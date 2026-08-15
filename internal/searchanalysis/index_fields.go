@@ -91,32 +91,14 @@ func (service *FieldService) ListIndexFields(
 		)
 	}
 
-	service.mu.Lock()
-	if service.closed {
-		service.mu.Unlock()
-		return FieldPage{}, searchjobs.ErrClosed
+	operationContext, finish, err := service.beginOperation(ctx)
+	if err != nil {
+		return FieldPage{}, err
 	}
-	service.operations.Add(1)
-	service.mu.Unlock()
-
-	operationContext, cancelOperation := context.WithCancel(ctx)
-	stopLifecycleCancel := context.AfterFunc(
-		service.lifecycleContext,
-		cancelOperation,
-	)
 	defer func() {
-		stopLifecycleCancel()
-		cancelOperation()
-		if errors.Is(resultErr, context.Canceled) {
-			service.mu.Lock()
-			closed := service.closed
-			service.mu.Unlock()
-			if closed {
-				result = FieldPage{}
-				resultErr = searchjobs.ErrClosed
-			}
+		if finish(&resultErr) {
+			result = FieldPage{}
 		}
-		service.operations.Done()
 	}()
 	ctx = operationContext
 
@@ -165,7 +147,7 @@ func (service *FieldService) ListIndexFields(
 	}
 
 	service.mu.Lock()
-	service.expireCacheLocked(service.clock())
+	service.catalog.expire(service.clock())
 	service.mu.Unlock()
 	if err != nil {
 		return FieldPage{}, err

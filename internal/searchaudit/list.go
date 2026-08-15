@@ -2,8 +2,6 @@ package searchaudit
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -63,25 +61,16 @@ func (store *Store) List(
 		}
 	}
 
-	tx := store.orm.WithContext(ctx).Begin(&sql.TxOptions{ReadOnly: true})
-	if tx.Error != nil {
-		return ListPage{}, mapStoreError(ctx, "begin search-attempt audit list", tx.Error)
+	tx, markFinished, rollbackGuard, err := beginReadOnly(
+		ctx,
+		store.orm,
+		"search-attempt audit list",
+		&returnedErr,
+	)
+	if err != nil {
+		return ListPage{}, err
 	}
-	finished := false
-	defer func() {
-		if finished {
-			return
-		}
-		if rollbackErr := tx.Rollback().Error; rollbackErr != nil &&
-			!errors.Is(rollbackErr, gorm.ErrInvalidTransaction) {
-			rollbackErr = fmt.Errorf("rollback search-attempt audit list: %w", rollbackErr)
-			if returnedErr == nil {
-				returnedErr = rollbackErr
-			} else {
-				returnedErr = errors.Join(returnedErr, rollbackErr)
-			}
-		}
-	}()
+	defer rollbackGuard()
 
 	state, exists, err := readOptionalTenantState(tx, normalized.tenantID)
 	if err != nil {
@@ -190,7 +179,7 @@ func (store *Store) List(
 		}
 	}
 	commitErr := tx.Commit().Error
-	finished = true
+	markFinished()
 	if commitErr != nil {
 		return ListPage{}, mapStoreError(ctx, "commit search-attempt audit list", commitErr)
 	}

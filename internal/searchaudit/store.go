@@ -110,34 +110,53 @@ func NewWithContext(
 	}, nil
 }
 
-func validateStartupIntegrity(ctx context.Context, database *gorm.DB) (returnedErr error) {
-	tx := database.WithContext(ctx).Begin(&sql.TxOptions{ReadOnly: true})
+// beginReadOnly opens a read-only transaction and returns it with a deferred
+// rollback guard. Call markFinished immediately after a successful Commit so
+// the guard becomes a no-op; otherwise the guard rolls back and joins any
+// rollback failure onto returnedErr.
+func beginReadOnly(
+	ctx context.Context,
+	database *gorm.DB,
+	operation string,
+	returnedErr *error,
+) (tx *gorm.DB, markFinished func(), rollbackGuard func(), err error) {
+	tx = database.WithContext(ctx).Begin(&sql.TxOptions{ReadOnly: true})
 	if tx.Error != nil {
-		return mapStoreError(ctx, "begin search-attempt audit startup validation", tx.Error)
+		return nil, nil, nil, mapStoreError(ctx, "begin "+operation, tx.Error)
 	}
 	finished := false
-	defer func() {
+	return tx, func() { finished = true }, func() {
 		if finished {
 			return
 		}
 		if rollbackErr := tx.Rollback().Error; rollbackErr != nil &&
 			!errors.Is(rollbackErr, gorm.ErrInvalidTransaction) {
-			rollbackErr = fmt.Errorf(
-				"rollback search-attempt audit startup validation: %w",
-				rollbackErr,
-			)
-			if returnedErr == nil {
-				returnedErr = rollbackErr
+			rollbackErr = fmt.Errorf("rollback %s: %w", operation, rollbackErr)
+			if *returnedErr == nil {
+				*returnedErr = rollbackErr
 			} else {
-				returnedErr = errors.Join(returnedErr, rollbackErr)
+				*returnedErr = errors.Join(*returnedErr, rollbackErr)
 			}
 		}
-	}()
+	}, nil
+}
+
+func validateStartupIntegrity(ctx context.Context, database *gorm.DB) (returnedErr error) {
+	tx, markFinished, rollbackGuard, err := beginReadOnly(
+		ctx,
+		database,
+		"search-attempt audit startup validation",
+		&returnedErr,
+	)
+	if err != nil {
+		return err
+	}
+	defer rollbackGuard()
 	if err := validateAllTenantIntegrity(tx); err != nil {
 		return mapStoreError(ctx, "validate search-attempt audit startup integrity", err)
 	}
 	commitErr := tx.Commit().Error
-	finished = true
+	markFinished()
 	if commitErr != nil {
 		return mapStoreError(ctx, "commit search-attempt audit startup validation", commitErr)
 	}

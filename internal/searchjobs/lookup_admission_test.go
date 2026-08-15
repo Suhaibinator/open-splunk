@@ -17,15 +17,8 @@ import (
 
 type lookupResolverFunc func(
 	context.Context,
-	LookupResolutionScope,
+	LookupAdmissionResolutionScope,
 ) ([]clickhouse.LookupResolution, error)
-
-func (resolver lookupResolverFunc) ResolveLookups(
-	ctx context.Context,
-	scope LookupResolutionScope,
-) ([]clickhouse.LookupResolution, error) {
-	return resolver(ctx, scope)
-}
 
 func (resolver lookupResolverFunc) ResolveLookupAdmission(
 	ctx context.Context,
@@ -33,13 +26,6 @@ func (resolver lookupResolverFunc) ResolveLookupAdmission(
 ) (LookupAdmissionResolution, error) {
 	explicit, err := resolver(ctx, scope)
 	return LookupAdmissionResolution{Explicit: explicit}, err
-}
-
-func (lookupResolverFunc) ResolveAutomaticLookups(
-	context.Context,
-	AutomaticLookupResolutionScope,
-) ([]clickhouse.AutomaticLookupBinding, error) {
-	return nil, nil
 }
 
 var _ LookupResolver = lookupResolverFunc(nil)
@@ -52,10 +38,10 @@ func TestLookupAdmissionResolvesAndSealsBeforeExecution(t *testing.T) {
 	resolution := testLookupResolution(t, request.TenantID, "service_catalog")
 
 	var calls atomic.Int32
-	var gotScope LookupResolutionScope
+	var gotScope LookupAdmissionResolutionScope
 	lookupResolver := lookupResolverFunc(func(
 		ctx context.Context,
-		scope LookupResolutionScope,
+		scope LookupAdmissionResolutionScope,
 	) ([]clickhouse.LookupResolution, error) {
 		calls.Add(1)
 		gotScope = scope
@@ -108,7 +94,7 @@ func TestConfiguredLookupResolverIsConsultedWithoutAuthoredLookup(t *testing.T) 
 	var calls atomic.Int32
 	resolver := lookupResolverFunc(func(
 		ctx context.Context,
-		scope LookupResolutionScope,
+		scope LookupAdmissionResolutionScope,
 	) ([]clickhouse.LookupResolution, error) {
 		calls.Add(1)
 		if scope.TenantID != request.TenantID || scope.PrincipalID != request.OwnerID ||
@@ -154,7 +140,7 @@ func TestLookupAdmissionFailsClosedBeforeJobWhenResolverIsMissingOrDiverges(t *t
 		{name: "missing"},
 		{
 			name: "wrong tenant",
-			resolver: lookupResolverFunc(func(context.Context, LookupResolutionScope) ([]clickhouse.LookupResolution, error) {
+			resolver: lookupResolverFunc(func(context.Context, LookupAdmissionResolutionScope) ([]clickhouse.LookupResolution, error) {
 				return []clickhouse.LookupResolution{testLookupResolution(t, "other-tenant", "service_catalog")}, nil
 			}),
 		},
@@ -188,7 +174,7 @@ func TestLookupAdmissionMapsCombinedCatalogBudgetToCapacity(t *testing.T) {
 	request.SPL = "index=main | lookup service_catalog service_id AS service OUTPUT owner"
 	resolver := lookupResolverFunc(func(
 		context.Context,
-		LookupResolutionScope,
+		LookupAdmissionResolutionScope,
 	) ([]clickhouse.LookupResolution, error) {
 		return nil, ErrCapacity
 	})
@@ -230,7 +216,7 @@ func TestLookupCreateRejectsMissingScopeOrAuthorityBeforeIDAndJournal(t *testing
 			}),
 			lookupResolver: lookupResolverFunc(func(
 				context.Context,
-				LookupResolutionScope,
+				LookupAdmissionResolutionScope,
 			) ([]clickhouse.LookupResolution, error) {
 				t.Fatal("app-less lookup consulted resolver")
 				return nil, nil
@@ -300,7 +286,7 @@ func TestNewRejectsLookupResolverWithoutKnowledgeResolver(t *testing.T) {
 
 	resolver := lookupResolverFunc(func(
 		context.Context,
-		LookupResolutionScope,
+		LookupAdmissionResolutionScope,
 	) ([]clickhouse.LookupResolution, error) {
 		t.Fatal("invalid resolver configuration was consulted")
 		return nil, nil

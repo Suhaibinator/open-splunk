@@ -2,7 +2,6 @@ package searchanalysis
 
 import (
 	"container/heap"
-	"container/list"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -76,48 +75,7 @@ type fieldSummaryCacheKey struct {
 	fieldName string
 }
 
-type fieldSummaryCacheEntry struct {
-	key         fieldSummaryCacheKey
-	summary     FieldSummary
-	generation  uint64
-	retained    uint64
-	expiresAt   time.Time
-	element     *list.Element
-	expiryIndex int
-}
-
-type fieldSummaryExpiryHeap []*fieldSummaryCacheEntry
-
-func (entries fieldSummaryExpiryHeap) Len() int { return len(entries) }
-
-func (entries fieldSummaryExpiryHeap) Less(left, right int) bool {
-	if entries[left].expiresAt.Equal(entries[right].expiresAt) {
-		return entries[left].generation < entries[right].generation
-	}
-	return entries[left].expiresAt.Before(entries[right].expiresAt)
-}
-
-func (entries fieldSummaryExpiryHeap) Swap(left, right int) {
-	entries[left], entries[right] = entries[right], entries[left]
-	entries[left].expiryIndex = left
-	entries[right].expiryIndex = right
-}
-
-func (entries *fieldSummaryExpiryHeap) Push(value any) {
-	entry := value.(*fieldSummaryCacheEntry)
-	entry.expiryIndex = len(*entries)
-	*entries = append(*entries, entry)
-}
-
-func (entries *fieldSummaryExpiryHeap) Pop() any {
-	old := *entries
-	last := len(old) - 1
-	entry := old[last]
-	old[last] = nil
-	entry.expiryIndex = -1
-	*entries = old[:last]
-	return entry
-}
+type fieldSummaryCacheEntry = cacheEntry[fieldSummaryCacheKey, FieldSummary]
 
 type fieldSummaryFlight struct {
 	done    chan struct{}
@@ -149,29 +107,14 @@ func (service *FieldService) GetFieldSummary(
 		return FieldSummary{}, err
 	}
 
-	service.mu.Lock()
-	if service.closed {
-		service.mu.Unlock()
-		return FieldSummary{}, searchjobs.ErrClosed
+	operationContext, finish, err := service.beginOperation(ctx)
+	if err != nil {
+		return FieldSummary{}, err
 	}
-	service.operations.Add(1)
-	service.mu.Unlock()
-
-	operationContext, cancelOperation := context.WithCancel(ctx)
-	stopLifecycleCancel := context.AfterFunc(service.lifecycleContext, cancelOperation)
 	defer func() {
-		stopLifecycleCancel()
-		cancelOperation()
-		if errors.Is(resultErr, context.Canceled) {
-			service.mu.Lock()
-			closed := service.closed
-			service.mu.Unlock()
-			if closed {
-				result = FieldSummary{}
-				resultErr = searchjobs.ErrClosed
-			}
+		if finish(&resultErr) {
+			result = FieldSummary{}
 		}
-		service.operations.Done()
 	}()
 	ctx = operationContext
 
@@ -188,7 +131,7 @@ func (service *FieldService) GetFieldSummary(
 	}
 
 	service.mu.Lock()
-	service.expireSummaryCacheLocked(service.clock())
+	service.summary.expire(service.clock())
 	service.mu.Unlock()
 	if err != nil {
 		return FieldSummary{}, err
@@ -220,7 +163,7 @@ func (service *FieldService) GetFieldSummary(
 	now := service.clock()
 	if snapshot.ExpiresAt.IsZero() || !now.Before(snapshot.ExpiresAt) {
 		service.mu.Lock()
-		service.removeSummaryCacheEntryLocked(service.summaryCache[key])
+		service.summary.remove(service.summary.entries[key])
 		service.mu.Unlock()
 		return FieldSummary{}, searchjobs.ErrExpired
 	}
@@ -229,7 +172,7 @@ func (service *FieldService) GetFieldSummary(
 	if err != nil {
 		return FieldSummary{}, err
 	}
-	return cloneFieldSummaryPrefix(entry.summary, normalized.maxValues), nil
+	return cloneFieldSummaryPrefix(entry.value, normalized.maxValues), nil
 }
 
 func (service *FieldService) normalizeFieldSummaryRequest(
@@ -283,8 +226,8 @@ func (service *FieldService) summaryFor(
 		service.mu.Unlock()
 		return nil, searchjobs.ErrClosed
 	}
-	if entry := service.liveSummaryCacheEntryLocked(key, now); entry != nil {
-		service.summaryLRU.MoveToFront(entry.element)
+	if entry := service.summary.live(key, now); entry != nil {
+		service.summary.lru.MoveToFront(entry.element)
 		service.mu.Unlock()
 		return entry, nil
 	}
@@ -378,30 +321,32 @@ func (service *FieldService) runFieldSummaryFlight(
 	}
 	if err == nil {
 		now := service.clock()
-		service.expireSummaryCacheLocked(now)
+		service.summary.expire(now)
 		switch {
 		case !now.Before(snapshot.ExpiresAt):
 			err = searchjobs.ErrExpired
 			entry = nil
-		case entry.retained > service.maxSummaryCacheBytes:
-			err = ErrFieldAnalysisCapacity
-			entry = nil
-		case service.nextSummaryGeneration == ^uint64(0):
+		case entry.retained > service.summary.maxBytes:
 			err = ErrFieldAnalysisCapacity
 			entry = nil
 		default:
-			service.nextSummaryGeneration++
-			entry.generation = service.nextSummaryGeneration
+			generation, allocated := service.summary.allocateGeneration()
+			if !allocated {
+				err = ErrFieldAnalysisCapacity
+				entry = nil
+				break
+			}
+			entry.generation = generation
 			entry.expiresAt = now.Add(service.summaryCacheTTL)
 			if snapshot.ExpiresAt.Before(entry.expiresAt) {
 				entry.expiresAt = snapshot.ExpiresAt
 			}
-			entry.element = service.summaryLRU.PushFront(entry)
-			service.summaryCache[key] = entry
-			service.summaryCacheBytes += entry.retained
-			heap.Push(&service.summaryExpirations, entry)
-			service.enforceSummaryCacheBoundsLocked()
-			if service.summaryCache[key] != entry {
+			entry.element = service.summary.lru.PushFront(entry)
+			service.summary.entries[key] = entry
+			service.summary.bytes += entry.retained
+			heap.Push(&service.summary.expirations, entry)
+			service.summary.enforceBounds()
+			if service.summary.entries[key] != entry {
 				err = ErrFieldAnalysisCapacity
 				entry = nil
 			}
@@ -471,7 +416,7 @@ func (service *FieldService) buildFieldSummary(
 		return nil, err
 	}
 	return &fieldSummaryCacheEntry{
-		key: key, summary: summary, retained: retained, expiryIndex: -1,
+		key: key, value: summary, retained: retained, expiryIndex: -1,
 	}, nil
 }
 
@@ -760,53 +705,6 @@ func cloneFieldSummaryPrefix(source FieldSummary, maximum uint32) FieldSummary {
 		}
 	}
 	return result
-}
-
-func (service *FieldService) liveSummaryCacheEntryLocked(
-	key fieldSummaryCacheKey,
-	now time.Time,
-) *fieldSummaryCacheEntry {
-	entry := service.summaryCache[key]
-	if entry != nil && !now.Before(entry.expiresAt) {
-		service.removeSummaryCacheEntryLocked(entry)
-		return nil
-	}
-	return entry
-}
-
-func (service *FieldService) expireSummaryCacheLocked(now time.Time) {
-	for len(service.summaryExpirations) != 0 {
-		entry := service.summaryExpirations[0]
-		if now.Before(entry.expiresAt) {
-			return
-		}
-		service.removeSummaryCacheEntryLocked(entry)
-	}
-}
-
-func (service *FieldService) enforceSummaryCacheBoundsLocked() {
-	for len(service.summaryCache) > service.maxSummaryCacheEntries ||
-		service.summaryCacheBytes > service.maxSummaryCacheBytes {
-		element := service.summaryLRU.Back()
-		if element == nil {
-			return
-		}
-		service.removeSummaryCacheEntryLocked(element.Value.(*fieldSummaryCacheEntry))
-	}
-}
-
-func (service *FieldService) removeSummaryCacheEntryLocked(entry *fieldSummaryCacheEntry) {
-	if entry == nil || service.summaryCache[entry.key] != entry {
-		return
-	}
-	delete(service.summaryCache, entry.key)
-	service.summaryLRU.Remove(entry.element)
-	heap.Remove(&service.summaryExpirations, entry.expiryIndex)
-	if entry.retained > service.summaryCacheBytes {
-		service.summaryCacheBytes = 0
-	} else {
-		service.summaryCacheBytes -= entry.retained
-	}
 }
 
 func retainedFieldSummaryBytes(

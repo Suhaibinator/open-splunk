@@ -919,8 +919,8 @@ func TestFieldServiceCloseCancelsWorkersInvalidatesCacheAndRejectsNewWork(t *tes
 	}
 	service.mu.Lock()
 	defer service.mu.Unlock()
-	if len(service.cache) != 0 || len(service.flights) != 0 || service.cacheBytes != 0 || service.lru.Len() != 0 || len(service.expirations) != 0 || len(service.gate) != 0 {
-		t.Fatalf("closed state cache=%d flights=%d bytes=%d lru=%d expirations=%d gate=%d", len(service.cache), len(service.flights), service.cacheBytes, service.lru.Len(), len(service.expirations), len(service.gate))
+	if len(service.catalog.entries) != 0 || len(service.flights) != 0 || service.catalog.bytes != 0 || service.catalog.lru.Len() != 0 || len(service.catalog.expirations) != 0 || len(service.gate) != 0 {
+		t.Fatalf("closed state cache=%d flights=%d bytes=%d lru=%d expirations=%d gate=%d", len(service.catalog.entries), len(service.flights), service.catalog.bytes, service.catalog.lru.Len(), len(service.catalog.expirations), len(service.gate))
 	}
 }
 
@@ -996,7 +996,7 @@ func TestFieldServiceCloseInvalidatesPopulatedCatalog(t *testing.T) {
 		t.Fatalf("first page = (%#v, %v)", first, err)
 	}
 	service.mu.Lock()
-	cacheEntries := len(service.cache)
+	cacheEntries := len(service.catalog.entries)
 	if cacheEntries != 1 {
 		service.mu.Unlock()
 		t.Fatalf("cache entries = %d, want 1", cacheEntries)
@@ -1006,7 +1006,7 @@ func TestFieldServiceCloseInvalidatesPopulatedCatalog(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 	service.mu.Lock()
-	if len(service.cache) != 0 || service.cacheBytes != 0 || service.lru.Len() != 0 || len(service.expirations) != 0 {
+	if len(service.catalog.entries) != 0 || service.catalog.bytes != 0 || service.catalog.lru.Len() != 0 || len(service.catalog.expirations) != 0 {
 		service.mu.Unlock()
 		t.Fatal("Close retained populated field catalog")
 	}
@@ -1230,18 +1230,18 @@ func TestFieldServiceExpiryHeapPrunesInDeadlineOrder(t *testing.T) {
 		t.Helper()
 		service.mu.Lock()
 		defer service.mu.Unlock()
-		service.expireCacheLocked(clock.Now())
-		got := make([]string, 0, len(service.cache))
-		for _, entry := range service.cache {
+		service.catalog.expire(clock.Now())
+		got := make([]string, 0, len(service.catalog.entries))
+		for _, entry := range service.catalog.entries {
 			got = append(got, entry.key.jobID)
 		}
 		sort.Strings(got)
 		sort.Strings(want)
-		if !slices.Equal(got, want) || len(service.expirations) != len(service.cache) {
-			t.Fatalf("live jobs = %v, expirations=%d, want %v", got, len(service.expirations), want)
+		if !slices.Equal(got, want) || len(service.catalog.expirations) != len(service.catalog.entries) {
+			t.Fatalf("live jobs = %v, expirations=%d, want %v", got, len(service.catalog.expirations), want)
 		}
-		for index, entry := range service.expirations {
-			if entry.expiryIndex != index || service.cache[entry.key] != entry {
+		for index, entry := range service.catalog.expirations {
+			if entry.expiryIndex != index || service.catalog.entries[entry.key] != entry {
 				t.Fatalf("expiry heap[%d] = %+v", index, entry)
 			}
 		}
@@ -1291,8 +1291,8 @@ func TestFieldServiceCapsCacheLifetimeAtJobExpiry(t *testing.T) {
 			}
 			service.mu.Lock()
 			defer service.mu.Unlock()
-			if len(service.cache) != 0 || service.cacheBytes != 0 || service.lru.Len() != 0 || len(service.expirations) != 0 {
-				t.Fatalf("expired cache retained entries=%d bytes=%d lru=%d expirations=%d", len(service.cache), service.cacheBytes, service.lru.Len(), len(service.expirations))
+			if len(service.catalog.entries) != 0 || service.catalog.bytes != 0 || service.catalog.lru.Len() != 0 || len(service.catalog.expirations) != 0 {
+				t.Fatalf("expired cache retained entries=%d bytes=%d lru=%d expirations=%d", len(service.catalog.entries), service.catalog.bytes, service.catalog.lru.Len(), len(service.catalog.expirations))
 			}
 		})
 	}

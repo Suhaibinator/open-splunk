@@ -224,27 +224,6 @@ type LookupAdmissionResolution struct {
 	Automatic []clickhouse.AutomaticLookupBinding
 }
 
-// LookupResolutionScope is retained for direct resolver diagnostics. Search
-// admission uses LookupAdmissionResolutionScope and never resolves the two
-// halves independently.
-type LookupResolutionScope = LookupAdmissionResolutionScope
-
-// AutomaticLookupResolutionScope is retained for direct catalog diagnostics.
-type AutomaticLookupResolutionScope struct {
-	TenantID    string
-	PrincipalID string
-	AppID       string
-}
-
-// AutomaticLookupResolver describes the optional direct diagnostic surface;
-// Manager deliberately depends on the atomic LookupResolver contract below.
-type AutomaticLookupResolver interface {
-	ResolveAutomaticLookups(
-		context.Context,
-		AutomaticLookupResolutionScope,
-	) ([]clickhouse.AutomaticLookupBinding, error)
-}
-
 // LookupResolver atomically resolves authored logical names and all visible
 // automatic winners to immutable asset versions. The single call lets the
 // control plane enforce combined stage/cell/byte budgets before loading any
@@ -1272,15 +1251,7 @@ func validAccessScope(access AccessScope) bool {
 }
 
 func validAccessIdentity(value string) bool {
-	if value == "" || len(value) > defaultMaxIdentityBytes || !utf8.ValidString(value) || strings.TrimSpace(value) != value {
-		return false
-	}
-	for _, character := range value {
-		if unicode.IsControl(character) {
-			return false
-		}
-	}
-	return true
+	return canonicalJobMetadataIdentifier(value, defaultMaxIdentityBytes, false)
 }
 
 // Get returns a deep metadata copy for trusted administrative callers. API
@@ -1678,6 +1649,49 @@ func (manager *Manager) lookup(id string) *jobEntry {
 	entry := manager.jobs[id]
 	manager.mu.RUnlock()
 	return entry
+}
+
+// lockEntryForAccess resolves id for an access-scoped read and returns the
+// entry with entry.mu held. Retaining manager.mu until entry.mu is acquired
+// orders shutdown and tombstone removal with this read, following the
+// manager -> entry lock order used by result-lease admission while keeping the
+// entry lock hold bounded. Expiry is resolved only after acquiring entry.mu so
+// a reader delayed behind another entry operation never uses a stale pre-wait
+// clock sample. Every error path releases both locks; contextError may be nil,
+// and requireOpen additionally rejects a closed manager.
+func (manager *Manager) lockEntryForAccess(
+	access AccessScope,
+	id string,
+	requireOpen bool,
+	contextError func() error,
+) (*jobEntry, error) {
+	manager.mu.RLock()
+	if requireOpen && manager.closed {
+		manager.mu.RUnlock()
+		return nil, ErrClosed
+	}
+	entry := manager.jobs[id]
+	if entry == nil {
+		manager.mu.RUnlock()
+		return nil, ErrNotFound
+	}
+	entry.mu.Lock()
+	manager.mu.RUnlock()
+	if contextError != nil {
+		if err := contextError(); err != nil {
+			entry.mu.Unlock()
+			return nil, err
+		}
+	}
+	if entry.job.TenantID != access.TenantID || entry.job.OwnerID != access.OwnerID {
+		entry.mu.Unlock()
+		return nil, ErrNotFound
+	}
+	now := manager.nowUTC()
+	if canExpireLocked(entry, now) {
+		manager.expireLocked(entry, now)
+	}
+	return entry, nil
 }
 
 func (entry *jobEntry) matches(access AccessScope) bool {
@@ -2491,6 +2505,73 @@ func (sink *resultSink) SetSchema(schema Schema) error {
 	return nil
 }
 
+// measureRowCellsLocked validates one row against columns and returns its
+// payload and retained sizes. The caller holds entry.mu and is responsible for
+// recording the returned error through rememberLocked.
+func (sink *resultSink) measureRowCellsLocked(columns []Column, values []Value) (uint64, uint64, error) {
+	var payloadBytes uint64
+	var retainedBytes uint64
+	for index, value := range values {
+		column := columns[index]
+		if column.Kind != ValueKindMixed && value.kind != column.Kind && value.kind != ValueKindNull {
+			return 0, 0, fmt.Errorf("%w: cell %d kind does not match schema", ErrInvalidResult, index)
+		}
+		if value.kind == ValueKindNull && !column.Nullable && column.Kind != ValueKindNull {
+			return 0, 0, fmt.Errorf("%w: cell %d is null in a non-nullable column", ErrInvalidResult, index)
+		}
+		payloadSize, retainedSize, err := measureValue(value, 0)
+		if err != nil {
+			return 0, 0, fmt.Errorf("%w: cell %d: %w", ErrInvalidResult, index, err)
+		}
+		payloadBytes, err = checkedAdd(payloadBytes, payloadSize)
+		if err != nil {
+			return 0, 0, ErrByteLimit
+		}
+		retainedBytes, err = checkedAdd(retainedBytes, retainedSize)
+		if err != nil {
+			return 0, 0, ErrByteLimit
+		}
+	}
+	return payloadBytes, retainedBytes, nil
+}
+
+// planRowGrowthLocked charges one row against the page ceiling and plans the
+// backing slice growth, returning the new capacity, the retained size adjusted
+// for that growth, and the row's own retained page size. The caller holds
+// entry.mu and is responsible for recording the returned error.
+func (sink *resultSink) planRowGrowthLocked(
+	rows []ResultRow, schemaBytes uint64, retainedBytes uint64,
+) (int, uint64, uint64, error) {
+	rowPageBytes, err := checkedAdd(retainedResultRowBase, retainedBytes)
+	if err != nil || schemaBytes > sink.manager.maxPageBytes || rowPageBytes > sink.manager.maxPageBytes-schemaBytes {
+		return 0, 0, 0, ErrByteLimit
+	}
+	newCapacity := cap(rows)
+	if len(rows) == cap(rows) {
+		newCapacity64 := uint64(1)
+		if cap(rows) > 0 {
+			// #nosec G115 -- a slice capacity is non-negative and exactly representable as uint64.
+			newCapacity64 = uint64(cap(rows)) * 2
+		}
+		if newCapacity64 > sink.manager.maxRows {
+			newCapacity64 = sink.manager.maxRows
+		}
+		// #nosec G115 -- manager construction rejects maxRows values greater than MaxInt.
+		newCapacity = int(newCapacity64)
+		// #nosec G115 -- newCapacity is never smaller than the current slice capacity.
+		capacityGrowth := uint64(newCapacity - cap(rows))
+		capacityBytes, multiplyErr := checkedMultiply(capacityGrowth, retainedResultRowBase)
+		if multiplyErr != nil {
+			return 0, 0, 0, ErrByteLimit
+		}
+		retainedBytes, err = checkedAdd(retainedBytes, capacityBytes)
+		if err != nil {
+			return 0, 0, 0, ErrByteLimit
+		}
+	}
+	return newCapacity, retainedBytes, rowPageBytes, nil
+}
+
 func (sink *resultSink) AddRow(values []Value) error {
 	entry := sink.entry
 	entry.mu.Lock()
@@ -2511,28 +2592,9 @@ func (sink *resultSink) AddRow(values []Value) error {
 	if err := sink.requireIncrementableResultRevisionLocked(); err != nil {
 		return err
 	}
-	var payloadBytes uint64
-	var retainedBytes uint64
-	for index, value := range values {
-		column := entry.job.Schema.Columns[index]
-		if column.Kind != ValueKindMixed && value.kind != column.Kind && value.kind != ValueKindNull {
-			return sink.rememberLocked(fmt.Errorf("%w: cell %d kind does not match schema", ErrInvalidResult, index))
-		}
-		if value.kind == ValueKindNull && !column.Nullable && column.Kind != ValueKindNull {
-			return sink.rememberLocked(fmt.Errorf("%w: cell %d is null in a non-nullable column", ErrInvalidResult, index))
-		}
-		payloadSize, retainedSize, err := measureValue(value, 0)
-		if err != nil {
-			return sink.rememberLocked(fmt.Errorf("%w: cell %d: %w", ErrInvalidResult, index, err))
-		}
-		payloadBytes, err = checkedAdd(payloadBytes, payloadSize)
-		if err != nil {
-			return sink.rememberLocked(ErrByteLimit)
-		}
-		retainedBytes, err = checkedAdd(retainedBytes, retainedSize)
-		if err != nil {
-			return sink.rememberLocked(ErrByteLimit)
-		}
+	payloadBytes, retainedBytes, measureErr := sink.measureRowCellsLocked(entry.job.Schema.Columns, values)
+	if measureErr != nil {
+		return sink.rememberLocked(measureErr)
 	}
 	// Validate an overflow row before recording truncation. A malformed row is
 	// not evidence that another valid result existed and must remain a failed
@@ -2547,32 +2609,9 @@ func (sink *resultSink) AddRow(values []Value) error {
 	if err != nil {
 		return sink.rememberLocked(ErrByteLimit)
 	}
-	rowPageBytes, err := checkedAdd(retainedResultRowBase, retainedBytes)
-	if err != nil || entry.schemaBytes > sink.manager.maxPageBytes || rowPageBytes > sink.manager.maxPageBytes-entry.schemaBytes {
-		return sink.rememberLocked(ErrByteLimit)
-	}
-	newCapacity := cap(entry.rows)
-	if len(entry.rows) == cap(entry.rows) {
-		newCapacity64 := uint64(1)
-		if cap(entry.rows) > 0 {
-			// #nosec G115 -- a slice capacity is non-negative and exactly representable as uint64.
-			newCapacity64 = uint64(cap(entry.rows)) * 2
-		}
-		if newCapacity64 > sink.manager.maxRows {
-			newCapacity64 = sink.manager.maxRows
-		}
-		// #nosec G115 -- manager construction rejects maxRows values greater than MaxInt.
-		newCapacity = int(newCapacity64)
-		// #nosec G115 -- newCapacity is never smaller than the current slice capacity.
-		capacityGrowth := uint64(newCapacity - cap(entry.rows))
-		capacityBytes, multiplyErr := checkedMultiply(capacityGrowth, retainedResultRowBase)
-		if multiplyErr != nil {
-			return sink.rememberLocked(ErrByteLimit)
-		}
-		retainedBytes, err = checkedAdd(retainedBytes, capacityBytes)
-		if err != nil {
-			return sink.rememberLocked(ErrByteLimit)
-		}
+	newCapacity, retainedBytes, rowPageBytes, growErr := sink.planRowGrowthLocked(entry.rows, entry.schemaBytes, retainedBytes)
+	if growErr != nil {
+		return sink.rememberLocked(growErr)
 	}
 	if err := sink.manager.reserveRetainedLocked(entry, retainedBytes); err != nil {
 		return sink.rememberLocked(err)
@@ -2633,28 +2672,9 @@ func (sink *resultSink) stageAtomicRowLocked(values []Value) error {
 	if err := sink.requireIncrementableResultRevisionLocked(); err != nil {
 		return err
 	}
-	var payloadBytes uint64
-	var retainedBytes uint64
-	for index, value := range values {
-		column := schema.Columns[index]
-		if column.Kind != ValueKindMixed && value.kind != column.Kind && value.kind != ValueKindNull {
-			return sink.rememberLocked(fmt.Errorf("%w: cell %d kind does not match schema", ErrInvalidResult, index))
-		}
-		if value.kind == ValueKindNull && !column.Nullable && column.Kind != ValueKindNull {
-			return sink.rememberLocked(fmt.Errorf("%w: cell %d is null in a non-nullable column", ErrInvalidResult, index))
-		}
-		payloadSize, retainedSize, err := measureValue(value, 0)
-		if err != nil {
-			return sink.rememberLocked(fmt.Errorf("%w: cell %d: %w", ErrInvalidResult, index, err))
-		}
-		payloadBytes, err = checkedAdd(payloadBytes, payloadSize)
-		if err != nil {
-			return sink.rememberLocked(ErrByteLimit)
-		}
-		retainedBytes, err = checkedAdd(retainedBytes, retainedSize)
-		if err != nil {
-			return sink.rememberLocked(ErrByteLimit)
-		}
+	payloadBytes, retainedBytes, measureErr := sink.measureRowCellsLocked(schema.Columns, values)
+	if measureErr != nil {
+		return sink.rememberLocked(measureErr)
 	}
 	if uint64(len(sink.atomicRows)) >= sink.manager.maxRows {
 		return sink.rememberLocked(ErrRowLimit)
@@ -2663,32 +2683,11 @@ func (sink *resultSink) stageAtomicRowLocked(values []Value) error {
 	if err != nil {
 		return sink.rememberLocked(ErrByteLimit)
 	}
-	rowPageBytes, err := checkedAdd(retainedResultRowBase, retainedBytes)
-	if err != nil || sink.atomicSchemaBytes > sink.manager.maxPageBytes ||
-		rowPageBytes > sink.manager.maxPageBytes-sink.atomicSchemaBytes {
-		return sink.rememberLocked(ErrByteLimit)
-	}
-	newCapacity := cap(sink.atomicRows)
-	if len(sink.atomicRows) == cap(sink.atomicRows) {
-		newCapacity64 := uint64(1)
-		if cap(sink.atomicRows) > 0 {
-			newCapacity64 = uint64(cap(sink.atomicRows)) * 2
-		}
-		if newCapacity64 > sink.manager.maxRows {
-			newCapacity64 = sink.manager.maxRows
-		}
-		// #nosec G115 -- manager construction rejects maxRows values greater than MaxInt.
-		newCapacity = int(newCapacity64)
-		// #nosec G115 -- newCapacity is never smaller than the current slice capacity.
-		capacityGrowth := uint64(newCapacity - cap(sink.atomicRows))
-		capacityBytes, multiplyErr := checkedMultiply(capacityGrowth, retainedResultRowBase)
-		if multiplyErr != nil {
-			return sink.rememberLocked(ErrByteLimit)
-		}
-		retainedBytes, err = checkedAdd(retainedBytes, capacityBytes)
-		if err != nil {
-			return sink.rememberLocked(ErrByteLimit)
-		}
+	newCapacity, retainedBytes, rowPageBytes, growErr := sink.planRowGrowthLocked(
+		sink.atomicRows, sink.atomicSchemaBytes, retainedBytes,
+	)
+	if growErr != nil {
+		return sink.rememberLocked(growErr)
 	}
 	if err := sink.manager.reserveRetainedLocked(sink.entry, retainedBytes); err != nil {
 		return sink.rememberLocked(err)

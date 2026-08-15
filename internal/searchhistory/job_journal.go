@@ -192,50 +192,17 @@ func failureToHistory(failure *searchjobs.Failure) *opensplunkv1.SearchFailure {
 		for _, suggestion := range diagnostic.Suggestions[:min(len(diagnostic.Suggestions), 32)] {
 			converted.Suggestions = append(converted.Suggestions, boundedUTF8(suggestion, 1024))
 		}
-		if diagnostic.ValidSourceRange() {
-			converted.SourceRange = &opensplunkv1.SourceRange{
-				// #nosec G115 -- ValidSourceRange proves offsets non-negative
-				// and bounds line/column values by math.MaxUint32.
-				Start: &opensplunkv1.SourcePosition{
-					ByteOffset: uint64(diagnostic.ByteOffset),
-					Line:       uint32(diagnostic.Line),
-					Column:     uint32(diagnostic.Column),
-				},
-				// #nosec G115 -- ValidSourceRange proves offsets non-negative
-				// and bounds line/column values by math.MaxUint32.
-				End: &opensplunkv1.SourcePosition{
-					ByteOffset: uint64(diagnostic.EndByteOffset),
-					Line:       uint32(diagnostic.EndLine),
-					Column:     uint32(diagnostic.EndColumn),
-				},
-			}
-		}
+		converted.SourceRange = searchjobproto.SourceRange(diagnostic)
 		result.Diagnostics = append(result.Diagnostics, converted)
 	}
 	return result
 }
 
 func failureCodeToHistory(code searchjobs.FailureCode) opensplunkv1.SearchFailureCode {
-	switch code {
-	case searchjobs.FailureInvalidSPL:
-		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_INVALID_SPL
-	case searchjobs.FailureUnsupportedSPL:
-		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_UNSUPPORTED_SPL
-	case searchjobs.FailureInvalidTimeRange:
-		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_INVALID_TIME_RANGE
-	case searchjobs.FailureIndexForbidden:
-		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_INDEX_FORBIDDEN
-	case searchjobs.FailureResourceLimit:
-		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_RESOURCE_LIMIT
-	case searchjobs.FailureTimeout:
-		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_TIMEOUT
-	case searchjobs.FailureStorageUnavailable:
-		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_STORAGE_UNAVAILABLE
-	case searchjobs.FailureExecution:
-		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_EXECUTION
-	default:
-		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_INTERNAL
+	if projected := searchjobproto.FailureCode(code); projected != opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_UNSPECIFIED {
+		return projected
 	}
+	return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_INTERNAL
 }
 
 func boundedUTF8(value string, maximum int) string {

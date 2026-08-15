@@ -306,33 +306,12 @@ func (manager *Manager) CompletedExecutionSnapshotFor(ctx context.Context, acces
 		return ExecutionSnapshot{}, ErrNotFound
 	}
 
-	// Retain manager.mu until entry.mu is acquired so shutdown and tombstone
-	// removal are ordered with this read. This is the manager -> entry lock
-	// order also used by result-lease admission.
-	manager.mu.RLock()
-	if manager.closed {
-		manager.mu.RUnlock()
-		return ExecutionSnapshot{}, ErrClosed
-	}
-	entry := manager.jobs[id]
-	if entry == nil {
-		manager.mu.RUnlock()
-		return ExecutionSnapshot{}, ErrNotFound
-	}
-	entry.mu.Lock()
-	manager.mu.RUnlock()
-	defer entry.mu.Unlock()
-
-	if err := ctx.Err(); err != nil {
+	entry, err := manager.lockEntryForAccess(access, id, true, func() error { return ctx.Err() })
+	if err != nil {
 		return ExecutionSnapshot{}, err
 	}
-	if entry.job.TenantID != access.TenantID || entry.job.OwnerID != access.OwnerID {
-		return ExecutionSnapshot{}, ErrNotFound
-	}
-	now := manager.nowUTC()
-	if canExpireLocked(entry, now) {
-		manager.expireLocked(entry, now)
-	}
+	defer entry.mu.Unlock()
+
 	switch entry.job.State {
 	case StateCompleted:
 		// Continue below.

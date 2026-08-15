@@ -125,33 +125,9 @@ func (manager *Manager) previewForBytesWithPermit(
 	limit int,
 	maximumBytes uint64,
 ) (PreviewSnapshot, error) {
-	// Retain manager.mu until entry.mu is acquired so tombstone removal is
-	// ordered with this read. This follows the manager -> entry lock order used
-	// by result-lease admission while keeping the entry lock hold bounded.
-	manager.mu.RLock()
-	entry := manager.jobs[id]
-	if entry == nil {
-		manager.mu.RUnlock()
-		return PreviewSnapshot{}, ErrNotFound
-	}
-	entry.mu.Lock()
-	manager.mu.RUnlock()
-	if contextError != nil {
-		if err := contextError(); err != nil {
-			entry.mu.Unlock()
-			return PreviewSnapshot{}, err
-		}
-	}
-
-	if entry.job.TenantID != access.TenantID || entry.job.OwnerID != access.OwnerID {
-		entry.mu.Unlock()
-		return PreviewSnapshot{}, ErrNotFound
-	}
-	// Resolve expiry only after acquiring entry.mu. A reader delayed behind a
-	// result update must not use a stale pre-wait clock sample.
-	now := manager.nowUTC()
-	if canExpireLocked(entry, now) {
-		manager.expireLocked(entry, now)
+	entry, err := manager.lockEntryForAccess(access, id, false, contextError)
+	if err != nil {
+		return PreviewSnapshot{}, err
 	}
 
 	switch entry.job.State {

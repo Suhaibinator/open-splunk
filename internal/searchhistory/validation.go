@@ -14,9 +14,9 @@ import (
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/protostrict"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -57,7 +57,7 @@ func normalizeEntry(input *opensplunkv1.SearchHistoryEntry) (*opensplunkv1.Searc
 	}
 	entry := proto.Clone(input).(*opensplunkv1.SearchHistoryEntry)
 	entry.KnowledgeSnapshot = knowledgeSnapshot
-	if err := rejectUnknownFields(entry.ProtoReflect()); err != nil {
+	if err := protostrict.RejectUnknownFields(entry.ProtoReflect(), "search-history entry"); err != nil {
 		return nil, indexedEntry{}, invalid(err.Error())
 	}
 	entry.SearchJobId = strings.TrimSpace(entry.SearchJobId)
@@ -458,41 +458,4 @@ func decodeEntry(encoded, expectedChecksum []byte) (*opensplunkv1.SearchHistoryE
 		return nil, indexedEntry{}, errors.New("persisted search-history entry is not canonical")
 	}
 	return normalizedEntry, normalized, nil
-}
-
-func rejectUnknownFields(message protoreflect.Message) error {
-	if len(message.GetUnknown()) != 0 {
-		return errors.New("search-history entry contains unknown protobuf fields")
-	}
-	var visitErr error
-	message.Range(func(field protoreflect.FieldDescriptor, value protoreflect.Value) bool {
-		if field.IsMap() {
-			if field.MapValue().Kind() != protoreflect.MessageKind {
-				return true
-			}
-			value.Map().Range(func(_ protoreflect.MapKey, mapValue protoreflect.Value) bool {
-				visitErr = rejectUnknownFields(mapValue.Message())
-				return visitErr == nil
-			})
-			return visitErr == nil
-		}
-		if field.IsList() {
-			if field.Kind() != protoreflect.MessageKind {
-				return true
-			}
-			list := value.List()
-			for index := 0; index < list.Len(); index++ {
-				if visitErr = rejectUnknownFields(list.Get(index).Message()); visitErr != nil {
-					return false
-				}
-			}
-			return true
-		}
-		if field.Kind() == protoreflect.MessageKind {
-			visitErr = rejectUnknownFields(value.Message())
-			return visitErr == nil
-		}
-		return true
-	})
-	return visitErr
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
+	"github.com/Suhaibinator/open-splunk/internal/shutdownbarrier"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
@@ -127,8 +128,7 @@ type Service struct {
 	mu               sync.Mutex
 	closed           bool
 	operations       sync.WaitGroup
-	closeOnce        sync.Once
-	closeDone        chan struct{}
+	barrier          *shutdownbarrier.Barrier
 }
 
 type normalizedRequest struct {
@@ -187,7 +187,7 @@ func New(config Config) (*Service, error) {
 		gate:             make(chan struct{}, config.MaxConcurrent),
 		lifecycleContext: lifecycleContext,
 		lifecycleCancel:  lifecycleCancel,
-		closeDone:        make(chan struct{}),
+		barrier:          shutdownbarrier.New(),
 	}, nil
 }
 
@@ -779,25 +779,12 @@ func validSuggestionFieldName(name string) bool {
 }
 
 func fieldSuggestionNameBefore(left, right string) bool {
-	leftFolded := foldASCII(left)
-	rightFolded := foldASCII(right)
+	leftFolded := eventfields.FoldASCII(left)
+	rightFolded := eventfields.FoldASCII(right)
 	if leftFolded != rightFolded {
 		return leftFolded < rightFolded
 	}
 	return left < right
-}
-
-func foldASCII(value string) string {
-	var builder strings.Builder
-	builder.Grow(len(value))
-	for index := 0; index < len(value); index++ {
-		character := value[index]
-		if character >= 'A' && character <= 'Z' {
-			character += 'a' - 'A'
-		}
-		builder.WriteByte(character)
-	}
-	return builder.String()
 }
 
 func representableFieldName(name string) bool {
@@ -997,21 +984,5 @@ func (service *Service) Close(ctx context.Context) error {
 		service.lifecycleCancel()
 	}
 	service.mu.Unlock()
-	service.closeOnce.Do(func() {
-		go func() {
-			service.operations.Wait()
-			close(service.closeDone)
-		}()
-	})
-	select {
-	case <-service.closeDone:
-		return nil
-	default:
-	}
-	select {
-	case <-service.closeDone:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	return service.barrier.Wait(ctx, func() { service.operations.Wait() })
 }

@@ -139,36 +139,10 @@ func (manager *Manager) acquireResultLeaseFor(
 	id string,
 	includeExecution bool,
 ) (*resultLease, ExecutionSnapshot, error) {
-	// Holding manager.mu until entry.mu is acquired makes admission atomic
-	// with manager shutdown and tombstone removal. This follows the existing
-	// manager -> entry -> budget lock order.
-	manager.mu.RLock()
-	if manager.closed {
-		manager.mu.RUnlock()
-		return nil, ExecutionSnapshot{}, ErrClosed
-	}
-	entry := manager.jobs[id]
-	if entry == nil {
-		manager.mu.RUnlock()
-		return nil, ExecutionSnapshot{}, ErrNotFound
-	}
-	entry.mu.Lock()
-	manager.mu.RUnlock()
-
-	if err := ctx.Err(); err != nil {
-		entry.mu.Unlock()
+	// Admission follows the manager -> entry -> budget lock order.
+	entry, err := manager.lockEntryForAccess(access, id, true, func() error { return ctx.Err() })
+	if err != nil {
 		return nil, ExecutionSnapshot{}, err
-	}
-	if entry.job.TenantID != access.TenantID || entry.job.OwnerID != access.OwnerID {
-		entry.mu.Unlock()
-		return nil, ExecutionSnapshot{}, ErrNotFound
-	}
-	// Resolve expiry only after acquiring the entry lock. A reader that waited
-	// behind another entry operation must not use a pre-wait clock sample to
-	// admit a lease beyond the retention boundary.
-	now := manager.nowUTC()
-	if canExpireLocked(entry, now) {
-		manager.expireLocked(entry, now)
 	}
 	switch entry.job.State {
 	case StateExpired:

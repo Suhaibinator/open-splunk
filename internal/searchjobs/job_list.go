@@ -9,6 +9,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/Suhaibinator/open-splunk/internal/asciifold"
 )
 
 const (
@@ -98,9 +100,18 @@ func (manager *Manager) listPageFor(ctx context.Context, access AccessScope, req
 	manager.mu.RUnlock()
 
 	now := manager.nowUTC()
-	matcher := newJobListTextMatcher("")
+	matcher := asciifold.New("")
 	if normalized.text != nil {
-		matcher = newJobListTextMatcher(*normalized.text)
+		matcher = asciifold.New(*normalized.text)
+	}
+	textScanContextError := func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if manager.ctx.Err() != nil {
+			return ErrClosed
+		}
+		return nil
 	}
 	capacity := normalized.pageSize + 1
 	selected := make([]Job, 0, capacity)
@@ -137,7 +148,7 @@ func (manager *Manager) listPageFor(ctx context.Context, access AccessScope, req
 				continue
 			}
 			if normalized.text != nil {
-				matches, matchErr := matcher.containsContext(ctx, manager.ctx, snapshot.SPL)
+				matches, matchErr := matcher.ContainsFunc(snapshot.SPL, 4096, textScanContextError)
 				if matchErr != nil {
 					return false, matchErr
 				}
@@ -460,74 +471,4 @@ func jobListFollowsCursor(job Job, cursor jobListCursor) bool {
 	createdAt := cursor.lastCreatedAt()
 	return job.CreatedAt.Before(createdAt) ||
 		(job.CreatedAt.Equal(createdAt) && job.ID < cursor.LastID)
-}
-
-// jobListTextMatcher is a fixed-capacity KMP matcher. ASCII letters compare
-// case-insensitively while every non-ASCII UTF-8 byte compares exactly, which
-// matches SQLite lower() semantics without allocating a lower-cased SPL copy.
-type jobListTextMatcher struct {
-	pattern string
-	prefix  [maximumJobListTextBytes]uint16
-}
-
-func newJobListTextMatcher(pattern string) jobListTextMatcher {
-	matcher := jobListTextMatcher{pattern: pattern}
-	for index, matched := 1, 0; index < len(pattern); index++ {
-		for matched > 0 && !jobListFoldEqual(pattern[index], pattern[matched]) {
-			matched = int(matcher.prefix[matched-1])
-		}
-		if jobListFoldEqual(pattern[index], pattern[matched]) {
-			matched++
-		}
-		matcher.prefix[index] = uint16(matched)
-	}
-	return matcher
-}
-
-func (matcher *jobListTextMatcher) Contains(source string) bool {
-	matches, _ := matcher.containsContext(context.Background(), context.Background(), source)
-	return matches
-}
-
-func (matcher *jobListTextMatcher) containsContext(ctx, managerContext context.Context, source string) (bool, error) {
-	if matcher.pattern == "" {
-		return true, nil
-	}
-	matched := 0
-	for index := 0; index < len(source); index++ {
-		if index&4095 == 0 {
-			if err := ctx.Err(); err != nil {
-				return false, err
-			}
-			if managerContext.Err() != nil {
-				return false, ErrClosed
-			}
-		}
-		for matched > 0 && !jobListFoldEqual(source[index], matcher.pattern[matched]) {
-			matched = int(matcher.prefix[matched-1])
-		}
-		if jobListFoldEqual(source[index], matcher.pattern[matched]) {
-			matched++
-			if matched == len(matcher.pattern) {
-				return true, nil
-			}
-		}
-	}
-	if err := ctx.Err(); err != nil {
-		return false, err
-	}
-	if managerContext.Err() != nil {
-		return false, ErrClosed
-	}
-	return false, nil
-}
-
-func jobListFoldEqual(left, right byte) bool {
-	if left >= 'A' && left <= 'Z' {
-		left += 'a' - 'A'
-	}
-	if right >= 'A' && right <= 'Z' {
-		right += 'a' - 'A'
-	}
-	return left == right
 }

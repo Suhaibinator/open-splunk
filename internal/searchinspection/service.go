@@ -24,6 +24,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchsnapshot"
+	"github.com/Suhaibinator/open-splunk/internal/shutdownbarrier"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
@@ -116,8 +117,7 @@ type Service struct {
 	closed        bool
 	activeCancels map[*operationToken]context.CancelFunc
 	operations    sync.WaitGroup
-	closeOnce     sync.Once
-	closeDone     chan struct{}
+	barrier       *shutdownbarrier.Barrier
 }
 
 type normalizedRequest struct {
@@ -196,7 +196,7 @@ func newService(
 		maxRuntime:    maxRuntime,
 		gate:          make(chan struct{}, maxConcurrent),
 		activeCancels: make(map[*operationToken]context.CancelFunc),
-		closeDone:     make(chan struct{}),
+		barrier:       shutdownbarrier.New(),
 	}, nil
 }
 
@@ -634,21 +634,5 @@ func (service *Service) Close(ctx context.Context) error {
 		}
 	}
 	service.mu.Unlock()
-	service.closeOnce.Do(func() {
-		go func() {
-			service.operations.Wait()
-			close(service.closeDone)
-		}()
-	})
-	select {
-	case <-service.closeDone:
-		return nil
-	default:
-	}
-	select {
-	case <-service.closeDone:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	return service.barrier.Wait(ctx, func() { service.operations.Wait() })
 }

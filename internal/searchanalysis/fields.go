@@ -2,7 +2,6 @@ package searchanalysis
 
 import (
 	"container/heap"
-	"container/list"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -25,6 +24,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchsnapshot"
+	"github.com/Suhaibinator/open-splunk/internal/shutdownbarrier"
 )
 
 const (
@@ -175,34 +175,21 @@ type FieldService struct {
 	maximumPageSize    uint32
 	maxRuntime         time.Duration
 	cacheTTL           time.Duration
-	maxCacheEntries    int
-	maxCacheBytes      uint64
 	gate               chan struct{}
 
-	defaultSummaryValues   uint32
-	maximumSummaryValues   uint32
-	summaryCacheTTL        time.Duration
-	maxSummaryCacheEntries int
-	maxSummaryCacheBytes   uint64
+	defaultSummaryValues uint32
+	maximumSummaryValues uint32
+	summaryCacheTTL      time.Duration
 
-	mu                    sync.Mutex
-	closed                bool
-	cache                 map[fieldCacheKey]*fieldCacheEntry
-	lru                   list.List
-	cacheBytes            uint64
-	flights               map[fieldCacheKey]*fieldFlight
-	expirations           fieldExpiryHeap
-	nextGeneration        uint64
-	summaryCache          map[fieldSummaryCacheKey]*fieldSummaryCacheEntry
-	summaryLRU            list.List
-	summaryCacheBytes     uint64
-	summaryFlights        map[fieldSummaryCacheKey]*fieldSummaryFlight
-	summaryExpirations    fieldSummaryExpiryHeap
-	nextSummaryGeneration uint64
-	operations            sync.WaitGroup
-	workers               sync.WaitGroup
-	shutdownOnce          sync.Once
-	shutdownDone          chan struct{}
+	mu             sync.Mutex
+	closed         bool
+	catalog        expiringCache[fieldCacheKey, []FieldProfile]
+	flights        map[fieldCacheKey]*fieldFlight
+	summary        expiringCache[fieldSummaryCacheKey, FieldSummary]
+	summaryFlights map[fieldSummaryCacheKey]*fieldSummaryFlight
+	operations     sync.WaitGroup
+	workers        sync.WaitGroup
+	barrier        *shutdownbarrier.Barrier
 }
 
 type fieldCatalogDomain uint8
@@ -224,48 +211,7 @@ type fieldCacheKey struct {
 	snapshotFingerprint [sha256.Size]byte
 }
 
-type fieldCacheEntry struct {
-	key         fieldCacheKey
-	profiles    []FieldProfile
-	generation  uint64
-	retained    uint64
-	expiresAt   time.Time
-	element     *list.Element
-	expiryIndex int
-}
-
-type fieldExpiryHeap []*fieldCacheEntry
-
-func (entries fieldExpiryHeap) Len() int { return len(entries) }
-
-func (entries fieldExpiryHeap) Less(left, right int) bool {
-	if entries[left].expiresAt.Equal(entries[right].expiresAt) {
-		return entries[left].generation < entries[right].generation
-	}
-	return entries[left].expiresAt.Before(entries[right].expiresAt)
-}
-
-func (entries fieldExpiryHeap) Swap(left, right int) {
-	entries[left], entries[right] = entries[right], entries[left]
-	entries[left].expiryIndex = left
-	entries[right].expiryIndex = right
-}
-
-func (entries *fieldExpiryHeap) Push(value any) {
-	entry := value.(*fieldCacheEntry)
-	entry.expiryIndex = len(*entries)
-	*entries = append(*entries, entry)
-}
-
-func (entries *fieldExpiryHeap) Pop() any {
-	old := *entries
-	last := len(old) - 1
-	entry := old[last]
-	old[last] = nil
-	entry.expiryIndex = -1
-	*entries = old[:last]
-	return entry
-}
+type fieldCacheEntry = cacheEntry[fieldCacheKey, []FieldProfile]
 
 type fieldFlight struct {
 	done    chan struct{}
@@ -452,15 +398,23 @@ func NewFieldService(config FieldConfig) (*FieldService, error) {
 		clock:         func() time.Time { return clock().UTC() },
 		maximumFields: config.MaximumFields, defaultPageSize: config.DefaultPageSize,
 		maximumPageSize: config.MaximumPageSize, maxRuntime: config.MaxRuntime,
-		cacheTTL: config.CacheTTL, maxCacheEntries: config.MaxCacheEntries, maxCacheBytes: config.MaxCacheBytes,
+		cacheTTL:             config.CacheTTL,
 		defaultSummaryValues: config.DefaultSummaryValues, maximumSummaryValues: config.MaximumSummaryValues,
-		summaryCacheTTL: config.SummaryCacheTTL, maxSummaryCacheEntries: config.MaxSummaryCacheEntries,
-		maxSummaryCacheBytes: config.MaxSummaryCacheBytes,
-		gate:                 make(chan struct{}, config.MaxConcurrent), cache: make(map[fieldCacheKey]*fieldCacheEntry),
-		flights:        make(map[fieldCacheKey]*fieldFlight),
-		summaryCache:   make(map[fieldSummaryCacheKey]*fieldSummaryCacheEntry),
+		summaryCacheTTL: config.SummaryCacheTTL,
+		gate:            make(chan struct{}, config.MaxConcurrent),
+		catalog: expiringCache[fieldCacheKey, []FieldProfile]{
+			entries:    make(map[fieldCacheKey]*fieldCacheEntry),
+			maxEntries: config.MaxCacheEntries,
+			maxBytes:   config.MaxCacheBytes,
+		},
+		flights: make(map[fieldCacheKey]*fieldFlight),
+		summary: expiringCache[fieldSummaryCacheKey, FieldSummary]{
+			entries:    make(map[fieldSummaryCacheKey]*fieldSummaryCacheEntry),
+			maxEntries: config.MaxSummaryCacheEntries,
+			maxBytes:   config.MaxSummaryCacheBytes,
+		},
 		summaryFlights: make(map[fieldSummaryCacheKey]*fieldSummaryFlight),
-		shutdownDone:   make(chan struct{}),
+		barrier:        shutdownbarrier.New(),
 	}, nil
 }
 
@@ -509,37 +463,47 @@ func (service *FieldService) Close(ctx context.Context) error {
 		for _, flight := range service.summaryFlights {
 			flight.cancel()
 		}
-		for element := service.lru.Back(); element != nil; {
-			previous := element.Prev()
-			service.removeCacheEntryLocked(element.Value.(*fieldCacheEntry))
-			element = previous
-		}
-		for element := service.summaryLRU.Back(); element != nil; {
-			previous := element.Prev()
-			service.removeSummaryCacheEntryLocked(element.Value.(*fieldSummaryCacheEntry))
-			element = previous
-		}
+		service.catalog.drain()
+		service.summary.drain()
 	}
 	service.mu.Unlock()
 
-	service.shutdownOnce.Do(func() {
-		go func() {
-			service.operations.Wait()
-			service.workers.Wait()
-			close(service.shutdownDone)
-		}()
+	return service.barrier.Wait(ctx, func() {
+		service.operations.Wait()
+		service.workers.Wait()
 	})
-	select {
-	case <-service.shutdownDone:
-		return nil
-	default:
+}
+
+// beginOperation admits one public operation, deriving a lifecycle-cancelable
+// context. finish must be deferred; it reports whether the caller must replace
+// its result with the zero value because the service closed mid-flight.
+func (service *FieldService) beginOperation(ctx context.Context) (context.Context, func(resultErr *error) bool, error) {
+	service.mu.Lock()
+	if service.closed {
+		service.mu.Unlock()
+		return nil, nil, searchjobs.ErrClosed
 	}
-	select {
-	case <-service.shutdownDone:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	service.operations.Add(1)
+	service.mu.Unlock()
+
+	operationContext, cancelOperation := context.WithCancel(ctx)
+	stopLifecycleCancel := context.AfterFunc(service.lifecycleContext, cancelOperation)
+	return operationContext, func(resultErr *error) bool {
+		stopLifecycleCancel()
+		cancelOperation()
+		defer service.operations.Done()
+		if !errors.Is(*resultErr, context.Canceled) {
+			return false
+		}
+		service.mu.Lock()
+		closed := service.closed
+		service.mu.Unlock()
+		if !closed {
+			return false
+		}
+		*resultErr = searchjobs.ErrClosed
+		return true
+	}, nil
 }
 
 // ListFields re-executes an eligible event pipeline once per live immutable
@@ -559,28 +523,14 @@ func (service *FieldService) ListFields(ctx context.Context, access searchjobs.A
 	if err != nil {
 		return FieldPage{}, err
 	}
-	service.mu.Lock()
-	if service.closed {
-		service.mu.Unlock()
-		return FieldPage{}, searchjobs.ErrClosed
+	operationContext, finish, err := service.beginOperation(ctx)
+	if err != nil {
+		return FieldPage{}, err
 	}
-	service.operations.Add(1)
-	service.mu.Unlock()
-	operationContext, cancelOperation := context.WithCancel(ctx)
-	stopLifecycleCancel := context.AfterFunc(service.lifecycleContext, cancelOperation)
 	defer func() {
-		stopLifecycleCancel()
-		cancelOperation()
-		if errors.Is(resultErr, context.Canceled) {
-			service.mu.Lock()
-			closed := service.closed
-			service.mu.Unlock()
-			if closed {
-				result = FieldPage{}
-				resultErr = searchjobs.ErrClosed
-			}
+		if finish(&resultErr) {
+			result = FieldPage{}
 		}
-		service.operations.Done()
 	}()
 	ctx = operationContext
 
@@ -595,8 +545,8 @@ func (service *FieldService) ListFields(ctx context.Context, access searchjobs.A
 	// afterward, neither with a snapshot. The heap root is an O(1) live-cache
 	// check and removes only entries whose own capped deadline has passed.
 	service.mu.Lock()
-	service.expireCacheLocked(service.clock())
-	service.expireSummaryCacheLocked(service.clock())
+	service.catalog.expire(service.clock())
+	service.summary.expire(service.clock())
 	service.mu.Unlock()
 	if err != nil {
 		return FieldPage{}, err
@@ -616,7 +566,7 @@ func (service *FieldService) ListFields(ctx context.Context, access searchjobs.A
 	now := service.clock()
 	if snapshot.ExpiresAt.IsZero() || !now.Before(snapshot.ExpiresAt) {
 		service.mu.Lock()
-		service.removeCacheEntryLocked(service.cache[key])
+		service.catalog.remove(service.catalog.entries[key])
 		service.mu.Unlock()
 		return FieldPage{}, searchjobs.ErrExpired
 	}
@@ -687,8 +637,8 @@ func (service *FieldService) catalogFor(
 		service.mu.Unlock()
 		return nil, searchjobs.ErrClosed
 	}
-	if entry := service.liveCacheEntryLocked(key, now); entry != nil {
-		service.lru.MoveToFront(entry.element)
+	if entry := service.catalog.live(key, now); entry != nil {
+		service.catalog.lru.MoveToFront(entry.element)
 		service.mu.Unlock()
 		return entry, nil
 	}
@@ -779,30 +729,30 @@ func (service *FieldService) runFieldFlight(
 	}
 	if err == nil {
 		now := service.clock()
-		service.expireCacheLocked(now)
+		service.catalog.expire(now)
 		if !validUntil.IsZero() && !now.Before(validUntil) {
 			err = searchjobs.ErrExpired
 			entry = nil
-		} else if entry.retained > service.maxCacheBytes {
+		} else if entry.retained > service.catalog.maxBytes {
 			err = ErrFieldAnalysisCapacity
 			entry = nil
 		} else {
-			if service.nextGeneration == ^uint64(0) {
+			generation, allocated := service.catalog.allocateGeneration()
+			if !allocated {
 				err = ErrFieldAnalysisCapacity
 				entry = nil
 			} else {
-				service.nextGeneration++
-				entry.generation = service.nextGeneration
+				entry.generation = generation
 				entry.expiresAt = now.Add(service.cacheTTL)
 				if !validUntil.IsZero() && validUntil.Before(entry.expiresAt) {
 					entry.expiresAt = validUntil
 				}
-				entry.element = service.lru.PushFront(entry)
-				service.cache[key] = entry
-				service.cacheBytes += entry.retained
-				heap.Push(&service.expirations, entry)
-				service.enforceCacheBoundsLocked()
-				if service.cache[key] != entry {
+				entry.element = service.catalog.lru.PushFront(entry)
+				service.catalog.entries[key] = entry
+				service.catalog.bytes += entry.retained
+				heap.Push(&service.catalog.expirations, entry)
+				service.catalog.enforceBounds()
+				if service.catalog.entries[key] != entry {
 					err = ErrFieldAnalysisCapacity
 					entry = nil
 				}
@@ -878,7 +828,7 @@ func (service *FieldService) buildFieldCatalog(
 	if err != nil {
 		return nil, err
 	}
-	return &fieldCacheEntry{key: key, profiles: profiles, retained: retained, expiryIndex: -1}, nil
+	return &fieldCacheEntry{key: key, value: profiles, retained: retained, expiryIndex: -1}, nil
 }
 
 func classifyFieldCompileError(err error) error {
@@ -1046,7 +996,7 @@ func (service *FieldService) pageFromCachedEntry(
 		service.mu.Unlock()
 		return FieldPage{}, searchjobs.ErrClosed
 	}
-	liveEntry := service.liveCacheEntryLocked(key, service.clock())
+	liveEntry := service.catalog.live(key, service.clock())
 	if cursor != nil {
 		if liveEntry == nil || liveEntry.generation != cursor.Generation {
 			service.mu.Unlock()
@@ -1057,7 +1007,7 @@ func (service *FieldService) pageFromCachedEntry(
 		service.mu.Unlock()
 		return FieldPage{}, staleError
 	}
-	service.lru.MoveToFront(entry.element)
+	service.catalog.lru.MoveToFront(entry.element)
 	service.mu.Unlock()
 
 	page, err := service.buildFieldPage(ctx, key, request, entry, cursor)
@@ -1069,10 +1019,10 @@ func (service *FieldService) pageFromCachedEntry(
 	if service.closed {
 		return FieldPage{}, searchjobs.ErrClosed
 	}
-	if service.liveCacheEntryLocked(key, service.clock()) != entry || cursor != nil && entry.generation != cursor.Generation {
+	if service.catalog.live(key, service.clock()) != entry || cursor != nil && entry.generation != cursor.Generation {
 		return FieldPage{}, staleError
 	}
-	service.lru.MoveToFront(entry.element)
+	service.catalog.lru.MoveToFront(entry.element)
 	return page, nil
 }
 
@@ -1093,16 +1043,16 @@ func (service *FieldService) buildFieldPage(
 	if cursor == nil {
 		// #nosec G115 -- normalized page sizes cannot exceed the 10,000-field service ceiling.
 		pageLimit := int(request.pageSize)
-		page := make([]FieldProfile, 0, min(pageLimit, len(entry.profiles)))
+		page := make([]FieldProfile, 0, min(pageLimit, len(entry.value)))
 		totalFields := uint64(0)
 		nextScanIndex := uint64(0)
-		for index := range entry.profiles {
+		for index := range entry.value {
 			if index&255 == 0 {
 				if err := ctx.Err(); err != nil {
 					return FieldPage{}, err
 				}
 			}
-			profile := entry.profiles[index]
+			profile := entry.value[index]
 			if !fieldProfileMatches(profile, request) {
 				continue
 			}
@@ -1123,7 +1073,7 @@ func (service *FieldService) buildFieldPage(
 	}
 
 	// #nosec G115 -- the catalog is capped at 10,000 profiles during normalization.
-	profileCount := uint64(len(entry.profiles))
+	profileCount := uint64(len(entry.value))
 	if cursor.TotalFields > profileCount || cursor.Offset >= cursor.TotalFields ||
 		cursor.ScanIndex < cursor.Offset || cursor.ScanIndex >= profileCount {
 		return FieldPage{}, ErrInvalidFieldCursor
@@ -1139,7 +1089,7 @@ func (service *FieldService) buildFieldPage(
 	nextScanIndex := cursor.ScanIndex
 	// #nosec G115 -- ScanIndex was just proven smaller than the bounded catalog length.
 	scanIndex := int(cursor.ScanIndex)
-	for index := scanIndex; index < len(entry.profiles) && len(page) < pageCapacity; index++ {
+	for index := scanIndex; index < len(entry.value) && len(page) < pageCapacity; index++ {
 		if index&255 == 0 {
 			if err := ctx.Err(); err != nil {
 				return FieldPage{}, err
@@ -1147,7 +1097,7 @@ func (service *FieldService) buildFieldPage(
 		}
 		// #nosec G115 -- index is a non-negative position within the bounded catalog.
 		nextScanIndex = uint64(index + 1)
-		profile := entry.profiles[index]
+		profile := entry.value[index]
 		if fieldProfileMatches(profile, request) {
 			page = append(page, cloneFieldProfile(profile))
 		}
@@ -1171,7 +1121,7 @@ func (service *FieldService) buildUnfilteredFieldPage(
 	cursor *fieldCursorPayload,
 ) (FieldPage, error) {
 	// #nosec G115 -- the catalog is capped at 10,000 profiles during normalization.
-	totalFields := uint64(len(entry.profiles))
+	totalFields := uint64(len(entry.value))
 	offset := uint64(0)
 	if cursor != nil {
 		if cursor.TotalFields != totalFields || cursor.Offset >= totalFields || cursor.ScanIndex != cursor.Offset {
@@ -1189,7 +1139,7 @@ func (service *FieldService) buildUnfilteredFieldPage(
 				return FieldPage{}, err
 			}
 		}
-		page = append(page, cloneFieldProfile(entry.profiles[index]))
+		page = append(page, cloneFieldProfile(entry.value[index]))
 	}
 	if err := ctx.Err(); err != nil {
 		return FieldPage{}, err
@@ -1259,49 +1209,6 @@ func cloneFieldProfile(source FieldProfile) FieldProfile {
 		result.DistinctCount = &value
 	}
 	return result
-}
-
-func (service *FieldService) liveCacheEntryLocked(key fieldCacheKey, now time.Time) *fieldCacheEntry {
-	entry := service.cache[key]
-	if entry != nil && !now.Before(entry.expiresAt) {
-		service.removeCacheEntryLocked(entry)
-		return nil
-	}
-	return entry
-}
-
-func (service *FieldService) expireCacheLocked(now time.Time) {
-	for len(service.expirations) != 0 {
-		entry := service.expirations[0]
-		if now.Before(entry.expiresAt) {
-			return
-		}
-		service.removeCacheEntryLocked(entry)
-	}
-}
-
-func (service *FieldService) enforceCacheBoundsLocked() {
-	for len(service.cache) > service.maxCacheEntries || service.cacheBytes > service.maxCacheBytes {
-		element := service.lru.Back()
-		if element == nil {
-			return
-		}
-		service.removeCacheEntryLocked(element.Value.(*fieldCacheEntry))
-	}
-}
-
-func (service *FieldService) removeCacheEntryLocked(entry *fieldCacheEntry) {
-	if entry == nil || service.cache[entry.key] != entry {
-		return
-	}
-	delete(service.cache, entry.key)
-	service.lru.Remove(entry.element)
-	heap.Remove(&service.expirations, entry.expiryIndex)
-	if entry.retained > service.cacheBytes {
-		service.cacheBytes = 0
-	} else {
-		service.cacheBytes -= entry.retained
-	}
 }
 
 func retainedFieldCatalogBytes(key fieldCacheKey, profiles []FieldProfile) (uint64, bool) {
