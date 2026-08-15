@@ -43,12 +43,11 @@ const (
 // contract with the SQL so an approximate or oracle-dependent implementation
 // cannot be mistaken for confirmed SPL parity at the call site.
 type statsDistributionAggregateLowering struct {
-	SQL            string
-	Result         statsDistributionResultKind
-	StateBound     statsDistributionStateBound
-	Exact          bool
-	Deterministic  bool
-	OracleRequired bool
+	SQL           string
+	Result        statsDistributionResultKind
+	StateBound    statsDistributionStateBound
+	Exact         bool
+	Deterministic bool
 }
 
 type statsExactModeWithSemanticBytesLowering struct {
@@ -65,8 +64,8 @@ type statsExactModeWithSemanticBytesLowering struct {
 // It is intentionally linear-memory, just like Splunk exactperc, and therefore
 // relies on the production query memory ceiling. Mode uses an exact sumMap
 // frequency state and is linear in distinct strings. The remaining states are
-// bounded, but their algorithms are not represented as confirmed Splunk
-// parity where OracleRequired is true.
+// bounded, and none of these lowerings is represented as confirmed Splunk
+// parity: each still requires oracle confirmation.
 func statsDistributionArrayAggregateSQL(
 	function plan.AggregateFunction,
 	percentile uint8,
@@ -82,72 +81,66 @@ func statsDistributionArrayAggregateSQL(
 			return statsDistributionAggregateLowering{}, false
 		}
 		return statsDistributionAggregateLowering{
-			SQL:            statsExactNearestRankArraySQL(percentile, inputSQL),
-			Result:         statsDistributionResultNullableFloat64,
-			StateBound:     statsDistributionStateBoundLinearValues,
-			Exact:          true,
-			Deterministic:  true,
-			OracleRequired: true,
+			SQL:           statsExactNearestRankArraySQL(percentile, inputSQL),
+			Result:        statsDistributionResultNullableFloat64,
+			StateBound:    statsDistributionStateBoundLinearValues,
+			Exact:         true,
+			Deterministic: true,
 		}, true
 	case plan.AggregateFunctionUpperPercentile:
 		if !statsDistributionPercentileIsValid(percentile) {
 			return statsDistributionAggregateLowering{}, false
 		}
 		return statsDistributionAggregateLowering{
-			SQL:            statsApproximateUpperPercentileArraySQL(percentile, inputSQL),
-			Result:         statsDistributionResultNullableFloat64,
-			StateBound:     statsDistributionStateBoundConstant,
-			Exact:          false,
-			Deterministic:  false,
-			OracleRequired: true,
+			SQL:           statsApproximateUpperPercentileArraySQL(percentile, inputSQL),
+			Result:        statsDistributionResultNullableFloat64,
+			StateBound:    statsDistributionStateBoundConstant,
+			Exact:         false,
+			Deterministic: false,
 		}, true
 	case plan.AggregateFunctionMedian:
 		if percentile != 0 {
 			return statsDistributionAggregateLowering{}, false
 		}
 		return statsDistributionAggregateLowering{
-			SQL:            statsApproximateMedianArraySQL(inputSQL),
-			Result:         statsDistributionResultNullableFloat64,
-			StateBound:     statsDistributionStateBoundConstant,
-			Exact:          false,
-			Deterministic:  false,
-			OracleRequired: true,
+			SQL:           statsApproximateMedianArraySQL(inputSQL),
+			Result:        statsDistributionResultNullableFloat64,
+			StateBound:    statsDistributionStateBoundConstant,
+			Exact:         false,
+			Deterministic: false,
 		}, true
 	case plan.AggregateFunctionEstimatedDistinctCount:
 		if percentile != 0 {
 			return statsDistributionAggregateLowering{}, false
 		}
 		return statsDistributionAggregateLowering{
-			SQL:            statsEstimatedDistinctArraySQL(inputSQL),
-			Result:         statsDistributionResultUInt64,
-			StateBound:     statsDistributionStateBoundConstant,
-			Exact:          false,
-			Deterministic:  true,
-			OracleRequired: true,
+			SQL:           statsEstimatedDistinctArraySQL(inputSQL),
+			Result:        statsDistributionResultUInt64,
+			StateBound:    statsDistributionStateBoundConstant,
+			Exact:         false,
+			Deterministic: true,
 		}, true
 	case plan.AggregateFunctionEstimatedDistinctCountError:
 		if percentile != 0 {
 			return statsDistributionAggregateLowering{}, false
 		}
 		return statsDistributionAggregateLowering{
-			SQL:            statsEstimatedDistinctErrorArraySQL(inputSQL),
-			Result:         statsDistributionResultFloat64,
-			StateBound:     statsDistributionStateBoundConstant,
-			Exact:          false,
-			Deterministic:  true,
-			OracleRequired: true,
+			SQL:           statsEstimatedDistinctErrorArraySQL(inputSQL),
+			Result:        statsDistributionResultFloat64,
+			StateBound:    statsDistributionStateBoundConstant,
+			Exact:         false,
+			Deterministic: true,
 		}, true
 	case plan.AggregateFunctionMode:
 		if percentile != 0 {
 			return statsDistributionAggregateLowering{}, false
 		}
 		return statsDistributionAggregateLowering{
-			SQL:            statsExactModeArraySQL(inputSQL),
-			Result:         statsDistributionResultNullableString,
-			StateBound:     statsDistributionStateBoundLinearDistinct,
-			Exact:          true,
-			Deterministic:  true,
-			OracleRequired: true,
+			SQL:           statsExactModeArraySQL(inputSQL),
+			Result:        statsDistributionResultNullableString,
+			StateBound:    statsDistributionStateBoundLinearDistinct,
+			Exact:         true,
+			Deterministic: true,
 		}, true
 	default:
 		return statsDistributionAggregateLowering{}, false

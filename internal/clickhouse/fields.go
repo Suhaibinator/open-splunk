@@ -347,23 +347,7 @@ func finalizeFieldCatalog(
 	sql.WriteString(" AS (SELECT count() AS ")
 	sql.WriteString(q(fieldCatalogProfileTotal))
 	sql.WriteString(", toUInt8(countIf(")
-	sql.WriteString(q(internalFieldMetadataVersionColumn))
-	sql.WriteString(" != ? OR length(")
-	sql.WriteString(q(internalFieldNamesColumn))
-	sql.WriteString(") > ? OR length(")
-	sql.WriteString(q(internalFieldTypesColumn))
-	sql.WriteString(") > ? OR length(")
-	sql.WriteString(q(internalFieldNamesColumn))
-	sql.WriteString(") != length(")
-	sql.WriteString(q(internalFieldTypesColumn))
-	sql.WriteString(") OR arrayExists(field_name -> empty(field_name) OR NOT isValidUTF8(field_name) OR length(field_name) > ?, ")
-	sql.WriteString(q(internalFieldNamesColumn))
-	sql.WriteString(") OR ")
-	sql.WriteString(q(internalFieldNamesColumn))
-	sql.WriteString(" != arraySort(arrayDistinct(")
-	sql.WriteString(q(internalFieldNamesColumn))
-	sql.WriteString(")) OR arrayExists(stored_type -> stored_type < ? OR stored_type > ?, ")
-	sql.WriteString(q(internalFieldTypesColumn))
+	writeAlignedFieldMetadataInvalidPredicate(&sql)
 	sql.WriteString(")) > 0) AS ")
 	sql.WriteString(q(fieldCatalogMetadataInvalid))
 	if len(knownFields) > 0 {
@@ -692,10 +676,12 @@ func fieldCatalogValidationDummyProjection() []string {
 	}
 }
 
-func writePrerequisiteFieldCatalogMetadataPredicate(
-	sql *strings.Builder,
-	hasSidecars bool,
-) {
+// writeAlignedFieldMetadataInvalidPredicate emits the shared "aligned stored-field
+// metadata is invalid" boolean. It binds six values in order:
+// CurrentFieldMetadataVersion, MaximumStoredFieldsPerEvent, MaximumStoredFieldsPerEvent,
+// MaximumNormalizedFieldNameBytes, StoredValueTypeNull, StoredValueTypeDecimal.
+// Callers own the surrounding countIf(...)/toUInt8(...) wrapper and any suffix.
+func writeAlignedFieldMetadataInvalidPredicate(sql *strings.Builder) {
 	q := quoteIdentifier
 	sql.WriteString(q(internalFieldMetadataVersionColumn))
 	sql.WriteString(" != ? OR length(")
@@ -714,6 +700,14 @@ func writePrerequisiteFieldCatalogMetadataPredicate(
 	sql.WriteString(q(internalFieldNamesColumn))
 	sql.WriteString(")) OR arrayExists(stored_type -> stored_type < ? OR stored_type > ?, ")
 	sql.WriteString(q(internalFieldTypesColumn))
+}
+
+func writePrerequisiteFieldCatalogMetadataPredicate(
+	sql *strings.Builder,
+	hasSidecars bool,
+) {
+	q := quoteIdentifier
+	writeAlignedFieldMetadataInvalidPredicate(sql)
 	sql.WriteString(")")
 	if hasSidecars {
 		sql.WriteString(" OR ")

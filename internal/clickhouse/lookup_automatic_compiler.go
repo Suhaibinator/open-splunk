@@ -123,7 +123,7 @@ func compileAutomaticLookupGroup(
 	}
 
 	boundTuple := quoteIdentifier("__os_auto_lookup_frozen")
-	bindingProjection := automaticLookupEventProjection(state)
+	bindingProjection := visibleEventProjection(state)
 	position := 1
 	for stageIndex := range group.stages {
 		bindingProjection = append(
@@ -233,7 +233,7 @@ func compileAutomaticLookupGroup(
 			knowledgeTupleElementUInt128(input.selectorTuple, 3),
 		)
 	}
-	finalProjection := automaticLookupEventProjection(finalState)
+	finalProjection := visibleEventProjection(finalState)
 	for _, column := range []string{
 		prelude.aliasCopyCharges.eventBytes,
 		prelude.aliasCopyCharges.queryUnits,
@@ -285,16 +285,12 @@ func compileAutomaticLookupGroup(
 	return current, finalState, args, prelude, nil
 }
 
-func automaticLookupEventProjection(state compileState) []string {
+func visibleEventProjection(state compileState) []string {
 	projection := make([]string, 0, len(state.visible)+len(state.privateColumns)+12)
 	for _, name := range orderedVisibleNames(state) {
 		field := state.visible[name]
 		publicName := quoteIdentifier(name)
-		if field.valueSQL == publicName {
-			projection = append(projection, publicName)
-		} else {
-			projection = append(projection, field.valueSQL+" AS "+publicName)
-		}
+		projection = appendVisibleFieldProjection(projection, field, publicName)
 	}
 	return appendPrivateEventProjection(projection, state)
 }

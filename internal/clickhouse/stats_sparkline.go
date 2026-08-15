@@ -39,16 +39,15 @@ const (
 // sparkline_maxsize elements, so the physical +1 remains explicitly marked as
 // oracle-required rather than silently reducing the documented 100 bins.
 type statsSparklineBucketSpec struct {
-	Span                           plan.SparklineSpan
-	Automatic                      bool
-	BucketSQL                      string
-	BucketArgs                     []any
-	FirstBucket                    int64
-	BucketCount                    uint16
-	MaximumPoints                  uint16
-	MaximumEncodedElements         uint16
-	MarkerAccountingOracleRequired bool
-	AlignmentOracleRequired        bool
+	Span                    plan.SparklineSpan
+	Automatic               bool
+	BucketSQL               string
+	BucketArgs              []any
+	FirstBucket             int64
+	BucketCount             uint16
+	MaximumPoints           uint16
+	MaximumEncodedElements  uint16
+	AlignmentOracleRequired bool
 }
 
 var statsSparklineAutomaticSteps = [...]plan.SparklineSpan{
@@ -183,10 +182,9 @@ func statsSparklineExplicitBucketSpec(
 	}
 
 	base := statsSparklineBucketSpec{
-		Span:                           span,
-		MaximumPoints:                  maximumPoints,
-		MaximumEncodedElements:         maximumPoints + 1,
-		MarkerAccountingOracleRequired: true,
+		Span:                   span,
+		MaximumPoints:          maximumPoints,
+		MaximumEncodedElements: maximumPoints + 1,
 	}
 	lastIncluded := latest.Add(-time.Nanosecond)
 	if span.Unit == plan.SparklineSpanUnitDay {
@@ -344,8 +342,6 @@ type statsSparklineAggregateLowering struct {
 	Input                    statsSparklineInputKind
 	Result                   statsSparklineResultKind
 	StateBound               statsSparklineStateBound
-	Exact                    bool
-	Deterministic            bool
 	OracleRequired           bool
 	MaximumDistinctPerBucket uint64
 }
@@ -378,24 +374,20 @@ func statsSparklineWindowAggregateSQL(
 			return statsSparklineAggregateLowering{}, false
 		}
 		return statsSparklineAggregateLowering{
-			SQL:           "toUInt64(count()" + over + ")",
-			Input:         statsSparklineInputNone,
-			Result:        statsSparklineResultUInt64,
-			StateBound:    statsSparklineStateBoundConstant,
-			Exact:         true,
-			Deterministic: true,
+			SQL:        "toUInt64(count()" + over + ")",
+			Input:      statsSparklineInputNone,
+			Result:     statsSparklineResultUInt64,
+			StateBound: statsSparklineStateBoundConstant,
 		}, true
 	case plan.AggregateFunctionCountValues:
 		if !requireInput(statsSparklineInputOccurrenceCount) {
 			return statsSparklineAggregateLowering{}, false
 		}
 		return statsSparklineAggregateLowering{
-			SQL:           "toUInt64(sum(toUInt128(" + inputSQL + "))" + over + ")",
-			Input:         statsSparklineInputOccurrenceCount,
-			Result:        statsSparklineResultUInt64,
-			StateBound:    statsSparklineStateBoundConstant,
-			Exact:         true,
-			Deterministic: true,
+			SQL:        "toUInt64(sum(toUInt128(" + inputSQL + "))" + over + ")",
+			Input:      statsSparklineInputOccurrenceCount,
+			Result:     statsSparklineResultUInt64,
+			StateBound: statsSparklineStateBoundConstant,
 		}, true
 	case plan.AggregateFunctionDistinctCount:
 		if !requireInput(statsSparklineInputStringArray) {
@@ -414,8 +406,6 @@ func statsSparklineWindowAggregateSQL(
 			Input:                    statsSparklineInputStringArray,
 			Result:                   statsSparklineResultUInt64,
 			StateBound:               statsSparklineStateBoundLinearDistinct,
-			Exact:                    true,
-			Deterministic:            true,
 			MaximumDistinctPerBucket: maximum,
 		}, true
 	case plan.AggregateFunctionMinimum, plan.AggregateFunctionMaximum:
@@ -427,12 +417,10 @@ func statsSparklineWindowAggregateSQL(
 			name = "maxOrNullArray"
 		}
 		return statsSparklineAggregateLowering{
-			SQL:           name + "(" + inputSQL + ")" + over,
-			Input:         statsSparklineInputStringArray,
-			Result:        statsSparklineResultNullableString,
-			StateBound:    statsSparklineStateBoundConstant,
-			Exact:         true,
-			Deterministic: true,
+			SQL:        name + "(" + inputSQL + ")" + over,
+			Input:      statsSparklineInputStringArray,
+			Result:     statsSparklineResultNullableString,
+			StateBound: statsSparklineStateBoundConstant,
 			// The bytewise lexical lowering is deterministic, but Splunk's
 			// mixed numeric/string ordering remains O-min-max-order.
 			OracleRequired: true,
@@ -442,43 +430,15 @@ func statsSparklineWindowAggregateSQL(
 	if inputSQL == "" {
 		return statsSparklineAggregateLowering{}, false
 	}
-	windowAggregate := func(name string) string {
-		return name + "(" + inputSQL + ")" + over
-	}
-	var sql string
-	switch function {
-	case plan.AggregateFunctionAverage:
-		sql = windowAggregate("avgOrNullArray")
-	case plan.AggregateFunctionStandardDeviationSample:
-		sql = "if(" + windowAggregate("countArray") + " = 1, " +
-			"CAST(0 AS Nullable(Float64)), " +
-			windowAggregate("stddevSampStableOrNullArray") + ")"
-	case plan.AggregateFunctionStandardDeviationPopulation:
-		sql = windowAggregate("stddevPopStableOrNullArray")
-	case plan.AggregateFunctionVarianceSample:
-		sql = "if(" + windowAggregate("countArray") + " = 1, " +
-			"CAST(0 AS Nullable(Float64)), " +
-			windowAggregate("varSampStableOrNullArray") + ")"
-	case plan.AggregateFunctionVariancePopulation:
-		sql = windowAggregate("varPopStableOrNullArray")
-	case plan.AggregateFunctionSum:
-		sql = windowAggregate("sumOrNullArray")
-	case plan.AggregateFunctionSumSquares:
-		squared := "arrayMap(value -> value * value, " + inputSQL + ")"
-		sql = "sumOrNullArray(" + squared + ")" + over
-	case plan.AggregateFunctionRange:
-		sql = windowAggregate("maxOrNullArray") + " - " +
-			windowAggregate("minOrNullArray")
-	default:
+	sql, supported := numericArrayAggregateOverSQL(function, inputSQL, over)
+	if !supported {
 		return statsSparklineAggregateLowering{}, false
 	}
 	return statsSparklineAggregateLowering{
-		SQL:           sql,
-		Input:         statsSparklineInputFloat64Array,
-		Result:        statsSparklineResultNullableFloat64,
-		StateBound:    statsSparklineStateBoundConstant,
-		Exact:         true,
-		Deterministic: true,
+		SQL:        sql,
+		Input:      statsSparklineInputFloat64Array,
+		Result:     statsSparklineResultNullableFloat64,
+		StateBound: statsSparklineStateBoundConstant,
 	}, true
 }
 

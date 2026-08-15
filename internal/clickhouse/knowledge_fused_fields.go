@@ -195,6 +195,51 @@ type compiledKnowledgeFusedFieldProjection struct {
 	calculated         []knowledgeprogram.Calculated
 }
 
+// knowledgeFieldAssignmentOperation is the shared selector/destination surface
+// of the fused alias and calculated operations.
+type knowledgeFieldAssignmentOperation interface {
+	Selector() knowledgeprogram.Selector
+	Destination() string
+	Overwrite() knowledgeprogram.OverwriteBehavior
+	Origin() knowledgeprogram.Origin
+}
+
+// finalizeKnowledgeFieldAssignment authorizes a compiled knowledge field source
+// against the frozen input state and lowers it into the sealed assignment.
+func finalizeKnowledgeFieldAssignment(
+	operation knowledgeFieldAssignmentOperation,
+	state compileState,
+	value compiledScalar,
+	sourceValue compiledKnowledgeFieldSource,
+	inputFields []string,
+	authorityLabel string,
+) (compiledKnowledgeFieldAssignment, error) {
+	inputStateAuthority, err := compileKnowledgeFieldInputStateAuthority(
+		state,
+		inputFields,
+	)
+	if err != nil {
+		return compiledKnowledgeFieldAssignment{}, err
+	}
+	maxStringBytes := compiledScalarStringByteBound(value)
+	sourceValue, err = authorizeCompiledKnowledgeFieldSource(
+		sourceValue,
+		authorityLabel,
+		inputStateAuthority,
+		maxStringBytes,
+	)
+	if err != nil {
+		return compiledKnowledgeFieldAssignment{}, err
+	}
+	return compileKnowledgeFieldAssignment(
+		operation.Selector(),
+		operation.Destination(),
+		operation.Overwrite(),
+		operation.Origin(),
+		sourceValue,
+	)
+}
+
 // compileKnowledgeAliasAssignment lowers one immutable alias against the
 // frozen extraction-stage state. Exact leaves retain their Dynamic value;
 // flattened object parents retain a lazy materializer plus relative metadata
@@ -232,29 +277,13 @@ func compileKnowledgeAliasAssignment(
 	if err != nil {
 		return compiledKnowledgeFieldAssignment{}, err
 	}
-	inputStateAuthority, err := compileKnowledgeFieldInputStateAuthority(
+	compiled, err := finalizeKnowledgeFieldAssignment(
+		operation,
 		state,
+		value,
+		sourceValue,
 		[]string{operation.Source()},
-	)
-	if err != nil {
-		return compiledKnowledgeFieldAssignment{}, err
-	}
-	maxStringBytes := compiledScalarStringByteBound(value)
-	sourceValue, err = authorizeCompiledKnowledgeFieldSource(
-		sourceValue,
 		"field:"+operation.Source(),
-		inputStateAuthority,
-		maxStringBytes,
-	)
-	if err != nil {
-		return compiledKnowledgeFieldAssignment{}, err
-	}
-	compiled, err := compileKnowledgeFieldAssignment(
-		operation.Selector(),
-		operation.Destination(),
-		operation.Overwrite(),
-		operation.Origin(),
-		sourceValue,
 	)
 	if err != nil {
 		return compiledKnowledgeFieldAssignment{}, err
@@ -293,29 +322,13 @@ func compileKnowledgeCalculatedAssignment(
 	if err != nil {
 		return compiledKnowledgeFieldAssignment{}, err
 	}
-	inputStateAuthority, err := compileKnowledgeFieldInputStateAuthority(
+	compiled, err := finalizeKnowledgeFieldAssignment(
+		operation,
 		state,
+		value,
+		sourceValue,
 		operation.InputFields(),
-	)
-	if err != nil {
-		return compiledKnowledgeFieldAssignment{}, err
-	}
-	maxStringBytes := compiledScalarStringByteBound(value)
-	sourceValue, err = authorizeCompiledKnowledgeFieldSource(
-		sourceValue,
 		"expression:"+operation.Expression(),
-		inputStateAuthority,
-		maxStringBytes,
-	)
-	if err != nil {
-		return compiledKnowledgeFieldAssignment{}, err
-	}
-	compiled, err := compileKnowledgeFieldAssignment(
-		operation.Selector(),
-		operation.Destination(),
-		operation.Overwrite(),
-		operation.Origin(),
-		sourceValue,
 	)
 	if err != nil {
 		return compiledKnowledgeFieldAssignment{}, err
@@ -786,17 +799,7 @@ func compileKnowledgeFusedFieldProjection(
 		inputBytes: quoteIdentifier(fmt.Sprintf("__os_ko_selector_input_bytes_%d", stage)),
 		queryUnits: quoteIdentifier(fmt.Sprintf("__os_ko_selector_query_units_%d", stage)),
 	}
-	bindingProjection := make([]string, 0, len(state.visible)+len(groups)+12)
-	for _, name := range orderedVisibleNames(state) {
-		field := state.visible[name]
-		publicName := quoteIdentifier(name)
-		if field.valueSQL == publicName {
-			bindingProjection = append(bindingProjection, publicName)
-		} else {
-			bindingProjection = append(bindingProjection, field.valueSQL+" AS "+publicName)
-		}
-	}
-	bindingProjection = appendPrivateEventProjection(bindingProjection, state)
+	bindingProjection := visibleEventProjection(state)
 	if priorCharges.inputBytes != "" {
 		if !slices.Contains(bindingProjection, priorCharges.inputBytes) {
 			bindingProjection = append(bindingProjection, priorCharges.inputBytes)

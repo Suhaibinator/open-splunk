@@ -332,65 +332,9 @@ func finalizeFieldSummary(
 	// complex final event pipeline. The ordinary analysis path materializes this
 	// CTE; deferred eventstats graphs keep it ordinary so ClickHouse 26.3 can
 	// schedule the flat dependency chain.
-	sql.WriteString(q(fieldSummaryTypedCTE))
-	writeCTEOpening(&sql, policy.materializeSharedCTEs)
-	sql.WriteString("SELECT toUInt8(ifNull(")
-	sql.WriteString(presenceSQL)
-	sql.WriteString(", 0)) AS ")
-	sql.WriteString(q(fieldSummaryPresent))
-	sql.WriteString(", ")
-	sql.WriteString(storedTypeSQL)
-	sql.WriteString(" AS ")
-	sql.WriteString(q(fieldSummaryStoredType))
-	sql.WriteString(", ")
-	sql.WriteString(field.valueSQL)
-	sql.WriteString(" AS ")
-	sql.WriteString(q(fieldSummaryRawValue))
-	if field.kind == fieldKindDynamic {
-		sql.WriteString(", ")
-		sql.WriteString(dynamicTypeExpression(field))
-		sql.WriteString(" AS ")
-		sql.WriteString(q(fieldSummaryPhysicalType))
-	}
-	for _, column := range []string{
-		internalFieldNamesColumn,
-		internalFieldTypesColumn,
-		internalFieldMetadataVersionColumn,
-	} {
-		sql.WriteString(", ")
-		sql.WriteString(q(column))
-	}
-	sql.WriteString(" FROM ")
-	sql.WriteString(q(fieldSummarySourceCTE))
-	sql.WriteString("), ")
+	writeFieldSummaryTypedAndEncodedCTEs(&sql, field, presenceSQL, storedTypeSQL, policy.materializeSharedCTEs)
 	args = append(args, presenceArgs...)
 	args = append(args, storedTypeArgs...)
-
-	agreementSQL, encodedSQL := fieldSummaryScalarExpressions(field)
-	sql.WriteString(q(fieldSummaryEncodedCTE))
-	sql.WriteString(" AS (SELECT ")
-	sql.WriteString(q(fieldSummaryPresent))
-	sql.WriteString(", ")
-	sql.WriteString(q(fieldSummaryStoredType))
-	sql.WriteString(", toUInt8(")
-	sql.WriteString(agreementSQL)
-	sql.WriteString(") AS ")
-	sql.WriteString(q(fieldSummaryAgreement))
-	sql.WriteString(", ifNull(")
-	sql.WriteString(encodedSQL)
-	sql.WriteString(", CAST('' AS String)) AS ")
-	sql.WriteString(q(fieldSummaryEncoded))
-	for _, column := range []string{
-		internalFieldNamesColumn,
-		internalFieldTypesColumn,
-		internalFieldMetadataVersionColumn,
-	} {
-		sql.WriteString(", ")
-		sql.WriteString(q(column))
-	}
-	sql.WriteString(" FROM ")
-	sql.WriteString(q(fieldSummaryTypedCTE))
-	sql.WriteString("), ")
 
 	sql.WriteString(q(fieldSummaryRowsCTE))
 	writeCTEOpening(&sql, policy.materializeSharedCTEs)
@@ -506,32 +450,19 @@ func finalizeFieldSummary(
 // most one exact-value observation; a zero-weight control observation preserves
 // the header for an empty input. The only window runs after the distinct-value
 // GROUP BY, so its state is bounded by MaximumDistinctValues plus the header.
-func finalizePrerequisiteFieldSummary(
-	relation compiledRelation,
-	args []any,
+// writeFieldSummaryTypedAndEncodedCTEs emits the typed projection stage and the
+// agreement/encoding stage shared by both field-summary finalizers. materialized
+// selects MATERIALIZED for the typed CTE; the emitted text is otherwise identical.
+func writeFieldSummaryTypedAndEncodedCTEs(
+	sql *strings.Builder,
 	field fieldState,
-	presenceSQL string,
-	presenceArgs []any,
-	storedTypeSQL string,
-	storedTypeArgs []any,
-	spec FieldSummarySpec,
-	ownerRange spl.Range,
-	policy eventAnalysisFinalizationPolicy,
-) (CompiledQuery, error) {
+	presenceSQL, storedTypeSQL string,
+	materialized bool,
+) {
 	q := quoteIdentifier
-	var sql strings.Builder
-	sql.Grow(len(relation.sql) + 16_384)
-	sql.WriteString("WITH ")
-	sql.WriteString(q(fieldSummarySourceCTE))
-	sql.WriteString(" AS (")
-	sql.WriteString(relation.sql)
-	sql.WriteString("), ")
-
-	// Keep each expression in its own stage. Besides avoiding repeated Dynamic
-	// evaluation, this prevents ClickHouse's global alias substitution from
-	// replacing an input column with a same-SELECT output alias.
 	sql.WriteString(q(fieldSummaryTypedCTE))
-	sql.WriteString(" AS (SELECT toUInt8(ifNull(")
+	writeCTEOpening(sql, materialized)
+	sql.WriteString("SELECT toUInt8(ifNull(")
 	sql.WriteString(presenceSQL)
 	sql.WriteString(", 0)) AS ")
 	sql.WriteString(q(fieldSummaryPresent))
@@ -560,8 +491,6 @@ func finalizePrerequisiteFieldSummary(
 	sql.WriteString(" FROM ")
 	sql.WriteString(q(fieldSummarySourceCTE))
 	sql.WriteString("), ")
-	args = append(args, presenceArgs...)
-	args = append(args, storedTypeArgs...)
 
 	agreementSQL, encodedSQL := fieldSummaryScalarExpressions(field)
 	sql.WriteString(q(fieldSummaryEncodedCTE))
@@ -588,6 +517,35 @@ func finalizePrerequisiteFieldSummary(
 	sql.WriteString(" FROM ")
 	sql.WriteString(q(fieldSummaryTypedCTE))
 	sql.WriteString("), ")
+}
+
+func finalizePrerequisiteFieldSummary(
+	relation compiledRelation,
+	args []any,
+	field fieldState,
+	presenceSQL string,
+	presenceArgs []any,
+	storedTypeSQL string,
+	storedTypeArgs []any,
+	spec FieldSummarySpec,
+	ownerRange spl.Range,
+	policy eventAnalysisFinalizationPolicy,
+) (CompiledQuery, error) {
+	q := quoteIdentifier
+	var sql strings.Builder
+	sql.Grow(len(relation.sql) + 16_384)
+	sql.WriteString("WITH ")
+	sql.WriteString(q(fieldSummarySourceCTE))
+	sql.WriteString(" AS (")
+	sql.WriteString(relation.sql)
+	sql.WriteString("), ")
+
+	// Keep each expression in its own stage. Besides avoiding repeated Dynamic
+	// evaluation, this prevents ClickHouse's global alias substitution from
+	// replacing an input column with a same-SELECT output alias.
+	writeFieldSummaryTypedAndEncodedCTEs(&sql, field, presenceSQL, storedTypeSQL, false)
+	args = append(args, presenceArgs...)
+	args = append(args, storedTypeArgs...)
 
 	sql.WriteString(q(fieldSummaryRowsCTE))
 	sql.WriteString(" AS (SELECT ")
@@ -625,7 +583,8 @@ func finalizePrerequisiteFieldSummary(
 	sql.WriteString(") > CAST(? AS UInt64), 0)) AS ")
 	sql.WriteString(q(fieldSummaryRowOversized))
 	sql.WriteString(", toUInt8(")
-	writePrerequisiteFieldSummaryMetadataPredicate(&sql)
+	writeAlignedFieldMetadataInvalidPredicate(&sql)
+	sql.WriteString(")")
 	sql.WriteString(") AS ")
 	sql.WriteString(q(fieldSummaryRowMetadataBad))
 	sql.WriteString(" FROM ")
@@ -689,28 +648,6 @@ func finalizePrerequisiteFieldSummary(
 		validationDummyProjection: fieldSummaryValidationDummyProjection(),
 	}
 	return withCompiledRelationalDepth(compiled, resultDepth, ownerRange), nil
-}
-
-func writePrerequisiteFieldSummaryMetadataPredicate(sql *strings.Builder) {
-	q := quoteIdentifier
-	sql.WriteString(q(internalFieldMetadataVersionColumn))
-	sql.WriteString(" != ? OR length(")
-	sql.WriteString(q(internalFieldNamesColumn))
-	sql.WriteString(") > ? OR length(")
-	sql.WriteString(q(internalFieldTypesColumn))
-	sql.WriteString(") > ? OR length(")
-	sql.WriteString(q(internalFieldNamesColumn))
-	sql.WriteString(") != length(")
-	sql.WriteString(q(internalFieldTypesColumn))
-	sql.WriteString(") OR arrayExists(field_name -> empty(field_name) OR NOT isValidUTF8(field_name) OR length(field_name) > ?, ")
-	sql.WriteString(q(internalFieldNamesColumn))
-	sql.WriteString(") OR ")
-	sql.WriteString(q(internalFieldNamesColumn))
-	sql.WriteString(" != arraySort(arrayDistinct(")
-	sql.WriteString(q(internalFieldNamesColumn))
-	sql.WriteString(")) OR arrayExists(stored_type -> stored_type < ? OR stored_type > ?, ")
-	sql.WriteString(q(internalFieldTypesColumn))
-	sql.WriteString(")")
 }
 
 func writePrerequisiteFieldSummaryObservations(sql *strings.Builder) {
@@ -960,26 +897,10 @@ func writeFieldSummaryTotals(sql *strings.Builder, materialized bool) {
 	sql.WriteString(", count() AS ")
 	sql.WriteString(q(fieldSummaryProfileTotal))
 
-	// This is deliberately byte-for-byte equivalent in semantics to the field
+	// This shares writeAlignedFieldMetadataInvalidPredicate with the field
 	// catalog metadata guard. One corrupt event invalidates the whole result.
 	sql.WriteString(", toUInt8(countIf(")
-	sql.WriteString(q(internalFieldMetadataVersionColumn))
-	sql.WriteString(" != ? OR length(")
-	sql.WriteString(q(internalFieldNamesColumn))
-	sql.WriteString(") > ? OR length(")
-	sql.WriteString(q(internalFieldTypesColumn))
-	sql.WriteString(") > ? OR length(")
-	sql.WriteString(q(internalFieldNamesColumn))
-	sql.WriteString(") != length(")
-	sql.WriteString(q(internalFieldTypesColumn))
-	sql.WriteString(") OR arrayExists(field_name -> empty(field_name) OR NOT isValidUTF8(field_name) OR length(field_name) > ?, ")
-	sql.WriteString(q(internalFieldNamesColumn))
-	sql.WriteString(") OR ")
-	sql.WriteString(q(internalFieldNamesColumn))
-	sql.WriteString(" != arraySort(arrayDistinct(")
-	sql.WriteString(q(internalFieldNamesColumn))
-	sql.WriteString(")) OR arrayExists(stored_type -> stored_type < ? OR stored_type > ?, ")
-	sql.WriteString(q(internalFieldTypesColumn))
+	writeAlignedFieldMetadataInvalidPredicate(sql)
 	sql.WriteString(") OR ")
 	sql.WriteString(q(fieldSummaryRowInvalid))
 	sql.WriteString(" != 0) > 0) AS ")

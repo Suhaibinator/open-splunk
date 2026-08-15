@@ -1,6 +1,9 @@
 package clickhouse
 
-import "math"
+import (
+	"math"
+	"strings"
+)
 
 // epochFloorBucketNumberSQL returns a signed epoch-bucket expression for a
 // DateTime64 tick count. ClickHouse integer division truncates toward zero, so
@@ -38,4 +41,67 @@ func ordinalGridFirstBucketNumber(firstUnix, spanSeconds int64, bucketCount uint
 
 func appendOrdinalGridArgs(args []any, spanNanoseconds, firstBucketNumber int64, bucketCount uint64) []any {
 	return append(args, spanNanoseconds, spanNanoseconds, firstBucketNumber, bucketCount)
+}
+
+// bucketCountGrid names the identifiers of the shared bucket-count grid used by
+// the timeline and the fixed-count timechart.
+type bucketCountGrid struct {
+	counts       string
+	countsSource string
+	ticks        string
+	bucketNumber string
+	grid         string
+	ordinal      string
+	count        string
+}
+
+// writeBucketCountGridSQL emits the counts CTE, the ordinal grid CTE, and the
+// grid-to-counts LEFT JOIN. Callers must append the grid bind values with
+// appendOrdinalGridArgs in the same order.
+func writeBucketCountGridSQL(sql *strings.Builder, g bucketCountGrid) {
+	sql.WriteString(g.counts)
+	sql.WriteString(" AS (SELECT ")
+	sql.WriteString(epochFloorBucketNumberSQL(g.ticks))
+	sql.WriteString(" AS ")
+	sql.WriteString(g.bucketNumber)
+	sql.WriteString(", count() AS ")
+	sql.WriteString(g.count)
+	sql.WriteString(" FROM ")
+	sql.WriteString(g.countsSource)
+	sql.WriteString(" GROUP BY ")
+	sql.WriteString(g.bucketNumber)
+	sql.WriteString("), ")
+
+	sql.WriteString(g.grid)
+	sql.WriteString(" AS (")
+	sql.WriteString(ordinalGridSQL(g.ordinal, g.bucketNumber))
+	sql.WriteString(") SELECT ")
+	sql.WriteString(g.grid)
+	sql.WriteString(".")
+	sql.WriteString(g.ordinal)
+	sql.WriteString(" AS ")
+	sql.WriteString(g.ordinal)
+	sql.WriteString(", ifNull(")
+	sql.WriteString(g.counts)
+	sql.WriteString(".")
+	sql.WriteString(g.count)
+	sql.WriteString(", toUInt64(0)) AS ")
+	sql.WriteString(g.count)
+	sql.WriteString(" FROM ")
+	sql.WriteString(g.grid)
+	sql.WriteString(" LEFT JOIN ")
+	sql.WriteString(g.counts)
+	sql.WriteString(" ON ")
+	sql.WriteString(g.counts)
+	sql.WriteString(".")
+	sql.WriteString(g.bucketNumber)
+	sql.WriteString(" = ")
+	sql.WriteString(g.grid)
+	sql.WriteString(".")
+	sql.WriteString(g.bucketNumber)
+	sql.WriteString(" ORDER BY ")
+	sql.WriteString(g.grid)
+	sql.WriteString(".")
+	sql.WriteString(g.ordinal)
+	sql.WriteString(" ASC")
 }

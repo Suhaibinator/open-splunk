@@ -49,20 +49,11 @@ func validResultStringOrBytesOutputs(compiled CompiledQuery) bool {
 		!validResultOptionalMultivalueOutputs(compiled) {
 		return false
 	}
-	usedNames := make(map[string]struct{}, len(compiled.OutputFields)+1+
+	usedNames, ok := publicResultOutputNames(compiled,
 		len(compiled.ContainerOutputs)*3+len(compiled.OptionalMultivalueOutputs)+
-		len(compiled.StringOrBytesOutputs))
-	for _, name := range compiled.OutputFields {
-		if name == "" {
-			return false
-		}
-		if _, duplicate := usedNames[name]; duplicate {
-			return false
-		}
-		usedNames[name] = struct{}{}
-	}
-	if compiled.SparseFields {
-		usedNames[SparseEventFieldNamesColumn] = struct{}{}
+			len(compiled.StringOrBytesOutputs))
+	if !ok {
+		return false
 	}
 	reservedIndexes := make(map[int]struct{}, len(compiled.ContainerOutputs)+
 		len(compiled.OptionalMultivalueOutputs))
@@ -81,8 +72,7 @@ func validResultStringOrBytesOutputs(compiled CompiledQuery) bool {
 	previous := -1
 	for _, output := range compiled.StringOrBytesOutputs {
 		index := int(output.OutputIndex)
-		if index <= previous || index >= len(compiled.OutputFields) ||
-			compiled.SparseFields && compiled.OutputFields[index] == "fields" {
+		if !validResultOutputOrdinal(compiled, index, previous) {
 			return false
 		}
 		if _, overlap := reservedIndexes[index]; overlap {

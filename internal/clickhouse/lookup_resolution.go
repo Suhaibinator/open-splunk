@@ -355,7 +355,7 @@ func (compiler Compiler) WithLookupResolutionsContext(
 				"configure ClickHouse lookup resolutions: retained byte count overflows",
 			)
 		}
-		retainedBytes, ok = checkedLookupBytesAdd(retainedBytes, bytes)
+		retainedBytes, ok = retainedAdd(retainedBytes, bytes)
 		if !ok || retainedBytes >
 			uint64(MaximumLookupStagesPerQuery)*MaximumLookupAssetBytes {
 			return Compiler{}, errors.New(
@@ -685,7 +685,7 @@ func validateLookupResolutionAndMeasureContext(
 		}
 		seenHeaders[header] = struct{}{}
 		var ok bool
-		decodedBytes, ok = checkedLookupBytesAdd(decodedBytes, uint64(len(header)))
+		decodedBytes, ok = retainedAdd(decodedBytes, uint64(len(header)))
 		if !ok {
 			return 0, errors.New("create ClickHouse lookup resolution: asset byte count overflows")
 		}
@@ -738,7 +738,7 @@ func validateLookupResolutionAndMeasureContext(
 				)
 			}
 			var added bool
-			rowBytes, added = checkedLookupBytesAdd(rowBytes, uint64(len(cell)))
+			rowBytes, added = retainedAdd(rowBytes, uint64(len(cell)))
 			if !added || rowBytes > MaximumLookupRowBytes {
 				return 0, fmt.Errorf(
 					"create ClickHouse lookup resolution: row %d exceeds %d decoded bytes",
@@ -748,7 +748,7 @@ func validateLookupResolutionAndMeasureContext(
 			}
 		}
 		var ok bool
-		decodedBytes, ok = checkedLookupBytesAdd(decodedBytes, rowBytes)
+		decodedBytes, ok = retainedAdd(decodedBytes, rowBytes)
 		if !ok || decodedBytes > MaximumLookupAssetBytes {
 			return 0, fmt.Errorf(
 				"create ClickHouse lookup resolution: asset exceeds %d decoded bytes",
@@ -757,13 +757,6 @@ func validateLookupResolutionAndMeasureContext(
 		}
 	}
 	return decodedBytes, nil
-}
-
-func checkedLookupBytesAdd(left, right uint64) (uint64, bool) {
-	if right > ^uint64(0)-left {
-		return 0, false
-	}
-	return left + right, true
 }
 
 func lookupResolutionPayloadBytes(resolution LookupResolution) (uint64, bool) {
@@ -777,7 +770,7 @@ func lookupResolutionPayloadBytesUncached(resolution LookupResolution) (uint64, 
 	var total uint64
 	for _, header := range resolution.headers {
 		var ok bool
-		total, ok = checkedLookupBytesAdd(total, uint64(len(header)))
+		total, ok = retainedAdd(total, uint64(len(header)))
 		if !ok {
 			return 0, false
 		}
@@ -789,7 +782,7 @@ func lookupResolutionPayloadBytesUncached(resolution LookupResolution) (uint64, 
 				return 0, false
 			}
 			var added bool
-			total, added = checkedLookupBytesAdd(total, uint64(len(cell)))
+			total, added = retainedAdd(total, uint64(len(cell)))
 			if !added {
 				return 0, false
 			}

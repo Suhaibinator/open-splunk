@@ -11,80 +11,14 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 )
 
-// compiledKnowledgeRelation is the complete inline compatibility form of the
-// physical knowledge prefix. prelude is retained beside the relation so sealing
-// can prove that the SQL, final state, and runtime accounting came from one
-// internally compiled authority rather than independently mutable inputs.
-type compiledKnowledgeRelation struct {
-	relation compiledRelation
-	state    compileState
-	args     []any
-	prelude  compiledKnowledgePrelude
-}
-
 // compiledKnowledgeStageRelation is the exact physical prefix before a
-// whole-query runtime fence is chosen. Both the inline compatibility probe and
-// the deferred top-level barrier consume this one compile-once authority.
+// whole-query runtime fence is chosen. The deferred top-level barrier consumes
+// this one compile-once authority.
 type compiledKnowledgeStageRelation struct {
 	relation compiledRelation
 	state    compileState
 	args     []any
 	prelude  compiledKnowledgePrelude
-}
-
-// compileKnowledgeRelation compiles the immutable prelude from the exact Scan
-// state, applies every relation-neutral stage as two SELECT levels, and closes
-// nonempty work behind the runtime guard. Production compiler.go uses the
-// deferred top-level form instead; this independent inline form remains a
-// compatibility and invariant oracle for the same compiler-minted authority.
-func compileKnowledgeRelation(
-	relation compiledRelation,
-	scanState compileState,
-	existingArgs []any,
-	preparation preparedKnowledgeCompilation,
-) (compiledKnowledgeRelation, error) {
-	staged, err := compileKnowledgeStageRelation(
-		relation,
-		scanState,
-		existingArgs,
-		preparation,
-	)
-	if err != nil {
-		return compiledKnowledgeRelation{}, err
-	}
-	guarded, err := compileKnowledgeRuntimeGuard(
-		staged.relation,
-		staged.prelude,
-		preparation,
-	)
-	if err != nil {
-		return compiledKnowledgeRelation{}, err
-	}
-	if len(guarded.suffixArgs) != 0 {
-		return compiledKnowledgeRelation{}, errors.New(
-			"compile ClickHouse knowledge relation: runtime guard introduced arguments",
-		)
-	}
-	if strings.Count(guarded.relation.sql, "?") != len(staged.args) {
-		return compiledKnowledgeRelation{}, errors.New(
-			"compile ClickHouse knowledge relation: final placeholder order is invalid",
-		)
-	}
-	result := compiledKnowledgeRelation{
-		relation: guarded.relation,
-		state:    guarded.state,
-		args:     staged.args,
-		prelude:  staged.prelude,
-	}
-	if err := validateCompiledKnowledgeRelation(
-		result,
-		relation,
-		existingArgs,
-		preparation,
-	); err != nil {
-		return compiledKnowledgeRelation{}, err
-	}
-	return result, nil
 }
 
 func compileKnowledgeStageRelation(
@@ -111,11 +45,14 @@ func compileKnowledgeStageRelation(
 			args:     args,
 			prelude:  prelude,
 		}
-		if err := validateCompiledKnowledgeStageRelation(
+		if err := validateCompiledKnowledgeStageRelationCore(
 			result,
 			relation,
 			existingArgs,
 			preparation,
+			0,
+			"compile ClickHouse knowledge relation: staged identity changed",
+			"compile ClickHouse knowledge relation: staged relational depth disagrees",
 		); err != nil {
 			return compiledKnowledgeStageRelation{}, err
 		}
@@ -187,11 +124,14 @@ func compileKnowledgeStageRelation(
 		args:     args,
 		prelude:  prelude,
 	}
-	if err := validateCompiledKnowledgeStageRelation(
+	if err := validateCompiledKnowledgeStageRelationCore(
 		result,
 		relation,
 		existingArgs,
 		preparation,
+		0,
+		"compile ClickHouse knowledge relation: staged identity changed",
+		"compile ClickHouse knowledge relation: staged relational depth disagrees",
 	); err != nil {
 		return compiledKnowledgeStageRelation{}, err
 	}
@@ -285,53 +225,14 @@ func cloneKnowledgeRelationArguments(arguments []any) ([]any, error) {
 	return cloned, nil
 }
 
-func validateCompiledKnowledgeRelation(
-	compiled compiledKnowledgeRelation,
-	input compiledRelation,
-	existingArgs []any,
-	preparation preparedKnowledgeCompilation,
-) error {
-	if err := validateCompiledKnowledgeRelationAuthority(
-		compiled.relation,
-		compiled.state,
-		compiled.args,
-		compiled.prelude,
-		input,
-		existingArgs,
-	); err != nil {
-		return err
-	}
-	if !preparation.present || preparation.program.IsEmpty() {
-		if err := validateKnowledgeRuntimeGuardIdentityPrelude(
-			compiled.prelude,
-			preparation,
-		); err != nil {
-			return err
-		}
-		if compiled.relation != input {
-			return errors.New(
-				"compile ClickHouse knowledge relation: identity relation changed",
-			)
-		}
-		return nil
-	}
-	if err := validateCompiledKnowledgePrelude(compiled.prelude, preparation); err != nil {
-		return err
-	}
-	expectedDepth := input.depth + 2*len(compiled.prelude.stages) + 2
-	if compiled.relation.depth != expectedDepth {
-		return errors.New(
-			"compile ClickHouse knowledge relation: final relational depth disagrees",
-		)
-	}
-	return nil
-}
-
-func validateCompiledKnowledgeStageRelation(
+func validateCompiledKnowledgeStageRelationCore(
 	compiled compiledKnowledgeStageRelation,
 	input compiledRelation,
 	existingArgs []any,
 	preparation preparedKnowledgeCompilation,
+	extraDepth int,
+	identityMessage string,
+	depthMessage string,
 ) error {
 	if err := validateCompiledKnowledgeRelationAuthority(
 		compiled.relation,
@@ -351,20 +252,16 @@ func validateCompiledKnowledgeStageRelation(
 			return err
 		}
 		if compiled.relation != input {
-			return errors.New(
-				"compile ClickHouse knowledge relation: staged identity changed",
-			)
+			return errors.New(identityMessage)
 		}
 		return nil
 	}
 	if err := validateCompiledKnowledgePrelude(compiled.prelude, preparation); err != nil {
 		return err
 	}
-	expectedDepth := input.depth + 2*len(compiled.prelude.stages)
+	expectedDepth := input.depth + 2*len(compiled.prelude.stages) + extraDepth
 	if compiled.relation.depth != expectedDepth {
-		return errors.New(
-			"compile ClickHouse knowledge relation: staged relational depth disagrees",
-		)
+		return errors.New(depthMessage)
 	}
 	return nil
 }

@@ -235,7 +235,7 @@ func prepareLookupCompilationWithMaterializationContext(
 				"prepare ClickHouse lookup compilation: asset byte count overflows",
 			)
 		}
-		aggregatePayload, ok = checkedLookupBytesAdd(aggregatePayload, payload)
+		aggregatePayload, ok = retainedAdd(aggregatePayload, payload)
 		if !ok || aggregatePayload >
 			uint64(MaximumLookupStagesPerQuery)*MaximumLookupAssetBytes {
 			return preparedLookupStage{}, &plan.Diagnostic{
@@ -694,6 +694,28 @@ type compiledLookupOutput struct {
 	privateColumns          []string
 }
 
+// compiledLookupProjection pairs one private lookup projection expression with
+// the bind values it carries.
+type compiledLookupProjection struct {
+	sql  string
+	args []any
+}
+
+// projections returns the private projections of a lookup output in placeholder
+// order. Both the projection list and the bind list must iterate this order.
+func (output compiledLookupOutput) projections() []compiledLookupProjection {
+	return []compiledLookupProjection{
+		{output.existsProjection, output.existsArgs},
+		{output.typeProjection, output.typeArgs},
+		{output.textProjection, output.textArgs},
+		{output.semanticBytesProjection, output.semanticBytesArgs},
+		{output.descendantProjection, output.descendantArgs},
+		{output.namesProjection, output.namesArgs},
+		{output.typesProjection, output.typesArgs},
+		{output.metadataProjection, output.metadataArgs},
+	}
+}
+
 // compiledLookupStageOptions is compiler-private authority used only by the
 // generated automatic-lookup group. Authored lookup stages use the zero value.
 // Automatic keys and selector results are frozen against the one post-Tier-1
@@ -879,19 +901,7 @@ func compileLookupStageWithOptions(
 	privateProjections := make([]string, 0, 8*len(outputs))
 	for _, output := range outputs {
 		valuesByName[output.name] = output.valueSQL
-		for _, expression := range []struct {
-			sql  string
-			args []any
-		}{
-			{output.existsProjection, output.existsArgs},
-			{output.typeProjection, output.typeArgs},
-			{output.textProjection, output.textArgs},
-			{output.semanticBytesProjection, output.semanticBytesArgs},
-			{output.descendantProjection, output.descendantArgs},
-			{output.namesProjection, output.namesArgs},
-			{output.typesProjection, output.typesArgs},
-			{output.metadataProjection, output.metadataArgs},
-		} {
+		for _, expression := range output.projections() {
 			if expression.sql != "" {
 				privateProjections = append(privateProjections, expression.sql)
 			}
@@ -917,30 +927,14 @@ func compileLookupStageWithOptions(
 				name,
 			)
 		}
-		if field.valueSQL == publicName {
-			projection = append(projection, publicName)
-		} else {
-			projection = append(projection, field.valueSQL+" AS "+publicName)
-		}
+		projection = appendVisibleFieldProjection(projection, field, publicName)
 	}
 	projectionState := next
 	projectionState.privateColumns = liveOldPrivateColumns
 	projection = appendPrivateEventProjection(projection, projectionState)
 	projection = append(projection, privateProjections...)
 	for _, output := range outputs {
-		for _, expression := range []struct {
-			sql  string
-			args []any
-		}{
-			{output.existsProjection, output.existsArgs},
-			{output.typeProjection, output.typeArgs},
-			{output.textProjection, output.textArgs},
-			{output.semanticBytesProjection, output.semanticBytesArgs},
-			{output.descendantProjection, output.descendantArgs},
-			{output.namesProjection, output.namesArgs},
-			{output.typesProjection, output.typesArgs},
-			{output.metadataProjection, output.metadataArgs},
-		} {
+		for _, expression := range output.projections() {
 			if expression.sql != "" {
 				prefixArgs = append(prefixArgs, expression.args...)
 			}

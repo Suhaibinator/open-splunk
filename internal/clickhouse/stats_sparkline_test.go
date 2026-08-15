@@ -43,7 +43,7 @@ func TestStatsSparklineBucketSpecExplicitFixed(t *testing.T) {
 		t.Fatalf("bucket count/automatic = %d/%v, want 3/false", spec.BucketCount, spec.Automatic)
 	}
 	if spec.MaximumPoints != 100 || spec.MaximumEncodedElements != 101 ||
-		!spec.MarkerAccountingOracleRequired || spec.AlignmentOracleRequired {
+		spec.AlignmentOracleRequired {
 		t.Fatalf("resource/oracle metadata = %#v", spec)
 	}
 }
@@ -297,8 +297,7 @@ func TestStatsSparklineWindowAggregateSQL(t *testing.T) {
 				t.Fatalf("function %v was rejected", test.function)
 			}
 			if got.SQL != test.wantSQL || got.Input != test.wantKind ||
-				got.Result != test.result || got.OracleRequired != test.oracle ||
-				!got.Exact || !got.Deterministic {
+				got.Result != test.result || got.OracleRequired != test.oracle {
 				t.Fatalf("lowering = %#v, want SQL %q, input %v, result %v, oracle %v", got, test.wantSQL, test.wantKind, test.result, test.oracle)
 			}
 		})
@@ -326,7 +325,7 @@ func TestStatsSparklineWindowDistinctCountIsExactAndBounded(t *testing.T) {
 		}
 	}
 	if got.MaximumDistinctPerBucket != MaximumStatsDistinctValuesPerGroup ||
-		got.StateBound != statsSparklineStateBoundLinearDistinct || !got.Exact {
+		got.StateBound != statsSparklineStateBoundLinearDistinct {
 		t.Fatalf("dc resource metadata = %#v", got)
 	}
 }
@@ -373,11 +372,10 @@ func TestStatsSparklineBucketRecordsAndPublication(t *testing.T) {
 	}
 
 	spec := statsSparklineBucketSpec{
-		FirstBucket:                    -1,
-		BucketCount:                    3,
-		MaximumPoints:                  100,
-		MaximumEncodedElements:         101,
-		MarkerAccountingOracleRequired: true,
+		FirstBucket:            -1,
+		BucketCount:            3,
+		MaximumPoints:          100,
+		MaximumEncodedElements: 101,
 	}
 	published, ok := statsSparklinePublishSQL(`"records"`, spec, statsSparklineMissingZero)
 	if !ok {

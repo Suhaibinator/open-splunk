@@ -339,35 +339,8 @@ func (reader *IndexStatisticsReader) GetIndexStatistics(
 		return result, nil
 	}
 
-	queryID, err = reader.nextQueryID(operationContext)
+	physicalRows, physicalBytes, err := reader.readIndexStatisticsActiveParts(operationContext)
 	if err != nil {
-		return IndexStatisticsResult{}, err
-	}
-	queryContext = clickhousedriver.Context(
-		operationContext,
-		clickhousedriver.WithQueryID(queryID),
-		clickhousedriver.WithSettings(reader.settings),
-	)
-	row = reader.connection.QueryRow(
-		queryContext,
-		indexStatisticsActivePartsSQL,
-		reader.database,
-		reader.table,
-	)
-	if isNilIndexStatisticsDependency(row) {
-		return IndexStatisticsResult{}, errors.New(
-			"read ClickHouse index statistics: active-parts aggregate returned no row",
-		)
-	}
-	var physicalRows, physicalBytes uint64
-	if err := row.Scan(&physicalRows, &physicalBytes); err != nil {
-		return IndexStatisticsResult{}, indexStatisticsOperationError(
-			operationContext,
-			"query active-part aggregate",
-			err,
-		)
-	}
-	if err := operationContext.Err(); err != nil {
 		return IndexStatisticsResult{}, err
 	}
 	result.StorageBytes, err = proportionalIndexStorageBytes(
@@ -663,14 +636,14 @@ func (reader *IndexStatisticsReader) readIndexStatisticsActiveParts(
 	)
 	if isNilIndexStatisticsDependency(row) {
 		return 0, 0, errors.New(
-			"read ClickHouse index statistics batch: active-parts aggregate returned no row",
+			"read ClickHouse index statistics: active-parts aggregate returned no row",
 		)
 	}
 	var physicalRows, physicalBytes uint64
 	if err := row.Scan(&physicalRows, &physicalBytes); err != nil {
 		return 0, 0, indexStatisticsOperationError(
 			ctx,
-			"query batched active-part aggregate",
+			"query active-part aggregate",
 			err,
 		)
 	}

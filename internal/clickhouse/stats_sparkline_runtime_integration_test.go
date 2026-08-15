@@ -162,11 +162,10 @@ tuple('g', toInt64(1), CAST([], 'Array(Float64)'), CAST([], 'Array(String)'), to
 		t.Fatal("lower bucket records")
 	}
 	spec := statsSparklineBucketSpec{
-		FirstBucket:                    10,
-		BucketCount:                    3,
-		MaximumPoints:                  100,
-		MaximumEncodedElements:         101,
-		MarkerAccountingOracleRequired: true,
+		FirstBucket:            10,
+		BucketCount:            3,
+		MaximumPoints:          100,
+		MaximumEncodedElements: 101,
 	}
 	publishSQL, ok := statsSparklinePublishSQL(
 		"records",

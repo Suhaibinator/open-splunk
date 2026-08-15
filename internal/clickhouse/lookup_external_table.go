@@ -176,7 +176,7 @@ func authenticateCompiledLookupExternalBackingContext(
 					"authenticate ClickHouse lookup transport: selected cell is invalid",
 				)
 			}
-			rowBytes[rowIndex], ok = checkedLookupBytesAdd(
+			rowBytes[rowIndex], ok = retainedAdd(
 				rowBytes[rowIndex],
 				uint64(len(value)),
 			)
@@ -185,7 +185,7 @@ func authenticateCompiledLookupExternalBackingContext(
 					"authenticate ClickHouse lookup transport: selected row is oversized",
 				)
 			}
-			payloadBytes, ok = checkedLookupBytesAdd(payloadBytes, uint64(len(value)))
+			payloadBytes, ok = retainedAdd(payloadBytes, uint64(len(value)))
 			if !ok || payloadBytes > MaximumLookupAssetBytes {
 				return nil, errors.New(
 					"authenticate ClickHouse lookup transport: selected payload is oversized",
@@ -348,7 +348,7 @@ func validateCompiledLookupExternalTablesContext(
 				"compiled ClickHouse lookup transport table exceeds the asset byte limit",
 			)
 		}
-		aggregatePayload, ok = checkedLookupBytesAdd(
+		aggregatePayload, ok = retainedAdd(
 			aggregatePayload,
 			table.backing.payloadBytes,
 		)

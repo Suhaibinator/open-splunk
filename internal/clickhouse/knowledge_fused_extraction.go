@@ -213,17 +213,7 @@ func compileKnowledgeExtractionStage(
 		)
 	}
 
-	bindingProjection := make([]string, 0, len(state.visible)+len(objects)+12)
-	for _, name := range orderedVisibleNames(state) {
-		field := state.visible[name]
-		publicName := quoteIdentifier(name)
-		if field.valueSQL == publicName {
-			bindingProjection = append(bindingProjection, publicName)
-		} else {
-			bindingProjection = append(bindingProjection, field.valueSQL+" AS "+publicName)
-		}
-	}
-	bindingProjection = appendPrivateEventProjection(bindingProjection, state)
+	bindingProjection := visibleEventProjection(state)
 	if priorCharges.inputBytes != "" {
 		if !slices.Contains(bindingProjection, priorCharges.inputBytes) {
 			bindingProjection = append(bindingProjection, priorCharges.inputBytes)

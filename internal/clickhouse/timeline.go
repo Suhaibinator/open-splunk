@@ -187,51 +187,15 @@ func finalizeTimeline(
 	sql.WriteString(source)
 	sql.WriteString("), ")
 
-	sql.WriteString(counts)
-	sql.WriteString(" AS (SELECT ")
-	sql.WriteString(epochFloorBucketNumberSQL(ticks))
-	sql.WriteString(" AS ")
-	sql.WriteString(bucketNumber)
-	sql.WriteString(", count() AS ")
-	sql.WriteString(count)
-	sql.WriteString(" FROM ")
-	sql.WriteString(prepared)
-	sql.WriteString(" GROUP BY ")
-	sql.WriteString(bucketNumber)
-	sql.WriteString("), ")
-
-	sql.WriteString(grid)
-	sql.WriteString(" AS (")
-	sql.WriteString(ordinalGridSQL(ordinal, bucketNumber))
-	sql.WriteString(") SELECT ")
-	sql.WriteString(grid)
-	sql.WriteString(".")
-	sql.WriteString(ordinal)
-	sql.WriteString(" AS ")
-	sql.WriteString(ordinal)
-	sql.WriteString(", ifNull(")
-	sql.WriteString(counts)
-	sql.WriteString(".")
-	sql.WriteString(count)
-	sql.WriteString(", toUInt64(0)) AS ")
-	sql.WriteString(count)
-	sql.WriteString(" FROM ")
-	sql.WriteString(grid)
-	sql.WriteString(" LEFT JOIN ")
-	sql.WriteString(counts)
-	sql.WriteString(" ON ")
-	sql.WriteString(counts)
-	sql.WriteString(".")
-	sql.WriteString(bucketNumber)
-	sql.WriteString(" = ")
-	sql.WriteString(grid)
-	sql.WriteString(".")
-	sql.WriteString(bucketNumber)
-	sql.WriteString(" ORDER BY ")
-	sql.WriteString(grid)
-	sql.WriteString(".")
-	sql.WriteString(ordinal)
-	sql.WriteString(" ASC")
+	writeBucketCountGridSQL(&sql, bucketCountGrid{
+		counts:       counts,
+		countsSource: prepared,
+		ticks:        ticks,
+		bucketNumber: bucketNumber,
+		grid:         grid,
+		ordinal:      ordinal,
+		count:        count,
+	})
 
 	sourceDepth := relationalNodeDepth(relation.depth)
 	preparedDepth := relationalNodeDepth(sourceDepth)

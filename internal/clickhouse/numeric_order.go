@@ -30,6 +30,37 @@ func bindSQLExpressions(parameters, values []string, body string) string {
 		body + ", " + strings.Join(arrays, ", ") + "), 1)"
 }
 
+// numericOrderingSignificandSQL splits a sign-stripped decimal body into its
+// significand and exponent text at the located exponent marker position.
+func numericOrderingSignificandSQL(body, exponentPosition string) (string, string) {
+	significandSQL := "if(" + exponentPosition + " = 0, " + body +
+		", substring(" + body + ", 1, " + exponentPosition + " - 1))"
+	exponentTextSQL := "if(" + exponentPosition + " = 0, CAST('0' AS String), substring(" +
+		body + ", " + exponentPosition + " + 1))"
+	return significandSQL, exponentTextSQL
+}
+
+// numericOrderingFractionDigitsSQL counts the digits after the decimal point of
+// a significand.
+func numericOrderingFractionDigitsSQL(significand string) string {
+	return "toInt64(if(position(" + significand +
+		", '.') = 0, 0, length(" + significand + ") - position(" + significand + ", '.')))"
+}
+
+// numericOrderingKeyComponentsSQL returns the sign class, decimal order key and
+// complemented coefficient key shared by both ordering-key builders. The ':'
+// terminator and the digit complement must stay mirrored across both paths or
+// their key spaces stop comparing equal.
+func numericOrderingKeyComponentsSQL(zero, negative, decimalOrder, coefficient string) (string, string, string) {
+	signClass := "toUInt8(multiIf(" + zero + ", 1, " + negative + " != 0, 0, 2))"
+	orderKey := "multiIf(" + zero + ", toInt64(0), " + negative +
+		" != 0, -(" + decimalOrder + "), " + decimalOrder + ")"
+	coefficientKey := "multiIf(" + zero + ", CAST('' AS String), " +
+		negative + " != 0, concat(translate(" + coefficient +
+		", '0123456789', '9876543210'), ':'), " + coefficient + ")"
+	return signClass, orderKey, coefficientKey
+}
+
 // exactNumericOrderingKeySQL returns a total ascending key for one complete
 // decimal spelling:
 //
@@ -80,10 +111,7 @@ func exactNumericOrderingKeySQL(valueSQL string) string {
 	bodySQL := "substring(" + bounded + ", " + signOffset + ")"
 	exponentPositionSQL := "greatest(position(" + body + ", 'e'), position(" +
 		body + ", 'E'))"
-	significandSQL := "if(" + exponentPosition + " = 0, " + body +
-		", substring(" + body + ", 1, " + exponentPosition + " - 1))"
-	exponentTextSQL := "if(" + exponentPosition + " = 0, CAST('0' AS String), substring(" +
-		body + ", " + exponentPosition + " + 1))"
+	significandSQL, exponentTextSQL := numericOrderingSignificandSQL(body, exponentPosition)
 	exponentOffset := "if(startsWith(" + exponentText + ", '-') OR startsWith(" +
 		exponentText + ", '+'), 2, 1)"
 	exponentDigitsSQL := "substring(" + exponentText + ", " + exponentOffset + ")"
@@ -95,8 +123,7 @@ func exactNumericOrderingKeySQL(valueSQL string) string {
 	exponentMagnitudeSQL := "toInt64OrZero(if(" + exponentEligible +
 		" != 0 AND NOT empty(" + exponentTrimmed + "), " + exponentTrimmed +
 		", CAST('0' AS String)))"
-	fractionDigitsSQL := "toInt64(if(position(" + significand +
-		", '.') = 0, 0, length(" + significand + ") - position(" + significand + ", '.')))"
+	fractionDigitsSQL := numericOrderingFractionDigitsSQL(significand)
 	significantSQL := "replaceRegexpOne(replaceAll(" + significand +
 		", '.', ''), '^0+', '')"
 	coefficientSQL := "replaceRegexpOne(" + significant + ", '0+$', '')"
@@ -108,12 +135,7 @@ func exactNumericOrderingKeySQL(valueSQL string) string {
 	zero := "empty(" + significant + ")"
 	eligible := "toUInt8(" + valid + " != 0 AND (" + zero + " OR " +
 		exponentEligible + " != 0))"
-	signClass := "toUInt8(multiIf(" + zero + ", 1, " + negative + " != 0, 0, 2))"
-	orderKey := "multiIf(" + zero + ", toInt64(0), " + negative +
-		" != 0, -(" + decimalOrder + "), " + decimalOrder + ")"
-	coefficientKey := "multiIf(" + zero + ", CAST('' AS String), " +
-		negative + " != 0, concat(translate(" + coefficient +
-		", '0123456789', '9876543210'), ':'), " + coefficient + ")"
+	signClass, orderKey, coefficientKey := numericOrderingKeyComponentsSQL(zero, negative, decimalOrder, coefficient)
 	result := "tuple(" + eligible + ", " + signClass + ", " +
 		orderKey + ", " + coefficientKey + ")"
 
@@ -206,25 +228,16 @@ func trustedFiniteFloatOrderingKeySQL(valueSQL string) string {
 
 	bodySQL := "if(startsWith(" + raw + ", '-'), substring(" + raw + ", 2), " + raw + ")"
 	exponentPositionSQL := "position(" + body + ", 'e')"
-	significandSQL := "if(" + exponentPosition + " = 0, " + body +
-		", substring(" + body + ", 1, " + exponentPosition + " - 1))"
-	exponentTextSQL := "if(" + exponentPosition + " = 0, CAST('0' AS String), substring(" +
-		body + ", " + exponentPosition + " + 1))"
+	significandSQL, exponentTextSQL := numericOrderingSignificandSQL(body, exponentPosition)
 	exponentSQL := "toInt16OrZero(" + exponentTextSQL + ")"
-	fractionDigitsSQL := "toInt64(if(position(" + significand +
-		", '.') = 0, 0, length(" + significand + ") - position(" + significand + ", '.')))"
+	fractionDigitsSQL := numericOrderingFractionDigitsSQL(significand)
 	significantSQL := "trimLeft(replaceAll(" + significand + ", '.', ''), '0')"
 	coefficientSQL := "trimRight(" + significant + ", '0')"
 	decimalOrderSQL := "toInt64(length(" + significant + ")) + toInt64(" +
 		exponent + ") - " + fractionDigits
 
 	zero := "empty(" + significant + ")"
-	signClass := "toUInt8(multiIf(" + zero + ", 1, " + negative + " != 0, 0, 2))"
-	orderKey := "multiIf(" + zero + ", toInt64(0), " + negative +
-		" != 0, -(" + decimalOrder + "), " + decimalOrder + ")"
-	coefficientKey := "multiIf(" + zero + ", CAST('' AS String), " +
-		negative + " != 0, concat(translate(" + coefficient +
-		", '0123456789', '9876543210'), ':'), " + coefficient + ")"
+	signClass, orderKey, coefficientKey := numericOrderingKeyComponentsSQL(zero, negative, decimalOrder, coefficient)
 	result := "tuple(toUInt8(1), " + signClass + ", " + orderKey + ", " +
 		coefficientKey + ")"
 

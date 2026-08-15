@@ -327,74 +327,7 @@ func finalizeFieldSuggestions(
 	// Validate the complete aligned metadata arrays independently of the
 	// requested prefix. A poisoned source row invalidates the response even
 	// when none of its names would otherwise become a candidate.
-	sql.WriteString(q(fieldSuggestionMetadataCTE))
-	sql.WriteString(" AS (WITH arraySlice(")
-	sql.WriteString(q(internalFieldNamesColumn))
-	sql.WriteString(", 1, CAST(? AS UInt64)) AS ")
-	sql.WriteString(q(fieldSuggestionBoundedNames))
-	sql.WriteString(", arrayMap(field_name -> left(field_name, CAST(? AS UInt64)), ")
-	sql.WriteString(q(fieldSuggestionBoundedNames))
-	sql.WriteString(") AS ")
-	sql.WriteString(q(fieldSuggestionCheckedNames))
-	sql.WriteString(", arrayMap(field_name -> extractAll(field_name, CAST(? AS String)), ")
-	sql.WriteString(q(fieldSuggestionCheckedNames))
-	sql.WriteString(") AS ")
-	sql.WriteString(q(fieldSuggestionCheckedPaths))
-	sql.WriteString(", arraySlice(")
-	sql.WriteString(q(internalFieldTypesColumn))
-	sql.WriteString(", 1, CAST(? AS UInt64)) AS ")
-	sql.WriteString(q(fieldSuggestionBoundedTypes))
-	sql.WriteString(" SELECT toUInt8(countIf(")
-	sql.WriteString(q(internalFieldMetadataVersionColumn))
-	sql.WriteString(" != ? OR length(")
-	sql.WriteString(q(internalFieldNamesColumn))
-	sql.WriteString(") > ? OR length(")
-	sql.WriteString(q(internalFieldTypesColumn))
-	sql.WriteString(") > ? OR length(")
-	sql.WriteString(q(internalFieldNamesColumn))
-	sql.WriteString(") != length(")
-	sql.WriteString(q(internalFieldTypesColumn))
-	sql.WriteString(") OR arraySum(arrayMap(field_name -> length(field_name), ")
-	sql.WriteString(q(fieldSuggestionBoundedNames))
-	sql.WriteString(")) > ? OR arrayExists(field_name -> empty(field_name) OR NOT isValidUTF8(field_name) OR length(field_name) > ?, ")
-	sql.WriteString(q(fieldSuggestionBoundedNames))
-	sql.WriteString(") OR arrayExists(field_name -> NOT match(field_name, CAST(? AS String)) OR arrayExists(normalized_segment -> length(normalized_segment) > ?, splitByChar('.', replaceAll(replaceAll(field_name, CAST(? AS String), 'x'), CAST(? AS String), 'x'))), ")
-	sql.WriteString(q(fieldSuggestionCheckedNames))
-	sql.WriteString(") OR arrayExists(field_name -> startsWith(lower(field_name), '__os_') OR arrayExists(reserved_root -> lower(field_name) = reserved_root OR startsWith(lower(field_name), concat(reserved_root, '.')), CAST(? AS Array(String))), ")
-	sql.WriteString(q(fieldSuggestionCheckedNames))
-	sql.WriteString(") OR arrayExists(path -> arrayExists(depth -> depth < length(path) AND indexOfAssumeSorted(")
-	sql.WriteString(q(fieldSuggestionCheckedNames))
-	sql.WriteString(", arrayStringConcat(arraySlice(path, 1, depth), '.')) != 0, arrayEnumerate(path)), ")
-	sql.WriteString(q(fieldSuggestionCheckedPaths))
-	sql.WriteString(") OR ")
-	sql.WriteString(q(fieldSuggestionCheckedNames))
-	sql.WriteString(" != arraySort(arrayDistinct(")
-	sql.WriteString(q(fieldSuggestionCheckedNames))
-	sql.WriteString(")) OR arrayExists(stored_type -> stored_type < ? OR stored_type > ?, ")
-	sql.WriteString(q(fieldSuggestionBoundedTypes))
-	sql.WriteString(")) > 0) AS ")
-	sql.WriteString(q(fieldSuggestionMetadataInvalid))
-	sql.WriteString(" FROM ")
-	sql.WriteString(q(fieldSuggestionSourceCTE))
-	sql.WriteString("), ")
-	args = append(args,
-		uint64(eventfields.MaximumStoredFieldsPerEvent),
-		uint64(eventfields.MaximumNormalizedFieldNameBytes+1),
-		fieldSuggestionNormalizedSegmentPattern,
-		uint64(eventfields.MaximumStoredFieldsPerEvent),
-		eventfields.CurrentFieldMetadataVersion,
-		uint64(eventfields.MaximumStoredFieldsPerEvent),
-		uint64(eventfields.MaximumStoredFieldsPerEvent),
-		uint64(eventfields.MaximumStoredFieldNamesBytes),
-		uint64(eventfields.MaximumNormalizedFieldNameBytes),
-		fieldSuggestionNormalizedNamePattern,
-		uint64(eventfields.MaximumDynamicPathSegmentBytes),
-		fieldSuggestionEscapedBackslash,
-		fieldSuggestionEscapedDot,
-		reservedRoots,
-		uint8(eventfields.StoredValueTypeNull),
-		uint8(eventfields.StoredValueTypeDecimal),
-	)
+	args = writeFieldSuggestionMetadataCTE(&sql, args, reservedRoots)
 
 	// Prefix filtering happens inside the ARRAY JOIN leaf relation, before its
 	// GROUP BY. This is the only runtime-cardinality branch and keeps common
@@ -536,31 +469,62 @@ func finalizeFieldSuggestions(
 	return withCompiledRelationalDepth(compiled, resultDepth, ownerRange), nil
 }
 
-func finalizePrerequisiteFieldSuggestions(
-	relation compiledRelation,
-	args []any,
-	spec FieldSuggestionSpec,
-	ownerRange spl.Range,
-	policy eventAnalysisFinalizationPolicy,
-	knownNames,
-	shadows,
-	blockedPrefixes,
-	reservedRoots []string,
-	allowDynamic bool,
-	sidecars []fieldSuggestionSidecar,
-) (CompiledQuery, error) {
+// writeFieldSuggestionMetadataCTE emits the __os_field_suggestion_metadata
+// validation CTE and appends its bind values. Every aligned metadata row is
+// validated before any prefix/name filtering: a poisoned nonmatching field must
+// invalidate the whole response atomically.
+func writeFieldSuggestionMetadataCTE(sql *strings.Builder, args []any, reservedRoots []string) []any {
 	q := quoteIdentifier
-	var sql strings.Builder
-	sql.Grow(len(relation.sql) + 16_384 + len(knownNames)*16)
-	sql.WriteString("WITH ")
+	sql.WriteString(q(fieldSuggestionMetadataCTE))
+	sql.WriteString(" AS (WITH arraySlice(")
+	sql.WriteString(q(internalFieldNamesColumn))
+	sql.WriteString(", 1, CAST(? AS UInt64)) AS ")
+	sql.WriteString(q(fieldSuggestionBoundedNames))
+	sql.WriteString(", arrayMap(field_name -> left(field_name, CAST(? AS UInt64)), ")
+	sql.WriteString(q(fieldSuggestionBoundedNames))
+	sql.WriteString(") AS ")
+	sql.WriteString(q(fieldSuggestionCheckedNames))
+	sql.WriteString(", arrayMap(field_name -> extractAll(field_name, CAST(? AS String)), ")
+	sql.WriteString(q(fieldSuggestionCheckedNames))
+	sql.WriteString(") AS ")
+	sql.WriteString(q(fieldSuggestionCheckedPaths))
+	sql.WriteString(", arraySlice(")
+	sql.WriteString(q(internalFieldTypesColumn))
+	sql.WriteString(", 1, CAST(? AS UInt64)) AS ")
+	sql.WriteString(q(fieldSuggestionBoundedTypes))
+	sql.WriteString(" SELECT toUInt8(countIf(")
+	sql.WriteString(q(internalFieldMetadataVersionColumn))
+	sql.WriteString(" != ? OR length(")
+	sql.WriteString(q(internalFieldNamesColumn))
+	sql.WriteString(") > ? OR length(")
+	sql.WriteString(q(internalFieldTypesColumn))
+	sql.WriteString(") > ? OR length(")
+	sql.WriteString(q(internalFieldNamesColumn))
+	sql.WriteString(") != length(")
+	sql.WriteString(q(internalFieldTypesColumn))
+	sql.WriteString(") OR arraySum(arrayMap(field_name -> length(field_name), ")
+	sql.WriteString(q(fieldSuggestionBoundedNames))
+	sql.WriteString(")) > ? OR arrayExists(field_name -> empty(field_name) OR NOT isValidUTF8(field_name) OR length(field_name) > ?, ")
+	sql.WriteString(q(fieldSuggestionBoundedNames))
+	sql.WriteString(") OR arrayExists(field_name -> NOT match(field_name, CAST(? AS String)) OR arrayExists(normalized_segment -> length(normalized_segment) > ?, splitByChar('.', replaceAll(replaceAll(field_name, CAST(? AS String), 'x'), CAST(? AS String), 'x'))), ")
+	sql.WriteString(q(fieldSuggestionCheckedNames))
+	sql.WriteString(") OR arrayExists(field_name -> startsWith(lower(field_name), '__os_') OR arrayExists(reserved_root -> lower(field_name) = reserved_root OR startsWith(lower(field_name), concat(reserved_root, '.')), CAST(? AS Array(String))), ")
+	sql.WriteString(q(fieldSuggestionCheckedNames))
+	sql.WriteString(") OR arrayExists(path -> arrayExists(depth -> depth < length(path) AND indexOfAssumeSorted(")
+	sql.WriteString(q(fieldSuggestionCheckedNames))
+	sql.WriteString(", arrayStringConcat(arraySlice(path, 1, depth), '.')) != 0, arrayEnumerate(path)), ")
+	sql.WriteString(q(fieldSuggestionCheckedPaths))
+	sql.WriteString(") OR ")
+	sql.WriteString(q(fieldSuggestionCheckedNames))
+	sql.WriteString(" != arraySort(arrayDistinct(")
+	sql.WriteString(q(fieldSuggestionCheckedNames))
+	sql.WriteString(")) OR arrayExists(stored_type -> stored_type < ? OR stored_type > ?, ")
+	sql.WriteString(q(fieldSuggestionBoundedTypes))
+	sql.WriteString(")) > 0) AS ")
+	sql.WriteString(q(fieldSuggestionMetadataInvalid))
+	sql.WriteString(" FROM ")
 	sql.WriteString(q(fieldSuggestionSourceCTE))
-	sql.WriteString(" AS (")
-	sql.WriteString(relation.sql)
 	sql.WriteString("), ")
-
-	writePrerequisiteFieldSuggestionSidecars(&sql, sidecars)
-	sql.WriteString(", ")
-	writePrerequisiteFieldSuggestionRows(&sql, sidecars)
 	args = append(args,
 		uint64(eventfields.MaximumStoredFieldsPerEvent),
 		uint64(eventfields.MaximumNormalizedFieldNameBytes+1),
@@ -578,17 +542,26 @@ func finalizePrerequisiteFieldSuggestions(
 		reservedRoots,
 		uint8(eventfields.StoredValueTypeNull),
 		uint8(eventfields.StoredValueTypeDecimal),
-		eventfields.CurrentFieldMetadataVersion,
-		uint64(eventfields.MaximumStoredFieldsPerEvent),
-		uint64(eventfields.MaximumStoredFieldsPerEvent),
-		uint64(eventfields.MaximumNormalizedFieldNameBytes),
-		uint8(eventfields.StoredValueTypeNull),
-		uint8(eventfields.StoredValueTypeDecimal),
-		uint64(eventfields.MaximumNormalizedFieldNameBytes+1),
-		uint64(eventfields.MaximumStoredFieldsPerEvent),
-		uint64(eventfields.MaximumStoredFieldsPerEvent),
-		fieldSuggestionSidecarRoots(sidecars),
 	)
+	return args
+}
+
+func finalizePrerequisiteFieldSuggestions(
+	relation compiledRelation,
+	args []any,
+	spec FieldSuggestionSpec,
+	ownerRange spl.Range,
+	policy eventAnalysisFinalizationPolicy,
+	knownNames,
+	shadows,
+	blockedPrefixes,
+	reservedRoots []string,
+	allowDynamic bool,
+	sidecars []fieldSuggestionSidecar,
+) (CompiledQuery, error) {
+	q := quoteIdentifier
+	var sql strings.Builder
+	args = writePrerequisiteFieldSuggestionPrelude(&sql, args, relation, knownNames, reservedRoots, sidecars)
 	sql.WriteString(", ")
 
 	writePrerequisiteFieldSuggestionObservations(&sql)
@@ -682,6 +655,58 @@ func fieldSuggestionSidecarTypesAlias(index int) string {
 
 func fieldSuggestionSidecarVersionAlias(index int) string {
 	return fmt.Sprintf("__os_field_suggestion_sidecar_version_%d", index)
+}
+
+// writePrerequisiteFieldSuggestionPrelude emits the shared prerequisite
+// preamble (source CTE, sidecar projection, row validation) and appends its
+// bind values. Callers append their own observation stage afterwards.
+func writePrerequisiteFieldSuggestionPrelude(
+	sql *strings.Builder,
+	args []any,
+	relation compiledRelation,
+	knownNames, reservedRoots []string,
+	sidecars []fieldSuggestionSidecar,
+) []any {
+	q := quoteIdentifier
+	sql.Grow(len(relation.sql) + 16_384 + len(knownNames)*16)
+	sql.WriteString("WITH ")
+	sql.WriteString(q(fieldSuggestionSourceCTE))
+	sql.WriteString(" AS (")
+	sql.WriteString(relation.sql)
+	sql.WriteString("), ")
+
+	writePrerequisiteFieldSuggestionSidecars(sql, sidecars)
+	sql.WriteString(", ")
+	writePrerequisiteFieldSuggestionRows(sql, sidecars)
+	args = append(args,
+		uint64(eventfields.MaximumStoredFieldsPerEvent),
+		uint64(eventfields.MaximumNormalizedFieldNameBytes+1),
+		fieldSuggestionNormalizedSegmentPattern,
+		uint64(eventfields.MaximumStoredFieldsPerEvent),
+		eventfields.CurrentFieldMetadataVersion,
+		uint64(eventfields.MaximumStoredFieldsPerEvent),
+		uint64(eventfields.MaximumStoredFieldsPerEvent),
+		uint64(eventfields.MaximumStoredFieldNamesBytes),
+		uint64(eventfields.MaximumNormalizedFieldNameBytes),
+		fieldSuggestionNormalizedNamePattern,
+		uint64(eventfields.MaximumDynamicPathSegmentBytes),
+		fieldSuggestionEscapedBackslash,
+		fieldSuggestionEscapedDot,
+		reservedRoots,
+		uint8(eventfields.StoredValueTypeNull),
+		uint8(eventfields.StoredValueTypeDecimal),
+		eventfields.CurrentFieldMetadataVersion,
+		uint64(eventfields.MaximumStoredFieldsPerEvent),
+		uint64(eventfields.MaximumStoredFieldsPerEvent),
+		uint64(eventfields.MaximumNormalizedFieldNameBytes),
+		uint8(eventfields.StoredValueTypeNull),
+		uint8(eventfields.StoredValueTypeDecimal),
+		uint64(eventfields.MaximumNormalizedFieldNameBytes+1),
+		uint64(eventfields.MaximumStoredFieldsPerEvent),
+		uint64(eventfields.MaximumStoredFieldsPerEvent),
+		fieldSuggestionSidecarRoots(sidecars),
+	)
+	return args
 }
 
 func writePrerequisiteFieldSuggestionSidecars(

@@ -400,11 +400,6 @@ func writeTimelineSpecRemainder(writer hash.Hash, spec TimelineSpec) bool {
 	return writeTime(writer, spec.Earliest) && writeTime(writer, spec.Latest)
 }
 
-func (compiled CompiledTimeline) hasValidExecutionSeal() bool {
-	valid, _ := compiled.hasValidExecutionSealContext(context.Background())
-	return valid
-}
-
 func (compiled CompiledTimeline) hasValidExecutionSealContext(
 	ctx context.Context,
 ) (bool, error) {
@@ -422,7 +417,8 @@ func (compiled CompiledTimeline) hasValidExecutionSealContext(
 // HasValidExecutionSeal reports whether the timeline remains the exact
 // compiler-produced executable and result contract.
 func (compiled CompiledTimeline) HasValidExecutionSeal() bool {
-	return compiled.hasValidExecutionSeal()
+	valid, _ := compiled.hasValidExecutionSealContext(context.Background())
+	return valid
 }
 
 func (compiled CompiledTimeline) HasValidExecutionSealContext(
@@ -471,11 +467,6 @@ func (compiled CompiledTimeline) CloneForExecutionContext(
 	return cloned, true, nil
 }
 
-func (compiled CompiledFieldCatalog) hasValidExecutionSeal() bool {
-	valid, _ := compiled.hasValidExecutionSealContext(context.Background())
-	return valid
-}
-
 func (compiled CompiledFieldCatalog) hasValidExecutionSealContext(
 	ctx context.Context,
 ) (bool, error) {
@@ -499,7 +490,8 @@ func (compiled CompiledFieldCatalog) hasValidExecutionSealContext(
 // HasValidExecutionSeal reports whether the catalog remains the exact
 // compiler-produced executable and result contract.
 func (compiled CompiledFieldCatalog) HasValidExecutionSeal() bool {
-	return compiled.hasValidExecutionSeal()
+	valid, _ := compiled.hasValidExecutionSealContext(context.Background())
+	return valid
 }
 
 func (compiled CompiledFieldCatalog) HasValidExecutionSealContext(
@@ -548,11 +540,6 @@ func (compiled CompiledFieldCatalog) CloneForExecutionContext(
 	return cloned, true, nil
 }
 
-func (compiled CompiledFieldSummary) hasValidExecutionSeal() bool {
-	valid, _ := compiled.hasValidExecutionSealContext(context.Background())
-	return valid
-}
-
 func (compiled CompiledFieldSummary) hasValidExecutionSealContext(
 	ctx context.Context,
 ) (bool, error) {
@@ -572,7 +559,8 @@ func (compiled CompiledFieldSummary) hasValidExecutionSealContext(
 // HasValidExecutionSeal reports whether the summary remains the exact
 // compiler-produced executable and result contract.
 func (compiled CompiledFieldSummary) HasValidExecutionSeal() bool {
-	return compiled.hasValidExecutionSeal()
+	valid, _ := compiled.hasValidExecutionSealContext(context.Background())
+	return valid
 }
 
 func (compiled CompiledFieldSummary) HasValidExecutionSealContext(
@@ -622,11 +610,6 @@ func (compiled CompiledFieldSummary) CloneForExecutionContext(
 	return cloned, true, nil
 }
 
-func (compiled CompiledFieldSuggestions) hasValidExecutionSeal() bool {
-	valid, _ := compiled.hasValidExecutionSealContext(context.Background())
-	return valid
-}
-
 func (compiled CompiledFieldSuggestions) hasValidExecutionSealContext(
 	ctx context.Context,
 ) (bool, error) {
@@ -644,7 +627,8 @@ func (compiled CompiledFieldSuggestions) hasValidExecutionSealContext(
 // HasValidExecutionSeal reports whether the suggestions remain the exact
 // compiler-produced executable and result contract.
 func (compiled CompiledFieldSuggestions) HasValidExecutionSeal() bool {
-	return compiled.hasValidExecutionSeal()
+	valid, _ := compiled.hasValidExecutionSealContext(context.Background())
+	return valid
 }
 
 func (compiled CompiledFieldSuggestions) HasValidExecutionSealContext(

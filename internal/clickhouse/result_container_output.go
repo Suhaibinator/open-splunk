@@ -48,6 +48,35 @@ func (compiled CompiledQuery) ValidatedResultContainerOutputs() ([]ResultContain
 	return slices.Clone(compiled.ContainerOutputs), true
 }
 
+// publicResultOutputNames returns the set of public result column names,
+// including the sparse field-names column, or false when OutputFields is not a
+// canonical set of distinct non-empty names. extraCapacity is an allocation
+// hint for the private names the caller will add.
+func publicResultOutputNames(compiled CompiledQuery, extraCapacity int) (map[string]struct{}, bool) {
+	names := make(map[string]struct{}, len(compiled.OutputFields)+1+extraCapacity)
+	for _, name := range compiled.OutputFields {
+		if name == "" {
+			return nil, false
+		}
+		if _, duplicate := names[name]; duplicate {
+			return nil, false
+		}
+		names[name] = struct{}{}
+	}
+	if compiled.SparseFields {
+		names[SparseEventFieldNamesColumn] = struct{}{}
+	}
+	return names, true
+}
+
+// validResultOutputOrdinal reports whether a transport output ordinal is
+// strictly ascending, inside the declared output arity, and not the sparse
+// fields payload column.
+func validResultOutputOrdinal(compiled CompiledQuery, index, previous int) bool {
+	return index > previous && index < len(compiled.OutputFields) &&
+		(!compiled.SparseFields || compiled.OutputFields[index] != "fields")
+}
+
 func validResultContainerOutputs(compiled CompiledQuery) bool {
 	if len(compiled.ContainerOutputs) == 0 {
 		return true
@@ -56,25 +85,15 @@ func validResultContainerOutputs(compiled CompiledQuery) bool {
 		len(compiled.ContainerOutputs) > len(compiled.OutputFields) {
 		return false
 	}
-	public := make(map[string]struct{}, len(compiled.OutputFields)+1)
-	for _, name := range compiled.OutputFields {
-		if name == "" {
-			return false
-		}
-		if _, duplicate := public[name]; duplicate {
-			return false
-		}
-		public[name] = struct{}{}
-	}
-	if compiled.SparseFields {
-		public[SparseEventFieldNamesColumn] = struct{}{}
+	public, ok := publicResultOutputNames(compiled, 0)
+	if !ok {
+		return false
 	}
 	hidden := make(map[string]struct{}, len(compiled.ContainerOutputs)*3)
 	previous := -1
 	for _, output := range compiled.ContainerOutputs {
 		index := int(output.OutputIndex)
-		if index <= previous || index >= len(compiled.OutputFields) ||
-			compiled.SparseFields && compiled.OutputFields[index] == "fields" {
+		if !validResultOutputOrdinal(compiled, index, previous) {
 			return false
 		}
 		previous = index

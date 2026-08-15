@@ -1086,14 +1086,7 @@ func (c Compiler) compileWithFinalizerContext(
 			}
 			relation = enriched
 			args = prependArguments(prefixArgs, args)
-			if barrier != nil {
-				boundBarrier := barrier.bind(args)
-				args = nil
-				nextState.chronologicalBarriers = append(
-					nextState.chronologicalBarriers,
-					boundBarrier,
-				)
-			}
+			nextState, args = bindChronologicalBarrier(nextState, barrier, args)
 			state = nextState
 		case *plan.OrderedDelta:
 			enriched, nextState, prefixArgs, barrier, compileErr := compileOrderedDelta(
@@ -1107,14 +1100,7 @@ func (c Compiler) compileWithFinalizerContext(
 			}
 			relation = enriched
 			args = prependArguments(prefixArgs, args)
-			if barrier != nil {
-				boundBarrier := barrier.bind(args)
-				args = nil
-				nextState.chronologicalBarriers = append(
-					nextState.chronologicalBarriers,
-					boundBarrier,
-				)
-			}
+			nextState, args = bindChronologicalBarrier(nextState, barrier, args)
 			state = nextState
 		case *plan.MakeMultivalue:
 			enriched, nextState, prefixArgs, compileErr := compileMakeMultivalue(
@@ -1480,14 +1466,7 @@ func (c Compiler) compileWithFinalizerContext(
 					aliasSequence,
 				)
 				aliasSequence += additionalAliases
-				if barrier != nil {
-					boundBarrier := barrier.bind(args)
-					args = nil
-					nextState.chronologicalBarriers = append(
-						nextState.chronologicalBarriers,
-						boundBarrier,
-					)
-				}
+				nextState, args = bindChronologicalBarrier(nextState, barrier, args)
 				nextState.postAggregateChronological = nil
 			}
 			if len(nextState.postAggregateScalarExtrema) > 0 {
@@ -1561,12 +1540,7 @@ func (c Compiler) compileWithFinalizerContext(
 					}
 					relation = enriched
 					args = prependArguments(prefixArgs, args)
-					boundBarrier := barrier.bind(args)
-					args = nil
-					nextState.chronologicalBarriers = append(
-						nextState.chronologicalBarriers,
-						boundBarrier,
-					)
+					nextState, args = bindChronologicalBarrier(nextState, barrier, args)
 					state = nextState
 					operatorIndex++
 					aliasSequence++
@@ -1588,14 +1562,7 @@ func (c Compiler) compileWithFinalizerContext(
 			} else {
 				args = prependArguments(prefixArgs, args)
 			}
-			if barrier != nil {
-				boundBarrier := barrier.bind(args)
-				args = nil
-				nextState.chronologicalBarriers = append(
-					nextState.chronologicalBarriers,
-					boundBarrier,
-				)
-			}
+			nextState, args = bindChronologicalBarrier(nextState, barrier, args)
 			state = nextState
 		case *plan.StreamAggregate:
 			if operatorIndex+1 < len(remainingOperators) {
@@ -1615,12 +1582,7 @@ func (c Compiler) compileWithFinalizerContext(
 					}
 					relation = enriched
 					args = prependArguments(prefixArgs, args)
-					boundBarrier := barrier.bind(args)
-					args = nil
-					nextState.chronologicalBarriers = append(
-						nextState.chronologicalBarriers,
-						boundBarrier,
-					)
+					nextState, args = bindChronologicalBarrier(nextState, barrier, args)
 					state = nextState
 					operatorIndex++
 					aliasSequence++
@@ -1638,14 +1600,7 @@ func (c Compiler) compileWithFinalizerContext(
 			}
 			relation = enriched
 			args = prependArguments(prefixArgs, args)
-			if barrier != nil {
-				boundBarrier := barrier.bind(args)
-				args = nil
-				nextState.chronologicalBarriers = append(
-					nextState.chronologicalBarriers,
-					boundBarrier,
-				)
-			}
+			nextState, args = bindChronologicalBarrier(nextState, barrier, args)
 			state = nextState
 		case *plan.Timechart:
 			if !permitTerminalWideOperators {
@@ -4888,51 +4843,15 @@ func compileFixedCountTimechart(
 	sql.WriteString(alias)
 	sql.WriteString("), ")
 
-	sql.WriteString(counts)
-	sql.WriteString(" AS (SELECT ")
-	sql.WriteString(epochFloorBucketNumberSQL(ticks))
-	sql.WriteString(" AS ")
-	sql.WriteString(bucketNumber)
-	sql.WriteString(", count() AS ")
-	sql.WriteString(count)
-	sql.WriteString(" FROM ")
-	sql.WriteString(source)
-	sql.WriteString(" GROUP BY ")
-	sql.WriteString(bucketNumber)
-	sql.WriteString("), ")
-
-	sql.WriteString(grid)
-	sql.WriteString(" AS (")
-	sql.WriteString(ordinalGridSQL(ordinal, bucketNumber))
-	sql.WriteString(") SELECT ")
-	sql.WriteString(grid)
-	sql.WriteString(".")
-	sql.WriteString(ordinal)
-	sql.WriteString(" AS ")
-	sql.WriteString(ordinal)
-	sql.WriteString(", ifNull(")
-	sql.WriteString(counts)
-	sql.WriteString(".")
-	sql.WriteString(count)
-	sql.WriteString(", toUInt64(0)) AS ")
-	sql.WriteString(count)
-	sql.WriteString(" FROM ")
-	sql.WriteString(grid)
-	sql.WriteString(" LEFT JOIN ")
-	sql.WriteString(counts)
-	sql.WriteString(" ON ")
-	sql.WriteString(counts)
-	sql.WriteString(".")
-	sql.WriteString(bucketNumber)
-	sql.WriteString(" = ")
-	sql.WriteString(grid)
-	sql.WriteString(".")
-	sql.WriteString(bucketNumber)
-	sql.WriteString(" ORDER BY ")
-	sql.WriteString(grid)
-	sql.WriteString(".")
-	sql.WriteString(ordinal)
-	sql.WriteString(" ASC")
+	writeBucketCountGridSQL(&sql, bucketCountGrid{
+		counts:       counts,
+		countsSource: source,
+		ticks:        ticks,
+		bucketNumber: bucketNumber,
+		grid:         grid,
+		ordinal:      ordinal,
+		count:        count,
+	})
 
 	args = appendOrdinalGridArgs(args, spanNanoseconds, firstBucketNumber, operator.BucketCount)
 	sourceDepth := relationalNodeDepth(relation.depth)
@@ -5365,6 +5284,115 @@ func compileChart(
 	}
 }
 
+// resolveChartAxes revalidates the chart bounding contract and resolves the row
+// and column axis fields shared by the count and numeric chart compilers.
+func resolveChartAxes(
+	operator *plan.Chart,
+	dynamic *plan.DynamicSeriesOutput,
+	state compileState,
+) (fieldState, string, ChartRowKind, fieldState, error) {
+	rowName := operator.Over.Name
+	if dynamic == nil || !slices.Equal(dynamic.FixedFields, []string{rowName}) || dynamic.MaxSeries == 0 {
+		return fieldState{}, "", 0, fieldState{}, errors.New("compile ClickHouse chart: dynamic output contract is invalid")
+	}
+	// The plan carries the complete bounding contract as data precisely so the
+	// backend can revalidate it before emitting SQL.
+	if rowName == "" || operator.SplitBy.Name == "" || rowName == operator.SplitBy.Name ||
+		operator.RowLimit != maxChartRowValues || operator.SeriesLimit != 10 ||
+		dynamic.MaxSeries != 12 || uint32(operator.SeriesLimit)+2 != uint32(dynamic.MaxSeries) ||
+		!operator.IncludeNull || !operator.IncludeOther ||
+		operator.NullLabel != "NULL" || operator.OtherLabel != "OTHER" {
+		return fieldState{}, "", 0, fieldState{}, errors.New("compile ClickHouse chart: bounded defaults are invalid")
+	}
+	for _, axis := range []plan.FieldRef{operator.Over, operator.SplitBy} {
+		if err := validateCanonicalFieldRef("chart", "axis", axis); err != nil {
+			return fieldState{}, "", 0, fieldState{}, err
+		}
+		if axis.Name == operator.NullLabel || axis.Name == operator.OtherLabel {
+			return fieldState{}, "", 0, fieldState{}, &plan.Diagnostic{
+				Code:    "SPL_UNSUPPORTED_CHART_FIELD_TYPE",
+				Message: "NULL and OTHER are reserved chart series names",
+				Range:   axis.Range,
+			}
+		}
+		if state.eventRows && state.allowDynamic && axis.Name == "fields" {
+			return fieldState{}, "", 0, fieldState{}, &plan.Diagnostic{
+				Code:    "SPL_UNSUPPORTED_CHART_FIELD_TYPE",
+				Message: "chart cannot use the event result's reserved fields payload without an exact upstream schema",
+				Range:   axis.Range,
+			}
+		}
+	}
+
+	rowField, rowResolved, err := resolveCompiledField(operator.Over, state)
+	if err != nil {
+		return fieldState{}, "", 0, fieldState{}, err
+	}
+	if !rowResolved {
+		// An upstream projection removed the row field, so no row value is
+		// present. stats BY emits no groups in that case; keep the declared
+		// one-column schema instead of resurrecting the private document.
+		rowField = fieldState{
+			valueSQL:  "CAST(NULL AS Nullable(String))",
+			existsSQL: "0",
+			kind:      fieldKindString,
+		}
+	}
+	if rowField.kind == fieldKindStringArray {
+		return fieldState{}, "", 0, fieldState{}, unsupportedMultivalueUsage("chart row field", operator.Over.Range)
+	}
+	rowDatabaseType, rowKind, err := chartRowColumnType(rowName, rowField)
+	if err != nil {
+		return fieldState{}, "", 0, fieldState{}, err
+	}
+	if rowKind == ChartRowKindMixed && rowField.semanticBytesSQL == "" {
+		return fieldState{}, "", 0, fieldState{}, errors.New(
+			"compile ClickHouse chart: Mixed row lacks semantic Bytes provenance",
+		)
+	}
+
+	splitField, splitResolved, err := resolveCompiledField(operator.SplitBy, state)
+	if err != nil {
+		return fieldState{}, "", 0, fieldState{}, err
+	}
+	if !splitResolved {
+		// A projected-away column field is missing for every retained row, so
+		// the documented usenull=true default produces one NULL column.
+		splitField = fieldState{
+			valueSQL:  "CAST(NULL AS Nullable(String))",
+			existsSQL: "0",
+			kind:      fieldKindString,
+		}
+	}
+	if splitField.kind == fieldKindStringArray {
+		return fieldState{}, "", 0, fieldState{}, unsupportedMultivalueUsage("chart column field", operator.SplitBy.Range)
+	}
+	if splitField.kind == fieldKindInvalid {
+		// A statically null column field (eval x=null) is inside the documented
+		// column domain "string column values plus missing/explicit-null": it
+		// carries no present, non-null value on any row, exactly like the
+		// projected-away field above. fieldKindInvalid is unconditionally null
+		// everywhere else in the compiler too — its stored semantic type is the
+		// constant Null — so the pivot reads it as the same typed NULL and
+		// publishes one usenull=true NULL series instead of failing the search.
+		splitField = fieldState{
+			valueSQL:   "CAST(NULL AS Nullable(String))",
+			existsSQL:  splitField.existsSQL,
+			existsArgs: splitField.existsArgs,
+			kind:       fieldKindString,
+		}
+	}
+	if splitField.kind != fieldKindString && splitField.kind != fieldKindDynamic {
+		return fieldState{}, "", 0, fieldState{}, &plan.Diagnostic{
+			Code:        "SPL_UNSUPPORTED_CHART_FIELD_TYPE",
+			Message:     "chart column fields currently support strings plus missing and null values",
+			Range:       operator.SplitBy.Range,
+			Suggestions: []string{"convert the column field to a string before chart"},
+		}
+	}
+	return rowField, rowDatabaseType, rowKind, splitField, nil
+}
+
 func compileCountChart(
 	relation compiledRelation,
 	state compileState,
@@ -5405,103 +5433,9 @@ func compileCountChart(
 		return CompiledQuery{}, errors.New("compile ClickHouse chart: count operator is required")
 	}
 	rowName := operator.Over.Name
-	if dynamic == nil || !slices.Equal(dynamic.FixedFields, []string{rowName}) || dynamic.MaxSeries == 0 {
-		return CompiledQuery{}, errors.New("compile ClickHouse chart: dynamic output contract is invalid")
-	}
-	// The plan carries the complete bounding contract as data precisely so the
-	// backend can revalidate it before emitting SQL.
-	if rowName == "" || operator.SplitBy.Name == "" || rowName == operator.SplitBy.Name ||
-		operator.RowLimit != maxChartRowValues || operator.SeriesLimit != 10 ||
-		dynamic.MaxSeries != 12 || uint32(operator.SeriesLimit)+2 != uint32(dynamic.MaxSeries) ||
-		!operator.IncludeNull || !operator.IncludeOther ||
-		operator.NullLabel != "NULL" || operator.OtherLabel != "OTHER" {
-		return CompiledQuery{}, errors.New("compile ClickHouse chart: bounded defaults are invalid")
-	}
-	for _, axis := range []plan.FieldRef{operator.Over, operator.SplitBy} {
-		if err := validateCanonicalFieldRef("chart", "axis", axis); err != nil {
-			return CompiledQuery{}, err
-		}
-		if axis.Name == operator.NullLabel || axis.Name == operator.OtherLabel {
-			return CompiledQuery{}, &plan.Diagnostic{
-				Code:    "SPL_UNSUPPORTED_CHART_FIELD_TYPE",
-				Message: "NULL and OTHER are reserved chart series names",
-				Range:   axis.Range,
-			}
-		}
-		if state.eventRows && state.allowDynamic && axis.Name == "fields" {
-			return CompiledQuery{}, &plan.Diagnostic{
-				Code:    "SPL_UNSUPPORTED_CHART_FIELD_TYPE",
-				Message: "chart cannot use the event result's reserved fields payload without an exact upstream schema",
-				Range:   axis.Range,
-			}
-		}
-	}
-
-	rowField, rowResolved, err := resolveCompiledField(operator.Over, state)
+	rowField, rowDatabaseType, rowKind, splitField, err := resolveChartAxes(operator, dynamic, state)
 	if err != nil {
 		return CompiledQuery{}, err
-	}
-	if !rowResolved {
-		// An upstream projection removed the row field, so no row value is
-		// present. stats BY emits no groups in that case; keep the declared
-		// one-column schema instead of resurrecting the private document.
-		rowField = fieldState{
-			valueSQL:  "CAST(NULL AS Nullable(String))",
-			existsSQL: "0",
-			kind:      fieldKindString,
-		}
-	}
-	if rowField.kind == fieldKindStringArray {
-		return CompiledQuery{}, unsupportedMultivalueUsage("chart row field", operator.Over.Range)
-	}
-	rowDatabaseType, rowKind, err := chartRowColumnType(rowName, rowField)
-	if err != nil {
-		return CompiledQuery{}, err
-	}
-	if rowKind == ChartRowKindMixed && rowField.semanticBytesSQL == "" {
-		return CompiledQuery{}, errors.New(
-			"compile ClickHouse chart: Mixed row lacks semantic Bytes provenance",
-		)
-	}
-
-	splitField, splitResolved, err := resolveCompiledField(operator.SplitBy, state)
-	if err != nil {
-		return CompiledQuery{}, err
-	}
-	if !splitResolved {
-		// A projected-away column field is missing for every retained row, so
-		// the documented usenull=true default produces one NULL column.
-		splitField = fieldState{
-			valueSQL:  "CAST(NULL AS Nullable(String))",
-			existsSQL: "0",
-			kind:      fieldKindString,
-		}
-	}
-	if splitField.kind == fieldKindStringArray {
-		return CompiledQuery{}, unsupportedMultivalueUsage("chart column field", operator.SplitBy.Range)
-	}
-	if splitField.kind == fieldKindInvalid {
-		// A statically null column field (eval x=null) is inside the documented
-		// column domain "string column values plus missing/explicit-null": it
-		// carries no present, non-null value on any row, exactly like the
-		// projected-away field above. fieldKindInvalid is unconditionally null
-		// everywhere else in the compiler too — its stored semantic type is the
-		// constant Null — so the pivot reads it as the same typed NULL and
-		// publishes one usenull=true NULL series instead of failing the search.
-		splitField = fieldState{
-			valueSQL:   "CAST(NULL AS Nullable(String))",
-			existsSQL:  splitField.existsSQL,
-			existsArgs: splitField.existsArgs,
-			kind:       fieldKindString,
-		}
-	}
-	if splitField.kind != fieldKindString && splitField.kind != fieldKindDynamic {
-		return CompiledQuery{}, &plan.Diagnostic{
-			Code:        "SPL_UNSUPPORTED_CHART_FIELD_TYPE",
-			Message:     "chart column fields currently support strings plus missing and null values",
-			Range:       operator.SplitBy.Range,
-			Suggestions: []string{"convert the column field to a string before chart"},
-		}
 	}
 	measureInputSQL := ""
 	var measureArgs []any
@@ -6114,98 +6048,9 @@ func compileNumericChart(
 	}
 
 	rowName := operator.Over.Name
-	if dynamic == nil || !slices.Equal(dynamic.FixedFields, []string{rowName}) ||
-		dynamic.MaxSeries == 0 {
-		return CompiledQuery{}, errors.New("compile ClickHouse chart: dynamic output contract is invalid")
-	}
-	if rowName == "" || operator.SplitBy.Name == "" ||
-		rowName == operator.SplitBy.Name ||
-		operator.RowLimit != maxChartRowValues ||
-		operator.SeriesLimit != 10 || dynamic.MaxSeries != 12 ||
-		uint32(operator.SeriesLimit)+2 != uint32(dynamic.MaxSeries) ||
-		!operator.IncludeNull || !operator.IncludeOther ||
-		operator.NullLabel != "NULL" || operator.OtherLabel != "OTHER" {
-		return CompiledQuery{}, errors.New("compile ClickHouse chart: bounded defaults are invalid")
-	}
-	for _, axis := range []plan.FieldRef{operator.Over, operator.SplitBy} {
-		if err := validateCanonicalFieldRef("chart", "axis", axis); err != nil {
-			return CompiledQuery{}, err
-		}
-		if axis.Name == operator.NullLabel || axis.Name == operator.OtherLabel {
-			return CompiledQuery{}, &plan.Diagnostic{
-				Code:    "SPL_UNSUPPORTED_CHART_FIELD_TYPE",
-				Message: "NULL and OTHER are reserved chart series names",
-				Range:   axis.Range,
-			}
-		}
-		if state.eventRows && state.allowDynamic && axis.Name == "fields" {
-			return CompiledQuery{}, &plan.Diagnostic{
-				Code:    "SPL_UNSUPPORTED_CHART_FIELD_TYPE",
-				Message: "chart cannot use the event result's reserved fields payload without an exact upstream schema",
-				Range:   axis.Range,
-			}
-		}
-	}
-
-	rowField, rowResolved, err := resolveCompiledField(operator.Over, state)
+	rowField, rowDatabaseType, rowKind, splitField, err := resolveChartAxes(operator, dynamic, state)
 	if err != nil {
 		return CompiledQuery{}, err
-	}
-	if !rowResolved {
-		rowField = fieldState{
-			valueSQL:  "CAST(NULL AS Nullable(String))",
-			existsSQL: "0",
-			kind:      fieldKindString,
-		}
-	}
-	if rowField.kind == fieldKindStringArray {
-		return CompiledQuery{}, unsupportedMultivalueUsage(
-			"chart row field",
-			operator.Over.Range,
-		)
-	}
-	rowDatabaseType, rowKind, err := chartRowColumnType(rowName, rowField)
-	if err != nil {
-		return CompiledQuery{}, err
-	}
-	if rowKind == ChartRowKindMixed && rowField.semanticBytesSQL == "" {
-		return CompiledQuery{}, errors.New(
-			"compile ClickHouse chart: Mixed row lacks semantic Bytes provenance",
-		)
-	}
-
-	splitField, splitResolved, err := resolveCompiledField(operator.SplitBy, state)
-	if err != nil {
-		return CompiledQuery{}, err
-	}
-	if !splitResolved {
-		splitField = fieldState{
-			valueSQL:  "CAST(NULL AS Nullable(String))",
-			existsSQL: "0",
-			kind:      fieldKindString,
-		}
-	}
-	if splitField.kind == fieldKindStringArray {
-		return CompiledQuery{}, unsupportedMultivalueUsage(
-			"chart column field",
-			operator.SplitBy.Range,
-		)
-	}
-	if splitField.kind == fieldKindInvalid {
-		splitField = fieldState{
-			valueSQL:   "CAST(NULL AS Nullable(String))",
-			existsSQL:  splitField.existsSQL,
-			existsArgs: splitField.existsArgs,
-			kind:       fieldKindString,
-		}
-	}
-	if splitField.kind != fieldKindString && splitField.kind != fieldKindDynamic {
-		return CompiledQuery{}, &plan.Diagnostic{
-			Code:        "SPL_UNSUPPORTED_CHART_FIELD_TYPE",
-			Message:     "chart column fields currently support strings plus missing and null values",
-			Range:       operator.SplitBy.Range,
-			Suggestions: []string{"convert the column field to a string before chart"},
-		}
 	}
 
 	measureField, measureResolved, err := resolveCompiledField(
@@ -6800,6 +6645,40 @@ type pendingChronologicalBarrier struct {
 	fanout                       uint64
 	depth                        int
 	ownerRange                   spl.Range
+}
+
+// appendVisibleFieldProjection appends the projection term for a visible field,
+// omitting the redundant alias when the value expression is already the public
+// column name.
+func appendVisibleFieldProjection(projection []string, field fieldState, publicName string) []string {
+	if field.valueSQL == publicName {
+		return append(projection, publicName)
+	}
+	return append(projection, field.valueSQL+" AS "+publicName)
+}
+
+// dynamicPresenceOperands returns the presence and descendant predicates for a
+// field together with their bind values, in placeholder order.
+func dynamicPresenceOperands(field fieldState) (existsSQL, descendantSQL string, args []any) {
+	existsSQL = field.existsSQL
+	if existsSQL == "" {
+		existsSQL = "1"
+	}
+	descendantSQL = "0"
+	args = append([]any(nil), field.existsArgs...)
+	if field.descendantSQL != "" {
+		descendantSQL = field.descendantSQL
+		args = append(args, field.descendantArgs...)
+	}
+	return existsSQL, descendantSQL, args
+}
+
+func bindChronologicalBarrier(state compileState, barrier *pendingChronologicalBarrier, args []any) (compileState, []any) {
+	if barrier == nil {
+		return state, args
+	}
+	state.chronologicalBarriers = append(state.chronologicalBarriers, barrier.bind(args))
+	return state, nil
 }
 
 func (barrier pendingChronologicalBarrier) bind(args []any) compiledChronologicalBarrier {
@@ -13280,11 +13159,7 @@ func compileExtract(
 		if !ok {
 			return compiledRelation{}, compileState{}, nil, 0, fmt.Errorf("compile ClickHouse extract: field %q has no input value", name)
 		}
-		if field.valueSQL == publicName {
-			projection = append(projection, publicName)
-		} else {
-			projection = append(projection, field.valueSQL+" AS "+publicName)
-		}
+		projection = appendVisibleFieldProjection(projection, field, publicName)
 	}
 	projectionState := next
 	projectionState.privateColumns = liveOldPrivateColumns
@@ -14017,11 +13892,7 @@ func compileExtractJSON(
 				name,
 			)
 		}
-		if field.valueSQL == publicName {
-			projection = append(projection, publicName)
-		} else {
-			projection = append(projection, field.valueSQL+" AS "+publicName)
-		}
+		projection = appendVisibleFieldProjection(projection, field, publicName)
 	}
 	projectionState := next
 	projectionState.privateColumns = liveOldPrivateColumns
@@ -14357,11 +14228,7 @@ func renameProjection(state, next compileState, destination string, source field
 			field = source
 		}
 		publicName := quoteIdentifier(name)
-		if field.valueSQL == publicName {
-			projection = append(projection, publicName)
-		} else {
-			projection = append(projection, field.valueSQL+" AS "+publicName)
-		}
+		projection = appendVisibleFieldProjection(projection, field, publicName)
 	}
 	return appendPrivateEventProjection(projection, next)
 }
@@ -14561,9 +14428,9 @@ func evalComparisonCoreWithoutIEEE(left, right compiledScalar, operator string) 
 	if left.kind == fieldKindDynamic || right.kind == fieldKindDynamic {
 		if left.dynamicDomain == dynamicScalarDomainNumeric ||
 			right.dynamicDomain == dynamicScalarDomainNumeric {
-			return dynamicNumericEvalComparisonCore(left, right, operator)
+			return dynamicEvalComparisonCoreWith(left, right, operator, dynamicNumericComparisonBody)
 		}
-		return dynamicEvalComparisonCore(left, right, operator)
+		return dynamicEvalComparisonCoreWith(left, right, operator, dynamicComparisonBody)
 	}
 	if !fixedScalarKindsComparable(left.kind, right.kind) {
 		return "CAST(NULL AS Nullable(Bool))", nil
@@ -14665,17 +14532,19 @@ func fixedScalarKindsComparable(left, right fieldKind) bool {
 		left == fieldKindString || right == fieldKindString
 }
 
-func dynamicEvalComparisonCore(left, right compiledScalar, operator string) (string, []any) {
+// dynamicEvalComparisonCoreWith lowers a dynamic eval comparison using the given
+// per-flavor comparison body builder.
+func dynamicEvalComparisonCoreWith(
+	left, right compiledScalar,
+	operator string,
+	body func(compiledScalar, compiledScalar, string) (string, int, bool),
+) (string, []any) {
 	if left.comparisonAtomic && right.comparisonAtomic {
-		body, argumentOccurrences, ok := dynamicComparisonBody(
-			left,
-			right,
-			operator,
-		)
+		sql, argumentOccurrences, ok := body(left, right, operator)
 		if !ok {
 			return "CAST(NULL AS Nullable(Bool))", nil
 		}
-		return body, repeatedComparisonValueArgs(
+		return sql, repeatedComparisonValueArgs(
 			left,
 			right,
 			argumentOccurrences,
@@ -14687,11 +14556,11 @@ func dynamicEvalComparisonCore(left, right compiledScalar, operator string) (str
 	left.dynamicTypeSQL = ""
 	right.valueSQL = "right_value"
 	right.dynamicTypeSQL = ""
-	body, _, ok := dynamicComparisonBody(left, right, operator)
+	sql, _, ok := body(left, right, operator)
 	if !ok {
 		return "CAST(NULL AS Nullable(Bool))", nil
 	}
-	return bindComparisonOperands(body, originalLeft, originalRight)
+	return bindComparisonOperands(sql, originalLeft, originalRight)
 }
 
 func dynamicComparisonBody(
@@ -14774,38 +14643,6 @@ func dynamicComparisonBody(
 	default:
 		return "", 0, false
 	}
-}
-
-func dynamicNumericEvalComparisonCore(
-	left, right compiledScalar,
-	operator string,
-) (string, []any) {
-	if left.comparisonAtomic && right.comparisonAtomic {
-		body, argumentOccurrences, ok := dynamicNumericComparisonBody(
-			left,
-			right,
-			operator,
-		)
-		if !ok {
-			return "CAST(NULL AS Nullable(Bool))", nil
-		}
-		return body, repeatedComparisonValueArgs(
-			left,
-			right,
-			argumentOccurrences,
-		)
-	}
-	originalLeft := left
-	originalRight := right
-	left.valueSQL = "left_value"
-	left.dynamicTypeSQL = ""
-	right.valueSQL = "right_value"
-	right.dynamicTypeSQL = ""
-	body, _, ok := dynamicNumericComparisonBody(left, right, operator)
-	if !ok {
-		return "CAST(NULL AS Nullable(Bool))", nil
-	}
-	return bindComparisonOperands(body, originalLeft, originalRight)
 }
 
 func dynamicNumericComparisonBody(
@@ -16365,11 +16202,7 @@ func fusedChronologicalProjection(
 				name,
 			)
 		}
-		if field.valueSQL == publicName {
-			projection = append(projection, publicName)
-		} else {
-			projection = append(projection, field.valueSQL+" AS "+publicName)
-		}
+		projection = appendVisibleFieldProjection(projection, field, publicName)
 	}
 
 	projectionState := next
@@ -21804,16 +21637,7 @@ func dynamicStringArrayStateSQL(
 			memberStatesAlias+")))",
 	)
 
-	existsSQL := field.existsSQL
-	if existsSQL == "" {
-		existsSQL = "1"
-	}
-	args := append([]any(nil), field.existsArgs...)
-	descendantSQL := "0"
-	if field.descendantSQL != "" {
-		descendantSQL = field.descendantSQL
-		args = append(args, field.descendantArgs...)
-	}
+	existsSQL, descendantSQL, args := dynamicPresenceOperands(field)
 	if rowEligibleSQL == "" {
 		rowEligibleSQL = "1"
 	}
@@ -21962,16 +21786,7 @@ func singleChronologicalCandidateSQL(
 		", toUInt64(1), toUInt8(1), toUInt8(0))"
 	invalid := "tuple(CAST('' AS String), toUInt64(0), toUInt8(0), toUInt8(1))"
 
-	existsSQL := field.existsSQL
-	if existsSQL == "" {
-		existsSQL = "1"
-	}
-	descendantSQL := "0"
-	args := append([]any(nil), field.existsArgs...)
-	if field.descendantSQL != "" {
-		descendantSQL = field.descendantSQL
-		args = append(args, field.descendantArgs...)
-	}
+	existsSQL, descendantSQL, args := dynamicPresenceOperands(field)
 	value := "multiIf(" +
 		"descendant_present != 0, " + invalid + ", " +
 		"field_present = 0 OR " + typeSQL + " = 'None', " + empty + ", " +
@@ -22256,16 +22071,7 @@ func chronologicalCandidatesSQL(
 	invalid := "tuple(CAST('' AS String), CAST('' AS String), toUInt8(0), " +
 		"toUInt8(1), toUInt64(0), toUInt64(0))"
 
-	existsSQL := field.existsSQL
-	if existsSQL == "" {
-		existsSQL = "1"
-	}
-	descendantSQL := "0"
-	args := append([]any(nil), field.existsArgs...)
-	if field.descendantSQL != "" {
-		descendantSQL = field.descendantSQL
-		args = append(args, field.descendantArgs...)
-	}
+	existsSQL, descendantSQL, args := dynamicPresenceOperands(field)
 	value := "multiIf(" +
 		"descendant_present != 0, " + invalid + ", " +
 		"field_present = 0 OR " + typeSQL + " = 'None', " + empty + ", " +
@@ -22688,16 +22494,7 @@ func statsExtremaDynamicCandidatesSQL(field fieldState) (string, []any) {
 		" != 'None', dynamicElement(" + field.valueSQL + ", 'Array(Dynamic)'))"
 	arrayInput := "arrayMap(element -> " + elementInput + ", " + arrayValues + ")"
 
-	existsSQL := field.existsSQL
-	if existsSQL == "" {
-		existsSQL = "1"
-	}
-	descendantSQL := "0"
-	args := append([]any(nil), field.existsArgs...)
-	if field.descendantSQL != "" {
-		descendantSQL = field.descendantSQL
-		args = append(args, field.descendantArgs...)
-	}
+	existsSQL, descendantSQL, args := dynamicPresenceOperands(field)
 	topLevelUnsupported := "(field_present != 0 AND " + scalar.typeSQL +
 		" != 'None' AND " + scalar.typeSQL + " != 'Array(Dynamic)' AND NOT (" +
 		scalar.supportedSQL + "))"
@@ -22891,16 +22688,7 @@ func eventStatsExtremaDynamicMeasureSQL(
 			" = 'Array(Dynamic)' OR ifNull(" + field.textEligibleSQL + ", 0))"
 	}
 
-	existsSQL := field.existsSQL
-	if existsSQL == "" {
-		existsSQL = "1"
-	}
-	descendantSQL := "0"
-	args := append([]any(nil), field.existsArgs...)
-	if field.descendantSQL != "" {
-		descendantSQL = field.descendantSQL
-		args = append(args, field.descendantArgs...)
-	}
+	existsSQL, descendantSQL, args := dynamicPresenceOperands(field)
 	empty := eventStatsExtremaEmptyRowStateSQL("0")
 	initial := eventStatsExtremaEmptyRowStateSQL("descendant_present != 0")
 	memberState := "__os_eventstats_extrema_state"
@@ -24002,11 +23790,7 @@ func finalProjection(state compileState) ([]string, []string, error) {
 			continue
 		}
 		publicName := quoteIdentifier(name)
-		if field.valueSQL == publicName {
-			projection = append(projection, publicName)
-		} else {
-			projection = append(projection, field.valueSQL+" AS "+publicName)
-		}
+		projection = appendVisibleFieldProjection(projection, field, publicName)
 		output = append(output, name)
 	}
 	if len(projection) == 0 {

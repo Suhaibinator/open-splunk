@@ -46,22 +46,13 @@ func validResultOptionalMultivalueOutputs(compiled CompiledQuery) bool {
 		!validResultContainerOutputs(compiled) {
 		return false
 	}
-	usedNames := make(map[string]struct{}, len(compiled.OutputFields)+1+
+	usedNames, ok := publicResultOutputNames(compiled,
 		len(compiled.ContainerOutputs)*3+len(compiled.OptionalMultivalueOutputs))
+	if !ok {
+		return false
+	}
 	usedIndexes := make(map[int]struct{}, len(compiled.ContainerOutputs)+
 		len(compiled.OptionalMultivalueOutputs))
-	for _, name := range compiled.OutputFields {
-		if name == "" {
-			return false
-		}
-		if _, duplicate := usedNames[name]; duplicate {
-			return false
-		}
-		usedNames[name] = struct{}{}
-	}
-	if compiled.SparseFields {
-		usedNames[SparseEventFieldNamesColumn] = struct{}{}
-	}
 	for _, output := range compiled.ContainerOutputs {
 		usedIndexes[int(output.OutputIndex)] = struct{}{}
 		for _, name := range []string{
@@ -78,8 +69,7 @@ func validResultOptionalMultivalueOutputs(compiled CompiledQuery) bool {
 	previous := -1
 	for _, output := range compiled.OptionalMultivalueOutputs {
 		index := int(output.OutputIndex)
-		if index <= previous || index >= len(compiled.OutputFields) ||
-			compiled.SparseFields && compiled.OutputFields[index] == "fields" {
+		if !validResultOutputOrdinal(compiled, index, previous) {
 			return false
 		}
 		if _, overlap := usedIndexes[index]; overlap {
