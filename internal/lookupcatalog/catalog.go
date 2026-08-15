@@ -126,13 +126,6 @@ type StateRequest struct {
 	State           opensplunkv1.LookupState
 }
 
-type ListRequest struct {
-	TenantID string
-	OwnerID  string
-	AppID    string
-	Limit    uint32
-}
-
 // ListPageRequest is one normalized management-list query. Position and
 // ExpectedSnapshot are detached cursor authority supplied by lookupservice;
 // the catalog validates both inside the same SQLite read snapshot as the page.
@@ -659,7 +652,6 @@ func replaceRowsInTransaction(
 	created := time.UnixMicro(createdMicro).UTC()
 	lookupState, disabled, deleted, err := stateTimes(
 		state,
-		now,
 		nullTime(disabledMicro),
 		nullTime(deletedMicro),
 	)
@@ -881,81 +873,6 @@ func (catalog *Catalog) SetState(ctx context.Context, request StateRequest) (*op
 	return catalog.Get(ctx, GetRequest{TenantID: request.TenantID, OwnerID: request.OwnerID, LookupID: request.LookupID, Version: version})
 }
 
-func (catalog *Catalog) List(ctx context.Context, request ListRequest) ([]*opensplunkv1.Lookup, error) {
-	if err := catalog.validateContext(ctx); err != nil {
-		return nil, err
-	}
-	if !validIdentity(request.TenantID, 255) || !validIdentity(request.OwnerID, 255) || (request.AppID != "" && !validIdentity(request.AppID, 128)) || request.Limit == 0 || request.Limit > MaximumManagedLookups+1 {
-		return nil, fmt.Errorf("%w: lookup list scope is invalid", ErrInvalid)
-	}
-	page, err := catalog.ListPage(ctx, ListPageRequest{
-		TenantID:      request.TenantID,
-		OwnerID:       request.OwnerID,
-		AppID:         request.AppID,
-		SortBy:        opensplunkv1.LookupSortBy_LOOKUP_SORT_BY_NAME,
-		SortDirection: opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING,
-		Limit:         request.Limit,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return page.Lookups, nil
-}
-
-func (catalog *Catalog) Resolve(ctx context.Context, scope ResolveScope) ([]Resolved, error) {
-	if err := catalog.validateContext(ctx); err != nil {
-		return nil, err
-	}
-	if !validIdentity(scope.TenantID, 255) || !validIdentity(scope.PrincipalID, 255) || !validIdentity(scope.AppID, 128) || len(scope.Names) > MaximumResolvedLookups {
-		return nil, fmt.Errorf("%w: lookup resolution scope is invalid", ErrInvalid)
-	}
-	tx, err := catalog.database.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return nil, fmt.Errorf("begin lookup resolution snapshot: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-	records := make([]persistedProjection, 0, len(scope.Names))
-	for _, name := range scope.Names {
-		if !lookupdefinition.IsValidLookupName(name) {
-			return nil, fmt.Errorf("%w: lookup name is invalid", ErrInvalid)
-		}
-		lookupID, err := catalog.resolutionWinnerID(ctx, tx, scope, name)
-		if err != nil {
-			return nil, err
-		}
-		record, recordErr := catalog.getProjectionRecordWith(
-			ctx,
-			tx,
-			scope.TenantID,
-			lookupID,
-			0,
-		)
-		if recordErr != nil {
-			return nil, recordErr
-		}
-		if record.lookup.GetState() != opensplunkv1.LookupState_LOOKUP_STATE_ACTIVE ||
-			record.lookup.GetDefinition().GetName() != name {
-			return nil, ErrConflict
-		}
-		records = append(records, record)
-	}
-	if err := preflightResolvedRecords(records); err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit lookup resolution snapshot: %w", err)
-	}
-	result := make([]Resolved, len(records))
-	for index, record := range records {
-		resolved, resolveErr := catalog.resolvePersistedProjection(ctx, record)
-		if resolveErr != nil {
-			return nil, resolveErr
-		}
-		result[index] = resolved
-	}
-	return cloneResolved(result), nil
-}
-
 // ResolveAdmission selects explicit names and automatic winners from one read
 // snapshot, applies the combined execution budgets to metadata, and only then
 // loads immutable CSV bodies. Explicit order follows scope.Names; automatic
@@ -1022,41 +939,6 @@ func (catalog *Catalog) ResolveAdmission(
 		Explicit:  resolved[:explicitCount],
 		Automatic: resolved[explicitCount:],
 	}, nil
-}
-
-// ResolveAutomatic selects the same visible logical-name winners as explicit
-// resolution, then returns only winners marked automatic. Registry metadata
-// decides visibility and precedence before at most sixteen immutable assets
-// are loaded. Result order is canonical name then stable ID.
-func (catalog *Catalog) ResolveAutomatic(ctx context.Context, scope ResolveScope) ([]Resolved, error) {
-	if err := catalog.validateContext(ctx); err != nil {
-		return nil, err
-	}
-	if !validIdentity(scope.TenantID, 255) || !validIdentity(scope.PrincipalID, 255) ||
-		!validIdentity(scope.AppID, 128) || len(scope.Names) != 0 {
-		return nil, fmt.Errorf("%w: automatic lookup resolution scope is invalid", ErrInvalid)
-	}
-	tx, err := catalog.database.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return nil, fmt.Errorf("begin automatic lookup resolution snapshot: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-	records, err := catalog.resolveAutomaticProjectionRecords(
-		ctx,
-		tx,
-		scope,
-		MaximumResolvedLookups,
-	)
-	if err != nil {
-		return nil, err
-	}
-	if err := preflightResolvedRecords(records); err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit automatic lookup resolution snapshot: %w", err)
-	}
-	return catalog.resolvePersistedRecords(ctx, records)
 }
 
 func (catalog *Catalog) resolveAutomaticProjectionRecords(
@@ -1473,7 +1355,6 @@ func validatePersistedRegistry(registry persistedRegistry) error {
 	}
 	if _, _, _, err := stateTimes(
 		registry.state,
-		time.Time{},
 		nullTime(registry.disabledMicro),
 		nullTime(registry.deletedMicro),
 	); err != nil {
@@ -1637,6 +1518,17 @@ func resolvePersistedProjectionAsset(
 	return Resolved{Lookup: record.lookup, Asset: asset}, nil
 }
 
+func normalizeAgainstAsset(ctx context.Context, definition *opensplunkv1.LookupDefinition, asset lookupasset.Version) (lookupdefinition.Normalized, lookupasset.Version, error) {
+	normalized, err := lookupdefinition.Normalize(definition, asset.Asset.Headers())
+	if err != nil {
+		return lookupdefinition.Normalized{}, lookupasset.Version{}, err
+	}
+	if err := lookupasset.ValidateUniqueKeysContext(ctx, asset.Asset, lookupdefinition.KeyColumns(normalized.Definition)); err != nil {
+		return lookupdefinition.Normalized{}, lookupasset.Version{}, err
+	}
+	return normalized, asset, nil
+}
+
 func (catalog *Catalog) validateDefinitionAsset(ctx context.Context, tenantID string, definition *opensplunkv1.LookupDefinition, supplied lookupasset.Version) (lookupdefinition.Normalized, lookupasset.Version, error) {
 	if supplied.Ref.TenantID != tenantID {
 		return lookupdefinition.Normalized{}, lookupasset.Version{}, fmt.Errorf("%w: asset tenant does not match definition tenant", ErrInvalid)
@@ -1645,18 +1537,7 @@ func (catalog *Catalog) validateDefinitionAsset(ctx context.Context, tenantID st
 	if err != nil {
 		return lookupdefinition.Normalized{}, lookupasset.Version{}, err
 	}
-	normalized, err := lookupdefinition.Normalize(definition, asset.Asset.Headers())
-	if err != nil {
-		return lookupdefinition.Normalized{}, lookupasset.Version{}, err
-	}
-	keyColumns := make([]string, len(normalized.Definition.GetKeyMappings()))
-	for index, mapping := range normalized.Definition.GetKeyMappings() {
-		keyColumns[index] = mapping.GetLookupField()
-	}
-	if err := lookupasset.ValidateUniqueKeysContext(ctx, asset.Asset, keyColumns); err != nil {
-		return lookupdefinition.Normalized{}, lookupasset.Version{}, err
-	}
-	return normalized, asset, nil
+	return normalizeAgainstAsset(ctx, definition, asset)
 }
 
 func validatePublishedDefinition(
@@ -1687,18 +1568,7 @@ func validatePublishedDefinition(
 			ErrInvalid,
 		)
 	}
-	normalized, err := lookupdefinition.Normalize(definition, asset.Asset.Headers())
-	if err != nil {
-		return lookupdefinition.Normalized{}, lookupasset.Version{}, err
-	}
-	keyColumns := make([]string, len(normalized.Definition.GetKeyMappings()))
-	for index, mapping := range normalized.Definition.GetKeyMappings() {
-		keyColumns[index] = mapping.GetLookupField()
-	}
-	if err := lookupasset.ValidateUniqueKeysContext(ctx, asset.Asset, keyColumns); err != nil {
-		return lookupdefinition.Normalized{}, lookupasset.Version{}, err
-	}
-	return normalized, asset, nil
+	return normalizeAgainstAsset(ctx, definition, asset)
 }
 
 func deterministicDefinition(definition *opensplunkv1.LookupDefinition) ([]byte, error) {
@@ -1800,7 +1670,6 @@ func versionStateTimes(
 ) (opensplunkv1.LookupState, time.Time, time.Time, error) {
 	lookupState, disabled, deleted, err := stateTimes(
 		state,
-		time.Time{},
 		nullTime(disabledMicro),
 		nullTime(deletedMicro),
 	)
@@ -1880,7 +1749,7 @@ func projectionMetadata(
 	return result
 }
 
-func stateTimes(value string, _ time.Time, disabled, deleted time.Time) (opensplunkv1.LookupState, time.Time, time.Time, error) {
+func stateTimes(value string, disabled, deleted time.Time) (opensplunkv1.LookupState, time.Time, time.Time, error) {
 	switch value {
 	case "ACTIVE":
 		if !disabled.IsZero() || !deleted.IsZero() {
@@ -1948,19 +1817,7 @@ func nextMutationTime(proposed time.Time, previousMicro int64) (time.Time, error
 	return time.UnixMicro(proposedMicro).UTC(), nil
 }
 
-func validIdentity(value string, maximum int) bool {
-	if value == "" || len(value) > maximum || !utf8.ValidString(value) {
-		return false
-	}
-	for index := range len(value) {
-		character := value[index]
-		alphaNumeric := character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9'
-		if !alphaNumeric && (index == 0 || character != '.' && character != '_' && character != ':' && character != '-') {
-			return false
-		}
-	}
-	return true
-}
+var validIdentity = lookupdefinition.ValidIdentity
 
 func storageConflict(err error) bool {
 	if err == nil {

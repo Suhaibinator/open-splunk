@@ -251,11 +251,15 @@ func TestCatalogManagementProjectionDoesNotLoadAssetBodies(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Get(): %v", err)
 	}
-	listed, err := catalog.List(t.Context(), ListRequest{
-		TenantID: "tenant-lookups", OwnerID: "owner-lookups", Limit: 10,
+	page, err := catalog.ListPage(t.Context(), ListPageRequest{
+		TenantID:      "tenant-lookups",
+		OwnerID:       "owner-lookups",
+		SortBy:        opensplunkv1.LookupSortBy_LOOKUP_SORT_BY_NAME,
+		SortDirection: opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING,
+		Limit:         10,
 	})
-	if err != nil || len(listed) != 1 || observed.getVersionCalls.Load() != 0 {
-		t.Fatalf("List() = %#v, %v; asset loads = %d", listed, err, observed.getVersionCalls.Load())
+	if err != nil || len(page.Lookups) != 1 || observed.getVersionCalls.Load() != 0 {
+		t.Fatalf("ListPage() = %#v, %v; asset loads = %d", page.Lookups, err, observed.getVersionCalls.Load())
 	}
 	if _, err := catalog.GetResolved(t.Context(), GetRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups", LookupID: created.GetLookupId(),
@@ -411,8 +415,8 @@ func TestCatalogAutomaticResolutionRejectsOverLimitBeforeAssetLoads(t *testing.T
 	}
 	observed.reset()
 	scope := ResolveScope{TenantID: "tenant-lookups", PrincipalID: "owner-lookups", AppID: appIDs[0]}
-	if _, err := catalog.ResolveAutomatic(t.Context(), scope); !errors.Is(err, ErrCapacity) || observed.getVersionCalls.Load() != 0 {
-		t.Fatalf("ResolveAutomatic(over limit) error = %v; asset loads = %d", err, observed.getVersionCalls.Load())
+	if _, err := catalog.ResolveAdmission(t.Context(), scope); !errors.Is(err, ErrCapacity) || observed.getVersionCalls.Load() != 0 {
+		t.Fatalf("ResolveAdmission(over automatic limit) error = %v; asset loads = %d", err, observed.getVersionCalls.Load())
 	}
 	if _, err := catalog.SetState(t.Context(), StateRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups", LookupID: created[0].GetLookupId(),
@@ -421,9 +425,10 @@ func TestCatalogAutomaticResolutionRejectsOverLimitBeforeAssetLoads(t *testing.T
 		t.Fatalf("disable one automatic lookup: %v", err)
 	}
 	observed.reset()
-	resolved, err := catalog.ResolveAutomatic(t.Context(), scope)
+	admitted, err := catalog.ResolveAdmission(t.Context(), scope)
+	resolved := admitted.Automatic
 	if err != nil || len(resolved) != MaximumResolvedLookups || observed.getVersionCalls.Load() != 1 {
-		t.Fatalf("ResolveAutomatic(bound) len=%d error=%v asset loads=%d", len(resolved), err, observed.getVersionCalls.Load())
+		t.Fatalf("ResolveAdmission(bound) len=%d error=%v asset loads=%d", len(resolved), err, observed.getVersionCalls.Load())
 	}
 }
 
@@ -454,14 +459,14 @@ func TestCatalogResolutionRejectsAggregateCellsBeforeAssetLoads(t *testing.T) {
 	}
 	observed.reset()
 	scope := ResolveScope{TenantID: "tenant-lookups", PrincipalID: "owner-lookups", AppID: appIDs[0]}
-	if _, err := catalog.Resolve(t.Context(), ResolveScope{
+	if _, err := catalog.ResolveAdmission(t.Context(), ResolveScope{
 		TenantID: scope.TenantID, PrincipalID: scope.PrincipalID, AppID: scope.AppID, Names: names,
 	}); !errors.Is(err, ErrCapacity) || observed.getVersionCalls.Load() != 0 {
-		t.Fatalf("Resolve(over cell bound) error = %v; asset loads = %d", err, observed.getVersionCalls.Load())
+		t.Fatalf("ResolveAdmission(explicit over cell bound) error = %v; asset loads = %d", err, observed.getVersionCalls.Load())
 	}
 	observed.reset()
-	if _, err := catalog.ResolveAutomatic(t.Context(), scope); !errors.Is(err, ErrCapacity) || observed.getVersionCalls.Load() != 0 {
-		t.Fatalf("ResolveAutomatic(over cell bound) error = %v; asset loads = %d", err, observed.getVersionCalls.Load())
+	if _, err := catalog.ResolveAdmission(t.Context(), scope); !errors.Is(err, ErrCapacity) || observed.getVersionCalls.Load() != 0 {
+		t.Fatalf("ResolveAdmission(automatic over cell bound) error = %v; asset loads = %d", err, observed.getVersionCalls.Load())
 	}
 }
 
@@ -577,10 +582,10 @@ func TestCatalogResolutionSealsLogicalSnapshotBeforeAssetLoad(t *testing.T) {
 	}
 	completed := make(chan outcome, 1)
 	go func() {
-		resolved, resolveErr := resolutionCatalog.Resolve(t.Context(), ResolveScope{
+		admitted, resolveErr := resolutionCatalog.ResolveAdmission(t.Context(), ResolveScope{
 			TenantID: "tenant-lookups", PrincipalID: "owner-lookups", AppID: appIDs[0], Names: []string{"snapshot"},
 		})
-		completed <- outcome{resolved: resolved, err: resolveErr}
+		completed <- outcome{resolved: admitted.Explicit, err: resolveErr}
 	}()
 	select {
 	case <-observed.started:
@@ -597,13 +602,13 @@ func TestCatalogResolutionSealsLogicalSnapshotBeforeAssetLoad(t *testing.T) {
 	result := <-completed
 	if result.err != nil || len(result.resolved) != 1 || result.resolved[0].Lookup.GetVersion() != 1 ||
 		result.resolved[0].Lookup.GetState() != opensplunkv1.LookupState_LOOKUP_STATE_ACTIVE {
-		t.Fatalf("sealed Resolve() = %#v, %v", result.resolved, result.err)
+		t.Fatalf("sealed ResolveAdmission() = %#v, %v", result.resolved, result.err)
 	}
 	observed.block.Store(false)
-	if _, err := resolutionCatalog.Resolve(t.Context(), ResolveScope{
+	if _, err := resolutionCatalog.ResolveAdmission(t.Context(), ResolveScope{
 		TenantID: "tenant-lookups", PrincipalID: "owner-lookups", AppID: appIDs[0], Names: []string{"snapshot"},
 	}); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("Resolve(after disable) error = %v", err)
+		t.Fatalf("ResolveAdmission(after disable) error = %v", err)
 	}
 }
 
@@ -862,15 +867,16 @@ func TestCatalogResolutionUsesVisibleWinnerAndAutomaticFlag(t *testing.T) {
 		t.Fatalf("Create(global fallback): %v", err)
 	}
 	scope := ResolveScope{TenantID: "tenant-lookups", PrincipalID: "owner-lookups", AppID: appIDs[0]}
-	explicit, err := catalog.Resolve(t.Context(), ResolveScope{
+	admitted, err := catalog.ResolveAdmission(t.Context(), ResolveScope{
 		TenantID: scope.TenantID, PrincipalID: scope.PrincipalID, AppID: scope.AppID, Names: []string{"services"},
 	})
+	explicit := admitted.Explicit
 	if err != nil || len(explicit) != 1 || explicit[0].Lookup.GetLookupId() != appWinner.GetLookupId() {
-		t.Fatalf("Resolve() = %#v, %v", explicit, err)
+		t.Fatalf("ResolveAdmission() = %#v, %v", explicit, err)
 	}
-	automatic, err := catalog.ResolveAutomatic(t.Context(), scope)
-	if err != nil || len(automatic) != 1 || automatic[0].Lookup.GetLookupId() != appWinner.GetLookupId() {
-		t.Fatalf("ResolveAutomatic(app winner) = %#v, %v", automatic, err)
+	automatic := admitted.Automatic
+	if len(automatic) != 1 || automatic[0].Lookup.GetLookupId() != appWinner.GetLookupId() {
+		t.Fatalf("ResolveAdmission(app winner) = %#v, %v", automatic, err)
 	}
 
 	nonAutomatic := catalogDefinition(appIDs[0], "services", opensplunkv1.SharingScope_SHARING_SCOPE_APP, false)
@@ -881,7 +887,8 @@ func TestCatalogResolutionUsesVisibleWinnerAndAutomaticFlag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Replace(nonautomatic winner): %v", err)
 	}
-	automatic, err = catalog.ResolveAutomatic(t.Context(), scope)
+	admitted, err = catalog.ResolveAdmission(t.Context(), scope)
+	automatic = admitted.Automatic
 	if err != nil || len(automatic) != 0 {
 		t.Fatalf("shadowed global automatic = %#v, %v", automatic, err)
 	}
@@ -893,15 +900,16 @@ func TestCatalogResolutionUsesVisibleWinnerAndAutomaticFlag(t *testing.T) {
 	if err != nil || disabled.GetState() != opensplunkv1.LookupState_LOOKUP_STATE_DISABLED {
 		t.Fatalf("SetState(disabled) = %#v, %v", disabled, err)
 	}
-	automatic, err = catalog.ResolveAutomatic(t.Context(), scope)
+	admitted, err = catalog.ResolveAdmission(t.Context(), scope)
+	automatic = admitted.Automatic
 	if err != nil || len(automatic) != 1 || automatic[0].Lookup.GetLookupId() != global.GetLookupId() {
-		t.Fatalf("ResolveAutomatic(global fallback) = %#v, %v", automatic, err)
+		t.Fatalf("ResolveAdmission(global fallback) = %#v, %v", automatic, err)
 	}
 
 	automatic[0].Lookup.Definition.Name = "mutated"
-	again, err := catalog.ResolveAutomatic(t.Context(), scope)
-	if err != nil || again[0].Lookup.GetDefinition().GetName() != "services" {
-		t.Fatalf("automatic result aliases caller memory: %#v, %v", again, err)
+	again, err := catalog.ResolveAdmission(t.Context(), scope)
+	if err != nil || again.Automatic[0].Lookup.GetDefinition().GetName() != "services" {
+		t.Fatalf("automatic result aliases caller memory: %#v, %v", again.Automatic, err)
 	}
 }
 
@@ -946,21 +954,23 @@ func TestCatalogNamespaceSupportsPrivateAppGlobalPrecedenceWithoutAmbiguity(t *t
 		{principal: "private-b", want: privateB.GetLookupId()},
 		{principal: "other-owner", want: app.GetLookupId()},
 	} {
-		resolved, resolveErr := catalog.Resolve(t.Context(), ResolveScope{
+		admitted, resolveErr := catalog.ResolveAdmission(t.Context(), ResolveScope{
 			TenantID:    "tenant-lookups",
 			PrincipalID: test.principal,
 			AppID:       appIDs[0],
 			Names:       []string{"shadowed"},
 		})
+		resolved := admitted.Explicit
 		if resolveErr != nil || len(resolved) != 1 || resolved[0].Lookup.GetLookupId() != test.want {
-			t.Fatalf("Resolve(%s) = %#v, %v", test.principal, resolved, resolveErr)
+			t.Fatalf("ResolveAdmission(%s) = %#v, %v", test.principal, resolved, resolveErr)
 		}
 	}
-	resolved, err := catalog.Resolve(t.Context(), ResolveScope{
+	admitted, err := catalog.ResolveAdmission(t.Context(), ResolveScope{
 		TenantID: "tenant-lookups", PrincipalID: "other-owner", AppID: appIDs[1], Names: []string{"shadowed"},
 	})
+	resolved := admitted.Explicit
 	if err != nil || len(resolved) != 1 || resolved[0].Lookup.GetLookupId() != global.GetLookupId() {
-		t.Fatalf("Resolve(global fallback) = %#v, %v", resolved, err)
+		t.Fatalf("ResolveAdmission(global fallback) = %#v, %v", resolved, err)
 	}
 	if _, err := catalog.Create(t.Context(), CreateRequest{
 		TenantID: "tenant-lookups", OwnerID: "second-global",
@@ -1060,11 +1070,12 @@ func TestCatalogResolveUsesThePublishedExactLookupNameLanguage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create(%q): %v", name, err)
 	}
-	resolved, err := catalog.Resolve(t.Context(), ResolveScope{
+	admitted, err := catalog.ResolveAdmission(t.Context(), ResolveScope{
 		TenantID: "tenant-lookups", PrincipalID: "owner-lookups", AppID: appIDs[0], Names: []string{name},
 	})
+	resolved := admitted.Explicit
 	if err != nil || len(resolved) != 1 || resolved[0].Lookup.GetLookupId() != created.GetLookupId() {
-		t.Fatalf("Resolve(%q) = %#v, %v", name, resolved, err)
+		t.Fatalf("ResolveAdmission(%q) = %#v, %v", name, resolved, err)
 	}
 }
 
@@ -1125,16 +1136,16 @@ func TestCatalogEnforcesLookupAppLifecycleAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatalf("archive after disable: %v", err)
 	}
-	if _, err := catalog.Resolve(t.Context(), ResolveScope{
+	if _, err := catalog.ResolveAdmission(t.Context(), ResolveScope{
 		TenantID: "tenant-lookups", PrincipalID: "owner-lookups", AppID: appIDs[1], Names: []string{"app-lifecycle"},
 	}); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("Resolve(global from archived app) error = %v, want not found", err)
+		t.Fatalf("ResolveAdmission(global from archived app) error = %v, want not found", err)
 	}
-	automatic, err := catalog.ResolveAutomatic(t.Context(), ResolveScope{
+	admitted, err := catalog.ResolveAdmission(t.Context(), ResolveScope{
 		TenantID: "tenant-lookups", PrincipalID: "owner-lookups", AppID: appIDs[1],
 	})
-	if err != nil || len(automatic) != 0 {
-		t.Fatalf("ResolveAutomatic(global from archived app) = %#v, %v", automatic, err)
+	if err != nil || len(admitted.Automatic) != 0 {
+		t.Fatalf("ResolveAdmission(global from archived app) = %#v, %v", admitted.Automatic, err)
 	}
 	if _, err := catalog.Replace(t.Context(), ReplaceRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups", LookupID: created.GetLookupId(),

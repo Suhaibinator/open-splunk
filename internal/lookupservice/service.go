@@ -59,13 +59,11 @@ type AssetRepository interface {
 
 // CatalogRepository is the complete logical-definition dependency.
 type CatalogRepository interface {
-	Create(context.Context, lookupcatalog.CreateRequest) (*opensplunkv1.Lookup, error)
 	CreatePublished(context.Context, lookupasset.PublicationTransaction, lookupcatalog.CreateRequest) (*opensplunkv1.Lookup, error)
 	Replace(context.Context, lookupcatalog.ReplaceRequest) (*opensplunkv1.Lookup, error)
 	ReplacePublished(context.Context, lookupasset.PublicationTransaction, lookupcatalog.ReplaceRequest) (*opensplunkv1.Lookup, error)
 	Get(context.Context, lookupcatalog.GetRequest) (*opensplunkv1.Lookup, error)
 	GetResolved(context.Context, lookupcatalog.GetRequest) (lookupcatalog.Resolved, error)
-	List(context.Context, lookupcatalog.ListRequest) ([]*opensplunkv1.Lookup, error)
 	ListPage(context.Context, lookupcatalog.ListPageRequest) (lookupcatalog.ListPage, error)
 	SetState(context.Context, lookupcatalog.StateRequest) (*opensplunkv1.Lookup, error)
 }
@@ -496,11 +494,7 @@ func prepareAssetDefinition(ctx context.Context, csvData []byte, definition *ope
 }
 
 func validateDefinitionKeys(ctx context.Context, asset *lookupasset.Asset, definition *opensplunkv1.LookupDefinition) error {
-	keys := make([]string, len(definition.GetKeyMappings()))
-	for index, mapping := range definition.GetKeyMappings() {
-		keys[index] = mapping.GetLookupField()
-	}
-	return lookupasset.ValidateUniqueKeysContext(ctx, asset, keys)
+	return lookupasset.ValidateUniqueKeysContext(ctx, asset, lookupdefinition.KeyColumns(definition))
 }
 
 func (service *Service) validate(ctx context.Context, scope Scope) error {
@@ -763,19 +757,7 @@ func cloneLookup(value *opensplunkv1.Lookup) *opensplunkv1.Lookup {
 	return proto.Clone(value).(*opensplunkv1.Lookup)
 }
 
-func validIdentity(value string, maximum int) bool {
-	if value == "" || len(value) > maximum || !utf8.ValidString(value) {
-		return false
-	}
-	for index := range len(value) {
-		character := value[index]
-		alphaNumeric := character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9'
-		if !alphaNumeric && (index == 0 || character != '.' && character != '_' && character != ':' && character != '-') {
-			return false
-		}
-	}
-	return true
-}
+var validIdentity = lookupdefinition.ValidIdentity
 
 var _ AssetRepository = (*lookupasset.Store)(nil)
 var _ CatalogRepository = (*lookupcatalog.Catalog)(nil)

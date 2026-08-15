@@ -503,8 +503,18 @@ type stagedRecord struct {
 	canonicalCSV  []byte
 	rowCount      uint64
 	columnCount   uint32
-	createdAt     time.Time
 	expiresAt     time.Time
+}
+
+// validStoredAssetMetadata bounds the columns shared by staged and published
+// asset rows. Callers add their own row-kind-specific checks and message.
+func validStoredAssetMetadata(sourceDigest, contentDigest, canonical []byte, sourceBytes, canonicalBytes, rowCount, columnCount, created int64) bool {
+	return len(sourceDigest) == sha256.Size && len(contentDigest) == sha256.Size &&
+		sourceBytes >= 1 && sourceBytes <= MaximumSourceBytes &&
+		canonicalBytes >= 1 && canonicalBytes == int64(len(canonical)) && canonicalBytes <= MaximumSourceBytes &&
+		rowCount >= 0 && rowCount <= MaximumRows &&
+		columnCount >= 1 && columnCount <= MaximumColumns &&
+		created >= 1 && created <= maximumUnixMicro
 }
 
 func readStagedAsset(ctx context.Context, query interface {
@@ -534,19 +544,20 @@ func readStagedAsset(ctx context.Context, query interface {
 	if err := ctx.Err(); err != nil {
 		return stagedRecord{}, err
 	}
-	if len(sourceDigest) != sha256.Size || len(contentDigest) != sha256.Size ||
-		sourceBytes < 1 || sourceBytes > MaximumSourceBytes ||
-		canonicalBytes < 1 || canonicalBytes != int64(len(canonical)) || canonicalBytes > MaximumSourceBytes ||
-		rowCount < 0 || rowCount > MaximumRows || columnCount < 1 || columnCount > MaximumColumns ||
-		created < 1 || created > maximumUnixMicro || expires <= created || expires > maximumUnixMicro {
+	if !validStoredAssetMetadata(sourceDigest, contentDigest, canonical, sourceBytes, canonicalBytes, rowCount, columnCount, created) ||
+		expires <= created || expires > maximumUnixMicro {
 		return stagedRecord{}, fmt.Errorf("%w: staged lookup asset has invalid metadata", ErrCorrupt)
 	}
 	result := stagedRecord{
+		canonicalCSV: canonical,
 		// All persisted counts are validated against the package maxima above.
 		// #nosec G115 -- validated bounded nonnegative SQLite INTEGER values.
-		sourceBytes: uint64(sourceBytes), canonicalCSV: canonical,
-		rowCount: uint64(rowCount), columnCount: uint32(columnCount),
-		createdAt: time.UnixMicro(created).UTC(), expiresAt: time.UnixMicro(expires).UTC(),
+		sourceBytes: uint64(sourceBytes),
+		// #nosec G115 -- validated bounded nonnegative SQLite INTEGER values.
+		rowCount: uint64(rowCount),
+		// #nosec G115 -- validated bounded nonnegative SQLite INTEGER values.
+		columnCount: uint32(columnCount),
+		expiresAt:   time.UnixMicro(expires).UTC(),
 	}
 	copy(result.sourceSHA256[:], sourceDigest)
 	copy(result.contentSHA256[:], contentDigest)
@@ -609,28 +620,20 @@ func readVersion(ctx context.Context, query interface {
 	if err := ctx.Err(); err != nil {
 		return Version{}, err
 	}
-	record := stagedRecord{canonicalCSV: canonical}
-	if len(sourceDigest) == sha256.Size {
-		copy(record.sourceSHA256[:], sourceDigest)
-	}
-	if len(contentDigest) == sha256.Size {
-		copy(record.contentSHA256[:], contentDigest)
-	}
-	if sourceBytes >= 0 {
-		record.sourceBytes = uint64(sourceBytes)
-	}
-	if rowCount >= 0 {
-		record.rowCount = uint64(rowCount)
-	}
-	if columnCount >= 0 {
-		record.columnCount = uint32(columnCount)
-	}
-	if len(sourceDigest) != sha256.Size || len(contentDigest) != sha256.Size ||
-		sourceBytes < 1 || sourceBytes > MaximumSourceBytes || canonicalBytes != int64(len(canonical)) ||
-		canonicalBytes < 1 || canonicalBytes > MaximumSourceBytes || rowCount < 0 || rowCount > MaximumRows ||
-		columnCount < 1 || columnCount > MaximumColumns || created < 1 || created > maximumUnixMicro {
+	if !validStoredAssetMetadata(sourceDigest, contentDigest, canonical, sourceBytes, canonicalBytes, rowCount, columnCount, created) {
 		return Version{}, fmt.Errorf("%w: immutable lookup asset version has invalid metadata", ErrCorrupt)
 	}
+	record := stagedRecord{
+		canonicalCSV: canonical,
+		// #nosec G115 -- validated bounded nonnegative SQLite INTEGER values.
+		sourceBytes: uint64(sourceBytes),
+		// #nosec G115 -- validated bounded nonnegative SQLite INTEGER values.
+		rowCount: uint64(rowCount),
+		// #nosec G115 -- validated bounded nonnegative SQLite INTEGER values.
+		columnCount: uint32(columnCount),
+	}
+	copy(record.sourceSHA256[:], sourceDigest)
+	copy(record.contentSHA256[:], contentDigest)
 	if err := ctx.Err(); err != nil {
 		return Version{}, err
 	}

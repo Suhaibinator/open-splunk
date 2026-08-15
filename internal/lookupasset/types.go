@@ -25,10 +25,7 @@ const (
 
 	MaximumKeyColumns = 4
 
-	MaximumStagedAssetsPerTenant    = 64
-	MaximumAssetIdentitiesPerTenant = 2_048
-	MaximumAssetVersionsPerTenant   = 8_192
-	MaximumStoredBytesPerTenant     = 2 << 30
+	MaximumStagedAssetsPerTenant = 64
 )
 
 var (

@@ -3,7 +3,6 @@ package lookupasset
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"errors"
 	"strings"
 	"testing"
@@ -50,41 +49,15 @@ func TestCanonicalizeExactKeyRejectsInvalidShape(t *testing.T) {
 	}
 }
 
-func TestBuildExactIndexFindsCompositeAndEmptyKeys(t *testing.T) {
-	asset := mustParseAsset(t, "region,service,owner\nwest,api,alice\nwest,,empty-owner\neast,api,bob\n")
-	index, err := BuildExactIndex(asset, []string{"region", "service"})
-	if err != nil {
-		t.Fatalf("build exact index: %v", err)
-	}
-	if got := index.KeyColumns(); !equalStrings(got, []string{"region", "service"}) {
-		t.Fatalf("key columns = %#v", got)
-	}
-	row, found, err := index.Find([]string{"west", ""})
-	if err != nil || !found || row[2] != "empty-owner" {
-		t.Fatalf("empty exact key lookup = %#v, %v, %v", row, found, err)
-	}
-	row[2] = "changed"
-	again, found, err := index.Find([]string{"west", ""})
-	if err != nil || !found || again[2] != "empty-owner" {
-		t.Fatal("Find exposed mutable index storage")
-	}
-	if row, found, err := index.Find([]string{"north", "api"}); err != nil || found || row != nil {
-		t.Fatalf("non-match = %#v, %v, %v", row, found, err)
-	}
-	if _, _, err := index.Find([]string{"west"}); !errors.Is(err, ErrInvalidArgument) {
-		t.Fatalf("arity error = %v", err)
-	}
-}
-
-func TestBuildExactIndexRejectsKeyDefinitionAndDuplicateRows(t *testing.T) {
+func TestExactKeyOrdinalsRejectKeyDefinitionAndDuplicateRows(t *testing.T) {
 	asset := mustParseAsset(t, "key,other\na,1\na,2\n")
 	tests := [][]string{nil, {}, {"missing"}, {"key", "key"}}
 	for _, columns := range tests {
-		if _, err := BuildExactIndex(asset, columns); !errors.Is(err, ErrInvalidArgument) {
-			t.Fatalf("BuildExactIndex(%q) error = %v", columns, err)
+		if err := ValidateUniqueKeysContext(t.Context(), asset, columns); !errors.Is(err, ErrInvalidArgument) {
+			t.Fatalf("ValidateUniqueKeysContext(%q) error = %v", columns, err)
 		}
 	}
-	if err := ValidateUniqueKeys(asset, []string{"key"}); !errors.Is(err, ErrDuplicateKey) {
+	if err := ValidateUniqueKeysContext(t.Context(), asset, []string{"key"}); !errors.Is(err, ErrDuplicateKey) {
 		t.Fatalf("duplicate key error = %v", err)
 	}
 }
@@ -102,24 +75,6 @@ func TestValidateUniqueKeysContextRejectsNilAndCanceledContexts(t *testing.T) {
 	}
 }
 
-func TestExactIndexHashCollisionStillUsesAuthoritativeBytes(t *testing.T) {
-	asset := mustParseAsset(t, "key,value\na,one\nb,two\n")
-	constantHash := func([]byte) [sha256.Size]byte { return [sha256.Size]byte{1} }
-	index, err := buildExactIndex(asset, []string{"key"}, constantHash)
-	if err != nil {
-		t.Fatalf("build collision index: %v", err)
-	}
-	for key, want := range map[string]string{"a": "one", "b": "two"} {
-		row, found, err := index.Find([]string{key})
-		if err != nil || !found || row[1] != want {
-			t.Fatalf("collision lookup %q = %#v, %v, %v", key, row, found, err)
-		}
-	}
-	if row, found, err := index.Find([]string{"c"}); err != nil || found || row != nil {
-		t.Fatalf("collision non-match = %#v, %v, %v", row, found, err)
-	}
-}
-
 func mustParseAsset(t *testing.T, source string) *Asset {
 	t.Helper()
 	asset, err := ParseCSV(strings.NewReader(source), Limits{})
@@ -127,16 +82,4 @@ func mustParseAsset(t *testing.T, source string) *Asset {
 		t.Fatalf("parse fixture: %v", err)
 	}
 	return asset
-}
-
-func equalStrings(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		if left[index] != right[index] {
-			return false
-		}
-	}
-	return true
 }
