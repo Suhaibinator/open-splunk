@@ -26,7 +26,6 @@ func TestCompileChartPercentileUsesOneScopedScanAndMergeableGKStates(t *testing.
 			level:  "0.5",
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

@@ -1016,7 +1016,6 @@ func TestCheckpointMarksRetainMissingInputOrSourceIdentity(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			marks := checkpointMarksForBatch(1, []*opensplunkv1.LogEvent{{Origin: test.origin}})
@@ -1290,7 +1289,6 @@ func TestComputeEventIDsDigestGolden(t *testing.T) {
 		},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got := hex.EncodeToString(ComputeEventIDsDigest(makeEvents(tc.ids...)))

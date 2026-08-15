@@ -28,7 +28,6 @@ func TestSequentialSupplementalRedactionGolden(t *testing.T) {
 	hash := sha256.New()
 	var size [8]byte
 	for _, test := range supplementalRedactionCases() {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			event := applySequentialSupplementalRedaction(t, test.policies, test.event(t))
 			encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(event)
@@ -51,7 +50,6 @@ func TestCompositeSupplementalRedactorMatchesSequentialPolicies(t *testing.T) {
 	t.Parallel()
 
 	for _, test := range supplementalRedactionCases() {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -131,7 +129,6 @@ func TestSequentialSupplementalRedactionOrderingRegressions(t *testing.T) {
 			want: `alpha="beta"="FINAL"`,
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -176,7 +173,6 @@ func TestCompositeSupplementalRedactorDoesNotHideEarlierFailClosedBoundary(t *te
 			raw:        `private_key=prefix alpha=\"secret\"`,
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -264,7 +260,6 @@ func TestCompositeSupplementalRedactorReplaysEarlierMatchThatCanExposeLaterKey(t
 			encoding: opensplunkv1.RawEncoding_RAW_ENCODING_BINARY,
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -379,7 +374,6 @@ func TestCompositeSupplementalRedactorChoosesCompatibilityFallbackOnlyWhenNeeded
 			},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -703,7 +697,6 @@ func TestCompositeSupplementalRedactorOrderedReplayMatchesSequentialAcrossSurfac
 			},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			want := applySequentialSupplementalRedaction(
 				t,
@@ -801,7 +794,6 @@ func TestCompositeSupplementalRedactorDirectFieldDropsUnknownBytesLikeSequential
 			wantOrderedPath: true,
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -914,7 +906,6 @@ func TestCompositeSupplementalRedactorUsesPerFieldValueExtent(t *testing.T) {
 			want: "private_key=\"<KEY>\"\nsafe=value",
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -1041,7 +1032,6 @@ func TestTopLevelAliasCompositeMatchesSequentialTextGroups(t *testing.T) {
 			raw:  `alpha={"x":"y"}beta"=]alias-secret-must-not-survive}`,
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -1125,7 +1115,6 @@ func TestTopLevelAliasCompatibilityFallbackMatchesSequentialTextGroups(t *testin
 			wantMessage: `alpha="" safe=value`,
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

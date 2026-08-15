@@ -249,7 +249,6 @@ func TestIntegrationLifecycleTerminalMarkersAreExact(t *testing.T) {
 			t.Fatalf("Get(quarantined current baseline): %v", err)
 		}
 		for _, requested := range []uint64{3, math.MaxInt64} {
-			requested := requested
 			t.Run("future v"+strconv.FormatUint(requested, 10), func(t *testing.T) {
 				got, getErr := store.Get(
 					context.Background(),

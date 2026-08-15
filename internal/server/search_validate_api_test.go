@@ -226,7 +226,6 @@ func TestValidateSearchReturnsSourceLocatedParsePlanningAndCompilerDiagnostics(t
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			response := postProto(t, handler, testSearchValidatePath, newValidationAPIRequest(test.source, "main"))
 			if response.Code != http.StatusOK {
@@ -384,7 +383,6 @@ func TestValidateSearchSharesCreateTimeAndIndexAdmission(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			jobs := newValidationSearchJobs(t)
 			handler := newTestHandler(t, Config{
@@ -436,7 +434,6 @@ func TestValidateSearchRejectsUnsupportedDefinitionFieldsAndBoundsRequests(t *te
 		}},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			jobs := newValidationSearchJobs(t)
 			handler := newTestHandler(t, Config{
@@ -558,7 +555,6 @@ func TestValidateSearchMapsValidatorFailuresWithoutLeakingDetails(t *testing.T) 
 		{name: "internal", err: errors.New("SELECT secret_token FROM generated_sql"), wantStatus: http.StatusInternalServerError},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			jobs := &fakeSearchJobs{validateErr: test.err}
 			handler := newTestHandler(t, Config{

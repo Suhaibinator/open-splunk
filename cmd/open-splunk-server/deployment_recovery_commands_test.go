@@ -180,7 +180,6 @@ func TestDeploymentRecoverySetFlagParsersRejectUnsafePathAddressAndTLSInputs(t *
 		{name: "empty server name", flag: "-server-name", value: ""},
 		{name: "server name whitespace", flag: "-server-name", value: "click house"},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			arguments := append([]string(nil), validBackup...)
@@ -899,11 +898,11 @@ func deploymentRecoveryTestArchiveMarkerInsertDatabase(query string) (string, bo
 		return "", false
 	}
 	remaining := strings.TrimPrefix(query, prefix)
-	index := strings.Index(remaining, suffix)
-	if index < 0 {
+	before, _, ok := strings.Cut(remaining, suffix)
+	if !ok {
 		return "", false
 	}
-	return remaining[:index], true
+	return before, true
 }
 
 func deploymentRecoveryTestArchiveMarkerTruncateDatabase(query string) (string, bool) {
@@ -972,7 +971,6 @@ func TestClassifyDeploymentRecoveryDatabaseNamespace(t *testing.T) {
 		{name: "duplicate", databases: []string{deploymentRecoveryDatabase, deploymentRecoveryDatabase}, wantError: true},
 		{name: "over bound", databases: []string{deploymentRecoveryDatabase, "open_splunk_other", "open_splunk_restore"}, wantError: true},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			finalExists, err := classifyDeploymentRecoveryDatabaseNamespace(test.databases)
@@ -1015,7 +1013,6 @@ func TestDeploymentRecoveryRestoreRejectsForeignNamespaceBeforeMutation(t *testi
 			databases: []string{deploymentRecoveryDatabase, "open_splunk_other"},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			mutated := false
@@ -1100,7 +1097,6 @@ func TestDeploymentRecoveryBackupRejectsNativeStatusAndSourceDrift(t *testing.T)
 			value.EventsTableUUID = "77777777-7777-4777-8777-777777777777"
 		}},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newDeploymentRecoveryCommandFixture(t)
 			operationID := uuid.MustParse("55555555-5555-4555-8555-555555555555")
@@ -1677,7 +1673,6 @@ func TestDeploymentRecoveryRestorePreflightRejectsUnsafeControlStateBeforeEveryC
 			},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newDeploymentRecoveryCommandFixture(t)
 			root := filepath.Dir(fixture.databasePath)
@@ -1779,7 +1774,6 @@ func TestDeploymentRecoveryRestoreResumesExactCanonicalReceiptWithMarkerCrashSta
 		{name: "receipt with exact retained marker", markerExact: true},
 		{name: "receipt with already consumed marker"},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newDeploymentRecoveryCommandFixture(t)
 			verification := deploymentRecoveryVerificationFixture(fixture.release)
@@ -1907,7 +1901,6 @@ func TestDeploymentRecoveryRestoreFailsClosedForPartialOrMismatchedState(t *test
 		}},
 		{name: "canonical marker belongs to another backup", wrongMarker: true},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newDeploymentRecoveryCommandFixture(t)
 			verification := deploymentRecoveryVerificationFixture(fixture.release)
@@ -2018,7 +2011,6 @@ func TestDeploymentRecoveryRestoreRejectsNativeStatusBeforeReceiptOrControl(t *t
 		{name: "failed", returnedID: "66666666-6666-4666-8666-666666666666", status: "RESTORE_FAILED"},
 		{name: "empty", returnedID: "66666666-6666-4666-8666-666666666666", status: ""},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newDeploymentRecoveryCommandFixture(t)
 			verification := deploymentRecoveryVerificationFixture(fixture.release)
@@ -2100,7 +2092,6 @@ func TestOpenDeploymentRecoverySessionRejectsUnsafeTLSAndPasswordBeforeNetwork(t
 		{name: "group-writable password", passwordFile: writeClickHouseCredentialFixture(t, "secret", 0o660), caFile: identity.CertificateFile},
 		{name: "invalid CA", passwordFile: writeClickHouseCredentialFixture(t, "secret", 0o600), caFile: invalidCA},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			opened := false
 			_, err := openDeploymentRecoverySession(

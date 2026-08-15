@@ -30,7 +30,6 @@ func TestParseEventStatsChronologicalAggregatesRequireBoundedExactSyntax(
 		{"earliest comma second measure", `index=main | eventstats earliest(status) AS first, count`, "SPL_UNSUPPORTED_EVENTSTATS_SYNTAX", ","},
 		{"latest option", `index=main | eventstats latest(status) AS last allnum=true`, "SPL_UNSUPPORTED_EVENTSTATS_SYNTAX", "allnum"},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

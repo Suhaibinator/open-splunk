@@ -111,7 +111,6 @@ func TestCompileStatsTimeFunctionsRequireCanonicalEventTime(t *testing.T) {
 		"latest_time(service)",
 		"rate(metric)",
 	} {
-		function := function
 		t.Run(function, func(t *testing.T) {
 			t.Parallel()
 

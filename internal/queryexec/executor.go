@@ -1084,14 +1084,14 @@ func readFixedTimechartRows(
 	}
 	fieldOccurrenceCount := output.Mode == clickhouse.TimechartModeFixedFieldCount
 	contracts := []resultColumnContract{
-		{name: clickhouse.TimechartOrdinalColumn, databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0))},
-		{name: clickhouse.TimechartCountColumn, databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0))},
+		{name: clickhouse.TimechartOrdinalColumn, databaseType: "UInt64", scanType: reflect.TypeFor[uint64]()},
+		{name: clickhouse.TimechartCountColumn, databaseType: "UInt64", scanType: reflect.TypeFor[uint64]()},
 	}
 	if fieldOccurrenceCount {
 		contracts = append(contracts, resultColumnContract{
 			name:         clickhouse.TimechartInputPresentColumn,
 			databaseType: "UInt8",
-			scanType:     reflect.TypeOf(uint8(0)),
+			scanType:     reflect.TypeFor[uint8](),
 		})
 	}
 	if err := validateResultColumns(
@@ -1224,14 +1224,14 @@ func readFixedValueTimechartRows(
 		return bufferedFixedValueTimechart{}, err
 	}
 	contracts := []resultColumnContract{
-		{name: clickhouse.TimechartOrdinalColumn, databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0))},
+		{name: clickhouse.TimechartOrdinalColumn, databaseType: "UInt64", scanType: reflect.TypeFor[uint64]()},
 		{
 			name:         clickhouse.TimechartValueColumn,
 			databaseType: "Nullable(Float64)",
-			scanType:     reflect.TypeOf((*float64)(nil)),
+			scanType:     reflect.TypeFor[*float64](),
 			nullable:     true,
 		},
-		{name: clickhouse.TimechartInputPresentColumn, databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0))},
+		{name: clickhouse.TimechartInputPresentColumn, databaseType: "UInt8", scanType: reflect.TypeFor[uint8]()},
 	}
 	if err := validateResultColumns(
 		columns,
@@ -1328,10 +1328,10 @@ func readTimechartRows(ctx context.Context, rows driver.Rows, columns []string, 
 		return bufferedTimechart{}, err
 	}
 	contracts := []resultColumnContract{
-		{name: clickhouse.TimechartOrdinalColumn, databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0))},
-		{name: clickhouse.TimechartNamesColumn, databaseType: "Array(String)", scanType: reflect.TypeOf([]string{})},
-		{name: clickhouse.TimechartCountsColumn, databaseType: "Array(UInt64)", scanType: reflect.TypeOf([]uint64{})},
-		{name: clickhouse.TimechartInvalidColumn, databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0))},
+		{name: clickhouse.TimechartOrdinalColumn, databaseType: "UInt64", scanType: reflect.TypeFor[uint64]()},
+		{name: clickhouse.TimechartNamesColumn, databaseType: "Array(String)", scanType: reflect.TypeFor[[]string]()},
+		{name: clickhouse.TimechartCountsColumn, databaseType: "Array(UInt64)", scanType: reflect.TypeFor[[]uint64]()},
+		{name: clickhouse.TimechartInvalidColumn, databaseType: "UInt8", scanType: reflect.TypeFor[uint8]()},
 	}
 	if err := validateResultColumns(
 		columns,
@@ -1433,11 +1433,11 @@ func readValueTimechartRows(
 		return bufferedValueTimechart{}, err
 	}
 	contracts := []resultColumnContract{
-		{name: clickhouse.TimechartOrdinalColumn, databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0))},
-		{name: clickhouse.TimechartNamesColumn, databaseType: "Array(String)", scanType: reflect.TypeOf([]string{})},
-		{name: clickhouse.TimechartValuesColumn, databaseType: "Array(Float64)", scanType: reflect.TypeOf([]float64{})},
-		{name: clickhouse.TimechartValuePresentColumn, databaseType: "Array(UInt8)", scanType: reflect.TypeOf([]uint8{})},
-		{name: clickhouse.TimechartInvalidColumn, databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0))},
+		{name: clickhouse.TimechartOrdinalColumn, databaseType: "UInt64", scanType: reflect.TypeFor[uint64]()},
+		{name: clickhouse.TimechartNamesColumn, databaseType: "Array(String)", scanType: reflect.TypeFor[[]string]()},
+		{name: clickhouse.TimechartValuesColumn, databaseType: "Array(Float64)", scanType: reflect.TypeFor[[]float64]()},
+		{name: clickhouse.TimechartValuePresentColumn, databaseType: "Array(UInt8)", scanType: reflect.TypeFor[[]uint8]()},
+		{name: clickhouse.TimechartInvalidColumn, databaseType: "UInt8", scanType: reflect.TypeFor[uint8]()},
 	}
 	if err := validateResultColumns(
 		columns,
@@ -1836,31 +1836,31 @@ func chartRowScanType(kind clickhouse.ChartRowKind, databaseType string) (reflec
 	switch databaseType {
 	case "String":
 		if kind == clickhouse.ChartRowKindString || kind == clickhouse.ChartRowKindMixed {
-			return reflect.TypeOf(""), true
+			return reflect.TypeFor[string](), true
 		}
 	case "Int64":
 		if kind == clickhouse.ChartRowKindSigned {
-			return reflect.TypeOf(int64(0)), true
+			return reflect.TypeFor[int64](), true
 		}
 	case "UInt8":
 		if kind == clickhouse.ChartRowKindUnsigned {
-			return reflect.TypeOf(uint8(0)), true
+			return reflect.TypeFor[uint8](), true
 		}
 	case "UInt64":
 		if kind == clickhouse.ChartRowKindUnsigned {
-			return reflect.TypeOf(uint64(0)), true
+			return reflect.TypeFor[uint64](), true
 		}
 	case "Float64":
 		if kind == clickhouse.ChartRowKindDouble {
-			return reflect.TypeOf(float64(0)), true
+			return reflect.TypeFor[float64](), true
 		}
 	case "Bool":
 		if kind == clickhouse.ChartRowKindBool {
-			return reflect.TypeOf(false), true
+			return reflect.TypeFor[bool](), true
 		}
 	case "DateTime64(9, 'UTC')":
 		if kind == clickhouse.ChartRowKindTime {
-			return reflect.TypeOf(time.Time{}), true
+			return reflect.TypeFor[time.Time](), true
 		}
 	}
 	return nil, false
@@ -1914,39 +1914,39 @@ func readChartRows(
 	switch output.ValueKind {
 	case clickhouse.ChartValueKindCount:
 		contracts = []resultColumnContract{
-			{name: clickhouse.ChartOrdinalColumn, databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0))},
+			{name: clickhouse.ChartOrdinalColumn, databaseType: "UInt64", scanType: reflect.TypeFor[uint64]()},
 			{name: clickhouse.ChartRowColumn, databaseType: output.RowDatabaseType, scanType: rowScanType},
 		}
 		if output.RowSemanticBytes {
 			contracts = append(contracts, resultColumnContract{
 				name:         clickhouse.ChartRowSemanticBytesColumn,
 				databaseType: "UInt8",
-				scanType:     reflect.TypeOf(uint8(0)),
+				scanType:     reflect.TypeFor[uint8](),
 			})
 		}
 		contracts = append(contracts,
-			resultColumnContract{name: clickhouse.ChartNamesColumn, databaseType: "Array(String)", scanType: reflect.TypeOf([]string{})},
-			resultColumnContract{name: clickhouse.ChartCountsColumn, databaseType: "Array(UInt64)", scanType: reflect.TypeOf([]uint64{})},
-			resultColumnContract{name: clickhouse.ChartInvalidColumn, databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0))},
+			resultColumnContract{name: clickhouse.ChartNamesColumn, databaseType: "Array(String)", scanType: reflect.TypeFor[[]string]()},
+			resultColumnContract{name: clickhouse.ChartCountsColumn, databaseType: "Array(UInt64)", scanType: reflect.TypeFor[[]uint64]()},
+			resultColumnContract{name: clickhouse.ChartInvalidColumn, databaseType: "UInt8", scanType: reflect.TypeFor[uint8]()},
 		)
 	case clickhouse.ChartValueKindSum, clickhouse.ChartValueKindAverage,
 		clickhouse.ChartValueKindPercentile:
 		contracts = []resultColumnContract{
-			{name: clickhouse.ChartOrdinalColumn, databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0))},
+			{name: clickhouse.ChartOrdinalColumn, databaseType: "UInt64", scanType: reflect.TypeFor[uint64]()},
 			{name: clickhouse.ChartRowColumn, databaseType: output.RowDatabaseType, scanType: rowScanType},
 		}
 		if output.RowSemanticBytes {
 			contracts = append(contracts, resultColumnContract{
 				name:         clickhouse.ChartRowSemanticBytesColumn,
 				databaseType: "UInt8",
-				scanType:     reflect.TypeOf(uint8(0)),
+				scanType:     reflect.TypeFor[uint8](),
 			})
 		}
 		contracts = append(contracts,
-			resultColumnContract{name: clickhouse.ChartNamesColumn, databaseType: "Array(String)", scanType: reflect.TypeOf([]string{})},
-			resultColumnContract{name: clickhouse.ChartValuesColumn, databaseType: "Array(Float64)", scanType: reflect.TypeOf([]float64{})},
-			resultColumnContract{name: clickhouse.ChartValuePresentColumn, databaseType: "Array(UInt8)", scanType: reflect.TypeOf([]uint8{})},
-			resultColumnContract{name: clickhouse.ChartInvalidColumn, databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0))},
+			resultColumnContract{name: clickhouse.ChartNamesColumn, databaseType: "Array(String)", scanType: reflect.TypeFor[[]string]()},
+			resultColumnContract{name: clickhouse.ChartValuesColumn, databaseType: "Array(Float64)", scanType: reflect.TypeFor[[]float64]()},
+			resultColumnContract{name: clickhouse.ChartValuePresentColumn, databaseType: "Array(UInt8)", scanType: reflect.TypeFor[[]uint8]()},
+			resultColumnContract{name: clickhouse.ChartInvalidColumn, databaseType: "UInt8", scanType: reflect.TypeFor[uint8]()},
 		)
 	default:
 		return bufferedChart{}, fmt.Errorf("%w: compiled chart value kind is invalid", searchjobs.ErrInvalidResult)

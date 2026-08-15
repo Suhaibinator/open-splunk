@@ -44,9 +44,7 @@ func TestInactiveFutureBodyLifecycleGatePrecedesEveryByteAuthority(t *testing.T)
 		opensplunkv1.KnowledgeObjectState(99),
 	}
 	for _, state := range disallowed {
-		state := state
 		for _, input := range inputs {
-			input := input
 			t.Run(state.String()+"/"+input.name, func(t *testing.T) {
 				t.Parallel()
 				_, err := DecodeCanonicalInactiveFutureBody(input.data, input.digest, state)
@@ -124,7 +122,6 @@ func TestInactiveFutureBodyAcceptsAllocationEdgesAndAllMetadataWireKinds(t *test
 	t.Parallel()
 
 	for _, bodyNumber := range []protowire.Number{13, 31} {
-		bodyNumber := bodyNumber
 		t.Run(string(rune('a'+bodyNumber-13)), func(t *testing.T) {
 			t.Parallel()
 			metadata, err := (proto.MarshalOptions{Deterministic: true}).Marshal(adversarialFutureMetadata())
@@ -260,7 +257,6 @@ func TestInactiveFutureBodyRejectsEveryAmbiguousWireClass(t *testing.T) {
 		{name: "unknown before known metadata", data: append(bytes.Clone(validBody), metadata...), want: ErrNonCanonical},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			digest := sha256.Sum256(test.data)
@@ -374,7 +370,6 @@ func TestInactiveFutureBodyFourMiBBoundaryAndRepeatedShapePreflight(t *testing.T
 			s.SourcetypePatterns = p
 		}},
 	} {
-		dimension := dimension
 		t.Run("selector/"+dimension.name, func(t *testing.T) {
 			definition := adversarialFutureMetadata()
 			patterns := make([]*opensplunkv1.KnowledgeSelectorPattern, knowledge.MaximumSelectorPatternsPerDimension+1)
@@ -428,7 +423,6 @@ func TestInactiveFutureBodyErrorTaxonomyIsClosedAndStable(t *testing.T) {
 		{name: "active valid future", data: valid, digest: digest[:], state: opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE, want: ErrUnknownFutureBody},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			_, got := DecodeCanonicalInactiveFutureBody(test.data, test.digest, test.state)

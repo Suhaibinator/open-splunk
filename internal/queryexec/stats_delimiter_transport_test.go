@@ -23,7 +23,7 @@ func TestExecutorPublishesStatsDelimiterPresentationWithoutFlatteningCell(t *tes
 		types: []driver.ColumnType{fakeColumnType{
 			name:         "users",
 			databaseType: "Array(String)",
-			scanType:     reflect.TypeOf([]string{}),
+			scanType:     reflect.TypeFor[[]string](),
 		}},
 		data: [][]any{{[]string{"alice", "bob"}}},
 	}
@@ -56,7 +56,7 @@ func TestExecutorPublishesAuthenticatedStatsSparklinePresentation(t *testing.T) 
 	rows := &fakeRows{
 		columns: []string{"trend"},
 		types: []driver.ColumnType{fakeColumnType{
-			name: "trend", databaseType: "Array(String)", scanType: reflect.TypeOf([]string{}),
+			name: "trend", databaseType: "Array(String)", scanType: reflect.TypeFor[[]string](),
 		}},
 		data: [][]any{{[]string{"##__SPARKLINE__##", "1", "2"}}},
 	}
@@ -117,12 +117,11 @@ func TestExecutorRejectsStatsDelimiterPresentationTampering(t *testing.T) {
 				types: []driver.ColumnType{fakeColumnType{
 					name:         "users",
 					databaseType: "String",
-					scanType:     reflect.TypeOf(""),
+					scanType:     reflect.TypeFor[string](),
 				}},
 			},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			connection := &fakeQueryConnection{rows: test.rows}

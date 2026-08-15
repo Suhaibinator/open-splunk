@@ -905,7 +905,7 @@ func backendLoadDurableWALAppendedEvents(logs string) (uint64, error) {
 		marker  = " events="
 	)
 	var total uint64
-	for _, line := range strings.Split(logs, "\n") {
+	for line := range strings.SplitSeq(logs, "\n") {
 		if !strings.Contains(line, message) {
 			continue
 		}

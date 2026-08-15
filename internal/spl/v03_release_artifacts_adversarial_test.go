@@ -579,7 +579,6 @@ func TestV03CorpusLoaderRejectsMalformedSchema(t *testing.T) {
 		{name: "type vocabulary", encoded: valid("SPL-V03-TEST-001", `{"name":"case","evidence":"case","expect":{"type":"mixed"}}`), want: "expect.type"},
 		{name: "value vocabulary", encoded: valid("SPL-V03-TEST-001", `{"name":"case","evidence":"case","expect":{"value":17}}`), want: "expect.value"},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := loadCompatibilityV03Corpus([]byte(test.encoded))

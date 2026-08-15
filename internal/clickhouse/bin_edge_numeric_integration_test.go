@@ -504,7 +504,6 @@ func TestBinEdgeNumericDynamicStringsAgainstClickHouse(t *testing.T) {
 	cutoff := indexTime.Add(10 * time.Second)
 
 	for _, testCase := range cases {
-		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			gotType, gotValue := binEdgeNumericBucket(
 				t, ctx, connection, cutoff, visibilityCutoff,
@@ -584,7 +583,6 @@ func TestBinEdgeNumericDynamicStringsAgainstClickHouse(t *testing.T) {
 				eventID: binEdgeNumericDecimalBase, field: "decimal_negative", span: "10", want: "-30",
 			},
 		} {
-			testCase := testCase
 			t.Run(testCase.name, func(t *testing.T) {
 				gotType, gotValue := binEdgeNumericBucket(
 					t, ctx, connection, cutoff, visibilityCutoff,
@@ -619,7 +617,6 @@ func TestBinEdgeNumericDynamicStringsAgainstClickHouse(t *testing.T) {
 			{name: "4095 bytes", field: "decimal_bytes_4095", span: "1", want: "1"},
 			{name: "4096 bytes", field: "decimal_bytes_4096", span: "1", want: "1"},
 		} {
-			testCase := testCase
 			t.Run(testCase.name, func(t *testing.T) {
 				compiled := compileIntegrationSPL(
 					t,
@@ -678,7 +675,6 @@ func TestBinEdgeNumericDynamicStringsAgainstClickHouse(t *testing.T) {
 			{name: "78 significant digits", field: "decimal_78"},
 			{name: "4097 bytes", field: "decimal_bytes_4097"},
 		} {
-			testCase := testCase
 			t.Run(testCase.name, func(t *testing.T) {
 				compiled := compileIntegrationSPL(
 					t,
@@ -735,7 +731,6 @@ func TestBinEdgeNumericDynamicStringsAgainstClickHouse(t *testing.T) {
 				wantValue:  "NaN",
 			},
 		} {
-			testCase := testCase
 			t.Run(testCase.name, func(t *testing.T) {
 				compiled := compileIntegrationSPL(
 					t,
@@ -772,7 +767,6 @@ func TestBinEdgeNumericDynamicStringsAgainstClickHouse(t *testing.T) {
 			{name: "where", command: `where band>9007199254740992`},
 			{name: "search", command: `search band>9007199254740992`},
 		} {
-			predicate := predicate
 			t.Run(predicate.name, func(t *testing.T) {
 				compiled := compileIntegrationSPL(
 					t,
@@ -897,7 +891,6 @@ func TestBinEdgeNumericDynamicStringsAgainstClickHouse(t *testing.T) {
 				wantEventID: binEdgeNumericDecimalLow,
 			},
 		} {
-			predicate := predicate
 			t.Run(predicate.name, func(t *testing.T) {
 				compiled := compileIntegrationSPL(
 					t,
@@ -1070,7 +1063,6 @@ func TestBinEdgeNumericDynamicStringsAgainstClickHouse(t *testing.T) {
 				filter: "band<9007199254740900", wantCount: 0,
 			},
 		} {
-			probe := probe
 			t.Run(probe.name, func(t *testing.T) {
 				compiled := compileIntegrationSPL(
 					t,
@@ -1354,7 +1346,6 @@ func TestBinEdgeNumericDynamicStringsAgainstClickHouse(t *testing.T) {
 		}
 
 		for _, malformed := range inScope {
-			malformed := malformed
 			t.Run(malformed.eventID, func(t *testing.T) {
 				compiled := compileIntegrationSPL(
 					t,

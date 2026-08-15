@@ -38,7 +38,6 @@ func TestBuildEventStatsChronologicalAggregatesProduceRowPreservingMeasures(
 			references: []string{"_time", "host", "http.status", "index", "last_status"},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -214,7 +213,6 @@ func TestBuildEventStatsChronologicalAggregatesRejectForgedMetadata(t *testing.T
 		{name: "earliest", function: spl.AggregateFunctionEarliest},
 		{name: "latest", function: spl.AggregateFunctionLatest},
 	} {
-		testFunction := testFunction
 		for _, test := range []struct {
 			name   string
 			mutate func(*spl.StatsAggregate)
@@ -225,7 +223,6 @@ func TestBuildEventStatsChronologicalAggregatesRejectForgedMetadata(t *testing.T
 			{"percentile metadata", func(aggregate *spl.StatsAggregate) { aggregate.Percentile = 95 }},
 			{"implicit alias", func(aggregate *spl.StatsAggregate) { aggregate.ExplicitAlias = false }},
 		} {
-			test := test
 			t.Run(testFunction.name+"/"+test.name, func(t *testing.T) {
 				t.Parallel()
 
@@ -268,7 +265,6 @@ func TestEventStatsChronologicalPlanContractAcceptsResolvedFieldsAndRejectsForge
 		{name: "earliest", function: AggregateFunctionEarliest},
 		{name: "latest", function: AggregateFunctionLatest},
 	} {
-		testFunction := testFunction
 		t.Run(testFunction.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -311,7 +307,6 @@ func TestEventStatsChronologicalPlanContractAcceptsResolvedFieldsAndRejectsForge
 				{"empty output", func(measure *AggregateMeasure) { measure.Output = "" }},
 				{"private output", func(measure *AggregateMeasure) { measure.Output = "__os_eventstats_private" }},
 			} {
-				test := test
 				t.Run(test.name, func(t *testing.T) {
 					t.Parallel()
 

@@ -96,7 +96,6 @@ func testEventStatsListAgainstClickHouse(
 		{name: "global complete empty"},
 		{name: "grouped complete empty", grouped: true},
 	} {
-		test := test
 		base := orderBase + ` event_id="list-order-null"` +
 			` | eventstats list(list_value) AS ordered`
 		if test.grouped {

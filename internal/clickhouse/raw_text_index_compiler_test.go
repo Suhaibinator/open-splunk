@@ -212,7 +212,6 @@ func TestCompileRawTokenIndexCandidateRequiresCanonicalPhysicalRaw(t *testing.T)
 		`index=gradethis | fields - message | search Alpha42`,
 		`index=gradethis | rename _raw AS saved_raw | rename saved_raw AS _raw | search Alpha42`,
 	} {
-		source := source
 		t.Run("preserved/"+source, func(t *testing.T) {
 			t.Parallel()
 
@@ -234,7 +233,6 @@ func TestCompileRawTokenIndexCandidateRequiresCanonicalPhysicalRaw(t *testing.T)
 		`index=gradethis | eval _raw=_raw | search Alpha42`,
 		`index=gradethis | table message | rename message AS _raw | search Alpha42`,
 	} {
-		source := source
 		t.Run("overwritten/"+source, func(t *testing.T) {
 			t.Parallel()
 

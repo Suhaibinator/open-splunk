@@ -255,8 +255,6 @@ func TestIndexDataDeletionStatusRejectsNonCanonicalTenantBeforeClickHouse(
 		"trailing newline": "tenant\n",
 		"C1 control":       "tenant\u0085",
 	} {
-		name := name
-		tenantID := tenantID
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 

@@ -139,7 +139,6 @@ func TestBuildEventStatsCountUpsertsKnownOutputSchema(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -362,7 +361,6 @@ func TestBuildEventStatsCountRejectsForgedMetadata(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -597,7 +595,6 @@ func TestAnalyzeEventAggregateReadsGroupsAndCountFieldAndValidatesContract(
 		},
 	}
 	for _, test := range malformed {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -696,12 +693,10 @@ func TestEventAggregateEligibilityRejectsForgedContracts(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
 			for _, validator := range validators {
-				validator := validator
 				t.Run(validator.name, func(t *testing.T) {
 					t.Parallel()
 

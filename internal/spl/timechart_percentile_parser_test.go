@@ -49,7 +49,6 @@ func TestParseTimechartPercentileCanonicalizesAndLocatesAggregate(t *testing.T) 
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -110,7 +109,6 @@ func TestParseTimechartPercentileAcceptsOneSplitField(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -160,7 +158,6 @@ func TestParseTimechartPercentileRejectsUnsupportedShapesAtSource(t *testing.T) 
 		{"count alias remains unsupported", `index=main | timechart span=5m count AS total`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "AS"},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

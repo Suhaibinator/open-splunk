@@ -43,7 +43,6 @@ func TestWebSocketTLSConfigRequiresTrustedHTTPTransport(t *testing.T) {
 		"untyped transport":  {Transport: roundTripFunc(nil)},
 		"missing TLS config": {Transport: &http.Transport{}},
 	} {
-		client := client
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			if _, err := webSocketTLSConfig(client); err == nil {

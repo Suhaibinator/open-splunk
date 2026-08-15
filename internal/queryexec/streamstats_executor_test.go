@@ -19,18 +19,18 @@ func TestExecutorPublishesStreamStatsAsRowPreservingNullableUnsignedCount(t *tes
 			fakeColumnType{
 				name:         "event_id",
 				databaseType: "String",
-				scanType:     reflect.TypeOf(""),
+				scanType:     reflect.TypeFor[string](),
 			},
 			fakeColumnType{
 				name:         "service",
 				databaseType: "Nullable(String)",
-				scanType:     reflect.TypeOf((*string)(nil)),
+				scanType:     reflect.TypeFor[*string](),
 				nullable:     true,
 			},
 			fakeColumnType{
 				name:         "prior",
 				databaseType: "Nullable(UInt64)",
-				scanType:     reflect.TypeOf((*uint64)(nil)),
+				scanType:     reflect.TypeFor[*uint64](),
 				nullable:     true,
 			},
 		},

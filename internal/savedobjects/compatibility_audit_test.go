@@ -135,7 +135,6 @@ func TestScanAllForCompatibilityAuditRejectsCorruptRecordsBeforeCallback(t *test
 			},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			database, store := openTestStore(t)
 			created, err := store.Create(

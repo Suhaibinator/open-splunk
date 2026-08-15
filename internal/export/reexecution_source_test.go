@@ -738,7 +738,6 @@ func TestReexecutionSourceAdmitsFixedSumAndAverageTimechartSchemas(t *testing.T)
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -1071,7 +1070,6 @@ func TestSchemaMatchesCompiledFixedPercentileTimechartRejectsForeignSchemas(t *t
 			},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			candidate := compiled

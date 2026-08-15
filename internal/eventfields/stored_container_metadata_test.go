@@ -98,7 +98,6 @@ func TestParseStoredContainerMetadataRejectsVersionsAlignmentAndTypes(t *testing
 		{name: "maximum unknown version", version: 255},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			if _, err := ParseStoredContainerMetadata(
@@ -132,7 +131,6 @@ func TestParseStoredContainerMetadataRejectsInvalidRelativePaths(t *testing.T) {
 		{name: "ancestor collision", names: []string{"a", "a.b"}},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			types := make([]uint8, len(test.names))

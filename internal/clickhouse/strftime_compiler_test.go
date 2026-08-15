@@ -99,7 +99,6 @@ func TestCompileStrftimeRejectsFixedStringBooleanAndMultivalueInputs(t *testing.
 			code:   "SPL_UNSUPPORTED_MULTIVALUE_USAGE",
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			query, err := (Compiler{}).Compile(buildPlan(t, test.source))
@@ -223,7 +222,6 @@ func TestCompileStrftimeRejectsForgedPlans(t *testing.T) {
 			wantCode: "SPL_QUERY_TOO_COMPLEX",
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			err := compileForgedScalarAssignment(t, base, test.expression)
@@ -282,7 +280,6 @@ func TestCompileStrftimeBoundsQueryWideFormatWorkAndOutput(t *testing.T) {
 			want:   "strftime results may exceed",
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

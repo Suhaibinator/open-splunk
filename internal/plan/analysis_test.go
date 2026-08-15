@@ -221,7 +221,6 @@ func TestAnalyzeOperatorReadPositions(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -285,7 +284,6 @@ func TestAnalyzeExpressionReadPositions(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -359,7 +357,6 @@ func TestAnalyzeScalarExpressionReadPositions(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -495,7 +492,6 @@ func TestAnalyzeExcludesWriteOnlyOutputsUntilRead(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -590,7 +586,6 @@ func TestAnalyzeRejectsTypedNils(t *testing.T) {
 		{name: "limit", operator: nilLimit},
 	}
 	for _, test := range operatorTests {
-		test := test
 		t.Run("operator "+test.name, func(t *testing.T) {
 			t.Parallel()
 			analysisRequireError(t, &Query{Operators: []Operator{test.operator}})
@@ -609,7 +604,6 @@ func TestAnalyzeRejectsTypedNils(t *testing.T) {
 		{name: "scalar predicate", expression: nilPredicate},
 	}
 	for _, test := range expressionTests {
-		test := test
 		t.Run("expression "+test.name, func(t *testing.T) {
 			t.Parallel()
 			analysisRequireError(t, &Query{Operators: []Operator{
@@ -629,7 +623,6 @@ func TestAnalyzeRejectsTypedNils(t *testing.T) {
 		{name: "case", expression: nilScalarCase},
 	}
 	for _, test := range scalarTests {
-		test := test
 		t.Run("scalar "+test.name, func(t *testing.T) {
 			t.Parallel()
 			analysisRequireError(t, &Query{Operators: []Operator{
@@ -688,7 +681,6 @@ func TestAnalyzeRejectsCyclicAndDeepExpressionTrees(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			analysisRequireError(t, test.query)
@@ -867,7 +859,6 @@ func TestAnalyzeRejectsEmptyFieldReferences(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			analysisRequireError(t, &Query{Operators: []Operator{test.operator}})

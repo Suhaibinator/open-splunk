@@ -1013,7 +1013,7 @@ func TestDeploymentClickHouseTLSListenerContract(t *testing.T) {
 func parseDeploymentEnvironment(t *testing.T, contents string) map[string]string {
 	t.Helper()
 	values := make(map[string]string)
-	for _, line := range strings.Split(contents, "\n") {
+	for line := range strings.SplitSeq(contents, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue

@@ -110,7 +110,6 @@ func TestCompileEventStatsListUsesOneBoundedOrderedState(t *testing.T) {
 				`"__os_eventstats_group_1" `,
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -255,7 +254,6 @@ func TestCompileEventStatsListStackKeepsOneEarliestMaterializedFence(t *testing.
 				` | eventstats list(occurrences) AS counts | table occurrences counts`,
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -428,7 +426,6 @@ func TestCompileEventStatsListRejectsForgedMeasureMetadata(t *testing.T) {
 			operator.Measure.Output = "__os_eventstats_list_private"
 		}},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

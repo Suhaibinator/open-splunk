@@ -25,7 +25,6 @@ func TestProjectLogicalPlanProjectsFixedTimechartCountFieldSchemas(t *testing.T)
 			output: "populated",
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

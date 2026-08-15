@@ -39,7 +39,6 @@ func TestBuildChartPercentileProducesBoundedDynamicPivot(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -153,7 +152,6 @@ func TestBuildRejectsForgedChartPercentileContracts(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -254,7 +252,6 @@ func TestAnalyzeAcceptsValidAndRejectsForgedChartPercentileMeasures(t *testing.T
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

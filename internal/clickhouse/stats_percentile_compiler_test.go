@@ -170,7 +170,6 @@ func TestCompileRejectsForgedStatsPercentileLevels(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, percentile := range []uint8{0, 100, 255} {
-		percentile := percentile
 		t.Run(fmt.Sprintf("%d", percentile), func(t *testing.T) {
 			t.Parallel()
 

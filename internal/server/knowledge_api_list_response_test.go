@@ -234,7 +234,6 @@ func TestKnowledgeHTTPListPreflightRejectsNormalizedOptionalFilterAboveLimit(
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			catalog := &knowledgeHTTPCatalog{listFn: func(
@@ -361,7 +360,6 @@ func TestKnowledgeHTTPListRejectsObjectsOutsideEveryNormalizedFilter(t *testing.
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			assertKnowledgeHTTPListPageRejected(t, test.request, knowledgecatalog.ListPage{
@@ -428,7 +426,6 @@ func TestKnowledgeHTTPListRejectsDuplicatesAndNonCanonicalOrdering(t *testing.T)
 		{name: "object type", sortBy: opensplunkv1.KnowledgeObjectSortBy_KNOWLEDGE_OBJECT_SORT_BY_OBJECT_TYPE, objects: []knowledgecatalog.Object{extraction, alpha}},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			assertKnowledgeHTTPListPageRejected(t, &opensplunkv1.ListKnowledgeObjectsRequest{
@@ -476,7 +473,6 @@ func TestKnowledgeHTTPListRejectsIncoherentContinuationMetadata(t *testing.T) {
 		{name: "both-side continuation omits one side", request: &opensplunkv1.ListKnowledgeObjectsRequest{Page: &opensplunkv1.PageRequest{PageToken: new("current-token"), IncludeTotalSize: true}}, page: knowledgecatalog.ListPage{Objects: []knowledgecatalog.Object{object}, NextPageToken: "next-token", TotalSize: &two, TotalSizeExact: true, CatalogRevision: 2}},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			assertKnowledgeHTTPListPageRejected(t, test.request, test.page)

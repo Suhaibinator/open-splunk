@@ -29,7 +29,6 @@ func TestCompileChartPercentileCanonicalBoundaryLevels(t *testing.T) {
 		{source: `index=gradethis | chart p1(metric) OVER path BY service`, level: "0.01"},
 		{source: `index=gradethis | chart perc99(metric) OVER path BY service`, level: "0.99"},
 	} {
-		test := test
 		t.Run(test.level, func(t *testing.T) {
 			t.Parallel()
 
@@ -70,7 +69,6 @@ func TestCompileChartPercentileRevalidatesForgedMeasureMetadata(t *testing.T) {
 			operator.Measure.Output = "perc95(\"metric\")"
 		}},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

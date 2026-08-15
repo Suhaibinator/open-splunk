@@ -226,8 +226,8 @@ func NormalizeDecimalLexeme(text string) string {
 		return mantissa
 	}
 	sign := ""
-	if strings.HasPrefix(exponent, "+") {
-		exponent = strings.TrimPrefix(exponent, "+")
+	if after, ok := strings.CutPrefix(exponent, "+"); ok {
+		exponent = after
 	} else if strings.HasPrefix(exponent, "-") {
 		sign = "-"
 		exponent = strings.TrimPrefix(exponent, "-")

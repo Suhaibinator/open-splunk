@@ -121,7 +121,6 @@ func TestInjectAutomaticLookupGroupCommitsPlacementAndRejectsForgery(t *testing.
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			forged := newInjected(t)
 			test.mutate(forged)

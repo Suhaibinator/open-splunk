@@ -143,7 +143,6 @@ func TestCompiledRelationalDepthPinsRepresentativeOperatorCosts(t *testing.T) {
 			depth:  10,
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			compiled, err := (Compiler{}).Compile(relationalDepthPlan(t, test.source))
@@ -283,7 +282,6 @@ func TestStatsListRelationalDepthBoundariesAreSourceLocated(t *testing.T) {
 			terminal:        "stats values(user) AS distinct_users list(user) AS ordered_users",
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -460,7 +458,6 @@ func TestCompiledRelationalDepthPinsTerminalWideOperatorCosts(t *testing.T) {
 			wantChart: true,
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			source := relationalDepthEvalPipeline(t, 0, 0, test.terminal)
@@ -554,7 +551,6 @@ func TestTerminalWideRelationalDepthBoundariesAreSourceLocated(t *testing.T) {
 			wantChart:       true,
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

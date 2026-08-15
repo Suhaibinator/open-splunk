@@ -30,7 +30,6 @@ func TestParseStatsExtendedFamiliesPreserveDistinctFunctionsAndDefaults(t *testi
 		{call: "rate", function: AggregateFunctionRate, alias: "rate(value)"},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.call, func(t *testing.T) {
 			t.Parallel()
 
@@ -66,7 +65,6 @@ func TestParseStatsPercentileFamiliesRemainIntegerOneThroughNinetyNinePendingOra
 		"upperperc", "upperperc0", "upperperc100", "upperperc256",
 		"upperperc-1", "upperperc50.5", "upperpercfoo",
 	} {
-		call := call
 		t.Run(call, func(t *testing.T) {
 			t.Parallel()
 
@@ -127,7 +125,6 @@ func TestParseStatsEveryFieldTakingFamilyAcceptsScalarEvalWithExplicitAlias(t *t
 		{call: "rate", function: AggregateFunctionRate},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.call, func(t *testing.T) {
 			t.Parallel()
 
@@ -171,7 +168,6 @@ func TestParseStatsGenericEvalBoundaryKeepsCountDisjoint(t *testing.T) {
 			code:   "SPL_EXPECTED_RIGHT_PAREN",
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -202,7 +198,6 @@ func TestParseStatsFieldTakingEvalAcceptsBooleanScalarResults(t *testing.T) {
 		{call: "mode", function: AggregateFunctionMode},
 		{call: "sum", function: AggregateFunctionSum},
 	} {
-		test := test
 		t.Run(test.call, func(t *testing.T) {
 			t.Parallel()
 

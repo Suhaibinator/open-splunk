@@ -308,7 +308,6 @@ func TestCompileEventStatsCountEvalRejectsForgedPlans(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			base := buildPlan(t, `index=gradethis | eventstats count AS matches`)

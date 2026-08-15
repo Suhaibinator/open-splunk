@@ -2601,7 +2601,7 @@ func (stack *releaseOCIComposeStack) labeledResources(t *testing.T, kind string)
 			)
 			continue
 		}
-		for _, resource := range strings.Fields(output) {
+		for resource := range strings.FieldsSeq(output) {
 			resourceSet[resource] = struct{}{}
 		}
 	}

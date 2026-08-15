@@ -212,11 +212,10 @@ func postHECOperations(
 
 func assertHECOperationalSnapshotHasNoIdentityFields(t *testing.T) {
 	t.Helper()
-	typeOfSnapshot := reflect.TypeOf(HECOperationalSnapshot{})
-	for index := 0; index < typeOfSnapshot.NumField(); index++ {
-		field := typeOfSnapshot.Field(index)
+	typeOfSnapshot := reflect.TypeFor[HECOperationalSnapshot]()
+	for field := range typeOfSnapshot.Fields() {
 		kind := field.Type.Kind()
-		if field.Type == reflect.TypeOf(time.Time{}) || kind == reflect.Bool ||
+		if field.Type == reflect.TypeFor[time.Time]() || kind == reflect.Bool ||
 			kind == reflect.Uint64 || kind == reflect.Int64 ||
 			kind == reflect.Array && field.Type.Elem().Kind() == reflect.Uint64 {
 			continue

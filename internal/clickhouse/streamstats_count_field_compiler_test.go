@@ -93,7 +93,6 @@ func TestCompileStreamStatsCountFieldPinsRowWindowsAndZeroPriorFrame(t *testing.
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -282,7 +281,6 @@ func TestCompileStreamStatsCountFieldRejectsForgedMetadata(t *testing.T) {
 		{"predicate", func(operator *plan.StreamAggregate) { operator.Measure.Predicate = &plan.BooleanExpression{} }},
 		{"percentile", func(operator *plan.StreamAggregate) { operator.Measure.Percentile = 50 }},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

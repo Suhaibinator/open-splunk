@@ -36,7 +36,6 @@ func TestExecutorPublishesFixedSumAndAverageValues(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -92,7 +91,6 @@ func TestExecutorDistinguishesEmptyAndAllIneligibleFixedSumAndAverageInput(t *te
 		{name: "sum", kind: clickhouse.TimechartValueKindSum},
 		{name: "average", kind: clickhouse.TimechartValueKindAverage},
 	} {
-		aggregate := aggregate
 		for _, input := range []struct {
 			name     string
 			presence uint8
@@ -101,7 +99,6 @@ func TestExecutorDistinguishesEmptyAndAllIneligibleFixedSumAndAverageInput(t *te
 			{name: "empty upstream", presence: 0, wantRows: 0},
 			{name: "all ineligible", presence: 1, wantRows: 3},
 		} {
-			input := input
 			t.Run(aggregate.name+"/"+input.name, func(t *testing.T) {
 				t.Parallel()
 
@@ -169,7 +166,6 @@ func TestExecutorRejectsMalformedFixedSumAndAverageTransportAtomically(t *testin
 		{name: "sum", kind: clickhouse.TimechartValueKindSum},
 		{name: "average", kind: clickhouse.TimechartValueKindAverage},
 	} {
-		aggregate := aggregate
 		for _, malformed := range []struct {
 			name   string
 			mutate func(*fakeRows)
@@ -185,7 +181,7 @@ func TestExecutorRejectsMalformedFixedSumAndAverageTransportAtomically(t *testin
 				mutate: func(rows *fakeRows) {
 					rows.types[1] = fakeColumnType{
 						name: clickhouse.TimechartValueColumn, databaseType: "Float64",
-						scanType: reflect.TypeOf(float64(0)),
+						scanType: reflect.TypeFor[float64](),
 					}
 				},
 			},
@@ -209,7 +205,6 @@ func TestExecutorRejectsMalformedFixedSumAndAverageTransportAtomically(t *testin
 				},
 			},
 		} {
-			malformed := malformed
 			t.Run(aggregate.name+"/"+malformed.name, func(t *testing.T) {
 				t.Parallel()
 

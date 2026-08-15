@@ -662,7 +662,7 @@ func chartBreakInvalid(
 func chartBreakSum(t *testing.T, counts string) string {
 	t.Helper()
 	var total uint64
-	for _, cell := range strings.Split(counts, "|") {
+	for cell := range strings.SplitSeq(counts, "|") {
 		value, err := strconv.ParseUint(cell, 10, 64)
 		if err != nil {
 			t.Fatalf("chart cell %q is not a count: %v", cell, err)

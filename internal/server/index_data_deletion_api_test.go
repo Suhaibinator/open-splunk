@@ -616,7 +616,6 @@ func TestDeleteIndexDataAdmissionRejectsWithoutMutationOrWake(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -876,7 +875,6 @@ func TestDeleteIndexDataAdmissionMapsErrorsWithoutWaking(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -1016,7 +1014,6 @@ func TestDeleteIndexDataAdmissionValidatesSuccessAfterWaking(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -1290,8 +1287,6 @@ func TestNewHandlerRequiresCompleteIndexDataDeletionServices(t *testing.T) {
 			config.IndexDataDeletionWaker = waker
 		},
 	} {
-		name := name
-		configure := configure
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 

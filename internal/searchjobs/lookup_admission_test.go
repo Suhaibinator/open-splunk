@@ -234,7 +234,6 @@ func TestLookupCreateRejectsMissingScopeOrAuthorityBeforeIDAndJournal(t *testing
 			}),
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			var idCalls, journalCalls, snapshotCalls atomic.Int32

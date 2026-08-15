@@ -161,7 +161,6 @@ func TestGradeThisCompatibilityV0_1AgainstClickHouse(t *testing.T) {
 		len(searches),
 	)
 	for _, search := range searches {
-		search := search
 		t.Run(string(search.ID), func(t *testing.T) {
 			expectation, ok := expectations[search.ID]
 			if !ok {

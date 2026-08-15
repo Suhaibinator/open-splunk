@@ -185,7 +185,6 @@ func queryIntegrationTestFieldCatalog(
 			"field-catalog-invalid-name",
 			"field-catalog-oversized",
 		} {
-			indexName := indexName
 			t.Run(indexName+" fails closed", func(t *testing.T) {
 				compiled := queryIntegrationCompileFieldCatalog(t, indexName, indexTime, "index="+indexName)
 				catalog, err := executor.ExecuteFieldCatalog(ctx, compiled)
@@ -440,7 +439,6 @@ func queryIntegrationTestFieldCatalog(
 				{index: "field-suggestions-path-collision", prefix: "does-not-match"},
 				{index: "field-suggestions-escaped-path-collision", prefix: "does-not-match"},
 			} {
-				test := test
 				t.Run(test.index, func(t *testing.T) {
 					suggestions, err := executor.ExecuteFieldSuggestions(
 						ctx,
@@ -660,7 +658,6 @@ func queryIntegrationTestFieldCatalog(
 		})
 
 		for _, fieldName := range []string{"list", "object"} {
-			fieldName := fieldName
 			t.Run(fieldName+" fails closed as unsupported", func(t *testing.T) {
 				compiled := queryIntegrationCompileFieldSummary(
 					t, "field-catalog-v1", indexTime, `index=field-catalog-v1`, fieldName,

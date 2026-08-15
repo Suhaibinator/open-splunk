@@ -226,7 +226,6 @@ func TestBuildEventStatsCountEvalRejectsForgedMetadataAndPredicates(t *testing.T
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -321,7 +320,6 @@ func TestAnalyzeEventStatsCountEvalValidatesPredicateContract(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -554,7 +552,6 @@ func TestEventStatsCountEvalPredicateContractRejectsForgedStructuresAndGraphs(
 		{name: "shared DAG expansion exceeds budget", predicate: overBudget},
 	}
 	for _, test := range malformed {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

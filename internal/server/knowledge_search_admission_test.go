@@ -125,7 +125,6 @@ func TestKnowledgeSearchAdmissionAppAuthorizationFailsClosedBeforeIndexes(t *tes
 			wantStatus: http.StatusServiceUnavailable,
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			jobs := &knowledgeAdmissionSearchJobs{
@@ -214,7 +213,6 @@ func TestKnowledgeSearchAdmissionRejectsMismatchedDependencyOutcome(t *testing.T
 		{name: "scoped result changed app", requestApp: "app-main", jobApp: "app-other", summary: enabledEmptyKnowledgeSnapshotSummary()},
 		{name: "app-less result invented snapshot", summary: enabledEmptyKnowledgeSnapshotSummary()},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			job := completeJob("mismatched-knowledge-outcome")
@@ -259,7 +257,6 @@ func TestKnowledgeSearchAdmissionRejectsMismatchedLaterLifecycleProjections(t *t
 	probe := &apiHandler{knowledgeSearchAdmission: true}
 	disabledProbe := &apiHandler{}
 	for _, state := range states {
-		state := state
 		t.Run(state.String(), func(t *testing.T) {
 			appScoped := completeJob("projection-invariant")
 			appScoped.State = state
@@ -306,7 +303,6 @@ func TestKnowledgeSearchAdmissionRejectsMismatchedLaterLifecycleProjections(t *t
 			},
 		},
 	} {
-		route := route
 		t.Run(route.name, func(t *testing.T) {
 			t.Parallel()
 			job := listSearchJob("projection-mismatch", time.Now().UTC())
@@ -379,7 +375,6 @@ func TestKnowledgeSearchAdmissionMapsSynchronousFailuresWithoutDetails(t *testin
 		{name: "unsupported SPL", err: searchjobs.ErrUnsupportedSPL, wantStatus: http.StatusUnprocessableEntity},
 		{name: "knowledge unavailable", err: searchjobs.ErrKnowledgeUnavailable, wantStatus: http.StatusServiceUnavailable},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			jobs := &knowledgeAdmissionSearchJobs{

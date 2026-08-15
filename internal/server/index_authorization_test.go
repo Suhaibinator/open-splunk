@@ -90,7 +90,6 @@ func TestAuthorizeRequestedIndexesBatchFailsClosed(t *testing.T) {
 			wantErr: errInvalidIndexCatalogBatch,
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

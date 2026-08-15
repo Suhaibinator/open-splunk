@@ -847,7 +847,6 @@ func TestIndexCatalogCapacityIsAtomicAndRetainsTerminalIdentities(
 	results := make(chan error, 2)
 	var wait sync.WaitGroup
 	for _, name := range []string{"last-a", "last-b"} {
-		name := name
 		wait.Go(func() {
 			<-start
 			_, err := db.CreateIndex(ctx, enabledIndex(name))

@@ -130,7 +130,6 @@ func TestNumericChartAgainstClickHouse(t *testing.T) {
 	// both count and numeric chart must still return the private invalid
 	// sentinel instead of silently producing an empty successful result.
 	for _, aggregate := range []string{"count", "sum(metric)"} {
-		aggregate := aggregate
 		t.Run("row-independent invalid split "+aggregate, func(t *testing.T) {
 			compiled := chartEdgeCompile(
 				t,

@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"sort"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -453,11 +454,11 @@ func readWriterFaultSnapshot(t *testing.T, database *control.DB) writerFaultSnap
 				_ = rows.Close()
 				t.Fatalf("snapshot %s row: %v", table, err)
 			}
-			encoded := ""
+			var encoded strings.Builder
 			for index, value := range values {
-				encoded += strconv.Quote(columns[index]) + "=" + writerFaultSQLValue(value) + ";"
+				encoded.WriteString(strconv.Quote(columns[index]) + "=" + writerFaultSQLValue(value) + ";")
 			}
-			encodedRows = append(encodedRows, encoded)
+			encodedRows = append(encodedRows, encoded.String())
 		}
 		if err := rows.Err(); err != nil {
 			_ = rows.Close()

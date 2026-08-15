@@ -112,7 +112,6 @@ func TestCompileSpecifierNormalizesDocumentedOperationOrder(t *testing.T) {
 			},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -170,9 +169,7 @@ func TestCompileSpecifierAcceptsDocumentedUnitAliases(t *testing.T) {
 			"y", "yr", "yrs", "year", "years",
 		},
 	} {
-		unit := unit
 		for _, alias := range aliases {
-			alias := alias
 			t.Run(alias, func(t *testing.T) {
 				t.Parallel()
 
@@ -271,7 +268,6 @@ func TestCompileSpecifierPinsExactMagnitudeBounds(t *testing.T) {
 		{"years", "+362y", "+363y"},
 		{"uint64 overflow", "", "+18446744073709551616s"},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

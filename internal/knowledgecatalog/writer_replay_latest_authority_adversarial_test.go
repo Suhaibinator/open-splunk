@@ -3,6 +3,7 @@ package knowledgecatalog
 import (
 	"database/sql"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -622,8 +623,8 @@ func dropWriterReplayTriggers(
 		}
 	}
 	return func() {
-		for index := len(triggerSQL) - 1; index >= 0; index-- {
-			if _, err := connection.ExecContext(t.Context(), triggerSQL[index]); err != nil {
+		for index, v := range slices.Backward(triggerSQL) {
+			if _, err := connection.ExecContext(t.Context(), v); err != nil {
 				t.Errorf("restore trigger %s: %v", names[index], err)
 			}
 		}

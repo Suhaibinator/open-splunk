@@ -261,7 +261,6 @@ func TestAuditedAppCatalogRollsBackEveryMutationWhenAuditFails(t *testing.T) {
 		AppMutationAuditActionActivate,
 		AppMutationAuditActionDelete,
 	} {
-		action := action
 		t.Run(string(action), func(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()

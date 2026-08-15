@@ -37,7 +37,6 @@ func TestBinEdgeNumericDynamicShapesKeepPlaceholderAccountingExact(t *testing.T)
 		// The source is replaced in place rather than aliased.
 		`index=gradethis | bin metric span=10 | table metric`,
 	} {
-		source := source
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()
 

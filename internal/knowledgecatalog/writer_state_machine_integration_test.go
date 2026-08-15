@@ -138,7 +138,6 @@ func (machine *writerStateMachine) run() {
 	// later immutable versions (and, for the oldest outcomes, a tombstone).
 	late := make([]writerStateMachineStep, 0, len(machine.model.commits)+1)
 	for _, commit := range machine.model.commits {
-		commit := commit
 		late = append(late, writerStateMachineStep{
 			name: "late_replay_" + commit.label,
 			run:  func() { machine.replay(commit) },

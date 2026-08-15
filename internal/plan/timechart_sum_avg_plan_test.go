@@ -38,7 +38,6 @@ func TestBuildTimechartSumAndAverageProducesStaticNumericMeasure(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -108,7 +107,6 @@ func TestBuildTimechartSumAndAverageProducesBoundedDynamicSplitSeries(t *testing
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -275,7 +273,6 @@ func TestBuildRejectsForgedTimechartSumAndAverageContracts(t *testing.T) {
 		{name: "same measure and split field", aggregate: valid, split: &spl.StatsGroupField{Name: "latency", Range: fieldRange}, code: "SPL_DUPLICATE_FIELD"},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

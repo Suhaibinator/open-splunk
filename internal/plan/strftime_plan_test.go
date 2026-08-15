@@ -199,7 +199,6 @@ func TestBuildStrftimeRejectsForgedArityFormatBooleanEnumAndTypedNil(t *testing.
 			code: "SPL_UNSUPPORTED_EVAL_FUNCTION",
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			assertForgedEvalBuildDiagnostic(

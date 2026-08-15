@@ -170,7 +170,6 @@ func TestClickHousePhysicalSchemaDefinitionsMatchPinnedReleaseDigests(
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -374,7 +373,6 @@ func TestValidateClickHousePhysicalSchemaRejectsTableSetOrDefinitionDrift(
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -432,7 +430,6 @@ func TestValidateClickHousePhysicalSchemaRejectsInvalidTableUUIDIdentity(
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

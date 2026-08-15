@@ -1586,11 +1586,11 @@ func seedCapacityReceiptCopies(t *testing.T, database *control.DB, seed capacity
 	for index := 0; index < seed.Count; index++ {
 		requestID := fmt.Sprintf("%s%08d", seed.RequestIDPrefix, index)
 		revision := firstSyntheticRevision + int64(index)
-		token := sha256.Sum256([]byte(fmt.Sprintf(
+		token := sha256.Sum256(fmt.Appendf(nil,
 			"open-splunk-capacity-fixture/%s/%d",
 			requestID,
 			revision,
-		)))
+		))
 		copyEnvelope := proto.Clone(envelope).(*opensplunkv1.KnowledgeMutationOutcomeRecord)
 		copyEnvelope.TenantCatalogRevision = uint64(revision)
 		copyEnvelope.TenantCatalogStateToken = bytes.Clone(token[:])

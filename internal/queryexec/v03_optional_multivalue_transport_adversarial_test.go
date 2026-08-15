@@ -90,7 +90,6 @@ func TestV03OptionalMultivalueTransportDistinguishesNullEmptyAndMembers(t *testi
 		{name: "ordered Unicode and empty members", raw: []string{"a", "", "界", "a"}, present: 1, want: []string{"a", "", "界", "a"}},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			raw := slices.Clone(test.raw)
@@ -152,7 +151,6 @@ func TestV03OptionalMultivalueTransportRejectsForgedNativeValues(t *testing.T) {
 		{name: "nil value", destinations: []any{(*[]string)(nil), &one}},
 		{name: "nil presence", destinations: []any{&empty, (*uint8)(nil)}},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			value, err := convertOptionalMultivalueOutput(test.destinations, 0, transport)
@@ -235,7 +233,7 @@ func TestV03OptionalMultivalueTransportRejectsForgedHeadersTypesAndDescriptors(t
 		}},
 		{name: "array scan type", mutate: func(_ *clickhouse.CompiledQuery, _ *[]string, types *[]driver.ColumnType, _ *int) {
 			value := (*types)[1].(fakeColumnType)
-			value.scanType = reflect.TypeOf([]any{})
+			value.scanType = reflect.TypeFor[[]any]()
 			(*types)[1] = value
 		}},
 		{name: "presence nullable", mutate: func(_ *clickhouse.CompiledQuery, _ *[]string, types *[]driver.ColumnType, _ *int) {
@@ -253,14 +251,13 @@ func TestV03OptionalMultivalueTransportRejectsForgedHeadersTypesAndDescriptors(t
 			query.SparseFields = true
 			(*columns)[1] = "fields"
 			*columns = append((*columns)[:2], append([]string{clickhouse.SparseEventFieldNamesColumn}, (*columns)[2:]...)...)
-			jsonType := fakeColumnType{name: "fields", databaseType: "JSON", scanType: reflect.TypeOf((*any)(nil)).Elem()}
+			jsonType := fakeColumnType{name: "fields", databaseType: "JSON", scanType: reflect.TypeFor[any]()}
 			*types = append((*types)[:2], append([]driver.ColumnType{jsonType}, (*types)[2:]...)...)
 			*sparse = 1
 		}},
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			descriptor := clickhouse.ResultOptionalMultivalueOutput{OutputIndex: 1}
@@ -283,9 +280,9 @@ func v03OptionalMultivalueColumnTypes(
 	descriptor clickhouse.ResultOptionalMultivalueOutput,
 ) []driver.ColumnType {
 	return []driver.ColumnType{
-		fakeColumnType{name: "event_id", databaseType: "String", scanType: reflect.TypeOf("")},
-		fakeColumnType{name: "tags", databaseType: "Array(String)", scanType: reflect.TypeOf([]string{})},
-		fakeColumnType{name: descriptor.PresentColumn(), databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0))},
+		fakeColumnType{name: "event_id", databaseType: "String", scanType: reflect.TypeFor[string]()},
+		fakeColumnType{name: "tags", databaseType: "Array(String)", scanType: reflect.TypeFor[[]string]()},
+		fakeColumnType{name: descriptor.PresentColumn(), databaseType: "UInt8", scanType: reflect.TypeFor[uint8]()},
 	}
 }
 

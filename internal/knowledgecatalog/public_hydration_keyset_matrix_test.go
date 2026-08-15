@@ -93,7 +93,6 @@ func TestPersistedTierOneBodyHydrationAndFilters(t *testing.T) {
 	}
 
 	for _, fixture := range fixtures {
-		fixture := fixture
 		t.Run(fixture.body+" hydration and detachment", func(t *testing.T) {
 			got, err := store.Get(context.Background(), testReadScope(), fixture.id, nil)
 			if err != nil {
@@ -147,7 +146,6 @@ func TestPersistedTierOneBodyHydrationAndFilters(t *testing.T) {
 		})
 	}
 	for _, fixture := range fixtures {
-		fixture := fixture
 		t.Run("selector filter "+fixture.body, func(t *testing.T) {
 			page, err := store.List(context.Background(), testReadScope(), ListRequest{
 				SelectorTextFilter: &fixture.selectorToken,
@@ -311,7 +309,6 @@ func TestListKeysetTraversalSortMatrix(t *testing.T) {
 	mustExec(t, database, `UPDATE knowledge_catalog_tenants
 		SET catalog_revision = catalog_revision + 1 WHERE tenant_id = ?`, testTenant)
 	for _, continuation := range staleContinuations {
-		continuation := continuation
 		t.Run("revision invalidates "+continuation.name, func(t *testing.T) {
 			if _, err := store.List(context.Background(), testReadScope(), continuation.request); !errors.Is(err, control.ErrPageInvalidated) {
 				t.Fatalf("List(stale continuation) error = %v, want ErrPageInvalidated", err)

@@ -62,7 +62,6 @@ func TestCreateSearchHistoryRerunUsesTrustedSnapshotAndFreshAdmission(t *testing
 		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_CANCELED,
 		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_EXPIRED,
 	} {
-		finalState := finalState
 		t.Run(finalState.String(), func(t *testing.T) {
 			t.Parallel()
 
@@ -322,7 +321,6 @@ func TestCreateSearchHistoryRerunUsesEffectiveScopeWithDefinitionFallback(t *tes
 			wantScope:       []string{"fallback"},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -439,7 +437,6 @@ func TestCreateSearchHistoryRerunLookupFailuresCreateNoJob(t *testing.T) {
 			wantMessage: "internal server error",
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -541,7 +538,6 @@ func TestCreateSearchHistoryRerunReauthorizesAppAndIndexes(t *testing.T) {
 			}}},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

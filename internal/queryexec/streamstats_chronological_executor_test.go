@@ -25,23 +25,23 @@ func TestExecutorPublishesStackedStreamStatsChronologicalMixedValuesWithoutDropp
 			fakeColumnType{
 				name:         "event_id",
 				databaseType: "String",
-				scanType:     reflect.TypeOf(""),
+				scanType:     reflect.TypeFor[string](),
 			},
 			fakeColumnType{
 				name:         "service",
 				databaseType: "Nullable(String)",
-				scanType:     reflect.TypeOf((*string)(nil)),
+				scanType:     reflect.TypeFor[*string](),
 				nullable:     true,
 			},
 			fakeColumnType{
 				name:         "first_seen",
 				databaseType: "Dynamic",
-				scanType:     reflect.TypeOf((*any)(nil)).Elem(),
+				scanType:     reflect.TypeFor[any](),
 			},
 			fakeColumnType{
 				name:         "last_seen",
 				databaseType: "Dynamic",
-				scanType:     reflect.TypeOf((*any)(nil)).Elem(),
+				scanType:     reflect.TypeFor[any](),
 			},
 		},
 		data: [][]any{

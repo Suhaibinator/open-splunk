@@ -78,7 +78,6 @@ func TestMutationRequestPreflightAcceptsWriterShapesWithoutMutation(t *testing.T
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			if err := assertMutationRequestPreflightParity(t, test.request); err != nil {
@@ -107,7 +106,6 @@ func TestMutationRequestPreflightValidatesClientIdentityAndDetachedWireShape(
 		"request id with spaces",
 		"request-id-with-\n-control",
 	} {
-		requestID := requestID
 		t.Run("client request identity "+requestID, func(t *testing.T) {
 			if err := assertMutationRequestPreflightParity(t, create(requestID)); !errors.Is(err, control.ErrInvalidArgument) ||
 				!strings.Contains(err.Error(), "client request identity") {
@@ -239,7 +237,6 @@ func TestMutationRequestPreflightPreservesWriterFieldPrecedence(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			err := assertMutationRequestPreflightParity(t, test.request)
 			if !errors.Is(err, control.ErrInvalidArgument) ||

@@ -73,7 +73,6 @@ func TestValidateTimechartSchemaEnforcesFixedPercentileContract(t *testing.T) {
 		{name: "nonnullable value", schema: Schema{Columns: []Column{valid.Columns[0], {Name: "p95_ms", Kind: ValueKindDouble}}}, expected: []string{"_time", "p95_ms"}, output: output},
 		{name: "multivalue value", schema: Schema{Columns: []Column{valid.Columns[0], {Name: "p95_ms", Kind: ValueKindDouble, Nullable: true, Multivalue: true}}}, expected: []string{"_time", "p95_ms"}, output: output},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			if err := ValidateTimechartSchema(

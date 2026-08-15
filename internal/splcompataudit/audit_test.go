@@ -45,7 +45,6 @@ func TestAuditSourceFindsOnlyAmbiguousUnspacedScalarOperators(t *testing.T) {
 		{name: "invalid source", source: "index=main | eval value=("},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			got, err := AuditSource(test.source)
@@ -285,7 +284,6 @@ func TestRepositoryReadRejectsFinalAndIntermediateSymlinkSwaps(t *testing.T) {
 			},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			root := t.TempDir()

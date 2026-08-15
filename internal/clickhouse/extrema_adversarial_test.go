@@ -26,7 +26,6 @@ func TestDynamicBytesPayloadValidityRequiresCanonicalRawStd(t *testing.T) {
 		{payload: "AA=", valid: false},
 		{payload: "AA-", valid: false},
 	} {
-		test := test
 		t.Run(test.payload, func(t *testing.T) {
 			t.Parallel()
 			if got := validRawStd.MatchString(test.payload); got != test.valid {

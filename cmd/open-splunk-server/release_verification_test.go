@@ -37,7 +37,6 @@ func TestEmbeddedReleaseVerificationRejectsInvalidIdentityBeforeWriting(t *testi
 	t.Parallel()
 
 	for _, version := range []string{"", " 0.3", "0.3\nforged", string([]byte{0xff})} {
-		version := version
 		t.Run(version, func(t *testing.T) {
 			t.Parallel()
 			var output bytes.Buffer

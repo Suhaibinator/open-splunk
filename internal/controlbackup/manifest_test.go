@@ -61,7 +61,6 @@ func TestManifestRejectsNoncanonicalUnknownDuplicateAndOversizedInput(t *testing
 			return bytes.Repeat([]byte{'x'}, maximumManifestBytes+1)
 		},
 	} {
-		name, mutate := name, mutate
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			if _, err := unmarshalManifest(mutate(append([]byte(nil), encoded...))); err == nil {
@@ -106,7 +105,6 @@ func TestManifestValidationRejectsEveryBoundedContractViolation(t *testing.T) {
 		"master key identity":        func(value *Manifest) { value.MasterKeyFingerprintSHA256 = "bad" },
 	}
 	for name, mutate := range tests {
-		name, mutate := name, mutate
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			manifest := validTestManifest()
@@ -138,7 +136,6 @@ func TestManifestRequiresExactExpectedRelease(t *testing.T) {
 		},
 		"clickhouse version": func(value *ReleaseIdentity) { value.ClickHouseMigrations.LatestVersion++ },
 	} {
-		name, mutate := name, mutate
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			changed := expected

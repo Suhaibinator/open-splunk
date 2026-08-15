@@ -55,7 +55,6 @@ func TestV03PublicIndexRewritesStopPhysicalScopeInference(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			source := test.prefix + ` | ` + test.predicate
@@ -93,7 +92,6 @@ func TestV03NonIndexWritesDoNotHideForbiddenPhysicalIndexSelectors(t *testing.T)
 		`index=gradethis | delta bytes AS difference | search index=secret`,
 		`index=gradethis | makemv delim="," tags | search index=secret`,
 	} {
-		source := source
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()
 			parsed := mustParse(t, source)

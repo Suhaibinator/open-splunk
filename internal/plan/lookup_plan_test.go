@@ -175,7 +175,6 @@ func TestBuildLookupRevalidatesForgedAST(t *testing.T) {
 		}},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			query := mustParse(t, "index=gradethis | lookup catalog id AS service_key OUTPUT owner")

@@ -115,7 +115,7 @@ func testStatsPercentilesAgainstClickHouse(
 		t.Helper()
 		actions := explainCompiledQuery(t, ctx, connection, "EXPLAIN actions=1 ", compiled)
 		physicalStates := 0
-		for _, line := range strings.Split(actions, "\n") {
+		for line := range strings.SplitSeq(actions, "\n") {
 			if strings.Contains(line, "Function:") && strings.Contains(line, "quantilesGK") {
 				physicalStates++
 			}

@@ -33,12 +33,11 @@ func TestExecutorPublishesNumericChartAsNullableWideValues(t *testing.T) {
 			check: math.IsNaN,
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
 			rows := numericChartRows(
-				reflect.TypeOf(""),
+				reflect.TypeFor[string](),
 				[]string{"0:api", "1:", "2:"},
 				[]any{"/a", "/b"},
 				[][]float64{{0, 0, test.nonfinite}, {0, -2.25, 0}},
@@ -97,7 +96,7 @@ func TestExecutorRetainsNumericChartRowsWithNoEligibleMeasureMembers(t *testing.
 	t.Parallel()
 
 	rows := numericChartRows(
-		reflect.TypeOf(""),
+		reflect.TypeFor[string](),
 		[]string{"0:api"},
 		[]any{"/measureless"},
 		[][]float64{{0}},
@@ -141,7 +140,7 @@ func TestExecutorNumericChartByteCeilingIsExactAtBothSides(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			rows := numericChartRows(
-				reflect.TypeOf(""),
+				reflect.TypeFor[string](),
 				names,
 				[]any{test.row},
 				[][]float64{{1}},
@@ -180,7 +179,7 @@ func TestExecutorReusesNumericChartScanDestinations(t *testing.T) {
 	t.Parallel()
 
 	rows := numericChartRows(
-		reflect.TypeOf(""),
+		reflect.TypeFor[string](),
 		[]string{"0:api"},
 		[]any{"/a", "/b"},
 		[][]float64{{1}, {2}},
@@ -220,7 +219,7 @@ func TestExecutorBuffersNumericChartBeforePublishing(t *testing.T) {
 	t.Parallel()
 
 	rows := numericChartRows(
-		reflect.TypeOf(""),
+		reflect.TypeFor[string](),
 		[]string{"0:api"},
 		[]any{"/a", "/b"},
 		[][]float64{{1}, {2}},
@@ -282,7 +281,7 @@ func TestExecutorRejectsNumericChartCloseFailureAtomically(t *testing.T) {
 	t.Parallel()
 
 	rows := numericChartRows(
-		reflect.TypeOf(""),
+		reflect.TypeFor[string](),
 		[]string{"0:api"},
 		[]any{"/a"},
 		[][]float64{{1}},
@@ -318,12 +317,11 @@ func TestExecutorRejectsInvalidNumericChartValueKindBeforeQuery(t *testing.T) {
 		{name: "unset", kind: clickhouse.ChartValueKindInvalid},
 		{name: "unknown", kind: clickhouse.ChartValueKind(255)},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
 			rows := numericChartRows(
-				reflect.TypeOf(""),
+				reflect.TypeFor[string](),
 				[]string{"0:api"},
 				[]any{"/a"},
 				[][]float64{{1}},
@@ -359,19 +357,19 @@ func TestExecutorRejectsMalformedNumericChartTransportAtomically(t *testing.T) {
 		{name: "wrong values column", mutate: func(rows *fakeRows) { rows.columns[3] = "wrong" }, want: searchjobs.ErrInvalidResult},
 		{name: "wrong presence column", mutate: func(rows *fakeRows) { rows.columns[4] = "wrong" }, want: searchjobs.ErrInvalidResult},
 		{name: "wrong row scan type", mutate: func(rows *fakeRows) {
-			rows.types[1] = fakeColumnType{name: clickhouse.ChartRowColumn, databaseType: "String", scanType: reflect.TypeOf([]byte{})}
+			rows.types[1] = fakeColumnType{name: clickhouse.ChartRowColumn, databaseType: "String", scanType: reflect.TypeFor[[]byte]()}
 		}, want: searchjobs.ErrInvalidResult},
 		{name: "wrong value type", mutate: func(rows *fakeRows) {
-			rows.types[3] = fakeColumnType{name: clickhouse.ChartValuesColumn, databaseType: "Array(UInt64)", scanType: reflect.TypeOf([]uint64{})}
+			rows.types[3] = fakeColumnType{name: clickhouse.ChartValuesColumn, databaseType: "Array(UInt64)", scanType: reflect.TypeFor[[]uint64]()}
 		}, want: searchjobs.ErrInvalidResult},
 		{name: "wrong presence type", mutate: func(rows *fakeRows) {
-			rows.types[4] = fakeColumnType{name: clickhouse.ChartValuePresentColumn, databaseType: "Array(UInt64)", scanType: reflect.TypeOf([]uint64{})}
+			rows.types[4] = fakeColumnType{name: clickhouse.ChartValuePresentColumn, databaseType: "Array(UInt64)", scanType: reflect.TypeFor[[]uint64]()}
 		}, want: searchjobs.ErrInvalidResult},
 		{name: "nullable value array", mutate: func(rows *fakeRows) {
-			rows.types[3] = fakeColumnType{name: clickhouse.ChartValuesColumn, databaseType: "Array(Float64)", scanType: reflect.TypeOf([]float64{}), nullable: true}
+			rows.types[3] = fakeColumnType{name: clickhouse.ChartValuesColumn, databaseType: "Array(Float64)", scanType: reflect.TypeFor[[]float64](), nullable: true}
 		}, want: searchjobs.ErrInvalidResult},
 		{name: "nullable presence array", mutate: func(rows *fakeRows) {
-			rows.types[4] = fakeColumnType{name: clickhouse.ChartValuePresentColumn, databaseType: "Array(UInt8)", scanType: reflect.TypeOf([]uint8{}), nullable: true}
+			rows.types[4] = fakeColumnType{name: clickhouse.ChartValuePresentColumn, databaseType: "Array(UInt8)", scanType: reflect.TypeFor[[]uint8](), nullable: true}
 		}, want: searchjobs.ErrInvalidResult},
 		{name: "value width", mutate: func(rows *fakeRows) { rows.data[0][3] = []float64{1} }, want: searchjobs.ErrInvalidResult},
 		{name: "presence width", mutate: func(rows *fakeRows) { rows.data[0][4] = []uint8{1} }, want: searchjobs.ErrInvalidResult},
@@ -398,12 +396,11 @@ func TestExecutorRejectsMalformedNumericChartTransportAtomically(t *testing.T) {
 		{name: "ordinal gap", mutate: func(rows *fakeRows) { rows.data[1][0] = uint64(2) }, want: searchjobs.ErrInvalidResult},
 		{name: "invalid split marker", mutate: func(rows *fakeRows) { rows.data[0][5] = uint8(1) }, want: searchjobs.ErrUnsupportedValue},
 	} {
-		malformed := malformed
 		t.Run(malformed.name, func(t *testing.T) {
 			t.Parallel()
 
 			rows := numericChartRows(
-				reflect.TypeOf(""),
+				reflect.TypeFor[string](),
 				[]string{"0:api", "1:"},
 				[]any{"/a", "/b"},
 				[][]float64{{1, 0}, {2, 0}},
@@ -463,12 +460,12 @@ func numericChartRows(
 			clickhouse.ChartInvalidColumn,
 		},
 		types: []driver.ColumnType{
-			fakeColumnType{name: clickhouse.ChartOrdinalColumn, databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0))},
+			fakeColumnType{name: clickhouse.ChartOrdinalColumn, databaseType: "UInt64", scanType: reflect.TypeFor[uint64]()},
 			fakeColumnType{name: clickhouse.ChartRowColumn, databaseType: "String", scanType: rowScanType},
-			fakeColumnType{name: clickhouse.ChartNamesColumn, databaseType: "Array(String)", scanType: reflect.TypeOf([]string{})},
-			fakeColumnType{name: clickhouse.ChartValuesColumn, databaseType: "Array(Float64)", scanType: reflect.TypeOf([]float64{})},
-			fakeColumnType{name: clickhouse.ChartValuePresentColumn, databaseType: "Array(UInt8)", scanType: reflect.TypeOf([]uint8{})},
-			fakeColumnType{name: clickhouse.ChartInvalidColumn, databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0))},
+			fakeColumnType{name: clickhouse.ChartNamesColumn, databaseType: "Array(String)", scanType: reflect.TypeFor[[]string]()},
+			fakeColumnType{name: clickhouse.ChartValuesColumn, databaseType: "Array(Float64)", scanType: reflect.TypeFor[[]float64]()},
+			fakeColumnType{name: clickhouse.ChartValuePresentColumn, databaseType: "Array(UInt8)", scanType: reflect.TypeFor[[]uint8]()},
+			fakeColumnType{name: clickhouse.ChartInvalidColumn, databaseType: "UInt8", scanType: reflect.TypeFor[uint8]()},
 		},
 		data: make([][]any, len(values)),
 	}

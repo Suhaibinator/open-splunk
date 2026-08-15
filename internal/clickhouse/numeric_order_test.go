@@ -58,7 +58,6 @@ func TestExactNumericOrderingSQLStaysBounded(t *testing.T) {
 			maximum: 7 << 10,
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			if got := len(test.sql); got > test.maximum {
@@ -312,7 +311,6 @@ func TestMaximumExactNumericPredicatesStayWithinCompiledQueryCeiling(t *testing.
 		`ratio>9007199254740992.75`,
 		`ratio>other_ratio`,
 	} {
-		predicate := predicate
 		t.Run(predicate, func(t *testing.T) {
 			t.Parallel()
 			var source strings.Builder

@@ -58,7 +58,6 @@ func TestChartPercentileAgainstClickHouse(t *testing.T) {
 		"0:g", "0:h", "0:i", "0:j", "1:", "2:",
 	}
 	for _, function := range []string{"p95", "perc50"} {
-		function := function
 		t.Run(function+" exact rank lexical ties and pooled other", func(t *testing.T) {
 			compiled := compile(t, function)
 			if compiled.Chart == nil || compiled.Timechart != nil ||

@@ -49,7 +49,6 @@ func TestV03CommandsParseAsSourceLocatedPipelineStages(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			command := requireV03LastCommand(t, test.source, test.command)
@@ -253,7 +252,6 @@ func TestV03CommandsRejectDeferredAndAmbiguousSyntaxAtTheOffendingToken(t *testi
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			diagnostic := assertV03RecognizedRejection(t, test.source, test.rangeText)
@@ -290,7 +288,6 @@ func TestV03CommandsHaveExactEmptyTailDiagnostics(t *testing.T) {
 		{name: "addtotals option without field", source: `index=main | addtotals fieldname=total`, code: "SPL_EXPECTED_FIELD"},
 		{name: "makemv option without field", source: `index=main | makemv delim=","`, code: "SPL_EXPECTED_FIELD"},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			query, err := Parse(test.source)
@@ -348,19 +345,19 @@ func TestV03SourceDeterminedResourceBoundaries(t *testing.T) {
 		// Eight individually valid 32-source stages exactly consume the
 		// 256-occurrence query budget. A ninth, otherwise valid two-source
 		// stage must be rejected atomically at that complete stage.
-		boundary := "index=main"
+		var boundary strings.Builder
+		boundary.WriteString("index=main")
 		for stage := range MaximumConcatenationOperandsPerQuery / MaximumConcatenationOperands {
-			boundary += ` | strcat ` + strings.Join(strcatOperands, " ") + ` output` + strconv.Itoa(stage)
+			boundary.WriteString(` | strcat ` + strings.Join(strcatOperands, " ") + ` output` + strconv.Itoa(stage))
 		}
-		if _, err := Parse(boundary); err != nil {
+		if _, err := Parse(boundary.String()); err != nil {
 			t.Fatalf("strcat at aggregate operand boundary: %v", err)
 		}
 		overflowStage := `strcat host "/" overflow_output`
-		assertV03ResourceRejection(t, boundary+` | `+overflowStage, overflowStage)
+		assertV03ResourceRejection(t, boundary.String()+` | `+overflowStage, overflowStage)
 	})
 
 	for _, command := range []string{"fillnull", "addtotals"} {
-		command := command
 		t.Run(command+" field budget", func(t *testing.T) {
 			fields := make([]string, 65)
 			for index := range fields {
@@ -399,18 +396,19 @@ func TestV03SourceDeterminedResourceBoundaries(t *testing.T) {
 		if _, err := Parse(`index=main | regex message="` + pattern + `"`); err != nil {
 			t.Fatalf("regex at per-pattern work boundary fixture: %v", err)
 		}
-		aggregate := "index=main"
+		var aggregate strings.Builder
+		aggregate.WriteString("index=main")
 		for range 5 {
-			aggregate += ` | regex message="` + pattern + `"`
+			aggregate.WriteString(` | regex message="` + pattern + `"`)
 		}
 		diagnosticSource := `"` + pattern + `"`
-		_, err := Parse(aggregate)
+		_, err := Parse(aggregate.String())
 		var diagnostic *Diagnostic
 		if !errors.As(err, &diagnostic) || diagnostic.Code != "SPL_QUERY_TOO_COMPLEX" {
 			t.Fatalf("Parse aggregate regex budget error = %v, want SPL_QUERY_TOO_COMPLEX", err)
 		}
-		assertV03RangeText(t, aggregate, diagnostic.Range, diagnosticSource)
-		if wantOffset := strings.LastIndex(aggregate, diagnosticSource); diagnostic.Range.Start.Offset != wantOffset {
+		assertV03RangeText(t, aggregate.String(), diagnostic.Range, diagnosticSource)
+		if wantOffset := strings.LastIndex(aggregate.String(), diagnosticSource); diagnostic.Range.Start.Offset != wantOffset {
 			t.Fatalf("aggregate regex diagnostic starts at %d, want fifth program at %d", diagnostic.Range.Start.Offset, wantOffset)
 		}
 
@@ -490,7 +488,6 @@ func TestV03CommandsAreDiscoverableAndHaveBoundedSuggestionContexts(t *testing.T
 		"fillnull", "addtotals", "delta", "makemv", "mvexpand",
 	}
 	for _, command := range commands {
-		command := command
 		t.Run(command+" command completion", func(t *testing.T) {
 			t.Parallel()
 			prefix := command[:len(command)-1]
@@ -523,7 +520,6 @@ func TestV03CommandsAreDiscoverableAndHaveBoundedSuggestionContexts(t *testing.T
 	for _, command := range []string{
 		"regex", "accum", "strcat", "fillnull", "addtotals", "delta", "makemv", "mvexpand",
 	} {
-		command := command
 		t.Run(command+" field context", func(t *testing.T) {
 			t.Parallel()
 			source := "index=main | " + command + " pa界"
@@ -542,7 +538,6 @@ func TestV03CommandsAreDiscoverableAndHaveBoundedSuggestionContexts(t *testing.T
 	}
 
 	for _, command := range []string{"reverse", "addinfo"} {
-		command := command
 		t.Run(command+" argument-free context", func(t *testing.T) {
 			t.Parallel()
 			source := "index=main | " + command + " "
@@ -584,7 +579,6 @@ func TestV03OptionAndAliasSuggestionsFollowTheAcceptedGrammar(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			context, diagnostic := AnalyzeSuggestionContext(test.source, len(test.source))
@@ -622,7 +616,6 @@ func TestV03SuggestionContextsDoNotLeakAcrossValueOrTerminalGrammarPositions(t *
 		`index=main | makemv delim=`,
 		`index=main | makemv tags `,
 	} {
-		source := source
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()
 			context, diagnostic := AnalyzeSuggestionContext(source, len(source))
@@ -663,7 +656,6 @@ func TestV03AddTotalsSuggestionsRetainEveryUnusedLeadingOption(t *testing.T) {
 		{source: `index=main | addtotals col=false fieldname=total `, wantKeywords: []string{"row="}},
 		{source: `index=main | addtotals row=true col=false fieldname=total `},
 	} {
-		test := test
 		t.Run(test.source, func(t *testing.T) {
 			t.Parallel()
 			context, diagnostic := AnalyzeSuggestionContext(test.source, len(test.source))
@@ -710,7 +702,6 @@ func TestV03EveryAdvertisedKeywordInsertionHasAParseableContinuation(t *testing.
 	}
 
 	for _, source := range contexts {
-		source := source
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()
 			result := Suggest(source, len(source), MaximumSuggestionLimit)
@@ -724,7 +715,6 @@ func TestV03EveryAdvertisedKeywordInsertionHasAParseableContinuation(t *testing.
 				}
 			}
 			for _, keyword := range result.Context.Keywords {
-				keyword := keyword
 				t.Run(keyword, func(t *testing.T) {
 					suggestion, ok := advertised[keyword]
 					if !ok {
@@ -766,7 +756,6 @@ func TestV03CommandsPreserveTheCurrentPublicRelationShape(t *testing.T) {
 		`delta total AS difference`, `makemv delim="," tags`, `mvexpand tags limit=2`,
 	}
 	for _, command := range commands {
-		command := command
 		t.Run(command, func(t *testing.T) {
 			t.Parallel()
 			for _, prefix := range []struct {
@@ -962,7 +951,7 @@ func assertV03StringSliceField(t *testing.T, command Command, name string, want 
 func assertV03RangeFieldText(t *testing.T, source string, command Command, name, want string) {
 	t.Helper()
 	field := v03RequiredField(t, command, name)
-	rangeType := reflect.TypeOf(Range{})
+	rangeType := reflect.TypeFor[Range]()
 	if field.Type() != rangeType {
 		t.Fatalf("%T.%s has type %s, want %s", command, name, field.Type(), rangeType)
 	}

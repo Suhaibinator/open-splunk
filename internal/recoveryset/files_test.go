@@ -49,7 +49,6 @@ func TestOpenArchiveDirectoryRejectsUnsafeRootMetadata(t *testing.T) {
 		},
 	}
 	for name, arrange := range tests {
-		name, arrange := name, arrange
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
@@ -138,7 +137,6 @@ func TestInspectArchiveRejectsUnsafeMetadata(t *testing.T) {
 	t.Parallel()
 
 	for name, create := range unsafeArchiveFixtures() {
-		name, create := name, create
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
@@ -219,7 +217,6 @@ func TestRemoveKnownArchiveRejectsUnsafeMetadataWithoutDeletion(t *testing.T) {
 	t.Parallel()
 
 	for name, create := range unsafeArchiveFixtures() {
-		name, create := name, create
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 

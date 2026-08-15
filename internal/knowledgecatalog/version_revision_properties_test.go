@@ -20,7 +20,6 @@ func TestCatalogRevisionExactSQLiteDomainBoundariesForGetAndList(t *testing.T) {
 		{name: "maximum admitted", revision: math.MaxInt64 - 1},
 		{name: "signed maximum excluded", revision: math.MaxInt64, bypassCheck: true, wantCorrupt: true},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			database, store := newCatalogTestStore(t)
 			insertFixtureObject(t, database, fixtureObject{id: "ko-revision-boundary", owner: testOwner, versions: []fixtureVersion{{

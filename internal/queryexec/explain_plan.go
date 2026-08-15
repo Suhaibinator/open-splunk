@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -168,8 +169,8 @@ func parseExplainPlanText(
 				"structured plan exceeded the child limit",
 			)
 		}
-		for index := len(node.Plans) - 1; index >= 0; index-- {
-			stack = append(stack, &node.Plans[index])
+		for _, v := range slices.Backward(node.Plans) {
+			stack = append(stack, &v)
 		}
 
 		if node.NodeType != "ReadFromMergeTree" {

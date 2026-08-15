@@ -35,10 +35,10 @@ func TestExecutorStreamsTypedRowsAndExactSchema(t *testing.T) {
 	rows := &fakeRows{
 		columns: []string{"_time", "message", "status", "_raw"},
 		types: []driver.ColumnType{
-			fakeColumnType{name: "_time", databaseType: "DateTime64(9, 'UTC')", scanType: reflect.TypeOf(time.Time{})},
-			fakeColumnType{name: "message", databaseType: "Nullable(String)", scanType: reflect.TypeOf((*string)(nil)), nullable: true},
-			fakeColumnType{name: "status", databaseType: "Dynamic", scanType: reflect.TypeOf((*any)(nil)).Elem()},
-			fakeColumnType{name: "_raw", databaseType: "String", scanType: reflect.TypeOf("")},
+			fakeColumnType{name: "_time", databaseType: "DateTime64(9, 'UTC')", scanType: reflect.TypeFor[time.Time]()},
+			fakeColumnType{name: "message", databaseType: "Nullable(String)", scanType: reflect.TypeFor[*string](), nullable: true},
+			fakeColumnType{name: "status", databaseType: "Dynamic", scanType: reflect.TypeFor[any]()},
+			fakeColumnType{name: "_raw", databaseType: "String", scanType: reflect.TypeFor[string]()},
 		},
 		data: [][]any{
 			{timestamp, "hello", chcol.NewDynamicWithType(int64(500), "Int64"), "valid"},
@@ -124,14 +124,13 @@ func TestExecutorPublishesOrdinarySchemaWithFirstRowOrSuccessfulEmpty(t *testing
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
 			rows := &fakeRows{
 				columns: []string{"message"},
 				types: []driver.ColumnType{
-					fakeColumnType{name: "message", databaseType: "String", scanType: reflect.TypeOf("")},
+					fakeColumnType{name: "message", databaseType: "String", scanType: reflect.TypeFor[string]()},
 				},
 				data: test.data,
 				err:  test.iteration,
@@ -174,7 +173,7 @@ func TestScanDestinationsOverridesGenericDynamicScanType(t *testing.T) {
 		fakeColumnType{
 			name:         "band",
 			databaseType: "LowCardinality(Nullable(Dynamic(max_types=32)))",
-			scanType:     reflect.TypeOf((*any)(nil)).Elem(),
+			scanType:     reflect.TypeFor[any](),
 		},
 	})
 	if err != nil {
@@ -301,7 +300,7 @@ func TestExecutorRejectsMalformedFixedTimechartAtomically(t *testing.T) {
 			mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
 				rows.types[1] = fakeColumnType{
 					name: clickhouse.TimechartCountColumn, databaseType: "UInt64",
-					scanType: reflect.TypeOf(uint64(0)), nullable: true,
+					scanType: reflect.TypeFor[uint64](), nullable: true,
 				}
 			},
 			queryIssued: true,
@@ -311,7 +310,7 @@ func TestExecutorRejectsMalformedFixedTimechartAtomically(t *testing.T) {
 			mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
 				rows.types[1] = fakeColumnType{
 					name: clickhouse.TimechartCountColumn, databaseType: "UInt32",
-					scanType: reflect.TypeOf(uint32(0)),
+					scanType: reflect.TypeFor[uint32](),
 				}
 				rows.data[0][1] = uint32(1)
 			},
@@ -401,7 +400,6 @@ func TestExecutorRejectsFixedTimechartStreamFailuresAtomically(t *testing.T) {
 			mutate: func(rows *fakeRows) { rows.closeErr = io.ErrUnexpectedEOF },
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			rows := fixedTimechartOrdinalRows([]uint64{1, 0})
@@ -452,7 +450,7 @@ func TestExecutorBuffersAndPublishesBoundedChartPivot(t *testing.T) {
 	// The row axis is runtime data, so the first public column is named and
 	// typed from the row field rather than from canonical time.
 	names := []string{"0:_audit", "0:Z", "1:", "2:"}
-	rows := chartPivotRows("String", reflect.TypeOf(""), names,
+	rows := chartPivotRows("String", reflect.TypeFor[string](), names,
 		[]any{"/a", "/b", "/c"},
 		[][]uint64{{2, 1, 0, 3}, {0, 4, 1, 0}, {5, 0, 0, 2}})
 	sink := &fakeSink{}
@@ -504,13 +502,13 @@ func TestExecutorPublishesEveryChartRowKind(t *testing.T) {
 		value        any
 		want         searchjobs.ValueKind
 	}{
-		{"string", clickhouse.ChartRowKindString, "String", reflect.TypeOf(""), "/a", searchjobs.ValueKindString},
-		{"unsigned8", clickhouse.ChartRowKindUnsigned, "UInt8", reflect.TypeOf(uint8(0)), uint8(10), searchjobs.ValueKindUnsigned},
-		{"unsigned64", clickhouse.ChartRowKindUnsigned, "UInt64", reflect.TypeOf(uint64(0)), uint64(10), searchjobs.ValueKindUnsigned},
-		{"signed", clickhouse.ChartRowKindSigned, "Int64", reflect.TypeOf(int64(0)), int64(-20), searchjobs.ValueKindSigned},
-		{"double", clickhouse.ChartRowKindDouble, "Float64", reflect.TypeOf(float64(0)), 1.5, searchjobs.ValueKindDouble},
-		{"bool", clickhouse.ChartRowKindBool, "Bool", reflect.TypeOf(false), true, searchjobs.ValueKindBool},
-		{"time", clickhouse.ChartRowKindTime, "DateTime64(9, 'UTC')", reflect.TypeOf(time.Time{}), bucket, searchjobs.ValueKindTime},
+		{"string", clickhouse.ChartRowKindString, "String", reflect.TypeFor[string](), "/a", searchjobs.ValueKindString},
+		{"unsigned8", clickhouse.ChartRowKindUnsigned, "UInt8", reflect.TypeFor[uint8](), uint8(10), searchjobs.ValueKindUnsigned},
+		{"unsigned64", clickhouse.ChartRowKindUnsigned, "UInt64", reflect.TypeFor[uint64](), uint64(10), searchjobs.ValueKindUnsigned},
+		{"signed", clickhouse.ChartRowKindSigned, "Int64", reflect.TypeFor[int64](), int64(-20), searchjobs.ValueKindSigned},
+		{"double", clickhouse.ChartRowKindDouble, "Float64", reflect.TypeFor[float64](), 1.5, searchjobs.ValueKindDouble},
+		{"bool", clickhouse.ChartRowKindBool, "Bool", reflect.TypeFor[bool](), true, searchjobs.ValueKindBool},
+		{"time", clickhouse.ChartRowKindTime, "DateTime64(9, 'UTC')", reflect.TypeFor[time.Time](), bucket, searchjobs.ValueKindTime},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
@@ -540,7 +538,7 @@ func TestExecutorPublishesRawChartRowLikeStatsGroupColumn(t *testing.T) {
 	t.Parallel()
 
 	binary := string([]byte{0x61, 0xff, 0xfe, 0x62})
-	rows := chartPivotRows("String", reflect.TypeOf(""), []string{"0:INFO"},
+	rows := chartPivotRows("String", reflect.TypeFor[string](), []string{"0:INFO"},
 		[]any{"plain", binary}, [][]uint64{{2}, {3}})
 	sink := &fakeSink{}
 	executor := mustExecutor(t, &fakeQueryConnection{rows: rows})
@@ -582,7 +580,7 @@ func TestExecutorRejectsOversizedChartResultAtomically(t *testing.T) {
 		rowValues[index] = wide
 		counts[index] = []uint64{1}
 	}
-	rows := chartPivotRows("String", reflect.TypeOf(""), []string{"0:INFO"}, rowValues, counts)
+	rows := chartPivotRows("String", reflect.TypeFor[string](), []string{"0:INFO"}, rowValues, counts)
 	sink := &fakeSink{}
 	executor := mustExecutor(t, &fakeQueryConnection{rows: rows})
 	err := executor.Execute(context.Background(), chartQuery("_raw", clickhouse.ChartRowKindString, "String"), sink)
@@ -594,7 +592,7 @@ func TestExecutorRejectsOversizedChartResultAtomically(t *testing.T) {
 	}
 
 	// The same shape well inside the ceiling still publishes normally.
-	narrow := chartPivotRows("String", reflect.TypeOf(""), []string{"0:INFO"},
+	narrow := chartPivotRows("String", reflect.TypeFor[string](), []string{"0:INFO"},
 		[]any{wide, wide}, [][]uint64{{1}, {1}})
 	narrowSink := &fakeSink{}
 	narrowExecutor := mustExecutor(t, &fakeQueryConnection{rows: narrow})
@@ -610,7 +608,7 @@ func TestExecutorRejectsOversizedChartResultAtomically(t *testing.T) {
 func TestExecutorSuppressesEmptyChartPivot(t *testing.T) {
 	t.Parallel()
 
-	rows := chartPivotRows("String", reflect.TypeOf(""), nil, nil, nil)
+	rows := chartPivotRows("String", reflect.TypeFor[string](), nil, nil, nil)
 	sink := &fakeSink{}
 	executor := mustExecutor(t, &fakeQueryConnection{rows: rows})
 	if err := executor.Execute(context.Background(), chartQuery("path", clickhouse.ChartRowKindString, "String"), sink); err != nil {
@@ -636,21 +634,21 @@ func TestExecutorRejectsMalformedChartAtomically(t *testing.T) {
 		{
 			name: "row column type drift",
 			mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
-				rows.types[1] = fakeColumnType{name: clickhouse.ChartRowColumn, databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0))}
+				rows.types[1] = fakeColumnType{name: clickhouse.ChartRowColumn, databaseType: "UInt64", scanType: reflect.TypeFor[uint64]()}
 			},
 			want: searchjobs.ErrInvalidResult, queryIssued: true,
 		},
 		{
 			name: "row column scan type drift",
 			mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
-				rows.types[1] = fakeColumnType{name: clickhouse.ChartRowColumn, databaseType: "String", scanType: reflect.TypeOf([]byte{})}
+				rows.types[1] = fakeColumnType{name: clickhouse.ChartRowColumn, databaseType: "String", scanType: reflect.TypeFor[[]byte]()}
 			},
 			want: searchjobs.ErrInvalidResult, queryIssued: true,
 		},
 		{
 			name: "nullable row column",
 			mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
-				rows.types[1] = fakeColumnType{name: clickhouse.ChartRowColumn, databaseType: "String", scanType: reflect.TypeOf(""), nullable: true}
+				rows.types[1] = fakeColumnType{name: clickhouse.ChartRowColumn, databaseType: "String", scanType: reflect.TypeFor[string](), nullable: true}
 			},
 			want: searchjobs.ErrInvalidResult, queryIssued: true,
 		},
@@ -671,7 +669,7 @@ func TestExecutorRejectsMalformedChartAtomically(t *testing.T) {
 			mutate: func(rows *fakeRows, query *clickhouse.CompiledQuery) {
 				query.Chart.RowKind = clickhouse.ChartRowKindMixed
 				query.Chart.RowDatabaseType = "UInt64"
-				rows.types[1] = fakeColumnType{name: clickhouse.ChartRowColumn, databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0))}
+				rows.types[1] = fakeColumnType{name: clickhouse.ChartRowColumn, databaseType: "UInt64", scanType: reflect.TypeFor[uint64]()}
 				for index, row := range rows.data {
 					row[1] = uint64(index)
 				}
@@ -757,7 +755,7 @@ func TestExecutorRejectsMalformedChartAtomically(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			rows := chartPivotRows("String", reflect.TypeOf(""), []string{"0:INFO", "1:"},
+			rows := chartPivotRows("String", reflect.TypeFor[string](), []string{"0:INFO", "1:"},
 				[]any{"/a", "/b", "/c"},
 				[][]uint64{{1, 0}, {0, 2}, {3, 0}})
 			query := chartQuery("path", clickhouse.ChartRowKindString, "String")
@@ -803,27 +801,27 @@ func TestExecutorRejectsMalformedTimechartAtomically(t *testing.T) {
 	}{
 		{name: "wrong physical columns", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) { rows.columns[1] = "wrong" }, want: searchjobs.ErrInvalidResult, queryIssued: true},
 		{name: "nullable physical column", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
-			rows.types[1] = fakeColumnType{name: clickhouse.TimechartNamesColumn, databaseType: "Array(String)", scanType: reflect.TypeOf([]string{}), nullable: true}
+			rows.types[1] = fakeColumnType{name: clickhouse.TimechartNamesColumn, databaseType: "Array(String)", scanType: reflect.TypeFor[[]string](), nullable: true}
 		}, want: searchjobs.ErrInvalidResult, queryIssued: true},
 		{name: "column type name drift", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
-			rows.types[1] = fakeColumnType{name: "wrong", databaseType: "Array(String)", scanType: reflect.TypeOf([]string{})}
+			rows.types[1] = fakeColumnType{name: "wrong", databaseType: "Array(String)", scanType: reflect.TypeFor[[]string]()}
 		}, want: searchjobs.ErrInvalidResult, queryIssued: true},
 		{name: "typed nil ordinal type", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
 			var columnType *fakeColumnType
 			rows.types[0] = columnType
 		}, want: searchjobs.ErrInvalidResult, queryIssued: true},
 		{name: "wrapped ordinal type", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
-			rows.types[0] = fakeColumnType{name: clickhouse.TimechartOrdinalColumn, databaseType: "Nullable(UInt64)", scanType: reflect.TypeOf(uint64(0))}
+			rows.types[0] = fakeColumnType{name: clickhouse.TimechartOrdinalColumn, databaseType: "Nullable(UInt64)", scanType: reflect.TypeFor[uint64]()}
 		}, want: searchjobs.ErrInvalidResult, queryIssued: true},
 		{name: "wrong ordinal width", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
-			rows.types[0] = fakeColumnType{name: clickhouse.TimechartOrdinalColumn, databaseType: "UInt32", scanType: reflect.TypeOf(uint32(0))}
+			rows.types[0] = fakeColumnType{name: clickhouse.TimechartOrdinalColumn, databaseType: "UInt32", scanType: reflect.TypeFor[uint32]()}
 		}, want: searchjobs.ErrInvalidResult, queryIssued: true},
 		{name: "wrong native ordinal", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
-			rows.types[0] = fakeColumnType{name: clickhouse.TimechartOrdinalColumn, databaseType: "UInt64", scanType: reflect.TypeOf(int64(0))}
+			rows.types[0] = fakeColumnType{name: clickhouse.TimechartOrdinalColumn, databaseType: "UInt64", scanType: reflect.TypeFor[int64]()}
 			rows.data[0][0] = int64(0)
 		}, want: searchjobs.ErrInvalidResult, queryIssued: true},
 		{name: "wrong array type", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
-			rows.types[2] = fakeColumnType{name: clickhouse.TimechartCountsColumn, databaseType: "Array(UInt32)", scanType: reflect.TypeOf([]uint64{})}
+			rows.types[2] = fakeColumnType{name: clickhouse.TimechartCountsColumn, databaseType: "Array(UInt32)", scanType: reflect.TypeFor[[]uint64]()}
 		}, want: searchjobs.ErrInvalidResult, queryIssued: true},
 		{name: "too few buckets", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) { rows.data = rows.data[:1] }, want: searchjobs.ErrInvalidResult, queryIssued: true},
 		{name: "too many buckets", mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
@@ -925,10 +923,10 @@ func timechartOrdinalRows(names []string, counts [][]uint64) *fakeRows {
 			clickhouse.TimechartInvalidColumn,
 		},
 		types: []driver.ColumnType{
-			fakeColumnType{name: clickhouse.TimechartOrdinalColumn, databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0))},
-			fakeColumnType{name: clickhouse.TimechartNamesColumn, databaseType: "Array(String)", scanType: reflect.TypeOf([]string{})},
-			fakeColumnType{name: clickhouse.TimechartCountsColumn, databaseType: "Array(UInt64)", scanType: reflect.TypeOf([]uint64{})},
-			fakeColumnType{name: clickhouse.TimechartInvalidColumn, databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0))},
+			fakeColumnType{name: clickhouse.TimechartOrdinalColumn, databaseType: "UInt64", scanType: reflect.TypeFor[uint64]()},
+			fakeColumnType{name: clickhouse.TimechartNamesColumn, databaseType: "Array(String)", scanType: reflect.TypeFor[[]string]()},
+			fakeColumnType{name: clickhouse.TimechartCountsColumn, databaseType: "Array(UInt64)", scanType: reflect.TypeFor[[]uint64]()},
+			fakeColumnType{name: clickhouse.TimechartInvalidColumn, databaseType: "UInt8", scanType: reflect.TypeFor[uint8]()},
 		},
 		data: make([][]any, len(counts)),
 	}
@@ -961,8 +959,8 @@ func fixedTimechartOrdinalRows(counts []uint64) *fakeRows {
 			clickhouse.TimechartCountColumn,
 		},
 		types: []driver.ColumnType{
-			fakeColumnType{name: clickhouse.TimechartOrdinalColumn, databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0))},
-			fakeColumnType{name: clickhouse.TimechartCountColumn, databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0))},
+			fakeColumnType{name: clickhouse.TimechartOrdinalColumn, databaseType: "UInt64", scanType: reflect.TypeFor[uint64]()},
+			fakeColumnType{name: clickhouse.TimechartCountColumn, databaseType: "UInt64", scanType: reflect.TypeFor[uint64]()},
 		},
 		data: make([][]any, len(counts)),
 	}
@@ -994,11 +992,11 @@ func chartPivotRows(rowDatabaseType string, rowScanType reflect.Type, names []st
 			clickhouse.ChartInvalidColumn,
 		},
 		types: []driver.ColumnType{
-			fakeColumnType{name: clickhouse.ChartOrdinalColumn, databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0))},
+			fakeColumnType{name: clickhouse.ChartOrdinalColumn, databaseType: "UInt64", scanType: reflect.TypeFor[uint64]()},
 			fakeColumnType{name: clickhouse.ChartRowColumn, databaseType: rowDatabaseType, scanType: rowScanType},
-			fakeColumnType{name: clickhouse.ChartNamesColumn, databaseType: "Array(String)", scanType: reflect.TypeOf([]string{})},
-			fakeColumnType{name: clickhouse.ChartCountsColumn, databaseType: "Array(UInt64)", scanType: reflect.TypeOf([]uint64{})},
-			fakeColumnType{name: clickhouse.ChartInvalidColumn, databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0))},
+			fakeColumnType{name: clickhouse.ChartNamesColumn, databaseType: "Array(String)", scanType: reflect.TypeFor[[]string]()},
+			fakeColumnType{name: clickhouse.ChartCountsColumn, databaseType: "Array(UInt64)", scanType: reflect.TypeFor[[]uint64]()},
+			fakeColumnType{name: clickhouse.ChartInvalidColumn, databaseType: "UInt8", scanType: reflect.TypeFor[uint8]()},
 		},
 		data: make([][]any, len(counts)),
 	}
@@ -1068,11 +1066,11 @@ func TestExecutorReconstructsSparseEventFieldsFromPresenceMetadata(t *testing.T)
 		types: []driver.ColumnType{
 			fakeColumnType{
 				name: "fields", databaseType: "JSON(max_dynamic_paths=256)",
-				scanType: reflect.TypeOf((*chcol.JSON)(nil)),
+				scanType: reflect.TypeFor[*chcol.JSON](),
 			},
 			fakeColumnType{
 				name:         clickhouse.SparseEventFieldNamesColumn,
-				databaseType: "Array(String)", scanType: reflect.TypeOf([]string{}),
+				databaseType: "Array(String)", scanType: reflect.TypeFor[[]string](),
 			},
 		},
 		data: [][]any{{document, names}},
@@ -1306,8 +1304,8 @@ func TestExecutorConvertsDriverDecimalAndDurationScanTypes(t *testing.T) {
 	rows := &fakeRows{
 		columns: []string{"amount", "elapsed"},
 		types: []driver.ColumnType{
-			fakeColumnType{name: "amount", databaseType: "Decimal(38, 5)", scanType: reflect.TypeOf(decimal.Decimal{})},
-			fakeColumnType{name: "elapsed", databaseType: "Time64(6)", scanType: reflect.TypeOf(time.Duration(0))},
+			fakeColumnType{name: "amount", databaseType: "Decimal(38, 5)", scanType: reflect.TypeFor[decimal.Decimal]()},
+			fakeColumnType{name: "elapsed", databaseType: "Time64(6)", scanType: reflect.TypeFor[time.Duration]()},
 		},
 		data: [][]any{{amount, elapsed}},
 	}
@@ -1422,7 +1420,6 @@ func TestDatabaseTypeNullableRecognizesWholeColumnWrappers(t *testing.T) {
 		{"Nullable(String) trailing", false},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.databaseType, func(t *testing.T) {
 			t.Parallel()
 			if got := databaseTypeNullable(test.databaseType); got != test.want {
@@ -1440,7 +1437,7 @@ func TestExecutorMarksLowCardinalityNullableSchema(t *testing.T) {
 			fakeColumnType{
 				name:         "service",
 				databaseType: "LowCardinality(Nullable(String))",
-				scanType:     reflect.TypeOf((*string)(nil)),
+				scanType:     reflect.TypeFor[*string](),
 				nullable:     false,
 			},
 		},
@@ -1464,7 +1461,7 @@ func TestExecutorRejectsColumnDriftAndPropagatesSinkLimit(t *testing.T) {
 	t.Parallel()
 	rows := &fakeRows{
 		columns: []string{"wrong"},
-		types:   []driver.ColumnType{fakeColumnType{name: "wrong", databaseType: "String", scanType: reflect.TypeOf("")}},
+		types:   []driver.ColumnType{fakeColumnType{name: "wrong", databaseType: "String", scanType: reflect.TypeFor[string]()}},
 	}
 	executor := mustExecutor(t, &fakeQueryConnection{rows: rows})
 	err := executor.Execute(context.Background(), clickhouse.CompiledQuery{SQL: "SELECT 1", OutputFields: []string{"expected"}}, &fakeSink{})
@@ -1474,7 +1471,7 @@ func TestExecutorRejectsColumnDriftAndPropagatesSinkLimit(t *testing.T) {
 
 	rows = &fakeRows{
 		columns: []string{"message"},
-		types:   []driver.ColumnType{fakeColumnType{name: "message", databaseType: "String", scanType: reflect.TypeOf("")}},
+		types:   []driver.ColumnType{fakeColumnType{name: "message", databaseType: "String", scanType: reflect.TypeFor[string]()}},
 		data:    [][]any{{"one"}, {"two"}},
 	}
 	sink := &fakeSink{addErr: searchjobs.ErrRowLimit}
@@ -1507,8 +1504,8 @@ func TestExecutorBuildsStatsCountSchemaFromNativeTypes(t *testing.T) {
 	rows := &fakeRows{
 		columns: []string{"host", "count"},
 		types: []driver.ColumnType{
-			fakeColumnType{name: "host", databaseType: "String", scanType: reflect.TypeOf("")},
-			fakeColumnType{name: "count", databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0))},
+			fakeColumnType{name: "host", databaseType: "String", scanType: reflect.TypeFor[string]()},
+			fakeColumnType{name: "count", databaseType: "UInt64", scanType: reflect.TypeFor[uint64]()},
 		},
 		data: [][]any{{"api", uint64(3)}},
 	}
@@ -1534,8 +1531,8 @@ func TestExecutorPublishesStatsValuesAsTypedMultivalueList(t *testing.T) {
 	rows := &fakeRows{
 		columns: []string{"service", "users"},
 		types: []driver.ColumnType{
-			fakeColumnType{name: "service", databaseType: "String", scanType: reflect.TypeOf("")},
-			fakeColumnType{name: "users", databaseType: "Array(String)", scanType: reflect.TypeOf([]string{})},
+			fakeColumnType{name: "service", databaseType: "String", scanType: reflect.TypeFor[string]()},
+			fakeColumnType{name: "users", databaseType: "Array(String)", scanType: reflect.TypeFor[[]string]()},
 		},
 		data: [][]any{{"api", []string{"10", "2", "Alice", "alice"}}},
 	}
@@ -1574,7 +1571,7 @@ func TestExecutorPublishesStatsListInOrderWithDuplicatesAndBinaryMembers(t *test
 			fakeColumnType{
 				name:         "ordered",
 				databaseType: "Array(String)",
-				scanType:     reflect.TypeOf([]string{}),
+				scanType:     reflect.TypeFor[[]string](),
 			},
 		},
 		data: [][]any{{[]string{"duplicate", invalidUTF8, "duplicate"}}},
@@ -1616,22 +1613,22 @@ func TestExecutorPublishesStatsChronologicalValuesAsCanonicalStrings(t *testing.
 			fakeColumnType{
 				name:         "earliest_number",
 				databaseType: "Dynamic",
-				scanType:     reflect.TypeOf((*any)(nil)).Elem(),
+				scanType:     reflect.TypeFor[any](),
 			},
 			fakeColumnType{
 				name:         "latest_bool",
 				databaseType: "Dynamic",
-				scanType:     reflect.TypeOf((*any)(nil)).Elem(),
+				scanType:     reflect.TypeFor[any](),
 			},
 			fakeColumnType{
 				name:         "absent",
 				databaseType: "Dynamic",
-				scanType:     reflect.TypeOf((*any)(nil)).Elem(),
+				scanType:     reflect.TypeFor[any](),
 			},
 			fakeColumnType{
 				name:         "earliest_raw",
 				databaseType: "Dynamic",
-				scanType:     reflect.TypeOf((*any)(nil)).Elem(),
+				scanType:     reflect.TypeFor[any](),
 			},
 		},
 		data: [][]any{{

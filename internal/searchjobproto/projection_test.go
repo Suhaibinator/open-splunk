@@ -123,7 +123,6 @@ func TestTimeRangePreservesIntentAndLegacyFallback(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			got, timezone, err := TimeRange(searchjobs.Job{
@@ -175,7 +174,6 @@ func TestSourceMapsEveryOriginAndRejectsInvalidShapes(t *testing.T) {
 		{name: "api", source: searchjobs.JobSource{Origin: searchjobs.JobOriginAPI}, origin: opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_API},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			got, err := Source(test.source)

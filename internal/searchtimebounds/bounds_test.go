@@ -63,7 +63,6 @@ func TestSupportsRejectsZeroAndOutOfRangeBoundsWithoutOwningOrdering(t *testing.
 		{"above maximum", minimum, maximum.Add(time.Nanosecond), false},
 		{"reversed ordering belongs to caller", maximum, minimum, true},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			if got := Supports(test.earliest, test.latest); got != test.want {

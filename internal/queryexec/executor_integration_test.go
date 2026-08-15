@@ -2182,7 +2182,6 @@ ORDER BY grid.number`,
 			{name: "inequality", filter: `search binary_values!=missing`, rows: 0},
 			{name: "presence", filter: `search binary_values=*`, rows: 0},
 		} {
-			test := test
 			t.Run("binary "+test.name, func(t *testing.T) {
 				job, page := queryIntegrationRunSearchRangeForIndex(
 					t,
@@ -2606,7 +2605,7 @@ func queryIntegrationTestFixedPercentileTimechart(
 
 	actions := queryIntegrationExplainActions(t, ctx, connection, compiled)
 	physicalStates := 0
-	for _, line := range strings.Split(actions, "\n") {
+	for line := range strings.SplitSeq(actions, "\n") {
 		if strings.Contains(line, "Function:") && strings.Contains(line, "quantilesGK") {
 			physicalStates++
 		}
@@ -2815,7 +2814,7 @@ func queryIntegrationTestFixedNumericTimechart(
 			}
 			actions := queryIntegrationExplainActions(t, ctx, connection, compiled)
 			physicalStates := 0
-			for _, line := range strings.Split(actions, "\n") {
+			for line := range strings.SplitSeq(actions, "\n") {
 				if strings.Contains(line, "Function:") &&
 					strings.Contains(line, test.physicalAggregate) {
 					physicalStates++
@@ -3838,7 +3837,7 @@ func queryIntegrationNativeAddress(t *testing.T, ctx context.Context, container 
 	if err != nil {
 		t.Fatalf("resolve native port: %v: %s", err, output)
 	}
-	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(string(output)), "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "127.0.0.1:") {
 			return line

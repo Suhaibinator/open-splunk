@@ -61,7 +61,6 @@ func TestStatsSparklineBucketSpecAutomaticDefaultSteps(t *testing.T) {
 		{"seven days selects one day", 7 * 24 * time.Hour, plan.SparklineSpanUnitDay, 1},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			earliest := time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC)
@@ -235,7 +234,6 @@ func TestStatsSparklineBucketSpecRejectsForgedMetadata(t *testing.T) {
 		{"invalid timezone", plan.SparklineSpan{Kind: plan.SparklineSpanKindAutomatic}, 100, `"_time"`},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			timezone := "UTC"
@@ -289,7 +287,6 @@ func TestStatsSparklineWindowAggregateSQL(t *testing.T) {
 		{"range", plan.AggregateFunctionRange, numeric, `maxOrNullArray("numeric_values")` + over + ` - minOrNullArray("numeric_values")` + over, statsSparklineInputFloat64Array, statsSparklineResultNullableFloat64, false},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			got, ok := statsSparklineWindowAggregateSQL(test.function, test.input, partition)

@@ -30,9 +30,9 @@ func TestStatsByFixedMultivaluePublishesStringOrBytesCells(t *testing.T) {
 			descriptors[0].SemanticBytesColumn(),
 		),
 		types: []driver.ColumnType{
-			fakeColumnType{name: "members", databaseType: "String", scanType: reflect.TypeOf("")},
-			fakeColumnType{name: "count", databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0))},
-			fakeColumnType{name: descriptors[0].SemanticBytesColumn(), databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0))},
+			fakeColumnType{name: "members", databaseType: "String", scanType: reflect.TypeFor[string]()},
+			fakeColumnType{name: "count", databaseType: "UInt64", scanType: reflect.TypeFor[uint64]()},
+			fakeColumnType{name: descriptors[0].SemanticBytesColumn(), databaseType: "UInt8", scanType: reflect.TypeFor[uint8]()},
 		},
 		data: [][]any{
 			{"valid", uint64(1), uint8(0)},
@@ -83,9 +83,9 @@ func TestStatsByStringOrBytesTransportRejectsPhysicalTypeDrift(t *testing.T) {
 			descriptors[0].SemanticBytesColumn(),
 		),
 		types: []driver.ColumnType{
-			fakeColumnType{name: "members", databaseType: "Nullable(String)", scanType: reflect.TypeOf((*string)(nil)), nullable: true},
-			fakeColumnType{name: "count", databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0))},
-			fakeColumnType{name: descriptors[0].SemanticBytesColumn(), databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0))},
+			fakeColumnType{name: "members", databaseType: "Nullable(String)", scanType: reflect.TypeFor[*string](), nullable: true},
+			fakeColumnType{name: "count", databaseType: "UInt64", scanType: reflect.TypeFor[uint64]()},
+			fakeColumnType{name: descriptors[0].SemanticBytesColumn(), databaseType: "UInt8", scanType: reflect.TypeFor[uint8]()},
 		},
 	}
 	err := mustExecutor(t, &fakeQueryConnection{rows: rows}).Execute(

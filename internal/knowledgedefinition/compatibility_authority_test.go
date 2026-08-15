@@ -17,7 +17,6 @@ func TestCompatibilityV0_1DefinitionAuthorities(t *testing.T) {
 		}, func(t *testing.T) {
 			t.Run("body-family-contract", TestNormalizeBodyFamiliesAndStructuralBounds)
 			for _, root := range append(eventfields.ReservedDynamicRootNames(), "__OS_future_private") {
-				root := root
 				t.Run(root, func(t *testing.T) {
 					definition := proto.Clone(validAliasDefinition()).(*opensplunkv1.KnowledgeObjectDefinition)
 					definition.GetFieldAlias().DestinationField = root + ".child"

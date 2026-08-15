@@ -38,7 +38,6 @@ func TestCollectorGRPCServerOptionsRequireExplicitSafeTransport(t *testing.T) {
 			Address: "127.0.0.1:8443", TLSCertFile: "server.crt",
 		},
 	} {
-		config := config
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			if _, err := collectorGRPCServerOptions(config); err == nil {
@@ -61,7 +60,6 @@ func TestOpenCollectorServerRejectsIncompleteConfigurationBeforeListening(t *tes
 		"invalid address":           {Address: "not-an-address", Insecure: true},
 		"missing service":           {Address: "127.0.0.1:0", Insecure: true},
 	} {
-		config := config
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			candidate := opensplunkv1.CollectorIngestServiceServer(service)

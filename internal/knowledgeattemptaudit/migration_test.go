@@ -834,7 +834,7 @@ func scrubKnowledgeAttemptAuditIntendedDeltas(
 
 func normalizeKnowledgeAttemptAuditSchemaSQL(schemaSQL string) string {
 	var tokens []string
-	for _, line := range strings.Split(schemaSQL, "\n") {
+	for line := range strings.SplitSeq(schemaSQL, "\n") {
 		if beforeComment, _, found := strings.Cut(line, "--"); found {
 			line = beforeComment
 		}

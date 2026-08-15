@@ -222,7 +222,6 @@ func TestSearchSuggestionsAllowsEmptyAndPartialSPL(t *testing.T) {
 		{name: "unicode byte cursor", source: "😀 | fields ho", cursor: uint64(len("😀 | fields ho"))},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			service := &fakeSearchSuggestions{maximum: 10}
@@ -299,7 +298,6 @@ func TestSearchSuggestionsRejectsInvalidCursorSourceAndMetadata(t *testing.T) {
 		}},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			service := &fakeSearchSuggestions{maximum: 10}
@@ -346,7 +344,6 @@ func TestSearchSuggestionsSharesIndexAuthorizationAndSanitizesCatalogFailures(t 
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			service := &fakeSearchSuggestions{maximum: 10}
@@ -397,7 +394,6 @@ func TestSearchSuggestionsMapsServiceErrorsWithoutLeakingDetails(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			service := &fakeSearchSuggestions{maximum: 10, err: test.err}
@@ -683,7 +679,6 @@ func TestSearchSuggestionsRejectsForgedOrUnboundedServiceResults(t *testing.T) {
 		}},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			result := searchsuggestions.Result{Suggestions: []spl.Suggestion{validSuggestion}}

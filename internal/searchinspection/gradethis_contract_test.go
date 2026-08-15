@@ -294,7 +294,6 @@ func TestGradeThisSummarizeInspectionPlan(t *testing.T) {
 	)
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -337,7 +336,6 @@ func TestGradeThisValidateInspectionSummaryExactCorpus(t *testing.T) {
 		t.Fatal("GradeThis physical-plan contract does not cover the corpus")
 	}
 	for _, search := range searches {
-		search := search
 		t.Run(string(search.ID), func(t *testing.T) {
 			t.Parallel()
 
@@ -505,7 +503,6 @@ func TestGradeThisValidateInspectionSummaryRejectsDrift(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

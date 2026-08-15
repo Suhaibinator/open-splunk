@@ -89,7 +89,6 @@ func TestCompileStatsSparklineAllDocumentedFunctionsAndSpans(t *testing.T) {
 		{"range", `range(value)`, `maxOrNullArray(`},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			span := ",30m"

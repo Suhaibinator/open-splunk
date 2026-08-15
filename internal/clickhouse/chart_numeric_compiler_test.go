@@ -47,7 +47,6 @@ func TestCompileNumericChartUsesOneScopedScanAndMergeablePerCellStates(t *testin
 			forbidden: `avg("__os_ch_measure_value")`,
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

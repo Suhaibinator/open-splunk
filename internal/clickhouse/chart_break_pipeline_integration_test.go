@@ -280,7 +280,6 @@ func TestChartBreakPipelineAgainstClickHouse(t *testing.T) {
 			},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			compiled := compile(test.source)
 			got := chartBreakPipelineTransport(t, ctx, connection, compiled)
@@ -303,7 +302,6 @@ func TestChartBreakPipelineAgainstClickHouse(t *testing.T) {
 	// field measure retains ineligible rows for independent column validation.
 	t.Run("flattened object parent row axis fails atomically", func(t *testing.T) {
 		for _, aggregate := range []string{"count", "count(path)", "sum(path)"} {
-			aggregate := aggregate
 			t.Run(aggregate, func(t *testing.T) {
 				source := fmt.Sprintf(
 					`index=chartpipe source="pipe-object" | chart %s OVER obj BY level`,

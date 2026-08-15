@@ -41,7 +41,6 @@ func TestBuildStreamStatsChronologicalProducesResolvedOperators(t *testing.T) {
 			groups:     []string{"service"},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -162,7 +161,6 @@ func TestBuildStreamStatsChronologicalRejectsForgedASTMetadata(t *testing.T) {
 		{name: "earliest", function: spl.AggregateFunctionEarliest},
 		{name: "latest", function: spl.AggregateFunctionLatest},
 	} {
-		testFunction := testFunction
 		for _, test := range []struct {
 			name   string
 			mutate func(*spl.StatsAggregate)
@@ -173,7 +171,6 @@ func TestBuildStreamStatsChronologicalRejectsForgedASTMetadata(t *testing.T) {
 			{"percentile metadata", func(aggregate *spl.StatsAggregate) { aggregate.Percentile = 95 }},
 			{"forged default", func(aggregate *spl.StatsAggregate) { aggregate.Alias = testFunction.name + "(other)" }},
 		} {
-			test := test
 			t.Run(testFunction.name+"/"+test.name, func(t *testing.T) {
 				t.Parallel()
 
@@ -214,7 +211,6 @@ func TestStreamStatsChronologicalPlanContractRejectsForgery(t *testing.T) {
 		{name: "earliest", function: AggregateFunctionEarliest},
 		{name: "latest", function: AggregateFunctionLatest},
 	} {
-		testFunction := testFunction
 		t.Run(testFunction.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -257,7 +253,6 @@ func TestStreamStatsChronologicalPlanContractRejectsForgery(t *testing.T) {
 				{"predicate", func(operator *StreamAggregate) { operator.Measure.Predicate = &ComparisonExpression{} }},
 				{"percentile", func(operator *StreamAggregate) { operator.Measure.Percentile = 50 }},
 			} {
-				test := test
 				t.Run(test.name, func(t *testing.T) {
 					t.Parallel()
 

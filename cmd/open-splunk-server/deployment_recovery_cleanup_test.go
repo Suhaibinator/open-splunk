@@ -80,7 +80,6 @@ func TestDeleteDeploymentRecoveryArchiveFlagContract(t *testing.T) {
 			"-confirm-archive-name", "fedcba9876543210fedcba9876543210.tar.zst",
 		},
 	} {
-		name, arguments := name, arguments
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
@@ -126,7 +125,6 @@ func TestDeleteDeploymentRecoveryArchiveRequiresExactClickHouseUID(t *testing.T)
 	t.Parallel()
 
 	for _, effectiveUID := range []int{0, 65532, deploymentRecoveryArchiveUID + 1} {
-		effectiveUID := effectiveUID
 		t.Run(fmt.Sprintf("uid-%d", effectiveUID), func(t *testing.T) {
 			t.Parallel()
 
@@ -160,7 +158,6 @@ func TestDeleteDeploymentRecoveryArchiveRequiresExactClickHouseGID(t *testing.T)
 	t.Parallel()
 
 	for _, effectiveGID := range []int{0, 101, deploymentRecoveryArchiveGID + 1} {
-		effectiveGID := effectiveGID
 		t.Run(fmt.Sprintf("gid-%d", effectiveGID), func(t *testing.T) {
 			t.Parallel()
 
@@ -268,7 +265,6 @@ func TestDeleteDeploymentRecoveryArchiveRejectsContextAndDependencyFailures(
 			effectiveGID: validDependencies.effectiveGID,
 		},
 	} {
-		name, dependencies := name, dependencies
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 

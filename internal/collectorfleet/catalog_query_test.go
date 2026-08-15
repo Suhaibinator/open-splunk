@@ -425,7 +425,6 @@ func TestCollectorCatalogStateFiltersAreExactAndUnioned(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			request := normalizedListRequest{
 				tenantID:     "tenant-a",
@@ -517,7 +516,6 @@ func TestCollectorCatalogDisplayNameCursorMatchesSQLiteNullOrdering(
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			request := normalizedListRequest{
 				tenantID:  "tenant-a",
@@ -632,9 +630,7 @@ func TestCollectorCatalogUnfilteredSortsUseCompositeIndexes(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		for _, withCursor := range []bool{false, true} {
-			withCursor := withCursor
 			name := string(test.sortBy) + "/" + string(test.direction)
 			if withCursor {
 				name += "/cursor"

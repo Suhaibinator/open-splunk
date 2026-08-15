@@ -451,16 +451,16 @@ func TestUnknownOrMalformedLowerLevelIssuesFailClosed(t *testing.T) {
 }
 
 func TestIssuePublicShapeCarriesNoObjectOrCatalogAuthority(t *testing.T) {
-	typeOfIssue := reflect.TypeOf(Issue{})
+	typeOfIssue := reflect.TypeFor[Issue]()
 	want := []struct {
 		name   string
 		typeOf reflect.Type
 	}{
-		{name: "FieldPath", typeOf: reflect.TypeOf("")},
-		{name: "Code", typeOf: reflect.TypeOf(IssueCode(""))},
-		{name: "Message", typeOf: reflect.TypeOf("")},
-		{name: "Range", typeOf: reflect.TypeOf((*ScalarRange)(nil))},
-		{name: "Suggestions", typeOf: reflect.TypeOf([]string(nil))},
+		{name: "FieldPath", typeOf: reflect.TypeFor[string]()},
+		{name: "Code", typeOf: reflect.TypeFor[IssueCode]()},
+		{name: "Message", typeOf: reflect.TypeFor[string]()},
+		{name: "Range", typeOf: reflect.TypeFor[*ScalarRange]()},
+		{name: "Suggestions", typeOf: reflect.TypeFor[[]string]()},
 	}
 	if typeOfIssue.NumField() != len(want) {
 		t.Fatalf("Issue has %d fields, want %d", typeOfIssue.NumField(), len(want))

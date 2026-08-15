@@ -103,7 +103,6 @@ func TestCompileEventStatsPercentileUsesGroupedLeftJoinAndCanonicalLevels(
 		{name: "median", function: "perc50", literal: "0.5"},
 		{name: "maximum", function: "p99", literal: "0.99"},
 	} {
-		test := test
 		testingT.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

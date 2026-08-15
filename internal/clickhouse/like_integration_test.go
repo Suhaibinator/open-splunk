@@ -75,7 +75,6 @@ func testLikeAgainstClickHouse(
 		{name: "object", where: `like(object, "%error%")`, want: 0},
 		{name: "binary", where: `like(binary, "%error%")`, want: 0},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			compiled := compile(
 				`index=like event_id="like-scalars" | where ` + test.where + ` | stats count`,

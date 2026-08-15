@@ -251,7 +251,6 @@ func TestCompileStatsCountEvalRejectsForgedPlans(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			logical := buildPlan(t, `index=gradethis | stats count`)
@@ -307,7 +306,6 @@ func TestCompileStatsCountEvalRejectsForgedPredicateComplexity(t *testing.T) {
 		{name: "depth", predicate: deep},
 		{name: "shared DAG expansion", predicate: sharedDAG},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			logical := buildPlan(t, `index=gradethis | stats count`)

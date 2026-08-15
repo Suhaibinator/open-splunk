@@ -58,7 +58,6 @@ func TestCompileStrftimeFormatAcceptsBoundedLocaleStableSubset(t *testing.T) {
 			directives:  []Directive{DirectiveHour24, DirectiveMinute},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

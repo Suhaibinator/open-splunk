@@ -116,7 +116,6 @@ func TestDeleteAttestedArchiveRejectsInvalidRootAndName(t *testing.T) {
 			ArchiveOwnership:     policy,
 		},
 	} {
-		name, options := name, options
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
@@ -131,7 +130,6 @@ func TestDeleteAttestedArchiveRejectsUnsafeExistingObject(t *testing.T) {
 	t.Parallel()
 
 	for name, create := range unsafeArchiveFixtures() {
-		name, create := name, create
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
@@ -168,7 +166,6 @@ func TestDeleteAttestedArchiveRejectsOwnershipMismatch(t *testing.T) {
 			policy.File.GID = mismatchedArchiveTestID(policy.File.GID)
 		},
 	} {
-		name, mutate := name, mutate
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
@@ -197,7 +194,6 @@ func TestDeleteAttestedArchiveRejectsExtendedACL(t *testing.T) {
 	t.Parallel()
 
 	for _, target := range []string{"root", "archive"} {
-		target := target
 		t.Run(target, func(t *testing.T) {
 			t.Parallel()
 

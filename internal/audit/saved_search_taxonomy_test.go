@@ -111,7 +111,6 @@ func TestSavedSearchAuditActorPolicyIsActionSpecific(t *testing.T) {
 		},
 	}
 	for _, actorCase := range actors {
-		actorCase := actorCase
 		t.Run(actorCase.name, func(t *testing.T) {
 			t.Parallel()
 			for _, eventCase := range []struct {

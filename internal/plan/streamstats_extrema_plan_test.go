@@ -42,7 +42,6 @@ func TestBuildStreamStatsExtremaProduceResolvedRowPreservingOperators(t *testing
 			input:  "value", output: "prior_max", windowRows: 2, groups: []string{"service"},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -103,7 +102,6 @@ func TestBuildStreamStatsExtremaPreserveReplacementAndCanonicalTime(t *testing.T
 			replacedTimeSource: `index=gradethis | streamstats max(value) AS _time | timechart span=5m count BY level`,
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -137,7 +135,6 @@ func TestBuildStreamStatsExtremaProtectOpenFieldsPayload(t *testing.T) {
 		{name: "minimum", functionName: "min", alias: "low"},
 		{name: "maximum", functionName: "max", alias: "high"},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -204,7 +201,6 @@ func TestBuildStreamStatsMaximumRejectsForgedASTMetadata(t *testing.T) {
 			aggregate.Alias, aggregate.ExplicitAlias = "__os_streamstats_private", true
 		}, "SPL_RESERVED_FIELD"},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			aggregate := valid
@@ -230,7 +226,6 @@ func TestAnalyzeStreamStatsExtremaAcceptOnlyCanonicalContracts(t *testing.T) {
 			otherOutput: "min(value)", otherFieldOutput: "max(other)",
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

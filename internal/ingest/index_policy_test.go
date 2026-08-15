@@ -80,7 +80,6 @@ func TestCollectAppliesEachPerIndexLimitToOnlyThatIndex(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			tight := validTestEvent("event-tight", "tight")
@@ -451,7 +450,6 @@ func TestCollectMutableIndexAuthorityFailureBlocksHeartbeatBeforePersistence(t *
 		{name: "no active index", err: ErrNoActiveIndexAuthority, wantCode: codes.Unauthenticated},
 		{name: "invalid index policy", err: ErrInvalidIndexAuthority, wantCode: codes.Unavailable},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -526,7 +524,6 @@ func TestValidatorDefaultSourcetypeNeverMutatesInputAndPreservesExplicitValue(t 
 		{name: "omitted", got: "", want: "policy:json"},
 		{name: "explicit", got: "explicit:type", want: "explicit:type"},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			event := validTestEvent("event-"+test.name, "main")
@@ -623,7 +620,6 @@ func TestNewServiceValidatesDefaultIndexRetention(t *testing.T) {
 		"submillisecond":       time.Nanosecond,
 		"past storage horizon": 8_000_000_000 * time.Second,
 	} {
-		name, retention := name, retention
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			config := withTestSessionManager(testServiceConfig(), authorizer)
@@ -758,7 +754,6 @@ func TestCollectDurableRetryPrecedesMutableIndexAuthorityFailure(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -926,7 +921,6 @@ func TestCollectPendingRetryPrecedesMutableIndexAuthorityFailure(t *testing.T) {
 	t.Parallel()
 
 	for _, authorityErr := range []error{ErrNoActiveIndexAuthority, ErrInvalidIndexAuthority} {
-		authorityErr := authorityErr
 		t.Run(authorityErr.Error(), func(t *testing.T) {
 			t.Parallel()
 
@@ -1006,7 +1000,6 @@ func TestCollectFatalOrMalformedLeaseAuthorizationNeverLooksUpDurableBatch(t *te
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -1106,7 +1099,6 @@ func TestProcessBatchDeferredIndexAuthorityMasksEveryUnprovenDurableOutcome(t *t
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -1172,7 +1164,6 @@ func TestCollectFailsClosedForInvalidAdmittedIndexPolicies(t *testing.T) {
 		"malformed sourcetype":   {{Name: "main", Version: 1, RetentionPeriod: time.Hour, DefaultSourcetype: " surrounding "}},
 	}
 	for name, policies := range tests {
-		name, policies := name, policies
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			authorizer := AuthorizerFunc(func(context.Context, string) (Authorization, error) {

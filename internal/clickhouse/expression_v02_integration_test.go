@@ -483,7 +483,6 @@ func TestExpressionV02AgainstClickHouse(t *testing.T) {
 			},
 		}
 		for _, fixture := range arithmeticSources {
-			fixture := fixture
 			t.Run(fixture.name+" arithmetic", func(t *testing.T) {
 				compiled := compile(fixture.source)
 				assertPhysicalContract(t, fixture.name+" maximum arithmetic", compiled)

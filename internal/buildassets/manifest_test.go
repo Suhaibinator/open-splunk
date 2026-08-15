@@ -318,7 +318,6 @@ func TestGenerateRejectsInputsGoEmbedWouldOmit(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			fixture := cloneFixture(validFixture())
@@ -371,7 +370,6 @@ func TestGenerateBindsEachComponentWithoutCrossComponentDrift(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			fixture := cloneFixture(validFixture())
@@ -520,7 +518,6 @@ func TestGenerateRejectsInvalidOrIncompleteInputs(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			fixture := cloneFixture(validFixture())
@@ -640,7 +637,6 @@ func TestValidateRejectsTamperingMissingAndExtraFiles(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			fixture := cloneFixture(baselineFiles)
@@ -698,7 +694,6 @@ func TestUnmarshalRejectsUnknownNoncanonicalAndTrailingData(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			if _, err := Unmarshal(test.input); err == nil {

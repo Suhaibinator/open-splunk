@@ -141,8 +141,8 @@ func v02FuzzDiagnostic(t *testing.T, err error) *Diagnostic {
 
 func v02FuzzValidateNodeRanges(t *testing.T, source string, root Node) {
 	t.Helper()
-	nodeType := reflect.TypeOf((*Node)(nil)).Elem()
-	rangeType := reflect.TypeOf(Range{})
+	nodeType := reflect.TypeFor[Node]()
+	rangeType := reflect.TypeFor[Range]()
 	seen := make(map[uintptr]struct{})
 	var walk func(reflect.Value)
 	walk = func(value reflect.Value) {
@@ -181,8 +181,8 @@ func v02FuzzValidateNodeRanges(t *testing.T, source string, root Node) {
 		}
 		switch value.Kind() {
 		case reflect.Struct:
-			for index := 0; index < value.NumField(); index++ {
-				walk(value.Field(index))
+			for _, field := range value.Fields() {
+				walk(field)
 			}
 		case reflect.Slice, reflect.Array:
 			for index := 0; index < value.Len(); index++ {
@@ -513,7 +513,6 @@ var benchmarkParseV02Query *Query
 
 func BenchmarkParseV02ArithmeticOperators(b *testing.B) {
 	for _, operators := range []int{1, 32, 128, MaximumArithmeticOperatorsPerQuery} {
-		operators := operators
 		b.Run(fmt.Sprintf("operators_%03d", operators), func(b *testing.B) {
 			source := `| eval value=` + strings.Repeat(`1+`, operators) + `1`
 			if _, err := Parse(source); err != nil {
@@ -535,7 +534,6 @@ func BenchmarkParseV02ArithmeticOperators(b *testing.B) {
 
 func BenchmarkParseV02MembershipCandidates(b *testing.B) {
 	for _, candidates := range []int{1, 8, 16, MaximumMembershipCandidates} {
-		candidates := candidates
 		b.Run(fmt.Sprintf("candidates_%02d", candidates), func(b *testing.B) {
 			list := strings.TrimSuffix(strings.Repeat(`1,`, candidates), `,`)
 			source := `| where value IN (` + list + `)`

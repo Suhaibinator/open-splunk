@@ -26,7 +26,6 @@ func TestCompileArithmeticV02NormalizesFixedOperandsAndOperators(t *testing.T) {
 		{name: "remainder", op: plan.ScalarBinaryOpRemainder, required: "moduloOrNull(", normalizes: true},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			state := expressionV02CompilerTestState(nil)
@@ -128,7 +127,6 @@ func TestCompileArithmeticV02RejectsFixedTypes(t *testing.T) {
 		{name: "multivalue", value: compiledScalar{valueSQL: "value", existsSQL: "1", kind: fieldKindStringArray}},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := normalizeArithmeticOperand(test.value, plan.FieldRef{}.Range)
@@ -231,7 +229,6 @@ func TestCompileMembershipV02EveryPredicateConsumer(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			compiled := compileSPL(t, test.source)
@@ -425,7 +422,6 @@ func TestExpressionV02RoundingPreservesIEEEComparisonSemantics(t *testing.T) {
 	t.Parallel()
 
 	for _, function := range []string{"round", "ceil", "floor"} {
-		function := function
 		t.Run(function, func(t *testing.T) {
 			t.Parallel()
 			compiled := compileSPL(
@@ -548,7 +544,6 @@ func TestCompileExpressionV02TerminalConsumersRetainAtomicResult(t *testing.T) {
 				` | timechart span=5m avg(weighted) AS mean`,
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -583,7 +578,6 @@ func TestCompileExpressionV02MaximumAuthoredShapesStayWithinSQLBudget(t *testing
 			source: expressionV02MembershipBenchmarkSource(32),
 		},
 	} {
-		fixture := fixture
 		t.Run(fixture.name, func(t *testing.T) {
 			t.Parallel()
 			compiled := compileSPL(t, fixture.source)

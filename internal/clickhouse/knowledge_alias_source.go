@@ -129,11 +129,12 @@ func (authority storedPathAuthority) isZero() bool {
 }
 
 func (authority storedPathAuthority) valueSQL() string {
-	value := quoteIdentifier(internalFieldsColumn)
+	var value strings.Builder
+	value.WriteString(quoteIdentifier(internalFieldsColumn))
 	for _, segment := range authority.physicalSegments {
-		value += "." + quoteIdentifier(segment)
+		value.WriteString("." + quoteIdentifier(segment))
 	}
-	return value
+	return value.String()
 }
 
 type compiledKnowledgeAliasSourceProof struct {
@@ -700,12 +701,13 @@ func knowledgeAliasMaterializedDynamicSQL(
 	fieldsSQL string,
 	physicalSegmentSQL []string,
 ) string {
-	raw := "JSONExtractRaw(toJSONString(" + fieldsSQL + ")"
+	var raw strings.Builder
+	raw.WriteString("JSONExtractRaw(toJSONString(" + fieldsSQL + ")")
 	for _, segmentSQL := range physicalSegmentSQL {
-		raw += ", " + segmentSQL
+		raw.WriteString(", " + segmentSQL)
 	}
-	raw += ")"
-	return "CAST(JSONExtract(ifNull(" + raw +
+	raw.WriteString(")")
+	return "CAST(JSONExtract(ifNull(" + raw.String() +
 		", CAST('' AS String)), 'Map(String, Dynamic)') AS Dynamic)"
 }
 

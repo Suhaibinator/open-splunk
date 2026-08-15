@@ -96,7 +96,6 @@ func TestParseStoredFieldNamesValidatesWholePresenceSet(t *testing.T) {
 		{"reserved root", []string{"tenant_id"}},
 		{"ancestor collision", []string{"a", "a.b"}},
 	} {
-		invalid := invalid
 		t.Run(invalid.name, func(t *testing.T) {
 			t.Parallel()
 			if _, err := ParseStoredFieldNames(invalid.names); err == nil {

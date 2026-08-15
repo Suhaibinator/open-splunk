@@ -333,12 +333,12 @@ type pinnedCleanupFile struct {
 
 func closePinnedCleanupFiles(files []pinnedCleanupFile) error {
 	var result error
-	for index := len(files) - 1; index >= 0; index-- {
-		if files[index].file == nil {
+	for _, v := range slices.Backward(files) {
+		if v.file == nil {
 			continue
 		}
-		result = errors.Join(result, files[index].file.Close())
-		files[index].file = nil
+		result = errors.Join(result, v.file.Close())
+		v.file = nil
 	}
 	return result
 }

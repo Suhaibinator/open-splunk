@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -88,7 +89,6 @@ func TestValidateAndNormalizeEventRejectsCanonicalFieldInjection(t *testing.T) {
 	names := append(eventfields.ReservedDynamicRootNames(), "__Os_Private")
 	for _, canonical := range names {
 		for _, name := range []string{canonical, strings.ToUpper(canonical)} {
-			name := name
 			t.Run(name, func(t *testing.T) {
 				event := validTestEvent("event-1", "main")
 				event.Fields.Fields = append(event.Fields.Fields, stringField(name, "forged"))
@@ -139,7 +139,6 @@ func TestValidateAndNormalizeEventValidatesNextSourceLine(t *testing.T) {
 		{name: "equal", line: proto.Uint64(3), next: 3},
 		{name: "exhausted", line: proto.Uint64(math.MaxUint64 - 1), next: math.MaxUint64},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			event := validTestEvent("event-"+strings.ReplaceAll(test.name, " ", "-"), "main")
 			event.Origin = &opensplunkv1.EventOrigin{
@@ -519,7 +518,6 @@ func TestValidateAndNormalizeEventRawRedactionCoversMandatoryFieldVariants(t *te
 
 	v := newTestValidator(t, DefaultLimits())
 	for _, field := range mandatorySensitiveFields {
-		field := field
 		for _, spelling := range []string{
 			field,
 			strings.ReplaceAll(field, "_", "-"),
@@ -527,7 +525,6 @@ func TestValidateAndNormalizeEventRawRedactionCoversMandatoryFieldVariants(t *te
 			strings.ReplaceAll(field, "_", " "),
 			camelCaseSensitiveField(field),
 		} {
-			spelling := spelling
 			t.Run(field+"/"+spelling, func(t *testing.T) {
 				t.Parallel()
 				secret := "secret-for-" + strings.ReplaceAll(field, "_", "-")
@@ -627,7 +624,6 @@ func TestValidateAndNormalizeEventRawRedactionMatchesStructuredNameSemantics(t *
 		{name: "prefixed private key pair", key: "tlsprivate_key", value: "-----BEGIN PRIVATE KEY-----\nprefixed-private-pair-secret\n-----END PRIVATE KEY-----", secret: "prefixed-private-pair-secret"},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			secret := test.secret
@@ -669,7 +665,6 @@ func TestValidateAndNormalizeEventRawRedactionNormalizesConfiguredSeparators(t *
 		t.Fatal(err)
 	}
 	for _, key := range []string{"customer/credential", "customer\tcredential", "customer@credential", "customer—credential"} {
-		key := key
 		t.Run(key, func(t *testing.T) {
 			t.Parallel()
 			event := validTestEvent("event-separator", "main")
@@ -1188,7 +1183,6 @@ func TestValidateAndNormalizeEventCanonicalizesDuplicateJSONKeys(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			event := validTestEvent("event-duplicate-json", "main")
@@ -1446,8 +1440,8 @@ func amplifiedFieldMetadataObject(parentNames []string, leafCount int) *opensplu
 		leaves[index] = stringField(fmt.Sprintf("f%04d", index), "value")
 	}
 	nested := object(leaves...)
-	for index := len(parentNames) - 1; index >= 0; index-- {
-		nested = object(objectField(parentNames[index], nested))
+	for _, v := range slices.Backward(parentNames) {
+		nested = object(objectField(v, nested))
 	}
 	return nested
 }

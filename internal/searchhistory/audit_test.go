@@ -353,7 +353,6 @@ func TestSearchAttemptAuditConcurrentConflictingAdmissionsAppendOnce(t *testing.
 	results := make(chan admissionResult, len(entries))
 	var wait sync.WaitGroup
 	for _, entry := range entries {
-		entry := entry
 		wait.Go(func() {
 			<-start
 			admitted, err := store.BeginAttempt(

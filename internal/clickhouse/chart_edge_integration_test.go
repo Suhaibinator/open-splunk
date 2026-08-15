@@ -616,7 +616,7 @@ func chartEdgeInvalid(
 func chartEdgeSum(t *testing.T, counts string) string {
 	t.Helper()
 	total := 0
-	for _, cell := range strings.Split(counts, "|") {
+	for cell := range strings.SplitSeq(counts, "|") {
 		var value int
 		if _, err := fmt.Sscanf(cell, "%d", &value); err != nil {
 			t.Fatalf("chart cell %q is not a number: %v", cell, err)

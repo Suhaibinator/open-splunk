@@ -313,7 +313,6 @@ func TestCollectorWALAdvancedRequiresNewOrGrowingDurableFile(t *testing.T) {
 		{name: "new empty", after: map[string]int64{"segment-2.wal": 0}},
 		{name: "new durable file", after: map[string]int64{"segment-2.wal": 1}, want: true},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			if got := collectorWALAdvanced(before, test.after); got != test.want {
@@ -350,7 +349,6 @@ func TestManagedProcessWaitDistinguishesExitAndTimeout(t *testing.T) {
 			want:    errManagedProcessWaitTimeout,
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			if err := test.process.Wait(test.timeout); !errors.Is(err, test.want) {
@@ -414,7 +412,6 @@ func TestRunCommandWithBoundedOutputBoundaries(t *testing.T) {
 		{name: "failure", mode: "failure", wantError: true, wantLength: len("stdoutstderr")},
 		{name: "exact limit", mode: "exact", wantLength: maximum},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			command := exec.CommandContext(context.Background(), os.Args[0], "-test.run=^TestHarnessOutputEmitter$")

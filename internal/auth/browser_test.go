@@ -44,7 +44,6 @@ func TestNewBearerTokenAuthenticatorAcceptsExactBounds(t *testing.T) {
 			ownerID:  "owner",
 		},
 	} {
-		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -136,7 +135,6 @@ func TestNewBearerTokenAuthenticatorRejectsInvalidSecrets(t *testing.T) {
 		{name: "leading padding", token: []byte("=" + browserTestToken)},
 		{name: "embedded padding", token: []byte(browserTestToken + "=a")},
 	} {
-		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -198,7 +196,6 @@ func TestNewBearerTokenAuthenticatorRejectsNonCanonicalIdentityAndRole(t *testin
 		{name: "invalid role", tenantID: "tenant", ownerID: "owner", role: BrowserRoleInvalid},
 		{name: "unknown role", tenantID: "tenant", ownerID: "owner", role: BrowserRole(255)},
 	} {
-		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -237,7 +234,6 @@ func TestBearerTokenAuthenticatorAuthenticatesAdministratorAndOrdinaryUser(t *te
 		{name: "administrator", role: BrowserRoleAdministrator, administrator: true},
 		{name: "ordinary user", role: BrowserRoleUser},
 	} {
-		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -293,7 +289,6 @@ func TestBearerTokenAuthenticatorRejectsEveryInvalidCredentialAsUnauthorized(t *
 		{name: "malformed padding", token: []byte(browserTestToken + "=x")},
 		{name: "malformed binary", token: append([]byte(browserTestToken), 0xff)},
 	} {
-		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 

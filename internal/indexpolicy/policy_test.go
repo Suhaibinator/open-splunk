@@ -43,7 +43,6 @@ func TestValidateRetentionAtRejectsStorageIncompatibleValues(t *testing.T) {
 		"zero reference":       {value: time.Hour},
 	}
 	for name, test := range tests {
-		name, test := name, test
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			if err := ValidateRetentionAt(test.value, test.reference, test.allowZero); err == nil {

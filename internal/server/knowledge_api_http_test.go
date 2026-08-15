@@ -589,7 +589,6 @@ func TestKnowledgeHTTPTestRouterServesExistingEightManagementHandlers(
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			response := knowledgeHTTPPost(t, httpHandler, test.path, test.request)
 			if response.Code != http.StatusOK {
@@ -788,7 +787,6 @@ func TestKnowledgeHTTPDefinitiveErrorMappingAndConflictBodyUniformity(
 	}
 	const uniformConflictBody = "{\"error\":{\"message\":\"knowledge request conflicts with current state\"}}\n"
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			err := test.operationErr
@@ -1011,7 +1009,6 @@ func TestKnowledgeHTTPRejectsAuthorizedErrorContextUnboundFromRequest(
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			appender := &knowledgeBoundaryAppender{}
@@ -1125,7 +1122,6 @@ func TestKnowledgeHTTPAllowsIdempotencyConflictReceiptContextWithinScope(
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			appender := &knowledgeBoundaryAppender{}
@@ -1193,7 +1189,6 @@ func TestKnowledgeHTTPRefinesOnlyValidatedSemanticActions(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			rejection := knowledgecatalog.WithErrorDisposition(
@@ -1259,7 +1254,6 @@ func TestKnowledgeHTTPAppScopeFailuresCloseBeforeService(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			apps := &knowledgeHTTPAppCatalog{result: test.result, err: test.err}
@@ -1351,7 +1345,6 @@ func TestKnowledgeHTTPListPreflightPinsCatalogRequestBounds(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			catalog := &knowledgeHTTPCatalog{listFn: func(
@@ -1431,7 +1424,6 @@ func TestKnowledgeHTTPCommittedAndIndeterminateMutationErrorsAreNeverRejected(
 		{name: "missing disposition is indeterminate"},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			err := errors.New("mutation boundary failed")
@@ -1518,7 +1510,6 @@ func TestKnowledgeHTTPSmallRouteBodyLimitsAreAuditedBeforeScope(t *testing.T) {
 		{path: knowledgeObjectsDependenciesPath, action: knowledgeattemptaudit.ActionDependencies},
 		{path: knowledgeObjectsDependentsPath, action: knowledgeattemptaudit.ActionDependents},
 	} {
-		test := test
 		t.Run(string(test.action), func(t *testing.T) {
 			t.Parallel()
 			appender := &knowledgeBoundaryAppender{}
@@ -1623,7 +1614,6 @@ func TestKnowledgeHTTPGetRejectsMismatchedSameScopeProjectionWithoutLeak(
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			returned := knowledgeHTTPObject()

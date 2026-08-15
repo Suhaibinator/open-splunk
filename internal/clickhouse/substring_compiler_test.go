@@ -341,7 +341,6 @@ func TestCompileEvalSubstringRejectsForgedPlans(t *testing.T) {
 			want:       "contains a cycle",
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			err := compileForgedScalarAssignment(t, base, test.expression)

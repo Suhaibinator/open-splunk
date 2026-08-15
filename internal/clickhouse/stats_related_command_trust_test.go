@@ -64,7 +64,6 @@ func TestCompileRelatedAggregateCommandsRejectStatsOnlyMeasureMetadata(t *testin
 			},
 		},
 	} {
-		command := command
 		for _, mutation := range []struct {
 			name   string
 			mutate func(*plan.AggregateMeasure)
@@ -90,7 +89,6 @@ func TestCompileRelatedAggregateCommandsRejectStatsOnlyMeasureMetadata(t *testin
 				},
 			},
 		} {
-			mutation := mutation
 			t.Run(command.name+"/"+mutation.name, func(t *testing.T) {
 				t.Parallel()
 				logical := buildPlan(t, command.source)
@@ -149,7 +147,6 @@ func TestCompileChartAndTimechartRejectForgedFieldReferences(t *testing.T) {
 			},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			logical := buildPlan(t, test.source)

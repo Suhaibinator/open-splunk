@@ -51,7 +51,6 @@ func TestNormalizeEntryUsesOriginSpecificProvenanceIDBounds(t *testing.T) {
 			wantErr:  true,
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

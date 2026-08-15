@@ -75,7 +75,6 @@ func TestKnowledgeDescendantSidecarsCrossRuntimeWidePivotSource(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			compiled, state := compileKnowledgePivotForTest(t, test.source)
 
@@ -147,7 +146,6 @@ func TestFillNullDescendantSidecarsCrossRuntimeWidePivotSource(t *testing.T) {
 			wantSidecars: 1,
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			compiled := compileSPL(t, test.source)
 			projection := pivotSourceProjectionForTest(t, compiled.SQL, test.sourceCTE)
@@ -228,9 +226,9 @@ func pivotSourceProjectionForTest(t *testing.T, sql, cte string) string {
 		t.Fatalf("compiled SQL contains no %s source CTE:\n%s", cte, sql)
 	}
 	remainder := sql[start+len(marker):]
-	end := strings.Index(remainder, " FROM (")
-	if end < 0 {
+	before, _, ok := strings.Cut(remainder, " FROM (")
+	if !ok {
 		t.Fatalf("%s source CTE contains no scoped relation:\n%s", cte, remainder)
 	}
-	return remainder[:end]
+	return before
 }

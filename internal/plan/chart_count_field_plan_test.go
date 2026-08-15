@@ -142,7 +142,6 @@ func TestBuildRejectsForgedChartCountFieldContracts(t *testing.T) {
 			command.Aggregate.Alias = "count(" + command.Over.Name + ")"
 		}, "SPL_DUPLICATE_FIELD"},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -218,7 +217,6 @@ func TestAnalyzeRevalidatesForgedChartCountFieldLogicalPlans(t *testing.T) {
 		}},
 		{"zero row bound", func(operator *Chart) { operator.RowLimit = 0 }},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

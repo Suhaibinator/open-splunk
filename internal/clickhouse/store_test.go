@@ -1689,7 +1689,6 @@ func TestStoreRejectsIncompleteOrExcessAdmittedRetentionSnapshot(t *testing.T) {
 		}},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			batch := base
@@ -1815,7 +1814,6 @@ func TestStoreClassifiesErrorsAndReleasesBatch(t *testing.T) {
 		{name: "schema", prepareErr: &clickhousedriver.Exception{Code: 60, Name: "UNKNOWN_TABLE"}, permanent: true},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			batch := &fakeWriteBatch{sendErr: test.sendErr}
 			conn := &fakeStoreConnection{batch: batch, prepareErr: test.prepareErr}
@@ -1885,7 +1883,6 @@ func TestStoreRejectsInvalidInputsBeforePrepare(t *testing.T) {
 		retention RetentionProvider
 	}{name: "metadata mismatch", batch: mismatch, retention: fixedRetention(time.Hour)})
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			conn := &fakeStoreConnection{batch: &fakeWriteBatch{}}
@@ -1939,7 +1936,6 @@ func TestEventExpirationEnforcesStoragePrecisionAndRange(t *testing.T) {
 		{name: "expiration above range", indexTime: MaximumSearchTime(), retention: time.Millisecond},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			if _, err := eventExpiration(test.indexTime, test.retention); err == nil {
@@ -2004,7 +2000,6 @@ func TestStoreRejectsReservedDynamicRootsFromDirectStoredEvents(t *testing.T) {
 	names := append(eventfields.ReservedDynamicRootNames(), "__Os_Private")
 	for _, canonical := range names {
 		for _, name := range []string{canonical, strings.ToUpper(canonical)} {
-			name := name
 			t.Run(name, func(t *testing.T) {
 				batch := validStoreBatch()
 				batch.Events[0].Event.Fields = typedObjectValue(typedField(name, typedString("forged")))

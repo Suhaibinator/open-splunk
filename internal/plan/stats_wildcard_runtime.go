@@ -909,8 +909,8 @@ func writeStatsWildcardSemanticValue(writer hash.Hash, value reflect.Value, dept
 		}
 		// #nosec G115 -- reflection field counts are non-negative native-sized values.
 		writeStatsWildcardUint64(writer, uint64(value.NumField()))
-		for index := 0; index < value.NumField(); index++ {
-			if !writeStatsWildcardSemanticValue(writer, value.Field(index), depth+1) {
+		for _, field := range value.Fields() {
+			if !writeStatsWildcardSemanticValue(writer, field, depth+1) {
 				return false
 			}
 		}

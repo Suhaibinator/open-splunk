@@ -91,7 +91,6 @@ func TestCreateSearchHistoryRerunRejectsMalformedSourceShapes(t *testing.T) {
 			wantMessage: "search job source metadata is invalid or unsupported",
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -181,7 +180,6 @@ func TestCreateSearchHistoryRerunRejectsRequestOptionsBeforeLookup(t *testing.T)
 			wantMessage: "eager field discovery and timeline options are not supported",
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -317,7 +315,6 @@ func TestCreateSearchHistoryRerunAuthorizesLegacyAndStaticApps(t *testing.T) {
 			wantStatus: http.StatusForbidden,
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -432,7 +429,6 @@ func TestCreateSearchHistoryRerunMapsLiveAppCatalogFailures(t *testing.T) {
 			wantMessage: "history rerun request was canceled",
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -564,7 +560,6 @@ func TestCreateSearchHistoryRerunRejectsMalformedTrustedDefinition(t *testing.T)
 			},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -642,7 +637,6 @@ func TestCreateSearchHistoryRerunMapsIndexCatalogFailures(t *testing.T) {
 			wantMessage: "history rerun request was canceled",
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -707,7 +701,6 @@ func TestCreateSearchHistoryRerunMapsJobAdmissionCancellation(t *testing.T) {
 		context.Canceled,
 		context.DeadlineExceeded,
 	} {
-		operationErr := operationErr
 		t.Run(operationErr.Error(), func(t *testing.T) {
 			t.Parallel()
 

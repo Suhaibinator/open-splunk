@@ -31,7 +31,6 @@ func TestChartBreakPipelineAggOptionKeepsAggregateCodeInEveryPosition(t *testing
 		{"mixed case spelling", `index=main | chart count over path by level Agg=avg`},
 		{"empty value", `index=main | chart count over path by level agg=`},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := Parse(test.source)
@@ -89,7 +88,6 @@ func TestChartBreakPipelineKeywordShapedFieldNamesAgreeAcrossSpellings(t *testin
 		{"and", "or"},
 		{"not", "like"},
 	} {
-		test := test
 		t.Run(test.row+"/"+test.column, func(t *testing.T) {
 			t.Parallel()
 			for _, source := range []string{

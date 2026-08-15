@@ -1198,7 +1198,6 @@ func TestCatalogListCursorInvalidatesAfterDurableMutation(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			database, store := openTestStore(t)
 			catalog := newCatalogForTest(t, database)
@@ -1288,7 +1287,6 @@ func TestCatalogListCursorInvalidatesAfterLivenessTransition(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			database, store := openTestStore(t)
 			catalog := newCatalogForTest(t, database)

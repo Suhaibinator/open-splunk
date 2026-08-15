@@ -32,7 +32,6 @@ func TestParseEventStatsStringAggregatesAcceptExactFieldsAndPreserveSourceRanges
 	t.Parallel()
 
 	for _, test := range eventStatsStringAggregateParserCases() {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -96,7 +95,6 @@ func TestParseEventStatsStringAggregatesAcceptGlobalAndCaseDistinctGroups(t *tes
 	t.Parallel()
 
 	for _, test := range eventStatsStringAggregateParserCases() {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -137,7 +135,6 @@ func TestParseEventStatsStringAggregatesRequireExplicitExactAlias(t *testing.T) 
 	t.Parallel()
 
 	for _, test := range eventStatsStringAggregateParserCases() {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -184,7 +181,6 @@ func TestParseEventStatsStringAggregatesRejectUnsupportedShapes(t *testing.T) {
 	t.Parallel()
 
 	for _, aggregate := range eventStatsStringAggregateParserCases() {
-		aggregate := aggregate
 		t.Run(aggregate.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -212,7 +208,6 @@ func TestParseEventStatsStringAggregatesRejectUnsupportedShapes(t *testing.T) {
 				{"leading unsupported option", prefix + "allnum=true " + call + "(user) AS " + alias, "SPL_UNSUPPORTED_EVENTSTATS_SYNTAX", "allnum"},
 				{"trailing unsupported option", prefix + call + "(user) AS " + alias + " allnum=true", "SPL_UNSUPPORTED_EVENTSTATS_SYNTAX", "allnum"},
 			} {
-				test := test
 				t.Run(test.name, func(t *testing.T) {
 					t.Parallel()
 
@@ -247,7 +242,6 @@ func TestParseEventStatsStringAggregatesBoundExactGroupingFields(t *testing.T) {
 	}
 
 	for _, aggregate := range eventStatsStringAggregateParserCases() {
-		aggregate := aggregate
 		t.Run(aggregate.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -282,7 +276,6 @@ func TestParseEventStatsStringAggregatesBoundExactGroupingFields(t *testing.T) {
 				{"wildcard", prefix + "host*", "SPL_UNSUPPORTED_EVENTSTATS_SYNTAX", "host*"},
 				{"quoted", prefix + `"host"`, "SPL_EXPECTED_FIELD", `"host"`},
 			} {
-				test := test
 				t.Run(test.name, func(t *testing.T) {
 					t.Parallel()
 
@@ -304,7 +297,6 @@ func TestEventStatsDiagnosticsAdvertiseStringAggregateForms(t *testing.T) {
 	t.Parallel()
 
 	for _, test := range eventStatsStringAggregateParserCases() {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -343,7 +335,6 @@ func TestClassifyResultShapeTreatsEventStatsStringAggregatesAsRowPreserving(t *t
 	t.Parallel()
 
 	for _, test := range eventStatsStringAggregateParserCases() {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

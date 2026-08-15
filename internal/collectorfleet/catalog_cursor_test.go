@@ -139,7 +139,6 @@ func TestCollectorLivenessDigestIsCanonicalAndBindsExactLease(t *testing.T) {
 		},
 	}
 	for _, mutation := range mutations {
-		mutation := mutation
 		t.Run(mutation.name, func(t *testing.T) {
 			t.Parallel()
 			changed := append([]CollectorLiveness(nil), snapshot...)
@@ -260,7 +259,6 @@ func TestCollectorLivenessDigestRejectsInvalidSnapshot(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := collectorLivenessDigest(test.scope, test.snapshot)
@@ -328,7 +326,6 @@ func TestCollectorListCursorRoundTripsTypedNullableKeys(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			cursor := test.cursor
@@ -395,7 +392,6 @@ func TestCollectorListCursorBindsOptionalExactTotal(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -710,7 +706,6 @@ func TestCollectorListCursorRejectsTamperingAndRequestReplay(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			_, decodeErr := decodeCollectorListCursor(
@@ -790,7 +785,6 @@ func TestCollectorListCursorRevisionAndLivenessChangesInvalidatePage(
 			want:        control.ErrInvalidArgument,
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			_, decodeErr := decodeCollectorListCursor(
@@ -1005,7 +999,6 @@ func TestCollectorListCursorRejectsInvalidPayloadShape(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			cursor := base

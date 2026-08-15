@@ -29,7 +29,6 @@ func TestMatchStatsFieldGlob(t *testing.T) {
 		{"literal", "literal", false},
 		{"", "", false},
 	} {
-		test := test
 		t.Run(test.pattern+"/"+test.name, func(t *testing.T) {
 			t.Parallel()
 			if got := MatchStatsFieldGlob(test.pattern, test.name); got != test.want {

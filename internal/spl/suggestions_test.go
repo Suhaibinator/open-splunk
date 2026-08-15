@@ -31,7 +31,6 @@ func TestAnalyzeSuggestionContextRejectsInvalidSourceAndCursor(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			context, diagnostic := AnalyzeSuggestionContext(test.source, test.cursor)
@@ -328,7 +327,6 @@ func TestAnalyzeSuggestionContextIncompleteGrammar(t *testing.T) {
 		{source: "| table tr", prefix: "tr", kinds: []SuggestionKind{SuggestionKindField}},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.source, func(t *testing.T) {
 			t.Parallel()
 			context, diagnostic := AnalyzeSuggestionContext(test.source, len(test.source))
@@ -361,7 +359,6 @@ func TestAnalyzeSuggestionContextV02OperatorsReplaceOnlyTheActiveFragment(t *tes
 		"| eventstats count(eval(duration_ms/toSuffix",
 		"| streamstats count(eval(duration_ms%toSuffix",
 	} {
-		source := source
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()
 			fragmentStart := strings.LastIndex(source, "toSuffix")
@@ -498,7 +495,6 @@ func TestAnalyzeSuggestionContextRangesStayOnUTF8Boundaries(t *testing.T) {
 		`| where !`,
 	}
 	for _, source := range sources {
-		source := source
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()
 			for cursor := 0; cursor <= len(source); cursor++ {
@@ -700,7 +696,6 @@ func TestAnalyzeSuggestionContextTracksConsumedCommandOptions(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.source, func(t *testing.T) {
 			t.Parallel()
 			context, diagnostic := AnalyzeSuggestionContext(test.source, len(test.source))
@@ -805,7 +800,6 @@ func TestAnalyzeSuggestionContextBoundsFrequencyFieldLists(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -833,7 +827,6 @@ func TestAnalyzeSuggestionContextRejectsInvalidFrequencyLimits(t *testing.T) {
 		{name: "overflow named", source: `| top limit=18446744073709551616 `},
 		{name: "malformed named", source: `| rare limit=lots, `},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -904,7 +897,6 @@ func TestRankSuggestionCandidatesExcludesLaterFrequencyTupleFields(t *testing.T)
 			want:       []string{"sourcetype"},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

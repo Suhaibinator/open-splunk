@@ -79,7 +79,6 @@ func TestKnowledgeSnapshotReferenceAndSummarySharedGoTypeScriptWireGolden(t *tes
 	var absentWire []byte
 	var enabledEmptyWire []byte
 	for _, contract := range fixture.Cases {
-		contract := contract
 		t.Run(contract.Name, func(t *testing.T) {
 			if seen[contract.Name] {
 				t.Fatalf("duplicate fixture case %q", contract.Name)

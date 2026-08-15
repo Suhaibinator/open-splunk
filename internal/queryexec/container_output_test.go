@@ -239,7 +239,6 @@ func TestConvertContainerOutputRejectsInvalidMetadataAndValues(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			if _, err := convertContainerOutput(
@@ -334,27 +333,27 @@ func TestExecutorContainerOutputCoexistsWithSparseFields(t *testing.T) {
 		types: []driver.ColumnType{
 			fakeColumnType{
 				name: "fields", databaseType: "JSON(max_dynamic_paths=256)",
-				scanType: reflect.TypeOf((*chcol.JSON)(nil)),
+				scanType: reflect.TypeFor[*chcol.JSON](),
 			},
 			fakeColumnType{
 				name: "payload", databaseType: "Dynamic",
-				scanType: reflect.TypeOf((*any)(nil)).Elem(),
+				scanType: reflect.TypeFor[any](),
 			},
 			fakeColumnType{
 				name:         clickhouse.SparseEventFieldNamesColumn,
-				databaseType: "Array(String)", scanType: reflect.TypeOf([]string{}),
+				databaseType: "Array(String)", scanType: reflect.TypeFor[[]string](),
 			},
 			fakeColumnType{
 				name:         descriptor.NamesColumn(),
-				databaseType: "Array(String)", scanType: reflect.TypeOf([]string{}),
+				databaseType: "Array(String)", scanType: reflect.TypeFor[[]string](),
 			},
 			fakeColumnType{
 				name:         descriptor.TypesColumn(),
-				databaseType: "Array(UInt8)", scanType: reflect.TypeOf([]uint8{}),
+				databaseType: "Array(UInt8)", scanType: reflect.TypeFor[[]uint8](),
 			},
 			fakeColumnType{
 				name:         descriptor.MetadataVersionColumn(),
-				databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0)),
+				databaseType: "UInt8", scanType: reflect.TypeFor[uint8](),
 			},
 		},
 		data: [][]any{{
@@ -413,7 +412,7 @@ func TestExecutorContainerOutputRejectsInvalidHeadersAndTypes(t *testing.T) {
 				*columns = append(*columns, "__os_result_container_extra")
 				*types = append(*types, fakeColumnType{
 					name: "__os_result_container_extra", databaseType: "UInt8",
-					scanType: reflect.TypeOf(uint8(0)),
+					scanType: reflect.TypeFor[uint8](),
 				})
 			},
 		},
@@ -428,7 +427,7 @@ func TestExecutorContainerOutputRejectsInvalidHeadersAndTypes(t *testing.T) {
 			name: "public value is not Dynamic",
 			mutate: func(_ *clickhouse.CompiledQuery, _ *[]string, types *[]driver.ColumnType) {
 				(*types)[1] = fakeColumnType{
-					name: "payload", databaseType: "String", scanType: reflect.TypeOf(""),
+					name: "payload", databaseType: "String", scanType: reflect.TypeFor[string](),
 				}
 			},
 		},
@@ -436,7 +435,7 @@ func TestExecutorContainerOutputRejectsInvalidHeadersAndTypes(t *testing.T) {
 			name: "public value has forged Dynamic prefix",
 			mutate: func(_ *clickhouse.CompiledQuery, _ *[]string, types *[]driver.ColumnType) {
 				(*types)[1] = fakeColumnType{
-					name: "payload", databaseType: "DynamicPoison", scanType: reflect.TypeOf((*any)(nil)).Elem(),
+					name: "payload", databaseType: "DynamicPoison", scanType: reflect.TypeFor[any](),
 				}
 			},
 		},
@@ -444,7 +443,7 @@ func TestExecutorContainerOutputRejectsInvalidHeadersAndTypes(t *testing.T) {
 			name: "public value hides nullable Dynamic wrapper",
 			mutate: func(_ *clickhouse.CompiledQuery, _ *[]string, types *[]driver.ColumnType) {
 				(*types)[1] = fakeColumnType{
-					name: "payload", databaseType: "Nullable(Dynamic)", scanType: reflect.TypeOf((*any)(nil)).Elem(),
+					name: "payload", databaseType: "Nullable(Dynamic)", scanType: reflect.TypeFor[any](),
 				}
 			},
 		},
@@ -452,7 +451,7 @@ func TestExecutorContainerOutputRejectsInvalidHeadersAndTypes(t *testing.T) {
 			name: "names database type",
 			mutate: func(_ *clickhouse.CompiledQuery, _ *[]string, types *[]driver.ColumnType) {
 				(*types)[2] = fakeColumnType{
-					name: "names", databaseType: "Array(UInt8)", scanType: reflect.TypeOf([]string{}),
+					name: "names", databaseType: "Array(UInt8)", scanType: reflect.TypeFor[[]string](),
 				}
 			},
 		},
@@ -460,7 +459,7 @@ func TestExecutorContainerOutputRejectsInvalidHeadersAndTypes(t *testing.T) {
 			name: "types scan type",
 			mutate: func(_ *clickhouse.CompiledQuery, _ *[]string, types *[]driver.ColumnType) {
 				(*types)[3] = fakeColumnType{
-					name: "types", databaseType: "Array(UInt8)", scanType: reflect.TypeOf([]uint16{}),
+					name: "types", databaseType: "Array(UInt8)", scanType: reflect.TypeFor[[]uint16](),
 				}
 			},
 		},
@@ -468,7 +467,7 @@ func TestExecutorContainerOutputRejectsInvalidHeadersAndTypes(t *testing.T) {
 			name: "metadata version nullable",
 			mutate: func(_ *clickhouse.CompiledQuery, _ *[]string, types *[]driver.ColumnType) {
 				(*types)[4] = fakeColumnType{
-					name: "version", databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0)), nullable: true,
+					name: "version", databaseType: "UInt8", scanType: reflect.TypeFor[uint8](), nullable: true,
 				}
 			},
 		},
@@ -477,7 +476,7 @@ func TestExecutorContainerOutputRejectsInvalidHeadersAndTypes(t *testing.T) {
 			mutate: func(_ *clickhouse.CompiledQuery, _ *[]string, types *[]driver.ColumnType) {
 				(*types)[4] = fakeColumnType{
 					name: "version", databaseType: "LowCardinality(Nullable(UInt8))",
-					scanType: reflect.TypeOf(uint8(0)),
+					scanType: reflect.TypeFor[uint8](),
 				}
 			},
 		},
@@ -495,7 +494,6 @@ func TestExecutorContainerOutputRejectsInvalidHeadersAndTypes(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			descriptor := testResultContainerOutput(1)
@@ -587,18 +585,18 @@ func containerOutputColumnTypes(
 	descriptor clickhouse.ResultContainerOutput,
 ) []driver.ColumnType {
 	return []driver.ColumnType{
-		fakeColumnType{name: "event_id", databaseType: "String", scanType: reflect.TypeOf("")},
+		fakeColumnType{name: "event_id", databaseType: "String", scanType: reflect.TypeFor[string]()},
 		fakeColumnType{
-			name: "payload", databaseType: "Dynamic", scanType: reflect.TypeOf((*any)(nil)).Elem(),
+			name: "payload", databaseType: "Dynamic", scanType: reflect.TypeFor[any](),
 		},
 		fakeColumnType{
-			name: descriptor.NamesColumn(), databaseType: "Array(String)", scanType: reflect.TypeOf([]string{}),
+			name: descriptor.NamesColumn(), databaseType: "Array(String)", scanType: reflect.TypeFor[[]string](),
 		},
 		fakeColumnType{
-			name: descriptor.TypesColumn(), databaseType: "Array(UInt8)", scanType: reflect.TypeOf([]uint8{}),
+			name: descriptor.TypesColumn(), databaseType: "Array(UInt8)", scanType: reflect.TypeFor[[]uint8](),
 		},
 		fakeColumnType{
-			name: descriptor.MetadataVersionColumn(), databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0)),
+			name: descriptor.MetadataVersionColumn(), databaseType: "UInt8", scanType: reflect.TypeFor[uint8](),
 		},
 	}
 }

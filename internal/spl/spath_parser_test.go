@@ -57,7 +57,6 @@ func TestParseSpathExplicitJSONPath(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -117,7 +116,6 @@ func TestParseSpathRejectsUnsupportedOrAmbiguousSyntax(t *testing.T) {
 		{`* | spath path=a,output=b`, "SPL_UNSUPPORTED_SPATH_SYNTAX"},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.source, func(t *testing.T) {
 			t.Parallel()
 

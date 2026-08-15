@@ -754,7 +754,7 @@ func parseEndpointQuery(raw string, endpoint hec.Endpoint, limits hec.Limits) (e
 }
 
 func queryAuthorizationPresent(raw string) bool {
-	for _, segment := range strings.Split(raw, "&") {
+	for segment := range strings.SplitSeq(raw, "&") {
 		name := segment
 		if separator := strings.IndexByte(name, '='); separator >= 0 {
 			name = name[:separator]

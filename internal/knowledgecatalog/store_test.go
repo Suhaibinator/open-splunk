@@ -574,9 +574,9 @@ func insertFixtureObject(t *testing.T, database *control.DB, object fixtureObjec
 	}
 	var disabledAt, quarantinedAt, deletedAt any
 	if last.state == StateDisabled {
-		for index := len(object.versions) - 1; index >= 0; index-- {
-			if object.versions[index].mutation == "disable" {
-				disabledAt = object.versions[index].timestamp
+		for _, v := range slices.Backward(object.versions) {
+			if v.mutation == "disable" {
+				disabledAt = v.timestamp
 				break
 			}
 		}

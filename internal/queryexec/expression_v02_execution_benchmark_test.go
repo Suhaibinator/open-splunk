@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -624,7 +623,7 @@ func expressionV02RunTimedBenchmark(
 
 func expressionV02BenchmarkDistribution(samples []time.Duration) (time.Duration, float64) {
 	ordered := slices.Clone(samples)
-	sort.Slice(ordered, func(left, right int) bool { return ordered[left] < ordered[right] })
+	slices.Sort(ordered)
 	median := ordered[len(ordered)/2]
 	if len(ordered)%2 == 0 {
 		median = (ordered[len(ordered)/2-1] + median) / 2

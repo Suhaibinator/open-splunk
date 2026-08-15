@@ -211,7 +211,6 @@ func TestIndexStatisticsStorageEstimateUsesOverflowSafeCeilingArithmetic(
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -302,7 +301,6 @@ func TestIndexStatisticsRejectsInconsistentPartsMetadata(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -399,7 +397,6 @@ func TestIndexStatisticsRejectsInvalidAggregateBoundsBeforePartsQuery(
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -481,7 +478,6 @@ func TestIndexStatisticsRejectsInvalidConstruction(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -586,7 +582,6 @@ func TestIndexStatisticsRejectsInvalidRequestsBeforeQuery(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -644,7 +639,6 @@ func TestIndexStatisticsRejectsNilAndTypedNilQueryRows(t *testing.T) {
 		{name: "typed nil row", row: typedNil},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -712,7 +706,6 @@ func TestIndexStatisticsPropagatesQueryErrorsAndStops(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -1096,7 +1089,7 @@ type indexStatisticsContextProbe struct {
 
 func (probe *indexStatisticsContextProbe) Value(key any) any {
 	if reflect.TypeOf(key) ==
-		reflect.TypeOf((*clickhousedriver.QueryOptions)(nil)) {
+		reflect.TypeFor[*clickhousedriver.QueryOptions]() {
 		probe.key = key
 	}
 	return probe.Context.Value(key)

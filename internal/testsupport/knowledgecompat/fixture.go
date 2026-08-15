@@ -167,7 +167,6 @@ func Run(t *testing.T, owner Owner, registry map[Vector]Assertion) {
 	}
 	slices.Sort(vectors)
 	for _, vector := range vectors {
-		vector := vector
 		cases := slices.Clone(grouped[vector])
 		t.Run(string(vector), func(t *testing.T) {
 			registry[vector](t, cases)

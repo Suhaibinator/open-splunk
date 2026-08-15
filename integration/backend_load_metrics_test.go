@@ -378,7 +378,6 @@ func TestBackendLoadStorageStateClassifier(t *testing.T) {
 		{name: "row overshoot", state: backendLoadStorageState{Rows: 11, DistinctEventIDs: 11}, expected: 10, wantErr: true},
 		{name: "distinct overshoot", state: backendLoadStorageState{Rows: 10, DistinctEventIDs: 11}, expected: 10, wantErr: true},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			done, err := test.state.classify(test.expected)

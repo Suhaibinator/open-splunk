@@ -49,7 +49,6 @@ func TestNewRejectsMissingAndTypedNilDependencies(t *testing.T) {
 		}},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			config := valid
@@ -91,7 +90,6 @@ func TestSuggestReturnsStaticAndIndexCandidatesWithoutStorage(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			diagnostic := searchjobs.Diagnostic{
@@ -150,7 +148,6 @@ func TestSuggestReturnsAnalyzerSyntaxDiagnosticsInBandWithoutStorage(t *testing.
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			validator := &suggestionTestValidator{result: searchjobs.ValidationResult{
@@ -313,7 +310,6 @@ func TestSuggestFrequencyFieldCandidatesExcludeGeneratedAndCommittedNames(t *tes
 			forbidden: []string{"host"},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -462,7 +458,6 @@ func TestSuggestPreservesCompletedBaseAndSearchPredicates(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			request := validSuggestionRequest(test.source)
@@ -509,7 +504,6 @@ func TestSuggestSuppressesUnparseableCompletedBaseAndSearchPredicatesBeforeSnaps
 		"index=main AND ho",
 		"index=main | search status=200 AND ho",
 	} {
-		source := source
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()
 			scopes := &suggestionTestScopes{failOnCall: true}
@@ -615,7 +609,6 @@ func TestFieldSuggestionInsertionQuotesV02ScalarFields(t *testing.T) {
 		{name: "__os_private", allowQuoted: true},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name+test.want, func(t *testing.T) {
 			t.Parallel()
 			got, ok := fieldSuggestionInsertion(test.name, test.allowQuoted)
@@ -643,7 +636,6 @@ func TestSuggestQuotesOperatorFieldsOnlyInV02ScalarContexts(t *testing.T) {
 		{name: "fields remains command grammar", source: "index=main | fields req", wantInsertion: "request-bytes"},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			request := validSuggestionRequest(test.source)
@@ -747,7 +739,6 @@ func TestSuggestSuppressesUnsafeDynamicFieldLookup(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			request := validSuggestionRequest(test.source)
@@ -842,7 +833,6 @@ func TestSuggestRejectsStructuralAndScopeErrorsBeforeDependencies(t *testing.T) 
 		{name: "invalid range", mutate: func(request *Request) { request.TimeRange = searchtime.Range{} }},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			validator := &suggestionTestValidator{failOnCall: true}
@@ -887,7 +877,6 @@ func TestSuggestMapsDependencyErrorsWithoutLeakingDetails(t *testing.T) {
 		{name: "unknown compiler", compiler: errors.New("raw SQL failure"), want: searchjobs.ErrInvalidResult, wantNoText: "SQL"},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			request := validSuggestionRequest("index=main | fields ho")
@@ -970,7 +959,6 @@ func TestSuggestRejectsChangedDependencyContractsAtomically(t *testing.T) {
 		}},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			request := validSuggestionRequest("index=main | fields ho")
@@ -1076,7 +1064,6 @@ func TestSuggestRejectsPartialValidationMetadataAtomically(t *testing.T) {
 		}},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			service := mustSuggestionService(t, Config{

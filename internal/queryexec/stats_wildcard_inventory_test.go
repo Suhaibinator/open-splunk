@@ -84,7 +84,6 @@ func TestExecutorExecuteStatsWildcardInventoryRejectsRowsAtomically(t *testing.T
 		{name: "canonical reserved descendant", rows: statsWildcardFakeRows(0, plan.StatsWildcardInventoryMatch{Ordinal: 0, Field: "host.child"}), wantErr: searchjobs.ErrInvalidResult},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			got, err := mustExecutor(t, &fakeQueryConnection{rows: test.rows}).
@@ -123,16 +122,15 @@ func TestExecutorExecuteStatsWildcardInventoryRejectsMalformedSchemaAndStream(t 
 		{name: "wrong column", mutate: func(rows *fakeRows) { rows.columns[1] = "wrong" }},
 		{name: "missing type", mutate: func(rows *fakeRows) { rows.types = rows.types[:2] }},
 		{name: "nullable", mutate: func(rows *fakeRows) {
-			rows.types[2] = fakeColumnType{name: clickhouse.StatsWildcardInventoryInvalidColumn, databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0)), nullable: true}
+			rows.types[2] = fakeColumnType{name: clickhouse.StatsWildcardInventoryInvalidColumn, databaseType: "UInt8", scanType: reflect.TypeFor[uint8](), nullable: true}
 		}},
 		{name: "wrong scan type", mutate: func(rows *fakeRows) {
-			rows.types[1] = fakeColumnType{name: clickhouse.StatsWildcardInventoryFieldColumn, databaseType: "String", scanType: reflect.TypeOf([]byte{})}
+			rows.types[1] = fakeColumnType{name: clickhouse.StatsWildcardInventoryFieldColumn, databaseType: "String", scanType: reflect.TypeFor[[]byte]()}
 		}},
 		{name: "partial stream", mutate: func(rows *fakeRows) { rows.err = errors.New("stream failed") }},
 		{name: "close failure", mutate: func(rows *fakeRows) { rows.closeErr = errors.New("close failed") }},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			rows := statsWildcardFakeRows(0, plan.StatsWildcardInventoryMatch{Ordinal: 0, Field: "payload"})
@@ -254,7 +252,7 @@ func statsWildcardRows(data [][]any) *fakeRows {
 	}
 	databaseTypes := []string{"UInt8", "String", "UInt8"}
 	scanTypes := []reflect.Type{
-		reflect.TypeOf(uint8(0)), reflect.TypeOf(""), reflect.TypeOf(uint8(0)),
+		reflect.TypeFor[uint8](), reflect.TypeFor[string](), reflect.TypeFor[uint8](),
 	}
 	types := make([]driver.ColumnType, len(columns))
 	for index := range columns {

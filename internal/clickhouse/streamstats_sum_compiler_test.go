@@ -116,7 +116,6 @@ func TestCompileStreamStatsSumPinsEveryRowFrameAndKeepsEmptyFramesNull(t *testin
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -330,7 +329,6 @@ func TestCompileStreamStatsSumRejectsForgedCanonicalPlans(t *testing.T) {
 		}},
 		{"percentile", func(operator *plan.StreamAggregate) { operator.Measure.Percentile = 50 }},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -377,8 +375,8 @@ func buildStreamStatsSumPlan(
 ) (*plan.Query, *plan.StreamAggregate) {
 	t.Helper()
 	logical := buildPlan(t, source)
-	for index := len(logical.Operators) - 1; index >= 0; index-- {
-		operator, ok := logical.Operators[index].(*plan.StreamAggregate)
+	for _, v := range slices.Backward(logical.Operators) {
+		operator, ok := v.(*plan.StreamAggregate)
 		if !ok {
 			continue
 		}

@@ -135,7 +135,6 @@ func TestApplyClickHouseMigrationsRejectsDriftBeforeDDL(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			connection := &fakeClickHouseMigrationConnection{
@@ -258,7 +257,6 @@ func TestLoadClickHouseMigrationsValidatesFiles(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			connection := &fakeClickHouseMigrationConnection{}
@@ -350,7 +348,6 @@ func TestSplitClickHouseStatementsRejectsUnterminatedLexemes(t *testing.T) {
 		"SELECT 1 /* unterminated",
 	}
 	for _, source := range tests {
-		source := source
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()
 			if _, err := splitClickHouseStatements(source); err == nil {

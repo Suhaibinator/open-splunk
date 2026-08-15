@@ -52,7 +52,6 @@ func TestTypedValueRoundTripPreservesDistinctKinds(t *testing.T) {
 	}
 
 	for name, value := range values {
-		value := value
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
@@ -392,7 +391,6 @@ func TestKnowledgeSnapshotReferenceAndSummaryKeepExactWireContracts(t *testing.T
 	}
 
 	for _, contract := range contracts {
-		contract := contract
 		t.Run(string(contract.name), func(t *testing.T) {
 			descriptor := file.Messages().ByName(contract.name)
 			if descriptor == nil {
@@ -515,7 +513,6 @@ func TestKnowledgeSnapshotReferenceAndSummaryKeepExactWireContracts(t *testing.T
 		},
 	}
 	for _, attachment := range attachments {
-		attachment := attachment
 		t.Run(attachment.name+" attachment", func(t *testing.T) {
 			message := attachment.file.Messages().ByName(attachment.message)
 			if message == nil {
@@ -618,7 +615,6 @@ func TestFieldExtractionDefinitionDeterministicWireMatchesCrossLanguageGolden(t 
 
 	seen := make(map[string]bool, len(fixture.Cases))
 	for _, contract := range fixture.Cases {
-		contract := contract
 		t.Run(contract.Name, func(t *testing.T) {
 			if contract.Name != "regex" && contract.Name != "json" {
 				t.Fatalf("unexpected cross-language fixture case %q", contract.Name)
@@ -821,7 +817,6 @@ func TestKnowledgeManagementDependencyProjectionMatchesCrossLanguageGolden(t *te
 	}
 	marshal := proto.MarshalOptions{Deterministic: true}
 	for _, contract := range cases {
-		contract := contract
 		t.Run(contract.name, func(t *testing.T) {
 			want, err := hex.DecodeString(contract.wireHex)
 			if err != nil {
@@ -1046,7 +1041,6 @@ func TestKnowledgeMutationResponsesPairRevisionAndStateToken(t *testing.T) {
 
 	file := opensplunkv1.File_open_splunk_v1_knowledge_api_proto
 	for _, test := range tests {
-		test := test
 		t.Run(string(test.name), func(t *testing.T) {
 			t.Parallel()
 

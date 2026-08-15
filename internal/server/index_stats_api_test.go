@@ -225,7 +225,6 @@ func TestIndexStatisticsConfigurationIsPairedAndRequiresAdministration(
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			config := base()
@@ -352,7 +351,6 @@ func TestIndexStatisticsRouteAuthenticatesBeforeReadingOrDoingWork(
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -759,7 +757,6 @@ func TestIndexStatisticsMapsCancellationAndDependencyErrors(
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -1007,7 +1004,6 @@ func TestIndexStatisticsRejectsMalformedResults(
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

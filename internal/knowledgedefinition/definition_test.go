@@ -143,7 +143,6 @@ func TestNormalizeRejectsUnknownFieldsRecursively(t *testing.T) {
 		}},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			definition := validAliasDefinition()
@@ -231,7 +230,6 @@ func TestNormalizeRejectsUnknownFieldsRecursively(t *testing.T) {
 		},
 	}
 	for _, test := range nestedBodies {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			definition := test.definition()
@@ -281,7 +279,6 @@ func TestNormalizeRejectsUnknownEnumsSelectorDisagreementAndBodies(t *testing.T)
 		}},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			definition := validAliasDefinition()

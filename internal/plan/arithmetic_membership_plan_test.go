@@ -173,7 +173,6 @@ func TestBuildArithmeticMembershipRejectsForgedASTsAndBudgets(t *testing.T) {
 		},
 	}
 	for _, test := range evalTests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := Build(
@@ -214,7 +213,6 @@ func TestBuildArithmeticMembershipRejectsForgedASTsAndBudgets(t *testing.T) {
 		},
 	}
 	for _, test := range whereTests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := Build(
@@ -368,7 +366,6 @@ func TestAnalyzeArithmeticMembershipRejectsForgedPlanGraphsAndBudgets(t *testing
 		{name: "unknown predicate node", query: filter(&futureMembershipExpression{})},
 	}
 	for _, test := range malformed {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			if _, err := Analyze(test.query); err == nil {

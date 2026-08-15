@@ -47,8 +47,6 @@ func TestPrepareClickHouseRecoveryVolumeFlagContract(t *testing.T) {
 		"unknown":         {"-unknown"},
 		"positional":      {"-path", "/recovery-volume", "unexpected"},
 	} {
-		name := name
-		arguments := arguments
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
@@ -279,8 +277,6 @@ func TestPrepareClickHouseRecoveryVolumeRejectsEveryOtherInitialState(t *testing
 		},
 	}
 	for name, metadata := range tests {
-		name := name
-		metadata := metadata
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
@@ -346,8 +342,6 @@ func TestPrepareClickHouseRecoveryVolumeRejectsUnsafeOrUnavailableACL(t *testing
 		"fresh":       fakeClickHouseRecoveryVolumeFreshMetadata(),
 		"interrupted": fakeClickHouseRecoveryVolumeChownedMetadata(),
 	} {
-		name := name
-		metadata := metadata
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
@@ -411,8 +405,6 @@ func TestPrepareClickHouseRecoveryVolumeRejectsPathSwapsAtEveryBoundary(
 		},
 	}
 	for name, makeHooks := range tests {
-		name := name
-		makeHooks := makeHooks
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
@@ -482,8 +474,6 @@ func TestPrepareClickHouseRecoveryVolumePropagatesDescriptorFailures(t *testing.
 		},
 	}
 	for name, inject := range tests {
-		name := name
-		inject := inject
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 

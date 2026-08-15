@@ -138,7 +138,6 @@ func TestParseStatsOptionsRejectsInvalidValuesDuplicatesAndPlacement(t *testing.
 		{name: "bare partitions needs equal", source: `| stats partitions count`, code: "SPL_EXPECTED_EQUAL"},
 		{name: "options need aggregate", source: `| stats partitions=1`, code: "SPL_EXPECTED_AGGREGATE"},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

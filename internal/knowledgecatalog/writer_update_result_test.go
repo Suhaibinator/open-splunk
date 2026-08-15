@@ -99,7 +99,6 @@ func TestUpdateResultMatchesRequestBindsEveryCanonicalMaskPath(t *testing.T) {
 		}},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.path, func(t *testing.T) {
 			t.Parallel()
 			result := proto.Clone(test.current).(*opensplunkv1.KnowledgeObjectDefinition)

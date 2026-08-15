@@ -64,7 +64,6 @@ func testMatchAgainstClickHouse(
 		{name: "object", where: `match(object, "error")`, want: 0},
 		{name: "binary", where: `match(binary, "error")`, want: 0},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			compiled := compile(
 				`index=match event_id="match-scalars" | where ` + test.where + ` | stats count`,

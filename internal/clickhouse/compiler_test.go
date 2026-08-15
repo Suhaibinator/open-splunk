@@ -696,7 +696,6 @@ func TestCompileNumericBinUsesExactStreamingArithmetic(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -1060,7 +1059,6 @@ func TestCompileNumericBinRejectsForgedPlans(t *testing.T) {
 		}},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -1489,7 +1487,6 @@ func TestCompileTimechartRevalidatesExactGridAndOutputContract(t *testing.T) {
 		`index=gradethis | timechart span=5m count`,
 		`index=gradethis | timechart span=5m count BY level`,
 	} {
-		source := source
 		for _, test := range []struct {
 			name    string
 			corrupt func(*plan.Query, *plan.Timechart)
@@ -1524,7 +1521,6 @@ func TestCompileTimechartRevalidatesExactGridAndOutputContract(t *testing.T) {
 				want: "aggregate function is unsupported",
 			},
 		} {
-			test := test
 			t.Run(source+"/"+test.name, func(t *testing.T) {
 				t.Parallel()
 				logical := buildPlan(t, source)
@@ -1572,7 +1568,6 @@ func TestCompileTimechartRevalidatesExactGridAndOutputContract(t *testing.T) {
 			want: "dynamic output contract is invalid",
 		},
 	} {
-		test := test
 		t.Run("fixed/"+test.name, func(t *testing.T) {
 			t.Parallel()
 			logical := buildPlan(t, `index=gradethis | timechart span=5m count`)
@@ -1608,7 +1603,6 @@ func TestCompileTimechartRevalidatesExactGridAndOutputContract(t *testing.T) {
 			},
 		},
 	} {
-		test := test
 		t.Run("split/"+test.name, func(t *testing.T) {
 			t.Parallel()
 			logical := buildPlan(t, `index=gradethis | timechart span=5m count BY level`)
@@ -3545,7 +3539,6 @@ func TestCompileStatsValuesRejectsUnpinnedScalarMultivalueConsumers(t *testing.T
 		{name: "chart column", source: `index=gradethis | stats values(user) AS users count AS events | chart count OVER events BY users`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: "users"},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := (Compiler{}).Compile(buildPlan(t, test.source))
@@ -4373,7 +4366,6 @@ func TestEventPipelinesPreservePersistedFieldMetadataForAnalysis(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			logical := buildPlan(t, test.source)
@@ -4465,7 +4457,6 @@ func TestCompileRejectsTypedNilOperatorsWithoutPanicking(t *testing.T) {
 	}
 	base := buildPlan(t, `index=gradethis`)
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			operators := []plan.Operator{base.Operators[0], test.operator}

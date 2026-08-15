@@ -381,7 +381,6 @@ func TestBinEdgeMetadataAgainstClickHouse(t *testing.T) {
 		// Both the shallow and the intermediate flattened parent are containers
 		// and carry the sanitized unsupported-value marker.
 		for _, field := range []string{"edge_obj", "edge_obj.grand"} {
-			field := field
 			t.Run("parent "+field, func(t *testing.T) {
 				parent := compile(t, `index=compiler event_id=m-int | bin `+field+` span=10 | table `+field)
 				binEdgeMetadataRequireMarker(t, ctx, connection, parent, "flattened parent "+field)
@@ -401,7 +400,6 @@ func TestBinEdgeMetadataAgainstClickHouse(t *testing.T) {
 			{"edge_bytes", "Map(String, String)", eventfields.StoredValueTypeBytes, true},
 			{"edge_flag", "Bool", eventfields.StoredValueTypeBool, true},
 		} {
-			extended := extended
 			t.Run(extended.field, func(t *testing.T) {
 				compiled := compile(t,
 					`index=compiler | bin `+extended.field+` span=10 AS band | table event_id `+extended.field+` band`)
@@ -957,7 +955,6 @@ func TestBinEdgeMetadataAgainstClickHouse(t *testing.T) {
 			{"w-num", "Int64"},
 			{"w-txt", "Int64"},
 		} {
-			wide := wide
 			t.Run(wide.eventID, func(t *testing.T) {
 				var leaf string
 				if err := connection.QueryRow(ctx,

@@ -105,7 +105,7 @@ func validateOrdinaryResultColumns(
 	if sparseFieldIndex >= 0 {
 		hiddenType := columnTypes[len(query.OutputFields)]
 		if hiddenType.Nullable() || unwrapType(hiddenType.DatabaseTypeName()) != "Array(String)" ||
-			hiddenType.ScanType() != reflect.TypeOf([]string{}) ||
+			hiddenType.ScanType() != reflect.TypeFor[[]string]() ||
 			!strings.HasPrefix(unwrapType(columnTypes[sparseFieldIndex].DatabaseTypeName()), "JSON") {
 			return nil, nil, fmt.Errorf(
 				"%w: sparse event fields transport has invalid column types",
@@ -122,15 +122,15 @@ func validateOrdinaryResultColumns(
 		) || !exactContainerHiddenColumnType(
 			columnTypes[transport.namesColumn],
 			"Array(String)",
-			reflect.TypeOf([]string{}),
+			reflect.TypeFor[[]string](),
 		) || !exactContainerHiddenColumnType(
 			columnTypes[transport.typesColumn],
 			"Array(UInt8)",
-			reflect.TypeOf([]uint8{}),
+			reflect.TypeFor[[]uint8](),
 		) || !exactContainerHiddenColumnType(
 			columnTypes[transport.metadataVersionColumn],
 			"UInt8",
-			reflect.TypeOf(uint8(0)),
+			reflect.TypeFor[uint8](),
 		) {
 			return nil, nil, fmt.Errorf(
 				"%w: container output transport has invalid column types",
@@ -144,11 +144,11 @@ func validateOrdinaryResultColumns(
 		}
 		if strings.TrimSpace(columnTypes[outputIndex].DatabaseTypeName()) != "Array(String)" ||
 			columnTypes[outputIndex].Nullable() ||
-			columnTypes[outputIndex].ScanType() != reflect.TypeOf([]string{}) ||
+			columnTypes[outputIndex].ScanType() != reflect.TypeFor[[]string]() ||
 			!exactContainerHiddenColumnType(
 				columnTypes[transport.presentColumn],
 				"UInt8",
-				reflect.TypeOf(uint8(0)),
+				reflect.TypeFor[uint8](),
 			) {
 			return nil, nil, fmt.Errorf(
 				"%w: optional multivalue output transport has invalid column types",
@@ -187,10 +187,10 @@ func validateStringOrBytesResultColumns(
 		}
 		columnType := columnTypes[index]
 		expectedDatabaseType := "String"
-		expectedScanType := reflect.TypeOf("")
+		expectedScanType := reflect.TypeFor[string]()
 		if output.Nullable {
 			expectedDatabaseType = "Nullable(String)"
-			expectedScanType = reflect.TypeOf((*string)(nil))
+			expectedScanType = reflect.TypeFor[*string]()
 		}
 		if strings.TrimSpace(columnType.DatabaseTypeName()) != expectedDatabaseType ||
 			columnType.Nullable() != output.Nullable ||
@@ -198,7 +198,7 @@ func validateStringOrBytesResultColumns(
 			!exactContainerHiddenColumnType(
 				columnTypes[semanticColumn],
 				"UInt8",
-				reflect.TypeOf(uint8(0)),
+				reflect.TypeFor[uint8](),
 			) {
 			return nil, fmt.Errorf(
 				"%w: String-or-Bytes output transport has an invalid column type",

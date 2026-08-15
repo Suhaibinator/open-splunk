@@ -553,7 +553,6 @@ func TestDurableRedactorPreventsRenameDeclassification(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			pipeline, err := buildPipeline(test.processors)
@@ -728,7 +727,6 @@ func TestDurableRedactorTracksExactOrderedRenameLineage(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			pipeline, err := buildPipeline(test.processors)
@@ -831,7 +829,6 @@ func TestDurableRedactorSeparatesConstantAliasFromRawAndMessageProvenance(t *tes
 			raw:    `{"userID":"ordinary-json-business-data","message":"userID=ordinary-message-business-data"}`,
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			decoder, decodeErr := NewDecoder(DecodeConfig{
@@ -1213,8 +1210,7 @@ func TestDaemonBackpressureNoDrop(t *testing.T) {
 		lastOffsets:        make(map[inputFileKey]uint64),
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	processed := make(chan processedEvent)
 	batcherDone := make(chan error, 1)
 	go func() { batcherDone <- d.runBatcher(ctx, processed) }()

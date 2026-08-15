@@ -94,7 +94,6 @@ func TestConfiguredServerSingletonLockPath(t *testing.T) {
 	})
 
 	for _, value := range []string{"", "relative.lock", "/tmp/../tmp/lock", " /tmp/lock", "/tmp/lock "} {
-		value := value
 		t.Run("reject "+value, func(t *testing.T) {
 			t.Setenv(serverSingletonLockPathEnv, value)
 			if _, err := configuredServerSingletonLockPath(); err == nil {
@@ -160,7 +159,6 @@ func TestConfiguredServerLockRejectsUnsafePrivateDirectory(t *testing.T) {
 			},
 		},
 	} {
-		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			path := testCase.path(t)
 			t.Setenv(serverSingletonLockPathEnv, path)
@@ -238,7 +236,6 @@ func TestServerLockRejectsUnsafeExistingInodeMetadata(t *testing.T) {
 			},
 		},
 	} {
-		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 			path := filepath.Join(t.TempDir(), "deployment.lock")

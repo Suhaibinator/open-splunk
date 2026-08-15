@@ -732,7 +732,7 @@ var backendHECSlowGoroutinePattern = regexp.MustCompile(`^\s+G[0-9]+:`)
 
 func parseBackendHECSlowGC(logs string) []backendHECSlowGCSample {
 	var result []backendHECSlowGCSample
-	for _, line := range strings.Split(logs, "\n") {
+	for line := range strings.SplitSeq(logs, "\n") {
 		match := backendHECSlowGCPattern.FindStringSubmatch(line)
 		if len(match) != 4 {
 			continue
@@ -898,7 +898,7 @@ func summarizeBackendHECSlowStacks(logs string) string {
 		}
 		counts[strings.Join(symbols, " <- ")]++
 	}
-	for _, line := range strings.Split(logs, "\n") {
+	for line := range strings.SplitSeq(logs, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "goroutine ") {
 			finish()

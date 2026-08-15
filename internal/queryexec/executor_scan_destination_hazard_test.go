@@ -63,14 +63,14 @@ func TestExecuteSurvivesADriverThatSkipsNullAndRecyclesArrayBuffers(t *testing.T
 	base := &fakeRows{
 		columns: []string{"_time", "message", "tags"},
 		types: []driver.ColumnType{
-			fakeColumnType{name: "_time", databaseType: "DateTime64(9, 'UTC')", scanType: reflect.TypeOf(time.Time{})},
+			fakeColumnType{name: "_time", databaseType: "DateTime64(9, 'UTC')", scanType: reflect.TypeFor[time.Time]()},
 			fakeColumnType{
 				name:         "message",
 				databaseType: "Nullable(String)",
-				scanType:     reflect.TypeOf((*string)(nil)),
+				scanType:     reflect.TypeFor[*string](),
 				nullable:     true,
 			},
-			fakeColumnType{name: "tags", databaseType: "Array(String)", scanType: reflect.TypeOf([]string(nil))},
+			fakeColumnType{name: "tags", databaseType: "Array(String)", scanType: reflect.TypeFor[[]string]()},
 		},
 		data: [][]any{
 			{timestamp, "first", []string{"alpha", "beta"}},

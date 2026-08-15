@@ -17,7 +17,6 @@ func TestGradeThisCompatibilityCorpus(t *testing.T) {
 
 	fixture := gradethiscorpus.Fixture()
 	for _, search := range gradethiscorpus.Searches() {
-		search := search
 		t.Run(search.Name, func(t *testing.T) {
 			t.Parallel()
 			source, err := search.Render(fixture.TraceID)
@@ -41,7 +40,6 @@ func TestGradeThisCurrentMigrationCorpus(t *testing.T) {
 
 	fixture := gradethiscorpus.MigrationFixture()
 	for _, search := range gradethiscorpus.MigrationSearches() {
-		search := search
 		t.Run(search.Name, func(t *testing.T) {
 			t.Parallel()
 			source, err := search.Render(fixture.TraceID)

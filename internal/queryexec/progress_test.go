@@ -45,7 +45,7 @@ func TestExecutorExecuteAttachesAndForwardsClickHouseProgress(t *testing.T) {
 	rows := &fakeRows{
 		columns: []string{"message"},
 		types: []driver.ColumnType{
-			fakeColumnType{name: "message", databaseType: "String", scanType: reflect.TypeOf("")},
+			fakeColumnType{name: "message", databaseType: "String", scanType: reflect.TypeFor[string]()},
 		},
 		data: [][]any{{"ready"}},
 	}
@@ -114,7 +114,7 @@ func TestExecutorExecuteDoesNotAttachProgressForOrdinarySink(t *testing.T) {
 	rows := &fakeRows{
 		columns: []string{"message"},
 		types: []driver.ColumnType{
-			fakeColumnType{name: "message", databaseType: "String", scanType: reflect.TypeOf("")},
+			fakeColumnType{name: "message", databaseType: "String", scanType: reflect.TypeFor[string]()},
 		},
 	}
 	executor := mustExecutor(t, &fakeQueryConnection{rows: rows})
@@ -272,7 +272,6 @@ func TestExecutionProgressPreservesDriverErrorWithoutHigherPriorityFailure(t *te
 
 func TestExecutionProgressRecoversSinkPanicWithoutLeakingValue(t *testing.T) {
 	for _, panicValue := range []any{"storage-password", nil} {
-		panicValue := panicValue
 		name := "value"
 		if panicValue == nil {
 			name = "nil"

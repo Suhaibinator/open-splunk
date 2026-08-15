@@ -25,7 +25,6 @@ func TestKnowledgeCatalogStateMigrationPreflightsPhysicalVersionOverCap(t *testi
 		{name: "registered tenant", tenantID: "tenant-a"},
 		{name: "orphan physical tenant", tenantID: "tenant-orphan"},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			raw := openKnowledgeMigrationTestDB(t, "knowledge-state-physical-over-cap.sqlite")
 			if err := ApplyMigrations(context.Background(), raw, migrationsBefore(t, "0029_")); err != nil {
@@ -395,7 +394,6 @@ func TestKnowledgeCatalogStateMigrationRejectsCurrentVersionTupleDrift(t *testin
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			raw := openKnowledgeMigrationTestDB(t, "knowledge-state-current-tuple-drift.sqlite")
 			if err := ApplyMigrations(context.Background(), raw, migrationsBefore(t, "0029_")); err != nil {
@@ -588,7 +586,6 @@ func TestKnowledgeCatalogOrderKeySupportsPermittedPublicationOrders(t *testing.T
 		{name: "version before projection"},
 		{name: "deferred projection before version", projectionFirst: true},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			raw := openKnowledgeMigrationTestDB(t, "knowledge-order-publication.sqlite")
 			if err := ApplyMigrations(context.Background(), raw, migrations.SQLite()); err != nil {
@@ -946,7 +943,6 @@ func TestKnowledgeCatalogStateMigrationRejectsUnreadableLegacyChronologies(t *te
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			raw := openKnowledgeMigrationTestDB(t, "knowledge-state-unreadable-upgrade.sqlite")
 			if err := ApplyMigrations(context.Background(), raw, migrationsBefore(t, "0029_")); err != nil {
@@ -1029,7 +1025,6 @@ func TestKnowledgeCatalogStateMigrationRejectsDeferredMalformedHistories(t *test
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			raw := openKnowledgeMigrationTestDB(t, "knowledge-state-deferred-malformed.sqlite")
 			if err := ApplyMigrations(context.Background(), raw, migrationsBefore(t, "0029_")); err != nil {
@@ -1124,7 +1119,6 @@ func TestKnowledgeObjectVersionTransitionTriggerRejectsInvalidFreshHistory(t *te
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			raw := openKnowledgeMigrationTestDB(t, "knowledge-state-fresh-invalid.sqlite")
 			if err := ApplyMigrations(context.Background(), raw, migrations.SQLite()); err != nil {
@@ -1225,7 +1219,6 @@ func TestKnowledgeObjectVersionTransitionTriggerAcceptsValidFreshMatrix(t *testi
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			raw := openKnowledgeMigrationTestDB(t, "knowledge-state-fresh-valid.sqlite")
 			if err := ApplyMigrations(context.Background(), raw, migrations.SQLite()); err != nil {
@@ -1289,7 +1282,6 @@ func TestKnowledgeCatalogStateMigrationRejectsCurrentLifecycleMarkerDrift(t *tes
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			raw := openKnowledgeMigrationTestDB(t, "knowledge-state-marker-drift.sqlite")
 			if err := ApplyMigrations(context.Background(), raw, migrationsBefore(t, "0029_")); err != nil {

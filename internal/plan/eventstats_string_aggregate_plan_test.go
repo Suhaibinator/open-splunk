@@ -29,7 +29,6 @@ func TestBuildEventStatsStringAggregatesProduceSingularRowPreservingMeasure(t *t
 	t.Parallel()
 
 	for _, test := range eventStatsStringAggregatePlanCases() {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -110,7 +109,6 @@ func TestBuildEventStatsStringAggregatesUpsertFixedOutputSchema(t *testing.T) {
 	t.Parallel()
 
 	for _, aggregate := range eventStatsStringAggregatePlanCases() {
-		aggregate := aggregate
 		t.Run(aggregate.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -147,7 +145,6 @@ func TestBuildEventStatsStringAggregatesUpsertFixedOutputSchema(t *testing.T) {
 					want: []string{"host", "events", "observed_hosts"},
 				},
 			} {
-				test := test
 				t.Run(test.name, func(t *testing.T) {
 					t.Parallel()
 
@@ -176,7 +173,6 @@ func TestBuildEventStatsStringAggregatesProtectReservedOpenSchemaFields(t *testi
 	t.Parallel()
 
 	for _, test := range eventStatsStringAggregatePlanCases() {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -243,7 +239,6 @@ func TestBuildEventStatsStringAggregatesPreserveTimeAndIndexProvenance(t *testin
 	t.Parallel()
 
 	for _, test := range eventStatsStringAggregatePlanCases() {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -329,7 +324,6 @@ func TestBuildEventStatsStringAggregatesRejectForgedAggregateMetadata(t *testing
 	t.Parallel()
 
 	for _, aggregate := range eventStatsStringAggregatePlanCases() {
-		aggregate := aggregate
 		t.Run(aggregate.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -368,7 +362,6 @@ func TestBuildEventStatsStringAggregatesRejectForgedAggregateMetadata(t *testing
 				{"empty output", func(value *spl.StatsAggregate) { value.Alias = "" }, "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE"},
 				{"private output", func(value *spl.StatsAggregate) { value.Alias = "__os_eventstats_private" }, "SPL_RESERVED_FIELD"},
 			} {
-				test := test
 				t.Run(test.name, func(t *testing.T) {
 					t.Parallel()
 
@@ -393,7 +386,6 @@ func TestBuildEventStatsStringAggregatesRejectLongAliasAndForgedGroups(t *testin
 	t.Parallel()
 
 	for _, aggregate := range eventStatsStringAggregatePlanCases() {
-		aggregate := aggregate
 		t.Run(aggregate.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -451,7 +443,6 @@ func TestBuildEventStatsStringAggregatesRejectLongAliasAndForgedGroups(t *testin
 					wantCode: "SPL_QUERY_TOO_COMPLEX",
 				},
 			} {
-				test := test
 				t.Run(test.name, func(t *testing.T) {
 					t.Parallel()
 
@@ -486,7 +477,6 @@ func TestAnalyzeEventStatsStringAggregatesAcceptResolvedFieldsAndRejectForgery(
 	t.Parallel()
 
 	for _, aggregate := range eventStatsStringAggregatePlanCases() {
-		aggregate := aggregate
 		t.Run(aggregate.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -522,7 +512,6 @@ func TestAnalyzeEventStatsStringAggregatesAcceptResolvedFieldsAndRejectForgery(
 				{"empty output", func(value *AggregateMeasure) { value.Output = "" }},
 				{"private output", func(value *AggregateMeasure) { value.Output = "__os_eventstats_private" }},
 			} {
-				test := test
 				t.Run(test.name, func(t *testing.T) {
 					t.Parallel()
 
@@ -545,7 +534,6 @@ func TestAnalyzeEventStatsStringAggregatesAcceptResolvedFieldsAndRejectForgery(
 				{"duplicate group", []FieldRef{host, host}},
 				{"over group limit", make([]FieldRef, spl.MaximumStatsGroupFields+1)},
 			} {
-				test := test
 				t.Run(test.name, func(t *testing.T) {
 					t.Parallel()
 

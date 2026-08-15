@@ -332,7 +332,6 @@ func TestCompileStrptimeRejectsForgedPlans(t *testing.T) {
 			wantCode: "SPL_QUERY_TOO_COMPLEX",
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			err := compileForgedScalarAssignment(t, base, test.expression)
@@ -406,7 +405,6 @@ func TestCompileStrptimeBoundsQueryWideFormatWorkAndInputBytes(t *testing.T) {
 			want:      "strptime inputs require more than",
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

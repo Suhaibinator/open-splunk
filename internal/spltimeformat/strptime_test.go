@@ -65,7 +65,6 @@ func TestCompileStrptimeFormatAcceptsDeterministicFullDateSubset(t *testing.T) {
 			format: "on %Y%%%m%%%d",
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

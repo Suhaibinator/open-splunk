@@ -231,7 +231,6 @@ func TestKnowledgeHTTPGetAndListValidateCatalogDefinitionAuthority(t *testing.T)
 	}
 
 	for _, test := range tests {
-		test := test
 		for _, operation := range []struct {
 			name    string
 			path    string
@@ -250,7 +249,6 @@ func TestKnowledgeHTTPGetAndListValidateCatalogDefinitionAuthority(t *testing.T)
 				request: &opensplunkv1.ListKnowledgeObjectsRequest{},
 			},
 		} {
-			operation := operation
 			t.Run(test.name+"/"+operation.name, func(t *testing.T) {
 				object := test.object(t)
 				catalog := &knowledgeHTTPCatalog{

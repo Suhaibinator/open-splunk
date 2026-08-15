@@ -31,7 +31,6 @@ func TestParseEventStatsCount(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -96,7 +95,6 @@ func TestParseEventStatsCountFieldRequiresExplicitAlias(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -237,7 +235,6 @@ func TestParseEventStatsRejectsUnsupportedSurfaceAtSource(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -328,7 +325,6 @@ func TestParseEventStatsRejectsUnsupportedCountFieldForms(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -437,7 +433,6 @@ func TestParseAggregateGroupFieldsKeepCommandSpecificDiagnostics(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -483,7 +478,6 @@ func TestParseEventStatsRequiresCountAliasAndGroupField(t *testing.T) {
 		{name: "missing group", source: `index=main | eventstats count BY`, code: "SPL_EXPECTED_FIELD"},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

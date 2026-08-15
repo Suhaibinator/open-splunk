@@ -669,7 +669,7 @@ func readAdmissionCountRows(count uint64) *fakeRows {
 	return &fakeRows{
 		columns: []string{"count"},
 		types: []driver.ColumnType{
-			fakeColumnType{name: "count", databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0))},
+			fakeColumnType{name: "count", databaseType: "UInt64", scanType: reflect.TypeFor[uint64]()},
 		},
 		data: [][]any{{count}},
 	}

@@ -123,7 +123,6 @@ func TestCompileTimelineAcceptsEligibleOperatorMatrix(t *testing.T) {
 		`index=gradethis | makemv delim="," allowempty=true tags`,
 	}
 	for _, source := range queries {
-		source := source
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()
 			if _, err := (Compiler{}).CompileTimeline(buildPlan(t, source), validTimelineSpec()); err != nil {
@@ -160,7 +159,6 @@ func TestCompileTimelineRejectsIneligibleOperatorMatrix(t *testing.T) {
 		{`index=gradethis | mvexpand tags`, "SPL_UNSUPPORTED_TIMELINE_PIPELINE"},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.source, func(t *testing.T) {
 			t.Parallel()
 			_, err := (Compiler{}).CompileTimeline(buildPlan(t, test.source), validTimelineSpec())
@@ -187,7 +185,6 @@ func TestCompileTimelineRejectsForgedPlanAndMissingCanonicalOutput(t *testing.T)
 		{name: "dynamic output", query: &plan.Query{Operators: valid.Operators, DynamicOutput: &plan.DynamicSeriesOutput{FixedFields: []string{"_time"}, MaxSeries: 1}}},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := (Compiler{}).CompileTimeline(test.query, validTimelineSpec())
@@ -254,7 +251,6 @@ func TestCompileTimelineValidatesExactMinimalSpec(t *testing.T) {
 	}
 	logical := buildPlan(t, `index=gradethis`)
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			spec := valid
@@ -278,7 +274,6 @@ func TestCompileTimelineRequiresExactScanRange(t *testing.T) {
 		{name: "latest one nanosecond earlier", mutate: func(spec *TimelineSpec) { spec.Latest = spec.Latest.Add(-time.Nanosecond) }},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			spec := validTimelineSpec()

@@ -686,7 +686,6 @@ func TestCompileFieldCatalogProjectionAndShadowSemantics(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			compiled := compileFieldCatalog(t, buildPlan(t, test.source), 100)
@@ -865,7 +864,6 @@ func TestCompileFieldCatalogRecognizesProvenDynamicObjectParents(t *testing.T) {
 		{name: "table", source: `index=gradethis | table parent`, value: "parent"},
 		{name: "eval copy", source: `index=gradethis | eval copied=parent | table copied`, value: "copied"},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			compiled := compileFieldCatalog(t, buildPlan(t, test.source), 10)

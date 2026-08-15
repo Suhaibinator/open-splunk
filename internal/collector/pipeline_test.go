@@ -152,7 +152,6 @@ func TestAllowProcessor(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			p, err := NewAllowProcessor(tt.allow)
@@ -223,7 +222,6 @@ func TestDenyProcessor(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			p, err := NewDenyProcessor(tt.deny)
@@ -304,7 +302,6 @@ func TestRenameProcessor(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			p, err := NewRenameProcessor(tt.from, tt.to)

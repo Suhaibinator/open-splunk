@@ -81,7 +81,6 @@ func TestParseStreamStatsCountPreservesOptionsAliasGroupsAndRanges(t *testing.T)
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -194,7 +193,6 @@ func TestParseStreamStatsCountField(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -279,7 +277,6 @@ func TestParseStreamStatsSumField(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -356,7 +353,6 @@ func TestParseStreamStatsAverageField(t *testing.T) {
 			groups:        []string{"service"},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -452,7 +448,6 @@ func TestParseStreamStatsAcceptsEveryBooleanSpelling(t *testing.T) {
 		{value: "f", want: false},
 		{value: "FaLsE", want: false},
 	} {
-		test := test
 		t.Run(test.value, func(t *testing.T) {
 			t.Parallel()
 
@@ -538,7 +533,6 @@ func TestParseStreamStatsRejectsUnsupportedSurfaceAtSource(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

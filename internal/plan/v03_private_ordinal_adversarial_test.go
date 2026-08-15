@@ -35,7 +35,6 @@ func TestV03CommandsRejectPrivateOrdinalCollisionsDuringParsing(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			_, parseErr := spl.Parse(test.source)
@@ -160,7 +159,6 @@ func TestV03ForgedCommandsCannotBypassPrivateNamespaceDefense(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			if err := test.build(); err == nil {
@@ -195,7 +193,6 @@ func TestV03ReservedFieldsPayloadRequiresAnExactUpstreamSchema(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			parsed, parseErr := spl.Parse(test.raw)
@@ -230,14 +227,15 @@ func TestV03ReservedFieldsPayloadRequiresAnExactUpstreamSchema(t *testing.T) {
 func TestV03PlanningBoundsRepeatedExpansionAndKeepsOrdinalPrivate(t *testing.T) {
 	t.Parallel()
 
-	accepted := `index=gradethis`
+	var accepted strings.Builder
+	accepted.WriteString(`index=gradethis`)
 	for index := 1; index <= MaximumMVExpandStages; index++ {
-		accepted += fmt.Sprintf(` | mvexpand tags%d`, index)
+		fmt.Fprintf(&accepted, ` | mvexpand tags%d`, index)
 		if index != MaximumMVExpandStages {
-			accepted += ` | reverse`
+			accepted.WriteString(` | reverse`)
 		}
 	}
-	parsed, err := spl.Parse(accepted)
+	parsed, err := spl.Parse(accepted.String())
 	if err != nil {
 		t.Fatalf("Parse accepted repeated expansion: %v", err)
 	}
@@ -265,7 +263,7 @@ func TestV03PlanningBoundsRepeatedExpansionAndKeepsOrdinalPrivate(t *testing.T) 
 		}
 	}
 
-	rejected := accepted + ` | mvexpand overflow`
+	rejected := accepted.String() + ` | mvexpand overflow`
 	parsed, err = spl.Parse(rejected)
 	if err != nil {
 		t.Fatalf("parser should retain the third syntax-shaped expansion for planning: %v", err)

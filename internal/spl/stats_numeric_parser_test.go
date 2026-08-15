@@ -25,7 +25,6 @@ func TestParseStatsNumericFamiliesAndMeanPreserveCanonicalDefaults(t *testing.T)
 		{name: "varp", function: AggregateFunctionVariancePopulation, alias: "varp(value)"},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -68,7 +67,6 @@ func TestParseStatsNumericEvalInputsUseV02ScalarGrammar(t *testing.T) {
 		{call: "varp", function: AggregateFunctionVariancePopulation},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.call, func(t *testing.T) {
 			t.Parallel()
 
@@ -125,7 +123,6 @@ func TestParseStatsNumericEvalInputsPreserveCountBoundary(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

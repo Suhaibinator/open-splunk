@@ -429,7 +429,6 @@ func TestRestoreEnforcesOptionalDeploymentBinding(t *testing.T) {
 			},
 		},
 	} {
-		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 			fixture := newRecoveryFixture(t)
@@ -589,7 +588,6 @@ func TestVerifyRejectsTamperingExtraMembersAndDifferentReleaseWithoutSecrets(t *
 			fixture.release.SourceRevision = strings.Repeat("f", 40)
 		},
 	} {
-		name, mutate := name, mutate
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			fixture := newRecoveryFixture(t)
@@ -618,7 +616,6 @@ func TestRestoreResumesOnlyExactFailClosedPublicationPrefixes(t *testing.T) {
 		"database and key":    {databaseFilename, masterKeyFilename},
 		"complete idempotent": {databaseFilename, masterKeyFilename, administratorTokenFilename},
 	} {
-		name, prefix := name, prefix
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			fixture := newRecoveryFixture(t)
@@ -671,7 +668,6 @@ func TestRestoreResumesOnlyExactFailClosedPublicationPrefixes(t *testing.T) {
 			}
 		},
 	} {
-		name, seed := name, seed
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			fixture := newRecoveryFixture(t)
@@ -954,7 +950,6 @@ func TestRestoreRejectsUnsafeOrImplicitDatabaseLockWithoutMutation(t *testing.T)
 			},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			fixture := newRecoveryFixture(t)
@@ -1270,7 +1265,6 @@ func TestRestoreInterruptionAfterEveryPublicationBoundaryIsResumable(t *testing.
 			wantEntries: []string{"restored.db", "restored.key", "restored.token"},
 		},
 	} {
-		name, testCase := name, testCase
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			fixture := newRecoveryFixture(t)
@@ -1410,7 +1404,6 @@ func TestVerifyRejectsUnsafeMemberObjectsAndManifestConsistentWrongKey(t *testin
 			}
 		},
 	} {
-		name, mutate := name, mutate
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			fixture := newRecoveryFixture(t)

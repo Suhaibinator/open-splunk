@@ -145,7 +145,6 @@ func TestCompileEventStatsMaximumRejectsForgedPlanMetadata(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -169,7 +168,6 @@ func TestCompileEventStatsMaximumKeepsNativeFixedNumericAndTimeTypes(t *testing.
 		{name: "UInt8 severity", field: "severity", output: "highest_severity"},
 		{name: "DateTime64 time", field: "_time", output: "latest_time"},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

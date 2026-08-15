@@ -90,7 +90,7 @@ func TestExplainerBuffersExactPlanAndPreservesParameters(t *testing.T) {
 	if !rows.closed {
 		t.Fatal("EXPLAIN rows were not closed")
 	}
-	resultType := reflect.TypeOf(ExplainResult{})
+	resultType := reflect.TypeFor[ExplainResult]()
 	if resultType.NumField() != 2 ||
 		resultType.Field(0).Name != "Text" ||
 		resultType.Field(1).Name != "QueryID" {
@@ -331,7 +331,6 @@ func TestValidateExplainResult(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -370,12 +369,12 @@ func TestExplainerAcceptsExactCompilerArgumentInventory(t *testing.T) {
 		inventory[reflect.TypeOf(argument)] = struct{}{}
 	}
 	want := []reflect.Type{
-		reflect.TypeOf(""),
-		reflect.TypeOf(false),
-		reflect.TypeOf(int64(0)),
-		reflect.TypeOf(uint64(0)),
-		reflect.TypeOf(float64(0)),
-		reflect.TypeOf(uint8(0)),
+		reflect.TypeFor[string](),
+		reflect.TypeFor[bool](),
+		reflect.TypeFor[int64](),
+		reflect.TypeFor[uint64](),
+		reflect.TypeFor[float64](),
+		reflect.TypeFor[uint8](),
 	}
 	if len(inventory) != len(want) {
 		t.Fatalf("Compiler argument types = %v, want exactly %v", inventory, want)
@@ -1019,7 +1018,7 @@ func TestExplainerRejectsMalformedSchemaAndEmptyResults(t *testing.T) {
 			mutate: func(rows *fakeRows) {
 				rows.types[0] = fakeColumnType{
 					name: "explain", databaseType: "LowCardinality(String)",
-					scanType: reflect.TypeOf(""),
+					scanType: reflect.TypeFor[string](),
 				}
 			},
 		},
@@ -1028,7 +1027,7 @@ func TestExplainerRejectsMalformedSchemaAndEmptyResults(t *testing.T) {
 			mutate: func(rows *fakeRows) {
 				rows.types[0] = fakeColumnType{
 					name: "explain", databaseType: "String",
-					scanType: reflect.TypeOf(""), nullable: true,
+					scanType: reflect.TypeFor[string](), nullable: true,
 				}
 			},
 		},
@@ -1037,7 +1036,7 @@ func TestExplainerRejectsMalformedSchemaAndEmptyResults(t *testing.T) {
 			mutate: func(rows *fakeRows) {
 				rows.types[0] = fakeColumnType{
 					name: "explain", databaseType: "String",
-					scanType: reflect.TypeOf([]byte{}),
+					scanType: reflect.TypeFor[[]byte](),
 				}
 			},
 		},
@@ -1841,7 +1840,7 @@ func explainFakeRows(lines ...string) *fakeRows {
 	return &fakeRows{
 		columns: []string{"explain"},
 		types: []driver.ColumnType{fakeColumnType{
-			name: "explain", databaseType: "String", scanType: reflect.TypeOf(""),
+			name: "explain", databaseType: "String", scanType: reflect.TypeFor[string](),
 		}},
 		data: data,
 	}

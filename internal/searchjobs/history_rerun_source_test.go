@@ -48,7 +48,6 @@ func TestJobSourceUsesOriginSpecificIDBounds(t *testing.T) {
 			wantError: true,
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

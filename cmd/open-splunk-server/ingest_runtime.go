@@ -112,7 +112,7 @@ func normalizeRuntimeOptions(config *options) error {
 		)
 	}
 	config.httpAllowedHosts = config.httpAllowedHosts[:0]
-	for _, candidate := range strings.Split(config.httpAllowedHostsCSV, ",") {
+	for candidate := range strings.SplitSeq(config.httpAllowedHostsCSV, ",") {
 		if candidate = strings.TrimSpace(candidate); candidate != "" {
 			config.httpAllowedHosts = append(config.httpAllowedHosts, candidate)
 		}

@@ -55,7 +55,7 @@ func TestExecutorExecuteTimelineRejectsMalformedResultsAtomically(t *testing.T) 
 		{name: "reversed columns", mutate: func(rows *fakeRows) { rows.columns[0], rows.columns[1] = rows.columns[1], rows.columns[0] }},
 		{name: "extra column", mutate: func(rows *fakeRows) {
 			rows.columns = append(rows.columns, "extra")
-			rows.types = append(rows.types, fakeColumnType{name: "extra", databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0))})
+			rows.types = append(rows.types, fakeColumnType{name: "extra", databaseType: "UInt8", scanType: reflect.TypeFor[uint8]()})
 		}},
 		{name: "missing type", mutate: func(rows *fakeRows) { rows.types = rows.types[:1] }},
 		{name: "typed nil type", mutate: func(rows *fakeRows) {
@@ -63,22 +63,22 @@ func TestExecutorExecuteTimelineRejectsMalformedResultsAtomically(t *testing.T) 
 			rows.types[0] = columnType
 		}},
 		{name: "type name differs from column", mutate: func(rows *fakeRows) {
-			rows.types[0] = fakeColumnType{name: "wrong", databaseType: timelineOrdinalDatabaseType, scanType: reflect.TypeOf(uint64(0))}
+			rows.types[0] = fakeColumnType{name: "wrong", databaseType: timelineOrdinalDatabaseType, scanType: reflect.TypeFor[uint64]()}
 		}},
 		{name: "nullable ordinal", mutate: func(rows *fakeRows) {
-			rows.types[0] = fakeColumnType{name: clickhouse.TimelineOrdinalColumn, databaseType: timelineOrdinalDatabaseType, scanType: reflect.TypeOf(uint64(0)), nullable: true}
+			rows.types[0] = fakeColumnType{name: clickhouse.TimelineOrdinalColumn, databaseType: timelineOrdinalDatabaseType, scanType: reflect.TypeFor[uint64](), nullable: true}
 		}},
 		{name: "wrapped ordinal", mutate: func(rows *fakeRows) {
-			rows.types[0] = fakeColumnType{name: clickhouse.TimelineOrdinalColumn, databaseType: "Nullable(" + timelineOrdinalDatabaseType + ")", scanType: reflect.TypeOf(uint64(0))}
+			rows.types[0] = fakeColumnType{name: clickhouse.TimelineOrdinalColumn, databaseType: "Nullable(" + timelineOrdinalDatabaseType + ")", scanType: reflect.TypeFor[uint64]()}
 		}},
 		{name: "wrong ordinal width", mutate: func(rows *fakeRows) {
-			rows.types[0] = fakeColumnType{name: clickhouse.TimelineOrdinalColumn, databaseType: "UInt32", scanType: reflect.TypeOf(uint32(0))}
+			rows.types[0] = fakeColumnType{name: clickhouse.TimelineOrdinalColumn, databaseType: "UInt32", scanType: reflect.TypeFor[uint32]()}
 		}},
 		{name: "nullable count", mutate: func(rows *fakeRows) {
-			rows.types[1] = fakeColumnType{name: clickhouse.TimelineCountColumn, databaseType: "Nullable(UInt64)", scanType: reflect.TypeOf(uint64(0)), nullable: true}
+			rows.types[1] = fakeColumnType{name: clickhouse.TimelineCountColumn, databaseType: "Nullable(UInt64)", scanType: reflect.TypeFor[uint64](), nullable: true}
 		}},
 		{name: "wrong count width", mutate: func(rows *fakeRows) {
-			rows.types[1] = fakeColumnType{name: clickhouse.TimelineCountColumn, databaseType: "UInt32", scanType: reflect.TypeOf(uint32(0))}
+			rows.types[1] = fakeColumnType{name: clickhouse.TimelineCountColumn, databaseType: "UInt32", scanType: reflect.TypeFor[uint32]()}
 		}},
 		{name: "short grid", mutate: func(rows *fakeRows) { rows.data = rows.data[:2] }},
 		{name: "long grid", mutate: func(rows *fakeRows) {
@@ -410,8 +410,8 @@ func timelineFakeRows(_ time.Time, _ time.Duration, counts []uint64) *fakeRows {
 	return &fakeRows{
 		columns: []string{clickhouse.TimelineOrdinalColumn, clickhouse.TimelineCountColumn},
 		types: []driver.ColumnType{
-			fakeColumnType{name: clickhouse.TimelineOrdinalColumn, databaseType: timelineOrdinalDatabaseType, scanType: reflect.TypeOf(uint64(0))},
-			fakeColumnType{name: clickhouse.TimelineCountColumn, databaseType: timelineCountDatabaseType, scanType: reflect.TypeOf(uint64(0))},
+			fakeColumnType{name: clickhouse.TimelineOrdinalColumn, databaseType: timelineOrdinalDatabaseType, scanType: reflect.TypeFor[uint64]()},
+			fakeColumnType{name: clickhouse.TimelineCountColumn, databaseType: timelineCountDatabaseType, scanType: reflect.TypeFor[uint64]()},
 		},
 		data: data,
 	}

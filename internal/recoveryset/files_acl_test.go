@@ -49,7 +49,6 @@ func TestArchiveOperationsRejectExtendedACLWithoutDeletion(t *testing.T) {
 	t.Parallel()
 
 	for _, operation := range []string{"inspect", "cleanup"} {
-		operation := operation
 		t.Run(operation, func(t *testing.T) {
 			t.Parallel()
 

@@ -148,7 +148,6 @@ func TestParseRenameRejectsPatternsDuplicatesAndAmbiguousSyntax(t *testing.T) {
 		{`* | rename first AS target, second AS target`, "SPL_DUPLICATE_RENAME_TARGET"},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.source, func(t *testing.T) {
 			t.Parallel()
 			assertParseDiagnosticCode(t, test.source, test.code)
@@ -225,7 +224,6 @@ func TestParseDedupCountAndExactFieldList(t *testing.T) {
 		{name: "whitespace list", source: `index=main | dedup service severity level`, count: 1, fields: []string{"service", "severity", "level"}},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			query, err := Parse(test.source)
@@ -268,7 +266,6 @@ func TestParseDedupRejectsUnsupportedOrAmbiguousSyntax(t *testing.T) {
 		`index=main | dedup host sortby -_time`,
 	}
 	for _, source := range tests {
-		source := source
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()
 			_, err := Parse(source)
@@ -967,7 +964,6 @@ func TestLiteralsRetainTypeIntent(t *testing.T) {
 		{`code="500"`, LiteralKindString, "500"},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.query, func(t *testing.T) {
 			t.Parallel()
 			query, err := Parse(test.query)
@@ -1136,7 +1132,6 @@ func TestParseStatsCountFieldRequiresExactlyOneExactField(t *testing.T) {
 		{name: "abbreviated eval expression", source: `index=main | stats c(eval(status=200))`, code: "SPL_EXPECTED_RIGHT_PAREN"},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := Parse(test.source)
@@ -1334,7 +1329,6 @@ func TestParseStatsValuesRequiresExactlyOneField(t *testing.T) {
 		{name: "multiple fields", source: `index=main | stats values(left,right)`, code: "SPL_EXPECTED_RIGHT_PAREN"},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := Parse(test.source)
@@ -1385,7 +1379,6 @@ func TestParseStatsListRequiresExactlyOneField(t *testing.T) {
 		{name: "multiple fields", source: `index=main | stats list(left,right)`, code: "SPL_EXPECTED_RIGHT_PAREN"},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := Parse(test.source)
@@ -1545,7 +1538,6 @@ func TestParseTimechartFixedSpanCountByField(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			query, err := Parse(test.source)
@@ -1606,7 +1598,6 @@ func TestParseTimechartFixedSpanCountWithoutSplit(t *testing.T) {
 			unit:        TimeSpanUnitHour,
 		},
 	} {
-		test := test
 		t.Run(test.commandText, func(t *testing.T) {
 			t.Parallel()
 			query, err := Parse(test.source)
@@ -1756,7 +1747,6 @@ func TestParseBinSpansFieldsAndOutput(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -1805,7 +1795,6 @@ func TestParseBinOptionNamesRemainExactFieldsWithoutEqual(t *testing.T) {
 	t.Parallel()
 
 	for _, field := range []string{"span", "bins", "minspan", "start", "end", "aligntime"} {
-		field := field
 		t.Run(field, func(t *testing.T) {
 			t.Parallel()
 
@@ -1879,7 +1868,6 @@ func TestParseBinRejectsUnsupportedOrMalformedSyntax(t *testing.T) {
 		{"numeric integer overflow", `index=main | bucket span=18446744073709551616 value`, "SPL_NUMBER_OUT_OF_RANGE", "18446744073709551616"},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -1931,7 +1919,6 @@ func TestParseTimechartRejectsUnsupportedOrMalformedSyntax(t *testing.T) {
 		{"unsupported option", `index=main | timechart span=5m count by level useother=false`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "useother"},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := Parse(test.source)
@@ -2014,7 +2001,6 @@ func TestParseChartAcceptsBothTwoFieldPivotSpellings(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			query, err := Parse(test.source)
@@ -2151,7 +2137,6 @@ func TestParseChartRejectsUnsupportedAggregates(t *testing.T) {
 		{"aggregate alias", `index=main | chart count AS total over path by level`, "AS"},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := Parse(test.source)
@@ -2200,7 +2185,6 @@ func TestParseChartRejectsEveryOptionIncludingDocumentedDefaults(t *testing.T) {
 		{"option after a BY list", `index=main | chart count by path, level useother=false`, "useother"},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := Parse(test.source)
@@ -2254,7 +2238,6 @@ func TestParseChartRejectsUnsupportedOrMalformedSyntax(t *testing.T) {
 		{"empty comma", `index=main | chart count by path,, level`, "SPL_EXPECTED_FIELD", ","},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := Parse(test.source)
@@ -2520,7 +2503,6 @@ func TestParseErrorsAreSourceLocated(t *testing.T) {
 		{"dangling pipe", `index=gradethis |`, "SPL_EXPECTED_COMMAND", 1, 18},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := Parse(test.query)

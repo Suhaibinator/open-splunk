@@ -1066,7 +1066,6 @@ func assertCurrentGradeThisSearches(
 ) {
 	t.Helper()
 	for _, search := range gradethiscorpus.MigrationSearches() {
-		search := search
 		t.Run("current-gradethis-"+string(search.ID), func(t *testing.T) {
 			source, err := search.Render(profile.TraceID)
 			if err != nil {

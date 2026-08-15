@@ -432,7 +432,6 @@ func TestAuditedIndexAdministrationConcurrentCASPublishesOnlyWinner(t *testing.T
 	start := make(chan struct{})
 	errorsByAttempt := make(chan error, 2)
 	for _, displayName := range []string{"first", "second"} {
-		displayName := displayName
 		go func() {
 			<-start
 			replacement := created.Definition

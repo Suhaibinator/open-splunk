@@ -66,7 +66,6 @@ func TestParseStatsSparklineAcceptsScopedAndUnscopedCountForms(t *testing.T) {
 		{name: "scoped abbreviation", source: `| stats sparkline(c(status),30m)`, function: AggregateFunctionCountValues, input: "status"},
 		{name: "legacy shorthand", source: `| stats sparkline count`, function: AggregateFunctionCount, automatic: true},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -161,7 +160,6 @@ func TestParseStatsSparklineSupportsDocumentedInnerFunctionInventory(t *testing.
 		{"range", AggregateFunctionRange},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -196,7 +194,6 @@ func TestParseStatsSparklinePreservesEveryDocumentedSpanUnit(t *testing.T) {
 		{"6months", 6, SparklineSpanUnitMonth},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.span, func(t *testing.T) {
 			t.Parallel()
 
@@ -242,7 +239,6 @@ func TestParseStatsSparklineRejectsUnsupportedShapesAndInvalidSpans(t *testing.T
 		{name: "wildcard alias capture mismatch", source: `| stats sparkline(avg(*lay)) AS trend_*_*`, code: "SPL_UNSUPPORTED_STATS_AGGREGATE", message: "each input capture"},
 		{name: "quoted wildcard alias", source: `| stats sparkline(avg(*lay)) AS "trend_*"`, code: "SPL_UNSUPPORTED_STATS_AGGREGATE", message: "unquoted wc-field"},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

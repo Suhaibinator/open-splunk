@@ -48,7 +48,6 @@ func TestParseFrequencyCommandsAcceptOrderedCommaSeparatedFields(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -83,7 +82,6 @@ func TestParseFrequencyCommandsAcceptMaximumDistinctFields(t *testing.T) {
 		fieldNames[index] = fmt.Sprintf("field%d", index)
 	}
 	for _, commandName := range []string{"top", "rare"} {
-		commandName := commandName
 		t.Run(commandName, func(t *testing.T) {
 			t.Parallel()
 
@@ -107,7 +105,6 @@ func TestParseFrequencyCommandsRejectMoreThanMaximumFields(t *testing.T) {
 		fieldNames[index] = fmt.Sprintf("field%d", index)
 	}
 	for _, commandName := range []string{"top", "rare"} {
-		commandName := commandName
 		t.Run(commandName, func(t *testing.T) {
 			t.Parallel()
 
@@ -144,9 +141,7 @@ func TestParseFrequencyCommandsRequireExactDistinctCommaSeparatedFields(t *testi
 		{name: "output option", arguments: "host,showperc=false", wantRange: "showperc"},
 	}
 	for _, commandName := range []string{"top", "rare"} {
-		commandName := commandName
 		for _, test := range tests {
-			test := test
 			t.Run(commandName+"/"+test.name, func(t *testing.T) {
 				t.Parallel()
 

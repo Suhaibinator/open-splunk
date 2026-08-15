@@ -23105,20 +23105,22 @@ func compileBoundedOrderedStringResults(
 		)
 	}
 
-	rowElementTotal := "toUInt128(0)"
-	rowByteTotal := "toUInt128(0)"
+	var rowElementTotal strings.Builder
+	rowElementTotal.WriteString("toUInt128(0)")
+	var rowByteTotal strings.Builder
+	rowByteTotal.WriteString("toUInt128(0)")
 	for _, measure := range measures {
 		// Public aliases count independently even when their physical ordered
 		// aggregate state is shared.
-		rowElementTotal += " + toUInt128(length(" + measure.listColumn + "))"
-		rowByteTotal += " + " + orderedStringListPayloadBytesSQL(measure.listColumn)
+		rowElementTotal.WriteString(" + toUInt128(length(" + measure.listColumn + "))")
+		rowByteTotal.WriteString(" + " + orderedStringListPayloadBytesSQL(measure.listColumn))
 	}
 	for _, valuesColumn := range existingValues {
 		// values() has already passed its own exact-state barrier. Include each
 		// public values alias again so list() cannot bypass the combined
 		// transforming-row and transport budgets.
-		rowElementTotal += " + toUInt128(length(" + valuesColumn + "))"
-		rowByteTotal += " + " + stringArrayPayloadBytesSQL(valuesColumn)
+		rowElementTotal.WriteString(" + toUInt128(length(" + valuesColumn + "))")
+		rowByteTotal.WriteString(" + " + stringArrayPayloadBytesSQL(valuesColumn))
 	}
 
 	elementOverflow := quoteIdentifier("__os_stats_list_any_overflow")
@@ -23127,15 +23129,15 @@ func compileBoundedOrderedStringResults(
 	totalBytes := quoteIdentifier("__os_stats_list_total_bytes")
 	windowColumns = append(
 		windowColumns,
-		"max(toUInt8("+rowElementTotal+" > toUInt128("+
+		"max(toUInt8("+rowElementTotal.String()+" > toUInt128("+
 			strconv.FormatUint(MaximumStatsValuesPerGroup, 10)+
 			"))) OVER () AS "+elementOverflow,
-		"sum("+rowElementTotal+") OVER () AS "+totalElements,
+		"sum("+rowElementTotal.String()+") OVER () AS "+totalElements,
 		"max(toUInt8(("+strings.Join(byteConditions, " OR ")+") OR "+
-			rowByteTotal+" > toUInt128("+
+			rowByteTotal.String()+" > toUInt128("+
 			strconv.FormatUint(MaximumStatsValuesBytesPerGroup, 10)+
 			"))) OVER () AS "+bytesOverflow,
-		"sum("+rowByteTotal+") OVER () AS "+totalBytes,
+		"sum("+rowByteTotal.String()+") OVER () AS "+totalBytes,
 	)
 
 	windowAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", stage+1))
@@ -23268,24 +23270,26 @@ func compileBoundedExactStringResults(
 		valuesBytesOverflow = quoteIdentifier("__os_stats_values_bytes_any_overflow")
 		valuesTotalBytes = quoteIdentifier("__os_stats_values_total_bytes")
 
-		rowElementTotal := "toUInt128(0)"
-		rowByteTotal := "toUInt128(0)"
+		var rowElementTotal strings.Builder
+		rowElementTotal.WriteString("toUInt128(0)")
+		var rowByteTotal strings.Builder
+		rowByteTotal.WriteString("toUInt128(0)")
 		for _, measure := range valuesMeasures {
 			// Deliberately retain duplicates: two public aliases create two
 			// recursive list cells even when their aggregate state is shared.
-			rowElementTotal += " + toUInt128(length(" + measure.setColumn + "))"
-			rowByteTotal += " + " + stringArrayPayloadBytesSQL(measure.setColumn)
+			rowElementTotal.WriteString(" + toUInt128(length(" + measure.setColumn + "))")
+			rowByteTotal.WriteString(" + " + stringArrayPayloadBytesSQL(measure.setColumn))
 		}
 		windowColumns = append(
 			windowColumns,
-			"max(toUInt8(("+strings.Join(valueConditions, " OR ")+") OR "+rowElementTotal+
+			"max(toUInt8(("+strings.Join(valueConditions, " OR ")+") OR "+rowElementTotal.String()+
 				" > toUInt128("+strconv.FormatUint(MaximumStatsValuesPerGroup, 10)+
 				"))) OVER () AS "+valuesOverflow,
-			"sum("+rowElementTotal+") OVER () AS "+valuesTotalElements,
-			"max(toUInt8(("+strings.Join(byteConditions, " OR ")+") OR "+rowByteTotal+
+			"sum("+rowElementTotal.String()+") OVER () AS "+valuesTotalElements,
+			"max(toUInt8(("+strings.Join(byteConditions, " OR ")+") OR "+rowByteTotal.String()+
 				" > toUInt128("+strconv.FormatUint(MaximumStatsValuesBytesPerGroup, 10)+
 				"))) OVER () AS "+valuesBytesOverflow,
-			"sum("+rowByteTotal+") OVER () AS "+valuesTotalBytes,
+			"sum("+rowByteTotal.String()+") OVER () AS "+valuesTotalBytes,
 		)
 	}
 

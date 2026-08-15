@@ -13,7 +13,6 @@ import (
 
 func TestIntegrationInactiveFutureBodiesRoundTripAndActiveFailsClosed(t *testing.T) {
 	for _, state := range []State{StateDraft, StateDisabled, StateDeleted} {
-		state := state
 		t.Run(string(state), func(t *testing.T) {
 			database, store := newCatalogTestStore(t)
 			name := "future-" + string(state)

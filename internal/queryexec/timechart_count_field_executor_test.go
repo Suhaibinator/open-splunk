@@ -162,7 +162,7 @@ func TestExecutorRejectsMalformedFixedCountFieldTransportAtomically(t *testing.T
 				rows.types[2] = fakeColumnType{
 					name:         clickhouse.TimechartInputPresentColumn,
 					databaseType: "UInt8",
-					scanType:     reflect.TypeOf(uint8(0)),
+					scanType:     reflect.TypeFor[uint8](),
 					nullable:     true,
 				}
 			},
@@ -174,7 +174,7 @@ func TestExecutorRejectsMalformedFixedCountFieldTransportAtomically(t *testing.T
 				rows.types[2] = fakeColumnType{
 					name:         clickhouse.TimechartInputPresentColumn,
 					databaseType: "UInt64",
-					scanType:     reflect.TypeOf(uint64(0)),
+					scanType:     reflect.TypeFor[uint64](),
 				}
 				rows.data[0][2] = uint64(1)
 				rows.data[1][2] = uint64(1)
@@ -223,7 +223,6 @@ func TestExecutorRejectsMalformedFixedCountFieldTransportAtomically(t *testing.T
 			},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -292,17 +291,17 @@ func fixedCountFieldTimechartRows(counts []uint64, presence []uint8) *fakeRows {
 			fakeColumnType{
 				name:         clickhouse.TimechartOrdinalColumn,
 				databaseType: "UInt64",
-				scanType:     reflect.TypeOf(uint64(0)),
+				scanType:     reflect.TypeFor[uint64](),
 			},
 			fakeColumnType{
 				name:         clickhouse.TimechartCountColumn,
 				databaseType: "UInt64",
-				scanType:     reflect.TypeOf(uint64(0)),
+				scanType:     reflect.TypeFor[uint64](),
 			},
 			fakeColumnType{
 				name:         clickhouse.TimechartInputPresentColumn,
 				databaseType: "UInt8",
-				scanType:     reflect.TypeOf(uint8(0)),
+				scanType:     reflect.TypeFor[uint8](),
 			},
 		},
 		data: make([][]any, len(counts)),

@@ -1088,7 +1088,6 @@ func TestV03AdversarialAgainstClickHouse(t *testing.T) {
 			{source: `index=spl-v03 source="v03-mvexpand-duration" | mvexpand mv_scalar | head 1 | table event_id`, marker: UnsupportedMVExpandValueMarker},
 			{source: `index=spl-v03 event_id="v03-mvexpand-malformed-envelope" | mvexpand mv_scalar | head 1 | table event_id`, marker: UnsupportedMVExpandValueMarker},
 		} {
-			test := test
 			t.Run(test.source, func(t *testing.T) {
 				v03AssertAtomicExecutionFailure(t, queryContext, connection, compile(test.source), test.marker)
 			})
@@ -1145,7 +1144,6 @@ func TestV03AdversarialAgainstClickHouse(t *testing.T) {
 			`index=spl-v03 source="v03-delta-boundary" | delta delta_n AS step | head 1`,
 			`index=spl-v03 source="v03-delta-boundary" | delta delta_n AS step | stats count`,
 		} {
-			source := source
 			t.Run(source, func(t *testing.T) {
 				v03AssertAtomicExecutionFailure(
 					t, queryContext, connection, compile(source), StreamStatsInputLimitMarker,
@@ -1184,7 +1182,6 @@ func TestV03AdversarialAgainstClickHouse(t *testing.T) {
 			`index=spl-v03 event_id="v03-mvexpand-malformed-envelope" | addtotals fieldname=mv_scalar mv_scalar | where event_id="never"`,
 			`index=spl-v03 event_id="v03-addtotals-default-malformed-envelope" | addtotals Total | fields event_id`,
 		} {
-			source := source
 			t.Run(source, func(t *testing.T) {
 				v03AssertAtomicExecutionFailure(
 					t, queryContext, connection, compile(source), UnsupportedExpressionValueMarker,
@@ -1200,7 +1197,6 @@ func TestV03AdversarialAgainstClickHouse(t *testing.T) {
 			`index=spl-v03 source="v03-mvexpand-bomb" | mvexpand bomb_mv | table event_id`,
 			`index=spl-v03 source="v03-mvexpand-bomb" | mvexpand bomb_mv | head 1`,
 		} {
-			source := source
 			t.Run(source, func(t *testing.T) {
 				v03AssertAtomicExecutionFailure(
 					t, queryContext, connection, compile(source), MVExpandRowMembersLimitMarker,

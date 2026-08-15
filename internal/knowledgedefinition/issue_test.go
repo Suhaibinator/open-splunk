@@ -238,7 +238,6 @@ func TestNormalizePreflightIssuesCoverEveryBoundedShape(t *testing.T) {
 		}},
 	}
 	for _, dimension := range dimensions {
-		dimension := dimension
 		t.Run(dimension.path, func(t *testing.T) {
 			t.Parallel()
 			definition := validAliasDefinition()
@@ -402,7 +401,6 @@ func TestNormalizeIssueErrorsPreserveLegacyRootParity(t *testing.T) {
 		},
 	}
 	for _, test := range lowerLevelCauses {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := Normalize(test.definition())

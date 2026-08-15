@@ -52,7 +52,6 @@ func TestCompileEventStatsValuesUsesOneBoundedSortedExactSet(t *testing.T) {
 			grouped: true,
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -324,7 +323,6 @@ func TestCompileEventStatsValuesRejectsForgedMeasureMetadata(t *testing.T) {
 			},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

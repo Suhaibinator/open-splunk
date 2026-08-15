@@ -96,7 +96,7 @@ type lookupExternalTableContextProbe struct {
 }
 
 func (probe *lookupExternalTableContextProbe) Value(key any) any {
-	if reflect.TypeOf(key) == reflect.TypeOf((*clickhousedriver.QueryOptions)(nil)) {
+	if reflect.TypeOf(key) == reflect.TypeFor[*clickhousedriver.QueryOptions]() {
 		probe.key = key
 	}
 	return probe.Context.Value(key)

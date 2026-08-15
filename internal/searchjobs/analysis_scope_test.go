@@ -255,7 +255,6 @@ func TestSnapshotAnalysisScopeRejectsStructuralScopeAndSizeErrorsBeforeAdmission
 		}, wantTooLarge: true},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			request := valid
 			test.mutate(&request)

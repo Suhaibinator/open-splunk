@@ -509,8 +509,6 @@ func TestConcurrentRotatedCredentialsAllocateMonotonicDurableLeases(t *testing.T
 		firstToken,
 		secondToken,
 	} {
-		index := index
-		issued := issued
 		go func() {
 			<-start
 			result, err := fixture.store.Admit(

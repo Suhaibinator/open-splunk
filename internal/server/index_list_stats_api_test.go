@@ -344,7 +344,6 @@ func TestIndexListStatisticsDoNoNativeWorkWhenDisabledOrPageIsEmpty(
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -493,7 +492,6 @@ func TestIndexListStatisticsSortsRemainRejectedBeforeNativeWork(
 		opensplunkv1.IndexSortBy_INDEX_SORT_BY_EVENT_COUNT,
 		opensplunkv1.IndexSortBy_INDEX_SORT_BY_STORAGE_BYTES,
 	} {
-		sortBy := sortBy
 		t.Run(sortBy.String(), func(t *testing.T) {
 			t.Parallel()
 
@@ -561,7 +559,6 @@ func TestIndexListCursorBindsStatisticsModeBeforeNativeWork(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -745,7 +742,6 @@ func TestIndexListStatisticsRejectMalformedBatchResults(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -808,7 +804,6 @@ func TestIndexListStatisticsMapBatchFailuresWithoutDisclosure(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

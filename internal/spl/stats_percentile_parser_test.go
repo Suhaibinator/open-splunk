@@ -62,7 +62,6 @@ func TestParseStatsPercentileRejectsOutOfRangeAndNonSuffixForms(t *testing.T) {
 		`index=main | stats perc(latency, 95)`,
 		`index=main | stats perc99.5(latency)`,
 	} {
-		source := source
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()
 

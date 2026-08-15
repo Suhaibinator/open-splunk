@@ -63,7 +63,6 @@ func TestResolvePinnedClickHouseImage(t *testing.T) {
 		"uppercase digest": {image: "clickhouse@sha256:" + strings.Repeat("A", 64)},
 		"trailing text":    {image: canonical + "-mutable"},
 	} {
-		test := test
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			got, err := ResolvePinnedClickHouseImage(test.image)

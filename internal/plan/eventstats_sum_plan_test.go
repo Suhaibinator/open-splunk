@@ -48,7 +48,6 @@ func TestBuildEventStatsFieldAggregatesProduceSingularRowPreservingMeasure(t *te
 			references: []string{"host", "http.bytes", "index", "status"},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -139,7 +138,6 @@ func TestBuildEventStatsSumUpsertsKnownOutputSchema(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -346,7 +344,6 @@ func TestBuildEventStatsSumRejectsForgedAggregateMetadata(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -443,7 +440,6 @@ func TestAnalyzeEventStatsSumAcceptsResolvedInputAndRejectsForgedMetadata(
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

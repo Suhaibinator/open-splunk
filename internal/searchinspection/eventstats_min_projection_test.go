@@ -33,7 +33,6 @@ func TestProjectLogicalPlanProjectsEventStatsFieldAggregateInputAndOutput(t *tes
 			output: "last_status", stageInputs: []string{"_time", "host", "http.status"},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

@@ -177,7 +177,7 @@ func TestExecutorExecuteFieldSuggestionsRejectsMalformedSchemaAtomically(t *test
 		{name: "extra column", mutate: func(rows *fakeRows) {
 			rows.columns = append(rows.columns, "extra")
 			rows.types = append(rows.types, fakeColumnType{
-				name: "extra", databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0)),
+				name: "extra", databaseType: "UInt8", scanType: reflect.TypeFor[uint8](),
 			})
 		}},
 		{name: "missing column type", mutate: func(rows *fakeRows) { rows.types = rows.types[:2] }},
@@ -187,31 +187,31 @@ func TestExecutorExecuteFieldSuggestionsRejectsMalformedSchemaAtomically(t *test
 		}},
 		{name: "type name mismatch", mutate: func(rows *fakeRows) {
 			rows.types[1] = fakeColumnType{
-				name: "wrong", databaseType: "String", scanType: reflect.TypeOf(""),
+				name: "wrong", databaseType: "String", scanType: reflect.TypeFor[string](),
 			}
 		}},
 		{name: "nullable", mutate: func(rows *fakeRows) {
 			rows.types[2] = fakeColumnType{
 				name: clickhouse.FieldSuggestionInvalidColumn, databaseType: "UInt8",
-				scanType: reflect.TypeOf(uint8(0)), nullable: true,
+				scanType: reflect.TypeFor[uint8](), nullable: true,
 			}
 		}},
 		{name: "wrapped nullable", mutate: func(rows *fakeRows) {
 			rows.types[2] = fakeColumnType{
 				name: clickhouse.FieldSuggestionInvalidColumn, databaseType: "Nullable(UInt8)",
-				scanType: reflect.TypeOf(uint8(0)),
+				scanType: reflect.TypeFor[uint8](),
 			}
 		}},
 		{name: "wrong physical type", mutate: func(rows *fakeRows) {
 			rows.types[1] = fakeColumnType{
 				name: clickhouse.FieldSuggestionNameColumn, databaseType: "FixedString(8)",
-				scanType: reflect.TypeOf(""),
+				scanType: reflect.TypeFor[string](),
 			}
 		}},
 		{name: "wrong scan type", mutate: func(rows *fakeRows) {
 			rows.types[1] = fakeColumnType{
 				name: clickhouse.FieldSuggestionNameColumn, databaseType: "String",
-				scanType: reflect.TypeOf([]byte{}),
+				scanType: reflect.TypeFor[[]byte](),
 			}
 		}},
 	}
@@ -687,9 +687,9 @@ func fieldSuggestionFakeRows(metadataInvalid uint8, names ...string) *fakeRows {
 	}
 	databaseTypes := []string{"UInt8", "String", "UInt8"}
 	scanTypes := []reflect.Type{
-		reflect.TypeOf(uint8(0)),
-		reflect.TypeOf(""),
-		reflect.TypeOf(uint8(0)),
+		reflect.TypeFor[uint8](),
+		reflect.TypeFor[string](),
+		reflect.TypeFor[uint8](),
 	}
 	types := make([]driver.ColumnType, len(columns))
 	for index := range columns {

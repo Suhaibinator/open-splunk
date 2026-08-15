@@ -150,7 +150,6 @@ func TestParseStatsQuotedFieldsAndOutputsFailClosed(t *testing.T) {
 		{name: "unquoted wildcard output", source: `| stats count AS revenue*`, code: "SPL_UNSUPPORTED_STATS_AGGREGATE"},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := Parse(test.source)

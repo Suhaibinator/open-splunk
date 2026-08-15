@@ -56,7 +56,6 @@ func TestValidateChartSchemaEnforcesPercentileCellPolicy(t *testing.T) {
 			kind:   clickhouse.ChartValueKind(5),
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			candidate := output

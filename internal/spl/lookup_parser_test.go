@@ -138,7 +138,6 @@ func TestParseLookupRejectsUnsupportedAmbiguousAndOverBoundedSyntax(t *testing.T
 		{overOutputs.String(), "SPL_QUERY_TOO_COMPLEX"},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.source, func(t *testing.T) {
 			t.Parallel()
 			_, err := Parse(test.source)
@@ -168,7 +167,6 @@ func TestLookupSuggestionContextsExposeOnlyGrammarAndEventFields(t *testing.T) {
 		{source: "| lookup catalog key AS event_key OUTPUT owner AS ", kinds: []SuggestionKind{SuggestionKindField}},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.source, func(t *testing.T) {
 			t.Parallel()
 			context, diagnostic := AnalyzeSuggestionContext(test.source, len(test.source))

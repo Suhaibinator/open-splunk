@@ -73,7 +73,6 @@ func TestExecutorDistinguishesEmptyAndAllIneligibleFixedPercentileInput(t *testi
 		{name: "empty upstream", presence: 0, wantRows: 0},
 		{name: "rows with no eligible measures", presence: 1, wantRows: 3, wantAllNil: true},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -146,7 +145,7 @@ func TestExecutorRejectsMalformedFixedPercentileTimechartAtomically(t *testing.T
 			mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
 				rows.types[1] = fakeColumnType{
 					name: clickhouse.TimechartValueColumn, databaseType: "Float64",
-					scanType: reflect.TypeOf(float64(0)),
+					scanType: reflect.TypeFor[float64](),
 				}
 			},
 			queryIssued: true,
@@ -156,7 +155,7 @@ func TestExecutorRejectsMalformedFixedPercentileTimechartAtomically(t *testing.T
 			mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
 				rows.types[1] = fakeColumnType{
 					name: clickhouse.TimechartValueColumn, databaseType: "Nullable(Float64)",
-					scanType: reflect.TypeOf(float64(0)), nullable: true,
+					scanType: reflect.TypeFor[float64](), nullable: true,
 				}
 			},
 			queryIssued: true,
@@ -166,7 +165,7 @@ func TestExecutorRejectsMalformedFixedPercentileTimechartAtomically(t *testing.T
 			mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
 				rows.types[2] = fakeColumnType{
 					name: clickhouse.TimechartInputPresentColumn, databaseType: "Nullable(UInt8)",
-					scanType: reflect.TypeOf((*uint8)(nil)), nullable: true,
+					scanType: reflect.TypeFor[*uint8](), nullable: true,
 				}
 			},
 			queryIssued: true,
@@ -270,7 +269,6 @@ func TestExecutorRejectsMalformedFixedPercentileTimechartAtomically(t *testing.T
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -307,7 +305,6 @@ func TestExecutorFixedPercentileTimechartStreamFailuresAreAtomic(t *testing.T) {
 		{name: "iteration", mutate: func(rows *fakeRows) { rows.err = io.ErrUnexpectedEOF }},
 		{name: "close", mutate: func(rows *fakeRows) { rows.closeErr = io.ErrUnexpectedEOF }},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -388,15 +385,15 @@ func fixedValueTimechartRows(values []any, presence []uint8) *fakeRows {
 		types: []driver.ColumnType{
 			fakeColumnType{
 				name: clickhouse.TimechartOrdinalColumn, databaseType: "UInt64",
-				scanType: reflect.TypeOf(uint64(0)),
+				scanType: reflect.TypeFor[uint64](),
 			},
 			fakeColumnType{
 				name: clickhouse.TimechartValueColumn, databaseType: "Nullable(Float64)",
-				scanType: reflect.TypeOf((*float64)(nil)), nullable: true,
+				scanType: reflect.TypeFor[*float64](), nullable: true,
 			},
 			fakeColumnType{
 				name: clickhouse.TimechartInputPresentColumn, databaseType: "UInt8",
-				scanType: reflect.TypeOf(uint8(0)),
+				scanType: reflect.TypeFor[uint8](),
 			},
 		},
 		data: make([][]any, len(values)),

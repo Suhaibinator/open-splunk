@@ -367,7 +367,6 @@ func TestGradeThisInspectionServiceAgainstClickHouse(t *testing.T) {
 	)
 	queryIDs := make(map[string]struct{}, len(corpus))
 	for _, search := range corpus {
-		search := search
 		t.Run(string(search.ID), func(t *testing.T) {
 			source, err := search.Render(profile.TraceID)
 			if err != nil {

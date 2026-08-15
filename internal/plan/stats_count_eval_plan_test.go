@@ -167,7 +167,6 @@ func TestBuildStatsCountEvalRejectsForgedMetadataAndPredicates(t *testing.T) {
 		},
 	}
 	for _, test := range predicateTests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			command := &spl.StatsCommand{Aggregates: []spl.StatsAggregate{{
@@ -252,7 +251,6 @@ func TestBuildStatsCountEvalRejectsForgedPredicateComplexity(t *testing.T) {
 		{name: "depth", predicate: deep},
 		{name: "shared DAG expansion", predicate: sharedDAG},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			command := &spl.StatsCommand{Aggregates: []spl.StatsAggregate{{

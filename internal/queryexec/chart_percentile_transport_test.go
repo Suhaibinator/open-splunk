@@ -15,7 +15,7 @@ func TestExecutorPublishesChartPercentileAsNullableFiniteValues(t *testing.T) {
 	t.Parallel()
 
 	rows := numericChartRows(
-		reflect.TypeOf(""),
+		reflect.TypeFor[string](),
 		[]string{"0:api", "1:", "2:"},
 		[]any{"/a", "/b"},
 		[][]float64{{0, 0, 97.5}, {12.25, 0, 0}},
@@ -78,12 +78,11 @@ func TestExecutorRejectsNonFiniteChartPercentileAtomically(t *testing.T) {
 		{name: "positive infinity", value: math.Inf(1)},
 		{name: "negative infinity", value: math.Inf(-1)},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
 			rows := numericChartRows(
-				reflect.TypeOf(""),
+				reflect.TypeFor[string](),
 				[]string{"0:api"},
 				[]any{"/finite", "/invalid"},
 				[][]float64{{25}, {test.value}},

@@ -186,7 +186,6 @@ func TestCheckpointStoreRejectsInvalidInputIDs(t *testing.T) {
 		"bad/input",
 		strings.Repeat("a", 129),
 	} {
-		inputID := inputID
 		t.Run(inputID, func(t *testing.T) {
 			store, err := NewCheckpointStore(t.TempDir())
 			if err != nil {
@@ -228,7 +227,6 @@ func TestCheckpointStoreRejectsInvalidInputIDOnLoad(t *testing.T) {
 func TestCheckpointStoreRejectsHostileVersionTwoState(t *testing.T) {
 	t.Parallel()
 	for _, test := range hostileCheckpointMutations() {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			checkpoint := validCheckpointForTest(
@@ -253,7 +251,6 @@ func TestCheckpointStoreRejectsHostileVersionTwoState(t *testing.T) {
 func TestCheckpointStoreSetManyRejectsHostileBatchAtomically(t *testing.T) {
 	t.Parallel()
 	for _, test := range hostileCheckpointMutations() {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			storeAPI, err := NewCheckpointStore(t.TempDir())

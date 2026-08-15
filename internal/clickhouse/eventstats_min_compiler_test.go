@@ -210,7 +210,6 @@ func TestCompileEventStatsMinimumKeepsNativeFixedNumericAndTimeTypes(t *testing.
 			forbidden: []string{`toFloat64("_time")`, `toUnixTimestamp64Nano(`, `argMinArray(`, `argMinOrNullIf(`},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -640,7 +639,6 @@ func TestEventAnalysisFinalizationPolicyOnlyInlinesPrerequisiteGraphs(t *testing
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -748,7 +746,6 @@ func TestCompileMixedEventStatsAnalysisKeepsOneFlatMaterializedLeaf(t *testing.T
 			argumentOrder:              []string{"payload", "needle", "wanted"},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -890,7 +887,6 @@ func TestCompileEventStatsMinimumRejectsForgedPlanBoundaries(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -954,7 +950,6 @@ func TestCompileEventStatsStackBoundsDeferredGraphAmplification(t *testing.T) {
 			acceptedStages: 2,
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -1067,7 +1062,6 @@ func TestCompileEventStatsGraphAmplificationChargesPrerequisiteBarriers(t *testi
 			) + ` | stats earliest(payload) AS first`,
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			requireEventStatsAmplificationBoundary(
@@ -1187,7 +1181,6 @@ func TestCompileEventStatsGraphAmplificationChargesTerminalWideFanout(t *testing
 			acceptedStages: 7,
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			accepted := eventStatsAmplificationStackSource(

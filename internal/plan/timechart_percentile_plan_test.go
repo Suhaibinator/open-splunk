@@ -96,7 +96,6 @@ func TestBuildTimechartPercentileProducesBoundedDynamicSplitSeries(t *testing.T)
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -247,7 +246,6 @@ func TestBuildRejectsForgedTimechartAggregateContracts(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -359,7 +357,6 @@ func TestAnalyzeAcceptsValidAndRejectsForgedTimechartPercentileMeasures(t *testi
 		{name: "same percentile input and split field", measure: validPercentile, split: validSplit(validInput)},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := Analyze(&Query{Operators: []Operator{&Timechart{

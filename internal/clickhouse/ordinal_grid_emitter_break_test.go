@@ -133,11 +133,11 @@ func TestBucketCountGridPlaceholdersMatchAppendedArguments(t *testing.T) {
 		// The two span placeholders belong to the bucket-number expression in
 		// the counts CTE; the last two belong to the numbers() grid, in that
 		// order.
-		countsEnd := strings.Index(text, "GROUP BY")
-		if countsEnd < 0 {
+		before, _, ok := strings.Cut(text, "GROUP BY")
+		if !ok {
 			t.Fatalf("%s grid has no counts GROUP BY:\n%s", name, text)
 		}
-		if got := strings.Count(text[:countsEnd], "?"); got != 2 {
+		if got := strings.Count(before, "?"); got != 2 {
 			t.Fatalf("%s counts stage has %d placeholders, want the two span binds:\n%s", name, got, text)
 		}
 		firstBucket := strings.Index(text, "toInt64(?) + toInt64(number)")

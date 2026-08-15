@@ -63,7 +63,6 @@ func BenchmarkCompositeSupplementalRedactor(b *testing.B) {
 			})
 		}
 		for _, fixture := range fixtures {
-			fixture := fixture
 			want := supplementalBenchmarkResult(fixture.raw, func(event *opensplunkv1.LogEvent) {
 				for _, redactor := range sequential {
 					redactor.RedactEventInPlace(event)
@@ -232,7 +231,6 @@ func BenchmarkCompositeSupplementalRedactorSyntaxMarkerHitOnly(b *testing.B) {
 				},
 			},
 		} {
-			fixture := fixture
 			want := fixture.newEvent()
 			for _, redactor := range sequential {
 				redactor.RedactEventInPlace(want)
@@ -351,7 +349,6 @@ func BenchmarkCompositeSupplementalRedactorSyntaxMarkerSparseHit(b *testing.B) {
 			},
 		},
 	} {
-		fixture := fixture
 		want := fixture.newEvent()
 		for _, redactor := range sequential {
 			redactor.RedactEventInPlace(want)
@@ -399,7 +396,6 @@ func BenchmarkTopLevelAliasRedaction(b *testing.B) {
 				withMessage: true,
 			},
 		} {
-			fixture := fixture
 			want := aliasBenchmarkResult(b, fixture.raw, fixture.withMessage, func(event *opensplunkv1.LogEvent) {
 				legacyTopLevelAliasRedaction(b, event, policies)
 			})

@@ -656,7 +656,7 @@ func validateExplainColumns(
 	contracts := []resultColumnContract{{
 		name:         explainColumn,
 		databaseType: "String",
-		scanType:     reflect.TypeOf(""),
+		scanType:     reflect.TypeFor[string](),
 	}}
 	violation, _ := validateResultColumnContracts(
 		columns,

@@ -167,7 +167,6 @@ func TestEnvDollarEscape(t *testing.T) {
 		{"regex anchor", `ERROR$`, `ERROR$`},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got, err := substituteEnv([]byte(tc.in))
@@ -252,7 +251,6 @@ func TestValidate(t *testing.T) {
 		}, ""},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			c := base()
@@ -298,7 +296,6 @@ func TestByteSizeUnmarshal(t *testing.T) {
 		{"", 0, false},              // empty -> zero
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.in, func(t *testing.T) {
 			t.Parallel()
 			var bs ByteSize
@@ -334,7 +331,6 @@ func TestDurationUnmarshal(t *testing.T) {
 		{"abc", 0, true}, // garbage
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.in, func(t *testing.T) {
 			t.Parallel()
 			var d Duration

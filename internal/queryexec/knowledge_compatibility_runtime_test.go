@@ -538,7 +538,6 @@ func runKnowledgeCompatibilityRuntime(
 
 	result := knowledgeCompatibilityRuntimeResult{rows: rows, filteredRows: filteredRows}
 	for _, observation := range knowledgeCompatibilityRuntimeObservations() {
-		observation := observation
 		t.Run(observation.caseID, func(t *testing.T) {
 			observation.assert(t, result)
 		})

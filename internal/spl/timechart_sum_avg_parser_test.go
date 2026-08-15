@@ -40,7 +40,6 @@ func TestParseTimechartSumAndAverageCanonicalizesAndLocatesAggregate(t *testing.
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -98,7 +97,6 @@ func TestParseTimechartSumAndAverageAcceptsOneSplitField(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -147,7 +145,6 @@ func TestParseTimechartSumAndAverageRejectsUnsupportedShapesAtSource(t *testing.
 		{"unsupported aggregate", `index=main | timechart span=5m min(latency)`, "SPL_UNSUPPORTED_TIMECHART_AGGREGATE", "min"},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

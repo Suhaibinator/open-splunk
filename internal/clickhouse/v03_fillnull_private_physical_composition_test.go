@@ -65,7 +65,6 @@ func TestCompileV03FillNullBindsPrivatePhysicalColumns(t *testing.T) {
 			physical: `"__os_group_0"`, publicName: `"flag"`, appendPublic: true,
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			compiled := compileSPL(t, test.source)
@@ -183,7 +182,6 @@ func TestV03FillNullAfterPrivatePhysicalProducersAgainstClickHouse(t *testing.T)
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			compiled := compile(test.source)
 			v03AssertJSONRows(t, queryContext, connection, compiled, test.fields, test.want)
@@ -205,7 +203,6 @@ func TestV03FillNullAfterPrivatePhysicalProducersAgainstClickHouse(t *testing.T)
 		{name: "fixed Number stats BY direct", assignment: "n=1", field: "n", want: "1"},
 		{name: "fixed Bool stats BY direct", assignment: "flag=true", field: "flag", want: "true"},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			compiled := compile(base + ` | eval ` + test.assignment + ` | stats count BY ` +
 				test.field + ` | fillnull value="fallback" ` + test.field +

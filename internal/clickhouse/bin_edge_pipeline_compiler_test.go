@@ -261,7 +261,6 @@ func TestBinEdgeCalculatedPredicateUsesOneDurableAnalyzerFence(t *testing.T) {
 			wantBoundFields: []string{"band"},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

@@ -32,7 +32,6 @@ func TestNormalizePatternPinsClosedGlobGrammar(t *testing.T) {
 		{source: "東京", canonical: "東京", literal: "東京", wantLiteral: true},
 		{source: "\u00a0host\u00a0", canonical: "\u00a0host\u00a0", literal: "\u00a0host\u00a0", wantLiteral: true},
 	} {
-		test := test
 		t.Run(test.source, func(t *testing.T) {
 			t.Parallel()
 			pattern, err := NormalizePattern(test.source)
@@ -100,7 +99,6 @@ func TestSelectorGlobIsAnchoredCaseSensitiveAndUnicodeScalarAware(t *testing.T) 
 		{pattern: `\*`, value: "*", want: true},
 		{pattern: `\?`, value: "?", want: true},
 	} {
-		test := test
 		t.Run(fmt.Sprintf("%q/%q", test.pattern, test.value), func(t *testing.T) {
 			t.Parallel()
 			selector := mustCompileSelector(t, SelectorSpec{Dimensions: []DimensionSpec{{
@@ -188,7 +186,6 @@ func TestSelectorANDORAndMissingNullSemantics(t *testing.T) {
 		{name: "missing other constrained", event: EventMetadata{Index: StringMetadata("main"), Host: MissingMetadata()}},
 		{name: "null other constrained", event: EventMetadata{Index: StringMetadata("main"), Host: NullMetadata()}},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			matched, _, err := selector.Match(context.Background(), test.event, DefaultRuntimeBudget())
@@ -238,7 +235,7 @@ func TestSelectorUsesLiteralFastPathAndOneCombinedWildcardProgram(t *testing.T) 
 	}
 	// compiledDimension has one combined program pointer, not a program slice. This
 	// structural assertion prevents regressions to sequential per-pattern scans.
-	if reflect.TypeOf(dimension.wildcard).String() != "*knowledge.globProgram" {
+	if reflect.TypeFor[*globProgram]().String() != "*knowledge.globProgram" {
 		t.Fatalf("wildcard program type = %T", dimension.wildcard)
 	}
 	matched, _, err := mixed.Match(context.Background(), EventMetadata{Host: StringMetadata("service-14-worker")}, DefaultRuntimeBudget())
@@ -379,7 +376,6 @@ func TestSelectorRuntimeChargeUsesExactFastPathOrFixedWildcardBound(t *testing.T
 		{name: "wildcard hit", value: "a", wantMatch: true, wantInput: 1, wantMatcher: 11, wantUnits: 89},
 		{name: "wildcard miss", value: "z", wantInput: 1, wantMatcher: 11, wantUnits: 89},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			matched, charged, err := mixed.Match(
@@ -502,7 +498,6 @@ func TestCompileSelectorRejectsDimensionPatternByteAndWorkLimits(t *testing.T) {
 		{name: "patterns per dimension", spec: SelectorSpec{Dimensions: []DimensionSpec{{Dimension: DimensionHost, Patterns: tooManyPerDimension}}}, err: ErrResourceLimit},
 		{name: "pattern bytes", spec: SelectorSpec{Dimensions: []DimensionSpec{{Dimension: DimensionHost, Patterns: []string{strings.Repeat("x", MaximumSelectorPatternBytes+1)}}}}, err: ErrResourceLimit},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			if _, err := CompileSelector(test.spec); !errors.Is(err, test.err) {
@@ -853,7 +848,6 @@ func TestSelectorIsSafeForConcurrentMatchingAndDetachedReads(t *testing.T) {
 
 	var wait sync.WaitGroup
 	for worker := range 64 {
-		worker := worker
 		wait.Go(func() {
 			for range 500 {
 				host := fmt.Sprintf("api-%d", worker)

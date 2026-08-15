@@ -116,7 +116,6 @@ func TestKnowledgeIndexAdmissionDriversMigrationPinsFreshSchemaAndChecksum(t *te
 		},
 	}
 	for _, index := range indexes {
-		index := index
 		t.Run(index.name, func(t *testing.T) {
 			var unique, partial int
 			if err := raw.QueryRowContext(t.Context(), `

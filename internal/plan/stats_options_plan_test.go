@@ -49,7 +49,6 @@ func TestBuildStatsOptionsResolvesEffectiveDefaultsAndAuthoredValues(t *testing.
 			dedup:      true,
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -114,7 +113,6 @@ func TestBuildStatsOptionsRejectsForgedASTMetadata(t *testing.T) {
 		{name: "dedup value without specified bit", mutate: func(options *spl.StatsOptions) { options.DeduplicateSplitValues = true }},
 		{name: "dedup specified without range", mutate: func(options *spl.StatsOptions) { options.DeduplicateSplitValuesSpecified = true }},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

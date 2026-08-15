@@ -49,7 +49,6 @@ func TestParseEventStatsPercentileFamilyPreservesValidatedSuffixAndRanges(t *tes
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -103,7 +102,6 @@ func TestParseEventStatsPercentileRequiresExplicitAlias(t *testing.T) {
 	t.Parallel()
 
 	for _, suffix := range []string{"", " BY service"} {
-		suffix := suffix
 		t.Run(strconv.Quote(suffix), func(t *testing.T) {
 			t.Parallel()
 
@@ -172,7 +170,6 @@ func TestParseEventStatsPercentileRejectsUnsupportedSurface(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -245,7 +242,6 @@ func TestEventStatsPercentileSuggestionsAreFieldThenAliasThenGroup(t *testing.T)
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.source, func(t *testing.T) {
 			t.Parallel()
 

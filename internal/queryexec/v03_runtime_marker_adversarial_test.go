@@ -48,7 +48,6 @@ func TestV03RuntimeMarkersAreCompletelyClassifiedAndRedacted(t *testing.T) {
 		seen[test.marker] = test.name
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			const secret = "AUTHORED_SECRET_VALUE SELECT private_storage_column"

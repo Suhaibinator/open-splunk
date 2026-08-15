@@ -50,7 +50,6 @@ func TestParseStreamStatsChronologicalFields(t *testing.T) {
 			groups:      []string{"host"},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -103,7 +102,6 @@ func TestParseStreamStatsChronologicalRejectsBroaderShapes(t *testing.T) {
 		{"missing earliest close", `index=main | streamstats earliest(value`, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE", ""},
 		{"earliest alias after by", `index=main | streamstats earliest(value) BY host AS first`, "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX", "AS"},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

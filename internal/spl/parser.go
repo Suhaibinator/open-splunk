@@ -4337,8 +4337,8 @@ func (p *parser) parseSortCommand(name token) (Command, error) {
 		if strings.HasPrefix(field, "-") {
 			descending = true
 			field = strings.TrimPrefix(field, "-")
-		} else if strings.HasPrefix(field, "+") {
-			field = strings.TrimPrefix(field, "+")
+		} else if after, ok := strings.CutPrefix(field, "+"); ok {
+			field = after
 		}
 		if field == "" {
 			return nil, p.errorAtCurrent("SPL_EXPECTED_FIELD", "expected a sort field after direction prefix")

@@ -1420,7 +1420,7 @@ func validV03CorpusFixtureID(id string) bool {
 	if id == "" || len(id) > 96 || strings.TrimSpace(id) != id {
 		return false
 	}
-	for _, part := range strings.Split(id, ".") {
+	for part := range strings.SplitSeq(id, ".") {
 		if part == "" {
 			return false
 		}

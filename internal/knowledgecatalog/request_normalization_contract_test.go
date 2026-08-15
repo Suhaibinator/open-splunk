@@ -23,7 +23,6 @@ func TestCatalogFilterBoundsApplyAfterASCIITrim(t *testing.T) {
 		{kind: "app", maximum: maximumAppIDBytes},
 		{kind: "owner", maximum: maximumOwnerIDBytes},
 	} {
-		boundary := boundary
 		exact := strings.Repeat("x", boundary.maximum)
 		over := exact + "x"
 		for _, test := range []struct {
@@ -45,7 +44,6 @@ func TestCatalogFilterBoundsApplyAfterASCIITrim(t *testing.T) {
 				wantInvalid: true,
 			},
 		} {
-			test := test
 			t.Run(fmt.Sprintf("%s/%s", boundary.kind, test.name), func(t *testing.T) {
 				t.Parallel()
 				request := ListRequest{}
@@ -73,7 +71,6 @@ func TestCatalogFiltersRejectControlsRemainingAfterASCIITrim(t *testing.T) {
 	t.Parallel()
 
 	for _, kind := range []string{"text", "selector", "app", "owner"} {
-		kind := kind
 		for _, test := range []struct {
 			name  string
 			value string
@@ -84,7 +81,6 @@ func TestCatalogFiltersRejectControlsRemainingAfterASCIITrim(t *testing.T) {
 			{name: "embedded-c1", value: "safe\u0085unsafe"},
 			{name: "invalid-utf8", value: string([]byte{'s', 0xff})},
 		} {
-			test := test
 			t.Run(kind+"/"+test.name, func(t *testing.T) {
 				t.Parallel()
 				request := ListRequest{}

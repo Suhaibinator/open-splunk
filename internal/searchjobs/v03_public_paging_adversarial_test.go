@@ -311,7 +311,6 @@ func TestV03ManagerExecutesAllTenSPLWithSavedAndHistoryOriginMetadata(t *testing
 		{name: "saved search", origin: JobOriginSavedSearch, object: "saved-v03", jobID: "v03-saved-origin-1"},
 		{name: "history rerun", origin: JobOriginHistoryRerun, object: "history-v03", jobID: "v03-history-origin-1"},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

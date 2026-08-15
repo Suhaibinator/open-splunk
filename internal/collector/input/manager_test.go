@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -218,14 +219,14 @@ func (h *harness) waitForTexts(want []string) {
 }
 
 func joinq(s []string) string {
-	out := ""
+	var out strings.Builder
 	for i, v := range s {
 		if i > 0 {
-			out += ","
+			out.WriteString(",")
 		}
-		out += v
+		out.WriteString(v)
 	}
-	return out
+	return out.String()
 }
 
 func TestTailerPollTimerRearmsWithoutAllocating(t *testing.T) {

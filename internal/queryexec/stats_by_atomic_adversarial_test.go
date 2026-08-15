@@ -35,8 +35,8 @@ func TestStatsByLateUnsupportedValueIsAtomicAndRedacted(t *testing.T) {
 	rows := &fakeRows{
 		columns: slices.Clone(query.OutputFields),
 		types: []driver.ColumnType{
-			fakeColumnType{name: "grouping", databaseType: "String", scanType: reflect.TypeOf("")},
-			fakeColumnType{name: "count", databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0))},
+			fakeColumnType{name: "grouping", databaseType: "String", scanType: reflect.TypeFor[string]()},
+			fakeColumnType{name: "count", databaseType: "UInt64", scanType: reflect.TypeFor[uint64]()},
 		},
 		data: [][]any{{"apparently-valid", uint64(1)}},
 		err: &clickhousedriver.Exception{
@@ -90,11 +90,11 @@ func TestStatsByLateExpansionLimitIsAtomicAndRedacted(t *testing.T) {
 	row := make([]any, len(query.OutputFields))
 	for index, field := range query.OutputFields {
 		if field == "count" {
-			types[index] = fakeColumnType{name: field, databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0))}
+			types[index] = fakeColumnType{name: field, databaseType: "UInt64", scanType: reflect.TypeFor[uint64]()}
 			row[index] = uint64(1)
 			continue
 		}
-		types[index] = fakeColumnType{name: field, databaseType: "String", scanType: reflect.TypeOf("")}
+		types[index] = fakeColumnType{name: field, databaseType: "String", scanType: reflect.TypeFor[string]()}
 		row[index] = "apparently-valid"
 	}
 	columns := slices.Clone(query.OutputFields)
@@ -102,7 +102,7 @@ func TestStatsByLateExpansionLimitIsAtomicAndRedacted(t *testing.T) {
 		columns = append(columns, descriptor.SemanticBytesColumn())
 		types = append(types, fakeColumnType{
 			name: descriptor.SemanticBytesColumn(), databaseType: "UInt8",
-			scanType: reflect.TypeOf(uint8(0)),
+			scanType: reflect.TypeFor[uint8](),
 		})
 		row = append(row, uint8(0))
 	}

@@ -22,7 +22,6 @@ func TestReadAdministratorTokenAcceptsOnlyOptionalLineTerminator(t *testing.T) {
 		"LF":   "\n",
 		"CRLF": "\r\n",
 	} {
-		suffix := suffix
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			for _, mode := range []os.FileMode{0o400, 0o600} {

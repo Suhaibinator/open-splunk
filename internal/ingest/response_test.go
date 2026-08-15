@@ -147,7 +147,6 @@ func TestValidateDurableBatchRejectionRejectsNonCanonicalState(t *testing.T) {
 		}},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			rejection := proto.Clone(valid).(*opensplunkv1.BatchReject)
 			test.mutate(rejection)
@@ -268,7 +267,6 @@ func TestResponseForStoredBatchRejectsMalformedRejectionOnlyResult(t *testing.T)
 		}},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

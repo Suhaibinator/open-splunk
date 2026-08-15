@@ -63,7 +63,6 @@ func TestListDefinitionBudgetBoundaryArithmetic(t *testing.T) {
 		{name: "quarantined zero", record: projectionRecord{State: StateQuarantined}},
 		{name: "quarantined nonzero", record: projectionRecord{State: StateQuarantined, DefinitionBytes: 1}, want: ErrCorrupt},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			err := validateListDefinitionBudget(maximum, []projectionRecord{test.record})
@@ -137,7 +136,6 @@ func TestBoundedListResponseRecordsExactFitOverflowAndSentinel(t *testing.T) {
 		{name: "over maximum page", pageSize: MaximumPageSize + 1},
 		{name: "more than one sentinel", pageSize: 1, records: make([]projectionRecord, 3)},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			if _, _, err := boundedListResponseRecords(test.records, test.pageSize); !errors.Is(err, ErrCorrupt) {
@@ -180,7 +178,6 @@ func TestListHydrationBudgetEachDimensionExactAndOver(t *testing.T) {
 		{name: "dependencies", mutate: func(b *listHydrationBudget) { b.dependencies-- }},
 	}
 	for _, test := range invalidBudgets {
-		test := test
 		t.Run("invalid budget/"+test.name, func(t *testing.T) {
 			t.Parallel()
 			budget := minimum
@@ -232,7 +229,6 @@ func TestListHydrationBudgetEachDimensionExactAndOver(t *testing.T) {
 		},
 	}
 	for _, test := range overflows {
-		test := test
 		t.Run("overflow/"+test.name, func(t *testing.T) {
 			t.Parallel()
 			if err := validateListHydrationBudget(test.records, minimum); !errors.Is(err, control.ErrCapacityExceeded) {

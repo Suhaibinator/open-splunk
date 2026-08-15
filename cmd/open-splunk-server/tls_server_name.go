@@ -17,8 +17,8 @@ func validExplicitTLSServerName(serverName string) bool {
 	if net.ParseIP(serverName) != nil {
 		return true
 	}
-	labels := strings.Split(serverName, ".")
-	for _, label := range labels {
+	labels := strings.SplitSeq(serverName, ".")
+	for label := range labels {
 		if len(label) == 0 || len(label) > 63 ||
 			!isASCIIAlphaNumeric(label[0]) ||
 			!isASCIIAlphaNumeric(label[len(label)-1]) {

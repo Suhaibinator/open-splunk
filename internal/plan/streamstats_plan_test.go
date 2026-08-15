@@ -108,7 +108,6 @@ func TestBuildStreamStatsCountProducesBoundedRowPreservingOperator(t *testing.T)
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -228,7 +227,6 @@ func TestBuildStreamStatsCountUpsertsKnownSchemaAndPreservesRelationKind(t *test
 			want:   []string{"_time", "bytes"},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			logical, err := Build(mustParse(t, test.source), testScope([]string{"gradethis"}, nil))
@@ -563,7 +561,6 @@ func TestBuildStreamStatsRejectsForgedASTMetadata(t *testing.T) {
 			c.GroupBy = []spl.StatsGroupField{{Name: "host,status"}}
 		}, "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX"},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			command := validCommand()
@@ -736,7 +733,6 @@ func TestAnalyzeStreamAggregateReadsGroupsAndRejectsForgedContracts(t *testing.T
 			op.GroupBy = []FieldRef{mustResolveStreamStatsField(t, "host status")}
 		}},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			operator := valid()
@@ -813,7 +809,6 @@ func TestStreamAggregatePreservesEventAnalysisAndCanonicalTimeline(t *testing.T)
 		},
 		{name: "typed nil", operator: (*StreamAggregate)(nil)},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			query := *ordinary

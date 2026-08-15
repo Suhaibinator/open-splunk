@@ -124,7 +124,6 @@ func TestManifestRejectsInvalidFields(t *testing.T) {
 		},
 	}
 	for name, mutate := range tests {
-		name, mutate := name, mutate
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			manifest := validTestManifest()
@@ -152,7 +151,6 @@ func TestUnmarshalManifestRejectsUnknownTrailingAndNoncanonicalJSON(t *testing.T
 		"oversized":     bytes.Repeat([]byte{' '}, maximumManifestBytes+1),
 	}
 	for name, encoded := range tests {
-		name, encoded := name, encoded
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			if _, err := unmarshalManifest(encoded); err == nil {

@@ -146,7 +146,6 @@ func TestStoreConcurrentClaimsCannotExceedDurableCollectorCapacity(
 		MaximumDurableCollectorsPerTenant - 1,
 		MaximumDurableCollectorsPerTenant,
 	} {
-		ordinal := ordinal
 		workers.Go(func() {
 			<-start
 			request := durableCollectorCapacityClaim(

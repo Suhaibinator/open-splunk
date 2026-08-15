@@ -147,7 +147,6 @@ func TestKnowledgeConfigRequiresOneCompleteDependencyUnit(t *testing.T) {
 		{name: "attempts only", set: func(config *Config) { config.KnowledgeAttempts = &knowledgeBoundaryAppender{} }},
 	}
 	for _, test := range setters {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			config := knowledgeConfigBase(t)
@@ -207,7 +206,6 @@ func TestKnowledgeConfigRequiresExactCatalogWriter(t *testing.T) {
 		{name: "ordinary interface implementation", writer: &knowledgeHTTPWriter{}},
 		{name: "embedding override", writer: &embeddingKnowledgeWriterOverride{Writer: &knowledgecatalog.Writer{}}},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			config := knowledgeConfigBase(t)

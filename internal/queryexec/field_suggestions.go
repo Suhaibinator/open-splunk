@@ -294,9 +294,9 @@ func validateFieldSuggestionColumns(
 	columnTypes []driver.ColumnType,
 ) error {
 	contracts := []resultColumnContract{
-		{name: clickhouse.FieldSuggestionRowKindColumn, databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0))},
-		{name: clickhouse.FieldSuggestionNameColumn, databaseType: "String", scanType: reflect.TypeOf("")},
-		{name: clickhouse.FieldSuggestionInvalidColumn, databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0))},
+		{name: clickhouse.FieldSuggestionRowKindColumn, databaseType: "UInt8", scanType: reflect.TypeFor[uint8]()},
+		{name: clickhouse.FieldSuggestionNameColumn, databaseType: "String", scanType: reflect.TypeFor[string]()},
+		{name: clickhouse.FieldSuggestionInvalidColumn, databaseType: "UInt8", scanType: reflect.TypeFor[uint8]()},
 	}
 	return validateResultColumns(
 		columns,

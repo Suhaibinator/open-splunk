@@ -2927,7 +2927,6 @@ func testNumericBinAgainstClickHouse(
 				wantType: "String", wantValue: "1e9999",
 			},
 		} {
-			test := test
 			t.Run(test.name, func(t *testing.T) {
 				stringBin := compileIntegrationSPL(
 					t,
@@ -3051,7 +3050,6 @@ func testNumericBinAgainstClickHouse(
 		}
 
 		for _, field := range []string{"bytes_value", "timestamp_value", "duration_value"} {
-			field := field
 			t.Run("extended "+field, func(t *testing.T) {
 				extended := compileIntegrationSPL(
 					t,
@@ -3097,7 +3095,6 @@ func testNumericBinAgainstClickHouse(
 			"object_value",
 			"object_parent",
 		} {
-			field := field
 			t.Run("unsupported "+field, func(t *testing.T) {
 				unsupported := compileIntegrationSPL(
 					t,
@@ -5035,7 +5032,7 @@ func integrationNativeAddress(t *testing.T, ctx context.Context, container strin
 	if err != nil {
 		t.Fatalf("resolve native port: %v: %s", err, output)
 	}
-	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(string(output)), "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "127.0.0.1:") {
 			return line

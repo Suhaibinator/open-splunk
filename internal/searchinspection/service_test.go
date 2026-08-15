@@ -1145,8 +1145,8 @@ func TestInternalConstructorRejectsNilCompiler(t *testing.T) {
 }
 
 func TestPublicConfigRejectsSameScopeCompilerSubstitutionByType(t *testing.T) {
-	field, ok := reflect.TypeOf(Config{}).FieldByName("Compiler")
-	trustedType := reflect.TypeOf(clickhouse.Compiler{})
+	field, ok := reflect.TypeFor[Config]().FieldByName("Compiler")
+	trustedType := reflect.TypeFor[clickhouse.Compiler]()
 	if !ok || field.Type != trustedType {
 		t.Fatalf(
 			"Config.Compiler type = %v, want exact %v",
@@ -1192,7 +1192,7 @@ func TestPublicConfigRejectsSameScopeCompilerSubstitutionByType(t *testing.T) {
 	}
 	fake := &sameScopeSubstitutionCompiler{compiled: compiled}
 	fakeType := reflect.TypeOf(fake)
-	compilerInterface := reflect.TypeOf((*queryCompiler)(nil)).Elem()
+	compilerInterface := reflect.TypeFor[queryCompiler]()
 	if !fakeType.Implements(compilerInterface) {
 		t.Fatalf("same-scope fake %v does not implement %v", fakeType, compilerInterface)
 	}

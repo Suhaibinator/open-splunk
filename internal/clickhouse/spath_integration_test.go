@@ -1218,7 +1218,7 @@ func countPhysicalAggregates(actions, legacySignature, currentSignature string) 
 	}
 
 	count := 0
-	for _, line := range strings.Split(actions, "\n") {
+	for line := range strings.SplitSeq(actions, "\n") {
 		if strings.Contains(line, "Aggregates:") {
 			count += strings.Count(line, currentSignature)
 		}

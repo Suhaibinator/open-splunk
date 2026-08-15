@@ -79,7 +79,6 @@ func TestCompileStreamStatsAveragePinsFramesAndGroupedFloatState(t *testing.T) {
 		{name: "three current rows", options: `window=3`, frame: `ROWS BETWEEN 2 PRECEDING AND CURRENT ROW`},
 		{name: "three prior rows", options: `current=false window=3`, frame: `ROWS BETWEEN 3 PRECEDING AND 1 PRECEDING`},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -168,7 +167,6 @@ func TestCompileStreamStatsAverageCanonicalDefaultAndDefensiveValidation(t *test
 		{"predicate", func(op *plan.StreamAggregate) { op.Measure.Predicate = &plan.BooleanExpression{} }},
 		{"percentile", func(op *plan.StreamAggregate) { op.Measure.Percentile = 50 }},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -199,8 +197,8 @@ func buildStreamStatsAveragePlan(
 ) (*plan.Query, *plan.StreamAggregate) {
 	t.Helper()
 	logical := buildPlan(t, source)
-	for index := len(logical.Operators) - 1; index >= 0; index-- {
-		operator, ok := logical.Operators[index].(*plan.StreamAggregate)
+	for _, v := range slices.Backward(logical.Operators) {
+		operator, ok := v.(*plan.StreamAggregate)
 		if !ok {
 			continue
 		}

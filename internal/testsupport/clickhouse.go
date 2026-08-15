@@ -782,7 +782,7 @@ func (container *ClickHouseContainer) publishedAddress(
 			boundedOutput(output),
 		)
 	}
-	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(string(output)), "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "127.0.0.1:") {
 			return line, nil

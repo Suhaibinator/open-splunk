@@ -266,7 +266,6 @@ func TestResolverCompilesEveryVisibleDefinitionBeforeSelectorPruning(t *testing.
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			database, store := newCatalogTestStore(t)
 			resolver := mustTestResolver(t, store)

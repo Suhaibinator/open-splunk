@@ -69,7 +69,6 @@ func TestV03EveryCommandHasAnIndependentPhysicalLowering(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			compiled := compileSPLWithScope(t, test.source, scope)
@@ -292,15 +291,16 @@ func TestV03FixedTypeBoundaryRejectsMakeMVButAdmitsScalarAndArrayMVExpand(t *tes
 func TestV03RepeatedExpansionAtStageBoundaryStaysBoundedAndPrivate(t *testing.T) {
 	t.Parallel()
 
-	source := `index=gradethis | sort 0 +event_id`
+	var source strings.Builder
+	source.WriteString(`index=gradethis | sort 0 +event_id`)
 	wantFields := []string{"event_id"}
 	for index := 1; index <= plan.MaximumMVExpandStages; index++ {
 		field := "tags" + string(rune('a'+index-1))
-		source += ` | mvexpand ` + field + ` limit=1 | reverse`
+		source.WriteString(` | mvexpand ` + field + ` limit=1 | reverse`)
 		wantFields = append(wantFields, field)
 	}
-	source += ` | table ` + strings.Join(wantFields, " ")
-	compiled := compileSPL(t, source)
+	source.WriteString(` | table ` + strings.Join(wantFields, " "))
+	compiled := compileSPL(t, source.String())
 
 	if !reflect.DeepEqual(compiled.OutputFields, wantFields) {
 		t.Fatalf("repeated expansion fields = %v, want %v", compiled.OutputFields, wantFields)
@@ -386,7 +386,6 @@ func TestV03RepeatedExpansionRetainsQueryWideChargeAcrossIntermediateOperators(t
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			compiled := compileSPL(t, firstExpansion+test.middle+test.finish)
@@ -431,7 +430,6 @@ func TestV03MVExpandGeneratedSQLHasBalancedStructuralParenthesesForEveryInputKin
 		`index=gradethis | stats values(user) AS tags | mvexpand tags | table tags`,
 		`index=gradethis | makemv delim="," tags | mvexpand tags | table tags`,
 	} {
-		source := source
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()
 			compiled := compileSPL(t, source)
@@ -504,7 +502,6 @@ func TestV03CompilerRevalidatesForgedPhaseTwoAndThreeOperators(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			query := v03ForgedCompilerQuery(t, test.operators...)
@@ -553,7 +550,6 @@ func TestV03SourceDeterminedLimitsRemainResourceDiagnosticsAtCompilerBoundary(t 
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := (Compiler{}).Compile(v03ForgedCompilerQuery(t, test.operator))

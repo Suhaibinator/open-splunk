@@ -64,7 +64,6 @@ func TestAppMutationAppenderMapsAllControlActions(t *testing.T) {
 		{Kind: ActorKindBrowser, ID: "administrator", Role: ActorRoleAdministrator},
 	}
 	for _, actor := range actors {
-		actor := actor
 		t.Run(string(actor.Kind), func(t *testing.T) {
 			t.Parallel()
 			ctx := actorContext(t, actor)

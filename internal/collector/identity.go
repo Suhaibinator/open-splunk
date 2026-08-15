@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/Suhaibinator/open-splunk/internal/protocolid"
@@ -88,8 +89,8 @@ func ensureCollectorStateDirectory(stateDir string) error {
 	if err := syncCollectorDirectory(filepath.Dir(current)); err != nil {
 		return fmt.Errorf("collector: make state directory ancestor %q durable: %w", current, err)
 	}
-	for index := len(missing) - 1; index >= 0; index-- {
-		directory := missing[index]
+	for _, v := range slices.Backward(missing) {
+		directory := v
 		if err := os.Mkdir(directory, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
 			return fmt.Errorf("collector: create state directory %q: %w", directory, err)
 		}

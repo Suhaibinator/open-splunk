@@ -57,7 +57,6 @@ func TestCompileStatsDelimiterPresentationDistinguishesDefaultEmptyAndAbsent(t *
 		{"empty", `index=gradethis | stats delim="" values(user) AS users`, "", true},
 		{"no array", `index=gradethis | stats count AS events`, "", false},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			compiled := compileSPL(t, test.source)

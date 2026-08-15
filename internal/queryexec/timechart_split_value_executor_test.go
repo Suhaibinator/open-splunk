@@ -27,7 +27,6 @@ func TestExecutorPublishesSplitSumAndAverageAsNullableWideValues(t *testing.T) {
 		{name: "sum", kind: clickhouse.TimechartValueKindSum, nonfinite: math.Inf(1), check: func(value float64) bool { return math.IsInf(value, 1) }},
 		{name: "average", kind: clickhouse.TimechartValueKindAverage, nonfinite: math.NaN(), check: math.IsNaN},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -229,7 +228,6 @@ func TestExecutorRejectsInvalidSplitNumericMetadataBeforeQuery(t *testing.T) {
 			query.OutputFields = []string{"_time", "hidden"}
 		}},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -319,13 +317,13 @@ func TestExecutorRejectsMalformedSplitNumericTransportAtomically(t *testing.T) {
 		mutate func(*fakeRows)
 	}{
 		{name: "wrong value type", mutate: func(rows *fakeRows) {
-			rows.types[2] = fakeColumnType{name: clickhouse.TimechartValuesColumn, databaseType: "Array(UInt64)", scanType: reflect.TypeOf([]uint64{})}
+			rows.types[2] = fakeColumnType{name: clickhouse.TimechartValuesColumn, databaseType: "Array(UInt64)", scanType: reflect.TypeFor[[]uint64]()}
 		}},
 		{name: "wrong presence type", mutate: func(rows *fakeRows) {
-			rows.types[3] = fakeColumnType{name: clickhouse.TimechartValuePresentColumn, databaseType: "Array(UInt64)", scanType: reflect.TypeOf([]uint64{})}
+			rows.types[3] = fakeColumnType{name: clickhouse.TimechartValuePresentColumn, databaseType: "Array(UInt64)", scanType: reflect.TypeFor[[]uint64]()}
 		}},
 		{name: "nullable value array", mutate: func(rows *fakeRows) {
-			rows.types[2] = fakeColumnType{name: clickhouse.TimechartValuesColumn, databaseType: "Array(Float64)", scanType: reflect.TypeOf([]float64{}), nullable: true}
+			rows.types[2] = fakeColumnType{name: clickhouse.TimechartValuesColumn, databaseType: "Array(Float64)", scanType: reflect.TypeFor[[]float64](), nullable: true}
 		}},
 		{name: "wrong value column", mutate: func(rows *fakeRows) { rows.columns[2] = "wrong" }},
 		{name: "value width", mutate: func(rows *fakeRows) { rows.data[0][2] = []float64{1} }},
@@ -345,7 +343,6 @@ func TestExecutorRejectsMalformedSplitNumericTransportAtomically(t *testing.T) {
 		{name: "incomplete grid", mutate: func(rows *fakeRows) { rows.data = rows.data[:1] }},
 		{name: "invalid split marker", mutate: func(rows *fakeRows) { rows.data[0][4] = uint8(1) }},
 	} {
-		malformed := malformed
 		t.Run(malformed.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -408,11 +405,11 @@ func splitValueTimechartRows(names []string, values [][]float64, present [][]uin
 			clickhouse.TimechartInvalidColumn,
 		},
 		types: []driver.ColumnType{
-			fakeColumnType{name: clickhouse.TimechartOrdinalColumn, databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0))},
-			fakeColumnType{name: clickhouse.TimechartNamesColumn, databaseType: "Array(String)", scanType: reflect.TypeOf([]string{})},
-			fakeColumnType{name: clickhouse.TimechartValuesColumn, databaseType: "Array(Float64)", scanType: reflect.TypeOf([]float64{})},
-			fakeColumnType{name: clickhouse.TimechartValuePresentColumn, databaseType: "Array(UInt8)", scanType: reflect.TypeOf([]uint8{})},
-			fakeColumnType{name: clickhouse.TimechartInvalidColumn, databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0))},
+			fakeColumnType{name: clickhouse.TimechartOrdinalColumn, databaseType: "UInt64", scanType: reflect.TypeFor[uint64]()},
+			fakeColumnType{name: clickhouse.TimechartNamesColumn, databaseType: "Array(String)", scanType: reflect.TypeFor[[]string]()},
+			fakeColumnType{name: clickhouse.TimechartValuesColumn, databaseType: "Array(Float64)", scanType: reflect.TypeFor[[]float64]()},
+			fakeColumnType{name: clickhouse.TimechartValuePresentColumn, databaseType: "Array(UInt8)", scanType: reflect.TypeFor[[]uint8]()},
+			fakeColumnType{name: clickhouse.TimechartInvalidColumn, databaseType: "UInt8", scanType: reflect.TypeFor[uint8]()},
 		},
 	}
 	for ordinal := range values {

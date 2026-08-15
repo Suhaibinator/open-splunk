@@ -565,7 +565,6 @@ func TestCompileLookupRejectsStoredContractMismatch(t *testing.T) {
 			},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			stored := cloneLookupResolutionContract(authored)
 			test.mutate(&stored)

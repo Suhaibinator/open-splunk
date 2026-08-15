@@ -69,7 +69,6 @@ func TestBuildStatsSparklineMapsDocumentedInnerFunctions(t *testing.T) {
 		{"range(value)", AggregateFunctionRange, true},
 	}
 	for index, test := range tests {
-		test := test
 		t.Run(test.call, func(t *testing.T) {
 			t.Parallel()
 
@@ -116,7 +115,6 @@ func TestBuildStatsSparklinePreservesEverySpanUnit(t *testing.T) {
 		{"6mon", SparklineSpanUnitMonth},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.span, func(t *testing.T) {
 			t.Parallel()
 
@@ -227,7 +225,6 @@ func TestBuildStatsSparklineRejectsForgedASTMetadata(t *testing.T) {
 			aggregate.Sparkline.Span = spl.SparklineSpan{Kind: spl.SparklineSpanKindExplicit, Magnitude: 3, Unit: spl.SparklineSpanUnitMillisecond, Range: sourceRange}
 		}},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -270,7 +267,6 @@ func TestBuildChartAndTimechartRejectForgedStatsSparklineArm(t *testing.T) {
 			code: "SPL_UNSUPPORTED_TIMECHART_AGGREGATE",
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			query := mustParse(t, test.source)
@@ -332,7 +328,6 @@ func TestAnalyzeStatsSparklineRejectsForgedPlanMetadata(t *testing.T) {
 			measure.Sparkline.Span = SparklineSpan{Kind: SparklineSpanKindExplicit, Magnitude: 3, Unit: SparklineSpanUnitMillisecond}
 		}},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

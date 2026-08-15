@@ -265,7 +265,6 @@ func TestKnowledgeGraphConverterRejectsUntrustedPageAuthorityAndShape(
 		}},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			page := base
 			page.Edges = append([]knowledgecatalog.DependencyEdge(nil), base.Edges...)
@@ -432,7 +431,6 @@ func TestKnowledgeGraphConverterRejectsDirectionVersionAndPagingViolations(
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			request, page := knowledgeGraphConverterFixture(test.direction)
 			page.Edges = append([]knowledgecatalog.DependencyEdge(nil), page.Edges...)
@@ -560,7 +558,6 @@ func TestKnowledgeGraphHTTPPreflightsKnownFieldsBeforeScopeAndCatalog(
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			catalog := &knowledgeHTTPCatalog{}
@@ -638,7 +635,6 @@ func TestKnowledgeGraphHTTPErrorsBindOnlyAnAuthorizedRequestedRoot(
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			serviceErr := knowledgecatalog.WithAuthorizedContext(test.cause, authorized)
 			catalog := &knowledgeHTTPCatalog{}

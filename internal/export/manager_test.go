@@ -2737,7 +2737,6 @@ func TestManagerConcurrentInspectionAndCancellation(t *testing.T) {
 	}
 	var group sync.WaitGroup
 	for _, job := range jobs {
-		job := job
 		group.Add(2)
 		go func() {
 			defer group.Done()

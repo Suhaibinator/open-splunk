@@ -28,7 +28,6 @@ func TestCanonicalDecimalCollapsesEquivalentSpellings(t *testing.T) {
 		"123E-999":               "1.23e-997",
 	}
 	for source, want := range tests {
-		source, want := source, want
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()
 			got, err := CanonicalDecimal(source)

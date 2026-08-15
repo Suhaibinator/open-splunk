@@ -64,7 +64,6 @@ func TestValidateSplitNumericTimechartSchema(t *testing.T) {
 		}},
 		{name: "oversized label bound", mutate: func(_ *Schema, got *clickhouse.TimechartOutput) { got.MaxLabelBytes = 257 }},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			schema := Schema{Columns: append([]Column(nil), valid.Columns...)}

@@ -24,7 +24,7 @@ func chartBreakTransportStringRows(names []string, values ...string) *fakeRows {
 		counts[index] = make([]uint64, len(names))
 		counts[index][0] = 1
 	}
-	return chartPivotRows("String", reflect.TypeOf(""), names, rowValues, counts)
+	return chartPivotRows("String", reflect.TypeFor[string](), names, rowValues, counts)
 }
 
 // TestChartBreakTransportByteCeilingIsExactAtBothSides pins the conservative
@@ -71,7 +71,7 @@ func TestChartBreakTransportByteCeilingIsExactAtBothSides(t *testing.T) {
 	t.Run("an extra series consumes the last eight bytes", func(t *testing.T) {
 		// The same row value that fits with one series must not fit with two:
 		// the guard accounts every retained count, not only the row label.
-		rows := chartPivotRows("String", reflect.TypeOf(""), []string{"0:INFO", "1:"},
+		rows := chartPivotRows("String", reflect.TypeFor[string](), []string{"0:INFO", "1:"},
 			[]any{base[:exact]}, [][]uint64{{1, 0}})
 		sink := &fakeSink{}
 		err := executeChartBreakTransport(t, rows, sink)

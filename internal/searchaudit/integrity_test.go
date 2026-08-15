@@ -103,7 +103,6 @@ func TestConcurrentUniqueAppendsRemainDenseAndBounded(t *testing.T) {
 	errorsByAttempt := make(chan error, attempts)
 	var wait sync.WaitGroup
 	for index := range attempts {
-		index := index
 		wait.Go(func() {
 			<-start
 			tx := database.GORMDB().WithContext(ctx).Begin()

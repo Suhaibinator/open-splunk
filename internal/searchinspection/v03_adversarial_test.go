@@ -128,7 +128,6 @@ func TestV03AllTenCommandsHaveACompleteRedactedInspectionProjection(t *testing.T
 func TestV03MissingMultivalueFieldKeepsInspectionAndLogicalShapeAligned(t *testing.T) {
 	t.Parallel()
 	for _, command := range []string{"makemv missing", "mvexpand missing"} {
-		command := command
 		t.Run(command, func(t *testing.T) {
 			t.Parallel()
 			source := `index=gradethis | table event_id | ` + command

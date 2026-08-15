@@ -225,7 +225,6 @@ func TestIndexFieldsConfigurationAndRouteRegistration(t *testing.T) {
 			needle: "index field catalog maximum page size cannot exceed browser",
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			if _, err := NewHandler(test.config); err == nil ||
@@ -271,7 +270,6 @@ func TestIndexFieldsAuthenticatesBeforeBodyOrDependencyWork(t *testing.T) {
 			wantStatus:    http.StatusForbidden,
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			administration := &browserGateIndexAdministration{}
@@ -663,7 +661,6 @@ func TestIndexFieldsValidatesTimePageAndPreservesCursorBytes(
 			return candidate
 		}()},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			response := postAuthenticatedIndexFields(
 				t,
@@ -806,7 +803,6 @@ func TestIndexFieldsServiceErrorsAreSanitized(t *testing.T) {
 			status: http.StatusInternalServerError,
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			service := &recordingIndexFields{
 				maximumFields: 100,

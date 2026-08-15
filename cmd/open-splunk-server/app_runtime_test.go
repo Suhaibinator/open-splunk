@@ -606,7 +606,6 @@ func TestRuntimeAppCatalogRejectsCorruptKnowledgeAuthority(t *testing.T) {
 		{name: "duplicate identity", maximum: control.MaximumAppsPerTenant, result: control.AppIdentityListResult{AppIDs: []string{valid, valid}, Complete: true}},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			calls := 0

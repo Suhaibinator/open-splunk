@@ -112,7 +112,6 @@ func TestBuildStatsEveryFieldTakingFamilyAcceptsScalarIR(t *testing.T) {
 		{call: "rate", function: AggregateFunctionRate, requiresTime: true},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.call, func(t *testing.T) {
 			t.Parallel()
 
@@ -169,7 +168,6 @@ func TestBuildStatsBooleanScalarEvalPreservesTypedIRForValueAndNumericFamilies(t
 		{call: "mode", function: AggregateFunctionMode},
 		{call: "sum", function: AggregateFunctionSum},
 	} {
-		test := test
 		t.Run(test.call, func(t *testing.T) {
 			t.Parallel()
 
@@ -209,9 +207,7 @@ func TestBuildStatsTimeFamiliesRequireCanonicalTimeButFirstAndLastDoNot(t *testi
 	t.Parallel()
 
 	for _, call := range []string{"earliest", "latest", "earliest_time", "latest_time", "rate"} {
-		call := call
 		for _, input := range []string{"value", "eval(value)"} {
-			input := input
 			t.Run(call+"/"+input, func(t *testing.T) {
 				t.Parallel()
 

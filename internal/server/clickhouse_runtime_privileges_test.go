@@ -20,7 +20,6 @@ func TestValidateClickHousePrincipalPrivilegesAcceptsExactAllowlists(t *testing.
 	t.Parallel()
 
 	for _, profile := range testClickHousePrivilegeProfiles() {
-		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -64,9 +63,7 @@ func TestValidateClickHousePrincipalPrivilegesRejectsEachMissingGrant(t *testing
 	t.Parallel()
 
 	for _, profile := range testClickHousePrivilegeProfiles() {
-		profile := profile
 		for missingIndex := range profile.allowlist {
-			missingIndex := missingIndex
 			t.Run(fmt.Sprintf("%s/%d", profile.name, missingIndex), func(t *testing.T) {
 				t.Parallel()
 
@@ -108,9 +105,7 @@ func TestValidateClickHousePrincipalPrivilegesRejectsAdversarialExcess(t *testin
 		"REVOKE INSERT ON open_splunk.events FROM runtime",
 	}
 	for _, profile := range testClickHousePrivilegeProfiles() {
-		profile := profile
 		for _, statement := range excessStatements {
-			statement := statement
 			t.Run(profile.name+"/"+statement, func(t *testing.T) {
 				t.Parallel()
 
@@ -581,7 +576,6 @@ func TestValidateClickHousePrincipalPrivilegesRequiresInputsAndLiveContext(
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

@@ -55,7 +55,6 @@ func TestSelectorImpliesConservativeDimensionProof(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			source, err := CompileSelector(test.source)
@@ -204,7 +203,6 @@ func TestSelectorsProvablyDisjointConservativeProof(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			left, err := CompileSelector(test.left)

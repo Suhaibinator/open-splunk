@@ -378,7 +378,6 @@ func TestIndexNameAdmissionCapacityAndIDChecksPrecedeValidator(t *testing.T) {
 			return err
 		},
 	} {
-		name, run := name, run
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			database := openTestDB(t)
@@ -446,7 +445,6 @@ func TestNilIndexNameAdmissionRejectsEitherActiveKnowledgeDriver(t *testing.T) {
 		{name: "registry only", activeRow: true},
 		{name: "both", activeLedger: true, activeRow: true},
 	} {
-		fixture := fixture
 		t.Run(fixture.name, func(t *testing.T) {
 			t.Parallel()
 			database := openTestDB(t)

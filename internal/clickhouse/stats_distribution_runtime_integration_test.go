@@ -74,7 +74,6 @@ func TestStatsDistributionAggregatesAgainstClickHouse(t *testing.T) {
 			{"no rows", `(SELECT CAST([], 'Array(Float64)') AS a FROM numbers(0))`, nil},
 			{"singleton", `values('a Array(Float64)', ([7.]))`, new(float64(7))},
 		} {
-			test := test
 			t.Run(test.name, func(t *testing.T) {
 				var got *float64
 				if queryErr := connection.QueryRow(
@@ -172,7 +171,6 @@ func TestStatsDistributionAggregatesAgainstClickHouse(t *testing.T) {
 			{"empty", `CAST([], 'Array(String)')`, 0},
 			{"singleton", `['only']`, 1},
 		} {
-			test := test
 			t.Run(test.name, func(t *testing.T) {
 				var got uint64
 				if queryErr := connection.QueryRow(
@@ -236,7 +234,6 @@ func TestStatsDistributionAggregatesAgainstClickHouse(t *testing.T) {
 			{"empty", `CAST([], 'Array(String)')`, nil},
 			{"singleton", `['only']`, new("only")},
 		} {
-			test := test
 			t.Run(test.name, func(t *testing.T) {
 				var got *string
 				if queryErr := connection.QueryRow(

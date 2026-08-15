@@ -58,7 +58,6 @@ func TestCompileExtractionPatternValidatesDialectAndCaptureContract(t *testing.T
 		{name: "invalid utf8", pattern: "(?<value>" + string([]byte{0xff}) + ")", want: ErrInvalidExtractionPattern},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := CompileExtractionPattern(test.pattern)

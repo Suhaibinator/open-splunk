@@ -60,7 +60,6 @@ func TestParseDecimalRatRejectsInvalidJSONNumberLexemes(t *testing.T) {
 		"NaN",
 		"Inf",
 	} {
-		text := text
 		t.Run(text, func(t *testing.T) {
 			t.Parallel()
 			if value, err := ParseDecimalRat(text); err == nil {
@@ -77,7 +76,6 @@ func TestParseDecimalRatReturnsZeroAtExponentBounds(t *testing.T) {
 		"0e10000",
 		"-0.0e-10000",
 	} {
-		text := text
 		t.Run(text, func(t *testing.T) {
 			t.Parallel()
 			value, err := ParseDecimalRat(text)

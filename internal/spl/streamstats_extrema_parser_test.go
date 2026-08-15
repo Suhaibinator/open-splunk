@@ -51,7 +51,6 @@ func TestParseStreamStatsExtremaField(t *testing.T) {
 			input:  "value", alias: "max(value)", global: true, groups: []string{"service"},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -124,7 +123,6 @@ func TestParseStreamStatsExtremaRejectsNonExactShapes(t *testing.T) {
 		{"wildcard maximum alias", `index=main | streamstats max(value) AS high*`, "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX", "high*"},
 		{"maximum alias after by", `index=main | streamstats max(value) BY host AS high`, "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX", "AS"},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

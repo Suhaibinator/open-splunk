@@ -158,7 +158,6 @@ func TestCollectorRejectsSharedReservedRootsAndSourceAliases(t *testing.T) {
 	)
 	for _, canonical := range names {
 		for _, name := range []string{canonical, strings.ToUpper(canonical)} {
-			name := name
 			t.Run(name, func(t *testing.T) {
 				dynamic, err := dynamicFields(jsonObject{{name: name, value: "forged"}})
 				if err != nil {

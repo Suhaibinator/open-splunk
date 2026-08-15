@@ -36,7 +36,6 @@ func TestCompileTimechartSumAndAverageUseOneScopedScanAndSharedNumericNormalizat
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -128,7 +127,6 @@ func TestCompileSplitTimechartSumAndAverageUseBoundedMergeableStates(t *testing.
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -236,7 +234,6 @@ func TestCompileTimechartNumericAggregateRevalidatesForgedMeasure(t *testing.T) 
 			want: "field aggregate output contract is invalid",
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

@@ -56,7 +56,6 @@ func TestBuildRejectsExplicitForbiddenIndex(t *testing.T) {
 		`index=gradethis | search index=secret`,
 	}
 	for _, source := range tests {
-		source := source
 		t.Run(source, func(t *testing.T) {
 			t.Parallel()
 			_, err := Build(mustParse(t, source), testScope([]string{"gradethis"}, nil))
@@ -102,7 +101,6 @@ func TestBuildPreservesLiteralTypes(t *testing.T) {
 		{`status="500"`, ValueKindString},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.source, func(t *testing.T) {
 			t.Parallel()
 			logical, err := Build(mustParse(t, test.source), testScope([]string{"gradethis"}, nil))
@@ -1332,7 +1330,6 @@ func TestBuildFrequencyCommandsUseCompleteOrderedFieldTuples(t *testing.T) {
 		{name: "top", source: `index=gradethis | top limit=20 service,status`},
 		{name: "rare", source: `index=gradethis | rare limit=20 service,status`, leastFrequent: true},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -1451,7 +1448,6 @@ func TestBuildFrequencyCommandsRevalidateForgedFieldTuples(t *testing.T) {
 			code: "SPL_DUPLICATE_FIELD",
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			query := &spl.Query{
@@ -1613,7 +1609,6 @@ func TestBuildNumericBinSupportsTransformingRowsAndASOutputSchema(t *testing.T) 
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.source, func(t *testing.T) {
 			t.Parallel()
 			logical, err := Build(mustParse(t, test.source), testScope([]string{"gradethis"}, nil))
@@ -1823,7 +1818,6 @@ func TestBuildRejectsForgedNumericBinAST(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -2152,7 +2146,6 @@ func TestBuildRejectsChartCombinedWithOtherWideCommands(t *testing.T) {
 		{`index=gradethis | timechart span=5m count by level | chart count over path by level`, "SPL_UNSUPPORTED_TIMECHART_PIPELINE"},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.source, func(t *testing.T) {
 			t.Parallel()
 			_, err := Build(mustParse(t, test.source), testScope([]string{"gradethis"}, nil))
@@ -2303,7 +2296,6 @@ func TestBuildRevalidatesForgedChartCommands(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			query := &spl.Query{Search: base.Search, Commands: []spl.Command{test.command}, Range: base.Range}

@@ -47,7 +47,6 @@ func TestCompileFieldSummaryValidatesEffectiveBounds(t *testing.T) {
 		}},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			spec := valid
@@ -363,7 +362,6 @@ func TestCompileFieldSummaryUsesFinalFieldSemantics(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			compiled, err := (Compiler{}).CompileFieldSummary(

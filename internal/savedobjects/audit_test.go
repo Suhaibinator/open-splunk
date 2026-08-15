@@ -247,7 +247,6 @@ func TestAuditedStoreRollsBackEverySavedSearchMutationWhenAuditFails(t *testing.
 		SavedSearchMutationAuditActionDuplicate,
 		SavedSearchMutationAuditActionDelete,
 	} {
-		action := action
 		t.Run(string(action), func(t *testing.T) {
 			t.Parallel()
 			database, _ := openTestStore(t)
@@ -452,7 +451,6 @@ func TestAuditedStoreIDCollisionsPublishOnlyTheCommittedSavedSearch(t *testing.T
 			exhausted: true,
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			database, _ := openTestStore(t)
@@ -553,7 +551,6 @@ func TestAuditedStoreConcurrentSavedSearchMutationsPublishOnlyTheWinner(t *testi
 		start := make(chan struct{})
 		errorsByWriter := make(chan error, 2)
 		for _, name := range []string{"winner-a", "winner-b"} {
-			name := name
 			go func() {
 				replacement := proto.Clone(created.Definition).(*opensplunkv1.SavedSearchDefinition)
 				replacement.Name = name

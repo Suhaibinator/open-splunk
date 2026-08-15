@@ -84,7 +84,6 @@ func TestHeartbeatRuntimeConfigValidation(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			config := valid
 			if test.mutate != nil {
@@ -1538,7 +1537,6 @@ func TestHeartbeatRuntimeReleaseReportsOnlyPendingSnapshotDroppedAtDeadline(
 	t.Parallel()
 
 	for _, pending := range []bool{false, true} {
-		pending := pending
 		t.Run(fmt.Sprintf("pending=%t", pending), func(t *testing.T) {
 			t.Parallel()
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -435,8 +436,8 @@ func (connection *connection) subscribe(requestID string, command *opensplunkv1.
 		target.publishMu.Lock()
 	}
 	defer func() {
-		for index := len(targets) - 1; index >= 0; index-- {
-			targets[index].publishMu.Unlock()
+		for _, v := range slices.Backward(targets) {
+			v.publishMu.Unlock()
 		}
 	}()
 
@@ -696,8 +697,8 @@ func (connection *connection) unsubscribe(requestID string, command *opensplunkv
 		target.publishMu.Lock()
 	}
 	defer func() {
-		for index := len(targets) - 1; index >= 0; index-- {
-			targets[index].publishMu.Unlock()
+		for _, v := range slices.Backward(targets) {
+			v.publishMu.Unlock()
 		}
 	}()
 
@@ -749,8 +750,8 @@ func (connection *connection) removeAllSubscriptions() {
 		target.mu.Unlock()
 	}
 	clear(connection.subscriptions)
-	for index := len(targets) - 1; index >= 0; index-- {
-		targets[index].publishMu.Unlock()
+	for _, v := range slices.Backward(targets) {
+		v.publishMu.Unlock()
 	}
 }
 

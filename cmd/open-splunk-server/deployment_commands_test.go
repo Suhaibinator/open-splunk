@@ -131,7 +131,6 @@ func TestDeploymentHealthcheckRejectsInvalidURLAndServerName(t *testing.T) {
 		"userinfo":          "https://user@127.0.0.1:8080/healthz",
 		"surrounding space": " https://127.0.0.1:8080/healthz ",
 	} {
-		rawURL := rawURL
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			if _, err := validateDeploymentHealthURL(rawURL); err == nil {
@@ -169,7 +168,6 @@ func TestDeploymentHealthcheckRejectsRedirectStatusAndNonExactBody(t *testing.T)
 			_, _ = response.Write([]byte(strings.Repeat("x", 1024)))
 		},
 	} {
-		handler := handler
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			url, identity := startDeploymentHealthTLSServer(t, handler)
@@ -239,7 +237,6 @@ func TestProvisionAdministratorTokenCreatesRuntimeCredential(t *testing.T) {
 	t.Parallel()
 	token := []byte(strings.Repeat("A", auth.MinimumBrowserBearerTokenBytes))
 	for _, sourceMode := range []os.FileMode{0o444, 0o644} {
-		sourceMode := sourceMode
 		t.Run(fmt.Sprintf("source-%#o", sourceMode), func(t *testing.T) {
 			t.Parallel()
 			source := writeProvisioningTokenSource(t, append(token, '\n'), sourceMode)
@@ -433,7 +430,6 @@ func TestProvisionAdministratorTokenRejectsUnsafeSource(t *testing.T) {
 		"executable":     0o744,
 		"special":        os.ModeSticky | 0o444,
 	} {
-		mode := mode
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			source := writeProvisioningTokenSource(t, token, mode)
@@ -552,7 +548,6 @@ func TestProvisionAdministratorTokenRejectsUnsafeExistingDestination(t *testing.
 			return os.Link(path, path+".link")
 		},
 	} {
-		prepare := prepare
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			destination := secureProvisioningDestinationPath(t)

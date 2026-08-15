@@ -737,7 +737,6 @@ func TestAdministrativeProjectionAndDisableSurviveUnrelatedCorruption(t *testing
 		},
 	}
 	for index, corruption := range corruptions {
-		corruption := corruption
 		t.Run(corruption.name, func(t *testing.T) {
 			t.Parallel()
 

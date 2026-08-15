@@ -1179,13 +1179,12 @@ func TestHandlerMetricsAreBoundedAggregateAndContainNoRequestIdentity(t *testing
 			t.Errorf("metrics snapshot contains private request value %q", private)
 		}
 	}
-	assertAggregateMetricShape(t, reflect.TypeOf(snapshot))
+	assertAggregateMetricShape(t, reflect.TypeFor[MetricsSnapshot]())
 }
 
 func assertAggregateMetricShape(t *testing.T, metricType reflect.Type) {
 	t.Helper()
-	for index := 0; index < metricType.NumField(); index++ {
-		field := metricType.Field(index)
+	for field := range metricType.Fields() {
 		switch field.Type.Kind() {
 		case reflect.Uint64, reflect.Int64:
 		case reflect.Array:

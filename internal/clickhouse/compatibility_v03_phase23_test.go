@@ -46,7 +46,6 @@ func TestCompileRowTotalValidationSurvivesEveryDownstreamConsumer(t *testing.T) 
 		`head 1`,
 		`stats count`,
 	} {
-		suffix := suffix
 		t.Run(suffix, func(t *testing.T) {
 			t.Parallel()
 			compiled, err := (Compiler{}).Compile(buildPlan(
@@ -194,7 +193,6 @@ func TestCompileDeltaMalformedBarrierSurvivesDownstreamConsumers(t *testing.T) {
 		`head 1`,
 		`stats count`,
 	} {
-		downstream := downstream
 		t.Run(downstream, func(t *testing.T) {
 			t.Parallel()
 			compiled, err := (Compiler{}).Compile(buildPlan(
@@ -298,7 +296,6 @@ func TestCompileMVExpandValidationDisablesPredicatePushdown(t *testing.T) {
 				`mvexpand zones | where event_id="never"`,
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			compiled, err := (Compiler{}).Compile(buildPlan(t, test.source))
@@ -348,7 +345,6 @@ func TestCompileDeltaValidationDisablesPlanRewrites(t *testing.T) {
 func TestCompileMissingMultivalueFieldMatchesClosedLogicalShape(t *testing.T) {
 	t.Parallel()
 	for _, command := range []string{"makemv missing", "mvexpand missing"} {
-		command := command
 		t.Run(command, func(t *testing.T) {
 			t.Parallel()
 			compiled, err := (Compiler{}).Compile(buildPlan(
@@ -390,7 +386,6 @@ func TestCompileMakeMVUsesBoundedLiteralSplitSentinels(t *testing.T) {
 			notSQL:    "splitByString(",
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			compiled, err := (Compiler{}).Compile(buildPlan(t, test.source))

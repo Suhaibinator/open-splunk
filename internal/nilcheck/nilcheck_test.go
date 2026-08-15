@@ -28,7 +28,6 @@ func TestIsNil(t *testing.T) {
 		{name: "empty struct", value: struct{}{}},
 		{name: "non-nil slice", value: []int{}},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			if got := IsNil(test.value); got != test.want {

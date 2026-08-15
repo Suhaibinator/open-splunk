@@ -191,7 +191,6 @@ func TestReadClickHouseMigrationHistoryBoundsCanonicalAndRecoveryAliasResults(
 		recoverycontract.CanonicalDatabase,
 		"open_splunk_recovery_" + testRecoverySetID,
 	} {
-		databaseName := databaseName
 		t.Run(databaseName, func(t *testing.T) {
 			t.Parallel()
 
@@ -210,7 +209,6 @@ func TestReadClickHouseMigrationHistoryBoundsCanonicalAndRecoveryAliasResults(
 					wantDrift: true,
 				},
 			} {
-				test := test
 				t.Run(test.name, func(t *testing.T) {
 					t.Parallel()
 
@@ -354,7 +352,6 @@ func TestReadClickHouseMigrationHistoryBoundsPreliminaryTableProbe(t *testing.T)
 			wantArguments: []any{"open_splunk_recovery_" + testRecoverySetID},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -516,7 +513,6 @@ func TestInspectClickHouseRecoveryDatabaseRejectsInvalidAtomicIdentity(t *testin
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -747,7 +743,6 @@ func TestClearClickHouseRecoveryArchiveMarkerConsumesOnlyExactIdentity(
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			connection := &fakeClickHouseRecoveryArchiveMarkerConnection{
@@ -801,7 +796,6 @@ func TestRequireClickHouseRecoveryArchiveMarkerRejectsNonExactState(t *testing.T
 		}}, wantErr: true},
 		{name: "duplicate", rows: []fakeClickHouseRecoveryArchiveMarkerRow{exact, exact}, wantErr: true},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			connection := &fakeClickHouseRecoveryArchiveMarkerConnection{
@@ -951,7 +945,6 @@ func TestReadClickHouseRecoveryReceiptSupportsOnlyExactRetry(t *testing.T) {
 		}}},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

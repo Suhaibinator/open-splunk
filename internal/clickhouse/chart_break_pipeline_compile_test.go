@@ -121,7 +121,6 @@ func TestChartBreakPipelineSpellingsAgreeAfterEverySupportedUpstream(t *testing.
 	t.Parallel()
 
 	for _, test := range chartBreakPipelineUpstreams() {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			over := test.upstream + " | chart count OVER " + test.row + " BY " + test.column
@@ -203,7 +202,6 @@ func TestChartBreakPipelineKeywordAndReservedFieldNames(t *testing.T) {
 		{"dotted paths at the segment ceiling", `index=gradethis | chart count OVER ` + seventeen + ` BY level`, seventeen},
 		{"dotted column path at the segment ceiling", `index=gradethis | chart count OVER path BY ` + seventeen, "path"},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			compiled := chartBreakPipelineCompile(t, test.source)
@@ -290,7 +288,6 @@ func TestChartBreakPipelineColumnAxisTypeRejectionSurvivesEveryProducer(t *testi
 		{"top percent column", `index=gradethis | top message | chart count OVER message BY percent`, "percent"},
 		{"rare count column", `index=gradethis | rare message | chart count OVER message BY count`, "count"},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			logical := chartBreakPipelineBuild(t, test.source)
@@ -414,7 +411,6 @@ func TestChartBreakPipelineProjectionsThatDropAnAxis(t *testing.T) {
 		{"stats closes the schema without the row axis", `index=gradethis | stats count BY level | chart count OVER path BY level`, true},
 		{"top closes the schema without the row axis", `index=gradethis | top message | chart count OVER path BY message`, true},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			compiled := chartBreakPipelineCompile(t, test.source)

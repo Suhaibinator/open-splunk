@@ -365,7 +365,7 @@ func atomicResultRows(query clickhouse.CompiledQuery, data [][]any) *fakeRows {
 		types: []driver.ColumnType{fakeColumnType{
 			name:         query.OutputFields[0],
 			databaseType: "Dynamic",
-			scanType:     reflect.TypeOf((*any)(nil)).Elem(),
+			scanType:     reflect.TypeFor[any](),
 			nullable:     true,
 		}},
 		data: data,

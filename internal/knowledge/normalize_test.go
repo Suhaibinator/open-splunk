@@ -19,7 +19,6 @@ func TestNormalizeNamePinsASCIIWhitespaceControlsAndBinaryCase(t *testing.T) {
 		{name: "binary case lower", source: "revenue", want: "revenue"},
 		{name: "non-ASCII whitespace is data", source: "\u00a0Revenue\u00a0", want: "\u00a0Revenue\u00a0"},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			got, err := NormalizeName(test.source)

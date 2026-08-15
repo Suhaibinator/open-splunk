@@ -222,7 +222,7 @@ func TestExecutorExecuteFieldSummaryRejectsMalformedSchemaAtomically(t *testing.
 		}},
 		{name: "extra column", mutate: func(rows *fakeRows) {
 			rows.columns = append(rows.columns, "extra")
-			rows.types = append(rows.types, fakeColumnType{name: "extra", databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0))})
+			rows.types = append(rows.types, fakeColumnType{name: "extra", databaseType: "UInt8", scanType: reflect.TypeFor[uint8]()})
 		}},
 		{name: "missing column type", mutate: func(rows *fakeRows) { rows.types = rows.types[:12] }},
 		{name: "typed nil column type", mutate: func(rows *fakeRows) {
@@ -230,24 +230,24 @@ func TestExecutorExecuteFieldSummaryRejectsMalformedSchemaAtomically(t *testing.
 			rows.types[2] = columnType
 		}},
 		{name: "type name mismatch", mutate: func(rows *fakeRows) {
-			rows.types[1] = fakeColumnType{name: "wrong", databaseType: "String", scanType: reflect.TypeOf("")}
+			rows.types[1] = fakeColumnType{name: "wrong", databaseType: "String", scanType: reflect.TypeFor[string]()}
 		}},
 		{name: "nullable", mutate: func(rows *fakeRows) {
 			rows.types[4] = fakeColumnType{
 				name: clickhouse.FieldSummaryNullCountColumn, databaseType: "UInt64",
-				scanType: reflect.TypeOf(uint64(0)), nullable: true,
+				scanType: reflect.TypeFor[uint64](), nullable: true,
 			}
 		}},
 		{name: "wrapped nullable", mutate: func(rows *fakeRows) {
 			rows.types[4] = fakeColumnType{
 				name: clickhouse.FieldSummaryNullCountColumn, databaseType: "Nullable(UInt64)",
-				scanType: reflect.TypeOf(uint64(0)),
+				scanType: reflect.TypeFor[uint64](),
 			}
 		}},
 		{name: "wrong physical type", mutate: func(rows *fakeRows) {
 			rows.types[2] = fakeColumnType{
 				name: clickhouse.FieldSummaryObservedTypesColumn, databaseType: "Array(UInt16)",
-				scanType: reflect.TypeOf([]uint16{}),
+				scanType: reflect.TypeFor[[]uint16](),
 			}
 		}},
 	}
@@ -994,19 +994,19 @@ func fieldSummaryFakeRows(rows ...[]any) *fakeRows {
 		"UInt8",
 	}
 	scanTypes := []reflect.Type{
-		reflect.TypeOf(uint8(0)),
-		reflect.TypeOf(""),
-		reflect.TypeOf([]uint8{}),
-		reflect.TypeOf(uint64(0)),
-		reflect.TypeOf(uint64(0)),
-		reflect.TypeOf(uint64(0)),
-		reflect.TypeOf(uint64(0)),
-		reflect.TypeOf(uint8(0)),
-		reflect.TypeOf(""),
-		reflect.TypeOf(uint64(0)),
-		reflect.TypeOf(uint8(0)),
-		reflect.TypeOf(uint8(0)),
-		reflect.TypeOf(uint8(0)),
+		reflect.TypeFor[uint8](),
+		reflect.TypeFor[string](),
+		reflect.TypeFor[[]uint8](),
+		reflect.TypeFor[uint64](),
+		reflect.TypeFor[uint64](),
+		reflect.TypeFor[uint64](),
+		reflect.TypeFor[uint64](),
+		reflect.TypeFor[uint8](),
+		reflect.TypeFor[string](),
+		reflect.TypeFor[uint64](),
+		reflect.TypeFor[uint8](),
+		reflect.TypeFor[uint8](),
+		reflect.TypeFor[uint8](),
 	}
 	columnTypes := make([]driver.ColumnType, len(columns))
 	for index := range columns {

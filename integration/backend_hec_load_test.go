@@ -1241,7 +1241,6 @@ func runBackendHECLoadTraffic(
 	schedules := plan.schedules()
 	var schedulers sync.WaitGroup
 	for _, schedule := range schedules {
-		schedule := schedule
 		schedulers.Go(func() {
 			interval := schedule.interval
 			channel := backendHECLoadFullChannel
@@ -1886,7 +1885,7 @@ func parseBackendHECLoadRuntimeSignalsWithGCRequirement(
 		result.maximumGoroutines = max(result.maximumGoroutines, currentGoroutines)
 		result.lastGoroutines = currentGoroutines
 	}
-	for _, line := range strings.Split(logs, "\n") {
+	for line := range strings.SplitSeq(logs, "\n") {
 		if match := backendHECLoadGCHeapPattern.FindStringSubmatch(line); len(match) == 4 {
 			result.gcSamples++
 			for _, value := range match[1:] {

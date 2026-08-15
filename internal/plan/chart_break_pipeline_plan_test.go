@@ -75,7 +75,6 @@ func TestChartBreakPipelineOperatorIsTerminalAndWideAfterEveryUpstream(t *testin
 		{"time bin", `index=gradethis | bin _time span=5m AS bt | chart count OVER bt BY level`, "bt", "level"},
 		{"in-place time bin", `index=gradethis | bin _time span=5m | chart count OVER _time BY level`, "_time", "level"},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			logical := chartBreakPipelineBuild(t, test.source)
@@ -256,7 +255,6 @@ func TestChartBreakPipelineFieldResolutionRejections(t *testing.T) {
 		{"row path past the segment ceiling", `index=gradethis | chart count OVER ` + eighteen + ` BY level`, "SPL_QUERY_TOO_COMPLEX"},
 		{"column path past the segment ceiling", `index=gradethis | chart count OVER path BY ` + eighteen, "SPL_QUERY_TOO_COMPLEX"},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			if diagnostic := chartBreakPipelineBuildError(t, test.source); diagnostic.Code != test.code {

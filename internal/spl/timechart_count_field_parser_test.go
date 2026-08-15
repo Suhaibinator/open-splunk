@@ -39,7 +39,6 @@ func TestParseTimechartCountFieldCanonicalizesAndPreservesExactFields(t *testing
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -102,7 +101,6 @@ func TestParseTimechartCountFieldRejectsShorthandAndNonExactShapes(t *testing.T)
 		{"second split", `index=main | timechart span=5m count(status) BY service host`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX"},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -143,7 +141,6 @@ func TestTimechartCountFieldSuggestionContext(t *testing.T) {
 		{source: `| timechart span=5m count(status) BY `, kinds: []SuggestionKind{SuggestionKindField}},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.source, func(t *testing.T) {
 			t.Parallel()
 

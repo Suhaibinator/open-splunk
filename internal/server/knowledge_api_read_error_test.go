@@ -49,7 +49,6 @@ func TestKnowledgeHTTPReadRoutesCollapseImpossibleCatalogSentinels(
 		{name: "list capacity", path: knowledgeObjectsListPath, request: &opensplunkv1.ListKnowledgeObjectsRequest{}, cause: control.ErrCapacityExceeded, authorized: appContext},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			serviceErr := knowledgecatalog.WithAuthorizedContext(
@@ -160,7 +159,6 @@ func TestKnowledgeHTTPReadRoutesRetainOnlyTheirSupportedErrorFamilies(
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			catalog := &knowledgeHTTPCatalog{

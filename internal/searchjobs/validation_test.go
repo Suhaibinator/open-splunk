@@ -200,7 +200,6 @@ func TestManagerValidateReturnsExactParsePlanningAndCompilerDiagnostics(t *testi
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			result, err := manager.Validate(context.Background(), validValidationRequest(test.source))
 			if err != nil {

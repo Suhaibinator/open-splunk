@@ -1032,7 +1032,6 @@ func TestCreateSearchRejectsUnsupportedSemanticsBeforeCreatingJob(t *testing.T) 
 		}},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			jobs := &fakeSearchJobs{createJob: completeJob("job-1")}
 			handler := newTestHandler(t, Config{

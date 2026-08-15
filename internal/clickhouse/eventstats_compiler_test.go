@@ -158,7 +158,6 @@ func TestCompileEventStatsDeferredStageWrapsTerminalWideOutputs(t *testing.T) {
 			},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -265,7 +264,6 @@ func TestCompileEventStatsDefensivelyRejectsForgedOperators(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			logical, operator := cloneEventAggregatePlan(t, base)
 			test.mutate(operator)

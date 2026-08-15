@@ -70,7 +70,6 @@ func TestBuildStatsNumericEvalInputsProduceScalarIR(t *testing.T) {
 		{call: "varp", function: AggregateFunctionVariancePopulation},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.call, func(t *testing.T) {
 			t.Parallel()
 
@@ -195,7 +194,6 @@ func TestBuildStatsNumericEvalRejectsForgedMetadata(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

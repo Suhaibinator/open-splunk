@@ -33,7 +33,6 @@ func TestParseChartCountFieldCanonicalizesAndPreservesExactInput(t *testing.T) {
 			column: "service",
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -100,7 +99,6 @@ func TestParseChartCountFieldRejectsNonExactAndAliasedShapes(t *testing.T) {
 		{"shorthand", `index=main | chart c(status) OVER path BY service`, "SPL_UNSUPPORTED_CHART_AGGREGATE", "c"},
 		{"explicit alias", `index=main | chart count(status) AS populated OVER path BY service`, "SPL_UNSUPPORTED_CHART_AGGREGATE", "AS"},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

@@ -45,7 +45,6 @@ func TestCompileStreamStatsCountUsesDeterministicPipelineOrder(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -122,7 +121,6 @@ func TestCompileStreamStatsCountPinsCurrentAndWindowFrames(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -230,7 +228,6 @@ func TestCompileStreamStatsGuardsInputAndUnsupportedGroupsBeforeDownstreamLimit(
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -563,7 +560,6 @@ func TestCompileStreamStatsDefensivelyRejectsForgedOperators(t *testing.T) {
 		}},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

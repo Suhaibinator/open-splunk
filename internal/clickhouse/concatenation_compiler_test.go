@@ -112,7 +112,6 @@ func TestCompileEvalConcatenationDynamicDomainsAreScalarAndBoundOnce(t *testing.
 			},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			const source = "dynamic_input"
@@ -307,7 +306,6 @@ func TestCompileEvalConcatenationRejectsUnsupportedFixedTypes(t *testing.T) {
 			code:   "SPL_UNSUPPORTED_MULTIVALUE_USAGE",
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := (Compiler{}).Compile(buildPlan(t, test.source))
@@ -459,7 +457,6 @@ func TestCompileEvalConcatenationRejectsForgedPlansAndWorksInPredicates(t *testi
 			want: "unsupported function 0",
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			err := compileForgedScalarAssignment(t, base, test.expression)

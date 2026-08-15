@@ -827,7 +827,6 @@ func TestProcessBatchRejectsDurableStateDispositionMismatch(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			store := &recoverableTestStore{
 				identity: durableIdentity, result: test.result, storedState: test.state,
@@ -1312,7 +1311,6 @@ func TestProcessBatchRejectPersistenceFailurePreservesStorePrecedence(t *testing
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			config := testServiceConfig()
 			config.Limits.MaxBatchEvents = 1

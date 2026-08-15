@@ -155,7 +155,6 @@ func TestCompileSplitTimechartPercentileCanonicalLevels(t *testing.T) {
 	for percentile, literal := range map[uint8]string{
 		1: "0.01", 9: "0.09", 10: "0.1", 50: "0.5", 95: "0.95", 99: "0.99",
 	} {
-		percentile, literal := percentile, literal
 		t.Run(fmt.Sprintf("p%d", percentile), func(t *testing.T) {
 			t.Parallel()
 
@@ -263,7 +262,6 @@ func TestCompileTimechartPercentileRevalidatesForgedMeasureAndOutput(t *testing.
 			want: "field aggregate output contract is invalid",
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -307,7 +305,6 @@ func TestCompileTimechartCountMeasureContractRemainsStrict(t *testing.T) {
 			},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -328,7 +325,6 @@ func TestCompileTimechartPercentileCanonicalLevels(t *testing.T) {
 	for percentile, literal := range map[uint8]string{
 		1: "0.01", 9: "0.09", 10: "0.1", 50: "0.5", 95: "0.95", 99: "0.99",
 	} {
-		percentile, literal := percentile, literal
 		t.Run(fmt.Sprintf("p%d", percentile), func(t *testing.T) {
 			t.Parallel()
 

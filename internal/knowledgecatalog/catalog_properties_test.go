@@ -270,7 +270,6 @@ func TestCatalogFingerprintBindsEverySemanticInputButNotToken(t *testing.T) {
 	appendVariant("sort direction", func(r *ListRequest) { r.SortDirection = SortDescending })
 
 	for _, variant := range variants {
-		variant := variant
 		t.Run(variant.name, func(t *testing.T) {
 			t.Parallel()
 			if got := fingerprint(t, variant.scope, variant.request); got == want {
@@ -303,7 +302,6 @@ func TestCatalogIdentityFilterAndVersionBoundaries(t *testing.T) {
 		{name: "invalid utf8", value: invalidUTF8, maximum: maximumTenantIDBytes},
 		{name: "unicode", value: "ténant", maximum: maximumTenantIDBytes, valid: true},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			if got := validIdentity(test.value, test.maximum); got != test.valid {
@@ -371,7 +369,6 @@ func TestCatalogCursorShapeMatrixAndAdversarialTokens(t *testing.T) {
 		{name: "object type", sortBy: SortByObjectType, cursor: listCursor{PrimaryString: "field_alias", SecondaryString: "name"}},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			cursor := test.cursor

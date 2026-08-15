@@ -84,7 +84,6 @@ func TestCompileStatsPartitionsMaxThreadsHintUsesWholeQueryMinimum(t *testing.T)
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			compiled := compileSPL(t, test.source)
@@ -136,7 +135,6 @@ func TestCompiledStatsPartitionsMaxThreadsHintIsSealedClonedAndRetained(t *testi
 		{name: "removed hint", hint: 0},
 		{name: "out of range value", hint: maximumStatsPartitionsMaxThreadsHint + 1},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			tampered := compiled

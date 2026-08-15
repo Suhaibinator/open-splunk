@@ -50,7 +50,6 @@ func TestSPAStaticServingIsCacheSafeAndNeverListsDirectories(t *testing.T) {
 		{name: "Next directory listing denied", path: "/_next/static", wantCode: http.StatusNotFound},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, test.path, nil)

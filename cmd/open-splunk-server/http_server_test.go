@@ -70,7 +70,6 @@ func TestLoadHTTPServerTLSConfigRejectsInvalidIdentity(t *testing.T) {
 		"malformed":        {malformed, malformed},
 		"mismatched pair":  {first.CertificateFile, second.PrivateKeyFile},
 	} {
-		files := files
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			if _, err := loadHTTPServerTLSConfig(files[0], files[1]); err == nil ||

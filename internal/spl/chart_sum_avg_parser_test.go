@@ -44,7 +44,6 @@ func TestParseChartSumAndAveragePreservesExactMeasureAndRanges(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -120,7 +119,6 @@ func TestParseChartSumAndAverageRejectsUnsupportedInputShapes(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -154,7 +152,6 @@ func TestParseChartSumAndAverageRejectsAdditionalAggregatesAliasesAndOptions(t *
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -193,7 +190,6 @@ func TestChartSumAndAverageSuggestionContext(t *testing.T) {
 		{source: `| chart sum(bytes) BY `, kinds: []SuggestionKind{SuggestionKindField}},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.source, func(t *testing.T) {
 			t.Parallel()
 

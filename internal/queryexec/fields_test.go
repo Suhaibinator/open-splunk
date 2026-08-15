@@ -74,7 +74,7 @@ func TestExecutorExecuteFieldCatalogRejectsMalformedSchemaAtomically(t *testing.
 		{name: "reordered columns", mutate: func(rows *fakeRows) { rows.columns[0], rows.columns[1] = rows.columns[1], rows.columns[0] }},
 		{name: "extra column", mutate: func(rows *fakeRows) {
 			rows.columns = append(rows.columns, "extra")
-			rows.types = append(rows.types, fakeColumnType{name: "extra", databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0))})
+			rows.types = append(rows.types, fakeColumnType{name: "extra", databaseType: "UInt8", scanType: reflect.TypeFor[uint8]()})
 		}},
 		{name: "missing column type", mutate: func(rows *fakeRows) { rows.types = rows.types[:7] }},
 		{name: "typed nil column type", mutate: func(rows *fakeRows) {
@@ -82,16 +82,16 @@ func TestExecutorExecuteFieldCatalogRejectsMalformedSchemaAtomically(t *testing.
 			rows.types[2] = columnType
 		}},
 		{name: "type name mismatch", mutate: func(rows *fakeRows) {
-			rows.types[1] = fakeColumnType{name: "wrong", databaseType: "String", scanType: reflect.TypeOf("")}
+			rows.types[1] = fakeColumnType{name: "wrong", databaseType: "String", scanType: reflect.TypeFor[string]()}
 		}},
 		{name: "nullable", mutate: func(rows *fakeRows) {
-			rows.types[4] = fakeColumnType{name: clickhouse.FieldCatalogNullCountColumn, databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0)), nullable: true}
+			rows.types[4] = fakeColumnType{name: clickhouse.FieldCatalogNullCountColumn, databaseType: "UInt64", scanType: reflect.TypeFor[uint64](), nullable: true}
 		}},
 		{name: "wrapped nullable", mutate: func(rows *fakeRows) {
-			rows.types[4] = fakeColumnType{name: clickhouse.FieldCatalogNullCountColumn, databaseType: "Nullable(UInt64)", scanType: reflect.TypeOf(uint64(0))}
+			rows.types[4] = fakeColumnType{name: clickhouse.FieldCatalogNullCountColumn, databaseType: "Nullable(UInt64)", scanType: reflect.TypeFor[uint64]()}
 		}},
 		{name: "wrong physical type", mutate: func(rows *fakeRows) {
-			rows.types[2] = fakeColumnType{name: clickhouse.FieldCatalogObservedTypesColumn, databaseType: "Array(UInt16)", scanType: reflect.TypeOf([]uint16{})}
+			rows.types[2] = fakeColumnType{name: clickhouse.FieldCatalogObservedTypesColumn, databaseType: "Array(UInt16)", scanType: reflect.TypeFor[[]uint16]()}
 		}},
 	}
 	for _, test := range tests {
@@ -546,9 +546,9 @@ func fieldCatalogFakeRows(totalEvents uint64, profiles ...[]any) *fakeRows {
 	}
 	databaseTypes := []string{"UInt8", "String", "Array(UInt8)", "UInt64", "UInt64", "UInt64", "UInt64", "UInt8"}
 	scanTypes := []reflect.Type{
-		reflect.TypeOf(uint8(0)), reflect.TypeOf(""), reflect.TypeOf([]uint8{}),
-		reflect.TypeOf(uint64(0)), reflect.TypeOf(uint64(0)), reflect.TypeOf(uint64(0)), reflect.TypeOf(uint64(0)),
-		reflect.TypeOf(uint8(0)),
+		reflect.TypeFor[uint8](), reflect.TypeFor[string](), reflect.TypeFor[[]uint8](),
+		reflect.TypeFor[uint64](), reflect.TypeFor[uint64](), reflect.TypeFor[uint64](), reflect.TypeFor[uint64](),
+		reflect.TypeFor[uint8](),
 	}
 	types := make([]driver.ColumnType, len(columns))
 	for index := range columns {

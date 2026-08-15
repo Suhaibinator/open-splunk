@@ -264,7 +264,6 @@ func TestV03FillNullEscapedPhysicalNamesAgainstClickHouse(t *testing.T) {
 		`semi:semicolon`,
 		`κλειδί界💥`,
 	} {
-		name := name
 		t.Run("fixed String "+name, func(_ *testing.T) {
 			assertRows(
 				base+` | eval `+name+`="fixed-keep-界"`+
@@ -283,7 +282,6 @@ func TestV03FillNullEscapedPhysicalNamesAgainstClickHouse(t *testing.T) {
 		{name: "fields", spl: ` | fields event_id literal\.dot`},
 		{name: "table", spl: ` | table event_id literal\.dot`},
 	} {
-		barrier := barrier
 		t.Run("fixed String escaped dot "+barrier.name, func(_ *testing.T) {
 			assertRows(
 				base+` | eval literal\.dot="barrier-keep"`+barrier.spl+
@@ -303,7 +301,6 @@ func TestV03FillNullEscapedPhysicalNamesAgainstClickHouse(t *testing.T) {
 		`number{brace}`,
 		`数値界`,
 	} {
-		name := name
 		t.Run("fixed Number "+name, func(_ *testing.T) {
 			assertRows(
 				base+` | eval `+name+`=7`+
@@ -323,7 +320,6 @@ func TestV03FillNullEscapedPhysicalNamesAgainstClickHouse(t *testing.T) {
 		`dynamic{brace}`,
 		`動的界`,
 	} {
-		name := name
 		t.Run("direct Dynamic "+name, func(_ *testing.T) {
 			assertRows(
 				base+` | eval `+name+`=dynamic_scalar`+
@@ -345,7 +341,6 @@ func TestV03FillNullEscapedPhysicalNamesAgainstClickHouse(t *testing.T) {
 		{name: "fields", spl: ` | fields event_id calculated\\slash\.dot`},
 		{name: "table", spl: ` | table event_id calculated\\slash\.dot`},
 	} {
-		barrier := barrier
 		t.Run("calculated Dynamic "+barrier.name, func(_ *testing.T) {
 			assertRows(
 				base+` | eval calculated\\slash\.dot=dynamic_scalar`+

@@ -179,7 +179,6 @@ func TestValidCompilerVersionCanonicalContract(t *testing.T) {
 		{name: "invalid UTF-8", value: string([]byte{0xff})},
 		{name: "oversized", value: maximum + "v"},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			if got := ValidCompilerVersion(test.value); got != test.want {

@@ -147,7 +147,6 @@ func TestKnowledgeActivePublicationDependenciesMigrationKeepsStateOnlyEdgesExact
 	t.Parallel()
 
 	for _, mutation := range []string{"disable", "delete"} {
-		mutation := mutation
 		t.Run(mutation, func(t *testing.T) {
 			t.Parallel()
 			raw := openKnowledgeMigrationTestDB(t, "knowledge-active-publication-"+mutation+".sqlite")
@@ -614,7 +613,7 @@ func stageKnowledge0033ActiveUpdate(
 	timestamp int64,
 ) ([]byte, error) {
 	const version = 2
-	body := []byte(fmt.Sprintf("knowledge-0033/%s/%d", objectID, version))
+	body := fmt.Appendf(nil, "knowledge-0033/%s/%d", objectID, version)
 	digest := sha256.Sum256(body)
 	if _, err := tx.ExecContext(context.Background(), `
 		INSERT INTO knowledge_definition_blobs (

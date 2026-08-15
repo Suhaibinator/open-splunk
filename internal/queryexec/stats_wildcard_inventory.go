@@ -231,9 +231,9 @@ func validateStatsWildcardInventoryColumns(
 	columnTypes []driver.ColumnType,
 ) error {
 	contracts := []resultColumnContract{
-		{name: clickhouse.StatsWildcardInventoryOrdinalColumn, databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0))},
-		{name: clickhouse.StatsWildcardInventoryFieldColumn, databaseType: "String", scanType: reflect.TypeOf("")},
-		{name: clickhouse.StatsWildcardInventoryInvalidColumn, databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0))},
+		{name: clickhouse.StatsWildcardInventoryOrdinalColumn, databaseType: "UInt8", scanType: reflect.TypeFor[uint8]()},
+		{name: clickhouse.StatsWildcardInventoryFieldColumn, databaseType: "String", scanType: reflect.TypeFor[string]()},
+		{name: clickhouse.StatsWildcardInventoryInvalidColumn, databaseType: "UInt8", scanType: reflect.TypeFor[uint8]()},
 	}
 	return validateResultColumns(
 		columns,

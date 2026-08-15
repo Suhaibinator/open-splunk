@@ -55,7 +55,6 @@ func TestKnowledgeDefinitionSanitizersRejectRepeatedShapeBeforeUnknownWalks(
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			definition := newDefinition()
@@ -120,7 +119,6 @@ func TestKnowledgeDefinitionRepeatedShapePinsEveryEntryBoundary(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			if got := boundedKnowledgeDefinitionRepeatedShape(test.definition); got != test.want {

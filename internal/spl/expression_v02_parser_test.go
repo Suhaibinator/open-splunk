@@ -468,7 +468,6 @@ next'+right`,
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			start := sourcePositionAtOffset(test.source, len(prefix))

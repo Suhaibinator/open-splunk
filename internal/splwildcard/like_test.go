@@ -21,7 +21,6 @@ func TestCompileLikePatternPreservesEscapesAndCollapsesPercentRuns(t *testing.T)
 		{pattern: `\q%`, want: `\q%`, work: 3},
 		{pattern: "_¥", want: "_¥", work: 2},
 	} {
-		test := test
 		t.Run(test.pattern, func(t *testing.T) {
 			t.Parallel()
 			compiled, err := CompileLikePattern(test.pattern)

@@ -303,7 +303,6 @@ func TestParseExplainPlanProjectsOnlyKnownIndexMetadata(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -367,7 +366,6 @@ func TestParseExplainPlanAcceptsPlansWithoutPhysicalIndexEvidence(
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -490,7 +488,6 @@ func TestExplainPlanPreflightRejectsCollectionsBeforeTypedDecode(
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -560,7 +557,6 @@ func TestParseExplainPlanRejectsMalformedOrIncompleteStructure(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

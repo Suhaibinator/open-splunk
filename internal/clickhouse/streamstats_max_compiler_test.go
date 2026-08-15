@@ -58,7 +58,6 @@ func TestCompileStreamStatsMaximumPinsEveryFrameShape(t *testing.T) {
 		{name: "three current rows", options: `window=3`, frame: `ROWS BETWEEN 2 PRECEDING AND CURRENT ROW`},
 		{name: "three prior rows", options: `current=false window=3`, frame: `ROWS BETWEEN 3 PRECEDING AND 1 PRECEDING`},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			compiled := compileSPL(
@@ -107,7 +106,6 @@ func TestCompileStreamStatsMaximumPreservesFixedScalarAndMultivalueTypes(t *test
 			},
 		},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			compiled := compileSPL(t, test.source)
@@ -354,7 +352,6 @@ func TestCompileStreamStatsMaximumCanonicalDefaultAndDefensiveValidation(t *test
 		{"predicate", func(operator *plan.StreamAggregate) { operator.Measure.Predicate = &plan.BooleanExpression{} }},
 		{"percentile", func(operator *plan.StreamAggregate) { operator.Measure.Percentile = 50 }},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			op := valid()
