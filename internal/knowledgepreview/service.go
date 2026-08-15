@@ -20,6 +20,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgevalidation"
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
@@ -229,7 +230,7 @@ func (service *Service) Preview(
 		return SealedResponse{}, err
 	}
 	before := retained.CompiledQuery
-	if err := validateRetainedCompiled(before, execution, retained.KnowledgePrelude); err != nil {
+	if err := validateCompiledPreview(before, execution, retained.KnowledgePrelude); err != nil {
 		return SealedResponse{}, err
 	}
 
@@ -334,7 +335,7 @@ func prospectiveProgram(
 	if !ok || normalized == nil {
 		return knowledgeprogram.Program{}, ErrInvariant
 	}
-	objectType, stage, rank, ok := candidateTypeAndStage(normalized)
+	objectType, stage, _, ok := candidateTypeAndStage(normalized)
 	if !ok || objectType != validation.GetObjectType() {
 		return knowledgeprogram.Program{}, ErrInvariant
 	}
@@ -406,7 +407,6 @@ func prospectiveProgram(
 	); err != nil {
 		return knowledgeprogram.Program{}, err
 	}
-	_ = rank
 	return program, nil
 }
 
@@ -434,21 +434,23 @@ func previewObjectID(
 func candidateTypeAndStage(
 	definition *opensplunkv1.KnowledgeObjectDefinition,
 ) (opensplunkv1.KnowledgeObjectType, opensplunkv1.KnowledgeSearchStage, uint8, bool) {
-	if definition == nil {
-		return 0, 0, 0, false
-	}
+	objectType := objectTypeForDefinition(definition)
+	stage, rank, ok := knowledgedefinition.StageForObjectType(objectType)
+	return objectType, stage, rank, ok
+}
+
+func objectTypeForDefinition(
+	definition *opensplunkv1.KnowledgeObjectDefinition,
+) opensplunkv1.KnowledgeObjectType {
 	switch definition.GetBody().(type) {
 	case *opensplunkv1.KnowledgeObjectDefinition_FieldExtraction:
-		return opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
-			opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION, 1, true
+		return opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION
 	case *opensplunkv1.KnowledgeObjectDefinition_FieldAlias:
-		return opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
-			opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS, 2, true
+		return opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS
 	case *opensplunkv1.KnowledgeObjectDefinition_CalculatedField:
-		return opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD,
-			opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD, 3, true
+		return opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD
 	default:
-		return 0, 0, 0, false
+		return opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_UNSPECIFIED
 	}
 }
 
@@ -507,17 +509,6 @@ func candidateDependenciesMatch(
 		return ErrUnavailable
 	}
 	return nil
-}
-
-func validateRetainedCompiled(
-	compiled clickhouse.CompiledQuery,
-	execution searchjobs.ExecutionSnapshot,
-	program knowledgeprogram.Program,
-) error {
-	if !compiled.HasValidExecutionSeal() {
-		return ErrUnavailable
-	}
-	return validateCompiledPreview(compiled, execution, program)
 }
 
 func validateCompiledPreview(

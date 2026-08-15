@@ -9,6 +9,14 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/control"
 )
 
+func calculatedDependencyInputFields(expression string) ([]string, error) {
+	analysis, err := calculatedDependencyAnalysis(expression)
+	if err != nil {
+		return nil, err
+	}
+	return analysis.InputFields, nil
+}
+
 func TestCalculatedDependencyInputFieldsAreBinarySortedAndDeduplicated(t *testing.T) {
 	fields, err := calculatedDependencyInputFields(
 		`if(isnull(host), coalesce(service,host), case(status=200,lower(Host),isnull(service),host))`,

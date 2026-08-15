@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -1159,5 +1160,36 @@ func publicationTransitionTestPersistenceBinding(
 		before:       publicationTransitionPersistenceEndpointFrom(input.candidateBefore),
 		after:        publicationTransitionPersistenceEndpointFrom(input.candidateAfter),
 		dependencies: slices.Clone(dependencies),
+	}
+}
+
+func (authority publicationActiveTransitionAuthority) candidateBindings() (
+	pre publicationCandidateAuthority,
+	prePresent bool,
+	preState State,
+	post publicationCandidateAuthority,
+	postState State,
+	present bool,
+) {
+	if authority.state == nil {
+		return publicationCandidateAuthority{}, false, "", publicationCandidateAuthority{}, "", false
+	}
+	pre = publicationTransitionCandidateFromPersistence(authority.state.beforePersistence)
+	post = publicationTransitionCandidateFromPersistence(authority.state.afterPersistence)
+	return pre, authority.state.beforePersistence.present, authority.state.beforePersistence.state,
+		post, authority.state.afterPersistence.state, true
+}
+
+func publicationTransitionCandidateFromPersistence(
+	endpoint publicationTransitionPersistenceEndpoint,
+) publicationCandidateAuthority {
+	if !endpoint.present {
+		return publicationCandidateAuthority{}
+	}
+	return publicationCandidateAuthority{
+		objectID:         strings.Clone(endpoint.objectID),
+		version:          endpoint.version,
+		definitionDigest: endpoint.definitionDigest,
+		ownerID:          strings.Clone(endpoint.ownerID),
 	}
 }

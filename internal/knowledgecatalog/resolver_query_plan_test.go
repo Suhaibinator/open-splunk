@@ -10,7 +10,7 @@ import (
 )
 
 func TestResolverHydrationAuthoritiesCrossOneChunkWithoutPerObjectQueries(t *testing.T) {
-	database, store := newCatalogTestStore(t)
+	database, _ := newCatalogTestStore(t)
 	const objectCount = listHydrationChunkSize + 1
 	insertIntegrationBatchObjects(t, database, objectCount, false)
 
@@ -48,7 +48,7 @@ func TestResolverHydrationAuthoritiesCrossOneChunkWithoutPerObjectQueries(t *tes
 	}); err != nil {
 		t.Fatalf("register resolver hydration query observer: %v", err)
 	}
-	objects, authorities, hydrateErr := store.objectsFromProjectionsWithAuthorities(
+	objects, authorities, hydrateErr := objectsFromProjectionsWithAuthorities(
 		database.GORMDB(),
 		projections,
 		resolutionHydrationBudget,

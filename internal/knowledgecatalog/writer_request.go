@@ -79,6 +79,35 @@ func validateCreateKnowledgeObjectRequestShape(
 	)
 }
 
+// clientRequestMessage is any mutation request carrying a caller-chosen
+// idempotency key that must be cleared before deterministic marshaling.
+type clientRequestMessage interface {
+	proto.Message
+	GetClientRequestId() string
+}
+
+// prepareTypedMutation detaches an already shape-validated request and prepares
+// it for one mutation route. Callers keep their own shape validation so the
+// rejection names the concrete request type.
+func prepareTypedMutation[T clientRequestMessage](
+	ctxScope normalizedWriteScope,
+	actor audit.Actor,
+	route string,
+	request T,
+	clearClientRequestID func(T),
+	updatePaths []string,
+) (preparedMutation, error) {
+	validated, err := detachMutationRequest(
+		request.GetClientRequestId(),
+		request,
+		func(cloned proto.Message) { clearClientRequestID(cloned.(T)) },
+	)
+	if err != nil {
+		return preparedMutation{}, err
+	}
+	return prepareMutationRequest(ctxScope, actor, route, validated, updatePaths)
+}
+
 func prepareCreateMutation(
 	ctxScope normalizedWriteScope,
 	actor audit.Actor,
@@ -87,21 +116,12 @@ func prepareCreateMutation(
 	if err := validateCreateKnowledgeObjectRequestShape(request); err != nil {
 		return preparedMutation{}, err
 	}
-	validated, err := detachMutationRequest(
-		request.GetClientRequestId(),
-		request,
-		func(cloned proto.Message) {
-			cloned.(*opensplunkv1.CreateKnowledgeObjectRequest).ClientRequestId = ""
-		},
-	)
-	if err != nil {
-		return preparedMutation{}, err
-	}
-	return prepareMutationRequest(
+	return prepareTypedMutation(
 		ctxScope,
 		actor,
 		mutationRouteCreate,
-		validated,
+		request,
+		func(cloned *opensplunkv1.CreateKnowledgeObjectRequest) { cloned.ClientRequestId = "" },
 		nil,
 	)
 }
@@ -143,21 +163,12 @@ func prepareUpdateMutation(
 	if err != nil {
 		return preparedMutation{}, err
 	}
-	validated, err := detachMutationRequest(
-		request.GetClientRequestId(),
-		request,
-		func(cloned proto.Message) {
-			cloned.(*opensplunkv1.UpdateKnowledgeObjectRequest).ClientRequestId = ""
-		},
-	)
-	if err != nil {
-		return preparedMutation{}, err
-	}
-	return prepareMutationRequest(
+	return prepareTypedMutation(
 		ctxScope,
 		actor,
 		mutationRouteUpdate,
-		validated,
+		request,
+		func(cloned *opensplunkv1.UpdateKnowledgeObjectRequest) { cloned.ClientRequestId = "" },
 		paths,
 	)
 }
@@ -197,21 +208,12 @@ func prepareSetStateMutation(
 	if err := validateSetKnowledgeObjectStateRequestShape(request); err != nil {
 		return preparedMutation{}, err
 	}
-	validated, err := detachMutationRequest(
-		request.GetClientRequestId(),
-		request,
-		func(cloned proto.Message) {
-			cloned.(*opensplunkv1.SetKnowledgeObjectStateRequest).ClientRequestId = ""
-		},
-	)
-	if err != nil {
-		return preparedMutation{}, err
-	}
-	return prepareMutationRequest(
+	return prepareTypedMutation(
 		ctxScope,
 		actor,
 		mutationRouteSetState,
-		validated,
+		request,
+		func(cloned *opensplunkv1.SetKnowledgeObjectStateRequest) { cloned.ClientRequestId = "" },
 		nil,
 	)
 }
@@ -245,21 +247,12 @@ func prepareDeleteMutation(
 	if err := validateDeleteKnowledgeObjectRequestShape(request); err != nil {
 		return preparedMutation{}, err
 	}
-	validated, err := detachMutationRequest(
-		request.GetClientRequestId(),
-		request,
-		func(cloned proto.Message) {
-			cloned.(*opensplunkv1.DeleteKnowledgeObjectRequest).ClientRequestId = ""
-		},
-	)
-	if err != nil {
-		return preparedMutation{}, err
-	}
-	return prepareMutationRequest(
+	return prepareTypedMutation(
 		ctxScope,
 		actor,
 		mutationRouteDelete,
-		validated,
+		request,
+		func(cloned *opensplunkv1.DeleteKnowledgeObjectRequest) { cloned.ClientRequestId = "" },
 		nil,
 	)
 }

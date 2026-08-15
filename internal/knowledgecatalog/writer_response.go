@@ -135,7 +135,7 @@ func (writer *Writer) replayObject(
 	if authority.current.CurrentVersion == authority.version.ObjectVersion {
 		object, err = writer.reader.objectFromCurrentRegistry(tx.WithContext(ctx), authority.current)
 	} else {
-		object, err = writer.reader.objectFromHistoricalVersion(
+		object, err = objectFromHistoricalVersion(
 			tx.WithContext(ctx),
 			authority.current,
 			authority.version,

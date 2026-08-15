@@ -279,23 +279,6 @@ func (authority publicationActiveTransitionAuthority) candidateDependencies() ca
 	return authority.state.candidateDependencies.detached()
 }
 
-func (authority publicationActiveTransitionAuthority) candidateBindings() (
-	pre publicationCandidateAuthority,
-	prePresent bool,
-	preState State,
-	post publicationCandidateAuthority,
-	postState State,
-	present bool,
-) {
-	if authority.state == nil {
-		return publicationCandidateAuthority{}, false, "", publicationCandidateAuthority{}, "", false
-	}
-	pre = publicationTransitionCandidateFromPersistence(authority.state.beforePersistence)
-	post = publicationTransitionCandidateFromPersistence(authority.state.afterPersistence)
-	return pre, authority.state.beforePersistence.present, authority.state.beforePersistence.state,
-		post, authority.state.afterPersistence.state, true
-}
-
 type publicationTransitionCanonicalObject struct {
 	winner                 publicationWinner
 	canonical              canonicalPublicationWinner
@@ -1566,20 +1549,6 @@ func publicationTransitionPersistenceEndpointEqual(
 		left.definitionDigest == right.definitionDigest &&
 		left.existingDependenciesPresent == right.existingDependenciesPresent &&
 		slices.Equal(left.existingDependencies, right.existingDependencies)
-}
-
-func publicationTransitionCandidateFromPersistence(
-	endpoint publicationTransitionPersistenceEndpoint,
-) publicationCandidateAuthority {
-	if !endpoint.present {
-		return publicationCandidateAuthority{}
-	}
-	return publicationCandidateAuthority{
-		objectID:         strings.Clone(endpoint.objectID),
-		version:          endpoint.version,
-		definitionDigest: endpoint.definitionDigest,
-		ownerID:          strings.Clone(endpoint.ownerID),
-	}
 }
 
 func publicationTransitionPersistenceDependenciesEqual(

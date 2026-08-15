@@ -231,7 +231,7 @@ func (store *Store) readGraphRootVersion(
 		if err := validateCurrentVersion(registry, selected); err != nil {
 			return versionRecord{}, err
 		}
-	} else if _, err := store.objectFromHistoricalVersion(database, registry, selected); err != nil {
+	} else if _, err := objectFromHistoricalVersion(database, registry, selected); err != nil {
 		return versionRecord{}, err
 	}
 	return selected, nil
@@ -434,7 +434,7 @@ func readAuthorizedGraphRegistries(
 			Where("object.knowledge_object_id IN ?", chunk).
 			Where("object.state <> ?", StateQuarantined).
 			Order("object.knowledge_object_id ASC")
-		records, err := readAliasedRegistryRecords(query, "object", len(chunk)+1)
+		records, err := readAuthorizedObjectRegistryRecords(query, len(chunk)+1)
 		if err != nil {
 			return err
 		}
@@ -481,8 +481,10 @@ func readAuthorizedGraphRegistries(
 	return result, nil
 }
 
-func readAliasedRegistryRecords(query *gorm.DB, alias string, limit int) ([]registryRecord, error) {
-	if query == nil || alias != "object" || limit < 1 || limit > maximumObjectsPerTenant+1 {
+// readAuthorizedObjectRegistryRecords reads from a query whose knowledge_objects
+// table is already aliased AS object by the caller (see applyObjectAuthorization).
+func readAuthorizedObjectRegistryRecords(query *gorm.DB, limit int) ([]registryRecord, error) {
+	if query == nil || limit < 1 || limit > maximumObjectsPerTenant+1 {
 		return nil, fmt.Errorf("%w: invalid aliased registry read", ErrCorrupt)
 	}
 	var sizes []registrySizeRecord
@@ -557,7 +559,7 @@ func (store *Store) listIncomingGraphEdges(
 	}
 	projections = boundedProjections
 	pageCandidates = pageCandidates[:len(projections):len(projections)]
-	_, semanticCount, err := store.objectsFromProjectionsPage(
+	_, semanticCount, err := objectsFromProjectionsPage(
 		database,
 		projections,
 		listResponseHydrationBudget,

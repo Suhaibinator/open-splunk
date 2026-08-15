@@ -6,12 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 )
 
 const (
@@ -208,20 +207,5 @@ func actionAllowsAuthorizedObject(action Action) bool {
 }
 
 func validIdentity(value string, maximumBytes int) bool {
-	if value == "" || len(value) > maximumBytes || !utf8.ValidString(value) ||
-		trimASCIIWhitespace(value) != value || strings.IndexByte(value, 0) >= 0 {
-		return false
-	}
-	for _, character := range value {
-		if character <= 0x1f || character >= 0x7f && character <= 0x9f {
-			return false
-		}
-	}
-	return true
-}
-
-func trimASCIIWhitespace(value string) string {
-	return strings.TrimFunc(value, func(character rune) bool {
-		return character == ' ' || character >= '\t' && character <= '\r'
-	})
+	return knowledge.ValidIdentity(value, maximumBytes)
 }

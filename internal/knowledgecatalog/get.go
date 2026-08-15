@@ -104,7 +104,7 @@ func (store *Store) Get(
 		if !found {
 			return Object{}, fmt.Errorf("%w: historical immutable version is missing", ErrCorrupt)
 		}
-		result, err = store.objectFromHistoricalVersion(tx, registry, historical)
+		result, err = objectFromHistoricalVersion(tx, registry, historical)
 		if err != nil {
 			return Object{}, mapError(ctx.Err(), "validate historical version", err)
 		}

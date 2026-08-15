@@ -302,7 +302,7 @@ func (resolver *Resolver) resolveOnce(
 		return Resolution{}, fmt.Errorf("%w: active resolution projection coverage disagrees", ErrCorrupt)
 	}
 
-	objects, hydrated, err := resolver.store.objectsFromProjectionsWithAuthorities(
+	objects, hydrated, err := objectsFromProjectionsWithAuthorities(
 		tx,
 		projections,
 		resolutionHydrationBudget,
@@ -458,15 +458,6 @@ func applyActiveResolutionProjectionAuthorization(
 	// joins only its exact immutable projection, and shares one 4,097-row cap.
 	// Inactive and hidden identities cannot consume the candidate set or turn
 	// definition hydration into an existence oracle.
-	exactProjectionJoin := `candidate.tenant_id = authorized_registry.tenant_id
-		AND candidate.knowledge_object_id = authorized_registry.knowledge_object_id
-		AND candidate.object_version = authorized_registry.current_version
-		AND candidate.app_id = authorized_registry.app_id
-		AND candidate.owner_id = authorized_registry.owner_id
-		AND candidate.object_type = authorized_registry.object_type
-		AND candidate.name = authorized_registry.name
-		AND candidate.sharing_scope = authorized_registry.sharing_scope
-		AND candidate.state = authorized_registry.state`
 	driver := fmt.Sprintf(`(
 		SELECT candidate.tenant_id, candidate.knowledge_object_id, candidate.object_version
 		FROM knowledge_objects AS authorized_registry INDEXED BY knowledge_objects_authorized_global_idx
@@ -495,9 +486,9 @@ func applyActiveResolutionProjectionAuthorization(
 		LIMIT %d
 	) AS authorized_active_resolution_projection
 	CROSS JOIN knowledge_object_list_projections AS projection`,
-		exactProjectionJoin,
-		exactProjectionJoin,
-		exactProjectionJoin,
+		exactAuthorizedProjectionJoinSQL,
+		exactAuthorizedProjectionJoinSQL,
+		exactAuthorizedProjectionJoinSQL,
 		MaximumResolutionCandidates+1,
 	)
 	return query.Table(

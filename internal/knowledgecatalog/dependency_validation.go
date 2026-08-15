@@ -576,11 +576,3 @@ func calculatedDependencyAnalysis(expression string) (spl.ScalarExpressionAnalys
 	}
 	return analysis, nil
 }
-
-func calculatedDependencyInputFields(expression string) ([]string, error) {
-	analysis, err := calculatedDependencyAnalysis(expression)
-	if err != nil {
-		return nil, err
-	}
-	return analysis.InputFields, nil
-}

@@ -29,7 +29,7 @@ func (store *Store) objectFromCurrentRegistry(database *gorm.DB, registry regist
 	if len(projections) != 1 {
 		return Object{}, fmt.Errorf("%w: current list projection is missing or ambiguous", ErrCorrupt)
 	}
-	return store.objectFromRegistryAndProjection(database, registry, projections[0])
+	return objectFromRegistryAndProjection(database, registry, projections[0])
 }
 
 func registryFromProjection(projection projectionRecord) registryRecord {
@@ -53,7 +53,7 @@ func registryFromProjection(projection projectionRecord) registryRecord {
 	}
 }
 
-func (store *Store) objectFromRegistryAndProjection(
+func objectFromRegistryAndProjection(
 	database *gorm.DB,
 	registry registryRecord,
 	projection projectionRecord,
@@ -115,7 +115,7 @@ func (store *Store) objectFromRegistryAndProjection(
 	return objectFromCurrentScalars(registry, normalized.Definition, normalized.Digest)
 }
 
-func (store *Store) objectFromHistoricalVersion(
+func objectFromHistoricalVersion(
 	database *gorm.DB,
 	current registryRecord,
 	version versionRecord,

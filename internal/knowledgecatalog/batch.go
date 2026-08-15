@@ -40,22 +40,22 @@ type projectionHydrationAuthorities struct {
 	dependencies map[string][]dependencyRecord
 }
 
-func (store *Store) objectsFromProjections(
+func objectsFromProjections(
 	database *gorm.DB,
 	projections []projectionRecord,
 	budget listHydrationBudget,
 ) ([]Object, error) {
-	objects, _, err := store.objectsFromProjectionsInternal(database, projections, budget, false, nil)
+	objects, _, err := objectsFromProjectionsInternal(database, projections, budget, false, nil)
 	return objects, err
 }
 
-func (store *Store) objectsFromProjectionsWithAuthorities(
+func objectsFromProjectionsWithAuthorities(
 	database *gorm.DB,
 	projections []projectionRecord,
 	budget listHydrationBudget,
 ) ([]Object, projectionHydrationAuthorities, error) {
 	var authorities projectionHydrationAuthorities
-	objects, _, err := store.objectsFromProjectionsInternal(
+	objects, _, err := objectsFromProjectionsInternal(
 		database,
 		projections,
 		budget,
@@ -73,15 +73,15 @@ func (store *Store) objectsFromProjectionsWithAuthorities(
 // cross the response work budget. Complete integrity sweeps use
 // objectsFromProjections and continue to fail closed instead of returning a
 // partially validated candidate set.
-func (store *Store) objectsFromProjectionsPage(
+func objectsFromProjectionsPage(
 	database *gorm.DB,
 	projections []projectionRecord,
 	budget listHydrationBudget,
 ) ([]Object, int, error) {
-	return store.objectsFromProjectionsInternal(database, projections, budget, true, nil)
+	return objectsFromProjectionsInternal(database, projections, budget, true, nil)
 }
 
-func (store *Store) objectsFromProjectionsInternal(
+func objectsFromProjectionsInternal(
 	database *gorm.DB,
 	projections []projectionRecord,
 	budget listHydrationBudget,

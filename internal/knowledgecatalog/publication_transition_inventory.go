@@ -114,7 +114,7 @@ func (store *Store) readPublicationActiveTransitionInventory(
 	if err != nil {
 		return publicationActiveTransitionInventoryRead{}, err
 	}
-	activeAppIDs, appRevision, err := readPublicationTransitionActiveApps(tx, tenantID)
+	_, activeAppIDs, appRevision, err := readPublicationApps(tx, tenantID)
 	if err != nil {
 		return publicationActiveTransitionInventoryRead{}, err
 	}
@@ -137,7 +137,7 @@ func (store *Store) readPublicationActiveTransitionInventory(
 		return publicationActiveTransitionInventoryRead{}, err
 	}
 
-	objects, authorities, err := store.objectsFromProjectionsWithAuthorities(
+	objects, authorities, err := objectsFromProjectionsWithAuthorities(
 		tx,
 		projections,
 		listHydrationBudget{
@@ -461,16 +461,17 @@ func matchPublicationTransitionProjectionPreflight(
 	return nil
 }
 
-func readPublicationTransitionActiveApps(
-	tx *gorm.DB,
-	tenantID string,
-) ([]string, int64, error) {
-	type revisionRecord struct {
-		TenantID      string `gorm:"column:tenant_id"`
-		TenantIDBytes int64  `gorm:"column:tenant_id_bytes"`
-		Revision      int64  `gorm:"column:revision"`
-	}
-	var revisions []revisionRecord
+type publicationAppCatalogRevision struct {
+	TenantID      string `gorm:"column:tenant_id"`
+	TenantIDBytes int64  `gorm:"column:tenant_id_bytes"`
+	Revision      int64  `gorm:"column:revision"`
+}
+
+// readPublicationAppCatalogRevision reads the single app-catalog revision
+// authority for one tenant. The projected tenant identity is clamped so a
+// corrupt oversized row cannot be hydrated.
+func readPublicationAppCatalogRevision(tx *gorm.DB, tenantID string) (int64, error) {
+	var revisions []publicationAppCatalogRevision
 	if err := tx.Table("app_catalog_revisions AS authority").Select(fmt.Sprintf(`
 		CASE WHEN length(CAST(authority.tenant_id AS BLOB)) BETWEEN 1 AND %[1]d
 			THEN authority.tenant_id ELSE '' END AS tenant_id,
@@ -479,24 +480,39 @@ func readPublicationTransitionActiveApps(
 		Where("authority.tenant_id = ?", tenantID).
 		Limit(2).
 		Find(&revisions).Error; err != nil {
-		return nil, 0, err
+		return 0, err
 	}
 	if len(revisions) != 1 || revisions[0].TenantID != tenantID ||
 		revisions[0].TenantIDBytes != int64(len(tenantID)) ||
 		revisions[0].Revision < 1 {
-		return nil, 0, fmt.Errorf(
-			"%w: publication transition app-catalog revision authority is missing or invalid",
+		return 0, fmt.Errorf(
+			"%w: publication app-catalog revision authority is missing or invalid",
 			ErrCorrupt,
 		)
+	}
+	return revisions[0].Revision, nil
+}
+
+// readPublicationApps reads the tenant's complete admitted app inventory
+// together with the app-catalog revision that authorizes it.
+func readPublicationApps(tx *gorm.DB, tenantID string) (
+	[]publicationTransitionAppRecord,
+	[]string,
+	int64,
+	error,
+) {
+	revision, err := readPublicationAppCatalogRevision(tx, tenantID)
+	if err != nil {
+		return nil, nil, 0, err
 	}
 
 	var records []publicationTransitionAppRecord
 	if err := publicationTransitionAppPreflightQuery(tx, tenantID).
 		Find(&records).Error; err != nil {
-		return nil, 0, err
+		return nil, nil, 0, err
 	}
 	if len(records) > maximumReadableApps {
-		return nil, 0, fmt.Errorf("%w: publication transition app inventory exceeds its limit", ErrCorrupt)
+		return nil, nil, 0, fmt.Errorf("%w: publication transition app inventory exceeds its limit", ErrCorrupt)
 	}
 	seen := make(map[string]struct{}, len(records))
 	for _, record := range records {
@@ -504,10 +520,10 @@ func readPublicationTransitionActiveApps(
 			record.TenantID != tenantID || record.TenantIDBytes != int64(len(tenantID)) ||
 			record.StateBytes != int64(len(record.State)) ||
 			(record.State != string(control.AppStateActive) && record.State != string(control.AppStateArchived)) {
-			return nil, 0, fmt.Errorf("%w: publication transition app inventory is invalid", ErrCorrupt)
+			return nil, nil, 0, fmt.Errorf("%w: publication transition app inventory is invalid", ErrCorrupt)
 		}
 		if _, duplicate := seen[record.AppID]; duplicate {
-			return nil, 0, fmt.Errorf("%w: publication transition app inventory is invalid", ErrCorrupt)
+			return nil, nil, 0, fmt.Errorf("%w: publication transition app inventory is invalid", ErrCorrupt)
 		}
 		seen[record.AppID] = struct{}{}
 	}
@@ -523,12 +539,12 @@ func readPublicationTransitionActiveApps(
 		}
 	}
 	if len(active) == 0 {
-		return nil, 0, fmt.Errorf(
+		return nil, nil, 0, fmt.Errorf(
 			"%w: publication transition has no active app authority",
 			ErrCorrupt,
 		)
 	}
-	return active[:len(active):len(active)], revisions[0].Revision, nil
+	return records[:len(records):len(records)], active[:len(active):len(active)], revision, nil
 }
 
 func publicationTransitionAppPreflightQuery(tx *gorm.DB, tenantID string) *gorm.DB {

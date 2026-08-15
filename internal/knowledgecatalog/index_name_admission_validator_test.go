@@ -792,7 +792,7 @@ func TestIndexNameAdmissionZeroActiveAppAuthorityIsCorrupt(t *testing.T) {
 	); !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("zero-active-app validation error = %v, want corrupt", err)
 	}
-	if _, _, err := readPublicationTransitionActiveApps(
+	if _, _, _, err := readPublicationApps(
 		tx,
 		testTenant,
 	); !errors.Is(err, ErrCorrupt) {

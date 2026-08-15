@@ -641,7 +641,7 @@ func normalizeDescription(description *string) (*string, error) {
 	if description == nil {
 		return nil, nil
 	}
-	value := trimASCIIWhitespace(*description)
+	value := knowledge.TrimASCIIWhitespace(*description)
 	if value == "" {
 		return nil, nil
 	}
@@ -652,7 +652,7 @@ func normalizeDescription(description *string) (*string, error) {
 }
 
 func normalizeRequiredText(source string, maximumBytes int) (string, error) {
-	value := trimASCIIWhitespace(source)
+	value := knowledge.TrimASCIIWhitespace(source)
 	if value == "" {
 		return "", errors.New("is empty")
 	}
@@ -668,7 +668,7 @@ func normalizeOpaqueBodyText(source string, maximumBytes int, trim bool) (string
 	}
 	value := source
 	if trim {
-		value = trimASCIIWhitespace(value)
+		value = knowledge.TrimASCIIWhitespace(value)
 	}
 	if value == "" {
 		return "", errors.New("is empty")
@@ -867,12 +867,6 @@ func cloneOptionalString(value *string) *string {
 	}
 	cloned := *value
 	return &cloned
-}
-
-func trimASCIIWhitespace(value string) string {
-	return strings.TrimFunc(value, func(character rune) bool {
-		return character == ' ' || character >= '\t' && character <= '\r'
-	})
 }
 
 func invalid(path string, err error) error {

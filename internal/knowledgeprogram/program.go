@@ -12,7 +12,6 @@ import (
 	"math"
 	"slices"
 	"strings"
-	"unicode/utf8"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
@@ -896,16 +895,11 @@ func writeUint64(buffer *bytes.Buffer, value uint64) {
 }
 
 func stageForType(objectType opensplunkv1.KnowledgeObjectType) (opensplunkv1.KnowledgeSearchStage, uint8, error) {
-	switch objectType {
-	case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION:
-		return opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION, 1, nil
-	case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS:
-		return opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS, 2, nil
-	case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD:
-		return opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD, 3, nil
-	default:
+	stage, rank, ok := knowledgedefinition.StageForObjectType(objectType)
+	if !ok {
 		return 0, 0, errors.New("object type is unsupported")
 	}
+	return stage, rank, nil
 }
 
 func objectAfter(previous, current *opensplunkv1.KnowledgeSnapshotObject) bool {
@@ -978,18 +972,7 @@ func overwriteBehavior(value opensplunkv1.KnowledgeOverwriteBehavior) (Overwrite
 }
 
 func validIdentity(value string, maximum int) bool {
-	if value == "" || len(value) > maximum || !utf8.ValidString(value) ||
-		strings.TrimFunc(value, func(character rune) bool {
-			return character == ' ' || character >= '\t' && character <= '\r'
-		}) != value || strings.IndexByte(value, 0) >= 0 {
-		return false
-	}
-	for _, character := range value {
-		if character <= 0x1f || character >= 0x7f && character <= 0x9f {
-			return false
-		}
-	}
-	return true
+	return knowledge.ValidIdentity(value, maximum)
 }
 
 func cloneRegex(input []RegexExtraction) []RegexExtraction {

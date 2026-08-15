@@ -68,6 +68,22 @@ type idempotencyWidthRecord struct {
 	ObjectIDBytes      int64 `gorm:"column:object_id_bytes"`
 }
 
+// idempotencyWidthProjectionSQL is the scalar-width projection that hydrates
+// idempotencyWidthRecord. Shared by the replay preflight and the expired
+// receipt reclamation preflight.
+const idempotencyWidthProjectionSQL = `
+		length(CAST(tenant_id AS BLOB)) AS tenant_id_bytes,
+		length(CAST(actor_kind AS BLOB)) AS actor_kind_bytes,
+		length(CAST(actor_id AS BLOB)) AS actor_id_bytes,
+		length(CAST(route AS BLOB)) AS route_bytes,
+		length(CAST(client_request_id AS BLOB)) AS request_id_bytes,
+		length(CAST(mutation_kind AS BLOB)) AS mutation_kind_bytes,
+		length(request_digest) AS request_digest_bytes,
+		length(outcome_proto) AS outcome_proto_bytes,
+		length(committed_catalog_state_token) AS state_token_bytes,
+		length(CAST(knowledge_object_id AS BLOB)) AS object_id_bytes
+	`
+
 type idempotencyObjectIdentity struct {
 	KnowledgeObjectIDBytes int64  `gorm:"column:knowledge_object_id_bytes"`
 	KnowledgeObjectID      string `gorm:"column:knowledge_object_id"`
@@ -76,6 +92,20 @@ type idempotencyObjectIdentity struct {
 type idempotencyRequestDigest struct {
 	RequestDigestBytes int64  `gorm:"column:request_digest_bytes"`
 	RequestDigest      []byte `gorm:"column:request_digest"`
+}
+
+// idempotencyReceiptQuery builds the exact-receipt lookup shared by every
+// replay reader. Callers keep their own precondition guard so the failure
+// diagnostic names the reader that rejected the request.
+func idempotencyReceiptQuery(tx *gorm.DB, prepared *preparedMutation, route string) *gorm.DB {
+	return tx.Model(&idempotencyRecord{}).Where(
+		"tenant_id = ? AND actor_kind = ? AND actor_id = ? AND route = ? AND client_request_id = ?",
+		prepared.scope.tenantID,
+		prepared.actor.Kind,
+		prepared.actor.ID,
+		route,
+		prepared.clientRequestID,
+	)
 }
 
 // readIdempotencyObjectIdentity is the only receipt read allowed before
@@ -94,14 +124,7 @@ func readIdempotencyObjectIdentity(
 		)
 	}
 	var identities []idempotencyObjectIdentity
-	if err := tx.Model(&idempotencyRecord{}).Where(
-		"tenant_id = ? AND actor_kind = ? AND actor_id = ? AND route = ? AND client_request_id = ?",
-		prepared.scope.tenantID,
-		prepared.actor.Kind,
-		prepared.actor.ID,
-		route,
-		prepared.clientRequestID,
-	).Select(`
+	if err := idempotencyReceiptQuery(tx, prepared, route).Select(`
 		length(CAST(knowledge_object_id AS BLOB)) AS knowledge_object_id_bytes,
 		CAST(substr(CAST(knowledge_object_id AS BLOB), 1, ?) AS TEXT) AS knowledge_object_id
 	`, maximumObjectIDBytes+1).Limit(2).Find(&identities).Error; err != nil {
@@ -255,14 +278,7 @@ func readIdempotencyRequestDigest(
 		)
 	}
 	var digests []idempotencyRequestDigest
-	if err := tx.Model(&idempotencyRecord{}).Where(
-		"tenant_id = ? AND actor_kind = ? AND actor_id = ? AND route = ? AND client_request_id = ?",
-		prepared.scope.tenantID,
-		prepared.actor.Kind,
-		prepared.actor.ID,
-		route,
-		prepared.clientRequestID,
-	).Select(`
+	if err := idempotencyReceiptQuery(tx, prepared, route).Select(`
 		length(request_digest) AS request_digest_bytes,
 		substr(request_digest, 1, ?) AS request_digest
 	`, sha256.Size+1).Limit(2).Find(&digests).Error; err != nil {
@@ -295,27 +311,11 @@ func readIdempotencyRecord(
 			control.ErrInvalidArgument,
 		)
 	}
-	query := tx.Model(&idempotencyRecord{}).Where(
-		"tenant_id = ? AND actor_kind = ? AND actor_id = ? AND route = ? AND client_request_id = ?",
-		prepared.scope.tenantID,
-		prepared.actor.Kind,
-		prepared.actor.ID,
-		route,
-		prepared.clientRequestID,
-	)
+	query := idempotencyReceiptQuery(tx, prepared, route)
 	var widths []idempotencyWidthRecord
-	if err := query.Session(&gorm.Session{}).Select(`
-		length(CAST(tenant_id AS BLOB)) AS tenant_id_bytes,
-		length(CAST(actor_kind AS BLOB)) AS actor_kind_bytes,
-		length(CAST(actor_id AS BLOB)) AS actor_id_bytes,
-		length(CAST(route AS BLOB)) AS route_bytes,
-		length(CAST(client_request_id AS BLOB)) AS request_id_bytes,
-		length(CAST(mutation_kind AS BLOB)) AS mutation_kind_bytes,
-		length(request_digest) AS request_digest_bytes,
-		length(outcome_proto) AS outcome_proto_bytes,
-		length(committed_catalog_state_token) AS state_token_bytes,
-		length(CAST(knowledge_object_id AS BLOB)) AS object_id_bytes
-	`).Limit(2).Find(&widths).Error; err != nil {
+	if err := query.Session(&gorm.Session{}).
+		Select(idempotencyWidthProjectionSQL).
+		Limit(2).Find(&widths).Error; err != nil {
 		return idempotencyRecord{}, false, err
 	}
 	if len(widths) == 0 {
@@ -713,19 +713,14 @@ func validateReplayCommitAuthority(tx *gorm.DB, record idempotencyRecord) error 
 		authority.OccurredAtUnixMicro != record.CreatedAtUnixMicro ||
 		authority.RetentionAnchorUnixMicro != record.RetentionAnchorUnixMicro ||
 		authority.RetainUntilUnixMicro != record.RetainUntilUnixMicro ||
-		!sameOptionalInt64(authority.SuccessfulAuditSequence, record.SuccessfulAuditSequence) ||
-		!sameOptionalInt64(authority.RecoveryAuditSequence, record.RecoveryAuditSequence) {
+		!equalOptionalInt64(authority.SuccessfulAuditSequence, record.SuccessfulAuditSequence) ||
+		!equalOptionalInt64(authority.RecoveryAuditSequence, record.RecoveryAuditSequence) {
 		return fmt.Errorf("%w: knowledge replay commit authority disagrees", ErrCorrupt)
 	}
 	if _, err := canonicalTime(authority.OccurredAtUnixMicro); err != nil {
 		return fmt.Errorf("%w: knowledge replay commit occurrence is invalid", ErrCorrupt)
 	}
 	return nil
-}
-
-func sameOptionalInt64(left, right *int64) bool {
-	return left == nil && right == nil ||
-		left != nil && right != nil && *left == *right
 }
 
 type replayAuthority struct {

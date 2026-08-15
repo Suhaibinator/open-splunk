@@ -204,8 +204,8 @@ func newSemanticObject(
 		},
 		origin:   origin,
 		selector: selector.compiled,
-		inputs:   canonicalSemanticFields(inputs),
-		outputs:  canonicalSemanticFields(outputs),
+		inputs:   knowledge.CanonicalFields(inputs),
+		outputs:  knowledge.CanonicalFields(outputs),
 	}
 }
 
@@ -220,7 +220,7 @@ func validateParallelSemantics(objects []semanticObject) error {
 			if knowledge.SelectorsProvablyDisjoint(left.selector, right.selector) {
 				continue
 			}
-			if semanticFieldsIntersect(left.outputs, right.outputs) {
+			if knowledge.FieldsIntersect(left.outputs, right.outputs) {
 				return fmt.Errorf(
 					"%w: same-stage objects %q and %q may write the same destination",
 					ErrInvalidProgram,
@@ -228,8 +228,8 @@ func validateParallelSemantics(objects []semanticObject) error {
 					right.origin.objectID,
 				)
 			}
-			if semanticFieldsIntersect(left.outputs, right.inputs) ||
-				semanticFieldsIntersect(right.outputs, left.inputs) {
+			if knowledge.FieldsIntersect(left.outputs, right.inputs) ||
+				knowledge.FieldsIntersect(right.outputs, left.inputs) {
 				return fmt.Errorf(
 					"%w: same-stage objects %q and %q form a possible data dependency",
 					ErrInvalidProgram,
@@ -249,7 +249,7 @@ func deriveSemanticEdges(objects []semanticObject) (map[semanticEdgeKey]struct{}
 		for targetIndex := range objects {
 			target := &objects[targetIndex]
 			if source.key == target.key || source.stageRank <= target.stageRank ||
-				!semanticFieldsIntersect(source.inputs, target.outputs) ||
+				!knowledge.FieldsIntersect(source.inputs, target.outputs) ||
 				knowledge.SelectorsProvablyDisjoint(source.selector, target.selector) {
 				continue
 			}
@@ -336,32 +336,4 @@ func semanticDependencyScopeAllows(source, target Origin) bool {
 	default:
 		return false
 	}
-}
-
-func canonicalSemanticFields(fields []string) []string {
-	result := append([]string(nil), fields...)
-	sort.Strings(result)
-	write := 0
-	for _, field := range result {
-		if field == "" || write > 0 && result[write-1] == field {
-			continue
-		}
-		result[write] = field
-		write++
-	}
-	return result[:write:write]
-}
-
-func semanticFieldsIntersect(left, right []string) bool {
-	for leftIndex, rightIndex := 0, 0; leftIndex < len(left) && rightIndex < len(right); {
-		switch {
-		case left[leftIndex] < right[rightIndex]:
-			leftIndex++
-		case left[leftIndex] > right[rightIndex]:
-			rightIndex++
-		default:
-			return true
-		}
-	}
-	return false
 }

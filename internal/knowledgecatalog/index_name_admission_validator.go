@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math"
 	"slices"
-	"sort"
 	"strings"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -51,12 +50,8 @@ var (
 // IndexNameAdmissionValidator proves, inside control's caller-owned index
 // creation transaction, that one previously unknown immutable index name does
 // not change the semantics of any ACTIVE knowledge object in any tenant.
-//
-// It deliberately does not embed Store: index-name admission needs neither a
-// cursor signing key nor the interactive resolution admission gate.
 type IndexNameAdmissionValidator struct {
 	database *control.DB
-	hydrator Store
 }
 
 var _ control.IndexNameAdmissionValidator = (*IndexNameAdmissionValidator)(nil)
@@ -188,9 +183,14 @@ func (validator *IndexNameAdmissionValidator) ValidateIndexNameAdmissionInTransa
 				ErrCorrupt,
 			)
 		}
-		apps, err := readPublicationIndexAdmissionApps(database, driver.tenantID)
+		appRecords, appActive, appRevision, err := readPublicationApps(database, driver.tenantID)
 		if err != nil {
 			return err
+		}
+		apps := publicationIndexAdmissionAppFacts{
+			revision: appRevision,
+			records:  appRecords,
+			active:   appActive,
 		}
 		scalars, aggregate, err := readPublicationTransitionProjectionScalars(
 			database,
@@ -241,7 +241,7 @@ func (validator *IndexNameAdmissionValidator) ValidateIndexNameAdmissionInTransa
 		); err != nil {
 			return err
 		}
-		objects, authorities, err := validator.hydrator.objectsFromProjectionsWithAuthorities(
+		objects, authorities, err := objectsFromProjectionsWithAuthorities(
 			database,
 			projections,
 			listHydrationBudget{
@@ -576,89 +576,6 @@ func publicationIndexAdmissionRegistryAfter(
 		previousTenant == currentTenant && previousObject < currentObject
 }
 
-func readPublicationIndexAdmissionApps(
-	database *gorm.DB,
-	tenantID string,
-) (publicationIndexAdmissionAppFacts, error) {
-	type revisionRecord struct {
-		TenantID      string `gorm:"column:tenant_id"`
-		TenantIDBytes int64  `gorm:"column:tenant_id_bytes"`
-		Revision      int64  `gorm:"column:revision"`
-	}
-	var revisions []revisionRecord
-	if err := database.Table("app_catalog_revisions AS authority").Select(`
-		authority.tenant_id AS tenant_id,
-		length(CAST(authority.tenant_id AS BLOB)) AS tenant_id_bytes,
-		authority.revision AS revision`).
-		Where("authority.tenant_id = ?", tenantID).
-		Limit(2).
-		Find(&revisions).Error; err != nil {
-		return publicationIndexAdmissionAppFacts{}, err
-	}
-	if len(revisions) != 1 || revisions[0].TenantID != tenantID ||
-		revisions[0].TenantIDBytes != int64(len(tenantID)) ||
-		revisions[0].Revision < 1 {
-		return publicationIndexAdmissionAppFacts{}, fmt.Errorf(
-			"%w: index-name admission app-catalog revision authority is invalid",
-			ErrCorrupt,
-		)
-	}
-
-	var records []publicationTransitionAppRecord
-	if err := publicationTransitionAppPreflightQuery(database, tenantID).
-		Find(&records).Error; err != nil {
-		return publicationIndexAdmissionAppFacts{}, err
-	}
-	if len(records) > maximumReadableApps {
-		return publicationIndexAdmissionAppFacts{}, fmt.Errorf(
-			"%w: index-name admission app inventory exceeds its limit",
-			ErrCorrupt,
-		)
-	}
-	seen := make(map[string]struct{}, len(records))
-	for _, record := range records {
-		if record.AppIDBytes != int64(len(record.AppID)) ||
-			!control.ValidCanonicalAppID(record.AppID) ||
-			record.TenantID != tenantID ||
-			record.TenantIDBytes != int64(len(tenantID)) ||
-			record.StateBytes != int64(len(record.State)) ||
-			(record.State != string(control.AppStateActive) &&
-				record.State != string(control.AppStateArchived)) {
-			return publicationIndexAdmissionAppFacts{}, fmt.Errorf(
-				"%w: index-name admission app inventory is invalid",
-				ErrCorrupt,
-			)
-		}
-		if _, duplicate := seen[record.AppID]; duplicate {
-			return publicationIndexAdmissionAppFacts{}, fmt.Errorf(
-				"%w: index-name admission app inventory is invalid",
-				ErrCorrupt,
-			)
-		}
-		seen[record.AppID] = struct{}{}
-	}
-	sort.Slice(records, func(left, right int) bool {
-		return records[left].AppID < records[right].AppID
-	})
-	active := make([]string, 0, len(records))
-	for _, record := range records {
-		if record.State == string(control.AppStateActive) {
-			active = append(active, strings.Clone(record.AppID))
-		}
-	}
-	if len(active) == 0 {
-		return publicationIndexAdmissionAppFacts{}, fmt.Errorf(
-			"%w: index-name admission has no active app authority",
-			ErrCorrupt,
-		)
-	}
-	return publicationIndexAdmissionAppFacts{
-		revision: revisions[0].Revision,
-		records:  records[:len(records):len(records)],
-		active:   active[:len(active):len(active)],
-	}, nil
-}
-
 func chargePublicationIndexAdmissionScalars(
 	total *publicationIndexAdmissionScalarBudget,
 	current publicationTransitionAggregateScalars,
@@ -708,9 +625,14 @@ func (validator *IndexNameAdmissionValidator) finalPublicationIndexAdmissionChec
 		if err := matchPublicationIndexAdmissionCatalogFact(bound.catalog, catalog); err != nil {
 			return err
 		}
-		apps, err := readPublicationIndexAdmissionApps(database, bound.driver.tenantID)
+		appRecords, appActive, appRevision, err := readPublicationApps(database, bound.driver.tenantID)
 		if err != nil {
 			return err
+		}
+		apps := publicationIndexAdmissionAppFacts{
+			revision: appRevision,
+			records:  appRecords,
+			active:   appActive,
 		}
 		if err := matchPublicationIndexAdmissionAppFacts(bound.apps, apps); err != nil {
 			return err

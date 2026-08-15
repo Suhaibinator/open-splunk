@@ -614,18 +614,6 @@ func compilePublicationWinnerCohortMode(
 	return result, nil
 }
 
-func preflightPublicationWinnerCohort(
-	cohort publicationWinnerCohort,
-	candidate publicationCandidateAuthority,
-) error {
-	return preflightPublicationWinnerCohortTransition(
-		cohort,
-		candidate,
-		true,
-		publicationCohortCandidatePresent,
-	)
-}
-
 func preflightPublicationWinnerCohortTransition(
 	cohort publicationWinnerCohort,
 	candidate publicationCandidateAuthority,

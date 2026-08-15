@@ -13,7 +13,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"unicode/utf8"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
@@ -675,7 +674,7 @@ func compileDefinitionSemantics(normalized knowledgedefinition.Normalized) (defi
 		if body == nil || body.FieldExtraction == nil {
 			return definitionSemantics{}, errors.New("field extraction is nil")
 		}
-		semantics.inputFields = normalizedFields([]string{body.FieldExtraction.GetInputField()})
+		semantics.inputFields = knowledge.CanonicalFields([]string{body.FieldExtraction.GetInputField()})
 		switch extraction := body.FieldExtraction.GetExtraction().(type) {
 		case *opensplunkv1.FieldExtractionDefinition_Regex:
 			if extraction == nil || extraction.Regex == nil {
@@ -694,7 +693,7 @@ func compileDefinitionSemantics(normalized knowledgedefinition.Normalized) (defi
 					return definitionSemantics{}, errors.New("regex capture order disagrees with declared outputs")
 				}
 			}
-			semantics.outputFields = normalizedFields(outputs)
+			semantics.outputFields = knowledge.CanonicalFields(outputs)
 			semantics.charges.GeneratedFields = uint32(len(outputs)) // #nosec G115 -- regex outputs are bounded by the extraction limit.
 			semantics.charges.ExtractionRegexPrograms = 1
 			// The regex compiler returns a positive value bounded by MaximumExtractionProgramWorkUnits.
@@ -712,7 +711,7 @@ func compileDefinitionSemantics(normalized knowledgedefinition.Normalized) (defi
 			if work < 1 || work > MaximumJSONEvaluationWorkUnits {
 				return definitionSemantics{}, errors.New("JSON extraction work is invalid")
 			}
-			semantics.outputFields = normalizedFields([]string{extraction.Json.GetOutputField()})
+			semantics.outputFields = knowledge.CanonicalFields([]string{extraction.Json.GetOutputField()})
 			semantics.charges.GeneratedFields = 1
 			semantics.charges.ExtractionOutputs = 1
 			semantics.charges.JSONEvaluationWorkUnits = uint32(work)
@@ -723,8 +722,8 @@ func compileDefinitionSemantics(normalized knowledgedefinition.Normalized) (defi
 		if body == nil || body.FieldAlias == nil {
 			return definitionSemantics{}, errors.New("field alias is nil")
 		}
-		semantics.inputFields = normalizedFields([]string{body.FieldAlias.GetSourceField()})
-		semantics.outputFields = normalizedFields([]string{body.FieldAlias.GetDestinationField()})
+		semantics.inputFields = knowledge.CanonicalFields([]string{body.FieldAlias.GetSourceField()})
+		semantics.outputFields = knowledge.CanonicalFields([]string{body.FieldAlias.GetDestinationField()})
 		semantics.charges.GeneratedFields = 1
 	case *opensplunkv1.KnowledgeObjectDefinition_CalculatedField:
 		if body == nil || body.CalculatedField == nil {
@@ -743,7 +742,7 @@ func compileDefinitionSemantics(normalized knowledgedefinition.Normalized) (defi
 			return definitionSemantics{}, errors.New("calculated expression charge is invalid")
 		}
 		semantics.inputFields = slices.Clone(analysis.InputFields)
-		semantics.outputFields = normalizedFields([]string{body.CalculatedField.GetDestinationField()})
+		semantics.outputFields = knowledge.CanonicalFields([]string{body.CalculatedField.GetDestinationField()})
 		semantics.charges.GeneratedFields = 1
 		semantics.charges.ScalarExpressions = 1
 		semantics.charges.ScalarExpressionNodes = analysis.Nodes
@@ -773,7 +772,7 @@ func validateParallelStageSemantics(objects []*canonicalObject) error {
 			if knowledge.SelectorsProvablyDisjoint(left.normalized.Selector, right.normalized.Selector) {
 				continue
 			}
-			if fieldsIntersect(left.semantics.outputFields, right.semantics.outputFields) {
+			if knowledge.FieldsIntersect(left.semantics.outputFields, right.semantics.outputFields) {
 				return fmt.Errorf(
 					"%w: same-stage objects %q and %q may write the same destination",
 					ErrInvalidInput,
@@ -781,8 +780,8 @@ func validateParallelStageSemantics(objects []*canonicalObject) error {
 					right.input.KnowledgeObjectID,
 				)
 			}
-			if fieldsIntersect(left.semantics.outputFields, right.semantics.inputFields) ||
-				fieldsIntersect(right.semantics.outputFields, left.semantics.inputFields) {
+			if knowledge.FieldsIntersect(left.semantics.outputFields, right.semantics.inputFields) ||
+				knowledge.FieldsIntersect(right.semantics.outputFields, left.semantics.inputFields) {
 				return fmt.Errorf(
 					"%w: same-stage objects %q and %q form a possible data dependency",
 					ErrInvalidInput,
@@ -840,7 +839,7 @@ func canonicalizeDependencies(
 	for sourceKey, source := range byKey {
 		for targetKey, target := range byKey {
 			if sourceKey == targetKey || source.stageRank <= target.stageRank ||
-				!fieldsIntersect(source.semantics.inputFields, target.semantics.outputFields) ||
+				!knowledge.FieldsIntersect(source.semantics.inputFields, target.semantics.outputFields) ||
 				knowledge.SelectorsProvablyDisjoint(source.normalized.Selector, target.normalized.Selector) {
 				continue
 			}
@@ -888,7 +887,7 @@ func canonicalizeDependencies(
 		if !dependencyScopeAllows(source.input, target.input) {
 			return nil, 0, 0, fmt.Errorf("%w: dependency %d violates sharing authority", ErrInvalidInput, position)
 		}
-		if !fieldsIntersect(source.semantics.inputFields, target.semantics.outputFields) {
+		if !knowledge.FieldsIntersect(source.semantics.inputFields, target.semantics.outputFields) {
 			return nil, 0, 0, fmt.Errorf("%w: dependency %d field identity disagrees", ErrInvalidInput, position)
 		}
 		if !knowledge.SelectorImplies(source.normalized.Selector, target.normalized.Selector) {
@@ -1073,35 +1072,6 @@ func dependencyScopeAllows(source, target Object) bool {
 	default:
 		return false
 	}
-}
-
-func normalizedFields(fields []string) []string {
-	normalized := slices.Clone(fields)
-	sort.Strings(normalized)
-	write := 0
-	for _, field := range normalized {
-		if field == "" || write > 0 && normalized[write-1] == field {
-			continue
-		}
-		normalized[write] = field
-		write++
-	}
-	normalized = normalized[:write]
-	return normalized[:len(normalized):len(normalized)]
-}
-
-func fieldsIntersect(left, right []string) bool {
-	for leftIndex, rightIndex := 0, 0; leftIndex < len(left) && rightIndex < len(right); {
-		switch {
-		case left[leftIndex] < right[rightIndex]:
-			leftIndex++
-		case left[leftIndex] > right[rightIndex]:
-			rightIndex++
-		default:
-			return true
-		}
-	}
-	return false
 }
 
 func objectIDIsWinner(byKey map[objectKey]*canonicalObject, objectID string) bool {
@@ -1403,16 +1373,11 @@ func digestSnapshot(
 }
 
 func stageForObjectType(objectType opensplunkv1.KnowledgeObjectType) (opensplunkv1.KnowledgeSearchStage, uint8, error) {
-	switch objectType {
-	case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION:
-		return opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION, 1, nil
-	case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS:
-		return opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS, 2, nil
-	case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD:
-		return opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD, 3, nil
-	default:
+	stage, rank, ok := knowledgedefinition.StageForObjectType(objectType)
+	if !ok {
 		return 0, 0, fmt.Errorf("unsupported object type %d", objectType)
 	}
+	return stage, rank, nil
 }
 
 func precedenceRank(scope opensplunkv1.SharingScope) uint8 {
@@ -1442,22 +1407,7 @@ func authorizedIdentity(input Input, appID, ownerID string, scope opensplunkv1.S
 }
 
 func validIdentity(value string, maximum int) bool {
-	if value == "" || len(value) > maximum || !utf8.ValidString(value) ||
-		trimASCIIWhitespace(value) != value || strings.IndexByte(value, 0) >= 0 {
-		return false
-	}
-	for _, character := range value {
-		if character <= 0x1f || character >= 0x7f && character <= 0x9f {
-			return false
-		}
-	}
-	return true
-}
-
-func trimASCIIWhitespace(value string) string {
-	return strings.TrimFunc(value, func(character rune) bool {
-		return character == ' ' || character >= '\t' && character <= '\r'
-	})
+	return knowledge.ValidIdentity(value, maximum)
 }
 
 func canonicalAuthorityObject(object *canonicalObject) Object {

@@ -69,8 +69,8 @@ func FuzzIssueCanonicalizationDeterministic(f *testing.F) {
 			severity:    opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR,
 			suggestions: []string{suggestion, suggestion},
 		}}
-		firstDiagnostics, firstTruncated, firstErr := canonicalDiagnostics(context.Background(), diagnosticInput)
-		secondDiagnostics, secondTruncated, secondErr := canonicalDiagnostics(context.Background(), diagnosticInput)
+		firstDiagnostics, _, firstTruncated, firstErr := canonicalDiagnosticsWithSources(context.Background(), diagnosticInput)
+		secondDiagnostics, _, secondTruncated, secondErr := canonicalDiagnosticsWithSources(context.Background(), diagnosticInput)
 		if (firstErr == nil) != (secondErr == nil) || firstTruncated != secondTruncated ||
 			len(firstDiagnostics) != len(secondDiagnostics) {
 			t.Fatal("diagnostic canonicalization status is nondeterministic")

@@ -90,11 +90,6 @@ func canonicalFieldViolations(ctx context.Context, input []fieldIssue) ([]*opens
 	return values, false, nil
 }
 
-func canonicalDiagnostics(ctx context.Context, input []diagnosticIssue) ([]*opensplunkv1.KnowledgeValidationDiagnostic, bool, error) {
-	values, _, truncated, err := canonicalDiagnosticsWithSources(ctx, input)
-	return values, truncated, err
-}
-
 func canonicalDiagnosticsWithSources(
 	ctx context.Context,
 	input []diagnosticIssue,

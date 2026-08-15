@@ -1,7 +1,6 @@
 package savedobjects
 
 import (
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -10,8 +9,8 @@ import (
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/protostrict"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
@@ -41,7 +40,7 @@ func normalizeAndEncodeDefinition(input *opensplunkv1.SavedSearchDefinition, own
 	if err := validateIdentifierText("owner ID", ownerID, 255, false); err != nil {
 		return nil, indexedDefinition{}, nil, err
 	}
-	if err := rejectUnknownFields(definition.ProtoReflect()); err != nil {
+	if err := protostrict.RejectUnknownFields(definition.ProtoReflect(), "saved-search definition"); err != nil {
 		return nil, indexedDefinition{}, nil, fmt.Errorf("%w: %w", control.ErrInvalidArgument, err)
 	}
 
@@ -272,43 +271,6 @@ func boolMinimum(allowEmpty bool) int {
 
 func validSharingScope(scope opensplunkv1.SharingScope) bool {
 	return scope >= opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE && scope <= opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL
-}
-
-func rejectUnknownFields(message protoreflect.Message) error {
-	if len(message.GetUnknown()) != 0 {
-		return errors.New("saved-search definition contains unknown protobuf fields")
-	}
-	var visitErr error
-	message.Range(func(field protoreflect.FieldDescriptor, value protoreflect.Value) bool {
-		if field.IsMap() {
-			if field.MapValue().Kind() != protoreflect.MessageKind {
-				return true
-			}
-			value.Map().Range(func(_ protoreflect.MapKey, mapValue protoreflect.Value) bool {
-				visitErr = rejectUnknownFields(mapValue.Message())
-				return visitErr == nil
-			})
-			return visitErr == nil
-		}
-		if field.IsList() {
-			if field.Kind() != protoreflect.MessageKind {
-				return true
-			}
-			list := value.List()
-			for index := 0; index < list.Len(); index++ {
-				if visitErr = rejectUnknownFields(list.Get(index).Message()); visitErr != nil {
-					return false
-				}
-			}
-			return true
-		}
-		if field.Kind() == protoreflect.MessageKind {
-			visitErr = rejectUnknownFields(value.Message())
-			return visitErr == nil
-		}
-		return true
-	})
-	return visitErr
 }
 
 type updatePaths struct {

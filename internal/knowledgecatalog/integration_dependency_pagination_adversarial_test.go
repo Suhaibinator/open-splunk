@@ -38,17 +38,17 @@ func TestListPageStopsBeforeTransitiveDependencyClosureBudget(t *testing.T) {
 
 	budget := listResponseHydrationBudget
 	budget.dependencies = maximumDependencyGraphEdges
-	objects, boundary, err := store.objectsFromProjectionsPage(database.GORMDB(), records, budget)
+	objects, boundary, err := objectsFromProjectionsPage(database.GORMDB(), records, budget)
 	if err != nil {
 		t.Fatalf("hydrate dependency-bounded page: %v", err)
 	}
 	if boundary != 1 || len(objects) != 1 || objects[0].KnowledgeObjectID != firstID {
 		t.Fatalf("dependency page boundary/objects = %d/%v, want 1/[%s]", boundary, objectIDs(objects), firstID)
 	}
-	if _, err := store.objectsFromProjections(database.GORMDB(), records, budget); !errors.Is(err, control.ErrCapacityExceeded) {
+	if _, err := objectsFromProjections(database.GORMDB(), records, budget); !errors.Is(err, control.ErrCapacityExceeded) {
 		t.Fatalf("strict dense dependency hydration error = %v, want CapacityExceeded", err)
 	}
-	objects, boundary, err = store.objectsFromProjectionsPage(database.GORMDB(), records[1:], budget)
+	objects, boundary, err = objectsFromProjectionsPage(database.GORMDB(), records[1:], budget)
 	if err != nil || boundary != 1 || len(objects) != 1 || objects[0].KnowledgeObjectID != secondID {
 		t.Fatalf("continued dependency page = boundary:%d objects:%v error:%v", boundary, objectIDs(objects), err)
 	}

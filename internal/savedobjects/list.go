@@ -221,6 +221,17 @@ func applySavedSearchListFilters(
 	return query
 }
 
+func savedSearchSortColumn(sortBy opensplunkv1.SavedSearchSortBy) string {
+	switch sortBy {
+	case opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_NAME:
+		return "name"
+	case opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_CREATED_AT:
+		return "created_at_unix_micro"
+	default:
+		return "updated_at_unix_micro"
+	}
+}
+
 func applySavedSearchListCursor(
 	query *gorm.DB,
 	request normalizedListRequest,
@@ -229,75 +240,28 @@ func applySavedSearchListCursor(
 	if cursor.SavedSearch == "" {
 		return query
 	}
-	ascending := request.sortDirection == opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING
-	switch request.sortBy {
-	case opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_NAME:
-		if ascending {
-			return query.Where(
-				"(name > ? OR (name = ? AND saved_search_id > ?))",
-				cursor.StringKey,
-				cursor.StringKey,
-				cursor.SavedSearch,
-			)
-		}
-		return query.Where(
-			"(name < ? OR (name = ? AND saved_search_id < ?))",
-			cursor.StringKey,
-			cursor.StringKey,
-			cursor.SavedSearch,
-		)
-	case opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_CREATED_AT:
-		if ascending {
-			return query.Where(
-				"(created_at_unix_micro > ? OR (created_at_unix_micro = ? AND saved_search_id > ?))",
-				*cursor.IntegerKey,
-				*cursor.IntegerKey,
-				cursor.SavedSearch,
-			)
-		}
-		return query.Where(
-			"(created_at_unix_micro < ? OR (created_at_unix_micro = ? AND saved_search_id < ?))",
-			*cursor.IntegerKey,
-			*cursor.IntegerKey,
-			cursor.SavedSearch,
-		)
-	default:
-		if ascending {
-			return query.Where(
-				"(updated_at_unix_micro > ? OR (updated_at_unix_micro = ? AND saved_search_id > ?))",
-				*cursor.IntegerKey,
-				*cursor.IntegerKey,
-				cursor.SavedSearch,
-			)
-		}
-		return query.Where(
-			"(updated_at_unix_micro < ? OR (updated_at_unix_micro = ? AND saved_search_id < ?))",
-			*cursor.IntegerKey,
-			*cursor.IntegerKey,
-			cursor.SavedSearch,
-		)
+	column := savedSearchSortColumn(request.sortBy)
+	comparison := "<"
+	if request.sortDirection == opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING {
+		comparison = ">"
 	}
+	var key any = cursor.StringKey
+	if request.sortBy != opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_NAME {
+		key = *cursor.IntegerKey
+	}
+	// #nosec G201 -- column and comparison come from fixed, validated enum sets; all values stay bound parameters.
+	predicate := fmt.Sprintf("(%s %s ? OR (%s = ? AND saved_search_id %s ?))", column, comparison, column, comparison)
+	return query.Where(predicate, key, key, cursor.SavedSearch)
 }
 
 func applySavedSearchListOrder(query *gorm.DB, request normalizedListRequest) *gorm.DB {
-	ascending := request.sortDirection == opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING
-	switch request.sortBy {
-	case opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_NAME:
-		if ascending {
-			return query.Order("name ASC, saved_search_id ASC")
-		}
-		return query.Order("name DESC, saved_search_id DESC")
-	case opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_CREATED_AT:
-		if ascending {
-			return query.Order("created_at_unix_micro ASC, saved_search_id ASC")
-		}
-		return query.Order("created_at_unix_micro DESC, saved_search_id DESC")
-	default:
-		if ascending {
-			return query.Order("updated_at_unix_micro ASC, saved_search_id ASC")
-		}
-		return query.Order("updated_at_unix_micro DESC, saved_search_id DESC")
+	direction := "DESC"
+	if request.sortDirection == opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING {
+		direction = "ASC"
 	}
+	column := savedSearchSortColumn(request.sortBy)
+	// #nosec G201 -- column and direction come from fixed, validated enum sets.
+	return query.Order(fmt.Sprintf("%s %s, saved_search_id %s", column, direction, direction))
 }
 
 func (store *Store) countSavedSearches(ctx context.Context, request normalizedListRequest) (uint64, error) {

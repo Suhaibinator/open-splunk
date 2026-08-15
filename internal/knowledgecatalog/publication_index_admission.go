@@ -457,22 +457,6 @@ func admitPublicationIndexNameAdmissionInventory(
 	return detached, slots, nil
 }
 
-func publicationIndexNameAdmissionAtoms(
-	ctx context.Context,
-	existingNames []string,
-	newName string,
-	slots []*publicationTransitionCanonicalObject,
-) ([]publicationIndexAtom, error) {
-	var budget publicationTransitionIndexMatcherBudget
-	return publicationIndexNameAdmissionAtomsWithBudget(
-		ctx,
-		existingNames,
-		newName,
-		slots,
-		&budget,
-	)
-}
-
 func publicationIndexNameAdmissionAtomsWithBudget(
 	ctx context.Context,
 	existingNames []string,

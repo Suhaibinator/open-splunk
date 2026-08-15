@@ -63,7 +63,7 @@ func TestDiagnosticCanonicalizationTotalOrderAndSuggestions(t *testing.T) {
 		{path: "a", code: "E1", severity: opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR, message: "absent", suggestions: []string{"a", "z"}},
 		{path: "a", code: "I", severity: opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_INFO, message: "info"},
 	}
-	values, truncated, err := canonicalDiagnostics(context.Background(), input)
+	values, _, truncated, err := canonicalDiagnosticsWithSources(context.Background(), input)
 	if err != nil || truncated || len(values) != 4 {
 		t.Fatalf("canonical diagnostics = %d/%t/%v", len(values), truncated, err)
 	}
@@ -94,7 +94,7 @@ func TestDiagnosticBoundsRetainErrorBeforeWarningSaturation(t *testing.T) {
 		message:  "invalid",
 	}
 	input = append(input, errorIssue, errorIssue)
-	values, truncated, err := canonicalDiagnostics(context.Background(), input)
+	values, _, truncated, err := canonicalDiagnosticsWithSources(context.Background(), input)
 	if err != nil || !truncated || len(values) != 192 ||
 		values[0].GetDiagnostic().GetSeverity() != opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR {
 		t.Fatalf("warning saturation = %d/%t/%v first=%+v", len(values), truncated, err, values[0])
@@ -107,7 +107,7 @@ func TestDiagnosticBoundsRetainErrorBeforeWarningSaturation(t *testing.T) {
 			severity: opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_WARNING,
 		}
 	}
-	values, truncated, err = canonicalDiagnostics(context.Background(), tiny)
+	values, _, truncated, err = canonicalDiagnosticsWithSources(context.Background(), tiny)
 	if err != nil || !truncated || len(values) != MaximumIssues {
 		t.Fatalf("diagnostic count cap = %d/%t/%v", len(values), truncated, err)
 	}
@@ -125,13 +125,13 @@ func TestIssueEntryValidationFailsClosed(t *testing.T) {
 	for index := range tooManySuggestions {
 		tooManySuggestions[index] = fmt.Sprintf("s%02d", index)
 	}
-	if _, _, err := canonicalDiagnostics(context.Background(), []diagnosticIssue{{
+	if _, _, _, err := canonicalDiagnosticsWithSources(context.Background(), []diagnosticIssue{{
 		code: "C", severity: opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR,
 		message: "m", suggestions: tooManySuggestions,
 	}}); !errors.Is(err, ErrInvariant) {
 		t.Fatalf("too many suggestions error = %v", err)
 	}
-	if _, _, err := canonicalDiagnostics(context.Background(), []diagnosticIssue{{
+	if _, _, _, err := canonicalDiagnosticsWithSources(context.Background(), []diagnosticIssue{{
 		code: "C", severity: opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_UNSPECIFIED,
 		message: "m",
 	}}); !errors.Is(err, ErrInvariant) {

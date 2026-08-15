@@ -335,28 +335,9 @@ func readPublicationTransitionPersistenceFacts(
 		)
 	}
 
-	type appRevisionRecord struct {
-		TenantID      string `gorm:"column:tenant_id"`
-		TenantIDBytes int64  `gorm:"column:tenant_id_bytes"`
-		Revision      int64  `gorm:"column:revision"`
-	}
-	var appRevisions []appRevisionRecord
-	if err := database.Table("app_catalog_revisions AS authority").Select(`
-		authority.tenant_id AS tenant_id,
-		length(CAST(authority.tenant_id AS BLOB)) AS tenant_id_bytes,
-		authority.revision AS revision`).
-		Where("authority.tenant_id = ?", tenantID).
-		Limit(2).
-		Find(&appRevisions).Error; err != nil {
+	appRevision, err := readPublicationAppCatalogRevision(database, tenantID)
+	if err != nil {
 		return publicationTransitionPersistenceFacts{}, err
-	}
-	if len(appRevisions) != 1 || appRevisions[0].TenantID != tenantID ||
-		appRevisions[0].TenantIDBytes != int64(len(tenantID)) ||
-		appRevisions[0].Revision < 1 {
-		return publicationTransitionPersistenceFacts{}, fmt.Errorf(
-			"%w: publication transition app-catalog authority is missing or malformed",
-			ErrCorrupt,
-		)
 	}
 
 	type indexStateRecord struct {
@@ -386,7 +367,7 @@ func readPublicationTransitionPersistenceFacts(
 	}
 	return publicationTransitionPersistenceFacts{
 		catalog:              catalog,
-		appCatalogRevision:   appRevisions[0].Revision,
+		appCatalogRevision:   appRevision,
 		indexCatalogRevision: indexStates[0].Revision,
 		// #nosec G115 -- PhysicalCount was bounded by maximumPublicationIndexAtoms above.
 		indexCatalogPhysicalCount: uint16(indexStates[0].PhysicalCount),

@@ -134,7 +134,7 @@ func PrepareActive(ctx context.Context, submitted *opensplunkv1.KnowledgeObjectD
 }
 
 func compileSingleton(normalized knowledgedefinition.Normalized) (knowledgeprogram.Program, error) {
-	stage, ok := stageForObjectType(normalized.ObjectType)
+	stage, _, ok := knowledgedefinition.StageForObjectType(normalized.ObjectType)
 	if !ok || normalized.Definition == nil {
 		return knowledgeprogram.Program{}, ErrInvariant
 	}
@@ -389,18 +389,5 @@ func objectTypeFromDefinition(definition *opensplunkv1.KnowledgeObjectDefinition
 		return opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD
 	default:
 		return opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_UNSPECIFIED
-	}
-}
-
-func stageForObjectType(objectType opensplunkv1.KnowledgeObjectType) (opensplunkv1.KnowledgeSearchStage, bool) {
-	switch objectType {
-	case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION:
-		return opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION, true
-	case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS:
-		return opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS, true
-	case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD:
-		return opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD, true
-	default:
-		return opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_UNSPECIFIED, false
 	}
 }

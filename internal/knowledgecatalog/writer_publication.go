@@ -1165,19 +1165,6 @@ const mutationReceiptReclaimDeleteSQL = `DELETE FROM knowledge_mutation_idempote
 			LIMIT ?
 		)`
 
-type mutationReceiptReclaimWidth struct {
-	TenantIDBytes      int64 `gorm:"column:tenant_id_bytes"`
-	ActorKindBytes     int64 `gorm:"column:actor_kind_bytes"`
-	ActorIDBytes       int64 `gorm:"column:actor_id_bytes"`
-	RouteBytes         int64 `gorm:"column:route_bytes"`
-	RequestIDBytes     int64 `gorm:"column:request_id_bytes"`
-	MutationKindBytes  int64 `gorm:"column:mutation_kind_bytes"`
-	RequestDigestBytes int64 `gorm:"column:request_digest_bytes"`
-	OutcomeProtoBytes  int64 `gorm:"column:outcome_proto_bytes"`
-	StateTokenBytes    int64 `gorm:"column:state_token_bytes"`
-	ObjectIDBytes      int64 `gorm:"column:object_id_bytes"`
-}
-
 type mutationReceiptReclaimRecord struct {
 	Record                         idempotencyRecord      `gorm:"embedded"`
 	CommitAuthorityMatches         int64                  `gorm:"column:commit_authority_matches"`
@@ -1198,20 +1185,10 @@ func preflightExpiredMutationReceiptReclaim(
 	if _, err := canonicalTime(cutoff); err != nil {
 		return fmt.Errorf("%w: knowledge receipt reclamation cutoff is invalid", ErrCorrupt)
 	}
-	var widths []mutationReceiptReclaimWidth
+	var widths []idempotencyWidthRecord
 	if err := tx.Table(`knowledge_mutation_idempotency
 		INDEXED BY knowledge_mutation_idempotency_retention_idx`).
-		Select(`
-			length(CAST(tenant_id AS BLOB)) AS tenant_id_bytes,
-			length(CAST(actor_kind AS BLOB)) AS actor_kind_bytes,
-			length(CAST(actor_id AS BLOB)) AS actor_id_bytes,
-			length(CAST(route AS BLOB)) AS route_bytes,
-			length(CAST(client_request_id AS BLOB)) AS request_id_bytes,
-			length(CAST(mutation_kind AS BLOB)) AS mutation_kind_bytes,
-			length(request_digest) AS request_digest_bytes,
-			length(outcome_proto) AS outcome_proto_bytes,
-			length(committed_catalog_state_token) AS state_token_bytes,
-			length(CAST(knowledge_object_id AS BLOB)) AS object_id_bytes`).
+		Select(idempotencyWidthProjectionSQL).
 		Where(`knowledge_mutation_idempotency.tenant_id = ?
 			AND knowledge_mutation_idempotency.retain_until_unix_micro <= ?`, tenantID, cutoff).
 		Order(`knowledge_mutation_idempotency.retain_until_unix_micro,
@@ -1225,19 +1202,7 @@ func preflightExpiredMutationReceiptReclaim(
 		return err
 	}
 	for _, width := range widths {
-		if width.TenantIDBytes != int64(len(tenantID)) ||
-			width.ActorKindBytes < int64(len(audit.ActorKindSystem)) ||
-			width.ActorKindBytes > int64(len(audit.ActorKindBrowser)) ||
-			width.ActorIDBytes < 1 || width.ActorIDBytes > maximumOwnerIDBytes ||
-			width.RouteBytes < 1 || width.RouteBytes > int64(maximumMutationRouteBytes) ||
-			width.RequestIDBytes < minimumClientRequestIDBytes ||
-			width.RequestIDBytes > maximumClientRequestIDBytes ||
-			width.MutationKindBytes < minimumPersistedMutationKindBytes ||
-			width.MutationKindBytes > maximumPersistedMutationKindBytes ||
-			width.RequestDigestBytes != 32 ||
-			width.OutcomeProtoBytes < 1 || width.OutcomeProtoBytes > maximumMutationOutcomeBytes ||
-			width.StateTokenBytes != catalogStateTokenBytes ||
-			width.ObjectIDBytes < 1 || width.ObjectIDBytes > maximumObjectIDBytes {
+		if !validIdempotencyWidth(width) || width.TenantIDBytes != int64(len(tenantID)) {
 			return fmt.Errorf("%w: expired knowledge mutation receipt key is invalid", ErrCorrupt)
 		}
 	}

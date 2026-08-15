@@ -255,7 +255,7 @@ func TestPublicationTransitionAppPreflightIsTenantDrivenAndBounded(t *testing.T)
 			t.Errorf("roll back over-bound inventory transaction: %v", err)
 		}
 	}()
-	if _, _, err := readPublicationTransitionActiveApps(tx, testTenant); !errors.Is(err, ErrCorrupt) {
+	if _, _, _, err := readPublicationApps(tx, testTenant); !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("over-bound app inventory error = %v, want ErrCorrupt", err)
 	}
 

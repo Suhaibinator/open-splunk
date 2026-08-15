@@ -76,7 +76,7 @@ func (store *Store) List(
 		if len(integrityRecords) > maximumObjectsPerTenant {
 			return ListPage{}, fmt.Errorf("%w: body-filter integrity set exceeds its object bound", ErrCorrupt)
 		}
-		hydrated, hydrateErr := store.objectsFromProjections(
+		hydrated, hydrateErr := objectsFromProjections(
 			tx,
 			integrityRecords,
 			listFilterIntegrityHydrationBudget,
@@ -116,7 +116,7 @@ func (store *Store) List(
 		}
 	} else {
 		var semanticCount int
-		objects, semanticCount, err = store.objectsFromProjectionsPage(
+		objects, semanticCount, err = objectsFromProjectionsPage(
 			tx,
 			returnedRecords,
 			listResponseHydrationBudget,
@@ -187,26 +187,6 @@ func (store *Store) List(
 		return ListPage{}, mapError(ctx.Err(), "commit list", err)
 	}
 	return page, nil
-}
-
-func validateListDefinitionBudget(maximumBytes int64, groups ...[]projectionRecord) error {
-	if maximumBytes < maximumDefinitionBytes {
-		return fmt.Errorf("%w: knowledge catalog list definition budget is invalid", ErrCorrupt)
-	}
-	var total int64
-	for _, records := range groups {
-		for _, record := range records {
-			charge, err := listDefinitionCharge(record)
-			if err != nil {
-				return err
-			}
-			if total > maximumBytes-charge {
-				return fmt.Errorf("%w: knowledge catalog list definition budget exceeded", control.ErrCapacityExceeded)
-			}
-			total += charge
-		}
-	}
-	return nil
 }
 
 func boundedListResponseRecords(

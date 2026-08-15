@@ -5,7 +5,6 @@ import (
 	"math"
 	"slices"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
@@ -337,20 +336,9 @@ func normalizeOptionalFilter(value *string, label string) (*string, error) {
 }
 
 func validIdentity(value string, maximumBytes int) bool {
-	if value == "" || len(value) > maximumBytes || !utf8.ValidString(value) ||
-		trimASCIIWhitespace(value) != value || strings.IndexByte(value, 0) >= 0 {
-		return false
-	}
-	for _, character := range value {
-		if character <= 0x1f || character >= 0x7f && character <= 0x9f {
-			return false
-		}
-	}
-	return true
+	return knowledge.ValidIdentity(value, maximumBytes)
 }
 
 func trimASCIIWhitespace(value string) string {
-	return strings.TrimFunc(value, func(character rune) bool {
-		return character == ' ' || character >= '\t' && character <= '\r'
-	})
+	return knowledge.TrimASCIIWhitespace(value)
 }

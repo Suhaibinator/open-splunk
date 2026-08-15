@@ -6,9 +6,9 @@ import (
 	"math"
 	"slices"
 	"strings"
-	"unicode/utf8"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 )
 
@@ -132,18 +132,7 @@ func canonicalDependencies(ctx context.Context, publication ActivePublication) (
 }
 
 func validIdentity(value string, maximum int) bool {
-	if value == "" || len(value) > maximum || !utf8.ValidString(value) || strings.ContainsRune(value, 0) {
-		return false
-	}
-	if left, right := asciiTrimBounds(value); left != 0 || right != len(value) {
-		return false
-	}
-	for _, character := range value {
-		if character <= 0x1f || character >= 0x7f && character <= 0x9f {
-			return false
-		}
-	}
-	return true
+	return knowledge.ValidIdentity(value, maximum)
 }
 
 func stringUint64(value uint64) string {

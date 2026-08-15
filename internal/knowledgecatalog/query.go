@@ -39,12 +39,10 @@ func applyObjectAuthorization(query *gorm.DB, scope normalizedScope) *gorm.DB {
 	})
 }
 
-func applyProjectionAuthorization(query *gorm.DB, scope normalizedScope) *gorm.DB {
-	// Authorization is derived from the current registry authority, then joined
-	// to its exact immutable projection inside each forced-index branch. A stale,
-	// orphaned, or scope-escalated projection can therefore neither enter nor
-	// consume the bounded driver before the outer integrity joins run.
-	exactProjectionJoin := `candidate.tenant_id = authorized_registry.tenant_id
+// exactAuthorizedProjectionJoinSQL joins the current registry authority to its
+// exact immutable projection. Shared verbatim by resolver.go's ACTIVE-only
+// variant.
+const exactAuthorizedProjectionJoinSQL = `candidate.tenant_id = authorized_registry.tenant_id
 		AND candidate.knowledge_object_id = authorized_registry.knowledge_object_id
 		AND candidate.object_version = authorized_registry.current_version
 		AND candidate.app_id = authorized_registry.app_id
@@ -53,6 +51,12 @@ func applyProjectionAuthorization(query *gorm.DB, scope normalizedScope) *gorm.D
 		AND candidate.name = authorized_registry.name
 		AND candidate.sharing_scope = authorized_registry.sharing_scope
 		AND candidate.state = authorized_registry.state`
+
+func applyProjectionAuthorization(query *gorm.DB, scope normalizedScope) *gorm.DB {
+	// Authorization is derived from the current registry authority, then joined
+	// to its exact immutable projection inside each forced-index branch. A stale,
+	// orphaned, or scope-escalated projection can therefore neither enter nor
+	// consume the bounded driver before the outer integrity joins run.
 	driver := fmt.Sprintf(`(
 		SELECT candidate.tenant_id, candidate.knowledge_object_id, candidate.object_version
 		FROM knowledge_objects AS authorized_registry INDEXED BY knowledge_objects_authorized_global_idx
@@ -73,9 +77,9 @@ func applyProjectionAuthorization(query *gorm.DB, scope normalizedScope) *gorm.D
 		LIMIT %d
 	) AS authorized_projection
 	CROSS JOIN knowledge_object_list_projections AS projection`,
-		exactProjectionJoin,
-		exactProjectionJoin,
-		exactProjectionJoin,
+		exactAuthorizedProjectionJoinSQL,
+		exactAuthorizedProjectionJoinSQL,
+		exactAuthorizedProjectionJoinSQL,
 		maximumObjectsPerTenant+1,
 	)
 	return query.Table(

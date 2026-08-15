@@ -2,11 +2,32 @@ package knowledgecatalog
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"testing"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
 )
+
+func validateListDefinitionBudget(maximumBytes int64, groups ...[]projectionRecord) error {
+	if maximumBytes < maximumDefinitionBytes {
+		return fmt.Errorf("%w: knowledge catalog list definition budget is invalid", ErrCorrupt)
+	}
+	var total int64
+	for _, records := range groups {
+		for _, record := range records {
+			charge, err := listDefinitionCharge(record)
+			if err != nil {
+				return err
+			}
+			if total > maximumBytes-charge {
+				return fmt.Errorf("%w: knowledge catalog list definition budget exceeded", control.ErrCapacityExceeded)
+			}
+			total += charge
+		}
+	}
+	return nil
+}
 
 func TestListDefinitionBudgetBoundaryArithmetic(t *testing.T) {
 	t.Parallel()
