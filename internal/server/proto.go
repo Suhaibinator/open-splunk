@@ -62,7 +62,7 @@ func searchJobToProto(job searchjobs.Job, now time.Time) (*opensplunkv1.SearchJo
 		IndexScope: slices.Clone(job.RequestedIndexes),
 	}
 	if job.AppID != "" {
-		definition.AppId = stringPointer(job.AppID)
+		definition.AppId = new(job.AppID)
 	}
 	result := &opensplunkv1.SearchJob{
 		SearchJobId:         job.ID,
@@ -78,7 +78,7 @@ func searchJobToProto(job searchjobs.Job, now time.Time) (*opensplunkv1.SearchJo
 			Timezone: timezone,
 		},
 		IndexTimeCutoff:   indexTimeCutoff,
-		State:             searchStateToProto(job.State),
+		State:             searchjobproto.State(job.State),
 		ResultKind:        resultShape.Kind,
 		ResultsTruncated:  job.ResultsTruncated,
 		Progress:          progress,
@@ -92,7 +92,7 @@ func searchJobToProto(job searchjobs.Job, now time.Time) (*opensplunkv1.SearchJo
 		}
 	}
 	if job.Failure != nil {
-		result.Failure = failureToProto(*job.Failure)
+		result.Failure = searchjobproto.Failure(*job.Failure)
 		result.Diagnostics = diagnosticsToProto(job.Failure.Diagnostics)
 	}
 	if job.ResultsTruncated {
@@ -149,63 +149,6 @@ func valueToProto(ctx context.Context, value searchjobs.Value) (*opensplunkv1.Ty
 
 func valueKindToProto(kind searchjobs.ValueKind) (opensplunkv1.ValueType, error) {
 	return searchjobproto.ValueKind(kind)
-}
-
-func searchStateToProto(state searchjobs.State) opensplunkv1.SearchJobState {
-	switch state {
-	case searchjobs.StateQueued:
-		return opensplunkv1.SearchJobState_SEARCH_JOB_STATE_QUEUED
-	case searchjobs.StateParsing:
-		return opensplunkv1.SearchJobState_SEARCH_JOB_STATE_PARSING
-	case searchjobs.StatePlanning:
-		return opensplunkv1.SearchJobState_SEARCH_JOB_STATE_PLANNING
-	case searchjobs.StateRunning:
-		return opensplunkv1.SearchJobState_SEARCH_JOB_STATE_RUNNING
-	case searchjobs.StateCompleted:
-		return opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED
-	case searchjobs.StateFailed:
-		return opensplunkv1.SearchJobState_SEARCH_JOB_STATE_FAILED
-	case searchjobs.StateCanceled:
-		return opensplunkv1.SearchJobState_SEARCH_JOB_STATE_CANCELED
-	case searchjobs.StateExpired:
-		return opensplunkv1.SearchJobState_SEARCH_JOB_STATE_EXPIRED
-	default:
-		return opensplunkv1.SearchJobState_SEARCH_JOB_STATE_UNSPECIFIED
-	}
-}
-
-func failureToProto(failure searchjobs.Failure) *opensplunkv1.SearchFailure {
-	return &opensplunkv1.SearchFailure{
-		Code:        failureCodeToProto(failure.Code),
-		Message:     failure.Message,
-		Retryable:   failure.Retryable,
-		Diagnostics: diagnosticsToProto(failure.Diagnostics),
-	}
-}
-
-func failureCodeToProto(code searchjobs.FailureCode) opensplunkv1.SearchFailureCode {
-	switch code {
-	case searchjobs.FailureInvalidSPL:
-		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_INVALID_SPL
-	case searchjobs.FailureUnsupportedSPL:
-		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_UNSUPPORTED_SPL
-	case searchjobs.FailureInvalidTimeRange:
-		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_INVALID_TIME_RANGE
-	case searchjobs.FailureIndexForbidden:
-		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_INDEX_FORBIDDEN
-	case searchjobs.FailureResourceLimit:
-		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_RESOURCE_LIMIT
-	case searchjobs.FailureTimeout:
-		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_TIMEOUT
-	case searchjobs.FailureStorageUnavailable:
-		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_STORAGE_UNAVAILABLE
-	case searchjobs.FailureExecution:
-		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_EXECUTION
-	case searchjobs.FailureInternal:
-		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_INTERNAL
-	default:
-		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_UNSPECIFIED
-	}
 }
 
 func diagnosticsToProto(diagnostics []searchjobs.Diagnostic) []*opensplunkv1.Diagnostic {
@@ -282,12 +225,8 @@ func optionalString(value string) *string {
 	if value == "" {
 		return nil
 	}
-	return stringPointer(value)
+	return new(value)
 }
-
-func stringPointer(value string) *string { return &value }
-
-func uint64Pointer(value uint64) *uint64 { return &value }
 
 // protobufRouteDefinition keeps protobuf routes behind the constructor that
 // installs the version-skew boundary. The unexported wrapper prevents another

@@ -1077,7 +1077,7 @@ func spathEvent(
 			Severity:        opensplunkv1.LogSeverity_LOG_SEVERITY_INFO,
 			Raw:             raw,
 			RawEncoding:     rawEncoding,
-			Message:         stringPointer("spath integration fixture"),
+			Message:         new("spath integration fixture"),
 			Fields:          typedObjectValue(fields...),
 		},
 	}
@@ -1116,7 +1116,7 @@ func spathBuildPlan(t *testing.T, source string, cutoff time.Time, visibilityCut
 		SearchStart:      cutoff.Add(-time.Second),
 		SearchTimezone:   "UTC",
 		IndexTimeCutoff:  cutoff,
-		VisibilityCutoff: uint64PointerForIntegration(visibilityCutoff),
+		VisibilityCutoff: new(visibilityCutoff),
 	})
 	if err != nil {
 		t.Fatalf("build spath SPL %q: %v", source, err)

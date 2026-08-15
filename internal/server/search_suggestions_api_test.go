@@ -73,11 +73,11 @@ func TestSearchSuggestionsReturnsDetachedEditorCompletionsWithoutCreatingJob(t *
 	maximum := uint32(5)
 	result := searchsuggestions.Result{
 		Suggestions: []spl.Suggestion{
-			testSuggestion(spl.SuggestionKindCommand, "head", "head ", detail, replacement, 0.75),
-			testSuggestion(spl.SuggestionKindFunction, "lower", "lower(", "Scalar function", replacement, 0.75),
-			testSuggestion(spl.SuggestionKindField, "host", "host", "Field", replacement, 0.75),
-			testSuggestion(spl.SuggestionKindKeyword, "AS", "AS ", "", replacement, 0.75),
-			testSuggestion(spl.SuggestionKindIndex, "main", "main", "Authorized index", replacement, 0.75),
+			testSuggestion(spl.SuggestionKindCommand, "head", "head ", detail, replacement),
+			testSuggestion(spl.SuggestionKindFunction, "lower", "lower(", "Scalar function", replacement),
+			testSuggestion(spl.SuggestionKindField, "host", "host", "Field", replacement),
+			testSuggestion(spl.SuggestionKindKeyword, "AS", "AS ", "", replacement),
+			testSuggestion(spl.SuggestionKindIndex, "main", "main", "Authorized index", replacement),
 		},
 		Diagnostics: []searchjobs.Diagnostic{{
 			Code:          "SPL_INCOMPLETE",
@@ -149,7 +149,7 @@ func TestSearchSuggestionsReturnsDetachedEditorCompletionsWithoutCreatingJob(t *
 		Now:      func() time.Time { return testNow },
 	})
 	request := newSuggestionAPIRequest(source, uint64(len(source)), " INTERNAL ", "main", "MAIN")
-	request.AppId = stringPointer(" app-main ")
+	request.AppId = new(" app-main ")
 	request.MaxSuggestions = &maximum
 	response := postProto(t, handler, testSearchSuggestionsPath, request)
 	if response.Code != http.StatusOK {
@@ -274,10 +274,10 @@ func TestSearchSuggestionsRejectsInvalidCursorSourceAndMetadata(t *testing.T) {
 			request.TimeRange = suggestionTimeRange("2026-07-22T13:00:00Z", "2026-07-22T12:00:00Z")
 		}},
 		{name: "invalid app ID", mutate: func(request *opensplunkv1.GetSearchSuggestionsRequest) {
-			request.AppId = stringPointer("app\x00main")
+			request.AppId = new("app\x00main")
 		}},
 		{name: "oversized app ID", mutate: func(request *opensplunkv1.GetSearchSuggestionsRequest) {
-			request.AppId = stringPointer(strings.Repeat("a", maximumSavedSearchAppIDBytes+1))
+			request.AppId = new(strings.Repeat("a", maximumSavedSearchAppIDBytes+1))
 		}},
 		{name: "missing index scope", mutate: func(request *opensplunkv1.GetSearchSuggestionsRequest) {
 			request.IndexScope = nil
@@ -292,10 +292,10 @@ func TestSearchSuggestionsRejectsInvalidCursorSourceAndMetadata(t *testing.T) {
 			}
 		}},
 		{name: "explicit zero maximum", mutate: func(request *opensplunkv1.GetSearchSuggestionsRequest) {
-			request.MaxSuggestions = suggestionUint32Pointer(0)
+			request.MaxSuggestions = new(uint32(0))
 		}},
 		{name: "maximum above service bound", mutate: func(request *opensplunkv1.GetSearchSuggestionsRequest) {
-			request.MaxSuggestions = suggestionUint32Pointer(11)
+			request.MaxSuggestions = new(uint32(11))
 		}},
 	}
 	for _, test := range tests {
@@ -509,7 +509,6 @@ func TestSearchSuggestionsRejectsForgedOrUnboundedServiceResults(t *testing.T) {
 		"host",
 		"Field",
 		validRange,
-		0.75,
 	)
 	validDiagnostic := searchjobs.Diagnostic{
 		Code:          "SPL_INCOMPLETE",
@@ -546,7 +545,7 @@ func TestSearchSuggestionsRejectsForgedOrUnboundedServiceResults(t *testing.T) {
 				result.Suggestions[index].Insertion = result.Suggestions[index].Label
 			}
 		}},
-		{name: "over requested maximum", requestMax: suggestionUint32Pointer(1), mutate: func(result *searchsuggestions.Result) {
+		{name: "over requested maximum", requestMax: new(uint32(1)), mutate: func(result *searchsuggestions.Result) {
 			second := validSuggestion
 			second.Label = "hostname"
 			second.Insertion = "hostname"
@@ -923,7 +922,6 @@ func testSuggestion(
 	insertion string,
 	detail string,
 	replacement spl.Range,
-	relevance float64,
 ) spl.Suggestion {
 	return spl.Suggestion{
 		SuggestionCandidate: spl.SuggestionCandidate{
@@ -933,7 +931,7 @@ func testSuggestion(
 			Detail:    detail,
 		},
 		Replacement: replacement,
-		Relevance:   relevance,
+		Relevance:   0.75,
 	}
 }
 
@@ -968,5 +966,3 @@ func assertNoSuggestionSearchJobCalls(t *testing.T, jobs *fakeSearchJobs) {
 		)
 	}
 }
-
-func suggestionUint32Pointer(value uint32) *uint32 { return &value }

@@ -71,7 +71,7 @@ func TestAppAuditEventsPersistAndSQLiteRejectsTaxonomyForgeries(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	_, database := openAuditTestDatabase(t)
+	database := openAuditTestDatabase(t)
 	store := newAuditTestStore(t, database, auditTestCursorKey())
 	events := []SuccessfulEvent{
 		{OccurredAt: auditTestTime, Action: ActionAppCreate, TargetKind: TargetKindApp, TargetID: "app-observability", TargetVersion: 1},
@@ -97,7 +97,7 @@ func TestAppAuditEventsPersistAndSQLiteRejectsTaxonomyForgeries(t *testing.T) {
 	page, err := store.List(ctx, "tenant-app", ListRequest{
 		PageSize:      uint32(len(events)),
 		ActionFilters: allKnownAuditActions(),
-		TargetKind:    targetKindPointer(TargetKindApp),
+		TargetKind:    new(TargetKindApp),
 	})
 	if err != nil {
 		t.Fatalf("List(app events): %v", err)

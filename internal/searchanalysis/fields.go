@@ -20,6 +20,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/cursorcodec"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
+	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -305,13 +306,13 @@ type fieldCursorPayload struct {
 
 // NewFieldService validates dependencies and constructs a bounded service.
 func NewFieldService(config FieldConfig) (*FieldService, error) {
-	if nilInterface(config.Searches) {
+	if nilcheck.IsNil(config.Searches) {
 		return nil, errors.New("create search field service: completed search snapshots are required")
 	}
-	if nilInterface(config.Compiler) {
+	if nilcheck.IsNil(config.Compiler) {
 		return nil, errors.New("create search field service: field compiler is required")
 	}
-	if nilInterface(config.Executor) {
+	if nilcheck.IsNil(config.Executor) {
 		return nil, errors.New("create search field service: field executor is required")
 	}
 
@@ -435,7 +436,7 @@ func NewFieldService(config FieldConfig) (*FieldService, error) {
 		clock = time.Now
 	}
 	scopeSnapshotter := config.ScopeSnapshotter
-	if nilInterface(scopeSnapshotter) {
+	if nilcheck.IsNil(scopeSnapshotter) {
 		scopeSnapshotter = nil
 	}
 
@@ -627,7 +628,7 @@ func (service *FieldService) ListFields(ctx context.Context, access searchjobs.A
 		return service.pageFromCursor(ctx, key, normalized, cursor)
 	}
 
-	for attempt := 0; attempt < 2; attempt++ {
+	for range 2 {
 		entry, err := service.catalogFor(
 			ctx,
 			key,

@@ -301,11 +301,9 @@ func TestReexecutionLeaseCancellationAndConcurrentCloseReleasePinOnce(t *testing
 
 	var waits sync.WaitGroup
 	for range 8 {
-		waits.Add(1)
-		go func() {
-			defer waits.Done()
+		waits.Go(func() {
 			_ = lease.Close()
-		}()
+		})
 	}
 	waits.Wait()
 	if nextErr := <-nextDone; !errors.Is(nextErr, context.Canceled) && !errors.Is(nextErr, searchjobs.ErrResultLeaseClosed) {
@@ -685,6 +683,7 @@ type knowledgeSummaryTestLease struct {
 	summary *opensplunkv1.KnowledgeSnapshotSummary
 }
 
+//nolint:unparam // Both results are required by knowledgeSnapshotSummaryProvider.
 func (lease *knowledgeSummaryTestLease) knowledgeSnapshotSummary() (*opensplunkv1.KnowledgeSnapshotSummary, error) {
 	cloned, _ := proto.Clone(lease.summary).(*opensplunkv1.KnowledgeSnapshotSummary)
 	return cloned, nil

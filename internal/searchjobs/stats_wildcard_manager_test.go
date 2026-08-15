@@ -238,14 +238,14 @@ func TestStatsWildcardExpansionMetadataIsReleasedByCleanup(t *testing.T) {
 }
 
 func TestStatsWildcardExpansionPrivateAuthorityParticipatesInMetadataCapacity(t *testing.T) {
-	resolver, appID := newEmptyKnowledgeResolver(t, "tenant")
+	resolver, appID := newEmptyKnowledgeResolver(t)
 	request := validRequest()
 	request.AppID = appID
 	primaryIndex := "primary_" + strings.Repeat("x", 40)
 	request.SPL = `index=` + primaryIndex + ` | eval padding="` + strings.Repeat("x", 15<<10) + `" | stats sum(*)`
 	request.RequestedIndexes = []string{primaryIndex}
 	request.AuthorizedIndexes = []string{primaryIndex}
-	for index := 0; index < 127; index++ {
+	for index := range 127 {
 		request.AuthorizedIndexes = append(
 			request.AuthorizedIndexes,
 			fmt.Sprintf("scope_index_%03d_%s", index, strings.Repeat("x", 32)),

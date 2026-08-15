@@ -711,13 +711,13 @@ func TestProtobufMediaTypeMethodAndBodyLimit(t *testing.T) {
 		t.Fatalf("method error headers = %v", response.Header())
 	}
 
-	large := &opensplunkv1.GetSystemBootstrapRequest{PreferredAppId: stringPointer(strings.Repeat("a", 128))}
+	large := &opensplunkv1.GetSystemBootstrapRequest{PreferredAppId: new(strings.Repeat("a", 128))}
 	response = postProto(t, handler, "/api/v1/system/bootstrap", large)
 	if response.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("large body status = %d, body = %s", response.Code, response.Body.String())
 	}
 
-	exact := &opensplunkv1.GetSystemBootstrapRequest{PreferredAppId: stringPointer(strings.Repeat("a", 30))}
+	exact := &opensplunkv1.GetSystemBootstrapRequest{PreferredAppId: new(strings.Repeat("a", 30))}
 	if size := proto.Size(exact); size != 32 {
 		t.Fatalf("exact request size = %d, want 32", size)
 	}
@@ -919,7 +919,7 @@ func TestCreateSearchPreservesScopedSavedSearchProvenance(t *testing.T) {
 	request := createRequest("-24h", "now", "main")
 	request.Source = &opensplunkv1.SearchJobSource{
 		Origin:        opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH,
-		SavedSearchId: stringPointer(savedID),
+		SavedSearchId: new(savedID),
 	}
 	response := postProto(t, handler, "/api/v1/search/jobs/create", request)
 	if response.Code != http.StatusOK {
@@ -936,7 +936,7 @@ func TestCreateSearchPreservesScopedSavedSearchProvenance(t *testing.T) {
 	}
 
 	mismatch := createRequest("-24h", "now", "main")
-	mismatch.Definition.AppId = stringPointer("other-app")
+	mismatch.Definition.AppId = new("other-app")
 	mismatch.Source = request.Source
 	response = postProto(t, handler, "/api/v1/search/jobs/create", mismatch)
 	if response.Code != http.StatusBadRequest {
@@ -954,7 +954,7 @@ func TestCreateSearchRejectsNoncanonicalSavedSearchProvenance(t *testing.T) {
 	t.Parallel()
 
 	record := savedSearchRecord("saved-1", 1, "owner-1", "app-main", "Errors")
-	record.Definition.Search.AppId = stringPointer(" app-main ")
+	record.Definition.Search.AppId = new(" app-main ")
 	store := &fakeSavedSearches{getFn: func(context.Context, savedobjects.AccessScope, string) (*opensplunkv1.SavedSearch, error) {
 		return record, nil
 	}}
@@ -973,7 +973,7 @@ func TestCreateSearchRejectsNoncanonicalSavedSearchProvenance(t *testing.T) {
 	request := createRequest("-24h", "now", "main")
 	request.Source = &opensplunkv1.SearchJobSource{
 		Origin:        opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH,
-		SavedSearchId: stringPointer("saved-1"),
+		SavedSearchId: new("saved-1"),
 	}
 	response := postProto(t, handler, "/api/v1/search/jobs/create", request)
 	if response.Code != http.StatusInternalServerError {
@@ -992,18 +992,18 @@ func TestCreateSearchRejectsUnsupportedSemanticsBeforeCreatingJob(t *testing.T) 
 		name   string
 		mutate func(*opensplunkv1.CreateSearchJobRequest)
 	}{
-		{name: "client request ID", mutate: func(request *opensplunkv1.CreateSearchJobRequest) { request.ClientRequestId = stringPointer("") }},
+		{name: "client request ID", mutate: func(request *opensplunkv1.CreateSearchJobRequest) { request.ClientRequestId = new("") }},
 		{name: "source ID without origin", mutate: func(request *opensplunkv1.CreateSearchJobRequest) {
-			request.Source = &opensplunkv1.SearchJobSource{SavedSearchId: stringPointer("saved-1")}
+			request.Source = &opensplunkv1.SearchJobSource{SavedSearchId: new("saved-1")}
 		}},
 		{name: "saved search without ID", mutate: func(request *opensplunkv1.CreateSearchJobRequest) {
 			request.Source = &opensplunkv1.SearchJobSource{Origin: opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH}
 		}},
 		{name: "history source", mutate: func(request *opensplunkv1.CreateSearchJobRequest) {
-			request.Source = &opensplunkv1.SearchJobSource{HistorySearchId: stringPointer("")}
+			request.Source = &opensplunkv1.SearchJobSource{HistorySearchId: new("")}
 		}},
 		{name: "dashboard source", mutate: func(request *opensplunkv1.CreateSearchJobRequest) {
-			request.Source = &opensplunkv1.SearchJobSource{DashboardId: stringPointer("")}
+			request.Source = &opensplunkv1.SearchJobSource{DashboardId: new("")}
 		}},
 		{name: "preview", mutate: func(request *opensplunkv1.CreateSearchJobRequest) {
 			request.Options = &opensplunkv1.SearchJobOptions{EnablePreview: true}
@@ -1603,7 +1603,7 @@ func createRequest(earliest, latest string, indexes ...string) *opensplunkv1.Cre
 	return &opensplunkv1.CreateSearchJobRequest{Definition: &opensplunkv1.SearchDefinition{
 		Spl: "index=main | head 10",
 		TimeRange: &opensplunkv1.TimeRangeSpec{
-			Earliest: stringPointer(earliest), Latest: stringPointer(latest), Timezone: &timezone,
+			Earliest: new(earliest), Latest: new(latest), Timezone: &timezone,
 		},
 		IndexScope: indexes,
 	}}

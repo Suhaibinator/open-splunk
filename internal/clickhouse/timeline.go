@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -327,10 +328,5 @@ func validTimelineRangeBoundary(value time.Time) bool {
 }
 
 func timelineOutputContainsCanonicalTime(fields []string) bool {
-	for _, field := range fields {
-		if field == "_time" {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(fields, "_time")
 }

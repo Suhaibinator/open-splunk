@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"hash"
+	"maps"
 	"math"
 	"math/bits"
 	"slices"
@@ -898,9 +899,7 @@ func validatePublicationActiveTransitionMode(
 	}
 
 	postByID := make(map[string]*publicationTransitionCanonicalObject, len(current)+1)
-	for objectID, object := range currentByID {
-		postByID[objectID] = object
-	}
+	maps.Copy(postByID, currentByID)
 	delete(postByID, candidateID)
 	if afterActive {
 		postByID[candidateID] = candidateAfter

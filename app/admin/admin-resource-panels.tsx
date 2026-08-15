@@ -23,6 +23,7 @@ import {
   isOptionalRouteUnavailable,
   type SystemBootstrapModel,
 } from "@/lib/api";
+import { createErrorMessage } from "@/lib/error-message";
 
 import { Modal } from "../search-workspace/modal";
 import {
@@ -40,9 +41,7 @@ interface PanelProps {
   bootstrap: SystemBootstrapModel | null;
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error && error.message.trim() ? error.message : "The server did not return a usable response.";
-}
+const errorMessage = createErrorMessage("The server did not return a usable response.");
 
 function formatDate(value: Date | undefined): string {
   if (value === undefined || Number.isNaN(value.valueOf())) return "Never";

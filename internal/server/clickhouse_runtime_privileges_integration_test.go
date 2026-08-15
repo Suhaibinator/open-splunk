@@ -479,7 +479,7 @@ func TestClickHouseServicePrincipalLifecycle(t *testing.T) {
 
 	var target internalclickhouse.IndexDataDeletionTarget
 	var progress internalclickhouse.IndexDataDeletionProgress
-	for attempt := 0; attempt < 100; attempt++ {
+	for range 100 {
 		err = store.WithWritesFrozen(
 			ctx,
 			func(

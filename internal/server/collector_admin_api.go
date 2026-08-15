@@ -56,7 +56,6 @@ func (handler *apiHandler) collectorAdministrationRoutes(
 			Codec:      newSerializedListCollectorsCodec(),
 			Handler:    handler.listCollectors,
 			SourceType: router.Body,
-			Sanitizer:  forwardCompatibleProtoSanitizer[*opensplunkv1.ListCollectorsRequest],
 			Overrides: sroutercommon.RouteOverrides{
 				MaxBodySize: requestBytes,
 			},
@@ -73,7 +72,6 @@ func (handler *apiHandler) collectorAdministrationRoutes(
 			Codec:      newSerializedGetCollectorCodec(),
 			Handler:    handler.getCollector,
 			SourceType: router.Body,
-			Sanitizer:  forwardCompatibleProtoSanitizer[*opensplunkv1.GetCollectorRequest],
 			Overrides: sroutercommon.RouteOverrides{
 				MaxBodySize: requestBytes,
 			},
@@ -90,7 +88,6 @@ func (handler *apiHandler) collectorAdministrationRoutes(
 			Codec:      newSerializedUpdateCollectorCodec(),
 			Handler:    handler.updateCollector,
 			SourceType: router.Body,
-			Sanitizer:  forwardCompatibleProtoSanitizer[*opensplunkv1.UpdateCollectorRequest],
 			Overrides: sroutercommon.RouteOverrides{
 				MaxBodySize: requestBytes,
 			},
@@ -107,7 +104,6 @@ func (handler *apiHandler) collectorAdministrationRoutes(
 			Codec:      newSerializedSetCollectorEnabledCodec(),
 			Handler:    handler.setCollectorEnabled,
 			SourceType: router.Body,
-			Sanitizer:  forwardCompatibleProtoSanitizer[*opensplunkv1.SetCollectorEnabledRequest],
 			Overrides: sroutercommon.RouteOverrides{
 				MaxBodySize: requestBytes,
 			},
@@ -576,7 +572,7 @@ func normalizeCollectorDisplayName(input *string) (*string, error) {
 	) != nil {
 		return nil, errors.New("collector display name is invalid")
 	}
-	return stringPointer(strings.Clone(value)), nil
+	return new(strings.Clone(value)), nil
 }
 
 func canonicalCollectorIndexFilter(input *string) (*string, error) {
@@ -587,7 +583,7 @@ func canonicalCollectorIndexFilter(input *string) (*string, error) {
 	if err != nil || canonical != *input {
 		return nil, errors.New("collector index filter is invalid")
 	}
-	return stringPointer(strings.Clone(canonical)), nil
+	return new(strings.Clone(canonical)), nil
 }
 
 func normalizeCollectorTextFilter(input *string) (*string, error) {
@@ -610,7 +606,7 @@ func normalizeCollectorTextFilter(input *string) (*string, error) {
 	if value == "" {
 		return nil, nil
 	}
-	return stringPointer(strings.Clone(value)), nil
+	return new(strings.Clone(value)), nil
 }
 
 func collectorConnectionStateFromProto(
@@ -766,7 +762,7 @@ func collectorAdministrationListToProto(
 		TotalSizeExact: result.TotalSizeExact,
 	}
 	if result.NextPageToken != nil {
-		page.NextPageToken = stringPointer(
+		page.NextPageToken = new(
 			strings.Clone(*result.NextPageToken),
 		)
 	}
@@ -933,7 +929,7 @@ func collectorActiveInstanceID(
 		input.Generation > math.MaxInt64 {
 		return nil, errors.New("collector active lease is invalid")
 	}
-	return stringPointer(strings.Clone(input.InstanceID)), nil
+	return new(strings.Clone(input.InstanceID)), nil
 }
 
 func collectorOptionalMetadata(
@@ -946,7 +942,7 @@ func collectorOptionalMetadata(
 	if input == "" {
 		return nil, nil
 	}
-	return stringPointer(strings.Clone(input)), nil
+	return new(strings.Clone(input)), nil
 }
 
 func collectorCapabilitiesToProto(

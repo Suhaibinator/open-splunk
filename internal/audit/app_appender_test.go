@@ -12,7 +12,7 @@ func TestAppMutationAppenderRequiresExplicitSuccessfulActor(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	_, database := openAuditTestDatabase(t)
+	database := openAuditTestDatabase(t)
 	store := newAuditTestStore(t, database, auditTestCursorKey())
 	event := control.AppMutationAuditEvent{
 		OccurredAt: auditTestTime,
@@ -68,7 +68,7 @@ func TestAppMutationAppenderMapsAllControlActions(t *testing.T) {
 		t.Run(string(actor.Kind), func(t *testing.T) {
 			t.Parallel()
 			ctx := actorContext(t, actor)
-			_, database := openAuditTestDatabase(t)
+			database := openAuditTestDatabase(t)
 			store := newAuditTestStore(t, database, auditTestCursorKey())
 			tests := []struct {
 				controlAction control.AppMutationAuditAction
@@ -103,7 +103,7 @@ func TestAppMutationAppenderMapsAllControlActions(t *testing.T) {
 
 			page, err := store.List(ctx, "tenant-app-adapter", ListRequest{
 				PageSize:   uint32(len(tests)),
-				TargetKind: targetKindPointer(TargetKindApp),
+				TargetKind: new(TargetKindApp),
 			})
 			if err != nil {
 				t.Fatalf("List(app adapter events): %v", err)

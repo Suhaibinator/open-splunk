@@ -342,30 +342,22 @@ func lookupSelectedCellCountContext(
 // lookupExternalTableCellCount is shared by preflight and sealed transport
 // validation so the private match marker cannot appear only after admission.
 func lookupExternalTableCellCount(rowCount, selectedColumns int) (uint64, bool) {
+	if rowCount < 0 || selectedColumns < 0 {
+		return 0, false
+	}
+	// Both inputs are nonnegative ints, so widening them to uint64 is lossless.
+	// #nosec G115 -- guarded immediately above.
 	columns := uint64(selectedColumns)
+	// #nosec G115 -- guarded immediately above.
+	rows := uint64(rowCount)
 	if columns == ^uint64(0) {
 		return 0, false
 	}
 	columns++ // one UInt8 match marker is materialized for every asset row
-	if rowCount != 0 && columns > ^uint64(0)/uint64(rowCount) {
+	if rows != 0 && columns > ^uint64(0)/rows {
 		return 0, false
 	}
-	return uint64(rowCount) * columns, true
-}
-
-func prepareLookupStage(
-	operator *plan.Lookup,
-	scan *plan.Scan,
-	resolution LookupResolution,
-	materializeSelectedValues bool,
-) (preparedLookupStage, error) {
-	return prepareLookupStageContext(
-		context.Background(),
-		operator,
-		scan,
-		resolution,
-		materializeSelectedValues,
-	)
+	return rows * columns, true
 }
 
 func prepareLookupStageContext(
@@ -544,10 +536,6 @@ func validateCompiledLookupOperator(operator *plan.Lookup) error {
 		seenEventOutputs[output.EventField.Name] = struct{}{}
 	}
 	return nil
-}
-
-func validateExactLookupKeys(stage preparedLookupStage) error {
-	return validateExactLookupKeysContext(context.Background(), stage)
 }
 
 func validateExactLookupKeysContext(

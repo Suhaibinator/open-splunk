@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp/syntax"
+	"slices"
 )
 
 // ErrMayMatchEmpty reports a pattern whose language includes a zero-width
@@ -47,12 +48,7 @@ func mayMatchEmptySubstring(expression *syntax.Regexp) bool {
 		}
 		return true
 	case syntax.OpAlternate:
-		for _, child := range expression.Sub {
-			if mayMatchEmptySubstring(child) {
-				return true
-			}
-		}
-		return false
+		return slices.ContainsFunc(expression.Sub, mayMatchEmptySubstring)
 	case syntax.OpQuest, syntax.OpStar:
 		return true
 	case syntax.OpPlus:

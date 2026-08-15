@@ -625,7 +625,7 @@ func TestRuntimeBudgetPinsValueEventAndCumulativeQueryBoundaries(t *testing.T) {
 		t.Fatalf("default runtime capacity = %+v", got)
 	}
 	var err error
-	for count := 0; count < MaximumSelectorRuntimeEventBytes/MaximumSelectorRuntimeValueBytes; count++ {
+	for count := range MaximumSelectorRuntimeEventBytes / MaximumSelectorRuntimeValueBytes {
 		budget, err = budget.ChargeInput(value)
 		if err != nil {
 			t.Fatalf("event boundary charge %d: %v", count, err)
@@ -739,7 +739,7 @@ func TestEmptyStarChargesCombinedMatcherInitializationClosureAndTerminalWork(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	for event := 0; event < 2; event++ {
+	for event := range 2 {
 		matched, next, matchErr := selector.Match(context.Background(), EventMetadata{Host: StringMetadata("")}, budget)
 		if matchErr != nil || !matched {
 			t.Fatalf("empty star event %d = %t, %v", event, matched, matchErr)
@@ -798,10 +798,10 @@ func TestCombinedGlobMatchesReferenceAcrossAdversarialCorpus(t *testing.T) {
 	random := rand.New(rand.NewSource(20260806))
 	alphabet := []rune{'a', 'b', 'A', 'é', '東', '😀', '\n'}
 	patterns := []string{"", "*", "?", "a*", "*b", "?é?", "東*😀", `\*`, `\\`, "a**?b"}
-	for count := 0; count < 500; count++ {
+	for range 500 {
 		var pattern strings.Builder
 		length := random.Intn(8) + 1
-		for index := 0; index < length; index++ {
+		for range length {
 			switch random.Intn(8) {
 			case 0:
 				pattern.WriteByte('*')
@@ -814,7 +814,7 @@ func TestCombinedGlobMatchesReferenceAcrossAdversarialCorpus(t *testing.T) {
 		patterns = append(patterns, pattern.String())
 	}
 	values := []string{"", "a", "A", "é", "😀", "é", "a\nb", "東abc😀", "*", `\`}
-	for count := 0; count < 500; count++ {
+	for range 500 {
 		var value strings.Builder
 		for index := 0; index < random.Intn(10); index++ {
 			value.WriteRune(alphabet[random.Intn(len(alphabet))])
@@ -852,12 +852,10 @@ func TestSelectorIsSafeForConcurrentMatchingAndDetachedReads(t *testing.T) {
 	wantCanonical := selector.CanonicalBytes()
 
 	var wait sync.WaitGroup
-	for worker := 0; worker < 64; worker++ {
+	for worker := range 64 {
 		worker := worker
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
-			for iteration := 0; iteration < 500; iteration++ {
+		wait.Go(func() {
+			for range 500 {
 				host := fmt.Sprintf("api-%d", worker)
 				matched, _, err := selector.Match(context.Background(), EventMetadata{
 					Index: StringMetadata("main"), Host: StringMetadata(host),
@@ -869,7 +867,7 @@ func TestSelectorIsSafeForConcurrentMatchingAndDetachedReads(t *testing.T) {
 				canonicalCopy := selector.CanonicalBytes()
 				canonicalCopy[len(canonicalCopy)-1] ^= byte(worker + 1)
 			}
-		}()
+		})
 	}
 	wait.Wait()
 	if !bytes.Equal(selector.CanonicalBytes(), wantCanonical) {

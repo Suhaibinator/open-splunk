@@ -398,7 +398,7 @@ func TestAuditEventListUsesAuthenticatedTenantAndProjectsBoundedPage(t *testing.
 	targetKind := opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_INGESTION_TOKEN
 	request := &opensplunkv1.ListAuditEventsRequest{
 		Page: &opensplunkv1.PageRequest{
-			PageSize:         uint32Pointer(2),
+			PageSize:         new(uint32(2)),
 			IncludeTotalSize: true,
 		},
 		ActionFilters: []opensplunkv1.AuditAction{
@@ -747,7 +747,7 @@ func TestAuditEventListRejectsInvalidFiltersBeforeStorage(t *testing.T) {
 		{
 			name: "oversized page",
 			request: &opensplunkv1.ListAuditEventsRequest{Page: &opensplunkv1.PageRequest{
-				PageSize: uint32Pointer(audit.MaximumListPageSize + 1),
+				PageSize: new(uint32(audit.MaximumListPageSize + 1)),
 			}},
 		},
 	}

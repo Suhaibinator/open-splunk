@@ -23,7 +23,7 @@ func testTextCaseAgainstClickHouse(
 	unicodeEvent := testStoredEvent("text-case-unicode", "textcase", indexTime)
 	unicodeEvent.Event.Host = "München"
 	unicodeEvent.Event.Raw = []byte("Straße RAW")
-	unicodeEvent.Event.Message = stringPointer("Unicode fixture")
+	unicodeEvent.Event.Message = new("Unicode fixture")
 	unicodeEvent.Event.Fields = typedObjectValue(
 		typedField("scalar", typedString("MÜNCHEN Straße")),
 		typedField(

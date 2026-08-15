@@ -27,7 +27,7 @@ func TestNormalizeDependencyListRequestReturnsDetachedCanonicalRequest(t *testin
 	}
 	want := DependencyListRequest{
 		KnowledgeObjectID: "ko-normalized-graph",
-		Version:           uint64Pointer(7),
+		Version:           new(uint64(7)),
 		PageSize:          DefaultPageSize,
 		PageToken:         "opaque-token",
 		IncludeTotal:      true,
@@ -49,7 +49,7 @@ func TestNormalizeDependencyListRequestReturnsDetachedCanonicalRequest(t *testin
 	for _, invalid := range []DependencyListRequest{
 		{},
 		{KnowledgeObjectID: " ko"},
-		{KnowledgeObjectID: "ko", Version: uint64Pointer(0)},
+		{KnowledgeObjectID: "ko", Version: new(uint64(0))},
 		{KnowledgeObjectID: "ko", Version: &maximum},
 		{KnowledgeObjectID: "ko", PageSize: MaximumPageSize + 1},
 		{KnowledgeObjectID: "ko", PageToken: " cursor"},
@@ -182,5 +182,3 @@ func TestIncomingGraphQueryIsAuthorizationDrivenAndClipsPayloadScalars(t *testin
 		t.Fatalf("incoming graph plan is not authorization/current-source first:\n%s", joined)
 	}
 }
-
-func uint64Pointer(value uint64) *uint64 { return &value }

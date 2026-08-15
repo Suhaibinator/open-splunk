@@ -235,7 +235,7 @@ func TestOpenSearchHistoryStoreUsesRegisteredStableMasterKey(t *testing.T) {
 		}
 	})
 	keyPath := filepath.Join(directory, "server.key")
-	if _, _, err := openSecurityStores(ctx, db, keyPath); err != nil {
+	if _, err := openSecurityStores(ctx, db, keyPath); err != nil {
 		t.Fatal(err)
 	}
 	first, err := openSearchHistoryStore(ctx, db, keyPath, searchhistory.Options{})
@@ -271,7 +271,7 @@ func TestOpenSecurityStoresKeepsCollectorCredentialsValidAcrossRestart(t *testin
 		t.Fatal(err)
 	}
 	keyPath := filepath.Join(directory, "server.key")
-	_, firstTokens, err := openSecurityStores(ctx, db, keyPath)
+	firstTokens, err := openSecurityStores(ctx, db, keyPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +282,7 @@ func TestOpenSecurityStoresKeepsCollectorCredentialsValidAcrossRestart(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, secondTokens, err := openSecurityStores(ctx, db, keyPath)
+	secondTokens, err := openSecurityStores(ctx, db, keyPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,7 +299,7 @@ func TestOpenSecurityStoresKeepsCollectorCredentialsValidAcrossRestart(t *testin
 	if err := os.Remove(keyPath); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := openSecurityStores(ctx, db, keyPath); err == nil {
+	if _, err := openSecurityStores(ctx, db, keyPath); err == nil {
 		t.Fatal("missing registered master key was silently replaced")
 	}
 	if _, err := os.Stat(keyPath); !os.IsNotExist(err) {
@@ -308,7 +308,7 @@ func TestOpenSecurityStoresKeepsCollectorCredentialsValidAcrossRestart(t *testin
 	if err := os.WriteFile(keyPath, bytes.Repeat([]byte{0x33}, masterKeyBytes), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := openSecurityStores(ctx, db, keyPath); err == nil {
+	if _, err := openSecurityStores(ctx, db, keyPath); err == nil {
 		t.Fatal("replacement master key was accepted for registered database")
 	}
 }
@@ -342,7 +342,7 @@ func TestOpenSecurityStoresRefusesUnverifiableExistingTokens(t *testing.T) {
 		t.Fatal(err)
 	}
 	keyPath := filepath.Join(directory, "server.key")
-	if _, _, err := openSecurityStores(ctx, db, keyPath); err == nil {
+	if _, err := openSecurityStores(ctx, db, keyPath); err == nil {
 		t.Fatal("unbound database with existing token was accepted")
 	}
 	if _, err := os.Stat(keyPath); !os.IsNotExist(err) {

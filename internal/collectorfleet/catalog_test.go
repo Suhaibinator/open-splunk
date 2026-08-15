@@ -119,7 +119,7 @@ func TestCatalogGetIsTenantScopedAndProjectsExactLiveness(t *testing.T) {
 		"tenant-a",
 		"shared-collector",
 		"tenant-a.example",
-		stringPointerForCatalogTest("Tenant A"),
+		new("Tenant A"),
 		base,
 		17,
 		"audit",
@@ -131,7 +131,7 @@ func TestCatalogGetIsTenantScopedAndProjectsExactLiveness(t *testing.T) {
 		"tenant-b",
 		"shared-collector",
 		"tenant-b.example",
-		stringPointerForCatalogTest("Tenant B"),
+		new("Tenant B"),
 		base.Add(time.Minute),
 		29,
 		"main",
@@ -311,28 +311,28 @@ func TestCatalogListSortsAndPaginatesWithoutDuplicatesOrOmissions(
 		},
 		{
 			id:          "collector-c",
-			displayName: stringPointerForCatalogTest("Alpha"),
+			displayName: new("Alpha"),
 			hostname:    "beta",
 			lastSeen:    base.Add(3 * time.Minute),
 			queueBytes:  10,
 		},
 		{
 			id:          "collector-d",
-			displayName: stringPointerForCatalogTest("Alpha"),
+			displayName: new("Alpha"),
 			hostname:    "beta",
 			lastSeen:    base.Add(3 * time.Minute),
 			queueBytes:  20,
 		},
 		{
 			id:          "collector-e",
-			displayName: stringPointerForCatalogTest("Zulu"),
+			displayName: new("Zulu"),
 			hostname:    "",
 			lastSeen:    base.Add(5 * time.Minute),
 			queueBytes:  0,
 		},
 		{
 			id:          "collector-f",
-			displayName: stringPointerForCatalogTest("Beta"),
+			displayName: new("Beta"),
 			hostname:    "beta",
 			lastSeen:    base.Add(4 * time.Minute),
 			queueBytes:  20,
@@ -1366,7 +1366,7 @@ func TestCatalogHydratesCompleteDetachedChildren(t *testing.T) {
 		scope.TenantID,
 		"collector-children",
 		"children.example",
-		stringPointerForCatalogTest("Child Snapshot"),
+		new("Child Snapshot"),
 		time.Date(2026, 7, 28, 21, 0, 0, 0, time.UTC),
 		1234,
 		"audit",
@@ -1699,7 +1699,7 @@ func TestCatalogListReadsCoherentHeartbeatSnapshotsUnderWAL(t *testing.T) {
 	}()
 	close(start)
 
-	for iteration := 0; iteration < int(finalSequence); iteration++ {
+	for iteration := range int(finalSequence) {
 		page, err := catalog.List(
 			context.Background(),
 			scope,
@@ -1902,7 +1902,7 @@ func listAllCatalogTestPages(
 	var result []CatalogEntry
 	var revision uint64
 	seenTokens := make(map[string]struct{})
-	for pageNumber := 0; pageNumber < 100; pageNumber++ {
+	for pageNumber := range 100 {
 		page, err := catalog.List(
 			context.Background(),
 			scope,
@@ -2131,8 +2131,4 @@ func installCatalogRuntimeCorruption(
 	); err != nil {
 		t.Fatalf("restore check constraints: %v", err)
 	}
-}
-
-func stringPointerForCatalogTest(value string) *string {
-	return &value
 }

@@ -9,6 +9,8 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
+const arithmeticMembershipSource = `index=gradethis | eval score=-(left + right*2) | where score NOT IN (low+1, mid, high/2)`
+
 func TestBuildArithmeticRejectsFixedStringPlusAtOperandRange(t *testing.T) {
 	t.Parallel()
 
@@ -38,8 +40,7 @@ func TestBuildArithmeticRejectsFixedStringPlusAtOperandRange(t *testing.T) {
 func TestBuildArithmeticAndMembershipPreservesClosedIRRangesAndReadOrder(t *testing.T) {
 	t.Parallel()
 
-	const source = `index=gradethis | eval score=-(left + right*2) | where score NOT IN (low+1, mid, high/2)`
-	parsed := mustParse(t, source)
+	parsed := mustParse(t, arithmeticMembershipSource)
 	where := parsed.Commands[1].(*spl.WhereCommand)
 	sourceMembership := where.Expression.(*spl.WhereMembershipExpr)
 
@@ -60,16 +61,16 @@ func TestBuildArithmeticAndMembershipPreservesClosedIRRangesAndReadOrder(t *test
 	if !ok || multiply.Op != ScalarBinaryOpMultiply {
 		t.Fatalf("addition right = %#v, want multiplication", add.Right)
 	}
-	assertPlanExpressionText(t, source, unary, `-(left + right*2)`)
-	assertPlanExpressionText(t, source, add, `(left + right*2)`)
-	assertPlanExpressionText(t, source, multiply, `right*2`)
+	assertPlanExpressionText(t, unary, `-(left + right*2)`)
+	assertPlanExpressionText(t, add, `(left + right*2)`)
+	assertPlanExpressionText(t, multiply, `right*2`)
 
 	filter := logical.Operators[len(logical.Operators)-1].(*Filter)
 	membership, ok := filter.Expression.(*MembershipExpression)
 	if !ok || !membership.Negated || len(membership.Candidates) != 3 {
 		t.Fatalf("where expression = %#v, want three-candidate NOT IN", filter.Expression)
 	}
-	assertPlanExpressionText(t, source, membership, `score NOT IN (low+1, mid, high/2)`)
+	assertPlanExpressionText(t, membership, `score NOT IN (low+1, mid, high/2)`)
 	if first, ok := membership.Candidates[0].(*ScalarBinaryExpression); !ok || first.Op != ScalarBinaryOpAdd {
 		t.Fatalf("first candidate = %#v, want addition", membership.Candidates[0])
 	}
@@ -603,17 +604,16 @@ func arithmeticMembershipTestRange(start, end int) spl.Range {
 
 func assertPlanExpressionText(
 	t *testing.T,
-	source string,
 	expression interface{ SourceRange() spl.Range },
 	want string,
 ) {
 	t.Helper()
 	sourceRange := expression.SourceRange()
-	if sourceRange.Start.Offset < 0 || sourceRange.End.Offset > len(source) ||
+	if sourceRange.Start.Offset < 0 || sourceRange.End.Offset > len(arithmeticMembershipSource) ||
 		sourceRange.End.Offset <= sourceRange.Start.Offset {
 		t.Fatalf("invalid source range %#v", sourceRange)
 	}
-	if got := source[sourceRange.Start.Offset:sourceRange.End.Offset]; got != want {
+	if got := arithmeticMembershipSource[sourceRange.Start.Offset:sourceRange.End.Offset]; got != want {
 		t.Fatalf("source range text = %q, want %q", got, want)
 	}
 	if strings.TrimSpace(want) == "" {

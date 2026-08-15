@@ -386,15 +386,14 @@ func runBackendLoadConcurrentSearches(
 	cohort.CollectedAt = time.Now()
 	if err := validateBackendLoadConcurrentSearches(
 		cohort.Searches,
-		backendLoadConcurrentJobs,
+
 		backendLoadSearchExpectation{
 			MinimumEvents:  plan.WarmEvents,
 			MaximumEvents:  plan.eventCount(),
 			MaximumUserIDs: plan.Cardinality,
 			FixtureStart:   fixtureStart,
 			EventInterval:  plan.interval(),
-		},
-	); err != nil {
+		}); err != nil {
 		t.Fatal(err)
 	}
 	cohort.LifecycleStartedAt = cohort.Searches[0].CreatedAt
@@ -438,14 +437,13 @@ func validBackendLoadTimestamp(t *testing.T, name string, value *timestamppb.Tim
 
 func validateBackendLoadConcurrentSearches(
 	observations []backendLoadSearchObservation,
-	expectedCount int,
 	expectation backendLoadSearchExpectation,
 ) error {
-	if expectedCount <= 0 || len(observations) != expectedCount {
+	if len(observations) != backendLoadConcurrentJobs {
 		return fmt.Errorf(
 			"concurrent backend load searches = %d, want %d",
 			len(observations),
-			expectedCount,
+			backendLoadConcurrentJobs,
 		)
 	}
 	jobIDs := make(map[string]struct{}, len(observations))
@@ -686,18 +684,16 @@ func TestBackendLoadConcurrentSearchValidationRejectsInconsistentSnapshots(t *te
 	}
 	if err := validateBackendLoadConcurrentSearches(
 		observations,
-		backendLoadConcurrentJobs,
-		expectation,
-	); err != nil {
+
+		expectation); err != nil {
 		t.Fatalf("valid serial lifecycle observations: %v", err)
 	}
 
 	observations[3].EventIDs--
 	if err := validateBackendLoadConcurrentSearches(
 		observations,
-		backendLoadConcurrentJobs,
-		expectation,
-	); err == nil || !strings.Contains(err.Error(), "unique event/request IDs") {
+
+		expectation); err == nil || !strings.Contains(err.Error(), "unique event/request IDs") {
 		t.Fatalf("inconsistent concurrent-search validation error = %v, want ID rejection", err)
 	}
 	observations[3].EventIDs++
@@ -705,9 +701,8 @@ func TestBackendLoadConcurrentSearchValidationRejectsInconsistentSnapshots(t *te
 	observations[2].LastEventAt = fixtureStart.Add(12 * time.Millisecond)
 	if err := validateBackendLoadConcurrentSearches(
 		observations,
-		backendLoadConcurrentJobs,
-		expectation,
-	); err == nil || !strings.Contains(err.Error(), "exact source prefix") {
+
+		expectation); err == nil || !strings.Contains(err.Error(), "exact source prefix") {
 		t.Fatalf("gapped concurrent-search validation error = %v, want exact-prefix rejection", err)
 	}
 }

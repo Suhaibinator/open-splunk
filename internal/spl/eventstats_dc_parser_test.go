@@ -56,7 +56,7 @@ func TestParseEventStatsDistinctCountAcceptsMaximumGroupingFields(t *testing.T) 
 	t.Parallel()
 
 	groups := make([]string, 0, MaximumStatsGroupFields)
-	for index := 0; index < MaximumStatsGroupFields; index++ {
+	for index := range MaximumStatsGroupFields {
 		groups = append(groups, fmt.Sprintf("field%d", index))
 	}
 	source := "index=main | eventstats dc(user) AS unique_users BY " +

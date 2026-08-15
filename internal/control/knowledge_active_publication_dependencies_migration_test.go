@@ -215,12 +215,12 @@ func TestKnowledgeActivePublicationDependenciesMigrationGuardsTargetVersionAdvan
 		if err != nil {
 			t.Fatalf("begin blocked advance: %v", err)
 		}
-		digest, err := stageKnowledge0033ActiveUpdate(tx, "ko-version-target", 2, 20, "", 0)
+		digest, err := stageKnowledge0033ActiveUpdate(tx, "ko-version-target", 20)
 		if err != nil {
 			_ = tx.Rollback()
 			t.Fatalf("stage target update: %v", err)
 		}
-		err = publishKnowledge0033ActiveUpdate(tx, "ko-version-target", 2, 20, digest)
+		err = publishKnowledge0033ActiveUpdate(tx, "ko-version-target", 20, digest)
 		if err == nil || !strings.Contains(err.Error(), "pins a prior target version") {
 			_ = tx.Rollback()
 			t.Fatalf("blocked target advance error = %v", err)
@@ -259,14 +259,13 @@ func TestKnowledgeActivePublicationDependenciesMigrationGuardsTargetVersionAdvan
 			_ = tx.Rollback()
 			t.Fatalf("publish dependent disable: %v", err)
 		}
-		targetDigest, err := stageKnowledge0033ActiveUpdate(tx, "ko-version-target", 2, 21, "", 0)
+		targetDigest, err := stageKnowledge0033ActiveUpdate(tx, "ko-version-target", 21)
 		if err != nil {
 			_ = tx.Rollback()
 			t.Fatalf("stage target update: %v", err)
 		}
 		if err := publishKnowledge0033ActiveUpdate(
-			tx, "ko-version-target", 2, 21, targetDigest,
-		); err != nil {
+			tx, "ko-version-target", 21, targetDigest); err != nil {
 			_ = tx.Rollback()
 			t.Fatalf("publish target while dependent is disabled: %v", err)
 		}
@@ -313,25 +312,23 @@ func TestKnowledgeActivePublicationDependenciesMigrationGuardsTargetVersionAdvan
 		if err != nil {
 			t.Fatalf("begin historical probe: %v", err)
 		}
-		targetDigest, err := stageKnowledge0033ActiveUpdate(tx, "ko-version-target", 2, 20, "", 0)
+		targetDigest, err := stageKnowledge0033ActiveUpdate(tx, "ko-version-target", 20)
 		if err != nil {
 			_ = tx.Rollback()
 			t.Fatalf("stage target update: %v", err)
 		}
-		dependentDigest, err := stageKnowledge0033ActiveUpdate(tx, "ko-version-dependent", 2, 21, "", 0)
+		dependentDigest, err := stageKnowledge0033ActiveUpdate(tx, "ko-version-dependent", 21)
 		if err != nil {
 			_ = tx.Rollback()
 			t.Fatalf("stage dependency-free current version: %v", err)
 		}
 		if err := publishKnowledge0033ActiveUpdate(
-			tx, "ko-version-dependent", 2, 21, dependentDigest,
-		); err != nil {
+			tx, "ko-version-dependent", 21, dependentDigest); err != nil {
 			_ = tx.Rollback()
 			t.Fatalf("publish dependency-free current version: %v", err)
 		}
 		if err := publishKnowledge0033ActiveUpdate(
-			tx, "ko-version-target", 2, 20, targetDigest,
-		); err != nil {
+			tx, "ko-version-target", 20, targetDigest); err != nil {
 			_ = tx.Rollback()
 			t.Fatalf("historical pin blocked target advance: %v", err)
 		}
@@ -365,14 +362,13 @@ func TestKnowledgeActivePublicationDependenciesMigrationGuardsTargetVersionAdvan
 		if err != nil {
 			t.Fatalf("begin nonactive probe: %v", err)
 		}
-		targetDigest, err := stageKnowledge0033ActiveUpdate(tx, "ko-version-target", 2, 20, "", 0)
+		targetDigest, err := stageKnowledge0033ActiveUpdate(tx, "ko-version-target", 20)
 		if err != nil {
 			_ = tx.Rollback()
 			t.Fatalf("stage target update: %v", err)
 		}
 		if err := publishKnowledge0033ActiveUpdate(
-			tx, "ko-version-target", 2, 20, targetDigest,
-		); err != nil {
+			tx, "ko-version-target", 20, targetDigest); err != nil {
 			_ = tx.Rollback()
 			t.Fatalf("nonactive pin blocked target advance: %v", err)
 		}
@@ -615,11 +611,9 @@ func publishKnowledge0033RetainedDefinitionVersion(
 func stageKnowledge0033ActiveUpdate(
 	tx *sql.Tx,
 	objectID string,
-	version int,
 	timestamp int64,
-	targetObjectID string,
-	targetVersion int,
 ) ([]byte, error) {
+	const version = 2
 	body := []byte(fmt.Sprintf("knowledge-0033/%s/%d", objectID, version))
 	digest := sha256.Sum256(body)
 	if _, err := tx.ExecContext(context.Background(), `
@@ -628,10 +622,6 @@ func stageKnowledge0033ActiveUpdate(
 			definition_bytes, created_at_unix_micro
 		) VALUES ('tenant-a', ?, ?, ?, ?)`, digest[:], body, len(body), timestamp); err != nil {
 		return nil, fmt.Errorf("insert update definition: %w", err)
-	}
-	dependencyCount := 0
-	if targetObjectID != "" {
-		dependencyCount = 1
 	}
 	if _, err := tx.ExecContext(context.Background(), `
 		INSERT INTO knowledge_object_versions (
@@ -643,24 +633,13 @@ func stageKnowledge0033ActiveUpdate(
 			'tenant-a', ?, ?, ?, 'owner-a', 'field_extraction', ?,
 			'private', 'active', ?, ?, 'update', NULL, ?
 		)`, objectID, version, knowledgeMigrationTestAppID, objectID,
-		digest[:], dependencyCount, timestamp); err != nil {
+		digest[:], 0, timestamp); err != nil {
 		return nil, fmt.Errorf("insert active update version: %w", err)
-	}
-	if targetObjectID != "" {
-		if _, err := tx.ExecContext(context.Background(), `
-			INSERT INTO knowledge_object_dependencies (
-				tenant_id, source_object_id, source_object_version, ordinal,
-				target_kind, target_object_id, target_object_version, dependency_role
-			) VALUES (
-				'tenant-a', ?, ?, 0, 'object', ?, ?, 'field_input'
-			)`, objectID, version, targetObjectID, targetVersion); err != nil {
-			return nil, fmt.Errorf("insert active update dependency: %w", err)
-		}
 	}
 	if _, err := tx.ExecContext(context.Background(), `
 		INSERT INTO knowledge_object_dependency_seals (
 			tenant_id, knowledge_object_id, object_version, dependency_count
-		) VALUES ('tenant-a', ?, ?, ?)`, objectID, version, dependencyCount); err != nil {
+		) VALUES ('tenant-a', ?, ?, 0)`, objectID, version); err != nil {
 		return nil, fmt.Errorf("seal active update dependencies: %w", err)
 	}
 	if _, err := tx.ExecContext(context.Background(), `
@@ -692,10 +671,10 @@ func stageKnowledge0033ActiveUpdate(
 func publishKnowledge0033ActiveUpdate(
 	tx *sql.Tx,
 	objectID string,
-	version int,
 	timestamp int64,
 	digest []byte,
 ) error {
+	const version = 2
 	result, err := tx.ExecContext(context.Background(), `
 		UPDATE knowledge_objects
 		SET current_version = ?, definition_digest = ?, updated_at_unix_micro = ?

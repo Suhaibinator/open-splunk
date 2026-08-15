@@ -269,30 +269,20 @@ function tokenizeSearchExpression(source: string): SearchExpressionToken[] {
   return tokens;
 }
 
-interface IndexExpressionAnalysis {
-  selectors: string[];
-  exhaustivelyConstrained: boolean;
-}
-
-function mergeIndexExpressionAnalysis(
-  left: IndexExpressionAnalysis,
-  right: IndexExpressionAnalysis,
+function mergeIndexExpressionExhaustiveness(
+  left: boolean,
+  right: boolean,
   operator: "and" | "or",
   negated: boolean,
-): IndexExpressionAnalysis {
+): boolean {
   // De Morgan flips the guarantee rule beneath a negated group.
   const effectiveOperator = negated
     ? operator === "and" ? "or" : "and"
     : operator;
-  return {
-    selectors: [...left.selectors, ...right.selectors],
-    exhaustivelyConstrained: effectiveOperator === "and"
-      ? left.exhaustivelyConstrained || right.exhaustivelyConstrained
-      : left.exhaustivelyConstrained && right.exhaustivelyConstrained,
-  };
+  return effectiveOperator === "and" ? left || right : left && right;
 }
 
-function analyzeIndexExpression(source: string): IndexExpressionAnalysis {
+function analyzeIndexExpression(source: string, selectors: Set<string>): boolean {
   const tokens = tokenizeSearchExpression(source);
   let cursor = 0;
 
@@ -303,33 +293,33 @@ function analyzeIndexExpression(source: string): IndexExpressionAnalysis {
       && !(token.kind === "word" && ["and", "or"].includes(token.text.toLowerCase()));
   }
 
-  function parseAnd(negated: boolean): IndexExpressionAnalysis {
+  function parseAnd(negated: boolean): boolean {
     let result = parseOr(negated);
     while (cursor < tokens.length && tokens[cursor]?.kind !== "right-paren") {
       const token = tokens[cursor];
       const explicitAnd = token?.kind === "word" && token.text.toLowerCase() === "and";
       if (explicitAnd) cursor += 1;
       if (!canStartOperand()) break;
-      result = mergeIndexExpressionAnalysis(result, parseOr(negated), "and", negated);
+      result = mergeIndexExpressionExhaustiveness(result, parseOr(negated), "and", negated);
     }
     return result;
   }
 
-  function parseOr(negated: boolean): IndexExpressionAnalysis {
+  function parseOr(negated: boolean): boolean {
     let result = parseUnary(negated);
     while (
       tokens[cursor]?.kind === "word"
       && tokens[cursor]?.text.toLowerCase() === "or"
     ) {
       cursor += 1;
-      result = mergeIndexExpressionAnalysis(result, parseUnary(negated), "or", negated);
+      result = mergeIndexExpressionExhaustiveness(result, parseUnary(negated), "or", negated);
     }
     return result;
   }
 
-  function parseUnary(negated: boolean): IndexExpressionAnalysis {
+  function parseUnary(negated: boolean): boolean {
     const token = tokens[cursor];
-    if (token === undefined) return { selectors: [], exhaustivelyConstrained: false };
+    if (token === undefined) return false;
     if (token.kind === "word" && token.text.toLowerCase() === "not") {
       cursor += 1;
       return parseUnary(!negated);
@@ -347,26 +337,19 @@ function analyzeIndexExpression(source: string): IndexExpressionAnalysis {
       && token.text === "index"
       && operator?.kind === "equals"
       && (value?.kind === "word" || value?.kind === "string");
-    const selectors = isPositiveIndexEquality && value.text.trim().length > 0
-      ? [value.text.trim()]
-      : [];
+    if (isPositiveIndexEquality && value.text.trim().length > 0) {
+      selectors.add(value.text.trim());
+    }
     cursor += operator?.kind === "equals" || operator?.kind === "not-equals" ? 3 : 1;
-    return {
-      selectors,
-      exhaustivelyConstrained: isPositiveIndexEquality,
-    };
+    return isPositiveIndexEquality;
   }
 
-  if (tokens.length === 0) return { selectors: [], exhaustivelyConstrained: false };
-  const result = parseAnd(false);
-  return {
-    selectors: [...new Set(result.selectors)],
-    exhaustivelyConstrained: result.exhaustivelyConstrained,
-  };
+  return tokens.length > 0 && parseAnd(false);
 }
 
-function positiveIndexSelectorsFromExpression(source: string): string[] {
-  return analyzeIndexExpression(source).selectors;
+export interface SPLIndexScopeAnalysis {
+  selectors: string[];
+  exhaustivelyConstrained: boolean;
 }
 
 function stageRedefinesOrClosesIndex(command: { name: string; expression: string }): boolean {
@@ -383,22 +366,32 @@ function stageRedefinesOrClosesIndex(command: { name: string; expression: string
 }
 
 /**
- * Reports whether the eligible SPL filters guarantee that every matching row
- * is constrained by at least one positive exact `index=` predicate.
+ * Collects positive exact `index=` predicates and reports whether the eligible
+ * SPL filters constrain every matching row to at least one of them.
  */
-export function splIndexScopeIsExhaustive(spl: string): boolean {
+export function analyzeSPLIndexScope(spl: string): SPLIndexScopeAnalysis {
   const stages = searchStages(spl);
-  let exhaustive = analyzeIndexExpression(stages[0] ?? "").exhaustivelyConstrained;
+  const selectors = new Set<string>();
+  let exhaustivelyConstrained = analyzeIndexExpression(stages[0] ?? "", selectors);
   for (const stage of stages.slice(1)) {
     const command = stageCommand(stage);
     if (command === null) continue;
     if (stageRedefinesOrClosesIndex(command)) break;
     if (command.name === "search") {
       // Pipeline search stages compose with the prior filter using AND.
-      exhaustive ||= analyzeIndexExpression(command.expression).exhaustivelyConstrained;
+      const stageIsExhaustive = analyzeIndexExpression(command.expression, selectors);
+      exhaustivelyConstrained ||= stageIsExhaustive;
     }
   }
-  return exhaustive;
+  return { selectors: [...selectors], exhaustivelyConstrained };
+}
+
+/**
+ * Reports whether the eligible SPL filters guarantee that every matching row
+ * is constrained by at least one positive exact `index=` predicate.
+ */
+export function splIndexScopeIsExhaustive(spl: string): boolean {
+  return analyzeSPLIndexScope(spl).exhaustivelyConstrained;
 }
 
 function stageCommand(stage: string): { name: string; expression: string } | null {
@@ -416,17 +409,7 @@ function stageCommand(stage: string): { name: string; expression: string } | nul
  * can redefine `index` or closes the event schema.
  */
 export function indexSelectorsFromSPL(spl: string): string[] {
-  const stages = searchStages(spl);
-  const selectors = positiveIndexSelectorsFromExpression(stages[0] ?? "");
-  for (const stage of stages.slice(1)) {
-    const command = stageCommand(stage);
-    if (command === null) continue;
-    if (stageRedefinesOrClosesIndex(command)) break;
-    if (command.name === "search") {
-      selectors.push(...positiveIndexSelectorsFromExpression(command.expression));
-    }
-  }
-  return [...new Set(selectors)];
+  return analyzeSPLIndexScope(spl).selectors;
 }
 
 function uniqueIndexNames(indexes: BrowserIndexModel[]): string[] {

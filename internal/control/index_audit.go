@@ -3,10 +3,10 @@ package control
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"strings"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"gorm.io/gorm"
 )
 
@@ -85,13 +85,13 @@ func NewAuditedIndexAdministration(
 			ErrInvalidArgument,
 		)
 	}
-	if options.Appender == nil || isNilMutationAuditAppender(options.Appender) {
+	if nilcheck.IsNil(options.Appender) {
 		return nil, fmt.Errorf(
 			"%w: index audit appender is required",
 			ErrInvalidArgument,
 		)
 	}
-	if options.Validator != nil && isNilMutationAuditAppender(options.Validator) {
+	if options.Validator != nil && nilcheck.IsNil(options.Validator) {
 		return nil, fmt.Errorf(
 			"%w: index-name admission validator is nil",
 			ErrInvalidArgument,
@@ -103,17 +103,6 @@ func NewAuditedIndexAdministration(
 		appender:  options.Appender,
 		validator: options.Validator,
 	}, nil
-}
-
-func isNilMutationAuditAppender(appender any) bool {
-	value := reflect.ValueOf(appender)
-	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map,
-		reflect.Pointer, reflect.Slice:
-		return value.IsNil()
-	default:
-		return false
-	}
 }
 
 func (administration *AuditedIndexAdministration) publish(

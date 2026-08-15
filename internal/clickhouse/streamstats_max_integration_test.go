@@ -493,11 +493,10 @@ func testStreamStatsMaximumAgainstClickHouse(
 	assertPhysicalString := func(
 		name string,
 		query CompiledQuery,
-		field string,
 		want string,
 	) {
 		t.Helper()
-		column := quoteIdentifier(field)
+		column := quoteIdentifier("low")
 		physical := "dynamicType(" + column + ")"
 		control := "SELECT " + physical + ", if(" + physical +
 			" = 'String', dynamicElement(" + column +
@@ -511,7 +510,7 @@ func testStreamStatsMaximumAgainstClickHouse(
 			t.Fatalf("execute %s: %v\nSQL: %s", name, queryErr, query.SQL)
 		}
 		if gotPhysical != "String" || got != want {
-			t.Fatalf("%s %s = %q/%q, want String/%q", name, field, gotPhysical, got, want)
+			t.Fatalf("%s low = %q/%q, want String/%q", name, gotPhysical, got, want)
 		}
 	}
 
@@ -576,7 +575,6 @@ func testStreamStatsMaximumAgainstClickHouse(
 	assertPhysicalString(
 		"equal lexical streamstats minimum prefers String",
 		compile(tieStreamSource+` | table low`),
-		"low",
 		string(rawMinimum),
 	)
 	tieStatsSource := bytesBase +
@@ -590,7 +588,6 @@ func testStreamStatsMaximumAgainstClickHouse(
 	assertPhysicalString(
 		"equal lexical transforming minimum prefers String",
 		compile(tieStatsSource+` | table low`),
-		"low",
 		string(rawMinimum),
 	)
 	emptyTieSource := bytesBase + ` | sort 0 +event_id` +
@@ -605,7 +602,6 @@ func testStreamStatsMaximumAgainstClickHouse(
 	assertPhysicalString(
 		"empty lexical streamstats minimum prefers String",
 		compile(emptyTieSource+` | table low`),
-		"low",
 		"",
 	)
 	rawTieBase := `index=compiler source="streamstats-max-raw-tie-fixture"`
@@ -621,7 +617,6 @@ func testStreamStatsMaximumAgainstClickHouse(
 	assertPhysicalString(
 		"equal raw streamstats minimum prefers text provenance",
 		compile(rawTieStreamSource+` | table low`),
-		"low",
 		string(rawMinimum),
 	)
 	rawTieStatsSource := rawTieBase + ` | stats max(_raw) AS high min(_raw) AS low`
@@ -634,7 +629,6 @@ func testStreamStatsMaximumAgainstClickHouse(
 	assertPhysicalString(
 		"equal raw transforming minimum prefers text provenance",
 		compile(rawTieStatsSource+` | table low`),
-		"low",
 		string(rawMinimum),
 	)
 	rawTieEventSource := rawTieBase + ` | eventstats max(_raw) AS high` +
@@ -648,7 +642,6 @@ func testStreamStatsMaximumAgainstClickHouse(
 	assertPhysicalString(
 		"equal raw eventstats minimum prefers text provenance",
 		compile(rawTieEventSource+` | table low`),
-		"low",
 		string(rawMinimum),
 	)
 	for _, test := range []struct {

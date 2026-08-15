@@ -10,6 +10,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/hechttp"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
+	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/server"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
 )
@@ -42,7 +43,7 @@ func newRuntimeHECOperations(
 	sequencer runtimeHECSequencer,
 	store runtimeHECStore,
 ) (*runtimeHECOperations, error) {
-	if metrics == nil || nilRuntimeDependency(sequencer) || nilRuntimeDependency(store) {
+	if metrics == nil || nilcheck.IsNil(sequencer) || nilcheck.IsNil(store) {
 		return nil, errors.New("compose HEC operations: complete dependencies are required")
 	}
 	return &runtimeHECOperations{
@@ -57,7 +58,7 @@ func (operations *runtimeHECOperations) HECOperationalSnapshot(
 	ctx context.Context,
 ) (server.HECOperationalSnapshot, error) {
 	if operations == nil || operations.metrics == nil ||
-		nilRuntimeDependency(operations.sequencer) || nilRuntimeDependency(operations.store) {
+		nilcheck.IsNil(operations.sequencer) || nilcheck.IsNil(operations.store) {
 		return server.HECOperationalSnapshot{}, errors.New("HEC operations are unavailable")
 	}
 	durable, err := operations.sequencer.HECOperationalHealth(ctx)
@@ -121,8 +122,8 @@ type runtimeHECConfig struct {
 // returns an error rather than registering JSON without raw, ACK, health, or
 // the shared durable admission boundary.
 func newRuntimeHECHandler(config runtimeHECConfig) (*hechttp.Handler, error) {
-	if nilRuntimeDependency(config.Next) || nilRuntimeDependency(config.Authenticator) ||
-		nilRuntimeDependency(config.Store) || nilRuntimeDependency(config.Sequencer) {
+	if nilcheck.IsNil(config.Next) || nilcheck.IsNil(config.Authenticator) ||
+		nilcheck.IsNil(config.Store) || nilcheck.IsNil(config.Sequencer) {
 		return nil, errors.New("compose HEC runtime: complete dependencies are required")
 	}
 	admission, err := ingest.NewAdmissionPreparer(ingest.AdmissionConfig{

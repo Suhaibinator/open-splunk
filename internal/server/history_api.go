@@ -43,22 +43,22 @@ func (handler *apiHandler) searchHistoryRoutes(noAuth router.AuthLevel, smallReq
 		newForwardCompatibleProtoRoute[*opensplunkv1.GetSearchHistoryEntryRequest, *opensplunkv1.GetSearchHistoryEntryResponse](router.RouteConfig[*opensplunkv1.GetSearchHistoryEntryRequest, *opensplunkv1.GetSearchHistoryEntryResponse]{
 			Path: "/search/history/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunkv1.GetSearchHistoryEntryRequest, *opensplunkv1.GetSearchHistoryEntryResponse](), Handler: handler.getSearchHistoryEntry,
-			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.GetSearchHistoryEntryRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
+			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
 		newForwardCompatibleProtoRoute[*opensplunkv1.ListSearchHistoryRequest, *serializedSearchHistoryListResponse](router.RouteConfig[*opensplunkv1.ListSearchHistoryRequest, *serializedSearchHistoryListResponse]{
 			Path: "/search/history/list", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedSearchHistoryListCodec(), Handler: handler.listSearchHistory,
-			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.ListSearchHistoryRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
+			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
 		newForwardCompatibleProtoRoute[*opensplunkv1.DeleteSearchHistoryEntryRequest, *opensplunkv1.DeleteSearchHistoryEntryResponse](router.RouteConfig[*opensplunkv1.DeleteSearchHistoryEntryRequest, *opensplunkv1.DeleteSearchHistoryEntryResponse]{
 			Path: "/search/history/delete", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunkv1.DeleteSearchHistoryEntryRequest, *opensplunkv1.DeleteSearchHistoryEntryResponse](), Handler: handler.deleteSearchHistoryEntry,
-			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.DeleteSearchHistoryEntryRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
+			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
 		newForwardCompatibleProtoRoute[*opensplunkv1.ClearSearchHistoryRequest, *opensplunkv1.ClearSearchHistoryResponse](router.RouteConfig[*opensplunkv1.ClearSearchHistoryRequest, *opensplunkv1.ClearSearchHistoryResponse]{
 			Path: "/search/history/clear", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunkv1.ClearSearchHistoryRequest, *opensplunkv1.ClearSearchHistoryResponse](), Handler: handler.clearSearchHistory,
-			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.ClearSearchHistoryRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
+			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
 	}
 }
@@ -459,13 +459,13 @@ func historyPageResponse(result searchhistory.ListResult, includeTotal bool) (*o
 		if len(*result.NextPageToken) == 0 || len(*result.NextPageToken) > maximumHistoryPageTokenBytes || !utf8.ValidString(*result.NextPageToken) || strings.TrimSpace(*result.NextPageToken) != *result.NextPageToken {
 			return nil, errors.New("search history service returned an invalid page token")
 		}
-		page.NextPageToken = stringPointer(*result.NextPageToken)
+		page.NextPageToken = new(*result.NextPageToken)
 	}
 	if result.TotalSize != nil {
 		if !includeTotal || !result.TotalSizeExact {
 			return nil, errors.New("search history service returned an unexpected total")
 		}
-		page.TotalSize = uint64Pointer(*result.TotalSize)
+		page.TotalSize = new(*result.TotalSize)
 		page.TotalSizeExact = true
 	} else if result.TotalSizeExact || includeTotal {
 		return nil, errors.New("search history service omitted a requested total")

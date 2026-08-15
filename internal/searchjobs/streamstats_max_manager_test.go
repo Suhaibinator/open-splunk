@@ -101,7 +101,7 @@ func TestManagerRetainsReplacingAndStackedStreamStatsMaximumResults(t *testing.T
 			t.Fatalf("streamstats maximum service at row %d = %q/%v", index, got, ok)
 		}
 	}
-	for index := 0; index < 3; index++ {
+	for index := range 3 {
 		if !page.Rows[index].Values[2].IsNull() || !page.Rows[index].Values[3].IsNull() {
 			t.Fatalf("empty maximum frame at row %d = %#v", index, page.Rows[index])
 		}

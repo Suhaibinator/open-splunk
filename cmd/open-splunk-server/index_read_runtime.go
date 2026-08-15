@@ -7,6 +7,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	internalclickhouse "github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
+	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 )
 
@@ -19,7 +20,7 @@ func newRuntimeQueryExecutor(
 	config queryexec.Config,
 	readAdmission indexread.Admission,
 ) (*queryexec.Executor, error) {
-	if nilRuntimeDependency(readAdmission) {
+	if nilcheck.IsNil(readAdmission) {
 		return nil, errors.New(
 			"create runtime query executor: index read admission is required",
 		)
@@ -40,7 +41,7 @@ func newRuntimeIndexStatisticsReader(
 	config internalclickhouse.IndexStatisticsConfig,
 	readAdmission indexread.Admission,
 ) (*internalclickhouse.IndexStatisticsReader, error) {
-	if nilRuntimeDependency(readAdmission) {
+	if nilcheck.IsNil(readAdmission) {
 		return nil, errors.New(
 			"create runtime index statistics reader: index read admission is required",
 		)

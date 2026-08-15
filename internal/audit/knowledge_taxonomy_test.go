@@ -124,7 +124,7 @@ func TestKnowledgeAuditEventsPersistAndSQLiteRejectsTaxonomyForgeries(t *testing
 	t.Parallel()
 
 	ctx := context.Background()
-	_, database := openAuditTestDatabase(t)
+	database := openAuditTestDatabase(t)
 	store := newAuditTestStore(t, database, auditTestCursorKey())
 	events := []SuccessfulEvent{
 		{OccurredAt: auditTestTime, Action: ActionKnowledgeObjectCreate, TargetKind: TargetKindKnowledgeObject, TargetID: "ko-a", TargetVersion: 1, KnowledgeObject: knowledgeAuditTestMetadata()},
@@ -150,7 +150,7 @@ func TestKnowledgeAuditEventsPersistAndSQLiteRejectsTaxonomyForgeries(t *testing
 	page, err := store.List(ctx, "tenant-knowledge", ListRequest{
 		PageSize:      uint32(len(events)),
 		ActionFilters: allKnownAuditActions(),
-		TargetKind:    targetKindPointer(TargetKindKnowledgeObject),
+		TargetKind:    new(TargetKindKnowledgeObject),
 	})
 	if err != nil {
 		t.Fatalf("List(knowledge-object events): %v", err)
@@ -474,7 +474,7 @@ func TestKnowledgeAuditMetadataCorruptionFailsStartupListAndContinuation(t *test
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
-			_, database := openAuditTestDatabase(t)
+			database := openAuditTestDatabase(t)
 			store := newAuditTestStore(t, database, auditTestCursorKey())
 			for _, definition := range []SuccessfulEvent{
 				{
@@ -588,7 +588,7 @@ func TestKnowledgeAuditContinuationRejectsValidMetadataRewrite(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	_, database := openAuditTestDatabase(t)
+	database := openAuditTestDatabase(t)
 	store := newAuditTestStore(t, database, auditTestCursorKey())
 	for _, definition := range []SuccessfulEvent{
 		{

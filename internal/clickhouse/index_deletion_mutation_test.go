@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"reflect"
 	"strings"
 	"testing"
@@ -812,9 +813,7 @@ func (row fakeStoreQueryRow) Scan(destinations ...any) error {
 
 func cloneSettings(input clickhousedriver.Settings) clickhousedriver.Settings {
 	result := make(clickhousedriver.Settings, len(input))
-	for key, value := range input {
-		result[key] = value
-	}
+	maps.Copy(result, input)
 	return result
 }
 
@@ -822,9 +821,7 @@ func cloneParameters(
 	input clickhousedriver.Parameters,
 ) clickhousedriver.Parameters {
 	result := make(clickhousedriver.Parameters, len(input))
-	for key, value := range input {
-		result[key] = value
-	}
+	maps.Copy(result, input)
 	return result
 }
 

@@ -13,7 +13,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"reflect"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -23,6 +22,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/lookupasset"
 	"github.com/Suhaibinator/open-splunk/internal/lookupcatalog"
 	"github.com/Suhaibinator/open-splunk/internal/lookupdefinition"
+	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -86,7 +86,7 @@ type Service struct {
 }
 
 func New(config Config) (*Service, error) {
-	if nilDependency(config.Assets) || nilDependency(config.Catalog) {
+	if nilcheck.IsNil(config.Assets) || nilcheck.IsNil(config.Catalog) {
 		return nil, fmt.Errorf("%w: asset store and catalog are required", ErrInvalid)
 	}
 	key := config.CursorKey
@@ -106,7 +106,7 @@ func New(config Config) (*Service, error) {
 }
 
 func (service *Service) Ready() bool {
-	return service != nil && service.ready && !nilDependency(service.assets) && !nilDependency(service.catalog)
+	return service != nil && service.ready && !nilcheck.IsNil(service.assets) && !nilcheck.IsNil(service.catalog)
 }
 
 func (service *Service) Create(ctx context.Context, scope Scope, input *opensplunkv1.CreateLookupRequest) (*opensplunkv1.CreateLookupResponse, error) {
@@ -183,13 +183,12 @@ func (service *Service) Replace(ctx context.Context, scope Scope, input *openspl
 			return nil, classify(publishErr)
 		}
 		return &opensplunkv1.ReplaceLookupResponse{Lookup: cloneLookup(lookup)}, nil
-	} else {
-		normalized, normalizeErr := lookupdefinition.Normalize(input.GetDefinition(), current.Asset.Asset.Headers())
-		if normalizeErr != nil {
-			return nil, classify(normalizeErr)
-		}
-		definition = normalized.Definition
 	}
+	normalized, normalizeErr := lookupdefinition.Normalize(input.GetDefinition(), current.Asset.Asset.Headers())
+	if normalizeErr != nil {
+		return nil, classify(normalizeErr)
+	}
+	definition = normalized.Definition
 	lookup, err := service.catalog.Replace(ctx, lookupcatalog.ReplaceRequest{
 		TenantID: scope.TenantID, OwnerID: scope.OwnerID, LookupID: input.GetLookupId(),
 		ExpectedVersion: input.GetExpectedVersion(), Definition: definition, Asset: current.Asset,
@@ -291,7 +290,7 @@ func (service *Service) Preview(ctx context.Context, scope Scope, input *openspl
 	}
 	previewRows := min(asset.RowCount(), uint64(maximumRows))
 	response.Truncated = previewRows < asset.RowCount()
-	response.Rows = make([]*opensplunkv1.LookupPreviewRow, int(previewRows))
+	response.Rows = make([]*opensplunkv1.LookupPreviewRow, previewRows)
 	for index := range response.Rows {
 		values, ok := asset.Row(index)
 		if !ok {
@@ -384,7 +383,7 @@ func (service *Service) createPublished(
 	definition *opensplunkv1.LookupDefinition,
 ) (*opensplunkv1.Lookup, error) {
 	var lookup *opensplunkv1.Lookup
-	_, err := service.publishStaged(
+	err := service.publishStaged(
 		ctx,
 		scope,
 		asset,
@@ -422,7 +421,7 @@ func (service *Service) replacePublished(
 	definition *opensplunkv1.LookupDefinition,
 ) (*opensplunkv1.Lookup, error) {
 	var lookup *opensplunkv1.Lookup
-	_, err := service.publishStaged(
+	err := service.publishStaged(
 		ctx,
 		scope,
 		asset,
@@ -462,10 +461,10 @@ func (service *Service) publishStaged(
 	asset *lookupasset.Asset,
 	request lookupasset.PublishRequest,
 	finalize lookupasset.PublicationFinalizer,
-) (lookupasset.Version, error) {
+) error {
 	stage, err := service.assets.StageCSV(ctx, lookupasset.StageRequest{TenantID: scope.TenantID, OwnerID: scope.OwnerID, Asset: asset})
 	if err != nil {
-		return lookupasset.Version{}, err
+		return err
 	}
 	consumed := false
 	defer func() {
@@ -476,12 +475,12 @@ func (service *Service) publishStaged(
 	request.TenantID = scope.TenantID
 	request.OwnerID = scope.OwnerID
 	request.StageID = stage.StageID
-	published, err := service.assets.PublishAtomic(ctx, request, finalize)
+	_, err = service.assets.PublishAtomic(ctx, request, finalize)
 	if err != nil {
-		return lookupasset.Version{}, err
+		return err
 	}
 	consumed = true
-	return published, nil
+	return nil
 }
 
 func prepareAssetDefinition(ctx context.Context, csvData []byte, definition *opensplunkv1.LookupDefinition) (*lookupasset.Asset, *opensplunkv1.LookupDefinition, error) {
@@ -588,13 +587,17 @@ func (request normalizedListRequest) fingerprint(scope Scope) [sha256.Size]byte 
 	writeFingerprintString(hash, request.text)
 	buffer := make([]byte, 8)
 	binary.BigEndian.PutUint32(buffer[:4], request.pageSize)
+	// Normalization validates all enum values before this fingerprint is built.
+	// #nosec G115 -- the accepted protobuf enum values fit in one byte.
 	buffer[4] = byte(request.sortBy)
+	// #nosec G115 -- the accepted protobuf enum values fit in one byte.
 	buffer[5] = byte(request.direction)
 	if request.includeTotal {
 		buffer[6] = 1
 	}
 	_, _ = hash.Write(buffer)
 	for _, state := range request.states {
+		// #nosec G115 -- normalization accepts only the bounded state enum values.
 		_, _ = hash.Write([]byte{byte(state)})
 	}
 	var result [sha256.Size]byte
@@ -606,6 +609,8 @@ type stringWriter interface{ Write([]byte) (int, error) }
 
 func writeFingerprintString(writer stringWriter, value string) {
 	length := make([]byte, 4)
+	// Request validation caps every fingerprint component well below MaxUint32.
+	// #nosec G115 -- validated string lengths fit in uint32.
 	binary.BigEndian.PutUint32(length, uint32(len(value)))
 	_, _ = writer.Write(length)
 	_, _ = writer.Write([]byte(value))
@@ -732,17 +737,17 @@ func classify(err error) error {
 	}
 	switch {
 	case errors.Is(err, lookupasset.ErrResourceLimit), errors.Is(err, lookupcatalog.ErrCapacity):
-		return fmt.Errorf("%w: %v", ErrResourceLimit, err)
+		return fmt.Errorf("%w: %s", ErrResourceLimit, err.Error())
 	case errors.Is(err, lookupcatalog.ErrNotFound):
-		return fmt.Errorf("%w: %v", ErrNotFound, err)
+		return fmt.Errorf("%w: %s", ErrNotFound, err.Error())
 	case errors.Is(err, lookupcatalog.ErrConflict):
-		return fmt.Errorf("%w: %v", ErrConflict, err)
+		return fmt.Errorf("%w: %s", ErrConflict, err.Error())
 	case errors.Is(err, lookupasset.ErrConflict):
-		return fmt.Errorf("%w: %v", ErrConflict, err)
+		return fmt.Errorf("%w: %s", ErrConflict, err.Error())
 	case errors.Is(err, lookupdefinition.ErrInvalid), errors.Is(err, lookupcatalog.ErrInvalid),
 		errors.Is(err, lookupcatalog.ErrPageInvalidated),
 		errors.Is(err, lookupasset.ErrInvalidArgument), errors.Is(err, lookupasset.ErrMalformedCSV), errors.Is(err, lookupasset.ErrDuplicateKey):
-		return fmt.Errorf("%w: %v", ErrInvalid, err)
+		return fmt.Errorf("%w: %s", ErrInvalid, err.Error())
 	case errors.Is(err, lookupcatalog.ErrCorrupt), errors.Is(err, lookupasset.ErrCorrupt),
 		errors.Is(err, lookupasset.ErrNotFound):
 		return fmt.Errorf("%w: corrupt lookup state", ErrUnavailable)
@@ -770,19 +775,6 @@ func validIdentity(value string, maximum int) bool {
 		}
 	}
 	return true
-}
-
-func nilDependency(value any) bool {
-	if value == nil {
-		return true
-	}
-	reflected := reflect.ValueOf(value)
-	switch reflected.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return reflected.IsNil()
-	default:
-		return false
-	}
 }
 
 var _ AssetRepository = (*lookupasset.Store)(nil)

@@ -62,7 +62,7 @@ func TestIndexFieldsCaptureOnceAndKeepRelativeIntentSnapshotAcrossPages(
 	// the original immutable catalog without another scope capture or query.
 	request.TimeRange = indexFieldTestRange(t, requestAnchor.Add(time.Hour))
 	request.PageToken = first.NextPageToken
-	request.PageSize = fieldUint32Pointer(2)
+	request.PageSize = new(uint32(2))
 	second, err := service.ListIndexFields(
 		context.Background(),
 		access,
@@ -756,7 +756,7 @@ func indexFieldSearchCursor(
 	page, err := service.ListFields(
 		context.Background(),
 		access,
-		ListFieldsRequest{SearchJobID: "job", PageSize: fieldUint32Pointer(1)},
+		ListFieldsRequest{SearchJobID: "job", PageSize: new(uint32(1))},
 	)
 	if err != nil || page.NextPageToken == "" {
 		t.Fatalf("create search field cursor = (%#v, %v)", page, err)

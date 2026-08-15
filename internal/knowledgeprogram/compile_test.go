@@ -18,8 +18,8 @@ func TestCompileDerivesCanonicalVersionPinnedDependencies(t *testing.T) {
 		regexDefinition("extract-b", "extracted_b", nil, opensplunkv1.SharingScope_SHARING_SCOPE_APP, "app-a"),
 		aliasDefinition("alias-a", "extracted_a", "alias_a", nil, opensplunkv1.SharingScope_SHARING_SCOPE_APP, "app-a"),
 		aliasDefinition("alias-b", "extracted_b", "alias_b", nil, opensplunkv1.SharingScope_SHARING_SCOPE_APP, "app-a"),
-		calculatedDefinition("calculated-a", "calculated_a", "lower(alias_b)", opensplunkv1.SharingScope_SHARING_SCOPE_APP, "app-a"),
-		calculatedDefinition("calculated-b", "calculated_b", "coalesce(alias_a, extracted_b)", opensplunkv1.SharingScope_SHARING_SCOPE_APP, "app-a"),
+		calculatedDefinition("calculated-a", "calculated_a", "lower(alias_b)"),
+		calculatedDefinition("calculated-b", "calculated_b", "coalesce(alias_a, extracted_b)"),
 	}
 	input := inputFromDefinitions(t, definitions)
 	for index := range input.Objects {
@@ -115,9 +115,9 @@ func TestCompiledProgramAccessorsAreConcurrentAndDetached(t *testing.T) {
 	const workers = 8
 	const iterations = 64
 	results := make(chan error, workers)
-	for worker := 0; worker < workers; worker++ {
+	for worker := range workers {
 		go func(worker int) {
-			for iteration := 0; iteration < iterations; iteration++ {
+			for iteration := range iterations {
 				commitment, present := program.Commitment()
 				if program.IsZero() || program.IsEmpty() || program.ObjectCount() != baseline.ObjectCount() ||
 					!present || commitment != wantCommitment || program.Charges() != baseline.Charges() ||
@@ -218,7 +218,7 @@ func TestCompiledProgramAccessorsAreConcurrentAndDetached(t *testing.T) {
 			results <- nil
 		}(worker)
 	}
-	for worker := 0; worker < workers; worker++ {
+	for range workers {
 		if err := <-results; err != nil {
 			t.Error(err)
 		}
@@ -356,7 +356,7 @@ func TestSemanticDepthsRejectsCyclesAndEnforcesCeiling(t *testing.T) {
 		objects[index].key = semanticObjectKey{id: fmt.Sprintf("object-%02d", index), version: 1}
 	}
 	edges := make(map[semanticEdgeKey]struct{}, MaximumDependencyDepth+1)
-	for index := 0; index < MaximumDependencyDepth; index++ {
+	for index := range MaximumDependencyDepth {
 		edges[semanticEdgeKey{source: objects[index].key, target: objects[index+1].key, role: role}] = struct{}{}
 	}
 	depths, err := semanticDepths(objects, edges)
@@ -415,11 +415,9 @@ func aliasDefinition(
 
 func calculatedDefinition(
 	name, destination, expression string,
-	scope opensplunkv1.SharingScope,
-	appID string,
 ) *opensplunkv1.KnowledgeObjectDefinition {
 	return &opensplunkv1.KnowledgeObjectDefinition{
-		AppId: appID, Name: name, SharingScope: scope,
+		AppId: "app-a", Name: name, SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
 		Body: &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{CalculatedField: &opensplunkv1.CalculatedFieldDefinition{
 			DestinationField: destination, Expression: expression,
 		}},
@@ -446,10 +444,9 @@ func denseDependencyDefinitions(targets int) []*opensplunkv1.KnowledgeObjectDefi
 		))
 	}
 	expression := denseDependencyExpression(fields)
-	for index := 0; index < MaximumScalarExpressions; index++ {
+	for index := range MaximumScalarExpressions {
 		definitions = append(definitions, calculatedDefinition(
 			fmt.Sprintf("calculated-%02d", index), fmt.Sprintf("calculated_%02d", index), expression,
-			opensplunkv1.SharingScope_SHARING_SCOPE_APP, "app-a",
 		))
 	}
 	return definitions

@@ -389,7 +389,7 @@ func (source *keyedHECAcknowledgmentIDSource) ID(
 	zeroBasedOrdinal := allocationOrdinal - 1
 	blockOrdinal := zeroBasedOrdinal >> hecAcknowledgmentCounterBits
 	counter := zeroBasedOrdinal & (hecAcknowledgmentIDsPerBlock - 1)
-	for derivationAttempt := uint64(0); derivationAttempt < maximumHECAcknowledgmentIDGenerationAttempts; derivationAttempt++ {
+	for derivationAttempt := range uint64(maximumHECAcknowledgmentIDGenerationAttempts) {
 		mac := hmac.New(sha256.New, source.key[:])
 		_, _ = mac.Write([]byte("open-splunk/hec-ack/v1\x00"))
 		writeHECAcknowledgmentIDScope(mac, scope)
@@ -431,7 +431,7 @@ func selectUniqueHECAcknowledgmentID(
 		tokenID:  request.TokenID,
 		channel:  request.AcknowledgmentChannel,
 	}
-	for attempt := 0; attempt < maximumHECAcknowledgmentIDCollisionRetries; attempt++ {
+	for attempt := range maximumHECAcknowledgmentIDCollisionRetries {
 		acknowledgmentID, err := source.ID(scope, allocationOrdinal, uint64(attempt))
 		if err != nil {
 			return 0, fmt.Errorf("generate HEC acknowledgment ID: %w", err)

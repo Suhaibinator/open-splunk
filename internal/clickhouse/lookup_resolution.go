@@ -458,7 +458,10 @@ func (resolution LookupResolution) Rows() [][]string {
 // RowCount and ColumnCount expose only scalar shape metadata, allowing
 // admission to charge a resolution without cloning its retained cells.
 func (resolution LookupResolution) RowCount() uint64 {
-	return uint64(lookupResolutionRowCount(resolution))
+	if resolution.asset != nil {
+		return resolution.asset.RowCount()
+	}
+	return uint64(len(resolution.rows))
 }
 
 func (resolution LookupResolution) ColumnCount() uint32 {
@@ -688,7 +691,7 @@ func validateLookupResolutionAndMeasureContext(
 		}
 	}
 	if resolution.asset != nil &&
-		resolution.asset.ColumnCount() != uint32(len(resolution.headers)) {
+		resolution.asset.ColumnCount() != resolution.ColumnCount() {
 		return 0, errors.New(
 			"create ClickHouse lookup resolution: asset schema changed",
 		)
@@ -704,7 +707,7 @@ func validateLookupResolutionAndMeasureContext(
 		}
 		return resolution.backing.payloadBytes, nil
 	}
-	for rowIndex := 0; rowIndex < rowCount; rowIndex++ {
+	for rowIndex := range rowCount {
 		if rowIndex%lookupContextCheckRows == 0 {
 			if err := ctx.Err(); err != nil {
 				return 0, err
@@ -803,12 +806,12 @@ func lookupResolutionCellCount(resolution LookupResolution) (uint64, bool) {
 }
 
 func lookupResolutionCellCountUncached(resolution LookupResolution) (uint64, bool) {
-	rowCount := lookupResolutionRowCount(resolution)
-	if rowCount != 0 &&
-		uint64(len(resolution.headers)) > ^uint64(0)/uint64(rowCount) {
+	rowCount := resolution.RowCount()
+	columnCount := uint64(resolution.ColumnCount())
+	if rowCount != 0 && columnCount > ^uint64(0)/rowCount {
 		return 0, false
 	}
-	return uint64(rowCount) * uint64(len(resolution.headers)), true
+	return rowCount * columnCount, true
 }
 
 func lookupResolutionEqual(left, right LookupResolution) bool {
@@ -845,6 +848,8 @@ func lookupResolutionEqual(left, right LookupResolution) bool {
 
 func lookupResolutionRowCount(resolution LookupResolution) int {
 	if resolution.asset != nil {
+		// Immutable lookup assets are capped at lookupasset.MaximumRows.
+		// #nosec G115 -- the validated cap fits in int on every supported target.
 		return int(resolution.asset.RowCount())
 	}
 	return len(resolution.rows)

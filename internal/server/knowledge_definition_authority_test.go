@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"strings"
 	"testing"
-	"time"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
@@ -35,7 +34,7 @@ func TestKnowledgeCatalogDefinitionAuthorityPinsProtoSizeBoundary(t *testing.T) 
 	}
 	exact := knowledgeHTTPAuthorityObject(t, exactDefinition)
 	exact.State = knowledgecatalog.StateDisabled
-	exact.DisabledAt = timePointer(exact.UpdatedAt)
+	exact.DisabledAt = new(exact.UpdatedAt)
 	if !validKnowledgeCatalogDefinitionAuthority(exact) {
 		t.Fatal("exact four-MiB catalog definition authority was rejected")
 	}
@@ -53,7 +52,7 @@ func TestKnowledgeCatalogDefinitionAuthorityPinsProtoSizeBoundary(t *testing.T) 
 	}
 	over := knowledgeHTTPAuthorityObject(t, overDefinition)
 	over.State = knowledgecatalog.StateDisabled
-	over.DisabledAt = timePointer(over.UpdatedAt)
+	over.DisabledAt = new(over.UpdatedAt)
 	if validKnowledgeCatalogDefinitionAuthority(over) {
 		t.Fatal("catalog definition above four MiB was accepted")
 	}
@@ -223,8 +222,8 @@ func TestKnowledgeHTTPGetAndListValidateCatalogDefinitionAuthority(t *testing.T)
 				object.State = knowledgecatalog.StateQuarantined
 				object.Definition = nil
 				object.DefinitionSHA256 = nil
-				object.QuarantinedAt = timePointer(object.UpdatedAt)
-				object.QuarantineReason = stringPointer("root_corruption")
+				object.QuarantinedAt = new(object.UpdatedAt)
+				object.QuarantineReason = new("root_corruption")
 				return object
 			},
 			wantStatus: http.StatusOK,
@@ -371,9 +370,9 @@ func knowledgeHTTPFutureAuthorityObject(
 	object.State = state
 	switch state {
 	case knowledgecatalog.StateDisabled:
-		object.DisabledAt = timePointer(object.UpdatedAt)
+		object.DisabledAt = new(object.UpdatedAt)
 	case knowledgecatalog.StateDeleted:
-		object.DeletedAt = timePointer(object.UpdatedAt)
+		object.DeletedAt = new(object.UpdatedAt)
 	}
 	return object
 }
@@ -416,8 +415,4 @@ func knowledgeHTTPFutureDefinitionAtSize(
 		t.Fatalf("unmarshal sized future definition: %v", err)
 	}
 	return definition
-}
-
-func timePointer(value time.Time) *time.Time {
-	return &value
 }

@@ -7,6 +7,7 @@ import (
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
+	"github.com/Suhaibinator/open-splunk/internal/exportjobproto"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobproto"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"google.golang.org/protobuf/proto"
@@ -40,7 +41,7 @@ func projectSearchWithPreview(ctx context.Context, job searchjobs.Job, preview *
 	if _, err := timestampToProto(job.CreatedAt); err != nil {
 		return targetProjection{}, err
 	}
-	state := searchStateToProto(job.State)
+	state := searchjobproto.State(job.State)
 	if state == opensplunkv1.SearchJobState_SEARCH_JOB_STATE_UNSPECIFIED {
 		return targetProjection{}, errors.New("search websocket projection: search state is invalid")
 	}
@@ -103,7 +104,7 @@ func projectSearchWithPreview(ctx context.Context, job searchjobs.Job, preview *
 			FinalProgress: proto.Clone(progress).(*opensplunkv1.SearchProgress),
 		}
 		if job.Failure != nil {
-			terminalEvent.Failure = searchFailureToProto(*job.Failure)
+			terminalEvent.Failure = searchjobproto.Failure(*job.Failure)
 			if terminalEvent.Failure.GetCode() == opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_UNSPECIFIED {
 				return targetProjection{}, errors.New("search websocket projection: search failure code is invalid")
 			}
@@ -135,7 +136,7 @@ func projectExport(job exportjobs.Job, now time.Time) (targetProjection, error) 
 	if _, err := timestampToProto(job.CreatedAt); err != nil {
 		return targetProjection{}, err
 	}
-	state := exportStateToProto(job.State)
+	state := exportjobproto.State(job.State)
 	if state == opensplunkv1.ExportJobState_EXPORT_JOB_STATE_UNSPECIFIED {
 		return targetProjection{}, errors.New("search websocket projection: export state is invalid")
 	}
@@ -157,7 +158,7 @@ func projectExport(job exportjobs.Job, now time.Time) (targetProjection, error) 
 			FinalProgress: proto.Clone(progress).(*opensplunkv1.ExportProgress),
 		}
 		if job.Failure != nil {
-			failureCode := exportFailureCodeToProto(job.Failure.Code)
+			failureCode := exportjobproto.FailureCode(job.Failure.Code)
 			if failureCode == opensplunkv1.ExportFailureCode_EXPORT_FAILURE_CODE_UNSPECIFIED {
 				return targetProjection{}, errors.New("search websocket projection: export failure code is invalid")
 			}
@@ -225,97 +226,6 @@ func exportProgressToProto(job exportjobs.Job, now time.Time) (*opensplunkv1.Exp
 
 func schemaToProto(id string, schema searchjobs.Schema, shape searchjobproto.ResultShape) (*opensplunkv1.ResultSchema, error) {
 	return searchjobproto.Schema(id, schema, shape)
-}
-
-func searchStateToProto(state searchjobs.State) opensplunkv1.SearchJobState {
-	switch state {
-	case searchjobs.StateQueued:
-		return opensplunkv1.SearchJobState_SEARCH_JOB_STATE_QUEUED
-	case searchjobs.StateParsing:
-		return opensplunkv1.SearchJobState_SEARCH_JOB_STATE_PARSING
-	case searchjobs.StatePlanning:
-		return opensplunkv1.SearchJobState_SEARCH_JOB_STATE_PLANNING
-	case searchjobs.StateRunning:
-		return opensplunkv1.SearchJobState_SEARCH_JOB_STATE_RUNNING
-	case searchjobs.StateCompleted:
-		return opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED
-	case searchjobs.StateFailed:
-		return opensplunkv1.SearchJobState_SEARCH_JOB_STATE_FAILED
-	case searchjobs.StateCanceled:
-		return opensplunkv1.SearchJobState_SEARCH_JOB_STATE_CANCELED
-	case searchjobs.StateExpired:
-		return opensplunkv1.SearchJobState_SEARCH_JOB_STATE_EXPIRED
-	default:
-		return opensplunkv1.SearchJobState_SEARCH_JOB_STATE_UNSPECIFIED
-	}
-}
-
-func exportStateToProto(state exportjobs.State) opensplunkv1.ExportJobState {
-	switch state {
-	case exportjobs.StateQueued:
-		return opensplunkv1.ExportJobState_EXPORT_JOB_STATE_QUEUED
-	case exportjobs.StateRunning:
-		return opensplunkv1.ExportJobState_EXPORT_JOB_STATE_RUNNING
-	case exportjobs.StateCompleted:
-		return opensplunkv1.ExportJobState_EXPORT_JOB_STATE_COMPLETED
-	case exportjobs.StateFailed:
-		return opensplunkv1.ExportJobState_EXPORT_JOB_STATE_FAILED
-	case exportjobs.StateCanceled:
-		return opensplunkv1.ExportJobState_EXPORT_JOB_STATE_CANCELED
-	case exportjobs.StateExpired:
-		return opensplunkv1.ExportJobState_EXPORT_JOB_STATE_EXPIRED
-	default:
-		return opensplunkv1.ExportJobState_EXPORT_JOB_STATE_UNSPECIFIED
-	}
-}
-
-func searchFailureToProto(failure searchjobs.Failure) *opensplunkv1.SearchFailure {
-	return &opensplunkv1.SearchFailure{
-		Code: searchFailureCodeToProto(failure.Code), Message: failure.Message,
-		Retryable: failure.Retryable, Diagnostics: searchjobproto.Diagnostics(failure.Diagnostics),
-	}
-}
-
-func searchFailureCodeToProto(code searchjobs.FailureCode) opensplunkv1.SearchFailureCode {
-	switch code {
-	case searchjobs.FailureInvalidSPL:
-		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_INVALID_SPL
-	case searchjobs.FailureUnsupportedSPL:
-		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_UNSUPPORTED_SPL
-	case searchjobs.FailureInvalidTimeRange:
-		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_INVALID_TIME_RANGE
-	case searchjobs.FailureIndexForbidden:
-		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_INDEX_FORBIDDEN
-	case searchjobs.FailureResourceLimit:
-		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_RESOURCE_LIMIT
-	case searchjobs.FailureTimeout:
-		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_TIMEOUT
-	case searchjobs.FailureStorageUnavailable:
-		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_STORAGE_UNAVAILABLE
-	case searchjobs.FailureExecution:
-		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_EXECUTION
-	case searchjobs.FailureInternal:
-		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_INTERNAL
-	default:
-		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_UNSPECIFIED
-	}
-}
-
-func exportFailureCodeToProto(code exportjobs.FailureCode) opensplunkv1.ExportFailureCode {
-	switch code {
-	case exportjobs.FailureRowLimit:
-		return opensplunkv1.ExportFailureCode_EXPORT_FAILURE_CODE_ROW_LIMIT
-	case exportjobs.FailureByteLimit:
-		return opensplunkv1.ExportFailureCode_EXPORT_FAILURE_CODE_BYTE_LIMIT
-	case exportjobs.FailureSourceUnavailable:
-		return opensplunkv1.ExportFailureCode_EXPORT_FAILURE_CODE_SEARCH_UNAVAILABLE
-	case exportjobs.FailureStorageUnavailable:
-		return opensplunkv1.ExportFailureCode_EXPORT_FAILURE_CODE_STORAGE_UNAVAILABLE
-	case exportjobs.FailureInternal:
-		return opensplunkv1.ExportFailureCode_EXPORT_FAILURE_CODE_INTERNAL
-	default:
-		return opensplunkv1.ExportFailureCode_EXPORT_FAILURE_CODE_UNSPECIFIED
-	}
 }
 
 func timestampToProto(input time.Time) (*timestamppb.Timestamp, error) {

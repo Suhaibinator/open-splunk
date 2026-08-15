@@ -31,10 +31,7 @@ const (
 func (t *tailer) currentStagedReadWindow() uint64 {
 	maximum := t.m.readWindow
 	if t.stagedWindow == 0 || t.stagedWindow > maximum {
-		t.stagedWindow = initialStagedReadBytes
-		if t.stagedWindow > maximum {
-			t.stagedWindow = maximum
-		}
+		t.stagedWindow = min(initialStagedReadBytes, maximum)
 	}
 	return t.stagedWindow
 }
@@ -199,10 +196,7 @@ func (t *tailer) stageRead(
 			}
 		} else {
 			for position := 0; position < len(dependency); {
-				chunkLength := len(dependency) - position
-				if chunkLength > validationChunkBytes {
-					chunkLength = validationChunkBytes
-				}
+				chunkLength := min(len(dependency)-position, validationChunkBytes)
 				if _, err := io.ReadFull(reader, dependency[position:position+chunkLength]); err != nil {
 					return nil, classifyExactReadError(err)
 				}
@@ -345,19 +339,13 @@ func (t *tailer) snapshotDependenciesMatch(batch *stagedBatch) (bool, error) {
 	if length == 0 {
 		return true, nil
 	}
-	scratchLength := length
-	if scratchLength > validationChunkBytes {
-		scratchLength = validationChunkBytes
-	}
+	scratchLength := min(length, validationChunkBytes)
 	t.validationScratch = slices.Grow(
 		t.validationScratch[:0],
 		scratchLength,
 	)[:scratchLength]
 	for position := 0; position < length; {
-		chunkLength := length - position
-		if chunkLength > len(t.validationScratch) {
-			chunkLength = len(t.validationScratch)
-		}
+		chunkLength := min(length-position, len(t.validationScratch))
 		offset, err := checkedFileOffset(batch.dependencyStart + uint64(position))
 		if err != nil {
 			return false, err

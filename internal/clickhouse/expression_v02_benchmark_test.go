@@ -74,7 +74,7 @@ func BenchmarkExpressionV02Compile(b *testing.B) {
 func expressionV02ArithmeticBenchmarkSource(field string, operators int) string {
 	var expression strings.Builder
 	expression.WriteString(field)
-	for index := 0; index < operators; index++ {
+	for range operators {
 		expression.WriteString("+1")
 	}
 	return "index=gradethis | eval result=" + expression.String() + " | table result"
@@ -83,7 +83,7 @@ func expressionV02ArithmeticBenchmarkSource(field string, operators int) string 
 func expressionV02MembershipBenchmarkSource(candidates int) string {
 	var source strings.Builder
 	source.WriteString("index=gradethis | where status IN (")
-	for index := 0; index < candidates; index++ {
+	for index := range candidates {
 		if index > 0 {
 			source.WriteByte(',')
 		}

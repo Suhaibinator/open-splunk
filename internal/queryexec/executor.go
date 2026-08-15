@@ -31,6 +31,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
+	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
@@ -144,7 +145,7 @@ type Config struct {
 // Executor is a native ClickHouse implementation of searchjobs.Executor.
 type Executor struct {
 	connection                queryConnection
-	settings                  clickhousedriver.Settings
+	settings                  *validatedExecutorSettings
 	expandTimechartGroupLimit bool
 	newQueryID                func() (string, error)
 	withProgress              func(func(*clickhousedriver.Progress)) clickhousedriver.QueryOption
@@ -167,7 +168,7 @@ func New(connection driver.Conn, config Config) (*Executor, error) {
 		return nil, errors.New("create ClickHouse query executor: read admission is required")
 	}
 	expandTimechartGroupLimit := config.MaxRowsToGroupBy == 0 || config.ExpandTimechartGroupLimit
-	settings, err := querySettings(config)
+	settings, err := validatedQuerySettings(config)
 	if err != nil {
 		return nil, err
 	}
@@ -179,6 +180,84 @@ func New(connection driver.Conn, config Config) (*Executor, error) {
 		withProgress:              clickhousedriver.WithProgress,
 		readAdmission:             config.ReadAdmission,
 	}, nil
+}
+
+type validatedExecutorSettings struct {
+	values clickhousedriver.Settings
+}
+
+var requiredPositiveExecutorSettingNames = [...]string{
+	"max_execution_time",
+	"max_memory_usage",
+	"max_rows_to_read",
+	"max_bytes_to_read",
+	"max_result_rows",
+	"max_result_bytes",
+	"max_rows_to_group_by",
+	"max_threads",
+	"max_query_size",
+	"max_ast_elements",
+	"max_expanded_ast_elements",
+	"max_subquery_depth",
+}
+
+var requiredThrowExecutorSettingNames = [...]string{
+	"timeout_overflow_mode",
+	"read_overflow_mode",
+	"result_overflow_mode",
+	"group_by_overflow_mode",
+}
+
+func newValidatedExecutorSettings(
+	values clickhousedriver.Settings,
+) (*validatedExecutorSettings, error) {
+	if values == nil || values["readonly"] != uint8(2) {
+		return nil, errors.New("create ClickHouse query executor: settings are not read-only")
+	}
+	for _, name := range requiredPositiveExecutorSettingNames {
+		value, ok := values[name].(uint64)
+		if !ok || value == 0 {
+			return nil, fmt.Errorf("create ClickHouse query executor: setting %s is invalid", name)
+		}
+	}
+	for _, name := range requiredThrowExecutorSettingNames {
+		if values[name] != "throw" {
+			return nil, fmt.Errorf("create ClickHouse query executor: setting %s is unsafe", name)
+		}
+	}
+	for _, name := range requiredTextIndexSettingNames {
+		if values[name] != uint8(1) {
+			return nil, fmt.Errorf("create ClickHouse query executor: setting %s is not enabled", name)
+		}
+	}
+	if values["enable_materialized_cte"] != uint8(1) ||
+		values["short_circuit_function_evaluation"] != "enable" ||
+		values["async_insert"] != uint8(0) {
+		return nil, errors.New("create ClickHouse query executor: safety settings are invalid")
+	}
+	return &validatedExecutorSettings{values: maps.Clone(values)}, nil
+}
+
+func (settings *validatedExecutorSettings) clone() clickhousedriver.Settings {
+	if settings == nil {
+		return nil
+	}
+	return maps.Clone(settings.values)
+}
+
+func (settings *validatedExecutorSettings) limit(name string) uint64 {
+	if settings == nil {
+		return 0
+	}
+	return settings.values[name].(uint64)
+}
+
+func validatedQuerySettings(config Config) (*validatedExecutorSettings, error) {
+	settings, err := querySettings(config)
+	if err != nil {
+		return nil, err
+	}
+	return newValidatedExecutorSettings(settings)
 }
 
 func querySettings(config Config) (clickhousedriver.Settings, error) {
@@ -813,13 +892,17 @@ func (executor *Executor) settingsForContext(
 }
 
 func (executor *Executor) groupLimitSettingsFor(query clickhouse.CompiledQuery) clickhousedriver.Settings {
+	if executor.settings == nil {
+		return nil
+	}
+	base := executor.settings.values
 	percentileWide := (query.Timechart != nil &&
 		query.Timechart.Mode == clickhouse.TimechartModeRuntimeWideValue &&
 		query.Timechart.ValueKind == clickhouse.TimechartValueKindPercentile) ||
 		(query.Chart != nil &&
 			query.Chart.ValueKind == clickhouse.ChartValueKindPercentile)
 	if !executor.expandTimechartGroupLimit && !percentileWide {
-		return executor.settings
+		return base
 	}
 	// A fixed timechart groups only by bucket. Runtime-wide timecharts must first
 	// aggregate every distinct raw (bucket, label) pair to rank the exact top
@@ -851,21 +934,21 @@ func (executor *Executor) groupLimitSettingsFor(query clickhouse.CompiledQuery) 
 			required = maximumRuntimeWideTimechartGroups
 		}
 	default:
-		return executor.settings
+		return base
 	}
-	current, ok := executor.settings["max_rows_to_group_by"].(uint64)
+	current, ok := base["max_rows_to_group_by"].(uint64)
 	if !ok {
-		return executor.settings
+		return base
 	}
 	if percentileWide && current > required {
-		settings := maps.Clone(executor.settings)
+		settings := maps.Clone(base)
 		settings["max_rows_to_group_by"] = required
 		return settings
 	}
 	if current >= required || !executor.expandTimechartGroupLimit {
-		return executor.settings
+		return base
 	}
-	settings := maps.Clone(executor.settings)
+	settings := maps.Clone(base)
 	settings["max_rows_to_group_by"] = required
 	return settings
 }
@@ -976,36 +1059,35 @@ func readFixedTimechartRows(
 		return bufferedFixedTimechart{}, err
 	}
 	fieldOccurrenceCount := output.Mode == clickhouse.TimechartModeFixedFieldCount
-	expectedColumns := []string{
-		clickhouse.TimechartOrdinalColumn,
-		clickhouse.TimechartCountColumn,
+	contracts := []resultColumnContract{
+		{name: clickhouse.TimechartOrdinalColumn, databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0))},
+		{name: clickhouse.TimechartCountColumn, databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0))},
 	}
 	if fieldOccurrenceCount {
-		expectedColumns = append(expectedColumns, clickhouse.TimechartInputPresentColumn)
+		contracts = append(contracts, resultColumnContract{
+			name:         clickhouse.TimechartInputPresentColumn,
+			databaseType: "UInt8",
+			scanType:     reflect.TypeOf(uint8(0)),
+		})
 	}
-	if len(columnTypes) != len(expectedColumns) || !slices.Equal(columns, expectedColumns) {
+	violation, column := validateResultColumnContracts(
+		columns,
+		columnTypes,
+		contracts,
+		resultColumnRequireScanType|resultColumnTrimDatabaseType,
+	)
+	if violation == resultColumnContractShapeMismatch {
 		return bufferedFixedTimechart{}, fmt.Errorf(
 			"%w: ClickHouse fixed timechart columns do not match the compiled output",
 			searchjobs.ErrInvalidResult,
 		)
 	}
-	for index, columnType := range columnTypes {
-		databaseType := "UInt64"
-		scanType := reflect.TypeOf(uint64(0))
-		if fieldOccurrenceCount && index == 2 {
-			databaseType = "UInt8"
-			scanType = reflect.TypeOf(uint8(0))
-		}
-		if isNilDriverValue(columnType) || columnType.Name() != expectedColumns[index] ||
-			columnType.Nullable() ||
-			strings.TrimSpace(columnType.DatabaseTypeName()) != databaseType ||
-			columnType.ScanType() != scanType {
-			return bufferedFixedTimechart{}, fmt.Errorf(
-				"%w: ClickHouse fixed timechart column %q has an invalid type",
-				searchjobs.ErrInvalidResult,
-				expectedColumns[index],
-			)
-		}
+	if violation == resultColumnContractTypeMismatch {
+		return bufferedFixedTimechart{}, fmt.Errorf(
+			"%w: ClickHouse fixed timechart column %q has an invalid type",
+			searchjobs.ErrInvalidResult,
+			column,
+		)
 	}
 
 	// #nosec G115 -- validateTimechartOutput caps BucketCount at 10,000.
@@ -1118,42 +1200,34 @@ func readFixedValueTimechartRows(
 	if err := ctx.Err(); err != nil {
 		return bufferedFixedValueTimechart{}, err
 	}
-	expectedColumns := []string{
-		clickhouse.TimechartOrdinalColumn,
-		clickhouse.TimechartValueColumn,
-		clickhouse.TimechartInputPresentColumn,
+	contracts := []resultColumnContract{
+		{name: clickhouse.TimechartOrdinalColumn, databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0))},
+		{
+			name:         clickhouse.TimechartValueColumn,
+			databaseType: "Nullable(Float64)",
+			scanType:     reflect.TypeOf((*float64)(nil)),
+			nullable:     true,
+		},
+		{name: clickhouse.TimechartInputPresentColumn, databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0))},
 	}
-	if len(columnTypes) != len(expectedColumns) || !slices.Equal(columns, expectedColumns) {
+	violation, column := validateResultColumnContracts(
+		columns,
+		columnTypes,
+		contracts,
+		resultColumnRequireScanType|resultColumnTrimDatabaseType,
+	)
+	if violation == resultColumnContractShapeMismatch {
 		return bufferedFixedValueTimechart{}, fmt.Errorf(
 			"%w: ClickHouse fixed value timechart columns do not match the compiled output",
 			searchjobs.ErrInvalidResult,
 		)
 	}
-	expectedTypes := []struct {
-		databaseType string
-		scanType     reflect.Type
-		nullable     bool
-	}{
-		{databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0))},
-		{
-			databaseType: "Nullable(Float64)",
-			scanType:     reflect.TypeOf((*float64)(nil)),
-			nullable:     true,
-		},
-		{databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0))},
-	}
-	for index, columnType := range columnTypes {
-		expected := expectedTypes[index]
-		if isNilDriverValue(columnType) || columnType.Name() != expectedColumns[index] ||
-			columnType.Nullable() != expected.nullable ||
-			strings.TrimSpace(columnType.DatabaseTypeName()) != expected.databaseType ||
-			columnType.ScanType() != expected.scanType {
-			return bufferedFixedValueTimechart{}, fmt.Errorf(
-				"%w: ClickHouse fixed value timechart column %q has an invalid type",
-				searchjobs.ErrInvalidResult,
-				expectedColumns[index],
-			)
-		}
+	if violation == resultColumnContractTypeMismatch {
+		return bufferedFixedValueTimechart{}, fmt.Errorf(
+			"%w: ClickHouse fixed value timechart column %q has an invalid type",
+			searchjobs.ErrInvalidResult,
+			column,
+		)
 	}
 
 	// #nosec G115 -- validateTimechartOutput caps BucketCount at 10,000.
@@ -1240,28 +1314,23 @@ func readTimechartRows(ctx context.Context, rows driver.Rows, columns []string, 
 	if err := ctx.Err(); err != nil {
 		return bufferedTimechart{}, err
 	}
-	expectedColumns := []string{
-		clickhouse.TimechartOrdinalColumn,
-		clickhouse.TimechartNamesColumn,
-		clickhouse.TimechartCountsColumn,
-		clickhouse.TimechartInvalidColumn,
+	contracts := []resultColumnContract{
+		{name: clickhouse.TimechartOrdinalColumn, databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0))},
+		{name: clickhouse.TimechartNamesColumn, databaseType: "Array(String)", scanType: reflect.TypeOf([]string{})},
+		{name: clickhouse.TimechartCountsColumn, databaseType: "Array(UInt64)", scanType: reflect.TypeOf([]uint64{})},
+		{name: clickhouse.TimechartInvalidColumn, databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0))},
 	}
-	if len(columnTypes) != len(expectedColumns) || !slices.Equal(columns, expectedColumns) {
+	violation, column := validateResultColumnContracts(
+		columns,
+		columnTypes,
+		contracts,
+		resultColumnRequireScanType|resultColumnTrimDatabaseType,
+	)
+	if violation == resultColumnContractShapeMismatch {
 		return bufferedTimechart{}, fmt.Errorf("%w: ClickHouse timechart columns do not match the compiled output", searchjobs.ErrInvalidResult)
 	}
-	expectedTypes := []string{"UInt64", "Array(String)", "Array(UInt64)", "UInt8"}
-	expectedScanTypes := []reflect.Type{
-		reflect.TypeOf(uint64(0)),
-		reflect.TypeOf([]string{}),
-		reflect.TypeOf([]uint64{}),
-		reflect.TypeOf(uint8(0)),
-	}
-	for index, columnType := range columnTypes {
-		if isNilDriverValue(columnType) || columnType.Name() != expectedColumns[index] || columnType.Nullable() ||
-			strings.TrimSpace(columnType.DatabaseTypeName()) != expectedTypes[index] ||
-			columnType.ScanType() != expectedScanTypes[index] {
-			return bufferedTimechart{}, fmt.Errorf("%w: ClickHouse timechart column %q has an invalid type", searchjobs.ErrInvalidResult, expectedColumns[index])
-		}
+	if violation == resultColumnContractTypeMismatch {
+		return bufferedTimechart{}, fmt.Errorf("%w: ClickHouse timechart column %q has an invalid type", searchjobs.ErrInvalidResult, column)
 	}
 
 	// #nosec G115 -- validateTimechartOutput caps BucketCount at 10,000.
@@ -1353,44 +1422,31 @@ func readValueTimechartRows(
 	if err := ctx.Err(); err != nil {
 		return bufferedValueTimechart{}, err
 	}
-	expectedColumns := []string{
-		clickhouse.TimechartOrdinalColumn,
-		clickhouse.TimechartNamesColumn,
-		clickhouse.TimechartValuesColumn,
-		clickhouse.TimechartValuePresentColumn,
-		clickhouse.TimechartInvalidColumn,
+	contracts := []resultColumnContract{
+		{name: clickhouse.TimechartOrdinalColumn, databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0))},
+		{name: clickhouse.TimechartNamesColumn, databaseType: "Array(String)", scanType: reflect.TypeOf([]string{})},
+		{name: clickhouse.TimechartValuesColumn, databaseType: "Array(Float64)", scanType: reflect.TypeOf([]float64{})},
+		{name: clickhouse.TimechartValuePresentColumn, databaseType: "Array(UInt8)", scanType: reflect.TypeOf([]uint8{})},
+		{name: clickhouse.TimechartInvalidColumn, databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0))},
 	}
-	if len(columnTypes) != len(expectedColumns) || !slices.Equal(columns, expectedColumns) {
+	violation, column := validateResultColumnContracts(
+		columns,
+		columnTypes,
+		contracts,
+		resultColumnRequireScanType|resultColumnTrimDatabaseType,
+	)
+	if violation == resultColumnContractShapeMismatch {
 		return bufferedValueTimechart{}, fmt.Errorf(
 			"%w: ClickHouse split value timechart columns do not match the compiled output",
 			searchjobs.ErrInvalidResult,
 		)
 	}
-	expectedTypes := []string{
-		"UInt64",
-		"Array(String)",
-		"Array(Float64)",
-		"Array(UInt8)",
-		"UInt8",
-	}
-	expectedScanTypes := []reflect.Type{
-		reflect.TypeOf(uint64(0)),
-		reflect.TypeOf([]string{}),
-		reflect.TypeOf([]float64{}),
-		reflect.TypeOf([]uint8{}),
-		reflect.TypeOf(uint8(0)),
-	}
-	for index, columnType := range columnTypes {
-		if isNilDriverValue(columnType) || columnType.Name() != expectedColumns[index] ||
-			columnType.Nullable() ||
-			strings.TrimSpace(columnType.DatabaseTypeName()) != expectedTypes[index] ||
-			columnType.ScanType() != expectedScanTypes[index] {
-			return bufferedValueTimechart{}, fmt.Errorf(
-				"%w: ClickHouse split value timechart column %q has an invalid type",
-				searchjobs.ErrInvalidResult,
-				expectedColumns[index],
-			)
-		}
+	if violation == resultColumnContractTypeMismatch {
+		return bufferedValueTimechart{}, fmt.Errorf(
+			"%w: ClickHouse split value timechart column %q has an invalid type",
+			searchjobs.ErrInvalidResult,
+			column,
+		)
 	}
 
 	// #nosec G115 -- validateTimechartOutput caps BucketCount at 10,000.
@@ -1889,87 +1945,58 @@ func readChartRows(
 	if !rowKindOK || !rowScanTypeOK {
 		return bufferedChart{}, fmt.Errorf("%w: compiled chart row transport is invalid", searchjobs.ErrInvalidResult)
 	}
-	expectedColumns := []string(nil)
-	expectedTypes := []string(nil)
-	expectedScanTypes := []reflect.Type(nil)
+	contracts := []resultColumnContract(nil)
 	switch output.ValueKind {
 	case clickhouse.ChartValueKindCount:
-		expectedColumns = []string{
-			clickhouse.ChartOrdinalColumn,
-			clickhouse.ChartRowColumn,
-		}
-		expectedTypes = []string{"UInt64", output.RowDatabaseType}
-		expectedScanTypes = []reflect.Type{
-			reflect.TypeOf(uint64(0)),
-			rowScanType,
+		contracts = []resultColumnContract{
+			{name: clickhouse.ChartOrdinalColumn, databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0))},
+			{name: clickhouse.ChartRowColumn, databaseType: output.RowDatabaseType, scanType: rowScanType},
 		}
 		if output.RowSemanticBytes {
-			expectedColumns = append(expectedColumns, clickhouse.ChartRowSemanticBytesColumn)
-			expectedTypes = append(expectedTypes, "UInt8")
-			expectedScanTypes = append(expectedScanTypes, reflect.TypeOf(uint8(0)))
+			contracts = append(contracts, resultColumnContract{
+				name:         clickhouse.ChartRowSemanticBytesColumn,
+				databaseType: "UInt8",
+				scanType:     reflect.TypeOf(uint8(0)),
+			})
 		}
-		expectedColumns = append(expectedColumns,
-			clickhouse.ChartNamesColumn,
-			clickhouse.ChartCountsColumn,
-			clickhouse.ChartInvalidColumn,
-		)
-		expectedTypes = append(expectedTypes, "Array(String)", "Array(UInt64)", "UInt8")
-		expectedScanTypes = append(expectedScanTypes,
-			reflect.TypeOf([]string{}),
-			reflect.TypeOf([]uint64{}),
-			reflect.TypeOf(uint8(0)),
+		contracts = append(contracts,
+			resultColumnContract{name: clickhouse.ChartNamesColumn, databaseType: "Array(String)", scanType: reflect.TypeOf([]string{})},
+			resultColumnContract{name: clickhouse.ChartCountsColumn, databaseType: "Array(UInt64)", scanType: reflect.TypeOf([]uint64{})},
+			resultColumnContract{name: clickhouse.ChartInvalidColumn, databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0))},
 		)
 	case clickhouse.ChartValueKindSum, clickhouse.ChartValueKindAverage,
 		clickhouse.ChartValueKindPercentile:
-		expectedColumns = []string{
-			clickhouse.ChartOrdinalColumn,
-			clickhouse.ChartRowColumn,
-		}
-		expectedTypes = []string{
-			"UInt64",
-			output.RowDatabaseType,
-		}
-		expectedScanTypes = []reflect.Type{
-			reflect.TypeOf(uint64(0)),
-			rowScanType,
+		contracts = []resultColumnContract{
+			{name: clickhouse.ChartOrdinalColumn, databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0))},
+			{name: clickhouse.ChartRowColumn, databaseType: output.RowDatabaseType, scanType: rowScanType},
 		}
 		if output.RowSemanticBytes {
-			expectedColumns = append(expectedColumns, clickhouse.ChartRowSemanticBytesColumn)
-			expectedTypes = append(expectedTypes, "UInt8")
-			expectedScanTypes = append(expectedScanTypes, reflect.TypeOf(uint8(0)))
+			contracts = append(contracts, resultColumnContract{
+				name:         clickhouse.ChartRowSemanticBytesColumn,
+				databaseType: "UInt8",
+				scanType:     reflect.TypeOf(uint8(0)),
+			})
 		}
-		expectedColumns = append(expectedColumns,
-			clickhouse.ChartNamesColumn,
-			clickhouse.ChartValuesColumn,
-			clickhouse.ChartValuePresentColumn,
-			clickhouse.ChartInvalidColumn,
-		)
-		expectedTypes = append(expectedTypes,
-			"Array(String)",
-			"Array(Float64)",
-			"Array(UInt8)",
-			"UInt8",
-		)
-		expectedScanTypes = append(expectedScanTypes,
-			reflect.TypeOf([]string{}),
-			reflect.TypeOf([]float64{}),
-			reflect.TypeOf([]uint8{}),
-			reflect.TypeOf(uint8(0)),
+		contracts = append(contracts,
+			resultColumnContract{name: clickhouse.ChartNamesColumn, databaseType: "Array(String)", scanType: reflect.TypeOf([]string{})},
+			resultColumnContract{name: clickhouse.ChartValuesColumn, databaseType: "Array(Float64)", scanType: reflect.TypeOf([]float64{})},
+			resultColumnContract{name: clickhouse.ChartValuePresentColumn, databaseType: "Array(UInt8)", scanType: reflect.TypeOf([]uint8{})},
+			resultColumnContract{name: clickhouse.ChartInvalidColumn, databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0))},
 		)
 	default:
 		return bufferedChart{}, fmt.Errorf("%w: compiled chart value kind is invalid", searchjobs.ErrInvalidResult)
 	}
-	if len(columnTypes) != len(expectedColumns) || !slices.Equal(columns, expectedColumns) {
+	violation, column := validateResultColumnContracts(
+		columns,
+		columnTypes,
+		contracts,
+		resultColumnRequireScanType|resultColumnTrimDatabaseType,
+	)
+	if violation == resultColumnContractShapeMismatch {
 		return bufferedChart{}, fmt.Errorf("%w: ClickHouse chart columns do not match the compiled output", searchjobs.ErrInvalidResult)
 	}
-	// Only the row column's physical type varies, and the compiler's closed
-	// database-type/kind pair resolves it before this exact scan-type check.
-	for index, columnType := range columnTypes {
-		if isNilDriverValue(columnType) || columnType.Name() != expectedColumns[index] || columnType.Nullable() ||
-			strings.TrimSpace(columnType.DatabaseTypeName()) != expectedTypes[index] || columnType.ScanType() == nil ||
-			columnType.ScanType() != expectedScanTypes[index] {
-			return bufferedChart{}, fmt.Errorf("%w: ClickHouse chart column %q has an invalid type", searchjobs.ErrInvalidResult, expectedColumns[index])
-		}
+	if violation == resultColumnContractTypeMismatch {
+		return bufferedChart{}, fmt.Errorf("%w: ClickHouse chart column %q has an invalid type", searchjobs.ErrInvalidResult, column)
 	}
 
 	buffered := bufferedChart{}
@@ -2619,16 +2646,7 @@ func convertValue(value any) (searchjobs.Value, error) {
 // Keeping this at the package boundary ensures every specialized executor
 // rejects them consistently before invoking a driver method.
 func isNilDriverValue(value any) bool {
-	if value == nil {
-		return true
-	}
-	reflected := reflect.ValueOf(value)
-	switch reflected.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return reflected.IsNil()
-	default:
-		return false
-	}
+	return nilcheck.IsNil(value)
 }
 
 // convertExtendedValue reverses the lossless representation used when an

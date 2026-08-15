@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"net"
 	"reflect"
@@ -1430,9 +1431,7 @@ func (s *Store) rowsForBatch(ctx context.Context, batch ingest.StoreBatch, prior
 	retentionByIndex := make(map[string]time.Duration)
 	if admittedRetention {
 		retentionByIndex = make(map[string]time.Duration, len(batch.RetentionByIndex))
-		for index, period := range batch.RetentionByIndex {
-			retentionByIndex[index] = period
-		}
+		maps.Copy(retentionByIndex, batch.RetentionByIndex)
 	}
 	metadataVersion := reservationMetadataVersion
 	if prior != nil {
@@ -2185,7 +2184,7 @@ func decodeReservationMetadata(metadata []byte) (reservationMetadata, error) {
 	}
 	rejections := make([]*opensplunkv1.EventRejection, 0, rejectionCount)
 	seenRejections := make(map[uint32]struct{}, rejectionCount)
-	for index := uint32(0); index < rejectionCount; index++ {
+	for index := range rejectionCount {
 		length, err := readUint64()
 		// #nosec G115 -- bytes.Reader.Len is always non-negative.
 		if err != nil || length == 0 || length > uint64(reader.Len()) || length > uint64(math.MaxInt) {

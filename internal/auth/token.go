@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -24,6 +23,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
 	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
+	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/tokenconstraint"
 	"gorm.io/gorm"
 )
@@ -346,7 +346,7 @@ func NewStoreWithOptions(db *control.DB, digestKey []byte, options StoreOptions)
 		if err != nil {
 			return nil, fmt.Errorf("configure collector-token audit store: %w", err)
 		}
-	} else if isNilAuditAppender(auditAppender) {
+	} else if nilcheck.IsNil(auditAppender) {
 		return nil, fmt.Errorf(
 			"%w: collector-token audit appender is nil",
 			control.ErrInvalidArgument,
@@ -363,17 +363,6 @@ func NewStoreWithOptions(db *control.DB, digestKey []byte, options StoreOptions)
 		auditTenantID:             auditTenantID,
 		requireExplicitAuditActor: options.RequireExplicitAuditActor,
 	}, nil
-}
-
-func isNilAuditAppender(appender audit.TransactionAppender) bool {
-	value := reflect.ValueOf(appender)
-	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map,
-		reflect.Pointer, reflect.Slice:
-		return value.IsNil()
-	default:
-		return false
-	}
 }
 
 func (store *Store) validateTokenMutationActor(ctx context.Context) error {

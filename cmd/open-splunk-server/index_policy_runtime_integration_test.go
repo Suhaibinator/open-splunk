@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"maps"
 	"net"
 	"path/filepath"
 	"slices"
@@ -142,7 +143,7 @@ func TestRuntimeIndexPoliciesRefreshWithoutCollectorReconnect(t *testing.T) {
 		t.Fatalf("collector Ready = %#v", readyResponse)
 	}
 
-	initialBatch := indexPolicyRuntimeBatch(t, collectorID, "batch-index-policy-v1", 1, now,
+	initialBatch := indexPolicyRuntimeBatch(t, "batch-index-policy-v1", 1, now,
 		indexPolicyRuntimeEvent(t, "event-main-default-v1", "main", "", now,
 			indexPolicyRuntimeStringField("one", "1")),
 		indexPolicyRuntimeEvent(t, "event-main-explicit-v1", "main", "explicit:main", now,
@@ -180,7 +181,7 @@ func TestRuntimeIndexPoliciesRefreshWithoutCollectorReconnect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	updatedBatch := indexPolicyRuntimeBatch(t, collectorID, "batch-index-policy-v2", 2, now,
+	updatedBatch := indexPolicyRuntimeBatch(t, "batch-index-policy-v2", 2, now,
 		indexPolicyRuntimeEvent(t, "event-main-default-v2", "main", "", now,
 			indexPolicyRuntimeStringField("one", "1"),
 			indexPolicyRuntimeStringField("two", "2")),
@@ -213,7 +214,7 @@ func TestRuntimeIndexPoliciesRefreshWithoutCollectorReconnect(t *testing.T) {
 	if _, err := database.UpdateIndex(ctx, mainIndex.ID, mainIndex.Version, disabledDefinition); err != nil {
 		t.Fatal(err)
 	}
-	disabledBatch := indexPolicyRuntimeBatch(t, collectorID, "batch-index-policy-disabled", 3, now,
+	disabledBatch := indexPolicyRuntimeBatch(t, "batch-index-policy-disabled", 3, now,
 		indexPolicyRuntimeEvent(t, "event-main-disabled", "main", "", now,
 			indexPolicyRuntimeStringField("one", "1")),
 	)
@@ -236,7 +237,7 @@ func TestRuntimeIndexPoliciesRefreshWithoutCollectorReconnect(t *testing.T) {
 		t.Fatalf("stored batches after disabled-index rejection = %d, want 2", calls)
 	}
 
-	auditBatch := indexPolicyRuntimeBatch(t, collectorID, "batch-index-policy-audit", 4, now,
+	auditBatch := indexPolicyRuntimeBatch(t, "batch-index-policy-audit", 4, now,
 		indexPolicyRuntimeEvent(t, "event-audit-after-main-disable", "audit", "", now,
 			indexPolicyRuntimeStringField("one", "1")),
 	)
@@ -279,7 +280,7 @@ func TestRuntimeIndexPoliciesRefreshWithoutCollectorReconnect(t *testing.T) {
 		t.Fatalf("stored batches after durable replay = %d, want 3", calls)
 	}
 
-	freshBatch := indexPolicyRuntimeBatch(t, collectorID, "batch-index-policy-no-authority", 5, now,
+	freshBatch := indexPolicyRuntimeBatch(t, "batch-index-policy-no-authority", 5, now,
 		indexPolicyRuntimeEvent(t, "event-no-authority", "audit", "", now,
 			indexPolicyRuntimeStringField("one", "1")),
 	)
@@ -421,7 +422,6 @@ func indexPolicyRuntimeObjectField(
 
 func indexPolicyRuntimeBatch(
 	t *testing.T,
-	collectorID string,
 	batchID string,
 	batchSequence uint64,
 	createdAt time.Time,
@@ -430,7 +430,7 @@ func indexPolicyRuntimeBatch(
 	t.Helper()
 
 	return &opensplunkv1.EventBatch{
-		CollectorId:           collectorID,
+		CollectorId:           "collector-index-policy-runtime",
 		BatchId:               batchID,
 		BatchSequence:         batchSequence,
 		CreatedAt:             timestamppb.New(createdAt),
@@ -628,9 +628,7 @@ func indexPolicyRuntimeCloneBatch(batch ingest.StoreBatch) ingest.StoreBatch {
 		detached.Events[index] = &cloned
 	}
 	detached.RetentionByIndex = make(map[string]time.Duration, len(batch.RetentionByIndex))
-	for indexName, retention := range batch.RetentionByIndex {
-		detached.RetentionByIndex[indexName] = retention
-	}
+	maps.Copy(detached.RetentionByIndex, batch.RetentionByIndex)
 	detached.RejectedEvents = indexPolicyRuntimeCloneRejections(batch.RejectedEvents)
 	return detached
 }

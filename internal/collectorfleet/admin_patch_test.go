@@ -512,9 +512,7 @@ func TestAdministrativePatchTerminalCapacitySemantics(t *testing.T) {
 	results := make(chan terminalResult, 2)
 	var workers sync.WaitGroup
 	for range 2 {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
+		workers.Go(func() {
 			<-start
 			snapshot, updateErr := store.SetAdministrativeState(
 				ctx,
@@ -525,7 +523,7 @@ func TestAdministrativePatchTerminalCapacitySemantics(t *testing.T) {
 				connectedAt.Add(2*time.Minute),
 			)
 			results <- terminalResult{snapshot: snapshot, err: updateErr}
-		}()
+		})
 	}
 	close(start)
 	workers.Wait()

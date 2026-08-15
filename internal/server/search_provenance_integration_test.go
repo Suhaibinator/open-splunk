@@ -106,8 +106,8 @@ func TestSavedSearchProvenanceSurvivesExecutionAndSourceDeletion(t *testing.T) {
 	savedDefinition := savedSearchDefinition(ownerID, appID, "Errors")
 	savedDefinition.Search.Spl = searchSPL
 	savedDefinition.Search.TimeRange = &opensplunkv1.TimeRangeSpec{
-		Earliest: stringPointer("-1d"), Latest: stringPointer("now"),
-		Timezone: stringPointer(location.String()),
+		Earliest: new("-1d"), Latest: new("now"),
+		Timezone: new(location.String()),
 	}
 	saved, err := savedSearches.Create(
 		ctx,
@@ -182,13 +182,13 @@ func TestSavedSearchProvenanceSurvivesExecutionAndSourceDeletion(t *testing.T) {
 		Definition: &opensplunkv1.SearchDefinition{
 			Spl: searchSPL,
 			TimeRange: &opensplunkv1.TimeRangeSpec{
-				Earliest: stringPointer("-1d"), Latest: stringPointer("now"), Timezone: &timezone,
+				Earliest: new("-1d"), Latest: new("now"), Timezone: &timezone,
 			},
 			IndexScope: []string{"main"},
 		},
 		Source: &opensplunkv1.SearchJobSource{
 			Origin:        opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH,
-			SavedSearchId: stringPointer(saved.GetSavedSearchId()),
+			SavedSearchId: new(saved.GetSavedSearchId()),
 		},
 	}
 	response := postProto(t, handler, "/api/v1/search/jobs/create", request)
@@ -242,7 +242,7 @@ func TestSavedSearchProvenanceSurvivesExecutionAndSourceDeletion(t *testing.T) {
 	assertHistoryProvenanceSnapshot(t, historyResponse.GetHistoryEntry(), jobID, appID, savedID, searchSPL, wantEarliest, anchor)
 
 	listed, err := history.List(ctx, searchhistory.AccessScope{TenantID: tenantID, OwnerID: ownerID}, searchhistory.ListRequest{
-		PageSize: 1, AppIDFilter: stringPointer(appID), SavedSearchIDFilter: stringPointer(savedID),
+		PageSize: 1, AppIDFilter: new(appID), SavedSearchIDFilter: new(savedID),
 	})
 	if err != nil {
 		t.Fatal(err)

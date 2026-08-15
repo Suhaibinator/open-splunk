@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"testing"
@@ -127,9 +128,7 @@ func (set *backendLoadRawMultiset) Clone() *backendLoadRawMultiset {
 		counts:    make(map[[sha256.Size]byte]uint64, len(set.counts)),
 		remaining: set.remaining,
 	}
-	for digest, count := range set.counts {
-		clone.counts[digest] = count
-	}
+	maps.Copy(clone.counts, set.counts)
 	return clone
 }
 

@@ -16,7 +16,7 @@ import (
 
 func TestMigrationRejectsDirectInvalidTaxonomyAndPrivacyShapes(t *testing.T) {
 	t.Parallel()
-	_, database := openTestDatabase(t)
+	database := openTestDatabase(t)
 	if _, err := database.SQLDB().ExecContext(t.Context(), `
 		INSERT INTO knowledge_attempt_audit_tenant_state (
 			tenant_id, first_sequence, next_sequence, retained_count
@@ -87,7 +87,7 @@ func TestMigrationRejectsDirectInvalidTaxonomyAndPrivacyShapes(t *testing.T) {
 }
 
 func TestRollingCapEvictsOldestWithRecursiveTriggersOffAndOn(t *testing.T) {
-	_, database := openTestDatabase(t)
+	database := openTestDatabase(t)
 	store := newTestStore(t, database)
 	admin := actorContext(t, audit.ActorRoleAdministrator, "administrator")
 	ctx := context.Background()
@@ -185,7 +185,7 @@ func TestRollingCapEvictsOldestWithRecursiveTriggersOffAndOn(t *testing.T) {
 
 func TestORReplaceCannotBypassImmutabilityWithRecursiveTriggersOffAndOn(t *testing.T) {
 	t.Parallel()
-	_, database := openTestDatabase(t)
+	database := openTestDatabase(t)
 	store := newTestStore(t, database)
 	admin := actorContext(t, audit.ActorRoleAdministrator, "administrator")
 	if err := store.AppendRejected(admin, "tenant-replace", adminDefinition(ActionValidate, ReasonInvalidDefinition, 0)); err != nil {
@@ -245,7 +245,7 @@ func TestORReplaceCannotBypassImmutabilityWithRecursiveTriggersOffAndOn(t *testi
 
 func TestSequenceExhaustionFailsClosedWithoutWrapping(t *testing.T) {
 	t.Parallel()
-	_, database := openTestDatabase(t)
+	database := openTestDatabase(t)
 	store := newTestStore(t, database)
 	admin := actorContext(t, audit.ActorRoleAdministrator, "administrator")
 	if _, err := database.SQLDB().ExecContext(t.Context(), `
@@ -279,10 +279,10 @@ func TestSequenceExhaustionFailsClosedWithoutWrapping(t *testing.T) {
 
 func TestStartupDetectsTamperingWithoutReturningPartialState(t *testing.T) {
 	t.Parallel()
-	_, database := openTestDatabase(t)
+	database := openTestDatabase(t)
 	store := newTestStore(t, database)
 	admin := actorContext(t, audit.ActorRoleAdministrator, "administrator")
-	for index := 0; index < 3; index++ {
+	for index := range 3 {
 		if err := store.AppendRejected(admin, "tenant-tamper", adminDefinition(ActionValidate, ReasonInvalidDefinition, time.Duration(index))); err != nil {
 			t.Fatal(err)
 		}
@@ -309,11 +309,10 @@ func TestStartupDetectsTamperingWithoutReturningPartialState(t *testing.T) {
 }
 
 func TestBackupRestorePreservesExactWindowAndIntegrity(t *testing.T) {
-	path, database := openTestDatabase(t)
-	_ = path
+	database := openTestDatabase(t)
 	store := newTestStore(t, database)
 	admin := actorContext(t, audit.ActorRoleAdministrator, "administrator")
-	for index := 0; index < 4; index++ {
+	for index := range 4 {
 		if err := store.AppendRejected(admin, "tenant-backup", adminDefinition(ActionPreview, ReasonResourceLimit, time.Duration(index)*time.Microsecond)); err != nil {
 			t.Fatal(err)
 		}

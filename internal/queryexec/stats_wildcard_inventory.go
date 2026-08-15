@@ -4,9 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"reflect"
-	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -262,36 +260,30 @@ func validateStatsWildcardInventoryColumns(
 	columns []string,
 	columnTypes []driver.ColumnType,
 ) error {
-	expectedColumns := []string{
-		clickhouse.StatsWildcardInventoryOrdinalColumn,
-		clickhouse.StatsWildcardInventoryFieldColumn,
-		clickhouse.StatsWildcardInventoryInvalidColumn,
+	contracts := []resultColumnContract{
+		{name: clickhouse.StatsWildcardInventoryOrdinalColumn, databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0))},
+		{name: clickhouse.StatsWildcardInventoryFieldColumn, databaseType: "String", scanType: reflect.TypeOf("")},
+		{name: clickhouse.StatsWildcardInventoryInvalidColumn, databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0))},
 	}
-	if !slices.Equal(columns, expectedColumns) || len(columnTypes) != len(expectedColumns) {
+	violation, column := validateResultColumnContracts(
+		columns,
+		columnTypes,
+		contracts,
+		resultColumnRequireScanType,
+	)
+	if violation == resultColumnContractShapeMismatch {
 		return invalidStatsWildcardInventoryResult("columns do not match the compiled output")
 	}
-	expectedTypes := []struct {
-		database string
-		scan     reflect.Type
-	}{
-		{database: "UInt8", scan: reflect.TypeOf(uint8(0))},
-		{database: "String", scan: reflect.TypeOf("")},
-		{database: "UInt8", scan: reflect.TypeOf(uint8(0))},
-	}
-	for index, columnType := range columnTypes {
-		if isNilDriverValue(columnType) || columnType.Name() != expectedColumns[index] ||
-			columnType.Nullable() || columnType.DatabaseTypeName() != expectedTypes[index].database ||
-			columnType.ScanType() != expectedTypes[index].scan {
-			return invalidStatsWildcardInventoryResult(
-				fmt.Sprintf("column %q has an invalid type", expectedColumns[index]),
-			)
-		}
+	if violation == resultColumnContractTypeMismatch {
+		return invalidStatsWildcardInventoryResult(
+			fmt.Sprintf("column %q has an invalid type", column),
+		)
 	}
 	return nil
 }
 
 func settingsForStatsWildcardInventory(
-	base clickhousedriver.Settings,
+	base *validatedExecutorSettings,
 	maximumPairs uint8,
 ) (clickhousedriver.Settings, error) {
 	if maximumPairs < 2 || maximumPairs > spl.MaximumStatsMeasures+1 {
@@ -299,58 +291,27 @@ func settingsForStatsWildcardInventory(
 			"execute ClickHouse stats wildcard inventory: pair limit is invalid",
 		)
 	}
-	if base == nil || base["readonly"] != uint8(2) {
+	if base == nil {
 		return nil, errors.New(
 			"execute ClickHouse stats wildcard inventory: executor does not have read-only settings",
 		)
 	}
-	for _, name := range []string{
-		"max_execution_time", "max_memory_usage", "max_rows_to_read",
-		"max_bytes_to_read", "max_result_rows", "max_result_bytes",
-		"max_rows_to_group_by", "max_threads", "max_query_size", "max_subquery_depth",
-	} {
-		value, ok := base[name].(uint64)
-		if !ok || value == 0 {
-			return nil, fmt.Errorf(
-				"execute ClickHouse stats wildcard inventory: executor setting %s is invalid",
-				name,
-			)
-		}
-	}
-	for _, name := range []string{
-		"timeout_overflow_mode", "read_overflow_mode", "result_overflow_mode",
-		"group_by_overflow_mode",
-	} {
-		if base[name] != "throw" {
-			return nil, fmt.Errorf(
-				"execute ClickHouse stats wildcard inventory: executor setting %s is unsafe",
-				name,
-			)
-		}
-	}
-	if base["enable_materialized_cte"] != uint8(1) ||
-		base["short_circuit_function_evaluation"] != "enable" ||
-		base["async_insert"] != uint8(0) {
-		return nil, errors.New(
-			"execute ClickHouse stats wildcard inventory: executor safety settings are invalid",
-		)
-	}
-	settings := maps.Clone(base)
+	settings := base.clone()
 	settings["max_execution_time"] = min(
-		base["max_execution_time"].(uint64),
+		base.limit("max_execution_time"),
 		uint64(maximumStatsWildcardInventoryExecutionTime/time.Second),
 	)
 	settings["max_memory_usage"] = min(
-		base["max_memory_usage"].(uint64), maximumStatsWildcardInventoryMemoryBytes,
+		base.limit("max_memory_usage"), maximumStatsWildcardInventoryMemoryBytes,
 	)
 	settings["max_rows_to_read"] = min(
-		base["max_rows_to_read"].(uint64), maximumStatsWildcardInventoryRowsToRead,
+		base.limit("max_rows_to_read"), maximumStatsWildcardInventoryRowsToRead,
 	)
 	settings["max_bytes_to_read"] = min(
-		base["max_bytes_to_read"].(uint64), maximumStatsWildcardInventoryBytesToRead,
+		base.limit("max_bytes_to_read"), maximumStatsWildcardInventoryBytesToRead,
 	)
 	settings["max_result_rows"] = min(
-		base["max_result_rows"].(uint64), uint64(maximumPairs)+1,
+		base.limit("max_result_rows"), uint64(maximumPairs)+1,
 	)
 	// Include the String offset/length, two scalar cells, and conservative
 	// block bookkeeping per row. Legal maximum-length names must not trip the
@@ -358,15 +319,15 @@ func settingsForStatsWildcardInventory(
 	maximumResultBytes := uint64(maximumPairs+1) *
 		uint64(eventfields.MaximumNormalizedFieldNameBytes+64)
 	settings["max_result_bytes"] = min(
-		base["max_result_bytes"].(uint64), maximumResultBytes,
+		base.limit("max_result_bytes"), maximumResultBytes,
 	)
 	// Prefix operators (notably eventstats) and the pre-LIMIT distinct-name
 	// relation may legitimately exceed the final 17-pair transport. Preserve
 	// the executor's ordinary hard group ceiling; SQL LIMIT and the bounded
 	// result stream independently enforce inventory width.
-	settings["max_rows_to_group_by"] = base["max_rows_to_group_by"].(uint64)
+	settings["max_rows_to_group_by"] = base.limit("max_rows_to_group_by")
 	settings["max_threads"] = min(
-		base["max_threads"].(uint64), maximumStatsWildcardInventoryThreads,
+		base.limit("max_threads"), maximumStatsWildcardInventoryThreads,
 	)
 	settings["use_query_cache"] = uint8(0)
 	return settings, nil

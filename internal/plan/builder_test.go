@@ -1255,9 +1255,9 @@ func TestBuildRexBoundsTotalOutputsAcrossPipeline(t *testing.T) {
 
 	var source strings.Builder
 	source.WriteString("index=gradethis")
-	for command := 0; command < 5; command++ {
+	for command := range 5 {
 		source.WriteString(` | rex "`)
-		for capture := 0; capture < 16; capture++ {
+		for capture := range 16 {
 			fmt.Fprintf(&source, "(?<r%d_%d>x)", command, capture)
 		}
 		source.WriteByte('"')

@@ -8,6 +8,7 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
+	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
@@ -156,7 +157,7 @@ func convertKnowledgeCalculatedExpression(
 }
 
 func knowledgeExpressionUsesAuthoredV02Syntax(expression spl.ScalarExpr) bool {
-	if nilSPLScalarExpression(expression) {
+	if nilcheck.IsNil(expression) {
 		return true
 	}
 	switch expression := expression.(type) {
@@ -165,12 +166,7 @@ func knowledgeExpressionUsesAuthoredV02Syntax(expression spl.ScalarExpr) bool {
 	case *spl.ScalarUnaryExpr, *spl.ScalarBinaryExpr:
 		return true
 	case *spl.ScalarCallExpr:
-		for _, argument := range expression.Arguments {
-			if knowledgeExpressionUsesAuthoredV02Syntax(argument) {
-				return true
-			}
-		}
-		return false
+		return slices.ContainsFunc(expression.Arguments, knowledgeExpressionUsesAuthoredV02Syntax)
 	case *spl.ScalarIfExpr:
 		return knowledgeWhereUsesAuthoredV02Syntax(expression.Condition) ||
 			knowledgeExpressionUsesAuthoredV02Syntax(expression.True) ||
@@ -189,7 +185,7 @@ func knowledgeExpressionUsesAuthoredV02Syntax(expression spl.ScalarExpr) bool {
 }
 
 func knowledgeWhereUsesAuthoredV02Syntax(expression spl.WhereExpr) bool {
-	if nilSPLWhereExpression(expression) {
+	if nilcheck.IsNil(expression) {
 		return true
 	}
 	switch expression := expression.(type) {
@@ -272,10 +268,8 @@ func ValidateKnowledgePreludeIntegrity(query *Query) error {
 		return errors.New("validate knowledge prelude: marker is malformed")
 	}
 	if !markerPresent {
-		for _, operator := range query.Operators {
-			if isKnowledgePreludeOperator(operator) {
-				return errors.New("validate knowledge prelude: legacy query contains a knowledge operator")
-			}
+		if slices.ContainsFunc(query.Operators, isKnowledgePreludeOperator) {
+			return errors.New("validate knowledge prelude: legacy query contains a knowledge operator")
 		}
 		return nil
 	}
@@ -298,10 +292,8 @@ func ValidateKnowledgePreludeIntegrity(query *Query) error {
 			return fmt.Errorf("validate knowledge prelude: generated operator %d disagrees", index)
 		}
 	}
-	for _, operator := range query.Operators[1+len(expected):] {
-		if isKnowledgePreludeOperator(operator) {
-			return errors.New("validate knowledge prelude: knowledge operator is outside the generated prefix")
-		}
+	if slices.ContainsFunc(query.Operators[1+len(expected):], isKnowledgePreludeOperator) {
+		return errors.New("validate knowledge prelude: knowledge operator is outside the generated prefix")
 	}
 	return nil
 }

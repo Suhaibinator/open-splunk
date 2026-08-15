@@ -109,7 +109,7 @@ func TestSearchWebSocketFullServerIntegration(t *testing.T) {
 	connection := dialSearchWebSocket(
 		t,
 		dialer,
-		webSocketURL(httpServer.URL, searchWebSocketPath),
+		webSocketURL(httpServer.URL),
 		httpServer.URL,
 	)
 	defer connection.Close()
@@ -121,7 +121,7 @@ func TestSearchWebSocketFullServerIntegration(t *testing.T) {
 				SubscriptionId: "subscription-1",
 				Target: &opensplunkv1.JobTarget{Target: &opensplunkv1.JobTarget_SearchJobId{
 					SearchJobId: jobID,
-				}}, IncludePreviews: true, PreviewRowLimit: uint32Pointer(1),
+				}}, IncludePreviews: true, PreviewRowLimit: new(uint32(1)),
 			}},
 		}},
 	}
@@ -551,7 +551,7 @@ func newRealSearchWebSocketFixtureWithOptions(
 	return &realSearchWebSocketFixture{
 		t: t, jobID: jobID, anchor: anchor, executor: executor, server: server, client: client,
 		dialer:    &websocket.Dialer{HandshakeTimeout: clientTimeout},
-		socketURL: webSocketURL(server.URL, searchWebSocketPath),
+		socketURL: webSocketURL(server.URL),
 	}
 }
 
@@ -995,7 +995,7 @@ func assertRejectedSearchWebSocketOrigins(t *testing.T, dialer *websocket.Dialer
 	} {
 		t.Run(name, func(t *testing.T) {
 			connection, response, err := dialer.Dial(
-				webSocketURL(serverURL, searchWebSocketPath),
+				webSocketURL(serverURL),
 				http.Header{"Origin": []string{origin}, "Sec-Fetch-Site": []string{"same-origin"}},
 			)
 			if connection != nil {
@@ -1039,6 +1039,6 @@ func assertSearchWebSocketWrongMethod(t *testing.T, client *http.Client, serverU
 	}
 }
 
-func webSocketURL(serverURL, path string) string {
-	return "ws" + strings.TrimPrefix(serverURL, "http") + path
+func webSocketURL(serverURL string) string {
+	return "ws" + strings.TrimPrefix(serverURL, "http") + searchWebSocketPath
 }

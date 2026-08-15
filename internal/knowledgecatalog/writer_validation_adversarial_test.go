@@ -401,7 +401,7 @@ func TestWriterValidateUpdateCardinalityHonorsRootMaskAndBodyApplicability(t *te
 	)
 
 	wrongVersion := proto.Clone(selectorRequest).(*opensplunkv1.ValidateKnowledgeObjectRequest)
-	wrongVersion.ExpectedVersion = uint64Pointer(2)
+	wrongVersion.ExpectedVersion = new(uint64(2))
 	if _, err := writer.Validate(t.Context(), scope, wrongVersion); !errors.Is(err, control.ErrVersionConflict) {
 		t.Fatalf("over-cardinality wrong-version error = %v, want ErrVersionConflict", err)
 	}
@@ -817,7 +817,7 @@ func TestWriterValidateRootAuthorizationAndVersionPrecedeCandidateIssues(t *test
 		t.Fatalf("unauthorized root error exposed an authorized context: %v", err)
 	}
 	wrongVersion := proto.Clone(request).(*opensplunkv1.ValidateKnowledgeObjectRequest)
-	wrongVersion.ExpectedVersion = uint64Pointer(2)
+	wrongVersion.ExpectedVersion = new(uint64(2))
 	if _, err := writer.Validate(t.Context(), scope, wrongVersion); !errors.Is(err, control.ErrVersionConflict) {
 		t.Fatalf("wrong-version root error = %v, want ErrVersionConflict", err)
 	}

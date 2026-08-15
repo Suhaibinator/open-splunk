@@ -633,12 +633,10 @@ func buildKnowledgeAliasSourceExpressions(
 			"compile ClickHouse knowledge alias source expressions: path authority is incomplete",
 		)
 	}
-	for _, expression := range physicalSegmentSQL {
-		if expression == "" {
-			return knowledgeAliasSourceExpressions{}, errors.New(
-				"compile ClickHouse knowledge alias source expressions: physical path is incomplete",
-			)
-		}
+	if slices.Contains(physicalSegmentSQL, "") {
+		return knowledgeAliasSourceExpressions{}, errors.New(
+			"compile ClickHouse knowledge alias source expressions: physical path is incomplete",
+		)
 	}
 
 	q := quoteIdentifier

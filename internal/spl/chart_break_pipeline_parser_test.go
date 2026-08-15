@@ -272,7 +272,7 @@ func TestChartBreakPipelineBudgetsCountChartAsOneOrdinaryStage(t *testing.T) {
 	build := func(stages int) string {
 		var source strings.Builder
 		source.WriteString("index=main")
-		for index := 0; index < stages; index++ {
+		for index := range stages {
 			source.WriteString(" | eval f")
 			source.WriteString(strconv.Itoa(index))
 			source.WriteString("=1")

@@ -563,10 +563,10 @@ func TestDecodeCanonicalFutureBodyRejectsAmbiguousOrNoncanonicalShapes(t *testin
 	knownAndFuture := append(bytes.Clone(knownNormalized.Bytes), canonicalFutureBodyField(13, []byte{1})...)
 	nestedUnknown := validBaseDefinition()
 	nestedUnknown.Selector.ProtoReflect().SetUnknown(testUnknownField())
-	nestedUnknownBytes := futureDefinitionBytes(t, nestedUnknown, 13, []byte{1})
+	nestedUnknownBytes := futureDefinitionBytes(t, nestedUnknown, []byte{1})
 	noncanonicalMetadata := validBaseDefinition()
 	noncanonicalMetadata.Name = " revenue "
-	noncanonicalBytes := futureDefinitionBytes(t, noncanonicalMetadata, 13, []byte{1})
+	noncanonicalBytes := futureDefinitionBytes(t, noncanonicalMetadata, []byte{1})
 	tooManyPatterns := validBaseDefinition()
 	for len(tooManyPatterns.Selector.IndexPatterns) <= knowledge.MaximumSelectorPatternsPerDimension {
 		tooManyPatterns.Selector.IndexPatterns = append(
@@ -577,10 +577,10 @@ func TestDecodeCanonicalFutureBodyRejectsAmbiguousOrNoncanonicalShapes(t *testin
 			},
 		)
 	}
-	tooManyPatternsBytes := futureDefinitionBytes(t, tooManyPatterns, 13, []byte{1})
+	tooManyPatternsBytes := futureDefinitionBytes(t, tooManyPatterns, []byte{1})
 	duplicateName := protowire.AppendString(
 		protowire.AppendTag(
-			futureDefinitionBytes(t, validBaseDefinition(), 13, []byte{1}),
+			futureDefinitionBytes(t, validBaseDefinition(), []byte{1}),
 			2,
 			protowire.BytesType,
 		),
@@ -622,7 +622,7 @@ func TestDecodeCanonicalFutureBodyRejectsAmbiguousOrNoncanonicalShapes(t *testin
 		})
 	}
 
-	valid := futureDefinitionBytes(t, validBaseDefinition(), 13, []byte{1})
+	valid := futureDefinitionBytes(t, validBaseDefinition(), []byte{1})
 	digest := sha256.Sum256(valid)
 	wrong := digest
 	wrong[0] ^= 0xff
@@ -654,7 +654,7 @@ func TestDecodeCanonicalFutureBodyRejectsAmbiguousOrNoncanonicalShapes(t *testin
 func TestDecodeCanonicalInactiveFutureBodyEnforcesTrustedLifecycleState(t *testing.T) {
 	t.Parallel()
 
-	data := futureDefinitionBytes(t, validBaseDefinition(), 13, []byte{1})
+	data := futureDefinitionBytes(t, validBaseDefinition(), []byte{1})
 	digest := sha256.Sum256(data)
 	for _, state := range []opensplunkv1.KnowledgeObjectState{
 		opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
@@ -807,11 +807,10 @@ func testUnknownField() []byte {
 func futureDefinitionBytes(
 	t *testing.T,
 	definition *opensplunkv1.KnowledgeObjectDefinition,
-	field protowire.Number,
 	payload []byte,
 ) []byte {
 	t.Helper()
-	return futureDefinitionBytesWithMetadata(t, definition, nil, field, payload)
+	return futureDefinitionBytesWithMetadata(t, definition, nil, 13, payload)
 }
 
 func futureDefinitionBytesWithMetadata(

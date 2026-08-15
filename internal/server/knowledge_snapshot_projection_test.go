@@ -114,7 +114,7 @@ func TestKnowledgeSnapshotProjectionPreservesTruncatedCanonicalPrefix(t *testing
 
 func TestSearchHistoryGetAndListRedactKnowledgeObjectDisclosures(t *testing.T) {
 	entry := historyEntry(
-		"history-knowledge", testNow, "search-app", "", opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
+		"history-knowledge", testNow, "search-app", "",
 	)
 	entry.KnowledgeSnapshot = serverKnowledgeSnapshotSummary()
 	wantRef := proto.Clone(entry.KnowledgeSnapshot.Ref).(*opensplunkv1.KnowledgeSnapshotRef)
@@ -159,7 +159,7 @@ func TestSearchHistoryGetAndListRedactKnowledgeObjectDisclosures(t *testing.T) {
 
 func TestSearchHistoryGetAndListFailClosedOnInvalidKnowledgeDependencyOutput(t *testing.T) {
 	invalid := historyEntry(
-		"invalid-history-knowledge", testNow, "search-app", "", opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
+		"invalid-history-knowledge", testNow, "search-app", "",
 	)
 	invalid.KnowledgeSnapshot = serverEmptyKnowledgeSnapshotSummary()
 	invalid.KnowledgeSnapshot.Ref.ObjectCount = knowledgesnapshot.MaximumSummaryObjects + 1

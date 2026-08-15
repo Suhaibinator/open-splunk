@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -296,97 +295,48 @@ func fieldSuggestionContainsControl(value string) bool {
 }
 
 func settingsForFieldSuggestions(
-	base clickhousedriver.Settings,
+	base *validatedExecutorSettings,
 	maximumFields uint32,
 ) (clickhousedriver.Settings, error) {
 	if maximumFields == 0 || maximumFields > clickhouse.MaximumFieldSuggestions {
 		return nil, errors.New("execute ClickHouse field suggestions: field limit is invalid")
 	}
-	if base == nil || base["readonly"] != uint8(2) {
+	if base == nil {
 		return nil, errors.New(
 			"execute ClickHouse field suggestions: executor does not have read-only settings",
 		)
 	}
-	for _, name := range []string{
-		"max_execution_time",
-		"max_memory_usage",
-		"max_rows_to_read",
-		"max_bytes_to_read",
-		"max_result_rows",
-		"max_result_bytes",
-		"max_rows_to_group_by",
-		"max_threads",
-		"max_query_size",
-		"max_subquery_depth",
-	} {
-		value, ok := base[name].(uint64)
-		if !ok || value == 0 {
-			return nil, fmt.Errorf(
-				"execute ClickHouse field suggestions: executor setting %s is invalid",
-				name,
-			)
-		}
-	}
-	for _, name := range []string{
-		"timeout_overflow_mode",
-		"read_overflow_mode",
-		"result_overflow_mode",
-		"group_by_overflow_mode",
-	} {
-		if base[name] != "throw" {
-			return nil, fmt.Errorf(
-				"execute ClickHouse field suggestions: executor setting %s is unsafe",
-				name,
-			)
-		}
-	}
-	if base["enable_materialized_cte"] != uint8(1) {
-		return nil, errors.New(
-			"execute ClickHouse field suggestions: materialized CTEs are not enabled",
-		)
-	}
-	if base["short_circuit_function_evaluation"] != "enable" {
-		return nil, errors.New(
-			"execute ClickHouse field suggestions: short-circuit evaluation is not enabled",
-		)
-	}
-	if base["async_insert"] != uint8(0) {
-		return nil, errors.New(
-			"execute ClickHouse field suggestions: asynchronous inserts must remain disabled",
-		)
-	}
-
-	settings := maps.Clone(base)
+	settings := base.clone()
 	settings["max_execution_time"] = min(
-		base["max_execution_time"].(uint64),
+		base.limit("max_execution_time"),
 		uint64(maximumFieldSuggestionExecutionTime/time.Second),
 	)
 	settings["max_memory_usage"] = min(
-		base["max_memory_usage"].(uint64),
+		base.limit("max_memory_usage"),
 		maximumFieldSuggestionMemoryBytes,
 	)
 	settings["max_rows_to_read"] = min(
-		base["max_rows_to_read"].(uint64),
+		base.limit("max_rows_to_read"),
 		maximumFieldSuggestionRowsToRead,
 	)
 	settings["max_bytes_to_read"] = min(
-		base["max_bytes_to_read"].(uint64),
+		base.limit("max_bytes_to_read"),
 		maximumFieldSuggestionBytesToRead,
 	)
 	settings["max_result_rows"] = min(
-		base["max_result_rows"].(uint64),
+		base.limit("max_result_rows"),
 		uint64(maximumFields)+2,
 	)
 	settings["max_result_bytes"] = min(
-		base["max_result_bytes"].(uint64),
+		base.limit("max_result_bytes"),
 		maximumFieldSuggestionResultBytes,
 	)
 	settings["max_rows_to_group_by"] = min(
-		base["max_rows_to_group_by"].(uint64),
+		base.limit("max_rows_to_group_by"),
 		maximumFieldSuggestionGroups,
 	)
 	settings["max_threads"] = min(
-		base["max_threads"].(uint64),
+		base.limit("max_threads"),
 		maximumFieldSuggestionThreads,
 	)
 	return settings, nil
@@ -396,32 +346,24 @@ func validateFieldSuggestionColumns(
 	columns []string,
 	columnTypes []driver.ColumnType,
 ) error {
-	expectedColumns := []string{
-		clickhouse.FieldSuggestionRowKindColumn,
-		clickhouse.FieldSuggestionNameColumn,
-		clickhouse.FieldSuggestionInvalidColumn,
+	contracts := []resultColumnContract{
+		{name: clickhouse.FieldSuggestionRowKindColumn, databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0))},
+		{name: clickhouse.FieldSuggestionNameColumn, databaseType: "String", scanType: reflect.TypeOf("")},
+		{name: clickhouse.FieldSuggestionInvalidColumn, databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0))},
 	}
-	if !slices.Equal(columns, expectedColumns) || len(columnTypes) != len(expectedColumns) {
+	violation, column := validateResultColumnContracts(
+		columns,
+		columnTypes,
+		contracts,
+		resultColumnRequireScanType,
+	)
+	if violation == resultColumnContractShapeMismatch {
 		return invalidFieldSuggestionResult("columns do not match the compiled output")
 	}
-	expectedTypes := []struct {
-		database string
-		scan     reflect.Type
-	}{
-		{database: "UInt8", scan: reflect.TypeOf(uint8(0))},
-		{database: "String", scan: reflect.TypeOf("")},
-		{database: "UInt8", scan: reflect.TypeOf(uint8(0))},
-	}
-	for index, columnType := range columnTypes {
-		if isNilDriverValue(columnType) ||
-			columnType.Name() != expectedColumns[index] ||
-			columnType.Nullable() ||
-			columnType.DatabaseTypeName() != expectedTypes[index].database ||
-			columnType.ScanType() != expectedTypes[index].scan {
-			return invalidFieldSuggestionResult(
-				fmt.Sprintf("column %q has an invalid type", expectedColumns[index]),
-			)
-		}
+	if violation == resultColumnContractTypeMismatch {
+		return invalidFieldSuggestionResult(
+			fmt.Sprintf("column %q has an invalid type", column),
+		)
 	}
 	return nil
 }

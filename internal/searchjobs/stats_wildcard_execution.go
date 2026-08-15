@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
+	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
@@ -88,7 +89,7 @@ func (manager *Manager) executeStatsWildcardInventory(
 		return plan.StatsWildcardExpansion{}, clickhouse.CompiledStatsWildcardInventory{}, 0, err
 	}
 	capability, ok := manager.executor.(StatsWildcardInventoryExecutor)
-	if !ok || isNilRequiredDependency(capability) {
+	if !ok || nilcheck.IsNil(capability) {
 		return plan.StatsWildcardExpansion{}, clickhouse.CompiledStatsWildcardInventory{}, 0, ErrUnsupportedSPL
 	}
 	compiled, err := compiler.CompileStatsWildcardInventoryContext(ctx, prefix, request)

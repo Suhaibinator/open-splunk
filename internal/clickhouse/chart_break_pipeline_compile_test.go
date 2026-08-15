@@ -485,7 +485,7 @@ func TestChartBreakPipelineAtTheCommandBudgetStillCompiles(t *testing.T) {
 
 	var source strings.Builder
 	source.WriteString("index=gradethis")
-	for index := 0; index < 63; index++ {
+	for index := range 63 {
 		source.WriteString(" | eval f")
 		source.WriteString(strconv.Itoa(index))
 		source.WriteString(`=replace(duration, "ms$", "")`)

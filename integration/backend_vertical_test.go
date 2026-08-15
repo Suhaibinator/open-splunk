@@ -2754,7 +2754,7 @@ func insertBulkEvents(t *testing.T, ctx context.Context, connection clickhousedr
 	start := time.Now().UTC().Add(-time.Minute).Truncate(time.Second)
 	indexTime := start
 	expiresAt := start.Add(24 * time.Hour)
-	for index := uint64(0); index < bulkEventCount; index++ {
+	for index := range bulkEventCount {
 		eventID := fmt.Sprintf("vertical-bulk-%05d", index)
 		message := "bulk export " + eventID
 		document := clickhousedriver.NewJSON()
@@ -3192,7 +3192,7 @@ func assertBackendHistoryRerun(
 		1,
 		1,
 	)
-	if got := resultStringCell(t, originalResults, 0, 0); got != baselineMarker {
+	if got := resultStringCell(t, originalResults, 0); got != baselineMarker {
 		t.Fatalf("history-rerun source result = %q", got)
 	}
 
@@ -3313,15 +3313,15 @@ func assertBackendHistoryRerun(
 	}
 	rerunResults := fetchAllCompletedSearchResults(t, ctx, client, baseURL, rerunID, 2, 1)
 	got := []string{
-		resultStringCell(t, rerunResults, 0, 0),
-		resultStringCell(t, rerunResults, 1, 0),
+		resultStringCell(t, rerunResults, 0),
+		resultStringCell(t, rerunResults, 1),
 	}
 	slices.Sort(got)
 	if !slices.Equal(got, []string{baselineMarker, lateMarker}) {
 		t.Fatalf("history rerun results = %v", got)
 	}
 	retainedOriginal := fetchAllCompletedSearchResults(t, ctx, client, baseURL, originalID, 1, 1)
-	if got := resultStringCell(t, retainedOriginal, 0, 0); got != baselineMarker {
+	if got := resultStringCell(t, retainedOriginal, 0); got != baselineMarker {
 		t.Fatalf("retained source result after rerun = %q", got)
 	}
 	return plaintextToken
@@ -3435,17 +3435,17 @@ func waitForBackendServerTimeAfter(
 func resultStringCell(
 	t *testing.T,
 	results *collectedVerticalSearchResults,
-	rowIndex, columnIndex int,
+	rowIndex int,
 ) string {
 	t.Helper()
 	if results == nil || rowIndex < 0 || rowIndex >= len(results.rows) ||
-		columnIndex < 0 || columnIndex >= len(results.rows[rowIndex].GetCells()) {
-		t.Fatalf("result cell [%d,%d] is unavailable: %+v", rowIndex, columnIndex, results)
+		len(results.rows[rowIndex].GetCells()) == 0 {
+		t.Fatalf("result cell [%d,0] is unavailable: %+v", rowIndex, results)
 	}
-	cell := results.rows[rowIndex].GetCells()[columnIndex]
+	cell := results.rows[rowIndex].GetCells()[0]
 	_, ok := cell.GetKind().(*opensplunkv1.TypedValue_StringValue)
 	if !ok {
-		t.Fatalf("result cell [%d,%d] = %+v, want string", rowIndex, columnIndex, cell)
+		t.Fatalf("result cell [%d,0] = %+v, want string", rowIndex, cell)
 	}
 	return cell.GetStringValue()
 }
@@ -3980,7 +3980,7 @@ func observeCompletedSearchWebSocket(
 		sawSchema           bool
 		sawPreview          bool
 	)
-	for frame := 0; frame < 256; frame++ {
+	for range 256 {
 		event := readBackendSearchWebSocketEvent(t, connection)
 		if event.GetSubscriptionAcknowledged() != nil {
 			t.Fatalf("duplicate search websocket acknowledgment: %+v", event)

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -15,6 +14,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
+	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 )
 
 const (
@@ -149,13 +149,13 @@ func NewIndexDataDeletionCoordinator(
 	store DeletionStore,
 	config IndexDataDeletionCoordinatorConfig,
 ) (*IndexDataDeletionCoordinator, error) {
-	if interfaceIsNil(controlPlane) {
+	if nilcheck.IsNil(controlPlane) {
 		return nil, errors.New("index data deletion control plane is required")
 	}
-	if interfaceIsNil(store) {
+	if nilcheck.IsNil(store) {
 		return nil, errors.New("index data deletion ClickHouse store is required")
 	}
-	if interfaceIsNil(config.ReadRetirement) {
+	if nilcheck.IsNil(config.ReadRetirement) {
 		return nil, errors.New("index data deletion read retirement is required")
 	}
 	if !validDeletionTenantID(config.TenantID) {
@@ -789,18 +789,4 @@ func validDeletionTenantID(value string) bool {
 		}
 	}
 	return true
-}
-
-func interfaceIsNil(value any) bool {
-	if value == nil {
-		return true
-	}
-	reflected := reflect.ValueOf(value)
-	switch reflected.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map,
-		reflect.Pointer, reflect.Slice:
-		return reflected.IsNil()
-	default:
-		return false
-	}
 }

@@ -139,7 +139,7 @@ func Generate(ctx context.Context, w io.Writer, cfg Config, count uint64) error 
 	if err != nil {
 		return err
 	}
-	for i := uint64(0); i < count; i++ {
+	for i := range count {
 		if err := ctx.Err(); err != nil {
 			return err
 		}

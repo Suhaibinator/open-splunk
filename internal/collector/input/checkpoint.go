@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
@@ -296,9 +297,7 @@ func cloneCheckpoints(
 	entries map[checkpointKey]Checkpoint,
 ) map[checkpointKey]Checkpoint {
 	cloned := make(map[checkpointKey]Checkpoint, len(entries))
-	for key, cp := range entries {
-		cloned[key] = cp
-	}
+	maps.Copy(cloned, entries)
 	return cloned
 }
 

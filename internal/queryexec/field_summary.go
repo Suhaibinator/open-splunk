@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"maps"
 	"math"
 	"regexp"
 	"slices"
@@ -404,41 +403,18 @@ func validateCompiledFieldSummary(query clickhouse.CompiledFieldSummary) error {
 }
 
 func settingsForFieldSummary(
-	base clickhousedriver.Settings,
+	base *validatedExecutorSettings,
 	spec clickhouse.FieldSummarySpec,
 ) (clickhousedriver.Settings, error) {
 	if err := validateCompiledFieldSummary(clickhouse.CompiledFieldSummary{SQL: "SELECT summary", Spec: spec}); err != nil {
 		return nil, errors.New("execute ClickHouse field summary: summary limits are invalid")
 	}
-	if base == nil || base["readonly"] != uint8(2) {
+	if base == nil {
 		return nil, errors.New("execute ClickHouse field summary: executor does not have read-only settings")
 	}
-	for _, name := range []string{
-		"max_execution_time",
-		"max_memory_usage",
-		"max_rows_to_read",
-		"max_bytes_to_read",
-		"max_result_rows",
-		"max_result_bytes",
-		"max_rows_to_group_by",
-		"max_threads",
-		"max_query_size",
-		"max_subquery_depth",
-	} {
-		value, ok := base[name].(uint64)
-		if !ok || value == 0 {
-			return nil, fmt.Errorf("execute ClickHouse field summary: executor setting %s is invalid", name)
-		}
-	}
-	for _, name := range []string{"timeout_overflow_mode", "read_overflow_mode", "result_overflow_mode", "group_by_overflow_mode"} {
-		if base[name] != "throw" {
-			return nil, fmt.Errorf("execute ClickHouse field summary: executor setting %s is unsafe", name)
-		}
-	}
-
-	settings := maps.Clone(base)
-	settings["max_result_rows"] = min(base["max_result_rows"].(uint64), uint64(spec.MaximumDistinctValues)+2)
-	settings["max_result_bytes"] = min(base["max_result_bytes"].(uint64), maximumFieldSummaryResultBytes)
+	settings := base.clone()
+	settings["max_result_rows"] = min(base.limit("max_result_rows"), uint64(spec.MaximumDistinctValues)+2)
+	settings["max_result_bytes"] = min(base.limit("max_result_bytes"), maximumFieldSummaryResultBytes)
 	maximumGroups := uint64(spec.MaximumDistinctValues)
 	if maximumGroups == ^uint64(0) {
 		return nil, errors.New("execute ClickHouse field summary: distinct-value group limit overflows")
@@ -447,38 +423,32 @@ func settingsForFieldSummary(
 	// keys. Ordinary summaries do not use that key, and their buffering
 	// validator still rejects a (MaximumDistinctValues+1)st value atomically.
 	maximumGroups++
-	settings["max_rows_to_group_by"] = min(base["max_rows_to_group_by"].(uint64), maximumGroups)
+	settings["max_rows_to_group_by"] = min(base.limit("max_rows_to_group_by"), maximumGroups)
 	return settings, nil
 }
 
 func validateFieldSummaryColumns(columns []string, columnTypes []driver.ColumnType) error {
-	expectedColumns := []string{
-		clickhouse.FieldSummaryRowKindColumn,
-		clickhouse.FieldSummaryFieldNameColumn,
-		clickhouse.FieldSummaryObservedTypesColumn,
-		clickhouse.FieldSummaryEventCountColumn,
-		clickhouse.FieldSummaryNullCountColumn,
-		clickhouse.FieldSummaryMissingCountColumn,
-		clickhouse.FieldSummaryTotalEventCountColumn,
-		clickhouse.FieldSummaryValueTypeColumn,
-		clickhouse.FieldSummaryEncodedValueColumn,
-		clickhouse.FieldSummaryValueCountColumn,
-		clickhouse.FieldSummaryMetadataInvalidColumn,
-		clickhouse.FieldSummaryUnsupportedColumn,
-		clickhouse.FieldSummaryOversizedColumn,
+	contracts := []resultColumnContract{
+		{name: clickhouse.FieldSummaryRowKindColumn, databaseType: "UInt8"},
+		{name: clickhouse.FieldSummaryFieldNameColumn, databaseType: "String"},
+		{name: clickhouse.FieldSummaryObservedTypesColumn, databaseType: "Array(UInt8)"},
+		{name: clickhouse.FieldSummaryEventCountColumn, databaseType: "UInt64"},
+		{name: clickhouse.FieldSummaryNullCountColumn, databaseType: "UInt64"},
+		{name: clickhouse.FieldSummaryMissingCountColumn, databaseType: "UInt64"},
+		{name: clickhouse.FieldSummaryTotalEventCountColumn, databaseType: "UInt64"},
+		{name: clickhouse.FieldSummaryValueTypeColumn, databaseType: "UInt8"},
+		{name: clickhouse.FieldSummaryEncodedValueColumn, databaseType: "String"},
+		{name: clickhouse.FieldSummaryValueCountColumn, databaseType: "UInt64"},
+		{name: clickhouse.FieldSummaryMetadataInvalidColumn, databaseType: "UInt8"},
+		{name: clickhouse.FieldSummaryUnsupportedColumn, databaseType: "UInt8"},
+		{name: clickhouse.FieldSummaryOversizedColumn, databaseType: "UInt8"},
 	}
-	if !slices.Equal(columns, expectedColumns) || len(columnTypes) != len(expectedColumns) {
+	violation, column := validateResultColumnContracts(columns, columnTypes, contracts, 0)
+	if violation == resultColumnContractShapeMismatch {
 		return invalidFieldSummaryResult("columns do not match the compiled output")
 	}
-	expectedTypes := []string{
-		"UInt8", "String", "Array(UInt8)", "UInt64", "UInt64", "UInt64", "UInt64",
-		"UInt8", "String", "UInt64", "UInt8", "UInt8", "UInt8",
-	}
-	for index, columnType := range columnTypes {
-		if isNilDriverValue(columnType) || columnType.Name() != expectedColumns[index] || columnType.Nullable() ||
-			columnType.DatabaseTypeName() != expectedTypes[index] {
-			return invalidFieldSummaryResult(fmt.Sprintf("column %q has an invalid type", expectedColumns[index]))
-		}
+	if violation == resultColumnContractTypeMismatch {
+		return invalidFieldSummaryResult(fmt.Sprintf("column %q has an invalid type", column))
 	}
 	return nil
 }

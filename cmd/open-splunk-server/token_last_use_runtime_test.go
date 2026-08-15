@@ -60,7 +60,7 @@ func TestRuntimeIngestionTokenLastUseSurvivesHTTPGRPCReopen(t *testing.T) {
 		_ = firstDB.Close()
 		t.Fatal(err)
 	}
-	_, firstTokens, err := openSecurityStores(ctx, firstDB, keyPath)
+	firstTokens, err := openSecurityStores(ctx, firstDB, keyPath)
 	if err != nil {
 		_ = firstDB.Close()
 		t.Fatal(err)
@@ -200,7 +200,7 @@ func TestRuntimeIngestionTokenLastUseSurvivesHTTPGRPCReopen(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	_, secondTokens, err := openSecurityStores(ctx, secondDB, keyPath)
+	secondTokens, err := openSecurityStores(ctx, secondDB, keyPath)
 	if err != nil {
 		t.Fatal(err)
 	}

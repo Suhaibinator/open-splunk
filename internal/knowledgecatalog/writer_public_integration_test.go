@@ -85,7 +85,6 @@ func TestWriterCreateDraftPublishesAtomicallyAndReplaysCompactOutcome(t *testing
 		harness.database,
 		audit.ActorKindBrowser,
 		"writer-blackbox-administrator",
-		"objects.create",
 		request.GetClientRequestId(),
 	)
 	expectedDigest := writerExpectedRequestDigest(t, "objects.create", writerTestOwner, request)
@@ -290,7 +289,7 @@ func TestWriterIdempotencyKeyPartitionsByActorAndRouteAndBindsOwner(t *testing.T
 	}
 
 	updateDefinition := proto.Clone(first.GetKnowledgeObject().GetDefinition()).(*opensplunkv1.KnowledgeObjectDefinition)
-	updateDefinition.Description = writerStringPointer("route-partitioned update")
+	updateDefinition.Description = new("route-partitioned update")
 	updateResponse, err := harness.writer.Update(harness.actorCtx, harness.writeScope, &opensplunkv1.UpdateKnowledgeObjectRequest{
 		KnowledgeObjectId: first.GetKnowledgeObject().GetKnowledgeObjectId(),
 		ExpectedVersion:   1,
@@ -305,9 +304,9 @@ func TestWriterIdempotencyKeyPartitionsByActorAndRouteAndBindsOwner(t *testing.T
 		t.Fatalf("route-partitioned update version = %d, want 2", updateResponse.GetKnowledgeObject().GetVersion())
 	}
 
-	browserReceipt := readWriterIdempotencyReceipt(t, harness.database, audit.ActorKindBrowser, "writer-blackbox-administrator", "objects.create", request.GetClientRequestId())
-	systemReceipt := readWriterIdempotencyReceipt(t, harness.database, audit.ActorKindSystem, "writer-blackbox-administrator", "objects.create", request.GetClientRequestId())
-	secondBrowserReceipt := readWriterIdempotencyReceipt(t, harness.database, audit.ActorKindBrowser, "writer-blackbox-second-administrator", "objects.create", request.GetClientRequestId())
+	browserReceipt := readWriterIdempotencyReceipt(t, harness.database, audit.ActorKindBrowser, "writer-blackbox-administrator", request.GetClientRequestId())
+	systemReceipt := readWriterIdempotencyReceipt(t, harness.database, audit.ActorKindSystem, "writer-blackbox-administrator", request.GetClientRequestId())
+	secondBrowserReceipt := readWriterIdempotencyReceipt(t, harness.database, audit.ActorKindBrowser, "writer-blackbox-second-administrator", request.GetClientRequestId())
 	if !bytes.Equal(browserReceipt.RequestDigest, systemReceipt.RequestDigest) ||
 		!bytes.Equal(browserReceipt.RequestDigest, secondBrowserReceipt.RequestDigest) {
 		t.Fatal("request digest redundantly bound actor PK fields")
@@ -518,7 +517,7 @@ func TestWriterDisableDeleteAndHistoryAreImmutable(t *testing.T) {
 	disabledCommitted := proto.Clone(disabled).(*opensplunkv1.SetKnowledgeObjectStateResponse)
 
 	updatedDefinition := proto.Clone(disabled.GetKnowledgeObject().GetDefinition()).(*opensplunkv1.KnowledgeObjectDefinition)
-	updatedDefinition.Description = writerStringPointer("edited while disabled")
+	updatedDefinition.Description = new("edited while disabled")
 	updated, err := harness.writer.Update(harness.actorCtx, harness.writeScope, &opensplunkv1.UpdateKnowledgeObjectRequest{
 		KnowledgeObjectId: createdObject.GetKnowledgeObjectId(),
 		ExpectedVersion:   2,

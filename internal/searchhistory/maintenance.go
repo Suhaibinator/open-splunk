@@ -347,10 +347,7 @@ func (store *Store) deleteOldestExcess(
 	if excess <= 0 {
 		return 0, false, nil
 	}
-	deleteLimit := maximumRows
-	if excess < deleteLimit {
-		deleteLimit = excess
-	}
+	deleteLimit := min(excess, maximumRows)
 	oldest := database.Model(&historyRecord{}).
 		Select("search_job_id").
 		Where("tenant_id = ? AND owner_id = ?", scope.TenantID, scope.OwnerID).

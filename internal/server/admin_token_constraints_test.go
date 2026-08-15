@@ -23,7 +23,7 @@ func TestIngestionTokenConstraintParsingIsCanonicalAndDetached(t *testing.T) {
 			AllowedIndexNames:    []string{"main"},
 			AllowedHostRegexes:   []string{"^z$", "^a$", "^z$"},
 			AllowedSourceRegexes: []string{`^/var/log/[^/]+$`, `.*`, `.*`},
-			BoundCollectorId:     stringPointer("collector-constrained"),
+			BoundCollectorId:     new("collector-constrained"),
 		},
 	}
 	parsed, err := tokenDefinitionFromProto(input)
@@ -331,7 +331,7 @@ func tokenConstraintDefinition(hosts, sources []string) *opensplunkv1.IngestionT
 			AllowedIndexNames:    []string{"main"},
 			AllowedHostRegexes:   hosts,
 			AllowedSourceRegexes: sources,
-			BoundCollectorId:     stringPointer("collector-constraint-test"),
+			BoundCollectorId:     new("collector-constraint-test"),
 		},
 	}
 }

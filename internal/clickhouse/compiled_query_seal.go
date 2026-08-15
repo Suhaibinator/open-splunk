@@ -71,10 +71,8 @@ func (scope compiledReadScope) hasValidSealForSQL(sql string) bool {
 	if scope.tenantID == "" || len(scope.indexNames) == 0 {
 		return false
 	}
-	for _, indexName := range scope.indexNames {
-		if indexName == "" {
-			return false
-		}
+	if slices.Contains(scope.indexNames, "") {
+		return false
 	}
 	if len(scope.argumentPositions) != len(scope.indexNames)+1 {
 		return false
@@ -137,10 +135,8 @@ func sealCompiledQueryReadScope(
 	if tenantID == "" || len(indexNames) == 0 {
 		return CompiledQuery{}, errors.New("seal compiled ClickHouse read scope: tenant and indexes are required")
 	}
-	for _, indexName := range indexNames {
-		if indexName == "" {
-			return CompiledQuery{}, errors.New("seal compiled ClickHouse read scope: index names must be nonempty")
-		}
+	if slices.Contains(indexNames, "") {
+		return CompiledQuery{}, errors.New("seal compiled ClickHouse read scope: index names must be nonempty")
 	}
 
 	arguments := slices.Clone(compiled.Args)

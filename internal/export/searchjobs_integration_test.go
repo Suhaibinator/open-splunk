@@ -273,7 +273,7 @@ func TestManagerExportsPinnedSearchJobSnapshotAcrossSourceExpiry(t *testing.T) {
 	}
 }
 
-func waitForIntegrationSearchState(t *testing.T, manager *searchjobs.Manager, access searchjobs.AccessScope, id string, want searchjobs.State) searchjobs.Job {
+func waitForIntegrationSearchState(t *testing.T, manager *searchjobs.Manager, access searchjobs.AccessScope, id string, want searchjobs.State) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
@@ -282,7 +282,7 @@ func waitForIntegrationSearchState(t *testing.T, manager *searchjobs.Manager, ac
 			t.Fatalf("GetFor(%q) = %v", id, err)
 		}
 		if job.State == want {
-			return job
+			return
 		}
 		switch job.State {
 		case searchjobs.StateCompleted, searchjobs.StateFailed, searchjobs.StateCanceled, searchjobs.StateExpired:
@@ -291,7 +291,6 @@ func waitForIntegrationSearchState(t *testing.T, manager *searchjobs.Manager, ac
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("search job %q did not reach %v", id, want)
-	return searchjobs.Job{}
 }
 
 func waitForIntegrationExportState(t *testing.T, manager *Manager, access searchjobs.AccessScope, id string, want State) Job {

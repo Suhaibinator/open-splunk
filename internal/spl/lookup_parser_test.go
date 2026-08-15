@@ -83,11 +83,11 @@ func TestParseLookupAcceptsKeyAndOutputBounds(t *testing.T) {
 
 	var source strings.Builder
 	source.WriteString("* | lookup catalog")
-	for index := 0; index < MaximumLookupKeys; index++ {
+	for index := range MaximumLookupKeys {
 		fmt.Fprintf(&source, " key%d AS event_key%d", index, index)
 	}
 	source.WriteString(" OUTPUT")
-	for index := 0; index < MaximumLookupOutputs; index++ {
+	for index := range MaximumLookupOutputs {
 		fmt.Fprintf(&source, " output%d", index)
 	}
 	query, err := Parse(source.String())

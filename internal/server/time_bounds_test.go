@@ -14,8 +14,8 @@ func TestAbsoluteTimeRangeUsesPracticalClickHouseNanosecondBounds(t *testing.T) 
 	minimum := clickhouse.MinimumSearchTime()
 	maximum := clickhouse.MaximumSearchTime()
 	exact := &opensplunkv1.TimeRangeSpec{
-		Earliest: stringPointer(minimum.Format(time.RFC3339Nano)),
-		Latest:   stringPointer(maximum.Format(time.RFC3339Nano)),
+		Earliest: new(minimum.Format(time.RFC3339Nano)),
+		Latest:   new(maximum.Format(time.RFC3339Nano)),
 	}
 	resolved, err := resolveSearchTimeRange(exact, time.Time{})
 	if err != nil {
@@ -36,8 +36,8 @@ func TestAbsoluteTimeRangeUsesPracticalClickHouseNanosecondBounds(t *testing.T) 
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			spec := &opensplunkv1.TimeRangeSpec{
-				Earliest: stringPointer(test.earliest.Format(time.RFC3339Nano)),
-				Latest:   stringPointer(test.latest.Format(time.RFC3339Nano)),
+				Earliest: new(test.earliest.Format(time.RFC3339Nano)),
+				Latest:   new(test.latest.Format(time.RFC3339Nano)),
 			}
 			if _, err := resolveSearchTimeRange(spec, time.Time{}); err == nil {
 				t.Fatal("resolveSearchTimeRange() error = nil")
@@ -84,8 +84,8 @@ func TestPublishedTimePresetsResolveThroughProtobufAdapter(t *testing.T) {
 			t.Parallel()
 
 			spec := &opensplunkv1.TimeRangeSpec{
-				Earliest: stringPointer(test.earliest),
-				Latest:   stringPointer(test.latest),
+				Earliest: new(test.earliest),
+				Latest:   new(test.latest),
 				Timezone: &timezone,
 			}
 			resolved, err := resolveSearchTimeRange(spec, anchor)
@@ -113,8 +113,8 @@ func TestPublishedTimePresetsResolveThroughProtobufAdapter(t *testing.T) {
 	}
 
 	invalid := &opensplunkv1.TimeRangeSpec{
-		Earliest: stringPointer("-1h"),
-		Latest:   stringPointer("0"),
+		Earliest: new("-1h"),
+		Latest:   new("0"),
 		Timezone: &timezone,
 	}
 	if _, err := resolveSearchTimeRange(invalid, anchor); err == nil {

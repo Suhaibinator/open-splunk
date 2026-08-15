@@ -428,16 +428,14 @@ func TestGORMConcurrentPendingAdmissionPreservesCapacityAndIdempotency(t *testin
 		var wait sync.WaitGroup
 		for _, record := range entries {
 			record := record
-			wait.Add(1)
-			go func() {
-				defer wait.Done()
+			wait.Go(func() {
 				<-start
 				entry, _, err := decodePendingEntry(record.EntryProto, record.EntrySHA256)
 				if err == nil {
 					_, err = store.BeginAttempt(ctx, scope, entry)
 				}
 				results <- err
-			}()
+			})
 		}
 		close(start)
 		wait.Wait()

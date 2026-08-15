@@ -69,10 +69,10 @@ func TestV03SavedSearchExecutionUsesPersistedAllTenDefinition(t *testing.T) {
 	// definition associated with savedID.
 	request := createRequest("-24h", "now", "main")
 	request.Definition.Spl = `index=main | head 1`
-	request.Definition.AppId = stringPointer(appID)
+	request.Definition.AppId = new(appID)
 	request.Source = &opensplunkv1.SearchJobSource{
 		Origin:        opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH,
-		SavedSearchId: stringPointer(savedID),
+		SavedSearchId: new(savedID),
 	}
 	response := postProto(t, handler, "/api/v1/search/jobs/create", request)
 	if response.Code != http.StatusOK {
@@ -127,7 +127,7 @@ func TestV03HistoryRerunReconstructsPersistedAllTenDefinition(t *testing.T) {
 	handler := newTestHandler(t, Config{
 		SearchJobs:    jobs,
 		Indexes:       activeHistoryRerunIndexCatalog("main"),
-		AppCatalog:    activeHistoryRerunAppCatalog(appID),
+		AppCatalog:    activeHistoryRerunAppCatalog(),
 		SearchHistory: history,
 		WebUI:         testUI(),
 		OwnerID:       ownerID,

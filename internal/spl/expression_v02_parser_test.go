@@ -329,7 +329,7 @@ func TestLexV02ScalarOperatorsAreContextSafeAndSourceExact(t *testing.T) {
 
 	// Outside a token-opening single quote, enabling quoted-field recognition
 	// must not alter the legacy token stream for any ASCII byte.
-	for value := 0; value < 128; value++ {
+	for value := range 128 {
 		source := "a" + string(rune(value)) + "b"
 		got, gotErr := lex(source)
 		want, wantErr := lexWithQuotedFields(source, false)
@@ -715,7 +715,7 @@ func TestAnalyzeScalarExpressionRejectsForgedV02Nodes(t *testing.T) {
 	}
 
 	var condition WhereExpr
-	for occurrence := 0; occurrence < MaximumMembershipCandidatesPerQuery/MaximumMembershipCandidates+1; occurrence++ {
+	for range MaximumMembershipCandidatesPerQuery/MaximumMembershipCandidates + 1 {
 		membershipCandidates := make([]ScalarExpr, MaximumMembershipCandidates)
 		for index := range membershipCandidates {
 			membershipCandidates[index] = literal()

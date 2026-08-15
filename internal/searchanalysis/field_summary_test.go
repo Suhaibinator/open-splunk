@@ -80,7 +80,7 @@ func TestFieldServiceSummaryBuildsAtomicExactResultAndCachesMaximumPrefix(t *tes
 	first.Profile.ObservedValueKinds[0] = searchjobs.ValueKindBool
 	first.TopValues[0].Count = 99
 	second, err := service.GetFieldSummary(context.Background(), access, GetFieldSummaryRequest{
-		SearchJobID: snapshot.ID, FieldName: "value", MaxValues: fieldUint32Pointer(1),
+		SearchJobID: snapshot.ID, FieldName: "value", MaxValues: new(uint32(1)),
 	})
 	if err != nil {
 		t.Fatalf("GetFieldSummary(second) error = %v", err)
@@ -233,10 +233,10 @@ func TestFieldServiceSummaryValidatesRequestBeforeLookupAndPreservesExactFieldNa
 		{SearchJobID: snapshot.ID, FieldName: "a..b"},
 		{SearchJobID: snapshot.ID, FieldName: "wild*"},
 		{SearchJobID: snapshot.ID, FieldName: "__os_private"},
-		{SearchJobID: snapshot.ID, FieldName: "host", MaxValues: fieldUint32Pointer(0)},
+		{SearchJobID: snapshot.ID, FieldName: "host", MaxValues: new(uint32(0))},
 		{
 			SearchJobID: snapshot.ID, FieldName: "host",
-			MaxValues: fieldUint32Pointer(service.MaximumSummaryValues() + 1),
+			MaxValues: new(service.MaximumSummaryValues() + 1),
 		},
 	}
 	for _, request := range invalidRequests {

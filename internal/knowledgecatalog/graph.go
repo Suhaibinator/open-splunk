@@ -566,7 +566,7 @@ func (store *Store) listIncomingGraphEdges(
 		return nil, false, nil, err
 	}
 	edges := make([]DependencyEdge, semanticCount)
-	for index := 0; index < semanticCount; index++ {
+	for index := range semanticCount {
 		edges[index] = dependencyEdgeFromRecord(
 			pageCandidates[index],
 			currentRegistryAuthorityFromRegistry(registryFromProjection(projections[index])),

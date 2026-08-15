@@ -120,7 +120,7 @@ func TestSearchAttemptAuditAppendsOnceAfterPendingInsertInSameTransaction(t *tes
 	database, _ := openTestStore(t, Options{})
 	createSearchAttemptAuditTestTable(t, database)
 	appender := &recordingSearchAttemptAuditAppender{persist: true}
-	store := newSearchAttemptAuditStore(t, database, appender, true)
+	store := newSearchAttemptAuditStore(t, database, appender)
 	ctx := context.Background()
 	scope := AccessScope{TenantID: " tenant-a ", OwnerID: " owner-a "}
 	created := time.Date(2026, time.August, 4, 12, 34, 56, 987_654_321, time.FixedZone("test", -7*60*60))
@@ -187,7 +187,7 @@ func TestSearchAttemptAuditFailureRollsBackPendingAndAuditRows(t *testing.T) {
 	database, _ := openTestStore(t, Options{})
 	createSearchAttemptAuditTestTable(t, database)
 	appender := &recordingSearchAttemptAuditAppender{fail: true, persist: true}
-	store := newSearchAttemptAuditStore(t, database, appender, true)
+	store := newSearchAttemptAuditStore(t, database, appender)
 	entry := pendingHistoryEntry("job-rollback", "index=main", time.Now().UTC())
 
 	if _, err := store.BeginAttempt(
@@ -214,7 +214,7 @@ func TestSearchAttemptAuditTerminalJobIDReuseAppendsNothing(t *testing.T) {
 	database, _ := openTestStore(t, Options{})
 	createSearchAttemptAuditTestTable(t, database)
 	appender := &recordingSearchAttemptAuditAppender{persist: true}
-	store := newSearchAttemptAuditStore(t, database, appender, true)
+	store := newSearchAttemptAuditStore(t, database, appender)
 	ctx := context.Background()
 	scope := AccessScope{TenantID: "tenant-terminal", OwnerID: "owner-terminal"}
 	created := time.Date(2026, time.August, 5, 10, 11, 12, 345_678_000, time.UTC)
@@ -304,7 +304,7 @@ func TestSearchAttemptAuditConcurrentExactRetriesAppendOnce(t *testing.T) {
 	database, _ := openTestStore(t, Options{})
 	createSearchAttemptAuditTestTable(t, database)
 	appender := &recordingSearchAttemptAuditAppender{persist: true}
-	store := newSearchAttemptAuditStore(t, database, appender, true)
+	store := newSearchAttemptAuditStore(t, database, appender)
 	entry := pendingHistoryEntry("job-concurrent", "index=main", time.Now().UTC())
 	scope := AccessScope{TenantID: "tenant", OwnerID: "owner"}
 
@@ -313,13 +313,11 @@ func TestSearchAttemptAuditConcurrentExactRetriesAppendOnce(t *testing.T) {
 	errorsByWorker := make(chan error, workers)
 	var wait sync.WaitGroup
 	for range workers {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
+		wait.Go(func() {
 			<-start
 			_, err := store.BeginAttempt(context.Background(), scope, entry)
 			errorsByWorker <- err
-		}()
+		})
 	}
 	close(start)
 	wait.Wait()
@@ -339,7 +337,7 @@ func TestSearchAttemptAuditConcurrentConflictingAdmissionsAppendOnce(t *testing.
 	database, _ := openTestStore(t, Options{})
 	createSearchAttemptAuditTestTable(t, database)
 	appender := &recordingSearchAttemptAuditAppender{persist: true}
-	store := newSearchAttemptAuditStore(t, database, appender, true)
+	store := newSearchAttemptAuditStore(t, database, appender)
 	scope := AccessScope{TenantID: "tenant-conflict", OwnerID: "owner-conflict"}
 	created := time.Date(2026, time.August, 5, 13, 14, 15, 456_789_000, time.UTC)
 	entries := []*opensplunkv1.SearchHistoryEntry{
@@ -356,9 +354,7 @@ func TestSearchAttemptAuditConcurrentConflictingAdmissionsAppendOnce(t *testing.
 	var wait sync.WaitGroup
 	for _, entry := range entries {
 		entry := entry
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
+		wait.Go(func() {
 			<-start
 			admitted, err := store.BeginAttempt(
 				context.Background(),
@@ -366,7 +362,7 @@ func TestSearchAttemptAuditConcurrentConflictingAdmissionsAppendOnce(t *testing.
 				entry,
 			)
 			results <- admissionResult{entry: admitted, err: err}
-		}()
+		})
 	}
 	close(start)
 	wait.Wait()
@@ -421,13 +417,12 @@ func newSearchAttemptAuditStore(
 	t *testing.T,
 	database *control.DB,
 	appender SearchAttemptAuditAppender,
-	require bool,
 ) *Store {
 	t.Helper()
 	store, err := New(database, Options{
 		CursorKey:                 testCursorKey,
 		AuditAppender:             appender,
-		RequireSearchAttemptAudit: require,
+		RequireSearchAttemptAudit: true,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)

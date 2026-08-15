@@ -164,7 +164,7 @@ func newStalledWriteExplainer(
 	if err != nil {
 		t.Fatal(err)
 	}
-	settings, err := settingsForExplain(baseSettings)
+	settings, err := settingsForExplain(mustValidatedSettings(t, baseSettings))
 	if err != nil {
 		t.Fatal(err)
 	}

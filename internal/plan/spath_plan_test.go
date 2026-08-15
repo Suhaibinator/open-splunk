@@ -173,7 +173,7 @@ func TestBuildSpathBoundsCumulativeJSONEvaluationWork(t *testing.T) {
 	acceptedStages := splpath.MaximumEvaluationWorkUnits / splpath.EvaluationWorkUnits(
 		[]splpath.Step{{Key: "value"}},
 	)
-	for index := 0; index < acceptedStages; index++ {
+	for index := range acceptedStages {
 		source.WriteString(` | spath output=value_`)
 		source.WriteString(strconv.Itoa(index))
 		source.WriteString(` path=value`)

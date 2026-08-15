@@ -21,7 +21,7 @@ func (handler *apiHandler) searchTimelineRoutes(noAuth router.AuthLevel, smallRe
 		newForwardCompatibleProtoRoute[*opensplunkv1.GetSearchTimelineRequest, *serializedSearchTimelineResponse](router.RouteConfig[*opensplunkv1.GetSearchTimelineRequest, *serializedSearchTimelineResponse]{
 			Path: "/search/jobs/timeline", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedSearchTimelineCodec(), Handler: handler.getSearchTimeline,
-			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.GetSearchTimelineRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
+			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
 	}
 }

@@ -977,7 +977,7 @@ func TestRankSuggestionCandidatesIsPrefixOnlyStableAndBounded(t *testing.T) {
 		t.Fatalf("hard-bounded result count = %d, want %d", len(got), MaximumSuggestionLimit)
 	}
 	first := suggestionLabels(RankSuggestionCandidates(fieldContext, many, 100))
-	for iteration := 0; iteration < 100; iteration++ {
+	for iteration := range 100 {
 		if next := suggestionLabels(RankSuggestionCandidates(fieldContext, slices.Clone(many), 100)); !slices.Equal(next, first) {
 			t.Fatalf("iteration %d order differs", iteration)
 		}

@@ -163,7 +163,7 @@ func TestKnowledgeHTTPGetRequestVersionIsDetachedFromCatalogMutation(t *testing.
 		knowledgeObjectsGetPath,
 		&opensplunkv1.GetKnowledgeObjectRequest{
 			KnowledgeObjectId: returned.KnowledgeObjectID,
-			Version:           uint64Pointer(1),
+			Version:           new(uint64(1)),
 		},
 	)
 	attempts := appender.snapshot()

@@ -96,8 +96,8 @@ func validationUpdateRequest(
 ) *opensplunkv1.ValidateKnowledgeObjectRequest {
 	return &opensplunkv1.ValidateKnowledgeObjectRequest{
 		Definition:        definition,
-		KnowledgeObjectId: stringPointer(objectID),
-		ExpectedVersion:   uint64Pointer(version),
+		KnowledgeObjectId: new(objectID),
+		ExpectedVersion:   new(version),
 		UpdateMask:        &fieldmaskpb.FieldMask{Paths: paths},
 		Intent:            opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
 	}
@@ -136,7 +136,7 @@ func TestValidateKnowledgeObjectRequestPresenceEnvelope(t *testing.T) {
 			Definition: validDefinition, Intent: opensplunkv1.KnowledgeValidationIntent(99),
 		}},
 		{name: "create expected version present", request: &opensplunkv1.ValidateKnowledgeObjectRequest{
-			Definition: validDefinition, ExpectedVersion: uint64Pointer(0),
+			Definition: validDefinition, ExpectedVersion: new(uint64(0)),
 			Intent: opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
 		}},
 		{name: "create update mask present", request: &opensplunkv1.ValidateKnowledgeObjectRequest{
@@ -145,7 +145,7 @@ func TestValidateKnowledgeObjectRequestPresenceEnvelope(t *testing.T) {
 		}},
 		{name: "update empty present ID", request: validationUpdateRequest("", 1, validDefinition, "name")},
 		{name: "update expected version absent", request: &opensplunkv1.ValidateKnowledgeObjectRequest{
-			Definition: validDefinition, KnowledgeObjectId: stringPointer("ko-validation-envelope"),
+			Definition: validDefinition, KnowledgeObjectId: new("ko-validation-envelope"),
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"name"}},
 			Intent:     opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
 		}},

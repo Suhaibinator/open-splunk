@@ -1220,7 +1220,7 @@ func eventStatsAmplificationStackSource(
 ) string {
 	var source strings.Builder
 	source.WriteString(prefix)
-	for index := 0; index < additionalStages; index++ {
+	for index := range additionalStages {
 		source.WriteString(` | eventstats `)
 		source.WriteString(aggregate)
 		source.WriteString(` AS amplification_`)

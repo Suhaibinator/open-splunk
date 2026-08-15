@@ -1,10 +1,12 @@
-package main
+// Package nilcheck recognizes both nil interfaces and interfaces containing
+// typed nil values.
+package nilcheck
 
 import "reflect"
 
-// nilRuntimeDependency rejects both nil interfaces and interfaces containing
-// typed nil values at production composition and shutdown boundaries.
-func nilRuntimeDependency(value any) bool {
+// IsNil reports whether value is nil or contains a nil value of a nil-capable
+// dynamic type.
+func IsNil(value any) bool {
 	if value == nil {
 		return true
 	}

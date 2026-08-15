@@ -163,7 +163,7 @@ func TestKnowledgeGraphHTTPServesHistoricalDependenciesAndCurrentDependents(
 		appender,
 	)
 	dependenciesPage := &opensplunkv1.PageRequest{
-		PageSize:         uint32Pointer(1),
+		PageSize:         new(uint32(1)),
 		IncludeTotalSize: true,
 	}
 	dependenciesResponse := knowledgeHTTPPost(
@@ -172,7 +172,7 @@ func TestKnowledgeGraphHTTPServesHistoricalDependenciesAndCurrentDependents(
 		knowledgeObjectsDependenciesPath,
 		&opensplunkv1.ListKnowledgeObjectDependenciesRequest{
 			KnowledgeObjectId: rootID,
-			Version:           uint64Pointer(2),
+			Version:           new(uint64(2)),
 			Page:              proto.Clone(dependenciesPage).(*opensplunkv1.PageRequest),
 		},
 	)
@@ -198,9 +198,9 @@ func TestKnowledgeGraphHTTPServesHistoricalDependenciesAndCurrentDependents(
 		knowledgeObjectsDependentsPath,
 		&opensplunkv1.ListKnowledgeObjectDependentsRequest{
 			KnowledgeObjectId: rootID,
-			Version:           uint64Pointer(2),
+			Version:           new(uint64(2)),
 			Page: &opensplunkv1.PageRequest{
-				PageSize:         uint32Pointer(2),
+				PageSize:         new(uint32(2)),
 				IncludeTotalSize: true,
 			},
 		},
@@ -524,7 +524,7 @@ func TestKnowledgeGraphHTTPPreflightsKnownFieldsBeforeScopeAndCatalog(
 			name: "zero version", path: knowledgeObjectsDependenciesPath,
 			request: &opensplunkv1.ListKnowledgeObjectDependenciesRequest{
 				KnowledgeObjectId: "ko-http-root-1",
-				Version:           uint64Pointer(0),
+				Version:           new(uint64(0)),
 			},
 			wantAction: knowledgeattemptaudit.ActionDependencies,
 		},
@@ -533,7 +533,7 @@ func TestKnowledgeGraphHTTPPreflightsKnownFieldsBeforeScopeAndCatalog(
 			request: &opensplunkv1.ListKnowledgeObjectDependentsRequest{
 				KnowledgeObjectId: "ko-http-root-1",
 				Page: &opensplunkv1.PageRequest{
-					PageSize: uint32Pointer(knowledgecatalog.MaximumPageSize + 1),
+					PageSize: new(uint32(knowledgecatalog.MaximumPageSize + 1)),
 				},
 			},
 			wantAction: knowledgeattemptaudit.ActionDependents,
@@ -543,7 +543,7 @@ func TestKnowledgeGraphHTTPPreflightsKnownFieldsBeforeScopeAndCatalog(
 			request: &opensplunkv1.ListKnowledgeObjectDependenciesRequest{
 				KnowledgeObjectId: "ko-http-root-1",
 				Page: &opensplunkv1.PageRequest{
-					PageToken: stringPointer("cursor\nsecret"),
+					PageToken: new("cursor\nsecret"),
 				},
 			},
 			wantAction: knowledgeattemptaudit.ActionDependencies,
@@ -553,7 +553,7 @@ func TestKnowledgeGraphHTTPPreflightsKnownFieldsBeforeScopeAndCatalog(
 			request: &opensplunkv1.ListKnowledgeObjectDependentsRequest{
 				KnowledgeObjectId: "ko-http-root-1",
 				Page: &opensplunkv1.PageRequest{
-					PageToken: stringPointer(strings.Repeat("x", maximumKnowledgePageTokenBytes+1)),
+					PageToken: new(strings.Repeat("x", maximumKnowledgePageTokenBytes+1)),
 				},
 			},
 			wantAction: knowledgeattemptaudit.ActionDependents,

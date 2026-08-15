@@ -47,7 +47,7 @@ func TestFieldServiceBuildsCachesFiltersAndPagesDetachedCatalog(t *testing.T) {
 	access := searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
 
 	first, err := service.ListFields(context.Background(), access, ListFieldsRequest{
-		SearchJobID: snapshot.ID, PageSize: fieldUint32Pointer(2),
+		SearchJobID: snapshot.ID, PageSize: new(uint32(2)),
 	})
 	if err != nil {
 		t.Fatalf("ListFields(first) error = %v", err)
@@ -75,7 +75,7 @@ func TestFieldServiceBuildsCachesFiltersAndPagesDetachedCatalog(t *testing.T) {
 	executor.result.Fields[0].FieldName = "executor-mutated"
 
 	second, err := service.ListFields(context.Background(), access, ListFieldsRequest{
-		SearchJobID: snapshot.ID, PageSize: fieldUint32Pointer(2), PageToken: first.NextPageToken,
+		SearchJobID: snapshot.ID, PageSize: new(uint32(2)), PageToken: first.NextPageToken,
 	})
 	if err != nil {
 		t.Fatalf("ListFields(second) error = %v", err)
@@ -111,7 +111,7 @@ func TestFieldServiceBuildsCachesFiltersAndPagesDetachedCatalog(t *testing.T) {
 	}
 
 	filtered, err := service.ListFields(context.Background(), access, ListFieldsRequest{
-		SearchJobID: snapshot.ID, NameFilter: "MIX", PageSize: fieldUint32Pointer(3),
+		SearchJobID: snapshot.ID, NameFilter: "MIX", PageSize: new(uint32(3)),
 	})
 	if err != nil {
 		t.Fatalf("ListFields(case-sensitive filter) error = %v", err)
@@ -120,7 +120,7 @@ func TestFieldServiceBuildsCachesFiltersAndPagesDetachedCatalog(t *testing.T) {
 		t.Fatalf("uppercase filtered page = %#v", filtered)
 	}
 	filtered, err = service.ListFields(context.Background(), access, ListFieldsRequest{
-		SearchJobID: snapshot.ID, NameFilter: "mix", PageSize: fieldUint32Pointer(3),
+		SearchJobID: snapshot.ID, NameFilter: "mix", PageSize: new(uint32(3)),
 	})
 	if err != nil || filtered.TotalFields != 1 || filtered.Fields[0].FieldName != "z_mixed" {
 		t.Fatalf("lowercase filtered page = (%#v, %v)", filtered, err)
@@ -273,7 +273,7 @@ func TestFieldServiceRejectsInvalidManagerAuthorityBeforeCacheOrCursorReuse(t *t
 				Compiler: compiler,
 				Executor: executor,
 			})
-			request := ListFieldsRequest{SearchJobID: signed.ID, PageSize: fieldUint32Pointer(2)}
+			request := ListFieldsRequest{SearchJobID: signed.ID, PageSize: new(uint32(2))}
 			if _, err := service.ListFields(
 				context.Background(),
 				fieldAccess(signed),
@@ -358,7 +358,7 @@ func TestFieldServiceBindsChangedEnabledEmptyAuthorityInCacheAndCursor(t *testin
 			Compiler: compiler,
 			Executor: executor,
 		})
-		request := ListFieldsRequest{SearchJobID: first.ID, PageSize: fieldUint32Pointer(2)}
+		request := ListFieldsRequest{SearchJobID: first.ID, PageSize: new(uint32(2))}
 		for attempt := range 2 {
 			if _, err := service.ListFields(
 				context.Background(),
@@ -576,8 +576,8 @@ func TestFieldServiceValidatesRequestsBeforeLookup(t *testing.T) {
 	requests := []ListFieldsRequest{
 		{},
 		{SearchJobID: strings.Repeat("j", maximumFieldJobIDBytes+1)},
-		{SearchJobID: "job", PageSize: fieldUint32Pointer(0)},
-		{SearchJobID: "job", PageSize: fieldUint32Pointer(service.MaximumPageSize() + 1)},
+		{SearchJobID: "job", PageSize: new(uint32(0))},
+		{SearchJobID: "job", PageSize: new(service.MaximumPageSize() + 1)},
 		{SearchJobID: "job", PageToken: strings.Repeat("t", maximumFieldCursorBytes+1)},
 		{SearchJobID: "job", NameFilter: strings.Repeat("f", maximumFieldNameFilterBytes+1)},
 		{SearchJobID: "job", NameFilter: string([]byte{0xff})},
@@ -1366,7 +1366,7 @@ func TestFieldServiceRejectsMalformedCatalogWithoutCaching(t *testing.T) {
 				Searches: &fakeFieldSearches{snapshot: snapshot}, Compiler: &fakeFieldCompiler{}, Executor: executor,
 				MaximumFields: maximumFields,
 			})
-			for attempt := 0; attempt < 2; attempt++ {
+			for attempt := range 2 {
 				if _, err := service.ListFields(context.Background(), fieldAccess(snapshot), ListFieldsRequest{SearchJobID: snapshot.ID}); !errors.Is(err, searchjobs.ErrInvalidResult) {
 					t.Fatalf("attempt %d error = %v, want ErrInvalidResult", attempt, err)
 				}
@@ -1433,7 +1433,7 @@ func TestFieldServiceRuntimeTimeoutReleasesFlightForRetry(t *testing.T) {
 		ownerID: snapshot.OwnerID, jobID: snapshot.ID, snapshotFingerprint: fingerprint,
 	}
 	source := fieldCatalogPlanSource{completedExecution: true, execution: snapshot}
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := range 2 {
 		if _, err := service.catalogFor(context.Background(), key, source, snapshot.ExpiresAt); !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("attempt %d error = %v, want DeadlineExceeded", attempt, err)
 		}
@@ -1685,8 +1685,6 @@ func twoFieldCatalog() queryexec.FieldCatalogResult {
 		{FieldName: "b", ObservedTypes: []eventfields.StoredValueType{eventfields.StoredValueTypeString}, EventCount: 2, MissingCount: 8},
 	}}
 }
-
-func fieldUint32Pointer(value uint32) *uint32 { return &value }
 
 func tamperFieldCursor(token string) string {
 	index := len(token) / 2

@@ -51,11 +51,11 @@ func v03PrivateField(name string) bool {
 	return strings.HasPrefix(strings.ToLower(name), "__os_")
 }
 
-func validateV03Field(operation, role string, field plan.FieldRef) error {
+func validateV03Field(operation string, field plan.FieldRef) error {
 	if field.Name == "" || v03PrivateField(field.Name) {
-		return errors.New("compile ClickHouse " + operation + ": " + role + " field is invalid")
+		return errors.New("compile ClickHouse " + operation + ": input field is invalid")
 	}
-	return validateCanonicalFieldRef(operation, role, field)
+	return validateCanonicalFieldRef(operation, "input", field)
 }
 
 func compileFillNull(
@@ -82,7 +82,7 @@ func compileFillNull(
 	args := make([]any, 0, len(operator.Fields))
 	seen := make(map[string]struct{}, len(operator.Fields))
 	for index, ref := range operator.Fields {
-		if err := validateV03Field("fillnull", "input", ref); err != nil {
+		if err := validateV03Field("fillnull", ref); err != nil {
 			return compiledRelation{}, compileState{}, nil, err
 		}
 		if _, duplicate := seen[ref.Name]; duplicate {
@@ -424,7 +424,7 @@ func compileRowTotal(
 		stage,
 	))
 	for _, ref := range operator.Inputs {
-		if err := validateV03Field("addtotals", "input", ref); err != nil {
+		if err := validateV03Field("addtotals", ref); err != nil {
 			return compiledRelation{}, compileState{}, nil, nil, err
 		}
 		if _, duplicate := seen[ref.Name]; duplicate {
@@ -626,7 +626,7 @@ func compileOrderedDelta(
 			), Range: operator.Range,
 		}
 	}
-	if err := validateV03Field("delta", "input", operator.Input); err != nil {
+	if err := validateV03Field("delta", operator.Input); err != nil {
 		return compiledRelation{}, compileState{}, nil, nil, err
 	}
 	if _, explicitErr := plan.ResolveField(operator.Output, operator.Range); explicitErr != nil &&
@@ -943,7 +943,7 @@ func compileMakeMultivalue(
 			"compile ClickHouse makemv: operator is invalid",
 		)
 	}
-	if err := validateV03Field("makemv", "input", operator.Input); err != nil {
+	if err := validateV03Field("makemv", operator.Input); err != nil {
 		return compiledRelation{}, compileState{}, nil, err
 	}
 	if state.context == nil {
@@ -1153,7 +1153,7 @@ func compileExpandMultivalue(
 			), Range: operator.Range,
 		}
 	}
-	if err := validateV03Field("mvexpand", "input", operator.Input); err != nil {
+	if err := validateV03Field("mvexpand", operator.Input); err != nil {
 		return compiledRelation{}, compileState{}, nil, err
 	}
 	if state.context == nil {

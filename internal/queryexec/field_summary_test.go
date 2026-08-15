@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"maps"
 	"math"
 	"reflect"
 	"slices"
@@ -644,7 +645,7 @@ func TestSettingsForFieldSummaryClonesAndTightensEveryOutputCap(t *testing.T) {
 	}
 	before := cloneFieldSummarySettings(base)
 	spec := validCompiledFieldSummary(5, 73, 256).Spec
-	got, err := settingsForFieldSummary(base, spec)
+	got, err := settingsForFieldSummary(mustValidatedSettings(t, base), spec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -669,7 +670,7 @@ func TestSettingsForFieldSummaryClonesAndTightensEveryOutputCap(t *testing.T) {
 	base["max_result_rows"] = uint64(7)
 	base["max_result_bytes"] = uint64(1024)
 	base["max_rows_to_group_by"] = uint64(5)
-	strict, err := settingsForFieldSummary(base, spec)
+	strict, err := settingsForFieldSummary(mustValidatedSettings(t, base), spec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -680,68 +681,12 @@ func TestSettingsForFieldSummaryClonesAndTightensEveryOutputCap(t *testing.T) {
 	}
 }
 
-func TestSettingsForFieldSummaryRejectsInvalidBaseAndSummarySettings(t *testing.T) {
+func TestSettingsForFieldSummaryRejectsInvalidSummarySettings(t *testing.T) {
 	base, err := querySettings(Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	spec := validCompiledFieldSummary(1, 1, 8).Spec
-	for _, name := range []string{
-		"max_execution_time",
-		"max_memory_usage",
-		"max_rows_to_read",
-		"max_bytes_to_read",
-		"max_result_rows",
-		"max_result_bytes",
-		"max_rows_to_group_by",
-		"max_threads",
-		"max_query_size",
-		"max_subquery_depth",
-	} {
-		t.Run(name+" missing", func(t *testing.T) {
-			malformed := cloneFieldSummarySettings(base)
-			delete(malformed, name)
-			if _, err := settingsForFieldSummary(malformed, spec); err == nil {
-				t.Fatalf("missing %s unexpectedly accepted", name)
-			}
-		})
-		t.Run(name+" zero", func(t *testing.T) {
-			malformed := cloneFieldSummarySettings(base)
-			malformed[name] = uint64(0)
-			if _, err := settingsForFieldSummary(malformed, spec); err == nil {
-				t.Fatalf("zero %s unexpectedly accepted", name)
-			}
-		})
-		t.Run(name+" wrong type", func(t *testing.T) {
-			malformed := cloneFieldSummarySettings(base)
-			malformed[name] = "1"
-			if _, err := settingsForFieldSummary(malformed, spec); err == nil {
-				t.Fatalf("wrong-type %s unexpectedly accepted", name)
-			}
-		})
-	}
-	for _, name := range []string{
-		"timeout_overflow_mode",
-		"read_overflow_mode",
-		"result_overflow_mode",
-		"group_by_overflow_mode",
-	} {
-		t.Run(name, func(t *testing.T) {
-			malformed := cloneFieldSummarySettings(base)
-			malformed[name] = "break"
-			if _, err := settingsForFieldSummary(malformed, spec); err == nil {
-				t.Fatalf("unsafe %s unexpectedly accepted", name)
-			}
-		})
-	}
-	for _, malformed := range []clickhousedriver.Settings{nil, cloneFieldSummarySettings(base)} {
-		if malformed != nil {
-			malformed["readonly"] = uint8(1)
-		}
-		if _, err := settingsForFieldSummary(malformed, spec); err == nil {
-			t.Fatalf("settingsForFieldSummary(%#v) unexpectedly succeeded", malformed)
-		}
-	}
+	validated := mustValidatedSettings(t, base)
 
 	invalidSpecs := []clickhouse.FieldSummarySpec{
 		{},
@@ -762,7 +707,7 @@ func TestSettingsForFieldSummaryRejectsInvalidBaseAndSummarySettings(t *testing.
 		},
 	}
 	for index, invalid := range invalidSpecs {
-		if _, err := settingsForFieldSummary(base, invalid); err == nil {
+		if _, err := settingsForFieldSummary(validated, invalid); err == nil {
 			t.Fatalf("invalid spec %d unexpectedly accepted: %#v", index, invalid)
 		}
 	}
@@ -773,6 +718,7 @@ func TestSettingsForFieldSummaryIsRaceSafeForConcurrentReaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	validated := mustValidatedSettings(t, base)
 	const workers = 32
 	var wait sync.WaitGroup
 	wait.Add(workers)
@@ -780,7 +726,7 @@ func TestSettingsForFieldSummaryIsRaceSafeForConcurrentReaders(t *testing.T) {
 		go func() {
 			defer wait.Done()
 			query := validCompiledFieldSummary(1, uint32(index+1), 8)
-			got, err := settingsForFieldSummary(base, query.Spec)
+			got, err := settingsForFieldSummary(validated, query.Spec)
 			if err != nil {
 				t.Errorf("settingsForFieldSummary() error = %v", err)
 				return
@@ -1139,9 +1085,7 @@ func assertFieldSummaryError(t *testing.T, got FieldSummaryResult, err, want err
 
 func cloneFieldSummarySettings(settings clickhousedriver.Settings) clickhousedriver.Settings {
 	cloned := clickhousedriver.Settings{}
-	for key, value := range settings {
-		cloned[key] = value
-	}
+	maps.Copy(cloned, settings)
 	return cloned
 }
 

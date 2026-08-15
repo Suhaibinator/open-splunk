@@ -114,7 +114,6 @@ func (handler *apiHandler) hecOperationalRoutes(
 			Codec:      codec.NewProtoCodec[*opensplunkv1.GetHECOperationalSnapshotRequest, *opensplunkv1.GetHECOperationalSnapshotResponse](),
 			Handler:    handler.getHECOperationalSnapshot,
 			SourceType: router.Body,
-			Sanitizer:  forwardCompatibleProtoSanitizer[*opensplunkv1.GetHECOperationalSnapshotRequest],
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
 	}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -296,7 +295,7 @@ func validateCompiledFieldCatalog(query clickhouse.CompiledFieldCatalog) error {
 }
 
 func settingsForFieldCatalog(
-	base clickhousedriver.Settings,
+	base *validatedExecutorSettings,
 	maximumFields uint32,
 	knowledgeGeneratedFields uint32,
 ) (clickhousedriver.Settings, error) {
@@ -308,71 +307,39 @@ func settingsForFieldCatalog(
 			"execute ClickHouse field catalog: generated-field resource evidence is invalid",
 		)
 	}
-	if base == nil || base["readonly"] != uint8(2) {
+	if base == nil {
 		return nil, errors.New("execute ClickHouse field catalog: executor does not have read-only settings")
 	}
-	for _, name := range []string{
-		"max_execution_time",
-		"max_memory_usage",
-		"max_rows_to_read",
-		"max_bytes_to_read",
-		"max_result_rows",
-		"max_result_bytes",
-		"max_rows_to_group_by",
-		"max_threads",
-		"max_query_size",
-		"max_subquery_depth",
-	} {
-		value, ok := base[name].(uint64)
-		if !ok || value == 0 {
-			return nil, fmt.Errorf("execute ClickHouse field catalog: executor setting %s is invalid", name)
-		}
-	}
-	for _, name := range []string{"timeout_overflow_mode", "read_overflow_mode", "result_overflow_mode", "group_by_overflow_mode"} {
-		if base[name] != "throw" {
-			return nil, fmt.Errorf("execute ClickHouse field catalog: executor setting %s is unsafe", name)
-		}
-	}
-	if base["enable_materialized_cte"] != uint8(1) {
-		return nil, errors.New("execute ClickHouse field catalog: materialized CTEs are not enabled")
-	}
-	if base["short_circuit_function_evaluation"] != "enable" {
-		return nil, errors.New("execute ClickHouse field catalog: short-circuit evaluation is not enabled")
-	}
-	if base["async_insert"] != uint8(0) {
-		return nil, errors.New("execute ClickHouse field catalog: asynchronous inserts must remain disabled")
-	}
-
-	settings := maps.Clone(base)
+	settings := base.clone()
 	memoryLimit := maximumFieldCatalogMemoryBytes
 	if knowledgeGeneratedFields > maximumStandardFieldCatalogKnowledgeFields {
 		memoryLimit = MaximumFieldCatalogMemoryBytes
 	}
 	settings["max_execution_time"] = min(
-		base["max_execution_time"].(uint64),
+		base.limit("max_execution_time"),
 		uint64(maximumFieldCatalogExecutionTime/time.Second),
 	)
 	settings["max_memory_usage"] = min(
-		base["max_memory_usage"].(uint64),
+		base.limit("max_memory_usage"),
 		memoryLimit,
 	)
 	settings["max_rows_to_read"] = min(
-		base["max_rows_to_read"].(uint64),
+		base.limit("max_rows_to_read"),
 		maximumFieldCatalogRowsToRead,
 	)
 	settings["max_bytes_to_read"] = min(
-		base["max_bytes_to_read"].(uint64),
+		base.limit("max_bytes_to_read"),
 		maximumFieldCatalogBytesToRead,
 	)
-	settings["max_result_rows"] = min(base["max_result_rows"].(uint64), uint64(maximumFields)+2)
-	settings["max_result_bytes"] = min(base["max_result_bytes"].(uint64), maximumFieldCatalogBytes)
+	settings["max_result_rows"] = min(base.limit("max_result_rows"), uint64(maximumFields)+2)
+	settings["max_result_bytes"] = min(base.limit("max_result_bytes"), maximumFieldCatalogBytes)
 	// The prerequisite catalog groups one synthetic/header key plus up to
 	// MaximumFields+1 profile keys. The latter extra key is the executor's exact
 	// overflow sentinel; neither may be rejected before the atomic result is
 	// observed.
-	settings["max_rows_to_group_by"] = min(base["max_rows_to_group_by"].(uint64), uint64(maximumFields)+2)
+	settings["max_rows_to_group_by"] = min(base.limit("max_rows_to_group_by"), uint64(maximumFields)+2)
 	settings["max_threads"] = min(
-		base["max_threads"].(uint64),
+		base.limit("max_threads"),
 		maximumFieldCatalogThreads,
 	)
 	settings["use_query_cache"] = uint8(0)
@@ -380,25 +347,22 @@ func settingsForFieldCatalog(
 }
 
 func validateFieldCatalogColumns(columns []string, columnTypes []driver.ColumnType) error {
-	expectedColumns := []string{
-		clickhouse.FieldCatalogRowKindColumn,
-		clickhouse.FieldCatalogNameColumn,
-		clickhouse.FieldCatalogObservedTypesColumn,
-		clickhouse.FieldCatalogEventCountColumn,
-		clickhouse.FieldCatalogNullCountColumn,
-		clickhouse.FieldCatalogMissingCountColumn,
-		clickhouse.FieldCatalogTotalEventsColumn,
-		clickhouse.FieldCatalogInvalidColumn,
+	contracts := []resultColumnContract{
+		{name: clickhouse.FieldCatalogRowKindColumn, databaseType: "UInt8"},
+		{name: clickhouse.FieldCatalogNameColumn, databaseType: "String"},
+		{name: clickhouse.FieldCatalogObservedTypesColumn, databaseType: "Array(UInt8)"},
+		{name: clickhouse.FieldCatalogEventCountColumn, databaseType: "UInt64"},
+		{name: clickhouse.FieldCatalogNullCountColumn, databaseType: "UInt64"},
+		{name: clickhouse.FieldCatalogMissingCountColumn, databaseType: "UInt64"},
+		{name: clickhouse.FieldCatalogTotalEventsColumn, databaseType: "UInt64"},
+		{name: clickhouse.FieldCatalogInvalidColumn, databaseType: "UInt8"},
 	}
-	if !slices.Equal(columns, expectedColumns) || len(columnTypes) != len(expectedColumns) {
+	violation, column := validateResultColumnContracts(columns, columnTypes, contracts, 0)
+	if violation == resultColumnContractShapeMismatch {
 		return invalidFieldCatalogResult("columns do not match the compiled output")
 	}
-	expectedTypes := []string{"UInt8", "String", "Array(UInt8)", "UInt64", "UInt64", "UInt64", "UInt64", "UInt8"}
-	for index, columnType := range columnTypes {
-		if isNilDriverValue(columnType) || columnType.Name() != expectedColumns[index] || columnType.Nullable() ||
-			columnType.DatabaseTypeName() != expectedTypes[index] {
-			return invalidFieldCatalogResult(fmt.Sprintf("column %q has an invalid type", expectedColumns[index]))
-		}
+	if violation == resultColumnContractTypeMismatch {
+		return invalidFieldCatalogResult(fmt.Sprintf("column %q has an invalid type", column))
 	}
 	return nil
 }

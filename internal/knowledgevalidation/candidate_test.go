@@ -51,7 +51,7 @@ func TestDefinitionIssuesBecomeClosedInvalidFieldViolations(t *testing.T) {
 		},
 		{
 			name:       "preflight resource limit",
-			definition: regexDefinition("regex-too-many-outputs", `(?P<value>x)`, tooManyOutputs...),
+			definition: regexDefinition("regex-too-many-outputs", tooManyOutputs...),
 			objectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
 			code:       "KNOWLEDGE_DEFINITION_RESOURCE_LIMIT",
 			message:    "candidate definition exceeds a resource limit",
@@ -221,7 +221,7 @@ func TestValidationHonorsCanceledContext(t *testing.T) {
 
 func TestAllowedProgramIssueRequiresExactCodePathRangeShape(t *testing.T) {
 	calculated := calculatedDefinition("calculated-shape", "lower(host)")
-	regex := regexDefinition("regex-shape", `(?P<value>x)`, "value")
+	regex := regexDefinition("regex-shape", "value")
 	json := jsonDefinition("json-shape", "server.name")
 	full := &knowledgeprogram.ScalarRange{EndByteOffset: uint32(len("lower(host)"))}
 	tests := []struct {

@@ -123,7 +123,7 @@ func TestIntegrationConcurrentPublicationReturnsOnlyOldOrNewSnapshots(t *testing
 	raceStart := make(chan struct{})
 	commitDone := make(chan struct{})
 	results := make(chan error, readers)
-	for worker := 0; worker < readers; worker++ {
+	for worker := range readers {
 		go func(worker int) {
 			if err := integrationAssertCatalogSnapshot(
 				store,

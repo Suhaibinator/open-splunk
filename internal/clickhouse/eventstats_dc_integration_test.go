@@ -270,12 +270,12 @@ func testEventStatsDistinctCountAgainstClickHouse(
 			` | sort event_id | table event_id distinct_values`,
 	)
 	if got, want := collect("grouped eventstats dc", grouped), []groupedRow{
-		{id: "sum-avg-a-array", count: uint64PointerForIntegration(6)},
-		{id: "sum-avg-a-int", count: uint64PointerForIntegration(6)},
-		{id: "sum-avg-a-missing", count: uint64PointerForIntegration(6)},
-		{id: "sum-avg-a-string", count: uint64PointerForIntegration(6)},
-		{id: "sum-avg-b-bad", count: uint64PointerForIntegration(1)},
-		{id: "sum-avg-b-null", count: uint64PointerForIntegration(1)},
+		{id: "sum-avg-a-array", count: new(uint64(6))},
+		{id: "sum-avg-a-int", count: new(uint64(6))},
+		{id: "sum-avg-a-missing", count: new(uint64(6))},
+		{id: "sum-avg-a-string", count: new(uint64(6))},
+		{id: "sum-avg-b-bad", count: new(uint64(1))},
+		{id: "sum-avg-b-null", count: new(uint64(1))},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("grouped eventstats dc = %#v, want %#v", got, want)
 	}
@@ -289,10 +289,10 @@ func testEventStatsDistinctCountAgainstClickHouse(
 	)
 	if got, want := collect("incomplete eventstats dc group", incompleteGroup), []groupedRow{
 		{id: "sum-avg-a-array"},
-		{id: "sum-avg-a-int", count: uint64PointerForIntegration(0)},
+		{id: "sum-avg-a-int", count: new(uint64(0))},
 		{id: "sum-avg-a-missing"},
-		{id: "sum-avg-a-string", count: uint64PointerForIntegration(0)},
-		{id: "sum-avg-b-bad", count: uint64PointerForIntegration(0)},
+		{id: "sum-avg-a-string", count: new(uint64(0))},
+		{id: "sum-avg-b-bad", count: new(uint64(0))},
 		{id: "sum-avg-b-null"},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("incomplete eventstats dc group = %#v, want %#v", got, want)

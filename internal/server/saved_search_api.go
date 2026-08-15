@@ -169,7 +169,7 @@ func (handler *apiHandler) listSavedSearches(request *http.Request, input *opens
 		if len(*result.NextPageToken) == 0 || len(*result.NextPageToken) > maximumPageTokenBytes || !utf8.ValidString(*result.NextPageToken) {
 			return nil, internalError()
 		}
-		page.NextPageToken = stringPointer(*result.NextPageToken)
+		page.NextPageToken = new(*result.NextPageToken)
 	}
 	if result.TotalSize != nil {
 		if !includeTotal {
@@ -178,7 +178,7 @@ func (handler *apiHandler) listSavedSearches(request *http.Request, input *opens
 		if !result.TotalSizeExact {
 			return nil, internalError()
 		}
-		page.TotalSize = uint64Pointer(*result.TotalSize)
+		page.TotalSize = new(*result.TotalSize)
 		page.TotalSizeExact = result.TotalSizeExact
 	} else if result.TotalSizeExact {
 		return nil, internalError()

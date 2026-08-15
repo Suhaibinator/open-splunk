@@ -19,7 +19,10 @@ import {
   type OptionalFeatureResult,
 } from "@/lib/api/optional-feature";
 import type { ProtobufRequestOptions } from "@/lib/api/protobuf-transport";
-import { exactDurationNumericText } from "@/lib/search/backend-data";
+import {
+  exactDurationNumericText,
+  typedValueIsPivotable,
+} from "@/lib/search/backend-data";
 import {
   supportsServerFeature,
   type SystemBootstrapModel,
@@ -157,22 +160,6 @@ function adaptFieldValue(value: FieldValueCount): ServerFieldValue {
     countIsApproximate: value.countIsApproximate,
     pivotable: typedValueIsPivotable(value.value),
   };
-}
-
-function typedValueIsPivotable(value: TypedValue | undefined): boolean {
-  switch (value?.kind?.$case) {
-    case "nullValue":
-    case "stringValue":
-    case "boolValue":
-      return true;
-    case "doubleValue":
-      return Number.isFinite(value.kind.value);
-    case "sint64Value":
-    case "uint64Value":
-      return Number.isSafeInteger(Number(value.kind.value));
-    default:
-      return false;
-  }
 }
 
 export function adaptFieldSummary(summary: FieldSummary): ServerFieldSummary {

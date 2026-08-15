@@ -557,7 +557,7 @@ func (fs *fakeServer) send(resp *opensplunkv1.CollectResponse) error {
 	return stream.Send(resp)
 }
 
-func (fs *fakeServer) ackBatch(seq uint64, accepted, duplicate uint32, rejected ...*opensplunkv1.EventRejection) {
+func (fs *fakeServer) ackBatch(seq uint64, accepted uint32, rejected ...*opensplunkv1.EventRejection) {
 	fs.mu.Lock()
 	batch := fs.byID[seq]
 	fs.mu.Unlock()
@@ -567,7 +567,7 @@ func (fs *fakeServer) ackBatch(seq uint64, accepted, duplicate uint32, rejected 
 			BatchSequence:       seq,
 			Durability:          opensplunkv1.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED,
 			AcceptedEventCount:  accepted,
-			DuplicateEventCount: duplicate,
+			DuplicateEventCount: 0,
 			RejectedEvents:      rejected,
 		}},
 	})
@@ -718,7 +718,7 @@ func TestSenderHelloBatchAckWalAck(t *testing.T) {
 	t.Parallel()
 	fs := newFakeServer()
 	fs.onBatch = func(fs *fakeServer, b *opensplunkv1.EventBatch) {
-		fs.ackBatch(b.GetBatchSequence(), uint32(len(b.GetEvents())), 0)
+		fs.ackBatch(b.GetBatchSequence(), uint32(len(b.GetEvents())))
 	}
 	conn := startServer(t, fs)
 	q := newFakeQueue(fakeBatch(1, makeEvent("e1", "main")))
@@ -758,7 +758,7 @@ func TestSenderCheckpointCallbackFailureLeavesBatchReplayable(t *testing.T) {
 	batch := fakeBatch(1, makeEvent("e1", "main"))
 	batch.Events[0].Origin = &opensplunkv1.EventOrigin{
 		InputId:      "input-a",
-		FileIdentity: proto.String("dev=1;ino=2;gen=1;fp=" + strings.Repeat("ab", 32)),
+		FileIdentity: new("dev=1;ino=2;gen=1;fp=" + strings.Repeat("ab", 32)),
 		EndOffset:    proto.Uint64(1),
 	}
 	q := newFakeQueue(batch)
@@ -962,7 +962,7 @@ func TestSenderStreamSequenceStrictlyIncrements(t *testing.T) {
 	// sequencing is correct. Covered end-to-end in TestSenderAgainstRealService.
 	fs := newFakeServer()
 	fs.onBatch = func(fs *fakeServer, b *opensplunkv1.EventBatch) {
-		fs.ackBatch(b.GetBatchSequence(), 1, 0)
+		fs.ackBatch(b.GetBatchSequence(), 1)
 	}
 	conn := startServer(t, fs)
 	q := newFakeQueue(fakeBatch(1, makeEvent("e1", "main")), fakeBatch(2, makeEvent("e2", "main")))
@@ -978,7 +978,7 @@ func TestSenderNoTokenInLogs(t *testing.T) {
 	const secret = "super-secret-token-abc123"
 	fs := newFakeServer()
 	fs.onBatch = func(fs *fakeServer, b *opensplunkv1.EventBatch) {
-		fs.ackBatch(b.GetBatchSequence(), 1, 0)
+		fs.ackBatch(b.GetBatchSequence(), 1)
 	}
 	conn := startServer(t, fs)
 	q := newFakeQueue(fakeBatch(1, makeEvent("e1", "main")))
@@ -1013,7 +1013,7 @@ func TestSenderResumeAfterSkipsBatches(t *testing.T) {
 		return r
 	}
 	fs.onBatch = func(fs *fakeServer, b *opensplunkv1.EventBatch) {
-		fs.ackBatch(b.GetBatchSequence(), 1, 0)
+		fs.ackBatch(b.GetBatchSequence(), 1)
 	}
 	conn := startServer(t, fs)
 	q := newFakeQueue(
@@ -1071,7 +1071,7 @@ func TestSenderHonorsInFlightCap(t *testing.T) {
 		fs.mu.Lock()
 		fs.currentInFlight--
 		fs.mu.Unlock()
-		fs.ackBatch(seq, 1, 0)
+		fs.ackBatch(seq, 1)
 	}
 
 	// First two batches pipeline immediately.
@@ -1128,7 +1128,7 @@ func TestSenderRetryResendsIdenticalBytes(t *testing.T) {
 			})
 			return
 		}
-		fs.ackBatch(b.GetBatchSequence(), 1, 0)
+		fs.ackBatch(b.GetBatchSequence(), 1)
 	}
 	conn := startServer(t, fs)
 	q := newFakeQueue(fakeBatch(1, makeEvent("e1", "main")))
@@ -1178,7 +1178,7 @@ func TestSenderTerminalAckCancelsScheduledRetry(t *testing.T) {
 					RetryAfter: durationpb.New(150 * time.Millisecond),
 				}},
 			})
-			fs.ackBatch(batch.GetBatchSequence(), 1, 0)
+			fs.ackBatch(batch.GetBatchSequence(), 1)
 		})
 	}
 	conn := startServer(t, fs)
@@ -1208,14 +1208,14 @@ func TestSenderTerminalAckCancelsRetryBeforeCheckpointCommit(t *testing.T) {
 					RetryAfter: durationpb.New(20 * time.Millisecond),
 				}},
 			})
-			fs.ackBatch(batch.GetBatchSequence(), 1, 0)
+			fs.ackBatch(batch.GetBatchSequence(), 1)
 		})
 	}
 
 	batch := fakeBatch(1, makeEvent("e1", "main"))
 	batch.Events[0].Origin = &opensplunkv1.EventOrigin{
 		InputId:      "input-a",
-		FileIdentity: proto.String("dev=1;ino=2;gen=1;fp=" + strings.Repeat("ab", 32)),
+		FileIdentity: new("dev=1;ino=2;gen=1;fp=" + strings.Repeat("ab", 32)),
 		EndOffset:    proto.Uint64(1),
 	}
 	q := newFakeQueue(batch)
@@ -1431,7 +1431,7 @@ func TestSenderThrottleAppliesSendDelay(t *testing.T) {
 				}},
 			})
 		}
-		fs.ackBatch(b.GetBatchSequence(), 1, 0)
+		fs.ackBatch(b.GetBatchSequence(), 1)
 	}
 	conn := startServer(t, fs)
 	q := newFakeQueue(
@@ -1460,7 +1460,7 @@ func TestSenderPartialRejectionDeadLettersExactEvents(t *testing.T) {
 	t.Parallel()
 	fs := newFakeServer()
 	fs.onBatch = func(fs *fakeServer, b *opensplunkv1.EventBatch) {
-		fs.ackBatch(b.GetBatchSequence(), 1, 0,
+		fs.ackBatch(b.GetBatchSequence(), 1,
 			&opensplunkv1.EventRejection{
 				EventIndex: 1,
 				EventId:    "e2",
@@ -1571,7 +1571,7 @@ func TestSenderReconnectsWithBackoff(t *testing.T) {
 	fs := newFakeServer()
 	fs.failCalls = 1 // first Collect fails after Hello, forcing a reconnect
 	fs.onBatch = func(fs *fakeServer, b *opensplunkv1.EventBatch) {
-		fs.ackBatch(b.GetBatchSequence(), 1, 0)
+		fs.ackBatch(b.GetBatchSequence(), 1)
 	}
 	conn := startServer(t, fs)
 	q := newFakeQueue(fakeBatch(1, makeEvent("e1", "main")))
@@ -1611,7 +1611,7 @@ func TestBackoffDelayBoundedAndJittered(t *testing.T) {
 
 	// With zero jitter fraction the delay equals the (bounded) base and grows.
 	var prev time.Duration
-	for attempt := 0; attempt < 10; attempt++ {
+	for attempt := range 10 {
 		d := backoffDelay(policy, attempt, 0)
 		if d <= 0 {
 			t.Fatalf("attempt %d: delay %v must be positive", attempt, d)
@@ -1893,7 +1893,7 @@ func TestSenderRedeliversOrphanedInflightAfterReconnect(t *testing.T) {
 		return nil
 	}
 	fs.onBatch = func(fs *fakeServer, b *opensplunkv1.EventBatch) {
-		fs.ackBatch(b.GetBatchSequence(), uint32(len(b.GetEvents())), 0)
+		fs.ackBatch(b.GetBatchSequence(), uint32(len(b.GetEvents())))
 	}
 	conn := startServer(t, fs)
 	q := newFakeQueue(fakeBatch(1, makeEvent("e1", "main")))
@@ -1939,7 +1939,7 @@ func TestSenderContinuesWhenResumePointUnknown(t *testing.T) {
 		return ready
 	}
 	fs.onBatch = func(fs *fakeServer, b *opensplunkv1.EventBatch) {
-		fs.ackBatch(b.GetBatchSequence(), uint32(len(b.GetEvents())), 0)
+		fs.ackBatch(b.GetBatchSequence(), uint32(len(b.GetEvents())))
 	}
 	conn := startServer(t, fs)
 	q := &invalidResumeQueue{fakeQueue: newFakeQueue(fakeBatch(1, makeEvent("e1", "main")))}

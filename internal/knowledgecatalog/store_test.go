@@ -348,7 +348,7 @@ func TestConcurrentReadsReturnDetachedDefinitions(t *testing.T) {
 	ready.Add(workers)
 	start := make(chan struct{})
 	errorsSeen := make(chan error, workers)
-	for index := 0; index < workers; index++ {
+	for index := range workers {
 		go func(index int) {
 			ready.Done()
 			<-start
@@ -412,7 +412,7 @@ func newCatalogTestStore(t *testing.T) (*control.DB, *Store) {
 	for _, slug := range []string{"catalog-one", "catalog-two"} {
 		if _, err := apps.CreateApp(context.Background(), control.AppAccessScope{TenantID: testTenant}, control.AppDefinition{
 			Slug: slug, DisplayName: slug,
-			DefaultTimeRange: &control.AppTimeRange{Earliest: stringPointer("-24h"), Latest: stringPointer("now")},
+			DefaultTimeRange: &control.AppTimeRange{Earliest: new("-24h"), Latest: new("now")},
 		}); err != nil {
 			t.Fatalf("CreateApp(%s): %v", slug, err)
 		}
@@ -763,5 +763,3 @@ func assertTableExists(t *testing.T, database *control.DB, table string) {
 		t.Fatalf("migrated table %s count = %d", table, count)
 	}
 }
-
-func stringPointer(value string) *string { return &value }

@@ -340,6 +340,8 @@ func readLookupListSnapshot(
 	if count < 0 || count > MaximumManagedLookups || revision < count || revision > MaximumVersions {
 		return ListSnapshot{}, ErrCorrupt
 	}
+	// The query result is validated as nonnegative and capped above.
+	// #nosec G115 -- revision is in [0, MaximumVersions].
 	snapshot := ListSnapshot{Revision: uint64(revision)}
 	if count == 0 && len(state) == 0 {
 		snapshot.State = emptyLookupCatalogState()

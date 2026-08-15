@@ -1868,7 +1868,7 @@ func preflightActivePublicationCapacity(
 }
 
 func (writer *Writer) selectCreateObjectID(tx *gorm.DB, tenantID string) (string, int, error) {
-	for attempt := 0; attempt < maximumWriterIDAttempts; attempt++ {
+	for attempt := range maximumWriterIDAttempts {
 		objectID, err := writer.idGenerator()
 		if err != nil {
 			return "", 0, fmt.Errorf("generate knowledge object identity: %w", err)

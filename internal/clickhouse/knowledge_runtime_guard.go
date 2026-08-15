@@ -3,6 +3,7 @@ package clickhouse
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -489,10 +490,8 @@ func knowledgeRuntimeGuardStateLeaksAccounting(
 			return true
 		}
 	}
-	for _, column := range state.privateColumns {
-		if references(column) {
-			return true
-		}
+	if slices.ContainsFunc(state.privateColumns, references) {
+		return true
 	}
 	for _, key := range append(
 		append([]compiledSortKey(nil), state.order...),

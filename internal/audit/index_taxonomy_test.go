@@ -97,7 +97,7 @@ func TestIndexAuditEventsPersistAndSQLiteRejectsTaxonomyForgeries(t *testing.T) 
 	t.Parallel()
 
 	ctx := context.Background()
-	_, database := openAuditTestDatabase(t)
+	database := openAuditTestDatabase(t)
 	store := newAuditTestStore(t, database, auditTestCursorKey())
 	events := []SuccessfulEvent{
 		{OccurredAt: auditTestTime, Action: ActionIndexCreate, TargetKind: TargetKindIndex, TargetID: "events", TargetVersion: 1},
@@ -123,7 +123,7 @@ func TestIndexAuditEventsPersistAndSQLiteRejectsTaxonomyForgeries(t *testing.T) 
 	page, err := store.List(ctx, "tenant-index", ListRequest{
 		PageSize:      uint32(len(events)),
 		ActionFilters: allKnownAuditActions(),
-		TargetKind:    targetKindPointer(TargetKindIndex),
+		TargetKind:    new(TargetKindIndex),
 	})
 	if err != nil {
 		t.Fatalf("List(index events): %v", err)
@@ -207,5 +207,3 @@ func allKnownAuditActions() []Action {
 		ActionKnowledgeObjectDelete,
 	}
 }
-
-func targetKindPointer(value TargetKind) *TargetKind { return &value }

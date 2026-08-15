@@ -116,9 +116,9 @@ func TestServiceValidatesRequestsAndTimelineEligibilityBeforeExecution(t *testin
 		want    error
 	}{
 		{name: "missing ID", request: Request{}, want: ErrInvalidTimelineRequest},
-		{name: "zero explicit buckets", request: Request{SearchJobID: snapshot.ID, MaxBuckets: uint32Pointer(0)}, want: ErrInvalidTimelineRequest},
-		{name: "above service maximum", request: Request{SearchJobID: snapshot.ID, MaxBuckets: uint32Pointer(1_001)}, want: ErrInvalidTimelineRequest},
-		{name: "zero explicit width", request: Request{SearchJobID: snapshot.ID, PreferredBucketWidthSeconds: int64Pointer(0)}, want: ErrInvalidTimelineRequest},
+		{name: "zero explicit buckets", request: Request{SearchJobID: snapshot.ID, MaxBuckets: new(uint32(0))}, want: ErrInvalidTimelineRequest},
+		{name: "above service maximum", request: Request{SearchJobID: snapshot.ID, MaxBuckets: new(uint32(1_001))}, want: ErrInvalidTimelineRequest},
+		{name: "zero explicit width", request: Request{SearchJobID: snapshot.ID, PreferredBucketWidthSeconds: new(int64(0))}, want: ErrInvalidTimelineRequest},
 		{name: "substitute time", request: Request{SearchJobID: snapshot.ID}, mutate: func(snapshot *searchjobs.ExecutionSnapshot) {
 			snapshot.SPL = `index=main | eval _time=_indextime`
 		}, want: ErrTimelineUnsupported},
@@ -230,7 +230,7 @@ func TestServiceRejectsMalformedExecutorSequence(t *testing.T) {
 			return []queryexec.TimelineBucket{{AlignedStart: query.Spec.FirstBucket.Add(time.Second), Count: 1}}, nil
 		}},
 	})
-	if _, err := service.Get(context.Background(), access, Request{SearchJobID: snapshot.ID, MaxBuckets: uint32Pointer(1)}); !errors.Is(err, searchjobs.ErrInvalidResult) {
+	if _, err := service.Get(context.Background(), access, Request{SearchJobID: snapshot.ID, MaxBuckets: new(uint32(1))}); !errors.Is(err, searchjobs.ErrInvalidResult) {
 		t.Fatalf("Get(malformed executor) = %v, want ErrInvalidResult", err)
 	}
 }
@@ -413,6 +413,3 @@ func newTimelineTestService(t *testing.T, config Config) *Service {
 	}
 	return service
 }
-
-func uint32Pointer(value uint32) *uint32 { return &value }
-func int64Pointer(value int64) *int64    { return &value }

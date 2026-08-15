@@ -555,12 +555,12 @@ func TestProjectLogicalPlanFailsClosedAndReturnsNoPartialPlan(t *testing.T) {
 func TestProjectLogicalPlanAcceptsAccumulatedOutputExpansion(t *testing.T) {
 	var source strings.Builder
 	source.WriteString("| table _raw")
-	for index := 0; index < 1_008; index++ {
+	for index := range 1_008 {
 		fmt.Fprintf(&source, " f%d", index)
 	}
-	for command := 0; command < 2; command++ {
+	for command := range 2 {
 		source.WriteString(` | rex "`)
-		for capture := 0; capture < 16; capture++ {
+		for capture := range 16 {
 			fmt.Fprintf(
 				&source,
 				"(?<r%d_%d>x)",

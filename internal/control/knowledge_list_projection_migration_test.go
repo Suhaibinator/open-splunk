@@ -74,7 +74,7 @@ func TestKnowledgeListProjectionMigrationRejectsUnprojectedLegacyCatalog(t *test
 		) VALUES ('tenant-a', zeroblob(32), X'01', 1, 10)`); err != nil {
 		t.Fatalf("seed legacy catalog: %v", err)
 	}
-	insertKnowledgeMigrationObject(t, raw, "ko-legacy", "Legacy", "private", "active", 10)
+	insertKnowledgeMigrationObject(t, raw, "ko-legacy", "Legacy", "active", 10)
 
 	err := ApplyMigrations(context.Background(), raw, migrationsBefore(t, "0026_"))
 	if err == nil || !strings.Contains(err.Error(), "requires empty catalog") {

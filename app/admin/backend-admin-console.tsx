@@ -32,6 +32,7 @@ import {
   type OpenSplunkApiClient,
   type SystemBootstrapModel,
 } from "@/lib/api";
+import { createErrorMessage } from "@/lib/error-message";
 import { searchLaunchHref } from "@/lib/search/launch-url";
 
 import { PageHeading } from "../_components/product-shell";
@@ -600,10 +601,7 @@ function historyStateWithTokenGuard(guardId: string): Record<string, unknown> {
   };
 }
 
-function errorMessage(error: unknown): string {
-  if (error instanceof Error && error.message.trim().length > 0) return error.message;
-  return "The server did not return a usable response.";
-}
+const errorMessage = createErrorMessage("The server did not return a usable response.");
 
 function formatDate(value: Date | undefined): string {
   if (value === undefined || Number.isNaN(value.valueOf())) return "Never";

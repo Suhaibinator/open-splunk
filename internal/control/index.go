@@ -128,8 +128,8 @@ func (db *DB) createIndex(
 		return Index{}, err
 	}
 
-	for attempt := 0; attempt < 3; attempt++ {
-		id, err := randomID("idx_", 16)
+	for range 3 {
+		id, err := randomID("idx_")
 		if err != nil {
 			return Index{}, fmt.Errorf("generate index ID: %w", err)
 		}
@@ -1078,8 +1078,8 @@ func boolInteger(value bool) int64 {
 	return 0
 }
 
-func randomID(prefix string, randomBytes int) (string, error) {
-	buffer := make([]byte, randomBytes)
+func randomID(prefix string) (string, error) {
+	buffer := make([]byte, 16)
 	if _, err := rand.Read(buffer); err != nil {
 		return "", err
 	}

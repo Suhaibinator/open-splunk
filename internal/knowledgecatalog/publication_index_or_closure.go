@@ -220,7 +220,7 @@ func orPublicationIndexPairs(
 	left, right publicationIndexORPair,
 ) publicationIndexORPair {
 	var result publicationIndexORPair
-	for index := 0; index < publicationIndexMembershipWordCount; index++ {
+	for index := range publicationIndexMembershipWordCount {
 		result.before[index] = left.before[index] | right.before[index]
 		result.after[index] = left.after[index] | right.after[index]
 	}
@@ -268,7 +268,7 @@ func comparePublicationIndexORPairs(left, right publicationIndexORPair) int {
 func comparePublicationIndexMembership(
 	left, right publicationIndexMembership,
 ) int {
-	for index := 0; index < publicationIndexMembershipWordCount; index++ {
+	for index := range publicationIndexMembershipWordCount {
 		// Reverse conventional low-bit-first storage so ordinal zero is the
 		// first bit of the canonical binary ordering.
 		leftWord := bits.Reverse64(left[index])

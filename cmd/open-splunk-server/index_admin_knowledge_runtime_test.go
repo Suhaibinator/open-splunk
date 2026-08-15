@@ -264,8 +264,8 @@ func createRuntimeIndexAdmissionApp(
 			Slug:        slug,
 			DisplayName: slug,
 			DefaultTimeRange: &control.AppTimeRange{
-				Earliest: runtimeIndexAdmissionStringPointer("-24h"),
-				Latest:   runtimeIndexAdmissionStringPointer("now"),
+				Earliest: new("-24h"),
+				Latest:   new("now"),
 			},
 		},
 	); err != nil {
@@ -502,8 +502,4 @@ func runtimeIndexAdmissionRowCount(
 		t.Fatalf("count %s: %v", table, err)
 	}
 	return count
-}
-
-func runtimeIndexAdmissionStringPointer(value string) *string {
-	return &value
 }

@@ -172,7 +172,7 @@ function typedValueToScalar(value: TypedValue | undefined): DemoScalar {
   return jsonToScalar(typedValueToJSON(value));
 }
 
-function typedValueIsPivotable(value: TypedValue | undefined): boolean {
+export function typedValueIsPivotable(value: TypedValue | undefined): boolean {
   switch (value?.kind?.$case) {
     case "nullValue":
     case "stringValue":

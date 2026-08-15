@@ -18,7 +18,7 @@ import (
 
 func TestMigrationFreshSchemaIsExactAndBounded(t *testing.T) {
 	t.Parallel()
-	_, database := openTestDatabase(t)
+	database := openTestDatabase(t)
 
 	var version int
 	if err := database.SQLDB().QueryRowContext(t.Context(), `SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil {

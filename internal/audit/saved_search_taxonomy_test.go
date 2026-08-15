@@ -172,7 +172,7 @@ func TestSavedSearchAuditEventsPersistAndSQLiteRejectsTaxonomyForgeries(t *testi
 	t.Parallel()
 
 	ctx := context.Background()
-	_, database := openAuditTestDatabase(t)
+	database := openAuditTestDatabase(t)
 	store := newAuditTestStore(t, database, auditTestCursorKey())
 	administrator := Actor{
 		Kind: ActorKindBrowser,
@@ -248,7 +248,7 @@ func TestSavedSearchAuditEventsPersistAndSQLiteRejectsTaxonomyForgeries(t *testi
 	page, err := store.List(ctx, "tenant-saved-search", ListRequest{
 		PageSize:      uint32(len(events)),
 		ActionFilters: allKnownAuditActions(),
-		TargetKind:    targetKindPointer(TargetKindSavedSearch),
+		TargetKind:    new(TargetKindSavedSearch),
 	})
 	if err != nil {
 		t.Fatalf("List(saved-search events): %v", err)

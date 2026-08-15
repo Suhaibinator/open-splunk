@@ -250,10 +250,7 @@ func (c *conn) awaitReady() error {
 	c.ready = ready
 
 	c.mu.Lock()
-	c.maxInFlight = int(ready.GetMaxInFlightBatches())
-	if c.maxInFlight < 1 {
-		c.maxInFlight = 1
-	}
+	c.maxInFlight = max(int(ready.GetMaxInFlightBatches()), 1)
 	c.maxBatchEvents = ready.GetMaxBatchEvents()
 	c.maxBatchBytes = ready.GetMaxBatchBytes()
 	c.mu.Unlock()
@@ -952,10 +949,7 @@ func (c *conn) handleThrottle(resp *opensplunkv1.CollectResponse) {
 		return
 	}
 	receivedAt := c.s.now()
-	minimumDelay := throttle.GetMinimumSendDelay().AsDuration()
-	if minimumDelay < 0 {
-		minimumDelay = 0
-	}
+	minimumDelay := max(throttle.GetMinimumSendDelay().AsDuration(), 0)
 	until := localThrottleUntil(receivedAt, resp.GetSentAt(), throttle.GetEffectiveUntil(), minimumDelay)
 
 	// Serialize applying the response with every outbound Send. This establishes

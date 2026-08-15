@@ -6,11 +6,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 	"strings"
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
+	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -96,13 +96,13 @@ type Service struct {
 
 // New validates dependencies and constructs a timeline service.
 func New(config Config) (*Service, error) {
-	if nilInterface(config.Searches) {
+	if nilcheck.IsNil(config.Searches) {
 		return nil, errors.New("create search timeline service: completed search snapshots are required")
 	}
-	if nilInterface(config.Compiler) {
+	if nilcheck.IsNil(config.Compiler) {
 		return nil, errors.New("create search timeline service: timeline compiler is required")
 	}
-	if nilInterface(config.Executor) {
+	if nilcheck.IsNil(config.Executor) {
 		return nil, errors.New("create search timeline service: timeline executor is required")
 	}
 	if config.MaximumBuckets == 0 {
@@ -287,17 +287,4 @@ func buildTimelineResult(ctx context.Context, spec clickhouse.TimelineSpec, rows
 		return Result{}, err
 	}
 	return Result{Buckets: buckets, BucketWidthSeconds: spec.SpanSeconds, Complete: true}, nil
-}
-
-func nilInterface(value any) bool {
-	if value == nil {
-		return true
-	}
-	reflected := reflect.ValueOf(value)
-	switch reflected.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return reflected.IsNil()
-	default:
-		return false
-	}
 }

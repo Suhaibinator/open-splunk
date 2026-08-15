@@ -417,7 +417,7 @@ func TestValidateSearchRejectsUnsupportedDefinitionFieldsAndBoundsRequests(t *te
 		{name: "blank SPL", mutate: func(request *opensplunkv1.ValidateSearchRequest) { request.Definition.Spl = " \n\t" }},
 		{name: "SPL NUL", mutate: func(request *opensplunkv1.ValidateSearchRequest) { request.Definition.Spl += "\x00" }},
 		{name: "invalid app ID", mutate: func(request *opensplunkv1.ValidateSearchRequest) {
-			request.Definition.AppId = stringPointer("app\x00main")
+			request.Definition.AppId = new("app\x00main")
 		}},
 		{name: "preferred result tab", mutate: func(request *opensplunkv1.ValidateSearchRequest) {
 			request.Definition.PreferredResultTab = opensplunkv1.SearchResultTab_SEARCH_RESULT_TAB_EVENTS

@@ -18,6 +18,7 @@ import {
   type OpenSplunkApiClient,
   type SystemBootstrapModel,
 } from "@/lib/api";
+import { createErrorMessage } from "@/lib/error-message";
 import { searchLaunchHref } from "@/lib/search/launch-url";
 
 import { PageHeading } from "../_components/product-shell";
@@ -35,11 +36,7 @@ interface AuthorizedIndexDefinitions {
   message?: string;
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error && error.message.trim().length > 0
-    ? error.message
-    : "The server did not return a usable bootstrap response.";
-}
+const errorMessage = createErrorMessage("The server did not return a usable bootstrap response.");
 
 function stateLabel(index: BrowserIndexModel): string {
   if (index.state === IndexState.INDEX_STATE_ACTIVE) return "Active";

@@ -264,7 +264,7 @@ func seedWriterActiveOpaquePublication(
 		timestamp,
 		dependencies,
 	)
-	insertIntegrationProjection(t, tx, objectID, 1, testOwner, StateActive, fixture.metadata)
+	insertIntegrationProjection(t, tx, objectID, 1, StateActive, fixture.metadata)
 	objectType, typeOK := objectTypeFromProto(fixture.metadata.ObjectType)
 	sharingScope, scopeOK := sharingScopeFromProto(fixture.metadata.SharingScope)
 	if !typeOK || !scopeOK {

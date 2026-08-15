@@ -16,7 +16,7 @@ var _ ProgressSink = (*resultSink)(nil)
 func TestResultSinkProgressBeforeSchemaAndVersioning(t *testing.T) {
 	t.Parallel()
 
-	sink, entry := newProgressSinkTestFixture(StateRunning, 41)
+	sink, entry := newProgressSinkTestFixture(41)
 
 	if err := sink.ReportProgress(ExecutionProgressDelta{}); err != nil {
 		t.Fatalf("ReportProgress(zero) error = %v", err)
@@ -73,7 +73,7 @@ func TestResultSinkProgressOverflowIsAtomicAndSticky(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			sink, entry := newProgressSinkTestFixture(StateRunning, 7)
+			sink, entry := newProgressSinkTestFixture(7)
 			entry.job.ScannedRows = test.initialRows
 			entry.job.ScannedBytes = test.initialBytes
 
@@ -99,7 +99,7 @@ func TestResultSinkProgressOverflowIsAtomicAndSticky(t *testing.T) {
 func TestResultSinkProgressVersionOverflowIsAtomic(t *testing.T) {
 	t.Parallel()
 
-	sink, entry := newProgressSinkTestFixture(StateRunning, math.MaxUint64)
+	sink, entry := newProgressSinkTestFixture(math.MaxUint64)
 	entry.job.ScannedRows = 7
 	entry.job.ScannedBytes = 11
 
@@ -144,7 +144,7 @@ func TestResultSinkProgressConcurrentPackets(t *testing.T) {
 		workers = 32
 		packets = 257
 	)
-	sink, entry := newProgressSinkTestFixture(StateRunning, 13)
+	sink, entry := newProgressSinkTestFixture(13)
 	errs := make(chan error, workers)
 	var wait sync.WaitGroup
 	wait.Add(workers)
@@ -171,7 +171,7 @@ func TestResultSinkProgressConcurrentPackets(t *testing.T) {
 func TestResultSinkRejectsLateProgressWithoutMutation(t *testing.T) {
 	t.Parallel()
 
-	sink, entry := newProgressSinkTestFixture(StateRunning, 19)
+	sink, entry := newProgressSinkTestFixture(19)
 	if err := sink.ReportProgress(ExecutionProgressDelta{ScannedRows: 2, ScannedBytes: 4}); err != nil {
 		t.Fatal(err)
 	}
@@ -345,8 +345,8 @@ func TestManagerRetainsExecutionProgressAcrossTerminalLifecycles(t *testing.T) {
 	})
 }
 
-func newProgressSinkTestFixture(state State, version uint64) (*resultSink, *jobEntry) {
-	entry := &jobEntry{job: Job{State: state, Version: version}}
+func newProgressSinkTestFixture(version uint64) (*resultSink, *jobEntry) {
+	entry := &jobEntry{job: Job{State: StateRunning, Version: version}}
 	return &resultSink{entry: entry, ctx: context.Background()}, entry
 }
 

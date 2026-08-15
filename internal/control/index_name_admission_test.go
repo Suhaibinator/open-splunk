@@ -420,7 +420,6 @@ func TestNilIndexNameAdmissionAllowsEmptyKnowledgeCatalog(t *testing.T) {
 	administration := newTestAuditedIndexAdministration(
 		t,
 		database,
-		"tenant-a",
 		appender,
 	)
 	if _, err := administration.CreateIndex(

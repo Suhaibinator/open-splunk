@@ -47,7 +47,7 @@ func TestCollectAuthenticatesBearerTokenAndNegotiatesReady(t *testing.T) {
 	build.SourceRevision = "mutated"
 	stream := harness.stream(t, "Bearer token-value")
 
-	sendHello(t, stream, 1, 1, 0)
+	sendHello(t, stream, 1)
 	response := recvResponse(t, stream)
 	ready := response.GetReady()
 	if ready == nil {
@@ -260,7 +260,7 @@ func TestCollectLimitsConcurrentPreHelloStreamsPerCredential(t *testing.T) {
 	}
 
 	third := harness.stream(t, "Bearer collector-a-token")
-	sendHello(t, third, 1, 1, 0)
+	sendHello(t, third, 1)
 	if ready := recvResponse(t, third).GetReady(); ready == nil {
 		t.Fatal("released per-credential stream capacity was not reusable")
 	}
@@ -321,7 +321,7 @@ func TestCollectEnforcesHelloFirstProtocolAndStreamSequence(t *testing.T) {
 
 	t.Run("sequence gap after hello", func(t *testing.T) {
 		stream := harness.stream(t, "Bearer good-token")
-		sendHello(t, stream, 1, 1, 0)
+		sendHello(t, stream, 1)
 		_ = recvResponse(t, stream)
 		heartbeat := &opensplunkv1.CollectorHeartbeat{
 			CollectorId: "collector-a",
@@ -355,7 +355,7 @@ func TestCollectEnforcesTokenAndPayloadCollectorIdentity(t *testing.T) {
 
 	t.Run("hello must match token binding", func(t *testing.T) {
 		stream := harness.stream(t, "Bearer good-token")
-		if err := stream.Send(helloRequestFor(1, "different-collector", "instance-a", 1, 0)); err != nil {
+		if err := stream.Send(helloRequestFor(1, "different-collector", 1, 0)); err != nil {
 			t.Fatal(err)
 		}
 		_, err := stream.Recv()
@@ -366,7 +366,7 @@ func TestCollectEnforcesTokenAndPayloadCollectorIdentity(t *testing.T) {
 
 	t.Run("batch collector must match hello", func(t *testing.T) {
 		stream := harness.stream(t, "Bearer good-token")
-		if err := stream.Send(helloRequestFor(1, "bound-collector", "instance-a", 1, 0)); err != nil {
+		if err := stream.Send(helloRequestFor(1, "bound-collector", 1, 0)); err != nil {
 			t.Fatal(err)
 		}
 		_ = recvResponse(t, stream)
@@ -402,7 +402,7 @@ func TestCollectReauthorizesEveryBatch(t *testing.T) {
 	})
 	harness := newServiceHarness(t, testServiceConfig(), authorizer, store)
 	stream := harness.stream(t, "Bearer token-that-will-be-revoked")
-	sendHello(t, stream, 1, 1, 0)
+	sendHello(t, stream, 1)
 	_ = recvResponse(t, stream)
 	batch := validTestBatch("collector-a", "batch-after-revocation", 1, validTestEvent("event-a", "main"))
 	if err := stream.Send(batchRequest(2, batch)); err != nil {
@@ -425,7 +425,7 @@ func TestCollectPartiallyRejectsEventsAndStoresOnlyNormalizedAuthorizedEvents(t 
 	})
 	harness := newServiceHarness(t, testServiceConfig(), staticTestAuthorizer(), store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1, 1, 0)
+	sendHello(t, stream, 1)
 	_ = recvResponse(t, stream)
 
 	accepted := validTestEvent("event-accepted", "main")
@@ -486,7 +486,7 @@ func TestCollectLostAckUsesOriginalDispositionAfterAuthorizationExpansion(t *tes
 	batch := validTestBatch("collector-a", "batch-lost-ack", 1, mainEvent, auditEvent)
 
 	first := harness.stream(t, "Bearer good-token")
-	sendHello(t, first, 1, 1, 0)
+	sendHello(t, first, 1)
 	_ = recvResponse(t, first)
 	if err := first.Send(batchRequest(2, batch)); err != nil {
 		t.Fatal(err)
@@ -497,7 +497,7 @@ func TestCollectLostAckUsesOriginalDispositionAfterAuthorizationExpansion(t *tes
 	_ = first.CloseSend()
 
 	second := harness.stream(t, "Bearer good-token")
-	sendHello(t, second, 1, 1, 0)
+	sendHello(t, second, 1)
 	_ = recvResponse(t, second)
 	if err := second.Send(batchRequest(2, batch)); err != nil {
 		t.Fatal(err)
@@ -538,7 +538,7 @@ func TestCollectRetriesTransientStoreFailureThenAcknowledgesDuplicateOutcome(t *
 	})
 	harness := newServiceHarness(t, testServiceConfig(), staticTestAuthorizer(), store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1, 1, 0)
+	sendHello(t, stream, 1)
 	_ = recvResponse(t, stream)
 
 	batch := validTestBatch("collector-a", "batch-retry", 1, validTestEvent("event-a", "main"))
@@ -577,7 +577,7 @@ func TestCollectRetriesChangedStreamLocalPendingIdentity(t *testing.T) {
 	})
 	harness := newServiceHarness(t, testServiceConfig(), staticTestAuthorizer(), store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1, 1, 0)
+	sendHello(t, stream, 1)
 	_ = recvResponse(t, stream)
 
 	batch := validTestBatch("collector-a", "batch-retry", 1, validTestEvent("event-a", "main"))
@@ -629,7 +629,7 @@ func TestCollectRetryReusesFirstServerReceiveTime(t *testing.T) {
 	})
 	harness := newServiceHarness(t, cfg, staticTestAuthorizer(), store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1, 1, 0)
+	sendHello(t, stream, 1)
 	_ = recvResponse(t, stream)
 	batch := validTestBatch("collector-a", "batch-retry-time", 1, validTestEvent("event-a", "main"))
 	if err := stream.Send(batchRequest(2, batch)); err != nil {
@@ -1569,7 +1569,7 @@ func TestProcessBatchTerminallyRejectsOversizedDurableOutcome(t *testing.T) {
 	const rejectedEvents = 280
 	events := make([]*opensplunkv1.LogEvent, 0, rejectedEvents+1)
 	longName := strings.Repeat("n", int(HardMaxFieldNameBytes))
-	for i := 0; i < rejectedEvents; i++ {
+	for i := range rejectedEvents {
 		nested := object(stringField(longName, "value"))
 		for range HardMaxNestingDepth {
 			nested = object(objectField(longName, nested))
@@ -1601,7 +1601,7 @@ func TestCollectDoesNotAcknowledgePermanentStoreFailure(t *testing.T) {
 	})
 	harness := newServiceHarness(t, testServiceConfig(), staticTestAuthorizer(), store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1, 1, 0)
+	sendHello(t, stream, 1)
 	_ = recvResponse(t, stream)
 	batch := validTestBatch("collector-a", "batch-failure", 1, validTestEvent("event-a", "main"))
 	if err := stream.Send(batchRequest(2, batch)); err != nil {
@@ -1651,7 +1651,7 @@ func TestCollectRejectsInvalidBatchEnvelopesBeforeStorage(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			stream := harness.stream(t, "Bearer good-token")
-			sendHello(t, stream, 1, 1, 0)
+			sendHello(t, stream, 1)
 			_ = recvResponse(t, stream)
 			batch := validTestBatch("collector-a", "batch-a", 1, validTestEvent("event-a", "main"))
 			tt.edit(batch)
@@ -1676,7 +1676,7 @@ func TestCollectEnforcesBatchEventCountAndEncodedByteLimits(t *testing.T) {
 		store := &recoverableTestStore{}
 		harness := newServiceHarness(t, cfg, staticTestAuthorizer(), store)
 		stream := harness.stream(t, "Bearer good-token")
-		sendHello(t, stream, 1, 1, 0)
+		sendHello(t, stream, 1)
 		_ = recvResponse(t, stream)
 		batch := validTestBatch(
 			"collector-a", "batch-count", 1,
@@ -1705,7 +1705,7 @@ func TestCollectEnforcesBatchEventCountAndEncodedByteLimits(t *testing.T) {
 		store := &recoverableTestStore{}
 		harness := newServiceHarness(t, cfg, staticTestAuthorizer(), store)
 		stream := harness.stream(t, "Bearer good-token")
-		sendHello(t, stream, 1, 1, 0)
+		sendHello(t, stream, 1)
 		_ = recvResponse(t, stream)
 		batch := validTestBatch("collector-a", "batch-bytes", 1, first, second)
 		if err := stream.Send(batchRequest(2, batch)); err != nil {
@@ -1734,7 +1734,7 @@ func TestCollectPartiallyRejectsOversizedEvent(t *testing.T) {
 	})
 	harness := newServiceHarness(t, cfg, staticTestAuthorizer(), store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1, 1, 0)
+	sendHello(t, stream, 1)
 	_ = recvResponse(t, stream)
 	batch := validTestBatch("collector-a", "batch-event-size", 1, small, large)
 	if err := stream.Send(batchRequest(2, batch)); err != nil {
@@ -1758,7 +1758,7 @@ func TestCollectRejectsInconsistentStoreAccountingWithoutAck(t *testing.T) {
 	})
 	harness := newServiceHarness(t, testServiceConfig(), staticTestAuthorizer(), store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1, 1, 0)
+	sendHello(t, stream, 1)
 	_ = recvResponse(t, stream)
 	batch := validTestBatch("collector-a", "batch-accounting", 1, validTestEvent("event-a", "main"))
 	if err := stream.Send(batchRequest(2, batch)); err != nil {
@@ -1773,7 +1773,7 @@ func TestCollectRejectsInconsistentStoreAccountingWithoutAck(t *testing.T) {
 func TestCollectRetriesStreamLocalBatchSequenceConflict(t *testing.T) {
 	harness := newServiceHarness(t, testServiceConfig(), staticTestAuthorizer(), acceptingStore())
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1, 1, 0)
+	sendHello(t, stream, 1)
 	_ = recvResponse(t, stream)
 
 	first := validTestBatch("collector-a", "batch-one", 1, validTestEvent("event-one", "main"))
@@ -1795,7 +1795,7 @@ func TestCollectRetriesStreamLocalBatchSequenceConflict(t *testing.T) {
 func TestCollectClosesCleanlyAfterGoodbye(t *testing.T) {
 	harness := newServiceHarness(t, testServiceConfig(), staticTestAuthorizer(), acceptingStore())
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1, 1, 0)
+	sendHello(t, stream, 1)
 	_ = recvResponse(t, stream)
 	if err := stream.Send(&opensplunkv1.CollectRequest{
 		StreamSequence: 2,
@@ -2126,24 +2126,24 @@ func (store *recoverableTestStore) RejectBatch(
 	return store.result, nil
 }
 
-func sendHello(t *testing.T, stream opensplunkv1.CollectorIngestService_CollectClient, sequence uint64, major, minor uint32) {
+func sendHello(t *testing.T, stream opensplunkv1.CollectorIngestService_CollectClient, major uint32) {
 	t.Helper()
-	if err := stream.Send(helloRequest(sequence, major, minor)); err != nil {
+	if err := stream.Send(helloRequest(1, major, 0)); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func helloRequest(sequence uint64, major, minor uint32) *opensplunkv1.CollectRequest {
-	return helloRequestFor(sequence, "collector-a", "instance-a", major, minor)
+	return helloRequestFor(sequence, "collector-a", major, minor)
 }
 
-func helloRequestFor(sequence uint64, collectorID, instanceID string, major, minor uint32) *opensplunkv1.CollectRequest {
+func helloRequestFor(sequence uint64, collectorID string, major, minor uint32) *opensplunkv1.CollectRequest {
 	return &opensplunkv1.CollectRequest{
 		StreamSequence: sequence,
 		SentAt:         timestamppb.New(validationTestNow),
 		Payload: &opensplunkv1.CollectRequest_Hello{Hello: &opensplunkv1.CollectorHello{
 			CollectorId:      collectorID,
-			InstanceId:       instanceID,
+			InstanceId:       "instance-a",
 			ProtocolMajor:    major,
 			ProtocolMinor:    minor,
 			CollectorVersion: "test-collector",

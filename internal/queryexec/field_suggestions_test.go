@@ -9,7 +9,6 @@ import (
 	"sync"
 	"testing"
 
-	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
@@ -581,7 +580,8 @@ func TestSettingsForFieldSuggestionsClonesAndTightensCaps(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := cloneFieldCatalogSettings(base)
-	got, err := settingsForFieldSuggestions(base, 73)
+	validated := mustValidatedSettings(t, base)
+	got, err := settingsForFieldSuggestions(validated, 73)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -603,7 +603,7 @@ func TestSettingsForFieldSuggestionsClonesAndTightensCaps(t *testing.T) {
 	base["max_result_rows"] = uint64(7)
 	base["max_result_bytes"] = uint64(1024)
 	base["max_rows_to_group_by"] = uint64(5)
-	strict, err := settingsForFieldSuggestions(base, 73)
+	strict, err := settingsForFieldSuggestions(mustValidatedSettings(t, base), 73)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -614,7 +614,7 @@ func TestSettingsForFieldSuggestionsClonesAndTightensCaps(t *testing.T) {
 	}
 
 	base["max_rows_to_group_by"] = uint64(clickhouse.MaximumFieldCatalogFields) + 2
-	exact, err := settingsForFieldSuggestions(base, 73)
+	exact, err := settingsForFieldSuggestions(mustValidatedSettings(t, base), 73)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -623,78 +623,16 @@ func TestSettingsForFieldSuggestionsClonesAndTightensCaps(t *testing.T) {
 	}
 }
 
-func TestSettingsForFieldSuggestionsRejectsUnsafeBaseSettings(t *testing.T) {
+func TestSettingsForFieldSuggestionsRejectsInvalidLimits(t *testing.T) {
 	base, err := querySettings(Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{
-		"max_execution_time", "max_memory_usage", "max_rows_to_read", "max_bytes_to_read",
-		"max_result_rows", "max_result_bytes", "max_rows_to_group_by", "max_threads",
-		"max_query_size", "max_subquery_depth",
-	} {
-		t.Run(name+" missing", func(t *testing.T) {
-			malformed := cloneFieldCatalogSettings(base)
-			delete(malformed, name)
-			if _, err := settingsForFieldSuggestions(malformed, 1); err == nil {
-				t.Fatalf("missing %s unexpectedly accepted", name)
-			}
-		})
-		t.Run(name+" zero", func(t *testing.T) {
-			malformed := cloneFieldCatalogSettings(base)
-			malformed[name] = uint64(0)
-			if _, err := settingsForFieldSuggestions(malformed, 1); err == nil {
-				t.Fatalf("zero %s unexpectedly accepted", name)
-			}
-		})
-		t.Run(name+" wrong type", func(t *testing.T) {
-			malformed := cloneFieldCatalogSettings(base)
-			malformed[name] = "1"
-			if _, err := settingsForFieldSuggestions(malformed, 1); err == nil {
-				t.Fatalf("wrong type %s unexpectedly accepted", name)
-			}
-		})
-	}
-	for _, name := range []string{
-		"timeout_overflow_mode", "read_overflow_mode", "result_overflow_mode",
-		"group_by_overflow_mode",
-	} {
-		t.Run(name, func(t *testing.T) {
-			malformed := cloneFieldCatalogSettings(base)
-			malformed[name] = "break"
-			if _, err := settingsForFieldSuggestions(malformed, 1); err == nil {
-				t.Fatalf("unsafe %s unexpectedly accepted", name)
-			}
-		})
-	}
-	for _, test := range []struct {
-		name  string
-		value any
-	}{
-		{name: "enable_materialized_cte", value: uint8(0)},
-		{name: "short_circuit_function_evaluation", value: "disable"},
-		{name: "async_insert", value: uint8(1)},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			malformed := cloneFieldCatalogSettings(base)
-			malformed[test.name] = test.value
-			if _, err := settingsForFieldSuggestions(malformed, 1); err == nil {
-				t.Fatalf("unsafe %s unexpectedly accepted", test.name)
-			}
-		})
-	}
-	for _, malformed := range []clickhousedriver.Settings{nil, cloneFieldCatalogSettings(base)} {
-		if malformed != nil {
-			malformed["readonly"] = uint8(1)
-		}
-		if _, err := settingsForFieldSuggestions(malformed, 1); err == nil {
-			t.Fatalf("settingsForFieldSuggestions(%#v) unexpectedly succeeded", malformed)
-		}
-	}
-	if _, err := settingsForFieldSuggestions(base, 0); err == nil {
+	validated := mustValidatedSettings(t, base)
+	if _, err := settingsForFieldSuggestions(validated, 0); err == nil {
 		t.Fatal("zero maximum fields unexpectedly accepted")
 	}
-	if _, err := settingsForFieldSuggestions(base, clickhouse.MaximumFieldSuggestions+1); err == nil {
+	if _, err := settingsForFieldSuggestions(validated, clickhouse.MaximumFieldSuggestions+1); err == nil {
 		t.Fatal("oversized maximum fields unexpectedly accepted")
 	}
 }
@@ -706,13 +644,14 @@ func TestSettingsForFieldSuggestionsIsRaceSafeForConcurrentReaders(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	validated := mustValidatedSettings(t, base)
 	const workers = 32
 	var wait sync.WaitGroup
 	wait.Add(workers)
 	for index := range workers {
 		go func() {
 			defer wait.Done()
-			got, err := settingsForFieldSuggestions(base, uint32(index+1))
+			got, err := settingsForFieldSuggestions(validated, uint32(index+1))
 			if err != nil {
 				t.Errorf("settingsForFieldSuggestions() error = %v", err)
 				return

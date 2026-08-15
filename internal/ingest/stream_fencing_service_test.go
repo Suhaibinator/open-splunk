@@ -123,11 +123,11 @@ func TestCollectAcceptsDurableTrustedTenantIdentityBeyondProtocolIDLimit(t *test
 		acceptingStore(),
 	)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1, 1, 0)
+	sendHello(t, stream, 1)
 	if ready := recvResponse(t, stream).GetReady(); ready == nil {
 		t.Fatal("response was not Ready")
 	}
-	sendGoodbye(t, stream, 2)
+	sendGoodbye(t, stream)
 	if _, err := stream.Recv(); !errors.Is(err, io.EOF) {
 		t.Fatalf("goodbye error = %v, want EOF", err)
 	}
@@ -144,14 +144,14 @@ func TestCollectLastValidHelloSupersedesIdleStreamAcrossTokens(t *testing.T) {
 	harness := newServiceHarness(t, config, authorizer, acceptingStore())
 
 	first := harness.stream(t, "Bearer first-token")
-	sendHello(t, first, 1, 1, 0)
+	sendHello(t, first, 1)
 	firstReady := recvResponse(t, first).GetReady()
 	if firstReady == nil {
 		t.Fatal("first response was not Ready")
 	}
 
 	second := harness.stream(t, "Bearer second-token")
-	sendHello(t, second, 1, 1, 0)
+	sendHello(t, second, 1)
 	secondReady := recvResponse(t, second).GetReady()
 	if secondReady == nil {
 		t.Fatal("second response was not Ready")
@@ -175,7 +175,7 @@ func TestCollectLastValidHelloSupersedesIdleStreamAcrossTokens(t *testing.T) {
 		t.Fatal("idle superseded handler was not woken promptly")
 	}
 
-	sendGoodbye(t, second, 2)
+	sendGoodbye(t, second)
 	if _, err := second.Recv(); !errors.Is(err, io.EOF) {
 		t.Fatalf("current stream goodbye error = %v, want EOF", err)
 	}
@@ -189,11 +189,11 @@ func TestCollectSameTokenTakeoverBypassesSteadyStateLimit(t *testing.T) {
 	harness := newServiceHarness(t, config, staticTestAuthorizer(), acceptingStore())
 
 	first := harness.stream(t, "Bearer good-token")
-	sendHello(t, first, 1, 1, 0)
+	sendHello(t, first, 1)
 	_ = recvResponse(t, first)
 
 	second := harness.stream(t, "Bearer good-token")
-	sendHello(t, second, 1, 1, 0)
+	sendHello(t, second, 1)
 	if ready := recvResponse(t, second).GetReady(); ready == nil {
 		t.Fatal("replacement response was not Ready")
 	}
@@ -201,7 +201,7 @@ func TestCollectSameTokenTakeoverBypassesSteadyStateLimit(t *testing.T) {
 		t.Fatalf("superseded stream error = %v, want Aborted", err)
 	}
 
-	sendGoodbye(t, second, 2)
+	sendGoodbye(t, second)
 	if _, err := second.Recv(); !errors.Is(err, io.EOF) {
 		t.Fatalf("replacement goodbye error = %v, want EOF", err)
 	}
@@ -228,7 +228,7 @@ func TestCollectNewestPreHelloAttemptSupersedesOlderSameIdentity(t *testing.T) {
 	)
 
 	second := harness.stream(t, "Bearer good-token")
-	sendHello(t, second, 1, 1, 0)
+	sendHello(t, second, 1)
 	if ready := recvResponse(t, second).GetReady(); ready == nil {
 		t.Fatal("newest pre-Hello attempt response was not Ready")
 	}
@@ -241,7 +241,7 @@ func TestCollectNewestPreHelloAttemptSupersedesOlderSameIdentity(t *testing.T) {
 		t.Fatal("newest pre-Hello attempt did not wake its predecessor")
 	}
 
-	sendGoodbye(t, second, 2)
+	sendGoodbye(t, second)
 	if _, err := second.Recv(); !errors.Is(err, io.EOF) {
 		t.Fatalf("newest attempt goodbye error = %v, want EOF", err)
 	}
@@ -274,7 +274,7 @@ func TestCollectPreHelloTakeoverCancelsTokenUseRecording(t *testing.T) {
 	harness := newServiceHarness(t, config, staticTestAuthorizer(), acceptingStore())
 
 	first := harness.stream(t, "Bearer good-token")
-	sendHello(t, first, 1, 1, 0)
+	sendHello(t, first, 1)
 	select {
 	case <-recordingStarted:
 	case <-time.After(time.Second):
@@ -282,7 +282,7 @@ func TestCollectPreHelloTakeoverCancelsTokenUseRecording(t *testing.T) {
 	}
 
 	second := harness.stream(t, "Bearer good-token")
-	sendHello(t, second, 1, 1, 0)
+	sendHello(t, second, 1)
 	if ready := recvResponse(t, second).GetReady(); ready == nil {
 		t.Fatal("replacement response was not Ready")
 	}
@@ -293,7 +293,7 @@ func TestCollectPreHelloTakeoverCancelsTokenUseRecording(t *testing.T) {
 		t.Fatalf("token-use recorder calls = %d, want 2", got)
 	}
 
-	sendGoodbye(t, second, 2)
+	sendGoodbye(t, second)
 	if _, err := second.Recv(); !errors.Is(err, io.EOF) {
 		t.Fatalf("replacement goodbye error = %v, want EOF", err)
 	}
@@ -314,16 +314,16 @@ func TestCollectInvalidHelloDoesNotSupersedeCurrentLease(t *testing.T) {
 	)
 
 	first := harness.stream(t, "Bearer first-token")
-	sendHello(t, first, 1, 1, 0)
+	sendHello(t, first, 1)
 	_ = recvResponse(t, first)
 
 	invalid := harness.stream(t, "Bearer second-token")
-	sendHello(t, invalid, 1, 2, 0)
+	sendHello(t, invalid, 2)
 	if _, err := invalid.Recv(); status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("invalid successor error = %v, want FailedPrecondition", err)
 	}
 
-	sendGoodbye(t, first, 2)
+	sendGoodbye(t, first)
 	if _, err := first.Recv(); !errors.Is(err, io.EOF) {
 		t.Fatalf("original stream was not retained after invalid Hello: %v", err)
 	}
@@ -350,7 +350,7 @@ func TestCollectDoesNotFenceDifferentTrustedCollectorKeys(t *testing.T) {
 	streams := make([]activeStream, 0, len(authorizations))
 	for token, authorization := range authorizations {
 		stream := harness.stream(t, "Bearer "+token)
-		if err := stream.Send(helloRequestFor(1, authorization.CollectorID, "instance-a", 1, 0)); err != nil {
+		if err := stream.Send(helloRequestFor(1, authorization.CollectorID, 1, 0)); err != nil {
 			t.Fatal(err)
 		}
 		if ready := recvResponse(t, stream).GetReady(); ready == nil {
@@ -359,7 +359,7 @@ func TestCollectDoesNotFenceDifferentTrustedCollectorKeys(t *testing.T) {
 		streams = append(streams, activeStream{token: token, stream: stream})
 	}
 	for _, active := range streams {
-		sendGoodbye(t, active.stream, 2)
+		sendGoodbye(t, active.stream)
 		if _, err := active.stream.Recv(); !errors.Is(err, io.EOF) {
 			t.Fatalf("%s goodbye error = %v, want EOF", active.token, err)
 		}
@@ -404,7 +404,7 @@ func TestCollectRejectsPostReadyAuthorizationScopeChanges(t *testing.T) {
 			})
 			harness := newServiceHarness(t, testServiceConfig(), authorizer, acceptingStore())
 			stream := harness.stream(t, "Bearer private-token")
-			sendHello(t, stream, 1, 1, 0)
+			sendHello(t, stream, 1)
 			_ = recvResponse(t, stream)
 			if err := stream.Send(&opensplunkv1.CollectRequest{
 				StreamSequence: 2,
@@ -446,7 +446,7 @@ func TestCollectReauthorizesHeartbeat(t *testing.T) {
 	})
 	harness := newServiceHarness(t, testServiceConfig(), authorizer, acceptingStore())
 	stream := harness.stream(t, "Bearer private-token")
-	sendHello(t, stream, 1, 1, 0)
+	sendHello(t, stream, 1)
 	_ = recvResponse(t, stream)
 	if err := stream.Send(&opensplunkv1.CollectRequest{
 		StreamSequence: 2,
@@ -483,9 +483,9 @@ func TestCollectGoodbyeChecksLeaseWithoutReauthorization(t *testing.T) {
 	})
 	harness := newServiceHarness(t, testServiceConfig(), authorizer, acceptingStore())
 	stream := harness.stream(t, "Bearer private-token")
-	sendHello(t, stream, 1, 1, 0)
+	sendHello(t, stream, 1)
 	_ = recvResponse(t, stream)
-	sendGoodbye(t, stream, 2)
+	sendGoodbye(t, stream)
 	if _, err := stream.Recv(); !errors.Is(err, io.EOF) {
 		t.Fatalf("goodbye error = %v, want EOF", err)
 	}
@@ -504,7 +504,7 @@ func TestCollectValidatesEnvelopeBeforeReauthorization(t *testing.T) {
 	})
 	harness := newServiceHarness(t, testServiceConfig(), authorizer, acceptingStore())
 	stream := harness.stream(t, "Bearer private-token")
-	sendHello(t, stream, 1, 1, 0)
+	sendHello(t, stream, 1)
 	_ = recvResponse(t, stream)
 
 	if err := stream.Send(&opensplunkv1.CollectRequest{
@@ -555,7 +555,7 @@ func TestCollectTakeoverCancelsBlockedAuthorizationRefresh(t *testing.T) {
 	harness := newServiceHarness(t, testServiceConfigWithUniqueStreamIDs(), authorizer, store)
 
 	first := harness.stream(t, "Bearer first-token")
-	sendHello(t, first, 1, 1, 0)
+	sendHello(t, first, 1)
 	_ = recvResponse(t, first)
 	batch := validTestBatch("collector-a", "blocked-refresh-batch", 1, validTestEvent("event-a", "main"))
 	if err := first.Send(batchRequest(2, batch)); err != nil {
@@ -568,7 +568,7 @@ func TestCollectTakeoverCancelsBlockedAuthorizationRefresh(t *testing.T) {
 	}
 
 	second := harness.stream(t, "Bearer second-token")
-	sendHello(t, second, 1, 1, 0)
+	sendHello(t, second, 1)
 	_ = recvResponse(t, second)
 
 	firstResult := make(chan error, 1)
@@ -588,7 +588,7 @@ func TestCollectTakeoverCancelsBlockedAuthorizationRefresh(t *testing.T) {
 		t.Fatalf("durable store calls = %d, want 0", got)
 	}
 
-	sendGoodbye(t, second, 2)
+	sendGoodbye(t, second)
 	if _, err := second.Recv(); !errors.Is(err, io.EOF) {
 		t.Fatalf("successor goodbye error = %v, want EOF", err)
 	}
@@ -622,7 +622,7 @@ func TestCollectStaleRequestDoesNotStartDurableBatchWork(t *testing.T) {
 	harness := newServiceHarness(t, testServiceConfigWithUniqueStreamIDs(), authorizer, store)
 
 	first := harness.stream(t, "Bearer first-token")
-	sendHello(t, first, 1, 1, 0)
+	sendHello(t, first, 1)
 	_ = recvResponse(t, first)
 	batch := validTestBatch("collector-a", "stale-batch", 1, validTestEvent("event-a", "main"))
 	if err := first.Send(batchRequest(2, batch)); err != nil {
@@ -635,7 +635,7 @@ func TestCollectStaleRequestDoesNotStartDurableBatchWork(t *testing.T) {
 	}
 
 	second := harness.stream(t, "Bearer second-token")
-	sendHello(t, second, 1, 1, 0)
+	sendHello(t, second, 1)
 	_ = recvResponse(t, second)
 	close(allowRefresh)
 
@@ -646,7 +646,7 @@ func TestCollectStaleRequestDoesNotStartDurableBatchWork(t *testing.T) {
 	if got := storeCalls.Load(); got != 0 {
 		t.Fatalf("durable store calls = %d, want 0", got)
 	}
-	sendGoodbye(t, second, 2)
+	sendGoodbye(t, second)
 	if _, err := second.Recv(); !errors.Is(err, io.EOF) {
 		t.Fatalf("successor goodbye error = %v, want EOF", err)
 	}
@@ -671,7 +671,7 @@ func TestCollectBatchLinearizedBeforeTakeoverMayFinish(t *testing.T) {
 	harness := newServiceHarness(t, testServiceConfigWithUniqueStreamIDs(), authorizer, store)
 
 	first := harness.stream(t, "Bearer first-token")
-	sendHello(t, first, 1, 1, 0)
+	sendHello(t, first, 1)
 	_ = recvResponse(t, first)
 	batch := validTestBatch("collector-a", "admitted-batch", 1, validTestEvent("event-a", "main"))
 	if err := first.Send(batchRequest(2, batch)); err != nil {
@@ -684,7 +684,7 @@ func TestCollectBatchLinearizedBeforeTakeoverMayFinish(t *testing.T) {
 	}
 
 	second := harness.stream(t, "Bearer second-token")
-	sendHello(t, second, 1, 1, 0)
+	sendHello(t, second, 1)
 	_ = recvResponse(t, second)
 	close(allowStore)
 
@@ -697,7 +697,7 @@ func TestCollectBatchLinearizedBeforeTakeoverMayFinish(t *testing.T) {
 	if got := storeCalls.Load(); got != 1 {
 		t.Fatalf("durable store calls = %d, want 1", got)
 	}
-	sendGoodbye(t, second, 2)
+	sendGoodbye(t, second)
 	if _, err := second.Recv(); !errors.Is(err, io.EOF) {
 		t.Fatalf("successor goodbye error = %v, want EOF", err)
 	}
@@ -734,11 +734,10 @@ func testServiceConfigWithUniqueStreamIDs() Config {
 func sendGoodbye(
 	t *testing.T,
 	stream opensplunkv1.CollectorIngestService_CollectClient,
-	sequence uint64,
 ) {
 	t.Helper()
 	if err := stream.Send(&opensplunkv1.CollectRequest{
-		StreamSequence: sequence,
+		StreamSequence: 2,
 		SentAt:         timestamppb.New(validationTestNow),
 		Payload: &opensplunkv1.CollectRequest_Goodbye{Goodbye: &opensplunkv1.CollectorGoodbye{
 			Reason: opensplunkv1.CollectorGoodbyeReason_COLLECTOR_GOODBYE_REASON_SHUTDOWN,

@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,6 +20,7 @@ import (
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
+	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"golang.org/x/sys/unix"
 	"google.golang.org/protobuf/proto"
@@ -288,7 +290,7 @@ func (accumulator *cleanupErrorAccumulator) err() error {
 
 // New constructs an export manager and starts its bounded workers.
 func New(config Config) (*Manager, error) {
-	if nilReexecutionDependency(config.Source) {
+	if nilcheck.IsNil(config.Source) {
 		return nil, errors.New("create export manager: result source is nil")
 	}
 	maxWorkers, err := boundedInt(config.MaxWorkers, defaultMaxWorkers, maximumWorkers, "worker")
@@ -770,7 +772,7 @@ func (manager *Manager) Create(ctx context.Context, access searchjobs.AccessScop
 	if acquireErr != nil {
 		stopRequestCancellation()
 		jobCancel()
-		if !nilReexecutionDependency(lease) {
+		if !nilcheck.IsNil(lease) {
 			_ = lease.Close()
 		}
 		if err := ctx.Err(); err != nil {
@@ -781,7 +783,7 @@ func (manager *Manager) Create(ctx context.Context, access searchjobs.AccessScop
 		}
 		return Job{}, mapSourceError(acquireErr)
 	}
-	if nilReexecutionDependency(lease) {
+	if nilcheck.IsNil(lease) {
 		stopRequestCancellation()
 		jobCancel()
 		if err := ctx.Err(); err != nil {
@@ -2007,12 +2009,7 @@ func shouldReportCleanupError(err error) bool {
 		return false
 	}
 	if joined, ok := err.(interface{ Unwrap() []error }); ok {
-		for _, child := range joined.Unwrap() {
-			if shouldReportCleanupError(child) {
-				return true
-			}
-		}
-		return false
+		return slices.ContainsFunc(joined.Unwrap(), shouldReportCleanupError)
 	}
 	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
 		if child := wrapped.Unwrap(); child != nil {

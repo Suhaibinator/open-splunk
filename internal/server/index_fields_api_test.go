@@ -683,7 +683,7 @@ func TestIndexFieldsValidatesTimePageAndPreservesCursorBytes(
 
 	service.err = searchanalysis.ErrInvalidFieldCursor
 	const token = " signed cursor bytes \t"
-	valid.Page = &opensplunkv1.PageRequest{PageToken: stringPointer(token)}
+	valid.Page = &opensplunkv1.PageRequest{PageToken: new(token)}
 	response := postAuthenticatedIndexFields(t, handler, valid)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf(

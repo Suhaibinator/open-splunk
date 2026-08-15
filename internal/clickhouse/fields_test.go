@@ -308,7 +308,7 @@ func TestPrerequisiteFieldCatalogSidecarWritersStayGenericAcrossKnownCount(t *te
 	}
 	boundary, downstream := thirteen[:boundaryEnd], thirteen[boundaryEnd:]
 	rawProducerReferences := 0
-	for index := 0; index < 13; index++ {
+	for index := range 13 {
 		for name, want := range map[string]int{
 			fmt.Sprintf("known_present_%d", index):    1,
 			fmt.Sprintf("known_type_%d", index):       1,

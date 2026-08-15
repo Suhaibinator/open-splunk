@@ -373,7 +373,7 @@ func TestIndexNameAdmissionValidatorGlobalScalarPreflightPrecedesHydration(t *te
 	createPublicationTransitionTestIndex(t, database, "main")
 	createIndexAdmissionTenantApp(t, database, firstTenant, firstApp, "scalar-first")
 	createIndexAdmissionTenantApp(t, database, secondTenant, secondApp, "scalar-second")
-	for index := 0; index < 17; index++ {
+	for index := range 17 {
 		tenantID, appID, tenantOffset := firstTenant, firstApp, 0
 		if index >= 9 {
 			tenantID, appID, tenantOffset = secondTenant, secondApp, 9
@@ -879,8 +879,8 @@ func createIndexAdmissionTenantApp(
 			Slug:        slug,
 			DisplayName: slug,
 			DefaultTimeRange: &control.AppTimeRange{
-				Earliest: stringPointer("-24h"),
-				Latest:   stringPointer("now"),
+				Earliest: new("-24h"),
+				Latest:   new("now"),
 			},
 		},
 	); err != nil {

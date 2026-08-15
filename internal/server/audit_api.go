@@ -39,7 +39,6 @@ func (handler *apiHandler) auditEventRoutes(
 			Codec:      newSerializedAuditEventListCodec(),
 			Handler:    handler.listAuditEvents,
 			SourceType: router.Body,
-			Sanitizer:  forwardCompatibleProtoSanitizer[*opensplunkv1.ListAuditEventsRequest],
 			Overrides: sroutercommon.RouteOverrides{
 				MaxBodySize: smallRequestBytes,
 			},
@@ -196,7 +195,7 @@ func (handler *apiHandler) auditListRequest(
 				"audit event actor filter is invalid",
 			)
 		}
-		actorID = stringPointer(strings.Clone(value))
+		actorID = new(strings.Clone(value))
 	}
 
 	var targetKind *audit.TargetKind

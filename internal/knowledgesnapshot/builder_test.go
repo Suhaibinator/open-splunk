@@ -231,7 +231,7 @@ func TestPrepareEmptyAuthorityAbsentAndPresentRevisionGoldens(t *testing.T) {
 		wantDigest  string
 	}{
 		{name: "absent app revision", wantCharge: 91, wantDigest: "e7c2b2dc3e84fdf116fbf009ce44b7879807249aa1c34c863d68ec0046f5c711"},
-		{name: "present app revision", appRevision: uint64Pointer(1), wantCharge: 93, wantDigest: "88d64cd94b61aea342df4bfdd9566fb30091d099f9e108eeff1231186d453b13"},
+		{name: "present app revision", appRevision: new(uint64(1)), wantCharge: 93, wantDigest: "88d64cd94b61aea342df4bfdd9566fb30091d099f9e108eeff1231186d453b13"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -576,10 +576,10 @@ func TestPrepareCompilesEveryWinnerAndShadowSemantically(t *testing.T) {
 		{
 			name: "invalid calculated expression",
 			invalid: func(name, app string, scope opensplunkv1.SharingScope) *opensplunkv1.KnowledgeObjectDefinition {
-				return calculatedDefinition(name, app, scope, "lower(", "out", nil)
+				return calculatedDefinition(name, app, scope, "lower(", "out")
 			},
 			valid: func(name, app string, scope opensplunkv1.SharingScope) *opensplunkv1.KnowledgeObjectDefinition {
-				return calculatedDefinition(name, app, scope, "lower(source)", "out", nil)
+				return calculatedDefinition(name, app, scope, "lower(source)", "out")
 			},
 		},
 	}
@@ -691,7 +691,7 @@ func TestPrepareEnforcesAggregateWinningSemanticBounds(t *testing.T) {
 				name := fmt.Sprintf("calculated-%02d", index)
 				objects[index] = snapshotObject(t, "ko-"+name, uint64(index+1), "owner-a", calculatedDefinition(
 					name, "app-a", opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL,
-					"lower(source)", fmt.Sprintf("out_%02d", index), nil,
+					"lower(source)", fmt.Sprintf("out_%02d", index),
 				))
 			}
 			return objects
@@ -707,15 +707,15 @@ func TestPrepareEnforcesAggregateWinningSemanticBounds(t *testing.T) {
 			return []Object{
 				snapshotObject(t, "ko-predicates-a", 1, "owner-a", calculatedDefinition(
 					"predicates-a", "app-a", opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL,
-					caseExpression(0), "out_a", nil,
+					caseExpression(0), "out_a",
 				)),
 				snapshotObject(t, "ko-predicates-b", 2, "owner-a", calculatedDefinition(
 					"predicates-b", "app-a", opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL,
-					caseExpression(16), "out_b", nil,
+					caseExpression(16), "out_b",
 				)),
 				snapshotObject(t, "ko-predicates-c", 3, "owner-a", calculatedDefinition(
 					"predicates-c", "app-a", opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL,
-					"if(extra=1,1,0)", "out_c", nil,
+					"if(extra=1,1,0)", "out_c",
 				)),
 			}
 		}},
@@ -770,7 +770,7 @@ func TestPrepareRejectsInvalidAuthoritiesAndStructuralBounds(t *testing.T) {
 		want   error
 	}{
 		{name: "state token", mutate: func(input *Input) { input.TenantCatalogStateToken = input.TenantCatalogStateToken[:31] }, want: ErrInvalidInput},
-		{name: "present zero app revision", mutate: func(input *Input) { input.AppCatalogRevision = uint64Pointer(0) }, want: ErrInvalidInput},
+		{name: "present zero app revision", mutate: func(input *Input) { input.AppCatalogRevision = new(uint64(0)) }, want: ErrInvalidInput},
 		{name: "nil definition", mutate: func(input *Input) { input.Objects[0].Definition = nil }, want: ErrInvalidInput},
 		{name: "recursive unknown definition", mutate: func(input *Input) {
 			input.Objects[2].Definition.GetSelector().ProtoReflect().SetUnknown(protowire.AppendTag(nil, 99, protowire.VarintType))
@@ -912,22 +912,22 @@ func TestPrepareParallelValidationCoversEveryExecutableBody(t *testing.T) {
 			name: "calculated destination collision",
 			left: calculatedDefinition(
 				"calculated-left", "app-a", opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
-				"lower(left)", "shared", nil,
+				"lower(left)", "shared",
 			),
 			right: calculatedDefinition(
 				"calculated-right", "app-a", opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
-				"upper(right)", "shared", nil,
+				"upper(right)", "shared",
 			),
 		},
 		{
 			name: "calculated same-stage chain",
 			left: calculatedDefinition(
 				"calculated-left", "app-a", opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
-				"lower(raw)", "intermediate", nil,
+				"lower(raw)", "intermediate",
 			),
 			right: calculatedDefinition(
 				"calculated-right", "app-a", opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
-				"upper(intermediate)", "result", nil,
+				"upper(intermediate)", "result",
 			),
 		},
 	}
@@ -1083,10 +1083,9 @@ func calculatedDefinition(
 	name, appID string,
 	scope opensplunkv1.SharingScope,
 	expression, output string,
-	selector *opensplunkv1.KnowledgeSelector,
 ) *opensplunkv1.KnowledgeObjectDefinition {
 	return &opensplunkv1.KnowledgeObjectDefinition{
-		AppId: appID, Name: name, SharingScope: scope, Selector: selector,
+		AppId: appID, Name: name, SharingScope: scope,
 		Body: &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{CalculatedField: &opensplunkv1.CalculatedFieldDefinition{
 			DestinationField: output, Expression: expression,
 		}},
@@ -1194,8 +1193,6 @@ func deterministicMessage(t *testing.T, message proto.Message) []byte {
 	}
 	return encoded
 }
-
-func uint64Pointer(value uint64) *uint64 { return &value }
 
 func assertSnapshotDigest(t *testing.T, snapshot *opensplunkv1.KnowledgeSnapshot) {
 	t.Helper()

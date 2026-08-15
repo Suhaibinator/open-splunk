@@ -201,7 +201,7 @@ func TestResolverPrunesBeforeWholeObjectPrecedenceAndDetaches(t *testing.T) {
 	// Mutate every body-bearing accessor, including concurrently. The retained
 	// resolution and a later snapshot must remain byte-identical under -race.
 	var workers sync.WaitGroup
-	for worker := 0; worker < 8; worker++ {
+	for worker := range 8 {
 		workers.Add(1)
 		go func(worker int) {
 			defer workers.Done()

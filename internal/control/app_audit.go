@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"gorm.io/gorm"
 )
 
@@ -60,7 +61,7 @@ func NewAuditedAppCatalog(
 			ErrInvalidArgument,
 		)
 	}
-	if appender == nil || isNilMutationAuditAppender(appender) {
+	if nilcheck.IsNil(appender) {
 		return nil, fmt.Errorf(
 			"%w: app audit appender is required",
 			ErrInvalidArgument,

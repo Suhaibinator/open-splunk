@@ -7,12 +7,13 @@ import (
 	"slices"
 
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
+	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
 func normalizedLookupResolver(resolver LookupResolver) LookupResolver {
-	if isNilRequiredDependency(resolver) {
+	if nilcheck.IsNil(resolver) {
 		return nil
 	}
 	return resolver

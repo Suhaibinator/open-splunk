@@ -7,6 +7,7 @@ import (
 	"sort"
 	"unicode/utf8"
 
+	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
@@ -459,7 +460,7 @@ func (analyzer *queryAnalyzer) visitOperator(operator Operator, depth int) error
 	if err := enter(depth); err != nil {
 		return err
 	}
-	if operator == nil || isNilOperator(operator) {
+	if nilcheck.IsNil(operator) {
 		return fmt.Errorf("analyze logical query: operator %T is nil", operator)
 	}
 	switch operator := operator.(type) {

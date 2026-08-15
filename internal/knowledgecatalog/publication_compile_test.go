@@ -971,10 +971,8 @@ func TestCompilePublicationWinnerCohortConcurrentDeterminism(t *testing.T) {
 	const workers = 8
 	errorsByWorker := make(chan error, workers)
 	var wait sync.WaitGroup
-	for worker := 0; worker < workers; worker++ {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
+	for range workers {
+		wait.Go(func() {
 			compiled, compileErr := compilePublicationWinnerCohort(t.Context(), cohort, candidate)
 			if compileErr != nil {
 				errorsByWorker <- compileErr
@@ -993,7 +991,7 @@ func TestCompilePublicationWinnerCohortConcurrentDeterminism(t *testing.T) {
 			if compiled.derivedTargets()[0].objectID != "ko-extraction" {
 				errorsByWorker <- errors.New("concurrent accessor aliases authority")
 			}
-		}()
+		})
 	}
 	wait.Wait()
 	close(errorsByWorker)
@@ -1090,7 +1088,7 @@ func publicationDependencyBoundaryCohort(
 	winners := make([]publicationWinner, 0, targets+knowledgeprogram.MaximumScalarExpressions)
 	fields := make([]string, targets)
 	rows := make([]publicationPersistedDependency, targets)
-	for index := 0; index < targets; index++ {
+	for index := range targets {
 		fields[index] = fmt.Sprintf("input_%02d", index)
 		objectID := fmt.Sprintf("ko-target-%02d", index)
 		definition := aliasDefinition(
@@ -1120,7 +1118,7 @@ func publicationDependencyBoundaryCohort(
 		}
 	}
 	expression := publicationDenseDependencyExpression(fields)
-	for index := 0; index < knowledgeprogram.MaximumScalarExpressions-1; index++ {
+	for index := range knowledgeprogram.MaximumScalarExpressions - 1 {
 		object := publicationTestObject(
 			t,
 			fmt.Sprintf("ko-existing-calculated-%02d", index),

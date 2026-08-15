@@ -436,7 +436,7 @@ func TestKnowledgeHTTPTestRouterServesExistingEightManagementHandlers(
 	graphPage := func(
 		scope knowledgecatalog.ReadScope,
 		request knowledgecatalog.DependencyListRequest,
-	) (knowledgecatalog.DependencyPage, error) {
+	) knowledgecatalog.DependencyPage {
 		if scope.TenantID != knowledgeBoundaryTenantID ||
 			scope.OwnerID != knowledgeBoundaryOwnerID ||
 			!slices.Equal(scope.ReadableAppIDs, []string{knowledgeHTTPAppID}) ||
@@ -450,7 +450,7 @@ func TestKnowledgeHTTPTestRouterServesExistingEightManagementHandlers(
 			ResolvedObject:  knowledgecatalog.ObjectVersionIdentity{KnowledgeObjectID: object.KnowledgeObjectID, Version: object.Version},
 			ResolvedCurrent: rootCurrent,
 			CatalogRevision: 7,
-		}, nil
+		}
 	}
 	catalog := &knowledgeHTTPCatalog{
 		getFn: func(
@@ -489,14 +489,14 @@ func TestKnowledgeHTTPTestRouterServesExistingEightManagementHandlers(
 			scope knowledgecatalog.ReadScope,
 			request knowledgecatalog.DependencyListRequest,
 		) (knowledgecatalog.DependencyPage, error) {
-			return graphPage(scope, request)
+			return graphPage(scope, request), nil
 		},
 		dependentsFn: func(
 			_ context.Context,
 			scope knowledgecatalog.ReadScope,
 			request knowledgecatalog.DependencyListRequest,
 		) (knowledgecatalog.DependencyPage, error) {
-			return graphPage(scope, request)
+			return graphPage(scope, request), nil
 		},
 	}
 	validateWrite := func(scope knowledgecatalog.WriteScope) {
@@ -553,7 +553,7 @@ func TestKnowledgeHTTPTestRouterServesExistingEightManagementHandlers(
 		},
 		{
 			name: "list", path: knowledgeObjectsListPath,
-			request:  &opensplunkv1.ListKnowledgeObjectsRequest{Page: &opensplunkv1.PageRequest{PageSize: uint32Pointer(1), IncludeTotalSize: true}},
+			request:  &opensplunkv1.ListKnowledgeObjectsRequest{Page: &opensplunkv1.PageRequest{PageSize: new(uint32(1)), IncludeTotalSize: true}},
 			response: &opensplunkv1.ListKnowledgeObjectsResponse{},
 		},
 		{
@@ -638,7 +638,6 @@ func TestKnowledgeHTTPUserIsRejectedBeforeMalformedBodyDecode(t *testing.T) {
 	body := newKnowledgeBoundaryObservedBody("not protobuf", nil)
 	request := knowledgeBoundaryRequest(
 		context.Background(),
-		http.MethodPost,
 		knowledgeObjectsCreatePath,
 		body,
 	)
@@ -930,7 +929,7 @@ func TestKnowledgeHTTPRejectsAuthorizedErrorContextUnboundFromRequest(
 			name: "list app differs from explicit filter",
 			path: knowledgeObjectsListPath,
 			request: &opensplunkv1.ListKnowledgeObjectsRequest{
-				AppIdFilter: stringPointer(knowledgeHTTPAppID),
+				AppIdFilter: new(knowledgeHTTPAppID),
 			},
 			catalog: &knowledgeHTTPCatalog{listFn: func(
 				context.Context,
@@ -1291,7 +1290,7 @@ func TestKnowledgeHTTPListPreflightPinsCatalogRequestBounds(t *testing.T) {
 			name: "page size",
 			request: &opensplunkv1.ListKnowledgeObjectsRequest{
 				Page: &opensplunkv1.PageRequest{
-					PageSize: uint32Pointer(knowledgecatalog.MaximumPageSize + 1),
+					PageSize: new(uint32(knowledgecatalog.MaximumPageSize + 1)),
 				},
 			},
 		},
@@ -1299,20 +1298,20 @@ func TestKnowledgeHTTPListPreflightPinsCatalogRequestBounds(t *testing.T) {
 			name: "page token whitespace",
 			request: &opensplunkv1.ListKnowledgeObjectsRequest{
 				Page: &opensplunkv1.PageRequest{
-					PageToken: stringPointer(" invalid-cursor "),
+					PageToken: new(" invalid-cursor "),
 				},
 			},
 		},
 		{
 			name: "empty app filter",
 			request: &opensplunkv1.ListKnowledgeObjectsRequest{
-				AppIdFilter: stringPointer(""),
+				AppIdFilter: new(""),
 			},
 		},
 		{
 			name: "control text filter",
 			request: &opensplunkv1.ListKnowledgeObjectsRequest{
-				TextFilter: stringPointer("invalid\x7ftext"),
+				TextFilter: new("invalid\x7ftext"),
 			},
 		},
 		{
@@ -1427,8 +1426,8 @@ func TestKnowledgeHTTPCommittedAndIndeterminateMutationErrorsAreNeverRejected(
 		name        string
 		disposition *knowledgecatalog.ErrorDisposition
 	}{
-		{name: "known committed", disposition: knowledgeDispositionPointer(knowledgecatalog.ErrorDispositionKnownCommitted)},
-		{name: "indeterminate", disposition: knowledgeDispositionPointer(knowledgecatalog.ErrorDispositionIndeterminate)},
+		{name: "known committed", disposition: new(knowledgecatalog.ErrorDispositionKnownCommitted)},
+		{name: "indeterminate", disposition: new(knowledgecatalog.ErrorDispositionIndeterminate)},
 		{name: "missing disposition is indeterminate"},
 	}
 	for _, test := range tests {
@@ -1453,10 +1452,6 @@ func TestKnowledgeHTTPCommittedAndIndeterminateMutationErrorsAreNeverRejected(
 			}
 		})
 	}
-}
-
-func knowledgeDispositionPointer(value knowledgecatalog.ErrorDisposition) *knowledgecatalog.ErrorDisposition {
-	return &value
 }
 
 func TestKnowledgeHTTPJournalFailureReplacesApplicationRejection(t *testing.T) {
@@ -1587,7 +1582,7 @@ func TestKnowledgeHTTPRouteDeadlineBoundsBlockingAuthenticationBeforeDecode(
 	handler.browserAuthenticator = &knowledgeHTTPBlockingAuthenticator{}
 	handler.routeTimeout = 20 * time.Millisecond
 	body := newKnowledgeBoundaryObservedBody("unread definition secret", nil)
-	request := knowledgeBoundaryRequest(context.Background(), http.MethodPost, knowledgeObjectsCreatePath, body)
+	request := knowledgeBoundaryRequest(context.Background(), knowledgeObjectsCreatePath, body)
 	request.Host = "example.com"
 	request.Header.Set("Origin", "http://example.com")
 	response := httptest.NewRecorder()
@@ -1619,7 +1614,7 @@ func TestKnowledgeHTTPGetRejectsMismatchedSameScopeProjectionWithoutLeak(
 			name: "wrong historical version",
 			request: &opensplunkv1.GetKnowledgeObjectRequest{
 				KnowledgeObjectId: "ko-http-object-1",
-				Version:           uint64Pointer(3),
+				Version:           new(uint64(3)),
 			},
 			mutate: func(object *knowledgecatalog.Object) {
 				object.Version = 2

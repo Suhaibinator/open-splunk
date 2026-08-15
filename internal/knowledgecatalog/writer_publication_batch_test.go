@@ -416,7 +416,7 @@ func writerPublicationBatchSelector(
 	}
 	for _, dimension := range writerPublicationSelectorDimensions() {
 		patterns := make([]*opensplunkv1.KnowledgeSelectorPattern, 0, knowledge.MaximumSelectorPatternsPerDimension)
-		for ordinal := 0; ordinal < knowledge.MaximumSelectorPatternsPerDimension; ordinal++ {
+		for ordinal := range knowledge.MaximumSelectorPatternsPerDimension {
 			matchKind := opensplunkv1.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT
 			if ordinal%2 != 0 {
 				matchKind = opensplunkv1.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_WILDCARD
@@ -572,7 +572,7 @@ func assertWriterPublicationSelectorRows(
 	}
 	index := 0
 	for _, dimension := range writerPublicationSelectorDimensions() {
-		for ordinal := 0; ordinal < knowledge.MaximumSelectorPatternsPerDimension; ordinal++ {
+		for ordinal := range knowledge.MaximumSelectorPatternsPerDimension {
 			row := rows[index]
 			matchKind := "exact"
 			if ordinal%2 != 0 {

@@ -74,14 +74,6 @@ func (compiled CompiledFieldCatalog) KnowledgeGeneratedFieldsContext(
 	return compiled.knowledgeGeneratedFields, true, nil
 }
 
-func fieldCatalogKnowledgeGeneratedFieldsFromSource(source CompiledQuery) (uint32, bool) {
-	count, ok, _ := fieldCatalogKnowledgeGeneratedFieldsFromSourceContext(
-		context.Background(),
-		source,
-	)
-	return count, ok
-}
-
 func fieldCatalogKnowledgeGeneratedFieldsFromSourceContext(
 	ctx context.Context,
 	source CompiledQuery,
@@ -1394,7 +1386,7 @@ func writeKnownAggregateColumns(sql *strings.Builder, fields []compiledKnownFiel
 
 func writeKnownAggregateArray(sql *strings.Builder, count int, alias string, expression func(int) string) {
 	sql.WriteString(", [")
-	for index := 0; index < count; index++ {
+	for index := range count {
 		if index > 0 {
 			sql.WriteString(", ")
 		}

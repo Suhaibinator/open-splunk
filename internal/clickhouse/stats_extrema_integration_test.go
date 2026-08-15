@@ -35,7 +35,7 @@ func testStatsExtremaAgainstClickHouse(
 		return event
 	}
 	withService := func(event *ingest.StoredEvent, service string) *ingest.StoredEvent {
-		event.Event.Service = stringPointer(service)
+		event.Event.Service = new(service)
 		return event
 	}
 	overlongValue := strings.Repeat("9", MaximumExactNumericBinTextBytes+1)
@@ -115,7 +115,7 @@ func testStatsExtremaAgainstClickHouse(
 	)
 	foreign.TenantID = "other-tenant"
 	foreign.BatchID = "stats-extrema-foreign-batch"
-	foreign.Event.Service = stringPointer("-999999")
+	foreign.Event.Service = new("-999999")
 	foreignBatch := ingest.StoreBatch{
 		TenantID:          "other-tenant",
 		CollectorID:       "collector",

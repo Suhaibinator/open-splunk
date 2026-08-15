@@ -185,10 +185,7 @@ func Evaluate(now time.Time, admission Admission) (Decision, error) {
 		}
 	}
 	if blocked {
-		retryAfter := time.Duration(retryNanoseconds)
-		if retryAfter > MaximumRetryAfter {
-			retryAfter = MaximumRetryAfter
-		}
+		retryAfter := min(time.Duration(retryNanoseconds), MaximumRetryAfter)
 		return Decision{
 			RetryAfter:    retryAfter,
 			BlockingScope: blockingScope,

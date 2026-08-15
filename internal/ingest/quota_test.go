@@ -257,7 +257,7 @@ func TestCollectRefreshesQuotaRatesBeforeNextStore(t *testing.T) {
 			config.SessionManager = manager
 			harness := newServiceHarness(t, config, authorizer, store)
 			stream := harness.stream(t, "Bearer good-token")
-			sendHello(t, stream, 1, 1, 0)
+			sendHello(t, stream, 1)
 			_ = recvResponse(t, stream)
 
 			batch := validTestBatch(
@@ -316,7 +316,7 @@ func TestCollectSequencesQuotaRetryThenThrottle(t *testing.T) {
 		store,
 	)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1, 1, 0)
+	sendHello(t, stream, 1)
 	_ = recvResponse(t, stream)
 	batch := validTestBatch(
 		"collector-a",

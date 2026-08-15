@@ -317,7 +317,7 @@ func TestMaximumExactNumericPredicatesStayWithinCompiledQueryCeiling(t *testing.
 			t.Parallel()
 			var source strings.Builder
 			source.WriteString(`index=gradethis | where `)
-			for index := 0; index < 32; index++ {
+			for index := range 32 {
 				if index > 0 {
 					source.WriteString(` AND `)
 				}

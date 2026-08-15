@@ -3,6 +3,7 @@ package hec
 import (
 	"errors"
 	"net/url"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -43,10 +44,8 @@ func ParseRawQuery(rawQuery string, limits Limits) (RawQuery, error) {
 	// while the HEC contract treats each as an empty parameter name. Close that
 	// ambiguity before decoding names and values.
 	if rawQuery != "" {
-		for _, segment := range strings.Split(rawQuery, "&") {
-			if segment == "" {
-				return RawQuery{}, NewProtocolError(ErrorInvalidDataFormat, errors.New("HEC raw query parameter name is empty"))
-			}
+		if slices.Contains(strings.Split(rawQuery, "&"), "") {
+			return RawQuery{}, NewProtocolError(ErrorInvalidDataFormat, errors.New("HEC raw query parameter name is empty"))
 		}
 	}
 	values, err := url.ParseQuery(rawQuery)

@@ -16,6 +16,7 @@ import {
   RepeatedPageCursorError,
   type SystemBootstrapModel,
 } from "@/lib/api";
+import { createErrorMessage } from "@/lib/error-message";
 import {
   cancelServerExport,
   downloadServerExport,
@@ -56,11 +57,7 @@ interface BackendExportJobsProps {
   bootstrap: SystemBootstrapModel;
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error && error.message.trim().length > 0
-    ? error.message
-    : "The server did not return a usable export job response.";
-}
+const errorMessage = createErrorMessage("The server did not return a usable export job response.");
 
 function filterStates(filter: ExportFilter): readonly ExportJobState[] {
   return FILTERS.find((candidate) => candidate.key === filter)?.states ?? [];

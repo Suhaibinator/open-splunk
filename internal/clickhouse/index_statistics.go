@@ -6,9 +6,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"math/bits"
-	"reflect"
 	"strings"
 	"time"
 	"unicode"
@@ -18,6 +18,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/Suhaibinator/open-splunk/internal/indexname"
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
+	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/protocolid"
 )
 
@@ -764,9 +765,7 @@ func indexStatisticsBatchSettings(
 	base clickhousedriver.Settings,
 ) clickhousedriver.Settings {
 	settings := make(clickhousedriver.Settings, len(base)+2)
-	for name, value := range base {
-		settings[name] = value
-	}
+	maps.Copy(settings, base)
 	settings["max_result_rows"] = uint64(indexStatisticsMaximumBatchSize)
 	settings["max_rows_to_group_by"] = uint64(indexStatisticsMaximumBatchSize)
 	settings["group_by_overflow_mode"] = "throw"
@@ -968,15 +967,5 @@ func indexStatisticsOperationError(
 }
 
 func isNilIndexStatisticsDependency(value any) bool {
-	if value == nil {
-		return true
-	}
-	reflected := reflect.ValueOf(value)
-	switch reflected.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map,
-		reflect.Pointer, reflect.Slice:
-		return reflected.IsNil()
-	default:
-		return false
-	}
+	return nilcheck.IsNil(value)
 }

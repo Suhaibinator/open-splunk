@@ -54,21 +54,6 @@ type compiledLookupExternalBacking struct {
 
 const compiledLookupExternalBackingDomain = "open-splunk-lookup-external-backing-v1"
 
-func newCompiledLookupExternalTable(
-	name string,
-	matchedColumn string,
-	stage preparedLookupStage,
-	columnNames []string,
-) (compiledLookupExternalTable, error) {
-	return newCompiledLookupExternalTableContext(
-		context.Background(),
-		name,
-		matchedColumn,
-		stage,
-		columnNames,
-	)
-}
-
 func newCompiledLookupExternalTableContext(
 	ctx context.Context,
 	name string,
@@ -377,18 +362,6 @@ func validateCompiledLookupExternalTablesContext(
 	return nil
 }
 
-func compiledLookupExternalTablesReferenced(
-	sql string,
-	tables []compiledLookupExternalTable,
-) bool {
-	referenced, _ := compiledLookupExternalTablesReferencedContext(
-		context.Background(),
-		sql,
-		tables,
-	)
-	return referenced
-}
-
 func compiledLookupExternalTablesReferencedContext(
 	ctx context.Context,
 	sql string,
@@ -446,18 +419,6 @@ func cloneCompiledLookupExternalTables(
 		}
 	}
 	return cloned
-}
-
-func writeCompiledLookupExternalTables(
-	writer hash.Hash,
-	tables []compiledLookupExternalTable,
-) bool {
-	written, _ := writeCompiledLookupExternalTablesContext(
-		context.Background(),
-		writer,
-		tables,
-	)
-	return written
 }
 
 func writeCompiledLookupExternalTablesContext(

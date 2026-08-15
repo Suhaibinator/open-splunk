@@ -3,6 +3,7 @@ package collector
 import (
 	"errors"
 	"fmt"
+	"slices"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"google.golang.org/protobuf/proto"
@@ -269,10 +270,8 @@ func (p *redactProcessor) valueNeedsRedact(v *opensplunkv1.TypedValue) bool {
 		if k.ListValue == nil {
 			return false
 		}
-		for _, item := range k.ListValue.Values {
-			if p.valueNeedsRedact(item) {
-				return true
-			}
+		if slices.ContainsFunc(k.ListValue.Values, p.valueNeedsRedact) {
+			return true
 		}
 	}
 	return false

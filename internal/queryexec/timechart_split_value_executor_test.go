@@ -173,7 +173,7 @@ func TestExecutorExpandsSplitValueTimechartGroupBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	executor := &Executor{settings: settings, expandTimechartGroupLimit: true}
+	executor := &Executor{settings: mustValidatedSettings(t, settings), expandTimechartGroupLimit: true}
 	query := splitValueTimechartQuery(
 		time.Unix(0, 0).UTC(),
 		1,
@@ -195,7 +195,7 @@ func TestExecutorExpandsSplitValueTimechartGroupBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	high := &Executor{settings: highSettings}
+	high := &Executor{settings: mustValidatedSettings(t, highSettings)}
 	if got, want := high.settingsFor(query)["max_rows_to_group_by"], maximumRuntimeWidePercentileGroups; got != want {
 		t.Fatalf("explicit high split percentile group cap = %v, want clamped %d", got, want)
 	}
@@ -203,7 +203,7 @@ func TestExecutorExpandsSplitValueTimechartGroupBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	low := &Executor{settings: lowSettings}
+	low := &Executor{settings: mustValidatedSettings(t, lowSettings)}
 	if got := low.settingsFor(query)["max_rows_to_group_by"]; got != uint64(7) {
 		t.Fatalf("explicit low split percentile group cap = %v, want 7", got)
 	}

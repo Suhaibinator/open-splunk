@@ -41,7 +41,7 @@ func (*nilKnowledgeResolver) Resolve(
 }
 
 func TestKnowledgeAdmissionSealsEmptyAuthorityBeforeJournalAndDetaches(t *testing.T) {
-	resolver, appID := newEmptyKnowledgeResolver(t, "tenant")
+	resolver, appID := newEmptyKnowledgeResolver(t)
 	request := validRequest()
 	request.AppID = appID
 
@@ -232,7 +232,7 @@ func TestKnowledgeAdmissionSealsEmptyAuthorityBeforeJournalAndDetaches(t *testin
 }
 
 func TestKnowledgeAdmissionReservesAndSealsAddInfoSIDBeforeResolution(t *testing.T) {
-	resolver, appID := newEmptyKnowledgeResolver(t, "tenant")
+	resolver, appID := newEmptyKnowledgeResolver(t)
 	request := validRequest()
 	request.AppID = appID
 	request.SPL = `index=main | addinfo | table info_sid`
@@ -329,7 +329,7 @@ func TestKnowledgeAdmissionReservesAndSealsAddInfoSIDBeforeResolution(t *testing
 }
 
 func TestKnowledgePreparedWorkerNeverReparsesReplansOrReresolves(t *testing.T) {
-	resolver, appID := newEmptyKnowledgeResolver(t, "tenant")
+	resolver, appID := newEmptyKnowledgeResolver(t)
 	var resolverCalls atomic.Int32
 	counted := knowledgeResolverFunc(func(ctx context.Context, scope knowledgecatalog.ResolutionScope) (knowledgecatalog.Resolution, error) {
 		resolverCalls.Add(1)
@@ -536,7 +536,7 @@ func TestKnowledgeAdmissionFailuresAreSynchronousSafeAndSideEffectFree(t *testin
 }
 
 func TestKnowledgeAdmissionPlanningGateAndMemoryAreBounded(t *testing.T) {
-	resolver, appID := newEmptyKnowledgeResolver(t, "tenant")
+	resolver, appID := newEmptyKnowledgeResolver(t)
 	request := validRequest()
 	request.AppID = appID
 	var ids atomic.Int32
@@ -578,7 +578,7 @@ func TestKnowledgeAdmissionPlanningGateAndMemoryAreBounded(t *testing.T) {
 }
 
 func TestKnowledgeAdmissionRejectsResolverScopeDivergence(t *testing.T) {
-	resolver, appID := newEmptyKnowledgeResolver(t, "tenant")
+	resolver, appID := newEmptyKnowledgeResolver(t)
 	divergent := knowledgeResolverFunc(func(ctx context.Context, scope knowledgecatalog.ResolutionScope) (knowledgecatalog.Resolution, error) {
 		// A resolver is a dependency boundary. Mutating its input and resolving a
 		// different authority must not mutate the manager's expected cross-check.
@@ -654,8 +654,9 @@ func TestKnowledgeAdmissionCancellationAndCloseInterruptResolver(t *testing.T) {
 	}
 }
 
-func newEmptyKnowledgeResolver(t *testing.T, tenantID string) (KnowledgeResolver, string) {
+func newEmptyKnowledgeResolver(t *testing.T) (KnowledgeResolver, string) {
 	t.Helper()
+	tenantID := "tenant"
 	database, err := control.Open(context.Background(), filepath.Join(t.TempDir(), "control.db"))
 	if err != nil {
 		t.Fatalf("control.Open(): %v", err)

@@ -80,10 +80,10 @@ func PrepareClaim(request ClaimRequest) (PreparedClaim, error) {
 		if err := validateText(field.name, field.value, field.maximum, true); err != nil {
 			return PreparedClaim{}, err
 		}
-		if !addBoundedBytes(&aggregateBytes, len(field.value), maximumHelloSnapshotBytes) {
+		if !addBoundedBytes(&aggregateBytes, len(field.value)) {
 			return PreparedClaim{}, invalid(
 				"collector hello exceeds %d bytes",
-				maximumHelloSnapshotBytes,
+				maximumSnapshotBytes,
 			)
 		}
 	}
@@ -92,10 +92,10 @@ func PrepareClaim(request ClaimRequest) (PreparedClaim, error) {
 	if err != nil {
 		return PreparedClaim{}, err
 	}
-	if !addBoundedBytes(&aggregateBytes, len(capabilities)*8, maximumHelloSnapshotBytes) {
+	if !addBoundedBytes(&aggregateBytes, len(capabilities)*8) {
 		return PreparedClaim{}, invalid(
 			"collector hello exceeds %d bytes",
-			maximumHelloSnapshotBytes,
+			maximumSnapshotBytes,
 		)
 	}
 	inputs, err := normalizeInputRegistrations(
@@ -150,10 +150,10 @@ func authorizePreparedClaim(
 	authorizedSet := make(map[string]struct{}, len(authorizedIndexes))
 	for _, indexName := range authorizedIndexes {
 		authorizedSet[indexName] = struct{}{}
-		if !addBoundedBytes(&aggregateBytes, len(indexName), maximumHelloSnapshotBytes) {
+		if !addBoundedBytes(&aggregateBytes, len(indexName)) {
 			return normalizedClaim{}, invalid(
 				"collector hello exceeds %d bytes",
-				maximumHelloSnapshotBytes,
+				maximumSnapshotBytes,
 			)
 		}
 	}
@@ -386,8 +386,8 @@ func normalizeInputRegistrations(
 		if sourcetype != nil {
 			recordBytes += len(*sourcetype)
 		}
-		if !addBoundedBytes(aggregateBytes, recordBytes, maximumHelloSnapshotBytes) {
-			return nil, invalid("collector hello exceeds %d bytes", maximumHelloSnapshotBytes)
+		if !addBoundedBytes(aggregateBytes, recordBytes) {
+			return nil, invalid("collector hello exceeds %d bytes", maximumSnapshotBytes)
 		}
 		result = append(result, InputRegistration{
 			InputID: input.InputID, InputType: input.InputType,
@@ -474,11 +474,10 @@ func normalizeInputHealth(inputs []InputHealth, aggregateBytes *int) ([]InputHea
 		if !addBoundedBytes(
 			aggregateBytes,
 			len(input.InputID)+len(input.StatusMessage)+64,
-			maximumHeartbeatSnapshotBytes,
 		) {
 			return nil, invalid(
 				"collector heartbeat exceeds %d bytes",
-				maximumHeartbeatSnapshotBytes,
+				maximumSnapshotBytes,
 			)
 		}
 		result = append(result, InputHealth{
@@ -572,8 +571,8 @@ func validIdentifier(value string) bool {
 	return protocolid.Valid(value)
 }
 
-func addBoundedBytes(total *int, addition, maximum int) bool {
-	if total == nil || addition < 0 || *total < 0 || *total > maximum-addition {
+func addBoundedBytes(total *int, addition int) bool {
+	if total == nil || addition < 0 || *total < 0 || *total > maximumSnapshotBytes-addition {
 		return false
 	}
 	*total += addition

@@ -392,16 +392,6 @@ func (compiled CompiledStatsWildcardInventory) RetainedBytes() (uint64, bool) {
 	return retainedAdd(total, uint64(unsafe.Sizeof(*compiled.executionAuthority)))
 }
 
-func statsWildcardInventoryDigest(
-	compiled CompiledStatsWildcardInventory,
-) (statsWildcardInventorySeal, bool) {
-	digest, ok, _ := statsWildcardInventoryDigestContext(
-		context.Background(),
-		compiled,
-	)
-	return digest, ok
-}
-
 func statsWildcardInventoryDigestContext(
 	ctx context.Context,
 	compiled CompiledStatsWildcardInventory,

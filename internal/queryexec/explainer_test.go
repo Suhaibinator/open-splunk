@@ -78,7 +78,7 @@ func TestNewExplainerOwnsTwoOneConnectionNativeLanes(t *testing.T) {
 		}
 	}
 
-	gotSettings, err := settingsForExplain(explainer.settings)
+	gotSettings, err := settingsForExplain(mustValidatedSettings(t, explainer.settings))
 	if err != nil {
 		t.Fatal(err)
 	}

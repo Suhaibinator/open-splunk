@@ -1,3 +1,4 @@
+import { niceStep } from "../charts/chart-scale";
 import {
   type KeyboardEvent,
   type PointerEvent,
@@ -138,15 +139,6 @@ function statisticMagnitude(row: WorkspaceStatistic): number {
   return values !== undefined && values.length > 0
     ? values.reduce((sum, value) => sum + value, 0)
     : Math.abs(row.count);
-}
-
-function niceStep(span: number, targetIntervals = 4): number {
-  if (!Number.isFinite(span) || span <= 0) return 1;
-  const roughStep = span / targetIntervals;
-  const power = 10 ** Math.floor(Math.log10(roughStep));
-  const fraction = roughStep / power;
-  const niceFraction = fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 5 ? 5 : 10;
-  return niceFraction * power;
 }
 
 function categoricalScale(

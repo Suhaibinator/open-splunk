@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -671,13 +672,11 @@ func requireDeploymentRecoveryOperationUUIDDistinct(
 	operationID uuid.UUID,
 	reserved ...string,
 ) error {
-	for _, value := range reserved {
-		if operationID.String() == value {
-			return fmt.Errorf(
-				"operation UUID %s reuses a durable database, table, or backup operation identity",
-				operationID,
-			)
-		}
+	if slices.Contains(reserved, operationID.String()) {
+		return fmt.Errorf(
+			"operation UUID %s reuses a durable database, table, or backup operation identity",
+			operationID,
+		)
 	}
 	return nil
 }

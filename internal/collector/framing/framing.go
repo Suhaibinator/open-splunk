@@ -461,10 +461,7 @@ func (m *multilineFramer) checkBounds() {
 // finishEvent builds the frame for a completed event (trailing delimiter
 // excluded from Bytes) and resets assembly state.
 func (m *multilineFramer) finishEvent() Frame {
-	n := len(m.event) - m.evDelim
-	if n < 0 {
-		n = 0
-	}
+	n := max(len(m.event)-m.evDelim, 0)
 	out := make([]byte, n)
 	copy(out, m.event[:n])
 	fr := Frame{
@@ -481,10 +478,7 @@ func (m *multilineFramer) finishEvent() Frame {
 // finishEventTruncated builds an oversized event frame carrying the first
 // maxBytes bytes but offsets spanning the whole assembled event.
 func (m *multilineFramer) finishEventTruncated() Frame {
-	n := m.maxBytes
-	if n > len(m.event) {
-		n = len(m.event)
-	}
+	n := min(m.maxBytes, len(m.event))
 	out := make([]byte, n)
 	copy(out, m.event[:n])
 	fr := Frame{
@@ -521,10 +515,7 @@ func (m *multilineFramer) emitOversized() error {
 		lineNo = m.nextLineNo
 	}
 	combined := len(m.event) + len(m.buf)
-	tn := m.maxBytes
-	if tn > combined {
-		tn = combined
-	}
+	tn := min(m.maxBytes, combined)
 	out := make([]byte, tn)
 	k := copy(out, m.event)
 	if k < tn {

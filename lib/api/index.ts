@@ -46,6 +46,7 @@ export {
 export type { RouteRequest, RouteResponse } from "./routes";
 
 export {
+  analyzeSPLIndexScope,
   adaptSystemBootstrap,
   getSystemBootstrap,
   indexSelectorsFromSPL,
@@ -59,6 +60,7 @@ export type {
   BrowserApiLimitsModel,
   BrowserIndexModel,
   ResolveIndexScopeOptions,
+  SPLIndexScopeAnalysis,
   SystemBootstrapModel,
 } from "./system-bootstrap";
 

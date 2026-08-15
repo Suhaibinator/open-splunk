@@ -562,11 +562,9 @@ func TestTerminalJournalCallbackRunsExactlyOnceAcrossCompletionCancelAndClose(t 
 
 	var racers sync.WaitGroup
 	for range 32 {
-		racers.Add(1)
-		go func() {
-			defer racers.Done()
+		racers.Go(func() {
 			_ = manager.Cancel(job.ID)
-		}()
+		})
 	}
 	racers.Add(2)
 	go func() { defer racers.Done(); close(release) }()

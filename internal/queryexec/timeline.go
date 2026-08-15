@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"math"
 	"slices"
 	"strings"
@@ -236,35 +235,32 @@ func checkedBucketBoundary(first, span int64, multiplier uint64) (int64, bool) {
 	return first + offset, true
 }
 
-func settingsForTimeline(base clickhousedriver.Settings, bucketCount uint64) (clickhousedriver.Settings, error) {
+func settingsForTimeline(base *validatedExecutorSettings, bucketCount uint64) (clickhousedriver.Settings, error) {
 	if bucketCount == 0 || bucketCount > maximumTimelineResultBuckets {
 		return nil, errors.New("execute ClickHouse timeline: bucket limit is invalid")
 	}
-	if base == nil || base["readonly"] != uint8(2) {
+	if base == nil {
 		return nil, errors.New("execute ClickHouse timeline: executor does not have read-only settings")
 	}
-	baseRows, rowsOK := base["max_result_rows"].(uint64)
-	baseBytes, bytesOK := base["max_result_bytes"].(uint64)
-	if !rowsOK || baseRows == 0 || !bytesOK || baseBytes == 0 {
-		return nil, errors.New("execute ClickHouse timeline: executor result limits are invalid")
-	}
-	settings := maps.Clone(base)
+	baseRows := base.limit("max_result_rows")
+	baseBytes := base.limit("max_result_bytes")
+	settings := base.clone()
 	settings["max_result_rows"] = min(baseRows, bucketCount)
 	settings["max_result_bytes"] = min(baseBytes, maximumTimelineResultBytes)
 	return settings, nil
 }
 
 func validateTimelineColumns(columns []string, columnTypes []driver.ColumnType) error {
-	expectedColumns := []string{clickhouse.TimelineOrdinalColumn, clickhouse.TimelineCountColumn}
-	if !slices.Equal(columns, expectedColumns) || len(columnTypes) != len(expectedColumns) {
+	contracts := []resultColumnContract{
+		{name: clickhouse.TimelineOrdinalColumn, databaseType: timelineOrdinalDatabaseType},
+		{name: clickhouse.TimelineCountColumn, databaseType: timelineCountDatabaseType},
+	}
+	violation, column := validateResultColumnContracts(columns, columnTypes, contracts, 0)
+	if violation == resultColumnContractShapeMismatch {
 		return fmt.Errorf("%w: ClickHouse timeline columns do not match the compiled output", searchjobs.ErrInvalidResult)
 	}
-	expectedTypes := []string{timelineOrdinalDatabaseType, timelineCountDatabaseType}
-	for index, columnType := range columnTypes {
-		if isNilDriverValue(columnType) || columnType.Name() != expectedColumns[index] || columnType.Nullable() ||
-			columnType.DatabaseTypeName() != expectedTypes[index] {
-			return fmt.Errorf("%w: ClickHouse timeline column %q has an invalid type", searchjobs.ErrInvalidResult, expectedColumns[index])
-		}
+	if violation == resultColumnContractTypeMismatch {
+		return fmt.Errorf("%w: ClickHouse timeline column %q has an invalid type", searchjobs.ErrInvalidResult, column)
 	}
 	return nil
 }

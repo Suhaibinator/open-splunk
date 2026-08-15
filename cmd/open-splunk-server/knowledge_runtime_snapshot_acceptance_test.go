@@ -113,10 +113,7 @@ func (resolver *runtimeKnowledgeSnapshotResolver) Resolve(
 	scope knowledgecatalog.ResolutionScope,
 ) (knowledgecatalog.Resolution, error) {
 	resolver.logicalCalls.Add(1)
-	maximumAttempts := resolver.maximumAttempts
-	if maximumAttempts < 1 {
-		maximumAttempts = 1
-	}
+	maximumAttempts := max(resolver.maximumAttempts, 1)
 	for attempt := 1; attempt <= maximumAttempts; attempt++ {
 		resolver.attempts.Add(1)
 		resolution, err := resolver.delegate.Resolve(ctx, scope)
@@ -581,7 +578,7 @@ func TestKnowledgeSnapshotManagerRetainsWriterResolvedActiveVersions(t *testing.
 	jobV1Summary.Objects[0].GetAuthorizedObject().Version = 99
 
 	close(releaseFirst)
-	completedV1 := waitForRuntimeKnowledgeJobState(t, manager, jobV1.ID, searchjobs.StateCompleted)
+	completedV1 := waitForRuntimeKnowledgeJobState(t, manager, jobV1.ID)
 	if completedV1.Failure != nil {
 		t.Fatalf("ACTIVE v1 completion = %#v", completedV1)
 	}
@@ -685,7 +682,7 @@ func TestKnowledgeSnapshotManagerRetainsWriterResolvedActiveVersions(t *testing.
 	if _, oldProgramOK := observedV2.KnowledgeSnapshotEvidenceFor(preludeV1); oldProgramOK {
 		t.Fatal("ACTIVE v2 compiler authority reopened for v1 program")
 	}
-	completedV2 := waitForRuntimeKnowledgeJobState(t, manager, jobV2.ID, searchjobs.StateCompleted)
+	completedV2 := waitForRuntimeKnowledgeJobState(t, manager, jobV2.ID)
 	if completedV2.Failure != nil {
 		t.Fatalf("ACTIVE v2 completion = %#v", completedV2)
 	}

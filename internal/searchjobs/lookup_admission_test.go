@@ -45,7 +45,7 @@ func (lookupResolverFunc) ResolveAutomaticLookups(
 var _ LookupResolver = lookupResolverFunc(nil)
 
 func TestLookupAdmissionResolvesAndSealsBeforeExecution(t *testing.T) {
-	knowledgeResolver, appID := newEmptyKnowledgeResolver(t, "tenant")
+	knowledgeResolver, appID := newEmptyKnowledgeResolver(t)
 	request := validRequest()
 	request.AppID = appID
 	request.SPL = "index=main | lookup service_catalog service_id AS service OUTPUT owner | table owner"
@@ -100,7 +100,7 @@ func TestLookupAdmissionResolvesAndSealsBeforeExecution(t *testing.T) {
 }
 
 func TestConfiguredLookupResolverIsConsultedWithoutAuthoredLookup(t *testing.T) {
-	knowledgeResolver, appID := newEmptyKnowledgeResolver(t, "tenant")
+	knowledgeResolver, appID := newEmptyKnowledgeResolver(t)
 	request := validRequest()
 	request.AppID = appID
 	request.SPL = "index=main | head 1"
@@ -142,7 +142,7 @@ func TestConfiguredLookupResolverIsConsultedWithoutAuthoredLookup(t *testing.T) 
 }
 
 func TestLookupAdmissionFailsClosedBeforeJobWhenResolverIsMissingOrDiverges(t *testing.T) {
-	knowledgeResolver, appID := newEmptyKnowledgeResolver(t, "tenant")
+	knowledgeResolver, appID := newEmptyKnowledgeResolver(t)
 	request := validRequest()
 	request.AppID = appID
 	request.SPL = "index=main | lookup service_catalog service_id AS service OUTPUT owner"
@@ -182,7 +182,7 @@ func TestLookupAdmissionFailsClosedBeforeJobWhenResolverIsMissingOrDiverges(t *t
 }
 
 func TestLookupAdmissionMapsCombinedCatalogBudgetToCapacity(t *testing.T) {
-	knowledgeResolver, appID := newEmptyKnowledgeResolver(t, "tenant")
+	knowledgeResolver, appID := newEmptyKnowledgeResolver(t)
 	request := validRequest()
 	request.AppID = appID
 	request.SPL = "index=main | lookup service_catalog service_id AS service OUTPUT owner"

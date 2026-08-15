@@ -386,7 +386,7 @@ func TestWebSocketPreviewPublishesWhenVisiblePrefixChanges(t *testing.T) {
 		searchjobs.ResultRow{Ordinal: 1, Values: []searchjobs.Value{searchjobs.StringValue("second")}},
 	))
 	var updated *opensplunkv1.SearchWebSocketEvent
-	for reads := 0; reads < 3; reads++ {
+	for range 3 {
 		event := readEvent(t, client)
 		if event.GetResultPreview() != nil {
 			updated = event
@@ -483,7 +483,7 @@ func TestPreviewDemandRefreshIsSingleflight(t *testing.T) {
 	errs := make(chan error, 2)
 	for range 2 {
 		go func() {
-			_, refreshErr := target.refreshForSubscription(context.Background(), 1, false)
+			refreshErr := target.refreshForSubscription(context.Background(), 1, false)
 			errs <- refreshErr
 		}()
 	}
@@ -680,7 +680,7 @@ func TestWebSocketFreshFailedJobDoesNotEmitSchemalessPreview(t *testing.T) {
 		t.Fatal("failed-job subscription acknowledgment is missing")
 	}
 	sawSchema := false
-	for reads := 0; reads < 4; reads++ {
+	for range 4 {
 		event := readEvent(t, client)
 		if event.GetResultSchemaAvailable() != nil {
 			sawSchema = true
@@ -870,7 +870,7 @@ func TestWebSocketReplayFiltersPreviewToChangedRowLimit(t *testing.T) {
 		t.Fatalf("resume acknowledgment = %+v", ackEvent)
 	}
 	var replayed *opensplunkv1.SearchWebSocketEvent
-	for reads := 0; reads < 4; reads++ {
+	for range 4 {
 		event := readEvent(t, client)
 		if event.GetResynchronizationRequired() != nil || event.GetProtocolError() != nil {
 			t.Fatalf("resume control event = %+v", event)

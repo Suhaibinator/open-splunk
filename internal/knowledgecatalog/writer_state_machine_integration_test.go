@@ -31,7 +31,7 @@ func TestWriterDeterministicStateMachine(t *testing.T) {
 	}
 
 	seed := uint64(0x4b4f5f5752495445)
-	for index := 0; index < writerStateMachineSeedCount; index++ {
+	for range writerStateMachineSeedCount {
 		seed += 0x9e3779b97f4a7c15
 		currentSeed := seed
 		t.Run(fmt.Sprintf("seed_%016x", currentSeed), func(t *testing.T) {
@@ -237,7 +237,7 @@ func (machine *writerStateMachine) updateMetadata(path string) {
 	wantDefinition := proto.Clone(machine.model.definition).(*opensplunkv1.KnowledgeObjectDefinition)
 	switch path {
 	case "description":
-		wantDefinition.Description = writerStringPointer(incomingDescription)
+		wantDefinition.Description = new(incomingDescription)
 	case "name":
 		wantDefinition.Name = incoming.GetName()
 	default:
@@ -335,7 +335,7 @@ func (machine *writerStateMachine) delete() {
 
 func (machine *writerStateMachine) staleUpdate() {
 	definition := proto.Clone(machine.model.definition).(*opensplunkv1.KnowledgeObjectDefinition)
-	definition.Description = writerStringPointer("stale contender must never publish")
+	definition.Description = new("stale contender must never publish")
 	request := &opensplunkv1.UpdateKnowledgeObjectRequest{
 		KnowledgeObjectId: machine.model.objectID,
 		ExpectedVersion:   machine.model.version - 1,
@@ -358,7 +358,7 @@ func (machine *writerStateMachine) noopDisable() {
 
 func (machine *writerStateMachine) terminalUpdate() {
 	definition := proto.Clone(machine.model.definition).(*opensplunkv1.KnowledgeObjectDefinition)
-	definition.Description = writerStringPointer("terminal update must never publish")
+	definition.Description = new("terminal update must never publish")
 	request := &opensplunkv1.UpdateKnowledgeObjectRequest{
 		KnowledgeObjectId: machine.model.objectID,
 		ExpectedVersion:   machine.model.version,

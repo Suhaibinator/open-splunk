@@ -708,9 +708,7 @@ func TestValidatePublicationActiveTransitionCancellationAndConcurrency(t *testin
 	errorsByWorker := make(chan error, workers)
 	var group sync.WaitGroup
 	for range workers {
-		group.Add(1)
-		go func() {
-			defer group.Done()
+		group.Go(func() {
 			got, workerErr := validatePublicationActiveTransition(t.Context(), input)
 			if workerErr != nil {
 				errorsByWorker <- workerErr
@@ -719,7 +717,7 @@ func TestValidatePublicationActiveTransitionCancellationAndConcurrency(t *testin
 			if !want.Equal(got) {
 				errorsByWorker <- errors.New("concurrent transition authority differs")
 			}
-		}()
+		})
 	}
 	group.Wait()
 	close(errorsByWorker)

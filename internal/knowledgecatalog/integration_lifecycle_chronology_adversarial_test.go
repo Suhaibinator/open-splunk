@@ -117,10 +117,10 @@ func TestIntegrationLifecycleDisableMarkerSurvivesDisabledChangesBackupAndConcur
 	var wait sync.WaitGroup
 	wait.Add(workers)
 	errorsByWorker := make(chan error, workers)
-	for worker := 0; worker < workers; worker++ {
+	for worker := range workers {
 		go func(worker int) {
 			defer wait.Done()
-			for iteration := 0; iteration < iterations; iteration++ {
+			for iteration := range iterations {
 				if err := checkIntegrationLifecyclePublicReads(
 					restoredStore,
 					"ko-disabled-chronology",

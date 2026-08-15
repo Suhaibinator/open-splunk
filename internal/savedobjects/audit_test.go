@@ -119,14 +119,14 @@ func (dependencies *savedSearchAuditDependencies) options() Options {
 func TestAuditedStorePublishesCompleteSavedSearchLifecycleInsideMutationTransactions(t *testing.T) {
 	t.Parallel()
 
-	database, _, _ := openTestStore(t)
+	database, _ := openTestStore(t)
 	dependencies := &savedSearchAuditDependencies{
 		base: time.Date(2026, time.August, 4, 18, 0, 0, 0, time.UTC),
 		ids:  []string{"ss_audit_lifecycle", "ss_audit_lifecycle_copy"},
 	}
 	store := newSavedSearchAuditRawStore(t, database, dependencies.options())
 	appender := &recordingSavedSearchAuditAppender{}
-	audited := newSavedSearchAuditStore(t, store, savedSearchAuditTestTenant, appender)
+	audited := newSavedSearchAuditStore(t, store, appender)
 	ctx := context.Background()
 	scope := AccessScope{OwnerID: "owner-a"}
 
@@ -250,7 +250,7 @@ func TestAuditedStoreRollsBackEverySavedSearchMutationWhenAuditFails(t *testing.
 		action := action
 		t.Run(string(action), func(t *testing.T) {
 			t.Parallel()
-			database, _, _ := openTestStore(t)
+			database, _ := openTestStore(t)
 			dependencies := &savedSearchAuditDependencies{
 				base: time.Date(2026, time.August, 4, 20, 0, 0, 0, time.UTC),
 			}
@@ -267,7 +267,7 @@ func TestAuditedStoreRollsBackEverySavedSearchMutationWhenAuditFails(t *testing.
 			}
 			before := readSavedSearchAuditPersistence(t, database)
 			appender := &recordingSavedSearchAuditAppender{failAction: action}
-			audited := newSavedSearchAuditStore(t, store, savedSearchAuditTestTenant, appender)
+			audited := newSavedSearchAuditStore(t, store, appender)
 
 			var mutationErr error
 			switch action {
@@ -329,7 +329,7 @@ func TestAuditedStoreRollsBackEverySavedSearchMutationWhenAuditFails(t *testing.
 func TestAuditedStoreDoesNotAuditRejectedSavedSearchOperations(t *testing.T) {
 	t.Parallel()
 
-	database, store, _ := openTestStore(t)
+	database, store := openTestStore(t)
 	ctx := context.Background()
 	owner := AccessScope{OwnerID: "owner-a"}
 	first, err := store.Create(ctx, owner, savedSearchDefinition("same", ""))
@@ -342,7 +342,7 @@ func TestAuditedStoreDoesNotAuditRejectedSavedSearchOperations(t *testing.T) {
 	}
 	before := readSavedSearchAuditPersistence(t, database)
 	appender := &recordingSavedSearchAuditAppender{}
-	audited := newSavedSearchAuditStore(t, store, savedSearchAuditTestTenant, appender)
+	audited := newSavedSearchAuditStore(t, store, appender)
 
 	if _, err := audited.Get(ctx, owner, first.SavedSearchId); err != nil {
 		t.Fatalf("Get() error = %v", err)
@@ -455,7 +455,7 @@ func TestAuditedStoreIDCollisionsPublishOnlyTheCommittedSavedSearch(t *testing.T
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			database, _, _ := openTestStore(t)
+			database, _ := openTestStore(t)
 			seedIDs := []string{"ss_collision"}
 			if test.action == SavedSearchMutationAuditActionDuplicate {
 				seedIDs = []string{"ss_source", "ss_collision"}
@@ -501,7 +501,7 @@ func TestAuditedStoreIDCollisionsPublishOnlyTheCommittedSavedSearch(t *testing.T
 				},
 			})
 			appender := &recordingSavedSearchAuditAppender{}
-			audited := newSavedSearchAuditStore(t, store, savedSearchAuditTestTenant, appender)
+			audited := newSavedSearchAuditStore(t, store, appender)
 			var result *opensplunkv1.SavedSearch
 			var err error
 			if test.action == SavedSearchMutationAuditActionCreate {
@@ -541,7 +541,7 @@ func TestAuditedStoreConcurrentSavedSearchMutationsPublishOnlyTheWinner(t *testi
 	t.Parallel()
 
 	t.Run("optimistic update", func(t *testing.T) {
-		_, store, _ := openTestStore(t)
+		_, store := openTestStore(t)
 		ctx := context.Background()
 		scope := AccessScope{OwnerID: "owner"}
 		created, err := store.Create(ctx, scope, savedSearchDefinition("concurrent-update", ""))
@@ -549,7 +549,7 @@ func TestAuditedStoreConcurrentSavedSearchMutationsPublishOnlyTheWinner(t *testi
 			t.Fatalf("seed Create() error = %v", err)
 		}
 		appender := &recordingSavedSearchAuditAppender{}
-		audited := newSavedSearchAuditStore(t, store, savedSearchAuditTestTenant, appender)
+		audited := newSavedSearchAuditStore(t, store, appender)
 		start := make(chan struct{})
 		errorsByWriter := make(chan error, 2)
 		for _, name := range []string{"winner-a", "winner-b"} {
@@ -595,11 +595,11 @@ func TestAuditedStoreConcurrentSavedSearchMutationsPublishOnlyTheWinner(t *testi
 	})
 
 	t.Run("unique name create", func(t *testing.T) {
-		_, store, _ := openTestStore(t)
+		_, store := openTestStore(t)
 		ctx := context.Background()
 		scope := AccessScope{OwnerID: "owner"}
 		appender := &recordingSavedSearchAuditAppender{}
-		audited := newSavedSearchAuditStore(t, store, savedSearchAuditTestTenant, appender)
+		audited := newSavedSearchAuditStore(t, store, appender)
 		start := make(chan struct{})
 		errorsByWriter := make(chan error, 2)
 		for range 2 {
@@ -637,7 +637,7 @@ func TestAuditedStoreConcurrentSavedSearchMutationsPublishOnlyTheWinner(t *testi
 func TestNewAuditedStoreRejectsInvalidSavedSearchAuditConfiguration(t *testing.T) {
 	t.Parallel()
 
-	database, store, _ := openTestStore(t)
+	database, store := openTestStore(t)
 	validAppender := &recordingSavedSearchAuditAppender{}
 	var typedNil *recordingSavedSearchAuditAppender
 	tests := map[string]struct {
@@ -707,11 +707,10 @@ func newSavedSearchAuditRawStore(t *testing.T, database *control.DB, options Opt
 func newSavedSearchAuditStore(
 	t *testing.T,
 	store *Store,
-	tenantID string,
 	appender SavedSearchMutationAuditAppender,
 ) *AuditedStore {
 	t.Helper()
-	audited, err := NewAuditedStore(store, tenantID, appender)
+	audited, err := NewAuditedStore(store, savedSearchAuditTestTenant, appender)
 	if err != nil {
 		t.Fatalf("NewAuditedStore() error = %v", err)
 	}

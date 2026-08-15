@@ -1159,7 +1159,7 @@ func runtimeFieldExecutionSnapshotWithID(
 	if err != nil {
 		t.Fatalf("create field execution: %v", err)
 	}
-	waitForRuntimeKnowledgeJobState(t, manager, created.ID, searchjobs.StateCompleted)
+	waitForRuntimeKnowledgeJobState(t, manager, created.ID)
 	snapshot, err := manager.CompletedExecutionSnapshotFor(
 		context.Background(),
 		searchjobs.AccessScope{TenantID: tenantID, OwnerID: ownerID},

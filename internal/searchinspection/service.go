@@ -10,7 +10,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -20,6 +19,7 @@ import (
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
+	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -153,17 +153,17 @@ func newService(
 	maxConcurrent int,
 	maxRuntime time.Duration,
 ) (*Service, error) {
-	if nilInterface(searches) {
+	if nilcheck.IsNil(searches) {
 		return nil, errors.New(
 			"create search inspection service: completed search snapshots are required",
 		)
 	}
-	if nilInterface(compiler) {
+	if nilcheck.IsNil(compiler) {
 		return nil, errors.New(
 			"create search inspection service: query compiler is required",
 		)
 	}
-	if nilInterface(explainer) {
+	if nilcheck.IsNil(explainer) {
 		return nil, errors.New(
 			"create search inspection service: query Explainer is required",
 		)
@@ -650,19 +650,5 @@ func (service *Service) Close(ctx context.Context) error {
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
-	}
-}
-
-func nilInterface(value any) bool {
-	if value == nil {
-		return true
-	}
-	reflected := reflect.ValueOf(value)
-	switch reflected.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map,
-		reflect.Pointer, reflect.Slice:
-		return reflected.IsNil()
-	default:
-		return false
 	}
 }

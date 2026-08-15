@@ -112,7 +112,7 @@ func TestStatsSparklinePipelineAgainstClickHouse(t *testing.T) {
 			SearchStart:       indexTime.Add(2 * time.Minute),
 			SearchTimezone:    "UTC",
 			IndexTimeCutoff:   indexTime.Add(time.Minute),
-			VisibilityCutoff:  uint64PointerForIntegration(visibilityCutoff),
+			VisibilityCutoff:  new(visibilityCutoff),
 		})
 		if buildErr != nil {
 			t.Fatalf("build sparkline SPL %q: %v", source, buildErr)

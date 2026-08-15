@@ -100,7 +100,7 @@ func TestValidatePublicationExistingWinnerCohortCandidateAbsentMode(t *testing.T
 
 func TestPublicationTransitionSemanticProgramLimit(t *testing.T) {
 	var work publicationTransitionWork
-	for program := uint64(0); program < maximumPublicationTransitionSemanticPrograms; program++ {
+	for program := range maximumPublicationTransitionSemanticPrograms {
 		if err := work.chargeChangedCohort(nil); err != nil {
 			t.Fatalf("charge semantic program %d at exact limit: %v", program, err)
 		}
@@ -930,10 +930,8 @@ func TestValidatePublicationIndexNameAdmissionDeterminism(t *testing.T) {
 	const workers = 8
 	errorsByWorker := make(chan error, workers)
 	var wait sync.WaitGroup
-	for worker := 0; worker < workers; worker++ {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
+	for range workers {
+		wait.Go(func() {
 			authority, workerErr := validatePublicationIndexNameAdmission(t.Context(), base)
 			if workerErr != nil {
 				errorsByWorker <- workerErr
@@ -942,7 +940,7 @@ func TestValidatePublicationIndexNameAdmissionDeterminism(t *testing.T) {
 			if !authority.Equal(expected) {
 				errorsByWorker <- errors.New("concurrent admission authority differs")
 			}
-		}()
+		})
 	}
 	wait.Wait()
 	close(errorsByWorker)
@@ -1083,7 +1081,7 @@ func TestValidatePublicationIndexNameAdmissionBoundsAndCancellation(t *testing.T
 		const privatePrincipals = 64
 		const oldIndexes = 9
 		winners := make([]publicationWinner, 0, privatePrincipals+oldIndexes)
-		for owner := 0; owner < privatePrincipals; owner++ {
+		for owner := range privatePrincipals {
 			winners = append(winners, publicationIndexAdmissionTestExtraction(
 				t,
 				fmt.Sprintf("ko-private-bound-%02d", owner),

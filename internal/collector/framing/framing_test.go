@@ -34,7 +34,7 @@ func (r endlessByteReader) Read(buffer []byte) (int, error) {
 func drainFramer(t *testing.T, f Framer) []wantFrame {
 	t.Helper()
 	var got []wantFrame
-	for i := 0; i < 10000; i++ {
+	for range 10000 {
 		fr, err := f.Next()
 		switch {
 		case err == nil:

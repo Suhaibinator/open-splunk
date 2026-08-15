@@ -341,7 +341,7 @@ func TestIntegrationCatalogTenantHealthDoesNotDisclosePrivateRows(t *testing.T) 
 		privacyContractAssertPhysicalCountDiagnostic(t, database, 3)
 		privacyContractAssertGets(t, store, visibleIDs, baselineGets)
 		privacyContractAssertLists(t, store, requests, baselineLists)
-		for _, version := range []*uint64{nil, integrationUint64Pointer(1)} {
+		for _, version := range []*uint64{nil, new(uint64(1))} {
 			if _, err := store.Get(context.Background(), testReadScope(), "ko-ledger-hidden", version); !errors.Is(err, control.ErrNotFound) {
 				t.Fatalf("Get(hidden ledger row, version=%v) error = %v, want policy-neutral ErrNotFound", version, err)
 			}
@@ -414,7 +414,7 @@ func TestIntegrationCatalogTenantHealthDoesNotDisclosePrivateRows(t *testing.T) 
 		privacyContractAssertPhysicalCountDiagnostic(t, database, maximumObjectsPerTenant+1)
 		privacyContractAssertGets(t, store, visibleIDs, baselineGets)
 		privacyContractAssertLists(t, store, requests, baselineLists)
-		for _, version := range []*uint64{nil, integrationUint64Pointer(1)} {
+		for _, version := range []*uint64{nil, new(uint64(1))} {
 			if _, err := store.Get(context.Background(), testReadScope(), "ko-over-cap-00000", version); !errors.Is(err, control.ErrNotFound) {
 				t.Fatalf("Get(hidden over-cap row, version=%v) error = %v, want policy-neutral ErrNotFound", version, err)
 			}
@@ -554,11 +554,11 @@ func TestIntegrationConcurrentBatchHydrationReturnsDetachedStableObjects(t *test
 	errorsSeen := make(chan error, workers)
 	var ready sync.WaitGroup
 	ready.Add(workers)
-	for worker := 0; worker < workers; worker++ {
+	for worker := range workers {
 		go func(worker int) {
 			ready.Done()
 			<-start
-			for iteration := 0; iteration < iterations; iteration++ {
+			for iteration := range iterations {
 				request := ListRequest{PageSize: objectCount}
 				if (worker+iteration)%2 == 0 {
 					request.TextFilter = &needle
@@ -580,7 +580,7 @@ func TestIntegrationConcurrentBatchHydrationReturnsDetachedStableObjects(t *test
 	}
 	ready.Wait()
 	close(start)
-	for worker := 0; worker < workers; worker++ {
+	for range workers {
 		if err := <-errorsSeen; err != nil {
 			t.Fatal(err)
 		}
@@ -603,7 +603,7 @@ func insertIntegrationBatchObjects(t *testing.T, database *control.DB, count int
 	defer func() { _ = tx.Rollback() }()
 	ensureIntegrationCatalogLedgers(t, tx)
 	mutations := int64(0)
-	for index := 0; index < count; index++ {
+	for index := range count {
 		objectID := fmt.Sprintf("ko-batch-%04d", index)
 		name := fmt.Sprintf("batch-%04d", index)
 		descriptionV1 := fmt.Sprintf("batch body %04d v1", index)
@@ -643,7 +643,7 @@ func insertIntegrationBatchObjects(t *testing.T, database *control.DB, count int
 			currentVersion = 2
 			mutations++
 		}
-		insertIntegrationProjection(t, tx, objectID, currentVersion, testOwner, StateDraft, current)
+		insertIntegrationProjection(t, tx, objectID, currentVersion, StateDraft, current)
 		if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_objects (
 			tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name,
 			sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro,
@@ -676,7 +676,7 @@ func insertIntegrationDisabledBatchObjects(t *testing.T, database *control.DB, c
 	}
 	defer func() { _ = tx.Rollback() }()
 	ensureIntegrationCatalogLedgers(t, tx)
-	for index := 0; index < count; index++ {
+	for index := range count {
 		objectID := fmt.Sprintf("ko-disabled-batch-%04d", index)
 		name := fmt.Sprintf("disabled-batch-%04d", index)
 		description := fmt.Sprintf("disabled batch body %04d", index)
@@ -695,7 +695,7 @@ func insertIntegrationDisabledBatchObjects(t *testing.T, database *control.DB, c
 		insertIntegrationDefinitionBlob(t, tx, normalized.Bytes, normalized.Digest[:], createdAt)
 		insertIntegrationVersion(t, tx, objectID, 1, StateActive, "create", normalized.Digest[:], normalized, createdAt)
 		insertIntegrationVersion(t, tx, objectID, 2, StateDisabled, "disable", normalized.Digest[:], normalized, disabledAt)
-		insertIntegrationProjection(t, tx, objectID, 2, testOwner, StateDisabled, normalized)
+		insertIntegrationProjection(t, tx, objectID, 2, StateDisabled, normalized)
 		if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_objects (
 			tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name,
 			sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro,

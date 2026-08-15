@@ -133,10 +133,10 @@ func ResultPage(
 	}
 	pageResponse := &opensplunkv1.PageResponse{TotalSizeExact: includeTotal && !resultsTruncated}
 	if page.NextCursor != "" {
-		pageResponse.NextPageToken = stringPointer(page.NextCursor)
+		pageResponse.NextPageToken = new(page.NextCursor)
 	}
 	if includeTotal {
-		pageResponse.TotalSize = uint64Pointer(page.TotalRows)
+		pageResponse.TotalSize = new(page.TotalRows)
 	}
 	return &opensplunkv1.ResultPage{
 		Schema: schema,
@@ -369,5 +369,3 @@ func timestampToProto(input time.Time) (*timestamppb.Timestamp, error) {
 	}
 	return result, nil
 }
-
-func uint64Pointer(value uint64) *uint64 { return &value }

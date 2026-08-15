@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"math/big"
 	"net/http"
@@ -678,9 +679,7 @@ func (fake *compatibilityAdmission) snapshot() (int, bool, compatibilityDurable,
 		events = append(events, fake.committed.Events...)
 	}
 	consumed := make(map[string]bool, len(fake.consumed))
-	for condition, value := range fake.consumed {
-		consumed[condition] = value
-	}
+	maps.Copy(consumed, fake.consumed)
 	return fake.calls, fake.overLimit, fake.durable, events, consumed
 }
 
@@ -759,9 +758,7 @@ func (fake *compatibilityHealth) snapshot() (int, bool, map[string]bool) {
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	consumed := make(map[string]bool, len(fake.consumed))
-	for condition, value := range fake.consumed {
-		consumed[condition] = value
-	}
+	maps.Copy(consumed, fake.consumed)
 	return fake.calls, fake.overLimit, consumed
 }
 

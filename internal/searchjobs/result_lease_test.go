@@ -246,9 +246,7 @@ func TestResultLeaseSerializesConcurrentNext(t *testing.T) {
 	errorsSeen := make(chan error, 8)
 	var workers sync.WaitGroup
 	for range 8 {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
+		workers.Go(func() {
 			for {
 				row, ok, err := lease.Next(context.Background())
 				if err != nil {
@@ -260,7 +258,7 @@ func TestResultLeaseSerializesConcurrentNext(t *testing.T) {
 				}
 				ordinals <- row.Ordinal
 			}
-		}()
+		})
 	}
 	workers.Wait()
 	close(ordinals)
@@ -845,21 +843,17 @@ func TestResultLeaseCancellationAndConcurrentCloseReleaseCapacitySynchronously(t
 	var closers sync.WaitGroup
 	for range 32 {
 		alias := lease
-		closers.Add(1)
-		go func() {
-			defer closers.Done()
+		closers.Go(func() {
 			<-start
 			if closeErr := alias.Close(); closeErr != nil {
 				t.Errorf("Close() error = %v", closeErr)
 			}
-		}()
+		})
 	}
-	closers.Add(1)
-	go func() {
-		defer closers.Done()
+	closers.Go(func() {
 		<-start
 		cancel()
-	}()
+	})
 	close(start)
 	closers.Wait()
 	assertLeaseCounts(t, manager, job.ID, 0, 0)

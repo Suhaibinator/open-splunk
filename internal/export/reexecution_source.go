@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -15,6 +14,7 @@ import (
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
+	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchsnapshot"
 )
@@ -68,10 +68,10 @@ var _ ResultSource = (*ReexecutionSource)(nil)
 // NewReexecutionSource constructs a streaming export source. Zero duration and
 // row-buffer values select conservative defaults.
 func NewReexecutionSource(config ReexecutionSourceConfig) (*ReexecutionSource, error) {
-	if nilReexecutionDependency(config.Searches) {
+	if nilcheck.IsNil(config.Searches) {
 		return nil, errors.New("create export re-execution source: search service is required")
 	}
-	if nilReexecutionDependency(config.Executor) {
+	if nilcheck.IsNil(config.Executor) {
 		return nil, errors.New("create export re-execution source: query executor is required")
 	}
 	if config.MaxRuntime < 0 || config.MaxRuntime > maximumReexecutionRuntime {
@@ -95,20 +95,6 @@ func NewReexecutionSource(config ReexecutionSourceConfig) (*ReexecutionSource, e
 	}, nil
 }
 
-func nilReexecutionDependency(value any) bool {
-	if value == nil {
-		return true
-	}
-	reflected := reflect.ValueOf(value)
-	switch reflected.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map,
-		reflect.Pointer, reflect.Slice:
-		return reflected.IsNil()
-	default:
-		return false
-	}
-}
-
 // AcquireResultsFor atomically pins the completed search and obtains the exact
 // execution authority associated with that pin. Query execution itself is
 // lazy, preserving the export manager's worker and queue admission bounds.
@@ -121,12 +107,12 @@ func (source *ReexecutionSource) AcquireResultsFor(ctx context.Context, access s
 	}
 	pin, execution, err := source.searches.AcquireExecutionFor(ctx, access, id)
 	if err != nil {
-		if !nilReexecutionDependency(pin) {
+		if !nilcheck.IsNil(pin) {
 			_ = pin.Close()
 		}
 		return nil, err
 	}
-	if nilReexecutionDependency(pin) {
+	if nilcheck.IsNil(pin) {
 		return nil, searchjobs.ErrResultsUnavailable
 	}
 	pinReleased := false

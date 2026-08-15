@@ -15,7 +15,6 @@ func TestExecutorPublishesChartPercentileAsNullableFiniteValues(t *testing.T) {
 	t.Parallel()
 
 	rows := numericChartRows(
-		"String",
 		reflect.TypeOf(""),
 		[]string{"0:api", "1:", "2:"},
 		[]any{"/a", "/b"},
@@ -25,9 +24,6 @@ func TestExecutorPublishesChartPercentileAsNullableFiniteValues(t *testing.T) {
 	sink := &fakeSink{}
 	query := numericChartQuery(
 		t,
-		"path",
-		clickhouse.ChartRowKindString,
-		"String",
 		clickhouse.ChartValueKindPercentile,
 	)
 	if err := mustExecutor(t, &fakeQueryConnection{rows: rows}).Execute(
@@ -87,7 +83,6 @@ func TestExecutorRejectsNonFiniteChartPercentileAtomically(t *testing.T) {
 			t.Parallel()
 
 			rows := numericChartRows(
-				"String",
 				reflect.TypeOf(""),
 				[]string{"0:api"},
 				[]any{"/finite", "/invalid"},
@@ -100,9 +95,6 @@ func TestExecutorRejectsNonFiniteChartPercentileAtomically(t *testing.T) {
 				context.Background(),
 				numericChartQuery(
 					t,
-					"path",
-					clickhouse.ChartRowKindString,
-					"String",
 					clickhouse.ChartValueKindPercentile,
 				),
 				sink,
@@ -128,9 +120,6 @@ func TestExecutorCapsChartPercentileRawSketchGroupsAtTwentyThousand(t *testing.T
 
 	query := numericChartQuery(
 		t,
-		"path",
-		clickhouse.ChartRowKindString,
-		"String",
 		clickhouse.ChartValueKindPercentile,
 	)
 	if query.Chart.RowLimit != maximumChartRows ||
@@ -142,7 +131,7 @@ func TestExecutorCapsChartPercentileRawSketchGroupsAtTwentyThousand(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	executor := &Executor{settings: settings, expandTimechartGroupLimit: true}
+	executor := &Executor{settings: mustValidatedSettings(t, settings), expandTimechartGroupLimit: true}
 	if got := executor.settingsFor(query)["max_rows_to_group_by"]; got != uint64(20_000) {
 		t.Fatalf("percentile chart raw sketch cap = %v, want 20000", got)
 	}
@@ -154,7 +143,7 @@ func TestExecutorCapsChartPercentileRawSketchGroupsAtTwentyThousand(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	high := &Executor{settings: highSettings}
+	high := &Executor{settings: mustValidatedSettings(t, highSettings)}
 	if got := high.settingsFor(query)["max_rows_to_group_by"]; got != uint64(20_000) {
 		t.Fatalf("explicit high percentile chart group cap = %v, want clamped 20000", got)
 	}
@@ -163,12 +152,12 @@ func TestExecutorCapsChartPercentileRawSketchGroupsAtTwentyThousand(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	low := &Executor{settings: lowSettings}
+	low := &Executor{settings: mustValidatedSettings(t, lowSettings)}
 	if got := low.settingsFor(query)["max_rows_to_group_by"]; got != uint64(7) {
 		t.Fatalf("explicit low percentile chart group cap = %v, want 7", got)
 	}
 	expandedLow := &Executor{
-		settings:                  lowSettings,
+		settings:                  mustValidatedSettings(t, lowSettings),
 		expandTimechartGroupLimit: true,
 	}
 	if got := expandedLow.settingsFor(query)["max_rows_to_group_by"]; got != uint64(20_000) {

@@ -746,10 +746,7 @@ func (v *Validator) rawSecretMatchBefore(raw []byte, delimiter int) (redactionMa
 	// quote delimiters and outer escape bytes as well. The hard field-name limit
 	// keeps this lookback small and independent of event size.
 	quotedKeyBudget := int(v.limits.MaxFieldNameBytes)*6 + 4
-	quotedLowerBound := quotedKeyEnd - quotedKeyBudget
-	if quotedLowerBound < 0 {
-		quotedLowerBound = 0
-	}
+	quotedLowerBound := max(quotedKeyEnd-quotedKeyBudget, 0)
 	for quotedLowerBound < quotedKeyEnd && !utf8.RuneStart(raw[quotedLowerBound]) {
 		quotedLowerBound++
 	}
@@ -775,10 +772,7 @@ func (v *Validator) rawSecretMatchBefore(raw []byte, delimiter int) (redactionMa
 		return redactionMatch{}, false, false
 	}
 
-	lowerBound := keyEnd - int(v.limits.MaxFieldNameBytes)
-	if lowerBound < 0 {
-		lowerBound = 0
-	}
+	lowerBound := max(keyEnd-int(v.limits.MaxFieldNameBytes), 0)
 	for lowerBound < delimiter && !utf8.RuneStart(raw[lowerBound]) {
 		lowerBound++
 	}

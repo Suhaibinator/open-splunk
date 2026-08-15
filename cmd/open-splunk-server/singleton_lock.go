@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/Suhaibinator/open-splunk/internal/privatefs"
@@ -179,8 +180,7 @@ func (lock *serverLock) Close() error {
 		return nil
 	}
 	var result error
-	for index := len(lock.files) - 1; index >= 0; index-- {
-		file := lock.files[index]
+	for _, file := range slices.Backward(lock.files) {
 		// #nosec G115 -- os.File descriptors originate as native int descriptors on Unix.
 		unlockErr := unix.Flock(int(file.Fd()), unix.LOCK_UN)
 		closeErr := file.Close()

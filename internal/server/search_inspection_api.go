@@ -37,7 +37,6 @@ func (handler *apiHandler) searchInspectionRoutes(
 			Codec:      newSerializedSearchInspectionCodec(),
 			Handler:    handler.inspectSearchJob,
 			SourceType: router.Body,
-			Sanitizer:  forwardCompatibleProtoSanitizer[*opensplunkv1.InspectSearchJobRequest],
 			Overrides: sroutercommon.RouteOverrides{
 				MaxBodySize: smallRequestBytes,
 			},

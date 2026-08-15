@@ -12,6 +12,7 @@ import {
   RepeatedPageCursorError,
   type SystemBootstrapModel,
 } from "@/lib/api";
+import { createErrorMessage } from "@/lib/error-message";
 import { savedSearchLaunchHref } from "@/lib/search/launch-url";
 import {
   nextDuplicateSavedSearchName,
@@ -44,11 +45,7 @@ interface BackendReportsConsoleProps {
   apiBaseUrl: string;
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error && error.message.trim().length > 0
-    ? error.message
-    : "The server did not return a usable saved-search response.";
-}
+const errorMessage = createErrorMessage("The server did not return a usable saved-search response.");
 
 function scopeLabel(scope: SharingScope): string {
   if (scope === SharingScope.SHARING_SCOPE_GLOBAL) return "Global";

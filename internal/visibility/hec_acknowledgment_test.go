@@ -76,7 +76,7 @@ func TestKeyedHECAcknowledgmentIDSourceIsExactAndConstantSpace(t *testing.T) {
 	if retried == first || retried == 0 || retried > maximumHECAcknowledgmentID {
 		t.Fatalf("collision-derived ACK ID = %d, first %d", retried, first)
 	}
-	for index := uint64(0); index < 10_000; index++ {
+	for index := range uint64(10_000) {
 		churnedScope := hecAcknowledgmentScope{
 			tenantID: "tenant-a",
 			tokenID:  fmt.Sprintf("token-%d", index),
@@ -375,7 +375,7 @@ func TestHECChannelCapacityPrecedesQuotaAndRollsBackAdmission(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for index := 0; index < MaxHECChannelsPerToken; index++ {
+	for index := range MaxHECChannelsPerToken {
 		channel := fmt.Sprintf("capacity-channel-%03d", index)
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO hec_channels (

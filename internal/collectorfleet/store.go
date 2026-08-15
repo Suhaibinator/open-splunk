@@ -1447,7 +1447,6 @@ func collectorFromRecords(
 		if !addBoundedBytes(
 			&helloSnapshotBytes,
 			len(metadata.value),
-			maximumHelloSnapshotBytes,
 		) {
 			return Collector{}, errors.New("collector hello snapshot exceeds persisted bounds")
 		}
@@ -1563,7 +1562,6 @@ func collectorFromRecords(
 	if !addBoundedBytes(
 		&helloSnapshotBytes,
 		len(capabilityRows)*8,
-		maximumHelloSnapshotBytes,
 	) {
 		return Collector{}, errors.New("collector hello snapshot exceeds persisted bounds")
 	}
@@ -1587,7 +1585,6 @@ func collectorFromRecords(
 		if !addBoundedBytes(
 			&helloSnapshotBytes,
 			len(row.IndexName),
-			maximumHelloSnapshotBytes,
 		) {
 			return Collector{}, errors.New("collector hello snapshot exceeds persisted bounds")
 		}
@@ -1628,7 +1625,6 @@ func collectorFromRecords(
 		if !addBoundedBytes(
 			&helloSnapshotBytes,
 			recordBytes,
-			maximumHelloSnapshotBytes,
 		) {
 			return Collector{}, errors.New("collector hello snapshot exceeds persisted bounds")
 		}
@@ -1665,7 +1661,6 @@ func collectorFromRecords(
 		if !addBoundedBytes(
 			&heartbeatSnapshotBytes,
 			len(row.InputID)+len(row.StatusMessage)+64,
-			maximumHeartbeatSnapshotBytes,
 		) {
 			return Collector{}, errors.New("collector heartbeat snapshot exceeds persisted bounds")
 		}

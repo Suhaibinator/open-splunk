@@ -104,7 +104,7 @@ func TestJSONConvertsConcatenatedEnvelopeEventKindsExactly(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = decoder.Next()
-	assertAdapterProtocolError(t, err, hec.ErrorEventBlank, adapterOrdinal(0))
+	assertAdapterProtocolError(t, err, hec.ErrorEventBlank, new(0))
 }
 
 func TestJSONResolvesMetadataPrecedenceAndFallbacks(t *testing.T) {
@@ -470,28 +470,28 @@ func TestAdapterFailuresAreRequestAtomicAndCarryLowestEventOrdinal(t *testing.T)
 	context.Authentication.AuthorizedIndexes = context.Authentication.AuthorizedIndexes[:1]
 	request, err := JSON(context, decodeAdapterEnvelopes(t,
 		`{"event":"accepted-first"} {"index":"audit","event":"unauthorized-second"}`))
-	assertAdapterProtocolError(t, err, hec.ErrorIncorrectIndex, adapterOrdinal(1))
+	assertAdapterProtocolError(t, err, hec.ErrorIncorrectIndex, new(1))
 	assertZeroAdapterAdmission(t, request)
 
 	missingIndexContext := context
 	missingIndexContext.Authentication.HECProfile.DefaultIndexName = ""
 	request, err = JSON(missingIndexContext, decodeAdapterEnvelopes(t, `{"event":"missing-index"}`))
-	assertAdapterProtocolError(t, err, hec.ErrorIncorrectIndex, adapterOrdinal(0))
+	assertAdapterProtocolError(t, err, hec.ErrorIncorrectIndex, new(0))
 	assertZeroAdapterAdmission(t, request)
 
 	request, err = Raw(context, hec.RawQuery{}, [][]byte{[]byte("accepted-first"), {}})
-	assertAdapterProtocolError(t, err, hec.ErrorInvalidDataFormat, adapterOrdinal(1))
+	assertAdapterProtocolError(t, err, hec.ErrorInvalidDataFormat, new(1))
 	assertZeroAdapterAdmission(t, request)
 
 	request, err = Raw(context, hec.RawQuery{}, [][]byte{[]byte("accepted-first"), []byte("bad\x00event")})
-	assertAdapterProtocolError(t, err, hec.ErrorInvalidDataFormat, adapterOrdinal(1))
+	assertAdapterProtocolError(t, err, hec.ErrorInvalidDataFormat, new(1))
 	assertZeroAdapterAdmission(t, request)
 
 	unauthorized := hec.RawQuery{Metadata: hec.MetadataValues{
 		Index: hec.OptionalString{Present: true, Value: "audit"},
 	}}
 	request, err = Raw(context, unauthorized, [][]byte{[]byte("body")})
-	assertAdapterProtocolError(t, err, hec.ErrorIncorrectIndex, adapterOrdinal(0))
+	assertAdapterProtocolError(t, err, hec.ErrorIncorrectIndex, new(0))
 	assertZeroAdapterAdmission(t, request)
 
 	invalidTime := hec.RawQuery{Time: hec.OptionalString{Present: true, Value: "1.0000000001"}}
@@ -569,8 +569,6 @@ func decodeAdapterEnvelopes(t *testing.T, body string) []hec.Envelope {
 		envelopes = append(envelopes, envelope)
 	}
 }
-
-func adapterOrdinal(value int) *int { return &value }
 
 func assertAdapterProtocolError(t *testing.T, err error, kind hec.ErrorKind, ordinal *int) {
 	t.Helper()

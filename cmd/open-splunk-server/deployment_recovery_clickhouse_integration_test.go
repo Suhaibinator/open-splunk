@@ -50,7 +50,7 @@ func TestDeploymentNativeRecoveryClickHouseLifecycle(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 	fixture := startNativeRecoveryIntegrationClickHouse(t, ctx, image)
-	admin := fixture.open(t, "default", fixture.bootstrapUsername, fixture.bootstrapPassword)
+	admin := fixture.open(t, fixture.bootstrapUsername, fixture.bootstrapPassword)
 	t.Cleanup(func() {
 		if closeErr := admin.Close(); closeErr != nil {
 			t.Errorf("close recovery integration bootstrap session: %v", closeErr)
@@ -82,16 +82,16 @@ func TestDeploymentNativeRecoveryClickHouseLifecycle(t *testing.T) {
 
 	backup := fixture.open(
 		t,
-		"default",
+
 		deploymentRecoveryBackupUsername,
-		fixture.backupPassword,
-	)
+		fixture.backupPassword)
+
 	restore := fixture.open(
 		t,
-		"default",
+
 		deploymentRecoveryRestoreUsername,
-		fixture.restorePassword,
-	)
+		fixture.restorePassword)
+
 	t.Cleanup(func() {
 		if closeErr := restore.Close(); closeErr != nil {
 			t.Errorf("close recovery integration restore session: %v", closeErr)
@@ -346,9 +346,9 @@ func TestDeploymentNativeRecoveryClickHouseLifecycle(t *testing.T) {
 			}
 		}
 		fixture.restartContainer(t, ctx, recoveryReadOnly)
-		admin = fixture.open(t, "default", fixture.bootstrapUsername, fixture.bootstrapPassword)
-		backup = fixture.open(t, "default", deploymentRecoveryBackupUsername, fixture.backupPassword)
-		restore = fixture.open(t, "default", deploymentRecoveryRestoreUsername, fixture.restorePassword)
+		admin = fixture.open(t, fixture.bootstrapUsername, fixture.bootstrapPassword)
+		backup = fixture.open(t, deploymentRecoveryBackupUsername, fixture.backupPassword)
+		restore = fixture.open(t, deploymentRecoveryRestoreUsername, fixture.restorePassword)
 	}
 	if err := server.ValidateClickHouseRecoveryDiskReadOnly(ctx, restore); !errors.Is(err, server.ErrClickHouseRecoveryDiskWritable) {
 		t.Fatalf("writable recovery disk validation error = %v, want writable-disk rejection", err)
@@ -954,7 +954,6 @@ func (fixture *nativeRecoveryIntegrationFixture) restartContainer(
 
 func (fixture *nativeRecoveryIntegrationFixture) open(
 	t *testing.T,
-	database string,
 	username string,
 	password string,
 ) clickhousedriver.Conn {
@@ -963,7 +962,7 @@ func (fixture *nativeRecoveryIntegrationFixture) open(
 		Protocol: clickhousedriver.Native,
 		Addr:     []string{fixture.address},
 		Auth: clickhousedriver.Auth{
-			Database: database,
+			Database: "default",
 			Username: username,
 			Password: password,
 		},

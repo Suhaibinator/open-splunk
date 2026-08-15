@@ -6,8 +6,19 @@ import { GetSystemBootstrapResponse } from "@/gen/ts/open_splunk/v1/system_api";
 import {
   MAXIMUM_BROWSER_BOOTSTRAP_APPS,
   MAXIMUM_SPL_COMPATIBILITY_VERSION_BYTES,
+  analyzeSPLIndexScope,
   adaptSystemBootstrap,
 } from "./system-bootstrap";
+
+test("SPL index scope analysis collects selectors after an exhaustive stage", () => {
+  assert.deepEqual(
+    analyzeSPLIndexScope("(index=main OR index=security) source=api | search index=audit"),
+    {
+      selectors: ["main", "security", "audit"],
+      exhaustivelyConstrained: true,
+    },
+  );
+});
 
 test("system bootstrap preserves structured release identity", () => {
   const response = GetSystemBootstrapResponse.fromPartial({

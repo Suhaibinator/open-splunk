@@ -172,7 +172,6 @@ func (handler *apiHandler) appAdministrationRoutes(
 			Codec:      newSerializedCreateAppCodec(),
 			Handler:    handler.createApp,
 			SourceType: router.Body,
-			Sanitizer:  forwardCompatibleProtoSanitizer[*opensplunkv1.CreateAppRequest],
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: requestBytes},
 		}),
 		newForwardCompatibleProtoRoute[
@@ -187,7 +186,6 @@ func (handler *apiHandler) appAdministrationRoutes(
 			Codec:      newSerializedGetAppCodec(),
 			Handler:    handler.getApp,
 			SourceType: router.Body,
-			Sanitizer:  forwardCompatibleProtoSanitizer[*opensplunkv1.GetAppRequest],
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
 		newForwardCompatibleProtoRoute[
@@ -202,7 +200,6 @@ func (handler *apiHandler) appAdministrationRoutes(
 			Codec:      newSerializedListAppsCodec(),
 			Handler:    handler.listApps,
 			SourceType: router.Body,
-			Sanitizer:  forwardCompatibleProtoSanitizer[*opensplunkv1.ListAppsRequest],
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
 		newForwardCompatibleProtoRoute[
@@ -217,7 +214,6 @@ func (handler *apiHandler) appAdministrationRoutes(
 			Codec:      newSerializedUpdateAppCodec(),
 			Handler:    handler.updateApp,
 			SourceType: router.Body,
-			Sanitizer:  forwardCompatibleProtoSanitizer[*opensplunkv1.UpdateAppRequest],
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: requestBytes},
 		}),
 		newForwardCompatibleProtoRoute[
@@ -232,7 +228,6 @@ func (handler *apiHandler) appAdministrationRoutes(
 			Codec:      newSerializedSetAppStateCodec(),
 			Handler:    handler.setAppState,
 			SourceType: router.Body,
-			Sanitizer:  forwardCompatibleProtoSanitizer[*opensplunkv1.SetAppStateRequest],
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
 		newForwardCompatibleProtoRoute[
@@ -247,7 +242,6 @@ func (handler *apiHandler) appAdministrationRoutes(
 			Codec:      newSerializedDeleteAppCodec(),
 			Handler:    handler.deleteApp,
 			SourceType: router.Body,
-			Sanitizer:  forwardCompatibleProtoSanitizer[*opensplunkv1.DeleteAppRequest],
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
 	}
@@ -946,7 +940,7 @@ func normalizeAppAdministrationDescription(
 	if value == "" {
 		return nil, nil
 	}
-	return stringPointer(value), nil
+	return new(value), nil
 }
 
 func normalizeAppAdministrationIndexes(input []string) ([]string, error) {
@@ -1017,7 +1011,7 @@ func cloneOptionalString(input *string) *string {
 	if input == nil {
 		return nil
 	}
-	return stringPointer(strings.Clone(*input))
+	return new(strings.Clone(*input))
 }
 
 var errAppAdministrationImmutableSlug = errors.New("app slug is immutable")
@@ -1634,7 +1628,7 @@ func (handler *apiHandler) appAdministrationListToProto(
 		if err != nil {
 			return nil, err
 		}
-		page.NextPageToken = stringPointer(token)
+		page.NextPageToken = new(token)
 	}
 	if result.TotalSize != nil {
 		total := *result.TotalSize

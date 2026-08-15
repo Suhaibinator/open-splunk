@@ -104,7 +104,7 @@ func TestCollectAppliesEachPerIndexLimitToOnlyThatIndex(t *testing.T) {
 			})
 			harness := newServiceHarness(t, testServiceConfig(), authorizer, store)
 			stream := harness.stream(t, "Bearer good-token")
-			sendHello(t, stream, 1, 1, 0)
+			sendHello(t, stream, 1)
 			_ = recvResponse(t, stream)
 			batchID := "batch-limit-" + strings.ReplaceAll(test.name, " ", "-")
 			if err := stream.Send(batchRequest(2, validTestBatch(
@@ -216,7 +216,7 @@ func TestCollectAppliesDefaultSourcetypeAndSnapshotsExactRetention(t *testing.T)
 	})
 	harness := newServiceHarness(t, testServiceConfig(), authorizer, store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1, 1, 0)
+	sendHello(t, stream, 1)
 	_ = recvResponse(t, stream)
 
 	defaulted := validTestEvent("event-defaulted", "main")
@@ -267,7 +267,7 @@ func TestCollectUsesServerReceiveTimeForPerIndexTimestampLimits(t *testing.T) {
 	})
 	harness := newServiceHarness(t, testServiceConfig(), authorizer, acceptingStore())
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1, 1, 0)
+	sendHello(t, stream, 1)
 	_ = recvResponse(t, stream)
 
 	event := validTestEvent("event-reference", "main")
@@ -333,7 +333,7 @@ func TestCollectKeepsAuthorizationBoundaryTimeThroughPolicyRefresh(t *testing.T)
 	})
 	harness := newServiceHarness(t, config, authorizer, store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1, 1, 0)
+	sendHello(t, stream, 1)
 	_ = recvResponse(t, stream)
 
 	event := validTestEvent("event-boundary", "main")
@@ -409,7 +409,7 @@ func TestCollectUsesOneServerTimeSnapshotAcrossHeartbeatBoundary(t *testing.T) {
 	config.SessionManager = manager
 	harness := newServiceHarness(t, config, authorizer, acceptingStore())
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1, 1, 0)
+	sendHello(t, stream, 1)
 	_ = recvResponse(t, stream)
 
 	measure.Store(true)
@@ -493,7 +493,7 @@ func TestCollectMutableIndexAuthorityFailureBlocksHeartbeatBeforePersistence(t *
 			config.SessionManager = manager
 			harness := newServiceHarness(t, config, authorizer, acceptingStore())
 			stream := harness.stream(t, "Bearer good-token")
-			sendHello(t, stream, 1, 1, 0)
+			sendHello(t, stream, 1)
 			_ = recvResponse(t, stream)
 			if err := stream.Send(&opensplunkv1.CollectRequest{
 				StreamSequence: 2,
@@ -588,7 +588,7 @@ func TestCollectAppliesIndexTimestampPolicyFromServerReceiveTime(t *testing.T) {
 	})
 	harness := newServiceHarness(t, testServiceConfig(), authorizer, store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1, 1, 0)
+	sendHello(t, stream, 1)
 	_ = recvResponse(t, stream)
 
 	collectorReference := validationTestNow.Add(-2 * time.Hour)
@@ -646,7 +646,7 @@ func TestCollectClassifiesInvalidAndUnauthorizedIndexesBeforeDeepValidation(t *t
 	})
 	harness := newServiceHarness(t, testServiceConfig(), authorizer, store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1, 1, 0)
+	sendHello(t, stream, 1)
 	_ = recvResponse(t, stream)
 
 	unauthorized := &opensplunkv1.LogEvent{EventId: "shared-id", IndexName: "forbidden"}
@@ -719,7 +719,7 @@ func TestCollectRefreshesResolvedIndexPolicyAtEveryBatchBoundary(t *testing.T) {
 	store := &recoverableTestStore{}
 	harness := newServiceHarness(t, config, authorizer, store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1, 1, 0)
+	sendHello(t, stream, 1)
 	_ = recvResponse(t, stream)
 
 	first := validTestEvent("event-first", "main")
@@ -797,7 +797,7 @@ func TestCollectDurableRetryPrecedesMutableIndexAuthorityFailure(t *testing.T) {
 			store := &recoverableTestStore{}
 			harness := newServiceHarness(t, config, authorizer, store)
 			stream := harness.stream(t, "Bearer good-token")
-			sendHello(t, stream, 1, 1, 0)
+			sendHello(t, stream, 1)
 			_ = recvResponse(t, stream)
 
 			batch := validTestBatch(
@@ -903,7 +903,7 @@ func TestCollectRejectedRetryPrecedesMutableIndexAuthorityFailure(t *testing.T) 
 	config.SessionManager = manager
 	harness := newServiceHarness(t, config, authorizer, store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1, 1, 0)
+	sendHello(t, stream, 1)
 	_ = recvResponse(t, stream)
 	if err := stream.Send(batchRequest(2, batch)); err != nil {
 		t.Fatal(err)
@@ -964,7 +964,7 @@ func TestCollectPendingRetryPrecedesMutableIndexAuthorityFailure(t *testing.T) {
 			config.SessionManager = manager
 			harness := newServiceHarness(t, config, authorizer, store)
 			stream := harness.stream(t, "Bearer good-token")
-			sendHello(t, stream, 1, 1, 0)
+			sendHello(t, stream, 1)
 			_ = recvResponse(t, stream)
 			if err := stream.Send(batchRequest(2, validTestBatch(
 				"collector-a", "batch-pending-policy", 1, validTestEvent("event-pending", "main"),
@@ -1034,7 +1034,7 @@ func TestCollectFatalOrMalformedLeaseAuthorizationNeverLooksUpDurableBatch(t *te
 			store := &recoverableTestStore{}
 			harness := newServiceHarness(t, config, authorizer, store)
 			stream := harness.stream(t, "Bearer good-token")
-			sendHello(t, stream, 1, 1, 0)
+			sendHello(t, stream, 1)
 			_ = recvResponse(t, stream)
 			if err := stream.Send(batchRequest(2, validTestBatch(
 				"collector-a", "batch-no-lookup", 1, validTestEvent("event-no-lookup", "main"),
@@ -1183,7 +1183,7 @@ func TestCollectFailsClosedForInvalidAdmittedIndexPolicies(t *testing.T) {
 			})
 			harness := newServiceHarness(t, testServiceConfig(), authorizer, acceptingStore())
 			stream := harness.stream(t, "Bearer good-token")
-			sendHello(t, stream, 1, 1, 0)
+			sendHello(t, stream, 1)
 			_, err := stream.Recv()
 			if got := status.Code(err); got != codes.Unavailable {
 				t.Fatalf("Collect error = %v (%v), want Unavailable", err, got)

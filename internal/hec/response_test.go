@@ -78,11 +78,11 @@ func TestResponseOptionalMembersAreValidatedAndOrdered(t *testing.T) {
 		{name: "invalid event", response: Response{Code: ResultInvalidDataFormat, InvalidEventNumber: &eventNumber}, limit: HardMaximumResponseBytes, want: `{"text":"Invalid data format","code":6,"invalid-event-number":4}`},
 		{name: "ack", response: Response{Code: ResultSuccess, AckID: &ackID}, limit: HardMaximumResponseBytes, want: `{"text":"Success","code":0,"ackId":9007199254740991}`},
 		{name: "unknown code", response: Response{Code: 100}, limit: HardMaximumResponseBytes, wantErr: true},
-		{name: "negative event", response: Response{Code: ResultInvalidDataFormat, InvalidEventNumber: pointer(-1)}, limit: HardMaximumResponseBytes, wantErr: true},
+		{name: "negative event", response: Response{Code: ResultInvalidDataFormat, InvalidEventNumber: new(-1)}, limit: HardMaximumResponseBytes, wantErr: true},
 		{name: "event on success", response: Response{Code: ResultSuccess, InvalidEventNumber: &eventNumber}, limit: HardMaximumResponseBytes, wantErr: true},
-		{name: "zero ack", response: Response{Code: ResultSuccess, AckID: pointer(int64(0))}, limit: HardMaximumResponseBytes, wantErr: true},
-		{name: "negative ack", response: Response{Code: ResultSuccess, AckID: pointer(int64(-1))}, limit: HardMaximumResponseBytes, wantErr: true},
-		{name: "inexact ack", response: Response{Code: ResultSuccess, AckID: pointer(MaximumEmittedAcknowledgmentID + 1)}, limit: HardMaximumResponseBytes, wantErr: true},
+		{name: "zero ack", response: Response{Code: ResultSuccess, AckID: new(int64(0))}, limit: HardMaximumResponseBytes, wantErr: true},
+		{name: "negative ack", response: Response{Code: ResultSuccess, AckID: new(int64(-1))}, limit: HardMaximumResponseBytes, wantErr: true},
+		{name: "inexact ack", response: Response{Code: ResultSuccess, AckID: new(MaximumEmittedAcknowledgmentID + 1)}, limit: HardMaximumResponseBytes, wantErr: true},
 		{name: "ack on failure", response: Response{Code: ResultInvalidDataFormat, AckID: &ackID}, limit: HardMaximumResponseBytes, wantErr: true},
 		{name: "both optionals", response: Response{Code: ResultSuccess, AckID: &ackID, InvalidEventNumber: &eventNumber}, limit: HardMaximumResponseBytes, wantErr: true},
 		{name: "invalid zero limit", response: NewResponse(ResultSuccess), limit: 0, wantErr: true},
@@ -237,5 +237,3 @@ func FuzzMarshalResponse(f *testing.F) {
 		}
 	})
 }
-
-func pointer[T any](value T) *T { return &value }

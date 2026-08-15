@@ -27,6 +27,69 @@ type ResultShape struct {
 	RuntimeNamedColumns bool
 }
 
+// State projects an internal lifecycle state to its wire representation.
+// Values unknown to this binary fail closed as UNSPECIFIED so callers can
+// reject snapshots whose state cannot be represented safely.
+func State(state searchjobs.State) opensplunkv1.SearchJobState {
+	switch state {
+	case searchjobs.StateQueued:
+		return opensplunkv1.SearchJobState_SEARCH_JOB_STATE_QUEUED
+	case searchjobs.StateParsing:
+		return opensplunkv1.SearchJobState_SEARCH_JOB_STATE_PARSING
+	case searchjobs.StatePlanning:
+		return opensplunkv1.SearchJobState_SEARCH_JOB_STATE_PLANNING
+	case searchjobs.StateRunning:
+		return opensplunkv1.SearchJobState_SEARCH_JOB_STATE_RUNNING
+	case searchjobs.StateCompleted:
+		return opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED
+	case searchjobs.StateFailed:
+		return opensplunkv1.SearchJobState_SEARCH_JOB_STATE_FAILED
+	case searchjobs.StateCanceled:
+		return opensplunkv1.SearchJobState_SEARCH_JOB_STATE_CANCELED
+	case searchjobs.StateExpired:
+		return opensplunkv1.SearchJobState_SEARCH_JOB_STATE_EXPIRED
+	default:
+		return opensplunkv1.SearchJobState_SEARCH_JOB_STATE_UNSPECIFIED
+	}
+}
+
+// Failure projects the complete shared HTTP and WebSocket failure surface.
+func Failure(failure searchjobs.Failure) *opensplunkv1.SearchFailure {
+	return &opensplunkv1.SearchFailure{
+		Code:        FailureCode(failure.Code),
+		Message:     failure.Message,
+		Retryable:   failure.Retryable,
+		Diagnostics: Diagnostics(failure.Diagnostics),
+	}
+}
+
+// FailureCode projects an internal failure code to its wire representation.
+// Values unknown to this binary remain UNSPECIFIED for caller-side validation.
+func FailureCode(code searchjobs.FailureCode) opensplunkv1.SearchFailureCode {
+	switch code {
+	case searchjobs.FailureInvalidSPL:
+		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_INVALID_SPL
+	case searchjobs.FailureUnsupportedSPL:
+		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_UNSUPPORTED_SPL
+	case searchjobs.FailureInvalidTimeRange:
+		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_INVALID_TIME_RANGE
+	case searchjobs.FailureIndexForbidden:
+		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_INDEX_FORBIDDEN
+	case searchjobs.FailureResourceLimit:
+		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_RESOURCE_LIMIT
+	case searchjobs.FailureTimeout:
+		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_TIMEOUT
+	case searchjobs.FailureStorageUnavailable:
+		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_STORAGE_UNAVAILABLE
+	case searchjobs.FailureExecution:
+		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_EXECUTION
+	case searchjobs.FailureInternal:
+		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_INTERNAL
+	default:
+		return opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_UNSPECIFIED
+	}
+}
+
 // ResultShapeForSPL classifies the result shape from the final transforming
 // command while preserving event semantics for non-transforming pipelines.
 func ResultShapeForSPL(source string) ResultShape {
@@ -124,11 +187,11 @@ func TimeRange(job searchjobs.Job) (*opensplunkv1.TimeRangeSpec, string, error) 
 		return nil, "", errors.New("invalid search-job time-range intent")
 	}
 	result := &opensplunkv1.TimeRangeSpec{
-		Earliest: stringPointer(intent.Earliest),
-		Latest:   stringPointer(intent.Latest),
+		Earliest: new(intent.Earliest),
+		Latest:   new(intent.Latest),
 	}
 	if intent.TimezoneSpecified {
-		result.Timezone = stringPointer(intent.Timezone)
+		result.Timezone = new(intent.Timezone)
 	}
 	return result, intent.Timezone, nil
 }
@@ -146,13 +209,13 @@ func Source(source searchjobs.JobSource) (*opensplunkv1.SearchJobSource, error) 
 		result.Origin = opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_AD_HOC
 	case searchjobs.JobOriginSavedSearch:
 		result.Origin = opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH
-		result.SavedSearchId = stringPointer(source.ObjectID)
+		result.SavedSearchId = new(source.ObjectID)
 	case searchjobs.JobOriginHistoryRerun:
 		result.Origin = opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN
-		result.HistorySearchId = stringPointer(source.ObjectID)
+		result.HistorySearchId = new(source.ObjectID)
 	case searchjobs.JobOriginDashboard:
 		result.Origin = opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_DASHBOARD
-		result.DashboardId = stringPointer(source.ObjectID)
+		result.DashboardId = new(source.ObjectID)
 	case searchjobs.JobOriginAPI:
 		result.Origin = opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_API
 	default:
@@ -160,5 +223,3 @@ func Source(source searchjobs.JobSource) (*opensplunkv1.SearchJobSource, error) 
 	}
 	return result, nil
 }
-
-func stringPointer(value string) *string { return &value }

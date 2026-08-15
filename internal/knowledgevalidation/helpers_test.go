@@ -35,7 +35,7 @@ func calculatedDefinition(name, expression string) *opensplunkv1.KnowledgeObject
 	}
 }
 
-func regexDefinition(name, pattern string, outputs ...string) *opensplunkv1.KnowledgeObjectDefinition {
+func regexDefinition(name string, outputs ...string) *opensplunkv1.KnowledgeObjectDefinition {
 	return &opensplunkv1.KnowledgeObjectDefinition{
 		AppId:        "app-a",
 		Name:         name,
@@ -45,7 +45,7 @@ func regexDefinition(name, pattern string, outputs ...string) *opensplunkv1.Know
 				InputField: "_raw",
 				Extraction: &opensplunkv1.FieldExtractionDefinition_Regex{
 					Regex: &opensplunkv1.RegexFieldExtractionDefinition{
-						Pattern:      pattern,
+						Pattern:      `(?P<value>x)`,
 						OutputFields: append([]string(nil), outputs...),
 					},
 				},

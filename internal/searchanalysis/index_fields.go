@@ -195,7 +195,7 @@ func (service *FieldService) ListIndexFields(
 	if err != nil {
 		return FieldPage{}, err
 	}
-	for attempt := 0; attempt < 2; attempt++ {
+	for range 2 {
 		entry, catalogErr := service.catalogFor(
 			ctx,
 			key,

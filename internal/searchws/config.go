@@ -9,13 +9,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"reflect"
 	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
+	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 )
 
@@ -169,10 +169,10 @@ type normalizedConfig struct {
 }
 
 func normalizeConfig(config Config) (normalizedConfig, error) {
-	if isNil(config.Searches) {
+	if nilcheck.IsNil(config.Searches) {
 		return normalizedConfig{}, errors.New("create search websocket: search snapshot reader is required")
 	}
-	if isNil(config.Exports) {
+	if nilcheck.IsNil(config.Exports) {
 		return normalizedConfig{}, errors.New("create search websocket: export snapshot reader is required")
 	}
 	if err := validateIdentity(config.Access.TenantID, "tenant"); err != nil {
@@ -376,19 +376,6 @@ func validateIdentity(value, name string) error {
 		return fmt.Errorf("create search websocket: %s identity is invalid", name)
 	}
 	return nil
-}
-
-func isNil(value any) bool {
-	if value == nil {
-		return true
-	}
-	reflected := reflect.ValueOf(value)
-	switch reflected.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return reflected.IsNil()
-	default:
-		return false
-	}
 }
 
 func sameOrigin(request *http.Request) bool {

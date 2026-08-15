@@ -460,7 +460,7 @@ func TestKnowledgeFeatureRequiresCompleteRuntimeFamily(t *testing.T) {
 			enabled:          true,
 			executionEnabled: true,
 		}
-		config.AppCatalog = activeHistoryRerunAppCatalog("app-main")
+		config.AppCatalog = activeHistoryRerunAppCatalog()
 		config.KnowledgeCatalog = &knowledgeHTTPCatalog{}
 		config.KnowledgeWriter = writer
 		config.KnowledgeApps = knowledgeHTTPApps()
@@ -659,7 +659,7 @@ func TestKnowledgeHTTPPrincipalIdentityMismatchIsJournaledBeforeDecode(t *testin
 	handler, httpHandler := newKnowledgeHTTPHandler(t, auth.BrowserRoleAdministrator, &knowledgeHTTPCatalog{}, &knowledgeHTTPWriter{}, knowledgeHTTPApps(), appender)
 	handler.tenantID = "different-tenant"
 	body := newKnowledgeBoundaryObservedBody("not protobuf", nil)
-	request := knowledgeBoundaryRequest(context.Background(), http.MethodPost, knowledgeObjectsCreatePath, body)
+	request := knowledgeBoundaryRequest(context.Background(), knowledgeObjectsCreatePath, body)
 	request.Host = "example.com"
 	request.Header.Set("Origin", "http://example.com")
 	response := httptest.NewRecorder()

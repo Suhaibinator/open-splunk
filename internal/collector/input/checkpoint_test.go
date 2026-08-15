@@ -456,7 +456,7 @@ func TestCheckpointStoreAtomicRewriteNoTempLeak(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		id := canonicalIdentityForTest(1, uint64(i), 1, "ab", 64)
 		if err := store.Set(Checkpoint{
 			InputID: checkpointTestInputID, Identity: id,

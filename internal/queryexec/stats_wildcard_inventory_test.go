@@ -153,7 +153,7 @@ func TestStatsWildcardInventorySettingsPreservePrefixGroupsAndMaximumName(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	settings, err := settingsForStatsWildcardInventory(base, 17)
+	settings, err := settingsForStatsWildcardInventory(mustValidatedSettings(t, base), 17)
 	if err != nil {
 		t.Fatal(err)
 	}

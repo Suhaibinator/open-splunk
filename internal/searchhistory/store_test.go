@@ -49,8 +49,8 @@ func historyEntry(id, spl, app string, state opensplunkv1.SearchJobState, create
 			AppId:      &appID,
 			IndexScope: []string{"main"},
 			TimeRange: &opensplunkv1.TimeRangeSpec{
-				Earliest: stringPointer("-15m"),
-				Latest:   stringPointer("now"),
+				Earliest: new("-15m"),
+				Latest:   new("now"),
 			},
 		},
 		Source:              &opensplunkv1.SearchJobSource{Origin: opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_AD_HOC},
@@ -192,7 +192,7 @@ func TestRecordValidationRejectsUnsafeOrIncompleteEntries(t *testing.T) {
 			entry.FinishedAt = timestamppb.New(entry.CreatedAt.AsTime().Add(-time.Second))
 		}},
 		{name: "source ID mismatch", mutate: func(entry *opensplunkv1.SearchHistoryEntry) {
-			entry.Source.SavedSearchId = stringPointer("saved-unrelated")
+			entry.Source.SavedSearchId = new("saved-unrelated")
 		}},
 		{name: "too many indexes", mutate: func(entry *opensplunkv1.SearchHistoryEntry) {
 			entry.EffectiveIndexScope = make([]string, maximumIndexScope+1)
@@ -381,11 +381,11 @@ func TestListFilterQueriesUseCompositeIndexes(t *testing.T) {
 			wantIndex: "search_history_owner_created_idx",
 		},
 		"app": {
-			request:   ListRequest{AppIDFilter: stringPointer("search")},
+			request:   ListRequest{AppIDFilter: new("search")},
 			wantIndex: "search_history_owner_app_created_idx",
 		},
 		"saved": {
-			request:   ListRequest{SavedSearchIDFilter: stringPointer("saved-1")},
+			request:   ListRequest{SavedSearchIDFilter: new("saved-1")},
 			wantIndex: "search_history_owner_saved_created_idx",
 		},
 	}
@@ -490,5 +490,3 @@ func entryIDs(entries []*opensplunkv1.SearchHistoryEntry) []string {
 	}
 	return ids
 }
-
-func stringPointer(value string) *string { return &value }

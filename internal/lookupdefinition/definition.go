@@ -320,7 +320,7 @@ func normalizeSelector(input *opensplunkv1.KnowledgeSelector) (*knowledge.Select
 	}
 	compiled, err := knowledge.CompileSelector(spec)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: selector: %v", ErrInvalid, err)
+		return nil, nil, fmt.Errorf("%w: selector: %w", ErrInvalid, err)
 	}
 	canonical := &opensplunkv1.KnowledgeSelector{}
 	for _, dimension := range dimensions {

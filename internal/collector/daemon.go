@@ -26,7 +26,6 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/collector/wal"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/google/uuid"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -876,10 +875,7 @@ func buildInput(in *config.InputConfig, defaultHost string, checkpoints input.Ma
 		sourcetype = in.Format
 	}
 
-	service, constants, err := buildConstants(in.Fields)
-	if err != nil {
-		return nil, nil, false, fmt.Errorf("input %q: fields: %w", in.ID, err)
-	}
+	service, constants := buildConstants(in.Fields)
 
 	dec, err := NewDecoder(DecodeConfig{
 		Format:         InputFormat(in.Format),
@@ -900,8 +896,8 @@ func buildInput(in *config.InputConfig, defaultHost string, checkpoints input.Ma
 		InputId:    in.ID,
 		InputType:  opensplunkv1.CollectorInputType_COLLECTOR_INPUT_TYPE_FILE,
 		IndexName:  index,
-		Source:     proto.String(source),
-		Sourcetype: proto.String(sourcetype),
+		Source:     new(source),
+		Sourcetype: new(sourcetype),
 	}
 	return &inputRuntime{id: in.ID, manager: mgr, decoder: dec}, reg, multiline, nil
 }
@@ -910,9 +906,9 @@ func buildInput(in *config.InputConfig, defaultHost string, checkpoints input.Ma
 // TypedObject fields, extracting the canonical "service" key into its own return
 // value (the decoder rejects it as a constant because it is reserved metadata).
 // Keys are emitted in sorted order for deterministic output.
-func buildConstants(fields map[string]string) (string, *opensplunkv1.TypedObject, error) {
+func buildConstants(fields map[string]string) (string, *opensplunkv1.TypedObject) {
 	if len(fields) == 0 {
-		return "", nil, nil
+		return "", nil
 	}
 	keys := make([]string, 0, len(fields))
 	for k := range fields {
@@ -933,9 +929,9 @@ func buildConstants(fields map[string]string) (string, *opensplunkv1.TypedObject
 		})
 	}
 	if len(converted) == 0 {
-		return service, nil, nil
+		return service, nil
 	}
-	return service, &opensplunkv1.TypedObject{Fields: converted}, nil
+	return service, &opensplunkv1.TypedObject{Fields: converted}
 }
 
 // capabilities returns the CollectorCapabilities advertised in the Hello.

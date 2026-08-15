@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -375,10 +376,9 @@ func TestSettingsForFieldCatalogClonesAndTightensEveryResourceCap(t *testing.T) 
 	}
 	base["use_query_cache"] = uint8(1)
 	before := clickhousedriver.Settings{}
-	for key, value := range base {
-		before[key] = value
-	}
-	got, err := settingsForFieldCatalog(base, 73, 0)
+	maps.Copy(before, base)
+	validated := mustValidatedSettings(t, base)
+	got, err := settingsForFieldCatalog(validated, 73, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -418,7 +418,7 @@ func TestSettingsForFieldCatalogClonesAndTightensEveryResourceCap(t *testing.T) 
 		{name: "physical boundary", knowledgeGeneratedFields: clickhouse.MaximumClickHouseKnowledgeGeneratedFields, wantMemory: MaximumFieldCatalogMemoryBytes},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			settings, err := settingsForFieldCatalog(base, 73, test.knowledgeGeneratedFields)
+			settings, err := settingsForFieldCatalog(validated, 73, test.knowledgeGeneratedFields)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -449,7 +449,11 @@ func TestSettingsForFieldCatalogClonesAndTightensEveryResourceCap(t *testing.T) 
 	base["max_result_bytes"] = uint64(1024)
 	base["max_rows_to_group_by"] = uint64(5)
 	base["max_threads"] = uint64(1)
-	strict, err := settingsForFieldCatalog(base, 73, clickhouse.MaximumClickHouseKnowledgeGeneratedFields)
+	strict, err := settingsForFieldCatalog(
+		mustValidatedSettings(t, base),
+		73,
+		clickhouse.MaximumClickHouseKnowledgeGeneratedFields,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -465,79 +469,20 @@ func TestSettingsForFieldCatalogClonesAndTightensEveryResourceCap(t *testing.T) 
 	}
 }
 
-func TestSettingsForFieldCatalogRejectsInvalidBaseSettings(t *testing.T) {
+func TestSettingsForFieldCatalogRejectsInvalidLimits(t *testing.T) {
 	base, err := querySettings(Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{
-		"max_execution_time", "max_memory_usage", "max_rows_to_read", "max_bytes_to_read",
-		"max_result_rows", "max_result_bytes", "max_rows_to_group_by", "max_threads", "max_query_size",
-		"max_subquery_depth",
-	} {
-		t.Run(name+" missing", func(t *testing.T) {
-			malformed := cloneFieldCatalogSettings(base)
-			delete(malformed, name)
-			if _, err := settingsForFieldCatalog(malformed, 1, 0); err == nil {
-				t.Fatalf("missing %s unexpectedly accepted", name)
-			}
-		})
-		t.Run(name+" zero", func(t *testing.T) {
-			malformed := cloneFieldCatalogSettings(base)
-			malformed[name] = uint64(0)
-			if _, err := settingsForFieldCatalog(malformed, 1, 0); err == nil {
-				t.Fatalf("zero %s unexpectedly accepted", name)
-			}
-		})
-		t.Run(name+" wrong type", func(t *testing.T) {
-			malformed := cloneFieldCatalogSettings(base)
-			malformed[name] = "1"
-			if _, err := settingsForFieldCatalog(malformed, 1, 0); err == nil {
-				t.Fatalf("wrong type %s unexpectedly accepted", name)
-			}
-		})
-	}
-	for _, name := range []string{"timeout_overflow_mode", "read_overflow_mode", "result_overflow_mode", "group_by_overflow_mode"} {
-		t.Run(name, func(t *testing.T) {
-			malformed := cloneFieldCatalogSettings(base)
-			malformed[name] = "break"
-			if _, err := settingsForFieldCatalog(malformed, 1, 0); err == nil {
-				t.Fatalf("unsafe %s unexpectedly accepted", name)
-			}
-		})
-	}
-	for _, test := range []struct {
-		name  string
-		value any
-	}{
-		{name: "enable_materialized_cte", value: uint8(0)},
-		{name: "short_circuit_function_evaluation", value: "disable"},
-		{name: "async_insert", value: uint8(1)},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			malformed := cloneFieldCatalogSettings(base)
-			malformed[test.name] = test.value
-			if _, err := settingsForFieldCatalog(malformed, 1, 0); err == nil {
-				t.Fatalf("unsafe %s unexpectedly accepted", test.name)
-			}
-		})
-	}
-	for _, malformed := range []clickhousedriver.Settings{nil, cloneFieldCatalogSettings(base)} {
-		if malformed != nil {
-			malformed["readonly"] = uint8(1)
-		}
-		if _, err := settingsForFieldCatalog(malformed, 1, 0); err == nil {
-			t.Fatalf("settingsForFieldCatalog(%#v) unexpectedly succeeded", malformed)
-		}
-	}
-	if _, err := settingsForFieldCatalog(base, 0, 0); err == nil {
+	validated := mustValidatedSettings(t, base)
+	if _, err := settingsForFieldCatalog(validated, 0, 0); err == nil {
 		t.Fatal("zero maximum fields unexpectedly accepted")
 	}
-	if _, err := settingsForFieldCatalog(base, clickhouse.MaximumFieldCatalogFields+1, 0); err == nil {
+	if _, err := settingsForFieldCatalog(validated, clickhouse.MaximumFieldCatalogFields+1, 0); err == nil {
 		t.Fatal("oversized maximum fields unexpectedly accepted")
 	}
 	if _, err := settingsForFieldCatalog(
-		base,
+		validated,
 		1,
 		clickhouse.MaximumClickHouseKnowledgeGeneratedFields+1,
 	); err == nil {
@@ -550,6 +495,7 @@ func TestSettingsForFieldCatalogIsRaceSafeForConcurrentReaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	validated := mustValidatedSettings(t, base)
 	const workers = 32
 	var wait sync.WaitGroup
 	wait.Add(workers)
@@ -557,7 +503,7 @@ func TestSettingsForFieldCatalogIsRaceSafeForConcurrentReaders(t *testing.T) {
 		go func() {
 			defer wait.Done()
 			knowledgeGeneratedFields := uint32(index % 17)
-			got, err := settingsForFieldCatalog(base, uint32(index+1), knowledgeGeneratedFields)
+			got, err := settingsForFieldCatalog(validated, uint32(index+1), knowledgeGeneratedFields)
 			if err != nil {
 				t.Errorf("settingsForFieldCatalog() error = %v", err)
 				return
@@ -624,9 +570,7 @@ func assertFieldCatalogError(t *testing.T, got FieldCatalogResult, err, want err
 
 func cloneFieldCatalogSettings(settings clickhousedriver.Settings) clickhousedriver.Settings {
 	cloned := clickhousedriver.Settings{}
-	for key, value := range settings {
-		cloned[key] = value
-	}
+	maps.Copy(cloned, settings)
 	return cloned
 }
 

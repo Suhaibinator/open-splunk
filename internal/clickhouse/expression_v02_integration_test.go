@@ -43,7 +43,6 @@ func TestExpressionV02AgainstClickHouse(t *testing.T) {
 
 	arithmeticEvent := expressionV02StoredEvent(
 		"arithmetic",
-		"expression-v02",
 		indexTime,
 		typedField("dyn_int", typedSint(5)),
 		typedField("dyn_float", typedDouble(2.5)),
@@ -55,21 +54,18 @@ func TestExpressionV02AgainstClickHouse(t *testing.T) {
 	)
 	membershipMatch := expressionV02StoredEvent(
 		"membership-match",
-		"expression-v02",
 		indexTime,
 		typedField("status", typedString("A")),
 		typedField("numeric_status", typedSint(2)),
 	)
 	membershipCaseMismatch := expressionV02StoredEvent(
 		"membership-case-mismatch",
-		"expression-v02",
 		indexTime,
 		typedField("status", typedString("a")),
 		typedField("numeric_status", typedString("2")),
 	)
 	membershipNull := expressionV02StoredEvent(
 		"membership-null",
-		"expression-v02",
 		indexTime,
 		typedField("status", typedNull()),
 		typedField("numeric_status", typedNull()),
@@ -638,11 +634,10 @@ func TestExpressionV02AgainstClickHouse(t *testing.T) {
 
 func expressionV02StoredEvent(
 	eventID string,
-	index string,
 	indexTime time.Time,
 	fields ...*opensplunkv1.TypedObjectField,
 ) *ingest.StoredEvent {
-	event := testStoredEvent(eventID, index, indexTime)
+	event := testStoredEvent(eventID, "expression-v02", indexTime)
 	event.Event.Source = "expression-v02"
 	event.Event.Fields = typedObjectValue(fields...)
 	return event
@@ -657,6 +652,6 @@ func expressionV02IntegrationScope(indexTime time.Time, visibility uint64) plan.
 		SearchStart:       indexTime.Add(time.Second),
 		SearchTimezone:    "UTC",
 		IndexTimeCutoff:   indexTime.Add(time.Second),
-		VisibilityCutoff:  uint64PointerForIntegration(visibility),
+		VisibilityCutoff:  new(visibility),
 	}
 }

@@ -61,12 +61,12 @@ import {
 } from "@/gen/ts/open_splunk/v1/search_ws";
 import { ServerFeature } from "@/gen/ts/open_splunk/v1/system_api";
 import {
+  analyzeSPLIndexScope,
   assertBrowserResultPageBounds,
   SearchWebSocketClient,
   clearAdministratorBearerToken,
   createOpenSplunkApiClient,
   getSystemBootstrap,
-  indexSelectorsFromSPL,
   isHttpError,
   isHttpStatus,
   pruneCursorChainFrom,
@@ -74,7 +74,6 @@ import {
   RepeatedPageCursorError,
   resolveExactIndexScope,
   searchJobTarget,
-  splIndexScopeIsExhaustive,
   supportsServerFeature,
   type SystemBootstrapModel,
 } from "@/lib/api";
@@ -98,6 +97,10 @@ import {
 } from "@/lib/search/server-inspection";
 import { applyFieldPivot, type PivotMode } from "@/lib/search/query-pivots";
 import { splFromFindInput } from "@/lib/search/launch-url";
+import {
+  duplicateSavedSearchName,
+  savedSearchNameWithSuffix,
+} from "@/lib/search/saved-search-names";
 import {
   cancelServerExport,
   clearServerSearchHistory,
@@ -210,7 +213,6 @@ const TERMINAL_HISTORY_STATES = [
 ] as const;
 const DEFAULT_BACKEND_PAGE_SIZE = 1_000;
 const MAX_CACHED_RESULT_PAGES = 8;
-const MAXIMUM_SAVED_SEARCH_NAME_BYTES = 255;
 const MAXIMUM_READABLE_DUPLICATE_NAME_ATTEMPTS = 8;
 const MAXIMUM_RANDOM_DUPLICATE_NAME_ATTEMPTS = 3;
 const REST_RECOVERY_DELAYS_MS = [1_500, 2_500, 5_000, 10_000] as const;
@@ -418,35 +420,6 @@ function savedSearchConflictKind(error: unknown): SavedSearchConflictKind | null
   return "unknown";
 }
 
-function truncateUtf8ToByteLength(value: string, maximumBytes: number): string {
-  const encoder = new TextEncoder();
-  let byteLength = 0;
-  let result = "";
-  for (const character of value) {
-    const characterBytes = encoder.encode(character).byteLength;
-    if (byteLength + characterBytes > maximumBytes) break;
-    result += character;
-    byteLength += characterBytes;
-  }
-  return result;
-}
-
-function savedSearchNameWithSuffix(name: string, suffix: string): string {
-  const suffixBytes = new TextEncoder().encode(suffix).byteLength;
-  const base = truncateUtf8ToByteLength(
-    name.trim(),
-    Math.max(0, MAXIMUM_SAVED_SEARCH_NAME_BYTES - suffixBytes),
-  ).trimEnd();
-  return `${base}${suffix}`.trim();
-}
-
-function duplicateSavedSearchName(name: string, copyNumber: number): string {
-  return savedSearchNameWithSuffix(
-    name,
-    copyNumber <= 1 ? " copy" : ` copy ${copyNumber}`,
-  );
-}
-
 function randomDuplicateSavedSearchName(name: string): string {
   const entropy = globalThis.crypto.randomUUID().replaceAll("-", "");
   return savedSearchNameWithSuffix(name, ` copy ${entropy}`);
@@ -457,7 +430,8 @@ function currentBackendServerTime(bootstrap: BackendBootstrapState): Date {
 }
 
 function backendIndexScope(spl: string, bootstrap: BackendBootstrapState): string[] {
-  const selectors = indexSelectorsFromSPL(spl);
+  const analysis = analyzeSPLIndexScope(spl);
+  const { selectors } = analysis;
   const searchableIndexes = bootstrap.response.indexes
     .filter((index) => index.searchable)
     .map((index) => index.name);
@@ -480,7 +454,7 @@ function backendIndexScope(spl: string, bootstrap: BackendBootstrapState): strin
   const selectedApp = bootstrap.response.apps.find((app) => app.appId === bootstrap.response.selectedAppId)
     ?? bootstrap.response.apps[0];
   const appDefaults = selectedApp?.defaultIndexNames.filter((name) => exactNames.has(name)) ?? [];
-  const exhaustivelyConstrained = selectors.length > 0 && splIndexScopeIsExhaustive(spl);
+  const exhaustivelyConstrained = selectors.length > 0 && analysis.exhaustivelyConstrained;
   const unconstrainedBaseline = exhaustivelyConstrained
       ? []
       : appDefaults.length > 0
@@ -2076,7 +2050,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     const markExpired = () => {
       setBackendResultsExpired(true);
       setPhase("expired");
-      setBackendNotices((current) => uniqueMessages([...current, "These retained search results have expired. Run the search again to refresh them."]));
+      setBackendNotices((current) => appendUniqueMessage(current, "These retained search results have expired. Run the search again to refresh them."));
     };
     const armExpiryCheck = () => {
       const bootstrap = backendBootstrapRef.current;
@@ -2151,10 +2125,10 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         summary.topValuesAreApproximate
         || summary.topValues.some((value) => value.countIsApproximate)
       ) {
-        setBackendNotices((current) => uniqueMessages([
-          ...current,
+        setBackendNotices((current) => appendUniqueMessage(
+          current,
           `Top values for ${summary.profile.displayName} are approximate.`,
-        ]));
+        ));
       }
     }).catch((error: unknown) => {
       if (controller.signal.aborted) return;
@@ -2670,10 +2644,10 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           pageSize,
           pageNumber + 1,
         );
-        setBackendNotices((current) => uniqueMessages([
-          ...current,
+        setBackendNotices((current) => appendUniqueMessage(
+          current,
           "The retained result cursor changed while revisiting a page. Further paging was stopped.",
-        ]));
+        ));
       }
     } else {
       try {
@@ -2691,10 +2665,10 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           pageSize,
           pageNumber + 1,
         );
-        setBackendNotices((current) => uniqueMessages([
-          ...current,
+        setBackendNotices((current) => appendUniqueMessage(
+          current,
           `${error instanceof Error ? error.message : "Search results returned an invalid page cursor."} Further paging was stopped.`,
-        ]));
+        ));
       }
     }
     const page: BackendResultPage = {
@@ -2788,28 +2762,28 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         !timelineResult.value.value.complete
         || timelineResult.value.value.buckets.some((bucket) => bucket.partial)
       ) {
-        setBackendNotices((current) => uniqueMessages([
-          ...current,
+        setBackendNotices((current) => appendUniqueMessage(
+          current,
           "The server timeline contains partial buckets.",
-        ]));
+        ));
       }
     } else if (timelineResult.status === "fulfilled") {
       setBackendTimeline([]);
-      setBackendNotices((current) => uniqueMessages([
-        ...current,
+      setBackendNotices((current) => appendUniqueMessage(
+        current,
         "The server did not expose an authoritative timeline for this search.",
-      ]));
+      ));
     } else if (isHttpStatus(timelineResult.reason, 410)) {
       setBackendResultsExpired(true);
       setPhase("expired");
     } else if (!(timelineResult.reason instanceof DOMException && timelineResult.reason.name === "AbortError")) {
       setBackendTimeline([]);
-      setBackendNotices((current) => uniqueMessages([
-        ...current,
+      setBackendNotices((current) => appendUniqueMessage(
+        current,
         timelineResult.reason instanceof Error
           ? `Timeline unavailable: ${timelineResult.reason.message}`
           : "The authoritative timeline could not be loaded.",
-      ]));
+      ));
     }
 
     if (fieldResult.status === "fulfilled" && fieldResult.value.status === "available") {
@@ -2824,10 +2798,10 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       } catch (error) {
         backendFieldCatalogNextPageTokenRef.current = null;
         setBackendFieldsHasMore(false);
-        setBackendNotices((current) => uniqueMessages([
-          ...current,
+        setBackendNotices((current) => appendUniqueMessage(
+          current,
           error instanceof Error ? error.message : "The field catalog returned an invalid page cursor.",
-        ]));
+        ));
       }
       const savedSelection = pendingSavedSelectedFieldsRef.current;
       setFields(fieldResult.value.value.fields.map((profile) => {
@@ -2842,10 +2816,10 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       backendFieldCatalogNextPageTokenRef.current = null;
       setBackendFieldsHasMore(false);
       setFields([]);
-      setBackendNotices((current) => uniqueMessages([
-        ...current,
+      setBackendNotices((current) => appendUniqueMessage(
+        current,
         "The server did not expose an authoritative field catalog for this search.",
-      ]));
+      ));
     } else if (isHttpStatus(fieldResult.reason, 410)) {
       pendingSavedSelectedFieldsRef.current = null;
       setBackendResultsExpired(true);
@@ -2853,12 +2827,12 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     } else if (!(fieldResult.reason instanceof DOMException && fieldResult.reason.name === "AbortError")) {
       pendingSavedSelectedFieldsRef.current = null;
       setFields([]);
-      setBackendNotices((current) => uniqueMessages([
-        ...current,
+      setBackendNotices((current) => appendUniqueMessage(
+        current,
         fieldResult.reason instanceof Error
           ? `Field catalog unavailable: ${fieldResult.reason.message}`
           : "The authoritative field catalog could not be loaded.",
-      ]));
+      ));
     }
     setBackendFieldsLoading(false);
     if (backendMetadataAbortRef.current === controller) backendMetadataAbortRef.current = null;
@@ -2893,10 +2867,10 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       if (result.status === "unavailable") {
         backendFieldCatalogNextPageTokenRef.current = null;
         setBackendFieldsHasMore(false);
-        setBackendNotices((current) => uniqueMessages([
-          ...current,
+        setBackendNotices((current) => appendUniqueMessage(
+          current,
           "Additional server fields are not available.",
-        ]));
+        ));
         return;
       }
       setFields((current) => {
@@ -2920,10 +2894,10 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       } catch (error) {
         backendFieldCatalogNextPageTokenRef.current = null;
         setBackendFieldsHasMore(false);
-        setBackendNotices((current) => uniqueMessages([
-          ...current,
+        setBackendNotices((current) => appendUniqueMessage(
+          current,
           `${error instanceof Error ? error.message : "The field catalog returned an invalid page cursor."} Further paging was stopped.`,
-        ]));
+        ));
       }
     } catch (error) {
       if (controller.signal.aborted) return;
@@ -2935,10 +2909,10 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       } else if (error instanceof RepeatedPageCursorError) {
         backendFieldCatalogNextPageTokenRef.current = null;
         setBackendFieldsHasMore(false);
-        setBackendNotices((current) => uniqueMessages([
-          ...current,
+        setBackendNotices((current) => appendUniqueMessage(
+          current,
           `${error.message} Further paging was stopped.`,
-        ]));
+        ));
       } else {
         showToast(error instanceof Error ? error.message : "Unable to load more server fields.", "warning");
       }
@@ -2989,10 +2963,10 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         "resyncing",
         "The live result preview was discarded because its schema was invalid.",
       );
-      setBackendNotices((current) => uniqueMessages([
-        ...current,
+      setBackendNotices((current) => appendUniqueMessage(
+        current,
         `${validationError} Waiting for authoritative results.`,
-      ]));
+      ));
       return false;
     }
 
@@ -3014,10 +2988,10 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           "resyncing",
           "The live result preview was discarded because its schema changed unexpectedly.",
         );
-        setBackendNotices((current) => uniqueMessages([
-          ...current,
+        setBackendNotices((current) => appendUniqueMessage(
+          current,
           "The server changed a preview schema without advancing its revision. Waiting for authoritative results.",
-        ]));
+        ));
         return false;
       }
       if (backendPreviewRef.current?.schemaId === schema.schemaId) {
@@ -3051,10 +3025,10 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         "resyncing",
         "The live result preview was discarded because its schema was unavailable.",
       );
-      setBackendNotices((current) => uniqueMessages([
-        ...current,
+      setBackendNotices((current) => appendUniqueMessage(
+        current,
         "The server sent preview rows before their result schema. Waiting for authoritative results.",
-      ]));
+      ));
       return;
     }
 
@@ -3071,10 +3045,10 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         "resyncing",
         "The live result preview was discarded because it failed validation.",
       );
-      setBackendNotices((current) => uniqueMessages([
-        ...current,
+      setBackendNotices((current) => appendUniqueMessage(
+        current,
         `${applied.message} Waiting for authoritative results.`,
-      ]));
+      ));
       return;
     }
 
@@ -3116,10 +3090,10 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         "resyncing",
         "The live result preview was discarded because it could not be displayed safely.",
       );
-      setBackendNotices((current) => uniqueMessages([
-        ...current,
+      setBackendNotices((current) => appendUniqueMessage(
+        current,
         `${error instanceof Error ? error.message : "The preview result could not be adapted."} Waiting for authoritative results.`,
-      ]));
+      ));
     }
   }
 
@@ -3452,7 +3426,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
             break;
           case "warning": {
             const message = event.payload.value.warning?.message;
-            if (message) setBackendNotices((current) => uniqueMessages([...current, message]));
+            if (message) setBackendNotices((current) => appendUniqueMessage(current, message));
             refreshWatchdog();
             break;
           }
@@ -3534,10 +3508,10 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
             "disabled",
             "This server declined live previews. Search progress remains connected.",
           );
-          setBackendNotices((current) => uniqueMessages([
-            ...current,
+          setBackendNotices((current) => appendUniqueMessage(
+            current,
             "This server declined live result previews; complete results will still load normally.",
-          ]));
+          ));
           try {
             subscriptionId = socket.subscribe(
               searchJobTarget(initialJob.searchJobId),
@@ -3548,7 +3522,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           }
           return;
         }
-        setBackendNotices((current) => uniqueMessages([...current, `Live job updates failed: ${error.message}`]));
+        setBackendNotices((current) => appendUniqueMessage(current, `Live job updates failed: ${error.message}`));
         scheduleRecovery(0);
       }));
       cleanups.push(socket.onSequenceGap((gap) => {
@@ -3561,7 +3535,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           previewsEnabled ? "resyncing" : "disabled",
           "Live preview was cleared while job updates are resynchronized.",
         );
-        setBackendNotices((current) => uniqueMessages([...current, "Live job updates skipped a sequence; resynchronizing from the server…"]));
+        setBackendNotices((current) => appendUniqueMessage(current, "Live job updates skipped a sequence; resynchronizing from the server…"));
         scheduleRecovery(0);
       }));
       cleanups.push(socket.onResynchronizationRequired(async (notice) => {
@@ -3637,10 +3611,10 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           setBackendResultsExpired(true);
           setPhase("expired");
           setProgress(100);
-          setBackendNotices((current) => uniqueMessages([
-            ...current,
+          setBackendNotices((current) => appendUniqueMessage(
+            current,
             "These retained search results have expired. Run the search again to refresh them.",
-          ]));
+          ));
           showToast("Search results expired. Run the search again.", "warning");
           void refreshBackendHistory(bootstrap);
           return;
@@ -3655,16 +3629,16 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
             "finalization-error",
             "Search completed, but authoritative results could not be loaded. The visible rows remain provisional.",
           );
-          setBackendNotices((current) => uniqueMessages([
-            ...current,
+          setBackendNotices((current) => appendUniqueMessage(
+            current,
             `Authoritative results could not be loaded: ${message} The visible preview remains provisional and cannot be exported.`,
-          ]));
+          ));
         } else {
           updateBackendPreviewStatus("disabled");
-          setBackendNotices((current) => uniqueMessages([
-            ...current,
+          setBackendNotices((current) => appendUniqueMessage(
+            current,
             `Search completed, but authoritative results could not be loaded: ${message}`,
-          ]));
+          ));
         }
         showToast("Search completed, but its authoritative results could not be loaded.", "warning");
         void refreshBackendHistory(bootstrap);
@@ -3961,10 +3935,10 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         setBackendResultsExpired(true);
         setPhase("expired");
         setProgress(100);
-        setBackendNotices((current) => uniqueMessages([
-          ...current,
+        setBackendNotices((current) => appendUniqueMessage(
+          current,
           "These retained search results have expired. Run the search again to refresh them.",
-        ]));
+        ));
         showToast("Search results expired. Run the search again.", "warning");
         return;
       }
@@ -4440,7 +4414,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       if (isHttpStatus(error, 410)) {
         setBackendResultsExpired(true);
         setPhase("expired");
-        setBackendNotices((current) => uniqueMessages([...current, "These retained search results have expired. Run the search again to refresh them."]));
+        setBackendNotices((current) => appendUniqueMessage(current, "These retained search results have expired. Run the search again to refresh them."));
       } else {
         showToast(error instanceof Error ? error.message : "Unable to load that result page.", "warning");
       }
@@ -4570,7 +4544,8 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           requestedIndexes: persistedScope,
         });
       }
-      const selectors = indexSelectorsFromSPL(searchText);
+      const analysis = analyzeSPLIndexScope(searchText);
+      const { selectors } = analysis;
       const savedAppDefaults = bootstrap.response.apps
         .find((app) => app.appId === persistedSearch.appId)
         ?.defaultIndexNames ?? [];
@@ -4588,7 +4563,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           : [...authorizedIndexes];
       const requestedIndexes = selectors.length === 0
         ? baseline
-        : splIndexScopeIsExhaustive(searchText)
+        : analysis.exhaustivelyConstrained
           ? selectors
           : [...new Set([...baseline, ...selectors])];
       return resolveExactIndexScope({
@@ -4626,14 +4601,15 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           .find((app) => app.appId === saved.search.appId)
           ?.defaultIndexNames
           .filter((indexName) => searchableIndexNames.has(indexName)) ?? [];
-      const selectors = indexSelectorsFromSPL(searchText);
+      const analysis = analyzeSPLIndexScope(searchText);
+      const { selectors } = analysis;
       const baseline = persistedAppDefaults.length > 0
         ? persistedAppDefaults
         : searchableIndexes;
       return resolveExactIndexScope({
         spl: searchText,
         bootstrap: bootstrap.response,
-        requestedIndexes: selectors.length > 0 && splIndexScopeIsExhaustive(searchText)
+        requestedIndexes: selectors.length > 0 && analysis.exhaustivelyConstrained
           ? selectors
           : [...new Set([...baseline, ...selectors])],
       });

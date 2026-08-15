@@ -76,7 +76,7 @@ func TestAcquireExecutionForLegacyAtomicallyPinsResultGenerationAcrossExpiry(t *
 	if err := lease.Close(); err != nil {
 		t.Fatalf("Close(): %v", err)
 	}
-	assertExecutionLeasePermits(t, manager, completed.ID, 0, 0)
+	assertExecutionLeasePermits(t, manager, completed.ID)
 }
 
 func TestAcquireResultsForDoesNotMintOrRetainExecutionAuthority(t *testing.T) {
@@ -179,7 +179,7 @@ func TestManagerExecutionAuthorityPostflightRejectsSharedMutationButContainsValu
 }
 
 func TestKnowledgeExecutionJointSealRejectsEveryMutationDowngradeAndAuthoritySwap(t *testing.T) {
-	resolver, appID := newEmptyKnowledgeResolver(t, "tenant")
+	resolver, appID := newEmptyKnowledgeResolver(t)
 	manager := newTestManager(t, Config{
 		Executor: executorFunc(func(_ context.Context, _ clickhouse.CompiledQuery, sink ResultSink) error {
 			return sink.SetSchema(messageSchema())
@@ -357,7 +357,7 @@ func TestExecutionResultPinPrivateAttestationRejectsClosedAndCrossManagerSwap(t 
 }
 
 func TestAcquireExecutionForCancellationAfterSnapshotCloneUnwindsBeforePin(t *testing.T) {
-	resolver, appID := newEmptyKnowledgeResolver(t, "tenant")
+	resolver, appID := newEmptyKnowledgeResolver(t)
 	manager := newTestManager(t, Config{
 		Executor: executorFunc(func(_ context.Context, _ clickhouse.CompiledQuery, sink ResultSink) error {
 			return sink.SetSchema(messageSchema())
@@ -382,11 +382,11 @@ func TestAcquireExecutionForCancellationAfterSnapshotCloneUnwindsBeforePin(t *te
 	if !errors.Is(err, context.Canceled) || lease != nil || !reflect.DeepEqual(snapshot, ExecutionSnapshot{}) {
 		t.Fatalf("AcquireExecutionFor(cancel during clone) = (%#v, %#v, %v)", lease, snapshot, err)
 	}
-	assertExecutionLeasePermits(t, manager, created.ID, 0, 0)
+	assertExecutionLeasePermits(t, manager, created.ID)
 }
 
 func TestAcquireExecutionForTamperedCompiledAuthorityFailsBeforePin(t *testing.T) {
-	resolver, appID := newEmptyKnowledgeResolver(t, "tenant")
+	resolver, appID := newEmptyKnowledgeResolver(t)
 	manager := newTestManager(t, Config{
 		Executor: executorFunc(func(_ context.Context, _ clickhouse.CompiledQuery, sink ResultSink) error {
 			return sink.SetSchema(messageSchema())
@@ -417,7 +417,7 @@ func TestAcquireExecutionForTamperedCompiledAuthorityFailsBeforePin(t *testing.T
 	if !errors.Is(err, ErrResultsUnavailable) || lease != nil || !reflect.DeepEqual(snapshot, ExecutionSnapshot{}) {
 		t.Fatalf("AcquireExecutionFor(tampered authority) = (%#v, %#v, %v)", lease, snapshot, err)
 	}
-	assertExecutionLeasePermits(t, manager, created.ID, 0, 0)
+	assertExecutionLeasePermits(t, manager, created.ID)
 }
 
 func TestAcquireExecutionForScopeContextAndResultCoherenceFailuresDoNotPin(t *testing.T) {
@@ -451,7 +451,7 @@ func TestAcquireExecutionForScopeContextAndResultCoherenceFailuresDoNotPin(t *te
 			if err == nil || test.want != nil && !errors.Is(err, test.want) || lease != nil || !reflect.DeepEqual(snapshot, ExecutionSnapshot{}) {
 				t.Fatalf("AcquireExecutionFor() = (%#v, %#v, %v), want %v", lease, snapshot, err, test.want)
 			}
-			assertExecutionLeasePermits(t, manager, created.ID, 0, 0)
+			assertExecutionLeasePermits(t, manager, created.ID)
 		})
 	}
 
@@ -465,7 +465,7 @@ func TestAcquireExecutionForScopeContextAndResultCoherenceFailuresDoNotPin(t *te
 	if !errors.Is(err, ErrResultsUnavailable) || lease != nil || !reflect.DeepEqual(snapshot, ExecutionSnapshot{}) {
 		t.Fatalf("AcquireExecutionFor(incoherent result) = (%#v, %#v, %v)", lease, snapshot, err)
 	}
-	assertExecutionLeasePermits(t, manager, created.ID, 0, 0)
+	assertExecutionLeasePermits(t, manager, created.ID)
 }
 
 type cancelOnNthErrContext struct {
@@ -494,8 +494,6 @@ func assertExecutionLeasePermits(
 	t *testing.T,
 	manager *Manager,
 	id string,
-	wantJobPins int,
-	wantManagerPins int,
 ) {
 	t.Helper()
 	manager.mu.RLock()
@@ -510,7 +508,7 @@ func assertExecutionLeasePermits(
 	manager.budgetMu.Lock()
 	managerPins := manager.activeResultLeases
 	manager.budgetMu.Unlock()
-	if jobPins != wantJobPins || managerPins != wantManagerPins {
-		t.Fatalf("result lease permits = job:%d manager:%d, want %d/%d", jobPins, managerPins, wantJobPins, wantManagerPins)
+	if jobPins != 0 || managerPins != 0 {
+		t.Fatalf("result lease permits = job:%d manager:%d, want 0/0", jobPins, managerPins)
 	}
 }

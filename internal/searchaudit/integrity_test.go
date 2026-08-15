@@ -15,7 +15,7 @@ import (
 func TestPersistedCapSurvivesDefaultReopenAndExplicitMismatchFails(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	_, database := openSearchAuditTestDatabase(t)
+	database := openSearchAuditTestDatabase(t)
 	configured := newSearchAuditTestStore(t, database, searchAuditTestCursorKey(), 2)
 	appendSearchAuditTestEvent(t, configured, database, ctx, "tenant-cap", searchAuditTestDefinition("owner", "job-1", 0))
 
@@ -37,7 +37,7 @@ func TestPersistedCapSurvivesDefaultReopenAndExplicitMismatchFails(t *testing.T)
 func TestDuplicateRetainedJobPublicationRollsBackWithoutAdvancingState(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	_, database := openSearchAuditTestDatabase(t)
+	database := openSearchAuditTestDatabase(t)
 	store := newSearchAuditTestStore(t, database, searchAuditTestCursorKey(), 3)
 	definition := searchAuditTestDefinition("owner", "job-duplicate", 0)
 	appendSearchAuditTestEvent(t, store, database, ctx, "tenant-duplicate", definition)
@@ -96,17 +96,15 @@ func TestDuplicateRetainedJobPublicationRollsBackWithoutAdvancingState(t *testin
 func TestConcurrentUniqueAppendsRemainDenseAndBounded(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	_, database := openSearchAuditTestDatabase(t)
+	database := openSearchAuditTestDatabase(t)
 	store := newSearchAuditTestStore(t, database, searchAuditTestCursorKey(), 16)
 	const attempts = 24
 	start := make(chan struct{})
 	errorsByAttempt := make(chan error, attempts)
 	var wait sync.WaitGroup
-	for index := 0; index < attempts; index++ {
+	for index := range attempts {
 		index := index
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
+		wait.Go(func() {
 			<-start
 			tx := database.GORMDB().WithContext(ctx).Begin()
 			if tx.Error != nil {
@@ -129,7 +127,7 @@ func TestConcurrentUniqueAppendsRemainDenseAndBounded(t *testing.T) {
 				return
 			}
 			errorsByAttempt <- tx.Commit().Error
-		}()
+		})
 	}
 	close(start)
 	wait.Wait()
@@ -153,7 +151,7 @@ func TestStartupIntegrityRejectsGapAndForgedRows(t *testing.T) {
 	t.Parallel()
 	t.Run("gap", func(t *testing.T) {
 		ctx := context.Background()
-		_, database := openSearchAuditTestDatabase(t)
+		database := openSearchAuditTestDatabase(t)
 		store := newSearchAuditTestStore(t, database, searchAuditTestCursorKey(), 5)
 		for index := 1; index <= 3; index++ {
 			appendSearchAuditTestEvent(t, store, database, ctx, "tenant-gap", searchAuditTestDefinition(
@@ -179,7 +177,7 @@ func TestStartupIntegrityRejectsGapAndForgedRows(t *testing.T) {
 
 	t.Run("forged actor", func(t *testing.T) {
 		ctx := context.Background()
-		_, database := openSearchAuditTestDatabase(t)
+		database := openSearchAuditTestDatabase(t)
 		store := newSearchAuditTestStore(t, database, searchAuditTestCursorKey(), 5)
 		appendSearchAuditTestEvent(t, store, database, ctx, "tenant-forged", searchAuditTestDefinition("owner", "job", 0))
 		connection, err := database.SQLDB().Conn(ctx)
@@ -212,7 +210,7 @@ func TestStartupIntegrityRejectsGapAndForgedRows(t *testing.T) {
 func TestAppendRejectsNilAndCanceledContexts(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	_, database := openSearchAuditTestDatabase(t)
+	database := openSearchAuditTestDatabase(t)
 	store := newSearchAuditTestStore(t, database, searchAuditTestCursorKey(), 5)
 	tx := database.GORMDB().WithContext(ctx).Begin()
 	if tx.Error != nil {

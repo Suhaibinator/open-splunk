@@ -157,7 +157,7 @@ func TestActiveIntrinsicResourceFieldsIncludeAppendedCharges(t *testing.T) {
 	}{
 		{
 			name:       "regex extraction outputs",
-			definition: regexDefinition("regex-resources", `(?P<value>x)`, "value"),
+			definition: regexDefinition("regex-resources", "value"),
 			check: func(t *testing.T, resources *opensplunkv1.KnowledgeResourceEstimate) {
 				if resources.GetExtractionOutputs() != 1 || resources.GetRegexPrograms() != 1 ||
 					resources.GetEstimatedRegexWorkUnits() == 0 || resources.GetJsonEvaluationWorkUnits() != 0 ||

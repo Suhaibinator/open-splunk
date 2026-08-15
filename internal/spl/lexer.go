@@ -98,25 +98,25 @@ func (l *lexer) next() (token, error) {
 		return l.single(tokenComma, ",", start), nil
 	case '=':
 		l.advanceASCII()
-		if l.consumeASCII('=') {
+		if l.consumeEquals() {
 			return l.single(tokenEqualEqual, "==", start), nil
 		}
 		return l.single(tokenEqual, "=", start), nil
 	case '!':
 		l.advanceASCII()
-		if l.consumeASCII('=') {
+		if l.consumeEquals() {
 			return l.single(tokenNotEqual, "!=", start), nil
 		}
 		return token{}, l.diagnostic("SPL_UNEXPECTED_CHARACTER", "expected '=' after '!'", start, l.position())
 	case '<':
 		l.advanceASCII()
-		if l.consumeASCII('=') {
+		if l.consumeEquals() {
 			return l.single(tokenLessEqual, "<=", start), nil
 		}
 		return l.single(tokenLess, "<", start), nil
 	case '>':
 		l.advanceASCII()
-		if l.consumeASCII('=') {
+		if l.consumeEquals() {
 			return l.single(tokenGreaterEqual, ">=", start), nil
 		}
 		return l.single(tokenGreater, ">", start), nil
@@ -468,8 +468,8 @@ func (l *lexer) single(kind tokenKind, text string, start Position) token {
 	return token{kind: kind, text: text, sourceRange: Range{Start: start, End: l.position()}}
 }
 
-func (l *lexer) consumeASCII(want byte) bool {
-	if l.offset >= len(l.source) || l.source[l.offset] != want {
+func (l *lexer) consumeEquals() bool {
+	if l.offset >= len(l.source) || l.source[l.offset] != '=' {
 		return false
 	}
 	l.advanceASCII()

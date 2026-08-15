@@ -18,7 +18,7 @@ func TestIndexAdministrationPolicyRoundTripAgainstSQLite(t *testing.T) {
 
 	handler, _, _ := newAdminIntegrationHandler(t)
 	definition := adminTestIndexProto("policy-round-trip")
-	definition.DefaultSourcetype = stringPointer("go:zap:json")
+	definition.DefaultSourcetype = new("go:zap:json")
 	definition.Limits = adminIndexPolicyLimits(
 		ingest.HardMaxEventBytes,
 		ingest.HardMaxFields,
@@ -62,7 +62,7 @@ func TestIndexAdministrationPolicyRoundTripAgainstSQLite(t *testing.T) {
 		Selector:        adminIndexPolicySelector(current.GetIndexId()),
 		ExpectedVersion: current.GetVersion(),
 		Definition: &opensplunkv1.IndexDefinition{Limits: &opensplunkv1.IndexLimits{
-			MaxEventBytes: uint64Pointer(ingest.HardMaxEventBytes + 1),
+			MaxEventBytes: new(ingest.HardMaxEventBytes + 1),
 		}},
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"limits.max_event_bytes"}},
 	})
@@ -100,9 +100,9 @@ func TestIndexAdministrationPolicyRoundTripAgainstSQLite(t *testing.T) {
 		Selector:        adminIndexPolicySelector(current.GetIndexId()),
 		ExpectedVersion: current.GetVersion(),
 		Definition: &opensplunkv1.IndexDefinition{Limits: &opensplunkv1.IndexLimits{
-			MaxEventBytes:     uint64Pointer(0),
-			MaxFieldCount:     uint32Pointer(0),
-			MaxNestingDepth:   uint32Pointer(0),
+			MaxEventBytes:     new(uint64(0)),
+			MaxFieldCount:     new(uint32(0)),
+			MaxNestingDepth:   new(uint32(0)),
 			MaximumFutureSkew: durationpb.New(0),
 			MaximumEventAge:   durationpb.New(0),
 		}},
@@ -127,7 +127,7 @@ func TestIndexAdministrationPolicyRoundTripAgainstSQLite(t *testing.T) {
 	response = postProto(t, handler, "/api/v1/indexes/update", &opensplunkv1.UpdateIndexRequest{
 		Selector:        adminIndexPolicySelector(current.GetIndexId()),
 		ExpectedVersion: current.GetVersion(),
-		Definition:      &opensplunkv1.IndexDefinition{DefaultSourcetype: stringPointer("")},
+		Definition:      &opensplunkv1.IndexDefinition{DefaultSourcetype: new("")},
 		UpdateMask:      &fieldmaskpb.FieldMask{Paths: []string{"default_sourcetype"}},
 	})
 	if response.Code != http.StatusOK {
@@ -150,19 +150,19 @@ func TestIndexAdministrationPolicyRejectsInvalidLimits(t *testing.T) {
 		{
 			name: "event bytes above hard ceiling",
 			limits: &opensplunkv1.IndexLimits{
-				MaxEventBytes: uint64Pointer(ingest.HardMaxEventBytes + 1),
+				MaxEventBytes: new(ingest.HardMaxEventBytes + 1),
 			},
 		},
 		{
 			name: "field count above hard ceiling",
 			limits: &opensplunkv1.IndexLimits{
-				MaxFieldCount: uint32Pointer(ingest.HardMaxFields + 1),
+				MaxFieldCount: new(ingest.HardMaxFields + 1),
 			},
 		},
 		{
 			name: "nesting depth above hard ceiling",
 			limits: &opensplunkv1.IndexLimits{
-				MaxNestingDepth: uint32Pointer(ingest.HardMaxNestingDepth + 1),
+				MaxNestingDepth: new(ingest.HardMaxNestingDepth + 1),
 			},
 		},
 		{
@@ -294,9 +294,9 @@ func adminIndexPolicyLimits(
 	maximumEventAge time.Duration,
 ) *opensplunkv1.IndexLimits {
 	return &opensplunkv1.IndexLimits{
-		MaxEventBytes:     uint64Pointer(maxEventBytes),
-		MaxFieldCount:     uint32Pointer(maxFieldCount),
-		MaxNestingDepth:   uint32Pointer(maxNestingDepth),
+		MaxEventBytes:     new(maxEventBytes),
+		MaxFieldCount:     new(maxFieldCount),
+		MaxNestingDepth:   new(maxNestingDepth),
 		MaximumFutureSkew: durationpb.New(maximumFutureSkew),
 		MaximumEventAge:   durationpb.New(maximumEventAge),
 	}

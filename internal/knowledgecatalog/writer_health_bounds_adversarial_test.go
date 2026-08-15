@@ -89,15 +89,15 @@ func TestWriterActiveCounterPreflightRejectsKeysAndScalarsBeforeGrouping(t *test
 		{name: "owner-wide", kind: activeOwnerCounterPreflight, firstKey: wideSentinel + strings.Repeat("o", 1<<20), wantNoLeak: true},
 		{name: "type-wide", kind: activeTypeCounterPreflight, firstKey: wideSentinel + strings.Repeat("t", 1<<20), wantNoLeak: true},
 		{name: "app-type-wide-app", kind: activeAppTypeCounterPreflight, firstKey: wideSentinel + strings.Repeat("a", 1<<20), secondKey: string(ObjectTypeFieldAlias), wantNoLeak: true},
-		{name: "app-type-wide-type", kind: activeAppTypeCounterPreflight, firstKey: writerHealthCanonicalAppID(0), secondKey: wideSentinel + strings.Repeat("t", 1<<20), wantNoLeak: true},
+		{name: "app-type-wide-type", kind: activeAppTypeCounterPreflight, firstKey: writerHealthCanonicalAppID(), secondKey: wideSentinel + strings.Repeat("t", 1<<20), wantNoLeak: true},
 		{name: "app-semantic", kind: activeAppCounterPreflight, firstKey: "app_not-canonical", counter: 0},
 		{name: "owner-semantic", kind: activeOwnerCounterPreflight, firstKey: " owner-not-canonical", counter: 0},
 		{name: "type-semantic", kind: activeTypeCounterPreflight, firstKey: "future_type", counter: 0},
-		{name: "app-type-semantic", kind: activeAppTypeCounterPreflight, firstKey: writerHealthCanonicalAppID(0), secondKey: "future_type", counter: 0},
-		{name: "app-negative", kind: activeAppCounterPreflight, firstKey: writerHealthCanonicalAppID(0), counter: -1},
+		{name: "app-type-semantic", kind: activeAppTypeCounterPreflight, firstKey: writerHealthCanonicalAppID(), secondKey: "future_type", counter: 0},
+		{name: "app-negative", kind: activeAppCounterPreflight, firstKey: writerHealthCanonicalAppID(), counter: -1},
 		{name: "owner-overflow", kind: activeOwnerCounterPreflight, firstKey: "owner-health", counter: 513},
 		{name: "type-overflow", kind: activeTypeCounterPreflight, firstKey: string(ObjectTypeFieldAlias), counter: 2049},
-		{name: "app-type-overflow", kind: activeAppTypeCounterPreflight, firstKey: writerHealthCanonicalAppID(0), secondKey: string(ObjectTypeFieldAlias), counter: 513},
+		{name: "app-type-overflow", kind: activeAppTypeCounterPreflight, firstKey: writerHealthCanonicalAppID(), secondKey: string(ObjectTypeFieldAlias), counter: 513},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -554,8 +554,8 @@ func writerHealthCounterKeyExpression(kind activeCounterPreflightKind, second bo
 	}
 }
 
-func writerHealthCanonicalAppID(index int) string {
-	return fmt.Sprintf("app_%021dA", index)
+func writerHealthCanonicalAppID() string {
+	return fmt.Sprintf("app_%021dA", 0)
 }
 
 func withWriterHealthCorruptionConnection(

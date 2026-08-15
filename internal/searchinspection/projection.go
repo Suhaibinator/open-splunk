@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"reflect"
 	"slices"
 	"strings"
 	"unicode"
@@ -13,6 +12,7 @@ import (
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
+	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
@@ -469,7 +469,7 @@ func describeAuthoredOperator(
 			return "", nil, spl.Range{}, invalidProjection("logical operator is nil")
 		}
 	case *plan.RegexFilter, *plan.Reverse:
-		if reflect.ValueOf(concrete).IsNil() {
+		if nilcheck.IsNil(concrete) {
 			return "", nil, spl.Range{}, invalidProjection("logical operator is nil")
 		}
 	case *plan.Project:

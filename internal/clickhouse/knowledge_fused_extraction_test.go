@@ -92,7 +92,7 @@ func TestCompileKnowledgeExtractionStagePreservesOrderFrozenBindingsAndCharges(t
 		wantArgs = append(wantArgs, object.args...)
 	}
 	for index, destination := range []string{"json_a", "first", "second", "json_c"} {
-		_, previous, _, previousErr := compileKnowledgeExtractionPrevious(
+		previous, _, previousErr := compileKnowledgeExtractionPrevious(
 			destination,
 			state,
 			12,

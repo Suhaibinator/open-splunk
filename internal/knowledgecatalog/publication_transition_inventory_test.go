@@ -215,7 +215,7 @@ func TestPublicationTransitionAppPreflightIsTenantDrivenAndBounded(t *testing.T)
 		t.Fatalf("app preflight SQL lacks the %d-row bound: %s / %#v", maximumReadableApps+1, sqlText, dryRun.Statement.Vars)
 	}
 
-	for index := 0; index < maximumReadableApps-1; index++ {
+	for index := range maximumReadableApps - 1 {
 		appID := fmt.Sprintf("app_%021dA", index+1)
 		slug := fmt.Sprintf("inventory-overflow-%03d", index+1)
 		mustExec(t, database, `INSERT INTO app_workspaces (

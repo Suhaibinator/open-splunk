@@ -112,7 +112,7 @@ func TestParseEventStatsMaximumBoundsGroupingFields(t *testing.T) {
 	buildSource := func(groupFields int) string {
 		var source strings.Builder
 		source.WriteString("index=main | eventstats max(latency) AS maximum BY ")
-		for index := 0; index < groupFields; index++ {
+		for index := range groupFields {
 			if index > 0 {
 				source.WriteString(", ")
 			}

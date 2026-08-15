@@ -9,7 +9,7 @@ import (
 
 func (handler *Handler) serveHealth(response http.ResponseWriter, request *http.Request) {
 	if len(request.RequestURI) > handler.limits.MaximumRequestTargetBytes {
-		handler.writeError(response, hec.NewProtocolError(hec.ErrorInvalidDataFormat, nil), 0)
+		handler.writeError(response, hec.NewProtocolError(hec.ErrorInvalidDataFormat, nil))
 		return
 	}
 	if err := hec.ValidateConsumedHeaderBytes(
@@ -18,11 +18,11 @@ func (handler *Handler) serveHealth(response http.ResponseWriter, request *http.
 		request.Header.Values("Content-Type"),
 		request.Header.Values("Content-Encoding"),
 	); err != nil {
-		handler.writeError(response, err, 0)
+		handler.writeError(response, err)
 		return
 	}
 	if queryAuthorizationPresent(request.URL.RawQuery) {
-		handler.writeError(response, hec.NewProtocolError(hec.ErrorQueryAuthorizationDisabled, nil), 0)
+		handler.writeError(response, hec.NewProtocolError(hec.ErrorQueryAuthorizationDisabled, nil))
 		return
 	}
 	releaseHealth, acquired := handler.beginHealth()
@@ -44,12 +44,12 @@ func (handler *Handler) serveHealth(response http.ResponseWriter, request *http.
 		}
 	}
 	if hasHealthBody(request) {
-		handler.writeError(response, hec.NewProtocolError(hec.ErrorInvalidDataFormat, nil), 0)
+		handler.writeError(response, hec.NewProtocolError(hec.ErrorInvalidDataFormat, nil))
 		return
 	}
 	query, err := parseEndpointQuery(request.URL.RawQuery, hec.EndpointHealth, handler.limits)
 	if err != nil {
-		handler.writeError(response, err, 0)
+		handler.writeError(response, err)
 		return
 	}
 	acknowledgmentRequested := query.acknowledgmentHealthCheck

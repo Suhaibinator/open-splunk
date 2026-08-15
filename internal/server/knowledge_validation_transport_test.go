@@ -207,7 +207,7 @@ func TestValidateKnowledgeObjectCodecSkipsUnselectedWithoutSkippingValidation(t 
 func TestValidateKnowledgeObjectCodecOneofAlternationIsAllocationBounded(t *testing.T) {
 	codec := newValidateKnowledgeObjectCodec()
 	emptyAlternation := make([]byte, 0, 2_000_000)
-	for index := 0; index < 1_000_000; index++ {
+	for index := range 1_000_000 {
 		number := protowire.Number(10)
 		if index%2 != 0 {
 			number = 11
@@ -222,7 +222,7 @@ func TestValidateKnowledgeObjectCodecOneofAlternationIsAllocationBounded(t *test
 	regexWithOutput := validateTestBytesField(2, validateTestBytesField(2, nil))
 	aliasWithUnknown := validateTestVarintField(100, 1)
 	contentAlternation := make([]byte, 0, 80_000)
-	for index := 0; index < 10_000; index++ {
+	for range 10_000 {
 		contentAlternation = append(contentAlternation, validateTestBytesField(10, regexWithOutput)...)
 		contentAlternation = append(contentAlternation, validateTestBytesField(11, aliasWithUnknown)...)
 	}
@@ -242,7 +242,7 @@ func TestValidateKnowledgeObjectCodecOneofAlternationIsAllocationBounded(t *test
 	)
 	jsonWithUnknown := validateTestVarintField(101, 2)
 	nestedAlternation := make([]byte, 0, 120_000)
-	for index := 0; index < 10_000; index++ {
+	for range 10_000 {
 		nestedAlternation = append(nestedAlternation, validateTestBytesField(2, regexWithOutputAndUnknown)...)
 		nestedAlternation = append(nestedAlternation, validateTestBytesField(3, jsonWithUnknown)...)
 	}
@@ -294,7 +294,7 @@ func TestValidateKnowledgeObjectCodecBoundsMalformedGroupsAndDetaches(t *testing
 
 	group := func(depth int, mismatch bool) []byte {
 		var result []byte
-		for index := 0; index < depth; index++ {
+		for index := range depth {
 			result = protowire.AppendTag(result, protowire.Number(100+index), protowire.StartGroupType)
 		}
 		for index := depth - 1; index >= 0; index-- {

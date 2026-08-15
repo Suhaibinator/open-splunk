@@ -10,6 +10,7 @@ import {
   type BrowserIndexModel,
   type OpenSplunkApiClient,
 } from "@/lib/api";
+import { createErrorMessage } from "@/lib/error-message";
 
 import {
   fieldCountLabel,
@@ -25,11 +26,7 @@ interface IndexObservabilityPanelProps {
 
 type LoadState = "loading" | "available" | "unavailable" | "error";
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error && error.message.trim()
-    ? error.message
-    : "The server returned an unusable index analysis response.";
-}
+const errorMessage = createErrorMessage("The server returned an unusable index analysis response.");
 
 function dateLabel(value: Date | undefined): string {
   if (value === undefined || Number.isNaN(value.valueOf())) return "No events";

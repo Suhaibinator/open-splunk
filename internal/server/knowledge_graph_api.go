@@ -585,10 +585,10 @@ func knowledgeGraphPageMetadata(
 	}
 	metadata := &opensplunkv1.PageResponse{TotalSizeExact: page.TotalSizeExact}
 	if page.NextPageToken != "" {
-		metadata.NextPageToken = stringPointer(strings.Clone(page.NextPageToken))
+		metadata.NextPageToken = new(strings.Clone(page.NextPageToken))
 	}
 	if page.TotalSize != nil {
-		metadata.TotalSize = uint64Pointer(*page.TotalSize)
+		metadata.TotalSize = new(*page.TotalSize)
 	}
 	return metadata, nil
 }

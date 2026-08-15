@@ -72,7 +72,7 @@ func TestAuditedIndexAdministrationPublishesSuccessfulLifecycleInMutationTransac
 	ctx := context.Background()
 	db := openTestDB(t)
 	appender := &recordingIndexMutationAuditAppender{}
-	administration := newTestAuditedIndexAdministration(t, db, "tenant-a", appender)
+	administration := newTestAuditedIndexAdministration(t, db, appender)
 
 	created, err := administration.CreateIndex(ctx, enabledIndex("lifecycle"))
 	if err != nil {
@@ -236,7 +236,7 @@ func TestAuditedIndexAdministrationRollsBackEveryMutationWhenAuditFails(
 		ctx := context.Background()
 		db := openTestDB(t)
 		appender := failingIndexAuditAppender(IndexMutationAuditActionCreate)
-		administration := newTestAuditedIndexAdministration(t, db, "tenant-a", appender)
+		administration := newTestAuditedIndexAdministration(t, db, appender)
 		before := readTestIndexCatalogState(t, db)
 
 		_, err := administration.CreateIndex(ctx, enabledIndex("rollback-create"))
@@ -255,7 +255,7 @@ func TestAuditedIndexAdministrationRollsBackEveryMutationWhenAuditFails(
 		db := openTestDB(t)
 		created := mustCreateIndex(t, db, enabledIndex("rollback-update"))
 		appender := failingIndexAuditAppender(IndexMutationAuditActionUpdate)
-		administration := newTestAuditedIndexAdministration(t, db, "tenant-a", appender)
+		administration := newTestAuditedIndexAdministration(t, db, appender)
 		before := readTestIndexCatalogState(t, db)
 		replacement := created.Definition
 		replacement.DisplayName = "must roll back"
@@ -282,7 +282,7 @@ func TestAuditedIndexAdministrationRollsBackEveryMutationWhenAuditFails(
 		db := openTestDB(t)
 		created := mustCreateIndex(t, db, enabledIndex("rollback-state"))
 		appender := failingIndexAuditAppender(IndexMutationAuditActionArchive)
-		administration := newTestAuditedIndexAdministration(t, db, "tenant-a", appender)
+		administration := newTestAuditedIndexAdministration(t, db, appender)
 		before := readTestIndexCatalogState(t, db)
 
 		_, err := administration.SetIndexState(
@@ -312,7 +312,7 @@ func TestAuditedIndexAdministrationRollsBackEveryMutationWhenAuditFails(
 			t.Fatalf("raw SetIndexState() error = %v", err)
 		}
 		appender := failingIndexAuditAppender(IndexMutationAuditActionDeleteKeepData)
-		administration := newTestAuditedIndexAdministration(t, db, "tenant-a", appender)
+		administration := newTestAuditedIndexAdministration(t, db, appender)
 		before := readTestIndexCatalogState(t, db)
 
 		_, err = administration.DeleteIndex(
@@ -343,7 +343,7 @@ func TestAuditedIndexAdministrationRollsBackEveryMutationWhenAuditFails(
 			t.Fatalf("raw SetIndexState() error = %v", err)
 		}
 		appender := failingIndexAuditAppender(IndexMutationAuditActionDeleteData)
-		administration := newTestAuditedIndexAdministration(t, db, "tenant-a", appender)
+		administration := newTestAuditedIndexAdministration(t, db, appender)
 		before := readTestIndexCatalogState(t, db)
 
 		_, err = administration.BeginIndexDataDeletion(
@@ -371,7 +371,7 @@ func TestAuditedIndexAdministrationDoesNotAuditRejectedMutations(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
 	appender := &recordingIndexMutationAuditAppender{}
-	administration := newTestAuditedIndexAdministration(t, db, "tenant-a", appender)
+	administration := newTestAuditedIndexAdministration(t, db, appender)
 
 	if _, err := administration.CreateIndex(ctx, IndexDefinition{}); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("CreateIndex(invalid) error = %v, want ErrInvalidArgument", err)
@@ -427,7 +427,7 @@ func TestAuditedIndexAdministrationConcurrentCASPublishesOnlyWinner(t *testing.T
 	db := openTestDB(t)
 	created := mustCreateIndex(t, db, enabledIndex("concurrent-audit"))
 	appender := &recordingIndexMutationAuditAppender{}
-	administration := newTestAuditedIndexAdministration(t, db, "tenant-a", appender)
+	administration := newTestAuditedIndexAdministration(t, db, appender)
 
 	start := make(chan struct{})
 	errorsByAttempt := make(chan error, 2)
@@ -483,7 +483,7 @@ func TestAuditedIndexAdministrationConcurrentDeleteDataRetryAuditsOnce(t *testin
 		t.Fatalf("raw SetIndexState() error = %v", err)
 	}
 	appender := &recordingIndexMutationAuditAppender{}
-	administration := newTestAuditedIndexAdministration(t, db, "tenant-a", appender)
+	administration := newTestAuditedIndexAdministration(t, db, appender)
 
 	start := make(chan struct{})
 	results := make(chan IndexDeletionOperation, 2)
@@ -584,14 +584,13 @@ func failingIndexAuditAppender(
 func newTestAuditedIndexAdministration(
 	t *testing.T,
 	db *DB,
-	tenantID string,
 	appender IndexMutationAuditAppender,
 ) *AuditedIndexAdministration {
 	t.Helper()
 	administration, err := NewAuditedIndexAdministration(
 		db,
 		AuditedIndexAdministrationOptions{
-			TenantID: tenantID,
+			TenantID: "tenant-a",
 			Appender: appender,
 		},
 	)

@@ -206,11 +206,11 @@ func TestAppAdministrationCreateDerivesScopeAndProjectsEveryField(
 		want := AppAdministrationDefinition{
 			Slug:              "grade_this",
 			DisplayName:       "Grade This",
-			Description:       stringPointer("workspace description"),
+			Description:       new("workspace description"),
 			DefaultIndexNames: []string{"audit", "main"},
 			DefaultTimeRange: &AppAdministrationTimeRange{
-				Earliest: stringPointer(earliest),
-				Timezone: stringPointer(timezone),
+				Earliest: new(earliest),
+				Timezone: new(timezone),
 			},
 		}
 		if !reflect.DeepEqual(definition, want) {
@@ -448,11 +448,11 @@ func TestAppAdministrationUpdateStateAndDeleteSemantics(t *testing.T) {
 		AppAdministrationDefinition{
 			Slug:              "immutable",
 			DisplayName:       "Before",
-			Description:       stringPointer("remove me"),
+			Description:       new("remove me"),
 			DefaultIndexNames: []string{"main"},
 			DefaultTimeRange: &AppAdministrationTimeRange{
-				Earliest: stringPointer("-24h"),
-				Latest:   stringPointer("now"),
+				Earliest: new("-24h"),
+				Latest:   new("now"),
 			},
 		},
 	)
@@ -920,7 +920,6 @@ func TestAppAdministrationRequestBoundaryOrderAndExactness(t *testing.T) {
 		t,
 		service,
 		authenticator,
-		5*time.Second,
 	)
 
 	method := httptest.NewRequestWithContext(
@@ -1162,7 +1161,6 @@ func TestEveryAppAdministrationRouteRejectsOrdinaryPrincipal(t *testing.T) {
 				auth.BrowserRoleUser,
 			),
 		},
-		5*time.Second,
 	)
 	for _, path := range []string{
 		"/api/v1/apps/create",
@@ -1243,21 +1241,21 @@ func TestAppAdministrationTimeRangePreservesIndependentPresence(
 			name:  "earliest only",
 			input: &opensplunkv1.TimeRangeSpec{Earliest: &earliest},
 			want: &AppAdministrationTimeRange{
-				Earliest: stringPointer(earliest),
+				Earliest: new(earliest),
 			},
 		},
 		{
 			name:  "latest only",
 			input: &opensplunkv1.TimeRangeSpec{Latest: &latest},
 			want: &AppAdministrationTimeRange{
-				Latest: stringPointer(latest),
+				Latest: new(latest),
 			},
 		},
 		{
 			name:  "timezone only",
 			input: &opensplunkv1.TimeRangeSpec{Timezone: &timezone},
 			want: &AppAdministrationTimeRange{
-				Timezone: stringPointer(timezone),
+				Timezone: new(timezone),
 			},
 		},
 		{
@@ -1268,9 +1266,9 @@ func TestAppAdministrationTimeRangePreservesIndependentPresence(
 				Timezone: &timezone,
 			},
 			want: &AppAdministrationTimeRange{
-				Earliest: stringPointer(earliest),
-				Latest:   stringPointer(latest),
-				Timezone: stringPointer(timezone),
+				Earliest: new(earliest),
+				Latest:   new(latest),
+				Timezone: new(timezone),
 			},
 		},
 		{
@@ -1280,8 +1278,8 @@ func TestAppAdministrationTimeRangePreservesIndependentPresence(
 				Latest:   &latest,
 			},
 			want: &AppAdministrationTimeRange{
-				Earliest: stringPointer(futureAbsolute),
-				Latest:   stringPointer(latest),
+				Earliest: new(futureAbsolute),
+				Latest:   new(latest),
 			},
 		},
 	}
@@ -1641,7 +1639,7 @@ func TestAppAdministrationDescriptionCanonicalizesEmptyToAbsent(
 	t.Parallel()
 
 	handler := &apiHandler{now: time.Now}
-	for _, input := range []*string{nil, stringPointer(""), stringPointer(" \n ")} {
+	for _, input := range []*string{nil, new(""), new(" \n ")} {
 		normalized, err := normalizeAppAdministrationDescription(input)
 		if err != nil || normalized != nil {
 			t.Fatalf("normalize description(%v) = %v, %v", input, normalized, err)
@@ -1651,7 +1649,7 @@ func TestAppAdministrationDescriptionCanonicalizesEmptyToAbsent(
 		&opensplunkv1.AppDefinition{
 			Slug:        "empty-description",
 			DisplayName: "Empty Description",
-			Description: stringPointer(""),
+			Description: new(""),
 		},
 	)
 	if err != nil || definition.Description != nil {
@@ -1899,7 +1897,6 @@ func TestAppAdministrationCancellationAndCommittedSuccess(t *testing.T) {
 				auth.BrowserRoleAdministrator,
 			),
 		},
-		5*time.Second,
 	)
 	committed := postAppAdministrationProtoContext(
 		t,
@@ -2193,7 +2190,6 @@ func newAppAdministrationTestHandler(
 				auth.BrowserRoleAdministrator,
 			),
 		},
-		5*time.Second,
 		bootstrap,
 	)
 }
@@ -2202,7 +2198,6 @@ func newAppAdministrationHandlerWithAuthenticator(
 	t *testing.T,
 	service AppAdministration,
 	authenticator auth.BrowserAuthenticator,
-	routeTimeout time.Duration,
 	bootstrap ...BootstrapConfig,
 ) *Handler {
 	t.Helper()
@@ -2221,7 +2216,7 @@ func newAppAdministrationHandlerWithAuthenticator(
 		Bootstrap:                  configuredBootstrap,
 		TenantID:                   browserGateTenantID,
 		OwnerID:                    browserGateOwnerID,
-		RouteTimeout:               routeTimeout,
+		RouteTimeout:               5 * time.Second,
 		AdministrativeAllowedHosts: []string{"example.com"},
 	})
 	if err != nil {

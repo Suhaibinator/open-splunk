@@ -287,7 +287,7 @@ func TestSearchTimelineInputValidation(t *testing.T) {
 		{name: "zero duration", request: &opensplunkv1.GetSearchTimelineRequest{SearchJobId: "job", PreferredBucketWidth: &durationpb.Duration{}}, wantStatus: http.StatusBadRequest},
 		{name: "negative duration", request: &opensplunkv1.GetSearchTimelineRequest{SearchJobId: "job", PreferredBucketWidth: &durationpb.Duration{Seconds: -1}}, wantStatus: http.StatusBadRequest},
 		{name: "fractional duration", request: &opensplunkv1.GetSearchTimelineRequest{SearchJobId: "job", PreferredBucketWidth: &durationpb.Duration{Seconds: 1, Nanos: 1}}, wantStatus: http.StatusBadRequest},
-		{name: "valid exact maximum", request: &opensplunkv1.GetSearchTimelineRequest{SearchJobId: "job", MaxBuckets: timelineUint32Pointer(10)}, wantStatus: http.StatusUnprocessableEntity, wantCalls: 1},
+		{name: "valid exact maximum", request: &opensplunkv1.GetSearchTimelineRequest{SearchJobId: "job", MaxBuckets: new(uint32(10))}, wantStatus: http.StatusUnprocessableEntity, wantCalls: 1},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -514,8 +514,6 @@ func validTimelineResult(start time.Time) searchanalysis.Result {
 		}},
 	}
 }
-
-func timelineUint32Pointer(value uint32) *uint32 { return &value }
 
 type timelineObservingWriter struct {
 	header          http.Header

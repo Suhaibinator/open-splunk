@@ -436,9 +436,7 @@ func TestConcurrentCollectorTokenCreatesRespectTotalRecordLimit(t *testing.T) {
 	results := make(chan error, attemptCount)
 	var workers sync.WaitGroup
 	for attempt := range attemptCount {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
+		workers.Go(func() {
 			<-start
 			_, createErr := store.CreateCollectorToken(
 				ctx,
@@ -449,7 +447,7 @@ func TestConcurrentCollectorTokenCreatesRespectTotalRecordLimit(t *testing.T) {
 				},
 			)
 			results <- createErr
-		}()
+		})
 	}
 	close(start)
 	workers.Wait()
@@ -1722,9 +1720,7 @@ func TestConcurrentCollectorTokenRevocationsPreserveRetentionLimit(t *testing.T)
 	errs := make(chan error, tokenCount)
 	var workers sync.WaitGroup
 	for tokenIndex := range issued {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
+		workers.Go(func() {
 			<-start
 			_, revokeErr := store.RevokeCollectorToken(
 				ctx,
@@ -1732,7 +1728,7 @@ func TestConcurrentCollectorTokenRevocationsPreserveRetentionLimit(t *testing.T)
 				issued[tokenIndex].Token.Version,
 			)
 			errs <- revokeErr
-		}()
+		})
 	}
 	close(start)
 	workers.Wait()

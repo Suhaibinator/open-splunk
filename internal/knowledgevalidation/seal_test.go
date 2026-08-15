@@ -65,7 +65,7 @@ func TestResultKindAndChargeTamperingFailBeforeProjection(t *testing.T) {
 		t.Fatalf("inactive-as-active error = %v", err)
 	}
 
-	candidate := mustActiveCandidate(t, regexDefinition("regex-tamper", `(?P<value>x)`, "value"))
+	candidate := mustActiveCandidate(t, regexDefinition("regex-tamper", "value"))
 	active, err := candidate.BuildValid(context.Background(), ActivePublication{
 		Candidate: ExactIdentity{KnowledgeObjectID: "candidate-a", Version: 1},
 	})

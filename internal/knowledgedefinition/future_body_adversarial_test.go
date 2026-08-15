@@ -16,7 +16,7 @@ import (
 func TestInactiveFutureBodyLifecycleGatePrecedesEveryByteAuthority(t *testing.T) {
 	t.Parallel()
 
-	valid := futureDefinitionBytes(t, adversarialFutureMetadata(), 13, []byte{0x08, 0x01})
+	valid := futureDefinitionBytes(t, adversarialFutureMetadata(), []byte{0x08, 0x01})
 	validDigest := sha256.Sum256(valid)
 	wrongDigest := validDigest
 	wrongDigest[0] ^= 0xff
@@ -385,7 +385,7 @@ func TestInactiveFutureBodyFourMiBBoundaryAndRepeatedShapePreflight(t *testing.T
 				}
 			}
 			dimension.set(definition.Selector, patterns)
-			data := futureDefinitionBytes(t, definition, 13, []byte{1})
+			data := futureDefinitionBytes(t, definition, []byte{1})
 			digest := sha256.Sum256(data)
 			if _, err := DecodeCanonicalInactiveFutureBody(
 				data, digest[:], opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
@@ -399,7 +399,7 @@ func TestInactiveFutureBodyFourMiBBoundaryAndRepeatedShapePreflight(t *testing.T
 func TestInactiveFutureBodyErrorTaxonomyIsClosedAndStable(t *testing.T) {
 	t.Parallel()
 
-	valid := futureDefinitionBytes(t, adversarialFutureMetadata(), 13, []byte{1})
+	valid := futureDefinitionBytes(t, adversarialFutureMetadata(), []byte{1})
 	digest := sha256.Sum256(valid)
 	known, err := Normalize(validAliasDefinition())
 	if err != nil {
@@ -409,7 +409,7 @@ func TestInactiveFutureBodyErrorTaxonomyIsClosedAndStable(t *testing.T) {
 	malformedDigest := sha256.Sum256(malformed)
 	noncanonicalMetadata := adversarialFutureMetadata()
 	noncanonicalMetadata.Name = " future_name "
-	noncanonical := futureDefinitionBytes(t, noncanonicalMetadata, 13, []byte{1})
+	noncanonical := futureDefinitionBytes(t, noncanonicalMetadata, []byte{1})
 	noncanonicalDigest := sha256.Sum256(noncanonical)
 
 	tests := []struct {

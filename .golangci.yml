@@ -10,9 +10,11 @@ linters:
     - errorlint
     - gosec
     - misspell
+    - modernize
     - noctx
     - revive
     - unconvert
+    - unparam
     - usestdlibvars
   settings:
     govet:
@@ -20,6 +22,25 @@ linters:
         - shadow
     misspell:
       locale: US
+    modernize:
+      # Keep the deletion-oriented analyzers enabled. The remaining analyzers
+      # are useful migrations, but do not consistently make the code smaller.
+      disable:
+        - any
+        - fmtappendf
+        - forvar
+        - omitzero
+        - plusbuild
+        - reflecttypefor
+        - slicesbackward
+        - slicessort
+        - stditerators
+        - stringscut
+        - stringscutprefix
+        - stringsseq
+        - stringsbuilder
+        - testingcontext
+        - unsafefuncs
   exclusions:
     presets:
       - comments

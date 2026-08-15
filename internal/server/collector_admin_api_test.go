@@ -196,7 +196,7 @@ func TestCollectorAdministrationListPassesOpaqueTokenAndReleasesPermit(
 			entry := validCollectorCatalogEntry(tenantID, "collector-list")
 			return collectorfleet.ListResult{
 				Entries:         []collectorfleet.CatalogEntry{entry},
-				NextPageToken:   stringPointer(responseToken),
+				NextPageToken:   new(responseToken),
 				TotalSize:       &total,
 				TotalSizeExact:  true,
 				CatalogRevision: 9,
@@ -228,8 +228,8 @@ func TestCollectorAdministrationListPassesOpaqueTokenAndReleasesPermit(
 				opensplunkv1.CollectorConnectionState_COLLECTOR_CONNECTION_STATE_STALE,
 				opensplunkv1.CollectorConnectionState_COLLECTOR_CONNECTION_STATE_ONLINE,
 			},
-			IndexNameFilter: stringPointer("main"),
-			TextFilter:      stringPointer(" needle "),
+			IndexNameFilter: new("main"),
+			TextFilter:      new(" needle "),
 			SortBy:          opensplunkv1.CollectorSortBy_COLLECTOR_SORT_BY_QUEUE_BYTES,
 			SortDirection:   opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING,
 		},
@@ -474,7 +474,7 @@ func TestCollectorAdministrationRejectsInvalidListOutputAndReleasesPermit(
 			result: func() collectorfleet.ListResult {
 				return collectorfleet.ListResult{
 					Entries:       []collectorfleet.CatalogEntry{entry()},
-					NextPageToken: stringPointer("cursor"),
+					NextPageToken: new("cursor"),
 				}
 			},
 		},
@@ -482,7 +482,7 @@ func TestCollectorAdministrationRejectsInvalidListOutputAndReleasesPermit(
 			name: "continuation without a row",
 			result: func() collectorfleet.ListResult {
 				return collectorfleet.ListResult{
-					NextPageToken:   stringPointer("cursor"),
+					NextPageToken:   new("cursor"),
 					CatalogRevision: 1,
 				}
 			},
@@ -491,11 +491,8 @@ func TestCollectorAdministrationRejectsInvalidListOutputAndReleasesPermit(
 			name: "oversized continuation",
 			result: func() collectorfleet.ListResult {
 				return collectorfleet.ListResult{
-					Entries: []collectorfleet.CatalogEntry{entry()},
-					NextPageToken: stringPointer(strings.Repeat(
-						"x",
-						collectorfleet.MaximumCollectorListCursorBytes+1,
-					)),
+					Entries:         []collectorfleet.CatalogEntry{entry()},
+					NextPageToken:   new(strings.Repeat("x", collectorfleet.MaximumCollectorListCursorBytes+1)),
 					CatalogRevision: 1,
 				}
 			},
@@ -550,7 +547,7 @@ func TestCollectorAdministrationRejectsInvalidListOutputAndReleasesPermit(
 			result: func() collectorfleet.ListResult {
 				return collectorfleet.ListResult{
 					Entries:         []collectorfleet.CatalogEntry{entry()},
-					NextPageToken:   stringPointer("cursor"),
+					NextPageToken:   new("cursor"),
 					TotalSize:       &one,
 					TotalSizeExact:  true,
 					CatalogRevision: 1,

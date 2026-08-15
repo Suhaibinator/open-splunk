@@ -179,7 +179,7 @@ func (state *explainPlanPreflight) scanNode(
 		return err
 	}
 	if !seenNodeType ||
-		!validExplainMetadata(nodeType, maximumExplainPlanMetadataLen) {
+		!validExplainMetadata(nodeType) {
 		return malformedExplainPlan()
 	}
 	if nodeType != "ReadFromMergeTree" {

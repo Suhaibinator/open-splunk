@@ -408,10 +408,7 @@ func TestPreviewForIsCoherentDuringConcurrentResultUpdates(t *testing.T) {
 					errs <- previewErr
 					return
 				}
-				wantRows := int(preview.Job.RowCount)
-				if wantRows > previewLimit {
-					wantRows = previewLimit
-				}
+				wantRows := min(int(preview.Job.RowCount), previewLimit)
 				wantTruncated := preview.Job.ResultsTruncated || preview.Job.RowCount > uint64(wantRows)
 				if len(preview.Rows) != wantRows || preview.Truncated != wantTruncated ||
 					preview.Revision != preview.Job.RowCount+1 {

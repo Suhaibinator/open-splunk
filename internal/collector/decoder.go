@@ -150,7 +150,7 @@ func (d *Decoder) Decode(raw []byte, position SourcePosition, collectedAt time.T
 		Origin:          sourceOrigin(d.cfg.InputID, position),
 	}
 	if d.cfg.Service != "" {
-		event.Service = proto.String(d.cfg.Service)
+		event.Service = new(d.cfg.Service)
 	}
 	if utf8.Valid(raw) {
 		event.RawEncoding = opensplunkv1.RawEncoding_RAW_ENCODING_UTF8
@@ -158,7 +158,7 @@ func (d *Decoder) Decode(raw []byte, position SourcePosition, collectedAt time.T
 
 	if d.cfg.Format == InputFormatRaw {
 		if event.RawEncoding == opensplunkv1.RawEncoding_RAW_ENCODING_UTF8 {
-			event.Message = proto.String(string(raw))
+			event.Message = new(string(raw))
 		}
 		event.Fields = d.mergeConstants(nil)
 		return event, nil
@@ -203,7 +203,7 @@ func (d *Decoder) extractCanonical(event *opensplunkv1.LogEvent, object jsonObje
 		if !ok {
 			return errors.New("level must be a string or null")
 		}
-		event.Level = proto.String(level)
+		event.Level = new(level)
 		event.Severity = severityForLevel(level)
 	}
 	if value, found, err := oneCanonical(object, "message", "msg", "body"); err != nil {
@@ -213,7 +213,7 @@ func (d *Decoder) extractCanonical(event *opensplunkv1.LogEvent, object jsonObje
 		if !ok {
 			return errors.New("message must be a string or null")
 		}
-		event.Message = proto.String(message)
+		event.Message = new(message)
 	}
 	if value, found, err := oneCanonical(object, "trace_id", "traceId"); err != nil {
 		return err
@@ -222,7 +222,7 @@ func (d *Decoder) extractCanonical(event *opensplunkv1.LogEvent, object jsonObje
 		if !ok {
 			return errors.New("trace_id must be a string or null")
 		}
-		event.TraceId = proto.String(traceID)
+		event.TraceId = new(traceID)
 	}
 	if value, found, err := oneCanonical(object, "span_id", "spanId"); err != nil {
 		return err
@@ -231,7 +231,7 @@ func (d *Decoder) extractCanonical(event *opensplunkv1.LogEvent, object jsonObje
 		if !ok {
 			return errors.New("span_id must be a string or null")
 		}
-		event.SpanId = proto.String(spanID)
+		event.SpanId = new(spanID)
 	}
 	return nil
 }
@@ -527,19 +527,19 @@ func severityForLevel(level string) opensplunkv1.LogSeverity {
 func sourceOrigin(inputID string, position SourcePosition) *opensplunkv1.EventOrigin {
 	origin := &opensplunkv1.EventOrigin{InputId: inputID}
 	if position.FileIdentity != "" {
-		origin.FileIdentity = proto.String(position.FileIdentity)
-		origin.FileFingerprintLength = proto.Uint32(position.FileFingerprintLength)
+		origin.FileIdentity = new(position.FileIdentity)
+		origin.FileFingerprintLength = new(position.FileFingerprintLength)
 	}
 	if position.SourcePath != "" {
-		origin.SourcePath = proto.String(position.SourcePath)
+		origin.SourcePath = new(position.SourcePath)
 	}
-	origin.StartOffset = proto.Uint64(position.StartOffset)
-	origin.EndOffset = proto.Uint64(position.EndOffset)
+	origin.StartOffset = new(position.StartOffset)
+	origin.EndOffset = new(position.EndOffset)
 	if position.LineNumber != 0 {
-		origin.LineNumber = proto.Uint64(position.LineNumber)
+		origin.LineNumber = new(position.LineNumber)
 	}
 	if position.NextLineNumber != 0 {
-		origin.NextLineNumber = proto.Uint64(position.NextLineNumber)
+		origin.NextLineNumber = new(position.NextLineNumber)
 	}
 	return origin
 }

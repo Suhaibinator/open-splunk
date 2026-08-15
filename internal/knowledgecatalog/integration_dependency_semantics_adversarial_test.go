@@ -65,7 +65,7 @@ func TestIntegrationBatchDependencySemanticSharedDAGQueryCountIsBounded(t *testi
 			),
 			state: StateActive, mutation: "create", timestamp: 10,
 		}}})
-		for index := 0; index < dependents; index++ {
+		for index := range dependents {
 			insertFixtureObject(t, database, fixtureObject{
 				id: fmt.Sprintf("ko-shared-source-%03d", index), owner: testOwner,
 				versions: []fixtureVersion{{
@@ -154,7 +154,7 @@ func recognizedInactiveSemanticVersions(name, destination string, state State, t
 	}}
 	definition := dependencyAliasDefinition(
 		testApp, name, SharingScopePrivate,
-		stringPointer(fmt.Sprintf("%s inactive", name)),
+		new(fmt.Sprintf("%s inactive", name)),
 		"inactive-*", "inactive_input", destination,
 	)
 	versions := []fixtureVersion{{
@@ -187,7 +187,7 @@ func TestIntegrationInactiveRecognizedExpressionsRemainInspectableUntilPublicati
 	database, store := newCatalogTestStore(t)
 	definition := func(name, expression, revision string) *opensplunkv1.KnowledgeObjectDefinition {
 		return dependencyCalculatedDefinition(
-			testApp, name, SharingScopePrivate, stringPointer(revision), "editable-*", expression, "result_value",
+			testApp, name, SharingScopePrivate, new(revision), "editable-*", expression, "result_value",
 		)
 	}
 	valid := func(name, revision string) *opensplunkv1.KnowledgeObjectDefinition {
@@ -394,7 +394,7 @@ func TestIntegrationDependencyGraphRejectsNodeTwoHundredFiftySeven(t *testing.T)
 	database, store := newCatalogTestStore(t)
 	dependencies := make([]fixtureDependency, maximumDependencyGraphNodes)
 	fields := make([]string, maximumDependencyGraphNodes)
-	for index := 0; index < maximumDependencyGraphNodes; index++ {
+	for index := range maximumDependencyGraphNodes {
 		objectID := fmt.Sprintf("ko-node-target-%03d", index)
 		field := fmt.Sprintf("node_%03d", index)
 		insertFixtureObject(t, database, fixtureObject{id: objectID, owner: testOwner, versions: []fixtureVersion{{
@@ -428,7 +428,7 @@ func TestIntegrationDependencyGraphRejectsEdgeOneThousandTwentyFive(t *testing.T
 	const leafCount = 16
 	const middleCount = 64
 	leaves := make([]fixtureDependency, leafCount)
-	for index := 0; index < leafCount; index++ {
+	for index := range leafCount {
 		objectID := fmt.Sprintf("ko-edge-leaf-%02d", index)
 		insertFixtureObject(t, database, fixtureObject{id: objectID, owner: testOwner, versions: []fixtureVersion{{
 			definition: dependencyExtractionDefinition(
@@ -441,7 +441,7 @@ func TestIntegrationDependencyGraphRejectsEdgeOneThousandTwentyFive(t *testing.T
 	}
 	middles := make([]fixtureDependency, middleCount)
 	middleFields := make([]string, middleCount)
-	for index := 0; index < middleCount; index++ {
+	for index := range middleCount {
 		objectID := fmt.Sprintf("ko-edge-middle-%02d", index)
 		output := fmt.Sprintf("edge_middle_%02d", index)
 		insertFixtureObject(t, database, fixtureObject{id: objectID, owner: testOwner, versions: []fixtureVersion{{
@@ -486,7 +486,7 @@ func TestIntegrationHistoricalDependencyFieldIdentityIsVersionPinned(t *testing.
 	insertFixtureObject(t, database, fixtureObject{id: "ko-history-semantic-source", owner: testOwner, versions: []fixtureVersion{
 		{
 			definition: dependencyAliasDefinition(
-				testApp, "history-semantic-source", SharingScopePrivate, stringPointer("history source v1"),
+				testApp, "history-semantic-source", SharingScopePrivate, new("history source v1"),
 				"history-*", "wanted", "history_alias",
 			),
 			state: StateActive, mutation: "create", timestamp: 20,
@@ -494,7 +494,7 @@ func TestIntegrationHistoricalDependencyFieldIdentityIsVersionPinned(t *testing.
 		},
 		{
 			definition: dependencyAliasDefinition(
-				testApp, "history-semantic-source", SharingScopePrivate, stringPointer("history source v2"),
+				testApp, "history-semantic-source", SharingScopePrivate, new("history source v2"),
 				"history-*", "wanted", "history_alias",
 			),
 			state: StateActive, mutation: "update", timestamp: 21,

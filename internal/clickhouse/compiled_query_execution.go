@@ -576,11 +576,6 @@ func (compiled CompiledQuery) EqualForExecutionContext(
 	) == 1, nil
 }
 
-func compiledExecutionDigest(compiled CompiledQuery) (compiledExecutionSeal, bool) {
-	digest, ok, _ := compiledExecutionDigestContext(context.Background(), compiled)
-	return digest, ok
-}
-
 func compiledExecutionDigestContext(
 	ctx context.Context,
 	compiled CompiledQuery,

@@ -138,7 +138,7 @@ func NewAppCatalog(db *DB, options AppCatalogOptions) (*AppCatalog, error) {
 	idGenerator := options.IDGenerator
 	if idGenerator == nil {
 		idGenerator = func() (string, error) {
-			return randomID("app_", 16)
+			return randomID("app_")
 		}
 	}
 	return &AppCatalog{
@@ -182,7 +182,7 @@ func (catalog *AppCatalog) createApp(
 		return AppWorkspace{}, err
 	}
 
-	for attempt := 0; attempt < maximumAppIDAttempts; attempt++ {
+	for range maximumAppIDAttempts {
 		appID, generateErr := catalog.idGenerator()
 		if generateErr != nil {
 			return AppWorkspace{}, fmt.Errorf("generate app ID: %w", generateErr)

@@ -833,9 +833,7 @@ func TestConcurrentClaimsAllocateUniqueMonotonicGenerations(t *testing.T) {
 	errs := make(chan error, contenders)
 	var workers sync.WaitGroup
 	for contender := range contenders {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
+		workers.Go(func() {
 			request := testClaim(baseTime.Add(time.Duration(contender) * time.Second))
 			request.StreamID = fmt.Sprintf("stream-%d", contender)
 			request.Hello.InstanceID = fmt.Sprintf("instance-%d", contender)
@@ -846,7 +844,7 @@ func TestConcurrentClaimsAllocateUniqueMonotonicGenerations(t *testing.T) {
 				return
 			}
 			leases <- lease
-		}()
+		})
 	}
 	close(start)
 	workers.Wait()
@@ -907,9 +905,7 @@ func TestConcurrentHeartbeatsPersistHighestObservationSequence(t *testing.T) {
 	errs := make(chan error, observations)
 	var workers sync.WaitGroup
 	for sequence := uint64(1); sequence <= observations; sequence++ {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
+		workers.Go(func() {
 			heartbeat := testHeartbeat(
 				connectedAt.Add(time.Duration(sequence)*time.Second),
 				sequence,
@@ -918,7 +914,7 @@ func TestConcurrentHeartbeatsPersistHighestObservationSequence(t *testing.T) {
 			<-start
 			_, err := store.RecordHeartbeat(ctx, lease, heartbeat)
 			errs <- err
-		}()
+		})
 	}
 	close(start)
 	workers.Wait()
@@ -958,9 +954,7 @@ func TestConcurrentAdministrationUpdatesHaveOneCASWinner(t *testing.T) {
 	errs := make(chan error, contenders)
 	var workers sync.WaitGroup
 	for contender := range contenders {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
+		workers.Go(func() {
 			displayName := fmt.Sprintf("collector-%d", contender)
 			<-start
 			result, updateErr := store.UpdateAdministration(
@@ -979,7 +973,7 @@ func TestConcurrentAdministrationUpdatesHaveOneCASWinner(t *testing.T) {
 				return
 			}
 			results <- result
-		}()
+		})
 	}
 	close(start)
 	workers.Wait()
@@ -1355,7 +1349,7 @@ func TestStoreValidatesContextAndBounds(t *testing.T) {
 			request.Hello.Inputs = append(request.Hello.Inputs, request.Hello.Inputs[0])
 		}},
 		{name: "oversized aggregate", mutate: func(request *ClaimRequest) {
-			request.Hello.Inputs[0].Source = stringPointer(
+			request.Hello.Inputs[0].Source = new(
 				strings.Repeat("x", maximumSourceBytes+1),
 			)
 		}},
@@ -1398,8 +1392,4 @@ func withLeaseStream(lease Lease, stream string) Lease {
 func withLeaseTenant(lease Lease, tenant string) Lease {
 	lease.TenantID = tenant
 	return lease
-}
-
-func stringPointer(value string) *string {
-	return &value
 }

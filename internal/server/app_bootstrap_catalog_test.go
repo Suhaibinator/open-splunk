@@ -85,7 +85,7 @@ func TestBootstrapAppCatalogIsLiveTenantScopedAndActiveOnly(t *testing.T) {
 		t,
 		handler,
 		&opensplunkv1.GetSystemBootstrapRequest{
-			PreferredAppId: stringPointer("app_archived"),
+			PreferredAppId: new("app_archived"),
 		},
 	)
 	if got := bootstrap.GetApps(); len(got) != 2 ||
@@ -125,7 +125,7 @@ func TestBootstrapAppCatalogIsLiveTenantScopedAndActiveOnly(t *testing.T) {
 		t,
 		handler,
 		&opensplunkv1.GetSystemBootstrapRequest{
-			PreferredAppId: stringPointer("app_missing"),
+			PreferredAppId: new("app_missing"),
 		},
 	)
 	if bootstrap.GetSelectedAppId() != "app_zeta" {
@@ -139,7 +139,7 @@ func TestBootstrapAppCatalogIsLiveTenantScopedAndActiveOnly(t *testing.T) {
 		t,
 		handler,
 		&opensplunkv1.GetSystemBootstrapRequest{
-			PreferredAppId: stringPointer("app_zeta"),
+			PreferredAppId: new("app_zeta"),
 		},
 	)
 	if bootstrap.GetSelectedAppId() != "app_zeta" {
@@ -161,7 +161,7 @@ func TestBootstrapAppCatalogIsLiveTenantScopedAndActiveOnly(t *testing.T) {
 		t,
 		handler,
 		&opensplunkv1.GetSystemBootstrapRequest{
-			PreferredAppId: stringPointer("app_alpha"),
+			PreferredAppId: new("app_alpha"),
 		},
 	)
 	if got := bootstrap.GetApps(); len(got) != 1 ||

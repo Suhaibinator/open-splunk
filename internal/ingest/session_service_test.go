@@ -126,7 +126,7 @@ func TestCollectActivatesExactLeaseWhileProcessPromotionIsCurrentAndFinalized(t 
 	servicePointer.Store(harness.server)
 
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1, 1, 0)
+	sendHello(t, stream, 1)
 	ready := recvResponse(t, stream).GetReady()
 	if ready == nil {
 		t.Fatal("first response was not Ready")
@@ -150,7 +150,7 @@ func TestCollectActivatesExactLeaseWhileProcessPromotionIsCurrentAndFinalized(t 
 		t.Fatal("Ready was sent without heartbeat runtime activation")
 	}
 
-	sendGoodbye(t, stream, 2)
+	sendGoodbye(t, stream)
 	if _, err := stream.Recv(); !errors.Is(err, io.EOF) {
 		t.Fatalf("stream goodbye error = %v, want EOF", err)
 	}
@@ -254,7 +254,7 @@ func TestCollectMapsHeartbeatActivationFailuresBeforeReadyAndCleansExactLease(
 			harness := newServiceHarness(t, config, authorizer, store)
 			stream := harness.stream(t, "Bearer good-token")
 
-			sendHello(t, stream, 1, 1, 0)
+			sendHello(t, stream, 1)
 			var activatedLease collectorfleet.Lease
 			select {
 			case activatedLease = <-activationStarted:
@@ -363,7 +363,7 @@ func TestCollectUsesFreshAdmissionAuthorityAndDetachedExactCleanup(t *testing.T)
 	config.SessionManager = manager
 	harness := newServiceHarness(t, config, authorizer, acceptingStore())
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1, 1, 0)
+	sendHello(t, stream, 1)
 	ready := recvResponse(t, stream).GetReady()
 	if ready == nil ||
 		len(ready.GetAuthorizedIndexes()) != 1 ||
@@ -434,7 +434,7 @@ func TestCollectCleansCommittedLeaseWhenAdmissionResultIsInvalid(t *testing.T) {
 	config.SessionManager = manager
 	harness := newServiceHarness(t, config, authorizer, acceptingStore())
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1, 1, 0)
+	sendHello(t, stream, 1)
 	response, err := stream.Recv()
 	if response != nil || status.Code(err) != codes.Unavailable {
 		t.Fatalf("Recv() = (%#v, %v), want nil/Unavailable", response, err)
@@ -644,7 +644,7 @@ func TestCollectAuthorizesExactLeaseAndPersistsHeartbeatBeforeBatch(t *testing.T
 	config.SessionManager = manager
 	harness := newServiceHarness(t, config, authorizer, store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1, 1, 0)
+	sendHello(t, stream, 1)
 	_ = recvResponse(t, stream)
 	if err := stream.Send(&opensplunkv1.CollectRequest{
 		StreamSequence: 2,
@@ -739,7 +739,7 @@ func TestCollectStaleDurableLeaseNeverStartsBatchWork(t *testing.T) {
 	config.SessionManager = manager
 	harness := newServiceHarness(t, config, authorizer, store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1, 1, 0)
+	sendHello(t, stream, 1)
 	_ = recvResponse(t, stream)
 	batch := validTestBatch(
 		"collector-a",
@@ -788,7 +788,7 @@ func TestCollectHeartbeatNoOpMeansLeaseLost(t *testing.T) {
 	config.SessionManager = manager
 	harness := newServiceHarness(t, config, authorizer, acceptingStore())
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1, 1, 0)
+	sendHello(t, stream, 1)
 	_ = recvResponse(t, stream)
 	if err := stream.Send(&opensplunkv1.CollectRequest{
 		StreamSequence: 2,
@@ -888,7 +888,7 @@ func TestCollectSerializesDurableAdmissionThroughProcessActivationPerCollector(t
 	harness := newServiceHarness(t, config, authorizer, acceptingStore())
 
 	first := harness.stream(t, "Bearer first-token")
-	sendHello(t, first, 1, 1, 0)
+	sendHello(t, first, 1)
 	select {
 	case <-firstAdmitStarted:
 	case <-time.After(time.Second):
@@ -896,7 +896,7 @@ func TestCollectSerializesDurableAdmissionThroughProcessActivationPerCollector(t
 	}
 
 	second := harness.stream(t, "Bearer second-token")
-	sendHello(t, second, 1, 1, 0)
+	sendHello(t, second, 1)
 	select {
 	case <-secondPreauthorized:
 	case <-time.After(time.Second):
@@ -940,7 +940,7 @@ func TestCollectSerializesDurableAdmissionThroughProcessActivationPerCollector(t
 	if _, err := first.Recv(); status.Code(err) != codes.Aborted {
 		t.Fatalf("superseded first stream error = %v, want Aborted", err)
 	}
-	sendGoodbye(t, second, 2)
+	sendGoodbye(t, second)
 	if _, err := second.Recv(); !errors.Is(err, io.EOF) {
 		t.Fatalf("second stream goodbye error = %v, want EOF", err)
 	}

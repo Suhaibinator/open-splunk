@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -358,10 +359,8 @@ func TestClickHouseRecoveryMarkerPrivilegesMatchOneShotResponsibilities(t *testi
 
 func slicesContainClickHousePrivilege(grants []clickHouseGrant, privilege string) bool {
 	for _, grant := range grants {
-		for _, candidate := range grant.privileges {
-			if candidate == privilege {
-				return true
-			}
+		if slices.Contains(grant.privileges, privilege) {
+			return true
 		}
 	}
 	return false
@@ -376,10 +375,8 @@ func slicesContainClickHousePrivilegeOutsideTarget(
 		if grant.target == allowedTarget {
 			continue
 		}
-		for _, candidate := range grant.privileges {
-			if candidate == privilege {
-				return true
-			}
+		if slices.Contains(grant.privileges, privilege) {
+			return true
 		}
 	}
 	return false

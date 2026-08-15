@@ -74,7 +74,6 @@ func TestRuntimeIndexAdministrationPublishesAuthenticatedAudit(t *testing.T) {
 		firstAdministration,
 		firstStores.auditEvents,
 		authenticator,
-		runtimeIndexAuditTenantID,
 		&runtimeIndexAuditWaker{},
 	)
 
@@ -263,7 +262,6 @@ func TestRuntimeIndexAdministrationPublishesAuthenticatedAudit(t *testing.T) {
 		secondAdministration,
 		secondStores.auditEvents,
 		authenticator,
-		runtimeIndexAuditTenantID,
 		&runtimeIndexAuditWaker{},
 	)
 	reopenedRetry := deleteRuntimeIndexForAudit(
@@ -397,7 +395,6 @@ func TestRuntimeIndexAdministrationPublishesAuthenticatedAudit(t *testing.T) {
 		secondAdministration,
 		secondStores.auditEvents,
 		newRuntimeIndexAuditAuthenticator(t, wrongBearerToken, "tenant-b"),
-		runtimeIndexAuditTenantID,
 		nil,
 	)
 	wrongScopeResponse := postRuntimeAppProto(
@@ -454,7 +451,6 @@ func TestRuntimeIndexAdministrationAuditFailureRollsBack(t *testing.T) {
 			bearerToken,
 			runtimeIndexAuditTenantID,
 		),
-		runtimeIndexAuditTenantID,
 		nil,
 	)
 	indexName := "runtime-audit-failure-rollback"
@@ -613,7 +609,6 @@ func newRuntimeIndexAuditHandlerForTest(
 	administration *control.AuditedIndexAdministration,
 	auditEvents server.AuditEvents,
 	authenticator auth.BrowserAuthenticator,
-	tenantID string,
 	waker server.IndexDataDeletionWaker,
 ) *server.Handler {
 	t.Helper()
@@ -622,7 +617,7 @@ func newRuntimeIndexAuditHandlerForTest(
 	config.IndexAdmin = administration
 	config.AuditEvents = auditEvents
 	config.BrowserAuthenticator = authenticator
-	config.TenantID = tenantID
+	config.TenantID = runtimeIndexAuditTenantID
 	config.OwnerID = runtimeIndexAuditOwnerID
 	config.AdministrativeAllowedHosts = []string{"127.0.0.1"}
 	if waker != nil {

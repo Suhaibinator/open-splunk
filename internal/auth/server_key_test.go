@@ -307,9 +307,7 @@ func TestConcurrentServerMasterKeyRegistrationSelectsOneIdentity(t *testing.T) {
 	results := make(chan result, contenders)
 	var workers sync.WaitGroup
 	for contender := range contenders {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
+		workers.Go(func() {
 			fingerprint := bytes.Repeat([]byte{byte(contender + 1)}, sha256.Size)
 			<-start
 			err := registerServerMasterKeyIdentityAt(
@@ -319,7 +317,7 @@ func TestConcurrentServerMasterKeyRegistrationSelectsOneIdentity(t *testing.T) {
 				time.Date(2026, 7, 28, 19, contender, 0, 0, time.UTC),
 			)
 			results <- result{fingerprint: fingerprint, err: err}
-		}()
+		})
 	}
 	close(start)
 	workers.Wait()

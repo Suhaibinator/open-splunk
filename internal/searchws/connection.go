@@ -422,7 +422,7 @@ func (connection *connection) subscribe(requestID string, command *opensplunkv1.
 		}
 	}()
 	for target, refresh := range refreshByTarget {
-		if _, err := target.refreshForSubscription(
+		if err := target.refreshForSubscription(
 			connection.ctx, refresh.previewRows, refresh.currentSnapshot,
 		); err != nil {
 			return &commandFailure{code: opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_JOB_NOT_FOUND, message: "job was not found"}

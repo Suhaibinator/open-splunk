@@ -3,6 +3,7 @@ package clickhouse
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"slices"
 	"sort"
 	"strings"
@@ -76,12 +77,7 @@ func (query CompiledQuery) LookupAssetVersions() ([]LookupAssetVersionEvidence, 
 	byVersion := make(map[string]LookupAssetVersionEvidence, len(query.lookupTables))
 	for _, table := range query.lookupTables {
 		key := table.tenantID + "\x00" + table.logicalID + "\x00" +
-			string([]byte{
-				byte(table.logicalVersion >> 56), byte(table.logicalVersion >> 48),
-				byte(table.logicalVersion >> 40), byte(table.logicalVersion >> 32),
-				byte(table.logicalVersion >> 24), byte(table.logicalVersion >> 16),
-				byte(table.logicalVersion >> 8), byte(table.logicalVersion),
-			})
+			string(binary.BigEndian.AppendUint64(nil, table.logicalVersion))
 		candidate := LookupAssetVersionEvidence{
 			tenantID:       strings.Clone(table.tenantID),
 			definitionName: strings.Clone(table.definitionName),

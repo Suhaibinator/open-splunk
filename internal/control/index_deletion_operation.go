@@ -102,8 +102,8 @@ func (db *DB) beginIndexDataDeletionWithAudit(
 		return existing, err
 	}
 
-	for attempt := 0; attempt < 3; attempt++ {
-		operationID, generateErr := randomID("idxdel_", 16)
+	for range 3 {
+		operationID, generateErr := randomID("idxdel_")
 		if generateErr != nil {
 			return IndexDeletionOperation{}, fmt.Errorf(
 				"generate index deletion operation ID: %w",

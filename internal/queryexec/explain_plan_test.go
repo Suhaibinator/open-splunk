@@ -436,7 +436,7 @@ func TestExplainPlanPreflightRejectsCollectionsBeforeTypedDecode(
 		var text strings.Builder
 		text.Grow(len(prefix) + count*(len(value)+1) + len(suffix))
 		text.WriteString(prefix)
-		for index := 0; index < count; index++ {
+		for index := range count {
 			if index > 0 {
 				text.WriteByte(',')
 			}

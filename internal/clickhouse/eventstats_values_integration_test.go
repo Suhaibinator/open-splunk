@@ -149,7 +149,7 @@ func testEventStatsValuesAgainstClickHouse(
 	// Ten rows annotated with the exact 10,000-member cell publish exactly
 	// 100,000 recursive result elements. Eleven rows annotated with 9,091
 	// members publish exactly 100,001.
-	for index := 0; index < 10; index++ {
+	for index := range 10 {
 		value := any(clickhousedriver.Dynamic{})
 		present := index == 0
 		if present {
@@ -166,7 +166,7 @@ func testEventStatsValuesAgainstClickHouse(
 		)
 	}
 	const valuesPerOverResultRow = 9_091
-	for index := 0; index < 11; index++ {
+	for index := range 11 {
 		value := any(clickhousedriver.Dynamic{})
 		present := index == 0
 		if present {
@@ -184,7 +184,7 @@ func testEventStatsValuesAgainstClickHouse(
 	}
 
 	exactBytes := strings.Repeat("x", int(MaximumStatsValuesBytesPerGroup))
-	for index := 0; index < 16; index++ {
+	for index := range 16 {
 		appendFixture(
 			fmt.Sprintf("eventstats-values-total-bytes-exact-%02d", index),
 			"eventstats-values-total-bytes-exact",
@@ -192,7 +192,7 @@ func testEventStatsValuesAgainstClickHouse(
 			index == 0,
 		)
 	}
-	for index := 0; index < 17; index++ {
+	for index := range 17 {
 		appendFixture(
 			fmt.Sprintf("eventstats-values-total-bytes-over-%02d", index),
 			"eventstats-values-total-bytes-over",

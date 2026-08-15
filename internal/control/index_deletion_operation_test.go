@@ -855,10 +855,7 @@ func TestIndexDeletionOperationSQLGuards(t *testing.T) {
 		t.Fatal("inserting a deleting index without an operation unexpectedly succeeded")
 	}
 
-	createdAt := time.Now().UTC().UnixMicro()
-	if createdAt < archived.UpdatedAt.UnixMicro() {
-		createdAt = archived.UpdatedAt.UnixMicro()
-	}
+	createdAt := max(time.Now().UTC().UnixMicro(), archived.UpdatedAt.UnixMicro())
 	invalidOperations := map[string]struct {
 		statement string
 		arguments []any
@@ -1138,10 +1135,7 @@ func TestIndexDeletionOperationReplaceCannotOrphanDeletingIndex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("archive second index: %v", err)
 	}
-	createdAt := time.Now().UTC().UnixMicro()
-	if createdAt < second.UpdatedAt.UnixMicro() {
-		createdAt = second.UpdatedAt.UnixMicro()
-	}
+	createdAt := max(time.Now().UTC().UnixMicro(), second.UpdatedAt.UnixMicro())
 	if _, err := db.SQLDB().ExecContext(ctx, `
 		INSERT OR REPLACE INTO index_deletion_operations (
 			deletion_operation_id,

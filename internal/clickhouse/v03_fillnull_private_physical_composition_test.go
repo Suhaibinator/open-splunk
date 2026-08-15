@@ -120,7 +120,7 @@ func TestV03FillNullAfterPrivatePhysicalProducersAgainstClickHouse(t *testing.T)
 	newEvent := func(id, group string, ordinal int) *ingest.StoredEvent {
 		event := testStoredEvent(id, "spl-v03-fillnull-private", indexTime)
 		event.Event.Source = "v03-fillnull-private"
-		event.Event.Level = stringPointer(group)
+		event.Event.Level = new(group)
 		event.Event.EventTime = timestamppb.New(eventAnchor.Add(time.Duration(ordinal) * time.Second))
 		event.Event.CollectedAt = timestamppb.New(event.Event.EventTime.AsTime().Add(-time.Second))
 		event.Event.Fields = typedObjectValue(typedField("group", typedString(group)))

@@ -87,7 +87,7 @@ func buildLookupCommand(command *spl.LookupCommand, outputSchemaKnown bool) (*Lo
 		}
 	}
 
-	writeMode := LookupWriteModeInvalid
+	var writeMode LookupWriteMode
 	switch command.OutputMode {
 	case spl.LookupOutputModeOverwrite:
 		writeMode = LookupWriteModeOverwrite

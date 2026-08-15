@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -83,7 +84,7 @@ func (store *fakeSearchHistory) callCount() int {
 
 func TestSearchHistoryRoutesRoundTripProtobufAndScope(t *testing.T) {
 	ownerID, tenantID := "owner-1", "tenant-1"
-	entry := historyEntry("job-1", testNow, "app-main", "saved-1", opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED)
+	entry := historyEntry("job-1", testNow, "app-main", "saved-1")
 	after := timestamppb.New(testNow.Add(-time.Hour).Add(999 * time.Nanosecond))
 	before := timestamppb.New(testNow.Add(time.Hour).Add(999 * time.Nanosecond))
 	appID, text, savedSearchID := " app-main ", " ERROR ", " saved-1 "
@@ -215,7 +216,7 @@ func TestSearchHistoryRoutesValidateBeforeStoreCalls(t *testing.T) {
 		{name: "get oversized ID", path: "/api/v1/search/history/get", request: &opensplunkv1.GetSearchHistoryEntryRequest{SearchJobId: strings.Repeat("x", maximumHistorySearchJobIDBytes+1)}},
 		{name: "page explicit zero", path: "/api/v1/search/history/list", request: &opensplunkv1.ListSearchHistoryRequest{Page: &opensplunkv1.PageRequest{PageSize: &zero}}},
 		{name: "page above server maximum", path: "/api/v1/search/history/list", request: &opensplunkv1.ListSearchHistoryRequest{Page: &opensplunkv1.PageRequest{PageSize: &tooLarge}}},
-		{name: "page oversized token", path: "/api/v1/search/history/list", request: &opensplunkv1.ListSearchHistoryRequest{Page: &opensplunkv1.PageRequest{PageToken: stringPointer(strings.Repeat("x", maximumHistoryPageTokenBytes+1))}}},
+		{name: "page oversized token", path: "/api/v1/search/history/list", request: &opensplunkv1.ListSearchHistoryRequest{Page: &opensplunkv1.PageRequest{PageToken: new(strings.Repeat("x", maximumHistoryPageTokenBytes+1))}}},
 		{name: "filter invalid app", path: "/api/v1/search/history/list", request: &opensplunkv1.ListSearchHistoryRequest{Filter: &opensplunkv1.SearchHistoryFilter{AppId: &controlApp}}},
 		{name: "filter oversized text", path: "/api/v1/search/history/list", request: &opensplunkv1.ListSearchHistoryRequest{Filter: &opensplunkv1.SearchHistoryFilter{Text: &oversizedText}}},
 		{name: "filter empty saved search", path: "/api/v1/search/history/list", request: &opensplunkv1.ListSearchHistoryRequest{Filter: &opensplunkv1.SearchHistoryFilter{SavedSearchId: &emptySaved}}},
@@ -270,7 +271,6 @@ func TestSearchHistoryRejectsUnknownFieldsFromServiceOutput(t *testing.T) {
 		testNow,
 		"app-main",
 		"saved-1",
-		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
 	)
 	entry.ProtoReflect().SetUnknown(
 		futureProtobufField("future-history-output"),
@@ -329,7 +329,7 @@ func TestSearchHistoryListUsesStoreAndTransportPageCap(t *testing.T) {
 func TestSearchHistoryListResponseStaysBelowEightMiB(t *testing.T) {
 	entries := make([]*opensplunkv1.SearchHistoryEntry, 0, maximumHistoryRowsPerResponse)
 	for index := int(maximumHistoryRowsPerResponse); index > 0; index-- {
-		entry := historyEntry(fmt.Sprintf("job-%02d", index), testNow, "", "", opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED)
+		entry := historyEntry(fmt.Sprintf("job-%02d", index), testNow, "", "")
 		entry.CompilerVersion = strings.Repeat("x", 480<<10)
 		if size := proto.Size(entry); size >= maximumHistoryEntryBytes {
 			t.Fatalf("fixture entry size = %d", size)
@@ -397,16 +397,16 @@ func TestSearchHistoryListSerializationIsCapacityBounded(t *testing.T) {
 }
 
 func TestSearchHistoryServiceOutputIsValidated(t *testing.T) {
-	valid := historyEntry("job-1", testNow, "app-main", "", opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED)
+	valid := historyEntry("job-1", testNow, "app-main", "")
 	tests := []struct {
 		name   string
 		result searchhistory.ListResult
 		filter *opensplunkv1.SearchHistoryFilter
 	}{
 		{name: "nil entry", result: searchhistory.ListResult{Entries: []*opensplunkv1.SearchHistoryEntry{nil}}},
-		{name: "cross filter", result: searchhistory.ListResult{Entries: []*opensplunkv1.SearchHistoryEntry{valid}}, filter: &opensplunkv1.SearchHistoryFilter{AppId: stringPointer("other-app")}},
-		{name: "invalid next token", result: searchhistory.ListResult{NextPageToken: stringPointer(" cursor ")}},
-		{name: "unexpected total", result: searchhistory.ListResult{TotalSize: uint64Pointer(1), TotalSizeExact: true}},
+		{name: "cross filter", result: searchhistory.ListResult{Entries: []*opensplunkv1.SearchHistoryEntry{valid}}, filter: &opensplunkv1.SearchHistoryFilter{AppId: new("other-app")}},
+		{name: "invalid next token", result: searchhistory.ListResult{NextPageToken: new(" cursor ")}},
+		{name: "unexpected total", result: searchhistory.ListResult{TotalSize: new(uint64(1)), TotalSizeExact: true}},
 		{name: "exact without total", result: searchhistory.ListResult{TotalSizeExact: true}},
 	}
 	for _, test := range tests {
@@ -435,8 +435,8 @@ func TestSearchHistoryServiceOutputIsValidated(t *testing.T) {
 	})
 
 	t.Run("out of order", func(t *testing.T) {
-		older := historyEntry("job-1", testNow.Add(-time.Hour), "", "", opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED)
-		newer := historyEntry("job-2", testNow, "", "", opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED)
+		older := historyEntry("job-1", testNow.Add(-time.Hour), "", "")
+		newer := historyEntry("job-2", testNow, "", "")
 		store := &fakeSearchHistory{listFn: func(context.Context, searchhistory.AccessScope, searchhistory.ListRequest) (searchhistory.ListResult, error) {
 			return searchhistory.ListResult{Entries: []*opensplunkv1.SearchHistoryEntry{older, newer}}, nil
 		}}
@@ -535,7 +535,7 @@ func TestCommittedSearchHistoryMutationsWinContextCancellationRace(t *testing.T)
 
 func TestSearchHistoryRoutesAreExactAndConditional(t *testing.T) {
 	store := &fakeSearchHistory{getFn: func(context.Context, searchhistory.AccessScope, string) (*opensplunkv1.SearchHistoryEntry, error) {
-		return historyEntry("job-1", testNow, "", "", opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED), nil
+		return historyEntry("job-1", testNow, "", ""), nil
 	}}
 	handler := newTestHandler(t, Config{SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, SearchHistory: store, WebUI: testUI()})
 	response := postProto(t, handler, "/api/v1/search/history/get/extra", &opensplunkv1.GetSearchHistoryEntryRequest{SearchJobId: "job-1"})
@@ -588,18 +588,18 @@ func TestSearchHistoryFeatureTracksConfiguredService(t *testing.T) {
 	}
 }
 
-func historyEntry(id string, created time.Time, appID, savedSearchID string, state opensplunkv1.SearchJobState) *opensplunkv1.SearchHistoryEntry {
+func historyEntry(id string, created time.Time, appID, savedSearchID string) *opensplunkv1.SearchHistoryEntry {
 	definition := &opensplunkv1.SearchDefinition{Spl: "index=main ERROR"}
 	if appID != "" {
-		definition.AppId = stringPointer(appID)
+		definition.AppId = new(appID)
 	}
 	source := &opensplunkv1.SearchJobSource{Origin: opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_AD_HOC}
 	if savedSearchID != "" {
 		source.Origin = opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH
-		source.SavedSearchId = stringPointer(savedSearchID)
+		source.SavedSearchId = new(savedSearchID)
 	}
 	return &opensplunkv1.SearchHistoryEntry{
-		SearchJobId: id, Definition: definition, Source: source, FinalState: state,
+		SearchJobId: id, Definition: definition, Source: source, FinalState: opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
 		MatchedEvents: 3, Duration: durationpb.New(2 * time.Second), CompilerVersion: "test",
 		CreatedAt: timestamppb.New(created), StartedAt: timestamppb.New(created.Add(time.Second)), FinishedAt: timestamppb.New(created.Add(3 * time.Second)),
 	}
@@ -613,10 +613,5 @@ func assertHistoryScope(t *testing.T, scope searchhistory.AccessScope, tenantID,
 }
 
 func containsServerFeature(features []opensplunkv1.ServerFeature, target opensplunkv1.ServerFeature) bool {
-	for _, feature := range features {
-		if feature == target {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(features, target)
 }

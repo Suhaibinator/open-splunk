@@ -11,6 +11,7 @@ import (
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
+	"github.com/Suhaibinator/open-splunk/internal/exportjobproto"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"google.golang.org/protobuf/types/known/durationpb"
 )
@@ -168,8 +169,8 @@ func exportJobToProto(job exportjobs.Job, now time.Time) (*opensplunkv1.ExportJo
 	definition := &opensplunkv1.ExportDefinition{
 		SearchJobId: job.SearchJobID,
 		Columns:     slices.Clone(job.Columns),
-		RowLimit:    uint64Pointer(job.RowLimit),
-		ByteLimit:   uint64Pointer(job.ByteLimit),
+		RowLimit:    new(job.RowLimit),
+		ByteLimit:   new(job.ByteLimit),
 	}
 	switch job.Format {
 	case exportjobs.FormatCSV:
@@ -203,7 +204,7 @@ func exportJobToProto(job exportjobs.Job, now time.Time) (*opensplunkv1.ExportJo
 		StateVersion: job.Version,
 		Definition:   definition,
 		Format:       exportFormatToProto(job.Format),
-		State:        exportStateToProto(job.State),
+		State:        exportjobproto.State(job.State),
 		Progress: &opensplunkv1.ExportProgress{
 			RowsWritten:  job.Progress.RowsWritten,
 			BytesWritten: job.Progress.BytesWritten,
@@ -229,7 +230,7 @@ func exportJobToProto(job exportjobs.Job, now time.Time) (*opensplunkv1.ExportJo
 	}
 	if job.Failure != nil {
 		result.Failure = &opensplunkv1.ExportFailure{
-			Code:      exportFailureCodeToProto(job.Failure.Code),
+			Code:      exportjobproto.FailureCode(job.Failure.Code),
 			Message:   job.Failure.Message,
 			Retryable: job.Failure.Retryable,
 		}
@@ -265,25 +266,6 @@ func exportFormatToProto(format exportjobs.Format) opensplunkv1.ExportFormat {
 	return opensplunkv1.ExportFormat_EXPORT_FORMAT_UNSPECIFIED
 }
 
-func exportStateToProto(state exportjobs.State) opensplunkv1.ExportJobState {
-	switch state {
-	case exportjobs.StateQueued:
-		return opensplunkv1.ExportJobState_EXPORT_JOB_STATE_QUEUED
-	case exportjobs.StateRunning:
-		return opensplunkv1.ExportJobState_EXPORT_JOB_STATE_RUNNING
-	case exportjobs.StateCompleted:
-		return opensplunkv1.ExportJobState_EXPORT_JOB_STATE_COMPLETED
-	case exportjobs.StateFailed:
-		return opensplunkv1.ExportJobState_EXPORT_JOB_STATE_FAILED
-	case exportjobs.StateCanceled:
-		return opensplunkv1.ExportJobState_EXPORT_JOB_STATE_CANCELED
-	case exportjobs.StateExpired:
-		return opensplunkv1.ExportJobState_EXPORT_JOB_STATE_EXPIRED
-	default:
-		return opensplunkv1.ExportJobState_EXPORT_JOB_STATE_UNSPECIFIED
-	}
-}
-
 func csvHeaderModeToProto(mode exportjobs.CSVHeaderMode) opensplunkv1.CsvHeaderMode {
 	switch mode {
 	case exportjobs.CSVHeaderFieldNames:
@@ -305,23 +287,6 @@ func jsonIntegerEncodingToProto(encoding exportjobs.JSONIntegerEncoding) openspl
 		return opensplunkv1.JsonIntegerEncoding_JSON_INTEGER_ENCODING_STRING
 	default:
 		return opensplunkv1.JsonIntegerEncoding_JSON_INTEGER_ENCODING_UNSPECIFIED
-	}
-}
-
-func exportFailureCodeToProto(code exportjobs.FailureCode) opensplunkv1.ExportFailureCode {
-	switch code {
-	case exportjobs.FailureRowLimit:
-		return opensplunkv1.ExportFailureCode_EXPORT_FAILURE_CODE_ROW_LIMIT
-	case exportjobs.FailureByteLimit:
-		return opensplunkv1.ExportFailureCode_EXPORT_FAILURE_CODE_BYTE_LIMIT
-	case exportjobs.FailureSourceUnavailable:
-		return opensplunkv1.ExportFailureCode_EXPORT_FAILURE_CODE_SEARCH_UNAVAILABLE
-	case exportjobs.FailureStorageUnavailable:
-		return opensplunkv1.ExportFailureCode_EXPORT_FAILURE_CODE_STORAGE_UNAVAILABLE
-	case exportjobs.FailureInternal:
-		return opensplunkv1.ExportFailureCode_EXPORT_FAILURE_CODE_INTERNAL
-	default:
-		return opensplunkv1.ExportFailureCode_EXPORT_FAILURE_CODE_UNSPECIFIED
 	}
 }
 

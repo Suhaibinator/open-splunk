@@ -13,7 +13,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"reflect"
 	"slices"
 	"strings"
 
@@ -23,6 +22,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgevalidation"
+	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobproto"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchsnapshot"
@@ -116,9 +116,9 @@ type Service struct {
 }
 
 func NewService(config Config) (*Service, error) {
-	if nilDependency(config.Searches) || config.Writer == nil ||
-		!config.Writer.ReadyForManagement() || nilDependency(config.Compiler) ||
-		nilDependency(config.Executor) {
+	if nilcheck.IsNil(config.Searches) || config.Writer == nil ||
+		!config.Writer.ReadyForManagement() || nilcheck.IsNil(config.Compiler) ||
+		nilcheck.IsNil(config.Executor) {
 		return nil, errors.New("knowledge preview dependencies are incomplete")
 	}
 	return &Service{
@@ -132,9 +132,9 @@ func NewService(config Config) (*Service, error) {
 // Ready reports only complete service construction. It does not advertise a
 // capability or imply that the production compiler accepts nonempty programs.
 func (service *Service) Ready() bool {
-	return service != nil && !nilDependency(service.searches) &&
+	return service != nil && !nilcheck.IsNil(service.searches) &&
 		service.writer != nil && service.writer.ReadyForManagement() &&
-		!nilDependency(service.compiler) && !nilDependency(service.executor)
+		!nilcheck.IsNil(service.compiler) && !nilcheck.IsNil(service.executor)
 }
 
 // Preview validates, derives, compiles, and executes one all-or-nothing
@@ -703,21 +703,5 @@ func classifyExecutionError(err error) error {
 		return ErrResourceLimit
 	default:
 		return ErrUnavailable
-	}
-}
-
-func nilDependency(value any) bool {
-	if value == nil {
-		return true
-	}
-	// All accepted dependencies are interfaces implemented by pointers in
-	// production. A typed nil must not make the dormant route configurable.
-	reflected := reflect.ValueOf(value)
-	switch reflected.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map,
-		reflect.Pointer, reflect.Slice:
-		return reflected.IsNil()
-	default:
-		return false
 	}
 }

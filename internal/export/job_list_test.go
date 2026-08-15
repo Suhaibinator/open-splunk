@@ -595,7 +595,7 @@ func TestManagerListValidatesContextScopeFiltersAndBounds(t *testing.T) {
 		{"invalid state high", testAccess, ListRequest{StateFilters: []State{StateExpired + 1}}, ErrInvalidListFilter},
 		{"empty search filter", testAccess, ListRequest{SearchJobIDFilter: &emptySearch}, ErrInvalidListFilter},
 		{"invalid search utf8", testAccess, ListRequest{SearchJobIDFilter: &invalidUTF8}, ErrInvalidListFilter},
-		{"long search", testAccess, ListRequest{SearchJobIDFilter: stringPointer(strings.Repeat("s", maximumSearchIDBytes+1))}, ErrInvalidListFilter},
+		{"long search", testAccess, ListRequest{SearchJobIDFilter: new(strings.Repeat("s", maximumSearchIDBytes+1))}, ErrInvalidListFilter},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -699,9 +699,7 @@ func TestExportListIndexSurvivesConcurrentMutation(t *testing.T) {
 	var wait sync.WaitGroup
 	start := make(chan struct{})
 	for worker := range workers {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
+		wait.Go(func() {
 			<-start
 			for index := range iterations {
 				id := fmt.Sprintf("worker-%02d-%04d", worker, index)
@@ -722,7 +720,7 @@ func TestExportListIndexSurvivesConcurrentMutation(t *testing.T) {
 					return
 				}
 			}
-		}()
+		})
 	}
 	close(start)
 	wait.Wait()
@@ -1058,10 +1056,6 @@ func exportListIDs(jobs []ListItem) []string {
 		result[index] = jobs[index].ID
 	}
 	return result
-}
-
-func stringPointer(value string) *string {
-	return &value
 }
 
 type exportListCountingContext struct {

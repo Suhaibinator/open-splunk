@@ -20,6 +20,7 @@ import {
 } from "@/gen/ts/open_splunk/v1/lookup";
 import type { PreviewLookupResponse } from "@/gen/ts/open_splunk/v1/lookup_api";
 import { isOptionalRouteUnavailable } from "@/lib/api";
+import { createErrorMessage } from "@/lib/error-message";
 
 import { Modal } from "../search-workspace/modal";
 import type { KnowledgeManagerAppOption } from "./knowledge-manager-feature";
@@ -95,11 +96,7 @@ interface LookupEditorProps {
   ) => Promise<void>;
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error && error.message.trim().length > 0
-    ? error.message
-    : "The server did not return a usable lookup response.";
-}
+const errorMessage = createErrorMessage("The server did not return a usable lookup response.");
 
 function lines(value: string): string[] {
   return value

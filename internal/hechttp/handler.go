@@ -205,7 +205,7 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 		if route.Allow != "" {
 			response.Header().Set("Allow", route.Allow)
 		}
-		handler.writeError(response, err, 0)
+		handler.writeError(response, err)
 		return
 	}
 	if route.Endpoint == hec.EndpointHealth {
@@ -213,36 +213,36 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 		return
 	}
 	if request.ContentLength > handler.limits.MaximumCompressedBodyBytes {
-		handler.writeError(response, hec.NewProtocolError(hec.ErrorCompressedBodyTooLarge, nil), 0)
+		handler.writeError(response, hec.NewProtocolError(hec.ErrorCompressedBodyTooLarge, nil))
 		return
 	}
 	if len(request.RequestURI) > handler.limits.MaximumRequestTargetBytes {
-		handler.writeError(response, hec.NewProtocolError(hec.ErrorInvalidDataFormat, nil), 0)
+		handler.writeError(response, hec.NewProtocolError(hec.ErrorInvalidDataFormat, nil))
 		return
 	}
 	encoding, err := handler.validateFraming(request, route.Endpoint)
 	if err != nil {
-		handler.writeError(response, err, 0)
+		handler.writeError(response, err)
 		return
 	}
 	if queryAuthorizationPresent(request.URL.RawQuery) {
-		handler.writeError(response, hec.NewProtocolError(hec.ErrorQueryAuthorizationDisabled, nil), 0)
+		handler.writeError(response, hec.NewProtocolError(hec.ErrorQueryAuthorizationDisabled, nil))
 		return
 	}
 	releaseGlobal, err := handler.beginGlobal()
 	if err != nil {
-		handler.writeError(response, err, 0)
+		handler.writeError(response, err)
 		return
 	}
 	defer releaseGlobal()
 	authentication, err := handler.authenticate(request)
 	if err != nil {
-		handler.writeError(response, err, 0)
+		handler.writeError(response, err)
 		return
 	}
 	query, err := parseEndpointQuery(request.URL.RawQuery, route.Endpoint, handler.limits)
 	if err != nil {
-		handler.writeError(response, err, 0)
+		handler.writeError(response, err)
 		return
 	}
 	requiredChannel := authentication.HECProfile.IndexerAcknowledgment ||
@@ -254,12 +254,12 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 		handler.limits.MaximumChannelBytes,
 	)
 	if err != nil {
-		handler.writeError(response, err, 0)
+		handler.writeError(response, err)
 		return
 	}
 	if route.Endpoint == hec.EndpointAcknowledgment &&
 		!authentication.HECProfile.IndexerAcknowledgment {
-		handler.writeError(response, hec.NewProtocolError(hec.ErrorAcknowledgmentDisabled, nil), 0)
+		handler.writeError(response, hec.NewProtocolError(hec.ErrorAcknowledgmentDisabled, nil))
 		return
 	}
 	protectedContext, release, err := handler.beginToken(
@@ -267,7 +267,7 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 		authentication.TokenID,
 	)
 	if err != nil {
-		handler.writeError(response, err, 0)
+		handler.writeError(response, err)
 		return
 	}
 	defer release()
@@ -283,7 +283,7 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 	case hec.EndpointAcknowledgment:
 		handler.serveAcknowledgment(response, request, authentication, channel, encoding)
 	default:
-		handler.writeError(response, hec.NewProtocolError(hec.ErrorInternal, nil), 0)
+		handler.writeError(response, hec.NewProtocolError(hec.ErrorInternal, nil))
 	}
 }
 
@@ -416,13 +416,13 @@ func (handler *Handler) serveJSON(
 ) {
 	body, err := hec.NewBodyReader(request.Body, encoding, handler.limits)
 	if err != nil {
-		handler.writeError(response, err, 0)
+		handler.writeError(response, err)
 		return
 	}
 	defer body.Close()
 	decoder, err := hec.NewEnvelopeDecoder(body, handler.limits)
 	if err != nil {
-		handler.writeError(response, err, 0)
+		handler.writeError(response, err)
 		return
 	}
 	envelopes := make([]hec.Envelope, 0, 1)
@@ -433,20 +433,20 @@ func (handler *Handler) serveJSON(
 		}
 		if decodeErr != nil {
 			handler.metrics.observeDecodeFailure()
-			handler.writeError(response, decodeErr, 0)
+			handler.writeError(response, decodeErr)
 			return
 		}
 		envelopes = append(envelopes, envelope)
 	}
 	context, err := handler.requestContext(authentication, channel, receivedAt)
 	if err != nil {
-		handler.writeError(response, err, 0)
+		handler.writeError(response, err)
 		return
 	}
 	admission, err := hecadapter.JSON(context, envelopes)
 	if err != nil {
 		handler.metrics.observeDecodeFailure()
-		handler.writeError(response, err, 0)
+		handler.writeError(response, err)
 		return
 	}
 	handler.stage(response, request, admission, authentication.HECProfile.IndexerAcknowledgment)
@@ -463,13 +463,13 @@ func (handler *Handler) serveRaw(
 ) {
 	body, err := hec.NewBodyReader(request.Body, encoding, handler.limits)
 	if err != nil {
-		handler.writeError(response, err, 0)
+		handler.writeError(response, err)
 		return
 	}
 	defer body.Close()
 	decoder, err := hec.NewRawDecoder(body, handler.limits)
 	if err != nil {
-		handler.writeError(response, err, 0)
+		handler.writeError(response, err)
 		return
 	}
 	lines := make([][]byte, 0, 1)
@@ -480,20 +480,20 @@ func (handler *Handler) serveRaw(
 		}
 		if decodeErr != nil {
 			handler.metrics.observeDecodeFailure()
-			handler.writeError(response, decodeErr, 0)
+			handler.writeError(response, decodeErr)
 			return
 		}
 		lines = append(lines, line)
 	}
 	context, err := handler.requestContext(authentication, channel, receivedAt)
 	if err != nil {
-		handler.writeError(response, err, 0)
+		handler.writeError(response, err)
 		return
 	}
 	admission, err := hecadapter.Raw(context, query, lines)
 	if err != nil {
 		handler.metrics.observeDecodeFailure()
-		handler.writeError(response, err, 0)
+		handler.writeError(response, err)
 		return
 	}
 	handler.stage(response, request, admission, authentication.HECProfile.IndexerAcknowledgment)
@@ -525,14 +525,14 @@ func (handler *Handler) stage(
 	}
 	if result.HECRequestSequence == 0 ||
 		result.State != ingest.StoredBatchPending && result.State != ingest.StoredBatchCommitted {
-		handler.writeError(response, hec.NewProtocolError(hec.ErrorInternal, nil), 0)
+		handler.writeError(response, hec.NewProtocolError(hec.ErrorInternal, nil))
 		return
 	}
 	public := hec.NewResponse(hec.ResultSuccess)
 	if acknowledgment {
 		if result.HECAcknowledgmentID == 0 ||
 			result.HECAcknowledgmentID > uint64(hec.MaximumEmittedAcknowledgmentID) {
-			handler.writeError(response, hec.NewProtocolError(hec.ErrorInternal, nil), 0)
+			handler.writeError(response, hec.NewProtocolError(hec.ErrorInternal, nil))
 			return
 		}
 		value := int64(result.HECAcknowledgmentID) // #nosec G115 -- checked above.
@@ -551,14 +551,14 @@ func (handler *Handler) serveAcknowledgment(
 ) {
 	body, err := hec.NewBodyReader(request.Body, encoding, handler.limits)
 	if err != nil {
-		handler.writeError(response, err, 0)
+		handler.writeError(response, err)
 		return
 	}
 	defer body.Close()
 	decoded, err := hec.DecodeAcknowledgmentRequest(body, handler.limits)
 	if err != nil {
 		handler.metrics.observeDecodeFailure()
-		handler.writeError(response, err, 0)
+		handler.writeError(response, err)
 		return
 	}
 	ids := make([]uint64, len(decoded.IDs))
@@ -588,7 +588,7 @@ func (handler *Handler) serveAcknowledgment(
 	}
 	encoded, err := hec.MarshalAcknowledgments(results, handler.limits)
 	if err != nil {
-		handler.writeError(response, hec.NewProtocolError(hec.ErrorInternal, err), 0)
+		handler.writeError(response, hec.NewProtocolError(hec.ErrorInternal, err))
 		return
 	}
 	handler.metrics.observeAcknowledgmentQuery(uint64(len(results)), misses)
@@ -648,8 +648,8 @@ func mapStageError(err error) (int, time.Duration, error) {
 	return 0, 0, hec.NewProtocolError(hec.ErrorInternal, err)
 }
 
-func (handler *Handler) writeError(response http.ResponseWriter, err error, retryAfter time.Duration) {
-	handler.writeErrorWithStatus(response, err, 0, retryAfter)
+func (handler *Handler) writeError(response http.ResponseWriter, err error) {
+	handler.writeErrorWithStatus(response, err, 0, 0)
 }
 
 func (handler *Handler) writeErrorWithStatus(
@@ -693,13 +693,7 @@ func writeJSON(response http.ResponseWriter, status int, body []byte, retryAfter
 	response.Header().Set("Cache-Control", "no-store")
 	response.Header().Set("Pragma", "no-cache")
 	if retryAfter > 0 {
-		seconds := int64(math.Ceil(retryAfter.Seconds()))
-		if seconds < 1 {
-			seconds = 1
-		}
-		if seconds > maximumRetryAfterSeconds {
-			seconds = maximumRetryAfterSeconds
-		}
+		seconds := min(max(int64(math.Ceil(retryAfter.Seconds())), 1), maximumRetryAfterSeconds)
 		response.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
 	}
 	response.WriteHeader(status)

@@ -81,8 +81,8 @@ func newWriterBlackboxHarness(t *testing.T) *writerBlackboxHarness {
 			Slug:        slug,
 			DisplayName: slug,
 			DefaultTimeRange: &control.AppTimeRange{
-				Earliest: writerStringPointer("-24h"),
-				Latest:   writerStringPointer("now"),
+				Earliest: new("-24h"),
+				Latest:   new("now"),
 			},
 		}); err != nil {
 			t.Fatalf("CreateApp(%q): %v", slug, err)
@@ -204,10 +204,6 @@ func (harness *writerBlackboxHarness) createDraft(
 		t.Fatalf("Writer.Create(%q) mutated its caller-owned request: got %v want %v", name, request, submitted)
 	}
 	return request, response
-}
-
-func writerStringPointer(value string) *string {
-	return &value
 }
 
 type writerAuthoritySnapshot struct {
@@ -399,7 +395,6 @@ func readWriterIdempotencyReceipt(
 	database *control.DB,
 	actorKind audit.ActorKind,
 	actorID string,
-	route string,
 	requestID string,
 ) writerIdempotencyReceipt {
 	t.Helper()
@@ -417,7 +412,7 @@ func readWriterIdempotencyReceipt(
 		writerTestTenant,
 		string(actorKind),
 		actorID,
-		route,
+		"objects.create",
 		requestID,
 	).Scan(
 		&receipt.ActorKind,

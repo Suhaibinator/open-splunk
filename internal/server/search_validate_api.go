@@ -59,7 +59,7 @@ func validationResultToProto(result searchjobs.ValidationResult) (*opensplunkv1.
 		if !ok {
 			return nil, errors.New("valid search result kind is invalid")
 		}
-		response.NormalizedSpl = stringPointer(result.NormalizedSPL)
+		response.NormalizedSpl = new(result.NormalizedSPL)
 		response.ReferencedIndexes = slices.Clone(result.ReferencedIndexes)
 		response.ReferencedFields = slices.Clone(result.ReferencedFields)
 		response.PredictedResultKind = kind

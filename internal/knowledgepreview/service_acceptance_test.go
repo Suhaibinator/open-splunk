@@ -19,8 +19,8 @@ func TestProductionPreviewAdapterUsesRetainedScopeAndBoundedPairedResults(t *tes
 		wantRows    int
 	}{
 		{name: "absent defaults to one hundred", wantRows: int(DefaultMaximumRows)},
-		{name: "one", maximumRows: uint32Pointer(1), wantRows: 1},
-		{name: "exact maximum", maximumRows: uint32Pointer(MaximumRows), wantRows: int(MaximumRows)},
+		{name: "one", maximumRows: new(uint32(1)), wantRows: 1},
+		{name: "exact maximum", maximumRows: new(MaximumRows), wantRows: int(MaximumRows)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newPreviewFixture(t)

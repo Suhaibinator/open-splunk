@@ -164,7 +164,7 @@ func compileKnowledgeExtractionStage(
 		}
 	}
 	for index := range groups {
-		_, previous, previousBound, previousErr :=
+		previous, previousBound, previousErr :=
 			compileKnowledgeExtractionPrevious(
 				groups[index].destination.Name,
 				state,
@@ -498,17 +498,17 @@ func compileKnowledgeExtractionPrevious(
 	state compileState,
 	stage int,
 	index int,
-) (plan.FieldRef, compiledKnowledgeExtractionPrevious, uint64, error) {
+) (compiledKnowledgeExtractionPrevious, uint64, error) {
 	destination, err := resolveKnowledgeExtractionDestination(name)
 	if err != nil {
-		return plan.FieldRef{}, compiledKnowledgeExtractionPrevious{}, 0, err
+		return compiledKnowledgeExtractionPrevious{}, 0, err
 	}
 	field, present, err := resolveCompiledField(destination, state)
 	if err != nil {
-		return plan.FieldRef{}, compiledKnowledgeExtractionPrevious{}, 0, err
+		return compiledKnowledgeExtractionPrevious{}, 0, err
 	}
 	if !present {
-		return destination, compiledKnowledgeExtractionPrevious{
+		return compiledKnowledgeExtractionPrevious{
 			valueSQL:           "CAST(NULL AS Dynamic)",
 			presentSQL:         "toUInt8(0)",
 			storedTypeSQL:      "toUInt8(0)",
@@ -521,7 +521,7 @@ func compileKnowledgeExtractionPrevious(
 	if !field.storedPath.isZero() {
 		authority := field.storedPath
 		if err := validateKnowledgeAliasSourceField(field); err != nil {
-			return plan.FieldRef{}, compiledKnowledgeExtractionPrevious{}, 0, fmt.Errorf(
+			return compiledKnowledgeExtractionPrevious{}, 0, fmt.Errorf(
 				"compile ClickHouse knowledge extraction prior source for %q: %w",
 				name,
 				err,
@@ -561,9 +561,9 @@ func compileKnowledgeExtractionPrevious(
 			physicalSQL,
 		)
 		if expressionErr != nil {
-			return plan.FieldRef{}, compiledKnowledgeExtractionPrevious{}, 0, expressionErr
+			return compiledKnowledgeExtractionPrevious{}, 0, expressionErr
 		}
-		return destination, compiledKnowledgeExtractionPrevious{
+		return compiledKnowledgeExtractionPrevious{
 			valueSQL:            expressions.valueSQL,
 			presentSQL:          expressions.producedSQL,
 			storedTypeSQL:       expressions.storedTypeSQL,
@@ -580,15 +580,15 @@ func compileKnowledgeExtractionPrevious(
 		field.relativeFieldTypesSQL,
 		field.fieldMetadataVersionSQL,
 	); err != nil {
-		return plan.FieldRef{}, compiledKnowledgeExtractionPrevious{}, 0, err
+		return compiledKnowledgeExtractionPrevious{}, 0, err
 	}
 	presentSQL, presentArgs := knownFieldPresenceSQL(field)
 	typeSQL, typeArgs, typeErr := knownFieldStoredTypeSQL(field)
 	if typeErr != nil {
-		return plan.FieldRef{}, compiledKnowledgeExtractionPrevious{}, 0, typeErr
+		return compiledKnowledgeExtractionPrevious{}, 0, typeErr
 	}
 	if len(presentArgs) != 0 || len(typeArgs) != 0 {
-		return plan.FieldRef{}, compiledKnowledgeExtractionPrevious{}, 0, errors.New(
+		return compiledKnowledgeExtractionPrevious{}, 0, errors.New(
 			"compile ClickHouse knowledge extraction prior source retains unbound arguments",
 		)
 	}
@@ -600,7 +600,7 @@ func compileKnowledgeExtractionPrevious(
 		typesSQL = field.relativeFieldTypesSQL
 		metadataVersionSQL = "toUInt8(" + field.fieldMetadataVersionSQL + ")"
 	}
-	return destination, compiledKnowledgeExtractionPrevious{
+	return compiledKnowledgeExtractionPrevious{
 		valueSQL:           "CAST(" + field.valueSQL + " AS Dynamic)",
 		presentSQL:         "toUInt8(ifNull(" + presentSQL + ", 0))",
 		storedTypeSQL:      "toUInt8(" + typeSQL + ")",
@@ -621,8 +621,7 @@ func finalizeKnowledgeExtractionDestination(
 	names := group.previous.namesSQL
 	types := group.previous.typesSQL
 	metadataVersion := group.previous.metadataVersionSQL
-	for index := len(group.candidates) - 1; index >= 0; index-- {
-		candidate := group.candidates[index]
+	for _, candidate := range slices.Backward(group.candidates) {
 		write := candidate.producedSQL + " != 0"
 		if candidate.overwrite == knowledgeprogram.PreserveExisting {
 			write += " AND " + previousPresent + " = 0"

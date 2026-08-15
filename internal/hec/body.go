@@ -81,10 +81,7 @@ func (reader *hardLimitReader) Read(destination []byte) (int, error) {
 		reader.failed = NewProtocolError(reader.kind, nil)
 		return 0, reader.failed
 	}
-	maximumRead := int64(len(destination))
-	if maximumRead > remaining+1 {
-		maximumRead = remaining + 1
-	}
+	maximumRead := min(int64(len(destination)), remaining+1)
 	n, err := reader.source.Read(destination[:int(maximumRead)])
 	if int64(n) > remaining {
 		allowed := int(remaining)

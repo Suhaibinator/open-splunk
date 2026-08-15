@@ -201,13 +201,13 @@ func TestSearchAttemptAuditListUsesAdministratorTenantAndExactFilters(
 		TotalSize:      &total,
 		TotalSizeExact: true,
 	}}
-	handler := newSearchAttemptAuditTestHandler(t, service, 0)
+	handler := newSearchAttemptAuditTestHandler(t, service)
 	actorID := browserGateOwnerID
 	ownerID := "searched-owner"
 	input := &opensplunkv1.ListSearchAttemptAuditEventsRequest{
 		Page: &opensplunkv1.PageRequest{
-			PageSize:         uint32Pointer(1),
-			PageToken:        stringPointer("opaque-page"),
+			PageSize:         new(uint32(1)),
+			PageToken:        new("opaque-page"),
 			IncludeTotalSize: true,
 		},
 		ActorIdFilter: &actorID,
@@ -258,15 +258,15 @@ func TestSearchAttemptAuditListRejectsInvalidRequestsBeforeStorage(t *testing.T)
 			name: "oversized page",
 			request: &opensplunkv1.ListSearchAttemptAuditEventsRequest{
 				Page: &opensplunkv1.PageRequest{
-					PageSize: uint32Pointer(searchaudit.MaximumListPageSize + 1),
+					PageSize: new(uint32(searchaudit.MaximumListPageSize + 1)),
 				},
 			},
 		},
 		{name: "empty actor", request: &opensplunkv1.ListSearchAttemptAuditEventsRequest{
-			ActorIdFilter: stringPointer(""),
+			ActorIdFilter: new(""),
 		}},
 		{name: "padded owner", request: &opensplunkv1.ListSearchAttemptAuditEventsRequest{
-			OwnerIdFilter: stringPointer(" owner"),
+			OwnerIdFilter: new(" owner"),
 		}},
 		{name: "oversized owner", request: &opensplunkv1.ListSearchAttemptAuditEventsRequest{
 			OwnerIdFilter: &oversized,
@@ -274,7 +274,7 @@ func TestSearchAttemptAuditListRejectsInvalidRequestsBeforeStorage(t *testing.T)
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			service := &fakeSearchAttemptAudit{}
-			handler := newSearchAttemptAuditTestHandler(t, service, 0)
+			handler := newSearchAttemptAuditTestHandler(t, service)
 			response := postAuthenticatedSearchAttemptAudit(t, handler, test.request)
 			if response.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
@@ -293,7 +293,7 @@ func TestSearchAttemptAuditListRequiresAdministratorBeforeBodyOrStorage(
 	t.Parallel()
 
 	service := &fakeSearchAttemptAudit{}
-	handler := newSearchAttemptAuditTestHandler(t, service, 0)
+	handler := newSearchAttemptAuditTestHandler(t, service)
 	body := &observedRequestBody{}
 	request := httptest.NewRequestWithContext(
 		context.Background(),
@@ -468,7 +468,7 @@ func TestSearchAttemptAuditListRejectsOutOfContractServicePages(t *testing.T) {
 			page := searchaudit.ListPage{Events: []searchaudit.Event{valid}}
 			mutate(&page)
 			service := &fakeSearchAttemptAudit{page: page}
-			handler := newSearchAttemptAuditTestHandler(t, service, 0)
+			handler := newSearchAttemptAuditTestHandler(t, service)
 			response := postAuthenticatedSearchAttemptAudit(t, handler, input)
 			if response.Code != http.StatusInternalServerError {
 				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
@@ -481,7 +481,7 @@ func TestSearchAttemptAuditFeatureAndRouteFollowServiceConfiguration(t *testing.
 	t.Parallel()
 
 	service := &fakeSearchAttemptAudit{}
-	enabled := newSearchAttemptAuditTestHandler(t, service, 0)
+	enabled := newSearchAttemptAuditTestHandler(t, service)
 	bootstrap := postProto(
 		t,
 		enabled,
@@ -547,7 +547,7 @@ func TestSearchAttemptAuditErrorsAreSanitized(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			service := &fakeSearchAttemptAudit{err: test.err}
-			handler := newSearchAttemptAuditTestHandler(t, service, 0)
+			handler := newSearchAttemptAuditTestHandler(t, service)
 			response := postAuthenticatedSearchAttemptAudit(
 				t,
 				handler,
@@ -607,7 +607,6 @@ func TestSearchAttemptAuditCodecEnforcesTwoMiBResponseCeiling(t *testing.T) {
 func newSearchAttemptAuditTestHandler(
 	t *testing.T,
 	service SearchAttemptAuditEvents,
-	maximumPageSize uint32,
 ) *Handler {
 	t.Helper()
 	return newTestHandler(t, Config{
@@ -618,7 +617,6 @@ func newSearchAttemptAuditTestHandler(
 		WebUI:                      testUI(),
 		TenantID:                   browserGateTenantID,
 		OwnerID:                    browserGateOwnerID,
-		MaximumPageSize:            maximumPageSize,
 		MaximumConcurrentResponses: 2,
 		AdministrativeAllowedHosts: []string{"example.com"},
 	})

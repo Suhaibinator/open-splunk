@@ -262,10 +262,10 @@ func TestPreviewMaximumRowsPolicy(t *testing.T) {
 		valid bool
 	}{
 		{name: "absent", want: DefaultMaximumRows, valid: true},
-		{name: "zero", value: uint32Pointer(0)},
-		{name: "one", value: uint32Pointer(1), want: 1, valid: true},
-		{name: "maximum", value: uint32Pointer(MaximumRows), want: MaximumRows, valid: true},
-		{name: "overflow", value: uint32Pointer(MaximumRows + 1)},
+		{name: "zero", value: new(uint32(0))},
+		{name: "one", value: new(uint32(1)), want: 1, valid: true},
+		{name: "maximum", value: new(MaximumRows), want: MaximumRows, valid: true},
+		{name: "overflow", value: new(MaximumRows + 1)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			got, err := previewMaximumRows(test.value)
@@ -464,7 +464,7 @@ func TestPreviewInvalidRowBoundsFailBeforeRetainedTraffic(t *testing.T) {
 	}
 	for _, maximumRows := range []uint32{0, MaximumRows + 1} {
 		request := invalidPreviewRequest()
-		request.MaximumRows = uint32Pointer(maximumRows)
+		request.MaximumRows = new(maximumRows)
 		if _, err := service.Preview(
 			context.Background(), fixture.access, fixture.scope, request,
 		); !errors.Is(err, ErrInvalidRequest) {
@@ -710,5 +710,3 @@ func TestPreviewCancellationBeforeAcquisitionIsAtomic(t *testing.T) {
 		t.Fatal("canceled Preview reached compiler or executor")
 	}
 }
-
-func uint32Pointer(value uint32) *uint32 { return &value }

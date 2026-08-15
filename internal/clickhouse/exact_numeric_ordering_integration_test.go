@@ -127,7 +127,7 @@ func testExactNumericOrderingAgainstClickHouse(
 		)
 		event.BatchID = "exact-numeric-ordering-batch"
 		event.Event.Source = "exact-numeric-ordering"
-		event.Event.Service = stringPointer(service)
+		event.Event.Service = new(service)
 		return event
 	}
 	events := []*ingest.StoredEvent{

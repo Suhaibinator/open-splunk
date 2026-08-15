@@ -13,22 +13,21 @@ const (
 	// process-local MaximumActiveCollectors liveness bound.
 	MaximumDurableCollectorsPerTenant = 256
 
-	maximumTenantIDBytes          = 255
-	maximumDisplayNameBytes       = 255
-	maximumCollectorVersionBytes  = 128
-	maximumHostnameBytes          = 255
-	maximumOperatingSystemBytes   = 128
-	maximumArchitectureBytes      = 128
-	maximumCapabilities           = 64
-	maximumAuthorizedIndexes      = 256
-	maximumInputs                 = 256
-	maximumSourceBytes            = 4096
-	maximumSourcetypeBytes        = 255
-	maximumStatusMessageBytes     = 8 << 10
-	maximumHelloSnapshotBytes     = 1 << 20
-	maximumHeartbeatSnapshotBytes = 1 << 20
-	maximumPersistedEnumValue     = uint32(1<<31 - 1)
-	maximumPublicUnixMicro        = int64(253_402_300_799_999_999)
+	maximumTenantIDBytes         = 255
+	maximumDisplayNameBytes      = 255
+	maximumCollectorVersionBytes = 128
+	maximumHostnameBytes         = 255
+	maximumOperatingSystemBytes  = 128
+	maximumArchitectureBytes     = 128
+	maximumCapabilities          = 64
+	maximumAuthorizedIndexes     = 256
+	maximumInputs                = 256
+	maximumSourceBytes           = 4096
+	maximumSourcetypeBytes       = 255
+	maximumStatusMessageBytes    = 8 << 10
+	maximumSnapshotBytes         = 1 << 20
+	maximumPersistedEnumValue    = uint32(1<<31 - 1)
+	maximumPublicUnixMicro       = int64(253_402_300_799_999_999)
 )
 
 var (

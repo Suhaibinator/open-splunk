@@ -12,7 +12,7 @@ import (
 )
 
 func TestScanAllForCompatibilityAuditUsesOneQueryAcrossOwners(t *testing.T) {
-	database, store, _ := openTestStore(t)
+	database, store := openTestStore(t)
 	ctx := context.Background()
 	type fixture struct {
 		owner  string
@@ -80,8 +80,8 @@ func TestScanAllForCompatibilityAuditUsesOneQueryAcrossOwners(t *testing.T) {
 }
 
 func TestScanAllForCompatibilityAuditStopsAfterCancellation(t *testing.T) {
-	_, store, _ := openTestStore(t)
-	for index := 0; index < 3; index++ {
+	_, store := openTestStore(t)
+	for index := range 3 {
 		if _, err := store.Create(
 			context.Background(),
 			AccessScope{OwnerID: "owner"},
@@ -137,7 +137,7 @@ func TestScanAllForCompatibilityAuditRejectsCorruptRecordsBeforeCallback(t *test
 	} {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
-			database, store, _ := openTestStore(t)
+			database, store := openTestStore(t)
 			created, err := store.Create(
 				context.Background(),
 				AccessScope{OwnerID: "owner"},

@@ -31,7 +31,7 @@ func NewExplainer(
 	if err := validateExplainerOptions(options); err != nil {
 		return nil, err
 	}
-	baseSettings, err := querySettings(config)
+	baseSettings, err := validatedQuerySettings(config)
 	if err != nil {
 		return nil, fmt.Errorf("create ClickHouse EXPLAIN: %w", err)
 	}

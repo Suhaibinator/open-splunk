@@ -233,7 +233,7 @@ func TestSavedSearchAndHistoryRerunResolveCurrentKnowledgeWhileExportRetainsOrig
 	savedDefinition.Search.IndexScope = []string{"main"}
 	timezone := "UTC"
 	savedDefinition.Search.TimeRange = &opensplunkv1.TimeRangeSpec{
-		Earliest: stringPointer("-1h"), Latest: stringPointer("now"), Timezone: &timezone,
+		Earliest: new("-1h"), Latest: new("now"), Timezone: &timezone,
 	}
 	saved, err := savedSearches.Create(
 		ctx,
@@ -327,7 +327,7 @@ func TestSavedSearchAndHistoryRerunResolveCurrentKnowledgeWhileExportRetainsOrig
 		Definition: savedRunDefinition,
 		Source: &opensplunkv1.SearchJobSource{
 			Origin:        opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH,
-			SavedSearchId: stringPointer(saved.GetSavedSearchId()),
+			SavedSearchId: new(saved.GetSavedSearchId()),
 		},
 	}
 	original := createKnowledgeSavedSearchJob(t, handler, manager, savedRun, jobIDs[0])

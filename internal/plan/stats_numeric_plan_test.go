@@ -223,7 +223,7 @@ func TestBuildStatsNumericEvalRevalidatesSharedArithmeticBudget(t *testing.T) {
 	measures := make([]spl.StatsAggregate, spl.MaximumStatsMeasures)
 	for index := range measures {
 		var expression spl.ScalarExpr = field
-		for operator := 0; operator < 17; operator++ {
+		for range 17 {
 			expression = &spl.ScalarBinaryExpr{
 				Op:    spl.ScalarBinaryOpAdd,
 				Left:  expression,

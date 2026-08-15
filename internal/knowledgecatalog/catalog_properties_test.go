@@ -108,7 +108,7 @@ func TestCatalogScopeAndFilterNormalizationAreCanonicalAndDetached(t *testing.T)
 	canonicalRequest := ListRequest{
 		PageSize: 17, IncludeTotal: true,
 		AppIDFilter: &canonicalAppFilter, OwnerIDFilter: &canonicalOwnerFilter,
-		TextFilter: stringPointer("needle"), SelectorTextFilter: stringPointer("prod-*"),
+		TextFilter: new("needle"), SelectorTextFilter: new("prod-*"),
 		ObjectTypeFilters: []ObjectType{ObjectTypeCalculatedField, ObjectTypeFieldAlias},
 		StateFilters:      []State{StateActive, StateDeleted},
 		SharingScopeFilters: []SharingScope{
@@ -173,8 +173,8 @@ func TestPublicListRequestValidatorPinsStoreBoundsWithoutMutation(t *testing.T) 
 	invalid := []ListRequest{
 		{PageSize: MaximumPageSize + 1},
 		{PageToken: " cursor-with-whitespace "},
-		{AppIDFilter: stringPointer("")},
-		{TextFilter: stringPointer("\x7f")},
+		{AppIDFilter: new("")},
+		{TextFilter: new("\x7f")},
 		{ObjectTypeFilters: []ObjectType{
 			ObjectTypeFieldAlias,
 			ObjectTypeFieldExtraction,
@@ -202,8 +202,8 @@ func TestCatalogFingerprintBindsEverySemanticInputButNotToken(t *testing.T) {
 	baseScope := ReadScope{TenantID: "tenant-a", OwnerID: "owner-a", ReadableAppIDs: []string{"app-a", "app-b"}}
 	base := ListRequest{
 		PageSize: 7, IncludeTotal: true,
-		AppIDFilter: stringPointer("app-a"), OwnerIDFilter: stringPointer("owner-a"),
-		TextFilter: stringPointer("needle"), SelectorTextFilter: stringPointer("prod"),
+		AppIDFilter: new("app-a"), OwnerIDFilter: new("owner-a"),
+		TextFilter: new("needle"), SelectorTextFilter: new("prod"),
 		ObjectTypeFilters: []ObjectType{ObjectTypeFieldAlias},
 		StateFilters:      []State{StateActive},
 		SharingScopeFilters: []SharingScope{
@@ -259,10 +259,10 @@ func TestCatalogFingerprintBindsEverySemanticInputButNotToken(t *testing.T) {
 	}
 	appendVariant("page size", func(r *ListRequest) { r.PageSize++ })
 	appendVariant("include total", func(r *ListRequest) { r.IncludeTotal = false })
-	appendVariant("app filter", func(r *ListRequest) { r.AppIDFilter = stringPointer("app-b") })
-	appendVariant("owner filter", func(r *ListRequest) { r.OwnerIDFilter = stringPointer("owner-b") })
-	appendVariant("text", func(r *ListRequest) { r.TextFilter = stringPointer("other") })
-	appendVariant("selector", func(r *ListRequest) { r.SelectorTextFilter = stringPointer("other") })
+	appendVariant("app filter", func(r *ListRequest) { r.AppIDFilter = new("app-b") })
+	appendVariant("owner filter", func(r *ListRequest) { r.OwnerIDFilter = new("owner-b") })
+	appendVariant("text", func(r *ListRequest) { r.TextFilter = new("other") })
+	appendVariant("selector", func(r *ListRequest) { r.SelectorTextFilter = new("other") })
 	appendVariant("object types", func(r *ListRequest) { r.ObjectTypeFilters = []ObjectType{ObjectTypeCalculatedField} })
 	appendVariant("states", func(r *ListRequest) { r.StateFilters = []State{StateDisabled} })
 	appendVariant("sharing scopes", func(r *ListRequest) { r.SharingScopeFilters = []SharingScope{SharingScopeApp} })
@@ -347,12 +347,12 @@ func TestCatalogTextAndSelectorFiltersUseExactBinaryContainment(t *testing.T) {
 			t.Fatalf("%s names = %v, error = %v, want %v", label, names(page.Objects), err, want)
 		}
 	}
-	assertNames("text exact", ListRequest{TextFilter: stringPointer("Needle")}, []string{"binary_filter"})
-	assertNames("text case", ListRequest{TextFilter: stringPointer("needle")}, nil)
-	assertNames("text unicode bytes", ListRequest{TextFilter: stringPointer("café")}, []string{"binary_filter"})
-	assertNames("text unicode case", ListRequest{TextFilter: stringPointer("CAFÉ")}, nil)
-	assertNames("selector exact", ListRequest{SelectorTextFilter: stringPointer("Prod-É")}, []string{"binary_filter"})
-	assertNames("selector case", ListRequest{SelectorTextFilter: stringPointer("prod-é")}, nil)
+	assertNames("text exact", ListRequest{TextFilter: new("Needle")}, []string{"binary_filter"})
+	assertNames("text case", ListRequest{TextFilter: new("needle")}, nil)
+	assertNames("text unicode bytes", ListRequest{TextFilter: new("café")}, []string{"binary_filter"})
+	assertNames("text unicode case", ListRequest{TextFilter: new("CAFÉ")}, nil)
+	assertNames("selector exact", ListRequest{SelectorTextFilter: new("Prod-É")}, []string{"binary_filter"})
+	assertNames("selector case", ListRequest{SelectorTextFilter: new("prod-é")}, nil)
 }
 
 func TestCatalogCursorShapeMatrixAndAdversarialTokens(t *testing.T) {

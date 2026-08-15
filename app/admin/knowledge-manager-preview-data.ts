@@ -33,6 +33,7 @@ import { validFlatMultivalueColumnPresentation } from "@/lib/api/result-column-p
 import {
   adaptKnowledgeValidationResponse,
   knowledgeValidateRequest,
+  utf8ByteLength,
 } from "./knowledge-manager-data";
 
 export const KNOWLEDGE_PREVIEW_DEFAULT_MAXIMUM_ROWS = 100;
@@ -400,23 +401,4 @@ function validText(value: string): boolean {
 
 function validUTF16(value: string): boolean {
   return utf8ByteLength(value) !== Number.MAX_SAFE_INTEGER;
-}
-
-function utf8ByteLength(value: string, stopAfter = Number.MAX_SAFE_INTEGER): number {
-  let bytes = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code <= 0x7f) bytes += 1;
-    else if (code <= 0x7ff) bytes += 2;
-    else if (code >= 0xd800 && code <= 0xdbff) {
-      const low = value.charCodeAt(index + 1);
-      if (low < 0xdc00 || low > 0xdfff) return Number.MAX_SAFE_INTEGER;
-      bytes += 4;
-      index += 1;
-    } else if (code >= 0xdc00 && code <= 0xdfff) {
-      return Number.MAX_SAFE_INTEGER;
-    } else bytes += 3;
-    if (bytes > stopAfter) return bytes;
-  }
-  return bytes;
 }

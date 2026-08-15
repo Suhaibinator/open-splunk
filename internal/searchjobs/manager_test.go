@@ -274,13 +274,11 @@ func TestCancelQueuedAndRunningJobsIsIdempotentAndPropagatesContext(t *testing.T
 
 	var cancelWG sync.WaitGroup
 	for range 32 {
-		cancelWG.Add(1)
-		go func() {
-			defer cancelWG.Done()
+		cancelWG.Go(func() {
 			if cancelErr := manager.Cancel(running.ID); cancelErr != nil {
 				t.Errorf("Cancel(running) = %v", cancelErr)
 			}
-		}()
+		})
 	}
 	cancelWG.Wait()
 	waitForState(t, manager, running.ID, StateCanceled)
@@ -973,7 +971,7 @@ func TestRecursiveValueConstructorsRejectExcessiveDepth(t *testing.T) {
 
 	object := StringValue("leaf")
 	var err error
-	for depth := 0; depth < 64; depth++ {
+	for range 64 {
 		object, err = ObjectValue(ObjectField{Name: "child", Value: object})
 		if err != nil {
 			break

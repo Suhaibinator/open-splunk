@@ -50,13 +50,13 @@ func relationalDepthEvalPipeline(
 		source.WriteString("| ")
 		source.WriteString(command)
 	}
-	for command := 0; command < singleCommands; command++ {
+	for command := range singleCommands {
 		appendCommand("eval single" + strconv.Itoa(command) + "=1")
 	}
 	if finalAssignments > 0 {
 		var final strings.Builder
 		final.WriteString("eval ")
-		for assignment := 0; assignment < finalAssignments; assignment++ {
+		for assignment := range finalAssignments {
 			if assignment > 0 {
 				final.WriteByte(',')
 			}

@@ -359,7 +359,7 @@ func TestValidatePublicationActiveCandidateAlphaRenameLowMidHigh(t *testing.T) {
 
 func TestValidatePublicationActiveCandidateAlphaRenameProperty(t *testing.T) {
 	var want []publicationDependency
-	for index := 0; index < 48; index++ {
+	for index := range 48 {
 		identity := fmt.Sprintf("%c-validation-%02d", 'a'+rune(index%26), index)
 		decision, err := validatePublicationActiveCandidate(
 			t.Context(),
@@ -420,7 +420,7 @@ func TestPublicationActiveValidationBaselineAndPostShareSemanticBudget(t *testin
 		seenBaselineCohorts:  make(map[[sha256.Size]byte][]publicationTransitionValidatedCohort),
 		winnerKeyCommitments: make(map[*publicationTransitionCanonicalObject][sha256.Size]byte),
 	}
-	for index := uint64(0); index < maximumPublicationTransitionSemanticPrograms-1; index++ {
+	for index := range maximumPublicationTransitionSemanticPrograms - 1 {
 		winner := publicationActiveValidationBudgetWinner(t, index)
 		if err := evaluator.validateBaselineCohort([]*publicationTransitionCanonicalObject{winner}); err != nil {
 			t.Fatalf("baseline cohort %d: %v", index, err)

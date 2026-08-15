@@ -8,6 +8,7 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
+	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 	"github.com/Suhaibinator/open-splunk/internal/searchinspection"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -56,7 +57,7 @@ type runtimeSearchInspection struct {
 func newRuntimeSearchInspection(
 	config runtimeSearchInspectionConfig,
 ) (*runtimeSearchInspection, error) {
-	if nilRuntimeDependency(config.Searches) {
+	if nilcheck.IsNil(config.Searches) {
 		return nil, errors.New(
 			"compose search inspection runtime: completed search snapshots " +
 				"are required",
@@ -86,7 +87,7 @@ func newRuntimeSearchInspection(
 			err,
 		)
 	}
-	if nilRuntimeDependency(explainer) {
+	if nilcheck.IsNil(explainer) {
 		return nil, errors.New(
 			"compose search inspection runtime: query Explainer is required",
 		)
@@ -128,7 +129,7 @@ func (inspection *runtimeSearchInspection) Close() error {
 	inspection.closeOnce.Do(func() {
 		serviceErr := inspection.service.Close(context.Background())
 		var explainerErr error
-		if nilRuntimeDependency(inspection.explainer) {
+		if nilcheck.IsNil(inspection.explainer) {
 			explainerErr = errors.New(
 				"close search inspection runtime: query Explainer is required",
 			)

@@ -32,7 +32,7 @@ func searchAuditTestCursorKey() []byte {
 	return bytes.Repeat([]byte{0x73}, minimumCursorKeyBytes)
 }
 
-func openSearchAuditTestDatabase(t *testing.T) (string, *control.DB) {
+func openSearchAuditTestDatabase(t *testing.T) *control.DB {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "control.db")
 	database, err := control.Open(context.Background(), path)
@@ -46,7 +46,7 @@ func openSearchAuditTestDatabase(t *testing.T) (string, *control.DB) {
 			}
 		}
 	})
-	return path, database
+	return database
 }
 
 func newSearchAuditTestStore(
@@ -142,7 +142,7 @@ func (logging countingSearchAuditLogger) Trace(
 
 func TestAppendUsesCallerTransactionAndSafeActorProjection(t *testing.T) {
 	t.Parallel()
-	_, database := openSearchAuditTestDatabase(t)
+	database := openSearchAuditTestDatabase(t)
 	store := newSearchAuditTestStore(t, database, searchAuditTestCursorKey(), 3)
 	ctx := context.Background()
 
@@ -211,7 +211,7 @@ func TestAppendUsesCallerTransactionAndSafeActorProjection(t *testing.T) {
 
 func TestRollingCapPrunesExactlyTheOldestAndKeepsMonotonicSequences(t *testing.T) {
 	t.Parallel()
-	_, database := openSearchAuditTestDatabase(t)
+	database := openSearchAuditTestDatabase(t)
 	store := newSearchAuditTestStore(t, database, searchAuditTestCursorKey(), 3)
 	ctx := context.Background()
 
@@ -232,10 +232,7 @@ func TestRollingCapPrunesExactlyTheOldestAndKeepsMonotonicSequences(t *testing.T
 		if index > 3 {
 			wantFirst = int64(index - 2)
 		}
-		wantCount := int64(index)
-		if wantCount > 3 {
-			wantCount = 3
-		}
+		wantCount := min(int64(index), 3)
 		if state.FirstSequence != wantFirst || state.NextSequence != int64(index+1) ||
 			state.RetainedCount != wantCount || state.MaximumRetainedAttempts != 3 {
 			t.Fatalf("state after append %d = %+v", index, state)
@@ -261,7 +258,7 @@ func TestRollingCapPrunesExactlyTheOldestAndKeepsMonotonicSequences(t *testing.T
 }
 
 func TestExistingTenantAppendUsesBoundedStatementBudget(t *testing.T) {
-	_, database := openSearchAuditTestDatabase(t)
+	database := openSearchAuditTestDatabase(t)
 	store := newSearchAuditTestStore(t, database, searchAuditTestCursorKey(), 5)
 	ctx := context.Background()
 	appendSearchAuditTestEvent(
@@ -314,7 +311,7 @@ func TestAppendRejectsMissingRetainedBoundaryBeforeMutation(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ctx := context.Background()
-			_, database := openSearchAuditTestDatabase(t)
+			database := openSearchAuditTestDatabase(t)
 			store := newSearchAuditTestStore(t, database, searchAuditTestCursorKey(), 5)
 			for index := 1; index <= 3; index++ {
 				appendSearchAuditTestEvent(
@@ -377,7 +374,7 @@ func TestAppendRejectsMissingRetainedBoundaryBeforeMutation(t *testing.T) {
 
 func TestAppendRejectsRowsBehindEmptyStateBeforeMutation(t *testing.T) {
 	ctx := context.Background()
-	_, database := openSearchAuditTestDatabase(t)
+	database := openSearchAuditTestDatabase(t)
 	store := newSearchAuditTestStore(t, database, searchAuditTestCursorKey(), 5)
 	if err := database.GORMDB().Create(&searchAttemptTenantStateRecord{
 		TenantID:                "tenant-corrupt-empty",
@@ -488,7 +485,7 @@ func assertSearchAuditFailedAppendDidNotAdvance(
 func TestAppendRejectsInvalidAndForeignTransactionInputs(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	_, database := openSearchAuditTestDatabase(t)
+	database := openSearchAuditTestDatabase(t)
 	store := newSearchAuditTestStore(t, database, nil, 2)
 	definition := searchAuditTestDefinition("owner", "job", 0)
 
@@ -500,7 +497,7 @@ func TestAppendRejectsInvalidAndForeignTransactionInputs(t *testing.T) {
 	); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("autocommit append error = %v", err)
 	}
-	_, foreign := openSearchAuditTestDatabase(t)
+	foreign := openSearchAuditTestDatabase(t)
 	foreignTx := foreign.GORMDB().WithContext(ctx).Begin()
 	if foreignTx.Error != nil {
 		t.Fatal(foreignTx.Error)
@@ -532,7 +529,7 @@ func TestAppendRejectsInvalidAndForeignTransactionInputs(t *testing.T) {
 
 func TestConstructionValidatesConfigurationAndDetachesCursorKey(t *testing.T) {
 	t.Parallel()
-	_, database := openSearchAuditTestDatabase(t)
+	database := openSearchAuditTestDatabase(t)
 
 	if store, err := New(nil, Options{}); store != nil || !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("New(nil) = (%v, %v)", store, err)

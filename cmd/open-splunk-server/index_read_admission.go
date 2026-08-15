@@ -8,6 +8,7 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
+	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 )
 
 // indexReadCatalog is the durable half of search read admission. The live
@@ -29,10 +30,10 @@ func newCatalogIndexReadAdmission(
 	live indexread.Admission,
 	tenantID string,
 ) (*catalogIndexReadAdmission, error) {
-	if nilRuntimeDependency(catalog) {
+	if nilcheck.IsNil(catalog) {
 		return nil, errors.New("create index read admission: catalog is required")
 	}
-	if nilRuntimeDependency(live) {
+	if nilcheck.IsNil(live) {
 		return nil, errors.New("create index read admission: live admission is required")
 	}
 	if err := indexread.ValidateTenantID(tenantID); err != nil {
@@ -50,8 +51,8 @@ func (admission *catalogIndexReadAdmission) Acquire(
 	tenantID string,
 	indexNames []string,
 ) (context.Context, func(), error) {
-	if admission == nil || nilRuntimeDependency(admission.catalog) ||
-		nilRuntimeDependency(admission.live) {
+	if admission == nil || nilcheck.IsNil(admission.catalog) ||
+		nilcheck.IsNil(admission.live) {
 		return nil, nil, errors.New("acquire index read: admission is unavailable")
 	}
 	if ctx == nil {

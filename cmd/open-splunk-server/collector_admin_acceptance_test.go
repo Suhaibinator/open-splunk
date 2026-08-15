@@ -85,7 +85,7 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	_, tokenStore, err := openSecurityStores(
+	tokenStore, err := openSecurityStores(
 		ctx,
 		firstDatabase,
 		masterKeyPath,
@@ -512,8 +512,7 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 		heartbeatAt,
 	)
 
-	pageSize := uint32(1)
-	onlineListRequest := collectorAdminAcceptanceListRequest(pageSize, "")
+	onlineListRequest := collectorAdminAcceptanceListRequest("")
 	onlineListResponse := postCollectorAdminAcceptanceProto(
 		t,
 		firstHandler,
@@ -589,10 +588,7 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 		displayUpdatedAt,
 	)
 
-	invalidatedRequest := collectorAdminAcceptanceListRequest(
-		pageSize,
-		onlineCursor,
-	)
+	invalidatedRequest := collectorAdminAcceptanceListRequest(onlineCursor)
 	invalidatedResponse := postCollectorAdminAcceptanceProto(
 		t,
 		firstHandler,
@@ -695,7 +691,7 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 		t,
 		firstHandler,
 		"/api/v1/collectors/list",
-		collectorAdminAcceptanceListRequest(pageSize, ""),
+		collectorAdminAcceptanceListRequest(""),
 		administratorToken,
 	)
 	if stableListResponse.Code != http.StatusOK {
@@ -784,10 +780,7 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 		t,
 		reopenedHandler,
 		"/api/v1/collectors/list",
-		collectorAdminAcceptanceListRequest(
-			pageSize,
-			stableOfflineCursor,
-		),
+		collectorAdminAcceptanceListRequest(stableOfflineCursor),
 		administratorToken,
 	)
 	if reopenedContinuationResponse.Code != http.StatusOK {
@@ -918,10 +911,8 @@ func unmarshalCollectorAdminAcceptanceResponse(
 	}
 }
 
-func collectorAdminAcceptanceListRequest(
-	pageSize uint32,
-	pageToken string,
-) *opensplunkv1.ListCollectorsRequest {
+func collectorAdminAcceptanceListRequest(pageToken string) *opensplunkv1.ListCollectorsRequest {
+	pageSize := uint32(1)
 	request := &opensplunkv1.ListCollectorsRequest{
 		Page: &opensplunkv1.PageRequest{
 			PageSize:         &pageSize,

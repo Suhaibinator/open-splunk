@@ -407,7 +407,7 @@ func TestCollectorTokenRevocationPruningRollsBackWhenAuditAppendFails(t *testing
 			t.Fatalf("CreateCollectorToken(%d): %v", index, err)
 		}
 	}
-	for index := 0; index < 2; index++ {
+	for index := range 2 {
 		if _, err := store.RevokeCollectorToken(
 			ctx,
 			issued[index].Token.ID,

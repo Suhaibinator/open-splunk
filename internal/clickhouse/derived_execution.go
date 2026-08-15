@@ -156,26 +156,6 @@ func hasValidDerivedExecutionContext(
 	return ok && subtle.ConstantTimeCompare(expected[:], authority.seal[:]) == 1, nil
 }
 
-func derivedExecutionDigest(
-	kind derivedExecutionKind,
-	authority *derivedExecutionAuthority,
-	sql string,
-	args []any,
-	readScope compiledReadScope,
-	writeSpec derivedExecutionSpecWriter,
-) (derivedExecutionSeal, bool) {
-	digest, ok, _ := derivedExecutionDigestContext(
-		context.Background(),
-		kind,
-		authority,
-		sql,
-		args,
-		readScope,
-		writeSpec,
-	)
-	return digest, ok
-}
-
 func derivedExecutionDigestContext(
 	ctx context.Context,
 	kind derivedExecutionKind,
@@ -240,23 +220,6 @@ func derivedExecutionDigestContext(
 	var result derivedExecutionSeal
 	digest.Sum(result[:0])
 	return result, true, nil
-}
-
-func cloneDerivedExecutionSurface(
-	sql string,
-	args []any,
-	readScope compiledReadScope,
-	authority *derivedExecutionAuthority,
-) (string, []any, compiledReadScope, *derivedExecutionAuthority, bool) {
-	sql, clonedArgs, clonedScope, clonedAuthority, ok, _ :=
-		cloneDerivedExecutionSurfaceContext(
-			context.Background(),
-			sql,
-			args,
-			readScope,
-			authority,
-		)
-	return sql, clonedArgs, clonedScope, clonedAuthority, ok
 }
 
 func cloneDerivedExecutionSurfaceContext(
@@ -338,17 +301,6 @@ func writeFieldSuggestionSpec(writer hash.Hash, spec FieldSuggestionSpec) bool {
 	return true
 }
 
-func sealCompiledTimelineExecution(
-	source CompiledQuery,
-	compiled CompiledTimeline,
-) (*derivedExecutionAuthority, error) {
-	return sealCompiledTimelineExecutionContext(
-		context.Background(),
-		source,
-		compiled,
-	)
-}
-
 func sealCompiledTimelineExecutionContext(
 	ctx context.Context,
 	source CompiledQuery,
@@ -408,17 +360,6 @@ func sealCompiledFieldCatalogExecutionContext(
 	)
 }
 
-func sealCompiledFieldSummaryExecution(
-	source CompiledQuery,
-	compiled CompiledFieldSummary,
-) (*derivedExecutionAuthority, error) {
-	return sealCompiledFieldSummaryExecutionContext(
-		context.Background(),
-		source,
-		compiled,
-	)
-}
-
 func sealCompiledFieldSummaryExecutionContext(
 	ctx context.Context,
 	source CompiledQuery,
@@ -434,17 +375,6 @@ func sealCompiledFieldSummaryExecutionContext(
 		func(writer hash.Hash) bool {
 			return writeFieldSummarySpec(writer, compiled.Spec, compiled.FieldKnown)
 		},
-	)
-}
-
-func sealCompiledFieldSuggestionsExecution(
-	source CompiledQuery,
-	compiled CompiledFieldSuggestions,
-) (*derivedExecutionAuthority, error) {
-	return sealCompiledFieldSuggestionsExecutionContext(
-		context.Background(),
-		source,
-		compiled,
 	)
 }
 

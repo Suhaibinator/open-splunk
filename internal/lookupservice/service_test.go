@@ -192,7 +192,7 @@ func TestServicePreviewAndFilteredCursorPagination(t *testing.T) {
 	preview, err := service.Preview(t.Context(), scope, &opensplunkv1.PreviewLookupRequest{
 		Definition:  testDefinition("preview"),
 		CsvData:     []byte("service_id,owner\na,alice\nb,bob\n"),
-		MaximumRows: uint32Pointer(1),
+		MaximumRows: new(uint32(1)),
 	})
 	if err != nil || len(preview.GetRows()) != 1 || preview.GetTotalRows() != 2 || !preview.GetTruncated() || len(preview.GetContentSha256()) != 32 {
 		t.Fatalf("Preview() = %+v, %v", preview, err)
@@ -214,8 +214,8 @@ func TestServicePreviewAndFilteredCursorPagination(t *testing.T) {
 		}
 	}
 	request := &opensplunkv1.ListLookupsRequest{
-		Page:  &opensplunkv1.PageRequest{PageSize: uint32Pointer(1), IncludeTotalSize: true},
-		AppId: stringPointer(testAppID),
+		Page:  &opensplunkv1.PageRequest{PageSize: new(uint32(1)), IncludeTotalSize: true},
+		AppId: new(testAppID),
 		StateFilters: []opensplunkv1.LookupState{
 			opensplunkv1.LookupState_LOOKUP_STATE_ACTIVE,
 			opensplunkv1.LookupState_LOOKUP_STATE_ACTIVE,
@@ -320,8 +320,8 @@ func TestServiceListKeysetSortMatrixHasNoGapsOrDuplicates(t *testing.T) {
 				return comparison
 			})
 			request := &opensplunkv1.ListLookupsRequest{
-				Page:          &opensplunkv1.PageRequest{PageSize: uint32Pointer(1)},
-				AppId:         stringPointer(testAppID),
+				Page:          &opensplunkv1.PageRequest{PageSize: new(uint32(1))},
+				AppId:         new(testAppID),
 				SortBy:        sortBy,
 				SortDirection: direction,
 			}
@@ -442,9 +442,6 @@ func testDefinition(name string) *opensplunkv1.LookupDefinition {
 		OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
 	}
 }
-
-func uint32Pointer(value uint32) *uint32 { return &value }
-func stringPointer(value string) *string { return &value }
 
 func bytesEqual(left, right []byte) bool {
 	return string(left) == string(right)

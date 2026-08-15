@@ -212,10 +212,7 @@ func bodyTestLimits(compressed, decompressed int64) Limits {
 	limits := DefaultLimits()
 	limits.MaximumCompressedBodyBytes = compressed
 	limits.MaximumDecompressedBodyBytes = decompressed
-	limits.MaximumEventBytes = decompressed
-	if limits.MaximumEventBytes > HardMaximumEventBytes {
-		limits.MaximumEventBytes = HardMaximumEventBytes
-	}
+	limits.MaximumEventBytes = min(decompressed, HardMaximumEventBytes)
 	return limits
 }
 

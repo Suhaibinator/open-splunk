@@ -1531,7 +1531,7 @@ func knowledgeRuntimeProgramWithExtraPayloadAliases(
 	}
 	calculated := definitions[len(definitions)-1]
 	definitions = definitions[:len(definitions)-1]
-	for index := 0; index < extraPayloadAliases; index++ {
+	for index := range extraPayloadAliases {
 		suffix := string(rune('a' + index))
 		definitions = append(
 			definitions,

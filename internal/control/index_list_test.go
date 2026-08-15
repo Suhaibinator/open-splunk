@@ -848,13 +848,11 @@ func TestIndexCatalogCapacityIsAtomicAndRetainsTerminalIdentities(
 	var wait sync.WaitGroup
 	for _, name := range []string{"last-a", "last-b"} {
 		name := name
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
+		wait.Go(func() {
 			<-start
 			_, err := db.CreateIndex(ctx, enabledIndex(name))
 			results <- err
-		}()
+		})
 	}
 	close(start)
 	wait.Wait()

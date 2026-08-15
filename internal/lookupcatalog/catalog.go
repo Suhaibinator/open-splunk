@@ -293,7 +293,7 @@ func (catalog *Catalog) Create(ctx context.Context, request CreateRequest) (*ope
 	if err != nil {
 		return nil, err
 	}
-	for attempt := 0; attempt < maximumIDAttempts; attempt++ {
+	for range maximumIDAttempts {
 		lookupID, generateErr := catalog.newID()
 		if generateErr != nil {
 			return nil, fmt.Errorf("generate lookup identity: %w", generateErr)
@@ -349,7 +349,7 @@ func (catalog *Catalog) CreatePublished(
 	if err != nil {
 		return nil, err
 	}
-	for attempt := 0; attempt < maximumIDAttempts; attempt++ {
+	for range maximumIDAttempts {
 		lookupID, generateErr := catalog.newID()
 		if generateErr != nil {
 			return nil, fmt.Errorf("generate lookup identity: %w", generateErr)
@@ -1369,9 +1369,9 @@ func projectPersisted(
 	if err := validatePersistedRegistry(registry); err != nil {
 		return persistedProjection{}, err
 	}
-	if version.definitionVersion == 0 || version.definitionVersion > uint64(^uint64(0)>>1) ||
+	if version.definitionVersion == 0 || version.definitionVersion > ^uint64(0)>>1 ||
 		!validPersistedIdentity(version.assetID, 128) || version.assetVersion == 0 ||
-		version.assetVersion > uint64(^uint64(0)>>1) || version.assetSize == 0 ||
+		version.assetVersion > ^uint64(0)>>1 || version.assetSize == 0 ||
 		version.assetSize > lookupasset.MaximumSourceBytes ||
 		len(version.digestBytes) != sha256.Size || len(version.sourceDigestBytes) != sha256.Size ||
 		version.rowCount > lookupasset.MaximumRows || version.columnCount == 0 ||
@@ -1462,7 +1462,7 @@ func validatePersistedRegistry(registry persistedRegistry) error {
 		!validIdentity(registry.appID, 128) ||
 		!lookupdefinition.IsValidLookupName(registry.name) ||
 		sharingRank(registry.sharingScope) < 0 || registry.currentVersion == 0 ||
-		registry.currentVersion > uint64(^uint64(0)>>1) {
+		registry.currentVersion > ^uint64(0)>>1 {
 		return ErrCorrupt
 	}
 	if registry.createdMicro < 1 || registry.createdMicro > maximumUnixMicro ||
@@ -1534,7 +1534,7 @@ func (catalog *Catalog) getProjectionRecordWith(
 	requestedVersion uint64,
 ) (persistedProjection, error) {
 	if !validIdentity(tenantID, 255) || !validIdentity(lookupID, 128) ||
-		requestedVersion > uint64(^uint64(0)>>1) {
+		requestedVersion > ^uint64(0)>>1 {
 		return persistedProjection{}, fmt.Errorf("%w: lookup identity is invalid", ErrInvalid)
 	}
 	if query == nil {
@@ -1667,7 +1667,7 @@ func validatePublishedDefinition(
 ) (lookupdefinition.Normalized, lookupasset.Version, error) {
 	if asset.Ref.TenantID != tenantID || asset.Asset == nil ||
 		!validIdentity(asset.Ref.LookupAssetID, 128) || asset.Ref.Version == 0 ||
-		asset.Ref.Version > uint64(^uint64(0)>>1) ||
+		asset.Ref.Version > ^uint64(0)>>1 ||
 		asset.Ref.SizeBytes == 0 || asset.Ref.SizeBytes > lookupasset.MaximumSourceBytes ||
 		asset.Ref.ContentSHA256 == ([sha256.Size]byte{}) ||
 		asset.SourceSHA256 == ([sha256.Size]byte{}) ||

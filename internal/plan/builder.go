@@ -15,6 +15,7 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/ianatimezone"
+	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/searchtimebounds"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"github.com/Suhaibinator/open-splunk/internal/splpath"
@@ -1321,7 +1322,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					}
 				}
 				if aggregate.InputExpression != nil &&
-					nilSPLScalarExpression(aggregate.InputExpression) {
+					nilcheck.IsNil(aggregate.InputExpression) {
 					return nil, &Diagnostic{
 						Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
 						Message: "stats aggregate contains a missing scalar input expression",
@@ -2932,66 +2933,8 @@ func convertWhereExpressionUnchecked(expression spl.WhereExpr) (Expression, erro
 	}
 }
 
-func nilSPLWhereExpression(expression spl.WhereExpr) bool {
-	if expression == nil {
-		return true
-	}
-	switch expression := expression.(type) {
-	case *spl.WhereBoolExpr:
-		return expression == nil
-	case *spl.WhereNotExpr:
-		return expression == nil
-	case *spl.WhereComparisonExpr:
-		return expression == nil
-	case *spl.WhereMembershipExpr:
-		return expression == nil
-	case *spl.WhereScalarPredicateExpr:
-		return expression == nil
-	default:
-		return nilInterfaceValue(expression)
-	}
-}
-
-func nilSPLScalarExpression(expression spl.ScalarExpr) bool {
-	if expression == nil {
-		return true
-	}
-	switch expression := expression.(type) {
-	case *spl.ScalarFieldExpr:
-		return expression == nil
-	case *spl.ScalarLiteralExpr:
-		return expression == nil
-	case *spl.ScalarUnaryExpr:
-		return expression == nil
-	case *spl.ScalarBinaryExpr:
-		return expression == nil
-	case *spl.ScalarCallExpr:
-		return expression == nil
-	case *spl.ScalarIfExpr:
-		return expression == nil
-	case *spl.ScalarCaseExpr:
-		return expression == nil
-	default:
-		return nilInterfaceValue(expression)
-	}
-}
-
-func nilInterfaceValue(value any) bool {
-	if value == nil {
-		return true
-	}
-	reflected := reflect.ValueOf(value)
-	switch reflected.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map,
-		reflect.Pointer, reflect.Slice:
-		return reflected.IsNil()
-	default:
-		return false
-	}
-}
-
 func safeSPLNodeRange(node spl.Node) spl.Range {
-	if nilInterfaceValue(node) {
+	if nilcheck.IsNil(node) {
 		return spl.Range{}
 	}
 	return node.SourceRange()
@@ -3002,7 +2945,7 @@ func splQuotedStringLiteral(
 	fallbackRange spl.Range,
 ) (*spl.ScalarLiteralExpr, spl.Range, bool) {
 	sourceRange := fallbackRange
-	if !nilSPLScalarExpression(expression) {
+	if !nilcheck.IsNil(expression) {
 		sourceRange = expression.SourceRange()
 	}
 	literal, ok := expression.(*spl.ScalarLiteralExpr)
@@ -3052,7 +2995,7 @@ func (v *splExpressionComplexityValidator) validateWhere(
 	expression spl.WhereExpr,
 	depth int,
 ) error {
-	if nilSPLWhereExpression(expression) {
+	if nilcheck.IsNil(expression) {
 		return nil
 	}
 	if err := v.enter(expression, depth, safeSPLNodeRange(expression)); err != nil {
@@ -3128,7 +3071,7 @@ func (v *splExpressionComplexityValidator) validateScalar(
 	depth int,
 	unaryChain int,
 ) error {
-	if nilSPLScalarExpression(expression) {
+	if nilcheck.IsNil(expression) {
 		return nil
 	}
 	if err := v.enter(expression, depth, safeSPLNodeRange(expression)); err != nil {
@@ -3774,7 +3717,7 @@ func buildCountPredicateMeasure(
 		aggregate.InputExpression != nil ||
 		aggregate.Percentile != 0 ||
 		(!aggregate.ExplicitAlias && !diagnostics.allowImplicitAlias) ||
-		nilSPLWhereExpression(aggregate.Predicate) {
+		nilcheck.IsNil(aggregate.Predicate) {
 		return AggregateMeasure{}, &Diagnostic{
 			Code:    diagnostics.unsupportedCode,
 			Message: diagnostics.invalidMessage,
@@ -4259,7 +4202,7 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 		}
 		if expression.Function == spl.ScalarFunctionConcat {
 			for _, argument := range expression.Arguments {
-				if nilSPLScalarExpression(argument) {
+				if nilcheck.IsNil(argument) {
 					return nil, &Diagnostic{
 						Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
 						Message: "concatenation operand is missing",
@@ -4318,7 +4261,7 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 				}
 			}
 			for index := 1; index < len(expression.Arguments); index++ {
-				if nilSPLScalarExpression(expression.Arguments[index]) {
+				if nilcheck.IsNil(expression.Arguments[index]) {
 					return nil, &Diagnostic{
 						Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
 						Message: "scalar expression is missing",
@@ -4692,10 +4635,8 @@ func splScalarMayReturnBooleanValue(expression spl.ScalarExpr) bool {
 			return true
 		}
 		if expression.Function == spl.ScalarFunctionCoalesce {
-			for _, argument := range expression.Arguments {
-				if splScalarMayReturnBooleanValue(argument) {
-					return true
-				}
+			if slices.ContainsFunc(expression.Arguments, splScalarMayReturnBooleanValue) {
+				return true
 			}
 		}
 		return false
@@ -4722,7 +4663,7 @@ func splScalarExpressionRange(
 	expression spl.ScalarExpr,
 	fallback spl.Range,
 ) spl.Range {
-	if nilSPLScalarExpression(expression) {
+	if nilcheck.IsNil(expression) {
 		return fallback
 	}
 	return expression.SourceRange()
@@ -4731,9 +4672,9 @@ func splScalarExpressionRange(
 func splScalarHasStaticallyUnsupportedArithmeticType(
 	expression spl.ScalarExpr,
 ) bool {
-	if nilSPLScalarExpression(expression) ||
+	if nilcheck.IsNil(expression) ||
 		splScalarMayReturnBooleanValue(expression) {
-		return !nilSPLScalarExpression(expression)
+		return !nilcheck.IsNil(expression)
 	}
 	switch expression := expression.(type) {
 	case *spl.ScalarFieldExpr:

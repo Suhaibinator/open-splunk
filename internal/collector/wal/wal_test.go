@@ -114,7 +114,7 @@ func TestReopenResumesUnacked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if _, err := q.Append(makeEvents("e")); err != nil {
 			t.Fatalf("Append %d: %v", i, err)
 		}
@@ -349,7 +349,7 @@ func TestSequenceNeverReusedAfterCrash(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	seqs := map[uint64]bool{}
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		b, err := q2.NextBatch(ctx)
 		if err != nil {
 			t.Fatalf("NextBatch: %v", err)
@@ -368,7 +368,7 @@ func TestCorruptCRCQuarantine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if _, err := q.Append(makeEvents("evt")); err != nil {
 			t.Fatalf("Append %d: %v", i, err)
 		}
@@ -457,11 +457,11 @@ func TestRecoveryQuarantinesEverySegmentAfterCorruptGap(t *testing.T) {
 		event := makeEvents("event-" + itoaForTest(uint64(sequence)))[0]
 		event.Origin = &opensplunkv1.EventOrigin{
 			InputId:               "input",
-			FileIdentity:          proto.String(identity),
-			SourcePath:            proto.String("/logs/app.log"),
-			EndOffset:             proto.Uint64(uint64(sequence * 100)),
-			LineNumber:            proto.Uint64(uint64(sequence)),
-			NextLineNumber:        proto.Uint64(uint64(sequence + 1)),
+			FileIdentity:          new(identity),
+			SourcePath:            new("/logs/app.log"),
+			EndOffset:             new(uint64(sequence * 100)),
+			LineNumber:            new(uint64(sequence)),
+			NextLineNumber:        new(uint64(sequence + 1)),
 			FileFingerprintLength: proto.Uint32(64),
 		}
 		if _, err := q.Append([]*opensplunkv1.LogEvent{event}); err != nil {
@@ -621,7 +621,7 @@ func TestTruncatedTail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		if _, err := q.Append(makeEvents("evt")); err != nil {
 			t.Fatalf("Append %d: %v", i, err)
 		}
@@ -708,7 +708,7 @@ func TestAckOutOfOrderDoesNotDeleteRetryablePrefix(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	t.Cleanup(func() { _ = q.Close() })
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if _, err := q.Append(makeEvents("event")); err != nil {
 			t.Fatalf("Append %d: %v", i, err)
 		}
@@ -818,10 +818,10 @@ func TestPrepareAckCachesAndCoalescesSourceMarksAcrossRecovery(t *testing.T) {
 		event := makeEvents("event")[0]
 		event.Raw = []byte(strings.Repeat("x", 64<<10))
 		event.Origin = &opensplunkv1.EventOrigin{
-			InputId: "input", FileIdentity: proto.String(identity),
-			SourcePath: proto.String("/logs/app.log"),
-			EndOffset:  proto.Uint64(end), LineNumber: proto.Uint64(uint64(sequence + 1)),
-			NextLineNumber:        proto.Uint64(uint64(sequence + 2)),
+			InputId: "input", FileIdentity: new(identity),
+			SourcePath: new("/logs/app.log"),
+			EndOffset:  new(end), LineNumber: new(uint64(sequence + 1)),
+			NextLineNumber:        new(uint64(sequence + 2)),
 			FileFingerprintLength: proto.Uint32(1024),
 		}
 		if _, err := q.Append([]*opensplunkv1.LogEvent{event}); err != nil {
@@ -893,8 +893,8 @@ func TestCheckpointMarksScopeIdenticalFileIdentityByInput(t *testing.T) {
 	event := func(inputID string, end uint64) *opensplunkv1.LogEvent {
 		return &opensplunkv1.LogEvent{Origin: &opensplunkv1.EventOrigin{
 			InputId:      inputID,
-			FileIdentity: proto.String(identity),
-			EndOffset:    proto.Uint64(end),
+			FileIdentity: new(identity),
+			EndOffset:    new(end),
 		}}
 	}
 
@@ -931,9 +931,9 @@ func TestPrepareAckThroughCoalescesSourceMarksPerInputAcrossRecovery(t *testing.
 			IndexName: "main",
 			Origin: &opensplunkv1.EventOrigin{
 				InputId:               inputID,
-				FileIdentity:          proto.String(identity),
-				SourcePath:            proto.String("/logs/shared.log"),
-				EndOffset:             proto.Uint64(end),
+				FileIdentity:          new(identity),
+				SourcePath:            new("/logs/shared.log"),
+				EndOffset:             new(end),
 				FileFingerprintLength: proto.Uint32(1024),
 			},
 		}
@@ -1003,7 +1003,7 @@ func TestCheckpointMarksRetainMissingInputOrSourceIdentity(t *testing.T) {
 		{
 			name: "missing input ID",
 			origin: &opensplunkv1.EventOrigin{
-				FileIdentity: proto.String(identity),
+				FileIdentity: new(identity),
 				EndOffset:    proto.Uint64(10),
 			},
 		},
@@ -1046,9 +1046,9 @@ func TestCheckpointMarksKeepFingerprintConflictSticky(t *testing.T) {
 	for index, length := range []uint32{10, 20, 20} {
 		event := makeEvents("event")[0]
 		event.Origin = &opensplunkv1.EventOrigin{
-			InputId: "input", FileIdentity: proto.String(identity),
-			SourcePath: proto.String("/x.log"),
-			EndOffset:  proto.Uint64(uint64(index + 1)), FileFingerprintLength: proto.Uint32(length),
+			InputId: "input", FileIdentity: new(identity),
+			SourcePath: new("/x.log"),
+			EndOffset:  new(uint64(index + 1)), FileFingerprintLength: new(length),
 		}
 		events = append(events, event)
 	}
@@ -1064,7 +1064,7 @@ func TestCheckpointMarksPreferPresentNextLineAndKeepConflictSticky(t *testing.T)
 	event := func(next *uint64) *opensplunkv1.LogEvent {
 		return &opensplunkv1.LogEvent{Origin: &opensplunkv1.EventOrigin{
 			InputId:        "input",
-			FileIdentity:   proto.String(identity),
+			FileIdentity:   new(identity),
 			EndOffset:      proto.Uint64(100),
 			LineNumber:     proto.Uint64(7),
 			NextLineNumber: next,
@@ -1176,9 +1176,9 @@ func TestAckClearsRemovedDescriptorReferences(t *testing.T) {
 	for sequence := 1; sequence <= 3; sequence++ {
 		event := makeEvents("event")[0]
 		event.Origin = &opensplunkv1.EventOrigin{
-			InputId: "input", FileIdentity: proto.String(identity),
-			SourcePath: proto.String("/x.log"),
-			EndOffset:  proto.Uint64(uint64(sequence)), FileFingerprintLength: proto.Uint32(64),
+			InputId: "input", FileIdentity: new(identity),
+			SourcePath: new("/x.log"),
+			EndOffset:  new(uint64(sequence)), FileFingerprintLength: proto.Uint32(64),
 		}
 		if _, err := q.Append([]*opensplunkv1.LogEvent{event}); err != nil {
 			t.Fatalf("Append %d: %v", sequence, err)
@@ -1232,7 +1232,7 @@ func TestSegmentReclamationRemovesFiles(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	var lastSeq uint64
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		b, err := q.Append(makeEvents("evt"))
 		if err != nil {
 			t.Fatalf("Append %d: %v", i, err)
@@ -1334,7 +1334,7 @@ func TestConcurrentAppendConsumeStats(t *testing.T) {
 	// Appender.
 	go func() {
 		defer wg.Done()
-		for i := 0; i < total; i++ {
+		for range total {
 			if _, err := q.Append(makeEvents("evt")); err != nil {
 				t.Errorf("Append: %v", err)
 				return

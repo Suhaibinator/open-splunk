@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -6087,10 +6088,8 @@ func scalarExpressionMayReturnBooleanFunction(expression ScalarExpr) bool {
 			return true
 		}
 		if expression.Function == ScalarFunctionCoalesce {
-			for _, argument := range expression.Arguments {
-				if scalarExpressionMayReturnBooleanFunction(argument) {
-					return true
-				}
+			if slices.ContainsFunc(expression.Arguments, scalarExpressionMayReturnBooleanFunction) {
+				return true
 			}
 		}
 		return false
@@ -6129,10 +6128,8 @@ func scalarExpressionMayReturnBooleanValue(expression ScalarExpr) bool {
 			return true
 		}
 		if expression.Function == ScalarFunctionCoalesce {
-			for _, argument := range expression.Arguments {
-				if scalarExpressionMayReturnBooleanValue(argument) {
-					return true
-				}
+			if slices.ContainsFunc(expression.Arguments, scalarExpressionMayReturnBooleanValue) {
+				return true
 			}
 		}
 		return false

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 )
 
 type trackedHandler struct {
@@ -114,10 +116,10 @@ func shutdownHTTPServer(
 	timeout time.Duration,
 	admissions ...httpAdmissionShutdown,
 ) error {
-	if nilRuntimeDependency(webSockets) {
+	if nilcheck.IsNil(webSockets) {
 		return errors.New("shutdown HTTP server: websocket service is required")
 	}
-	if len(admissions) > 1 || len(admissions) == 1 && nilRuntimeDependency(admissions[0]) {
+	if len(admissions) > 1 || len(admissions) == 1 && nilcheck.IsNil(admissions[0]) {
 		return errors.New("shutdown HTTP server: admission lifecycle is invalid")
 	}
 	if len(admissions) == 1 {

@@ -52,8 +52,8 @@ func (handler *apiHandler) searchSuggestionRoutes(
 		]{
 			Path: searchSuggestionsRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedSearchSuggestionsCodec(), Handler: handler.getSearchSuggestions,
-			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.GetSearchSuggestionsRequest],
-			Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
+			SourceType: router.Body,
+			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
 	}
 }
@@ -246,7 +246,7 @@ func searchSuggestionsResultToProto(
 			Relevance:        suggestion.Relevance,
 		}
 		if suggestion.Detail != "" {
-			converted.Detail = stringPointer(suggestion.Detail)
+			converted.Detail = new(suggestion.Detail)
 		}
 		suggestions[index] = converted
 		previousRelevance = suggestion.Relevance

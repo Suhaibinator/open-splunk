@@ -66,7 +66,7 @@ func TestKnowledgeSearchAdmissionAuthorizesCurrentAppBeforeIndexesAndCreate(t *t
 		fakeSearchJobs: &fakeSearchJobs{createJob: job},
 		enabled:        true,
 	}
-	apps := activeHistoryRerunAppCatalog(appID)
+	apps := activeHistoryRerunAppCatalog()
 	indexes := activeHistoryRerunIndexCatalog("main")
 	handler := newTestHandler(t, Config{
 		SearchJobs: jobs,
@@ -77,7 +77,7 @@ func TestKnowledgeSearchAdmissionAuthorizesCurrentAppBeforeIndexesAndCreate(t *t
 		TenantID:   "tenant-1",
 	})
 	request := createRequest("-1h", "now", "main")
-	request.Definition.AppId = stringPointer(appID)
+	request.Definition.AppId = new(appID)
 	response := postProto(t, handler, "/api/v1/search/jobs/create", request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("knowledge admission status = %d, body = %s", response.Code, response.Body.String())
@@ -142,7 +142,7 @@ func TestKnowledgeSearchAdmissionAppAuthorizationFailsClosedBeforeIndexes(t *tes
 				TenantID:   "tenant-1",
 			})
 			request := createRequest("-1h", "now", "main")
-			request.Definition.AppId = stringPointer("app-main")
+			request.Definition.AppId = new("app-main")
 			response := postProto(t, handler, "/api/v1/search/jobs/create", request)
 			if response.Code != test.wantStatus || strings.Contains(response.Body.String(), "secret") {
 				t.Fatalf("status/body = %d/%s", response.Code, response.Body.String())
@@ -168,7 +168,7 @@ func TestKnowledgeSearchAdmissionPreservesAppLessLegacyCreate(t *testing.T) {
 		fakeSearchJobs: &fakeSearchJobs{createJob: job},
 		enabled:        true,
 	}
-	apps := activeHistoryRerunAppCatalog("app-main")
+	apps := activeHistoryRerunAppCatalog()
 	handler := newTestHandler(t, Config{
 		SearchJobs: jobs,
 		Indexes:    activeHistoryRerunIndexCatalog("main"),
@@ -227,12 +227,12 @@ func TestKnowledgeSearchAdmissionRejectsMismatchedDependencyOutcome(t *testing.T
 			handler := newTestHandler(t, Config{
 				SearchJobs: jobs,
 				Indexes:    activeHistoryRerunIndexCatalog("main"),
-				AppCatalog: activeHistoryRerunAppCatalog("app-main"),
+				AppCatalog: activeHistoryRerunAppCatalog(),
 				WebUI:      testUI(),
 			})
 			request := createRequest("-1h", "now", "main")
 			if test.requestApp != "" {
-				request.Definition.AppId = stringPointer(test.requestApp)
+				request.Definition.AppId = new(test.requestApp)
 			}
 			response := postProto(t, handler, "/api/v1/search/jobs/create", request)
 			if response.Code != http.StatusInternalServerError ||
@@ -318,7 +318,7 @@ func TestKnowledgeSearchAdmissionRejectsMismatchedLaterLifecycleProjections(t *t
 			handler := newTestHandler(t, Config{
 				SearchJobs: configured,
 				Indexes:    fakeIndexCatalog{},
-				AppCatalog: activeHistoryRerunAppCatalog("app-main"),
+				AppCatalog: activeHistoryRerunAppCatalog(),
 				WebUI:      testUI(),
 				OwnerID:    "owner-1",
 				TenantID:   "tenant-1",
@@ -345,7 +345,7 @@ func TestKnowledgeSearchAdmissionListProjectsDetachedRedactedSnapshot(t *testing
 	handler := newTestHandler(t, Config{
 		SearchJobs: jobs,
 		Indexes:    fakeIndexCatalog{},
-		AppCatalog: activeHistoryRerunAppCatalog("app-main"),
+		AppCatalog: activeHistoryRerunAppCatalog(),
 		WebUI:      testUI(),
 		OwnerID:    "owner-1",
 		TenantID:   "tenant-1",
@@ -389,11 +389,11 @@ func TestKnowledgeSearchAdmissionMapsSynchronousFailuresWithoutDetails(t *testin
 			handler := newTestHandler(t, Config{
 				SearchJobs: jobs,
 				Indexes:    activeHistoryRerunIndexCatalog("main"),
-				AppCatalog: activeHistoryRerunAppCatalog("app-main"),
+				AppCatalog: activeHistoryRerunAppCatalog(),
 				WebUI:      testUI(),
 			})
 			request := createRequest("-1h", "now", "main")
-			request.Definition.AppId = stringPointer("app-main")
+			request.Definition.AppId = new("app-main")
 			response := postProto(t, handler, "/api/v1/search/jobs/create", request)
 			if response.Code != test.wantStatus || strings.Contains(response.Body.String(), "secret") {
 				t.Fatalf("status/body = %d/%s", response.Code, response.Body.String())

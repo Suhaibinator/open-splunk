@@ -147,9 +147,7 @@ func TestStoreConcurrentClaimsCannotExceedDurableCollectorCapacity(
 		MaximumDurableCollectorsPerTenant,
 	} {
 		ordinal := ordinal
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
+		workers.Go(func() {
 			<-start
 			request := durableCollectorCapacityClaim(
 				"tenant-concurrent-capacity",
@@ -161,7 +159,7 @@ func TestStoreConcurrentClaimsCannotExceedDurableCollectorCapacity(
 				collectorID: request.CollectorID,
 				err:         err,
 			}
-		}()
+		})
 	}
 	close(start)
 	workers.Wait()
@@ -235,7 +233,7 @@ func fillDurableCollectorCapacity(
 	count int,
 ) {
 	t.Helper()
-	for ordinal := 0; ordinal < count; ordinal++ {
+	for ordinal := range count {
 		request := durableCollectorCapacityClaim(
 			tenantID,
 			ordinal,

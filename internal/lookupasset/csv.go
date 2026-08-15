@@ -68,10 +68,7 @@ func ParseCSVContext(ctx context.Context, source io.Reader, requested Limits) (*
 	if err != nil {
 		return nil, err
 	}
-	parseBytes := raw
-	if bytes.HasPrefix(parseBytes, utf8BOM) {
-		parseBytes = parseBytes[len(utf8BOM):]
-	}
+	parseBytes := bytes.TrimPrefix(raw, utf8BOM)
 	validUTF8, err := validCSVUTF8Context(ctx, parseBytes)
 	if err != nil {
 		return nil, err
@@ -175,10 +172,6 @@ func ParseCSVContext(ctx context.Context, source io.Reader, requested Limits) (*
 	}, nil
 }
 
-func validateHeader(headers []string, limits Limits) error {
-	return validateHeaderContext(context.Background(), headers, limits)
-}
-
 func validateHeaderContext(ctx context.Context, headers []string, limits Limits) error {
 	if len(headers) == 0 {
 		return fmt.Errorf("%w: CSV header is empty", ErrMalformedCSV)
@@ -221,10 +214,6 @@ func csvReadError(operation string, err error) error {
 		return fmt.Errorf("%w: %s at line %d, column %d", ErrMalformedCSV, operation, parseError.Line, parseError.Column)
 	}
 	return fmt.Errorf("%w: %s", ErrMalformedCSV, operation)
-}
-
-func marshalCanonicalCSV(headers []string, rows [][]string, maximumBytes int) ([]byte, error) {
-	return marshalCanonicalCSVContext(context.Background(), headers, rows, maximumBytes)
 }
 
 func marshalCanonicalCSVContext(ctx context.Context, headers []string, rows [][]string, maximumBytes int) ([]byte, error) {
@@ -283,11 +272,6 @@ func canonicalCSVWriteError(ctx context.Context, maximumBytes int) error {
 // preserveBlankCSVRecords rewrites only blank physical lines outside quoted
 // fields. It leaves malformed quote handling to encoding/csv and returns the
 // original slice without allocating when no rewrite is needed.
-func preserveBlankCSVRecords(source []byte) []byte {
-	result, _ := preserveBlankCSVRecordsContext(context.Background(), source)
-	return result
-}
-
 func preserveBlankCSVRecordsContext(ctx context.Context, source []byte) ([]byte, error) {
 	inQuotes := false
 	lineStart := 0

@@ -110,7 +110,7 @@ func TestCompletedExecutionSnapshotForReturnsDetachedExecutionMetadata(t *testin
 }
 
 func TestOpenRetainedKnowledgeExecutionValidatesAppAndDetaches(t *testing.T) {
-	resolver, appID := newEmptyKnowledgeResolver(t, "tenant")
+	resolver, appID := newEmptyKnowledgeResolver(t)
 	manager := newTestManager(t, Config{
 		Executor: executorFunc(func(
 			_ context.Context,
@@ -351,7 +351,7 @@ func TestOpenRetainedKnowledgeExecutionValidatesAppAndDetaches(t *testing.T) {
 }
 
 func TestValidateRetainedKnowledgeAuthorityHasAbsoluteAllocationBound(t *testing.T) {
-	resolver, appID := newEmptyKnowledgeResolver(t, "tenant")
+	resolver, appID := newEmptyKnowledgeResolver(t)
 	manager := newTestManager(t, Config{
 		Executor: executorFunc(func(
 			_ context.Context,

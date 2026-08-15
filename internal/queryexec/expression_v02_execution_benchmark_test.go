@@ -656,7 +656,7 @@ func expressionV02BenchmarkResultError(got, want float64) error {
 func expressionV02BenchmarkHighCandidates(rows uint64) []string {
 	count := min(rows, uint64(16))
 	result := make([]string, 0, count)
-	for index := uint64(0); index < count; index++ {
+	for index := range count {
 		row := index * rows / count
 		result = append(result, fmt.Sprintf("bench-%08d", row))
 	}

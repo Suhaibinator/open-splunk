@@ -91,7 +91,7 @@ func (handler *apiHandler) getSystemBootstrap(request *http.Request, input *open
 		ServerTime: timestamppb.New(handler.now().Round(0).UTC()),
 	}
 	if selectedAppID != "" {
-		response.SelectedAppId = stringPointer(selectedAppID)
+		response.SelectedAppId = new(selectedAppID)
 	}
 	if err := request.Context().Err(); err != nil {
 		return nil, err

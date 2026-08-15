@@ -1,6 +1,9 @@
 package knowledge
 
-import "unicode/utf8"
+import (
+	"slices"
+	"unicode/utf8"
+)
 
 // SelectorImplies reports whether the source selector is conservatively
 // proven to be a subset of target. The proof is independent for every
@@ -124,12 +127,7 @@ func selectorDimensionImplies(source, target *Selector, dimension Dimension) boo
 }
 
 func containsCanonicalPattern(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(values, target)
 }
 
 func globPatternMatchesLiteral(pattern Pattern, literal string) bool {

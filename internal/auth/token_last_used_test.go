@@ -244,16 +244,14 @@ func TestConcurrentCollectorTokenUseKeepsNewestObservation(t *testing.T) {
 	errs := make(chan error, observations)
 	var workers sync.WaitGroup
 	for offset := range observations {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
+		workers.Go(func() {
 			<-start
 			errs <- store.RecordCollectorTokenUse(
 				ctx,
 				issued.Token.ID,
 				now.Add(time.Duration(offset+1)*time.Second),
 			)
-		}()
+		})
 	}
 	close(start)
 	workers.Wait()

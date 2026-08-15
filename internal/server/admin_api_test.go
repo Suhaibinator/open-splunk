@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -725,7 +726,7 @@ func TestAdministrativeIngestionTokenCapacityIsSanitizedAndRecoverable(
 			Name: "replacement capacity fixture",
 			Constraints: &opensplunkv1.IngestionTokenConstraints{
 				AllowedIndexNames: []string{"audit"},
-				BoundCollectorId:  stringPointer("collector-replacement"),
+				BoundCollectorId:  new("collector-replacement"),
 			},
 		},
 	}
@@ -1001,7 +1002,7 @@ func TestAdministrativeValidationAndStatusMapping(t *testing.T) {
 		{
 			name: "present empty index idempotency key", path: "/api/v1/indexes/create",
 			request: &opensplunkv1.CreateIndexRequest{
-				Definition: adminTestIndexProto("empty-index-idempotency"), ClientRequestId: stringPointer(""),
+				Definition: adminTestIndexProto("empty-index-idempotency"), ClientRequestId: new(""),
 			},
 			status: http.StatusBadRequest,
 		},
@@ -1086,7 +1087,7 @@ func TestAdministrativeValidationAndStatusMapping(t *testing.T) {
 			request: &opensplunkv1.CreateIngestionTokenRequest{Definition: &opensplunkv1.IngestionTokenDefinition{
 				Name: "bad", Constraints: &opensplunkv1.IngestionTokenConstraints{
 					AllowedIndexNames: []string{"main"}, AllowedHostRegexes: []string{"["},
-					BoundCollectorId: stringPointer("collector-bad"),
+					BoundCollectorId: new("collector-bad"),
 				},
 			}},
 			status: http.StatusBadRequest,
@@ -1103,17 +1104,17 @@ func TestAdministrativeValidationAndStatusMapping(t *testing.T) {
 			request: &opensplunkv1.CreateIngestionTokenRequest{
 				Definition: &opensplunkv1.IngestionTokenDefinition{
 					Name: "empty-token-idempotency", Constraints: &opensplunkv1.IngestionTokenConstraints{
-						AllowedIndexNames: []string{"main"}, BoundCollectorId: stringPointer("collector-idempotency"),
+						AllowedIndexNames: []string{"main"}, BoundCollectorId: new("collector-idempotency"),
 					},
 				},
-				ClientRequestId: stringPointer(""),
+				ClientRequestId: new(""),
 			},
 			status: http.StatusBadRequest,
 		},
 		{
 			name: "present empty revocation reason", path: "/api/v1/ingestion-tokens/revoke",
 			request: &opensplunkv1.RevokeIngestionTokenRequest{
-				IngestionTokenId: "tok_missing", ExpectedVersion: 1, Reason: stringPointer(""),
+				IngestionTokenId: "tok_missing", ExpectedVersion: 1, Reason: new(""),
 			},
 			status: http.StatusBadRequest,
 		},
@@ -1208,7 +1209,7 @@ func TestAdministrativeRoutesRejectDNSRebindingAndCrossOriginBrowsers(t *testing
 	}
 	requestMessage := &opensplunkv1.CreateIngestionTokenRequest{Definition: &opensplunkv1.IngestionTokenDefinition{
 		Name: "browser", Constraints: &opensplunkv1.IngestionTokenConstraints{
-			AllowedIndexNames: []string{"main"}, BoundCollectorId: stringPointer("collector-browser"),
+			AllowedIndexNames: []string{"main"}, BoundCollectorId: new("collector-browser"),
 		},
 	}}
 
@@ -1349,12 +1350,7 @@ func adminTestIndexProto(name string) *opensplunkv1.IndexDefinition {
 }
 
 func containsFeature(features []opensplunkv1.ServerFeature, target opensplunkv1.ServerFeature) bool {
-	for _, feature := range features {
-		if feature == target {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(features, target)
 }
 
 func postProtoHeaders(t *testing.T, handler http.Handler, path string, message proto.Message, headers map[string]string) *httptest.ResponseRecorder {

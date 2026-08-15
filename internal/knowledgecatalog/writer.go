@@ -6,13 +6,13 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"reflect"
 	"slices"
 	"time"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"gorm.io/gorm"
 )
 
@@ -91,7 +91,7 @@ func (writer *Writer) ReadyForManagement() bool {
 		writer.reader != nil &&
 		writer.reader.orm == writer.orm &&
 		writer.validationGate != nil &&
-		!isNilAuditAppender(writer.auditAppender) &&
+		!nilcheck.IsNil(writer.auditAppender) &&
 		writer.clock != nil &&
 		writer.idGenerator != nil &&
 		writer.idempotencyRetention >= minimumIdempotencyRetention &&
@@ -113,7 +113,7 @@ func NewWriter(
 			control.ErrInvalidArgument,
 		)
 	}
-	if isNilAuditAppender(auditAppender) {
+	if nilcheck.IsNil(auditAppender) {
 		return nil, fmt.Errorf(
 			"%w: knowledge writer audit appender is required",
 			control.ErrInvalidArgument,
@@ -159,19 +159,6 @@ func NewWriter(
 		idGenerator:          idGenerator,
 		idempotencyRetention: retention,
 	}, nil
-}
-
-func isNilAuditAppender(appender audit.TransactionAppender) bool {
-	if appender == nil {
-		return true
-	}
-	value := reflect.ValueOf(appender)
-	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return value.IsNil()
-	default:
-		return false
-	}
 }
 
 // Create commits immutable version one or returns a previously committed

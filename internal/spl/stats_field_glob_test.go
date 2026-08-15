@@ -91,7 +91,7 @@ func TestMatchStatsFieldGlobAdversarialStarsStaysBounded(t *testing.T) {
 
 	pattern := "*a*a*a*a*a*a*a*a*a*a*z"
 	name := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	for iteration := 0; iteration < 10_000; iteration++ {
+	for range 10_000 {
 		if MatchStatsFieldGlob(pattern, name) {
 			t.Fatal("nonmatching adversarial pattern matched")
 		}

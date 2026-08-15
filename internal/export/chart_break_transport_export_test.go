@@ -63,7 +63,7 @@ func TestChartBreakTransportCSVRoundTripsDataDerivedPivotColumns(t *testing.T) {
 		t.Fatalf("selectColumns: %v", err)
 	}
 	var output bytes.Buffer
-	serializer, err := newCSVSerializer(&output, selection, CSVOptions{})
+	serializer, err := newCSVSerializer(&output, selection)
 	if err != nil {
 		t.Fatalf("newCSVSerializer: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestChartBreakTransportCSVHeaderCollapsesFormulaProtectedPivotColumns(t *te
 		t.Fatalf("selectColumns: %v", err)
 	}
 	var output bytes.Buffer
-	serializer, err := newCSVSerializer(&output, selection, CSVOptions{})
+	serializer, err := newCSVSerializer(&output, selection)
 	if err != nil {
 		t.Fatalf("newCSVSerializer: %v", err)
 	}
@@ -246,7 +246,7 @@ func TestChartBreakTransportExportsMixedRawPivotRowColumn(t *testing.T) {
 	}
 
 	var csvOutput bytes.Buffer
-	csvSerializer, err := newCSVSerializer(&csvOutput, selection, CSVOptions{})
+	csvSerializer, err := newCSVSerializer(&csvOutput, selection)
 	if err != nil {
 		t.Fatalf("newCSVSerializer: %v", err)
 	}
@@ -344,7 +344,7 @@ func TestChartBreakTransportExportSelectsRuntimeColumnsByName(t *testing.T) {
 		t.Fatalf("selectColumns: %v", err)
 	}
 	var output bytes.Buffer
-	serializer, err := newCSVSerializer(&output, selection, CSVOptions{})
+	serializer, err := newCSVSerializer(&output, selection)
 	if err != nil {
 		t.Fatalf("newCSVSerializer: %v", err)
 	}

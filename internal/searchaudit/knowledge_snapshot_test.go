@@ -28,7 +28,7 @@ func searchAuditTestKnowledgeSnapshotRef() *opensplunkv1.KnowledgeSnapshotRef {
 func TestKnowledgeSnapshotReferenceRoundTripsAndDetaches(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	_, database := openSearchAuditTestDatabase(t)
+	database := openSearchAuditTestDatabase(t)
 	store := newSearchAuditTestStore(t, database, searchAuditTestCursorKey(), 5)
 	appendSearchAuditTestEvent(
 		t, store, database, ctx, "tenant-snapshot",
@@ -66,7 +66,7 @@ func TestKnowledgeSnapshotReferenceRoundTripsAndDetaches(t *testing.T) {
 func TestAppendRejectsMalformedKnowledgeSnapshotReferenceBeforeMutation(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	_, database := openSearchAuditTestDatabase(t)
+	database := openSearchAuditTestDatabase(t)
 	store := newSearchAuditTestStore(t, database, searchAuditTestCursorKey(), 5)
 	tests := []struct {
 		name   string
@@ -173,7 +173,7 @@ func TestEventDigestPreservesLegacyIdentityAndBindsKnowledgeSnapshot(t *testing.
 func TestListCursorBindsKnowledgeSnapshotIdentity(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	_, database := openSearchAuditTestDatabase(t)
+	database := openSearchAuditTestDatabase(t)
 	store := newSearchAuditTestStore(t, database, searchAuditTestCursorKey(), 5)
 	for index := 1; index <= 4; index++ {
 		definition := searchAuditTestDefinition(
@@ -212,7 +212,7 @@ func TestListCursorBindsKnowledgeSnapshotIdentity(t *testing.T) {
 func TestStartupIntegrityRejectsPartialKnowledgeSnapshotTuple(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	_, database := openSearchAuditTestDatabase(t)
+	database := openSearchAuditTestDatabase(t)
 	store := newSearchAuditTestStore(t, database, searchAuditTestCursorKey(), 5)
 	definition := searchAuditTestDefinition("owner", "job-corrupt-snapshot", 0)
 	definition.KnowledgeSnapshot = searchAuditTestKnowledgeSnapshotRef()

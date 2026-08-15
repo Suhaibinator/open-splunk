@@ -14,6 +14,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
+	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
@@ -31,7 +32,7 @@ type preparedKnowledgeAdmission struct {
 var errSearchJobIDRequired = errors.New("search job ID is required before addinfo compilation")
 
 func normalizedKnowledgeResolver(resolver KnowledgeResolver) KnowledgeResolver {
-	if isNilRequiredDependency(resolver) {
+	if nilcheck.IsNil(resolver) {
 		return nil
 	}
 	return resolver
@@ -208,7 +209,7 @@ func (manager *Manager) prepareKnowledgeAdmissionForJob(
 		if err != nil {
 			return preparedKnowledgeAdmission{}, ErrKnowledgeUnavailable
 		}
-		logical, fullCompiler, compilerErr := configureResolvedPlanLookups(
+		resolvedLogical, fullCompiler, compilerErr := configureResolvedPlanLookups(
 			admissionContext,
 			manager.compiler,
 			logical,
@@ -218,6 +219,7 @@ func (manager *Manager) prepareKnowledgeAdmissionForJob(
 		if compilerErr != nil {
 			return preparedKnowledgeAdmission{}, manager.safeKnowledgeAdmissionError(ctx, compilerErr)
 		}
+		logical = resolvedLogical
 		compiledCandidate, compileErr := fullCompiler.CompileContext(
 			admissionContext,
 			logical,
@@ -244,7 +246,7 @@ func (manager *Manager) prepareKnowledgeAdmissionForJob(
 	}
 
 	if wildcardExpansion.IsZero() {
-		logical, resolvedCompiler, compilerErr := configureResolvedPlanLookups(
+		resolvedLogical, resolvedCompiler, compilerErr := configureResolvedPlanLookups(
 			admissionContext,
 			manager.compiler,
 			logical,
@@ -254,6 +256,7 @@ func (manager *Manager) prepareKnowledgeAdmissionForJob(
 		if compilerErr != nil {
 			return preparedKnowledgeAdmission{}, manager.safeKnowledgeAdmissionError(ctx, compilerErr)
 		}
+		logical = resolvedLogical
 		compiled, err = resolvedCompiler.CompileContext(admissionContext, logical)
 		if err != nil {
 			return preparedKnowledgeAdmission{}, manager.safeKnowledgeAdmissionError(ctx, err)

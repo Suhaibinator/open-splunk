@@ -32,7 +32,7 @@ func backoffDelay(p BackoffPolicy, attempt int, frac float64) time.Duration {
 
 	base := float64(initial)
 	limit := float64(maximum)
-	for i := 0; i < attempt; i++ {
+	for range attempt {
 		base *= multiplier
 		if base >= limit {
 			base = limit

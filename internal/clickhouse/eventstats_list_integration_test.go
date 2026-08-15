@@ -38,14 +38,14 @@ func testEventStatsListAgainstClickHouse(
 			visibilityCutoff,
 		)
 	}
-	compileForIndex := func(source, index string) CompiledQuery {
+	compileForIndex := func(source string) CompiledQuery {
 		t.Helper()
 		return compileIntegrationSPLForIndex(
 			t,
 			source,
 			indexTime.Add(10*time.Second),
 			visibilityCutoff,
-			index,
+			"eventstats-boundary",
 		)
 	}
 	oneList := func(name string, query CompiledQuery) []string {
@@ -397,7 +397,6 @@ func testEventStatsListAgainstClickHouse(
 			`index=eventstats-boundary host="in" | head 1000`+
 				` | eventstats list(host) AS ordered`+
 				` | head 1 | table ordered`,
-			"eventstats-boundary",
 		),
 	)
 	if len(repeatedElementsExact) != int(MaximumStatsListValuesPerGroup) {
@@ -413,7 +412,6 @@ func testEventStatsListAgainstClickHouse(
 			`index=eventstats-boundary host="in" | head 1001`+
 				` | eventstats list(host) AS discarded`+
 				` | head 1 | table event_id | search event_id="absent"`,
-			"eventstats-boundary",
 		),
 		EventStatsListLimitMarker,
 	)
@@ -436,7 +434,6 @@ func testEventStatsListAgainstClickHouse(
 			`index=eventstats-boundary host="in"`+
 				` | eventstats list(host) AS hosts BY event_id`+
 				` | head 1 | table hosts`,
-			"eventstats-boundary",
 		),
 	)
 	if want := []string{"in"}; !reflect.DeepEqual(exactRows, want) {
@@ -447,7 +444,6 @@ func testEventStatsListAgainstClickHouse(
 		compileForIndex(
 			`index=eventstats-boundary | eventstats list(host) AS hosts BY event_id`+
 				` | head 1 | table hosts`,
-			"eventstats-boundary",
 		),
 		EventStatsInputLimitMarker,
 	)

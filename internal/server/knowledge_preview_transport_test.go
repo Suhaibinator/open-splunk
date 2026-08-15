@@ -317,7 +317,7 @@ func TestPreviewKnowledgeObjectRequestCodecAlternationAndUnknownCopiesAreAllocat
 	regexWithOutput := validateTestBytesField(2, validateTestBytesField(2, nil))
 	aliasWithUnknown := validateTestVarintField(100, 1)
 	bodyAlternation := make([]byte, 0, 80_000)
-	for index := 0; index < 10_000; index++ {
+	for range 10_000 {
 		bodyAlternation = append(bodyAlternation, validateTestBytesField(10, regexWithOutput)...)
 		bodyAlternation = append(bodyAlternation, validateTestBytesField(11, aliasWithUnknown)...)
 	}
@@ -338,7 +338,7 @@ func TestPreviewKnowledgeObjectRequestCodecAlternationAndUnknownCopiesAreAllocat
 	)
 	jsonWithUnknown := validateTestVarintField(101, 2)
 	nestedAlternation := make([]byte, 0, 120_000)
-	for index := 0; index < 10_000; index++ {
+	for range 10_000 {
 		nestedAlternation = append(nestedAlternation, validateTestBytesField(2, regexWithOutputAndUnknown)...)
 		nestedAlternation = append(nestedAlternation, validateTestBytesField(3, jsonWithUnknown)...)
 	}
@@ -420,7 +420,7 @@ func TestPreviewKnowledgeObjectRequestCodecUnknownAuthorityAndWrongWire(t *testi
 
 func previewTestUnknownGroup(depth int, mismatch bool) []byte {
 	var result []byte
-	for index := 0; index < depth; index++ {
+	for index := range depth {
 		result = protowire.AppendTag(result, protowire.Number(100+index), protowire.StartGroupType)
 	}
 	for index := depth - 1; index >= 0; index-- {

@@ -15,7 +15,7 @@ func TestCompileStreamStatsCountEvalUsesOneTrueOnlyUInt128Window(t *testing.T) {
 	t.Parallel()
 
 	operator := streamStatsCountEvalOperator(
-		streamStatsCountEvalStringComparison(t, "source", "api"),
+		streamStatsCountEvalStringComparison(t),
 		"matches",
 	)
 	compiled, err := (Compiler{}).Compile(appendStreamStatsOperator(
@@ -91,7 +91,7 @@ func TestCompileStreamStatsCountEvalPinsFramesAndGroupedPresence(t *testing.T) {
 			t.Parallel()
 
 			operator := streamStatsCountEvalOperator(
-				streamStatsCountEvalStringComparison(t, "source", "api"),
+				streamStatsCountEvalStringComparison(t),
 				"matches",
 			)
 			operator.IncludeCurrent = test.includeCurrent
@@ -142,7 +142,7 @@ func TestCompileStreamStatsCountEvalReadsIncomingSameNameBeforeReplacement(t *te
 	t.Parallel()
 
 	operator := streamStatsCountEvalOperator(
-		streamStatsCountEvalStringComparison(t, "source", "api"),
+		streamStatsCountEvalStringComparison(t),
 		"source",
 	)
 	compiled, err := (Compiler{}).Compile(appendStreamStatsOperator(
@@ -332,7 +332,7 @@ func TestCompileStreamStatsCountEvalRejectsForgedMetadataAndComplexity(t *testin
 	t.Parallel()
 
 	validPredicate := func() plan.Expression {
-		return streamStatsCountEvalStringComparison(t, "source", "api")
+		return streamStatsCountEvalStringComparison(t)
 	}
 	input := mustResolveStreamStatsField(t, "source")
 	var typedNil *plan.EvalComparisonExpression
@@ -422,17 +422,15 @@ func streamStatsCountEvalOperator(
 
 func streamStatsCountEvalStringComparison(
 	t *testing.T,
-	fieldName string,
-	value string,
 ) plan.Expression {
 	t.Helper()
 	return &plan.EvalComparisonExpression{
 		Left: &plan.ScalarFieldExpression{
-			Field: mustResolveStreamStatsField(t, fieldName),
+			Field: mustResolveStreamStatsField(t, "source"),
 		},
 		Op: plan.ComparisonOpEqual,
 		Right: &plan.ScalarLiteralExpression{
-			Value: plan.Value{Kind: plan.ValueKindString, String: value},
+			Value: plan.Value{Kind: plan.ValueKindString, String: "api"},
 		},
 	}
 }

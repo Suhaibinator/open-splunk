@@ -79,8 +79,8 @@ func TestIntegrationCatalogAuthorizedPhysicalIdentityBoundFailsClosed(t *testing
 	privacyContractAssertPhysicalCountDiagnostic(t, database, maximumObjectsPerTenant+1)
 	for _, request := range []ListRequest{
 		{},
-		{TextFilter: privacyContractStringPointer("visible capacity")},
-		{SelectorTextFilter: privacyContractStringPointer("visible-capacity-")},
+		{TextFilter: new("visible capacity")},
+		{SelectorTextFilter: new("visible-capacity-")},
 	} {
 		if _, err := store.List(context.Background(), testReadScope(), request); !errors.Is(err, ErrCorrupt) {
 			t.Fatalf("List(8,193 authorized identities, request=%#v) error = %v, want ErrCorrupt", request, err)
@@ -297,5 +297,3 @@ func privacyContractCloneVisibleAuthorities(t *testing.T, database *control.DB, 
 		t.Fatalf("restore visible over-cap fixture foreign keys: %v", err)
 	}
 }
-
-func privacyContractStringPointer(value string) *string { return &value }

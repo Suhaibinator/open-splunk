@@ -327,7 +327,7 @@ func newExpirationWebSocketFixture(
 		server:    server,
 		client:    server.Client(),
 		dialer:    &websocket.Dialer{HandshakeTimeout: clientTimeout},
-		socketURL: webSocketURL(server.URL, searchWebSocketPath),
+		socketURL: webSocketURL(server.URL),
 	}
 	base.client.Timeout = clientTimeout
 	return &expirationWebSocketFixture{
@@ -366,7 +366,7 @@ func subscribeExpirationTarget(
 	}
 	var previewRowLimit *uint32
 	if includePreviews {
-		previewRowLimit = uint32Pointer(1)
+		previewRowLimit = new(uint32(1))
 	}
 	command := searchWebSocketTargetSubscribeCommand(
 		"subscribe-"+subscription.id,

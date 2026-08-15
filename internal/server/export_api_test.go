@@ -340,7 +340,7 @@ func TestExportRoutesValidateBeforeCallingService(t *testing.T) {
 		{name: "invalid JSON integer mode", path: "/api/v1/search/exports/create", request: &opensplunkv1.CreateExportJobRequest{Definition: &opensplunkv1.ExportDefinition{SearchJobId: "search-1", FormatOptions: &opensplunkv1.ExportDefinition_JsonLines{JsonLines: &opensplunkv1.JsonLinesExportOptions{IntegerEncoding: 99}}}}},
 		{name: "missing get ID", path: "/api/v1/search/exports/get", request: &opensplunkv1.GetExportJobRequest{ExportJobId: " "}},
 		{name: "missing cancel ID", path: "/api/v1/search/exports/cancel", request: &opensplunkv1.CancelExportJobRequest{ExportJobId: " "}},
-		{name: "unsupported cancel reason", path: "/api/v1/search/exports/cancel", request: &opensplunkv1.CancelExportJobRequest{ExportJobId: "export-1", Reason: stringPointer("because")}},
+		{name: "unsupported cancel reason", path: "/api/v1/search/exports/cancel", request: &opensplunkv1.CancelExportJobRequest{ExportJobId: "export-1", Reason: new("because")}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

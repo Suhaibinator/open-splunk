@@ -146,7 +146,7 @@ func TestBinEdgeMetadataAgainstClickHouse(t *testing.T) {
 	// still be readable for classification.
 	numericPads := make([]*opensplunkv1.TypedObjectField, 0, 300)
 	textPads := make([]*opensplunkv1.TypedObjectField, 0, 300)
-	for index := 0; index < 300; index++ {
+	for index := range 300 {
 		// Every leaf spells the same value, so the assertion below does not
 		// depend on which leaves ClickHouse chose to keep as subcolumns.
 		numericPads = append(numericPads, typedField(fmt.Sprintf("pad_%03d", index), typedSint(25)))
@@ -1091,7 +1091,7 @@ func binEdgeMetadataEvent(
 	event.BatchID = batch
 	event.Event.Host = "edge"
 	event.Event.Raw = []byte(raw)
-	event.Event.Message = stringPointer("bin edge metadata")
+	event.Event.Message = new("bin edge metadata")
 	event.Event.Fields = typedObjectValue(fields...)
 	return event
 }
@@ -1110,7 +1110,7 @@ func binEdgeMetadataPlan(t *testing.T, source string, cutoff time.Time, visibili
 		SearchStart:       cutoff.Add(-time.Second),
 		SearchTimezone:    "UTC",
 		IndexTimeCutoff:   cutoff,
-		VisibilityCutoff:  uint64PointerForIntegration(visibilityCutoff),
+		VisibilityCutoff:  new(visibilityCutoff),
 	})
 	if err != nil {
 		t.Fatalf("build bin edge SPL %q: %v", source, err)

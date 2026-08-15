@@ -72,7 +72,7 @@ func TestCollectRecordsTokenUseOncePerValidStreamAdmission(t *testing.T) {
 
 	harness := newServiceHarness(t, config, authorizer, acceptingStore())
 	stream := harness.stream(t, "Bearer one-time-secret")
-	sendHello(t, stream, 1, 1, 0)
+	sendHello(t, stream, 1)
 	response := recvResponse(t, stream)
 	if response.GetReady() == nil {
 		t.Fatalf("response payload = %T, want CollectorReady", response.GetPayload())
@@ -144,7 +144,7 @@ func TestCollectRecordsTokenUseOncePerValidStreamAdmission(t *testing.T) {
 	}
 
 	second := harness.stream(t, "Bearer one-time-secret")
-	sendHello(t, second, 1, 1, 0)
+	sendHello(t, second, 1)
 	if got := recvResponse(t, second).GetReady(); got == nil {
 		t.Fatal("second stream response was not CollectorReady")
 	}
@@ -177,7 +177,7 @@ func TestCollectDoesNotRecordRejectedStreamAdmission(t *testing.T) {
 			authorizer: staticTestAuthorizer(),
 			send: func(t *testing.T, stream opensplunkv1.CollectorIngestService_CollectClient) {
 				t.Helper()
-				sendHello(t, stream, 1, 2, 0)
+				sendHello(t, stream, 2)
 			},
 			wantCode: codes.FailedPrecondition,
 		},
@@ -189,7 +189,7 @@ func TestCollectDoesNotRecordRejectedStreamAdmission(t *testing.T) {
 			},
 			send: func(t *testing.T, stream opensplunkv1.CollectorIngestService_CollectClient) {
 				t.Helper()
-				sendHello(t, stream, 1, 1, 0)
+				sendHello(t, stream, 1)
 			},
 			wantCode: codes.Internal,
 		},
@@ -302,7 +302,7 @@ func TestCollectMapsSessionAdmissionFailuresBeforeReady(t *testing.T) {
 			config.SessionManager = manager
 			harness := newServiceHarness(t, config, staticTestAuthorizer(), acceptingStore())
 			stream := harness.stream(t, "Bearer good-token")
-			sendHello(t, stream, 1, 1, 0)
+			sendHello(t, stream, 1)
 			response, err := stream.Recv()
 			if response != nil || status.Code(err) != tt.wantCode {
 				t.Fatalf("Recv() = (%#v, %v), want nil/%v", response, err, tt.wantCode)

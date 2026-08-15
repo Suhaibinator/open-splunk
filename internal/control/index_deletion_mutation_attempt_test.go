@@ -126,9 +126,7 @@ func TestEnsureIndexDeletionMutationAttemptConvergesConcurrently(t *testing.T) {
 	failures := make(chan error, callers)
 	var wait sync.WaitGroup
 	for range callers {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
+		wait.Go(func() {
 			<-start
 			attempt, err := db.EnsureIndexDeletionMutationAttempt(ctx, operation.ID, target)
 			if err != nil {
@@ -136,7 +134,7 @@ func TestEnsureIndexDeletionMutationAttemptConvergesConcurrently(t *testing.T) {
 				return
 			}
 			results <- attempt
-		}()
+		})
 	}
 	close(start)
 	wait.Wait()

@@ -78,7 +78,7 @@ func TestCreateSearchHistoryRerunUsesTrustedSnapshotAndFreshAdmission(t *testing
 				}
 				return entry, nil
 			}}
-			apps := activeHistoryRerunAppCatalog(appID)
+			apps := activeHistoryRerunAppCatalog()
 			indexes := activeHistoryRerunIndexCatalog("main")
 			jobs := &fakeSearchJobs{createJob: completeJobForApp("history-rerun-new", appID)}
 			handler := newTestHandler(t, Config{
@@ -179,7 +179,7 @@ func TestCreateSearchHistoryRerunRejectsClientDefinition(t *testing.T) {
 	handler := newTestHandler(t, Config{
 		SearchJobs:    jobs,
 		Indexes:       activeHistoryRerunIndexCatalog("main"),
-		AppCatalog:    activeHistoryRerunAppCatalog("app-main"),
+		AppCatalog:    activeHistoryRerunAppCatalog(),
 		SearchHistory: history,
 		WebUI:         testUI(),
 		OwnerID:       "owner-1",
@@ -188,7 +188,7 @@ func TestCreateSearchHistoryRerunRejectsClientDefinition(t *testing.T) {
 	request := historyRerunRequest("history-original")
 	request.Definition = createRequest("-30d", "now", "forged-index").Definition
 	request.Definition.Spl = "index=forged-index | delete everything"
-	request.Definition.AppId = stringPointer("forged-app")
+	request.Definition.AppId = new("forged-app")
 
 	response := postProto(t, handler, "/api/v1/search/jobs/create", request)
 	if response.Code != http.StatusBadRequest ||
@@ -227,7 +227,7 @@ func TestCreateSearchHistoryRerunUsesHistoryIDBoundary(t *testing.T) {
 		handler := newTestHandler(t, Config{
 			SearchJobs:    jobs,
 			Indexes:       activeHistoryRerunIndexCatalog("main"),
-			AppCatalog:    activeHistoryRerunAppCatalog("app-main"),
+			AppCatalog:    activeHistoryRerunAppCatalog(),
 			SearchHistory: history,
 			WebUI:         testUI(),
 			OwnerID:       "owner-1",
@@ -270,7 +270,7 @@ func TestCreateSearchHistoryRerunUsesHistoryIDBoundary(t *testing.T) {
 		handler := newTestHandler(t, Config{
 			SearchJobs:    jobs,
 			Indexes:       activeHistoryRerunIndexCatalog("main"),
-			AppCatalog:    activeHistoryRerunAppCatalog("app-main"),
+			AppCatalog:    activeHistoryRerunAppCatalog(),
 			SearchHistory: history,
 			WebUI:         testUI(),
 			OwnerID:       "owner-1",
@@ -345,7 +345,7 @@ func TestCreateSearchHistoryRerunUsesEffectiveScopeWithDefinitionFallback(t *tes
 			handler := newTestHandler(t, Config{
 				SearchJobs:    jobs,
 				Indexes:       indexes,
-				AppCatalog:    activeHistoryRerunAppCatalog("app-main"),
+				AppCatalog:    activeHistoryRerunAppCatalog(),
 				SearchHistory: history,
 				WebUI:         testUI(),
 				OwnerID:       "owner-1",
@@ -458,7 +458,7 @@ func TestCreateSearchHistoryRerunLookupFailuresCreateNoJob(t *testing.T) {
 			handler := newTestHandler(t, Config{
 				SearchJobs:    jobs,
 				Indexes:       activeHistoryRerunIndexCatalog("main"),
-				AppCatalog:    activeHistoryRerunAppCatalog("app-main"),
+				AppCatalog:    activeHistoryRerunAppCatalog(),
 				SearchHistory: history,
 				WebUI:         testUI(),
 				OwnerID:       "owner-1",
@@ -507,12 +507,12 @@ func TestCreateSearchHistoryRerunReauthorizesAppAndIndexes(t *testing.T) {
 		},
 		{
 			name:    "index was deleted",
-			apps:    activeHistoryRerunAppCatalog("app-main"),
+			apps:    activeHistoryRerunAppCatalog(),
 			indexes: &historyRerunIndexCatalog{},
 		},
 		{
 			name: "index is no longer searchable",
-			apps: activeHistoryRerunAppCatalog("app-main"),
+			apps: activeHistoryRerunAppCatalog(),
 			indexes: &historyRerunIndexCatalog{fakeIndexCatalog: fakeIndexCatalog{indexes: []control.Index{
 				{
 					ID: "index-main",
@@ -527,7 +527,7 @@ func TestCreateSearchHistoryRerunReauthorizesAppAndIndexes(t *testing.T) {
 		},
 		{
 			name: "index was archived",
-			apps: activeHistoryRerunAppCatalog("app-main"),
+			apps: activeHistoryRerunAppCatalog(),
 			indexes: &historyRerunIndexCatalog{fakeIndexCatalog: fakeIndexCatalog{indexes: []control.Index{
 				{
 					ID: "index-main",
@@ -587,7 +587,7 @@ func TestCreateSearchHistoryRerunReauthorizesAppAndIndexes(t *testing.T) {
 func historyRerunRequest(historyID string) *opensplunkv1.CreateSearchJobRequest {
 	return &opensplunkv1.CreateSearchJobRequest{Source: &opensplunkv1.SearchJobSource{
 		Origin:          opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN,
-		HistorySearchId: stringPointer(historyID),
+		HistorySearchId: new(historyID),
 	}}
 }
 
@@ -605,8 +605,8 @@ func historyRerunEntry(
 		Definition: &opensplunkv1.SearchDefinition{
 			Spl: "  index=main ERROR | head 7\n",
 			TimeRange: &opensplunkv1.TimeRangeSpec{
-				Earliest: stringPointer("-2h"),
-				Latest:   stringPointer("now"),
+				Earliest: new("-2h"),
+				Latest:   new("now"),
 				Timezone: &timezone,
 			},
 			AppId:      &appID,
@@ -635,11 +635,11 @@ func historyRerunEntry(
 	}
 }
 
-func activeHistoryRerunAppCatalog(appID string) *fakeBootstrapAppCatalog {
+func activeHistoryRerunAppCatalog() *fakeBootstrapAppCatalog {
 	return &fakeBootstrapAppCatalog{result: AppCatalogResult{
 		Complete: true,
 		Apps: []AppCatalogSummary{
-			validBootstrapCatalogApp(appID, "main", "Main", "main"),
+			validBootstrapCatalogApp("app-main", "main", "Main", "main"),
 		},
 	}}
 }

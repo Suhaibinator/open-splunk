@@ -41,7 +41,6 @@ func (handler *apiHandler) searchAttemptAuditRoutes(
 			Codec:      newSerializedSearchAttemptAuditListCodec(),
 			Handler:    handler.listSearchAttemptAuditEvents,
 			SourceType: router.Body,
-			Sanitizer:  forwardCompatibleProtoSanitizer[*opensplunkv1.ListSearchAttemptAuditEventsRequest],
 			Overrides: sroutercommon.RouteOverrides{
 				MaxBodySize: smallRequestBytes,
 			},
@@ -196,7 +195,7 @@ func optionalSearchAttemptAuditFilter(
 	) != nil {
 		return nil, badRequestError(message)
 	}
-	return stringPointer(strings.Clone(value)), nil
+	return new(strings.Clone(value)), nil
 }
 
 func searchAttemptAuditListPageToProto(

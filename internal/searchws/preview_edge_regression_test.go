@@ -291,7 +291,7 @@ func TestCurrentBootstrapDoesNotRebroadcastDiscontinuousStateToExistingSubscribe
 	subscription := adversarialAttach(target, connection, "existing")
 	defer adversarialDetach(subscription)
 
-	if _, err := target.refreshForSubscription(context.Background(), 0, true); err != nil {
+	if err := target.refreshForSubscription(context.Background(), 0, true); err != nil {
 		t.Fatalf("refreshForSubscription() = %v", err)
 	}
 	if calls := reader.calls.Load(); calls != 0 {
@@ -331,7 +331,7 @@ func TestCurrentBootstrapRevalidatesExclusivityAfterSnapshotLoad(t *testing.T) {
 
 	result := make(chan error, 1)
 	go func() {
-		_, refreshErr := target.refreshForSubscription(context.Background(), 0, true)
+		refreshErr := target.refreshForSubscription(context.Background(), 0, true)
 		result <- refreshErr
 	}()
 	select {
@@ -383,7 +383,7 @@ func TestProjectionGateBoundsConcurrencyAndHonorsCancellation(t *testing.T) {
 				results <- err
 			}()
 		}
-		for index := 0; index < 2; index++ {
+		for range 2 {
 			select {
 			case <-reader.entered:
 			case <-time.After(time.Second):

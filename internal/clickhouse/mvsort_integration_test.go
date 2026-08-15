@@ -186,30 +186,24 @@ func testMVSortPrimitiveBoundariesAgainstClickHouse(
 		)
 	}
 
-	nullDynamic := "CAST(NULL AS Dynamic)"
 	dynamicMembers := func(count string) string {
 		return "arrayMap(number -> CAST(toString(number) AS Dynamic), " +
 			"range(toUInt64(" + count + ")))"
 	}
 	dynamicExactMembers := boundedMVSortDynamicArraySQL(
 		dynamicMembers(maximumValues),
-		nullDynamic,
 	)
 	dynamicOverMembers := boundedMVSortDynamicArraySQL(
 		dynamicMembers(overMaximumValues),
-		nullDynamic,
 	)
 	dynamicExactBytes := boundedMVSortDynamicArraySQL(
-		"[CAST("+exactPayload+" AS Dynamic)]",
-		nullDynamic,
+		"[CAST(" + exactPayload + " AS Dynamic)]",
 	)
 	dynamicOverBytes := boundedMVSortDynamicArraySQL(
-		"[CAST("+overPayload+" AS Dynamic)]",
-		nullDynamic,
+		"[CAST(" + overPayload + " AS Dynamic)]",
 	)
 	dynamicInvalidUTF8 := boundedMVSortDynamicArraySQL(
 		"[CAST(unhex('ff') AS Dynamic)]",
-		nullDynamic,
 	)
 	dynamicBoundarySQL := "SELECT " +
 		"length(dynamicElement(" + dynamicExactMembers + ", 'Array(String)')), " +

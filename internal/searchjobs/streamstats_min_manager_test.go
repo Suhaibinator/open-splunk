@@ -96,7 +96,7 @@ func TestManagerRetainsRowPreservingStreamStatsMinimumMixedResults(t *testing.T)
 	if !page.Rows[2].Values[1].IsNull() || !page.Rows[2].Values[2].IsNull() {
 		t.Fatalf("missing BY row = %#v, want retained row with null group and minimum", page.Rows[2])
 	}
-	for index := 0; index < 3; index++ {
+	for index := range 3 {
 		if !page.Rows[index].Values[2].IsNull() {
 			t.Fatalf("empty prior minimum at row %d = %#v, want null", index, page.Rows[index].Values[2])
 		}

@@ -351,9 +351,8 @@ func TestRuntimeLookupManagementAndSearchResolutionShareOneCatalog(t *testing.T)
 	completed := waitForRuntimeKnowledgeJobState(
 		t,
 		manager,
-		job.ID,
-		searchjobs.StateCompleted,
-	)
+		job.ID)
+
 	if completed.Failure != nil || counters.executions.Load() != 1 {
 		t.Fatalf("runtime lookup execution = (%#v, count=%d)", completed, counters.executions.Load())
 	}
@@ -434,9 +433,8 @@ func TestRuntimeLookupManagementAndSearchResolutionShareOneCatalog(t *testing.T)
 	secondCompleted := waitForRuntimeKnowledgeJobState(
 		t,
 		manager,
-		secondJob.ID,
-		searchjobs.StateCompleted,
-	)
+		secondJob.ID)
+
 	if secondCompleted.Failure != nil || counters.executions.Load() != 2 {
 		t.Fatalf(
 			"replaced runtime lookup execution = (%#v, count=%d)",
@@ -669,9 +667,8 @@ func TestRuntimeKnowledgeResolverEnabledEmptyAdmissionSucceeds(t *testing.T) {
 	completed := waitForRuntimeKnowledgeJobState(
 		t,
 		manager,
-		created.ID,
-		searchjobs.StateCompleted,
-	)
+		created.ID)
+
 	select {
 	case <-counters.finalized:
 	case <-time.After(3 * time.Second):
@@ -957,9 +954,9 @@ func waitForRuntimeKnowledgeJobState(
 	t *testing.T,
 	manager *searchjobs.Manager,
 	jobID string,
-	want searchjobs.State,
 ) searchjobs.Job {
 	t.Helper()
+	const want = searchjobs.StateCompleted
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		job, err := manager.Get(jobID)

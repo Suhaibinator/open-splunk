@@ -264,7 +264,7 @@ func TestListPageForCursorReplayHighWaterAndDeletedAnchor(t *testing.T) {
 		{"owner", AccessScope{TenantID: access.TenantID, OwnerID: "other"}, JobListRequest{AppIDFilter: &app, TextFilter: &text, StateFilters: reorderedStates}},
 		{"tenant", AccessScope{TenantID: "other", OwnerID: access.OwnerID}, JobListRequest{AppIDFilter: &app, TextFilter: &text, StateFilters: reorderedStates}},
 		{"app", access, JobListRequest{AppIDFilter: &changedApp, TextFilter: &text, StateFilters: reorderedStates}},
-		{"text", access, JobListRequest{AppIDFilter: &app, TextFilter: stringPointer("different"), StateFilters: reorderedStates}},
+		{"text", access, JobListRequest{AppIDFilter: &app, TextFilter: new("different"), StateFilters: reorderedStates}},
 		{"state", access, JobListRequest{AppIDFilter: &app, TextFilter: &text, StateFilters: []State{StateQueued}}},
 	}
 	for _, replay := range replays {
@@ -471,14 +471,14 @@ func TestListPageForValidatesInputAndCancellation(t *testing.T) {
 		{"too many states", validAccess, JobListRequest{StateFilters: tooManyStates}, ErrInvalidListFilter},
 		{"invalid state zero", validAccess, JobListRequest{StateFilters: []State{StateInvalid}}, ErrInvalidListFilter},
 		{"invalid state high", validAccess, JobListRequest{StateFilters: []State{StateExpired + 1}}, ErrInvalidListFilter},
-		{"spaced app", validAccess, JobListRequest{AppIDFilter: stringPointer(" search ")}, ErrInvalidListFilter},
+		{"spaced app", validAccess, JobListRequest{AppIDFilter: new(" search ")}, ErrInvalidListFilter},
 		{"invalid app utf8", validAccess, JobListRequest{AppIDFilter: &invalidUTF8}, ErrInvalidListFilter},
-		{"long app", validAccess, JobListRequest{AppIDFilter: stringPointer(strings.Repeat("a", maximumJobAppIDBytes+1))}, ErrInvalidListFilter},
+		{"long app", validAccess, JobListRequest{AppIDFilter: new(strings.Repeat("a", maximumJobAppIDBytes+1))}, ErrInvalidListFilter},
 		{"invalid text utf8", validAccess, JobListRequest{TextFilter: &invalidUTF8}, ErrInvalidListFilter},
-		{"nul text", validAccess, JobListRequest{TextFilter: stringPointer("bad\x00text")}, ErrInvalidListFilter},
-		{"control text", validAccess, JobListRequest{TextFilter: stringPointer("bad\u0085text")}, ErrInvalidListFilter},
-		{"long text", validAccess, JobListRequest{TextFilter: stringPointer(strings.Repeat("q", maximumJobListTextBytes+1))}, ErrInvalidListFilter},
-		{"long whitespace text", validAccess, JobListRequest{TextFilter: stringPointer(strings.Repeat(" ", maximumJobListTextBytes+1))}, ErrInvalidListFilter},
+		{"nul text", validAccess, JobListRequest{TextFilter: new("bad\x00text")}, ErrInvalidListFilter},
+		{"control text", validAccess, JobListRequest{TextFilter: new("bad\u0085text")}, ErrInvalidListFilter},
+		{"long text", validAccess, JobListRequest{TextFilter: new(strings.Repeat("q", maximumJobListTextBytes+1))}, ErrInvalidListFilter},
+		{"long whitespace text", validAccess, JobListRequest{TextFilter: new(strings.Repeat(" ", maximumJobListTextBytes+1))}, ErrInvalidListFilter},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -514,8 +514,8 @@ func TestListPageForValidatesInputAndCancellation(t *testing.T) {
 func BenchmarkNormalizeJobListRequestRejectsOversizedFilters(b *testing.B) {
 	access := AccessScope{TenantID: "tenant", OwnerID: "owner"}
 	for name, request := range map[string]JobListRequest{
-		"text": {TextFilter: stringPointer(strings.Repeat(" ", 1<<20))},
-		"app":  {AppIDFilter: stringPointer(strings.Repeat("a", 1<<20))},
+		"text": {TextFilter: new(strings.Repeat(" ", 1<<20))},
+		"app":  {AppIDFilter: new(strings.Repeat("a", 1<<20))},
 	} {
 		b.Run(name, func(b *testing.B) {
 			b.ReportAllocs()
@@ -765,8 +765,4 @@ func jobListItemIDs(items []JobListItem) []string {
 		ids[index] = items[index].ID
 	}
 	return ids
-}
-
-func stringPointer(value string) *string {
-	return &value
 }

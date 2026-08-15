@@ -255,9 +255,8 @@ func registeredProtobufHTTPRoutes(t *testing.T) map[string]protobufHTTPRouteSign
 			if !ok {
 				t.Fatalf("unresolved protobuf route path at %s", position)
 			}
-			sanitizer := protobufRouteConfigField(config, "Sanitizer")
-			if protobufRouteFunctionName(sanitizer) != "forwardCompatibleProtoSanitizer" {
-				t.Fatalf("protobuf route %q lacks the forward-compatible sanitizer at %s", path, position)
+			if protobufRouteConfigField(config, "Sanitizer") != nil {
+				t.Fatalf("protobuf route %q redundantly supplies the constructor-owned sanitizer at %s", path, position)
 			}
 			requestType, ok := protobufRouteMessageType(typeArguments[0], typeExpressions, nil)
 			if !ok {
@@ -417,17 +416,42 @@ func assertProtobufRouteConstructionBoundary(
 			if !ok || function.Name.Name != "newForwardCompatibleProtoRoute" || function.Body == nil {
 				continue
 			}
+			sanitizerInstallations := 0
+			ast.Inspect(function.Body, func(node ast.Node) bool {
+				assignment, assignmentOK := node.(*ast.AssignStmt)
+				if !assignmentOK || assignment.Tok != token.ASSIGN ||
+					len(assignment.Lhs) != 1 || len(assignment.Rhs) != 1 {
+					return true
+				}
+				selector, selectorOK := assignment.Lhs[0].(*ast.SelectorExpr)
+				if !selectorOK {
+					return true
+				}
+				receiver, receiverOK := selector.X.(*ast.Ident)
+				if receiverOK && receiver.Name == "config" &&
+					selector.Sel.Name == "Sanitizer" &&
+					protobufRouteFunctionName(assignment.Rhs[0]) == "forwardCompatibleProtoSanitizer" {
+					sanitizerInstallations++
+				}
+				return true
+			})
+			if sanitizerInstallations != 1 {
+				t.Fatalf(
+					"protobuf route constructor installs the forward-compatible sanitizer %d times, want 1",
+					sanitizerInstallations,
+				)
+			}
 			directSRouter := make(map[token.Pos]struct{})
 			ast.Inspect(function.Body, func(node ast.Node) bool {
 				call, callOK := node.(*ast.CallExpr)
 				if !callOK {
 					return true
 				}
-				if _, constructor := srouterGenericRouteTypeArguments(
+				if isSrouterGenericRouteConstructor(
 					call.Fun,
 					routerAliases,
 					dotImported,
-				); constructor {
+				) {
 					directSRouter[call.Fun.Pos()] = struct{}{}
 				}
 				return true
@@ -435,11 +459,11 @@ func assertProtobufRouteConstructionBoundary(
 			ast.Inspect(function.Body, func(node ast.Node) bool {
 				expression, expressionOK := node.(ast.Expr)
 				if expressionOK {
-					if _, constructor := srouterGenericRouteTypeArguments(
+					if isSrouterGenericRouteConstructor(
 						expression,
 						routerAliases,
 						dotImported,
-					); constructor {
+					) {
 						if _, direct := directSRouter[expression.Pos()]; !direct {
 							t.Fatalf(
 								"SRouter constructor is indirect inside the local boundary at %s",
@@ -465,11 +489,11 @@ func assertProtobufRouteConstructionBoundary(
 		ast.Inspect(file, func(node ast.Node) bool {
 			expression, expressionOK := node.(ast.Expr)
 			if expressionOK {
-				if _, constructor := srouterGenericRouteTypeArguments(
+				if isSrouterGenericRouteConstructor(
 					expression,
 					routerAliases,
 					dotImported,
-				); constructor {
+				) {
 					if _, allowed := allowedSRouter[expression.Pos()]; !allowed {
 						t.Fatalf(
 							"SRouter protobuf constructor bypasses the local boundary at %s",
@@ -644,32 +668,31 @@ func directProtobufRouteUnwrapPositions(files []*ast.File) (map[token.Pos]struct
 	return allowed, count
 }
 
-func srouterGenericRouteTypeArguments(
+func isSrouterGenericRouteConstructor(
 	expression ast.Expr,
 	routerAliases map[string]struct{},
 	dotImported bool,
-) ([]ast.Expr, bool) {
+) bool {
 	var base ast.Expr
-	var arguments []ast.Expr
 	switch indexed := expression.(type) {
 	case *ast.IndexListExpr:
-		base, arguments = indexed.X, indexed.Indices
+		base = indexed.X
 	case *ast.IndexExpr:
-		base, arguments = indexed.X, []ast.Expr{indexed.Index}
+		base = indexed.X
 	default:
-		return nil, false
+		return false
 	}
 	selector, ok := base.(*ast.SelectorExpr)
 	if ok {
 		packageName, packageOK := selector.X.(*ast.Ident)
 		if !packageOK {
-			return nil, false
+			return false
 		}
 		_, routerPackage := routerAliases[packageName.Name]
-		return arguments, routerPackage && selector.Sel.Name == "NewGenericRouteDefinition"
+		return routerPackage && selector.Sel.Name == "NewGenericRouteDefinition"
 	}
 	identifier, ok := base.(*ast.Ident)
-	return arguments, ok && dotImported && identifier.Name == "NewGenericRouteDefinition"
+	return ok && dotImported && identifier.Name == "NewGenericRouteDefinition"
 }
 
 func protobufDirectRouteRegistrationPositions(

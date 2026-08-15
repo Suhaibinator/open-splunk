@@ -22,7 +22,7 @@ var auditTestTime = time.Date(2026, 8, 3, 12, 34, 56, 789_123_456, time.FixedZon
 
 func auditTestCursorKey() []byte { return bytes.Repeat([]byte{0x5a}, minimumCursorKeyBytes) }
 
-func openAuditTestDatabase(t *testing.T) (string, *control.DB) {
+func openAuditTestDatabase(t *testing.T) *control.DB {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "control.db")
 	database, err := control.Open(context.Background(), path)
@@ -34,7 +34,7 @@ func openAuditTestDatabase(t *testing.T) (string, *control.DB) {
 			t.Errorf("close control database: %v", closeErr)
 		}
 	})
-	return path, database
+	return database
 }
 
 func newAuditTestStore(t *testing.T, database *control.DB, key []byte) *Store {
@@ -169,7 +169,7 @@ func (logging countingAuditLogger) Trace(
 
 func TestStoreAppendUsesSystemDefaultAndBrowserOverride(t *testing.T) {
 	t.Parallel()
-	_, database := openAuditTestDatabase(t)
+	database := openAuditTestDatabase(t)
 	store := newAuditTestStore(t, database, auditTestCursorKey())
 	ctx := context.Background()
 
@@ -225,7 +225,7 @@ func TestStoreAppendUsesSystemDefaultAndBrowserOverride(t *testing.T) {
 
 func TestStoreAppendOnlyConstructionAndConfigurationValidation(t *testing.T) {
 	t.Parallel()
-	_, database := openAuditTestDatabase(t)
+	database := openAuditTestDatabase(t)
 
 	if store, err := NewStore(nil, StoreOptions{}); store != nil ||
 		!errors.Is(err, control.ErrInvalidArgument) {
@@ -278,7 +278,7 @@ func TestStoreAppendOnlyConstructionAndConfigurationValidation(t *testing.T) {
 
 func TestAppendInTransactionRollsBackWithCaller(t *testing.T) {
 	t.Parallel()
-	_, database := openAuditTestDatabase(t)
+	database := openAuditTestDatabase(t)
 	store := newAuditTestStore(t, database, auditTestCursorKey())
 	ctx := context.Background()
 
@@ -322,7 +322,7 @@ func TestAppendInTransactionRollsBackWithCaller(t *testing.T) {
 func TestAppendInTransactionRejectsAutocommitAndForeignHandles(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	_, database := openAuditTestDatabase(t)
+	database := openAuditTestDatabase(t)
 	store := newAuditTestStore(t, database, auditTestCursorKey())
 	definition := auditTestDefinition(ActionIngestionTokenCreate, "token", 1)
 
@@ -335,7 +335,7 @@ func TestAppendInTransactionRejectsAutocommitAndForeignHandles(t *testing.T) {
 		t.Fatalf("AppendInTransaction(root) = (%+v, %v)", event, err)
 	}
 
-	_, foreign := openAuditTestDatabase(t)
+	foreign := openAuditTestDatabase(t)
 	foreignTx := foreign.GORMDB().WithContext(ctx).Begin()
 	if foreignTx.Error != nil {
 		t.Fatalf("begin foreign transaction: %v", foreignTx.Error)
@@ -390,7 +390,7 @@ func TestAppendInTransactionRejectsAutocommitAndForeignHandles(t *testing.T) {
 }
 
 func TestAppendCapacityFailsClosedAtCanonicalLimit(t *testing.T) {
-	_, database := openAuditTestDatabase(t)
+	database := openAuditTestDatabase(t)
 	populateCanonicalAuditJournal(
 		t,
 		database,
@@ -415,7 +415,7 @@ func TestAppendCapacityFailsClosedAtCanonicalLimit(t *testing.T) {
 }
 
 func TestAppendAndFirstListPageStatementCountsDoNotGrowWithJournal(t *testing.T) {
-	_, database := openAuditTestDatabase(t)
+	database := openAuditTestDatabase(t)
 	populateCanonicalAuditJournal(t, database, "tenant-small", 1)
 	populateCanonicalAuditJournal(t, database, "tenant-large", 2_048)
 	store := newAuditTestStore(t, database, auditTestCursorKey())
@@ -470,7 +470,7 @@ func TestAppendAndFirstListPageStatementCountsDoNotGrowWithJournal(t *testing.T)
 func TestConcurrentAppendAllocatesDenseUniqueTenantSequences(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	_, database := openAuditTestDatabase(t)
+	database := openAuditTestDatabase(t)
 	store := newAuditTestStore(t, database, auditTestCursorKey())
 	const appendCount = 16
 
@@ -606,7 +606,7 @@ func TestAuditBackupExcludesUncommittedEventAndResumesDenseSequence(t *testing.T
 
 func TestAppendValidationFailsBeforeWriting(t *testing.T) {
 	t.Parallel()
-	_, database := openAuditTestDatabase(t)
+	database := openAuditTestDatabase(t)
 	store := newAuditTestStore(t, database, auditTestCursorKey())
 	ctx := context.Background()
 	invalidUTF8 := string([]byte{0xff})
@@ -677,7 +677,7 @@ func TestAppendValidationFailsBeforeWriting(t *testing.T) {
 func TestAuditMigrationRejectsForgedAccountingAndTaxonomy(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	_, database := openAuditTestDatabase(t)
+	database := openAuditTestDatabase(t)
 	store := newAuditTestStore(t, database, auditTestCursorKey())
 	event := appendAuditTestEvent(
 		t,
@@ -796,7 +796,7 @@ func TestAuditMigrationRejectsForgedAccountingAndTaxonomy(t *testing.T) {
 func TestNewStoreFailsClosedOnPreexistingInteriorJournalGap(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	_, database := openAuditTestDatabase(t)
+	database := openAuditTestDatabase(t)
 	writer := newAuditTestStore(t, database, auditTestCursorKey())
 	appendAuditTestEvent(t, writer, ctx, "tenant-gap", ActionIngestionTokenCreate, "token", 1)
 	appendAuditTestEvent(t, writer, ctx, "tenant-gap", ActionIngestionTokenUpdate, "token", 2)
@@ -828,7 +828,7 @@ func TestNewStoreFailsClosedOnPreexistingInteriorJournalGap(t *testing.T) {
 func TestNewStoreFailsClosedOnPreexistingMalformedInteriorJournalRow(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	_, database := openAuditTestDatabase(t)
+	database := openAuditTestDatabase(t)
 	writer := newAuditTestStore(t, database, auditTestCursorKey())
 	appendAuditTestEvent(t, writer, ctx, "tenant-malformed", ActionIngestionTokenCreate, "token", 1)
 	appendAuditTestEvent(t, writer, ctx, "tenant-malformed", ActionIngestionTokenUpdate, "token", 2)
@@ -868,7 +868,7 @@ func TestNewStoreFailsClosedOnPreexistingMalformedInteriorJournalRow(t *testing.
 func TestAppendFailsClosedOnRuntimeTailCorruption(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	_, database := openAuditTestDatabase(t)
+	database := openAuditTestDatabase(t)
 	store := newAuditTestStore(t, database, auditTestCursorKey())
 	appendAuditTestEvent(t, store, ctx, "tenant-tail", ActionIngestionTokenCreate, "token", 1)
 	appendAuditTestEvent(t, store, ctx, "tenant-tail", ActionIngestionTokenUpdate, "token", 2)
@@ -909,7 +909,7 @@ func TestAppendFailsClosedOnRuntimeTailCorruption(t *testing.T) {
 func TestAppendChecksCorruptFullStateBeforeCapacity(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	_, database := openAuditTestDatabase(t)
+	database := openAuditTestDatabase(t)
 	store := newAuditTestStore(t, database, auditTestCursorKey())
 
 	if err := database.GORMDB().Exec(
@@ -938,7 +938,7 @@ func TestAppendChecksCorruptFullStateBeforeCapacity(t *testing.T) {
 
 func TestAuditRowsAndStateAreImmutable(t *testing.T) {
 	t.Parallel()
-	_, database := openAuditTestDatabase(t)
+	database := openAuditTestDatabase(t)
 	store := newAuditTestStore(t, database, auditTestCursorKey())
 	ctx := context.Background()
 	event, err := store.Append(ctx, "tenant-immutable", auditTestDefinition(ActionIngestionTokenCreate, "token", 1))
@@ -1003,7 +1003,7 @@ func TestAuditRowsAndStateAreImmutable(t *testing.T) {
 
 func TestExplicitGORMModelsMatchMigratedAuditColumns(t *testing.T) {
 	t.Parallel()
-	_, database := openAuditTestDatabase(t)
+	database := openAuditTestDatabase(t)
 
 	stateStatement := &gorm.Statement{DB: database.GORMDB()}
 	if err := stateStatement.Parse(&auditTenantStateRecord{}); err != nil {

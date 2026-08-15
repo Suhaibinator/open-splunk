@@ -14,7 +14,7 @@ func TestValidationDiagnosticsAreDeterministic(t *testing.T) {
 	invalid := "bad\x00value"
 	definition := savedSearchDefinition("Errors", "app-main")
 	definition.Search.TimeRange = &opensplunkv1.TimeRangeSpec{Earliest: &empty, Latest: &empty}
-	for iteration := 0; iteration < 50; iteration++ {
+	for iteration := range 50 {
 		_, _, _, err := normalizeAndEncodeDefinition(definition, "owner")
 		if err == nil || !strings.Contains(err.Error(), "earliest time") {
 			t.Fatalf("iteration %d error = %v, want earliest-time error", iteration, err)
@@ -26,7 +26,7 @@ func TestValidationDiagnosticsAreDeterministic(t *testing.T) {
 		Type:  opensplunkv1.VisualizationType_VISUALIZATION_TYPE_TABLE,
 		Title: &invalid, XField: &invalid,
 	}
-	for iteration := 0; iteration < 50; iteration++ {
+	for iteration := range 50 {
 		_, _, _, err := normalizeAndEncodeDefinition(definition, "owner")
 		if err == nil || !strings.Contains(err.Error(), "visualization title") {
 			t.Fatalf("iteration %d error = %v, want title error", iteration, err)

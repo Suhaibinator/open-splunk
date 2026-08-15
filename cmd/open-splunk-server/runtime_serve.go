@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"google.golang.org/grpc"
 )
 
@@ -36,7 +37,7 @@ func serveRuntime(
 	collectorShutdownGraceTimeout time.Duration,
 	admissions ...httpAdmissionShutdown,
 ) error {
-	if ctx == nil || httpServer == nil || requests == nil || nilRuntimeDependency(webSockets) {
+	if ctx == nil || httpServer == nil || requests == nil || nilcheck.IsNil(webSockets) {
 		return errors.New("serve runtime: context, HTTP server, request tracker, and websocket service are required")
 	}
 	if httpShutdownTimeout <= 0 {
@@ -50,7 +51,7 @@ func serveRuntime(
 	if (collectorServer == nil) != (collectorListener == nil) {
 		return errors.New("serve runtime: collector server and listener must be configured together")
 	}
-	if len(admissions) > 1 || len(admissions) == 1 && nilRuntimeDependency(admissions[0]) {
+	if len(admissions) > 1 || len(admissions) == 1 && nilcheck.IsNil(admissions[0]) {
 		return errors.New("serve runtime: admission lifecycle is invalid")
 	}
 
@@ -77,9 +78,7 @@ func serveRuntime(
 
 	var shutdownWG sync.WaitGroup
 	httpShutdown := make(chan error, 1)
-	shutdownWG.Add(1)
-	go func() {
-		defer shutdownWG.Done()
+	shutdownWG.Go(func() {
 		httpShutdown <- shutdownHTTPServer(
 			httpServer,
 			requests,
@@ -87,18 +86,16 @@ func serveRuntime(
 			httpShutdownTimeout,
 			admissions...,
 		)
-	}()
+	})
 	var collectorShutdown chan error
 	if collectorServer != nil {
 		collectorShutdown = make(chan error, 1)
-		shutdownWG.Add(1)
-		go func() {
-			defer shutdownWG.Done()
+		shutdownWG.Go(func() {
 			collectorShutdown <- shutdownGRPCServer(
 				collectorServer,
 				collectorShutdownGraceTimeout,
 			)
-		}()
+		})
 	}
 	shutdownWG.Wait()
 	serveErr = errors.Join(serveErr, <-httpShutdown)

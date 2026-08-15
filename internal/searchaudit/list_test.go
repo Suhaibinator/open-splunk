@@ -17,7 +17,7 @@ import (
 func TestListPaginationFiltersTotalsAndCursorAuthentication(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	_, database := openSearchAuditTestDatabase(t)
+	database := openSearchAuditTestDatabase(t)
 	store := newSearchAuditTestStore(t, database, searchAuditTestCursorKey(), 10)
 	alice := audit.Actor{Kind: audit.ActorKindBrowser, ID: "alice", Role: audit.ActorRoleUser}
 	aliceContext, err := audit.WithActor(ctx, alice)
@@ -147,7 +147,7 @@ func TestListCursorSurvivesAppendAndReopenBeforePruning(t *testing.T) {
 
 func TestListUsesBoundedStatementBudget(t *testing.T) {
 	ctx := context.Background()
-	_, database := openSearchAuditTestDatabase(t)
+	database := openSearchAuditTestDatabase(t)
 	store := newSearchAuditTestStore(t, database, searchAuditTestCursorKey(), 10)
 	for index := 1; index <= 4; index++ {
 		appendSearchAuditTestEvent(
@@ -205,7 +205,7 @@ func TestListUsesBoundedStatementBudget(t *testing.T) {
 func TestListCursorFailsClosedWhenRollingPruneRemovesSnapshotRow(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	_, database := openSearchAuditTestDatabase(t)
+	database := openSearchAuditTestDatabase(t)
 	store := newSearchAuditTestStore(t, database, searchAuditTestCursorKey(), 4)
 	for index := 1; index <= 4; index++ {
 		appendSearchAuditTestEvent(t, store, database, ctx, "tenant-prune", searchAuditTestDefinition(
@@ -227,7 +227,7 @@ func TestListCursorFailsClosedWhenRollingPruneRemovesSnapshotRow(t *testing.T) {
 func TestListRejectsInvalidAndCanceledRequests(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	_, database := openSearchAuditTestDatabase(t)
+	database := openSearchAuditTestDatabase(t)
 	store := newSearchAuditTestStore(t, database, searchAuditTestCursorKey(), 5)
 	bad := " owner"
 	for _, request := range []ListRequest{

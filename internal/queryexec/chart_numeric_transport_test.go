@@ -38,7 +38,6 @@ func TestExecutorPublishesNumericChartAsNullableWideValues(t *testing.T) {
 			t.Parallel()
 
 			rows := numericChartRows(
-				"String",
 				reflect.TypeOf(""),
 				[]string{"0:api", "1:", "2:"},
 				[]any{"/a", "/b"},
@@ -46,7 +45,7 @@ func TestExecutorPublishesNumericChartAsNullableWideValues(t *testing.T) {
 				[][]uint8{{1, 0, 1}, {0, 1, 0}},
 			)
 			sink := &fakeSink{}
-			query := numericChartQuery(t, "path", clickhouse.ChartRowKindString, "String", test.kind)
+			query := numericChartQuery(t, test.kind)
 			if err := mustExecutor(t, &fakeQueryConnection{rows: rows}).Execute(
 				context.Background(), query, sink,
 			); err != nil {
@@ -98,7 +97,6 @@ func TestExecutorRetainsNumericChartRowsWithNoEligibleMeasureMembers(t *testing.
 	t.Parallel()
 
 	rows := numericChartRows(
-		"String",
 		reflect.TypeOf(""),
 		[]string{"0:api"},
 		[]any{"/measureless"},
@@ -108,7 +106,7 @@ func TestExecutorRetainsNumericChartRowsWithNoEligibleMeasureMembers(t *testing.
 	sink := &fakeSink{}
 	if err := mustExecutor(t, &fakeQueryConnection{rows: rows}).Execute(
 		context.Background(),
-		numericChartQuery(t, "path", clickhouse.ChartRowKindString, "String", clickhouse.ChartValueKindAverage),
+		numericChartQuery(t, clickhouse.ChartValueKindAverage),
 		sink,
 	); err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -143,7 +141,6 @@ func TestExecutorNumericChartByteCeilingIsExactAtBothSides(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			rows := numericChartRows(
-				"String",
 				reflect.TypeOf(""),
 				names,
 				[]any{test.row},
@@ -153,7 +150,7 @@ func TestExecutorNumericChartByteCeilingIsExactAtBothSides(t *testing.T) {
 			sink := &fakeSink{}
 			err := mustExecutor(t, &fakeQueryConnection{rows: rows}).Execute(
 				context.Background(),
-				numericChartQuery(t, "path", clickhouse.ChartRowKindString, "String", clickhouse.ChartValueKindSum),
+				numericChartQuery(t, clickhouse.ChartValueKindSum),
 				sink,
 			)
 			if test.wantErr != nil {
@@ -183,7 +180,6 @@ func TestExecutorReusesNumericChartScanDestinations(t *testing.T) {
 	t.Parallel()
 
 	rows := numericChartRows(
-		"String",
 		reflect.TypeOf(""),
 		[]string{"0:api"},
 		[]any{"/a", "/b"},
@@ -210,7 +206,7 @@ func TestExecutorReusesNumericChartScanDestinations(t *testing.T) {
 	sink := &fakeSink{}
 	if err := mustExecutor(t, &fakeQueryConnection{rows: rows}).Execute(
 		context.Background(),
-		numericChartQuery(t, "path", clickhouse.ChartRowKindString, "String", clickhouse.ChartValueKindSum),
+		numericChartQuery(t, clickhouse.ChartValueKindSum),
 		sink,
 	); err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -224,7 +220,6 @@ func TestExecutorBuffersNumericChartBeforePublishing(t *testing.T) {
 	t.Parallel()
 
 	rows := numericChartRows(
-		"String",
 		reflect.TypeOf(""),
 		[]string{"0:api"},
 		[]any{"/a", "/b"},
@@ -235,7 +230,7 @@ func TestExecutorBuffersNumericChartBeforePublishing(t *testing.T) {
 	sink := &fakeSink{}
 	err := mustExecutor(t, &fakeQueryConnection{rows: rows}).Execute(
 		context.Background(),
-		numericChartQuery(t, "path", clickhouse.ChartRowKindString, "String", clickhouse.ChartValueKindSum),
+		numericChartQuery(t, clickhouse.ChartValueKindSum),
 		sink,
 	)
 	if !errors.Is(err, searchjobs.ErrStorageUnavailable) {
@@ -258,12 +253,9 @@ func TestExecutorKeepsNumericChartRawGroupBudgetIndependentOfOutputWidth(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	executor := &Executor{settings: settings, expandTimechartGroupLimit: true}
+	executor := &Executor{settings: mustValidatedSettings(t, settings), expandTimechartGroupLimit: true}
 	query := numericChartQuery(
 		t,
-		"path",
-		clickhouse.ChartRowKindString,
-		"String",
 		clickhouse.ChartValueKindSum,
 	)
 	if query.Chart.RowLimit != maximumChartRows || query.Chart.MaxSeries != maximumChartSeries {
@@ -280,7 +272,7 @@ func TestExecutorKeepsNumericChartRawGroupBudgetIndependentOfOutputWidth(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	low := &Executor{settings: lowSettings}
+	low := &Executor{settings: mustValidatedSettings(t, lowSettings)}
 	if got := low.settingsFor(query)["max_rows_to_group_by"]; got != uint64(7) {
 		t.Fatalf("explicit lower numeric chart group cap = %v, want 7", got)
 	}
@@ -290,7 +282,6 @@ func TestExecutorRejectsNumericChartCloseFailureAtomically(t *testing.T) {
 	t.Parallel()
 
 	rows := numericChartRows(
-		"String",
 		reflect.TypeOf(""),
 		[]string{"0:api"},
 		[]any{"/a"},
@@ -301,7 +292,7 @@ func TestExecutorRejectsNumericChartCloseFailureAtomically(t *testing.T) {
 	sink := &fakeSink{}
 	err := mustExecutor(t, &fakeQueryConnection{rows: rows}).Execute(
 		context.Background(),
-		numericChartQuery(t, "path", clickhouse.ChartRowKindString, "String", clickhouse.ChartValueKindAverage),
+		numericChartQuery(t, clickhouse.ChartValueKindAverage),
 		sink,
 	)
 	if !errors.Is(err, searchjobs.ErrStorageUnavailable) {
@@ -332,14 +323,13 @@ func TestExecutorRejectsInvalidNumericChartValueKindBeforeQuery(t *testing.T) {
 			t.Parallel()
 
 			rows := numericChartRows(
-				"String",
 				reflect.TypeOf(""),
 				[]string{"0:api"},
 				[]any{"/a"},
 				[][]float64{{1}},
 				[][]uint8{{1}},
 			)
-			query := numericChartQuery(t, "path", clickhouse.ChartRowKindString, "String", test.kind)
+			query := numericChartQuery(t, test.kind)
 			connection := &fakeQueryConnection{rows: rows}
 			sink := &fakeSink{}
 			err := mustExecutor(t, connection).Execute(context.Background(), query, sink)
@@ -413,7 +403,6 @@ func TestExecutorRejectsMalformedNumericChartTransportAtomically(t *testing.T) {
 			t.Parallel()
 
 			rows := numericChartRows(
-				"String",
 				reflect.TypeOf(""),
 				[]string{"0:api", "1:"},
 				[]any{"/a", "/b"},
@@ -425,7 +414,7 @@ func TestExecutorRejectsMalformedNumericChartTransportAtomically(t *testing.T) {
 			sink := &fakeSink{}
 			err := mustExecutor(t, connection).Execute(
 				context.Background(),
-				numericChartQuery(t, "path", clickhouse.ChartRowKindString, "String", clickhouse.ChartValueKindAverage),
+				numericChartQuery(t, clickhouse.ChartValueKindAverage),
 				sink,
 			)
 			if !errors.Is(err, malformed.want) {
@@ -446,19 +435,15 @@ func TestExecutorRejectsMalformedNumericChartTransportAtomically(t *testing.T) {
 
 func numericChartQuery(
 	t *testing.T,
-	rowField string,
-	rowKind clickhouse.ChartRowKind,
-	rowDatabaseType string,
 	valueKind clickhouse.ChartValueKind,
 ) clickhouse.CompiledQuery {
 	t.Helper()
-	query := chartQuery(rowField, rowKind, rowDatabaseType)
+	query := chartQuery("path", clickhouse.ChartRowKindString, "String")
 	query.Chart.ValueKind = valueKind
 	return query
 }
 
 func numericChartRows(
-	rowDatabaseType string,
 	rowScanType reflect.Type,
 	names []string,
 	rowValues []any,
@@ -479,7 +464,7 @@ func numericChartRows(
 		},
 		types: []driver.ColumnType{
 			fakeColumnType{name: clickhouse.ChartOrdinalColumn, databaseType: "UInt64", scanType: reflect.TypeOf(uint64(0))},
-			fakeColumnType{name: clickhouse.ChartRowColumn, databaseType: rowDatabaseType, scanType: rowScanType},
+			fakeColumnType{name: clickhouse.ChartRowColumn, databaseType: "String", scanType: rowScanType},
 			fakeColumnType{name: clickhouse.ChartNamesColumn, databaseType: "Array(String)", scanType: reflect.TypeOf([]string{})},
 			fakeColumnType{name: clickhouse.ChartValuesColumn, databaseType: "Array(Float64)", scanType: reflect.TypeOf([]float64{})},
 			fakeColumnType{name: clickhouse.ChartValuePresentColumn, databaseType: "Array(UInt8)", scanType: reflect.TypeOf([]uint8{})},

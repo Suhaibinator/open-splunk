@@ -409,7 +409,7 @@ func TestSearchJobListRejectsMaliciousServiceOutput(t *testing.T) {
 			request: &opensplunkv1.ListSearchJobsRequest{},
 			page: func() searchjobs.JobListPage {
 				page := listPage(baseJob("job-a", testNow))
-				page.TotalSize = uint64Pointer(1)
+				page.TotalSize = new(uint64(1))
 				page.TotalSizeExact = true
 				return page
 			},

@@ -11,6 +11,7 @@ import (
 	"github.com/Suhaibinator/SRouter/pkg/codec"
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/searchjobproto"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"google.golang.org/protobuf/proto"
 )
@@ -265,7 +266,7 @@ func validSearchJobListItem(
 	if !validSearchJobListFailure(job.State, job.Failure) {
 		return false
 	}
-	if searchStateToProto(job.State) == opensplunkv1.SearchJobState_SEARCH_JOB_STATE_UNSPECIFIED {
+	if searchjobproto.State(job.State) == opensplunkv1.SearchJobState_SEARCH_JOB_STATE_UNSPECIFIED {
 		return false
 	}
 	if len(states) != 0 && !slices.Contains(states, job.State) {

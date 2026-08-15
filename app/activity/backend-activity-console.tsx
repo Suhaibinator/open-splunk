@@ -21,6 +21,7 @@ import {
   supportsServerFeature,
   type SystemBootstrapModel,
 } from "@/lib/api";
+import { createErrorMessage } from "@/lib/error-message";
 import { historySearchLaunchHref } from "@/lib/search/launch-url";
 import {
   clearServerSearchHistory,
@@ -55,11 +56,7 @@ interface BackendActivityConsoleProps {
   apiBaseUrl: string;
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error && error.message.trim().length > 0
-    ? error.message
-    : "The server did not return a usable search history response.";
-}
+const errorMessage = createErrorMessage("The server did not return a usable search history response.");
 
 function launchHref(entry: ServerSearchHistoryEntry): string {
   return historySearchLaunchHref(entry.id);

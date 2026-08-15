@@ -110,7 +110,7 @@ func TestLookupRoutesAreOneAuthenticatedExactFamily(t *testing.T) {
 	}
 
 	payload, _ := proto.Marshal(&opensplunkv1.GetLookupRequest{LookupId: "lookup-1"})
-	unauthorized := httptest.NewRequest(http.MethodPost, lookupGetPath, strings.NewReader(string(payload)))
+	unauthorized := httptest.NewRequestWithContext(t.Context(), http.MethodPost, lookupGetPath, strings.NewReader(string(payload)))
 	unauthorized.Host = "example.com"
 	unauthorized.Header.Set("Origin", "http://example.com")
 	unauthorized.Header.Set("Content-Type", "application/x-protobuf")
@@ -120,7 +120,7 @@ func TestLookupRoutesAreOneAuthenticatedExactFamily(t *testing.T) {
 		t.Fatalf("unauthenticated status=%d", unauthorizedResponse.Code)
 	}
 
-	wrongMethod := httptest.NewRequest(http.MethodGet, lookupGetPath, nil)
+	wrongMethod := httptest.NewRequestWithContext(t.Context(), http.MethodGet, lookupGetPath, nil)
 	wrongMethod.Host = "example.com"
 	wrongMethod.Header.Set("Origin", "http://example.com")
 	wrongMethod.Header.Set("Authorization", "Bearer "+knowledgeBoundaryToken)

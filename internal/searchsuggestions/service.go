@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
+	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -145,16 +145,16 @@ type normalizedRequest struct {
 // New validates every dependency and bound before constructing an idle
 // suggestion service.
 func New(config Config) (*Service, error) {
-	if nilInterface(config.Validator) {
+	if nilcheck.IsNil(config.Validator) {
 		return nil, errors.New("create search suggestion service: validator is required")
 	}
-	if nilInterface(config.Scopes) {
+	if nilcheck.IsNil(config.Scopes) {
 		return nil, errors.New("create search suggestion service: scope snapshotter is required")
 	}
-	if nilInterface(config.Compiler) {
+	if nilcheck.IsNil(config.Compiler) {
 		return nil, errors.New("create search suggestion service: field compiler is required")
 	}
-	if nilInterface(config.Executor) {
+	if nilcheck.IsNil(config.Executor) {
 		return nil, errors.New("create search suggestion service: field executor is required")
 	}
 	if config.MaxConcurrent < 0 || config.MaxConcurrent > maximumConcurrent {
@@ -1013,18 +1013,5 @@ func (service *Service) Close(ctx context.Context) error {
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
-	}
-}
-
-func nilInterface(value any) bool {
-	if value == nil {
-		return true
-	}
-	reflected := reflect.ValueOf(value)
-	switch reflected.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return reflected.IsNil()
-	default:
-		return false
 	}
 }

@@ -341,7 +341,7 @@ func TestKnowledgeCatalogSchemaEnforcesImmutablePublicationAndRecovery(t *testin
 		  AND client_request_id = 'idempotency-test-1'`)
 
 	// Binary identity means an ASCII-case-distinct name is not a collision.
-	insertKnowledgeMigrationObject(t, raw, "ko-case", "BASE", "private", "active", 20)
+	insertKnowledgeMigrationObject(t, raw, "ko-case", "BASE", "active", 20)
 	assertSQLFailsContaining(t, raw, "active name already exists", fmt.Sprintf(`
 		INSERT INTO knowledge_objects (
 			tenant_id, knowledge_object_id, current_version,
@@ -474,7 +474,7 @@ func TestKnowledgeCatalogSchemaProtectsNormalCapacityReserves(t *testing.T) {
 		) VALUES ('tenant-a', zeroblob(32), X'01', 1, 10)`); err != nil {
 		t.Fatalf("create definition blob: %v", err)
 	}
-	insertKnowledgeMigrationObject(t, raw, "ko-capacity", "capacity", "private", "active", 10)
+	insertKnowledgeMigrationObject(t, raw, "ko-capacity", "capacity", "active", 10)
 	update, err := raw.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatalf("begin capacity update seed: %v", err)
@@ -624,7 +624,7 @@ func TestKnowledgeCatalogActiveObjectsRequireActiveApp(t *testing.T) {
 			'active-insert', 'private', 'active', zeroblob(32), 10, 10
 		)`)
 
-	insertKnowledgeMigrationObject(t, raw, "ko-draft-app", "draft-app", "private", "draft", 10)
+	insertKnowledgeMigrationObject(t, raw, "ko-draft-app", "draft-app", "draft", 10)
 	assertSQLFailsContaining(t, raw, "requires active app", `
 		UPDATE knowledge_objects
 		SET current_version = 2, state = 'active', updated_at_unix_micro = 11
@@ -830,7 +830,7 @@ func TestKnowledgeCatalogSuccessRecordsRequireExactCurrentVersion(t *testing.T) 
 		) VALUES ('tenant-a', zeroblob(32), X'01', 1, 10)`); err != nil {
 		t.Fatalf("seed success-record catalog: %v", err)
 	}
-	insertKnowledgeMigrationObject(t, raw, "ko-current", "current", "private", "active", 10)
+	insertKnowledgeMigrationObject(t, raw, "ko-current", "current", "active", 10)
 
 	ordinary, err := raw.BeginTx(ctx, nil)
 	if err != nil {
@@ -1273,7 +1273,6 @@ func insertKnowledgeMigrationObject(
 	db *sql.DB,
 	objectID string,
 	name string,
-	scope string,
 	state string,
 	timestamp int64,
 ) {
@@ -1311,8 +1310,8 @@ func insertKnowledgeMigrationObject(
 	if _, err := tx.ExecContext(
 		t.Context(),
 		statement,
-		objectID, knowledgeMigrationTestAppID, name, scope, state, timestamp, timestamp,
-		objectID, knowledgeMigrationTestAppID, name, scope, state, timestamp,
+		objectID, knowledgeMigrationTestAppID, name, "private", state, timestamp, timestamp,
+		objectID, knowledgeMigrationTestAppID, name, "private", state, timestamp,
 		objectID,
 	); err != nil {
 		_ = tx.Rollback()
@@ -1330,9 +1329,9 @@ func assertSQLFailsContaining(t *testing.T, db *sql.DB, want string, query strin
 	}
 }
 
-func assertSQLFails(t *testing.T, db *sql.DB, query string, args ...any) {
+func assertSQLFails(t *testing.T, db *sql.DB, query string) {
 	t.Helper()
-	if _, err := db.ExecContext(t.Context(), query, args...); err == nil {
+	if _, err := db.ExecContext(t.Context(), query); err == nil {
 		t.Fatal("SQL unexpectedly succeeded")
 	}
 }

@@ -41,7 +41,7 @@ func TestCreateSearchHistoryRerunRejectsMalformedSourceShapes(t *testing.T) {
 			name: "saved-search ID also supplied",
 			request: func() *opensplunkv1.CreateSearchJobRequest {
 				request := historyRerunRequest("history-original")
-				request.Source.SavedSearchId = stringPointer("saved-forged")
+				request.Source.SavedSearchId = new("saved-forged")
 				return request
 			},
 			wantMessage: "history-rerun origin requires a history search ID",
@@ -50,7 +50,7 @@ func TestCreateSearchHistoryRerunRejectsMalformedSourceShapes(t *testing.T) {
 			name: "dashboard ID also supplied",
 			request: func() *opensplunkv1.CreateSearchJobRequest {
 				request := historyRerunRequest("history-original")
-				request.Source.DashboardId = stringPointer("dashboard-forged")
+				request.Source.DashboardId = new("dashboard-forged")
 				return request
 			},
 			wantMessage: "history-rerun origin requires a history search ID",
@@ -61,7 +61,7 @@ func TestCreateSearchHistoryRerunRejectsMalformedSourceShapes(t *testing.T) {
 				request := createRequest("-1h", "now", "main")
 				request.Source = &opensplunkv1.SearchJobSource{
 					Origin:          opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_AD_HOC,
-					HistorySearchId: stringPointer("history-forged"),
+					HistorySearchId: new("history-forged"),
 				}
 				return request
 			},
@@ -73,7 +73,7 @@ func TestCreateSearchHistoryRerunRejectsMalformedSourceShapes(t *testing.T) {
 				request := createRequest("-1h", "now", "main")
 				request.Source = &opensplunkv1.SearchJobSource{
 					Origin:          opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH,
-					HistorySearchId: stringPointer("history-forged"),
+					HistorySearchId: new("history-forged"),
 				}
 				return request
 			},
@@ -84,7 +84,7 @@ func TestCreateSearchHistoryRerunRejectsMalformedSourceShapes(t *testing.T) {
 			request: func() *opensplunkv1.CreateSearchJobRequest {
 				request := createRequest("-1h", "now", "main")
 				request.Source = &opensplunkv1.SearchJobSource{
-					HistorySearchId: stringPointer("history-forged"),
+					HistorySearchId: new("history-forged"),
 				}
 				return request
 			},
@@ -107,7 +107,7 @@ func TestCreateSearchHistoryRerunRejectsMalformedSourceShapes(t *testing.T) {
 			handler := newTestHandler(t, Config{
 				SearchJobs:    jobs,
 				Indexes:       activeHistoryRerunIndexCatalog("main"),
-				AppCatalog:    activeHistoryRerunAppCatalog("app-main"),
+				AppCatalog:    activeHistoryRerunAppCatalog(),
 				SearchHistory: history,
 				WebUI:         testUI(),
 				OwnerID:       "owner-1",
@@ -147,7 +147,7 @@ func TestCreateSearchHistoryRerunRejectsRequestOptionsBeforeLookup(t *testing.T)
 		{
 			name: "client request ID",
 			mutate: func(request *opensplunkv1.CreateSearchJobRequest) {
-				request.ClientRequestId = stringPointer("client-1")
+				request.ClientRequestId = new("client-1")
 			},
 			wantMessage: "client request idempotency is not supported",
 		},
@@ -197,7 +197,7 @@ func TestCreateSearchHistoryRerunRejectsRequestOptionsBeforeLookup(t *testing.T)
 			handler := newTestHandler(t, Config{
 				SearchJobs:    jobs,
 				Indexes:       activeHistoryRerunIndexCatalog("main"),
-				AppCatalog:    activeHistoryRerunAppCatalog("app-main"),
+				AppCatalog:    activeHistoryRerunAppCatalog(),
 				SearchHistory: history,
 				WebUI:         testUI(),
 				OwnerID:       "owner-1",
@@ -235,7 +235,7 @@ func TestCreateSearchHistoryRerunWithoutHistoryServiceIsUnsupported(t *testing.T
 	handler := newTestHandler(t, Config{
 		SearchJobs: jobs,
 		Indexes:    activeHistoryRerunIndexCatalog("main"),
-		AppCatalog: activeHistoryRerunAppCatalog("app-main"),
+		AppCatalog: activeHistoryRerunAppCatalog(),
 		WebUI:      testUI(),
 		OwnerID:    "owner-1",
 		TenantID:   "tenant-1",
@@ -278,7 +278,7 @@ func TestCreateSearchHistoryRerunAuthorizesLegacyAndStaticApps(t *testing.T) {
 		{
 			name: "legacy explicit empty app",
 			mutate: func(entry *opensplunkv1.SearchHistoryEntry) {
-				entry.Definition.AppId = stringPointer("")
+				entry.Definition.AppId = new("")
 			},
 			wantStatus: http.StatusOK,
 		},
@@ -510,31 +510,31 @@ func TestCreateSearchHistoryRerunRejectsMalformedTrustedDefinition(t *testing.T)
 		{
 			name: "padded time intent",
 			mutate: func(entry *opensplunkv1.SearchHistoryEntry) {
-				entry.Definition.TimeRange.Earliest = stringPointer(" -2h ")
+				entry.Definition.TimeRange.Earliest = new(" -2h ")
 			},
 		},
 		{
 			name: "invalid canonical time expression",
 			mutate: func(entry *opensplunkv1.SearchHistoryEntry) {
-				entry.Definition.TimeRange.Earliest = stringPointer("yesterday-ish")
+				entry.Definition.TimeRange.Earliest = new("yesterday-ish")
 			},
 		},
 		{
 			name: "padded timezone",
 			mutate: func(entry *opensplunkv1.SearchHistoryEntry) {
-				entry.Definition.TimeRange.Timezone = stringPointer(" UTC ")
+				entry.Definition.TimeRange.Timezone = new(" UTC ")
 			},
 		},
 		{
 			name: "invalid canonical timezone",
 			mutate: func(entry *opensplunkv1.SearchHistoryEntry) {
-				entry.Definition.TimeRange.Timezone = stringPointer("Mars/Olympus")
+				entry.Definition.TimeRange.Timezone = new("Mars/Olympus")
 			},
 		},
 		{
 			name: "padded app ID",
 			mutate: func(entry *opensplunkv1.SearchHistoryEntry) {
-				entry.Definition.AppId = stringPointer(" app-main ")
+				entry.Definition.AppId = new(" app-main ")
 			},
 		},
 		{
@@ -581,7 +581,7 @@ func TestCreateSearchHistoryRerunRejectsMalformedTrustedDefinition(t *testing.T)
 				return entry, nil
 			}}
 			indexes := activeHistoryRerunIndexCatalog("main", "other")
-			apps := activeHistoryRerunAppCatalog("app-main")
+			apps := activeHistoryRerunAppCatalog()
 			jobs := &fakeSearchJobs{createJob: completeJob("must-not-create")}
 			handler := newTestHandler(t, Config{
 				SearchJobs:    jobs,
@@ -668,7 +668,7 @@ func TestCreateSearchHistoryRerunMapsIndexCatalogFailures(t *testing.T) {
 			handler := newTestHandler(t, Config{
 				SearchJobs:    jobs,
 				Indexes:       indexes,
-				AppCatalog:    activeHistoryRerunAppCatalog("app-main"),
+				AppCatalog:    activeHistoryRerunAppCatalog(),
 				SearchHistory: history,
 				WebUI:         testUI(),
 				OwnerID:       "owner-1",
@@ -725,7 +725,7 @@ func TestCreateSearchHistoryRerunMapsJobAdmissionCancellation(t *testing.T) {
 			handler := newTestHandler(t, Config{
 				SearchJobs:    jobs,
 				Indexes:       activeHistoryRerunIndexCatalog("main"),
-				AppCatalog:    activeHistoryRerunAppCatalog("app-main"),
+				AppCatalog:    activeHistoryRerunAppCatalog(),
 				SearchHistory: history,
 				WebUI:         testUI(),
 				OwnerID:       "owner-1",
@@ -768,9 +768,9 @@ func TestCreateSearchHistoryRerunResolvesNamedZoneDayIntentAtFreshAdmission(t *t
 		"history-original",
 		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
 	)
-	entry.Definition.TimeRange.Earliest = stringPointer("-1d@d")
-	entry.Definition.TimeRange.Latest = stringPointer("@d")
-	entry.Definition.TimeRange.Timezone = stringPointer("America/Los_Angeles")
+	entry.Definition.TimeRange.Earliest = new("-1d@d")
+	entry.Definition.TimeRange.Latest = new("@d")
+	entry.Definition.TimeRange.Timezone = new("America/Los_Angeles")
 	history := &fakeSearchHistory{getFn: func(
 		context.Context,
 		searchhistory.AccessScope,
@@ -782,7 +782,7 @@ func TestCreateSearchHistoryRerunResolvesNamedZoneDayIntentAtFreshAdmission(t *t
 	handler := newTestHandler(t, Config{
 		SearchJobs:    jobs,
 		Indexes:       activeHistoryRerunIndexCatalog("main"),
-		AppCatalog:    activeHistoryRerunAppCatalog("app-main"),
+		AppCatalog:    activeHistoryRerunAppCatalog(),
 		SearchHistory: history,
 		WebUI:         testUI(),
 		OwnerID:       "owner-1",
@@ -833,8 +833,8 @@ func TestCreateSearchHistoryRerunRejectsTimeIntentThatExpiredAgainstFreshClock(t
 		"history-original",
 		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
 	)
-	entry.Definition.TimeRange.Earliest = stringPointer("now")
-	entry.Definition.TimeRange.Latest = stringPointer("2026-07-24T18:00:00Z")
+	entry.Definition.TimeRange.Earliest = new("now")
+	entry.Definition.TimeRange.Latest = new("2026-07-24T18:00:00Z")
 	history := &fakeSearchHistory{getFn: func(
 		context.Context,
 		searchhistory.AccessScope,
@@ -846,7 +846,7 @@ func TestCreateSearchHistoryRerunRejectsTimeIntentThatExpiredAgainstFreshClock(t
 	handler := newTestHandler(t, Config{
 		SearchJobs:    jobs,
 		Indexes:       activeHistoryRerunIndexCatalog("main"),
-		AppCatalog:    activeHistoryRerunAppCatalog("app-main"),
+		AppCatalog:    activeHistoryRerunAppCatalog(),
 		SearchHistory: history,
 		WebUI:         testUI(),
 		OwnerID:       "owner-1",

@@ -20,11 +20,9 @@ func TestCompatibilityV0_1ProgramAuthorities(t *testing.T) {
 				definitions := []*opensplunkv1.KnowledgeObjectDefinition{
 					calculatedDefinition(
 						"calculated-a", "calculated_a", "lower(host)",
-						opensplunkv1.SharingScope_SHARING_SCOPE_APP, "app-a",
 					),
 					calculatedDefinition(
 						"calculated-b", "calculated_b", "upper(calculated_a)",
-						opensplunkv1.SharingScope_SHARING_SCOPE_APP, "app-a",
 					),
 				}
 				if _, err := Compile(inputFromDefinitions(t, definitions).Objects); !errors.Is(err, ErrInvalidProgram) {

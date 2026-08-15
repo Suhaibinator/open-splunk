@@ -21,7 +21,7 @@ func TestEnumeratePublicationIndexORSignaturesMatchesBruteForce(t *testing.T) {
 		atomCount := int(seed%8) + 1
 		atoms := make([]publicationIndexAtom, atomCount)
 		for atomIndex := range atoms {
-			for ordinal := 0; ordinal < 12; ordinal++ {
+			for ordinal := range 12 {
 				generator ^= generator << 13
 				generator ^= generator >> 7
 				generator ^= generator << 17
@@ -173,7 +173,7 @@ func TestEnumeratePublicationIndexORSignaturesRejectsJoinClosedWorkAmplification
 	// at the independent work ceiling.
 	atoms := make([]publicationIndexAtom, maximumPublicationIndexAtoms)
 	for subset := range atoms {
-		for bit := 0; bit < 10; bit++ {
+		for bit := range 10 {
 			if subset&(1<<bit) != 0 {
 				publicationIndexTestSet(&atoms[subset].before, bit)
 				publicationIndexTestSet(&atoms[subset].after, bit+64)
@@ -302,7 +302,7 @@ func TestEnumeratePublicationIndexORSignaturesIsDeterministicAndConcurrent(t *te
 	errorsByWorker := make(chan error, workers)
 	var wait sync.WaitGroup
 	testContext := t.Context()
-	for worker := 0; worker < workers; worker++ {
+	for worker := range workers {
 		wait.Add(1)
 		go func(worker int) {
 			defer wait.Done()

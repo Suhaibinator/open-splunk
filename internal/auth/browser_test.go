@@ -471,10 +471,8 @@ func TestBearerTokenAuthenticatorIsSafeForConcurrentUse(t *testing.T) {
 
 	var waitGroup sync.WaitGroup
 	errorsByWorker := make(chan error, workers)
-	for worker := 0; worker < workers; worker++ {
-		waitGroup.Add(1)
-		go func() {
-			defer waitGroup.Done()
+	for range workers {
+		waitGroup.Go(func() {
 			principal, err := authenticator.Authenticate(
 				context.Background(),
 				[]byte(browserTestToken),
@@ -488,7 +486,7 @@ func TestBearerTokenAuthenticatorIsSafeForConcurrentUse(t *testing.T) {
 				principal.OwnerID() != "owner" {
 				errorsByWorker <- errors.New("unexpected concurrent principal")
 			}
-		}()
+		})
 	}
 	waitGroup.Wait()
 	close(errorsByWorker)

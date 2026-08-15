@@ -7,7 +7,6 @@ import (
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/collector/input"
 	"github.com/Suhaibinator/open-splunk/internal/collector/wal"
-	"google.golang.org/protobuf/proto"
 )
 
 const testCheckpointInputID = "input"
@@ -32,8 +31,8 @@ func TestCommitTerminalCheckpointsAdvancesFromDurableBatchOrigin(t *testing.T) {
 		t.Fatalf("seed discovery checkpoint: %v", err)
 	}
 	marks := []wal.SourceCheckpointMark{
-		checkpointSourceMark(1, identity, "/logs/app.log", 100, 1),
-		checkpointSourceMark(2, identity, "/logs/app.log", 240, 2),
+		checkpointSourceMark(1, identity, 100, 1),
+		checkpointSourceMark(2, identity, 240, 2),
 	}
 
 	if _, err := commitTerminalCheckpoints(store, marks); err != nil {
@@ -75,7 +74,7 @@ func TestCommitTerminalCheckpointsFencesDelayedPreCopytruncateGeneration(t *test
 	}
 
 	if _, err := commitTerminalCheckpoints(store, []wal.SourceCheckpointMark{
-		checkpointSourceMark(1, oldIdentity, "/logs/app.log", 900, 90),
+		checkpointSourceMark(1, oldIdentity, 900, 90),
 	}); err != nil {
 		t.Fatalf("commit old generation: %v", err)
 	}
@@ -107,7 +106,7 @@ func TestCommitTerminalCheckpointsRejectsInvalidNextLine(t *testing.T) {
 	}
 
 	for _, nextLine := range []uint64{0, 5, ^uint64(0)} {
-		mark := checkpointSourceMark(1, identity, "/logs/app.log", 100, 5)
+		mark := checkpointSourceMark(1, identity, 100, 5)
 		mark.NextLineNumber = nextLine
 		if _, err := commitTerminalCheckpoints(store, []wal.SourceCheckpointMark{mark}); err == nil ||
 			!strings.Contains(err.Error(), "invalid next_line_number") {
@@ -136,8 +135,8 @@ func TestSourceCheckpointsFromWALRejectsCursorConflictWithDurableCheckpoint(t *t
 	}
 
 	for _, mark := range []wal.SourceCheckpointMark{
-		checkpointSourceMark(1, identity, "/logs/app.log", 200, 8),
-		checkpointSourceMark(1, identity, "/logs/app.log", 100, 10),
+		checkpointSourceMark(1, identity, 200, 8),
+		checkpointSourceMark(1, identity, 100, 10),
 	} {
 		if _, err := sourceCheckpointsFromWAL(store, []wal.SourceCheckpointMark{mark}); err == nil ||
 			!strings.Contains(err.Error(), "line cursor conflicts with durable checkpoint") {
@@ -161,8 +160,8 @@ func TestSourceCheckpointsFromWALRejectsConflictingPendingIdentities(t *testing.
 	second.Fingerprint = strings.Repeat("cd", 32)
 
 	_, err = sourceCheckpointsFromWAL(store, []wal.SourceCheckpointMark{
-		checkpointSourceMark(1, first, "/logs/app.log", 100, 1),
-		checkpointSourceMark(2, second, "/logs/app.log", 200, 2),
+		checkpointSourceMark(1, first, 100, 1),
+		checkpointSourceMark(2, second, 200, 2),
 	})
 	if err == nil || !strings.Contains(err.Error(), "conflicts with another source identity") {
 		t.Fatalf("sourceCheckpointsFromWAL conflicting identities error = %v", err)
@@ -202,12 +201,12 @@ func TestCommitTerminalCheckpointsKeepsIdenticalFilesIndependentByInput(t *testi
 	}
 }
 
-func checkpointSourceMark(sequence uint64, identity input.FileIdentity, path string, end, line uint64) wal.SourceCheckpointMark {
+func checkpointSourceMark(sequence uint64, identity input.FileIdentity, end, line uint64) wal.SourceCheckpointMark {
 	return checkpointSourceMarkForInput(
 		testCheckpointInputID,
 		sequence,
 		identity,
-		path,
+		"/logs/app.log",
 		end,
 		line,
 	)
@@ -237,13 +236,13 @@ func checkpointBatch(sequence uint64, identity input.FileIdentity, path string, 
 			EventId: "event",
 			Origin: &opensplunkv1.EventOrigin{
 				InputId:               "input",
-				FileIdentity:          proto.String(identity.String()),
-				StartOffset:           proto.Uint64(start),
-				EndOffset:             proto.Uint64(end),
-				LineNumber:            proto.Uint64(line),
-				NextLineNumber:        proto.Uint64(line + 1),
-				SourcePath:            proto.String(path),
-				FileFingerprintLength: proto.Uint32(identity.FingerprintLength),
+				FileIdentity:          new(identity.String()),
+				StartOffset:           new(start),
+				EndOffset:             new(end),
+				LineNumber:            new(line),
+				NextLineNumber:        new(line + 1),
+				SourcePath:            new(path),
+				FileFingerprintLength: new(identity.FingerprintLength),
 			},
 		}},
 	}

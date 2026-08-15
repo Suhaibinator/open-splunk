@@ -38,9 +38,9 @@ func TestAppLifecycleIsTenantScopedVersionedAndReferentiallySafe(t *testing.T) {
 			"main",
 		},
 		DefaultTimeRange: &AppTimeRange{
-			Earliest: stringPointerForAppTest(" -24h "),
-			Latest:   stringPointerForAppTest(" now "),
-			Timezone: stringPointerForAppTest(" America/Los_Angeles "),
+			Earliest: new(" -24h "),
+			Latest:   new(" now "),
+			Timezone: new(" America/Los_Angeles "),
 		},
 	})
 	if err != nil {
@@ -54,9 +54,9 @@ func TestAppLifecycleIsTenantScopedVersionedAndReferentiallySafe(t *testing.T) {
 		created.Definition.Description != "production workspace" ||
 		!slices.Equal(created.Definition.DefaultIndexes, []string{"audit", "main"}) ||
 		!reflect.DeepEqual(created.Definition.DefaultTimeRange, &AppTimeRange{
-			Earliest: stringPointerForAppTest("-24h"),
-			Latest:   stringPointerForAppTest("now"),
-			Timezone: stringPointerForAppTest("America/Los_Angeles"),
+			Earliest: new("-24h"),
+			Latest:   new("now"),
+			Timezone: new("America/Los_Angeles"),
 		}) {
 		t.Fatalf("CreateApp() normalization = %#v", created.Definition)
 	}
@@ -649,9 +649,9 @@ func TestAppDefinitionPresenceAndCallerStorageAreDetached(t *testing.T) {
 	}
 
 	definition.DefaultIndexes[0] = "mutated"
-	definition.DefaultTimeRange.Earliest = stringPointerForAppTest("0")
+	definition.DefaultTimeRange.Earliest = new("0")
 	created.Definition.DefaultIndexes[0] = "mutated-result"
-	created.Definition.DefaultTimeRange.Latest = stringPointerForAppTest("0")
+	created.Definition.DefaultTimeRange.Latest = new("0")
 	got, err := catalog.GetApp(ctx, scope, AppSelector{AppID: created.ID})
 	if err != nil {
 		t.Fatal(err)
@@ -689,7 +689,7 @@ func TestAppCatalogEnforcesPerTenantCapacity(t *testing.T) {
 	db := openTestDB(t)
 	catalog := newTestAppCatalog(t, db)
 	scope := AppAccessScope{TenantID: "tenant-full"}
-	for index := 0; index < MaximumAppsPerTenant; index++ {
+	for index := range MaximumAppsPerTenant {
 		if _, err := catalog.CreateApp(
 			ctx,
 			scope,
@@ -1364,15 +1364,15 @@ func TestAppValidationIsCanonicalAndBounded(t *testing.T) {
 		}},
 		{name: "invalid earliest", scope: scope, mutate: func(definition *AppDefinition) {
 			definition.DefaultTimeRange = &AppTimeRange{
-				Earliest: stringPointerForAppTest("tomorrow"),
-				Latest:   stringPointerForAppTest("now"),
+				Earliest: new("tomorrow"),
+				Latest:   new("now"),
 			}
 		}},
 		{name: "invalid timezone", scope: scope, mutate: func(definition *AppDefinition) {
 			definition.DefaultTimeRange = &AppTimeRange{
-				Earliest: stringPointerForAppTest("-24h"),
-				Latest:   stringPointerForAppTest("now"),
-				Timezone: stringPointerForAppTest("Local"),
+				Earliest: new("-24h"),
+				Latest:   new("now"),
+				Timezone: new("Local"),
 			}
 		}},
 	}
@@ -1553,8 +1553,8 @@ func validAppDefinition(slug string) AppDefinition {
 		Slug:        slug,
 		DisplayName: slug,
 		DefaultTimeRange: &AppTimeRange{
-			Earliest: stringPointerForAppTest("-24h"),
-			Latest:   stringPointerForAppTest("now"),
+			Earliest: new("-24h"),
+			Latest:   new("now"),
 		},
 	}
 }
@@ -1603,8 +1603,4 @@ func newTestAppCatalog(t *testing.T, db *DB) *AppCatalog {
 		t.Fatalf("NewAppCatalog() error = %v", err)
 	}
 	return catalog
-}
-
-func stringPointerForAppTest(value string) *string {
-	return &value
 }

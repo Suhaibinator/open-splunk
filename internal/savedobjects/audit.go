@@ -3,11 +3,11 @@ package savedobjects
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"strings"
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"gorm.io/gorm"
 
@@ -75,7 +75,7 @@ func NewAuditedStore(
 			control.ErrInvalidArgument,
 		)
 	}
-	if appender == nil || isNilSavedSearchAuditAppender(appender) {
+	if nilcheck.IsNil(appender) {
 		return nil, fmt.Errorf(
 			"%w: saved-search audit appender is required",
 			control.ErrInvalidArgument,
@@ -86,17 +86,6 @@ func NewAuditedStore(
 		tenantID: strings.Clone(tenantID),
 		appender: appender,
 	}, nil
-}
-
-func isNilSavedSearchAuditAppender(appender SavedSearchMutationAuditAppender) bool {
-	value := reflect.ValueOf(appender)
-	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map,
-		reflect.Pointer, reflect.Slice:
-		return value.IsNil()
-	default:
-		return false
-	}
 }
 
 func (store *AuditedStore) publish(

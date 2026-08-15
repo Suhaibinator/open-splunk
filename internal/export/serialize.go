@@ -82,8 +82,8 @@ type csvSerializer struct {
 	cellLimit uint64
 }
 
-func newCSVSerializer(output io.Writer, selection columnSelection, options CSVOptions) (*csvSerializer, error) {
-	return newCSVSerializerWithLimit(output, selection, options, MaximumBufferedCSVCellBytes)
+func newCSVSerializer(output io.Writer, selection columnSelection) (*csvSerializer, error) {
+	return newCSVSerializerWithLimit(output, selection, CSVOptions{}, MaximumBufferedCSVCellBytes)
 }
 
 func newCSVSerializerWithLimit(output io.Writer, selection columnSelection, options CSVOptions, cellLimit uint64) (*csvSerializer, error) {

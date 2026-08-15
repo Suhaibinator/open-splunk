@@ -109,7 +109,7 @@ func (store *Store) StageCSV(ctx context.Context, request StageRequest) (StagedA
 	defer conn.Close()
 
 	var lastCollision error
-	for attempt := 0; attempt < maximumIDAttempts; attempt++ {
+	for range maximumIDAttempts {
 		stageID, generateErr := store.stageIDGenerator()
 		if generateErr != nil {
 			return StagedAsset{}, generateErr
@@ -196,9 +196,11 @@ func stagedProjection(tenantID, ownerID, stageID string, asset *Asset, created, 
 		SourceBytes:   asset.sourceBytes,
 		SizeBytes:     uint64(len(asset.canonicalCSV)),
 		RowCount:      uint64(len(asset.rows)),
-		ColumnCount:   uint32(len(asset.headers)),
-		CreatedAt:     created,
-		ExpiresAt:     expires,
+		// Parsed assets are capped at MaximumColumns.
+		// #nosec G115 -- the validated cap fits in uint32.
+		ColumnCount: uint32(len(asset.headers)),
+		CreatedAt:   created,
+		ExpiresAt:   expires,
 	}
 }
 
@@ -303,10 +305,17 @@ func (store *Store) PublishAtomic(
 		} else if err != nil {
 			return Version{}, fmt.Errorf("read current lookup asset version: %w", err)
 		}
-		if uint64(current) != request.ExpectedCurrentVersion {
+		if current < 1 {
+			return Version{}, fmt.Errorf("%w: current lookup asset version is invalid", ErrCorrupt)
+		}
+		// SQLite INTEGER values are signed; the positivity check makes this
+		// conversion lossless.
+		// #nosec G115 -- current is positive.
+		currentVersion := uint64(current)
+		if currentVersion != request.ExpectedCurrentVersion {
 			return Version{}, ErrConflict
 		}
-		version = uint64(current) + 1
+		version = currentVersion + 1
 	}
 
 	if !creating {
@@ -482,6 +491,8 @@ func (store *Store) PruneExpiredStages(ctx context.Context, before time.Time, li
 	if err != nil || changed < 0 || changed > int64(limit) {
 		return 0, fmt.Errorf("%w: lookup stage prune count is invalid", ErrCorrupt)
 	}
+	// RowsAffected is checked against the uint32 limit above.
+	// #nosec G115 -- changed is in [0, limit].
 	return uint32(changed), nil
 }
 
@@ -531,6 +542,8 @@ func readStagedAsset(ctx context.Context, query interface {
 		return stagedRecord{}, fmt.Errorf("%w: staged lookup asset has invalid metadata", ErrCorrupt)
 	}
 	result := stagedRecord{
+		// All persisted counts are validated against the package maxima above.
+		// #nosec G115 -- validated bounded nonnegative SQLite INTEGER values.
 		sourceBytes: uint64(sourceBytes), canonicalCSV: canonical,
 		rowCount: uint64(rowCount), columnCount: uint32(columnCount),
 		createdAt: time.UnixMicro(created).UTC(), expiresAt: time.UnixMicro(expires).UTC(),
@@ -549,7 +562,7 @@ func (record stagedRecord) asset(ctx context.Context) (*Asset, error) {
 		if contextErr := ctx.Err(); contextErr != nil {
 			return nil, contextErr
 		}
-		return nil, fmt.Errorf("%w: persisted canonical CSV cannot be decoded: %v", ErrCorrupt, err)
+		return nil, fmt.Errorf("%w: persisted canonical CSV cannot be decoded: %w", ErrCorrupt, err)
 	}
 	canonicalMatches, err := equalBytesContext(ctx, asset.canonicalCSV, record.canonicalCSV)
 	if err != nil {
@@ -557,7 +570,10 @@ func (record stagedRecord) asset(ctx context.Context) (*Asset, error) {
 	}
 	if asset.contentSHA256 != record.contentSHA256 ||
 		uint64(len(asset.canonicalCSV)) != uint64(len(record.canonicalCSV)) ||
-		uint64(len(asset.rows)) != record.rowCount || uint32(len(asset.headers)) != record.columnCount ||
+		uint64(len(asset.rows)) != record.rowCount ||
+		// Parsed assets are capped at MaximumColumns.
+		// #nosec G115 -- the validated cap fits in uint32.
+		uint32(len(asset.headers)) != record.columnCount ||
 		!canonicalMatches {
 		return nil, fmt.Errorf("%w: persisted canonical CSV metadata disagrees", ErrCorrupt)
 	}
@@ -637,7 +653,7 @@ func verifyDetachedAsset(ctx context.Context, asset *Asset) (*Asset, error) {
 		if contextErr := ctx.Err(); contextErr != nil {
 			return nil, contextErr
 		}
-		return nil, fmt.Errorf("%w: detached CSV asset is invalid: %v", ErrInvalidArgument, err)
+		return nil, fmt.Errorf("%w: detached CSV asset is invalid: %w", ErrInvalidArgument, err)
 	}
 	canonicalMatches, err := equalBytesContext(ctx, reparsed.canonicalCSV, asset.canonicalCSV)
 	if err != nil {
@@ -657,11 +673,6 @@ func verifyDetachedAsset(ctx context.Context, asset *Asset) (*Asset, error) {
 	reparsed.sourceSHA256 = asset.sourceSHA256
 	reparsed.sourceBytes = asset.sourceBytes
 	return reparsed, nil
-}
-
-func equalRows(left, right [][]string) bool {
-	equal, _ := equalRowsContext(context.Background(), left, right)
-	return equal
 }
 
 func equalRowsContext(ctx context.Context, left, right [][]string) (bool, error) {

@@ -5,13 +5,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"reflect"
 	"slices"
 	"strings"
 	"time"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"gorm.io/gorm"
@@ -28,7 +28,7 @@ func New(database *control.DB, options Options) (*Store, error) {
 	if len(options.CursorKey) < minimumCursorKeyBytes {
 		return nil, invalid(fmt.Sprintf("cursor key must contain at least %d bytes", minimumCursorKeyBytes))
 	}
-	if options.AuditAppender != nil && isNilSearchAttemptAuditAppender(options.AuditAppender) {
+	if options.AuditAppender != nil && nilcheck.IsNil(options.AuditAppender) {
 		return nil, invalid("search-attempt audit appender is nil")
 	}
 	if options.RequireSearchAttemptAudit && options.AuditAppender == nil {
@@ -50,17 +50,6 @@ func New(database *control.DB, options Options) (*Store, error) {
 		maximumAge: retention.MaximumAge, maximumEntriesPerOwner: retention.MaximumEntriesPerOwner,
 		searchAttemptAuditAppender: options.AuditAppender,
 	}, nil
-}
-
-func isNilSearchAttemptAuditAppender(appender SearchAttemptAuditAppender) bool {
-	value := reflect.ValueOf(appender)
-	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map,
-		reflect.Pointer, reflect.Slice:
-		return value.IsNil()
-	default:
-		return false
-	}
 }
 
 // Record atomically inserts one immutable terminal search snapshot and advances

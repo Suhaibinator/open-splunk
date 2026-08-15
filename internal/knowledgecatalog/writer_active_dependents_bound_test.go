@@ -268,7 +268,7 @@ func insertActiveDependentHistoryFixtures(
 	for index := range dependencies {
 		dependencies[index] = fixtureDependency{targetObjectID: targetID, targetVersion: int64(index + 1)}
 	}
-	for source := 0; source < sourceCount; source++ {
+	for source := range sourceCount {
 		name := fmt.Sprintf("bounded-dependent-history-source-%02d", source)
 		insertFixtureObject(t, database, fixtureObject{
 			id: "ko-" + name,

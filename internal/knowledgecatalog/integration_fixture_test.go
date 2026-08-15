@@ -86,7 +86,7 @@ func futurePayloadBytesForTarget(t *testing.T, knownBytes, targetBytes int) int 
 	t.Helper()
 	tagBytes := len(protowire.AppendTag(nil, 13, protowire.BytesType))
 	payloadBytes := targetBytes - knownBytes - tagBytes - 1
-	for attempts := 0; attempts < 8; attempts++ {
+	for range 8 {
 		if payloadBytes < 0 {
 			t.Fatalf("future target %d is smaller than metadata overhead", targetBytes)
 		}
@@ -170,7 +170,7 @@ func insertIntegrationFutureObject(
 		timestamp,
 		dependencies,
 	)
-	insertIntegrationProjection(t, tx, objectID, currentVersion, testOwner, state, fixture.metadata)
+	insertIntegrationProjection(t, tx, objectID, currentVersion, state, fixture.metadata)
 
 	var disabledAt, deletedAt any
 	if state == StateDisabled {
@@ -257,7 +257,7 @@ func stageIntegrationKnownPublication(
 		timestamp,
 		dependencies,
 	)
-	insertIntegrationProjection(t, tx, objectID, nextVersion, testOwner, state, normalized)
+	insertIntegrationProjection(t, tx, objectID, nextVersion, state, normalized)
 
 	objectType, ok := objectTypeFromProto(normalized.ObjectType)
 	sharingScope, scopeOK := sharingScopeFromProto(normalized.SharingScope)
@@ -463,7 +463,6 @@ func insertIntegrationProjection(
 	tx *sql.Tx,
 	objectID string,
 	version int64,
-	owner string,
 	state State,
 	metadata knowledgedefinition.Normalized,
 ) {
@@ -505,7 +504,7 @@ func insertIntegrationProjection(
 		objectID,
 		version,
 		metadata.AppID,
-		owner,
+		testOwner,
 		objectType,
 		metadata.Name,
 		sharingScope,

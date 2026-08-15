@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"path/filepath"
 	"reflect"
@@ -39,11 +40,11 @@ func TestStoreNativeBatchContractAndEventOrder(t *testing.T) {
 
 	first := testStoredEvent("event-2", "main", indexTime)
 	first.Event.Raw = []byte{0xff, 0, 'r', 'a', 'w'}
-	first.Event.Service = stringPointer("")
+	first.Event.Service = new("")
 	first.Event.Level = nil
-	first.Event.Message = stringPointer("")
+	first.Event.Message = new("")
 	first.Event.TraceId = nil
-	first.Event.SpanId = stringPointer("")
+	first.Event.SpanId = new("")
 	second := testStoredEvent("event-1", "main", indexTime)
 	sequence := uint64(19)
 	input := ingest.StoreBatch{
@@ -93,11 +94,11 @@ func TestStoreNativeBatchContractAndEventOrder(t *testing.T) {
 			t.Errorf("time column %d = %#v (%T), want UTC time.Time", column, conn.batch.rows[0][column], conn.batch.rows[0][column])
 		}
 	}
-	assertOptionalString(t, conn.batch.rows[0][10], true, "")
-	assertOptionalString(t, conn.batch.rows[0][12], false, "")
-	assertOptionalString(t, conn.batch.rows[0][13], true, "")
-	assertOptionalString(t, conn.batch.rows[0][16], false, "")
-	assertOptionalString(t, conn.batch.rows[0][17], true, "")
+	assertOptionalString(t, conn.batch.rows[0][10], true)
+	assertOptionalString(t, conn.batch.rows[0][12], false)
+	assertOptionalString(t, conn.batch.rows[0][13], true)
+	assertOptionalString(t, conn.batch.rows[0][16], false)
+	assertOptionalString(t, conn.batch.rows[0][17], true)
 	wantIndexTime := indexTime.UTC().Truncate(time.Millisecond)
 	if got := conn.batch.rows[0][4]; got != wantIndexTime {
 		t.Fatalf("index_time = %v, want %v", got, wantIndexTime)
@@ -674,7 +675,7 @@ func TestBackgroundReconcilerCountsScheduledRetries(t *testing.T) {
 	store.startReconciler()
 	defer store.Close()
 
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := range 2 {
 		select {
 		case <-pruned:
 		case <-time.After(5 * time.Second):
@@ -1420,7 +1421,7 @@ func TestConvertTypedObjectRejectsAggregateFieldMetadataOverLimit(t *testing.T) 
 		leaves[index] = typedField(fmt.Sprintf("leaf%04d", index), typedString("value"))
 	}
 	object := typedObjectValue(leaves...)
-	for depth := 0; depth < eventfields.MaximumDynamicPathSegments-1; depth++ {
+	for range eventfields.MaximumDynamicPathSegments - 1 {
 		object = typedObjectValue(typedField(parentName, typedObject(object.Fields...)))
 	}
 
@@ -2080,9 +2081,7 @@ func (c *fakeStoreConnection) prepare(_ context.Context, query string, settings 
 	c.prepareCalls++
 	c.query = query
 	c.settings = make(clickhousedriver.Settings, len(settings))
-	for key, value := range settings {
-		c.settings[key] = value
-	}
+	maps.Copy(c.settings, settings)
 	if c.prepareErr != nil {
 		return nil, c.prepareErr
 	}
@@ -2458,7 +2457,7 @@ func testStoredEvent(id, index string, indexTime time.Time) *ingest.StoredEvent 
 	}
 }
 
-func assertOptionalString(t *testing.T, value any, present bool, want string) {
+func assertOptionalString(t *testing.T, value any, present bool) {
 	t.Helper()
 	if !present {
 		if value != nil {
@@ -2467,8 +2466,8 @@ func assertOptionalString(t *testing.T, value any, present bool, want string) {
 		return
 	}
 	pointer, ok := value.(*string)
-	if !ok || pointer == nil || *pointer != want {
-		t.Fatalf("optional = %#v (%T), want %q", value, value, want)
+	if !ok || pointer == nil || *pointer != "" {
+		t.Fatalf("optional = %#v (%T), want empty string", value, value)
 	}
 }
 func assertJSONPath(t *testing.T, document *clickhousedriver.JSON, path string, want any) {
@@ -2516,7 +2515,7 @@ func isTransient(err error) bool {
 	var transient *ingest.TransientStoreError
 	return errors.As(err, &transient)
 }
-func stringPointer(value string) *string { return &value }
+
 func typedField(name string, value *opensplunkv1.TypedValue) *opensplunkv1.TypedObjectField {
 	return &opensplunkv1.TypedObjectField{Name: name, Value: value}
 }

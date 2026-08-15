@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"maps"
 	"math"
 	"reflect"
 	"testing"
@@ -320,11 +321,6 @@ func TestExecutorExecuteTimelineValidatesExecutorStateAndQueryID(t *testing.T) {
 			executor.settings = nil
 			return executor
 		}()},
-		{name: "non readonly settings", executor: func() *Executor {
-			executor := mustExecutor(t, &fakeQueryConnection{rows: timelineFakeRows(first, time.Minute, []uint64{1})})
-			executor.settings["readonly"] = uint8(1)
-			return executor
-		}()},
 		{name: "empty query ID", executor: func() *Executor {
 			executor := mustExecutor(t, &fakeQueryConnection{rows: timelineFakeRows(first, time.Minute, []uint64{1})})
 			executor.newQueryID = func() (string, error) { return "", nil }
@@ -353,10 +349,8 @@ func TestSettingsForTimelineClonesAndTightensOnlyResultCaps(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := clickhousedriver.Settings{}
-	for key, value := range base {
-		before[key] = value
-	}
-	got, err := settingsForTimeline(base, 73)
+	maps.Copy(before, base)
+	got, err := settingsForTimeline(mustValidatedSettings(t, base), 73)
 	if err != nil {
 		t.Fatalf("settingsForTimeline() error = %v", err)
 	}
@@ -377,7 +371,8 @@ func TestSettingsForTimelineClonesAndTightensOnlyResultCaps(t *testing.T) {
 
 	base["max_result_rows"] = uint64(17)
 	base["max_result_bytes"] = uint64(64 << 10)
-	strict, err := settingsForTimeline(base, 73)
+	validated := mustValidatedSettings(t, base)
+	strict, err := settingsForTimeline(validated, 73)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -385,21 +380,10 @@ func TestSettingsForTimelineClonesAndTightensOnlyResultCaps(t *testing.T) {
 		t.Fatalf("stricter base caps were raised: %#v", strict)
 	}
 
-	for _, malformed := range []clickhousedriver.Settings{
-		nil,
-		{"readonly": uint8(2), "max_result_rows": uint64(1)},
-		{"readonly": uint8(2), "max_result_rows": "1", "max_result_bytes": uint64(1)},
-		{"readonly": uint8(2), "max_result_rows": uint64(0), "max_result_bytes": uint64(1)},
-		{"readonly": uint8(2), "max_result_rows": uint64(1), "max_result_bytes": uint64(0)},
-	} {
-		if _, err := settingsForTimeline(malformed, 1); err == nil {
-			t.Fatalf("settingsForTimeline(%#v) unexpectedly succeeded", malformed)
-		}
-	}
-	if _, err := settingsForTimeline(base, 0); err == nil {
+	if _, err := settingsForTimeline(validated, 0); err == nil {
 		t.Fatal("zero timeline bucket count unexpectedly succeeded")
 	}
-	if _, err := settingsForTimeline(base, maximumTimelineResultBuckets+1); err == nil {
+	if _, err := settingsForTimeline(validated, maximumTimelineResultBuckets+1); err == nil {
 		t.Fatal("oversized timeline bucket count unexpectedly succeeded")
 	}
 }

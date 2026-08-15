@@ -61,7 +61,7 @@ func (executor *browserRenderingExecutor) Execute(
 	if err := sink.SetSchema(searchjobs.Schema{Columns: columns}); err != nil {
 		return err
 	}
-	for ordinal := 0; ordinal < browserRenderingRowCount; ordinal++ {
+	for ordinal := range browserRenderingRowCount {
 		if err := ctx.Err(); err != nil {
 			return err
 		}

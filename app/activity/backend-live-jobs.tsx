@@ -15,6 +15,7 @@ import {
   RepeatedPageCursorError,
   type SystemBootstrapModel,
 } from "@/lib/api";
+import { createErrorMessage } from "@/lib/error-message";
 import { searchLaunchHref } from "@/lib/search/launch-url";
 import {
   cancelServerSearchJob,
@@ -86,11 +87,7 @@ interface BackendLiveJobsProps {
   apiBaseUrl: string;
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error && error.message.trim().length > 0
-    ? error.message
-    : "The server did not return a usable search job response.";
-}
+const errorMessage = createErrorMessage("The server did not return a usable search job response.");
 
 function elapsedMilliseconds(progress: SearchProgress | null): number {
   const elapsed = progress?.elapsed;

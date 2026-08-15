@@ -349,7 +349,7 @@ func TestV03SourceDeterminedResourceBoundaries(t *testing.T) {
 		// 256-occurrence query budget. A ninth, otherwise valid two-source
 		// stage must be rejected atomically at that complete stage.
 		boundary := "index=main"
-		for stage := 0; stage < MaximumConcatenationOperandsPerQuery/MaximumConcatenationOperands; stage++ {
+		for stage := range MaximumConcatenationOperandsPerQuery / MaximumConcatenationOperands {
 			boundary += ` | strcat ` + strings.Join(strcatOperands, " ") + ` output` + strconv.Itoa(stage)
 		}
 		if _, err := Parse(boundary); err != nil {
@@ -859,10 +859,8 @@ func assertV03ConcreteTypeAny(t *testing.T, command Command, wants ...string) {
 	if typeOf.Kind() == reflect.Pointer {
 		typeOf = typeOf.Elem()
 	}
-	for _, want := range wants {
-		if typeOf.Name() == want {
-			return
-		}
+	if slices.Contains(wants, typeOf.Name()) {
+		return
 	}
 	t.Fatalf("command type = %s, want one of %v", typeOf.Name(), wants)
 }

@@ -609,7 +609,7 @@ func TestCollectorTokenValidationExpirationAndRandomness(t *testing.T) {
 
 	store.now = func() time.Time { return now }
 	seen := make(map[string]struct{}, 128)
-	for i := 0; i < 128; i++ {
+	for i := range 128 {
 		issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 			Name:              fmt.Sprintf("random-%03d", i),
 			AllowedIndexNames: []string{"main"},
@@ -862,9 +862,7 @@ func TestConcurrentCollectorTokenUpdatesHaveOneAtomicCASWinner(t *testing.T) {
 	errs := make(chan error, contenders)
 	var workers sync.WaitGroup
 	for contender := range contenders {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
+		workers.Go(func() {
 			<-start
 			scope := "alpha"
 			if contender%2 == 1 {
@@ -885,7 +883,7 @@ func TestConcurrentCollectorTokenUpdatesHaveOneAtomicCASWinner(t *testing.T) {
 				return
 			}
 			results <- updated
-		}()
+		})
 	}
 	close(start)
 	workers.Wait()

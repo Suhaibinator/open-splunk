@@ -412,10 +412,7 @@ func (output *deploymentComposeOutputBuffer) Write(value []byte) (int, error) {
 	defer output.mutex.Unlock()
 
 	written := len(value)
-	remaining := output.maximum - len(output.output)
-	if remaining > len(value) {
-		remaining = len(value)
-	}
+	remaining := min(output.maximum-len(output.output), len(value))
 	if remaining > 0 {
 		output.output = append(output.output, value[:remaining]...)
 	}
@@ -459,9 +456,7 @@ func (stack *deploymentComposeStack) environment(
 	values["OPEN_SPLUNK_CLICKHOUSE_SECURE_NATIVE_PORT"] = "0"
 	values["OPEN_SPLUNK_SERVER_HTTP_PORT"] = "0"
 	values["OPEN_SPLUNK_SERVER_GRPC_PORT"] = "0"
-	for key, value := range additionalEnvironment {
-		values[key] = value
-	}
+	maps.Copy(values, additionalEnvironment)
 
 	environment := make([]string, 0, len(os.Environ())+len(values))
 	for _, entry := range os.Environ() {

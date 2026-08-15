@@ -55,7 +55,7 @@ func TestStatsPartitionsMaxThreadsHintChangesExecutorSettings(t *testing.T) {
 				t.Fatalf("querySettings: %v", err)
 			}
 			base := settings["max_threads"]
-			executor := &Executor{settings: settings}
+			executor := &Executor{settings: mustValidatedSettings(t, settings)}
 			got := executor.settingsFor(queries[test.query])["max_threads"]
 			if got != test.want {
 				t.Fatalf("max_threads = %#v, want %d", got, test.want)

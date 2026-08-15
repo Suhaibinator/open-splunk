@@ -5,7 +5,6 @@ import (
 	sqldriver "database/sql/driver"
 	"errors"
 	"fmt"
-	"maps"
 	"net"
 	"reflect"
 	"slices"
@@ -625,14 +624,14 @@ func explainArgumentRenderedBytes(argument any) (uint64, bool) {
 }
 
 func settingsForExplain(
-	base clickhousedriver.Settings,
+	base *validatedExecutorSettings,
 ) (clickhousedriver.Settings, error) {
-	if base == nil || base["readonly"] != uint8(2) {
+	if base == nil {
 		return nil, errors.New(
 			"execute ClickHouse EXPLAIN: explainer does not have read-only settings",
 		)
 	}
-	settings := maps.Clone(base)
+	settings := base.clone()
 	for _, limit := range [...]struct {
 		name    string
 		maximum uint64
@@ -648,52 +647,9 @@ func settingsForExplain(
 		{name: "max_query_size", maximum: defaultMaxQueryBytes},
 		{name: "max_subquery_depth", maximum: defaultMaxSubqueryDepth},
 	} {
-		value, ok := base[limit.name].(uint64)
-		if !ok || value == 0 {
-			return nil, fmt.Errorf(
-				"execute ClickHouse EXPLAIN: explainer setting %s is invalid",
-				limit.name,
-			)
-		}
+		value := base.limit(limit.name)
 		settings[limit.name] = min(value, limit.maximum)
 	}
-	for _, name := range []string{
-		"timeout_overflow_mode",
-		"read_overflow_mode",
-		"result_overflow_mode",
-		"group_by_overflow_mode",
-	} {
-		if base[name] != "throw" {
-			return nil, fmt.Errorf(
-				"execute ClickHouse EXPLAIN: explainer setting %s is unsafe",
-				name,
-			)
-		}
-	}
-	if base["enable_materialized_cte"] != uint8(1) {
-		return nil, errors.New(
-			"execute ClickHouse EXPLAIN: materialized CTEs are not enabled",
-		)
-	}
-	for _, name := range requiredTextIndexSettingNames {
-		if base[name] != uint8(1) {
-			return nil, fmt.Errorf(
-				"execute ClickHouse EXPLAIN: setting %s is not enabled",
-				name,
-			)
-		}
-	}
-	if base["short_circuit_function_evaluation"] != "enable" {
-		return nil, errors.New(
-			"execute ClickHouse EXPLAIN: short-circuit evaluation is not enabled",
-		)
-	}
-	if base["async_insert"] != uint8(0) {
-		return nil, errors.New(
-			"execute ClickHouse EXPLAIN: asynchronous inserts must remain disabled",
-		)
-	}
-
 	settings["use_query_cache"] = uint8(0)
 	return settings, nil
 }
@@ -703,16 +659,21 @@ func validateExplainColumns(
 	columnTypes []driver.ColumnType,
 ) error {
 	const explainColumn = "explain"
-	if !slices.Equal(columns, []string{explainColumn}) ||
-		len(columnTypes) != 1 {
+	contracts := []resultColumnContract{{
+		name:         explainColumn,
+		databaseType: "String",
+		scanType:     reflect.TypeOf(""),
+	}}
+	violation, _ := validateResultColumnContracts(
+		columns,
+		columnTypes,
+		contracts,
+		resultColumnRequireScanType,
+	)
+	if violation == resultColumnContractShapeMismatch {
 		return invalidExplainResult("columns do not match the expected output")
 	}
-	columnType := columnTypes[0]
-	if isNilDriverValue(columnType) ||
-		columnType.Name() != explainColumn ||
-		columnType.Nullable() ||
-		columnType.DatabaseTypeName() != "String" ||
-		columnType.ScanType() != reflect.TypeOf("") {
+	if violation == resultColumnContractTypeMismatch {
 		return invalidExplainResult("column has an invalid type")
 	}
 	return nil

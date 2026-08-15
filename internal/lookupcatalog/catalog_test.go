@@ -1252,7 +1252,7 @@ func catalogCSVWithShape(rows, columns int) string {
 		builder.WriteString(strconv.Itoa(column))
 	}
 	builder.WriteByte('\n')
-	for row := 0; row < rows; row++ {
+	for row := range rows {
 		builder.WriteString(strconv.Itoa(row))
 		for column := 1; column < columns; column++ {
 			builder.WriteByte(',')
@@ -1393,7 +1393,7 @@ func seedDefinitionIdentityCapacity(
 	}
 	defer func() { _ = tx.Rollback() }()
 	const baseMicro = int64(1_800_000_000_000_000)
-	for index := 0; index < count; index++ {
+	for index := range count {
 		lookupID := fmt.Sprintf("lookup-retained-%04d", index)
 		name := fmt.Sprintf("retained-%04d", index)
 		definition := catalogDefinition(appID, name, opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE, false)

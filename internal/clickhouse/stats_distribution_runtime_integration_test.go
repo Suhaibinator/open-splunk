@@ -72,7 +72,7 @@ func TestStatsDistributionAggregatesAgainstClickHouse(t *testing.T) {
 		}{
 			{"empty array", `values('a Array(Float64)', (CAST([], 'Array(Float64)')))`, nil},
 			{"no rows", `(SELECT CAST([], 'Array(Float64)') AS a FROM numbers(0))`, nil},
-			{"singleton", `values('a Array(Float64)', ([7.]))`, float64PointerForIntegration(7)},
+			{"singleton", `values('a Array(Float64)', ([7.]))`, new(float64(7))},
 		} {
 			test := test
 			t.Run(test.name, func(t *testing.T) {
@@ -234,7 +234,7 @@ func TestStatsDistributionAggregatesAgainstClickHouse(t *testing.T) {
 			want *string
 		}{
 			{"empty", `CAST([], 'Array(String)')`, nil},
-			{"singleton", `['only']`, stringPointer("only")},
+			{"singleton", `['only']`, new("only")},
 		} {
 			test := test
 			t.Run(test.name, func(t *testing.T) {
@@ -370,7 +370,7 @@ func TestStatsDistributionAggregatesAgainstClickHouse(t *testing.T) {
 
 func assertDistributionFloat(t *testing.T, name string, got *float64, want float64) {
 	t.Helper()
-	assertDistributionNullableFloat(t, name, got, float64PointerForIntegration(want))
+	assertDistributionNullableFloat(t, name, got, new(want))
 }
 
 func assertDistributionNullableFloat(t *testing.T, name string, got, want *float64) {

@@ -1,9 +1,9 @@
 package plan
 
 import (
-	"reflect"
 	"slices"
 
+	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
@@ -37,7 +37,7 @@ func ValidateTimelineEligibility(query *Query) error {
 	}
 
 	for index, operator := range query.Operators {
-		if operator == nil || isNilOperator(operator) {
+		if nilcheck.IsNil(operator) {
 			return timelinePipelineDiagnostic(operatorRange(operator))
 		}
 		switch operator := operator.(type) {
@@ -204,13 +204,8 @@ func containsTimelineTime(fields []FieldRef) bool {
 	return slices.ContainsFunc(fields, func(field FieldRef) bool { return field.Name == "_time" })
 }
 
-func isNilOperator(operator Operator) bool {
-	value := reflect.ValueOf(operator)
-	return value.Kind() == reflect.Pointer && value.IsNil()
-}
-
 func operatorRange(operator Operator) spl.Range {
-	if operator == nil || isNilOperator(operator) {
+	if nilcheck.IsNil(operator) {
 		return spl.Range{}
 	}
 	return operator.SourceRange()

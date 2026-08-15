@@ -1,6 +1,9 @@
 package plan
 
-import "github.com/Suhaibinator/open-splunk/internal/spl"
+import (
+	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
+	"github.com/Suhaibinator/open-splunk/internal/spl"
+)
 
 const fieldAnalysisPipelineDiagnosticCode = "SPL_UNSUPPORTED_FIELD_ANALYSIS_PIPELINE"
 
@@ -26,7 +29,7 @@ func ValidateFieldAnalysisEligibility(query *Query) error {
 	}
 
 	for index, operator := range query.Operators {
-		if operator == nil || isNilOperator(operator) {
+		if nilcheck.IsNil(operator) {
 			return fieldAnalysisPipelineDiagnostic(operatorRange(operator))
 		}
 		switch operator := operator.(type) {

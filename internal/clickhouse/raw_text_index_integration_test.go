@@ -297,7 +297,7 @@ func insertRawTextIndexFixtures(
 	if err != nil {
 		t.Fatalf("prepare raw text index fixtures: %v", err)
 	}
-	for row := 0; row < rawTextIndexFixtureRows; row++ {
+	for row := range rawTextIndexFixtureRows {
 		raw := []byte("quiet filler")
 		encoding := uint8(opensplunkv1.RawEncoding_RAW_ENCODING_UTF8)
 		switch row {

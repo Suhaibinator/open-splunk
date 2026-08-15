@@ -16,7 +16,7 @@ import (
 
 var testTime = time.Date(2026, time.August, 6, 19, 20, 21, 987654321, time.FixedZone("fixture", -7*60*60))
 
-func openTestDatabase(t *testing.T) (string, *control.DB) {
+func openTestDatabase(t *testing.T) *control.DB {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "control.db")
 	database, err := control.Open(context.Background(), path)
@@ -30,7 +30,7 @@ func openTestDatabase(t *testing.T) (string, *control.DB) {
 			}
 		}
 	})
-	return path, database
+	return database
 }
 
 func newTestStore(t *testing.T, database *control.DB) *Store {
@@ -118,7 +118,7 @@ func TestActionTaxonomyIsClosedAndIntegrityBounded(t *testing.T) {
 
 func TestAppendRejectedStoresOnlyTrustedBoundedProjection(t *testing.T) {
 	t.Parallel()
-	_, database := openTestDatabase(t)
+	database := openTestDatabase(t)
 	store := newTestStore(t, database)
 	admin := actorContext(t, audit.ActorRoleAdministrator, "administrator-a")
 	user := actorContext(t, audit.ActorRoleUser, "user-a")
@@ -176,7 +176,7 @@ func TestAppendRejectedStoresOnlyTrustedBoundedProjection(t *testing.T) {
 
 func TestAppendRejectedAcceptsClosedPrivilegedReadActions(t *testing.T) {
 	t.Parallel()
-	_, database := openTestDatabase(t)
+	database := openTestDatabase(t)
 	store := newTestStore(t, database)
 	admin := actorContext(t, audit.ActorRoleAdministrator, "administrator")
 	authorized := &AuthorizedContext{
@@ -229,7 +229,7 @@ func TestAppendRejectedAcceptsClosedPrivilegedReadActions(t *testing.T) {
 
 func TestAppendInputTaxonomyAndPrivacyShapes(t *testing.T) {
 	t.Parallel()
-	_, database := openTestDatabase(t)
+	database := openTestDatabase(t)
 	store := newTestStore(t, database)
 	admin := actorContext(t, audit.ActorRoleAdministrator, "administrator")
 	user := actorContext(t, audit.ActorRoleUser, "user")
@@ -281,7 +281,7 @@ func TestAppendInputTaxonomyAndPrivacyShapes(t *testing.T) {
 
 func TestTransactionRollbackCancellationAndForeignHandle(t *testing.T) {
 	t.Parallel()
-	_, database := openTestDatabase(t)
+	database := openTestDatabase(t)
 	store := newTestStore(t, database)
 	admin := actorContext(t, audit.ActorRoleAdministrator, "administrator")
 	definition := adminDefinition(ActionPreview, ReasonResourceLimit, 0)
@@ -314,7 +314,7 @@ func TestTransactionRollbackCancellationAndForeignHandle(t *testing.T) {
 		t.Fatalf("AppendRejectedInTransaction(nil) = %v", err)
 	}
 
-	_, foreign := openTestDatabase(t)
+	foreign := openTestDatabase(t)
 	foreignTx := foreign.GORMDB().WithContext(admin).Begin()
 	if foreignTx.Error != nil {
 		t.Fatal(foreignTx.Error)
@@ -326,7 +326,7 @@ func TestTransactionRollbackCancellationAndForeignHandle(t *testing.T) {
 }
 
 func TestConcurrentAppendsAllocateDenseUniqueSequence(t *testing.T) {
-	_, database := openTestDatabase(t)
+	database := openTestDatabase(t)
 	store := newTestStore(t, database)
 	const attempts = 48
 	errorsByAttempt := make(chan error, attempts)
@@ -374,10 +374,10 @@ func TestConcurrentAppendsAllocateDenseUniqueSequence(t *testing.T) {
 
 func TestAppendRejectsMalformedNewestWithoutMutation(t *testing.T) {
 	t.Parallel()
-	_, database := openTestDatabase(t)
+	database := openTestDatabase(t)
 	store := newTestStore(t, database)
 	admin := actorContext(t, audit.ActorRoleAdministrator, "administrator")
-	for index := 0; index < 2; index++ {
+	for index := range 2 {
 		if err := store.AppendRejected(
 			admin,
 			"tenant-malformed-newest",

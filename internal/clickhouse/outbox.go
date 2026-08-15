@@ -160,7 +160,7 @@ func decodeStoreOutbox(encoded []byte) (ingest.StoreBatch, error) {
 		ReceivedAt:         receivedAt,
 		Events:             make([]*ingest.StoredEvent, 0, eventCount),
 	}
-	for index := uint32(0); index < eventCount; index++ {
+	for index := range eventCount {
 		payload, readErr := readOutboxBytes(reader, math.MaxUint64)
 		if readErr != nil || len(payload) == 0 {
 			return ingest.StoreBatch{}, fmt.Errorf("decode ClickHouse outbox event %d: invalid payload", index)

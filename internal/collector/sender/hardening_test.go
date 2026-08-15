@@ -34,7 +34,7 @@ func TestSenderThrottleReducedLimitsDoesNotDeadLetter(t *testing.T) {
 				}},
 			})
 		}
-		fs.ackBatch(b.GetBatchSequence(), 1, 0)
+		fs.ackBatch(b.GetBatchSequence(), 1)
 	}
 	conn := startServer(t, fs)
 
@@ -103,7 +103,7 @@ func TestSenderRetryFloodCoalescesToSingleResend(t *testing.T) {
 		mu.Unlock()
 		if n == 1 {
 			// Flood identical RetryBatch messages before the (delayed) resend fires.
-			for i := 0; i < 100; i++ {
+			for range 100 {
 				_ = fs.send(&opensplunkv1.CollectResponse{
 					Payload: &opensplunkv1.CollectResponse_RetryBatch{RetryBatch: &opensplunkv1.RetryBatch{
 						BatchId:       b.GetBatchId(),
@@ -115,7 +115,7 @@ func TestSenderRetryFloodCoalescesToSingleResend(t *testing.T) {
 			}
 			return
 		}
-		fs.ackBatch(b.GetBatchSequence(), 1, 0)
+		fs.ackBatch(b.GetBatchSequence(), 1)
 	}
 	conn := startServer(t, fs)
 	q := newFakeQueue(fakeBatch(1, makeEvent("e1", "main")))

@@ -295,9 +295,9 @@ func readInitialSearchState(t *testing.T, client *websocket.Conn, subscriptionID
 	return ack, events
 }
 
-func waitFor(t *testing.T, timeout time.Duration, condition func() bool, description string) {
+func waitFor(t *testing.T, condition func() bool, description string) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
+	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		if condition() {
 			return
@@ -358,7 +358,7 @@ func TestWebSocketCoalescesTargetsAndPublishesIdenticalSequences(t *testing.T) {
 			t.Fatalf("terminal transition = (%+v, %+v, %+v)", state, progress, terminal)
 		}
 	}
-	waitFor(t, time.Second, func() bool {
+	waitFor(t, func() bool {
 		fixture.service.mu.Lock()
 		target := fixture.service.targets[targetKey{kind: targetKindSearch, id: job.ID}]
 		fixture.service.mu.Unlock()
@@ -546,7 +546,7 @@ func TestExpiredTargetPollsUntilBackingTombstoneIsRemoved(t *testing.T) {
 	_, _ = readInitialSearchState(t, client, "expired")
 
 	reader.delete(job.ID)
-	waitFor(t, time.Second, func() bool {
+	waitFor(t, func() bool {
 		fixture.service.mu.Lock()
 		defer fixture.service.mu.Unlock()
 		return fixture.service.targets[targetKey{kind: targetKindSearch, id: job.ID}] == nil
@@ -581,11 +581,12 @@ func TestCompletedTargetRemovedAtFirstExpiryPollRetiresTarget(t *testing.T) {
 
 	reader.delete(job.ID)
 	clock.set(job.ExpiresAt.Add(time.Millisecond))
-	waitFor(t, time.Second, func() bool {
+	waitFor(t, func() bool {
 		fixture.service.mu.Lock()
 		defer fixture.service.mu.Unlock()
 		return fixture.service.targets[targetKey{kind: targetKindSearch, id: job.ID}] == nil
 	}, "completed target retirement at its first expiry poll")
+
 }
 
 func TestWebSocketSubscriptionIdentityLimitRequiresReconnect(t *testing.T) {
@@ -595,7 +596,7 @@ func TestWebSocketSubscriptionIdentityLimitRequiresReconnect(t *testing.T) {
 	})
 	client := fixture.dial()
 
-	for index := 0; index < maximumSubscriptionIDsPerConnection; index++ {
+	for index := range maximumSubscriptionIDsPerConnection {
 		id := fmt.Sprintf("identity-%d", index)
 		writeCommand(t, client, subscribeCommand("subscribe-"+id, id, job.ID, 0))
 		_, _ = readInitialSearchState(t, client, id)
@@ -677,7 +678,7 @@ func TestWebSocketCommandsAreAtomic(t *testing.T) {
 			t.Fatalf("removed event = %+v, want %q", removed, id)
 		}
 	}
-	waitFor(t, time.Second, func() bool {
+	waitFor(t, func() bool {
 		fixture.service.mu.Lock()
 		target := fixture.service.targets[targetKey{kind: targetKindSearch, id: job.ID}]
 		fixture.service.mu.Unlock()
@@ -1034,12 +1035,13 @@ func TestCoalescedLoadSurvivesInitiatorCancellationAndPinsForWaiter(t *testing.T
 		target, resolveErr := service.resolveTarget(context.Background(), key)
 		waiter <- result{target: target, err: resolveErr}
 	}()
-	waitFor(t, time.Second, func() bool {
+	waitFor(t, func() bool {
 		service.mu.Lock()
 		defer service.mu.Unlock()
 		load := service.loads[key]
 		return load != nil && load.waiters == 2
 	}, "second coalesced load waiter")
+
 	cancelInitiator()
 	select {
 	case got := <-initiator:
@@ -1106,7 +1108,7 @@ func TestConnectionQueueEnforcesIntrinsicAndGlobalByteBounds(t *testing.T) {
 	if got := second.enqueueBatchResult(intrinsic); got != queueIntrinsicLimit {
 		t.Fatalf("intrinsic frame result = %v, want intrinsic limit", got)
 	}
-	for index := 0; index < 2; index++ {
+	for index := range 2 {
 		frame, _, _, state := first.nextFrame()
 		if state != writerFrame {
 			t.Fatalf("nextFrame[%d] state = %v, want frame", index, state)

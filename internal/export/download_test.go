@@ -102,16 +102,14 @@ func TestDownloadGrantRedemptionIsAtomicAndSingleUse(t *testing.T) {
 	}, contenders)
 	var wait sync.WaitGroup
 	for range contenders {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
+		wait.Go(func() {
 			<-start
 			lease, redeemErr := manager.RedeemDownload(context.Background(), grant.Token)
 			results <- struct {
 				lease ArtifactDownload
 				err   error
 			}{lease: lease, err: redeemErr}
-		}()
+		})
 	}
 	close(start)
 	wait.Wait()

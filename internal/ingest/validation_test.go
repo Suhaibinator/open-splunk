@@ -144,7 +144,7 @@ func TestValidateAndNormalizeEventValidatesNextSourceLine(t *testing.T) {
 			event := validTestEvent("event-"+strings.ReplaceAll(test.name, " ", "-"), "main")
 			event.Origin = &opensplunkv1.EventOrigin{
 				LineNumber:     test.line,
-				NextLineNumber: proto.Uint64(test.next),
+				NextLineNumber: new(test.next),
 			}
 			_, rejection := validator.ValidateAndNormalizeEvent(event, EventContext{ReceivedAt: validationTestNow})
 			assertEventRejectionCode(

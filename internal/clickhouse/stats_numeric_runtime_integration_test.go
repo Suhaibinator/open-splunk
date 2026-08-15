@@ -135,29 +135,29 @@ func TestStatsNumericMomentsAgainstClickHouse(t *testing.T) {
 	}
 	want := map[string]numericMoments{
 		"empty": {
-			span:               float64PointerForIntegration(0),
-			squared:            float64PointerForIntegration(25),
-			sampleSD:           float64PointerForIntegration(0),
-			populationSD:       float64PointerForIntegration(0),
-			sampleVariance:     float64PointerForIntegration(0),
-			populationVariance: float64PointerForIntegration(0),
+			span:               new(float64(0)),
+			squared:            new(float64(25)),
+			sampleSD:           new(float64(0)),
+			populationSD:       new(float64(0)),
+			sampleVariance:     new(float64(0)),
+			populationVariance: new(float64(0)),
 		},
 		"invalid": {},
 		"mixed": {
-			span:               float64PointerForIntegration(3),
-			squared:            float64PointerForIntegration(30),
-			sampleSD:           float64PointerForIntegration(math.Sqrt(5.0 / 3.0)),
-			populationSD:       float64PointerForIntegration(math.Sqrt(1.25)),
-			sampleVariance:     float64PointerForIntegration(5.0 / 3.0),
-			populationVariance: float64PointerForIntegration(1.25),
+			span:               new(float64(3)),
+			squared:            new(float64(30)),
+			sampleSD:           new(math.Sqrt(5.0 / 3.0)),
+			populationSD:       new(math.Sqrt(1.25)),
+			sampleVariance:     new(5.0 / 3.0),
+			populationVariance: new(1.25),
 		},
 		"singleton": {
-			span:               float64PointerForIntegration(0),
-			squared:            float64PointerForIntegration(49),
-			sampleSD:           float64PointerForIntegration(0),
-			populationSD:       float64PointerForIntegration(0),
-			sampleVariance:     float64PointerForIntegration(0),
-			populationVariance: float64PointerForIntegration(0),
+			span:               new(float64(0)),
+			squared:            new(float64(49)),
+			sampleSD:           new(float64(0)),
+			populationSD:       new(float64(0)),
+			sampleVariance:     new(float64(0)),
+			populationVariance: new(float64(0)),
 		},
 	}
 	seen := make(map[string]struct{}, len(want))
@@ -226,8 +226,8 @@ func TestStatsNumericMomentsAgainstClickHouse(t *testing.T) {
 		"invalid": {},
 		"mixed":   {},
 		"singleton": {
-			average: float64PointerForIntegration(7),
-			span:    float64PointerForIntegration(0),
+			average: new(float64(7)),
+			span:    new(float64(0)),
 		},
 	}
 	seenAllNumeric := make(map[string]struct{}, len(wantAllNumeric))
@@ -302,13 +302,13 @@ func TestStatsNumericMomentsAgainstClickHouse(t *testing.T) {
 		t,
 		"evaluated singleton sumsq",
 		shiftedSumSquares,
-		float64PointerForIntegration(64),
+		new(float64(64)),
 	)
 	assertNullableFloatApprox(
 		t,
 		"evaluated singleton stdev",
 		shiftedSampleSD,
-		float64PointerForIntegration(0),
+		new(float64(0)),
 	)
 }
 

@@ -223,9 +223,7 @@ func TestConcurrentLegacyCollectorBindingHasOneCASWinner(t *testing.T) {
 	errs := make(chan error, contenders)
 	var workers sync.WaitGroup
 	for contender := range contenders {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
+		workers.Go(func() {
 			<-start
 			result, updateErr := store.UpdateCollectorToken(
 				ctx,
@@ -242,7 +240,7 @@ func TestConcurrentLegacyCollectorBindingHasOneCASWinner(t *testing.T) {
 				return
 			}
 			results <- result
-		}()
+		})
 	}
 	close(start)
 	workers.Wait()

@@ -547,8 +547,8 @@ func adminIngestionRateLimits(
 	uncompressedBytesPerSecond uint64,
 ) *opensplunkv1.IngestionRateLimits {
 	return &opensplunkv1.IngestionRateLimits{
-		MaxEventsPerSecond:            uint64Pointer(eventsPerSecond),
-		MaxUncompressedBytesPerSecond: uint64Pointer(uncompressedBytesPerSecond),
+		MaxEventsPerSecond:            new(eventsPerSecond),
+		MaxUncompressedBytesPerSecond: new(uncompressedBytesPerSecond),
 	}
 }
 

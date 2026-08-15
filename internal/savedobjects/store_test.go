@@ -39,7 +39,7 @@ func (dependencies *testDependencies) options() Options {
 	}
 }
 
-func openTestStore(t *testing.T) (*control.DB, *Store, string) {
+func openTestStore(t *testing.T) (*control.DB, *Store) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "control.sqlite")
 	database, err := control.Open(context.Background(), path)
@@ -52,7 +52,7 @@ func openTestStore(t *testing.T) (*control.DB, *Store, string) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	return database, store, path
+	return database, store
 }
 
 func savedSearchDefinition(name, appID string) *opensplunkv1.SavedSearchDefinition {
@@ -73,7 +73,7 @@ func savedSearchDefinition(name, appID string) *opensplunkv1.SavedSearchDefiniti
 }
 
 func TestNewValidatesDependenciesAndClonesCursorKey(t *testing.T) {
-	database, _, _ := openTestStore(t)
+	database, _ := openTestStore(t)
 	for _, options := range []Options{{}, {CursorKey: make([]byte, 31)}} {
 		if _, err := New(database, options); !errors.Is(err, control.ErrInvalidArgument) {
 			t.Fatalf("New(%d byte key) error = %v, want ErrInvalidArgument", len(options.CursorKey), err)
@@ -100,7 +100,7 @@ func TestNewValidatesDependenciesAndClonesCursorKey(t *testing.T) {
 func TestSavedSearchGORMModelMatchesMigratedSQLiteSchema(t *testing.T) {
 	t.Parallel()
 
-	database, _, _ := openTestStore(t)
+	database, _ := openTestStore(t)
 	statement := &gorm.Statement{DB: database.GORMDB()}
 	if err := statement.Parse(&savedSearchRecord{}); err != nil {
 		t.Fatalf("parse GORM saved-search model: %v", err)
@@ -243,7 +243,7 @@ func TestSavedSearchGORMModelMatchesMigratedSQLiteSchema(t *testing.T) {
 func TestSavedSearchGORMListUsesOwnerKeysetIndexes(t *testing.T) {
 	t.Parallel()
 
-	database, _, _ := openTestStore(t)
+	database, _ := openTestStore(t)
 	integerCursor := int64(1)
 	tests := []struct {
 		name          string
@@ -326,7 +326,7 @@ func TestSavedSearchGORMListUsesOwnerKeysetIndexes(t *testing.T) {
 }
 
 func TestCreateGetUpdateDeleteNormalizeAndDoNotAlias(t *testing.T) {
-	_, store, _ := openTestStore(t)
+	_, store := openTestStore(t)
 	ctx := context.Background()
 	scope := AccessScope{OwnerID: " user-1 "}
 	input := savedSearchDefinition("Errors", "search")
@@ -392,7 +392,7 @@ func TestCreateGetUpdateDeleteNormalizeAndDoNotAlias(t *testing.T) {
 }
 
 func TestDefinitionPersistenceIsDeterministicAndDefinitionOnly(t *testing.T) {
-	database, store, _ := openTestStore(t)
+	database, store := openTestStore(t)
 	created, err := store.Create(context.Background(), AccessScope{OwnerID: "owner"}, savedSearchDefinition("Canonical", "app"))
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
@@ -415,7 +415,7 @@ func TestDefinitionPersistenceIsDeterministicAndDefinitionOnly(t *testing.T) {
 }
 
 func TestGORMPersistenceHonorsMigratedAppWorkspaceTriggers(t *testing.T) {
-	database, store, _ := openTestStore(t)
+	database, store := openTestStore(t)
 	catalog, err := control.NewAppCatalog(database, control.AppCatalogOptions{
 		CursorKey: []byte("saved-search-app-catalog-test-key"),
 	})
@@ -464,7 +464,7 @@ func TestGORMPersistenceHonorsMigratedAppWorkspaceTriggers(t *testing.T) {
 }
 
 func TestValidationOwnershipAndSharing(t *testing.T) {
-	_, store, _ := openTestStore(t)
+	_, store := openTestStore(t)
 	ctx := context.Background()
 	scope := AccessScope{OwnerID: "owner"}
 	tests := []struct {
@@ -509,7 +509,7 @@ func TestValidationOwnershipAndSharing(t *testing.T) {
 }
 
 func TestUniquenessClassificationAndOwnerIsolation(t *testing.T) {
-	_, store, _ := openTestStore(t)
+	_, store := openTestStore(t)
 	ctx := context.Background()
 	first, err := store.Create(ctx, AccessScope{OwnerID: "owner-a"}, savedSearchDefinition("Same", "app"))
 	if err != nil {
@@ -545,7 +545,7 @@ func TestUniquenessClassificationAndOwnerIsolation(t *testing.T) {
 }
 
 func TestConcurrentOptimisticUpdateAllowsOneWriter(t *testing.T) {
-	_, store, _ := openTestStore(t)
+	_, store := openTestStore(t)
 	ctx := context.Background()
 	scope := AccessScope{OwnerID: "owner"}
 	created, err := store.Create(ctx, scope, savedSearchDefinition("Original", "app"))
@@ -586,19 +586,17 @@ func TestConcurrentOptimisticUpdateAllowsOneWriter(t *testing.T) {
 }
 
 func TestConcurrentCreateClassifiesUniqueName(t *testing.T) {
-	_, store, _ := openTestStore(t)
+	_, store := openTestStore(t)
 	ctx := context.Background()
 	start := make(chan struct{})
 	results := make(chan error, 2)
 	var wait sync.WaitGroup
 	for range 2 {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
+		wait.Go(func() {
 			<-start
 			_, err := store.Create(ctx, AccessScope{OwnerID: "owner"}, savedSearchDefinition("same", "app"))
 			results <- err
-		}()
+		})
 	}
 	close(start)
 	wait.Wait()
@@ -619,7 +617,7 @@ func TestConcurrentCreateClassifiesUniqueName(t *testing.T) {
 }
 
 func TestGORMCreateAndDuplicateRetryIDCollisions(t *testing.T) {
-	database, _, _ := openTestStore(t)
+	database, _ := openTestStore(t)
 	ids := []string{
 		"ss_source",
 		"ss_existing",
@@ -688,7 +686,7 @@ func TestGORMCreateAndDuplicateRetryIDCollisions(t *testing.T) {
 }
 
 func TestDuplicateClonesAndClassifiesConflicts(t *testing.T) {
-	_, store, _ := openTestStore(t)
+	_, store := openTestStore(t)
 	ctx := context.Background()
 	scope := AccessScope{OwnerID: "owner"}
 	source, err := store.Create(ctx, scope, savedSearchDefinition("source", "app-a"))
@@ -717,7 +715,7 @@ func TestDuplicateClonesAndClassifiesConflicts(t *testing.T) {
 }
 
 func TestListPaginationFiltersSortingCursorBindingAndNoAliasing(t *testing.T) {
-	_, store, _ := openTestStore(t)
+	_, store := openTestStore(t)
 	ctx := context.Background()
 	scope := AccessScope{OwnerID: "owner"}
 	definitions := []*opensplunkv1.SavedSearchDefinition{
@@ -990,7 +988,7 @@ func TestCursorAndRecordsSurviveReopen(t *testing.T) {
 }
 
 func TestMalformedStoredProtoAndMetadataAreRejected(t *testing.T) {
-	database, store, _ := openTestStore(t)
+	database, store := openTestStore(t)
 	ctx := context.Background()
 	scope := AccessScope{OwnerID: "owner"}
 	created, err := store.Create(ctx, scope, savedSearchDefinition("valid", "app"))
@@ -1041,7 +1039,7 @@ func TestMalformedStoredProtoAndMetadataAreRejected(t *testing.T) {
 }
 
 func TestCancellationAndBoundedInputs(t *testing.T) {
-	_, store, _ := openTestStore(t)
+	_, store := openTestStore(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := store.Create(ctx, AccessScope{OwnerID: "owner"}, savedSearchDefinition("test", "app")); !errors.Is(err, context.Canceled) {

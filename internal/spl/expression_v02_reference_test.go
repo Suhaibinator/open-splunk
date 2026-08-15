@@ -156,7 +156,7 @@ func TestExpressionV02ReferenceArithmeticFixtures(t *testing.T) {
 		{name: "decimal underflow", expression: binary(referenceAdd, referenceDecimalValue("1e-400"), referenceFixedSint(1)), wantFloat: 1},
 		{name: "malformed decimal", expression: binary(referenceAdd, referenceMalformedDecimal("malformed-secret-1e"), referenceFixedSint(1)), wantError: errReferenceMalformedScalar},
 		{name: "oversized decimal", expression: binary(referenceAdd, referenceDecimalValue(strings.Repeat("1", referenceMaximumNumericTextBytes+1)), referenceFixedSint(1)), wantError: errReferenceMalformedScalar},
-		{name: "Dynamic Bool becomes null", expression: binary(referenceAdd, referenceDynamicBool(true), referenceFixedSint(1)), wantNull: true},
+		{name: "Dynamic Bool becomes null", expression: binary(referenceAdd, referenceDynamicTrue(), referenceFixedSint(1)), wantNull: true},
 		{name: "fixed Bool rejected", expression: binary(referenceAdd, referenceFixedBool(true), referenceFixedSint(1)), wantError: errReferenceStaticType},
 		{name: "positive zero division", expression: binary(referenceDivide, referenceFixedSint(1), referenceFixedFloat(0)), wantNull: true},
 		{name: "negative zero division", expression: binary(referenceDivide, referenceFixedSint(1), referenceFixedFloat(negativeZero)), wantNull: true},
@@ -244,8 +244,8 @@ func TestExpressionV02ReferenceMembershipFixtures(t *testing.T) {
 		{name: "decimal against number", value: referenceDynamicUint(9_007_199_254_740_993), candidates: []referenceScalar{referenceDecimalValue("9007199254740993.0")}, want: referenceTruthTrue},
 		{name: "fixed Float comparison is native", value: referenceFixedFloat(9_007_199_254_740_992), candidates: []referenceScalar{referenceDynamicUint(9_007_199_254_740_993)}, want: referenceTruthTrue},
 		{name: "Dynamic Float uses exact published key", value: referenceDynamicFloat(9_007_199_254_740_992), candidates: []referenceScalar{referenceDynamicUint(9_007_199_254_740_993)}, want: referenceTruthFalse},
-		{name: "Bool equality", value: referenceDynamicBool(true), candidates: []referenceScalar{referenceDynamicBool(true)}, want: referenceTruthTrue},
-		{name: "Bool and number are incomparable", value: referenceDynamicBool(true), candidates: []referenceScalar{referenceFixedSint(1)}, want: referenceTruthNull},
+		{name: "Bool equality", value: referenceDynamicTrue(), candidates: []referenceScalar{referenceDynamicTrue()}, want: referenceTruthTrue},
+		{name: "Bool and number are incomparable", value: referenceDynamicTrue(), candidates: []referenceScalar{referenceFixedSint(1)}, want: referenceTruthNull},
 		{name: "object comparison is null", value: referenceDynamicObject(), candidates: []referenceScalar{referenceDynamicObject()}, want: referenceTruthNull},
 		{name: "later malformed candidate fails", value: referenceDynamicSint(1), candidates: []referenceScalar{referenceFixedSint(1), referenceMalformedDecimal("secret-1e")}, wantError: errReferenceMalformedScalar},
 		{name: "zero candidates", value: referenceDynamicSint(1), wantError: errReferenceMembershipArity},
@@ -1096,8 +1096,8 @@ func referenceFixedBool(value bool) referenceScalar {
 	return referenceScalar{kind: referenceBool, fixed: true, present: true, boolean: value}
 }
 
-func referenceDynamicBool(value bool) referenceScalar {
-	return referenceScalar{kind: referenceBool, present: true, boolean: value}
+func referenceDynamicTrue() referenceScalar {
+	return referenceScalar{kind: referenceBool, present: true, boolean: true}
 }
 
 func referenceDynamicObject() referenceScalar {

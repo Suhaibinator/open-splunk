@@ -147,56 +147,56 @@ func (handler *apiHandler) knowledgeManagementRoutes(
 		newForwardCompatibleProtoRoute[*opensplunkv1.CreateKnowledgeObjectRequest, *serializedCreateKnowledgeObjectResponse](router.RouteConfig[*opensplunkv1.CreateKnowledgeObjectRequest, *serializedCreateKnowledgeObjectResponse]{
 			Path: knowledgeObjectsCreateRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedCreateKnowledgeObjectCodec(), Handler: handler.createKnowledgeObject,
-			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.CreateKnowledgeObjectRequest],
-			Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeMutationRequestBytes},
+			SourceType: router.Body,
+			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeMutationRequestBytes},
 		}),
 		newForwardCompatibleProtoRoute[*opensplunkv1.GetKnowledgeObjectRequest, *serializedGetKnowledgeObjectResponse](router.RouteConfig[*opensplunkv1.GetKnowledgeObjectRequest, *serializedGetKnowledgeObjectResponse]{
 			Path: knowledgeObjectsGetRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedGetKnowledgeObjectCodec(), Handler: handler.getKnowledgeObject,
-			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.GetKnowledgeObjectRequest],
-			Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
+			SourceType: router.Body,
+			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
 		}),
 		newForwardCompatibleProtoRoute[*opensplunkv1.ListKnowledgeObjectsRequest, *serializedListKnowledgeObjectsResponse](router.RouteConfig[*opensplunkv1.ListKnowledgeObjectsRequest, *serializedListKnowledgeObjectsResponse]{
 			Path: knowledgeObjectsListRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedListKnowledgeObjectsCodec(), Handler: handler.listKnowledgeObjects,
-			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.ListKnowledgeObjectsRequest],
-			Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
+			SourceType: router.Body,
+			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
 		}),
 		newForwardCompatibleProtoRoute[*opensplunkv1.ListKnowledgeObjectDependenciesRequest, *serializedListKnowledgeObjectDependenciesResponse](router.RouteConfig[*opensplunkv1.ListKnowledgeObjectDependenciesRequest, *serializedListKnowledgeObjectDependenciesResponse]{
 			Path: knowledgeObjectsDependenciesRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedListKnowledgeObjectDependenciesCodec(), Handler: handler.listKnowledgeObjectDependencies,
-			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.ListKnowledgeObjectDependenciesRequest],
-			Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
+			SourceType: router.Body,
+			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
 		}),
 		newForwardCompatibleProtoRoute[*opensplunkv1.ListKnowledgeObjectDependentsRequest, *serializedListKnowledgeObjectDependentsResponse](router.RouteConfig[*opensplunkv1.ListKnowledgeObjectDependentsRequest, *serializedListKnowledgeObjectDependentsResponse]{
 			Path: knowledgeObjectsDependentsRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedListKnowledgeObjectDependentsCodec(), Handler: handler.listKnowledgeObjectDependents,
-			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.ListKnowledgeObjectDependentsRequest],
-			Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
+			SourceType: router.Body,
+			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
 		}),
 		newForwardCompatibleProtoRoute[*opensplunkv1.ValidateKnowledgeObjectRequest, *serializedValidateKnowledgeObjectResponse](router.RouteConfig[*opensplunkv1.ValidateKnowledgeObjectRequest, *serializedValidateKnowledgeObjectResponse]{
 			Path: knowledgeObjectsValidateRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newValidateKnowledgeObjectCodec(), Handler: handler.validateKnowledgeObject,
-			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.ValidateKnowledgeObjectRequest],
-			Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeMutationRequestBytes},
+			SourceType: router.Body,
+			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeMutationRequestBytes},
 		}),
 		newForwardCompatibleProtoRoute[*opensplunkv1.UpdateKnowledgeObjectRequest, *serializedUpdateKnowledgeObjectResponse](router.RouteConfig[*opensplunkv1.UpdateKnowledgeObjectRequest, *serializedUpdateKnowledgeObjectResponse]{
 			Path: knowledgeObjectsUpdateRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedUpdateKnowledgeObjectCodec(), Handler: handler.updateKnowledgeObject,
-			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.UpdateKnowledgeObjectRequest],
-			Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeMutationRequestBytes},
+			SourceType: router.Body,
+			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeMutationRequestBytes},
 		}),
 		newForwardCompatibleProtoRoute[*opensplunkv1.SetKnowledgeObjectStateRequest, *serializedSetKnowledgeObjectStateResponse](router.RouteConfig[*opensplunkv1.SetKnowledgeObjectStateRequest, *serializedSetKnowledgeObjectStateResponse]{
 			Path: knowledgeObjectsSetStateRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedSetKnowledgeObjectStateCodec(), Handler: handler.setKnowledgeObjectState,
-			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.SetKnowledgeObjectStateRequest],
-			Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
+			SourceType: router.Body,
+			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
 		}),
 		newForwardCompatibleProtoRoute[*opensplunkv1.DeleteKnowledgeObjectRequest, *serializedDeleteKnowledgeObjectResponse](router.RouteConfig[*opensplunkv1.DeleteKnowledgeObjectRequest, *serializedDeleteKnowledgeObjectResponse]{
 			Path: knowledgeObjectsDeleteRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedDeleteKnowledgeObjectCodec(), Handler: handler.deleteKnowledgeObject,
-			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.DeleteKnowledgeObjectRequest],
-			Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
+			SourceType: router.Body,
+			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
 		}),
 	}
 	if handler.knowledgePreviewConfigured() {
@@ -205,8 +205,8 @@ func (handler *apiHandler) knowledgeManagementRoutes(
 			newForwardCompatibleProtoRoute[*opensplunkv1.PreviewKnowledgeObjectRequest, *serializedPreviewKnowledgeObjectResponse](router.RouteConfig[*opensplunkv1.PreviewKnowledgeObjectRequest, *serializedPreviewKnowledgeObjectResponse]{
 				Path: knowledgeObjectsPreviewRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 				Codec: newPreviewKnowledgeObjectRequestCodec(), Handler: handler.previewKnowledgeObject,
-				SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.PreviewKnowledgeObjectRequest],
-				Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeMutationRequestBytes},
+				SourceType: router.Body,
+				Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeMutationRequestBytes},
 			}),
 		)
 	}
@@ -1756,10 +1756,10 @@ func knowledgeListPageToProto(
 	}
 	metadata := &opensplunkv1.PageResponse{TotalSizeExact: page.TotalSizeExact}
 	if page.NextPageToken != "" {
-		metadata.NextPageToken = stringPointer(strings.Clone(page.NextPageToken))
+		metadata.NextPageToken = new(strings.Clone(page.NextPageToken))
 	}
 	if page.TotalSize != nil {
-		metadata.TotalSize = uint64Pointer(*page.TotalSize)
+		metadata.TotalSize = new(*page.TotalSize)
 	}
 	response := &opensplunkv1.ListKnowledgeObjectsResponse{
 		KnowledgeObjects:      objects,

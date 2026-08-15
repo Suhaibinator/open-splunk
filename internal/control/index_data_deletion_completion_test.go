@@ -562,9 +562,7 @@ func TestCompleteIndexDataDeletionConvergesConcurrently(t *testing.T) {
 	failures := make(chan error, callers)
 	var wait sync.WaitGroup
 	for range callers {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
+		wait.Go(func() {
 			<-start
 			completion, completeErr := db.CompleteIndexDataDeletion(
 				ctx,
@@ -572,7 +570,7 @@ func TestCompleteIndexDataDeletionConvergesConcurrently(t *testing.T) {
 			)
 			results <- completion
 			failures <- completeErr
-		}()
+		})
 	}
 	close(start)
 	wait.Wait()

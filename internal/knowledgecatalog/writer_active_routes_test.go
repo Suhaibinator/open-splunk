@@ -452,7 +452,7 @@ func TestWriterActiveUpdateDependentPrecedesMalformedInventory(t *testing.T) {
 	}
 	definition := writerActiveRouteDefinition(dependencyExtractionDefinition(
 		testApp, "writer-inbound-candidate", SharingScopePrivate,
-		stringPointer("candidate changed after malformed inventory"),
+		new("candidate changed after malformed inventory"),
 		"writer-inbound-host", "writer_inbound_input",
 	), "main")
 	_, err = harness.writer.Update(
@@ -576,7 +576,7 @@ func TestWriterActiveRoutesRequireActiveDefiningApp(t *testing.T) {
 			return nil
 		}
 		updatedDefinition := proto.Clone(definition).(*opensplunkv1.KnowledgeObjectDefinition)
-		updatedDefinition.Description = stringPointer("archived app update")
+		updatedDefinition.Description = new("archived app update")
 		_, err = harness.writer.Update(
 			harness.actorContext,
 			harness.scope,
@@ -615,7 +615,7 @@ func TestWriterActiveUpdateAndEnableRejectOpaqueFutureBodies(t *testing.T) {
 			return nil
 		}
 		incoming := &opensplunkv1.KnowledgeObjectDefinition{
-			Description: stringPointer("opaque ACTIVE update is forbidden"),
+			Description: new("opaque ACTIVE update is forbidden"),
 		}
 		_, err = writer.Update(actorContext, scope, &opensplunkv1.UpdateKnowledgeObjectRequest{
 			KnowledgeObjectId: objectID,
@@ -1017,7 +1017,7 @@ func TestWriterActiveCreateRejectsAppTypeCapacityBeforeInventoryHook(t *testing.
 		t.Skip("seeds the exact 512-row ACTIVE app/type boundary")
 	}
 	harness := newWriterActiveRouteEmptyHarness(t)
-	for index := 0; index < 512; index++ {
+	for index := range 512 {
 		name := fmt.Sprintf("writer-route-capacity-%03d", index)
 		insertFixtureObject(t, harness.database, fixtureObject{
 			id: "ko-" + name, owner: testOwner,

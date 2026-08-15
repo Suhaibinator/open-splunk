@@ -25,14 +25,14 @@ func TestIngestionTokenCollectorBindingValidation(t *testing.T) {
 		want    string
 	}{
 		{name: "missing"},
-		{name: "empty", binding: stringPointer("")},
-		{name: "leading punctuation", binding: stringPointer("-collector")},
-		{name: "space", binding: stringPointer("collector one")},
-		{name: "slash", binding: stringPointer("collector/one")},
-		{name: "non ASCII", binding: stringPointer("collectör")},
-		{name: "too long", binding: stringPointer("c" + strings.Repeat("x", maximumCollectorIDBytes))},
-		{name: "minimum", binding: stringPointer("7"), want: "7"},
-		{name: "allowed punctuation", binding: stringPointer("Collector-01.eu_west:blue"), want: "Collector-01.eu_west:blue"},
+		{name: "empty", binding: new("")},
+		{name: "leading punctuation", binding: new("-collector")},
+		{name: "space", binding: new("collector one")},
+		{name: "slash", binding: new("collector/one")},
+		{name: "non ASCII", binding: new("collectör")},
+		{name: "too long", binding: new("c" + strings.Repeat("x", maximumCollectorIDBytes))},
+		{name: "minimum", binding: new("7"), want: "7"},
+		{name: "allowed punctuation", binding: new("Collector-01.eu_west:blue"), want: "Collector-01.eu_west:blue"},
 		{name: "maximum length", binding: &maximumLengthID, want: maximumLengthID},
 	}
 	for _, test := range tests {

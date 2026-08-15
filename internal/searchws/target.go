@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"maps"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -474,10 +475,7 @@ func (target *targetState) pollLoop(ctx context.Context, generation uint64) {
 }
 
 func nextPollDelay(current, baseline time.Duration) time.Duration {
-	ceiling := maximumPollFailureBackoff
-	if baseline > ceiling {
-		ceiling = baseline
-	}
+	ceiling := max(baseline, maximumPollFailureBackoff)
 	if current < baseline {
 		current = baseline
 	}
@@ -625,14 +623,13 @@ func (target *targetState) addSubscriptionLocked(subscription *subscription) {
 	target.subscriberCount.Add(1)
 }
 
-func (target *targetState) removeSubscriptionLocked(subscription *subscription) bool {
+func (target *targetState) removeSubscriptionLocked(subscription *subscription) {
 	if _, exists := target.subscriptions[subscription]; !exists {
-		return false
+		return
 	}
 	delete(target.subscriptions, subscription)
 	target.removePreviewDemandLocked(subscription.previewRows)
 	target.subscriberCount.Add(-1)
-	return true
 }
 
 // refreshForSubscription serializes demand-driven loads with the poller and
@@ -644,7 +641,7 @@ func (target *targetState) refreshForSubscription(
 	ctx context.Context,
 	requestedRows uint32,
 	currentSnapshot bool,
-) (bool, error) {
+) error {
 	target.refreshMu.Lock()
 	defer target.refreshMu.Unlock()
 
@@ -662,15 +659,14 @@ func (target *targetState) refreshForSubscription(
 		(exclusiveBootstrap && !target.currentEventsContinuousLocked()) ||
 		target.revalidateUntilRemoved
 	if !forceFull {
-		terminal := target.terminal
 		target.mu.Unlock()
-		return terminal, nil
+		return nil
 	}
 	target.mu.Unlock()
 
 	projectionContext, cancelProjection, release, err := target.service.beginProjection(ctx)
 	if err != nil {
-		return false, err
+		return err
 	}
 	defer func() {
 		release()
@@ -679,12 +675,13 @@ func (target *targetState) refreshForSubscription(
 	projection, err := target.service.loadProjectionWithPermit(projectionContext, target.key, previewRows)
 	if err != nil {
 		target.retireMissingExpiredTombstone(err)
-		return false, err
+		return err
 	}
 	if err := projectionContext.Err(); err != nil {
-		return false, err
+		return err
 	}
-	return target.applyProjection(projection, exclusiveBootstrap)
+	_, err = target.applyProjection(projection, exclusiveBootstrap)
+	return err
 }
 
 func (target *targetState) refreshCurrentProjection(ctx context.Context) (bool, error) {
@@ -779,9 +776,7 @@ func (target *targetState) applyProjection(projection targetProjection, initial 
 		target.epochStart = target.latest + 1
 	}
 	priorFingerprints := make(map[eventCategory][sha256.Size]byte, len(target.fingerprints))
-	for category, fingerprint := range target.fingerprints {
-		priorFingerprints[category] = fingerprint
-	}
+	maps.Copy(priorFingerprints, target.fingerprints)
 	missingCurrent := make(map[eventCategory]struct{})
 	for category := range target.expected {
 		if target.current[category] == nil {

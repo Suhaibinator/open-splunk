@@ -137,7 +137,7 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 	event.BatchID = "native-batch"
 	event.Event.Raw = []byte{0xff, 0, 'b', 'y', 't', 'e', 's'}
 	event.Event.RawEncoding = 2
-	event.Event.Service = stringPointer("")
+	event.Event.Service = new("")
 	event.Event.Level = nil
 	event.Event.Fields = typedObjectValue(
 		typedField("signed", typedSint(-1<<63)),
@@ -1670,7 +1670,7 @@ func testCompiledQueriesAgainstClickHouse(
 		{
 			name:   "valid string",
 			source: `index=compiler | eval duration_ms=tonumber(replace(duration, "ms$", "")) | where event_id="n-one" | table duration_ms`,
-			want:   float64PointerForIntegration(600),
+			want:   new(float64(600)),
 		},
 		{
 			name:   "failed conversion",
@@ -2593,7 +2593,7 @@ func testCompiledQueriesAgainstClickHouse(
 		SearchStart:       indexTime.Add(9 * time.Second),
 		SearchTimezone:    "UTC",
 		IndexTimeCutoff:   indexTime.Add(10 * time.Second),
-		VisibilityCutoff:  uint64PointerForIntegration(visibilityCutoff),
+		VisibilityCutoff:  new(visibilityCutoff),
 	})
 	if err != nil {
 		t.Fatalf("build pre-epoch time bin: %v", err)
@@ -4833,12 +4833,10 @@ func compilerIntegrationEvent(id, host, raw string, indexTime time.Time, fields 
 	event.BatchID = "compiler-batch"
 	event.Event.Host = host
 	event.Event.Raw = []byte(raw)
-	event.Event.Message = stringPointer("Request metrics")
+	event.Event.Message = new("Request metrics")
 	event.Event.Fields = typedObjectValue(fields...)
 	return event
 }
-
-func float64PointerForIntegration(value float64) *float64 { return &value }
 
 func compileIntegrationSPL(t *testing.T, source string, cutoff time.Time, visibilityCutoff uint64) CompiledQuery {
 	t.Helper()
@@ -4975,15 +4973,13 @@ func buildIntegrationPlanForIndex(
 		SearchStart:      cutoff.Add(-time.Second),
 		SearchTimezone:   "UTC",
 		IndexTimeCutoff:  cutoff,
-		VisibilityCutoff: uint64PointerForIntegration(visibilityCutoff),
+		VisibilityCutoff: new(visibilityCutoff),
 	})
 	if err != nil {
 		t.Fatalf("build integration SPL %q: %v", source, err)
 	}
 	return logical
 }
-
-func uint64PointerForIntegration(value uint64) *uint64 { return &value }
 
 func integrationRandomHex(t *testing.T, size int) string {
 	t.Helper()

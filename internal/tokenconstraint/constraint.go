@@ -22,10 +22,7 @@ const (
 // Normalize validates one host or source dimension, removes exact duplicate
 // patterns, and returns a detached lexical projection.
 func Normalize(patterns []string) ([]string, error) {
-	mapCapacity := len(patterns)
-	if mapCapacity > MaximumPatternsPerDimension+1 {
-		mapCapacity = MaximumPatternsPerDimension + 1
-	}
+	mapCapacity := min(len(patterns), MaximumPatternsPerDimension+1)
 	unique := make(map[string]struct{}, mapCapacity)
 	for _, pattern := range patterns {
 		if _, duplicate := unique[pattern]; duplicate {

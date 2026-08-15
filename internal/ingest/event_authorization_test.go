@@ -233,7 +233,7 @@ func TestCollectAppliesEventAuthorizationAfterNormalizationBeforeQuota(t *testin
 	})
 	harness := newServiceHarness(t, testServiceConfig(), authorizer, store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1, 1, 0)
+	sendHello(t, stream, 1)
 	_ = recvResponse(t, stream)
 
 	acceptedA := validTestEvent("accepted-a", "main")
@@ -337,7 +337,7 @@ func TestCollectRefreshesEventAuthorizationAtEveryBatchBoundary(t *testing.T) {
 	})
 	harness := newServiceHarness(t, config, authorizer, store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1, 1, 0)
+	sendHello(t, stream, 1)
 	_ = recvResponse(t, stream)
 
 	firstAllowed := validTestEvent("first-allowed", "main")
@@ -409,7 +409,7 @@ func TestCollectDurablyReplaysAllRejectedEventAuthorization(t *testing.T) {
 	store := &recoverableTestStore{}
 	harness := newServiceHarness(t, config, authorizer, store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1, 1, 0)
+	sendHello(t, stream, 1)
 	_ = recvResponse(t, stream)
 
 	batch := validTestBatch(
@@ -461,7 +461,7 @@ func TestCollectFailsClosedOnCorruptRefreshedEventAuthorization(t *testing.T) {
 	store := &deferredAuthorityTestStore{lookupState: StoredBatchNotFound}
 	harness := newServiceHarness(t, config, authorizer, store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1, 1, 0)
+	sendHello(t, stream, 1)
 	_ = recvResponse(t, stream)
 	if err := stream.Send(batchRequest(2, validTestBatch(
 		"collector-a", "corrupt-event-authorization", 1, validTestEvent("event", "main"),
@@ -503,7 +503,7 @@ func TestCollectDefersTypedInvalidEventAuthorityUntilAfterDurableLookup(t *testi
 	store := &deferredAuthorityTestStore{lookupState: StoredBatchNotFound}
 	harness := newServiceHarness(t, config, authorizer, store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1, 1, 0)
+	sendHello(t, stream, 1)
 	_ = recvResponse(t, stream)
 	if err := stream.Send(batchRequest(2, validTestBatch(
 		"collector-a", "typed-invalid-event-authorization", 1, validTestEvent("event", "main"),
@@ -631,7 +631,7 @@ func TestCollectRejectsCorruptAdmittedEventAuthorization(t *testing.T) {
 	config.SessionManager = manager
 	harness := newServiceHarness(t, config, authorizer, acceptingStore())
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1, 1, 0)
+	sendHello(t, stream, 1)
 	if response, err := stream.Recv(); response != nil || status.Code(err) != codes.Unavailable {
 		t.Fatalf("corrupt admitted event authorization = (%#v, %v), want nil/Unavailable", response, err)
 	}

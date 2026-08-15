@@ -555,15 +555,13 @@ func TestRenameNoReplaceIsAtomicUnderConcurrency(t *testing.T) {
 	results := make(chan result, contenders)
 	var group sync.WaitGroup
 	for _, source := range sources {
-		group.Add(1)
-		go func() {
-			defer group.Done()
+		group.Go(func() {
 			<-start
 			results <- result{
 				source: source,
 				err:    directory.RenameNoReplace(source, directory, "winner"),
 			}
-		}()
+		})
 	}
 	close(start)
 	group.Wait()

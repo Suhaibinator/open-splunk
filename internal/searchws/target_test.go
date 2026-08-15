@@ -16,7 +16,7 @@ import (
 func TestIncompleteRetentionHasTruthfulBoundsAndNeverPublishesUnreplayableEvents(t *testing.T) {
 	job := scopedSearchJob("search-incomplete")
 	job.Schema = &searchjobs.Schema{}
-	for index := 0; index < 40; index++ {
+	for index := range 40 {
 		job.Schema.Columns = append(job.Schema.Columns, searchjobs.Column{
 			Name: fmt.Sprintf("field_%02d_%s", index, string(make([]byte, 80))),
 			Kind: searchjobs.ValueKindString,

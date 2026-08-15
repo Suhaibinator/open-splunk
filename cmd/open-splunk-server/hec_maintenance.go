@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
 )
 
@@ -96,7 +97,7 @@ func newHECTerminalMaintenance(
 	pruner hecTerminalPruner,
 	config hecTerminalMaintenanceConfig,
 ) (*hecTerminalMaintenance, error) {
-	if nilRuntimeDependency(pruner) {
+	if nilcheck.IsNil(pruner) {
 		return nil, errors.New("HEC terminal maintenance pruner is required")
 	}
 	if err := config.normalize(); err != nil {
@@ -208,7 +209,7 @@ func runHECTerminalPruneBatches(
 	batchSize uint32,
 	maximumBatches int,
 ) (hecTerminalPruneRun, error) {
-	if ctx == nil || nilRuntimeDependency(pruner) || terminalBefore.IsZero() ||
+	if ctx == nil || nilcheck.IsNil(pruner) || terminalBefore.IsZero() ||
 		batchSize == 0 || batchSize > visibility.MaxPruneLimit || maximumBatches < 1 {
 		return hecTerminalPruneRun{}, errors.New("HEC terminal prune run is invalid")
 	}

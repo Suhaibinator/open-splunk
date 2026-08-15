@@ -182,7 +182,7 @@ func (writer *Writer) readAuthorizedIdempotencyRecord(
 	if !isAuthorized {
 		return idempotencyRecord{}, true, nil, control.ErrNotFound
 	}
-	if _, err := validateAuthorizedReplayCurrent(database, *prepared, current); err != nil {
+	if err := validateAuthorizedReplayCurrent(database, *prepared, current); err != nil {
 		if !errors.Is(err, control.ErrNotFound) &&
 			!errors.Is(err, ErrIdempotentOutcomeRedacted) {
 			err = withErrorDisposition(err, ErrorDispositionIndeterminate)
@@ -769,7 +769,7 @@ func (writer *Writer) readReplayAuthority(
 	// from both mutable current scalars and the latest retained immutable
 	// version before any historical receipt body, blob, dependency, selector,
 	// or projection is read.
-	if _, err := validateAuthorizedReplayCurrent(database, prepared, current); err != nil {
+	if err := validateAuthorizedReplayCurrent(database, prepared, current); err != nil {
 		return replayAuthority{}, err
 	}
 	if err := validateReplayCommitAuthority(database, record); err != nil {
@@ -831,10 +831,10 @@ func validateAuthorizedReplayCurrent(
 	database *gorm.DB,
 	prepared preparedMutation,
 	current registryRecord,
-) (versionRecord, error) {
+) error {
 	if database == nil || !validIdentity(current.TenantID, maximumTenantIDBytes) ||
 		!validIdentity(current.KnowledgeObjectID, maximumObjectIDBytes) {
-		return versionRecord{}, fmt.Errorf("%w: current replay authority is invalid", ErrCorrupt)
+		return fmt.Errorf("%w: current replay authority is invalid", ErrCorrupt)
 	}
 	var latest []struct {
 		ObjectVersion int64 `gorm:"column:object_version"`
@@ -843,11 +843,11 @@ func validateAuthorizedReplayCurrent(
 		Select("object_version").
 		Where("tenant_id = ? AND knowledge_object_id = ?", current.TenantID, current.KnowledgeObjectID).
 		Order("object_version DESC").Limit(2).Find(&latest).Error; err != nil {
-		return versionRecord{}, err
+		return err
 	}
 	if len(latest) == 0 || latest[0].ObjectVersion < 1 ||
 		latest[0].ObjectVersion > maximumVersionsPerTenant {
-		return versionRecord{}, fmt.Errorf("%w: latest replay version is invalid", ErrCorrupt)
+		return fmt.Errorf("%w: latest replay version is invalid", ErrCorrupt)
 	}
 	var authorized []struct {
 		ObjectVersion int64 `gorm:"column:object_version"`
@@ -859,10 +859,10 @@ func validateAuthorizedReplayCurrent(
 		Where("owner_id = ?", prepared.scope.ownerID).
 		Where("app_id IN ?", prepared.scope.writableAppIDs).
 		Limit(2).Find(&authorized).Error; err != nil {
-		return versionRecord{}, err
+		return err
 	}
 	if len(authorized) != 1 || authorized[0].ObjectVersion != latest[0].ObjectVersion {
-		return versionRecord{}, control.ErrNotFound
+		return control.ErrNotFound
 	}
 	version, found, err := readVersionRecord(
 		database,
@@ -871,34 +871,34 @@ func validateAuthorizedReplayCurrent(
 		latest[0].ObjectVersion,
 	)
 	if err != nil {
-		return versionRecord{}, err
+		return err
 	}
 	if !found {
-		return versionRecord{}, fmt.Errorf("%w: latest replay version is missing", ErrCorrupt)
+		return fmt.Errorf("%w: latest replay version is missing", ErrCorrupt)
 	}
 	// Either mutable or immutable quarantine authority is sufficient to keep
 	// the outcome permanently redacted. This intentionally precedes broader
 	// coherence diagnostics so corruption cannot turn redaction into an oracle.
 	if current.State == StateQuarantined || version.State == StateQuarantined {
-		return versionRecord{}, ErrIdempotentOutcomeRedacted
+		return ErrIdempotentOutcomeRedacted
 	}
 	if err := validateRegistry(current); err != nil {
-		return versionRecord{}, err
+		return err
 	}
 	if validateVersion(version) != nil || version.ObjectVersion != current.CurrentVersion {
-		return versionRecord{}, fmt.Errorf("%w: latest replay version disagrees with registry", ErrCorrupt)
+		return fmt.Errorf("%w: latest replay version disagrees with registry", ErrCorrupt)
 	}
 	if err := validateCurrentVersion(current, version); err != nil {
-		return versionRecord{}, err
+		return err
 	}
 	lifecycle, err := readVersionLifecycle(database, version)
 	if err != nil {
-		return versionRecord{}, err
+		return err
 	}
 	if err := validateCurrentLifecycle(current, version, lifecycle); err != nil {
-		return versionRecord{}, err
+		return err
 	}
-	return version, nil
+	return nil
 }
 
 // validateReplayRequestBinding closes the part of the replay relationship that

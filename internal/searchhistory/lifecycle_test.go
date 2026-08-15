@@ -187,7 +187,7 @@ func TestRecoverInterruptedPreservesProvenanceAndExactRangeAcrossRestart(t *test
 	pending := pendingHistoryEntry("job-restart-provenance", "index=main | table message", now.Add(-time.Minute))
 	pending.Definition.AppId = &appID
 	pending.Definition.TimeRange = &opensplunkv1.TimeRangeSpec{
-		Earliest: stringPointer("-1d"), Latest: stringPointer("now"), Timezone: &timezone,
+		Earliest: new("-1d"), Latest: new("now"), Timezone: &timezone,
 	}
 	pending.Source = &opensplunkv1.SearchJobSource{
 		Origin: opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH, SavedSearchId: &savedID,

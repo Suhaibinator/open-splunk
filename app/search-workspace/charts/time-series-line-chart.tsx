@@ -12,6 +12,7 @@ import type { TimelinePoint } from "@/lib/demo/search-data";
 
 import { COMPACT_NUMBER_FORMAT, NUMBER_FORMAT } from "../constants";
 import { formatExactNumericText } from "../formatters";
+import { niceStep } from "./chart-scale";
 
 const VIEWBOX_WIDTH = 1000;
 const VIEWBOX_HEIGHT = 300;
@@ -33,15 +34,6 @@ export const TIME_SERIES_COLORS = [
 interface TimeSeriesLineChartProps {
   points: TimelinePoint[];
   seriesLabel?: string;
-}
-
-function niceStep(span: number, targetIntervals = 4): number {
-  if (!Number.isFinite(span) || span <= 0) return 1;
-  const roughStep = span / targetIntervals;
-  const power = 10 ** Math.floor(Math.log10(roughStep));
-  const fraction = roughStep / power;
-  const niceFraction = fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 5 ? 5 : 10;
-  return niceFraction * power;
 }
 
 export function timelineSeriesNames(points: TimelinePoint[], fallbackLabel = "Events"): string[] {

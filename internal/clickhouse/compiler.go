@@ -2579,8 +2579,7 @@ func validateChronologicalGraphAmplification(
 		}
 		consumers *= 2
 	}
-	for index := len(barriers) - 1; index >= 0; index-- {
-		barrier := barriers[index]
+	for _, barrier := range slices.Backward(barriers) {
 		if len(barrier.validationColumns) > 0 {
 			if consumers > MaximumEventStatsGraphAmplification-2 {
 				return overflow()
@@ -8759,7 +8758,6 @@ func compileRelativeTimeCalendarDayOffsetSQL(
 	targetDay := currentDay + " " + operator + " toInt64(?) * " +
 		strconv.FormatUint(daysPerUnit, 10)
 	valid := relativeTimeLocalCivilLowerBoundCondition(
-		"value",
 		localMinimumUnixNanoseconds,
 	) + " AND " +
 		relativeTimeCalendarDayRangeCondition("target_day")
@@ -8790,7 +8788,6 @@ func compileRelativeTimeCalendarMonthOffsetSQL(
 	targetMonth := currentMonth + " " + operator + " toInt64(?) * " +
 		strconv.FormatUint(monthsPerUnit, 10)
 	valid := relativeTimeLocalCivilLowerBoundCondition(
-		"value",
 		localMinimumUnixNanoseconds,
 	) + " AND " +
 		relativeTimeCalendarMonthRangeCondition("target_month")
@@ -8897,7 +8894,6 @@ func compileRelativeTimeWeekSnapSQL(
 		strconv.FormatUint(uint64(weekday), 10) + " + 7, 7)"
 	targetDay := currentDay + " - " + daysBack
 	valid := relativeTimeLocalCivilLowerBoundCondition(
-		"value",
 		localMinimumUnixNanoseconds,
 	) + " AND " +
 		relativeTimeCalendarDayRangeCondition("target_day")
@@ -8937,10 +8933,9 @@ func relativeTimeTimestampRangeCondition(valueSQL string) string {
 }
 
 func relativeTimeLocalCivilLowerBoundCondition(
-	valueSQL string,
 	localMinimumUnixNanoseconds int64,
 ) string {
-	return "toUnixTimestamp64Nano(" + valueSQL + ") >= " +
+	return "toUnixTimestamp64Nano(value) >= " +
 		strconv.FormatInt(localMinimumUnixNanoseconds, 10)
 }
 
@@ -8950,7 +8945,6 @@ func relativeTimeLocallyRepresentableCandidateSQL(
 ) string {
 	return "if(isNotNull(value) AND " +
 		relativeTimeLocalCivilLowerBoundCondition(
-			"value",
 			localMinimumUnixNanoseconds,
 		) +
 		", " + candidateSQL + ", NULL)"
@@ -9619,6 +9613,14 @@ func normalizeCoalesceValues(
 	values []compiledScalar,
 	sourceRange spl.Range,
 ) ([]compiledScalar, fieldKind, string, error) {
+	return normalizeConditionalValues(values, sourceRange, unsupportedCoalesceValueTypes)
+}
+
+func normalizeConditionalValues(
+	values []compiledScalar,
+	sourceRange spl.Range,
+	unsupportedValueTypes func(spl.Range, compiledScalar, compiledScalar) error,
+) ([]compiledScalar, fieldKind, string, error) {
 	target := compiledScalar{}
 	found := false
 	for _, value := range values {
@@ -9632,7 +9634,7 @@ func normalizeCoalesceValues(
 		}
 		if !coalesceFixedTypesMatch(target, value) {
 			return nil, fieldKindInvalid, "",
-				unsupportedCoalesceValueTypes(sourceRange, target, value)
+				unsupportedValueTypes(sourceRange, target, value)
 		}
 	}
 	if !found {
@@ -9655,7 +9657,7 @@ func normalizeCoalesceValues(
 	}
 	if !supportedCoalesceFixedType(target) {
 		return nil, fieldKindInvalid, "",
-			unsupportedCoalesceValueTypes(sourceRange, target, compiledScalar{})
+			unsupportedValueTypes(sourceRange, target, compiledScalar{})
 	}
 
 	normalized := append([]compiledScalar(nil), values...)
@@ -9664,15 +9666,14 @@ func normalizeCoalesceValues(
 			continue
 		}
 		if coalesceFixedTypesMatch(value, target) {
-			// Keep a typed null-producing expression intact. Its result cannot
-			// win selection, but preserving it retains source-order bindings
-			// and avoids inventing an evaluation-elision contract.
+			// Keep a typed null-producing expression intact. Preserving it retains
+			// source-order bindings and avoids an evaluation-elision contract.
 			continue
 		}
 		typed, ok := typedNullIfBranchFor(target)
 		if !ok {
 			return nil, fieldKindInvalid, "",
-				unsupportedCoalesceValueTypes(sourceRange, target, value)
+				unsupportedValueTypes(sourceRange, target, value)
 		}
 		if len(value.valueArgs) > 0 {
 			typed.valueSQL = "CAST(" + value.valueSQL + " AS Nullable(" +
@@ -9892,67 +9893,7 @@ func normalizeCaseValues(
 	values []compiledScalar,
 	sourceRange spl.Range,
 ) ([]compiledScalar, fieldKind, string, error) {
-	target := compiledScalar{}
-	found := false
-	for _, value := range values {
-		if compiledScalarIsAlwaysNull(value) {
-			continue
-		}
-		if !found {
-			target = value
-			found = true
-			continue
-		}
-		if !coalesceFixedTypesMatch(target, value) {
-			return nil, fieldKindInvalid, "",
-				unsupportedCaseValueTypes(sourceRange, target, value)
-		}
-	}
-	if !found {
-		normalized := append([]compiledScalar(nil), values...)
-		target = typedNullIfBranch(fieldKindString, "")
-		for index, value := range normalized {
-			if coalesceFixedTypesMatch(value, target) {
-				continue
-			}
-			typed := target
-			if len(value.valueArgs) > 0 {
-				typed.valueSQL = "CAST(" + value.valueSQL +
-					" AS Nullable(String))"
-				typed.valueArgs = append([]any(nil), value.valueArgs...)
-				typed.materializeForPredicate = value.materializeForPredicate
-			}
-			normalized[index] = typed
-		}
-		return normalized, fieldKindString, "", nil
-	}
-	if !supportedCoalesceFixedType(target) {
-		return nil, fieldKindInvalid, "",
-			unsupportedCaseValueTypes(sourceRange, target, compiledScalar{})
-	}
-
-	normalized := append([]compiledScalar(nil), values...)
-	for index, value := range normalized {
-		if !compiledScalarIsAlwaysNull(value) {
-			continue
-		}
-		if coalesceFixedTypesMatch(value, target) {
-			continue
-		}
-		typed, ok := typedNullIfBranchFor(target)
-		if !ok {
-			return nil, fieldKindInvalid, "",
-				unsupportedCaseValueTypes(sourceRange, target, value)
-		}
-		if len(value.valueArgs) > 0 {
-			typed.valueSQL = "CAST(" + value.valueSQL + " AS Nullable(" +
-				coalesceFixedTypeSQL(target) + "))"
-			typed.valueArgs = append([]any(nil), value.valueArgs...)
-			typed.materializeForPredicate = value.materializeForPredicate
-		}
-		normalized[index] = typed
-	}
-	return normalized, target.kind, target.numberType, nil
+	return normalizeConditionalValues(values, sourceRange, unsupportedCaseValueTypes)
 }
 
 func unsupportedCaseValueTypes(
@@ -11647,11 +11588,11 @@ func nativeSubstringIntegerSafe(value plan.Value) bool {
 		value.Uint64 <= maximumNativeSubstringInteger
 }
 
-func compileInt128SubstringInteger(value plan.Value) (string, []any) {
+func compileInt128SubstringInteger(value plan.Value) []any {
 	if value.Kind == plan.ValueKindInt64 {
-		return "CAST(? AS Int128)", []any{value.Int64}
+		return []any{value.Int64}
 	}
-	return "CAST(? AS Int128)", []any{value.Uint64}
+	return []any{value.Uint64}
 }
 
 func substringIntegerSign(value plan.Value) int {
@@ -11698,18 +11639,18 @@ func compileGenericSQLiteSubstringUTF8SQL(
 	start plan.Value,
 	length *plan.Value,
 ) (string, []any) {
-	startSQL, startArgs := compileInt128SubstringInteger(start)
+	startArgs := compileInt128SubstringInteger(start)
 	outerParameters := "value, start"
-	outerArguments := "[" + inputSQL + "], [" + startSQL + "]"
+	outerArguments := "[" + inputSQL + "], [CAST(? AS Int128)]"
 
 	positionSQL := "if(start < 0, n + start + 1, start)"
 	beginSQL := positionSQL
 	endSQL := "n + 1"
 	indexArgs := startArgs
 	if length != nil {
-		lengthSQL, lengthArgs := compileInt128SubstringInteger(*length)
+		lengthArgs := compileInt128SubstringInteger(*length)
 		outerParameters += ", span"
-		outerArguments += ", [" + lengthSQL + "]"
+		outerArguments += ", [CAST(? AS Int128)]"
 		indexArgs = append(indexArgs, lengthArgs...)
 		beginSQL = "if(span < 0, (" + positionSQL + ") + span, " +
 			positionSQL + ")"
@@ -12024,12 +11965,10 @@ func compileConcatenationScalarWithNullPolicy(
 			"compile ClickHouse concatenation: query context is required",
 		)
 	}
-	for _, argument := range expression.Arguments {
-		if nilScalarExpression(argument) {
-			return compiledScalar{}, errors.New(
-				"compile ClickHouse concatenation: missing operand",
-			)
-		}
+	if slices.ContainsFunc(expression.Arguments, nilScalarExpression) {
+		return compiledScalar{}, errors.New(
+			"compile ClickHouse concatenation: missing operand",
+		)
 	}
 	if err := reserveConcatenationOperands(
 		state.context,
@@ -12519,7 +12458,7 @@ func compileMVSortScalar(
 			) +
 			", [dynamicElement(value, 'Array(String)')]), 1)"
 		dynamicArray := "arrayElement(arrayMap(values -> " +
-			boundedMVSortDynamicArraySQL("values", nullDynamic) +
+			boundedMVSortDynamicArraySQL("values") +
 			", [dynamicElement(value, 'Array(Dynamic)')]), 1)"
 		body := "multiIf(" +
 			"dynamicType(value) = 'Array(String)', " + stringArray + ", " +
@@ -12595,7 +12534,7 @@ func boundedMVSortStringArraySQL(
 		"), " + invalidSQL + ")"
 }
 
-func boundedMVSortDynamicArraySQL(valuesSQL string, invalidSQL string) string {
+func boundedMVSortDynamicArraySQL(valuesSQL string) string {
 	nullableStringValue := "dynamicElement(element, 'String')"
 	stringValue := "assumeNotNull(" + nullableStringValue + ")"
 	overLimitBytes := strconv.FormatUint(uint64(MaximumMVSortBytes)+1, 10)
@@ -12614,7 +12553,7 @@ func boundedMVSortDynamicArraySQL(valuesSQL string, invalidSQL string) string {
 	}
 	stringsSQL := "arrayMap(element -> " + stringValue + ", " + valuesSQL + ")"
 	return "if(" + strings.Join(conditions, " AND ") +
-		", CAST(arraySort(" + stringsSQL + ") AS Dynamic), " + invalidSQL + ")"
+		", CAST(arraySort(" + stringsSQL + ") AS Dynamic), CAST(NULL AS Dynamic))"
 }
 
 func compileMVCountScalar(
@@ -12851,10 +12790,8 @@ func scalarExpressionMayReturnBooleanFunction(expression plan.ScalarExpression) 
 			return true
 		}
 		if expression.Function == plan.ScalarFunctionCoalesce {
-			for _, argument := range expression.Arguments {
-				if scalarExpressionMayReturnBooleanFunction(argument) {
-					return true
-				}
+			if slices.ContainsFunc(expression.Arguments, scalarExpressionMayReturnBooleanFunction) {
+				return true
 			}
 		}
 		return false
@@ -20393,9 +20330,9 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 		input fieldState,
 		exists bool,
 		directions chronologicalDirections,
-	) (chronologicalInput, error) {
+	) chronologicalInput {
 		if cached, ok := chronologicalInputs[key]; ok {
-			return cached, nil
+			return cached
 		}
 		ordinal := len(chronologicalInputs)
 		compiled := chronologicalInput{}
@@ -20427,7 +20364,7 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 			)
 		}
 		chronologicalInputs[key] = compiled
-		return compiled, nil
+		return compiled
 	}
 	chronologicalInputFor := func(ref plan.FieldRef) (chronologicalInput, error) {
 		input, exists, resolveErr := resolveCompiledField(ref, state)
@@ -20439,7 +20376,7 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 			input,
 			exists,
 			chronologicalInputDirections[ref.Name],
-		)
+		), nil
 	}
 	chronologicalInputForExpression := func(
 		expression plan.ScalarExpression,
@@ -20453,7 +20390,7 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 			cached.field,
 			!cached.field.alwaysNull,
 			chronologicalDirections{earliest: true, latest: true},
-		)
+		), nil
 	}
 	type percentileState struct {
 		column    string

@@ -323,7 +323,7 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 	t.Run("structured EXPLAIN accepts a legal deep sort pipeline", func(t *testing.T) {
 		var source strings.Builder
 		source.WriteString("| table host")
-		for command := 0; command < 21; command++ {
+		for range 21 {
 			source.WriteString(" | sort host")
 		}
 		compiled := queryIntegrationCompileSearchRange(
@@ -2334,7 +2334,7 @@ func queryIntegrationDiagnosticExecutor(
 	}
 	return &Executor{
 		connection:                connection,
-		settings:                  settings,
+		settings:                  mustValidatedSettings(t, settings),
 		expandTimechartGroupLimit: config.MaxRowsToGroupBy == 0 || config.ExpandTimechartGroupLimit,
 		newQueryID:                randomQueryID,
 		withProgress:              clickhousedriver.WithProgress,

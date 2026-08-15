@@ -576,7 +576,7 @@ func TestSettingsForExplainClonesAndTightensEveryResourceCap(t *testing.T) {
 	base["max_query_size"] = 2 * defaultMaxQueryBytes
 	before := maps.Clone(base)
 
-	got, err := settingsForExplain(base)
+	got, err := settingsForExplain(mustValidatedSettings(t, base))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -618,7 +618,7 @@ func TestSettingsForExplainClonesAndTightensEveryResourceCap(t *testing.T) {
 	stricter["max_result_rows"] = uint64(7)
 	stricter["max_result_bytes"] = uint64(1_024)
 	stricter["max_query_size"] = uint64(2_048)
-	strict, err := settingsForExplain(stricter)
+	strict, err := settingsForExplain(mustValidatedSettings(t, stricter))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -658,102 +658,6 @@ func TestExplainerPreservesExactTimeoutAndPinsCeiledServerSetting(t *testing.T) 
 	remaining := connection.deadline.Sub(started)
 	if remaining < 1400*time.Millisecond || remaining > 1600*time.Millisecond {
 		t.Fatalf("exact execution timeout = %v, want about 1.5s", remaining)
-	}
-}
-
-func TestSettingsForExplainRejectsMalformedOrUnsafeBase(t *testing.T) {
-	base, err := querySettings(Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{
-		"max_execution_time",
-		"max_memory_usage",
-		"max_rows_to_read",
-		"max_bytes_to_read",
-		"max_result_rows",
-		"max_result_bytes",
-		"max_rows_to_group_by",
-		"max_threads",
-		"max_query_size",
-		"max_subquery_depth",
-	} {
-		t.Run(name+" missing", func(t *testing.T) {
-			malformed := maps.Clone(base)
-			delete(malformed, name)
-			if _, err := settingsForExplain(malformed); err == nil {
-				t.Fatalf("missing %s unexpectedly accepted", name)
-			}
-		})
-		t.Run(name+" zero", func(t *testing.T) {
-			malformed := maps.Clone(base)
-			malformed[name] = uint64(0)
-			if _, err := settingsForExplain(malformed); err == nil {
-				t.Fatalf("zero %s unexpectedly accepted", name)
-			}
-		})
-		t.Run(name+" wrong type", func(t *testing.T) {
-			malformed := maps.Clone(base)
-			malformed[name] = "1"
-			if _, err := settingsForExplain(malformed); err == nil {
-				t.Fatalf("wrong-type %s unexpectedly accepted", name)
-			}
-		})
-	}
-	for _, name := range []string{
-		"timeout_overflow_mode",
-		"read_overflow_mode",
-		"result_overflow_mode",
-		"group_by_overflow_mode",
-	} {
-		t.Run(name, func(t *testing.T) {
-			malformed := maps.Clone(base)
-			malformed[name] = "break"
-			if _, err := settingsForExplain(malformed); err == nil {
-				t.Fatalf("unsafe %s unexpectedly accepted", name)
-			}
-		})
-	}
-	type unsafeSetting struct {
-		name  string
-		value any
-	}
-	unsafeSettings := []unsafeSetting{
-		{name: "enable_materialized_cte", value: uint8(0)},
-		{name: "short_circuit_function_evaluation", value: "disable"},
-		{name: "async_insert", value: uint8(1)},
-	}
-	for _, name := range requiredTextIndexSettingNames {
-		unsafeSettings = append(
-			unsafeSettings,
-			unsafeSetting{name: name, value: uint8(0)},
-		)
-	}
-	for _, test := range unsafeSettings {
-		t.Run(test.name, func(t *testing.T) {
-			malformed := maps.Clone(base)
-			malformed[test.name] = test.value
-			if _, err := settingsForExplain(malformed); err == nil {
-				t.Fatalf("unsafe %s unexpectedly accepted", test.name)
-			}
-		})
-	}
-	for _, malformed := range []clickhousedriver.Settings{
-		nil,
-		func() clickhousedriver.Settings {
-			settings := maps.Clone(base)
-			settings["readonly"] = uint8(1)
-			return settings
-		}(),
-		func() clickhousedriver.Settings {
-			settings := maps.Clone(base)
-			settings["readonly"] = "2"
-			return settings
-		}(),
-	} {
-		if _, err := settingsForExplain(malformed); err == nil {
-			t.Fatalf("settingsForExplain(%#v) unexpectedly succeeded", malformed)
-		}
 	}
 }
 
@@ -1863,7 +1767,7 @@ func mustExplainer(t *testing.T, connection queryConnection) *Explainer {
 	if err != nil {
 		t.Fatal(err)
 	}
-	settings, err := settingsForExplain(baseSettings)
+	settings, err := settingsForExplain(mustValidatedSettings(t, baseSettings))
 	if err != nil {
 		t.Fatal(err)
 	}

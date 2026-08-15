@@ -278,9 +278,7 @@ func TestHeartbeatRuntimeConcurrentOffersFlushOnlyMaximumSequence(t *testing.T) 
 	var workers sync.WaitGroup
 	for sequence := uint64(1); sequence <= offerCount; sequence++ {
 		sequence := sequence
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
+		workers.Go(func() {
 			<-start
 			accepted, err := runtime.Offer(
 				context.Background(),
@@ -292,7 +290,7 @@ func TestHeartbeatRuntimeConcurrentOffersFlushOnlyMaximumSequence(t *testing.T) 
 				accepted: accepted,
 				err:      err,
 			}
-		}()
+		})
 	}
 	close(start)
 	workers.Wait()

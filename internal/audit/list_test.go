@@ -143,7 +143,7 @@ func TestListDescendingKeysetIsStableAcrossAppendsAndRestart(t *testing.T) {
 func TestListFiltersRemainTenantScopedAndCanonical(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	_, database := openAuditTestDatabase(t)
+	database := openAuditTestDatabase(t)
 	store := newAuditTestStore(t, database, auditTestCursorKey())
 
 	appendAuditTestEvent(t, store, ctx, "tenant-filter", ActionIngestionTokenCreate, "token-a", 1)
@@ -193,7 +193,7 @@ func TestListFiltersRemainTenantScopedAndCanonical(t *testing.T) {
 func TestListCursorCanonicalizesEmptyActionFilters(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	_, database := openAuditTestDatabase(t)
+	database := openAuditTestDatabase(t)
 	store := newAuditTestStore(t, database, auditTestCursorKey())
 	appendAuditTestEvent(t, store, ctx, "tenant-empty-filter", ActionIngestionTokenCreate, "token", 1)
 	appendAuditTestEvent(t, store, ctx, "tenant-empty-filter", ActionIngestionTokenUpdate, "token", 2)
@@ -217,7 +217,7 @@ func TestListCursorCanonicalizesEmptyActionFilters(t *testing.T) {
 func TestListPagesAreCallerOwnedAndCursorStateRemainsStable(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	_, database := openAuditTestDatabase(t)
+	database := openAuditTestDatabase(t)
 	store := newAuditTestStore(t, database, auditTestCursorKey())
 	appendAuditTestEvent(t, store, ctx, "tenant-owned", ActionIngestionTokenCreate, "token", 1)
 	appendAuditTestEvent(t, store, ctx, "tenant-owned", ActionIngestionTokenUpdate, "token", 2)
@@ -256,7 +256,7 @@ func TestListPagesAreCallerOwnedAndCursorStateRemainsStable(t *testing.T) {
 func TestListRejectsInvalidRequestsSeparatelyFromInvalidCursors(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	_, database := openAuditTestDatabase(t)
+	database := openAuditTestDatabase(t)
 	store := newAuditTestStore(t, database, auditTestCursorKey())
 	badActor := " bad"
 	badTarget := TargetKind("other")
@@ -339,7 +339,7 @@ func TestListCorruptionFailsClosedBeforeReturningRows(t *testing.T) {
 	t.Parallel()
 	t.Run("oversized text", func(t *testing.T) {
 		ctx := context.Background()
-		_, database := openAuditTestDatabase(t)
+		database := openAuditTestDatabase(t)
 		store := newAuditTestStore(t, database, auditTestCursorKey())
 		appendAuditTestEvent(t, store, ctx, "tenant-poison", ActionIngestionTokenCreate, "token", 1)
 		database.SQLDB().SetMaxOpenConns(1)
@@ -374,7 +374,7 @@ func TestListCorruptionFailsClosedBeforeReturningRows(t *testing.T) {
 
 	t.Run("corrupt lookahead", func(t *testing.T) {
 		ctx := context.Background()
-		_, database := openAuditTestDatabase(t)
+		database := openAuditTestDatabase(t)
 		store := newAuditTestStore(t, database, auditTestCursorKey())
 		appendAuditTestEvent(t, store, ctx, "tenant-lookahead", ActionIngestionTokenCreate, "token", 1)
 		appendAuditTestEvent(t, store, ctx, "tenant-lookahead", ActionIngestionTokenUpdate, "token", 2)
@@ -414,7 +414,7 @@ func TestListCorruptionFailsClosedBeforeReturningRows(t *testing.T) {
 
 	t.Run("accounting mismatch", func(t *testing.T) {
 		ctx := context.Background()
-		_, database := openAuditTestDatabase(t)
+		database := openAuditTestDatabase(t)
 		store := newAuditTestStore(t, database, auditTestCursorKey())
 		appendAuditTestEvent(t, store, ctx, "tenant-state", ActionIngestionTokenCreate, "token", 1)
 		if err := database.GORMDB().Exec(

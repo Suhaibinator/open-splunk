@@ -141,7 +141,7 @@ func TestIntegrationHiddenCorruptionIsNotAReadOracle(t *testing.T) {
 			}
 			integrationAssertPagesEqual(t, afterFirst, baselineFirst)
 			integrationAssertPagesEqual(t, afterSecond, baselineSecond)
-			for _, version := range []*uint64{nil, integrationUint64Pointer(1)} {
+			for _, version := range []*uint64{nil, new(uint64(1))} {
 				if _, err := store.Get(context.Background(), testReadScope(), "ko-hidden-source", version); !errors.Is(err, control.ErrNotFound) {
 					t.Fatalf("Get(hidden after corruption, version=%v) error = %v, want ErrNotFound", version, err)
 				}
@@ -173,5 +173,3 @@ func integrationAssertPagesEqual(t *testing.T, got, want ListPage) {
 		}
 	}
 }
-
-func integrationUint64Pointer(value uint64) *uint64 { return &value }

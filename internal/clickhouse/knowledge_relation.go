@@ -241,12 +241,7 @@ func validateKnowledgeRelationStage(
 }
 
 func knowledgeRelationContainsEmptyExpression(expressions []string) bool {
-	for _, expression := range expressions {
-		if expression == "" {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(expressions, "")
 }
 
 func validateKnowledgeRelationLayer(relation compiledRelation) error {

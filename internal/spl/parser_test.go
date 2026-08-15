@@ -21,8 +21,8 @@ func TestParseGradeThisEventSearch(t *testing.T) {
 	if !ok || base.Op != BoolOpAnd {
 		t.Fatalf("base expression = %#v, want implicit AND", query.Search)
 	}
-	assertComparison(t, base.Left, "index", CompareOpEqual, "gradethis", false)
-	assertComparison(t, base.Right, "trace_id", CompareOpEqual, "abc-123", true)
+	assertComparison(t, base.Left, "index", "gradethis", false)
+	assertComparison(t, base.Right, "trace_id", "abc-123", true)
 
 	if len(query.Commands) != 2 {
 		t.Fatalf("command count = %d, want 2", len(query.Commands))
@@ -57,9 +57,9 @@ func TestBaseSearchORPrecedesAND(t *testing.T) {
 	if !ok || or.Op != BoolOpOr {
 		t.Fatalf("left = %#v, want OR", and.Left)
 	}
-	assertComparison(t, or.Left, "level", CompareOpEqual, "ERROR", false)
-	assertComparison(t, or.Right, "level", CompareOpEqual, "WARN", false)
-	assertComparison(t, and.Right, "index", CompareOpEqual, "gradethis", false)
+	assertComparison(t, or.Left, "level", "ERROR", false)
+	assertComparison(t, or.Right, "level", "WARN", false)
+	assertComparison(t, and.Right, "index", "gradethis", false)
 }
 
 func TestParenthesesAndNOTOverridePrecedence(t *testing.T) {
@@ -604,7 +604,7 @@ func TestParseEvalIfEnforcesArityAndSharedPredicateLimit(t *testing.T) {
 
 	var mixedBudget strings.Builder
 	mixedBudget.WriteString("index=main | eval ")
-	for index := 0; index < maxEvalPredicates/2; index++ {
+	for index := range maxEvalPredicates / 2 {
 		if index > 0 {
 			mixedBudget.WriteString(", ")
 		}
@@ -884,7 +884,7 @@ func TestParseBoundsQueryComplexity(t *testing.T) {
 	}
 
 	var tokens strings.Builder
-	for index := 0; index < maxSPLTokens+1; index++ {
+	for index := range maxSPLTokens + 1 {
 		if index > 0 {
 			tokens.WriteByte(' ')
 		}
@@ -2569,14 +2569,14 @@ func FuzzParseDoesNotPanic(f *testing.F) {
 	})
 }
 
-func assertComparison(t *testing.T, expression Expr, field string, op CompareOp, value string, quoted bool) {
+func assertComparison(t *testing.T, expression Expr, field, value string, quoted bool) {
 	t.Helper()
 	comparison, ok := expression.(*ComparisonExpr)
 	if !ok {
 		t.Fatalf("expression = %T, want *ComparisonExpr", expression)
 	}
-	if comparison.Field != field || comparison.Op != op || comparison.Value.Text != value || comparison.Value.Quoted != quoted {
-		t.Fatalf("comparison = %#v, want %s%s%q (quoted=%t)", comparison, field, op, value, quoted)
+	if comparison.Field != field || comparison.Op != CompareOpEqual || comparison.Value.Text != value || comparison.Value.Quoted != quoted {
+		t.Fatalf("comparison = %#v, want %s%s%q (quoted=%t)", comparison, field, CompareOpEqual, value, quoted)
 	}
 }
 

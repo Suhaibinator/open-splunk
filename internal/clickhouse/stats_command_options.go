@@ -48,10 +48,7 @@ func effectiveStatsPartitionsMaxThreadsHint(operator *plan.Aggregate) (uint8, er
 	if err != nil {
 		return 0, err
 	}
-	hint := options.Partitions
-	if hint > maximumStatsPartitionsMaxThreadsHint {
-		hint = maximumStatsPartitionsMaxThreadsHint
-	}
+	hint := min(options.Partitions, maximumStatsPartitionsMaxThreadsHint)
 	return hint, nil
 }
 

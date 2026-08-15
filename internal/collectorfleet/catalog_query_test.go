@@ -449,15 +449,15 @@ func TestCollectorCatalogDisplayNameCursorMatchesSQLiteNullOrdering(
 	database, store := openTestStore(t)
 	now := time.Date(2026, time.July, 28, 13, 0, 0, 0, time.UTC)
 	displayNames := map[string]*string{
-		"collector-alpha-a": catalogQueryStringPointer("Alpha"),
-		"collector-alpha-b": catalogQueryStringPointer("Alpha"),
-		"collector-alpha-c": catalogQueryStringPointer("Alpha"),
+		"collector-alpha-a": new("Alpha"),
+		"collector-alpha-b": new("Alpha"),
+		"collector-alpha-c": new("Alpha"),
 		"collector-null-a":  nil,
 		"collector-null-b":  nil,
 		"collector-null-c":  nil,
-		"collector-zulu-a":  catalogQueryStringPointer("Zulu"),
-		"collector-zulu-b":  catalogQueryStringPointer("Zulu"),
-		"collector-zulu":    catalogQueryStringPointer("Zulu"),
+		"collector-zulu-a":  new("Zulu"),
+		"collector-zulu-b":  new("Zulu"),
+		"collector-zulu":    new("Zulu"),
 	}
 	for collectorID, displayName := range displayNames {
 		claimCatalogQueryCollector(
@@ -941,7 +941,7 @@ func walkCatalogPageRecordIDs(
 
 	var result []string
 	cursor := collectorListCursor{}
-	for page := 0; page < 100; page++ {
+	for range 100 {
 		query := collectorCatalogPageQuery(
 			database,
 			request,
@@ -1004,8 +1004,4 @@ func catalogQueryPlanCursor(sortBy CollectorSortBy) collectorListCursor {
 		}
 	}
 	return cursor
-}
-
-func catalogQueryStringPointer(value string) *string {
-	return &value
 }

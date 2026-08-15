@@ -265,7 +265,7 @@ func exactEventPathBytes(length int) string {
 	}
 	remaining := length - (segments - 1)
 	result := make([]string, 0, segments)
-	for index := 0; index < segments; index++ {
+	for index := range segments {
 		segmentsLeft := segments - index
 		segmentBytes := min(maximumEncodedSegmentBytes, remaining-(segmentsLeft-1))
 		segment := ""

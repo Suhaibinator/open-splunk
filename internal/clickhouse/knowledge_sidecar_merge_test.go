@@ -301,7 +301,7 @@ func TestCompileKnowledgeExtractionSidecarsKeepRawPriorLazy(t *testing.T) {
 		!strings.Contains(projection, `"__os_ko_extract_previous_authority_6_0"`) {
 		t.Fatalf("raw prior is not confined to the no-write projection fallback:\n%s", projection)
 	}
-	_, previous, _, previousErr := compileKnowledgeExtractionPrevious(
+	previous, _, previousErr := compileKnowledgeExtractionPrevious(
 		"payload",
 		knowledgeExtractionStageState(),
 		6,

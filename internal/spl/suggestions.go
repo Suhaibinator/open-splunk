@@ -3,6 +3,7 @@ package spl
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -71,12 +72,7 @@ type SuggestionExclusion struct {
 
 // Allows reports whether context admits candidates of kind.
 func (context SuggestionContext) Allows(kind SuggestionKind) bool {
-	for _, allowed := range context.Kinds {
-		if allowed == kind {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(context.Kinds, kind)
 }
 
 // SuggestionCandidate is static catalog metadata or an authorized dynamic
@@ -324,10 +320,7 @@ func prepareScalarSuggestionScan(
 	} else if scan.activeWord {
 		normalizationStart = scan.replacement.Start
 	}
-	capacity := scalarStart + activeEnd - normalizationStart.Offset
-	if capacity > maxSPLTokens {
-		capacity = maxSPLTokens
-	}
+	capacity := min(scalarStart+activeEnd-normalizationStart.Offset, maxSPLTokens)
 	tokens := make([]token, 0, capacity)
 	tokens = append(tokens, scan.tokens[:scalarStart]...)
 

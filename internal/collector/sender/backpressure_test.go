@@ -42,7 +42,7 @@ func TestSenderRetryDelaySurvivesReconnect(t *testing.T) {
 		return io.ErrUnexpectedEOF
 	}
 	fs.onBatch = func(fs *fakeServer, batch *opensplunkv1.EventBatch) {
-		fs.ackBatch(batch.GetBatchSequence(), 1, 0)
+		fs.ackBatch(batch.GetBatchSequence(), 1)
 	}
 
 	q := newFakeQueue(fakeBatch(1, makeEvent("e1", "main")))

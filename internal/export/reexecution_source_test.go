@@ -1491,7 +1491,7 @@ func TestReexecutionLeaseConcurrentFirstNextAndClose(t *testing.T) {
 		return ctx.Err()
 	})
 	source := newReexecutionTestSource(t, searches, executor, nil)
-	for iteration := 0; iteration < 200; iteration++ {
+	for iteration := range 200 {
 		lease, err := source.AcquireResultsFor(context.Background(), access, searches.job.ID)
 		if err != nil {
 			t.Fatal(err)

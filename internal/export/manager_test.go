@@ -2610,11 +2610,9 @@ func TestManagerConcurrentAndRepeatedCloseReturnsStableRemovalError(t *testing.T
 	errorsSeen := make(chan error, callers)
 	var group sync.WaitGroup
 	for range callers {
-		group.Add(1)
-		go func() {
-			defer group.Done()
+		group.Go(func() {
 			errorsSeen <- manager.Close()
-		}()
+		})
 	}
 	group.Wait()
 	close(errorsSeen)

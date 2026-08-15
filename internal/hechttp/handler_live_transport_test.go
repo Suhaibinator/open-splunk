@@ -15,6 +15,7 @@ import (
 	"net/http/httptrace"
 	"os"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -836,12 +837,7 @@ func waitForGoroutineCeiling(t *testing.T, maximum int) {
 }
 
 func containsString(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(values, want)
 }
 
 func updateAtomicMaximum(target *atomic.Int64, candidate int64) {
@@ -1192,9 +1188,7 @@ func runLiveTransportLoad(t *testing.T, run liveLoadRun) liveLoadObservation {
 		}
 	} else {
 		for range liveLoadWorkers {
-			workers.Add(1)
-			go func() {
-				defer workers.Done()
+			workers.Go(func() {
 				for {
 					index := next.Add(1) - 1
 					if index >= run.requests || failed.Load() {
@@ -1202,7 +1196,7 @@ func runLiveTransportLoad(t *testing.T, run liveLoadRun) liveLoadObservation {
 					}
 					execute(index)
 				}
-			}()
+			})
 		}
 		workers.Wait()
 	}
@@ -1324,10 +1318,7 @@ func runPacedLiveTransportSoak(
 		if err := liveness.observe(actualStart); err != nil {
 			return observation, err
 		}
-		scheduleLag := actualStart.Sub(scheduled)
-		if scheduleLag < 0 {
-			scheduleLag = 0
-		}
+		scheduleLag := max(actualStart.Sub(scheduled), 0)
 		observation.maximumScheduleLag = max(observation.maximumScheduleLag, scheduleLag)
 		if scheduleLag > liveSoakMaximumLivenessGap {
 			return observation, fmt.Errorf(

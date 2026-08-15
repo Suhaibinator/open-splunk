@@ -13,7 +13,7 @@ func TestIndexMutationAppenderRequiresExplicitSuccessfulActor(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	_, database := openAuditTestDatabase(t)
+	database := openAuditTestDatabase(t)
 	store := newAuditTestStore(t, database, auditTestCursorKey())
 	event := control.IndexMutationAuditEvent{
 		OccurredAt:   auditTestTime,
@@ -67,7 +67,7 @@ func TestIndexMutationAppenderMapsAllControlActions(t *testing.T) {
 	ctx := actorContext(t, Actor{
 		Kind: ActorKindSystem, ID: "index-controller", Role: ActorRoleSystem,
 	})
-	_, database := openAuditTestDatabase(t)
+	database := openAuditTestDatabase(t)
 	store := newAuditTestStore(t, database, auditTestCursorKey())
 	tests := []struct {
 		controlAction control.IndexMutationAuditAction
@@ -103,7 +103,7 @@ func TestIndexMutationAppenderMapsAllControlActions(t *testing.T) {
 
 	page, err := store.List(ctx, "tenant-index-adapter", ListRequest{
 		PageSize:   uint32(len(tests)),
-		TargetKind: targetKindPointer(TargetKindIndex),
+		TargetKind: new(TargetKindIndex),
 	})
 	if err != nil {
 		t.Fatalf("List(index adapter events): %v", err)

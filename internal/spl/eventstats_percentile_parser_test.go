@@ -199,7 +199,7 @@ func TestParseEventStatsPercentileEnforcesGroupBound(t *testing.T) {
 
 	var source strings.Builder
 	source.WriteString("index=main | eventstats p95(latency) AS p95_latency BY ")
-	for index := 0; index < MaximumStatsGroupFields; index++ {
+	for index := range MaximumStatsGroupFields {
 		if index > 0 {
 			source.WriteByte(',')
 		}

@@ -153,10 +153,7 @@ func parseExplainPlanText(
 		nodeCount++
 		node := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
-		if !validExplainMetadata(
-			node.NodeType,
-			maximumExplainPlanMetadataLen,
-		) || len(node.Actions) != 0 {
+		if !validExplainMetadata(node.NodeType) || len(node.Actions) != 0 {
 			return ExplainPlan{}, malformedExplainPlan()
 		}
 		if nodeType, safe := projectExplainNodeType(node.NodeType); safe {
@@ -242,13 +239,7 @@ func decodeExplainRead(
 		if err := ctx.Err(); err != nil {
 			return ExplainRead{}, 0, 0, err
 		}
-		if !validExplainMetadata(
-			header.Name,
-			maximumExplainPlanMetadataLen,
-		) || !validExplainMetadata(
-			header.Type,
-			maximumExplainPlanMetadataLen,
-		) {
+		if !validExplainMetadata(header.Name) || !validExplainMetadata(header.Type) {
 			return ExplainRead{}, 0, 0, malformedExplainPlan()
 		}
 		if safeExplainPhysicalColumn(header.Name) {
@@ -300,9 +291,9 @@ func decodeExplainRead(
 func projectExplainIndex(
 	raw rawExplainIndex,
 ) (ExplainIndex, bool, error) {
-	if !validExplainMetadata(raw.Type, maximumExplainPlanMetadataLen) ||
+	if !validExplainMetadata(raw.Type) ||
 		(raw.Name != "" &&
-			!validExplainMetadata(raw.Name, maximumExplainPlanMetadataLen)) ||
+			!validExplainMetadata(raw.Name)) ||
 		len(raw.Keys) > maximumExplainPlanIndexKeys ||
 		raw.InitialParts == nil ||
 		raw.SelectedParts == nil ||
@@ -315,7 +306,7 @@ func projectExplainIndex(
 	indexType, safe := projectExplainIndexType(raw.Type)
 	if !safe {
 		for _, key := range raw.Keys {
-			if !validExplainMetadata(key, maximumExplainPlanMetadataLen) {
+			if !validExplainMetadata(key) {
 				return ExplainIndex{}, false, malformedExplainPlan()
 			}
 		}
@@ -323,7 +314,7 @@ func projectExplainIndex(
 	}
 	keys := make([]string, 0, len(raw.Keys))
 	for _, key := range raw.Keys {
-		if !validExplainMetadata(key, maximumExplainPlanMetadataLen) {
+		if !validExplainMetadata(key) {
 			return ExplainIndex{}, false, malformedExplainPlan()
 		}
 		if safeExplainIndexKey(indexType, raw.Name, key) {
@@ -468,9 +459,9 @@ func safeExplainPhysicalColumn(value string) bool {
 	}
 }
 
-func validExplainMetadata(value string, maximumBytes int) bool {
+func validExplainMetadata(value string) bool {
 	if value == "" ||
-		len(value) > maximumBytes ||
+		len(value) > maximumExplainPlanMetadataLen ||
 		!utf8.ValidString(value) {
 		return false
 	}

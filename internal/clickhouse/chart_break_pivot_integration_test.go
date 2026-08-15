@@ -1,14 +1,13 @@
 package clickhouse
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -16,11 +15,9 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
-	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
-	"github.com/Suhaibinator/open-splunk/internal/visibility"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -601,12 +598,7 @@ func TestChartPivotHostileDataAgainstClickHouse(t *testing.T) {
 }
 
 func chartBreakContains(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(values, want)
 }
 
 type chartBreakRow struct {
@@ -775,7 +767,7 @@ func chartBreakBuild(source string, cutoff time.Time, visibilityCutoff uint64) (
 		SearchStart:      cutoff.Add(-time.Second),
 		SearchTimezone:   "UTC",
 		IndexTimeCutoff:  cutoff,
-		VisibilityCutoff: uint64PointerForIntegration(visibilityCutoff),
+		VisibilityCutoff: new(visibilityCutoff),
 	})
 	if err != nil {
 		return CompiledQuery{}, err
@@ -1066,88 +1058,14 @@ func chartBreakEvent(
 			Level:           level,
 			Raw:             []byte(id),
 			RawEncoding:     opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
-			Message:         stringPointer("Request metrics"),
+			Message:         new("Request metrics"),
 			Fields:          typedObjectValue(fields...),
 		},
 	}
 }
 
 func chartBreakStartClickHouse(t *testing.T, ctx context.Context) (clickhousedriver.Conn, *Store) {
-	t.Helper()
-	container := "open-splunk-chart-break-" + integrationRandomHex(t, 6)
-	password := integrationRandomHex(t, 24)
-	image := os.Getenv("OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE")
-	if image == "" {
-		image = storeIntegrationImage
-	}
-	integrationDocker(t, ctx, nil,
-		"run", "--detach", "--rm", "--name", container,
-		"--publish", "127.0.0.1::9000",
-		"--env", "CLICKHOUSE_DB=open_splunk",
-		"--env", "CLICKHOUSE_USER=open_splunk",
-		"--env", "CLICKHOUSE_PASSWORD="+password,
-		"--env", "CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1",
-		image,
-	)
-	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cleanupCancel()
-		_ = exec.CommandContext(cleanupCtx, "docker", "rm", "--force", "--volumes", container).Run()
-	})
-	integrationWaitForClickHouse(t, ctx, container, password)
-
-	migrationPaths, err := filepath.Glob(filepath.Join("..", "..", "migrations", "clickhouse", "[0-9][0-9][0-9][0-9]_*.sql"))
-	if err != nil || len(migrationPaths) == 0 {
-		t.Fatalf("discover migrations: paths=%v err=%v", migrationPaths, err)
-	}
-	var migrations bytes.Buffer
-	for _, migrationPath := range migrationPaths {
-		migration, readErr := os.ReadFile(migrationPath)
-		if readErr != nil {
-			t.Fatalf("read migration %s: %v", migrationPath, readErr)
-		}
-		migrations.Write(migration)
-		migrations.WriteByte('\n')
-	}
-	integrationDocker(t, ctx, bytes.NewReader(migrations.Bytes()),
-		"exec", "--interactive", container, "clickhouse-client",
-		"--user", "open_splunk", "--password", password, "--multiquery",
-	)
-
-	config := DefaultConfig()
-	config.Addresses = []string{integrationNativeAddress(t, ctx, container)}
-	config.Username = "open_splunk"
-	config.Password = password
-	controlDB, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
-	if err != nil {
-		t.Fatalf("open chart break visibility control database: %v", err)
-	}
-	t.Cleanup(func() { _ = controlDB.Close() })
-	sequencer, err := visibility.NewSQLite(ctx, controlDB)
-	if err != nil {
-		t.Fatalf("create chart break visibility sequencer: %v", err)
-	}
-	t.Cleanup(func() { _ = sequencer.Close() })
-	// Preserve the fixed logical fixture clock without letting ClickHouse's
-	// physical TTL make this integration matrix expire as wall time advances.
-	store, err := Open(config, fixedRetention(100*365*24*time.Hour), sequencer)
-	if err != nil {
-		t.Fatalf("open chart break store: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-	if err := store.Ping(ctx); err != nil {
-		t.Fatalf("ping chart break store: %v", err)
-	}
-	options, _, err := config.clickHouseOptions()
-	if err != nil {
-		t.Fatalf("resolve chart break ClickHouse options: %v", err)
-	}
-	connection, err := clickhousedriver.Open(options)
-	if err != nil {
-		t.Fatalf("open chart break query connection: %v", err)
-	}
-	t.Cleanup(func() { _ = connection.Close() })
-	return connection, store
+	return startClickHouseStoreFixture(t, ctx)
 }
 
 func chartBreakBrief(err error) string {

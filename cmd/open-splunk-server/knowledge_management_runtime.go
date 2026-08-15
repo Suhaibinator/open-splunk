@@ -13,6 +13,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/lookupasset"
 	"github.com/Suhaibinator/open-splunk/internal/lookupcatalog"
 	"github.com/Suhaibinator/open-splunk/internal/lookupservice"
+	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/server"
 )
 
@@ -41,7 +42,7 @@ func newRuntimeKnowledgeManagement(
 	auditAppender audit.TransactionAppender,
 ) (runtimeKnowledgeManagement, error) {
 	if ctx == nil || database == nil || database.GORMDB() == nil ||
-		database.SQLDB() == nil || nilRuntimeDependency(auditAppender) {
+		database.SQLDB() == nil || nilcheck.IsNil(auditAppender) {
 		return runtimeKnowledgeManagement{}, fmt.Errorf(
 			"%w: knowledge-management startup dependencies are incomplete",
 			control.ErrInvalidArgument,
@@ -175,7 +176,7 @@ func configureRuntimeKnowledgeManagement(
 		runtime.lookupManagement == nil || !runtime.lookupManagement.Ready() ||
 		runtime.lookupResolver == nil || runtime.lookupResolver.catalog == nil ||
 		runtime.lookupResolver.catalog != runtime.lookupCatalog || apps == nil ||
-		nilRuntimeDependency(apps.catalog) || preview == nil || !preview.Ready() {
+		nilcheck.IsNil(apps.catalog) || preview == nil || !preview.Ready() {
 		return errors.New(
 			"configure knowledge runtime: dependencies are incomplete",
 		)

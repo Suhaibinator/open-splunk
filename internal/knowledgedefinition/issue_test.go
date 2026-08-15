@@ -206,7 +206,7 @@ func TestNormalizeUnknownFieldIssueOrderIsDeterministic(t *testing.T) {
 	definition := validAliasDefinition()
 	definition.Selector.ProtoReflect().SetUnknown(testUnknownField())
 	definition.GetFieldAlias().ProtoReflect().SetUnknown(testUnknownField())
-	for iteration := 0; iteration < 100; iteration++ {
+	for range 100 {
 		_, err := Normalize(definition)
 		assertDefinitionIssue(t, err, Issue{
 			FieldPath: "selector",

@@ -86,6 +86,7 @@ type hardeningSummaryLease struct {
 	summaryCalls atomic.Int32
 }
 
+//nolint:unparam // Both results are required by knowledgeSnapshotSummaryProvider.
 func (lease *hardeningSummaryLease) knowledgeSnapshotSummary() (*opensplunkv1.KnowledgeSnapshotSummary, error) {
 	lease.summaryCalls.Add(1)
 	return nil, nil

@@ -204,7 +204,7 @@ func TestAdmitCapacityRollsBackTokenUseAndNewCollectorIdentity(
 	fixture := openAdmissionFixture(t, "main")
 	ctx := context.Background()
 	now := time.Date(2026, 7, 29, 16, 0, 0, 0, time.UTC)
-	for ordinal := 0; ordinal < collectorfleet.MaximumDurableCollectorsPerTenant; ordinal++ {
+	for ordinal := range collectorfleet.MaximumDurableCollectorsPerTenant {
 		collectorID := fmt.Sprintf(
 			"collector-admission-capacity-%03d",
 			ordinal,
@@ -921,7 +921,7 @@ func TestAdmitRejectsCorruptTotalScopeCardinalityWithoutUnboundedProjection(
 			)
 
 			indexIDs := make([]string, 0, 256)
-			for index := 0; index < 256; index++ {
+			for index := range 256 {
 				created, err := fixture.database.CreateIndex(
 					ctx,
 					control.IndexDefinition{

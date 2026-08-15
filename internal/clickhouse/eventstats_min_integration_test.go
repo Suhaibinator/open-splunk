@@ -245,10 +245,10 @@ func testEventStatsMinimumAgainstClickHouse(
 		"eventstats-min-10-nested-poison",
 		"eventstats-min-11-complete-group",
 	}
-	dynamicRows := func(value any, ids ...string) []dynamicRow {
+	dynamicRows := func(ids ...string) []dynamicRow {
 		rows := make([]dynamicRow, 0, len(ids))
 		for _, id := range ids {
-			rows = append(rows, dynamicRow{id: id, value: value})
+			rows = append(rows, dynamicRow{id: id, value: float64(1)})
 		}
 		return rows
 	}
@@ -260,7 +260,7 @@ func testEventStatsMinimumAgainstClickHouse(
 				` | sort event_id | table event_id low`,
 		),
 	)
-	if want := dynamicRows(float64(1), allIDs...); !reflect.DeepEqual(global, want) {
+	if want := dynamicRows(allIDs...); !reflect.DeepEqual(global, want) {
 		t.Fatalf("global eventstats min = %#v, want %#v", global, want)
 	}
 
@@ -575,7 +575,7 @@ func testEventStatsMinimumAgainstClickHouse(
 		"stacked eventstats min",
 		compile(stackedAnalysisSource+` | sort event_id | table event_id lower`),
 	)
-	if want := dynamicRows(float64(1), allIDs...); !reflect.DeepEqual(stacked, want) {
+	if want := dynamicRows(allIDs...); !reflect.DeepEqual(stacked, want) {
 		t.Fatalf("stacked eventstats min = %#v, want %#v", stacked, want)
 	}
 	if got, want := collectSuggestions(
@@ -615,7 +615,7 @@ func testEventStatsMinimumAgainstClickHouse(
 			test.name,
 			compile(test.source+` | sort event_id | table event_id low`),
 		)
-		if want := dynamicRows(float64(1), allIDs...); !reflect.DeepEqual(mixed, want) {
+		if want := dynamicRows(allIDs...); !reflect.DeepEqual(mixed, want) {
 			t.Fatalf("%s = %#v, want %#v", test.name, mixed, want)
 		}
 	}
@@ -835,7 +835,7 @@ func testEventStatsMinimumAgainstClickHouse(
 				` | sort event_id | table event_id eventstats_min_value`,
 		),
 	)
-	if want := dynamicRows(float64(1), allIDs...); !reflect.DeepEqual(aliased, want) {
+	if want := dynamicRows(allIDs...); !reflect.DeepEqual(aliased, want) {
 		t.Fatalf("aliased eventstats min = %#v, want %#v", aliased, want)
 	}
 

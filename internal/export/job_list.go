@@ -403,7 +403,7 @@ func (manager *Manager) removeExportListEntryLocked(entry *jobEntry) {
 		}
 		return
 	}
-	manager.jobsByScope[root.entry.access] = root
+	manager.jobsByScope[root.Value().access] = root
 }
 
 // compactExportListScopeIndexLocked releases bucket storage retained after
@@ -429,7 +429,7 @@ func (manager *Manager) compactExportListScopeIndexLocked() {
 		live,
 	)
 	for _, root := range manager.jobsByScope {
-		compacted[root.entry.access] = root
+		compacted[root.Value().access] = root
 	}
 	manager.jobsByScope = compacted
 	manager.scopeIndexHighWater = live

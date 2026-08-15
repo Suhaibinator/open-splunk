@@ -45,7 +45,7 @@ func boundedListPageResponse(
 				serviceName + " service returned an invalid page token",
 			)
 		}
-		page.NextPageToken = stringPointer(
+		page.NextPageToken = new(
 			strings.Clone(result.nextPageToken),
 		)
 	}
@@ -72,7 +72,7 @@ func boundedListPageResponse(
 					" service returned an invalid first-page total",
 			)
 		}
-		page.TotalSize = uint64Pointer(*result.totalSize)
+		page.TotalSize = new(*result.totalSize)
 		page.TotalSizeExact = true
 	} else if result.totalSize != nil || result.totalExact {
 		return nil, errors.New(

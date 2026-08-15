@@ -3,6 +3,7 @@ package searchws
 import (
 	"context"
 
+	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 )
 
@@ -17,7 +18,7 @@ type contextualSearchSnapshotAdapter struct {
 }
 
 func adaptSynchronousSearchSnapshots(reader synchronousSearchSnapshots) SearchSnapshots {
-	if isNil(reader) {
+	if nilcheck.IsNil(reader) {
 		return nil
 	}
 	return contextualSearchSnapshotAdapter{synchronousSearchSnapshots: reader}

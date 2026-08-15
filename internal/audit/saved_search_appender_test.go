@@ -14,7 +14,7 @@ func TestSavedSearchMutationAppenderMapsAllActionsAndActorsInOneTransaction(t *t
 	t.Parallel()
 
 	ctx := context.Background()
-	_, database := openAuditTestDatabase(t)
+	database := openAuditTestDatabase(t)
 	store := newAuditTestStore(t, database, auditTestCursorKey())
 	ordinaryUser := Actor{
 		Kind: ActorKindBrowser,
@@ -122,7 +122,7 @@ func TestSavedSearchMutationAppenderMapsAllActionsAndActorsInOneTransaction(t *t
 
 	page, err := store.List(ctx, "tenant-saved-search-adapter", ListRequest{
 		PageSize:     uint32(len(tests)),
-		TargetKind:   targetKindPointer(TargetKindSavedSearch),
+		TargetKind:   new(TargetKindSavedSearch),
 		IncludeTotal: true,
 	})
 	if err != nil {
@@ -155,7 +155,7 @@ func TestSavedSearchMutationAppenderRejectsUnknownAndInvalidEventsBeforeWriting(
 	t.Parallel()
 
 	ctx := context.Background()
-	_, database := openAuditTestDatabase(t)
+	database := openAuditTestDatabase(t)
 	store := newAuditTestStore(t, database, auditTestCursorKey())
 	tests := []struct {
 		name  string
@@ -253,7 +253,7 @@ func TestSavedSearchMutationAppenderRejectsForeignAndAutocommitTransactions(t *t
 	t.Parallel()
 
 	ctx := context.Background()
-	_, database := openAuditTestDatabase(t)
+	database := openAuditTestDatabase(t)
 	store := newAuditTestStore(t, database, auditTestCursorKey())
 	event := savedobjects.SavedSearchMutationAuditEvent{
 		OccurredAt:         auditTestTime,
@@ -279,7 +279,7 @@ func TestSavedSearchMutationAppenderRejectsForeignAndAutocommitTransactions(t *t
 		t.Fatalf("nil transaction append error = %v, want invalid argument", err)
 	}
 
-	_, foreignDatabase := openAuditTestDatabase(t)
+	foreignDatabase := openAuditTestDatabase(t)
 	foreignTx := foreignDatabase.GORMDB().WithContext(ctx).Begin()
 	if foreignTx.Error != nil {
 		t.Fatalf("begin foreign transaction: %v", foreignTx.Error)
@@ -312,7 +312,7 @@ func TestSavedSearchMutationAppenderRollbackRemainsProvisional(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	_, database := openAuditTestDatabase(t)
+	database := openAuditTestDatabase(t)
 	store := newAuditTestStore(t, database, auditTestCursorKey())
 	event := savedobjects.SavedSearchMutationAuditEvent{
 		OccurredAt:         auditTestTime,

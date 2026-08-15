@@ -58,7 +58,7 @@ func TestV03AdversarialAgainstClickHouse(t *testing.T) {
 		event := testStoredEvent(id, "spl-v03", indexTime)
 		event.Event.Source = source
 		event.Event.Raw = []byte(raw)
-		event.Event.Message = stringPointer(raw)
+		event.Event.Message = new(raw)
 		eventTime := eventTimeAnchor.Add(time.Duration(ordinal) * time.Second)
 		event.Event.EventTime = timestamppb.New(eventTime)
 		event.Event.CollectedAt = timestamppb.New(eventTime.Add(-time.Second))
@@ -265,7 +265,7 @@ func TestV03AdversarialAgainstClickHouse(t *testing.T) {
 	// Exercise whole-result makemv ceilings independently of the per-row
 	// member/byte bounds. These rows are individually ordinary and only become
 	// hostile when the command tries to publish the complete stage result.
-	for index := 0; index < 101; index++ {
+	for index := range 101 {
 		resources = append(resources, newEvent(
 			fmt.Sprintf("v03-makemv-result-members-%03d", index),
 			"v03-makemv-result-members",
@@ -274,7 +274,7 @@ func TestV03AdversarialAgainstClickHouse(t *testing.T) {
 			typedField("bomb_csv", typedString(commaList(1000))),
 		))
 	}
-	for index := 0; index < 100; index++ {
+	for index := range 100 {
 		resources = append(resources, newEvent(
 			fmt.Sprintf("v03-makemv-result-bytes-%03d", index),
 			"v03-makemv-result-bytes",
@@ -283,7 +283,7 @@ func TestV03AdversarialAgainstClickHouse(t *testing.T) {
 			typedField("bomb_csv", typedString(strings.Repeat("界", 30_000))),
 		))
 	}
-	for index := 0; index < 100; index++ {
+	for index := range 100 {
 		resources = append(resources, newEvent(
 			fmt.Sprintf("v03-makemv-retained-%03d", index),
 			"v03-makemv-retained",
@@ -296,7 +296,7 @@ func TestV03AdversarialAgainstClickHouse(t *testing.T) {
 	// ten source events fan out to 1,000 tag rows, then each tag row retains one
 	// zone. The 20,000-row cumulative charge must therefore select the stricter
 	// query-wide marker without being masked by a row- or stage-local failure.
-	for index := 0; index < 10; index++ {
+	for index := range 10 {
 		resources = append(resources, newEvent(
 			fmt.Sprintf("v03-mvexpand-query-rows-%02d", index),
 			"v03-mvexpand-query-rows",
@@ -310,7 +310,7 @@ func TestV03AdversarialAgainstClickHouse(t *testing.T) {
 	// row stage ceiling. Ten 1,000-member inputs make stage one exactly 10,000;
 	// only five retain one zone, so stage two emits 5,000 and the cumulative
 	// charge is exactly the admitted 15,000.
-	for index := 0; index < 10; index++ {
+	for index := range 10 {
 		zones := typedList()
 		if index < 5 {
 			zones = stringsList(fmt.Sprintf("exact-zone-%02d", index), 1)
@@ -327,7 +327,7 @@ func TestV03AdversarialAgainstClickHouse(t *testing.T) {
 	// The overflow fixture keeps both stages independently legal while adding
 	// exactly one second-stage row: 5*1000 + 1 emitted rows after an exact
 	// 10,000-row first stage. This must select the 15,001 cumulative marker.
-	for index := 0; index < 11; index++ {
+	for index := range 11 {
 		tagCount := 1000
 		zones := typedList()
 		switch {

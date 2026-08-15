@@ -609,7 +609,7 @@ func TestConcurrentOpenSerializesMigrationStartup(t *testing.T) {
 	errorsByOpener := make(chan error, openers)
 	var wait sync.WaitGroup
 	wait.Add(openers)
-	for i := 0; i < openers; i++ {
+	for range openers {
 		go func() {
 			defer wait.Done()
 			<-start

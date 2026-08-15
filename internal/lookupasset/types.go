@@ -163,6 +163,8 @@ func (asset *Asset) ColumnCount() uint32 {
 	if asset == nil {
 		return 0
 	}
+	// Parsed assets are capped at MaximumColumns.
+	// #nosec G115 -- the validated cap fits in uint32.
 	return uint32(len(asset.headers))
 }
 

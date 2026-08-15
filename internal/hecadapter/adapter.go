@@ -67,7 +67,7 @@ func Raw(
 	if err := validateContext(context); err != nil {
 		return ingest.AdmissionRequest{}, err
 	}
-	metadata, _, err := resolveMetadata(context.Authentication, query.Metadata, 0)
+	metadata, err := resolveMetadata(context.Authentication, query.Metadata, 0)
 	if err != nil {
 		return ingest.AdmissionRequest{}, err
 	}
@@ -126,7 +126,7 @@ func convertEnvelope(context RequestContext, envelope hec.Envelope) (*opensplunk
 	if err != nil {
 		return nil, err
 	}
-	resolved, _, err := resolveMetadata(context.Authentication, metadata, envelope.Number)
+	resolved, err := resolveMetadata(context.Authentication, metadata, envelope.Number)
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +167,7 @@ func resolveMetadata(
 	authentication auth.Authentication,
 	event hec.MetadataValues,
 	eventNumber int,
-) (hec.MetadataValues, auth.AuthorizedIndexPolicy, error) {
+) (hec.MetadataValues, error) {
 	token := hec.MetadataValues{}
 	profile := authentication.HECProfile
 	if profile.DefaultIndexName != "" {
@@ -184,7 +184,7 @@ func resolveMetadata(
 	}
 	selectedIndex := hec.ResolveMetadata(event, token, hec.MetadataValues{}, hec.MetadataValues{}).Index
 	if !selectedIndex.Present || selectedIndex.Value == "" {
-		return hec.MetadataValues{}, auth.AuthorizedIndexPolicy{}, hec.NewEventError(
+		return hec.MetadataValues{}, hec.NewEventError(
 			hec.ErrorIncorrectIndex,
 			eventNumber,
 			errors.New("HEC index has no resolved value"),
@@ -199,7 +199,7 @@ func resolveMetadata(
 		}
 	}
 	if !found {
-		return hec.MetadataValues{}, auth.AuthorizedIndexPolicy{}, hec.NewEventError(
+		return hec.MetadataValues{}, hec.NewEventError(
 			hec.ErrorIncorrectIndex,
 			eventNumber,
 			errors.New("HEC index is not authorized"),
@@ -212,12 +212,12 @@ func resolveMetadata(
 	resolved := hec.ResolveMetadata(event, token, index, hec.DefaultMetadataFallbacks())
 	if !resolved.Host.Present || !resolved.Source.Present || !resolved.Sourcetype.Present ||
 		!resolved.Index.Present {
-		return hec.MetadataValues{}, auth.AuthorizedIndexPolicy{}, hec.NewProtocolError(
+		return hec.MetadataValues{}, hec.NewProtocolError(
 			hec.ErrorInternal,
 			errors.New("HEC metadata resolution is incomplete"),
 		)
 	}
-	return resolved, policy, nil
+	return resolved, nil
 }
 
 func canonicalEvent(

@@ -1697,7 +1697,7 @@ func TestSQLiteSequencerEnforcesPendingCapacity(t *testing.T) {
 	t.Parallel()
 	sequencer, _ := openTestSequencer(t)
 	ctx := context.Background()
-	for i := 0; i < MaxPendingReservations; i++ {
+	for i := range MaxPendingReservations {
 		attempt := fmt.Sprintf("attempt-%d", i)
 		reservation := reserve(t, sequencer, fmt.Sprintf("batch-%d", i), attempt)
 		if err := sequencer.Release(ctx, reservation.Sequence, attempt); err != nil {
@@ -2109,7 +2109,7 @@ func TestSQLiteSequencerAbandonedAttemptsDoNotAgeCommittedHorizon(t *testing.T) 
 	markAndCommit(t, sequencer, committed.Sequence, "committed-owner", testCommittedAt)
 	const retainCommitted = 3
 	sequences := []uint64{committed.Sequence}
-	for i := 0; i < retainCommitted+2; i++ {
+	for i := range retainCommitted + 2 {
 		attemptID := fmt.Sprintf("abandoned-owner-%d", i)
 		reservation := reserve(t, sequencer, fmt.Sprintf("abandoned-%d", i), attemptID)
 		if err := sequencer.Abandon(ctx, reservation.Sequence, attemptID); err != nil {
@@ -2142,7 +2142,7 @@ func TestSQLiteSequencerPrunesOldAbandonsBehindPendingGap(t *testing.T) {
 		t.Fatal(err)
 	}
 	sequences := []uint64{pending.Sequence}
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		attemptID := fmt.Sprintf("safe-abandon-owner-%d", i)
 		reservation := reserve(t, sequencer, fmt.Sprintf("safe-abandon-%d", i), attemptID)
 		if err := sequencer.Abandon(ctx, reservation.Sequence, attemptID); err != nil {

@@ -181,13 +181,13 @@ func TestWriterAmbiguousCommitReturnsConcurrentDurableReplay(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			harness := newWriterFaultHarness(t)
-			_, target := createWriterAmbiguousCommitObject(
+			target := createWriterAmbiguousCommitObject(
 				t,
 				harness,
 				"ambiguous-"+test.name+"-target",
 				"ambiguous-"+test.name+"-target-create-01",
 			)
-			_, companion := createWriterAmbiguousCommitObject(
+			companion := createWriterAmbiguousCommitObject(
 				t,
 				harness,
 				"ambiguous-"+test.name+"-companion",
@@ -302,14 +302,14 @@ func createWriterAmbiguousCommitObject(
 	harness *writerFaultHarness,
 	name string,
 	requestID string,
-) (*opensplunkv1.CreateKnowledgeObjectRequest, *opensplunkv1.KnowledgeObject) {
+) *opensplunkv1.KnowledgeObject {
 	t.Helper()
 	request := writerFaultCreateRequest(name, requestID)
 	response, err := harness.writer.Create(harness.actorContext, harness.scope, request)
 	if err != nil {
 		t.Fatalf("create %s baseline: %v", name, err)
 	}
-	return request, response.GetKnowledgeObject()
+	return response.GetKnowledgeObject()
 }
 
 func writerAmbiguousResponseCatalog(t *testing.T, response proto.Message) (uint64, []byte) {

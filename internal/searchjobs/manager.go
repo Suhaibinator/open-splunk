@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -20,6 +19,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
+	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
@@ -431,10 +431,10 @@ type jobEntry struct {
 
 // New constructs and starts a search job manager.
 func New(config Config) (*Manager, error) {
-	if isNilRequiredDependency(config.Executor) {
+	if nilcheck.IsNil(config.Executor) {
 		return nil, errors.New("create search job manager: executor is required")
 	}
-	if isNilRequiredDependency(config.Snapshotter) {
+	if nilcheck.IsNil(config.Snapshotter) {
 		return nil, errors.New("create search job manager: visibility snapshotter is required")
 	}
 	knowledgeResolver := normalizedKnowledgeResolver(config.KnowledgeResolver)
@@ -532,10 +532,7 @@ func New(config Config) (*Manager, error) {
 	}
 	maxPageBytes := config.MaxPageBytes
 	if maxPageBytes == 0 {
-		maxPageBytes = defaultMaxPageBytes
-		if maxPageBytes > maxBytes {
-			maxPageBytes = maxBytes
-		}
+		maxPageBytes = min(defaultMaxPageBytes, maxBytes)
 	} else if maxPageBytes > maxBytes {
 		return nil, errors.New("create search job manager: page byte limit exceeds per-job byte limit")
 	}
@@ -674,19 +671,6 @@ func New(config Config) (*Manager, error) {
 	return manager, nil
 }
 
-func isNilRequiredDependency(dependency any) bool {
-	if dependency == nil {
-		return true
-	}
-	value := reflect.ValueOf(dependency)
-	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return value.IsNil()
-	default:
-		return false
-	}
-}
-
 // KnowledgeAdmissionEnabled reports whether this manager is configured to
 // seal nonempty-app searches before durable admission. Callers use it to apply
 // the corresponding live app-authorization boundary without guessing from a
@@ -701,7 +685,7 @@ func (manager *Manager) KnowledgeAdmissionEnabled() bool {
 // the Manager starts accepting jobs.
 func (manager *Manager) KnowledgeExecutionEnabled() bool {
 	return manager != nil && manager.knowledgeResolver != nil &&
-		!isNilRequiredDependency(manager.executor)
+		!nilcheck.IsNil(manager.executor)
 }
 
 // Create takes an immutable absolute-time, authorization, and committed-storage
@@ -1720,9 +1704,9 @@ func (manager *Manager) worker() {
 	}
 }
 
-func (manager *Manager) removeQueuedLocked(target *jobEntry) bool {
+func (manager *Manager) removeQueuedLocked(target *jobEntry) {
 	if !target.queued {
-		return false
+		return
 	}
 	if target.queuePrev == nil {
 		manager.queueHead = target.queueNext
@@ -1738,7 +1722,6 @@ func (manager *Manager) removeQueuedLocked(target *jobEntry) bool {
 	target.queueNext = nil
 	target.queued = false
 	manager.queueCount--
-	return true
 }
 
 func (manager *Manager) enqueueLocked(entry *jobEntry) {

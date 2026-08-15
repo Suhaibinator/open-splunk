@@ -2,6 +2,7 @@ package spl
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 )
 
@@ -102,10 +103,8 @@ func ScalarExpressionMayReturnBooleanFunction(expression ScalarExpr) bool {
 			return true
 		}
 		if expression.Function == ScalarFunctionCoalesce {
-			for _, argument := range expression.Arguments {
-				if ScalarExpressionMayReturnBooleanFunction(argument) {
-					return true
-				}
+			if slices.ContainsFunc(expression.Arguments, ScalarExpressionMayReturnBooleanFunction) {
+				return true
 			}
 		}
 		return false

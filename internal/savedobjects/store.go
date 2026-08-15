@@ -127,7 +127,7 @@ func (store *Store) create(
 		return nil, err
 	}
 
-	for attempt := 0; attempt < maximumIDAttempts; attempt++ {
+	for range maximumIDAttempts {
 		id, err := store.idGenerator()
 		if err != nil {
 			return nil, fmt.Errorf("generate saved-search ID: %w", err)
@@ -464,7 +464,7 @@ func (store *Store) duplicate(
 	if err != nil {
 		return nil, err
 	}
-	for attempt := 0; attempt < maximumIDAttempts; attempt++ {
+	for range maximumIDAttempts {
 		id, idErr := store.idGenerator()
 		if idErr != nil {
 			return nil, fmt.Errorf("generate duplicate saved-search ID: %w", idErr)

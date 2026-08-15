@@ -3120,7 +3120,7 @@ function hasPinnedControl(value: string): boolean {
   return false;
 }
 
-function utf8ByteLength(value: string, stopAfter = Number.MAX_SAFE_INTEGER): number {
+export function utf8ByteLength(value: string, stopAfter = Number.MAX_SAFE_INTEGER): number {
   let bytes = 0;
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);

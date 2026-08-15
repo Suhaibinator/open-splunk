@@ -270,7 +270,7 @@ func TestSemanticBytesModeManagerAgainstClickHouse(t *testing.T) {
 		encoding opensplunkv1.RawEncoding,
 	) {
 		serviceCopy := service
-		for repeat := 0; repeat < 3; repeat++ {
+		for repeat := range 3 {
 			events = append(events, semanticBytesLineageEvent{
 				id:  fmt.Sprintf("mode-%s-winner-%d", service, repeat),
 				at:  earliest.Add(time.Duration(len(events)+1) * time.Minute),
@@ -561,7 +561,7 @@ func TestSparklineFeedsStatsByThroughManagerAgainstClickHouse(t *testing.T) {
 		{"a", "b", "c", "omega"},
 	}
 	events := make([]semanticBytesLineageEvent, 0, 10)
-	for hour := 0; hour < 4; hour++ {
+	for hour := range 4 {
 		for ordinal := 0; ordinal <= hour; ordinal++ {
 			events = append(events, semanticBytesLineageEvent{
 				id:       fmt.Sprintf("sparkline-%d-%d", hour, ordinal),

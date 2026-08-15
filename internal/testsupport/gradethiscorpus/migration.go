@@ -50,7 +50,7 @@ func (search MigrationSearch) Render(traceID string) (string, error) {
 	if !strings.Contains(search.Template, migrationTracePlaceholder) {
 		return strings.Clone(search.Template), nil
 	}
-	if !validHexID(traceID, 32) {
+	if !validHexID(traceID) {
 		return "", errors.New("GradeThis migration trace ID must contain exactly 32 lowercase hexadecimal characters")
 	}
 	return strings.ReplaceAll(search.Template, migrationTracePlaceholder, traceID), nil
@@ -307,24 +307,24 @@ func encodeMigrationEvent(event MigrationEvent) []byte {
 		Message:   event.Message,
 	}
 	if event.Logger != "" {
-		wire.Logger = migrationPointer(event.Logger)
+		wire.Logger = new(event.Logger)
 	}
 	if event.Layer != "" {
-		wire.Layer = migrationPointer(event.Layer)
+		wire.Layer = new(event.Layer)
 	}
 	if event.TraceID != "" {
-		wire.TraceID = migrationPointer(event.TraceID)
+		wire.TraceID = new(event.TraceID)
 	}
 	if event.Request {
-		wire.Method = migrationPointer(event.Method)
-		wire.Path = migrationPointer(event.Path)
-		wire.Status = migrationPointer(event.Status)
-		wire.Duration = migrationPointer(event.Duration)
-		wire.Bytes = migrationPointer(event.Bytes)
-		wire.IP = migrationPointer(event.IP)
+		wire.Method = new(event.Method)
+		wire.Path = new(event.Path)
+		wire.Status = new(event.Status)
+		wire.Duration = new(event.Duration)
+		wire.Bytes = new(event.Bytes)
+		wire.IP = new(event.IP)
 	}
 	if event.Healthy {
-		wire.Healthy = migrationPointer(true)
+		wire.Healthy = new(true)
 	}
 	if event.ExplicitNull {
 		nullValue := json.RawMessage("null")
@@ -340,8 +340,6 @@ func encodeMigrationEvent(event MigrationEvent) []byte {
 	return encoded
 }
 
-func migrationPointer[T any](value T) *T { return &value }
-
 // ValidateMigration checks identity, source realism, deterministic encoding,
 // and the ordinary fixture scanner before the profile can reach a collector.
 func ValidateMigration(profile MigrationProfile) error {
@@ -349,7 +347,7 @@ func ValidateMigration(profile MigrationProfile) error {
 		profile.BaseTime.Location() != time.UTC {
 		return errors.New("GradeThis migration profile identity does not match current-source-v1")
 	}
-	if !validHexID(profile.TraceID, 32) {
+	if !validHexID(profile.TraceID) {
 		return errors.New("GradeThis migration profile has an invalid trace ID")
 	}
 	if len(MigrationSearches()) != 6 {

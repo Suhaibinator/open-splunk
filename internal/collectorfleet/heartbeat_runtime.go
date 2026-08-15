@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -646,12 +647,7 @@ func shouldReportHeartbeatRuntimeError(err error) bool {
 		return false
 	}
 	if joined, ok := err.(interface{ Unwrap() []error }); ok {
-		for _, child := range joined.Unwrap() {
-			if shouldReportHeartbeatRuntimeError(child) {
-				return true
-			}
-		}
-		return false
+		return slices.ContainsFunc(joined.Unwrap(), shouldReportHeartbeatRuntimeError)
 	}
 	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
 		if child := wrapped.Unwrap(); child != nil {

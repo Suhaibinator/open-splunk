@@ -402,9 +402,10 @@ func testStatsListAgainstClickHouse(
 			t.Fatalf("%s error = %v, want marker %q", name, err, marker)
 		}
 	}
-	orderedTuples := func(valueCount uint64, valueSQL string) string {
+	orderedTuples := func(valueSQL string) string {
 		return "arrayMap(element -> tuple(toUInt64(element + 1), toUInt64(1), " +
-			valueSQL + "), range(toUInt64(" + strconv.FormatUint(valueCount, 10) + ")))"
+			valueSQL + "), range(toUInt64(" +
+			strconv.FormatUint(MaximumStatsListValuesPerGroup, 10) + ")))"
 	}
 
 	// Repeated public aliases count independently even though they share one
@@ -415,7 +416,6 @@ func testStatsListAgainstClickHouse(
 	duplicateAliases := boundedListResults(
 		`SELECT `+
 			orderedTuples(
-				MaximumStatsListValuesPerGroup,
 				`repeat('x', `+strconv.FormatUint(duplicateValueBytes, 10)+`)`,
 			)+` AS "__os_ordered_strings_0", `+
 			`toUInt8(0) AS "__os_ordered_strings_bytes_overflow_0"`,
@@ -435,7 +435,7 @@ func testStatsListAgainstClickHouse(
 	)
 	combinedValues := boundedListResults(
 		`SELECT `+
-			orderedTuples(MaximumStatsListValuesPerGroup, `toString(element)`)+
+			orderedTuples(`toString(element)`)+
 			` AS "__os_ordered_strings_0", `+
 			`toUInt8(0) AS "__os_ordered_strings_bytes_overflow_0", `+
 			`arrayMap(element -> toString(element), range(toUInt64(`+
@@ -457,7 +457,7 @@ func testStatsListAgainstClickHouse(
 	)
 	wholeResultElements := boundedListResults(
 		`SELECT toString(number) AS "group", `+
-			orderedTuples(MaximumStatsListValuesPerGroup, `toString(element)`)+
+			orderedTuples(`toString(element)`)+
 			` AS "__os_ordered_strings_0", `+
 			`toUInt8(0) AS "__os_ordered_strings_bytes_overflow_0" `+
 			`FROM numbers(`+strconv.FormatUint(elementRows, 10)+`)`,
@@ -477,7 +477,6 @@ func testStatsListAgainstClickHouse(
 	wholeResultBytes := boundedListResults(
 		`SELECT toString(number) AS "group", `+
 			orderedTuples(
-				MaximumStatsListValuesPerGroup,
 				`repeat('x', `+strconv.FormatUint(wholeResultValueBytes, 10)+`)`,
 			)+` AS "__os_ordered_strings_0", `+
 			`toUInt8(0) AS "__os_ordered_strings_bytes_overflow_0" `+

@@ -1054,7 +1054,7 @@ func openSecurityStores(
 	ctx context.Context,
 	db *control.DB,
 	masterKeyPath string,
-) (*savedobjects.AuditedStore, *auth.Store, error) {
+) (*auth.Store, error) {
 	stores, err := openSecurityStoreSet(
 		ctx,
 		db,
@@ -1064,9 +1064,9 @@ func openSecurityStores(
 		0,
 	)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return stores.savedSearches, stores.ingestionTokens, nil
+	return stores.ingestionTokens, nil
 }
 
 type securityStoreSet struct {

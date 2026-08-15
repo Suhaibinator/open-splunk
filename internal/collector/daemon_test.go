@@ -1454,7 +1454,7 @@ func TestBatcherFlushesBeforeCrossingByteCap(t *testing.T) {
 	}
 	identity := input.FileIdentity{Device: 1, Inode: 2, Generation: 1, Fingerprint: "fp"}
 	processed := make(chan processedEvent, 2)
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		processed <- processedEvent{
 			event:   &opensplunkv1.LogEvent{EventId: fmt.Sprintf("e%d", i)},
 			inputID: "input", identity: identity, endOffset: uint64(i + 1), size: 6,

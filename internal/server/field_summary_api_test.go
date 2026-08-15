@@ -46,7 +46,7 @@ func TestSearchFieldSummaryRoundTripsExactTypedValuesAndScope(t *testing.T) {
 		}, nil
 	}
 	response := postProto(t, searchFieldsTestHandler(t, service), searchFieldSummaryPath, &opensplunkv1.GetSearchFieldSummaryRequest{
-		SearchJobId: "  job-1\n", FieldName: `labels.kubernetes\.io/app `, MaxValues: uint32Pointer(3),
+		SearchJobId: "  job-1\n", FieldName: `labels.kubernetes\.io/app `, MaxValues: new(uint32(3)),
 	})
 	if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "application/x-protobuf" {
 		t.Fatalf("status/headers/body = %d/%v/%s", response.Code, response.Header(), response.Body.String())
@@ -83,8 +83,8 @@ func TestSearchFieldSummaryInputValidationAndExactRoute(t *testing.T) {
 	}{
 		{name: "missing job", request: &opensplunkv1.GetSearchFieldSummaryRequest{FieldName: "message"}},
 		{name: "missing field", request: &opensplunkv1.GetSearchFieldSummaryRequest{SearchJobId: "job"}},
-		{name: "zero limit", request: &opensplunkv1.GetSearchFieldSummaryRequest{SearchJobId: "job", FieldName: "message", MaxValues: uint32Pointer(0)}},
-		{name: "large limit", request: &opensplunkv1.GetSearchFieldSummaryRequest{SearchJobId: "job", FieldName: "message", MaxValues: uint32Pointer(21)}},
+		{name: "zero limit", request: &opensplunkv1.GetSearchFieldSummaryRequest{SearchJobId: "job", FieldName: "message", MaxValues: new(uint32(0))}},
+		{name: "large limit", request: &opensplunkv1.GetSearchFieldSummaryRequest{SearchJobId: "job", FieldName: "message", MaxValues: new(uint32(21))}},
 		{name: "service validation", request: &opensplunkv1.GetSearchFieldSummaryRequest{SearchJobId: "job", FieldName: " "}},
 	}
 	for _, test := range tests {
@@ -320,5 +320,3 @@ func validSearchFieldSummaryForTransport(t *testing.T) searchanalysis.FieldSumma
 		},
 	}
 }
-
-func uint32Pointer(value uint32) *uint32 { return &value }

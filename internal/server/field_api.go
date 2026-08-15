@@ -27,12 +27,12 @@ func (handler *apiHandler) searchFieldRoutes(noAuth router.AuthLevel, smallReque
 		newForwardCompatibleProtoRoute[*opensplunkv1.ListSearchFieldsRequest, *serializedSearchFieldsResponse](router.RouteConfig[*opensplunkv1.ListSearchFieldsRequest, *serializedSearchFieldsResponse]{
 			Path: searchFieldsListRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedSearchFieldsCodec(), Handler: handler.listSearchFields,
-			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.ListSearchFieldsRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
+			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
 		newForwardCompatibleProtoRoute[*opensplunkv1.GetSearchFieldSummaryRequest, *serializedSearchFieldSummaryResponse](router.RouteConfig[*opensplunkv1.GetSearchFieldSummaryRequest, *serializedSearchFieldSummaryResponse]{
 			Path: searchFieldSummaryRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedSearchFieldSummaryCodec(), Handler: handler.getSearchFieldSummary,
-			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.GetSearchFieldSummaryRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
+			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
 	}
 }
@@ -225,10 +225,10 @@ func fieldPageToProto(
 
 	page := &opensplunkv1.PageResponse{}
 	if result.NextPageToken != "" {
-		page.NextPageToken = stringPointer(result.NextPageToken)
+		page.NextPageToken = new(result.NextPageToken)
 	}
 	if includeTotal {
-		page.TotalSize = uint64Pointer(result.TotalFields)
+		page.TotalSize = new(result.TotalFields)
 		page.TotalSizeExact = true
 	}
 	return fields, page, nil
@@ -289,7 +289,7 @@ func searchFieldProfileToProto(profile searchanalysis.FieldProfile) (*opensplunk
 		Interesting:                profile.Interesting,
 	}
 	if profile.DistinctCount != nil {
-		result.DistinctCount = uint64Pointer(*profile.DistinctCount)
+		result.DistinctCount = new(*profile.DistinctCount)
 	}
 	return result, nil
 }

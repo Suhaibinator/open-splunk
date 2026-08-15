@@ -26,7 +26,7 @@ func TestCSVExactQuotingAndMandatoryFormulaDefense(t *testing.T) {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	serializer, err := newCSVSerializer(&output, selection, CSVOptions{})
+	serializer, err := newCSVSerializer(&output, selection)
 	if err != nil {
 		t.Fatal(err)
 	}

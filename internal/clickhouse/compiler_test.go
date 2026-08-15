@@ -4216,7 +4216,7 @@ func TestCompileBoundsGeneratedRelationalDepth(t *testing.T) {
 
 	evalPipeline := func(finalAssignments int) string {
 		var source strings.Builder
-		for command := 0; command < 62; command++ {
+		for command := range 62 {
 			if command > 0 {
 				source.WriteByte(' ')
 			}
@@ -4225,7 +4225,7 @@ func TestCompileBoundsGeneratedRelationalDepth(t *testing.T) {
 			source.WriteString("=1")
 		}
 		source.WriteString(" | eval ")
-		for assignment := 0; assignment < finalAssignments; assignment++ {
+		for assignment := range finalAssignments {
 			if assignment > 0 {
 				source.WriteByte(',')
 			}
@@ -4294,7 +4294,7 @@ func TestCompileBoundsGeneratedRelationalDepth(t *testing.T) {
 
 	t.Run("full parser command budget remains compatible", func(t *testing.T) {
 		var source strings.Builder
-		for command := 0; command < 64; command++ {
+		for command := range 64 {
 			if command > 0 {
 				source.WriteByte(' ')
 			}
@@ -5143,8 +5143,6 @@ func testChartScope() plan.Scope {
 		SearchStart:       time.Date(2026, 7, 22, 0, 0, 0, 500_000_000, time.UTC),
 		SearchTimezone:    "UTC",
 		IndexTimeCutoff:   time.Date(2026, 7, 22, 0, 0, 1, 0, time.UTC),
-		VisibilityCutoff:  uint64Pointer(73),
+		VisibilityCutoff:  new(uint64(73)),
 	}
 }
-
-func uint64Pointer(value uint64) *uint64 { return &value }

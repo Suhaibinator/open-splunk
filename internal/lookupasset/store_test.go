@@ -621,7 +621,7 @@ func TestStoreStagingCapacityIsAtomic(t *testing.T) {
 	database := openLookupTestDatabase(t)
 	store := mustLookupStore(t, database, StoreOptions{})
 	asset := mustParseAsset(t, "key\na\n")
-	for index := 0; index < MaximumStagedAssetsPerTenant; index++ {
+	for index := range MaximumStagedAssetsPerTenant {
 		if _, err := store.StageCSV(t.Context(), StageRequest{TenantID: testLookupTenant, OwnerID: testLookupOwner, Asset: asset}); err != nil {
 			t.Fatalf("stage %d: %v", index, err)
 		}
@@ -690,6 +690,7 @@ func TestNewStoreAndRequestsRejectInvalidInput(t *testing.T) {
 		t.Fatalf("oversized TTL = %v", err)
 	}
 	store := mustLookupStore(t, database, StoreOptions{})
+	//nolint:staticcheck // The nil context is the invalid input under test.
 	if _, err := store.StageCSV(nil, StageRequest{}); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("nil context = %v", err)
 	}

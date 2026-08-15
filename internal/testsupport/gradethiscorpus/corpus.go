@@ -61,7 +61,7 @@ func (search Search) Render(traceID string) (string, error) {
 	if !strings.Contains(search.Template, tracePlaceholder) {
 		return strings.Clone(search.Template), nil
 	}
-	if !validHexID(traceID, 32) {
+	if !validHexID(traceID) {
 		return "", errors.New("GradeThis corpus trace ID must contain exactly 32 lowercase hexadecimal characters")
 	}
 	return strings.ReplaceAll(search.Template, tracePlaceholder, traceID), nil
@@ -237,7 +237,7 @@ func Validate(profile Profile) error {
 	if len(Searches()) != 10 {
 		return errors.New("GradeThis corpus must contain exactly ten searches")
 	}
-	if !validHexID(profile.TraceID, 32) {
+	if !validHexID(profile.TraceID) {
 		return errors.New("GradeThis corpus has an invalid trace ID")
 	}
 	if len(profile.Events) != 20 {
@@ -350,8 +350,8 @@ func cloneEvents(source []Event) []Event {
 	return result
 }
 
-func validHexID(value string, length int) bool {
-	if len(value) != length {
+func validHexID(value string) bool {
+	if len(value) != 32 {
 		return false
 	}
 	for _, character := range value {

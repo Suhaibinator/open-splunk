@@ -91,7 +91,6 @@ func (db *DB) EnsureIndexDeletionMutationAttempt(
 	for range 3 {
 		correlationID, generateErr := randomID(
 			indexDeletionMutationCorrelationTag,
-			16,
 		)
 		if generateErr != nil {
 			return IndexDeletionMutationAttempt{}, fmt.Errorf(

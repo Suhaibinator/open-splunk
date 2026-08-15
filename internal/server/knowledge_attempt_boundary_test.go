@@ -216,11 +216,10 @@ func newKnowledgeBoundaryHandler(
 
 func knowledgeBoundaryRequest(
 	ctx context.Context,
-	method string,
 	path string,
 	body io.Reader,
 ) *http.Request {
-	request := httptest.NewRequestWithContext(ctx, method, path, body)
+	request := httptest.NewRequestWithContext(ctx, http.MethodPost, path, body)
 	request.Header.Set("Authorization", "Bearer "+knowledgeBoundaryToken)
 	request.Header.Set("Content-Type", "application/x-protobuf")
 	return request
@@ -274,7 +273,6 @@ func TestKnowledgeAttemptBoundaryRecognizesOnlyExactPostRoutes(t *testing.T) {
 				},
 			)).ServeHTTP(response, knowledgeBoundaryRequest(
 				context.Background(),
-				http.MethodPost,
 				test.path,
 				body,
 			))
@@ -378,7 +376,6 @@ func TestKnowledgeAttemptBoundaryAuthenticatesBeforeReadingBody(t *testing.T) {
 		},
 	)).ServeHTTP(response, knowledgeBoundaryRequest(
 		context.Background(),
-		http.MethodPost,
 		"/api/v1/knowledge/objects/create",
 		body,
 	))
@@ -415,7 +412,6 @@ func TestKnowledgeAttemptBoundaryUserAppendPrecedesFixedForbiddenAndLeavesBodyUn
 		},
 	)).ServeHTTP(response, knowledgeBoundaryRequest(
 		context.Background(),
-		http.MethodPost,
 		"/api/v1/knowledge/objects/get",
 		body,
 	))
@@ -476,7 +472,6 @@ func TestKnowledgeAttemptBoundaryBoundsDetachedJournalTailsAndReturnsPermit(
 			response,
 			knowledgeBoundaryRequest(
 				context.Background(),
-				http.MethodPost,
 				knowledgeObjectsGetPath,
 				newKnowledgeBoundaryObservedBody("first unread body", nil),
 			),
@@ -502,7 +497,6 @@ func TestKnowledgeAttemptBoundaryBoundsDetachedJournalTailsAndReturnsPermit(
 				response,
 				knowledgeBoundaryRequest(
 					context.Background(),
-					http.MethodPost,
 					path,
 					body,
 				),
@@ -619,7 +613,6 @@ func TestKnowledgeAttemptBoundaryUsesDetachedCancellationTailWithActor(t *testin
 		},
 	)).ServeHTTP(response, knowledgeBoundaryRequest(
 		requestContext,
-		http.MethodPost,
 		"/api/v1/knowledge/objects/update",
 		nil,
 	))
@@ -682,7 +675,6 @@ func TestKnowledgeAttemptBoundaryMapsUnhandledFailures(t *testing.T) {
 				},
 			)).ServeHTTP(response, knowledgeBoundaryRequest(
 				context.Background(),
-				http.MethodPost,
 				"/api/v1/knowledge/objects/set-state",
 				nil,
 			))
@@ -757,7 +749,6 @@ func TestKnowledgeAttemptBoundaryRefinesAndDetachesDefinitiveRejection(t *testin
 		},
 	)).ServeHTTP(response, knowledgeBoundaryRequest(
 		context.Background(),
-		http.MethodPost,
 		"/api/v1/knowledge/objects/update",
 		nil,
 	))
@@ -802,7 +793,6 @@ func TestKnowledgeAttemptBoundarySupportsMarkedHandlerRejection(t *testing.T) {
 		},
 	)).ServeHTTP(response, knowledgeBoundaryRequest(
 		context.Background(),
-		http.MethodPost,
 		"/api/v1/knowledge/objects/get",
 		nil,
 	))
@@ -867,7 +857,6 @@ func TestKnowledgeAttemptBoundaryAppendFailureIsFixedAndNeverRetried(t *testing.
 				response,
 				knowledgeBoundaryRequest(
 					context.Background(),
-					http.MethodPost,
 					"/api/v1/knowledge/objects/create",
 					nil,
 				),
@@ -918,7 +907,6 @@ func TestKnowledgeAttemptBoundaryRejectsInvalidAuditProjectionBeforeAppender(t *
 		},
 	)).ServeHTTP(response, knowledgeBoundaryRequest(
 		context.Background(),
-		http.MethodPost,
 		"/api/v1/knowledge/objects/update",
 		nil,
 	))
@@ -961,7 +949,6 @@ func TestKnowledgeAttemptBoundaryStreamsSuccessfulResponses(t *testing.T) {
 		},
 	)).ServeHTTP(response, knowledgeBoundaryRequest(
 		context.Background(),
-		http.MethodPost,
 		"/api/v1/knowledge/objects/list",
 		nil,
 	))
@@ -1011,7 +998,6 @@ func TestKnowledgeAttemptBoundarySuppressesPostMutationFailures(t *testing.T) {
 				},
 			)).ServeHTTP(response, knowledgeBoundaryRequest(
 				context.Background(),
-				http.MethodPost,
 				"/api/v1/knowledge/objects/delete",
 				nil,
 			))
@@ -1057,7 +1043,6 @@ func TestKnowledgeAttemptBoundaryBoundsStagedErrorsAndFailsGeneric(t *testing.T)
 		},
 	)).ServeHTTP(response, knowledgeBoundaryRequest(
 		context.Background(),
-		http.MethodPost,
 		"/api/v1/knowledge/objects/create",
 		nil,
 	))

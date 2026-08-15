@@ -185,10 +185,10 @@ func adversarialDetach(subscription *subscription) {
 	delete(subscription.connection.subscriptions, subscription.id)
 }
 
-func adversarialStore(target *targetState, category eventCategory, sequence uint64, data []byte) bool {
+func adversarialStore(target *targetState, sequence uint64, data []byte) bool {
 	target.mu.Lock()
 	defer target.mu.Unlock()
-	return target.storeLocked(category, sequence, data)
+	return target.storeLocked(eventCategorySearchState, sequence, data)
 }
 
 func adversarialReplayBytes(service *Service) uint64 {
@@ -429,10 +429,10 @@ func TestAdversarialGlobalReplayCapReclaimsLRUInactiveTarget(t *testing.T) {
 	oldest := adversarialNewTarget(service, "oldest")
 	untouched := adversarialNewTarget(service, "untouched")
 	writer := adversarialNewTarget(service, "writer")
-	if !adversarialStore(oldest, eventCategorySearchState, base+1, make([]byte, minimumFrameBytes)) {
+	if !adversarialStore(oldest, base+1, make([]byte, minimumFrameBytes)) {
 		t.Fatal("could not fill the global replay budget")
 	}
-	if !adversarialStore(writer, eventCategorySearchState, base+1, []byte{1}) {
+	if !adversarialStore(writer, base+1, []byte{1}) {
 		t.Fatal("writer could not reclaim the LRU inactive target")
 	}
 
@@ -485,11 +485,11 @@ func TestAdversarialResolverAndSubscriberPinsPreventEviction(t *testing.T) {
 			base := adversarialSequenceBase
 			pinned := adversarialNewTarget(service, "pinned")
 			writer := adversarialNewTarget(service, "writer")
-			if !adversarialStore(pinned, eventCategorySearchState, base+1, make([]byte, minimumFrameBytes)) {
+			if !adversarialStore(pinned, base+1, make([]byte, minimumFrameBytes)) {
 				t.Fatal("could not fill the global replay budget")
 			}
 			unpin := test.pin(t, service, pinned)
-			if adversarialStore(writer, eventCategorySearchState, base+1, []byte{1}) {
+			if adversarialStore(writer, base+1, []byte{1}) {
 				t.Fatal("global replay admission evicted a pinned target")
 			}
 			service.mu.Lock()
@@ -499,7 +499,7 @@ func TestAdversarialResolverAndSubscriberPinsPreventEviction(t *testing.T) {
 				t.Fatal("pinned target was removed or retired")
 			}
 			unpin()
-			if !adversarialStore(writer, eventCategorySearchState, base+2, []byte{2}) {
+			if !adversarialStore(writer, base+2, []byte{2}) {
 				t.Fatal("global replay admission did not reclaim the unpinned target")
 			}
 			if !pinned.isRetired() {
@@ -1028,8 +1028,8 @@ func TestAdversarialRetireAndCloseReleaseExactReplayAccountingAndTailReferences(
 		base := adversarialSequenceBase
 		first := adversarialNewTarget(service, "close-first")
 		second := adversarialNewTarget(service, "close-second")
-		if !adversarialStore(first, eventCategorySearchState, base+1, make([]byte, 11)) ||
-			!adversarialStore(second, eventCategorySearchState, base+1, make([]byte, 17)) {
+		if !adversarialStore(first, base+1, make([]byte, 11)) ||
+			!adversarialStore(second, base+1, make([]byte, 17)) {
 			t.Fatal("could not construct retained journals")
 		}
 		if got := adversarialReplayBytes(service); got != 28 {
@@ -1230,7 +1230,7 @@ func TestAdversarialApplyRetireAndResolverPinsRace(t *testing.T) {
 		defer wait.Done()
 		defer actors.Done()
 		<-start
-		for index := 0; index < actorIterations; index++ {
+		for range actorIterations {
 			resolved, err := service.resolveTarget(context.Background(), target.key)
 			if err == nil {
 				service.releaseResolvedTarget(resolved)

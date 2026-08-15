@@ -1214,9 +1214,7 @@ func runBackendHECLoadTraffic(
 
 	var workers sync.WaitGroup
 	for range backendHECLoadWorkers {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
+		workers.Go(func() {
 			for job := range jobs {
 				response, err := backendHECLoadPost(
 					trafficContext,
@@ -1237,16 +1235,14 @@ func runBackendHECLoadTraffic(
 					return
 				}
 			}
-		}()
+		})
 	}
 
 	schedules := plan.schedules()
 	var schedulers sync.WaitGroup
 	for _, schedule := range schedules {
 		schedule := schedule
-		schedulers.Add(1)
-		go func() {
-			defer schedulers.Done()
+		schedulers.Go(func() {
 			interval := schedule.interval
 			channel := backendHECLoadFullChannel
 			body := fullBody
@@ -1300,7 +1296,7 @@ func runBackendHECLoadTraffic(
 					return
 				}
 			}
-		}()
+		})
 	}
 	schedulers.Wait()
 	close(jobs)

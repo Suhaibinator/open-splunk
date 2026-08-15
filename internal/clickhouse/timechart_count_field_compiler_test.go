@@ -56,7 +56,7 @@ func TestCompileFixedTimechartCountFieldUsesOneBoundedOccurrenceContribution(t *
 			t.Fatalf("fixed timechart count(field) SQL missing %q:\n%s", required, compiled.SQL)
 		}
 	}
-	assertTimechartCountFieldShape(t, compiled, timechartCountValueAlias)
+	assertTimechartCountFieldShape(t, compiled)
 
 	wantArgumentPrefix := []any{"counted_value", "counted_value."}
 	if len(compiled.Args) < len(wantArgumentPrefix) ||
@@ -83,7 +83,7 @@ func TestCompileFixedTimechartCountFieldTreatsProjectedInputAsZero(t *testing.T)
 	if !strings.Contains(compiled.SQL, `AS "`+TimechartInputPresentColumn+`"`) {
 		t.Fatalf("projected count(field) lost independent row-presence transport:\n%s", compiled.SQL)
 	}
-	assertTimechartCountFieldShape(t, compiled, timechartCountValueAlias)
+	assertTimechartCountFieldShape(t, compiled)
 }
 
 func TestCompileSplitTimechartCountFieldRanksOccurrencesButKeepsRowDomain(t *testing.T) {
@@ -163,7 +163,7 @@ func TestCompileSplitTimechartCountFieldRanksOccurrencesButKeepsRowDomain(t *tes
 		strings.Contains(compiled.SQL, `WHERE `+timechartCountValueAlias+` != 0`) {
 		t.Fatalf("zero-occurrence rows were removed from the split domain:\n%s", compiled.SQL)
 	}
-	assertTimechartCountFieldShape(t, compiled, timechartCountValueAlias)
+	assertTimechartCountFieldShape(t, compiled)
 }
 
 func TestCompileSplitTimechartCountFieldKeepsProjectedInputInRowDomain(t *testing.T) {
@@ -190,7 +190,7 @@ func TestCompileSplitTimechartCountFieldKeepsProjectedInputInRowDomain(t *testin
 			t.Fatalf("projected split count(field) lost row domain %q:\n%s", rowDomainFragment, compiled.SQL)
 		}
 	}
-	assertTimechartCountFieldShape(t, compiled, timechartCountValueAlias)
+	assertTimechartCountFieldShape(t, compiled)
 }
 
 func TestCompileFixedTimechartCountFieldAfterStreamStatsPreservesTransportEnvelope(t *testing.T) {
@@ -359,10 +359,9 @@ func TestCompileTimechartCountFieldRevalidatesForgedPlan(t *testing.T) {
 func assertTimechartCountFieldShape(
 	t *testing.T,
 	compiled CompiledQuery,
-	measureAlias string,
 ) {
 	t.Helper()
-	assertCountFieldPhysicalShape(t, compiled, measureAlias, "timechart")
+	assertCountFieldPhysicalShape(t, compiled, timechartCountValueAlias, "timechart")
 
 	if compiled.Timechart != nil && compiled.Timechart.Mode == TimechartModeRuntimeWide {
 		firstOrdinalNames := `if("__os_timechart_grid"."` + TimechartOrdinalColumn +

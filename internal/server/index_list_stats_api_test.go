@@ -93,7 +93,6 @@ func TestIndexListStatisticsEnrichOnlyTheSelectedPageInOneTrustedBatch(
 			clockCalls.Add(1)
 			return clockValue
 		},
-		0,
 	)
 
 	pageSize := uint32(2)
@@ -234,7 +233,6 @@ func TestIndexListStatisticsSkipDeletingRecordsButEnrichReadableRecords(
 			clockCalls.Add(1)
 			return testNow
 		},
-		0,
 	)
 	response := postAuthenticatedIndexList(
 		t,
@@ -291,7 +289,6 @@ func TestIndexListStatisticsAllDeletingPageDoesNoSnapshotOrNativeWork(
 			clockCalls.Add(1)
 			return testNow
 		},
-		0,
 	)
 	response := postAuthenticatedIndexList(
 		t,
@@ -374,7 +371,6 @@ func TestIndexListStatisticsDoNoNativeWorkWhenDisabledOrPageIsEmpty(
 					clockCalls.Add(1)
 					return testNow
 				},
-				0,
 			)
 			response := postAuthenticatedIndexList(
 				t,
@@ -434,7 +430,6 @@ func TestIndexListStatisticsRequireConfiguredDependenciesBeforeCatalogWork(
 		nil,
 		nil,
 		nil,
-		0,
 	)
 	response := postAuthenticatedIndexList(
 		t,
@@ -514,7 +509,6 @@ func TestIndexListStatisticsSortsRemainRejectedBeforeNativeWork(
 				statistics,
 				snapshotter,
 				func() time.Time { return testNow },
-				0,
 			)
 			response := postAuthenticatedIndexList(
 				t,
@@ -592,7 +586,6 @@ func TestIndexListCursorBindsStatisticsModeBeforeNativeWork(t *testing.T) {
 				statistics,
 				snapshotter,
 				func() time.Time { return testNow },
-				0,
 			)
 			pageSize := uint32(1)
 			firstResponse := postAuthenticatedIndexList(
@@ -777,7 +770,6 @@ func TestIndexListStatisticsRejectMalformedBatchResults(t *testing.T) {
 				statistics,
 				&recordingIndexStatisticsSnapshotter{cutoff: 3},
 				func() time.Time { return testNow },
-				0,
 			)
 			response := postAuthenticatedIndexList(
 				t,
@@ -836,7 +828,6 @@ func TestIndexListStatisticsMapBatchFailuresWithoutDisclosure(t *testing.T) {
 				statistics,
 				&recordingIndexStatisticsSnapshotter{cutoff: 4},
 				func() time.Time { return testNow },
-				0,
 			)
 			response := postAuthenticatedIndexList(
 				t,
@@ -1013,7 +1004,6 @@ func newIndexListStatisticsTestHandler(
 	statistics IndexStatistics,
 	snapshotter IndexStatisticsSnapshotter,
 	now func() time.Time,
-	maximumConcurrentResponses int,
 ) *Handler {
 	t.Helper()
 	handler, err := NewHandler(Config{
@@ -1032,7 +1022,6 @@ func newIndexListStatisticsTestHandler(
 		TenantID:                   browserGateTenantID,
 		OwnerID:                    browserGateOwnerID,
 		Now:                        now,
-		MaximumConcurrentResponses: maximumConcurrentResponses,
 		AdministrativeAllowedHosts: []string{"example.com"},
 	})
 	if err != nil {

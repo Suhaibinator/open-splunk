@@ -26,7 +26,7 @@ func TestSQLiteSequencerQuotaDenialRollsBackFreshReservation(t *testing.T) {
 	blockedUntil := now.Add(5 * time.Second)
 	seedQuotaBucket(t, database, token, limits, blockedUntil.UnixNano(), 0, now.Add(-time.Second))
 
-	request := quotaReserveRequest("quota-denied", "attempt-one", now, token, limits, "main", ingestquota.Limits{})
+	request := quotaReserveRequest("quota-denied", "attempt-one", now, token, limits, ingestquota.Limits{})
 	if _, err := sequencer.Reserve(ctx, request); err == nil {
 		t.Fatal("Reserve succeeded above quota")
 	} else {
@@ -71,7 +71,7 @@ func TestSQLiteSequencerQuotaMixedScopesAreAtomic(t *testing.T) {
 	seedQuotaBucket(t, database, token, limits, now.UnixNano(), 0, now.Add(-time.Second))
 	seedQuotaBucket(t, database, index, limits, now.Add(3*time.Second).UnixNano(), 0, now.Add(-time.Second))
 
-	request := quotaReserveRequest("quota-mixed", "attempt", now, token, limits, "main", limits)
+	request := quotaReserveRequest("quota-mixed", "attempt", now, token, limits, limits)
 	_, err := sequencer.Reserve(context.Background(), request)
 	var exceeded *ingestquota.ExceededError
 	if !errors.As(err, &exceeded) || exceeded.Scope != index || exceeded.RetryAfter != 3*time.Second {
@@ -97,7 +97,7 @@ func TestSQLiteSequencerQuotaAdmissionSurvivesAbandonRestartAndPolicyChange(t *t
 	limits := ingestquota.Limits{
 		MaxEventsPerSecond: 10, MaxUncompressedBytesPerSecond: 100,
 	}
-	request := quotaReserveRequest("quota-replay", "attempt-one", now, token, limits, "main", limits)
+	request := quotaReserveRequest("quota-replay", "attempt-one", now, token, limits, limits)
 	first, err := sequencer.Reserve(ctx, request)
 	if err != nil {
 		t.Fatal(err)
@@ -171,12 +171,12 @@ func TestSQLiteSequencerQuotaPolicyChangeResetsDurableSchedule(t *testing.T) {
 	}
 	seedQuotaToken(t, database, token.Identity)
 	limited := ingestquota.Limits{MaxEventsPerSecond: 10}
-	first := quotaReserveRequest("quota-policy-one", "attempt-one", now, token, limited, "main", limited)
+	first := quotaReserveRequest("quota-policy-one", "attempt-one", now, token, limited, limited)
 	if _, err := sequencer.Reserve(ctx, first); err != nil {
 		t.Fatal(err)
 	}
 
-	unlimited := quotaReserveRequest("quota-policy-two", "attempt-two", now, token, ingestquota.Limits{}, "main", ingestquota.Limits{})
+	unlimited := quotaReserveRequest("quota-policy-two", "attempt-two", now, token, ingestquota.Limits{}, ingestquota.Limits{})
 	if _, err := sequencer.Reserve(ctx, unlimited); err != nil {
 		t.Fatalf("change to unlimited policy: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestSQLiteSequencerQuotaPolicyChangeResetsDurableSchedule(t *testing.T) {
 		}
 	}
 
-	restored := quotaReserveRequest("quota-policy-three", "attempt-three", now, token, limited, "main", limited)
+	restored := quotaReserveRequest("quota-policy-three", "attempt-three", now, token, limited, limited)
 	if _, err := sequencer.Reserve(ctx, restored); err != nil {
 		t.Fatalf("restored rate inherited stale debt: %v", err)
 	}
@@ -215,7 +215,7 @@ func TestSQLiteSequencerQuotaMaximumScopesBulkHydrationAndPersistence(t *testing
 		UncompressedBytes: ingestquota.HardMaxAdmissionEvents,
 	})
 	lastIndex := ""
-	for index := 0; index < int(ingestquota.HardMaxAdmissionEvents); index++ {
+	for index := range int(ingestquota.HardMaxAdmissionEvents) {
 		lastIndex = fmt.Sprintf("bulk-index-%04d", index)
 		charges = append(charges, ingestquota.Charge{
 			Scope: ingestquota.ScopeKey{
@@ -283,7 +283,7 @@ func TestSQLiteSequencerConcurrentExactQuotaAdmissionChargesOnce(t *testing.T) {
 	}
 	seedQuotaToken(t, database, token.Identity)
 	limits := ingestquota.Limits{MaxEventsPerSecond: 1}
-	first := quotaReserveRequest("quota-concurrent", "attempt-one", now, token, limits, "main", limits)
+	first := quotaReserveRequest("quota-concurrent", "attempt-one", now, token, limits, limits)
 	second := first
 	second.AttemptID = "attempt-two"
 
@@ -333,8 +333,8 @@ func TestSQLiteSequencerConcurrentDistinctBatchesCompeteAtomically(t *testing.T)
 	seedQuotaToken(t, database, token.Identity)
 	limits := ingestquota.Limits{MaxEventsPerSecond: 1}
 	requests := []ReserveRequest{
-		quotaReserveRequest("quota-distinct-a", "attempt-a", now, token, limits, "main", limits),
-		quotaReserveRequest("quota-distinct-b", "attempt-b", now, token, limits, "main", limits),
+		quotaReserveRequest("quota-distinct-a", "attempt-a", now, token, limits, limits),
+		quotaReserveRequest("quota-distinct-b", "attempt-b", now, token, limits, limits),
 	}
 
 	start := make(chan struct{})
@@ -462,11 +462,10 @@ func quotaReserveRequest(
 	evaluatedAt time.Time,
 	token ingestquota.ScopeKey,
 	tokenLimits ingestquota.Limits,
-	index string,
 	indexLimits ingestquota.Limits,
 ) ReserveRequest {
 	request := reserveRequest(key, attemptID)
-	request.QuotaAdmission = quotaAdmission(token, tokenLimits, index, indexLimits)
+	request.QuotaAdmission = quotaAdmission(token, tokenLimits, "main", indexLimits)
 	request.QuotaEvaluatedAt = evaluatedAt
 	return request
 }
