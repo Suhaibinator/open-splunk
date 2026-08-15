@@ -1,6 +1,7 @@
 package collector
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -79,7 +80,7 @@ func mustProcess(t *testing.T, p Processor, e *opensplunkv1.LogEvent) *opensplun
 	t.Helper()
 	out, err := p.Process(e)
 	if err != nil {
-		t.Fatalf("%s.Process: unexpected error: %v", p.Name(), err)
+		t.Fatalf("%T.Process: unexpected error: %v", p, err)
 	}
 	return out
 }
@@ -467,11 +468,9 @@ func TestRedactProcessor(t *testing.T) {
 
 // pipeFunc is a test Processor built from a closure.
 type pipeFunc struct {
-	name string
-	fn   func(*opensplunkv1.LogEvent) (*opensplunkv1.LogEvent, error)
+	fn func(*opensplunkv1.LogEvent) (*opensplunkv1.LogEvent, error)
 }
 
-func (p pipeFunc) Name() string { return p.name }
 func (p pipeFunc) Process(e *opensplunkv1.LogEvent) (*opensplunkv1.LogEvent, error) {
 	return p.fn(e)
 }
@@ -515,10 +514,10 @@ func TestPipelineProcess(t *testing.T) {
 	t.Run("stops on drop", func(t *testing.T) {
 		t.Parallel()
 		reached := false
-		drop := pipeFunc{name: "drop", fn: func(*opensplunkv1.LogEvent) (*opensplunkv1.LogEvent, error) {
+		drop := pipeFunc{fn: func(*opensplunkv1.LogEvent) (*opensplunkv1.LogEvent, error) {
 			return nil, nil
 		}}
-		after := pipeFunc{name: "after", fn: func(e *opensplunkv1.LogEvent) (*opensplunkv1.LogEvent, error) {
+		after := pipeFunc{fn: func(e *opensplunkv1.LogEvent) (*opensplunkv1.LogEvent, error) {
 			reached = true
 			return e, nil
 		}}
@@ -537,10 +536,10 @@ func TestPipelineProcess(t *testing.T) {
 	t.Run("stops on error", func(t *testing.T) {
 		t.Parallel()
 		reached := false
-		boom := pipeFunc{name: "boom", fn: func(*opensplunkv1.LogEvent) (*opensplunkv1.LogEvent, error) {
-			return nil, errNotImplemented
+		boom := pipeFunc{fn: func(*opensplunkv1.LogEvent) (*opensplunkv1.LogEvent, error) {
+			return nil, errors.New("boom")
 		}}
-		after := pipeFunc{name: "after", fn: func(e *opensplunkv1.LogEvent) (*opensplunkv1.LogEvent, error) {
+		after := pipeFunc{fn: func(e *opensplunkv1.LogEvent) (*opensplunkv1.LogEvent, error) {
 			reached = true
 			return e, nil
 		}}

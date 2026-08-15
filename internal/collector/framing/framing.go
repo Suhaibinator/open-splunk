@@ -216,9 +216,6 @@ func (f *lineFramer) Next() (Frame, error) {
 		i := bytes.IndexByte(f.buf, '\n')
 		// Oversized: the record reaches the cap without a usable delimiter.
 		if (i < 0 && len(f.buf) > f.maxBytes) || (i > f.maxBytes) {
-			if !canAdvanceLineNumber(f.line) {
-				return Frame{}, ErrLineNumberOverflow
-			}
 			return f.emitTooLarge()
 		}
 		if i >= 0 {
@@ -458,10 +455,10 @@ func (m *multilineFramer) checkBounds() {
 	}
 }
 
-// finishEvent builds the frame for a completed event (trailing delimiter
-// excluded from Bytes) and resets assembly state.
-func (m *multilineFramer) finishEvent() Frame {
-	n := max(len(m.event)-m.evDelim, 0)
+// finishEventLen builds the frame for the current event using the first n
+// assembled bytes (offsets always span the whole event) and resets assembly
+// state.
+func (m *multilineFramer) finishEventLen(n int) Frame {
 	out := make([]byte, n)
 	copy(out, m.event[:n])
 	fr := Frame{
@@ -475,21 +472,16 @@ func (m *multilineFramer) finishEvent() Frame {
 	return fr
 }
 
+// finishEvent builds the frame for a completed event (trailing delimiter
+// excluded from Bytes) and resets assembly state.
+func (m *multilineFramer) finishEvent() Frame {
+	return m.finishEventLen(max(len(m.event)-m.evDelim, 0))
+}
+
 // finishEventTruncated builds an oversized event frame carrying the first
 // maxBytes bytes but offsets spanning the whole assembled event.
 func (m *multilineFramer) finishEventTruncated() Frame {
-	n := min(m.maxBytes, len(m.event))
-	out := make([]byte, n)
-	copy(out, m.event[:n])
-	fr := Frame{
-		Bytes:          out,
-		StartOffset:    m.evStart,
-		EndOffset:      m.evStart + uint64(len(m.event)),
-		LineNumber:     m.evLine,
-		NextLineNumber: m.nextLineNo,
-	}
-	m.resetEvent()
-	return fr
+	return m.finishEventLen(min(m.maxBytes, len(m.event)))
 }
 
 // resetEvent clears the current-event assembly state.

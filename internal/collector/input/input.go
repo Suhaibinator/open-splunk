@@ -59,11 +59,6 @@ func (id FileIdentity) TrackingKey() string {
 	return "fp=" + id.Fingerprint
 }
 
-// IsZero reports whether id is the zero identity.
-func (id FileIdentity) IsZero() bool {
-	return id.Device == 0 && id.Inode == 0 && id.Generation == 0 && id.Fingerprint == ""
-}
-
 // SourceRef locates one framed event within a file. Line numbers are physical
 // lines relative to the collector's initial read position for that file
 // generation; start_at=end therefore begins at line 1 without reading skipped

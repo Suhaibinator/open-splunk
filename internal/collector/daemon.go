@@ -92,12 +92,10 @@ const (
 // later event from the same file is durably appended, or it is re-read (and
 // re-skipped, idempotently) after a restart.
 type Daemon struct {
-	cfg *config.Config
 	log *slog.Logger
 	now func() time.Time
 
 	collectorID string
-	instanceID  string
 
 	checkpoints input.CheckpointStore
 	queue       wal.Queue
@@ -105,7 +103,6 @@ type Daemon struct {
 	stateLock   *stateDirectoryLock
 	sender      *sender.Sender
 	inputs      []*inputRuntime
-	pipeline    *Pipeline
 	redactor    *durableRedactor
 
 	// Batching / backpressure / shutdown tunables. Defaulted in New; overridable
@@ -336,18 +333,15 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 	}
 
 	d := &Daemon{
-		cfg:                cfg,
 		log:                logger,
 		now:                time.Now,
 		collectorID:        collectorID,
-		instanceID:         instanceID,
 		checkpoints:        checkpoints,
 		queue:              queue,
 		deadLetter:         deadLetter,
 		stateLock:          stateLock,
 		sender:             snd,
 		inputs:             inputs,
-		pipeline:           pipeline,
 		redactor:           redactor,
 		batchMaxEvents:     defaultBatchMaxEvents,
 		batchLinger:        defaultBatchLinger,

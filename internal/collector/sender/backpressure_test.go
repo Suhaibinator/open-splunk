@@ -159,7 +159,7 @@ func TestThrottleExpiryUsesServerRelativeDurationUnderClockSkew(t *testing.T) {
 	if want := collectorReceivedAt.Add(activeFor); !until.Equal(want) {
 		t.Fatalf("local throttle expiry = %v, want %v derived from server-relative duration", until, want)
 	}
-	if got := c.throttleWaitDuration(); got < minimumDelay {
+	if got := c.throttleWaitDurationForTest(); got < minimumDelay {
 		t.Fatalf("throttle pacing wait = %v, want at least %v despite collector clock skew", got, minimumDelay)
 	}
 }
@@ -511,3 +511,16 @@ func (c *recordingCollectClient) CloseSend() error             { return nil }
 func (c *recordingCollectClient) Context() context.Context     { return c.ctx }
 func (c *recordingCollectClient) SendMsg(any) error            { return nil }
 func (c *recordingCollectClient) RecvMsg(any) error            { return io.EOF }
+
+func (c *conn) throttleWaitDurationForTest() time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.throttleActiveLocked() || c.minSendDelay <= 0 {
+		return 0
+	}
+	d := c.nextBatchSendAt.Sub(c.s.now())
+	if d < 0 {
+		return 0
+	}
+	return d
+}

@@ -543,19 +543,6 @@ func (c *conn) throttleActiveLocked() bool {
 	return false
 }
 
-func (c *conn) throttleWaitDuration() time.Duration {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if !c.throttleActiveLocked() || c.minSendDelay <= 0 {
-		return 0
-	}
-	d := c.nextBatchSendAt.Sub(c.s.now())
-	if d < 0 {
-		return 0
-	}
-	return d
-}
-
 // batchExceedsReadyLimits reports whether batch exceeds the NEGOTIATED Ready
 // limits (fixed for the life of the stream). Such a batch can never be accepted
 // and is permanently dead-lettered; the returned string is the rejection code.
@@ -796,26 +783,14 @@ func (c *conn) handleReject(reject *opensplunkv1.BatchReject) error {
 		return fmt.Errorf("collector/sender: reject batch id %q does not match sequence %d", reject.GetBatchId(), seq)
 	}
 	c.cancelRetry(seq)
-	records := make([]DeadLetterRecord, 0, len(batch.GetEvents()))
-	now := c.s.now()
-	for _, event := range batch.GetEvents() {
-		records = append(records, DeadLetterRecord{
-			Event:         event,
-			BatchID:       reject.GetBatchId(),
-			BatchSequence: seq,
-			Code:          reject.GetCode().String(),
-			Reason:        reject.GetMessage(),
-			RejectedAt:    now,
-		})
-	}
-	if err := c.s.writeDeadLetter(records); err != nil {
+	if err := c.deadLetterWholeBatch(batch, reject.GetCode().String(), reject.GetMessage()); err != nil {
 		return err
 	}
 	through, err := c.s.commitTerminal(seq, false)
 	if err != nil {
 		return fmt.Errorf("collector/sender: queue ack %d: %w", seq, err)
 	}
-	c.s.markDropped(uint64(len(records)))
+	c.s.markDropped(uint64(len(batch.GetEvents())))
 	c.s.markAcked(through, 0)
 	c.releaseInflight(seq)
 	return nil

@@ -23,12 +23,6 @@ func TestFileIdentityString(t *testing.T) {
 	if got, want := id.TrackingKey(), "dev=1;ino=2"; got != want {
 		t.Fatalf("TrackingKey() = %q, want %q", got, want)
 	}
-	if id.IsZero() {
-		t.Fatalf("non-zero identity reported zero")
-	}
-	if !(FileIdentity{}).IsZero() {
-		t.Fatalf("zero identity reported non-zero")
-	}
 }
 
 func TestParseFileIdentityStrictRoundTrip(t *testing.T) {

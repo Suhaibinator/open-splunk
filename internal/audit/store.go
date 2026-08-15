@@ -97,20 +97,7 @@ func validateStartupIntegrity(
 		return mapStoreError(ctx, "begin audit startup validation", tx.Error)
 	}
 	transactionFinished := false
-	defer func() {
-		if transactionFinished {
-			return
-		}
-		if rollbackErr := tx.Rollback().Error; rollbackErr != nil &&
-			!errors.Is(rollbackErr, gorm.ErrInvalidTransaction) {
-			rollbackErr = fmt.Errorf("rollback audit startup validation: %w", rollbackErr)
-			if returnedErr == nil {
-				returnedErr = rollbackErr
-			} else {
-				returnedErr = errors.Join(returnedErr, rollbackErr)
-			}
-		}
-	}()
+	defer finishAuditTransaction(tx, "startup validation", &transactionFinished, &returnedErr)
 
 	if err := validateAllTenantIntegrity(tx); err != nil {
 		return mapStoreError(ctx, "validate audit startup integrity", err)
@@ -139,20 +126,7 @@ func (store *Store) Append(
 		return Event{}, mapStoreError(ctx, "begin audit append", tx.Error)
 	}
 	transactionFinished := false
-	defer func() {
-		if transactionFinished {
-			return
-		}
-		if rollbackErr := tx.Rollback().Error; rollbackErr != nil &&
-			!errors.Is(rollbackErr, gorm.ErrInvalidTransaction) {
-			rollbackErr = fmt.Errorf("rollback audit append: %w", rollbackErr)
-			if returnedErr == nil {
-				returnedErr = rollbackErr
-			} else {
-				returnedErr = errors.Join(returnedErr, rollbackErr)
-			}
-		}
-	}()
+	defer finishAuditTransaction(tx, "append", &transactionFinished, &returnedErr)
 
 	event, err := store.AppendInTransaction(ctx, tx, tenantID, definition)
 	if err != nil {
@@ -321,21 +295,14 @@ func ensureTenantState(database *gorm.DB, tenantID string) (auditTenantStateReco
 }
 
 func readTenantState(database *gorm.DB, tenantID string) (auditTenantStateRecord, error) {
-	var records []auditTenantStateRecord
-	query := database.
-		Where("tenant_id = ?", tenantID).
-		Limit(2).
-		Find(&records)
-	if query.Error != nil {
-		return auditTenantStateRecord{}, query.Error
+	state, exists, err := readOptionalTenantState(database, tenantID)
+	if err != nil {
+		return auditTenantStateRecord{}, err
 	}
-	if len(records) != 1 || !validTenantState(records[0], tenantID) {
-		return auditTenantStateRecord{}, fmt.Errorf(
-			"%w: audit tenant state is missing or invalid",
-			ErrCorrupt,
-		)
+	if !exists {
+		return auditTenantStateRecord{}, fmt.Errorf("%w: audit tenant state is missing", ErrCorrupt)
 	}
-	return records[0], nil
+	return state, nil
 }
 
 func validTenantState(record auditTenantStateRecord, tenantID string) bool {
@@ -436,4 +403,25 @@ func mapStoreError(ctx context.Context, operation string, err error) error {
 		}
 	}
 	return fmt.Errorf("%s: %w", operation, err)
+}
+
+// finishAuditTransaction rolls back tx unless it was already finished, joining
+// any rollback failure onto the error the enclosing function is returning.
+func finishAuditTransaction(tx *gorm.DB, label string, finished *bool, returnedErr *error) {
+	if tx == nil || finished == nil || *finished {
+		return
+	}
+	rollbackErr := tx.Rollback().Error
+	if rollbackErr == nil || errors.Is(rollbackErr, gorm.ErrInvalidTransaction) {
+		return
+	}
+	wrapped := fmt.Errorf("rollback audit %s: %w", label, rollbackErr)
+	if returnedErr == nil {
+		return
+	}
+	if *returnedErr == nil {
+		*returnedErr = wrapped
+		return
+	}
+	*returnedErr = errors.Join(*returnedErr, wrapped)
 }

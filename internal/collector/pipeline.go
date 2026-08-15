@@ -9,11 +9,6 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// errNotImplemented is returned by contract stubs that other files in this
-// package still leave unimplemented (e.g. daemon.go). The processor chain below
-// is fully implemented and never returns it.
-var errNotImplemented = errors.New("collector: not implemented")
-
 // Processor transforms or filters one decoded event. It runs after decoding and
 // before the event is appended to the durable queue.
 //
@@ -40,8 +35,6 @@ var errNotImplemented = errors.New("collector: not implemented")
 // return an error from Process; errors surface only at construction time.
 type Processor interface {
 	Process(event *opensplunkv1.LogEvent) (*opensplunkv1.LogEvent, error)
-	// Name identifies the processor in diagnostics.
-	Name() string
 }
 
 // NewAllowProcessor keeps only the named TOP-LEVEL dynamic fields and drops all
@@ -119,8 +112,6 @@ func NewRedactProcessor(fields []string, replacement string) (Processor, error) 
 // allowProcessor keeps only the listed top-level dynamic fields.
 type allowProcessor struct{ keep map[string]struct{} }
 
-func (p *allowProcessor) Name() string { return "allow" }
-
 func (p *allowProcessor) Process(event *opensplunkv1.LogEvent) (*opensplunkv1.LogEvent, error) {
 	if event == nil || event.Fields == nil || len(event.Fields.Fields) == 0 {
 		return event, nil
@@ -150,8 +141,6 @@ func (p *allowProcessor) Process(event *opensplunkv1.LogEvent) (*opensplunkv1.Lo
 // denyProcessor removes the listed top-level dynamic fields.
 type denyProcessor struct{ deny map[string]struct{} }
 
-func (p *denyProcessor) Name() string { return "deny" }
-
 func (p *denyProcessor) Process(event *opensplunkv1.LogEvent) (*opensplunkv1.LogEvent, error) {
 	if event == nil || event.Fields == nil || len(event.Fields.Fields) == 0 {
 		return event, nil
@@ -180,8 +169,6 @@ func (p *denyProcessor) Process(event *opensplunkv1.LogEvent) (*opensplunkv1.Log
 
 // renameProcessor renames one top-level dynamic field.
 type renameProcessor struct{ from, to string }
-
-func (p *renameProcessor) Name() string { return "rename" }
 
 func (p *renameProcessor) Process(event *opensplunkv1.LogEvent) (*opensplunkv1.LogEvent, error) {
 	if event == nil || event.Fields == nil || len(event.Fields.Fields) == 0 {
@@ -223,8 +210,6 @@ type redactProcessor struct {
 	targets     map[string]struct{}
 	replacement string
 }
-
-func (p *redactProcessor) Name() string { return "redact" }
 
 func (p *redactProcessor) Process(event *opensplunkv1.LogEvent) (*opensplunkv1.LogEvent, error) {
 	if event == nil || event.Fields == nil || len(event.Fields.Fields) == 0 {

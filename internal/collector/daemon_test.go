@@ -470,7 +470,6 @@ func TestBuildDurableRedactorRejectsUnsupportedProcessor(t *testing.T) {
 	t.Parallel()
 
 	unsupported := pipeFunc{
-		name: "unsupported",
 		fn: func(event *opensplunkv1.LogEvent) (*opensplunkv1.LogEvent, error) {
 			return event, nil
 		},

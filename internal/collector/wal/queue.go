@@ -41,17 +41,13 @@ type batchDesc struct {
 	sourceMarks []SourceCheckpointMark
 }
 
-// ackMarkGroup is an immutable view of one batch's cached source marks.
-// PrepareAck copies only these small slice headers while holding q.mu; hash
-// aggregation and sorting happen after the queue is unlocked.
-type ackMarkGroup struct {
-	marks []SourceCheckpointMark
-}
-
 type ackPlan struct {
 	throughBatchSequence uint64
 	batchCount           uint64
-	markGroups           []ackMarkGroup
+	// markGroups holds immutable views of each batch's cached source marks.
+	// PrepareAck copies only these small slice headers while holding q.mu; hash
+	// aggregation and sorting happen after the queue is unlocked.
+	markGroups [][]SourceCheckpointMark
 }
 
 // segInfo tracks a segment file's sequence span and seal state for reclamation.
@@ -623,12 +619,10 @@ func (q *queue) prepareAckPlanLocked(batchSequence uint64, cumulative bool) (ack
 	// 100K-batch prefix otherwise allocates and copies tens of megabytes while
 	// holding q.mu even when the final checkpoint set coalesces to one
 	// input/file key.
-	plan.markGroups = make([]ackMarkGroup, 0, markGroupCount)
+	plan.markGroups = make([][]SourceCheckpointMark, 0, markGroupCount)
 	for _, d := range q.unacked[:prefixLength] {
 		if len(d.sourceMarks) > 0 {
-			plan.markGroups = append(plan.markGroups, ackMarkGroup{
-				marks: d.sourceMarks,
-			})
+			plan.markGroups = append(plan.markGroups, d.sourceMarks)
 		}
 	}
 	return plan, nil
@@ -640,14 +634,11 @@ func (q *queue) prepareAckPlanLocked(batchSequence uint64, cumulative bool) (ack
 // its descriptor without invalidating this snapshot.
 func aggregateAckPlan(plan ackPlan) AckPreview {
 	var aggregator sourceMarkAggregator
-	for _, group := range plan.markGroups {
-		for _, mark := range group.marks {
+aggregate:
+	for _, marks := range plan.markGroups {
+		for _, mark := range marks {
 			if !aggregator.add(mark) {
-				return AckPreview{
-					ThroughBatchSequence: plan.throughBatchSequence,
-					BatchCount:           plan.batchCount,
-					Marks:                aggregator.marks(),
-				}
+				break aggregate
 			}
 		}
 	}

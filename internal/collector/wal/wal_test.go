@@ -1030,7 +1030,7 @@ func TestCheckpointMarksRetainMissingInputOrSourceIdentity(t *testing.T) {
 			preview := aggregateAckPlan(ackPlan{
 				throughBatchSequence: 1,
 				batchCount:           1,
-				markGroups:           []ackMarkGroup{{marks: marks}},
+				markGroups:           [][]SourceCheckpointMark{marks},
 			})
 			if len(preview.Marks) != 1 || preview.Marks[0] != marks[0] {
 				t.Fatalf("preview = %+v, want malformed mark preserved for fail-closed validation", preview)
@@ -1121,10 +1121,10 @@ func TestAggregateAckPlanPrefersPresentNextLineAndRejectsConflict(t *testing.T) 
 	preview := aggregateAckPlan(ackPlan{
 		throughBatchSequence: 3,
 		batchCount:           3,
-		markGroups: []ackMarkGroup{
-			{marks: []SourceCheckpointMark{base}},
-			{marks: []SourceCheckpointMark{present}},
-			{marks: []SourceCheckpointMark{legacyAfter}},
+		markGroups: [][]SourceCheckpointMark{
+			{base},
+			{present},
+			{legacyAfter},
 		},
 	})
 	if len(preview.Marks) != 1 || preview.Marks[0] != present {
@@ -1137,9 +1137,9 @@ func TestAggregateAckPlanPrefersPresentNextLineAndRejectsConflict(t *testing.T) 
 	preview = aggregateAckPlan(ackPlan{
 		throughBatchSequence: 4,
 		batchCount:           2,
-		markGroups: []ackMarkGroup{
-			{marks: []SourceCheckpointMark{present}},
-			{marks: []SourceCheckpointMark{conflict}},
+		markGroups: [][]SourceCheckpointMark{
+			{present},
+			{conflict},
 		},
 	})
 	if len(preview.Marks) != 1 || !preview.Marks[0].ConflictingMetadata {
@@ -1154,9 +1154,9 @@ func TestAggregateAckPlanPrefersPresentNextLineAndRejectsConflict(t *testing.T) 
 	preview = aggregateAckPlan(ackPlan{
 		throughBatchSequence: 5,
 		batchCount:           2,
-		markGroups: []ackMarkGroup{
-			{marks: []SourceCheckpointMark{present}},
-			{marks: []SourceCheckpointMark{higher}},
+		markGroups: [][]SourceCheckpointMark{
+			{present},
+			{higher},
 		},
 	})
 	if len(preview.Marks) != 1 || !preview.Marks[0].ConflictingMetadata {

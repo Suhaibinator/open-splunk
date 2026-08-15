@@ -3,7 +3,6 @@ package audit
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -154,20 +153,7 @@ func (store *Store) List(
 		return ListPage{}, mapStoreError(ctx, "begin audit list", tx.Error)
 	}
 	transactionFinished := false
-	defer func() {
-		if transactionFinished {
-			return
-		}
-		if rollbackErr := tx.Rollback().Error; rollbackErr != nil &&
-			!errors.Is(rollbackErr, gorm.ErrInvalidTransaction) {
-			rollbackErr = fmt.Errorf("rollback audit list: %w", rollbackErr)
-			if returnedErr == nil {
-				returnedErr = rollbackErr
-			} else {
-				returnedErr = errors.Join(returnedErr, rollbackErr)
-			}
-		}
-	}()
+	defer finishAuditTransaction(tx, "list", &transactionFinished, &returnedErr)
 
 	state, exists, err := readOptionalTenantState(tx, normalized.tenantID)
 	if err != nil {

@@ -589,8 +589,7 @@ func (t *tailer) finalizeRetirement(
 	}
 	t.retireCommitted = true
 	t.retireMu.Unlock()
-	if !t.commitBatch(ctx, batch) {
-		return true, false
-	}
+	// commitBatch's result is intentionally ignored: retirement is done either way.
+	t.commitBatch(ctx, batch)
 	return true, false
 }
