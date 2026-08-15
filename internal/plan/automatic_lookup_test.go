@@ -134,3 +134,75 @@ func TestInjectAutomaticLookupGroupCommitsPlacementAndRejectsForgery(t *testing.
 		})
 	}
 }
+
+func TestAutomaticLookupAuthorityDetachesEventFieldPaths(t *testing.T) {
+	t.Parallel()
+
+	authored, err := Build(
+		mustParse(t, `index=gradethis`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build(): %v", err)
+	}
+	empty, err := knowledgeprogram.Prepare(knowledgeprogram.Input{})
+	if err != nil {
+		t.Fatalf("Prepare(empty): %v", err)
+	}
+	admitted, err := InjectKnowledgePrelude(authored, empty)
+	if err != nil {
+		t.Fatalf("InjectKnowledgePrelude(): %v", err)
+	}
+	compiledSelector, err := knowledge.CompileSelector(knowledge.SelectorSpec{})
+	if err != nil {
+		t.Fatalf("CompileSelector(): %v", err)
+	}
+	selector, err := knowledgeprogram.NewSelector(compiledSelector)
+	if err != nil {
+		t.Fatalf("NewSelector(): %v", err)
+	}
+	key, err := ResolveField("service.id", spl.Range{})
+	if err != nil {
+		t.Fatalf("ResolveField(service.id): %v", err)
+	}
+	output, err := ResolveField("owner.name", spl.Range{})
+	if err != nil {
+		t.Fatalf("ResolveField(owner.name): %v", err)
+	}
+	spec := AutomaticLookupSpec{
+		StableID: "lookup-object-1",
+		Lookup: Lookup{
+			DefinitionName: "service_catalog",
+			Keys: []LookupKey{{
+				LookupField: "service_id",
+				EventField:  key,
+			}},
+			Outputs: []LookupOutput{{
+				LookupField: "owner",
+				EventField:  output,
+			}},
+			WriteMode: LookupWriteModeOverwrite,
+		},
+		Selector: selector,
+	}
+	injected, err := InjectAutomaticLookupGroup(admitted, []AutomaticLookupSpec{spec})
+	if err != nil {
+		t.Fatalf("InjectAutomaticLookupGroup(): %v", err)
+	}
+
+	spec.Lookup.Keys[0].EventField.Path[0] = "caller-mutated"
+	spec.Lookup.Outputs[0].EventField.Path[0] = "caller-mutated"
+	group := injected.Operators[1].(*AutomaticLookupGroup)
+	view := group.Lookups()[0].LogicalLookup()
+	view.Keys[0].EventField.Path[0] = "view-mutated"
+	view.Outputs[0].EventField.Path[0] = "view-mutated"
+
+	if err := ValidateAutomaticLookupIntegrity(injected); err != nil {
+		t.Fatalf("caller/view mutation changed automatic authority: %v", err)
+	}
+	retained := group.Lookups()[0].LogicalLookup()
+	if retained.Keys[0].EventField.Path[0] != "service" ||
+		retained.Outputs[0].EventField.Path[0] != "owner" {
+		t.Fatalf("retained event paths were mutated: %#v", retained)
+	}
+}

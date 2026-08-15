@@ -14,6 +14,8 @@ row-preserving operation before a job can be admitted.
 
 ## `lookup`
 
+### `SPL-V04-LOOKUP-SYNTAX-001` — Exact lookup syntax and semantics
+
 Accepted syntax is:
 
 ```text
@@ -103,6 +105,8 @@ An unresolved or validation-only lookup may be analyzed for diagnostics but
 cannot produce an executable compiled query. Compiler execution cloning,
 history, inspection, field analysis, export, and preview all revalidate the
 same authority commitment.
+
+### `SPL-V04-LOOKUP-BOUNDS-001` — Bounded resolution and execution
 
 The operation preserves public row count, event identity, and established
 order. A query may contain at most sixteen explicit plus automatic lookup

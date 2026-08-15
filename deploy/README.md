@@ -204,7 +204,7 @@ roots themselves to be writable or changing ownership as root.
 ClickHouse is pinned to:
 
 ```text
-clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49
+clickhouse/clickhouse-server:26.3.17.56@sha256:422be85ae7344058369cdd366ac0efea9daa8428b55c9cf50258e83a7d12fcb3
 ```
 
 It runs as numeric UID/GID `101:101` with a read-only root filesystem, all
@@ -277,7 +277,7 @@ ClickHouse 26.3 authorizes several partition operations through the same
 connection is private to the fixed deletion Store path and is never shared
 with ingestion, search, export, or inspection.
 
-`clickhouse-init.sh` rejects every server version other than `26.3.17.4` and
+`clickhouse-init.sh` rejects every server version other than `26.3.17.56` and
 provisions or rotates all six principals. For every managed non-bootstrap
 principal, it first removes all prior direct privileges and role assignments,
 then reapplies the exact release allowlist. The grants name their future

@@ -96,6 +96,10 @@ const OBJECT_PATTERN = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const RECEIPT_PATH_PATTERN = /^receipts\/[A-Za-z0-9._/-]+$/;
 const TIMESTAMP_PATTERN = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$/;
 const V02_APPLICATION_VERSION = "0.1.0";
+// This checkpoint README is also the v0.3 verifier's prerequisite authority.
+// Intentional operator-document changes must re-pin both verifiers together.
+const V02_PUBLIC_README_AUTHORITY_SHA256 =
+  "28eadf56bd249c6b09734a7833a0d15deed0244a323a1ebf762b97b3b0710995";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const repositoryRoot = path.resolve(path.dirname(scriptPath), "..");
@@ -645,7 +649,7 @@ function checkPublicREADMEAt(revision) {
   }
   requireReleasePair(source, "0.1.0", "0.2", `README at ${revision}`,
     "OPEN_SPLUNK_SOURCE_REVISION=.*make[ \\t]+release[ \\t]*$");
-  check(sha256(bytes) === "42b175ea79965ddb2bd9a7546480a3906f9b1f811cfb4da96c8145cbec2c28db",
+  check(sha256(bytes) === V02_PUBLIC_README_AUTHORITY_SHA256,
     `README at ${revision} does not equal the exact v0.2 release authority`);
 }
 
@@ -691,14 +695,14 @@ function checkOperatorReleaseIdentityAt(revision) {
   requireReleasePair(sources.integrationGuide, "0.1.0", "0.2",
     `integration guide at ${revision}`,
     "OPEN_SPLUNK_OCI_INTEGRATION=1 \\\\r?\\n" +
-    "OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26\\.3\\.17\\.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \\\\r?\\n" +
+    "OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26\\.3\\.17\\.56@sha256:422be85ae7344058369cdd366ac0efea9daa8428b55c9cf50258e83a7d12fcb3 \\\\r?\\n" +
     "  go test \\.\\/integration -run '\\^TestReleaseOCIComposeContract\\$' \\\\r?\\n" +
     "    -count=1 -timeout=25m -v$");
   for (const [id, source, digest] of [
     ["deployGenerator", sources.deployGenerator, "5f6c3a95aa720acb7769431b3b54930c9deb7f124c2d0a09c6966a72a708828b"],
-    ["deployGuide", sources.deployGuide, "b94a4361edc5e8f04e2482c5722675e11cb803aecbc240c0cfacccf61e19eaf1"],
+    ["deployGuide", sources.deployGuide, "0e1c77f00b310a79a29e68ef4f0c57178ec053ef2bfb8c5bac3f8b3f59e372b4"],
     ["collectorGuide", sources.collectorGuide, "e4b38c4539cfe4be60e538fbe408bc9fce0d7e35e464e520da058784fa9324c0"],
-    ["integrationGuide", sources.integrationGuide, "f297f0936822ce53b05c8b2ff84ada8a4fa363974cc0570dd21b1880342ee569"],
+    ["integrationGuide", sources.integrationGuide, "a6fb033ccb18ca8d8908ed6a468ad9196e2d94ad6843cd7a1949066a5bfe8299"],
   ]) {
     check(sha256(Buffer.from(source, "utf8")) === digest,
       `${id} at ${revision} does not equal the exact v0.2 release authority`);
@@ -915,7 +919,7 @@ async function validateReceipts(manifest, revision = null) {
     ["clickhouse-gates", {
       runtime_revision: runtime,
       runtime_tree: runtimeTree,
-      image: "clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49",
+      image: "clickhouse/clickhouse-server:26.3.17.56@sha256:422be85ae7344058369cdd366ac0efea9daa8428b55c9cf50258e83a7d12fcb3",
       result: "pass",
     }],
     ["compatibility-audit", {

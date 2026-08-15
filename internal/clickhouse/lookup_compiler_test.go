@@ -382,12 +382,13 @@ func TestCompileLookupUsesSealedExternalTableAndExactLeftAnyJoin(t *testing.T) {
 	payload := compiled.lookupTables[0]
 	if payload.objectID != "asset-42" || payload.version != 11 ||
 		len(payload.columns) != 4 ||
-		!slices.Equal(payload.columns[0].values, []string{"api", "worker"}) ||
-		!slices.Equal(payload.columns[2].values, []string{"platform", "compute"}) {
+		payload.backing == nil ||
+		!slices.Equal(payload.backing.values[0], []string{"api", "worker"}) ||
+		!slices.Equal(payload.backing.values[2], []string{"platform", "compute"}) {
 		t.Fatalf("compiled lookup external table = %#v", payload)
 	}
-	for _, column := range payload.columns {
-		if slices.Equal(column.values, []string{"not-bound", "not-bound-either"}) {
+	for _, values := range payload.backing.values {
+		if slices.Equal(values, []string{"not-bound", "not-bound-either"}) {
 			t.Fatal("compiler retained an unreferenced lookup column")
 		}
 	}
@@ -398,16 +399,15 @@ func TestCompileLookupUsesSealedExternalTableAndExactLeftAnyJoin(t *testing.T) {
 		t.Fatalf("materialized lookup table = (%#v, %v)", tables, err)
 	}
 
-	if &cloned.lookupTables[0].columns[0].values[0] !=
-		&compiled.lookupTables[0].columns[0].values[0] {
+	if cloned.lookupTables[0].backing != compiled.lookupTables[0].backing {
 		t.Fatal("compiled execution clone duplicated immutable lookup cell backing")
 	}
-	cloned.lookupTables[0].columns[0].values[0] = "tampered"
+	cloned.lookupTables[0].columns[0].name = "tampered"
 	if cloned.HasValidExecutionSeal() {
-		t.Fatal("lookup payload mutation preserved the compiled execution seal")
+		t.Fatal("lookup descriptor mutation preserved the compiled execution seal")
 	}
-	if compiled.HasValidExecutionSeal() {
-		t.Fatal("same-package corruption of shared immutable lookup backing preserved the source seal")
+	if !compiled.HasValidExecutionSeal() {
+		t.Fatal("detached lookup descriptor mutation invalidated the source seal")
 	}
 }
 
@@ -795,16 +795,15 @@ func TestLookupExternalTablesPropagateThroughDerivedExecutables(t *testing.T) {
 	if !ok {
 		t.Fatal("CloneForExecution(stats wildcard) rejected lookup authority")
 	}
-	if &clone.lookupTables[0].columns[0].values[0] !=
-		&inventory.lookupTables[0].columns[0].values[0] {
+	if clone.lookupTables[0].backing != inventory.lookupTables[0].backing {
 		t.Fatal("derived execution clone duplicated immutable lookup cell backing")
 	}
-	clone.lookupTables[0].columns[0].values[0] = "tampered"
+	clone.lookupTables[0].columns[0].name = "tampered"
 	if clone.HasValidExecutionSeal() {
-		t.Fatal("derived lookup payload mutation preserved execution authority")
+		t.Fatal("derived lookup descriptor mutation preserved execution authority")
 	}
-	if inventory.HasValidExecutionSeal() {
-		t.Fatal("same-package corruption of shared derived lookup backing preserved the source seal")
+	if !inventory.HasValidExecutionSeal() {
+		t.Fatal("detached derived lookup descriptor mutation invalidated source authority")
 	}
 }
 

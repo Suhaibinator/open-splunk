@@ -136,7 +136,7 @@ func TestRuntimeKnowledgeManagementCursorContinuesAcrossReopen(t *testing.T) {
 	}
 	if firstRuntime.catalog == nil || firstRuntime.writer == nil ||
 		firstRuntime.resolver == nil || firstRuntime.attempts == nil ||
-		firstRuntime.lookupAssets == nil || firstRuntime.lookupCatalog == nil ||
+		firstRuntime.lookupCatalog == nil ||
 		firstRuntime.lookupManagement == nil || !firstRuntime.lookupManagement.Ready() ||
 		firstRuntime.lookupResolver == nil {
 		_ = firstDatabase.Close()
@@ -514,7 +514,6 @@ func TestConfigureRuntimeKnowledgeManagementIsAtomicAndNarrow(t *testing.T) {
 		{name: "writer", runtime: without(func(value *runtimeKnowledgeManagement) { value.writer = nil }), apps: apps, preview: preview},
 		{name: "unready writer", runtime: without(func(value *runtimeKnowledgeManagement) { value.writer = &knowledgecatalog.Writer{} }), apps: apps, preview: preview},
 		{name: "attempts", runtime: without(func(value *runtimeKnowledgeManagement) { value.attempts = nil }), apps: apps, preview: preview},
-		{name: "lookup assets", runtime: without(func(value *runtimeKnowledgeManagement) { value.lookupAssets = nil }), apps: apps, preview: preview},
 		{name: "lookup catalog", runtime: without(func(value *runtimeKnowledgeManagement) { value.lookupCatalog = nil }), apps: apps, preview: preview},
 		{name: "lookup management", runtime: without(func(value *runtimeKnowledgeManagement) { value.lookupManagement = nil }), apps: apps, preview: preview},
 		{name: "lookup resolver", runtime: without(func(value *runtimeKnowledgeManagement) { value.lookupResolver = nil }), apps: apps, preview: preview},

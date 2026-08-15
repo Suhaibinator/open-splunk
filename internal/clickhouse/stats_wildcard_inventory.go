@@ -21,7 +21,7 @@ const (
 	StatsWildcardInventoryOrdinalColumn = "__os_stats_wildcard_ordinal"
 	StatsWildcardInventoryFieldColumn   = "__os_stats_wildcard_field"
 	StatsWildcardInventoryInvalidColumn = "__os_stats_wildcard_invalid"
-	statsWildcardInventorySealDomain    = "open-splunk-stats-wildcard-inventory-v2"
+	statsWildcardInventorySealDomain    = "open-splunk-stats-wildcard-inventory-v3"
 )
 
 type statsWildcardInventorySeal [sha256.Size]byte

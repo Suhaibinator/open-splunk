@@ -578,7 +578,7 @@ physical numeric variants; those specialized paths omit impossible Boolean,
 container, and tagged-envelope dispatch.
 
 Physical and tagged Decimal spelling is intentionally distinct. A physical
-Dynamic Decimal uses ClickHouse `toString` on the pinned `26.3.17.4` target;
+Dynamic Decimal uses ClickHouse `toString` on the pinned `26.3.17.56` target;
 the integration contract pins `toDecimal64('12.3400', 4)` as `"12.34"`. A
 `decimal/v1` envelope instead retains its exact validated payload, so
 `"123.4500"` remains `"123.4500"` without a `Float64` conversion. Such an
@@ -652,7 +652,7 @@ and fixed multivalue conversion independently validates every retained member
 before applying a UTF-8 function.
 
 Open Splunk lowers to ClickHouse `lowerUTF8` and `upperUTF8` on the pinned
-ClickHouse `26.3.17.4` execution target. This is Unicode-aware case mapping,
+ClickHouse `26.3.17.56` execution target. This is Unicode-aware case mapping,
 not locale-aware collation, normalization, or full case folding; in
 particular, callers must not infer Turkish-locale behavior. ClickHouse also
 documents limitations when a code point's upper- or lowercase representation
@@ -1081,7 +1081,7 @@ while `%` matches every non-null String. No Unicode normalization or case
 folding is implicit. In the decoded SPL string, backslash escapes a literal
 `%`, `_`, or backslash. Before any other character, backslash is itself a
 literal character. These escape, Unicode, and newline edges are pinned against
-ClickHouse 26.3.17.4. Splunk's public documentation specifies whole-string
+ClickHouse 26.3.17.56. Splunk's public documentation specifies whole-string
 matching and the `%`/`_` wildcards but does not fully specify those edges, so
 they are an explicit Open Splunk v0.1 boundary pending a live differential
 oracle.
@@ -1260,7 +1260,7 @@ occurrence. `@d` selects local midnight. Week snaps select the most recent
 requested weekday at local midnight. Month, quarter, and year snaps select
 local midnight on the first day of the containing period.
 
-Calendar arithmetic uses the pinned ClickHouse 26.3.17.4 IANA behavior. The
+Calendar arithmetic uses the pinned ClickHouse 26.3.17.56 IANA behavior. The
 integration contract covers elapsed-versus-calendar DST differences, month
 and leap-year clamping, historical second offsets, both occurrences of a
 fall-back hour, a spring-gap wall time, and a skipped civil date. A Los Angeles
@@ -1383,7 +1383,7 @@ generated-SQL ceiling beneath the 256 KiB whole-query ceiling.
 The parser, planner, and compiler independently revalidate the format. The
 compiler binds the format fragments and timezone as query arguments, evaluates
 the input once, localizes the timestamp once, and does not expand rows. The
-pinned ClickHouse 26.3.17.4 integration corpus covers every supported
+pinned ClickHouse 26.3.17.56 integration corpus covers every supported
 directive, UTC and daylight-saving offsets, the ISO year boundary, pre-epoch
 flooring, nanoseconds, literal Unicode/apostrophes/percent, fixed and Dynamic
 types, predicates, projection, aggregation, later eval, and snapshot replay.
@@ -1481,7 +1481,7 @@ timezone as query arguments. It references the input once, extracts the
 authored date once, and executes exactly one parser per value. A format with
 the optional terminal fractional suffix binds both the primary and fallback
 patterns, but the extracted suffix capture selects one before parsing. No form
-expands rows. The pinned ClickHouse 26.3.17.4 integration
+expands rows. The pinned ClickHouse 26.3.17.56 integration
 corpus covers fixed and Dynamic types, valid and invalid dates, trailing and
 overlong input, optional fractions, millisecond and microsecond values,
 12-hour time, compact offsets, the civil-date boundaries, UTC and IANA zones,

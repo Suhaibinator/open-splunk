@@ -150,12 +150,7 @@ func (executor *Executor) ExecuteFieldCatalog(ctx context.Context, query clickho
 		clickhousedriver.WithQueryID(queryID),
 		clickhousedriver.WithSettings(settings),
 	}
-	if len(externalTables) != 0 {
-		queryOptions = append(
-			queryOptions,
-			clickhousedriver.WithExternalTable(externalTables...),
-		)
-	}
+	queryOptions = appendExternalTableOption(queryOptions, externalTables)
 	queryContext := clickhousedriver.Context(ctx, queryOptions...)
 	rows, err := executor.connection.Query(queryContext, query.SQL, query.Args...)
 	if err != nil {

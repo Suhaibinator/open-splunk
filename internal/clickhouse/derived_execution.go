@@ -20,7 +20,7 @@ import (
 // it was derived from and the complete public surface that reaches the driver.
 // A distinct kind token prevents equal byte sequences from crossing result
 // contracts.
-const derivedExecutionSealDomain = "open-splunk-derived-clickhouse-execution-v3"
+const derivedExecutionSealDomain = "open-splunk-derived-clickhouse-execution-v4"
 
 type derivedExecutionKind string
 

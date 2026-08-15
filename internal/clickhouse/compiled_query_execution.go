@@ -19,10 +19,11 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
-// v10 additionally binds exact lookup-version identity and every selected
-// external-table cell. Lookup blocks can therefore cross the driver boundary
-// only as part of the same immutable executable authority as their SQL.
-const compiledExecutionSealDomain = "open-splunk-compiled-query-execution-v10"
+// v11 binds the authenticated immutable backing commitment for every exact
+// lookup external table. Lookup blocks can therefore cross the driver boundary
+// only as part of the same immutable executable authority as their SQL without
+// rescanning every private cell at each executor handoff.
+const compiledExecutionSealDomain = "open-splunk-compiled-query-execution-v11"
 
 var timeType = reflect.TypeFor[time.Time]()
 
@@ -487,7 +488,8 @@ func (compiled CompiledQuery) HasValidExecutionSeal() bool {
 }
 
 // HasValidExecutionSealContext is the cancellable form of
-// HasValidExecutionSeal. It checks lookup transport rows in bounded batches.
+// HasValidExecutionSeal. Selected lookup cells are represented by the
+// commitment of their already-validated private immutable backing.
 func (compiled CompiledQuery) HasValidExecutionSealContext(
 	ctx context.Context,
 ) (bool, error) {
@@ -840,8 +842,8 @@ func (compiled CompiledQuery) CloneForExecution() (CompiledQuery, bool) {
 	return cloned, ok
 }
 
-// CloneForExecutionContext validates and detaches the executable while
-// allowing maximum-envelope lookup validation and hashing to be canceled.
+// CloneForExecutionContext validates and detaches the executable while sharing
+// only authenticated package-private immutable lookup backing.
 func (compiled CompiledQuery) CloneForExecutionContext(
 	ctx context.Context,
 ) (CompiledQuery, bool, error) {
@@ -974,8 +976,8 @@ func (compiled CompiledQuery) RetainedBytes() (uint64, bool) {
 	return total, ok
 }
 
-// RetainedBytesContext is the cancellable form of RetainedBytes. Lookup cell
-// validation and charging yield to ctx at bounded row intervals.
+// RetainedBytesContext is the cancellable form of RetainedBytes. Lookup cells
+// use the conservative charge authenticated with their immutable backing.
 func (compiled CompiledQuery) RetainedBytesContext(
 	ctx context.Context,
 ) (uint64, bool, error) {

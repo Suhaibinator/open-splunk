@@ -370,7 +370,7 @@ test("OCI targets are pinned scratch runtimes with a minimal non-root contract",
 
   assert.match(
     dockerfile,
-    /node:24\.18\.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d/,
+    /node:24\.19\.0-bookworm-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03/,
   );
   assert.match(
     dockerfile,
@@ -698,6 +698,30 @@ test("OCI build anchors both local image tags to clean HEAD", async (t) => {
       entry.startsWith("open-splunk-oci."),
     ),
     [],
+  );
+});
+
+test("OCI build can stage SPL v0.4 while preserving the Docker identity check", async (t) => {
+  const fixture = await ociFixture(t);
+  const revision = git(fixture, ["rev-parse", "HEAD"]);
+  const docker = await installDockerShim(fixture);
+
+  const result = runBuildOCI(fixture, revision, docker, {
+    OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION: "0.4",
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const invocations = await readFile(docker.log, "utf8");
+  assert.equal(
+    (invocations.match(
+      /--build-arg OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION=0\.4/g,
+    ) ?? []).length,
+    2,
+  );
+  const dockerfile = await readFile(path.join(workspace, "Dockerfile"), "utf8");
+  assert.match(
+    dockerfile,
+    /test "\$\{actual_spl_compatibility_version\}" = \\\n+\s+"\$\{OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION\}"/,
   );
 });
 
@@ -1087,8 +1111,8 @@ test("OCI build rejects unsafe identity, platform, and image references", async 
       message: /OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION is required/,
     },
     {
-      environment: { OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION: "0.4" },
-      message: /must be 0\.2 or 0\.3/,
+      environment: { OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION: "0.5" },
+      message: /must be 0\.2, 0\.3, or 0\.4/,
     },
     {
       environment: { OPEN_SPLUNK_OCI_PLATFORM: "linux/386" },

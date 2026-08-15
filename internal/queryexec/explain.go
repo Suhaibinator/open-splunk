@@ -282,12 +282,7 @@ func (explainer *Explainer) Explain(
 		clickhousedriver.WithQueryID(queryID),
 		clickhousedriver.WithSettings(explainer.settings),
 	}
-	if len(externalTables) != 0 {
-		queryOptions = append(
-			queryOptions,
-			clickhousedriver.WithExternalTable(externalTables...),
-		)
-	}
+	queryOptions = appendExternalTableOption(queryOptions, externalTables)
 	queryContext := clickhousedriver.Context(explainContext, queryOptions...)
 	rows, err := lane.connection.Query(
 		queryContext,

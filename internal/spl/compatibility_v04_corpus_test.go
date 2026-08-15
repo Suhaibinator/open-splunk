@@ -52,16 +52,24 @@ func TestCompatibilityV04CorpusInventoryAndParserExpectations(t *testing.T) {
 	t.Parallel()
 
 	corpus := loadCompatibilityV04Corpus(t)
-	gotRules := make([]string, len(corpus.Rules))
+	corpusRules := make([]string, len(corpus.Rules))
 	for index, rule := range corpus.Rules {
-		gotRules[index] = rule.ID
+		corpusRules[index] = rule.ID
 	}
-	wantRules := []string{
-		"SPL-V04-LOOKUP-SYNTAX-001",
-		"SPL-V04-LOOKUP-BOUNDS-001",
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("locate v0.4 compatibility contract")
 	}
-	if !slices.Equal(gotRules, wantRules) {
-		t.Fatalf("v0.4 corpus rules = %v, want %v", gotRules, wantRules)
+	contract, err := os.ReadFile(filepath.Join(filepath.Dir(filename), "..", "..", "docs", "spl-compatibility-v0.4.md"))
+	if err != nil {
+		t.Fatalf("read v0.4 compatibility contract: %v", err)
+	}
+	documentRules, err := compatibilityDocumentRuleIDs(contract, "SPL-V04")
+	if err != nil {
+		t.Fatalf("read v0.4 contract rule inventory: %v", err)
+	}
+	if documentOnly, corpusOnly := setDifference(documentRules, corpusRules), setDifference(corpusRules, documentRules); len(documentOnly) != 0 || len(corpusOnly) != 0 {
+		t.Fatalf("v0.4 rule inventories differ: document-only=%v corpus-only=%v", documentOnly, corpusOnly)
 	}
 
 	modeInventory := make(map[string]struct{})

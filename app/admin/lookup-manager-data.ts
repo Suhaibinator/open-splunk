@@ -30,15 +30,11 @@ import {
 import { lookupRoutes } from "@/lib/api/routes";
 
 import {
+  LOOKUP_MANAGER_CONTRACT,
   isBoundedCanonicalLookupDefinition,
   textBytes,
 } from "./lookup-manager-contract";
 
-export const LOOKUP_MAXIMUM_CSV_BYTES = 8 << 20;
-export const LOOKUP_MAXIMUM_PREVIEW_ROWS = 100;
-export const LOOKUP_DEFAULT_PAGE_SIZE = 100;
-export const LOOKUP_MAXIMUM_MANAGED = 2_048;
-const LOOKUP_MAXIMUM_LIST_PAGES = Math.ceil(LOOKUP_MAXIMUM_MANAGED / LOOKUP_DEFAULT_PAGE_SIZE);
 const MAXIMUM_SQLITE_VERSION = (1n << 63n) - 1n;
 
 export interface LookupManagerClient {
@@ -115,14 +111,14 @@ export function createLookupManagerClient(
       let authority: { readonly tenantId: string; readonly ownerId: string } | undefined;
       for (;;) {
         pageCount += 1;
-        if (pageCount > LOOKUP_MAXIMUM_LIST_PAGES) {
+        if (pageCount > LOOKUP_MANAGER_CONTRACT.maximumListPages) {
           throw new RangeError("Lookup list exceeds its bounded page count.");
         }
         // eslint-disable-next-line no-await-in-loop -- each opaque cursor is authority for the following page.
         const response: ListLookupsResponse = await transport.post(
           lookupRoutes.list,
           ListLookupsRequest.fromPartial({
-            page: { pageSize: LOOKUP_DEFAULT_PAGE_SIZE, pageToken },
+            page: { pageSize: LOOKUP_MANAGER_CONTRACT.listPageSize, pageToken },
             appId,
             stateFilters: [LookupState.LOOKUP_STATE_ACTIVE, LookupState.LOOKUP_STATE_DISABLED],
             sortBy: LookupSortBy.LOOKUP_SORT_BY_NAME,
@@ -130,7 +126,7 @@ export function createLookupManagerClient(
           }),
           requestOptions,
         );
-        if (response.page === undefined || response.lookups.length > LOOKUP_DEFAULT_PAGE_SIZE) {
+        if (response.page === undefined || response.lookups.length > LOOKUP_MANAGER_CONTRACT.listPageSize) {
           throw new TypeError("Lookup list page is outside its bounded contract.");
         }
         for (const value of response.lookups) {
@@ -150,15 +146,15 @@ export function createLookupManagerClient(
           }
           seenIDs.add(lookup.lookupId);
           result.push(lookup);
-          if (result.length > LOOKUP_MAXIMUM_MANAGED) {
+          if (result.length > LOOKUP_MANAGER_CONTRACT.maximumManagedLookups) {
             throw new RangeError("Lookup catalog exceeds its managed-object limit.");
           }
         }
         const next = response.page.nextPageToken;
         if (next === undefined || next.length === 0) return result;
         if (
-          response.lookups.length !== LOOKUP_DEFAULT_PAGE_SIZE
-          || textBytes(next) > 4 << 10
+          response.lookups.length !== LOOKUP_MANAGER_CONTRACT.listPageSize
+          || textBytes(next) > LOOKUP_MANAGER_CONTRACT.maximumPageTokenBytes
           || seenTokens.has(next)
         ) {
           throw new TypeError("Lookup list returned an invalid or repeated page cursor.");
@@ -211,9 +207,9 @@ export function createLookupManagerClient(
     },
     preview: async (definition, csvData, maximumRows, requestOptions) => {
       validateCSVBytes(csvData);
-      const boundedRows = maximumRows ?? LOOKUP_MAXIMUM_PREVIEW_ROWS;
-      if (!Number.isSafeInteger(boundedRows) || boundedRows < 1 || boundedRows > LOOKUP_MAXIMUM_PREVIEW_ROWS) {
-        throw new RangeError(`Lookup preview rows must be between 1 and ${LOOKUP_MAXIMUM_PREVIEW_ROWS}.`);
+      const boundedRows = maximumRows ?? LOOKUP_MANAGER_CONTRACT.maximumPreviewRows;
+      if (!Number.isSafeInteger(boundedRows) || boundedRows < 1 || boundedRows > LOOKUP_MANAGER_CONTRACT.maximumPreviewRows) {
+        throw new RangeError(`Lookup preview rows must be between 1 and ${LOOKUP_MANAGER_CONTRACT.maximumPreviewRows}.`);
       }
       return transport.post(
         lookupRoutes.preview,
@@ -228,8 +224,8 @@ export function validateCSVBytes(csvData: Uint8Array): void {
   if (!(csvData instanceof Uint8Array) || csvData.byteLength === 0) {
     throw new TypeError("Lookup CSV must be a nonempty byte sequence.");
   }
-  if (csvData.byteLength > LOOKUP_MAXIMUM_CSV_BYTES) {
-    throw new RangeError(`Lookup CSV exceeds ${LOOKUP_MAXIMUM_CSV_BYTES} bytes.`);
+  if (csvData.byteLength > LOOKUP_MANAGER_CONTRACT.maximumUploadBytes) {
+    throw new RangeError(`Lookup CSV exceeds ${LOOKUP_MANAGER_CONTRACT.maximumUploadBytes} bytes.`);
   }
 }
 
@@ -240,22 +236,22 @@ function requiredLookup(value: LookupMessage | undefined): LookupMessage {
   }
   const detached = Lookup.fromPartial(value);
   if (
-    !isManagementIdentity(detached.lookupId, 128)
-    || !isManagementIdentity(detached.tenantId, 255)
-    || !isManagementIdentity(detached.ownerId, 255)
+    !isManagementIdentity(detached.lookupId, LOOKUP_MANAGER_CONTRACT.maximumLookupIdBytes)
+    || !isManagementIdentity(detached.tenantId, LOOKUP_MANAGER_CONTRACT.maximumTenantIdBytes)
+    || !isManagementIdentity(detached.ownerId, LOOKUP_MANAGER_CONTRACT.maximumOwnerIdBytes)
     || detached.version <= 0n
     || detached.version > MAXIMUM_SQLITE_VERSION
     || detached.definition === undefined
     || detached.columns.length === 0
-    || detached.columns.length > 64
+    || detached.columns.length > LOOKUP_MANAGER_CONTRACT.maximumColumns
     || detached.columns.some((column) => !isLookupHeader(column))
     || new Set(detached.columns).size !== detached.columns.length
     || detached.rowCount < 0n
-    || detached.rowCount > 100_000n
+    || detached.rowCount > BigInt(LOOKUP_MANAGER_CONTRACT.maximumAssetRows)
     || detached.canonicalSizeBytes < 1n
-    || detached.canonicalSizeBytes > BigInt(LOOKUP_MAXIMUM_CSV_BYTES)
-    || detached.sourceSha256.byteLength !== 32
-    || detached.contentSha256.byteLength !== 32
+    || detached.canonicalSizeBytes > BigInt(LOOKUP_MANAGER_CONTRACT.maximumUploadBytes)
+    || detached.sourceSha256.byteLength !== LOOKUP_MANAGER_CONTRACT.sha256Bytes
+    || detached.contentSha256.byteLength !== LOOKUP_MANAGER_CONTRACT.sha256Bytes
     || detached.createdAt === undefined
     || detached.updatedAt === undefined
     || !validDate(detached.createdAt)
@@ -284,26 +280,30 @@ function requiredLookup(value: LookupMessage | undefined): LookupMessage {
 }
 
 function boundedLookupDefinitionShape(definition: LookupDefinition | undefined): boolean {
-  if (definition === undefined || definition.keyMappings.length > 4 || definition.outputMappings.length > 16) {
+  if (
+    definition === undefined
+    || definition.keyMappings.length > LOOKUP_MANAGER_CONTRACT.maximumKeyMappings
+    || definition.outputMappings.length > LOOKUP_MANAGER_CONTRACT.maximumOutputMappings
+  ) {
     return false;
   }
   const selector = definition.selector;
   return selector === undefined
-    || (selector.indexPatterns.length <= 16
-      && selector.hostPatterns.length <= 16
-      && selector.sourcePatterns.length <= 16
-      && selector.sourcetypePatterns.length <= 16);
+    || (selector.indexPatterns.length <= LOOKUP_MANAGER_CONTRACT.maximumSelectorPatternsPerDimension
+      && selector.hostPatterns.length <= LOOKUP_MANAGER_CONTRACT.maximumSelectorPatternsPerDimension
+      && selector.sourcePatterns.length <= LOOKUP_MANAGER_CONTRACT.maximumSelectorPatternsPerDimension
+      && selector.sourcetypePatterns.length <= LOOKUP_MANAGER_CONTRACT.maximumSelectorPatternsPerDimension);
 }
 
 function isManagementIdentity(value: string, maximumBytes: number): boolean {
   return value.length > 0
-    && new TextEncoder().encode(value).byteLength <= maximumBytes
+    && textBytes(value) <= maximumBytes
     && /^[A-Za-z0-9](?:[A-Za-z0-9._:-]*)$/u.test(value);
 }
 
 function isLookupHeader(value: string): boolean {
   return value.length > 0
-    && new TextEncoder().encode(value).byteLength <= 255
+    && textBytes(value) <= LOOKUP_MANAGER_CONTRACT.maximumHeaderBytes
     && value.trim() === value
     && !value.includes("\0")
     && !/[\p{Cc}\p{Cf}]/u.test(value);

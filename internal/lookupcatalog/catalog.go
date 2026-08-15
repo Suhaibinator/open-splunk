@@ -41,6 +41,7 @@ const (
 	// management projection. The service requests one additional row to prove
 	// that filtered and sorted pagination never silently truncates the catalog.
 	MaximumManagedLookups = 2_048
+	MaximumListTextBytes  = 255
 	maximumIDAttempts     = 8
 	maximumUnixMicro      = int64(253_402_300_799_999_999)
 	mutationCreate        = "CREATE"
@@ -51,11 +52,12 @@ const (
 )
 
 var (
-	ErrInvalid  = errors.New("lookupcatalog: invalid argument")
-	ErrNotFound = errors.New("lookupcatalog: not found")
-	ErrConflict = errors.New("lookupcatalog: conflict")
-	ErrCapacity = errors.New("lookupcatalog: capacity exceeded")
-	ErrCorrupt  = errors.New("lookupcatalog: persisted state is corrupt")
+	ErrInvalid         = errors.New("lookupcatalog: invalid argument")
+	ErrNotFound        = errors.New("lookupcatalog: not found")
+	ErrConflict        = errors.New("lookupcatalog: conflict")
+	ErrCapacity        = errors.New("lookupcatalog: capacity exceeded")
+	ErrCorrupt         = errors.New("lookupcatalog: persisted state is corrupt")
+	ErrPageInvalidated = errors.New("lookupcatalog: page invalidated")
 )
 
 type IDGenerator func() (string, error)
@@ -129,6 +131,48 @@ type ListRequest struct {
 	OwnerID  string
 	AppID    string
 	Limit    uint32
+}
+
+// ListPageRequest is one normalized management-list query. Position and
+// ExpectedSnapshot are detached cursor authority supplied by lookupservice;
+// the catalog validates both inside the same SQLite read snapshot as the page.
+type ListPageRequest struct {
+	TenantID         string
+	OwnerID          string
+	AppID            string
+	States           []opensplunkv1.LookupState
+	TextFilter       string
+	SortBy           opensplunkv1.LookupSortBy
+	SortDirection    opensplunkv1.SortDirection
+	Limit            uint32
+	Position         *ListPosition
+	ExpectedSnapshot *ListSnapshot
+	IncludeTotal     bool
+}
+
+// ListPosition is the stable keyset immediately after the last returned row.
+// Name is populated for name ordering; UnixMicro is populated for timestamp
+// ordering. LookupID is the deterministic secondary key for every ordering.
+type ListPosition struct {
+	LookupID  string
+	Name      string
+	UnixMicro int64
+}
+
+// ListSnapshot is an exact, owner-scoped commitment to every retained logical
+// lookup identity and current version. Revision increases for every supported
+// mutation; State also detects restore/fork histories with the same revision.
+type ListSnapshot struct {
+	Revision uint64
+	State    [sha256.Size]byte
+}
+
+// ListPage is one bounded, detached current-definition page.
+type ListPage struct {
+	Lookups      []*opensplunkv1.Lookup
+	NextPosition *ListPosition
+	Snapshot     ListSnapshot
+	TotalSize    *uint64
 }
 
 type ResolveScope struct {
@@ -289,6 +333,7 @@ func (catalog *Catalog) CreatePublished(
 		return nil, err
 	}
 	normalized, asset, err := validatePublishedDefinition(
+		ctx,
 		request.TenantID,
 		request.Definition,
 		request.Asset,
@@ -477,6 +522,7 @@ func (catalog *Catalog) ReplacePublished(
 		return nil, err
 	}
 	normalized, asset, err := validatePublishedDefinition(
+		ctx,
 		request.TenantID,
 		request.Definition,
 		request.Asset,
@@ -842,48 +888,18 @@ func (catalog *Catalog) List(ctx context.Context, request ListRequest) ([]*opens
 	if !validIdentity(request.TenantID, 255) || !validIdentity(request.OwnerID, 255) || (request.AppID != "" && !validIdentity(request.AppID, 128)) || request.Limit == 0 || request.Limit > MaximumManagedLookups+1 {
 		return nil, fmt.Errorf("%w: lookup list scope is invalid", ErrInvalid)
 	}
-	tx, err := catalog.database.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	page, err := catalog.ListPage(ctx, ListPageRequest{
+		TenantID:      request.TenantID,
+		OwnerID:       request.OwnerID,
+		AppID:         request.AppID,
+		SortBy:        opensplunkv1.LookupSortBy_LOOKUP_SORT_BY_NAME,
+		SortDirection: opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING,
+		Limit:         request.Limit,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("begin lookup list snapshot: %w", err)
+		return nil, err
 	}
-	defer func() { _ = tx.Rollback() }()
-	rows, err := tx.QueryContext(ctx, `
-		SELECT lookup_id FROM knowledge_lookup_definitions
-		WHERE tenant_id = ? AND owner_id = ? AND (? = '' OR app_id = ?)
-		ORDER BY name, lookup_id LIMIT ?`, request.TenantID, request.OwnerID, request.AppID, request.AppID, request.Limit)
-	if err != nil {
-		return nil, fmt.Errorf("list lookup identities: %w", err)
-	}
-	defer rows.Close()
-	ids := make([]string, 0, request.Limit)
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("list lookup identities: %w", err)
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list lookup identities: %w", err)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, fmt.Errorf("close lookup identity list: %w", err)
-	}
-	result := make([]*opensplunkv1.Lookup, 0, len(ids))
-	for _, id := range ids {
-		record, err := catalog.getProjectionRecordWith(ctx, tx, request.TenantID, id, 0)
-		if err != nil {
-			return nil, err
-		}
-		if record.lookup.GetOwnerId() != request.OwnerID {
-			return nil, ErrCorrupt
-		}
-		result = append(result, record.lookup)
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit lookup list snapshot: %w", err)
-	}
-	return result, nil
+	return page.Lookups, nil
 }
 
 func (catalog *Catalog) Resolve(ctx context.Context, scope ResolveScope) ([]Resolved, error) {
@@ -1052,107 +1068,109 @@ func (catalog *Catalog) resolveAutomaticProjectionRecords(
 	if query == nil || maximum < 0 || maximum > MaximumResolvedLookups {
 		return nil, ErrInvalid
 	}
-	rows, err := query.QueryContext(ctx, `
+	const visible = `
 		SELECT definition.lookup_id, definition.name,
-			definition.sharing_scope, definition.automatic
+			definition.sharing_scope - 1 AS precedence_rank,
+			definition.automatic
 		FROM knowledge_lookup_definitions AS definition
-		JOIN app_workspaces AS app
-		  ON app.tenant_id = definition.tenant_id
-		 AND app.app_id = definition.app_id
-		 AND app.state = 'active'
+		JOIN app_workspaces AS visible_app
+		  ON visible_app.tenant_id = definition.tenant_id
+		 AND visible_app.app_id = definition.app_id
+		 AND visible_app.state = 'active'
 		WHERE definition.tenant_id = ?
 		  AND definition.state = 'ACTIVE'
 		  AND (
 		    (definition.sharing_scope = 1 AND definition.owner_id = ? AND definition.app_id = ?)
 		    OR (definition.sharing_scope = 2 AND definition.app_id = ?)
 		    OR definition.sharing_scope = 3
-		  )
-		ORDER BY definition.name, definition.lookup_id LIMIT ?`,
+		  )`
+	arguments := []any{
 		scope.TenantID,
 		scope.PrincipalID,
 		scope.AppID,
 		scope.AppID,
-		MaximumManagedLookups+1,
-	)
+	}
+	var visibleCount, maximumWinningMatches int64
+	if err := query.QueryRowContext(ctx, `
+		WITH visible AS (`+visible+`),
+		ranked AS (
+			SELECT precedence_rank,
+				min(precedence_rank) OVER (PARTITION BY name) AS winning_rank,
+				count(*) OVER (PARTITION BY name, precedence_rank) AS rank_matches
+			FROM visible
+		)
+		SELECT (SELECT count(*) FROM visible),
+			COALESCE(max(CASE WHEN precedence_rank = winning_rank THEN rank_matches ELSE 0 END), 0)
+		FROM ranked`, arguments...).Scan(&visibleCount, &maximumWinningMatches); err != nil {
+		return nil, fmt.Errorf("preflight automatic lookup winners: %w", err)
+	}
+	if visibleCount < 0 || visibleCount > MaximumManagedLookups {
+		return nil, ErrCapacity
+	}
+	if maximumWinningMatches > 1 {
+		return nil, ErrConflict
+	}
+	if maximumWinningMatches < 0 {
+		return nil, ErrCorrupt
+	}
+	rows, err := query.QueryContext(ctx, `
+		WITH visible AS (`+visible+`),
+		winners AS (
+			SELECT lookup_id, name, automatic, precedence_rank,
+				min(precedence_rank) OVER (PARTITION BY name) AS winning_rank
+			FROM visible
+		)
+		SELECT `+projectionSelectColumns+`
+		FROM winners
+		JOIN knowledge_lookup_definitions AS registry
+		  ON registry.tenant_id = ?
+		 AND registry.lookup_id = winners.lookup_id
+		JOIN knowledge_lookup_definition_versions AS version
+		  ON version.tenant_id = registry.tenant_id
+		 AND version.lookup_id = registry.lookup_id
+		 AND version.definition_version = registry.current_version
+		JOIN knowledge_lookup_asset_versions AS asset
+		  ON asset.tenant_id = version.tenant_id
+		 AND asset.lookup_asset_id = version.lookup_asset_id
+		 AND asset.asset_version = version.asset_version
+		 AND asset.content_sha256 = version.asset_content_sha256
+		 AND asset.canonical_bytes = version.asset_size_bytes
+		WHERE winners.precedence_rank = winners.winning_rank
+		  AND winners.automatic = 1
+		ORDER BY winners.name, winners.lookup_id
+		LIMIT ?`, append(arguments, scope.TenantID, maximum+1)...)
 	if err != nil {
-		return nil, fmt.Errorf("resolve automatic lookup identities: %w", err)
+		return nil, fmt.Errorf("read automatic lookup winners: %w", err)
 	}
-	type candidate struct {
-		id        string
-		name      string
-		rank      int
-		automatic bool
-	}
-	candidates := make([]candidate, 0)
+	records := make([]persistedProjection, 0, maximum+1)
 	for rows.Next() {
-		var value candidate
-		var sharing int32
-		if scanErr := rows.Scan(&value.id, &value.name, &sharing, &value.automatic); scanErr != nil {
-			rows.Close()
-			return nil, fmt.Errorf("resolve automatic lookup identities: %w", scanErr)
+		registry, version, scanErr := scanJoinedProjection(rows)
+		if scanErr != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("scan automatic lookup winners: %w", scanErr)
 		}
-		value.rank = sharingRank(sharing)
-		if value.rank < 0 {
-			rows.Close()
-			return nil, ErrCorrupt
-		}
-		candidates = append(candidates, value)
-	}
-	if iterationErr := rows.Err(); iterationErr != nil {
-		rows.Close()
-		return nil, fmt.Errorf("resolve automatic lookup identities: %w", iterationErr)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, fmt.Errorf("close automatic lookup identities: %w", err)
-	}
-	if len(candidates) > MaximumManagedLookups {
-		return nil, ErrCapacity
-	}
-	type winner struct {
-		candidate candidate
-		matches   int
-	}
-	winners := make(map[string]winner)
-	for _, value := range candidates {
-		current, exists := winners[value.name]
-		switch {
-		case !exists || value.rank < current.candidate.rank:
-			winners[value.name] = winner{candidate: value, matches: 1}
-		case value.rank == current.candidate.rank:
-			current.matches++
-			winners[value.name] = current
-		}
-	}
-	selected := make([]candidate, 0, len(winners))
-	for _, winning := range winners {
-		if winning.matches != 1 {
-			return nil, ErrConflict
-		}
-		if winning.candidate.automatic {
-			selected = append(selected, winning.candidate)
-		}
-	}
-	slices.SortFunc(selected, func(left, right candidate) int {
-		if compared := strings.Compare(left.name, right.name); compared != 0 {
-			return compared
-		}
-		return strings.Compare(left.id, right.id)
-	})
-	if len(selected) > maximum {
-		return nil, ErrCapacity
-	}
-	records := make([]persistedProjection, len(selected))
-	for index, value := range selected {
-		record, recordErr := catalog.getProjectionRecordWith(ctx, query, scope.TenantID, value.id, 0)
-		if recordErr != nil {
-			return nil, recordErr
+		record, projectionErr := projectPersisted(registry, version)
+		if projectionErr != nil {
+			_ = rows.Close()
+			return nil, projectionErr
 		}
 		if record.lookup.GetState() != opensplunkv1.LookupState_LOOKUP_STATE_ACTIVE ||
 			!record.lookup.GetDefinition().GetAutomatic() ||
-			record.lookup.GetDefinition().GetName() != value.name {
+			record.lookup.GetDefinition().GetName() != registry.name {
+			_ = rows.Close()
 			return nil, ErrConflict
 		}
-		records[index] = record
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, fmt.Errorf("iterate automatic lookup winners: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close automatic lookup winners: %w", err)
+	}
+	if len(records) > maximum {
+		return nil, ErrCapacity
 	}
 	return records, nil
 }
@@ -1266,6 +1284,204 @@ type persistedProjection struct {
 	assetRef lookupasset.VersionRef
 }
 
+type persistedRegistry struct {
+	tenantID       string
+	lookupID       string
+	ownerID        string
+	appID          string
+	name           string
+	sharingScope   int32
+	automatic      bool
+	currentVersion uint64
+	state          string
+	createdMicro   int64
+	updatedMicro   int64
+	disabledMicro  sql.NullInt64
+	deletedMicro   sql.NullInt64
+}
+
+type persistedDefinitionVersion struct {
+	definitionVersion uint64
+	assetID           string
+	assetVersion      uint64
+	assetSize         uint64
+	digestBytes       []byte
+	definitionBytes   []byte
+	columnsBlob       []byte
+	mutationKind      string
+	state             string
+	disabledMicro     sql.NullInt64
+	deletedMicro      sql.NullInt64
+	createdMicro      int64
+	sourceDigestBytes []byte
+	rowCount          uint64
+	columnCount       uint32
+}
+
+type projectionScanner interface {
+	Scan(...any) error
+}
+
+func scanJoinedProjection(scanner projectionScanner) (
+	persistedRegistry,
+	persistedDefinitionVersion,
+	error,
+) {
+	registry := persistedRegistry{}
+	version := persistedDefinitionVersion{}
+	err := scanner.Scan(
+		&registry.tenantID,
+		&registry.lookupID,
+		&registry.ownerID,
+		&registry.appID,
+		&registry.name,
+		&registry.sharingScope,
+		&registry.automatic,
+		&registry.currentVersion,
+		&registry.state,
+		&registry.createdMicro,
+		&registry.updatedMicro,
+		&registry.disabledMicro,
+		&registry.deletedMicro,
+		&version.definitionVersion,
+		&version.assetID,
+		&version.assetVersion,
+		&version.assetSize,
+		&version.digestBytes,
+		&version.definitionBytes,
+		&version.columnsBlob,
+		&version.mutationKind,
+		&version.state,
+		&version.disabledMicro,
+		&version.deletedMicro,
+		&version.createdMicro,
+		&version.sourceDigestBytes,
+		&version.rowCount,
+		&version.columnCount,
+	)
+	return registry, version, err
+}
+
+func projectPersisted(
+	registry persistedRegistry,
+	version persistedDefinitionVersion,
+) (persistedProjection, error) {
+	if err := validatePersistedRegistry(registry); err != nil {
+		return persistedProjection{}, err
+	}
+	if version.definitionVersion == 0 || version.definitionVersion > uint64(^uint64(0)>>1) ||
+		!validPersistedIdentity(version.assetID, 128) || version.assetVersion == 0 ||
+		version.assetVersion > uint64(^uint64(0)>>1) || version.assetSize == 0 ||
+		version.assetSize > lookupasset.MaximumSourceBytes ||
+		len(version.digestBytes) != sha256.Size || len(version.sourceDigestBytes) != sha256.Size ||
+		version.rowCount > lookupasset.MaximumRows || version.columnCount == 0 ||
+		version.columnCount > lookupasset.MaximumColumns ||
+		version.createdMicro < registry.createdMicro ||
+		version.createdMicro > registry.updatedMicro || version.createdMicro > maximumUnixMicro {
+		return persistedProjection{}, ErrCorrupt
+	}
+	if !validOptionalTimestamp(version.disabledMicro, 1, version.createdMicro) ||
+		!validOptionalTimestamp(version.deletedMicro, 1, version.createdMicro) {
+		return persistedProjection{}, ErrCorrupt
+	}
+	var digest [sha256.Size]byte
+	copy(digest[:], version.digestBytes)
+	var sourceDigest [sha256.Size]byte
+	copy(sourceDigest[:], version.sourceDigestBytes)
+	if digest == ([sha256.Size]byte{}) || sourceDigest == ([sha256.Size]byte{}) {
+		return persistedProjection{}, ErrCorrupt
+	}
+	columns, err := decodeColumns(version.columnsBlob)
+	if err != nil || len(columns) != int(version.columnCount) {
+		return persistedProjection{}, ErrCorrupt
+	}
+	definition := &opensplunkv1.LookupDefinition{}
+	if err := (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(version.definitionBytes, definition); err != nil {
+		return persistedProjection{}, ErrCorrupt
+	}
+	normalized, err := lookupdefinition.Normalize(definition, columns)
+	if err != nil {
+		return persistedProjection{}, ErrCorrupt
+	}
+	canonical, err := deterministicDefinition(normalized.Definition)
+	if err != nil || !slices.Equal(canonical, version.definitionBytes) ||
+		(version.definitionVersion == registry.currentVersion &&
+			(registry.appID != normalized.Definition.GetAppId() ||
+				registry.name != normalized.Definition.GetName() ||
+				registry.sharingScope != int32(normalized.Definition.GetSharingScope()) ||
+				registry.automatic != normalized.Definition.GetAutomatic() ||
+				registry.state != version.state ||
+				registry.updatedMicro != version.createdMicro ||
+				!equalNullInt64(registry.disabledMicro, version.disabledMicro) ||
+				!equalNullInt64(registry.deletedMicro, version.deletedMicro))) {
+		return persistedProjection{}, ErrCorrupt
+	}
+	lookupState, disabled, deleted, err := versionStateTimes(
+		version.mutationKind,
+		version.state,
+		version.createdMicro,
+		version.disabledMicro,
+		version.deletedMicro,
+	)
+	if err != nil {
+		return persistedProjection{}, err
+	}
+	lookup := projectionMetadata(
+		registry.tenantID,
+		registry.ownerID,
+		registry.lookupID,
+		version.definitionVersion,
+		lookupState,
+		normalized.Definition,
+		columns,
+		version.rowCount,
+		version.assetSize,
+		sourceDigest,
+		digest,
+		time.UnixMicro(registry.createdMicro).UTC(),
+		time.UnixMicro(version.createdMicro).UTC(),
+		disabled,
+		deleted,
+	)
+	return persistedProjection{
+		lookup: lookup,
+		assetRef: lookupasset.VersionRef{
+			TenantID:      registry.tenantID,
+			LookupAssetID: version.assetID,
+			Version:       version.assetVersion,
+			SizeBytes:     version.assetSize,
+			ContentSHA256: digest,
+		},
+	}, nil
+}
+
+func validatePersistedRegistry(registry persistedRegistry) error {
+	if !validIdentity(registry.tenantID, 255) ||
+		!validIdentity(registry.lookupID, 128) ||
+		!validIdentity(registry.ownerID, 255) ||
+		!validIdentity(registry.appID, 128) ||
+		!lookupdefinition.IsValidLookupName(registry.name) ||
+		sharingRank(registry.sharingScope) < 0 || registry.currentVersion == 0 ||
+		registry.currentVersion > uint64(^uint64(0)>>1) {
+		return ErrCorrupt
+	}
+	if registry.createdMicro < 1 || registry.createdMicro > maximumUnixMicro ||
+		registry.updatedMicro < registry.createdMicro || registry.updatedMicro > maximumUnixMicro ||
+		!validOptionalTimestamp(registry.disabledMicro, registry.createdMicro, registry.updatedMicro) ||
+		!validOptionalTimestamp(registry.deletedMicro, registry.createdMicro, registry.updatedMicro) {
+		return ErrCorrupt
+	}
+	if _, _, _, err := stateTimes(
+		registry.state,
+		time.Time{},
+		nullTime(registry.disabledMicro),
+		nullTime(registry.deletedMicro),
+	); err != nil {
+		return err
+	}
+	return nil
+}
+
 func preflightResolvedRecords(records []persistedProjection) error {
 	if len(records) > MaximumResolvedLookups {
 		return ErrCapacity
@@ -1321,51 +1537,23 @@ func (catalog *Catalog) getProjectionRecordWith(
 		requestedVersion > uint64(^uint64(0)>>1) {
 		return persistedProjection{}, fmt.Errorf("%w: lookup identity is invalid", ErrInvalid)
 	}
-	var ownerID, registryAppID, registryName, registryState string
-	var registrySharingScope int32
-	var registryAutomatic bool
-	var current uint64
-	var createdMicro, registryUpdatedMicro int64
-	var registryDisabledMicro, registryDeletedMicro sql.NullInt64
 	if query == nil {
 		return persistedProjection{}, ErrInvalid
 	}
-	if err := query.QueryRowContext(ctx, `SELECT owner_id, app_id, name, sharing_scope, automatic, current_version, state, created_at_unix_micro, updated_at_unix_micro, disabled_at_unix_micro, deleted_at_unix_micro FROM knowledge_lookup_definitions WHERE tenant_id = ? AND lookup_id = ?`, tenantID, lookupID).Scan(&ownerID, &registryAppID, &registryName, &registrySharingScope, &registryAutomatic, &current, &registryState, &createdMicro, &registryUpdatedMicro, &registryDisabledMicro, &registryDeletedMicro); errors.Is(err, sql.ErrNoRows) {
+	registry := persistedRegistry{tenantID: tenantID, lookupID: lookupID}
+	if err := query.QueryRowContext(ctx, `SELECT owner_id, app_id, name, sharing_scope, automatic, current_version, state, created_at_unix_micro, updated_at_unix_micro, disabled_at_unix_micro, deleted_at_unix_micro FROM knowledge_lookup_definitions WHERE tenant_id = ? AND lookup_id = ?`, tenantID, lookupID).Scan(&registry.ownerID, &registry.appID, &registry.name, &registry.sharingScope, &registry.automatic, &registry.currentVersion, &registry.state, &registry.createdMicro, &registry.updatedMicro, &registry.disabledMicro, &registry.deletedMicro); errors.Is(err, sql.ErrNoRows) {
 		return persistedProjection{}, ErrNotFound
 	} else if err != nil {
 		return persistedProjection{}, fmt.Errorf("read lookup registry: %w", err)
 	}
-	if !validIdentity(ownerID, 255) || !validIdentity(registryAppID, 128) ||
-		!lookupdefinition.IsValidLookupName(registryName) ||
-		sharingRank(registrySharingScope) < 0 || current == 0 ||
-		current > uint64(^uint64(0)>>1) {
-		return persistedProjection{}, ErrCorrupt
-	}
-	if createdMicro < 1 || createdMicro > maximumUnixMicro ||
-		registryUpdatedMicro < createdMicro || registryUpdatedMicro > maximumUnixMicro ||
-		!validOptionalTimestamp(registryDisabledMicro, createdMicro, registryUpdatedMicro) ||
-		!validOptionalTimestamp(registryDeletedMicro, createdMicro, registryUpdatedMicro) {
-		return persistedProjection{}, ErrCorrupt
-	}
-	if _, _, _, err := stateTimes(
-		registryState,
-		time.Time{},
-		nullTime(registryDisabledMicro),
-		nullTime(registryDeletedMicro),
-	); err != nil {
+	if err := validatePersistedRegistry(registry); err != nil {
 		return persistedProjection{}, err
 	}
 	version := requestedVersion
 	if version == 0 {
-		version = current
+		version = registry.currentVersion
 	}
-	var assetID string
-	var assetVersion, assetSize, rowCount uint64
-	var columnCount uint32
-	var digestBytes, sourceDigestBytes, definitionBytes, columnsBlob []byte
-	var mutationKind, versionState string
-	var versionCreatedMicro int64
-	var versionDisabledMicro, versionDeletedMicro sql.NullInt64
+	persistedVersion := persistedDefinitionVersion{definitionVersion: version}
 	if err := query.QueryRowContext(ctx, `
 		SELECT version.lookup_asset_id, version.asset_version,
 			version.asset_size_bytes, version.asset_content_sha256,
@@ -1386,106 +1574,26 @@ func (catalog *Catalog) getProjectionRecordWith(
 		lookupID,
 		version,
 	).Scan(
-		&assetID,
-		&assetVersion,
-		&assetSize,
-		&digestBytes,
-		&definitionBytes,
-		&columnsBlob,
-		&mutationKind,
-		&versionState,
-		&versionDisabledMicro,
-		&versionDeletedMicro,
-		&versionCreatedMicro,
-		&sourceDigestBytes,
-		&rowCount,
-		&columnCount,
+		&persistedVersion.assetID,
+		&persistedVersion.assetVersion,
+		&persistedVersion.assetSize,
+		&persistedVersion.digestBytes,
+		&persistedVersion.definitionBytes,
+		&persistedVersion.columnsBlob,
+		&persistedVersion.mutationKind,
+		&persistedVersion.state,
+		&persistedVersion.disabledMicro,
+		&persistedVersion.deletedMicro,
+		&persistedVersion.createdMicro,
+		&persistedVersion.sourceDigestBytes,
+		&persistedVersion.rowCount,
+		&persistedVersion.columnCount,
 	); errors.Is(err, sql.ErrNoRows) {
 		return persistedProjection{}, ErrNotFound
 	} else if err != nil {
 		return persistedProjection{}, fmt.Errorf("read lookup definition version: %w", err)
 	}
-	if !validPersistedIdentity(assetID, 128) || assetVersion == 0 ||
-		assetVersion > uint64(^uint64(0)>>1) || assetSize == 0 ||
-		assetSize > lookupasset.MaximumSourceBytes ||
-		len(digestBytes) != sha256.Size || len(sourceDigestBytes) != sha256.Size ||
-		rowCount > lookupasset.MaximumRows || columnCount == 0 ||
-		columnCount > lookupasset.MaximumColumns || versionCreatedMicro < createdMicro ||
-		versionCreatedMicro > registryUpdatedMicro || versionCreatedMicro > maximumUnixMicro {
-		return persistedProjection{}, ErrCorrupt
-	}
-	if !validOptionalTimestamp(versionDisabledMicro, 1, versionCreatedMicro) ||
-		!validOptionalTimestamp(versionDeletedMicro, 1, versionCreatedMicro) {
-		return persistedProjection{}, ErrCorrupt
-	}
-	var digest [sha256.Size]byte
-	copy(digest[:], digestBytes)
-	var sourceDigest [sha256.Size]byte
-	copy(sourceDigest[:], sourceDigestBytes)
-	if digest == ([sha256.Size]byte{}) || sourceDigest == ([sha256.Size]byte{}) {
-		return persistedProjection{}, ErrCorrupt
-	}
-	columns, err := decodeColumns(columnsBlob)
-	if err != nil || len(columns) != int(columnCount) {
-		return persistedProjection{}, ErrCorrupt
-	}
-	definition := &opensplunkv1.LookupDefinition{}
-	if err := (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(definitionBytes, definition); err != nil {
-		return persistedProjection{}, ErrCorrupt
-	}
-	normalized, err := lookupdefinition.Normalize(definition, columns)
-	if err != nil {
-		return persistedProjection{}, ErrCorrupt
-	}
-	canonical, err := deterministicDefinition(normalized.Definition)
-	if err != nil || !slices.Equal(canonical, definitionBytes) ||
-		(version == current && (registryAppID != normalized.Definition.GetAppId() ||
-			registryName != normalized.Definition.GetName() ||
-			registrySharingScope != int32(normalized.Definition.GetSharingScope()) ||
-			registryAutomatic != normalized.Definition.GetAutomatic() ||
-			registryState != versionState ||
-			registryUpdatedMicro != versionCreatedMicro ||
-			!equalNullInt64(registryDisabledMicro, versionDisabledMicro) ||
-			!equalNullInt64(registryDeletedMicro, versionDeletedMicro))) {
-		return persistedProjection{}, ErrCorrupt
-	}
-	lookupState, disabled, deleted, err := versionStateTimes(
-		mutationKind,
-		versionState,
-		versionCreatedMicro,
-		versionDisabledMicro,
-		versionDeletedMicro,
-	)
-	if err != nil {
-		return persistedProjection{}, err
-	}
-	lookup := projectionMetadata(
-		tenantID,
-		ownerID,
-		lookupID,
-		version,
-		lookupState,
-		normalized.Definition,
-		columns,
-		rowCount,
-		assetSize,
-		sourceDigest,
-		digest,
-		time.UnixMicro(createdMicro).UTC(),
-		time.UnixMicro(versionCreatedMicro).UTC(),
-		disabled,
-		deleted,
-	)
-	return persistedProjection{
-		lookup: lookup,
-		assetRef: lookupasset.VersionRef{
-			TenantID:      tenantID,
-			LookupAssetID: assetID,
-			Version:       assetVersion,
-			SizeBytes:     assetSize,
-			ContentSHA256: digest,
-		},
-	}, nil
+	return projectPersisted(registry, persistedVersion)
 }
 
 func (catalog *Catalog) getResolved(ctx context.Context, tenantID, lookupID string, requestedVersion uint64) (Resolved, error) {
@@ -1545,13 +1653,14 @@ func (catalog *Catalog) validateDefinitionAsset(ctx context.Context, tenantID st
 	for index, mapping := range normalized.Definition.GetKeyMappings() {
 		keyColumns[index] = mapping.GetLookupField()
 	}
-	if err := lookupasset.ValidateUniqueKeys(asset.Asset, keyColumns); err != nil {
+	if err := lookupasset.ValidateUniqueKeysContext(ctx, asset.Asset, keyColumns); err != nil {
 		return lookupdefinition.Normalized{}, lookupasset.Version{}, err
 	}
 	return normalized, asset, nil
 }
 
 func validatePublishedDefinition(
+	ctx context.Context,
 	tenantID string,
 	definition *opensplunkv1.LookupDefinition,
 	asset lookupasset.Version,
@@ -1586,7 +1695,7 @@ func validatePublishedDefinition(
 	for index, mapping := range normalized.Definition.GetKeyMappings() {
 		keyColumns[index] = mapping.GetLookupField()
 	}
-	if err := lookupasset.ValidateUniqueKeys(asset.Asset, keyColumns); err != nil {
+	if err := lookupasset.ValidateUniqueKeysContext(ctx, asset.Asset, keyColumns); err != nil {
 		return lookupdefinition.Normalized{}, lookupasset.Version{}, err
 	}
 	return normalized, asset, nil

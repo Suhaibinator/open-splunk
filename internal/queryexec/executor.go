@@ -404,12 +404,7 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 	if progressOption != nil {
 		queryOptions = append(queryOptions, progressOption)
 	}
-	if len(externalTables) != 0 {
-		queryOptions = append(
-			queryOptions,
-			clickhousedriver.WithExternalTable(externalTables...),
-		)
-	}
+	queryOptions = appendExternalTableOption(queryOptions, externalTables)
 	queryContext := clickhousedriver.Context(executionContext, queryOptions...)
 	rows, err := executor.connection.Query(queryContext, query.SQL, query.Args...)
 	if err != nil {

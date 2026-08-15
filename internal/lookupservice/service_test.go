@@ -1,9 +1,12 @@
 package lookupservice
 
 import (
+	"context"
 	"errors"
 	"math"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
@@ -262,6 +265,93 @@ func TestServiceRejectsPartialDependenciesAndCrossOwnerReads(t *testing.T) {
 	}
 }
 
+func TestServiceListKeysetSortMatrixHasNoGapsOrDuplicates(t *testing.T) {
+	service := newTestService(t)
+	scope := Scope{TenantID: testTenant, OwnerID: testOwner}
+	lookups := make([]*opensplunkv1.Lookup, 0, 4)
+	for _, name := range []string{"zeta", "alpha", "gamma", "beta"} {
+		created, err := service.Create(t.Context(), scope, &opensplunkv1.CreateLookupRequest{
+			Definition: testDefinition(name),
+			CsvData:    []byte("service_id,owner\na,alice\n"),
+		})
+		if err != nil {
+			t.Fatalf("Create(%s): %v", name, err)
+		}
+		lookups = append(lookups, created.GetLookup())
+	}
+	replacementDefinition := proto.Clone(lookups[2].GetDefinition()).(*opensplunkv1.LookupDefinition)
+	description := "updated"
+	replacementDefinition.Description = &description
+	replaced, err := service.Replace(t.Context(), scope, &opensplunkv1.ReplaceLookupRequest{
+		LookupId: lookups[2].GetLookupId(), ExpectedVersion: lookups[2].GetVersion(),
+		Definition: replacementDefinition,
+	})
+	if err != nil {
+		t.Fatalf("Replace(updated sort fixture): %v", err)
+	}
+	lookups[2] = replaced.GetLookup()
+
+	for _, sortBy := range []opensplunkv1.LookupSortBy{
+		opensplunkv1.LookupSortBy_LOOKUP_SORT_BY_NAME,
+		opensplunkv1.LookupSortBy_LOOKUP_SORT_BY_CREATED_AT,
+		opensplunkv1.LookupSortBy_LOOKUP_SORT_BY_UPDATED_AT,
+	} {
+		for _, direction := range []opensplunkv1.SortDirection{
+			opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING,
+			opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING,
+		} {
+			expected := slices.Clone(lookups)
+			slices.SortFunc(expected, func(left, right *opensplunkv1.Lookup) int {
+				comparison := 0
+				switch sortBy {
+				case opensplunkv1.LookupSortBy_LOOKUP_SORT_BY_CREATED_AT:
+					comparison = left.GetCreatedAt().AsTime().Compare(right.GetCreatedAt().AsTime())
+				case opensplunkv1.LookupSortBy_LOOKUP_SORT_BY_UPDATED_AT:
+					comparison = left.GetUpdatedAt().AsTime().Compare(right.GetUpdatedAt().AsTime())
+				default:
+					comparison = strings.Compare(left.GetDefinition().GetName(), right.GetDefinition().GetName())
+				}
+				if comparison == 0 {
+					comparison = strings.Compare(left.GetLookupId(), right.GetLookupId())
+				}
+				if direction == opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING {
+					return -comparison
+				}
+				return comparison
+			})
+			request := &opensplunkv1.ListLookupsRequest{
+				Page:          &opensplunkv1.PageRequest{PageSize: uint32Pointer(1)},
+				AppId:         stringPointer(testAppID),
+				SortBy:        sortBy,
+				SortDirection: direction,
+			}
+			got := make([]string, 0, len(expected))
+			for {
+				page, err := service.List(t.Context(), scope, request)
+				if err != nil || len(page.GetLookups()) != 1 {
+					t.Fatalf("List(%s, %s) = %#v, %v", sortBy, direction, page, err)
+				}
+				got = append(got, page.GetLookups()[0].GetLookupId())
+				token := page.GetPage().GetNextPageToken()
+				if token == "" {
+					break
+				}
+				request.Page.PageToken = &token
+				if len(got) > len(expected) {
+					t.Fatalf("List(%s, %s) did not terminate", sortBy, direction)
+				}
+			}
+			want := make([]string, len(expected))
+			for index, lookup := range expected {
+				want[index] = lookup.GetLookupId()
+			}
+			if !slices.Equal(got, want) {
+				t.Fatalf("List(%s, %s) ids = %v, want %v", sortBy, direction, got, want)
+			}
+		}
+	}
+}
+
 func TestClassifyPhysicalVersionRaceAsConflict(t *testing.T) {
 	if err := classify(lookupasset.ErrConflict); !errors.Is(err, ErrConflict) {
 		t.Fatalf("classify(physical conflict) = %v", err)
@@ -281,6 +371,19 @@ func TestServiceGetRejectsVersionsOutsideSQLiteAuthority(t *testing.T) {
 	)
 	if !errors.Is(err, ErrInvalid) {
 		t.Fatalf("Get(high-bit version) error = %v, want ErrInvalid", err)
+	}
+}
+
+func TestPrepareAssetDefinitionPropagatesCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _, err := prepareAssetDefinition(
+		ctx,
+		[]byte("service_id,owner\napi,alice\n"),
+		testDefinition("services"),
+	)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("prepareAssetDefinition cancellation = %v", err)
 	}
 }
 

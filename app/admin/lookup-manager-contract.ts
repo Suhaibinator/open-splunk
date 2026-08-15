@@ -6,15 +6,49 @@ import {
 } from "@/gen/ts/open_splunk/v1/knowledge";
 import type { LookupDefinition, LookupFieldMapping } from "@/gen/ts/open_splunk/v1/lookup";
 
-export const LOOKUP_MAXIMUM_NAME_BYTES = 255;
-export const LOOKUP_MAXIMUM_DESCRIPTION_BYTES = 16 << 10;
-export const LOOKUP_MAXIMUM_AUTHORED_SOURCE_BYTES = 16 << 10;
-const LOOKUP_MAXIMUM_EVENT_FIELD_BYTES = 8_720;
-const LOOKUP_MAXIMUM_EVENT_FIELD_SEGMENTS = 17;
-const LOOKUP_MAXIMUM_EVENT_FIELD_SEGMENT_BYTES = 256;
-const LOOKUP_MAXIMUM_SELECTOR_PATTERN_BYTES = 255;
-const LOOKUP_MAXIMUM_SELECTOR_NORMALIZED_BYTES = 8 << 10;
-const LOOKUP_MAXIMUM_SELECTOR_WORK_UNITS = 1 << 10;
+const LOOKUP_LIST_PAGE_SIZE = 100;
+const LOOKUP_MAXIMUM_MANAGED = 2_048;
+
+/**
+ * Frontend mirror of the backend lookup publication, pagination, and response
+ * ceilings. Keeping every browser-side bound here prevents validation and UI
+ * copy from becoming independent compatibility authorities.
+ */
+export const LOOKUP_MANAGER_CONTRACT = Object.freeze({
+  maximumNameBytes: 255,
+  maximumDescriptionBytes: 16 << 10,
+  maximumAuthoredSourceBytes: 16 << 10,
+  maximumAppIdBytes: 128,
+  maximumLookupIdBytes: 128,
+  maximumTenantIdBytes: 255,
+  maximumOwnerIdBytes: 255,
+  maximumEventFieldBytes: 8_720,
+  maximumEventFieldSegments: 17,
+  maximumEventFieldSegmentBytes: 256,
+  maximumSelectorPatternBytes: 255,
+  maximumSelectorPatternsPerDimension: 16,
+  maximumSelectorPatterns: 64,
+  maximumSelectorNormalizedBytes: 8 << 10,
+  maximumSelectorWorkUnits: 1 << 10,
+  maximumUploadBytes: 8 << 20,
+  maximumAssetRows: 100_000,
+  maximumColumns: 64,
+  maximumCellBytes: 64 << 10,
+  maximumRowBytes: 1 << 20,
+  maximumHeaderBytes: 255,
+  maximumKeyMappings: 4,
+  maximumOutputMappings: 16,
+  listPageSize: LOOKUP_LIST_PAGE_SIZE,
+  maximumManagedLookups: LOOKUP_MAXIMUM_MANAGED,
+  maximumListPages: Math.ceil(LOOKUP_MAXIMUM_MANAGED / LOOKUP_LIST_PAGE_SIZE),
+  maximumPageTokenBytes: 4 << 10,
+  maximumPreviewRows: 100,
+  maximumPreviewViolations: 8,
+  maximumViolationFieldPathBytes: 255,
+  maximumViolationCodeBytes: 128,
+  maximumViolationMessageBytes: 4 << 10,
+  sha256Bytes: 32,
+});
 const CANONICAL_SELECTOR_DOMAIN = "open-splunk/knowledge-selector/v1\0";
 
 export function textBytes(value: string): number {
@@ -65,15 +99,15 @@ export function isExactPublicField(value: string): boolean {
 
 /** Mirrors the canonical event path accepted by plan.ResolveField. */
 export function isExactEventField(value: string): boolean {
-  if (!isExactPublicField(value) || textBytes(value) > LOOKUP_MAXIMUM_EVENT_FIELD_BYTES) return false;
+  if (!isExactPublicField(value) || textBytes(value) > LOOKUP_MANAGER_CONTRACT.maximumEventFieldBytes) return false;
   let segment = "";
   let segmentCount = 0;
   let escaped = false;
   const finishSegment = (): boolean => {
-    if (segment.length === 0 || textBytes(segment) > LOOKUP_MAXIMUM_EVENT_FIELD_SEGMENT_BYTES) return false;
+    if (segment.length === 0 || textBytes(segment) > LOOKUP_MANAGER_CONTRACT.maximumEventFieldSegmentBytes) return false;
     segmentCount += 1;
     segment = "";
-    return segmentCount <= LOOKUP_MAXIMUM_EVENT_FIELD_SEGMENTS;
+    return segmentCount <= LOOKUP_MANAGER_CONTRACT.maximumEventFieldSegments;
   };
   for (const character of value) {
     if (escaped) {
@@ -106,7 +140,7 @@ function normalizeSelectorPattern(value: string): CanonicalSelectorPattern | und
   if (
     value.length === 0
     || value.replace(/^[\t-\r ]+|[\t-\r ]+$/gu, "") !== value
-    || textBytes(value) > LOOKUP_MAXIMUM_SELECTOR_PATTERN_BYTES
+    || textBytes(value) > LOOKUP_MANAGER_CONTRACT.maximumSelectorPatternBytes
     || hasUnpairedSurrogate(value)
   ) return undefined;
   let canonical = "";
@@ -147,7 +181,7 @@ function normalizeSelectorPattern(value: string): CanonicalSelectorPattern | und
       workUnits += 1;
     }
   }
-  if (escaped || canonical !== value || textBytes(canonical) > LOOKUP_MAXIMUM_SELECTOR_PATTERN_BYTES) {
+  if (escaped || canonical !== value || textBytes(canonical) > LOOKUP_MANAGER_CONTRACT.maximumSelectorPatternBytes) {
     return undefined;
   }
   return {
@@ -188,7 +222,7 @@ function validCanonicalSelector(definition: LookupDefinition): boolean {
   let normalizedBytes = textBytes(CANONICAL_SELECTOR_DOMAIN) + dimensions.length * 3;
   let workUnits = 0;
   for (const patterns of dimensions) {
-    if (patterns.length > 16) return false;
+    if (patterns.length > LOOKUP_MANAGER_CONTRACT.maximumSelectorPatternsPerDimension) return false;
     let previous: string | undefined;
     for (const pattern of patterns) {
       const normalized = validSelectorPattern(pattern);
@@ -202,9 +236,9 @@ function validCanonicalSelector(definition: LookupDefinition): boolean {
     }
   }
   return patternCount >= 1
-    && patternCount <= 64
-    && normalizedBytes <= LOOKUP_MAXIMUM_SELECTOR_NORMALIZED_BYTES
-    && workUnits <= LOOKUP_MAXIMUM_SELECTOR_WORK_UNITS;
+    && patternCount <= LOOKUP_MANAGER_CONTRACT.maximumSelectorPatterns
+    && normalizedBytes <= LOOKUP_MANAGER_CONTRACT.maximumSelectorNormalizedBytes
+    && workUnits <= LOOKUP_MANAGER_CONTRACT.maximumSelectorWorkUnits;
 }
 
 function validSelectorPattern(pattern: KnowledgeSelectorPattern): CanonicalSelectorPattern | undefined {
@@ -242,7 +276,7 @@ function isManagementIdentity(value: string, maximumBytes: number): boolean {
 
 function validDescription(value: string | undefined): boolean {
   return value === undefined
-    || (textBytes(value) <= LOOKUP_MAXIMUM_DESCRIPTION_BYTES
+    || (textBytes(value) <= LOOKUP_MANAGER_CONTRACT.maximumDescriptionBytes
       && !hasUnpairedSurrogate(value)
       && !/[\p{Cc}\p{Cf}]/u.test(value));
 }
@@ -269,7 +303,7 @@ export function canonicalLookupSourceBytes(definition: LookupDefinition): number
 }
 
 export function isCanonicallyAuthorableLookupDefinition(definition: LookupDefinition): boolean {
-  return canonicalLookupSourceBytes(definition) <= LOOKUP_MAXIMUM_AUTHORED_SOURCE_BYTES;
+  return canonicalLookupSourceBytes(definition) <= LOOKUP_MANAGER_CONTRACT.maximumAuthoredSourceBytes;
 }
 
 /** Validates a detached server projection before any nested value reaches UI state. */
@@ -278,18 +312,18 @@ export function isBoundedCanonicalLookupDefinition(
   responseColumns: readonly string[],
 ): boolean {
   const columns = new Set(responseColumns);
-  return isManagementIdentity(definition.appId, 128)
+  return isManagementIdentity(definition.appId, LOOKUP_MANAGER_CONTRACT.maximumAppIdBytes)
     && isExactPublicField(definition.name)
-    && textBytes(definition.name) <= LOOKUP_MAXIMUM_NAME_BYTES
+    && textBytes(definition.name) <= LOOKUP_MANAGER_CONTRACT.maximumNameBytes
     && validDescription(definition.description)
     && (definition.sharingScope === SharingScope.SHARING_SCOPE_PRIVATE
       || definition.sharingScope === SharingScope.SHARING_SCOPE_APP
       || definition.sharingScope === SharingScope.SHARING_SCOPE_GLOBAL)
     && typeof definition.automatic === "boolean"
     && definition.keyMappings.length >= 1
-    && definition.keyMappings.length <= 4
+    && definition.keyMappings.length <= LOOKUP_MANAGER_CONTRACT.maximumKeyMappings
     && definition.outputMappings.length >= 1
-    && definition.outputMappings.length <= 16
+    && definition.outputMappings.length <= LOOKUP_MANAGER_CONTRACT.maximumOutputMappings
     && validMappings(definition.keyMappings, columns, true)
     && validMappings(definition.outputMappings, columns, false)
     && (definition.overwriteBehavior

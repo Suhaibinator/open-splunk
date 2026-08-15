@@ -88,7 +88,7 @@ func (manager *Manager) Validate(ctx context.Context, request ValidateRequest) (
 			if lookupErr != nil {
 				err = lookupErr
 			} else if len(lookupNames) == 0 {
-				_, err = manager.compiler.Compile(logical)
+				_, err = manager.compiler.CompileContext(validationContext, logical)
 			}
 		} else {
 			logical = preparation.Prefix()
@@ -101,13 +101,16 @@ func (manager *Manager) Validate(ctx context.Context, request ValidateRequest) (
 					err = lookupErr
 				} else if len(lookupNames) == 0 {
 					var inventory clickhouse.CompiledStatsWildcardInventory
-					inventory, err = manager.compiler.CompileStatsWildcardInventory(
+					inventory, err = manager.compiler.CompileStatsWildcardInventoryContext(
+						validationContext,
 						logical,
 						request,
 					)
 					if err == nil {
-						_, ok := inventory.CloneForExecution()
-						if !ok {
+						_, ok, cloneErr := inventory.CloneForExecutionContext(validationContext)
+						if cloneErr != nil {
+							err = cloneErr
+						} else if !ok {
 							err = errors.New("validate search: stats wildcard inventory authority is invalid")
 						}
 					}

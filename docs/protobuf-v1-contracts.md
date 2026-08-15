@@ -613,7 +613,7 @@ Resolver-backed runtime, Preview, inspection/history/export, field catalog,
 field summary, suggestions, and timeline services are all ready. The feature-
 gated manager provides Tier-1 create/validate/update/state/delete and retained-
 search Preview while feature-off bootstrap still imports nothing and emits
-zero Knowledge traffic. The pinned ClickHouse 26.3.17.4 matrix exercises
+zero Knowledge traffic. The pinned ClickHouse 26.3.17.56 matrix exercises
 ordinary search, selectors, all 16 executable compatibility runtime-edge IDs,
 chart/timechart/stats/chronology, pruning, empty runtime, field services, exact
 maximum-field concurrency, atomic overflow, and retained v1/v2 history/export

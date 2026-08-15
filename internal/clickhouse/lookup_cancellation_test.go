@@ -59,7 +59,33 @@ func TestLookupCompilationContextCancelsBeforeAndDuringAssetValidation(t *testin
 	}
 }
 
-func TestLookupExternalTableHashCancelsMidColumn(t *testing.T) {
+func TestLookupResolutionValidationReusesImmutableBackingMetrics(t *testing.T) {
+	rows := make([][]string, 4*lookupContextCheckRows)
+	for index := range rows {
+		rows[index] = []string{strconv.Itoa(index), "owner"}
+	}
+	resolution := testLookupResolution(t, "tenant-1", rows)
+
+	cached := &cancelAfterLookupChecks{Context: context.Background(), cancelAt: 100}
+	if err := validateLookupResolutionContext(cached, resolution); err != nil {
+		t.Fatalf("validate cached resolution: %v", err)
+	}
+	uncachedResolution := resolution
+	uncachedResolution.backing = nil
+	uncached := &cancelAfterLookupChecks{Context: context.Background(), cancelAt: 100}
+	if err := validateLookupResolutionContext(uncached, uncachedResolution); err != nil {
+		t.Fatalf("validate uncached resolution: %v", err)
+	}
+	if cached.calls >= uncached.calls || cached.calls > 2 {
+		t.Fatalf(
+			"resolution validation checks cached=%d uncached=%d, want scalar cached validation",
+			cached.calls,
+			uncached.calls,
+		)
+	}
+}
+
+func TestLookupExternalBackingAuthenticationAndMaterializationAreCancellable(t *testing.T) {
 	logical := buildPlan(
 		t,
 		`index=gradethis | lookup service_catalog service_id AS service OUTPUT owner`,
@@ -86,22 +112,89 @@ func TestLookupExternalTableHashCancelsMidColumn(t *testing.T) {
 		t.Fatalf("CloneForExecutionContext(pre-canceled) = (%#v, %v, %v)", cloned, ok, cloneErr)
 	}
 
-	// Two 4,096-row columns consume ten validation checks (start, table, and
-	// four row checkpoints per column). The writer then checks the table and
-	// rows; cancel on its second row checkpoint, after hashing 1,024 cells.
-	midHash := &cancelAfterLookupChecks{
+	// Authentication is the one full selected-cell validation and commitment
+	// scan. Cancel during the second column to prove the immutable cache is not
+	// established from a partial payload.
+	midAuthentication := &cancelAfterLookupChecks{
 		Context:  context.Background(),
-		cancelAt: 13,
+		cancelAt: 6,
 	}
-	written, hashErr := writeCompiledLookupExternalTablesContext(
-		midHash,
+	backing, authenticationErr := authenticateCompiledLookupExternalBackingContext(
+		midAuthentication,
+		compiled.lookupTables[0].backing.values,
+	)
+	if backing != nil || !errors.Is(authenticationErr, context.Canceled) {
+		t.Fatalf("authenticate lookup backing = (%v, %v), want canceled", backing, authenticationErr)
+	}
+	if midAuthentication.calls != midAuthentication.cancelAt {
+		t.Fatalf(
+			"mid-authentication context checks = %d, want %d",
+			midAuthentication.calls,
+			midAuthentication.cancelAt,
+		)
+	}
+
+	// Seal hashing consumes the authenticated commitment rather than scanning
+	// cells again, but fresh driver blocks still walk every row and retain
+	// bounded cancellation checkpoints.
+	midMaterialization := &cancelAfterLookupChecks{
+		Context:  context.Background(),
+		cancelAt: 5,
+	}
+	if tables, materializationErr := materializeCompiledLookupExternalTables(
+		midMaterialization,
+		compiled.lookupTables,
+	); tables != nil || !errors.Is(materializationErr, context.Canceled) {
+		t.Fatalf(
+			"materialize lookup backing = (%v, %v), want canceled",
+			tables,
+			materializationErr,
+		)
+	}
+	if midMaterialization.calls != midMaterialization.cancelAt {
+		t.Fatalf(
+			"mid-materialization context checks = %d, want %d",
+			midMaterialization.calls,
+			midMaterialization.cancelAt,
+		)
+	}
+}
+
+func TestLookupExternalSealHashUsesAuthenticatedBackingWithoutCellRescan(t *testing.T) {
+	logical := buildPlan(
+		t,
+		`index=gradethis | lookup service_catalog service_id AS service OUTPUT owner`,
+	)
+	rows := make([][]string, 4*lookupContextCheckRows)
+	for index := range rows {
+		rows[index] = []string{strconv.Itoa(index), "owner"}
+	}
+	resolution := bindTestLookupResolution(
+		t,
+		testLookupResolution(t, "tenant-1", rows),
+		logical,
+	)
+	compiled, err := (Compiler{
+		lookupResolutions: []LookupResolution{resolution},
+	}).CompileContext(context.Background(), logical)
+	if err != nil {
+		t.Fatalf("CompileContext(): %v", err)
+	}
+
+	checks := &cancelAfterLookupChecks{Context: context.Background(), cancelAt: 100}
+	written, err := writeCompiledLookupExternalTablesContext(
+		checks,
 		sha256.New(),
 		compiled.lookupTables,
 	)
-	if written || !errors.Is(hashErr, context.Canceled) {
-		t.Fatalf("write lookup tables = (%v, %v), want canceled", written, hashErr)
+	if err != nil || !written {
+		t.Fatalf("write authenticated lookup backing = (%v, %v)", written, err)
 	}
-	if midHash.calls != midHash.cancelAt {
-		t.Fatalf("mid-hash context checks = %d, want %d", midHash.calls, midHash.cancelAt)
+	if checks.calls > 8 {
+		t.Fatalf(
+			"seal hashing performed row-proportional checks: %d checks for %d rows",
+			checks.calls,
+			len(rows),
+		)
 	}
 }

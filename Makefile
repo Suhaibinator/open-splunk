@@ -5,8 +5,8 @@ override PROTOC_GEN_GO_GRPC_VERSION := v1.6.2
 override PROTO_TOOL_BIN := $(CURDIR)/.cache/proto-tools
 override PROTO_LINT_CACHE := $(CURDIR)/.cache/buf
 override RELEASE_GO_VERSION := 1.26.6
-override RELEASE_NODE_VERSION := 24.18.0
-override RELEASE_NPM_VERSION := 11.16.0
+override RELEASE_NODE_VERSION := 24.19.0
+override RELEASE_NPM_VERSION := 11.17.0
 override RELEASE_GIT_ENV := env \
 	-u GIT_ALTERNATE_OBJECT_DIRECTORIES \
 	-u GIT_COMMON_DIR \

@@ -2462,6 +2462,13 @@ real Writer→Resolver→Manager→history/export v1/v2 lifecycle. CI runs the s
 untagged test with one-minute subtest bounds, a four-minute suite watchdog, and
 a 4m30s process deadline in the dedicated `knowledge-runtime-clickhouse` job.
 
+On August 14, 2026, a post-upgrade development rerun of that same matrix passed
+against `clickhouse/clickhouse-server:26.3.17.56@sha256:422be85ae7344058369cdd366ac0efea9daa8428b55c9cf50258e83a7d12fcb3`
+in 84.56 seconds at top level. The v0.2 compatibility and GradeThis verticals
+also passed against that image. This qualifies the current maintenance pin; it
+is not release-activation evidence and does not rewrite the historical
+26.3.17.4 record above.
+
 | # | Acceptance authority | Result |
 |---:|---|---|
 | 1 | CRUD protobuf routes, mutation adapters, gated Tier-1 editor, and the Knowledge Manager Playwright vertical | Pass |

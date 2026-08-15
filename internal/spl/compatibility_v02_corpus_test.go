@@ -64,7 +64,7 @@ func TestCompatibilityV02CorpusSchemaAndRuleParity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read v0.2 compatibility contract: %v", err)
 	}
-	documentIDs, err := compatibilityV02DocumentRuleIDs(contract)
+	documentIDs, err := compatibilityDocumentRuleIDs(contract, "SPL-V02")
 	if err != nil {
 		t.Fatalf("read v0.2 contract rule inventory: %v", err)
 	}
@@ -306,34 +306,6 @@ func validateCompatibilityV02Corpus(corpus compatibilityV02Corpus) error {
 		}
 	}
 	return nil
-}
-
-func compatibilityV02DocumentRuleIDs(document []byte) ([]string, error) {
-	headingPattern := regexp.MustCompile(`(?m)^### ` + "`" + `(SPL-V02-[A-Z0-9]+(?:-[A-Z0-9]+)*-[0-9]{3})` + "`" + ` — `)
-	allPattern := regexp.MustCompile(`SPL-V02-[A-Z0-9]+(?:-[A-Z0-9]+)*-[0-9]{3}`)
-
-	headingMatches := headingPattern.FindAllSubmatch(document, -1)
-	if len(headingMatches) == 0 {
-		return nil, errors.New("contract has no rule headings")
-	}
-	headings := make([]string, 0, len(headingMatches))
-	seen := make(map[string]struct{}, len(headingMatches))
-	for _, match := range headingMatches {
-		id := string(match[1])
-		if _, exists := seen[id]; exists {
-			return nil, fmt.Errorf("contract duplicates rule heading %q", id)
-		}
-		seen[id] = struct{}{}
-		headings = append(headings, id)
-	}
-
-	for _, match := range allPattern.FindAll(document, -1) {
-		id := string(match)
-		if _, exists := seen[id]; !exists {
-			return nil, fmt.Errorf("contract mentions rule %q without a rule heading", id)
-		}
-	}
-	return headings, nil
 }
 
 func requireCompatibilityV02Coverage(t *testing.T, corpus compatibilityV02Corpus) {

@@ -72,6 +72,21 @@ type LookupResolution struct {
 	headers        []string
 	asset          *lookupasset.Asset
 	rows           [][]string
+	backing        *lookupResolutionBacking
+}
+
+// lookupResolutionBacking records facts established while the detached asset
+// is validated. The backing is created only by this package and thereafter
+// shared by value clones; no exported method exposes any of its slices. That
+// lets admission and seal revalidation charge a maximum-envelope asset from
+// scalar facts instead of rescanning every cell.
+type lookupResolutionBacking struct {
+	headers      []string
+	asset        *lookupasset.Asset
+	rows         [][]string
+	rowCount     int
+	payloadBytes uint64
+	cellCount    uint64
 }
 
 // NewLookupResolution validates and detaches one immutable CSV asset version.
@@ -126,9 +141,14 @@ func newOwnedLookupResolution(
 		headers:        headers,
 		rows:           rows,
 	}
-	if err := validateLookupResolution(resolution); err != nil {
+	payloadBytes, err := validateLookupResolutionAndMeasureContext(
+		context.Background(),
+		resolution,
+	)
+	if err != nil {
 		return LookupResolution{}, err
 	}
+	resolution.backing = newLookupResolutionBacking(resolution, payloadBytes)
 	return resolution, nil
 }
 
@@ -162,6 +182,11 @@ func NewLookupResolutionFromVersion(
 		headers:        version.Asset.Headers(),
 		asset:          version.Asset,
 	}
+	// lookupasset.Asset is already a validated immutable value, and its
+	// canonical source size conservatively bounds decoded header/cell bytes.
+	// Authenticate that backing before generic validation so bridging a maximum
+	// published version does not walk all cells again.
+	resolution.backing = newLookupResolutionBacking(resolution, version.Ref.SizeBytes)
 	if err := validateLookupResolution(resolution); err != nil {
 		return LookupResolution{}, err
 	}
@@ -459,7 +484,50 @@ func (resolution LookupResolution) clone() LookupResolution {
 		headers:        resolution.headers,
 		asset:          resolution.asset,
 		rows:           resolution.rows,
+		backing:        resolution.backing,
 	}
+}
+
+func newLookupResolutionBacking(
+	resolution LookupResolution,
+	payloadBytes uint64,
+) *lookupResolutionBacking {
+	cells, _ := lookupResolutionCellCountUncached(resolution)
+	return &lookupResolutionBacking{
+		headers:      resolution.headers,
+		asset:        resolution.asset,
+		rows:         resolution.rows,
+		rowCount:     lookupResolutionRowCount(resolution),
+		payloadBytes: payloadBytes,
+		cellCount:    cells,
+	}
+}
+
+func lookupResolutionHasImmutableBacking(resolution LookupResolution) bool {
+	backing := resolution.backing
+	if backing == nil || backing.asset != resolution.asset ||
+		backing.rowCount != lookupResolutionRowCount(resolution) ||
+		!sameStringSliceStorage(backing.headers, resolution.headers) {
+		return false
+	}
+	if resolution.asset != nil {
+		return resolution.rows == nil && backing.rows == nil
+	}
+	return sameLookupRowStorage(backing.rows, resolution.rows)
+}
+
+func sameStringSliceStorage(left, right []string) bool {
+	if len(left) != len(right) || (left == nil) != (right == nil) {
+		return false
+	}
+	return len(left) == 0 || &left[0] == &right[0]
+}
+
+func sameLookupRowStorage(left, right [][]string) bool {
+	if len(left) != len(right) || (left == nil) != (right == nil) {
+		return false
+	}
+	return len(left) == 0 || &left[0] == &right[0]
 }
 
 func normalizeLookupResolutionContract(contract plan.Lookup) (plan.Lookup, error) {
@@ -543,22 +611,30 @@ func validateLookupResolutionContext(
 	ctx context.Context,
 	resolution LookupResolution,
 ) error {
+	_, err := validateLookupResolutionAndMeasureContext(ctx, resolution)
+	return err
+}
+
+func validateLookupResolutionAndMeasureContext(
+	ctx context.Context,
+	resolution LookupResolution,
+) (uint64, error) {
 	if ctx == nil {
-		return errors.New("validate ClickHouse lookup resolution: context is nil")
+		return 0, errors.New("validate ClickHouse lookup resolution: context is nil")
 	}
 	if err := ctx.Err(); err != nil {
-		return err
+		return 0, err
 	}
 	if resolution.tenantID == "" || resolution.definitionName == "" ||
 		resolution.objectID == "" || resolution.version == 0 ||
 		resolution.sizeBytes == 0 || resolution.sizeBytes > MaximumLookupAssetBytes ||
 		resolution.contentSHA256 == ([sha256.Size]byte{}) {
-		return errors.New("create ClickHouse lookup resolution: pinned identity is incomplete")
+		return 0, errors.New("create ClickHouse lookup resolution: pinned identity is incomplete")
 	}
 	logicalIdentityPresent := resolution.logicalID != "" || resolution.logicalVersion != 0
 	if logicalIdentityPresent != resolution.contractSet ||
 		resolution.contractSet && (resolution.logicalID == "" || resolution.logicalVersion == 0) {
-		return errors.New(
+		return 0, errors.New(
 			"create ClickHouse lookup resolution: logical definition authority is incomplete",
 		)
 	}
@@ -569,26 +645,26 @@ func validateLookupResolutionContext(
 	} {
 		if !utf8.ValidString(identity) || len(identity) > MaximumLookupCellBytes ||
 			strings.IndexByte(identity, 0) >= 0 {
-			return errors.New("create ClickHouse lookup resolution: pinned identity is invalid")
+			return 0, errors.New("create ClickHouse lookup resolution: pinned identity is invalid")
 		}
 	}
 	if resolution.logicalID != "" && (!utf8.ValidString(resolution.logicalID) ||
 		len(resolution.logicalID) > MaximumLookupCellBytes ||
 		strings.IndexByte(resolution.logicalID, 0) >= 0) {
-		return errors.New(
+		return 0, errors.New(
 			"create ClickHouse lookup resolution: logical definition identity is invalid",
 		)
 	}
 	if len(resolution.headers) == 0 ||
 		len(resolution.headers) > MaximumLookupAssetColumns {
-		return fmt.Errorf(
+		return 0, fmt.Errorf(
 			"create ClickHouse lookup resolution: asset must contain 1 through %d columns",
 			MaximumLookupAssetColumns,
 		)
 	}
 	rowCount := lookupResolutionRowCount(resolution)
 	if rowCount > MaximumLookupAssetRows {
-		return fmt.Errorf(
+		return 0, fmt.Errorf(
 			"create ClickHouse lookup resolution: asset contains more than %d rows",
 			MaximumLookupAssetRows,
 		)
@@ -599,32 +675,43 @@ func validateLookupResolutionContext(
 		if header == "" || !utf8.ValidString(header) ||
 			len(header) > lookupasset.MaximumHeaderBytes ||
 			strings.IndexByte(header, 0) >= 0 {
-			return errors.New("create ClickHouse lookup resolution: asset header is invalid")
+			return 0, errors.New("create ClickHouse lookup resolution: asset header is invalid")
 		}
 		if _, duplicate := seenHeaders[header]; duplicate {
-			return errors.New("create ClickHouse lookup resolution: asset header is duplicated")
+			return 0, errors.New("create ClickHouse lookup resolution: asset header is duplicated")
 		}
 		seenHeaders[header] = struct{}{}
 		var ok bool
 		decodedBytes, ok = checkedLookupBytesAdd(decodedBytes, uint64(len(header)))
 		if !ok {
-			return errors.New("create ClickHouse lookup resolution: asset byte count overflows")
+			return 0, errors.New("create ClickHouse lookup resolution: asset byte count overflows")
 		}
 	}
 	if resolution.asset != nil &&
 		resolution.asset.ColumnCount() != uint32(len(resolution.headers)) {
-		return errors.New(
+		return 0, errors.New(
 			"create ClickHouse lookup resolution: asset schema changed",
 		)
+	}
+	if lookupResolutionHasImmutableBacking(resolution) {
+		expectedCells, ok := lookupResolutionCellCountUncached(resolution)
+		if !ok || resolution.backing.cellCount != expectedCells ||
+			resolution.backing.payloadBytes < decodedBytes ||
+			resolution.backing.payloadBytes > MaximumLookupAssetBytes {
+			return 0, errors.New(
+				"create ClickHouse lookup resolution: immutable backing is invalid",
+			)
+		}
+		return resolution.backing.payloadBytes, nil
 	}
 	for rowIndex := 0; rowIndex < rowCount; rowIndex++ {
 		if rowIndex%lookupContextCheckRows == 0 {
 			if err := ctx.Err(); err != nil {
-				return err
+				return 0, err
 			}
 		}
 		if resolution.asset == nil && len(resolution.rows[rowIndex]) != len(resolution.headers) {
-			return fmt.Errorf(
+			return 0, fmt.Errorf(
 				"create ClickHouse lookup resolution: row %d has %d cells, want %d",
 				rowIndex+1,
 				len(resolution.rows[rowIndex]),
@@ -635,14 +722,14 @@ func validateLookupResolutionContext(
 		for columnIndex := range resolution.headers {
 			cell, ok := lookupResolutionCell(resolution, rowIndex, columnIndex)
 			if !ok {
-				return fmt.Errorf(
+				return 0, fmt.Errorf(
 					"create ClickHouse lookup resolution: row %d has an invalid width",
 					rowIndex+1,
 				)
 			}
 			if !utf8.ValidString(cell) || len(cell) > MaximumLookupCellBytes ||
 				strings.IndexByte(cell, 0) >= 0 {
-				return fmt.Errorf(
+				return 0, fmt.Errorf(
 					"create ClickHouse lookup resolution: row %d contains an invalid cell",
 					rowIndex+1,
 				)
@@ -650,7 +737,7 @@ func validateLookupResolutionContext(
 			var added bool
 			rowBytes, added = checkedLookupBytesAdd(rowBytes, uint64(len(cell)))
 			if !added || rowBytes > MaximumLookupRowBytes {
-				return fmt.Errorf(
+				return 0, fmt.Errorf(
 					"create ClickHouse lookup resolution: row %d exceeds %d decoded bytes",
 					rowIndex+1,
 					MaximumLookupRowBytes,
@@ -660,13 +747,13 @@ func validateLookupResolutionContext(
 		var ok bool
 		decodedBytes, ok = checkedLookupBytesAdd(decodedBytes, rowBytes)
 		if !ok || decodedBytes > MaximumLookupAssetBytes {
-			return fmt.Errorf(
+			return 0, fmt.Errorf(
 				"create ClickHouse lookup resolution: asset exceeds %d decoded bytes",
 				MaximumLookupAssetBytes,
 			)
 		}
 	}
-	return nil
+	return decodedBytes, nil
 }
 
 func checkedLookupBytesAdd(left, right uint64) (uint64, bool) {
@@ -677,6 +764,13 @@ func checkedLookupBytesAdd(left, right uint64) (uint64, bool) {
 }
 
 func lookupResolutionPayloadBytes(resolution LookupResolution) (uint64, bool) {
+	if lookupResolutionHasImmutableBacking(resolution) {
+		return resolution.backing.payloadBytes, true
+	}
+	return lookupResolutionPayloadBytesUncached(resolution)
+}
+
+func lookupResolutionPayloadBytesUncached(resolution LookupResolution) (uint64, bool) {
 	var total uint64
 	for _, header := range resolution.headers {
 		var ok bool
@@ -702,6 +796,13 @@ func lookupResolutionPayloadBytes(resolution LookupResolution) (uint64, bool) {
 }
 
 func lookupResolutionCellCount(resolution LookupResolution) (uint64, bool) {
+	if lookupResolutionHasImmutableBacking(resolution) {
+		return resolution.backing.cellCount, true
+	}
+	return lookupResolutionCellCountUncached(resolution)
+}
+
+func lookupResolutionCellCountUncached(resolution LookupResolution) (uint64, bool) {
 	rowCount := lookupResolutionRowCount(resolution)
 	if rowCount != 0 &&
 		uint64(len(resolution.headers)) > ^uint64(0)/uint64(rowCount) {
@@ -724,6 +825,11 @@ func lookupResolutionEqual(left, right LookupResolution) bool {
 		!slices.Equal(left.headers, right.headers) ||
 		lookupResolutionRowCount(left) != lookupResolutionRowCount(right) {
 		return false
+	}
+	if lookupResolutionHasImmutableBacking(left) &&
+		lookupResolutionHasImmutableBacking(right) &&
+		left.backing == right.backing {
+		return true
 	}
 	for rowIndex := 0; rowIndex < lookupResolutionRowCount(left); rowIndex++ {
 		for columnIndex := range left.headers {

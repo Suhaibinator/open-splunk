@@ -16,7 +16,49 @@ import {
 import { PROTOBUF_CONTENT_TYPE } from "@/lib/api/protobuf-transport";
 
 import { createLookupManagerClient, validateCSVBytes } from "./lookup-manager-data";
-import { isBoundedCanonicalLookupDefinition } from "./lookup-manager-contract";
+import {
+  LOOKUP_MANAGER_CONTRACT,
+  isBoundedCanonicalLookupDefinition,
+} from "./lookup-manager-contract";
+
+test("lookup manager uses one frozen backend-parity contract", () => {
+  assert.equal(Object.isFrozen(LOOKUP_MANAGER_CONTRACT), true);
+  assert.deepEqual(LOOKUP_MANAGER_CONTRACT, {
+    maximumNameBytes: 255,
+    maximumDescriptionBytes: 16 << 10,
+    maximumAuthoredSourceBytes: 16 << 10,
+    maximumAppIdBytes: 128,
+    maximumLookupIdBytes: 128,
+    maximumTenantIdBytes: 255,
+    maximumOwnerIdBytes: 255,
+    maximumEventFieldBytes: 8_720,
+    maximumEventFieldSegments: 17,
+    maximumEventFieldSegmentBytes: 256,
+    maximumSelectorPatternBytes: 255,
+    maximumSelectorPatternsPerDimension: 16,
+    maximumSelectorPatterns: 64,
+    maximumSelectorNormalizedBytes: 8 << 10,
+    maximumSelectorWorkUnits: 1 << 10,
+    maximumUploadBytes: 8 << 20,
+    maximumAssetRows: 100_000,
+    maximumColumns: 64,
+    maximumCellBytes: 64 << 10,
+    maximumRowBytes: 1 << 20,
+    maximumHeaderBytes: 255,
+    maximumKeyMappings: 4,
+    maximumOutputMappings: 16,
+    listPageSize: 100,
+    maximumManagedLookups: 2_048,
+    maximumListPages: 21,
+    maximumPageTokenBytes: 4 << 10,
+    maximumPreviewRows: 100,
+    maximumPreviewViolations: 8,
+    maximumViolationFieldPathBytes: 255,
+    maximumViolationCodeBytes: 128,
+    maximumViolationMessageBytes: 4 << 10,
+    sha256Bytes: 32,
+  });
+});
 
 test("validateCSVBytes accepts a bounded nonempty CSV", () => {
   assert.doesNotThrow(() => validateCSVBytes(new TextEncoder().encode("id,value\n1,one\n")));
@@ -24,7 +66,10 @@ test("validateCSVBytes accepts a bounded nonempty CSV", () => {
 
 test("validateCSVBytes rejects empty and oversized input", () => {
   assert.throws(() => validateCSVBytes(new Uint8Array()), /nonempty/);
-  assert.throws(() => validateCSVBytes(new Uint8Array((8 << 20) + 1)), /exceeds/);
+  assert.throws(
+    () => validateCSVBytes(new Uint8Array(LOOKUP_MANAGER_CONTRACT.maximumUploadBytes + 1)),
+    /exceeds/,
+  );
 });
 
 function managedLookup(id: string, name: string): Lookup {

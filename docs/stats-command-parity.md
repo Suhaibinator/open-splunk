@@ -42,7 +42,7 @@ Evidence is tracked independently from parity status:
   documented spelling, source metadata, and effective option value;
 - **lowering tested** means compiler tests prove the intended ClickHouse shape;
 - **pinned runtime tested** means the generated query ran against the
-  digest-pinned ClickHouse 26.3.17.4 image over stored events.
+  digest-pinned ClickHouse 26.3.17.56 image over stored events.
 - **UI rendering tested** means the generic statistics table recognizes the
   sparkline marker transport or effective multivalue delimiter metadata and
   applies the corresponding presentation without replacing the typed cell.

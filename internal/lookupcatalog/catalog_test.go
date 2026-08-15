@@ -2,6 +2,7 @@ package lookupcatalog
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -260,6 +261,129 @@ func TestCatalogManagementProjectionDoesNotLoadAssetBodies(t *testing.T) {
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups", LookupID: created.GetLookupId(),
 	}); err != nil || observed.getVersionCalls.Load() != 1 {
 		t.Fatalf("GetResolved() error = %v; asset loads = %d", err, observed.getVersionCalls.Load())
+	}
+}
+
+func TestCatalogListPageUsesOneBoundedJoinedProjection(t *testing.T) {
+	database, assets, appIDs := newCatalogHarness(t)
+	asset := publishCatalogAsset(t, assets, "service_id,owner\napi,alice\n")
+	observed := &observingRepository{Repository: assets}
+	sequence := atomic.Uint64{}
+	catalog, err := New(database, observed, Options{IDGenerator: func() (string, error) {
+		return fmt.Sprintf("lookup-page-%03d", sequence.Add(1)), nil
+	}})
+	if err != nil {
+		t.Fatalf("New(): %v", err)
+	}
+	for index := range 75 {
+		definition := catalogDefinition(
+			appIDs[0],
+			fmt.Sprintf("page-%03d", index),
+			opensplunkv1.SharingScope_SHARING_SCOPE_APP,
+			false,
+		)
+		description := fmt.Sprintf("bounded page row %03d", index)
+		if index == 74 {
+			description = "International CAFÉ sentinel"
+		}
+		definition.Description = &description
+		if _, err := catalog.Create(t.Context(), CreateRequest{
+			TenantID: "tenant-lookups", OwnerID: "owner-lookups",
+			Definition: definition, Asset: asset,
+		}); err != nil {
+			t.Fatalf("Create(%d): %v", index, err)
+		}
+	}
+
+	request := ListPageRequest{
+		TenantID: "tenant-lookups", OwnerID: "owner-lookups", AppID: appIDs[0],
+		SortBy:        opensplunkv1.LookupSortBy_LOOKUP_SORT_BY_NAME,
+		SortDirection: opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING,
+		Limit:         50, IncludeTotal: true,
+	}
+	normalized, err := normalizeListPageRequest(request)
+	if err != nil {
+		t.Fatalf("normalizeListPageRequest(): %v", err)
+	}
+	query, arguments := lookupListPageSQL(normalized)
+	if strings.Count(strings.ToUpper(query), "SELECT ") != 1 ||
+		strings.Count(strings.ToUpper(query), "JOIN KNOWLEDGE_LOOKUP_") != 2 ||
+		!strings.Contains(strings.ToUpper(query), " LIMIT ?") {
+		t.Fatalf("list page is not one bounded joined statement:\n%s", query)
+	}
+	tx, err := database.SQLDB().BeginTx(t.Context(), &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		t.Fatalf("BeginTx(query bound): %v", err)
+	}
+	rows, err := tx.QueryContext(t.Context(), query, arguments...)
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("QueryContext(query bound): %v", err)
+	}
+	loaded := 0
+	for rows.Next() {
+		if _, _, err := scanJoinedProjection(rows); err != nil {
+			_ = rows.Close()
+			_ = tx.Rollback()
+			t.Fatalf("scanJoinedProjection(): %v", err)
+		}
+		loaded++
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		_ = tx.Rollback()
+		t.Fatalf("iterate bounded query: %v", err)
+	}
+	if err := rows.Close(); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("close bounded query: %v", err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("rollback bounded query: %v", err)
+	}
+	if loaded != 51 {
+		t.Fatalf("joined projection rows loaded = %d, want page size + 1 = 51", loaded)
+	}
+
+	observed.reset()
+	first, err := catalog.ListPage(t.Context(), request)
+	if err != nil || len(first.Lookups) != 50 || first.NextPosition == nil ||
+		first.TotalSize == nil || *first.TotalSize != 75 || observed.getVersionCalls.Load() != 0 {
+		t.Fatalf("ListPage(first) = %#v, %v; asset loads = %d", first, err, observed.getVersionCalls.Load())
+	}
+	request.Position = first.NextPosition
+	request.ExpectedSnapshot = &first.Snapshot
+	second, err := catalog.ListPage(t.Context(), request)
+	if err != nil || len(second.Lookups) != 25 || second.NextPosition != nil ||
+		second.Snapshot != first.Snapshot || observed.getVersionCalls.Load() != 0 {
+		t.Fatalf("ListPage(second) = %#v, %v; asset loads = %d", second, err, observed.getVersionCalls.Load())
+	}
+	for index, lookup := range append(first.Lookups, second.Lookups...) {
+		if want := fmt.Sprintf("page-%03d", index); lookup.GetDefinition().GetName() != want {
+			t.Fatalf("page item %d name = %q, want %q", index, lookup.GetDefinition().GetName(), want)
+		}
+	}
+	filtered := request
+	filtered.Position = nil
+	filtered.ExpectedSnapshot = nil
+	filtered.TextFilter = "café"
+	filtered.IncludeTotal = true
+	matching, err := catalog.ListPage(t.Context(), filtered)
+	if err != nil || len(matching.Lookups) != 1 ||
+		matching.Lookups[0].GetDefinition().GetName() != "page-074" ||
+		matching.TotalSize == nil || *matching.TotalSize != 1 {
+		t.Fatalf("ListPage(unicode description filter) = %#v, %v", matching, err)
+	}
+	if _, err := catalog.SetState(t.Context(), StateRequest{
+		TenantID: "tenant-lookups", OwnerID: "owner-lookups",
+		LookupID: first.Lookups[0].GetLookupId(), ExpectedVersion: first.Lookups[0].GetVersion(),
+		State: opensplunkv1.LookupState_LOOKUP_STATE_DISABLED,
+	}); err != nil {
+		t.Fatalf("SetState(cursor invalidation): %v", err)
+	}
+	request.ExpectedSnapshot = &first.Snapshot
+	if _, err := catalog.ListPage(t.Context(), request); !errors.Is(err, ErrPageInvalidated) {
+		t.Fatalf("ListPage(stale snapshot) error = %v, want ErrPageInvalidated", err)
 	}
 }
 

@@ -37,7 +37,7 @@ test("backend vertical executes the complete v0.2 multivalue stats-BY evidence",
   }
   assert.match(
     workflow,
-    /OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE:\s*clickhouse\/clickhouse-server:26\.3\.17\.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49/,
+    /OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE:\s*clickhouse\/clickhouse-server:26\.3\.17\.56@sha256:422be85ae7344058369cdd366ac0efea9daa8428b55c9cf50258e83a7d12fcb3/,
   );
 });
 

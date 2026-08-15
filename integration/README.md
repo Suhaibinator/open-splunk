@@ -69,7 +69,7 @@ Set `OPEN_SPLUNK_BROWSER_EXECUTABLE` to use a specific Chromium-family browser
 instead of Playwright's pinned download.
 
 The default image is
-`clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49`.
+`clickhouse/clickhouse-server:26.3.17.56@sha256:422be85ae7344058369cdd366ac0efea9daa8428b55c9cf50258e83a7d12fcb3`.
 Set `OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE` to exercise another digest-pinned image
 deliberately.
 
@@ -177,7 +177,7 @@ test-owned container, network, and image.
 OPEN_SPLUNK_APPLICATION_VERSION=0.1.0 \
 OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION=0.2 \
 OPEN_SPLUNK_OCI_INTEGRATION=1 \
-OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.56@sha256:422be85ae7344058369cdd366ac0efea9daa8428b55c9cf50258e83a7d12fcb3 \
   go test ./integration -run '^TestReleaseOCIComposeContract$' \
     -count=1 -timeout=25m -v
 ```

@@ -25,6 +25,13 @@ const (
 
 var ErrInvalid = errors.New("invalid lookup definition")
 
+type mappingKind uint8
+
+const (
+	mappingKindKey mappingKind = iota + 1
+	mappingKindOutput
+)
+
 // Normalized is detached publication authority. Definition and Selector do
 // not alias the submitted protobuf.
 type Normalized struct {
@@ -60,11 +67,11 @@ func Normalize(input *opensplunkv1.LookupDefinition, columns []string) (Normaliz
 	if err != nil {
 		return Normalized{}, err
 	}
-	keys, err := normalizeMappings("key_mappings", input.GetKeyMappings(), columnSet, 1, MaximumKeyMappings)
+	keys, err := normalizeMappings(mappingKindKey, "key_mappings", input.GetKeyMappings(), columnSet, 1, MaximumKeyMappings)
 	if err != nil {
 		return Normalized{}, err
 	}
-	outputs, err := normalizeMappings("output_mappings", input.GetOutputMappings(), columnSet, 1, MaximumOutputMappings)
+	outputs, err := normalizeMappings(mappingKindOutput, "output_mappings", input.GetOutputMappings(), columnSet, 1, MaximumOutputMappings)
 	if err != nil {
 		return Normalized{}, err
 	}
@@ -96,14 +103,17 @@ func Normalize(input *opensplunkv1.LookupDefinition, columns []string) (Normaliz
 	}, nil
 }
 
-func normalizeMappings(path string, input []*opensplunkv1.LookupFieldMapping, columns map[string]struct{}, minimum, maximum int) ([]*opensplunkv1.LookupFieldMapping, error) {
+func normalizeMappings(kind mappingKind, path string, input []*opensplunkv1.LookupFieldMapping, columns map[string]struct{}, minimum, maximum int) ([]*opensplunkv1.LookupFieldMapping, error) {
+	if kind != mappingKindKey && kind != mappingKindOutput {
+		return nil, invalid(path, "has an unknown mapping kind")
+	}
 	if len(input) < minimum || len(input) > maximum {
 		return nil, invalid(path, fmt.Sprintf("must contain between %d and %d mappings", minimum, maximum))
 	}
 	lookupFields := make(map[string]struct{}, len(input))
 	eventFields := make(map[string]struct{}, len(input))
 	result := make([]*opensplunkv1.LookupFieldMapping, 0, len(input))
-	keyMapping := path == "key_mappings"
+	keyMapping := kind == mappingKindKey
 	for index, mapping := range input {
 		itemPath := fmt.Sprintf("%s[%d]", path, index)
 		if mapping == nil {

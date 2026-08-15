@@ -487,8 +487,13 @@ func prepareLookupStageContext(
 		}
 		stage.outputHeaderIndex[index] = selectedIndex
 	}
-	if err := validateExactLookupKeysContext(ctx, stage); err != nil {
-		return preparedLookupStage{}, err
+	if materializeSelectedValues {
+		// The first preparation owns the immutable selected backing and proves
+		// key uniqueness. Seal-time preparation compares the same backing and
+		// logical contract, so repeating this full-row proof cannot add authority.
+		if err := validateExactLookupKeysContext(ctx, stage); err != nil {
+			return preparedLookupStage{}, err
+		}
 	}
 	return stage, nil
 }
@@ -562,13 +567,14 @@ func validateExactLookupKeysContext(
 		map[[sha256.Size]byte][][]byte,
 		lookupResolutionRowCount(stage.resolution),
 	)
+	values := make([]string, len(stage.keyHeaderIndexes))
 	for rowIndex := 0; rowIndex < lookupResolutionRowCount(stage.resolution); rowIndex++ {
 		if rowIndex%lookupContextCheckRows == 0 {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
 		}
-		key, err := canonicalLookupKey(rowIndex, stage)
+		key, err := canonicalLookupKey(rowIndex, stage, values)
 		if err != nil {
 			return fmt.Errorf(
 				"validate ClickHouse lookup key at row %d: %w",
@@ -590,7 +596,9 @@ func validateExactLookupKeysContext(
 				}
 			}
 		}
-		buckets[digest] = append(buckets[digest], slices.Clone(canonical))
+		// ExactKey.Bytes already returns a detached slice. Retain that one copy
+		// directly instead of cloning the canonical key a second time.
+		buckets[digest] = append(buckets[digest], canonical)
 	}
 	return nil
 }
@@ -598,8 +606,13 @@ func validateExactLookupKeysContext(
 func canonicalLookupKey(
 	rowIndex int,
 	stage preparedLookupStage,
+	values []string,
 ) (lookupasset.ExactKey, error) {
-	values := make([]string, len(stage.keyHeaderIndexes))
+	if len(values) != len(stage.keyHeaderIndexes) {
+		return lookupasset.ExactKey{}, errors.New(
+			"lookup exact-key scratch space has invalid arity",
+		)
+	}
 	for index, selectedIndex := range stage.keyHeaderIndexes {
 		value, ok := lookupResolutionCell(
 			stage.resolution,

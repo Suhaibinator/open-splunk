@@ -31,12 +31,28 @@ type compiledLookupExternalTable struct {
 	contentSHA256  [sha256.Size]byte
 	matchedColumn  string
 	columns        []compiledLookupExternalColumn
+	backing        *compiledLookupExternalBacking
 }
 
 type compiledLookupExternalColumn struct {
-	name   string
-	values []string
+	name string
 }
+
+// compiledLookupExternalBacking owns the only selected-cell slices retained
+// by an executable. It is built after a cancellable validation scan and never
+// exposed outside this package. Descriptor clones share it, avoiding another
+// potentially 6.4-million-cell clone or validation pass. commitment binds the
+// exact ordered cells into the wider execution seal.
+type compiledLookupExternalBacking struct {
+	values        [][]string
+	rowCount      int
+	payloadBytes  uint64
+	selectedCells uint64
+	retainedBytes uint64
+	commitment    [sha256.Size]byte
+}
+
+const compiledLookupExternalBackingDomain = "open-splunk-lookup-external-backing-v1"
 
 func newCompiledLookupExternalTable(
 	name string,
@@ -89,12 +105,20 @@ func newCompiledLookupExternalTableContext(
 	for index, name := range columnNames {
 		table.columns[index] = compiledLookupExternalColumn{
 			name: strings.Clone(name),
-			// prepareLookupStage created this private immutable column for the
-			// external-table transport. Transfer its backing instead of retaining
-			// another maximum-envelope String-header matrix.
-			values: stage.selectedColumns[index].values,
 		}
 	}
+	values := make([][]string, len(stage.selectedColumns))
+	for index := range stage.selectedColumns {
+		// prepareLookupStage created this private immutable column for the
+		// external-table transport. Transfer its backing instead of retaining
+		// another maximum-envelope String-header matrix.
+		values[index] = stage.selectedColumns[index].values
+	}
+	backing, err := authenticateCompiledLookupExternalBackingContext(ctx, values)
+	if err != nil {
+		return compiledLookupExternalTable{}, err
+	}
+	table.backing = backing
 	if err := validateCompiledLookupExternalTablesContext(
 		ctx,
 		[]compiledLookupExternalTable{table},
@@ -102,6 +126,104 @@ func newCompiledLookupExternalTableContext(
 		return compiledLookupExternalTable{}, err
 	}
 	return table, nil
+}
+
+func authenticateCompiledLookupExternalBackingContext(
+	ctx context.Context,
+	values [][]string,
+) (*compiledLookupExternalBacking, error) {
+	if ctx == nil {
+		return nil, errors.New("authenticate ClickHouse lookup transport: context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(values) == 0 || len(values) > MaximumLookupAssetColumns {
+		return nil, errors.New("authenticate ClickHouse lookup transport: selected schema is invalid")
+	}
+	rowCount := len(values[0])
+	if rowCount > MaximumLookupAssetRows {
+		return nil, errors.New("authenticate ClickHouse lookup transport: row limit exceeded")
+	}
+	selectedCells, ok := lookupExternalTableCellCount(rowCount, len(values))
+	if !ok || selectedCells > MaximumLookupSelectedCellsPerQuery {
+		return nil, errors.New("authenticate ClickHouse lookup transport: selected-cell limit exceeded")
+	}
+	digest := sha256.New()
+	writeTokenPart(digest, compiledLookupExternalBackingDomain)
+	writeBool(digest, values == nil)
+	writeUint64(digest, uint64(len(values)))
+	rowBytes := make([]uint64, rowCount)
+	var payloadBytes uint64
+	var retainedBytes uint64
+	retainedBytes, ok = retainedAdd(
+		retainedBytes,
+		uint64(cap(values))*uint64(unsafe.Sizeof([]string{})),
+	)
+	if !ok {
+		return nil, errors.New("authenticate ClickHouse lookup transport: retained bytes overflow")
+	}
+	for columnIndex, column := range values {
+		if len(column) != rowCount {
+			return nil, fmt.Errorf(
+				"authenticate ClickHouse lookup transport: column %d has an invalid row count",
+				columnIndex,
+			)
+		}
+		writeBool(digest, column == nil)
+		writeUint64(digest, uint64(len(column)))
+		retainedBytes, ok = retainedAdd(
+			retainedBytes,
+			uint64(cap(column))*uint64(unsafe.Sizeof("")),
+		)
+		if !ok {
+			return nil, errors.New("authenticate ClickHouse lookup transport: retained bytes overflow")
+		}
+		for rowIndex, value := range column {
+			if rowIndex%lookupContextCheckRows == 0 {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+			}
+			if !utf8.ValidString(value) || len(value) > MaximumLookupCellBytes ||
+				strings.IndexByte(value, 0) >= 0 {
+				return nil, errors.New(
+					"authenticate ClickHouse lookup transport: selected cell is invalid",
+				)
+			}
+			rowBytes[rowIndex], ok = checkedLookupBytesAdd(
+				rowBytes[rowIndex],
+				uint64(len(value)),
+			)
+			if !ok || rowBytes[rowIndex] > MaximumLookupRowBytes {
+				return nil, errors.New(
+					"authenticate ClickHouse lookup transport: selected row is oversized",
+				)
+			}
+			payloadBytes, ok = checkedLookupBytesAdd(payloadBytes, uint64(len(value)))
+			if !ok || payloadBytes > MaximumLookupAssetBytes {
+				return nil, errors.New(
+					"authenticate ClickHouse lookup transport: selected payload is oversized",
+				)
+			}
+			retainedBytes, ok = retainedAdd(retainedBytes, uint64(len(value)))
+			if !ok {
+				return nil, errors.New(
+					"authenticate ClickHouse lookup transport: retained bytes overflow",
+				)
+			}
+			writeTokenPart(digest, value)
+		}
+	}
+	backing := &compiledLookupExternalBacking{
+		values:        values,
+		rowCount:      rowCount,
+		payloadBytes:  payloadBytes,
+		selectedCells: selectedCells,
+		retainedBytes: retainedBytes,
+	}
+	digest.Sum(backing.commitment[:0])
+	return backing, nil
 }
 
 func validateCompiledLookupExternalTables(tables []compiledLookupExternalTable) error {
@@ -154,6 +276,7 @@ func validateCompiledLookupExternalTablesContext(
 			table.version == 0 || table.sizeBytes == 0 ||
 			table.sizeBytes > MaximumLookupAssetBytes ||
 			table.contentSHA256 == ([sha256.Size]byte{}) ||
+			table.backing == nil ||
 			len(table.columns) == 0 ||
 			len(table.columns) > MaximumLookupAssetColumns {
 			return fmt.Errorf(
@@ -199,7 +322,14 @@ func validateCompiledLookupExternalTablesContext(
 		}
 		logicalVersions[logicalKey] = physical
 		seenColumns := map[string]struct{}{table.matchedColumn: {}}
-		rowCount := len(table.columns[0].values)
+		if len(table.backing.values) != len(table.columns) ||
+			table.backing.commitment == ([sha256.Size]byte{}) {
+			return fmt.Errorf(
+				"compiled ClickHouse lookup transport table %d has invalid immutable backing",
+				tableIndex,
+			)
+		}
+		rowCount := table.backing.rowCount
 		if rowCount > MaximumLookupAssetRows {
 			return fmt.Errorf(
 				"compiled ClickHouse lookup transport table %d exceeds the row limit",
@@ -207,17 +337,16 @@ func validateCompiledLookupExternalTablesContext(
 			)
 		}
 		cells, ok := lookupExternalTableCellCount(rowCount, len(table.columns))
-		if !ok || cells > MaximumLookupSelectedCellsPerQuery-aggregateCells {
+		if !ok || cells != table.backing.selectedCells ||
+			cells > MaximumLookupSelectedCellsPerQuery-aggregateCells {
 			return errors.New(
 				"compiled ClickHouse lookup transport exceeds the selected-cell work limit",
 			)
 		}
 		aggregateCells += cells
-		rowBytes := make([]uint64, rowCount)
-		var tablePayload uint64
 		for columnIndex, column := range table.columns {
 			if column.name == "" || !physicalIdentifier.MatchString(column.name) ||
-				len(column.values) != rowCount {
+				len(table.backing.values[columnIndex]) != rowCount {
 				return fmt.Errorf(
 					"compiled ClickHouse lookup transport table %d column %d is invalid",
 					tableIndex,
@@ -228,50 +357,21 @@ func validateCompiledLookupExternalTablesContext(
 				return errors.New("compiled ClickHouse lookup transport repeats a column name")
 			}
 			seenColumns[column.name] = struct{}{}
-			for rowIndex, value := range column.values {
-				if rowIndex%lookupContextCheckRows == 0 {
-					if err := ctx.Err(); err != nil {
-						return err
-					}
-				}
-				if !utf8.ValidString(value) || len(value) > MaximumLookupCellBytes ||
-					strings.IndexByte(value, 0) >= 0 {
-					return fmt.Errorf(
-						"compiled ClickHouse lookup transport table %d contains an invalid cell",
-						tableIndex,
-					)
-				}
-				var ok bool
-				rowBytes[rowIndex], ok = checkedLookupBytesAdd(
-					rowBytes[rowIndex],
-					uint64(len(value)),
-				)
-				if !ok || rowBytes[rowIndex] > MaximumLookupRowBytes {
-					return fmt.Errorf(
-						"compiled ClickHouse lookup transport table %d contains an oversized row",
-						tableIndex,
-					)
-				}
-				aggregatePayload, ok = checkedLookupBytesAdd(
-					aggregatePayload,
-					uint64(len(value)),
-				)
-				if !ok || aggregatePayload >
-					uint64(MaximumLookupStagesPerQuery)*MaximumLookupAssetBytes {
-					return errors.New(
-						"compiled ClickHouse lookup transport exceeds the aggregate byte limit",
-					)
-				}
-				tablePayload, ok = checkedLookupBytesAdd(
-					tablePayload,
-					uint64(len(value)),
-				)
-				if !ok || tablePayload > MaximumLookupAssetBytes {
-					return errors.New(
-						"compiled ClickHouse lookup transport table exceeds the asset byte limit",
-					)
-				}
-			}
+		}
+		if table.backing.payloadBytes > MaximumLookupAssetBytes {
+			return errors.New(
+				"compiled ClickHouse lookup transport table exceeds the asset byte limit",
+			)
+		}
+		aggregatePayload, ok = checkedLookupBytesAdd(
+			aggregatePayload,
+			table.backing.payloadBytes,
+		)
+		if !ok || aggregatePayload >
+			uint64(MaximumLookupStagesPerQuery)*MaximumLookupAssetBytes {
+			return errors.New(
+				"compiled ClickHouse lookup transport exceeds the aggregate byte limit",
+			)
 		}
 	}
 	return nil
@@ -334,6 +434,7 @@ func cloneCompiledLookupExternalTables(
 			contentSHA256:  table.contentSHA256,
 			matchedColumn:  strings.Clone(table.matchedColumn),
 			columns:        make([]compiledLookupExternalColumn, len(table.columns)),
+			backing:        table.backing,
 		}
 		if table.columns == nil {
 			cloned[tableIndex].columns = nil
@@ -341,10 +442,6 @@ func cloneCompiledLookupExternalTables(
 		for columnIndex, column := range table.columns {
 			cloned[tableIndex].columns[columnIndex] = compiledLookupExternalColumn{
 				name: strings.Clone(column.name),
-				// Cell slices are compiler-private immutable backing. Public
-				// execution values cannot reach them, so detached compiled-value
-				// clones need only detach the table/column descriptors.
-				values: column.values,
 			}
 		}
 	}
@@ -400,17 +497,8 @@ func writeCompiledLookupExternalTablesContext(
 		writeUint64(writer, uint64(len(table.columns)))
 		for _, column := range table.columns {
 			writeTokenPart(writer, column.name)
-			writeBool(writer, column.values == nil)
-			writeUint64(writer, uint64(len(column.values)))
-			for rowIndex, value := range column.values {
-				if rowIndex%lookupContextCheckRows == 0 {
-					if err := ctx.Err(); err != nil {
-						return false, err
-					}
-				}
-				writeTokenPart(writer, value)
-			}
 		}
+		_, _ = writer.Write(table.backing.commitment[:])
 	}
 	return true, nil
 }
@@ -478,24 +566,13 @@ func retainedCompiledLookupExternalTablesContext(
 			if !ok {
 				return 0, false, nil
 			}
-			total, ok = retainedAdd(
-				total,
-				uint64(cap(column.values))*uint64(unsafe.Sizeof("")),
-			)
-			if !ok {
-				return 0, false, nil
-			}
-			for rowIndex, value := range column.values {
-				if rowIndex%lookupContextCheckRows == 0 {
-					if err := ctx.Err(); err != nil {
-						return 0, false, err
-					}
-				}
-				total, ok = retainedAdd(total, uint64(len(value)))
-				if !ok {
-					return 0, false, nil
-				}
-			}
+		}
+		total, ok = retainedAdd(
+			total,
+			uint64(unsafe.Sizeof(*table.backing))+table.backing.retainedBytes,
+		)
+		if !ok {
+			return 0, false, nil
 		}
 	}
 	return total, true, nil
@@ -530,14 +607,14 @@ func materializeCompiledLookupExternalTables(
 		}
 		row := make([]any, len(compiled.columns)+1)
 		row[0] = uint8(1)
-		for rowIndex := range compiled.columns[0].values {
-			if rowIndex%1024 == 0 {
+		for rowIndex := 0; rowIndex < compiled.backing.rowCount; rowIndex++ {
+			if rowIndex%lookupContextCheckRows == 0 {
 				if err := ctx.Err(); err != nil {
 					return nil, err
 				}
 			}
 			for columnIndex := range compiled.columns {
-				row[columnIndex+1] = compiled.columns[columnIndex].values[rowIndex]
+				row[columnIndex+1] = compiled.backing.values[columnIndex][rowIndex]
 			}
 			if err := table.Append(row...); err != nil {
 				return nil, err

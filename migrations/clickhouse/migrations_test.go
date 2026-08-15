@@ -19,9 +19,9 @@ import (
 	"strings"
 	"testing"
 	"time"
-)
 
-const pinnedClickHouseImage = "clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49"
+	"github.com/Suhaibinator/open-splunk/internal/testsupport"
+)
 
 var migrationNamePattern = regexp.MustCompile(`^(\d{4})_[a-z0-9]+(?:_[a-z0-9]+)*\.sql$`)
 
@@ -179,7 +179,7 @@ func TestComposeFullStackSecurityContract(t *testing.T) {
 	compose := readFile(t, filepath.Join("..", "..", "deploy", "docker-compose.yaml"))
 
 	for _, fragment := range []string{
-		"image: " + pinnedClickHouseImage,
+		"image: " + testsupport.DefaultClickHouseImage,
 		"user: \"101:101\"",
 		"read_only: true",
 		"cap_drop:",
@@ -1060,7 +1060,7 @@ func TestDeploymentClickHouseBootstrapSeparatesServicePrincipals(t *testing.T) {
 		"GRANT ALTER DELETE, SELECT(tenant_id, index_name) ON open_splunk.events TO open_splunk_deletion",
 		"GRANT SELECT ON system.tables TO open_splunk_deletion",
 		"GRANT SELECT ON system.mutations TO open_splunk_deletion",
-		"expected_server_version=26.3.17.4",
+		"expected_server_version=26.3.17.56",
 		"SELECT version()",
 		"chmod 0700 /var/lib/clickhouse /var/log/clickhouse-server",
 	} {
@@ -1200,7 +1200,7 @@ func TestMigrationsAgainstClickHouse(t *testing.T) {
 	t.Setenv("CLICKHOUSE_PASSWORD", password)
 	image := os.Getenv("OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE")
 	if image == "" {
-		image = pinnedClickHouseImage
+		image = testsupport.DefaultClickHouseImage
 	}
 
 	runDocker(ctx, t, nil,

@@ -2,6 +2,7 @@ package lookupasset
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
@@ -74,6 +75,18 @@ func BuildExactIndex(asset *Asset, keyColumns []string) (*ExactIndex, error) {
 // ValidateUniqueKeys performs publication-time key validation without
 // retaining an index.
 func ValidateUniqueKeys(asset *Asset, keyColumns []string) error {
+	return ValidateUniqueKeysContext(context.Background(), asset, keyColumns)
+}
+
+// ValidateUniqueKeysContext performs publication-time key validation without
+// retaining an index and permits callers to abandon a maximum-row asset.
+func ValidateUniqueKeysContext(ctx context.Context, asset *Asset, keyColumns []string) error {
+	if ctx == nil {
+		return fmt.Errorf("%w: exact lookup key context is required", ErrInvalidArgument)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	ordinals, err := exactKeyOrdinals(asset, keyColumns)
 	if err != nil {
 		return err
@@ -81,6 +94,11 @@ func ValidateUniqueKeys(asset *Asset, keyColumns []string) error {
 	seen := make(map[string]struct{}, len(asset.rows))
 	values := make([]string, len(ordinals))
 	for rowOrdinal, row := range asset.rows {
+		if rowOrdinal%1024 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
 		for keyOrdinal, columnOrdinal := range ordinals {
 			values[keyOrdinal] = row[columnOrdinal]
 		}
@@ -94,7 +112,7 @@ func ValidateUniqueKeys(asset *Asset, keyColumns []string) error {
 		}
 		seen[canonical] = struct{}{}
 	}
-	return nil
+	return ctx.Err()
 }
 
 func buildExactIndex(asset *Asset, keyColumns []string, hasher exactKeyHasher) (*ExactIndex, error) {

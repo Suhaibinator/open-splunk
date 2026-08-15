@@ -40,7 +40,7 @@ export function LookupManagerGate(props: LookupManagerPanelProps) {
     return (
       <output className="backend-resource-state backend-resource-state--unavailable">
         <span aria-hidden="true">!</span>
-        <div><strong>Lookup Manager unavailable</strong><p>The advertised v0.4 lookup surface could not be loaded.</p></div>
+        <div><strong>Lookup Manager unavailable</strong><p>The advertised lookup management surface could not be loaded.</p></div>
       </output>
     );
   }

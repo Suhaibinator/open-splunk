@@ -531,7 +531,7 @@ func readStagedAsset(ctx context.Context, query interface {
 		return stagedRecord{}, fmt.Errorf("%w: staged lookup asset has invalid metadata", ErrCorrupt)
 	}
 	result := stagedRecord{
-		sourceBytes: uint64(sourceBytes), canonicalCSV: bytes.Clone(canonical),
+		sourceBytes: uint64(sourceBytes), canonicalCSV: canonical,
 		rowCount: uint64(rowCount), columnCount: uint32(columnCount),
 		createdAt: time.UnixMicro(created).UTC(), expiresAt: time.UnixMicro(expires).UTC(),
 	}
@@ -593,7 +593,7 @@ func readVersion(ctx context.Context, query interface {
 	if err := ctx.Err(); err != nil {
 		return Version{}, err
 	}
-	record := stagedRecord{canonicalCSV: bytes.Clone(canonical)}
+	record := stagedRecord{canonicalCSV: canonical}
 	if len(sourceDigest) == sha256.Size {
 		copy(record.sourceSHA256[:], sourceDigest)
 	}

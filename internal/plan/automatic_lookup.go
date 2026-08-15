@@ -293,10 +293,12 @@ func cloneLogicalLookup(lookup Lookup) Lookup {
 	for index := range result.Keys {
 		result.Keys[index].LookupField = strings.Clone(result.Keys[index].LookupField)
 		result.Keys[index].EventField.Name = strings.Clone(result.Keys[index].EventField.Name)
+		result.Keys[index].EventField.Path = slices.Clone(result.Keys[index].EventField.Path)
 	}
 	for index := range result.Outputs {
 		result.Outputs[index].LookupField = strings.Clone(result.Outputs[index].LookupField)
 		result.Outputs[index].EventField.Name = strings.Clone(result.Outputs[index].EventField.Name)
+		result.Outputs[index].EventField.Path = slices.Clone(result.Outputs[index].EventField.Path)
 	}
 	return result
 }

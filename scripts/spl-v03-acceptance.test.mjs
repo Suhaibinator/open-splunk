@@ -629,6 +629,30 @@ test("public README follows the exact activation phase", async () => {
   }
 });
 
+test("README byte pins stay synchronized across activation verifiers", async () => {
+  const [v02Verifier, v03Verifier, publicREADME] = await Promise.all([
+    readFile(path.join(workspace, "scripts/verify-spl-v02-acceptance.mjs"), "utf8"),
+    readFile(path.join(workspace, "scripts/verify-spl-v03-acceptance.mjs"), "utf8"),
+    readFile(path.join(workspace, "README.md"), "utf8"),
+  ]);
+  const checkpoint = checkpointOperatorBytes("README.md", publicREADME);
+  const candidate = candidateOperatorBytes("README.md", checkpoint);
+  const readPin = (source, name) => source.match(
+    new RegExp(`const ${name} =\\n  "([0-9a-f]{64})";`),
+  )?.[1];
+
+  const v02Pin = readPin(v02Verifier, "V02_PUBLIC_README_AUTHORITY_SHA256");
+  assert.equal(v02Pin, sha256(checkpoint));
+  assert.equal(
+    readPin(v03Verifier, "V02_PUBLIC_README_AUTHORITY_SHA256"),
+    v02Pin,
+  );
+  assert.equal(
+    readPin(v03Verifier, "V03_PUBLIC_README_AUTHORITY_SHA256"),
+    sha256(candidate),
+  );
+});
+
 test("operator release defaults advance atomically with the activation phase", async () => {
   const checkpoint = {
     deployGenerator: checkpointOperatorBytes("deploy/generate-env.sh",
@@ -1007,7 +1031,7 @@ test("synthetic clean v0.3 R/E lineage passes candidate and accepted verificatio
   const v02ReceiptValues = new Map([
     ["source-identity", { runtime_revision: v02Runtime, runtime_tree: v02Tree, remote_ref: v02Accepted.runtime.remote_ref, remote_readback_revision: v02Runtime, result: "pass" }],
     ["quality-gates", { runtime_revision: v02Runtime, runtime_tree: v02Tree, result: "pass" }],
-    ["clickhouse-gates", { runtime_revision: v02Runtime, runtime_tree: v02Tree, image: "clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49", result: "pass" }],
+    ["clickhouse-gates", { runtime_revision: v02Runtime, runtime_tree: v02Tree, image: "clickhouse/clickhouse-server:26.3.17.56@sha256:422be85ae7344058369cdd366ac0efea9daa8428b55c9cf50258e83a7d12fcb3", result: "pass" }],
     ["compatibility-audit", { runtime_revision: v02Runtime, runtime_tree: v02Tree, compatibility_version: "0.2", unresolved_findings: 0, result: "pass" }],
     ["ci-run", v02CIRun],
     ["ci-jobs", v02Jobs],
@@ -1170,12 +1194,12 @@ test("synthetic clean v0.3 R/E lineage passes candidate and accepted verificatio
       "./internal/searchsnapshot", "./internal/searchinspection",
       "./internal/searchanalysis", "./internal/export",
     ], result: "pass" })],
-    ["frontend-gates", json({ runtime_revision: v03Runtime, runtime_tree: v03Tree, node: "v24.18.0", npm: "11.16.0", commands: [
+    ["frontend-gates", json({ runtime_revision: v03Runtime, runtime_tree: v03Tree, node: "v24.19.0", npm: "11.17.0", commands: [
       "npm ci", "npm audit --omit=dev --audit-level=critical",
       "npm run typecheck", "npm run lint", "npm run test:frontend",
       "npm run build",
     ], result: "pass" })],
-    ["clickhouse-v03", json({ runtime_revision: v03Runtime, runtime_tree: v03Tree, image: "clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49", tests: REQUIRED_SPL_TESTS, result: "pass" })],
+    ["clickhouse-v03", json({ runtime_revision: v03Runtime, runtime_tree: v03Tree, image: "clickhouse/clickhouse-server:26.3.17.56@sha256:422be85ae7344058369cdd366ac0efea9daa8428b55c9cf50258e83a7d12fcb3", tests: REQUIRED_SPL_TESTS, result: "pass" })],
     ["release-readback", releaseReadback],
     ["binary-identities", binaryIdentityReceipt],
     ["artifact-digests", digestReceipt],

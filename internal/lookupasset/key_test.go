@@ -2,6 +2,7 @@ package lookupasset
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"strings"
@@ -85,6 +86,18 @@ func TestBuildExactIndexRejectsKeyDefinitionAndDuplicateRows(t *testing.T) {
 	}
 	if err := ValidateUniqueKeys(asset, []string{"key"}); !errors.Is(err, ErrDuplicateKey) {
 		t.Fatalf("duplicate key error = %v", err)
+	}
+}
+
+func TestValidateUniqueKeysContextRejectsNilAndCanceledContexts(t *testing.T) {
+	asset := mustParseAsset(t, "key\na\n")
+	if err := ValidateUniqueKeysContext(nil, asset, []string{"key"}); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("nil context error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := ValidateUniqueKeysContext(ctx, asset, []string{"key"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled context error = %v", err)
 	}
 }
 

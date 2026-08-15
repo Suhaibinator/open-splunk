@@ -14,6 +14,7 @@ import {
 import { Lookup, LookupState } from "@/gen/ts/open_splunk/v1/lookup";
 import { PreviewLookupResponse } from "@/gen/ts/open_splunk/v1/lookup_api";
 
+import { selectorPatternKind } from "./lookup-manager-contract";
 import {
   LookupManagerTable,
   LookupPreviewTable,
@@ -69,7 +70,7 @@ function lookupFixture() {
   });
 }
 
-test("mapping drafts use the explicit bounded v0.4 key and output grammar", () => {
+test("mapping drafts use the explicit bounded key and output grammar", () => {
   assert.deepEqual(parseLookupMappings("id AS event_id\nregion AS event_region", "key"), [
     { lookupField: "id", eventField: "event_id" },
     { lookupField: "region", eventField: "event_region" },
@@ -144,6 +145,17 @@ test("lookup editor draft produces exact mappings, selectors, and overwrite auth
     keyMappings: "asset_id AS host_id",
     outputMappings: "owner",
   }), /invalid escape/);
+  assert.throws(() => lookupDefinitionFromDraft({
+    ...createLookupDraft("app-security"),
+    name: "asset_inventory",
+    hostPatterns: "api-**",
+    keyMappings: "asset_id AS host_id",
+    outputMappings: "owner",
+  }), /non-canonical/);
+  assert.equal(
+    selectorPatternKind("api-*"),
+    KnowledgeSelectorMatchKind.KNOWLEDGE_SELECTOR_MATCH_KIND_WILDCARD,
+  );
 });
 
 test("lookup editor rejects a mapping contract outside the authored SPL ceiling", () => {
@@ -248,4 +260,11 @@ test("the advertised backend navigation renders Lookup Manager through its gate"
   assert.match(featureSource, /key: "lookups"/);
   assert.match(consoleSource, /section === "lookups"/);
   assert.match(consoleSource, /<LookupManagerGate/);
+});
+
+test("lookup manager user copy stays version-neutral", () => {
+  const gateSource = readFileSync(path.join(process.cwd(), "app/admin/lookup-manager-gate.tsx"), "utf8");
+  const panelSource = readFileSync(path.join(process.cwd(), "app/admin/lookup-manager-panel.tsx"), "utf8");
+  assert.doesNotMatch(gateSource, /\bv0\.4\b/iu);
+  assert.doesNotMatch(panelSource, /\bv0\.4\b/iu);
 });

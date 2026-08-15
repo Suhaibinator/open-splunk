@@ -37,7 +37,7 @@ test("terminal CI requires every pinned SPL v0.3 ClickHouse vertical", async () 
 
   assert.match(
     job,
-    /OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE: clickhouse\/clickhouse-server:26\.3\.17\.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49/,
+    /OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE: clickhouse\/clickhouse-server:26\.3\.17\.56@sha256:422be85ae7344058369cdd366ac0efea9daa8428b55c9cf50258e83a7d12fcb3/,
   );
   const singletonTests = [
     ["./internal/clickhouse", "TestV03AdversarialAgainstClickHouse"],

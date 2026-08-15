@@ -6,7 +6,6 @@ package lookupservice
 import (
 	"bytes"
 	"context"
-	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -16,11 +15,11 @@ import (
 	"math"
 	"reflect"
 	"slices"
-	"sort"
 	"strings"
 	"unicode/utf8"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/cursorcodec"
 	"github.com/Suhaibinator/open-splunk/internal/lookupasset"
 	"github.com/Suhaibinator/open-splunk/internal/lookupcatalog"
 	"github.com/Suhaibinator/open-splunk/internal/lookupdefinition"
@@ -32,10 +31,11 @@ const (
 	MaximumPageSize    = 100
 	DefaultPreviewRows = 25
 	MaximumPreviewRows = 100
-	MaximumTextBytes   = 255
+	MaximumTextBytes   = lookupcatalog.MaximumListTextBytes
 	MaximumPageToken   = 4 << 10
 
-	cursorVersion = byte(1)
+	cursorVersion = 2
+	cursorDomain  = "lookup-list-cursor"
 )
 
 var (
@@ -66,6 +66,7 @@ type CatalogRepository interface {
 	Get(context.Context, lookupcatalog.GetRequest) (*opensplunkv1.Lookup, error)
 	GetResolved(context.Context, lookupcatalog.GetRequest) (lookupcatalog.Resolved, error)
 	List(context.Context, lookupcatalog.ListRequest) ([]*opensplunkv1.Lookup, error)
+	ListPage(context.Context, lookupcatalog.ListPageRequest) (lookupcatalog.ListPage, error)
 	SetState(context.Context, lookupcatalog.StateRequest) (*opensplunkv1.Lookup, error)
 }
 
@@ -115,7 +116,7 @@ func (service *Service) Create(ctx context.Context, scope Scope, input *opensplu
 	if input == nil || input.ClientRequestId != nil || len(input.GetCsvData()) == 0 {
 		return nil, fmt.Errorf("%w: definition and nonempty csv_data are required; idempotency keys are not supported", ErrInvalid)
 	}
-	asset, definition, err := prepareAssetDefinition(input.GetCsvData(), input.GetDefinition())
+	asset, definition, err := prepareAssetDefinition(ctx, input.GetCsvData(), input.GetDefinition())
 	if err != nil {
 		return nil, classify(err)
 	}
@@ -165,7 +166,7 @@ func (service *Service) Replace(ctx context.Context, scope Scope, input *openspl
 		if len(input.GetCsvData()) == 0 {
 			return nil, fmt.Errorf("%w: present csv_data must be nonempty", ErrInvalid)
 		}
-		asset, normalized, prepareErr := prepareAssetDefinition(input.GetCsvData(), input.GetDefinition())
+		asset, normalized, prepareErr := prepareAssetDefinition(ctx, input.GetCsvData(), input.GetDefinition())
 		if prepareErr != nil {
 			return nil, classify(prepareErr)
 		}
@@ -264,8 +265,11 @@ func (service *Service) Preview(ctx context.Context, scope Scope, input *openspl
 	}
 	sourceDigest := sha256.Sum256(input.GetCsvData())
 	response := &opensplunkv1.PreviewLookupResponse{SourceSha256: slices.Clone(sourceDigest[:])}
-	asset, err := lookupasset.ParseCSV(bytes.NewReader(input.GetCsvData()), lookupasset.DefaultLimits())
+	asset, err := lookupasset.ParseCSVContext(ctx, bytes.NewReader(input.GetCsvData()), lookupasset.DefaultLimits())
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
 		response.Violations = []*opensplunkv1.FieldViolation{previewViolation("csv_data", err)}
 		return response, nil
 	}
@@ -278,7 +282,10 @@ func (service *Service) Preview(ctx context.Context, scope Scope, input *openspl
 		response.Violations = []*opensplunkv1.FieldViolation{previewViolation("definition", err)}
 		return response, nil
 	}
-	if err := validateDefinitionKeys(asset, normalized.Definition); err != nil {
+	if err := validateDefinitionKeys(ctx, asset, normalized.Definition); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
 		response.Violations = []*opensplunkv1.FieldViolation{previewViolation("definition.key_mappings", err)}
 		return response, nil
 	}
@@ -303,73 +310,71 @@ func (service *Service) List(ctx context.Context, scope Scope, input *opensplunk
 	if err != nil {
 		return nil, err
 	}
-	all, err := service.catalog.List(ctx, lookupcatalog.ListRequest{
-		TenantID: scope.TenantID, OwnerID: scope.OwnerID, AppID: normalized.appID,
-		Limit: lookupcatalog.MaximumManagedLookups + 1,
-	})
+	fingerprint := normalized.fingerprint(scope)
+	request := lookupcatalog.ListPageRequest{
+		TenantID:      scope.TenantID,
+		OwnerID:       scope.OwnerID,
+		AppID:         normalized.appID,
+		States:        normalized.states,
+		TextFilter:    normalized.text,
+		SortBy:        normalized.sortBy,
+		SortDirection: normalized.direction,
+		Limit:         normalized.pageSize,
+		IncludeTotal:  normalized.includeTotal,
+	}
+	if normalized.pageToken != "" {
+		cursor, decodeErr := service.decodeListCursor(normalized.pageToken, fingerprint, normalized.sortBy)
+		if decodeErr != nil {
+			return nil, fmt.Errorf("%w: page token is invalid, stale, or does not match the request", ErrInvalid)
+		}
+		request.Position = &lookupcatalog.ListPosition{
+			LookupID: cursor.LookupID,
+			Name:     cursor.Name,
+		}
+		if cursor.UnixMicro != nil {
+			request.Position.UnixMicro = *cursor.UnixMicro
+		}
+		request.ExpectedSnapshot = &lookupcatalog.ListSnapshot{
+			Revision: cursor.Revision,
+			State:    cursor.stateDigest(),
+		}
+	}
+	listed, err := service.catalog.ListPage(ctx, request)
 	if err != nil {
+		if errors.Is(err, lookupcatalog.ErrPageInvalidated) {
+			return nil, fmt.Errorf("%w: page token is invalid, stale, or does not match the request", ErrInvalid)
+		}
 		return nil, classify(err)
 	}
-	if len(all) > lookupcatalog.MaximumManagedLookups {
-		return nil, ErrResourceLimit
-	}
-	filtered := make([]*opensplunkv1.Lookup, 0, len(all))
-	for _, lookup := range all {
+	pageItems := make([]*opensplunkv1.Lookup, len(listed.Lookups))
+	for index, lookup := range listed.Lookups {
 		if lookup == nil || lookup.GetDefinition() == nil {
 			return nil, ErrUnavailable
 		}
-		if len(normalized.states) != 0 && !slices.Contains(normalized.states, lookup.GetState()) {
-			continue
-		}
-		if normalized.text != "" {
-			name := strings.ToLower(lookup.GetDefinition().GetName())
-			description := strings.ToLower(lookup.GetDefinition().GetDescription())
-			if !strings.Contains(name, normalized.text) && !strings.Contains(description, normalized.text) {
-				continue
-			}
-		}
-		filtered = append(filtered, cloneLookup(lookup))
+		pageItems[index] = cloneLookup(lookup)
 	}
-	sortLookups(filtered, normalized.sortBy, normalized.direction)
-	fingerprint := lookupListSnapshotFingerprint(normalized.fingerprint(scope), filtered)
-	offset := uint32(0)
-	if normalized.pageToken != "" {
-		offset, err = service.decodeCursor(normalized.pageToken, fingerprint)
-		if err != nil || uint64(offset) > uint64(len(filtered)) {
-			return nil, fmt.Errorf("%w: page token is invalid, stale, or does not match the request", ErrInvalid)
-		}
-	}
-	end := min(uint64(len(filtered)), uint64(offset)+uint64(normalized.pageSize))
-	pageItems := filtered[offset:end:end]
 	page := &opensplunkv1.PageResponse{}
-	if end < uint64(len(filtered)) {
-		token, encodeErr := service.encodeCursor(uint32(end), fingerprint)
+	if listed.NextPosition != nil {
+		token, encodeErr := service.encodeListCursor(
+			fingerprint,
+			listed.Snapshot,
+			*listed.NextPosition,
+			normalized.sortBy,
+		)
 		if encodeErr != nil {
 			return nil, encodeErr
 		}
 		page.NextPageToken = &token
 	}
 	if normalized.includeTotal {
-		total := uint64(len(filtered))
+		if listed.TotalSize == nil {
+			return nil, ErrUnavailable
+		}
+		total := *listed.TotalSize
 		page.TotalSize = &total
 		page.TotalSizeExact = true
 	}
 	return &opensplunkv1.ListLookupsResponse{Lookups: pageItems, Page: page}, nil
-}
-
-func lookupListSnapshotFingerprint(request [sha256.Size]byte, lookups []*opensplunkv1.Lookup) [sha256.Size]byte {
-	hash := sha256.New()
-	writeFingerprintString(hash, "open-splunk/lookup-list-snapshot/v1")
-	_, _ = hash.Write(request[:])
-	version := make([]byte, 8)
-	for _, lookup := range lookups {
-		writeFingerprintString(hash, lookup.GetLookupId())
-		binary.BigEndian.PutUint64(version, lookup.GetVersion())
-		_, _ = hash.Write(version)
-	}
-	var result [sha256.Size]byte
-	copy(result[:], hash.Sum(nil))
-	return result
 }
 
 func (service *Service) createPublished(
@@ -479,8 +484,8 @@ func (service *Service) publishStaged(
 	return published, nil
 }
 
-func prepareAssetDefinition(csvData []byte, definition *opensplunkv1.LookupDefinition) (*lookupasset.Asset, *opensplunkv1.LookupDefinition, error) {
-	asset, err := lookupasset.ParseCSV(bytes.NewReader(csvData), lookupasset.DefaultLimits())
+func prepareAssetDefinition(ctx context.Context, csvData []byte, definition *opensplunkv1.LookupDefinition) (*lookupasset.Asset, *opensplunkv1.LookupDefinition, error) {
+	asset, err := lookupasset.ParseCSVContext(ctx, bytes.NewReader(csvData), lookupasset.DefaultLimits())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -491,12 +496,12 @@ func prepareAssetDefinition(csvData []byte, definition *opensplunkv1.LookupDefin
 	return asset, normalized.Definition, nil
 }
 
-func validateDefinitionKeys(asset *lookupasset.Asset, definition *opensplunkv1.LookupDefinition) error {
+func validateDefinitionKeys(ctx context.Context, asset *lookupasset.Asset, definition *opensplunkv1.LookupDefinition) error {
 	keys := make([]string, len(definition.GetKeyMappings()))
 	for index, mapping := range definition.GetKeyMappings() {
 		keys[index] = mapping.GetLookupField()
 	}
-	return lookupasset.ValidateUniqueKeys(asset, keys)
+	return lookupasset.ValidateUniqueKeysContext(ctx, asset, keys)
 }
 
 func (service *Service) validate(ctx context.Context, scope Scope) error {
@@ -574,27 +579,6 @@ func normalizeList(input *opensplunkv1.ListLookupsRequest) (normalizedListReques
 	return result, nil
 }
 
-func sortLookups(values []*opensplunkv1.Lookup, field opensplunkv1.LookupSortBy, direction opensplunkv1.SortDirection) {
-	sort.SliceStable(values, func(left, right int) bool {
-		comparison := 0
-		switch field {
-		case opensplunkv1.LookupSortBy_LOOKUP_SORT_BY_CREATED_AT:
-			comparison = values[left].GetCreatedAt().AsTime().Compare(values[right].GetCreatedAt().AsTime())
-		case opensplunkv1.LookupSortBy_LOOKUP_SORT_BY_UPDATED_AT:
-			comparison = values[left].GetUpdatedAt().AsTime().Compare(values[right].GetUpdatedAt().AsTime())
-		default:
-			comparison = strings.Compare(values[left].GetDefinition().GetName(), values[right].GetDefinition().GetName())
-		}
-		if comparison == 0 {
-			comparison = strings.Compare(values[left].GetLookupId(), values[right].GetLookupId())
-		}
-		if direction == opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING {
-			return comparison > 0
-		}
-		return comparison < 0
-	})
-}
-
 func (request normalizedListRequest) fingerprint(scope Scope) [sha256.Size]byte {
 	hash := sha256.New()
 	writeFingerprintString(hash, "open-splunk/lookup-list/v1")
@@ -627,29 +611,101 @@ func writeFingerprintString(writer stringWriter, value string) {
 	_, _ = writer.Write([]byte(value))
 }
 
-func (service *Service) encodeCursor(offset uint32, fingerprint [sha256.Size]byte) (string, error) {
-	payload := make([]byte, 1+4+sha256.Size)
-	payload[0] = cursorVersion
-	binary.BigEndian.PutUint32(payload[1:5], offset)
-	copy(payload[5:], fingerprint[:])
-	mac := hmac.New(sha256.New, service.cursorKey[:])
-	_, _ = mac.Write(payload)
-	token := append(payload, mac.Sum(nil)...)
-	return base64.RawURLEncoding.EncodeToString(token), nil
+type lookupListCursor struct {
+	Version     int    `json:"v"`
+	Fingerprint string `json:"f"`
+	Revision    uint64 `json:"r"`
+	State       string `json:"g"`
+	LookupID    string `json:"i"`
+	Name        string `json:"s,omitempty"`
+	UnixMicro   *int64 `json:"n,omitempty"`
 }
 
-func (service *Service) decodeCursor(token string, fingerprint [sha256.Size]byte) (uint32, error) {
-	decoded, err := base64.RawURLEncoding.DecodeString(token)
-	const payloadBytes = 1 + 4 + sha256.Size
-	if err != nil || len(decoded) != payloadBytes+sha256.Size || decoded[0] != cursorVersion {
-		return 0, ErrInvalid
+func (service *Service) encodeListCursor(
+	fingerprint [sha256.Size]byte,
+	snapshot lookupcatalog.ListSnapshot,
+	position lookupcatalog.ListPosition,
+	sortBy opensplunkv1.LookupSortBy,
+) (string, error) {
+	cursor := lookupListCursor{
+		Version:     cursorVersion,
+		Fingerprint: base64.RawURLEncoding.EncodeToString(fingerprint[:]),
+		Revision:    snapshot.Revision,
+		State:       base64.RawURLEncoding.EncodeToString(snapshot.State[:]),
+		LookupID:    strings.Clone(position.LookupID),
+		Name:        strings.Clone(position.Name),
 	}
-	mac := hmac.New(sha256.New, service.cursorKey[:])
-	_, _ = mac.Write(decoded[:payloadBytes])
-	if !hmac.Equal(mac.Sum(nil), decoded[payloadBytes:]) || !hmac.Equal(decoded[5:payloadBytes], fingerprint[:]) {
-		return 0, ErrInvalid
+	if sortBy != opensplunkv1.LookupSortBy_LOOKUP_SORT_BY_NAME {
+		value := position.UnixMicro
+		cursor.UnixMicro = &value
 	}
-	return binary.BigEndian.Uint32(decoded[1:5]), nil
+	if !validLookupListCursor(cursor, fingerprint, sortBy) {
+		return "", ErrUnavailable
+	}
+	token, err := cursorcodec.Encode(
+		service.cursorKey[:],
+		cursorDomain,
+		cursorVersion,
+		MaximumPageToken,
+		cursor,
+	)
+	if err != nil {
+		return "", fmt.Errorf("%w: encode lookup list cursor", ErrUnavailable)
+	}
+	return token, nil
+}
+
+func (service *Service) decodeListCursor(
+	token string,
+	fingerprint [sha256.Size]byte,
+	sortBy opensplunkv1.LookupSortBy,
+) (lookupListCursor, error) {
+	var cursor lookupListCursor
+	if err := cursorcodec.Decode(
+		service.cursorKey[:],
+		cursorDomain,
+		cursorVersion,
+		MaximumPageToken,
+		token,
+		&cursor,
+	); err != nil || !validLookupListCursor(cursor, fingerprint, sortBy) {
+		return lookupListCursor{}, ErrInvalid
+	}
+	return cursor, nil
+}
+
+func validLookupListCursor(
+	cursor lookupListCursor,
+	fingerprint [sha256.Size]byte,
+	sortBy opensplunkv1.LookupSortBy,
+) bool {
+	decodedFingerprint, fingerprintErr := base64.RawURLEncoding.DecodeString(cursor.Fingerprint)
+	decodedState, stateErr := base64.RawURLEncoding.DecodeString(cursor.State)
+	if cursor.Version != cursorVersion || cursor.Revision == 0 ||
+		fingerprintErr != nil || len(decodedFingerprint) != sha256.Size ||
+		base64.RawURLEncoding.EncodeToString(decodedFingerprint) != cursor.Fingerprint ||
+		!slices.Equal(decodedFingerprint, fingerprint[:]) ||
+		stateErr != nil || len(decodedState) != sha256.Size ||
+		base64.RawURLEncoding.EncodeToString(decodedState) != cursor.State ||
+		!validIdentity(cursor.LookupID, 128) {
+		return false
+	}
+	switch sortBy {
+	case opensplunkv1.LookupSortBy_LOOKUP_SORT_BY_NAME:
+		return cursor.UnixMicro == nil && lookupdefinition.IsValidLookupName(cursor.Name)
+	case opensplunkv1.LookupSortBy_LOOKUP_SORT_BY_CREATED_AT,
+		opensplunkv1.LookupSortBy_LOOKUP_SORT_BY_UPDATED_AT:
+		return cursor.Name == "" && cursor.UnixMicro != nil && *cursor.UnixMicro > 0
+	default:
+		return false
+	}
+}
+
+func (cursor lookupListCursor) stateDigest() [sha256.Size]byte {
+	decoded, _ := base64.RawURLEncoding.DecodeString(cursor.State)
+	var digest [sha256.Size]byte
+	copy(digest[:], decoded)
+	return digest
 }
 
 func previewViolation(path string, err error) *opensplunkv1.FieldViolation {
@@ -684,6 +740,7 @@ func classify(err error) error {
 	case errors.Is(err, lookupasset.ErrConflict):
 		return fmt.Errorf("%w: %v", ErrConflict, err)
 	case errors.Is(err, lookupdefinition.ErrInvalid), errors.Is(err, lookupcatalog.ErrInvalid),
+		errors.Is(err, lookupcatalog.ErrPageInvalidated),
 		errors.Is(err, lookupasset.ErrInvalidArgument), errors.Is(err, lookupasset.ErrMalformedCSV), errors.Is(err, lookupasset.ErrDuplicateKey):
 		return fmt.Errorf("%w: %v", ErrInvalid, err)
 	case errors.Is(err, lookupcatalog.ErrCorrupt), errors.Is(err, lookupasset.ErrCorrupt),

@@ -1951,10 +1951,12 @@ func TestCanceledExecutionDoesNotCallExecutionErrorHook(t *testing.T) {
 	t.Parallel()
 
 	var executions atomic.Uint64
+	executionStarted := make(chan struct{})
 	reported := make(chan struct{}, 1)
 	manager := newTestManager(t, Config{
 		Executor: executorFunc(func(ctx context.Context, _ clickhouse.CompiledQuery, sink ResultSink) error {
 			if executions.Add(1) == 1 {
+				close(executionStarted)
 				<-ctx.Done()
 				return errors.New("private transport failure after cancellation")
 			}
@@ -1973,6 +1975,11 @@ func TestCanceledExecutionDoesNotCallExecutionErrorHook(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForState(t, manager, canceled.ID, StateRunning)
+	select {
+	case <-executionStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("executor did not start")
+	}
 	if err := manager.Cancel(canceled.ID); err != nil {
 		t.Fatal(err)
 	}

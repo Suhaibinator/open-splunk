@@ -24,21 +24,18 @@ import { isOptionalRouteUnavailable } from "@/lib/api";
 import { Modal } from "../search-workspace/modal";
 import type { KnowledgeManagerAppOption } from "./knowledge-manager-feature";
 import {
-  LOOKUP_MAXIMUM_CSV_BYTES,
-  LOOKUP_MAXIMUM_MANAGED,
-  LOOKUP_MAXIMUM_PREVIEW_ROWS,
   createLookupManagerClient,
   type LookupManagerClient,
 } from "./lookup-manager-data";
 import {
-  LOOKUP_MAXIMUM_DESCRIPTION_BYTES,
-  LOOKUP_MAXIMUM_NAME_BYTES,
+  LOOKUP_MANAGER_CONTRACT,
   hasUnpairedSurrogate,
   isCanonicallyAuthorableLookupDefinition,
   isExactEventField,
   isExactLookupColumn,
   isExactPublicField,
   isLookupOutputMarker,
+  selectorPatternKind,
   textBytes,
 } from "./lookup-manager-contract";
 
@@ -98,11 +95,6 @@ interface LookupEditorProps {
   ) => Promise<void>;
 }
 
-const MAXIMUM_KEY_MAPPINGS = 4;
-const MAXIMUM_OUTPUT_MAPPINGS = 16;
-const MAXIMUM_COLUMNS = 64;
-const MAXIMUM_ROWS = 100_000n;
-
 function errorMessage(error: unknown): string {
   return error instanceof Error && error.message.trim().length > 0
     ? error.message
@@ -122,13 +114,15 @@ function mappingLine(mapping: LookupFieldMapping, allowImplicit: boolean): strin
     : `${mapping.lookupField} AS ${mapping.eventField}`;
 }
 
-/** Parses the same exact, unquoted mapping form exposed by SPL v0.4. */
+/** Parses the exact, unquoted mapping form exposed by the public SPL grammar. */
 export function parseLookupMappings(
   value: string,
   kind: "key" | "output",
 ): LookupFieldMapping[] {
   const entries = lines(value);
-  const maximum = kind === "key" ? MAXIMUM_KEY_MAPPINGS : MAXIMUM_OUTPUT_MAPPINGS;
+  const maximum = kind === "key"
+    ? LOOKUP_MANAGER_CONTRACT.maximumKeyMappings
+    : LOOKUP_MANAGER_CONTRACT.maximumOutputMappings;
   if (entries.length < 1 || entries.length > maximum) {
     throw new TypeError(`${kind === "key" ? "Key" : "Output"} mappings must contain between 1 and ${maximum} lines.`);
   }
@@ -168,32 +162,9 @@ export function parseLookupMappings(
   });
 }
 
-function selectorMatchKind(pattern: string): KnowledgeSelectorMatchKind {
-  let escaped = false;
-  let wildcard = false;
-  for (const character of pattern) {
-    if (escaped) {
-      if (character !== "*" && character !== "?" && character !== "\\") {
-        return KnowledgeSelectorMatchKind.KNOWLEDGE_SELECTOR_MATCH_KIND_UNSPECIFIED;
-      }
-      escaped = false;
-      continue;
-    }
-    if (character === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (character === "*" || character === "?") wildcard = true;
-  }
-  if (escaped) return KnowledgeSelectorMatchKind.KNOWLEDGE_SELECTOR_MATCH_KIND_UNSPECIFIED;
-  return wildcard
-    ? KnowledgeSelectorMatchKind.KNOWLEDGE_SELECTOR_MATCH_KIND_WILDCARD
-    : KnowledgeSelectorMatchKind.KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT;
-}
-
 function selectorPatterns(value: string) {
   return lines(value).map((pattern) => ({
-    matchKind: selectorMatchKind(pattern),
+    matchKind: selectorPatternKind(pattern),
     value: pattern,
   }));
 }
@@ -250,18 +221,18 @@ export function createLookupDraft(appId: string): LookupDraft {
 }
 
 export function lookupDefinitionFromDraft(draft: LookupDraft): LookupDefinition {
-  if (!isExactPublicField(draft.name) || textBytes(draft.name) > LOOKUP_MAXIMUM_NAME_BYTES) {
-    throw new TypeError("Lookup name must be an exact unquoted public name within 255 UTF-8 bytes.");
+  if (!isExactPublicField(draft.name) || textBytes(draft.name) > LOOKUP_MANAGER_CONTRACT.maximumNameBytes) {
+    throw new TypeError(`Lookup name must be an exact unquoted public name within ${LOOKUP_MANAGER_CONTRACT.maximumNameBytes} UTF-8 bytes.`);
   }
   if (
-    textBytes(draft.description) > LOOKUP_MAXIMUM_DESCRIPTION_BYTES
+    textBytes(draft.description) > LOOKUP_MANAGER_CONTRACT.maximumDescriptionBytes
     || hasUnpairedSurrogate(draft.description)
     || /[\p{Cc}\p{Cf}]/u.test(draft.description)
   ) {
-    throw new TypeError("Lookup description must be control-free UTF-8 within 16 KiB.");
+    throw new TypeError(`Lookup description must be control-free UTF-8 within ${LOOKUP_MANAGER_CONTRACT.maximumDescriptionBytes / 1024} KiB.`);
   }
   if (
-    textBytes(draft.appId) > 128
+    textBytes(draft.appId) > LOOKUP_MANAGER_CONTRACT.maximumAppIdBytes
     || !/^[A-Za-z0-9](?:[A-Za-z0-9._:-]*)$/u.test(draft.appId)
   ) throw new TypeError("A canonical app scope is required.");
   const selector = KnowledgeSelector.fromPartial({
@@ -276,7 +247,7 @@ export function lookupDefinitionFromDraft(draft: LookupDraft): LookupDefinition 
     ...selector.sourcePatterns,
     ...selector.sourcetypePatterns,
   ].some((pattern) => pattern.matchKind === KnowledgeSelectorMatchKind.KNOWLEDGE_SELECTOR_MATCH_KIND_UNSPECIFIED)) {
-    throw new TypeError("Lookup selector patterns contain an invalid escape sequence.");
+    throw new TypeError("Lookup selector patterns contain an invalid escape sequence or non-canonical value.");
   }
   const definition = LookupDefinition.fromPartial({
     appId: draft.appId,
@@ -290,7 +261,7 @@ export function lookupDefinitionFromDraft(draft: LookupDraft): LookupDefinition 
     overwriteBehavior: overwriteFromDraft(draft.overwrite),
   });
   if (!isCanonicallyAuthorableLookupDefinition(definition)) {
-    throw new TypeError("Lookup mappings exceed the 16 KiB authored SPL ceiling.");
+    throw new TypeError(`Lookup mappings exceed the ${LOOKUP_MANAGER_CONTRACT.maximumAuthoredSourceBytes / 1024} KiB authored SPL ceiling.`);
   }
   return definition;
 }
@@ -321,18 +292,18 @@ export function lookupDraftFromLookup(lookup: Lookup): LookupDraft {
 /** Detaches and bounds a preview before any server-controlled arrays reach the DOM. */
 export function normalizeLookupPreview(response: PreviewLookupResponse): SafeLookupPreview {
   if (
-    response.columns.length > MAXIMUM_COLUMNS
-    || response.rows.length > LOOKUP_MAXIMUM_PREVIEW_ROWS
-    || response.violations.length > 8
+    response.columns.length > LOOKUP_MANAGER_CONTRACT.maximumColumns
+    || response.rows.length > LOOKUP_MANAGER_CONTRACT.maximumPreviewRows
+    || response.violations.length > LOOKUP_MANAGER_CONTRACT.maximumPreviewViolations
     || response.totalRows < 0n
-    || response.totalRows > MAXIMUM_ROWS
-    || response.sourceSha256.byteLength !== 32
+    || response.totalRows > BigInt(LOOKUP_MANAGER_CONTRACT.maximumAssetRows)
+    || response.sourceSha256.byteLength !== LOOKUP_MANAGER_CONTRACT.sha256Bytes
   ) throw new TypeError("Lookup preview response is outside the bounded contract.");
   const columns = [...response.columns];
   if (
     columns.some((column) => (
       column.length === 0
-      || textBytes(column) > 255
+      || textBytes(column) > LOOKUP_MANAGER_CONTRACT.maximumHeaderBytes
       || column.trim() !== column
       || column.includes("\0")
       || [...column].some((character) => /[\p{Cc}\p{Cf}]/u.test(character))
@@ -347,14 +318,15 @@ export function normalizeLookupPreview(response: PreviewLookupResponse): SafeLoo
     if (
       response.rows.length !== 0
       || response.truncated
-      || (response.contentSha256.byteLength !== 0 && response.contentSha256.byteLength !== 32)
+      || (response.contentSha256.byteLength !== 0
+        && response.contentSha256.byteLength !== LOOKUP_MANAGER_CONTRACT.sha256Bytes)
       || violations.some((violation) => (
         violation.fieldPath.length === 0
-        || textBytes(violation.fieldPath) > 255
+        || textBytes(violation.fieldPath) > LOOKUP_MANAGER_CONTRACT.maximumViolationFieldPathBytes
         || violation.code.length === 0
-        || textBytes(violation.code) > 128
+        || textBytes(violation.code) > LOOKUP_MANAGER_CONTRACT.maximumViolationCodeBytes
         || violation.message.length === 0
-        || textBytes(violation.message) > 4 << 10
+        || textBytes(violation.message) > LOOKUP_MANAGER_CONTRACT.maximumViolationMessageBytes
         || hasUnpairedSurrogate(violation.fieldPath)
         || hasUnpairedSurrogate(violation.code)
         || hasUnpairedSurrogate(violation.message)
@@ -362,7 +334,7 @@ export function normalizeLookupPreview(response: PreviewLookupResponse): SafeLoo
     ) throw new TypeError("Lookup preview violations are outside the bounded contract.");
     if (
       (columns.length === 0 && (response.totalRows !== 0n || response.contentSha256.byteLength !== 0))
-      || (columns.length > 0 && response.contentSha256.byteLength !== 32)
+      || (columns.length > 0 && response.contentSha256.byteLength !== LOOKUP_MANAGER_CONTRACT.sha256Bytes)
     ) throw new TypeError("Lookup preview violation authority is inconsistent.");
     return {
       columns,
@@ -374,7 +346,7 @@ export function normalizeLookupPreview(response: PreviewLookupResponse): SafeLoo
   }
   if (
     columns.length === 0
-    || response.contentSha256.byteLength !== 32
+    || response.contentSha256.byteLength !== LOOKUP_MANAGER_CONTRACT.sha256Bytes
     || response.totalRows < BigInt(response.rows.length)
     || response.truncated !== (response.totalRows > BigInt(response.rows.length))
   ) throw new TypeError("Lookup preview success authority is invalid.");
@@ -389,9 +361,9 @@ export function normalizeLookupPreview(response: PreviewLookupResponse): SafeLoo
       rowBytes += bytes;
       totalCellBytes += bytes;
       if (
-        bytes > (64 << 10)
-        || rowBytes > (1 << 20)
-        || totalCellBytes > LOOKUP_MAXIMUM_CSV_BYTES
+        bytes > LOOKUP_MANAGER_CONTRACT.maximumCellBytes
+        || rowBytes > LOOKUP_MANAGER_CONTRACT.maximumRowBytes
+        || totalCellBytes > LOOKUP_MANAGER_CONTRACT.maximumUploadBytes
         || value.includes("\0")
         || hasUnpairedSurrogate(value)
       ) throw new TypeError("Lookup preview cell is outside its bounded contract.");
@@ -492,7 +464,7 @@ export function LookupManagerPanel({
     setLoadError(null);
     void client.list(appId || undefined, { signal: controller.signal }).then((loaded) => {
       if (controller.signal.aborted) return;
-      if (loaded.length > LOOKUP_MAXIMUM_MANAGED) {
+      if (loaded.length > LOOKUP_MANAGER_CONTRACT.maximumManagedLookups) {
         throw new TypeError("Lookup list exceeds its managed-object limit.");
       }
       const ids = new Set<string>();
@@ -649,7 +621,7 @@ export function LookupManagerPanel({
 
       <div className="lookup-manager__contract" role="note">
         <span aria-hidden="true">i</span>
-        <p><strong>v0.4 exact lookup contract.</strong> CSV uploads are limited to 8 MiB, 100,000 rows, and 64 columns. Keys match case-sensitive scalar strings; one lookup cannot fan out an event.</p>
+        <p><strong>Exact lookup contract.</strong> CSV uploads are limited to {(LOOKUP_MANAGER_CONTRACT.maximumUploadBytes / (1024 * 1024)).toLocaleString()} MiB, {LOOKUP_MANAGER_CONTRACT.maximumAssetRows.toLocaleString()} rows, and {LOOKUP_MANAGER_CONTRACT.maximumColumns.toLocaleString()} columns. Keys match case-sensitive scalar strings; one lookup cannot fan out an event.</p>
       </div>
 
       <div className="lookup-manager__toolbar">
@@ -682,7 +654,7 @@ export function LookupManagerPanel({
         <LookupStatus kind="loading" title="Loading lookup tables" message="Reading the bounded lookup catalog pages…" />
       ) : null}
       {state === "unavailable" ? (
-        <LookupStatus kind="unavailable" title="Lookup management is unavailable" message="The connected server does not expose the complete v0.4 lookup API." onRetry={reload} />
+        <LookupStatus kind="unavailable" title="Lookup management is unavailable" message="The connected server does not expose the complete lookup management API." onRetry={reload} />
       ) : null}
       {state === "error" ? (
         <LookupStatus kind="error" title="Lookup tables could not be loaded" message={loadError ?? "The lookup catalog request failed."} onRetry={reload} />
@@ -864,8 +836,8 @@ function LookupEditor({
     setCSVData(undefined);
     setCSVName(null);
     if (file === undefined) return;
-    if (file.size < 1 || file.size > LOOKUP_MAXIMUM_CSV_BYTES) {
-      setLocalError(`CSV files must contain between 1 byte and ${LOOKUP_MAXIMUM_CSV_BYTES.toLocaleString()} bytes.`);
+    if (file.size < 1 || file.size > LOOKUP_MANAGER_CONTRACT.maximumUploadBytes) {
+      setLocalError(`CSV files must contain between 1 byte and ${LOOKUP_MANAGER_CONTRACT.maximumUploadBytes.toLocaleString()} bytes.`);
       return;
     }
     try {
@@ -888,7 +860,7 @@ function LookupEditor({
     setPreview(null);
     try {
       const definition = lookupDefinitionFromDraft(draft);
-      const result = await client.preview(definition, csvData, LOOKUP_MAXIMUM_PREVIEW_ROWS);
+      const result = await client.preview(definition, csvData, LOOKUP_MANAGER_CONTRACT.maximumPreviewRows);
       setPreview(normalizeLookupPreview(result));
     } catch (previewError) {
       setLocalError(errorMessage(previewError));
@@ -924,7 +896,7 @@ function LookupEditor({
         <legend>Identity and visibility</legend>
         <div className="lookup-manager__editor-grid">
           <label htmlFor="lookup-editor-app"><span>App scope</span><select id="lookup-editor-app" value={draft.appId} onChange={(event) => update("appId", event.currentTarget.value)}>{apps.map((app) => <option value={app.appId} key={app.appId}>{app.label}</option>)}</select></label>
-      <label htmlFor="lookup-editor-name"><span>Lookup name</span><input id="lookup-editor-name" value={draft.name} maxLength={LOOKUP_MAXIMUM_NAME_BYTES} autoComplete="off" placeholder="service_catalog" onChange={(event) => update("name", event.currentTarget.value)} /><small>Exact unquoted name used by the SPL <code>lookup</code> command.</small></label>
+      <label htmlFor="lookup-editor-name"><span>Lookup name</span><input id="lookup-editor-name" value={draft.name} maxLength={LOOKUP_MANAGER_CONTRACT.maximumNameBytes} autoComplete="off" placeholder="service_catalog" onChange={(event) => update("name", event.currentTarget.value)} /><small>Exact unquoted name used by the SPL <code>lookup</code> command.</small></label>
           <label htmlFor="lookup-editor-scope"><span>Sharing</span><select id="lookup-editor-scope" value={draft.sharingScope} onChange={(event) => update("sharingScope", event.currentTarget.value as LookupDraftSharingScope)}><option value="private">Private</option><option value="app">App</option><option value="global">Global</option></select></label>
           <label className="lookup-manager__editor-wide" htmlFor="lookup-editor-description"><span>Description <small>(optional)</small></span><input id="lookup-editor-description" value={draft.description} onChange={(event) => update("description", event.currentTarget.value)} /></label>
           <label className="admin-checkbox lookup-manager__editor-wide"><input type="checkbox" aria-label="Apply lookup automatically" checked={draft.automatic} onChange={(event) => update("automatic", event.currentTarget.checked)} /><span><strong>Apply automatically</strong><small>Run after Tier-1 calculated fields and before the authored base-search predicate when selectors match.</small></span></label>
@@ -934,8 +906,8 @@ function LookupEditor({
       <fieldset>
         <legend>Exact field mappings</legend>
         <div className="lookup-manager__mapping-grid">
-          <label htmlFor="lookup-editor-keys"><span>Key mappings <small>(1–4)</small></span><textarea id="lookup-editor-keys" value={draft.keyMappings} placeholder={"service_id AS service_key\nregion AS event_region"} onChange={(event) => update("keyMappings", event.currentTarget.value)} /><small>One <code>lookup_column AS event_field</code> per line. Key AS is required.</small></label>
-          <label htmlFor="lookup-editor-outputs"><span>Output mappings <small>(1–16)</small></span><textarea id="lookup-editor-outputs" value={draft.outputMappings} placeholder={"owner AS service_owner\ntier"} onChange={(event) => update("outputMappings", event.currentTarget.value)} /><small>One mapping per line. A column without AS writes to the same event-field name.</small></label>
+          <label htmlFor="lookup-editor-keys"><span>Key mappings <small>(1–{LOOKUP_MANAGER_CONTRACT.maximumKeyMappings})</small></span><textarea id="lookup-editor-keys" value={draft.keyMappings} placeholder={"service_id AS service_key\nregion AS event_region"} onChange={(event) => update("keyMappings", event.currentTarget.value)} /><small>One <code>lookup_column AS event_field</code> per line. Key AS is required.</small></label>
+          <label htmlFor="lookup-editor-outputs"><span>Output mappings <small>(1–{LOOKUP_MANAGER_CONTRACT.maximumOutputMappings})</small></span><textarea id="lookup-editor-outputs" value={draft.outputMappings} placeholder={"owner AS service_owner\ntier"} onChange={(event) => update("outputMappings", event.currentTarget.value)} /><small>One mapping per line. A column without AS writes to the same event-field name.</small></label>
         </div>
         <label className="lookup-manager__overwrite" htmlFor="lookup-editor-overwrite"><span>On output collision</span><select id="lookup-editor-overwrite" value={draft.overwrite} onChange={(event) => update("overwrite", event.currentTarget.value as LookupDraftOverwrite)}><option value="preserve">Preserve existing (OUTPUTNEW)</option><option value="replace">Replace existing (OUTPUT)</option></select></label>
       </fieldset>
@@ -954,7 +926,7 @@ function LookupEditor({
       <fieldset>
         <legend>Immutable CSV asset</legend>
         <div className="lookup-manager__upload">
-          <label htmlFor="lookup-editor-csv"><span>{currentLookup === null ? "CSV file" : "Replacement CSV (optional)"}</span><input id="lookup-editor-csv" type="file" accept=".csv,text/csv" onChange={(event) => void chooseCSV(event.currentTarget.files?.[0])} /><small>{csvName === null ? currentLookup === null ? "Choose a UTF-8 RFC 4180-style CSV up to 8 MiB." : "No file selected; saving will retain the current asset." : `${csvName} · ${csvData?.byteLength.toLocaleString() ?? 0} bytes`}</small></label>
+          <label htmlFor="lookup-editor-csv"><span>{currentLookup === null ? "CSV file" : "Replacement CSV (optional)"}</span><input id="lookup-editor-csv" type="file" accept=".csv,text/csv" onChange={(event) => void chooseCSV(event.currentTarget.files?.[0])} /><small>{csvName === null ? currentLookup === null ? `Choose a UTF-8 RFC 4180-style CSV up to ${(LOOKUP_MANAGER_CONTRACT.maximumUploadBytes / (1024 * 1024)).toLocaleString()} MiB.` : "No file selected; saving will retain the current asset." : `${csvName} · ${csvData?.byteLength.toLocaleString() ?? 0} bytes`}</small></label>
           <button type="button" disabled={busy || previewBusy || csvData === undefined} onClick={() => void requestPreview()}>{previewBusy ? "Validating preview…" : "Validate and preview"}</button>
         </div>
         {preview === null ? null : <LookupPreviewTable preview={preview} />}

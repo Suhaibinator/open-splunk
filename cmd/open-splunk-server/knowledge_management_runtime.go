@@ -29,7 +29,6 @@ type runtimeKnowledgeManagement struct {
 	resolver         *knowledgecatalog.Resolver
 	writer           *knowledgecatalog.Writer
 	attempts         *knowledgeattemptaudit.Store
-	lookupAssets     *lookupasset.Store
 	lookupCatalog    *lookupcatalog.Catalog
 	lookupManagement *lookupservice.Service
 	lookupResolver   *runtimeLookupSearchResolver
@@ -141,7 +140,6 @@ func newRuntimeKnowledgeManagement(
 		resolver:         resolver,
 		writer:           writer,
 		attempts:         attempts,
-		lookupAssets:     lookupAssets,
 		lookupCatalog:    lookupCatalog,
 		lookupManagement: lookupManagement,
 		lookupResolver:   lookupResolver,
@@ -173,7 +171,7 @@ func configureRuntimeKnowledgeManagement(
 	if config == nil || runtime.catalog == nil || runtime.resolver == nil ||
 		runtime.writer == nil ||
 		!runtime.writer.ReadyForManagement() || runtime.attempts == nil ||
-		runtime.lookupAssets == nil || runtime.lookupCatalog == nil ||
+		runtime.lookupCatalog == nil ||
 		runtime.lookupManagement == nil || !runtime.lookupManagement.Ready() ||
 		runtime.lookupResolver == nil || runtime.lookupResolver.catalog == nil ||
 		runtime.lookupResolver.catalog != runtime.lookupCatalog || apps == nil ||
