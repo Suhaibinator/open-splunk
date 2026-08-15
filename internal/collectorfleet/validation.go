@@ -100,7 +100,6 @@ func PrepareClaim(request ClaimRequest) (PreparedClaim, error) {
 	}
 	inputs, err := normalizeInputRegistrations(
 		request.Hello.Inputs,
-		nil,
 		&aggregateBytes,
 	)
 	if err != nil {
@@ -339,7 +338,6 @@ func normalizeAuthorizedIndexes(inputs []string) ([]string, error) {
 
 func normalizeInputRegistrations(
 	inputs []InputRegistration,
-	authorized map[string]struct{},
 	aggregateBytes *int,
 ) ([]InputRegistration, error) {
 	if len(inputs) > maximumInputs {
@@ -361,11 +359,6 @@ func normalizeInputRegistrations(
 		canonicalIndex, err := control.NormalizeIndexName(input.IndexName)
 		if err != nil || canonicalIndex != input.IndexName {
 			return nil, invalid("input index name is not canonical")
-		}
-		if authorized != nil {
-			if _, allowed := authorized[input.IndexName]; !allowed {
-				return nil, invalid("input index is not in the authorized index snapshot")
-			}
 		}
 		source, err := normalizeOptionalText("input source", input.Source, maximumSourceBytes)
 		if err != nil {

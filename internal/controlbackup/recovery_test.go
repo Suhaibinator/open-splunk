@@ -129,7 +129,7 @@ func TestRemoveCreatedBundleOwnsCompleteMemberNamespace(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer parent.Close()
-	child, err := parent.OpenChildDirectory(filepath.Base(fixture.bundle))
+	child, err := privatefs.OpenDirectory(fixture.bundle)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestRemoveCreatedBundleRejectsPinnedChildReplacementWithoutMutation(t *test
 		t.Fatal(err)
 	}
 	defer parent.Close()
-	child, err := parent.OpenChildDirectory(filepath.Base(fixture.bundle))
+	child, err := privatefs.OpenDirectory(fixture.bundle)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +205,7 @@ func TestRemoveCreatedBundleRejectsUnexpectedEntryBeforeAnyMutation(t *testing.T
 		t.Fatal(err)
 	}
 	defer parent.Close()
-	child, err := parent.OpenChildDirectory(filepath.Base(fixture.bundle))
+	child, err := privatefs.OpenDirectory(fixture.bundle)
 	if err != nil {
 		t.Fatal(err)
 	}

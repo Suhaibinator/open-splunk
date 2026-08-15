@@ -13,6 +13,7 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/errorreport"
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 )
@@ -98,7 +99,7 @@ type IndexDataDeletionCoordinator struct {
 	retryInitial     time.Duration
 	retryMaximum     time.Duration
 	stepTimeout      time.Duration
-	onError          func(error)
+	errorReports     errorreport.SingleFlight
 
 	workerContext context.Context
 	cancelWorker  context.CancelFunc
@@ -106,9 +107,6 @@ type IndexDataDeletionCoordinator struct {
 	wake          chan struct{}
 	closed        atomic.Bool
 	closeOnce     sync.Once
-
-	callbackMu    sync.Mutex
-	callbackAlive bool
 }
 
 type indexDataDeletionWork struct {
@@ -220,7 +218,7 @@ func NewIndexDataDeletionCoordinator(
 		retryInitial:     retryInitial,
 		retryMaximum:     retryMaximum,
 		stepTimeout:      stepTimeout,
-		onError:          config.OnError,
+		errorReports:     errorreport.SingleFlight{Callback: config.OnError},
 		workerContext:    workerContext,
 		cancelWorker:     cancelWorker,
 		workerDone:       make(chan struct{}),
@@ -687,26 +685,10 @@ func (coordinator *IndexDataDeletionCoordinator) wait(
 }
 
 func (coordinator *IndexDataDeletionCoordinator) reportError(err error) {
-	if err == nil || coordinator.onError == nil ||
-		coordinator.workerContext.Err() != nil {
+	if coordinator.workerContext.Err() != nil {
 		return
 	}
-	coordinator.callbackMu.Lock()
-	if coordinator.callbackAlive {
-		coordinator.callbackMu.Unlock()
-		return
-	}
-	coordinator.callbackAlive = true
-	coordinator.callbackMu.Unlock()
-	go func() {
-		defer func() {
-			_ = recover()
-			coordinator.callbackMu.Lock()
-			coordinator.callbackAlive = false
-			coordinator.callbackMu.Unlock()
-		}()
-		coordinator.onError(err)
-	}()
+	coordinator.errorReports.Report(err)
 }
 
 func deletionRequest(

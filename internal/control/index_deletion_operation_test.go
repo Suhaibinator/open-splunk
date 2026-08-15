@@ -307,13 +307,14 @@ func TestBeginIndexDataDeletionClassifiesCompletedOperationIDCollision(t *testin
 	if err != nil {
 		t.Fatalf("archive index: %v", err)
 	}
-	if _, err := db.beginIndexDataDeletion(
+	if _, err := db.beginIndexDataDeletionTransaction(
 		ctx,
 		completedOperation.ID,
 		"tenant",
 		archived.ID,
 		archived.Version,
 		archived.Definition.Name,
+		nil,
 	); !errors.Is(err, errIndexDeletionOperationIDCollision) {
 		t.Fatalf(
 			"completed operation ID collision error = %v, want %v",

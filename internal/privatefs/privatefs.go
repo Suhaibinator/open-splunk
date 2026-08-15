@@ -105,6 +105,70 @@ func RandomName(prefix string) NameGenerator {
 	}
 }
 
+// SameFileState reports that two stat results describe the same inode with
+// unchanged mode, size, and modification time.
+func SameFileState(left, right os.FileInfo) bool {
+	return left != nil && right != nil &&
+		os.SameFile(left, right) &&
+		left.Mode() == right.Mode() &&
+		left.Size() == right.Size() &&
+		left.ModTime().Equal(right.ModTime())
+}
+
+// OpenValidatedDirectory opens an already-cleaned absolute path as a pinned
+// directory descriptor, validating the pre-image and the opened inode with the
+// caller's predicate and rejecting any change across the open. The subject
+// names the directory in error messages. The caller owns the returned
+// descriptor and must close it.
+func OpenValidatedDirectory(
+	path string,
+	subject string,
+	validate func(os.FileInfo) error,
+) (*os.File, os.FileInfo, error) {
+	before, err := os.Lstat(path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open %s: inspect path: %w", subject, err)
+	}
+	if err := validate(before); err != nil {
+		return nil, nil, fmt.Errorf("open %s: %w", subject, err)
+	}
+
+	// #nosec G304,G703 -- the explicit absolute operator path is opened
+	// read-only, and O_NOFOLLOW rejects a redirected final component.
+	fd, err := unix.Open(
+		path,
+		unix.O_RDONLY|unix.O_CLOEXEC|unix.O_DIRECTORY|unix.O_NOFOLLOW,
+		0,
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open %s: open path: %w", subject, err)
+	}
+	// #nosec G115 -- unix.Open returned a non-negative native descriptor.
+	file := os.NewFile(uintptr(fd), path)
+	if file == nil {
+		_ = unix.Close(fd)
+		return nil, nil, errors.New("open " + subject + ": invalid descriptor")
+	}
+	opened, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, nil, fmt.Errorf("open %s: inspect descriptor: %w", subject, err)
+	}
+	if !os.SameFile(before, opened) {
+		_ = file.Close()
+		return nil, nil, errors.New("open " + subject + ": path changed while opening")
+	}
+	if err := validate(opened); err != nil {
+		_ = file.Close()
+		return nil, nil, fmt.Errorf("open %s: %w", subject, err)
+	}
+	if err := validateNoExtendedACL(file); err != nil {
+		_ = file.Close()
+		return nil, nil, fmt.Errorf("open %s: %w", subject, err)
+	}
+	return file, opened, nil
+}
+
 // OpenDirectory pins an existing absolute owner-private 0700 directory. The
 // final path component may not be a symlink, and the path is rechecked after
 // descriptor and ACL validation.
@@ -116,46 +180,11 @@ func OpenDirectory(path string) (*Directory, error) {
 		return nil, errors.New("open private directory: path must be absolute")
 	}
 	path = filepath.Clean(path)
-	before, err := os.Lstat(path)
+	file, opened, err := OpenValidatedDirectory(path, "private directory", func(info os.FileInfo) error {
+		return validateOwnedDirectory(info, os.Geteuid())
+	})
 	if err != nil {
-		return nil, fmt.Errorf("open private directory: inspect path: %w", err)
-	}
-	if err := validateOwnedDirectory(before, os.Geteuid()); err != nil {
-		return nil, fmt.Errorf("open private directory: %w", err)
-	}
-
-	// #nosec G304,G703 -- the explicit absolute operator path is opened
-	// read-only, and O_NOFOLLOW rejects a redirected final component.
-	fd, err := unix.Open(
-		path,
-		unix.O_RDONLY|unix.O_CLOEXEC|unix.O_DIRECTORY|unix.O_NOFOLLOW,
-		0,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("open private directory: open path: %w", err)
-	}
-	// #nosec G115 -- unix.Open returned a non-negative native descriptor.
-	file := os.NewFile(uintptr(fd), path)
-	if file == nil {
-		_ = unix.Close(fd)
-		return nil, errors.New("open private directory: invalid descriptor")
-	}
-	opened, err := file.Stat()
-	if err != nil {
-		_ = file.Close()
-		return nil, fmt.Errorf("open private directory: inspect descriptor: %w", err)
-	}
-	if !os.SameFile(before, opened) {
-		_ = file.Close()
-		return nil, errors.New("open private directory: path changed while opening")
-	}
-	if err := validateOwnedDirectory(opened, os.Geteuid()); err != nil {
-		_ = file.Close()
-		return nil, fmt.Errorf("open private directory: %w", err)
-	}
-	if err := validateNoExtendedACL(file); err != nil {
-		_ = file.Close()
-		return nil, fmt.Errorf("open private directory: %w", err)
+		return nil, err
 	}
 	directory := &Directory{path: path, file: file, info: opened}
 	if err := directory.Revalidate(); err != nil {
@@ -567,26 +596,6 @@ func (directory *Directory) CreateTemporaryDirectory(
 	)
 }
 
-// OpenChildDirectory opens and pins one exact existing owner-private 0700
-// child relative to the parent descriptor. Both the parent and child paths are
-// revalidated before the descriptor is returned.
-func (directory *Directory) OpenChildDirectory(name string) (*Directory, error) {
-	if err := ValidateComponent(name); err != nil {
-		return nil, err
-	}
-	if err := directory.Revalidate(); err != nil {
-		return nil, err
-	}
-	child, err := directory.openChildDirectory(name, false)
-	if err != nil {
-		return nil, err
-	}
-	if err := directory.Revalidate(); err != nil {
-		return nil, errors.Join(err, child.Close())
-	}
-	return child, nil
-}
-
 // RequirePinnedChildDirectory proves that name still identifies the exact
 // owner-private child descriptor supplied by the caller. The child descriptor
 // must have been opened beneath this parent and must remain open for the whole
@@ -779,26 +788,6 @@ func (directory *Directory) RequireEntries(
 	return nil
 }
 
-// Unlink removes one exact non-directory name without following it. It is the
-// narrow cleanup primitive for a temporary file whose descriptor and metadata
-// the caller has already validated.
-func (directory *Directory) Unlink(name string) error {
-	if err := ValidateComponent(name); err != nil {
-		return err
-	}
-	if err := directory.Revalidate(); err != nil {
-		return err
-	}
-	directoryFD, err := directory.descriptor()
-	if err != nil {
-		return err
-	}
-	if err := unix.Unlinkat(directoryFD, name, 0); err != nil {
-		return fmt.Errorf("unlink private child %q: %w", name, err)
-	}
-	return directory.Revalidate()
-}
-
 // RequirePinnedRegular proves that name still identifies the exact open
 // regular-file descriptor supplied by the caller. Callers retain ownership of
 // the descriptor and must keep it open until their descriptor-relative
@@ -893,28 +882,6 @@ func (directory *Directory) RemovePinnedEmptyDirectory(
 	}
 	if err := unix.Unlinkat(directoryFD, name, unix.AT_REMOVEDIR); err != nil {
 		return fmt.Errorf("remove pinned private empty directory %q: %w", name, err)
-	}
-	return directory.Revalidate()
-}
-
-// RemoveOwnedEmptyDirectory removes one owner-private 0700 stage only after a
-// pinned descriptor proves that it is empty. It never follows a reserved-name
-// symlink or recursively traverses attacker-controlled entries.
-func (directory *Directory) RemoveOwnedEmptyDirectory(name string) error {
-	if err := ValidateComponent(name); err != nil {
-		return err
-	}
-	if err := directory.Revalidate(); err != nil {
-		return err
-	}
-	child, err := directory.openChildDirectory(name, false)
-	if err != nil {
-		return err
-	}
-	removeErr := directory.RemovePinnedEmptyDirectory(name, child)
-	closeErr := child.Close()
-	if err := errors.Join(removeErr, closeErr); err != nil {
-		return fmt.Errorf("remove private empty directory %q: %w", name, err)
 	}
 	return directory.Revalidate()
 }

@@ -301,9 +301,6 @@ func TestCreateTemporaryObjectsUsesExactModes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := opened.Close(); err != nil {
-		t.Fatal(err)
-	}
 
 	directoryName, child, err := directory.CreateTemporaryDirectory(
 		sequenceGenerator("collision", ".directory-stage"),
@@ -327,11 +324,21 @@ func TestCreateTemporaryObjectsUsesExactModes(t *testing.T) {
 	if err := child.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := directory.RemoveOwnedEmptyDirectory(directoryName); err != nil {
+	stage, err := directory.openChildDirectory(directoryName, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := directory.RemovePinnedEmptyDirectory(directoryName, stage); err != nil {
+		t.Fatal(err)
+	}
+	if err := stage.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := directory.Unlink(name); err != nil {
+	if err := directory.UnlinkPinnedRegular(name, opened); err != nil {
+		t.Fatal(err)
+	}
+	if err := opened.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if err := directory.Sync(); err != nil {
@@ -432,31 +439,21 @@ func TestListAndRequireEntriesAreExactAndBounded(t *testing.T) {
 	}
 }
 
-func TestUnlinkAndRemoveOwnedEmptyDirectoryDoNotTraverse(t *testing.T) {
+func TestRemoveEmptyDirectoryDoesNotTraverse(t *testing.T) {
 	t.Parallel()
 
 	path, directory := openTestDirectory(t)
-	outside := filepath.Join(t.TempDir(), "outside")
-	mustWriteFile(t, outside, []byte("outside"), 0o600)
-	if err := os.Symlink(outside, filepath.Join(path, "link")); err != nil {
-		t.Fatal(err)
-	}
-	if err := directory.Unlink("link"); err != nil {
-		t.Fatal(err)
-	}
-	contents, err := os.ReadFile(outside)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(contents) != "outside" {
-		t.Fatalf("outside contents = %q", contents)
-	}
-	if err := directory.Unlink("../outside"); err == nil {
-		t.Fatal("Unlink accepted a path instead of a component")
+	removeEmptyDirectory := func(name string) error {
+		child, err := directory.openChildDirectory(name, false)
+		if err != nil {
+			return err
+		}
+		removeErr := directory.RemovePinnedEmptyDirectory(name, child)
+		return errors.Join(removeErr, child.Close())
 	}
 
 	mustMkdir(t, filepath.Join(path, "empty-stage"), 0o700)
-	if err := directory.RemoveOwnedEmptyDirectory("empty-stage"); err != nil {
+	if err := removeEmptyDirectory("empty-stage"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Lstat(filepath.Join(path, "empty-stage")); !errors.Is(err, fs.ErrNotExist) {
@@ -465,13 +462,13 @@ func TestUnlinkAndRemoveOwnedEmptyDirectoryDoNotTraverse(t *testing.T) {
 
 	mustMkdir(t, filepath.Join(path, "nonempty-stage"), 0o700)
 	mustWriteFile(t, filepath.Join(path, "nonempty-stage", "member"), nil, 0o600)
-	if err := directory.RemoveOwnedEmptyDirectory("nonempty-stage"); err == nil {
-		t.Fatal("RemoveOwnedEmptyDirectory removed a nonempty stage")
+	if err := removeEmptyDirectory("nonempty-stage"); err == nil {
+		t.Fatal("RemovePinnedEmptyDirectory removed a nonempty stage")
 	}
 
 	mustMkdir(t, filepath.Join(path, "unsafe-stage"), 0o755)
-	if err := directory.RemoveOwnedEmptyDirectory("unsafe-stage"); err == nil {
-		t.Fatal("RemoveOwnedEmptyDirectory accepted mode 0755")
+	if err := removeEmptyDirectory("unsafe-stage"); err == nil {
+		t.Fatal("openChildDirectory accepted mode 0755")
 	}
 	assertExactMode(t, filepath.Join(path, "unsafe-stage"), 0o755)
 
@@ -479,16 +476,16 @@ func TestUnlinkAndRemoveOwnedEmptyDirectoryDoNotTraverse(t *testing.T) {
 	if err := os.Symlink(outsideDirectory, filepath.Join(path, "stage-link")); err != nil {
 		t.Fatal(err)
 	}
-	if err := directory.RemoveOwnedEmptyDirectory("stage-link"); err == nil {
-		t.Fatal("RemoveOwnedEmptyDirectory followed a symlink")
+	if err := removeEmptyDirectory("stage-link"); err == nil {
+		t.Fatal("openChildDirectory followed a symlink")
 	}
 	if _, err := os.Stat(outsideDirectory); err != nil {
 		t.Fatalf("outside directory changed: %v", err)
 	}
 
 	mustWriteFile(t, filepath.Join(path, "regular"), nil, 0o600)
-	if err := directory.RemoveOwnedEmptyDirectory("regular"); err == nil {
-		t.Fatal("RemoveOwnedEmptyDirectory accepted a regular file")
+	if err := removeEmptyDirectory("regular"); err == nil {
+		t.Fatal("openChildDirectory accepted a regular file")
 	}
 }
 

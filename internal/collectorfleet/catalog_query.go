@@ -186,6 +186,38 @@ func collectorCatalogLeaseTuples(
 	return strings.Join(tuples, " OR "), arguments
 }
 
+// collectorSortColumns is the single source of truth for the catalog's
+// (sort column, tiebreak column) pairs, shared by the cursor predicate and the
+// ORDER BY clause so the two can never drift apart. An unsupported sort
+// reports ok=false, which both callers translate to "leave the query alone".
+func collectorSortColumns(
+	sortBy CollectorSortBy,
+) (sortColumn string, collectorColumn string, ok bool) {
+	switch sortBy {
+	case CollectorSortByDisplayName:
+		return "fleet.display_name_sort_key", "fleet.collector_id", true
+	case CollectorSortByHostname:
+		return "runtime.hostname", "runtime.collector_id", true
+	case CollectorSortByLastSeenAt:
+		return "runtime.last_seen_at_unix_micro", "runtime.collector_id", true
+	case CollectorSortByQueueBytes:
+		return "runtime.queued_bytes", "runtime.collector_id", true
+	default:
+		return "", "", false
+	}
+}
+
+func collectorSortKeyword(direction SortDirection) (string, bool) {
+	switch direction {
+	case SortAscending:
+		return "ASC", true
+	case SortDescending:
+		return "DESC", true
+	default:
+		return "", false
+	}
+}
+
 func applyCollectorCatalogCursor(
 	query *gorm.DB,
 	request normalizedListRequest,
@@ -194,52 +226,35 @@ func applyCollectorCatalogCursor(
 	if cursor.CollectorID == "" {
 		return query
 	}
+	sortColumn, collectorColumn, ok := collectorSortColumns(request.sortBy)
+	if !ok {
+		return query
+	}
 
+	var value any
 	switch request.sortBy {
 	case CollectorSortByDisplayName:
 		key := cursor.StringKey
-		value := ""
+		text := ""
 		if key.Valid {
-			value = key.Value
+			text = key.Value
 		}
-		return applyCollectorTupleCursor(
-			query,
-			request.direction,
-			"fleet.display_name_sort_key",
-			"fleet.collector_id",
-			value,
-			cursor.CollectorID,
-		)
+		value = text
 	case CollectorSortByHostname:
-		return applyCollectorTupleCursor(
-			query,
-			request.direction,
-			"runtime.hostname",
-			"runtime.collector_id",
-			cursor.StringKey.Value,
-			cursor.CollectorID,
-		)
-	case CollectorSortByLastSeenAt:
-		return applyCollectorTupleCursor(
-			query,
-			request.direction,
-			"runtime.last_seen_at_unix_micro",
-			"runtime.collector_id",
-			cursor.IntegerKey.Value,
-			cursor.CollectorID,
-		)
-	case CollectorSortByQueueBytes:
-		return applyCollectorTupleCursor(
-			query,
-			request.direction,
-			"runtime.queued_bytes",
-			"runtime.collector_id",
-			cursor.IntegerKey.Value,
-			cursor.CollectorID,
-		)
+		value = cursor.StringKey.Value
+	case CollectorSortByLastSeenAt, CollectorSortByQueueBytes:
+		value = cursor.IntegerKey.Value
 	default:
 		return query
 	}
+	return applyCollectorTupleCursor(
+		query,
+		request.direction,
+		sortColumn,
+		collectorColumn,
+		value,
+		cursor.CollectorID,
+	)
 }
 
 func applyCollectorTupleCursor(
@@ -272,50 +287,17 @@ func applyCollectorCatalogOrder(
 	query *gorm.DB,
 	request normalizedListRequest,
 ) *gorm.DB {
-	switch {
-	case request.sortBy == CollectorSortByDisplayName &&
-		request.direction == SortAscending:
-		return query.Order(
-			"fleet.display_name_sort_key ASC, fleet.collector_id ASC",
-		)
-	case request.sortBy == CollectorSortByDisplayName &&
-		request.direction == SortDescending:
-		return query.Order(
-			"fleet.display_name_sort_key DESC, fleet.collector_id DESC",
-		)
-	case request.sortBy == CollectorSortByHostname &&
-		request.direction == SortAscending:
-		return query.Order(
-			"runtime.hostname ASC, runtime.collector_id ASC",
-		)
-	case request.sortBy == CollectorSortByHostname &&
-		request.direction == SortDescending:
-		return query.Order(
-			"runtime.hostname DESC, runtime.collector_id DESC",
-		)
-	case request.sortBy == CollectorSortByLastSeenAt &&
-		request.direction == SortAscending:
-		return query.Order(
-			"runtime.last_seen_at_unix_micro ASC, runtime.collector_id ASC",
-		)
-	case request.sortBy == CollectorSortByLastSeenAt &&
-		request.direction == SortDescending:
-		return query.Order(
-			"runtime.last_seen_at_unix_micro DESC, runtime.collector_id DESC",
-		)
-	case request.sortBy == CollectorSortByQueueBytes &&
-		request.direction == SortAscending:
-		return query.Order(
-			"runtime.queued_bytes ASC, runtime.collector_id ASC",
-		)
-	case request.sortBy == CollectorSortByQueueBytes &&
-		request.direction == SortDescending:
-		return query.Order(
-			"runtime.queued_bytes DESC, runtime.collector_id DESC",
-		)
-	default:
+	sortColumn, collectorColumn, ok := collectorSortColumns(request.sortBy)
+	if !ok {
 		return query
 	}
+	keyword, ok := collectorSortKeyword(request.direction)
+	if !ok {
+		return query
+	}
+	return query.Order(
+		sortColumn + " " + keyword + ", " + collectorColumn + " " + keyword,
+	)
 }
 
 func collectorCursorForPageRecord(

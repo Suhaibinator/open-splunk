@@ -52,27 +52,6 @@ func (store *Store) Claim(
 	return result, lease, nil
 }
 
-// ClaimInTransaction creates or supersedes a lease using a caller-owned GORM
-// transaction. It neither commits nor rolls back transaction. The transaction
-// must come from the same migrated control database and must use an immediate
-// SQLite write lock.
-func (store *Store) ClaimInTransaction(
-	ctx context.Context,
-	transaction *gorm.DB,
-	request ClaimRequest,
-) (Collector, Lease, error) {
-	prepared, err := PrepareClaim(request)
-	if err != nil {
-		return Collector{}, Lease{}, err
-	}
-	return store.ClaimPreparedInTransaction(
-		ctx,
-		transaction,
-		prepared,
-		request.Hello.AuthorizedIndexes,
-	)
-}
-
 // ClaimPreparedInTransaction attaches the exact fresh credential scope to a
 // prevalidated claim and persists it in a caller-owned transaction. It neither
 // commits nor rolls back transaction.

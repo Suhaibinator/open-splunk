@@ -986,7 +986,7 @@ func validAppTimeExpression(expression string, earliest bool) bool {
 			}
 		}
 	}
-	if !validAppRFC3339Nano(expression) {
+	if !searchtimebounds.ValidRFC3339Nano(expression) {
 		return false
 	}
 	_, err := time.Parse(time.RFC3339Nano, expression)
@@ -1004,47 +1004,6 @@ func parseAppDecimal(value string) (uint64, bool) {
 	}
 	parsed, err := strconv.ParseUint(value, 10, 64)
 	return parsed, err == nil
-}
-
-func validAppRFC3339Nano(value string) bool {
-	if len(value) < len("0001-01-01T00:00:00Z") ||
-		value[4] != '-' || value[7] != '-' || value[10] != 'T' ||
-		value[13] != ':' || value[16] != ':' {
-		return false
-	}
-	for _, index := range [...]int{0, 1, 2, 3, 5, 6, 8, 9, 11, 12, 14, 15, 17, 18} {
-		if value[index] < '0' || value[index] > '9' {
-			return false
-		}
-	}
-	zoneStart := 19
-	if value[zoneStart] == '.' {
-		fractionStart := zoneStart + 1
-		zoneStart = fractionStart
-		for zoneStart < len(value) && value[zoneStart] >= '0' && value[zoneStart] <= '9' {
-			zoneStart++
-		}
-		fractionDigits := zoneStart - fractionStart
-		if fractionDigits < 1 || fractionDigits > 9 {
-			return false
-		}
-	}
-	if zoneStart == len(value)-1 && value[zoneStart] == 'Z' {
-		return true
-	}
-	if len(value)-zoneStart != len("+00:00") ||
-		(value[zoneStart] != '+' && value[zoneStart] != '-') ||
-		value[zoneStart+3] != ':' {
-		return false
-	}
-	for _, index := range [...]int{zoneStart + 1, zoneStart + 2, zoneStart + 4, zoneStart + 5} {
-		if value[index] < '0' || value[index] > '9' {
-			return false
-		}
-	}
-	hour := int(value[zoneStart+1]-'0')*10 + int(value[zoneStart+2]-'0')
-	minute := int(value[zoneStart+4]-'0')*10 + int(value[zoneStart+5]-'0')
-	return hour <= 23 && minute <= 59
 }
 
 func normalizeOptionalAppText(value *string, maximum int) (*string, error) {

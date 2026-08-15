@@ -164,25 +164,6 @@ func (db *DB) findIndexDeletionOperation(
 	return operation, true, nil
 }
 
-func (db *DB) beginIndexDataDeletion(
-	ctx context.Context,
-	operationID string,
-	tenantID string,
-	indexID string,
-	expectedVersion uint64,
-	confirmationName string,
-) (result IndexDeletionOperation, err error) {
-	return db.beginIndexDataDeletionTransaction(
-		ctx,
-		operationID,
-		tenantID,
-		indexID,
-		expectedVersion,
-		confirmationName,
-		nil,
-	)
-}
-
 func (db *DB) beginIndexDataDeletionTransaction(
 	ctx context.Context,
 	operationID string,
@@ -472,9 +453,10 @@ func validatedIndexDeletionOperation(
 		if !errors.Is(result.Error, gorm.ErrRecordNotFound) {
 			return IndexDeletionOperation{}, result.Error
 		}
-		return IndexDeletionOperation{}, indexDeletionOperationRelationshipError(
+		return IndexDeletionOperation{}, indexDeletionRelationshipError(
 			database,
 			operation.ID,
+			errInvalidIndexDeletionOperation,
 		)
 	}
 	current, err := indexFromRecord(currentRecord)
@@ -484,9 +466,10 @@ func validatedIndexDeletionOperation(
 		current.Version != operation.DeletingVersion ||
 		current.State != IndexStateDeleting ||
 		currentRecord.UpdatedAtUnixMicro != record.CreatedAtUnixMicro {
-		return IndexDeletionOperation{}, indexDeletionOperationRelationshipError(
+		return IndexDeletionOperation{}, indexDeletionRelationshipError(
 			database,
 			operation.ID,
+			errInvalidIndexDeletionOperation,
 		)
 	}
 	return operation, nil
@@ -517,9 +500,13 @@ func indexDeletionOperationFromRecord(
 	}, nil
 }
 
-func indexDeletionOperationRelationshipError(
+// indexDeletionRelationshipError explains a broken deletion relationship: a
+// completed deletion is reported as not-found, while anything else is the
+// caller's invalid-record sentinel.
+func indexDeletionRelationshipError(
 	database *gorm.DB,
 	operationID string,
+	fallback error,
 ) error {
 	_, completed, err := takeIndexDataDeletionCompletion(
 		database,
@@ -531,7 +518,7 @@ func indexDeletionOperationRelationshipError(
 	if completed {
 		return ErrNotFound
 	}
-	return errInvalidIndexDeletionOperation
+	return fallback
 }
 
 func validateIndexDataDeletionVersion(version uint64) error {

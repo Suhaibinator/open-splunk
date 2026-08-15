@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/errorreport"
 )
 
 var (
@@ -100,7 +101,7 @@ type HeartbeatRuntime struct {
 	flushInterval time.Duration
 	writeTimeout  time.Duration
 	monotonicNow  func() time.Time
-	onError       func(error)
+	errorReports  errorreport.SingleFlight
 	workerContext context.Context
 	cancelWorker  context.CancelFunc
 	workerDone    chan struct{}
@@ -108,8 +109,6 @@ type HeartbeatRuntime struct {
 	entries       map[heartbeatRuntimeKey]*heartbeatRuntimeEntry
 	closed        bool
 	flushMu       sync.Mutex
-	callbackMu    sync.Mutex
-	callbackAlive bool
 	closeOnce     sync.Once
 	closeErr      error
 }
@@ -161,7 +160,7 @@ func NewHeartbeatRuntime(
 		flushInterval: config.FlushInterval,
 		writeTimeout:  config.WriteTimeout,
 		monotonicNow:  config.MonotonicNow,
-		onError:       config.OnError,
+		errorReports:  errorreport.SingleFlight{Callback: config.OnError},
 		workerContext: workerContext,
 		cancelWorker:  cancelWorker,
 		workerDone:    make(chan struct{}),
@@ -621,25 +620,7 @@ func (runtime *HeartbeatRuntime) requeueWrite(write heartbeatRuntimeWrite) {
 }
 
 func (runtime *HeartbeatRuntime) reportError(err error) {
-	if err == nil || runtime.onError == nil {
-		return
-	}
-	runtime.callbackMu.Lock()
-	if runtime.callbackAlive {
-		runtime.callbackMu.Unlock()
-		return
-	}
-	runtime.callbackAlive = true
-	runtime.callbackMu.Unlock()
-	go func() {
-		defer func() {
-			_ = recover()
-			runtime.callbackMu.Lock()
-			runtime.callbackAlive = false
-			runtime.callbackMu.Unlock()
-		}()
-		runtime.onError(err)
-	}()
+	runtime.errorReports.Report(err)
 }
 
 func shouldReportHeartbeatRuntimeError(err error) bool {

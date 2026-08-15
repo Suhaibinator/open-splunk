@@ -5,11 +5,8 @@
 package recoveryset
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 
 	"github.com/Suhaibinator/open-splunk/internal/buildinfo"
 	"github.com/Suhaibinator/open-splunk/internal/controlbackup"
@@ -20,6 +17,7 @@ import (
 const (
 	manifestFormatVersion           = uint32(1)
 	maximumManifestBytes            = 32 << 10
+	manifestSubject                 = "deployment recovery-set manifest"
 	maximumControlManifestBytes     = uint64(16 << 10)
 	maximumClickHouseArchiveBytes   = uint64(1 << 50)
 	maximumTimestampUnixMicro       = int64(253_402_300_799_999_999)
@@ -36,11 +34,7 @@ const (
 )
 
 // FileIdentity binds one fixed member name to its exact closed-file bytes.
-type FileIdentity struct {
-	Name      string `json:"name"`
-	SizeBytes uint64 `json:"size_bytes"`
-	SHA256    string `json:"sha256"`
-}
+type FileIdentity = controlbackup.FileIdentity
 
 // ControlPlaneIdentity binds the unchanged controlbackup v1 child through its
 // canonical manifest. Verifying the child manifest recursively verifies its
@@ -85,50 +79,11 @@ type Manifest struct {
 }
 
 func marshalManifest(manifest Manifest) ([]byte, error) {
-	if err := validateManifest(manifest); err != nil {
-		return nil, err
-	}
-	var output bytes.Buffer
-	encoder := json.NewEncoder(&output)
-	encoder.SetIndent("", "  ")
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(manifest); err != nil {
-		return nil, fmt.Errorf("encode deployment recovery-set manifest: %w", err)
-	}
-	if output.Len() > maximumManifestBytes {
-		return nil, errors.New("deployment recovery-set manifest exceeds its size limit")
-	}
-	return output.Bytes(), nil
+	return controlbackup.MarshalCanonicalJSON(manifest, manifestSubject, maximumManifestBytes, validateManifest)
 }
 
 func unmarshalManifest(encoded []byte) (Manifest, error) {
-	if len(encoded) == 0 || len(encoded) > maximumManifestBytes {
-		return Manifest{}, errors.New("deployment recovery-set manifest has an invalid size")
-	}
-	decoder := json.NewDecoder(bytes.NewReader(encoded))
-	decoder.DisallowUnknownFields()
-	var manifest Manifest
-	if err := decoder.Decode(&manifest); err != nil {
-		return Manifest{}, fmt.Errorf("decode deployment recovery-set manifest: %w", err)
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return Manifest{}, errors.New("deployment recovery-set manifest contains multiple JSON values")
-		}
-		return Manifest{}, fmt.Errorf("decode deployment recovery-set manifest terminator: %w", err)
-	}
-	if err := validateManifest(manifest); err != nil {
-		return Manifest{}, err
-	}
-	canonical, err := marshalManifest(manifest)
-	if err != nil {
-		return Manifest{}, err
-	}
-	if !bytes.Equal(encoded, canonical) {
-		return Manifest{}, errors.New("deployment recovery-set manifest is not canonical")
-	}
-	return manifest, nil
+	return controlbackup.UnmarshalCanonicalJSON(encoded, manifestSubject, maximumManifestBytes, validateManifest)
 }
 
 func validateManifest(manifest Manifest) error {
@@ -157,7 +112,7 @@ func validateManifest(manifest Manifest) error {
 			controlPlaneDirectory,
 		)
 	}
-	if err := validateFileIdentity(
+	if err := controlbackup.ValidateFileIdentity(
 		manifest.ControlPlane.Manifest,
 		controlPlaneManifestName,
 		1,
@@ -193,7 +148,7 @@ func validateClickHouseIdentity(
 	if identity.ArchiveFormat != clickHouseArchiveFormat {
 		return errors.New("deployment recovery-set ClickHouse archive format is invalid")
 	}
-	if err := validateFileIdentity(
+	if err := controlbackup.ValidateFileIdentity(
 		identity.Archive,
 		clickHouseArchiveName(recoverySetID),
 		1,
@@ -266,24 +221,6 @@ func (manifest Manifest) releaseIdentity() controlbackup.ReleaseIdentity {
 		SQLiteMigrations:     manifest.SQLiteMigrations,
 		ClickHouseMigrations: manifest.ClickHouseMigrations,
 	}
-}
-
-func validateFileIdentity(
-	identity FileIdentity,
-	name string,
-	minimum uint64,
-	maximum uint64,
-) error {
-	if identity.Name != name {
-		return fmt.Errorf("member name must be exactly %q", name)
-	}
-	if identity.SizeBytes < minimum || identity.SizeBytes > maximum {
-		return errors.New("member size is outside the supported bounds")
-	}
-	if !buildinfo.ValidSHA256(identity.SHA256) {
-		return errors.New("member SHA-256 is invalid")
-	}
-	return nil
 }
 
 func clickHouseArchiveDatabase(recoverySetID string) string {

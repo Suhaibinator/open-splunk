@@ -468,25 +468,19 @@ func applyAppListCursor(
 	}
 	switch request.sortBy {
 	case AppSortByDisplayName:
-		return query.Where(
-			"(display_name "+comparison+" ? OR (display_name = ? AND app_id "+comparison+" ?))",
-			cursor.StringKey,
-			cursor.StringKey,
-			cursor.AppID,
+		return applyKeysetCursor(
+			query, "display_name", "app_id", comparison,
+			cursor.StringKey, cursor.AppID,
 		)
 	case AppSortByCreatedAt:
-		return query.Where(
-			"(created_at_unix_micro "+comparison+" ? OR (created_at_unix_micro = ? AND app_id "+comparison+" ?))",
-			*cursor.IntegerKey,
-			*cursor.IntegerKey,
-			cursor.AppID,
+		return applyKeysetCursor(
+			query, "created_at_unix_micro", "app_id", comparison,
+			*cursor.IntegerKey, cursor.AppID,
 		)
 	case AppSortByUpdatedAt:
-		return query.Where(
-			"(updated_at_unix_micro "+comparison+" ? OR (updated_at_unix_micro = ? AND app_id "+comparison+" ?))",
-			*cursor.IntegerKey,
-			*cursor.IntegerKey,
-			cursor.AppID,
+		return applyKeysetCursor(
+			query, "updated_at_unix_micro", "app_id", comparison,
+			*cursor.IntegerKey, cursor.AppID,
 		)
 	default:
 		return query

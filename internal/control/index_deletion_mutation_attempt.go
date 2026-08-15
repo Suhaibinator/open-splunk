@@ -380,9 +380,10 @@ func validatedIndexDeletionMutationAttemptWithOperation(
 		}
 		return IndexDeletionMutationAttempt{},
 			IndexDeletionOperation{},
-			indexDeletionMutationAttemptRelationshipError(
+			indexDeletionRelationshipError(
 				database,
 				record.DeletionOperationID,
+				errInvalidIndexDeletionMutationAttempt,
 			)
 	}
 	operation, err := validatedIndexDeletionOperation(database, operationRecord)
@@ -394,7 +395,7 @@ func validatedIndexDeletionMutationAttemptWithOperation(
 		}
 		return IndexDeletionMutationAttempt{},
 			IndexDeletionOperation{},
-			invalidIndexDeletionMutationAttempt()
+			errInvalidIndexDeletionMutationAttempt
 	}
 	attempt, err := indexDeletionMutationAttemptForOperation(record, operation)
 	if err != nil {
@@ -415,7 +416,7 @@ func indexDeletionMutationAttemptForOperation(
 		attempt.Target.TenantID != operation.TenantID ||
 		attempt.CreatedAt.Before(operation.CreatedAt) {
 		return IndexDeletionMutationAttempt{},
-			invalidIndexDeletionMutationAttempt()
+			errInvalidIndexDeletionMutationAttempt
 	}
 	attempt.IndexID = operation.IndexID
 	attempt.IndexName = operation.IndexName
@@ -439,7 +440,7 @@ func indexDeletionMutationAttemptFromRecord(
 		record.CreatedAtUnixMicro < 1 ||
 		record.CreatedAtUnixMicro > maximumControlTimestampUnixMicro {
 		return IndexDeletionMutationAttempt{},
-			invalidIndexDeletionMutationAttempt()
+			errInvalidIndexDeletionMutationAttempt
 	}
 	return IndexDeletionMutationAttempt{
 		CorrelationID:       record.CorrelationID,
@@ -505,25 +506,4 @@ func validClickHousePhysicalIdentifier(value string) bool {
 		}
 	}
 	return true
-}
-
-func invalidIndexDeletionMutationAttempt() error {
-	return errInvalidIndexDeletionMutationAttempt
-}
-
-func indexDeletionMutationAttemptRelationshipError(
-	database *gorm.DB,
-	operationID string,
-) error {
-	_, completed, err := takeIndexDataDeletionCompletion(
-		database,
-		operationID,
-	)
-	if err != nil {
-		return err
-	}
-	if completed {
-		return ErrNotFound
-	}
-	return errInvalidIndexDeletionMutationAttempt
 }

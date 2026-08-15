@@ -115,45 +115,15 @@ func openArchiveDirectory(
 			"deployment recovery-set archive root must be a nonempty clean absolute path",
 		)
 	}
-	before, err := os.Lstat(path)
-	if err != nil {
-		return nil, fmt.Errorf("open deployment recovery-set archive root: inspect path: %w", err)
-	}
-	if err := validateArchiveRoot(before, policy.Root); err != nil {
-		return nil, fmt.Errorf("open deployment recovery-set archive root: %w", err)
-	}
-	// #nosec G304,G703 -- the exact absolute operator path is opened as a
-	// directory, and O_NOFOLLOW rejects a redirected final component.
-	fd, err := unix.Open(
+	file, opened, err := privatefs.OpenValidatedDirectory(
 		path,
-		unix.O_RDONLY|unix.O_CLOEXEC|unix.O_DIRECTORY|unix.O_NOFOLLOW,
-		0,
+		"deployment recovery-set archive root",
+		func(info os.FileInfo) error {
+			return validateArchiveRoot(info, policy.Root)
+		},
 	)
 	if err != nil {
-		return nil, fmt.Errorf("open deployment recovery-set archive root: %w", err)
-	}
-	// #nosec G115 -- unix.Open returned a non-negative native descriptor.
-	file := os.NewFile(uintptr(fd), path)
-	if file == nil {
-		_ = unix.Close(fd)
-		return nil, errors.New("open deployment recovery-set archive root: invalid descriptor")
-	}
-	opened, err := file.Stat()
-	if err != nil {
-		_ = file.Close()
-		return nil, fmt.Errorf("open deployment recovery-set archive root: inspect descriptor: %w", err)
-	}
-	if err := validateArchiveRoot(opened, policy.Root); err != nil {
-		_ = file.Close()
-		return nil, fmt.Errorf("open deployment recovery-set archive root: %w", err)
-	}
-	if !os.SameFile(before, opened) {
-		_ = file.Close()
-		return nil, errors.New("deployment recovery-set archive root changed while opening")
-	}
-	if err := privatefs.ValidateNoExtendedACL(file); err != nil {
-		_ = file.Close()
-		return nil, fmt.Errorf("open deployment recovery-set archive root: %w", err)
+		return nil, err
 	}
 	directory := &archiveDirectory{
 		path:   path,
@@ -385,7 +355,7 @@ func (directory *archiveDirectory) inspectArchiveWithRetention(
 	if err := privatefs.ValidateNoExtendedACL(file); err != nil {
 		return FileIdentity{}, fmt.Errorf("reinspect ClickHouse recovery archive %q: %w", name, err)
 	}
-	if !sameFileState(before, after) {
+	if !privatefs.SameFileState(before, after) {
 		return FileIdentity{}, fmt.Errorf("ClickHouse recovery archive %q changed while read", name)
 	}
 	if err := ctx.Err(); err != nil {
@@ -438,7 +408,7 @@ func (directory *archiveDirectory) inspectArchiveWithRetention(
 	if err := errors.Join(statErr, metadataErr, aclErr, pathErr, closeErr); err != nil {
 		return FileIdentity{}, fmt.Errorf("reinspect ClickHouse recovery archive %q: %w", name, err)
 	}
-	if !sameFileState(before, reopenedInfo) {
+	if !privatefs.SameFileState(before, reopenedInfo) {
 		return FileIdentity{}, fmt.Errorf("ClickHouse recovery archive %q changed after read", name)
 	}
 	if err := directory.revalidate(); err != nil {
@@ -608,7 +578,7 @@ func (directory *archiveDirectory) pinArchiveForRemoval(
 			err,
 		)
 	}
-	if !sameFileState(before, stable) {
+	if !privatefs.SameFileState(before, stable) {
 		return nil, fmt.Errorf(
 			"pin ClickHouse recovery archive %q for removal: metadata changed",
 			name,
@@ -663,7 +633,7 @@ func (directory *archiveDirectory) requirePinnedArchive(
 	if err := privatefs.ValidateNoExtendedACL(archive.file); err != nil {
 		return -1, fmt.Errorf("inspect pinned ClickHouse recovery archive %q: %w", name, err)
 	}
-	if !sameFileState(archive.info, current) {
+	if !privatefs.SameFileState(archive.info, current) {
 		return -1, fmt.Errorf("pinned ClickHouse recovery archive %q changed", name)
 	}
 	// #nosec G115 -- os.File descriptors are native int descriptors on the
@@ -798,12 +768,4 @@ func writePrivateFile(
 	}
 	_, err := privatefs.WriteStableRegularFile(ctx, directory, name, contents)
 	return err
-}
-
-func sameFileState(left, right os.FileInfo) bool {
-	return left != nil && right != nil &&
-		os.SameFile(left, right) &&
-		left.Mode() == right.Mode() &&
-		left.Size() == right.Size() &&
-		left.ModTime().Equal(right.ModTime())
 }

@@ -358,6 +358,21 @@ func applyIndexListFilters(
 	return query
 }
 
+// applyKeysetCursor emits the two-column keyset predicate shared by every list
+// endpoint: strictly past the sort key, or tied on it and past the tiebreak.
+func applyKeysetCursor(
+	query *gorm.DB,
+	column, idColumn, comparison string,
+	value any,
+	id string,
+) *gorm.DB {
+	return query.Where(
+		"("+column+" "+comparison+" ? OR ("+column+" = ? AND "+
+			idColumn+" "+comparison+" ?))",
+		value, value, id,
+	)
+}
+
 func applyIndexListCursor(
 	query *gorm.DB,
 	request normalizedIndexListRequest,
@@ -371,30 +386,19 @@ func applyIndexListCursor(
 	}
 	switch request.sortBy {
 	case IndexSortByName:
-		return query.Where(
-			"(name "+comparison+
-				" ? OR (name = ? AND index_id "+comparison+" ?))",
-			request.cursor.StringKey,
-			request.cursor.StringKey,
-			request.cursor.IndexID,
+		return applyKeysetCursor(
+			query, "name", "index_id", comparison,
+			request.cursor.StringKey, request.cursor.IndexID,
 		)
 	case IndexSortByCreatedAt:
-		return query.Where(
-			"(created_at_unix_micro "+comparison+
-				" ? OR (created_at_unix_micro = ? AND index_id "+
-				comparison+" ?))",
-			*request.cursor.TimeKey,
-			*request.cursor.TimeKey,
-			request.cursor.IndexID,
+		return applyKeysetCursor(
+			query, "created_at_unix_micro", "index_id", comparison,
+			*request.cursor.TimeKey, request.cursor.IndexID,
 		)
 	case IndexSortByUpdatedAt:
-		return query.Where(
-			"(updated_at_unix_micro "+comparison+
-				" ? OR (updated_at_unix_micro = ? AND index_id "+
-				comparison+" ?))",
-			*request.cursor.TimeKey,
-			*request.cursor.TimeKey,
-			request.cursor.IndexID,
+		return applyKeysetCursor(
+			query, "updated_at_unix_micro", "index_id", comparison,
+			*request.cursor.TimeKey, request.cursor.IndexID,
 		)
 	default:
 		return query

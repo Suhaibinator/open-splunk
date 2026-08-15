@@ -25,6 +25,7 @@ const (
 	minimumAdministratorTokenBytes = uint64(auth.MinimumBrowserBearerTokenBytes)
 	maximumAdministratorTokenBytes = uint64(auth.MaximumBrowserBearerTokenBytes)
 
+	manifestSubject            = "control-plane backup manifest"
 	controlPlaneOnlyScope      = "control-plane-only"
 	databaseFilename           = "control.sqlite"
 	masterKeyFilename          = "master.key"
@@ -87,51 +88,66 @@ func (manifest Manifest) ReleaseIdentity() ReleaseIdentity {
 	}
 }
 
-func marshalManifest(manifest Manifest) ([]byte, error) {
-	if err := validateManifest(manifest); err != nil {
+// MarshalCanonicalJSON validates a value and encodes it in the single
+// canonical JSON form shared by every recovery manifest: two-space indent, no
+// HTML escaping, and a hard size ceiling. The subject names the document in
+// error messages.
+func MarshalCanonicalJSON[T any](value T, subject string, maximumBytes int, validate func(T) error) ([]byte, error) {
+	if err := validate(value); err != nil {
 		return nil, err
 	}
 	var output bytes.Buffer
 	encoder := json.NewEncoder(&output)
 	encoder.SetIndent("", "  ")
 	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(manifest); err != nil {
-		return nil, fmt.Errorf("encode control-plane backup manifest: %w", err)
+	if err := encoder.Encode(value); err != nil {
+		return nil, fmt.Errorf("encode %s: %w", subject, err)
 	}
-	if output.Len() > maximumManifestBytes {
-		return nil, errors.New("control-plane backup manifest exceeds its size limit")
+	if output.Len() > maximumBytes {
+		return nil, errors.New(subject + " exceeds its size limit")
 	}
 	return output.Bytes(), nil
 }
 
-func unmarshalManifest(encoded []byte) (Manifest, error) {
-	if len(encoded) == 0 || len(encoded) > maximumManifestBytes {
-		return Manifest{}, errors.New("control-plane backup manifest has an invalid size")
+// UnmarshalCanonicalJSON decodes exactly one JSON value, validates it, and
+// rejects any encoding that is not byte-identical to its canonical form.
+func UnmarshalCanonicalJSON[T any](encoded []byte, subject string, maximumBytes int, validate func(T) error) (T, error) {
+	var zero T
+	if len(encoded) == 0 || len(encoded) > maximumBytes {
+		return zero, errors.New(subject + " has an invalid size")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	decoder.DisallowUnknownFields()
-	var manifest Manifest
-	if err := decoder.Decode(&manifest); err != nil {
-		return Manifest{}, fmt.Errorf("decode control-plane backup manifest: %w", err)
+	var value T
+	if err := decoder.Decode(&value); err != nil {
+		return zero, fmt.Errorf("decode %s: %w", subject, err)
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		if err == nil {
-			return Manifest{}, errors.New("control-plane backup manifest contains multiple JSON values")
+			return zero, errors.New(subject + " contains multiple JSON values")
 		}
-		return Manifest{}, fmt.Errorf("decode control-plane backup manifest terminator: %w", err)
+		return zero, fmt.Errorf("decode %s terminator: %w", subject, err)
 	}
-	if err := validateManifest(manifest); err != nil {
-		return Manifest{}, err
+	if err := validate(value); err != nil {
+		return zero, err
 	}
-	canonical, err := marshalManifest(manifest)
+	canonical, err := MarshalCanonicalJSON(value, subject, maximumBytes, validate)
 	if err != nil {
-		return Manifest{}, err
+		return zero, err
 	}
 	if !bytes.Equal(encoded, canonical) {
-		return Manifest{}, errors.New("control-plane backup manifest is not canonical")
+		return zero, errors.New(subject + " is not canonical")
 	}
-	return manifest, nil
+	return value, nil
+}
+
+func marshalManifest(manifest Manifest) ([]byte, error) {
+	return MarshalCanonicalJSON(manifest, manifestSubject, maximumManifestBytes, validateManifest)
+}
+
+func unmarshalManifest(encoded []byte) (Manifest, error) {
+	return UnmarshalCanonicalJSON(encoded, manifestSubject, maximumManifestBytes, validateManifest)
 }
 
 func validateManifest(manifest Manifest) error {
@@ -159,13 +175,13 @@ func validateManifest(manifest Manifest) error {
 	if err := validateMigrationIdentity("ClickHouse", manifest.ClickHouseMigrations); err != nil {
 		return err
 	}
-	if err := validateFileIdentity(manifest.Database, databaseFilename, 1, maximumDatabaseBytes); err != nil {
+	if err := ValidateFileIdentity(manifest.Database, databaseFilename, 1, maximumDatabaseBytes); err != nil {
 		return fmt.Errorf("control-plane backup database: %w", err)
 	}
-	if err := validateFileIdentity(manifest.MasterKey, masterKeyFilename, serverMasterKeyBytes, serverMasterKeyBytes); err != nil {
+	if err := ValidateFileIdentity(manifest.MasterKey, masterKeyFilename, serverMasterKeyBytes, serverMasterKeyBytes); err != nil {
 		return fmt.Errorf("control-plane backup master key: %w", err)
 	}
-	if err := validateFileIdentity(
+	if err := ValidateFileIdentity(
 		manifest.AdministratorToken,
 		administratorTokenFilename,
 		minimumAdministratorTokenBytes,
@@ -223,7 +239,10 @@ func validateReleaseMigrationIdentity(name string, identity MigrationIdentity) e
 	return nil
 }
 
-func validateFileIdentity(identity FileIdentity, name string, minimum, maximum uint64) error {
+// ValidateFileIdentity checks that a manifest member names the exact expected
+// file, has a size inside the supported bounds, and carries a well-formed
+// SHA-256 digest.
+func ValidateFileIdentity(identity FileIdentity, name string, minimum, maximum uint64) error {
 	if identity.Name != name {
 		return fmt.Errorf("member name must be exactly %q", name)
 	}

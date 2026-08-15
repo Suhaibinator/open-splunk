@@ -347,7 +347,7 @@ func createWithHooks(
 	if statErr != nil || closeErr != nil {
 		return Manifest{}, errors.Join(statErr, closeErr)
 	}
-	if !sameFileState(pinnedDatabaseInfo, reopenedDatabaseInfo) {
+	if !privatefs.SameFileState(pinnedDatabaseInfo, reopenedDatabaseInfo) {
 		return Manifest{}, errors.New("create control-plane backup: source database changed during snapshot")
 	}
 
@@ -721,12 +721,13 @@ func restoreWithHooks(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := cleanupRestoreStages(
+	if err := cleanupRestoreStagesWithHooks(
 		plan.destination,
 		plan.stageNames,
 		plan.namespaceNames,
 		plan.targets.databaseLockName,
 		options.DatabaseLock,
+		cleanupRestoreStagesHooks{},
 	); err != nil {
 		return err
 	}
@@ -782,13 +783,14 @@ func restoreWithHooks(
 			return err
 		}
 		remainingStages = append(remainingStages, member.stageName)
-		if err := copyMember(
+		if err := copyMemberWithHooks(
 			ctx,
 			plan.source,
 			member.identity.Name,
 			plan.destination,
 			member.stageName,
 			member.identity,
+			copyMemberHooks{},
 		); err != nil {
 			return fmt.Errorf("restore control-plane backup: stage %q: %w", member.identity.Name, err)
 		}
@@ -1225,23 +1227,6 @@ func validateRestoreNamespace(stageNames, finalNames []string) error {
 	return nil
 }
 
-func cleanupRestoreStages(
-	destination *privatefs.Directory,
-	stageNames []string,
-	namespaceNames []string,
-	databaseLockName string,
-	databaseLock *os.File,
-) error {
-	return cleanupRestoreStagesWithHooks(
-		destination,
-		stageNames,
-		namespaceNames,
-		databaseLockName,
-		databaseLock,
-		cleanupRestoreStagesHooks{},
-	)
-}
-
 type cleanupRestoreStagesHooks struct {
 	afterPreflight func()
 }
@@ -1284,11 +1269,7 @@ func cleanupRestoreStagesWithHooks(
 		if !slices.Contains(entries, stageName) {
 			continue
 		}
-		file, openErr := destination.OpenRegular(stageName, privatefs.FilePolicy{
-			AllowedModes: privateMode,
-			MinimumSize:  0,
-			MaximumSize:  int64(maximumDatabaseBytes),
-		})
+		file, openErr := destination.OpenRegular(stageName, anySizePrivateFilePolicy)
 		if openErr != nil {
 			return fmt.Errorf(
 				"restore control-plane backup: unsafe stale staging file %q: %w",
@@ -1340,11 +1321,7 @@ func validateRestoreStageFiles(
 		if !slices.Contains(entries, stageName) {
 			continue
 		}
-		file, err := destination.OpenRegular(stageName, privatefs.FilePolicy{
-			AllowedModes: privateMode,
-			MinimumSize:  0,
-			MaximumSize:  int64(maximumDatabaseBytes),
-		})
+		file, err := destination.OpenRegular(stageName, anySizePrivateFilePolicy)
 		if err != nil {
 			return fmt.Errorf(
 				"preflight control-plane restore: unsafe stale staging file %q: %w",

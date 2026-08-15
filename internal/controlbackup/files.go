@@ -20,6 +20,12 @@ import (
 
 var privateMode = []fs.FileMode{0o600}
 
+var anySizePrivateFilePolicy = privatefs.FilePolicy{
+	AllowedModes: privateMode,
+	MinimumSize:  0,
+	MaximumSize:  int64(maximumDatabaseBytes),
+}
+
 type memberResult struct {
 	identity FileIdentity
 	contents []byte
@@ -96,14 +102,6 @@ func inspectMember(
 	}, nil
 }
 
-func sameFileState(left, right os.FileInfo) bool {
-	return left != nil && right != nil &&
-		os.SameFile(left, right) &&
-		left.Mode() == right.Mode() &&
-		left.Size() == right.Size() &&
-		left.ModTime().Equal(right.ModTime())
-}
-
 func requireFileIdentity(got memberResult, want FileIdentity) error {
 	if got.identity != want {
 		return fmt.Errorf("control-plane backup member %q does not match its manifest", want.Name)
@@ -134,25 +132,6 @@ func writeMember(
 			SHA256:    hex.EncodeToString(written.SHA256[:]),
 		},
 	}, nil
-}
-
-func copyMember(
-	ctx context.Context,
-	source *privatefs.Directory,
-	sourceName string,
-	destination *privatefs.Directory,
-	destinationName string,
-	want FileIdentity,
-) (returnedErr error) {
-	return copyMemberWithHooks(
-		ctx,
-		source,
-		sourceName,
-		destination,
-		destinationName,
-		want,
-		copyMemberHooks{},
-	)
 }
 
 type copyMemberHooks struct {
@@ -327,12 +306,7 @@ func cleanupKnownFiles(
 	}
 	var result error
 	for _, name := range names {
-		policy := privatefs.FilePolicy{
-			AllowedModes: privateMode,
-			MinimumSize:  0,
-			MaximumSize:  int64(maximumDatabaseBytes),
-		}
-		file, err := directory.OpenRegular(name, policy)
+		file, err := directory.OpenRegular(name, anySizePrivateFilePolicy)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
@@ -409,11 +383,7 @@ func prepareExactBundleCleanup(
 
 	files := make([]pinnedCleanupFile, 0, len(entries))
 	for _, entry := range entries {
-		file, openErr := child.OpenRegular(entry, privatefs.FilePolicy{
-			AllowedModes: privateMode,
-			MinimumSize:  0,
-			MaximumSize:  int64(maximumDatabaseBytes),
-		})
+		file, openErr := child.OpenRegular(entry, anySizePrivateFilePolicy)
 		if openErr != nil {
 			return nil, errors.Join(
 				fmt.Errorf(

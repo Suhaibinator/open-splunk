@@ -158,185 +158,98 @@ func loadCollectors(
 		)
 	}
 
-	capabilityLimit, err := aggregateCollectorChildLimit(
-		len(collectorIDs),
-		maximumCapabilities,
-	)
-	if err != nil {
+	if err := loadCollectorChildren(
+		database,
+		scope,
+		collectorIDs,
+		requested,
+		records,
+		collectorChildQuery[capabilityRecord]{
+			order:            "collector_id, capability",
+			perParentMaximum: maximumCapabilities,
+			queryLabel:       "get collector batch capabilities",
+			rowKind:          "capability",
+			aggregateDetail:  "capability rows exceed aggregate persisted bounds",
+			perParentDetail:  "capabilities exceed per-collector persisted bounds",
+			slot: func(set *collectorRecordSet) *[]capabilityRecord {
+				return &set.capabilities
+			},
+			tenantOf:    func(row capabilityRecord) string { return row.TenantID },
+			collectorOf: func(row capabilityRecord) string { return row.CollectorID },
+		},
+	); err != nil {
 		return nil, err
 	}
-	var capabilities []capabilityRecord
-	if err := database.
-		Where(
-			"tenant_id = ? AND collector_id IN ?",
-			scope.TenantID,
-			collectorIDs,
-		).
-		Order("collector_id, capability").
-		Limit(capabilityLimit).
-		Find(&capabilities).Error; err != nil {
-		return nil, mapContextError(
-			database.Statement.Context,
-			"get collector batch capabilities",
-			err,
-		)
-	}
-	if len(capabilities) == capabilityLimit {
-		return nil, collectorChildBoundsError(
-			"capability rows exceed aggregate persisted bounds",
-		)
-	}
-	for _, row := range capabilities {
-		if err := requireRequestedCollectorRow(
-			scope,
-			requested,
-			row.TenantID,
-			row.CollectorID,
-			"capability",
-		); err != nil {
-			return nil, err
-		}
-		parent := records[row.CollectorID]
-		if len(parent.capabilities) == maximumCapabilities {
-			return nil, collectorChildBoundsError(
-				"capabilities exceed per-collector persisted bounds",
-			)
-		}
-		parent.capabilities = append(parent.capabilities, row)
-	}
 
-	indexLimit, err := aggregateCollectorChildLimit(
-		len(collectorIDs),
-		maximumAuthorizedIndexes,
-	)
-	if err != nil {
+	if err := loadCollectorChildren(
+		database,
+		scope,
+		collectorIDs,
+		requested,
+		records,
+		collectorChildQuery[authorizedIndexRecord]{
+			order:            "collector_id, index_name",
+			perParentMaximum: maximumAuthorizedIndexes,
+			queryLabel:       "get collector batch authorized indexes",
+			rowKind:          "authorized index",
+			aggregateDetail:  "authorized-index rows exceed aggregate persisted bounds",
+			perParentDetail:  "authorized indexes exceed per-collector persisted bounds",
+			slot: func(set *collectorRecordSet) *[]authorizedIndexRecord {
+				return &set.indexes
+			},
+			tenantOf: func(row authorizedIndexRecord) string { return row.TenantID },
+			collectorOf: func(row authorizedIndexRecord) string {
+				return row.CollectorID
+			},
+		},
+	); err != nil {
 		return nil, err
 	}
-	var indexes []authorizedIndexRecord
-	if err := database.
-		Where(
-			"tenant_id = ? AND collector_id IN ?",
-			scope.TenantID,
-			collectorIDs,
-		).
-		Order("collector_id, index_name").
-		Limit(indexLimit).
-		Find(&indexes).Error; err != nil {
-		return nil, mapContextError(
-			database.Statement.Context,
-			"get collector batch authorized indexes",
-			err,
-		)
-	}
-	if len(indexes) == indexLimit {
-		return nil, collectorChildBoundsError(
-			"authorized-index rows exceed aggregate persisted bounds",
-		)
-	}
-	for _, row := range indexes {
-		if err := requireRequestedCollectorRow(
-			scope,
-			requested,
-			row.TenantID,
-			row.CollectorID,
-			"authorized index",
-		); err != nil {
-			return nil, err
-		}
-		parent := records[row.CollectorID]
-		if len(parent.indexes) == maximumAuthorizedIndexes {
-			return nil, collectorChildBoundsError(
-				"authorized indexes exceed per-collector persisted bounds",
-			)
-		}
-		parent.indexes = append(parent.indexes, row)
-	}
 
-	inputLimit, err := aggregateCollectorChildLimit(
-		len(collectorIDs),
-		maximumInputs,
-	)
-	if err != nil {
+	if err := loadCollectorChildren(
+		database,
+		scope,
+		collectorIDs,
+		requested,
+		records,
+		collectorChildQuery[inputRecord]{
+			order:            "collector_id, input_id",
+			perParentMaximum: maximumInputs,
+			queryLabel:       "get collector batch inputs",
+			rowKind:          "input",
+			aggregateDetail:  "input rows exceed aggregate persisted bounds",
+			perParentDetail:  "inputs exceed per-collector persisted bounds",
+			slot: func(set *collectorRecordSet) *[]inputRecord {
+				return &set.inputs
+			},
+			tenantOf:    func(row inputRecord) string { return row.TenantID },
+			collectorOf: func(row inputRecord) string { return row.CollectorID },
+		},
+	); err != nil {
 		return nil, err
 	}
-	var inputs []inputRecord
-	if err := database.
-		Where(
-			"tenant_id = ? AND collector_id IN ?",
-			scope.TenantID,
-			collectorIDs,
-		).
-		Order("collector_id, input_id").
-		Limit(inputLimit).
-		Find(&inputs).Error; err != nil {
-		return nil, mapContextError(
-			database.Statement.Context,
-			"get collector batch inputs",
-			err,
-		)
-	}
-	if len(inputs) == inputLimit {
-		return nil, collectorChildBoundsError(
-			"input rows exceed aggregate persisted bounds",
-		)
-	}
-	for _, row := range inputs {
-		if err := requireRequestedCollectorRow(
-			scope,
-			requested,
-			row.TenantID,
-			row.CollectorID,
-			"input",
-		); err != nil {
-			return nil, err
-		}
-		parent := records[row.CollectorID]
-		if len(parent.inputs) == maximumInputs {
-			return nil, collectorChildBoundsError(
-				"inputs exceed per-collector persisted bounds",
-			)
-		}
-		parent.inputs = append(parent.inputs, row)
-	}
 
-	var health []inputHealthRecord
-	if err := database.
-		Where(
-			"tenant_id = ? AND collector_id IN ?",
-			scope.TenantID,
-			collectorIDs,
-		).
-		Order("collector_id, input_id").
-		Limit(inputLimit).
-		Find(&health).Error; err != nil {
-		return nil, mapContextError(
-			database.Statement.Context,
-			"get collector batch input health",
-			err,
-		)
-	}
-	if len(health) == inputLimit {
-		return nil, collectorChildBoundsError(
-			"input-health rows exceed aggregate persisted bounds",
-		)
-	}
-	for _, row := range health {
-		if err := requireRequestedCollectorRow(
-			scope,
-			requested,
-			row.TenantID,
-			row.CollectorID,
-			"input health",
-		); err != nil {
-			return nil, err
-		}
-		parent := records[row.CollectorID]
-		if len(parent.health) == maximumInputs {
-			return nil, collectorChildBoundsError(
-				"input health exceeds per-collector persisted bounds",
-			)
-		}
-		parent.health = append(parent.health, row)
+	if err := loadCollectorChildren(
+		database,
+		scope,
+		collectorIDs,
+		requested,
+		records,
+		collectorChildQuery[inputHealthRecord]{
+			order:            "collector_id, input_id",
+			perParentMaximum: maximumInputs,
+			queryLabel:       "get collector batch input health",
+			rowKind:          "input health",
+			aggregateDetail:  "input-health rows exceed aggregate persisted bounds",
+			perParentDetail:  "input health exceeds per-collector persisted bounds",
+			slot: func(set *collectorRecordSet) *[]inputHealthRecord {
+				return &set.health
+			},
+			tenantOf:    func(row inputHealthRecord) string { return row.TenantID },
+			collectorOf: func(row inputHealthRecord) string { return row.CollectorID },
+		},
+	); err != nil {
+		return nil, err
 	}
 
 	result := make([]Collector, 0, len(collectorIDs))
@@ -367,6 +280,77 @@ func collectorChildBoundsError(detail string) error {
 		"collector child snapshot exceeds persisted bounds: %s",
 		detail,
 	)
+}
+
+// collectorChildQuery describes one bounded child-row hydration pass: the
+// deterministic order, the per-collector maximum, the strings the failure
+// paths must emit, and the accessors that place each row on its parent.
+type collectorChildQuery[T any] struct {
+	order            string
+	perParentMaximum int
+	queryLabel       string
+	rowKind          string
+	aggregateDetail  string
+	perParentDetail  string
+	slot             func(*collectorRecordSet) *[]T
+	tenantOf         func(T) string
+	collectorOf      func(T) string
+}
+
+// loadCollectorChildren runs one child query for an already-hydrated parent
+// set. Every parent in records must exist before it is called: a row whose
+// parent was not requested is rejected as control-plane corruption.
+func loadCollectorChildren[T any](
+	database *gorm.DB,
+	scope Scope,
+	collectorIDs []string,
+	requested map[string]struct{},
+	records map[string]*collectorRecordSet,
+	spec collectorChildQuery[T],
+) error {
+	limit, err := aggregateCollectorChildLimit(
+		len(collectorIDs),
+		spec.perParentMaximum,
+	)
+	if err != nil {
+		return err
+	}
+	var rows []T
+	if err := database.
+		Where(
+			"tenant_id = ? AND collector_id IN ?",
+			scope.TenantID,
+			collectorIDs,
+		).
+		Order(spec.order).
+		Limit(limit).
+		Find(&rows).Error; err != nil {
+		return mapContextError(
+			database.Statement.Context,
+			spec.queryLabel,
+			err,
+		)
+	}
+	if len(rows) == limit {
+		return collectorChildBoundsError(spec.aggregateDetail)
+	}
+	for _, row := range rows {
+		if err := requireRequestedCollectorRow(
+			scope,
+			requested,
+			spec.tenantOf(row),
+			spec.collectorOf(row),
+			spec.rowKind,
+		); err != nil {
+			return err
+		}
+		target := spec.slot(records[spec.collectorOf(row)])
+		if len(*target) == spec.perParentMaximum {
+			return collectorChildBoundsError(spec.perParentDetail)
+		}
+		*target = append(*target, row)
+	}
+	return nil
 }
 
 func requireRequestedCollectorRow(
