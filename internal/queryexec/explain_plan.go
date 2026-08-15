@@ -361,6 +361,11 @@ func projectExplainNodeType(value string) (string, bool) {
 
 func projectExplainIndexType(value string) (string, bool) {
 	switch value {
+	case "Min-Max":
+		// ClickHouse 26.7 renamed the part-level MinMax evidence label from
+		// "MinMax" to "Min-Max"; both spell the same index, so the published
+		// projection keeps the canonical "MinMax" type.
+		return "MinMax", true
 	case "MinMax", "Partition", "PrimaryKey", "Skip":
 		return strings.Clone(value), true
 	default:

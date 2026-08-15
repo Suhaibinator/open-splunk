@@ -518,14 +518,14 @@ func TestBinEdgePipelineAgainstClickHouse(t *testing.T) {
 		} {
 			t.Run(test.name, func(t *testing.T) {
 				compiled := compile(test.source)
-				actions := binEdgeExplain(t, ctx, connection, "EXPLAIN actions=1 ", compiled)
+				actions := binEdgeExplain(t, ctx, connection, explainActionsPrefix, compiled)
 				if got := strings.Count(actions, "FUNCTION arrayFirstIndex("); got != test.wantMetadataScans {
 					t.Fatalf(
 						"physical plan performs %d aligned metadata lookups, want %d:\n%s",
 						got, test.wantMetadataScans, actions,
 					)
 				}
-				planText := binEdgeExplain(t, ctx, connection, "EXPLAIN ", compiled)
+				planText := binEdgeExplain(t, ctx, connection, explainPlanPrefix, compiled)
 				for _, fence := range []string{"Aggregating", "Join", "Window", "MergingAggregated"} {
 					if strings.Contains(planText, fence) {
 						t.Fatalf("streaming bin pipeline introduced a %s step:\n%s", fence, planText)

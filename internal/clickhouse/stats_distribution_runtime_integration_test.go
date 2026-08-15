@@ -298,10 +298,16 @@ func TestStatsDistributionAggregatesAgainstClickHouse(t *testing.T) {
 				`median(metric) AS median_value estdc(label) AS estimated_labels ` +
 				`estdc_error(label) AS label_error mode(label) AS common_label`,
 		)
+		// mode() keeps byte-preserving lineage, so common_label publishes through
+		// the String-or-Bytes transport: the compiler appends one sealed
+		// semantic-Bytes authority column after the public projection. Readers
+		// learn its ordinal from the descriptor rather than from the SQL text.
+		assertDistributionCommonLabelTransport(t, compiled)
 		var exactValue, upperValue, medianValue *float64
 		var estimatedLabels uint64
 		var labelError float64
 		var commonLabel *string
+		var commonLabelBytes uint8
 		if queryErr := connection.QueryRow(
 			queryContext,
 			compiled.SQL,
@@ -313,8 +319,12 @@ func TestStatsDistributionAggregatesAgainstClickHouse(t *testing.T) {
 			&estimatedLabels,
 			&labelError,
 			&commonLabel,
+			&commonLabelBytes,
 		); queryErr != nil {
 			t.Fatalf("execute compiled distribution SPL: %v\nSQL: %s\nargs: %#v", queryErr, compiled.SQL, compiled.Args)
+		}
+		if commonLabelBytes != 0 {
+			t.Fatalf("compiled mode semantic Bytes bit = %d, want 0 for valid UTF-8", commonLabelBytes)
 		}
 		assertDistributionFloat(t, "compiled exactperc50", exactValue, 5)
 		assertDistributionFloat(t, "compiled upperperc50", upperValue, 5)
@@ -334,8 +344,10 @@ func TestStatsDistributionAggregatesAgainstClickHouse(t *testing.T) {
 				`median(metric) AS median_value estdc(label) AS estimated_labels ` +
 				`estdc_error(label) AS label_error mode(label) AS common_label`,
 		)
+		assertDistributionCommonLabelTransport(t, empty)
 		exactValue, upperValue, medianValue, commonLabel = nil, nil, nil, nil
 		estimatedLabels, labelError = 1, 1
+		commonLabelBytes = 1
 		if queryErr := connection.QueryRow(
 			queryContext,
 			empty.SQL,
@@ -347,8 +359,12 @@ func TestStatsDistributionAggregatesAgainstClickHouse(t *testing.T) {
 			&estimatedLabels,
 			&labelError,
 			&commonLabel,
+			&commonLabelBytes,
 		); queryErr != nil {
 			t.Fatalf("execute empty compiled distribution SPL: %v\nSQL: %s\nargs: %#v", queryErr, empty.SQL, empty.Args)
+		}
+		if commonLabelBytes != 0 {
+			t.Fatalf("empty compiled mode semantic Bytes bit = %d, want 0", commonLabelBytes)
 		}
 		if exactValue != nil || upperValue != nil || medianValue != nil ||
 			estimatedLabels != 0 || labelError != 0 || commonLabel != nil {
@@ -363,6 +379,27 @@ func TestStatsDistributionAggregatesAgainstClickHouse(t *testing.T) {
 			)
 		}
 	})
+}
+
+// assertDistributionCommonLabelTransport pins the sealed trailing column that
+// the mode() output publishes. The scans below read it positionally, so the
+// descriptor has to agree that exactly one exists and that it belongs to
+// common_label.
+func assertDistributionCommonLabelTransport(t *testing.T, compiled CompiledQuery) {
+	t.Helper()
+	descriptors, valid := compiled.ValidatedResultStringOrBytesOutputs()
+	if !valid || len(descriptors) != 1 {
+		t.Fatalf("String-or-Bytes transport = %#v (valid %t), want one descriptor", descriptors, valid)
+	}
+	index := int(descriptors[0].OutputIndex)
+	if index != len(compiled.OutputFields)-1 ||
+		compiled.OutputFields[index] != "common_label" {
+		t.Fatalf(
+			"String-or-Bytes descriptor ordinal %d over outputs %v, want trailing common_label",
+			index,
+			compiled.OutputFields,
+		)
+	}
 }
 
 func assertDistributionFloat(t *testing.T, name string, got *float64, want float64) {

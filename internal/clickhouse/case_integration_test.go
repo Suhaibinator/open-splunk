@@ -295,7 +295,7 @@ func testCaseAgainstClickHouse(
 		t,
 		queryContext,
 		connection,
-		"EXPLAIN actions=1 ",
+		explainActionsPrefix,
 		physical,
 	)
 	if strings.Contains(actions, "ArrayJoin") {

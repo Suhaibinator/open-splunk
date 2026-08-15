@@ -22,10 +22,20 @@ import (
 
 const (
 	maximumFieldSuggestionExecutionTime = 15 * time.Second
-	maximumFieldSuggestionMemoryBytes   = uint64(128 << 20)
-	maximumFieldSuggestionRowsToRead    = uint64(5_000_000)
-	maximumFieldSuggestionBytesToRead   = uint64(1 << 30)
-	maximumFieldSuggestionResultBytes   = uint64(
+	// Nearly all of this budget is spent analyzing the query, not executing it:
+	// the suggestion relation embeds the full knowledge program, so the server
+	// builds a very large expression graph before reading the first event.
+	// ClickHouse 26.7 analyzes that graph far less frugally than 26.3 did. On
+	// the pinned server the production knowledge matrix needs just over 208 MiB
+	// to plan the query at all, where 26.3 planned the identical SQL under
+	// 64 MiB; EXPLAIN PLAN alone reproduces the 26.7 figure with no execution.
+	// Keep allocator headroom above that planning floor while staying a class
+	// below the catalog budgets, which cover the same relation plus per-field
+	// aggregation.
+	maximumFieldSuggestionMemoryBytes = uint64(256 << 20)
+	maximumFieldSuggestionRowsToRead  = uint64(5_000_000)
+	maximumFieldSuggestionBytesToRead = uint64(1 << 30)
+	maximumFieldSuggestionResultBytes = uint64(
 		(eventfields.MaximumNormalizedFieldNameBytes + 3) *
 			(int(clickhouse.MaximumFieldSuggestions) + 2),
 	)

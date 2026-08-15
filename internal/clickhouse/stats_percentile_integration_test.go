@@ -113,7 +113,7 @@ func testStatsPercentilesAgainstClickHouse(
 	base := `index=compiler source="stats-percentile"`
 	assertOnePhysicalState := func(name string, compiled CompiledQuery) {
 		t.Helper()
-		actions := explainCompiledQuery(t, ctx, connection, "EXPLAIN actions=1 ", compiled)
+		actions := explainCompiledQuery(t, ctx, connection, explainActionsPrefix, compiled)
 		physicalStates := 0
 		for line := range strings.SplitSeq(actions, "\n") {
 			if strings.Contains(line, "Function:") && strings.Contains(line, "quantilesGK") {

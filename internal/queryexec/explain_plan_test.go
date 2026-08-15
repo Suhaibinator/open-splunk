@@ -214,6 +214,23 @@ func TestParseExplainPlanProjectsOnlyKnownIndexMetadata(t *testing.T) {
 			safe: true,
 		},
 		{
+			name: "Min-Max normalizes to MinMax",
+			raw: index(
+				"Min-Max",
+				"ignored_known_name",
+				[]string{"event_time", "tenant_id"},
+			),
+			want: ExplainIndex{
+				Type:             "MinMax",
+				Keys:             []string{"event_time"},
+				InitialParts:     5,
+				SelectedParts:    3,
+				InitialGranules:  5,
+				SelectedGranules: 3,
+			},
+			safe: true,
+		},
+		{
 			name: "Partition",
 			raw: index(
 				"Partition",

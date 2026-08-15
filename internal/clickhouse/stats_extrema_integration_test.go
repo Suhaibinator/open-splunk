@@ -245,7 +245,7 @@ func testStatsExtremaAgainstClickHouse(
 			scalarHigh.Any(),
 		)
 	}
-	scalarActions := explainCompiledQuery(t, ctx, connection, "EXPLAIN actions=1 ", scalar)
+	scalarActions := explainCompiledQuery(t, ctx, connection, explainActionsPrefix, scalar)
 	const scalarMinSignature = "Function: argMinOrNullIf(" +
 		"Tuple(UInt8, Float64, String), " +
 		"Tuple(UInt8, UInt8, Int64, String, String, UInt8), UInt8)"
@@ -481,7 +481,7 @@ func testStatsExtremaAgainstClickHouse(
 	}
 
 	shared := compile(base + ` | stats min(extrema_value) AS low max(extrema_value) AS high`)
-	actions := explainCompiledQuery(t, ctx, connection, "EXPLAIN actions=1 ", shared)
+	actions := explainCompiledQuery(t, ctx, connection, explainActionsPrefix, shared)
 	if got := countPhysicalAggregates(actions, "argMinArray(", "argMinArray("); got != 1 {
 		t.Fatalf("min has %d physical aggregate states, want one:\n%s", got, actions)
 	}

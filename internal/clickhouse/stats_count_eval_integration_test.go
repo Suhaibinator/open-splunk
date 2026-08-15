@@ -273,7 +273,7 @@ func testStatsCountEvalAgainstClickHouse(
 			t,
 			ctx,
 			connection,
-			"EXPLAIN actions=1 ",
+			explainActionsPrefix,
 			compiled,
 		)
 		if strings.Contains(actions, "ArrayJoin") {
@@ -551,7 +551,7 @@ func testStatsCountEvalAgainstClickHouse(
 			t,
 			ctx,
 			connection,
-			"EXPLAIN actions=1 ",
+			explainActionsPrefix,
 			compiled,
 		)
 		if strings.Contains(actions, "ArrayJoin") {

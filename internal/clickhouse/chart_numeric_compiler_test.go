@@ -78,7 +78,11 @@ func TestCompileNumericChartUsesOneScopedScanAndMergeablePerCellStates(t *testin
 				`sumCountArray("__os_ch_measure_values") AS "__os_ch_numeric_state"`,
 				`GROUP BY "__os_ch_row", "__os_ch_row_eligible", "__os_ch_kind", "__os_ch_label"`,
 				`FROM "__os_chart_numeric_groups" GROUP BY "__os_ch_kind", "__os_ch_label"`,
-				`"__os_chart_numeric_scores" AS MATERIALIZED`,
+				// The score selection is deliberately not materialized: on
+				// ClickHouse 26.7 a materialized CTE read from an IN set and
+				// defined over another materialized CTE loses its readiness
+				// gate and fails the query.
+				`"__os_chart_numeric_scores" AS (`,
 				test.score,
 				`multiIf(isNaN("__os_ch_score"), toUInt8(0), isInfinite("__os_ch_score") AND "__os_ch_score" < 0, toUInt8(1), isInfinite("__os_ch_score"), toUInt8(3), toUInt8(2)) DESC`,
 				`if(isFinite("__os_ch_score"), "__os_ch_score", toFloat64(0)) DESC, "__os_ch_label" ASC LIMIT 10`,

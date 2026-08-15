@@ -517,7 +517,7 @@ func testEventStatsValuesAgainstClickHouse(
 		EventStatsInputLimitMarker,
 	)
 
-	actions := explainCompiledQuery(t, ctx, connection, "EXPLAIN actions=1 ", compile(
+	actions := explainCompiledQuery(t, ctx, connection, explainActionsPrefix, compile(
 		base+` | eventstats values(distinct_value) AS first | head 1 | table first`,
 	))
 	if countPhysicalAggregates(actions, "groupUniqArrayArray(", "groupUniqArrayArray(") == 0 {

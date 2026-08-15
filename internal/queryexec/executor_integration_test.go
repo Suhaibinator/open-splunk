@@ -3080,7 +3080,12 @@ func queryIntegrationExplainActions(
 	compiled clickhouse.CompiledQuery,
 ) string {
 	t.Helper()
-	rows, err := connection.Query(ctx, "EXPLAIN actions=1 "+compiled.SQL, compiled.Args...)
+	// ClickHouse 26.7 made the compact "pretty" plan the EXPLAIN PLAN default
+	// (explain_query_plan_default), which summarizes each step's expressions
+	// instead of listing the physical actions this helper's callers count.
+	// Naming actions, compact, and pretty explicitly restores that rendering.
+	const explainActionsPrefix = "EXPLAIN actions = 1, compact = 0, pretty = 0 "
+	rows, err := connection.Query(ctx, explainActionsPrefix+compiled.SQL, compiled.Args...)
 	if err != nil {
 		t.Fatalf("EXPLAIN actions: %v\nSQL: %s\nargs: %#v", err, compiled.SQL, compiled.Args)
 	}

@@ -151,7 +151,7 @@ func TestClickHousePhysicalSchemaDefinitionsMatchPinnedReleaseDigests(
 		{
 			name:       "schema migrations",
 			definition: clickHouseMigrationLedgerPhysicalSchemaDefinition,
-			want:       "c2588908c9b29afb4d287dc49367bde8dce6f6a3b498de6b6a54b9d10266c3a7",
+			want:       "f9306c9047b86b213916aae686038835bf8395bbd93d71cbe50e34be7738bff6",
 		},
 		{
 			name:       "events",
@@ -161,12 +161,12 @@ func TestClickHousePhysicalSchemaDefinitionsMatchPinnedReleaseDigests(
 		{
 			name:       "recovery sets",
 			definition: clickHouseRecoverySetsPhysicalSchemaDefinition,
-			want:       "ac59a548be6c742f79d3e64e162d93cba7df7c0a266bddee918c1d10113440b7",
+			want:       "93c2eed68b27bc1b79bb80ca800d8a008659de35d85605df4e3374e6bb224287",
 		},
 		{
 			name:       "recovery archive markers",
 			definition: clickHouseRecoveryArchiveMarkersPhysicalSchemaDefinition,
-			want:       "60e4ccaec1adc7f2bd8afc704e76a41064d7962af01ebc9999ca7fcdaadff62c",
+			want:       "0595b325a222189121fbc8392f04f9e53b878bce5dece014edb64b465ec9ea15",
 		},
 	}
 	for _, test := range tests {
@@ -310,7 +310,7 @@ func TestValidateClickHousePhysicalSchemaRejectsTableSetOrDefinitionDrift(
 			mutate: func(connection *fakeClickHousePhysicalSchemaConnection) {
 				connection.migrationLedgerDefinition = strings.Replace(
 					connection.migrationLedgerDefinition,
-					"ORDER BY version",
+					"ORDER BY (version)",
 					"ORDER BY (version, name)",
 					1,
 				)

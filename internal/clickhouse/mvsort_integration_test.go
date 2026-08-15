@@ -561,7 +561,7 @@ func testMVSortAgainstClickHouse(
 		t,
 		queryContext,
 		connection,
-		"EXPLAIN actions=1 ",
+		explainActionsPrefix,
 		dynamic,
 	)
 	if strings.Contains(actions, "ArrayJoin") {

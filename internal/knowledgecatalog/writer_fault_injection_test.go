@@ -456,7 +456,10 @@ func readWriterFaultSnapshot(t *testing.T, database *control.DB) writerFaultSnap
 			}
 			var encoded strings.Builder
 			for index, value := range values {
-				encoded.WriteString(strconv.Quote(columns[index]) + "=" + writerFaultSQLValue(value) + ";")
+				encoded.WriteString(strconv.Quote(columns[index]))
+				encoded.WriteByte('=')
+				encoded.WriteString(writerFaultSQLValue(value))
+				encoded.WriteByte(';')
 			}
 			encodedRows = append(encodedRows, encoded.String())
 		}

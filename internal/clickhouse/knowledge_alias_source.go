@@ -132,7 +132,8 @@ func (authority storedPathAuthority) valueSQL() string {
 	var value strings.Builder
 	value.WriteString(quoteIdentifier(internalFieldsColumn))
 	for _, segment := range authority.physicalSegments {
-		value.WriteString("." + quoteIdentifier(segment))
+		value.WriteString(".")
+		value.WriteString(quoteIdentifier(segment))
 	}
 	return value.String()
 }
@@ -697,14 +698,24 @@ func buildKnowledgeAliasSourceExpressions(
 // and then parsing a concrete object map retains heterogeneous descendants
 // without producing the native JSON variant. The explicit Dynamic cast keeps
 // the public field contract stable without crossing either restriction.
+//
+// KNOWN ISSUE: the toJSONString round-trip erases stored element types. JSON
+// number syntax has no float marker, so a stored Float64 1.0 prints as "1" and
+// reparses as Int64. Reading the parent as `fields.^"<path>"` preserves the
+// types, but that yields a native JSON subobject rather than this
+// Map(String, Dynamic), and no route produces both. Fixing the fidelity
+// therefore means migrating the flattened-parent transport.
 func knowledgeAliasMaterializedDynamicSQL(
 	fieldsSQL string,
 	physicalSegmentSQL []string,
 ) string {
 	var raw strings.Builder
-	raw.WriteString("JSONExtractRaw(toJSONString(" + fieldsSQL + ")")
+	raw.WriteString("JSONExtractRaw(toJSONString(")
+	raw.WriteString(fieldsSQL)
+	raw.WriteString(")")
 	for _, segmentSQL := range physicalSegmentSQL {
-		raw.WriteString(", " + segmentSQL)
+		raw.WriteString(", ")
+		raw.WriteString(segmentSQL)
 	}
 	raw.WriteString(")")
 	return "CAST(JSONExtract(ifNull(" + raw.String() +

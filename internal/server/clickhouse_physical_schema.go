@@ -20,16 +20,25 @@ var (
 )
 
 const (
-	clickHouseReleaseOwnedTableCount                  = 4
-	clickHouseReleaseOwnedTableSentinel               = clickHouseReleaseOwnedTableCount + 1
-	clickHousePhysicalSchemaReadLimit                 = 8 << 20
-	clickHousePhysicalSchemaMemoryLimit               = 64 << 20
-	clickHousePhysicalSchemaResultLimit               = 8 << 20
+	clickHouseReleaseOwnedTableCount    = 4
+	clickHouseReleaseOwnedTableSentinel = clickHouseReleaseOwnedTableCount + 1
+	clickHousePhysicalSchemaReadLimit   = 8 << 20
+	clickHousePhysicalSchemaMemoryLimit = 64 << 20
+	clickHousePhysicalSchemaResultLimit = 8 << 20
+	// The four definitions below are byte-exact copies of what
+	// system.tables.create_table_query renders on the pinned server version
+	// (clickHousePrivilegeContractVersion). They are therefore version-coupled:
+	// when the pin moves, re-read the live definitions and update these
+	// constants rather than relaxing the comparison. ClickHouse 26.7 stopped
+	// unwrapping single-column sort keys, so the three tables sorted on one
+	// column render `ORDER BY (version)` / `ORDER BY (slot)` where 26.3
+	// rendered `ORDER BY version` / `ORDER BY slot`; the events table's
+	// multi-column key was unaffected.
 	clickHouseMigrationLedgerPhysicalSchemaDefinition = "CREATE TABLE open_splunk.schema_migrations (" +
 		"`version` UInt32, " +
 		"`name` LowCardinality(String), " +
 		"`applied_at` DateTime64(3, 'UTC') CODEC(Delta(8), ZSTD(1))" +
-		") ENGINE = MergeTree ORDER BY version " +
+		") ENGINE = MergeTree ORDER BY (version) " +
 		"SETTINGS index_granularity = 8192"
 	clickHouseEventsPhysicalSchemaDefinition = "CREATE TABLE open_splunk.events (" +
 		"`event_id` String CODEC(ZSTD(1)), " +
@@ -96,14 +105,14 @@ const (
 		"`recovery_archive_markers_table_uuid` UUID, " +
 		"`restored_at` DateTime64(3, 'UTC'), " +
 		"CONSTRAINT slot_is_singleton CHECK slot = 1" +
-		") ENGINE = MergeTree ORDER BY slot " +
+		") ENGINE = MergeTree ORDER BY (slot) " +
 		"SETTINGS index_granularity = 8192"
 	clickHouseRecoveryArchiveMarkersPhysicalSchemaDefinition = "CREATE TABLE open_splunk.recovery_archive_markers (" +
 		"`slot` UInt8, " +
 		"`recovery_set_id` FixedString(32), " +
 		"`backup_operation_uuid` UUID, " +
 		"CONSTRAINT slot_is_singleton CHECK slot = 1" +
-		") ENGINE = MergeTree ORDER BY slot " +
+		") ENGINE = MergeTree ORDER BY (slot) " +
 		"SETTINGS index_granularity = 8192"
 )
 

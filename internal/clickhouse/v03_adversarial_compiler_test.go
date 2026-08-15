@@ -296,10 +296,13 @@ func TestV03RepeatedExpansionAtStageBoundaryStaysBoundedAndPrivate(t *testing.T)
 	wantFields := []string{"event_id"}
 	for index := 1; index <= plan.MaximumMVExpandStages; index++ {
 		field := "tags" + string(rune('a'+index-1))
-		source.WriteString(` | mvexpand ` + field + ` limit=1 | reverse`)
+		source.WriteString(` | mvexpand `)
+		source.WriteString(field)
+		source.WriteString(` limit=1 | reverse`)
 		wantFields = append(wantFields, field)
 	}
-	source.WriteString(` | table ` + strings.Join(wantFields, " "))
+	source.WriteString(` | table `)
+	source.WriteString(strings.Join(wantFields, " "))
 	compiled := compileSPL(t, source.String())
 
 	if !reflect.DeepEqual(compiled.OutputFields, wantFields) {

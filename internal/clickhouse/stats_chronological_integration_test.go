@@ -679,7 +679,7 @@ func testStatsChronologicalAgainstClickHouse(
 			shared.SQL,
 		)
 	}
-	actions := explainCompiledQuery(t, ctx, connection, "EXPLAIN actions=1 ", shared)
+	actions := explainCompiledQuery(t, ctx, connection, explainActionsPrefix, shared)
 	if countPhysicalAggregates(actions, "argMinOrNullIf(", "argMinOrNullIf(") == 0 {
 		t.Fatalf("physical plan is missing earliest aggregation:\n%s", actions)
 	}

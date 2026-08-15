@@ -406,9 +406,13 @@ func TestExpressionV02ExecutorManagerAgainstClickHouse(t *testing.T) {
 		if createErr != nil {
 			t.Fatal(createErr)
 		}
+		// classifyQueryError recognizes the compiler's unsupported-value
+		// markers, so the malformed semantic tag terminates as an unsupported
+		// value rather than an opaque execution failure.
 		terminal := queryIntegrationWaitForTerminal(t, manager, created.ID)
 		if terminal.State != searchjobs.StateFailed || terminal.RowCount != 0 || terminal.Schema != nil ||
-			terminal.ResultsTruncated || terminal.Failure == nil || terminal.Failure.Code != searchjobs.FailureExecution {
+			terminal.ResultsTruncated || terminal.Failure == nil ||
+			terminal.Failure.Code != searchjobs.FailureUnsupportedSPL {
 			t.Fatalf("atomic failure terminal = %#v", terminal)
 		}
 		if _, resultErr := manager.Results(created.ID, searchjobs.PageRequest{Limit: 2}); !errors.Is(resultErr, searchjobs.ErrResultsUnavailable) {
@@ -419,7 +423,9 @@ func TestExpressionV02ExecutorManagerAgainstClickHouse(t *testing.T) {
 		}
 		select {
 		case cause := <-executionErrors:
-			if cause == nil || !strings.Contains(cause.Error(), clickhouse.UnsupportedExpressionValueMarker) ||
+			// The classified cause deliberately retains neither the marker's
+			// surrounding ClickHouse message nor the offending payload.
+			if cause == nil || !errors.Is(cause, searchjobs.ErrUnsupportedValue) ||
 				strings.Contains(cause.Error(), "malformed-secret-1e") {
 				t.Fatalf("unsafe or unclassified internal execution error = %v", cause)
 			}

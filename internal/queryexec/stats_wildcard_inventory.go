@@ -20,10 +20,20 @@ import (
 
 const (
 	maximumStatsWildcardInventoryExecutionTime = 15 * time.Second
-	maximumStatsWildcardInventoryMemoryBytes   = uint64(128 << 20)
-	maximumStatsWildcardInventoryRowsToRead    = uint64(5_000_000)
-	maximumStatsWildcardInventoryBytesToRead   = uint64(1 << 30)
-	maximumStatsWildcardInventoryThreads       = uint64(2)
+	// A knowledge-bearing prefix makes this budget a planning budget: the
+	// inventory relation embeds the caller's whole knowledge program, so the
+	// server builds a very large expression graph before reading any event. The
+	// pinned production knowledge matrix needs just over 144 MiB to plan and run
+	// the discovery query, and EXPLAIN PLAN alone accounts for nearly all of it.
+	// Unlike the field-suggestion budget this floor did not move in ClickHouse
+	// 26.7 -- 26.3.17.56 and 26.7.3.19 both refuse 144 MiB and both succeed at
+	// 152 MiB -- so the previous 128 MiB ceiling had been rejecting every
+	// knowledge-bearing discovery query on both servers. Keep allocator headroom
+	// above that floor.
+	maximumStatsWildcardInventoryMemoryBytes = uint64(192 << 20)
+	maximumStatsWildcardInventoryRowsToRead  = uint64(5_000_000)
+	maximumStatsWildcardInventoryBytesToRead = uint64(1 << 30)
+	maximumStatsWildcardInventoryThreads     = uint64(2)
 )
 
 var _ searchjobs.StatsWildcardInventoryExecutor = (*Executor)(nil)

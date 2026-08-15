@@ -313,7 +313,7 @@ func testEventStatsPercentilesAgainstClickHouse(
 
 	assertPhysicalStates := func(name string, query CompiledQuery, want int) {
 		t.Helper()
-		actions := explainCompiledQuery(t, ctx, connection, "EXPLAIN actions=1 ", query)
+		actions := explainCompiledQuery(t, ctx, connection, explainActionsPrefix, query)
 		states := 0
 		for line := range strings.SplitSeq(actions, "\n") {
 			if strings.Contains(line, "Function:") && strings.Contains(line, "quantilesGK") {

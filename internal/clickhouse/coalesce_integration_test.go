@@ -263,7 +263,7 @@ func testCoalesceAgainstClickHouse(
 			` | eval selected=coalesce(if(isnull(probe), null, "present"), "fallback")` +
 			` | table event_id, selected`,
 	)
-	actions := explainCompiledQuery(t, queryContext, connection, "EXPLAIN actions=1 ", physical)
+	actions := explainCompiledQuery(t, queryContext, connection, explainActionsPrefix, physical)
 	if strings.Contains(actions, "ArrayJoin") {
 		t.Fatalf("coalesce expands event rows:\n%s", actions)
 	}

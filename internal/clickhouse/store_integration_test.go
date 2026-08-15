@@ -3330,7 +3330,7 @@ func testRexAgainstClickHouse(
 		indexTime.Add(10*time.Second),
 		visibilityCutoff,
 	)
-	explain := explainCompiledQuery(t, ctx, connection, "EXPLAIN actions=1 ", explained)
+	explain := explainCompiledQuery(t, ctx, connection, explainActionsPrefix, explained)
 	if calls := strings.Count(explain, "FUNCTION extractGroups("); calls != 1 {
 		t.Fatalf("rex physical explain contains %d extractGroups actions, want 1:\n%s", calls, explain)
 	}
@@ -4389,12 +4389,12 @@ func testStatsAggregatesAgainstClickHouse(
 		}
 	}
 	sharedDistinct := compile(base + ` | stats dc(distinct_value) AS count_values values(distinct_value) AS distinct_values`)
-	actions := explainCompiledQuery(t, ctx, connection, "EXPLAIN actions=1 ", sharedDistinct)
+	actions := explainCompiledQuery(t, ctx, connection, explainActionsPrefix, sharedDistinct)
 	if got := countPhysicalAggregates(actions, "groupUniqArrayArray(", "groupUniqArrayArray("); got != 1 {
 		t.Fatalf("values/dc has %d shared physical aggregate states, want one:\n%s", got, actions)
 	}
 	sharedCountValues := compile(base + ` | stats count(distinct_value) AS occurrences dc(distinct_value) AS count_values`)
-	actions = explainCompiledQuery(t, ctx, connection, "EXPLAIN actions=1 ", sharedCountValues)
+	actions = explainCompiledQuery(t, ctx, connection, explainActionsPrefix, sharedCountValues)
 	if got := strings.Count(actions, "FUNCTION arrayCount("); got != 1 {
 		t.Fatalf("count(field) has %d physical array cardinality actions, want one:\n%s", got, actions)
 	}

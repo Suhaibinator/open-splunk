@@ -865,14 +865,14 @@ func TestSpathAgainstClickHouse(t *testing.T) {
 		compiled := compile(t, `index=spath-edge
 | spath output=selected path=payload.text
 | table event_id selected`)
-		actions := explainCompiledQuery(t, ctx, connection, "EXPLAIN actions=1 ", compiled)
+		actions := explainCompiledQuery(t, ctx, connection, explainActionsPrefix, compiled)
 		if got := strings.Count(actions, "FUNCTION JSONExtractRaw("); got != 1 {
 			t.Fatalf("physical plan has %d raw JSON function actions, want one:\n%s", got, actions)
 		}
 		if got := strings.Count(actions, "FUNCTION JSONType("); got != 0 {
 			t.Fatalf("physical plan has %d terminal JSON type actions, want none:\n%s", got, actions)
 		}
-		planText := explainCompiledQuery(t, ctx, connection, "EXPLAIN ", compiled)
+		planText := explainCompiledQuery(t, ctx, connection, explainPlanPrefix, compiled)
 		for _, blockingStep := range []string{"Aggregating", "Join", "Window", "MergingAggregated"} {
 			if strings.Contains(planText, blockingStep) {
 				t.Fatalf("streaming spath pipeline introduced a %s step:\n%s", blockingStep, planText)
@@ -1179,6 +1179,17 @@ func spathQueryError(
 	}
 	return rows.Err()
 }
+
+// ClickHouse 26.7 made the compact "pretty" plan the EXPLAIN PLAN default
+// (explain_query_plan_default). That rendering summarizes each step's
+// expressions instead of listing the physical actions, so it cannot answer the
+// questions these tests ask, such as how many times a function is evaluated.
+// Naming actions, compact, and pretty explicitly overrides the default and
+// keeps the action-level rendering on the pinned server.
+const (
+	explainActionsPrefix = "EXPLAIN actions = 1, compact = 0, pretty = 0 "
+	explainPlanPrefix    = "EXPLAIN actions = 0, compact = 0, pretty = 0 "
+)
 
 func explainCompiledQuery(
 	t *testing.T,

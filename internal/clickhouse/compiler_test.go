@@ -4552,7 +4552,10 @@ func TestCompileChartUsesBoundedPivotTransport(t *testing.T) {
 		`"__os_chart_row_maps" AS (`,
 		`"__os_chart_row_domain" AS (`,
 		`mapFromArrays(groupArrayIf("__os_ch_encoded"`,
-		`arrayDistinct(arrayFlatten(groupArray(groupArrayIf(tuple(`,
+		// The domain deduplicates inside the window aggregate state, so each row
+		// carries at most the series limit plus the NULL and OTHER sentinels
+		// instead of one entry per collapsed group.
+		`arraySort(item -> (item.1, item.2), groupUniqArrayArray(groupArrayIf(tuple(`,
 		`row_number() OVER (ORDER BY`,
 		`AS "` + ChartOrdinalColumn + `"`,
 		`AS "` + ChartRowColumn + `"`,

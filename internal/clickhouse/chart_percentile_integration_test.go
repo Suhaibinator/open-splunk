@@ -73,7 +73,7 @@ func TestChartPercentileAgainstClickHouse(t *testing.T) {
 				strings.Count(compiled.SQL, "quantilesGKOrNullArrayMerge(") != 1 {
 				t.Fatalf("%s chart does not use one non-expanding mergeable GK path:\n%s", function, compiled.SQL)
 			}
-			actions := explainCompiledQuery(t, ctx, connection, "EXPLAIN actions=1 ", compiled)
+			actions := explainCompiledQuery(t, ctx, connection, explainActionsPrefix, compiled)
 			if strings.Contains(actions, "ArrayJoin") {
 				t.Fatalf("%s chart physical plan expands event rows:\n%s", function, actions)
 			}

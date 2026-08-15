@@ -261,7 +261,7 @@ func testIfAgainstClickHouse(
 	}
 
 	physical := compile(base + ` | eval label=if(isnull(probe), "missing", "present") | table event_id, label`)
-	actions := explainCompiledQuery(t, queryContext, connection, "EXPLAIN actions=1 ", physical)
+	actions := explainCompiledQuery(t, queryContext, connection, explainActionsPrefix, physical)
 	if strings.Contains(actions, "ArrayJoin") {
 		t.Fatalf("if expands event rows:\n%s", actions)
 	}

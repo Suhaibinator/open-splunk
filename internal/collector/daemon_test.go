@@ -265,7 +265,7 @@ func TestDaemonRestartDoesNotRequeuePendingWALSourcePrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, writeErr := io.WriteString(file, `{"message":"four","n":4}`+"\n")
+	_, writeErr := io.WriteString(file, "{\"message\":\"four\",\"n\":4}\n")
 	syncErr := file.Sync()
 	closeErr := file.Close()
 	if err := errors.Join(writeErr, syncErr, closeErr); err != nil {

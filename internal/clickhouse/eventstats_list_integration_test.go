@@ -456,7 +456,7 @@ func testEventStatsListAgainstClickHouse(
 		t,
 		ctx,
 		connection,
-		"EXPLAIN actions=1 ",
+		explainActionsPrefix,
 		physical,
 	)
 	// ClickHouse repeats a materialized CTE's action description for its

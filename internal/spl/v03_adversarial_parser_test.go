@@ -348,7 +348,10 @@ func TestV03SourceDeterminedResourceBoundaries(t *testing.T) {
 		var boundary strings.Builder
 		boundary.WriteString("index=main")
 		for stage := range MaximumConcatenationOperandsPerQuery / MaximumConcatenationOperands {
-			boundary.WriteString(` | strcat ` + strings.Join(strcatOperands, " ") + ` output` + strconv.Itoa(stage))
+			boundary.WriteString(` | strcat `)
+			boundary.WriteString(strings.Join(strcatOperands, " "))
+			boundary.WriteString(` output`)
+			boundary.WriteString(strconv.Itoa(stage))
 		}
 		if _, err := Parse(boundary.String()); err != nil {
 			t.Fatalf("strcat at aggregate operand boundary: %v", err)
@@ -399,7 +402,9 @@ func TestV03SourceDeterminedResourceBoundaries(t *testing.T) {
 		var aggregate strings.Builder
 		aggregate.WriteString("index=main")
 		for range 5 {
-			aggregate.WriteString(` | regex message="` + pattern + `"`)
+			aggregate.WriteString(` | regex message="`)
+			aggregate.WriteString(pattern)
+			aggregate.WriteString(`"`)
 		}
 		diagnosticSource := `"` + pattern + `"`
 		_, err := Parse(aggregate.String())

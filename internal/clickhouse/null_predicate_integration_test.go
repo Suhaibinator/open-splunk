@@ -183,7 +183,7 @@ func testNullPredicatesAgainstClickHouse(
 	}
 
 	physical := compile(base + ` | where isnull(probe) OR isnotnull(probe) | table event_id`)
-	actions := explainCompiledQuery(t, ctx, connection, "EXPLAIN actions=1 ", physical)
+	actions := explainCompiledQuery(t, ctx, connection, explainActionsPrefix, physical)
 	if strings.Contains(actions, "ArrayJoin") {
 		t.Fatalf("null predicates expand event rows:\n%s", actions)
 	}

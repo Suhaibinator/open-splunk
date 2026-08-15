@@ -484,6 +484,21 @@ jobs:
           -p=1
           -v
 
+      # Runs as its own step so the matrix above keeps its dedicated 4m30s
+      # process deadline. This proves the sealed stats wc-field discovery
+      # budget still admits a knowledge-bearing prefix on the pinned server;
+      # that budget is a planning budget and its floor moves with the release.
+      - name: Execute production stats wildcard inventory discovery
+        env:
+          OPEN_SPLUNK_CLICKHOUSE_INTEGRATION: "1"
+        run: >-
+          go test ./internal/queryexec
+          -run '^TestStatsWildcardInventoryAgainstClickHouse$'
+          -count=1
+          -timeout=2m
+          -p=1
+          -v
+
   spl-compatibility-clickhouse:
     name: SPL compatibility pinned ClickHouse verticals
     runs-on: ubuntu-latest
@@ -868,6 +883,25 @@ jobs:
           -run '^Test(ClickHouseTLSServicePrincipalStartupLifecycle|ClickHouseServicePrincipalLifecycle|IndexDataDeletionCoordinatorAgainstClickHouse|IndexStatisticsReaderAgainstClickHouse|StoreAgainstClickHouse|NumericChartAgainstClickHouse|ChartPercentileAgainstClickHouse|ExpressionV02AgainstClickHouse|ExpressionV02ExecutorManagerAgainstClickHouse|ExecutorAndManagerAgainstClickHouse|StatsByDeferredValidationAdversarialAgainstClickHouse|StatsMultivalueByAgainstClickHouse|StatsMultivalueByExpansionLimitAgainstClickHouse|StatsByUnsupportedCannotHideBehindMissingKeyAgainstClickHouse|StatsByFixedMultivalueStringOrBytesAgainstClickHouse|DeploymentComposePersistentCredentialRotation|DeploymentNativeRecoveryClickHouseLifecycle|BackendIndexDataDeletionLifecycle|BackendVertical|Browser(FixedResultRendering|SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$'
           -count=1
           -timeout=30m
+          -p=1
+          -v
+
+      # Runs as its own step so the 30-minute vertical above keeps its reserved
+      # budget. Both tests own one container each and execute a 10,000-row pivot
+      # under the production executor defaults, which takes well under a minute
+      # per test on a warm image; the deadline below leaves room for a cold pull
+      # and container startup without masking a hang. These pin the row ceiling
+      # the compiler advertises: that landing exactly on it publishes the whole
+      # pivot within the default memory budget, that crossing it fails
+      # atomically, and that the widest published column domain is exact.
+      - name: Test chart transport row ceiling and column domain
+        env:
+          OPEN_SPLUNK_CLICKHOUSE_INTEGRATION: "1"
+        run: >-
+          go test ./internal/queryexec
+          -run '^TestChartBreakTransport(RowCeiling|CeilingLabelDomain)AgainstClickHouse$'
+          -count=1
+          -timeout=6m
           -p=1
           -v
 

@@ -99,7 +99,7 @@ func TestExpressionV02AgainstClickHouse(t *testing.T) {
 			t,
 			queryContext,
 			connection,
-			"EXPLAIN actions=1 ",
+			explainActionsPrefix,
 			compiled,
 		)
 		if strings.Contains(actions, "ArrayJoin") {
