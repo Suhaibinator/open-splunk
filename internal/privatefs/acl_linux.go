@@ -51,7 +51,7 @@ func validateNoExtendedACL(file *os.File) error {
 }
 
 func containsLinuxExtendedACL(attributes []byte) bool {
-	for _, name := range strings.Split(string(attributes), "\x00") {
+	for name := range strings.SplitSeq(string(attributes), "\x00") {
 		if slices.Contains(linuxExtendedACLAttributes, name) {
 			return true
 		}
