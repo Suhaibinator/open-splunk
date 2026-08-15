@@ -683,7 +683,7 @@ func schemaMatchesCompiledQuery(schema searchjobs.Schema, compiled clickhouse.Co
 	}
 	// The remaining bounded runtime-wide operator is chart: one fixed,
 	// plan-time row column followed by at most MaxSeries runtime-named cells.
-	fixedKind, ok := chartRowExportKind(compiled.Chart.RowKind)
+	fixedKind, ok := searchjobs.ChartRowValueKind(compiled.Chart.RowKind)
 	seriesKind, seriesNullable, seriesOK := chartSeriesExportKind(compiled.Chart.ValueKind)
 	if !ok || !seriesOK || compiled.Chart.RowField == "" {
 		return false
@@ -733,26 +733,5 @@ func chartSeriesExportKind(kind clickhouse.ChartValueKind) (searchjobs.ValueKind
 		return searchjobs.ValueKindDouble, true, true
 	default:
 		return searchjobs.ValueKindInvalid, false, false
-	}
-}
-
-func chartRowExportKind(kind clickhouse.ChartRowKind) (searchjobs.ValueKind, bool) {
-	switch kind {
-	case clickhouse.ChartRowKindString:
-		return searchjobs.ValueKindString, true
-	case clickhouse.ChartRowKindSigned:
-		return searchjobs.ValueKindSigned, true
-	case clickhouse.ChartRowKindUnsigned:
-		return searchjobs.ValueKindUnsigned, true
-	case clickhouse.ChartRowKindDouble:
-		return searchjobs.ValueKindDouble, true
-	case clickhouse.ChartRowKindBool:
-		return searchjobs.ValueKindBool, true
-	case clickhouse.ChartRowKindTime:
-		return searchjobs.ValueKindTime, true
-	case clickhouse.ChartRowKindMixed:
-		return searchjobs.ValueKindMixed, true
-	default:
-		return searchjobs.ValueKindInvalid, false
 	}
 }

@@ -200,7 +200,7 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 		handler.next.ServeHTTP(response, request)
 		return
 	}
-	handler.metrics.observeRequest(route.Endpoint)
+	handler.metrics.observeRequest()
 	if err := route.ProtocolError(); err != nil {
 		if route.Allow != "" {
 			response.Header().Set("Allow", route.Allow)

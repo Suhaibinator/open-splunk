@@ -32,10 +32,7 @@ func NewBodyReader(source io.Reader, contentEncoding string, limits Limits) (io.
 	buffered := bufio.NewReaderSize(compressed, 32<<10)
 	member, err := gzip.NewReader(buffered)
 	if err != nil {
-		if _, ok := ErrorKindOf(err); ok {
-			return nil, err
-		}
-		return nil, NewProtocolError(ErrorInvalidCompressedBody, err)
+		return nil, wrapProtocolError(ErrorInvalidCompressedBody, err)
 	}
 	member.Multistream(false)
 	singleMember := &singleGzipMemberReader{member: member, source: buffered}
@@ -112,11 +109,7 @@ func (reader *singleGzipMemberReader) Read(destination []byte) (int, error) {
 		return n, nil
 	}
 	if !errors.Is(err, io.EOF) {
-		if _, ok := ErrorKindOf(err); ok {
-			reader.failed = err
-		} else {
-			reader.failed = NewProtocolError(ErrorInvalidCompressedBody, err)
-		}
+		reader.failed = wrapProtocolError(ErrorInvalidCompressedBody, err)
 		return n, reader.failed
 	}
 	if n > 0 {
@@ -131,11 +124,7 @@ func (reader *singleGzipMemberReader) Read(destination []byte) (int, error) {
 		return 0, reader.failed
 	}
 	if !errors.Is(trailingErr, io.EOF) {
-		if _, ok := ErrorKindOf(trailingErr); ok {
-			reader.failed = trailingErr
-		} else {
-			reader.failed = NewProtocolError(ErrorInvalidCompressedBody, trailingErr)
-		}
+		reader.failed = wrapProtocolError(ErrorInvalidCompressedBody, trailingErr)
 		return 0, reader.failed
 	}
 	reader.finished = true

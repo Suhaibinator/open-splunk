@@ -768,6 +768,22 @@ func (manager *Manager) Create(ctx context.Context, access searchjobs.AccessScop
 
 	jobContext, jobCancel := context.WithCancel(manager.ctx)
 	stopRequestCancellation := context.AfterFunc(ctx, jobCancel)
+	abort := func(cause error) error {
+		stopRequestCancellation()
+		jobCancel()
+		return cause
+	}
+	abortLifecycle := func(cause error) error {
+		stopRequestCancellation()
+		jobCancel()
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if manager.isClosed() {
+			return ErrClosed
+		}
+		return cause
+	}
 	lease, acquireErr := manager.source.AcquireResultsFor(jobContext, access, normalized.SearchJobID)
 	if acquireErr != nil {
 		stopRequestCancellation()
@@ -784,15 +800,7 @@ func (manager *Manager) Create(ctx context.Context, access searchjobs.AccessScop
 		return Job{}, mapSourceError(acquireErr)
 	}
 	if nilcheck.IsNil(lease) {
-		stopRequestCancellation()
-		jobCancel()
-		if err := ctx.Err(); err != nil {
-			return Job{}, err
-		}
-		if manager.isClosed() {
-			return Job{}, ErrClosed
-		}
-		return Job{}, ErrSourceUnavailable
+		return Job{}, abortLifecycle(ErrSourceUnavailable)
 	}
 	closeLease := true
 	defer func() {
@@ -801,76 +809,48 @@ func (manager *Manager) Create(ctx context.Context, access searchjobs.AccessScop
 		}
 	}()
 	if lease.ResultsTruncated() {
-		stopRequestCancellation()
-		jobCancel()
-		if err := ctx.Err(); err != nil {
-			return Job{}, err
-		}
-		if manager.isClosed() {
-			return Job{}, ErrClosed
-		}
-		return Job{}, ErrSourceTruncated
+		return Job{}, abortLifecycle(ErrSourceTruncated)
 	}
 	schema := lease.Schema()
 	if !validSourceSchemaCardinality(schema) {
-		stopRequestCancellation()
-		jobCancel()
 		if len(schema.Columns) == 0 {
-			return Job{}, ErrSourceUnavailable
+			return Job{}, abort(ErrSourceUnavailable)
 		}
-		return Job{}, ErrInvalidColumns
+		return Job{}, abort(ErrInvalidColumns)
 	}
 	compilerVersion, err := admittedCompilerVersion(lease)
 	if err != nil {
-		stopRequestCancellation()
-		jobCancel()
-		return Job{}, ErrSourceUnavailable
+		return Job{}, abort(ErrSourceUnavailable)
 	}
 	knowledgeSnapshot, err := admittedKnowledgeSnapshot(lease)
 	if err != nil {
-		stopRequestCancellation()
-		jobCancel()
-		return Job{}, ErrSourceUnavailable
+		return Job{}, abort(ErrSourceUnavailable)
 	}
 	selection, err := selectColumns(schema, normalized.Columns)
 	if err != nil {
-		stopRequestCancellation()
-		jobCancel()
-		return Job{}, err
+		return Job{}, abort(err)
 	}
 	if err := validateResolvedColumns(selection.columns); err != nil {
-		stopRequestCancellation()
-		jobCancel()
-		return Job{}, err
+		return Job{}, abort(err)
 	}
 	resolvedMetadata, err := resolvedMetadataBytes(manager.artifactDir, access, normalized.SearchJobID, selection.columns)
 	if err != nil {
-		stopRequestCancellation()
-		jobCancel()
-		return Job{}, err
+		return Job{}, abort(err)
 	}
 	knowledgeMetadata, err := knowledgeSnapshotMetadataBytes(knowledgeSnapshot)
 	if err != nil {
-		stopRequestCancellation()
-		jobCancel()
-		return Job{}, ErrSourceUnavailable
+		return Job{}, abort(ErrSourceUnavailable)
 	}
 	resolvedMetadata, ok := checkedAddUint64(resolvedMetadata, knowledgeMetadata)
 	if !ok {
-		stopRequestCancellation()
-		jobCancel()
-		return Job{}, ErrCapacity
+		return Job{}, abort(ErrCapacity)
 	}
 	resolvedMetadata, ok = checkedAddUint64(resolvedMetadata, uint64(len(compilerVersion)))
 	if !ok {
-		stopRequestCancellation()
-		jobCancel()
-		return Job{}, ErrCapacity
+		return Job{}, abort(ErrCapacity)
 	}
 	if err := manager.reconcileAdmissionMetadata(id, resolvedMetadata); err != nil {
-		stopRequestCancellation()
-		jobCancel()
-		return Job{}, err
+		return Job{}, abort(err)
 	}
 	normalized.Columns = make([]string, len(selection.columns))
 	for index, column := range selection.columns {
@@ -1706,11 +1686,7 @@ func (manager *Manager) reconcileEntryBytesLocked(entry *jobEntry, retained uint
 	entry.accountedBytes = retained
 	manager.budgetMu.Lock()
 	defer manager.budgetMu.Unlock()
-	if previous <= manager.totalBytes {
-		manager.totalBytes -= previous
-	} else {
-		manager.totalBytes = 0
-	}
+	manager.totalBytes = subtractFloor(manager.totalBytes, previous)
 	if manager.totalBytes <= manager.maxTotalBytes && retained <= manager.maxTotalBytes-manager.totalBytes {
 		manager.totalBytes += retained
 	} else {
@@ -1732,11 +1708,7 @@ func (manager *Manager) releaseEntryBytesIfUnbackedLocked(entry *jobEntry) {
 	previous := entry.accountedBytes
 	entry.accountedBytes = 0
 	manager.budgetMu.Lock()
-	if previous <= manager.totalBytes {
-		manager.totalBytes -= previous
-	} else {
-		manager.totalBytes = 0
-	}
+	manager.totalBytes = subtractFloor(manager.totalBytes, previous)
 	manager.budgetMu.Unlock()
 }
 

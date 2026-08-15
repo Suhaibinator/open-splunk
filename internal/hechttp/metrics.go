@@ -81,40 +81,32 @@ func (metrics *Metrics) Snapshot() MetricsSnapshot {
 	return result
 }
 
-func (metrics *Metrics) observeRequest(hec.Endpoint) {
+// bump increments one aggregate counter under the observation boundary.
+func (metrics *Metrics) bump(counter *atomic.Uint64) {
 	metrics.observationMu.RLock()
-	metrics.requests.Add(1)
+	counter.Add(1)
 	metrics.observationMu.RUnlock()
+}
+func (metrics *Metrics) observeRequest() {
+	metrics.bump(&metrics.requests)
 }
 func (metrics *Metrics) observeAuthenticationFailure() {
-	metrics.observationMu.RLock()
-	metrics.authenticationFailures.Add(1)
-	metrics.observationMu.RUnlock()
+	metrics.bump(&metrics.authenticationFailures)
 }
 func (metrics *Metrics) observeDecodeFailure() {
-	metrics.observationMu.RLock()
-	metrics.decodeFailures.Add(1)
-	metrics.observationMu.RUnlock()
+	metrics.bump(&metrics.decodeFailures)
 }
 func (metrics *Metrics) observeEventPolicyFailure() {
-	metrics.observationMu.RLock()
-	metrics.eventPolicyFailures.Add(1)
-	metrics.observationMu.RUnlock()
+	metrics.bump(&metrics.eventPolicyFailures)
 }
 func (metrics *Metrics) observeRateLimitedRequest() {
-	metrics.observationMu.RLock()
-	metrics.rateLimitedRequests.Add(1)
-	metrics.observationMu.RUnlock()
+	metrics.bump(&metrics.rateLimitedRequests)
 }
 func (metrics *Metrics) observeStagingFailure() {
-	metrics.observationMu.RLock()
-	metrics.stagingFailures.Add(1)
-	metrics.observationMu.RUnlock()
+	metrics.bump(&metrics.stagingFailures)
 }
 func (metrics *Metrics) observeShutdownRejection() {
-	metrics.observationMu.RLock()
-	metrics.shutdownRejections.Add(1)
-	metrics.observationMu.RUnlock()
+	metrics.bump(&metrics.shutdownRejections)
 }
 func (metrics *Metrics) observeStagingLatency(duration time.Duration) {
 	if duration > 0 {
@@ -144,8 +136,6 @@ func (metrics *Metrics) observeFailure(code hec.ResultCode) {
 		return
 	}
 	if code > hec.ResultSuccess && int(code) < len(metrics.protocolFailures) {
-		metrics.observationMu.RLock()
-		metrics.protocolFailures[code].Add(1)
-		metrics.observationMu.RUnlock()
+		metrics.bump(&metrics.protocolFailures[code])
 	}
 }

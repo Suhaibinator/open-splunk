@@ -111,10 +111,7 @@ func DecodeAcknowledgmentRequest(source io.Reader, limits Limits) (Acknowledgmen
 }
 
 func acknowledgmentDecodeError(err error) error {
-	if _, ok := ErrorKindOf(err); ok {
-		return err
-	}
-	return NewProtocolError(ErrorInvalidDataFormat, err)
+	return wrapProtocolError(ErrorInvalidDataFormat, err)
 }
 
 func containsJSONFractionOrExponent(value string) bool {

@@ -680,11 +680,7 @@ func (s *Service) acquireStreamAdmission(
 
 	byCollector := s.admissions[subjectKey]
 	previous, replacing := byCollector[collectorKey]
-	var distinctAdmissions uint32
-	for range byCollector {
-		distinctAdmissions++
-	}
-	if !replacing && distinctAdmissions >= s.config.MaxStreamsPerSubject {
+	if !replacing && uint64(len(byCollector)) >= uint64(s.config.MaxStreamsPerSubject) {
 		return collectorStreamAdmission{}, false
 	}
 	if s.nextAdmission == math.MaxUint64 {
@@ -1159,9 +1155,14 @@ type resolvedIndexPolicy struct {
 	ingestionRateLimits ingestquota.Limits
 }
 
-func (s *Service) resolveAuthorizedIndexPolicies(
+// resolveIndexPolicies is the shared bound-sort-resolve pass over an
+// authorization's index policies.
+func resolveIndexPolicies(
 	policies []IndexPolicy,
 	reference time.Time,
+	validator *Validator,
+	limits Limits,
+	defaultRetention time.Duration,
 ) (resolvedIndexAuthority, bool) {
 	if len(policies) > maximumAuthorizedCollectorIndexes {
 		return resolvedIndexAuthority{}, false
@@ -1177,7 +1178,7 @@ func (s *Service) resolveAuthorizedIndexPolicies(
 	for _, policy := range detached {
 		retention, policyErr := policy.ResolveRetentionAt(
 			reference,
-			s.config.DefaultIndexRetention,
+			defaultRetention,
 		)
 		if policyErr != nil {
 			return resolvedIndexAuthority{}, false
@@ -1185,15 +1186,22 @@ func (s *Service) resolveAuthorizedIndexPolicies(
 		if _, duplicate := result.byName[policy.Name]; duplicate {
 			return resolvedIndexAuthority{}, false
 		}
-		effectiveLimits := effectiveIndexLimits(s.config.Limits, policy.Limits)
+		effectiveLimits := effectiveIndexLimits(limits, policy.Limits)
 		result.byName[policy.Name] = resolvedIndexPolicy{
 			defaultSourcetype:   policy.DefaultSourcetype,
-			validator:           s.validator.withLimits(effectiveLimits),
+			validator:           validator.withLimits(effectiveLimits),
 			retentionPeriod:     retention,
 			ingestionRateLimits: policy.IngestionRateLimits,
 		}
 	}
 	return result, true
+}
+
+func (s *Service) resolveAuthorizedIndexPolicies(
+	policies []IndexPolicy,
+	reference time.Time,
+) (resolvedIndexAuthority, bool) {
+	return resolveIndexPolicies(policies, reference, s.validator, s.config.Limits, s.config.DefaultIndexRetention)
 }
 
 func authorizedIndexPolicyNames(policies []IndexPolicy) []string {

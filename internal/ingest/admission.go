@@ -5,7 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"sort"
+	"slices"
+	"sync/atomic"
 	"time"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
@@ -74,6 +75,7 @@ type AdmissionPreparer struct {
 	validator             *Validator
 	defaultIndexRetention time.Duration
 	store                 StagingEventStore
+	authority             atomic.Pointer[compiledEventAuthority]
 }
 
 func NewAdmissionPreparer(
@@ -213,7 +215,7 @@ func (preparer *AdmissionPreparer) Prepare(request AdmissionRequest) (StoreBatch
 		if !sizeOK || sourceSize == 0 {
 			return StoreBatch{}, errors.New("ingestion admission source byte charge is outside bounds")
 		}
-		normalized, eventErr := policy.validator.ValidateAndNormalizeEvent(
+		normalized, eventErr := policy.validator.validateAndNormalizeEventWithSize(
 			candidate.Event,
 			EventContext{
 				ReceivedAt:         request.ReceivedAt,
@@ -224,6 +226,7 @@ func (preparer *AdmissionPreparer) Prepare(request AdmissionRequest) (StoreBatch
 				CollectorID:        request.CollectorID,
 				BatchID:            request.BatchID,
 			},
+			sourceSize,
 		)
 		if eventErr != nil {
 			return failure(eventErr)
@@ -347,30 +350,47 @@ func (preparer *AdmissionPreparer) resolveAuthority(
 	if len(authorization.AuthorizedIndexes) == 0 {
 		return admissionAuthority{}, ErrNoActiveIndexAuthority
 	}
-	if len(authorization.AuthorizedIndexes) > maximumAuthorizedCollectorIndexes {
+	resolved, ok := resolveIndexPolicies(
+		authorization.AuthorizedIndexes,
+		reference,
+		preparer.validator,
+		preparer.limits,
+		preparer.defaultIndexRetention,
+	)
+	if !ok {
 		return admissionAuthority{}, ErrInvalidIndexAuthority
 	}
-	ordered := append([]IndexPolicy(nil), authorization.AuthorizedIndexes...)
-	sort.Slice(ordered, func(left, right int) bool { return ordered[left].Name < ordered[right].Name })
-	policies := make(map[string]resolvedIndexPolicy, len(ordered))
-	for _, policy := range ordered {
-		retention, err := policy.ResolveRetentionAt(reference, preparer.defaultIndexRetention)
-		if err != nil {
-			return admissionAuthority{}, ErrInvalidIndexAuthority
-		}
-		if _, duplicate := policies[policy.Name]; duplicate {
-			return admissionAuthority{}, ErrInvalidIndexAuthority
-		}
-		policies[policy.Name] = resolvedIndexPolicy{
-			defaultSourcetype:   policy.DefaultSourcetype,
-			validator:           preparer.validator.withLimits(effectiveIndexLimits(preparer.limits, policy.Limits)),
-			retentionPeriod:     retention,
-			ingestionRateLimits: policy.IngestionRateLimits,
-		}
-	}
-	events, err := compileEventAuthorization(authorization)
+	events, err := preparer.eventAuthorization(authorization)
 	if err != nil {
 		return admissionAuthority{}, ErrInvalidEventAuthority
 	}
-	return admissionAuthority{ordered: ordered, policies: policies, events: events}, nil
+	return admissionAuthority{ordered: resolved.policies, policies: resolved.byName, events: events}, nil
+}
+
+// compiledEventAuthority caches one compiled event-authorization matcher keyed
+// by the pattern lists it was compiled from.
+type compiledEventAuthority struct {
+	hosts   []string
+	sources []string
+	matcher eventAuthorizationMatcher
+}
+
+// eventAuthorization returns the compiled matcher for authorization, reusing
+// the previous compilation when the pattern lists are unchanged.
+func (preparer *AdmissionPreparer) eventAuthorization(authorization Authorization) (eventAuthorizationMatcher, error) {
+	if cached := preparer.authority.Load(); cached != nil &&
+		slices.Equal(cached.hosts, authorization.AllowedHostRegexes) &&
+		slices.Equal(cached.sources, authorization.AllowedSourceRegexes) {
+		return cached.matcher, nil
+	}
+	matcher, err := compileEventAuthorization(authorization)
+	if err != nil {
+		return eventAuthorizationMatcher{}, err
+	}
+	preparer.authority.Store(&compiledEventAuthority{
+		hosts:   slices.Clone(authorization.AllowedHostRegexes),
+		sources: slices.Clone(authorization.AllowedSourceRegexes),
+		matcher: matcher,
+	})
+	return matcher, nil
 }

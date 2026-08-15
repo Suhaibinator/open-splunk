@@ -4,8 +4,6 @@ import (
 	"runtime"
 	"sync"
 	"testing"
-
-	"github.com/Suhaibinator/open-splunk/internal/hec"
 )
 
 func TestMetricsSnapshotIsCoherentDuringConcurrentUpdates(t *testing.T) {
@@ -18,7 +16,7 @@ func TestMetricsSnapshotIsCoherentDuringConcurrentUpdates(t *testing.T) {
 		go func() {
 			defer writersDone.Done()
 			for range observationsPerWriter {
-				metrics.observeRequest(hec.EndpointEvent)
+				metrics.observeRequest()
 				metrics.observeAccepted(2, 3)
 			}
 		}()

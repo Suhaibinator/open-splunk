@@ -131,6 +131,15 @@ func ParseEnvelopeTime(envelope Envelope, receivedAt time.Time) (time.Time, bool
 		}
 		return time.Unix(0, nanoseconds).UTC(), false, nil
 	}
+	parsed, err := parsePresentEnvelopeTime(envelope)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	return parsed, true, nil
+}
+
+// parsePresentEnvelopeTime parses the present time member of an envelope.
+func parsePresentEnvelopeTime(envelope Envelope) (time.Time, error) {
 	var text string
 	switch envelope.Time.Value.Kind {
 	case JSONNumber:
@@ -138,32 +147,21 @@ func ParseEnvelopeTime(envelope Envelope, receivedAt time.Time) (time.Time, bool
 	case JSONString:
 		text = envelope.Time.Value.StringValue
 	default:
-		return time.Time{}, false, NewEventError(ErrorInvalidDataFormat, envelope.Number, errors.New("HEC time has the wrong JSON type"))
+		return time.Time{}, NewEventError(ErrorInvalidDataFormat, envelope.Number, errors.New("HEC time has the wrong JSON type"))
 	}
 	nanoseconds, err := ParseEpochNanoseconds(text)
 	if err != nil {
-		return time.Time{}, false, NewEventError(ErrorInvalidDataFormat, envelope.Number, err)
+		return time.Time{}, NewEventError(ErrorInvalidDataFormat, envelope.Number, err)
 	}
-	return time.Unix(0, nanoseconds).UTC(), true, nil
+	return time.Unix(0, nanoseconds).UTC(), nil
 }
 
 func validateExplicitTime(envelope Envelope) error {
 	if !envelope.Time.Present {
 		return nil
 	}
-	var text string
-	switch envelope.Time.Value.Kind {
-	case JSONNumber:
-		text = envelope.Time.Value.NumberValue.String()
-	case JSONString:
-		text = envelope.Time.Value.StringValue
-	default:
-		return NewEventError(ErrorInvalidDataFormat, envelope.Number, errors.New("HEC time has the wrong JSON type"))
-	}
-	if _, err := ParseEpochNanoseconds(text); err != nil {
-		return NewEventError(ErrorInvalidDataFormat, envelope.Number, err)
-	}
-	return nil
+	_, err := parsePresentEnvelopeTime(envelope)
+	return err
 }
 
 // ParseEpochNanoseconds converts the complete JSON-number grammar from epoch

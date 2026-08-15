@@ -167,6 +167,15 @@ func ErrorKindOf(err error) (ErrorKind, bool) {
 	return failure.Kind, true
 }
 
+// wrapProtocolError classifies err as kind unless it already carries a HEC
+// classification.
+func wrapProtocolError(kind ErrorKind, err error) error {
+	if _, ok := ErrorKindOf(err); ok {
+		return err
+	}
+	return NewProtocolError(kind, err)
+}
+
 // IsErrorKind reports whether err contains the requested HEC classification.
 func IsErrorKind(err error, kind ErrorKind) bool {
 	got, ok := ErrorKindOf(err)

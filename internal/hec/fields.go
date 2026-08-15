@@ -16,10 +16,6 @@ const (
 	MaximumFieldArrayElements    = 1_024
 	MaximumJSONNumberBytes       = 128
 	MaximumJSONExponentMagnitude = 1_024
-	// Backward-compatible names for the typed-field API. The lexical bound is
-	// shared by every number in a HEC envelope, not only indexed fields.
-	MaximumFieldNumberBytes       = MaximumJSONNumberBytes
-	MaximumFieldExponentMagnitude = MaximumJSONExponentMagnitude
 )
 
 // FieldNumberKind is the exact HEC-to-TypedValue numeric classification.

@@ -377,14 +377,26 @@ func newExactRedactorFromSet(
 // ValidateAndNormalizeEvent validates a collector event and returns an
 // independent, recursively redacted clone with server-derived metadata.
 func (v *Validator) ValidateAndNormalizeEvent(event *opensplunkv1.LogEvent, ctx EventContext) (*StoredEvent, *EventError) {
+	size, sizeOK := protobufSizeUint64(event)
+	if !sizeOK {
+		return nil, eventFailure(
+			opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_EVENT_TOO_LARGE,
+			"event exceeds the maximum encoded size", "event", "event_too_large",
+		)
+	}
+	return v.validateAndNormalizeEventWithSize(event, ctx, size)
+}
+
+// validateAndNormalizeEventWithSize is ValidateAndNormalizeEvent for callers
+// which already computed the exact serialized event size.
+func (v *Validator) validateAndNormalizeEventWithSize(event *opensplunkv1.LogEvent, ctx EventContext, size uint64) (*StoredEvent, *EventError) {
 	if event == nil {
 		return nil, eventFailure(
 			opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_VALUE_INVALID,
 			"event is required", "event", "required",
 		)
 	}
-	size, sizeOK := protobufSizeUint64(event)
-	if !sizeOK || size > v.limits.MaxEventBytes {
+	if size > v.limits.MaxEventBytes {
 		return nil, eventFailure(
 			opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_EVENT_TOO_LARGE,
 			"event exceeds the maximum encoded size", "event", "event_too_large",
@@ -463,7 +475,7 @@ func (v *Validator) ValidateAndNormalizeEvent(event *opensplunkv1.LogEvent, ctx 
 			"field_metadata_too_large",
 		)
 	}
-	size, sizeOK = protobufSizeUint64(cloned)
+	size, sizeOK := protobufSizeUint64(cloned)
 	if !sizeOK || size > v.limits.MaxEventBytes {
 		return nil, eventFailure(
 			opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_EVENT_TOO_LARGE,
@@ -550,14 +562,13 @@ func (v *Validator) validateObject(object *opensplunkv1.TypedObject, path string
 	}
 	seen := make(map[string]struct{}, len(object.GetFields()))
 	for i, field := range object.GetFields() {
-		fieldPath := fmt.Sprintf("%s[%d]", path, i)
 		if field == nil {
 			return eventFailure(
 				opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_VALUE_INVALID,
-				"typed object contains a nil field", fieldPath, "required",
+				"typed object contains a nil field", fmt.Sprintf("%s[%d]", path, i), "required",
 			)
 		}
-		fieldPath = joinFieldPath(path, field.GetName(), i)
+		fieldPath := joinFieldPath(path, field.GetName(), i)
 		if errCode := validateFieldName(field.GetName(), v.limits.MaxFieldNameBytes); errCode != "" {
 			return eventFailure(
 				opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_FIELD_NAME_INVALID,

@@ -751,7 +751,7 @@ func (v *Validator) rawSecretMatchBefore(raw []byte, delimiter int) (redactionMa
 		quotedLowerBound++
 	}
 	if quotedName, ok := rawQuotedKeyBefore(raw, quotedKeyEnd, quotedLowerBound); ok {
-		return v.classifyRawSensitiveName(quotedName, true), true, false
+		return v.matchSensitiveName(quotedName, true), true, false
 	}
 	if match, parsed := v.rawEscapedQuotedSecretMatchBefore(raw, quotedKeyEnd, quotedLowerBound, quotedKeyBudget); parsed {
 		return match, true, match.kind != rawSecretNone
@@ -783,7 +783,7 @@ func (v *Validator) rawSecretMatchBefore(raw []byte, delimiter int) (redactionMa
 	if keyStart == keyEnd {
 		return redactionMatch{}, false, false
 	}
-	if match := v.classifyRawSensitiveName(string(raw[keyStart:keyEnd]), true); match.kind != rawSecretNone {
+	if match := v.matchSensitiveName(string(raw[keyStart:keyEnd]), true); match.kind != rawSecretNone {
 		return match, false, false
 	}
 
@@ -806,7 +806,7 @@ func (v *Validator) rawSecretMatchBefore(raw []byte, delimiter int) (redactionMa
 		if previousStart == separatorStart {
 			break
 		}
-		if match := v.classifyRawSensitiveName(string(raw[previousStart:keyEnd]), false); match.kind != rawSecretNone {
+		if match := v.matchSensitiveName(string(raw[previousStart:keyEnd]), false); match.kind != rawSecretNone {
 			return match, false, false
 		}
 		extendedStart = previousStart
@@ -922,7 +922,7 @@ func (v *Validator) rawEscapedQuotedSecretMatchBefore(
 func (v *Validator) classifyRecursivelyEncodedKey(decoded string) redactionMatch {
 	for depth := 0; ; depth++ {
 		if len(decoded) <= int(v.limits.MaxFieldNameBytes) {
-			if match := v.classifyRawSensitiveName(decoded, true); match.kind != rawSecretNone {
+			if match := v.matchSensitiveName(decoded, true); match.kind != rawSecretNone {
 				return match
 			}
 		}
@@ -1002,13 +1002,6 @@ func rawEscapeLayer(backslashRun int) int {
 		layer++
 	}
 	return layer
-}
-
-func (v *Validator) classifyRawSensitiveName(
-	name string,
-	allowComponentMatch bool,
-) redactionMatch {
-	return v.matchSensitiveName(name, allowComponentMatch)
 }
 
 func rawSecretKindForName(name string) rawSecretKind {

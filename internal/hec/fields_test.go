@@ -32,7 +32,7 @@ func TestClassifyFieldNumberUsesExactHECTypedDomain(t *testing.T) {
 	}
 	invalid := []string{
 		"", "-9223372036854775809", "18446744073709551616", "1e1025", "1e-1025",
-		strings.Repeat("1", MaximumFieldNumberBytes+1), "not-a-number", "01", "+1", "1e+",
+		strings.Repeat("1", MaximumJSONNumberBytes+1), "not-a-number", "01", "+1", "1e+",
 	}
 	for _, text := range invalid {
 		if got, err := ClassifyFieldNumber(json.Number(text)); err == nil || got != (FieldNumber{}) {
@@ -87,7 +87,7 @@ func FuzzClassifyFieldNumber(f *testing.F) {
 	f.Add("1.25e+2")
 	f.Add("18446744073709551616")
 	f.Fuzz(func(t *testing.T, text string) {
-		if len(text) > MaximumFieldNumberBytes+1 {
+		if len(text) > MaximumJSONNumberBytes+1 {
 			return
 		}
 		got, err := ClassifyFieldNumber(json.Number(text))
