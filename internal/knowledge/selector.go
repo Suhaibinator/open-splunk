@@ -101,7 +101,7 @@ type Pattern struct {
 // and backslash may escape only '*', '?', or backslash. Matching is anchored
 // and binary-case-sensitive. Consecutive stars collapse canonically.
 func NormalizePattern(source string) (Pattern, error) {
-	value := trimASCIIWhitespace(source)
+	value := TrimASCIIWhitespace(source)
 	if value == "" {
 		return Pattern{}, fmt.Errorf("%w: pattern is empty", ErrInvalidSelector)
 	}
@@ -133,7 +133,7 @@ func NormalizePattern(source string) (Pattern, error) {
 			escaped = true
 			continue
 		}
-		if isPinnedControl(character) {
+		if IsPinnedControl(character) {
 			return Pattern{}, fmt.Errorf("%w: pattern contains a pinned C0/C1 control", ErrInvalidSelector)
 		}
 		switch character {

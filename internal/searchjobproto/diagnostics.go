@@ -19,25 +19,32 @@ func Diagnostics(diagnostics []searchjobs.Diagnostic) []*opensplunkv1.Diagnostic
 			Message:     diagnostic.Message,
 			Suggestions: slices.Clone(diagnostic.Suggestions),
 		}
-		if diagnostic.ValidSourceRange() {
-			converted.SourceRange = &opensplunkv1.SourceRange{
-				// #nosec G115 -- ValidSourceRange proves offsets non-negative
-				// and protobuf-representable line and column values.
-				Start: &opensplunkv1.SourcePosition{
-					ByteOffset: uint64(diagnostic.ByteOffset),
-					Line:       uint32(diagnostic.Line),
-					Column:     uint32(diagnostic.Column),
-				},
-				// #nosec G115 -- ValidSourceRange proves offsets non-negative
-				// and protobuf-representable line and column values.
-				End: &opensplunkv1.SourcePosition{
-					ByteOffset: uint64(diagnostic.EndByteOffset),
-					Line:       uint32(diagnostic.EndLine),
-					Column:     uint32(diagnostic.EndColumn),
-				},
-			}
-		}
+		converted.SourceRange = SourceRange(diagnostic)
 		result[index] = converted
 	}
 	return result
+}
+
+// SourceRange projects a diagnostic's validated source coordinates, or nil
+// when the diagnostic carries no representable range.
+func SourceRange(diagnostic searchjobs.Diagnostic) *opensplunkv1.SourceRange {
+	if !diagnostic.ValidSourceRange() {
+		return nil
+	}
+	return &opensplunkv1.SourceRange{
+		// #nosec G115 -- ValidSourceRange proves offsets non-negative
+		// and protobuf-representable line and column values.
+		Start: &opensplunkv1.SourcePosition{
+			ByteOffset: uint64(diagnostic.ByteOffset),
+			Line:       uint32(diagnostic.Line),
+			Column:     uint32(diagnostic.Column),
+		},
+		// #nosec G115 -- ValidSourceRange proves offsets non-negative
+		// and protobuf-representable line and column values.
+		End: &opensplunkv1.SourcePosition{
+			ByteOffset: uint64(diagnostic.EndByteOffset),
+			Line:       uint32(diagnostic.EndLine),
+			Column:     uint32(diagnostic.EndColumn),
+		},
+	}
 }

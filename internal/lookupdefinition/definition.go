@@ -5,7 +5,6 @@ package lookupdefinition
 import (
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -45,7 +44,7 @@ func Normalize(input *opensplunkv1.LookupDefinition, columns []string) (Normaliz
 	if input == nil {
 		return Normalized{}, invalid("definition", "is required")
 	}
-	if !validIdentity(input.GetAppId(), 128) {
+	if !ValidIdentity(input.GetAppId(), 128) {
 		return Normalized{}, invalid("app_id", "must be a nonempty bounded canonical identifier")
 	}
 	if !IsValidLookupName(input.GetName()) {
@@ -101,6 +100,15 @@ func Normalize(input *opensplunkv1.LookupDefinition, columns []string) (Normaliz
 		},
 		Selector: selector,
 	}, nil
+}
+
+// KeyColumns projects the ordered lookup-side key field names.
+func KeyColumns(definition *opensplunkv1.LookupDefinition) []string {
+	columns := make([]string, len(definition.GetKeyMappings()))
+	for index, mapping := range definition.GetKeyMappings() {
+		columns[index] = mapping.GetLookupField()
+	}
+	return columns
 }
 
 func normalizeMappings(kind mappingKind, path string, input []*opensplunkv1.LookupFieldMapping, columns map[string]struct{}, minimum, maximum int) ([]*opensplunkv1.LookupFieldMapping, error) {
@@ -243,7 +251,10 @@ func isLookupOutputMarker(value string) bool {
 	return strings.EqualFold(value, "OUTPUT") || strings.EqualFold(value, "OUTPUTNEW")
 }
 
-func validIdentity(value string, maximum int) bool {
+// ValidIdentity reports whether value is a bounded dotted lookup-family
+// identifier: UTF-8, nonempty, at most maximum bytes, alphanumeric first byte,
+// and thereafter alphanumeric or one of . _ : -
+func ValidIdentity(value string, maximum int) bool {
 	if value == "" || len(value) > maximum || !utf8.ValidString(value) {
 		return false
 	}
@@ -356,11 +367,4 @@ func normalizeSelector(input *opensplunkv1.KnowledgeSelector) (*knowledge.Select
 
 func invalid(path, message string) error {
 	return fmt.Errorf("%w: %s %s", ErrInvalid, path, message)
-}
-
-// SameMappings reports exact ordered mapping equality.
-func SameMappings(left, right []*opensplunkv1.LookupFieldMapping) bool {
-	return slices.EqualFunc(left, right, func(a, b *opensplunkv1.LookupFieldMapping) bool {
-		return a != nil && b != nil && a.GetLookupField() == b.GetLookupField() && a.GetEventField() == b.GetEventField()
-	})
 }

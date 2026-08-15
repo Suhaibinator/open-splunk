@@ -84,7 +84,7 @@ func (destination FieldDestination) String() string {
 }
 
 func normalizeBoundedText(source string, maximumBytes int, label string) (string, error) {
-	value := trimASCIIWhitespace(source)
+	value := TrimASCIIWhitespace(source)
 	if value == "" {
 		return "", fmt.Errorf("%w: %s is empty", ErrInvalidText, label)
 	}
@@ -95,21 +95,37 @@ func normalizeBoundedText(source string, maximumBytes int, label string) (string
 		return "", fmt.Errorf("%w: %s is not UTF-8", ErrInvalidText, label)
 	}
 	for _, character := range value {
-		if isPinnedControl(character) {
+		if IsPinnedControl(character) {
 			return "", fmt.Errorf("%w: %s contains a pinned C0/C1 control", ErrInvalidText, label)
 		}
 	}
 	return value, nil
 }
 
-// trimASCIIWhitespace is intentionally independent of Go's evolving Unicode
+// TrimASCIIWhitespace is intentionally independent of Go's evolving Unicode
 // tables. Its set is fixed to HT, LF, VT, FF, CR, and space.
-func trimASCIIWhitespace(value string) string {
+func TrimASCIIWhitespace(value string) string {
 	return strings.TrimFunc(value, func(character rune) bool {
 		return character == ' ' || character >= '\t' && character <= '\r'
 	})
 }
 
-func isPinnedControl(value rune) bool {
+// IsPinnedControl reports whether value is a pinned C0 or C1 control.
+func IsPinnedControl(value rune) bool {
 	return value <= 0x1f || value >= 0x7f && value <= 0x9f
+}
+
+// ValidIdentity reports whether value is a bounded, UTF-8, untrimmed-free
+// identity with no NUL and no pinned C0/C1 control.
+func ValidIdentity(value string, maximumBytes int) bool {
+	if value == "" || len(value) > maximumBytes || !utf8.ValidString(value) ||
+		TrimASCIIWhitespace(value) != value || strings.IndexByte(value, 0) >= 0 {
+		return false
+	}
+	for _, character := range value {
+		if IsPinnedControl(character) {
+			return false
+		}
+	}
+	return true
 }
