@@ -376,8 +376,7 @@ func (analyzer *queryAnalyzer) visitAggregateMeasure(
 		}
 		return analyzer.visitSparklineMeasure(measure.Sparkline, depth)
 	}
-	hasInput := measure.Input.Name != "" || measure.Input.Canonical ||
-		measure.Input.Path != nil || measure.Input.Range != (spl.Range{})
+	hasInput := !emptyAggregateField(measure.Input)
 	hasInputExpression := measure.InputExpression != nil
 	hasPredicate := measure.Predicate != nil
 	switch measure.Function {

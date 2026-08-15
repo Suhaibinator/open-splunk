@@ -1518,7 +1518,7 @@ func (p *parser) parseChartCommand(name token) (Command, error) {
 	if diagnostic := p.chartOptionDiagnostic(); diagnostic != nil {
 		return nil, diagnostic
 	}
-	aggregate, _, err := p.parseChartAggregate()
+	aggregate, err := p.parseChartAggregate()
 	if err != nil {
 		return nil, err
 	}
@@ -1589,14 +1589,13 @@ func (p *parser) parseChartCommand(name token) (Command, error) {
 	}, nil
 }
 
-func (p *parser) parseChartAggregate() (StatsAggregate, Position, error) {
+func (p *parser) parseChartAggregate() (StatsAggregate, error) {
 	function := p.current()
 	if function.kind != tokenWord {
-		return StatsAggregate{}, function.sourceRange.End,
-			p.unsupportedChartAggregate(
-				function,
-				"chart requires argument-free count or one count(field), pN(field), percN(field), sum(field), or avg(field) aggregate",
-			)
+		return StatsAggregate{}, p.unsupportedChartAggregate(
+			function,
+			"chart requires argument-free count or one count(field), pN(field), percN(field), sum(field), or avg(field) aggregate",
+		)
 	}
 	functionName := strings.ToLower(function.text)
 	if functionName == "count" &&
@@ -1607,42 +1606,38 @@ func (p *parser) parseChartAggregate() (StatsAggregate, Position, error) {
 			Alias:      "count",
 			Range:      function.sourceRange,
 			AliasRange: function.sourceRange,
-		}, function.sourceRange.End, nil
+		}, nil
 	}
 
 	spec, supported := pivotFieldAggregateSpecForName(functionName)
 	if !supported {
-		return StatsAggregate{}, function.sourceRange.End,
-			p.unsupportedChartAggregate(
-				function,
-				fmt.Sprintf("chart aggregate %q is not supported; use count, count(field), pN(field), percN(field), sum(field), or avg(field)", function.text),
-			)
+		return StatsAggregate{}, p.unsupportedChartAggregate(
+			function,
+			fmt.Sprintf("chart aggregate %q is not supported; use count, count(field), pN(field), percN(field), sum(field), or avg(field)", function.text),
+		)
 	}
 	p.advance()
 	if !p.match(tokenLeftParen) {
-		return StatsAggregate{}, function.sourceRange.End,
-			p.unsupportedChartSyntax(
-				function,
-				"chart field aggregates require one exact unquoted field in parentheses",
-			)
+		return StatsAggregate{}, p.unsupportedChartSyntax(
+			function,
+			"chart field aggregates require one exact unquoted field in parentheses",
+		)
 	}
 	input := p.current()
 	if input.kind != tokenWord || !IsExactUnquotedFieldName(input.text) ||
 		(strings.EqualFold(input.text, "eval") &&
 			p.index+1 < len(p.tokens) && p.tokens[p.index+1].kind == tokenLeftParen) {
-		return StatsAggregate{}, input.sourceRange.End,
-			p.unsupportedChartSyntax(
-				input,
-				"chart field aggregates require one exact unquoted field",
-			)
+		return StatsAggregate{}, p.unsupportedChartSyntax(
+			input,
+			"chart field aggregates require one exact unquoted field",
+		)
 	}
 	p.advance()
 	if !p.match(tokenRightParen) {
-		return StatsAggregate{}, input.sourceRange.End,
-			p.unsupportedChartSyntax(
-				p.current(),
-				"chart field aggregates accept exactly one field argument",
-			)
+		return StatsAggregate{}, p.unsupportedChartSyntax(
+			p.current(),
+			"chart field aggregates accept exactly one field argument",
+		)
 	}
 	end := p.previous().sourceRange.End
 	aggregate := StatsAggregate{
@@ -1654,7 +1649,7 @@ func (p *parser) parseChartAggregate() (StatsAggregate, Position, error) {
 		Range:      Range{Start: function.sourceRange.Start, End: end},
 		AliasRange: Range{Start: function.sourceRange.Start, End: end},
 	}
-	return aggregate, end, nil
+	return aggregate, nil
 }
 
 // parseChartSplitFields parses exactly two comma-, whitespace-, or
@@ -3207,66 +3202,36 @@ func normalizeStatsSourceDerivedAlias(value string) string {
 	}, value)
 }
 
-type statsSparklineAggregateSpec struct {
-	function AggregateFunction
-}
-
-func statsSparklineAggregateSpecForName(
-	name string,
-) (statsSparklineAggregateSpec, bool) {
+func statsSparklineAggregateFunctionForName(name string) (AggregateFunction, bool) {
 	switch strings.ToLower(name) {
 	case "count":
-		return statsSparklineAggregateSpec{function: AggregateFunctionCount}, true
+		return AggregateFunctionCount, true
 	case "c":
-		return statsSparklineAggregateSpec{
-			function: AggregateFunctionCountValues,
-		}, true
+		return AggregateFunctionCountValues, true
 	case "dc":
-		return statsSparklineAggregateSpec{
-			function: AggregateFunctionDistinctCount,
-		}, true
+		return AggregateFunctionDistinctCount, true
 	case "mean", "avg":
-		return statsSparklineAggregateSpec{
-			function: AggregateFunctionAverage,
-		}, true
+		return AggregateFunctionAverage, true
 	case "stdev":
-		return statsSparklineAggregateSpec{
-			function: AggregateFunctionStandardDeviationSample,
-		}, true
+		return AggregateFunctionStandardDeviationSample, true
 	case "stdevp":
-		return statsSparklineAggregateSpec{
-			function: AggregateFunctionStandardDeviationPopulation,
-		}, true
+		return AggregateFunctionStandardDeviationPopulation, true
 	case "var":
-		return statsSparklineAggregateSpec{
-			function: AggregateFunctionVarianceSample,
-		}, true
+		return AggregateFunctionVarianceSample, true
 	case "varp":
-		return statsSparklineAggregateSpec{
-			function: AggregateFunctionVariancePopulation,
-		}, true
+		return AggregateFunctionVariancePopulation, true
 	case "sum":
-		return statsSparklineAggregateSpec{
-			function: AggregateFunctionSum,
-		}, true
+		return AggregateFunctionSum, true
 	case "sumsq":
-		return statsSparklineAggregateSpec{
-			function: AggregateFunctionSumSquares,
-		}, true
+		return AggregateFunctionSumSquares, true
 	case "min":
-		return statsSparklineAggregateSpec{
-			function: AggregateFunctionMinimum,
-		}, true
+		return AggregateFunctionMinimum, true
 	case "max":
-		return statsSparklineAggregateSpec{
-			function: AggregateFunctionMaximum,
-		}, true
+		return AggregateFunctionMaximum, true
 	case "range":
-		return statsSparklineAggregateSpec{
-			function: AggregateFunctionRange,
-		}, true
+		return AggregateFunctionRange, true
 	default:
-		return statsSparklineAggregateSpec{}, false
+		return AggregateFunctionInvalid, false
 	}
 }
 
@@ -3320,14 +3285,14 @@ func (p *parser) parseStatsSparkline(
 		)
 	}
 	p.advance()
-	spec, supported := statsSparklineAggregateSpecForName(innerToken.text)
+	function, supported := statsSparklineAggregateFunctionForName(innerToken.text)
 	if !supported {
 		return StatsAggregate{}, innerToken.sourceRange.End, p.unsupportedStatsAggregate(
 			innerToken,
 			fmt.Sprintf("aggregate %q is not supported inside sparkline", innerToken.text),
 		)
 	}
-	sparkline.Function = spec.function
+	sparkline.Function = function
 
 	if strings.EqualFold(innerToken.text, "count") && p.current().kind != tokenLeftParen {
 		// Bare count is the only unscoped inner aggregate.
@@ -5222,11 +5187,7 @@ func unterminatedQuotedScalarField(tok token) *Diagnostic {
 
 func (p *parser) parseScalarIf(name token) (ScalarExpr, error) {
 	invalidArity := func(sourceRange Range) error {
-		return &Diagnostic{
-			Code:    "SPL_INVALID_EVAL_ARITY",
-			Message: "if requires exactly three arguments",
-			Range:   sourceRange,
-		}
+		return invalidEvalArity(sourceRange, "if requires exactly three arguments")
 	}
 	if p.current().kind == tokenRightParen || p.current().kind == tokenComma {
 		return nil, invalidArity(name.sourceRange)
@@ -5285,11 +5246,7 @@ func (p *parser) parseScalarIf(name token) (ScalarExpr, error) {
 
 func (p *parser) parseScalarCase(name token) (ScalarExpr, error) {
 	invalidArity := func(sourceRange Range) error {
-		return &Diagnostic{
-			Code:    "SPL_INVALID_EVAL_ARITY",
-			Message: "case requires one or more condition/value pairs",
-			Range:   sourceRange,
-		}
+		return invalidEvalArity(sourceRange, "case requires one or more condition/value pairs")
 	}
 	if p.current().kind == tokenRightParen || p.current().kind == tokenComma {
 		return nil, invalidArity(name.sourceRange)
@@ -5369,6 +5326,27 @@ func unsupportedScalarIdentifier(value string) bool {
 	return strings.ContainsAny(value, "+-*/%'`")
 }
 
+// invalidEvalArity reports an eval-language call whose argument count is
+// outside the function's supported arity.
+func invalidEvalArity(sourceRange Range, message string) *Diagnostic {
+	return &Diagnostic{
+		Code:    "SPL_INVALID_EVAL_ARITY",
+		Message: message,
+		Range:   sourceRange,
+	}
+}
+
+// booleanArgumentDiagnostic reports the shared search-mode restriction that a
+// Boolean-returning function result cannot be consumed as a scalar value.
+func booleanArgumentDiagnostic(function string, argument ScalarExpr, suggestions ...string) *Diagnostic {
+	return &Diagnostic{
+		Code:        "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+		Message:     function + " cannot consume a Boolean result in search-mode expressions",
+		Range:       argument.SourceRange(),
+		Suggestions: suggestions,
+	}
+}
+
 func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 	arguments := make([]ScalarExpr, 0, 3)
 	functionName := strings.ToLower(name.text)
@@ -5415,20 +5393,12 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 	case "now":
 		function = ScalarFunctionNow
 		if len(arguments) != 0 {
-			return nil, &Diagnostic{
-				Code:    "SPL_INVALID_EVAL_ARITY",
-				Message: "now requires no arguments",
-				Range:   name.sourceRange,
-			}
+			return nil, invalidEvalArity(name.sourceRange, "now requires no arguments")
 		}
 	case "strftime":
 		function = ScalarFunctionStrftime
 		if len(arguments) != 2 {
-			return nil, &Diagnostic{
-				Code:    "SPL_INVALID_EVAL_ARITY",
-				Message: "strftime requires exactly two arguments",
-				Range:   name.sourceRange,
-			}
+			return nil, invalidEvalArity(name.sourceRange, "strftime requires exactly two arguments")
 		}
 		if scalarExpressionMayReturnBooleanFunction(arguments[0]) {
 			return nil, &Diagnostic{
@@ -5478,11 +5448,7 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 	case "strptime":
 		function = ScalarFunctionStrptime
 		if len(arguments) != 2 {
-			return nil, &Diagnostic{
-				Code:    "SPL_INVALID_EVAL_ARITY",
-				Message: "strptime requires exactly two arguments",
-				Range:   name.sourceRange,
-			}
+			return nil, invalidEvalArity(name.sourceRange, "strptime requires exactly two arguments")
 		}
 		if scalarExpressionMayReturnBooleanFunction(arguments[0]) {
 			return nil, &Diagnostic{
@@ -5531,11 +5497,7 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 	case "relative_time":
 		function = ScalarFunctionRelativeTime
 		if len(arguments) != 2 {
-			return nil, &Diagnostic{
-				Code:    "SPL_INVALID_EVAL_ARITY",
-				Message: "relative_time requires exactly two arguments",
-				Range:   name.sourceRange,
-			}
+			return nil, invalidEvalArity(name.sourceRange, "relative_time requires exactly two arguments")
 		}
 		if scalarExpressionMayReturnBooleanFunction(arguments[0]) {
 			return nil, &Diagnostic{
@@ -5595,18 +5557,15 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 	case "tonumber":
 		function = ScalarFunctionToNumber
 		if len(arguments) != 1 {
-			return nil, &Diagnostic{Code: "SPL_INVALID_EVAL_ARITY", Message: "tonumber requires exactly one argument in compatibility version 0.1", Range: name.sourceRange}
+			return nil, invalidEvalArity(name.sourceRange, "tonumber requires exactly one argument in compatibility version 0.1")
 		}
 		if scalarExpressionMayReturnBooleanFunction(arguments[0]) {
-			return nil, &Diagnostic{
-				Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
-				Message: "tonumber cannot consume a Boolean result in search-mode expressions",
-				Range:   arguments[0].SourceRange(),
-				Suggestions: []string{
-					"use isnull or isnotnull directly with where",
-					"consume the Boolean with a supported conditional or conversion function",
-				},
-			}
+			return nil, booleanArgumentDiagnostic(
+				"tonumber",
+				arguments[0],
+				"use isnull or isnotnull directly with where",
+				"consume the Boolean with a supported conditional or conversion function",
+			)
 		}
 	case "tostring":
 		function = ScalarFunctionToString
@@ -5622,27 +5581,20 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 			}
 		}
 		if len(arguments) != 1 {
-			return nil, &Diagnostic{
-				Code:    "SPL_INVALID_EVAL_ARITY",
-				Message: "tostring requires exactly one argument in compatibility version 0.1",
-				Range:   name.sourceRange,
-			}
+			return nil, invalidEvalArity(name.sourceRange, "tostring requires exactly one argument in compatibility version 0.1")
 		}
 	case "replace":
 		function = ScalarFunctionReplace
 		if len(arguments) != 3 {
-			return nil, &Diagnostic{Code: "SPL_INVALID_EVAL_ARITY", Message: "replace requires exactly three arguments", Range: name.sourceRange}
+			return nil, invalidEvalArity(name.sourceRange, "replace requires exactly three arguments")
 		}
 		if scalarExpressionMayReturnBooleanFunction(arguments[0]) {
-			return nil, &Diagnostic{
-				Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
-				Message: "replace cannot consume a Boolean result in search-mode expressions",
-				Range:   arguments[0].SourceRange(),
-				Suggestions: []string{
-					"use isnull or isnotnull directly with where",
-					"consume the Boolean with a supported conditional or conversion function",
-				},
-			}
+			return nil, booleanArgumentDiagnostic(
+				"replace",
+				arguments[0],
+				"use isnull or isnotnull directly with where",
+				"consume the Boolean with a supported conditional or conversion function",
+			)
 		}
 		for index := 1; index < 3; index++ {
 			literal, ok := arguments[index].(*ScalarLiteralExpr)
@@ -5675,29 +5627,17 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 	case "isnull":
 		function = ScalarFunctionIsNull
 		if len(arguments) != 1 {
-			return nil, &Diagnostic{
-				Code:    "SPL_INVALID_EVAL_ARITY",
-				Message: "isnull requires exactly one argument",
-				Range:   name.sourceRange,
-			}
+			return nil, invalidEvalArity(name.sourceRange, "isnull requires exactly one argument")
 		}
 	case "isnotnull":
 		function = ScalarFunctionIsNotNull
 		if len(arguments) != 1 {
-			return nil, &Diagnostic{
-				Code:    "SPL_INVALID_EVAL_ARITY",
-				Message: "isnotnull requires exactly one argument",
-				Range:   name.sourceRange,
-			}
+			return nil, invalidEvalArity(name.sourceRange, "isnotnull requires exactly one argument")
 		}
 	case "coalesce":
 		function = ScalarFunctionCoalesce
 		if len(arguments) == 0 {
-			return nil, &Diagnostic{
-				Code:    "SPL_INVALID_EVAL_ARITY",
-				Message: "coalesce requires at least one argument",
-				Range:   name.sourceRange,
-			}
+			return nil, invalidEvalArity(name.sourceRange, "coalesce requires at least one argument")
 		}
 	case "lower", "upper":
 		if functionName == "lower" {
@@ -5706,64 +5646,41 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 			function = ScalarFunctionUpper
 		}
 		if len(arguments) != 1 {
-			return nil, &Diagnostic{
-				Code:    "SPL_INVALID_EVAL_ARITY",
-				Message: functionName + " requires exactly one argument",
-				Range:   name.sourceRange,
-			}
+			return nil, invalidEvalArity(name.sourceRange, functionName+" requires exactly one argument")
 		}
 		if scalarExpressionMayReturnBooleanFunction(arguments[0]) {
-			return nil, &Diagnostic{
-				Code: "SPL_UNSUPPORTED_EVAL_EXPRESSION",
-				Message: functionName +
-					" cannot consume a Boolean result in search-mode expressions",
-				Range: arguments[0].SourceRange(),
-				Suggestions: []string{
-					"use isnull or isnotnull directly with where",
-					"consume the Boolean with a supported conditional or conversion function",
-				},
-			}
+			return nil, booleanArgumentDiagnostic(
+				functionName,
+				arguments[0],
+				"use isnull or isnotnull directly with where",
+				"consume the Boolean with a supported conditional or conversion function",
+			)
 		}
 	case "len", "length":
 		function = ScalarFunctionLength
 		if len(arguments) != 1 {
-			return nil, &Diagnostic{
-				Code:    "SPL_INVALID_EVAL_ARITY",
-				Message: functionName + " requires exactly one argument",
-				Range:   name.sourceRange,
-			}
+			return nil, invalidEvalArity(name.sourceRange, functionName+" requires exactly one argument")
 		}
 		if scalarExpressionMayReturnBooleanFunction(arguments[0]) {
-			return nil, &Diagnostic{
-				Code: "SPL_UNSUPPORTED_EVAL_EXPRESSION",
-				Message: functionName +
-					" cannot consume a Boolean result in search-mode expressions",
-				Range: arguments[0].SourceRange(),
-				Suggestions: []string{
-					"use isnull or isnotnull directly with where",
-					"consume the Boolean with a supported conditional or conversion function",
-				},
-			}
+			return nil, booleanArgumentDiagnostic(
+				functionName,
+				arguments[0],
+				"use isnull or isnotnull directly with where",
+				"consume the Boolean with a supported conditional or conversion function",
+			)
 		}
 	case "round":
 		function = ScalarFunctionRound
 		if len(arguments) < 1 || len(arguments) > 2 {
-			return nil, &Diagnostic{
-				Code:    "SPL_INVALID_EVAL_ARITY",
-				Message: "round requires one or two arguments",
-				Range:   name.sourceRange,
-			}
+			return nil, invalidEvalArity(name.sourceRange, "round requires one or two arguments")
 		}
 		if scalarExpressionMayReturnBooleanFunction(arguments[0]) {
-			return nil, &Diagnostic{
-				Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
-				Message: "round cannot consume a Boolean result in search-mode expressions",
-				Range:   arguments[0].SourceRange(),
-				Suggestions: []string{
-					"use isnull or isnotnull directly with where",
-					"convert a numeric value before rounding it",
-				},
-			}
+			return nil, booleanArgumentDiagnostic(
+				"round",
+				arguments[0],
+				"use isnull or isnotnull directly with where",
+				"convert a numeric value before rounding it",
+			)
 		}
 		if len(arguments) == 2 && !SupportedRoundPrecision(arguments[1]) {
 			return nil, &Diagnostic{
@@ -5786,71 +5703,45 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 			function = ScalarFunctionCeil
 		}
 		if len(arguments) != 1 {
-			return nil, &Diagnostic{
-				Code:    "SPL_INVALID_EVAL_ARITY",
-				Message: functionName + " requires exactly one argument",
-				Range:   name.sourceRange,
-			}
+			return nil, invalidEvalArity(name.sourceRange, functionName+" requires exactly one argument")
 		}
 		if scalarExpressionMayReturnBooleanFunction(arguments[0]) {
-			return nil, &Diagnostic{
-				Code: "SPL_UNSUPPORTED_EVAL_EXPRESSION",
-				Message: functionName +
-					" cannot consume a Boolean result in search-mode expressions",
-				Range: arguments[0].SourceRange(),
-				Suggestions: []string{
-					"use isnull or isnotnull directly with where",
-					"convert a numeric value before rounding it",
-				},
-			}
+			return nil, booleanArgumentDiagnostic(
+				functionName,
+				arguments[0],
+				"use isnull or isnotnull directly with where",
+				"convert a numeric value before rounding it",
+			)
 		}
 	case "mvcount":
 		function = ScalarFunctionMVCount
 		if len(arguments) != 1 {
-			return nil, &Diagnostic{
-				Code:    "SPL_INVALID_EVAL_ARITY",
-				Message: "mvcount requires exactly one argument",
-				Range:   name.sourceRange,
-			}
+			return nil, invalidEvalArity(name.sourceRange, "mvcount requires exactly one argument")
 		}
 	case "mvsort":
 		function = ScalarFunctionMVSort
 		if len(arguments) != 1 {
-			return nil, &Diagnostic{
-				Code:    "SPL_INVALID_EVAL_ARITY",
-				Message: "mvsort requires exactly one argument",
-				Range:   name.sourceRange,
-			}
+			return nil, invalidEvalArity(name.sourceRange, "mvsort requires exactly one argument")
 		}
 		if scalarExpressionMayReturnBooleanFunction(arguments[0]) {
-			return nil, &Diagnostic{
-				Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
-				Message: "mvsort cannot consume a Boolean result in search-mode expressions",
-				Range:   arguments[0].SourceRange(),
-				Suggestions: []string{
-					"mvsort(multivalue_field)",
-				},
-			}
+			return nil, booleanArgumentDiagnostic(
+				"mvsort",
+				arguments[0],
+				"mvsort(multivalue_field)",
+			)
 		}
 	case "match":
 		function = ScalarFunctionMatch
 		if len(arguments) != 2 {
-			return nil, &Diagnostic{
-				Code:    "SPL_INVALID_EVAL_ARITY",
-				Message: "match requires exactly two arguments",
-				Range:   name.sourceRange,
-			}
+			return nil, invalidEvalArity(name.sourceRange, "match requires exactly two arguments")
 		}
 		if scalarExpressionMayReturnBooleanFunction(arguments[0]) {
-			return nil, &Diagnostic{
-				Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
-				Message: "match cannot consume a Boolean result in search-mode expressions",
-				Range:   arguments[0].SourceRange(),
-				Suggestions: []string{
-					"use the Boolean directly with where",
-					`match(value, "pattern")`,
-				},
-			}
+			return nil, booleanArgumentDiagnostic(
+				"match",
+				arguments[0],
+				"use the Boolean directly with where",
+				`match(value, "pattern")`,
+			)
 		}
 		pattern, ok := arguments[1].(*ScalarLiteralExpr)
 		if !ok || pattern == nil || pattern.Value.Kind != LiteralKindString ||
@@ -5889,22 +5780,15 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 	case "like":
 		function = ScalarFunctionLike
 		if len(arguments) != 2 {
-			return nil, &Diagnostic{
-				Code:    "SPL_INVALID_EVAL_ARITY",
-				Message: "like requires exactly two arguments",
-				Range:   name.sourceRange,
-			}
+			return nil, invalidEvalArity(name.sourceRange, "like requires exactly two arguments")
 		}
 		if scalarExpressionMayReturnBooleanFunction(arguments[0]) {
-			return nil, &Diagnostic{
-				Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
-				Message: "like cannot consume a Boolean result in search-mode expressions",
-				Range:   arguments[0].SourceRange(),
-				Suggestions: []string{
-					"use the Boolean directly with where",
-					`like(value, "pattern")`,
-				},
-			}
+			return nil, booleanArgumentDiagnostic(
+				"like",
+				arguments[0],
+				"use the Boolean directly with where",
+				`like(value, "pattern")`,
+			)
 		}
 		pattern, ok := arguments[1].(*ScalarLiteralExpr)
 		if !ok || pattern == nil || pattern.Value.Kind != LiteralKindString ||
@@ -5942,22 +5826,15 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 	case "substr":
 		function = ScalarFunctionSubstring
 		if len(arguments) < 2 || len(arguments) > 3 {
-			return nil, &Diagnostic{
-				Code:    "SPL_INVALID_EVAL_ARITY",
-				Message: "substr requires two or three arguments",
-				Range:   name.sourceRange,
-			}
+			return nil, invalidEvalArity(name.sourceRange, "substr requires two or three arguments")
 		}
 		if scalarExpressionMayReturnBooleanFunction(arguments[0]) {
-			return nil, &Diagnostic{
-				Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
-				Message: "substr cannot consume a Boolean result in search-mode expressions",
-				Range:   arguments[0].SourceRange(),
-				Suggestions: []string{
-					"use isnull or isnotnull directly with where",
-					"consume the Boolean with a supported conditional or conversion function",
-				},
-			}
+			return nil, booleanArgumentDiagnostic(
+				"substr",
+				arguments[0],
+				"use isnull or isnotnull directly with where",
+				"consume the Boolean with a supported conditional or conversion function",
+			)
 		}
 		for index := 1; index < len(arguments); index++ {
 			literal, ok := arguments[index].(*ScalarLiteralExpr)

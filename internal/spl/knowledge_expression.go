@@ -2,7 +2,6 @@ package spl
 
 import (
 	"fmt"
-	"slices"
 	"sort"
 )
 
@@ -94,35 +93,7 @@ func AnalyzeScalarExpression(expression ScalarExpr) (ScalarExpressionAnalysis, e
 // not storable values, including through coalesce/if/case value branches.
 // Parse and Analyze must still be called separately for syntax and bounds.
 func ScalarExpressionMayReturnBooleanFunction(expression ScalarExpr) bool {
-	switch expression := expression.(type) {
-	case *ScalarCallExpr:
-		if expression == nil {
-			return false
-		}
-		if expression.Function.ReturnsBoolean() {
-			return true
-		}
-		if expression.Function == ScalarFunctionCoalesce {
-			if slices.ContainsFunc(expression.Arguments, ScalarExpressionMayReturnBooleanFunction) {
-				return true
-			}
-		}
-		return false
-	case *ScalarIfExpr:
-		return expression != nil &&
-			(ScalarExpressionMayReturnBooleanFunction(expression.True) ||
-				ScalarExpressionMayReturnBooleanFunction(expression.False))
-	case *ScalarCaseExpr:
-		if expression == nil {
-			return false
-		}
-		for _, branch := range expression.Branches {
-			if ScalarExpressionMayReturnBooleanFunction(branch.Value) {
-				return true
-			}
-		}
-	}
-	return false
+	return scalarExpressionMayReturnBooleanFunction(expression)
 }
 
 type scalarExpressionAnalyzer struct {

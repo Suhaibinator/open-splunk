@@ -26,10 +26,7 @@ func validTimechartMeasureContract(operator *Timechart) bool {
 	}
 	switch operator.Measure.Function {
 	case AggregateFunctionCountRows:
-		return operator.Measure.Input.Name == "" &&
-			!operator.Measure.Input.Canonical &&
-			operator.Measure.Input.Path == nil &&
-			operator.Measure.Input.Range == (spl.Range{}) &&
+		return emptyAggregateField(operator.Measure.Input) &&
 			operator.Measure.Percentile == 0 &&
 			operator.Measure.Output == "count"
 	case AggregateFunctionPercentile:

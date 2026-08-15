@@ -138,35 +138,15 @@ func (p *parser) parseFillNullCommand(name token) (Command, error) {
 			p.advance()
 			continue
 		}
-		if current.kind == tokenComma {
-			return nil, p.unsupportedV03CommandSyntax("fillnull", current, "fillnull fields are separated by spaces, not commas")
-		}
-		field, err := exactV03CommandField("fillnull", current)
-		if err != nil {
+		if err := p.appendExactV03ProjectionField("fillnull", current, &command.Fields, seenFields); err != nil {
 			return nil, err
 		}
 		fieldsStarted = true
-		if _, duplicate := seenFields[field.Name]; duplicate {
-			return nil, p.unsupportedV03CommandSyntax("fillnull", current, fmt.Sprintf("fillnull field %q is repeated", field.Name))
-		}
-		if len(command.Fields) >= MaximumV03ProjectionFields {
-			return nil, &Diagnostic{
-				Code:    "SPL_QUERY_TOO_COMPLEX",
-				Message: fmt.Sprintf("fillnull contains more than %d fields", MaximumV03ProjectionFields),
-				Range:   current.sourceRange,
-			}
-		}
-		seenFields[field.Name] = struct{}{}
-		command.Fields = append(command.Fields, field)
 		end = current.sourceRange.End
 		p.advance()
 	}
-	if len(command.Fields) == 0 {
-		return nil, &Diagnostic{
-			Code:    "SPL_EXPECTED_FIELD",
-			Message: "fillnull requires at least one explicit exact field",
-			Range:   p.current().sourceRange,
-		}
+	if err := p.requireV03ProjectionFields("fillnull", command.Fields); err != nil {
+		return nil, err
 	}
 	command.Range = Range{Start: name.sourceRange.Start, End: end}
 	return command, nil
@@ -220,35 +200,15 @@ func (p *parser) parseAddTotalsCommand(name token) (Command, error) {
 			p.advance()
 			continue
 		}
-		if current.kind == tokenComma {
-			return nil, p.unsupportedV03CommandSyntax("addtotals", current, "addtotals fields are separated by spaces, not commas")
-		}
-		field, err := exactV03CommandField("addtotals", current)
-		if err != nil {
+		if err := p.appendExactV03ProjectionField("addtotals", current, &command.Fields, seenFields); err != nil {
 			return nil, err
 		}
 		fieldsStarted = true
-		if _, duplicate := seenFields[field.Name]; duplicate {
-			return nil, p.unsupportedV03CommandSyntax("addtotals", current, fmt.Sprintf("addtotals field %q is repeated", field.Name))
-		}
-		if len(command.Fields) >= MaximumV03ProjectionFields {
-			return nil, &Diagnostic{
-				Code:    "SPL_QUERY_TOO_COMPLEX",
-				Message: fmt.Sprintf("addtotals contains more than %d fields", MaximumV03ProjectionFields),
-				Range:   current.sourceRange,
-			}
-		}
-		seenFields[field.Name] = struct{}{}
-		command.Fields = append(command.Fields, field)
 		end = current.sourceRange.End
 		p.advance()
 	}
-	if len(command.Fields) == 0 {
-		return nil, &Diagnostic{
-			Code:    "SPL_EXPECTED_FIELD",
-			Message: "addtotals requires at least one explicit exact field",
-			Range:   p.current().sourceRange,
-		}
+	if err := p.requireV03ProjectionFields("addtotals", command.Fields); err != nil {
+		return nil, err
 	}
 	command.Range = Range{Start: name.sourceRange.Start, End: end}
 	// A row total of N inputs contains exactly N-1 arithmetic additions. Count
@@ -494,6 +454,48 @@ func (p *parser) parseMVExpandCommand(name token) (Command, error) {
 	}
 	command.Range = Range{Start: name.sourceRange.Start, End: end}
 	return command, nil
+}
+
+// appendExactV03ProjectionField validates one whitespace-separated exact field
+// token for the fillnull/addtotals projection lists and appends it, rejecting
+// comma separators, duplicates, and lists beyond the bounded field ceiling.
+func (p *parser) appendExactV03ProjectionField(
+	commandName string,
+	current token,
+	fields *[]ExactCommandField,
+	seen map[string]struct{},
+) error {
+	if current.kind == tokenComma {
+		return p.unsupportedV03CommandSyntax(commandName, current, commandName+" fields are separated by spaces, not commas")
+	}
+	field, err := exactV03CommandField(commandName, current)
+	if err != nil {
+		return err
+	}
+	if _, duplicate := seen[field.Name]; duplicate {
+		return p.unsupportedV03CommandSyntax(commandName, current, fmt.Sprintf("%s field %q is repeated", commandName, field.Name))
+	}
+	if len(*fields) >= MaximumV03ProjectionFields {
+		return &Diagnostic{
+			Code:    "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf("%s contains more than %d fields", commandName, MaximumV03ProjectionFields),
+			Range:   current.sourceRange,
+		}
+	}
+	seen[field.Name] = struct{}{}
+	*fields = append(*fields, field)
+	return nil
+}
+
+func (p *parser) requireV03ProjectionFields(commandName string, fields []ExactCommandField) error {
+	if len(fields) == 0 {
+		return &Diagnostic{
+			Code:    "SPL_EXPECTED_FIELD",
+			Message: commandName + " requires at least one explicit exact field",
+			Range:   p.current().sourceRange,
+		}
+	}
+	return nil
 }
 
 func exactV03CommandField(command string, tok token) (ExactCommandField, error) {

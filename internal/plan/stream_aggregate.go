@@ -1,6 +1,41 @@
 package plan
 
-import "github.com/Suhaibinator/open-splunk/internal/spl"
+import (
+	"strconv"
+
+	"github.com/Suhaibinator/open-splunk/internal/spl"
+)
+
+// canonicalAggregateName returns the documented short name for one plan
+// aggregate. percentile is used only for AggregateFunctionPercentile.
+func canonicalAggregateName(function AggregateFunction, percentile uint8) (string, bool) {
+	switch function {
+	case AggregateFunctionCountValues:
+		return "count", true
+	case AggregateFunctionSum:
+		return "sum", true
+	case AggregateFunctionAverage:
+		return "avg", true
+	case AggregateFunctionMinimum:
+		return "min", true
+	case AggregateFunctionMaximum:
+		return "max", true
+	case AggregateFunctionEarliest:
+		return "earliest", true
+	case AggregateFunctionLatest:
+		return "latest", true
+	case AggregateFunctionDistinctCount:
+		return "dc", true
+	case AggregateFunctionValues:
+		return "values", true
+	case AggregateFunctionList:
+		return "list", true
+	case AggregateFunctionPercentile:
+		return "perc" + strconv.Itoa(int(percentile)), true
+	default:
+		return "", false
+	}
+}
 
 func validStreamAggregateFieldName(name string) bool {
 	return spl.IsExactUnquotedFieldName(name)
@@ -13,24 +48,21 @@ func validStreamAggregateOutputName(measure AggregateMeasure) bool {
 }
 
 func streamAggregateDefaultOutput(measure AggregateMeasure) string {
+	// streamstats supports a strict subset of the named aggregates; the
+	// allowlist keeps canonicalAggregateName from widening it.
 	switch measure.Function {
-	case AggregateFunctionCountValues:
-		return "count(" + measure.Input.Name + ")"
-	case AggregateFunctionSum:
-		return "sum(" + measure.Input.Name + ")"
-	case AggregateFunctionAverage:
-		return "avg(" + measure.Input.Name + ")"
-	case AggregateFunctionMinimum:
-		return "min(" + measure.Input.Name + ")"
-	case AggregateFunctionMaximum:
-		return "max(" + measure.Input.Name + ")"
-	case AggregateFunctionEarliest:
-		return "earliest(" + measure.Input.Name + ")"
-	case AggregateFunctionLatest:
-		return "latest(" + measure.Input.Name + ")"
+	case AggregateFunctionCountValues, AggregateFunctionSum,
+		AggregateFunctionAverage, AggregateFunctionMinimum,
+		AggregateFunctionMaximum, AggregateFunctionEarliest,
+		AggregateFunctionLatest:
 	default:
 		return ""
 	}
+	name, ok := canonicalAggregateName(measure.Function, 0)
+	if !ok {
+		return ""
+	}
+	return name + "(" + measure.Input.Name + ")"
 }
 
 // validStreamAggregateContract is shared by every analysis that relies on
@@ -52,17 +84,11 @@ func validStreamAggregateContract(operator *StreamAggregate) bool {
 	switch operator.Measure.Function {
 	case AggregateFunctionCountRows:
 		if operator.Measure.Predicate != nil ||
-			operator.Measure.Input.Name != "" ||
-			operator.Measure.Input.Canonical ||
-			operator.Measure.Input.Path != nil ||
-			operator.Measure.Input.Range != (spl.Range{}) {
+			!emptyAggregateField(operator.Measure.Input) {
 			return false
 		}
 	case AggregateFunctionCountPredicate:
-		if operator.Measure.Input.Name != "" ||
-			operator.Measure.Input.Canonical ||
-			operator.Measure.Input.Path != nil ||
-			operator.Measure.Input.Range != (spl.Range{}) ||
+		if !emptyAggregateField(operator.Measure.Input) ||
 			!validEventAggregatePredicate(operator.Measure.Predicate) {
 			return false
 		}

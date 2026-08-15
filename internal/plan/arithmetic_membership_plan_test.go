@@ -445,7 +445,7 @@ func TestArithmeticMembershipCompositionVisitorsPreserveOrderedDependencies(t *t
 			field("fields", secondRange),
 		},
 	}
-	gotRange, found, err := predicateFieldRange(predicate, "fields")
+	gotRange, found, err := predicateFieldRange(predicate)
 	if err != nil || !found || gotRange != firstRange {
 		t.Fatalf("first reserved dependency = (%#v, %t, %v), want %#v", gotRange, found, err, firstRange)
 	}

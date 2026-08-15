@@ -29,10 +29,7 @@ func validChartContract(operator *Chart) bool {
 	switch operator.Measure.Function {
 	case AggregateFunctionCountRows:
 		return operator.Measure.Percentile == 0 &&
-			operator.Measure.Input.Name == "" &&
-			!operator.Measure.Input.Canonical &&
-			operator.Measure.Input.Path == nil &&
-			operator.Measure.Input.Range == (spl.Range{}) &&
+			emptyAggregateField(operator.Measure.Input) &&
 			operator.Measure.Output == "count"
 	case AggregateFunctionCountValues:
 		return spl.IsExactUnquotedFieldName(operator.Measure.Input.Name) &&
@@ -47,10 +44,7 @@ func validChartContract(operator *Chart) bool {
 			operator.Measure.Percentile != 0 {
 			return false
 		}
-		canonicalName := "sum"
-		if operator.Measure.Function == AggregateFunctionAverage {
-			canonicalName = "avg"
-		}
+		canonicalName, _ := canonicalAggregateName(operator.Measure.Function, 0)
 		return operator.Measure.Output == canonicalName+"("+operator.Measure.Input.Name+")"
 	case AggregateFunctionPercentile:
 		return spl.IsExactUnquotedFieldName(operator.Measure.Input.Name) &&

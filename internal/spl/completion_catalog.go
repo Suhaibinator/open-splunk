@@ -4,6 +4,8 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+
+	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 )
 
 //go:embed completion_catalog.json
@@ -47,7 +49,7 @@ func mustLoadCompletionCatalog() completionCatalogDocument {
 		if entry.Name == "" || entry.Insertion == "" || entry.Detail == "" {
 			panic(fmt.Sprintf("decode SPL completion catalog: incomplete %s entry %q", category, entry.Name))
 		}
-		key := category + "\x00" + asciiFold(entry.Name)
+		key := category + "\x00" + eventfields.FoldASCII(entry.Name)
 		if prior, exists := seen[key]; exists {
 			panic(fmt.Sprintf("decode SPL completion catalog: duplicate %s entries %q and %q", category, prior, entry.Name))
 		}
@@ -124,9 +126,8 @@ func StaticSuggestionCandidates(context SuggestionContext) []SuggestionCandidate
 }
 
 func containsASCIIFold(values []string, want string) bool {
-	foldedWant := asciiFold(want)
 	for _, value := range values {
-		if asciiFold(value) == foldedWant {
+		if equalASCIIFold(value, want) {
 			return true
 		}
 	}

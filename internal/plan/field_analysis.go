@@ -61,8 +61,8 @@ func ValidateFieldAnalysisEligibility(query *Query) error {
 			default:
 				return fieldAnalysisPipelineDiagnostic(operator.Range)
 			}
-		case *Aggregate, *Timechart, *Chart, *Window, *ExpandMultivalue:
-			return fieldAnalysisPipelineDiagnostic(operator.SourceRange())
+		// Aggregate, Timechart, Chart, Window and ExpandMultivalue break
+		// source-event identity and fall through with every unknown operator.
 		default:
 			return fieldAnalysisPipelineDiagnostic(operator.SourceRange())
 		}

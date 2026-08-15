@@ -153,6 +153,21 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 	spathEvaluationWorkUnits := 0
 	mvExpandOrdinal := 0
 	expressionBudget := splExpressionResourceBudget{}
+	// publishOutputField records one command output in the exact output schema
+	// when that schema is still known.
+	publishOutputField := func(name string) {
+		if outputSchemaKnown && !slices.Contains(result.OutputFields, name) {
+			result.OutputFields = append(result.OutputFields, name)
+		}
+	}
+	// publishOutputFieldAndTrackTime additionally retires the canonical time
+	// column when the command overwrites _time.
+	publishOutputFieldAndTrackTime := func(name string) {
+		publishOutputField(name)
+		if name == "_time" {
+			canonicalTimeAvailable = false
+		}
+	}
 	for commandIndex, command := range query.Commands {
 		switch command := command.(type) {
 		case *spl.SearchCommand:
@@ -201,12 +216,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					Expression: expression,
 					Range:      assignment.Range,
 				})
-				if outputSchemaKnown && !slices.Contains(result.OutputFields, assignment.Field) {
-					result.OutputFields = append(result.OutputFields, assignment.Field)
-				}
-				if assignment.Field == "_time" {
-					canonicalTimeAvailable = false
-				}
+				publishOutputFieldAndTrackTime(assignment.Field)
 			}
 			result.Operators = append(result.Operators, &Extend{Assignments: assignments, Range: command.Range})
 		case *spl.RexCommand:
@@ -263,12 +273,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					// #nosec G115 -- validated rex patterns contain at most 16 capture groups.
 					Group: uint16(capture.Group),
 				})
-				if outputSchemaKnown && !slices.Contains(result.OutputFields, capture.Name) {
-					result.OutputFields = append(result.OutputFields, capture.Name)
-				}
-				if capture.Name == "_time" {
-					canonicalTimeAvailable = false
-				}
+				publishOutputFieldAndTrackTime(capture.Name)
 			}
 			result.Operators = append(result.Operators, &Extract{
 				Input:    input,
@@ -297,12 +302,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				return nil, buildErr
 			}
 			result.Operators = append(result.Operators, operator)
-			if outputSchemaKnown && !slices.Contains(result.OutputFields, command.Output) {
-				result.OutputFields = append(result.OutputFields, command.Output)
-			}
-			if command.Output == "_time" {
-				canonicalTimeAvailable = false
-			}
+			publishOutputFieldAndTrackTime(command.Output)
 		case *spl.StrcatCommand:
 			operator, buildErr := buildStrcatCommand(
 				command,
@@ -313,29 +313,20 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				return nil, buildErr
 			}
 			result.Operators = append(result.Operators, operator)
-			if outputSchemaKnown && !slices.Contains(result.OutputFields, command.Destination) {
-				result.OutputFields = append(result.OutputFields, command.Destination)
-			}
-			if command.Destination == "_time" {
-				canonicalTimeAvailable = false
-			}
+			publishOutputFieldAndTrackTime(command.Destination)
 		case *spl.AddInfoCommand:
 			operator, buildErr := buildAddInfoCommand(command, scope)
 			if buildErr != nil {
 				return nil, buildErr
 			}
 			result.Operators = append(result.Operators, operator)
-			if outputSchemaKnown {
-				for _, field := range []string{
-					"info_min_time",
-					"info_max_time",
-					"info_search_time",
-					"info_sid",
-				} {
-					if !slices.Contains(result.OutputFields, field) {
-						result.OutputFields = append(result.OutputFields, field)
-					}
-				}
+			for _, field := range []string{
+				"info_min_time",
+				"info_max_time",
+				"info_search_time",
+				"info_sid",
+			} {
+				publishOutputField(field)
 			}
 		case *spl.FillNullCommand:
 			if !outputSchemaKnown {
@@ -355,12 +346,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			}
 			result.Operators = append(result.Operators, operator)
 			for _, field := range command.Fields {
-				if outputSchemaKnown && !slices.Contains(result.OutputFields, field.Name) {
-					result.OutputFields = append(result.OutputFields, field.Name)
-				}
-				if field.Name == "_time" {
-					canonicalTimeAvailable = false
-				}
+				publishOutputFieldAndTrackTime(field.Name)
 			}
 		case *spl.AddTotalsCommand:
 			if !outputSchemaKnown {
@@ -386,12 +372,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				return nil, buildErr
 			}
 			result.Operators = append(result.Operators, operator)
-			if outputSchemaKnown && !slices.Contains(result.OutputFields, command.Output) {
-				result.OutputFields = append(result.OutputFields, command.Output)
-			}
-			if command.Output == "_time" {
-				canonicalTimeAvailable = false
-			}
+			publishOutputFieldAndTrackTime(command.Output)
 		case *spl.DeltaCommand:
 			if !outputSchemaKnown && (command.Field == "fields" || command.Output == "fields") {
 				fieldRange := command.FieldRange
@@ -409,12 +390,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				return nil, buildErr
 			}
 			result.Operators = append(result.Operators, operator)
-			if outputSchemaKnown && !slices.Contains(result.OutputFields, command.Output) {
-				result.OutputFields = append(result.OutputFields, command.Output)
-			}
-			if command.Output == "_time" {
-				canonicalTimeAvailable = false
-			}
+			publishOutputFieldAndTrackTime(command.Output)
 		case *spl.MakeMVCommand:
 			if !outputSchemaKnown && command.Field == "fields" {
 				return nil, &Diagnostic{
@@ -428,9 +404,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				return nil, buildErr
 			}
 			result.Operators = append(result.Operators, operator)
-			if outputSchemaKnown && !slices.Contains(result.OutputFields, command.Field) {
-				result.OutputFields = append(result.OutputFields, command.Field)
-			}
+			publishOutputField(command.Field)
 		case *spl.MVExpandCommand:
 			if !outputSchemaKnown && command.Field == "fields" {
 				return nil, &Diagnostic{
@@ -445,9 +419,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				return nil, buildErr
 			}
 			result.Operators = append(result.Operators, operator)
-			if outputSchemaKnown && !slices.Contains(result.OutputFields, command.Field) {
-				result.OutputFields = append(result.OutputFields, command.Field)
-			}
+			publishOutputField(command.Field)
 		case *spl.SpathCommand:
 			if command == nil {
 				return nil, &Diagnostic{Code: "SPL_INVALID_QUERY", Message: "spath command is nil"}
@@ -521,12 +493,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				Steps:  slices.Clone(steps),
 				Range:  command.Range,
 			})
-			if outputSchemaKnown && !slices.Contains(result.OutputFields, command.Output) {
-				result.OutputFields = append(result.OutputFields, command.Output)
-			}
-			if command.Output == "_time" {
-				canonicalTimeAvailable = false
-			}
+			publishOutputFieldAndTrackTime(command.Output)
 		case *spl.LookupCommand:
 			operator, buildErr := buildLookupCommand(command, outputSchemaKnown)
 			if buildErr != nil {
@@ -534,9 +501,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			}
 			result.Operators = append(result.Operators, operator)
 			for _, output := range operator.Outputs {
-				if outputSchemaKnown && !slices.Contains(result.OutputFields, output.EventField.Name) {
-					result.OutputFields = append(result.OutputFields, output.EventField.Name)
-				}
+				publishOutputField(output.EventField.Name)
 				if operator.WriteMode == LookupWriteModeOverwrite &&
 					output.EventField.Name == "_time" {
 					canonicalTimeAvailable = false
@@ -618,12 +583,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				}
 			}
 
-			if outputSchemaKnown && !slices.Contains(result.OutputFields, command.Output) {
-				result.OutputFields = append(result.OutputFields, command.Output)
-			}
-			if command.Output == "_time" {
-				canonicalTimeAvailable = false
-			}
+			publishOutputFieldAndTrackTime(command.Output)
 		case *spl.RenameCommand:
 			assignments, renameErr := convertRenameAssignments(command)
 			if renameErr != nil {
@@ -831,37 +791,9 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				spl.AggregateFunctionDistinctCount,
 				spl.AggregateFunctionValues,
 				spl.AggregateFunctionList:
-				var function AggregateFunction
-				var form string
-				switch aggregate.Function {
-				case spl.AggregateFunctionMinimum:
-					function = AggregateFunctionMinimum
-					form = "min(field)"
-				case spl.AggregateFunctionMaximum:
-					function = AggregateFunctionMaximum
-					form = "max(field)"
-				case spl.AggregateFunctionEarliest:
-					function = AggregateFunctionEarliest
-					form = "earliest(field)"
-				case spl.AggregateFunctionLatest:
-					function = AggregateFunctionLatest
-					form = "latest(field)"
-				case spl.AggregateFunctionSum:
-					function = AggregateFunctionSum
-					form = "sum(field)"
-				case spl.AggregateFunctionAverage:
-					function = AggregateFunctionAverage
-					form = "avg(field)"
-				case spl.AggregateFunctionDistinctCount:
-					function = AggregateFunctionDistinctCount
-					form = "dc(field)"
-				case spl.AggregateFunctionValues:
-					function = AggregateFunctionValues
-					form = "values(field)"
-				case spl.AggregateFunctionList:
-					function = AggregateFunctionList
-					form = "list(field)"
-				}
+				function := convertNamedAggregateFunction(aggregate.Function)
+				name, _ := canonicalAggregateName(function, aggregate.Percentile)
+				form := name + "(field)"
 				var inputErr error
 				measure, inputErr = buildEventStatsFieldMeasure(
 					aggregate,
@@ -958,16 +890,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					Range:   command.Range,
 				},
 			)
-			if outputSchemaKnown &&
-				!slices.Contains(result.OutputFields, aggregate.Alias) {
-				result.OutputFields = append(
-					result.OutputFields,
-					aggregate.Alias,
-				)
-			}
-			if aggregate.Alias == "_time" {
-				canonicalTimeAvailable = false
-			}
+			publishOutputFieldAndTrackTime(aggregate.Alias)
 		case *spl.StreamStatsCommand:
 			if command == nil {
 				return nil, &Diagnostic{
@@ -1070,28 +993,8 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				spl.AggregateFunctionAverage, spl.AggregateFunctionMinimum,
 				spl.AggregateFunctionMaximum, spl.AggregateFunctionEarliest,
 				spl.AggregateFunctionLatest:
-				form := "count"
-				function := AggregateFunctionCountValues
-				switch aggregate.Function {
-				case spl.AggregateFunctionSum:
-					form = "sum"
-					function = AggregateFunctionSum
-				case spl.AggregateFunctionAverage:
-					form = "avg"
-					function = AggregateFunctionAverage
-				case spl.AggregateFunctionMinimum:
-					form = "min"
-					function = AggregateFunctionMinimum
-				case spl.AggregateFunctionMaximum:
-					form = "max"
-					function = AggregateFunctionMaximum
-				case spl.AggregateFunctionEarliest:
-					form = "earliest"
-					function = AggregateFunctionEarliest
-				case spl.AggregateFunctionLatest:
-					form = "latest"
-					function = AggregateFunctionLatest
-				}
+				function := convertNamedAggregateFunction(aggregate.Function)
+				form, _ := canonicalAggregateName(function, aggregate.Percentile)
 				if aggregate.Input == "" ||
 					aggregate.InputRange == (spl.Range{}) ||
 					aggregate.InputExpression != nil ||
@@ -1217,13 +1120,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					Range:          command.Range,
 				},
 			)
-			if outputSchemaKnown &&
-				!slices.Contains(result.OutputFields, aggregate.Alias) {
-				result.OutputFields = append(result.OutputFields, aggregate.Alias)
-			}
-			if aggregate.Alias == "_time" {
-				canonicalTimeAvailable = false
-			}
+			publishOutputFieldAndTrackTime(aggregate.Alias)
 		case *spl.StatsCommand:
 			if len(command.Aggregates) == 0 {
 				return nil, &Diagnostic{
@@ -1593,7 +1490,6 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 										Value: expression,
 										Range: expression.SourceRange(),
 									},
-									"fields",
 								)
 								if inventoryErr != nil {
 									return nil, inventoryErr
@@ -2010,22 +1906,12 @@ func buildChartMeasure(
 		spl.AggregateFunctionPercentile,
 		spl.AggregateFunctionSum,
 		spl.AggregateFunctionAverage:
-		canonicalName := "sum"
-		function := AggregateFunctionSum
-		switch aggregate.Function {
-		case spl.AggregateFunctionCountValues:
-			canonicalName = "count"
-			function = AggregateFunctionCountValues
-		case spl.AggregateFunctionPercentile:
-			if aggregate.Percentile < 1 || aggregate.Percentile > 99 {
-				return invalid("chart percentile must be from 1 through 99")
-			}
-			canonicalName = "perc" + strconv.Itoa(int(aggregate.Percentile))
-			function = AggregateFunctionPercentile
-		case spl.AggregateFunctionAverage:
-			canonicalName = "avg"
-			function = AggregateFunctionAverage
+		if aggregate.Function == spl.AggregateFunctionPercentile &&
+			(aggregate.Percentile < 1 || aggregate.Percentile > 99) {
+			return invalid("chart percentile must be from 1 through 99")
 		}
+		function := convertNamedAggregateFunction(aggregate.Function)
+		canonicalName, _ := canonicalAggregateName(function, aggregate.Percentile)
 		canonicalOutput := canonicalName + "(" + aggregate.Input + ")"
 		if aggregate.Input == "" || aggregate.InputRange == (spl.Range{}) ||
 			(function != AggregateFunctionPercentile && aggregate.Percentile != 0) ||
@@ -2137,16 +2023,8 @@ func buildTimechartMeasure(
 				Range: aggregate.Range,
 			}
 		}
-		function := AggregateFunctionCountValues
-		canonicalName := "count"
-		switch aggregate.Function {
-		case spl.AggregateFunctionSum:
-			function = AggregateFunctionSum
-			canonicalName = "sum"
-		case spl.AggregateFunctionAverage:
-			function = AggregateFunctionAverage
-			canonicalName = "avg"
-		}
+		function := convertNamedAggregateFunction(aggregate.Function)
+		canonicalName, _ := canonicalAggregateName(function, aggregate.Percentile)
 		return buildTimechartFieldMeasure(
 			command,
 			function,
@@ -3582,6 +3460,19 @@ func statsAggregateRequiresCanonicalTime(function spl.AggregateFunction) bool {
 	}
 }
 
+// convertNamedAggregateFunction maps one spl aggregate onto its plan
+// counterpart for the command paths that also accept the bare count(field)
+// form. stats itself does not, so convertStatsFieldAggregateFunction stays
+// narrower. Callers restrict the input through their own outer case lists and
+// receive AggregateFunctionInvalid for anything outside that set.
+func convertNamedAggregateFunction(function spl.AggregateFunction) AggregateFunction {
+	if function == spl.AggregateFunctionCountValues {
+		return AggregateFunctionCountValues
+	}
+	converted, _ := convertStatsFieldAggregateFunction(function)
+	return converted
+}
+
 func convertStatsFieldAggregateFunction(
 	function spl.AggregateFunction,
 ) (AggregateFunction, bool) {
@@ -3729,10 +3620,7 @@ func buildCountPredicateMeasure(
 		return AggregateMeasure{}, err
 	}
 	if !outputSchemaKnown {
-		fieldRange, referencesReserved, inventoryErr := predicateFieldRange(
-			predicate,
-			"fields",
-		)
+		fieldRange, referencesReserved, inventoryErr := predicateFieldRange(predicate)
 		if inventoryErr != nil {
 			return AggregateMeasure{}, inventoryErr
 		}
@@ -3752,13 +3640,16 @@ func buildCountPredicateMeasure(
 	}, nil
 }
 
-// predicateFieldRange finds the first reference to name in deterministic
-// expression order. Conditional aggregate planning uses it to preserve the
-// reserved open-event "fields" payload boundary just as it does for exact
-// inputs.
+// reservedFieldsPayloadName is the open-event reserved payload field that
+// conditional aggregate planning must never let a predicate read.
+const reservedFieldsPayloadName = "fields"
+
+// predicateFieldRange finds the first reference to the reserved fields payload
+// in deterministic expression order. Conditional aggregate planning uses it to
+// preserve the reserved open-event "fields" payload boundary just as it does
+// for exact inputs.
 func predicateFieldRange(
 	expression Expression,
-	name string,
 ) (spl.Range, bool, error) {
 	var visitExpression func(Expression) (spl.Range, bool, error)
 	var visitScalar func(ScalarExpression) (spl.Range, bool, error)
@@ -3768,7 +3659,7 @@ func predicateFieldRange(
 			if expression == nil {
 				return spl.Range{}, false, errors.New("inspect predicate fields: scalar field expression is nil")
 			}
-			if expression.Field.Name == name {
+			if expression.Field.Name == reservedFieldsPayloadName {
 				return expression.Field.Range, true, nil
 			}
 			return spl.Range{}, false, nil
@@ -3850,15 +3741,12 @@ func predicateFieldRange(
 			if expression == nil {
 				return spl.Range{}, false, errors.New("inspect predicate fields: text expression is nil")
 			}
-			if name == "_raw" {
-				return expression.Range, true, nil
-			}
 			return spl.Range{}, false, nil
 		case *ComparisonExpression:
 			if expression == nil {
 				return spl.Range{}, false, errors.New("inspect predicate fields: comparison expression is nil")
 			}
-			if expression.Field.Name == name {
+			if expression.Field.Name == reservedFieldsPayloadName {
 				return expression.Field.Range, true, nil
 			}
 			return spl.Range{}, false, nil
@@ -3896,6 +3784,43 @@ func predicateFieldRange(
 		}
 	}
 	return visitExpression(expression)
+}
+
+// scalarFunctionSpec is the single source for one supported eval function's
+// diagnostic name, plan counterpart and fixed arity.
+type scalarFunctionSpec struct {
+	name       string
+	plan       ScalarFunction
+	arguments  int
+	exactArity bool
+}
+
+// scalarFunctionSpecs enumerates every supported spl scalar function. Functions
+// with variable arity carry no exactArity and validate their operand counts
+// individually in convertScalarExpressionUnchecked.
+var scalarFunctionSpecs = map[spl.ScalarFunction]scalarFunctionSpec{
+	spl.ScalarFunctionConcat:       {name: "concatenation", plan: ScalarFunctionConcat},
+	spl.ScalarFunctionNow:          {name: "now", plan: ScalarFunctionNow, arguments: 0, exactArity: true},
+	spl.ScalarFunctionStrftime:     {name: "strftime", plan: ScalarFunctionStrftime, arguments: 2, exactArity: true},
+	spl.ScalarFunctionStrptime:     {name: "strptime", plan: ScalarFunctionStrptime, arguments: 2, exactArity: true},
+	spl.ScalarFunctionRelativeTime: {name: "relative_time", plan: ScalarFunctionRelativeTime, arguments: 2, exactArity: true},
+	spl.ScalarFunctionToNumber:     {name: "tonumber", plan: ScalarFunctionToNumber, arguments: 1, exactArity: true},
+	spl.ScalarFunctionToString:     {name: "tostring", plan: ScalarFunctionToString, arguments: 1, exactArity: true},
+	spl.ScalarFunctionRound:        {name: "round", plan: ScalarFunctionRound},
+	spl.ScalarFunctionCeil:         {name: "ceil", plan: ScalarFunctionCeil, arguments: 1, exactArity: true},
+	spl.ScalarFunctionFloor:        {name: "floor", plan: ScalarFunctionFloor, arguments: 1, exactArity: true},
+	spl.ScalarFunctionMVCount:      {name: "mvcount", plan: ScalarFunctionMVCount, arguments: 1, exactArity: true},
+	spl.ScalarFunctionMVSort:       {name: "mvsort", plan: ScalarFunctionMVSort, arguments: 1, exactArity: true},
+	spl.ScalarFunctionMatch:        {name: "match", plan: ScalarFunctionMatch, arguments: 2, exactArity: true},
+	spl.ScalarFunctionLike:         {name: "like", plan: ScalarFunctionLike, arguments: 2, exactArity: true},
+	spl.ScalarFunctionReplace:      {name: "replace", plan: ScalarFunctionReplace, arguments: 3, exactArity: true},
+	spl.ScalarFunctionIsNull:       {name: "isnull", plan: ScalarFunctionIsNull, arguments: 1, exactArity: true},
+	spl.ScalarFunctionIsNotNull:    {name: "isnotnull", plan: ScalarFunctionIsNotNull, arguments: 1, exactArity: true},
+	spl.ScalarFunctionCoalesce:     {name: "coalesce", plan: ScalarFunctionCoalesce},
+	spl.ScalarFunctionLower:        {name: "lower", plan: ScalarFunctionLower, arguments: 1, exactArity: true},
+	spl.ScalarFunctionUpper:        {name: "upper", plan: ScalarFunctionUpper, arguments: 1, exactArity: true},
+	spl.ScalarFunctionLength:       {name: "len", plan: ScalarFunctionLength, arguments: 1, exactArity: true},
+	spl.ScalarFunctionSubstring:    {name: "substr", plan: ScalarFunctionSubstring},
 }
 
 func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpression, error) {
@@ -4028,12 +3953,12 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 				Message: "scalar call expression is missing",
 			}
 		}
-		expectedArguments := 0
-		hasExactArity := false
-		functionName := ""
+		spec, specKnown := scalarFunctionSpecs[expression.Function]
+		expectedArguments := spec.arguments
+		hasExactArity := spec.exactArity
+		functionName := spec.name
 		switch expression.Function {
 		case spl.ScalarFunctionConcat:
-			functionName = "concatenation"
 			if len(expression.Arguments) < 2 {
 				return nil, &Diagnostic{
 					Code:    "SPL_INVALID_EVAL_ARITY",
@@ -4051,32 +3976,7 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 					Range: expression.Range,
 				}
 			}
-		case spl.ScalarFunctionNow:
-			expectedArguments = 0
-			hasExactArity = true
-			functionName = "now"
-		case spl.ScalarFunctionStrftime:
-			expectedArguments = 2
-			hasExactArity = true
-			functionName = "strftime"
-		case spl.ScalarFunctionStrptime:
-			expectedArguments = 2
-			hasExactArity = true
-			functionName = "strptime"
-		case spl.ScalarFunctionRelativeTime:
-			expectedArguments = 2
-			hasExactArity = true
-			functionName = "relative_time"
-		case spl.ScalarFunctionToNumber:
-			expectedArguments = 1
-			hasExactArity = true
-			functionName = "tonumber"
-		case spl.ScalarFunctionToString:
-			expectedArguments = 1
-			hasExactArity = true
-			functionName = "tostring"
 		case spl.ScalarFunctionRound:
-			functionName = "round"
 			if len(expression.Arguments) < 1 || len(expression.Arguments) > 2 {
 				return nil, &Diagnostic{
 					Code:    "SPL_INVALID_EVAL_ARITY",
@@ -4084,44 +3984,7 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 					Range:   expression.Range,
 				}
 			}
-		case spl.ScalarFunctionCeil:
-			expectedArguments = 1
-			hasExactArity = true
-			functionName = "ceil"
-		case spl.ScalarFunctionFloor:
-			expectedArguments = 1
-			hasExactArity = true
-			functionName = "floor"
-		case spl.ScalarFunctionMVCount:
-			expectedArguments = 1
-			hasExactArity = true
-			functionName = "mvcount"
-		case spl.ScalarFunctionMVSort:
-			expectedArguments = 1
-			hasExactArity = true
-			functionName = "mvsort"
-		case spl.ScalarFunctionMatch:
-			expectedArguments = 2
-			hasExactArity = true
-			functionName = "match"
-		case spl.ScalarFunctionLike:
-			expectedArguments = 2
-			hasExactArity = true
-			functionName = "like"
-		case spl.ScalarFunctionReplace:
-			expectedArguments = 3
-			hasExactArity = true
-			functionName = "replace"
-		case spl.ScalarFunctionIsNull:
-			expectedArguments = 1
-			hasExactArity = true
-			functionName = "isnull"
-		case spl.ScalarFunctionIsNotNull:
-			expectedArguments = 1
-			hasExactArity = true
-			functionName = "isnotnull"
 		case spl.ScalarFunctionCoalesce:
-			functionName = "coalesce"
 			if len(expression.Arguments) == 0 {
 				return nil, &Diagnostic{
 					Code:    "SPL_INVALID_EVAL_ARITY",
@@ -4139,20 +4002,7 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 					Range: expression.Range,
 				}
 			}
-		case spl.ScalarFunctionLower:
-			expectedArguments = 1
-			hasExactArity = true
-			functionName = "lower"
-		case spl.ScalarFunctionUpper:
-			expectedArguments = 1
-			hasExactArity = true
-			functionName = "upper"
-		case spl.ScalarFunctionLength:
-			expectedArguments = 1
-			hasExactArity = true
-			functionName = "len"
 		case spl.ScalarFunctionSubstring:
-			functionName = "substr"
 			if len(expression.Arguments) < 2 || len(expression.Arguments) > 3 {
 				return nil, &Diagnostic{
 					Code:    "SPL_INVALID_EVAL_ARITY",
@@ -4492,55 +4342,10 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 			}
 			arguments = append(arguments, converted)
 		}
-		var function ScalarFunction
-		switch expression.Function {
-		case spl.ScalarFunctionConcat:
-			function = ScalarFunctionConcat
-		case spl.ScalarFunctionNow:
-			function = ScalarFunctionNow
-		case spl.ScalarFunctionStrftime:
-			function = ScalarFunctionStrftime
-		case spl.ScalarFunctionStrptime:
-			function = ScalarFunctionStrptime
-		case spl.ScalarFunctionRelativeTime:
-			function = ScalarFunctionRelativeTime
-		case spl.ScalarFunctionToNumber:
-			function = ScalarFunctionToNumber
-		case spl.ScalarFunctionToString:
-			function = ScalarFunctionToString
-		case spl.ScalarFunctionRound:
-			function = ScalarFunctionRound
-		case spl.ScalarFunctionCeil:
-			function = ScalarFunctionCeil
-		case spl.ScalarFunctionFloor:
-			function = ScalarFunctionFloor
-		case spl.ScalarFunctionMVCount:
-			function = ScalarFunctionMVCount
-		case spl.ScalarFunctionMVSort:
-			function = ScalarFunctionMVSort
-		case spl.ScalarFunctionMatch:
-			function = ScalarFunctionMatch
-		case spl.ScalarFunctionLike:
-			function = ScalarFunctionLike
-		case spl.ScalarFunctionReplace:
-			function = ScalarFunctionReplace
-		case spl.ScalarFunctionIsNull:
-			function = ScalarFunctionIsNull
-		case spl.ScalarFunctionIsNotNull:
-			function = ScalarFunctionIsNotNull
-		case spl.ScalarFunctionCoalesce:
-			function = ScalarFunctionCoalesce
-		case spl.ScalarFunctionLower:
-			function = ScalarFunctionLower
-		case spl.ScalarFunctionUpper:
-			function = ScalarFunctionUpper
-		case spl.ScalarFunctionLength:
-			function = ScalarFunctionLength
-		case spl.ScalarFunctionSubstring:
-			function = ScalarFunctionSubstring
-		default:
+		if !specKnown {
 			return nil, &Diagnostic{Code: "SPL_UNSUPPORTED_EVAL_FUNCTION", Message: "unsupported scalar function", Range: expression.Range}
 		}
+		function := spec.plan
 		return &ScalarCallExpression{Function: function, Arguments: arguments, Range: expression.Range}, nil
 	case *spl.ScalarIfExpr:
 		if expression == nil {

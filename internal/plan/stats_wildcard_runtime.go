@@ -623,12 +623,17 @@ func newStatsWildcardRequest(
 	return request, nil
 }
 
+// validStatsWildcardMatches checks inventory row shape and ordering only.
+// Callers MUST have already proven request.valid(); both call sites
+// (StatsWildcardExpansion.valid and ValidateStatsWildcardInventory) do so
+// immediately beforehand. Re-validating here costs a full parse, Build and
+// two plan digests per call.
 func validStatsWildcardMatches(
 	request StatsWildcardRequest,
 	matches []StatsWildcardInventoryMatch,
 	requireComplete bool,
 ) bool {
-	if !request.valid() || len(matches) >= int(request.maximumPairs) ||
+	if len(matches) >= int(request.maximumPairs) ||
 		(requireComplete && len(matches) == 0) {
 		return false
 	}

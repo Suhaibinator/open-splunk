@@ -386,39 +386,9 @@ func (parser *numericSegmentParser) parseUnary() bool {
 }
 
 func (parser *numericSegmentParser) parseNumber() bool {
-	start := parser.offset
-	digits := 0
-	for parser.offset < len(parser.source) && parser.source[parser.offset] >= '0' && parser.source[parser.offset] <= '9' {
-		parser.offset++
-		digits++
-	}
-	if parser.offset < len(parser.source) && parser.source[parser.offset] == '.' {
-		parser.offset++
-		for parser.offset < len(parser.source) && parser.source[parser.offset] >= '0' && parser.source[parser.offset] <= '9' {
-			parser.offset++
-			digits++
-		}
-	}
-	if digits == 0 {
-		parser.offset = start
-		return false
-	}
-	if parser.offset < len(parser.source) && (parser.source[parser.offset] == 'e' || parser.source[parser.offset] == 'E') {
-		exponentStart := parser.offset
-		parser.offset++
-		if parser.offset < len(parser.source) &&
-			(parser.source[parser.offset] == '+' || parser.source[parser.offset] == '-') {
-			parser.offset++
-		}
-		exponentDigits := parser.offset
-		for parser.offset < len(parser.source) && parser.source[parser.offset] >= '0' && parser.source[parser.offset] <= '9' {
-			parser.offset++
-		}
-		if parser.offset == exponentDigits {
-			parser.offset = exponentStart
-		}
-	}
-	return true
+	end, _, ok := scanUnsignedNumericLiteral(parser.source, parser.offset)
+	parser.offset = end
+	return ok
 }
 
 func boundaryRuneBefore(source string, offset int) (rune, bool) {

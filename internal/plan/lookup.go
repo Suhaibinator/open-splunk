@@ -34,6 +34,103 @@ type LookupOutput struct {
 	Range            spl.Range
 }
 
+// lookupMappingMessages carries the diagnostic wording that distinguishes the
+// key half of a lookup stage from the output half.
+type lookupMappingMessages struct {
+	schemaField   string
+	eventField    string
+	reserved      string
+	repeatedField string
+	repeatedEvent string
+}
+
+// buildLookupMappings validates one ordered mapping list and resolves its event
+// fields. view projects the source mapping onto the shared shape.
+func buildLookupMappings[T any](
+	mappings []T,
+	view func(T) (lookupField string, lookupFieldRange spl.Range, eventField string, eventFieldRange spl.Range, sourceRange spl.Range),
+	outputSchemaKnown bool,
+	messages lookupMappingMessages,
+) ([]LookupKey, error) {
+	resolved := make([]LookupKey, 0, len(mappings))
+	lookupFields := make(map[string]struct{}, len(mappings))
+	eventFields := make(map[string]struct{}, len(mappings))
+	for _, mapping := range mappings {
+		lookupField, lookupFieldRange, eventField, eventFieldRange, sourceRange := view(mapping)
+		if !validLookupSchemaField(lookupField) {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_LOOKUP_SYNTAX",
+				Message: messages.schemaField,
+				Range:   lookupFieldRange,
+			}
+		}
+		if !spl.IsExactUnquotedFieldName(eventField) {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_LOOKUP_SYNTAX",
+				Message: messages.eventField,
+				Range:   eventFieldRange,
+			}
+		}
+		if !outputSchemaKnown && eventField == "fields" {
+			return nil, &Diagnostic{
+				Code:    "SPL_AMBIGUOUS_LOOKUP_FIELD",
+				Message: messages.reserved,
+				Range:   eventFieldRange,
+			}
+		}
+		if _, duplicate := lookupFields[lookupField]; duplicate {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_LOOKUP_SYNTAX",
+				Message: fmt.Sprintf(messages.repeatedField, lookupField),
+				Range:   lookupFieldRange,
+			}
+		}
+		if _, duplicate := eventFields[eventField]; duplicate {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_LOOKUP_SYNTAX",
+				Message: fmt.Sprintf(messages.repeatedEvent, eventField),
+				Range:   eventFieldRange,
+			}
+		}
+		resolvedEventField, err := ResolveField(eventField, eventFieldRange)
+		if err != nil {
+			return nil, err
+		}
+		lookupFields[lookupField] = struct{}{}
+		eventFields[eventField] = struct{}{}
+		resolved = append(resolved, LookupKey{
+			LookupField:      lookupField,
+			LookupFieldRange: lookupFieldRange,
+			EventField:       resolvedEventField,
+			Range:            sourceRange,
+		})
+	}
+	return resolved, nil
+}
+
+// validLookupMappingSet reports whether one resolved mapping list carries exact
+// fields with no repeated lookup column or event field.
+func validLookupMappingSet[T any](mappings []T, view func(T) (string, FieldRef)) bool {
+	lookupFields := make(map[string]struct{}, len(mappings))
+	eventFields := make(map[string]struct{}, len(mappings))
+	for _, mapping := range mappings {
+		lookupField, eventField := view(mapping)
+		if !validLookupSchemaField(lookupField) ||
+			!validLookupEventField(eventField) {
+			return false
+		}
+		if _, duplicate := lookupFields[lookupField]; duplicate {
+			return false
+		}
+		if _, duplicate := eventFields[eventField.Name]; duplicate {
+			return false
+		}
+		lookupFields[lookupField] = struct{}{}
+		eventFields[eventField.Name] = struct{}{}
+	}
+	return true
+}
+
 // Lookup enriches rows from an authored, unresolved definition name. Runtime
 // resolution authority is intentionally absent: tenant, object, version, and
 // immutable rows must come from a separately sealed search snapshot.
@@ -104,113 +201,49 @@ func buildLookupCommand(command *spl.LookupCommand, outputSchemaKnown bool) (*Lo
 	result := &Lookup{
 		DefinitionName:  command.DefinitionName,
 		DefinitionRange: command.DefinitionRange,
-		Keys:            make([]LookupKey, 0, len(command.Keys)),
-		Outputs:         make([]LookupOutput, 0, len(command.Outputs)),
 		WriteMode:       writeMode,
 		Range:           command.Range,
 	}
-	lookupKeys := make(map[string]struct{}, len(command.Keys))
-	eventKeys := make(map[string]struct{}, len(command.Keys))
-	for _, mapping := range command.Keys {
-		if !validLookupSchemaField(mapping.LookupField) {
-			return nil, &Diagnostic{
-				Code:    "SPL_UNSUPPORTED_LOOKUP_SYNTAX",
-				Message: "lookup key columns must be exact and unquoted",
-				Range:   mapping.LookupFieldRange,
-			}
-		}
-		if !spl.IsExactUnquotedFieldName(mapping.EventField) {
-			return nil, &Diagnostic{
-				Code:    "SPL_UNSUPPORTED_LOOKUP_SYNTAX",
-				Message: "lookup key event fields must be exact and unquoted",
-				Range:   mapping.EventFieldRange,
-			}
-		}
-		if !outputSchemaKnown && mapping.EventField == "fields" {
-			return nil, &Diagnostic{
-				Code:    "SPL_AMBIGUOUS_LOOKUP_FIELD",
-				Message: "lookup cannot read the event result's reserved fields payload without an exact upstream schema",
-				Range:   mapping.EventFieldRange,
-			}
-		}
-		if _, duplicate := lookupKeys[mapping.LookupField]; duplicate {
-			return nil, &Diagnostic{
-				Code:    "SPL_UNSUPPORTED_LOOKUP_SYNTAX",
-				Message: fmt.Sprintf("lookup key column %q is repeated", mapping.LookupField),
-				Range:   mapping.LookupFieldRange,
-			}
-		}
-		if _, duplicate := eventKeys[mapping.EventField]; duplicate {
-			return nil, &Diagnostic{
-				Code:    "SPL_UNSUPPORTED_LOOKUP_SYNTAX",
-				Message: fmt.Sprintf("lookup event key field %q is repeated", mapping.EventField),
-				Range:   mapping.EventFieldRange,
-			}
-		}
-		eventField, err := ResolveField(mapping.EventField, mapping.EventFieldRange)
-		if err != nil {
-			return nil, err
-		}
-		lookupKeys[mapping.LookupField] = struct{}{}
-		eventKeys[mapping.EventField] = struct{}{}
-		result.Keys = append(result.Keys, LookupKey{
-			LookupField:      mapping.LookupField,
-			LookupFieldRange: mapping.LookupFieldRange,
-			EventField:       eventField,
-			Range:            mapping.Range,
-		})
+	keys, err := buildLookupMappings(
+		command.Keys,
+		func(mapping spl.LookupKeyMapping) (string, spl.Range, string, spl.Range, spl.Range) {
+			return mapping.LookupField, mapping.LookupFieldRange,
+				mapping.EventField, mapping.EventFieldRange, mapping.Range
+		},
+		outputSchemaKnown,
+		lookupMappingMessages{
+			schemaField:   "lookup key columns must be exact and unquoted",
+			eventField:    "lookup key event fields must be exact and unquoted",
+			reserved:      "lookup cannot read the event result's reserved fields payload without an exact upstream schema",
+			repeatedField: "lookup key column %q is repeated",
+			repeatedEvent: "lookup event key field %q is repeated",
+		},
+	)
+	if err != nil {
+		return nil, err
 	}
-
-	lookupOutputs := make(map[string]struct{}, len(command.Outputs))
-	eventOutputs := make(map[string]struct{}, len(command.Outputs))
-	for _, mapping := range command.Outputs {
-		if !validLookupSchemaField(mapping.LookupField) {
-			return nil, &Diagnostic{
-				Code:    "SPL_UNSUPPORTED_LOOKUP_SYNTAX",
-				Message: "lookup output columns must be exact and unquoted",
-				Range:   mapping.LookupFieldRange,
-			}
-		}
-		if !spl.IsExactUnquotedFieldName(mapping.EventField) {
-			return nil, &Diagnostic{
-				Code:    "SPL_UNSUPPORTED_LOOKUP_SYNTAX",
-				Message: "lookup output event fields must be exact and unquoted",
-				Range:   mapping.EventFieldRange,
-			}
-		}
-		if !outputSchemaKnown && mapping.EventField == "fields" {
-			return nil, &Diagnostic{
-				Code:    "SPL_AMBIGUOUS_LOOKUP_FIELD",
-				Message: "lookup cannot replace the event result's reserved fields payload without an exact upstream schema",
-				Range:   mapping.EventFieldRange,
-			}
-		}
-		if _, duplicate := lookupOutputs[mapping.LookupField]; duplicate {
-			return nil, &Diagnostic{
-				Code:    "SPL_UNSUPPORTED_LOOKUP_SYNTAX",
-				Message: fmt.Sprintf("lookup output column %q is repeated", mapping.LookupField),
-				Range:   mapping.LookupFieldRange,
-			}
-		}
-		if _, duplicate := eventOutputs[mapping.EventField]; duplicate {
-			return nil, &Diagnostic{
-				Code:    "SPL_UNSUPPORTED_LOOKUP_SYNTAX",
-				Message: fmt.Sprintf("lookup event output field %q is repeated", mapping.EventField),
-				Range:   mapping.EventFieldRange,
-			}
-		}
-		eventField, err := ResolveField(mapping.EventField, mapping.EventFieldRange)
-		if err != nil {
-			return nil, err
-		}
-		lookupOutputs[mapping.LookupField] = struct{}{}
-		eventOutputs[mapping.EventField] = struct{}{}
-		result.Outputs = append(result.Outputs, LookupOutput{
-			LookupField:      mapping.LookupField,
-			LookupFieldRange: mapping.LookupFieldRange,
-			EventField:       eventField,
-			Range:            mapping.Range,
-		})
+	outputs, err := buildLookupMappings(
+		command.Outputs,
+		func(mapping spl.LookupOutputMapping) (string, spl.Range, string, spl.Range, spl.Range) {
+			return mapping.LookupField, mapping.LookupFieldRange,
+				mapping.EventField, mapping.EventFieldRange, mapping.Range
+		},
+		outputSchemaKnown,
+		lookupMappingMessages{
+			schemaField:   "lookup output columns must be exact and unquoted",
+			eventField:    "lookup output event fields must be exact and unquoted",
+			reserved:      "lookup cannot replace the event result's reserved fields payload without an exact upstream schema",
+			repeatedField: "lookup output column %q is repeated",
+			repeatedEvent: "lookup event output field %q is repeated",
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	result.Keys = keys
+	result.Outputs = make([]LookupOutput, len(outputs))
+	for index, mapping := range outputs {
+		result.Outputs[index] = LookupOutput(mapping)
 	}
 	return result, nil
 }
@@ -227,40 +260,11 @@ func validLookupContract(operator *Lookup) bool {
 		return false
 	}
 
-	lookupKeys := make(map[string]struct{}, len(operator.Keys))
-	eventKeys := make(map[string]struct{}, len(operator.Keys))
-	for _, key := range operator.Keys {
-		if !validLookupSchemaField(key.LookupField) ||
-			!validLookupEventField(key.EventField) {
-			return false
-		}
-		if _, duplicate := lookupKeys[key.LookupField]; duplicate {
-			return false
-		}
-		if _, duplicate := eventKeys[key.EventField.Name]; duplicate {
-			return false
-		}
-		lookupKeys[key.LookupField] = struct{}{}
-		eventKeys[key.EventField.Name] = struct{}{}
-	}
-
-	lookupOutputs := make(map[string]struct{}, len(operator.Outputs))
-	eventOutputs := make(map[string]struct{}, len(operator.Outputs))
-	for _, output := range operator.Outputs {
-		if !validLookupSchemaField(output.LookupField) ||
-			!validLookupEventField(output.EventField) {
-			return false
-		}
-		if _, duplicate := lookupOutputs[output.LookupField]; duplicate {
-			return false
-		}
-		if _, duplicate := eventOutputs[output.EventField.Name]; duplicate {
-			return false
-		}
-		lookupOutputs[output.LookupField] = struct{}{}
-		eventOutputs[output.EventField.Name] = struct{}{}
-	}
-	return true
+	return validLookupMappingSet(operator.Keys, func(key LookupKey) (string, FieldRef) {
+		return key.LookupField, key.EventField
+	}) && validLookupMappingSet(operator.Outputs, func(output LookupOutput) (string, FieldRef) {
+		return output.LookupField, output.EventField
+	})
 }
 
 func validLookupSchemaField(name string) bool {

@@ -30,10 +30,7 @@ func validEventAggregateContract(operator *EventAggregate) bool {
 	switch operator.Measure.Function {
 	case AggregateFunctionCountRows:
 		if operator.Measure.Predicate != nil ||
-			operator.Measure.Input.Name != "" ||
-			operator.Measure.Input.Canonical ||
-			operator.Measure.Input.Path != nil ||
-			operator.Measure.Input.Range != (spl.Range{}) {
+			!emptyAggregateField(operator.Measure.Input) {
 			return false
 		}
 	case AggregateFunctionCountValues, AggregateFunctionMinimum,
@@ -57,10 +54,7 @@ func validEventAggregateContract(operator *EventAggregate) bool {
 			return false
 		}
 	case AggregateFunctionCountPredicate:
-		if operator.Measure.Input.Name != "" ||
-			operator.Measure.Input.Canonical ||
-			operator.Measure.Input.Path != nil ||
-			operator.Measure.Input.Range != (spl.Range{}) ||
+		if !emptyAggregateField(operator.Measure.Input) ||
 			!validEventAggregatePredicate(operator.Measure.Predicate) {
 			return false
 		}

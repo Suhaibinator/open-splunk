@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 )
 
 const (
@@ -531,7 +533,7 @@ func classifySuggestionContext(tokens []token, prefix string, replacement Range)
 	if stage[0].kind != tokenWord {
 		return base
 	}
-	command := asciiFold(stage[0].text)
+	command := eventfields.FoldASCII(stage[0].text)
 	body := stage[1:]
 	switch command {
 	case "search":
@@ -774,7 +776,7 @@ func consumeV03LeadingOptions(
 			tokens[index+1].kind != tokenEqual {
 			break
 		}
-		key := asciiFold(name.text)
+		key := eventfields.FoldASCII(name.text)
 		validator, supported := validators[key]
 		if !supported || index+2 >= len(tokens) {
 			return nil, used, false
@@ -990,16 +992,17 @@ func classifyStatsSuggestion(context SuggestionContext, tokens []token) Suggesti
 	return context
 }
 
-func classifyStatsSparklineLegacySuggestion(
-	context SuggestionContext,
-	tokens []token,
-) (SuggestionContext, bool) {
-	depth := 0
-	start := -1
+// lastTopLevelSparklineIndex returns the index of the last depth-zero
+// "sparkline" word that either is or is not immediately followed by '(' as
+// selected by wantCall, together with the trailing parenthesis depth.
+func lastTopLevelSparklineIndex(tokens []token, wantCall bool) (start int, depth int) {
+	start = -1
 	for index, tok := range tokens {
-		if depth == 0 && tokenWordEqual(tok, "sparkline") &&
-			(index+1 >= len(tokens) || tokens[index+1].kind != tokenLeftParen) {
-			start = index
+		if depth == 0 && tokenWordEqual(tok, "sparkline") {
+			isCall := index+1 < len(tokens) && tokens[index+1].kind == tokenLeftParen
+			if isCall == wantCall {
+				start = index
+			}
 		}
 		switch tok.kind {
 		case tokenLeftParen:
@@ -1010,6 +1013,14 @@ func classifyStatsSparklineLegacySuggestion(
 			}
 		}
 	}
+	return start, depth
+}
+
+func classifyStatsSparklineLegacySuggestion(
+	context SuggestionContext,
+	tokens []token,
+) (SuggestionContext, bool) {
+	start, _ := lastTopLevelSparklineIndex(tokens, false)
 	if start < 0 {
 		return context, false
 	}
@@ -1034,22 +1045,7 @@ func classifyActiveStatsSparklineSuggestion(
 	context SuggestionContext,
 	tokens []token,
 ) (SuggestionContext, bool) {
-	start := -1
-	depth := 0
-	for index, tok := range tokens {
-		if depth == 0 && tokenWordEqual(tok, "sparkline") &&
-			index+1 < len(tokens) && tokens[index+1].kind == tokenLeftParen {
-			start = index
-		}
-		switch tok.kind {
-		case tokenLeftParen:
-			depth++
-		case tokenRightParen:
-			if depth > 0 {
-				depth--
-			}
-		}
-	}
+	start, depth := lastTopLevelSparklineIndex(tokens, true)
 	if start < 0 || depth == 0 || start+2 > len(tokens) {
 		return context, false
 	}
@@ -1064,7 +1060,7 @@ func classifyActiveStatsSparklineSuggestion(
 	if function.kind != tokenWord {
 		return context, true
 	}
-	_, supported := statsSparklineAggregateSpecForName(function.text)
+	_, supported := statsSparklineAggregateFunctionForName(function.text)
 	if len(inner) == 1 || !supported {
 		context = aggregateSuggestionContext(context)
 		context.FunctionNames = statsSparklineFunctionNames()
@@ -1093,7 +1089,7 @@ func statsSuggestionBody(tokens []token) ([]token, map[string]struct{}) {
 		if value.kind != tokenWord && value.kind != tokenString {
 			break
 		}
-		used[asciiFold(name.text)] = struct{}{}
+		used[eventfields.FoldASCII(name.text)] = struct{}{}
 		index += 3
 	}
 	return tokens[index:], used
@@ -1281,7 +1277,7 @@ func streamStatsSuggestionOptions(tokens []token) ([]string, bool) {
 		if tokens[index].kind != tokenWord || tokens[index+1].kind != tokenEqual {
 			continue
 		}
-		name := asciiFold(tokens[index].text)
+		name := eventfields.FoldASCII(tokens[index].text)
 		switch name {
 		case "current", "window", "global":
 			used[name] = struct{}{}
@@ -1492,7 +1488,7 @@ func classifyRexSuggestion(context SuggestionContext, tokens []token) Suggestion
 
 func classifySpathSuggestion(context SuggestionContext, tokens []token) SuggestionContext {
 	if endsOptionEqual(tokens, "input") || endsOptionEqual(tokens, "output") {
-		option := asciiFold(tokens[len(tokens)-2].text)
+		option := eventfields.FoldASCII(tokens[len(tokens)-2].text)
 		prior := analyzeSpathSuggestionTokens(tokens[:len(tokens)-2])
 		if !prior.invalid &&
 			(option == "input" && !prior.inputSeen ||
@@ -1835,7 +1831,7 @@ func analyzeRexSuggestionTokens(tokens []token) rexSuggestionState {
 			state.invalid = true
 			return state
 		}
-		switch asciiFold(current.text) {
+		switch eventfields.FoldASCII(current.text) {
 		case "field":
 			if state.patternSeen || state.fieldSeen {
 				state.invalid = true
@@ -1875,7 +1871,7 @@ func analyzeSpathSuggestionTokens(tokens []token) spathSuggestionState {
 				state.invalid = true
 				return state
 			}
-			switch asciiFold(current.text) {
+			switch eventfields.FoldASCII(current.text) {
 			case "input":
 				if state.inputSeen {
 					state.invalid = true
@@ -2015,10 +2011,13 @@ func classifyActiveCountEvalPredicateSuggestion(
 	return classifyWhereSuggestion(context, predicate), true
 }
 
-func activeCountEvalPredicateStart(tokens []token) int {
+// lastUnclosedEvalArgumentStart returns the token index just past the last
+// "<aggregate>(eval(" opener selected by matches whose parenthesis never
+// closes, or -1 when every such opener is balanced.
+func lastUnclosedEvalArgumentStart(tokens []token, matches func(index int) bool) int {
 	activeStart := -1
 	for index := 0; index+3 < len(tokens); index++ {
-		if !startsCountEvalCall(tokens, index) {
+		if !matches(index) {
 			continue
 		}
 		depth := 1
@@ -2042,6 +2041,12 @@ func activeCountEvalPredicateStart(tokens []token) int {
 		}
 	}
 	return activeStart
+}
+
+func activeCountEvalPredicateStart(tokens []token) int {
+	return lastUnclosedEvalArgumentStart(tokens, func(index int) bool {
+		return startsCountEvalCall(tokens, index)
+	})
 }
 
 func classifyActiveStatsScalarEvalInputSuggestion(
@@ -2069,37 +2074,14 @@ func classifyActiveStatsScalarEvalInputSuggestion(
 }
 
 func activeStatsScalarEvalInputStart(tokens []token) int {
-	activeStart := -1
-	for index := 0; index+3 < len(tokens); index++ {
+	return lastUnclosedEvalArgumentStart(tokens, func(index int) bool {
 		if tokens[index].kind != tokenWord {
-			continue
+			return false
 		}
 		spec, supported := statsAggregateSpecForName(tokens[index].text)
-		if !supported || !spec.supportsExpressionInput ||
-			!startsEvalPredicateArgument(tokens, index+1) {
-			continue
-		}
-		depth := 1
-		closed := false
-		for _, tok := range tokens[index+4:] {
-			switch tok.kind {
-			case tokenLeftParen:
-				depth++
-			case tokenRightParen:
-				depth--
-				if depth == 0 {
-					closed = true
-				}
-			}
-			if closed {
-				break
-			}
-		}
-		if !closed {
-			activeStart = index + 4
-		}
-	}
-	return activeStart
+		return supported && spec.supportsExpressionInput &&
+			startsEvalPredicateArgument(tokens, index+1)
+	})
 }
 
 func scalarSuggestionTokenStart(tokens []token) (int, bool) {
@@ -2107,7 +2089,7 @@ func scalarSuggestionTokenStart(tokens []token) (int, bool) {
 	if !followsPipeline || len(stage) == 0 || stage[0].kind != tokenWord {
 		return 0, false
 	}
-	switch asciiFold(stage[0].text) {
+	switch eventfields.FoldASCII(stage[0].text) {
 	case "eval", "where":
 		return stageStart + 1, true
 	case "stats":
@@ -2137,7 +2119,7 @@ func endsOptionEqual(tokens []token, name string) bool {
 }
 
 func tokenWordEqual(tok token, want string) bool {
-	return tok.kind == tokenWord && asciiFold(tok.text) == asciiFold(want)
+	return tok.kind == tokenWord && equalASCIIFold(tok.text, want)
 }
 
 func isComparisonToken(kind tokenKind) bool {
@@ -2186,7 +2168,7 @@ func suggestionStageCommand(tokens []token) string {
 	if !followsPipeline || len(stage) == 0 || stage[0].kind != tokenWord {
 		return ""
 	}
-	return asciiFold(stage[0].text)
+	return eventfields.FoldASCII(stage[0].text)
 }
 
 func removeLiteralSuggestionKinds(kinds []SuggestionKind) []SuggestionKind {
@@ -2209,9 +2191,10 @@ func RankSuggestionCandidates(context SuggestionContext, candidates []Suggestion
 		limit = MaximumSuggestionLimit
 	}
 	type rankedSuggestion struct {
-		suggestion Suggestion
-		exact      bool
-		kindRank   int
+		suggestion  Suggestion
+		foldedLabel string
+		exact       bool
+		kindRank    int
 	}
 	ranked := make([]rankedSuggestion, 0, len(candidates))
 	for _, candidate := range candidates {
@@ -2254,8 +2237,9 @@ func RankSuggestionCandidates(context SuggestionContext, candidates []Suggestion
 				Replacement:         context.Replacement,
 				Relevance:           relevance,
 			},
-			exact:    exact,
-			kindRank: kindRank,
+			foldedLabel: eventfields.FoldASCII(candidate.Label),
+			exact:       exact,
+			kindRank:    kindRank,
 		})
 	}
 	sort.Slice(ranked, func(left, right int) bool {
@@ -2270,10 +2254,8 @@ func RankSuggestionCandidates(context SuggestionContext, candidates []Suggestion
 		if a.suggestion.Priority != b.suggestion.Priority {
 			return a.suggestion.Priority > b.suggestion.Priority
 		}
-		aFolded := asciiFold(a.suggestion.Label)
-		bFolded := asciiFold(b.suggestion.Label)
-		if aFolded != bFolded {
-			return aFolded < bFolded
+		if a.foldedLabel != b.foldedLabel {
+			return a.foldedLabel < b.foldedLabel
 		}
 		if a.suggestion.Label != b.suggestion.Label {
 			return a.suggestion.Label < b.suggestion.Label
@@ -2354,30 +2336,17 @@ func suggestionPrefixMatch(kind SuggestionKind, label, prefix string) (bool, boo
 	if kind == SuggestionKindField {
 		return strings.HasPrefix(label, prefix), label == prefix
 	}
-	foldedLabel := asciiFold(label)
-	foldedPrefix := asciiFold(prefix)
+	foldedLabel := eventfields.FoldASCII(label)
+	foldedPrefix := eventfields.FoldASCII(prefix)
 	return strings.HasPrefix(foldedLabel, foldedPrefix), foldedLabel == foldedPrefix
 }
 
 func suggestionDeduplicationKey(suggestion Suggestion) string {
 	label := suggestion.Label
 	if suggestion.Kind != SuggestionKindField {
-		label = asciiFold(label)
+		label = eventfields.FoldASCII(label)
 	}
 	return string(suggestion.Kind) + "\x00" + label
-}
-
-func asciiFold(value string) string {
-	var builder strings.Builder
-	builder.Grow(len(value))
-	for index := 0; index < len(value); index++ {
-		character := value[index]
-		if character >= 'A' && character <= 'Z' {
-			character += 'a' - 'A'
-		}
-		builder.WriteByte(character)
-	}
-	return builder.String()
 }
 
 func firstInvalidUTF8Offset(source string) int {
