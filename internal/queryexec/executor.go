@@ -252,6 +252,27 @@ func (settings *validatedExecutorSettings) limit(name string) uint64 {
 	return settings.values[name].(uint64)
 }
 
+// settingLimit is one per-operation ceiling applied on top of the executor's
+// validated read-only settings.
+type settingLimit struct {
+	name    string
+	maximum uint64
+}
+
+// boundedExecutorSettings clones the executor's validated settings and clamps
+// each named limit to the smaller of the executor ceiling and the operation's
+// own maximum. Limits the caller omits are inherited from the clone unchanged.
+func boundedExecutorSettings(
+	base *validatedExecutorSettings,
+	limits ...settingLimit,
+) clickhousedriver.Settings {
+	settings := base.clone()
+	for _, limit := range limits {
+		settings[limit.name] = min(base.limit(limit.name), limit.maximum)
+	}
+	return settings
+}
+
 func validatedQuerySettings(config Config) (*validatedExecutorSettings, error) {
 	settings, err := querySettings(config)
 	if err != nil {
@@ -654,14 +675,16 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 	schemaPublished := false
 	atomicResult := query.RequiresAtomicResult()
 	var atomicRows atomicResultBuffer
+	destinations, err := scanDestinations(columnTypes)
+	if err != nil {
+		return fmt.Errorf("%w: prepare ClickHouse row scan: %w", searchjobs.ErrInvalidResult, err)
+	}
+	defer clearScanDestinations(destinations)
 	for rows.Next() {
 		if err := executionContext.Err(); err != nil {
 			return err
 		}
-		destinations, err := scanDestinations(columnTypes)
-		if err != nil {
-			return fmt.Errorf("%w: prepare ClickHouse row scan: %w", searchjobs.ErrInvalidResult, err)
-		}
+		clearScanDestinations(destinations)
 		if err := rows.Scan(destinations...); err != nil {
 			return classifyQueryError(executionContext, fmt.Errorf("scan ClickHouse result row: %w", err))
 		}
@@ -953,20 +976,21 @@ func (executor *Executor) groupLimitSettingsFor(query clickhouse.CompiledQuery) 
 	return settings
 }
 
-type timechartRow struct {
+// wideTimechartRow is one bucket of a split-by timechart grid: the bucket
+// boundary plus one cell per public series column.
+type wideTimechartRow[T any] struct {
 	bucket time.Time
-	counts []uint64
+	cells  []T
 }
+
+type timechartRow = wideTimechartRow[uint64]
 
 type bufferedTimechart struct {
 	columns []string
 	rows    []timechartRow
 }
 
-type timechartValueRow struct {
-	bucket time.Time
-	values []nullableFloat64
-}
+type timechartValueRow = wideTimechartRow[nullableFloat64]
 
 type bufferedValueTimechart struct {
 	columns []string
@@ -1070,24 +1094,14 @@ func readFixedTimechartRows(
 			scanType:     reflect.TypeOf(uint8(0)),
 		})
 	}
-	violation, column := validateResultColumnContracts(
+	if err := validateResultColumns(
 		columns,
 		columnTypes,
 		contracts,
 		resultColumnRequireScanType|resultColumnTrimDatabaseType,
-	)
-	if violation == resultColumnContractShapeMismatch {
-		return bufferedFixedTimechart{}, fmt.Errorf(
-			"%w: ClickHouse fixed timechart columns do not match the compiled output",
-			searchjobs.ErrInvalidResult,
-		)
-	}
-	if violation == resultColumnContractTypeMismatch {
-		return bufferedFixedTimechart{}, fmt.Errorf(
-			"%w: ClickHouse fixed timechart column %q has an invalid type",
-			searchjobs.ErrInvalidResult,
-			column,
-		)
+		"ClickHouse fixed timechart",
+	); err != nil {
+		return bufferedFixedTimechart{}, err
 	}
 
 	// #nosec G115 -- validateTimechartOutput caps BucketCount at 10,000.
@@ -1190,6 +1204,15 @@ type nullableFloat64 struct {
 	valid bool
 }
 
+// publicValue maps a buffered numeric cell onto the public value the sink
+// publishes: NULL when the bucket carried no value.
+func (value nullableFloat64) publicValue() searchjobs.Value {
+	if !value.valid {
+		return searchjobs.NullValue()
+	}
+	return searchjobs.DoubleValue(value.value)
+}
+
 func readFixedValueTimechartRows(
 	ctx context.Context,
 	rows driver.Rows,
@@ -1210,24 +1233,14 @@ func readFixedValueTimechartRows(
 		},
 		{name: clickhouse.TimechartInputPresentColumn, databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0))},
 	}
-	violation, column := validateResultColumnContracts(
+	if err := validateResultColumns(
 		columns,
 		columnTypes,
 		contracts,
 		resultColumnRequireScanType|resultColumnTrimDatabaseType,
-	)
-	if violation == resultColumnContractShapeMismatch {
-		return bufferedFixedValueTimechart{}, fmt.Errorf(
-			"%w: ClickHouse fixed value timechart columns do not match the compiled output",
-			searchjobs.ErrInvalidResult,
-		)
-	}
-	if violation == resultColumnContractTypeMismatch {
-		return bufferedFixedValueTimechart{}, fmt.Errorf(
-			"%w: ClickHouse fixed value timechart column %q has an invalid type",
-			searchjobs.ErrInvalidResult,
-			column,
-		)
+		"ClickHouse fixed value timechart",
+	); err != nil {
+		return bufferedFixedValueTimechart{}, err
 	}
 
 	// #nosec G115 -- validateTimechartOutput caps BucketCount at 10,000.
@@ -1320,17 +1333,14 @@ func readTimechartRows(ctx context.Context, rows driver.Rows, columns []string, 
 		{name: clickhouse.TimechartCountsColumn, databaseType: "Array(UInt64)", scanType: reflect.TypeOf([]uint64{})},
 		{name: clickhouse.TimechartInvalidColumn, databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0))},
 	}
-	violation, column := validateResultColumnContracts(
+	if err := validateResultColumns(
 		columns,
 		columnTypes,
 		contracts,
 		resultColumnRequireScanType|resultColumnTrimDatabaseType,
-	)
-	if violation == resultColumnContractShapeMismatch {
-		return bufferedTimechart{}, fmt.Errorf("%w: ClickHouse timechart columns do not match the compiled output", searchjobs.ErrInvalidResult)
-	}
-	if violation == resultColumnContractTypeMismatch {
-		return bufferedTimechart{}, fmt.Errorf("%w: ClickHouse timechart column %q has an invalid type", searchjobs.ErrInvalidResult, column)
+		"ClickHouse timechart",
+	); err != nil {
+		return bufferedTimechart{}, err
 	}
 
 	// #nosec G115 -- validateTimechartOutput caps BucketCount at 10,000.
@@ -1384,7 +1394,7 @@ func readTimechartRows(ctx context.Context, rows driver.Rows, columns []string, 
 		if invalid != 0 {
 			return bufferedTimechart{}, searchjobs.ErrUnsupportedValue
 		}
-		buffered.rows = append(buffered.rows, timechartRow{bucket: bucket, counts: slices.Clone(counts)})
+		buffered.rows = append(buffered.rows, timechartRow{bucket: bucket, cells: slices.Clone(counts)})
 	}
 	if err := rows.Err(); err != nil {
 		return bufferedTimechart{}, classifyQueryError(ctx, fmt.Errorf("iterate ClickHouse timechart results: %w", err))
@@ -1429,24 +1439,14 @@ func readValueTimechartRows(
 		{name: clickhouse.TimechartValuePresentColumn, databaseType: "Array(UInt8)", scanType: reflect.TypeOf([]uint8{})},
 		{name: clickhouse.TimechartInvalidColumn, databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0))},
 	}
-	violation, column := validateResultColumnContracts(
+	if err := validateResultColumns(
 		columns,
 		columnTypes,
 		contracts,
 		resultColumnRequireScanType|resultColumnTrimDatabaseType,
-	)
-	if violation == resultColumnContractShapeMismatch {
-		return bufferedValueTimechart{}, fmt.Errorf(
-			"%w: ClickHouse split value timechart columns do not match the compiled output",
-			searchjobs.ErrInvalidResult,
-		)
-	}
-	if violation == resultColumnContractTypeMismatch {
-		return bufferedValueTimechart{}, fmt.Errorf(
-			"%w: ClickHouse split value timechart column %q has an invalid type",
-			searchjobs.ErrInvalidResult,
-			column,
-		)
+		"ClickHouse split value timechart",
+	); err != nil {
+		return bufferedValueTimechart{}, err
 	}
 
 	// #nosec G115 -- validateTimechartOutput caps BucketCount at 10,000.
@@ -1540,7 +1540,7 @@ func readValueTimechartRows(
 		}
 		buffered.rows = append(buffered.rows, timechartValueRow{
 			bucket: time.Unix(bucketUnix, 0).UTC(),
-			values: rowValues,
+			cells:  rowValues,
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -1656,21 +1656,27 @@ func decodeSeriesNames(encoded []string, maxLabelBytes uint16, fixedColumn strin
 	return public, nil
 }
 
-func publishFixedTimechart(
+// publishFixedGrid publishes a dense single-series timechart grid: one row per
+// buffered cell, keyed by the bucket boundary derived from first and span.
+func publishFixedGrid[T any](
 	ctx context.Context,
 	sink searchjobs.ResultSink,
-	buffered bufferedFixedTimechart,
+	first time.Time,
+	span time.Duration,
+	column searchjobs.Column,
+	cells []T,
+	cell func(T) searchjobs.Value,
 ) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	spanSeconds := int64(buffered.span / time.Second)
-	if len(buffered.counts) > 0 {
-		// #nosec G115 -- fixed timechart validation caps the row count at 10,000.
+	spanSeconds := int64(span / time.Second)
+	if len(cells) > 0 {
+		// #nosec G115 -- the complete fixed grid was validated before schema publication.
 		if _, ok := checkedBucketBoundary(
-			buffered.first.Unix(),
+			first.Unix(),
 			spanSeconds,
-			uint64(len(buffered.counts)-1),
+			uint64(len(cells)-1),
 		); !ok {
 			return fmt.Errorf(
 				"%w: compiled timechart bucket arithmetic overflowed",
@@ -1680,25 +1686,86 @@ func publishFixedTimechart(
 	}
 	schema := searchjobs.Schema{Columns: []searchjobs.Column{
 		{Name: "_time", Kind: searchjobs.ValueKindTime},
-		{Name: buffered.countField, Kind: searchjobs.ValueKindUnsigned},
+		column,
 	}}
 	if err := sink.SetSchema(schema); err != nil {
 		return err
 	}
-	for ordinal, count := range buffered.counts {
+	for ordinal, value := range cells {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		// #nosec G115 -- the complete fixed grid was validated before schema publication.
-		bucketUnix := buffered.first.Unix() + int64(ordinal)*spanSeconds
+		bucketUnix := first.Unix() + int64(ordinal)*spanSeconds
 		if err := sink.AddRow([]searchjobs.Value{
 			searchjobs.TimeValue(time.Unix(bucketUnix, 0).UTC()),
-			searchjobs.UnsignedValue(count),
+			cell(value),
 		}); err != nil {
 			return err
 		}
 	}
 	return ctx.Err()
+}
+
+// publishWideGrid publishes a split-by timechart grid: a _time column followed
+// by one column per public series.
+func publishWideGrid[T any](
+	ctx context.Context,
+	sink searchjobs.ResultSink,
+	columns []string,
+	seriesKind searchjobs.ValueKind,
+	nullable bool,
+	rows []wideTimechartRow[T],
+	cell func(T) searchjobs.Value,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	schema := searchjobs.Schema{Columns: make([]searchjobs.Column, len(columns)+1)}
+	schema.Columns[0] = searchjobs.Column{Name: "_time", Kind: searchjobs.ValueKindTime}
+	for index, name := range columns {
+		schema.Columns[index+1] = searchjobs.Column{
+			Name:     name,
+			Kind:     seriesKind,
+			Nullable: nullable,
+		}
+	}
+	if err := sink.SetSchema(schema); err != nil {
+		return err
+	}
+	if len(columns) == 0 {
+		return ctx.Err()
+	}
+	for _, row := range rows {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		values := make([]searchjobs.Value, len(row.cells)+1)
+		values[0] = searchjobs.TimeValue(row.bucket)
+		for index, value := range row.cells {
+			values[index+1] = cell(value)
+		}
+		if err := sink.AddRow(values); err != nil {
+			return err
+		}
+	}
+	return ctx.Err()
+}
+
+func publishFixedTimechart(
+	ctx context.Context,
+	sink searchjobs.ResultSink,
+	buffered bufferedFixedTimechart,
+) error {
+	return publishFixedGrid(
+		ctx,
+		sink,
+		buffered.first,
+		buffered.span,
+		searchjobs.Column{Name: buffered.countField, Kind: searchjobs.ValueKindUnsigned},
+		buffered.counts,
+		searchjobs.UnsignedValue,
+	)
 }
 
 func publishFixedValueTimechart(
@@ -1706,79 +1773,27 @@ func publishFixedValueTimechart(
 	sink searchjobs.ResultSink,
 	buffered bufferedFixedValueTimechart,
 ) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	spanSeconds := int64(buffered.span / time.Second)
-	if len(buffered.values) > 0 {
-		// #nosec G115 -- the complete fixed grid was validated before schema publication.
-		if _, ok := checkedBucketBoundary(
-			buffered.first.Unix(),
-			spanSeconds,
-			uint64(len(buffered.values)-1),
-		); !ok {
-			return fmt.Errorf(
-				"%w: compiled timechart bucket arithmetic overflowed",
-				searchjobs.ErrInvalidResult,
-			)
-		}
-	}
-	schema := searchjobs.Schema{Columns: []searchjobs.Column{
-		{Name: "_time", Kind: searchjobs.ValueKindTime},
-		{Name: buffered.valueField, Kind: searchjobs.ValueKindDouble, Nullable: true},
-	}}
-	if err := sink.SetSchema(schema); err != nil {
-		return err
-	}
-	for ordinal, value := range buffered.values {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		// #nosec G115 -- the complete fixed grid was validated before schema publication.
-		bucketUnix := buffered.first.Unix() + int64(ordinal)*spanSeconds
-		publicValue := searchjobs.NullValue()
-		if value.valid {
-			publicValue = searchjobs.DoubleValue(value.value)
-		}
-		if err := sink.AddRow([]searchjobs.Value{
-			searchjobs.TimeValue(time.Unix(bucketUnix, 0).UTC()),
-			publicValue,
-		}); err != nil {
-			return err
-		}
-	}
-	return ctx.Err()
+	return publishFixedGrid(
+		ctx,
+		sink,
+		buffered.first,
+		buffered.span,
+		searchjobs.Column{Name: buffered.valueField, Kind: searchjobs.ValueKindDouble, Nullable: true},
+		buffered.values,
+		nullableFloat64.publicValue,
+	)
 }
 
 func publishTimechart(ctx context.Context, sink searchjobs.ResultSink, buffered bufferedTimechart) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	schema := searchjobs.Schema{Columns: make([]searchjobs.Column, len(buffered.columns)+1)}
-	schema.Columns[0] = searchjobs.Column{Name: "_time", Kind: searchjobs.ValueKindTime}
-	for index, name := range buffered.columns {
-		schema.Columns[index+1] = searchjobs.Column{Name: name, Kind: searchjobs.ValueKindUnsigned}
-	}
-	if err := sink.SetSchema(schema); err != nil {
-		return err
-	}
-	if len(buffered.columns) == 0 {
-		return ctx.Err()
-	}
-	for _, row := range buffered.rows {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		values := make([]searchjobs.Value, len(row.counts)+1)
-		values[0] = searchjobs.TimeValue(row.bucket)
-		for index, count := range row.counts {
-			values[index+1] = searchjobs.UnsignedValue(count)
-		}
-		if err := sink.AddRow(values); err != nil {
-			return err
-		}
-	}
-	return ctx.Err()
+	return publishWideGrid(
+		ctx,
+		sink,
+		buffered.columns,
+		searchjobs.ValueKindUnsigned,
+		false,
+		buffered.rows,
+		searchjobs.UnsignedValue,
+	)
 }
 
 func publishValueTimechart(
@@ -1786,41 +1801,15 @@ func publishValueTimechart(
 	sink searchjobs.ResultSink,
 	buffered bufferedValueTimechart,
 ) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	schema := searchjobs.Schema{Columns: make([]searchjobs.Column, len(buffered.columns)+1)}
-	schema.Columns[0] = searchjobs.Column{Name: "_time", Kind: searchjobs.ValueKindTime}
-	for index, name := range buffered.columns {
-		schema.Columns[index+1] = searchjobs.Column{
-			Name:     name,
-			Kind:     searchjobs.ValueKindDouble,
-			Nullable: true,
-		}
-	}
-	if err := sink.SetSchema(schema); err != nil {
-		return err
-	}
-	if len(buffered.columns) == 0 {
-		return ctx.Err()
-	}
-	for _, row := range buffered.rows {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		values := make([]searchjobs.Value, len(row.values)+1)
-		values[0] = searchjobs.TimeValue(row.bucket)
-		for index, value := range row.values {
-			values[index+1] = searchjobs.NullValue()
-			if value.valid {
-				values[index+1] = searchjobs.DoubleValue(value.value)
-			}
-		}
-		if err := sink.AddRow(values); err != nil {
-			return err
-		}
-	}
-	return ctx.Err()
+	return publishWideGrid(
+		ctx,
+		sink,
+		buffered.columns,
+		searchjobs.ValueKindDouble,
+		true,
+		buffered.rows,
+		nullableFloat64.publicValue,
+	)
 }
 
 type chartRow struct {
@@ -1837,30 +1826,6 @@ type bufferedChart struct {
 	columns   []string
 	rows      []chartRow
 	valueRows []chartValueRow
-}
-
-// chartRowValueKind maps the compiler's declared row kind onto the public
-// result kind. Both axes of a chart are runtime data, so the first column's
-// kind is contract metadata rather than something re-derived from ClickHouse.
-func chartRowValueKind(kind clickhouse.ChartRowKind) (searchjobs.ValueKind, bool) {
-	switch kind {
-	case clickhouse.ChartRowKindString:
-		return searchjobs.ValueKindString, true
-	case clickhouse.ChartRowKindSigned:
-		return searchjobs.ValueKindSigned, true
-	case clickhouse.ChartRowKindUnsigned:
-		return searchjobs.ValueKindUnsigned, true
-	case clickhouse.ChartRowKindDouble:
-		return searchjobs.ValueKindDouble, true
-	case clickhouse.ChartRowKindBool:
-		return searchjobs.ValueKindBool, true
-	case clickhouse.ChartRowKindTime:
-		return searchjobs.ValueKindTime, true
-	case clickhouse.ChartRowKindMixed:
-		return searchjobs.ValueKindMixed, true
-	default:
-		return searchjobs.ValueKindInvalid, false
-	}
 }
 
 // chartRowScanType binds the compiler's closed row-type contract to the exact
@@ -1940,7 +1905,7 @@ func readChartRows(
 	if err := ctx.Err(); err != nil {
 		return bufferedChart{}, err
 	}
-	rowKind, rowKindOK := chartRowValueKind(output.RowKind)
+	rowKind, rowKindOK := searchjobs.ChartRowValueKind(output.RowKind)
 	rowScanType, rowScanTypeOK := chartRowScanType(output.RowKind, output.RowDatabaseType)
 	if !rowKindOK || !rowScanTypeOK {
 		return bufferedChart{}, fmt.Errorf("%w: compiled chart row transport is invalid", searchjobs.ErrInvalidResult)
@@ -1986,17 +1951,14 @@ func readChartRows(
 	default:
 		return bufferedChart{}, fmt.Errorf("%w: compiled chart value kind is invalid", searchjobs.ErrInvalidResult)
 	}
-	violation, column := validateResultColumnContracts(
+	if err := validateResultColumns(
 		columns,
 		columnTypes,
 		contracts,
 		resultColumnRequireScanType|resultColumnTrimDatabaseType,
-	)
-	if violation == resultColumnContractShapeMismatch {
-		return bufferedChart{}, fmt.Errorf("%w: ClickHouse chart columns do not match the compiled output", searchjobs.ErrInvalidResult)
-	}
-	if violation == resultColumnContractTypeMismatch {
-		return bufferedChart{}, fmt.Errorf("%w: ClickHouse chart column %q has an invalid type", searchjobs.ErrInvalidResult, column)
+		"ClickHouse chart",
+	); err != nil {
+		return bufferedChart{}, err
 	}
 
 	buffered := bufferedChart{}
@@ -2160,6 +2122,65 @@ func clearScanDestinations(destinations []any) {
 	}
 }
 
+// chartRowTransport validates the fixed transport prologue every chart row
+// shares: the destination width implied by the optional semantic Bytes flag
+// column, and the flag itself when the transport carries one.
+func chartRowTransport(
+	destinations []any,
+	semanticBytesTransport bool,
+	dataColumns int,
+	invalidWidthMessage string,
+) (int, uint8, error) {
+	namesIndex := 2
+	semanticBytes := uint8(0)
+	if semanticBytesTransport {
+		namesIndex = 3
+	}
+	if len(destinations) != namesIndex+dataColumns {
+		return 0, 0, fmt.Errorf("%w: %s", searchjobs.ErrInvalidResult, invalidWidthMessage)
+	}
+	if semanticBytesTransport {
+		var ok bool
+		semanticBytes, ok = scannedValue(destinations[2]).(uint8)
+		if !ok || semanticBytes > 1 {
+			return 0, 0, fmt.Errorf("%w: ClickHouse chart semantic Bytes flag is invalid", searchjobs.ErrInvalidResult)
+		}
+	}
+	return namesIndex, semanticBytes, nil
+}
+
+// scannedChartRowValue decodes the row value column every chart row shares and
+// checks it against the compiled row kind.
+func scannedChartRowValue(
+	destinations []any,
+	rowKind searchjobs.ValueKind,
+	semanticBytesTransport bool,
+	semanticBytes uint8,
+) (searchjobs.Value, error) {
+	scanned := scannedValue(destinations[1])
+	if scanned == nil {
+		return searchjobs.Value{}, fmt.Errorf("%w: ClickHouse chart row value is null", searchjobs.ErrInvalidResult)
+	}
+	value, err := convertValue(scanned)
+	if semanticBytesTransport {
+		value, err = convertSemanticStringOrBytes(scanned, semanticBytes, false)
+	}
+	if err != nil {
+		return searchjobs.Value{}, fmt.Errorf("%w: ClickHouse chart row value cannot be converted", searchjobs.ErrInvalidResult)
+	}
+	if rowKind == searchjobs.ValueKindMixed {
+		// The Mixed row column is the String transport stats BY publishes for
+		// _raw, whose bytes may not be valid UTF-8. Those are exactly the two
+		// cell kinds a String column can produce, and nothing else.
+		if kind := value.Kind(); kind != searchjobs.ValueKindString && kind != searchjobs.ValueKindBytes {
+			return searchjobs.Value{}, fmt.Errorf("%w: ClickHouse chart row value does not match the compiled row kind", searchjobs.ErrInvalidResult)
+		}
+	} else if value.Kind() != rowKind {
+		return searchjobs.Value{}, fmt.Errorf("%w: ClickHouse chart row value does not match the compiled row kind", searchjobs.ErrInvalidResult)
+	}
+	return value, nil
+}
+
 func scannedChartRow(
 	destinations []any,
 	rowKind searchjobs.ValueKind,
@@ -2168,20 +2189,14 @@ func scannedChartRow(
 	invalidResult := func(message string) (uint64, searchjobs.Value, []string, []uint64, uint8, error) {
 		return 0, searchjobs.Value{}, nil, nil, 0, fmt.Errorf("%w: %s", searchjobs.ErrInvalidResult, message)
 	}
-	namesIndex := 2
-	semanticBytes := uint8(0)
-	if semanticBytesTransport {
-		namesIndex = 3
-	}
-	if len(destinations) != namesIndex+3 {
-		return invalidResult("ClickHouse chart row has an invalid width")
-	}
-	if semanticBytesTransport {
-		var ok bool
-		semanticBytes, ok = scannedValue(destinations[2]).(uint8)
-		if !ok || semanticBytes > 1 {
-			return invalidResult("ClickHouse chart semantic Bytes flag is invalid")
-		}
+	namesIndex, semanticBytes, err := chartRowTransport(
+		destinations,
+		semanticBytesTransport,
+		3,
+		"ClickHouse chart row has an invalid width",
+	)
+	if err != nil {
+		return 0, searchjobs.Value{}, nil, nil, 0, err
 	}
 	ordinal, ordinalOK := scannedValue(destinations[0]).(uint64)
 	names, namesOK := scannedValue(destinations[namesIndex]).([]string)
@@ -2190,26 +2205,9 @@ func scannedChartRow(
 	if !ordinalOK || !namesOK || !countsOK || !invalidOK {
 		return invalidResult("ClickHouse chart row has invalid native values")
 	}
-	scanned := scannedValue(destinations[1])
-	if scanned == nil {
-		return invalidResult("ClickHouse chart row value is null")
-	}
-	value, err := convertValue(scanned)
-	if semanticBytesTransport {
-		value, err = convertSemanticStringOrBytes(scanned, semanticBytes, false)
-	}
+	value, err := scannedChartRowValue(destinations, rowKind, semanticBytesTransport, semanticBytes)
 	if err != nil {
-		return invalidResult("ClickHouse chart row value cannot be converted")
-	}
-	if rowKind == searchjobs.ValueKindMixed {
-		// The Mixed row column is the String transport stats BY publishes for
-		// _raw, whose bytes may not be valid UTF-8. Those are exactly the two
-		// cell kinds a String column can produce, and nothing else.
-		if kind := value.Kind(); kind != searchjobs.ValueKindString && kind != searchjobs.ValueKindBytes {
-			return invalidResult("ClickHouse chart row value does not match the compiled row kind")
-		}
-	} else if value.Kind() != rowKind {
-		return invalidResult("ClickHouse chart row value does not match the compiled row kind")
+		return 0, searchjobs.Value{}, nil, nil, 0, err
 	}
 	return ordinal, value, names, counts, invalid, nil
 }
@@ -2224,20 +2222,14 @@ func scannedNumericChartRow(
 	invalidResult := func(message string) (uint64, searchjobs.Value, []string, []nullableFloat64, uint8, error) {
 		return 0, searchjobs.Value{}, nil, nil, 0, fmt.Errorf("%w: %s", searchjobs.ErrInvalidResult, message)
 	}
-	namesIndex := 2
-	semanticBytes := uint8(0)
-	if semanticBytesTransport {
-		namesIndex = 3
-	}
-	if len(destinations) != namesIndex+4 {
-		return invalidResult("ClickHouse numeric chart row has an invalid width")
-	}
-	if semanticBytesTransport {
-		var ok bool
-		semanticBytes, ok = scannedValue(destinations[2]).(uint8)
-		if !ok || semanticBytes > 1 {
-			return invalidResult("ClickHouse chart semantic Bytes flag is invalid")
-		}
+	namesIndex, semanticBytes, err := chartRowTransport(
+		destinations,
+		semanticBytesTransport,
+		4,
+		"ClickHouse numeric chart row has an invalid width",
+	)
+	if err != nil {
+		return 0, searchjobs.Value{}, nil, nil, 0, err
 	}
 	ordinal, ordinalOK := scannedValue(destinations[0]).(uint64)
 	names, namesOK := scannedValue(destinations[namesIndex]).([]string)
@@ -2262,23 +2254,9 @@ func scannedNumericChartRow(
 			values[index] = nullableFloat64{value: rawValues[index], valid: true}
 		}
 	}
-	scanned := scannedValue(destinations[1])
-	if scanned == nil {
-		return invalidResult("ClickHouse chart row value is null")
-	}
-	value, err := convertValue(scanned)
-	if semanticBytesTransport {
-		value, err = convertSemanticStringOrBytes(scanned, semanticBytes, false)
-	}
+	value, err := scannedChartRowValue(destinations, rowKind, semanticBytesTransport, semanticBytes)
 	if err != nil {
-		return invalidResult("ClickHouse chart row value cannot be converted")
-	}
-	if rowKind == searchjobs.ValueKindMixed {
-		if kind := value.Kind(); kind != searchjobs.ValueKindString && kind != searchjobs.ValueKindBytes {
-			return invalidResult("ClickHouse chart row value does not match the compiled row kind")
-		}
-	} else if value.Kind() != rowKind {
-		return invalidResult("ClickHouse chart row value does not match the compiled row kind")
+		return 0, searchjobs.Value{}, nil, nil, 0, err
 	}
 	return ordinal, value, names, values, invalid, nil
 }
@@ -2287,7 +2265,7 @@ func publishChart(ctx context.Context, sink searchjobs.ResultSink, output clickh
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	rowKind, ok := chartRowValueKind(output.RowKind)
+	rowKind, ok := searchjobs.ChartRowValueKind(output.RowKind)
 	if !ok {
 		return fmt.Errorf("%w: compiled chart row kind is invalid", searchjobs.ErrInvalidResult)
 	}

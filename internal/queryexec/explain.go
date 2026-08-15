@@ -631,25 +631,19 @@ func settingsForExplain(
 			"execute ClickHouse EXPLAIN: explainer does not have read-only settings",
 		)
 	}
-	settings := base.clone()
-	for _, limit := range [...]struct {
-		name    string
-		maximum uint64
-	}{
-		{name: "max_execution_time", maximum: uint64(maximumExplainExecutionTime / time.Second)},
-		{name: "max_memory_usage", maximum: maximumExplainMemoryBytes},
-		{name: "max_rows_to_read", maximum: maximumExplainRowsToRead},
-		{name: "max_bytes_to_read", maximum: maximumExplainBytesToRead},
-		{name: "max_result_rows", maximum: maximumExplainResultRows},
-		{name: "max_result_bytes", maximum: maximumExplainResultBytes},
-		{name: "max_rows_to_group_by", maximum: maximumExplainGroups},
-		{name: "max_threads", maximum: maximumExplainThreads},
-		{name: "max_query_size", maximum: defaultMaxQueryBytes},
-		{name: "max_subquery_depth", maximum: defaultMaxSubqueryDepth},
-	} {
-		value := base.limit(limit.name)
-		settings[limit.name] = min(value, limit.maximum)
-	}
+	settings := boundedExecutorSettings(
+		base,
+		settingLimit{name: "max_execution_time", maximum: uint64(maximumExplainExecutionTime / time.Second)},
+		settingLimit{name: "max_memory_usage", maximum: maximumExplainMemoryBytes},
+		settingLimit{name: "max_rows_to_read", maximum: maximumExplainRowsToRead},
+		settingLimit{name: "max_bytes_to_read", maximum: maximumExplainBytesToRead},
+		settingLimit{name: "max_result_rows", maximum: maximumExplainResultRows},
+		settingLimit{name: "max_result_bytes", maximum: maximumExplainResultBytes},
+		settingLimit{name: "max_rows_to_group_by", maximum: maximumExplainGroups},
+		settingLimit{name: "max_threads", maximum: maximumExplainThreads},
+		settingLimit{name: "max_query_size", maximum: defaultMaxQueryBytes},
+		settingLimit{name: "max_subquery_depth", maximum: defaultMaxSubqueryDepth},
+	)
 	settings["use_query_cache"] = uint8(0)
 	return settings, nil
 }

@@ -1,10 +1,13 @@
 package queryexec
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+
+	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 )
 
 type resultColumnContractMode uint8
@@ -60,4 +63,31 @@ func validateResultColumnContracts(
 		}
 	}
 	return resultColumnContractValid, ""
+}
+
+// validateResultColumns reports a contract violation as the invalid-result
+// error the named subject publishes.
+func validateResultColumns(
+	columns []string,
+	columnTypes []driver.ColumnType,
+	contracts []resultColumnContract,
+	mode resultColumnContractMode,
+	subject string,
+) error {
+	switch violation, column := validateResultColumnContracts(columns, columnTypes, contracts, mode); violation {
+	case resultColumnContractShapeMismatch:
+		return fmt.Errorf(
+			"%w: %s columns do not match the compiled output",
+			searchjobs.ErrInvalidResult,
+			subject,
+		)
+	case resultColumnContractTypeMismatch:
+		return fmt.Errorf(
+			"%w: %s column %q has an invalid type",
+			searchjobs.ErrInvalidResult,
+			subject,
+			column,
+		)
+	}
+	return nil
 }

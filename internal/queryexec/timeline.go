@@ -90,40 +90,13 @@ func (executor *Executor) ExecuteTimeline(ctx context.Context, query clickhouse.
 		)
 	}
 
-	queryID, err := executor.newQueryID()
+	rows, err := executor.issueRead(ctx, "timeline", query.SQL, query.Args, settings, externalTables)
 	if err != nil {
-		return nil, fmt.Errorf("execute ClickHouse timeline: create query ID: %w", err)
-	}
-	if queryID == "" {
-		return nil, errors.New("execute ClickHouse timeline: query ID is empty")
-	}
-	if err := ctx.Err(); err != nil {
 		return nil, err
-	}
-	queryOptions := []clickhousedriver.QueryOption{
-		clickhousedriver.WithQueryID(queryID),
-		clickhousedriver.WithSettings(settings),
-	}
-	queryOptions = appendExternalTableOption(queryOptions, externalTables)
-	queryContext := clickhousedriver.Context(ctx, queryOptions...)
-	rows, err := executor.connection.Query(queryContext, query.SQL, query.Args...)
-	if err != nil {
-		return nil, classifyQueryError(ctx, fmt.Errorf("query ClickHouse timeline: %w", err))
-	}
-	if isNilDriverValue(rows) {
-		return nil, fmt.Errorf("%w: ClickHouse timeline returned no result stream", searchjobs.ErrInvalidResult)
 	}
 
 	rowsClosed := false
-	defer func() {
-		if rowsClosed {
-			return
-		}
-		if closeErr := rows.Close(); resultErr == nil && closeErr != nil {
-			buckets = nil
-			resultErr = classifyQueryError(ctx, fmt.Errorf("close ClickHouse timeline result stream: %w", closeErr))
-		}
-	}()
+	defer closeReadStream(ctx, rows, "timeline", &rowsClosed, &buckets, &resultErr)
 
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -255,12 +228,5 @@ func validateTimelineColumns(columns []string, columnTypes []driver.ColumnType) 
 		{name: clickhouse.TimelineOrdinalColumn, databaseType: timelineOrdinalDatabaseType},
 		{name: clickhouse.TimelineCountColumn, databaseType: timelineCountDatabaseType},
 	}
-	violation, column := validateResultColumnContracts(columns, columnTypes, contracts, 0)
-	if violation == resultColumnContractShapeMismatch {
-		return fmt.Errorf("%w: ClickHouse timeline columns do not match the compiled output", searchjobs.ErrInvalidResult)
-	}
-	if violation == resultColumnContractTypeMismatch {
-		return fmt.Errorf("%w: ClickHouse timeline column %q has an invalid type", searchjobs.ErrInvalidResult, column)
-	}
-	return nil
+	return validateResultColumns(columns, columnTypes, contracts, 0, "ClickHouse timeline")
 }

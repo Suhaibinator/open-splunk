@@ -135,40 +135,13 @@ func (executor *Executor) ExecuteFieldCatalog(ctx context.Context, query clickho
 		)
 	}
 
-	queryID, err := executor.newQueryID()
+	rows, err := executor.issueRead(ctx, "field catalog", query.SQL, query.Args, settings, externalTables)
 	if err != nil {
-		return FieldCatalogResult{}, fmt.Errorf("execute ClickHouse field catalog: create query ID: %w", err)
-	}
-	if queryID == "" {
-		return FieldCatalogResult{}, errors.New("execute ClickHouse field catalog: query ID is empty")
-	}
-	if err := ctx.Err(); err != nil {
 		return FieldCatalogResult{}, err
-	}
-	queryOptions := []clickhousedriver.QueryOption{
-		clickhousedriver.WithQueryID(queryID),
-		clickhousedriver.WithSettings(settings),
-	}
-	queryOptions = appendExternalTableOption(queryOptions, externalTables)
-	queryContext := clickhousedriver.Context(ctx, queryOptions...)
-	rows, err := executor.connection.Query(queryContext, query.SQL, query.Args...)
-	if err != nil {
-		return FieldCatalogResult{}, classifyQueryError(ctx, fmt.Errorf("query ClickHouse field catalog: %w", err))
-	}
-	if isNilDriverValue(rows) {
-		return FieldCatalogResult{}, fmt.Errorf("%w: ClickHouse field catalog returned no result stream", searchjobs.ErrInvalidResult)
 	}
 
 	rowsClosed := false
-	defer func() {
-		if rowsClosed {
-			return
-		}
-		if closeErr := rows.Close(); resultErr == nil && closeErr != nil {
-			result = FieldCatalogResult{}
-			resultErr = classifyQueryError(ctx, fmt.Errorf("close ClickHouse field catalog result stream: %w", closeErr))
-		}
-	}()
+	defer closeReadStream(ctx, rows, "field catalog", &rowsClosed, &result, &resultErr)
 
 	if err := ctx.Err(); err != nil {
 		return FieldCatalogResult{}, err
@@ -310,37 +283,27 @@ func settingsForFieldCatalog(
 	if base == nil {
 		return nil, errors.New("execute ClickHouse field catalog: executor does not have read-only settings")
 	}
-	settings := base.clone()
 	memoryLimit := maximumFieldCatalogMemoryBytes
 	if knowledgeGeneratedFields > maximumStandardFieldCatalogKnowledgeFields {
 		memoryLimit = MaximumFieldCatalogMemoryBytes
 	}
-	settings["max_execution_time"] = min(
-		base.limit("max_execution_time"),
-		uint64(maximumFieldCatalogExecutionTime/time.Second),
-	)
-	settings["max_memory_usage"] = min(
-		base.limit("max_memory_usage"),
-		memoryLimit,
-	)
-	settings["max_rows_to_read"] = min(
-		base.limit("max_rows_to_read"),
-		maximumFieldCatalogRowsToRead,
-	)
-	settings["max_bytes_to_read"] = min(
-		base.limit("max_bytes_to_read"),
-		maximumFieldCatalogBytesToRead,
-	)
-	settings["max_result_rows"] = min(base.limit("max_result_rows"), uint64(maximumFields)+2)
-	settings["max_result_bytes"] = min(base.limit("max_result_bytes"), maximumFieldCatalogBytes)
-	// The prerequisite catalog groups one synthetic/header key plus up to
-	// MaximumFields+1 profile keys. The latter extra key is the executor's exact
-	// overflow sentinel; neither may be rejected before the atomic result is
-	// observed.
-	settings["max_rows_to_group_by"] = min(base.limit("max_rows_to_group_by"), uint64(maximumFields)+2)
-	settings["max_threads"] = min(
-		base.limit("max_threads"),
-		maximumFieldCatalogThreads,
+	settings := boundedExecutorSettings(
+		base,
+		settingLimit{
+			name:    "max_execution_time",
+			maximum: uint64(maximumFieldCatalogExecutionTime / time.Second),
+		},
+		settingLimit{name: "max_memory_usage", maximum: memoryLimit},
+		settingLimit{name: "max_rows_to_read", maximum: maximumFieldCatalogRowsToRead},
+		settingLimit{name: "max_bytes_to_read", maximum: maximumFieldCatalogBytesToRead},
+		settingLimit{name: "max_result_rows", maximum: uint64(maximumFields) + 2},
+		settingLimit{name: "max_result_bytes", maximum: maximumFieldCatalogBytes},
+		// The prerequisite catalog groups one synthetic/header key plus up to
+		// MaximumFields+1 profile keys. The latter extra key is the executor's exact
+		// overflow sentinel; neither may be rejected before the atomic result is
+		// observed.
+		settingLimit{name: "max_rows_to_group_by", maximum: uint64(maximumFields) + 2},
+		settingLimit{name: "max_threads", maximum: maximumFieldCatalogThreads},
 	)
 	settings["use_query_cache"] = uint8(0)
 	return settings, nil
@@ -357,14 +320,7 @@ func validateFieldCatalogColumns(columns []string, columnTypes []driver.ColumnTy
 		{name: clickhouse.FieldCatalogTotalEventsColumn, databaseType: "UInt64"},
 		{name: clickhouse.FieldCatalogInvalidColumn, databaseType: "UInt8"},
 	}
-	violation, column := validateResultColumnContracts(columns, columnTypes, contracts, 0)
-	if violation == resultColumnContractShapeMismatch {
-		return invalidFieldCatalogResult("columns do not match the compiled output")
-	}
-	if violation == resultColumnContractTypeMismatch {
-		return invalidFieldCatalogResult(fmt.Sprintf("column %q has an invalid type", column))
-	}
-	return nil
+	return validateResultColumns(columns, columnTypes, contracts, 0, "ClickHouse field catalog")
 }
 
 func validateFieldCatalogProfile(

@@ -105,50 +105,20 @@ func (executor *Executor) ExecuteStatsWildcardInventory(
 			"compiled lookup transport is invalid",
 		)
 	}
-	queryID, err := executor.newQueryID()
+	rows, err := executor.issueRead(
+		ctx,
+		"stats wildcard inventory",
+		query.SQL,
+		query.Args,
+		settings,
+		externalTables,
+	)
 	if err != nil {
-		return plan.StatsWildcardExpansion{}, fmt.Errorf(
-			"execute ClickHouse stats wildcard inventory: create query ID: %w",
-			err,
-		)
-	}
-	if queryID == "" {
-		return plan.StatsWildcardExpansion{}, errors.New(
-			"execute ClickHouse stats wildcard inventory: query ID is empty",
-		)
-	}
-	queryOptions := []clickhousedriver.QueryOption{
-		clickhousedriver.WithQueryID(queryID),
-		clickhousedriver.WithSettings(settings),
-	}
-	queryOptions = appendExternalTableOption(queryOptions, externalTables)
-	queryContext := clickhousedriver.Context(ctx, queryOptions...)
-	rows, err := executor.connection.Query(queryContext, query.SQL, query.Args...)
-	if err != nil {
-		return plan.StatsWildcardExpansion{}, classifyQueryError(
-			ctx,
-			fmt.Errorf("query ClickHouse stats wildcard inventory: %w", err),
-		)
-	}
-	if isNilDriverValue(rows) {
-		return plan.StatsWildcardExpansion{}, invalidStatsWildcardInventoryResult(
-			"returned no result stream",
-		)
+		return plan.StatsWildcardExpansion{}, err
 	}
 
 	rowsClosed := false
-	defer func() {
-		if rowsClosed {
-			return
-		}
-		if closeErr := rows.Close(); resultErr == nil && closeErr != nil {
-			result = plan.StatsWildcardExpansion{}
-			resultErr = classifyQueryError(
-				ctx,
-				fmt.Errorf("close ClickHouse stats wildcard inventory result stream: %w", closeErr),
-			)
-		}
-	}()
+	defer closeReadStream(ctx, rows, "stats wildcard inventory", &rowsClosed, &result, &resultErr)
 
 	if err := validateStatsWildcardInventoryColumns(rows.Columns(), rows.ColumnTypes()); err != nil {
 		return plan.StatsWildcardExpansion{}, err
@@ -265,21 +235,13 @@ func validateStatsWildcardInventoryColumns(
 		{name: clickhouse.StatsWildcardInventoryFieldColumn, databaseType: "String", scanType: reflect.TypeOf("")},
 		{name: clickhouse.StatsWildcardInventoryInvalidColumn, databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0))},
 	}
-	violation, column := validateResultColumnContracts(
+	return validateResultColumns(
 		columns,
 		columnTypes,
 		contracts,
 		resultColumnRequireScanType,
+		"ClickHouse stats wildcard inventory",
 	)
-	if violation == resultColumnContractShapeMismatch {
-		return invalidStatsWildcardInventoryResult("columns do not match the compiled output")
-	}
-	if violation == resultColumnContractTypeMismatch {
-		return invalidStatsWildcardInventoryResult(
-			fmt.Sprintf("column %q has an invalid type", column),
-		)
-	}
-	return nil
 }
 
 func settingsForStatsWildcardInventory(
@@ -296,38 +258,28 @@ func settingsForStatsWildcardInventory(
 			"execute ClickHouse stats wildcard inventory: executor does not have read-only settings",
 		)
 	}
-	settings := base.clone()
-	settings["max_execution_time"] = min(
-		base.limit("max_execution_time"),
-		uint64(maximumStatsWildcardInventoryExecutionTime/time.Second),
-	)
-	settings["max_memory_usage"] = min(
-		base.limit("max_memory_usage"), maximumStatsWildcardInventoryMemoryBytes,
-	)
-	settings["max_rows_to_read"] = min(
-		base.limit("max_rows_to_read"), maximumStatsWildcardInventoryRowsToRead,
-	)
-	settings["max_bytes_to_read"] = min(
-		base.limit("max_bytes_to_read"), maximumStatsWildcardInventoryBytesToRead,
-	)
-	settings["max_result_rows"] = min(
-		base.limit("max_result_rows"), uint64(maximumPairs)+1,
-	)
 	// Include the String offset/length, two scalar cells, and conservative
 	// block bookkeeping per row. Legal maximum-length names must not trip the
 	// transport guard before semantic validation sees them.
 	maximumResultBytes := uint64(maximumPairs+1) *
 		uint64(eventfields.MaximumNormalizedFieldNameBytes+64)
-	settings["max_result_bytes"] = min(
-		base.limit("max_result_bytes"), maximumResultBytes,
-	)
-	// Prefix operators (notably eventstats) and the pre-LIMIT distinct-name
-	// relation may legitimately exceed the final 17-pair transport. Preserve
-	// the executor's ordinary hard group ceiling; SQL LIMIT and the bounded
-	// result stream independently enforce inventory width.
-	settings["max_rows_to_group_by"] = base.limit("max_rows_to_group_by")
-	settings["max_threads"] = min(
-		base.limit("max_threads"), maximumStatsWildcardInventoryThreads,
+	// max_rows_to_group_by is deliberately absent below: prefix operators
+	// (notably eventstats) and the pre-LIMIT distinct-name relation may
+	// legitimately exceed the final 17-pair transport, so the executor's
+	// ordinary hard group ceiling is inherited unchanged. SQL LIMIT and the
+	// bounded result stream independently enforce inventory width.
+	settings := boundedExecutorSettings(
+		base,
+		settingLimit{
+			name:    "max_execution_time",
+			maximum: uint64(maximumStatsWildcardInventoryExecutionTime / time.Second),
+		},
+		settingLimit{name: "max_memory_usage", maximum: maximumStatsWildcardInventoryMemoryBytes},
+		settingLimit{name: "max_rows_to_read", maximum: maximumStatsWildcardInventoryRowsToRead},
+		settingLimit{name: "max_bytes_to_read", maximum: maximumStatsWildcardInventoryBytesToRead},
+		settingLimit{name: "max_result_rows", maximum: uint64(maximumPairs) + 1},
+		settingLimit{name: "max_result_bytes", maximum: maximumResultBytes},
+		settingLimit{name: "max_threads", maximum: maximumStatsWildcardInventoryThreads},
 	)
 	settings["use_query_cache"] = uint8(0)
 	return settings, nil

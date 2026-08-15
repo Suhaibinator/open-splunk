@@ -18,6 +18,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"github.com/Suhaibinator/open-splunk/internal/searchtimebounds"
 )
 
 // maximumFieldSummaryResultBytes bounds both the ClickHouse wire result and
@@ -134,40 +135,13 @@ func (executor *Executor) ExecuteFieldSummary(
 		)
 	}
 
-	queryID, err := executor.newQueryID()
+	rows, err := executor.issueRead(ctx, "field summary", query.SQL, query.Args, settings, externalTables)
 	if err != nil {
-		return FieldSummaryResult{}, fmt.Errorf("execute ClickHouse field summary: create query ID: %w", err)
-	}
-	if queryID == "" {
-		return FieldSummaryResult{}, errors.New("execute ClickHouse field summary: query ID is empty")
-	}
-	if err := ctx.Err(); err != nil {
 		return FieldSummaryResult{}, err
-	}
-	queryOptions := []clickhousedriver.QueryOption{
-		clickhousedriver.WithQueryID(queryID),
-		clickhousedriver.WithSettings(settings),
-	}
-	queryOptions = appendExternalTableOption(queryOptions, externalTables)
-	queryContext := clickhousedriver.Context(ctx, queryOptions...)
-	rows, err := executor.connection.Query(queryContext, query.SQL, query.Args...)
-	if err != nil {
-		return FieldSummaryResult{}, classifyQueryError(ctx, fmt.Errorf("query ClickHouse field summary: %w", err))
-	}
-	if isNilDriverValue(rows) {
-		return FieldSummaryResult{}, invalidFieldSummaryResult("returned no result stream")
 	}
 
 	rowsClosed := false
-	defer func() {
-		if rowsClosed {
-			return
-		}
-		if closeErr := rows.Close(); resultErr == nil && closeErr != nil {
-			result = FieldSummaryResult{}
-			resultErr = classifyQueryError(ctx, fmt.Errorf("close ClickHouse field summary result stream: %w", closeErr))
-		}
-	}()
+	defer closeReadStream(ctx, rows, "field summary", &rowsClosed, &result, &resultErr)
 
 	if err := ctx.Err(); err != nil {
 		return FieldSummaryResult{}, err
@@ -443,14 +417,7 @@ func validateFieldSummaryColumns(columns []string, columnTypes []driver.ColumnTy
 		{name: clickhouse.FieldSummaryUnsupportedColumn, databaseType: "UInt8"},
 		{name: clickhouse.FieldSummaryOversizedColumn, databaseType: "UInt8"},
 	}
-	violation, column := validateResultColumnContracts(columns, columnTypes, contracts, 0)
-	if violation == resultColumnContractShapeMismatch {
-		return invalidFieldSummaryResult("columns do not match the compiled output")
-	}
-	if violation == resultColumnContractTypeMismatch {
-		return invalidFieldSummaryResult(fmt.Sprintf("column %q has an invalid type", column))
-	}
-	return nil
+	return validateResultColumns(columns, columnTypes, contracts, 0, "ClickHouse field summary")
 }
 
 func validateFieldSummaryHeader(header fieldSummaryHeader, query clickhouse.CompiledFieldSummary) error {
@@ -580,7 +547,7 @@ func decodeFieldSummaryValue(
 		result.canonical = encoded
 		result.value = searchjobs.BytesValue(value)
 	case eventfields.StoredValueTypeTimestamp:
-		if !validFieldSummaryTimestampEncoding(encoded) {
+		if !searchtimebounds.ValidRFC3339Nano(encoded) {
 			return canonicalFieldSummaryValue{}, errors.New("timestamp value encoding is invalid")
 		}
 		value, err := time.Parse(time.RFC3339Nano, encoded)
@@ -626,55 +593,6 @@ func decodeFieldSummaryValue(
 		return canonicalFieldSummaryValue{}, errors.New("value type is invalid")
 	}
 	return result, nil
-}
-
-func validFieldSummaryTimestampEncoding(encoded string) bool {
-	// RFC 3339 permits a period-separated fractional second of up to nine
-	// digits. time.Parse is intentionally more permissive (it accepts commas,
-	// excess fractional digits, and invalid zone bounds), so validate the wire
-	// grammar before parsing and canonicalizing it.
-	if len(encoded) < len("0001-01-01T00:00:00Z") ||
-		encoded[4] != '-' || encoded[7] != '-' || encoded[10] != 'T' ||
-		encoded[13] != ':' || encoded[16] != ':' {
-		return false
-	}
-	for _, index := range [...]int{0, 1, 2, 3, 5, 6, 8, 9, 11, 12, 14, 15, 17, 18} {
-		if !fieldSummaryASCIIDigit(encoded[index]) {
-			return false
-		}
-	}
-
-	zoneStart := 19
-	if encoded[zoneStart] == '.' {
-		fractionStart := zoneStart + 1
-		zoneStart = fractionStart
-		for zoneStart < len(encoded) && fieldSummaryASCIIDigit(encoded[zoneStart]) {
-			zoneStart++
-		}
-		fractionDigits := zoneStart - fractionStart
-		if fractionDigits < 1 || fractionDigits > 9 {
-			return false
-		}
-	}
-	if zoneStart == len(encoded)-1 && encoded[zoneStart] == 'Z' {
-		return true
-	}
-	if len(encoded)-zoneStart != len("+00:00") ||
-		(encoded[zoneStart] != '+' && encoded[zoneStart] != '-') ||
-		encoded[zoneStart+3] != ':' ||
-		!fieldSummaryASCIIDigit(encoded[zoneStart+1]) ||
-		!fieldSummaryASCIIDigit(encoded[zoneStart+2]) ||
-		!fieldSummaryASCIIDigit(encoded[zoneStart+4]) ||
-		!fieldSummaryASCIIDigit(encoded[zoneStart+5]) {
-		return false
-	}
-	hour := int(encoded[zoneStart+1]-'0')*10 + int(encoded[zoneStart+2]-'0')
-	minute := int(encoded[zoneStart+4]-'0')*10 + int(encoded[zoneStart+5]-'0')
-	return hour <= 23 && minute <= 59
-}
-
-func fieldSummaryASCIIDigit(value byte) bool {
-	return value >= '0' && value <= '9'
 }
 
 func fieldSummaryRetainedValueBytes(value canonicalFieldSummaryValue, encoded string) uint64 {

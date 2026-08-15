@@ -117,54 +117,20 @@ func (executor *Executor) ExecuteFieldSuggestions(
 		)
 	}
 
-	queryID, err := executor.newQueryID()
+	rows, err := executor.issueRead(
+		ctx,
+		"field suggestions",
+		query.SQL,
+		query.Args,
+		settings,
+		externalTables,
+	)
 	if err != nil {
-		return FieldSuggestionResult{}, fmt.Errorf(
-			"execute ClickHouse field suggestions: create query ID: %w",
-			err,
-		)
-	}
-	if queryID == "" {
-		return FieldSuggestionResult{}, errors.New(
-			"execute ClickHouse field suggestions: query ID is empty",
-		)
-	}
-	if err := ctx.Err(); err != nil {
 		return FieldSuggestionResult{}, err
-	}
-	queryOptions := []clickhousedriver.QueryOption{
-		clickhousedriver.WithQueryID(queryID),
-		clickhousedriver.WithSettings(settings),
-	}
-	queryOptions = appendExternalTableOption(queryOptions, externalTables)
-	queryContext := clickhousedriver.Context(ctx, queryOptions...)
-	rows, err := executor.connection.Query(queryContext, query.SQL, query.Args...)
-	if err != nil {
-		return FieldSuggestionResult{}, classifyQueryError(
-			ctx,
-			fmt.Errorf("query ClickHouse field suggestions: %w", err),
-		)
-	}
-	if isNilDriverValue(rows) {
-		return FieldSuggestionResult{}, fmt.Errorf(
-			"%w: ClickHouse field suggestions returned no result stream",
-			searchjobs.ErrInvalidResult,
-		)
 	}
 
 	rowsClosed := false
-	defer func() {
-		if rowsClosed {
-			return
-		}
-		if closeErr := rows.Close(); resultErr == nil && closeErr != nil {
-			result = FieldSuggestionResult{}
-			resultErr = classifyQueryError(
-				ctx,
-				fmt.Errorf("close ClickHouse field suggestion result stream: %w", closeErr),
-			)
-		}
-	}()
+	defer closeReadStream(ctx, rows, "field suggestion", &rowsClosed, &result, &resultErr)
 
 	if err := ctx.Err(); err != nil {
 		return FieldSuggestionResult{}, err
@@ -306,38 +272,19 @@ func settingsForFieldSuggestions(
 			"execute ClickHouse field suggestions: executor does not have read-only settings",
 		)
 	}
-	settings := base.clone()
-	settings["max_execution_time"] = min(
-		base.limit("max_execution_time"),
-		uint64(maximumFieldSuggestionExecutionTime/time.Second),
-	)
-	settings["max_memory_usage"] = min(
-		base.limit("max_memory_usage"),
-		maximumFieldSuggestionMemoryBytes,
-	)
-	settings["max_rows_to_read"] = min(
-		base.limit("max_rows_to_read"),
-		maximumFieldSuggestionRowsToRead,
-	)
-	settings["max_bytes_to_read"] = min(
-		base.limit("max_bytes_to_read"),
-		maximumFieldSuggestionBytesToRead,
-	)
-	settings["max_result_rows"] = min(
-		base.limit("max_result_rows"),
-		uint64(maximumFields)+2,
-	)
-	settings["max_result_bytes"] = min(
-		base.limit("max_result_bytes"),
-		maximumFieldSuggestionResultBytes,
-	)
-	settings["max_rows_to_group_by"] = min(
-		base.limit("max_rows_to_group_by"),
-		maximumFieldSuggestionGroups,
-	)
-	settings["max_threads"] = min(
-		base.limit("max_threads"),
-		maximumFieldSuggestionThreads,
+	settings := boundedExecutorSettings(
+		base,
+		settingLimit{
+			name:    "max_execution_time",
+			maximum: uint64(maximumFieldSuggestionExecutionTime / time.Second),
+		},
+		settingLimit{name: "max_memory_usage", maximum: maximumFieldSuggestionMemoryBytes},
+		settingLimit{name: "max_rows_to_read", maximum: maximumFieldSuggestionRowsToRead},
+		settingLimit{name: "max_bytes_to_read", maximum: maximumFieldSuggestionBytesToRead},
+		settingLimit{name: "max_result_rows", maximum: uint64(maximumFields) + 2},
+		settingLimit{name: "max_result_bytes", maximum: maximumFieldSuggestionResultBytes},
+		settingLimit{name: "max_rows_to_group_by", maximum: maximumFieldSuggestionGroups},
+		settingLimit{name: "max_threads", maximum: maximumFieldSuggestionThreads},
 	)
 	return settings, nil
 }
@@ -351,21 +298,13 @@ func validateFieldSuggestionColumns(
 		{name: clickhouse.FieldSuggestionNameColumn, databaseType: "String", scanType: reflect.TypeOf("")},
 		{name: clickhouse.FieldSuggestionInvalidColumn, databaseType: "UInt8", scanType: reflect.TypeOf(uint8(0))},
 	}
-	violation, column := validateResultColumnContracts(
+	return validateResultColumns(
 		columns,
 		columnTypes,
 		contracts,
 		resultColumnRequireScanType,
+		"ClickHouse field suggestions",
 	)
-	if violation == resultColumnContractShapeMismatch {
-		return invalidFieldSuggestionResult("columns do not match the compiled output")
-	}
-	if violation == resultColumnContractTypeMismatch {
-		return invalidFieldSuggestionResult(
-			fmt.Sprintf("column %q has an invalid type", column),
-		)
-	}
-	return nil
 }
 
 func validateFieldSuggestionName(
