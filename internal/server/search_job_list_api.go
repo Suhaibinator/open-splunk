@@ -11,6 +11,7 @@ import (
 	"github.com/Suhaibinator/SRouter/pkg/codec"
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/asciifold"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobproto"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"google.golang.org/protobuf/proto"
@@ -52,9 +53,9 @@ func (handler *apiHandler) listSearchJobs(
 	if text != nil && *text == "" {
 		text = nil
 	}
-	var textMatcher *asciiFoldMatcher
+	var textMatcher *asciifold.Matcher
 	if text != nil {
-		matcher := newASCIIFoldMatcher(*text)
+		matcher := asciifold.New(*text)
 		textMatcher = &matcher
 	}
 	if err := searchJobListRequestContextError(request.Context()); err != nil {
@@ -254,7 +255,7 @@ func validSearchJobListItem(
 	scope searchjobs.AccessScope,
 	states []searchjobs.State,
 	appID *string,
-	text *asciiFoldMatcher,
+	text *asciifold.Matcher,
 ) bool {
 	if job.OwnerID != scope.OwnerID || job.TenantID != scope.TenantID ||
 		job.Schema != nil || job.CreatedAt.IsZero() ||
@@ -351,71 +352,8 @@ func validSearchJobListFailure(state searchjobs.State, failure *searchjobs.Failu
 	}
 }
 
-type asciiFoldMatcher struct {
-	pattern []byte
-	prefix  []int
-}
-
-func newASCIIFoldMatcher(pattern string) asciiFoldMatcher {
-	matcher := asciiFoldMatcher{
-		pattern: []byte(pattern),
-		prefix:  make([]int, len(pattern)),
-	}
-	for index := range matcher.pattern {
-		matcher.pattern[index] = asciiFoldByte(matcher.pattern[index])
-	}
-	for index, matched := 1, 0; index < len(matcher.pattern); {
-		if matcher.pattern[index] == matcher.pattern[matched] {
-			matched++
-			matcher.prefix[index] = matched
-			index++
-			continue
-		}
-		if matched > 0 {
-			matched = matcher.prefix[matched-1]
-			continue
-		}
-		index++
-	}
-	return matcher
-}
-
-func (matcher *asciiFoldMatcher) Contains(value string) bool {
-	if matcher == nil || len(matcher.pattern) == 0 {
-		return true
-	}
-	if len(matcher.pattern) > len(value) {
-		return false
-	}
-	matched := 0
-	for index := 0; index < len(value); index++ {
-		character := asciiFoldByte(value[index])
-		for matched > 0 && character != matcher.pattern[matched] {
-			matched = matcher.prefix[matched-1]
-		}
-		if character != matcher.pattern[matched] {
-			continue
-		}
-		matched++
-		if matched == len(matcher.pattern) {
-			return true
-		}
-	}
-	return false
-}
-
-func asciiFoldByte(value byte) byte {
-	if value >= 'A' && value <= 'Z' {
-		return value + ('a' - 'A')
-	}
-	return value
-}
-
 func searchJobListRequestContextError(ctx context.Context) error {
-	if ctx != nil && ctx.Err() != nil {
-		return router.NewHTTPError(http.StatusRequestTimeout, "search job list request was canceled")
-	}
-	return nil
+	return canceledRequestError(ctx, "search job list request was canceled")
 }
 
 type serializedSearchJobListResponse = boundedProtoResponse[*opensplunkv1.ListSearchJobsResponse]

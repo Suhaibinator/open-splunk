@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/searchjobproto"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 )
 
@@ -72,7 +73,7 @@ func validationResultToProto(result searchjobs.ValidationResult) (*opensplunkv1.
 		len(result.Diagnostics) == 0 {
 		return nil, errors.New("invalid search analysis is inconsistent")
 	}
-	response.Diagnostics = diagnosticsToProto(result.Diagnostics)
+	response.Diagnostics = searchjobproto.Diagnostics(result.Diagnostics)
 	return response, nil
 }
 

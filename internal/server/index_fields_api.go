@@ -169,13 +169,7 @@ func mapIndexFieldsCallError(
 }
 
 func indexFieldsRequestContextError(ctx context.Context) error {
-	if ctx != nil && ctx.Err() != nil {
-		return router.NewHTTPError(
-			http.StatusRequestTimeout,
-			"index field request was canceled",
-		)
-	}
-	return nil
+	return canceledRequestError(ctx, "index field request was canceled")
 }
 
 // A bounded index-field page has the same worst-case field-name expansion as

@@ -298,30 +298,6 @@ func setKnowledgeAttemptAuthorizedContext(
 	)
 }
 
-// markKnowledgeAttemptHandlerRejection supplies the exact reason for a
-// definitive handler rejection. rejectKnowledgeAttempt is preferred because
-// it also performs the synchronous append before returning an HTTP error.
-func markKnowledgeAttemptHandlerRejection(
-	request *http.Request,
-	reason knowledgeattemptaudit.Reason,
-) {
-	state, ok := knowledgeAttemptStateFromRequest(request)
-	if !ok {
-		return
-	}
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	if state.appendStarted || state.suppressed {
-		return
-	}
-	if !knowledgeAttemptReasonValid(reason) {
-		state.invalid = true
-		return
-	}
-	state.reason = reason
-	state.definitive = true
-}
-
 // rejectKnowledgeAttempt durably appends one exact handler rejection before
 // SRouter receives the HTTP error. The outer response boundary observes the
 // append result and therefore neither duplicates the event nor exposes the
@@ -339,7 +315,7 @@ func rejectKnowledgeAttempt(
 			knowledgeManagementUnavailableText,
 		)
 	}
-	if _, err := state.appendRejected(reason, true); err != nil {
+	if err := state.appendRejected(reason, true); err != nil {
 		return router.NewHTTPError(
 			http.StatusServiceUnavailable,
 			knowledgeManagementUnavailableText,
@@ -380,14 +356,14 @@ func markKnowledgeMutationOutcome(request *http.Request) {
 func (state *knowledgeAttemptState) appendRejected(
 	reason knowledgeattemptaudit.Reason,
 	definitive bool,
-) (bool, error) {
+) error {
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	if state.suppressed {
-		return true, nil
+		return nil
 	}
 	if state.appendStarted {
-		return false, state.appendErr
+		return state.appendErr
 	}
 	state.appendStarted = true
 	state.reason = reason
@@ -397,7 +373,7 @@ func (state *knowledgeAttemptState) appendRejected(
 	if state.invalid || !knowledgeAttemptActionValid(state.action) ||
 		!knowledgeAttemptReasonValid(state.reason) || state.append == nil {
 		state.appendErr = errKnowledgeAttemptBoundaryUnavailable
-		return false, state.appendErr
+		return state.appendErr
 	}
 	state.appendErr = state.append(knowledgeattemptaudit.Definition{
 		Action: state.action,
@@ -406,12 +382,12 @@ func (state *knowledgeAttemptState) appendRejected(
 			state.authorizedContext,
 		),
 	})
-	return false, state.appendErr
+	return state.appendErr
 }
 
 func (state *knowledgeAttemptState) finishRejectedResponse(
 	status int,
-) (suppressed bool, appendFailed bool) {
+) (appendFailed bool) {
 	state.mu.Lock()
 	definitive := state.definitive
 	reason := state.reason
@@ -419,8 +395,7 @@ func (state *knowledgeAttemptState) finishRejectedResponse(
 	if !definitive {
 		reason = fallbackKnowledgeAttemptReason(status)
 	}
-	suppressed, err := state.appendRejected(reason, definitive)
-	return suppressed, err != nil
+	return state.appendRejected(reason, definitive) != nil
 }
 
 func fallbackKnowledgeAttemptReason(
@@ -579,7 +554,7 @@ func (writer *knowledgeAttemptResponseWriter) finish(
 	if writer.streaming {
 		return
 	}
-	_, appendFailed := state.finishRejectedResponse(writer.status)
+	appendFailed := state.finishRejectedResponse(writer.status)
 	if appendFailed || writer.overflowed {
 		writeFixedKnowledgeUnavailable(writer.destination)
 		return

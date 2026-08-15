@@ -311,6 +311,27 @@ func (scopes knowledgeScopes) containsApp(appID string) bool {
 	return found
 }
 
+// allowsRead is the single sharing-scope read rule. Divergence between the
+// catalog, proto, and graph read paths would be an authorization bug.
+func (scopes knowledgeScopes) allowsRead(
+	scope knowledgecatalog.SharingScope,
+	appID string,
+	ownerID string,
+) bool {
+	switch scope {
+	case knowledgecatalog.SharingScopePrivate:
+		return scopes.containsApp(appID) && ownerID == scopes.read.OwnerID
+	case knowledgecatalog.SharingScopeApp:
+		return scopes.containsApp(appID)
+	case knowledgecatalog.SharingScopeGlobal:
+		// Tenant-global objects are intentionally visible from every readable
+		// app. Their source app is provenance, not read authority.
+		return true
+	default:
+		return false
+	}
+}
+
 func (handler *apiHandler) getKnowledgeObject(
 	request *http.Request,
 	input *opensplunkv1.GetKnowledgeObjectRequest,
@@ -1199,7 +1220,7 @@ func validKnowledgeMutationObjectResponse(
 		revision,
 		token,
 		scopes,
-	) && validKnowledgeDefinitionProjection(object)
+	) && validKnowledgeProtoDefinitionAuthority(object)
 }
 
 func validKnowledgeMutationObjectResponseAfterDefinitionAuthority(
@@ -1214,29 +1235,6 @@ func validKnowledgeMutationObjectResponseAfterDefinitionAuthority(
 		object.GetTenantId() == scopes.write.TenantID &&
 		object.GetOwnerId() == scopes.write.OwnerID &&
 		scopes.containsApp(object.GetAppId())
-}
-
-func validKnowledgeCreateResponse(
-	response *opensplunkv1.CreateKnowledgeObjectResponse,
-	request *opensplunkv1.CreateKnowledgeObjectRequest,
-	scopes knowledgeScopes,
-) bool {
-	return validKnowledgeCreateResponseForPolicy(response, request, scopes, false)
-}
-
-func validKnowledgeCreateResponseForPolicy(
-	response *opensplunkv1.CreateKnowledgeObjectResponse,
-	request *opensplunkv1.CreateKnowledgeObjectRequest,
-	scopes knowledgeScopes,
-	allowUnavailableActiveReplay bool,
-) bool {
-	return validKnowledgeCreateResponseWithPolicy(
-		response,
-		request,
-		scopes,
-		allowUnavailableActiveReplay,
-		false,
-	)
 }
 
 func validKnowledgeCreateResponseAfterDefinitionAuthorityForPolicy(
@@ -1291,29 +1289,6 @@ func validKnowledgeCreateResponseWithPolicy(
 		object.GetCreatedAt().AsTime().Equal(object.GetUpdatedAt().AsTime())
 }
 
-func validKnowledgeUpdateResponse(
-	response *opensplunkv1.UpdateKnowledgeObjectResponse,
-	request *opensplunkv1.UpdateKnowledgeObjectRequest,
-	scopes knowledgeScopes,
-) bool {
-	return validKnowledgeUpdateResponseForPolicy(response, request, scopes, false)
-}
-
-func validKnowledgeUpdateResponseForPolicy(
-	response *opensplunkv1.UpdateKnowledgeObjectResponse,
-	request *opensplunkv1.UpdateKnowledgeObjectRequest,
-	scopes knowledgeScopes,
-	allowUnavailableActiveReplay bool,
-) bool {
-	return validKnowledgeUpdateResponseWithPolicy(
-		response,
-		request,
-		scopes,
-		allowUnavailableActiveReplay,
-		false,
-	)
-}
-
 func validKnowledgeUpdateResponseAfterDefinitionAuthorityForPolicy(
 	response *opensplunkv1.UpdateKnowledgeObjectResponse,
 	request *opensplunkv1.UpdateKnowledgeObjectRequest,
@@ -1364,29 +1339,6 @@ func validKnowledgeUpdateResponseWithPolicy(
 			request.GetUpdateMask(),
 			object.GetState(),
 		)
-}
-
-func validKnowledgeSetStateResponse(
-	response *opensplunkv1.SetKnowledgeObjectStateResponse,
-	request *opensplunkv1.SetKnowledgeObjectStateRequest,
-	scopes knowledgeScopes,
-) bool {
-	return validKnowledgeSetStateResponseForPolicy(response, request, scopes, false)
-}
-
-func validKnowledgeSetStateResponseForPolicy(
-	response *opensplunkv1.SetKnowledgeObjectStateResponse,
-	request *opensplunkv1.SetKnowledgeObjectStateRequest,
-	scopes knowledgeScopes,
-	allowUnavailableActiveReplay bool,
-) bool {
-	return validKnowledgeSetStateResponseWithPolicy(
-		response,
-		request,
-		scopes,
-		allowUnavailableActiveReplay,
-		false,
-	)
 }
 
 func validKnowledgeSetStateResponseAfterDefinitionAuthorityForPolicy(
@@ -1460,11 +1412,6 @@ func validKnowledgeDeleteResponse(
 		len(scopes.apps) != 0
 }
 
-func validKnowledgeObjectEnvelope(object *opensplunkv1.KnowledgeObject) bool {
-	return validKnowledgeObjectScalarLifecycleEnvelope(object) &&
-		validKnowledgeDefinitionProjection(object)
-}
-
 // validKnowledgeObjectScalarLifecycleEnvelope validates every response
 // authority except the definition body and digest. Callers may use it only
 // after validKnowledgeCatalogDefinitionAuthority or
@@ -1532,12 +1479,6 @@ func validKnowledgeObjectScalarLifecycleEnvelope(
 		return false
 	}
 	return true
-}
-
-func validKnowledgeDefinitionProjection(
-	object *opensplunkv1.KnowledgeObject,
-) bool {
-	return validKnowledgeProtoDefinitionAuthority(object)
 }
 
 func knowledgeDefinitionObjectType(
@@ -1900,16 +1841,7 @@ func knowledgeCatalogObjectMatchesReadScope(
 	if object.TenantID != scopes.read.TenantID {
 		return false
 	}
-	switch object.SharingScope {
-	case knowledgecatalog.SharingScopePrivate:
-		return scopes.containsApp(object.AppID) && object.OwnerID == scopes.read.OwnerID
-	case knowledgecatalog.SharingScopeApp:
-		return scopes.containsApp(object.AppID)
-	case knowledgecatalog.SharingScopeGlobal:
-		return true
-	default:
-		return false
-	}
+	return scopes.allowsRead(object.SharingScope, object.AppID, object.OwnerID)
 }
 
 func knowledgeCatalogObjectMatchesListRequest(
@@ -2017,19 +1949,11 @@ func knowledgeObjectMatchesReadScopeAfterDefinitionAuthority(
 		object.GetTenantId() != scopes.read.TenantID {
 		return false
 	}
-	switch object.GetSharingScope() {
-	case opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE:
-		return scopes.containsApp(object.GetAppId()) &&
-			object.GetOwnerId() == scopes.read.OwnerID
-	case opensplunkv1.SharingScope_SHARING_SCOPE_APP:
-		return scopes.containsApp(object.GetAppId())
-	case opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL:
-		// Tenant-global objects are intentionally visible from every readable
-		// app. Their source app is provenance, not read authority.
-		return true
-	default:
+	converted, ok := knowledgeSharingScopeFromProto(object.GetSharingScope())
+	if !ok {
 		return false
 	}
+	return scopes.allowsRead(converted, object.GetAppId(), object.GetOwnerId())
 }
 
 func knowledgeObjectMatchesGetRequest(

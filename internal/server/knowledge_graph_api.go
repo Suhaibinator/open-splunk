@@ -450,17 +450,11 @@ func knowledgeGraphCurrentAuthorityValid(
 	default:
 		return false
 	}
-	switch authority.SharingScope {
-	case knowledgecatalog.SharingScopePrivate:
-		return scopes.containsApp(authority.AppID) &&
-			authority.OwnerID == scopes.read.OwnerID
-	case knowledgecatalog.SharingScopeApp:
-		return scopes.containsApp(authority.AppID)
-	case knowledgecatalog.SharingScopeGlobal:
-		return true
-	default:
-		return false
-	}
+	return scopes.allowsRead(
+		authority.SharingScope,
+		authority.AppID,
+		authority.OwnerID,
+	)
 }
 
 func knowledgeGraphIdentityValid(

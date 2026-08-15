@@ -14,6 +14,7 @@ import (
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/searchanalysis"
+	"github.com/Suhaibinator/open-splunk/internal/searchjobproto"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 )
 
@@ -244,7 +245,7 @@ func searchFieldProfileToProto(profile searchanalysis.FieldProfile) (*opensplunk
 		profile.DistinctCount != nil && *profile.DistinctCount > nonNullEvents {
 		return nil, errors.New("invalid search field profile counts")
 	}
-	valueType, err := valueKindToProto(profile.ValueKind)
+	valueType, err := searchjobproto.ValueKind(profile.ValueKind)
 	if err != nil {
 		return nil, err
 	}
@@ -259,7 +260,7 @@ func searchFieldProfileToProto(profile searchanalysis.FieldProfile) (*opensplunk
 			index > 0 && kind <= previous {
 			return nil, errors.New("invalid observed search field types")
 		}
-		converted, err := valueKindToProto(kind)
+		converted, err := searchjobproto.ValueKind(kind)
 		if err != nil {
 			return nil, err
 		}
@@ -369,8 +370,5 @@ func mapSearchFieldsCallError(ctx context.Context, operationErr error) error {
 }
 
 func searchFieldsRequestContextError(ctx context.Context) error {
-	if ctx != nil && ctx.Err() != nil {
-		return router.NewHTTPError(http.StatusRequestTimeout, "search field request was canceled")
-	}
-	return nil
+	return canceledRequestError(ctx, "search field request was canceled")
 }

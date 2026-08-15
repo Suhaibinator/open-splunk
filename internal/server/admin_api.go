@@ -27,6 +27,7 @@ import (
 	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/asciifold"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -808,9 +809,9 @@ func (handler *apiHandler) indexListResult(
 	}
 
 	selected := slices.Clone(result.Indexes)
-	var textMatcher *asciiFoldMatcher
+	var textMatcher *asciifold.Matcher
 	if request.TextFilter != nil {
-		matcher := newASCIIFoldMatcher(*request.TextFilter)
+		matcher := asciifold.New(*request.TextFilter)
 		textMatcher = &matcher
 	}
 	items := make(
@@ -935,7 +936,7 @@ func cloneInt64(input *int64) *int64 {
 func indexListRecordMatchesRequest(
 	record control.Index,
 	request control.IndexListRequest,
-	textMatcher *asciiFoldMatcher,
+	textMatcher *asciifold.Matcher,
 ) bool {
 	if len(request.StateFilters) != 0 &&
 		!slices.Contains(request.StateFilters, record.State) {
@@ -1807,7 +1808,7 @@ func applyIndexUpdate(current control.IndexDefinition, input *opensplunkv1.Index
 			return control.IndexDefinition{}, err
 		}
 	}
-	if err := validateIndexLimits(result.Limits); err != nil {
+	if err := result.Limits.Validate(); err != nil {
 		return control.IndexDefinition{}, err
 	}
 	if err := result.IngestionRateLimits.Validate(); err != nil {
@@ -1835,18 +1836,14 @@ func indexLimitsFromProto(input *opensplunkv1.IndexLimits) (control.IndexLimits,
 		MaxEventBytes: input.GetMaxEventBytes(), MaxFieldCount: input.GetMaxFieldCount(),
 		MaxNestingDepth: input.GetMaxNestingDepth(), MaximumFutureSkew: futureSkew, MaximumEventAge: eventAge,
 	}
-	if err := validateIndexLimits(limits); err != nil {
+	if err := limits.Validate(); err != nil {
 		return control.IndexLimits{}, err
 	}
 	return limits, nil
 }
 
-func validateIndexLimits(limits control.IndexLimits) error {
-	return limits.Validate()
-}
-
 func indexToProto(record control.Index) (*opensplunkv1.Index, error) {
-	if err := validateIndexLimits(record.Definition.Limits); err != nil {
+	if err := record.Definition.Limits.Validate(); err != nil {
 		return nil, errors.New("invalid index record")
 	}
 	if err := record.Definition.IngestionRateLimits.Validate(); err != nil {
@@ -3034,94 +3031,30 @@ func signAdminCursor(key, payload []byte) []byte {
 	return mac.Sum(nil)
 }
 
-type serializedIndexListResponse struct {
-	message *opensplunkv1.ListIndexesResponse
-	ctx     context.Context
-	release func()
-}
+type serializedIndexListResponse = boundedProtoResponse[*opensplunkv1.ListIndexesResponse]
 
-type serializedIndexListCodec struct {
-	inner codec.Codec[*opensplunkv1.ListIndexesRequest, *opensplunkv1.ListIndexesResponse]
-}
+type serializedIndexListCodec = boundedProtoCodec[*opensplunkv1.ListIndexesRequest, *opensplunkv1.ListIndexesResponse]
 
 func newSerializedIndexListCodec() *serializedIndexListCodec {
-	return &serializedIndexListCodec{inner: codec.NewProtoCodec[*opensplunkv1.ListIndexesRequest, *opensplunkv1.ListIndexesResponse]()}
+	return newBoundedProtoCodec(
+		codec.NewProtoCodec[*opensplunkv1.ListIndexesRequest, *opensplunkv1.ListIndexesResponse](),
+		boundedProtoCodecOptions{
+			stateError:   "index list serialization state is invalid",
+			messageError: "index list serialization state is invalid",
+		},
+	)
 }
 
-func (codec *serializedIndexListCodec) NewRequest() *opensplunkv1.ListIndexesRequest {
-	return codec.inner.NewRequest()
-}
+type serializedTokenListResponse = boundedProtoResponse[*opensplunkv1.ListIngestionTokensResponse]
 
-func (codec *serializedIndexListCodec) Decode(request *http.Request) (*opensplunkv1.ListIndexesRequest, error) {
-	return codec.inner.Decode(request)
-}
-
-func (codec *serializedIndexListCodec) DecodeBytes(data []byte) (*opensplunkv1.ListIndexesRequest, error) {
-	return codec.inner.DecodeBytes(data)
-}
-
-func (codec *serializedIndexListCodec) Encode(response http.ResponseWriter, result *serializedIndexListResponse) error {
-	if result == nil || result.message == nil || result.release == nil {
-		return errors.New("index list serialization state is invalid")
-	}
-	defer result.release()
-	if result.ctx != nil && result.ctx.Err() != nil {
-		return result.ctx.Err()
-	}
-	payload, err := proto.Marshal(result.message)
-	if err != nil {
-		return err
-	}
-	if result.ctx != nil && result.ctx.Err() != nil {
-		return result.ctx.Err()
-	}
-	response.Header().Set("Content-Type", "application/x-protobuf")
-	_, err = response.Write(payload)
-	return err
-}
-
-type serializedTokenListResponse struct {
-	message *opensplunkv1.ListIngestionTokensResponse
-	ctx     context.Context
-	release func()
-}
-
-type serializedTokenListCodec struct {
-	inner codec.Codec[*opensplunkv1.ListIngestionTokensRequest, *opensplunkv1.ListIngestionTokensResponse]
-}
+type serializedTokenListCodec = boundedProtoCodec[*opensplunkv1.ListIngestionTokensRequest, *opensplunkv1.ListIngestionTokensResponse]
 
 func newSerializedTokenListCodec() *serializedTokenListCodec {
-	return &serializedTokenListCodec{inner: codec.NewProtoCodec[*opensplunkv1.ListIngestionTokensRequest, *opensplunkv1.ListIngestionTokensResponse]()}
-}
-
-func (codec *serializedTokenListCodec) NewRequest() *opensplunkv1.ListIngestionTokensRequest {
-	return codec.inner.NewRequest()
-}
-
-func (codec *serializedTokenListCodec) Decode(request *http.Request) (*opensplunkv1.ListIngestionTokensRequest, error) {
-	return codec.inner.Decode(request)
-}
-
-func (codec *serializedTokenListCodec) DecodeBytes(data []byte) (*opensplunkv1.ListIngestionTokensRequest, error) {
-	return codec.inner.DecodeBytes(data)
-}
-
-func (codec *serializedTokenListCodec) Encode(response http.ResponseWriter, result *serializedTokenListResponse) error {
-	if result == nil || result.message == nil || result.release == nil {
-		return errors.New("ingestion token list serialization state is invalid")
-	}
-	defer result.release()
-	if result.ctx != nil && result.ctx.Err() != nil {
-		return result.ctx.Err()
-	}
-	payload, err := proto.Marshal(result.message)
-	if err != nil {
-		return err
-	}
-	if result.ctx != nil && result.ctx.Err() != nil {
-		return result.ctx.Err()
-	}
-	response.Header().Set("Content-Type", "application/x-protobuf")
-	_, err = response.Write(payload)
-	return err
+	return newBoundedProtoCodec(
+		codec.NewProtoCodec[*opensplunkv1.ListIngestionTokensRequest, *opensplunkv1.ListIngestionTokensResponse](),
+		boundedProtoCodecOptions{
+			stateError:   "ingestion token list serialization state is invalid",
+			messageError: "ingestion token list serialization state is invalid",
+		},
+	)
 }

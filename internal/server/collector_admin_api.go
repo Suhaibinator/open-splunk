@@ -404,19 +404,9 @@ func (handler *apiHandler) setCollectorEnabled(
 func (handler *apiHandler) collectorAdministrationAccess(
 	request *http.Request,
 ) (collectorfleet.Scope, error) {
-	if handler == nil || request == nil {
-		return collectorfleet.Scope{}, forbiddenError(
-			"administrator access is required",
-		)
-	}
-	principal, ok := browserPrincipalFromRequest(request)
-	if !ok ||
-		!principal.IsAdministrator() ||
-		principal.TenantID() != handler.tenantID ||
-		principal.OwnerID() != handler.ownerID {
-		return collectorfleet.Scope{}, forbiddenError(
-			"administrator access is required",
-		)
+	principal, err := handler.administratorPrincipal(request)
+	if err != nil {
+		return collectorfleet.Scope{}, err
 	}
 	return collectorfleet.Scope{
 		TenantID: strings.Clone(principal.TenantID()),
@@ -1170,13 +1160,7 @@ func (handler *apiHandler) collectorAdministrationNow() (time.Time, error) {
 }
 
 func collectorAdministrationContextError(ctx context.Context) error {
-	if ctx != nil && ctx.Err() != nil {
-		return router.NewHTTPError(
-			http.StatusRequestTimeout,
-			"collector administration request was canceled",
-		)
-	}
-	return nil
+	return canceledRequestError(ctx, "collector administration request was canceled")
 }
 
 func mapCollectorAdministrationCallError(

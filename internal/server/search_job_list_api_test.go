@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"math/rand"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -628,77 +627,6 @@ func TestSearchJobListRouteIsExactAndPostOnly(t *testing.T) {
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("suffix status = %d, body = %s", response.Code, response.Body.String())
 	}
-}
-
-func TestASCIIFoldMatcher(t *testing.T) {
-	tests := []struct {
-		name    string
-		value   string
-		pattern string
-		want    bool
-	}{
-		{name: "empty", value: "anything", pattern: "", want: true},
-		{name: "ascii folded prefix", value: "INDEX=main", pattern: "index=", want: true},
-		{name: "ascii folded suffix", value: "index=main ERROR", pattern: "error", want: true},
-		{name: "overlap", value: "aaaaab", pattern: "aaab", want: true},
-		{name: "longer", value: "short", pattern: "longer", want: false},
-		{name: "missing", value: "index=main", pattern: "needle", want: false},
-		{name: "non ascii exact", value: "café ERROR", pattern: "fé error", want: true},
-		{name: "non ascii is not folded", value: "CAFÉ", pattern: "café", want: false},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			matcher := newASCIIFoldMatcher(test.pattern)
-			if got := matcher.Contains(test.value); got != test.want {
-				t.Fatalf("Contains(%q, %q) = %v, want %v", test.value, test.pattern, got, test.want)
-			}
-		})
-	}
-}
-
-func TestASCIIFoldMatcherMatchesNaiveReference(t *testing.T) {
-	t.Parallel()
-
-	random := rand.New(rand.NewSource(0xc0ffee))
-	alphabet := []rune("abcXYZ012 _=-|éÉλ")
-	randomString := func(maximum int) string {
-		length := random.Intn(maximum + 1)
-		value := make([]rune, length)
-		for index := range value {
-			value[index] = alphabet[random.Intn(len(alphabet))]
-		}
-		return string(value)
-	}
-	for iteration := range 10_000 {
-		value := randomString(96)
-		pattern := randomString(16)
-		matcher := newASCIIFoldMatcher(pattern)
-		want := strings.Contains(serverFoldASCIIReference(value), serverFoldASCIIReference(pattern))
-		if got := matcher.Contains(value); got != want {
-			t.Fatalf("iteration %d: Contains(%q, %q) = %t, want %t", iteration, value, pattern, got, want)
-		}
-	}
-}
-
-func TestASCIIFoldMatcherAdversarialFallback(t *testing.T) {
-	t.Parallel()
-
-	matcher := newASCIIFoldMatcher(
-		"b" + strings.Repeat("a", maximumAdminTextFilterBytes-1),
-	)
-	if matcher.Contains(strings.Repeat("a", maximumDescriptionBytes)) {
-		t.Fatal("adversarial near-match was accepted")
-	}
-}
-
-func serverFoldASCIIReference(value string) string {
-	folded := []byte(value)
-	for index, character := range folded {
-		if character >= 'A' && character <= 'Z' {
-			folded[index] = character + ('a' - 'A')
-		}
-	}
-	return string(folded)
 }
 
 func newSearchJobListTestHandler(t *testing.T, jobs SearchJobs, overrides Config) *Handler {

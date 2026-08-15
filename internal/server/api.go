@@ -14,6 +14,7 @@ import (
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/buildmetadata"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/searchjobproto"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -613,7 +614,7 @@ func (handler *apiHandler) getSearchResults(request *http.Request, input *opensp
 	if err != nil {
 		return nil, mapSearchJobError(err)
 	}
-	converted, err := resultPageToProto(request.Context(), id, page, resultShapeForSPL(job.SPL), includeTotal, job.ResultsTruncated)
+	converted, err := searchjobproto.ResultPage(request.Context(), id, page, searchjobproto.ResultShapeForSPL(job.SPL), includeTotal, job.ResultsTruncated)
 	if err != nil {
 		if contextErr := requestContextFailure(request.Context(), err); contextErr != nil {
 			return nil, contextErr
@@ -723,6 +724,15 @@ func requestContextFailure(ctx context.Context, operationErr error) error {
 	}
 	if errors.Is(operationErr, context.DeadlineExceeded) || errors.Is(operationErr, context.Canceled) {
 		return operationErr
+	}
+	return nil
+}
+
+// canceledRequestError maps a canceled or expired request context onto the
+// single 408 shape every list endpoint returns.
+func canceledRequestError(ctx context.Context, message string) error {
+	if ctx != nil && ctx.Err() != nil {
+		return router.NewHTTPError(http.StatusRequestTimeout, message)
 	}
 	return nil
 }

@@ -14,6 +14,7 @@ import (
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/searchanalysis"
+	"github.com/Suhaibinator/open-splunk/internal/searchjobproto"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 )
 
@@ -185,7 +186,7 @@ func searchFieldSummaryToProto(
 			return nil, errors.New("search field summary contains duplicate values")
 		}
 		seen[identity] = struct{}{}
-		converted, err := valueToProto(ctx, item.Value)
+		converted, err := searchjobproto.Value(ctx, item.Value)
 		if err != nil {
 			return nil, err
 		}

@@ -360,8 +360,8 @@ type validateDefinitionWireBuilder struct {
 	selector           *validateSelectorWireBuilder
 	bodyNumber         protowire.Number
 	fieldExtraction    validateFieldExtractionWireBuilder
-	fieldAlias         validateFieldAliasWireBuilder
-	calculatedField    validateCalculatedFieldWireBuilder
+	fieldAlias         validateStringPairOverwriteWireBuilder
+	calculatedField    validateStringPairOverwriteWireBuilder
 	unknown            []byte
 }
 
@@ -431,12 +431,12 @@ func (builder *validateDefinitionWireBuilder) consumeBody(field validateWireFiel
 		if retained {
 			return builder.fieldAlias.consume(field.payload)
 		}
-		return (*validateFieldAliasWireBuilder)(nil).consume(field.payload)
+		return (*validateStringPairOverwriteWireBuilder)(nil).consume(field.payload)
 	case 12:
 		if retained {
 			return builder.calculatedField.consume(field.payload)
 		}
-		return (*validateCalculatedFieldWireBuilder)(nil).consume(field.payload)
+		return (*validateStringPairOverwriteWireBuilder)(nil).consume(field.payload)
 	default:
 		return nil
 	}
@@ -462,11 +462,11 @@ func (builder *validateDefinitionWireBuilder) finish() *opensplunkv1.KnowledgeOb
 		}
 	case 11:
 		if builder.projection.retains(11) {
-			result.Body = &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{FieldAlias: builder.fieldAlias.finish()}
+			result.Body = &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{FieldAlias: builder.fieldAlias.finishFieldAlias()}
 		}
 	case 12:
 		if builder.projection.retains(12) {
-			result.Body = &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{CalculatedField: builder.calculatedField.finish()}
+			result.Body = &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{CalculatedField: builder.calculatedField.finishCalculatedField()}
 		}
 	}
 	setValidateUnknown(result, builder.unknown)
@@ -718,21 +718,25 @@ func (builder *validateJSONWireBuilder) finish() *opensplunkv1.JsonFieldExtracti
 	return result
 }
 
-type validateFieldAliasWireBuilder struct {
-	source      []byte
-	destination []byte
-	overwrite   uint64
-	unknown     []byte
+// validateStringPairOverwriteWireBuilder decodes the wire shape shared by the
+// field-alias and calculated-field bodies: two length-delimited strings and one
+// overwrite varint. Every method tolerates a nil receiver so the discard path
+// can reuse the same parser without retaining anything.
+type validateStringPairOverwriteWireBuilder struct {
+	first     []byte
+	second    []byte
+	overwrite uint64
+	unknown   []byte
 }
 
-func (builder *validateFieldAliasWireBuilder) reset() {
-	builder.source = nil
-	builder.destination = nil
+func (builder *validateStringPairOverwriteWireBuilder) reset() {
+	builder.first = nil
+	builder.second = nil
 	builder.overwrite = 0
 	builder.unknown = builder.unknown[:0]
 }
 
-func (builder *validateFieldAliasWireBuilder) consume(data []byte) error {
+func (builder *validateStringPairOverwriteWireBuilder) consume(data []byte) error {
 	return walkValidateWire(data, func(field validateWireField) error {
 		switch {
 		case (field.number == 1 || field.number == 2) && field.wireType == protowire.BytesType:
@@ -742,9 +746,9 @@ func (builder *validateFieldAliasWireBuilder) consume(data []byte) error {
 			}
 			if builder != nil {
 				if field.number == 1 {
-					builder.source = value
+					builder.first = value
 				} else {
-					builder.destination = value
+					builder.second = value
 				}
 			}
 		case field.number == 3 && field.wireType == protowire.VarintType:
@@ -760,62 +764,20 @@ func (builder *validateFieldAliasWireBuilder) consume(data []byte) error {
 	})
 }
 
-func (builder *validateFieldAliasWireBuilder) finish() *opensplunkv1.FieldAliasDefinition {
+func (builder *validateStringPairOverwriteWireBuilder) finishFieldAlias() *opensplunkv1.FieldAliasDefinition {
 	result := &opensplunkv1.FieldAliasDefinition{
-		SourceField:       validateWireStringValue(builder.source),
-		DestinationField:  validateWireStringValue(builder.destination),
+		SourceField:       validateWireStringValue(builder.first),
+		DestinationField:  validateWireStringValue(builder.second),
 		OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior(int32(builder.overwrite)), // #nosec G115 -- protobuf varints intentionally retain generated unmarshal truncation semantics.
 	}
 	setValidateUnknown(result, builder.unknown)
 	return result
 }
 
-type validateCalculatedFieldWireBuilder struct {
-	destination []byte
-	expression  []byte
-	overwrite   uint64
-	unknown     []byte
-}
-
-func (builder *validateCalculatedFieldWireBuilder) reset() {
-	builder.destination = nil
-	builder.expression = nil
-	builder.overwrite = 0
-	builder.unknown = builder.unknown[:0]
-}
-
-func (builder *validateCalculatedFieldWireBuilder) consume(data []byte) error {
-	return walkValidateWire(data, func(field validateWireField) error {
-		switch {
-		case (field.number == 1 || field.number == 2) && field.wireType == protowire.BytesType:
-			value, err := validateWireString(field)
-			if err != nil {
-				return err
-			}
-			if builder != nil {
-				if field.number == 1 {
-					builder.destination = value
-				} else {
-					builder.expression = value
-				}
-			}
-		case field.number == 3 && field.wireType == protowire.VarintType:
-			if builder != nil {
-				builder.overwrite = field.varint
-			}
-		default:
-			if builder != nil {
-				builder.unknown = appendValidateUnknown(builder.unknown, field)
-			}
-		}
-		return nil
-	})
-}
-
-func (builder *validateCalculatedFieldWireBuilder) finish() *opensplunkv1.CalculatedFieldDefinition {
+func (builder *validateStringPairOverwriteWireBuilder) finishCalculatedField() *opensplunkv1.CalculatedFieldDefinition {
 	result := &opensplunkv1.CalculatedFieldDefinition{
-		DestinationField:  validateWireStringValue(builder.destination),
-		Expression:        validateWireStringValue(builder.expression),
+		DestinationField:  validateWireStringValue(builder.first),
+		Expression:        validateWireStringValue(builder.second),
 		OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior(int32(builder.overwrite)), // #nosec G115 -- protobuf varints intentionally retain generated unmarshal truncation semantics.
 	}
 	setValidateUnknown(result, builder.unknown)

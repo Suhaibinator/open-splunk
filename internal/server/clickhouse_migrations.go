@@ -38,30 +38,8 @@ const (
 )
 
 var (
-	clickHouseMigrationLedgerInsertPrefix = regexp.MustCompile("(?is)^\\s*INSERT\\s+INTO\\s+(?:open_splunk|`open_splunk`)\\s*\\.\\s*(?:schema_migrations\\b|`schema_migrations`)")
-	clickHouseMigrationLedgerInsert       = regexp.MustCompile("(?is)^\\s*INSERT\\s+INTO\\s+(?:open_splunk|`open_splunk`)\\s*\\.\\s*(?:schema_migrations\\b|`schema_migrations`)\\s*(?:\\([^)]*\\))?\\s*SELECT\\s+([0-9]+)\\s*,\\s*'([a-z0-9_]+)'(?:\\s*,|\\s*(?:WHERE\\b|$))")
-	clickHouseMigrationLedgerQuery        = clickHouseMigrationLedgerQueryForDatabase(recoverycontract.CanonicalDatabase)
-	clickHouseMigrationTablesQuery        = fmt.Sprintf(`
-		SELECT name
-		FROM
-		(
-			SELECT name
-			FROM system.tables
-			WHERE database = 'open_splunk'
-			LIMIT %d
-		)
-		ORDER BY name
-		SETTINGS
-			max_rows_to_read = %d,
-			max_bytes_to_read = %d,
-			read_overflow_mode = 'throw',
-			max_result_rows = %d,
-			result_overflow_mode = 'throw'`,
-		clickHouseMigrationTableResultLimit,
-		clickHouseMigrationTableResultLimit,
-		clickHouseMigrationTableReadByteLimit,
-		clickHouseMigrationTableResultLimit,
-	)
+	clickHouseMigrationLedgerInsertPrefix    = regexp.MustCompile("(?is)^\\s*INSERT\\s+INTO\\s+(?:open_splunk|`open_splunk`)\\s*\\.\\s*(?:schema_migrations\\b|`schema_migrations`)")
+	clickHouseMigrationLedgerInsert          = regexp.MustCompile("(?is)^\\s*INSERT\\s+INTO\\s+(?:open_splunk|`open_splunk`)\\s*\\.\\s*(?:schema_migrations\\b|`schema_migrations`)\\s*(?:\\([^)]*\\))?\\s*SELECT\\s+([0-9]+)\\s*,\\s*'([a-z0-9_]+)'(?:\\s*,|\\s*(?:WHERE\\b|$))")
 	clickHouseMigrationTablesByDatabaseQuery = fmt.Sprintf(`
 		SELECT name
 		FROM
@@ -310,13 +288,7 @@ func readClickHouseMigrationHistoryForDatabase(
 	}
 	tablesQuery := clickHouseMigrationTablesByDatabaseQuery
 	ledgerQuery := clickHouseMigrationLedgerQueryForDatabase(databaseName)
-	var tableArguments []any
-	if databaseName == recoverycontract.CanonicalDatabase {
-		tablesQuery = clickHouseMigrationTablesQuery
-		ledgerQuery = clickHouseMigrationLedgerQuery
-	} else {
-		tableArguments = []any{databaseName}
-	}
+	tableArguments := []any{databaseName}
 
 	if !tableSetValidated {
 		return readClickHouseMigrationHistoryWithTableProbe(

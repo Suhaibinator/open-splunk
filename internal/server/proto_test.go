@@ -148,7 +148,7 @@ func TestValueToProtoPreservesEverySupportedKind(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			converted, err := valueToProto(context.Background(), test.value)
+			converted, err := searchjobproto.Value(context.Background(), test.value)
 			if err != nil {
 				t.Fatalf("valueToProto: %v", err)
 			}
@@ -163,7 +163,7 @@ func TestValueToProtoPreservesEverySupportedKind(t *testing.T) {
 }
 
 func TestValueToProtoRejectsInvalidUTF8(t *testing.T) {
-	if _, err := valueToProto(context.Background(), searchjobs.StringValue(string([]byte{0xff}))); err == nil {
+	if _, err := searchjobproto.Value(context.Background(), searchjobs.StringValue(string([]byte{0xff}))); err == nil {
 		t.Fatal("invalid UTF-8 string was accepted")
 	}
 	object, err := searchjobs.ObjectValue(searchjobs.ObjectField{
@@ -173,15 +173,15 @@ func TestValueToProtoRejectsInvalidUTF8(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ObjectValue: %v", err)
 	}
-	if _, err := valueToProto(context.Background(), object); err == nil {
+	if _, err := searchjobproto.Value(context.Background(), object); err == nil {
 		t.Fatal("invalid UTF-8 object field name was accepted")
 	}
 }
 
 func TestValueToProtoAcceptsProtobufMinimumTimestamp(t *testing.T) {
-	converted, err := valueToProto(context.Background(), searchjobs.TimeValue(time.Time{}))
+	converted, err := searchjobproto.Value(context.Background(), searchjobs.TimeValue(time.Time{}))
 	if err != nil {
-		t.Fatalf("valueToProto(minimum timestamp): %v", err)
+		t.Fatalf("searchjobproto.Value(minimum timestamp): %v", err)
 	}
 	timestamp := converted.GetTimestampValue()
 	if timestamp == nil || timestamp.CheckValid() != nil || timestamp.GetSeconds() != -62_135_596_800 || timestamp.GetNanos() != 0 {
@@ -197,7 +197,7 @@ func TestValueToProtoCanonicalizesDecimalLexicalForm(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	converted, err := valueToProto(context.Background(), decimal)
+	converted, err := searchjobproto.Value(context.Background(), decimal)
 	if err != nil {
 		t.Fatalf("valueToProto: %v", err)
 	}
@@ -209,9 +209,9 @@ func TestValueToProtoCanonicalizesDecimalLexicalForm(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		converted, err := valueToProto(context.Background(), decimal)
+		converted, err := searchjobproto.Value(context.Background(), decimal)
 		if err != nil {
-			t.Fatalf("valueToProto(%q): %v", source, err)
+			t.Fatalf("searchjobproto.Value(%q): %v", source, err)
 		}
 		if got := converted.GetDecimalValue().GetValue(); got != "1234" {
 			t.Fatalf("canonical decimal for %q = %q, want 1234", source, got)
@@ -226,9 +226,9 @@ func TestValueToProtoCanonicalizesDecimalLexicalForm(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		converted, err := valueToProto(context.Background(), decimal)
+		converted, err := searchjobproto.Value(context.Background(), decimal)
 		if err != nil {
-			t.Fatalf("valueToProto(%q): %v", source, err)
+			t.Fatalf("searchjobproto.Value(%q): %v", source, err)
 		}
 		if got := converted.GetDecimalValue().GetValue(); got != want {
 			t.Fatalf("canonical decimal for %q = %q, want %q", source, got, want)
@@ -237,7 +237,7 @@ func TestValueToProtoCanonicalizesDecimalLexicalForm(t *testing.T) {
 }
 
 func TestMixedSchemaRetainsConcreteCellType(t *testing.T) {
-	page, err := resultPageToProto(context.Background(), "job", searchjobs.ResultPage{
+	page, err := searchjobproto.ResultPage(context.Background(), "job", searchjobs.ResultPage{
 		Schema:   searchjobs.Schema{Columns: []searchjobs.Column{{Name: "_raw", Kind: searchjobs.ValueKindMixed, Nullable: true}}},
 		Rows:     []searchjobs.ResultRow{{Ordinal: 0, Values: []searchjobs.Value{searchjobs.BytesValue([]byte{0xff})}}},
 		Complete: true,
@@ -272,7 +272,7 @@ func TestSearchJobAndResultPageExposeRetainedResultTruncation(t *testing.T) {
 		t.Fatalf("warning time = %s, want %s", converted.GetWarnings()[0].GetOccurredAt().AsTime(), job.FinishedAt)
 	}
 
-	page, err := resultPageToProto(context.Background(), job.ID, searchjobs.ResultPage{
+	page, err := searchjobproto.ResultPage(context.Background(), job.ID, searchjobs.ResultPage{
 		Schema:    searchjobs.Schema{Columns: []searchjobs.Column{{Name: "count", Kind: searchjobs.ValueKindUnsigned}}},
 		Rows:      []searchjobs.ResultRow{{Ordinal: 9_999, Values: []searchjobs.Value{searchjobs.UnsignedValue(1)}}},
 		TotalRows: 10_000,
@@ -288,13 +288,13 @@ func TestSearchJobAndResultPageExposeRetainedResultTruncation(t *testing.T) {
 		t.Fatalf("page metadata = %+v", page.GetPage())
 	}
 
-	complete, err := resultPageToProto(context.Background(), job.ID, searchjobs.ResultPage{
+	complete, err := searchjobproto.ResultPage(context.Background(), job.ID, searchjobs.ResultPage{
 		Schema:    searchjobs.Schema{Columns: []searchjobs.Column{{Name: "count", Kind: searchjobs.ValueKindUnsigned}}},
 		TotalRows: 10_000,
 		Complete:  true,
 	}, searchjobproto.ResultShape{Kind: opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS}, true, false)
 	if err != nil {
-		t.Fatalf("resultPageToProto(complete): %v", err)
+		t.Fatalf("searchjobproto.ResultPage(complete): %v", err)
 	}
 	if !complete.GetSnapshotComplete() || !complete.GetPage().GetTotalSizeExact() {
 		t.Fatalf("complete page metadata = %+v", complete)
@@ -368,8 +368,8 @@ func TestResultKindForSPLRecognizesTransformingCommands(t *testing.T) {
 		"index=main | unsupported": opensplunkv1.ResultSetKind_RESULT_SET_KIND_UNSPECIFIED,
 	}
 	for source, want := range tests {
-		if got := resultShapeForSPL(source).Kind; got != want {
-			t.Errorf("resultShapeForSPL(%q).Kind = %v, want %v", source, got, want)
+		if got := searchjobproto.ResultShapeForSPL(source).Kind; got != want {
+			t.Errorf("searchjobproto.ResultShapeForSPL(%q).Kind = %v, want %v", source, got, want)
 		}
 	}
 }
@@ -377,7 +377,7 @@ func TestResultKindForSPLRecognizesTransformingCommands(t *testing.T) {
 func TestTimeSeriesSchemaMarksWideSeriesAsMetrics(t *testing.T) {
 	t.Parallel()
 
-	converted, err := schemaToProto("timechart", searchjobs.Schema{Columns: []searchjobs.Column{
+	converted, err := searchjobproto.Schema("timechart", searchjobs.Schema{Columns: []searchjobs.Column{
 		{Name: "_time", Kind: searchjobs.ValueKindTime},
 		{Name: "ERROR", Kind: searchjobs.ValueKindUnsigned},
 		{Name: "NULL", Kind: searchjobs.ValueKindUnsigned},
@@ -398,7 +398,7 @@ func TestTimeSeriesSchemaMarksWideSeriesAsMetrics(t *testing.T) {
 func TestTimeSeriesSchemaMarksStaticCountAsMetric(t *testing.T) {
 	t.Parallel()
 
-	converted, err := schemaToProto("timechart", searchjobs.Schema{Columns: []searchjobs.Column{
+	converted, err := searchjobproto.Schema("timechart", searchjobs.Schema{Columns: []searchjobs.Column{
 		{Name: "_time", Kind: searchjobs.ValueKindTime},
 		{Name: "count", Kind: searchjobs.ValueKindUnsigned},
 	}}, searchjobproto.ResultShape{

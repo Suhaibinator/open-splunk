@@ -227,9 +227,9 @@ func invokeLookup[Request proto.Message, Response proto.Message](handler *apiHan
 }
 
 func (handler *apiHandler) lookupScope(request *http.Request) (lookupservice.Scope, error) {
-	principal, ok := browserPrincipalFromRequest(request)
-	if handler == nil || !ok || !principal.IsAdministrator() || principal.TenantID() != handler.tenantID || principal.OwnerID() != handler.ownerID {
-		return lookupservice.Scope{}, forbiddenError("administrator access is required")
+	principal, err := handler.administratorPrincipal(request)
+	if err != nil {
+		return lookupservice.Scope{}, err
 	}
 	return lookupservice.Scope{TenantID: principal.TenantID(), OwnerID: principal.OwnerID()}, nil
 }

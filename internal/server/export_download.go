@@ -34,7 +34,7 @@ var exportDownloadBuffers = sync.Pool{New: func() any {
 // dedicated download admission bound, and an explicit transport deadline.
 func (handler *apiHandler) downloadExport(response http.ResponseWriter, request *http.Request) {
 	if !validExportDownloadShape(request) {
-		writeDownloadError(response, http.StatusBadRequest, "download request is invalid")
+		writeAPIError(response, http.StatusBadRequest, "download request is invalid")
 		return
 	}
 	token, ok := strictBearerToken(request.Header.Values("Authorization"))
@@ -53,7 +53,7 @@ func (handler *apiHandler) downloadExport(response http.ResponseWriter, request 
 	writeDeadline, _ := downloadContext.Deadline()
 	if err := controller.SetWriteDeadline(writeDeadline); err != nil {
 		if !errors.Is(err, http.ErrNotSupported) {
-			writeDownloadError(response, http.StatusServiceUnavailable, "download transport is unavailable")
+			writeAPIError(response, http.StatusServiceUnavailable, "download transport is unavailable")
 			return
 		}
 	}
@@ -67,14 +67,14 @@ func (handler *apiHandler) downloadExport(response http.ResponseWriter, request 
 			writeInvalidDownloadGrant(response)
 		case errors.Is(err, exportjobs.ErrDownloadGrantCapacity):
 			response.Header().Set("Retry-After", "1")
-			writeDownloadError(response, http.StatusTooManyRequests, "download capacity is exhausted")
+			writeAPIError(response, http.StatusTooManyRequests, "download capacity is exhausted")
 		default:
-			writeDownloadError(response, http.StatusServiceUnavailable, "download is unavailable")
+			writeAPIError(response, http.StatusServiceUnavailable, "download is unavailable")
 		}
 		return
 	}
 	if download == nil {
-		writeDownloadError(response, http.StatusServiceUnavailable, "download is unavailable")
+		writeAPIError(response, http.StatusServiceUnavailable, "download is unavailable")
 		return
 	}
 	defer func() { _ = download.Close() }()
@@ -82,7 +82,7 @@ func (handler *apiHandler) downloadExport(response http.ResponseWriter, request 
 	artifact := download.Artifact()
 	contentDisposition, ok := validDownloadArtifact(artifact)
 	if !ok {
-		writeDownloadError(response, http.StatusServiceUnavailable, "download is unavailable")
+		writeAPIError(response, http.StatusServiceUnavailable, "download is unavailable")
 		return
 	}
 	if err := request.Context().Err(); err != nil {
@@ -198,9 +198,5 @@ func writeDownloadBytes(ctx context.Context, response http.ResponseWriter, paylo
 
 func writeInvalidDownloadGrant(response http.ResponseWriter) {
 	response.Header().Set("WWW-Authenticate", exportDownloadRealm)
-	writeDownloadError(response, http.StatusUnauthorized, "download grant is invalid")
-}
-
-func writeDownloadError(response http.ResponseWriter, status int, message string) {
-	writeAPIError(response, status, message)
+	writeAPIError(response, http.StatusUnauthorized, "download grant is invalid")
 }

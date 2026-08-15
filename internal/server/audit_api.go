@@ -107,14 +107,9 @@ func (handler *apiHandler) listAuditEvents(
 func (handler *apiHandler) administratorAuditTenantAccess(
 	request *http.Request,
 ) (string, error) {
-	if handler == nil || request == nil {
-		return "", forbiddenError("administrator access is required")
-	}
-	principal, ok := browserPrincipalFromRequest(request)
-	if !ok || !principal.IsAdministrator() ||
-		principal.TenantID() != handler.tenantID ||
-		principal.OwnerID() != handler.ownerID {
-		return "", forbiddenError("administrator access is required")
+	principal, err := handler.administratorPrincipal(request)
+	if err != nil {
+		return "", err
 	}
 	return principal.TenantID(), nil
 }
@@ -127,37 +122,15 @@ func (handler *apiHandler) auditListRequest(
 			"audit event list request is invalid",
 		)
 	}
-	maximumPageSize := min(handler.maximumPageSize, audit.MaximumListPageSize)
-	pageSize := min(defaultAuditListPageSize, maximumPageSize)
-	pageToken := ""
-	includeTotal := false
-	if input.Page != nil {
-		if len(input.Page.ProtoReflect().GetUnknown()) != 0 {
-			return audit.ListRequest{}, badRequestError(
-				"audit event page request is invalid",
-			)
-		}
-		includeTotal = input.Page.GetIncludeTotalSize()
-		if input.Page.PageSize != nil {
-			pageSize = input.Page.GetPageSize()
-			if pageSize == 0 || pageSize > maximumPageSize {
-				return audit.ListRequest{}, badRequestError(
-					"audit event page size is invalid",
-				)
-			}
-		}
-		if input.Page.PageToken != nil {
-			pageToken = input.Page.GetPageToken()
-			if !validBoundedListPageToken(
-				pageToken,
-				maximumAuditPageTokenBytes,
-				false,
-			) {
-				return audit.ListRequest{}, badRequestError(
-					"audit event page token is invalid",
-				)
-			}
-		}
+	pageSize, pageToken, includeTotal, err := handler.boundedListPageRequest(
+		input.Page,
+		"audit event",
+		defaultAuditListPageSize,
+		audit.MaximumListPageSize,
+		maximumAuditPageTokenBytes,
+	)
+	if err != nil {
+		return audit.ListRequest{}, err
 	}
 
 	if len(input.GetActionFilters()) > audit.MaximumActionFilters {
@@ -558,21 +531,14 @@ func mapAuditListCallError(ctx context.Context, operationErr error) error {
 	switch {
 	case errors.Is(operationErr, audit.ErrInvalidCursor):
 		return badRequestError("audit event page token is invalid")
-	case errors.Is(operationErr, audit.ErrCorrupt):
-		return unavailableError("audit event service is unavailable")
 	default:
+		// Ledger corruption is deliberately reported as 503, not 500.
 		return unavailableError("audit event service is unavailable")
 	}
 }
 
 func auditListContextError(ctx context.Context) error {
-	if ctx != nil && ctx.Err() != nil {
-		return router.NewHTTPError(
-			http.StatusRequestTimeout,
-			"audit event request was canceled",
-		)
-	}
-	return nil
+	return canceledRequestError(ctx, "audit event request was canceled")
 }
 
 type serializedAuditEventListResponse = boundedProtoResponse[*opensplunkv1.ListAuditEventsResponse]

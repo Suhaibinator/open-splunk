@@ -121,40 +121,15 @@ func (handler *apiHandler) searchAttemptAuditListRequest(
 			"search attempt audit list request is invalid",
 		)
 	}
-	maximumPageSize := min(
-		handler.maximumPageSize,
+	pageSize, pageToken, includeTotal, err := handler.boundedListPageRequest(
+		input.Page,
+		"search attempt audit",
+		defaultSearchAttemptAuditListPageSize,
 		searchaudit.MaximumListPageSize,
+		maximumSearchAttemptAuditPageTokenBytes,
 	)
-	pageSize := min(defaultSearchAttemptAuditListPageSize, maximumPageSize)
-	pageToken := ""
-	includeTotal := false
-	if input.Page != nil {
-		if len(input.Page.ProtoReflect().GetUnknown()) != 0 {
-			return searchaudit.ListRequest{}, badRequestError(
-				"search attempt audit page request is invalid",
-			)
-		}
-		includeTotal = input.Page.GetIncludeTotalSize()
-		if input.Page.PageSize != nil {
-			pageSize = input.Page.GetPageSize()
-			if pageSize == 0 || pageSize > maximumPageSize {
-				return searchaudit.ListRequest{}, badRequestError(
-					"search attempt audit page size is invalid",
-				)
-			}
-		}
-		if input.Page.PageToken != nil {
-			pageToken = input.Page.GetPageToken()
-			if !validBoundedListPageToken(
-				pageToken,
-				maximumSearchAttemptAuditPageTokenBytes,
-				false,
-			) {
-				return searchaudit.ListRequest{}, badRequestError(
-					"search attempt audit page token is invalid",
-				)
-			}
-		}
+	if err != nil {
+		return searchaudit.ListRequest{}, err
 	}
 
 	actorID, err := optionalSearchAttemptAuditFilter(
@@ -339,13 +314,7 @@ func mapSearchAttemptAuditListCallError(
 }
 
 func searchAttemptAuditContextError(ctx context.Context) error {
-	if ctx != nil && ctx.Err() != nil {
-		return router.NewHTTPError(
-			http.StatusRequestTimeout,
-			"search attempt audit request was canceled",
-		)
-	}
-	return nil
+	return canceledRequestError(ctx, "search attempt audit request was canceled")
 }
 
 type serializedSearchAttemptAuditListResponse = boundedProtoResponse[*opensplunkv1.ListSearchAttemptAuditEventsResponse]

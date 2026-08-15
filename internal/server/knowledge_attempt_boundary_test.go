@@ -773,39 +773,6 @@ func TestKnowledgeAttemptBoundaryRefinesAndDetachesDefinitiveRejection(t *testin
 	}
 }
 
-func TestKnowledgeAttemptBoundarySupportsMarkedHandlerRejection(t *testing.T) {
-	t.Parallel()
-
-	appender := &knowledgeBoundaryAppender{}
-	handler := newKnowledgeBoundaryHandler(
-		t,
-		auth.BrowserRoleAdministrator,
-		appender,
-	)
-	response := httptest.NewRecorder()
-	handler.protectKnowledgeManagementRoutes(http.HandlerFunc(
-		func(response http.ResponseWriter, request *http.Request) {
-			markKnowledgeAttemptHandlerRejection(
-				request,
-				knowledgeattemptaudit.ReasonNotFoundOrForbidden,
-			)
-			response.WriteHeader(http.StatusNotFound)
-		},
-	)).ServeHTTP(response, knowledgeBoundaryRequest(
-		context.Background(),
-		"/api/v1/knowledge/objects/get",
-		nil,
-	))
-
-	calls := appender.snapshot()
-	if len(calls) != 1 ||
-		calls[0].definition.Action != knowledgeattemptaudit.ActionGet ||
-		calls[0].definition.Reason != knowledgeattemptaudit.ReasonNotFoundOrForbidden ||
-		response.Code != http.StatusNotFound {
-		t.Fatalf("calls=%+v status=%d", calls, response.Code)
-	}
-}
-
 func TestKnowledgeAttemptBoundaryAppendFailureIsFixedAndNeverRetried(t *testing.T) {
 	t.Parallel()
 

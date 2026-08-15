@@ -11,6 +11,7 @@ import (
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
+	"github.com/Suhaibinator/open-splunk/internal/protostrict"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -275,7 +276,7 @@ func validateExportListRequest(
 	if input == nil {
 		return errors.New("export list request is required")
 	}
-	if protoMessageContainsUnknown(input.ProtoReflect()) {
+	if protostrict.ContainsUnknown(input.ProtoReflect()) {
 		return errors.New("export list request is invalid")
 	}
 	return nil
@@ -313,13 +314,7 @@ func mapExportListCallError(ctx context.Context, operationErr error) error {
 }
 
 func exportListRequestContextError(ctx context.Context) error {
-	if ctx != nil && ctx.Err() != nil {
-		return router.NewHTTPError(
-			http.StatusRequestTimeout,
-			"export list request was canceled",
-		)
-	}
-	return nil
+	return canceledRequestError(ctx, "export list request was canceled")
 }
 
 type serializedExportListResponse = boundedProtoResponse[*opensplunkv1.ListExportJobsResponse]

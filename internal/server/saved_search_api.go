@@ -484,10 +484,7 @@ func mapSavedSearchCallError(ctx context.Context, operationErr error) error {
 }
 
 func savedSearchRequestContextError(ctx context.Context) error {
-	if ctx != nil && ctx.Err() != nil {
-		return router.NewHTTPError(http.StatusRequestTimeout, "saved search request was canceled")
-	}
-	return nil
+	return canceledRequestError(ctx, "saved search request was canceled")
 }
 
 // serializedSavedSearchListResponse keeps one shared serialization permit
@@ -495,53 +492,17 @@ func savedSearchRequestContextError(ctx context.Context) error {
 // Saved-search definitions are user-authored and individually bounded, but a
 // page can still be large enough that unconstrained concurrent marshaling would
 // create avoidable memory pressure.
-type serializedSavedSearchListResponse struct {
-	message *opensplunkv1.ListSavedSearchesResponse
-	ctx     context.Context
-	release func()
-}
+type serializedSavedSearchListResponse = boundedProtoResponse[*opensplunkv1.ListSavedSearchesResponse]
 
-type serializedSavedSearchListCodec struct {
-	inner codec.Codec[*opensplunkv1.ListSavedSearchesRequest, *opensplunkv1.ListSavedSearchesResponse]
-}
+type serializedSavedSearchListCodec = boundedProtoCodec[*opensplunkv1.ListSavedSearchesRequest, *opensplunkv1.ListSavedSearchesResponse]
 
 func newSerializedSavedSearchListCodec() *serializedSavedSearchListCodec {
-	return &serializedSavedSearchListCodec{
-		inner: codec.NewProtoCodec[*opensplunkv1.ListSavedSearchesRequest, *opensplunkv1.ListSavedSearchesResponse](),
-	}
-}
-
-func (codec *serializedSavedSearchListCodec) NewRequest() *opensplunkv1.ListSavedSearchesRequest {
-	return codec.inner.NewRequest()
-}
-
-func (codec *serializedSavedSearchListCodec) Decode(request *http.Request) (*opensplunkv1.ListSavedSearchesRequest, error) {
-	return codec.inner.Decode(request)
-}
-
-func (codec *serializedSavedSearchListCodec) DecodeBytes(data []byte) (*opensplunkv1.ListSavedSearchesRequest, error) {
-	return codec.inner.DecodeBytes(data)
-}
-
-func (codec *serializedSavedSearchListCodec) Encode(response http.ResponseWriter, result *serializedSavedSearchListResponse) error {
-	if result == nil || result.release == nil {
-		return errors.New("saved search serialization permit is missing")
-	}
-	defer result.release()
-	if result.message == nil {
-		return errors.New("saved search list response is missing")
-	}
-	if err := savedSearchRequestContextError(result.ctx); err != nil {
-		return err
-	}
-	payload, err := proto.Marshal(result.message)
-	if err != nil {
-		return err
-	}
-	if err := savedSearchRequestContextError(result.ctx); err != nil {
-		return err
-	}
-	response.Header().Set("Content-Type", "application/x-protobuf")
-	_, err = response.Write(payload)
-	return err
+	return newBoundedProtoCodec(
+		codec.NewProtoCodec[*opensplunkv1.ListSavedSearchesRequest, *opensplunkv1.ListSavedSearchesResponse](),
+		boundedProtoCodecOptions{
+			stateError:   "saved search serialization permit is missing",
+			messageError: "saved search list response is missing",
+			contextError: savedSearchRequestContextError,
+		},
+	)
 }

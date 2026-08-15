@@ -16,9 +16,9 @@ import (
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/protostrict"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -339,7 +339,7 @@ func cloneSearchHistoryEntry(input *opensplunkv1.SearchHistoryEntry) (*opensplun
 	if encodedSize == 0 || encodedSize > maximumHistoryEntryBytes {
 		return nil, errors.New("search history service returned an invalid entry")
 	}
-	if err := rejectHistoryUnknownFields(input.ProtoReflect()); err != nil {
+	if err := protostrict.RejectUnknownFields(input.ProtoReflect(), "request"); err != nil {
 		return nil, err
 	}
 	if id, err := historySearchJobID(input.GetSearchJobId()); err != nil || id != input.GetSearchJobId() {
@@ -519,101 +519,29 @@ func mapSearchHistoryCallError(ctx context.Context, operationErr error) error {
 }
 
 func searchHistoryRequestContextError(ctx context.Context) error {
-	if ctx != nil && ctx.Err() != nil {
-		return router.NewHTTPError(http.StatusRequestTimeout, "search history request was canceled")
-	}
-	return nil
+	return canceledRequestError(ctx, "search history request was canceled")
 }
 
 func validateHistoryRequest(input proto.Message) error {
 	if input == nil {
 		return errors.New("request is required")
 	}
-	return rejectHistoryUnknownFields(input.ProtoReflect())
+	return protostrict.RejectUnknownFields(input.ProtoReflect(), "request")
 }
 
-func rejectHistoryUnknownFields(message protoreflect.Message) error {
-	if len(message.GetUnknown()) != 0 {
-		return errors.New("request contains unknown protobuf fields")
-	}
-	var visitErr error
-	message.Range(func(field protoreflect.FieldDescriptor, value protoreflect.Value) bool {
-		if field.IsMap() {
-			if field.MapValue().Kind() != protoreflect.MessageKind {
-				return true
-			}
-			value.Map().Range(func(_ protoreflect.MapKey, mapValue protoreflect.Value) bool {
-				visitErr = rejectHistoryUnknownFields(mapValue.Message())
-				return visitErr == nil
-			})
-			return visitErr == nil
-		}
-		if field.IsList() {
-			if field.Kind() != protoreflect.MessageKind {
-				return true
-			}
-			list := value.List()
-			for index := 0; index < list.Len(); index++ {
-				if visitErr = rejectHistoryUnknownFields(list.Get(index).Message()); visitErr != nil {
-					return false
-				}
-			}
-			return true
-		}
-		if field.Kind() == protoreflect.MessageKind {
-			visitErr = rejectHistoryUnknownFields(value.Message())
-			return visitErr == nil
-		}
-		return true
-	})
-	return visitErr
-}
+type serializedSearchHistoryListResponse = boundedProtoResponse[*opensplunkv1.ListSearchHistoryResponse]
 
-type serializedSearchHistoryListResponse struct {
-	message *opensplunkv1.ListSearchHistoryResponse
-	ctx     context.Context
-	release func()
-}
-
-type serializedSearchHistoryListCodec struct {
-	inner codec.Codec[*opensplunkv1.ListSearchHistoryRequest, *opensplunkv1.ListSearchHistoryResponse]
-}
+type serializedSearchHistoryListCodec = boundedProtoCodec[*opensplunkv1.ListSearchHistoryRequest, *opensplunkv1.ListSearchHistoryResponse]
 
 func newSerializedSearchHistoryListCodec() *serializedSearchHistoryListCodec {
-	return &serializedSearchHistoryListCodec{inner: codec.NewProtoCodec[*opensplunkv1.ListSearchHistoryRequest, *opensplunkv1.ListSearchHistoryResponse]()}
-}
-
-func (codec *serializedSearchHistoryListCodec) NewRequest() *opensplunkv1.ListSearchHistoryRequest {
-	return codec.inner.NewRequest()
-}
-
-func (codec *serializedSearchHistoryListCodec) Decode(request *http.Request) (*opensplunkv1.ListSearchHistoryRequest, error) {
-	return codec.inner.Decode(request)
-}
-
-func (codec *serializedSearchHistoryListCodec) DecodeBytes(data []byte) (*opensplunkv1.ListSearchHistoryRequest, error) {
-	return codec.inner.DecodeBytes(data)
-}
-
-func (codec *serializedSearchHistoryListCodec) Encode(response http.ResponseWriter, result *serializedSearchHistoryListResponse) error {
-	if result == nil || result.message == nil || result.release == nil {
-		return errors.New("search history list serialization state is invalid")
-	}
-	defer result.release()
-	if err := searchHistoryRequestContextError(result.ctx); err != nil {
-		return err
-	}
-	payload, err := proto.Marshal(result.message)
-	if err != nil {
-		return err
-	}
-	if len(payload) > maximumHistoryListResponseBytes {
-		return errors.New("search history list response exceeds the transport limit")
-	}
-	if err := searchHistoryRequestContextError(result.ctx); err != nil {
-		return err
-	}
-	response.Header().Set("Content-Type", "application/x-protobuf")
-	_, err = response.Write(payload)
-	return err
+	return newBoundedProtoCodec(
+		codec.NewProtoCodec[*opensplunkv1.ListSearchHistoryRequest, *opensplunkv1.ListSearchHistoryResponse](),
+		boundedProtoCodecOptions{
+			stateError:   "search history list serialization state is invalid",
+			messageError: "search history list serialization state is invalid",
+			contextError: searchHistoryRequestContextError,
+			maximumBytes: maximumHistoryListResponseBytes,
+			sizeError:    "search history list response exceeds the transport limit",
+		},
+	)
 }

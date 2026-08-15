@@ -13,6 +13,8 @@ import (
 	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/eventfields"
+	"github.com/Suhaibinator/open-splunk/internal/searchjobproto"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchsuggestions"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
@@ -262,7 +264,7 @@ func searchSuggestionsResultToProto(
 	}
 	return &opensplunkv1.GetSearchSuggestionsResponse{
 		Suggestions: suggestions,
-		Diagnostics: diagnosticsToProto(result.Diagnostics),
+		Diagnostics: searchjobproto.Diagnostics(result.Diagnostics),
 	}, nil
 }
 
@@ -415,22 +417,9 @@ func searchSuggestionRangeToProto(sourceRange spl.Range) *opensplunkv1.SourceRan
 
 func searchSuggestionDeduplicationKey(kind spl.SuggestionKind, label string) string {
 	if kind != spl.SuggestionKindField {
-		label = foldSearchSuggestionASCII(label)
+		label = eventfields.FoldASCII(label)
 	}
 	return string(kind) + "\x00" + label
-}
-
-func foldSearchSuggestionASCII(value string) string {
-	var builder strings.Builder
-	builder.Grow(len(value))
-	for index := 0; index < len(value); index++ {
-		character := value[index]
-		if character >= 'A' && character <= 'Z' {
-			character += 'a' - 'A'
-		}
-		builder.WriteByte(character)
-	}
-	return builder.String()
 }
 
 func mapSearchSuggestionCallError(ctx context.Context, operationErr error) error {
@@ -471,13 +460,7 @@ func mapSearchSuggestionCallError(ctx context.Context, operationErr error) error
 }
 
 func searchSuggestionRequestContextError(ctx context.Context) error {
-	if ctx != nil && ctx.Err() != nil {
-		return router.NewHTTPError(
-			http.StatusRequestTimeout,
-			"search suggestion request was canceled",
-		)
-	}
-	return nil
+	return canceledRequestError(ctx, "search suggestion request was canceled")
 }
 
 // The hard response field/count bounds above keep successful messages below

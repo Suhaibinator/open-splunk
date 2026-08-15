@@ -17,6 +17,28 @@ const (
 
 type browserPrincipalContextKey struct{}
 
+// administratorPrincipal is the single administrator gate every scope
+// accessor shares. Each caller maps the principal onto its own scope type.
+func (handler *apiHandler) administratorPrincipal(
+	request *http.Request,
+) (auth.BrowserPrincipal, error) {
+	if handler == nil || request == nil {
+		return auth.BrowserPrincipal{}, forbiddenError(
+			"administrator access is required",
+		)
+	}
+	principal, ok := browserPrincipalFromRequest(request)
+	if !ok ||
+		!principal.IsAdministrator() ||
+		principal.TenantID() != handler.tenantID ||
+		principal.OwnerID() != handler.ownerID {
+		return auth.BrowserPrincipal{}, forbiddenError(
+			"administrator access is required",
+		)
+	}
+	return principal, nil
+}
+
 func (handler *apiHandler) authorizeBrowserAdministrator(
 	response http.ResponseWriter,
 	request *http.Request,

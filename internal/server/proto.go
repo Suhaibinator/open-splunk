@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"errors"
 	"slices"
 	"time"
@@ -24,7 +23,7 @@ func searchJobToProto(job searchjobs.Job, now time.Time) (*opensplunkv1.SearchJo
 	if err != nil {
 		return nil, err
 	}
-	resultShape := resultShapeForSPL(job.SPL)
+	resultShape := searchjobproto.ResultShapeForSPL(job.SPL)
 	earliest, err := validTimestamp(job.Earliest)
 	if err != nil {
 		return nil, err
@@ -86,14 +85,14 @@ func searchJobToProto(job searchjobs.Job, now time.Time) (*opensplunkv1.SearchJo
 		KnowledgeSnapshot: knowledgeSnapshot,
 	}
 	if job.Schema != nil {
-		result.ResultSchema, err = schemaToProto(job.ID, *job.Schema, resultShape)
+		result.ResultSchema, err = searchjobproto.Schema(job.ID, *job.Schema, resultShape)
 		if err != nil {
 			return nil, err
 		}
 	}
 	if job.Failure != nil {
 		result.Failure = searchjobproto.Failure(*job.Failure)
-		result.Diagnostics = diagnosticsToProto(job.Failure.Diagnostics)
+		result.Diagnostics = searchjobproto.Diagnostics(job.Failure.Diagnostics)
 	}
 	if job.ResultsTruncated {
 		occurredAt := job.FinishedAt
@@ -129,30 +128,6 @@ func searchJobToProto(job searchjobs.Job, now time.Time) (*opensplunkv1.SearchJo
 		}
 	}
 	return result, nil
-}
-
-func resultPageToProto(ctx context.Context, jobID string, page searchjobs.ResultPage, shape searchjobproto.ResultShape, includeTotal, resultsTruncated bool) (*opensplunkv1.ResultPage, error) {
-	return searchjobproto.ResultPage(ctx, jobID, page, shape, includeTotal, resultsTruncated)
-}
-
-func schemaToProto(schemaID string, schema searchjobs.Schema, shape searchjobproto.ResultShape) (*opensplunkv1.ResultSchema, error) {
-	return searchjobproto.Schema(schemaID, schema, shape)
-}
-
-func resultShapeForSPL(source string) searchjobproto.ResultShape {
-	return searchjobproto.ResultShapeForSPL(source)
-}
-
-func valueToProto(ctx context.Context, value searchjobs.Value) (*opensplunkv1.TypedValue, error) {
-	return searchjobproto.Value(ctx, value)
-}
-
-func valueKindToProto(kind searchjobs.ValueKind) (opensplunkv1.ValueType, error) {
-	return searchjobproto.ValueKind(kind)
-}
-
-func diagnosticsToProto(diagnostics []searchjobs.Diagnostic) []*opensplunkv1.Diagnostic {
-	return searchjobproto.Diagnostics(diagnostics)
 }
 
 func indexSummaryToProto(index control.Index) *opensplunkv1.IndexSummary {

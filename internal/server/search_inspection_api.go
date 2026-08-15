@@ -117,19 +117,9 @@ func (handler *apiHandler) inspectSearchJob(
 func (handler *apiHandler) searchInspectionAccess(
 	request *http.Request,
 ) (searchjobs.AccessScope, error) {
-	if handler == nil || request == nil {
-		return searchjobs.AccessScope{}, forbiddenError(
-			"administrator access is required",
-		)
-	}
-	principal, ok := browserPrincipalFromRequest(request)
-	if !ok ||
-		!principal.IsAdministrator() ||
-		principal.TenantID() != handler.tenantID ||
-		principal.OwnerID() != handler.ownerID {
-		return searchjobs.AccessScope{}, forbiddenError(
-			"administrator access is required",
-		)
+	principal, err := handler.administratorPrincipal(request)
+	if err != nil {
+		return searchjobs.AccessScope{}, err
 	}
 	return searchjobs.AccessScope{
 		TenantID: principal.TenantID(),
@@ -391,13 +381,7 @@ func mapSearchInspectionCallError(
 }
 
 func searchInspectionRequestContextError(ctx context.Context) error {
-	if ctx != nil && ctx.Err() != nil {
-		return router.NewHTTPError(
-			http.StatusRequestTimeout,
-			"search inspection request was canceled",
-		)
-	}
-	return nil
+	return canceledRequestError(ctx, "search inspection request was canceled")
 }
 
 type serializedSearchInspectionResponse = boundedProtoResponse[*opensplunkv1.InspectSearchJobResponse]

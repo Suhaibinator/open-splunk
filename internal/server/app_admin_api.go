@@ -21,9 +21,9 @@ import (
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/protostrict"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
@@ -469,9 +469,14 @@ func (handler *apiHandler) updateApp(
 	if err := appAdministrationContextError(request.Context()); err != nil {
 		return nil, err
 	}
-	release, acquired := handler.acquireSerialization()
-	if !acquired {
-		return nil, unavailableError("administrative response capacity is exhausted")
+	current, release, err := handler.beginAppAdministrationMutation(
+		request,
+		scope,
+		selector,
+		input.GetExpectedVersion(),
+	)
+	if err != nil {
+		return nil, err
 	}
 	transferred := false
 	defer func() {
@@ -479,27 +484,6 @@ func (handler *apiHandler) updateApp(
 			release()
 		}
 	}()
-
-	current, operationErr := handler.appAdmin.GetApp(
-		request.Context(),
-		scope,
-		selector,
-	)
-	if mapped := mapAppAdministrationCallError(
-		request.Context(),
-		operationErr,
-	); mapped != nil {
-		return nil, mapped
-	}
-	if !appAdministrationSelectorMatches(selector, current) {
-		return nil, internalError()
-	}
-	if _, err := handler.appAdministrationWorkspaceToProto(current); err != nil {
-		return nil, internalError()
-	}
-	if current.Version != input.GetExpectedVersion() {
-		return nil, appAdministrationConflictError()
-	}
 	replacement, err := handler.applyAppAdministrationUpdate(
 		current.Definition,
 		input.GetDefinition(),
@@ -580,9 +564,14 @@ func (handler *apiHandler) setAppState(
 	if err := appAdministrationContextError(request.Context()); err != nil {
 		return nil, err
 	}
-	release, acquired := handler.acquireSerialization()
-	if !acquired {
-		return nil, unavailableError("administrative response capacity is exhausted")
+	current, release, err := handler.beginAppAdministrationMutation(
+		request,
+		scope,
+		selector,
+		input.GetExpectedVersion(),
+	)
+	if err != nil {
+		return nil, err
 	}
 	transferred := false
 	defer func() {
@@ -590,27 +579,6 @@ func (handler *apiHandler) setAppState(
 			release()
 		}
 	}()
-
-	current, operationErr := handler.appAdmin.GetApp(
-		request.Context(),
-		scope,
-		selector,
-	)
-	if mapped := mapAppAdministrationCallError(
-		request.Context(),
-		operationErr,
-	); mapped != nil {
-		return nil, mapped
-	}
-	if !appAdministrationSelectorMatches(selector, current) {
-		return nil, internalError()
-	}
-	if _, err := handler.appAdministrationWorkspaceToProto(current); err != nil {
-		return nil, internalError()
-	}
-	if current.Version != input.GetExpectedVersion() {
-		return nil, appAdministrationConflictError()
-	}
 	expectedDefinition := cloneAppAdministrationDefinition(current.Definition)
 	byID := AppAdministrationSelector{AppID: strings.Clone(current.AppID)}
 	record, operationErr := handler.appAdmin.SetAppState(
@@ -682,9 +650,14 @@ func (handler *apiHandler) deleteApp(
 	if err := appAdministrationContextError(request.Context()); err != nil {
 		return nil, err
 	}
-	release, acquired := handler.acquireSerialization()
-	if !acquired {
-		return nil, unavailableError("administrative response capacity is exhausted")
+	current, release, err := handler.beginAppAdministrationMutation(
+		request,
+		scope,
+		selector,
+		input.GetExpectedVersion(),
+	)
+	if err != nil {
+		return nil, err
 	}
 	transferred := false
 	defer func() {
@@ -692,26 +665,7 @@ func (handler *apiHandler) deleteApp(
 			release()
 		}
 	}()
-
-	current, operationErr := handler.appAdmin.GetApp(
-		request.Context(),
-		scope,
-		selector,
-	)
-	if mapped := mapAppAdministrationCallError(
-		request.Context(),
-		operationErr,
-	); mapped != nil {
-		return nil, mapped
-	}
-	if !appAdministrationSelectorMatches(selector, current) {
-		return nil, internalError()
-	}
-	if _, err := handler.appAdministrationWorkspaceToProto(current); err != nil {
-		return nil, internalError()
-	}
-	if current.Version != input.GetExpectedVersion() ||
-		current.State != AppAdministrationStateArchived {
+	if current.State != AppAdministrationStateArchived {
 		return nil, appAdministrationConflictError()
 	}
 	// Confirmation is checked before the destructive call, then also passed to
@@ -752,19 +706,9 @@ func (handler *apiHandler) deleteApp(
 func (handler *apiHandler) appAdministrationAccess(
 	request *http.Request,
 ) (AppAdministrationScope, error) {
-	if handler == nil || request == nil {
-		return AppAdministrationScope{}, forbiddenError(
-			"administrator access is required",
-		)
-	}
-	principal, ok := browserPrincipalFromRequest(request)
-	if !ok ||
-		!principal.IsAdministrator() ||
-		principal.TenantID() != handler.tenantID ||
-		principal.OwnerID() != handler.ownerID {
-		return AppAdministrationScope{}, forbiddenError(
-			"administrator access is required",
-		)
+	principal, err := handler.administratorPrincipal(request)
+	if err != nil {
+		return AppAdministrationScope{}, err
 	}
 	return AppAdministrationScope{
 		TenantID: principal.TenantID(),
@@ -772,51 +716,50 @@ func (handler *apiHandler) appAdministrationAccess(
 	}, nil
 }
 
-func invalidAppAdministrationRequest(message proto.Message) bool {
-	return isNilDependency(message) ||
-		protoMessageContainsUnknown(message.ProtoReflect())
+// beginAppAdministrationMutation acquires one serialization permit and loads
+// the app a mutation will replace. On any error it releases the permit
+// itself; on success the caller owns release and must transfer it into the
+// response.
+func (handler *apiHandler) beginAppAdministrationMutation(
+	request *http.Request,
+	scope AppAdministrationScope,
+	selector AppAdministrationSelector,
+	expectedVersion uint64,
+) (AppAdministrationWorkspace, func(), error) {
+	release, acquired := handler.acquireSerialization()
+	if !acquired {
+		return AppAdministrationWorkspace{}, nil, unavailableError("administrative response capacity is exhausted")
+	}
+	current, operationErr := handler.appAdmin.GetApp(
+		request.Context(),
+		scope,
+		selector,
+	)
+	if mapped := mapAppAdministrationCallError(
+		request.Context(),
+		operationErr,
+	); mapped != nil {
+		release()
+		return AppAdministrationWorkspace{}, nil, mapped
+	}
+	if !appAdministrationSelectorMatches(selector, current) {
+		release()
+		return AppAdministrationWorkspace{}, nil, internalError()
+	}
+	if _, err := handler.appAdministrationWorkspaceToProto(current); err != nil {
+		release()
+		return AppAdministrationWorkspace{}, nil, internalError()
+	}
+	if current.Version != expectedVersion {
+		release()
+		return AppAdministrationWorkspace{}, nil, appAdministrationConflictError()
+	}
+	return current, release, nil
 }
 
-func protoMessageContainsUnknown(message protoreflect.Message) bool {
-	if !message.IsValid() || len(message.GetUnknown()) != 0 {
-		return true
-	}
-	containsUnknown := false
-	message.Range(func(field protoreflect.FieldDescriptor, value protoreflect.Value) bool {
-		if field.IsMap() {
-			if field.MapValue().Message() == nil {
-				return true
-			}
-			value.Map().Range(func(_ protoreflect.MapKey, item protoreflect.Value) bool {
-				if protoMessageContainsUnknown(item.Message()) {
-					containsUnknown = true
-					return false
-				}
-				return true
-			})
-			return !containsUnknown
-		}
-		if field.IsList() {
-			if field.Message() == nil {
-				return true
-			}
-			list := value.List()
-			for index := 0; index < list.Len(); index++ {
-				if protoMessageContainsUnknown(list.Get(index).Message()) {
-					containsUnknown = true
-					return false
-				}
-			}
-			return true
-		}
-		if field.Message() != nil &&
-			protoMessageContainsUnknown(value.Message()) {
-			containsUnknown = true
-			return false
-		}
-		return true
-	})
-	return containsUnknown
+func invalidAppAdministrationRequest(message proto.Message) bool {
+	return isNilDependency(message) ||
+		protostrict.ContainsUnknown(message.ProtoReflect())
 }
 
 func appAdministrationSelector(
@@ -1641,13 +1584,7 @@ func (handler *apiHandler) appAdministrationListToProto(
 }
 
 func appAdministrationContextError(ctx context.Context) error {
-	if ctx != nil && ctx.Err() != nil {
-		return router.NewHTTPError(
-			http.StatusRequestTimeout,
-			"app administration request was canceled",
-		)
-	}
-	return nil
+	return canceledRequestError(ctx, "app administration request was canceled")
 }
 
 func mapAppAdministrationCallError(

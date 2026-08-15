@@ -399,7 +399,13 @@ func TestKnowledgeHTTPSuccessResponseValidationRejectsUnavailableActiveAndStaleM
 		TenantCatalogRevision:   1,
 		TenantCatalogStateToken: token,
 	}
-	if !validKnowledgeCreateResponse(draftCreateResponse, draftCreateRequest, scopes) {
+	if !validKnowledgeCreateResponseWithPolicy(
+		draftCreateResponse,
+		draftCreateRequest,
+		scopes,
+		false,
+		false,
+	) {
 		t.Fatal("valid draft Create response fixture was rejected")
 	}
 	missingCreatedAt := proto.Clone(draftCreateResponse).(*opensplunkv1.CreateKnowledgeObjectResponse)
@@ -417,15 +423,23 @@ func TestKnowledgeHTTPSuccessResponseValidationRejectsUnavailableActiveAndStaleM
 	activeCreateRequest.InitialState = opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE
 	activeCreateResponse := proto.Clone(draftCreateResponse).(*opensplunkv1.CreateKnowledgeObjectResponse)
 	activeCreateResponse.KnowledgeObject.State = opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE
-	if !validKnowledgeObjectEnvelope(activeCreateResponse.GetKnowledgeObject()) ||
-		validKnowledgeCreateResponse(activeCreateResponse, activeCreateRequest, scopes) {
+	if !validKnowledgeObjectScalarLifecycleEnvelope(activeCreateResponse.GetKnowledgeObject()) ||
+		!validKnowledgeProtoDefinitionAuthority(activeCreateResponse.GetKnowledgeObject()) ||
+		validKnowledgeCreateResponseWithPolicy(
+			activeCreateResponse,
+			activeCreateRequest,
+			scopes,
+			false,
+			false,
+		) {
 		t.Fatal("ACTIVE Create success response did not fail closed")
 	}
-	if !validKnowledgeCreateResponseForPolicy(
+	if !validKnowledgeCreateResponseWithPolicy(
 		activeCreateResponse,
 		activeCreateRequest,
 		scopes,
 		true,
+		false,
 	) {
 		t.Fatal("certified ACTIVE Create replay response was rejected")
 	}
@@ -452,7 +466,13 @@ func TestKnowledgeHTTPSuccessResponseValidationRejectsUnavailableActiveAndStaleM
 		TenantCatalogRevision:   2,
 		TenantCatalogStateToken: token,
 	}
-	if !validKnowledgeUpdateResponse(draftUpdateResponse, updateRequest, scopes) {
+	if !validKnowledgeUpdateResponseWithPolicy(
+		draftUpdateResponse,
+		updateRequest,
+		scopes,
+		false,
+		false,
+	) {
 		t.Fatal("valid draft Update response fixture was rejected")
 	}
 	wrongUpdateIdentity := proto.Clone(draftUpdateResponse).(*opensplunkv1.UpdateKnowledgeObjectResponse)
@@ -468,15 +488,23 @@ func TestKnowledgeHTTPSuccessResponseValidationRejectsUnavailableActiveAndStaleM
 	}
 	activeUpdateResponse := proto.Clone(draftUpdateResponse).(*opensplunkv1.UpdateKnowledgeObjectResponse)
 	activeUpdateResponse.KnowledgeObject.State = opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE
-	if !validKnowledgeObjectEnvelope(activeUpdateResponse.GetKnowledgeObject()) ||
-		validKnowledgeUpdateResponse(activeUpdateResponse, updateRequest, scopes) {
+	if !validKnowledgeObjectScalarLifecycleEnvelope(activeUpdateResponse.GetKnowledgeObject()) ||
+		!validKnowledgeProtoDefinitionAuthority(activeUpdateResponse.GetKnowledgeObject()) ||
+		validKnowledgeUpdateResponseWithPolicy(
+			activeUpdateResponse,
+			updateRequest,
+			scopes,
+			false,
+			false,
+		) {
 		t.Fatal("ACTIVE Update success response did not fail closed")
 	}
-	if !validKnowledgeUpdateResponseForPolicy(
+	if !validKnowledgeUpdateResponseWithPolicy(
 		activeUpdateResponse,
 		updateRequest,
 		scopes,
 		true,
+		false,
 	) {
 		t.Fatal("certified ACTIVE Update replay response was rejected")
 	}
@@ -500,7 +528,13 @@ func TestKnowledgeHTTPSuccessResponseValidationRejectsUnavailableActiveAndStaleM
 		TenantCatalogRevision:   2,
 		TenantCatalogStateToken: token,
 	}
-	if !validKnowledgeSetStateResponse(disabledStateResponse, disabledStateRequest, scopes) {
+	if !validKnowledgeSetStateResponseWithPolicy(
+		disabledStateResponse,
+		disabledStateRequest,
+		scopes,
+		false,
+		false,
+	) {
 		t.Fatal("valid disabled SetState response fixture was rejected")
 	}
 	activeStateRequest := proto.Clone(disabledStateRequest).(*opensplunkv1.SetKnowledgeObjectStateRequest)
@@ -508,15 +542,23 @@ func TestKnowledgeHTTPSuccessResponseValidationRejectsUnavailableActiveAndStaleM
 	activeStateResponse := proto.Clone(disabledStateResponse).(*opensplunkv1.SetKnowledgeObjectStateResponse)
 	activeStateResponse.KnowledgeObject.State = opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE
 	activeStateResponse.KnowledgeObject.DisabledAt = nil
-	if !validKnowledgeObjectEnvelope(activeStateResponse.GetKnowledgeObject()) ||
-		validKnowledgeSetStateResponse(activeStateResponse, activeStateRequest, scopes) {
+	if !validKnowledgeObjectScalarLifecycleEnvelope(activeStateResponse.GetKnowledgeObject()) ||
+		!validKnowledgeProtoDefinitionAuthority(activeStateResponse.GetKnowledgeObject()) ||
+		validKnowledgeSetStateResponseWithPolicy(
+			activeStateResponse,
+			activeStateRequest,
+			scopes,
+			false,
+			false,
+		) {
 		t.Fatal("ACTIVE SetState success response did not fail closed")
 	}
-	if !validKnowledgeSetStateResponseForPolicy(
+	if !validKnowledgeSetStateResponseWithPolicy(
 		activeStateResponse,
 		activeStateRequest,
 		scopes,
 		true,
+		false,
 	) {
 		t.Fatal("certified ACTIVE SetState replay response was rejected")
 	}
@@ -524,8 +566,15 @@ func TestKnowledgeHTTPSuccessResponseValidationRejectsUnavailableActiveAndStaleM
 	staleDisabledResponse.KnowledgeObject.DisabledAt = timestamppb.New(
 		staleDisabledResponse.GetKnowledgeObject().GetCreatedAt().AsTime(),
 	)
-	if !validKnowledgeObjectEnvelope(staleDisabledResponse.GetKnowledgeObject()) ||
-		validKnowledgeSetStateResponse(staleDisabledResponse, disabledStateRequest, scopes) {
+	if !validKnowledgeObjectScalarLifecycleEnvelope(staleDisabledResponse.GetKnowledgeObject()) ||
+		!validKnowledgeProtoDefinitionAuthority(staleDisabledResponse.GetKnowledgeObject()) ||
+		validKnowledgeSetStateResponseWithPolicy(
+			staleDisabledResponse,
+			disabledStateRequest,
+			scopes,
+			false,
+			false,
+		) {
 		t.Fatal("stale disabled_at SetState success response did not fail closed")
 	}
 	if !validKnowledgeProtoDefinitionAuthority(staleDisabledResponse.GetKnowledgeObject()) ||

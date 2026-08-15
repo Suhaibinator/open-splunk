@@ -225,8 +225,5 @@ func mapSearchTimelineCallError(ctx context.Context, operationErr error) error {
 }
 
 func searchTimelineRequestContextError(ctx context.Context) error {
-	if ctx != nil && ctx.Err() != nil {
-		return router.NewHTTPError(http.StatusRequestTimeout, "search timeline request was canceled")
-	}
-	return nil
+	return canceledRequestError(ctx, "search timeline request was canceled")
 }

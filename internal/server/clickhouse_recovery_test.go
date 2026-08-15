@@ -310,7 +310,7 @@ func TestReadClickHouseMigrationHistoryBoundsPreliminaryTableProbe(t *testing.T)
 		(
 			SELECT name
 			FROM system.tables
-			WHERE database = 'open_splunk'
+			WHERE database = ?
 			LIMIT %d
 		)
 		ORDER BY name
@@ -325,6 +325,7 @@ func TestReadClickHouseMigrationHistoryBoundsPreliminaryTableProbe(t *testing.T)
 				clickHouseMigrationTableReadByteLimit,
 				clickHouseMigrationTableResultLimit,
 			),
+			wantArguments: []any{recoverycontract.CanonicalDatabase},
 		},
 		{
 			name:         "recovery alias",
@@ -1093,11 +1094,6 @@ func (connection *fakeClickHouseMigrationLedgerConnection) Select(
 	tablesQuery := clickHouseMigrationTablesByDatabaseQuery
 	tablesArguments := []any{connection.databaseName}
 	ledgerQuery := clickHouseMigrationLedgerQueryForDatabase(connection.databaseName)
-	if connection.databaseName == "open_splunk" {
-		tablesQuery = clickHouseMigrationTablesQuery
-		tablesArguments = nil
-		ledgerQuery = clickHouseMigrationLedgerQuery
-	}
 	if query == tablesQuery {
 		if !reflect.DeepEqual(arguments, tablesArguments) {
 			return fmt.Errorf("migration tables arguments = %#v", arguments)

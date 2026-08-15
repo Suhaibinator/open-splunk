@@ -82,6 +82,44 @@ func boundedListPageResponse(
 	return page, nil
 }
 
+// boundedListPageRequest applies the shared bounded paging predicate: the
+// per-service maximum, the default page size, nested unknown-field rejection,
+// and bounded page-token validation. The noun prefixes every error message so
+// each endpoint keeps its own wording.
+func (handler *apiHandler) boundedListPageRequest(
+	page *opensplunkv1.PageRequest,
+	noun string,
+	defaultPageSize uint32,
+	serviceMaximum uint32,
+	maximumTokenBytes int,
+) (uint32, string, bool, error) {
+	maximumPageSize := min(handler.maximumPageSize, serviceMaximum)
+	pageSize := min(defaultPageSize, maximumPageSize)
+	if page == nil {
+		return pageSize, "", false, nil
+	}
+	if len(page.ProtoReflect().GetUnknown()) != 0 {
+		return 0, "", false, badRequestError(noun + " page request is invalid")
+	}
+	includeTotal := page.GetIncludeTotalSize()
+	if page.PageSize != nil {
+		pageSize = page.GetPageSize()
+		if pageSize == 0 || pageSize > maximumPageSize {
+			return 0, "", false, badRequestError(noun + " page size is invalid")
+		}
+	}
+	pageToken := ""
+	if page.PageToken != nil {
+		pageToken = page.GetPageToken()
+		if !validBoundedListPageToken(pageToken, maximumTokenBytes, false) {
+			return 0, "", false, badRequestError(
+				noun + " page token is invalid",
+			)
+		}
+	}
+	return pageSize, pageToken, includeTotal, nil
+}
+
 func validBoundedListPageToken(
 	token string,
 	maximumBytes int,
