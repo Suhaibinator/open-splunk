@@ -295,11 +295,6 @@ export function firstSplPipelineBoundary(spl: string): number {
   return scanSplStructure(spl).pipes[0] ?? -1;
 }
 
-export function isSplOffsetInDoubleQuotedValue(spl: string, offset: number): boolean {
-  const safeOffset = Math.max(0, Math.min(offset, spl.length));
-  return scanSplStructure(spl.slice(0, safeOffset)).unclosedQuote?.quote === '"';
-}
-
 export function isSplOffsetInQuotedValue(spl: string, offset: number): boolean {
   const safeOffset = Math.max(0, Math.min(offset, spl.length));
   return scanSplStructure(spl.slice(0, safeOffset)).unclosedQuote !== null;

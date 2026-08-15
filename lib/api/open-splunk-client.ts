@@ -1,6 +1,7 @@
 import {
   ProtobufTransport,
   type ProtobufRequestOptions,
+  type ProtobufRoute,
   type ProtobufTransportOptions,
 } from "./protobuf-transport";
 import {
@@ -16,260 +17,107 @@ import {
   searchAttemptAuditRoutes,
   searchRoutes,
   systemRoutes,
-  type RouteRequest,
 } from "./routes";
 
 /** Typed wrappers around every search-workspace SRouter endpoint. */
 export class OpenSplunkApiClient {
   public readonly system = {
-    bootstrap: (
-      request: RouteRequest<typeof systemRoutes.bootstrap>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(systemRoutes.bootstrap, request, options),
+    bootstrap: this.route(systemRoutes.bootstrap),
   };
 
   public readonly apps = {
-    create: (
-      request: RouteRequest<typeof appRoutes.create>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(appRoutes.create, request, options),
-    get: (
-      request: RouteRequest<typeof appRoutes.get>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(appRoutes.get, request, options),
-    list: (
-      request: RouteRequest<typeof appRoutes.list>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(appRoutes.list, request, options),
-    update: (
-      request: RouteRequest<typeof appRoutes.update>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(appRoutes.update, request, options),
-    setState: (
-      request: RouteRequest<typeof appRoutes.setState>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(appRoutes.setState, request, options),
-    delete: (
-      request: RouteRequest<typeof appRoutes.delete>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(appRoutes.delete, request, options),
+    create: this.route(appRoutes.create),
+    get: this.route(appRoutes.get),
+    list: this.route(appRoutes.list),
+    update: this.route(appRoutes.update),
+    setState: this.route(appRoutes.setState),
+    delete: this.route(appRoutes.delete),
   };
 
   public readonly collectors = {
-    list: (
-      request: RouteRequest<typeof collectorRoutes.list>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(collectorRoutes.list, request, options),
-    get: (
-      request: RouteRequest<typeof collectorRoutes.get>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(collectorRoutes.get, request, options),
-    update: (
-      request: RouteRequest<typeof collectorRoutes.update>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(collectorRoutes.update, request, options),
-    setState: (
-      request: RouteRequest<typeof collectorRoutes.setState>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(collectorRoutes.setState, request, options),
+    list: this.route(collectorRoutes.list),
+    get: this.route(collectorRoutes.get),
+    update: this.route(collectorRoutes.update),
+    setState: this.route(collectorRoutes.setState),
   };
 
   public readonly auditEvents = {
-    list: (
-      request: RouteRequest<typeof auditEventRoutes.list>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(auditEventRoutes.list, request, options),
+    list: this.route(auditEventRoutes.list),
   };
 
   public readonly searchAttemptAudit = {
-    list: (
-      request: RouteRequest<typeof searchAttemptAuditRoutes.list>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(searchAttemptAuditRoutes.list, request, options),
+    list: this.route(searchAttemptAuditRoutes.list),
   };
 
   public readonly indexes = {
-    create: (
-      request: RouteRequest<typeof indexRoutes.create>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(indexRoutes.create, request, options),
-    get: (
-      request: RouteRequest<typeof indexRoutes.get>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(indexRoutes.get, request, options),
-    list: (
-      request: RouteRequest<typeof indexRoutes.list>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(indexRoutes.list, request, options),
-    fields: (
-      request: RouteRequest<typeof indexRoutes.fields>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(indexRoutes.fields, request, options),
-    update: (
-      request: RouteRequest<typeof indexRoutes.update>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(indexRoutes.update, request, options),
-    setState: (
-      request: RouteRequest<typeof indexRoutes.setState>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(indexRoutes.setState, request, options),
-    delete: (
-      request: RouteRequest<typeof indexRoutes.delete>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(indexRoutes.delete, request, options),
-    stats: (
-      request: RouteRequest<typeof indexRoutes.stats>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(indexRoutes.stats, request, options),
+    create: this.route(indexRoutes.create),
+    get: this.route(indexRoutes.get),
+    list: this.route(indexRoutes.list),
+    fields: this.route(indexRoutes.fields),
+    update: this.route(indexRoutes.update),
+    setState: this.route(indexRoutes.setState),
+    delete: this.route(indexRoutes.delete),
+    stats: this.route(indexRoutes.stats),
   };
 
   public readonly ingestionTokens = {
-    create: (
-      request: RouteRequest<typeof ingestionTokenRoutes.create>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(ingestionTokenRoutes.create, request, options),
-    get: (
-      request: RouteRequest<typeof ingestionTokenRoutes.get>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(ingestionTokenRoutes.get, request, options),
-    list: (
-      request: RouteRequest<typeof ingestionTokenRoutes.list>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(ingestionTokenRoutes.list, request, options),
-    update: (
-      request: RouteRequest<typeof ingestionTokenRoutes.update>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(ingestionTokenRoutes.update, request, options),
-    setState: (
-      request: RouteRequest<typeof ingestionTokenRoutes.setState>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(ingestionTokenRoutes.setState, request, options),
-    revoke: (
-      request: RouteRequest<typeof ingestionTokenRoutes.revoke>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(ingestionTokenRoutes.revoke, request, options),
+    create: this.route(ingestionTokenRoutes.create),
+    get: this.route(ingestionTokenRoutes.get),
+    list: this.route(ingestionTokenRoutes.list),
+    update: this.route(ingestionTokenRoutes.update),
+    setState: this.route(ingestionTokenRoutes.setState),
+    revoke: this.route(ingestionTokenRoutes.revoke),
   };
 
   public readonly hec = {
-    getOperationalSnapshot: (
-      request: RouteRequest<typeof hecOperationsRoutes.get>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(hecOperationsRoutes.get, request, options),
+    getOperationalSnapshot: this.route(hecOperationsRoutes.get),
   };
 
   public readonly search = {
-    validate: (
-      request: RouteRequest<typeof searchRoutes.validate>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(searchRoutes.validate, request, options),
-    suggestions: (
-      request: RouteRequest<typeof searchRoutes.suggestions>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(searchRoutes.suggestions, request, options),
-    create: (
-      request: RouteRequest<typeof searchRoutes.create>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(searchRoutes.create, request, options),
-    get: (
-      request: RouteRequest<typeof searchRoutes.get>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(searchRoutes.get, request, options),
-    list: (
-      request: RouteRequest<typeof searchRoutes.list>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(searchRoutes.list, request, options),
-    results: (
-      request: RouteRequest<typeof searchRoutes.results>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(searchRoutes.results, request, options),
-    fields: (
-      request: RouteRequest<typeof searchRoutes.fields>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(searchRoutes.fields, request, options),
-    fieldSummary: (
-      request: RouteRequest<typeof searchRoutes.fieldSummary>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(searchRoutes.fieldSummary, request, options),
-    timeline: (
-      request: RouteRequest<typeof searchRoutes.timeline>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(searchRoutes.timeline, request, options),
-    cancel: (
-      request: RouteRequest<typeof searchRoutes.cancel>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(searchRoutes.cancel, request, options),
-    inspect: (
-      request: RouteRequest<typeof searchRoutes.inspect>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(searchRoutes.inspect, request, options),
+    validate: this.route(searchRoutes.validate),
+    suggestions: this.route(searchRoutes.suggestions),
+    create: this.route(searchRoutes.create),
+    get: this.route(searchRoutes.get),
+    list: this.route(searchRoutes.list),
+    results: this.route(searchRoutes.results),
+    fields: this.route(searchRoutes.fields),
+    fieldSummary: this.route(searchRoutes.fieldSummary),
+    timeline: this.route(searchRoutes.timeline),
+    cancel: this.route(searchRoutes.cancel),
+    inspect: this.route(searchRoutes.inspect),
   };
 
   public readonly savedSearches = {
-    create: (
-      request: RouteRequest<typeof savedSearchRoutes.create>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(savedSearchRoutes.create, request, options),
-    get: (
-      request: RouteRequest<typeof savedSearchRoutes.get>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(savedSearchRoutes.get, request, options),
-    list: (
-      request: RouteRequest<typeof savedSearchRoutes.list>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(savedSearchRoutes.list, request, options),
-    update: (
-      request: RouteRequest<typeof savedSearchRoutes.update>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(savedSearchRoutes.update, request, options),
-    duplicate: (
-      request: RouteRequest<typeof savedSearchRoutes.duplicate>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(savedSearchRoutes.duplicate, request, options),
-    delete: (
-      request: RouteRequest<typeof savedSearchRoutes.delete>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(savedSearchRoutes.delete, request, options),
+    create: this.route(savedSearchRoutes.create),
+    get: this.route(savedSearchRoutes.get),
+    list: this.route(savedSearchRoutes.list),
+    update: this.route(savedSearchRoutes.update),
+    duplicate: this.route(savedSearchRoutes.duplicate),
+    delete: this.route(savedSearchRoutes.delete),
   };
 
   public readonly history = {
-    get: (
-      request: RouteRequest<typeof historyRoutes.get>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(historyRoutes.get, request, options),
-    list: (
-      request: RouteRequest<typeof historyRoutes.list>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(historyRoutes.list, request, options),
-    delete: (
-      request: RouteRequest<typeof historyRoutes.delete>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(historyRoutes.delete, request, options),
-    clear: (
-      request: RouteRequest<typeof historyRoutes.clear>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(historyRoutes.clear, request, options),
+    get: this.route(historyRoutes.get),
+    list: this.route(historyRoutes.list),
+    delete: this.route(historyRoutes.delete),
+    clear: this.route(historyRoutes.clear),
   };
 
   public readonly exports = {
-    create: (
-      request: RouteRequest<typeof exportRoutes.create>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(exportRoutes.create, request, options),
-    get: (
-      request: RouteRequest<typeof exportRoutes.get>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(exportRoutes.get, request, options),
-    list: (
-      request: RouteRequest<typeof exportRoutes.list>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(exportRoutes.list, request, options),
-    cancel: (
-      request: RouteRequest<typeof exportRoutes.cancel>,
-      options?: ProtobufRequestOptions,
-    ) => this.transport.post(exportRoutes.cancel, request, options),
+    create: this.route(exportRoutes.create),
+    get: this.route(exportRoutes.get),
+    list: this.route(exportRoutes.list),
+    cancel: this.route(exportRoutes.cancel),
   };
 
   public constructor(public readonly transport: ProtobufTransport = new ProtobufTransport()) {}
+
+  /** Binds one route to the transport, preserving its request/response types. */
+  private route<TRequest, TResponse>(
+    route: ProtobufRoute<TRequest, TResponse>,
+  ): (request: TRequest, options?: ProtobufRequestOptions) => Promise<TResponse> {
+    return (request, options) => this.transport.post(route, request, options);
+  }
 }
 
 export function createOpenSplunkApiClient(options: ProtobufTransportOptions = {}): OpenSplunkApiClient {

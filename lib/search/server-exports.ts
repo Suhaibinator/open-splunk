@@ -1,6 +1,5 @@
 import {
   CsvHeaderMode,
-  ExportFormat,
   ExportJobState,
   JsonIntegerEncoding,
   type ExportJob,
@@ -899,10 +898,4 @@ export async function downloadServerExport(
       rowCount: artifact.rowCount,
     },
   };
-}
-
-export function exportFormatFromJob(job: ExportJob): ServerExportFormat | null {
-  if (job.format === ExportFormat.EXPORT_FORMAT_CSV) return "csv";
-  if (job.format === ExportFormat.EXPORT_FORMAT_JSON_LINES) return "json-lines";
-  return null;
 }

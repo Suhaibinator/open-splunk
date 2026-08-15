@@ -662,28 +662,6 @@ export class SearchWebSocketClient {
     this.suspendedTargets.delete(key);
   }
 
-  /** Removes a retained checkpoint so a future subscription starts from current state. */
-  public forgetTarget(target: JobTarget): void {
-    const key = searchWebSocketTargetKey(target);
-    for (const subscription of this.subscriptions.values()) {
-      if (searchWebSocketTargetKey(subscription.target) === key) {
-        throw new Error(`Cannot forget an active Search WebSocket target: ${key}`);
-      }
-    }
-    this.lastSequences.delete(key);
-    this.suspendedTargets.delete(key);
-  }
-
-  public ping(nonce = this.nextIdentifier("ping")): boolean {
-    if (!this.connected) {
-      return false;
-    }
-    return this.sendCommand({
-      requestId: this.nextIdentifier("ping-request"),
-      payload: { $case: "ping", value: { nonce } },
-    });
-  }
-
   public onEvent(listener: SearchWebSocketEventListener): () => void {
     this.eventListeners.add(listener);
     return () => this.eventListeners.delete(listener);

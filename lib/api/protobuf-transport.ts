@@ -191,23 +191,13 @@ function declaredContentLength(response: Response): number | null {
   return Number.isSafeInteger(value) ? value : Number.POSITIVE_INFINITY;
 }
 
-function cancelReader(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
+function cancelQuietly(
+  cancellable: { cancel: (reason?: unknown) => Promise<void> } | null,
   reason: unknown,
 ): void {
+  if (cancellable === null) return;
   try {
-    void reader.cancel(reason).catch(() => {
-      // The size violation remains the useful failure when cancellation races.
-    });
-  } catch {
-    // The size violation remains the useful failure when cancellation races.
-  }
-}
-
-function cancelStream(stream: ReadableStream<Uint8Array> | null, reason: unknown): void {
-  if (stream === null) return;
-  try {
-    void stream.cancel(reason).catch(() => {
+    void cancellable.cancel(reason).catch(() => {
       // The size violation remains the useful failure when cancellation races.
     });
   } catch {
@@ -236,7 +226,7 @@ async function readBoundedResponseBytes(
   const declaredBytes = declaredContentLength(response);
   if (declaredBytes !== null && declaredBytes > maximumBytes) {
     const error = new ProtobufResponseTooLargeError(url, maximumBytes, declaredBytes);
-    cancelStream(response.body, error);
+    cancelQuietly(response.body, error);
     throw error;
   }
 
@@ -257,7 +247,7 @@ async function readBoundedResponseBytes(
         const error = new ProtobufResponseTooLargeError(url, maximumBytes, declaredBytes);
         // Cancellation is best-effort: an adversarial stream must not delay the
         // size failure by returning a promise that never settles.
-        cancelReader(reader, error);
+        cancelQuietly(reader, error);
         throw error;
       }
       if (chunk.byteLength > 0) {
@@ -299,8 +289,7 @@ export class ProtobufTransport {
   public constructor(options: ProtobufTransportOptions = {}) {
     this.baseUrl = trimTrailingSlashes(options.baseUrl ?? "");
     this.timeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
-    const fetchImplementation = options.fetch ?? globalThis.fetch;
-    this.fetchImplementation = options.fetch ?? fetchImplementation?.bind(globalThis);
+    this.fetchImplementation = options.fetch ?? globalThis.fetch?.bind(globalThis);
     this.defaultHeaders = options.headers ?? {};
 
     if (!Number.isFinite(this.timeoutMs) || this.timeoutMs <= 0) {

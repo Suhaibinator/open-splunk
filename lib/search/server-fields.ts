@@ -11,7 +11,7 @@ import type {
   DemoScalar,
 } from "@/lib/demo/search-data";
 import type { OpenSplunkApiClient } from "@/lib/api/open-splunk-client";
-import { recordNextPageToken } from "@/lib/api/pagination";
+import { collectCursorPages } from "@/lib/api/pagination";
 import {
   featureNotAdvertised,
   isAdvertisedFeatureRouteUnavailable,
@@ -269,58 +269,29 @@ export async function getServerFieldCatalog(
     throw new RangeError("Field catalog maximum pages must be a positive integer.");
   }
 
-  const fields: ServerFieldProfile[] = [];
-  const initialPageToken = options.pageToken?.trim() || undefined;
-  const seenTokens = new Set<string>(initialPageToken === undefined ? [] : [initialPageToken]);
-  let pageToken = initialPageToken;
-  let totalSize: bigint | null = null;
-  let totalSizeExact = false;
   try {
-    for (let pageIndex = 0; pageIndex < maximumPages; pageIndex += 1) {
-      // Cursor pages are causally ordered and cannot be requested in parallel.
-      // eslint-disable-next-line no-await-in-loop
-      const response = await client.search.fields({
-        searchJobId: id,
-        page: {
-          pageSize,
-          pageToken,
-          includeTotalSize: pageIndex === 0 && initialPageToken === undefined,
-        },
-        nameFilter: options.nameFilter?.trim() || undefined,
-        interestingOnly: options.interestingOnly ?? false,
-      }, options);
-      fields.push(...response.fields.map(adaptFieldProfile));
-      if (pageIndex === 0) {
-        totalSize = response.page?.totalSize ?? null;
-        totalSizeExact = response.page?.totalSizeExact ?? false;
-      }
-      const nextToken = recordNextPageToken(
-        seenTokens,
-        response.page?.nextPageToken,
-        "The field catalog",
-      );
-      if (nextToken === null) {
-        return {
-          status: "available",
-          value: {
-            fields,
-            nextPageToken: null,
-            totalSize,
-            totalSizeExact,
-            complete: true,
-          },
-        };
-      }
-      pageToken = nextToken;
-    }
+    const collected = await collectCursorPages<ServerFieldProfile>({
+      maximumPages,
+      pageToken: options.pageToken?.trim() || undefined,
+      label: "The field catalog",
+      fetchPage: async ({ pageToken, includeTotalSize }) => {
+        const response = await client.search.fields({
+          searchJobId: id,
+          page: { pageSize, pageToken, includeTotalSize },
+          nameFilter: options.nameFilter?.trim() || undefined,
+          interestingOnly: options.interestingOnly ?? false,
+        }, options);
+        return { items: response.fields.map(adaptFieldProfile), page: response.page };
+      },
+    });
     return {
       status: "available",
       value: {
-        fields,
-        nextPageToken: pageToken ?? null,
-        totalSize,
-        totalSizeExact,
-        complete: false,
+        fields: collected.items,
+        nextPageToken: collected.nextPageToken,
+        totalSize: collected.totalSize,
+        totalSizeExact: collected.totalSizeExact,
+        complete: collected.complete,
       },
     };
   } catch (error) {

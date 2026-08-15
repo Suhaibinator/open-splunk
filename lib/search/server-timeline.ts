@@ -2,6 +2,7 @@ import type { Duration } from "@/gen/ts/google/protobuf/duration";
 import type { GetSearchTimelineResponse } from "@/gen/ts/open_splunk/v1/search_api";
 import { ServerFeature } from "@/gen/ts/open_splunk/v1/system_api";
 import type { TimelinePoint } from "@/lib/demo/search-data";
+import { durationToMilliseconds } from "@/lib/api/duration";
 import type { OpenSplunkApiClient } from "@/lib/api/open-splunk-client";
 import {
   featureNotAdvertised,
@@ -28,11 +29,6 @@ export interface ServerTimeline {
   points: TimelinePoint[];
   bucketWidthMs: number;
   complete: boolean;
-}
-
-function durationToMilliseconds(duration: Duration | undefined): number {
-  if (duration === undefined) return 0;
-  return Number(duration.seconds) * 1_000 + duration.nanos / 1_000_000;
 }
 
 function millisecondsToDuration(milliseconds: number): Duration {

@@ -415,15 +415,8 @@ function statisticsTableFromRows(schema: ResultSchema, rows: ResultRow[]): Works
     keyCounts.set(fieldName, occurrence);
     const key = occurrence === 1 ? fieldName : `${fieldName}__${occurrence}`;
     const baseLabel = column.displayName || fieldName;
-    const observedCells = rows
-      .map((row) => row.cells[sourceIndex])
-      .filter((cell) => cell?.kind?.$case !== "nullValue" && cell?.kind?.$case !== "missingValue");
-    const numeric = numericValueType(column.valueType)
-      || (observedCells.length > 0 && observedCells.every((cell) => numericCell(cell)));
-    const timeLike = column.valueType === ValueType.VALUE_TYPE_TIMESTAMP
-      || column.semanticType === ColumnSemanticType.COLUMN_SEMANTIC_TYPE_EVENT_TIME
-      || column.semanticType === ColumnSemanticType.COLUMN_SEMANTIC_TYPE_INDEX_TIME
-      || /^_?time$/i.test(fieldName);
+    const numeric = numericValueType(column.valueType) || columnHasNumericValues(rows, sourceIndex);
+    const timeLike = columnIsTimeLike(column);
     return {
       key,
       fieldName,
@@ -465,8 +458,9 @@ function columnHasNumericValues(rows: ResultRow[], index: number): boolean {
   return observed.length > 0 && observed.every((cell) => numericCell(cell));
 }
 
-function columnIsTimeLike(schema: ResultSchema, index: number): boolean {
-  const column = schema.columns[index];
+function columnIsTimeLike(
+  column: { valueType: ValueType; semanticType: ColumnSemanticType; fieldName: string },
+): boolean {
   return column.valueType === ValueType.VALUE_TYPE_TIMESTAMP
     || column.semanticType === ColumnSemanticType.COLUMN_SEMANTIC_TYPE_EVENT_TIME
     || column.semanticType === ColumnSemanticType.COLUMN_SEMANTIC_TYPE_INDEX_TIME
@@ -487,7 +481,7 @@ function preferredMetricIndexes(schema: ResultSchema, rows: ResultRow[]): number
     const combined = [...new Set([...explicitMetrics, ...namedAggregates])];
     const combinedSet = new Set(combined);
     const remainingScalarColumns = schema.columns.flatMap((column, index) => {
-      if (combinedSet.has(index) || columnIsTimeLike(schema, index)) return [];
+      if (combinedSet.has(index) || columnIsTimeLike(schema.columns[index])) return [];
       if (column.valueType === ValueType.VALUE_TYPE_LIST || column.valueType === ValueType.VALUE_TYPE_OBJECT) return [];
       return [index];
     });
@@ -517,7 +511,7 @@ function preferredMetricIndexes(schema: ResultSchema, rows: ResultRow[]): number
   // remain unambiguous when exactly one other scalar column can be the category.
   const numericSet = new Set(numericIndexes);
   const nonNumericDimensions = schema.columns.flatMap((column, index) => {
-    if (numericSet.has(index) || columnIsTimeLike(schema, index)) return [];
+    if (numericSet.has(index) || columnIsTimeLike(schema.columns[index])) return [];
     if (column.valueType === ValueType.VALUE_TYPE_LIST || column.valueType === ValueType.VALUE_TYPE_OBJECT) return [];
     return [index];
   });
@@ -527,7 +521,7 @@ function preferredMetricIndexes(schema: ResultSchema, rows: ResultRow[]): number
 function preferredDimensionIndex(schema: ResultSchema, metricIndexes: number[]): number | null {
   const metricSet = new Set(metricIndexes);
   const candidates = schema.columns.flatMap((column, index) => {
-    if (metricSet.has(index) || columnIsTimeLike(schema, index)) return [];
+    if (metricSet.has(index) || columnIsTimeLike(schema.columns[index])) return [];
     if (column.valueType === ValueType.VALUE_TYPE_LIST || column.valueType === ValueType.VALUE_TYPE_OBJECT) return [];
     if (column.semanticType === ColumnSemanticType.COLUMN_SEMANTIC_TYPE_METRIC) return [];
     return [index];
@@ -830,7 +824,11 @@ function sortableString(value: WorkspaceStatisticsValue): string {
   return typeof value === "object" && value !== null ? JSON.stringify(value) : String(value);
 }
 
-function compareNumericValues(left: WorkspaceStatisticsValue, right: WorkspaceStatisticsValue): number {
+/** Compare lossless numeric text without first coercing it to IEEE-754. */
+export function compareWorkspaceNumericValues(
+  left: WorkspaceStatisticsValue,
+  right: WorkspaceStatisticsValue,
+): number {
   const leftParts = decimalParts(String(left));
   const rightParts = decimalParts(String(right));
   if (leftParts !== null && rightParts !== null) {
@@ -844,14 +842,6 @@ function compareNumericValues(left: WorkspaceStatisticsValue, right: WorkspaceSt
   return String(left).localeCompare(String(right), undefined, { numeric: true, sensitivity: "base" });
 }
 
-/** Compare lossless numeric text without first coercing it to IEEE-754. */
-export function compareWorkspaceNumericValues(
-  left: WorkspaceStatisticsValue,
-  right: WorkspaceStatisticsValue,
-): number {
-  return compareNumericValues(left, right);
-}
-
 /** Compare typed statistics cells without coercing lossless 64-bit or decimal strings to IEEE-754 numbers. */
 export function compareWorkspaceStatisticValues(
   left: WorkspaceStatisticsValue,
@@ -860,11 +850,8 @@ export function compareWorkspaceStatisticValues(
 ): number {
   if (left === null) return right === null ? 0 : 1;
   if (right === null) return -1;
-  if (column.numeric) return compareNumericValues(left, right);
-  const timeLike = column.valueType === ValueType.VALUE_TYPE_TIMESTAMP
-    || column.semanticType === ColumnSemanticType.COLUMN_SEMANTIC_TYPE_EVENT_TIME
-    || column.semanticType === ColumnSemanticType.COLUMN_SEMANTIC_TYPE_INDEX_TIME
-    || /^_?time$/i.test(column.fieldName);
+  if (column.numeric) return compareWorkspaceNumericValues(left, right);
+  const timeLike = columnIsTimeLike(column);
   if (timeLike) {
     const leftTime = new Date(sortableString(left)).valueOf();
     const rightTime = new Date(sortableString(right)).valueOf();
@@ -1022,21 +1009,4 @@ export function resolveAbsoluteTimeRange(earliest: string, latest: string, now =
     latest: resolvedLatest.toISOString(),
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
   };
-}
-
-export function indexesFromSPL(spl: string): string[] {
-  const indexes = new Set<string>();
-  const baseSearch = spl.split("|", 1)[0] ?? spl;
-  let includesAllAuthorizedIndexes = false;
-  for (const match of baseSearch.matchAll(/\bindex\s*=\s*(?:"([^"]+)"|([a-zA-Z0-9_.*-]+))/gi)) {
-    const matchIndex = match.index ?? 0;
-    const before = baseSearch.slice(0, matchIndex);
-    const quoteCount = (before.match(/(?<!\\)"/g) ?? []).length;
-    if (quoteCount % 2 !== 0 || /(?:\bNOT|-)\s*$/i.test(before)) continue;
-    const value = (match[1] ?? match[2] ?? "").trim();
-    if (value.includes("*")) includesAllAuthorizedIndexes = true;
-    else if (value.length > 0) indexes.add(value);
-  }
-  if (includesAllAuthorizedIndexes) return [];
-  return indexes.size > 0 ? [...indexes] : ["gradethis"];
 }

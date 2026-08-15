@@ -13,7 +13,6 @@ import type { SavedSearch } from "@/gen/ts/open_splunk/v1/saved_search";
 import { SavedSearchSortBy } from "@/gen/ts/open_splunk/v1/saved_search_api";
 import {
   SearchJobState,
-  SearchJobOrigin,
   SearchResultTab,
   type SearchDefinition,
   type SearchJobSource,
@@ -24,8 +23,13 @@ import type {
   DemoHistoryEntry,
   DemoSavedSearch,
 } from "@/lib/demo/search-data";
+import {
+  durationToMilliseconds,
+  formatDurationMilliseconds,
+  validDate,
+} from "@/lib/api/duration";
 import type { OpenSplunkApiClient } from "@/lib/api/open-splunk-client";
-import { recordNextPageToken } from "@/lib/api/pagination";
+import { collectCursorPages } from "@/lib/api/pagination";
 import {
   featureNotAdvertised,
   isAdvertisedFeatureRouteUnavailable,
@@ -37,6 +41,7 @@ import {
   supportsServerFeature,
   type SystemBootstrapModel,
 } from "@/lib/api/system-bootstrap";
+import { serverSearchJobOriginLabel } from "./server-jobs";
 
 export interface ServerSearchDefinitionInput {
   spl: string;
@@ -95,10 +100,6 @@ export interface ServerObjectPage<T> {
 
 export type ServerObjectDateFormatter = (value: Date | null) => string;
 
-function validDate(date: Date | undefined): Date | null {
-  return date !== undefined && !Number.isNaN(date.valueOf()) ? new Date(date) : null;
-}
-
 function requireSearchDefinition(search: SearchDefinition | undefined, context: string): SearchDefinition {
   if (search === undefined) throw new TypeError(`${context} did not include a search definition.`);
   return search;
@@ -121,7 +122,6 @@ export function adaptSavedSearch(savedSearch: SavedSearch): ServerSavedSearch {
 }
 
 export function adaptSearchHistoryEntry(entry: SearchHistoryEntry): ServerSearchHistoryEntry {
-  const duration = entry.duration;
   return {
     id: entry.searchJobId,
     search: requireSearchDefinition(entry.definition, "The history entry"),
@@ -133,9 +133,7 @@ export function adaptSearchHistoryEntry(entry: SearchHistoryEntry): ServerSearch
     scannedRows: entry.scannedRows,
     scannedBytes: entry.scannedBytes,
     producedRows: entry.producedRows,
-    durationMs: duration === undefined
-      ? 0
-      : Number(duration.seconds) * 1_000 + duration.nanos / 1_000_000,
+    durationMs: durationToMilliseconds(entry.duration),
     warnings: [...entry.warnings],
     warningCount: entry.warnings.length,
     failureMessage: entry.failure?.message ?? null,
@@ -191,20 +189,6 @@ function historyState(state: SearchJobState): DemoHistoryEntry["state"] {
   return "Completed";
 }
 
-function formatDuration(milliseconds: number): string {
-  if (!Number.isFinite(milliseconds) || milliseconds <= 0) return "0 ms";
-  if (milliseconds < 1_000) return `${Math.round(milliseconds)} ms`;
-  return `${(milliseconds / 1_000).toFixed(milliseconds < 10_000 ? 2 : 1)} s`;
-}
-
-function historySourceLabel(source: SearchJobSource | null): string {
-  if (source?.origin === SearchJobOrigin.SEARCH_JOB_ORIGIN_SAVED_SEARCH) return "Saved search";
-  if (source?.origin === SearchJobOrigin.SEARCH_JOB_ORIGIN_HISTORY_RERUN) return "History rerun";
-  if (source?.origin === SearchJobOrigin.SEARCH_JOB_ORIGIN_DASHBOARD) return "Dashboard";
-  if (source?.origin === SearchJobOrigin.SEARCH_JOB_ORIGIN_API) return "API";
-  return "Ad hoc";
-}
-
 function formatResolvedHistoryRange(range: ResolvedTimeRange | null): string | undefined {
   if (range?.earliest === undefined || range.latest === undefined) return undefined;
   const timezone = range.timezone || "UTC";
@@ -232,7 +216,7 @@ export function searchHistoryToDemo(entry: ServerSearchHistoryEntry): DemoHistor
     latest,
     timezone: entry.search.timeRange?.timezone,
     appId: entry.search.appId,
-    sourceLabel: historySourceLabel(entry.source),
+    sourceLabel: serverSearchJobOriginLabel(entry.source),
     resolvedTimeRange: formatResolvedHistoryRange(entry.resolvedTimeRange),
     compilerVersion: entry.compilerVersion || undefined,
     state: historyState(entry.finalState),
@@ -240,7 +224,7 @@ export function searchHistoryToDemo(entry: ServerSearchHistoryEntry): DemoHistor
     eventsExact: resultCount > BigInt(Number.MAX_SAFE_INTEGER)
       ? resultCount.toString()
       : undefined,
-    duration: formatDuration(entry.durationMs),
+    duration: formatDurationMilliseconds(entry.durationMs),
     ranAt: (entry.finishedAt ?? entry.createdAt)?.toISOString() ?? "",
   };
 }
@@ -332,46 +316,24 @@ export async function listServerSavedSearches(
   if (!Number.isInteger(maximumPages) || maximumPages <= 0) {
     throw new RangeError("Maximum pages must be positive.");
   }
-  const items: ServerSavedSearch[] = [];
-  const initialPageToken = options.pageToken?.trim() || undefined;
-  const seenTokens = new Set<string>(initialPageToken === undefined ? [] : [initialPageToken]);
-  let pageToken = initialPageToken;
-  let totalSize: bigint | null = null;
-  let totalSizeExact = false;
   try {
-    for (let pageIndex = 0; pageIndex < maximumPages; pageIndex += 1) {
-      // Cursor pages are causally ordered and cannot be requested in parallel.
-      // eslint-disable-next-line no-await-in-loop
-      const response = await client.savedSearches.list({
-        page: { pageSize, pageToken, includeTotalSize: pageIndex === 0 && initialPageToken === undefined },
-        appIdFilter: options.appId?.trim() || undefined,
-        textFilter: options.text?.trim() || undefined,
-        sharingScopeFilters: [...new Set(options.sharingScopes ?? [])],
-        sortBy: options.sortBy ?? SavedSearchSortBy.SAVED_SEARCH_SORT_BY_UPDATED_AT,
-        sortDirection: options.sortDirection ?? SortDirection.SORT_DIRECTION_DESCENDING,
-      }, options);
-      items.push(...response.savedSearches.map(adaptSavedSearch));
-      if (pageIndex === 0) {
-        totalSize = response.page?.totalSize ?? null;
-        totalSizeExact = response.page?.totalSizeExact ?? false;
-      }
-      const nextToken = recordNextPageToken(
-        seenTokens,
-        response.page?.nextPageToken,
-        "Saved searches",
-      );
-      if (nextToken === null) {
-        return {
-          status: "available",
-          value: { items, nextPageToken: null, totalSize, totalSizeExact, complete: true },
-        };
-      }
-      pageToken = nextToken;
-    }
-    return {
-      status: "available",
-      value: { items, nextPageToken: pageToken ?? null, totalSize, totalSizeExact, complete: false },
-    };
+    const collected = await collectCursorPages<ServerSavedSearch>({
+      maximumPages,
+      pageToken: options.pageToken?.trim() || undefined,
+      label: "Saved searches",
+      fetchPage: async ({ pageToken, includeTotalSize }) => {
+        const response = await client.savedSearches.list({
+          page: { pageSize, pageToken, includeTotalSize },
+          appIdFilter: options.appId?.trim() || undefined,
+          textFilter: options.text?.trim() || undefined,
+          sharingScopeFilters: [...new Set(options.sharingScopes ?? [])],
+          sortBy: options.sortBy ?? SavedSearchSortBy.SAVED_SEARCH_SORT_BY_UPDATED_AT,
+          sortDirection: options.sortDirection ?? SortDirection.SORT_DIRECTION_DESCENDING,
+        }, options);
+        return { items: response.savedSearches.map(adaptSavedSearch), page: response.page };
+      },
+    });
+    return { status: "available", value: collected };
   } catch (error) {
     if (isAdvertisedFeatureRouteUnavailable(error)) return optionalRouteUnavailable;
     throw error;
@@ -600,44 +562,22 @@ export async function listServerSearchHistory(
   if (!Number.isInteger(maximumPages) || maximumPages <= 0) {
     throw new RangeError("Maximum pages must be positive.");
   }
-  const items: ServerSearchHistoryEntry[] = [];
-  const initialPageToken = options.pageToken?.trim() || undefined;
-  const seenTokens = new Set<string>(initialPageToken === undefined ? [] : [initialPageToken]);
-  let pageToken = initialPageToken;
-  let totalSize: bigint | null = null;
-  let totalSizeExact = false;
   try {
-    for (let pageIndex = 0; pageIndex < maximumPages; pageIndex += 1) {
-      // Cursor pages are causally ordered and cannot be requested in parallel.
-      // eslint-disable-next-line no-await-in-loop
-      const response = await client.history.list({
-        page: { pageSize, pageToken, includeTotalSize: pageIndex === 0 && initialPageToken === undefined },
-        filter: historyFilter(options),
-        sortBy: options.sortBy ?? SearchHistorySortBy.SEARCH_HISTORY_SORT_BY_CREATED_AT,
-        sortDirection: options.sortDirection ?? SortDirection.SORT_DIRECTION_DESCENDING,
-      }, options);
-      items.push(...response.historyEntries.map(adaptSearchHistoryEntry));
-      if (pageIndex === 0) {
-        totalSize = response.page?.totalSize ?? null;
-        totalSizeExact = response.page?.totalSizeExact ?? false;
-      }
-      const nextToken = recordNextPageToken(
-        seenTokens,
-        response.page?.nextPageToken,
-        "Search history",
-      );
-      if (nextToken === null) {
-        return {
-          status: "available",
-          value: { items, nextPageToken: null, totalSize, totalSizeExact, complete: true },
-        };
-      }
-      pageToken = nextToken;
-    }
-    return {
-      status: "available",
-      value: { items, nextPageToken: pageToken ?? null, totalSize, totalSizeExact, complete: false },
-    };
+    const collected = await collectCursorPages<ServerSearchHistoryEntry>({
+      maximumPages,
+      pageToken: options.pageToken?.trim() || undefined,
+      label: "Search history",
+      fetchPage: async ({ pageToken, includeTotalSize }) => {
+        const response = await client.history.list({
+          page: { pageSize, pageToken, includeTotalSize },
+          filter: historyFilter(options),
+          sortBy: options.sortBy ?? SearchHistorySortBy.SEARCH_HISTORY_SORT_BY_CREATED_AT,
+          sortDirection: options.sortDirection ?? SortDirection.SORT_DIRECTION_DESCENDING,
+        }, options);
+        return { items: response.historyEntries.map(adaptSearchHistoryEntry), page: response.page };
+      },
+    });
+    return { status: "available", value: collected };
   } catch (error) {
     if (isAdvertisedFeatureRouteUnavailable(error)) return optionalRouteUnavailable;
     throw error;

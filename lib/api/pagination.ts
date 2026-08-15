@@ -95,3 +95,57 @@ export function pruneCursorChainFrom<T>(
     if (normalized) seenTokens.add(normalized);
   }
 }
+
+export interface CursorPage<TItem> {
+  items: TItem[];
+  page?: { nextPageToken?: string; totalSize?: bigint; totalSizeExact?: boolean };
+}
+
+export interface CursorPageCollection<TItem> {
+  items: TItem[];
+  nextPageToken: string | null;
+  totalSize: bigint | null;
+  totalSizeExact: boolean;
+  complete: boolean;
+}
+
+/**
+ * Walks one cursor chain to its end or to a caller-supplied page ceiling. The
+ * exact total is requested only for the first page of a fresh chain, since a
+ * resumed chain cannot restate a snapshot total it never observed.
+ */
+export async function collectCursorPages<TItem>(options: {
+  maximumPages: number;
+  pageToken?: string;
+  label: string;
+  fetchPage: (request: {
+    pageToken: string | undefined;
+    includeTotalSize: boolean;
+  }) => Promise<CursorPage<TItem>>;
+}): Promise<CursorPageCollection<TItem>> {
+  const items: TItem[] = [];
+  const initialPageToken = options.pageToken;
+  const seenTokens = new Set<string>(initialPageToken === undefined ? [] : [initialPageToken]);
+  let pageToken = initialPageToken;
+  let totalSize: bigint | null = null;
+  let totalSizeExact = false;
+  for (let pageIndex = 0; pageIndex < options.maximumPages; pageIndex += 1) {
+    // Cursor pages are causally ordered and cannot be requested in parallel.
+    // eslint-disable-next-line no-await-in-loop
+    const response = await options.fetchPage({
+      pageToken,
+      includeTotalSize: pageIndex === 0 && initialPageToken === undefined,
+    });
+    items.push(...response.items);
+    if (pageIndex === 0) {
+      totalSize = response.page?.totalSize ?? null;
+      totalSizeExact = response.page?.totalSizeExact ?? false;
+    }
+    const nextToken = recordNextPageToken(seenTokens, response.page?.nextPageToken, options.label);
+    if (nextToken === null) {
+      return { items, nextPageToken: null, totalSize, totalSizeExact, complete: true };
+    }
+    pageToken = nextToken;
+  }
+  return { items, nextPageToken: pageToken ?? null, totalSize, totalSizeExact, complete: false };
+}

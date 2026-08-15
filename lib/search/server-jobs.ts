@@ -7,6 +7,7 @@ import {
   type SearchProgress,
 } from "@/gen/ts/open_splunk/v1/search";
 import { ServerFeature } from "@/gen/ts/open_splunk/v1/system_api";
+import { validDate } from "@/lib/api/duration";
 import type { OpenSplunkApiClient } from "@/lib/api/open-splunk-client";
 import {
   featureNotAdvertised,
@@ -73,10 +74,6 @@ export interface ListServerSearchJobsOptions extends ProtobufRequestOptions {
   pageToken?: string;
   includeTotalSize?: boolean;
   maximumPages?: number;
-}
-
-function validDate(value: Date | undefined): Date | null {
-  return value !== undefined && !Number.isNaN(value.valueOf()) ? new Date(value) : null;
 }
 
 function requireDefinition(job: SearchJob): SearchDefinition {

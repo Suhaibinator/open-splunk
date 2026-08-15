@@ -5,7 +5,6 @@ import {
   firstSplPipelineBoundary,
   isSupportedSplPipelineCommand,
   isScalarExpressionPipelineCommand,
-  isSplOffsetInDoubleQuotedValue,
   isSplOffsetInQuotedValue,
   scanSplStructure,
   splitSplPipeline,
@@ -165,9 +164,7 @@ test("quoted-offset helpers distinguish field identifiers from values", () => {
   const valueOffset = source.indexOf("server") + 2;
 
   assert.equal(isSplOffsetInQuotedValue(source, fieldOffset), true);
-  assert.equal(isSplOffsetInDoubleQuotedValue(source, fieldOffset), false);
   assert.equal(isSplOffsetInQuotedValue(source, valueOffset), true);
-  assert.equal(isSplOffsetInDoubleQuotedValue(source, valueOffset), true);
   assert.equal(isSplOffsetInQuotedValue(source, source.length), false);
 });
 

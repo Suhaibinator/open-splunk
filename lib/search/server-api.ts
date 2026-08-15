@@ -43,7 +43,6 @@ export {
   createServerExport,
   downloadServerExport,
   exportCanDownload,
-  exportFormatFromJob,
   exportIsTerminal,
   waitForServerExport,
 } from "./server-exports";

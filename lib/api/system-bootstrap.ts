@@ -9,6 +9,7 @@ import {
 } from "@/gen/ts/open_splunk/v1/index";
 import type { BuildMetadata } from "@/gen/ts/open_splunk/v1/common";
 
+import { durationToMilliseconds } from "./duration";
 import type { OpenSplunkApiClient } from "./open-splunk-client";
 import type { ProtobufRequestOptions } from "./protobuf-transport";
 import { canonicalBoundedServerText } from "@/lib/search/server-text";
@@ -52,12 +53,6 @@ export interface SystemBootstrapModel {
   indexes: BrowserIndexModel[];
   selectedAppId: string | null;
   serverTime: Date;
-}
-
-function durationToMilliseconds(duration: { seconds: bigint; nanos: number } | undefined): number {
-  if (duration === undefined) return 0;
-  const milliseconds = Number(duration.seconds) * 1_000 + duration.nanos / 1_000_000;
-  return Number.isFinite(milliseconds) && milliseconds >= 0 ? milliseconds : 0;
 }
 
 function adaptIndex(index: IndexSummary): BrowserIndexModel {
@@ -384,14 +379,6 @@ export function analyzeSPLIndexScope(spl: string): SPLIndexScopeAnalysis {
     }
   }
   return { selectors: [...selectors], exhaustivelyConstrained };
-}
-
-/**
- * Reports whether the eligible SPL filters guarantee that every matching row
- * is constrained by at least one positive exact `index=` predicate.
- */
-export function splIndexScopeIsExhaustive(spl: string): boolean {
-  return analyzeSPLIndexScope(spl).exhaustivelyConstrained;
 }
 
 function stageCommand(stage: string): { name: string; expression: string } | null {
