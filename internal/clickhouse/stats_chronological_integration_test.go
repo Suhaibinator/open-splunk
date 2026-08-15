@@ -680,10 +680,10 @@ func testStatsChronologicalAgainstClickHouse(
 		)
 	}
 	actions := explainCompiledQuery(t, ctx, connection, "EXPLAIN actions=1 ", shared)
-	if !strings.Contains(actions, "Function: argMinOrNullIf(") {
+	if countPhysicalAggregates(actions, "argMinOrNullIf(", "argMinOrNullIf(") == 0 {
 		t.Fatalf("physical plan is missing earliest aggregation:\n%s", actions)
 	}
-	if !strings.Contains(actions, "Function: argMaxOrNullIf(") {
+	if countPhysicalAggregates(actions, "argMaxOrNullIf(", "argMaxOrNullIf(") == 0 {
 		t.Fatalf("physical plan is missing latest aggregation:\n%s", actions)
 	}
 	upperActions := strings.ToUpper(actions)

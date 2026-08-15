@@ -4393,7 +4393,7 @@ func testStatsAggregatesAgainstClickHouse(
 	}
 	sharedDistinct := compile(base + ` | stats dc(distinct_value) AS count_values values(distinct_value) AS distinct_values`)
 	actions := explainCompiledQuery(t, ctx, connection, "EXPLAIN actions=1 ", sharedDistinct)
-	if got := strings.Count(actions, "Function: groupUniqArrayArray("); got != 1 {
+	if got := countPhysicalAggregates(actions, "groupUniqArrayArray(", "groupUniqArrayArray("); got != 1 {
 		t.Fatalf("values/dc has %d shared physical aggregate states, want one:\n%s", got, actions)
 	}
 	sharedCountValues := compile(base + ` | stats count(distinct_value) AS occurrences dc(distinct_value) AS count_values`)
@@ -4401,7 +4401,7 @@ func testStatsAggregatesAgainstClickHouse(
 	if got := strings.Count(actions, "FUNCTION arrayCount("); got != 1 {
 		t.Fatalf("count(field) has %d physical array cardinality actions, want one:\n%s", got, actions)
 	}
-	if got := strings.Count(actions, "Function: sum(UInt128)"); got != 1 {
+	if got := countPhysicalAggregates(actions, "sum(UInt128)", "sum("); got != 1 {
 		t.Fatalf("count(field) has %d physical aggregate states, want one:\n%s", got, actions)
 	}
 	if strings.Contains(actions, "ArrayJoin") {

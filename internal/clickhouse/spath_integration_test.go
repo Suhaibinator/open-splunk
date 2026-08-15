@@ -1208,6 +1208,24 @@ func explainCompiledQuery(
 	return explain.String()
 }
 
+// countPhysicalAggregates supports the EXPLAIN actions formats emitted by both
+// the previous ClickHouse LTS and current ClickHouse releases. Older releases
+// describe aggregate nodes as "Function:" actions, while current releases
+// list the physical states on "Aggregates:" lines.
+func countPhysicalAggregates(actions, legacySignature, currentSignature string) int {
+	if count := strings.Count(actions, "Function: "+legacySignature); count > 0 {
+		return count
+	}
+
+	count := 0
+	for _, line := range strings.Split(actions, "\n") {
+		if strings.Contains(line, "Aggregates:") {
+			count += strings.Count(line, currentSignature)
+		}
+	}
+	return count
+}
+
 func spathStartClickHouse(t *testing.T, ctx context.Context) (clickhousedriver.Conn, *Store) {
 	t.Helper()
 	container, err := testsupport.StartClickHouse(ctx, os.Getenv("OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE"))

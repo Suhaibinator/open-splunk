@@ -31,9 +31,9 @@ const V03_APPLICATION_VERSION = "0.2.0";
 // Keep the v0.2 pin synchronized with verify-spl-v02-acceptance.mjs. The
 // candidate pin is the same README after the verifier's atomic v0.3 rewrite.
 const V02_PUBLIC_README_AUTHORITY_SHA256 =
-  "28eadf56bd249c6b09734a7833a0d15deed0244a323a1ebf762b97b3b0710995";
+  "5de4834268ab8cb622f06cd398a3b05ac31c197affa87989bf69c1aa894c7612";
 const V03_PUBLIC_README_AUTHORITY_SHA256 =
-  "cc07b2c4e48d2d78e6f0e28a4214bae6a5c3b6dad985853d492454c66261e5b4";
+  "331522013a31218e01830819445e5b5a1e6700c197aa4669b794149e425d5d16";
 const EXPECTED_ARTIFACTS = new Map([
   ["public-readme", "README.md"],
   ["deploy-env-generator", "deploy/generate-env.sh"],
@@ -628,7 +628,7 @@ function verifyOperatorReleaseIdentitySources(sources, phase) {
   requireReleasePair(sources.integrationGuide, applicationVersion, compatibilityVersion,
     `integration guide in ${phase}`, [
       "OPEN_SPLUNK_OCI_INTEGRATION=1 \\",
-      "OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.56@sha256:422be85ae7344058369cdd366ac0efea9daa8428b55c9cf50258e83a7d12fcb3 \\",
+      "OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.7.3.19@sha256:f90a77560f72b10802106ee49e9870e41668cbc496e280c3911f6e3b216657f3 \\",
       "  go test ./integration -run '^TestReleaseOCIComposeContract$' \\",
       "    -count=1 -timeout=25m -v",
     ].join("\n"));
@@ -638,16 +638,16 @@ const OPERATOR_AUTHORITY_SHA256 = Object.freeze({
   "implementation-checkpoint": Object.freeze({
     publicREADME: V02_PUBLIC_README_AUTHORITY_SHA256,
     deployGenerator: "5f6c3a95aa720acb7769431b3b54930c9deb7f124c2d0a09c6966a72a708828b",
-    deployGuide: "0e1c77f00b310a79a29e68ef4f0c57178ec053ef2bfb8c5bac3f8b3f59e372b4",
+    deployGuide: "4cc215bba418782e7ed2b8b05e25bc4b3ae40e68ff170be9421014af1a8ca32e",
     collectorGuide: "e4b38c4539cfe4be60e538fbe408bc9fce0d7e35e464e520da058784fa9324c0",
-    integrationGuide: "a6fb033ccb18ca8d8908ed6a468ad9196e2d94ad6843cd7a1949066a5bfe8299",
+    integrationGuide: "56b57a9d67a3f5b2e77dbdee550c0e3301bcc47cc9a2de29e57fd2be69fafc57",
   }),
   candidate: Object.freeze({
     publicREADME: V03_PUBLIC_README_AUTHORITY_SHA256,
     deployGenerator: "66e581e7745d44ad6a051454984f4359d33cc301a4bf229feb9f184cae4ea680",
-    deployGuide: "4f7dd3e9871b860dbd3a414ed1e2d53218d4c6a546e7278f142b3bceb031eba9",
+    deployGuide: "fb4b1f9c789e618a4c614b813da0a7b0ef08fe17df5e1127dae4eafff28d7cef",
     collectorGuide: "1b1f9f264b2e0a02795410d8f01d275d4f54f367a956d366040fdd65b0dc3ce8",
-    integrationGuide: "bc4754c0f1341c515bb52a78a2e52700c6daa4ea2ca6efb635fc151cfe5369ae",
+    integrationGuide: "617bc3ecf3bb05c511ddd2c3289346b19b78d0845a09cc45cfca46df642d718e",
   }),
 });
 
@@ -1358,8 +1358,8 @@ async function verifyReceipts(manifest, runtimeRevision, evidenceRevision = null
     ["frontend-gates", {
       runtime_revision: runtimeRevision,
       runtime_tree: runtimeTree,
-      node: "v24.19.0",
-      npm: "11.17.0",
+      node: "v26.7.0",
+      npm: "11.19.0",
       commands: [
         "npm ci", "npm audit --omit=dev --audit-level=critical",
         "npm run typecheck", "npm run lint", "npm run test:frontend",
@@ -1370,7 +1370,7 @@ async function verifyReceipts(manifest, runtimeRevision, evidenceRevision = null
     ["clickhouse-v03", {
       runtime_revision: runtimeRevision,
       runtime_tree: runtimeTree,
-      image: "clickhouse/clickhouse-server:26.3.17.56@sha256:422be85ae7344058369cdd366ac0efea9daa8428b55c9cf50258e83a7d12fcb3",
+      image: "clickhouse/clickhouse-server:26.7.3.19@sha256:f90a77560f72b10802106ee49e9870e41668cbc496e280c3911f6e3b216657f3",
       tests: REQUIRED_SPL_TESTS,
       result: "pass",
     }],

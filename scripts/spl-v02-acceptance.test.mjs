@@ -694,7 +694,7 @@ test("synthetic clean R/E lineage passes accepted and ancestor verification", as
   const receiptValues = new Map([
     ["source-identity", { runtime_revision: runtime, runtime_tree: runtimeTree, remote_ref: accepted.runtime.remote_ref, remote_readback_revision: runtime, result: "pass" }],
     ["quality-gates", { runtime_revision: runtime, runtime_tree: runtimeTree, result: "pass" }],
-    ["clickhouse-gates", { runtime_revision: runtime, runtime_tree: runtimeTree, image: "clickhouse/clickhouse-server:26.3.17.56@sha256:422be85ae7344058369cdd366ac0efea9daa8428b55c9cf50258e83a7d12fcb3", result: "pass" }],
+    ["clickhouse-gates", { runtime_revision: runtime, runtime_tree: runtimeTree, image: "clickhouse/clickhouse-server:26.7.3.19@sha256:f90a77560f72b10802106ee49e9870e41668cbc496e280c3911f6e3b216657f3", result: "pass" }],
     ["compatibility-audit", { runtime_revision: runtime, runtime_tree: runtimeTree, compatibility_version: "0.2", unresolved_findings: 0, result: "pass" }],
     ["ci-run", ciRun],
     ["ci-jobs", jobs],
@@ -834,7 +834,7 @@ test("synthetic clean R/E lineage passes accepted and ancestor verification", as
     ["clickhouse-gates", {
       runtime_revision: malformedRuntime,
       runtime_tree: malformedRuntimeTree,
-      image: "clickhouse/clickhouse-server:26.3.17.56@sha256:422be85ae7344058369cdd366ac0efea9daa8428b55c9cf50258e83a7d12fcb3",
+      image: "clickhouse/clickhouse-server:26.7.3.19@sha256:f90a77560f72b10802106ee49e9870e41668cbc496e280c3911f6e3b216657f3",
       result: "pass",
     }],
     ["compatibility-audit", {

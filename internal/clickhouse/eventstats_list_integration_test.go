@@ -463,10 +463,11 @@ func testEventStatsListAgainstClickHouse(
 	// ClickHouse repeats a materialized CTE's action description for its
 	// readers. Compiler tests therefore pin the single SQL aggregate definition;
 	// the live plan proves that definition remains bounded and non-expanding.
-	if !strings.Contains(actions, "Function: groupArraySortedArray(") {
+	if countPhysicalAggregates(actions, "groupArraySortedArray(", "groupArraySortedArray(") == 0 {
 		t.Fatalf("eventstats list physical plan lost its bounded ordered state:\n%s", actions)
 	}
-	if strings.Contains(actions, "ArrayJoin") || strings.Contains(actions, "Function: groupArray(") {
+	if strings.Contains(actions, "ArrayJoin") ||
+		countPhysicalAggregates(actions, "groupArray(", "groupArray(") > 0 {
 		t.Fatalf("eventstats list physical plan expands or unboundedly buffers rows:\n%s", actions)
 	}
 	if got := strings.Count(physical.SQL, `FROM "open_splunk"."events"`); got != 1 {

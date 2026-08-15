@@ -25,7 +25,7 @@
   "evidence_layers": {
     "syntax_and_plan": "parser and logical-plan coverage",
     "clickhouse_lowering": "compiler SQL-shape coverage",
-    "pinned_runtime": "stored-event execution against digest-pinned ClickHouse 26.3.17.56",
+    "pinned_runtime": "stored-event execution against digest-pinned ClickHouse 26.7.3.19",
     "ui_rendering": "generic statistics-table sparkline-marker or multivalue-delimiter presentation without replacing typed cells"
   },
   "official_sources": [

@@ -482,10 +482,10 @@ func testStatsExtremaAgainstClickHouse(
 
 	shared := compile(base + ` | stats min(extrema_value) AS low max(extrema_value) AS high`)
 	actions := explainCompiledQuery(t, ctx, connection, "EXPLAIN actions=1 ", shared)
-	if got := strings.Count(actions, "Function: argMinArray("); got != 1 {
+	if got := countPhysicalAggregates(actions, "argMinArray(", "argMinArray("); got != 1 {
 		t.Fatalf("min has %d physical aggregate states, want one:\n%s", got, actions)
 	}
-	if got := strings.Count(actions, "Function: argMaxArray("); got != 1 {
+	if got := countPhysicalAggregates(actions, "argMaxArray(", "argMaxArray("); got != 1 {
 		t.Fatalf("min/max has %d physical max states, want one:\n%s", got, actions)
 	}
 	if strings.Contains(actions, "ArrayJoin") {

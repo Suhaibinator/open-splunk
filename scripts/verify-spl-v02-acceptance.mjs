@@ -99,7 +99,7 @@ const V02_APPLICATION_VERSION = "0.1.0";
 // This checkpoint README is also the v0.3 verifier's prerequisite authority.
 // Intentional operator-document changes must re-pin both verifiers together.
 const V02_PUBLIC_README_AUTHORITY_SHA256 =
-  "28eadf56bd249c6b09734a7833a0d15deed0244a323a1ebf762b97b3b0710995";
+  "5de4834268ab8cb622f06cd398a3b05ac31c197affa87989bf69c1aa894c7612";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const repositoryRoot = path.resolve(path.dirname(scriptPath), "..");
@@ -695,14 +695,14 @@ function checkOperatorReleaseIdentityAt(revision) {
   requireReleasePair(sources.integrationGuide, "0.1.0", "0.2",
     `integration guide at ${revision}`,
     "OPEN_SPLUNK_OCI_INTEGRATION=1 \\\\r?\\n" +
-    "OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26\\.3\\.17\\.56@sha256:422be85ae7344058369cdd366ac0efea9daa8428b55c9cf50258e83a7d12fcb3 \\\\r?\\n" +
+    "OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26\\.7\\.3\\.19@sha256:f90a77560f72b10802106ee49e9870e41668cbc496e280c3911f6e3b216657f3 \\\\r?\\n" +
     "  go test \\.\\/integration -run '\\^TestReleaseOCIComposeContract\\$' \\\\r?\\n" +
     "    -count=1 -timeout=25m -v$");
   for (const [id, source, digest] of [
     ["deployGenerator", sources.deployGenerator, "5f6c3a95aa720acb7769431b3b54930c9deb7f124c2d0a09c6966a72a708828b"],
-    ["deployGuide", sources.deployGuide, "0e1c77f00b310a79a29e68ef4f0c57178ec053ef2bfb8c5bac3f8b3f59e372b4"],
+    ["deployGuide", sources.deployGuide, "4cc215bba418782e7ed2b8b05e25bc4b3ae40e68ff170be9421014af1a8ca32e"],
     ["collectorGuide", sources.collectorGuide, "e4b38c4539cfe4be60e538fbe408bc9fce0d7e35e464e520da058784fa9324c0"],
-    ["integrationGuide", sources.integrationGuide, "a6fb033ccb18ca8d8908ed6a468ad9196e2d94ad6843cd7a1949066a5bfe8299"],
+    ["integrationGuide", sources.integrationGuide, "56b57a9d67a3f5b2e77dbdee550c0e3301bcc47cc9a2de29e57fd2be69fafc57"],
   ]) {
     check(sha256(Buffer.from(source, "utf8")) === digest,
       `${id} at ${revision} does not equal the exact v0.2 release authority`);
@@ -919,7 +919,7 @@ async function validateReceipts(manifest, revision = null) {
     ["clickhouse-gates", {
       runtime_revision: runtime,
       runtime_tree: runtimeTree,
-      image: "clickhouse/clickhouse-server:26.3.17.56@sha256:422be85ae7344058369cdd366ac0efea9daa8428b55c9cf50258e83a7d12fcb3",
+      image: "clickhouse/clickhouse-server:26.7.3.19@sha256:f90a77560f72b10802106ee49e9870e41668cbc496e280c3911f6e3b216657f3",
       result: "pass",
     }],
     ["compatibility-audit", {

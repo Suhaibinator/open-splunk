@@ -642,7 +642,7 @@ func deploymentRecoveryInspectionFixture() server.ClickHouseRecoveryDatabaseInsp
 	ledgerDigest := sha256.Sum256([]byte("release-owned migration ledger"))
 	return server.ClickHouseRecoveryDatabaseInspection{
 		DatabaseName:                    "open_splunk",
-		ServerVersion:                   "26.3.17.56",
+		ServerVersion:                   "26.7.3.19",
 		DatabaseEngine:                  "Atomic",
 		DatabaseUUID:                    "11111111-1111-4111-8111-111111111111",
 		SchemaMigrationsTableUUID:       "22222222-2222-4222-8222-222222222222",

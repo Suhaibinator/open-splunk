@@ -25,7 +25,7 @@ and derives the bootstrap capability only from the complete runtime, browser,
 inspection/history/export, and field-analysis family. The browser forwards its
 memory-only administrator bearer only on the exact ten Knowledge routes and
 keeps feature-off bootstrap at zero Knowledge imports and traffic. The pinned
-ClickHouse 26.3.17.56 matrix passes ordinary selectors and enrichment,
+ClickHouse 26.7.3.19 matrix passes ordinary selectors and enrichment,
 chart/timechart/stats/chronology, pruning/empty consumers, field services,
 maximum-field concurrency, atomic overflow, and real retained v1/v2
 Writer→Resolver→Manager→history/export execution.

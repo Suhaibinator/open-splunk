@@ -449,7 +449,7 @@ func (connection *startupMigrationConnection) QueryRow(
 		}
 		version := connection.version
 		if version == "" {
-			version = "26.3.17.56"
+			version = "26.7.3.19"
 		}
 		return startupMigrationRow{
 			value: version,

@@ -32,7 +32,7 @@ var (
 )
 
 const (
-	clickHousePrivilegeContractVersion = "26.3.17.56"
+	clickHousePrivilegeContractVersion = "26.7.3.19"
 	clickHouseVersionQuery             = "SELECT version()"
 	clickHouseExplicitGrantsQuery      = "SHOW GRANTS"
 	// system.tables is intentionally public even when ClickHouse requires

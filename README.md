@@ -39,8 +39,8 @@ The root TypeScript files (`package.json`, `next.config.ts`, and `tsconfig.json`
 
 ```sh
 go version   # go1.26.6; also pinned in go.mod
-node --version # v24.19.0; also pinned in .node-version
-npm --version  # 11.17.0; also pinned in package.json
+node --version # v26.7.0; also pinned in .node-version
+npm --version  # 11.19.0; also pinned in package.json
 make proto-tools
 make proto
 go test ./...
@@ -166,7 +166,7 @@ npx --no-install playwright install chromium
 OPEN_SPLUNK_BACKEND_INTEGRATION=1 go test ./integration -run TestBackendVertical
 
 OPEN_SPLUNK_OCI_INTEGRATION=1 \
-OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.56@sha256:422be85ae7344058369cdd366ac0efea9daa8428b55c9cf50258e83a7d12fcb3 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.7.3.19@sha256:f90a77560f72b10802106ee49e9870e41668cbc496e280c3911f6e3b216657f3 \
 go test ./integration -run '^TestReleaseOCIComposeContract$' -count=1 -timeout=20m -v
 ```
 

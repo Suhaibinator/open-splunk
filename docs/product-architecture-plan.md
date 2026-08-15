@@ -750,7 +750,7 @@ needed by the embedded files. The ordinary runtime has only `SELECT` and
 `SELECT(tenant_id, index_name)`, `ALTER DELETE`, and the two system-table reads
 needed for reconciliation. Every principal is validated through its complete
 explicit `SHOW GRANTS` surface against the exact audited ClickHouse
-`26.3.17.56` contract; a denied `system.server_settings` canary also proves that
+`26.7.3.19` contract; a denied `system.server_settings` canary also proves that
 non-public system-table reads require explicit grants. The migrator is
 validated before any DDL, its password is removed from the application
 environment after capture, and its options are cleared as soon as the

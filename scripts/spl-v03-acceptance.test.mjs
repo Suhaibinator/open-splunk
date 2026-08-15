@@ -1031,7 +1031,7 @@ test("synthetic clean v0.3 R/E lineage passes candidate and accepted verificatio
   const v02ReceiptValues = new Map([
     ["source-identity", { runtime_revision: v02Runtime, runtime_tree: v02Tree, remote_ref: v02Accepted.runtime.remote_ref, remote_readback_revision: v02Runtime, result: "pass" }],
     ["quality-gates", { runtime_revision: v02Runtime, runtime_tree: v02Tree, result: "pass" }],
-    ["clickhouse-gates", { runtime_revision: v02Runtime, runtime_tree: v02Tree, image: "clickhouse/clickhouse-server:26.3.17.56@sha256:422be85ae7344058369cdd366ac0efea9daa8428b55c9cf50258e83a7d12fcb3", result: "pass" }],
+    ["clickhouse-gates", { runtime_revision: v02Runtime, runtime_tree: v02Tree, image: "clickhouse/clickhouse-server:26.7.3.19@sha256:f90a77560f72b10802106ee49e9870e41668cbc496e280c3911f6e3b216657f3", result: "pass" }],
     ["compatibility-audit", { runtime_revision: v02Runtime, runtime_tree: v02Tree, compatibility_version: "0.2", unresolved_findings: 0, result: "pass" }],
     ["ci-run", v02CIRun],
     ["ci-jobs", v02Jobs],
@@ -1194,12 +1194,12 @@ test("synthetic clean v0.3 R/E lineage passes candidate and accepted verificatio
       "./internal/searchsnapshot", "./internal/searchinspection",
       "./internal/searchanalysis", "./internal/export",
     ], result: "pass" })],
-    ["frontend-gates", json({ runtime_revision: v03Runtime, runtime_tree: v03Tree, node: "v24.19.0", npm: "11.17.0", commands: [
+    ["frontend-gates", json({ runtime_revision: v03Runtime, runtime_tree: v03Tree, node: "v26.7.0", npm: "11.19.0", commands: [
       "npm ci", "npm audit --omit=dev --audit-level=critical",
       "npm run typecheck", "npm run lint", "npm run test:frontend",
       "npm run build",
     ], result: "pass" })],
-    ["clickhouse-v03", json({ runtime_revision: v03Runtime, runtime_tree: v03Tree, image: "clickhouse/clickhouse-server:26.3.17.56@sha256:422be85ae7344058369cdd366ac0efea9daa8428b55c9cf50258e83a7d12fcb3", tests: REQUIRED_SPL_TESTS, result: "pass" })],
+    ["clickhouse-v03", json({ runtime_revision: v03Runtime, runtime_tree: v03Tree, image: "clickhouse/clickhouse-server:26.7.3.19@sha256:f90a77560f72b10802106ee49e9870e41668cbc496e280c3911f6e3b216657f3", tests: REQUIRED_SPL_TESTS, result: "pass" })],
     ["release-readback", releaseReadback],
     ["binary-identities", binaryIdentityReceipt],
     ["artifact-digests", digestReceipt],

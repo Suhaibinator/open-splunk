@@ -30,7 +30,7 @@ import (
 )
 
 const (
-	knowledgeRuntimeExpectedClickHouseVersion = "26.3.17.56"
+	knowledgeRuntimeExpectedClickHouseVersion = "26.7.3.19"
 	knowledgeRuntimeOverflowAliasCount        = 5
 	// Parsing, analyzing, and executing the maximum-width field catalog peaks
 	// near 379 MiB on the pinned server before the tiny fixture completes.

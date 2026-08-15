@@ -68,7 +68,7 @@ Single-node mode requires one ClickHouse address and all server writer instances
 to share the same SQLite control DB. The SQLite and ClickHouse data therefore
 form one backup/restore unit.
 
-The schema targets `clickhouse/clickhouse-server:26.3.17.56`, the concrete patch
+The schema targets `clickhouse/clickhouse-server:26.7.3.19`, the concrete patch
 of the current 26.3 LTS line used by local deployment. Native JSON has been
 production-ready since 25.3, and native full-text indexes are GA from 26.2.
 The version decisions are checkable against the [Docker Official Image tag

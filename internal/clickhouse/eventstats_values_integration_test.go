@@ -520,7 +520,7 @@ func testEventStatsValuesAgainstClickHouse(
 	actions := explainCompiledQuery(t, ctx, connection, "EXPLAIN actions=1 ", compile(
 		base+` | eventstats values(distinct_value) AS first | head 1 | table first`,
 	))
-	if !strings.Contains(actions, "Function: groupUniqArrayArray(") {
+	if countPhysicalAggregates(actions, "groupUniqArrayArray(", "groupUniqArrayArray(") == 0 {
 		t.Fatalf("eventstats values physical plan lost its exact state:\n%s", actions)
 	}
 	if strings.Contains(actions, "ArrayJoin") || strings.Contains(actions, "groupArray(") {

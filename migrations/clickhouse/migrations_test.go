@@ -1060,7 +1060,7 @@ func TestDeploymentClickHouseBootstrapSeparatesServicePrincipals(t *testing.T) {
 		"GRANT ALTER DELETE, SELECT(tenant_id, index_name) ON open_splunk.events TO open_splunk_deletion",
 		"GRANT SELECT ON system.tables TO open_splunk_deletion",
 		"GRANT SELECT ON system.mutations TO open_splunk_deletion",
-		"expected_server_version=26.3.17.56",
+		"expected_server_version=26.7.3.19",
 		"SELECT version()",
 		"chmod 0700 /var/lib/clickhouse /var/log/clickhouse-server",
 	} {
@@ -1377,7 +1377,16 @@ func TestMigrationsAgainstClickHouse(t *testing.T) {
 			ORDER BY version
 		)
 		FORMAT TSVRaw`)
-	if versions != "[(1,1),(2,1),(3,1),(4,1)]" {
+	var expectedVersions strings.Builder
+	expectedVersions.WriteByte('[')
+	for index := range migrationFiles(t) {
+		if index > 0 {
+			expectedVersions.WriteByte(',')
+		}
+		fmt.Fprintf(&expectedVersions, "(%d,1)", index+1)
+	}
+	expectedVersions.WriteByte(']')
+	if versions != expectedVersions.String() {
 		t.Fatalf("migration ledger = %q, want one row for each version", versions)
 	}
 }

@@ -44,11 +44,11 @@ Normative artifacts:
 | Required application identity | `0.2.0`; exact release tag `v0.2.0` at `E` |
 | Required knowledge identity | `0.1` |
 | Go | `go1.26.6 darwin/arm64` |
-| Node.js required by lockfile | `v24.19.0` |
-| npm | `11.17.0` |
+| Node.js required by lockfile | `v26.7.0` |
+| npm | `11.19.0` |
 | Docker client/server | `29.7.2` / `29.7.2` |
-| ClickHouse | `26.3.17.56` |
-| Pinned ClickHouse image | `clickhouse/clickhouse-server:26.3.17.56@sha256:422be85ae7344058369cdd366ac0efea9daa8428b55c9cf50258e83a7d12fcb3` |
+| ClickHouse | `26.7.3.19` |
+| Pinned ClickHouse image | `clickhouse/clickhouse-server:26.7.3.19@sha256:f90a77560f72b10802106ee49e9870e41668cbc496e280c3911f6e3b216657f3` |
 
 Acceptance uses two immutable revisions because a Git commit cannot contain
 its own final object identity or the terminal CI result produced after that
@@ -127,7 +127,7 @@ tested working-tree behavior but do not replace the final clean-revision rerun.
 | Snapshot rebuild/version immutability | `go test ./internal/searchsnapshot -run 'TestV03|CompilerVersion' -count=1` | passed |
 | Export, inspection, field catalog/summary, timeline analysis | focused `internal/export`, `internal/searchinspection`, and `internal/searchanalysis` suites | passed |
 | Browser catalog/pipeline scanning | `lib/search/spl-syntax.test.ts` in frontend suite | passed during implementation |
-| Exact frontend toolchain | Node `v24.19.0`, npm `11.17.0`: `npm ci`, critical production audit, typecheck, lint, frontend tests, and production build | frontend runner passed after wiring the CI structural and release-identity gates: 117 script tests and 304 frontend tests; exact Node 24 full-sheet rerun still required for `R` |
+| Exact frontend toolchain | Node `v26.7.0`, npm `11.19.0`: `npm ci`, critical production audit, typecheck, lint, frontend tests, and production build | frontend runner passed after wiring the CI structural and release-identity gates: 117 script tests and 304 frontend tests; exact Node 26 full-sheet rerun still required for `R` |
 | Pinned live ClickHouse all-ten vertical | `OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 go test ./internal/clickhouse -run '^TestV03AdversarialAgainstClickHouse$' -count=1 -timeout=15m -v` | earlier checkpoint passed in 96.62 s; a fresh post-fix rerun is required for `R`; exact image digest shown above |
 | Pinned fillnull materialization compositions | `OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 go test ./internal/clickhouse -run '^(TestV03FillNullDynamicThenMVExpandAgainstClickHouse|TestV03FillNullAfterPrivatePhysicalProducersAgainstClickHouse)$' -count=1 -timeout=15m -p=1 -v` | post-fix checkpoint passed both exact verticals against the pinned image: stored Dynamic through `mvexpand`/pivot barriers and private physical Dynamic/String/Time/Number/Bool producers through `fillnull`; a fresh exact-`R` rerun remains required |
 | Pinned public paging/export vertical | `OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 go test ./internal/export -run '^TestV03PinnedClickHousePublishesNullableListsThroughPagingAndExport$' -count=1 -timeout=15m -v` | passed in 6.95 s; real ClickHouse → executor → manager paging → JSONL export, including nullable multivalue, expanded nullable-String, and semantic-Bytes transport |
@@ -186,7 +186,7 @@ npm run lint
 npm run test:frontend
 npm run build
 
-export OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.56@sha256:422be85ae7344058369cdd366ac0efea9daa8428b55c9cf50258e83a7d12fcb3'
+export OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.7.3.19@sha256:f90a77560f72b10802106ee49e9870e41668cbc496e280c3911f6e3b216657f3'
 
 require_exact_test() {
   package="$1"

@@ -104,11 +104,11 @@ Normative and operator documents:
 | Qualification UTC interval | post-`R` evidence, absent from carrier/`R` and recorded only by `E` |
 | Qualification runner/CPU/OS | post-`R` evidence, absent from carrier/`R` and recorded only by `E`; historical receipts used Apple M4 Max, 16 logical CPUs, Darwin 25.6.0 arm64 |
 | Required Go | `go1.26.6` |
-| Required Node.js | `v24.19.0` |
-| Required npm | `11.17.0` |
+| Required Node.js | `v26.7.0` |
+| Required npm | `11.19.0` |
 | Required Playwright | `1.62.1` |
-| Required ClickHouse | `26.3.17.56` |
-| Required ClickHouse image | `clickhouse/clickhouse-server:26.3.17.56@sha256:422be85ae7344058369cdd366ac0efea9daa8428b55c9cf50258e83a7d12fcb3` |
+| Required ClickHouse | `26.7.3.19` |
+| Required ClickHouse image | `clickhouse/clickhouse-server:26.7.3.19@sha256:f90a77560f72b10802106ee49e9870e41668cbc496e280c3911f6e3b216657f3` |
 | Contract/corpus binding | exact bytes are hashed by the `R` manifest and retained unchanged by `E` |
 | Redacted audit receipt | post-`R` evidence recorded only by `E` |
 | Release identity/readback | post-`R` evidence recorded only by `E`; it must name exact `R`, application `0.1.0`, and SPL `0.2` |
@@ -291,7 +291,7 @@ require_exact_go_test ./internal/queryexec TestSemanticBytesV02ManagerAgainstCli
 require_exact_go_test ./internal/queryexec TestSemanticBytesModeManagerAgainstClickHouse
 require_exact_go_test ./internal/queryexec TestSparklineFeedsStatsByThroughManagerAgainstClickHouse
 
-export OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.56@sha256:422be85ae7344058369cdd366ac0efea9daa8428b55c9cf50258e83a7d12fcb3'
+export OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.7.3.19@sha256:f90a77560f72b10802106ee49e9870e41668cbc496e280c3911f6e3b216657f3'
 
 OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
 go test ./internal/clickhouse \
