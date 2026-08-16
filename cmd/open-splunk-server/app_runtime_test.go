@@ -755,7 +755,11 @@ func TestMapRuntimeAppCatalogErrorIsStableAndSanitized(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			if got := mapRuntimeAppCatalogError(test.err); !reflect.DeepEqual(got, test.want) {
+			// The mapping returns either a package sentinel or the exact
+			// input error, so interface identity is the precise contract;
+			// structural comparison would wrongly equate distinct errors
+			// that happen to share a message.
+			if got := mapRuntimeAppCatalogError(test.err); got != test.want {
 				t.Fatalf("mapped error = %v, want exact %v", got, test.want)
 			}
 		})

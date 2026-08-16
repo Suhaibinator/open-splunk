@@ -324,6 +324,30 @@ func TestParseV02MembershipFormsAndCategoryBoundary(t *testing.T) {
 	}
 }
 
+// equalDifferentialErrors reports whether two lexer/parser errors agree for
+// differential testing. Both surfaces produce *Diagnostic, whose Error()
+// string omits Range.End and Suggestions, so the diagnostics are compared as
+// concrete structs to keep the full structural strength of the differential;
+// any other error type must match exactly by type and message.
+func equalDifferentialErrors(got, want error) bool {
+	if (got == nil) != (want == nil) {
+		return false
+	}
+	if got == nil {
+		return true
+	}
+	gotDiagnostic, gotOK := got.(*Diagnostic)
+	wantDiagnostic, wantOK := want.(*Diagnostic)
+	if gotOK != wantOK {
+		return false
+	}
+	if gotOK {
+		return reflect.DeepEqual(*gotDiagnostic, *wantDiagnostic)
+	}
+	return reflect.TypeOf(got) == reflect.TypeOf(want) &&
+		got.Error() == want.Error()
+}
+
 func TestLexV02ScalarOperatorsAreContextSafeAndSourceExact(t *testing.T) {
 	t.Parallel()
 
@@ -333,7 +357,7 @@ func TestLexV02ScalarOperatorsAreContextSafeAndSourceExact(t *testing.T) {
 		source := "a" + string(rune(value)) + "b"
 		got, gotErr := lex(source)
 		want, wantErr := lexWithQuotedFields(source, false)
-		if !reflect.DeepEqual(got, want) || !reflect.DeepEqual(gotErr, wantErr) {
+		if !reflect.DeepEqual(got, want) || !equalDifferentialErrors(gotErr, wantErr) {
 			t.Fatalf("ASCII %#02x token differential: got %#v, %v; want %#v, %v", value, got, gotErr, want, wantErr)
 		}
 	}
@@ -617,7 +641,7 @@ func TestParseV02PreservesNonScalarTokenization(t *testing.T) {
 		legacyParser := parser{source: source, tokens: legacyTokens, profile: expressionProfileV02}
 		legacyQuery, legacyErr := legacyParser.parseQuery()
 		query, err := Parse(source)
-		if !reflect.DeepEqual(query, legacyQuery) || !reflect.DeepEqual(err, legacyErr) {
+		if !reflect.DeepEqual(query, legacyQuery) || !equalDifferentialErrors(err, legacyErr) {
 			t.Fatalf(
 				"base-search composite differential for %q: got %#v, %v; legacy %#v, %v",
 				source, query, err, legacyQuery, legacyErr,

@@ -8168,7 +8168,7 @@ type compileContext struct {
 	searchTimezone                    string
 	searchLocalMinimumUnixNanoseconds int64
 	searchTimezoneChecked             bool
-	searchTimezoneCheckErr            error
+	searchTimezoneInvalid             bool
 	lookupTables                      []compiledLookupExternalTable
 }
 
@@ -9704,17 +9704,26 @@ func compileStrftimeScalar(
 	}, nil
 }
 
+// errSearchTimezoneInvalid is a package-level sentinel so compileContext can
+// cache the check outcome as a plain bool: storing the error itself would put
+// an error value inside compileState's type closure and undermine the
+// reflect.DeepEqual state seals that compare compiled preludes.
+var errSearchTimezoneInvalid = errors.New(
+	"compile ClickHouse date/time function: search timezone is invalid",
+)
+
 func validateCompileContextSearchTimezone(context *compileContext) error {
 	if context.searchTimezoneChecked {
-		return context.searchTimezoneCheckErr
+		if context.searchTimezoneInvalid {
+			return errSearchTimezoneInvalid
+		}
+		return nil
 	}
 	context.searchTimezoneChecked = true
 	location, err := ianatimezone.Load(context.searchTimezone)
 	if err != nil {
-		context.searchTimezoneCheckErr = errors.New(
-			"compile ClickHouse date/time function: search timezone is invalid",
-		)
-		return context.searchTimezoneCheckErr
+		context.searchTimezoneInvalid = true
+		return errSearchTimezoneInvalid
 	}
 	localMinimum := time.Date(
 		searchtimebounds.MinimumYear,
@@ -9733,7 +9742,7 @@ func validateCompileContextSearchTimezone(context *compileContext) error {
 	// second-offset zone detects drift against ClickHouse's bundled tzdb.
 	context.searchLocalMinimumUnixNanoseconds =
 		localMinimum.Unix() * 1_000_000_000
-	return context.searchTimezoneCheckErr
+	return nil
 }
 
 func compileStrptimeScalar(
