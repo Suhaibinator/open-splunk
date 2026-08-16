@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -126,24 +127,24 @@ func makeDirectoriesDurable(path string) error {
 		}
 	}
 
-	for i := len(missing) - 1; i >= 0; i-- {
+	for _, component := range slices.Backward(missing) {
 		created := false
-		if err := os.Mkdir(missing[i], 0o700); err != nil {
+		if err := os.Mkdir(component, 0o700); err != nil {
 			if !errors.Is(err, os.ErrExist) {
 				return err
 			}
-			info, statErr := os.Stat(missing[i])
+			info, statErr := os.Stat(component)
 			if statErr != nil {
 				return statErr
 			}
 			if !info.IsDir() {
-				return fmt.Errorf("%s is not a directory", missing[i])
+				return fmt.Errorf("%s is not a directory", component)
 			}
 		} else {
 			created = true
 		}
 		if created {
-			if err := syncDirectory(filepath.Dir(missing[i])); err != nil {
+			if err := syncDirectory(filepath.Dir(component)); err != nil {
 				return err
 			}
 		}
@@ -301,7 +302,6 @@ func (s *fileDeadLetterSink) WriteRecords(records []DeadLetterRecord) error {
 				s.failed = err
 				return err
 			}
-			dirty = false
 		}
 
 		startSize := s.size

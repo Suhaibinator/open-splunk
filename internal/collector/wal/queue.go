@@ -291,9 +291,14 @@ func (q *queue) recover() error {
 		if err != nil {
 			return err
 		}
+		if info.Size() < 0 {
+			return fmt.Errorf("collector/wal: segment %s has a negative size", name)
+		}
+		// #nosec G115 -- the negative-size case is rejected above.
+		size := uint64(info.Size())
 		seg := &segInfo{
 			name: name, firstSeq: firstSeq, lastSeq: scan.lastSequence,
-			sealed: true, size: uint64(info.Size()),
+			sealed: true, size: size,
 		}
 		for _, d := range scan.descriptors {
 			q.appendUnackedLocked(d)
@@ -460,6 +465,7 @@ func observeAllocatedSequenceFloor(
 		// append. Over-burning is safe, while undercounting could reuse a sequence
 		// previously observed by the server.
 		const minimumRecordBytes = uint64(recordHeaderSize + 1)
+		// #nosec G115 -- the bounds check above proves fileSize > badOffset >= 0.
 		tailBytes := uint64(result.fileSize - result.badOffset)
 		tailAllocations := tailBytes / minimumRecordBytes
 		if tailBytes%minimumRecordBytes != 0 {
@@ -499,13 +505,18 @@ func (q *queue) refreshStorageStatsLocked() error {
 		if err != nil {
 			return fmt.Errorf("collector/wal: stat %s: %w", entry.Name(), err)
 		}
+		if info.Size() < 0 {
+			return fmt.Errorf("collector/wal: %s has a negative size", entry.Name())
+		}
+		// #nosec G115 -- the negative-size case is rejected above.
+		size := uint64(info.Size())
 		if _, live := parseSegmentName(entry.Name()); live {
-			physicalBytes += uint64(info.Size())
+			physicalBytes += size
 			continue
 		}
 		if strings.Contains(entry.Name(), corruptSuffix) {
 			quarantined++
-			quarantinedBytes += uint64(info.Size())
+			quarantinedBytes += size
 		}
 	}
 	// Publish only after the entire directory scan succeeds. A transient Info

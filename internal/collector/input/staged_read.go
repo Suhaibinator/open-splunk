@@ -324,7 +324,7 @@ func (t *tailer) stageSnapshot(
 			_, batch.pendingLen = fr.Pending()
 			if batch.snapshotEnd == batch.observedEnd &&
 				(forceFlush || t.shouldFlushInactive(batch.pendingLen)) {
-				frame, flushErr, ok := fr.Flush()
+				frame, ok, flushErr := fr.Flush()
 				if !ok {
 					if flushErr != nil {
 						return flushErr
@@ -536,6 +536,7 @@ func (t *tailer) guardForEvent(
 		return "", 0, errors.New("collector/input: event guard exceeds staged dependency")
 	}
 	guardLength := end
+	// #nosec G115 -- fpBytes is validated against maximumFingerprintBytes.
 	if maximum := uint64(t.m.fpBytes); guardLength > maximum {
 		guardLength = maximum
 	}

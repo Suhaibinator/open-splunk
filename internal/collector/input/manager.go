@@ -204,10 +204,7 @@ func (m *manager) Health() Health {
 	// int64 storage/validation remains representable.
 	// #nosec G115 -- max64 clamps the atomic counter to a non-negative int64.
 	active := collectorlimits.ClampFleetCounter(uint64(max64(m.active.Load(), 0)))
-	discovered := collectorlimits.ClampFleetCounter(m.discovered.Load())
-	if discovered < active {
-		discovered = active
-	}
+	discovered := max(collectorlimits.ClampFleetCounter(m.discovered.Load()), active)
 	return Health{
 		InputID:           m.cfg.InputID,
 		State:             state,
@@ -633,6 +630,7 @@ func captureCheckpointGuard(
 	maximum int,
 ) (fingerprint string, length uint32, err error) {
 	guardLength := end
+	// #nosec G115 -- maximum is validated against maximumFingerprintBytes.
 	if limit := uint64(maximum); guardLength > limit {
 		guardLength = limit
 	}

@@ -759,6 +759,10 @@ func TestMapRuntimeAppCatalogErrorIsStableAndSanitized(t *testing.T) {
 			// input error, so interface identity is the precise contract;
 			// structural comparison would wrongly equate distinct errors
 			// that happen to share a message.
+			//nolint:errorlint // Identity is the contract under test: the
+			// mapping must return a package sentinel or the exact input
+			// error, never a wrapped one, so errors.Is would mask exactly
+			// the regression this test exists to catch.
 			if got := mapRuntimeAppCatalogError(test.err); got != test.want {
 				t.Fatalf("mapped error = %v, want exact %v", got, test.want)
 			}

@@ -1025,10 +1025,7 @@ func inputHealthSnapshot(inputs []*inputRuntime) []*opensplunkv1.CollectorInputH
 	for _, ir := range inputs {
 		h := ir.manager.Health()
 		active := collectorlimits.ClampFleetCounter(h.ActiveSources)
-		discovered := collectorlimits.ClampFleetCounter(h.DiscoveredSources)
-		if discovered < active {
-			discovered = active
-		}
+		discovered := max(collectorlimits.ClampFleetCounter(h.DiscoveredSources), active)
 		ch := &opensplunkv1.CollectorInputHealth{
 			InputId:           h.InputID,
 			State:             h.State,

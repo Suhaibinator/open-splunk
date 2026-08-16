@@ -180,25 +180,25 @@ func TestValidateAndNormalizeEventValidatesCheckpointRewriteGuard(t *testing.T) 
 		origin *opensplunkv1.EventOrigin
 	}{
 		{name: "missing length", origin: &opensplunkv1.EventOrigin{
-			EndOffset: proto.Uint64(100), CheckpointGuardFingerprint: proto.String(digest),
+			EndOffset: proto.Uint64(100), CheckpointGuardFingerprint: new(digest),
 		}},
 		{name: "missing fingerprint", origin: &opensplunkv1.EventOrigin{
 			EndOffset: proto.Uint64(100), CheckpointGuardLength: proto.Uint32(32),
 		}},
 		{name: "explicit empty guard", origin: &opensplunkv1.EventOrigin{
-			EndOffset: proto.Uint64(100), CheckpointGuardFingerprint: proto.String(""), CheckpointGuardLength: proto.Uint32(0),
+			EndOffset: proto.Uint64(100), CheckpointGuardFingerprint: new(""), CheckpointGuardLength: proto.Uint32(0),
 		}},
 		{name: "missing end offset", origin: &opensplunkv1.EventOrigin{
-			CheckpointGuardFingerprint: proto.String(digest), CheckpointGuardLength: proto.Uint32(32),
+			CheckpointGuardFingerprint: new(digest), CheckpointGuardLength: proto.Uint32(32),
 		}},
 		{name: "guard exceeds end", origin: &opensplunkv1.EventOrigin{
-			EndOffset: proto.Uint64(31), CheckpointGuardFingerprint: proto.String(digest), CheckpointGuardLength: proto.Uint32(32),
+			EndOffset: proto.Uint64(31), CheckpointGuardFingerprint: new(digest), CheckpointGuardLength: proto.Uint32(32),
 		}},
 		{name: "guard exceeds absolute limit", origin: &opensplunkv1.EventOrigin{
-			EndOffset: proto.Uint64(2 << 20), CheckpointGuardFingerprint: proto.String(digest), CheckpointGuardLength: proto.Uint32((1 << 20) + 1),
+			EndOffset: proto.Uint64(2 << 20), CheckpointGuardFingerprint: new(digest), CheckpointGuardLength: proto.Uint32((1 << 20) + 1),
 		}},
 		{name: "noncanonical digest", origin: &opensplunkv1.EventOrigin{
-			EndOffset: proto.Uint64(100), CheckpointGuardFingerprint: proto.String(strings.ToUpper(digest)), CheckpointGuardLength: proto.Uint32(32),
+			EndOffset: proto.Uint64(100), CheckpointGuardFingerprint: new(strings.ToUpper(digest)), CheckpointGuardLength: proto.Uint32(32),
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -215,7 +215,7 @@ func TestValidateAndNormalizeEventValidatesCheckpointRewriteGuard(t *testing.T) 
 
 	event := validTestEvent("event-valid-checkpoint-guard", "main")
 	event.Origin = &opensplunkv1.EventOrigin{
-		EndOffset: proto.Uint64(100), CheckpointGuardFingerprint: proto.String(digest), CheckpointGuardLength: proto.Uint32(32),
+		EndOffset: proto.Uint64(100), CheckpointGuardFingerprint: new(digest), CheckpointGuardLength: proto.Uint32(32),
 	}
 	if _, rejection := validator.ValidateAndNormalizeEvent(event, EventContext{ReceivedAt: validationTestNow}); rejection != nil {
 		t.Fatalf("valid checkpoint guard rejection = %+v", rejection)

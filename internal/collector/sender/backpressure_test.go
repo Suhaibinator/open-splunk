@@ -144,14 +144,16 @@ func TestThrottleExpiryUsesServerRelativeDurationUnderClockSkew(t *testing.T) {
 	c := s.newConn(context.Background(), func() {}, func() {}, nil)
 	c.lastBatchSendAt = collectorReceivedAt
 
-	c.handleThrottle(&opensplunkv1.CollectResponse{
+	if err := c.handleThrottle(&opensplunkv1.CollectResponse{
 		SentAt: timestamppb.New(serverSentAt),
 		Payload: &opensplunkv1.CollectResponse_Throttle{Throttle: &opensplunkv1.Throttle{
 			Reason:           opensplunkv1.ThrottleReason_THROTTLE_REASON_TOKEN_QUOTA,
 			MinimumSendDelay: durationpb.New(minimumDelay),
 			EffectiveUntil:   timestamppb.New(serverSentAt.Add(activeFor)),
 		}},
-	})
+	}); err != nil {
+		t.Fatalf("handleThrottle: %v", err)
+	}
 
 	c.mu.Lock()
 	until := c.throttleUntil
@@ -199,14 +201,16 @@ func TestPumpRechecksThrottleAfterBlockingNextBatch(t *testing.T) {
 	}
 
 	serverSentAt := time.Now()
-	c.handleThrottle(&opensplunkv1.CollectResponse{
+	if err := c.handleThrottle(&opensplunkv1.CollectResponse{
 		SentAt: timestamppb.New(serverSentAt),
 		Payload: &opensplunkv1.CollectResponse_Throttle{Throttle: &opensplunkv1.Throttle{
 			Reason:           opensplunkv1.ThrottleReason_THROTTLE_REASON_TOKEN_QUOTA,
 			MinimumSendDelay: durationpb.New(minimumDelay),
 			EffectiveUntil:   timestamppb.New(serverSentAt.Add(time.Second)),
 		}},
-	})
+	}); err != nil {
+		t.Fatalf("handleThrottle: %v", err)
+	}
 	throttleAppliedAt := time.Now()
 	close(queue.release)
 
@@ -264,14 +268,16 @@ func TestFiniteThrottleExpiryWakesInFlightCapacityWait(t *testing.T) {
 	}
 
 	serverSentAt := time.Now()
-	c.handleThrottle(&opensplunkv1.CollectResponse{
+	if err := c.handleThrottle(&opensplunkv1.CollectResponse{
 		SentAt: timestamppb.New(serverSentAt),
 		Payload: &opensplunkv1.CollectResponse_Throttle{Throttle: &opensplunkv1.Throttle{
 			Reason:             opensplunkv1.ThrottleReason_THROTTLE_REASON_TOKEN_QUOTA,
 			EffectiveUntil:     timestamppb.New(serverSentAt.Add(activeFor)),
 			MaxInFlightBatches: 1,
 		}},
-	})
+	}); err != nil {
+		t.Fatalf("handleThrottle: %v", err)
+	}
 	throttleAppliedAt := time.Now()
 	close(queue.release)
 
@@ -322,14 +328,16 @@ func TestSupersedingThrottleWakesLongPacingWait(t *testing.T) {
 	}
 
 	serverSentAt := time.Now()
-	c.handleThrottle(&opensplunkv1.CollectResponse{
+	if err := c.handleThrottle(&opensplunkv1.CollectResponse{
 		SentAt: timestamppb.New(serverSentAt),
 		Payload: &opensplunkv1.CollectResponse_Throttle{Throttle: &opensplunkv1.Throttle{
 			Reason:           opensplunkv1.ThrottleReason_THROTTLE_REASON_TOKEN_QUOTA,
 			MinimumSendDelay: durationpb.New(time.Hour),
 			EffectiveUntil:   timestamppb.New(serverSentAt.Add(time.Hour)),
 		}},
-	})
+	}); err != nil {
+		t.Fatalf("handleThrottle: %v", err)
+	}
 	close(queue.release)
 	select {
 	case <-stream.batchSentAt:
@@ -338,13 +346,15 @@ func TestSupersedingThrottleWakesLongPacingWait(t *testing.T) {
 	}
 
 	liftedAt := time.Now()
-	c.handleThrottle(&opensplunkv1.CollectResponse{
+	if err := c.handleThrottle(&opensplunkv1.CollectResponse{
 		SentAt: timestamppb.New(liftedAt),
 		Payload: &opensplunkv1.CollectResponse_Throttle{Throttle: &opensplunkv1.Throttle{
 			Reason:         opensplunkv1.ThrottleReason_THROTTLE_REASON_TOKEN_QUOTA,
 			EffectiveUntil: timestamppb.New(liftedAt),
 		}},
-	})
+	}); err != nil {
+		t.Fatalf("handleThrottle: %v", err)
+	}
 	select {
 	case <-stream.batchSentAt:
 	case <-time.After(time.Second):
@@ -390,13 +400,15 @@ func TestReplacementThrottleReevaluatesRelaxedBatchLimit(t *testing.T) {
 		t.Fatal("pump did not block in NextBatch")
 	}
 
-	c.handleThrottle(&opensplunkv1.CollectResponse{
+	if err := c.handleThrottle(&opensplunkv1.CollectResponse{
 		SentAt: timestamppb.Now(),
 		Payload: &opensplunkv1.CollectResponse_Throttle{Throttle: &opensplunkv1.Throttle{
 			Reason:        opensplunkv1.ThrottleReason_THROTTLE_REASON_TOKEN_QUOTA,
 			MaxBatchBytes: 1,
 		}},
-	})
+	}); err != nil {
+		t.Fatalf("handleThrottle: %v", err)
+	}
 	close(queue.release)
 	select {
 	case <-stream.batchSentAt:
@@ -404,12 +416,14 @@ func TestReplacementThrottleReevaluatesRelaxedBatchLimit(t *testing.T) {
 	case <-time.After(25 * time.Millisecond):
 	}
 
-	c.handleThrottle(&opensplunkv1.CollectResponse{
+	if err := c.handleThrottle(&opensplunkv1.CollectResponse{
 		SentAt: timestamppb.Now(),
 		Payload: &opensplunkv1.CollectResponse_Throttle{Throttle: &opensplunkv1.Throttle{
 			Reason: opensplunkv1.ThrottleReason_THROTTLE_REASON_TOKEN_QUOTA,
 		}},
-	})
+	}); err != nil {
+		t.Fatalf("handleThrottle: %v", err)
+	}
 	select {
 	case <-stream.batchSentAt:
 	case <-time.After(time.Second):
@@ -436,14 +450,16 @@ func TestTerminalReleaseCancelsRetryWaitingOutThrottle(t *testing.T) {
 	c.inflightN = 1
 
 	serverSentAt := time.Now()
-	c.handleThrottle(&opensplunkv1.CollectResponse{
+	if err := c.handleThrottle(&opensplunkv1.CollectResponse{
 		SentAt: timestamppb.New(serverSentAt),
 		Payload: &opensplunkv1.CollectResponse_Throttle{Throttle: &opensplunkv1.Throttle{
 			Reason:         opensplunkv1.ThrottleReason_THROTTLE_REASON_TOKEN_QUOTA,
 			EffectiveUntil: timestamppb.New(serverSentAt.Add(time.Hour)),
 			MaxBatchBytes:  1,
 		}},
-	})
+	}); err != nil {
+		t.Fatalf("handleThrottle: %v", err)
+	}
 	if err := c.handleRetry(retryFor(batch, 0)); err != nil {
 		t.Fatalf("handleRetry: %v", err)
 	}

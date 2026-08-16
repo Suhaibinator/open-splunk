@@ -364,16 +364,14 @@ func TestFileDeadLetterSinkSerializesCloseAndWrites(t *testing.T) {
 	errorsByWriter := make(chan error, writers)
 	var group sync.WaitGroup
 	for index := range writers {
-		group.Add(1)
-		go func() {
-			defer group.Done()
+		group.Go(func() {
 			<-start
 			errorsByWriter <- sink.WriteRecords([]DeadLetterRecord{{
 				BatchID:    fmt.Sprintf("batch-%d", index),
 				Code:       "TEST_REJECTION",
 				RejectedAt: time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC),
 			}})
-		}()
+		})
 	}
 	close(start)
 	if err := sink.Close(); err != nil {

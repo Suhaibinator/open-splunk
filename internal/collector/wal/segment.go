@@ -311,7 +311,7 @@ func recoverInterruptedQuarantines(dir string) error {
 		rewrite := filepath.Join(dir, entry.Name())
 		live := strings.TrimSuffix(rewrite, ".rewrite")
 		if _, err := os.Stat(live); err == nil {
-			prepared, err := preparedRewriteHasDurableOriginal(dir, live, rewrite, entries)
+			prepared, err := preparedRewriteHasDurableOriginal(live, rewrite, entries)
 			if err != nil {
 				return err
 			}
@@ -365,7 +365,7 @@ func recoverInterruptedQuarantines(dir string) error {
 // must be the same inode as live. That hard link is the durable forensic copy
 // which makes atomically publishing the prepared prefix safe.
 func preparedRewriteHasDurableOriginal(
-	dir, live, rewrite string,
+	live, rewrite string,
 	entries []os.DirEntry,
 ) (bool, error) {
 	liveInfo, err := os.Stat(live)

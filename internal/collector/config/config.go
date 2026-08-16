@@ -251,7 +251,7 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse config %q: %w", path, err)
 	}
 	var trailing yaml.Node
-	if err := dec.Decode(&trailing); err != io.EOF {
+	if err := dec.Decode(&trailing); !errors.Is(err, io.EOF) {
 		if err != nil {
 			return nil, fmt.Errorf("parse config %q trailing document: %w", path, err)
 		}
@@ -406,18 +406,18 @@ func (c *Config) Validate() error {
 		if strings.TrimSpace(effectiveSource) == "" {
 			effectiveSource = id
 		}
-		if err := validateBoundedText(effectiveSource, collectorlimits.MaximumSourceBytes, false); err != nil {
+		if err := validateBoundedText(effectiveSource, collectorlimits.MaximumSourceBytes); err != nil {
 			return fmt.Errorf("input %q: source %w", id, err)
 		}
 		effectiveSourcetype := in.Sourcetype
 		if strings.TrimSpace(effectiveSourcetype) == "" {
 			effectiveSourcetype = in.Format
 		}
-		if err := validateBoundedText(effectiveSourcetype, collectorlimits.MaximumSourcetypeBytes, false); err != nil {
+		if err := validateBoundedText(effectiveSourcetype, collectorlimits.MaximumSourcetypeBytes); err != nil {
 			return fmt.Errorf("input %q: sourcetype %w", id, err)
 		}
 		if in.Host != "" {
-			if err := validateBoundedText(in.Host, collectorlimits.MaximumHostnameBytes, false); err != nil {
+			if err := validateBoundedText(in.Host, collectorlimits.MaximumHostnameBytes); err != nil {
 				return fmt.Errorf("input %q: host %w", id, err)
 			}
 		}
@@ -519,8 +519,8 @@ func maximumConfigInputRegistrationBytes() int {
 	return collectorlimits.MaximumSnapshotBytes - reserved
 }
 
-func validateBoundedText(value string, maximum int, allowEmpty bool) error {
-	if (!allowEmpty && value == "") || len(value) > maximum || !utf8.ValidString(value) || strings.IndexByte(value, 0) >= 0 {
+func validateBoundedText(value string, maximum int) error {
+	if value == "" || len(value) > maximum || !utf8.ValidString(value) || strings.IndexByte(value, 0) >= 0 {
 		return fmt.Errorf("is invalid or exceeds %d bytes", maximum)
 	}
 	for _, character := range value {
@@ -535,7 +535,7 @@ func validateDynamicFieldName(name string) error {
 	if name == "" || strings.TrimSpace(name) != name {
 		return errors.New("must be non-empty without surrounding whitespace")
 	}
-	return validateBoundedText(name, eventfields.MaximumDynamicPathSegmentBytes, false)
+	return validateBoundedText(name, eventfields.MaximumDynamicPathSegmentBytes)
 }
 
 func isLoopbackAddress(address string) bool {

@@ -108,7 +108,7 @@ type Framer interface {
 	// invalid forced record; a successful Frame never exceeds MaxEventBytes.
 	// After a consumed flush, a subsequent Next continues from the resolved
 	// offset.
-	Flush() (frame Frame, err error, ok bool)
+	Flush() (frame Frame, ok bool, err error)
 }
 
 // source is the shared incremental reader used by both framers. It pulls from r
@@ -323,12 +323,12 @@ func (f *lineFramer) Pending() (uint64, int) {
 }
 
 // Flush implements Framer.
-func (f *lineFramer) Flush() (Frame, error, bool) {
+func (f *lineFramer) Flush() (Frame, bool, error) {
 	if len(f.buf) == 0 {
-		return Frame{}, nil, false
+		return Frame{}, false, nil
 	}
 	if !canAdvanceLineNumber(f.line) {
-		return Frame{}, ErrLineNumberOverflow, false
+		return Frame{}, false, ErrLineNumberOverflow
 	}
 	start := f.off
 	ln := f.line
@@ -354,7 +354,7 @@ func (f *lineFramer) Flush() (Frame, error, bool) {
 	return Frame{
 		Bytes: out, StartOffset: start, EndOffset: end,
 		LineNumber: ln, NextLineNumber: f.line,
-	}, flushErr, true
+	}, true, flushErr
 }
 
 // pendingFrame is a frame queued for emission by the multiline framer.
@@ -580,6 +580,7 @@ func (m *multilineFramer) discardUntilStart() error {
 
 func (m *multilineFramer) discardLine(n int) {
 	m.buf = m.buf[n:]
+	// #nosec G115 -- n is a delimiter index plus one, so it is always positive.
 	m.off += uint64(n)
 	m.nextLineNo++
 }
@@ -709,25 +710,25 @@ func (m *multilineFramer) Pending() (uint64, int) {
 }
 
 // Flush implements Framer.
-func (m *multilineFramer) Flush() (Frame, error, bool) {
+func (m *multilineFramer) Flush() (Frame, bool, error) {
 	if len(m.pending) > 0 {
 		pf := m.pending[0]
 		m.pending = m.pending[1:]
-		return pf.frame, pf.err, true
+		return pf.frame, true, pf.err
 	}
 	if m.discardingOversize {
 		if len(m.buf) == 0 {
 			if m.discardPartialLine {
 				if !canAdvanceLineNumber(m.nextLineNo) {
-					return Frame{}, ErrLineNumberOverflow, false
+					return Frame{}, false, ErrLineNumberOverflow
 				}
 				m.nextLineNo++
 				m.discardPartialLine = false
 			}
-			return Frame{}, nil, false
+			return Frame{}, false, nil
 		}
 		if !canAdvanceLineNumber(m.nextLineNo) {
-			return Frame{}, ErrLineNumberOverflow, false
+			return Frame{}, false, ErrLineNumberOverflow
 		}
 		content := m.buf
 		if content[len(content)-1] == '\r' {
@@ -748,15 +749,15 @@ func (m *multilineFramer) Flush() (Frame, error, bool) {
 			m.buf = m.buf[:0]
 			m.nextLineNo++
 			m.discardPartialLine = false
-			return Frame{}, nil, false
+			return Frame{}, false, nil
 		}
 	}
 	if !m.started && len(m.buf) == 0 {
-		return Frame{}, nil, false
+		return Frame{}, false, nil
 	}
 	hasPartialLine := len(m.buf) > 0
 	if hasPartialLine && !canAdvanceLineNumber(m.nextLineNo) {
-		return Frame{}, ErrLineNumberOverflow, false
+		return Frame{}, false, ErrLineNumberOverflow
 	}
 	if m.started && hasPartialLine {
 		matchContent := m.buf
@@ -767,7 +768,7 @@ func (m *multilineFramer) Flush() (Frame, error, bool) {
 			// Forced inactivity makes the buffered candidate a complete logical
 			// boundary for this decision. Preserve the already-assembled valid
 			// event and leave the matching candidate untouched for the next frame.
-			return m.finishEvent(), nil, true
+			return m.finishEvent(), true, nil
 		}
 	}
 	start := m.off - uint64(len(m.event))
@@ -807,5 +808,5 @@ func (m *multilineFramer) Flush() (Frame, error, bool) {
 	return Frame{
 		Bytes: out, StartOffset: start, EndOffset: end,
 		LineNumber: lineNo, NextLineNumber: m.nextLineNo,
-	}, flushErr, true
+	}, true, flushErr
 }

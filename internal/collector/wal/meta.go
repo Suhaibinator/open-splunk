@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 )
 
 // metaFileName is the name of the durable metadata file under Options.Dir.
@@ -150,8 +151,7 @@ func mkdirAllDurable(path string, perm fs.FileMode) (bool, error) {
 		}
 	}
 
-	for index := len(missing) - 1; index >= 0; index-- {
-		component := missing[index]
+	for _, component := range slices.Backward(missing) {
 		if err := os.Mkdir(component, perm); err != nil && !errors.Is(err, fs.ErrExist) {
 			return false, err
 		}
