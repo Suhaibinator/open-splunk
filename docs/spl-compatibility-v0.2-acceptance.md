@@ -2,7 +2,7 @@
 
 **Status:** pending
 
-**Evidence phase:** `implementation-checkpoint`
+**Evidence phase:** `qualification-candidate`
 
 **Decision:** pending
 

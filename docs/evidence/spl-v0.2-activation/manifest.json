@@ -1,13 +1,13 @@
 {
   "$schema": "./manifest.schema.json",
   "format_version": "open-splunk-spl-v0.2-activation-evidence-v1",
-  "phase": "implementation-checkpoint",
+  "phase": "qualification-candidate",
   "compatibility": {
     "authored_search": "0.2",
     "knowledge_expression": "0.1"
   },
   "runtime": {
-    "revision_binding": "unbound",
+    "revision_binding": "containing-commit",
     "revision": null,
     "tree": null,
     "candidate_manifest_sha256": null,
@@ -17,28 +17,28 @@
     "remote_readback_at_utc": null
   },
   "artifacts": [
-    { "id": "public-readme", "path": "README.md", "sha256": null },
-    { "id": "deploy-env-generator", "path": "deploy/generate-env.sh", "sha256": null },
-    { "id": "deploy-guide", "path": "deploy/README.md", "sha256": null },
-    { "id": "collector-deployment-guide", "path": "docs/collector-deployment.md", "sha256": null },
-    { "id": "integration-guide", "path": "integration/README.md", "sha256": null },
-    { "id": "contract", "path": "docs/spl-compatibility-v0.2.md", "sha256": null },
-    { "id": "corpus", "path": "internal/spl/testdata/compatibility-v0.2.json", "sha256": null },
-    { "id": "migration", "path": "docs/spl-compatibility-v0.2-migration.md", "sha256": null },
-    { "id": "benchmark", "path": "docs/spl-compatibility-v0.2-benchmark.md", "sha256": null },
-    { "id": "manifest-schema", "path": "docs/evidence/spl-v0.2-activation/manifest.schema.json", "sha256": null },
-    { "id": "acceptance-verifier", "path": "scripts/verify-spl-v02-acceptance.mjs", "sha256": null },
-    { "id": "acceptance-verifier-tests", "path": "scripts/spl-v02-acceptance.test.mjs", "sha256": null },
-    { "id": "ci-structural-tests", "path": "scripts/spl-v02-stats-by-ci.test.mjs", "sha256": null },
-    { "id": "strict-json-parser", "path": "scripts/strict-json.mjs", "sha256": null },
-    { "id": "ci-workflow", "path": ".github/workflows/ci.yml", "sha256": null },
-    { "id": "publication-workflow", "path": ".github/workflows/publish-images.yml", "sha256": null },
-    { "id": "release-makefile", "path": "Makefile", "sha256": null },
-    { "id": "release-launcher", "path": "scripts/build-release.sh", "sha256": null },
-    { "id": "oci-launcher", "path": "scripts/build-oci.sh", "sha256": null },
-    { "id": "identity-reader", "path": "scripts/read-spl-compatibility-version.mjs", "sha256": null },
-    { "id": "identity-reader-tests", "path": "scripts/read-spl-compatibility-version.test.mjs", "sha256": null },
-    { "id": "runtime-identity", "path": "internal/spl/doc.go", "sha256": null }
+    { "id": "public-readme", "path": "README.md", "sha256": "5de4834268ab8cb622f06cd398a3b05ac31c197affa87989bf69c1aa894c7612" },
+    { "id": "deploy-env-generator", "path": "deploy/generate-env.sh", "sha256": "5f6c3a95aa720acb7769431b3b54930c9deb7f124c2d0a09c6966a72a708828b" },
+    { "id": "deploy-guide", "path": "deploy/README.md", "sha256": "4cc215bba418782e7ed2b8b05e25bc4b3ae40e68ff170be9421014af1a8ca32e" },
+    { "id": "collector-deployment-guide", "path": "docs/collector-deployment.md", "sha256": "e4b38c4539cfe4be60e538fbe408bc9fce0d7e35e464e520da058784fa9324c0" },
+    { "id": "integration-guide", "path": "integration/README.md", "sha256": "56b57a9d67a3f5b2e77dbdee550c0e3301bcc47cc9a2de29e57fd2be69fafc57" },
+    { "id": "contract", "path": "docs/spl-compatibility-v0.2.md", "sha256": "acdd72ee6105ac409b3165a20726851251e6d78887a3349854c093b03a329f3a" },
+    { "id": "corpus", "path": "internal/spl/testdata/compatibility-v0.2.json", "sha256": "dcfb04e6e4737e3847a700e0e5661dc71ef1bbfa9d93e003d2fdf94deeafc851" },
+    { "id": "migration", "path": "docs/spl-compatibility-v0.2-migration.md", "sha256": "37d0f887b796de3aa485ff334417d90a82cfc1b7678aa5f87a0520a258dae5f2" },
+    { "id": "benchmark", "path": "docs/spl-compatibility-v0.2-benchmark.md", "sha256": "97b1dbca446ef588070cdbe26a382432bc9342741db1e611c7b6cc1cb2d45f62" },
+    { "id": "manifest-schema", "path": "docs/evidence/spl-v0.2-activation/manifest.schema.json", "sha256": "56f2379db935d9d2692d23d8f32dac56736f0f0a9524f3eee9d0b6e65c7d1e0a" },
+    { "id": "acceptance-verifier", "path": "scripts/verify-spl-v02-acceptance.mjs", "sha256": "7b0ad555f8e9eecdd45e8ea0529cfce00c741f7cd329937adc3fa09fc0b36bce" },
+    { "id": "acceptance-verifier-tests", "path": "scripts/spl-v02-acceptance.test.mjs", "sha256": "90cbce5cab9b96f0aec29ea203071045d45db8b4a6ac31982c21190a6dcd9f4a" },
+    { "id": "ci-structural-tests", "path": "scripts/spl-v02-stats-by-ci.test.mjs", "sha256": "80ea0d9b911f71c2ce6409a54f2a7b84e82e8b27ef038e555c4b28ff3c83a0bd" },
+    { "id": "strict-json-parser", "path": "scripts/strict-json.mjs", "sha256": "c4597cafb76c2cea855fc34f1dc9257921f46e423c948e7825c67b7f534f01fb" },
+    { "id": "ci-workflow", "path": ".github/workflows/ci.yml", "sha256": "fba3b2dc743d8f395b13bac5e02018394499f2a39027930ad1e6b3da5aa6553f" },
+    { "id": "publication-workflow", "path": ".github/workflows/publish-images.yml", "sha256": "05e4e2461e8cdd5775f3a4c9630096dfaba5eca6083d3f9a2995ca54a69213f5" },
+    { "id": "release-makefile", "path": "Makefile", "sha256": "c41771073292ccadd0731ab722cd8410a11552c874c5424e9e87a6777b38b8ca" },
+    { "id": "release-launcher", "path": "scripts/build-release.sh", "sha256": "9de43452610f7d76ddffbf2cebc490913931663136996301d209de9846fcf44a" },
+    { "id": "oci-launcher", "path": "scripts/build-oci.sh", "sha256": "f2d3b21b8edad28a82550580f705795a013062c7f66f33d4ab599460f83dc455" },
+    { "id": "identity-reader", "path": "scripts/read-spl-compatibility-version.mjs", "sha256": "80ddc36a07913add3d8f5d7b53c039cf6a8c1ad1b22982021725d0629493b60e" },
+    { "id": "identity-reader-tests", "path": "scripts/read-spl-compatibility-version.test.mjs", "sha256": "f2298e97d8317be9fe11e9cc7960527c8599bc22f08ba617c5f6a6f443b3de82" },
+    { "id": "runtime-identity", "path": "internal/spl/doc.go", "sha256": "00978d097c79e53f32981793bd47b78b8d42dde7839b1ff12a0694ba5a722cad" }
   ],
   "ci": {
     "repository": null,
@@ -68,6 +68,6 @@
   "decision": {
     "status": "pending",
     "stable_publication_authorized": false,
-    "reason": "The v0.2 implementation checkpoint is not a clean reachable qualification revision and has no terminal-success CI or release evidence."
+    "reason": "The qualification candidate binds every stable artifact by exact hash to its containing commit; acceptance requires terminal-success CI and release evidence recorded by a direct-child evidence revision."
   }
 }
