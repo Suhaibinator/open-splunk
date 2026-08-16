@@ -1,0 +1,6 @@
+{
+  "runtime_revision": "aceb69222c784225e46920079cf572c922ee7052",
+  "runtime_tree": "12132c3a6f829efade16622124a392c3f593d930",
+  "image": "clickhouse/clickhouse-server:26.7.3.19@sha256:f90a77560f72b10802106ee49e9870e41668cbc496e280c3911f6e3b216657f3",
+  "result": "pass"
+}

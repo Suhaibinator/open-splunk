@@ -1,12 +1,12 @@
 # SPL compatibility v0.2 acceptance report
 
-**Status:** pending
+**Status:** accepted
 
-**Evidence phase:** `qualification-candidate`
+**Evidence phase:** `accepted`
 
-**Decision:** pending
+**Decision:** accepted
 
-**Stable publication authorized:** no
+**Stable publication authorized:** yes
 
 **Target authored-search identity:** `0.2`
 
@@ -15,6 +15,40 @@
 **Prepared:** August 11, 2026
 
 **Closeout update:** August 12, 2026
+
+**Accepted:** August 15, 2026
+
+## Acceptance record
+
+Qualification revision `R = aceb69222c784225e46920079cf572c922ee7052`
+(tree `12132c3a6f829efade16622124a392c3f593d930`) binds all twenty-two stable
+artifacts by exact SHA-256 and completed the full CI gate set terminal-success:
+[run 31923250029](https://github.com/Suhaibinator/open-splunk/actions/runs/31923250029),
+28 of 28 jobs, event `push` on `main`, completed 2026-08-16T03:55:59Z against
+the pinned ClickHouse image `26.7.3.19`. The immutable runtime tag
+`spl-v0.2-evidence-aceb69222c784225e46920079cf572c922ee7052` was read back
+from `origin` at 2026-08-16T03:56:24Z. Release artifacts for application
+version `0.1.0` are digest-bound in the manifest and receipts, and the
+Linux and macOS builds produced byte-identical asset manifests.
+
+Acceptance is granted with the following defects known, documented in-tree,
+and deliberately not blocking this release:
+
+- Flattened object-parent knowledge aliases lose Float64 fidelity for
+  integral-valued doubles (the lowering round-trips through JSON text); the
+  validated fix requires migrating the flattened-parent transport and is
+  deferred. The contract test pins the current behavior with an explicit
+  revert instruction.
+- Losing knowledge-alias branches are not lazily evaluated (ClickHouse does
+  not short-circuit inside lambda bodies), so an alias source whose SQL can
+  fail aborts queries its selector excludes. Restoring laziness trades
+  against bounded SQL size and measured analyzer planning floors and is
+  deferred as a design decision. The laziness contract test is skipped with
+  the mechanism recorded.
+- The field-catalog analyzer memory budgets are sized from arm64
+  measurements and clear the linux-amd64 CI runner with thinner margin than
+  their comments imply; they are a watch item for the next ClickHouse pin
+  move.
 
 The authored-search runtime reports `0.2`. Reachable historical `origin/main`
 revision `230774476dfd96c5e11ef87f7372b81986689353` was revalidated from a

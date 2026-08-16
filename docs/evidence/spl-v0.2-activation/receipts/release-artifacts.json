@@ -1,0 +1,27 @@
+[
+  {
+    "name": "asset-manifest.json",
+    "sha256": "4318a4e5d583d37be28759ad9b810c905ee28f54b2b9d976a54abaf095972a04",
+    "bytes": 16623
+  },
+  {
+    "name": "open-splunk-collector",
+    "sha256": "846b1545d1f92997871a21c3600aa257a9cc00ad9b3d246ad7c8a4f57c6511e5",
+    "bytes": 28159889
+  },
+  {
+    "name": "open-splunk-loggen",
+    "sha256": "8d5cae1e4e421f2062d7da2f3c0298db8dc3e586bc9af576c85450cc97654650",
+    "bytes": 3882714
+  },
+  {
+    "name": "open-splunk-server",
+    "sha256": "488362283b600e2e04c1dfa6131707fc74b32e1149ca8848236ddf2fafa4cd21",
+    "bytes": 66079307
+  },
+  {
+    "name": "ui",
+    "sha256": "acef068a436918e02823606336577d3fb0e19028a985a8cee7cf68c58ea09d89",
+    "bytes": 2866126
+  }
+]
