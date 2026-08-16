@@ -25,14 +25,22 @@ const (
 	// Nearly all of this budget is spent analyzing the query, not executing it:
 	// the suggestion relation embeds the full knowledge program, so the server
 	// builds a very large expression graph before reading the first event.
-	// ClickHouse 26.7 analyzes that graph far less frugally than 26.3 did. On
-	// the pinned server the production knowledge matrix needs just over 208 MiB
-	// to plan the query at all, where 26.3 planned the identical SQL under
-	// 64 MiB; EXPLAIN PLAN alone reproduces the 26.7 figure with no execution.
-	// Keep allocator headroom above that planning floor while staying a class
-	// below the catalog budgets, which cover the same relation plus per-field
-	// aggregation.
-	maximumFieldSuggestionMemoryBytes = uint64(256 << 20)
+	// ClickHouse 26.7 analyzes that graph far less frugally than 26.3 did, and
+	// the cost is ALSO architecture-dependent, so this figure must clear the
+	// worst floor rather than the one the local machine happens to show.
+	// Measured on the pinned server with the production knowledge matrix, by
+	// bisecting max_memory_usage over the real compiled query:
+	//
+	//	arm64  26.7  floor 216 MiB   (rejects 208, admits 216)
+	//	amd64  26.7  floor 317.5 MiB (rejects 256 reporting 317.46, admits 320)
+	//	arm64  26.3  under 64 MiB
+	//
+	// amd64 is the CI runner and the binding case. EXPLAIN PLAN alone
+	// reproduces each figure with no execution and no rows read, which is why
+	// data volume does not move it. This budget is ~1.21x the worst floor,
+	// matching the headroom ratio the catalog budgets below carry over their
+	// own measured floors.
+	maximumFieldSuggestionMemoryBytes = uint64(384 << 20)
 	maximumFieldSuggestionRowsToRead  = uint64(5_000_000)
 	maximumFieldSuggestionBytesToRead = uint64(1 << 30)
 	maximumFieldSuggestionResultBytes = uint64(
