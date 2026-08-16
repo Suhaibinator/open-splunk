@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -79,7 +80,34 @@ func NewRenameProcessor(from, to string) (Processor, error) {
 	if from == to {
 		return nil, fmt.Errorf("collector: rename processor from and to are identical (%q)", from)
 	}
+	if eventfields.IsCollectorReservedRoot(to) {
+		return nil, fmt.Errorf("collector: rename processor destination %q is reserved canonical metadata", to)
+	}
 	return &renameProcessor{from: from, to: to}, nil
+}
+
+// pipelineMutator is implemented by the built-in clone-on-write processors.
+// Pipeline uses the split read/mutate contract to make one lazy deep clone for
+// an entire chain, while direct Processor callers retain the public
+// clone-on-write guarantee.
+type pipelineMutator interface {
+	needsMutation(*opensplunkv1.LogEvent) bool
+	mutate(*opensplunkv1.LogEvent)
+}
+
+// processCloneOnWrite applies one built-in mutator while preserving the public
+// Processor identity contract: no-ops return event itself, and mutations happen
+// only after taking an independent deep clone.
+func processCloneOnWrite(
+	event *opensplunkv1.LogEvent,
+	mutator pipelineMutator,
+) (*opensplunkv1.LogEvent, error) {
+	if !mutator.needsMutation(event) {
+		return event, nil
+	}
+	clone := proto.Clone(event).(*opensplunkv1.LogEvent)
+	mutator.mutate(clone)
+	return clone, nil
 }
 
 // NewRedactProcessor replaces the ENTIRE value of every field whose name matches
@@ -113,67 +141,85 @@ func NewRedactProcessor(fields []string, replacement string) (Processor, error) 
 type allowProcessor struct{ keep map[string]struct{} }
 
 func (p *allowProcessor) Process(event *opensplunkv1.LogEvent) (*opensplunkv1.LogEvent, error) {
+	return processCloneOnWrite(event, p)
+}
+
+func (p *allowProcessor) needsMutation(event *opensplunkv1.LogEvent) bool {
 	if event == nil || event.Fields == nil || len(event.Fields.Fields) == 0 {
-		return event, nil
+		return false
 	}
-	// Only clone if at least one field would be dropped.
-	drop := false
 	for _, f := range event.Fields.Fields {
 		if _, ok := p.keep[f.Name]; !ok {
-			drop = true
-			break
+			return true
 		}
 	}
-	if !drop {
-		return event, nil
-	}
-	clone := proto.Clone(event).(*opensplunkv1.LogEvent)
-	kept := make([]*opensplunkv1.TypedObjectField, 0, len(clone.Fields.Fields))
-	for _, f := range clone.Fields.Fields {
+	return false
+}
+
+func (p *allowProcessor) mutate(event *opensplunkv1.LogEvent) {
+	fields := event.Fields.Fields
+	kept := fields[:0]
+	for _, f := range fields {
 		if _, ok := p.keep[f.Name]; ok {
 			kept = append(kept, f)
 		}
 	}
-	clone.Fields.Fields = kept
-	return clone, nil
+	clear(fields[len(kept):])
+	event.Fields.Fields = kept
 }
 
 // denyProcessor removes the listed top-level dynamic fields.
 type denyProcessor struct{ deny map[string]struct{} }
 
 func (p *denyProcessor) Process(event *opensplunkv1.LogEvent) (*opensplunkv1.LogEvent, error) {
+	return processCloneOnWrite(event, p)
+}
+
+func (p *denyProcessor) needsMutation(event *opensplunkv1.LogEvent) bool {
 	if event == nil || event.Fields == nil || len(event.Fields.Fields) == 0 {
-		return event, nil
+		return false
 	}
-	hit := false
 	for _, f := range event.Fields.Fields {
 		if _, ok := p.deny[f.Name]; ok {
-			hit = true
-			break
+			return true
 		}
 	}
-	if !hit {
-		return event, nil
-	}
-	clone := proto.Clone(event).(*opensplunkv1.LogEvent)
-	kept := make([]*opensplunkv1.TypedObjectField, 0, len(clone.Fields.Fields))
-	for _, f := range clone.Fields.Fields {
+	return false
+}
+
+func (p *denyProcessor) mutate(event *opensplunkv1.LogEvent) {
+	fields := event.Fields.Fields
+	kept := fields[:0]
+	for _, f := range fields {
 		if _, ok := p.deny[f.Name]; ok {
 			continue
 		}
 		kept = append(kept, f)
 	}
-	clone.Fields.Fields = kept
-	return clone, nil
+	clear(fields[len(kept):])
+	event.Fields.Fields = kept
 }
 
 // renameProcessor renames one top-level dynamic field.
 type renameProcessor struct{ from, to string }
 
 func (p *renameProcessor) Process(event *opensplunkv1.LogEvent) (*opensplunkv1.LogEvent, error) {
+	return processCloneOnWrite(event, p)
+}
+
+func (p *renameProcessor) needsMutation(event *opensplunkv1.LogEvent) bool {
 	if event == nil || event.Fields == nil || len(event.Fields.Fields) == 0 {
-		return event, nil
+		return false
 	}
+	for _, f := range event.Fields.Fields {
+		if f.Name == p.from {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *renameProcessor) mutate(event *opensplunkv1.LogEvent) {
 	fromIdx := -1
 	for i, f := range event.Fields.Fields {
 		if f.Name == p.from {
@@ -181,13 +227,8 @@ func (p *renameProcessor) Process(event *opensplunkv1.LogEvent) (*opensplunkv1.L
 			break
 		}
 	}
-	if fromIdx == -1 {
-		// Nothing to rename.
-		return event, nil
-	}
-	clone := proto.Clone(event).(*opensplunkv1.LogEvent)
-	src := clone.Fields.Fields
-	kept := make([]*opensplunkv1.TypedObjectField, 0, len(src))
+	src := event.Fields.Fields
+	kept := src[:0]
 	for i, f := range src {
 		if i == fromIdx {
 			// Rename in place at from's original position.
@@ -201,8 +242,8 @@ func (p *renameProcessor) Process(event *opensplunkv1.LogEvent) (*opensplunkv1.L
 		}
 		kept = append(kept, f)
 	}
-	clone.Fields.Fields = kept
-	return clone, nil
+	clear(src[len(kept):])
+	event.Fields.Fields = kept
 }
 
 // redactProcessor replaces matched field values recursively.
@@ -212,15 +253,16 @@ type redactProcessor struct {
 }
 
 func (p *redactProcessor) Process(event *opensplunkv1.LogEvent) (*opensplunkv1.LogEvent, error) {
-	if event == nil || event.Fields == nil || len(event.Fields.Fields) == 0 {
-		return event, nil
-	}
-	if !p.objectNeedsRedact(event.Fields) {
-		return event, nil
-	}
-	clone := proto.Clone(event).(*opensplunkv1.LogEvent)
-	p.redactObject(clone.Fields)
-	return clone, nil
+	return processCloneOnWrite(event, p)
+}
+
+func (p *redactProcessor) needsMutation(event *opensplunkv1.LogEvent) bool {
+	return event != nil && event.Fields != nil && len(event.Fields.Fields) != 0 &&
+		p.objectNeedsRedact(event.Fields)
+}
+
+func (p *redactProcessor) mutate(event *opensplunkv1.LogEvent) {
+	p.redactObject(event.Fields)
 }
 
 // objectNeedsRedact reports whether any field in obj (at any depth) matches a
@@ -310,20 +352,35 @@ func NewPipeline(processors ...Processor) *Pipeline {
 // Process runs the chain over event in order. It stops and returns (nil, nil) as
 // soon as a processor drops the event, and stops and returns (nil, err) as soon
 // as a processor errors. A nil receiver or empty chain returns event unchanged.
-// Each stage feeds its output to the next; the caller's original event is never
-// mutated, because the first mutating stage clones it and every later mutating
-// stage clones that intermediate (pipeline-owned) event again.
+// Each stage feeds its output to the next. The caller's original event is never
+// mutated. Built-in stages share one lazy deep clone across the whole chain;
+// custom Processor implementations retain their public clone-on-write contract.
 func (p *Pipeline) Process(event *opensplunkv1.LogEvent) (*opensplunkv1.LogEvent, error) {
 	if p == nil {
 		return event, nil
 	}
+	owned := false
 	for _, proc := range p.processors {
+		if mutator, ok := proc.(pipelineMutator); ok {
+			if !mutator.needsMutation(event) {
+				continue
+			}
+			if !owned {
+				event = proto.Clone(event).(*opensplunkv1.LogEvent)
+				owned = true
+			}
+			mutator.mutate(event)
+			continue
+		}
 		out, err := proc.Process(event)
 		if err != nil {
 			return nil, err
 		}
 		if out == nil {
 			return nil, nil
+		}
+		if out != event {
+			owned = true
 		}
 		event = out
 	}

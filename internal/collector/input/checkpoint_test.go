@@ -2,6 +2,7 @@ package input
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,107 @@ import (
 )
 
 const checkpointTestInputID = "input-a"
+
+type checkpointShortWriter struct{}
+
+func (checkpointShortWriter) Write(data []byte) (int, error) {
+	if len(data) == 0 {
+		return 0, nil
+	}
+	return len(data) - 1, nil
+}
+
+func TestWriteCheckpointDataRejectsShortWrite(t *testing.T) {
+	t.Parallel()
+	if err := writeCheckpointData(checkpointShortWriter{}, []byte("checkpoint")); !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("writeCheckpointData error = %v, want io.ErrShortWrite", err)
+	}
+}
+
+func TestCheckpointStoreDurablyPublishesEveryCreatedDirectory(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	dir := filepath.Join(root, "one", "two", "checkpoints")
+	var synced []string
+	store, err := newCheckpointStoreWithDirectorySync(
+		dir,
+		func(path string) error {
+			synced = append(synced, filepath.Clean(path))
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("open nested checkpoint store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	want := []string{
+		filepath.Clean(root),
+		filepath.Join(root, "one"),
+		filepath.Join(root, "one", "two"),
+		filepath.Clean(dir),
+	}
+	if strings.Join(synced, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("synced directory parents = %q, want %q", synced, want)
+	}
+}
+
+func TestCheckpointStoreSyncsRepairedExistingDirectoryMode(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatalf("make checkpoint directory permissive: %v", err)
+	}
+	var synced []string
+	store, err := newCheckpointStoreWithDirectorySync(
+		dir,
+		func(path string) error {
+			synced = append(synced, filepath.Clean(path))
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("open existing checkpoint store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if len(synced) != 1 || synced[0] != filepath.Clean(dir) {
+		t.Fatalf("synced directories = %q, want repaired directory %q", synced, dir)
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat repaired checkpoint directory: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("repaired checkpoint directory mode = %o, want 700", got)
+	}
+}
+
+func TestCheckpointStorePropagatesParentDirectorySyncFailure(t *testing.T) {
+	t.Parallel()
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "checkpoints")
+	syncErr := errors.New("injected parent directory sync failure")
+	var synced string
+	store, err := newCheckpointStoreWithDirectorySync(
+		dir,
+		func(path string) error {
+			synced = filepath.Clean(path)
+			return syncErr
+		},
+	)
+	if store != nil {
+		_ = store.Close()
+		t.Fatal("checkpoint store returned despite parent sync failure")
+	}
+	if !errors.Is(err, syncErr) {
+		t.Fatalf("NewCheckpointStore error = %v, want %v", err, syncErr)
+	}
+	if synced != filepath.Clean(parent) {
+		t.Fatalf("synced parent = %q, want %q", synced, parent)
+	}
+	if info, statErr := os.Stat(dir); statErr != nil || !info.IsDir() {
+		t.Fatalf("created checkpoint directory = (%v, %v), want directory", info, statErr)
+	}
+}
 
 func TestCheckpointStoreSetGetReopen(t *testing.T) {
 	t.Parallel()
@@ -25,6 +127,7 @@ func TestCheckpointStoreSetGetReopen(t *testing.T) {
 		InputID:  checkpointTestInputID,
 		Identity: id, Path: "/var/log/app.log", Offset: 4096,
 		LineNumber: 12, NextLineNumber: 15,
+		GuardFingerprint: strings.Repeat("ab", 32), GuardLength: 64,
 		UpdatedAt: time.Now().UTC().Add(-time.Minute).Truncate(time.Second),
 	}
 	if err := store.Set(cp); err != nil {
@@ -49,11 +152,57 @@ func TestCheckpointStoreSetGetReopen(t *testing.T) {
 		t.Fatalf("checkpoint not found after reopen")
 	}
 	if got.Offset != 4096 || got.LineNumber != 12 || got.NextLineNumber != 15 ||
+		got.GuardFingerprint != cp.GuardFingerprint || got.GuardLength != cp.GuardLength ||
 		got.Path != "/var/log/app.log" {
 		t.Fatalf("checkpoint round-trip mismatch: %+v", got)
 	}
 	if got.Identity.String() != id.String() {
 		t.Fatalf("identity round-trip mismatch: %s", got.Identity)
+	}
+}
+
+func TestCheckpointStoreSameOffsetMergePreservesAndFencesRewriteGuard(t *testing.T) {
+	t.Parallel()
+	store, err := NewCheckpointStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	identity := canonicalIdentityForTest(7, 9, 3, "ab", 64)
+	current := Checkpoint{
+		InputID: checkpointTestInputID, Identity: identity,
+		Path: "/logs/current.log", Offset: 100,
+		LineNumber: 10, NextLineNumber: 11,
+		GuardFingerprint: strings.Repeat("cd", 32), GuardLength: 64,
+	}
+	if err := store.Set(current); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// A compatibility metadata refresh that predates guards must not erase
+	// evidence already persisted for this exact coordinate.
+	withoutGuard := current
+	withoutGuard.Path = "/logs/renamed.log"
+	withoutGuard.GuardFingerprint = ""
+	withoutGuard.GuardLength = 0
+	if err := store.Set(withoutGuard); err != nil {
+		t.Fatalf("same-offset legacy merge: %v", err)
+	}
+	got, ok, err := store.Get(checkpointTestInputID, identity)
+	if err != nil || !ok {
+		t.Fatalf("get merged checkpoint: ok=%t err=%v", ok, err)
+	}
+	if got.Path != withoutGuard.Path ||
+		got.GuardFingerprint != current.GuardFingerprint ||
+		got.GuardLength != current.GuardLength {
+		t.Fatalf("same-offset merged checkpoint = %+v", got)
+	}
+
+	conflict := current
+	conflict.GuardFingerprint = strings.Repeat("ef", 32)
+	if err := store.Set(conflict); err == nil ||
+		!strings.Contains(err.Error(), "conflicting rewrite guard") {
+		t.Fatalf("conflicting same-offset guard error = %v", err)
 	}
 }
 
@@ -117,6 +266,7 @@ func TestCheckpointStoreSetManyPersistsOneDeterministicSnapshot(t *testing.T) {
 	secondV1 := canonicalIdentityForTest(1, 2, 1, "cd", 64)
 	secondV2 := canonicalIdentityForTest(1, 2, 2, "ef", 64)
 	err = storeAPI.SetMany([]Checkpoint{
+		{InputID: "input-z", Identity: first, Path: "/logs/z.log", Offset: 10, LineNumber: 1},
 		{InputID: checkpointTestInputID, Identity: secondV1, Path: "/logs/second.log", Offset: 500, LineNumber: 5},
 		{InputID: checkpointTestInputID, Identity: first, Path: "/logs/first.log", Offset: 100, LineNumber: 1},
 		{InputID: checkpointTestInputID, Identity: secondV2, Path: "/logs/second.log", Offset: 20, LineNumber: 6},
@@ -130,17 +280,21 @@ func TestCheckpointStoreSetManyPersistsOneDeterministicSnapshot(t *testing.T) {
 	if len(persisted) != 1 {
 		t.Fatalf("persist calls = %d, want 1", len(persisted))
 	}
-	if len(persisted[0]) != 2 {
-		t.Fatalf("persisted checkpoints = %d, want 2", len(persisted[0]))
+	if len(persisted[0]) != 3 {
+		t.Fatalf("persisted checkpoints = %d, want 3", len(persisted[0]))
 	}
-	if persisted[0][0].Identity.TrackingKey() != first.TrackingKey() ||
-		persisted[0][1].Identity.TrackingKey() != secondV2.TrackingKey() {
-		t.Fatalf("snapshot is not identity-sorted: %+v", persisted[0])
+	if persisted[0][0].InputID != checkpointTestInputID ||
+		persisted[0][0].Identity.TrackingKey() != first.TrackingKey() ||
+		persisted[0][1].InputID != checkpointTestInputID ||
+		persisted[0][1].Identity.TrackingKey() != secondV2.TrackingKey() ||
+		persisted[0][2].InputID != "input-z" {
+		t.Fatalf("snapshot is not input/identity-sorted: %+v", persisted[0])
 	}
 	if got := persisted[0][1]; got.Identity.String() != secondV2.String() || got.Offset != 25 || got.LineNumber != 7 {
 		t.Fatalf("second checkpoint = %+v, want generation 2 offset 25", got)
 	}
-	if persisted[0][0].UpdatedAt.IsZero() || persisted[0][1].UpdatedAt.IsZero() {
+	if persisted[0][0].UpdatedAt.IsZero() || persisted[0][1].UpdatedAt.IsZero() ||
+		persisted[0][2].UpdatedAt.IsZero() {
 		t.Fatalf("SetMany did not stamp zero UpdatedAt values: %+v", persisted[0])
 	}
 }
@@ -414,6 +568,41 @@ func TestCheckpointStoreSetManyPersistenceFailureRollsBackMemory(t *testing.T) {
 	}
 	if _, ok, err := reopened.Get(checkpointTestInputID, newID); err != nil || ok {
 		t.Fatalf("new disk checkpoint present after failure: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestCheckpointStorePropagatesDirectorySyncFailure(t *testing.T) {
+	t.Parallel()
+	storeAPI, err := NewCheckpointStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = storeAPI.Close() })
+	store := storeAPI.(*fileCheckpointStore)
+	syncErr := errors.New("injected directory sync failure")
+	originalSync := store.syncDirectory
+	store.syncDirectory = func() error { return syncErr }
+	identity := canonicalIdentityForTest(3, 5, 1, "ab", 64)
+	checkpoint := Checkpoint{
+		InputID: checkpointTestInputID, Identity: identity,
+		Path: "/logs/app.log", Offset: 64,
+		LineNumber: 1, NextLineNumber: 2,
+	}
+	if err := storeAPI.Set(checkpoint); !errors.Is(err, syncErr) {
+		t.Fatalf("Set directory-sync error = %v, want %v", err, syncErr)
+	}
+	if _, ok, err := storeAPI.Get(checkpointTestInputID, identity); err != nil || ok {
+		t.Fatalf("failed directory sync published memory: ok=%t err=%v", ok, err)
+	}
+
+	// The failed write may already have renamed a complete snapshot. Retrying
+	// from the unchanged in-memory state must perform the durability step again.
+	store.syncDirectory = originalSync
+	if err := storeAPI.Set(checkpoint); err != nil {
+		t.Fatalf("retry after directory-sync failure: %v", err)
+	}
+	if _, ok, err := storeAPI.Get(checkpointTestInputID, identity); err != nil || !ok {
+		t.Fatalf("checkpoint missing after successful retry: ok=%t err=%v", ok, err)
 	}
 }
 

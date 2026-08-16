@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"maps"
 	"math"
 	"os"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/protocolid"
+	"github.com/Suhaibinator/open-splunk/internal/sha256hex"
 )
 
 // checkpointFileName is the single JSON document holding every checkpoint for a
@@ -40,8 +43,10 @@ type checkpointKey struct {
 }
 
 // fileCheckpointStore is a CheckpointStore backed by one atomically-rewritten
-// JSON file. The whole document is rewritten on every mutation; checkpoint
-// counts are bounded by the number of tracked files, so this stays cheap.
+// JSON file. The whole document is rewritten on every mutation. Entries are
+// retained until explicitly deleted, so installations that continually see
+// new file identities should monitor this snapshot and periodically compact it
+// under an application-level retention policy.
 type fileCheckpointStore struct {
 	dir  string
 	path string
@@ -49,6 +54,7 @@ type fileCheckpointStore struct {
 	mu              sync.Mutex
 	entries         map[checkpointKey]Checkpoint
 	persistSnapshot func([]Checkpoint) error
+	syncDirectory   func() error
 }
 
 // NewCheckpointStore opens or creates the checkpoint store rooted at dir. A
@@ -56,15 +62,25 @@ type fileCheckpointStore struct {
 // but cannot be parsed is a hard error naming the path, so a corrupt file is
 // never silently discarded.
 func NewCheckpointStore(dir string) (CheckpointStore, error) {
+	return newCheckpointStoreWithDirectorySync(dir, fsyncCheckpointDirectory)
+}
+
+func newCheckpointStoreWithDirectorySync(
+	dir string,
+	syncDirectory func(string) error,
+) (CheckpointStore, error) {
 	// 0o700 and tighten a pre-existing directory: checkpoints reveal tracked
 	// file paths and must not be world-readable, matching the WAL and
 	// dead-letter treatment of the state directory.
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := mkdirCheckpointDirDurable(dir, 0o700, syncDirectory); err != nil {
 		return nil, fmt.Errorf("collector/input: create checkpoint dir %s: %w", dir, err)
 	}
 	// #nosec G302 -- dir is a directory and is deliberately owner-only.
 	if err := os.Chmod(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("collector/input: secure checkpoint dir %s: %w", dir, err)
+	}
+	if err := syncDirectory(dir); err != nil {
+		return nil, fmt.Errorf("collector/input: fsync secured checkpoint dir %s: %w", dir, err)
 	}
 	s := &fileCheckpointStore{
 		dir:     dir,
@@ -72,10 +88,72 @@ func NewCheckpointStore(dir string) (CheckpointStore, error) {
 		entries: make(map[checkpointKey]Checkpoint),
 	}
 	s.persistSnapshot = s.writeSnapshot
+	s.syncDirectory = s.fsyncDir
 	if err := s.load(); err != nil {
 		return nil, err
 	}
 	return s, nil
+}
+
+// mkdirCheckpointDirDurable is MkdirAll with crash-safe publication. Each new
+// path component is created from the nearest existing ancestor downward and
+// immediately followed by an fsync of its parent. This matters when the WAL
+// directory already exists but a missing checkpoint directory is recreated:
+// syncing files inside the child cannot by itself make the child's name durable
+// in the collector state directory.
+func mkdirCheckpointDirDurable(
+	path string,
+	perm fs.FileMode,
+	syncDirectory func(string) error,
+) error {
+	clean := filepath.Clean(path)
+	info, err := os.Stat(clean)
+	if err == nil {
+		if !info.IsDir() {
+			return fmt.Errorf("%s exists and is not a directory", clean)
+		}
+		return nil
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+
+	var missing []string
+	for cursor := clean; ; cursor = filepath.Dir(cursor) {
+		info, err = os.Stat(cursor)
+		if err == nil {
+			if !info.IsDir() {
+				return fmt.Errorf("%s exists and is not a directory", cursor)
+			}
+			break
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		missing = append(missing, cursor)
+		parent := filepath.Dir(cursor)
+		if parent == cursor {
+			return fmt.Errorf("no existing ancestor for %s", clean)
+		}
+	}
+
+	for index := len(missing) - 1; index >= 0; index-- {
+		component := missing[index]
+		if err := os.Mkdir(component, perm); err != nil && !errors.Is(err, fs.ErrExist) {
+			return err
+		}
+		info, err := os.Stat(component)
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("%s exists and is not a directory", component)
+		}
+		if err := syncDirectory(filepath.Dir(component)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // load reads the store file into memory. A missing file yields an empty store.
@@ -110,7 +188,7 @@ func (s *fileCheckpointStore) load() error {
 		)
 	}
 	for _, cp := range doc.Checkpoints {
-		if checkpointErr := validateCheckpoint(cp); checkpointErr != nil {
+		if checkpointErr := ValidateCheckpoint(cp); checkpointErr != nil {
 			return fmt.Errorf(
 				"collector/input: invalid checkpoint in %s: %w",
 				s.path,
@@ -162,7 +240,7 @@ func (s *fileCheckpointStore) SetMany(checkpoints []Checkpoint) error {
 	}
 	keys := make([]checkpointKey, len(checkpoints))
 	for index, cp := range checkpoints {
-		if err := validateCheckpoint(cp); err != nil {
+		if err := ValidateCheckpoint(cp); err != nil {
 			return fmt.Errorf("collector/input: checkpoint %d: %w", index, err)
 		}
 		key, err := checkpointKeyFor(cp.InputID, cp.Identity)
@@ -204,13 +282,23 @@ func (s *fileCheckpointStore) SetMany(checkpoints []Checkpoint) error {
 				case current.NextLineNumber != 0 && cp.NextLineNumber != current.NextLineNumber:
 					return errors.New("collector/input: conflicting next line number at the same checkpoint offset")
 				}
+				switch {
+				case cp.GuardLength == 0:
+					cp.GuardLength = current.GuardLength
+					cp.GuardFingerprint = current.GuardFingerprint
+					normalized = normalized || cp.GuardLength != 0
+				case current.GuardLength != 0 &&
+					(cp.GuardLength != current.GuardLength ||
+						cp.GuardFingerprint != current.GuardFingerprint):
+					return errors.New("collector/input: conflicting rewrite guard at the same checkpoint offset")
+				}
 				if checkpointPositionEqual(cp, current) {
 					continue
 				}
 			}
 		}
 		if normalized {
-			if err := validateCheckpoint(cp); err != nil {
+			if err := ValidateCheckpoint(cp); err != nil {
 				return fmt.Errorf(
 					"collector/input: checkpoint %d is invalid after monotonic merge: %w",
 					index,
@@ -238,7 +326,9 @@ func checkpointPositionEqual(left, right Checkpoint) bool {
 	return left.InputID == right.InputID &&
 		left.Identity == right.Identity && left.Path == right.Path &&
 		left.Offset == right.Offset && left.LineNumber == right.LineNumber &&
-		left.NextLineNumber == right.NextLineNumber
+		left.NextLineNumber == right.NextLineNumber &&
+		left.GuardFingerprint == right.GuardFingerprint &&
+		left.GuardLength == right.GuardLength
 }
 
 // Delete removes the checkpoint for inputID and id, if any, and persists the
@@ -331,7 +421,10 @@ func ValidInputID(inputID string) bool {
 	return protocolid.Valid(inputID)
 }
 
-func validateCheckpoint(checkpoint Checkpoint) error {
+// ValidateCheckpoint applies the complete durable/startup checkpoint invariant
+// set without mutating storage. WAL recovery uses it before exposing a pending
+// coordinate through the manager's startup resume view.
+func ValidateCheckpoint(checkpoint Checkpoint) error {
 	if !ValidInputID(checkpoint.InputID) {
 		return fmt.Errorf(
 			"input ID %q is not a canonical identifier",
@@ -365,6 +458,25 @@ func validateCheckpoint(checkpoint Checkpoint) error {
 			"zero-length fingerprint requires the canonical empty digest at offset zero",
 		)
 	}
+	if checkpoint.GuardLength == 0 {
+		if checkpoint.GuardFingerprint != "" {
+			return errors.New("zero-length rewrite guard requires an empty fingerprint")
+		}
+	} else {
+		if checkpoint.GuardLength > maximumFingerprintBytes {
+			return fmt.Errorf(
+				"rewrite guard length %d exceeds absolute maximum %d",
+				checkpoint.GuardLength,
+				maximumFingerprintBytes,
+			)
+		}
+		if uint64(checkpoint.GuardLength) > checkpoint.Offset {
+			return errors.New("rewrite guard length exceeds checkpoint offset")
+		}
+		if !sha256hex.Valid(checkpoint.GuardFingerprint) {
+			return errors.New("rewrite guard fingerprint must be canonical SHA-256 hex")
+		}
+	}
 	if _, _, err := checkpointNextLine(checkpoint, false); err != nil {
 		return fmt.Errorf("line cursor is invalid: %w", err)
 	}
@@ -390,7 +502,7 @@ func (s *fileCheckpointStore) writeSnapshot(checkpoints []Checkpoint) error {
 	// Best-effort cleanup if we fail before the rename.
 	defer func() { _ = os.Remove(tmpName) }()
 
-	if _, err := tmp.Write(data); err != nil {
+	if err := writeCheckpointData(tmp, data); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("collector/input: write temp checkpoint file: %w", err)
 	}
@@ -404,18 +516,38 @@ func (s *fileCheckpointStore) writeSnapshot(checkpoints []Checkpoint) error {
 	if err := os.Rename(tmpName, s.path); err != nil {
 		return fmt.Errorf("collector/input: rename checkpoint file: %w", err)
 	}
-	s.fsyncDir()
+	if err := s.syncDirectory(); err != nil {
+		return fmt.Errorf("collector/input: fsync checkpoint dir: %w", err)
+	}
+	return nil
+}
+
+func writeCheckpointData(writer io.Writer, data []byte) error {
+	written, err := writer.Write(data)
+	if err != nil {
+		return err
+	}
+	if written != len(data) {
+		return io.ErrShortWrite
+	}
 	return nil
 }
 
 // fsyncDir flushes the store directory so a just-completed rename survives a
-// crash. Directory fsync is best-effort: not every filesystem supports it, and
-// failure here does not undo the durable temp write + rename.
-func (s *fileCheckpointStore) fsyncDir() {
-	d, err := os.Open(s.dir)
+// crash. Callers must observe failure: terminal delivery may reclaim its WAL
+// only after both the checkpoint file and its directory entry are durable.
+func (s *fileCheckpointStore) fsyncDir() error {
+	return fsyncCheckpointDirectory(s.dir)
+}
+
+func fsyncCheckpointDirectory(path string) error {
+	d, err := os.Open(path)
 	if err != nil {
-		return
+		return err
 	}
-	defer d.Close()
-	_ = d.Sync()
+	if err := d.Sync(); err != nil {
+		_ = d.Close()
+		return err
+	}
+	return d.Close()
 }

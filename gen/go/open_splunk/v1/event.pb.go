@@ -204,8 +204,15 @@ type EventOrigin struct {
 	// so polling and process restarts do not need to rescan the source prefix; it
 	// is omitted together with line_number when that exact cursor is unknown.
 	NextLineNumber *uint64 `protobuf:"varint,8,opt,name=next_line_number,json=nextLineNumber,proto3,oneof" json:"next_line_number,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// checkpoint_guard_fingerprint is the lowercase SHA-256 digest of the exact
+	// source range [end_offset-checkpoint_guard_length, end_offset). Collectors
+	// persist this bounded trailing evidence with terminal checkpoints so an
+	// in-place rewrite that preserves the file's leading identity fingerprint
+	// is still detected after restart. The two fields are presence-coupled.
+	CheckpointGuardFingerprint *string `protobuf:"bytes,9,opt,name=checkpoint_guard_fingerprint,json=checkpointGuardFingerprint,proto3,oneof" json:"checkpoint_guard_fingerprint,omitempty"`
+	CheckpointGuardLength      *uint32 `protobuf:"varint,10,opt,name=checkpoint_guard_length,json=checkpointGuardLength,proto3,oneof" json:"checkpoint_guard_length,omitempty"`
+	unknownFields              protoimpl.UnknownFields
+	sizeCache                  protoimpl.SizeCache
 }
 
 func (x *EventOrigin) Reset() {
@@ -290,6 +297,20 @@ func (x *EventOrigin) GetFileFingerprintLength() uint32 {
 func (x *EventOrigin) GetNextLineNumber() uint64 {
 	if x != nil && x.NextLineNumber != nil {
 		return *x.NextLineNumber
+	}
+	return 0
+}
+
+func (x *EventOrigin) GetCheckpointGuardFingerprint() string {
+	if x != nil && x.CheckpointGuardFingerprint != nil {
+		return *x.CheckpointGuardFingerprint
+	}
+	return ""
+}
+
+func (x *EventOrigin) GetCheckpointGuardLength() uint32 {
+	if x != nil && x.CheckpointGuardLength != nil {
+		return *x.CheckpointGuardLength
 	}
 	return 0
 }
@@ -481,7 +502,7 @@ var File_open_splunk_v1_event_proto protoreflect.FileDescriptor
 
 const file_open_splunk_v1_event_proto_rawDesc = "" +
 	"\n" +
-	"\x1aopen_splunk/v1/event.proto\x12\x0eopen_splunk.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1aopen_splunk/v1/value.proto\"\xd9\x03\n" +
+	"\x1aopen_splunk/v1/event.proto\x12\x0eopen_splunk.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1aopen_splunk/v1/value.proto\"\x9a\x05\n" +
 	"\vEventOrigin\x12\x19\n" +
 	"\binput_id\x18\x01 \x01(\tR\ainputId\x12(\n" +
 	"\rfile_identity\x18\x02 \x01(\tH\x00R\ffileIdentity\x88\x01\x01\x12&\n" +
@@ -493,14 +514,19 @@ const file_open_splunk_v1_event_proto_rawDesc = "" +
 	"\vsource_path\x18\x06 \x01(\tH\x04R\n" +
 	"sourcePath\x88\x01\x01\x12;\n" +
 	"\x17file_fingerprint_length\x18\a \x01(\rH\x05R\x15fileFingerprintLength\x88\x01\x01\x12-\n" +
-	"\x10next_line_number\x18\b \x01(\x04H\x06R\x0enextLineNumber\x88\x01\x01B\x10\n" +
+	"\x10next_line_number\x18\b \x01(\x04H\x06R\x0enextLineNumber\x88\x01\x01\x12E\n" +
+	"\x1ccheckpoint_guard_fingerprint\x18\t \x01(\tH\aR\x1acheckpointGuardFingerprint\x88\x01\x01\x12;\n" +
+	"\x17checkpoint_guard_length\x18\n" +
+	" \x01(\rH\bR\x15checkpointGuardLength\x88\x01\x01B\x10\n" +
 	"\x0e_file_identityB\x0f\n" +
 	"\r_start_offsetB\r\n" +
 	"\v_end_offsetB\x0e\n" +
 	"\f_line_numberB\x0e\n" +
 	"\f_source_pathB\x1a\n" +
 	"\x18_file_fingerprint_lengthB\x13\n" +
-	"\x11_next_line_number\"\x9e\x06\n" +
+	"\x11_next_line_numberB\x1f\n" +
+	"\x1d_checkpoint_guard_fingerprintB\x1a\n" +
+	"\x18_checkpoint_guard_length\"\x9e\x06\n" +
 	"\bLogEvent\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12\x1d\n" +
 	"\n" +

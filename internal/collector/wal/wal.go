@@ -18,11 +18,12 @@ var (
 	ErrQueueFull = errors.New("collector/wal: durable queue is full")
 
 	// ErrBatchTooLarge is returned by Append when a single batch's on-disk record
-	// exceeds Options.MaxQueueBytes: it can never fit even in an empty queue, so
-	// retrying as backpressure would wedge the pipeline forever. It is a terminal
-	// condition the daemon resolves by splitting or dead-lettering the batch, and
-	// is distinct from ErrQueueFull (which is transient backpressure).
-	ErrBatchTooLarge = errors.New("collector/wal: batch record exceeds max_queue_bytes")
+	// exceeds Options.MaxQueueBytes or the WAL format's stable per-record ceiling:
+	// it can never fit even in an empty queue, so retrying as backpressure would
+	// wedge the pipeline forever. It is a terminal condition the daemon resolves
+	// by splitting or dead-lettering the batch, and is distinct from ErrQueueFull
+	// (which is transient backpressure).
+	ErrBatchTooLarge = errors.New("collector/wal: batch record exceeds WAL capacity limit")
 
 	// ErrCorruptSegment reports that a segment failed validation during recovery.
 	// Its unreadable tail and all successor segments are quarantined; recovery
@@ -55,7 +56,9 @@ const (
 type Options struct {
 	// Dir is the directory holding meta.json and segment files.
 	Dir string
-	// MaxQueueBytes bounds the total on-disk queue size (0 = unbounded).
+	// MaxQueueBytes bounds live WAL segments plus retained corrupt/quarantine
+	// segment artifacts (0 = unbounded). A quarantine can therefore fail closed
+	// until an operator archives/removes it; metadata files are not included.
 	MaxQueueBytes uint64
 	// SegmentMaxBytes is the target size at which a new segment is started.
 	SegmentMaxBytes uint64
@@ -91,6 +94,25 @@ type Stats struct {
 	// This field is an additive extension to the frozen contract Stats struct;
 	// existing callers that only read the queue-depth fields are unaffected.
 	QuarantinedSegments uint64
+	// PhysicalBytes is the current size of live .wal segment files. It includes
+	// acknowledged bytes that remain in an active or partially acknowledged
+	// segment. Options.MaxQueueBytes is enforced against PhysicalBytes plus
+	// QuarantinedBytes.
+	PhysicalBytes uint64
+	// QuarantinedBytes is the size of retained .wal.corrupt forensic artifacts.
+	// Those files are reported separately but count toward MaxQueueBytes so
+	// forensic retention cannot grow the state directory outside its bound.
+	QuarantinedBytes uint64
+	// OnDiskBytes is the saturating sum of PhysicalBytes and QuarantinedBytes and
+	// is the value compared with Options.MaxQueueBytes.
+	OnDiskBytes uint64
+	// LastSyncError is non-empty while an interval or explicit segment sync has
+	// failed and no later successful sync has cleared the failure.
+	LastSyncError string
+	// RecoveryWarning describes the first corruption barrier repaired during this
+	// Open. The quarantined counters remain visible across later restarts through
+	// the retained forensic artifacts.
+	RecoveryWarning string
 }
 
 // SourceCheckpointMark is the compact input-scoped source coordinate retained
@@ -112,10 +134,14 @@ type SourceCheckpointMark struct {
 	NextLineNumber       uint64
 	EventIndex           uint32
 	FingerprintLength    uint32
+	GuardFingerprint     string
+	GuardLength          uint32
 	HasSourcePath        bool
 	HasEndOffset         bool
 	HasNextLineNumber    bool
 	HasFingerprintLength bool
+	HasGuardFingerprint  bool
+	HasGuardLength       bool
 	ConflictingMetadata  bool
 }
 
@@ -157,9 +183,11 @@ type Queue interface {
 	// and the persisted high-water mark are unchanged.
 	PrepareAck(batchSequence uint64) (AckPreview, error)
 
-	// AckThrough applies an explicitly cumulative acknowledgment from the
-	// protocol handshake or acknowledged_through field. The endpoint sequence
-	// must identify a real queued batch; unknown/future values fail closed.
+	// AckThrough applies an explicitly cumulative terminal response after every
+	// covered batch's local outcome has been handled. Handshake resume hints are
+	// advisory and must not drive deletion because they carry no rejection
+	// details. The endpoint sequence must identify a real queued batch;
+	// unknown/future values fail closed.
 	AckThrough(batchSequence uint64) error
 
 	// PrepareAckThrough is the read-only cumulative counterpart to AckThrough.

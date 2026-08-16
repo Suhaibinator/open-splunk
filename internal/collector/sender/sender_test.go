@@ -16,7 +16,9 @@ import (
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/collector/wal"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
+	"github.com/Suhaibinator/open-splunk/internal/collectorlimits"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
+	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -42,6 +44,15 @@ type fakeQueue struct {
 	nextSeq  uint64
 	ackCalls []uint64
 	terminal map[uint64]struct{}
+}
+
+type nextBatchErrorQueue struct {
+	*fakeQueue
+	err error
+}
+
+func (q *nextBatchErrorQueue) NextBatch(context.Context) (*opensplunkv1.EventBatch, error) {
+	return nil, q.err
 }
 
 func newFakeQueue(batches ...*opensplunkv1.EventBatch) *fakeQueue {
@@ -380,6 +391,13 @@ func (q *fakeQueue) ackCallsSnapshot() []uint64 {
 
 var _ wal.Queue = (*fakeQueue)(nil)
 
+type fixedStatsQueue struct {
+	wal.Queue
+	stats wal.Stats
+}
+
+func (q *fixedStatsQueue) Stats() wal.Stats { return q.stats }
+
 // ---------------------------------------------------------------------------
 // memSink captures dead-letter records in memory.
 // ---------------------------------------------------------------------------
@@ -437,6 +455,7 @@ type fakeServer struct {
 	readyFn   func() *opensplunkv1.CollectorReady
 	onBatch   func(fs *fakeServer, batch *opensplunkv1.EventBatch)
 	failCalls int // number of initial Collect calls that fail after Hello
+	failErr   error
 	// batchErr, when set, runs before onBatch; a non-nil return tears down the
 	// stream after the batch was received but before any ack is sent.
 	batchErr func(fs *fakeServer, batch *opensplunkv1.EventBatch) error
@@ -503,6 +522,9 @@ func (fs *fakeServer) Collect(stream opensplunkv1.CollectorIngestService_Collect
 	fs.mu.Unlock()
 
 	if n <= fs.failCalls {
+		if fs.failErr != nil {
+			return fs.failErr
+		}
 		return status.Error(codes.Unavailable, "transient failure")
 	}
 
@@ -1003,7 +1025,7 @@ func TestSenderNoTokenInLogs(t *testing.T) {
 	}
 }
 
-func TestSenderResumeAfterSkipsBatches(t *testing.T) {
+func TestSenderResumeAfterReplaysBatchesForExplicitOutcomes(t *testing.T) {
 	t.Parallel()
 	fs := newFakeServer()
 	fs.readyFn = func() *opensplunkv1.CollectorReady {
@@ -1013,26 +1035,44 @@ func TestSenderResumeAfterSkipsBatches(t *testing.T) {
 		return r
 	}
 	fs.onBatch = func(fs *fakeServer, b *opensplunkv1.EventBatch) {
-		fs.ackBatch(b.GetBatchSequence(), 1)
+		if b.GetBatchSequence() == 2 {
+			// Model a committed response that was lost before the collector could
+			// persist its rejected-event dead letter. Ingest's idempotency store
+			// replays this same terminal outcome when the WAL batch is resent.
+			fs.ackBatch(2, 1, &opensplunkv1.EventRejection{
+				EventIndex: 1,
+				EventId:    "e2-rejected",
+				Code:       opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_INDEX,
+				Message:    "index not authorized",
+			})
+			return
+		}
+		fs.ackBatch(b.GetBatchSequence(), uint32(len(b.GetEvents())))
 	}
 	conn := startServer(t, fs)
 	q := newFakeQueue(
 		fakeBatch(1, makeEvent("e1", "main")),
-		fakeBatch(2, makeEvent("e2", "main")),
+		fakeBatch(2, makeEvent("e2-accepted", "main"), makeEvent("e2-rejected", "forbidden")),
 		fakeBatch(3, makeEvent("e3", "main")),
 	)
-	s := newTestSender(t, testOptions(), q, &memSink{}, nil, conn)
+	sink := &memSink{}
+	s := newTestSender(t, testOptions(), q, sink, nil, conn)
 	cancel, done := runSender(t, s)
 
 	waitFor(t, "queue drained through 3", func() bool { return q.ackedSeq() >= 3 })
+	waitFor(t, "replayed rejection dead-lettered", func() bool { return len(sink.snapshot()) == 1 })
 
 	got := fs.receivedBatches()
-	if len(got) != 1 || got[0].GetBatchSequence() != 3 {
-		var seqs []uint64
-		for _, b := range got {
-			seqs = append(seqs, b.GetBatchSequence())
-		}
-		t.Fatalf("server received sequences %v, want only [3]", seqs)
+	var seqs []uint64
+	for _, b := range got {
+		seqs = append(seqs, b.GetBatchSequence())
+	}
+	if len(seqs) != 3 || seqs[0] != 1 || seqs[1] != 2 || seqs[2] != 3 {
+		t.Fatalf("server received sequences %v, want [1 2 3]", seqs)
+	}
+	records := sink.snapshot()
+	if got := records[0].Event.GetEventId(); got != "e2-rejected" {
+		t.Fatalf("dead-lettered event = %q, want e2-rejected", got)
 	}
 	cancel()
 	<-done
@@ -1291,7 +1331,7 @@ func TestReleaseInflightPromptlyCancelsLongScheduledRetry(t *testing.T) {
 	}
 }
 
-func TestSenderCumulativeAckCommitsCheckpointAndCancelsEarlierRetry(t *testing.T) {
+func TestSenderRejectsCumulativeAckThatOmitsEarlierTerminalOutcome(t *testing.T) {
 	t.Parallel()
 	fs := newFakeServer()
 	fs.readyFn = func() *opensplunkv1.CollectorReady {
@@ -1350,30 +1390,20 @@ func TestSenderCumulativeAckCommitsCheckpointAndCancelsEarlierRetry(t *testing.T
 	s := newTestSender(t, opts, q, &memSink{}, nil, startServer(t, fs))
 	cancel, done := runSender(t, s)
 
-	waitFor(t, "cumulative ack through batch 2", func() bool { return q.ackedSeq() == 2 })
+	waitFor(t, "unsafe cumulative ack rejected and connection retried", func() bool {
+		s.mu.Lock()
+		lastError := s.stats.LastError
+		s.mu.Unlock()
+		return strings.Contains(lastError, "omits terminal outcome for in-flight batch 1") && fs.calls() >= 2
+	})
+	if got := q.ackedSeq(); got != 0 {
+		t.Fatalf("unsafe cumulative ack advanced queue through %d, want 0", got)
+	}
 	marksMu.Lock()
 	gotMarks := append([]wal.SourceCheckpointMark(nil), committed...)
 	marksMu.Unlock()
-	if len(gotMarks) != 2 ||
-		gotMarks[0].InputID != "input-a" || gotMarks[0].BatchSequence != 1 ||
-		gotMarks[0].EndOffset != 1 ||
-		gotMarks[1].InputID != "input-b" || gotMarks[1].BatchSequence != 2 ||
-		gotMarks[1].EndOffset != 2 {
-		t.Fatalf(
-			"committed checkpoint marks = %+v, want input-a batch 1 and input-b batch 2",
-			gotMarks,
-		)
-	}
-
-	time.Sleep(250 * time.Millisecond)
-	deliveriesOfOne := 0
-	for _, batch := range fs.receivedBatches() {
-		if batch.GetBatchSequence() == 1 {
-			deliveriesOfOne++
-		}
-	}
-	if deliveriesOfOne != 1 {
-		t.Fatalf("batch 1 deliveries = %d, want only the original after cumulative ack", deliveriesOfOne)
+	if len(gotMarks) != 0 {
+		t.Fatalf("unsafe cumulative ack committed checkpoint marks: %+v", gotMarks)
 	}
 	cancel()
 	<-done
@@ -1408,6 +1438,26 @@ func TestSenderRejectsCumulativeAckBeyondSentHighWater(t *testing.T) {
 	}
 	if c.lookupInflight(1) == nil {
 		t.Fatal("invalid cumulative ack released in-flight batch")
+	}
+}
+
+func TestSenderSupervisesQueueReadFailure(t *testing.T) {
+	t.Parallel()
+	fs := newFakeServer()
+	queueErr := errors.New("simulated durable queue read failure")
+	q := &nextBatchErrorQueue{fakeQueue: newFakeQueue(), err: queueErr}
+	s := newTestSender(t, testOptions(), q, &memSink{}, nil, startServer(t, fs))
+	cancel, done := runSender(t, s)
+
+	waitFor(t, "queue read failure tears down and retries the stream", func() bool {
+		s.mu.Lock()
+		lastError := s.stats.LastError
+		s.mu.Unlock()
+		return strings.Contains(lastError, queueErr.Error()) && fs.calls() >= 2
+	})
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run after cancellation = %v, want context.Canceled", err)
 	}
 }
 
@@ -1602,6 +1652,322 @@ func TestSenderGoodbyeOnCancel(t *testing.T) {
 	waitFor(t, "goodbye received", func() bool { return fs.goodbyeSeen() != nil })
 	if got := fs.goodbyeSeen().GetReason(); got != opensplunkv1.CollectorGoodbyeReason_COLLECTOR_GOODBYE_REASON_SHUTDOWN {
 		t.Fatalf("goodbye reason = %v, want SHUTDOWN", got)
+	}
+}
+
+type preReadyGoodbyeServer struct {
+	opensplunkv1.UnimplementedCollectorIngestServiceServer
+	helloSeen   chan struct{}
+	goodbyeSeen chan struct{}
+	helloOnce   sync.Once
+	goodbyeOnce sync.Once
+}
+
+func (server *preReadyGoodbyeServer) Collect(stream opensplunkv1.CollectorIngestService_CollectServer) error {
+	request, err := stream.Recv()
+	if err != nil {
+		return err
+	}
+	if request.GetHello() != nil {
+		server.helloOnce.Do(func() { close(server.helloSeen) })
+	}
+	for {
+		request, err = stream.Recv()
+		if err != nil {
+			return nil
+		}
+		if request.GetGoodbye() != nil {
+			server.goodbyeOnce.Do(func() { close(server.goodbyeSeen) })
+			return nil
+		}
+	}
+}
+
+func TestSenderPreReadyCancellationIsBoundedAndJoinsHandshake(t *testing.T) {
+	t.Parallel()
+	server := &preReadyGoodbyeServer{
+		helloSeen:   make(chan struct{}),
+		goodbyeSeen: make(chan struct{}),
+	}
+	s := newTestSender(t, testOptions(), newFakeQueue(), &memSink{}, nil, startServer(t, server))
+	s.drainTimeout = 100 * time.Millisecond
+	cancel, done := runSender(t, s)
+
+	select {
+	case <-server.helloSeen:
+	case <-time.After(time.Second):
+		t.Fatal("server did not receive Hello")
+	}
+	started := time.Now()
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run = %v, want context.Canceled", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("pre-Ready cancellation exceeded its global drain bound")
+	}
+	if elapsed := time.Since(started); elapsed > 400*time.Millisecond {
+		t.Fatalf("pre-Ready cancellation took %v, want bounded by drain timeout", elapsed)
+	}
+	select {
+	case <-server.goodbyeSeen:
+	default:
+		t.Fatal("server did not receive pre-Ready Goodbye")
+	}
+}
+
+func TestSenderInitializesRestartAckHighWater(t *testing.T) {
+	t.Parallel()
+	q := newFakeQueue()
+	q.acked = 41
+	q.nextSeq = 42
+	s, err := New(testOptions(), q, &memSink{}, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	hb := s.buildHeartbeat()
+	if hb.LastAcknowledgedBatchSequence == nil || hb.GetLastAcknowledgedBatchSequence() != 41 {
+		t.Fatalf("restart heartbeat ack high-water = %v, want 41", hb.LastAcknowledgedBatchSequence)
+	}
+	if got := s.stats.LastAckedBatchSequence; got != 41 {
+		t.Fatalf("sender stats restart ack high-water = %d, want 41", got)
+	}
+}
+
+func TestHeartbeatIncludesLocalDroppedEventProvider(t *testing.T) {
+	t.Parallel()
+	var localDrops atomic.Uint64
+	localDrops.Store(7)
+	opts := testOptions()
+	opts.LocalDroppedEventsTotal = localDrops.Load
+	s, err := New(opts, newFakeQueue(), &memSink{}, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	s.stats.DroppedEventsTotal = 3
+	if got := s.buildHeartbeat().GetQueue().GetDroppedEventsTotal(); got != 10 {
+		t.Fatalf("heartbeat dropped_events_total = %d, want 10", got)
+	}
+	localDrops.Store(^uint64(0))
+	if got := s.buildHeartbeat().GetQueue().GetDroppedEventsTotal(); got != collectorlimits.MaximumFleetCounter {
+		t.Fatalf("overflowing heartbeat dropped_events_total = %d, want saturation", got)
+	}
+}
+
+func TestHeartbeatClampsFleetCountersAndSequences(t *testing.T) {
+	t.Parallel()
+	maximum := ^uint64(0)
+	q := &fixedStatsQueue{
+		Queue: newFakeQueue(),
+		stats: wal.Stats{
+			QueuedEvents:           maximum,
+			QueuedBytes:            maximum,
+			LastAckedBatchSequence: maximum,
+			NextBatchSequence:      maximum,
+		},
+	}
+	opts := testOptions()
+	opts.LocalDroppedEventsTotal = func() uint64 { return maximum }
+	s, err := New(opts, q, &memSink{}, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	s.stats = Stats{
+		LastSentBatchSequence:   maximum,
+		SentEventsTotal:         maximum,
+		AcknowledgedEventsTotal: maximum,
+		RetriedBatchesTotal:     maximum,
+		RejectedEventsTotal:     maximum,
+		DroppedEventsTotal:      maximum,
+	}
+	hb := s.buildHeartbeat()
+	queue := hb.GetQueue()
+	values := map[string]uint64{
+		"queued_events": queue.GetQueuedEvents(),
+		"queued_bytes":  queue.GetQueuedBytes(),
+		"sent":          queue.GetSentEventsTotal(),
+		"acknowledged":  queue.GetAcknowledgedEventsTotal(),
+		"retried":       queue.GetRetriedBatchesTotal(),
+		"rejected":      queue.GetRejectedEventsTotal(),
+		"dropped":       queue.GetDroppedEventsTotal(),
+		"last_sent":     hb.GetLastSentBatchSequence(),
+		"last_acked":    hb.GetLastAcknowledgedBatchSequence(),
+	}
+	for name, got := range values {
+		if got != collectorlimits.MaximumFleetCounter {
+			t.Errorf("%s = %d, want fleet maximum %d", name, got, collectorlimits.MaximumFleetCounter)
+		}
+	}
+}
+
+func TestHelloClampsLastAcknowledgedSequence(t *testing.T) {
+	t.Parallel()
+	maximum := ^uint64(0)
+	fs := newFakeServer()
+	conn := startServer(t, fs)
+	q := &fixedStatsQueue{
+		Queue: newFakeQueue(),
+		stats: wal.Stats{
+			LastAckedBatchSequence: maximum,
+			NextBatchSequence:      maximum,
+		},
+	}
+	s := newTestSender(t, testOptions(), q, &memSink{}, nil, conn)
+	cancel, done := runSender(t, s)
+	waitFor(t, "Hello observed", func() bool { return fs.helloSeen() != nil })
+	hello := fs.helloSeen()
+	if hello.LastAcknowledgedBatchSequence == nil ||
+		hello.GetLastAcknowledgedBatchSequence() != collectorlimits.MaximumFleetCounter {
+		t.Fatalf("Hello last acknowledged sequence = %v, want %d",
+			hello.LastAcknowledgedBatchSequence, collectorlimits.MaximumFleetCounter)
+	}
+	cancel()
+	<-done
+}
+
+func TestHandleAckRejectsHostileUint32EventIndex(t *testing.T) {
+	t.Parallel()
+	batch := fakeBatch(1, makeEvent("one", "main"))
+	q := newFakeQueue(batch)
+	s, err := New(testOptions(), q, &memSink{}, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	c := s.newConn(context.Background(), func() {}, func() {}, nil)
+	c.inflight[1] = batch
+	c.inflightN = 1
+	c.highestSentBatchSequence = 1
+	err = c.handleAck(&opensplunkv1.BatchAck{
+		BatchId:       batch.GetBatchId(),
+		BatchSequence: 1,
+		Durability:    opensplunkv1.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED,
+		RejectedEvents: []*opensplunkv1.EventRejection{{
+			EventIndex: ^uint32(0),
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "out of range") {
+		t.Fatalf("hostile rejection index error = %v, want bounds error", err)
+	}
+	if q.ackedSeq() != 0 || c.lookupInflight(1) == nil {
+		t.Fatal("hostile rejection index mutated terminal delivery state")
+	}
+}
+
+func TestResponseAndThrottleTimestampsValidateBeforeStateMutation(t *testing.T) {
+	t.Parallel()
+	s, err := New(testOptions(), newFakeQueue(), &memSink{}, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	c := s.newConn(context.Background(), func() {}, func() {}, nil)
+	if err := c.validateResponse(&opensplunkv1.CollectResponse{StreamSequence: 1}); err == nil ||
+		!strings.Contains(err.Error(), "sent_at") {
+		t.Fatalf("missing response sent_at = %v, want validation error", err)
+	}
+	serverSentAt := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	invalidThrottles := []*opensplunkv1.Throttle{
+		{MinimumSendDelay: durationpb.New(-time.Second)},
+		{MinimumSendDelay: durationpb.New(ingestquota.MaximumRetryAfter + time.Nanosecond)},
+		{EffectiveUntil: &timestamppb.Timestamp{Seconds: 253402300800}},
+		{EffectiveUntil: timestamppb.New(serverSentAt.Add(ingestquota.MaximumRetryAfter + time.Nanosecond))},
+	}
+	for _, throttle := range invalidThrottles {
+		resp := &opensplunkv1.CollectResponse{
+			SentAt:  timestamppb.New(serverSentAt),
+			Payload: &opensplunkv1.CollectResponse_Throttle{Throttle: throttle},
+		}
+		if err := c.handleThrottle(resp); err == nil {
+			t.Fatalf("handleThrottle accepted invalid timing: %+v", throttle)
+		}
+		c.mu.Lock()
+		mutated := c.throttled
+		c.mu.Unlock()
+		if mutated {
+			t.Fatal("invalid throttle mutated connection state")
+		}
+	}
+}
+
+func TestRetryRejectsDelayAboveServerMaximumBeforeStateMutation(t *testing.T) {
+	t.Parallel()
+	batch := fakeBatch(1, makeEvent("e1", "main"))
+	s, err := New(testOptions(), newFakeQueue(batch), &memSink{}, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	c := s.newConn(context.Background(), func() {}, func() {}, nil)
+	c.inflight[1] = batch
+	c.inflightN = 1
+	err = c.handleRetry(&opensplunkv1.RetryBatch{
+		BatchId:       batch.GetBatchId(),
+		BatchSequence: batch.GetBatchSequence(),
+		RetryAfter:    durationpb.New(ingestquota.MaximumRetryAfter + time.Nanosecond),
+	})
+	if err == nil || !strings.Contains(err.Error(), "retry_after") {
+		t.Fatalf("oversized retry_after error = %v, want validation failure", err)
+	}
+	c.mu.Lock()
+	_, scheduled := c.pendingRetry[1]
+	c.mu.Unlock()
+	if scheduled {
+		t.Fatal("oversized retry_after scheduled a retry")
+	}
+	s.mu.Lock()
+	got := s.stats.RetriedBatchesTotal
+	s.mu.Unlock()
+	if got != 0 {
+		t.Fatalf("oversized retry_after incremented retry counter to %d", got)
+	}
+}
+
+func TestSenderTreatsImmutablePreReadyStatusAsFatal(t *testing.T) {
+	t.Parallel()
+	fs := newFakeServer()
+	fs.failCalls = 1
+	fs.failErr = status.Error(codes.InvalidArgument, "immutable Hello rejected")
+	s := newTestSender(t, testOptions(), newFakeQueue(), &memSink{}, nil, startServer(t, fs))
+	done := make(chan error, 1)
+	go func() { done <- s.Run(context.Background()) }()
+	select {
+	case err := <-done:
+		var fatal *fatalError
+		if !errors.As(err, &fatal) || status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("Run error = %v, want fatal InvalidArgument", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("sender retried an immutable pre-Ready failure")
+	}
+	if calls := fs.calls(); calls != 1 {
+		t.Fatalf("Collect calls = %d, want one fatal attempt", calls)
+	}
+}
+
+func TestSenderRejectsInvalidConstructionOptions(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		edit func(*Options)
+	}{
+		{name: "compression", edit: func(opts *Options) { opts.Compression = "brotli" }},
+		{name: "negative dial timeout", edit: func(opts *Options) { opts.DialTimeout = -time.Second }},
+		{name: "negative backoff", edit: func(opts *Options) { opts.Backoff.Initial = -time.Second }},
+		{name: "backoff max below default initial", edit: func(opts *Options) {
+			opts.Backoff.Initial = 0
+			opts.Backoff.Max = time.Millisecond
+		}},
+		{name: "backoff multiplier", edit: func(opts *Options) { opts.Backoff.Multiplier = .5 }},
+		{name: "backoff jitter", edit: func(opts *Options) { opts.Backoff.Jitter = 1.01 }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			opts := testOptions()
+			test.edit(&opts)
+			if _, err := New(opts, newFakeQueue(), &memSink{}, nil); err == nil {
+				t.Fatal("New accepted invalid sender options")
+			}
+		})
 	}
 }
 
@@ -1915,20 +2281,10 @@ func TestSenderRedeliversOrphanedInflightAfterReconnect(t *testing.T) {
 	<-done
 }
 
-// invalidResumeQueue simulates a fresh/quarantined local queue that does not
-// know the durability point the server advertises: AckThrough fails closed
-// with wal.ErrInvalidAck while everything else behaves normally.
-type invalidResumeQueue struct{ *fakeQueue }
-
-func (q *invalidResumeQueue) AckThrough(uint64) error { return wal.ErrInvalidAck }
-func (q *invalidResumeQueue) PrepareAckThrough(uint64) (wal.AckPreview, error) {
-	return wal.AckPreview{}, wal.ErrInvalidAck
-}
-
 // TestSenderContinuesWhenResumePointUnknown covers the fresh-state-dir edge: a
 // server Ready carrying resume_after_batch_sequence ahead of anything the local
 // WAL knows must not fail the connection (which would crash-loop forever) —
-// the sender logs, skips the resume ack, and delivers the queue normally.
+// the sender treats it as advisory and delivers the queue normally.
 func TestSenderContinuesWhenResumePointUnknown(t *testing.T) {
 	t.Parallel()
 	fs := newFakeServer()
@@ -1942,7 +2298,7 @@ func TestSenderContinuesWhenResumePointUnknown(t *testing.T) {
 		fs.ackBatch(b.GetBatchSequence(), uint32(len(b.GetEvents())))
 	}
 	conn := startServer(t, fs)
-	q := &invalidResumeQueue{fakeQueue: newFakeQueue(fakeBatch(1, makeEvent("e1", "main")))}
+	q := newFakeQueue(fakeBatch(1, makeEvent("e1", "main")))
 	s := newTestSender(t, testOptions(), q, &memSink{}, nil, conn)
 	cancel, done := runSender(t, s)
 

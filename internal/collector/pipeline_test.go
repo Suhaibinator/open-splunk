@@ -254,6 +254,10 @@ func TestNewRenameProcessorConstructionErrors(t *testing.T) {
 		{"a", ""},
 		{"a", "a"},
 		{"", ""},
+		{"a", "message"},
+		{"a", "HOST"},
+		{"a", "tenant_id"},
+		{"a", "__os_internal"},
 	}
 	for _, c := range cases {
 		if _, err := NewRenameProcessor(c.from, c.to); err == nil {
@@ -336,6 +340,161 @@ func TestRenameProcessor(t *testing.T) {
 					t.Fatalf("%s value = %v, want %d", tt.to, v, tt.wantVal)
 				}
 			}
+		})
+	}
+}
+
+func TestFieldRemovingMutatorsCompactOwnedSliceInPlace(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutator pipelineMutator
+		fields  []*opensplunkv1.TypedObjectField
+		want    []string
+	}{
+		{
+			name:    "allow",
+			mutator: &allowProcessor{keep: map[string]struct{}{"a": {}, "c": {}}},
+			fields: []*opensplunkv1.TypedObjectField{
+				plField("a", plInt(1)), plField("b", plInt(2)), plField("c", plInt(3)),
+			},
+			want: []string{"a", "c"},
+		},
+		{
+			name:    "deny",
+			mutator: &denyProcessor{deny: map[string]struct{}{"b": {}}},
+			fields: []*opensplunkv1.TypedObjectField{
+				plField("a", plInt(1)), plField("b", plInt(2)), plField("c", plInt(3)),
+			},
+			want: []string{"a", "c"},
+		},
+		{
+			name:    "rename",
+			mutator: &renameProcessor{from: "old", to: "dest"},
+			fields: []*opensplunkv1.TypedObjectField{
+				plField("dest", plInt(1)), plField("old", plInt(2)), plField("z", plInt(3)),
+			},
+			want: []string{"dest", "z"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			event := plEvent(tt.fields...)
+			backing := event.Fields.Fields
+			firstSlot := &backing[0]
+
+			tt.mutator.mutate(event)
+
+			if len(event.Fields.Fields) == 0 || &event.Fields.Fields[0] != firstSlot {
+				t.Fatal("mutator replaced the owned field-slice backing array")
+			}
+			if got := plFieldNames(event); !slices.Equal(got, tt.want) {
+				t.Fatalf("fields = %v, want %v", got, tt.want)
+			}
+			for index, field := range backing[len(event.Fields.Fields):] {
+				if field != nil {
+					t.Fatalf("discarded tail entry %d was retained", len(event.Fields.Fields)+index)
+				}
+			}
+		})
+	}
+}
+
+func TestFieldRemovingMutatorsDoNotAllocate(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func() (pipelineMutator, *opensplunkv1.LogEvent, func())
+	}{
+		{
+			name: "allow",
+			setup: func() (pipelineMutator, *opensplunkv1.LogEvent, func()) {
+				a := plField("a", plInt(1))
+				b := plField("b", plInt(2))
+				c := plField("c", plInt(3))
+				backing := []*opensplunkv1.TypedObjectField{a, b, c}
+				event := plEvent(backing...)
+				return &allowProcessor{keep: map[string]struct{}{"a": {}, "c": {}}}, event, func() {
+					backing[0], backing[1], backing[2] = a, b, c
+					event.Fields.Fields = backing
+				}
+			},
+		},
+		{
+			name: "deny",
+			setup: func() (pipelineMutator, *opensplunkv1.LogEvent, func()) {
+				a := plField("a", plInt(1))
+				b := plField("b", plInt(2))
+				c := plField("c", plInt(3))
+				backing := []*opensplunkv1.TypedObjectField{a, b, c}
+				event := plEvent(backing...)
+				return &denyProcessor{deny: map[string]struct{}{"b": {}}}, event, func() {
+					backing[0], backing[1], backing[2] = a, b, c
+					event.Fields.Fields = backing
+				}
+			},
+		},
+		{
+			name: "rename",
+			setup: func() (pipelineMutator, *opensplunkv1.LogEvent, func()) {
+				dest := plField("dest", plInt(1))
+				old := plField("old", plInt(2))
+				z := plField("z", plInt(3))
+				backing := []*opensplunkv1.TypedObjectField{dest, old, z}
+				event := plEvent(backing...)
+				return &renameProcessor{from: "old", to: "dest"}, event, func() {
+					dest.Name = "dest"
+					old.Name = "old"
+					backing[0], backing[1], backing[2] = dest, old, z
+					event.Fields.Fields = backing
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mutator, event, reset := tt.setup()
+			allocations := testing.AllocsPerRun(1_000, func() {
+				reset()
+				mutator.mutate(event)
+			})
+			if allocations != 0 {
+				t.Fatalf("mutate allocated %.2f times per run, want 0", allocations)
+			}
+		})
+	}
+}
+
+func TestBuiltInCloneOnWriteOutputDoesNotAliasInput(t *testing.T) {
+	t.Parallel()
+	allow, _ := NewAllowProcessor([]string{"keep", "old", "secret"})
+	deny, _ := NewDenyProcessor([]string{"drop"})
+	rename, _ := NewRenameProcessor("old", "new")
+	redact, _ := NewRedactProcessor([]string{"secret"}, "***")
+
+	for _, tt := range []struct {
+		name      string
+		processor Processor
+	}{
+		{name: "allow", processor: allow},
+		{name: "deny", processor: deny},
+		{name: "rename", processor: rename},
+		{name: "redact", processor: redact},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			in := plEvent(
+				plField("keep", plInt(1)),
+				plField("drop", plInt(2)),
+				plField("old", plInt(3)),
+				plField("secret", stringValue("value")),
+			)
+			snapshot := proto.Clone(in).(*opensplunkv1.LogEvent)
+			out := mustProcess(t, tt.processor, in)
+			if out == in {
+				t.Fatal("mutating processor returned its input pointer")
+			}
+
+			out.Raw[0] ^= 0xff
+			out.Fields.Fields[0].Name = "mutated-after-process"
+			assertUnchanged(t, in, snapshot)
 		})
 	}
 }
@@ -582,6 +741,51 @@ func TestPipelineProcess(t *testing.T) {
 			t.Fatalf("redact-then-rename: password = %v, want hunter2 (secret not caught)", v)
 		}
 	})
+}
+
+func TestPipelineBuiltinsShareOneClone(t *testing.T) {
+	t.Parallel()
+	deny, err := NewDenyProcessor([]string{"drop"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rename, err := NewRenameProcessor("old", "new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	redact, err := NewRedactProcessor([]string{"secret"}, "***")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var afterDeny, afterRename *opensplunkv1.LogEvent
+	observeDeny := pipeFunc{fn: func(event *opensplunkv1.LogEvent) (*opensplunkv1.LogEvent, error) {
+		afterDeny = event
+		return event, nil
+	}}
+	observeRename := pipeFunc{fn: func(event *opensplunkv1.LogEvent) (*opensplunkv1.LogEvent, error) {
+		afterRename = event
+		return event, nil
+	}}
+	in := plEvent(
+		plField("drop", plInt(1)),
+		plField("old", plInt(2)),
+		plField("secret", plInt(3)),
+	)
+	snapshot := proto.Clone(in).(*opensplunkv1.LogEvent)
+	out, err := NewPipeline(deny, observeDeny, rename, observeRename, redact).Process(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertUnchanged(t, in, snapshot)
+	if out == in || afterDeny == nil || afterDeny != afterRename || afterRename != out {
+		t.Fatalf("built-in stages did not retain one pipeline-owned clone: input=%p deny=%p rename=%p output=%p", in, afterDeny, afterRename, out)
+	}
+	if got := plFieldNames(out); !slices.Equal(got, []string{"new", "secret"}) {
+		t.Fatalf("fields = %v", got)
+	}
+	if got := plLookup(out, "secret").GetStringValue(); got != "***" {
+		t.Fatalf("redacted value = %q", got)
+	}
 }
 
 // --- Redaction invariant ---

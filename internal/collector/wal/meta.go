@@ -1,9 +1,11 @@
 package wal
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -45,15 +47,32 @@ func readMeta(dir string) (walMeta, bool, error) {
 		}
 		return walMeta{}, false, fmt.Errorf("collector/wal: read meta: %w", err)
 	}
-	if err := json.Unmarshal(data, &m); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&m); err != nil {
 		return walMeta{}, false, fmt.Errorf("collector/wal: parse meta: %w", err)
 	}
-	if m.FormatVersion == 0 {
-		return walMeta{}, false, fmt.Errorf("collector/wal: meta has unknown format_version 0")
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		if err == nil {
+			err = errors.New("multiple JSON values")
+		}
+		return walMeta{}, false, fmt.Errorf("collector/wal: parse meta trailing data: %w", err)
+	}
+	if m.FormatVersion != currentFormatVersion {
+		return walMeta{}, false, fmt.Errorf(
+			"collector/wal: meta has unsupported format_version %d (want %d)",
+			m.FormatVersion, currentFormatVersion,
+		)
 	}
 	if m.NextBatchSequence == 0 {
 		// A valid meta always has next_batch_sequence >= 1 (sequences start at 1).
 		return walMeta{}, false, fmt.Errorf("collector/wal: meta has invalid next_batch_sequence 0")
+	}
+	if m.LastAckedBatchSequence >= m.NextBatchSequence {
+		return walMeta{}, false, fmt.Errorf(
+			"collector/wal: meta has last_acked_batch_sequence %d at or beyond next_batch_sequence %d",
+			m.LastAckedBatchSequence, m.NextBatchSequence,
+		)
 	}
 	return m, true, nil
 }
@@ -72,9 +91,12 @@ func writeMeta(dir string, m walMeta) error {
 	if err != nil {
 		return fmt.Errorf("collector/wal: create meta temp: %w", err)
 	}
-	if _, err := f.Write(data); err != nil {
+	if n, err := f.Write(data); err != nil {
 		_ = f.Close()
 		return fmt.Errorf("collector/wal: write meta temp: %w", err)
+	} else if n != len(data) {
+		_ = f.Close()
+		return fmt.Errorf("collector/wal: write meta temp: %w", io.ErrShortWrite)
 	}
 	if err := f.Sync(); err != nil {
 		_ = f.Close()
@@ -90,6 +112,61 @@ func writeMeta(dir string, m walMeta) error {
 		return fmt.Errorf("collector/wal: fsync dir after meta rename: %w", err)
 	}
 	return nil
+}
+
+// mkdirAllDurable is MkdirAll with crash-safe publication. Every newly visible
+// path component is followed by an fsync of its parent, so a nested state path
+// cannot disappear after reboot merely because only its deepest parent was
+// flushed.
+func mkdirAllDurable(path string, perm fs.FileMode) (bool, error) {
+	clean := filepath.Clean(path)
+	info, err := os.Stat(clean)
+	if err == nil {
+		if !info.IsDir() {
+			return false, fmt.Errorf("%s exists and is not a directory", clean)
+		}
+		return false, nil
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		return false, err
+	}
+
+	var missing []string
+	for cursor := clean; ; cursor = filepath.Dir(cursor) {
+		info, err = os.Stat(cursor)
+		if err == nil {
+			if !info.IsDir() {
+				return false, fmt.Errorf("%s exists and is not a directory", cursor)
+			}
+			break
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return false, err
+		}
+		missing = append(missing, cursor)
+		parent := filepath.Dir(cursor)
+		if parent == cursor {
+			return false, fmt.Errorf("collector/wal: no existing ancestor for %s", clean)
+		}
+	}
+
+	for index := len(missing) - 1; index >= 0; index-- {
+		component := missing[index]
+		if err := os.Mkdir(component, perm); err != nil && !errors.Is(err, fs.ErrExist) {
+			return false, err
+		}
+		info, err := os.Stat(component)
+		if err != nil {
+			return false, err
+		}
+		if !info.IsDir() {
+			return false, fmt.Errorf("%s exists and is not a directory", component)
+		}
+		if err := fsyncDir(filepath.Dir(component)); err != nil {
+			return false, err
+		}
+	}
+	return len(missing) > 0, nil
 }
 
 // fsyncDir flushes a directory's metadata so that create/rename/unlink of its

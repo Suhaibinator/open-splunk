@@ -2,7 +2,7 @@
 #
 # The daemon persists everything under state.directory:
 #   <dir>/wal/            durable, fsync-on-append event-batch queue
-#   <dir>/checkpoints/    per-file read offsets (advanced only after a durable append)
+#   <dir>/checkpoints/    per-file read offsets (advanced only after terminal delivery)
 #   <dir>/dead-letter.jsonl  events the server permanently rejected
 #   <dir>/collector_id    stable collector id, generated once and reused across restarts
 #
@@ -38,6 +38,8 @@ server:
 state:
   directory: "${OPEN_SPLUNK_COLLECTOR_STATE_DIRECTORY}"
   max_queue_bytes: 1GiB
+  dead_letter_max_bytes: 64MiB
+  dead_letter_max_backups: 4
 
 inputs:
   - id: gradethis-backend

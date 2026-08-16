@@ -146,6 +146,15 @@ Keep host log rotation and retention enabled. Size `state.max_queue_bytes` and
 the state filesystem for the longest expected server outage, and retain source
 log rotations long enough for a backpressured collector to catch up.
 
+Use rename/recreate rotation, keep rotated files readable, and include their
+names in the input globs until the collector's terminal checkpoints can catch
+up. The collector detects copy-truncate and prevents a rewritten file from
+being mistaken for an acknowledged old prefix, even if it regrows between
+polls. Copy-truncate nevertheless deletes source bytes asynchronously; bytes
+removed before they reach the collector WAL cannot be recovered after a crash.
+It is therefore best-effort, not a strict source-level at-least-once rotation
+contract.
+
 ## 4. Initialize the stable collector identity
 
 Run `identity` against the final state mount before requesting a token. The
@@ -316,7 +325,8 @@ state/collector_id          stable security identity
 state/.collector.lock       single-process state-directory lock
 state/wal/                  durable unacknowledged batches
 state/checkpoints/          per-file terminal read positions
-state/dead-letter.jsonl     append-only permanently rejected events
+state/dead-letter.jsonl     active permanently rejected events
+state/dead-letter.jsonl.N   bounded rotated dead-letter backups
 ```
 
 Acknowledged sealed WAL segments are reclaimed automatically. There is no
@@ -338,11 +348,15 @@ back into service.
 ### Dead letters
 
 `dead-letter.jsonl` contains full event payloads that were permanently rejected
-by the server or could not fit as one WAL record. It is mode `0600`, sensitive,
-append-only, and is not automatically compacted. Alert on a nonzero/growing
-file, inspect rejection codes without publishing payloads, correct the index,
-token, event-size, or schema cause, and use an explicitly reviewed external
-process if those events should be transformed and resubmitted.
+by the server or could not fit as one WAL record. It and its rotated backups are
+mode `0600` and sensitive. `state.dead_letter_max_bytes` (default 64 MiB) rotates
+the active file and `state.dead_letter_max_backups` (default 4, maximum 64)
+bounds retention. Setting backups explicitly to `0` keeps rotation bounded by
+discarding the previous active file instead of retaining a backup. Alert on a
+nonzero/growing file, inspect rejection codes
+without publishing payloads, correct the index, token, event-size, or schema
+cause, and use an explicitly reviewed external process if those events should
+be transformed and resubmitted.
 
 To archive the file for retention, stop the collector first, move it to an
 owner-only protected archive, and restart the collector; it creates a new

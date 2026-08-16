@@ -521,12 +521,19 @@ func TestRecoveryQuarantinesEverySegmentAfterCorruptGap(t *testing.T) {
 	if _, err := reopened.PrepareAckThrough(4); !errors.Is(err, ErrInvalidAck) {
 		t.Fatalf("PrepareAckThrough(4) = %v, want ErrInvalidAck after quarantine barrier", err)
 	}
+	// A corrupt frame makes every apparent boundary in its tail untrustworthy.
+	// Recovery conservatively burns the maximum number of allocations that the
+	// quarantined bytes could contain, so only monotonic non-reuse is exact here.
+	nextSequence := stats.NextBatchSequence
+	if nextSequence <= 4 {
+		t.Fatalf("NextBatchSequence after quarantine = %d, want above allocated high-water 4", nextSequence)
+	}
 	appended, err := reopened.Append(makeEvents("reread-after-gap"))
 	if err != nil {
 		t.Fatalf("Append after quarantine: %v", err)
 	}
-	if appended.GetBatchSequence() != 5 {
-		t.Fatalf("sequence after quarantine = %d, want burned high-water sequence 5", appended.GetBatchSequence())
+	if appended.GetBatchSequence() != nextSequence {
+		t.Fatalf("sequence after quarantine = %d, want recovered next sequence %d", appended.GetBatchSequence(), nextSequence)
 	}
 }
 
@@ -597,6 +604,179 @@ func TestRecoveryCrashCannotForgetCorruptGap(t *testing.T) {
 	}
 	if _, err := reopened.PrepareAckThrough(4); !errors.Is(err, ErrInvalidAck) {
 		t.Fatalf("PrepareAckThrough(4) = %v, want ErrInvalidAck after recovery retry", err)
+	}
+}
+
+func TestRecoveryNeverRestoresArtifactOnlyQuarantinedSuccessor(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	opts := defaultOpts(dir)
+	opts.SegmentMaxBytes = 1
+	q, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	for _, id := range []string{"trigger", "successor"} {
+		if _, err := q.Append(makeEvents(id)); err != nil {
+			t.Fatalf("Append %q: %v", id, err)
+		}
+	}
+	if err := q.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	segments := listWALFiles(t, dir)
+	if len(segments) != 2 {
+		t.Fatalf("segments = %v, want two", segments)
+	}
+
+	// The successor independently has a valid prefix plus a corrupt tail. It is
+	// nevertheless quarantined WHOLE because the earlier segment is the barrier.
+	successorPath := filepath.Join(dir, segments[1])
+	successor, err := os.OpenFile(successorPath, os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := successor.Write([]byte{1, 2, 3}); err != nil {
+		_ = successor.Close()
+		t.Fatal(err)
+	}
+	if err := successor.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := quarantineTail(dir, segments[1], 0); err != nil {
+		t.Fatalf("quarantine successor whole: %v", err)
+	}
+	if err := quarantineTail(dir, segments[0], 0); err != nil {
+		t.Fatalf("quarantine trigger whole: %v", err)
+	}
+
+	reopened, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open artifact-only state: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	if got := reopened.Stats(); got.QueuedBatches != 0 || got.QuarantinedSegments != 2 {
+		t.Fatalf("artifact-only recovery = %+v, want no live batches and two quarantines", got)
+	}
+	if live := listWALFiles(t, dir); len(live) != 0 {
+		t.Fatalf("artifact-only recovery resurrected successor segments: %v", live)
+	}
+}
+
+func TestRecoveryQuarantinesSemanticCorruption(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		record     int
+		wantPrefix uint64
+		wantReason string
+		mutate     func([]scannedRecord)
+	}{
+		{
+			name:       "filename mismatch",
+			record:     0,
+			wantPrefix: 0,
+			wantReason: "filename does not match",
+			mutate: func(records []scannedRecord) {
+				records[0].batch.BatchSequence = 2
+			},
+		},
+		{
+			name:       "sequence regression",
+			record:     1,
+			wantPrefix: 1,
+			wantReason: "not globally increasing",
+			mutate: func(records []scannedRecord) {
+				records[1].batch.BatchSequence = 1
+			},
+		},
+		{
+			name:       "duplicate batch id",
+			record:     1,
+			wantPrefix: 1,
+			wantReason: "duplicates sequence",
+			mutate: func(records []scannedRecord) {
+				records[1].batch.BatchId = records[0].batch.GetBatchId()
+			},
+		},
+		{
+			name:       "event digest mismatch",
+			record:     1,
+			wantPrefix: 1,
+			wantReason: "event id digest mismatch",
+			mutate: func(records []scannedRecord) {
+				records[1].batch.EventIdsSha256[0] ^= 0xff
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			opts := defaultOpts(dir)
+			q, err := Open(opts)
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			for _, id := range []string{"one", "two", "three"} {
+				if _, err := q.Append(makeEvents(id)); err != nil {
+					t.Fatalf("Append %q: %v", id, err)
+				}
+			}
+			if err := q.Close(); err != nil {
+				t.Fatalf("Close: %v", err)
+			}
+			path := filepath.Join(dir, listWALFiles(t, dir)[0])
+			scan, err := scanSegment(path)
+			if err != nil {
+				t.Fatalf("scan: %v", err)
+			}
+			test.mutate(scan.records)
+			payload, err := proto.Marshal(scan.records[test.record].batch)
+			if err != nil {
+				t.Fatalf("marshal mutation: %v", err)
+			}
+			framed, err := encodeRecord(payload)
+			if err != nil {
+				t.Fatalf("frame mutation: %v", err)
+			}
+			if len(framed) != recordHeaderSize+int(scan.records[test.record].payloadLen) {
+				t.Fatalf("mutation changed record length from %d to %d", scan.records[test.record].payloadLen, len(framed)-recordHeaderSize)
+			}
+			file, err := os.OpenFile(path, os.O_WRONLY, 0o600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			offset := scan.records[test.record].payloadOff - recordHeaderSize
+			if written, err := file.WriteAt(framed, offset); err != nil || written != len(framed) {
+				_ = file.Close()
+				t.Fatalf("write semantic mutation: n=%d err=%v", written, err)
+			}
+			if err := file.Sync(); err != nil {
+				_ = file.Close()
+				t.Fatal(err)
+			}
+			if err := file.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			reopened, err := Open(opts)
+			if err != nil {
+				t.Fatalf("Open semantic corruption: %v", err)
+			}
+			t.Cleanup(func() { _ = reopened.Close() })
+			stats := reopened.Stats()
+			if stats.QueuedBatches != test.wantPrefix || stats.QuarantinedSegments != 1 ||
+				!strings.Contains(stats.RecoveryWarning, test.wantReason) {
+				t.Fatalf("semantic recovery stats = %+v, want prefix=%d reason=%q", stats, test.wantPrefix, test.wantReason)
+			}
+			appended, err := reopened.Append(makeEvents("after-semantic-barrier"))
+			if err != nil {
+				t.Fatalf("Append after semantic recovery: %v", err)
+			}
+			if appended.GetBatchSequence() != 4 {
+				t.Fatalf("sequence after semantic recovery = %d, want 4", appended.GetBatchSequence())
+			}
+		})
 	}
 }
 
@@ -1100,6 +1280,102 @@ func TestCheckpointMarksPreferPresentNextLineAndKeepConflictSticky(t *testing.T)
 	})
 	if len(marks) != 1 || !marks[0].ConflictingMetadata {
 		t.Fatalf("marks with regressing higher-offset cursor = %+v, want one sticky conflict", marks)
+	}
+}
+
+func TestCheckpointMarksRetainAndValidateRestartGuardsAcrossRecovery(t *testing.T) {
+	t.Parallel()
+	identity := "dev=1;ino=2;gen=1;fp=" + strings.Repeat("ab", 32)
+	guard := strings.Repeat("cd", 32)
+	guardLength := uint32(64)
+	event := func(fingerprint *string, length *uint32) *opensplunkv1.LogEvent {
+		return &opensplunkv1.LogEvent{
+			EventId:   "event",
+			IndexName: "main",
+			Origin: &opensplunkv1.EventOrigin{
+				InputId:                    "input",
+				FileIdentity:               new(identity),
+				EndOffset:                  proto.Uint64(100),
+				CheckpointGuardFingerprint: fingerprint,
+				CheckpointGuardLength:      length,
+			},
+		}
+	}
+
+	marks := checkpointMarksForBatch(1, []*opensplunkv1.LogEvent{
+		event(nil, nil),
+		event(&guard, &guardLength),
+		event(nil, nil),
+	})
+	if len(marks) != 1 || marks[0].ConflictingMetadata ||
+		!marks[0].HasGuardFingerprint || !marks[0].HasGuardLength ||
+		marks[0].GuardFingerprint != guard || marks[0].GuardLength != guardLength ||
+		marks[0].EventIndex != 1 {
+		t.Fatalf("guarded equal-offset marks = %+v, want guarded event retained", marks)
+	}
+
+	otherGuard := strings.Repeat("ef", 32)
+	marks = checkpointMarksForBatch(1, []*opensplunkv1.LogEvent{
+		event(&guard, &guardLength),
+		event(&otherGuard, &guardLength),
+	})
+	if len(marks) != 1 || !marks[0].ConflictingMetadata {
+		t.Fatalf("conflicting same-offset guards = %+v, want sticky conflict", marks)
+	}
+	marks = checkpointMarksForBatch(1, []*opensplunkv1.LogEvent{event(&guard, nil)})
+	if len(marks) != 1 || !marks[0].ConflictingMetadata ||
+		marks[0].HasGuardFingerprint == marks[0].HasGuardLength {
+		t.Fatalf("incomplete guard pair = %+v, want malformed mark retained", marks)
+	}
+
+	dir := t.TempDir()
+	q, err := Open(defaultOpts(dir))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if _, err := q.Append([]*opensplunkv1.LogEvent{event(&guard, &guardLength)}); err != nil {
+		t.Fatalf("Append guarded event: %v", err)
+	}
+	if err := q.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	reopened, err := Open(defaultOpts(dir))
+	if err != nil {
+		t.Fatalf("reopen guarded WAL: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	pending, err := reopened.PendingSourceMarks()
+	if err != nil {
+		t.Fatalf("PendingSourceMarks: %v", err)
+	}
+	if len(pending) != 1 || pending[0].GuardFingerprint != guard ||
+		pending[0].GuardLength != guardLength || !pending[0].HasGuardFingerprint ||
+		!pending[0].HasGuardLength {
+		t.Fatalf("recovered restart guard = %+v", pending)
+	}
+}
+
+func TestReopenRejectsProtocolMismatch(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	opts := defaultOpts(dir)
+	q, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if _, err := q.Append(makeEvents("pending")); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := q.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	mismatch := opts
+	mismatch.ProtocolMinor++
+	if reopened, err := Open(mismatch); err == nil {
+		_ = reopened.Close()
+		t.Fatal("Open accepted a pending batch stamped with a different protocol")
+	} else if !strings.Contains(err.Error(), "has protocol 1.0, configured 1.1") {
+		t.Fatalf("Open protocol mismatch error = %v", err)
 	}
 }
 

@@ -4,9 +4,10 @@
 // A [Sender] consumes sealed batches from a [wal.Queue], transmits them, and
 // applies the server's acknowledgments back to the queue and to a dead-letter
 // sink. It owns the whole client side of the protocol: dial (TLS or explicit
-// plaintext), bearer token in gRPC metadata, Hello/Ready negotiation, resume
-// from CollectorReady.resume_after_batch_sequence, batch transmission bounded by
-// the negotiated max_in_flight_batches / max_batch_events / max_batch_bytes,
+// plaintext), bearer token in gRPC metadata, Hello/Ready negotiation, advisory
+// resume hints with exact WAL replay for explicit terminal outcomes, batch
+// transmission bounded by the negotiated max_in_flight_batches /
+// max_batch_events / max_batch_bytes,
 // heartbeats at Ready.heartbeat_interval, Goodbye on shutdown, and reconnect
 // with bounded exponential backoff plus jitter.
 //

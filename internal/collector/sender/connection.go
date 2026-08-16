@@ -8,8 +8,12 @@ import (
 	"time"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
-	"github.com/Suhaibinator/open-splunk/internal/collector/wal"
+	"github.com/Suhaibinator/open-splunk/internal/collectorlimits"
+	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -63,6 +67,8 @@ type conn struct {
 	// cancellable so a terminal disposition promptly releases its goroutine and
 	// retained EventBatch instead of waiting out a server-controlled delay.
 	pendingRetry map[uint64]*scheduledRetry
+	retryWG      sync.WaitGroup
+	failure      error
 
 	maxInFlight    int
 	maxBatchEvents uint32
@@ -81,6 +87,7 @@ type conn struct {
 	draining           bool
 	serverShutdown     bool
 	serverReconnectDur time.Duration
+	serverDrainTimer   *time.Timer
 }
 
 type scheduledRetry struct {
@@ -120,15 +127,18 @@ func (s *Sender) runConnection(parent context.Context) (connected bool, reconnec
 	}
 	stream, err := s.client.Collect(withBearer(streamCtx, token), s.collectCallOptions()...)
 	if err != nil {
-		return false, 0, err
+		return false, 0, classifyPreReadyError(err)
 	}
 
 	c := s.newConn(ctx, cancel, streamCancel, stream)
-	if err := c.sendHello(); err != nil {
-		return false, 0, err
-	}
-	readyDone := make(chan error, 1)
-	go func() { readyDone <- c.awaitReady() }()
+	handshakeDone := make(chan error, 1)
+	go func() {
+		if err := c.sendHello(); err != nil {
+			handshakeDone <- err
+			return
+		}
+		handshakeDone <- c.receiveReady()
+	}()
 	var readyTimer <-chan time.Time
 	var timer *time.Timer
 	if s.opts.DialTimeout > 0 {
@@ -137,23 +147,27 @@ func (s *Sender) runConnection(parent context.Context) (connected bool, reconnec
 		defer timer.Stop()
 	}
 	select {
-	case err := <-readyDone:
+	case err := <-handshakeDone:
 		if err != nil {
-			return false, 0, err
+			return false, 0, classifyPreReadyError(err)
 		}
 	case <-parent.Done():
-		c.gracefulPreReadyShutdown(readyDone)
-		streamCancel()
+		c.gracefulPreReadyShutdown(handshakeDone)
 		return false, 0, parent.Err()
 	case <-readyTimer:
 		streamCancel()
+		<-handshakeDone
 		return false, 0, fmt.Errorf("collector/sender: ready negotiation timed out after %s", s.opts.DialTimeout)
 	}
+	c.observeReadyResume()
 
 	// Batches handed out on a previous connection but never terminally
 	// acknowledged are still unacked in the queue, behind its delivery cursor.
-	// Rewind (after the resume trim in awaitReady) so this stream resends them;
-	// the server deduplicates identical retries by batch ID.
+	// Rewind so this stream resends them. A Ready resume hint cannot replace the
+	// terminal BatchAck/BatchReject outcome: a committed batch may still contain
+	// per-event rejections that must be written to the local dead-letter sink.
+	// The server deduplicates identical retries by batch ID and replays the
+	// original terminal outcome.
 	s.queue.Rewind()
 
 	s.logger.Info("collector stream ready",
@@ -163,13 +177,8 @@ func (s *Sender) runConnection(parent context.Context) (connected bool, reconnec
 	s.setConnected(true)
 	defer s.setConnected(false)
 
-	// Wake blocked pump goroutine when the connection is torn down.
-	go func() {
-		<-ctx.Done()
-		c.mu.Lock()
-		c.cond.Broadcast()
-		c.mu.Unlock()
-	}()
+	stopContextWake := context.AfterFunc(ctx, c.broadcastWaiters)
+	defer stopContextWake()
 
 	recvDone := make(chan error, 1)
 	go func() { recvDone <- c.receiveLoop() }()
@@ -181,14 +190,18 @@ func (s *Sender) runConnection(parent context.Context) (connected bool, reconnec
 	select {
 	case <-parent.Done():
 		c.gracefulShutdown(recvDone)
-		cancel()
+		c.stopServerDrainTimer()
 		<-pumpDone
 		<-hbDone
+		c.retryWG.Wait()
 		return true, 0, parent.Err()
 	case recvErr := <-recvDone:
+		c.stopServerDrainTimer()
+		streamCancel()
 		cancel()
 		<-pumpDone
 		<-hbDone
+		c.retryWG.Wait()
 		c.mu.Lock()
 		shutdown := c.serverShutdown
 		reconnect := c.serverReconnectDur
@@ -196,7 +209,30 @@ func (s *Sender) runConnection(parent context.Context) (connected bool, reconnec
 		if shutdown {
 			return true, reconnect, nil
 		}
+		if failure := c.connectionFailure(); failure != nil {
+			return true, 0, failure
+		}
 		return true, 0, recvErr
+	}
+}
+
+// classifyPreReadyError stops reconnect churn only for status codes determined
+// entirely by the immutable Hello/protocol shape. Authentication and permission
+// failures remain retryable because token files and server policy can rotate
+// without restarting the collector.
+func classifyPreReadyError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var fatal *fatalError
+	if errors.As(err, &fatal) {
+		return err
+	}
+	switch status.Code(err) {
+	case codes.InvalidArgument, codes.FailedPrecondition, codes.Unimplemented:
+		return &fatalError{err: err}
+	default:
+		return err
 	}
 }
 
@@ -216,7 +252,7 @@ func (c *conn) sendHello() error {
 		Inputs:           c.s.opts.Hello.Inputs,
 	}
 	if stats.LastAckedBatchSequence > 0 {
-		v := stats.LastAckedBatchSequence
+		v := collectorlimits.ClampFleetCounter(stats.LastAckedBatchSequence)
 		hello.LastAcknowledgedBatchSequence = &v
 	}
 	return c.send(&opensplunkv1.CollectRequest{
@@ -224,7 +260,7 @@ func (c *conn) sendHello() error {
 	})
 }
 
-func (c *conn) awaitReady() error {
+func (c *conn) receiveReady() error {
 	resp, err := c.stream.Recv()
 	if err != nil {
 		return err
@@ -247,37 +283,43 @@ func (c *conn) awaitReady() error {
 			ready.GetAcknowledgmentDurability().String(),
 		)}
 	}
+	if ready.GetStreamId() == "" {
+		return &fatalError{err: errors.New("collector/sender: server Ready has an empty stream id")}
+	}
+	heartbeatInterval := ready.GetHeartbeatInterval()
+	if heartbeatInterval == nil || heartbeatInterval.CheckValid() != nil || heartbeatInterval.AsDuration() <= 0 {
+		return &fatalError{err: errors.New("collector/sender: server Ready has an invalid heartbeat interval")}
+	}
+	if ready.GetMaxInFlightBatches() == 0 || ready.GetMaxBatchEvents() == 0 ||
+		ready.GetMaxBatchBytes() == 0 || ready.GetMaxEventBytes() == 0 {
+		return &fatalError{err: errors.New("collector/sender: server Ready has zero-valued hard delivery limits")}
+	}
+	if uint64(ready.GetMaxInFlightBatches()) > uint64(^uint(0)>>1) {
+		return &fatalError{err: errors.New("collector/sender: server Ready max_in_flight_batches exceeds platform int capacity")}
+	}
 	c.ready = ready
 
 	c.mu.Lock()
-	c.maxInFlight = max(int(ready.GetMaxInFlightBatches()), 1)
+	c.maxInFlight = int(ready.GetMaxInFlightBatches())
 	c.maxBatchEvents = ready.GetMaxBatchEvents()
 	c.maxBatchBytes = ready.GetMaxBatchBytes()
 	c.mu.Unlock()
 
-	// Honor resume_after_batch_sequence: everything through it is durably held by
-	// the server, so ack it off the queue. NextBatch then yields the first higher
-	// unacked batch.
-	if ready.ResumeAfterBatchSequence != nil {
-		resume := ready.GetResumeAfterBatchSequence()
-		through, err := c.s.commitTerminal(resume, true)
-		switch {
-		case err == nil:
-			c.s.markAcked(through, 0)
-		case errors.Is(err, wal.ErrInvalidAck):
-			// The server remembers a durability point this queue does not know —
-			// typically a fresh or quarantined state directory behind an older
-			// collector identity. Failing the connection here would crash-loop
-			// forever and deliver nothing. Proceed without acking: everything
-			// local is (re)sent and the server deduplicates or rejects with
-			// explicit, operator-visible responses.
-			c.s.logger.Warn("collector stream resume point unknown to local queue; continuing without ack",
-				"resume_sequence", resume, "error", err.Error())
-		default:
-			return fmt.Errorf("collector/sender: resume sequence %d: %w", resume, err)
-		}
-	}
 	return nil
+}
+
+func (c *conn) observeReadyResume() {
+	if c.ready.ResumeAfterBatchSequence == nil {
+		return
+	}
+	// resume_after_batch_sequence proves server-side durability, but says nothing
+	// about the per-event accepted/duplicate/rejected outcome. If a previous
+	// BatchAck was lost, AckThrough here would silently discard any rejected
+	// events before they reached the local dead-letter sink. Keep the hint
+	// advisory and replay the exact WAL batch so ingest deduplication can return
+	// its original terminal outcome.
+	c.s.logger.Info("collector stream advertised resume point; replaying local WAL for explicit outcomes",
+		"resume_sequence", c.ready.GetResumeAfterBatchSequence())
 }
 
 // send stamps the next connection-local stream sequence and sent_at, then
@@ -313,14 +355,25 @@ func (c *conn) pumpLoop() {
 			var err error
 			batch, err = c.s.queue.NextBatch(c.ctx)
 			if err != nil {
-				return // context canceled
+				if c.ctx.Err() == nil {
+					c.fail(fmt.Errorf("collector/sender: read next durable batch: %w", err))
+				}
+				return
 			}
 		}
 
 		// A batch that exceeds the NEGOTIATED Ready limits can never be accepted on
-		// this stream, so it is a permanent local dead-letter case: dead-letter it
-		// and ack it off the queue so delivery makes progress instead of looping.
+		// this stream. A single event has an exact dead-letter disposition; a
+		// multi-event batch must remain durable until a lossless repacker can split
+		// valid events from the offending limit.
 		if code, ok := c.batchExceedsReadyLimits(batch); ok {
+			if len(batch.GetEvents()) != 1 {
+				c.fail(&fatalError{err: fmt.Errorf(
+					"collector/sender: durable batch %d exceeds negotiated limits and requires lossless repacking; batch retained",
+					batch.GetBatchSequence(),
+				)})
+				return
+			}
 			if err := c.deadLetterWholeBatch(batch, code, "batch exceeds negotiated server limits"); err != nil {
 				c.fail(err)
 				return
@@ -544,14 +597,22 @@ func (c *conn) throttleActiveLocked() bool {
 }
 
 // batchExceedsReadyLimits reports whether batch exceeds the NEGOTIATED Ready
-// limits (fixed for the life of the stream). Such a batch can never be accepted
-// and is permanently dead-lettered; the returned string is the rejection code.
+// limits (fixed for the life of the stream). The caller can terminally
+// dead-letter a single-event batch; a multi-event batch is retained because it
+// requires lossless repacking to preserve its otherwise-valid events.
 func (c *conn) batchExceedsReadyLimits(batch *opensplunkv1.EventBatch) (string, bool) {
 	c.mu.Lock()
 	maxEvents := c.maxBatchEvents
 	maxBytes := c.maxBatchBytes
+	maxEventBytes := c.ready.GetMaxEventBytes()
 	c.mu.Unlock()
 
+	for _, event := range batch.GetEvents() {
+		eventSize := proto.Size(event)
+		if eventSize >= 0 && uint64(eventSize) > maxEventBytes {
+			return opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_EVENT_TOO_LARGE.String(), true
+		}
+	}
 	// #nosec G115 -- len is non-negative and every supported Go int value is
 	// exactly representable as uint64.
 	if maxEvents > 0 && uint64(len(batch.GetEvents())) > uint64(maxEvents) {
@@ -620,7 +681,7 @@ func (c *conn) heartbeatLoop() {
 				continue
 			}
 			hb := c.s.buildHeartbeat()
-			if err := c.send(&opensplunkv1.CollectRequest{
+			if err := c.sendHeartbeat(&opensplunkv1.CollectRequest{
 				Payload: &opensplunkv1.CollectRequest_Heartbeat{Heartbeat: hb},
 			}); err != nil {
 				c.fail(err)
@@ -628,6 +689,18 @@ func (c *conn) heartbeatLoop() {
 			}
 		}
 	}
+}
+
+func (c *conn) sendHeartbeat(req *opensplunkv1.CollectRequest) error {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+	c.mu.Lock()
+	stopped := c.draining || c.ctx.Err() != nil
+	c.mu.Unlock()
+	if stopped {
+		return nil
+	}
+	return c.sendLocked(req)
 }
 
 // --- receive dispatch -------------------------------------------------------
@@ -657,9 +730,13 @@ func (c *conn) receiveLoop() error {
 				return err
 			}
 		case resp.GetThrottle() != nil:
-			c.handleThrottle(resp)
+			if err := c.handleThrottle(resp); err != nil {
+				return err
+			}
 		case resp.GetNotice() != nil:
-			c.handleNotice(resp.GetNotice())
+			if err := c.handleNotice(resp.GetNotice()); err != nil {
+				return err
+			}
 		default:
 			return errors.New("collector/sender: response has no payload")
 		}
@@ -669,6 +746,9 @@ func (c *conn) receiveLoop() error {
 func (c *conn) validateResponse(resp *opensplunkv1.CollectResponse) error {
 	if resp == nil {
 		return errors.New("collector/sender: nil response")
+	}
+	if sentAt := resp.GetSentAt(); sentAt == nil || sentAt.CheckValid() != nil {
+		return errors.New("collector/sender: response has invalid sent_at")
 	}
 	want := c.recvSeq + 1
 	if resp.GetStreamSequence() != want {
@@ -705,11 +785,24 @@ func (c *conn) handleAck(ack *opensplunkv1.BatchAck) error {
 		}
 		c.mu.Lock()
 		highestSent := c.highestSentBatchSequence
+		var outcomeMissingFor uint64
+		for inflightSequence := range c.inflight {
+			if inflightSequence <= target && inflightSequence != seq {
+				outcomeMissingFor = inflightSequence
+				break
+			}
+		}
 		c.mu.Unlock()
 		if target > highestSent {
 			return fmt.Errorf(
 				"collector/sender: acknowledged-through %d exceeds highest batch sequence sent on this connection %d",
 				target, highestSent,
+			)
+		}
+		if outcomeMissingFor != 0 {
+			return fmt.Errorf(
+				"collector/sender: cumulative acknowledgment through %d omits terminal outcome for in-flight batch %d",
+				target, outcomeMissingFor,
 			)
 		}
 	}
@@ -732,8 +825,14 @@ func (c *conn) handleAck(ack *opensplunkv1.BatchAck) error {
 		now := c.s.now()
 		seen := make(map[uint32]struct{}, len(rejected))
 		for _, rej := range rejected {
+			if rej == nil {
+				return fmt.Errorf("collector/sender: nil rejected event for batch %d", seq)
+			}
 			idx := rej.GetEventIndex()
-			if int(idx) >= len(batch.GetEvents()) {
+			// Compare without converting the hostile uint32 to int: on 32-bit
+			// platforms a value above MaxInt would wrap negative and bypass the
+			// bounds check before the slice access below.
+			if uint64(idx) >= uint64(len(batch.GetEvents())) {
 				return fmt.Errorf("collector/sender: rejection index %d out of range for batch %d", idx, seq)
 			}
 			if _, duplicate := seen[idx]; duplicate {
@@ -800,6 +899,14 @@ func (c *conn) handleReject(reject *opensplunkv1.BatchReject) error {
 // resent after retry_after. The in-flight slot is kept the whole time.
 func (c *conn) handleRetry(retry *opensplunkv1.RetryBatch) error {
 	seq := retry.GetBatchSequence()
+	retryDelay := time.Duration(0)
+	if retryAfter := retry.GetRetryAfter(); retryAfter != nil {
+		if err := retryAfter.CheckValid(); err != nil || retryAfter.AsDuration() < 0 ||
+			retryAfter.AsDuration() > ingestquota.MaximumRetryAfter {
+			return fmt.Errorf("collector/sender: retry for batch sequence %d has invalid retry_after", seq)
+		}
+		retryDelay = retryAfter.AsDuration()
+	}
 	c.mu.Lock()
 	batch := c.inflight[seq]
 	if batch == nil {
@@ -810,7 +917,11 @@ func (c *conn) handleRetry(retry *opensplunkv1.RetryBatch) error {
 		c.mu.Unlock()
 		return fmt.Errorf("collector/sender: retry batch id %q does not match sequence %d", retry.GetBatchId(), seq)
 	}
-	c.s.deferBatchRetry(batch, retry.GetRetryAfter().AsDuration())
+	if c.draining || c.ctx.Err() != nil {
+		c.mu.Unlock()
+		return nil
+	}
+	c.s.deferBatchRetry(batch, retryDelay)
 	if _, scheduled := c.pendingRetry[seq]; scheduled {
 		// A resend is already pending for this sequence; coalesce so a flood of
 		// RetryBatch messages cannot spawn thousands of goroutines.
@@ -825,7 +936,9 @@ func (c *conn) handleRetry(retry *opensplunkv1.RetryBatch) error {
 	c.mu.Unlock()
 
 	c.s.markRetried()
+	c.retryWG.Add(1)
 	go func(state *scheduledRetry) {
+		defer c.retryWG.Done()
 		defer close(state.done)
 		defer state.cancel()
 		defer func() {
@@ -887,7 +1000,8 @@ func (c *conn) sendRetryIfCurrent(
 
 	c.mu.Lock()
 	current := c.inflight[seq]
-	eligible := current == batch && c.pendingRetry[seq] == state && state != nil && c.ctx.Err() == nil
+	eligible := current == batch && c.pendingRetry[seq] == state && state != nil &&
+		c.ctx.Err() == nil && !c.draining
 	throttleGeneration = c.throttleGeneration
 	if !eligible {
 		c.mu.Unlock()
@@ -916,15 +1030,33 @@ func (c *conn) sendRetryIfCurrent(
 // handleThrottle applies pacing and in-flight limits until effective_until (or
 // another Throttle). Server absolute timestamps are never compared directly to
 // the collector clock: when both timestamps are valid, their server-relative
-// duration is applied from local receipt time. A malformed/missing sent_at
-// falls back to at least minimum_send_delay.
-func (c *conn) handleThrottle(resp *opensplunkv1.CollectResponse) {
+// duration is applied from local receipt time. All server-requested delays are
+// bounded by the ingestion quota contract so a buggy peer cannot suspend
+// delivery indefinitely.
+func (c *conn) handleThrottle(resp *opensplunkv1.CollectResponse) error {
 	throttle := resp.GetThrottle()
 	if throttle == nil {
-		return
+		return nil
+	}
+	minimumDelay := time.Duration(0)
+	if raw := throttle.GetMinimumSendDelay(); raw != nil {
+		if err := raw.CheckValid(); err != nil || raw.AsDuration() < 0 ||
+			raw.AsDuration() > ingestquota.MaximumRetryAfter {
+			return errors.New("collector/sender: throttle has invalid minimum_send_delay")
+		}
+		minimumDelay = raw.AsDuration()
+	}
+	if effectiveUntil := throttle.GetEffectiveUntil(); effectiveUntil != nil {
+		sentAt := resp.GetSentAt()
+		if effectiveUntil.CheckValid() != nil || sentAt == nil || sentAt.CheckValid() != nil ||
+			effectiveUntil.AsTime().Sub(sentAt.AsTime()) > ingestquota.MaximumRetryAfter {
+			return errors.New("collector/sender: throttle has invalid effective_until")
+		}
+	}
+	if uint64(throttle.GetMaxInFlightBatches()) > uint64(^uint(0)>>1) {
+		return errors.New("collector/sender: throttle max_in_flight_batches exceeds platform int capacity")
 	}
 	receivedAt := c.s.now()
-	minimumDelay := max(throttle.GetMinimumSendDelay().AsDuration(), 0)
 	until := localThrottleUntil(receivedAt, resp.GetSentAt(), throttle.GetEffectiveUntil(), minimumDelay)
 
 	// Serialize applying the response with every outbound Send. This establishes
@@ -949,6 +1081,7 @@ func (c *conn) handleThrottle(resp *opensplunkv1.CollectResponse) {
 	c.cond.Broadcast()
 	c.mu.Unlock()
 	c.sendMu.Unlock()
+	return nil
 }
 
 func localThrottleUntil(
@@ -974,22 +1107,39 @@ func localThrottleUntil(
 
 // handleNotice reacts to server notices. A shutting-down notice drains the
 // current in-flight work and asks Run to reconnect after reconnect_after.
-func (c *conn) handleNotice(notice *opensplunkv1.ServerNotice) {
+func (c *conn) handleNotice(notice *opensplunkv1.ServerNotice) error {
 	if notice.GetType() != opensplunkv1.ServerNoticeType_SERVER_NOTICE_TYPE_SHUTTING_DOWN {
 		c.s.logger.Info("server notice", "type", notice.GetType().String(), "code", notice.GetCode())
-		return
+		return nil
+	}
+	reconnectAfter := time.Duration(0)
+	if raw := notice.GetReconnectAfter(); raw != nil {
+		if err := raw.CheckValid(); err != nil || raw.AsDuration() < 0 {
+			return errors.New("collector/sender: server shutdown notice has invalid reconnect_after")
+		}
+		reconnectAfter = raw.AsDuration()
+		maximum := c.s.opts.Backoff.Max
+		if maximum <= 0 {
+			maximum = defaultBackoffMax
+		}
+		if reconnectAfter > maximum {
+			reconnectAfter = maximum
+		}
 	}
 	c.mu.Lock()
 	c.draining = true
 	c.serverShutdown = true
-	if notice.ReconnectAfter != nil {
-		c.serverReconnectDur = notice.GetReconnectAfter().AsDuration()
+	c.serverReconnectDur = reconnectAfter
+	if c.serverDrainTimer == nil {
+		c.serverDrainTimer = time.AfterFunc(c.s.drainTimeout, c.streamCancel)
 	}
 	c.cond.Broadcast()
 	c.mu.Unlock()
+	c.cancel()
 	// Half-close so the server can flush any remaining acks and then EOF; the
 	// receive loop drains those before returning.
-	_ = c.stream.CloseSend()
+	c.closeSendSerialized()
+	return nil
 }
 
 // --- in-flight bookkeeping --------------------------------------------------
@@ -1079,75 +1229,136 @@ func (c *conn) deadLetterWholeBatch(batch *opensplunkv1.EventBatch, code, reason
 func (c *conn) fail(err error) {
 	if err != nil && !errors.Is(err, context.Canceled) {
 		c.s.setLastError(err)
+		c.mu.Lock()
+		if c.failure == nil {
+			c.failure = err
+		}
+		c.mu.Unlock()
 	}
 	// Break the stream so a blocked receive unblocks, then stop the workers.
 	c.streamCancel()
 	c.cancel()
 }
 
+func (c *conn) connectionFailure() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.failure
+}
+
+func (c *conn) stopServerDrainTimer() {
+	c.mu.Lock()
+	timer := c.serverDrainTimer
+	c.serverDrainTimer = nil
+	c.mu.Unlock()
+	if timer != nil {
+		timer.Stop()
+	}
+}
+
 // gracefulPreReadyShutdown covers cancellation after Hello was sent but while
 // Ready is still racing with the caller. The stream context is intentionally
 // independent of parent, so this best-effort Goodbye remains transmissible.
 func (c *conn) gracefulPreReadyShutdown(readyDone <-chan error) {
-	if err := c.send(&opensplunkv1.CollectRequest{
-		Payload: &opensplunkv1.CollectRequest_Goodbye{Goodbye: &opensplunkv1.CollectorGoodbye{
-			Reason: opensplunkv1.CollectorGoodbyeReason_COLLECTOR_GOODBYE_REASON_SHUTDOWN,
-		}},
-	}); err != nil {
-		return
-	}
-	_ = c.stream.CloseSend()
-
-	// Do not immediately cancel the independent stream context: Send returning
-	// only queues bytes locally. Wait for the outstanding Ready receive, then an
-	// EOF, so the server has a chance to consume Goodbye. Both waits are bounded.
-	timer := time.NewTimer(c.s.drainTimeout)
-	defer timer.Stop()
-	select {
-	case err := <-readyDone:
-		if err != nil {
-			return
-		}
-	case <-timer.C:
-		return
-	}
-	recvDone := make(chan struct{}, 1)
+	c.beginDraining()
+	deadline := time.Now().Add(c.s.drainTimeout)
+	sendDone := make(chan struct{})
 	go func() {
-		_, _ = c.stream.Recv()
-		recvDone <- struct{}{}
+		c.sendGoodbyeAndClose()
+		close(sendDone)
 	}()
-	if !timer.Stop() {
-		select {
-		case <-timer.C:
-		default:
+	if waitForSignalUntil(sendDone, deadline) {
+		remaining := time.Until(deadline)
+		if remaining > 0 {
+			timer := time.NewTimer(remaining)
+			select {
+			case <-readyDone:
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
 		}
+	} else {
+		c.streamCancel()
+		<-sendDone
 	}
-	timer.Reset(c.s.drainTimeout)
-	select {
-	case <-recvDone:
-	case <-timer.C:
-	}
+	// Closing the stream is what guarantees the outstanding Recv exits. Join it
+	// before returning so no pre-Ready worker survives into another connection.
+	c.streamCancel()
+	<-readyDone
 }
 
 // gracefulShutdown sends Goodbye(SHUTDOWN) best-effort, half-closes the send
 // direction, and briefly drains inbound acks before the caller returns.
 func (c *conn) gracefulShutdown(recvDone <-chan error) {
+	c.beginDraining()
+	deadline := time.Now().Add(c.s.drainTimeout)
+	sendDone := make(chan struct{})
+	go func() {
+		c.sendGoodbyeAndClose()
+		close(sendDone)
+	}()
+	if waitForSignalUntil(sendDone, deadline) {
+		remaining := time.Until(deadline)
+		if remaining > 0 {
+			timer := time.NewTimer(remaining)
+			select {
+			case <-recvDone:
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+		}
+	}
+	// The global network-drain deadline covers both a flow-controlled Goodbye
+	// and inbound ack draining. Cancel the independent stream at the deadline,
+	// then join both network workers before resource owners can close beneath them.
+	c.streamCancel()
+	<-sendDone
+	<-recvDone
+}
+
+func (c *conn) beginDraining() {
 	c.mu.Lock()
 	c.draining = true
 	c.cond.Broadcast()
 	c.mu.Unlock()
+	c.cancel()
+}
 
-	_ = c.send(&opensplunkv1.CollectRequest{
+func (c *conn) sendGoodbyeAndClose() {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+	_ = c.sendLocked(&opensplunkv1.CollectRequest{
 		Payload: &opensplunkv1.CollectRequest_Goodbye{Goodbye: &opensplunkv1.CollectorGoodbye{
 			Reason: opensplunkv1.CollectorGoodbyeReason_COLLECTOR_GOODBYE_REASON_SHUTDOWN,
 		}},
 	})
 	_ = c.stream.CloseSend()
+}
 
-	timer := time.NewTimer(c.s.drainTimeout)
+func (c *conn) closeSendSerialized() {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+	_ = c.stream.CloseSend()
+}
+
+func waitForSignalUntil(done <-chan struct{}, deadline time.Time) bool {
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		select {
+		case <-done:
+			return true
+		default:
+			return false
+		}
+	}
+	timer := time.NewTimer(remaining)
 	defer timer.Stop()
 	select {
-	case <-recvDone:
+	case <-done:
+		return true
 	case <-timer.C:
+		return false
 	}
 }

@@ -6,12 +6,13 @@ import (
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
+	"github.com/Suhaibinator/open-splunk/internal/collectorlimits"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
-	maximumCollectorHelloCapabilities = 64
-	maximumCollectorSnapshotInputs    = 256
+	maximumCollectorHelloCapabilities = collectorlimits.MaximumCapabilities
+	maximumCollectorSnapshotInputs    = collectorlimits.MaximumInputs
 )
 
 func collectorHelloSnapshot(

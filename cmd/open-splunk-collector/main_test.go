@@ -214,6 +214,8 @@ func TestRunDispatch(t *testing.T) {
 	}{
 		{"validate ok", []string{"validate", "-config", valid}, 0},
 		{"validate missing file", []string{"validate", "-config", "/no/such/file.yaml"}, 1},
+		{"validate positional argument", []string{"validate", "unexpected"}, 2},
+		{"run positional argument", []string{"run", "unexpected"}, 2},
 		{"unknown subcommand", []string{"bogus"}, 2},
 		{"help", []string{"help"}, 0},
 	}

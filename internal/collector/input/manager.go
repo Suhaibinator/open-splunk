@@ -15,10 +15,19 @@ import (
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/collector/framing"
+	"github.com/Suhaibinator/open-splunk/internal/collectorlimits"
 )
 
 // defaultPollInterval is used when Config.PollInterval is unset.
 const defaultPollInterval = 250 * time.Millisecond
+
+// maxConcurrentStagedTransactions prevents one source blocked on downstream
+// publication from serializing every other source in the input. A staged
+// transaction's dependency is bounded by readWindow+fpBytes, its total frame
+// payload by readWindow, and its event count by maxStagedEvents. This fixed
+// permit count therefore preserves a hard manager-wide memory bound while
+// allowing independent files to make progress.
+const maxConcurrentStagedTransactions = 4
 
 // errSourceSnapshotChanged classifies a short exact read as evidence that the
 // source changed while a transaction was being assembled or validated. Other
@@ -46,6 +55,9 @@ type manager struct {
 	poll        time.Duration
 	readWindow  uint64
 	identityFn  func(*os.File, os.FileInfo, int) (FileIdentity, error)
+	// afterMatchPathsObserver is an internal test seam after one discovery
+	// snapshot is assembled but before it can claim or replace a tailer.
+	afterMatchPathsObserver func()
 	// afterDrainObserver is an internal test seam installed before Run starts.
 	// It runs after a tailer stages a bounded read but before validation and
 	// publication.
@@ -67,9 +79,10 @@ type manager struct {
 	afterRetireCancelObserver func(tailerPollObservation)
 
 	events chan RawEvent
-	// stagedTransaction is a capacity-one manager-wide permit. A tailer holds it
-	// from snapshot allocation through validation and publication, bounding
-	// aggregate staged memory while the shared event consumer is backpressured.
+	// stagedTransaction is a fixed-capacity manager-wide permit pool. A tailer
+	// holds one permit from snapshot allocation through validation and
+	// publication, bounding aggregate staged memory even while the shared event
+	// consumer is backpressured.
 	stagedTransaction chan struct{}
 
 	wg      sync.WaitGroup
@@ -86,6 +99,13 @@ type manager struct {
 	stateMu sync.Mutex
 	state   opensplunkv1.CollectorInputState
 	status  string
+
+	// sourceErrors retains the current per-tailer failure independently of the
+	// discovery pass. Without this aggregation a successful glob would overwrite
+	// a persistent Stat/ReadAt failure with HEALTHY on every manager poll. Code
+	// needing both health locks acquires sourceErrMu before stateMu.
+	sourceErrMu  sync.Mutex
+	sourceErrors map[string]string
 
 	runOnce sync.Once
 }
@@ -129,8 +149,9 @@ func NewManager(cfg Config, checkpoints ManagerCheckpointStore) (Manager, error)
 		poll:              poll,
 		readWindow:        readWindow,
 		events:            make(chan RawEvent),
-		stagedTransaction: make(chan struct{}, 1),
+		stagedTransaction: make(chan struct{}, maxConcurrentStagedTransactions),
 		tailers:           make(map[string]*tailer),
+		sourceErrors:      make(map[string]string),
 		state:             opensplunkv1.CollectorInputState_COLLECTOR_INPUT_STATE_STARTING,
 	}
 	return m, nil
@@ -175,17 +196,28 @@ func (m *manager) Health() Health {
 	m.stateMu.Lock()
 	state, status := m.state, m.status
 	m.stateMu.Unlock()
+	// Snapshot active first. Discovery intentionally tolerates transient misses
+	// while an existing tailer drains; publishing the later discovery count
+	// verbatim could therefore report active_sources > discovered_sources, which
+	// is rejected by the fleet heartbeat validator. Lift discovery to the active
+	// snapshot and saturate every wire-facing counter at MaxInt64 so downstream
+	// int64 storage/validation remains representable.
+	// #nosec G115 -- max64 clamps the atomic counter to a non-negative int64.
+	active := collectorlimits.ClampFleetCounter(uint64(max64(m.active.Load(), 0)))
+	discovered := collectorlimits.ClampFleetCounter(m.discovered.Load())
+	if discovered < active {
+		discovered = active
+	}
 	return Health{
 		InputID:           m.cfg.InputID,
 		State:             state,
 		StatusMessage:     status,
-		DiscoveredSources: m.discovered.Load(),
-		// #nosec G115 -- max64 clamps the atomic counter to a non-negative int64.
-		ActiveSources:   uint64(max64(m.active.Load(), 0)),
-		EventsReadTotal: m.eventsRead.Load(),
-		BytesReadTotal:  m.bytesRead.Load(),
-		LastEventAt:     timeFromNanos(m.lastEventNs.Load()),
-		LastErrorAt:     timeFromNanos(m.lastErrorNs.Load()),
+		DiscoveredSources: discovered,
+		ActiveSources:     active,
+		EventsReadTotal:   collectorlimits.ClampFleetCounter(m.eventsRead.Load()),
+		BytesReadTotal:    collectorlimits.ClampFleetCounter(m.bytesRead.Load()),
+		LastEventAt:       timeFromNanos(m.lastEventNs.Load()),
+		LastErrorAt:       timeFromNanos(m.lastErrorNs.Load()),
 	}
 }
 
@@ -201,6 +233,12 @@ func (m *manager) pollOnce(ctx context.Context, initial bool) {
 		return
 	}
 	paths := m.matchPaths()
+	if observer := m.afterMatchPathsObserver; observer != nil {
+		observer()
+	}
+	if ctx.Err() != nil {
+		return
+	}
 	m.discovered.Store(uint64(len(paths)))
 
 	seen := make(map[string]struct{}, len(paths))
@@ -208,9 +246,19 @@ func (m *manager) pollOnce(ctx context.Context, initial bool) {
 	var openErr string
 
 	for _, p := range paths {
+		if ctx.Err() != nil {
+			return
+		}
 		fi, err := os.Stat(p)
-		if err != nil || !fi.Mode().IsRegular() {
-			continue // vanished between glob and stat, or not a regular file
+		if err != nil {
+			openErr = fmt.Sprintf("stat %s: %v", p, err)
+			m.lastErrorNs.Store(time.Now().UnixNano())
+			continue
+		}
+		if !fi.Mode().IsRegular() {
+			openErr = fmt.Sprintf("stat %s: source is not a regular file", p)
+			m.lastErrorNs.Store(time.Now().UnixNano())
+			continue
 		}
 		dev, ino, haveID := statDevIno(fi)
 		if haveID {
@@ -225,7 +273,7 @@ func (m *manager) pollOnce(ctx context.Context, initial bool) {
 
 		// New file (or a platform without stable inode): open it, fingerprint,
 		// and start a tailer.
-		f, err := os.Open(p)
+		f, err := openFileForTailing(p)
 		if err != nil {
 			openErr = fmt.Sprintf("open %s: %v", p, err)
 			m.lastErrorNs.Store(time.Now().UnixNano())
@@ -235,6 +283,12 @@ func (m *manager) pollOnce(ctx context.Context, initial bool) {
 		if err != nil {
 			_ = f.Close()
 			openErr = fmt.Sprintf("stat %s: %v", p, err)
+			m.lastErrorNs.Store(time.Now().UnixNano())
+			continue
+		}
+		if !fi2.Mode().IsRegular() {
+			_ = f.Close()
+			openErr = fmt.Sprintf("stat opened %s: source is not a regular file", p)
 			m.lastErrorNs.Store(time.Now().UnixNano())
 			continue
 		}
@@ -264,6 +318,10 @@ func (m *manager) pollOnce(ctx context.Context, initial bool) {
 				continue
 			}
 		}
+		if ctx.Err() != nil {
+			_ = f.Close()
+			return
+		}
 
 		// #nosec G115 -- the negative-size case is rejected above.
 		start, err := m.resolveStart(
@@ -278,6 +336,10 @@ func (m *manager) pollOnce(ctx context.Context, initial bool) {
 		if start.legacyUpgrade != nil {
 			legacyUpgrades = append(legacyUpgrades, *start.legacyUpgrade)
 		}
+		if ctx.Err() != nil {
+			_ = f.Close()
+			return
+		}
 		t, err := m.startTailer(
 			ctx,
 			key,
@@ -287,6 +349,8 @@ func (m *manager) pollOnce(ctx context.Context, initial bool) {
 			start.offset,
 			start.nextLine,
 			start.lineCursorKnown,
+			start.guardFingerprint,
+			start.guardLength,
 		)
 		if err != nil {
 			_ = f.Close()
@@ -303,6 +367,9 @@ func (m *manager) pollOnce(ctx context.Context, initial bool) {
 	// fsyncing the complete checkpoint document once per source. Tailers may
 	// advance concurrently; SetMany's monotonic merge makes those older
 	// enrichments harmless if terminal delivery wins the race.
+	if ctx.Err() != nil {
+		return
+	}
 	if err := m.checkpoints.SetMany(legacyUpgrades); err != nil {
 		openErr = fmt.Sprintf("upgrade legacy checkpoints: %v", err)
 		m.lastErrorNs.Store(time.Now().UnixNano())
@@ -376,11 +443,13 @@ func (m *manager) reconcileTailers(seen map[string]struct{}) {
 }
 
 type resolvedStart struct {
-	identity        FileIdentity
-	offset          uint64
-	nextLine        uint64
-	lineCursorKnown bool
-	legacyUpgrade   *Checkpoint
+	identity         FileIdentity
+	offset           uint64
+	nextLine         uint64
+	lineCursorKnown  bool
+	guardFingerprint string
+	guardLength      uint32
+	legacyUpgrade    *Checkpoint
 }
 
 // resolveStart chooses both the durable generation identity and initial offset.
@@ -405,7 +474,12 @@ func (m *manager) resolveStart(
 			if prefixErr != nil && !errors.Is(prefixErr, errSourceSnapshotChanged) {
 				return resolvedStart{}, prefixErr
 			}
-			sameGeneration = prefixErr == nil && prefixMatches
+			guardMatches, guardErr := persistedCheckpointGuardMatches(f, cp)
+			if guardErr != nil && !errors.Is(guardErr, errSourceSnapshotChanged) {
+				return resolvedStart{}, guardErr
+			}
+			sameGeneration = prefixErr == nil && prefixMatches &&
+				guardErr == nil && guardMatches
 		}
 		if sameGeneration {
 			nextLine, lineCursorKnown, lineErr := checkpointNextLine(cp, m.cfg.Multiline)
@@ -417,12 +491,27 @@ func (m *manager) resolveStart(
 				cp.NextLineNumber = nextLine
 				legacyUpgrade = &cp
 			}
+			if cp.GuardLength == 0 && cp.Offset > 0 {
+				guardFingerprint, guardLength, guardErr := captureCheckpointGuard(
+					f,
+					cp.Offset,
+					m.fpBytes,
+				)
+				if guardErr != nil {
+					return resolvedStart{}, guardErr
+				}
+				cp.GuardFingerprint = guardFingerprint
+				cp.GuardLength = guardLength
+				legacyUpgrade = &cp
+			}
 			return resolvedStart{
-				identity:        cp.Identity,
-				offset:          cp.Offset,
-				nextLine:        nextLine,
-				lineCursorKnown: lineCursorKnown,
-				legacyUpgrade:   legacyUpgrade,
+				identity:         cp.Identity,
+				offset:           cp.Offset,
+				nextLine:         nextLine,
+				lineCursorKnown:  lineCursorKnown,
+				guardFingerprint: cp.GuardFingerprint,
+				guardLength:      cp.GuardLength,
+				legacyUpgrade:    legacyUpgrade,
 			}, nil
 		}
 		// The same inode was truncated/reused. Burn a new generation before
@@ -447,14 +536,26 @@ func (m *manager) resolveStart(
 		start = size
 	}
 	nextLine := uint64(1)
+	guardFingerprint, guardLength, err := captureCheckpointGuard(f, start, m.fpBytes)
+	if err != nil {
+		return resolvedStart{}, err
+	}
 	if err := m.checkpoints.Set(Checkpoint{
 		InputID: m.cfg.InputID, Identity: id, Path: path,
-		Offset: start, NextLineNumber: nextLine,
+		Offset:           start,
+		NextLineNumber:   nextLine,
+		GuardFingerprint: guardFingerprint,
+		GuardLength:      guardLength,
 	}); err != nil {
 		return resolvedStart{}, err
 	}
 	return resolvedStart{
-		identity: id, offset: start, nextLine: nextLine, lineCursorKnown: true,
+		identity:         id,
+		offset:           start,
+		nextLine:         nextLine,
+		lineCursorKnown:  true,
+		guardFingerprint: guardFingerprint,
+		guardLength:      guardLength,
 	}, nil
 }
 
@@ -507,14 +608,64 @@ func persistedPrefixMatches(f *os.File, id FileIdentity) (bool, error) {
 	return fp == id.Fingerprint, nil
 }
 
+func persistedCheckpointGuardMatches(f *os.File, checkpoint Checkpoint) (bool, error) {
+	if checkpoint.GuardLength == 0 {
+		return checkpoint.GuardFingerprint == "", nil
+	}
+	length := uint64(checkpoint.GuardLength)
+	if length > checkpoint.Offset {
+		return false, errors.New("collector/input: checkpoint rewrite guard exceeds offset")
+	}
+	offset, err := checkedFileOffset(checkpoint.Offset - length)
+	if err != nil {
+		return false, err
+	}
+	fingerprint, err := computeFingerprintRange(f, offset, checkpoint.GuardLength)
+	if err != nil {
+		return false, classifyExactReadError(err)
+	}
+	return fingerprint == checkpoint.GuardFingerprint, nil
+}
+
+func captureCheckpointGuard(
+	f *os.File,
+	end uint64,
+	maximum int,
+) (fingerprint string, length uint32, err error) {
+	guardLength := end
+	if limit := uint64(maximum); guardLength > limit {
+		guardLength = limit
+	}
+	if guardLength == 0 {
+		return "", 0, nil
+	}
+	offset, err := checkedFileOffset(end - guardLength)
+	if err != nil {
+		return "", 0, err
+	}
+	// #nosec G115 -- maximum is validated against maximumFingerprintBytes.
+	length = uint32(guardLength)
+	fingerprint, err = computeFingerprintRange(f, offset, length)
+	if err != nil {
+		return "", 0, classifyExactReadError(err)
+	}
+	return fingerprint, length, nil
+}
+
 // updateState recomputes the aggregate health state after a poll.
 func (m *manager) updateState(discovered int, openErr string) {
+	m.sourceErrMu.Lock()
+	defer m.sourceErrMu.Unlock()
+	readErr := selectedSourceError(m.sourceErrors)
 	m.stateMu.Lock()
 	defer m.stateMu.Unlock()
 	switch {
 	case discovered == 0:
 		m.state = opensplunkv1.CollectorInputState_COLLECTOR_INPUT_STATE_MISSING
 		m.status = fmt.Sprintf("no files match include globs %v", m.cfg.Include)
+	case readErr != "":
+		m.state = opensplunkv1.CollectorInputState_COLLECTOR_INPUT_STATE_ERROR
+		m.status = readErr
 	case openErr != "":
 		m.state = opensplunkv1.CollectorInputState_COLLECTOR_INPUT_STATE_UNREADABLE
 		m.status = openErr
@@ -524,13 +675,44 @@ func (m *manager) updateState(discovered int, openErr string) {
 	}
 }
 
-// setReadError records an asynchronous per-file read failure into Health.
-func (m *manager) setReadError(path string, err error) {
+// setReadError records an asynchronous per-file read failure into Health and
+// retains it across discovery polls until that exact tailer makes progress.
+func (m *manager) setReadError(key, path string, err error) {
 	m.lastErrorNs.Store(time.Now().UnixNano())
+	message := fmt.Sprintf("read %s: %v", path, err)
+	m.sourceErrMu.Lock()
+	defer m.sourceErrMu.Unlock()
+	if m.sourceErrors == nil {
+		m.sourceErrors = make(map[string]string)
+	}
+	m.sourceErrors[key] = message
+	status := selectedSourceError(m.sourceErrors)
 	m.stateMu.Lock()
+	defer m.stateMu.Unlock()
 	m.state = opensplunkv1.CollectorInputState_COLLECTOR_INPUT_STATE_ERROR
-	m.status = fmt.Sprintf("read %s: %v", path, err)
-	m.stateMu.Unlock()
+	m.status = status
+}
+
+// selectedSourceError makes aggregate health stable across goroutine timing and
+// Go's randomized map iteration: the lexicographically smallest tracking key
+// supplies the reported status while its error remains active.
+func selectedSourceError(sourceErrors map[string]string) string {
+	var selectedKey, selectedMessage string
+	found := false
+	for key, message := range sourceErrors {
+		if !found || key < selectedKey {
+			selectedKey = key
+			selectedMessage = message
+			found = true
+		}
+	}
+	return selectedMessage
+}
+
+func (m *manager) clearReadError(key string) {
+	m.sourceErrMu.Lock()
+	delete(m.sourceErrors, key)
+	m.sourceErrMu.Unlock()
 }
 
 // matchPaths returns the sorted, de-duplicated set of paths matched by the
@@ -584,6 +766,8 @@ func (m *manager) startTailer(
 	id FileIdentity,
 	start, nextLine uint64,
 	lineCursorKnown bool,
+	checkpointGuardFingerprint string,
+	checkpointGuardLength uint32,
 ) (*tailer, error) {
 	t := &tailer{
 		m:               m,
@@ -602,7 +786,8 @@ func (m *manager) startTailer(
 			generation: id.Generation,
 		})
 	}
-	if err := t.refreshGuard(); err != nil {
+	initialGuard, err := t.captureGuard(t.offset)
+	if err != nil {
 		return nil, err
 	}
 	if id.FingerprintLength > 0 {
@@ -614,6 +799,21 @@ func (m *manager) startTailer(
 			return nil, errors.New("collector/input: file identity changed while starting tailer")
 		}
 	}
+	if checkpointGuardLength > 0 {
+		checkpoint := Checkpoint{
+			Offset:           start,
+			GuardFingerprint: checkpointGuardFingerprint,
+			GuardLength:      checkpointGuardLength,
+		}
+		matches, matchErr := persistedCheckpointGuardMatches(f, checkpoint)
+		if matchErr != nil && !errors.Is(matchErr, errSourceSnapshotChanged) {
+			return nil, matchErr
+		}
+		if matchErr != nil || !matches {
+			return nil, errors.New("collector/input: checkpoint rewrite guard changed while starting tailer")
+		}
+	}
+	t.installGuard(initialGuard)
 	t.path.Store(&path)
 	m.wg.Add(1)
 	go t.run(ctx)
@@ -663,6 +863,10 @@ type tailer struct {
 	m   *manager
 	key string
 	f   *os.File
+	// runCtx is installed by run before any generation validation. A generation
+	// fence waits on it so shutdown can always interrupt an unacknowledged
+	// durability barrier.
+	runCtx context.Context
 
 	path atomic.Pointer[string]
 
@@ -680,6 +884,15 @@ type tailer struct {
 	// Bytes are skipped incrementally until its delimiter arrives; framing must
 	// not resume early and publish the suffix as a separate event.
 	discardingOversize bool
+	// discardingMultilineOversize skips complete continuation lines after an
+	// oversized multiline event until the next configured start line. The flag
+	// survives the one-shot framers used for bounded source snapshots.
+	discardingMultilineOversize bool
+	// discardingMultilinePartialLine distinguishes a bounded cut inside a
+	// physical line from a complete-line oversize boundary. Until that line's
+	// delimiter is consumed, a matching suffix must never be mistaken for a new
+	// multiline start.
+	discardingMultilinePartialLine bool
 
 	// Growth tracking for multiline inactivity flushing.
 	lastSize       uint64
@@ -701,6 +914,16 @@ type tailer struct {
 	// rewritePending forces a generation reset retry after guard validation
 	// detected a rewrite but the durable zero checkpoint could not be stored.
 	rewritePending bool
+	// emittedSinceFence records that this generation has handed at least one
+	// event to the daemon since the last acknowledged durability fence. Before a
+	// replacement generation can supersede its checkpoint, resetGeneration
+	// serializes a barrier behind those events and waits for the daemon's durable
+	// ingestion acknowledgment.
+	emittedSinceFence bool
+	generationBarrier *durabilityBarrier
+	// readErrorActive avoids taking the manager's aggregate error-map lock on
+	// every healthy poll. It is owned by the tailer goroutine.
+	readErrorActive bool
 
 	// missingDiscoveries is owned by the manager discovery goroutine. A single
 	// miss is tolerated because glob and Stat do not form an atomic snapshot.
@@ -740,6 +963,19 @@ func (t *tailer) pathStr() string {
 		return *p
 	}
 	return ""
+}
+
+func (t *tailer) setReadError(err error) {
+	t.readErrorActive = true
+	t.m.setReadError(t.key, t.pathStr(), err)
+}
+
+func (t *tailer) clearReadError() {
+	if !t.readErrorActive {
+		return
+	}
+	t.readErrorActive = false
+	t.m.clearReadError(t.key)
 }
 
 // requestDrain begins a provisional retirement. It remains cancellable until
@@ -833,13 +1069,24 @@ func (timer *tailerPollTimer) stop() {
 // there is no work and no drain handoff to complete. A drain request must
 // reframe even at an observed EOF because a writer can append after Stat.
 func (t *tailer) canWaitAtCleanBoundary(size uint64) bool {
-	return size == t.offset && !t.retireRequested.Load()
+	if size != t.offset || t.retireRequested.Load() {
+		return false
+	}
+	// An incomplete oversized multiline record may have consumed every byte
+	// while deliberately leaving its physical-line cursor unresolved. Wake for
+	// one empty validated snapshot after inactivity so later delimiter-free bytes
+	// can be treated as a new line rather than a suffix of the rejected record.
+	return !t.discardingMultilineOversize ||
+		!t.discardingMultilinePartialLine ||
+		!t.inactivityElapsed()
 }
 
 // run is the tailer goroutine.
 func (t *tailer) run(ctx context.Context) {
+	t.runCtx = ctx
 	defer t.m.wg.Done()
 	defer t.finished.Store(true)
+	defer t.clearReadError()
 	defer func() { _ = t.f.Close() }()
 
 	t.m.active.Add(1)
@@ -858,6 +1105,7 @@ func (t *tailer) run(ctx context.Context) {
 		}
 		if t.canWaitAtCleanBoundary(size) {
 			t.retireStable = 0
+			t.clearReadError()
 			if !pollTimer.wait(ctx) {
 				return
 			}
@@ -882,6 +1130,7 @@ func (t *tailer) run(ctx context.Context) {
 		if t.canWaitAtCleanBoundary(size) {
 			t.m.releaseStagedTransaction()
 			t.retireStable = 0
+			t.clearReadError()
 			if !pollTimer.wait(ctx) {
 				return
 			}
@@ -912,8 +1161,7 @@ func (t *tailer) run(ctx context.Context) {
 			if grew {
 				continue
 			}
-			t.m.setReadError(
-				t.pathStr(),
+			t.setReadError(
 				fmt.Errorf(
 					"staged read window %d cannot reach a frame boundary at offset %d",
 					t.m.readWindow,
@@ -942,6 +1190,7 @@ func (t *tailer) run(ctx context.Context) {
 			t.m.releaseStagedTransaction()
 			return
 		}
+		t.clearReadError()
 		reachedObservedEnd := batch.reachedObservedEnd()
 		flushed := batch.flushed
 		if t.offset > batch.start {
@@ -993,11 +1242,11 @@ func (t *tailer) run(ctx context.Context) {
 func (t *tailer) trackGrowthAndTruncate() (size uint64, trackable bool) {
 	fi, err := t.f.Stat()
 	if err != nil {
-		t.m.setReadError(t.pathStr(), err)
+		t.setReadError(err)
 		return 0, false
 	}
 	if fi.Size() < 0 {
-		t.m.setReadError(t.pathStr(), errors.New("file has a negative size"))
+		t.setReadError(errors.New("file has a negative size"))
 		return 0, false
 	}
 	// #nosec G115 -- the negative-size case is rejected above.
@@ -1006,7 +1255,7 @@ func (t *tailer) trackGrowthAndTruncate() (size uint64, trackable bool) {
 	if !changed {
 		guardMatches, guardErr := t.installedGuardMatches()
 		if guardErr != nil && !errors.Is(guardErr, errSourceSnapshotChanged) {
-			t.m.setReadError(t.pathStr(), guardErr)
+			t.setReadError(guardErr)
 			return 0, false
 		}
 		changed = guardErr != nil || !guardMatches
@@ -1014,7 +1263,7 @@ func (t *tailer) trackGrowthAndTruncate() (size uint64, trackable bool) {
 	if changed {
 		if err := t.resetGeneration(fi); err != nil {
 			t.rewritePending = true
-			t.m.setReadError(t.pathStr(), err)
+			t.setReadError(err)
 			return 0, false
 		}
 	} else if t.offset == 0 && t.id.FingerprintLength == 0 && size > 0 {
@@ -1022,7 +1271,7 @@ func (t *tailer) trackGrowthAndTruncate() (size uint64, trackable bool) {
 		// before its first event is emitted, retaining the same generation number.
 		next, ierr := t.m.identifyFile(t.f, fi)
 		if ierr != nil {
-			t.m.setReadError(t.pathStr(), ierr)
+			t.setReadError(ierr)
 			return 0, false
 		}
 		next.Generation = t.id.Generation
@@ -1030,7 +1279,7 @@ func (t *tailer) trackGrowthAndTruncate() (size uint64, trackable bool) {
 			InputID: t.m.cfg.InputID, Identity: next, Path: t.pathStr(),
 			Offset: 0, NextLineNumber: 1,
 		}); err != nil {
-			t.m.setReadError(t.pathStr(), err)
+			t.setReadError(err)
 			return 0, false
 		}
 		t.id = next
@@ -1043,6 +1292,9 @@ func (t *tailer) trackGrowthAndTruncate() (size uint64, trackable bool) {
 }
 
 func (t *tailer) resetGeneration(fi os.FileInfo) error {
+	if err := t.awaitDurabilityBarrier(); err != nil {
+		return err
+	}
 	next, err := t.m.identifyFile(t.f, fi)
 	if err != nil {
 		return err
@@ -1062,12 +1314,49 @@ func (t *tailer) resetGeneration(fi os.FileInfo) error {
 	t.nextLineNumber = 1
 	t.lineCursorKnown = true
 	t.discardingOversize = false
+	t.discardingMultilineOversize = false
+	t.discardingMultilinePartialLine = false
 	t.guardOffset = 0
 	t.guardLength = 0
 	t.guardFingerprint = fingerprintDigest{}
 	t.rewritePending = false
+	t.emittedSinceFence = false
+	t.generationBarrier = nil
 	t.resetStagedReadWindow()
 	return nil
+}
+
+// awaitDurabilityBarrier prevents a newly rewritten generation's zero
+// checkpoint from overtaking old-generation events that the tailer has emitted
+// but the daemon may still be decoding, processing, batching, or appending.
+// FIFO ordering on Manager.Events and the daemon's processed channel means the
+// acknowledgment covers every prior event from this tailer. Cancellation is a
+// non-success result: an unacknowledged barrier must never permit the newer
+// checkpoint to be stored.
+func (t *tailer) awaitDurabilityBarrier() error {
+	if !t.emittedSinceFence {
+		return nil
+	}
+	if t.runCtx == nil {
+		return errors.New("collector/input: durability barrier requires a running tailer")
+	}
+	if t.generationBarrier == nil {
+		barrier := newDurabilityBarrier()
+		select {
+		case t.m.events <- RawEvent{barrier: barrier}:
+			t.generationBarrier = barrier
+		case <-t.runCtx.Done():
+			return t.runCtx.Err()
+		}
+	}
+	select {
+	case <-t.generationBarrier.done:
+		t.emittedSinceFence = false
+		t.generationBarrier = nil
+		return nil
+	case <-t.runCtx.Done():
+		return t.runCtx.Err()
+	}
 }
 
 // resetCurrentGeneration records a rewrite against the file's latest state.
@@ -1077,15 +1366,15 @@ func (t *tailer) resetCurrentGeneration() bool {
 	t.rewritePending = true
 	fi, err := t.f.Stat()
 	if err != nil {
-		t.m.setReadError(t.pathStr(), err)
+		t.setReadError(err)
 		return false
 	}
 	if fi.Size() < 0 {
-		t.m.setReadError(t.pathStr(), errors.New("file has a negative size"))
+		t.setReadError(errors.New("file has a negative size"))
 		return false
 	}
 	if err := t.resetGeneration(fi); err != nil {
-		t.m.setReadError(t.pathStr(), err)
+		t.setReadError(err)
 		return false
 	}
 	// #nosec G115 -- the negative-size case is rejected above.
@@ -1100,7 +1389,7 @@ func (t *tailer) resetCurrentGeneration() bool {
 // checkpoint I/O.
 func (t *tailer) handleSourceValidationFailure(matches bool, err error) bool {
 	if err != nil {
-		t.m.setReadError(t.pathStr(), err)
+		t.setReadError(err)
 	}
 	changed := !matches &&
 		(err == nil || errors.Is(err, errSourceSnapshotChanged))
@@ -1210,8 +1499,10 @@ func checkedFileOffset(offset uint64) (int64, error) {
 // shouldFlushInactive reports whether a buffered multiline partial has sat
 // unchanged (the file stopped growing) for at least Config.FlushAfter.
 func (t *tailer) shouldFlushInactive(pendingLen int) bool {
-	if !t.m.cfg.Multiline || t.m.cfg.FlushAfter <= 0 || pendingLen == 0 {
-		return false
-	}
-	return time.Since(t.lastSizeChange) >= t.m.cfg.FlushAfter
+	return pendingLen > 0 && t.inactivityElapsed()
+}
+
+func (t *tailer) inactivityElapsed() bool {
+	return t.m.cfg.Multiline && t.m.cfg.FlushAfter > 0 &&
+		time.Since(t.lastSizeChange) >= t.m.cfg.FlushAfter
 }

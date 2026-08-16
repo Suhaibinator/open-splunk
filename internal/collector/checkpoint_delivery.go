@@ -3,6 +3,7 @@ package collector
 import (
 	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/Suhaibinator/open-splunk/internal/collector/input"
 	"github.com/Suhaibinator/open-splunk/internal/collector/wal"
@@ -75,6 +76,14 @@ func sourceCheckpointsFromWAL(
 					sourceMark.EventIndex,
 				)
 			}
+			if mark.offset == current.offset && mark.guardLength != 0 && current.guardLength != 0 &&
+				(mark.guardLength != current.guardLength || mark.guardFingerprint != current.guardFingerprint) {
+				return nil, fmt.Errorf(
+					"collector: reconstruct checkpoint from batch %d event %d: rewrite guard conflicts at the same source offset",
+					sourceMark.BatchSequence,
+					sourceMark.EventIndex,
+				)
+			}
 		}
 		if entry := discovery[key]; entry.found &&
 			mark.identity.Generation == entry.checkpoint.Identity.Generation &&
@@ -90,7 +99,9 @@ func sourceCheckpointsFromWAL(
 		}
 		if !ok ||
 			mark.identity.Generation > current.identity.Generation ||
-			(mark.identity.Generation == current.identity.Generation && mark.offset >= current.offset) {
+			(mark.identity.Generation == current.identity.Generation &&
+				(mark.offset > current.offset ||
+					mark.offset == current.offset && (mark.guardLength != 0 || current.guardLength == 0))) {
 			marks[key] = mark
 		}
 	}
@@ -100,9 +111,17 @@ func sourceCheckpointsFromWAL(
 		ordered = append(ordered, input.Checkpoint{
 			InputID: mark.inputID, Identity: mark.identity, Path: mark.path,
 			Offset: mark.offset, LineNumber: mark.lineNumber,
-			NextLineNumber: mark.nextLineNumber,
+			NextLineNumber:   mark.nextLineNumber,
+			GuardFingerprint: mark.guardFingerprint,
+			GuardLength:      mark.guardLength,
 		})
 	}
+	sort.Slice(ordered, func(left, right int) bool {
+		if ordered[left].InputID != ordered[right].InputID {
+			return ordered[left].InputID < ordered[right].InputID
+		}
+		return ordered[left].Identity.String() < ordered[right].Identity.String()
+	})
 	return ordered, nil
 }
 
@@ -140,6 +159,9 @@ func checkpointMarkFromSource(
 	}
 	if source.ConflictingMetadata {
 		return checkpointMark{}, false, errors.New("file origin has conflicting metadata")
+	}
+	if source.HasGuardFingerprint != source.HasGuardLength {
+		return checkpointMark{}, false, errors.New("file origin has incomplete rewrite guard metadata")
 	}
 	identity, err := input.ParseFileIdentity(source.FileIdentity)
 	if err != nil {
@@ -198,9 +220,33 @@ func checkpointMarkFromSource(
 		return checkpointMark{}, false, errors.New("file origin is missing file_fingerprint_length")
 	}
 
+	candidate := input.Checkpoint{
+		InputID: source.InputID, Identity: identity, Path: path,
+		Offset: source.EndOffset, LineNumber: source.LineNumber,
+		NextLineNumber: source.NextLineNumber,
+	}
+	if source.HasGuardFingerprint {
+		candidate.GuardFingerprint = source.GuardFingerprint
+		candidate.GuardLength = source.GuardLength
+	}
+	if entry.found && cp.Identity.String() == identity.String() && cp.Offset == candidate.Offset {
+		switch {
+		case !source.HasGuardFingerprint:
+			candidate.GuardFingerprint = cp.GuardFingerprint
+			candidate.GuardLength = cp.GuardLength
+		case cp.GuardLength != 0 &&
+			(cp.GuardLength != candidate.GuardLength || cp.GuardFingerprint != candidate.GuardFingerprint):
+			return checkpointMark{}, false, errors.New("file origin rewrite guard conflicts with durable checkpoint")
+		}
+	}
+	if err := input.ValidateCheckpoint(candidate); err != nil {
+		return checkpointMark{}, false, fmt.Errorf("file origin checkpoint is invalid: %w", err)
+	}
+
 	return checkpointMark{
-		inputID: source.InputID, identity: identity, path: path,
-		offset: source.EndOffset, lineNumber: source.LineNumber,
-		nextLineNumber: source.NextLineNumber,
+		inputID: candidate.InputID, identity: candidate.Identity, path: candidate.Path,
+		offset: candidate.Offset, lineNumber: candidate.LineNumber,
+		nextLineNumber:   candidate.NextLineNumber,
+		guardFingerprint: candidate.GuardFingerprint, guardLength: candidate.GuardLength,
 	}, false, nil
 }

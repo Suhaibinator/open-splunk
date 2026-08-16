@@ -10,6 +10,8 @@ import (
 	"io"
 	"regexp"
 	"strings"
+
+	"github.com/Suhaibinator/open-splunk/internal/sha256hex"
 )
 
 const (
@@ -121,13 +123,7 @@ func WriteIdentity(output io.Writer, identity Identity) error {
 // ValidSHA256 reports whether value is one canonical lowercase SHA-256 hex
 // digest.
 func ValidSHA256(value string) bool {
-	if len(value) != sha256.Size*2 {
-		return false
-	}
-	decoded, err := hex.DecodeString(value)
-	return err == nil &&
-		len(decoded) == sha256.Size &&
-		hex.EncodeToString(decoded) == value
+	return sha256hex.Valid(value)
 }
 
 // Equal reports exact cross-component identity equality.

@@ -13,9 +13,11 @@ import (
 	"unicode/utf8"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/collectorlimits"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
 	"github.com/Suhaibinator/open-splunk/internal/protocolid"
+	"github.com/Suhaibinator/open-splunk/internal/sha256hex"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -710,6 +712,26 @@ func validateEventStrings(event *opensplunkv1.LogEvent) *EventError {
 				opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_VALUE_INVALID,
 				"origin next_line_number is invalid", "origin.next_line_number", "invalid_range",
 			)
+		}
+		guardFingerprintPresent := origin.CheckpointGuardFingerprint != nil
+		guardLengthPresent := origin.CheckpointGuardLength != nil
+		if guardFingerprintPresent != guardLengthPresent {
+			return eventFailure(
+				opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_VALUE_INVALID,
+				"origin checkpoint rewrite guard is incomplete", "origin.checkpoint_guard_fingerprint", "required_together",
+			)
+		}
+		if guardFingerprintPresent {
+			fingerprint := origin.GetCheckpointGuardFingerprint()
+			length := origin.GetCheckpointGuardLength()
+			validDigest := sha256hex.Valid(fingerprint)
+			if length == 0 || length > collectorlimits.MaximumCheckpointGuardBytes ||
+				origin.EndOffset == nil || uint64(length) > origin.GetEndOffset() || !validDigest {
+				return eventFailure(
+					opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_VALUE_INVALID,
+					"origin checkpoint rewrite guard is invalid", "origin.checkpoint_guard_fingerprint", "invalid_rewrite_guard",
+				)
+			}
 		}
 	}
 	return nil

@@ -201,6 +201,143 @@ func TestCommitTerminalCheckpointsKeepsIdenticalFilesIndependentByInput(t *testi
 	}
 }
 
+func TestSourceCheckpointsFromWALReturnsDeterministicOrder(t *testing.T) {
+	t.Parallel()
+	store, err := input.NewCheckpointStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewCheckpointStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	first := input.FileIdentity{
+		Device: 1, Inode: 3, Generation: 1,
+		Fingerprint: strings.Repeat("ab", 32), FingerprintLength: 64,
+	}
+	second := input.FileIdentity{
+		Device: 1, Inode: 2, Generation: 1,
+		Fingerprint: strings.Repeat("cd", 32), FingerprintLength: 64,
+	}
+	marks := []wal.SourceCheckpointMark{
+		checkpointSourceMarkForInput("z-input", 1, first, "/logs/z.log", 10, 1),
+		checkpointSourceMarkForInput("a-input", 2, first, "/logs/a-3.log", 20, 2),
+		checkpointSourceMarkForInput("a-input", 3, second, "/logs/a-2.log", 30, 3),
+	}
+
+	got, err := sourceCheckpointsFromWAL(store, marks)
+	if err != nil {
+		t.Fatalf("sourceCheckpointsFromWAL: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("checkpoint count = %d, want 3", len(got))
+	}
+	if got[0].InputID != "a-input" || got[0].Identity.String() != second.String() ||
+		got[1].InputID != "a-input" || got[1].Identity.String() != first.String() ||
+		got[2].InputID != "z-input" {
+		t.Fatalf("checkpoint order = [%s/%s, %s/%s, %s/%s]",
+			got[0].InputID, got[0].Identity.String(),
+			got[1].InputID, got[1].Identity.String(),
+			got[2].InputID, got[2].Identity.String())
+	}
+}
+
+func TestCommitTerminalCheckpointsPersistsRewriteGuard(t *testing.T) {
+	t.Parallel()
+	store, err := input.NewCheckpointStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewCheckpointStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	identity := input.FileIdentity{
+		Device: 7, Inode: 9, Generation: 1,
+		Fingerprint: strings.Repeat("ab", 32), FingerprintLength: 64,
+	}
+	if err := store.Set(input.Checkpoint{
+		InputID: testCheckpointInputID, Identity: identity, Path: "/logs/app.log",
+	}); err != nil {
+		t.Fatalf("seed checkpoint: %v", err)
+	}
+	mark := checkpointSourceMark(1, identity, 100, 1)
+	mark.GuardFingerprint = strings.Repeat("cd", 32)
+	mark.GuardLength = 32
+	mark.HasGuardFingerprint = true
+	mark.HasGuardLength = true
+
+	if _, err := commitTerminalCheckpoints(store, []wal.SourceCheckpointMark{mark}); err != nil {
+		t.Fatalf("commitTerminalCheckpoints: %v", err)
+	}
+	got, ok, err := store.Get(testCheckpointInputID, identity)
+	if err != nil || !ok {
+		t.Fatalf("Get = (%+v, %t, %v)", got, ok, err)
+	}
+	if got.GuardFingerprint != mark.GuardFingerprint || got.GuardLength != mark.GuardLength {
+		t.Fatalf("checkpoint guard = %q/%d, want %q/%d", got.GuardFingerprint, got.GuardLength, mark.GuardFingerprint, mark.GuardLength)
+	}
+}
+
+func TestSourceCheckpointsFromWALValidatesRewriteGuard(t *testing.T) {
+	t.Parallel()
+	store, err := input.NewCheckpointStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewCheckpointStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	identity := input.FileIdentity{
+		Device: 7, Inode: 9, Generation: 1,
+		Fingerprint: strings.Repeat("ab", 32), FingerprintLength: 64,
+	}
+	if err := store.Set(input.Checkpoint{
+		InputID: testCheckpointInputID, Identity: identity, Path: "/logs/app.log",
+	}); err != nil {
+		t.Fatalf("seed checkpoint: %v", err)
+	}
+	for _, mutate := range []func(*wal.SourceCheckpointMark){
+		func(mark *wal.SourceCheckpointMark) { mark.HasGuardFingerprint = true },
+		func(mark *wal.SourceCheckpointMark) {
+			mark.HasGuardFingerprint, mark.HasGuardLength = true, true
+			mark.GuardFingerprint, mark.GuardLength = "bad", 1
+		},
+		func(mark *wal.SourceCheckpointMark) {
+			mark.HasGuardFingerprint, mark.HasGuardLength = true, true
+			mark.GuardFingerprint, mark.GuardLength = strings.Repeat("cd", 32), 101
+		},
+	} {
+		mark := checkpointSourceMark(1, identity, 100, 1)
+		mutate(&mark)
+		if _, err := sourceCheckpointsFromWAL(store, []wal.SourceCheckpointMark{mark}); err == nil {
+			t.Fatalf("sourceCheckpointsFromWAL(%+v) error = nil", mark)
+		}
+	}
+}
+
+func TestSourceCheckpointsFromWALLegacyMarkKeepsDurableGuardAtSameOffset(t *testing.T) {
+	t.Parallel()
+	store, err := input.NewCheckpointStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewCheckpointStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	identity := input.FileIdentity{
+		Device: 7, Inode: 9, Generation: 1,
+		Fingerprint: strings.Repeat("ab", 32), FingerprintLength: 64,
+	}
+	wantGuard := strings.Repeat("ef", 32)
+	if err := store.Set(input.Checkpoint{
+		InputID: testCheckpointInputID, Identity: identity, Path: "/logs/app.log",
+		Offset: 100, LineNumber: 1, NextLineNumber: 2,
+		GuardFingerprint: wantGuard, GuardLength: 32,
+	}); err != nil {
+		t.Fatalf("seed checkpoint: %v", err)
+	}
+	checkpoints, err := sourceCheckpointsFromWAL(store, []wal.SourceCheckpointMark{
+		checkpointSourceMark(1, identity, 100, 1),
+	})
+	if err != nil {
+		t.Fatalf("sourceCheckpointsFromWAL: %v", err)
+	}
+	if len(checkpoints) != 1 || checkpoints[0].GuardFingerprint != wantGuard || checkpoints[0].GuardLength != 32 {
+		t.Fatalf("reconstructed checkpoints = %+v", checkpoints)
+	}
+}
+
 func checkpointSourceMark(sequence uint64, identity input.FileIdentity, end, line uint64) wal.SourceCheckpointMark {
 	return checkpointSourceMarkForInput(
 		testCheckpointInputID,

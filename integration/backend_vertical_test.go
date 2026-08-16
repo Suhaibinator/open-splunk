@@ -2061,9 +2061,11 @@ func assertCrashSafeAcknowledgedCollectorState(
 	assertCollectorCheckpoint(t, stateDir, wantOffset, 1)
 
 	queue, err := wal.Open(wal.Options{
-		Dir:         filepath.Join(stateDir, "wal"),
-		Sync:        wal.SyncAlways,
-		CollectorID: readCollectorIdentity(t, stateDir),
+		Dir:           filepath.Join(stateDir, "wal"),
+		Sync:          wal.SyncAlways,
+		CollectorID:   readCollectorIdentity(t, stateDir),
+		ProtocolMajor: 1,
+		ProtocolMinor: 0,
 	})
 	if err != nil {
 		t.Fatalf("reopen crash-safe collector WAL: %v", err)
@@ -2165,9 +2167,11 @@ func assertDurableCollectorState(t *testing.T, stateDir string, wantOffset, want
 	assertCollectorCheckpoint(t, stateDir, wantOffset, wantLine)
 
 	queue, err := wal.Open(wal.Options{
-		Dir:         filepath.Join(stateDir, "wal"),
-		Sync:        wal.SyncAlways,
-		CollectorID: readCollectorIdentity(t, stateDir),
+		Dir:           filepath.Join(stateDir, "wal"),
+		Sync:          wal.SyncAlways,
+		CollectorID:   readCollectorIdentity(t, stateDir),
+		ProtocolMajor: 1,
+		ProtocolMinor: 0,
 	})
 	if err != nil {
 		t.Fatalf("reopen collector WAL: %v", err)
@@ -2233,9 +2237,11 @@ func assertPendingCollectorState(t *testing.T, stateDir, logPath string, wantOff
 	}
 
 	queue, err := wal.Open(wal.Options{
-		Dir:         filepath.Join(stateDir, "wal"),
-		Sync:        wal.SyncAlways,
-		CollectorID: readCollectorIdentity(t, stateDir),
+		Dir:           filepath.Join(stateDir, "wal"),
+		Sync:          wal.SyncAlways,
+		CollectorID:   readCollectorIdentity(t, stateDir),
+		ProtocolMajor: 1,
+		ProtocolMinor: 0,
 	})
 	if err != nil {
 		t.Fatalf("reopen pending collector WAL: %v", err)

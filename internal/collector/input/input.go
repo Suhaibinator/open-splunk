@@ -3,6 +3,7 @@ package input
 import (
 	"context"
 	"strconv"
+	"sync"
 	"time"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
@@ -74,13 +75,56 @@ type SourceRef struct {
 	EndOffset      uint64
 	LineNumber     uint64
 	NextLineNumber uint64
+	// GuardFingerprint is the lowercase SHA-256 digest of the exact source
+	// range [EndOffset-GuardLength, EndOffset). Terminal delivery persists this
+	// bounded trailing evidence with the checkpoint so restart can distinguish
+	// an in-place rewrite that preserved the file's leading fingerprint.
+	GuardFingerprint string
+	GuardLength      uint32
 }
 
 // RawEvent is one framed, undecoded event emitted by the tailer. Bytes is owned
 // by the receiver (the tailer does not retain or mutate it after send).
+//
+// A durability-barrier event is an internal control record: Bytes and Source
+// are zero, IsDurabilityBarrier reports true, and the receiver must not decode
+// it. The receiver must acknowledge it only after every earlier event received
+// from this Manager has either crossed its durable ingestion boundary or
+// reached a deliberate terminal disposition. Until then the originating
+// tailer will not persist a checkpoint for a rewritten file generation.
 type RawEvent struct {
 	Bytes  []byte
 	Source SourceRef
+
+	barrier *durabilityBarrier
+}
+
+// durabilityBarrier coordinates an in-process FIFO durability fence. It is
+// deliberately absent from protobuf and checkpoint schemas: after a crash,
+// restart derives the same ordering boundary from the durable WAL.
+type durabilityBarrier struct {
+	once sync.Once
+	done chan struct{}
+}
+
+func newDurabilityBarrier() *durabilityBarrier {
+	return &durabilityBarrier{done: make(chan struct{})}
+}
+
+// IsDurabilityBarrier reports whether event is an internal durability control
+// record rather than a framed source event.
+func (event RawEvent) IsDurabilityBarrier() bool {
+	return event.barrier != nil
+}
+
+// AcknowledgeDurabilityBarrier releases the tailer waiting on a durability
+// control record. It is safe to call more than once and is a no-op for ordinary
+// events.
+func (event RawEvent) AcknowledgeDurabilityBarrier() {
+	if event.barrier == nil {
+		return
+	}
+	event.barrier.once.Do(func() { close(event.barrier.done) })
 }
 
 // Checkpoint is the persisted read position for one input and file identity.
@@ -91,7 +135,13 @@ type Checkpoint struct {
 	Offset         uint64
 	LineNumber     uint64
 	NextLineNumber uint64
-	UpdatedAt      time.Time
+	// GuardFingerprint is the lowercase SHA-256 digest of the exact source
+	// range [Offset-GuardLength, Offset). Older checkpoints omit both fields;
+	// the manager upgrades them after it has validated the legacy leading
+	// fingerprint.
+	GuardFingerprint string `json:"guard_fingerprint,omitempty"`
+	GuardLength      uint32 `json:"guard_length,omitempty"`
+	UpdatedAt        time.Time
 }
 
 // ManagerCheckpointStore is the checkpoint view used by file discovery and
@@ -166,8 +216,8 @@ type Manager interface {
 	// Run blocks tailing until ctx is canceled or a fatal setup error occurs.
 	// Per-file read errors are surfaced through Health, not returned.
 	Run(ctx context.Context) error
-	// Events returns the channel of framed raw events. It is closed when Run
-	// returns.
+	// Events returns the channel of framed raw events and internal durability
+	// barriers described by RawEvent. It is closed when Run returns.
 	Events() <-chan RawEvent
 	// Health returns the current input health snapshot.
 	Health() Health

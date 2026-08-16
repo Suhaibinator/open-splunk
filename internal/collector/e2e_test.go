@@ -604,7 +604,10 @@ func TestE2ECollectorFixtureToIngest(t *testing.T) {
 	if off := diskCheckpointOffset(t, stateDir); off != uint64(len(content)) {
 		t.Fatalf("on-disk checkpoint offset = %d, want %d", off, len(content))
 	}
-	q, err := wal.Open(wal.Options{Dir: filepath.Join(stateDir, walSubdir), Sync: wal.SyncAlways, CollectorID: d.collectorID})
+	q, err := wal.Open(wal.Options{
+		Dir: filepath.Join(stateDir, walSubdir), Sync: wal.SyncAlways,
+		CollectorID: d.collectorID, ProtocolMajor: protocolMajor, ProtocolMinor: protocolMinor,
+	})
 	if err != nil {
 		t.Fatalf("reopen WAL: %v", err)
 	}

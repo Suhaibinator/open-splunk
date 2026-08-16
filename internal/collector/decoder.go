@@ -15,8 +15,10 @@ import (
 	"unicode/utf8"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/collectorlimits"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/jsonnumber"
+	"github.com/Suhaibinator/open-splunk/internal/sha256hex"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -54,13 +56,15 @@ type DecodeConfig struct {
 // SourcePosition is the durable origin of one framed event. Both line fields
 // are zero when a legacy checkpoint cannot supply an exact physical cursor.
 type SourcePosition struct {
-	FileIdentity          string
-	SourcePath            string
-	FileFingerprintLength uint32
-	StartOffset           uint64
-	EndOffset             uint64
-	LineNumber            uint64
-	NextLineNumber        uint64
+	FileIdentity               string
+	SourcePath                 string
+	FileFingerprintLength      uint32
+	CheckpointGuardFingerprint string
+	CheckpointGuardLength      uint32
+	StartOffset                uint64
+	EndOffset                  uint64
+	LineNumber                 uint64
+	NextLineNumber             uint64
 }
 
 // Decoder converts framed source bytes to canonical protobuf events.
@@ -125,6 +129,20 @@ func (d *Decoder) Decode(raw []byte, position SourcePosition, collectedAt time.T
 	}
 	if position.EndOffset < position.StartOffset {
 		return nil, errors.New("source end offset precedes start offset")
+	}
+	if (position.CheckpointGuardFingerprint == "") != (position.CheckpointGuardLength == 0) {
+		return nil, errors.New("source checkpoint guard fingerprint and length must be present together")
+	}
+	if position.CheckpointGuardLength > 0 {
+		if position.CheckpointGuardLength > collectorlimits.MaximumCheckpointGuardBytes {
+			return nil, errors.New("source checkpoint guard exceeds the absolute length limit")
+		}
+		if uint64(position.CheckpointGuardLength) > position.EndOffset {
+			return nil, errors.New("source checkpoint guard extends before offset zero")
+		}
+		if !sha256hex.Valid(position.CheckpointGuardFingerprint) {
+			return nil, errors.New("source checkpoint guard fingerprint is not canonical SHA-256 hex")
+		}
 	}
 	if collectedAt.IsZero() {
 		return nil, errors.New("collection time is required")
@@ -531,7 +549,15 @@ func sourceOrigin(inputID string, position SourcePosition) *opensplunkv1.EventOr
 		origin.FileFingerprintLength = new(position.FileFingerprintLength)
 	}
 	if position.SourcePath != "" {
-		origin.SourcePath = new(position.SourcePath)
+		// Unix paths are arbitrary byte strings, while protobuf string fields must
+		// be valid UTF-8. Keep the raw path inside the input manager for file I/O,
+		// but normalize this diagnostic wire copy so one unusual filename cannot
+		// make WAL marshaling fail and stop the collector.
+		path := sanitizeCollectorBoundaryText(
+			position.SourcePath,
+			collectorlimits.MaximumSourceBytes,
+		)
+		origin.SourcePath = new(path)
 	}
 	origin.StartOffset = new(position.StartOffset)
 	origin.EndOffset = new(position.EndOffset)
@@ -540,6 +566,10 @@ func sourceOrigin(inputID string, position SourcePosition) *opensplunkv1.EventOr
 	}
 	if position.NextLineNumber != 0 {
 		origin.NextLineNumber = new(position.NextLineNumber)
+	}
+	if position.CheckpointGuardLength != 0 {
+		origin.CheckpointGuardFingerprint = new(position.CheckpointGuardFingerprint)
+		origin.CheckpointGuardLength = new(position.CheckpointGuardLength)
 	}
 	return origin
 }

@@ -1,13 +1,16 @@
 package wal
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,6 +29,11 @@ var errSimulatedCrash = errors.New("collector/wal: simulated crash after meta wr
 // after successor segments are durably quarantined but before the triggering
 // corrupt segment is repaired. Production code never enables the hook.
 var errSimulatedRecoveryCrash = errors.New("collector/wal: simulated crash during corruption recovery")
+
+// quarantineStorageRefreshInterval bounds directory scans when an operator-
+// managed quarantine artifact keeps the queue at capacity. Healthy appends do
+// not scan, and removal is observed within this interval while pressure lasts.
+const quarantineStorageRefreshInterval = time.Second
 
 // batchDesc locates one unacked batch record on disk and caches the cheap
 // bookkeeping the queue needs without holding the marshaled batch in memory.
@@ -56,6 +64,18 @@ type segInfo struct {
 	firstSeq uint64
 	lastSeq  uint64
 	sealed   bool
+	size     uint64
+}
+
+// recoveredSegmentScan is the compact result of streaming one segment during
+// startup. descriptors contains only the valid unacknowledged prefix; decoded
+// EventBatch payloads are released record by record.
+type recoveredSegmentScan struct {
+	result         scanResult
+	validRecords   uint64
+	lastSequence   uint64
+	descriptors    []batchDesc
+	semanticReason string
 }
 
 // queue is the concrete Queue. A single mutex guards all mutable state; it is
@@ -77,19 +97,29 @@ type queue struct {
 	unackedHeadWaste int
 	deliverIdx       int
 	liveBytes        uint64
+	physicalBytes    uint64
+	quarantinedBytes uint64
 	queuedEvents     uint64
 	// terminal contains exact out-of-order acknowledgments not yet representable
 	// by the persisted cumulative high-water mark. It is intentionally volatile:
 	// losing it on crash only causes safe at-least-once replay.
 	terminal map[uint64]struct{}
 
-	segments    []*segInfo
-	activeSeg   *segInfo
-	active      *os.File
-	activeSize  int64
-	activeDirty bool
+	segments        []*segInfo
+	activeSeg       *segInfo
+	active          *os.File
+	activeSize      int64
+	activeDirty     bool
+	syncErr         error
+	syncFile        func(*os.File) error
+	syncDirectory   func(string) error
+	removeFile      func(string) error
+	persistMetaFile func(string, walMeta) error
 
-	quarantined uint64
+	quarantined                uint64
+	recoveryWarning            string
+	nextQuarantineStatsRefresh time.Time
+	quarantineStatsRefreshErr  error
 
 	notify   chan struct{}
 	closedCh chan struct{}
@@ -112,7 +142,16 @@ func openQueue(opts Options) (*queue, error) {
 	if opts.Dir == "" {
 		return nil, errors.New("collector/wal: Options.Dir is required")
 	}
-	if err := os.MkdirAll(opts.Dir, 0o700); err != nil {
+	if opts.ProtocolMajor == 0 {
+		return nil, errors.New("collector/wal: ProtocolMajor must be non-zero")
+	}
+	if opts.Sync < SyncOnSeal || opts.Sync > SyncAlways {
+		return nil, fmt.Errorf("collector/wal: invalid sync policy %d", opts.Sync)
+	}
+	if opts.Sync == SyncInterval && opts.SyncInterval <= 0 {
+		return nil, errors.New("collector/wal: SyncInterval requires a positive interval")
+	}
+	if _, err := mkdirAllDurable(opts.Dir, 0o700); err != nil {
 		return nil, fmt.Errorf("collector/wal: create dir: %w", err)
 	}
 	// Tighten an existing directory too: MkdirAll leaves a pre-existing dir's mode
@@ -122,13 +161,20 @@ func openQueue(opts Options) (*queue, error) {
 	if err := os.Chmod(opts.Dir, 0o700); err != nil {
 		return nil, fmt.Errorf("collector/wal: secure dir: %w", err)
 	}
+	if err := recoverInterruptedQuarantines(opts.Dir); err != nil {
+		return nil, fmt.Errorf("collector/wal: recover interrupted quarantine: %w", err)
+	}
 
 	q := &queue{
-		opts:     opts,
-		dir:      opts.Dir,
-		notify:   make(chan struct{}, 1),
-		closedCh: make(chan struct{}),
-		terminal: make(map[uint64]struct{}),
+		opts:            opts,
+		dir:             opts.Dir,
+		notify:          make(chan struct{}, 1),
+		closedCh:        make(chan struct{}),
+		terminal:        make(map[uint64]struct{}),
+		syncFile:        func(file *os.File) error { return file.Sync() },
+		syncDirectory:   fsyncDir,
+		removeFile:      os.Remove,
+		persistMetaFile: writeMeta,
 	}
 
 	m, ok, err := readMeta(opts.Dir)
@@ -147,13 +193,16 @@ func openQueue(opts Options) (*queue, error) {
 	if err := q.recover(); err != nil {
 		return nil, err
 	}
+	if err := q.refreshStorageStatsLocked(); err != nil {
+		return nil, err
+	}
 
 	// Reclaim any segment that was already fully acked before the last crash.
 	if err := q.reclaimLocked(); err != nil {
 		return nil, err
 	}
 
-	if opts.Sync == SyncInterval && opts.SyncInterval > 0 {
+	if opts.Sync == SyncInterval {
 		q.syncStop = make(chan struct{})
 		q.syncDone = make(chan struct{})
 		go q.syncLoop(opts.SyncInterval)
@@ -173,24 +222,26 @@ func (q *queue) recover() error {
 		return err
 	}
 	var maxSeq uint64
+	var lastSequence uint64
+	batchIDs := make(map[string]uint64)
 	for nameIndex, name := range names {
 		firstSeq, _ := parseSegmentName(name)
 		if firstSeq > maxSeq {
 			maxSeq = firstSeq
 		}
-		res, err := scanSegment(filepath.Join(q.dir, name))
+		scan, err := q.scanRecoverableSegment(name, &lastSequence, batchIDs, &maxSeq)
 		if err != nil {
 			return err
 		}
-		// Even records behind the barrier contribute only to the defensive next
-		// sequence calculation. They are never made live again. Identity is still
-		// validated before recovery mutates anything: a corrupt prefix must not
-		// disguise intact batches owned by a different collector as quarantine.
-		if err := q.observeRecoveredRecords(name, res.records, &maxSeq); err != nil {
-			return err
+		res := scan.result
+		if scan.semanticReason != "" && q.recoveryWarning == "" {
+			q.recoveryWarning = fmt.Sprintf("%s: %s", name, scan.semanticReason)
 		}
 		stopAfterSegment := res.corrupt
 		if res.corrupt {
+			if q.recoveryWarning == "" {
+				q.recoveryWarning = fmt.Sprintf("%s: corrupt record at byte offset %d", name, res.badOffset)
+			}
 			// Discover the full allocated sequence floor before mutating any
 			// successor. This preserves non-reuse even if meta.json was missing and
 			// recovery crashes partway through quarantine.
@@ -199,11 +250,9 @@ func (q *queue) recover() error {
 				if successorFirst > maxSeq {
 					maxSeq = successorFirst
 				}
-				successorScan, scanErr := scanSegment(filepath.Join(q.dir, successor))
-				if scanErr != nil {
-					return scanErr
-				}
-				if err := q.observeRecoveredRecords(successor, successorScan.records, &maxSeq); err != nil {
+				if err := q.observeSegmentRecords(
+					successor, &lastSequence, batchIDs, &maxSeq,
+				); err != nil {
 					return err
 				}
 			}
@@ -230,7 +279,7 @@ func (q *queue) recover() error {
 			}
 			q.quarantined++
 		}
-		if len(res.records) == 0 {
+		if scan.validRecords == 0 {
 			// Whole segment was garbage (badOffset==0): the live file no longer
 			// exists after quarantine, so there is nothing to track.
 			if stopAfterSegment {
@@ -238,29 +287,15 @@ func (q *queue) recover() error {
 			}
 			continue
 		}
-		seg := &segInfo{name: name, firstSeq: firstSeq, sealed: true}
-		for _, rec := range res.records {
-			seq := rec.batch.GetBatchSequence()
-			seg.lastSeq = seq
-			if seq <= q.lastAcked {
-				// Already acknowledged before the crash; not part of the queue.
-				continue
-			}
-			var createdAt time.Time
-			if ts := rec.batch.GetCreatedAt(); ts != nil {
-				createdAt = ts.AsTime()
-			}
-			d := batchDesc{
-				seq:         seq,
-				segName:     name,
-				payloadOff:  rec.payloadOff,
-				payloadLen:  rec.payloadLen,
-				crc:         rec.crc,
-				eventCount:  uint64(len(rec.batch.GetEvents())),
-				sizeOnDisk:  uint64(recordHeaderSize) + uint64(rec.payloadLen),
-				createdAt:   createdAt,
-				sourceMarks: checkpointMarksForBatch(seq, rec.batch.GetEvents()),
-			}
+		info, err := os.Stat(filepath.Join(q.dir, name))
+		if err != nil {
+			return err
+		}
+		seg := &segInfo{
+			name: name, firstSeq: firstSeq, lastSeq: scan.lastSequence,
+			sealed: true, size: uint64(info.Size()),
+		}
+		for _, d := range scan.descriptors {
 			q.appendUnackedLocked(d)
 			q.liveBytes += d.sizeOnDisk
 			q.queuedEvents += d.eventCount
@@ -277,24 +312,291 @@ func (q *queue) recover() error {
 	return nil
 }
 
-func (q *queue) observeRecoveredRecords(
-	segmentName string,
-	records []scannedRecord,
+// scanRecoverableSegment streams one segment, validating ownership for every
+// physically intact record even after a semantic barrier. Only the valid prefix
+// contributes descriptors, so a large CRC-valid file cannot retain every
+// decoded EventBatch in memory during startup.
+func (q *queue) scanRecoverableSegment(
+	name string,
+	lastSequence *uint64,
+	batchIDs map[string]uint64,
+	maximumSequence *uint64,
+) (recoveredSegmentScan, error) {
+	firstSequence, _ := parseSegmentName(name)
+	var scan recoveredSegmentScan
+	var semanticOffset int64
+	semanticBarrier := false
+	recordIndex := 0
+	result, err := walkSegment(filepath.Join(q.dir, name), func(record scannedRecord) error {
+		index := recordIndex
+		recordIndex++
+		// Even records behind the semantic barrier contribute to the defensive
+		// sequence floor and must have the configured owner/protocol. They never
+		// become live, but foreign intact data must not be hidden by an earlier
+		// malformed record.
+		if err := q.validateRecoveredOwnership(name, record); err != nil {
+			return err
+		}
+		if semanticBarrier {
+			return nil
+		}
+		if reason := validateRecoveredRecord(
+			firstSequence, index, record, lastSequence, batchIDs,
+		); reason != "" {
+			semanticBarrier = true
+			semanticOffset = record.payloadOff - recordHeaderSize
+			scan.semanticReason = reason
+			return nil
+		}
+
+		batch := record.batch
+		sequence := batch.GetBatchSequence()
+		if sequence > *maximumSequence {
+			*maximumSequence = sequence
+		}
+		scan.validRecords++
+		scan.lastSequence = sequence
+		if sequence <= q.lastAcked {
+			return nil
+		}
+		createdAt := batch.GetCreatedAt().AsTime()
+		scan.descriptors = append(scan.descriptors, batchDesc{
+			seq:         sequence,
+			segName:     name,
+			payloadOff:  record.payloadOff,
+			payloadLen:  record.payloadLen,
+			crc:         record.crc,
+			eventCount:  uint64(len(batch.GetEvents())),
+			sizeOnDisk:  uint64(recordHeaderSize) + uint64(record.payloadLen),
+			createdAt:   createdAt,
+			sourceMarks: checkpointMarksForBatch(sequence, batch.GetEvents()),
+		})
+		return nil
+	})
+	if err != nil {
+		return recoveredSegmentScan{}, err
+	}
+	if err := observeAllocatedSequenceFloor(
+		name, firstSequence, result, maximumSequence,
+	); err != nil {
+		return recoveredSegmentScan{}, err
+	}
+	if semanticBarrier {
+		result.badOffset = semanticOffset
+		result.corrupt = true
+	}
+	scan.result = result
+	return scan, nil
+}
+
+// observeSegmentRecords streams a segment behind an already-established gap.
+// It retains no descriptors but still validates immutable ownership/protocol
+// and discovers the allocated sequence floor before quarantine mutates files.
+func (q *queue) observeSegmentRecords(
+	name string,
+	lastSequence *uint64,
+	batchIDs map[string]uint64,
 	maximumSequence *uint64,
 ) error {
-	for _, record := range records {
-		recoveredCollectorID := record.batch.GetCollectorId()
-		if recoveredCollectorID != q.opts.CollectorID {
-			return fmt.Errorf(
-				"collector/wal: recovered batch %d in %s has collector identity mismatch: batch %q, configured %q",
-				record.batch.GetBatchSequence(), segmentName, recoveredCollectorID, q.opts.CollectorID,
-			)
+	firstSequence, _ := parseSegmentName(name)
+	semanticBarrier := false
+	recordIndex := 0
+	result, err := walkSegment(filepath.Join(q.dir, name), func(record scannedRecord) error {
+		index := recordIndex
+		recordIndex++
+		if err := q.validateRecoveredOwnership(name, record); err != nil {
+			return err
+		}
+		if semanticBarrier {
+			return nil
+		}
+		if reason := validateRecoveredRecord(
+			firstSequence, index, record, lastSequence, batchIDs,
+		); reason != "" {
+			// The successor is already being quarantined whole. Ignore untrusted
+			// sequence values at and beyond its first semantic corruption rather
+			// than allowing a forged MaxUint64 to make recovery permanently fail.
+			semanticBarrier = true
+			return nil
 		}
 		if sequence := record.batch.GetBatchSequence(); sequence > *maximumSequence {
 			*maximumSequence = sequence
 		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	return observeAllocatedSequenceFloor(name, firstSequence, result, maximumSequence)
+}
+
+// observeAllocatedSequenceFloor derives a trustworthy allocation floor without
+// trusting semantic fields at or behind a corrupt record. Append writes records
+// contiguously within a segment: any counter burn without a record seals the
+// active segment before another Append. Thus the filename's first sequence plus
+// the count of physically intact records establishes the clean floor. Once a
+// physical record is corrupt, its framing and every later boundary are
+// untrusted. The remaining byte count therefore supplies a conservative upper
+// bound using the minimum possible nonempty frame size. Semantic validation may
+// raise the floor further for a legitimate historical gap.
+func observeAllocatedSequenceFloor(
+	name string,
+	firstSequence uint64,
+	result scanResult,
+	maximumSequence *uint64,
+) error {
+	floor := firstSequence
+	var additional uint64
+	switch {
+	case result.corrupt:
+		if result.badOffset < 0 || result.fileSize <= result.badOffset {
+			return fmt.Errorf("collector/wal: segment %s has invalid corrupt-tail bounds", name)
+		}
+		// A physical tail may contain later allocated records even though scanning
+		// stopped at the first bad CRC/header. Because the corrupt header can also
+		// falsify its payload length, no apparent later boundary is trustworthy.
+		// Every complete record occupies at least the fixed header plus one nonzero
+		// payload byte; ceil(tail/minimumFrame) also accounts for one final partial
+		// append. Over-burning is safe, while undercounting could reuse a sequence
+		// previously observed by the server.
+		const minimumRecordBytes = uint64(recordHeaderSize + 1)
+		tailBytes := uint64(result.fileSize - result.badOffset)
+		tailAllocations := tailBytes / minimumRecordBytes
+		if tailBytes%minimumRecordBytes != 0 {
+			tailAllocations++
+		}
+		if result.recordCount > math.MaxUint64-tailAllocations {
+			return fmt.Errorf("collector/wal: segment %s allocation count overflows", name)
+		}
+		allocationCount := result.recordCount + tailAllocations
+		additional = allocationCount - 1
+	case result.recordCount > 0:
+		additional = result.recordCount - 1
+	}
+	if additional > math.MaxUint64-firstSequence {
+		return fmt.Errorf("collector/wal: segment %s record count overflows batch sequence", name)
+	}
+	floor += additional
+	if floor > *maximumSequence {
+		*maximumSequence = floor
 	}
 	return nil
+}
+
+func (q *queue) refreshStorageStatsLocked() error {
+	entries, err := os.ReadDir(q.dir)
+	if err != nil {
+		return fmt.Errorf("collector/wal: inspect queue storage: %w", err)
+	}
+	var physicalBytes uint64
+	var quarantinedBytes uint64
+	var quarantined uint64
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return fmt.Errorf("collector/wal: stat %s: %w", entry.Name(), err)
+		}
+		if _, live := parseSegmentName(entry.Name()); live {
+			physicalBytes += uint64(info.Size())
+			continue
+		}
+		if strings.Contains(entry.Name(), corruptSuffix) {
+			quarantined++
+			quarantinedBytes += uint64(info.Size())
+		}
+	}
+	// Publish only after the entire directory scan succeeds. A transient Info
+	// failure must preserve the prior conservative accounting rather than leave
+	// a partial undercount that a later Append could mistake for free capacity.
+	q.physicalBytes = physicalBytes
+	q.quarantinedBytes = quarantinedBytes
+	q.quarantined = quarantined
+	if quarantined > 0 && q.recoveryWarning == "" {
+		q.recoveryWarning = "retained quarantine artifacts require operator review"
+	}
+	return nil
+}
+
+// refreshQuarantineStatsForCapacityLocked refreshes operator-managed
+// quarantine state at most once per interval while the queue is under pressure.
+// A failed scan is cached for the same interval: accounting remains at its last
+// fully observed (conservative) value, and callers continue to receive the
+// diagnostic error rather than mistaking stale state for available capacity.
+func (q *queue) refreshQuarantineStatsForCapacityLocked() error {
+	now := time.Now()
+	if !q.nextQuarantineStatsRefresh.IsZero() && now.Before(q.nextQuarantineStatsRefresh) {
+		return q.quarantineStatsRefreshErr
+	}
+	err := q.refreshStorageStatsLocked()
+	q.nextQuarantineStatsRefresh = time.Now().Add(quarantineStorageRefreshInterval)
+	q.quarantineStatsRefreshErr = err
+	return err
+}
+
+func (q *queue) validateRecoveredOwnership(segmentName string, record scannedRecord) error {
+	recoveredCollectorID := record.batch.GetCollectorId()
+	if recoveredCollectorID != q.opts.CollectorID {
+		return fmt.Errorf(
+			"collector/wal: recovered batch %d in %s has collector identity mismatch: batch %q, configured %q",
+			record.batch.GetBatchSequence(), segmentName, recoveredCollectorID, q.opts.CollectorID,
+		)
+	}
+	if record.batch.GetProtocolMajor() != q.opts.ProtocolMajor ||
+		record.batch.GetProtocolMinor() != q.opts.ProtocolMinor {
+		return fmt.Errorf(
+			"collector/wal: recovered batch %d in %s has protocol %d.%d, configured %d.%d",
+			record.batch.GetBatchSequence(), segmentName,
+			record.batch.GetProtocolMajor(), record.batch.GetProtocolMinor(),
+			q.opts.ProtocolMajor, q.opts.ProtocolMinor,
+		)
+	}
+	return nil
+}
+
+// validateRecoveredRecord validates invariants which the record CRC cannot
+// express. It returns the reason this record must form a global quarantine
+// barrier, or empty after advancing the semantic validation state. Ownership
+// and protocol are checked separately for every physically intact record.
+func validateRecoveredRecord(
+	firstSequence uint64,
+	recordIndex int,
+	record scannedRecord,
+	lastSequence *uint64,
+	batchIDs map[string]uint64,
+) string {
+	batch := record.batch
+	sequence := batch.GetBatchSequence()
+	switch {
+	case sequence == 0:
+		return "zero batch sequence"
+	case recordIndex == 0 && sequence != firstSequence:
+		return "segment filename does not match first record"
+	case sequence <= *lastSequence:
+		return "batch sequences are not globally increasing"
+	}
+	batchID := batch.GetBatchId()
+	parsedID, err := uuid.Parse(batchID)
+	if err != nil || parsedID.Version() != 4 {
+		return "batch id is not a UUIDv4"
+	}
+	if previous, duplicate := batchIDs[batchID]; duplicate {
+		return fmt.Sprintf("batch id duplicates sequence %d", previous)
+	}
+	if !bytes.Equal(batch.GetEventIdsSha256(), ComputeEventIDsDigest(batch.GetEvents())) {
+		return "event id digest mismatch"
+	}
+	if batch.GetUncompressedSizeBytes() != uncompressedEventBytes(batch.GetEvents()) {
+		return "uncompressed event size mismatch"
+	}
+	if batch.GetCreatedAt() == nil || batch.GetCreatedAt().CheckValid() != nil {
+		return "invalid created_at"
+	}
+	*lastSequence = sequence
+	batchIDs[batchID] = sequence
+	return ""
 }
 
 func (q *queue) persistRecoveredSequenceFloorLocked(maxSeq uint64) error {
@@ -317,8 +619,14 @@ func (q *queue) Append(events []*opensplunkv1.LogEvent) (*opensplunkv1.EventBatc
 	if q.closed {
 		return nil, ErrClosed
 	}
+	if q.syncErr != nil {
+		return nil, fmt.Errorf("collector/wal: storage sync is unhealthy: %w", q.syncErr)
+	}
 
 	seq := q.nextSeq
+	if seq == math.MaxUint64 {
+		return nil, errors.New("collector/wal: batch sequence exhausted uint64")
+	}
 	eventIDsDigest := ComputeEventIDsDigest(events)
 	if eventIDsDigest == nil {
 		return nil, ErrBatchTooLarge
@@ -334,39 +642,62 @@ func (q *queue) Append(events []*opensplunkv1.LogEvent) (*opensplunkv1.EventBatc
 		ProtocolMajor:         q.opts.ProtocolMajor,
 		ProtocolMinor:         q.opts.ProtocolMinor,
 	}
+	payloadSize := proto.Size(batch)
+	if payloadSize < 0 {
+		return nil, ErrBatchTooLarge
+	}
+	// Enforce the same stable payload ceiling used by recovery. Otherwise Append
+	// could successfully publish a record which this process would quarantine on
+	// its next restart. Size the message before marshaling so repeated QueueFull
+	// retries do not allocate and copy the entire event batch on every attempt.
+	// #nosec G115 -- proto.Size returned a non-negative int.
+	payloadSizeBytes := uint64(payloadSize)
+	if payloadSizeBytes > maximumRecordPayloadBytes {
+		return nil, ErrBatchTooLarge
+	}
+	recordSize := uint64(recordHeaderSize) + payloadSizeBytes
+
+	if err := q.ensureRecordCapacityLocked(recordSize); err != nil {
+		return nil, err
+	}
+
 	payload, err := proto.Marshal(batch)
 	if err != nil {
 		return nil, fmt.Errorf("collector/wal: marshal batch: %w", err)
 	}
+	if len(payload) != payloadSize {
+		// Defensively re-check the exact representation if a custom protobuf value
+		// or racy caller made proto.Size stale. Normal generated messages never take
+		// this path.
+		// #nosec G115 -- len is non-negative and exactly representable as uint64.
+		payloadSizeBytes = uint64(len(payload))
+		if payloadSizeBytes > maximumRecordPayloadBytes {
+			return nil, ErrBatchTooLarge
+		}
+		recordSize = uint64(recordHeaderSize) + payloadSizeBytes
+		if err := q.ensureRecordCapacityLocked(recordSize); err != nil {
+			return nil, err
+		}
+	}
 	record, err := encodeRecord(payload)
 	if err != nil {
 		return nil, err
-	}
-	recordSize := uint64(len(record))
-
-	// A record that cannot fit even an empty queue is terminal, not backpressure:
-	// reporting ErrQueueFull would make the daemon retry it forever. Check this
-	// BEFORE the live-bytes backpressure check.
-	if q.opts.MaxQueueBytes > 0 && recordSize > q.opts.MaxQueueBytes {
-		return nil, ErrBatchTooLarge
-	}
-
-	// Backpressure BEFORE burning a sequence: a full queue must be a clean no-op.
-	if q.opts.MaxQueueBytes > 0 && q.liveBytes+recordSize > q.opts.MaxQueueBytes {
-		return nil, ErrQueueFull
 	}
 
 	// Durably advance the sequence counter BEFORE writing the record so a crash
 	// here burns the sequence (a gap) rather than ever reusing it.
 	q.nextSeq = seq + 1
 	if err := q.persistMetaLocked(); err != nil {
-		q.nextSeq = seq // roll back the in-memory counter; nothing was made durable
-		return nil, err
+		// Do not roll the counter back. A failure after rename but during the
+		// directory fsync is ambiguous: the new meta may already be visible or even
+		// durable. Burning this sequence in memory is always safe; reusing it on a
+		// later Append in the same process is not.
+		return nil, q.sealActiveAfterSequenceBurnLocked(err)
 	}
 
 	// Test-only crash injection: meta is durable, record is not yet written.
 	if q.crashAfterMetaWrite {
-		return nil, errSimulatedCrash
+		return nil, q.sealActiveAfterSequenceBurnLocked(errSimulatedCrash)
 	}
 
 	segName, payloadOff, err := q.writeRecordLocked(seq, record)
@@ -375,10 +706,12 @@ func (q *queue) Append(events []*opensplunkv1.LogEvent) (*opensplunkv1.EventBatc
 	}
 
 	if q.opts.Sync == SyncAlways {
-		if err := q.active.Sync(); err != nil {
+		if err := q.syncActiveLocked(); err != nil {
+			q.syncErr = err
 			return nil, fmt.Errorf("collector/wal: fsync record: %w", err)
 		}
 		q.activeDirty = false
+		q.syncErr = nil
 	}
 
 	d := batchDesc{
@@ -398,6 +731,67 @@ func (q *queue) Append(events []*opensplunkv1.LogEvent) (*opensplunkv1.EventBatc
 	q.queuedEvents += d.eventCount
 	q.signalLocked()
 	return batch, nil
+}
+
+func exceedsByteLimit(current, additional, limit uint64) bool {
+	return current > limit || additional > limit-current
+}
+
+// ensureRecordCapacityLocked classifies an intrinsically oversized record
+// before transient queue pressure, refreshes operator-managed quarantine state
+// only on pressure, and opportunistically reclaims a fully acknowledged active
+// segment. It is called before sequence allocation, so every failure is a clean
+// no-op. Callers hold q.mu.
+func (q *queue) ensureRecordCapacityLocked(recordSize uint64) error {
+	if q.opts.MaxQueueBytes == 0 {
+		return nil
+	}
+	// A record that cannot fit even an empty queue is terminal, not backpressure:
+	// reporting ErrQueueFull would make the daemon retry it forever.
+	if recordSize > q.opts.MaxQueueBytes {
+		return ErrBatchTooLarge
+	}
+	if !exceedsByteLimit(q.storageBytesLocked(), recordSize, q.opts.MaxQueueBytes) {
+		return nil
+	}
+	// Quarantine cleanup is an explicit operator action. Refresh only on pressure
+	// so removal can unblock a running queue without adding a directory scan to
+	// the healthy append path.
+	if q.quarantinedBytes > 0 {
+		if err := q.refreshQuarantineStatsForCapacityLocked(); err != nil {
+			return err
+		}
+	}
+	if err := q.reclaimAckedActiveForCapacityLocked(); err != nil {
+		return err
+	}
+	if exceedsByteLimit(q.storageBytesLocked(), recordSize, q.opts.MaxQueueBytes) {
+		return ErrQueueFull
+	}
+	return nil
+}
+
+func (q *queue) storageBytesLocked() uint64 {
+	if q.quarantinedBytes > math.MaxUint64-q.physicalBytes {
+		return math.MaxUint64
+	}
+	return q.physicalBytes + q.quarantinedBytes
+}
+
+// reclaimAckedActiveForCapacityLocked seals and removes an active segment only
+// when every sequence it ever contained is already covered by the durable ack
+// high-water. It is invoked on physical capacity pressure, avoiding one segment
+// per batch during a healthy append/ack stream while still making MaxQueueBytes
+// a true upper bound on live .wal files.
+func (q *queue) reclaimAckedActiveForCapacityLocked() error {
+	if q.active == nil || q.activeSeg == nil || q.activeSize == 0 ||
+		q.activeSeg.lastSeq > q.lastAcked {
+		return nil
+	}
+	if err := q.sealActiveLocked(); err != nil {
+		return err
+	}
+	return q.reclaimLocked()
 }
 
 // writeRecordLocked rotates if needed, ensures an active segment, and appends
@@ -420,16 +814,22 @@ func (q *queue) writeRecordLocked(seq uint64, record []byte) (string, int64, err
 		}
 	}
 	payloadOff := q.activeSize + recordHeaderSize
-	if _, err := q.active.Write(record); err != nil {
+	if written, err := q.active.Write(record); err != nil || written != len(record) {
 		// A partial write leaves a corrupt tail; abandon this segment so no
 		// further records are appended after the damage. The tail is quarantined
 		// on the next Open.
 		_ = q.sealActiveLocked()
+		if err == nil {
+			err = io.ErrShortWrite
+		}
+		q.syncErr = err
 		return "", 0, fmt.Errorf("collector/wal: write record: %w", err)
 	}
 	q.activeSize += recordSize
+	q.physicalBytes += uint64(recordSize)
 	q.activeDirty = true
 	q.activeSeg.lastSeq = seq
+	q.activeSeg.size += uint64(recordSize)
 	return q.activeSeg.name, payloadOff, nil
 }
 
@@ -459,7 +859,7 @@ func (q *queue) sealActiveLocked() error {
 	if q.active == nil {
 		return nil
 	}
-	syncErr := q.active.Sync()
+	syncErr := q.syncActiveLocked()
 	closeErr := q.active.Close()
 	if q.activeSeg != nil {
 		q.activeSeg.sealed = true
@@ -469,12 +869,21 @@ func (q *queue) sealActiveLocked() error {
 	q.activeSize = 0
 	q.activeDirty = false
 	if syncErr != nil {
+		q.syncErr = syncErr
 		return fmt.Errorf("collector/wal: fsync on seal: %w", syncErr)
 	}
 	if closeErr != nil {
 		return fmt.Errorf("collector/wal: close on seal: %w", closeErr)
 	}
+	q.syncErr = nil
 	return nil
+}
+
+func (q *queue) syncActiveLocked() error {
+	if q.syncFile != nil {
+		return q.syncFile(q.active)
+	}
+	return q.active.Sync()
 }
 
 // NextBatch implements Queue.NextBatch.
@@ -667,7 +1076,8 @@ func (aggregator *sourceMarkAggregator) add(mark SourceCheckpointMark) bool {
 	// Preserve the first malformed mark verbatim so the daemon fails closed
 	// without retaining every malformed event in a hostile WAL.
 	if mark.InputID == "" || mark.FileIdentity == "" ||
-		!mark.HasEndOffset || mark.ConflictingMetadata {
+		!mark.HasEndOffset || mark.ConflictingMetadata ||
+		mark.HasGuardFingerprint != mark.HasGuardLength {
 		aggregator.failure = mark
 		aggregator.failed = true
 		return false
@@ -690,11 +1100,13 @@ func (aggregator *sourceMarkAggregator) add(mark SourceCheckpointMark) bool {
 		aggregator.failed = true
 		return false
 	}
-	if !ok || mark.EndOffset > current.EndOffset ||
-		(mark.EndOffset == current.EndOffset &&
-			(mark.HasNextLineNumber && !current.HasNextLineNumber ||
-				mark.HasNextLineNumber == current.HasNextLineNumber &&
-					mark.BatchSequence >= current.BatchSequence)) {
+	if ok && sourceGuardsConflict(current, mark) {
+		mark.ConflictingMetadata = true
+		aggregator.failure = mark
+		aggregator.failed = true
+		return false
+	}
+	if !ok || sourceMarkShouldReplace(current, mark) {
 		aggregator.bySource[key] = mark
 	}
 	return true
@@ -737,12 +1149,18 @@ func checkpointMarksForBatch(batchSequence uint64, events []*opensplunkv1.LogEve
 			LineNumber:           origin.GetLineNumber(),
 			NextLineNumber:       origin.GetNextLineNumber(),
 			FingerprintLength:    origin.GetFileFingerprintLength(),
+			GuardFingerprint:     origin.GetCheckpointGuardFingerprint(),
+			GuardLength:          origin.GetCheckpointGuardLength(),
 			HasSourcePath:        origin.SourcePath != nil,
 			HasEndOffset:         origin.EndOffset != nil,
 			HasNextLineNumber:    origin.NextLineNumber != nil,
 			HasFingerprintLength: origin.FileFingerprintLength != nil,
+			HasGuardFingerprint:  origin.CheckpointGuardFingerprint != nil,
+			HasGuardLength:       origin.CheckpointGuardLength != nil,
 		}
-		if mark.InputID == "" || mark.FileIdentity == "" || !mark.HasEndOffset {
+		if mark.InputID == "" || mark.FileIdentity == "" || !mark.HasEndOffset ||
+			mark.HasGuardFingerprint != mark.HasGuardLength {
+			mark.ConflictingMetadata = mark.HasGuardFingerprint != mark.HasGuardLength
 			if invalid == nil {
 				invalidMark := mark
 				invalid = &invalidMark
@@ -765,9 +1183,12 @@ func checkpointMarksForBatch(batchSequence uint64, events []*opensplunkv1.LogEve
 			bySource[key] = mark
 			continue
 		}
-		if !ok || mark.EndOffset > current.EndOffset ||
-			(mark.EndOffset == current.EndOffset &&
-				(mark.HasNextLineNumber || !current.HasNextLineNumber)) {
+		if ok && sourceGuardsConflict(current, mark) {
+			mark.ConflictingMetadata = true
+			bySource[key] = mark
+			continue
+		}
+		if !ok || sourceMarkShouldReplace(current, mark) {
 			bySource[key] = mark
 		}
 	}
@@ -794,6 +1215,29 @@ func sourceCheckpointMarkLess(left, right SourceCheckpointMark) bool {
 	return left.EventIndex < right.EventIndex
 }
 
+// sourceMarkShouldReplace chooses the furthest coordinate, preferring richer
+// optional metadata at an equal coordinate so a later legacy record cannot
+// erase a restart guard (or another field) recovered from an earlier record.
+func sourceMarkShouldReplace(current, candidate SourceCheckpointMark) bool {
+	if candidate.EndOffset != current.EndOffset {
+		return candidate.EndOffset > current.EndOffset
+	}
+	for _, presence := range [][2]bool{
+		{candidate.HasNextLineNumber, current.HasNextLineNumber},
+		{candidate.HasGuardFingerprint, current.HasGuardFingerprint},
+		{candidate.HasFingerprintLength, current.HasFingerprintLength},
+		{candidate.HasSourcePath, current.HasSourcePath},
+	} {
+		if presence[0] != presence[1] {
+			return presence[0]
+		}
+	}
+	if candidate.BatchSequence != current.BatchSequence {
+		return candidate.BatchSequence > current.BatchSequence
+	}
+	return candidate.EventIndex >= current.EventIndex
+}
+
 // sourceLineCursorsConflict reports metadata that cannot describe one
 // forward-only source generation. Equal byte positions require equal cursors;
 // a greater byte position requires a strictly greater next-line cursor.
@@ -809,6 +1253,19 @@ func sourceLineCursorsConflict(left, right SourceCheckpointMark) bool {
 	default:
 		return left.NextLineNumber <= right.NextLineNumber
 	}
+}
+
+func sourceGuardsConflict(left, right SourceCheckpointMark) bool {
+	if left.HasGuardFingerprint != left.HasGuardLength ||
+		right.HasGuardFingerprint != right.HasGuardLength {
+		return true
+	}
+	if left.EndOffset != right.EndOffset ||
+		!left.HasGuardFingerprint || !right.HasGuardFingerprint {
+		return false
+	}
+	return left.GuardFingerprint != right.GuardFingerprint ||
+		left.GuardLength != right.GuardLength
 }
 
 func (q *queue) hasSequenceLocked(sequence uint64) bool {
@@ -906,22 +1363,56 @@ func (q *queue) Rewind() {
 // scanning from the front since segments are ordered by ascending sequence.
 func (q *queue) reclaimLocked() error {
 	reclaimed := 0
-	for _, seg := range q.segments {
+	var removeErr error
+	for index, seg := range q.segments {
 		if !seg.sealed || seg.lastSeq > q.lastAcked {
 			break
 		}
-		if err := os.Remove(filepath.Join(q.dir, seg.name)); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("collector/wal: reclaim segment %s: %w", seg.name, err)
+		if seg.size > q.physicalBytes {
+			accounted := q.physicalBytes
+			// q.segments is the authoritative inventory of live WAL files. Restore
+			// at least their known size before returning so a broken subtraction
+			// invariant cannot turn into apparent capacity on a later Append.
+			q.physicalBytes = segmentPhysicalBytes(q.segments[index:])
+			removeErr = fmt.Errorf(
+				"collector/wal: reclaim segment %s: physical accounting invariant violated: segment size %d exceeds accounted bytes %d",
+				seg.name, seg.size, accounted,
+			)
+			break
 		}
+		remove := q.removeFile
+		if remove == nil {
+			remove = os.Remove
+		}
+		if err := remove(filepath.Join(q.dir, seg.name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			removeErr = fmt.Errorf("collector/wal: reclaim segment %s: %w", seg.name, err)
+			break
+		}
+		q.physicalBytes -= seg.size
 		reclaimed++
 	}
 	if reclaimed > 0 {
 		q.segments = append(q.segments[:0], q.segments[reclaimed:]...)
-		if err := fsyncDir(q.dir); err != nil {
-			return fmt.Errorf("collector/wal: fsync dir after reclaim: %w", err)
+		syncDirectory := q.syncDirectory
+		if syncDirectory == nil {
+			syncDirectory = fsyncDir
+		}
+		if err := syncDirectory(q.dir); err != nil {
+			return errors.Join(removeErr, fmt.Errorf("collector/wal: fsync dir after reclaim: %w", err))
 		}
 	}
-	return nil
+	return removeErr
+}
+
+func segmentPhysicalBytes(segments []*segInfo) uint64 {
+	var total uint64
+	for _, seg := range segments {
+		if seg.size > math.MaxUint64-total {
+			return math.MaxUint64
+		}
+		total += seg.size
+	}
+	return total
 }
 
 // Stats implements Queue.Stats.
@@ -936,6 +1427,10 @@ func (q *queue) Stats() Stats {
 			}
 		}
 	}
+	lastSyncError := ""
+	if q.syncErr != nil {
+		lastSyncError = q.syncErr.Error()
+	}
 	return Stats{
 		QueuedBatches:          uint64(len(q.unacked)),
 		QueuedEvents:           q.queuedEvents,
@@ -944,6 +1439,11 @@ func (q *queue) Stats() Stats {
 		NextBatchSequence:      q.nextSeq,
 		LastAckedBatchSequence: q.lastAcked,
 		QuarantinedSegments:    q.quarantined,
+		PhysicalBytes:          q.physicalBytes,
+		QuarantinedBytes:       q.quarantinedBytes,
+		OnDiskBytes:            q.storageBytesLocked(),
+		LastSyncError:          lastSyncError,
+		RecoveryWarning:        q.recoveryWarning,
 	}
 }
 
@@ -988,11 +1488,27 @@ func (q *queue) Close() error {
 
 // persistMetaLocked writes the current sequence counters durably. Callers hold mu.
 func (q *queue) persistMetaLocked() error {
-	return writeMeta(q.dir, walMeta{
+	persist := q.persistMetaFile
+	if persist == nil {
+		persist = writeMeta
+	}
+	return persist(q.dir, walMeta{
 		FormatVersion:          currentFormatVersion,
 		NextBatchSequence:      q.nextSeq,
 		LastAckedBatchSequence: q.lastAcked,
 	})
+}
+
+// sealActiveAfterSequenceBurnLocked preserves the invariant that every live
+// segment contains a contiguous run of allocated sequences. Once meta may have
+// advanced but no record was written, later appends must start a segment whose
+// filename publishes their new first sequence; otherwise record-count recovery
+// cannot reconstruct a missing meta file without trusting corrupt payloads.
+func (q *queue) sealActiveAfterSequenceBurnLocked(cause error) error {
+	if err := q.sealActiveLocked(); err != nil {
+		return errors.Join(cause, err)
+	}
+	return cause
 }
 
 // signalLocked wakes at most one NextBatch waiter. Callers hold mu.
@@ -1015,8 +1531,11 @@ func (q *queue) syncLoop(interval time.Duration) {
 		case <-t.C:
 			q.mu.Lock()
 			if q.active != nil && q.activeDirty {
-				if err := q.active.Sync(); err == nil {
+				if err := q.syncActiveLocked(); err == nil {
 					q.activeDirty = false
+					q.syncErr = nil
+				} else {
+					q.syncErr = err
 				}
 			}
 			q.mu.Unlock()

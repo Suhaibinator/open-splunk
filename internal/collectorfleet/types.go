@@ -4,6 +4,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/collectorlimits"
 	"gorm.io/gorm"
 )
 
@@ -15,17 +16,17 @@ const (
 
 	maximumTenantIDBytes         = 255
 	maximumDisplayNameBytes      = 255
-	maximumCollectorVersionBytes = 128
-	maximumHostnameBytes         = 255
-	maximumOperatingSystemBytes  = 128
-	maximumArchitectureBytes     = 128
-	maximumCapabilities          = 64
-	maximumAuthorizedIndexes     = 256
-	maximumInputs                = 256
-	maximumSourceBytes           = 4096
-	maximumSourcetypeBytes       = 255
-	maximumStatusMessageBytes    = 8 << 10
-	maximumSnapshotBytes         = 1 << 20
+	maximumCollectorVersionBytes = collectorlimits.MaximumCollectorVersionBytes
+	maximumHostnameBytes         = collectorlimits.MaximumHostnameBytes
+	maximumOperatingSystemBytes  = collectorlimits.MaximumOperatingSystemBytes
+	maximumArchitectureBytes     = collectorlimits.MaximumArchitectureBytes
+	maximumCapabilities          = collectorlimits.MaximumCapabilities
+	maximumAuthorizedIndexes     = collectorlimits.MaximumAuthorizedIndexes
+	maximumInputs                = collectorlimits.MaximumInputs
+	maximumSourceBytes           = collectorlimits.MaximumSourceBytes
+	maximumSourcetypeBytes       = collectorlimits.MaximumSourcetypeBytes
+	maximumStatusMessageBytes    = collectorlimits.MaximumInputStatusMessageBytes
+	maximumSnapshotBytes         = collectorlimits.MaximumSnapshotBytes
 	maximumPersistedEnumValue    = uint32(1<<31 - 1)
 	maximumPublicUnixMicro       = int64(253_402_300_799_999_999)
 )

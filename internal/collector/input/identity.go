@@ -9,6 +9,9 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/Suhaibinator/open-splunk/internal/collectorlimits"
+	"github.com/Suhaibinator/open-splunk/internal/sha256hex"
 )
 
 // defaultFingerprintBytes is the number of leading bytes hashed into a file
@@ -19,7 +22,7 @@ const defaultFingerprintBytes = 1024
 // bound. Fingerprints are read on discovery and restart, so accepting an
 // attacker-sized persisted length would turn state-file corruption into an
 // unbounded startup allocation.
-const maximumFingerprintBytes = 1 << 20
+const maximumFingerprintBytes = collectorlimits.MaximumCheckpointGuardBytes
 
 const emptyFingerprintSHA256 = "e3b0c44298fc1c149afbf4c8996fb924" +
 	"27ae41e4649b934ca495991b7852b855"
@@ -197,11 +200,8 @@ func ParseFileIdentity(value string) (FileIdentity, error) {
 		return FileIdentity{}, fmt.Errorf("collector/input: invalid file identity %q: want fp field", value)
 	}
 	fingerprint := strings.TrimPrefix(parts[3], "fp=")
-	if len(fingerprint) != sha256.Size*2 || strings.ToLower(fingerprint) != fingerprint {
+	if !sha256hex.Valid(fingerprint) {
 		return FileIdentity{}, fmt.Errorf("collector/input: invalid file identity %q: fingerprint must be canonical SHA-256 hex", value)
-	}
-	if _, err := hex.DecodeString(fingerprint); err != nil {
-		return FileIdentity{}, fmt.Errorf("collector/input: invalid file identity %q: parse fingerprint: %w", value, err)
 	}
 	id := FileIdentity{
 		Device:      device,

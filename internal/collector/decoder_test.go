@@ -5,9 +5,12 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestNDJSONDecoderExtractsCanonicalFieldsAndPreservesTypes(t *testing.T) {
@@ -20,6 +23,7 @@ func TestNDJSONDecoderExtractsCanonicalFieldsAndPreservesTypes(t *testing.T) {
 	event, err := decoder.Decode(raw, SourcePosition{
 		FileIdentity: "dev=1;ino=2", StartOffset: 10, EndOffset: 10 + uint64(len(raw)),
 		LineNumber: 7, NextLineNumber: 8,
+		CheckpointGuardFingerprint: strings.Repeat("ab", 32), CheckpointGuardLength: 16,
 	}, collectedAt)
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
@@ -74,6 +78,59 @@ func TestNDJSONDecoderExtractsCanonicalFieldsAndPreservesTypes(t *testing.T) {
 	}
 	if got := event.GetOrigin().GetNextLineNumber(); got != 8 {
 		t.Fatalf("origin next line = %d, want 8", got)
+	}
+	if got := event.GetOrigin().GetCheckpointGuardFingerprint(); got != strings.Repeat("ab", 32) ||
+		event.GetOrigin().GetCheckpointGuardLength() != 16 {
+		t.Fatalf("origin checkpoint guard = %q/%d", got, event.GetOrigin().GetCheckpointGuardLength())
+	}
+}
+
+func TestDecoderRejectsMalformedCheckpointGuard(t *testing.T) {
+	t.Parallel()
+	decoder := newTestDecoder(t, DecodeConfig{Format: InputFormatRaw})
+	now := time.Date(2026, time.July, 1, 2, 3, 4, 5, time.UTC)
+	tests := []SourcePosition{
+		{EndOffset: 10, CheckpointGuardFingerprint: strings.Repeat("ab", 32)},
+		{EndOffset: 10, CheckpointGuardLength: 1},
+		{EndOffset: 10, CheckpointGuardFingerprint: "not-a-digest", CheckpointGuardLength: 1},
+		{EndOffset: 10, CheckpointGuardFingerprint: strings.Repeat("AB", 32), CheckpointGuardLength: 1},
+		{EndOffset: 1, CheckpointGuardFingerprint: strings.Repeat("ab", 32), CheckpointGuardLength: 2},
+		{EndOffset: 2 << 20, CheckpointGuardFingerprint: strings.Repeat("ab", 32), CheckpointGuardLength: (1 << 20) + 1},
+	}
+	for _, position := range tests {
+		if _, err := decoder.Decode([]byte("x"), position, now); err == nil {
+			t.Fatalf("Decode accepted malformed checkpoint guard %+v", position)
+		}
+	}
+}
+
+func TestDecoderNormalizesFilesystemPathForWALSerialization(t *testing.T) {
+	t.Parallel()
+	decoder := newTestDecoder(t, DecodeConfig{Format: InputFormatRaw})
+	rawPath := "/var/log/" + string([]byte{0xff}) + "line\n.log"
+	event, err := decoder.Decode(
+		[]byte("payload"),
+		SourcePosition{
+			FileIdentity: "dev=1;ino=2;gen=0;fp=identity",
+			SourcePath:   rawPath,
+			EndOffset:    7,
+		},
+		time.Date(2026, time.July, 1, 2, 3, 4, 5, time.UTC),
+	)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	path := event.GetOrigin().GetSourcePath()
+	if !utf8.ValidString(path) {
+		t.Fatalf("wire source path is invalid UTF-8: %q", path)
+	}
+	for _, character := range path {
+		if unicode.IsControl(character) {
+			t.Fatalf("wire source path retained control character %U", character)
+		}
+	}
+	if _, err := proto.Marshal(event); err != nil {
+		t.Fatalf("marshal event for WAL: %v", err)
 	}
 }
 

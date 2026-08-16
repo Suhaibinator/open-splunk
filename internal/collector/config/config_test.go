@@ -80,9 +80,45 @@ inputs:
 	if cfg.Server.Transport != "grpc" {
 		t.Errorf("transport default = %q", cfg.Server.Transport)
 	}
+	if cfg.State.MaxQueueBytes != DefaultMaxQueueBytes {
+		t.Errorf("max queue default = %s, want %s", cfg.State.MaxQueueBytes, DefaultMaxQueueBytes)
+	}
+	if cfg.State.DeadLetterMaxBytes != DefaultDeadLetterMaxBytes ||
+		cfg.State.DeadLetterMaxBackups != DefaultDeadLetterMaxBackups {
+		t.Errorf("dead-letter defaults = %s/%d, want %s/%d",
+			cfg.State.DeadLetterMaxBytes, cfg.State.DeadLetterMaxBackups,
+			DefaultDeadLetterMaxBytes, DefaultDeadLetterMaxBackups)
+	}
 	in := cfg.Inputs[0]
 	if in.Type != "file" || in.Format != "ndjson" || in.StartAt != "end" {
 		t.Errorf("input defaults = type:%q format:%q start_at:%q", in.Type, in.Format, in.StartAt)
+	}
+}
+
+func TestLoadPreservesExplicitZeroDeadLetterBackups(t *testing.T) {
+	t.Parallel()
+	y := strings.Replace(
+		validYAML,
+		"  max_queue_bytes: 1GiB",
+		"  max_queue_bytes: 1GiB\n  dead_letter_max_backups: 0",
+		1,
+	)
+	dir := t.TempDir()
+	cfg, err := Load(writeFile(t, dir, "c.yaml", y))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.State.DeadLetterMaxBackups; got != 0 {
+		t.Fatalf("dead_letter_max_backups = %d, want explicit zero", got)
+	}
+}
+
+func TestLoadRejectsTrailingYAMLDocument(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	_, err := Load(writeFile(t, dir, "c.yaml", validYAML+"\n---\nserver: {}\n"))
+	if err == nil || !strings.Contains(err.Error(), "multiple YAML documents") {
+		t.Fatalf("expected multiple-document error, got %v", err)
 	}
 }
 
@@ -200,6 +236,7 @@ func TestValidate(t *testing.T) {
 		{"valid", func(*Config) {}, ""},
 		{"no address", func(c *Config) { c.Server.Address = "" }, "server.address"},
 		{"bad transport", func(c *Config) { c.Server.Transport = "http" }, "server.transport"},
+		{"bad compression", func(c *Config) { c.Server.Compression = "snappy" }, "server.compression"},
 		{"no token_file", func(c *Config) { c.Server.TokenFile = "" }, "server.token_file"},
 		{"tls incoherent", func(c *Config) { c.Server.TLS.CAFile = "/ca.pem" }, "server.tls"},
 		{"plaintext remote", func(c *Config) { c.Server.Address = "logs.example.com:443" }, "tls.enabled"},
@@ -208,7 +245,12 @@ func TestValidate(t *testing.T) {
 			c.Server.TLS.Enabled = true
 		}, ""},
 		{"no directory", func(c *Config) { c.State.Directory = "" }, "state.directory"},
+		{"negative dead-letter backups", func(c *Config) { c.State.DeadLetterMaxBackups = -1 }, "dead_letter_max_backups"},
+		{"too many dead-letter backups", func(c *Config) { c.State.DeadLetterMaxBackups = maximumDeadLetterBackups + 1 }, "dead_letter_max_backups"},
+		{"dead-letter size exceeds platform", func(c *Config) { c.State.DeadLetterMaxBytes = ByteSize(^uint64(0)) }, "dead_letter_max_bytes"},
 		{"no inputs", func(c *Config) { c.Inputs = nil }, "at least one input"},
+		{"too many inputs", func(c *Config) { c.Inputs = make([]InputConfig, 257) }, "more than 256"},
+		{"too many processors", func(c *Config) { c.Processors = make([]ProcessorConfig, 257) }, "more than 256"},
 		{"no id", func(c *Config) { c.Inputs[0].ID = "" }, "inputs[0].id"},
 		{"canonical punctuation id", func(c *Config) { c.Inputs[0].ID = "A._:-9" }, ""},
 		{"slash in id", func(c *Config) { c.Inputs[0].ID = "bad/input" }, "canonical identifier"},
@@ -220,8 +262,20 @@ func TestValidate(t *testing.T) {
 		{"bad start_at", func(c *Config) { c.Inputs[0].StartAt = "middle" }, "start_at must be"},
 		{"no include", func(c *Config) { c.Inputs[0].Include = nil }, "at least one include glob"},
 		{"no index", func(c *Config) { c.Inputs[0].Index = "" }, "index is required"},
+		{"noncanonical index", func(c *Config) { c.Inputs[0].Index = "Main" }, "not canonical"},
 		{"bad include glob", func(c *Config) { c.Inputs[0].Include = []string{"[bad"} }, "invalid include glob"},
+		{"empty include glob", func(c *Config) { c.Inputs[0].Include = []string{""} }, "include glob"},
+		{"too many include globs", func(c *Config) { c.Inputs[0].Include = make([]string, 257) }, "include cannot"},
 		{"bad exclude glob", func(c *Config) { c.Inputs[0].Exclude = []string{"[bad"} }, "invalid exclude glob"},
+		{"too many exclude globs", func(c *Config) { c.Inputs[0].Exclude = make([]string, 257) }, "exclude cannot"},
+		{"event cap too large", func(c *Config) { c.Inputs[0].MaxEventBytes = (1 << 20) + 1 }, "max_event_bytes"},
+		{"negative poll", func(c *Config) { c.Inputs[0].PollInterval = Duration(-time.Second) }, "poll_interval"},
+		{"too-fast poll", func(c *Config) { c.Inputs[0].PollInterval = Duration(time.Millisecond) }, "poll_interval"},
+		{"source too long", func(c *Config) { c.Inputs[0].Source = strings.Repeat("x", 4097) }, "source"},
+		{"sourcetype too long", func(c *Config) { c.Inputs[0].Sourcetype = strings.Repeat("x", 256) }, "sourcetype"},
+		{"host too long", func(c *Config) { c.Inputs[0].Host = strings.Repeat("x", 256) }, "host"},
+		{"reserved static field", func(c *Config) { c.Inputs[0].Fields = map[string]string{"message": "x"} }, "reserved"},
+		{"invalid static field", func(c *Config) { c.Inputs[0].Fields = map[string]string{" bad ": "x"} }, "surrounding whitespace"},
 		{"multiline empty pattern", func(c *Config) {
 			c.Inputs[0].Multiline = &MultilineConfig{}
 		}, "line_start_pattern is required"},
@@ -231,6 +285,15 @@ func TestValidate(t *testing.T) {
 		{"multiline ok", func(c *Config) {
 			c.Inputs[0].Multiline = &MultilineConfig{LineStartPattern: `^\d{4}`}
 		}, ""},
+		{"multiline negative flush", func(c *Config) {
+			c.Inputs[0].Multiline = &MultilineConfig{LineStartPattern: `^x`, FlushAfter: Duration(-time.Second)}
+		}, "flush_after"},
+		{"multiline too-fast flush", func(c *Config) {
+			c.Inputs[0].Multiline = &MultilineConfig{LineStartPattern: `^x`, FlushAfter: Duration(time.Millisecond)}
+		}, "flush_after"},
+		{"multiline too many lines", func(c *Config) {
+			c.Inputs[0].Multiline = &MultilineConfig{LineStartPattern: `^x`, MaxLines: maximumMultilineLines + 1}
+		}, "max_lines"},
 		{"allow no fields", func(c *Config) {
 			c.Processors = []ProcessorConfig{{Type: "allow"}}
 		}, "at least one field"},
@@ -240,6 +303,15 @@ func TestValidate(t *testing.T) {
 		{"rename no to", func(c *Config) {
 			c.Processors = []ProcessorConfig{{Type: "rename", From: "x"}}
 		}, "to is required"},
+		{"rename reserved destination", func(c *Config) {
+			c.Processors = []ProcessorConfig{{Type: "rename", From: "x", To: "MESSAGE"}}
+		}, "reserved canonical metadata"},
+		{"rename identical", func(c *Config) {
+			c.Processors = []ProcessorConfig{{Type: "rename", From: "x", To: "x"}}
+		}, "identical"},
+		{"processor invalid field", func(c *Config) {
+			c.Processors = []ProcessorConfig{{Type: "redact", Fields: []string{""}}}
+		}, "fields[0]"},
 		{"unknown processor", func(c *Config) {
 			c.Processors = []ProcessorConfig{{Type: "wat"}}
 		}, "unknown type"},
@@ -287,6 +359,11 @@ func TestByteSizeUnmarshal(t *testing.T) {
 		{"0", 0, false},
 		{"64B", 64, false},
 		{"1.5GiB", ByteSize(1.5 * float64(1<<30)), false},
+		{"0.1KB", 100, false},
+		{"0.1KiB", 0, true},
+		{"9007199254740993KiB", ByteSize(uint64(9007199254740993) * 1024), false},
+		{"18446744073709551615", ByteSize(^uint64(0)), false},
+		{"18446744073709551616", 0, true},
 		{"5mib", 5 << 20, false}, // case-insensitive unit
 		{"-5", 0, true},
 		{"-5GiB", 0, true},
@@ -327,6 +404,7 @@ func TestDurationUnmarshal(t *testing.T) {
 		{"250ms", Duration(250 * time.Millisecond), false},
 		{"0", 0, false},
 		{"1h30m", Duration(90 * time.Minute), false},
+		{"-1s", 0, true},
 		{"5", 0, true},   // bare int rejected
 		{"abc", 0, true}, // garbage
 	}

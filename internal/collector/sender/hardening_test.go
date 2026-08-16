@@ -1,6 +1,8 @@
 package sender
 
 import (
+	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -83,6 +85,58 @@ func TestSenderExceedsReadyLimitsDeadLetters(t *testing.T) {
 	rec := sink.snapshot()[0]
 	if rec.Code != opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE.String() {
 		t.Fatalf("dead-letter code = %q, want BATCH_TOO_LARGE", rec.Code)
+	}
+	cancel()
+	<-done
+}
+
+func TestSenderRetainsMultiEventBatchThatRequiresLosslessRepacking(t *testing.T) {
+	t.Parallel()
+	fs := newFakeServer()
+	fs.readyFn = func() *opensplunkv1.CollectorReady {
+		ready := defaultReady()
+		ready.MaxBatchEvents = 1
+		return ready
+	}
+	batch := fakeBatch(1, makeEvent("e1", "main"), makeEvent("e2", "main"))
+	q := newFakeQueue(batch)
+	sink := &memSink{}
+	s := newTestSender(t, testOptions(), q, sink, nil, startServer(t, fs))
+	done := make(chan error, 1)
+	go func() { done <- s.Run(context.Background()) }()
+	select {
+	case err := <-done:
+		var fatal *fatalError
+		if !errors.As(err, &fatal) {
+			t.Fatalf("Run error = %v, want fatal repacking requirement", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("sender neither retained nor failed an unsplittable durable batch")
+	}
+	if got := q.ackedSeq(); got != 0 {
+		t.Fatalf("multi-event oversized batch acked through %d, want retained", got)
+	}
+	if got := len(sink.snapshot()); got != 0 {
+		t.Fatalf("multi-event oversized batch dead-lettered %d valid events", got)
+	}
+}
+
+func TestSenderDeadLettersSingleEventAboveNegotiatedEventLimit(t *testing.T) {
+	t.Parallel()
+	fs := newFakeServer()
+	fs.readyFn = func() *opensplunkv1.CollectorReady {
+		ready := defaultReady()
+		ready.MaxEventBytes = 1
+		return ready
+	}
+	q := newFakeQueue(fakeBatch(1, makeEvent("oversized", "main")))
+	sink := &memSink{}
+	s := newTestSender(t, testOptions(), q, sink, nil, startServer(t, fs))
+	cancel, done := runSender(t, s)
+	waitFor(t, "single oversized event terminally handled", func() bool { return q.ackedSeq() == 1 })
+	records := sink.snapshot()
+	if len(records) != 1 || records[0].Code != opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_EVENT_TOO_LARGE.String() {
+		t.Fatalf("single-event negotiated dead letter = %+v", records)
 	}
 	cancel()
 	<-done

@@ -3,8 +3,9 @@
 //
 // The YAML shape mirrors configs/examples/collector.yaml: a server block (dial
 // address, transport, token_file, tls, compression), a state block (durable
-// queue directory and max_queue_bytes), a list of inputs, and an ordered list
-// of processors. [Load] reads a file, performs ${ENV} substitution, applies
+// queue directory, max_queue_bytes, and dead-letter retention), a list of
+// inputs, and an ordered list of processors. [Load] reads a file, performs
+// ${ENV} substitution, applies
 // defaults, and then calls [Config.Validate]; callers that already hold raw
 // bytes may unmarshal directly and call Validate themselves.
 //
@@ -26,8 +27,8 @@
 //
 // # Dependency direction
 //
-// config depends only on the standard library and go.yaml.in/yaml/v3. It must
-// not import any other internal/collector package. The root collector daemon
+// config depends on YAML plus dependency-neutral protocol/index/event validation
+// helpers (and input's canonical identifier grammar). The root collector daemon
 // translates a *Config into the option structs of framing, input, wal, and
-// sender; those packages never import config, keeping the graph acyclic.
+// sender; those runtime packages never import config, keeping the graph acyclic.
 package config

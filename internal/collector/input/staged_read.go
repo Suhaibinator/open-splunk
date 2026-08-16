@@ -83,9 +83,11 @@ func stagedReadWindow(cfg Config) (uint64, error) {
 }
 
 type tailerCursor struct {
-	offset             uint64
-	nextLineNumber     uint64
-	discardingOversize bool
+	offset                         uint64
+	nextLineNumber                 uint64
+	discardingOversize             bool
+	discardingMultilineOversize    bool
+	discardingMultilinePartialLine bool
 }
 
 type stagedBatch struct {
@@ -232,9 +234,11 @@ func (t *tailer) stageRead(
 		raw:                  raw,
 		capturedGuardMatches: capturedGuardMatches,
 		cursor: tailerCursor{
-			offset:             t.offset,
-			nextLineNumber:     t.nextLineNumber,
-			discardingOversize: t.discardingOversize,
+			offset:                         t.offset,
+			nextLineNumber:                 t.nextLineNumber,
+			discardingOversize:             t.discardingOversize,
+			discardingMultilineOversize:    t.discardingMultilineOversize,
+			discardingMultilinePartialLine: t.discardingMultilinePartialLine,
 		},
 	}
 	if err := t.stageSnapshot(ctx, batch, forceFlush); err != nil {
@@ -249,6 +253,16 @@ func (t *tailer) stageSnapshot(
 	forceFlush bool,
 ) error {
 	position := 0
+	if batch.cursor.discardingMultilineOversize {
+		var err error
+		position, err = t.skipMultilineOversize(batch, forceFlush)
+		if err != nil {
+			return err
+		}
+		if batch.cursor.discardingMultilineOversize {
+			return nil
+		}
+	}
 	if batch.cursor.discardingOversize {
 		delimiter := bytes.IndexByte(batch.raw, '\n')
 		if delimiter < 0 {
@@ -279,7 +293,9 @@ func (t *tailer) stageSnapshot(
 		frame, frameErr := fr.Next()
 		switch {
 		case frameErr == nil:
-			t.stageFrame(batch, frame)
+			if err := t.stageFrame(batch, frame); err != nil {
+				return err
+			}
 			if len(batch.events) >= maxStagedEvents {
 				batch.eventLimit = true
 				return nil
@@ -287,21 +303,70 @@ func (t *tailer) stageSnapshot(
 		case errors.Is(frameErr, framing.ErrEventTooLargeIncomplete):
 			batch.cursor.offset = frame.EndOffset
 			batch.cursor.nextLineNumber = frame.NextLineNumber
-			batch.cursor.discardingOversize = true
+			if t.m.cfg.Multiline {
+				batch.cursor.discardingMultilineOversize = true
+				batch.cursor.discardingMultilinePartialLine = true
+			} else {
+				batch.cursor.discardingOversize = true
+			}
 			batch.oversize = true
 			return nil
 		case errors.Is(frameErr, framing.ErrEventTooLarge):
 			batch.cursor.offset = frame.EndOffset
 			batch.cursor.nextLineNumber = frame.NextLineNumber
 			batch.oversize = true
+			if t.m.cfg.Multiline {
+				batch.cursor.discardingMultilineOversize = true
+				batch.cursor.discardingMultilinePartialLine = false
+				return nil
+			}
 		case errors.Is(frameErr, framing.ErrPartialFrame):
 			_, batch.pendingLen = fr.Pending()
 			if batch.snapshotEnd == batch.observedEnd &&
 				(forceFlush || t.shouldFlushInactive(batch.pendingLen)) {
-				if frame, ok := fr.Flush(); ok {
-					t.stageFrame(batch, frame)
-					batch.pendingLen = 0
+				frame, flushErr, ok := fr.Flush()
+				if !ok {
+					if flushErr != nil {
+						return flushErr
+					}
+					return nil
+				}
+				batch.pendingLen = 0
+				switch {
+				case flushErr == nil:
+					if err := t.stageFrame(batch, frame); err != nil {
+						return err
+					}
 					batch.flushed = true
+					if len(batch.events) >= maxStagedEvents {
+						batch.eventLimit = true
+						return nil
+					}
+					// A multiline flush may emit an assembled event while retaining a
+					// matching delimiter-free start line. Keep draining under the same
+					// inactivity/retirement decision so a final snapshot cannot retire
+					// with that candidate still unconsumed.
+					continue
+				case errors.Is(flushErr, framing.ErrEventTooLargeIncomplete):
+					batch.cursor.offset = frame.EndOffset
+					batch.cursor.nextLineNumber = frame.NextLineNumber
+					if t.m.cfg.Multiline {
+						batch.cursor.discardingMultilineOversize = true
+						batch.cursor.discardingMultilinePartialLine = true
+					} else {
+						batch.cursor.discardingOversize = true
+					}
+					batch.oversize = true
+				case errors.Is(flushErr, framing.ErrEventTooLarge):
+					batch.cursor.offset = frame.EndOffset
+					batch.cursor.nextLineNumber = frame.NextLineNumber
+					batch.oversize = true
+					if t.m.cfg.Multiline {
+						batch.cursor.discardingMultilineOversize = true
+						batch.cursor.discardingMultilinePartialLine = false
+					}
+				default:
+					return flushErr
 				}
 			}
 			return nil
@@ -313,8 +378,126 @@ func (t *tailer) stageSnapshot(
 	}
 }
 
-func (t *tailer) stageFrame(batch *stagedBatch, frame framing.Frame) {
-	payload := append([]byte(nil), frame.Bytes...)
+func (t *tailer) skipMultilineOversize(
+	batch *stagedBatch,
+	forceFlush bool,
+) (int, error) {
+	position := 0
+	maxEventBytes := t.m.cfg.Framing.MaxEventBytes
+	if maxEventBytes <= 0 {
+		maxEventBytes = framing.DefaultMaxEventBytes
+	}
+	for {
+		if position == len(batch.raw) {
+			// A prior bounded snapshot may already have consumed the known-rejected
+			// prefix of an incomplete physical line. Retirement force-resolves that
+			// line even when no newly appended bytes remain to read.
+			resolve := batch.snapshotEnd == batch.observedEnd &&
+				(forceFlush || t.inactivityElapsed())
+			if resolve && batch.cursor.discardingMultilinePartialLine {
+				if batch.cursor.nextLineNumber >= ^uint64(0)-1 {
+					return 0, framing.ErrLineNumberOverflow
+				}
+				batch.cursor.nextLineNumber++
+				batch.cursor.discardingMultilinePartialLine = false
+			}
+			return position, nil
+		}
+		relativeDelimiter := bytes.IndexByte(batch.raw[position:], '\n')
+		if batch.cursor.discardingMultilinePartialLine {
+			if relativeDelimiter < 0 {
+				remaining := len(batch.raw) - position
+				batch.cursor.offset += uint64(remaining)
+				resolve := batch.snapshotEnd == batch.observedEnd &&
+					(forceFlush || t.shouldFlushInactive(remaining))
+				if resolve {
+					if batch.cursor.nextLineNumber >= ^uint64(0)-1 {
+						return 0, framing.ErrLineNumberOverflow
+					}
+					batch.cursor.nextLineNumber++
+					batch.cursor.discardingMultilinePartialLine = false
+				}
+				return len(batch.raw), nil
+			}
+			if batch.cursor.nextLineNumber >= ^uint64(0)-1 {
+				return 0, framing.ErrLineNumberOverflow
+			}
+			consumed := relativeDelimiter + 1
+			position += consumed
+			batch.cursor.offset += uint64(consumed)
+			batch.cursor.nextLineNumber++
+			batch.cursor.discardingMultilinePartialLine = false
+			continue
+		}
+		if relativeDelimiter < 0 {
+			partial := batch.raw[position:]
+			resolve := batch.snapshotEnd == batch.observedEnd &&
+				(forceFlush || t.shouldFlushInactive(len(partial)))
+			// A delimiter-free line that is already over budget cannot become a
+			// usable start line. Consume it incrementally while retaining the
+			// discard mode and physical-line cursor until its delimiter arrives.
+			couldBeExactCapCRLF := len(partial) == maxEventBytes+1 &&
+				partial[len(partial)-1] == '\r'
+			if len(partial) > maxEventBytes && !couldBeExactCapCRLF {
+				batch.cursor.offset += uint64(len(partial))
+				if resolve {
+					if batch.cursor.nextLineNumber >= ^uint64(0)-1 {
+						return 0, framing.ErrLineNumberOverflow
+					}
+					batch.cursor.nextLineNumber++
+					batch.cursor.discardingMultilinePartialLine = false
+				} else {
+					batch.cursor.discardingMultilinePartialLine = true
+				}
+				return len(batch.raw), nil
+			}
+			if !resolve {
+				return position, nil
+			}
+			matchContent := partial
+			if len(matchContent) > 0 && matchContent[len(matchContent)-1] == '\r' {
+				matchContent = matchContent[:len(matchContent)-1]
+			}
+			if len(partial) > 0 && t.m.cfg.Framing.LineStartPattern.Match(matchContent) {
+				batch.cursor.discardingMultilineOversize = false
+				batch.cursor.discardingMultilinePartialLine = false
+				return position, nil
+			}
+			if len(partial) > 0 {
+				if batch.cursor.nextLineNumber >= ^uint64(0)-1 {
+					return 0, framing.ErrLineNumberOverflow
+				}
+				batch.cursor.offset += uint64(len(partial))
+				batch.cursor.nextLineNumber++
+			}
+			return len(batch.raw), nil
+		}
+		delimiter := position + relativeDelimiter
+		line := batch.raw[position:delimiter]
+		if len(line) > 0 && line[len(line)-1] == '\r' {
+			line = line[:len(line)-1]
+		}
+		if t.m.cfg.Framing.LineStartPattern.Match(line) {
+			batch.cursor.discardingMultilineOversize = false
+			batch.cursor.discardingMultilinePartialLine = false
+			return position, nil
+		}
+		if batch.cursor.nextLineNumber >= ^uint64(0)-1 {
+			return 0, framing.ErrLineNumberOverflow
+		}
+		consumed := relativeDelimiter + 1
+		position += consumed
+		batch.cursor.offset += uint64(consumed)
+		batch.cursor.nextLineNumber++
+	}
+}
+
+func (t *tailer) stageFrame(batch *stagedBatch, frame framing.Frame) error {
+	guardFingerprint, guardLength, err := t.guardForEvent(batch, frame.EndOffset)
+	if err != nil {
+		return err
+	}
+	payload := frame.Bytes
 	lineNumber, nextLineNumber := frame.LineNumber, frame.NextLineNumber
 	if !t.lineCursorKnown {
 		lineNumber, nextLineNumber = 0, 0
@@ -322,16 +505,56 @@ func (t *tailer) stageFrame(batch *stagedBatch, frame framing.Frame) {
 	batch.events = append(batch.events, RawEvent{
 		Bytes: payload,
 		Source: SourceRef{
-			Path:           t.pathStr(),
-			Identity:       t.id,
-			StartOffset:    frame.StartOffset,
-			EndOffset:      frame.EndOffset,
-			LineNumber:     lineNumber,
-			NextLineNumber: nextLineNumber,
+			Path:             t.pathStr(),
+			Identity:         t.id,
+			StartOffset:      frame.StartOffset,
+			EndOffset:        frame.EndOffset,
+			LineNumber:       lineNumber,
+			NextLineNumber:   nextLineNumber,
+			GuardFingerprint: guardFingerprint,
+			GuardLength:      guardLength,
 		},
 	})
 	batch.cursor.offset = frame.EndOffset
 	batch.cursor.nextLineNumber = frame.NextLineNumber
+	return nil
+}
+
+// guardForEvent derives the exact bounded trailing evidence for one event from
+// the immutable staged dependency. Framer implementations return independently
+// owned Frame.Bytes, so stageFrame can transfer that payload directly while the
+// dependency remains available for this coordinate hash.
+func (t *tailer) guardForEvent(
+	batch *stagedBatch,
+	end uint64,
+) (fingerprint string, length uint32, err error) {
+	if end < batch.dependencyStart {
+		return "", 0, errors.New("collector/input: event ends before staged dependency")
+	}
+	available := end - batch.dependencyStart
+	if available > uint64(len(batch.dependency)) {
+		return "", 0, errors.New("collector/input: event guard exceeds staged dependency")
+	}
+	guardLength := end
+	if maximum := uint64(t.m.fpBytes); guardLength > maximum {
+		guardLength = maximum
+	}
+	if guardLength == 0 {
+		return "", 0, nil
+	}
+	guardStartOffset := end - guardLength
+	if guardStartOffset < batch.dependencyStart {
+		return "", 0, errors.New("collector/input: staged dependency lacks event guard prefix")
+	}
+	start := guardStartOffset - batch.dependencyStart
+	if start+guardLength > uint64(len(batch.dependency)) {
+		return "", 0, errors.New("collector/input: event guard range exceeds staged dependency")
+	}
+	// #nosec G115 -- both indices are bounded by len(batch.dependency) above.
+	guardBytes := batch.dependency[int(start):int(start+guardLength)]
+	digest := sha256.Sum256(guardBytes)
+	// #nosec G115 -- fpBytes is validated against maximumFingerprintBytes.
+	return hex.EncodeToString(digest[:]), uint32(guardLength), nil
 }
 
 func (t *tailer) snapshotDependenciesMatch(batch *stagedBatch) (bool, error) {
@@ -422,12 +645,14 @@ func (t *tailer) guardFromBatch(batch *stagedBatch) (tailerRewriteGuard, error) 
 func (t *tailer) commitBatch(ctx context.Context, batch *stagedBatch) bool {
 	guard, err := t.guardFromBatch(batch)
 	if err != nil {
-		t.m.setReadError(t.pathStr(), err)
+		t.setReadError(err)
 		return false
 	}
 	t.offset = batch.cursor.offset
 	t.nextLineNumber = batch.cursor.nextLineNumber
 	t.discardingOversize = batch.cursor.discardingOversize
+	t.discardingMultilineOversize = batch.cursor.discardingMultilineOversize
+	t.discardingMultilinePartialLine = batch.cursor.discardingMultilinePartialLine
 	if guard.length > 0 {
 		t.installGuard(guard)
 	}
@@ -437,6 +662,7 @@ func (t *tailer) commitBatch(ctx context.Context, batch *stagedBatch) bool {
 	for _, event := range batch.events {
 		select {
 		case t.m.events <- event:
+			t.emittedSinceFence = true
 			t.m.eventsRead.Add(1)
 			t.m.bytesRead.Add(uint64(len(event.Bytes)))
 			t.m.lastEventNs.Store(time.Now().UnixNano())
@@ -470,7 +696,12 @@ func (t *tailer) finalizeRetirement(
 	if !t.m.acquireStagedTransaction(ctx) {
 		return false, false
 	}
-	defer t.m.releaseStagedTransaction()
+	permitHeld := true
+	defer func() {
+		if permitHeld {
+			t.m.releaseStagedTransaction()
+		}
+	}()
 	t.retireMu.Lock()
 	if !t.retireRequested.Load() || t.retireCommitted ||
 		t.retireVersion.Load() != expectedVersion {
@@ -496,7 +727,7 @@ func (t *tailer) finalizeRetirement(
 		if err == nil {
 			err = errors.New("file has a negative size")
 		}
-		t.m.setReadError(t.pathStr(), err)
+		t.setReadError(err)
 		return false, false
 	}
 	// #nosec G115 -- the negative-size case is rejected above.
@@ -514,7 +745,12 @@ func (t *tailer) finalizeRetirement(
 		}
 		return false, false
 	}
-	if !batch.reachedObservedEnd() {
+	if !batch.reachedObservedEnd() || batch.cursor.offset != finalSize {
+		// A forced final snapshot must classify every byte before retirement can
+		// release the descriptor. snapshotEnd proves what was read; cursor proves
+		// what framing actually consumed. Keeping both checks makes a future
+		// partial-frame state-machine regression fail safe instead of losing the
+		// retained suffix.
 		t.retireStable = 0
 		if batch.cursor.offset == batch.start {
 			t.growStagedReadWindow()
@@ -544,7 +780,7 @@ func (t *tailer) finalizeRetirement(
 		if err == nil {
 			err = errors.New("file has a negative size")
 		}
-		t.m.setReadError(t.pathStr(), err)
+		t.setReadError(err)
 		return false, false
 	}
 	// #nosec G115 -- the negative-size case is rejected above.
@@ -571,7 +807,7 @@ func (t *tailer) finalizeRetirement(
 	if offsetErr != nil {
 		t.retireStable = 0
 		t.retireMu.Unlock()
-		t.m.setReadError(t.pathStr(), offsetErr)
+		t.setReadError(offsetErr)
 		return false, false
 	}
 	var probe [1]byte
@@ -584,12 +820,32 @@ func (t *tailer) finalizeRetirement(
 	if !errors.Is(probeErr, io.EOF) {
 		t.retireStable = 0
 		t.retireMu.Unlock()
-		t.m.setReadError(t.pathStr(), probeErr)
+		t.setReadError(probeErr)
 		return false, false
 	}
 	t.retireCommitted = true
 	t.retireMu.Unlock()
-	// commitBatch's result is intentionally ignored: retirement is done either way.
+	// Once retireCommitted is visible, discovery retains this tailer as the
+	// owner of its physical tracking key. Publish the final snapshot in FIFO
+	// order, then release the bounded staging-memory permit before waiting on
+	// daemon/WAL durability. Holding a permit across that I/O boundary would let
+	// several retiring files stall otherwise independent active tailers.
 	t.commitBatch(ctx, batch)
+	batch = nil
+	t.m.releaseStagedTransaction()
+	permitHeld = false
+	// Fence prior publications even if this final commit was interrupted or hit
+	// an internal staging error. Under a live context those earlier events still
+	// must be durable before discovery can reuse the tracking key; under shutdown
+	// awaitDurabilityBarrier returns immediately through runCtx cancellation.
+	if barrierErr := t.awaitDurabilityBarrier(); barrierErr != nil &&
+		!errors.Is(barrierErr, context.Canceled) &&
+		!errors.Is(barrierErr, context.DeadlineExceeded) {
+		t.setReadError(barrierErr)
+	}
+	// Retirement crossed its exact source boundary and cannot be canceled. If
+	// shutdown interrupted publication or its durability fence, no replacement
+	// generation can start in this Manager; restart resumes from the older
+	// durable checkpoint and safely rereads the source range.
 	return true, false
 }

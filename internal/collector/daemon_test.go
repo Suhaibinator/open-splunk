@@ -10,13 +10,18 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/collector/config"
 	"github.com/Suhaibinator/open-splunk/internal/collector/input"
+	"github.com/Suhaibinator/open-splunk/internal/collector/sender"
 	"github.com/Suhaibinator/open-splunk/internal/collector/wal"
+	"github.com/Suhaibinator/open-splunk/internal/collectorlimits"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"google.golang.org/protobuf/proto"
 )
@@ -83,6 +88,27 @@ func newTestConfig(t *testing.T, stateDir, logGlob, tokenFile string) *config.Co
 	}
 }
 
+type blockedFirstAppendQueue struct {
+	wal.Queue
+	first         sync.Once
+	appendStarted chan struct{}
+	appendRelease chan struct{}
+}
+
+func (q *blockedFirstAppendQueue) Append(
+	events []*opensplunkv1.LogEvent,
+) (*opensplunkv1.EventBatch, error) {
+	block := false
+	q.first.Do(func() {
+		block = true
+		close(q.appendStarted)
+	})
+	if block {
+		<-q.appendRelease
+	}
+	return q.Queue.Append(events)
+}
+
 func TestDaemonStateDirectoryHasSingleOwner(t *testing.T) {
 	t.Parallel()
 	stateDir := t.TempDir()
@@ -104,6 +130,31 @@ func TestDaemonStateDirectoryHasSingleOwner(t *testing.T) {
 	}
 	if err := second.closeAll(); err != nil {
 		t.Fatalf("close second: %v", err)
+	}
+}
+
+func TestDaemonWiresBoundedDeadLetterRotation(t *testing.T) {
+	t.Parallel()
+	stateDir := t.TempDir()
+	logDir := t.TempDir()
+	cfg := newTestConfig(t, stateDir, filepath.Join(logDir, "*.log"), filepath.Join(stateDir, "token"))
+	cfg.State.DeadLetterMaxBytes = 1
+	cfg.State.DeadLetterMaxBackups = 1
+	d, err := New(cfg, WithLogger(discardLogger()), WithCollectorID("cid"), WithInstanceID("iid"))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { _ = d.closeAll() })
+
+	record := sender.DeadLetterRecord{Code: "test", RejectedAt: time.Now().UTC()}
+	if err := d.deadLetter.WriteRecords([]sender.DeadLetterRecord{record}); err != nil {
+		t.Fatalf("first WriteRecords: %v", err)
+	}
+	if err := d.deadLetter.WriteRecords([]sender.DeadLetterRecord{record}); err != nil {
+		t.Fatalf("second WriteRecords: %v", err)
+	}
+	if info, err := os.Stat(filepath.Join(stateDir, deadLetterFile+".1")); err != nil || info.Size() == 0 {
+		t.Fatalf("rotated dead letter = (%v, %v), want nonempty backup", info, err)
 	}
 }
 
@@ -193,7 +244,10 @@ func TestDaemonFileToWALWithheldAckKeepsDiscoveryCheckpoint(t *testing.T) {
 
 	// Reopen the queue after shutdown and confirm the batch survived and carries
 	// the decoded, index-routed events.
-	q, err := wal.Open(wal.Options{Dir: filepath.Join(stateDir, walSubdir), Sync: wal.SyncAlways, CollectorID: "cid"})
+	q, err := wal.Open(wal.Options{
+		Dir: filepath.Join(stateDir, walSubdir), Sync: wal.SyncAlways,
+		CollectorID: "cid", ProtocolMajor: protocolMajor, ProtocolMinor: protocolMinor,
+	})
 	if err != nil {
 		t.Fatalf("reopen queue: %v", err)
 	}
@@ -215,6 +269,221 @@ func TestDaemonFileToWALWithheldAckKeepsDiscoveryCheckpoint(t *testing.T) {
 		if ev.GetHost() != "test-host" {
 			t.Errorf("event host = %q, want test-host", ev.GetHost())
 		}
+	}
+}
+
+func TestDaemonGenerationResetWaitsForPriorSyncAlwaysAppend(t *testing.T) {
+	stateDir := t.TempDir()
+	logDir := t.TempDir()
+	logPath := filepath.Join(logDir, "app.log")
+	const original = "{\"message\":\"old\"}\n"
+	const replacement = "{\"message\":\"new\"}\n"
+	if len(original) != len(replacement) {
+		t.Fatal("generation barrier fixture must preserve file size")
+	}
+	writeFile(t, logPath, original)
+
+	cfg := newTestConfig(t, stateDir, logPath, filepath.Join(stateDir, "token"))
+	d, err := New(
+		cfg,
+		WithLogger(discardLogger()),
+		WithCollectorID("cid-generation-barrier"),
+		WithInstanceID("iid-generation-barrier"),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	underlying, ok := d.queue.(wal.ResumeQueue)
+	if !ok {
+		_ = d.closeAll()
+		t.Fatalf("daemon queue = %T, want wal.ResumeQueue", d.queue)
+	}
+	blocked := &blockedFirstAppendQueue{
+		Queue: underlying, appendStarted: make(chan struct{}), appendRelease: make(chan struct{}),
+	}
+	d.queue = blocked
+	// The first event must remain in the batcher indefinitely absent the
+	// generation barrier; this makes the regression independent of the normal
+	// 250ms linger and scheduler timing.
+	d.batchLinger = time.Hour
+	d.batchMaxEvents = 100
+	d.batchMaxBytes = 1 << 20
+	d.drainWindow = 25 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- d.Run(ctx) }()
+	releaseAppend := sync.OnceFunc(func() { close(blocked.appendRelease) })
+	runCollected := false
+	t.Cleanup(func() {
+		releaseAppend()
+		cancel()
+		if runCollected {
+			return
+		}
+		select {
+		case runError := <-runErr:
+			if runError != nil {
+				t.Errorf("Run: %v", runError)
+			}
+		case <-time.After(3 * time.Second):
+			t.Error("Daemon.Run did not stop")
+		}
+	})
+
+	waitFor(t, 3*time.Second, "original raw event publication", func() bool {
+		return d.inputs[0].manager.Health().EventsReadTotal == 1
+	})
+	checkpoints, err := d.checkpoints.List()
+	if err != nil || len(checkpoints) != 1 {
+		t.Fatalf("initial checkpoints = %+v, err=%v", checkpoints, err)
+	}
+	originalIdentity := checkpoints[0].Identity
+	if checkpoints[0].Offset != 0 {
+		t.Fatalf("initial checkpoint offset = %d, want discovery offset 0", checkpoints[0].Offset)
+	}
+
+	// Copy-truncate and rewrite the same inode to the same size. readInput must
+	// finish decoding/processing the old event, and the batcher must interrupt
+	// its one-hour linger and attempt the SyncAlways append, before input may
+	// persist the replacement generation.
+	writeFile(t, logPath, replacement)
+	select {
+	case <-blocked.appendStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for barrier-triggered append; health=%+v", d.inputs[0].manager.Health())
+	}
+	if stats := underlying.Stats(); stats.QueuedBatches != 0 || stats.QueuedEvents != 0 {
+		t.Fatalf("underlying WAL changed before blocked append was released: %+v", stats)
+	}
+	checkpoints, err = d.checkpoints.List()
+	if err != nil || len(checkpoints) != 1 {
+		t.Fatalf("blocked checkpoints = %+v, err=%v", checkpoints, err)
+	}
+	if checkpoints[0].Identity.Generation != originalIdentity.Generation {
+		t.Fatalf(
+			"generation checkpoint overtook SyncAlways append: got %d want %d",
+			checkpoints[0].Identity.Generation,
+			originalIdentity.Generation,
+		)
+	}
+
+	releaseAppend()
+	waitFor(t, 3*time.Second, "old generation durable WAL append", func() bool {
+		stats := underlying.Stats()
+		return stats.QueuedBatches == 1 && stats.QueuedEvents == 1
+	})
+	waitFor(t, 3*time.Second, "replacement generation checkpoint", func() bool {
+		cps, listErr := d.checkpoints.List()
+		return listErr == nil && len(cps) == 1 &&
+			cps[0].Identity.Generation == originalIdentity.Generation+1
+	})
+	marks, err := underlying.PendingSourceMarks()
+	if err != nil {
+		t.Fatalf("PendingSourceMarks: %v", err)
+	}
+	if len(marks) != 1 || marks[0].FileIdentity != originalIdentity.String() {
+		t.Fatalf("durable source marks = %+v, want original generation %s", marks, originalIdentity.String())
+	}
+
+	cancel()
+	select {
+	case runError := <-runErr:
+		runCollected = true
+		if runError != nil {
+			t.Fatalf("Run: %v", runError)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Daemon.Run did not stop after cancellation")
+	}
+}
+
+func TestDaemonQueueFullBarrierDoesNotAdvanceGenerationOnShutdown(t *testing.T) {
+	stateDir := t.TempDir()
+	logDir := t.TempDir()
+	logPath := filepath.Join(logDir, "app.log")
+	const original = "{\"message\":\"old\"}\n"
+	const replacement = "{\"message\":\"new\"}\n"
+	writeFile(t, logPath, original)
+
+	cfg := newTestConfig(t, stateDir, logPath, filepath.Join(stateDir, "token"))
+	d, err := New(
+		cfg,
+		WithLogger(discardLogger()),
+		WithCollectorID("cid-full-generation-barrier"),
+		WithInstanceID("iid-full-generation-barrier"),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	underlying := d.queue
+	full := &alwaysFullQueue{Queue: underlying}
+	d.queue = full
+	d.batchLinger = time.Hour
+	d.batchMaxEvents = 100
+	d.batchMaxBytes = 1 << 20
+	d.queueFullRetry = 2 * time.Millisecond
+	d.shutdownFlushGrace = 20 * time.Millisecond
+	d.drainWindow = 20 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- d.Run(ctx) }()
+	runCollected := false
+	t.Cleanup(func() {
+		cancel()
+		if runCollected {
+			return
+		}
+		select {
+		case <-runErr:
+		case <-time.After(3 * time.Second):
+			t.Error("Daemon.Run did not stop")
+		}
+	})
+
+	waitFor(t, 3*time.Second, "original raw event publication", func() bool {
+		return d.inputs[0].manager.Health().EventsReadTotal == 1
+	})
+	checkpoints, err := d.checkpoints.List()
+	if err != nil || len(checkpoints) != 1 {
+		t.Fatalf("initial checkpoints = %+v, err=%v", checkpoints, err)
+	}
+	originalIdentity := checkpoints[0].Identity
+	writeFile(t, logPath, replacement)
+	waitFor(t, 3*time.Second, "barrier flush blocked by full queue", func() bool {
+		return full.calls.Load() > 0
+	})
+	checkpoints, err = d.checkpoints.List()
+	if err != nil || len(checkpoints) != 1 {
+		t.Fatalf("queue-full checkpoints = %+v, err=%v", checkpoints, err)
+	}
+	if checkpoints[0].Identity.Generation != originalIdentity.Generation {
+		t.Fatalf("queue-full barrier advanced generation: %+v", checkpoints[0])
+	}
+
+	cancel()
+	select {
+	case runError := <-runErr:
+		runCollected = true
+		if runError != nil {
+			t.Fatalf("Run: %v", runError)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("queue-full durability barrier blocked shutdown")
+	}
+
+	reopened, err := input.NewCheckpointStore(filepath.Join(stateDir, checkpointsSubdir))
+	if err != nil {
+		t.Fatalf("reopen checkpoints: %v", err)
+	}
+	defer reopened.Close()
+	checkpoints, err = reopened.List()
+	if err != nil || len(checkpoints) != 1 {
+		t.Fatalf("reopened checkpoints = %+v, err=%v", checkpoints, err)
+	}
+	if checkpoints[0].Identity.Generation != originalIdentity.Generation {
+		t.Fatalf("shutdown persisted generation through failed barrier: %+v", checkpoints[0])
 	}
 }
 
@@ -352,7 +621,8 @@ func TestDaemonRedactsSecretsBeforeOfflineWALAppend(t *testing.T) {
 	}
 
 	queue, err := wal.Open(wal.Options{
-		Dir: filepath.Join(stateDir, walSubdir), Sync: wal.SyncAlways, CollectorID: "cid",
+		Dir: filepath.Join(stateDir, walSubdir), Sync: wal.SyncAlways,
+		CollectorID: "cid", ProtocolMajor: protocolMajor, ProtocolMinor: protocolMinor,
 	})
 	if err != nil {
 		t.Fatalf("reopen queue: %v", err)
@@ -1136,6 +1406,80 @@ func TestDaemonDecodeFailurePolicy(t *testing.T) {
 	if got := d.DecodeFailures(); got != 1 {
 		t.Fatalf("DecodeFailures = %d, want 1", got)
 	}
+	if got := d.localDroppedEvents(); got != 1 {
+		t.Fatalf("localDroppedEvents = %d, want 1", got)
+	}
+}
+
+type fixedHealthManager struct {
+	input.Manager
+	health input.Health
+}
+
+func (manager fixedHealthManager) Health() input.Health { return manager.health }
+
+func TestInputHealthSnapshotSanitizesFleetBoundary(t *testing.T) {
+	t.Parallel()
+	invalidStatus := string([]byte{0xff}) + "line\nwith\x00controls" +
+		strings.Repeat("x", maximumReportedInputStatusBytes+128)
+	inputs := []*inputRuntime{{
+		id: "input",
+		manager: fixedHealthManager{health: input.Health{
+			InputID: "input", State: opensplunkv1.CollectorInputState_COLLECTOR_INPUT_STATE_ERROR,
+			StatusMessage: invalidStatus, DiscoveredSources: 1, ActiveSources: 2,
+			EventsReadTotal: ^uint64(0), BytesReadTotal: ^uint64(0),
+		}},
+	}}
+
+	got := inputHealthSnapshot(inputs)
+	if len(got) != 1 {
+		t.Fatalf("input health count = %d, want 1", len(got))
+	}
+	health := got[0]
+	if !utf8.ValidString(health.GetStatusMessage()) ||
+		len(health.GetStatusMessage()) > maximumReportedInputStatusBytes {
+		t.Fatalf("status is not bounded valid UTF-8: %q", health.GetStatusMessage())
+	}
+	for _, character := range health.GetStatusMessage() {
+		if unicode.IsControl(character) {
+			t.Fatalf("status retained control character %U", character)
+		}
+	}
+	if health.GetDiscoveredSources() != 2 || health.GetActiveSources() != 2 {
+		t.Fatalf("source counts = discovered:%d active:%d, want 2/2",
+			health.GetDiscoveredSources(), health.GetActiveSources())
+	}
+	const maximumFleetCounter = uint64(1<<63 - 1)
+	if health.GetEventsReadTotal() != maximumFleetCounter ||
+		health.GetBytesReadTotal() != maximumFleetCounter {
+		t.Fatalf("counters = events:%d bytes:%d, want saturated %d",
+			health.GetEventsReadTotal(), health.GetBytesReadTotal(), maximumFleetCounter)
+	}
+}
+
+func TestLocalDroppedEventsSaturatesWithoutIntermediateWrap(t *testing.T) {
+	t.Parallel()
+	var daemon Daemon
+	daemon.decodeFailures.Store(collectorlimits.MaximumFleetCounter - 1)
+	daemon.pipelineFailures.Store(10)
+	daemon.policyDrops.Store(^uint64(0))
+	daemon.oversizedDrops.Store(20)
+
+	if got := daemon.localDroppedEvents(); got != collectorlimits.MaximumFleetCounter {
+		t.Fatalf("localDroppedEvents = %d, want saturated %d", got, collectorlimits.MaximumFleetCounter)
+	}
+}
+
+func TestCollectorBoundaryTextValidation(t *testing.T) {
+	t.Parallel()
+	if !validCollectorBoundaryText("host.example", 255, false) {
+		t.Fatal("valid hostname rejected")
+	}
+	for _, invalid := range []string{"", "bad\nhost", string([]byte{0xff}), strings.Repeat("x", 256)} {
+		if validCollectorBoundaryText(invalid, 255, false) {
+			t.Fatalf("invalid boundary text accepted: %q", invalid)
+		}
+	}
 }
 
 // testEvent decodes raw at the given position into a LogEvent using a decoder
@@ -1396,11 +1740,12 @@ func TestPendingBatchKeepsIdenticalFilesIndependentByInput(t *testing.T) {
 			endOffset: offset, lineNumber: 1, nextLineNumber: 2, size: 1,
 		})
 	}
-	if len(batch.marks) != 2 {
-		t.Fatalf("pending marks = %+v, want one for each input", batch.marks)
+	marks := batch.checkpointMarks()
+	if len(marks) != 2 {
+		t.Fatalf("pending marks = %+v, want one for each input", marks)
 	}
 	for inputID, wantOffset := range map[string]uint64{"input-a": 100, "input-b": 200} {
-		mark, ok := batch.marks[inputFileTrackingKey(inputID, identity)]
+		mark, ok := marks[inputFileTrackingKey(inputID, identity)]
 		if !ok || mark.inputID != inputID || mark.offset != wantOffset {
 			t.Fatalf(
 				"pending mark for %q = (%+v, %t), want offset %d",

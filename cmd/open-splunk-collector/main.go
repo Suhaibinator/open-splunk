@@ -141,6 +141,10 @@ func runCollector(args []string) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+	if fs.NArg() != 0 {
+		fmt.Fprintln(os.Stderr, "run does not accept positional arguments")
+		return 2
+	}
 
 	logLevel, err := parseLogLevel(*logLevelText)
 	if err != nil {
@@ -163,6 +167,13 @@ func runCollector(args []string) int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	// Restore the operating system's default disposition immediately after the
+	// first signal cancels graceful shutdown. A second SIGINT/SIGTERM can then
+	// force a process that is stuck in an OS or dependency call to exit.
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
 
 	logger.Info("collector starting", "config", *path, "inputs", len(cfg.Inputs))
 	if err := daemon.Run(ctx); err != nil {
@@ -194,6 +205,10 @@ func validateConfig(args []string) int {
 	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
 	path := fs.String("config", defaultConfigPath, "path to the collector configuration file")
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintln(os.Stderr, "validate does not accept positional arguments")
 		return 2
 	}
 

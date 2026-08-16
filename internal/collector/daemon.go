@@ -16,6 +16,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/buildinfo"
@@ -24,6 +26,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/collector/input"
 	"github.com/Suhaibinator/open-splunk/internal/collector/sender"
 	"github.com/Suhaibinator/open-splunk/internal/collector/wal"
+	"github.com/Suhaibinator/open-splunk/internal/collectorlimits"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -49,6 +52,10 @@ const (
 	defaultShutdownFlushGrace = 5 * time.Second
 	defaultDrainWindow        = 10 * time.Second
 	defaultSegmentMaxBytes    = 64 << 20 // 64 MiB
+	// Keeping each status well below the server's per-value ceiling also keeps
+	// the worst-case 256-input heartbeat comfortably below its aggregate 1 MiB
+	// snapshot limit.
+	maximumReportedInputStatusBytes = 2 << 10
 )
 
 // State-directory layout. Everything the daemon persists lives under
@@ -119,11 +126,19 @@ type Daemon struct {
 	// lock.
 	lastOffsets map[inputFileKey]uint64
 
-	decodeFailures atomic.Uint64
+	decodeFailures   atomic.Uint64
+	pipelineFailures atomic.Uint64
+	policyDrops      atomic.Uint64
 
 	// oversizedDrops counts single events whose durable record exceeds
 	// max_queue_bytes and were therefore dead-lettered rather than queued.
 	oversizedDrops atomic.Uint64
+
+	// shutdownFlushDeadline is initialized once when a canceled flush first
+	// observes queue-full backpressure. Every recursive split shares it, making
+	// the configured shutdown grace a process-wide bound rather than a per-leaf
+	// allowance.
+	shutdownFlushDeadline atomic.Int64
 }
 
 // inputRuntime bundles one input's tailer with the decoder built from its
@@ -235,9 +250,13 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 		return nil, fmt.Errorf("collector: open checkpoint store: %w", err)
 	}
 
+	maxQueueBytes := uint64(cfg.State.MaxQueueBytes)
+	if maxQueueBytes == 0 {
+		maxQueueBytes = uint64(config.DefaultMaxQueueBytes)
+	}
 	queue, err := wal.Open(wal.Options{
 		Dir:             filepath.Join(stateDir, walSubdir),
-		MaxQueueBytes:   uint64(cfg.State.MaxQueueBytes),
+		MaxQueueBytes:   maxQueueBytes,
 		SegmentMaxBytes: defaultSegmentMaxBytes,
 		Sync:            wal.SyncAlways,
 		CollectorID:     collectorID,
@@ -248,6 +267,14 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 		_ = checkpoints.Close()
 		_ = stateLock.Close()
 		return nil, fmt.Errorf("collector: open durable queue: %w", err)
+	}
+	queueStats := queue.Stats()
+	if queueStats.QuarantinedSegments != 0 || queueStats.RecoveryWarning != "" {
+		logger.Warn("collector: WAL recovery retained quarantined data; operator inspection is required",
+			"segments", queueStats.QuarantinedSegments,
+			"bytes", queueStats.QuarantinedBytes,
+			"recovery_warning", queueStats.RecoveryWarning,
+		)
 	}
 
 	// From here on, failures must release the queue and checkpoint store.
@@ -268,7 +295,13 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 	inputCheckpoints, resumeView := newCheckpointResumeView(checkpoints, pendingResumeCheckpoints)
 
 	hostname, herr := os.Hostname()
-	if herr != nil || strings.TrimSpace(hostname) == "" {
+	if herr != nil || strings.TrimSpace(hostname) == "" ||
+		!validCollectorBoundaryText(hostname, collectorlimits.MaximumHostnameBytes, false) {
+		if herr != nil {
+			logger.Warn("collector: operating-system hostname is unavailable; using fallback")
+		} else {
+			logger.Warn("collector: operating-system hostname is invalid for the wire protocol; using fallback")
+		}
 		hostname = "unknown-host"
 	}
 
@@ -288,11 +321,23 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 		anyMultiline = anyMultiline || multi
 	}
 
-	deadLetter, err := sender.NewFileDeadLetterSink(filepath.Join(stateDir, deadLetterFile))
+	deadLetterMaxBytes := cfg.State.DeadLetterMaxBytes
+	if deadLetterMaxBytes == 0 {
+		deadLetterMaxBytes = config.DefaultDeadLetterMaxBytes
+	}
+	deadLetterMaxBackups := cfg.State.DeadLetterMaxBackups
+	deadLetter, err := sender.NewFileDeadLetterSinkWithOptions(
+		filepath.Join(stateDir, deadLetterFile),
+		sender.FileDeadLetterSinkOptions{
+			MaxBytes:   int64(deadLetterMaxBytes),
+			MaxBackups: deadLetterMaxBackups,
+		},
+	)
 	if err != nil {
 		return fail(fmt.Errorf("collector: open dead-letter sink: %w", err))
 	}
 
+	var daemonRuntime *Daemon
 	senderOpts := sender.Options{
 		Address:     cfg.Server.Address,
 		TLS:         sender.TLSConfig{Enabled: cfg.Server.TLS.Enabled, CAFile: cfg.Server.TLS.CAFile, ServerName: cfg.Server.TLS.ServerName},
@@ -317,6 +362,12 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 		Backoff:     sender.BackoffPolicy{Initial: time.Second, Max: 30 * time.Second, Multiplier: 2, Jitter: 0.2},
 		Logger:      logger,
 		InputHealth: func() []*opensplunkv1.CollectorInputHealth { return inputHealthSnapshot(inputs) },
+		LocalDroppedEventsTotal: func() uint64 {
+			if daemonRuntime == nil {
+				return 0
+			}
+			return daemonRuntime.localDroppedEvents()
+		},
 		OnTerminalMarks: func(marks []wal.SourceCheckpointMark) error {
 			committed, err := commitTerminalCheckpoints(checkpoints, marks)
 			if err == nil && resumeView != nil {
@@ -351,6 +402,7 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 		drainWindow:        defaultDrainWindow,
 		lastOffsets:        make(map[inputFileKey]uint64),
 	}
+	daemonRuntime = d
 	return d, nil
 }
 
@@ -358,9 +410,27 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 // not be decoded. It is monotonic for the life of the process.
 func (d *Daemon) DecodeFailures() uint64 { return d.decodeFailures.Load() }
 
+// PipelineFailures returns the number of events skipped after an unexpected
+// processor error. Built-in processors surface configuration errors at startup,
+// so a nonzero value indicates a runtime implementation or extension fault.
+func (d *Daemon) PipelineFailures() uint64 { return d.pipelineFailures.Load() }
+
+// PolicyDrops returns the number of events intentionally filtered by the
+// configured processor chain.
+func (d *Daemon) PolicyDrops() uint64 { return d.policyDrops.Load() }
+
 // OversizedDrops returns the running count of single events dead-lettered
 // because their durable record exceeded max_queue_bytes. Monotonic per process.
 func (d *Daemon) OversizedDrops() uint64 { return d.oversizedDrops.Load() }
+
+func (d *Daemon) localDroppedEvents() uint64 {
+	return collectorlimits.SaturatingAddFleetCounters(
+		d.decodeFailures.Load(),
+		d.pipelineFailures.Load(),
+		d.policyDrops.Load(),
+		d.oversizedDrops.Load(),
+	)
+}
 
 // Run starts every input, the decode/process/append pipeline, and the sender,
 // blocking until ctx is canceled and shutdown completes. It returns nil on a
@@ -836,6 +906,9 @@ func buildInput(in *config.InputConfig, defaultHost string, checkpoints input.Ma
 		fo.LineStartPattern = re
 		fo.MaxLines = in.Multiline.MaxLines
 		flushAfter = in.Multiline.FlushAfter.Duration()
+		if flushAfter == 0 {
+			flushAfter = config.DefaultMultilineFlushAfter.Duration()
+		}
 	}
 
 	mgr, err := input.NewManager(input.Config{
@@ -951,14 +1024,19 @@ func inputHealthSnapshot(inputs []*inputRuntime) []*opensplunkv1.CollectorInputH
 	out := make([]*opensplunkv1.CollectorInputHealth, 0, len(inputs))
 	for _, ir := range inputs {
 		h := ir.manager.Health()
+		active := collectorlimits.ClampFleetCounter(h.ActiveSources)
+		discovered := collectorlimits.ClampFleetCounter(h.DiscoveredSources)
+		if discovered < active {
+			discovered = active
+		}
 		ch := &opensplunkv1.CollectorInputHealth{
 			InputId:           h.InputID,
 			State:             h.State,
-			StatusMessage:     h.StatusMessage,
-			DiscoveredSources: h.DiscoveredSources,
-			ActiveSources:     h.ActiveSources,
-			EventsReadTotal:   h.EventsReadTotal,
-			BytesReadTotal:    h.BytesReadTotal,
+			StatusMessage:     sanitizeCollectorBoundaryText(h.StatusMessage, maximumReportedInputStatusBytes),
+			DiscoveredSources: discovered,
+			ActiveSources:     active,
+			EventsReadTotal:   collectorlimits.ClampFleetCounter(h.EventsReadTotal),
+			BytesReadTotal:    collectorlimits.ClampFleetCounter(h.BytesReadTotal),
 		}
 		if !h.LastEventAt.IsZero() {
 			ch.LastEventAt = timestamppb.New(h.LastEventAt.UTC())
@@ -969,4 +1047,47 @@ func inputHealthSnapshot(inputs []*inputRuntime) []*opensplunkv1.CollectorInputH
 		out = append(out, ch)
 	}
 	return out
+}
+
+func validCollectorBoundaryText(value string, maximum int, allowEmpty bool) bool {
+	if maximum < 0 || (!allowEmpty && value == "") || len(value) > maximum ||
+		!utf8.ValidString(value) {
+		return false
+	}
+	for _, character := range value {
+		if unicode.IsControl(character) {
+			return false
+		}
+	}
+	return true
+}
+
+// sanitizeCollectorBoundaryText makes local filesystem diagnostics safe for
+// the fleet heartbeat contract without logging or otherwise exposing them.
+// Invalid UTF-8 becomes the replacement rune, controls become spaces, and the
+// result is truncated only at a rune boundary.
+func sanitizeCollectorBoundaryText(value string, maximum int) string {
+	if maximum <= 0 || value == "" {
+		return ""
+	}
+	if validCollectorBoundaryText(value, maximum, true) {
+		return value
+	}
+	var result strings.Builder
+	result.Grow(min(len(value), maximum))
+	for _, character := range value {
+		if unicode.IsControl(character) {
+			character = ' '
+		}
+		encodedBytes := utf8.RuneLen(character)
+		if encodedBytes < 0 {
+			character = utf8.RuneError
+			encodedBytes = utf8.RuneLen(character)
+		}
+		if result.Len() > maximum-encodedBytes {
+			break
+		}
+		result.WriteRune(character)
+	}
+	return result.String()
 }

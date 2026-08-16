@@ -4,17 +4,48 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"math"
+	"math/big"
 	"net"
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	collectorinput "github.com/Suhaibinator/open-splunk/internal/collector/input"
+	"github.com/Suhaibinator/open-splunk/internal/collectorlimits"
+	"github.com/Suhaibinator/open-splunk/internal/eventfields"
+	"github.com/Suhaibinator/open-splunk/internal/indexname"
+	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
 	yaml "go.yaml.in/yaml/v3"
+)
+
+const (
+	// DefaultMaxQueueBytes keeps an omitted max_queue_bytes bounded. The WAL
+	// package deliberately retains zero as an explicit API-level "unbounded"
+	// value, but a production collector configuration must never get that
+	// behavior accidentally.
+	DefaultMaxQueueBytes        ByteSize = 1 << 30
+	DefaultDeadLetterMaxBytes   ByteSize = 64 << 20
+	DefaultDeadLetterMaxBackups          = 4
+
+	// DefaultMultilineFlushAfter bounds the time a final partial multiline
+	// event can remain buffered when a file becomes idle.
+	DefaultMultilineFlushAfter Duration = Duration(5 * time.Second)
+
+	minimumPollInterval           = 10 * time.Millisecond
+	minimumMultilineFlushInterval = 10 * time.Millisecond
+	maximumGlobsPerInput          = 256
+	maximumGlobBytes              = 16 << 10
+	maximumProcessors             = 256
+	maximumProcessorFields        = eventfields.MaximumStoredFieldsPerEvent
+	maximumStaticFields           = eventfields.MaximumStoredFieldsPerEvent
+	maximumMultilineLines         = 1 << 20
+	maximumDeadLetterBackups      = 64
 )
 
 // Config is the fully parsed collector configuration. It is the single value
@@ -68,6 +99,12 @@ type StateConfig struct {
 	// MaxQueueBytes bounds the on-disk durable queue. When the queue is full the
 	// collector stops reading inputs (backpressure) rather than dropping data.
 	MaxQueueBytes ByteSize `yaml:"max_queue_bytes"`
+	// DeadLetterMaxBytes rotates the sensitive JSONL dead-letter output before
+	// the next record would cross this size. DeadLetterMaxBackups bounds the
+	// retained rotated files; an explicit zero discards the previous active file
+	// at rotation, while an omitted YAML value defaults to four backups.
+	DeadLetterMaxBytes   ByteSize `yaml:"dead_letter_max_bytes"`
+	DeadLetterMaxBackups int      `yaml:"dead_letter_max_backups"`
 }
 
 // InputConfig is one file-monitoring input. The trusted metadata fields (Index,
@@ -174,6 +211,9 @@ func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
 	if err != nil {
 		return fmt.Errorf("invalid duration %q: %w", s, err)
 	}
+	if dur < 0 {
+		return fmt.Errorf("duration %q cannot be negative", s)
+	}
 	*d = Duration(dur)
 	return nil
 }
@@ -198,11 +238,24 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("config %q: %w", path, err)
 	}
-	var cfg Config
+	// Seed scalar defaults before decoding so an explicitly configured zero can
+	// retain its documented meaning. In particular, zero dead-letter backups
+	// rotates by discarding the previous active file, while an omitted value
+	// retains the production default.
+	cfg := Config{State: StateConfig{
+		DeadLetterMaxBackups: DefaultDeadLetterMaxBackups,
+	}}
 	dec := yaml.NewDecoder(bytes.NewReader(sub))
 	dec.KnownFields(true)
 	if err := dec.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("parse config %q: %w", path, err)
+	}
+	var trailing yaml.Node
+	if err := dec.Decode(&trailing); err != io.EOF {
+		if err != nil {
+			return nil, fmt.Errorf("parse config %q trailing document: %w", path, err)
+		}
+		return nil, fmt.Errorf("parse config %q: multiple YAML documents are not allowed", path)
 	}
 	cfg.applyDefaults()
 	if err := cfg.Validate(); err != nil {
@@ -211,12 +264,17 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// applyDefaults fills in the small set of defaults this package owns. Sizes and
-// durations left at zero are interpreted as "use the package default" by the
-// consuming packages and are not defaulted here.
+// applyDefaults fills in defaults that must be visible before validation and
+// before the configuration is handed to lower-level packages.
 func (c *Config) applyDefaults() {
 	if c.Server.Transport == "" {
 		c.Server.Transport = "grpc"
+	}
+	if c.State.MaxQueueBytes == 0 {
+		c.State.MaxQueueBytes = DefaultMaxQueueBytes
+	}
+	if c.State.DeadLetterMaxBytes == 0 {
+		c.State.DeadLetterMaxBytes = DefaultDeadLetterMaxBytes
 	}
 	for i := range c.Inputs {
 		in := &c.Inputs[i]
@@ -228,6 +286,9 @@ func (c *Config) applyDefaults() {
 		}
 		if in.StartAt == "" {
 			in.StartAt = "end"
+		}
+		if in.Multiline != nil && in.Multiline.FlushAfter == 0 {
+			in.Multiline.FlushAfter = DefaultMultilineFlushAfter
 		}
 	}
 }
@@ -245,6 +306,9 @@ func (c *Config) Validate() error {
 	if c.Server.Transport != "grpc" {
 		return fmt.Errorf("server.transport must be %q, got %q", "grpc", c.Server.Transport)
 	}
+	if c.Server.Compression != "" && c.Server.Compression != "gzip" {
+		return fmt.Errorf("server.compression must be empty or %q, got %q", "gzip", c.Server.Compression)
+	}
 	if strings.TrimSpace(c.Server.TokenFile) == "" {
 		return errors.New("server.token_file is required")
 	}
@@ -257,10 +321,23 @@ func (c *Config) Validate() error {
 	if strings.TrimSpace(c.State.Directory) == "" {
 		return errors.New("state.directory is required")
 	}
+	if c.State.DeadLetterMaxBackups < 0 || c.State.DeadLetterMaxBackups > maximumDeadLetterBackups {
+		return fmt.Errorf("state.dead_letter_max_backups must be between 0 and %d", maximumDeadLetterBackups)
+	}
+	if c.State.DeadLetterMaxBytes > ByteSize(math.MaxInt64) {
+		return fmt.Errorf("state.dead_letter_max_bytes cannot exceed %d", int64(math.MaxInt64))
+	}
 	if len(c.Inputs) == 0 {
 		return errors.New("at least one input is required")
 	}
+	if len(c.Inputs) > collectorlimits.MaximumInputs {
+		return fmt.Errorf("inputs cannot contain more than %d values", collectorlimits.MaximumInputs)
+	}
+	if len(c.Processors) > maximumProcessors {
+		return fmt.Errorf("processors cannot contain more than %d values", maximumProcessors)
+	}
 	seen := make(map[string]int, len(c.Inputs))
+	inputRegistrationBytes := 0
 	for i, in := range c.Inputs {
 		id := in.ID
 		if strings.TrimSpace(id) == "" {
@@ -289,28 +366,101 @@ func (c *Config) Validate() error {
 		if len(in.Include) == 0 {
 			return fmt.Errorf("input %q: at least one include glob is required", id)
 		}
+		if len(in.Include) > maximumGlobsPerInput {
+			return fmt.Errorf("input %q: include cannot contain more than %d globs", id, maximumGlobsPerInput)
+		}
+		if len(in.Exclude) > maximumGlobsPerInput {
+			return fmt.Errorf("input %q: exclude cannot contain more than %d globs", id, maximumGlobsPerInput)
+		}
 		if strings.TrimSpace(in.Index) == "" {
 			return fmt.Errorf("input %q: index is required", id)
 		}
+		if !indexname.ValidCanonical(in.Index) {
+			return fmt.Errorf("input %q: index %q is not canonical", id, in.Index)
+		}
 		for _, g := range in.Include {
+			if len(g) == 0 || len(g) > maximumGlobBytes {
+				return fmt.Errorf("input %q: include glob must contain 1..%d bytes", id, maximumGlobBytes)
+			}
 			if _, err := filepath.Match(g, ""); err != nil {
 				return fmt.Errorf("input %q: invalid include glob %q: %w", id, g, err)
 			}
 		}
 		for _, g := range in.Exclude {
+			if len(g) == 0 || len(g) > maximumGlobBytes {
+				return fmt.Errorf("input %q: exclude glob must contain 1..%d bytes", id, maximumGlobBytes)
+			}
 			if _, err := filepath.Match(g, ""); err != nil {
 				return fmt.Errorf("input %q: invalid exclude glob %q: %w", id, g, err)
+			}
+		}
+		if uint64(in.MaxEventBytes) > indexpolicy.HardMaxEventBytes {
+			return fmt.Errorf("input %q: max_event_bytes cannot exceed %d", id, indexpolicy.HardMaxEventBytes)
+		}
+		if poll := in.PollInterval.Duration(); poll < 0 {
+			return fmt.Errorf("input %q: poll_interval must be >= 0", id)
+		} else if poll > 0 && poll < minimumPollInterval {
+			return fmt.Errorf("input %q: poll_interval must be 0 or at least %s", id, minimumPollInterval)
+		}
+		effectiveSource := in.Source
+		if strings.TrimSpace(effectiveSource) == "" {
+			effectiveSource = id
+		}
+		if err := validateBoundedText(effectiveSource, collectorlimits.MaximumSourceBytes, false); err != nil {
+			return fmt.Errorf("input %q: source %w", id, err)
+		}
+		effectiveSourcetype := in.Sourcetype
+		if strings.TrimSpace(effectiveSourcetype) == "" {
+			effectiveSourcetype = in.Format
+		}
+		if err := validateBoundedText(effectiveSourcetype, collectorlimits.MaximumSourcetypeBytes, false); err != nil {
+			return fmt.Errorf("input %q: sourcetype %w", id, err)
+		}
+		if in.Host != "" {
+			if err := validateBoundedText(in.Host, collectorlimits.MaximumHostnameBytes, false); err != nil {
+				return fmt.Errorf("input %q: host %w", id, err)
+			}
+		}
+		inputRegistrationBytes += len(id) + len(in.Index) + len(effectiveSource) + len(effectiveSourcetype) + 16
+		if inputRegistrationBytes > maximumConfigInputRegistrationBytes() {
+			return fmt.Errorf("configured input registrations exceed the collector hello limit of %d bytes", collectorlimits.MaximumSnapshotBytes)
+		}
+		if len(in.Fields) > maximumStaticFields {
+			return fmt.Errorf("input %q: fields cannot contain more than %d values", id, maximumStaticFields)
+		}
+		staticBytes := 0
+		for name, value := range in.Fields {
+			if err := validateDynamicFieldName(name); err != nil {
+				return fmt.Errorf("input %q: field %q: %w", id, name, err)
+			}
+			if name != "service" && eventfields.IsCollectorReservedRoot(name) {
+				return fmt.Errorf("input %q: field %q is reserved canonical metadata", id, name)
+			}
+			if !utf8.ValidString(value) {
+				return fmt.Errorf("input %q: field %q value is not valid UTF-8", id, name)
+			}
+			staticBytes += len(name) + len(value)
+			if staticBytes > int(indexpolicy.HardMaxEventBytes) {
+				return fmt.Errorf("input %q: fields exceed the maximum event size", id)
 			}
 		}
 		if in.Multiline != nil {
 			if strings.TrimSpace(in.Multiline.LineStartPattern) == "" {
 				return fmt.Errorf("input %q: multiline.line_start_pattern is required", id)
 			}
+			if len(in.Multiline.LineStartPattern) > maximumGlobBytes {
+				return fmt.Errorf("input %q: multiline.line_start_pattern exceeds %d bytes", id, maximumGlobBytes)
+			}
 			if _, err := regexp.Compile(in.Multiline.LineStartPattern); err != nil {
 				return fmt.Errorf("input %q: multiline.line_start_pattern: %w", id, err)
 			}
-			if in.Multiline.MaxLines < 0 {
-				return fmt.Errorf("input %q: multiline.max_lines must be >= 0", id)
+			if in.Multiline.MaxLines < 0 || in.Multiline.MaxLines > maximumMultilineLines {
+				return fmt.Errorf("input %q: multiline.max_lines must be between 0 and %d", id, maximumMultilineLines)
+			}
+			if flush := in.Multiline.FlushAfter.Duration(); flush < 0 {
+				return fmt.Errorf("input %q: multiline.flush_after must be >= 0", id)
+			} else if flush > 0 && flush < minimumMultilineFlushInterval {
+				return fmt.Errorf("input %q: multiline.flush_after must be 0 or at least %s", id, minimumMultilineFlushInterval)
 			}
 		}
 	}
@@ -320,12 +470,32 @@ func (c *Config) Validate() error {
 			if len(p.Fields) == 0 {
 				return fmt.Errorf("processors[%d] (%s): at least one field is required", i, p.Type)
 			}
+			if len(p.Fields) > maximumProcessorFields {
+				return fmt.Errorf("processors[%d] (%s): fields cannot contain more than %d values", i, p.Type, maximumProcessorFields)
+			}
+			for fieldIndex, name := range p.Fields {
+				if err := validateDynamicFieldName(name); err != nil {
+					return fmt.Errorf("processors[%d] (%s): fields[%d]: %w", i, p.Type, fieldIndex, err)
+				}
+			}
 		case "rename":
 			if strings.TrimSpace(p.From) == "" {
 				return fmt.Errorf("processors[%d] (rename): from is required", i)
 			}
 			if strings.TrimSpace(p.To) == "" {
 				return fmt.Errorf("processors[%d] (rename): to is required", i)
+			}
+			if err := validateDynamicFieldName(p.From); err != nil {
+				return fmt.Errorf("processors[%d] (rename): from: %w", i, err)
+			}
+			if err := validateDynamicFieldName(p.To); err != nil {
+				return fmt.Errorf("processors[%d] (rename): to: %w", i, err)
+			}
+			if eventfields.IsCollectorReservedRoot(p.To) {
+				return fmt.Errorf("processors[%d] (rename): destination %q is reserved canonical metadata", i, p.To)
+			}
+			if p.From == p.To {
+				return fmt.Errorf("processors[%d] (rename): from and to are identical", i)
 			}
 		case "":
 			return fmt.Errorf("processors[%d]: type is required", i)
@@ -334,6 +504,38 @@ func (c *Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+func maximumConfigInputRegistrationBytes() int {
+	// Reserve the server-side maximum for runtime metadata, capabilities, and
+	// the credential-derived authorized-index snapshot so a locally accepted
+	// configuration cannot be rejected only after it connects.
+	reserved := collectorlimits.MaximumCollectorVersionBytes +
+		collectorlimits.MaximumHostnameBytes +
+		collectorlimits.MaximumOperatingSystemBytes +
+		collectorlimits.MaximumArchitectureBytes +
+		collectorlimits.MaximumCapabilities*8 +
+		collectorlimits.MaximumAuthorizedIndexes*indexname.MaximumBytes
+	return collectorlimits.MaximumSnapshotBytes - reserved
+}
+
+func validateBoundedText(value string, maximum int, allowEmpty bool) error {
+	if (!allowEmpty && value == "") || len(value) > maximum || !utf8.ValidString(value) || strings.IndexByte(value, 0) >= 0 {
+		return fmt.Errorf("is invalid or exceeds %d bytes", maximum)
+	}
+	for _, character := range value {
+		if unicode.IsControl(character) {
+			return errors.New("contains a control character")
+		}
+	}
+	return nil
+}
+
+func validateDynamicFieldName(name string) error {
+	if name == "" || strings.TrimSpace(name) != name {
+		return errors.New("must be non-empty without surrounding whitespace")
+	}
+	return validateBoundedText(name, eventfields.MaximumDynamicPathSegmentBytes, false)
 }
 
 func isLoopbackAddress(address string) bool {
@@ -389,6 +591,8 @@ func (c *Config) String() string {
 	fmt.Fprintf(&b, "state:\n")
 	fmt.Fprintf(&b, "  directory: %s\n", c.State.Directory)
 	fmt.Fprintf(&b, "  max_queue_bytes: %s\n", c.State.MaxQueueBytes)
+	fmt.Fprintf(&b, "  dead_letter_max_bytes: %s\n", c.State.DeadLetterMaxBytes)
+	fmt.Fprintf(&b, "  dead_letter_max_backups: %d\n", c.State.DeadLetterMaxBackups)
 	fmt.Fprintf(&b, "inputs: (%d)\n", len(c.Inputs))
 	for _, in := range c.Inputs {
 		fmt.Fprintf(&b, "  - id=%s type=%s format=%s start_at=%s include=%v exclude=%v\n",
@@ -482,25 +686,22 @@ func parseByteSize(s string) (uint64, error) {
 	if !ok {
 		return 0, fmt.Errorf("unknown byte size unit %q in %q", unit, s)
 	}
-	if mult == 1 {
-		if strings.Contains(numStr, ".") {
-			return 0, fmt.Errorf("fractional byte count %q requires a unit", s)
-		}
-		v, err := strconv.ParseUint(numStr, 10, 64)
-		if err != nil {
-			return 0, fmt.Errorf("invalid byte size %q: %w", s, err)
-		}
-		return v, nil
+	if mult == 1 && strings.Contains(numStr, ".") {
+		return 0, fmt.Errorf("fractional byte count %q requires a unit", s)
 	}
-	f, err := strconv.ParseFloat(numStr, 64)
-	if err != nil {
-		return 0, fmt.Errorf("invalid byte size %q: %w", s, err)
+	value, ok := new(big.Rat).SetString(numStr)
+	if !ok {
+		return 0, fmt.Errorf("invalid byte size %q", s)
 	}
-	product := f * float64(mult)
-	if product < 0 || product >= float64(math.MaxUint64) {
+	value.Mul(value, new(big.Rat).SetInt(new(big.Int).SetUint64(mult)))
+	if !value.IsInt() {
+		return 0, fmt.Errorf("byte size %q does not resolve to a whole number of bytes", s)
+	}
+	integer := value.Num()
+	if integer.Sign() < 0 || integer.BitLen() > 64 {
 		return 0, fmt.Errorf("byte size %q overflows uint64", s)
 	}
-	return uint64(product), nil
+	return integer.Uint64(), nil
 }
 
 func byteSizeUnit(unit string) (uint64, bool) {

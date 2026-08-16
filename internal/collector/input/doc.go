@@ -6,7 +6,8 @@
 // A [FileIdentity] pairs the platform file identifier (device + inode from
 // os.FileInfo.Sys on darwin/linux) with a content fingerprint (a hash over the
 // first FingerprintBytes of the file). The platform id detects the same file
-// across renames; the fingerprint detects copy-truncate and inode reuse. Its
+// across renames; the leading fingerprint plus a checkpoint's bounded trailing
+// rewrite guard detect copy-truncate, in-place rewrites, and inode reuse. Its
 // String form is stable and is what the decoder receives as
 // SourcePosition.FileIdentity, so it must not change for a given physical file.
 // Windows is out of scope; syscall-specific identity code is build-tagged for
@@ -36,6 +37,16 @@
 // discovery StartAt selects whether an unknown file is read from its beginning
 // or only from its current end. Absent or unreadable inputs are reported as
 // [Health] states, never as fatal errors.
+//
+// Rename/recreate is the required rotation mode when source-level at-least-once
+// recovery matters: rotated files must remain readable and covered by the input
+// globs until their terminal checkpoints advance. Copy-truncate is detected and
+// its rewritten generations are never confused with an acknowledged prefix,
+// including when the replacement regrows past the old offset between polls.
+// However, no tailer can recover bytes an external process has already
+// truncated before they cross the collector's WAL durability boundary. For that
+// reason copy-truncate remains best-effort and must not be used as a strict
+// at-least-once source contract.
 //
 // # Dependency direction
 //

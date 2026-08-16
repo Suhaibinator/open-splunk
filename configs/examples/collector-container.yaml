@@ -27,6 +27,8 @@ server:
 state:
   directory: "${OPEN_SPLUNK_COLLECTOR_STATE_DIRECTORY}"
   max_queue_bytes: 1GiB
+  dead_letter_max_bytes: 64MiB
+  dead_letter_max_backups: 4
 
 inputs:
   - id: application-logs

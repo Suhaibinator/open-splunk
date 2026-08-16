@@ -188,7 +188,18 @@ export interface EventOrigin {
    * so polling and process restarts do not need to rescan the source prefix; it
    * is omitted together with line_number when that exact cursor is unknown.
    */
-  nextLineNumber?: bigint | undefined;
+  nextLineNumber?:
+    | bigint
+    | undefined;
+  /**
+   * checkpoint_guard_fingerprint is the lowercase SHA-256 digest of the exact
+   * source range [end_offset-checkpoint_guard_length, end_offset). Collectors
+   * persist this bounded trailing evidence with terminal checkpoints so an
+   * in-place rewrite that preserves the file's leading identity fingerprint
+   * is still detected after restart. The two fields are presence-coupled.
+   */
+  checkpointGuardFingerprint?: string | undefined;
+  checkpointGuardLength?: number | undefined;
 }
 
 /**
@@ -227,6 +238,8 @@ function createBaseEventOrigin(): EventOrigin {
     sourcePath: undefined,
     fileFingerprintLength: undefined,
     nextLineNumber: undefined,
+    checkpointGuardFingerprint: undefined,
+    checkpointGuardLength: undefined,
   };
 }
 
@@ -267,6 +280,12 @@ export const EventOrigin: MessageFns<EventOrigin> = {
         throw new globalThis.Error("value provided for field message.nextLineNumber of type uint64 too large");
       }
       writer.uint32(64).uint64(message.nextLineNumber);
+    }
+    if (message.checkpointGuardFingerprint !== undefined) {
+      writer.uint32(74).string(message.checkpointGuardFingerprint);
+    }
+    if (message.checkpointGuardLength !== undefined) {
+      writer.uint32(80).uint32(message.checkpointGuardLength);
     }
     return writer;
   },
@@ -342,6 +361,22 @@ export const EventOrigin: MessageFns<EventOrigin> = {
           message.nextLineNumber = reader.uint64() as bigint;
           continue;
         }
+        case 9: {
+          if (tag !== 74) {
+            break;
+          }
+
+          message.checkpointGuardFingerprint = reader.string();
+          continue;
+        }
+        case 10: {
+          if (tag !== 80) {
+            break;
+          }
+
+          message.checkpointGuardLength = reader.uint32();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -393,6 +428,16 @@ export const EventOrigin: MessageFns<EventOrigin> = {
         : isSet(object.next_line_number)
         ? BigInt(object.next_line_number)
         : undefined,
+      checkpointGuardFingerprint: isSet(object.checkpointGuardFingerprint)
+        ? globalThis.String(object.checkpointGuardFingerprint)
+        : isSet(object.checkpoint_guard_fingerprint)
+        ? globalThis.String(object.checkpoint_guard_fingerprint)
+        : undefined,
+      checkpointGuardLength: isSet(object.checkpointGuardLength)
+        ? globalThis.Number(object.checkpointGuardLength)
+        : isSet(object.checkpoint_guard_length)
+        ? globalThis.Number(object.checkpoint_guard_length)
+        : undefined,
     };
   },
 
@@ -422,6 +467,12 @@ export const EventOrigin: MessageFns<EventOrigin> = {
     if (message.nextLineNumber !== undefined) {
       obj.nextLineNumber = message.nextLineNumber.toString();
     }
+    if (message.checkpointGuardFingerprint !== undefined) {
+      obj.checkpointGuardFingerprint = message.checkpointGuardFingerprint;
+    }
+    if (message.checkpointGuardLength !== undefined) {
+      obj.checkpointGuardLength = Math.round(message.checkpointGuardLength);
+    }
     return obj;
   },
 
@@ -446,6 +497,8 @@ export const EventOrigin: MessageFns<EventOrigin> = {
     message.nextLineNumber = (object.nextLineNumber !== undefined && object.nextLineNumber !== null)
       ? BigInt(object.nextLineNumber)
       : undefined;
+    message.checkpointGuardFingerprint = object.checkpointGuardFingerprint ?? undefined;
+    message.checkpointGuardLength = object.checkpointGuardLength ?? undefined;
     return message;
   },
 };

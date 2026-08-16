@@ -382,6 +382,47 @@ func hostileCheckpointMutations() []struct {
 			},
 		},
 		{
+			name: "fingerprint without rewrite guard length",
+			mutate: func(checkpoint *Checkpoint) {
+				checkpoint.GuardFingerprint = strings.Repeat("ab", 32)
+			},
+		},
+		{
+			name: "rewrite guard without fingerprint",
+			mutate: func(checkpoint *Checkpoint) {
+				checkpoint.GuardLength = 1
+			},
+		},
+		{
+			name: "rewrite guard beyond offset",
+			mutate: func(checkpoint *Checkpoint) {
+				checkpoint.GuardLength = uint32(checkpoint.Offset + 1)
+				checkpoint.GuardFingerprint = strings.Repeat("ab", 32)
+			},
+		},
+		{
+			name: "rewrite guard beyond absolute maximum",
+			mutate: func(checkpoint *Checkpoint) {
+				checkpoint.Offset = maximumFingerprintBytes + 1
+				checkpoint.GuardLength = maximumFingerprintBytes + 1
+				checkpoint.GuardFingerprint = strings.Repeat("ab", 32)
+			},
+		},
+		{
+			name: "uppercase rewrite guard fingerprint",
+			mutate: func(checkpoint *Checkpoint) {
+				checkpoint.GuardLength = 1
+				checkpoint.GuardFingerprint = strings.Repeat("AB", 32)
+			},
+		},
+		{
+			name: "nonhex rewrite guard fingerprint",
+			mutate: func(checkpoint *Checkpoint) {
+				checkpoint.GuardLength = 1
+				checkpoint.GuardFingerprint = strings.Repeat("gg", 32)
+			},
+		},
+		{
 			name: "nonadvancing next line",
 			mutate: func(checkpoint *Checkpoint) {
 				checkpoint.LineNumber = 4

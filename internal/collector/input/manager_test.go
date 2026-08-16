@@ -2,6 +2,8 @@ package input
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -16,6 +18,7 @@ import (
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/collector/framing"
+	"github.com/Suhaibinator/open-splunk/internal/collectorlimits"
 )
 
 // --- test harness ---------------------------------------------------------
@@ -132,6 +135,10 @@ func startManagerWithHooks(
 	go func() {
 		defer close(drained)
 		for ev := range mgr.Events() {
+			if ev.IsDurabilityBarrier() {
+				ev.AcknowledgeDurabilityBarrier()
+				continue
+			}
 			col.add(ev)
 		}
 	}()
@@ -361,14 +368,18 @@ func TestManagerClaimTailerSteadyFastPathAvoidsLockAndPathStore(t *testing.T) {
 
 func TestManagerStagedTransactionPermitBoundsTailersAndCancels(t *testing.T) {
 	t.Parallel()
-	mgr := &manager{stagedTransaction: make(chan struct{}, 1)}
-	first := &tailer{m: mgr}
-	second := &tailer{m: mgr}
-	if !first.m.acquireStagedTransaction(context.Background()) {
-		t.Fatal("first tailer did not acquire staged transaction permit")
+	mgr := &manager{stagedTransaction: make(chan struct{}, maxConcurrentStagedTransactions)}
+	tailers := make([]*tailer, maxConcurrentStagedTransactions+1)
+	for index := range tailers {
+		tailers[index] = &tailer{m: mgr}
 	}
-	if got := len(mgr.stagedTransaction); got != 1 {
-		t.Fatalf("held staged transaction permits = %d, want 1", got)
+	for index := range maxConcurrentStagedTransactions {
+		if !tailers[index].m.acquireStagedTransaction(context.Background()) {
+			t.Fatalf("tailer %d did not acquire staged transaction permit", index)
+		}
+	}
+	if got := len(mgr.stagedTransaction); got != maxConcurrentStagedTransactions {
+		t.Fatalf("held staged transaction permits = %d, want %d", got, maxConcurrentStagedTransactions)
 	}
 
 	waitCtx, cancel := context.WithCancel(context.Background())
@@ -376,36 +387,38 @@ func TestManagerStagedTransactionPermitBoundsTailersAndCancels(t *testing.T) {
 	result := make(chan bool, 1)
 	go func() {
 		close(started)
-		result <- second.m.acquireStagedTransaction(waitCtx)
+		result <- tailers[len(tailers)-1].m.acquireStagedTransaction(waitCtx)
 	}()
 	<-started
 	cancel()
 	select {
 	case acquired := <-result:
 		if acquired {
-			second.m.releaseStagedTransaction()
-			t.Fatal("second tailer acquired a full staged transaction permit")
+			tailers[len(tailers)-1].m.releaseStagedTransaction()
+			t.Fatal("extra tailer acquired a full staged transaction permit")
 		}
 	case <-time.After(time.Second):
 		t.Fatal("canceled second tailer remained blocked on staged transaction permit")
 	}
-	first.m.releaseStagedTransaction()
+	for range maxConcurrentStagedTransactions {
+		mgr.releaseStagedTransaction()
+	}
 	preCanceled, cancelPreCanceled := context.WithCancel(context.Background())
 	cancelPreCanceled()
-	if second.m.acquireStagedTransaction(preCanceled) {
-		second.m.releaseStagedTransaction()
+	if tailers[0].m.acquireStagedTransaction(preCanceled) {
+		tailers[0].m.releaseStagedTransaction()
 		t.Fatal("pre-canceled tailer acquired a free staged transaction permit")
 	}
 
 	retryCtx, retryCancel := context.WithTimeout(context.Background(), time.Second)
 	defer retryCancel()
-	if !second.m.acquireStagedTransaction(retryCtx) {
+	if !tailers[0].m.acquireStagedTransaction(retryCtx) {
 		t.Fatal("permit was not reusable after the first tailer released it")
 	}
-	second.m.releaseStagedTransaction()
+	tailers[0].m.releaseStagedTransaction()
 }
 
-func TestManagerStagedTransactionPermitIsHeldThroughPublication(t *testing.T) {
+func TestManagerStagedTransactionPoolAvoidsCrossFilePublicationHOL(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	firstPath := filepath.Join(dir, "a.log")
@@ -441,29 +454,29 @@ func TestManagerStagedTransactionPermitIsHeldThroughPublication(t *testing.T) {
 		}
 	})
 
+	var firstStaged string
 	select {
-	case <-staged:
+	case firstStaged = <-staged:
 	case <-time.After(3 * time.Second):
 		t.Fatal("no tailer staged its first transaction")
 	}
-	if got := len(mgr.stagedTransaction); got != 1 {
-		t.Fatalf("publication-held staged permits = %d, want 1", got)
-	}
+	var secondStaged string
 	select {
-	case path := <-staged:
-		t.Fatalf("second tailer staged before first publication completed: %s", path)
-	case <-time.After(50 * time.Millisecond):
+	case secondStaged = <-staged:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("second tailer was blocked behind first publication; first=%s", firstStaged)
+	}
+	if firstStaged == secondStaged {
+		t.Fatalf("same source staged twice before publication: %s", firstStaged)
+	}
+	if got := len(mgr.stagedTransaction); got != 2 {
+		t.Fatalf("publication-held staged permits = %d, want 2", got)
 	}
 
 	select {
 	case <-mgr.Events():
 	case <-time.After(3 * time.Second):
 		t.Fatal("first staged event was not published")
-	}
-	select {
-	case <-staged:
-	case <-time.After(3 * time.Second):
-		t.Fatal("second tailer did not stage after first publication released the permit")
 	}
 	select {
 	case <-mgr.Events():
@@ -723,6 +736,16 @@ func TestManagerStartAtEnd(t *testing.T) {
 		checkpoint, ok, getErr := h.store.Get("in", identity)
 		return getErr == nil && ok && checkpoint.Offset == uint64(len(initial))
 	})
+	discovery, ok, err := h.store.Get("in", identity)
+	if err != nil || !ok {
+		t.Fatalf("get start-at-end discovery checkpoint: ok=%t err=%v", ok, err)
+	}
+	digest := sha256.Sum256([]byte(initial))
+	if discovery.GuardLength != uint32(len(initial)) ||
+		discovery.GuardFingerprint != hex.EncodeToString(digest[:]) {
+		t.Fatalf("start-at-end discovery guard = (%d, %q), want exact initial suffix",
+			discovery.GuardLength, discovery.GuardFingerprint)
+	}
 	appendFileT(t, p, "new1\n")
 	h.waitForTexts([]string{"new1"})
 	event := h.col.snapshot()[0]
@@ -1042,6 +1065,310 @@ func TestManagerRecreateSamePath(t *testing.T) {
 	h.waitForTexts([]string{"a1", "a2", "b1", "b2"})
 }
 
+func TestManagerRetirementBarrierHoldsReusedTrackingKey(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "app.log")
+	writeFileT(t, p, "old\n")
+	info, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok := statDevIno(info); !ok {
+		t.Skip("stable device/inode tracking is unavailable on this platform")
+	}
+
+	store := newStore(t)
+	mgrInterface, err := NewManager(Config{
+		InputID: "in", Include: []string{p}, StartAt: StartAtBeginning,
+		PollInterval: testPoll,
+	}, store)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	mgr := mgrInterface.(*manager)
+	// Real kernels normally delay inode reuse until the old open descriptor is
+	// closed. Pinning the identity here deterministically models the moment
+	// immediately after close: a different file now resolves to the exact same
+	// physical tracking key but has different fingerprint evidence.
+	replacementDigest := sha256.Sum256([]byte("new\n"))
+	replacementFingerprint := hex.EncodeToString(replacementDigest[:])
+	replacementIdentified := make(chan struct{})
+	var replacementIdentifiedOnce sync.Once
+	mgr.identityFn = func(f *os.File, fileInfo os.FileInfo, fingerprintBytes int) (FileIdentity, error) {
+		id, identifyErr := identityFor(f, fileInfo, fingerprintBytes)
+		id.Device = 41
+		id.Inode = 73
+		if identifyErr == nil && id.Fingerprint == replacementFingerprint {
+			replacementIdentifiedOnce.Do(func() { close(replacementIdentified) })
+		}
+		return id, identifyErr
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- mgr.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case runError := <-runErr:
+			if runError != nil {
+				t.Errorf("Run: %v", runError)
+			}
+		case <-time.After(3 * time.Second):
+			t.Error("manager did not stop after cancellation")
+		}
+		_ = store.Close()
+	})
+
+	var original RawEvent
+	select {
+	case original = <-mgr.Events():
+		if original.IsDurabilityBarrier() || string(original.Bytes) != "old" {
+			t.Fatalf("first manager event = %+v, want old source event", original)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for original event; health=%+v", mgr.Health())
+	}
+	waitFor(t, "original event publication committed", func() bool {
+		return mgr.Health().EventsReadTotal == 1
+	})
+	if err := os.Rename(p, p+".retired"); err != nil {
+		t.Fatalf("retire source: %v", err)
+	}
+
+	var barrier RawEvent
+	select {
+	case barrier = <-mgr.Events():
+		if !barrier.IsDurabilityBarrier() {
+			t.Fatalf("retirement published unexpected event: %+v", barrier)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for retirement barrier; health=%+v", mgr.Health())
+	}
+	defer barrier.AcknowledgeDurabilityBarrier()
+
+	writeFileT(t, p, "new\n")
+	select {
+	case <-replacementIdentified:
+	case <-time.After(3 * time.Second):
+		t.Fatal("replacement was not discovered while retirement barrier was blocked")
+	}
+	// Receiving the barrier proves retirement has crossed its uncancellable
+	// descriptor boundary. Even though discovery now sees a replacement with
+	// the same tracking key, it must not burn generation N+1 until the old
+	// generation's emitted event is acknowledged durable.
+	select {
+	case event := <-mgr.Events():
+		t.Fatalf("reused-key replacement escaped retirement barrier: %+v", event)
+	case <-time.After(5 * testPoll):
+	}
+	checkpoint, ok, err := store.Get("in", original.Source.Identity)
+	if err != nil || !ok {
+		t.Fatalf("checkpoint while retirement blocked = %+v, ok=%t err=%v", checkpoint, ok, err)
+	}
+	if checkpoint.Identity.Generation != original.Source.Identity.Generation {
+		t.Fatalf(
+			"reused key advanced before retirement acknowledgment: checkpoint=%d original=%d",
+			checkpoint.Identity.Generation,
+			original.Source.Identity.Generation,
+		)
+	}
+
+	barrier.AcknowledgeDurabilityBarrier()
+	waitFor(t, "reused-key replacement checkpoint", func() bool {
+		cp, exists, getErr := store.Get("in", original.Source.Identity)
+		return getErr == nil && exists &&
+			cp.Identity.Generation == original.Source.Identity.Generation+1
+	})
+	select {
+	case replacement := <-mgr.Events():
+		if replacement.IsDurabilityBarrier() || string(replacement.Bytes) != "new" {
+			t.Fatalf("post-retirement event = %+v, want replacement", replacement)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for reused-key replacement; health=%+v", mgr.Health())
+	}
+}
+
+func TestManagerShutdownInterruptsRetirementBarrier(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "app.log")
+	writeFileT(t, p, "old\n")
+	store := newStore(t)
+	mgr, err := NewManager(Config{
+		InputID: "in", Include: []string{p}, StartAt: StartAtBeginning,
+		PollInterval: testPoll,
+	}, store)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- mgr.Run(ctx) }()
+	runCollected := false
+	t.Cleanup(func() {
+		cancel()
+		if !runCollected {
+			select {
+			case runError := <-runErr:
+				if runError != nil {
+					t.Errorf("Run: %v", runError)
+				}
+			case <-time.After(3 * time.Second):
+				t.Error("manager did not stop")
+			}
+		}
+		_ = store.Close()
+	})
+
+	var original RawEvent
+	select {
+	case original = <-mgr.Events():
+		if original.IsDurabilityBarrier() || string(original.Bytes) != "old" {
+			t.Fatalf("first event = %+v, want old", original)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for original event")
+	}
+	waitFor(t, "original event publication committed", func() bool {
+		return mgr.Health().EventsReadTotal == 1
+	})
+	if err := os.Rename(p, p+".retired"); err != nil {
+		t.Fatalf("retire source: %v", err)
+	}
+	select {
+	case barrier := <-mgr.Events():
+		if !barrier.IsDurabilityBarrier() {
+			t.Fatalf("retirement event = %+v, want barrier", barrier)
+		}
+		// Intentionally leave it unacknowledged: shutdown must use runCtx to
+		// interrupt the tailer's wait rather than depend on a live consumer.
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for retirement barrier")
+	}
+
+	cancel()
+	select {
+	case runError := <-runErr:
+		runCollected = true
+		if runError != nil {
+			t.Fatalf("Run: %v", runError)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("unacknowledged retirement barrier blocked shutdown")
+	}
+	cp, ok, err := store.Get("in", original.Source.Identity)
+	if err != nil || !ok {
+		t.Fatalf("checkpoint after interrupted barrier = %+v, ok=%t err=%v", cp, ok, err)
+	}
+	if cp.Identity.Generation != original.Source.Identity.Generation {
+		t.Fatalf("shutdown advanced generation through unacknowledged barrier: %+v", cp)
+	}
+}
+
+func TestManagerCancellationDuringDiscoveryDoesNotReplaceFinishedTailer(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.log")
+	writeFileT(t, path, "old\n")
+	store := newStore(t)
+	mgrAPI, err := NewManager(Config{
+		InputID: "in", Include: []string{path}, StartAt: StartAtBeginning,
+		PollInterval: testPoll,
+	}, store)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	mgr := mgrAPI.(*manager)
+
+	var blockDiscovery atomic.Bool
+	discoveryBlocked := make(chan struct{})
+	releaseDiscovery := make(chan struct{})
+	var blockOnce sync.Once
+	mgr.afterMatchPathsObserver = func() {
+		if !blockDiscovery.Load() {
+			return
+		}
+		blockOnce.Do(func() {
+			close(discoveryBlocked)
+			<-releaseDiscovery
+		})
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- mgr.Run(ctx) }()
+	runCollected := false
+	release := sync.OnceFunc(func() { close(releaseDiscovery) })
+	t.Cleanup(func() {
+		cancel()
+		release()
+		if !runCollected {
+			select {
+			case runError := <-runErr:
+				if runError != nil {
+					t.Errorf("Run: %v", runError)
+				}
+			case <-time.After(3 * time.Second):
+				t.Error("manager did not stop after cancellation")
+			}
+		}
+		_ = store.Close()
+	})
+
+	var original RawEvent
+	select {
+	case original = <-mgr.Events():
+		if original.IsDurabilityBarrier() || string(original.Bytes) != "old" {
+			t.Fatalf("first event = %+v, want old", original)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for original event; health=%+v", mgr.Health())
+	}
+	waitFor(t, "original event publication committed", func() bool {
+		return mgr.Health().EventsReadTotal == 1
+	})
+
+	blockDiscovery.Store(true)
+	select {
+	case <-discoveryBlocked:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for in-flight discovery poll")
+	}
+	// The poll already captured this path. Replace its bytes, then cancel until
+	// the original tailer has exited. Before the cancellation checks, releasing
+	// this poll caused claimTailer to delete the finished lifecycle and
+	// resolveStart to persist generation N+1 without a durability fence.
+	writeFileT(t, path, "new\n")
+	cancel()
+	waitFor(t, "original tailer exit", func() bool {
+		return mgr.Health().ActiveSources == 0
+	})
+	release()
+
+	select {
+	case runError := <-runErr:
+		runCollected = true
+		if runError != nil {
+			t.Fatalf("Run: %v", runError)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("manager did not stop after releasing canceled discovery")
+	}
+
+	checkpoints, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(checkpoints) != 1 ||
+		checkpoints[0].Identity.String() != original.Source.Identity.String() {
+		t.Fatalf(
+			"canceled discovery checkpoints = %+v, want only original generation %s",
+			checkpoints,
+			original.Source.Identity.String(),
+		)
+	}
+}
+
 func TestManagerCopyTruncate(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -1102,6 +1429,105 @@ func TestManagerCopyTruncateRewriteLargerBetweenPolls(t *testing.T) {
 	after := afterEvents[len(afterEvents)-1].Source.Identity
 	if after.Generation <= before.Generation {
 		t.Fatalf("generation did not advance across copy-truncate: %d -> %d", before.Generation, after.Generation)
+	}
+}
+
+func TestManagerGenerationResetWaitsForDurabilityBarrier(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "app.log")
+	writeFileT(t, p, "old\n")
+
+	store := newStore(t)
+	mgr, err := NewManager(Config{
+		InputID: "in", Include: []string{p}, StartAt: StartAtBeginning,
+		PollInterval: testPoll,
+	}, store)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- mgr.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-runErr:
+			if err != nil {
+				t.Errorf("Run: %v", err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Error("manager did not stop after cancellation")
+		}
+		_ = store.Close()
+	})
+
+	var original RawEvent
+	select {
+	case original = <-mgr.Events():
+		if original.IsDurabilityBarrier() || string(original.Bytes) != "old" {
+			t.Fatalf("first manager event = %+v, want old source event", original)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for original event; health=%+v", mgr.Health())
+	}
+	// Sending and updating the health counter happen immediately before the
+	// tailer can poll for a rewrite. Waiting for the counter removes the narrow
+	// receiver/sender scheduling race from this regression.
+	waitFor(t, "original event publication committed", func() bool {
+		return mgr.Health().EventsReadTotal == 1
+	})
+
+	// Same inode and same length: detection relies on the trailing guard rather
+	// than the observable-size shortcut.
+	writeFileT(t, p, "new\n")
+	var barrier RawEvent
+	select {
+	case barrier = <-mgr.Events():
+		if !barrier.IsDurabilityBarrier() {
+			t.Fatalf("event before durability barrier = %+v", barrier)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for generation barrier; health=%+v", mgr.Health())
+	}
+	defer barrier.AcknowledgeDurabilityBarrier()
+
+	checkpoint, ok, err := store.Get("in", original.Source.Identity)
+	if err != nil || !ok {
+		t.Fatalf("checkpoint while barrier blocked = %+v, ok=%t err=%v", checkpoint, ok, err)
+	}
+	if checkpoint.Identity.Generation != original.Source.Identity.Generation {
+		t.Fatalf(
+			"generation advanced before barrier acknowledgment: checkpoint=%d original=%d",
+			checkpoint.Identity.Generation,
+			original.Source.Identity.Generation,
+		)
+	}
+	select {
+	case event := <-mgr.Events():
+		t.Fatalf("replacement event escaped an unacknowledged barrier: %+v", event)
+	case <-time.After(5 * testPoll):
+	}
+
+	barrier.AcknowledgeDurabilityBarrier()
+	waitFor(t, "replacement generation checkpoint", func() bool {
+		cp, exists, getErr := store.Get("in", original.Source.Identity)
+		return getErr == nil && exists &&
+			cp.Identity.Generation == original.Source.Identity.Generation+1
+	})
+	select {
+	case replacement := <-mgr.Events():
+		if replacement.IsDurabilityBarrier() || string(replacement.Bytes) != "new" {
+			t.Fatalf("post-barrier event = %+v, want replacement source event", replacement)
+		}
+		if replacement.Source.Identity.Generation != original.Source.Identity.Generation+1 {
+			t.Fatalf(
+				"replacement generation = %d, want %d",
+				replacement.Source.Identity.Generation,
+				original.Source.Identity.Generation+1,
+			)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for replacement event; health=%+v", mgr.Health())
 	}
 }
 
@@ -1388,6 +1814,313 @@ func TestManagerRewriteBetweenResumeAndInitialGuardBurnsGeneration(t *testing.T)
 	}
 }
 
+func TestManagerRestartGuardDetectsRewriteThatPreservesLeadingFingerprint(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "app.log")
+	prefix := strings.Repeat("stable header\n", 100)
+	original := prefix + "old trailing event\n"
+	replacement := prefix + "new trailing event\n"
+	if len(original) != len(replacement) || len(prefix) <= defaultFingerprintBytes {
+		t.Fatal("test fixture must preserve size and exceed the leading fingerprint")
+	}
+	writeFileT(t, p, original)
+
+	oldFile, err := os.Open(p)
+	if err != nil {
+		t.Fatalf("open original: %v", err)
+	}
+	oldInfo, err := oldFile.Stat()
+	if err != nil {
+		_ = oldFile.Close()
+		t.Fatalf("stat original: %v", err)
+	}
+	identity, err := identityFor(oldFile, oldInfo, defaultFingerprintBytes)
+	if err != nil {
+		_ = oldFile.Close()
+		t.Fatalf("identify original: %v", err)
+	}
+	guardFingerprint, guardLength, err := captureCheckpointGuard(
+		oldFile,
+		uint64(len(original)),
+		defaultFingerprintBytes,
+	)
+	if err != nil {
+		_ = oldFile.Close()
+		t.Fatalf("capture checkpoint guard: %v", err)
+	}
+	if err := oldFile.Close(); err != nil {
+		t.Fatalf("close original: %v", err)
+	}
+
+	store := newStore(t)
+	if err := store.Set(Checkpoint{
+		InputID: "in", Identity: identity, Path: p,
+		Offset:           uint64(len(original)),
+		LineNumber:       101,
+		NextLineNumber:   102,
+		GuardFingerprint: guardFingerprint,
+		GuardLength:      guardLength,
+	}); err != nil {
+		t.Fatalf("seed guarded checkpoint: %v", err)
+	}
+	writeFileT(t, p, replacement)
+
+	rewritten, err := os.Open(p)
+	if err != nil {
+		t.Fatalf("open replacement: %v", err)
+	}
+	defer rewritten.Close()
+	rewrittenInfo, err := rewritten.Stat()
+	if err != nil {
+		t.Fatalf("stat replacement: %v", err)
+	}
+	rewrittenIdentity, err := identityFor(rewritten, rewrittenInfo, defaultFingerprintBytes)
+	if err != nil {
+		t.Fatalf("identify replacement: %v", err)
+	}
+	if rewrittenIdentity.TrackingKey() != identity.TrackingKey() ||
+		rewrittenIdentity.Fingerprint != identity.Fingerprint {
+		t.Fatal("test rewrite did not preserve inode and leading fingerprint")
+	}
+
+	m := &manager{
+		cfg:         Config{InputID: "in", StartAt: StartAtBeginning},
+		checkpoints: store,
+		fpBytes:     defaultFingerprintBytes,
+	}
+	start, err := m.resolveStart(
+		rewrittenIdentity,
+		p,
+		uint64(rewrittenInfo.Size()),
+		true,
+		rewritten,
+	)
+	if err != nil {
+		t.Fatalf("resolve rewritten start: %v", err)
+	}
+	if start.offset != 0 || start.identity.Generation != identity.Generation+1 {
+		t.Fatalf(
+			"rewritten start = offset %d generation %d, want offset 0 generation %d",
+			start.offset,
+			start.identity.Generation,
+			identity.Generation+1,
+		)
+	}
+}
+
+func TestManagerResolveStartUpgradesLegacyCheckpointWithRewriteGuard(t *testing.T) {
+	t.Parallel()
+	p := filepath.Join(t.TempDir(), "app.log")
+	contents := strings.Repeat("line\n", 300)
+	writeFileT(t, p, contents)
+	file, err := os.Open(p)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	identity, err := identityFor(file, info, defaultFingerprintBytes)
+	if err != nil {
+		t.Fatalf("identity: %v", err)
+	}
+	store := newStore(t)
+	legacy := Checkpoint{
+		InputID: "in", Identity: identity, Path: p,
+		Offset: uint64(len(contents)), LineNumber: 300, NextLineNumber: 301,
+	}
+	if err := store.Set(legacy); err != nil {
+		t.Fatalf("seed legacy checkpoint: %v", err)
+	}
+	m := &manager{
+		cfg: Config{InputID: "in"}, checkpoints: store,
+		fpBytes: defaultFingerprintBytes,
+	}
+	start, err := m.resolveStart(identity, p, uint64(len(contents)), true, file)
+	if err != nil {
+		t.Fatalf("resolve legacy start: %v", err)
+	}
+	if start.offset != legacy.Offset || start.identity.Generation != identity.Generation {
+		t.Fatalf("legacy start = %+v, want unchanged generation/offset", start)
+	}
+	if start.legacyUpgrade == nil || start.guardLength == 0 || start.guardFingerprint == "" {
+		t.Fatalf("legacy guard upgrade missing: %+v", start)
+	}
+	if err := store.SetMany([]Checkpoint{*start.legacyUpgrade}); err != nil {
+		t.Fatalf("persist legacy guard upgrade: %v", err)
+	}
+	upgraded, ok, err := store.Get("in", identity)
+	if err != nil || !ok {
+		t.Fatalf("get upgraded checkpoint: ok=%t err=%v", ok, err)
+	}
+	if upgraded.GuardLength != start.guardLength ||
+		upgraded.GuardFingerprint != start.guardFingerprint {
+		t.Fatalf("persisted guard = (%d, %q), want (%d, %q)",
+			upgraded.GuardLength, upgraded.GuardFingerprint,
+			start.guardLength, start.guardFingerprint)
+	}
+}
+
+func TestManagerEmitsExactTrailingCheckpointGuard(t *testing.T) {
+	t.Parallel()
+	p := filepath.Join(t.TempDir(), "app.log")
+	writeFileT(t, p, "alpha\nbeta\n")
+	h := startManager(t, Config{
+		InputID: "in", Include: []string{p}, StartAt: StartAtBeginning,
+	}, newStore(t))
+	h.waitForTexts([]string{"alpha", "beta"})
+	events := h.col.snapshot()
+	for index, event := range events {
+		end := int(event.Source.EndOffset)
+		contents := []byte("alpha\nbeta\n")
+		length := min(end, defaultFingerprintBytes)
+		digest := sha256.Sum256(contents[end-length : end])
+		wantFingerprint := hex.EncodeToString(digest[:])
+		if event.Source.GuardLength != uint32(length) ||
+			event.Source.GuardFingerprint != wantFingerprint {
+			t.Fatalf(
+				"event %d guard = (%d, %q), want (%d, %q)",
+				index,
+				event.Source.GuardLength,
+				event.Source.GuardFingerprint,
+				length,
+				wantFingerprint,
+			)
+		}
+	}
+}
+
+func TestManagerHealthRetainsTailerErrorAcrossSuccessfulDiscoveryPolls(t *testing.T) {
+	t.Parallel()
+	m := &manager{
+		cfg:          Config{InputID: "in", Include: []string{"/logs/*.log"}},
+		sourceErrors: make(map[string]string),
+	}
+	m.setReadError("source", "/logs/app.log", errors.New("injected ReadAt failure"))
+	m.updateState(1, "")
+	first := m.Health()
+	if first.State != opensplunkv1.CollectorInputState_COLLECTOR_INPUT_STATE_ERROR ||
+		!strings.Contains(first.StatusMessage, "injected ReadAt failure") {
+		t.Fatalf("health after tailer failure = %+v, want persistent ERROR", first)
+	}
+	m.updateState(1, "")
+	second := m.Health()
+	if second.State != opensplunkv1.CollectorInputState_COLLECTOR_INPUT_STATE_ERROR {
+		t.Fatalf("successful discovery overwrote tailer error: %+v", second)
+	}
+	m.clearReadError("source")
+	m.updateState(1, "")
+	if got := m.Health(); got.State != opensplunkv1.CollectorInputState_COLLECTOR_INPUT_STATE_HEALTHY {
+		t.Fatalf("health after source recovery = %+v, want HEALTHY", got)
+	}
+}
+
+func TestManagerHealthSelectsSourceErrorByTrackingKey(t *testing.T) {
+	t.Parallel()
+	type sourceFailure struct {
+		key  string
+		path string
+	}
+	for _, test := range []struct {
+		name   string
+		errors []sourceFailure
+	}{
+		{
+			name: "smallest key arrives first",
+			errors: []sourceFailure{
+				{key: "a-source", path: "/logs/a.log"},
+				{key: "z-source", path: "/logs/z.log"},
+			},
+		},
+		{
+			name: "smallest key arrives last",
+			errors: []sourceFailure{
+				{key: "z-source", path: "/logs/z.log"},
+				{key: "a-source", path: "/logs/a.log"},
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			m := &manager{
+				cfg:          Config{InputID: "in", Include: []string{"/logs/*.log"}},
+				sourceErrors: make(map[string]string),
+			}
+			for _, sourceError := range test.errors {
+				m.setReadError(
+					sourceError.key,
+					sourceError.path,
+					errors.New("injected failure"),
+				)
+			}
+
+			if got := m.Health(); !strings.Contains(got.StatusMessage, "/logs/a.log") {
+				t.Fatalf("immediate aggregate health = %+v, want a-source error", got)
+			}
+			m.updateState(2, "")
+			if got := m.Health(); !strings.Contains(got.StatusMessage, "/logs/a.log") {
+				t.Fatalf("recomputed aggregate health = %+v, want a-source error", got)
+			}
+
+			m.clearReadError("a-source")
+			m.updateState(2, "")
+			if got := m.Health(); !strings.Contains(got.StatusMessage, "/logs/z.log") {
+				t.Fatalf("health after clearing a-source = %+v, want z-source error", got)
+			}
+		})
+	}
+}
+
+func TestManagerHealthPreservesFleetCounterInvariantsDuringDiscoveryMiss(t *testing.T) {
+	t.Parallel()
+	m := &manager{cfg: Config{InputID: "in"}}
+	// Model the intentional two-pass discovery-miss grace: the glob currently
+	// reports no files while two already-open tailers remain active and draining.
+	m.discovered.Store(0)
+	m.active.Store(2)
+	m.eventsRead.Store(^uint64(0))
+	m.bytesRead.Store(^uint64(0))
+
+	health := m.Health()
+	if health.ActiveSources != 2 || health.DiscoveredSources != 2 {
+		t.Fatalf(
+			"transient-miss health = active:%d discovered:%d, want coherent 2/2",
+			health.ActiveSources,
+			health.DiscoveredSources,
+		)
+	}
+	if health.EventsReadTotal != collectorlimits.MaximumFleetCounter ||
+		health.BytesReadTotal != collectorlimits.MaximumFleetCounter {
+		t.Fatalf(
+			"saturated totals = events:%d bytes:%d, want MaxInt64",
+			health.EventsReadTotal,
+			health.BytesReadTotal,
+		)
+	}
+
+	m.discovered.Store(^uint64(0))
+	health = m.Health()
+	if health.DiscoveredSources != collectorlimits.MaximumFleetCounter {
+		t.Fatalf("saturated discovered sources = %d, want MaxInt64", health.DiscoveredSources)
+	}
+}
+
+func TestManagerReportsMatchedNonRegularSourceAsUnreadable(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	h := startManager(t, Config{
+		InputID: "in", Include: []string{dir}, StartAt: StartAtBeginning,
+	}, newStore(t))
+	waitFor(t, "nonregular source health", func() bool {
+		health := h.mgr.Health()
+		return health.State == opensplunkv1.CollectorInputState_COLLECTOR_INPUT_STATE_UNREADABLE &&
+			strings.Contains(health.StatusMessage, "not a regular file")
+	})
+}
+
 func newTrackedTailerForTest(
 	t testing.TB,
 	path string,
@@ -1493,11 +2226,44 @@ func TestTailerSmallAppendPreservesFullRewriteGuard(t *testing.T) {
 			defaultFingerprintBytes,
 		)
 	}
+	select {
+	case event := <-tracked.m.events:
+		if event.IsDurabilityBarrier() || string(event.Bytes) != "x" {
+			t.Fatalf("committed append = %+v, want x event", event)
+		}
+	default:
+		t.Fatal("committed append was not published")
+	}
 
 	// Preserve the appended suffix while replacing every byte covered only by
 	// the prior guard. A guard incorrectly shrunk to len(appended) would miss it.
 	writeFileT(t, path, repeatByte('b', len(initial))+appended)
-	size, trackable := tracked.trackGrowthAndTruncate()
+	tracked.runCtx = context.Background()
+	type trackResult struct {
+		size      uint64
+		trackable bool
+	}
+	result := make(chan trackResult, 1)
+	go func() {
+		size, trackable := tracked.trackGrowthAndTruncate()
+		result <- trackResult{size: size, trackable: trackable}
+	}()
+	select {
+	case barrier := <-tracked.m.events:
+		if !barrier.IsDurabilityBarrier() {
+			t.Fatalf("rewrite control event = %+v, want durability barrier", barrier)
+		}
+		barrier.AcknowledgeDurabilityBarrier()
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for rewrite durability barrier")
+	}
+	var trackedResult trackResult
+	select {
+	case trackedResult = <-result:
+	case <-time.After(3 * time.Second):
+		t.Fatal("rewrite tracking did not resume after barrier acknowledgment")
+	}
+	size, trackable := trackedResult.size, trackedResult.trackable
 	if !trackable || size != observedEnd {
 		t.Fatalf(
 			"same-size replacement tracking = size %d trackable %t, want %d/true",
@@ -1957,6 +2723,108 @@ func TestManagerExactCapLineWaitsForDelimiterAcrossPolls(t *testing.T) {
 	}
 }
 
+func TestManagerExactCapLineWaitsForSplitCRLFAcrossPolls(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "app.log")
+	writeFileT(t, p, "abcd\r")
+
+	h := startManager(t, Config{
+		InputID: "in", Include: []string{p}, StartAt: StartAtBeginning,
+		Framing: framing.Options{MaxEventBytes: 4},
+	}, newStore(t))
+	waitFor(t, "exact-cap CR partial discovered", func() bool {
+		return h.mgr.Health().DiscoveredSources == 1
+	})
+	if got := h.col.snapshot(); len(got) != 0 {
+		t.Fatalf("exact-cap CR partial emitted before LF: %+v", got)
+	}
+
+	appendFileT(t, p, "\nok\n")
+	h.waitForTexts([]string{"abcd", "ok"})
+	events := h.col.snapshot()
+	if events[0].Source.EndOffset != 6 || events[0].Source.NextLineNumber != 2 {
+		t.Fatalf("exact-cap split CRLF source coordinate = %+v, want end 6 next line 2", events[0].Source)
+	}
+}
+
+func TestManagerExactCapMultilineWaitsForSplitCRLFAcrossPolls(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "app.log")
+	writeFileT(t, p, "ABCD\r")
+
+	h := startManager(t, Config{
+		InputID: "in", Include: []string{p}, StartAt: StartAtBeginning,
+		Multiline: true,
+		Framing: framing.Options{
+			LineStartPattern: regexp.MustCompile(`^[A-Z]`),
+			MaxEventBytes:    4,
+		},
+	}, newStore(t))
+	waitFor(t, "exact-cap multiline CR partial discovered", func() bool {
+		return h.mgr.Health().DiscoveredSources == 1
+	})
+	if got := h.col.snapshot(); len(got) != 0 {
+		t.Fatalf("exact-cap multiline CR partial emitted before LF: %+v", got)
+	}
+
+	appendFileT(t, p, "\nNEXT\r\nLAST\n")
+	h.waitForTexts([]string{"ABCD", "NEXT"})
+	events := h.col.snapshot()
+	if events[0].Source.EndOffset != 6 || events[0].Source.NextLineNumber != 2 {
+		t.Fatalf("exact-cap multiline split CRLF source = %+v, want end 6 next line 2", events[0].Source)
+	}
+}
+
+func TestManagerMultilineExactCapEventSurvivesPartialStartLookahead(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "app.log")
+	writeFileT(t, p, "S old\nS new")
+
+	staged := make(chan tailerPollObservation, 1)
+	var stagedOnce sync.Once
+	h := startManagerWithAfterDrainObserver(t, Config{
+		InputID: "in", Include: []string{p}, StartAt: StartAtBeginning,
+		Multiline: true,
+		Framing: framing.Options{
+			LineStartPattern: regexp.MustCompile(`^S `),
+			MaxEventBytes:    5,
+		},
+	}, newStore(t), func(observation tailerPollObservation) {
+		if observation.path == p {
+			stagedOnce.Do(func() { staged <- observation })
+		}
+	})
+
+	select {
+	case observation := <-staged:
+		if observation.offset != 0 {
+			t.Fatalf(
+				"ambiguous partial lookahead advanced staged offset to %d, want 0",
+				observation.offset,
+			)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for ambiguous snapshot; health=%+v", h.mgr.Health())
+	}
+	if events := h.col.snapshot(); len(events) != 0 {
+		t.Fatalf("ambiguous snapshot emitted before lookahead delimiter: %+v", events)
+	}
+
+	appendFileT(t, p, "\nS end\n")
+	h.waitForTexts([]string{"S old", "S new"})
+	events := h.col.snapshot()
+	if len(events) != 2 ||
+		events[0].Source.StartOffset != 0 || events[0].Source.EndOffset != 6 ||
+		events[0].Source.LineNumber != 1 || events[0].Source.NextLineNumber != 2 ||
+		events[1].Source.StartOffset != 6 || events[1].Source.EndOffset != 12 ||
+		events[1].Source.LineNumber != 2 || events[1].Source.NextLineNumber != 3 {
+		t.Fatalf("events after lookahead completion = %+v", events)
+	}
+}
+
 func TestManagerOversizedPartialDiscardsAppendedSuffix(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -1980,6 +2848,42 @@ func TestManagerOversizedPartialDiscardsAppendedSuffix(t *testing.T) {
 	if event.Source.LineNumber != 2 || event.Source.NextLineNumber != 3 {
 		t.Fatalf(
 			"post-oversize source lines = (%d, %d), want (2, 3)",
+			event.Source.LineNumber,
+			event.Source.NextLineNumber,
+		)
+	}
+}
+
+func TestManagerOversizedMultilinePartialDoesNotTreatMatchingSuffixAsStart(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "app.log")
+	writeFileT(t, p, "START "+strings.Repeat("x", 96))
+
+	h := startManager(t, Config{
+		InputID: "in", Include: []string{p}, StartAt: StartAtBeginning,
+		Multiline: true,
+		Framing: framing.Options{
+			LineStartPattern: regexp.MustCompile(`^START`),
+			MaxEventBytes:    32,
+		},
+	}, newStore(t))
+	waitFor(t, "oversized multiline partial detected", func() bool {
+		return !h.mgr.Health().LastErrorAt.IsZero()
+	})
+	if got := h.col.snapshot(); len(got) != 0 {
+		t.Fatalf("oversized multiline partial emitted: %+v", got)
+	}
+
+	// This matching text is a suffix of the already-rejected physical line and
+	// must be discarded through its delimiter. Only the later complete START
+	// line is a legitimate resynchronization boundary.
+	appendFileT(t, p, "START false\ncontinuation\nSTART real\nok\nSTART next\n")
+	h.waitForTexts([]string{"START real\nok"})
+	event := h.col.snapshot()[0]
+	if event.Source.LineNumber != 3 || event.Source.NextLineNumber != 5 {
+		t.Fatalf(
+			"resynchronized multiline source lines = (%d, %d), want (3, 5)",
 			event.Source.LineNumber,
 			event.Source.NextLineNumber,
 		)
@@ -2149,6 +3053,43 @@ func TestManagerMultilineFlushAfterInactivity(t *testing.T) {
 	if events[0].Source.LineNumber != 1 || events[0].Source.NextLineNumber != 3 ||
 		events[1].Source.LineNumber != 3 || events[1].Source.NextLineNumber != 5 {
 		t.Fatalf("multiline source coordinates = %+v, want lines [1,3) then [3,5)", events)
+	}
+}
+
+func TestManagerMultilineForcedOversizeContinuationResynchronizes(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "app.log")
+	writeFileT(t, p, "S old\ncont")
+
+	h := startManager(t, Config{
+		InputID:    "in",
+		Include:    []string{p},
+		StartAt:    StartAtBeginning,
+		Multiline:  true,
+		FlushAfter: 20 * time.Millisecond,
+		Framing: framing.Options{
+			LineStartPattern: regexp.MustCompile(`^S `),
+			MaxEventBytes:    5,
+		},
+	}, newStore(t))
+	waitFor(t, "forced oversized continuation", func() bool {
+		return !h.mgr.Health().LastErrorAt.IsZero()
+	})
+	if events := h.col.snapshot(); len(events) != 0 {
+		t.Fatalf("forced oversized event was published: %+v", events)
+	}
+
+	appendFileT(t, p, "\nS ok\nS end\n")
+	h.waitForTexts([]string{"S ok", "S end"})
+	events := h.col.snapshot()
+	if string(events[0].Bytes) != "S ok" || len(events[0].Bytes) > 5 ||
+		events[0].Source.StartOffset != 11 || events[0].Source.EndOffset != 16 {
+		t.Fatalf("first resynchronized event = %+v", events[0])
+	}
+	if string(events[1].Bytes) != "S end" || len(events[1].Bytes) > 5 ||
+		events[1].Source.StartOffset != 16 || events[1].Source.EndOffset != 22 {
+		t.Fatalf("second resynchronized event = %+v", events[1])
 	}
 }
 

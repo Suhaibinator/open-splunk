@@ -18,37 +18,45 @@ import (
 // coupled checkpointing; the explicit fields remain for the local terminal
 // path when one oversized event cannot enter the WAL.
 type processedEvent struct {
-	event          *opensplunkv1.LogEvent
-	inputID        string
-	identity       input.FileIdentity
-	path           string
-	endOffset      uint64
-	lineNumber     uint64
-	nextLineNumber uint64
-	size           int
+	event *opensplunkv1.LogEvent
+	// durabilityBarrier is a zero-payload input control record. The batcher
+	// acknowledges it only after every earlier processed event has crossed the
+	// durable queue boundary (or completed a deliberate terminal disposition).
+	durabilityBarrier input.RawEvent
+	inputID           string
+	identity          input.FileIdentity
+	path              string
+	endOffset         uint64
+	lineNumber        uint64
+	nextLineNumber    uint64
+	guardFingerprint  string
+	guardLength       uint32
+	size              int
 }
 
 // checkpointMark is the highest source position seen for one input-scoped file
 // identity within a pending batch that may need local oversized-event
 // disposition.
 type checkpointMark struct {
-	inputID        string
-	identity       input.FileIdentity
-	path           string
-	offset         uint64
-	lineNumber     uint64
-	nextLineNumber uint64
+	inputID          string
+	identity         input.FileIdentity
+	path             string
+	offset           uint64
+	lineNumber       uint64
+	nextLineNumber   uint64
+	guardFingerprint string
+	guardLength      uint32
 }
 
-// pendingBatch accumulates processed events and compact source marks. Ordinary
-// queued events advance from WAL-cached EventOrigin metadata after terminal
-// acknowledgment; these marks serve only splitting and local dead-lettering of
-// an event too large to enter even an empty queue.
+// pendingBatch accumulates processed events. Ordinary queued events advance
+// from WAL-cached EventOrigin metadata after terminal acknowledgment. Compact
+// source marks are derived lazily only for the rare local dead-letter path, so
+// ordinary ingestion does not pay for an otherwise-unused map insertion per
+// event.
 type pendingBatch struct {
 	items  []processedEvent
 	events []*opensplunkv1.LogEvent
 	bytes  int
-	marks  map[inputFileKey]checkpointMark
 }
 
 func (b *pendingBatch) empty() bool { return len(b.events) == 0 }
@@ -57,23 +65,30 @@ func (b *pendingBatch) add(pe processedEvent) {
 	b.items = append(b.items, pe)
 	b.events = append(b.events, pe.event)
 	b.bytes += pe.size
-	if b.marks == nil {
-		b.marks = make(map[inputFileKey]checkpointMark)
-	}
-	key := inputFileTrackingKey(pe.inputID, pe.identity)
-	if m, ok := b.marks[key]; !ok || m.identity.String() != pe.identity.String() || pe.endOffset > m.offset {
-		b.marks[key] = checkpointMark{
-			inputID: pe.inputID, identity: pe.identity, path: pe.path, offset: pe.endOffset,
-			lineNumber: pe.lineNumber, nextLineNumber: pe.nextLineNumber,
-		}
-	}
 }
 
 func (b *pendingBatch) reset() {
 	b.items = nil
 	b.events = nil
 	b.bytes = 0
-	b.marks = nil
+}
+
+func (b *pendingBatch) checkpointMarks() map[inputFileKey]checkpointMark {
+	marks := make(map[inputFileKey]checkpointMark)
+	for _, pe := range b.items {
+		key := inputFileTrackingKey(pe.inputID, pe.identity)
+		if current, ok := marks[key]; !ok ||
+			current.identity.String() != pe.identity.String() ||
+			pe.endOffset > current.offset {
+			marks[key] = checkpointMark{
+				inputID: pe.inputID, identity: pe.identity, path: pe.path,
+				offset: pe.endOffset, lineNumber: pe.lineNumber,
+				nextLineNumber:   pe.nextLineNumber,
+				guardFingerprint: pe.guardFingerprint, guardLength: pe.guardLength,
+			}
+		}
+	}
+	return marks
 }
 
 // split divides the batch into two halves that together cover exactly the same
@@ -98,14 +113,24 @@ func (b *pendingBatch) split() (*pendingBatch, *pendingBatch) {
 // policy drops are handled here, never propagated as fatal.
 func (d *Daemon) readInput(ctx context.Context, ir *inputRuntime, processed chan<- processedEvent) {
 	for raw := range ir.manager.Events() {
+		if raw.IsDurabilityBarrier() {
+			select {
+			case processed <- processedEvent{durabilityBarrier: raw}:
+			case <-ctx.Done():
+				return
+			}
+			continue
+		}
 		pos := SourcePosition{
-			FileIdentity:          raw.Source.Identity.String(),
-			SourcePath:            raw.Source.Path,
-			FileFingerprintLength: raw.Source.Identity.FingerprintLength,
-			StartOffset:           raw.Source.StartOffset,
-			EndOffset:             raw.Source.EndOffset,
-			LineNumber:            raw.Source.LineNumber,
-			NextLineNumber:        raw.Source.NextLineNumber,
+			FileIdentity:               raw.Source.Identity.String(),
+			SourcePath:                 raw.Source.Path,
+			FileFingerprintLength:      raw.Source.Identity.FingerprintLength,
+			CheckpointGuardFingerprint: raw.Source.GuardFingerprint,
+			CheckpointGuardLength:      raw.Source.GuardLength,
+			StartOffset:                raw.Source.StartOffset,
+			EndOffset:                  raw.Source.EndOffset,
+			LineNumber:                 raw.Source.LineNumber,
+			NextLineNumber:             raw.Source.NextLineNumber,
 		}
 		event, err := ir.decoder.Decode(raw.Bytes, pos, d.now())
 		if err != nil {
@@ -120,20 +145,24 @@ func (d *Daemon) readInput(ctx context.Context, ir *inputRuntime, processed chan
 			// A pipeline error is a configuration/logic fault, not a per-event
 			// rejection. Log and skip; do not stall the whole input.
 			d.log.Error("collector: processor pipeline failed", "input", ir.id, "error", err.Error())
+			d.pipelineFailures.Add(1)
 			continue
 		}
 		if out == nil {
+			d.policyDrops.Add(1)
 			continue // dropped by an allow/deny processor
 		}
 		pe := processedEvent{
-			event:          out,
-			inputID:        ir.id,
-			identity:       raw.Source.Identity,
-			path:           raw.Source.Path,
-			endOffset:      raw.Source.EndOffset,
-			lineNumber:     raw.Source.LineNumber,
-			nextLineNumber: raw.Source.NextLineNumber,
-			size:           proto.Size(out),
+			event:            out,
+			inputID:          ir.id,
+			identity:         raw.Source.Identity,
+			path:             raw.Source.Path,
+			endOffset:        raw.Source.EndOffset,
+			lineNumber:       raw.Source.LineNumber,
+			nextLineNumber:   raw.Source.NextLineNumber,
+			guardFingerprint: raw.Source.GuardFingerprint,
+			guardLength:      raw.Source.GuardLength,
+			size:             proto.Size(out),
 		}
 		select {
 		case processed <- pe:
@@ -182,6 +211,14 @@ func (d *Daemon) runBatcher(ctx context.Context, processed <-chan processedEvent
 			if !ok {
 				stopLinger()
 				return d.flush(ctx, b)
+			}
+			if pe.durabilityBarrier.IsDurabilityBarrier() {
+				stopLinger()
+				if err := d.flush(ctx, b); err != nil {
+					return err
+				}
+				pe.durabilityBarrier.AcknowledgeDurabilityBarrier()
+				continue
 			}
 			// Flush the existing batch before adding an event that would cross a
 			// configured cap. A single over-cap event is still admitted alone so it
@@ -244,14 +281,18 @@ func (d *Daemon) flush(ctx context.Context, b *pendingBatch) error {
 		// Bound queue-full backpressure once shutdown begins.
 		if ctx.Err() != nil {
 			if graceDeadline.IsZero() {
-				graceDeadline = time.Now().Add(d.shutdownFlushGrace)
+				graceDeadline = d.sharedShutdownFlushDeadline()
 			}
 			remaining := time.Until(graceDeadline)
 			if remaining <= 0 {
 				d.log.Warn("collector: queue full at shutdown; events left for re-read",
 					"events", len(b.events))
 				b.reset()
-				return nil
+				// Cancellation is an explicit non-success result. In particular,
+				// flushTooLarge must not continue with a later split after this
+				// earlier source range was abandoned: doing so could dead-letter the
+				// later range and checkpoint past bytes that never reached the WAL.
+				return ctx.Err()
 			}
 			// ctx is already canceled, so a ctx-aware select would fall through
 			// instantly and busy-spin re-marshaling; sleep a bounded plain interval.
@@ -269,6 +310,20 @@ func (d *Daemon) flush(ctx context.Context, b *pendingBatch) error {
 	}
 }
 
+// sharedShutdownFlushDeadline returns one deadline for every recursive and
+// sequential flush attempted during this daemon's shutdown. A per-call grace
+// period lets an oversized batch multiply the shutdown budget as it splits.
+func (d *Daemon) sharedShutdownFlushDeadline() time.Time {
+	if deadline := d.shutdownFlushDeadline.Load(); deadline != 0 {
+		return time.Unix(0, deadline)
+	}
+	deadline := time.Now().Add(d.shutdownFlushGrace).UnixNano()
+	if d.shutdownFlushDeadline.CompareAndSwap(0, deadline) {
+		return time.Unix(0, deadline)
+	}
+	return time.Unix(0, d.shutdownFlushDeadline.Load())
+}
+
 // flushTooLarge resolves a batch the durable queue rejected as ErrBatchTooLarge.
 // A multi-event batch is split in half and each half re-flushed recursively; a
 // single un-queueable event is a deliberate policy drop: it is written to the
@@ -280,7 +335,11 @@ func (d *Daemon) flushTooLarge(ctx context.Context, b *pendingBatch) error {
 		if err := d.flush(ctx, first); err != nil {
 			return err
 		}
-		return d.flush(ctx, second)
+		if err := d.flush(ctx, second); err != nil {
+			return err
+		}
+		b.reset()
+		return nil
 	}
 	if err := d.deadLetterOversized(b); err != nil {
 		return err
@@ -329,18 +388,36 @@ func minDuration(a, b time.Duration) time.Duration {
 // enter the WAL and become terminal through their durable local dead-letter
 // write. Ordinary queued batches advance only via commitTerminalCheckpoints.
 func (d *Daemon) advanceCheckpoints(b *pendingBatch) error {
-	for _, m := range b.marks {
+	// A WAL record with missing/legacy origin metadata cannot be attributed to a
+	// specific source. Require the entire queue to be empty before bypassing WAL
+	// ordering with a locally terminal dead-letter checkpoint. This path is rare,
+	// and a deferred position is safely covered by a later queued event (or may be
+	// dead-lettered again after restart).
+	queueEmpty := d.queue.Stats().QueuedBatches == 0
+	for _, m := range b.checkpointMarks() {
+		if !queueEmpty {
+			// The dead-letter record is durable, but advancing this later source
+			// position would cross an earlier WAL-owned event. If that WAL record
+			// were later quarantined, restart could no longer fall back to the
+			// source. Leave the checkpoint behind; a later normally queued event
+			// will cover this drop, or it may be dead-lettered again after restart.
+			d.log.Warn("collector: deferring oversized-event checkpoint behind pending WAL",
+				"input", m.inputID, "file_identity", m.identity.String(), "offset", m.offset)
+			continue
+		}
 		generationKey := inputFileGenerationKey(m.inputID, m.identity)
 		if last, ok := d.lastOffsets[generationKey]; ok && m.offset <= last {
 			continue
 		}
 		cp := input.Checkpoint{
-			InputID:        m.inputID,
-			Identity:       m.identity,
-			Path:           m.path,
-			Offset:         m.offset,
-			LineNumber:     m.lineNumber,
-			NextLineNumber: m.nextLineNumber,
+			InputID:          m.inputID,
+			Identity:         m.identity,
+			Path:             m.path,
+			Offset:           m.offset,
+			LineNumber:       m.lineNumber,
+			NextLineNumber:   m.nextLineNumber,
+			GuardFingerprint: m.guardFingerprint,
+			GuardLength:      m.guardLength,
 		}
 		if err := d.checkpoints.Set(cp); err != nil {
 			return fmt.Errorf(

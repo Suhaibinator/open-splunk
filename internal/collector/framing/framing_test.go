@@ -213,6 +213,54 @@ func TestLineFramerOneByteReaderEquivalence(t *testing.T) {
 	}
 }
 
+func TestLineFramerExactMaxEventBytesWithSplitCRLF(t *testing.T) {
+	t.Parallel()
+
+	f, err := NewLineFramer(
+		iotest.OneByteReader(strings.NewReader("ABCD\r\nnext\n")),
+		0,
+		Options{MaxEventBytes: 4},
+	)
+	if err != nil {
+		t.Fatalf("NewLineFramer: %v", err)
+	}
+
+	first, err := f.Next()
+	if err != nil {
+		t.Fatalf("Next exact-cap CRLF frame: %v", err)
+	}
+	if got := string(first.Bytes); got != "ABCD" {
+		t.Fatalf("exact-cap CRLF bytes = %q, want %q", got, "ABCD")
+	}
+	if first.StartOffset != 0 || first.EndOffset != 6 ||
+		first.LineNumber != 1 || first.NextLineNumber != 2 {
+		t.Fatalf("exact-cap CRLF coordinates = %+v, want offsets [0,6) lines [1,2)", first)
+	}
+}
+
+func TestLineFramerExactMaxEventBytesRetainsTrailingCRForLaterLF(t *testing.T) {
+	t.Parallel()
+
+	f, err := NewLineFramer(
+		strings.NewReader("ABCD\r"),
+		0,
+		Options{MaxEventBytes: 4},
+	)
+	if err != nil {
+		t.Fatalf("NewLineFramer: %v", err)
+	}
+	if _, err := f.Next(); !errors.Is(err, ErrPartialFrame) {
+		t.Fatalf("Next exact-cap trailing CR error = %v, want ErrPartialFrame", err)
+	}
+	if offset, length := f.Pending(); offset != 0 || length != 5 {
+		t.Fatalf("Pending = (%d, %d), want (0, 5)", offset, length)
+	}
+	flushed, flushErr, ok := f.Flush()
+	if flushErr != nil || !ok || string(flushed.Bytes) != "ABCD" || flushed.EndOffset != 5 {
+		t.Fatalf("Flush exact-cap trailing CR = (%+v, %v, %t)", flushed, flushErr, ok)
+	}
+}
+
 func TestLineFramerSeedsAndReportsNextLineNumber(t *testing.T) {
 	t.Parallel()
 
@@ -296,7 +344,7 @@ func TestFramersDoNotFlushOrSkipAtExhaustedNextLine(t *testing.T) {
 	if _, lineErr := line.Next(); !errors.Is(lineErr, ErrLineNumberOverflow) {
 		t.Fatalf("line Next error = %v, want ErrLineNumberOverflow", lineErr)
 	}
-	if _, ok := line.Flush(); ok {
+	if _, _, ok := line.Flush(); ok {
 		t.Fatal("line Flush at exhausted cursor emitted an invalid frame")
 	}
 
@@ -315,7 +363,7 @@ func TestFramersDoNotFlushOrSkipAtExhaustedNextLine(t *testing.T) {
 	if _, err := multiline.Next(); !errors.Is(err, ErrLineNumberOverflow) {
 		t.Fatalf("multiline Next error = %v, want ErrLineNumberOverflow", err)
 	}
-	if _, ok := multiline.Flush(); ok {
+	if _, _, ok := multiline.Flush(); ok {
 		t.Fatal("multiline Flush at exhausted cursor emitted an invalid frame")
 	}
 }
@@ -376,9 +424,9 @@ func TestLineFramerPendingAndFlush(t *testing.T) {
 	if start != 10 || length != len("trailing") {
 		t.Fatalf("Pending = (%d, %d), want (10, %d)", start, length, len("trailing"))
 	}
-	flushed, ok := f.Flush()
-	if !ok {
-		t.Fatal("Flush ok = false, want true")
+	flushed, flushErr, ok := f.Flush()
+	if flushErr != nil || !ok {
+		t.Fatalf("Flush = (%+v, %v, %t), want successful frame", flushed, flushErr, ok)
 	}
 	if got := string(flushed.Bytes); got != "trailing" {
 		t.Fatalf("flushed bytes = %q", got)
@@ -386,7 +434,7 @@ func TestLineFramerPendingAndFlush(t *testing.T) {
 	if flushed.StartOffset != 10 || flushed.EndOffset != 18 || flushed.LineNumber != 2 {
 		t.Fatalf("flushed = {start=%d end=%d line=%d}", flushed.StartOffset, flushed.EndOffset, flushed.LineNumber)
 	}
-	if _, ok := f.Flush(); ok {
+	if _, _, ok := f.Flush(); ok {
 		t.Fatal("second Flush ok = true, want false")
 	}
 	if _, err := f.Next(); !errors.Is(err, io.EOF) {
@@ -400,7 +448,7 @@ func TestLineFramerFlushEmptyBuffer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLineFramer: %v", err)
 	}
-	if _, ok := f.Flush(); ok {
+	if _, _, ok := f.Flush(); ok {
 		t.Fatal("Flush on empty reader ok = true, want false")
 	}
 }
@@ -530,9 +578,9 @@ func TestMultilineFramerFlushReleasesTrailingEvent(t *testing.T) {
 	if start != 0 || length != len(input) {
 		t.Fatalf("Pending = (%d, %d), want (0, %d)", start, length, len(input))
 	}
-	fr, ok := f.Flush()
-	if !ok {
-		t.Fatal("Flush ok = false, want true")
+	fr, flushErr, ok := f.Flush()
+	if flushErr != nil || !ok {
+		t.Fatalf("Flush = (%+v, %v, %t), want successful frame", fr, flushErr, ok)
 	}
 	if got, want := string(fr.Bytes), "ERR boom\n\tat foo\n\tat bar"; got != want {
 		t.Fatalf("flushed bytes = %q, want %q", got, want)
@@ -566,9 +614,9 @@ func TestMultilineFramerSeedsAndReportsNextPhysicalLine(t *testing.T) {
 	if _, err := f.Next(); !errors.Is(err, ErrPartialFrame) {
 		t.Fatalf("Next trailing err = %v, want ErrPartialFrame", err)
 	}
-	second, ok := f.Flush()
-	if !ok {
-		t.Fatal("Flush ok = false, want true")
+	second, flushErr, ok := f.Flush()
+	if flushErr != nil || !ok {
+		t.Fatalf("Flush = (%+v, %v, %t), want successful frame", second, flushErr, ok)
 	}
 	if second.LineNumber != 19 || second.NextLineNumber != 20 {
 		t.Fatalf("second line coordinates = (%d, %d), want (19, 20)", second.LineNumber, second.NextLineNumber)
@@ -621,6 +669,134 @@ func TestMultilineFramerOneByteReaderEquivalence(t *testing.T) {
 	}
 }
 
+func TestMultilineFramerExactMaxEventBytesWithSplitCRLF(t *testing.T) {
+	t.Parallel()
+
+	f, err := NewMultilineFramer(
+		iotest.OneByteReader(strings.NewReader("ABCD\r\nNEXT\r\n")),
+		0,
+		Options{
+			LineStartPattern: mustPattern(t, `^[A-Z]`),
+			MaxEventBytes:    4,
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewMultilineFramer: %v", err)
+	}
+
+	first, err := f.Next()
+	if err != nil {
+		t.Fatalf("Next exact-cap CRLF event: %v", err)
+	}
+	if got := string(first.Bytes); got != "ABCD" {
+		t.Fatalf("exact-cap CRLF bytes = %q, want %q", got, "ABCD")
+	}
+	if first.StartOffset != 0 || first.EndOffset != 6 ||
+		first.LineNumber != 1 || first.NextLineNumber != 2 {
+		t.Fatalf("exact-cap CRLF coordinates = %+v, want offsets [0,6) lines [1,2)", first)
+	}
+	if _, err := f.Next(); !errors.Is(err, ErrPartialFrame) {
+		t.Fatalf("Next trailing event error = %v, want ErrPartialFrame", err)
+	}
+}
+
+func TestMultilineFramerExactMaxEventBytesRetainsTrailingCRForLaterLF(t *testing.T) {
+	t.Parallel()
+
+	f, err := NewMultilineFramer(
+		strings.NewReader("ABCD\r"),
+		0,
+		Options{
+			LineStartPattern: mustPattern(t, `^[A-Z]`),
+			MaxEventBytes:    4,
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewMultilineFramer: %v", err)
+	}
+	if _, err := f.Next(); !errors.Is(err, ErrPartialFrame) {
+		t.Fatalf("Next exact-cap trailing CR error = %v, want ErrPartialFrame", err)
+	}
+	if offset, length := f.Pending(); offset != 0 || length != 5 {
+		t.Fatalf("Pending = (%d, %d), want (0, 5)", offset, length)
+	}
+	flushed, flushErr, ok := f.Flush()
+	if flushErr != nil || !ok || string(flushed.Bytes) != "ABCD" || flushed.EndOffset != 5 {
+		t.Fatalf("Flush exact-cap trailing CR = (%+v, %v, %t)", flushed, flushErr, ok)
+	}
+}
+
+func TestMultilineFramerDefersExactCapEventBeforePartialStart(t *testing.T) {
+	t.Parallel()
+
+	f, err := NewMultilineFramer(
+		strings.NewReader("S old\nS new"),
+		0,
+		Options{
+			LineStartPattern: mustPattern(t, `^S `),
+			MaxEventBytes:    5,
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewMultilineFramer: %v", err)
+	}
+	if frame, nextErr := f.Next(); !errors.Is(nextErr, ErrPartialFrame) {
+		t.Fatalf("Next ambiguous lookahead = %+v err=%v, want retained partial", frame, nextErr)
+	}
+	if start, length := f.Pending(); start != 0 || length != len("S old\nS new") {
+		t.Fatalf("Pending = (%d, %d), want (0, %d)", start, length, len("S old\nS new"))
+	}
+
+	first, flushErr, ok := f.Flush()
+	if flushErr != nil || !ok || string(first.Bytes) != "S old" ||
+		first.StartOffset != 0 || first.EndOffset != 6 ||
+		first.LineNumber != 1 || first.NextLineNumber != 2 {
+		t.Fatalf("Flush preserved event = (%+v, %v, %t)", first, flushErr, ok)
+	}
+	if start, length := f.Pending(); start != 6 || length != len("S new") {
+		t.Fatalf("post-flush Pending = (%d, %d), want (6, %d)", start, length, len("S new"))
+	}
+	if _, nextErr := f.Next(); !errors.Is(nextErr, ErrPartialFrame) {
+		t.Fatalf("Next retained start err = %v, want ErrPartialFrame", nextErr)
+	}
+	second, flushErr, ok := f.Flush()
+	if flushErr != nil || !ok || string(second.Bytes) != "S new" ||
+		second.StartOffset != 6 || second.EndOffset != 11 ||
+		second.LineNumber != 2 || second.NextLineNumber != 3 {
+		t.Fatalf("Flush retained start = (%+v, %v, %t)", second, flushErr, ok)
+	}
+}
+
+func TestMultilineFramerFlushClassifiesOversizedPartialContinuation(t *testing.T) {
+	t.Parallel()
+
+	f, err := NewMultilineFramer(
+		strings.NewReader("S old\ncont"),
+		0,
+		Options{
+			LineStartPattern: mustPattern(t, `^S `),
+			MaxEventBytes:    5,
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewMultilineFramer: %v", err)
+	}
+	if _, nextErr := f.Next(); !errors.Is(nextErr, ErrPartialFrame) {
+		t.Fatalf("Next partial continuation err = %v, want ErrPartialFrame", nextErr)
+	}
+	frame, flushErr, ok := f.Flush()
+	if !ok || !errors.Is(flushErr, ErrEventTooLarge) {
+		t.Fatalf("Flush oversized continuation = (%+v, %v, %t)", frame, flushErr, ok)
+	}
+	if got := string(frame.Bytes); got != "S old" {
+		t.Fatalf("truncated forced frame = %q, want %q", got, "S old")
+	}
+	if len(frame.Bytes) > 5 || frame.StartOffset != 0 || frame.EndOffset != 10 ||
+		frame.LineNumber != 1 || frame.NextLineNumber != 3 {
+		t.Fatalf("forced oversized frame coordinates = %+v", frame)
+	}
+}
+
 func TestMultilineFramerRequiresPattern(t *testing.T) {
 	t.Parallel()
 	if _, err := NewMultilineFramer(strings.NewReader("x"), 0, Options{}); err == nil {
@@ -653,6 +829,209 @@ func TestMultilineFramerOversizedEventThenNormal(t *testing.T) {
 		t.Fatalf("frame[0] start = %d, want 0", got[0].start)
 	}
 	assertContiguous(t, got)
+}
+
+func TestMultilineFramerOversizedEventDiscardsContinuationsUntilStart(t *testing.T) {
+	t.Parallel()
+
+	const oversizedPrefix = "S head\n123456789\n"
+	const discarded = "continuation one\ncontinuation two\n"
+	const recovered = "S ok\n"
+	input := oversizedPrefix + discarded + recovered + "S end\n"
+	f, err := NewMultilineFramer(strings.NewReader(input), 0, Options{
+		LineStartPattern: mustPattern(t, `^S `),
+		MaxEventBytes:    8,
+	})
+	if err != nil {
+		t.Fatalf("NewMultilineFramer: %v", err)
+	}
+
+	oversized, err := f.Next()
+	if !errors.Is(err, ErrEventTooLarge) {
+		t.Fatalf("Next oversized error = %v, want ErrEventTooLarge", err)
+	}
+	if got := string(oversized.Bytes); got != "S head\n1" {
+		t.Fatalf("oversized bytes = %q, want %q", got, "S head\n1")
+	}
+	if oversized.StartOffset != 0 || oversized.EndOffset != uint64(len(oversizedPrefix)) ||
+		oversized.LineNumber != 1 || oversized.NextLineNumber != 3 {
+		t.Fatalf("oversized coordinates = %+v, want end=%d lines [1,3)", oversized, len(oversizedPrefix))
+	}
+
+	next, err := f.Next()
+	if err != nil {
+		t.Fatalf("Next recovered event: %v", err)
+	}
+	wantStart := uint64(len(oversizedPrefix) + len(discarded))
+	if got := string(next.Bytes); got != "S ok" {
+		t.Fatalf("recovered bytes = %q, want %q", got, "S ok")
+	}
+	if next.StartOffset != wantStart || next.EndOffset != wantStart+uint64(len(recovered)) ||
+		next.LineNumber != 5 || next.NextLineNumber != 6 {
+		t.Fatalf("recovered coordinates = %+v, want start=%d lines [5,6)", next, wantStart)
+	}
+}
+
+func TestMultilineFramerFlushResynchronizesAtPartialStartAfterOversize(t *testing.T) {
+	t.Parallel()
+
+	const oversized = "S head\n123456789\n"
+	const recovered = "S ok"
+	f, err := NewMultilineFramer(strings.NewReader(oversized+recovered), 0, Options{
+		LineStartPattern: mustPattern(t, `^S `),
+		MaxEventBytes:    8,
+	})
+	if err != nil {
+		t.Fatalf("NewMultilineFramer: %v", err)
+	}
+
+	if _, nextErr := f.Next(); !errors.Is(nextErr, ErrEventTooLarge) {
+		t.Fatalf("Next oversized error = %v, want ErrEventTooLarge", nextErr)
+	}
+	if _, nextErr := f.Next(); !errors.Is(nextErr, ErrPartialFrame) {
+		t.Fatalf("Next partial start error = %v, want ErrPartialFrame", nextErr)
+	}
+	frame, flushErr, ok := f.Flush()
+	if flushErr != nil || !ok {
+		t.Fatalf("Flush partial start = (%+v, %v, %t), want frame", frame, flushErr, ok)
+	}
+	wantStart := uint64(len(oversized))
+	if string(frame.Bytes) != recovered ||
+		frame.StartOffset != wantStart || frame.EndOffset != uint64(len(oversized+recovered)) ||
+		frame.LineNumber != 3 || frame.NextLineNumber != 4 {
+		t.Fatalf("recovered partial start = %+v, want offsets [%d,%d) lines [3,4)",
+			frame, wantStart, len(oversized+recovered))
+	}
+	if _, nextErr := f.Next(); !errors.Is(nextErr, io.EOF) {
+		t.Fatalf("Next after recovered flush error = %v, want io.EOF", nextErr)
+	}
+}
+
+func TestMultilineFramerFlushConsumesRejectedPartialAfterOversize(t *testing.T) {
+	t.Parallel()
+
+	const oversized = "S head\n123456789\n"
+	const continuation = "more"
+	f, err := NewMultilineFramer(strings.NewReader(oversized+continuation), 0, Options{
+		LineStartPattern: mustPattern(t, `^S `),
+		MaxEventBytes:    8,
+	})
+	if err != nil {
+		t.Fatalf("NewMultilineFramer: %v", err)
+	}
+
+	if _, nextErr := f.Next(); !errors.Is(nextErr, ErrEventTooLarge) {
+		t.Fatalf("Next oversized error = %v, want ErrEventTooLarge", nextErr)
+	}
+	if _, nextErr := f.Next(); !errors.Is(nextErr, ErrPartialFrame) {
+		t.Fatalf("Next partial continuation error = %v, want ErrPartialFrame", nextErr)
+	}
+	if frame, flushErr, ok := f.Flush(); flushErr != nil || ok {
+		t.Fatalf("Flush partial continuation = (%+v, %v, %t), want consumed without frame", frame, flushErr, ok)
+	}
+	if start, length := f.Pending(); start != uint64(len(oversized+continuation)) || length != 0 {
+		t.Fatalf("Pending after rejected flush = (%d, %d), want (%d, 0)",
+			start, length, len(oversized+continuation))
+	}
+	if _, nextErr := f.Next(); !errors.Is(nextErr, io.EOF) {
+		t.Fatalf("Next after rejected flush error = %v, want io.EOF", nextErr)
+	}
+}
+
+func TestMultilineFramerFlushConsumesKnownOversizePartialLine(t *testing.T) {
+	t.Parallel()
+
+	input := "S head\n" + strings.Repeat("x", readChunkSize+32)
+	f, err := NewMultilineFramer(strings.NewReader(input), 0, Options{
+		LineStartPattern: mustPattern(t, `^S `),
+		MaxEventBytes:    8,
+	})
+	if err != nil {
+		t.Fatalf("NewMultilineFramer: %v", err)
+	}
+	if _, nextErr := f.Next(); !errors.Is(nextErr, ErrEventTooLargeIncomplete) {
+		t.Fatalf("Next incomplete oversized error = %v, want ErrEventTooLargeIncomplete", nextErr)
+	}
+	if _, nextErr := f.Next(); !errors.Is(nextErr, ErrPartialFrame) {
+		t.Fatalf("Next rejected physical-line remainder error = %v, want ErrPartialFrame", nextErr)
+	}
+	if frame, flushErr, ok := f.Flush(); flushErr != nil || ok {
+		t.Fatalf("Flush rejected physical-line remainder = (%+v, %v, %t), want consumed without frame", frame, flushErr, ok)
+	}
+	if start, length := f.Pending(); start != uint64(len(input)) || length != 0 {
+		t.Fatalf("Pending after rejected remainder flush = (%d, %d), want (%d, 0)",
+			start, length, len(input))
+	}
+}
+
+func TestMultilineFramerFlushResolvesKnownOversizeAtExactReadBoundary(t *testing.T) {
+	t.Parallel()
+
+	const prefix = "S head\n"
+	input := prefix + strings.Repeat("x", readChunkSize-len(prefix))
+	framer, err := NewMultilineFramer(strings.NewReader(input), 0, Options{
+		LineStartPattern: mustPattern(t, `^S `),
+		MaxEventBytes:    8,
+	})
+	if err != nil {
+		t.Fatalf("NewMultilineFramer: %v", err)
+	}
+	f := framer.(*multilineFramer)
+	if _, nextErr := f.Next(); !errors.Is(nextErr, ErrEventTooLargeIncomplete) {
+		t.Fatalf("Next exact-boundary oversized error = %v, want ErrEventTooLargeIncomplete", nextErr)
+	}
+	if _, nextErr := f.Next(); !errors.Is(nextErr, ErrPartialFrame) {
+		t.Fatalf("Next exact-boundary remainder error = %v, want ErrPartialFrame", nextErr)
+	}
+	if frame, flushErr, ok := f.Flush(); flushErr != nil || ok {
+		t.Fatalf("Flush exact-boundary remainder = (%+v, %v, %t), want consumed without frame", frame, flushErr, ok)
+	}
+	if f.discardPartialLine || f.nextLineNo != 3 {
+		t.Fatalf("post-flush discard state = partial:%t next-line:%d, want false/3",
+			f.discardPartialLine, f.nextLineNo)
+	}
+}
+
+func TestMultilineFramerIncompleteOversizeResynchronizesAtStart(t *testing.T) {
+	t.Parallel()
+
+	longContinuation := strings.Repeat("x", readChunkSize+32)
+	prefix := "S head\n" + longContinuation + "\n"
+	discarded := "continuation\n"
+	recovered := "S ok\n"
+	input := prefix + discarded + recovered + "S end\n"
+	f, err := NewMultilineFramer(strings.NewReader(input), 0, Options{
+		LineStartPattern: mustPattern(t, `^S `),
+		MaxEventBytes:    8,
+	})
+	if err != nil {
+		t.Fatalf("NewMultilineFramer: %v", err)
+	}
+
+	oversized, err := f.Next()
+	if !errors.Is(err, ErrEventTooLargeIncomplete) {
+		t.Fatalf("Next oversized error = %v, want ErrEventTooLargeIncomplete", err)
+	}
+	if got := string(oversized.Bytes); got != "S head\nx" {
+		t.Fatalf("oversized bytes = %q, want %q", got, "S head\nx")
+	}
+	if oversized.StartOffset != 0 || oversized.EndOffset != readChunkSize ||
+		oversized.LineNumber != 1 || oversized.NextLineNumber != 2 {
+		t.Fatalf("incomplete oversized coordinates = %+v, want end=%d lines [1,2)", oversized, readChunkSize)
+	}
+
+	next, err := f.Next()
+	if err != nil {
+		t.Fatalf("Next recovered event: %v", err)
+	}
+	wantStart := uint64(len(prefix) + len(discarded))
+	if got := string(next.Bytes); got != "S ok" {
+		t.Fatalf("recovered bytes = %q, want %q", got, "S ok")
+	}
+	if next.StartOffset != wantStart || next.EndOffset != wantStart+uint64(len(recovered)) ||
+		next.LineNumber != 4 || next.NextLineNumber != 5 {
+		t.Fatalf("recovered coordinates = %+v, want start=%d lines [4,5)", next, wantStart)
+	}
 }
 
 func TestNilReaderRejected(t *testing.T) {

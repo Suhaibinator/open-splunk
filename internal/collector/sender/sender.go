@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"math/rand"
 	"os"
 	"sync"
@@ -15,6 +16,7 @@ import (
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/collector/wal"
+	"github.com/Suhaibinator/open-splunk/internal/collectorlimits"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -77,6 +79,10 @@ type Options struct {
 	// InputHealth is a nil-safe provider of per-input health for heartbeats. The
 	// daemon wires it after construction; a nil provider yields no input health.
 	InputHealth func() []*opensplunkv1.CollectorInputHealth
+	// LocalDroppedEventsTotal supplies cumulative drops that occur before an
+	// EventBatch reaches this sender (decode/processing failures and local
+	// admission dead letters). Heartbeats saturating-add it to sender-owned drops.
+	LocalDroppedEventsTotal func() uint64
 
 	// OnTerminalMarks durably commits source checkpoints for the newly
 	// contiguous terminal WAL prefix. The sender invokes it after any required
@@ -153,6 +159,10 @@ type Sender struct {
 	rand         func() float64
 	dial         func() (opensplunkv1.CollectorIngestServiceClient, func() error, error)
 	drainTimeout time.Duration
+	// A connection must remain Ready for this long before it is allowed to reset
+	// exponential reconnect backoff. Otherwise a server that accepts Hello and
+	// immediately drops every stream turns a tight failure loop into attempt zero.
+	backoffResetAfter time.Duration
 
 	client    opensplunkv1.CollectorIngestServiceClient
 	closeConn func() error
@@ -191,6 +201,34 @@ func New(opts Options, queue wal.Queue, deadLetter DeadLetterSink, reporter Stat
 	if opts.CollectorID == "" {
 		return nil, errors.New("collector/sender: collector id is required")
 	}
+	if opts.Compression != "" && opts.Compression != gzip.Name {
+		return nil, fmt.Errorf("collector/sender: unsupported compression %q", opts.Compression)
+	}
+	if opts.DialTimeout < 0 {
+		return nil, errors.New("collector/sender: dial timeout cannot be negative")
+	}
+	if opts.Backoff.Initial < 0 || opts.Backoff.Max < 0 {
+		return nil, errors.New("collector/sender: backoff durations cannot be negative")
+	}
+	effectiveBackoffInitial := opts.Backoff.Initial
+	if effectiveBackoffInitial == 0 {
+		effectiveBackoffInitial = defaultBackoffInitial
+	}
+	effectiveBackoffMax := opts.Backoff.Max
+	if effectiveBackoffMax == 0 {
+		effectiveBackoffMax = defaultBackoffMax
+	}
+	if effectiveBackoffMax < effectiveBackoffInitial {
+		return nil, errors.New("collector/sender: backoff max cannot be less than initial")
+	}
+	if math.IsNaN(opts.Backoff.Multiplier) || math.IsInf(opts.Backoff.Multiplier, 0) ||
+		(opts.Backoff.Multiplier != 0 && opts.Backoff.Multiplier < 1) {
+		return nil, errors.New("collector/sender: backoff multiplier must be zero/default or at least one")
+	}
+	if math.IsNaN(opts.Backoff.Jitter) || math.IsInf(opts.Backoff.Jitter, 0) ||
+		opts.Backoff.Jitter < 0 || opts.Backoff.Jitter > 1 {
+		return nil, errors.New("collector/sender: backoff jitter must be between zero and one")
+	}
 	if opts.Token == nil {
 		opts.Token = func() (string, error) { return "", nil }
 	}
@@ -201,15 +239,26 @@ func New(opts Options, queue wal.Queue, deadLetter DeadLetterSink, reporter Stat
 	if deadLetter == nil {
 		deadLetter = nopDeadLetterSink{}
 	}
+	queueStats := queue.Stats()
 	s := &Sender{
-		opts:           opts,
-		queue:          queue,
-		deadLetter:     deadLetter,
-		reporter:       reporter,
-		logger:         logger,
-		now:            time.Now,
-		drainTimeout:   3 * time.Second,
-		retryNotBefore: make(map[uint64]batchRetryDeadline),
+		opts:              opts,
+		queue:             queue,
+		deadLetter:        deadLetter,
+		reporter:          reporter,
+		logger:            logger,
+		now:               time.Now,
+		drainTimeout:      3 * time.Second,
+		backoffResetAfter: defaultBackoffMax,
+		retryNotBefore:    make(map[uint64]batchRetryDeadline),
+		stats: Stats{
+			LastAckedBatchSequence: queueStats.LastAckedBatchSequence,
+		},
+	}
+	if queueStats.QuarantinedSegments > 0 {
+		logger.Error("collector WAL recovery quarantined durable segments",
+			"segments", queueStats.QuarantinedSegments,
+			"bytes", queueStats.QuarantinedBytes,
+			"recovery_warning", queueStats.RecoveryWarning)
 	}
 	// #nosec G404 -- this PRNG only jitters reconnect timing; it never generates
 	// tokens, identifiers, or other security-sensitive values.
@@ -243,7 +292,7 @@ func (s *Sender) Run(ctx context.Context) error {
 			s.setLastError(err)
 			return err
 		}
-		if connected {
+		if connected && s.connectionWasStable() {
 			attempt = 0
 		}
 		if err != nil {
@@ -262,6 +311,13 @@ func (s *Sender) Run(ctx context.Context) error {
 			return ctx.Err()
 		}
 	}
+}
+
+func (s *Sender) connectionWasStable() bool {
+	s.mu.Lock()
+	connectedAt := s.stats.LastConnectedAt
+	s.mu.Unlock()
+	return !connectedAt.IsZero() && s.now().Sub(connectedAt) >= s.backoffResetAfter
 }
 
 // ensureClient dials the gRPC target once and caches the client. Tests may
@@ -519,14 +575,21 @@ func (s *Sender) buildHeartbeat() *opensplunkv1.CollectorHeartbeat {
 	delivery := s.stats
 	s.mu.Unlock()
 
+	droppedEventsTotal := collectorlimits.ClampFleetCounter(delivery.DroppedEventsTotal)
+	if s.opts.LocalDroppedEventsTotal != nil {
+		droppedEventsTotal = collectorlimits.SaturatingAddFleetCounters(
+			droppedEventsTotal,
+			s.opts.LocalDroppedEventsTotal(),
+		)
+	}
 	qs := &opensplunkv1.CollectorQueueStats{
-		QueuedEvents:            queueStats.QueuedEvents,
-		QueuedBytes:             queueStats.QueuedBytes,
-		SentEventsTotal:         delivery.SentEventsTotal,
-		AcknowledgedEventsTotal: delivery.AcknowledgedEventsTotal,
-		RetriedBatchesTotal:     delivery.RetriedBatchesTotal,
-		RejectedEventsTotal:     delivery.RejectedEventsTotal,
-		DroppedEventsTotal:      delivery.DroppedEventsTotal,
+		QueuedEvents:            collectorlimits.ClampFleetCounter(queueStats.QueuedEvents),
+		QueuedBytes:             collectorlimits.ClampFleetCounter(queueStats.QueuedBytes),
+		SentEventsTotal:         collectorlimits.ClampFleetCounter(delivery.SentEventsTotal),
+		AcknowledgedEventsTotal: collectorlimits.ClampFleetCounter(delivery.AcknowledgedEventsTotal),
+		RetriedBatchesTotal:     collectorlimits.ClampFleetCounter(delivery.RetriedBatchesTotal),
+		RejectedEventsTotal:     collectorlimits.ClampFleetCounter(delivery.RejectedEventsTotal),
+		DroppedEventsTotal:      droppedEventsTotal,
 	}
 	if queueStats.OldestEventAge > 0 {
 		qs.OldestEventAge = durationpb.New(queueStats.OldestEventAge)
@@ -541,11 +604,11 @@ func (s *Sender) buildHeartbeat() *opensplunkv1.CollectorHeartbeat {
 		hb.Inputs = s.opts.InputHealth()
 	}
 	if delivery.LastSentBatchSequence > 0 {
-		v := delivery.LastSentBatchSequence
+		v := collectorlimits.ClampFleetCounter(delivery.LastSentBatchSequence)
 		hb.LastSentBatchSequence = &v
 	}
-	if delivery.LastAckedBatchSequence > 0 {
-		v := delivery.LastAckedBatchSequence
+	if queueStats.LastAckedBatchSequence > 0 {
+		v := collectorlimits.ClampFleetCounter(queueStats.LastAckedBatchSequence)
 		hb.LastAcknowledgedBatchSequence = &v
 	}
 	return hb
