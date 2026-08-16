@@ -91,8 +91,9 @@ that prebuilt image and cannot silently rebuild a dirty checkout.
 
 Each `vX.Y.Z` release tag runs one publication pipeline for both consumable
 images: `open-splunk-server` and `open-splunk-collector`, each for AMD64 and
-ARM64. For an end-to-end remote collector deployment using that release's
-collector image, follow
+ARM64. See [`docs/releasing.md`](docs/releasing.md) for the exact tagging and
+publication procedure. For an end-to-end remote collector deployment using that
+release's collector image, follow
 [`docs/collector-deployment.md`](docs/collector-deployment.md).
 
 The server can also expose a bounded Splunk-compatible HTTP Event Collector
@@ -139,8 +140,6 @@ v0.1 profile, documented in
 [`docs/knowledge-compatibility-v0.1.md`](docs/knowledge-compatibility-v0.1.md).
 Before upgrading retained searches, follow the
 [`v0.2 migration and read-only audit guide`](docs/spl-compatibility-v0.2-migration.md).
-Release evidence is organized in the
-[`v0.2 acceptance report`](docs/spl-compatibility-v0.2-acceptance.md).
 The default Go test suite is self-contained. The pinned ClickHouse and full
 collector-to-browser tests are opt-in because they start ephemeral Docker
 containers; the browser vertical also requires the pinned Playwright browser:

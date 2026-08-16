@@ -1,4 +1,0 @@
-application_version=0.1.0
-source_revision=dffde13c84d9a2ef0567e89dd527ec4776f5ca42
-ui_build_id=r18hh3g03m74j2n1574n107mg580m978h781hjgj327186mmk8h40472hhgj6j0mg
-ui_sha256=ad51b5a92ce581a4bd2e2d163d8c5bc9eb15e93c40318dafacbfacfc047667f5

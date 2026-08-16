@@ -1,7 +1,6 @@
-/* eslint-disable no-await-in-loop */
 // Test files run serially to keep their repository and publication fixtures isolated.
 import { spawn } from "node:child_process";
-import { access, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -17,20 +16,7 @@ const scriptTests = [
   "read-spl-compatibility-version.test.mjs",
   "build-release.test.mjs",
   "build-oci.test.mjs",
-  "spl-v02-acceptance.test.mjs",
-  "spl-v02-stats-by-ci.test.mjs",
 ];
-for (const optional of [
-  "spl-v03-acceptance.test.mjs",
-  "spl-v03-ci.test.mjs",
-]) {
-  try {
-    await access(path.join(workspace, "scripts", optional));
-    scriptTests.push(optional);
-  } catch (error) {
-    if (error?.code !== "ENOENT") throw error;
-  }
-}
 const testFiles = [
   path.join("app", "admin", "admin-resource-data.test.ts"),
   path.join("app", "admin", "backend-admin-console-hec.test.ts"),

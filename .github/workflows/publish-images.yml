@@ -24,12 +24,12 @@ jobs:
     timeout-minutes: 20
     outputs:
       application_version: ${{ steps.release.outputs.application_version }}
-      expected_spl_compatibility_version: ${{ steps.acceptance.outputs.expected_spl_compatibility_version }}
-      image_created: ${{ steps.acceptance.outputs.image_created }}
+      expected_spl_compatibility_version: ${{ steps.runtime.outputs.expected_spl_compatibility_version }}
+      image_created: ${{ steps.runtime.outputs.image_created }}
       image_tag: ${{ steps.release.outputs.image_tag }}
       registry: ${{ steps.release.outputs.registry }}
-      runtime_revision: ${{ steps.acceptance.outputs.runtime_revision }}
-      source_date_epoch: ${{ steps.acceptance.outputs.source_date_epoch }}
+      release_revision: ${{ steps.release.outputs.release_revision }}
+      source_date_epoch: ${{ steps.runtime.outputs.source_date_epoch }}
     steps:
       - name: Check out tagged source
         uses: actions/checkout@v7
@@ -42,15 +42,8 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          semantic_version_pattern='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
-          if [[ "$RELEASE_TAG" != v* ]]; then
-            echo "::error::Releases require a v-prefixed semantic version tag."
-            exit 1
-          fi
-          application_version=${RELEASE_TAG#v}
-          if [[ ${#application_version} -gt 64 ||
-                ! "$application_version" =~ $semantic_version_pattern ]]; then
-            echo "::error::Tag $RELEASE_TAG is not a supported semantic version."
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Releases require a vMAJOR.MINOR.PATCH tag; $RELEASE_TAG is not one."
             exit 1
           fi
           if [[ "$(git rev-parse HEAD)" != "$GITHUB_SHA" ]]; then
@@ -58,95 +51,63 @@ jobs:
             exit 1
           fi
 
-          image_tag=${application_version//+/_}
+          application_version=${RELEASE_TAG#v}
           registry="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}"
 
           {
             echo "application_version=$application_version"
-            echo "image_tag=$image_tag"
+            echo "image_tag=$application_version"
             echo "registry=$registry"
+            echo "release_revision=$GITHUB_SHA"
           } >>"$GITHUB_OUTPUT"
+
+      - name: Require the tagged commit on main
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+            echo "::error::Tagged commit $GITHUB_SHA is not an ancestor of origin/main."
+            exit 1
+          fi
+
+      - name: Require a successful CI run for the tagged commit
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          successful_runs="$(
+            gh api \
+              --method GET \
+              "repos/$GITHUB_REPOSITORY/actions/runs" \
+              -f head_sha="$GITHUB_SHA" \
+              -f status=completed \
+              -f per_page=100 \
+              --jq '[.workflow_runs[] | select(.name == "CI" and .conclusion == "success")] | length'
+          )"
+          if [[ ! "$successful_runs" =~ ^[0-9]+$ || "$successful_runs" -lt 1 ]]; then
+            echo "::error::No completed CI run concluded success for $GITHUB_SHA."
+            exit 1
+          fi
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
           node-version-file: .node-version
 
-      - name: Resolve accepted authored SPL runtime
-        id: acceptance
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
+      - name: Resolve authored SPL identity and build inputs
+        id: runtime
         run: |
           set -euo pipefail
           compatibility_version="$(node scripts/read-spl-compatibility-version.mjs)"
-          case "$compatibility_version" in
-            0.3)
-              manifest_path="docs/evidence/spl-v0.3/manifest.json"
-              runtime_revision="$(
-                node scripts/verify-spl-v03-acceptance.mjs \
-                  --phase accepted \
-                  --publication \
-                  --print-runtime-revision
-              )"
-              ;;
-            0.2)
-              manifest_path="docs/evidence/spl-v0.2-activation/manifest.json"
-              runtime_revision="$(
-                node scripts/verify-spl-v02-acceptance.mjs \
-                  --phase accepted \
-                  --publication \
-                  --print-runtime-revision
-              )"
-              ;;
-            *)
-              echo "::error::No stable-publication acceptance verifier exists for SPL compatibility $compatibility_version."
-              exit 1
-              ;;
-          esac
-          if [[ ! "$runtime_revision" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
-            echo "::error::The accepted SPL verifier returned an invalid runtime revision."
+          if [[ ! "$compatibility_version" =~ ^[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::The authored SPL compatibility identity is not MAJOR.MINOR."
             exit 1
           fi
-          git cat-file -e "${runtime_revision}^{commit}"
-          runtime_tree="$(git rev-parse "${runtime_revision}^{tree}")"
-          manifest_runtime_revision="$(
-            node -e '
-              const fs = require("node:fs");
-              const manifest = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-              process.stdout.write(`${manifest.runtime.revision}\n`);
-            ' "$manifest_path"
-          )"
-          manifest_runtime_tree="$(
-            node -e '
-              const fs = require("node:fs");
-              const manifest = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-              process.stdout.write(`${manifest.runtime.tree}\n`);
-            ' "$manifest_path"
-          )"
-          test "$runtime_revision" = "$manifest_runtime_revision"
-          test "$runtime_tree" = "$manifest_runtime_tree"
-          runtime_compatibility_version="$(
-            git show "${runtime_revision}:internal/spl/doc.go" |
-              awk '
-                /^const CompatibilityVersion = "[0-9]+\.[0-9]+"$/ {
-                  value = $0
-                  sub(/^const CompatibilityVersion = "/, "", value)
-                  sub(/"$/, "", value)
-                  count++
-                }
-                END {
-                  if (count != 1) exit 1
-                  print value
-                }
-              '
-          )"
-          test "$runtime_compatibility_version" = "$compatibility_version"
-          image_created="$(git show -s --format=%cI "$runtime_revision")"
-          source_date_epoch="$(git show -s --format=%ct "$runtime_revision")"
+          image_created="$(git show -s --format=%cI "$GITHUB_SHA")"
+          source_date_epoch="$(git show -s --format=%ct "$GITHUB_SHA")"
           {
-            echo "expected_spl_compatibility_version=$runtime_compatibility_version"
+            echo "expected_spl_compatibility_version=$compatibility_version"
             echo "image_created=$image_created"
-            echo "runtime_revision=$runtime_revision"
             echo "source_date_epoch=$source_date_epoch"
           } >>"$GITHUB_OUTPUT"
 
@@ -189,12 +150,12 @@ jobs:
       - name: Check out tagged source
         uses: actions/checkout@v7
         with:
-          ref: ${{ needs.verify.outputs.runtime_revision }}
+          ref: ${{ needs.verify.outputs.release_revision }}
 
-      - name: Verify exact accepted runtime checkout
+      - name: Verify exact tagged checkout
         env:
-          RUNTIME_REVISION: ${{ needs.verify.outputs.runtime_revision }}
-        run: test "$(git rev-parse HEAD)" = "$RUNTIME_REVISION"
+          RELEASE_REVISION: ${{ needs.verify.outputs.release_revision }}
+        run: test "$(git rev-parse HEAD)" = "$RELEASE_REVISION"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -218,7 +179,7 @@ jobs:
           build-args: |
             OPEN_SPLUNK_APPLICATION_VERSION=${{ needs.verify.outputs.application_version }}
             OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION=${{ needs.verify.outputs.expected_spl_compatibility_version }}
-            OPEN_SPLUNK_SOURCE_REVISION=${{ needs.verify.outputs.runtime_revision }}
+            OPEN_SPLUNK_SOURCE_REVISION=${{ needs.verify.outputs.release_revision }}
             OPEN_SPLUNK_IMAGE_CREATED=${{ needs.verify.outputs.image_created }}
             OPEN_SPLUNK_SOURCE_DATE_EPOCH=${{ needs.verify.outputs.source_date_epoch }}
             OPEN_SPLUNK_EXPECTED_TARGETOS=linux

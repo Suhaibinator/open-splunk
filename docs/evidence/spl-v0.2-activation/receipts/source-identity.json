@@ -1,7 +1,0 @@
-{
-  "runtime_revision": "aceb69222c784225e46920079cf572c922ee7052",
-  "runtime_tree": "12132c3a6f829efade16622124a392c3f593d930",
-  "remote_ref": "refs/tags/spl-v0.2-evidence-aceb69222c784225e46920079cf572c922ee7052",
-  "remote_readback_revision": "aceb69222c784225e46920079cf572c922ee7052",
-  "result": "pass"
-}

@@ -500,10 +500,8 @@ Before activation, v0.3 requires:
    public result paging;
 9. a migration note listing intentionally unsupported options and any source
    transition; and
-10. `docs/spl-compatibility-v0.3-acceptance.md` plus the strict
-    `docs/evidence/spl-v0.3/manifest.json` bundle, with clean-revision
-    provenance, terminal-success CI, exact release identities, checksummed
-    receipts, and the direct-child documentation-only `R`/`E` transition.
+10. a `vX.Y.Z` tag on a `main` commit whose CI run concluded success, which is
+    the whole release gate; see [`docs/releasing.md`](releasing.md).
 
 ## Deferred follow-ons
 

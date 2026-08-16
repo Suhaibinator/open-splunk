@@ -272,7 +272,7 @@ Initialization creates six distinct identities:
   is used only by the one-shot recovery helper, is never mounted into the
   long-running server, and should be rotated after the restore operation.
 
-ClickHouse 26.3 authorizes several partition operations through the same
+ClickHouse 26.7 authorizes several partition operations through the same
 `ALTER DELETE` privilege. That unavoidable blast radius is why the deletion
 connection is private to the fixed deletion Store path and is never shared
 with ingestion, search, export, or inspection.

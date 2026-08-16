@@ -511,42 +511,31 @@ test("release publication creates immutable amd64 and arm64 GHCR images", async 
     2,
   );
   assert.match(workflow, /uses: docker\/build-push-action@v7/);
-  assert.match(
-    workflow,
-    /node scripts\/verify-spl-v03-acceptance\.mjs \\\n+\s+--phase accepted \\\n+\s+--publication \\\n+\s+--print-runtime-revision/,
-  );
-  assert.match(
-    workflow,
-    /node scripts\/verify-spl-v02-acceptance\.mjs \\\n+\s+--phase accepted \\\n+\s+--publication \\\n+\s+--print-runtime-revision/,
-  );
   assert.match(workflow, /GITHUB_TOKEN: \$\{\{ github\.token \}\}/);
   assert.match(workflow, /permissions:\n\s+actions: read\n\s+contents: read/);
   assert.match(
     workflow,
-    /manifest_path="docs\/evidence\/spl-v0\.2-activation\/manifest\.json"/,
+    /if \[\[ ! "\$RELEASE_TAG" =~ \^v\[0-9\]\+\\\.\[0-9\]\+\\\.\[0-9\]\+\$ \]\]/,
   );
   assert.match(
     workflow,
-    /manifest_path="docs\/evidence\/spl-v0\.3\/manifest\.json"/,
+    /git merge-base --is-ancestor "\$GITHUB_SHA" refs\/remotes\/origin\/main/,
+  );
+  assert.match(workflow, /-f head_sha="\$GITHUB_SHA"/);
+  assert.match(workflow, /select\(\.name == "CI" and \.conclusion == "success"\)/);
+  assert.match(
+    workflow,
+    /ref: \$\{\{ needs\.verify\.outputs\.release_revision \}\}/,
   );
   assert.match(
     workflow,
-    /ref: \$\{\{ needs\.verify\.outputs\.runtime_revision \}\}/,
-  );
-  assert.match(
-    workflow,
-    /OPEN_SPLUNK_SOURCE_REVISION=\$\{\{ needs\.verify\.outputs\.runtime_revision \}\}/,
+    /OPEN_SPLUNK_SOURCE_REVISION=\$\{\{ needs\.verify\.outputs\.release_revision \}\}/,
   );
   assert.match(
     workflow,
     /OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION=\$\{\{ needs\.verify\.outputs\.expected_spl_compatibility_version \}\}/,
   );
-  assert.match(workflow, /git cat-file -e "\$\{runtime_revision\}\^\{commit\}"/);
-  assert.match(workflow, /test "\$runtime_tree" = "\$manifest_runtime_tree"/);
-  assert.match(
-    workflow,
-    /test "\$runtime_compatibility_version" = "\$compatibility_version"/,
-  );
+  assert.doesNotMatch(workflow, /runtime_revision/);
   assert.match(workflow, /push-by-digest=true/);
   assert.match(workflow, /provenance: mode=max/);
   assert.match(workflow, /sbom: true/);

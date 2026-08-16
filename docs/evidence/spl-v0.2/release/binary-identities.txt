@@ -1,9 +1,0 @@
-open-splunk-server
-application_version=0.1.0
-source_revision=dffde13c84d9a2ef0567e89dd527ec4776f5ca42
-open-splunk-collector
-application_version=0.1.0
-source_revision=dffde13c84d9a2ef0567e89dd527ec4776f5ca42
-open-splunk-loggen
-application_version=0.1.0
-source_revision=dffde13c84d9a2ef0567e89dd527ec4776f5ca42
