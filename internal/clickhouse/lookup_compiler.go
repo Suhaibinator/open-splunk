@@ -431,27 +431,33 @@ func prepareLookupStageContext(
 		}
 		var values []string
 		if materializeSelectedValues {
-			values = make([]string, lookupResolutionRowCount(resolution))
-			for rowIndex := range values {
-				if rowIndex%lookupContextCheckRows == 0 {
-					if err := ctx.Err(); err != nil {
-						return 0, err
+			if resolution.columns != nil {
+				// Retained replay columns are already private, immutable, and
+				// authenticated by the source compiled-query seal.
+				values = resolution.columns[headerIndex]
+			} else {
+				values = make([]string, lookupResolutionRowCount(resolution))
+				for rowIndex := range values {
+					if rowIndex%lookupContextCheckRows == 0 {
+						if err := ctx.Err(); err != nil {
+							return 0, err
+						}
 					}
-				}
-				// encoding/csv cells may be substrings of one shared row string.
-				// Detach selected bytes so a tiny charged value cannot retain large
-				// unselected cells after the source Asset leaves admission scope.
-				value, present := lookupResolutionCell(
-					resolution,
-					rowIndex,
-					headerIndex,
-				)
-				if !present {
-					return 0, errors.New(
-						"prepare ClickHouse lookup compilation: asset row width changed",
+					// encoding/csv cells may be substrings of one shared row string.
+					// Detach selected bytes so a tiny charged value cannot retain large
+					// unselected cells after the source Asset leaves admission scope.
+					value, present := lookupResolutionCell(
+						resolution,
+						rowIndex,
+						headerIndex,
 					)
+					if !present {
+						return 0, errors.New(
+							"prepare ClickHouse lookup compilation: asset row width changed",
+						)
+					}
+					values[rowIndex] = strings.Clone(value)
 				}
-				values[rowIndex] = strings.Clone(value)
 			}
 		}
 		selectedIndex := len(stage.selectedColumns)

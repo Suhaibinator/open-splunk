@@ -28,7 +28,7 @@ ordinary `docker pull` selects the host architecture automatically. Do not set
 `--platform` unless deliberately running a non-native image through emulation.
 
 ```sh
-export OPEN_SPLUNK_COLLECTOR_VERSION=0.1.0
+export OPEN_SPLUNK_COLLECTOR_VERSION=0.4.0
 export OPEN_SPLUNK_COLLECTOR_IMAGE="ghcr.io/suhaibinator/open-splunk-collector:${OPEN_SPLUNK_COLLECTOR_VERSION}"
 docker pull "$OPEN_SPLUNK_COLLECTOR_IMAGE"
 docker image inspect --format '{{.Os}}/{{.Architecture}}' "$OPEN_SPLUNK_COLLECTOR_IMAGE"

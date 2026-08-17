@@ -46,6 +46,7 @@ import {
   type ListKnowledgeObjectsRequest,
   type ListKnowledgeObjectsResponse as ListKnowledgeObjectsResponseMessage,
 } from "@/gen/ts/open_splunk/v1/knowledge_api";
+import { ServerFeature } from "@/gen/ts/open_splunk/v1/system_api";
 import {
   HttpError,
   PROTOBUF_CONTENT_TYPE,
@@ -100,6 +101,7 @@ import {
 } from "./knowledge-manager-data";
 import {
   KNOWLEDGE_MANAGER_MAXIMUM_BOOTSTRAP_APPS,
+  backendKnowledgeCapabilities,
   backendAdminNavigation,
   knowledgeManagerAppOptionsFromBootstrap,
   safeKnowledgeManagerAppOptions,
@@ -1185,7 +1187,7 @@ function mediaRuleBodies(css: string, condition: string): string[] {
 
 test("feature-absent navigation is unchanged and invokes no knowledge chunk importer", async () => {
   assert.deepEqual(
-    backendAdminNavigation(false).map(({ key, label, detail }) => ({ key, label, detail })),
+    backendAdminNavigation(false, false).map(({ key, label, detail }) => ({ key, label, detail })),
     [
       { key: "overview", label: "System overview", detail: "Capabilities and limits" },
       { key: "apps", label: "Apps", detail: "Workspaces and defaults" },
@@ -1198,12 +1200,46 @@ test("feature-absent navigation is unchanged and invokes no knowledge chunk impo
   );
 });
 
-test("feature-advertised navigation adds field-knowledge and lookup destinations and loads its module once", async () => {
-  const navigation = backendAdminNavigation(true);
+test("an older field-knowledge-only server does not expose lookup management", () => {
+  const capabilities = backendKnowledgeCapabilities(new Set([
+    ServerFeature.SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS,
+  ]));
+  assert.deepEqual(capabilities, { knowledge: true, lookupManagement: false });
+  const navigation = backendAdminNavigation(
+    capabilities.knowledge,
+    capabilities.lookupManagement,
+  );
   assert.equal(navigation.filter((item) => item.key === "knowledge").length, 1);
   assert.equal(navigation.find((item) => item.key === "knowledge")?.detail, "Tier-1 definitions");
+  assert.equal(navigation.filter((item) => item.key === "lookups").length, 0);
+});
+
+test("independently advertised lookup management adds its navigation destination", () => {
+  const capabilities = backendKnowledgeCapabilities(new Set([
+    ServerFeature.SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS,
+    ServerFeature.SERVER_FEATURE_LOOKUP_MANAGEMENT,
+  ]));
+  assert.deepEqual(capabilities, { knowledge: true, lookupManagement: true });
+  const navigation = backendAdminNavigation(
+    capabilities.knowledge,
+    capabilities.lookupManagement,
+  );
+  assert.equal(navigation.filter((item) => item.key === "knowledge").length, 1);
   assert.equal(navigation.filter((item) => item.key === "lookups").length, 1);
   assert.equal(navigation.find((item) => item.key === "lookups")?.detail, "Exact CSV enrichment");
+});
+
+test("lookup capability without field knowledge fails closed", () => {
+  const capabilities = backendKnowledgeCapabilities(new Set([
+    ServerFeature.SERVER_FEATURE_LOOKUP_MANAGEMENT,
+  ]));
+  assert.deepEqual(capabilities, { knowledge: false, lookupManagement: false });
+  const navigation = backendAdminNavigation(
+    capabilities.knowledge,
+    capabilities.lookupManagement,
+  );
+  assert.equal(navigation.filter((item) => item.key === "knowledge").length, 0);
+  assert.equal(navigation.filter((item) => item.key === "lookups").length, 0);
 });
 
 test("oversized and spoofed app fixtures fail closed before entries are scanned", () => {

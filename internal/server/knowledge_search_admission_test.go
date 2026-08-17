@@ -9,22 +9,23 @@ import (
 	"time"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"google.golang.org/protobuf/proto"
 )
 
 type knowledgeAdmissionSearchJobs struct {
 	*fakeSearchJobs
-	enabled          bool
-	executionEnabled bool
+	enabled       bool
+	lookupEnabled bool
 }
 
 func (jobs *knowledgeAdmissionSearchJobs) KnowledgeAdmissionEnabled() bool {
 	return jobs != nil && jobs.enabled
 }
 
-func (jobs *knowledgeAdmissionSearchJobs) KnowledgeExecutionEnabled() bool {
-	return jobs != nil && jobs.executionEnabled
+func (jobs *knowledgeAdmissionSearchJobs) LookupAdmissionEnabled() bool {
+	return jobs != nil && jobs.lookupEnabled
 }
 
 func TestKnowledgeSearchAdmissionRequiresLiveAppCatalog(t *testing.T) {
@@ -401,7 +402,7 @@ func enabledEmptyKnowledgeSnapshotSummary() *opensplunkv1.KnowledgeSnapshotSumma
 	return &opensplunkv1.KnowledgeSnapshotSummary{Ref: &opensplunkv1.KnowledgeSnapshotRef{
 		SnapshotSha256:               bytes.Repeat([]byte{0x42}, 32),
 		TenantCatalogStateToken:      bytes.Repeat([]byte{0x73}, 32),
-		CompilerCompatibilityVersion: "0.1",
+		CompilerCompatibilityVersion: knowledgesnapshot.CompilerCompatibilityVersion,
 	}}
 }
 

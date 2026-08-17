@@ -1504,7 +1504,6 @@ cmd/open-splunk-server/main.go
 cmd/open-splunk-server/runtime_serve.go
 internal/server/api.go or equivalent top-level route composition
 proto/open_splunk/v1/system_api.proto
-docs/backend-checkpoint.md
 ```
 
 ### Files HEC must not modify
@@ -1616,4 +1615,3 @@ Repository contracts that implementation must preserve:
 - [Ingestion token host/source constraints v0.1](ingestion-token-constraints-v0.1.md)
 - [Audit events v0.1](audit-events-v0.1.md)
 - [Collector deployment](collector-deployment.md)
-- [Backend checkpoint](backend-checkpoint.md)

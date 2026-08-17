@@ -48,7 +48,6 @@ const (
 	defaultRetentionTTL           = 15 * time.Minute
 	defaultExpiredRetention       = 5 * time.Minute
 	defaultCleanupInterval        = time.Minute
-	defaultCompilerVersion        = spl.CompatibilityVersion
 	minimumCursorKeyBytes         = 32
 	maximumConcurrent             = 256
 	maximumConcurrentReads        = 256
@@ -246,10 +245,6 @@ type Config struct {
 	Snapshotter Snapshotter
 	Journal     JobJournal
 	Compiler    clickhouse.Compiler
-	// CompilerVersion is the immutable authored-SPL compatibility identity
-	// retained with every admitted job. Empty selects the legacy development
-	// identity for embedders that have not supplied a product version.
-	CompilerVersion string
 	// KnowledgeResolver enables sealed pre-journal admission only for requests
 	// with a nonempty AppID. App-less searches deliberately remain legacy.
 	KnowledgeResolver KnowledgeResolver
@@ -324,7 +319,6 @@ type Manager struct {
 	onJournalError           func(error)
 	onExecutionError         func(string, FailureCode, error)
 	compiler                 clickhouse.Compiler
-	compilerVersion          string
 	knowledgeResolver        KnowledgeResolver
 	lookupResolver           LookupResolver
 	maxRows                  uint64
@@ -535,13 +529,6 @@ func New(config Config) (*Manager, error) {
 	if maxScopeIndexes == 0 {
 		maxScopeIndexes = MaximumScopeIndexes
 	}
-	compilerVersion := config.CompilerVersion
-	if compilerVersion == "" {
-		compilerVersion = defaultCompilerVersion
-	}
-	if !ValidCompilerVersion(compilerVersion) {
-		return nil, errors.New("create search job manager: compiler version is invalid")
-	}
 	retentionTTL := config.RetentionTTL
 	if retentionTTL == 0 {
 		retentionTTL = defaultRetentionTTL
@@ -604,7 +591,6 @@ func New(config Config) (*Manager, error) {
 		journalErrorHookGate:     make(chan struct{}, 1),
 		executionErrorHookGate:   make(chan struct{}, 1),
 		compiler:                 config.Compiler,
-		compilerVersion:          strings.Clone(compilerVersion),
 		knowledgeResolver:        knowledgeResolver,
 		lookupResolver:           lookupResolver,
 		maxRows:                  maxRows,
@@ -658,13 +644,13 @@ func (manager *Manager) KnowledgeAdmissionEnabled() bool {
 	return manager != nil && manager.knowledgeResolver != nil
 }
 
-// KnowledgeExecutionEnabled reports whether completed app-scoped searches can
-// retain the compiler and snapshot authority required by derived execution.
-// New constructs these dependencies once, so this value cannot drift after
-// the Manager starts accepting jobs.
-func (manager *Manager) KnowledgeExecutionEnabled() bool {
+// LookupAdmissionEnabled reports whether this manager resolves both explicit
+// and automatic lookup authority inside the knowledge admission snapshot. It
+// is separate from generic knowledge admission so a partially composed HTTP
+// server cannot advertise the complete lookup family.
+func (manager *Manager) LookupAdmissionEnabled() bool {
 	return manager != nil && manager.knowledgeResolver != nil &&
-		!nilcheck.IsNil(manager.executor)
+		manager.lookupResolver != nil
 }
 
 // Create takes an immutable absolute-time, authorization, and committed-storage
@@ -766,7 +752,7 @@ func (manager *Manager) Create(ctx context.Context, request CreateRequest) (Job,
 	if err != nil || metadataBytes > manager.maxMetadataBytes {
 		return Job{}, ErrCapacity
 	}
-	metadataBytes, err = checkedAdd(metadataBytes, uint64(len(manager.compilerVersion)))
+	metadataBytes, err = checkedAdd(metadataBytes, uint64(len(spl.CompatibilityVersion)))
 	if err != nil || metadataBytes > manager.maxMetadataBytes {
 		return Job{}, ErrCapacity
 	}
@@ -811,7 +797,7 @@ func (manager *Manager) Create(ctx context.Context, request CreateRequest) (Job,
 			Latest:           request.TimeRange.Latest(),
 			IndexTimeCutoff:  now,
 			VisibilityCutoff: visibilityCutoff,
-			CompilerVersion:  strings.Clone(manager.compilerVersion),
+			CompilerVersion:  spl.CompatibilityVersion,
 			State:            StateQueued,
 			CreatedAt:        now,
 		},

@@ -3,6 +3,6 @@ package spl
 
 // CompatibilityVersion is the public authored-search language identity exposed
 // by every production admission, retention, export, and bootstrap surface.
-// Knowledge calculated fields deliberately retain their separate closed v0.1
-// profile.
-const CompatibilityVersion = "0.2"
+// Knowledge calculated fields deliberately use a smaller, closed expression
+// grammar within that same compatibility contract.
+const CompatibilityVersion = "0.4"

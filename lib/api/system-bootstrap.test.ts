@@ -56,7 +56,7 @@ test("system bootstrap keeps build metadata optional for older servers", () => {
 });
 
 test("system bootstrap accepts only a canonical bounded SPL compatibility identity", () => {
-  for (const compatibility of ["0.2", "", "\ufeff0.2"]) {
+  for (const compatibility of ["0.4", "", "\ufeff0.4"]) {
     const response = GetSystemBootstrapResponse.fromPartial({
       splCompatibilityVersion: compatibility,
       serverTime: new Date("2026-07-26T12:00:00Z"),
@@ -65,9 +65,9 @@ test("system bootstrap accepts only a canonical bounded SPL compatibility identi
   }
 
   for (const compatibility of [
-    " 0.2",
-    "0.2\u00a0",
-    "0.\u00002",
+    " 0.4",
+    "0.4\u00a0",
+    "0.\u00004",
     "x".repeat(MAXIMUM_SPL_COMPATIBILITY_VERSION_BYTES + 1),
     "😀".repeat(MAXIMUM_SPL_COMPATIBILITY_VERSION_BYTES / 2),
     "\ud800",

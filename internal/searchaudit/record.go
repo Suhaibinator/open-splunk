@@ -11,6 +11,8 @@ import (
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
+	"google.golang.org/protobuf/proto"
 	"gorm.io/gorm"
 )
 
@@ -35,6 +37,8 @@ type eventSizeRecord struct {
 	KnowledgeSnapshotTenantCatalogStateTokenBytes sql.NullInt64 `gorm:"column:knowledge_snapshot_tenant_catalog_state_token_bytes"`
 	KnowledgeSnapshotObjectCount                  sql.NullInt64 `gorm:"column:knowledge_snapshot_object_count"`
 	KnowledgeSnapshotCompilerVersionBytes         sql.NullInt64 `gorm:"column:knowledge_snapshot_compiler_version_bytes"`
+	KnowledgeSnapshotLookupAssetCount             sql.NullInt64 `gorm:"column:knowledge_snapshot_lookup_asset_count"`
+	KnowledgeSnapshotLegacyFiveField              int64         `gorm:"column:knowledge_snapshot_legacy_five_field"`
 }
 
 type tenantAggregate struct {
@@ -62,6 +66,7 @@ func readPreflightedRecords(query *gorm.DB, limit int) ([]searchAttemptEventReco
 			  + (knowledge_snapshot_tenant_catalog_state_token IS NOT NULL)
 			  + (knowledge_snapshot_object_count IS NOT NULL)
 			  + (knowledge_snapshot_compiler_compatibility_version IS NOT NULL)
+			  + (knowledge_snapshot_lookup_asset_count IS NOT NULL)
 			    AS knowledge_snapshot_present_fields,
 			length(knowledge_snapshot_sha256)
 			    AS knowledge_snapshot_sha256_bytes,
@@ -71,7 +76,14 @@ func readPreflightedRecords(query *gorm.DB, limit int) ([]searchAttemptEventReco
 			knowledge_snapshot_object_count,
 			length(CAST(
 				knowledge_snapshot_compiler_compatibility_version AS BLOB
-			)) AS knowledge_snapshot_compiler_version_bytes
+			)) AS knowledge_snapshot_compiler_version_bytes,
+			knowledge_snapshot_lookup_asset_count,
+			CASE
+				WHEN knowledge_snapshot_lookup_asset_count IS NULL
+				 AND knowledge_snapshot_compiler_compatibility_version = '0.1'
+				THEN 1
+				ELSE 0
+			END AS knowledge_snapshot_legacy_five_field
 		`).
 		Limit(limit).
 		Find(&sizes)
@@ -117,10 +129,11 @@ func validEventSize(record eventSizeRecord) bool {
 			!record.KnowledgeSnapshotTenantCatalogRevision.Valid &&
 			!record.KnowledgeSnapshotTenantCatalogStateTokenBytes.Valid &&
 			!record.KnowledgeSnapshotObjectCount.Valid &&
-			!record.KnowledgeSnapshotCompilerVersionBytes.Valid
+			!record.KnowledgeSnapshotCompilerVersionBytes.Valid &&
+			!record.KnowledgeSnapshotLookupAssetCount.Valid &&
+			record.KnowledgeSnapshotLegacyFiveField == 0
 	}
-	return record.KnowledgeSnapshotPresentFields == 5 &&
-		record.KnowledgeSnapshotSHA256Bytes.Valid &&
+	commonValid := record.KnowledgeSnapshotSHA256Bytes.Valid &&
 		record.KnowledgeSnapshotSHA256Bytes.Int64 == sha256.Size &&
 		record.KnowledgeSnapshotTenantCatalogRevision.Valid &&
 		record.KnowledgeSnapshotTenantCatalogRevision.Int64 >= 0 &&
@@ -133,6 +146,18 @@ func validEventSize(record eventSizeRecord) bool {
 		record.KnowledgeSnapshotCompilerVersionBytes.Valid &&
 		record.KnowledgeSnapshotCompilerVersionBytes.Int64 >= 1 &&
 		record.KnowledgeSnapshotCompilerVersionBytes.Int64 <= maximumCompilerCompatibilityVersionBytes
+	if !commonValid {
+		return false
+	}
+	if record.KnowledgeSnapshotPresentFields == 5 {
+		return record.KnowledgeSnapshotLegacyFiveField == 1 &&
+			!record.KnowledgeSnapshotLookupAssetCount.Valid
+	}
+	return record.KnowledgeSnapshotPresentFields == 6 &&
+		record.KnowledgeSnapshotLegacyFiveField == 0 &&
+		record.KnowledgeSnapshotLookupAssetCount.Valid &&
+		record.KnowledgeSnapshotLookupAssetCount.Int64 >= 0 &&
+		record.KnowledgeSnapshotLookupAssetCount.Int64 <= maximumKnowledgeLookupAssets
 }
 
 func setRecordKnowledgeSnapshot(
@@ -159,6 +184,13 @@ func setRecordKnowledgeSnapshot(
 		String: strings.Clone(knowledgeSnapshot.GetCompilerCompatibilityVersion()),
 		Valid:  true,
 	}
+	record.KnowledgeSnapshotLookupAssetCount = sql.NullInt64{}
+	if !knowledgeSnapshot.GetLookupAssetCountUnknown() {
+		record.KnowledgeSnapshotLookupAssetCount = sql.NullInt64{
+			Int64: int64(knowledgeSnapshot.GetLookupAssetCount()),
+			Valid: true,
+		}
+	}
 }
 
 func knowledgeSnapshotFromRecord(
@@ -180,13 +212,26 @@ func knowledgeSnapshotFromRecord(
 	if record.KnowledgeSnapshotCompilerCompatibilityVersion.Valid {
 		present++
 	}
+	if record.KnowledgeSnapshotLookupAssetCount.Valid {
+		present++
+	}
 	if present == 0 {
 		return nil, nil
 	}
-	if present != 5 || record.KnowledgeSnapshotTenantCatalogRevision.Int64 < 0 ||
+	legacyFiveField := present == 5 &&
+		!record.KnowledgeSnapshotLookupAssetCount.Valid &&
+		record.KnowledgeSnapshotCompilerCompatibilityVersion.Valid &&
+		record.KnowledgeSnapshotCompilerCompatibilityVersion.String ==
+			knowledgesnapshot.LegacySnapshotCompilerVersion
+	lookupCountInvalid := record.KnowledgeSnapshotLookupAssetCount.Valid &&
+		(record.KnowledgeSnapshotLookupAssetCount.Int64 < 0 ||
+			record.KnowledgeSnapshotLookupAssetCount.Int64 > maximumKnowledgeLookupAssets)
+	if (present != 6 && !legacyFiveField) ||
+		record.KnowledgeSnapshotTenantCatalogRevision.Int64 < 0 ||
 		record.KnowledgeSnapshotTenantCatalogRevision.Int64 > maximumPersistedSequence ||
 		record.KnowledgeSnapshotObjectCount.Int64 < 0 ||
-		record.KnowledgeSnapshotObjectCount.Int64 > maximumKnowledgeObjects {
+		record.KnowledgeSnapshotObjectCount.Int64 > maximumKnowledgeObjects ||
+		lookupCountInvalid {
 		return nil, fmt.Errorf(
 			"%w: search-attempt audit knowledge snapshot tuple is incomplete",
 			ErrCorrupt,
@@ -205,6 +250,13 @@ func knowledgeSnapshotFromRecord(
 		CompilerCompatibilityVersion: strings.Clone(
 			record.KnowledgeSnapshotCompilerCompatibilityVersion.String,
 		),
+		LookupAssetCountUnknown: !record.KnowledgeSnapshotLookupAssetCount.Valid,
+	}
+	if record.KnowledgeSnapshotLookupAssetCount.Valid {
+		// #nosec G115 -- the persisted count is bounded immediately above.
+		knowledgeSnapshot.LookupAssetCount = uint32(
+			record.KnowledgeSnapshotLookupAssetCount.Int64,
+		)
 	}
 	if err := validateKnowledgeSnapshotRef(knowledgeSnapshot); err != nil {
 		return nil, fmt.Errorf(
@@ -348,15 +400,23 @@ func eventDigest(record searchAttemptEventRecord) (string, error) {
 		TenantCatalogStateToken      []byte `json:"t"`
 		ObjectCount                  uint32 `json:"c"`
 		CompilerCompatibilityVersion string `json:"v"`
+		// A nil pointer is omitted to preserve legacy event identity;
+		// a present zero is encoded as l:0 and is therefore unambiguous.
+		LookupAssetCount *uint32 `json:"l,omitempty"`
 	}
 	var snapshot *snapshotIdentity
 	if knowledgeSnapshot != nil {
+		var lookupAssetCount *uint32
+		if !knowledgeSnapshot.GetLookupAssetCountUnknown() {
+			lookupAssetCount = proto.Uint32(knowledgeSnapshot.GetLookupAssetCount())
+		}
 		snapshot = &snapshotIdentity{
 			SHA256:                       knowledgeSnapshot.GetSnapshotSha256(),
 			TenantCatalogRevision:        knowledgeSnapshot.GetTenantCatalogRevision(),
 			TenantCatalogStateToken:      knowledgeSnapshot.GetTenantCatalogStateToken(),
 			ObjectCount:                  knowledgeSnapshot.GetObjectCount(),
 			CompilerCompatibilityVersion: knowledgeSnapshot.GetCompilerCompatibilityVersion(),
+			LookupAssetCount:             lookupAssetCount,
 		}
 	}
 	payload, err := json.Marshal(struct {

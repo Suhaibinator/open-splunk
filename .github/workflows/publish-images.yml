@@ -24,7 +24,6 @@ jobs:
     timeout-minutes: 20
     outputs:
       application_version: ${{ steps.release.outputs.application_version }}
-      expected_spl_compatibility_version: ${{ steps.runtime.outputs.expected_spl_compatibility_version }}
       image_created: ${{ steps.runtime.outputs.image_created }}
       image_tag: ${{ steps.release.outputs.image_tag }}
       registry: ${{ steps.release.outputs.registry }}
@@ -94,19 +93,23 @@ jobs:
         with:
           node-version-file: .node-version
 
-      - name: Resolve authored SPL identity and build inputs
+      - name: Verify active release profile and resolve build inputs
         id: runtime
         run: |
           set -euo pipefail
+          package_version="$(node -p 'require("./package.json").version')"
           compatibility_version="$(node scripts/read-spl-compatibility-version.mjs)"
-          if [[ ! "$compatibility_version" =~ ^[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::The authored SPL compatibility identity is not MAJOR.MINOR."
+          if [[ "$package_version" != "0.4.0" || "$compatibility_version" != "0.4" ]]; then
+            echo "::error::The active release profile is application 0.4.0 with SPL compatibility 0.4; found $package_version/$compatibility_version."
+            exit 1
+          fi
+          if [[ "${{ steps.release.outputs.application_version }}" != "$package_version" ]]; then
+            echo "::error::Release tag application version ${{ steps.release.outputs.application_version }} does not match package version $package_version."
             exit 1
           fi
           image_created="$(git show -s --format=%cI "$GITHUB_SHA")"
           source_date_epoch="$(git show -s --format=%ct "$GITHUB_SHA")"
           {
-            echo "expected_spl_compatibility_version=$compatibility_version"
             echo "image_created=$image_created"
             echo "source_date_epoch=$source_date_epoch"
           } >>"$GITHUB_OUTPUT"
@@ -178,7 +181,6 @@ jobs:
           outputs: type=image,name=${{ needs.verify.outputs.registry }}/${{ matrix.image_name }},push-by-digest=true,name-canonical=true,push=true
           build-args: |
             OPEN_SPLUNK_APPLICATION_VERSION=${{ needs.verify.outputs.application_version }}
-            OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION=${{ needs.verify.outputs.expected_spl_compatibility_version }}
             OPEN_SPLUNK_SOURCE_REVISION=${{ needs.verify.outputs.release_revision }}
             OPEN_SPLUNK_IMAGE_CREATED=${{ needs.verify.outputs.image_created }}
             OPEN_SPLUNK_SOURCE_DATE_EPOCH=${{ needs.verify.outputs.source_date_epoch }}

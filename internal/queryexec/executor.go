@@ -82,7 +82,7 @@ const (
 	// would otherwise enforce incrementally. The guard trips on the offending
 	// row, so at most one row beyond the ceiling is ever resident.
 	maximumChartResultBytes = uint64(48 << 20)
-	// Expression v0.2 queries that can raise a sanitized runtime scalar error
+	// Authored arithmetic queries that can raise a sanitized runtime scalar error
 	// are consumed completely before any schema or row is published. Keep that
 	// private buffer independently bounded even if a forged driver ignores the
 	// ClickHouse max_result_bytes setting.

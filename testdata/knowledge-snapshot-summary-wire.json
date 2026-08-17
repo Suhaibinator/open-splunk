@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "cases": [
     {
       "name": "absent",
@@ -46,7 +46,8 @@
         "tenantCatalogRevision": "9007199254740995",
         "tenantCatalogStateToken": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
         "objectCount": 2,
-        "compilerCompatibilityVersion": "0.1"
+        "compilerCompatibilityVersion": "0.4",
+        "lookupAssetCount": 0
       },
       "objects": [
         {
@@ -69,18 +70,18 @@
       "objectsTruncated": false,
       "refWire": {
         "byteLength": 84,
-        "sha256": "601111b5b244092112b76b5d222960c59dbe3854861fe54ac17c8138621c5353",
-        "wireBase64": "CiCrq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urqxCDgICAgICAEBogzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc0gAioDMC4x"
+        "sha256": "0a84d209a81d49d8c5fa178f0509dd2185f6f4039b0687ae7f71332556a3baeb",
+        "wireBase64": "CiCrq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urqxCDgICAgICAEBogzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc0gAioDMC40"
       },
       "summaryWire": {
         "byteLength": 140,
-        "sha256": "3b569878e03a6b73500cf30f06731ab9ff6919dd9fb575f3bd8106b03b06fcf4",
-        "wireBase64": "ClQKIKurq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urEIOAgICAgIAQGiDNzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3NzSACKgMwLjESKhABGAEiJAoKa28tdmlzaWJsZRCFgICAgICAEBoNdmlzaWJsZV9maWVsZBIICAEQAhgCKAE="
+        "sha256": "c36231f4026c7a02b8a34c1ee4c8e64ca846cec58346aa84f657e6686bffc2e7",
+        "wireBase64": "ClQKIKurq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urEIOAgICAgIAQGiDNzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3NzSACKgMwLjQSKhABGAEiJAoKa28tdmlzaWJsZRCFgICAgICAEBoNdmlzaWJsZV9maWVsZBIICAEQAhgCKAE="
       },
       "searchJobWire": {
         "byteLength": 144,
-        "sha256": "3bfe2cc4ae781a983569ee65512f5c335a3a8ac2f0b3057dde3037a999ca30c6",
-        "wireBase64": "ugGMAQpUCiCrq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urqxCDgICAgICAEBogzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc0gAioDMC4xEioQARgBIiQKCmtvLXZpc2libGUQhYCAgICAgBAaDXZpc2libGVfZmllbGQSCAgBEAIYAigB"
+        "sha256": "0ed471cd0df430cf5040cc28868a7535361ab3d01ab1f91a18c831b343877749",
+        "wireBase64": "ugGMAQpUCiCrq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urqxCDgICAgICAEBogzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc0gAioDMC40EioQARgBIiQKCmtvLXZpc2libGUQhYCAgICAgBAaDXZpc2libGVfZmllbGQSCAgBEAIYAigB"
       }
     }
   ]

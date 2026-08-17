@@ -27,6 +27,7 @@ import (
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/collector/wal"
+	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -2834,6 +2835,11 @@ func releaseOCIAssertImageContract(
 			}
 		}
 	}
+	expectedSPLIdentity := "spl_compatibility_version=" + spl.CompatibilityVersion
+	if !strings.Contains(serverIdentity, expectedSPLIdentity+"\n") &&
+		!strings.HasSuffix(serverIdentity, expectedSPLIdentity) {
+		t.Fatalf("server image identity %q does not contain %q", serverIdentity, expectedSPLIdentity)
+	}
 }
 
 func releaseOCIInspectImage(
@@ -3811,6 +3817,7 @@ func releaseOCIAssertEmbeddedRelease(
 	if build.GetApplicationVersion() != stack.values["OPEN_SPLUNK_APPLICATION_VERSION"] ||
 		build.GetSourceRevision() != stack.values["OPEN_SPLUNK_SOURCE_REVISION"] ||
 		bootstrap.GetServerVersion() != stack.values["OPEN_SPLUNK_APPLICATION_VERSION"]+" ("+stack.values["OPEN_SPLUNK_SOURCE_REVISION"]+")" ||
+		bootstrap.GetSplCompatibilityVersion() != spl.CompatibilityVersion ||
 		build.GetUiBuildId() == "" || build.GetUiSha256() == "" ||
 		build.GetAssetManifestFormatVersion() != 1 {
 		t.Fatalf("release bootstrap identity = %+v", bootstrap)

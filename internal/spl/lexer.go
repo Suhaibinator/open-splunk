@@ -42,8 +42,8 @@ type token struct {
 	quoted      bool
 	sourceRange Range
 
-	// scalarDiagnostic is deferred until a token is consumed by v0.2 scalar
-	// grammar. Base search can expand the same raw token through legacy
+	// scalarDiagnostic is deferred until a token is consumed by the authored
+	// scalar grammar. Base search can expand the same raw token through base
 	// tokenization without inheriting quoted-field escape semantics.
 	scalarDiagnostic *Diagnostic
 }
@@ -314,8 +314,8 @@ type scalarWordScan struct {
 }
 
 // scanScalarWordBoundary is the pure boundary scanner shared by ordinary and
-// v0.2 composite words. An operator-adjacent single quote makes the word a
-// composite and temporarily suppresses delimiter/space boundaries; legacy
+// authored composite words. An operator-adjacent single quote makes the word a
+// composite and temporarily suppresses delimiter/space boundaries; unquoted
 // mode never opens that quote and therefore retains its original boundary.
 func scanScalarWordBoundary(
 	source string,

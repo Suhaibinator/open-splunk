@@ -39,9 +39,9 @@ func ParseScalarExpression(source string) (ScalarExpr, error) {
 			Range:   Range{Start: start, End: end},
 		}
 	}
-	// The standalone knowledge boundary is pinned to the exact v0.1 token
-	// stream; v0.2 single-quote/composite recognition is not enabled and cannot
-	// leak through as a caller-selectable sub-feature.
+	// The standalone knowledge boundary uses the closed knowledge token stream;
+	// authored single-quote/composite recognition is not enabled and cannot leak
+	// through as a caller-selectable sub-feature.
 	tokens, err := lexWithQuotedFields(source, false)
 	if err != nil {
 		return nil, err
@@ -53,7 +53,7 @@ func ParseScalarExpression(source string) (ScalarExpr, error) {
 			Range:   tokens[maxSPLTokens].sourceRange,
 		}
 	}
-	expressionParser := parser{source: source, tokens: tokens, profile: expressionProfileV01}
+	expressionParser := parser{source: source, tokens: tokens, profile: expressionProfileKnowledge}
 	expression, err := expressionParser.parseScalarExpression()
 	if err != nil {
 		return nil, err
@@ -285,7 +285,7 @@ func (analyzer *scalarExpressionAnalyzer) countPredicate() error {
 
 // validAnalysisRangeOrZero preserves the zero-range convention used by
 // directly assembled internal fixtures while rejecting contradictory authored
-// provenance on the v0.2 nodes added to this defensive trust-boundary walk.
+// provenance on authored-only nodes in this defensive trust-boundary walk.
 func validAnalysisRangeOrZero(sourceRange Range) bool {
 	if sourceRange == (Range{}) {
 		return true

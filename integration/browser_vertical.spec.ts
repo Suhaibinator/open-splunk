@@ -228,6 +228,10 @@ test("collector event is visible through the compiled backend UI", async ({ page
   const eventList = page.getByTestId("event-list");
   const finalRows = eventList.locator('[data-testid^="event-row-"]:not(.event-row--preview)');
   await expect(finalRows).toHaveCount(expectedRows, { timeout });
+  // Final backend results intentionally expand the first event so typed fields
+  // are immediately visible; wait for that committed state instead of toggling
+  // a row that may already be expanded.
+  await expect(finalRows.first()).toHaveClass(/\bexpanded\b/u, { timeout });
   await expect(eventList).toContainText(expectedText, { timeout });
   await expect(eventList.locator(".event-row--preview")).toHaveCount(0);
 
@@ -247,7 +251,7 @@ test("collector event is visible through the compiled backend UI", async ({ page
   assertBrowserSafety(safety);
 });
 
-test("backend v0.2 diagnostics remain authoritative and prevent browser dispatch", async ({
+test("backend diagnostics remain authoritative and prevent browser dispatch", async ({
   page,
 }) => {
   const protobufHeaders = { "content-type": "application/x-protobuf" };
@@ -259,7 +263,7 @@ test("backend v0.2 diagnostics remain authoritative and prevent browser dispatch
   const startByteOffset = BigInt(Buffer.byteLength(source.slice(0, membershipOffset), "utf8"));
   const startColumn = Array.from(source.slice(0, membershipOffset)).length + 1;
   const diagnosticMessage =
-    "SPL v0.2 membership is Boolean and cannot be assigned directly by eval.";
+    "Membership expressions are Boolean and cannot be assigned directly by eval.";
   const validated: ValidateSearchRequest[] = [];
   const safety = observeBrowserSafety(page);
 
@@ -270,7 +274,7 @@ test("backend v0.2 diagnostics remain authoritative and prevent browser dispatch
       if (wire === null) throw new Error("diagnostic Validate omitted its protobuf body");
       const request = ValidateSearchRequest.decode(wire);
       if (request.definition?.spl !== source) {
-        throw new Error("diagnostic Validate did not preserve the authored v0.2 source");
+        throw new Error("diagnostic Validate did not preserve the authored source");
       }
       validated.push(request);
       await route.fulfill({
@@ -444,7 +448,7 @@ test("Search Job Inspector renders only capability-gated redacted Knowledge auth
         GetSystemBootstrapResponse.fromPartial({
           serverVersion: "search-inspection-browser-test",
           apiVersion: "v1",
-          splCompatibilityVersion: "open-splunk-v0.1",
+          splCompatibilityVersion: "0.4",
           searchWebsocketPath: "/api/v1/search/ws",
           features: [
             ServerFeature.SERVER_FEATURE_SEARCH,
@@ -521,7 +525,7 @@ test("Search Job Inspector renders only capability-gated redacted Knowledge auth
               stateVersion: 1n,
               definition: request.definition,
               source: { origin: SearchJobOrigin.SEARCH_JOB_ORIGIN_AD_HOC },
-              compilerVersion: "open-splunk-v0.1",
+              compilerVersion: "0.4",
               effectiveIndexScope: [indexName],
               resolvedTimeRange: {
                 earliest: new Date("2026-08-10T11:00:00.000Z"),
@@ -883,7 +887,7 @@ test("Mutation Audit renders historical Knowledge events without the Knowledge f
         GetSystemBootstrapResponse.fromPartial({
           serverVersion: "knowledge-audit-browser-test",
           apiVersion: "v1",
-          splCompatibilityVersion: "open-splunk-v0.1",
+          splCompatibilityVersion: "0.4",
           searchWebsocketPath: "/api/v1/search/ws",
           // Historical journal visibility deliberately omits the dormant Knowledge feature.
           features: [ServerFeature.SERVER_FEATURE_AUDIT_SEARCH],
@@ -1117,7 +1121,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one exact
         GetSystemBootstrapResponse.fromPartial({
           serverVersion: "knowledge-browser-test",
           apiVersion: "v1",
-          splCompatibilityVersion: "open-splunk-v0.1",
+          splCompatibilityVersion: "0.4",
           searchWebsocketPath: "/api/v1/search/ws",
           features: knowledgeAdvertised
             ? [ServerFeature.SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS]
@@ -2375,7 +2379,7 @@ test("history Run again delegates persisted intent with source-only rerun proven
         GetSystemBootstrapResponse.fromPartial({
           serverVersion: "history-rerun-test",
           apiVersion: "v1",
-          splCompatibilityVersion: "open-splunk-v0.1",
+          splCompatibilityVersion: "0.4",
           searchWebsocketPath: "/api/v1/search/ws",
           features: [
             ServerFeature.SERVER_FEATURE_SEARCH,
@@ -2541,7 +2545,7 @@ test("history Run again delegates persisted intent with source-only rerun proven
               source: historyRerun
                 ? request.source
                 : { origin: SearchJobOrigin.SEARCH_JOB_ORIGIN_AD_HOC },
-              compilerVersion: "open-splunk-v0.1",
+              compilerVersion: "0.4",
               effectiveIndexScope: admittedDefinition.indexScope,
               resolvedTimeRange: {
                 earliest: new Date("2026-08-04T11:00:01.000Z"),

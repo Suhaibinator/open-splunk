@@ -8,12 +8,13 @@ import (
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
 func TestSearchJobCompilerVersionProjectionIsExactForGetAndList(t *testing.T) {
 	t.Parallel()
 
-	const version = "SPLExpressionV02-build.2026-08-11"
+	version := spl.CompatibilityVersion
 	job := completeJob("compiler-version-get")
 	job.CompilerVersion = version
 	projected, err := searchJobToProto(job, testNow)
@@ -57,8 +58,8 @@ func TestSearchJobCompilerVersionProjectionFailsClosed(t *testing.T) {
 		version string
 	}{
 		{name: "empty"},
-		{name: "surrounding whitespace", version: " v0.2 "},
-		{name: "control", version: "v0.2\nforged"},
+		{name: "surrounding whitespace", version: " " + spl.CompatibilityVersion + " "},
+		{name: "control", version: spl.CompatibilityVersion + "\nforged"},
 		{name: "invalid UTF-8", version: string([]byte{0xff})},
 		{name: "oversized", version: strings.Repeat("v", searchjobs.MaximumCompilerVersionBytes+1)},
 	} {
@@ -77,7 +78,7 @@ func TestSearchJobCompilerVersionProjectionFailsClosed(t *testing.T) {
 func TestExportCompilerVersionProjectionIsExactAndCanonical(t *testing.T) {
 	t.Parallel()
 
-	const version = "SPLExpressionV02-build.2026-08-11"
+	version := spl.CompatibilityVersion
 	job := validListExportJob("compiler-version-export", exportjobs.StateCompleted, testNow)
 	job.CompilerVersion = version
 	projected, err := exportJobToProto(job, testNow)
@@ -94,9 +95,9 @@ func TestExportCompilerVersionProjectionIsExactAndCanonical(t *testing.T) {
 	}
 
 	for _, invalid := range []string{
-		" v0.2",
-		"v0.2 ",
-		"v0.2\nforged",
+		" " + spl.CompatibilityVersion,
+		spl.CompatibilityVersion + " ",
+		spl.CompatibilityVersion + "\nforged",
 		string([]byte{0xff}),
 		strings.Repeat("v", searchjobs.MaximumCompilerVersionBytes+1),
 	} {

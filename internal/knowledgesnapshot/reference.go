@@ -25,6 +25,10 @@ const (
 	// MaximumCompilerCompatibilityVersionBytes bounds the canonical compiler
 	// compatibility identity independently of the snapshot body.
 	MaximumCompilerCompatibilityVersionBytes = 128
+	// LegacySnapshotCompilerVersion identifies the only released snapshot
+	// identity whose audit rows may lack the later lookup-count column. It is a
+	// persisted-data migration marker, never a selectable runtime profile.
+	LegacySnapshotCompilerVersion = "0.1"
 
 	retainedProtoMessageCharge = 512
 	retainedRepeatedSlotCharge = 32
@@ -49,6 +53,14 @@ func ValidateReference(reference *opensplunkv1.KnowledgeSnapshotRef) error {
 	}
 	if reference.GetObjectCount() > MaximumExecutableObjects {
 		return fmt.Errorf("%w: knowledge snapshot reference object count exceeds %d", ErrResourceLimit, MaximumExecutableObjects)
+	}
+	if reference.GetLookupAssetCountUnknown() &&
+		(reference.GetCompilerCompatibilityVersion() != LegacySnapshotCompilerVersion ||
+			reference.GetLookupAssetCount() != 0) {
+		return fmt.Errorf(
+			"%w: knowledge snapshot reference lookup asset count marker is invalid",
+			ErrInvalidInput,
+		)
 	}
 	if reference.GetLookupAssetCount() > MaximumLookupAssets {
 		return fmt.Errorf(
@@ -109,6 +121,12 @@ func ValidateSummary(summary *opensplunkv1.KnowledgeSnapshotSummary) error {
 	}
 	if err := ValidateReference(summary.GetRef()); err != nil {
 		return fmt.Errorf("knowledge snapshot summary reference: %w", err)
+	}
+	if summary.GetRef().GetLookupAssetCountUnknown() {
+		return fmt.Errorf(
+			"%w: knowledge snapshot summary lookup inventory count is unknown",
+			ErrInvalidInput,
+		)
 	}
 	if len(summary.GetLookupAssets()) != int(summary.GetRef().GetLookupAssetCount()) {
 		return fmt.Errorf(

@@ -726,7 +726,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			if aggregate.Sparkline != nil {
 				return nil, &Diagnostic{
 					Code:    "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
-					Message: "sparkline is supported only by stats in this compatibility slice",
+					Message: "sparkline is supported only by stats",
 					Range:   aggregate.Range,
 				}
 			}
@@ -940,7 +940,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			if aggregate.Sparkline != nil {
 				return nil, &Diagnostic{
 					Code:    "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE",
-					Message: "sparkline is supported only by stats in this compatibility slice",
+					Message: "sparkline is supported only by stats",
 					Range:   aggregate.Range,
 				}
 			}
@@ -1676,7 +1676,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				next := query.Commands[commandIndex+1]
 				return nil, &Diagnostic{
 					Code:        "SPL_UNSUPPORTED_TIMECHART_PIPELINE",
-					Message:     "timechart must be the final pipeline command in this compatibility version",
+					Message:     "timechart must be the final pipeline command",
 					Range:       next.SourceRange(),
 					Suggestions: []string{"move timechart to the final pipeline stage"},
 				}
@@ -1765,7 +1765,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				next := query.Commands[commandIndex+1]
 				return nil, &Diagnostic{
 					Code:        "SPL_UNSUPPORTED_CHART_PIPELINE",
-					Message:     "chart must be the final pipeline command in this compatibility version",
+					Message:     "chart must be the final pipeline command",
 					Range:       next.SourceRange(),
 					Suggestions: []string{"move chart to the final pipeline stage"},
 				}
@@ -2429,7 +2429,7 @@ func resolveIndexes(
 		if strings.Contains(reference.value, "*") {
 			return nil, &Diagnostic{
 				Code:    "SPL_UNSUPPORTED_INDEX_SELECTOR",
-				Message: "wildcard index selectors are not supported in compatibility version 0.1",
+				Message: "wildcard index selectors are not supported",
 				Range:   reference.sourceRange,
 			}
 		}
@@ -4122,10 +4122,9 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 				if !ok || literal == nil ||
 					literal.Value.Kind != spl.LiteralKindInteger {
 					return nil, &Diagnostic{
-						Code: "SPL_UNSUPPORTED_SUBSTRING_INDEX",
-						Message: "substr start and length must be literal integers " +
-							"in compatibility version 0.1",
-						Range: expression.Arguments[index].SourceRange(),
+						Code:    "SPL_UNSUPPORTED_SUBSTRING_INDEX",
+						Message: "substr start and length must be literal integers",
+						Range:   expression.Arguments[index].SourceRange(),
 					}
 				}
 			}
@@ -4790,7 +4789,7 @@ func ResolveField(name string, sourceRange spl.Range) (FieldRef, error) {
 		return FieldRef{}, &Diagnostic{Code: "SPL_RESERVED_FIELD", Message: "field name uses the compiler-private __os_ namespace", Range: sourceRange}
 	}
 	if strings.Contains(name, "*") {
-		return FieldRef{}, &Diagnostic{Code: "SPL_UNSUPPORTED_FIELD_PATTERN", Message: "wildcard field-name patterns are not supported in compatibility version 0.1", Range: sourceRange}
+		return FieldRef{}, &Diagnostic{Code: "SPL_UNSUPPORTED_FIELD_PATTERN", Message: "wildcard field-name patterns are not supported", Range: sourceRange}
 	}
 	path, err := splitFieldPath(name)
 	if err != nil {

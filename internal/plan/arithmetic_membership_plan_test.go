@@ -485,12 +485,12 @@ func TestKnowledgeV01ExpressionVisitorRejectsAuthoredV02Nodes(t *testing.T) {
 	t.Parallel()
 
 	literal := &spl.ScalarLiteralExpr{Value: spl.Literal{Kind: spl.LiteralKindInteger, Text: "1"}}
-	if !knowledgeExpressionUsesAuthoredV02Syntax(&spl.ScalarUnaryExpr{
+	if !knowledgeExpressionUsesAuthoredOnlySyntax(&spl.ScalarUnaryExpr{
 		Op: spl.ScalarUnaryOpNegative, Operand: literal,
 	}) {
 		t.Fatal("knowledge visitor accepted unary arithmetic")
 	}
-	if !knowledgeExpressionUsesAuthoredV02Syntax(&spl.ScalarIfExpr{
+	if !knowledgeExpressionUsesAuthoredOnlySyntax(&spl.ScalarIfExpr{
 		Condition: &spl.WhereMembershipExpr{
 			Value: literal, Candidates: []spl.ScalarExpr{literal},
 		},
@@ -499,7 +499,7 @@ func TestKnowledgeV01ExpressionVisitorRejectsAuthoredV02Nodes(t *testing.T) {
 	}) {
 		t.Fatal("knowledge visitor accepted nested membership")
 	}
-	if knowledgeExpressionUsesAuthoredV02Syntax(&spl.ScalarFieldExpr{Field: "host"}) {
+	if knowledgeExpressionUsesAuthoredOnlySyntax(&spl.ScalarFieldExpr{Field: "host"}) {
 		t.Fatal("knowledge visitor rejected a v0.1 field")
 	}
 

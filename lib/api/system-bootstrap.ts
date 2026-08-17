@@ -391,7 +391,7 @@ function stageCommand(stage: string): { name: string; expression: string } | nul
 }
 
 /**
- * Mirrors the v0.1 planner's positive index-reference traversal: the base
+ * Mirrors the planner's positive index-reference traversal: the base
  * expression and downstream `search` commands are inspected until a command
  * can redefine `index` or closes the event schema.
  */
@@ -468,7 +468,7 @@ export function resolveExactIndexScope({
     if (selector.length === 0) continue;
     if (selector.includes("*") || selector.includes("?")) {
       throw new IndexScopeResolutionError(
-        `Wildcard index selector "${selector}" is not supported by SPL compatibility ${bootstrap.splCompatibilityVersion || "v0.1"}. Choose an exact index name.`,
+        `Wildcard index selector "${selector}" is not supported. Choose an exact index name.`,
       );
     }
     if (!exactNames.has(selector)) {

@@ -26,9 +26,9 @@ in addition to the backend and manager's configured limits.
 
 The normative behavior is in
 [`spl-compatibility-v0.2.md`](spl-compatibility-v0.2.md). This guide is an
-operator checklist, not an additional compatibility contract. Qualification
-evidence and final rollout evidence are recorded in the
-[`v0.2 acceptance report`](spl-compatibility-v0.2-acceptance.md).
+operator checklist, not an additional compatibility contract. The current
+qualification and publication workflow is documented in
+[`releasing.md`](releasing.md).
 
 ## Supported operator examples
 
@@ -98,64 +98,26 @@ Their closed `SPLExpressionV01` profile continues to reject arithmetic,
 grouping, membership, and quoted fields. An authored v0.2 search may consume
 the output of an already validated v0.1 knowledge prelude.
 
-## Run the read-only compatibility audit
+## Historical read-only compatibility audit
 
-The `audit-spl-v0.2` subcommand inventories ambiguous unspaced operator
-characters in saved searches and repository-owned SPL fixtures. Supply at
-least one explicit input; the command never infers the running server's paths.
-For release evidence, use a quiesced, sanitized copy of the control database
-and the exact repository revision being activated.
+The v0.2 activation process included an `audit-spl-v0.2` subcommand that
+inventoried ambiguous unspaced operator characters in saved searches and
+repository-owned SPL fixtures. That one-time activation command is no longer
+shipped by the current server. The released application `0.1.0` already used
+authored compatibility `0.2`, so upgrading a released deployment does not
+require this preactivation audit.
 
-```sh
-make build-server
+Operators reviewing older development data should inspect saved-search source
+through the normal authorized workflow and validate it with the current server.
+The current product does not scan a control database or repository tree for
+this historical ambiguity.
 
-./build/open-splunk-server audit-spl-v0.2 \
-  -control-db /absolute/path/to/sanitized-control.db \
-  -repository /absolute/path/to/open-splunk
-```
+## Resolve historical findings
 
-Either source can be scanned independently:
-
-```sh
-./build/open-splunk-server audit-spl-v0.2 \
-  -control-db /absolute/path/to/sanitized-control.db
-
-./build/open-splunk-server audit-spl-v0.2 \
-  -repository /absolute/path/to/open-splunk
-```
-
-The control database is opened through the query-only control-plane path; it
-is not migrated, checkpointed, or mutated. The repository traversal does not
-follow symbolic links and excludes VCS, generated, dependency, cache, and
-build trees. Both scans have fixed object, file, byte, and finding ceilings.
-
-The command writes one deterministic JSON report to standard output. It
-contains only the target version, a scanned-object count, and redacted
-identities/locations:
-
-```json
-{
-  "compatibility_version": "0.2",
-  "scanned_objects": 2,
-  "findings": [
-    {
-      "object_id": "saved-search-id",
-      "source_location": "control-db/saved_searches/saved-search-id:1:37",
-      "kind": "ambiguous_unspaced_scalar_operator"
-    }
-  ]
-}
-```
-
-Authored SPL and field values never appear in the report. Protect the output
-as operational metadata because saved-search IDs and repository locations may
-still be sensitive.
-
-## Resolve findings
-
-Each finding identifies an operator-shaped source location, not a proven
-incompatibility. The audit cannot infer whether `request-bytes` means one
-legacy field or the arithmetic expression `request - bytes`.
+Each finding in a retained historical audit report identifies an
+operator-shaped source location, not a proven incompatibility. The audit could
+not infer whether `request-bytes` meant one legacy field or the arithmetic
+expression `request - bytes`.
 
 For every finding:
 
@@ -165,13 +127,10 @@ For every finding:
 3. If one punctuation-bearing field was intended, single-quote the exact field
    in its scalar position. If arithmetic was intended, keep the operator and
    add spacing when that improves clarity.
-4. Validate the complete source with the v0.2 backend before saving it.
-5. Rerun the audit on the same bounded inputs and retain the redacted report.
+4. Validate the complete source with the current server before saving it.
+5. Retain the authorized review evidence required by local policy.
 
-The audit performs no automatic rewrite. A zero-finding report means no
-ambiguous operator-shaped candidates were found in the inputs that were
-actually scanned; it is not evidence that unscanned history, external assets,
-or another control database is compatible.
+The server performs no automatic rewrite during upgrade or rerun.
 
 ## Rollback behavior
 

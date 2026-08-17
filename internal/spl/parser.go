@@ -38,18 +38,18 @@ const (
 	maxScalarNestingDepth = 32
 )
 
-// expressionProfile is deliberately closed and internal. Production-authored
-// SPL selects v0.2 while reusable knowledge expressions remain pinned to v0.1;
-// callers cannot accidentally construct a hybrid grammar.
+// expressionProfile is deliberately closed and internal. Authored searches use
+// the full scalar grammar while reusable knowledge expressions retain their
+// smaller grammar; callers cannot accidentally construct a hybrid profile.
 type expressionProfile uint8
 
 const (
 	expressionProfileInvalid expressionProfile = iota
-	expressionProfileV01
-	expressionProfileV02
+	expressionProfileKnowledge
+	expressionProfileAuthored
 )
 
-// Parse parses the supported SPL compatibility tier. Unsupported commands and
+// Parse parses the supported authored SPL grammar. Unsupported commands and
 // syntax are rejected; a valid prefix is never returned as a partial query.
 func Parse(source string) (*Query, error) {
 	if len(source) > maxSPLSourceBytes {
@@ -75,7 +75,7 @@ func Parse(source string) (*Query, error) {
 			Range:   tokens[maxSPLTokens].sourceRange,
 		}
 	}
-	p := parser{source: source, tokens: tokens, profile: expressionProfileV02}
+	p := parser{source: source, tokens: tokens, profile: expressionProfileAuthored}
 	return p.parseQuery()
 }
 
@@ -302,7 +302,7 @@ func (p *parser) parseRegexCommand(name token) (Command, error) {
 				Range:   first.sourceRange,
 			}
 		}
-		if err := rejectV03CompilerPrivateField("regex", first); err != nil {
+		if err := rejectCompilerPrivateField("regex", first); err != nil {
 			return nil, err
 		}
 		command.Field = first.text
@@ -405,7 +405,7 @@ func (p *parser) parseAccumCommand(name token) (Command, error) {
 			Range:   field.sourceRange,
 		}
 	}
-	if err := rejectV03CompilerPrivateField("accum", field); err != nil {
+	if err := rejectCompilerPrivateField("accum", field); err != nil {
 		return nil, err
 	}
 	command := &AccumCommand{
@@ -435,7 +435,7 @@ func (p *parser) parseAccumCommand(name token) (Command, error) {
 				Range:   output.sourceRange,
 			}
 		}
-		if err := rejectV03CompilerPrivateField("accum", output); err != nil {
+		if err := rejectCompilerPrivateField("accum", output); err != nil {
 			return nil, err
 		}
 		command.Output = output.text
@@ -484,7 +484,7 @@ func (p *parser) parseStrcatCommand(name token) (Command, error) {
 				Range:   value.sourceRange,
 			}
 		}
-		parsed, ok := parseV03Bool(value.text)
+		parsed, ok := parseStrictBool(value.text)
 		if !ok {
 			return nil, &Diagnostic{
 				Code:    "SPL_UNSUPPORTED_STRCAT_SYNTAX",
@@ -517,7 +517,7 @@ func (p *parser) parseStrcatCommand(name token) (Command, error) {
 			}
 		}
 		if current.kind == tokenWord {
-			if err := rejectV03CompilerPrivateField("strcat", current); err != nil {
+			if err := rejectCompilerPrivateField("strcat", current); err != nil {
 				return nil, err
 			}
 		}
@@ -580,7 +580,7 @@ func (p *parser) parseStrcatCommand(name token) (Command, error) {
 	return command, nil
 }
 
-func rejectV03CompilerPrivateField(commandName string, field token) error {
+func rejectCompilerPrivateField(commandName string, field token) error {
 	if !strings.HasPrefix(strings.ToLower(field.text), "__os_") {
 		return nil
 	}
@@ -835,9 +835,9 @@ options:
 				return nil, err
 			}
 		case p.isKeyword("mode"):
-			return nil, unsupportedOption("rex sed mode is not supported in compatibility version 0.1")
+			return nil, unsupportedOption("rex sed mode is not supported")
 		case p.isKeyword("offset_field"):
-			return nil, unsupportedOption("rex offset_field is not supported in compatibility version 0.1")
+			return nil, unsupportedOption("rex offset_field is not supported")
 		default:
 			break options
 		}
@@ -911,7 +911,7 @@ func (p *parser) parseRenameCommand(name token) (Command, error) {
 		if strings.Contains(source.text, "*") {
 			return nil, &Diagnostic{
 				Code:        "SPL_UNSUPPORTED_RENAME_PATTERN",
-				Message:     "wildcard rename patterns are not supported in compatibility version 0.1",
+				Message:     "wildcard rename patterns are not supported",
 				Range:       source.sourceRange,
 				Suggestions: []string{"rename old_field AS new_field"},
 			}
@@ -941,7 +941,7 @@ func (p *parser) parseRenameCommand(name token) (Command, error) {
 		if strings.Contains(destination.text, "*") {
 			return nil, &Diagnostic{
 				Code:        "SPL_UNSUPPORTED_RENAME_PATTERN",
-				Message:     "wildcard rename patterns are not supported in compatibility version 0.1",
+				Message:     "wildcard rename patterns are not supported",
 				Range:       destination.sourceRange,
 				Suggestions: []string{"rename old_field AS new_field"},
 			}
@@ -2263,7 +2263,7 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 		return nil, p.unsupportedEventStatsAggregate(
 			functionToken,
 			fmt.Sprintf(
-				"eventstats aggregate %q is not supported; this compatibility slice accepts %s",
+				"eventstats aggregate %q is not supported; supported aggregates are %s",
 				functionToken.text,
 				acceptedForms,
 			),
@@ -2384,7 +2384,7 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 		return nil, p.unsupportedEventStatsSyntax(
 			p.current(),
 			fmt.Sprintf(
-				"unsupported eventstats syntax at %q; this compatibility slice accepts %s and optional BY",
+				"unsupported eventstats syntax at %q; accepted syntax is %s with optional BY",
 				p.current().text,
 				acceptedForms,
 			),
@@ -2552,7 +2552,7 @@ func (p *parser) parseStreamStatsCommand(name token) (Command, error) {
 			case "time_window", "allnum", "reset_before", "reset_after", "reset_on_change":
 				return nil, p.unsupportedStreamStatsSyntax(
 					option,
-					fmt.Sprintf("streamstats option %q is not supported by the bounded compatibility slice", option.text),
+					fmt.Sprintf("streamstats option %q is not supported", option.text),
 				)
 			default:
 				return nil, p.unsupportedStreamStatsSyntax(
@@ -2879,7 +2879,7 @@ func parseStreamStatsBool(value string) (bool, bool) {
 	}
 }
 
-func parseV03Bool(value string) (bool, bool) {
+func parseStrictBool(value string) (bool, bool) {
 	switch strings.ToLower(value) {
 	case "true":
 		return true, true
@@ -3541,7 +3541,7 @@ func invalidSparklineSpan(tok token) *Diagnostic {
 }
 
 // parseStatsScalarInput parses the general field-taking aggregate wrapper
-// function(eval(<v0.2 scalar expression>)). count(eval(...)) is parsed first as
+// function(eval(<authored scalar expression>)). count(eval(...)) is parsed first as
 // its distinct predicate form; every other field-taking stats function retains
 // the scalar result kind, including Boolean values.
 func (p *parser) parseStatsScalarInput(functionName string) (ScalarExpr, Position, error) {
@@ -4128,7 +4128,7 @@ func (p *parser) parseEvalCommand(name token) (Command, error) {
 			}
 		}
 		field := p.current()
-		if p.profile == expressionProfileV02 {
+		if p.profile == expressionProfileAuthored {
 			if field.scalarDiagnostic != nil {
 				return nil, field.scalarDiagnostic
 			}
@@ -4136,7 +4136,7 @@ func (p *parser) parseEvalCommand(name token) (Command, error) {
 				return nil, unterminatedQuotedScalarField(field)
 			}
 		}
-		quotedDestination := p.profile == expressionProfileV02 && field.kind == tokenQuotedField
+		quotedDestination := p.profile == expressionProfileAuthored && field.kind == tokenQuotedField
 		if field.kind != tokenWord && !quotedDestination {
 			return nil, p.errorAtCurrent("SPL_EXPECTED_FIELD", "eval requires a destination field")
 		}
@@ -4457,7 +4457,7 @@ func (p *parser) parseWhereExpression() (WhereExpr, error) {
 	if err != nil {
 		return nil, err
 	}
-	if p.profile == expressionProfileV02 && whereExpressionContainsMembership(expression) {
+	if p.profile == expressionProfileAuthored && whereExpressionContainsMembership(expression) {
 		if _, comparison := evalComparisonOperator(p.current().kind, p.profile); comparison {
 			return nil, p.membershipSyntaxError(
 				p.current().sourceRange,
@@ -4551,11 +4551,11 @@ func (p *parser) parseWhereUnary() (WhereExpr, error) {
 }
 
 func (p *parser) parseWherePrimary() (WhereExpr, error) {
-	if p.profile == expressionProfileV02 && p.isKeyword("IN") && p.nextIs(tokenLeftParen) {
+	if p.profile == expressionProfileAuthored && p.isKeyword("IN") && p.nextIs(tokenLeftParen) {
 		return p.parseWhereMembershipFunction()
 	}
 
-	if p.current().kind == tokenLeftParen && p.profile == expressionProfileV02 {
+	if p.current().kind == tokenLeftParen && p.profile == expressionProfileAuthored {
 		// Parse the scalar interpretation on an isolated parser snapshot. This
 		// resolves grouped scalar/Boolean syntax from grammar alone while
 		// preserving lazy token splits and all complexity counters atomically.
@@ -4592,7 +4592,7 @@ func (p *parser) parseWherePrimary() (WhereExpr, error) {
 }
 
 func (p *parser) parseWherePredicateAfterScalar(left ScalarExpr) (WhereExpr, error) {
-	if p.profile == expressionProfileV02 {
+	if p.profile == expressionProfileAuthored {
 		negated := false
 		membership := false
 		if p.isKeyword("IN") {
@@ -4776,11 +4776,11 @@ func (p *parser) parseScalarExpression() (ScalarExpr, error) {
 	}
 	p.scalarDepth++
 	defer func() { p.scalarDepth-- }()
-	if p.profile == expressionProfileV01 {
-		return p.parseScalarConcatenation(p.parseScalarPrimaryV01)
+	if p.profile == expressionProfileKnowledge {
+		return p.parseScalarConcatenation(p.parseKnowledgeScalarPrimary)
 	}
-	if p.profile != expressionProfileV02 {
-		return nil, p.errorAtCurrent("SPL_UNSUPPORTED_EVAL_EXPRESSION", "unsupported scalar expression profile")
+	if p.profile != expressionProfileAuthored {
+		return nil, p.errorAtCurrent("SPL_UNSUPPORTED_EVAL_EXPRESSION", "unsupported scalar expression")
 	}
 	return p.parseScalarConcatenation(p.parseScalarAdditive)
 }
@@ -4941,7 +4941,7 @@ func (p *parser) parseScalarUnary() (ScalarExpr, error) {
 	case tokenMinus:
 		op = ScalarUnaryOpNegative
 	default:
-		return p.parseScalarPrimaryV02()
+		return p.parseAuthoredScalarPrimary()
 	}
 	operator := p.current()
 	if p.unaryDepth >= MaximumUnaryOperatorChain {
@@ -4993,7 +4993,7 @@ func arithmeticOperandError(err error, operatorRange Range) error {
 	return err
 }
 
-func (p *parser) parseScalarPrimaryV01() (ScalarExpr, error) {
+func (p *parser) parseKnowledgeScalarPrimary() (ScalarExpr, error) {
 	tok := p.current()
 	if tok.kind == tokenString {
 		p.advance()
@@ -5029,7 +5029,7 @@ func (p *parser) parseScalarPrimaryV01() (ScalarExpr, error) {
 	return &ScalarFieldExpr{Field: tok.text, Range: tok.sourceRange}, nil
 }
 
-func (p *parser) parseScalarPrimaryV02() (ScalarExpr, error) {
+func (p *parser) parseAuthoredScalarPrimary() (ScalarExpr, error) {
 	if err := p.prepareScalarToken(); err != nil {
 		return nil, err
 	}
@@ -5557,7 +5557,7 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 	case "tonumber":
 		function = ScalarFunctionToNumber
 		if len(arguments) != 1 {
-			return nil, invalidEvalArity(name.sourceRange, "tonumber requires exactly one argument in compatibility version 0.1")
+			return nil, invalidEvalArity(name.sourceRange, "tonumber requires exactly one argument")
 		}
 		if scalarExpressionMayReturnBooleanFunction(arguments[0]) {
 			return nil, booleanArgumentDiagnostic(
@@ -5571,17 +5571,16 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 		function = ScalarFunctionToString
 		if len(arguments) == 2 {
 			return nil, &Diagnostic{
-				Code: "SPL_UNSUPPORTED_TOSTRING_FORMAT",
-				Message: "tostring formats are outside compatibility version 0.1; " +
-					"only tostring(value) is supported",
-				Range: arguments[1].SourceRange(),
+				Code:    "SPL_UNSUPPORTED_TOSTRING_FORMAT",
+				Message: "tostring formats are not supported; only tostring(value) is supported",
+				Range:   arguments[1].SourceRange(),
 				Suggestions: []string{
 					"tostring(value)",
 				},
 			}
 		}
 		if len(arguments) != 1 {
-			return nil, invalidEvalArity(name.sourceRange, "tostring requires exactly one argument in compatibility version 0.1")
+			return nil, invalidEvalArity(name.sourceRange, "tostring requires exactly one argument")
 		}
 	case "replace":
 		function = ScalarFunctionReplace
@@ -5611,7 +5610,7 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 		if pattern.Value.Text == "" {
 			return nil, &Diagnostic{
 				Code:        "SPL_UNSUPPORTED_REGEX",
-				Message:     "replace does not support an empty regular expression in compatibility version 0.1",
+				Message:     "replace does not support an empty regular expression",
 				Range:       pattern.Range,
 				Suggestions: []string{"use a non-empty RE2-compatible regular expression"},
 			}
@@ -5840,10 +5839,9 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 			literal, ok := arguments[index].(*ScalarLiteralExpr)
 			if !ok || literal == nil || literal.Value.Kind != LiteralKindInteger {
 				return nil, &Diagnostic{
-					Code: "SPL_UNSUPPORTED_SUBSTRING_INDEX",
-					Message: "substr start and length must be literal integers " +
-						"in compatibility version 0.1",
-					Range: arguments[index].SourceRange(),
+					Code:    "SPL_UNSUPPORTED_SUBSTRING_INDEX",
+					Message: "substr start and length must be literal integers",
+					Range:   arguments[index].SourceRange(),
 					Suggestions: []string{
 						`substr(value, 1)`,
 						`substr(value, -3, 2)`,
@@ -5888,8 +5886,8 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 }
 
 // SupportedRoundPrecision reports whether an SPL scalar expression is the
-// bounded non-negative integer literal accepted by round in compatibility
-// version 0.1. Parser and planner trust boundaries share this pure check.
+// bounded non-negative integer literal accepted by round. Parser and planner
+// trust boundaries share this pure check.
 func SupportedRoundPrecision(expression ScalarExpr) bool {
 	literal, ok := expression.(*ScalarLiteralExpr)
 	if !ok || literal == nil ||
@@ -5953,8 +5951,7 @@ func scalarExpressionCanBeDirectPredicate(expression ScalarExpr) bool {
 // scalarExpressionMayReturnBooleanFunction is consumer-aware: predicates
 // nested in an if condition are consumed there, while a Boolean function in a
 // result branch can still escape to an eval assignment or non-Boolean
-// function. Plain Bool literals retain the compatibility tier's pre-existing
-// scalar behavior.
+// function. Plain Bool literals retain their established scalar behavior.
 func scalarExpressionMayReturnBooleanFunction(expression ScalarExpr) bool {
 	switch expression := expression.(type) {
 	case *ScalarCallExpr:
@@ -6318,7 +6315,7 @@ func comparisonOperator(kind tokenKind) (CompareOp, bool) {
 }
 
 func evalComparisonOperator(kind tokenKind, profile expressionProfile) (CompareOp, bool) {
-	if kind == tokenEqualEqual && profile == expressionProfileV02 {
+	if kind == tokenEqualEqual && profile == expressionProfileAuthored {
 		return CompareOpEqual, true
 	}
 	return comparisonOperator(kind)
@@ -6513,12 +6510,12 @@ func translateFragmentPosition(base, relative Position) Position {
 	return position
 }
 
-// prepareScalarToken reserves arithmetic punctuation only while the v0.2
-// scalar grammar is active. The legacy lexer intentionally keeps words whole
-// so base-search values, command aliases, sort prefixes, and paths retain
-// their v0.1 tokenization.
+// prepareScalarToken reserves arithmetic punctuation only while the authored
+// scalar grammar is active. The base lexer intentionally keeps words whole so
+// base-search values, command aliases, sort prefixes, and paths retain their
+// established tokenization.
 func (p *parser) prepareScalarToken() error {
-	if p.profile != expressionProfileV02 ||
+	if p.profile != expressionProfileAuthored ||
 		p.current().kind != tokenWord && p.current().kind != tokenScalarComposite {
 		return nil
 	}
@@ -6532,7 +6529,7 @@ func (p *parser) prepareScalarToken() error {
 	if preparedQuote {
 		return nil
 	}
-	parts := splitV02ScalarWord(p.current())
+	parts := splitScalarWord(p.current())
 	if len(parts) == 0 {
 		return nil
 	}
@@ -6554,9 +6551,9 @@ func (p *parser) prepareScalarToken() error {
 // prepareScalarQuotedOperand repairs the one context that the legacy lexer
 // deliberately cannot recognize globally: a single-quoted scalar operand
 // immediately following unspaced arithmetic punctuation. The initial token
-// stream retains v0.1 base-search boundaries; only an active v0.2 scalar parse
-// uses the original source to replace the overlapping legacy tokens with one
-// decoded quoted-field token.
+// stream retains base-search boundaries; only an authored scalar parse uses the
+// original source to replace the overlapping tokens with one decoded
+// quoted-field token.
 func (p *parser) prepareScalarQuotedOperand() (bool, error) {
 	tok := p.current()
 	if tok.kind != tokenWord && tok.kind != tokenScalarComposite ||
@@ -6622,7 +6619,7 @@ func (p *parser) prepareScalarQuotedOperand() (bool, error) {
 			End:   openingPosition,
 		},
 	}
-	parts := splitV02ScalarWord(prefix)
+	parts := splitScalarWord(prefix)
 	if len(parts) == 0 && prefix.text != "" {
 		parts = append(parts, prefix)
 	}
@@ -6658,15 +6655,15 @@ func (p *parser) prepareScalarQuotedOperand() (bool, error) {
 	return true, nil
 }
 
-func splitV02ScalarWord(tok token) []token {
-	parts, split := appendV02ScalarWord(nil, tok)
+func splitScalarWord(tok token) []token {
+	parts, split := appendScalarWord(nil, tok)
 	if !split {
 		return nil
 	}
 	return parts
 }
 
-func appendV02ScalarWord(parts []token, tok token) ([]token, bool) {
+func appendScalarWord(parts []token, tok token) ([]token, bool) {
 	if tok.kind != tokenWord || !strings.ContainsAny(tok.text, "+-*/%") {
 		return parts, false
 	}

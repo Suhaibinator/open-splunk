@@ -463,9 +463,6 @@ func TestKnowledgeAdmissionLegacyAndAppLessParity(t *testing.T) {
 			if manager.KnowledgeAdmissionEnabled() != test.enabled {
 				t.Fatalf("KnowledgeAdmissionEnabled() = %t", manager.KnowledgeAdmissionEnabled())
 			}
-			if manager.KnowledgeExecutionEnabled() != test.enabled {
-				t.Fatalf("KnowledgeExecutionEnabled() = %t", manager.KnowledgeExecutionEnabled())
-			}
 			created, err := manager.Create(context.Background(), withSPL(validRequest(), "| unsupported_legacy_command"))
 			if err != nil {
 				t.Fatalf("legacy Create() became synchronous: %v", err)

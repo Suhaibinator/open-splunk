@@ -88,7 +88,7 @@ test("a malformed SPL field is rejected in every position and before byte accoun
 });
 
 test("well-formed but hostile characters follow each module's own grammar", () => {
-  // The SPL v0.1 field lexer has no format-character rule; the lookup schema
+  // The SPL field lexer has no format-character rule; the lookup schema
   // token grammar mirrors spl.IsExactUnquotedFieldName and rejects \p{Cf}.
   assert.equal(isSplFieldRepresentable("﻿field"), true);
   assert.equal(isExactLookupColumn("﻿field"), false);

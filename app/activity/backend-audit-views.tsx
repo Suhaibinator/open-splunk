@@ -282,7 +282,7 @@ export function BackendMutationAudit({ apiBaseUrl, maximumPageSize }: AuditViewP
       {traversal.state === "error" && traversal.error !== null ? <BackendResourceState kind={traversal.error.title.endsWith("unavailable") ? "unavailable" : "error"} title={traversal.error.title} message={traversal.error.message} action={<button type="button" onClick={traversal.reload}>Retry</button>} /> : null}
       {traversal.state === "available" ? (
         <>
-          <output className="live-jobs-snapshot"><span><i aria-hidden="true" />This v0.1 journal contains successful mutations only; it does not include rejected changes, authentication, collectors, or search activity.</span></output>
+          <output className="live-jobs-snapshot"><span><i aria-hidden="true" />This journal contains successful mutations only; it does not include rejected changes, authentication, collectors, or search activity.</span></output>
           <form className="suite-card audit-filter-card" onSubmit={applyFilters}>
             <header><div><h2>Mutation filters</h2><p>Every filter is exact and runs on the server.</p></div><div><button type="button" disabled={!dirty && filters.actions.length === 0 && filters.actorId === undefined && filters.targetKind === undefined} onClick={clearFilters}>Clear</button><button className="suite-button suite-button--primary" type="submit">{dirty ? "Apply filters" : "Refresh"}</button></div></header>
             <div className="audit-filter-grid">

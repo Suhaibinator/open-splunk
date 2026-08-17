@@ -523,18 +523,14 @@ jobs:
         with:
           node-version-file: .node-version
 
-      - name: Read exact authored SPL compatibility identity
+      - name: Verify active SPL compatibility identity
         run: |
           set -euo pipefail
           compatibility_version="$(node scripts/read-spl-compatibility-version.mjs)"
-          case "$compatibility_version" in
-            0.2|0.3) ;;
-            *)
-              echo "::error::No pinned ClickHouse qualification matrix exists for SPL compatibility $compatibility_version."
-              exit 1
-              ;;
-          esac
-          echo "OPEN_SPLUNK_SPL_COMPATIBILITY_VERSION=$compatibility_version" >>"$GITHUB_ENV"
+          if [[ "$compatibility_version" != "0.4" ]]; then
+            echo "::error::The active release profile requires SPL compatibility 0.4; found $compatibility_version."
+            exit 1
+          fi
 
       - name: Verify exact SPL compatibility ClickHouse test inventory
         run: |
@@ -566,10 +562,9 @@ jobs:
           ./internal/queryexec TestSemanticBytesModeManagerAgainstClickHouse
           ./internal/queryexec TestSparklineFeedsStatsByThroughManagerAgainstClickHouse
           EOF
-          if [[ "$OPEN_SPLUNK_SPL_COMPATIBILITY_VERSION" = "0.3" ]]; then
-            while read -r package name; do
-              require_exact_test "$package" "$name"
-            done <<'EOF'
+          while read -r package name; do
+            require_exact_test "$package" "$name"
+          done <<'EOF'
           ./internal/clickhouse TestV03AdversarialAgainstClickHouse
           ./internal/clickhouse TestV03FillNullDynamicThenMVExpandAgainstClickHouse
           ./internal/clickhouse TestV03FillNullAfterPrivatePhysicalProducersAgainstClickHouse
@@ -578,7 +573,9 @@ jobs:
           ./internal/queryexec TestSemanticBytesLineageManagerAgainstClickHouse
           ./internal/queryexec TestV03AllTenPreserveUntouchedSemanticBytesThroughManagerAgainstClickHouse
           EOF
-          fi
+          require_exact_test \
+            ./cmd/open-splunk-server \
+            TestLookupRuntimeManagerAgainstClickHouse
 
       - name: Pre-pull pinned ClickHouse image with retry
         run: |
@@ -593,7 +590,7 @@ jobs:
             sleep "$((attempt * 5))"
           done
 
-      - name: Execute v0.2 stats-BY and semantic String/Bytes matrix
+      - name: Execute cumulative stats-BY and semantic String/Bytes matrix
         env:
           OPEN_SPLUNK_CLICKHOUSE_INTEGRATION: "1"
         run: >-
@@ -604,8 +601,7 @@ jobs:
           -p=1
           -v
 
-      - name: Execute complete adversarial SPL v0.3 matrix
-        if: env.OPEN_SPLUNK_SPL_COMPATIBILITY_VERSION == '0.3'
+      - name: Execute complete cumulative adversarial SPL matrix
         env:
           OPEN_SPLUNK_CLICKHOUSE_INTEGRATION: "1"
         run: >-
@@ -617,7 +613,6 @@ jobs:
           -v
 
       - name: Verify fillnull materialization through expansion and private producers
-        if: env.OPEN_SPLUNK_SPL_COMPATIBILITY_VERSION == '0.3'
         env:
           OPEN_SPLUNK_CLICKHOUSE_INTEGRATION: "1"
         run: >-
@@ -629,7 +624,6 @@ jobs:
           -v
 
       - name: Execute public paging and export vertical
-        if: env.OPEN_SPLUNK_SPL_COMPATIBILITY_VERSION == '0.3'
         env:
           OPEN_SPLUNK_CLICKHOUSE_INTEGRATION: "1"
         run: >-
@@ -641,7 +635,6 @@ jobs:
           -v
 
       - name: Verify canonical retained-result byte accounting
-        if: env.OPEN_SPLUNK_SPL_COMPATIBILITY_VERSION == '0.3'
         env:
           OPEN_SPLUNK_CLICKHOUSE_INTEGRATION: "1"
         run: >-
@@ -653,7 +646,6 @@ jobs:
           -v
 
       - name: Verify semantic String and Bytes lineage through manager publication
-        if: env.OPEN_SPLUNK_SPL_COMPATIBILITY_VERSION == '0.3'
         env:
           OPEN_SPLUNK_CLICKHOUSE_INTEGRATION: "1"
         run: >-
@@ -661,6 +653,17 @@ jobs:
           -run '^(TestSemanticBytesLineageManagerAgainstClickHouse|TestV03AllTenPreserveUntouchedSemanticBytesThroughManagerAgainstClickHouse)$'
           -count=1
           -timeout=15m
+          -p=1
+          -v
+
+      - name: Execute runtime lookup manager against pinned ClickHouse
+        env:
+          OPEN_SPLUNK_CLICKHOUSE_INTEGRATION: "1"
+        run: >-
+          go test ./cmd/open-splunk-server
+          -run '^TestLookupRuntimeManagerAgainstClickHouse$'
+          -count=1
+          -timeout=8m
           -p=1
           -v
 
@@ -764,34 +767,6 @@ jobs:
           cache: true
           cache-dependency-path: go.sum
 
-      - name: Verify exact SPL v0.2 stats-BY test inventory
-        run: |
-          set -euo pipefail
-          require_exact_test() {
-            local package="$1"
-            local name="$2"
-            local output
-            local match_count
-            output="$(go test "$package" -list "^${name}$")"
-            match_count="$(
-              printf '%s\n' "$output" |
-                awk -v expected="$name" '$0 == expected { count++ } END { print count + 0 }'
-            )"
-            if [[ "$match_count" -ne 1 ]]; then
-              echo "::error::Expected exactly one discovered test $package.$name; found $match_count"
-              exit 1
-            fi
-          }
-          while read -r package name; do
-            require_exact_test "$package" "$name"
-          done <<'EOF'
-          ./internal/clickhouse TestStatsByDeferredValidationAdversarialAgainstClickHouse
-          ./internal/clickhouse TestStatsMultivalueByAgainstClickHouse
-          ./internal/clickhouse TestStatsMultivalueByExpansionLimitAgainstClickHouse
-          ./internal/clickhouse TestStatsByUnsupportedCannotHideBehindMissingKeyAgainstClickHouse
-          ./internal/queryexec TestStatsByFixedMultivalueStringOrBytesAgainstClickHouse
-          EOF
-
       - name: Download Go modules with retry
         run: |
           set -euo pipefail
@@ -838,7 +813,7 @@ jobs:
         # and 30s cleanup headroom beneath this process deadline.
         run: >-
           go test ./cmd/open-splunk-server ./internal/clickhouse ./internal/indexes ./internal/queryexec ./internal/server ./integration ./migrations/clickhouse
-          -run '^Test(ClickHouseTLSServicePrincipalStartupLifecycle|ClickHouseServicePrincipalLifecycle|IndexDataDeletionCoordinatorAgainstClickHouse|IndexStatisticsReaderAgainstClickHouse|StoreAgainstClickHouse|NumericChartAgainstClickHouse|ChartPercentileAgainstClickHouse|ExpressionV02AgainstClickHouse|ExpressionV02ExecutorManagerAgainstClickHouse|ExecutorAndManagerAgainstClickHouse|StatsByDeferredValidationAdversarialAgainstClickHouse|StatsMultivalueByAgainstClickHouse|StatsMultivalueByExpansionLimitAgainstClickHouse|StatsByUnsupportedCannotHideBehindMissingKeyAgainstClickHouse|StatsByFixedMultivalueStringOrBytesAgainstClickHouse|DeploymentComposePersistentCredentialRotation|DeploymentNativeRecoveryClickHouseLifecycle|BackendIndexDataDeletionLifecycle|BackendVertical|Browser(FixedResultRendering|SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$'
+          -run '^Test(ClickHouseTLSServicePrincipalStartupLifecycle|ClickHouseServicePrincipalLifecycle|IndexDataDeletionCoordinatorAgainstClickHouse|IndexStatisticsReaderAgainstClickHouse|StoreAgainstClickHouse|NumericChartAgainstClickHouse|ChartPercentileAgainstClickHouse|ExpressionV02AgainstClickHouse|ExpressionV02ExecutorManagerAgainstClickHouse|ExecutorAndManagerAgainstClickHouse|DeploymentComposePersistentCredentialRotation|DeploymentNativeRecoveryClickHouseLifecycle|BackendIndexDataDeletionLifecycle|BackendVertical|Browser(FixedResultRendering|SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$'
           -count=1
           -timeout=30m
           -p=1
@@ -927,22 +902,16 @@ jobs:
         with:
           node-version-file: .node-version
 
-      - name: Bind release application identity to authored SPL compatibility
+      - name: Verify active release identity
         run: |
           set -euo pipefail
+          application_version="$(node -p 'require("./package.json").version')"
           compatibility_version="$(node scripts/read-spl-compatibility-version.mjs)"
-          case "$compatibility_version" in
-            0.2) application_version=0.1.0 ;;
-            0.3) application_version=0.2.0 ;;
-            *)
-              echo "::error::Unsupported authored SPL compatibility identity $compatibility_version."
-              exit 1
-              ;;
-          esac
-          {
-            echo "OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION=$compatibility_version"
-            echo "OPEN_SPLUNK_APPLICATION_VERSION=$application_version"
-          } >>"$GITHUB_ENV"
+          if [[ "$application_version" != "0.4.0" || "$compatibility_version" != "0.4" ]]; then
+            echo "::error::The active release profile is application 0.4.0 with SPL compatibility 0.4; found $application_version/$compatibility_version."
+            exit 1
+          fi
+          echo "OPEN_SPLUNK_APPLICATION_VERSION=$application_version" >>"$GITHUB_ENV"
 
       - name: Build and test release images with production Compose
         env:
@@ -1076,22 +1045,16 @@ jobs:
         with:
           node-version-file: .node-version
 
-      - name: Read exact authored SPL compatibility identity
+      - name: Verify active release identity
         run: |
           set -euo pipefail
+          application_version="$(node -p 'require("./package.json").version')"
           compatibility_version="$(node scripts/read-spl-compatibility-version.mjs)"
-          case "$compatibility_version" in
-            0.2) application_version=0.1.0 ;;
-            0.3) application_version=0.2.0 ;;
-            *)
-              echo "::error::Unsupported authored SPL compatibility identity $compatibility_version."
-              exit 1
-              ;;
-          esac
-          {
-            echo "OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION=$compatibility_version"
-            echo "OPEN_SPLUNK_APPLICATION_VERSION=$application_version"
-          } >>"$GITHUB_ENV"
+          if [[ "$application_version" != "0.4.0" || "$compatibility_version" != "0.4" ]]; then
+            echo "::error::The active release profile is application 0.4.0 with SPL compatibility 0.4; found $application_version/$compatibility_version."
+            exit 1
+          fi
+          echo "OPEN_SPLUNK_APPLICATION_VERSION=$application_version" >>"$GITHUB_ENV"
 
       - name: Verify OCI launcher portability on macOS Bash
         if: runner.os == 'macOS'
@@ -1117,8 +1080,9 @@ jobs:
           cmp build/release-verification.txt release-proof/verification.txt
           test "$(sed -n '1p' release-proof/verification.txt)" = \
             "application_version=${OPEN_SPLUNK_APPLICATION_VERSION}"
+          compatibility_version="$(node scripts/read-spl-compatibility-version.mjs)"
           test "$(sed -n '3p' release-proof/verification.txt)" = \
-            "spl_compatibility_version=${OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION}"
+            "spl_compatibility_version=${compatibility_version}"
           cp build/asset-manifest.json release-proof/asset-manifest.json
           cp build/binary-identities.txt release-proof/binary-identities.txt
 

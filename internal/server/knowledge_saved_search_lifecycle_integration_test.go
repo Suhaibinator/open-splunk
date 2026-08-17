@@ -23,6 +23,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
@@ -37,7 +38,6 @@ const (
 	knowledgeSavedSearchScore    = "saved_lifecycle_score"
 	knowledgeSavedSearchV1       = "alpha"
 	knowledgeSavedSearchV2       = "beta"
-	knowledgeSavedSearchCompiler = "knowledge-saved-search-lifecycle"
 	knowledgeSavedSearchSPL      = "index=main | eval saved_lifecycle_score=len(saved_lifecycle_kind)+1 | where saved_lifecycle_score IN (5, 6) | table saved_lifecycle_kind saved_lifecycle_score"
 )
 
@@ -250,7 +250,7 @@ func TestSavedSearchAndHistoryRerunResolveCurrentKnowledgeWhileExportRetainsOrig
 	if err != nil {
 		t.Fatal(err)
 	}
-	journal, err := searchhistory.NewJobJournal(history, "knowledge-saved-search-lifecycle")
+	journal, err := searchhistory.NewJobJournal(history)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +261,6 @@ func TestSavedSearchAndHistoryRerunResolveCurrentKnowledgeWhileExportRetainsOrig
 		Executor:          executor,
 		Snapshotter:       provenanceIntegrationSnapshotter(17),
 		Journal:           journal,
-		CompilerVersion:   knowledgeSavedSearchCompiler,
 		KnowledgeResolver: resolver,
 		Compiler:          clickhouse.Compiler{Database: "open_splunk", Table: "events"},
 		MaxConcurrent:     1,
@@ -285,8 +284,8 @@ func TestSavedSearchAndHistoryRerunResolveCurrentKnowledgeWhileExportRetainsOrig
 			t.Errorf("close search manager: %v", closeErr)
 		}
 	})
-	if !manager.KnowledgeAdmissionEnabled() || !manager.KnowledgeExecutionEnabled() {
-		t.Fatal("saved-search lifecycle manager did not enable knowledge execution")
+	if !manager.KnowledgeAdmissionEnabled() || manager.LookupAdmissionEnabled() {
+		t.Fatal("saved-search lifecycle manager reported incorrect knowledge or lookup capabilities")
 	}
 	principalFactory, err := auth.NewBearerTokenAuthenticator(
 		[]byte("knowledge-saved-search-browser-token"),
@@ -450,7 +449,7 @@ func TestSavedSearchAndHistoryRerunResolveCurrentKnowledgeWhileExportRetainsOrig
 			knowledgeSavedSearchField,
 			knowledgeSavedSearchScore,
 		}) {
-			t.Fatalf("%s output fields = %v, want v0.1-prelude/v0.2 composition outputs", test.name, test.retained.CompiledQuery.OutputFields)
+			t.Fatalf("%s output fields = %v, want knowledge-prelude/expression composition outputs", test.name, test.retained.CompiledQuery.OutputFields)
 		}
 	}
 	if retainedV1.KnowledgePrelude.Equal(retainedSavedV2.KnowledgePrelude) ||
@@ -515,8 +514,8 @@ func TestSavedSearchAndHistoryRerunResolveCurrentKnowledgeWhileExportRetainsOrig
 
 func requireKnowledgeSavedSearchCompilerVersion(t *testing.T, got, surface string) {
 	t.Helper()
-	if got != knowledgeSavedSearchCompiler {
-		t.Fatalf("%s compiler version = %q, want %q", surface, got, knowledgeSavedSearchCompiler)
+	if got != spl.CompatibilityVersion {
+		t.Fatalf("%s compiler version = %q, want %q", surface, got, spl.CompatibilityVersion)
 	}
 }
 

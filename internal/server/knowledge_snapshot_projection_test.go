@@ -226,7 +226,7 @@ func serverKnowledgeSnapshotSummary() *opensplunkv1.KnowledgeSnapshotSummary {
 			TenantCatalogRevision:        7,
 			TenantCatalogStateToken:      bytes.Repeat([]byte{0x73}, sha256.Size),
 			ObjectCount:                  2,
-			CompilerCompatibilityVersion: "0.1",
+			CompilerCompatibilityVersion: knowledgesnapshot.CompilerCompatibilityVersion,
 			LookupAssetCount:             1,
 		},
 		Objects: []*opensplunkv1.KnowledgeSnapshotObjectSummary{
@@ -280,6 +280,6 @@ func serverEmptyKnowledgeSnapshotSummary() *opensplunkv1.KnowledgeSnapshotSummar
 		SnapshotSha256:               bytes.Repeat([]byte{0x42}, sha256.Size),
 		TenantCatalogRevision:        7,
 		TenantCatalogStateToken:      bytes.Repeat([]byte{0x73}, sha256.Size),
-		CompilerCompatibilityVersion: "0.1",
+		CompilerCompatibilityVersion: knowledgesnapshot.CompilerCompatibilityVersion,
 	}}
 }

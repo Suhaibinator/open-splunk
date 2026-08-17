@@ -554,9 +554,9 @@ func buildBinary(t *testing.T, ctx context.Context, repository, output, pkg stri
 }
 
 const (
-	integrationApplicationVersion = "0.1.0"
+	integrationApplicationVersion = "0.4.0"
 	integrationSourceRevision     = "ad00000000000000000000000000000000000000"
-	integrationUIBuildID          = "rkkh71293jmh415h10571m4h1n2k00k4m26j0nn72nk97452n1n96jk3hk54m3h62"
+	integrationUIBuildID          = "r3g28717kj4g15m62h898mk9k1g020g7642h384414jmg8n568nk457319347g52g"
 	backendFrontendStagePrefix    = "open-splunk-backend-frontend-"
 	maximumHarnessOutputBytes     = 1 << 20
 	commandOutputTruncatedSuffix  = "\n... [command output truncated]"

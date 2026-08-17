@@ -44,13 +44,18 @@ const (
 	ServerFeature_SERVER_FEATURE_PLAN_INSPECTION      ServerFeature = 12
 	ServerFeature_SERVER_FEATURE_AUDIT_SEARCH         ServerFeature = 13
 	ServerFeature_SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT ServerFeature = 14
-	// The server emits this value only when the complete Tier-1 knowledge CRUD,
-	// validation, resolution, snapshot, execution, and browser family exists.
+	// The server emits this value only when the complete Tier-1 field-knowledge
+	// CRUD, validation, resolution, snapshot, execution, and browser family
+	// exists. Lookup management has its own additive capability below.
 	// Declaring the wire value alone does not advertise the feature.
 	ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS ServerFeature = 15
 	// The complete configured HEC v0.1 family is available: JSON, raw,
 	// acknowledgment, health, purpose isolation, and durable staging.
 	ServerFeature_SERVER_FEATURE_HEC_INGESTION ServerFeature = 16
+	// The complete immutable lookup family is available: asset and definition
+	// CRUD, admission resolution, snapshot retention, derived execution, and
+	// browser management. Field knowledge capability 15 is also required.
+	ServerFeature_SERVER_FEATURE_LOOKUP_MANAGEMENT ServerFeature = 17
 )
 
 // Enum value maps for ServerFeature.
@@ -73,6 +78,7 @@ var (
 		14: "SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT",
 		15: "SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS",
 		16: "SERVER_FEATURE_HEC_INGESTION",
+		17: "SERVER_FEATURE_LOOKUP_MANAGEMENT",
 	}
 	ServerFeature_value = map[string]int32{
 		"SERVER_FEATURE_UNSPECIFIED":             0,
@@ -92,6 +98,7 @@ var (
 		"SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT":    14,
 		"SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS": 15,
 		"SERVER_FEATURE_HEC_INGESTION":           16,
+		"SERVER_FEATURE_LOOKUP_MANAGEMENT":       17,
 	}
 )
 
@@ -442,7 +449,7 @@ const file_open_splunk_v1_system_api_proto_rawDesc = "" +
 	" \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"serverTime\x123\n" +
 	"\x05build\x18\v \x01(\v2\x1d.open_splunk.v1.BuildMetadataR\x05buildB\x12\n" +
-	"\x10_selected_app_id*\xd7\x04\n" +
+	"\x10_selected_app_id*\xfd\x04\n" +
 	"\rServerFeature\x12\x1e\n" +
 	"\x1aSERVER_FEATURE_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15SERVER_FEATURE_SEARCH\x10\x01\x12!\n" +
@@ -461,7 +468,8 @@ const file_open_splunk_v1_system_api_proto_rawDesc = "" +
 	"\x1bSERVER_FEATURE_AUDIT_SEARCH\x10\r\x12'\n" +
 	"#SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT\x10\x0e\x12*\n" +
 	"&SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS\x10\x0f\x12 \n" +
-	"\x1cSERVER_FEATURE_HEC_INGESTION\x10\x10BHZFgithub.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1b\x06proto3"
+	"\x1cSERVER_FEATURE_HEC_INGESTION\x10\x10\x12$\n" +
+	" SERVER_FEATURE_LOOKUP_MANAGEMENT\x10\x11BHZFgithub.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1b\x06proto3"
 
 var (
 	file_open_splunk_v1_system_api_proto_rawDescOnce sync.Once

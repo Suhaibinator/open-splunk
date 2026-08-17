@@ -134,13 +134,13 @@ func TestValidateSearchExpressionV02UsesTheProductionParserPlannerAndCompiler(t 
 	unmarshalResponse(t, response, decoded)
 	if !decoded.GetValid() || len(decoded.GetDiagnostics()) != 0 ||
 		decoded.GetNormalizedSpl() != strings.TrimSpace(source) {
-		t.Fatalf("v0.2 validation = %+v", decoded)
+		t.Fatalf("validation = %+v", decoded)
 	}
 	if !slices.Equal(decoded.GetReferencedIndexes(), []string{"main"}) ||
 		!slices.Equal(decoded.GetReferencedFields(), []string{"adjusted", "index", "request-bytes"}) ||
 		decoded.GetPredictedResultKind() != opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS {
 		t.Fatalf(
-			"v0.2 analysis = indexes %v fields %v kind %s",
+			"analysis = indexes %v fields %v kind %s",
 			decoded.GetReferencedIndexes(),
 			decoded.GetReferencedFields(),
 			decoded.GetPredictedResultKind(),

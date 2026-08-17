@@ -15,6 +15,7 @@ import (
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/searchaudit"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -110,6 +111,7 @@ func TestSearchAttemptAuditProjectionRetainsDetachedSnapshotReference(t *testing
 		TenantCatalogStateToken:      bytes.Repeat([]byte{0x42}, 32),
 		ObjectCount:                  2,
 		CompilerCompatibilityVersion: "0.1",
+		LookupAssetCountUnknown:      true,
 	}
 	event := searchaudit.Event{
 		Sequence:   1,
@@ -129,7 +131,8 @@ func TestSearchAttemptAuditProjectionRetainsDetachedSnapshotReference(t *testing
 		t.Fatalf("searchAttemptAuditEventToProto(): %v", err)
 	}
 	if converted.GetKnowledgeSnapshot() == reference ||
-		!proto.Equal(converted.GetKnowledgeSnapshot(), reference) {
+		!proto.Equal(converted.GetKnowledgeSnapshot(), reference) ||
+		!converted.GetKnowledgeSnapshot().GetLookupAssetCountUnknown() {
 		t.Fatalf("knowledge snapshot projection = %#v", converted.GetKnowledgeSnapshot())
 	}
 	wantDigest := bytes.Clone(converted.GetKnowledgeSnapshot().GetSnapshotSha256())
@@ -137,6 +140,16 @@ func TestSearchAttemptAuditProjectionRetainsDetachedSnapshotReference(t *testing
 	reference.TenantCatalogStateToken[0] ^= 0xff
 	if !bytes.Equal(converted.GetKnowledgeSnapshot().GetSnapshotSha256(), wantDigest) {
 		t.Fatal("projected knowledge snapshot aliases the dependency event")
+	}
+
+	current := proto.Clone(converted.GetKnowledgeSnapshot()).(*opensplunkv1.KnowledgeSnapshotRef)
+	current.CompilerCompatibilityVersion = knowledgesnapshot.CompilerCompatibilityVersion
+	current.LookupAssetCountUnknown = false
+	event.KnowledgeSnapshot = current
+	currentProjection, err := searchAttemptAuditEventToProto(event, browserGateTenantID)
+	if err != nil || currentProjection.GetKnowledgeSnapshot().GetLookupAssetCountUnknown() ||
+		currentProjection.GetKnowledgeSnapshot().GetLookupAssetCount() != 0 {
+		t.Fatalf("current exact-zero snapshot projection = (%#v, %v)", currentProjection, err)
 	}
 
 	invalid := event

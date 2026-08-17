@@ -16,15 +16,9 @@ fi
 
 : "${OPEN_SPLUNK_APPLICATION_VERSION:?OPEN_SPLUNK_APPLICATION_VERSION is required}"
 : "${OPEN_SPLUNK_SOURCE_REVISION:?OPEN_SPLUNK_SOURCE_REVISION is required}"
-: "${OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION:?OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION is required}"
 if [[ ${#OPEN_SPLUNK_APPLICATION_VERSION} -gt 64 ||
       ! "$OPEN_SPLUNK_APPLICATION_VERSION" =~ ^[0-9A-Za-z.+-]+$ ]]; then
   echo "error: OPEN_SPLUNK_APPLICATION_VERSION contains unsafe or unsupported characters" >&2
-  exit 1
-fi
-if [[ ${#OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION} -gt 128 ||
-      ! "$OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION" =~ ^[0-9]+\.[0-9]+$ ]]; then
-  echo "error: OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION contains unsafe or unsupported characters" >&2
   exit 1
 fi
 
@@ -238,6 +232,32 @@ env -i \
   TZ=UTC \
   node "$MATERIALIZER_BOOTSTRAP" "$REPO_ROOT" "$HEAD_REVISION" "$SOURCE_ROOT"
 
+CANONICAL_APPLICATION_VERSION="$(
+  env -i \
+    PATH="$PATH" \
+    HOME="$HOME_ROOT" \
+    TMPDIR="$TEMP_ROOT" \
+    NODE_OPTIONS= \
+    node -e '
+      const fs = require("node:fs");
+      const manifest = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+      process.stdout.write(manifest.version);
+    ' "$SOURCE_ROOT/package.json"
+)"
+if [[ "$OPEN_SPLUNK_APPLICATION_VERSION" != "$CANONICAL_APPLICATION_VERSION" ]]; then
+  echo "error: OPEN_SPLUNK_APPLICATION_VERSION $OPEN_SPLUNK_APPLICATION_VERSION does not match committed package version $CANONICAL_APPLICATION_VERSION" >&2
+  exit 1
+fi
+SPL_COMPATIBILITY_VERSION="$(
+  cd "$SOURCE_ROOT"
+  env -i \
+      PATH="$PATH" \
+      HOME="$HOME_ROOT" \
+      TMPDIR="$TEMP_ROOT" \
+      NODE_OPTIONS= \
+      node scripts/read-spl-compatibility-version.mjs
+)"
+
 SOURCE_DATE_EPOCH="$(git_repo show -s --format=%ct "$HEAD_REVISION")"
 if [[ ! "$SOURCE_DATE_EPOCH" =~ ^[0-9]+$ ]]; then
   echo "error: invalid commit timestamp for $HEAD_REVISION" >&2
@@ -343,9 +363,7 @@ printf \
 EXPECTED_SERVER_IDENTITY="$WORK_ROOT/expected-server-identity.txt"
 {
   cat "$EXPECTED_IDENTITY"
-  printf \
-    'spl_compatibility_version=%s\n' \
-    "$OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION"
+  printf 'spl_compatibility_version=%s\n' "$SPL_COMPATIBILITY_VERSION"
 } >"$EXPECTED_SERVER_IDENTITY"
 "$PUBLISH_ROOT/open-splunk-server" -verify-embedded-release >"$PUBLISH_ROOT/release-verification.txt"
 sed -n '1,3p' "$PUBLISH_ROOT/release-verification.txt" >"$WORK_ROOT/server-identity.txt"

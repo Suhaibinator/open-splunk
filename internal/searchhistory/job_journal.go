@@ -10,6 +10,7 @@ import (
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobproto"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -18,19 +19,15 @@ import (
 // history store. It deliberately records only reusable intent and safe
 // execution metadata; generated SQL and result rows never cross this seam.
 type JobJournal struct {
-	store           *Store
-	compilerVersion string
+	store *Store
 }
 
 // NewJobJournal constructs a searchjobs.JobJournal backed by store.
-func NewJobJournal(store *Store, compilerVersion string) (*JobJournal, error) {
+func NewJobJournal(store *Store) (*JobJournal, error) {
 	if store == nil || store.orm == nil {
 		return nil, invalid("search-history store is required")
 	}
-	if !searchjobs.ValidCompilerVersion(compilerVersion) {
-		return nil, invalid("compiler version is invalid")
-	}
-	return &JobJournal{store: store, compilerVersion: compilerVersion}, nil
+	return &JobJournal{store: store}, nil
 }
 
 // Admit persists the queued attempt before the manager exposes or executes it.
@@ -64,8 +61,8 @@ func (journal *JobJournal) entry(job searchjobs.Job, terminal bool) (*opensplunk
 	if !searchjobs.ValidCompilerVersion(job.CompilerVersion) {
 		return nil, invalid("search job compiler version is invalid")
 	}
-	if job.CompilerVersion != journal.compilerVersion {
-		return nil, invalid("search job compiler version does not match the history journal")
+	if job.CompilerVersion != spl.CompatibilityVersion {
+		return nil, invalid("search job compiler version does not match the current SPL compatibility identity")
 	}
 	knowledgeSnapshot, err := cloneKnowledgeSnapshotSummary(job.KnowledgeSnapshot)
 	if err != nil {

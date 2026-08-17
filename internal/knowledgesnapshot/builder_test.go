@@ -156,7 +156,7 @@ func TestPrepareCanonicalAuthorityOrderChargesDigestAndDetachment(t *testing.T) 
 	}
 	assertSnapshotDigest(t, firstSnapshot.Proto())
 	digest := firstSnapshot.Digest()
-	const wantDigest = "6d7a0758742fbec7123dfc45afffd6dbfa8784d3ecf86527a1a8e2294f5a1231"
+	const wantDigest = "a993d85ffeb0bfb7863de27d016843f568b9c397b91e55beca0f0fb230bb726d"
 	if firstSnapshot.CanonicalBytes() != 1272 || hex.EncodeToString(digest[:]) != wantDigest {
 		t.Fatalf("nonzero golden = canonical %d digest %x, want 1272/%s", firstSnapshot.CanonicalBytes(), digest, wantDigest)
 	}
@@ -230,8 +230,8 @@ func TestPrepareEmptyAuthorityAbsentAndPresentRevisionGoldens(t *testing.T) {
 		wantCharge  uint64
 		wantDigest  string
 	}{
-		{name: "absent app revision", wantCharge: 91, wantDigest: "e7c2b2dc3e84fdf116fbf009ce44b7879807249aa1c34c863d68ec0046f5c711"},
-		{name: "present app revision", appRevision: new(uint64(1)), wantCharge: 93, wantDigest: "88d64cd94b61aea342df4bfdd9566fb30091d099f9e108eeff1231186d453b13"},
+		{name: "absent app revision", wantCharge: 91, wantDigest: "09884862ad5c4fa15144a4dae40ec67d52ff3181f4bd7cb7da5209788361a3a9"},
+		{name: "present app revision", appRevision: new(uint64(1)), wantCharge: 93, wantDigest: "6abd3f96e00abbc97a7f852057c815b92831c347498968d91e6f553cbe45e7d1"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

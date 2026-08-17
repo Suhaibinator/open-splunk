@@ -16,6 +16,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
+	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
 var testCursorKey = []byte("0123456789abcdef0123456789abcdef")
@@ -1487,7 +1488,7 @@ func TestMetadataBudgetRejectsBeforeStorageAndIsReclaimedWithTombstone(t *testin
 		if err != nil {
 			t.Fatal(err)
 		}
-		metadataLimit, err = checkedAdd(metadataLimit, uint64(len(defaultCompilerVersion)))
+		metadataLimit, err = checkedAdd(metadataLimit, uint64(len(spl.CompatibilityVersion)))
 		if err != nil {
 			t.Fatal(err)
 		}

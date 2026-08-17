@@ -306,10 +306,7 @@ func openRuntimeSearchAttemptAuditFixture(
 		t.Fatal(err)
 	}
 	fixture.history = history
-	journal, err := searchhistory.NewJobJournal(
-		history,
-		"runtime-search-attempt-audit-test",
-	)
+	journal, err := searchhistory.NewJobJournal(history)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,7 +314,6 @@ func openRuntimeSearchAttemptAuditFixture(
 		Executor:        runtimeSearchAttemptAuditExecutor{},
 		Snapshotter:     runtimeSearchAttemptAuditSnapshotter(23),
 		Journal:         journal,
-		CompilerVersion: "runtime-search-attempt-audit-test",
 		MaxConcurrent:   1,
 		CleanupInterval: -1,
 		Now: func() time.Time {

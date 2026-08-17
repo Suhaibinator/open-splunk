@@ -51,19 +51,19 @@ test("SPL compatibility identity reader returns the exact source declaration", a
 test("SPL compatibility identity reader follows an exact future source identity", async (t) => {
   const fixture = await sourceFixture(
     t,
-    "package spl\n\nconst CompatibilityVersion = \"0.3\"\n",
+    "package spl\n\nconst CompatibilityVersion = \"9.9\"\n",
   );
   const result = readCompatibilityVersion(fixture);
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout, "0.3\n");
+  assert.equal(result.stdout, "9.9\n");
 });
 
 test("SPL compatibility identity reader rejects missing, malformed, and duplicate declarations", async (t) => {
   const sources = [
     "package spl\n",
-    "package spl\n\nconst CompatibilityVersion=\"0.3\"\n",
-    "package spl\n\nconst CompatibilityVersion = \"0.3.0\"\n",
-    "package spl\n\nconst CompatibilityVersion = \"0.3\"\nconst CompatibilityVersion = \"0.4\"\n",
+    "package spl\n\nconst CompatibilityVersion=\"9.9\"\n",
+    "package spl\n\nconst CompatibilityVersion = \"9.9.0\"\n",
+    "package spl\n\nconst CompatibilityVersion = \"9.8\"\nconst CompatibilityVersion = \"9.9\"\n",
   ];
   for (const source of sources) {
     const fixture = await sourceFixture(t, source);
@@ -74,7 +74,7 @@ test("SPL compatibility identity reader rejects missing, malformed, and duplicat
 });
 
 test("SPL compatibility identity reader rejects arguments", () => {
-  const result = readCompatibilityVersion(workspace, ["0.3"]);
+  const result = readCompatibilityVersion(workspace, ["unexpected"]);
   assert.equal(result.status, 2);
   assert.match(result.stderr, /^usage:/);
 });

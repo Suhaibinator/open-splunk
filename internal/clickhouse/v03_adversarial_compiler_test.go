@@ -476,7 +476,7 @@ func TestV03CompilerRevalidatesForgedPhaseTwoAndThreeOperators(t *testing.T) {
 		{name: "typed nil makemv", operators: []plan.Operator{nilMake}},
 		{name: "typed nil mvexpand", operators: []plan.Operator{nilExpand}},
 		{name: "fillnull empty fields", operators: []plan.Operator{&plan.FillNull{Value: "0", Range: r}}},
-		{name: "fillnull field overflow", operators: []plan.Operator{&plan.FillNull{Fields: fields(spl.MaximumV03ProjectionFields + 1), Value: "0", Range: r}}},
+		{name: "fillnull field overflow", operators: []plan.Operator{&plan.FillNull{Fields: fields(spl.MaximumExplicitProjectionFields + 1), Value: "0", Range: r}}},
 		{name: "fillnull invalid UTF-8", operators: []plan.Operator{&plan.FillNull{Fields: fields(1), Value: invalidUTF8, Range: r}}},
 		{name: "row total empty fields", operators: []plan.Operator{&plan.RowTotal{Output: "Total", Range: r}}},
 		{name: "row total private output", operators: []plan.Operator{&plan.RowTotal{Inputs: fields(1), Output: "__os_private", Range: r}}},
@@ -529,7 +529,7 @@ func TestV03SourceDeterminedLimitsRemainResourceDiagnosticsAtCompilerBoundary(t 
 			name: "fillnull projection overflow",
 			operator: &plan.FillNull{
 				Fields: func() []plan.FieldRef {
-					result := make([]plan.FieldRef, spl.MaximumV03ProjectionFields+1)
+					result := make([]plan.FieldRef, spl.MaximumExplicitProjectionFields+1)
 					for index := range result {
 						result[index] = v03CompilerField(t, "overflow"+string(rune('a'+index%26))+string(rune('a'+index/26)), r)
 					}

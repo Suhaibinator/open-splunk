@@ -23,7 +23,7 @@ const MAXIMUM_CATALOG_REVISION = (1n << 63n) - 2n;
 const MAXIMUM_SOURCE_BYTES = 16 << 10;
 const MAXIMUM_AUTHORED_PLAN_STAGES = 256;
 const MAXIMUM_KNOWLEDGE_OBJECTS = 256;
-const MAXIMUM_PLAN_STAGES = MAXIMUM_AUTHORED_PLAN_STAGES + MAXIMUM_KNOWLEDGE_OBJECTS;
+const MAXIMUM_PLAN_STAGES = MAXIMUM_AUTHORED_PLAN_STAGES + MAXIMUM_KNOWLEDGE_OBJECTS + 1;
 const MAXIMUM_STAGE_FIELDS = 1_024;
 const MAXIMUM_FINAL_OUTPUT_FIELDS = 4_096;
 const MAXIMUM_FIELD_OCCURRENCES = 16_384;
@@ -35,12 +35,14 @@ const MAXIMUM_OPERATOR_BYTES = 32;
 const MAXIMUM_DYNAMIC_FIELDS = 1_024;
 const MAXIMUM_OPERATOR_PROVENANCE = 256;
 const MAXIMUM_OUTPUT_PROVENANCE = 512;
+const MAXIMUM_AUTOMATIC_LOOKUP_OUTPUTS = 16 * 16;
 const MAXIMUM_SUMMARY_OBJECTS = 64;
+const MAXIMUM_LOOKUP_ASSETS = 16;
 const MAXIMUM_COMPILER_BYTES = 128;
 const MAXIMUM_GENERATED_SQL_BYTES = 256 << 10;
 const MAXIMUM_EXPLAIN_BYTES = 1 << 20;
 const MAXIMUM_EXPLAIN_LINES = 4_096;
-const MAXIMUM_EXPLAIN_LINE_BYTES = 16 << 10;
+const MAXIMUM_EXPLAIN_LINE_BYTES = 32 << 10;
 const MAXIMUM_DIAGNOSTIC_QUERY_ID_BYTES = 128;
 const MAXIMUM_PHYSICAL_NODES = 4_096;
 const MAXIMUM_PHYSICAL_READS = 256;
@@ -53,13 +55,22 @@ const MAXIMUM_PHYSICAL_TOTAL_STRING_BYTES = 1 << 20;
 const AUTHORED_OPERATORS = new Set([
   "Scan",
   "Filter",
+  "RegexFilter",
+  "Reverse",
   "Project",
   "Extend",
+  "Strcat",
+  "FillNull",
+  "RowTotal",
+  "OrderedDelta",
+  "MakeMultivalue",
+  "ExpandMultivalue",
   "TimeBucket",
   "NumericBucket",
   "Extract",
   "ExtractJSON",
   "Rename",
+  "Lookup",
   "Aggregate",
   "EventAggregate",
   "StreamAggregate",
@@ -235,6 +246,7 @@ export type ServerInspectionKnowledgeView =
     digestSha256: string;
     tenantCatalogRevision: bigint;
     objectCount: number;
+    lookupAssetCount: number;
     compilerCompatibilityVersion: string;
     objects: ServerInspectionRedactedProvenance[];
     objectsTruncated: boolean;
@@ -599,6 +611,7 @@ function adaptLogicalPlan(value: unknown, exposeKnowledge: boolean): AdaptedLogi
   };
   const knowledgeObjects: ServerInspectionRedactedProvenance[] = [];
   let knowledgePrefixEnded = false;
+  let automaticLookupSeen = false;
   let previousKnowledgeRank = 0;
   let authoredStages = 0;
   let generatedStages = 0;
@@ -608,10 +621,42 @@ function adaptLogicalPlan(value: unknown, exposeKnowledge: boolean): AdaptedLogi
     const stageIndex = uint32(stage.stageIndex);
     const operator = safeLogicalString(stage.operator, MAXIMUM_OPERATOR_BYTES, budget);
     const contract = KNOWLEDGE_OPERATOR_CONTRACTS.get(operator);
+    const automaticLookup = operator === "AutomaticLookupGroup";
     if (stageIndex !== index || (index === 0) !== (operator === "Scan")) return invalidInspection();
-    if (contract === undefined && !AUTHORED_OPERATORS.has(operator)) return invalidInspection();
+    if (contract === undefined && !automaticLookup && !AUTHORED_OPERATORS.has(operator)) {
+      return invalidInspection();
+    }
     const inputFields = adaptFields(stage.inputFields, MAXIMUM_STAGE_FIELDS, budget, true);
     const outputFields = adaptFields(stage.outputFields, MAXIMUM_STAGE_FIELDS, budget, true);
+
+    if (automaticLookup) {
+      if (
+        index === 0
+        || knowledgePrefixEnded
+        || automaticLookupSeen
+        || stage.sourceRange !== undefined
+        || outputFields.length === 0
+        || outputFields.length > MAXIMUM_AUTOMATIC_LOOKUP_OUTPUTS
+      ) {
+        return invalidInspection();
+      }
+      automaticLookupSeen = true;
+      knowledgePrefixEnded = true;
+      if (exposeKnowledge && (
+        requireArray(stage.operatorProvenance, MAXIMUM_OPERATOR_PROVENANCE).length !== 0
+        || requireArray(stage.outputProvenance, MAXIMUM_OUTPUT_PROVENANCE).length !== 0
+      )) {
+        return invalidInspection();
+      }
+      return {
+        stageIndex,
+        operator,
+        inputFields,
+        outputFields,
+        operatorProvenance: [],
+        outputProvenance: [],
+      };
+    }
 
     if (contract === undefined) {
       authoredStages += 1;
@@ -828,8 +873,20 @@ function adaptKnowledgeSummary(
   }
   if (!isRecord(value) || !isRecord(value.ref)) return invalidInspection();
   const rawObjects = requireArray(value.objects, MAXIMUM_SUMMARY_OBJECTS);
+  const rawLookupAssets = requireArray(value.lookupAssets, MAXIMUM_LOOKUP_ASSETS);
   const objectCount = uint32(value.ref.objectCount);
+  const lookupAssetCount = uint32(value.ref.lookupAssetCount);
+  const lookupAssetCountUnknown = booleanValue(value.ref.lookupAssetCountUnknown);
   if (objectCount > MAXIMUM_KNOWLEDGE_OBJECTS || planObjects.length !== objectCount) {
+    return invalidInspection();
+  }
+  // The administrator projection intentionally redacts every immutable lookup
+  // identity while preserving the exact bounded count in the snapshot ref.
+  if (
+    lookupAssetCountUnknown
+    || lookupAssetCount > MAXIMUM_LOOKUP_ASSETS
+    || rawLookupAssets.length !== 0
+  ) {
     return invalidInspection();
   }
   const wantedPrefix = Math.min(objectCount, MAXIMUM_SUMMARY_OBJECTS);
@@ -871,6 +928,7 @@ function adaptKnowledgeSummary(
     digestSha256,
     tenantCatalogRevision,
     objectCount,
+    lookupAssetCount,
     compilerCompatibilityVersion,
     objects,
     objectsTruncated,

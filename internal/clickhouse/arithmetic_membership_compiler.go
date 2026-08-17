@@ -15,9 +15,9 @@ const (
 	// one open-schema String operand. Fixed Strings are rejected before this
 	// runtime conversion path is constructed.
 	MaximumArithmeticDynamicStringBytes = 4 << 10
-	// maxCompiledExpressionV02NodeSQLBytes independently bounds every arithmetic
+	// maxCompiledExpressionNodeSQLBytes independently bounds every arithmetic
 	// and membership node before it can be embedded in a larger query.
-	maxCompiledExpressionV02NodeSQLBytes = 64 << 10
+	maxCompiledExpressionNodeSQLBytes = 64 << 10
 	// ClickHouse's default AST-depth limit is 1,000. Negative-zero
 	// canonicalization adds another function layer per direct operation, so
 	// large legal trees switch to the constant-depth RPN fold well before the
@@ -98,7 +98,7 @@ func compileArithmeticTree(
 		bodySQL = rendered.String()
 		valueSQL = bindSQLExpressions(compiler.parameters, compiler.values, bodySQL)
 	}
-	if err := validateExpressionV02NodeSQLBytes(
+	if err := validateExpressionNodeSQLBytes(
 		valueSQL,
 		"arithmetic",
 		expression.SourceRange(),
@@ -657,7 +657,7 @@ func compileMembershipExpression(
 		}
 	}
 	result = bindSQLExpressions(parameters, values, result)
-	if err := validateExpressionV02NodeSQLBytes(
+	if err := validateExpressionNodeSQLBytes(
 		result,
 		"membership",
 		expression.Range,
@@ -774,12 +774,12 @@ func dynamicMalformedSemanticScalarConditionSQL(value compiledScalar) string {
 	return "((" + recognized + ") AND NOT (" + valid + "))"
 }
 
-func validateExpressionV02NodeSQLBytes(
+func validateExpressionNodeSQLBytes(
 	valueSQL string,
 	operation string,
 	sourceRange spl.Range,
 ) error {
-	if len(valueSQL) <= maxCompiledExpressionV02NodeSQLBytes {
+	if len(valueSQL) <= maxCompiledExpressionNodeSQLBytes {
 		return nil
 	}
 	return &plan.Diagnostic{
@@ -787,7 +787,7 @@ func validateExpressionV02NodeSQLBytes(
 		Message: fmt.Sprintf(
 			"%s compiled node exceeds %d bytes",
 			operation,
-			maxCompiledExpressionV02NodeSQLBytes,
+			maxCompiledExpressionNodeSQLBytes,
 		),
 		Range: sourceRange,
 	}

@@ -64,16 +64,11 @@ func TestV03CommandsParseAsSourceLocatedPipelineStages(t *testing.T) {
 func TestV03CompatibilityIdentityActivatesWithTheCompleteCommandSurface(t *testing.T) {
 	t.Parallel()
 
-	switch CompatibilityVersion {
-	case "0.2":
-		// The v0.3 plan requires the server to retain its prior public identity
-		// throughout implementation. The release-artifact gate separately makes
-		// a future 0.3 flip conditional on accepted prerequisite/provenance text.
-		t.Skip("v0.3 implementation is present but activation provenance is still open")
-	case "0.3":
-		return
-	default:
-		t.Fatalf("authored SPL compatibility identity = %q, want the preactivation 0.2 or accepted 0.3 identity", CompatibilityVersion)
+	if CompatibilityVersion != "0.4" {
+		t.Fatalf(
+			"authored SPL compatibility identity = %q, want current cumulative identity 0.4",
+			CompatibilityVersion,
+		)
 	}
 }
 

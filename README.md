@@ -55,9 +55,9 @@ compile check; use the Make target for a runnable embedded server.
 Published artifacts use the stricter `make release` target. It requires the
 exact Node.js/npm versions pinned above and
 `OPEN_SPLUNK_SOURCE_REVISION` to equal the clean checkout's full Git revision.
-The caller must also provide the exact expected public SPL compatibility
-identity; the release fails before publication if the embedded server reports a
-different identity.
+The build derives the current SPL compatibility identity from the committed
+source and fails before publication if the embedded server reports anything
+different. Callers cannot select another compatibility profile.
 The release launcher materializes raw blobs and executable modes from that
 committed `HEAD` into a disposable tree; ignored and untracked worktree files
 are omitted and cannot enter the artifact. It installs the lockfile-pinned
@@ -71,15 +71,12 @@ executes `scripts/build-release.sh` from committed `HEAD`; no other live
 checkout file is used as a release build input:
 
 ```sh
-OPEN_SPLUNK_APPLICATION_VERSION=0.1.0 \
-OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION=0.2 \
+OPEN_SPLUNK_APPLICATION_VERSION=0.4.0 \
 OPEN_SPLUNK_SOURCE_REVISION="$(git rev-parse HEAD)" make release
 ```
 
-The application and authored-SPL version lines are independent release
-authorities: the initial SPL v0.2 release is application `0.1.0`; the v0.3
-runtime revision changes this invocation to application `0.2.0` with expected
-SPL `0.3`.
+This release is application `0.4.0` with the single cumulative compatibility
+profile `0.4`; see [`docs/versioning.md`](docs/versioning.md).
 
 For the production-shaped, non-root server and collector OCI images plus the
 digest-pinned server/ClickHouse Compose stack, follow
@@ -134,12 +131,11 @@ The backend includes the protobuf HTTP API, authenticated gRPC ingestion, an
 optional HEC compatibility facade, collector WAL and file tailing, the SQLite
 control plane, ClickHouse storage, bounded search jobs, and the executable SPL
 authored-search subset documented in
-[`docs/spl-compatibility-v0.2.md`](docs/spl-compatibility-v0.2.md). Tier-1
-calculated-field knowledge expressions deliberately remain on their closed
-v0.1 profile, documented in
-[`docs/knowledge-compatibility-v0.1.md`](docs/knowledge-compatibility-v0.1.md).
-Before upgrading retained searches, follow the
-[`v0.2 migration and read-only audit guide`](docs/spl-compatibility-v0.2-migration.md).
+[`docs/spl-compatibility-v0.4.md`](docs/spl-compatibility-v0.4.md). Its
+knowledge and lookup behavior is part of that same profile; calculated-field
+expressions deliberately retain their smaller closed reusable-expression
+grammar. Before upgrading retained searches, follow the
+[`v0.4 migration guide`](docs/spl-compatibility-v0.4-migration.md).
 The default Go test suite is self-contained. The pinned ClickHouse and full
 collector-to-browser tests are opt-in because they start ephemeral Docker
 containers; the browser vertical also requires the pinned Playwright browser:

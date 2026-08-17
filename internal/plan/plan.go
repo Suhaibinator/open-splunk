@@ -668,7 +668,7 @@ func validScalarUnaryOp(op ScalarUnaryOp) bool {
 }
 
 // ScalarUnaryExpression applies one unary arithmetic operation. Accepted
-// plans normalize the operand and result to the v0.2 nullable-Double domain.
+// plans normalize the operand and result to the nullable-Double domain.
 type ScalarUnaryExpression struct {
 	Op      ScalarUnaryOp
 	Operand ScalarExpression

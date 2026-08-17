@@ -46,6 +46,10 @@ async function ociFixture(t) {
     path.join(workspace, ".dockerignore"),
     path.join(fixture, ".dockerignore"),
   );
+  await writeFile(
+    path.join(fixture, "package.json"),
+    '{"name":"open-splunk-oci-fixture","version":"0.4.0"}\n',
+  );
   await mkdir(path.join(fixture, "oci", "rootfs", "etc"), { recursive: true });
   await copyFile(
     path.join(workspace, "oci", "rootfs", "etc", "passwd"),
@@ -264,8 +268,7 @@ async function installDockerShim(fixture) {
 function buildOCIEnvironment(revision, docker, extraEnvironment = {}) {
   return {
     ...process.env,
-    OPEN_SPLUNK_APPLICATION_VERSION: "1.2.3",
-    OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION: "0.2",
+    OPEN_SPLUNK_APPLICATION_VERSION: "0.4.0",
     OPEN_SPLUNK_SOURCE_REVISION: revision,
     OPEN_SPLUNK_SERVER_IMAGE: "registry.invalid/open-splunk/server:test",
     OPEN_SPLUNK_COLLECTOR_IMAGE: "registry.invalid/open-splunk/collector:test",
@@ -347,8 +350,7 @@ function runMakeOCI(fixture, revision, docker, extraEnvironment = {}) {
       encoding: "utf8",
       env: {
         ...process.env,
-        OPEN_SPLUNK_APPLICATION_VERSION: "1.2.3",
-        OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION: "0.2",
+        OPEN_SPLUNK_APPLICATION_VERSION: "0.4.0",
         OPEN_SPLUNK_SOURCE_REVISION: revision,
         OPEN_SPLUNK_SERVER_IMAGE: "registry.invalid/open-splunk/server:test",
         OPEN_SPLUNK_COLLECTOR_IMAGE:
@@ -431,11 +433,27 @@ test("OCI targets are pinned scratch runtimes with a minimal non-root contract",
   );
   assert.match(
     dockerfile,
-    /test "\$\{actual_spl_compatibility_version\}" = \\\n+\s+"\$\{OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION\}"/,
+    /printf '%s\\n' "\$\{actual_spl_compatibility_version\}" > \.spl-compatibility-version/,
   );
   assert.match(
     dockerfile,
-    /spl_compatibility_version=%s.*OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION/s,
+    /spl_compatibility_version=%s[\s\S]*cat \.spl-compatibility-version/,
+  );
+  assert.match(
+    dockerfile,
+    /server_identity=.*sed -n '1,3p'/,
+  );
+  assert.match(
+    dockerfile,
+    /OPEN_SPLUNK_APPLICATION_VERSION.*does not match package\.json/s,
+  );
+  assert.doesNotMatch(
+    dockerfile,
+    /OPEN_SPLUNK_EXPECTED_(?:SPL|KNOWLEDGE)_COMPATIBILITY_VERSION/,
+  );
+  assert.doesNotMatch(
+    dockerfile,
+    /internal\/knowledge\/doc\.go|knowledge_compatibility_version/,
   );
   assert.match(
     dockerfile,
@@ -533,7 +551,27 @@ test("release publication creates immutable amd64 and arm64 GHCR images", async 
   );
   assert.match(
     workflow,
-    /OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION=\$\{\{ needs\.verify\.outputs\.expected_spl_compatibility_version \}\}/,
+    /package_version="\$\(node -p 'require\("\.\/package\.json"\)\.version'\)"/,
+  );
+  assert.match(
+    workflow,
+    /compatibility_version="\$\(node scripts\/read-spl-compatibility-version\.mjs\)"/,
+  );
+  assert.match(
+    workflow,
+    /package_version" != "0\.4\.0" \|\| "\$compatibility_version" != "0\.4"/,
+  );
+  assert.match(
+    workflow,
+    /steps\.release\.outputs\.application_version.*package_version/,
+  );
+  assert.doesNotMatch(
+    workflow,
+    /OPEN_SPLUNK_EXPECTED_(?:SPL|KNOWLEDGE)_COMPATIBILITY_VERSION/,
+  );
+  assert.doesNotMatch(
+    workflow,
+    /read-knowledge-compatibility-version\.mjs|knowledge_compatibility_version/,
   );
   assert.doesNotMatch(workflow, /runtime_revision/);
   assert.match(workflow, /push-by-digest=true/);
@@ -542,6 +580,30 @@ test("release publication creates immutable amd64 and arm64 GHCR images", async 
   assert.match(workflow, /docker buildx imagetools create --tag/);
   assert.match(workflow, /expected_platforms=\$'linux\/amd64\\nlinux\/arm64'/);
   assert.doesNotMatch(workflow, /IMAGE_TAG.*latest/);
+
+  const ciWorkflow = await readFile(
+    path.join(workflowDirectory, "ci.yml"),
+    "utf8",
+  );
+  assert.ok(
+    (ciWorkflow.match(
+      /application_version="\$\(node -p 'require\("\.\/package\.json"\)\.version'\)"/g,
+    ) ?? []).length >= 2,
+  );
+  assert.ok(
+    (ciWorkflow.match(
+      /application_version" != "0\.4\.0" \|\| "\$compatibility_version" != "0\.4"/g,
+    ) ?? []).length >= 2,
+  );
+  assert.doesNotMatch(
+    ciWorkflow,
+    /OPEN_SPLUNK_EXPECTED_(?:SPL|KNOWLEDGE)_COMPATIBILITY_VERSION/,
+  );
+  assert.doesNotMatch(
+    ciWorkflow,
+    /read-knowledge-compatibility-version\.mjs|knowledge_compatibility_version/,
+  );
+  assert.doesNotMatch(ciWorkflow, /if: env\.OPEN_SPLUNK_SPL_COMPATIBILITY_VERSION/);
 });
 
 test("images seed secure writable paths in their normalized rootfs trees", async () => {
@@ -658,10 +720,10 @@ test("OCI build anchors both local image tags to clean HEAD", async (t) => {
   assert.match(invocations, /build .*--platform linux\/amd64 .*--target server /);
   assert.match(invocations, /build .*--platform linux\/amd64 .*--target collector /);
   assert.doesNotMatch(invocations, /build --no-cache/);
-  assert.match(invocations, /--build-arg OPEN_SPLUNK_APPLICATION_VERSION=1\.2\.3/);
-  assert.match(
+  assert.match(invocations, /--build-arg OPEN_SPLUNK_APPLICATION_VERSION=0\.4\.0/);
+  assert.doesNotMatch(
     invocations,
-    /--build-arg OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION=0\.2/,
+    /OPEN_SPLUNK_EXPECTED_(?:SPL|KNOWLEDGE)_COMPATIBILITY_VERSION/,
   );
   assert.match(
     invocations,
@@ -690,28 +752,21 @@ test("OCI build anchors both local image tags to clean HEAD", async (t) => {
   );
 });
 
-test("OCI build can stage SPL v0.4 while preserving the Docker identity check", async (t) => {
+test("OCI build rejects an application version that differs from package.json", async (t) => {
   const fixture = await ociFixture(t);
   const revision = git(fixture, ["rev-parse", "HEAD"]);
   const docker = await installDockerShim(fixture);
 
   const result = runBuildOCI(fixture, revision, docker, {
-    OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION: "0.4",
+    OPEN_SPLUNK_APPLICATION_VERSION: "0.4.1",
   });
 
-  assert.equal(result.status, 0, result.stderr);
-  const invocations = await readFile(docker.log, "utf8");
-  assert.equal(
-    (invocations.match(
-      /--build-arg OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION=0\.4/g,
-    ) ?? []).length,
-    2,
-  );
-  const dockerfile = await readFile(path.join(workspace, "Dockerfile"), "utf8");
+  assert.equal(result.status, 1);
   assert.match(
-    dockerfile,
-    /test "\$\{actual_spl_compatibility_version\}" = \\\n+\s+"\$\{OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION\}"/,
+    result.stderr,
+    /does not match committed package version 0\.4\.0/,
   );
+  await assert.rejects(access(docker.log, constants.F_OK));
 });
 
 test("OCI cold rebuild bypasses cache for both targets and rejects unsafe values", async (t) => {
@@ -1094,14 +1149,6 @@ test("OCI build rejects unsafe identity, platform, and image references", async 
     {
       environment: { OPEN_SPLUNK_APPLICATION_VERSION: "1.2.3;touch-pwned" },
       message: /semantic version/,
-    },
-    {
-      environment: { OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION: "" },
-      message: /OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION is required/,
-    },
-    {
-      environment: { OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION: "0.5" },
-      message: /must be 0\.2, 0\.3, or 0\.4/,
     },
     {
       environment: { OPEN_SPLUNK_OCI_PLATFORM: "linux/386" },

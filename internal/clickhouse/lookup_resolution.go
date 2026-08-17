@@ -72,7 +72,11 @@ type LookupResolution struct {
 	headers        []string
 	asset          *lookupasset.Asset
 	rows           [][]string
-	backing        *lookupResolutionBacking
+	// columns is used only when reopening compiler-sealed lookup authority.
+	// It shares the authenticated column-major external-table backing so
+	// derived analyses do not transpose or clone a maximum-envelope asset.
+	columns [][]string
+	backing *lookupResolutionBacking
 }
 
 // lookupResolutionBacking records facts established while the detached asset
@@ -84,6 +88,7 @@ type lookupResolutionBacking struct {
 	headers      []string
 	asset        *lookupasset.Asset
 	rows         [][]string
+	columns      [][]string
 	rowCount     int
 	payloadBytes uint64
 	cellCount    uint64
@@ -452,6 +457,18 @@ func (resolution LookupResolution) Rows() [][]string {
 	if resolution.asset != nil {
 		return resolution.asset.Rows()
 	}
+	if resolution.columns != nil {
+		rows := make([][]string, lookupResolutionRowCount(resolution))
+		for rowIndex := range rows {
+			rows[rowIndex] = make([]string, len(resolution.columns))
+			for columnIndex := range resolution.columns {
+				rows[rowIndex][columnIndex] = strings.Clone(
+					resolution.columns[columnIndex][rowIndex],
+				)
+			}
+		}
+		return rows
+	}
 	return cloneLookupRows(resolution.rows)
 }
 
@@ -460,6 +477,12 @@ func (resolution LookupResolution) Rows() [][]string {
 func (resolution LookupResolution) RowCount() uint64 {
 	if resolution.asset != nil {
 		return resolution.asset.RowCount()
+	}
+	if resolution.columns != nil {
+		if len(resolution.columns) == 0 {
+			return 0
+		}
+		return uint64(len(resolution.columns[0]))
 	}
 	return uint64(len(resolution.rows))
 }
@@ -487,6 +510,7 @@ func (resolution LookupResolution) clone() LookupResolution {
 		headers:        resolution.headers,
 		asset:          resolution.asset,
 		rows:           resolution.rows,
+		columns:        resolution.columns,
 		backing:        resolution.backing,
 	}
 }
@@ -500,6 +524,7 @@ func newLookupResolutionBacking(
 		headers:      resolution.headers,
 		asset:        resolution.asset,
 		rows:         resolution.rows,
+		columns:      resolution.columns,
 		rowCount:     lookupResolutionRowCount(resolution),
 		payloadBytes: payloadBytes,
 		cellCount:    cells,
@@ -510,13 +535,19 @@ func lookupResolutionHasImmutableBacking(resolution LookupResolution) bool {
 	backing := resolution.backing
 	if backing == nil || backing.asset != resolution.asset ||
 		backing.rowCount != lookupResolutionRowCount(resolution) ||
-		!sameStringSliceStorage(backing.headers, resolution.headers) {
+		!sameStringSliceStorage(backing.headers, resolution.headers) ||
+		!sameLookupColumnStorage(backing.columns, resolution.columns) {
 		return false
 	}
 	if resolution.asset != nil {
+		return resolution.rows == nil && backing.rows == nil &&
+			resolution.columns == nil && backing.columns == nil
+	}
+	if resolution.columns != nil {
 		return resolution.rows == nil && backing.rows == nil
 	}
-	return sameLookupRowStorage(backing.rows, resolution.rows)
+	return backing.columns == nil &&
+		sameLookupRowStorage(backing.rows, resolution.rows)
 }
 
 func sameStringSliceStorage(left, right []string) bool {
@@ -531,6 +562,21 @@ func sameLookupRowStorage(left, right [][]string) bool {
 		return false
 	}
 	return len(left) == 0 || &left[0] == &right[0]
+}
+
+func sameLookupColumnStorage(left, right [][]string) bool {
+	if len(left) != len(right) || (left == nil) != (right == nil) {
+		return false
+	}
+	if len(left) != 0 && &left[0] != &right[0] {
+		return false
+	}
+	for index := range left {
+		if !sameStringSliceStorage(left[index], right[index]) {
+			return false
+		}
+	}
+	return true
 }
 
 func normalizeLookupResolutionContract(contract plan.Lookup) (plan.Lookup, error) {
@@ -696,6 +742,11 @@ func validateLookupResolutionAndMeasureContext(
 			"create ClickHouse lookup resolution: asset schema changed",
 		)
 	}
+	if resolution.columns != nil && len(resolution.columns) != len(resolution.headers) {
+		return 0, errors.New(
+			"create ClickHouse lookup resolution: columnar schema changed",
+		)
+	}
 	if lookupResolutionHasImmutableBacking(resolution) {
 		expectedCells, ok := lookupResolutionCellCountUncached(resolution)
 		if !ok || resolution.backing.cellCount != expectedCells ||
@@ -713,7 +764,8 @@ func validateLookupResolutionAndMeasureContext(
 				return 0, err
 			}
 		}
-		if resolution.asset == nil && len(resolution.rows[rowIndex]) != len(resolution.headers) {
+		if resolution.asset == nil && resolution.columns == nil &&
+			len(resolution.rows[rowIndex]) != len(resolution.headers) {
 			return 0, fmt.Errorf(
 				"create ClickHouse lookup resolution: row %d has %d cells, want %d",
 				rowIndex+1,
@@ -845,6 +897,12 @@ func lookupResolutionRowCount(resolution LookupResolution) int {
 		// #nosec G115 -- the validated cap fits in int on every supported target.
 		return int(resolution.asset.RowCount())
 	}
+	if resolution.columns != nil {
+		if len(resolution.columns) == 0 {
+			return 0
+		}
+		return len(resolution.columns[0])
+	}
 	return len(resolution.rows)
 }
 
@@ -855,6 +913,13 @@ func lookupResolutionCell(
 ) (string, bool) {
 	if resolution.asset != nil {
 		return resolution.asset.Cell(row, column)
+	}
+	if resolution.columns != nil {
+		if column < 0 || column >= len(resolution.columns) ||
+			row < 0 || row >= len(resolution.columns[column]) {
+			return "", false
+		}
+		return resolution.columns[column][row], true
 	}
 	if row < 0 || row >= len(resolution.rows) ||
 		column < 0 || column >= len(resolution.rows[row]) {

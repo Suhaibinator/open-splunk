@@ -430,9 +430,8 @@ func runBrowserRecoveryFixture(
 		TenantID:        browserSequenceExpiredTenant,
 		Now:             func() time.Time { return anchor },
 		Bootstrap: server.BootstrapConfig{
-			ServerVersion:           "browser-recovery-test",
-			APIVersion:              "v1",
-			SPLCompatibilityVersion: splCompatibilityVersionForTest,
+			ServerVersion: "browser-recovery-test",
+			APIVersion:    "v1",
 		},
 	})
 	if err != nil {

@@ -358,7 +358,7 @@ const (
 	// source before its two bounded lexical projections are constructed.
 	SpathJSONTokenLimitMarker = "open-splunk: spath JSON token count exceeds the per-row limit" // #nosec G101 -- stable error classifier, not a credential
 	// UnsupportedSpathValueMarker is emitted when an explicitly selected JSON
-	// leaf is a container that this compatibility slice cannot publish.
+	// leaf is a container that the bounded result contract cannot publish.
 	UnsupportedSpathValueMarker = "open-splunk: spath selected value is outside the supported scalar domain"
 	// UnsupportedNumericBinValueMarker is emitted when a mathematically correct
 	// numeric bucket cannot be represented by the input field's fixed type, or
@@ -490,6 +490,9 @@ type CompiledQuery struct {
 	// stages. Keeping them outside Args prevents clickhouse-go from expanding an
 	// admitted multi-megabyte asset into the bounded SQL text.
 	lookupTables []compiledLookupExternalTable
+	// automaticLookupReplay retains only selector, logical mapping, and stable
+	// placement authority. Exact identities and cells remain in lookupTables.
+	automaticLookupReplay []retainedAutomaticLookup
 
 	// executionSeal binds the complete executable contract, including every
 	// bind value and result-shape field. knowledgeEvidence exists only for a
@@ -826,8 +829,8 @@ func (c Compiler) compileWithFinalizerContext(
 		} else if depthErr := validateFinalizedRelationalDepth(relation, compiled); depthErr != nil {
 			return CompiledQuery{}, depthErr
 		}
-		if state.context != nil && state.context.v03MaterializedValidation {
-			compiled.SQL = applyV03MaterializedValidationSettings(compiled.SQL)
+		if state.context != nil && state.context.requiresMaterializedValidationSettings {
+			compiled.SQL = applyMaterializedValidationSettings(compiled.SQL)
 		}
 		compiled.statsPartitionsMaxThreadsHint = statsPartitionsMaxThreadsHint
 		if state.context != nil {
@@ -8149,27 +8152,27 @@ type compiledStatsSparklineMeasure struct {
 // copying each search-scoped constant into newly constructed compileState
 // values.
 type compileContext struct {
-	operationContext                  context.Context
-	patternBudgets                    compiledPatternBudgets
-	strftimeBudget                    compiledStrftimeBudget
-	strptimeBudget                    compiledStrptimeBudget
-	relativeTimeBudget                compiledRelativeTimeBudget
-	unixTimestampBudget               compiledUnixTimestampBudget
-	concatenationBudget               compiledConcatenationBudget
-	stringConversionBudget            compiledStringConversionBudget
-	arithmeticOperators               int
-	membershipCandidates              int
-	mvExpandStages                    uint8
-	atomicResult                      bool
-	v03MaterializedValidation         bool
-	searchStartUnix                   int64
-	searchEarliest                    time.Time
-	searchLatest                      time.Time
-	searchTimezone                    string
-	searchLocalMinimumUnixNanoseconds int64
-	searchTimezoneChecked             bool
-	searchTimezoneInvalid             bool
-	lookupTables                      []compiledLookupExternalTable
+	operationContext                       context.Context
+	patternBudgets                         compiledPatternBudgets
+	strftimeBudget                         compiledStrftimeBudget
+	strptimeBudget                         compiledStrptimeBudget
+	relativeTimeBudget                     compiledRelativeTimeBudget
+	unixTimestampBudget                    compiledUnixTimestampBudget
+	concatenationBudget                    compiledConcatenationBudget
+	stringConversionBudget                 compiledStringConversionBudget
+	arithmeticOperators                    int
+	membershipCandidates                   int
+	mvExpandStages                         uint8
+	atomicResult                           bool
+	requiresMaterializedValidationSettings bool
+	searchStartUnix                        int64
+	searchEarliest                         time.Time
+	searchLatest                           time.Time
+	searchTimezone                         string
+	searchLocalMinimumUnixNanoseconds      int64
+	searchTimezoneChecked                  bool
+	searchTimezoneInvalid                  bool
+	lookupTables                           []compiledLookupExternalTable
 }
 
 func newCompileContext(searchStart time.Time, searchTimezone string) *compileContext {
@@ -9287,8 +9290,8 @@ type compiledScalar struct {
 	literal                      *plan.Value
 	alwaysNull                   bool
 	comparisonAtomic             bool
-	// ieeeComparison marks values produced by v0.2 arithmetic. Comparisons
-	// involving one of these values apply the release's explicit NaN rules
+	// ieeeComparison marks values produced by authored arithmetic. Comparisons
+	// involving one of these values apply the contract's explicit NaN rules
 	// instead of inheriting ClickHouse's ordered-NaN behavior.
 	ieeeComparison          bool
 	materializeForPredicate bool
@@ -9646,10 +9649,9 @@ func compileStrftimeScalar(
 	}
 	if input.kind == fieldKindString || input.kind == fieldKindBool {
 		return compiledScalar{}, &plan.Diagnostic{
-			Code: "SPL_UNSUPPORTED_STRFTIME_VALUE_TYPE",
-			Message: "strftime requires a numeric Unix-seconds value or time field " +
-				"in compatibility version 0.1",
-			Range: expression.Arguments[0].SourceRange(),
+			Code:    "SPL_UNSUPPORTED_STRFTIME_VALUE_TYPE",
+			Message: "strftime requires a numeric Unix-seconds value or time field",
+			Range:   expression.Arguments[0].SourceRange(),
 		}
 	}
 	if err := chargeUnixTimestampDynamicDecimalBudget(
@@ -9830,10 +9832,9 @@ func compileStrptimeScalar(
 	}
 	if input.kind != fieldKindString && input.kind != fieldKindDynamic {
 		return compiledScalar{}, &plan.Diagnostic{
-			Code: "SPL_UNSUPPORTED_STRPTIME_VALUE_TYPE",
-			Message: "strptime requires a String timestamp value in " +
-				"compatibility version 0.1",
-			Range: expression.Arguments[0].SourceRange(),
+			Code:    "SPL_UNSUPPORTED_STRPTIME_VALUE_TYPE",
+			Message: "strptime requires a String timestamp value",
+			Range:   expression.Arguments[0].SourceRange(),
 		}
 	}
 
@@ -10030,10 +10031,9 @@ func compileRelativeTimeScalar(
 		input.kind != fieldKindNumber &&
 		input.kind != fieldKindDynamic {
 		return compiledScalar{}, &plan.Diagnostic{
-			Code: "SPL_UNSUPPORTED_RELATIVE_TIME_VALUE_TYPE",
-			Message: "relative_time requires a numeric Unix-seconds value or " +
-				"time field in compatibility version 0.1",
-			Range: expression.Arguments[0].SourceRange(),
+			Code:    "SPL_UNSUPPORTED_RELATIVE_TIME_VALUE_TYPE",
+			Message: "relative_time requires a numeric Unix-seconds value or time field",
+			Range:   expression.Arguments[0].SourceRange(),
 		}
 	}
 	if err := chargeUnixTimestampDynamicDecimalBudget(
@@ -13391,8 +13391,7 @@ func compileLexicalStringScalar(
 		return compiledScalar{}, &plan.Diagnostic{
 			Code: conversion.unsupportedTypeCode,
 			Message: conversion.operation +
-				" supports " + supportedTypes +
-				" input in compatibility version 0.1",
+				" supports " + supportedTypes + " input",
 			Range: sourceRange,
 		}
 	}
@@ -14911,8 +14910,8 @@ func compileExtractInput(input plan.FieldRef, state compileState) (valueSQL, eli
 	case fieldKindStringArray:
 		return "", "", nil, unsupportedMultivalueUsage("field extraction", input.Range)
 	default:
-		// v0.1 does not stringify numeric, Boolean, time, multivalue, or
-		// container sources. They behave exactly like a non-match.
+		// Field extraction does not stringify numeric, Boolean, time,
+		// multivalue, or container sources. They behave exactly like a non-match.
 		return "CAST(NULL AS Nullable(String))", "0", nil, nil
 	}
 }

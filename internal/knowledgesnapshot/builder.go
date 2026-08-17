@@ -27,8 +27,11 @@ import (
 )
 
 const (
-	FormatVersion                = 1
-	CompilerCompatibilityVersion = "0.1"
+	FormatVersion = 1
+	// CompilerCompatibilityVersion binds newly created snapshots to the one
+	// current product compatibility profile. Historical values remain readable
+	// only where migration code handles an already-persisted snapshot.
+	CompilerCompatibilityVersion = spl.CompatibilityVersion
 
 	MaximumExecutableObjects        = 256
 	MaximumShadows                  = 512
@@ -56,6 +59,10 @@ const (
 	maximumCatalogRevision = uint64(math.MaxInt64 - 1)
 )
 
+// digestDomain identifies canonical snapshot wire format 1. The domain is a
+// wire-format identifier, not a selectable runtime compatibility profile.
+// CompilerCompatibilityVersion inside the hashed message prevents a retained
+// snapshot from being reinterpreted by a different compiler.
 const digestDomain = "open-splunk-knowledge-snapshot-v0.1\x00"
 
 var (

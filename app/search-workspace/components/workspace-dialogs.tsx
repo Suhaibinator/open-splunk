@@ -69,13 +69,15 @@ export function KnowledgeInspectionSection({
         <dd><code>{knowledge.digestSha256}</code></dd>
         <dt>Catalog revision</dt>
         <dd>{formatNonNegativeIntegerQuantity(knowledge.tenantCatalogRevision)}</dd>
-        <dt>Applicable objects</dt>
+        <dt>Applicable field objects</dt>
         <dd>{NUMBER_FORMAT.format(knowledge.objectCount)}</dd>
+        <dt>Lookup assets</dt>
+        <dd>{NUMBER_FORMAT.format(knowledge.lookupAssetCount)}</dd>
         <dt>Compiler compatibility</dt>
         <dd>{knowledge.compilerCompatibilityVersion}</dd>
       </dl>
       {knowledge.objectCount === 0 ? (
-        <p>Knowledge resolution was enabled with no applicable objects.</p>
+        <p>No Tier-1 field objects were applied.</p>
       ) : (
         <>
           <p>

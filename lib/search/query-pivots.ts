@@ -48,7 +48,7 @@ function splitFieldPath(field: string): string[] | null {
 
 /**
  * Reports whether a field can be emitted as an unquoted identifier accepted
- * by the backend's v0.1 lexer and deterministic dotted-path resolver.
+ * by the backend's bounded lexer and deterministic dotted-path resolver.
  *
  * Quoted field identifiers are intentionally not synthesized: the server only
  * supports quotes for values, and treating `'field name'` as an identifier

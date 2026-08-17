@@ -112,7 +112,7 @@ func (op *ExpandMultivalue) SourceRange() spl.Range { return op.Range }
 
 func buildFillNull(command *spl.FillNullCommand) (*FillNull, error) {
 	if command == nil || len(command.Fields) < 1 ||
-		len(command.Fields) > spl.MaximumV03ProjectionFields ||
+		len(command.Fields) > spl.MaximumExplicitProjectionFields ||
 		!utf8.ValidString(command.Value) {
 		return nil, &Diagnostic{
 			Code:    "SPL_INVALID_QUERY",
@@ -148,7 +148,7 @@ func buildFillNull(command *spl.FillNullCommand) (*FillNull, error) {
 
 func buildRowTotal(command *spl.AddTotalsCommand) (*RowTotal, error) {
 	if command == nil || len(command.Fields) < 1 ||
-		len(command.Fields) > spl.MaximumV03ProjectionFields ||
+		len(command.Fields) > spl.MaximumExplicitProjectionFields ||
 		!spl.IsExactUnquotedFieldName(command.Output) {
 		return nil, &Diagnostic{
 			Code:    "SPL_INVALID_QUERY",

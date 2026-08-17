@@ -59,6 +59,18 @@ type previewFixture struct {
 }
 
 func newPreviewFixture(t *testing.T) previewFixture {
+	return newPreviewFixtureForSearch(
+		t,
+		"index=main | table status",
+		nil,
+	)
+}
+
+func newPreviewFixtureForSearch(
+	t *testing.T,
+	search string,
+	lookupResolver searchjobs.LookupResolver,
+) previewFixture {
 	t.Helper()
 	ctx := context.Background()
 	database, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.db"))
@@ -130,6 +142,7 @@ func newPreviewFixture(t *testing.T) previewFixture {
 		}),
 		Snapshotter:       snapshotterFunc(func(context.Context) (uint64, error) { return 17, nil }),
 		KnowledgeResolver: resolver,
+		LookupResolver:    lookupResolver,
 		Compiler:          clickhouse.Compiler{Database: "open_splunk", Table: "events"},
 		MaxConcurrent:     1,
 		MaxResultLeases:   1,
@@ -148,7 +161,7 @@ func newPreviewFixture(t *testing.T) previewFixture {
 		t.Fatal(err)
 	}
 	created, err := manager.Create(ctx, searchjobs.CreateRequest{
-		SPL:               "index=main | table status",
+		SPL:               search,
 		OwnerID:           previewTestOwner,
 		TenantID:          previewTestTenant,
 		AppID:             previewTestApp,

@@ -1,12 +1,12 @@
 # Open Splunk SPL expansion plan: compatibility v0.2 expression foundation
 
-**Status:** implementation completed; final clean-revision revalidation and
-acceptance provenance pending as of August 11, 2026
+**Status:** historical v0.2 implementation plan; completed and incorporated
+into the cumulative v0.4 contract
 **Date:** August 10, 2026
 **Selected compatibility target:** bounded SPL1 arithmetic, scalar grouping,
 quoted scalar field references, and eval-language membership
-**Current prerequisite:** SPL compatibility `0.1` and Tier-1 knowledge objects
-are implemented and acceptance-verified
+**Original prerequisite:** SPL compatibility `0.1` and Tier-1 knowledge objects
+were implemented and acceptance-verified when this v0.2 plan was executed
 **Estimated effort:** 11–17 engineer-weeks, excluding access to and operation of
 a licensed Splunk differential environment
 
@@ -92,9 +92,7 @@ This document is subordinate to, and does not replace:
   CSV lookups, event types, tags, macros, workflow actions, data models, and
   acceleration;
 - [`knowledge-compatibility-v0.1.md`](knowledge-compatibility-v0.1.md), which
-  continues to govern active Tier-1 field knowledge; and
-- [`backend-checkpoint.md`](backend-checkpoint.md), which is implementation
-  history and handoff evidence rather than the future SPL roadmap.
+  retains the historical Tier-1 field-knowledge regression contract.
 
 The implementation must add a normative
 `docs/spl-compatibility-v0.2.md` before the first v0.2 syntax is enabled in the
@@ -766,7 +764,8 @@ v0.2 source.
 
 ### Knowledge-object boundary
 
-Tier-1 knowledge compatibility remains `0.1` during this release. Existing
+For the historical v0.2 application release, Tier-1 knowledge compatibility
+remained `0.1`. Existing
 calculated-field definitions continue to use the v0.1 standalone scalar
 profile, so enabling authored v0.2 arithmetic cannot silently change an ACTIVE
 knowledge snapshot or its digest.

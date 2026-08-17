@@ -12,10 +12,9 @@ Version 0.3 adds ten bounded single-relation commands: `regex`, `reverse`,
 [`spl-compatibility-v0.3.md`](spl-compatibility-v0.3.md). This guide describes
 source review and rollout; it does not widen the contract.
 
-## Before activation
+## Before upgrading from v0.2
 
-1. Retain a verifier-bound accepted v0.2 prerequisite before materializing or
-   qualifying v0.3 runtime `R`.
+1. Retain a recoverable v0.2 deployment before upgrading.
 2. Validate every retained saved search with the candidate v0.3 backend.
 3. Review exact command fields: v0.3 command positions do not accept single
    quotes or wildcards, even though v0.2 scalar expressions may.
@@ -23,8 +22,7 @@ source review and rollout; it does not widen the contract.
    upstream `table`/`fields` projection when that field is intentional.
 5. Run representative multivalue searches against production-shaped data and
    confirm the hard member, row, and retained-byte limits below.
-6. Activate the compatibility identity once, then retain the acceptance report
-   and exact source revision with the release.
+6. Retain the exact source revision and release tag used for the upgrade.
 
 Saved-search launch uses the persisted object definition associated with its
 trusted ID. Client SPL accompanying that launch is not an execution authority.

@@ -94,7 +94,7 @@ func TestKnowledgeIndexAdmissionDriversMigrationPinsFreshSchemaAndChecksum(t *te
 			wantChecksum,
 		)
 	}
-	assertIntegerQuery(t, raw, 38, `SELECT count(*) FROM schema_migrations`)
+	assertIntegerQuery(t, raw, 39, `SELECT count(*) FROM schema_migrations`)
 
 	indexes := []struct {
 		table     string
@@ -172,7 +172,7 @@ func TestKnowledgeIndexAdmissionDriversMigrationUpgradesWithoutChangingCatalogSt
 	if err := ApplyMigrations(context.Background(), raw, migrations.SQLite()); err != nil {
 		t.Fatalf("apply migration 0034: %v", err)
 	}
-	assertIntegerQuery(t, raw, 38, `SELECT count(*) FROM schema_migrations`)
+	assertIntegerQuery(t, raw, 39, `SELECT count(*) FROM schema_migrations`)
 	assertIntegerQuery(t, raw, 1, `
 		SELECT count(*)
 		FROM knowledge_catalog_tenants INDEXED BY knowledge_catalog_tenants_nonempty_active_idx
@@ -229,7 +229,7 @@ func TestKnowledgeIndexAdmissionDriversMigrationRollsBackBothIndexes(t *testing.
 	if err := ApplyMigrations(context.Background(), raw, migrations.SQLite()); err != nil {
 		t.Fatalf("apply migration after removing conflict: %v", err)
 	}
-	assertIntegerQuery(t, raw, 38, `SELECT count(*) FROM schema_migrations`)
+	assertIntegerQuery(t, raw, 39, `SELECT count(*) FROM schema_migrations`)
 	assertIntegerQuery(t, raw, 2, `
 		SELECT count(*) FROM sqlite_schema
 		WHERE type = 'index' AND name IN (

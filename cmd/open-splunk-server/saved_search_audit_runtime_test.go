@@ -155,10 +155,7 @@ func TestRuntimeSavedSearchAuditSurvivesStoreReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	journal, err := searchhistory.NewJobJournal(
-		history,
-		"saved-search-runtime-rerun-test",
-	)
+	journal, err := searchhistory.NewJobJournal(history)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +163,6 @@ func TestRuntimeSavedSearchAuditSurvivesStoreReopen(t *testing.T) {
 		Executor:        runtimeSavedSearchRerunExecutor{},
 		Snapshotter:     runtimeSavedSearchRerunSnapshotter(17),
 		Journal:         journal,
-		CompilerVersion: "saved-search-runtime-rerun-test",
 		MaxConcurrent:   1,
 		CleanupInterval: -1,
 		Now:             func() time.Time { return rerunServerTime },

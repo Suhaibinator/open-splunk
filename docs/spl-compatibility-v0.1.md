@@ -1,6 +1,7 @@
 # Open Splunk SPL compatibility contract v0.1
 
-**Status:** executable implementation contract
+**Status:** historical executable baseline; incorporated into cumulative
+runtime identity `0.4`
 **Compatibility version:** `0.1`
 **Last updated:** August 11, 2026
 

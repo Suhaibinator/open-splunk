@@ -12,6 +12,7 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
+	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
 var (
@@ -82,7 +83,7 @@ func TestCompletedExecutionSnapshotForReturnsDetachedExecutionMetadata(t *testin
 		OwnerID:          request.OwnerID,
 		TenantID:         request.TenantID,
 		SPL:              request.SPL,
-		CompilerVersion:  defaultCompilerVersion,
+		CompilerVersion:  spl.CompatibilityVersion,
 		EffectiveIndexes: []string{"alpha"},
 		Earliest:         earliest.UTC(),
 		Latest:           latest.UTC(),
@@ -423,7 +424,7 @@ func TestExecutionSnapshotEqualCoversEveryFieldAndIndexOrder(t *testing.T) {
 		OwnerID:          "owner",
 		TenantID:         "tenant",
 		SPL:              "index=alpha",
-		CompilerVersion:  defaultCompilerVersion,
+		CompilerVersion:  spl.CompatibilityVersion,
 		EffectiveIndexes: []string{"alpha", "beta"},
 		Earliest:         baseTime,
 		Latest:           baseTime.Add(time.Hour),

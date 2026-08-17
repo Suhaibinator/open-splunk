@@ -83,8 +83,6 @@ func runDeploymentSubcommand(arguments []string) (bool, error) {
 		return true, runVerifyControlPlaneBackupSubcommand(arguments[1:])
 	case "restore-control-plane":
 		return true, runRestoreControlPlaneSubcommand(arguments[1:])
-	case "audit-spl-v0.2":
-		return true, runSPLCompatibilityAuditSubcommand(arguments[1:])
 	default:
 		return false, nil
 	}

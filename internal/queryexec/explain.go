@@ -25,11 +25,13 @@ const (
 	// The fixed structured PLAN form is exercised against the
 	// production-pinned ClickHouse image. It exposes only plan structure,
 	// physical read headers, and index selection; actions remain disabled.
+	// Descriptions remain disabled because they add rendered expressions and
+	// lookup-join internals that are neither parsed nor published.
 	// The compiler SQL is sealed inside this fixed outer SELECT so its
 	// server-side timeout clause takes precedence over clickhouse-go's
 	// deadline-derived protocol setting. Callers cannot select an EXPLAIN
 	// mode, alias, or setting.
-	explainQueryPrefix = "EXPLAIN PLAN json = 1, description = 1, indexes = 1, " +
+	explainQueryPrefix = "EXPLAIN PLAN json = 1, description = 0, indexes = 1, " +
 		"actions = 0, header = 1 SELECT * FROM ("
 	explainQuerySettingsPrefix = ") AS __os_explain_input SETTINGS max_execution_time = "
 	explainQuerySettingsSuffix = ", use_query_condition_cache = 0, " +
@@ -41,8 +43,9 @@ const (
 	maximumExplainRowsToRead    = uint64(5_000_000)
 	maximumExplainBytesToRead   = uint64(1 << 30)
 	maximumExplainResultRows    = uint64(4_096)
-	maximumExplainLineBytes     = uint64(16 << 10)
+	maximumExplainLineBytes     = uint64(32 << 10)
 	maximumExplainResultBytes   = uint64(1 << 20)
+	maximumExplainArrayElements = 4_096
 	maximumExplainGroups        = uint64(4_096)
 	maximumExplainThreads       = uint64(1)
 	// This independently enforces the compiler's 256 KiB generated-query
@@ -536,15 +539,14 @@ func validateExplainQuery(query clickhouse.CompiledQuery) error {
 }
 
 // detachExplainArguments admits exactly the concrete argument inventory
-// emitted by Compiler.Compile: string, bool, int64, uint64, float64, and
-// uint8. In particular, it rejects the formatter, Valuer, pointer, collection,
-// and named-scalar fallbacks that clickhouse-go would otherwise evaluate
-// during unsafe client-side query binding.
+// emitted by Compiler.Compile: string, bool, int64, uint64, float64, uint8,
+// []string, and []uint8. In particular, it rejects the formatter, Valuer,
+// pointer, other-collection, and named-scalar fallbacks that clickhouse-go
+// would otherwise evaluate during unsafe client-side query binding.
 //
-// Compiler emits no mutable argument form. The fresh []any still matters:
-// CompiledQuery.Args is public, so a caller may replace one of its scalar
-// interface values after admission. The executor must retain its detached
-// snapshot.
+// Compiler's two slice forms are independently bounded and deeply copied.
+// CompiledQuery.Args is public, so the executor must retain its detached
+// snapshot even if a caller replaces an interface value after admission.
 func detachExplainArguments(
 	arguments []any,
 	compilerPlaceholders int,
@@ -566,6 +568,24 @@ func detachExplainArguments(
 	detached := slices.Clone(arguments)
 	estimatedBytes := rawQueryBytes
 	for index, argument := range detached {
+		switch value := argument.(type) {
+		case []string:
+			if len(value) > maximumExplainArrayElements {
+				return nil, explainLimit(
+					"argument collection exceeds the element limit",
+				)
+			}
+			detached[index] = slices.Clone(value)
+			argument = detached[index]
+		case []uint8:
+			if len(value) > maximumExplainArrayElements {
+				return nil, explainLimit(
+					"argument collection exceeds the element limit",
+				)
+			}
+			detached[index] = slices.Clone(value)
+			argument = detached[index]
+		}
 		renderedBytes, supported := explainArgumentRenderedBytes(argument)
 		if !supported {
 			return nil, invalidExplainResult(
@@ -590,7 +610,7 @@ func compilerPlaceholderCount(sql string) int {
 }
 
 func explainArgumentRenderedBytes(argument any) (uint64, bool) {
-	if argument == nil || isNilDriverValue(argument) {
+	if argument == nil {
 		return 0, false
 	}
 	switch argument.(type) {
@@ -607,6 +627,23 @@ func explainArgumentRenderedBytes(argument any) (uint64, bool) {
 			return ^uint64(0), true
 		}
 		return valueBytes*2 + 2, true
+	case []string:
+		total := uint64(2) // array brackets
+		for _, element := range value {
+			elementBytes, _ := explainArgumentRenderedBytes(element)
+			if elementBytes >= ^uint64(0)-total {
+				return ^uint64(0), true
+			}
+			total += elementBytes + 1 // one separator byte of headroom
+		}
+		return total, true
+	case []uint8:
+		length := uint64(len(value))
+		if length > (^uint64(0)-2)/4 {
+			return ^uint64(0), true
+		}
+		// Three decimal digits and one separator per element, plus brackets.
+		return length*4 + 2, true
 	case bool:
 		return 1, true
 	case int64, uint64:
@@ -619,6 +656,9 @@ func explainArgumentRenderedBytes(argument any) (uint64, bool) {
 	case uint8:
 		return 3, true
 	default:
+		if isNilDriverValue(argument) {
+			return 0, false
+		}
 		return 0, false
 	}
 }

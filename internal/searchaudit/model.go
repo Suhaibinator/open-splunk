@@ -36,6 +36,7 @@ type searchAttemptEventRecord struct {
 	KnowledgeSnapshotTenantCatalogStateToken      []byte          `gorm:"column:knowledge_snapshot_tenant_catalog_state_token;type:blob"`
 	KnowledgeSnapshotObjectCount                  sql.NullInt64   `gorm:"column:knowledge_snapshot_object_count;type:integer"`
 	KnowledgeSnapshotCompilerCompatibilityVersion sql.NullString  `gorm:"column:knowledge_snapshot_compiler_compatibility_version;type:text"`
+	KnowledgeSnapshotLookupAssetCount             sql.NullInt64   `gorm:"column:knowledge_snapshot_lookup_asset_count;type:integer"`
 }
 
 func (searchAttemptEventRecord) TableName() string {

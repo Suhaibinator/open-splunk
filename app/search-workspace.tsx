@@ -469,7 +469,7 @@ function backendIndexScope(spl: string, bootstrap: BackendBootstrapState): strin
   for (const selector of selectors) {
     if (selector.includes("*") || selector.includes("?")) {
       throw new Error(
-        `Wildcard index selector “${selector}” is not supported by SPL compatibility ${bootstrap.response.splCompatibilityVersion || "v0.1"}. Choose an exact index.`,
+        `Wildcard index selector “${selector}” is not supported. Choose an exact index.`,
       );
     }
     if (!exactNames.has(selector)) {

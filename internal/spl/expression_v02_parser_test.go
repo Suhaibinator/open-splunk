@@ -641,7 +641,7 @@ func TestParseV02PreservesNonScalarTokenization(t *testing.T) {
 		if lexErr != nil {
 			t.Fatalf("legacy lex(%q): %v", source, lexErr)
 		}
-		legacyParser := parser{source: source, tokens: legacyTokens, profile: expressionProfileV02}
+		legacyParser := parser{source: source, tokens: legacyTokens, profile: expressionProfileAuthored}
 		legacyQuery, legacyErr := legacyParser.parseQuery()
 		query, err := Parse(source)
 		if !reflect.DeepEqual(query, legacyQuery) || !equalDifferentialErrors(err, legacyErr) {

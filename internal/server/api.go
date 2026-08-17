@@ -17,6 +17,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/searchjobproto"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
+	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -71,7 +72,7 @@ func (handler *apiHandler) getSystemBootstrap(request *http.Request, input *open
 	response := &opensplunkv1.GetSystemBootstrapResponse{
 		ServerVersion:           handler.bootstrap.ServerVersion,
 		ApiVersion:              handler.bootstrap.APIVersion,
-		SplCompatibilityVersion: handler.bootstrap.SPLCompatibilityVersion,
+		SplCompatibilityVersion: spl.CompatibilityVersion,
 		Build:                   buildmetadata.Clone(handler.bootstrap.Build),
 		SearchWebsocketPath:     handler.bootstrap.SearchWebSocketPath,
 		Features:                slices.Clone(handler.bootstrap.Features),
