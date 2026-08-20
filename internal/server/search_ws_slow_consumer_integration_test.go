@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchws"
 	"google.golang.org/protobuf/proto"
@@ -140,18 +140,18 @@ func advanceSlowConsumerPoll(t *testing.T, clock *expirationTestClock) {
 func waitForRealSearchWebSocketState(
 	t *testing.T,
 	fixture *realSearchWebSocketFixture,
-	state opensplunkv1.SearchJobState,
-) *opensplunkv1.GetSearchJobResponse {
+	state opensplunk.SearchJobState,
+) *opensplunk.GetSearchJobResponse {
 	t.Helper()
 	return waitForIntegrationState(
 		t,
 		"search "+fixture.jobID,
 		state.String(),
-		func() (*opensplunkv1.GetSearchJobResponse, string, error) {
-			response := new(opensplunkv1.GetSearchJobResponse)
+		func() (*opensplunk.GetSearchJobResponse, string, error) {
+			response := new(opensplunk.GetSearchJobResponse)
 			fixture.post(
-				"/api/v1/search/jobs/get",
-				&opensplunkv1.GetSearchJobRequest{SearchJobId: fixture.jobID},
+				"/api/search/jobs/get",
+				&opensplunk.GetSearchJobRequest{SearchJobId: fixture.jobID},
 				response,
 			)
 			return response, response.GetSearchJob().GetState().String(), nil
@@ -240,13 +240,13 @@ func TestSearchWebSocketSlowConsumerIsBoundedAndRecoversWithoutBlockingSearch(t 
 			writeGate.requireOpen(t)
 		}
 		if step == queueFrames {
-			var authoritative opensplunkv1.GetSearchJobResponse
+			var authoritative opensplunk.GetSearchJobResponse
 			fixture.post(
-				"/api/v1/search/jobs/get",
-				&opensplunkv1.GetSearchJobRequest{SearchJobId: jobID},
+				"/api/search/jobs/get",
+				&opensplunk.GetSearchJobRequest{SearchJobId: jobID},
 				&authoritative,
 			)
-			if authoritative.GetSearchJob().GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_RUNNING ||
+			if authoritative.GetSearchJob().GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_RUNNING ||
 				authoritative.GetSearchJob().GetProgress().GetScannedRows() != queueFrames ||
 				authoritative.GetSearchJob().GetProgress().GetScannedBytes() != queueFrames*10 ||
 				fixture.executor.calls.Load() != 1 {
@@ -278,19 +278,19 @@ func TestSearchWebSocketSlowConsumerIsBoundedAndRecoversWithoutBlockingSearch(t 
 	}
 	resynchronization := readSearchWebSocketEvent(t, expired).GetResynchronizationRequired()
 	if resynchronization == nil ||
-		resynchronization.GetReason() != opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED ||
+		resynchronization.GetReason() != opensplunk.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED ||
 		resynchronization.GetEarliestAvailableSequence() != acknowledgment.GetEarliestAvailableSequence() ||
 		resynchronization.GetLatestSequence() != acknowledgment.GetLatestSequence() ||
-		resynchronization.GetRecoveryPath() != "/api/v1/search/jobs/get" {
+		resynchronization.GetRecoveryPath() != "/api/search/jobs/get" {
 		t.Fatalf("slow-consumer resynchronization = %+v", resynchronization)
 	}
-	var recoveredSnapshot opensplunkv1.GetSearchJobResponse
+	var recoveredSnapshot opensplunk.GetSearchJobResponse
 	fixture.post(
-		"/api/v1/search/jobs/get",
-		&opensplunkv1.GetSearchJobRequest{SearchJobId: jobID},
+		"/api/search/jobs/get",
+		&opensplunk.GetSearchJobRequest{SearchJobId: jobID},
 		&recoveredSnapshot,
 	)
-	if recoveredSnapshot.GetSearchJob().GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_RUNNING ||
+	if recoveredSnapshot.GetSearchJob().GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_RUNNING ||
 		recoveredSnapshot.GetSearchJob().GetProgress().GetScannedRows() != pressureStep ||
 		recoveredSnapshot.GetSearchJob().GetProgress().GetScannedBytes() != pressureStep*10 ||
 		fixture.executor.calls.Load() != 1 {
@@ -353,7 +353,7 @@ func TestSearchWebSocketSlowConsumerIsBoundedAndRecoversWithoutBlockingSearch(t 
 	completed := waitForRealSearchWebSocketState(
 		t,
 		fixture,
-		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
+		opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
 	)
 	if completed.GetSearchJob().GetProgress().GetScannedRows() != pressureStep+1 ||
 		completed.GetSearchJob().GetProgress().GetScannedBytes() != (pressureStep+1)*10 ||
@@ -368,7 +368,7 @@ func TestSearchWebSocketSlowConsumerIsBoundedAndRecoversWithoutBlockingSearch(t 
 	}
 
 	advanceSlowConsumerPoll(t, clock)
-	var healthyTerminal, recoveredTerminal []*opensplunkv1.SearchWebSocketEvent
+	var healthyTerminal, recoveredTerminal []*opensplunk.SearchWebSocketEvent
 	for range 3 {
 		healthyTerminal = append(healthyTerminal, readSearchWebSocketEvent(t, healthy))
 		recoveredTerminal = append(recoveredTerminal, readSearchWebSocketEvent(t, recovered))
@@ -403,9 +403,9 @@ func TestSearchWebSocketSlowConsumerIsBoundedAndRecoversWithoutBlockingSearch(t 
 			)
 		}
 	}
-	if healthyTerminal[0].GetSearchStateChanged().GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED ||
-		healthyTerminal[1].GetSearchProgress().GetPhase() != opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_COMPLETE ||
-		healthyTerminal[2].GetSearchTerminal().GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED {
+	if healthyTerminal[0].GetSearchStateChanged().GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED ||
+		healthyTerminal[1].GetSearchProgress().GetPhase() != opensplunk.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_COMPLETE ||
+		healthyTerminal[2].GetSearchTerminal().GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED {
 		t.Fatalf("completed terminal projection = %+v", healthyTerminal)
 	}
 

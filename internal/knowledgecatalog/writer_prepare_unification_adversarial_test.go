@@ -6,7 +6,7 @@ import (
 	"slices"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"google.golang.org/protobuf/proto"
@@ -31,16 +31,16 @@ func prepareUnificationRoute(
 ) (preparedMutation, string, proto.Message, error) {
 	actor := prepareUnificationActor()
 	switch typed := request.(type) {
-	case *opensplunkv1.CreateKnowledgeObjectRequest:
+	case *opensplunk.CreateKnowledgeObjectRequest:
 		prepared, err := prepareCreateMutation(scope, actor, typed)
 		return prepared, mutationRouteCreate, prepared.createRequest, err
-	case *opensplunkv1.UpdateKnowledgeObjectRequest:
+	case *opensplunk.UpdateKnowledgeObjectRequest:
 		prepared, err := prepareUpdateMutation(scope, actor, typed)
 		return prepared, mutationRouteUpdate, prepared.updateRequest, err
-	case *opensplunkv1.SetKnowledgeObjectStateRequest:
+	case *opensplunk.SetKnowledgeObjectStateRequest:
 		prepared, err := prepareSetStateMutation(scope, actor, typed)
 		return prepared, mutationRouteSetState, prepared.setStateRequest, err
-	case *opensplunkv1.DeleteKnowledgeObjectRequest:
+	case *opensplunk.DeleteKnowledgeObjectRequest:
 		prepared, err := prepareDeleteMutation(scope, actor, typed)
 		return prepared, mutationRouteDelete, prepared.deleteRequest, err
 	default:
@@ -56,51 +56,51 @@ type prepareUnificationCase struct {
 
 func prepareUnificationCases() []prepareUnificationCase {
 	description := "prepare unification"
-	definition := func() *opensplunkv1.KnowledgeObjectDefinition {
+	definition := func() *opensplunk.KnowledgeObjectDefinition {
 		return aliasDefinition(testApp, "prepare-unify", SharingScopePrivate, &description, "host-a")
 	}
 	return []prepareUnificationCase{
 		{
 			name: "create",
 			build: func(requestID string) proto.Message {
-				return &opensplunkv1.CreateKnowledgeObjectRequest{
+				return &opensplunk.CreateKnowledgeObjectRequest{
 					Definition:      definition(),
-					InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+					InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 					ClientRequestId: requestID,
 				}
 			},
 			scribble: func(request proto.Message) {
-				typed := request.(*opensplunkv1.CreateKnowledgeObjectRequest)
+				typed := request.(*opensplunk.CreateKnowledgeObjectRequest)
 				typed.Definition.Selector.HostPatterns[0].Value = "scribbled"
-				*typed = opensplunkv1.CreateKnowledgeObjectRequest{ClientRequestId: "scribbled-create-00000001"}
+				*typed = opensplunk.CreateKnowledgeObjectRequest{ClientRequestId: "scribbled-create-00000001"}
 			},
 		},
 		{
 			name: "update",
 			build: func(requestID string) proto.Message {
-				return &opensplunkv1.UpdateKnowledgeObjectRequest{
+				return &opensplunk.UpdateKnowledgeObjectRequest{
 					KnowledgeObjectId: "ko-prepare-unify", ExpectedVersion: 7, Definition: definition(),
 					UpdateMask:      &fieldmaskpb.FieldMask{Paths: []string{"description", "name"}},
 					ClientRequestId: requestID,
 				}
 			},
 			scribble: func(request proto.Message) {
-				typed := request.(*opensplunkv1.UpdateKnowledgeObjectRequest)
+				typed := request.(*opensplunk.UpdateKnowledgeObjectRequest)
 				typed.UpdateMask.Paths[0] = "scribbled"
-				*typed = opensplunkv1.UpdateKnowledgeObjectRequest{KnowledgeObjectId: "ko-scribbled"}
+				*typed = opensplunk.UpdateKnowledgeObjectRequest{KnowledgeObjectId: "ko-scribbled"}
 			},
 		},
 		{
 			name: "set state",
 			build: func(requestID string) proto.Message {
-				return &opensplunkv1.SetKnowledgeObjectStateRequest{
+				return &opensplunk.SetKnowledgeObjectStateRequest{
 					KnowledgeObjectId: "ko-prepare-unify", ExpectedVersion: 7,
-					State:           opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+					State:           opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 					ClientRequestId: requestID,
 				}
 			},
 			scribble: func(request proto.Message) {
-				*request.(*opensplunkv1.SetKnowledgeObjectStateRequest) = opensplunkv1.SetKnowledgeObjectStateRequest{
+				*request.(*opensplunk.SetKnowledgeObjectStateRequest) = opensplunk.SetKnowledgeObjectStateRequest{
 					KnowledgeObjectId: "ko-scribbled",
 				}
 			},
@@ -108,12 +108,12 @@ func prepareUnificationCases() []prepareUnificationCase {
 		{
 			name: "delete",
 			build: func(requestID string) proto.Message {
-				return &opensplunkv1.DeleteKnowledgeObjectRequest{
+				return &opensplunk.DeleteKnowledgeObjectRequest{
 					KnowledgeObjectId: "ko-prepare-unify", ExpectedVersion: 7, ClientRequestId: requestID,
 				}
 			},
 			scribble: func(request proto.Message) {
-				*request.(*opensplunkv1.DeleteKnowledgeObjectRequest) = opensplunkv1.DeleteKnowledgeObjectRequest{
+				*request.(*opensplunk.DeleteKnowledgeObjectRequest) = opensplunk.DeleteKnowledgeObjectRequest{
 					KnowledgeObjectId: "ko-scribbled",
 				}
 			},
@@ -203,7 +203,7 @@ func TestPrepareMutationDigestIgnoresKeyAndBindsOwner(t *testing.T) {
 // switch directly with a mismatched payload type and unroutable routes.
 func TestPrepareMutationRequestRejectsRouteTypeConfusion(t *testing.T) {
 	t.Parallel()
-	payload := &opensplunkv1.DeleteKnowledgeObjectRequest{KnowledgeObjectId: "ko-confused", ExpectedVersion: 1}
+	payload := &opensplunk.DeleteKnowledgeObjectRequest{KnowledgeObjectId: "ko-confused", ExpectedVersion: 1}
 	encoded, err := (proto.MarshalOptions{Deterministic: true}).Marshal(payload)
 	if err != nil {
 		t.Fatalf("marshal confusion payload: %v", err)

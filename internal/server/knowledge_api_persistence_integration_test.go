@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -239,42 +239,42 @@ func readKnowledgePersistenceCatalogAuthority(
 func TestKnowledgeHTTPRealPersistenceLifecycleAndExactReplay(t *testing.T) {
 	harness := newKnowledgePersistenceHarness(t, nil)
 
-	createRequest := &opensplunkv1.CreateKnowledgeObjectRequest{
-		Definition:      knowledgeHTTPDefinition(opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE),
-		InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+	createRequest := &opensplunk.CreateKnowledgeObjectRequest{
+		Definition:      knowledgeHTTPDefinition(opensplunk.SharingScope_SHARING_SCOPE_PRIVATE),
+		InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 		ClientRequestId: "persistence-create-0001",
 	}
-	createResponse := &opensplunkv1.CreateKnowledgeObjectResponse{}
+	createResponse := &opensplunk.CreateKnowledgeObjectResponse{}
 	createBytes := knowledgePersistenceOK(
 		t, harness.http, knowledgeObjectsCreatePath, createRequest, createResponse,
 	)
 	objectID := createResponse.GetKnowledgeObject().GetKnowledgeObjectId()
 	if objectID == "" || createResponse.GetKnowledgeObject().GetVersion() != 1 ||
-		createResponse.GetKnowledgeObject().GetState() != opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT ||
+		createResponse.GetKnowledgeObject().GetState() != opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT ||
 		createResponse.GetTenantCatalogRevision() != 1 ||
 		len(createResponse.GetTenantCatalogStateToken()) != 32 {
 		t.Fatalf("create response=%v", createResponse)
 	}
 
-	getResponse := &opensplunkv1.GetKnowledgeObjectResponse{}
+	getResponse := &opensplunk.GetKnowledgeObjectResponse{}
 	knowledgePersistenceOK(
 		t,
 		harness.http,
 		knowledgeObjectsGetPath,
-		&opensplunkv1.GetKnowledgeObjectRequest{KnowledgeObjectId: objectID},
+		&opensplunk.GetKnowledgeObjectRequest{KnowledgeObjectId: objectID},
 		getResponse,
 	)
 	if !proto.Equal(getResponse.GetKnowledgeObject(), createResponse.GetKnowledgeObject()) {
 		t.Fatalf("Get object=%v, want create object=%v", getResponse.GetKnowledgeObject(), createResponse.GetKnowledgeObject())
 	}
 
-	listResponse := &opensplunkv1.ListKnowledgeObjectsResponse{}
+	listResponse := &opensplunk.ListKnowledgeObjectsResponse{}
 	pageSize := uint32(10)
 	knowledgePersistenceOK(
 		t,
 		harness.http,
 		knowledgeObjectsListPath,
-		&opensplunkv1.ListKnowledgeObjectsRequest{Page: &opensplunkv1.PageRequest{
+		&opensplunk.ListKnowledgeObjectsRequest{Page: &opensplunk.PageRequest{
 			PageSize:         &pageSize,
 			IncludeTotalSize: true,
 		}},
@@ -288,17 +288,17 @@ func TestKnowledgeHTTPRealPersistenceLifecycleAndExactReplay(t *testing.T) {
 		t.Fatalf("List response=%v", listResponse)
 	}
 
-	updatedDefinition := proto.Clone(createRequest.GetDefinition()).(*opensplunkv1.KnowledgeObjectDefinition)
+	updatedDefinition := proto.Clone(createRequest.GetDefinition()).(*opensplunk.KnowledgeObjectDefinition)
 	updatedDescription := "updated through the real HTTP persistence boundary"
 	updatedDefinition.Description = &updatedDescription
-	updateRequest := &opensplunkv1.UpdateKnowledgeObjectRequest{
+	updateRequest := &opensplunk.UpdateKnowledgeObjectRequest{
 		KnowledgeObjectId: objectID,
 		ExpectedVersion:   1,
 		Definition:        updatedDefinition,
 		UpdateMask:        &fieldmaskpb.FieldMask{Paths: []string{"description"}},
 		ClientRequestId:   "persistence-update-0001",
 	}
-	updateResponse := &opensplunkv1.UpdateKnowledgeObjectResponse{}
+	updateResponse := &opensplunk.UpdateKnowledgeObjectResponse{}
 	updateBytes := knowledgePersistenceOK(
 		t, harness.http, knowledgeObjectsUpdatePath, updateRequest, updateResponse,
 	)
@@ -308,28 +308,28 @@ func TestKnowledgeHTTPRealPersistenceLifecycleAndExactReplay(t *testing.T) {
 		t.Fatalf("update response=%v", updateResponse)
 	}
 
-	disableRequest := &opensplunkv1.SetKnowledgeObjectStateRequest{
+	disableRequest := &opensplunk.SetKnowledgeObjectStateRequest{
 		KnowledgeObjectId: objectID,
 		ExpectedVersion:   2,
-		State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+		State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 		ClientRequestId:   "persistence-disable-0001",
 	}
-	disableResponse := &opensplunkv1.SetKnowledgeObjectStateResponse{}
+	disableResponse := &opensplunk.SetKnowledgeObjectStateResponse{}
 	disableBytes := knowledgePersistenceOK(
 		t, harness.http, knowledgeObjectsSetStatePath, disableRequest, disableResponse,
 	)
 	if disableResponse.GetKnowledgeObject().GetVersion() != 3 ||
-		disableResponse.GetKnowledgeObject().GetState() != opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED ||
+		disableResponse.GetKnowledgeObject().GetState() != opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED ||
 		disableResponse.GetTenantCatalogRevision() != 3 {
 		t.Fatalf("disable response=%v", disableResponse)
 	}
 
-	deleteRequest := &opensplunkv1.DeleteKnowledgeObjectRequest{
+	deleteRequest := &opensplunk.DeleteKnowledgeObjectRequest{
 		KnowledgeObjectId: objectID,
 		ExpectedVersion:   3,
 		ClientRequestId:   "persistence-delete-0001",
 	}
-	deleteResponse := &opensplunkv1.DeleteKnowledgeObjectResponse{}
+	deleteResponse := &opensplunk.DeleteKnowledgeObjectResponse{}
 	deleteBytes := knowledgePersistenceOK(
 		t, harness.http, knowledgeObjectsDeletePath, deleteRequest, deleteResponse,
 	)
@@ -345,10 +345,10 @@ func TestKnowledgeHTTPRealPersistenceLifecycleAndExactReplay(t *testing.T) {
 		response proto.Message
 		want     []byte
 	}{
-		{knowledgeObjectsCreatePath, createRequest, &opensplunkv1.CreateKnowledgeObjectResponse{}, createBytes},
-		{knowledgeObjectsUpdatePath, updateRequest, &opensplunkv1.UpdateKnowledgeObjectResponse{}, updateBytes},
-		{knowledgeObjectsSetStatePath, disableRequest, &opensplunkv1.SetKnowledgeObjectStateResponse{}, disableBytes},
-		{knowledgeObjectsDeletePath, deleteRequest, &opensplunkv1.DeleteKnowledgeObjectResponse{}, deleteBytes},
+		{knowledgeObjectsCreatePath, createRequest, &opensplunk.CreateKnowledgeObjectResponse{}, createBytes},
+		{knowledgeObjectsUpdatePath, updateRequest, &opensplunk.UpdateKnowledgeObjectResponse{}, updateBytes},
+		{knowledgeObjectsSetStatePath, disableRequest, &opensplunk.SetKnowledgeObjectStateResponse{}, disableBytes},
+		{knowledgeObjectsDeletePath, deleteRequest, &opensplunk.DeleteKnowledgeObjectResponse{}, deleteBytes},
 	}
 	for _, replay := range replays {
 		got := knowledgePersistenceOK(t, harness.http, replay.path, replay.request, replay.response)
@@ -479,18 +479,18 @@ func TestKnowledgeHTTPRealPersistenceLifecycleAndExactReplay(t *testing.T) {
 
 func TestKnowledgeHTTPRealStaleVersionJournalsCurrentAuthorizedContext(t *testing.T) {
 	harness := newKnowledgePersistenceHarness(t, nil)
-	create := &opensplunkv1.CreateKnowledgeObjectResponse{}
-	knowledgePersistenceOK(t, harness.http, knowledgeObjectsCreatePath, &opensplunkv1.CreateKnowledgeObjectRequest{
-		Definition:      knowledgeHTTPDefinition(opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE),
-		InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+	create := &opensplunk.CreateKnowledgeObjectResponse{}
+	knowledgePersistenceOK(t, harness.http, knowledgeObjectsCreatePath, &opensplunk.CreateKnowledgeObjectRequest{
+		Definition:      knowledgeHTTPDefinition(opensplunk.SharingScope_SHARING_SCOPE_PRIVATE),
+		InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 		ClientRequestId: "stale-context-create-0001",
 	}, create)
 	objectID := create.GetKnowledgeObject().GetKnowledgeObjectId()
-	definition := proto.Clone(create.GetKnowledgeObject().GetDefinition()).(*opensplunkv1.KnowledgeObjectDefinition)
+	definition := proto.Clone(create.GetKnowledgeObject().GetDefinition()).(*opensplunk.KnowledgeObjectDefinition)
 	description := "this contender must not publish"
 	definition.Description = &description
 
-	response := knowledgeHTTPPost(t, harness.http, knowledgeObjectsUpdatePath, &opensplunkv1.UpdateKnowledgeObjectRequest{
+	response := knowledgeHTTPPost(t, harness.http, knowledgeObjectsUpdatePath, &opensplunk.UpdateKnowledgeObjectRequest{
 		KnowledgeObjectId: objectID,
 		ExpectedVersion:   2,
 		Definition:        definition,
@@ -542,8 +542,8 @@ type knowledgePersistenceRedactingWriter struct {
 func (writer knowledgePersistenceRedactingWriter) Create(
 	context.Context,
 	knowledgecatalog.WriteScope,
-	*opensplunkv1.CreateKnowledgeObjectRequest,
-) (*opensplunkv1.CreateKnowledgeObjectResponse, error) {
+	*opensplunk.CreateKnowledgeObjectRequest,
+) (*opensplunk.CreateKnowledgeObjectResponse, error) {
 	err := fmt.Errorf(
 		"redacted persistence detail must never cross HTTP: %w",
 		knowledgecatalog.ErrIdempotentOutcomeRedacted,
@@ -564,7 +564,7 @@ func TestKnowledgeHTTPMissingHiddenAndRedactedAreIndistinguishable(t *testing.T)
 	if err != nil {
 		t.Fatalf("audit.WithActor: %v", err)
 	}
-	hiddenDefinition := knowledgeHTTPDefinition(opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE)
+	hiddenDefinition := knowledgeHTTPDefinition(opensplunk.SharingScope_SHARING_SCOPE_PRIVATE)
 	hiddenDefinition.Name = "hidden-persistence-secret-name"
 	hidden, err := harness.writer.Create(
 		actorContext,
@@ -573,9 +573,9 @@ func TestKnowledgeHTTPMissingHiddenAndRedactedAreIndistinguishable(t *testing.T)
 			OwnerID:        "hidden-persistence-owner",
 			WritableAppIDs: []string{knowledgeHTTPAppID},
 		},
-		&opensplunkv1.CreateKnowledgeObjectRequest{
+		&opensplunk.CreateKnowledgeObjectRequest{
 			Definition:      hiddenDefinition,
-			InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+			InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 			ClientRequestId: "hidden-object-create-0001",
 		},
 	)
@@ -584,10 +584,10 @@ func TestKnowledgeHTTPMissingHiddenAndRedactedAreIndistinguishable(t *testing.T)
 	}
 	hiddenID := hidden.GetKnowledgeObject().GetKnowledgeObjectId()
 
-	missing := knowledgeHTTPPost(t, harness.http, knowledgeObjectsGetPath, &opensplunkv1.GetKnowledgeObjectRequest{
+	missing := knowledgeHTTPPost(t, harness.http, knowledgeObjectsGetPath, &opensplunk.GetKnowledgeObjectRequest{
 		KnowledgeObjectId: "ko-missing-persistence-secret",
 	})
-	hiddenResponse := knowledgeHTTPPost(t, harness.http, knowledgeObjectsGetPath, &opensplunkv1.GetKnowledgeObjectRequest{
+	hiddenResponse := knowledgeHTTPPost(t, harness.http, knowledgeObjectsGetPath, &opensplunk.GetKnowledgeObjectRequest{
 		KnowledgeObjectId: hiddenID,
 	})
 
@@ -599,9 +599,9 @@ func TestKnowledgeHTTPMissingHiddenAndRedactedAreIndistinguishable(t *testing.T)
 		harness.apps,
 		harness.attempts,
 	)
-	redacted := knowledgeHTTPPost(t, redactedHTTP, knowledgeObjectsCreatePath, &opensplunkv1.CreateKnowledgeObjectRequest{
-		Definition:      knowledgeHTTPDefinition(opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE),
-		InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+	redacted := knowledgeHTTPPost(t, redactedHTTP, knowledgeObjectsCreatePath, &opensplunk.CreateKnowledgeObjectRequest{
+		Definition:      knowledgeHTTPDefinition(opensplunk.SharingScope_SHARING_SCOPE_PRIVATE),
+		InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 		ClientRequestId: "redacted-replay-0001",
 	})
 
@@ -687,9 +687,9 @@ func TestKnowledgeHTTPSuccessAuditFailureRollsBackAndJournalsRejection(t *testin
 		beforeAuthority.projectionBytes != 0 {
 		t.Fatalf("initial provisioned catalog authority=%+v", beforeAuthority)
 	}
-	response := knowledgeHTTPPost(t, harness.http, knowledgeObjectsCreatePath, &opensplunkv1.CreateKnowledgeObjectRequest{
-		Definition:      knowledgeHTTPDefinition(opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE),
-		InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+	response := knowledgeHTTPPost(t, harness.http, knowledgeObjectsCreatePath, &opensplunk.CreateKnowledgeObjectRequest{
+		Definition:      knowledgeHTTPDefinition(opensplunk.SharingScope_SHARING_SCOPE_PRIVATE),
+		InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 		ClientRequestId: "audit-failure-create-0001",
 	})
 	if response.Code != http.StatusServiceUnavailable ||
@@ -756,7 +756,7 @@ func TestKnowledgeHTTPRejectedAttemptJournalFailureReturnsFixedUnavailable(t *te
 		t,
 		httpHandler,
 		knowledgeObjectsCreatePath,
-		&opensplunkv1.CreateKnowledgeObjectRequest{ClientRequestId: "invalid-before-writer-0001"},
+		&opensplunk.CreateKnowledgeObjectRequest{ClientRequestId: "invalid-before-writer-0001"},
 	)
 	if response.Code != http.StatusServiceUnavailable ||
 		response.Body.String() != knowledgeManagementUnavailableBody {

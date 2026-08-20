@@ -14,7 +14,7 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
@@ -810,15 +810,15 @@ func chartBreakStoreFixture(t *testing.T, ctx context.Context, store *Store, ind
 	info := "INFO"
 	var events []*ingest.StoredEvent
 	counter := 0
-	add := func(source string, fields ...*opensplunkv1.TypedObjectField) {
+	add := func(source string, fields ...*opensplunk.TypedObjectField) {
 		counter++
 		events = append(events, chartBreakEvent(fmt.Sprintf("%s-%d", source, counter), source, "api", chartBreakBase, &info,
-			opensplunkv1.LogSeverity_LOG_SEVERITY_INFO, fields...))
+			opensplunk.LogSeverity_LOG_SEVERITY_INFO, fields...))
 	}
-	path := func(value string) *opensplunkv1.TypedObjectField {
+	path := func(value string) *opensplunk.TypedObjectField {
 		return typedField("path", typedString(value))
 	}
-	series := func(value string) *opensplunkv1.TypedObjectField {
+	series := func(value string) *opensplunk.TypedObjectField {
 		return typedField("series", typedString(value))
 	}
 
@@ -928,7 +928,7 @@ func chartBreakStoreFixture(t *testing.T, ctx context.Context, store *Store, ind
 	add("bp-rowmodes", series("frommissing"))
 
 	// Every dynamic storage type as a row value, including tagged envelopes.
-	for _, value := range []*opensplunkv1.TypedValue{
+	for _, value := range []*opensplunk.TypedValue{
 		typedString("s"),
 		typedSint(-5),
 		typedUint(7),
@@ -979,13 +979,13 @@ func chartBreakStoreFixture(t *testing.T, ctx context.Context, store *Store, ind
 	for _, raw := range []string{"9", "10", "é", "\U0001f600", "abc"} {
 		counter++
 		event := chartBreakEvent(fmt.Sprintf("bp-raw-unicode-%d", counter), "bp-raw-unicode", "api",
-			chartBreakBase, &info, opensplunkv1.LogSeverity_LOG_SEVERITY_INFO, series("INFO"))
+			chartBreakBase, &info, opensplunk.LogSeverity_LOG_SEVERITY_INFO, series("INFO"))
 		event.Event.Raw = []byte(raw)
 		events = append(events, event)
 	}
 	counter++
 	rawNamed := chartBreakEvent("bp-raw-rowname-1", "bp-raw-rowname", "api", chartBreakBase, &info,
-		opensplunkv1.LogSeverity_LOG_SEVERITY_INFO, series("_raw"))
+		opensplunk.LogSeverity_LOG_SEVERITY_INFO, series("_raw"))
 	rawNamed.Event.Raw = []byte("bp-raw-rowname-1")
 	events = append(events, rawNamed)
 
@@ -1037,27 +1037,27 @@ func chartBreakEvent(
 	id, source, host string,
 	at time.Time,
 	level *string,
-	severity opensplunkv1.LogSeverity,
-	fields ...*opensplunkv1.TypedObjectField,
+	severity opensplunk.LogSeverity,
+	fields ...*opensplunk.TypedObjectField,
 ) *ingest.StoredEvent {
 	return &ingest.StoredEvent{
 		TenantID:    chartBreakTenant,
 		CollectorID: "collector",
 		BatchID:     "chart-break-batch",
 		IndexTime:   time.Date(2026, time.July, 21, 4, 0, 0, 0, time.UTC),
-		Event: &opensplunkv1.LogEvent{
+		Event: &opensplunk.LogEvent{
 			EventId:         id,
 			IndexName:       chartBreakIndex,
 			EventTime:       timestamppb.New(at),
 			CollectedAt:     timestamppb.New(at),
-			EventTimeSource: opensplunkv1.EventTimeSource_EVENT_TIME_SOURCE_PARSED,
+			EventTimeSource: opensplunk.EventTimeSource_EVENT_TIME_SOURCE_PARSED,
 			Host:            host,
 			Source:          source,
 			Sourcetype:      "go:zap:json",
 			Severity:        severity,
 			Level:           level,
 			Raw:             []byte(id),
-			RawEncoding:     opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+			RawEncoding:     opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 			Message:         new("Request metrics"),
 			Fields:          typedObjectValue(fields...),
 		},

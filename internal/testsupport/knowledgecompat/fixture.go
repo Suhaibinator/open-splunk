@@ -19,9 +19,9 @@ import (
 	"testing"
 )
 
-const CompatibilityVersion = "0.1"
+const FormatVersion = uint32(1)
 
-// Owner is the closed package-level authority taxonomy for the v0.1 corpus.
+// Owner is the closed package-level authority taxonomy for the corpus.
 type Owner string
 
 const (
@@ -76,10 +76,10 @@ type Case struct {
 	Authority Authority `json:"authority"`
 }
 
-// Fixture is the complete v0.1 corpus.
+// Fixture is the complete knowledge-behavior corpus.
 type Fixture struct {
-	CompatibilityVersion string `json:"compatibility_version"`
-	Cases                []Case `json:"cases"`
+	FormatVersion uint32 `json:"format_version"`
+	Cases         []Case `json:"cases"`
 }
 
 // WantCase pins the exact normative identity, stage, and typed-result label
@@ -191,11 +191,11 @@ func Load(t testing.TB) Fixture {
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		t.Fatalf("decode trailing knowledge compatibility fixture data: %v", err)
 	}
-	if fixture.CompatibilityVersion != CompatibilityVersion {
+	if fixture.FormatVersion != FormatVersion {
 		t.Fatalf(
-			"knowledge compatibility version = %q, want %q",
-			fixture.CompatibilityVersion,
-			CompatibilityVersion,
+			"knowledge corpus format = %d, want %d",
+			fixture.FormatVersion,
+			FormatVersion,
 		)
 	}
 	if len(fixture.Cases) != 55 {
@@ -251,6 +251,6 @@ func fixturePath() string {
 		"..",
 		"knowledge",
 		"testdata",
-		"compatibility-v0.1.json",
+		"compatibility.json",
 	))
 }

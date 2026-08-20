@@ -472,8 +472,7 @@ func TestValidateReleaseIdentityProvidesReusableAndScopedErrors(t *testing.T) {
 	t.Parallel()
 
 	valid := ReleaseIdentity{
-		ApplicationVersion: "0.1.0",
-		SourceRevision:     "development",
+		SourceRevision: "development",
 		SQLiteMigrations: MigrationIdentity{
 			SHA256: strings.Repeat("1", sha256.Size*2), LatestVersion: 1,
 		},
@@ -584,7 +583,7 @@ func TestVerifyRejectsTamperingExtraMembersAndDifferentReleaseWithoutSecrets(t *
 				t.Fatal(err)
 			}
 		},
-		"different release": func(_ *testing.T, fixture *recoveryFixture) {
+		"different source": func(_ *testing.T, fixture *recoveryFixture) {
 			fixture.release.SourceRevision = strings.Repeat("f", 40)
 		},
 	} {
@@ -1483,8 +1482,7 @@ func newRecoveryFixture(t *testing.T) *recoveryFixture {
 		masterKey:          append([]byte(nil), masterKey...),
 		administratorToken: append([]byte(nil), administratorToken...),
 		release: ReleaseIdentity{
-			ApplicationVersion: "0.1.0",
-			SourceRevision:     "development",
+			SourceRevision: "development",
 			SQLiteMigrations: MigrationIdentity{
 				SHA256: strings.Repeat("1", sha256.Size*2), LatestVersion: migrationIdentity.LatestVersion,
 			},

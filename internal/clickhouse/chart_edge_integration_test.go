@@ -11,7 +11,7 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
@@ -735,7 +735,7 @@ func chartEdgeStoreFixture(t *testing.T, ctx context.Context, store *Store, inde
 	for _, entry := range chartEdgeColumnFixture {
 		for range entry.repeat {
 			counter++
-			fields := []*opensplunkv1.TypedObjectField{typedField("path", typedString(entry.path))}
+			fields := []*opensplunk.TypedObjectField{typedField("path", typedString(entry.path))}
 			if entry.series != "" {
 				fields = append(fields, typedField("series", typedString(entry.series)))
 			}
@@ -761,13 +761,13 @@ func chartEdgeStoreFixture(t *testing.T, ctx context.Context, store *Store, inde
 	// field carries it; the fixed severity column varies alongside so the same
 	// scenario also discretizes a promoted numeric column.
 	add(chartEdgeSeverityEvent("bin-5", chartEdgeBase, &info,
-		opensplunkv1.LogSeverity_LOG_SEVERITY_TRACE, typedField("sev", typedUint(5))))
+		opensplunk.LogSeverity_LOG_SEVERITY_TRACE, typedField("sev", typedUint(5))))
 	add(chartEdgeSeverityEvent("bin-12", chartEdgeBase, &err0,
-		opensplunkv1.LogSeverity_LOG_SEVERITY_ERROR, typedField("sev", typedUint(12))))
+		opensplunk.LogSeverity_LOG_SEVERITY_ERROR, typedField("sev", typedUint(12))))
 	add(chartEdgeSeverityEvent("bin-15", chartEdgeBase, &err0,
-		opensplunkv1.LogSeverity_LOG_SEVERITY_INFO, typedField("sev", typedUint(15))))
+		opensplunk.LogSeverity_LOG_SEVERITY_INFO, typedField("sev", typedUint(15))))
 	add(chartEdgeSeverityEvent("bin-27", chartEdgeBase, &info,
-		opensplunkv1.LogSeverity_LOG_SEVERITY_FATAL, typedField("sev", typedUint(27))))
+		opensplunk.LogSeverity_LOG_SEVERITY_FATAL, typedField("sev", typedUint(27))))
 	add(chartEdgeEvent("bin-mixed-number", "chart-bin-mixed", chartEdgeBase, &info, typedField("sev", typedSint(12))))
 	add(chartEdgeEvent("bin-mixed-text", "chart-bin-mixed", chartEdgeBase, &err0, typedField("sev", typedString("12"))))
 
@@ -815,7 +815,7 @@ func chartEdgeStoreFixture(t *testing.T, ctx context.Context, store *Store, inde
 	// command, and must not depend on which field names the row axis.
 	for _, scenario := range []struct {
 		source string
-		probe  *opensplunkv1.TypedValue
+		probe  *opensplunk.TypedValue
 	}{
 		{"chart-rowless-list", typedList(typedString("a"), typedString("b"))},
 		{"chart-rowless-number", typedSint(7)},
@@ -859,9 +859,9 @@ func chartEdgeStoreFixture(t *testing.T, ctx context.Context, store *Store, inde
 	// R1: _raw is the one field whose stats BY group column is Mixed rather
 	// than String, because ingest accepts non-UTF-8 raw bytes.
 	add(chartEdgeRawEvent("raw-utf8", "chart-raw", chartEdgeBase, &info,
-		[]byte("plain ascii raw"), opensplunkv1.RawEncoding_RAW_ENCODING_UTF8))
+		[]byte("plain ascii raw"), opensplunk.RawEncoding_RAW_ENCODING_UTF8))
 	add(chartEdgeRawEvent("raw-binary", "chart-raw", chartEdgeBase, &err0,
-		[]byte{0x61, 0xff, 0xfe, 0x62}, opensplunkv1.RawEncoding_RAW_ENCODING_BINARY))
+		[]byte{0x61, 0xff, 0xfe, 0x62}, opensplunk.RawEncoding_RAW_ENCODING_BINARY))
 
 	// L1: one more distinct row value than the ceiling admits. The host column
 	// carves the admitted boundary out of the same scenario.
@@ -871,7 +871,7 @@ func chartEdgeStoreFixture(t *testing.T, ctx context.Context, store *Store, inde
 			host = "extra"
 		}
 		add(chartEdgeEventHost(fmt.Sprintf("overflow-%d", index), "chart-overflow", host, chartEdgeBase, &info,
-			opensplunkv1.LogSeverity_LOG_SEVERITY_INFO, typedField("path", typedString(fmt.Sprintf("r%05d", index)))))
+			opensplunk.LogSeverity_LOG_SEVERITY_INFO, typedField("path", typedString(fmt.Sprintf("r%05d", index)))))
 	}
 
 	chartEdgeStoreBatches(t, ctx, store, indexTime, events)
@@ -915,10 +915,10 @@ func chartEdgeEvent(
 	id, source string,
 	at time.Time,
 	level *string,
-	fields ...*opensplunkv1.TypedObjectField,
+	fields ...*opensplunk.TypedObjectField,
 ) *ingest.StoredEvent {
 	return chartEdgeEventHost(id, source, "api", at, level,
-		opensplunkv1.LogSeverity_LOG_SEVERITY_INFO, fields...)
+		opensplunk.LogSeverity_LOG_SEVERITY_INFO, fields...)
 }
 
 // chartEdgeRawEvent writes an event whose _raw carries exactly the given bytes
@@ -929,7 +929,7 @@ func chartEdgeRawEvent(
 	at time.Time,
 	level *string,
 	raw []byte,
-	encoding opensplunkv1.RawEncoding,
+	encoding opensplunk.RawEncoding,
 ) *ingest.StoredEvent {
 	event := chartEdgeEvent(id, source, at, level)
 	event.Event.Raw = raw
@@ -941,8 +941,8 @@ func chartEdgeSeverityEvent(
 	id string,
 	at time.Time,
 	level *string,
-	severity opensplunkv1.LogSeverity,
-	fields ...*opensplunkv1.TypedObjectField,
+	severity opensplunk.LogSeverity,
+	fields ...*opensplunk.TypedObjectField,
 ) *ingest.StoredEvent {
 	return chartEdgeEventHost(id, "chart-bin", "api", at, level, severity, fields...)
 }
@@ -951,27 +951,27 @@ func chartEdgeEventHost(
 	id, source, host string,
 	at time.Time,
 	level *string,
-	severity opensplunkv1.LogSeverity,
-	fields ...*opensplunkv1.TypedObjectField,
+	severity opensplunk.LogSeverity,
+	fields ...*opensplunk.TypedObjectField,
 ) *ingest.StoredEvent {
 	return &ingest.StoredEvent{
 		TenantID:    chartEdgeTenant,
 		CollectorID: "collector",
 		BatchID:     "chart-batch",
 		IndexTime:   time.Date(2026, time.July, 21, 4, 0, 0, 0, time.UTC),
-		Event: &opensplunkv1.LogEvent{
+		Event: &opensplunk.LogEvent{
 			EventId:         id,
 			IndexName:       chartEdgeIndex,
 			EventTime:       timestamppb.New(at),
 			CollectedAt:     timestamppb.New(at),
-			EventTimeSource: opensplunkv1.EventTimeSource_EVENT_TIME_SOURCE_PARSED,
+			EventTimeSource: opensplunk.EventTimeSource_EVENT_TIME_SOURCE_PARSED,
 			Host:            host,
 			Source:          source,
 			Sourcetype:      "go:zap:json",
 			Severity:        severity,
 			Level:           level,
 			Raw:             []byte(id),
-			RawEncoding:     opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+			RawEncoding:     opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 			Message:         new("Request metrics"),
 			Fields:          typedObjectValue(fields...),
 		},

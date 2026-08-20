@@ -14,7 +14,7 @@ import (
 	"github.com/Suhaibinator/SRouter/pkg/codec"
 	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/protostrict"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
@@ -40,30 +40,30 @@ const (
 
 func (handler *apiHandler) searchHistoryRoutes(noAuth router.AuthLevel, smallRequestBytes int64) []protobufRouteDefinition {
 	return []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute[*opensplunkv1.GetSearchHistoryEntryRequest, *opensplunkv1.GetSearchHistoryEntryResponse](router.RouteConfig[*opensplunkv1.GetSearchHistoryEntryRequest, *opensplunkv1.GetSearchHistoryEntryResponse]{
+		newForwardCompatibleProtoRoute[*opensplunk.GetSearchHistoryEntryRequest, *opensplunk.GetSearchHistoryEntryResponse](router.RouteConfig[*opensplunk.GetSearchHistoryEntryRequest, *opensplunk.GetSearchHistoryEntryResponse]{
 			Path: "/search/history/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunkv1.GetSearchHistoryEntryRequest, *opensplunkv1.GetSearchHistoryEntryResponse](), Handler: handler.getSearchHistoryEntry,
+			Codec: codec.NewProtoCodec[*opensplunk.GetSearchHistoryEntryRequest, *opensplunk.GetSearchHistoryEntryResponse](), Handler: handler.getSearchHistoryEntry,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunkv1.ListSearchHistoryRequest, *serializedSearchHistoryListResponse](router.RouteConfig[*opensplunkv1.ListSearchHistoryRequest, *serializedSearchHistoryListResponse]{
+		newForwardCompatibleProtoRoute[*opensplunk.ListSearchHistoryRequest, *serializedSearchHistoryListResponse](router.RouteConfig[*opensplunk.ListSearchHistoryRequest, *serializedSearchHistoryListResponse]{
 			Path: "/search/history/list", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedSearchHistoryListCodec(), Handler: handler.listSearchHistory,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunkv1.DeleteSearchHistoryEntryRequest, *opensplunkv1.DeleteSearchHistoryEntryResponse](router.RouteConfig[*opensplunkv1.DeleteSearchHistoryEntryRequest, *opensplunkv1.DeleteSearchHistoryEntryResponse]{
+		newForwardCompatibleProtoRoute[*opensplunk.DeleteSearchHistoryEntryRequest, *opensplunk.DeleteSearchHistoryEntryResponse](router.RouteConfig[*opensplunk.DeleteSearchHistoryEntryRequest, *opensplunk.DeleteSearchHistoryEntryResponse]{
 			Path: "/search/history/delete", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunkv1.DeleteSearchHistoryEntryRequest, *opensplunkv1.DeleteSearchHistoryEntryResponse](), Handler: handler.deleteSearchHistoryEntry,
+			Codec: codec.NewProtoCodec[*opensplunk.DeleteSearchHistoryEntryRequest, *opensplunk.DeleteSearchHistoryEntryResponse](), Handler: handler.deleteSearchHistoryEntry,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunkv1.ClearSearchHistoryRequest, *opensplunkv1.ClearSearchHistoryResponse](router.RouteConfig[*opensplunkv1.ClearSearchHistoryRequest, *opensplunkv1.ClearSearchHistoryResponse]{
+		newForwardCompatibleProtoRoute[*opensplunk.ClearSearchHistoryRequest, *opensplunk.ClearSearchHistoryResponse](router.RouteConfig[*opensplunk.ClearSearchHistoryRequest, *opensplunk.ClearSearchHistoryResponse]{
 			Path: "/search/history/clear", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunkv1.ClearSearchHistoryRequest, *opensplunkv1.ClearSearchHistoryResponse](), Handler: handler.clearSearchHistory,
+			Codec: codec.NewProtoCodec[*opensplunk.ClearSearchHistoryRequest, *opensplunk.ClearSearchHistoryResponse](), Handler: handler.clearSearchHistory,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
 	}
 }
 
-func (handler *apiHandler) getSearchHistoryEntry(request *http.Request, input *opensplunkv1.GetSearchHistoryEntryRequest) (*opensplunkv1.GetSearchHistoryEntryResponse, error) {
+func (handler *apiHandler) getSearchHistoryEntry(request *http.Request, input *opensplunk.GetSearchHistoryEntryRequest) (*opensplunk.GetSearchHistoryEntryResponse, error) {
 	if err := validateHistoryRequest(input); err != nil {
 		return nil, badRequestError(err.Error())
 	}
@@ -82,14 +82,14 @@ func (handler *apiHandler) getSearchHistoryEntry(request *http.Request, input *o
 	if err := searchHistoryRequestContextError(request.Context()); err != nil {
 		return nil, err
 	}
-	response := &opensplunkv1.GetSearchHistoryEntryResponse{HistoryEntry: converted}
+	response := &opensplunk.GetSearchHistoryEntryResponse{HistoryEntry: converted}
 	if proto.Size(response) > maximumHistoryListResponseBytes {
 		return nil, internalError()
 	}
 	return response, nil
 }
 
-func (handler *apiHandler) listSearchHistory(request *http.Request, input *opensplunkv1.ListSearchHistoryRequest) (*serializedSearchHistoryListResponse, error) {
+func (handler *apiHandler) listSearchHistory(request *http.Request, input *opensplunk.ListSearchHistoryRequest) (*serializedSearchHistoryListResponse, error) {
 	if err := validateHistoryRequest(input); err != nil {
 		return nil, badRequestError(err.Error())
 	}
@@ -137,7 +137,7 @@ func (handler *apiHandler) listSearchHistory(request *http.Request, input *opens
 		return nil, internalError()
 	}
 
-	entries := make([]*opensplunkv1.SearchHistoryEntry, len(result.Entries))
+	entries := make([]*opensplunk.SearchHistoryEntry, len(result.Entries))
 	for index, entry := range result.Entries {
 		if err := searchHistoryRequestContextError(request.Context()); err != nil {
 			return nil, err
@@ -155,7 +155,7 @@ func (handler *apiHandler) listSearchHistory(request *http.Request, input *opens
 	if err != nil {
 		return nil, internalError()
 	}
-	message := &opensplunkv1.ListSearchHistoryResponse{HistoryEntries: entries, Page: page}
+	message := &opensplunk.ListSearchHistoryResponse{HistoryEntries: entries, Page: page}
 	if proto.Size(message) > maximumHistoryListResponseBytes {
 		return nil, internalError()
 	}
@@ -166,7 +166,7 @@ func (handler *apiHandler) listSearchHistory(request *http.Request, input *opens
 	return &serializedSearchHistoryListResponse{message: message, ctx: request.Context(), release: release}, nil
 }
 
-func (handler *apiHandler) deleteSearchHistoryEntry(request *http.Request, input *opensplunkv1.DeleteSearchHistoryEntryRequest) (*opensplunkv1.DeleteSearchHistoryEntryResponse, error) {
+func (handler *apiHandler) deleteSearchHistoryEntry(request *http.Request, input *opensplunk.DeleteSearchHistoryEntryRequest) (*opensplunk.DeleteSearchHistoryEntryResponse, error) {
 	if err := validateHistoryRequest(input); err != nil {
 		return nil, badRequestError(err.Error())
 	}
@@ -177,10 +177,10 @@ func (handler *apiHandler) deleteSearchHistoryEntry(request *http.Request, input
 	if err := handler.searchHistory.Delete(request.Context(), handler.searchHistoryScope(), searchJobID); err != nil {
 		return nil, mapSearchHistoryCallError(request.Context(), err)
 	}
-	return &opensplunkv1.DeleteSearchHistoryEntryResponse{SearchJobId: searchJobID}, nil
+	return &opensplunk.DeleteSearchHistoryEntryResponse{SearchJobId: searchJobID}, nil
 }
 
-func (handler *apiHandler) clearSearchHistory(request *http.Request, input *opensplunkv1.ClearSearchHistoryRequest) (*opensplunkv1.ClearSearchHistoryResponse, error) {
+func (handler *apiHandler) clearSearchHistory(request *http.Request, input *opensplunk.ClearSearchHistoryRequest) (*opensplunk.ClearSearchHistoryResponse, error) {
 	if err := validateHistoryRequest(input); err != nil {
 		return nil, badRequestError(err.Error())
 	}
@@ -195,14 +195,14 @@ func (handler *apiHandler) clearSearchHistory(request *http.Request, input *open
 	if err := mapSearchHistoryCallError(request.Context(), err); err != nil {
 		return nil, err
 	}
-	return &opensplunkv1.ClearSearchHistoryResponse{DeletedCount: deleted}, nil
+	return &opensplunk.ClearSearchHistoryResponse{DeletedCount: deleted}, nil
 }
 
 func (handler *apiHandler) searchHistoryScope() searchhistory.AccessScope {
 	return searchhistory.AccessScope{TenantID: handler.tenantID, OwnerID: handler.ownerID}
 }
 
-func (handler *apiHandler) historyPageRequest(page *opensplunkv1.PageRequest) (uint32, string, bool, error) {
+func (handler *apiHandler) historyPageRequest(page *opensplunk.PageRequest) (uint32, string, bool, error) {
 	pageSize, pageToken, includeTotal, err := handler.pageRequest(page)
 	if err != nil {
 		return 0, "", false, err
@@ -222,7 +222,7 @@ func effectiveHistoryPageSize(requested, configuredMaximum uint32) uint32 {
 	return min(configuredMaximum, maximumHistoryRowsPerResponse)
 }
 
-func historyFilter(input *opensplunkv1.SearchHistoryFilter) (searchhistory.Filter, error) {
+func historyFilter(input *opensplunk.SearchHistoryFilter) (searchhistory.Filter, error) {
 	if input == nil {
 		return searchhistory.Filter{}, nil
 	}
@@ -266,12 +266,12 @@ func historyFilter(input *opensplunkv1.SearchHistoryFilter) (searchhistory.Filte
 	}, nil
 }
 
-func historyStateFilters(input []opensplunkv1.SearchJobState) ([]opensplunkv1.SearchJobState, error) {
+func historyStateFilters(input []opensplunk.SearchJobState) ([]opensplunk.SearchJobState, error) {
 	if len(input) > 4 {
 		return nil, errors.New("state filters cannot contain more than four values")
 	}
-	result := make([]opensplunkv1.SearchJobState, 0, len(input))
-	seen := make(map[opensplunkv1.SearchJobState]struct{}, len(input))
+	result := make([]opensplunk.SearchJobState, 0, len(input))
+	seen := make(map[opensplunk.SearchJobState]struct{}, len(input))
 	for _, state := range input {
 		if !terminalHistoryState(state) {
 			return nil, errors.New("state filter must be terminal")
@@ -299,20 +299,20 @@ func historyFilterTime(name string, timestamp *timestamppb.Timestamp) (*time.Tim
 	return &value, nil
 }
 
-func validateHistorySort(sortBy opensplunkv1.SearchHistorySortBy, direction opensplunkv1.SortDirection) error {
+func validateHistorySort(sortBy opensplunk.SearchHistorySortBy, direction opensplunk.SortDirection) error {
 	switch sortBy {
-	case opensplunkv1.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_UNSPECIFIED,
-		opensplunkv1.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_CREATED_AT,
-		opensplunkv1.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_FINISHED_AT,
-		opensplunkv1.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_DURATION,
-		opensplunkv1.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_MATCHED_EVENTS:
+	case opensplunk.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_UNSPECIFIED,
+		opensplunk.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_CREATED_AT,
+		opensplunk.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_FINISHED_AT,
+		opensplunk.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_DURATION,
+		opensplunk.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_MATCHED_EVENTS:
 	default:
 		return errors.New("search-history sort field is invalid")
 	}
 	switch direction {
-	case opensplunkv1.SortDirection_SORT_DIRECTION_UNSPECIFIED,
-		opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING,
-		opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING:
+	case opensplunk.SortDirection_SORT_DIRECTION_UNSPECIFIED,
+		opensplunk.SortDirection_SORT_DIRECTION_ASCENDING,
+		opensplunk.SortDirection_SORT_DIRECTION_DESCENDING:
 		return nil
 	default:
 		return errors.New("sort direction is invalid")
@@ -327,7 +327,7 @@ func historySearchJobID(input string) (string, error) {
 	return value, nil
 }
 
-func cloneSearchHistoryEntry(input *opensplunkv1.SearchHistoryEntry) (*opensplunkv1.SearchHistoryEntry, error) {
+func cloneSearchHistoryEntry(input *opensplunk.SearchHistoryEntry) (*opensplunk.SearchHistoryEntry, error) {
 	if input == nil {
 		return nil, errors.New("search history service returned an invalid entry")
 	}
@@ -365,12 +365,12 @@ func cloneSearchHistoryEntry(input *opensplunkv1.SearchHistoryEntry) (*opensplun
 	if duration == nil || duration.CheckValid() != nil || duration.Seconds < 0 || duration.Nanos < 0 || duration.Seconds > maximumDurationSeconds || (duration.Seconds == maximumDurationSeconds && duration.Nanos > maximumDurationNanos) {
 		return nil, errors.New("search history service returned an invalid duration")
 	}
-	cloned := proto.Clone(input).(*opensplunkv1.SearchHistoryEntry)
+	cloned := proto.Clone(input).(*opensplunk.SearchHistoryEntry)
 	cloned.KnowledgeSnapshot = knowledgeSnapshot
 	return cloned, nil
 }
 
-func historyEntryMatchesFilter(entry *opensplunkv1.SearchHistoryEntry, filter searchhistory.Filter) bool {
+func historyEntryMatchesFilter(entry *opensplunk.SearchHistoryEntry, filter searchhistory.Filter) bool {
 	if entry == nil || entry.GetDefinition() == nil {
 		return false
 	}
@@ -411,12 +411,12 @@ func asciiLower(input string) string {
 	return string(bytes)
 }
 
-func historyEntriesOrdered(entries []*opensplunkv1.SearchHistoryEntry, sortBy opensplunkv1.SearchHistorySortBy, direction opensplunkv1.SortDirection) bool {
-	if sortBy == opensplunkv1.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_UNSPECIFIED {
-		sortBy = opensplunkv1.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_CREATED_AT
+func historyEntriesOrdered(entries []*opensplunk.SearchHistoryEntry, sortBy opensplunk.SearchHistorySortBy, direction opensplunk.SortDirection) bool {
+	if sortBy == opensplunk.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_UNSPECIFIED {
+		sortBy = opensplunk.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_CREATED_AT
 	}
-	if direction == opensplunkv1.SortDirection_SORT_DIRECTION_UNSPECIFIED {
-		direction = opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING
+	if direction == opensplunk.SortDirection_SORT_DIRECTION_UNSPECIFIED {
+		direction = opensplunk.SortDirection_SORT_DIRECTION_DESCENDING
 	}
 	for index := 1; index < len(entries); index++ {
 		previousKey := historyEntrySortKey(entries[index-1], sortBy)
@@ -429,23 +429,23 @@ func historyEntriesOrdered(entries []*opensplunkv1.SearchHistoryEntry, sortBy op
 		} else {
 			comparison = strings.Compare(entries[index-1].GetSearchJobId(), entries[index].GetSearchJobId())
 		}
-		if direction == opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING && comparison > 0 {
+		if direction == opensplunk.SortDirection_SORT_DIRECTION_ASCENDING && comparison > 0 {
 			return false
 		}
-		if direction == opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING && comparison < 0 {
+		if direction == opensplunk.SortDirection_SORT_DIRECTION_DESCENDING && comparison < 0 {
 			return false
 		}
 	}
 	return true
 }
 
-func historyEntrySortKey(entry *opensplunkv1.SearchHistoryEntry, sortBy opensplunkv1.SearchHistorySortBy) int64 {
+func historyEntrySortKey(entry *opensplunk.SearchHistoryEntry, sortBy opensplunk.SearchHistorySortBy) int64 {
 	switch sortBy {
-	case opensplunkv1.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_FINISHED_AT:
+	case opensplunk.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_FINISHED_AT:
 		return entry.GetFinishedAt().AsTime().UnixMicro()
-	case opensplunkv1.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_DURATION:
+	case opensplunk.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_DURATION:
 		return int64(entry.GetDuration().AsDuration())
-	case opensplunkv1.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_MATCHED_EVENTS:
+	case opensplunk.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_MATCHED_EVENTS:
 		// #nosec G115 -- cloneSearchHistoryEntry rejects matched-event counts above MaxInt64.
 		return int64(entry.GetMatchedEvents())
 	default:
@@ -453,8 +453,8 @@ func historyEntrySortKey(entry *opensplunkv1.SearchHistoryEntry, sortBy opensplu
 	}
 }
 
-func historyPageResponse(result searchhistory.ListResult, includeTotal bool) (*opensplunkv1.PageResponse, error) {
-	page := &opensplunkv1.PageResponse{}
+func historyPageResponse(result searchhistory.ListResult, includeTotal bool) (*opensplunk.PageResponse, error) {
+	page := &opensplunk.PageResponse{}
 	if result.NextPageToken != nil {
 		if len(*result.NextPageToken) == 0 || len(*result.NextPageToken) > maximumHistoryPageTokenBytes || !utf8.ValidString(*result.NextPageToken) || strings.TrimSpace(*result.NextPageToken) != *result.NextPageToken {
 			return nil, errors.New("search history service returned an invalid page token")
@@ -473,12 +473,12 @@ func historyPageResponse(result searchhistory.ListResult, includeTotal bool) (*o
 	return page, nil
 }
 
-func terminalHistoryState(state opensplunkv1.SearchJobState) bool {
+func terminalHistoryState(state opensplunk.SearchJobState) bool {
 	switch state {
-	case opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
-		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_FAILED,
-		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_CANCELED,
-		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_EXPIRED:
+	case opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
+		opensplunk.SearchJobState_SEARCH_JOB_STATE_FAILED,
+		opensplunk.SearchJobState_SEARCH_JOB_STATE_CANCELED,
+		opensplunk.SearchJobState_SEARCH_JOB_STATE_EXPIRED:
 		return true
 	default:
 		return false
@@ -529,13 +529,13 @@ func validateHistoryRequest(input proto.Message) error {
 	return protostrict.RejectUnknownFields(input.ProtoReflect(), "request")
 }
 
-type serializedSearchHistoryListResponse = boundedProtoResponse[*opensplunkv1.ListSearchHistoryResponse]
+type serializedSearchHistoryListResponse = boundedProtoResponse[*opensplunk.ListSearchHistoryResponse]
 
-type serializedSearchHistoryListCodec = boundedProtoCodec[*opensplunkv1.ListSearchHistoryRequest, *opensplunkv1.ListSearchHistoryResponse]
+type serializedSearchHistoryListCodec = boundedProtoCodec[*opensplunk.ListSearchHistoryRequest, *opensplunk.ListSearchHistoryResponse]
 
 func newSerializedSearchHistoryListCodec() *serializedSearchHistoryListCodec {
 	return newBoundedProtoCodec(
-		codec.NewProtoCodec[*opensplunkv1.ListSearchHistoryRequest, *opensplunkv1.ListSearchHistoryResponse](),
+		codec.NewProtoCodec[*opensplunk.ListSearchHistoryRequest, *opensplunk.ListSearchHistoryResponse](),
 		boundedProtoCodecOptions{
 			stateError:   "search history list serialization state is invalid",
 			messageError: "search history list serialization state is invalid",

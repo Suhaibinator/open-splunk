@@ -1,0 +1,73 @@
+syntax = "proto3";
+
+package open_splunk;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk;opensplunk";
+
+// POST /api/hec/operations/get
+// This route is administrator-only. The request is intentionally empty: HEC
+// The contract exposes one process-wide bounded aggregate and no per-token selector.
+message GetHECOperationalSnapshotRequest {}
+
+message HECRequestOperationalMetrics {
+  uint64 requests = 1;
+  uint64 events = 2;
+  uint64 uncompressed_bytes = 3;
+  uint64 authentication_failures = 4;
+  uint64 decode_failures = 5;
+  uint64 event_policy_failures = 6;
+  uint64 accepted_requests = 7;
+  uint64 rate_limited_requests = 8;
+  uint64 staging_failures = 9;
+  google.protobuf.Duration staging_duration = 10;
+  uint64 shutdown_rejections = 11;
+}
+
+message HECDurableOperationalMetrics {
+  bool queue_available = 1;
+  uint64 pending_outbox_reservations = 2;
+  uint64 pending_outbox_bytes = 3;
+  google.protobuf.Duration oldest_pending_outbox_age = 4;
+  bool request_capacity_available = 5;
+  uint64 retained_requests = 6;
+}
+
+message HECReconciliationOperationalMetrics {
+  bool available = 1;
+  uint64 successes = 2;
+  uint64 retries = 3;
+  uint64 ambiguities = 4;
+}
+
+message HECAcknowledgmentOperationalMetrics {
+  bool available = 1;
+  uint64 active_channels = 2;
+  uint64 retained_channels = 3;
+  uint64 pending_rows = 4;
+  uint64 indexed_rows = 5;
+  uint64 expired_rows = 6;
+  uint64 terminal_failed_requests = 7;
+  uint64 queries = 8;
+  uint64 ids_queried = 9;
+  uint64 misses = 10;
+}
+
+// code is one of the closed non-success Splunk-compatible HEC response codes.
+// This list has exactly the bounded domain 1 through 27 and never carries
+// request-provided labels.
+message HECProtocolFailureMetric {
+  uint32 code = 1;
+  uint64 count = 2;
+}
+
+message GetHECOperationalSnapshotResponse {
+  google.protobuf.Timestamp observed_at = 1;
+  HECRequestOperationalMetrics request = 2;
+  HECDurableOperationalMetrics durable = 3;
+  HECReconciliationOperationalMetrics reconciliation = 4;
+  HECAcknowledgmentOperationalMetrics acknowledgments = 5;
+  repeated HECProtocolFailureMetric protocol_failures = 6;
+}

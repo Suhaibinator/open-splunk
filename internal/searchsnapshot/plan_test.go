@@ -8,11 +8,9 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
-	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
-	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
 func TestBuildPlanUsesOnlyImmutableEffectiveScope(t *testing.T) {
@@ -107,7 +105,6 @@ func TestBuildExecutionPlanRejectsUnsignedLegacySnapshot(t *testing.T) {
 		OwnerID:          job.OwnerID,
 		TenantID:         job.TenantID,
 		SPL:              job.SPL,
-		CompilerVersion:  spl.CompatibilityVersion,
 		EffectiveIndexes: slices.Clone(job.EffectiveIndexes),
 		Earliest:         job.Earliest,
 		Latest:           job.Latest,
@@ -128,7 +125,6 @@ func TestBuildExecutionPlanRejectsUnsealedKnowledgeAuthority(t *testing.T) {
 		TenantID:         "tenant-1",
 		AppID:            "app_aaaaaaaaaaaaaaaaaaaaaA",
 		SPL:              `index=allowed-a`,
-		CompilerVersion:  spl.CompatibilityVersion,
 		EffectiveIndexes: []string{"allowed-a"},
 		Earliest:         time.Date(2026, 7, 21, 8, 0, 0, 0, time.UTC),
 		Latest:           time.Date(2026, 7, 21, 9, 0, 0, 0, time.UTC),
@@ -141,50 +137,6 @@ func TestBuildExecutionPlanRejectsUnsealedKnowledgeAuthority(t *testing.T) {
 	logical, err := BuildExecutionPlan(snapshot)
 	if err == nil || logical != nil {
 		t.Fatalf("BuildExecutionPlan(unsealed knowledge) = (%#v, %v), want failure", logical, err)
-	}
-}
-
-func TestExecutionPlanRebuildRejectsEveryCompilerVersionMismatch(t *testing.T) {
-	versions := []string{
-		"",
-		"0.1",
-		spl.CompatibilityVersion + "-future",
-		spl.CompatibilityVersion + " ",
-	}
-	builders := []struct {
-		name  string
-		build func(searchjobs.ExecutionSnapshot) (*plan.Query, error)
-	}{
-		{
-			name:  "ordinary",
-			build: BuildExecutionPlan,
-		},
-		{
-			name: "candidate knowledge prelude",
-			build: func(snapshot searchjobs.ExecutionSnapshot) (*plan.Query, error) {
-				return BuildExecutionPlanWithKnowledgePrelude(
-					snapshot,
-					knowledgeprogram.Program{},
-				)
-			},
-		},
-	}
-	for _, builder := range builders {
-		for _, version := range versions {
-			t.Run(builder.name+"/"+version, func(t *testing.T) {
-				logical, err := builder.build(searchjobs.ExecutionSnapshot{
-					CompilerVersion: version,
-				})
-				if logical != nil || !errors.Is(err, ErrCompilerVersionMismatch) {
-					t.Fatalf(
-						"rebuild compiler version %q = (%#v, %v), want ErrCompilerVersionMismatch",
-						version,
-						logical,
-						err,
-					)
-				}
-			})
-		}
 	}
 }
 

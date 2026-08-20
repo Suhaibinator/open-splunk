@@ -11,7 +11,7 @@ import (
 	"sort"
 	"strings"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
@@ -50,7 +50,7 @@ type publicationPersistedDependency struct {
 	ordinal        int64
 	targetObjectID string
 	targetVersion  int64
-	role           opensplunkv1.KnowledgeDependencyRole
+	role           opensplunk.KnowledgeDependencyRole
 }
 
 type publicationCandidateAuthority struct {
@@ -77,7 +77,7 @@ type candidateDependencyAuthority struct {
 
 type candidateDependencyAuthorityState struct {
 	candidate   publicationCandidateAuthority
-	sourceStage opensplunkv1.KnowledgeSearchStage
+	sourceStage opensplunk.KnowledgeSearchStage
 	targets     []publicationDerivedDependencyTarget
 	projection  []publicationDependency
 }
@@ -103,8 +103,8 @@ type publicationDerivedDependencyTarget struct {
 	version          int64
 	definitionDigest [sha256.Size]byte
 	ownerID          string
-	role             opensplunkv1.KnowledgeDependencyRole
-	targetStage      opensplunkv1.KnowledgeSearchStage
+	role             opensplunk.KnowledgeDependencyRole
+	targetStage      opensplunk.KnowledgeSearchStage
 }
 
 func (authority candidateDependencyAuthority) IsZero() bool {
@@ -131,9 +131,9 @@ func (authority candidateDependencyAuthority) candidateAuthority() publicationCa
 	return result
 }
 
-func (authority candidateDependencyAuthority) sourceStage() opensplunkv1.KnowledgeSearchStage {
+func (authority candidateDependencyAuthority) sourceStage() opensplunk.KnowledgeSearchStage {
 	if authority.state == nil {
-		return opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_UNSPECIFIED
+		return opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_UNSPECIFIED
 	}
 	return authority.state.sourceStage
 }
@@ -219,7 +219,7 @@ type canonicalPublicationWinner struct {
 	existingDependenciesPresent bool
 	existingDependencies        []publicationPersistedDependency
 	key                         dependencyVersionKey
-	object                      *opensplunkv1.KnowledgeSnapshotObject
+	object                      *opensplunk.KnowledgeSnapshotObject
 	semantics                   resolutionDefinitionSemantics
 	definitionBytes             uint64
 	selectorWork                uint64
@@ -503,8 +503,8 @@ func compilePublicationWinnerCohortMode(
 		}
 		return winners[left].object.GetKnowledgeObjectId() < winners[right].object.GetKnowledgeObjectId()
 	})
-	objects := make([]*opensplunkv1.KnowledgeSnapshotObject, len(winners))
-	stageOrdinals := make(map[opensplunkv1.KnowledgeSearchStage]uint32, 3)
+	objects := make([]*opensplunk.KnowledgeSnapshotObject, len(winners))
+	stageOrdinals := make(map[opensplunk.KnowledgeSearchStage]uint32, 3)
 	for index := range winners {
 		if err := ctx.Err(); err != nil {
 			return candidateDependencyAuthority{}, err
@@ -735,7 +735,7 @@ func canonicalizePublicationWinner(
 			objectID: strings.Clone(object.KnowledgeObjectID),
 			version:  int64(object.Version),
 		},
-		object: &opensplunkv1.KnowledgeSnapshotObject{
+		object: &opensplunk.KnowledgeSnapshotObject{
 			Stage:             stage,
 			KnowledgeObjectId: strings.Clone(object.KnowledgeObjectID),
 			Version:           object.Version,
@@ -769,15 +769,15 @@ func invalidPublicationWinnerAuthority(
 }
 
 func publicationStageForObjectType(
-	objectType opensplunkv1.KnowledgeObjectType,
-) (opensplunkv1.KnowledgeSearchStage, uint8, bool) {
+	objectType opensplunk.KnowledgeObjectType,
+) (opensplunk.KnowledgeSearchStage, uint8, bool) {
 	switch objectType {
-	case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION:
-		return opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION, 1, true
-	case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS:
-		return opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS, 2, true
-	case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD:
-		return opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD, 3, true
+	case opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION:
+		return opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION, 1, true
+	case opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS:
+		return opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS, 2, true
+	case opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD:
+		return opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD, 3, true
 	default:
 		return 0, 0, false
 	}
@@ -834,7 +834,7 @@ func validatePersistedPublicationDependencyScalars(
 		if dependency.ordinal != int64(index) ||
 			!validIdentity(dependency.targetObjectID, maximumObjectIDBytes) ||
 			dependency.targetVersion < 1 ||
-			dependency.role != opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT {
+			dependency.role != opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT {
 			return invalidPublicationWinnerCohort("contains malformed existing dependency rows")
 		}
 		if index > 0 && !publicationPersistedDependencyAfter(dependencies[index-1], dependency) {
@@ -868,7 +868,7 @@ func publicationDependenciesFromProgram(
 			return nil, err
 		}
 		if dependency == nil || dependency.GetCanonicalOrdinal() != uint32(index) ||
-			dependency.GetRole() != opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT {
+			dependency.GetRole() != opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT {
 			return nil, invalidPublicationWinnerCohort("compiler dependency authority is invalid")
 		}
 		sourceReference := dependency.GetSource()

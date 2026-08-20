@@ -4,7 +4,7 @@ import type { FormEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 
-import { OPEN_SPLUNK_APPLICATION_VERSION } from "@/lib/build-identity";
+import { OPEN_SPLUNK_BUILD_LABEL } from "@/lib/build-identity";
 import type { SearchDataMode } from "@/lib/search/backend-data";
 import { searchLaunchHref } from "@/lib/search/launch-url";
 
@@ -130,7 +130,7 @@ function DemoAdminConsole() {
               <i aria-hidden="true">{item.icon}</i><span><strong>{item.label}</strong><small>{item.detail}</small></span><b aria-hidden="true">›</b>
             </button>
           ))}
-          <div className="admin-sidebar-meta"><span className="status-dot status-dot--healthy" /><div><strong>open-splunk.local</strong><small>v{OPEN_SPLUNK_APPLICATION_VERSION} · Healthy</small></div></div>
+          <div className="admin-sidebar-meta"><span className="status-dot status-dot--healthy" /><div><strong>open-splunk.local</strong><small>{OPEN_SPLUNK_BUILD_LABEL} · Healthy</small></div></div>
         </aside>
 
         <section className="admin-content" aria-live="polite">
@@ -286,7 +286,7 @@ function CollectorsSection({ onCreateToken }: { onCreateToken: () => void }) {
   return (
     <div className="admin-section-stack">
       <header className="admin-section-header"><div><h2>Data inputs</h2><p>Preview collector health, queue depth, and token workflows.</p></div><span className="status-label status-label--complete"><i />2 connected</span></header>
-      <div className="collector-grid"><article className="collector-card"><header><span className="collector-host-icon">▣</span><div><strong>api-prod-03</strong><small>Linux · collector v{OPEN_SPLUNK_APPLICATION_VERSION}</small></div><span className="status-label status-label--complete"><i />Live</span></header><dl><div><dt>Last seen</dt><dd>1 sec ago</dd></div><div><dt>Queue depth</dt><dd>0 events</dd></div><div><dt>Throughput</dt><dd>214 evt/s</dd></div><div><dt>Destination</dt><dd>gradethis</dd></div></dl><footer><span><i style={{ width: "72%" }} /></span><small>72% of configured peak</small><button type="button">Details</button></footer></article><article className="collector-card"><header><span className="collector-host-icon">▣</span><div><strong>worker-prod-02</strong><small>Linux · collector v{OPEN_SPLUNK_APPLICATION_VERSION}</small></div><span className="status-label status-label--complete"><i />Live</span></header><dl><div><dt>Last seen</dt><dd>3 sec ago</dd></div><div><dt>Queue depth</dt><dd>42 events</dd></div><div><dt>Throughput</dt><dd>87 evt/s</dd></div><div><dt>Destination</dt><dd>platform</dd></div></dl><footer><span><i style={{ width: "36%" }} /></span><small>36% of configured peak</small><button type="button">Details</button></footer></article></div>
+      <div className="collector-grid"><article className="collector-card"><header><span className="collector-host-icon">▣</span><div><strong>api-prod-03</strong><small>Linux · collector {OPEN_SPLUNK_BUILD_LABEL}</small></div><span className="status-label status-label--complete"><i />Live</span></header><dl><div><dt>Last seen</dt><dd>1 sec ago</dd></div><div><dt>Queue depth</dt><dd>0 events</dd></div><div><dt>Throughput</dt><dd>214 evt/s</dd></div><div><dt>Destination</dt><dd>gradethis</dd></div></dl><footer><span><i style={{ width: "72%" }} /></span><small>72% of configured peak</small><button type="button">Details</button></footer></article><article className="collector-card"><header><span className="collector-host-icon">▣</span><div><strong>worker-prod-02</strong><small>Linux · collector {OPEN_SPLUNK_BUILD_LABEL}</small></div><span className="status-label status-label--complete"><i />Live</span></header><dl><div><dt>Last seen</dt><dd>3 sec ago</dd></div><div><dt>Queue depth</dt><dd>42 events</dd></div><div><dt>Throughput</dt><dd>87 evt/s</dd></div><div><dt>Destination</dt><dd>platform</dd></div></dl><footer><span><i style={{ width: "36%" }} /></span><small>36% of configured peak</small><button type="button">Details</button></footer></article></div>
       <section className="suite-card token-section"><header className="suite-card-header"><div><h3>Ingestion tokens</h3><p>Sample records illustrating index-scoped credentials.</p></div><button type="button" onClick={onCreateToken}>Generate demo token</button></header><div className="responsive-table-wrap"><table className="product-table"><thead><tr><th scope="col">Name</th><th scope="col">Prefix</th><th scope="col">Allowed indexes</th><th scope="col">Last used</th><th scope="col">Status</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead><tbody><tr><td><strong>prod-gradethis</strong></td><td><code>ospl_ing_a73…</code></td><td>gradethis</td><td>1 sec ago</td><td><span className="status-label status-label--complete"><i />Active</span></td><td><button className="row-overflow" type="button" aria-label="Actions for prod-gradethis">•••</button></td></tr><tr><td><strong>platform-workers</strong></td><td><code>ospl_ing_2f1…</code></td><td>platform</td><td>3 sec ago</td><td><span className="status-label status-label--complete"><i />Active</span></td><td><button className="row-overflow" type="button" aria-label="Actions for platform-workers">•••</button></td></tr></tbody></table></div></section>
     </div>
   );

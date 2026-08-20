@@ -383,7 +383,6 @@ func createWithHooks(
 		RecoverySetID:               recoverySetID,
 		Scope:                       controlPlaneOnlyScope,
 		ClickHouseIncluded:          false,
-		ApplicationVersion:          options.Release.ApplicationVersion,
 		SourceRevision:              options.Release.SourceRevision,
 		SQLiteMigrations:            options.Release.SQLiteMigrations,
 		SQLiteMigrationLedgerSHA256: hex.EncodeToString(sourceMigrationIdentity.SHA256[:]),

@@ -6,25 +6,25 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"google.golang.org/protobuf/proto"
 )
 
 func TestNormalizeDetachesAndCanonicalizes(t *testing.T) {
-	input := &opensplunkv1.LookupDefinition{
+	input := &opensplunk.LookupDefinition{
 		AppId:        "app-main",
 		Name:         "service_catalog",
-		SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-		Selector: &opensplunkv1.KnowledgeSelector{IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{
-			{Value: " api* ", MatchKind: opensplunkv1.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_UNSPECIFIED},
+		SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+		Selector: &opensplunk.KnowledgeSelector{IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{
+			{Value: " api* ", MatchKind: opensplunk.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_UNSPECIFIED},
 		}},
-		KeyMappings: []*opensplunkv1.LookupFieldMapping{{LookupField: "service_id", EventField: "service_key"}},
-		OutputMappings: []*opensplunkv1.LookupFieldMapping{
+		KeyMappings: []*opensplunk.LookupFieldMapping{{LookupField: "service_id", EventField: "service_key"}},
+		OutputMappings: []*opensplunk.LookupFieldMapping{
 			{LookupField: "owner", EventField: "owner"},
 			{LookupField: "tier", EventField: "service_tier"},
 		},
-		OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+		OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
 	}
 	normalized, err := Normalize(input, []string{"service_id", "owner", "tier"})
 	if err != nil {
@@ -40,21 +40,21 @@ func TestNormalizeDetachesAndCanonicalizes(t *testing.T) {
 }
 
 func TestNormalizeRejectsAmbiguousOrDuplicateMappings(t *testing.T) {
-	base := func() *opensplunkv1.LookupDefinition {
-		return &opensplunkv1.LookupDefinition{
-			AppId: "app", Name: "catalog", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-			KeyMappings:       []*opensplunkv1.LookupFieldMapping{{LookupField: "id", EventField: "id"}},
-			OutputMappings:    []*opensplunkv1.LookupFieldMapping{{LookupField: "value", EventField: "value"}},
-			OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+	base := func() *opensplunk.LookupDefinition {
+		return &opensplunk.LookupDefinition{
+			AppId: "app", Name: "catalog", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+			KeyMappings:       []*opensplunk.LookupFieldMapping{{LookupField: "id", EventField: "id"}},
+			OutputMappings:    []*opensplunk.LookupFieldMapping{{LookupField: "value", EventField: "value"}},
+			OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 		}
 	}
-	tests := []func(*opensplunkv1.LookupDefinition){
-		func(value *opensplunkv1.LookupDefinition) { value.OutputMappings[0].EventField = "fields" },
-		func(value *opensplunkv1.LookupDefinition) { value.OutputMappings[0].EventField = "__os_private" },
-		func(value *opensplunkv1.LookupDefinition) {
-			value.KeyMappings = append(value.KeyMappings, &opensplunkv1.LookupFieldMapping{LookupField: "id", EventField: "other"})
+	tests := []func(*opensplunk.LookupDefinition){
+		func(value *opensplunk.LookupDefinition) { value.OutputMappings[0].EventField = "fields" },
+		func(value *opensplunk.LookupDefinition) { value.OutputMappings[0].EventField = "__os_private" },
+		func(value *opensplunk.LookupDefinition) {
+			value.KeyMappings = append(value.KeyMappings, &opensplunk.LookupFieldMapping{LookupField: "id", EventField: "other"})
 		},
-		func(value *opensplunkv1.LookupDefinition) { value.OutputMappings[0].LookupField = "missing" },
+		func(value *opensplunk.LookupDefinition) { value.OutputMappings[0].LookupField = "missing" },
 	}
 	for index, mutate := range tests {
 		candidate := base()
@@ -67,11 +67,11 @@ func TestNormalizeRejectsAmbiguousOrDuplicateMappings(t *testing.T) {
 
 func TestNormalizeRejectsMappedAssetColumnsOutsideAuthoredLookupGrammar(t *testing.T) {
 	for _, column := range []string{"value with space", "__os_value"} {
-		definition := &opensplunkv1.LookupDefinition{
-			AppId: "app", Name: "catalog", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-			KeyMappings:       []*opensplunkv1.LookupFieldMapping{{LookupField: "id", EventField: "id"}},
-			OutputMappings:    []*opensplunkv1.LookupFieldMapping{{LookupField: column, EventField: "value"}},
-			OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+		definition := &opensplunk.LookupDefinition{
+			AppId: "app", Name: "catalog", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+			KeyMappings:       []*opensplunk.LookupFieldMapping{{LookupField: "id", EventField: "id"}},
+			OutputMappings:    []*opensplunk.LookupFieldMapping{{LookupField: column, EventField: "value"}},
+			OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 		}
 		if _, err := Normalize(definition, []string{"id", column}); !errors.Is(err, ErrInvalid) {
 			t.Fatalf("Normalize(%q) error = %v, want ErrInvalid", column, err)
@@ -80,14 +80,14 @@ func TestNormalizeRejectsMappedAssetColumnsOutsideAuthoredLookupGrammar(t *testi
 }
 
 func TestNormalizeRejectsSelectorMatchKindDisagreement(t *testing.T) {
-	definition := &opensplunkv1.LookupDefinition{
-		AppId: "app", Name: "catalog", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-		Selector: &opensplunkv1.KnowledgeSelector{IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{
-			Value: "api*", MatchKind: opensplunkv1.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT,
+	definition := &opensplunk.LookupDefinition{
+		AppId: "app", Name: "catalog", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+		Selector: &opensplunk.KnowledgeSelector{IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{{
+			Value: "api*", MatchKind: opensplunk.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT,
 		}}},
-		KeyMappings:       []*opensplunkv1.LookupFieldMapping{{LookupField: "id", EventField: "id"}},
-		OutputMappings:    []*opensplunkv1.LookupFieldMapping{{LookupField: "value", EventField: "value"}},
-		OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+		KeyMappings:       []*opensplunk.LookupFieldMapping{{LookupField: "id", EventField: "id"}},
+		OutputMappings:    []*opensplunk.LookupFieldMapping{{LookupField: "value", EventField: "value"}},
+		OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 	}
 	if _, err := Normalize(definition, []string{"id", "value"}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("Normalize() error = %v, want ErrInvalid", err)
@@ -95,23 +95,23 @@ func TestNormalizeRejectsSelectorMatchKindDisagreement(t *testing.T) {
 }
 
 func TestNormalizeKeepsLookupColumnsDistinctFromEventFields(t *testing.T) {
-	definition := &opensplunkv1.LookupDefinition{
-		AppId: "app", Name: "catalog", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-		KeyMappings:       []*opensplunkv1.LookupFieldMapping{{LookupField: "fields", EventField: "event_fields"}},
-		OutputMappings:    []*opensplunkv1.LookupFieldMapping{{LookupField: "OUTPUT", EventField: "OUTPUTNEW"}},
-		OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+	definition := &opensplunk.LookupDefinition{
+		AppId: "app", Name: "catalog", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+		KeyMappings:       []*opensplunk.LookupFieldMapping{{LookupField: "fields", EventField: "event_fields"}},
+		OutputMappings:    []*opensplunk.LookupFieldMapping{{LookupField: "OUTPUT", EventField: "OUTPUTNEW"}},
+		OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 	}
 	if _, err := Normalize(definition, []string{"fields", "OUTPUT"}); err != nil {
 		t.Fatalf("Normalize(representable lookup columns): %v", err)
 	}
 
 	for _, marker := range []string{"OUTPUT", "outputnew"} {
-		candidate := proto.Clone(definition).(*opensplunkv1.LookupDefinition)
+		candidate := proto.Clone(definition).(*opensplunk.LookupDefinition)
 		candidate.KeyMappings[0].LookupField = marker
 		if _, err := Normalize(candidate, []string{marker, "OUTPUT"}); !errors.Is(err, ErrInvalid) {
 			t.Fatalf("Normalize(key lookup marker %q) error = %v, want ErrInvalid", marker, err)
 		}
-		candidate = proto.Clone(definition).(*opensplunkv1.LookupDefinition)
+		candidate = proto.Clone(definition).(*opensplunk.LookupDefinition)
 		candidate.KeyMappings[0].EventField = marker
 		if _, err := Normalize(candidate, []string{"fields", "OUTPUT"}); !errors.Is(err, ErrInvalid) {
 			t.Fatalf("Normalize(key event marker %q) error = %v, want ErrInvalid", marker, err)
@@ -120,11 +120,11 @@ func TestNormalizeKeepsLookupColumnsDistinctFromEventFields(t *testing.T) {
 }
 
 func TestNormalizeRejectsEventFieldsRuntimeCannotResolve(t *testing.T) {
-	definition := &opensplunkv1.LookupDefinition{
-		AppId: "app", Name: "catalog", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-		KeyMappings:       []*opensplunkv1.LookupFieldMapping{{LookupField: "id", EventField: "id"}},
-		OutputMappings:    []*opensplunkv1.LookupFieldMapping{{LookupField: "value", EventField: "value"}},
-		OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+	definition := &opensplunk.LookupDefinition{
+		AppId: "app", Name: "catalog", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+		KeyMappings:       []*opensplunk.LookupFieldMapping{{LookupField: "id", EventField: "id"}},
+		OutputMappings:    []*opensplunk.LookupFieldMapping{{LookupField: "value", EventField: "value"}},
+		OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 	}
 	invalid := []string{
 		"a..b",
@@ -136,14 +136,14 @@ func TestNormalizeRejectsEventFieldsRuntimeCannotResolve(t *testing.T) {
 		"event\u200bfield",
 	}
 	for _, eventField := range invalid {
-		candidate := proto.Clone(definition).(*opensplunkv1.LookupDefinition)
+		candidate := proto.Clone(definition).(*opensplunk.LookupDefinition)
 		candidate.OutputMappings[0].EventField = eventField
 		if _, err := Normalize(candidate, []string{"id", "value"}); !errors.Is(err, ErrInvalid) {
 			t.Fatalf("Normalize(event field %q) error = %v, want ErrInvalid", eventField, err)
 		}
 	}
 	for _, eventField := range []string{`a\.b`, `a\\b`, "a[b]", "a?b"} {
-		candidate := proto.Clone(definition).(*opensplunkv1.LookupDefinition)
+		candidate := proto.Clone(definition).(*opensplunk.LookupDefinition)
 		candidate.OutputMappings[0].EventField = eventField
 		if _, err := Normalize(candidate, []string{"id", "value"}); err != nil {
 			t.Fatalf("Normalize(event field %q): %v", eventField, err)
@@ -161,11 +161,11 @@ func TestLookupNameRejectsControlAndFormatCharacters(t *testing.T) {
 
 func TestNormalizeRejectsControlAndFormatCharactersInLookupColumns(t *testing.T) {
 	for _, column := range []string{"catalog\x00key", "catalog\u200bkey"} {
-		definition := &opensplunkv1.LookupDefinition{
-			AppId: "app", Name: "catalog", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-			KeyMappings:       []*opensplunkv1.LookupFieldMapping{{LookupField: column, EventField: "key"}},
-			OutputMappings:    []*opensplunkv1.LookupFieldMapping{{LookupField: "value", EventField: "value"}},
-			OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+		definition := &opensplunk.LookupDefinition{
+			AppId: "app", Name: "catalog", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+			KeyMappings:       []*opensplunk.LookupFieldMapping{{LookupField: column, EventField: "key"}},
+			OutputMappings:    []*opensplunk.LookupFieldMapping{{LookupField: "value", EventField: "value"}},
+			OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 		}
 		if _, err := Normalize(definition, []string{column, "value"}); !errors.Is(err, ErrInvalid) {
 			t.Fatalf("Normalize(lookup column %q) error = %v, want ErrInvalid", column, err)
@@ -174,11 +174,11 @@ func TestNormalizeRejectsControlAndFormatCharactersInLookupColumns(t *testing.T)
 }
 
 func TestNormalizePinsCanonicalAuthoredSourceBoundary(t *testing.T) {
-	definition := &opensplunkv1.LookupDefinition{
-		AppId: "app", Name: "n", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-		KeyMappings:       []*opensplunkv1.LookupFieldMapping{{LookupField: "k", EventField: "a"}},
-		OutputMappings:    []*opensplunkv1.LookupFieldMapping{{LookupField: "v", EventField: "b"}},
-		OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+	definition := &opensplunk.LookupDefinition{
+		AppId: "app", Name: "n", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+		KeyMappings:       []*opensplunk.LookupFieldMapping{{LookupField: "k", EventField: "a"}},
+		OutputMappings:    []*opensplunk.LookupFieldMapping{{LookupField: "v", EventField: "b"}},
+		OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 	}
 	baseBytes := len(canonicalAuthoredLookupSource(
 		definition.GetName(),
@@ -206,7 +206,7 @@ func TestNormalizePinsCanonicalAuthoredSourceBoundary(t *testing.T) {
 		t.Fatalf("Normalize(exact source boundary): %v", err)
 	}
 
-	over := proto.Clone(definition).(*opensplunkv1.LookupDefinition)
+	over := proto.Clone(definition).(*opensplunk.LookupDefinition)
 	over.OutputMappings[0].EventField = exactEventPathBytes(len(over.OutputMappings[0].GetEventField()) + 1)
 	if got := len(canonicalAuthoredLookupSource(
 		over.GetName(),
@@ -222,9 +222,9 @@ func TestNormalizePinsCanonicalAuthoredSourceBoundary(t *testing.T) {
 }
 
 func TestNormalizeRejectsMultiMappingAuthoredSourceAggregate(t *testing.T) {
-	definition := &opensplunkv1.LookupDefinition{
-		AppId: "app", Name: "catalog", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-		OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+	definition := &opensplunk.LookupDefinition{
+		AppId: "app", Name: "catalog", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+		OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
 	}
 	columns := make([]string, 0, MaximumKeyMappings+MaximumOutputMappings)
 	for index := range MaximumKeyMappings + MaximumOutputMappings {
@@ -235,7 +235,7 @@ func TestNormalizeRejectsMultiMappingAuthoredSourceAggregate(t *testing.T) {
 			strings.Repeat("c", 250),
 			strings.Repeat("d", 250),
 		)
-		mapping := &opensplunkv1.LookupFieldMapping{LookupField: column, EventField: event}
+		mapping := &opensplunk.LookupFieldMapping{LookupField: column, EventField: event}
 		if index < MaximumKeyMappings {
 			definition.KeyMappings = append(definition.KeyMappings, mapping)
 		} else {

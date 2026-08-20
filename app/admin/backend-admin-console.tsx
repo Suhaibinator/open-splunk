@@ -4,22 +4,22 @@ import type { FormEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import Link from "next/link";
 
-import { SortDirection, type PageResponse } from "@/gen/ts/open_splunk/v1/common";
-import { ServerFeature } from "@/gen/ts/open_splunk/v1/system_api";
+import { SortDirection, type PageResponse } from "@/gen/ts/open_splunk/common";
+import { ServerFeature } from "@/gen/ts/open_splunk/system_api";
 import {
   IngestionTokenPurpose,
   IngestionTokenState,
   type IngestionToken,
   type IngestionTokenHecProfile,
-} from "@/gen/ts/open_splunk/v1/collector_admin";
-import type { GetHECOperationalSnapshotResponse } from "@/gen/ts/open_splunk/v1/hec_admin_api";
-import { IngestionTokenSortBy } from "@/gen/ts/open_splunk/v1/collector_admin_api";
+} from "@/gen/ts/open_splunk/collector_admin";
+import type { GetHECOperationalSnapshotResponse } from "@/gen/ts/open_splunk/hec_admin_api";
+import { IngestionTokenSortBy } from "@/gen/ts/open_splunk/collector_admin_api";
 import {
   IndexAccessState,
   IndexState,
   type Index,
-} from "@/gen/ts/open_splunk/v1/index";
-import { IndexDataDeletionMode, IndexSortBy } from "@/gen/ts/open_splunk/v1/index_api";
+} from "@/gen/ts/open_splunk/index";
+import { IndexDataDeletionMode, IndexSortBy } from "@/gen/ts/open_splunk/index_api";
 import {
   DEFAULT_REQUEST_TIMEOUT_MS,
   createOpenSplunkApiClient,
@@ -140,7 +140,7 @@ interface TokenCreateRecovery {
 type TokenCreateGuardMode = "ambiguous" | "issued";
 type TokenCreateGuardStorageState = "checking" | "available" | "unavailable";
 
-interface PersistedTokenCreateGuardV1 {
+interface PersistedTokenCreateGuard {
   schemaVersion: 1;
   apiBaseUrl: string;
   attemptId: string;
@@ -151,12 +151,12 @@ interface PersistedTokenCreateGuardV1 {
     description: string;
     boundCollectorId: string;
     allowedIndexNames: string[];
-    allowedHostRegexes?: string[];
-    allowedSourceRegexes?: string[];
-    maxEventsPerSecond?: string | null;
-    maxUncompressedBytesPerSecond?: string | null;
-    purpose?: IngestionTokenPurpose;
-    hecProfile?: {
+    allowedHostRegexes: string[];
+    allowedSourceRegexes: string[];
+    maxEventsPerSecond: string | null;
+    maxUncompressedBytesPerSecond: string | null;
+    purpose: IngestionTokenPurpose;
+    hecProfile: {
       defaultIndexName: string | null;
       defaultHost: string | null;
       defaultSource: string | null;
@@ -179,8 +179,8 @@ interface PersistedTokenCreateGuardV1 {
 }
 
 const TOKEN_HISTORY_GUARD_KEY = "__openSplunkTokenGuard";
-const TOKEN_CREATE_GUARD_STORAGE_PREFIX = "open-splunk.admin.token-create-guard.v1";
-const TOKEN_CREATE_LOCK_PREFIX = "open-splunk.admin.token-create-lock.v1";
+const TOKEN_CREATE_GUARD_STORAGE_PREFIX = "open-splunk.admin.token-create-guard";
+const TOKEN_CREATE_LOCK_PREFIX = "open-splunk.admin.token-create-lock";
 const TOKEN_CREATE_CLOCK_EPSILON_MS = 250;
 
 function normalizeApiBaseUrl(apiBaseUrl: string, pageOrigin: string): string {
@@ -337,7 +337,7 @@ export function serializeTokenCreateGuard(
   normalizedApiBaseUrl: string,
   recovery: TokenCreateRecovery,
   knownIssuedTokenId: string | null,
-): PersistedTokenCreateGuardV1 {
+): PersistedTokenCreateGuard {
   return {
     schemaVersion: 1,
     apiBaseUrl: normalizedApiBaseUrl,
@@ -391,24 +391,19 @@ export function parsePersistedTokenCreateGuard(
     return null;
   }
   if (typeof value !== "object" || value === null) return null;
-  const record = value as Partial<PersistedTokenCreateGuardV1>;
+  const record = value as Partial<PersistedTokenCreateGuard>;
   const definition = record.definition;
-  const persistedPurpose = definition?.purpose
-    ?? IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR;
-  const persistedHECProfile = definition?.hecProfile ?? null;
+  const persistedPurpose = definition?.purpose;
+  const persistedHECProfile = definition?.hecProfile;
   const allowedIndexNames = isStringArray(definition?.allowedIndexNames)
     ? definition.allowedIndexNames
     : [];
-  const allowedHostRegexes = definition?.allowedHostRegexes === undefined
-    ? []
-    : isStringArray(definition.allowedHostRegexes)
-      ? definition.allowedHostRegexes
-      : null;
-  const allowedSourceRegexes = definition?.allowedSourceRegexes === undefined
-    ? []
-    : isStringArray(definition.allowedSourceRegexes)
-      ? definition.allowedSourceRegexes
-      : null;
+  const allowedHostRegexes = isStringArray(definition?.allowedHostRegexes)
+    ? definition.allowedHostRegexes
+    : null;
+  const allowedSourceRegexes = isStringArray(definition?.allowedSourceRegexes)
+    ? definition.allowedSourceRegexes
+    : null;
   let normalizedHostRegexes: string[] | null = null;
   let normalizedSourceRegexes: string[] | null = null;
   try {
@@ -421,8 +416,8 @@ export function parsePersistedTokenCreateGuard(
   } catch {
     return null;
   }
-  const persistedEventsRate = definition?.maxEventsPerSecond ?? null;
-  const persistedBytesRate = definition?.maxUncompressedBytesPerSecond ?? null;
+  const persistedEventsRate = definition?.maxEventsPerSecond;
+  const persistedBytesRate = definition?.maxUncompressedBytesPerSecond;
   const validPersistedEventsRate = persistedEventsRate === null
     || (typeof persistedEventsRate === "string"
       && persistedEventsRate.length <= INGESTION_MAX_EVENTS_PER_SECOND.toString().length
@@ -3456,7 +3451,13 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
   const hasAvailableAdminRoute = indexState === "available" || tokenState === "available";
   const adminRoutesLoading = indexState === "loading" || tokenState === "loading";
   const connectionStatus = bootstrap !== null
-    ? { tone: "healthy", title: "API connected", detail: `Server ${bootstrap.serverVersion || "version unavailable"}` }
+    ? {
+        tone: "healthy",
+        title: "API connected",
+        detail: bootstrap.build?.sourceRevision
+          ? `Revision ${bootstrap.build.sourceRevision.slice(0, 12)}`
+          : "System bootstrap connected",
+      }
     : bootstrapError === null
       ? {
           tone: "running",
@@ -4177,7 +4178,7 @@ function BackendOverview(props: BackendOverviewProps) {
       <div className="admin-summary-grid">
         <article><span className="summary-icon summary-icon--green">▦</span><div><small>Indexes</small><strong>{props.indexState === "available" ? indexCount : "—"}</strong><p>{indexDetail}</p></div><button type="button" onClick={() => props.onNavigate("indexes")}>Manage</button></article>
         <article><span className="summary-icon summary-icon--blue">⇣</span><div><small>Ingestion tokens</small><strong>{props.tokenState === "available" ? tokenCount : "—"}</strong><p>{tokenDetail}</p></div><button type="button" onClick={() => props.onNavigate("collectors")}>Inspect</button></article>
-        <article><span className="summary-icon summary-icon--violet">⌕</span><div><small>SPL contract</small><strong>{bootstrap?.splCompatibilityVersion || "—"}</strong><p>{bootstrap === null ? "Bootstrap unavailable" : "Server advertised"}</p></div><Link href="/search/">Search</Link></article>
+        <article><span className="summary-icon summary-icon--violet">⌕</span><div><small>Source revision</small><strong>{bootstrap?.build?.sourceRevision.slice(0, 12) || "—"}</strong><p>{bootstrap === null ? "Bootstrap unavailable" : bootstrap.build === null ? "Not reported" : "Build identity"}</p></div><Link href="/search/">Search</Link></article>
         <article><span className="summary-icon summary-icon--orange">↻</span><div><small>Result retention</small><strong>{bootstrap !== null && bootstrap.limits.searchResultRetentionMs > 0 ? `${Math.round(bootstrap.limits.searchResultRetentionMs / 60_000)}m` : "—"}</strong><p>{bootstrap === null ? "Bootstrap unavailable" : "Read-only server limit"}</p></div><button type="button" onClick={() => props.onNavigate("server")}>Limits</button></article>
       </div>
       {bootstrap === null ? (
@@ -4191,8 +4192,8 @@ function BackendOverview(props: BackendOverviewProps) {
         <section className="suite-card">
           <header className="suite-card-header"><div><h3>Connection details</h3><p>Values returned by system bootstrap.</p></div><span className="status-label status-label--complete"><i />Connected</span></header>
           <dl className="backend-definition-list">
-            <div><dt>Server version</dt><dd>{bootstrap.serverVersion || "Not reported"}</dd></div>
-            <div><dt>API version</dt><dd>{bootstrap.apiVersion || "Not reported"}</dd></div>
+            <div><dt>Source revision</dt><dd>{bootstrap.build?.sourceRevision || "Not reported"}</dd></div>
+            <div><dt>UI build ID</dt><dd>{bootstrap.build?.uiBuildId || "Not reported"}</dd></div>
             <div><dt>Server time</dt><dd>{formatDate(bootstrap.serverTime)}</dd></div>
             <div><dt>Feature flags</dt><dd>{bootstrap.features.size.toLocaleString()}</dd></div>
           </dl>

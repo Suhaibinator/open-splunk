@@ -9,7 +9,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/lookupdefinition"
 )
 
@@ -117,7 +117,7 @@ func (catalog *Catalog) ListPage(
 		records = records[:normalized.Limit:normalized.Limit]
 	}
 	page = ListPage{
-		Lookups:  make([]*opensplunkv1.Lookup, len(records)),
+		Lookups:  make([]*opensplunk.Lookup, len(records)),
 		Snapshot: snapshot,
 	}
 	for index, record := range records {
@@ -158,13 +158,13 @@ func normalizeListPageRequest(request ListPageRequest) (normalizedListPageReques
 		request.TextFilter != strings.ToLower(request.TextFilter) {
 		return normalizedListPageRequest{}, fmt.Errorf("%w: lookup list-page scope is invalid", ErrInvalid)
 	}
-	if request.SortBy != opensplunkv1.LookupSortBy_LOOKUP_SORT_BY_NAME &&
-		request.SortBy != opensplunkv1.LookupSortBy_LOOKUP_SORT_BY_CREATED_AT &&
-		request.SortBy != opensplunkv1.LookupSortBy_LOOKUP_SORT_BY_UPDATED_AT {
+	if request.SortBy != opensplunk.LookupSortBy_LOOKUP_SORT_BY_NAME &&
+		request.SortBy != opensplunk.LookupSortBy_LOOKUP_SORT_BY_CREATED_AT &&
+		request.SortBy != opensplunk.LookupSortBy_LOOKUP_SORT_BY_UPDATED_AT {
 		return normalizedListPageRequest{}, fmt.Errorf("%w: lookup list-page sort is invalid", ErrInvalid)
 	}
-	if request.SortDirection != opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING &&
-		request.SortDirection != opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING {
+	if request.SortDirection != opensplunk.SortDirection_SORT_DIRECTION_ASCENDING &&
+		request.SortDirection != opensplunk.SortDirection_SORT_DIRECTION_DESCENDING {
 		return normalizedListPageRequest{}, fmt.Errorf("%w: lookup list-page direction is invalid", ErrInvalid)
 	}
 	if len(request.States) > 3 {
@@ -176,11 +176,11 @@ func normalizeListPageRequest(request ListPageRequest) (normalizedListPageReques
 	persistedStates := make([]string, len(states))
 	for index, state := range states {
 		switch state {
-		case opensplunkv1.LookupState_LOOKUP_STATE_ACTIVE:
+		case opensplunk.LookupState_LOOKUP_STATE_ACTIVE:
 			persistedStates[index] = "ACTIVE"
-		case opensplunkv1.LookupState_LOOKUP_STATE_DISABLED:
+		case opensplunk.LookupState_LOOKUP_STATE_DISABLED:
 			persistedStates[index] = "DISABLED"
-		case opensplunkv1.LookupState_LOOKUP_STATE_DELETED:
+		case opensplunk.LookupState_LOOKUP_STATE_DELETED:
 			persistedStates[index] = "DELETED"
 		default:
 			return normalizedListPageRequest{}, fmt.Errorf("%w: lookup list-page state is invalid", ErrInvalid)
@@ -210,15 +210,15 @@ func normalizeListPageRequest(request ListPageRequest) (normalizedListPageReques
 	return normalizedListPageRequest{ListPageRequest: request, states: persistedStates}, nil
 }
 
-func validListPosition(position ListPosition, sortBy opensplunkv1.LookupSortBy) bool {
+func validListPosition(position ListPosition, sortBy opensplunk.LookupSortBy) bool {
 	if !validIdentity(position.LookupID, 128) {
 		return false
 	}
 	switch sortBy {
-	case opensplunkv1.LookupSortBy_LOOKUP_SORT_BY_NAME:
+	case opensplunk.LookupSortBy_LOOKUP_SORT_BY_NAME:
 		return lookupdefinition.IsValidLookupName(position.Name) && position.UnixMicro == 0
-	case opensplunkv1.LookupSortBy_LOOKUP_SORT_BY_CREATED_AT,
-		opensplunkv1.LookupSortBy_LOOKUP_SORT_BY_UPDATED_AT:
+	case opensplunk.LookupSortBy_LOOKUP_SORT_BY_CREATED_AT,
+		opensplunk.LookupSortBy_LOOKUP_SORT_BY_UPDATED_AT:
 		return position.Name == "" && position.UnixMicro >= 1 && position.UnixMicro <= maximumUnixMicro
 	default:
 		return false
@@ -229,7 +229,7 @@ func lookupListPageSQL(request normalizedListPageRequest) (string, []any) {
 	where, arguments := lookupListWhere(request, true)
 	column := lookupListSortColumn(request.SortBy)
 	direction := "ASC"
-	if request.SortDirection == opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING {
+	if request.SortDirection == opensplunk.SortDirection_SORT_DIRECTION_DESCENDING {
 		direction = "DESC"
 	}
 	query := listProjectionSelect + where + " ORDER BY " + column + " " + direction +
@@ -260,11 +260,11 @@ func lookupListWhere(request normalizedListPageRequest, includePosition bool) (s
 	if includePosition && request.Position != nil {
 		column := lookupListSortColumn(request.SortBy)
 		operator := ">"
-		if request.SortDirection == opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING {
+		if request.SortDirection == opensplunk.SortDirection_SORT_DIRECTION_DESCENDING {
 			operator = "<"
 		}
 		var primary any = request.Position.Name
-		if request.SortBy != opensplunkv1.LookupSortBy_LOOKUP_SORT_BY_NAME {
+		if request.SortBy != opensplunk.LookupSortBy_LOOKUP_SORT_BY_NAME {
 			primary = request.Position.UnixMicro
 		}
 		clauses = append(clauses, "("+column+" "+operator+" ? OR ("+column+" = ? AND registry.lookup_id "+operator+" ?))")
@@ -273,11 +273,11 @@ func lookupListWhere(request normalizedListPageRequest, includePosition bool) (s
 	return " WHERE " + strings.Join(clauses, " AND "), arguments
 }
 
-func lookupListSortColumn(sortBy opensplunkv1.LookupSortBy) string {
+func lookupListSortColumn(sortBy opensplunk.LookupSortBy) string {
 	switch sortBy {
-	case opensplunkv1.LookupSortBy_LOOKUP_SORT_BY_CREATED_AT:
+	case opensplunk.LookupSortBy_LOOKUP_SORT_BY_CREATED_AT:
 		return "registry.created_at_unix_micro"
-	case opensplunkv1.LookupSortBy_LOOKUP_SORT_BY_UPDATED_AT:
+	case opensplunk.LookupSortBy_LOOKUP_SORT_BY_UPDATED_AT:
 		return "registry.updated_at_unix_micro"
 	default:
 		return "registry.name"
@@ -285,19 +285,19 @@ func lookupListSortColumn(sortBy opensplunkv1.LookupSortBy) string {
 }
 
 func listPosition(
-	lookup *opensplunkv1.Lookup,
-	sortBy opensplunkv1.LookupSortBy,
+	lookup *opensplunk.Lookup,
+	sortBy opensplunk.LookupSortBy,
 ) *ListPosition {
 	if lookup == nil || lookup.GetDefinition() == nil {
 		return nil
 	}
 	position := &ListPosition{LookupID: strings.Clone(lookup.GetLookupId())}
 	switch sortBy {
-	case opensplunkv1.LookupSortBy_LOOKUP_SORT_BY_NAME:
+	case opensplunk.LookupSortBy_LOOKUP_SORT_BY_NAME:
 		position.Name = strings.Clone(lookup.GetDefinition().GetName())
-	case opensplunkv1.LookupSortBy_LOOKUP_SORT_BY_CREATED_AT:
+	case opensplunk.LookupSortBy_LOOKUP_SORT_BY_CREATED_AT:
 		position.UnixMicro = lookup.GetCreatedAt().AsTime().UnixMicro()
-	case opensplunkv1.LookupSortBy_LOOKUP_SORT_BY_UPDATED_AT:
+	case opensplunk.LookupSortBy_LOOKUP_SORT_BY_UPDATED_AT:
 		position.UnixMicro = lookup.GetUpdatedAt().AsTime().UnixMicro()
 	default:
 		return nil

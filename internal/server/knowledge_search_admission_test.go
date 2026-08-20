@@ -8,8 +8,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
-	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"google.golang.org/protobuf/proto"
 )
@@ -79,7 +78,7 @@ func TestKnowledgeSearchAdmissionAuthorizesCurrentAppBeforeIndexesAndCreate(t *t
 	})
 	request := createRequest("-1h", "now", "main")
 	request.Definition.AppId = new(appID)
-	response := postProto(t, handler, "/api/v1/search/jobs/create", request)
+	response := postProto(t, handler, "/api/search/jobs/create", request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("knowledge admission status = %d, body = %s", response.Code, response.Body.String())
 	}
@@ -143,7 +142,7 @@ func TestKnowledgeSearchAdmissionAppAuthorizationFailsClosedBeforeIndexes(t *tes
 			})
 			request := createRequest("-1h", "now", "main")
 			request.Definition.AppId = new("app-main")
-			response := postProto(t, handler, "/api/v1/search/jobs/create", request)
+			response := postProto(t, handler, "/api/search/jobs/create", request)
 			if response.Code != test.wantStatus || strings.Contains(response.Body.String(), "secret") {
 				t.Fatalf("status/body = %d/%s", response.Code, response.Body.String())
 			}
@@ -175,7 +174,7 @@ func TestKnowledgeSearchAdmissionPreservesAppLessLegacyCreate(t *testing.T) {
 		AppCatalog: apps,
 		WebUI:      testUI(),
 	})
-	response := postProto(t, handler, "/api/v1/search/jobs/create", createRequest("-1h", "now", "main"))
+	response := postProto(t, handler, "/api/search/jobs/create", createRequest("-1h", "now", "main"))
 	if response.Code != http.StatusOK {
 		t.Fatalf("app-less create status = %d, body = %s", response.Code, response.Body.String())
 	}
@@ -194,7 +193,7 @@ func TestKnowledgeDisabledSearchRejectsInventedSnapshot(t *testing.T) {
 		Indexes:    activeHistoryRerunIndexCatalog("main"),
 		WebUI:      testUI(),
 	})
-	response := postProto(t, handler, "/api/v1/search/jobs/create", createRequest("-1h", "now", "main"))
+	response := postProto(t, handler, "/api/search/jobs/create", createRequest("-1h", "now", "main"))
 	if response.Code != http.StatusInternalServerError ||
 		!strings.Contains(response.Body.String(), "internal server error") {
 		t.Fatalf("status/body = %d/%s", response.Code, response.Body.String())
@@ -208,7 +207,7 @@ func TestKnowledgeSearchAdmissionRejectsMismatchedDependencyOutcome(t *testing.T
 		name       string
 		requestApp string
 		jobApp     string
-		summary    *opensplunkv1.KnowledgeSnapshotSummary
+		summary    *opensplunk.KnowledgeSnapshotSummary
 	}{
 		{name: "scoped result omitted snapshot", requestApp: "app-main", jobApp: "app-main"},
 		{name: "scoped result changed app", requestApp: "app-main", jobApp: "app-other", summary: enabledEmptyKnowledgeSnapshotSummary()},
@@ -233,7 +232,7 @@ func TestKnowledgeSearchAdmissionRejectsMismatchedDependencyOutcome(t *testing.T
 			if test.requestApp != "" {
 				request.Definition.AppId = new(test.requestApp)
 			}
-			response := postProto(t, handler, "/api/v1/search/jobs/create", request)
+			response := postProto(t, handler, "/api/search/jobs/create", request)
 			if response.Code != http.StatusInternalServerError ||
 				!strings.Contains(response.Body.String(), "internal server error") {
 				t.Fatalf("status/body = %d/%s", response.Code, response.Body.String())
@@ -285,20 +284,20 @@ func TestKnowledgeSearchAdmissionRejectsMismatchedLaterLifecycleProjections(t *t
 	}{
 		{
 			name:    "get",
-			path:    "/api/v1/search/jobs/get",
-			request: &opensplunkv1.GetSearchJobRequest{SearchJobId: "projection-mismatch"},
+			path:    "/api/search/jobs/get",
+			request: &opensplunk.GetSearchJobRequest{SearchJobId: "projection-mismatch"},
 			prepare: func(jobs *fakeSearchJobs, job searchjobs.Job) { jobs.getJob = job },
 		},
 		{
 			name:    "cancel",
-			path:    "/api/v1/search/jobs/cancel",
-			request: &opensplunkv1.CancelSearchJobRequest{SearchJobId: "projection-mismatch"},
+			path:    "/api/search/jobs/cancel",
+			request: &opensplunk.CancelSearchJobRequest{SearchJobId: "projection-mismatch"},
 			prepare: func(jobs *fakeSearchJobs, job searchjobs.Job) { jobs.getJob = job },
 		},
 		{
 			name:    "list",
 			path:    searchJobsListPath,
-			request: &opensplunkv1.ListSearchJobsRequest{},
+			request: &opensplunk.ListSearchJobsRequest{},
 			prepare: func(jobs *fakeSearchJobs, job searchjobs.Job) {
 				jobs.listPage = searchjobs.JobListPage{Jobs: []searchjobs.JobListItem{listItem(job)}}
 			},
@@ -347,11 +346,11 @@ func TestKnowledgeSearchAdmissionListProjectsDetachedRedactedSnapshot(t *testing
 		OwnerID:    "owner-1",
 		TenantID:   "tenant-1",
 	})
-	response := postProto(t, handler, searchJobsListPath, &opensplunkv1.ListSearchJobsRequest{})
+	response := postProto(t, handler, searchJobsListPath, &opensplunk.ListSearchJobsRequest{})
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var decoded opensplunkv1.ListSearchJobsResponse
+	var decoded opensplunk.ListSearchJobsResponse
 	unmarshalResponse(t, response, &decoded)
 	if len(decoded.GetSearchJobs()) != 1 {
 		t.Fatalf("jobs = %d, want 1", len(decoded.GetSearchJobs()))
@@ -390,7 +389,7 @@ func TestKnowledgeSearchAdmissionMapsSynchronousFailuresWithoutDetails(t *testin
 			})
 			request := createRequest("-1h", "now", "main")
 			request.Definition.AppId = new("app-main")
-			response := postProto(t, handler, "/api/v1/search/jobs/create", request)
+			response := postProto(t, handler, "/api/search/jobs/create", request)
 			if response.Code != test.wantStatus || strings.Contains(response.Body.String(), "secret") {
 				t.Fatalf("status/body = %d/%s", response.Code, response.Body.String())
 			}
@@ -398,11 +397,10 @@ func TestKnowledgeSearchAdmissionMapsSynchronousFailuresWithoutDetails(t *testin
 	}
 }
 
-func enabledEmptyKnowledgeSnapshotSummary() *opensplunkv1.KnowledgeSnapshotSummary {
-	return &opensplunkv1.KnowledgeSnapshotSummary{Ref: &opensplunkv1.KnowledgeSnapshotRef{
-		SnapshotSha256:               bytes.Repeat([]byte{0x42}, 32),
-		TenantCatalogStateToken:      bytes.Repeat([]byte{0x73}, 32),
-		CompilerCompatibilityVersion: knowledgesnapshot.CompilerCompatibilityVersion,
+func enabledEmptyKnowledgeSnapshotSummary() *opensplunk.KnowledgeSnapshotSummary {
+	return &opensplunk.KnowledgeSnapshotSummary{Ref: &opensplunk.KnowledgeSnapshotRef{
+		SnapshotSha256:          bytes.Repeat([]byte{0x42}, 32),
+		TenantCatalogStateToken: bytes.Repeat([]byte{0x73}, 32),
 	}}
 }
 

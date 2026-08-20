@@ -49,9 +49,7 @@ func testClaim(receivedAt time.Time) ClaimRequest {
 		ReceivedAt:  receivedAt,
 		Hello: Hello{
 			InstanceID:                    "instance-1",
-			ProtocolMajor:                 1,
-			ProtocolMinor:                 0,
-			CollectorVersion:              "1.2.3",
+			SourceRevision:                "development",
 			Hostname:                      "collector.example",
 			OperatingSystem:               "linux",
 			Architecture:                  "amd64",

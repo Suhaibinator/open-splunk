@@ -9,7 +9,7 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
@@ -89,7 +89,6 @@ func testEventAuthorizationFilteringAgainstClickHouse(
 	ingestConfig.Clock = func() time.Time { return receivedAt }
 	ingestConfig.NewStreamID = func() string { return "event-authorization-stream" }
 	ingestConfig.ServerInstanceID = "event-authorization-server"
-	ingestConfig.ServerVersion = "event-authorization-integration"
 	ingestConfig.SessionManager = manager
 	service, err := ingest.NewService(ingestConfig, authorizer, store)
 	if err != nil {
@@ -98,7 +97,7 @@ func testEventAuthorizationFilteringAgainstClickHouse(
 
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	opensplunkv1.RegisterCollectorIngestServiceServer(grpcServer, service)
+	opensplunk.RegisterCollectorIngestServiceServer(grpcServer, service)
 	go func() { _ = grpcServer.Serve(listener) }()
 	t.Cleanup(func() {
 		grpcServer.Stop()
@@ -119,22 +118,20 @@ func testEventAuthorizationFilteringAgainstClickHouse(
 		ctx,
 		metadata.Pairs("authorization", "Bearer "+bearer),
 	)
-	stream, err := opensplunkv1.NewCollectorIngestServiceClient(connection).
+	stream, err := opensplunk.NewCollectorIngestServiceClient(connection).
 		Collect(streamContext)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := stream.Send(&opensplunkv1.CollectRequest{
+	if err := stream.Send(&opensplunk.CollectRequest{
 		StreamSequence: 1,
 		SentAt:         timestamppb.New(receivedAt),
-		Payload: &opensplunkv1.CollectRequest_Hello{Hello: &opensplunkv1.CollectorHello{
-			CollectorId:      collectorID,
-			InstanceId:       "event-authorization-instance",
-			ProtocolMajor:    1,
-			ProtocolMinor:    0,
-			CollectorVersion: "event-authorization-integration",
-			Hostname:         "event-authorization-host",
-			StartedAt:        timestamppb.New(receivedAt.Add(-time.Hour)),
+		Payload: &opensplunk.CollectRequest_Hello{Hello: &opensplunk.CollectorHello{
+			CollectorId:    collectorID,
+			InstanceId:     "event-authorization-instance",
+			SourceRevision: "event-authorization-integration",
+			Hostname:       "event-authorization-host",
+			StartedAt:      timestamppb.New(receivedAt.Add(-time.Hour)),
 		}},
 	}); err != nil {
 		t.Fatal(err)
@@ -147,20 +144,20 @@ func testEventAuthorizationFilteringAgainstClickHouse(
 		t.Fatalf("collector ready response = %#v", readyResponse)
 	}
 
-	newEvent := func(eventID, host, message string) *opensplunkv1.LogEvent {
-		return &opensplunkv1.LogEvent{
+	newEvent := func(eventID, host, message string) *opensplunk.LogEvent {
+		return &opensplunk.LogEvent{
 			EventId:         eventID,
 			IndexName:       indexName,
 			EventTime:       timestamppb.New(receivedAt.Add(-time.Second)),
 			CollectedAt:     timestamppb.New(receivedAt),
-			EventTimeSource: opensplunkv1.EventTimeSource_EVENT_TIME_SOURCE_PARSED,
+			EventTimeSource: opensplunk.EventTimeSource_EVENT_TIME_SOURCE_PARSED,
 			Host:            host,
 			Source:          "/var/log/allowed.log",
 			Sourcetype:      "json",
-			Severity:        opensplunkv1.LogSeverity_LOG_SEVERITY_INFO,
+			Severity:        opensplunk.LogSeverity_LOG_SEVERITY_INFO,
 			Message:         &message,
 			Raw:             []byte(message),
-			RawEncoding:     opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+			RawEncoding:     opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 		}
 	}
 	acceptedEvent := newEvent(
@@ -176,8 +173,8 @@ func testEventAuthorizationFilteringAgainstClickHouse(
 		rejectedHost,
 		"this host-rejected event must not reach ClickHouse",
 	)
-	events := []*opensplunkv1.LogEvent{acceptedEvent, rejectedEvent}
-	batch := &opensplunkv1.EventBatch{
+	events := []*opensplunk.LogEvent{acceptedEvent, rejectedEvent}
+	batch := &opensplunk.EventBatch{
 		CollectorId:           collectorID,
 		BatchId:               batchID,
 		BatchSequence:         1,
@@ -185,13 +182,11 @@ func testEventAuthorizationFilteringAgainstClickHouse(
 		Events:                events,
 		UncompressedSizeBytes: ingest.UncompressedEventBytes(events),
 		EventIdsSha256:        ingest.EventIDDigest(events),
-		ProtocolMajor:         1,
-		ProtocolMinor:         0,
 	}
-	if err := stream.Send(&opensplunkv1.CollectRequest{
+	if err := stream.Send(&opensplunk.CollectRequest{
 		StreamSequence: 2,
 		SentAt:         timestamppb.New(receivedAt),
-		Payload:        &opensplunkv1.CollectRequest_Batch{Batch: batch},
+		Payload:        &opensplunk.CollectRequest_Batch{Batch: batch},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +201,7 @@ func testEventAuthorizationFilteringAgainstClickHouse(
 	}
 	rejection := ack.GetRejectedEvents()[0]
 	if rejection.GetEventIndex() != 1 || rejection.GetEventId() != rejectedID ||
-		rejection.GetCode() != opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_HOST ||
+		rejection.GetCode() != opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_HOST ||
 		len(rejection.GetViolations()) != 1 ||
 		rejection.GetViolations()[0].GetFieldPath() != "host" ||
 		rejection.GetViolations()[0].GetCode() != "unauthorized_host" {

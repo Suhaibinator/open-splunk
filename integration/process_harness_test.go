@@ -23,7 +23,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 )
@@ -179,7 +179,7 @@ func createBackendIndex(
 	administratorToken string,
 	name string,
 	displayName string,
-) *opensplunkv1.Index {
+) *opensplunk.Index {
 	t.Helper()
 	return createBackendIndexWithRetention(
 		t,
@@ -202,22 +202,22 @@ func createBackendIndexWithRetention(
 	name string,
 	displayName string,
 	retention time.Duration,
-) *opensplunkv1.Index {
+) *opensplunk.Index {
 	t.Helper()
-	var created opensplunkv1.CreateIndexResponse
+	var created opensplunk.CreateIndexResponse
 	postAdministratorProto(
 		t,
 		ctx,
 		client,
-		baseURL+"/api/v1/indexes/create",
+		baseURL+"/api/indexes/create",
 		administratorToken,
-		&opensplunkv1.CreateIndexRequest{
-			Definition: &opensplunkv1.IndexDefinition{
+		&opensplunk.CreateIndexRequest{
+			Definition: &opensplunk.IndexDefinition{
 				Name:            name,
 				DisplayName:     displayName,
 				RetentionPeriod: durationpb.New(retention),
-				IngestionAccess: opensplunkv1.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
-				SearchAccess:    opensplunkv1.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
+				IngestionAccess: opensplunk.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
+				SearchAccess:    opensplunk.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
 			},
 		},
 		&created,
@@ -229,7 +229,7 @@ func createBackendIndexWithRetention(
 		index.GetDefinition().GetRetentionPeriod() == nil ||
 		index.GetDefinition().GetRetentionPeriod().AsDuration() != retention ||
 		index.GetState() !=
-			opensplunkv1.IndexState_INDEX_STATE_ACTIVE {
+			opensplunk.IndexState_INDEX_STATE_ACTIVE {
 		t.Fatalf("created index %q = %+v", name, index)
 	}
 	return index
@@ -530,9 +530,7 @@ func repositoryRoot(t *testing.T) string {
 func buildBinary(t *testing.T, ctx context.Context, repository, output, pkg string) {
 	t.Helper()
 	linkerFlags := fmt.Sprintf(
-		"-X github.com/Suhaibinator/open-splunk/internal/buildinfo.applicationVersion=%s "+
-			"-X github.com/Suhaibinator/open-splunk/internal/buildinfo.sourceRevision=%s",
-		integrationApplicationVersion,
+		"-X github.com/Suhaibinator/open-splunk/internal/buildinfo.sourceRevision=%s",
 		integrationSourceRevision,
 	)
 	command := exec.CommandContext(ctx, "go", "build", "-trimpath", "-ldflags", linkerFlags, "-o", output, pkg)
@@ -554,12 +552,11 @@ func buildBinary(t *testing.T, ctx context.Context, repository, output, pkg stri
 }
 
 const (
-	integrationApplicationVersion = "0.4.0"
-	integrationSourceRevision     = "ad00000000000000000000000000000000000000"
-	integrationUIBuildID          = "r3g28717kj4g15m62h898mk9k1g020g7642h384414jmg8n568nk457319347g52g"
-	backendFrontendStagePrefix    = "open-splunk-backend-frontend-"
-	maximumHarnessOutputBytes     = 1 << 20
-	commandOutputTruncatedSuffix  = "\n... [command output truncated]"
+	integrationSourceRevision    = "ad00000000000000000000000000000000000000"
+	integrationUIBuildID         = "r4523g5783jn79k21jjkgkg263n2nkn47n9622nn59m910jkm818220237m6m394g"
+	backendFrontendStagePrefix   = "open-splunk-backend-frontend-"
+	maximumHarnessOutputBytes    = 1 << 20
+	commandOutputTruncatedSuffix = "\n... [command output truncated]"
 )
 
 var backendFrontendBuild struct {
@@ -665,7 +662,6 @@ func stageBackendFrontend(ctx context.Context, sourceRoot string) (string, strin
 	command.Dir = stageRoot
 	command.Env = environmentWithValue(os.Environ(), "OPEN_SPLUNK_DATA_MODE", "backend")
 	command.Env = environmentWithValue(command.Env, "OPEN_SPLUNK_API_BASE_URL", "")
-	command.Env = environmentWithValue(command.Env, "OPEN_SPLUNK_APPLICATION_VERSION", integrationApplicationVersion)
 	command.Env = environmentWithValue(command.Env, "OPEN_SPLUNK_SOURCE_REVISION", integrationSourceRevision)
 	command.Env = environmentWithValue(command.Env, "NEXT_TELEMETRY_DISABLED", "1")
 	command.Env = environmentWithValue(command.Env, "LANG", "C")
@@ -691,8 +687,6 @@ func stageBackendFrontend(ctx context.Context, sourceRoot string) (string, strin
 		"go",
 		"run",
 		"./cmd/open-splunk-manifest",
-		"-application-version",
-		integrationApplicationVersion,
 		"-source-revision",
 		integrationSourceRevision,
 	)

@@ -80,7 +80,7 @@ func ValidTextMetadata(value string) bool {
 }
 
 // DefaultMetadataFallbacks returns independent fixed fallbacks. Index remains
-// absent because HEC v0.1 has no global index fallback.
+// absent because HEC has no global index fallback.
 func DefaultMetadataFallbacks() MetadataValues {
 	return MetadataValues{
 		Host:       OptionalString{Present: true, Value: "hec"},
@@ -98,7 +98,7 @@ func asciiEdgeWhitespace(value byte) bool {
 	}
 }
 
-// ResolveMetadata applies the field-specific v0.1 precedence. Only
+// ResolveMetadata applies the field-specific precedence. Only
 // sourcetype consults the selected active index default; index, host, and
 // source do not derive from index metadata. A present empty string wins;
 // callers must apply any domain-specific empty or canonical-name policy after

@@ -13,7 +13,7 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
@@ -47,7 +47,7 @@ func TestStatsSparklinePipelineAgainstClickHouse(t *testing.T) {
 	newEvent := func(
 		id string,
 		at time.Time,
-		fields ...*opensplunkv1.TypedObjectField,
+		fields ...*opensplunk.TypedObjectField,
 	) *ingest.StoredEvent {
 		t.Helper()
 		event := testStoredEvent(id, index, indexTime)

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 )
 
@@ -185,15 +185,15 @@ func recognizedInactiveSemanticVersions(name, destination string, state State, t
 
 func TestIntegrationInactiveRecognizedExpressionsRemainInspectableUntilPublication(t *testing.T) {
 	database, store := newCatalogTestStore(t)
-	definition := func(name, expression, revision string) *opensplunkv1.KnowledgeObjectDefinition {
+	definition := func(name, expression, revision string) *opensplunk.KnowledgeObjectDefinition {
 		return dependencyCalculatedDefinition(
 			testApp, name, SharingScopePrivate, new(revision), "editable-*", expression, "result_value",
 		)
 	}
-	valid := func(name, revision string) *opensplunkv1.KnowledgeObjectDefinition {
+	valid := func(name, revision string) *opensplunk.KnowledgeObjectDefinition {
 		return definition(name, "lower(source_value)", revision)
 	}
-	invalid := func(name, revision string) *opensplunkv1.KnowledgeObjectDefinition {
+	invalid := func(name, revision string) *opensplunk.KnowledgeObjectDefinition {
 		return definition(name, "lower(", revision)
 	}
 	fixtures := []fixtureObject{
@@ -323,7 +323,7 @@ func TestIntegrationDependencySemanticsRejectInvalidEdgesAcrossGetAndBatchList(t
 	}
 }
 
-func semanticFixtureVersion(definition *opensplunkv1.KnowledgeObjectDefinition) *fixtureVersion {
+func semanticFixtureVersion(definition *opensplunk.KnowledgeObjectDefinition) *fixtureVersion {
 	return &fixtureVersion{definition: definition, state: StateActive, mutation: "create"}
 }
 

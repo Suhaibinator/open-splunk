@@ -93,9 +93,9 @@ OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
   go test ./integration -run '^TestBackendHECVertical$' -count=1 -timeout=8m -v
 ```
 
-## Release OCI and full-stack Compose
+## OCI and full-stack Compose
 
-`release_oci_integration_test.go` builds the production `server` and
+`release_oci_integration_test.go` builds the development `server` and
 `collector` images for the host Linux architecture through the production
 `make oci` launcher. That launcher requires a clean worktree and materializes
 the exact committed `HEAD` snapshot before either Docker target is built. The
@@ -112,7 +112,7 @@ migration/backup/restore credential or recovery mount in the long-running
 server, an isolated successful migrator with only its CA/secret mounts,
 read-only runtime/deletion credential files, exact recovery-volume ownership,
 rejection of the passwordless base ClickHouse user, and a successful
-administrator API mutation. It reapplies the exact embedded release migrations
+administrator API mutation. It reapplies the exact embedded source migrations
 to prove the current ledger is idempotent, stops ClickHouse to prove readiness
 becomes unavailable while HTTP liveness remains available, and requires
 sustained readiness after ClickHouse restarts. It then rotates all six
@@ -123,11 +123,11 @@ be healthy with the same state volume and expose both pre- and post-rotation
 SQLite records through the live protobuf API. The
 separate ClickHouse principal integration mutates and restores both physical
 table definitions and an unexpected third table while the ledger remains
-complete; every mutation must fail the release schema validator. The Compose
+complete; every mutation must fail the current schema validator. The Compose
 integration rejects all previous principal credentials on the persistent
 volume. Cleanup removes every test-owned container, network, volume, and image.
 
-The same release test proves paired deployment disaster recovery rather than a
+The same artifact test proves paired deployment disaster recovery rather than a
 control-plane-only snapshot. It creates a bounded index, ingestion credential,
 and ClickHouse event, stops the server, and uses the production recovery profile
 to create and independently verify the coordinated recovery set. The retained
@@ -178,7 +178,6 @@ labels, then removes the original and restored volumes as well as every
 test-owned container, network, and image.
 
 ```sh
-OPEN_SPLUNK_APPLICATION_VERSION=0.4.0 \
 OPEN_SPLUNK_OCI_INTEGRATION=1 \
 OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.7.3.19@sha256:f90a77560f72b10802106ee49e9870e41668cbc496e280c3911f6e3b216657f3 \
   go test ./integration -run '^TestReleaseOCIComposeContract$' \

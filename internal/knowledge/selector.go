@@ -545,7 +545,7 @@ func (counter *globTransitionCounter) step() bool {
 	return true
 }
 
-const canonicalSelectorDomain = "open-splunk/knowledge-selector/v1\x00"
+const canonicalSelectorDomain = "open-splunk/knowledge-selector\x00"
 
 func marshalCanonicalSelector(dimensions [MaximumSelectorDimensions]compiledDimension) []byte {
 	length := len(canonicalSelectorDomain) + MaximumSelectorDimensions*3

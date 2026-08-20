@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 )
 
@@ -512,7 +512,7 @@ type blockingCollectRequestReceiver struct {
 	ctx context.Context
 }
 
-func (receiver blockingCollectRequestReceiver) Recv() (*opensplunkv1.CollectRequest, error) {
+func (receiver blockingCollectRequestReceiver) Recv() (*opensplunk.CollectRequest, error) {
 	<-receiver.ctx.Done()
 	return nil, receiver.ctx.Err()
 }

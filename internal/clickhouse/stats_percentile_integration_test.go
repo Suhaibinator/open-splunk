@@ -9,7 +9,7 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 )
 
@@ -26,9 +26,9 @@ func testStatsPercentilesAgainstClickHouse(
 		batchID     = "stats-percentile-batch"
 		collectorID = "stats-percentile-collector"
 	)
-	newEvent := func(id, group string, fields ...*opensplunkv1.TypedObjectField) *ingest.StoredEvent {
+	newEvent := func(id, group string, fields ...*opensplunk.TypedObjectField) *ingest.StoredEvent {
 		fields = append(
-			[]*opensplunkv1.TypedObjectField{
+			[]*opensplunk.TypedObjectField{
 				typedField("percentile_group", typedString(group)),
 			},
 			fields...,

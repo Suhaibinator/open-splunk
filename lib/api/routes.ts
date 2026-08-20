@@ -1,17 +1,17 @@
-import * as ExportApi from "@/gen/ts/open_splunk/v1/export_api";
-import * as HistoryApi from "@/gen/ts/open_splunk/v1/history_api";
-import * as HecAdminApi from "@/gen/ts/open_splunk/v1/hec_admin_api";
-import * as IndexApi from "@/gen/ts/open_splunk/v1/index_api";
-import * as AppApi from "@/gen/ts/open_splunk/v1/app_api";
-import * as AuditApi from "@/gen/ts/open_splunk/v1/audit_api";
-import * as CollectorAdminApi from "@/gen/ts/open_splunk/v1/collector_admin_api";
-import * as KnowledgeApi from "@/gen/ts/open_splunk/v1/knowledge_api";
-import * as LookupApi from "@/gen/ts/open_splunk/v1/lookup_api";
-import * as SavedSearchApi from "@/gen/ts/open_splunk/v1/saved_search_api";
-import * as SearchApi from "@/gen/ts/open_splunk/v1/search_api";
-import * as SearchAttemptAuditApi from "@/gen/ts/open_splunk/v1/search_attempt_audit_api";
-import * as SearchInspectionApi from "@/gen/ts/open_splunk/v1/search_inspection_api";
-import * as SystemApi from "@/gen/ts/open_splunk/v1/system_api";
+import * as ExportApi from "@/gen/ts/open_splunk/export_api";
+import * as HistoryApi from "@/gen/ts/open_splunk/history_api";
+import * as HecAdminApi from "@/gen/ts/open_splunk/hec_admin_api";
+import * as IndexApi from "@/gen/ts/open_splunk/index_api";
+import * as AppApi from "@/gen/ts/open_splunk/app_api";
+import * as AuditApi from "@/gen/ts/open_splunk/audit_api";
+import * as CollectorAdminApi from "@/gen/ts/open_splunk/collector_admin_api";
+import * as KnowledgeApi from "@/gen/ts/open_splunk/knowledge_api";
+import * as LookupApi from "@/gen/ts/open_splunk/lookup_api";
+import * as SavedSearchApi from "@/gen/ts/open_splunk/saved_search_api";
+import * as SearchApi from "@/gen/ts/open_splunk/search_api";
+import * as SearchAttemptAuditApi from "@/gen/ts/open_splunk/search_attempt_audit_api";
+import * as SearchInspectionApi from "@/gen/ts/open_splunk/search_inspection_api";
+import * as SystemApi from "@/gen/ts/open_splunk/system_api";
 
 import { defineProtobufRoute, type ProtobufRoute } from "./protobuf-transport";
 
@@ -99,7 +99,7 @@ export type RouteResponse<TRoute> = TRoute extends ProtobufRoute<unknown, infer 
 
 export const systemRoutes = {
   bootstrap: defineProtobufRoute(
-    "/api/v1/system/bootstrap",
+    "/api/system/bootstrap",
     SystemApi.GetSystemBootstrapRequest,
     SystemApi.GetSystemBootstrapResponse,
   ),
@@ -107,42 +107,42 @@ export const systemRoutes = {
 
 export const indexRoutes = {
   create: defineProtobufRoute(
-    "/api/v1/indexes/create",
+    "/api/indexes/create",
     IndexApi.CreateIndexRequest,
     IndexApi.CreateIndexResponse,
   ),
   get: defineProtobufRoute(
-    "/api/v1/indexes/get",
+    "/api/indexes/get",
     IndexApi.GetIndexRequest,
     IndexApi.GetIndexResponse,
   ),
   list: defineProtobufRoute(
-    "/api/v1/indexes/list",
+    "/api/indexes/list",
     IndexApi.ListIndexesRequest,
     IndexApi.ListIndexesResponse,
   ),
   fields: defineProtobufRoute(
-    "/api/v1/indexes/fields/list",
+    "/api/indexes/fields/list",
     IndexApi.ListIndexFieldsRequest,
     IndexApi.ListIndexFieldsResponse,
   ),
   update: defineProtobufRoute(
-    "/api/v1/indexes/update",
+    "/api/indexes/update",
     IndexApi.UpdateIndexRequest,
     IndexApi.UpdateIndexResponse,
   ),
   setState: defineProtobufRoute(
-    "/api/v1/indexes/state/set",
+    "/api/indexes/state/set",
     IndexApi.SetIndexStateRequest,
     IndexApi.SetIndexStateResponse,
   ),
   delete: defineProtobufRoute(
-    "/api/v1/indexes/delete",
+    "/api/indexes/delete",
     IndexApi.DeleteIndexRequest,
     IndexApi.DeleteIndexResponse,
   ),
   stats: defineProtobufRoute(
-    "/api/v1/indexes/stats/get",
+    "/api/indexes/stats/get",
     IndexApi.GetIndexStatsRequest,
     IndexApi.GetIndexStatsResponse,
   ),
@@ -150,32 +150,32 @@ export const indexRoutes = {
 
 export const appRoutes = {
   create: defineProtobufRoute(
-    "/api/v1/apps/create",
+    "/api/apps/create",
     AppApi.CreateAppRequest,
     AppApi.CreateAppResponse,
   ),
   get: defineProtobufRoute(
-    "/api/v1/apps/get",
+    "/api/apps/get",
     AppApi.GetAppRequest,
     AppApi.GetAppResponse,
   ),
   list: defineProtobufRoute(
-    "/api/v1/apps/list",
+    "/api/apps/list",
     AppApi.ListAppsRequest,
     AppApi.ListAppsResponse,
   ),
   update: defineProtobufRoute(
-    "/api/v1/apps/update",
+    "/api/apps/update",
     AppApi.UpdateAppRequest,
     AppApi.UpdateAppResponse,
   ),
   setState: defineProtobufRoute(
-    "/api/v1/apps/state/set",
+    "/api/apps/state/set",
     AppApi.SetAppStateRequest,
     AppApi.SetAppStateResponse,
   ),
   delete: defineProtobufRoute(
-    "/api/v1/apps/delete",
+    "/api/apps/delete",
     AppApi.DeleteAppRequest,
     AppApi.DeleteAppResponse,
   ),
@@ -183,58 +183,58 @@ export const appRoutes = {
 
 export const knowledgeRoutes = {
   create: defineProtobufRoute(
-    "/api/v1/knowledge/objects/create",
+    "/api/knowledge/objects/create",
     KnowledgeApi.CreateKnowledgeObjectRequest,
     KnowledgeApi.CreateKnowledgeObjectResponse,
   ),
   get: defineProtobufRoute(
-    "/api/v1/knowledge/objects/get",
+    "/api/knowledge/objects/get",
     KnowledgeApi.GetKnowledgeObjectRequest,
     KnowledgeApi.GetKnowledgeObjectResponse,
     { maximumResponseBytes: MAXIMUM_KNOWLEDGE_MANAGEMENT_RESPONSE_BYTES },
   ),
   list: defineProtobufRoute(
-    "/api/v1/knowledge/objects/list",
+    "/api/knowledge/objects/list",
     KnowledgeApi.ListKnowledgeObjectsRequest,
     KnowledgeApi.ListKnowledgeObjectsResponse,
     { maximumResponseBytes: MAXIMUM_KNOWLEDGE_MANAGEMENT_RESPONSE_BYTES },
   ),
   dependencies: defineProtobufRoute(
-    "/api/v1/knowledge/objects/dependencies",
+    "/api/knowledge/objects/dependencies",
     KnowledgeApi.ListKnowledgeObjectDependenciesRequest,
     KnowledgeApi.ListKnowledgeObjectDependenciesResponse,
     { maximumResponseBytes: MAXIMUM_KNOWLEDGE_GRAPH_RESPONSE_BYTES },
   ),
   dependents: defineProtobufRoute(
-    "/api/v1/knowledge/objects/dependents",
+    "/api/knowledge/objects/dependents",
     KnowledgeApi.ListKnowledgeObjectDependentsRequest,
     KnowledgeApi.ListKnowledgeObjectDependentsResponse,
     { maximumResponseBytes: MAXIMUM_KNOWLEDGE_GRAPH_RESPONSE_BYTES },
   ),
   validate: defineProtobufRoute(
-    "/api/v1/knowledge/objects/validate",
+    "/api/knowledge/objects/validate",
     KnowledgeApi.ValidateKnowledgeObjectRequest,
     KnowledgeApi.ValidateKnowledgeObjectResponse,
     { maximumResponseBytes: MAXIMUM_KNOWLEDGE_MANAGEMENT_RESPONSE_BYTES },
   ),
   preview: defineProtobufRoute(
-    "/api/v1/knowledge/objects/preview",
+    "/api/knowledge/objects/preview",
     KnowledgeApi.PreviewKnowledgeObjectRequest,
     strictPreviewKnowledgeObjectResponse,
     { maximumResponseBytes: MAXIMUM_KNOWLEDGE_MANAGEMENT_RESPONSE_BYTES },
   ),
   update: defineProtobufRoute(
-    "/api/v1/knowledge/objects/update",
+    "/api/knowledge/objects/update",
     KnowledgeApi.UpdateKnowledgeObjectRequest,
     KnowledgeApi.UpdateKnowledgeObjectResponse,
   ),
   setState: defineProtobufRoute(
-    "/api/v1/knowledge/objects/set-state",
+    "/api/knowledge/objects/set-state",
     KnowledgeApi.SetKnowledgeObjectStateRequest,
     KnowledgeApi.SetKnowledgeObjectStateResponse,
   ),
   delete: defineProtobufRoute(
-    "/api/v1/knowledge/objects/delete",
+    "/api/knowledge/objects/delete",
     KnowledgeApi.DeleteKnowledgeObjectRequest,
     KnowledgeApi.DeleteKnowledgeObjectResponse,
   ),
@@ -242,43 +242,43 @@ export const knowledgeRoutes = {
 
 export const lookupRoutes = {
   create: defineProtobufRoute(
-    "/api/v1/knowledge/lookups/create",
+    "/api/knowledge/lookups/create",
     LookupApi.CreateLookupRequest,
     LookupApi.CreateLookupResponse,
     { maximumResponseBytes: MAXIMUM_LOOKUP_MANAGEMENT_RESPONSE_BYTES },
   ),
   get: defineProtobufRoute(
-    "/api/v1/knowledge/lookups/get",
+    "/api/knowledge/lookups/get",
     LookupApi.GetLookupRequest,
     LookupApi.GetLookupResponse,
     { maximumResponseBytes: MAXIMUM_LOOKUP_MANAGEMENT_RESPONSE_BYTES },
   ),
   list: defineProtobufRoute(
-    "/api/v1/knowledge/lookups/list",
+    "/api/knowledge/lookups/list",
     LookupApi.ListLookupsRequest,
     LookupApi.ListLookupsResponse,
     { maximumResponseBytes: MAXIMUM_LOOKUP_MANAGEMENT_RESPONSE_BYTES },
   ),
   replace: defineProtobufRoute(
-    "/api/v1/knowledge/lookups/replace",
+    "/api/knowledge/lookups/replace",
     LookupApi.ReplaceLookupRequest,
     LookupApi.ReplaceLookupResponse,
     { maximumResponseBytes: MAXIMUM_LOOKUP_MANAGEMENT_RESPONSE_BYTES },
   ),
   setState: defineProtobufRoute(
-    "/api/v1/knowledge/lookups/state/set",
+    "/api/knowledge/lookups/state/set",
     LookupApi.SetLookupStateRequest,
     LookupApi.SetLookupStateResponse,
     { maximumResponseBytes: MAXIMUM_LOOKUP_MANAGEMENT_RESPONSE_BYTES },
   ),
   delete: defineProtobufRoute(
-    "/api/v1/knowledge/lookups/delete",
+    "/api/knowledge/lookups/delete",
     LookupApi.DeleteLookupRequest,
     LookupApi.DeleteLookupResponse,
     { maximumResponseBytes: MAXIMUM_LOOKUP_MANAGEMENT_RESPONSE_BYTES },
   ),
   preview: defineProtobufRoute(
-    "/api/v1/knowledge/lookups/preview",
+    "/api/knowledge/lookups/preview",
     LookupApi.PreviewLookupRequest,
     LookupApi.PreviewLookupResponse,
     { maximumResponseBytes: MAXIMUM_LOOKUP_MANAGEMENT_RESPONSE_BYTES },
@@ -287,22 +287,22 @@ export const lookupRoutes = {
 
 export const collectorRoutes = {
   list: defineProtobufRoute(
-    "/api/v1/collectors/list",
+    "/api/collectors/list",
     CollectorAdminApi.ListCollectorsRequest,
     CollectorAdminApi.ListCollectorsResponse,
   ),
   get: defineProtobufRoute(
-    "/api/v1/collectors/get",
+    "/api/collectors/get",
     CollectorAdminApi.GetCollectorRequest,
     CollectorAdminApi.GetCollectorResponse,
   ),
   update: defineProtobufRoute(
-    "/api/v1/collectors/update",
+    "/api/collectors/update",
     CollectorAdminApi.UpdateCollectorRequest,
     CollectorAdminApi.UpdateCollectorResponse,
   ),
   setState: defineProtobufRoute(
-    "/api/v1/collectors/state/set",
+    "/api/collectors/state/set",
     CollectorAdminApi.SetCollectorEnabledRequest,
     CollectorAdminApi.SetCollectorEnabledResponse,
   ),
@@ -310,7 +310,7 @@ export const collectorRoutes = {
 
 export const auditEventRoutes = {
   list: defineProtobufRoute(
-    "/api/v1/audit/events/list",
+    "/api/audit/events/list",
     AuditApi.ListAuditEventsRequest,
     AuditApi.ListAuditEventsResponse,
   ),
@@ -318,7 +318,7 @@ export const auditEventRoutes = {
 
 export const searchAttemptAuditRoutes = {
   list: defineProtobufRoute(
-    "/api/v1/audit/search-attempts/list",
+    "/api/audit/search-attempts/list",
     SearchAttemptAuditApi.ListSearchAttemptAuditEventsRequest,
     SearchAttemptAuditApi.ListSearchAttemptAuditEventsResponse,
   ),
@@ -326,32 +326,32 @@ export const searchAttemptAuditRoutes = {
 
 export const ingestionTokenRoutes = {
   create: defineProtobufRoute(
-    "/api/v1/ingestion-tokens/create",
+    "/api/ingestion-tokens/create",
     CollectorAdminApi.CreateIngestionTokenRequest,
     CollectorAdminApi.CreateIngestionTokenResponse,
   ),
   get: defineProtobufRoute(
-    "/api/v1/ingestion-tokens/get",
+    "/api/ingestion-tokens/get",
     CollectorAdminApi.GetIngestionTokenRequest,
     CollectorAdminApi.GetIngestionTokenResponse,
   ),
   list: defineProtobufRoute(
-    "/api/v1/ingestion-tokens/list",
+    "/api/ingestion-tokens/list",
     CollectorAdminApi.ListIngestionTokensRequest,
     CollectorAdminApi.ListIngestionTokensResponse,
   ),
   update: defineProtobufRoute(
-    "/api/v1/ingestion-tokens/update",
+    "/api/ingestion-tokens/update",
     CollectorAdminApi.UpdateIngestionTokenRequest,
     CollectorAdminApi.UpdateIngestionTokenResponse,
   ),
   setState: defineProtobufRoute(
-    "/api/v1/ingestion-tokens/state/set",
+    "/api/ingestion-tokens/state/set",
     CollectorAdminApi.SetIngestionTokenEnabledRequest,
     CollectorAdminApi.SetIngestionTokenEnabledResponse,
   ),
   revoke: defineProtobufRoute(
-    "/api/v1/ingestion-tokens/revoke",
+    "/api/ingestion-tokens/revoke",
     CollectorAdminApi.RevokeIngestionTokenRequest,
     CollectorAdminApi.RevokeIngestionTokenResponse,
   ),
@@ -359,7 +359,7 @@ export const ingestionTokenRoutes = {
 
 export const hecOperationsRoutes = {
   get: defineProtobufRoute(
-    "/api/v1/hec/operations/get",
+    "/api/hec/operations/get",
     HecAdminApi.GetHECOperationalSnapshotRequest,
     HecAdminApi.GetHECOperationalSnapshotResponse,
   ),
@@ -367,57 +367,57 @@ export const hecOperationsRoutes = {
 
 export const searchRoutes = {
   validate: defineProtobufRoute(
-    "/api/v1/search/validate",
+    "/api/search/validate",
     SearchApi.ValidateSearchRequest,
     SearchApi.ValidateSearchResponse,
   ),
   suggestions: defineProtobufRoute(
-    "/api/v1/search/suggestions",
+    "/api/search/suggestions",
     SearchApi.GetSearchSuggestionsRequest,
     SearchApi.GetSearchSuggestionsResponse,
   ),
   create: defineProtobufRoute(
-    "/api/v1/search/jobs/create",
+    "/api/search/jobs/create",
     SearchApi.CreateSearchJobRequest,
     SearchApi.CreateSearchJobResponse,
   ),
   get: defineProtobufRoute(
-    "/api/v1/search/jobs/get",
+    "/api/search/jobs/get",
     SearchApi.GetSearchJobRequest,
     SearchApi.GetSearchJobResponse,
   ),
   list: defineProtobufRoute(
-    "/api/v1/search/jobs/list",
+    "/api/search/jobs/list",
     SearchApi.ListSearchJobsRequest,
     SearchApi.ListSearchJobsResponse,
   ),
   results: defineProtobufRoute(
-    "/api/v1/search/jobs/results",
+    "/api/search/jobs/results",
     SearchApi.GetSearchResultsRequest,
     SearchApi.GetSearchResultsResponse,
   ),
   fields: defineProtobufRoute(
-    "/api/v1/search/jobs/fields/list",
+    "/api/search/jobs/fields/list",
     SearchApi.ListSearchFieldsRequest,
     SearchApi.ListSearchFieldsResponse,
   ),
   fieldSummary: defineProtobufRoute(
-    "/api/v1/search/jobs/field-summary",
+    "/api/search/jobs/field-summary",
     SearchApi.GetSearchFieldSummaryRequest,
     SearchApi.GetSearchFieldSummaryResponse,
   ),
   timeline: defineProtobufRoute(
-    "/api/v1/search/jobs/timeline",
+    "/api/search/jobs/timeline",
     SearchApi.GetSearchTimelineRequest,
     SearchApi.GetSearchTimelineResponse,
   ),
   cancel: defineProtobufRoute(
-    "/api/v1/search/jobs/cancel",
+    "/api/search/jobs/cancel",
     SearchApi.CancelSearchJobRequest,
     SearchApi.CancelSearchJobResponse,
   ),
   inspect: defineProtobufRoute(
-    "/api/v1/search/jobs/inspect",
+    "/api/search/jobs/inspect",
     SearchInspectionApi.InspectSearchJobRequest,
     SearchInspectionApi.InspectSearchJobResponse,
     { maximumResponseBytes: MAXIMUM_SEARCH_INSPECTION_RESPONSE_BYTES },
@@ -426,32 +426,32 @@ export const searchRoutes = {
 
 export const savedSearchRoutes = {
   create: defineProtobufRoute(
-    "/api/v1/saved-searches/create",
+    "/api/saved-searches/create",
     SavedSearchApi.CreateSavedSearchRequest,
     SavedSearchApi.CreateSavedSearchResponse,
   ),
   get: defineProtobufRoute(
-    "/api/v1/saved-searches/get",
+    "/api/saved-searches/get",
     SavedSearchApi.GetSavedSearchRequest,
     SavedSearchApi.GetSavedSearchResponse,
   ),
   list: defineProtobufRoute(
-    "/api/v1/saved-searches/list",
+    "/api/saved-searches/list",
     SavedSearchApi.ListSavedSearchesRequest,
     SavedSearchApi.ListSavedSearchesResponse,
   ),
   update: defineProtobufRoute(
-    "/api/v1/saved-searches/update",
+    "/api/saved-searches/update",
     SavedSearchApi.UpdateSavedSearchRequest,
     SavedSearchApi.UpdateSavedSearchResponse,
   ),
   duplicate: defineProtobufRoute(
-    "/api/v1/saved-searches/duplicate",
+    "/api/saved-searches/duplicate",
     SavedSearchApi.DuplicateSavedSearchRequest,
     SavedSearchApi.DuplicateSavedSearchResponse,
   ),
   delete: defineProtobufRoute(
-    "/api/v1/saved-searches/delete",
+    "/api/saved-searches/delete",
     SavedSearchApi.DeleteSavedSearchRequest,
     SavedSearchApi.DeleteSavedSearchResponse,
   ),
@@ -459,22 +459,22 @@ export const savedSearchRoutes = {
 
 export const historyRoutes = {
   get: defineProtobufRoute(
-    "/api/v1/search/history/get",
+    "/api/search/history/get",
     HistoryApi.GetSearchHistoryEntryRequest,
     HistoryApi.GetSearchHistoryEntryResponse,
   ),
   list: defineProtobufRoute(
-    "/api/v1/search/history/list",
+    "/api/search/history/list",
     HistoryApi.ListSearchHistoryRequest,
     HistoryApi.ListSearchHistoryResponse,
   ),
   delete: defineProtobufRoute(
-    "/api/v1/search/history/delete",
+    "/api/search/history/delete",
     HistoryApi.DeleteSearchHistoryEntryRequest,
     HistoryApi.DeleteSearchHistoryEntryResponse,
   ),
   clear: defineProtobufRoute(
-    "/api/v1/search/history/clear",
+    "/api/search/history/clear",
     HistoryApi.ClearSearchHistoryRequest,
     HistoryApi.ClearSearchHistoryResponse,
   ),
@@ -482,22 +482,22 @@ export const historyRoutes = {
 
 export const exportRoutes = {
   create: defineProtobufRoute(
-    "/api/v1/search/exports/create",
+    "/api/search/exports/create",
     ExportApi.CreateExportJobRequest,
     ExportApi.CreateExportJobResponse,
   ),
   get: defineProtobufRoute(
-    "/api/v1/search/exports/get",
+    "/api/search/exports/get",
     ExportApi.GetExportJobRequest,
     ExportApi.GetExportJobResponse,
   ),
   list: defineProtobufRoute(
-    "/api/v1/search/exports/list",
+    "/api/search/exports/list",
     ExportApi.ListExportJobsRequest,
     ExportApi.ListExportJobsResponse,
   ),
   cancel: defineProtobufRoute(
-    "/api/v1/search/exports/cancel",
+    "/api/search/exports/cancel",
     ExportApi.CancelExportJobRequest,
     ExportApi.CancelExportJobResponse,
   ),

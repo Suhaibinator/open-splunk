@@ -60,7 +60,6 @@ export interface DemoHistoryEntry {
   appId?: string;
   sourceLabel?: string;
   resolvedTimeRange?: string;
-  compilerVersion?: string;
   state: "Completed" | "Canceled" | "Failed" | "Expired";
   events: number;
   eventsExact?: string;
@@ -128,7 +127,7 @@ export const DEMO_EVENTS: DemoEvent[] = [
     layer: "service",
     message: "Database query failed while loading submission",
     method: "POST",
-    path: "/api/v1/submissions/grade",
+    path: "/api/submissions/grade",
     status: 500,
     duration_ms: 827,
     trace_id: "4b9f0f06d2cc47c89bd04ce9a7318fd1",
@@ -141,7 +140,7 @@ export const DEMO_EVENTS: DemoEvent[] = [
     layer: "transport",
     message: "Request completed above latency threshold",
     method: "GET",
-    path: "/api/v1/courses/course_9/gradebook",
+    path: "/api/courses/course_9/gradebook",
     status: 200,
     duration_ms: 1842,
     trace_id: "c1034628acf44f0e94392c359074fa39",
@@ -163,7 +162,7 @@ export const DEMO_EVENTS: DemoEvent[] = [
     layer: "transport",
     message: "Request metrics",
     method: "POST",
-    path: "/api/v1/submissions",
+    path: "/api/submissions",
     status: 201,
     duration_ms: 94,
     bytes: 2841,
@@ -185,7 +184,7 @@ export const DEMO_EVENTS: DemoEvent[] = [
     layer: "middleware",
     message: "Client approaching request limit",
     method: "POST",
-    path: "/api/v1/copilot/messages",
+    path: "/api/copilot/messages",
     status: 200,
     limit: 120,
     remaining: 7,
@@ -197,7 +196,7 @@ export const DEMO_EVENTS: DemoEvent[] = [
     layer: "transport",
     message: "Recovered panic: invalid memory address <request body omitted>",
     method: "PATCH",
-    path: "/api/v1/rubrics/rub_18",
+    path: "/api/rubrics/rub_18",
     status: 500,
     duration_ms: 35,
     trace_id: "fbc6d5bd307840099e94ef7554fcf903",
@@ -217,7 +216,7 @@ export const DEMO_EVENTS: DemoEvent[] = [
     layer: "service",
     message: "Stale session refresh token rejected",
     method: "POST",
-    path: "/api/v1/auth/refresh",
+    path: "/api/auth/refresh",
     status: 401,
     duration_ms: 18,
     trace_id: "a5ae0434e4d0415aa47ad5f4d018772f",
@@ -314,9 +313,9 @@ export const DEMO_FIELDS: DemoField[] = [
     interesting: true,
     type: "string",
     values: [
-      { value: "/api/v1/submissions/grade", count: 1923 },
-      { value: "/api/v1/submissions", count: 1438 },
-      { value: "/api/v1/courses/course_9/gradebook", count: 1180 },
+      { value: "/api/submissions/grade", count: 1923 },
+      { value: "/api/submissions", count: 1438 },
+      { value: "/api/courses/course_9/gradebook", count: 1180 },
     ],
   },
   {

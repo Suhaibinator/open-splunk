@@ -1,4 +1,4 @@
-import type { AppDefinition, AppWorkspace } from "@/gen/ts/open_splunk/v1/app";
+import type { AppDefinition, AppWorkspace } from "@/gen/ts/open_splunk/app";
 
 export interface AppFormState {
   slug: string;

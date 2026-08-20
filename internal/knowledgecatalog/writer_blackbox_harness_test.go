@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
@@ -146,28 +146,28 @@ func writerAliasDefinition(
 	appID string,
 	name string,
 	description *string,
-	scope opensplunkv1.SharingScope,
+	scope opensplunk.SharingScope,
 	host string,
 	source string,
 	destination string,
-) *opensplunkv1.KnowledgeObjectDefinition {
-	definition := &opensplunkv1.KnowledgeObjectDefinition{
+) *opensplunk.KnowledgeObjectDefinition {
+	definition := &opensplunk.KnowledgeObjectDefinition{
 		AppId:        appID,
 		Name:         name,
 		Description:  description,
 		SharingScope: scope,
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{
-			FieldAlias: &opensplunkv1.FieldAliasDefinition{
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{
+			FieldAlias: &opensplunk.FieldAliasDefinition{
 				SourceField:       source,
 				DestinationField:  destination,
-				OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+				OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
 			},
 		},
 	}
 	if host != "" {
-		definition.Selector = &opensplunkv1.KnowledgeSelector{
-			HostPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{
-				MatchKind: opensplunkv1.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT,
+		definition.Selector = &opensplunk.KnowledgeSelector{
+			HostPatterns: []*opensplunk.KnowledgeSelectorPattern{{
+				MatchKind: opensplunk.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT,
 				Value:     host,
 			}},
 		}
@@ -179,23 +179,23 @@ func (harness *writerBlackboxHarness) createDraft(
 	t *testing.T,
 	name string,
 	requestID string,
-) (*opensplunkv1.CreateKnowledgeObjectRequest, *opensplunkv1.CreateKnowledgeObjectResponse) {
+) (*opensplunk.CreateKnowledgeObjectRequest, *opensplunk.CreateKnowledgeObjectResponse) {
 	t.Helper()
 	description := "draft description for " + name
-	request := &opensplunkv1.CreateKnowledgeObjectRequest{
+	request := &opensplunk.CreateKnowledgeObjectRequest{
 		Definition: writerAliasDefinition(
 			writerTestApp,
 			name,
 			&description,
-			opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+			opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 			"host-"+name,
 			"source_field",
 			"destination_"+name,
 		),
-		InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+		InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 		ClientRequestId: requestID,
 	}
-	submitted := proto.Clone(request).(*opensplunkv1.CreateKnowledgeObjectRequest)
+	submitted := proto.Clone(request).(*opensplunk.CreateKnowledgeObjectRequest)
 	response, err := harness.writer.Create(harness.actorCtx, harness.writeScope, request)
 	if err != nil {
 		t.Fatalf("Writer.Create(%q): %v", name, err)
@@ -339,7 +339,7 @@ func readCompactWriterOutcome(
 	database *control.DB,
 	route string,
 	requestID string,
-) (*opensplunkv1.KnowledgeObjectVersionReference, []byte) {
+) (*opensplunk.KnowledgeObjectVersionReference, []byte) {
 	t.Helper()
 	var encoded []byte
 	if err := database.SQLDB().QueryRowContext(t.Context(), `
@@ -355,7 +355,7 @@ func readCompactWriterOutcome(
 	).Scan(&encoded); err != nil {
 		t.Fatalf("read compact writer outcome: %v", err)
 	}
-	outcome := &opensplunkv1.KnowledgeMutationOutcomeRecord{}
+	outcome := &opensplunk.KnowledgeMutationOutcomeRecord{}
 	if err := (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(encoded, outcome); err != nil {
 		t.Fatalf("decode compact writer outcome: %v", err)
 	}
@@ -371,7 +371,7 @@ func readCompactWriterOutcome(
 	if !bytes.Equal(encoded, canonical) {
 		t.Fatalf("compact writer outcome is not deterministic: %x != %x", encoded, canonical)
 	}
-	return proto.Clone(outcome.GetObject()).(*opensplunkv1.KnowledgeObjectVersionReference), encoded
+	return proto.Clone(outcome.GetObject()).(*opensplunk.KnowledgeObjectVersionReference), encoded
 }
 
 type writerIdempotencyReceipt struct {
@@ -443,13 +443,13 @@ func writerExpectedRequestDigest(
 	t.Helper()
 	cloned := proto.Clone(request)
 	switch typed := cloned.(type) {
-	case *opensplunkv1.CreateKnowledgeObjectRequest:
+	case *opensplunk.CreateKnowledgeObjectRequest:
 		typed.ClientRequestId = ""
-	case *opensplunkv1.UpdateKnowledgeObjectRequest:
+	case *opensplunk.UpdateKnowledgeObjectRequest:
 		typed.ClientRequestId = ""
-	case *opensplunkv1.SetKnowledgeObjectStateRequest:
+	case *opensplunk.SetKnowledgeObjectStateRequest:
 		typed.ClientRequestId = ""
-	case *opensplunkv1.DeleteKnowledgeObjectRequest:
+	case *opensplunk.DeleteKnowledgeObjectRequest:
 		typed.ClientRequestId = ""
 	default:
 		t.Fatalf("unsupported writer request digest type %T", request)

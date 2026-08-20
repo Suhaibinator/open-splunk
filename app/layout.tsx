@@ -1,10 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 
-import {
-  OPEN_SPLUNK_APPLICATION_VERSION,
-  OPEN_SPLUNK_SOURCE_REVISION,
-} from "@/lib/build-identity";
+import { OPEN_SPLUNK_SOURCE_REVISION } from "@/lib/build-identity";
 
 import "./globals.css";
 
@@ -27,7 +24,6 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
   return (
     <html
       lang="en"
-      data-open-splunk-version={OPEN_SPLUNK_APPLICATION_VERSION}
       data-open-splunk-revision={OPEN_SPLUNK_SOURCE_REVISION}
     >
       <body>{children}</body>

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -55,11 +55,11 @@ func TestRuntimeSearchAttemptAuditSurvivesHistoryDeleteAndStoreReopen(t *testing
 		bearerToken,
 	)
 	createRequest := runtimeSearchAttemptAuditCreateRequest()
-	var createdResponse opensplunkv1.CreateSearchJobResponse
+	var createdResponse opensplunk.CreateSearchJobResponse
 	postRuntimeProtoOK(
 		t,
 		first.handler,
-		"/api/v1/search/jobs/create",
+		"/api/search/jobs/create",
 		createRequest,
 		&createdResponse,
 		bearerToken,
@@ -76,17 +76,17 @@ func TestRuntimeSearchAttemptAuditSurvivesHistoryDeleteAndStoreReopen(t *testing
 		first.history,
 		runtimeSearchAttemptAuditJobID,
 	)
-	if historyEntry.GetFinalState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_FAILED ||
-		historyEntry.GetFailure().GetCode() != opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_INVALID_SPL {
+	if historyEntry.GetFinalState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_FAILED ||
+		historyEntry.GetFailure().GetCode() != opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_INVALID_SPL {
 		t.Fatalf("parse-invalid search history = %+v", historyEntry)
 	}
 
-	var deletedResponse opensplunkv1.DeleteSearchHistoryEntryResponse
+	var deletedResponse opensplunk.DeleteSearchHistoryEntryResponse
 	postRuntimeProtoOK(
 		t,
 		first.handler,
-		"/api/v1/search/history/delete",
-		&opensplunkv1.DeleteSearchHistoryEntryRequest{
+		"/api/search/history/delete",
+		&opensplunk.DeleteSearchHistoryEntryRequest{
 			SearchJobId: runtimeSearchAttemptAuditJobID,
 		},
 		&deletedResponse,
@@ -194,7 +194,7 @@ func TestRuntimeSearchAdmissionFailsClosedWithoutAttemptAuditJournal(t *testing.
 	response := postRuntimeAppProto(
 		t,
 		fixture.handler,
-		"/api/v1/search/jobs/create",
+		"/api/search/jobs/create",
 		runtimeSearchAttemptAuditCreateRequest(),
 		bearerToken,
 	)
@@ -410,16 +410,16 @@ func runtimeSearchAttemptAuditAuthenticator(
 	return authenticator
 }
 
-func runtimeSearchAttemptAuditCreateRequest() *opensplunkv1.CreateSearchJobRequest {
+func runtimeSearchAttemptAuditCreateRequest() *opensplunk.CreateSearchJobRequest {
 	earliest := "-15m"
 	latest := "now"
 	timezone := "UTC"
-	return &opensplunkv1.CreateSearchJobRequest{
-		Definition: &opensplunkv1.SearchDefinition{
+	return &opensplunk.CreateSearchJobRequest{
+		Definition: &opensplunk.SearchDefinition{
 			Spl: "index=main | where " +
 				runtimeSearchAttemptAuditSPLCanary + " =",
 			IndexScope: []string{"main"},
-			TimeRange: &opensplunkv1.TimeRangeSpec{
+			TimeRange: &opensplunk.TimeRangeSpec{
 				Earliest: &earliest,
 				Latest:   &latest,
 				Timezone: &timezone,
@@ -432,7 +432,7 @@ func waitForRuntimeSearchAttemptAuditHistory(
 	t *testing.T,
 	history *searchhistory.Store,
 	jobID string,
-) *opensplunkv1.SearchHistoryEntry {
+) *opensplunk.SearchHistoryEntry {
 	t.Helper()
 	ctx := context.Background()
 	deadline := time.Now().Add(2 * time.Second)
@@ -462,11 +462,11 @@ func listRuntimeSearchAttemptAuditEvents(
 	t *testing.T,
 	handler http.Handler,
 	bearerToken []byte,
-) *opensplunkv1.ListSearchAttemptAuditEventsResponse {
+) *opensplunk.ListSearchAttemptAuditEventsResponse {
 	t.Helper()
 	pageSize := uint32(10)
-	request := &opensplunkv1.ListSearchAttemptAuditEventsRequest{
-		Page: &opensplunkv1.PageRequest{
+	request := &opensplunk.ListSearchAttemptAuditEventsRequest{
+		Page: &opensplunk.PageRequest{
 			PageSize:         &pageSize,
 			IncludeTotalSize: true,
 		},
@@ -474,7 +474,7 @@ func listRuntimeSearchAttemptAuditEvents(
 	response := postRuntimeAppProto(
 		t,
 		handler,
-		"/api/v1/audit/search-attempts/list",
+		"/api/audit/search-attempts/list",
 		request,
 		bearerToken,
 	)
@@ -491,14 +491,14 @@ func listRuntimeSearchAttemptAuditEvents(
 	) {
 		t.Fatal("search-attempt audit response disclosed raw SPL")
 	}
-	var result opensplunkv1.ListSearchAttemptAuditEventsResponse
+	var result opensplunk.ListSearchAttemptAuditEventsResponse
 	unmarshalRuntimeAppResponse(t, response, &result)
 	return &result
 }
 
 func assertSingleRuntimeSearchAttemptAuditEvent(
 	t *testing.T,
-	response *opensplunkv1.ListSearchAttemptAuditEventsResponse,
+	response *opensplunk.ListSearchAttemptAuditEventsResponse,
 ) {
 	t.Helper()
 	page := response.GetPage()
@@ -512,9 +512,9 @@ func assertSingleRuntimeSearchAttemptAuditEvent(
 	}
 	event := response.GetEvents()[0]
 	if event.GetSequence() != 1 ||
-		event.GetActorKind() != opensplunkv1.AuditActorKind_AUDIT_ACTOR_KIND_SYSTEM ||
+		event.GetActorKind() != opensplunk.AuditActorKind_AUDIT_ACTOR_KIND_SYSTEM ||
 		event.GetActorId() != runtimeSearchAttemptAuditActorID ||
-		event.GetActorRole() != opensplunkv1.AuditActorRole_AUDIT_ACTOR_ROLE_SYSTEM ||
+		event.GetActorRole() != opensplunk.AuditActorRole_AUDIT_ACTOR_ROLE_SYSTEM ||
 		event.GetOwnerId() != runtimeSearchAttemptAuditOwnerID ||
 		event.GetSearchJobId() != runtimeSearchAttemptAuditJobID ||
 		event.GetOccurredAt() == nil ||

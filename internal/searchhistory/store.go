@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"google.golang.org/protobuf/proto"
@@ -57,12 +57,12 @@ func New(database *control.DB, options Options) (*Store, error) {
 // count-bounded; maintenance completes any inherited backlog. Retrying an
 // identical terminal callback is idempotent; different content for an existing
 // search ID returns ErrVersionConflict instead of rewriting audit metadata.
-func (store *Store) Record(ctx context.Context, scope AccessScope, input *opensplunkv1.SearchHistoryEntry) (result *opensplunkv1.SearchHistoryEntry, returnedErr error) {
+func (store *Store) Record(ctx context.Context, scope AccessScope, input *opensplunk.SearchHistoryEntry) (result *opensplunk.SearchHistoryEntry, returnedErr error) {
 	return store.CompleteAttempt(ctx, scope, input)
 }
 
 // Get returns one detached owner-scoped terminal entry.
-func (store *Store) Get(ctx context.Context, scope AccessScope, searchJobID string) (*opensplunkv1.SearchHistoryEntry, error) {
+func (store *Store) Get(ctx context.Context, scope AccessScope, searchJobID string) (*opensplunk.SearchHistoryEntry, error) {
 	if err := validateContext(ctx); err != nil {
 		return nil, err
 	}
@@ -179,7 +179,7 @@ func (store *Store) Clear(ctx context.Context, scope AccessScope, filter Filter)
 	return uint64(result.RowsAffected), nil
 }
 
-func historyEntryFromRecord(record historyRecord) (*opensplunkv1.SearchHistoryEntry, error) {
+func historyEntryFromRecord(record historyRecord) (*opensplunk.SearchHistoryEntry, error) {
 	if _, err := normalizeScope(AccessScope{TenantID: record.TenantID, OwnerID: record.OwnerID}); err != nil {
 		return nil, persistedDataError("persisted search-history scope is invalid", err)
 	}
@@ -212,9 +212,9 @@ func mapContextError(ctx context.Context, operation string, err error) error {
 	return fmt.Errorf("%s: %w", operation, err)
 }
 
-func cloneEntry(entry *opensplunkv1.SearchHistoryEntry) *opensplunkv1.SearchHistoryEntry {
+func cloneEntry(entry *opensplunk.SearchHistoryEntry) *opensplunk.SearchHistoryEntry {
 	if entry == nil {
 		return nil
 	}
-	return proto.Clone(entry).(*opensplunkv1.SearchHistoryEntry)
+	return proto.Clone(entry).(*opensplunk.SearchHistoryEntry)
 }

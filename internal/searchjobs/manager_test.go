@@ -12,11 +12,10 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
-	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
 var testCursorKey = []byte("0123456789abcdef0123456789abcdef")
@@ -1007,22 +1006,22 @@ func TestValueKindWireNumbersMatchProto(t *testing.T) {
 
 	pairs := []struct {
 		internal ValueKind
-		wire     opensplunkv1.ValueType
+		wire     opensplunk.ValueType
 	}{
-		{ValueKindInvalid, opensplunkv1.ValueType_VALUE_TYPE_UNSPECIFIED},
-		{ValueKindNull, opensplunkv1.ValueType_VALUE_TYPE_NULL},
-		{ValueKindString, opensplunkv1.ValueType_VALUE_TYPE_STRING},
-		{ValueKindSigned, opensplunkv1.ValueType_VALUE_TYPE_SINT64},
-		{ValueKindUnsigned, opensplunkv1.ValueType_VALUE_TYPE_UINT64},
-		{ValueKindDouble, opensplunkv1.ValueType_VALUE_TYPE_DOUBLE},
-		{ValueKindBool, opensplunkv1.ValueType_VALUE_TYPE_BOOL},
-		{ValueKindBytes, opensplunkv1.ValueType_VALUE_TYPE_BYTES},
-		{ValueKindTime, opensplunkv1.ValueType_VALUE_TYPE_TIMESTAMP},
-		{ValueKindDuration, opensplunkv1.ValueType_VALUE_TYPE_DURATION},
-		{ValueKindList, opensplunkv1.ValueType_VALUE_TYPE_LIST},
-		{ValueKindObject, opensplunkv1.ValueType_VALUE_TYPE_OBJECT},
-		{ValueKindDecimal, opensplunkv1.ValueType_VALUE_TYPE_DECIMAL},
-		{ValueKindMixed, opensplunkv1.ValueType_VALUE_TYPE_MIXED},
+		{ValueKindInvalid, opensplunk.ValueType_VALUE_TYPE_UNSPECIFIED},
+		{ValueKindNull, opensplunk.ValueType_VALUE_TYPE_NULL},
+		{ValueKindString, opensplunk.ValueType_VALUE_TYPE_STRING},
+		{ValueKindSigned, opensplunk.ValueType_VALUE_TYPE_SINT64},
+		{ValueKindUnsigned, opensplunk.ValueType_VALUE_TYPE_UINT64},
+		{ValueKindDouble, opensplunk.ValueType_VALUE_TYPE_DOUBLE},
+		{ValueKindBool, opensplunk.ValueType_VALUE_TYPE_BOOL},
+		{ValueKindBytes, opensplunk.ValueType_VALUE_TYPE_BYTES},
+		{ValueKindTime, opensplunk.ValueType_VALUE_TYPE_TIMESTAMP},
+		{ValueKindDuration, opensplunk.ValueType_VALUE_TYPE_DURATION},
+		{ValueKindList, opensplunk.ValueType_VALUE_TYPE_LIST},
+		{ValueKindObject, opensplunk.ValueType_VALUE_TYPE_OBJECT},
+		{ValueKindDecimal, opensplunk.ValueType_VALUE_TYPE_DECIMAL},
+		{ValueKindMixed, opensplunk.ValueType_VALUE_TYPE_MIXED},
 	}
 	for _, pair := range pairs {
 		if int32(pair.internal) != int32(pair.wire) {
@@ -1485,10 +1484,6 @@ func TestMetadataBudgetRejectsBeforeStorageAndIsReclaimedWithTombstone(t *testin
 		clock := &fakeClock{now: time.Date(2026, time.July, 21, 9, 0, 0, 0, time.UTC)}
 		request := validRequest()
 		metadataLimit, err := retainedJobMetadataReservation("metadata-1", request)
-		if err != nil {
-			t.Fatal(err)
-		}
-		metadataLimit, err = checkedAdd(metadataLimit, uint64(len(spl.CompatibilityVersion)))
 		if err != nil {
 			t.Fatal(err)
 		}

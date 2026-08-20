@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"google.golang.org/protobuf/proto"
 )
@@ -22,13 +22,13 @@ func TestPersistedTerminalCorruptionIsNotCallerInvalidArgument(t *testing.T) {
 			"terminal-semantic-corruption",
 			"index=main",
 			"search",
-			opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
+			opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
 			created,
 		)
 		if _, err := store.Record(ctx, scope, entry); err != nil {
 			t.Fatal(err)
 		}
-		rewriteStoredHistoryProto(t, database, &historyRecord{}, entry.SearchJobId, func(stored *opensplunkv1.SearchHistoryEntry) {
+		rewriteStoredHistoryProto(t, database, &historyRecord{}, entry.SearchJobId, func(stored *opensplunk.SearchHistoryEntry) {
 			stored.Definition.Spl = " "
 		})
 
@@ -43,7 +43,7 @@ func TestPersistedTerminalCorruptionIsNotCallerInvalidArgument(t *testing.T) {
 			"terminal-invalid-request",
 			" ",
 			"search",
-			opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
+			opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
 			created,
 		)
 		if _, err := store.Record(ctx, scope, invalidRequest); !errors.Is(err, control.ErrInvalidArgument) {
@@ -65,7 +65,7 @@ func TestPersistedTerminalCorruptionIsNotCallerInvalidArgument(t *testing.T) {
 			"terminal-scope-corruption",
 			"index=main",
 			"search",
-			opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
+			opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
 			created,
 		)
 		if _, err := store.Record(ctx, scope, terminal); err != nil {
@@ -107,7 +107,7 @@ func TestPersistedPendingCorruptionIsNotCallerInvalidArgument(t *testing.T) {
 			database,
 			&pendingHistoryRecord{},
 			pending.SearchJobId,
-			func(stored *opensplunkv1.SearchHistoryEntry) {
+			func(stored *opensplunk.SearchHistoryEntry) {
 				stored.Definition.Spl = " "
 			},
 		)
@@ -118,7 +118,7 @@ func TestPersistedPendingCorruptionIsNotCallerInvalidArgument(t *testing.T) {
 			pending.SearchJobId,
 			pending.Definition.Spl,
 			"search",
-			opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
+			opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
 			created,
 		)
 		_, completeErr := store.CompleteAttempt(ctx, scope, terminal)
@@ -154,7 +154,7 @@ func TestPersistedPendingCorruptionIsNotCallerInvalidArgument(t *testing.T) {
 			pending.SearchJobId,
 			pending.Definition.Spl,
 			"search",
-			opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
+			opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
 			created,
 		)
 		_, completeErr := store.CompleteAttempt(ctx, scope, terminal)
@@ -175,7 +175,7 @@ func rewriteStoredHistoryProto(
 	database *control.DB,
 	model any,
 	searchJobID string,
-	mutate func(*opensplunkv1.SearchHistoryEntry),
+	mutate func(*opensplunk.SearchHistoryEntry),
 ) {
 	t.Helper()
 	var stored struct {
@@ -188,7 +188,7 @@ func rewriteStoredHistoryProto(
 	if read.Error != nil {
 		t.Fatal(read.Error)
 	}
-	entry := new(opensplunkv1.SearchHistoryEntry)
+	entry := new(opensplunk.SearchHistoryEntry)
 	if err := (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(stored.EntryProto, entry); err != nil {
 		t.Fatal(err)
 	}

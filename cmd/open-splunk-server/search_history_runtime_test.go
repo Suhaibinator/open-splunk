@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -98,7 +98,7 @@ func TestOpenSearchHistoryStorePropagatesRetentionOptions(t *testing.T) {
 	scope := searchhistory.AccessScope{TenantID: "tenant", OwnerID: "owner"}
 	expired := runtimeSearchHistoryEntry(
 		"expired",
-		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
+		opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
 		time.Now().UTC().Add(-2*time.Hour),
 	)
 	if _, err := store.Record(ctx, scope, expired); err != nil {
@@ -110,7 +110,7 @@ func TestOpenSearchHistoryStorePropagatesRetentionOptions(t *testing.T) {
 
 	first := runtimeSearchHistoryEntry(
 		"pending-first",
-		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_QUEUED,
+		opensplunk.SearchJobState_SEARCH_JOB_STATE_QUEUED,
 		time.Now().UTC(),
 	)
 	if _, err := store.BeginAttempt(ctx, scope, first); err != nil {
@@ -118,7 +118,7 @@ func TestOpenSearchHistoryStorePropagatesRetentionOptions(t *testing.T) {
 	}
 	second := runtimeSearchHistoryEntry(
 		"pending-second",
-		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_QUEUED,
+		opensplunk.SearchJobState_SEARCH_JOB_STATE_QUEUED,
 		time.Now().UTC(),
 	)
 	if _, err := store.BeginAttempt(ctx, scope, second); !errors.Is(err, searchhistory.ErrCapacity) {
@@ -159,7 +159,7 @@ func TestSearchHistoryTerminalAndPendingLimitsAreIndependent(t *testing.T) {
 		scope,
 		runtimeSearchHistoryEntry(
 			"terminal",
-			opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
+			opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
 			now,
 		),
 	); err != nil {
@@ -170,7 +170,7 @@ func TestSearchHistoryTerminalAndPendingLimitsAreIndependent(t *testing.T) {
 		scope,
 		runtimeSearchHistoryEntry(
 			"pending",
-			opensplunkv1.SearchJobState_SEARCH_JOB_STATE_QUEUED,
+			opensplunk.SearchJobState_SEARCH_JOB_STATE_QUEUED,
 			now,
 		),
 	); err != nil {
@@ -208,37 +208,36 @@ func validSearchHistoryRuntimeOptions() options {
 
 func runtimeSearchHistoryEntry(
 	id string,
-	state opensplunkv1.SearchJobState,
+	state opensplunk.SearchJobState,
 	created time.Time,
-) *opensplunkv1.SearchHistoryEntry {
+) *opensplunk.SearchHistoryEntry {
 	appID := "search"
 	earliest := "-15m"
 	latest := "now"
-	entry := &opensplunkv1.SearchHistoryEntry{
+	entry := &opensplunk.SearchHistoryEntry{
 		SearchJobId: id,
-		Definition: &opensplunkv1.SearchDefinition{
+		Definition: &opensplunk.SearchDefinition{
 			Spl:        "index=main | head 1",
 			AppId:      &appID,
 			IndexScope: []string{"main"},
-			TimeRange: &opensplunkv1.TimeRangeSpec{
+			TimeRange: &opensplunk.TimeRangeSpec{
 				Earliest: &earliest,
 				Latest:   &latest,
 			},
 		},
-		Source: &opensplunkv1.SearchJobSource{
-			Origin: opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_AD_HOC,
+		Source: &opensplunk.SearchJobSource{
+			Origin: opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_AD_HOC,
 		},
 		EffectiveIndexScope: []string{"main"},
-		ResolvedTimeRange: &opensplunkv1.ResolvedTimeRange{
+		ResolvedTimeRange: &opensplunk.ResolvedTimeRange{
 			Earliest: timestamppb.New(created.Add(-15 * time.Minute)),
 			Latest:   timestamppb.New(created),
 			Timezone: "UTC",
 		},
-		FinalState:      state,
-		CompilerVersion: "test",
-		CreatedAt:       timestamppb.New(created),
+		FinalState: state,
+		CreatedAt:  timestamppb.New(created),
 	}
-	if state == opensplunkv1.SearchJobState_SEARCH_JOB_STATE_QUEUED {
+	if state == opensplunk.SearchJobState_SEARCH_JOB_STATE_QUEUED {
 		return entry
 	}
 	entry.StartedAt = timestamppb.New(created.Add(time.Second))

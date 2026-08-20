@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 )
 
@@ -14,7 +14,7 @@ func TestCompileKnowledgeRegexExtractionProducesOneAtomicRowTuple(t *testing.T) 
 	t.Parallel()
 
 	operation := knowledgeRegexTestOperation(t,
-		opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+		opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 	)
 	compiled, err := compileKnowledgeRegexExtraction(operation)
 	if err != nil {
@@ -90,7 +90,7 @@ func TestCompileKnowledgeRegexExtractionRetainsOverwriteAndDetachedSelectorArgs(
 	t.Parallel()
 
 	operation := knowledgeRegexTestOperation(t,
-		opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+		opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
 	)
 	first, err := compileKnowledgeRegexExtraction(operation)
 	if err != nil {
@@ -128,7 +128,7 @@ func TestCompileKnowledgeRegexExtractionRejectsDisagreeingAuthority(t *testing.T
 	t.Parallel()
 
 	operation := knowledgeRegexTestOperation(t,
-		opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+		opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 	)
 	base := knowledgeRegexAuthorityForTest(operation)
 	tests := []struct {
@@ -170,22 +170,22 @@ func TestCompileKnowledgeRegexExtractionRejectsDisagreeingAuthority(t *testing.T
 
 func knowledgeRegexTestOperation(
 	t *testing.T,
-	overwrite opensplunkv1.KnowledgeOverwriteBehavior,
+	overwrite opensplunk.KnowledgeOverwriteBehavior,
 ) knowledgeprogram.RegexExtraction {
 	t.Helper()
-	program := knowledgePreparationProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{
+	program := knowledgePreparationProgram(t, []*opensplunk.KnowledgeObjectDefinition{
 		{
-			AppId: "app", Name: "regex-object", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-			Selector: &opensplunkv1.KnowledgeSelector{
-				IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{Value: "main"}, {Value: "prod*"}},
-				HostPatterns:  []*opensplunkv1.KnowledgeSelectorPattern{{Value: "api-1"}},
+			AppId: "app", Name: "regex-object", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+			Selector: &opensplunk.KnowledgeSelector{
+				IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{{Value: "main"}, {Value: "prod*"}},
+				HostPatterns:  []*opensplunk.KnowledgeSelectorPattern{{Value: "api-1"}},
 			},
-			Body: &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
-				FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
+			Body: &opensplunk.KnowledgeObjectDefinition_FieldExtraction{
+				FieldExtraction: &opensplunk.FieldExtractionDefinition{
 					InputField:        "_raw",
 					OverwriteBehavior: overwrite,
-					Extraction: &opensplunkv1.FieldExtractionDefinition_Regex{
-						Regex: &opensplunkv1.RegexFieldExtractionDefinition{
+					Extraction: &opensplunk.FieldExtractionDefinition_Regex{
+						Regex: &opensplunk.RegexFieldExtractionDefinition{
 							Pattern:      `(?P<first>[a-z]+)-(?P<second>[0-9]+)`,
 							OutputFields: []string{"first", "second"},
 						},

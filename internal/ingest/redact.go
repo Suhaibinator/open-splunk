@@ -10,7 +10,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 )
 
 var mandatorySensitiveFields = []string{
@@ -233,7 +233,7 @@ func hasSensitiveFamilyAffix(component, family string) bool {
 	return component == family || strings.HasPrefix(component, family) || strings.HasSuffix(component, family)
 }
 
-func (v *Validator) redactObject(object *opensplunkv1.TypedObject) {
+func (v *Validator) redactObject(object *opensplunk.TypedObject) {
 	if object == nil {
 		return
 	}
@@ -255,7 +255,7 @@ func (v *Validator) redactObject(object *opensplunkv1.TypedObject) {
 }
 
 func (v *Validator) redactFieldInPolicyOrder(
-	field *opensplunkv1.TypedObjectField,
+	field *opensplunk.TypedObjectField,
 	startPolicy int,
 ) {
 	for _, redactor := range v.ordered[startPolicy:] {
@@ -266,7 +266,7 @@ func (v *Validator) redactFieldInPolicyOrder(
 	}
 }
 
-func (v *Validator) redactFieldByName(field *opensplunkv1.TypedObjectField) bool {
+func (v *Validator) redactFieldByName(field *opensplunk.TypedObjectField) bool {
 	match := v.matchSensitiveName(field.GetName(), true)
 	if match.kind == rawSecretNone {
 		return false
@@ -276,33 +276,33 @@ func (v *Validator) redactFieldByName(field *opensplunkv1.TypedObjectField) bool
 }
 
 func redactTypedFieldValue(
-	field *opensplunkv1.TypedObjectField,
+	field *opensplunk.TypedObjectField,
 	replacement string,
 ) {
 	if len(field.ProtoReflect().GetUnknown()) > 0 {
 		field.ProtoReflect().SetUnknown(nil)
 	}
 	value := field.GetValue()
-	if current, ok := value.GetKind().(*opensplunkv1.TypedValue_StringValue); ok &&
+	if current, ok := value.GetKind().(*opensplunk.TypedValue_StringValue); ok &&
 		current.StringValue == replacement &&
 		len(value.ProtoReflect().GetUnknown()) == 0 {
 		return
 	}
-	field.Value = &opensplunkv1.TypedValue{
-		Kind: &opensplunkv1.TypedValue_StringValue{StringValue: replacement},
+	field.Value = &opensplunk.TypedValue{
+		Kind: &opensplunk.TypedValue_StringValue{StringValue: replacement},
 	}
 }
 
-func (v *Validator) redactValue(value *opensplunkv1.TypedValue) {
+func (v *Validator) redactValue(value *opensplunk.TypedValue) {
 	if value == nil {
 		return
 	}
 	switch kind := value.GetKind().(type) {
-	case *opensplunkv1.TypedValue_StringValue:
+	case *opensplunk.TypedValue_StringValue:
 		kind.StringValue = string(v.redactText([]byte(kind.StringValue)))
-	case *opensplunkv1.TypedValue_ObjectValue:
+	case *opensplunk.TypedValue_ObjectValue:
 		v.redactObject(kind.ObjectValue)
-	case *opensplunkv1.TypedValue_ListValue:
+	case *opensplunk.TypedValue_ListValue:
 		if kind.ListValue == nil {
 			return
 		}
@@ -313,7 +313,7 @@ func (v *Validator) redactValue(value *opensplunkv1.TypedValue) {
 }
 
 func redactTopLevelObjectWithReplacements(
-	object *opensplunkv1.TypedObject,
+	object *opensplunk.TypedObject,
 	replacements map[string]string,
 ) {
 	if object == nil {
@@ -502,9 +502,9 @@ func (v *Validator) redactText(raw []byte) []byte {
 
 func (v *Validator) redactEventRaw(
 	raw []byte,
-	encoding opensplunkv1.RawEncoding,
+	encoding opensplunk.RawEncoding,
 ) []byte {
-	if encoding == opensplunkv1.RawEncoding_RAW_ENCODING_UTF8 || utf8.Valid(raw) {
+	if encoding == opensplunk.RawEncoding_RAW_ENCODING_UTF8 || utf8.Valid(raw) {
 		return v.redactText(raw)
 	}
 
@@ -530,7 +530,7 @@ func (v *Validator) redactEventRaw(
 
 func (v *Validator) redactEventRawInPolicyOrder(
 	raw []byte,
-	encoding opensplunkv1.RawEncoding,
+	encoding opensplunk.RawEncoding,
 ) []byte {
 	redacted := raw
 	for _, redactor := range v.ordered {

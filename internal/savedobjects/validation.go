@@ -7,7 +7,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/protostrict"
 	"google.golang.org/protobuf/proto"
@@ -28,14 +28,14 @@ type indexedDefinition struct {
 	name         string
 	appID        string
 	ownerID      string
-	sharingScope opensplunkv1.SharingScope
+	sharingScope opensplunk.SharingScope
 }
 
-func normalizeAndEncodeDefinition(input *opensplunkv1.SavedSearchDefinition, ownerID string) (*opensplunkv1.SavedSearchDefinition, indexedDefinition, []byte, error) {
+func normalizeAndEncodeDefinition(input *opensplunk.SavedSearchDefinition, ownerID string) (*opensplunk.SavedSearchDefinition, indexedDefinition, []byte, error) {
 	if input == nil {
 		return nil, indexedDefinition{}, nil, fmt.Errorf("%w: saved-search definition is required", control.ErrInvalidArgument)
 	}
-	definition := proto.Clone(input).(*opensplunkv1.SavedSearchDefinition)
+	definition := proto.Clone(input).(*opensplunk.SavedSearchDefinition)
 	ownerID = strings.TrimSpace(ownerID)
 	if err := validateIdentifierText("owner ID", ownerID, 255, false); err != nil {
 		return nil, indexedDefinition{}, nil, err
@@ -74,14 +74,14 @@ func normalizeAndEncodeDefinition(input *opensplunkv1.SavedSearchDefinition, own
 		}
 	}
 	definition.OwnerId = stringPointer(ownerID)
-	if definition.SharingScope == opensplunkv1.SharingScope_SHARING_SCOPE_UNSPECIFIED {
-		definition.SharingScope = opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE
+	if definition.SharingScope == opensplunk.SharingScope_SHARING_SCOPE_UNSPECIFIED {
+		definition.SharingScope = opensplunk.SharingScope_SHARING_SCOPE_PRIVATE
 	}
 	if !validSharingScope(definition.SharingScope) {
 		return nil, indexedDefinition{}, nil, fmt.Errorf("%w: sharing scope is invalid", control.ErrInvalidArgument)
 	}
 	appID := definition.Search.GetAppId()
-	if definition.SharingScope == opensplunkv1.SharingScope_SHARING_SCOPE_APP && appID == "" {
+	if definition.SharingScope == opensplunk.SharingScope_SHARING_SCOPE_APP && appID == "" {
 		return nil, indexedDefinition{}, nil, fmt.Errorf("%w: app-shared saved searches require an app ID", control.ErrInvalidArgument)
 	}
 
@@ -97,7 +97,7 @@ func normalizeAndEncodeDefinition(input *opensplunkv1.SavedSearchDefinition, own
 	}, encoded, nil
 }
 
-func normalizeSearchDefinition(search *opensplunkv1.SearchDefinition) error {
+func normalizeSearchDefinition(search *opensplunk.SearchDefinition) error {
 	if !utf8.ValidString(search.Spl) || strings.TrimSpace(search.Spl) == "" || len(search.Spl) > maximumSPLBytes {
 		return fmt.Errorf("%w: SPL must contain between 1 and %d valid UTF-8 bytes", control.ErrInvalidArgument, maximumSPLBytes)
 	}
@@ -150,10 +150,10 @@ func normalizeSearchDefinition(search *opensplunkv1.SearchDefinition) error {
 	if err != nil {
 		return err
 	}
-	if search.PreferredResultTab == opensplunkv1.SearchResultTab_SEARCH_RESULT_TAB_UNSPECIFIED {
-		search.PreferredResultTab = opensplunkv1.SearchResultTab_SEARCH_RESULT_TAB_EVENTS
+	if search.PreferredResultTab == opensplunk.SearchResultTab_SEARCH_RESULT_TAB_UNSPECIFIED {
+		search.PreferredResultTab = opensplunk.SearchResultTab_SEARCH_RESULT_TAB_EVENTS
 	}
-	if search.PreferredResultTab < opensplunkv1.SearchResultTab_SEARCH_RESULT_TAB_EVENTS || search.PreferredResultTab > opensplunkv1.SearchResultTab_SEARCH_RESULT_TAB_VISUALIZATION {
+	if search.PreferredResultTab < opensplunk.SearchResultTab_SEARCH_RESULT_TAB_EVENTS || search.PreferredResultTab > opensplunk.SearchResultTab_SEARCH_RESULT_TAB_VISUALIZATION {
 		return fmt.Errorf("%w: preferred result tab is invalid", control.ErrInvalidArgument)
 	}
 	if search.Visualization != nil {
@@ -164,8 +164,8 @@ func normalizeSearchDefinition(search *opensplunkv1.SearchDefinition) error {
 	return nil
 }
 
-func normalizeVisualization(visualization *opensplunkv1.VisualizationSpec) error {
-	if visualization.Type < opensplunkv1.VisualizationType_VISUALIZATION_TYPE_TABLE || visualization.Type > opensplunkv1.VisualizationType_VISUALIZATION_TYPE_SCATTER {
+func normalizeVisualization(visualization *opensplunk.VisualizationSpec) error {
+	if visualization.Type < opensplunk.VisualizationType_VISUALIZATION_TYPE_TABLE || visualization.Type > opensplunk.VisualizationType_VISUALIZATION_TYPE_SCATTER {
 		return fmt.Errorf("%w: visualization type is invalid", control.ErrInvalidArgument)
 	}
 	for _, field := range []struct {
@@ -195,10 +195,10 @@ func normalizeVisualization(visualization *opensplunkv1.VisualizationSpec) error
 	if err != nil {
 		return err
 	}
-	if visualization.StackMode == opensplunkv1.VisualizationStackMode_VISUALIZATION_STACK_MODE_UNSPECIFIED {
-		visualization.StackMode = opensplunkv1.VisualizationStackMode_VISUALIZATION_STACK_MODE_NONE
+	if visualization.StackMode == opensplunk.VisualizationStackMode_VISUALIZATION_STACK_MODE_UNSPECIFIED {
+		visualization.StackMode = opensplunk.VisualizationStackMode_VISUALIZATION_STACK_MODE_NONE
 	}
-	if visualization.StackMode < opensplunkv1.VisualizationStackMode_VISUALIZATION_STACK_MODE_NONE || visualization.StackMode > opensplunkv1.VisualizationStackMode_VISUALIZATION_STACK_MODE_STACKED_100_PERCENT {
+	if visualization.StackMode < opensplunk.VisualizationStackMode_VISUALIZATION_STACK_MODE_NONE || visualization.StackMode > opensplunk.VisualizationStackMode_VISUALIZATION_STACK_MODE_STACKED_100_PERCENT {
 		return fmt.Errorf("%w: visualization stack mode is invalid", control.ErrInvalidArgument)
 	}
 	if duration := visualization.TimeBucketWidth; duration != nil {
@@ -269,8 +269,8 @@ func boolMinimum(allowEmpty bool) int {
 	return 1
 }
 
-func validSharingScope(scope opensplunkv1.SharingScope) bool {
-	return scope >= opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE && scope <= opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL
+func validSharingScope(scope opensplunk.SharingScope) bool {
+	return scope >= opensplunk.SharingScope_SHARING_SCOPE_PRIVATE && scope <= opensplunk.SharingScope_SHARING_SCOPE_GLOBAL
 }
 
 type updatePaths struct {
@@ -314,14 +314,14 @@ func normalizeUpdateMask(mask *fieldmaskpb.FieldMask) (updatePaths, error) {
 	return updatePaths{paths: paths}, nil
 }
 
-func applyDefinitionUpdate(current, incoming *opensplunkv1.SavedSearchDefinition, paths updatePaths) (*opensplunkv1.SavedSearchDefinition, error) {
+func applyDefinitionUpdate(current, incoming *opensplunk.SavedSearchDefinition, paths updatePaths) (*opensplunk.SavedSearchDefinition, error) {
 	if current == nil || incoming == nil {
 		return nil, fmt.Errorf("%w: saved-search definition is required", control.ErrInvalidArgument)
 	}
 	if paths.full {
-		return proto.Clone(incoming).(*opensplunkv1.SavedSearchDefinition), nil
+		return proto.Clone(incoming).(*opensplunk.SavedSearchDefinition), nil
 	}
-	result := proto.Clone(current).(*opensplunkv1.SavedSearchDefinition)
+	result := proto.Clone(current).(*opensplunk.SavedSearchDefinition)
 	for _, path := range paths.paths {
 		switch path {
 		case "name":
@@ -339,11 +339,11 @@ func applyDefinitionUpdate(current, incoming *opensplunkv1.SavedSearchDefinition
 	return result, nil
 }
 
-func cloneSearch(value *opensplunkv1.SearchDefinition) *opensplunkv1.SearchDefinition {
+func cloneSearch(value *opensplunk.SearchDefinition) *opensplunk.SearchDefinition {
 	if value == nil {
 		return nil
 	}
-	return proto.Clone(value).(*opensplunkv1.SearchDefinition)
+	return proto.Clone(value).(*opensplunk.SearchDefinition)
 }
 
 func cloneStringPointer(value *string) *string {

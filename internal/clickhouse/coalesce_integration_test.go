@@ -9,7 +9,7 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 )
 
 func testCoalesceAgainstClickHouse(
@@ -207,7 +207,7 @@ func testCoalesceAgainstClickHouse(
 	}
 	var severity uint8
 	scalar(`eval selected=coalesce(severity, severity) | table selected`, &severity)
-	if want := uint8(opensplunkv1.LogSeverity_LOG_SEVERITY_INFO); severity != want {
+	if want := uint8(opensplunk.LogSeverity_LOG_SEVERITY_INFO); severity != want {
 		t.Fatalf("coalesce UInt8 = %d, want %d", severity, want)
 	}
 	var allNull *string

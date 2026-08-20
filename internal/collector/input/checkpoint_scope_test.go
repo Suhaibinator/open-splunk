@@ -59,7 +59,7 @@ func TestCheckpointStoreScopesPhysicalIdentityByInputID(t *testing.T) {
 	}
 }
 
-func TestCheckpointStoreVersionTwoRoundTripAndDeterministicOrder(t *testing.T) {
+func TestCheckpointStoreRoundTripAndDeterministicOrder(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	store, err := NewCheckpointStore(dir)
@@ -88,8 +88,8 @@ func TestCheckpointStoreVersionTwoRoundTripAndDeterministicOrder(t *testing.T) {
 	if err := json.Unmarshal(data, &document); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if document.Version != 2 {
-		t.Fatalf("checkpoint version = %d, want 2", document.Version)
+	if document.Version != checkpointFormatVersion {
+		t.Fatalf("checkpoint version = %d, want %d", document.Version, checkpointFormatVersion)
 	}
 	if len(document.Checkpoints) != 3 {
 		t.Fatalf("checkpoint count = %d, want 3", len(document.Checkpoints))
@@ -133,45 +133,32 @@ func TestCheckpointStoreVersionTwoRoundTripAndDeterministicOrder(t *testing.T) {
 	}
 }
 
-func TestCheckpointStoreValidatesFormatVersion(t *testing.T) {
+func TestCheckpointStoreAcceptsOnlyCurrentFormatVersion(t *testing.T) {
 	t.Parallel()
 	identity := canonicalIdentityForTest(1, 2, 1, "ab", 64)
 
-	t.Run("nonempty version one requires explicit reset", func(t *testing.T) {
+	t.Run("current version", func(t *testing.T) {
 		dir := t.TempDir()
 		writeCheckpointDocument(t, dir, checkpointDoc{
-			Version: 1,
+			Version: checkpointFormatVersion,
 			Checkpoints: []Checkpoint{{
-				InputID: "input-a", Identity: identity, Offset: 10,
+				InputID: "input-a", Identity: identity, Path: "/logs/app.log", Offset: 10,
 			}},
 		})
-		_, err := NewCheckpointStore(dir)
-		if err == nil || !strings.Contains(err.Error(), "version 1") {
-			t.Fatalf("NewCheckpointStore error = %v, want explicit version 1 rejection", err)
-		}
-	})
-
-	t.Run("empty version one is harmless", func(t *testing.T) {
-		dir := t.TempDir()
-		writeCheckpointDocument(t, dir, checkpointDoc{Version: 1})
 		store, err := NewCheckpointStore(dir)
 		if err != nil {
 			t.Fatalf("NewCheckpointStore: %v", err)
 		}
 		defer store.Close()
-		if err := store.Set(Checkpoint{
-			InputID: "input-a", Identity: identity, Path: "/logs/app.log",
-		}); err != nil {
-			t.Fatalf("Set: %v", err)
-		}
 	})
 
-	t.Run("unknown version is rejected", func(t *testing.T) {
+	t.Run("unsupported version", func(t *testing.T) {
 		dir := t.TempDir()
-		writeCheckpointDocument(t, dir, checkpointDoc{Version: 3})
+		writeCheckpointDocument(t, dir, checkpointDoc{Version: checkpointFormatVersion + 1})
 		_, err := NewCheckpointStore(dir)
-		if err == nil || !strings.Contains(err.Error(), "version 3") {
-			t.Fatalf("NewCheckpointStore error = %v, want version 3 rejection", err)
+		if err == nil || !strings.Contains(err.Error(), "unsupported version 2") ||
+			!strings.Contains(err.Error(), "fresh collector state") {
+			t.Fatalf("NewCheckpointStore error = %v, want explicit fresh-state rejection", err)
 		}
 	})
 }
@@ -224,7 +211,7 @@ func TestCheckpointStoreRejectsInvalidInputIDOnLoad(t *testing.T) {
 	}
 }
 
-func TestCheckpointStoreRejectsHostileVersionTwoState(t *testing.T) {
+func TestCheckpointStoreRejectsHostileCurrentState(t *testing.T) {
 	t.Parallel()
 	for _, test := range hostileCheckpointMutations() {
 		t.Run(test.name, func(t *testing.T) {

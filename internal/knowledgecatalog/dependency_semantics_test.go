@@ -5,7 +5,7 @@ import (
 	"slices"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 )
 
@@ -135,7 +135,7 @@ func TestDependencySemanticRootStateFailsClosed(t *testing.T) {
 func TestDependencySemanticsDeriveTierOneStagesAndExactFields(t *testing.T) {
 	tests := []struct {
 		name        string
-		definition  *opensplunkv1.KnowledgeObjectDefinition
+		definition  *opensplunk.KnowledgeObjectDefinition
 		wantStage   dependencyStage
 		wantInputs  []string
 		wantOutputs []string

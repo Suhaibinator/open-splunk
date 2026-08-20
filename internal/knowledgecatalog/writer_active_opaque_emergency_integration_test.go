@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"google.golang.org/protobuf/encoding/protowire"
@@ -95,10 +95,10 @@ func exerciseWriterActiveOpaqueEmergencyTransition(t *testing.T, route string) {
 	case "disable":
 		clientRequestID = "active-opaque-disable-request-0001"
 		expectedState = StateDisabled
-		request := &opensplunkv1.SetKnowledgeObjectStateRequest{
+		request := &opensplunk.SetKnowledgeObjectStateRequest{
 			KnowledgeObjectId: sourceID,
 			ExpectedVersion:   1,
-			State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+			State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 			ClientRequestId:   clientRequestID,
 		}
 		response, err := writer.SetState(actorContext, scope, request)
@@ -113,7 +113,7 @@ func exerciseWriterActiveOpaqueEmergencyTransition(t *testing.T, route string) {
 	case "delete":
 		clientRequestID = "active-opaque-delete-request-00001"
 		expectedState = StateDeleted
-		request := &opensplunkv1.DeleteKnowledgeObjectRequest{
+		request := &opensplunk.DeleteKnowledgeObjectRequest{
 			KnowledgeObjectId: sourceID,
 			ExpectedVersion:   1,
 			ClientRequestId:   clientRequestID,
@@ -173,10 +173,10 @@ func exerciseWriterActiveOpaqueEmergencyTransition(t *testing.T, route string) {
 	var replayed proto.Message
 	switch route {
 	case "disable":
-		response, err := writer.SetState(actorContext, scope, &opensplunkv1.SetKnowledgeObjectStateRequest{
+		response, err := writer.SetState(actorContext, scope, &opensplunk.SetKnowledgeObjectStateRequest{
 			KnowledgeObjectId: sourceID,
 			ExpectedVersion:   1,
-			State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+			State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 			ClientRequestId:   clientRequestID,
 		})
 		if err != nil {
@@ -184,7 +184,7 @@ func exerciseWriterActiveOpaqueEmergencyTransition(t *testing.T, route string) {
 		}
 		replayed = response
 	case "delete":
-		response, err := writer.Delete(actorContext, scope, &opensplunkv1.DeleteKnowledgeObjectRequest{
+		response, err := writer.Delete(actorContext, scope, &opensplunk.DeleteKnowledgeObjectRequest{
 			KnowledgeObjectId: sourceID,
 			ExpectedVersion:   1,
 			ClientRequestId:   clientRequestID,
@@ -225,7 +225,7 @@ func newWriterActiveOpaqueDefinition(t *testing.T, name string) integrationFutur
 	fixture.bodyField = append(bytes.Clone(futureMetadata), fixture.bodyField...)
 	fixture.bytes = append(bytes.Clone(knownBytes), fixture.bodyField...)
 	fixture.digest = sha256.Sum256(fixture.bytes)
-	fixture.definition = &opensplunkv1.KnowledgeObjectDefinition{}
+	fixture.definition = &opensplunk.KnowledgeObjectDefinition{}
 	if err := (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(fixture.bytes, fixture.definition); err != nil {
 		t.Fatalf("decode ACTIVE opaque newer-binary fixture: %v", err)
 	}
@@ -467,7 +467,7 @@ func assertWriterOpaqueImmutableVersions(
 
 func assertWriterOpaqueProtoObject(
 	t *testing.T,
-	object *opensplunkv1.KnowledgeObject,
+	object *opensplunk.KnowledgeObject,
 	objectID string,
 	fixture integrationFutureDefinition,
 	state State,
@@ -498,7 +498,7 @@ func assertWriterOpaqueStoredObject(
 
 func assertWriterOpaqueDefinitionBytes(
 	t *testing.T,
-	definition *opensplunkv1.KnowledgeObjectDefinition,
+	definition *opensplunk.KnowledgeObjectDefinition,
 	fixture integrationFutureDefinition,
 ) {
 	t.Helper()
@@ -519,14 +519,14 @@ func assertWriterOpaqueDefinitionBytes(
 	}
 }
 
-func stateProto(state State) opensplunkv1.KnowledgeObjectState {
+func stateProto(state State) opensplunk.KnowledgeObjectState {
 	switch state {
 	case StateDisabled:
-		return opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED
+		return opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED
 	case StateDeleted:
-		return opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DELETED
+		return opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DELETED
 	default:
-		return opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_UNSPECIFIED
+		return opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_UNSPECIFIED
 	}
 }
 
@@ -766,7 +766,7 @@ func assertWriterOpaqueCompactReceipt(
 			sharingScope,
 		)
 	}
-	envelope := &opensplunkv1.KnowledgeMutationOutcomeRecord{}
+	envelope := &opensplunk.KnowledgeMutationOutcomeRecord{}
 	if err := (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(outcome, envelope); err != nil ||
 		len(envelope.ProtoReflect().GetUnknown()) != 0 || envelope.GetObject() == nil ||
 		envelope.GetRoute() != route || envelope.GetMutationKind() != mutationKind ||

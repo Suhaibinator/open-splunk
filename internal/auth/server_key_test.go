@@ -428,7 +428,7 @@ func TestServerMasterKeyRegistrationSerializesWithTokenCreation(t *testing.T) {
 			IngestionTokenID:   "tok_server_key_token_first",
 			Version:            1,
 			Name:               "token first",
-			TokenPrefix:        "ost_v1_tokenfirst",
+			TokenPrefix:        "ost_tokenfirst",
 			TokenDigest:        bytes.Repeat([]byte{0x41}, sha256.Size),
 			State:              CollectorTokenStateActive,
 			CreatedAtUnixMicro: now,

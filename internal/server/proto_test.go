@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/SRouter/pkg/router"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobproto"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
@@ -87,60 +87,60 @@ func TestValueToProtoPreservesEverySupportedKind(t *testing.T) {
 		name     string
 		value    searchjobs.Value
 		kindType any
-		check    func(*testing.T, *opensplunkv1.TypedValue)
+		check    func(*testing.T, *opensplunk.TypedValue)
 	}{
-		{name: "null", value: searchjobs.NullValue(), kindType: (*opensplunkv1.TypedValue_NullValue)(nil)},
-		{name: "string", value: searchjobs.StringValue("hello"), kindType: (*opensplunkv1.TypedValue_StringValue)(nil), check: func(t *testing.T, value *opensplunkv1.TypedValue) {
+		{name: "null", value: searchjobs.NullValue(), kindType: (*opensplunk.TypedValue_NullValue)(nil)},
+		{name: "string", value: searchjobs.StringValue("hello"), kindType: (*opensplunk.TypedValue_StringValue)(nil), check: func(t *testing.T, value *opensplunk.TypedValue) {
 			if value.GetStringValue() != "hello" {
 				t.Fatalf("string = %q", value.GetStringValue())
 			}
 		}},
-		{name: "signed", value: searchjobs.SignedValue(-9), kindType: (*opensplunkv1.TypedValue_Sint64Value)(nil), check: func(t *testing.T, value *opensplunkv1.TypedValue) {
+		{name: "signed", value: searchjobs.SignedValue(-9), kindType: (*opensplunk.TypedValue_Sint64Value)(nil), check: func(t *testing.T, value *opensplunk.TypedValue) {
 			if value.GetSint64Value() != -9 {
 				t.Fatalf("signed = %d", value.GetSint64Value())
 			}
 		}},
-		{name: "unsigned", value: searchjobs.UnsignedValue(math.MaxUint64), kindType: (*opensplunkv1.TypedValue_Uint64Value)(nil), check: func(t *testing.T, value *opensplunkv1.TypedValue) {
+		{name: "unsigned", value: searchjobs.UnsignedValue(math.MaxUint64), kindType: (*opensplunk.TypedValue_Uint64Value)(nil), check: func(t *testing.T, value *opensplunk.TypedValue) {
 			if value.GetUint64Value() != math.MaxUint64 {
 				t.Fatalf("unsigned = %d", value.GetUint64Value())
 			}
 		}},
-		{name: "double", value: searchjobs.DoubleValue(math.Inf(1)), kindType: (*opensplunkv1.TypedValue_DoubleValue)(nil), check: func(t *testing.T, value *opensplunkv1.TypedValue) {
+		{name: "double", value: searchjobs.DoubleValue(math.Inf(1)), kindType: (*opensplunk.TypedValue_DoubleValue)(nil), check: func(t *testing.T, value *opensplunk.TypedValue) {
 			if !math.IsInf(value.GetDoubleValue(), 1) {
 				t.Fatalf("double = %v", value.GetDoubleValue())
 			}
 		}},
-		{name: "bool", value: searchjobs.BoolValue(true), kindType: (*opensplunkv1.TypedValue_BoolValue)(nil), check: func(t *testing.T, value *opensplunkv1.TypedValue) {
+		{name: "bool", value: searchjobs.BoolValue(true), kindType: (*opensplunk.TypedValue_BoolValue)(nil), check: func(t *testing.T, value *opensplunk.TypedValue) {
 			if !value.GetBoolValue() {
 				t.Fatal("bool = false")
 			}
 		}},
-		{name: "bytes", value: searchjobs.BytesValue([]byte{0, 1, 2}), kindType: (*opensplunkv1.TypedValue_BytesValue)(nil), check: func(t *testing.T, value *opensplunkv1.TypedValue) {
+		{name: "bytes", value: searchjobs.BytesValue([]byte{0, 1, 2}), kindType: (*opensplunk.TypedValue_BytesValue)(nil), check: func(t *testing.T, value *opensplunk.TypedValue) {
 			if !reflect.DeepEqual(value.GetBytesValue(), []byte{0, 1, 2}) {
 				t.Fatalf("bytes = %v", value.GetBytesValue())
 			}
 		}},
-		{name: "timestamp", value: searchjobs.TimeValue(timestamp), kindType: (*opensplunkv1.TypedValue_TimestampValue)(nil), check: func(t *testing.T, value *opensplunkv1.TypedValue) {
+		{name: "timestamp", value: searchjobs.TimeValue(timestamp), kindType: (*opensplunk.TypedValue_TimestampValue)(nil), check: func(t *testing.T, value *opensplunk.TypedValue) {
 			if !value.GetTimestampValue().AsTime().Equal(timestamp) {
 				t.Fatalf("timestamp = %s", value.GetTimestampValue().AsTime())
 			}
 		}},
-		{name: "duration", value: searchjobs.DurationValue(-1500 * time.Millisecond), kindType: (*opensplunkv1.TypedValue_DurationValue)(nil), check: func(t *testing.T, value *opensplunkv1.TypedValue) {
+		{name: "duration", value: searchjobs.DurationValue(-1500 * time.Millisecond), kindType: (*opensplunk.TypedValue_DurationValue)(nil), check: func(t *testing.T, value *opensplunk.TypedValue) {
 			if value.GetDurationValue().AsDuration() != -1500*time.Millisecond {
 				t.Fatalf("duration = %s", value.GetDurationValue().AsDuration())
 			}
 		}},
-		{name: "decimal", value: decimal, kindType: (*opensplunkv1.TypedValue_DecimalValue)(nil), check: func(t *testing.T, value *opensplunkv1.TypedValue) {
+		{name: "decimal", value: decimal, kindType: (*opensplunk.TypedValue_DecimalValue)(nil), check: func(t *testing.T, value *opensplunk.TypedValue) {
 			if value.GetDecimalValue().GetValue() != "-12345678901234567890.001" {
 				t.Fatalf("decimal = %q", value.GetDecimalValue().GetValue())
 			}
 		}},
-		{name: "list", value: searchjobs.ListValue(searchjobs.StringValue("one"), searchjobs.NullValue()), kindType: (*opensplunkv1.TypedValue_ListValue)(nil), check: func(t *testing.T, value *opensplunkv1.TypedValue) {
+		{name: "list", value: searchjobs.ListValue(searchjobs.StringValue("one"), searchjobs.NullValue()), kindType: (*opensplunk.TypedValue_ListValue)(nil), check: func(t *testing.T, value *opensplunk.TypedValue) {
 			if len(value.GetListValue().GetValues()) != 2 {
 				t.Fatalf("list = %+v", value.GetListValue())
 			}
 		}},
-		{name: "object", value: object, kindType: (*opensplunkv1.TypedValue_ObjectValue)(nil), check: func(t *testing.T, value *opensplunkv1.TypedValue) {
+		{name: "object", value: object, kindType: (*opensplunk.TypedValue_ObjectValue)(nil), check: func(t *testing.T, value *opensplunk.TypedValue) {
 			if value.GetObjectValue().GetFields()[0].GetValue().GetSint64Value() != -2 {
 				t.Fatalf("object = %+v", value.GetObjectValue())
 			}
@@ -241,11 +241,11 @@ func TestMixedSchemaRetainsConcreteCellType(t *testing.T) {
 		Schema:   searchjobs.Schema{Columns: []searchjobs.Column{{Name: "_raw", Kind: searchjobs.ValueKindMixed, Nullable: true}}},
 		Rows:     []searchjobs.ResultRow{{Ordinal: 0, Values: []searchjobs.Value{searchjobs.BytesValue([]byte{0xff})}}},
 		Complete: true,
-	}, searchjobproto.ResultShape{Kind: opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS}, false, false)
+	}, searchjobproto.ResultShape{Kind: opensplunk.ResultSetKind_RESULT_SET_KIND_EVENTS}, false, false)
 	if err != nil {
 		t.Fatalf("resultPageToProto: %v", err)
 	}
-	if page.GetSchema().GetColumns()[0].GetValueType() != opensplunkv1.ValueType_VALUE_TYPE_MIXED {
+	if page.GetSchema().GetColumns()[0].GetValueType() != opensplunk.ValueType_VALUE_TYPE_MIXED {
 		t.Fatalf("schema kind = %v", page.GetSchema().GetColumns()[0].GetValueType())
 	}
 	if got := page.GetRows()[0].GetCells()[0].GetBytesValue(); !reflect.DeepEqual(got, []byte{0xff}) {
@@ -277,7 +277,7 @@ func TestSearchJobAndResultPageExposeRetainedResultTruncation(t *testing.T) {
 		Rows:      []searchjobs.ResultRow{{Ordinal: 9_999, Values: []searchjobs.Value{searchjobs.UnsignedValue(1)}}},
 		TotalRows: 10_000,
 		Complete:  true,
-	}, searchjobproto.ResultShape{Kind: opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS}, true, true)
+	}, searchjobproto.ResultShape{Kind: opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS}, true, true)
 	if err != nil {
 		t.Fatalf("resultPageToProto: %v", err)
 	}
@@ -292,7 +292,7 @@ func TestSearchJobAndResultPageExposeRetainedResultTruncation(t *testing.T) {
 		Schema:    searchjobs.Schema{Columns: []searchjobs.Column{{Name: "count", Kind: searchjobs.ValueKindUnsigned}}},
 		TotalRows: 10_000,
 		Complete:  true,
-	}, searchjobproto.ResultShape{Kind: opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS}, true, false)
+	}, searchjobproto.ResultShape{Kind: opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS}, true, false)
 	if err != nil {
 		t.Fatalf("searchjobproto.ResultPage(complete): %v", err)
 	}
@@ -341,7 +341,7 @@ func TestSearchJobToProtoPreservesIntentProvenanceAndResolvedRange(t *testing.T)
 		converted.GetDefinition().GetTimeRange().GetLatest() != "now" ||
 		converted.GetDefinition().GetTimeRange().GetTimezone() != "America/Los_Angeles" ||
 		converted.GetDefinition().GetAppId() != "search-app" ||
-		converted.GetSource().GetOrigin() != opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH ||
+		converted.GetSource().GetOrigin() != opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH ||
 		converted.GetSource().GetSavedSearchId() != "saved-1" {
 		t.Fatalf("converted intent/provenance = %+v", converted)
 	}
@@ -353,19 +353,19 @@ func TestSearchJobToProtoPreservesIntentProvenanceAndResolvedRange(t *testing.T)
 }
 
 func TestResultKindForSPLRecognizesTransformingCommands(t *testing.T) {
-	tests := map[string]opensplunkv1.ResultSetKind{
-		"index=main": opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS,
-		`index=main | rex "(?<request_id>request_id=\w+)"`:                  opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS,
-		"index=main | table level count":                                    opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
-		"index=main | stats count by level":                                 opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
-		"index=main | stats count by level | sort -count | head 20":         opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
-		"index=main | top limit=20 message":                                 opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
-		"index=main | rare limit=20 message":                                opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
-		"index=main | timechart span=5m count":                              opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES,
-		"index=main | timechart span=5m count by level":                     opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES,
-		"index=main | table _time level | timechart span=5m count by level": opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES,
-		`index=main | eval duration_ms=tonumber(replace(duration, "ms$", "")) | stats count p95(duration_ms) AS p95_ms BY path | where p95_ms>500`: opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
-		"index=main | unsupported": opensplunkv1.ResultSetKind_RESULT_SET_KIND_UNSPECIFIED,
+	tests := map[string]opensplunk.ResultSetKind{
+		"index=main": opensplunk.ResultSetKind_RESULT_SET_KIND_EVENTS,
+		`index=main | rex "(?<request_id>request_id=\w+)"`:                  opensplunk.ResultSetKind_RESULT_SET_KIND_EVENTS,
+		"index=main | table level count":                                    opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS,
+		"index=main | stats count by level":                                 opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS,
+		"index=main | stats count by level | sort -count | head 20":         opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS,
+		"index=main | top limit=20 message":                                 opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS,
+		"index=main | rare limit=20 message":                                opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS,
+		"index=main | timechart span=5m count":                              opensplunk.ResultSetKind_RESULT_SET_KIND_TIME_SERIES,
+		"index=main | timechart span=5m count by level":                     opensplunk.ResultSetKind_RESULT_SET_KIND_TIME_SERIES,
+		"index=main | table _time level | timechart span=5m count by level": opensplunk.ResultSetKind_RESULT_SET_KIND_TIME_SERIES,
+		`index=main | eval duration_ms=tonumber(replace(duration, "ms$", "")) | stats count p95(duration_ms) AS p95_ms BY path | where p95_ms>500`: opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS,
+		"index=main | unsupported": opensplunk.ResultSetKind_RESULT_SET_KIND_UNSPECIFIED,
 	}
 	for source, want := range tests {
 		if got := searchjobproto.ResultShapeForSPL(source).Kind; got != want {
@@ -381,15 +381,15 @@ func TestTimeSeriesSchemaMarksWideSeriesAsMetrics(t *testing.T) {
 		{Name: "_time", Kind: searchjobs.ValueKindTime},
 		{Name: "ERROR", Kind: searchjobs.ValueKindUnsigned},
 		{Name: "NULL", Kind: searchjobs.ValueKindUnsigned},
-	}}, searchjobproto.ResultShape{Kind: opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES, RuntimeNamedColumns: true})
+	}}, searchjobproto.ResultShape{Kind: opensplunk.ResultSetKind_RESULT_SET_KIND_TIME_SERIES, RuntimeNamedColumns: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if converted.Columns[0].SemanticType != opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_EVENT_TIME {
+	if converted.Columns[0].SemanticType != opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_EVENT_TIME {
 		t.Fatalf("time semantic = %v", converted.Columns[0].SemanticType)
 	}
 	for index := 1; index < len(converted.Columns); index++ {
-		if converted.Columns[index].SemanticType != opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_METRIC {
+		if converted.Columns[index].SemanticType != opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_METRIC {
 			t.Fatalf("series %d semantic = %v", index, converted.Columns[index].SemanticType)
 		}
 	}
@@ -402,14 +402,14 @@ func TestTimeSeriesSchemaMarksStaticCountAsMetric(t *testing.T) {
 		{Name: "_time", Kind: searchjobs.ValueKindTime},
 		{Name: "count", Kind: searchjobs.ValueKindUnsigned},
 	}}, searchjobproto.ResultShape{
-		Kind:                opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES,
+		Kind:                opensplunk.ResultSetKind_RESULT_SET_KIND_TIME_SERIES,
 		RuntimeNamedColumns: false,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := converted.Columns[1].SemanticType; got !=
-		opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_METRIC {
+		opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_METRIC {
 		t.Fatalf("count semantic = %v, want METRIC", got)
 	}
 }

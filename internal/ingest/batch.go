@@ -8,7 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -19,20 +19,20 @@ import (
 
 func (s *Service) processBatch(
 	ctx context.Context,
-	batch *opensplunkv1.EventBatch,
+	batch *opensplunk.EventBatch,
 	state *streamState,
 	boundaryAt time.Time,
-) (*opensplunkv1.CollectResponse, error) {
+) (*opensplunk.CollectResponse, error) {
 	return s.processBatchWithDeferredAuthority(ctx, batch, state, boundaryAt, nil)
 }
 
 func (s *Service) processBatchWithDeferredAuthority(
 	ctx context.Context,
-	batch *opensplunkv1.EventBatch,
+	batch *opensplunk.EventBatch,
 	state *streamState,
 	boundaryAt time.Time,
 	deferredAuthority error,
-) (*opensplunkv1.CollectResponse, error) {
+) (*opensplunk.CollectResponse, error) {
 	state.pendingThrottle = nil
 	uncompressedBytes, eventSizes, rejection := s.validateBatchHardEnvelope(batch, state)
 	if rejection != nil {
@@ -49,7 +49,7 @@ func (s *Service) processBatchWithDeferredAuthority(
 		}
 		return responseWithBatchReject(batchRejection(
 			batch,
-			opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_PROTOCOL_VIOLATION,
+			opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_PROTOCOL_VIOLATION,
 			"batch cannot be deterministically decoded",
 			"batch",
 			"invalid_protobuf",
@@ -61,7 +61,7 @@ func (s *Service) processBatchWithDeferredAuthority(
 		}
 		return responseWithRetryBatch(
 			batch,
-			opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
+			opensplunk.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
 			s.config.DefaultRetryAfter,
 			"batch identity conflicts with an unresolved stream-local batch; reconnect and retry",
 		), nil
@@ -153,7 +153,7 @@ func (s *Service) processBatchWithDeferredAuthority(
 	if rejection != nil {
 		return responseWithRetryBatch(
 			batch,
-			opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
+			opensplunk.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
 			s.config.DefaultRetryAfter,
 			"batch identity conflicts with stream-local sequence history; reconnect and retry",
 		), nil
@@ -161,7 +161,7 @@ func (s *Service) processBatchWithDeferredAuthority(
 	if atCapacity {
 		return responseWithRetryBatch(
 			batch,
-			opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
+			opensplunk.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
 			s.config.DefaultRetryAfter,
 			"maximum in-flight batch limit reached",
 		), nil
@@ -173,7 +173,7 @@ func (s *Service) processBatchWithDeferredAuthority(
 	}
 
 	normalized := make([]*StoredEvent, 0, len(batch.GetEvents()))
-	rejections := make([]*opensplunkv1.EventRejection, 0)
+	rejections := make([]*opensplunk.EventRejection, 0)
 	seenEventIDs := make(map[string]struct{}, len(batch.GetEvents()))
 	retentionByIndex := make(map[string]time.Duration)
 	quotaByIndex := make(map[string]*ingestquota.Charge)
@@ -186,7 +186,7 @@ func (s *Service) processBatchWithDeferredAuthority(
 					uint32(eventIndex),
 					event.GetEventId(),
 					eventFailure(
-						opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_EVENT_ID,
+						opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_EVENT_ID,
 						"event_id is empty or has an invalid format",
 						"event_id",
 						"invalid_event_id",
@@ -196,7 +196,7 @@ func (s *Service) processBatchWithDeferredAuthority(
 			}
 			if _, duplicate := seenEventIDs[event.GetEventId()]; duplicate {
 				rejections = append(rejections, toProtoRejection(uint32(eventIndex), event.GetEventId(), eventFailure(
-					opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_EVENT_ID,
+					opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_EVENT_ID,
 					"event_id is duplicated within the batch", "event_id", "duplicate_event_id",
 				)))
 				continue
@@ -207,7 +207,7 @@ func (s *Service) processBatchWithDeferredAuthority(
 					uint32(eventIndex),
 					event.GetEventId(),
 					eventFailure(
-						opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_INDEX,
+						opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_INDEX,
 						"index_name is empty or has an invalid format",
 						"index_name",
 						"invalid_index",
@@ -222,7 +222,7 @@ func (s *Service) processBatchWithDeferredAuthority(
 					uint32(eventIndex),
 					event.GetEventId(),
 					eventFailure(
-						opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_INDEX,
+						opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_INDEX,
 						"token is not authorized for the requested index",
 						"index_name",
 						"unauthorized_index",
@@ -288,10 +288,10 @@ func (s *Service) processBatchWithDeferredAuthority(
 	}
 
 	if len(normalized) == 0 {
-		return s.rejectRecordedBatch(ctx, batch, state, identity, durableIdentity, receivedAt, &opensplunkv1.BatchReject{
+		return s.rejectRecordedBatch(ctx, batch, state, identity, durableIdentity, receivedAt, &opensplunk.BatchReject{
 			BatchId:       batch.GetBatchId(),
 			BatchSequence: batch.GetBatchSequence(),
-			Code:          opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS,
+			Code:          opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS,
 			Message:       "batch contains no authorized valid events",
 			Violations:    rejectionViolations(rejections),
 		})
@@ -306,7 +306,7 @@ func (s *Service) processBatchWithDeferredAuthority(
 			receivedAt,
 			batchRejection(
 				batch,
-				opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE,
+				opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE,
 				"normalized batch outcome exceeds the durable replay limit",
 				"events",
 				"durable_replay_too_large",
@@ -366,13 +366,13 @@ func (s *Service) processBatchWithDeferredAuthority(
 
 func (s *Service) rejectRecordedBatch(
 	ctx context.Context,
-	batch *opensplunkv1.EventBatch,
+	batch *opensplunk.EventBatch,
 	state *streamState,
 	identity batchIdentity,
 	durableIdentity StoreBatchIdentity,
 	receivedAt time.Time,
-	rejection *opensplunkv1.BatchReject,
-) (*opensplunkv1.CollectResponse, error) {
+	rejection *opensplunk.BatchReject,
+) (*opensplunk.CollectResponse, error) {
 	recoverable, ok := s.store.(RecoverableEventStore)
 	if !ok {
 		return nil, status.Error(codes.Internal, "event store cannot durably record terminal batch rejections")
@@ -397,14 +397,14 @@ func (s *Service) rejectRecordedBatch(
 }
 
 func (s *Service) storeFailure(
-	batch *opensplunkv1.EventBatch,
+	batch *opensplunk.EventBatch,
 	state *streamState,
 	err error,
-) (*opensplunkv1.CollectResponse, error) {
+) (*opensplunk.CollectResponse, error) {
 	if isDurableIdentityConflict(err) {
 		return responseWithBatchReject(batchRejection(
 			batch,
-			opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_SEQUENCE_CONFLICT,
+			opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_SEQUENCE_CONFLICT,
 			"batch ID or sequence is already bound to different durable source bytes",
 			"batch_sequence",
 			"sequence_conflict",
@@ -414,9 +414,9 @@ func (s *Service) storeFailure(
 		message := "temporary storage failure"
 		var storeError *TransientStoreError
 		if errors.As(err, &storeError) &&
-			storeError.ThrottleReason != opensplunkv1.ThrottleReason_THROTTLE_REASON_UNSPECIFIED {
+			storeError.ThrottleReason != opensplunk.ThrottleReason_THROTTLE_REASON_UNSPECIFIED {
 			throttleMessage := "ingestion rate limit reached"
-			state.pendingThrottle = &opensplunkv1.Throttle{
+			state.pendingThrottle = &opensplunk.Throttle{
 				Reason:           storeError.ThrottleReason,
 				MinimumSendDelay: durationpb.New(retry.after),
 				Message:          &throttleMessage,
@@ -442,10 +442,10 @@ func isStoredBatchGone(err error) bool {
 }
 
 func (s *Service) responseForStoredBatch(
-	batch *opensplunkv1.EventBatch,
+	batch *opensplunk.EventBatch,
 	result StoreResult,
-	fallbackRejections []*opensplunkv1.EventRejection,
-) (*opensplunkv1.CollectResponse, error) {
+	fallbackRejections []*opensplunk.EventRejection,
+) (*opensplunk.CollectResponse, error) {
 	if result.BatchRejection != nil {
 		if result.Accepted != 0 ||
 			result.Duplicate != 0 ||
@@ -456,9 +456,9 @@ func (s *Service) responseForStoredBatch(
 			!validStoredBatchRejection(batch, result.BatchRejection) {
 			return nil, status.Error(codes.Internal, "event store returned an inconsistent durable batch rejection")
 		}
-		return &opensplunkv1.CollectResponse{
-			Payload: &opensplunkv1.CollectResponse_BatchReject{
-				BatchReject: proto.Clone(result.BatchRejection).(*opensplunkv1.BatchReject),
+		return &opensplunk.CollectResponse{
+			Payload: &opensplunk.CollectResponse_BatchReject{
+				BatchReject: proto.Clone(result.BatchRejection).(*opensplunk.BatchReject),
 			},
 		}, nil
 	}
@@ -487,11 +487,11 @@ func (s *Service) responseForStoredBatch(
 	if committedTimestamp.CheckValid() != nil {
 		return nil, status.Error(codes.Internal, "event store returned an invalid commit timestamp")
 	}
-	return &opensplunkv1.CollectResponse{Payload: &opensplunkv1.CollectResponse_BatchAck{BatchAck: &opensplunkv1.BatchAck{
+	return &opensplunk.CollectResponse{Payload: &opensplunk.CollectResponse_BatchAck{BatchAck: &opensplunk.BatchAck{
 		BatchId:                          batch.GetBatchId(),
 		BatchSequence:                    batch.GetBatchSequence(),
 		AcknowledgedThroughBatchSequence: result.AcknowledgedThrough,
-		Durability:                       opensplunkv1.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED,
+		Durability:                       opensplunk.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED,
 		AcceptedEventCount:               result.Accepted,
 		DuplicateEventCount:              result.Duplicate,
 		RejectedEvents:                   rejections,
@@ -500,8 +500,8 @@ func (s *Service) responseForStoredBatch(
 }
 
 func validStoredBatchRejection(
-	batch *opensplunkv1.EventBatch,
-	rejection *opensplunkv1.BatchReject,
+	batch *opensplunk.EventBatch,
+	rejection *opensplunk.BatchReject,
 ) bool {
 	if batch == nil || rejection == nil ||
 		rejection.GetBatchId() != batch.GetBatchId() ||
@@ -512,9 +512,9 @@ func validStoredBatchRejection(
 }
 
 func validStoredRejections(
-	batch *opensplunkv1.EventBatch,
+	batch *opensplunk.EventBatch,
 	eventCount uint32,
-	rejections []*opensplunkv1.EventRejection,
+	rejections []*opensplunk.EventRejection,
 ) bool {
 	seen := make(map[uint32]struct{}, len(rejections))
 	for _, rejection := range rejections {
@@ -533,7 +533,7 @@ func validStoredRejections(
 	return true
 }
 
-func durableOutboxFits(state *streamState, batch *opensplunkv1.EventBatch, events []*StoredEvent) bool {
+func durableOutboxFits(state *streamState, batch *opensplunk.EventBatch, events []*StoredEvent) bool {
 	// OSOB header/checksum; three length-prefixed IDs; sequence, source digest,
 	// receive time, and two event counts. Keep this byte accounting in lockstep
 	// with clickhouse.encodeStoreOutbox.
@@ -556,7 +556,7 @@ func durableOutboxFits(state *streamState, batch *opensplunkv1.EventBatch, event
 	return true
 }
 
-func durableOutcomeFits(events []*StoredEvent, rejections []*opensplunkv1.EventRejection) bool {
+func durableOutcomeFits(events []*StoredEvent, rejections []*opensplunk.EventRejection) bool {
 	// OSVM header/checksum, index count, sequence, and outcome counts. Retention
 	// values are fixed-width; rejection payloads are deterministic protobufs.
 	total := uint64(5 + sha256.Size + 8 + 8 + 4 + 4)
@@ -603,14 +603,14 @@ const (
 	maximumBatchRejectViolationMessageBytes   = 8 << 10
 )
 
-func responseWithBatchReject(rejection *opensplunkv1.BatchReject) *opensplunkv1.CollectResponse {
+func responseWithBatchReject(rejection *opensplunk.BatchReject) *opensplunk.CollectResponse {
 	// Collect adds a uint64 sequence and a protobuf Timestamp after this helper
 	// returns. Their maximum valid wire encoding is below 64 bytes, including
 	// tags and lengths, so reserve that space inside the transport ceiling.
 	return boundedBatchRejectResponse(rejection, batchRejectResponseBudget)
 }
 
-func durableBatchRejectResponse(rejection *opensplunkv1.BatchReject) *opensplunkv1.CollectResponse {
+func durableBatchRejectResponse(rejection *opensplunk.BatchReject) *opensplunk.CollectResponse {
 	// Durable stores add an envelope, identity fields, receive time, checksum,
 	// and length prefixes around this protobuf. Keep explicit headroom so the
 	// persisted terminal disposition always fits the metadata ceiling.
@@ -618,8 +618,8 @@ func durableBatchRejectResponse(rejection *opensplunkv1.BatchReject) *opensplunk
 }
 
 func canonicalDurableBatchRejection(
-	rejection *opensplunkv1.BatchReject,
-) (*opensplunkv1.BatchReject, error) {
+	rejection *opensplunk.BatchReject,
+) (*opensplunk.BatchReject, error) {
 	canonical := durableBatchRejectResponse(rejection).GetBatchReject()
 	if err := ValidateDurableBatchRejection(canonical); err != nil {
 		return nil, err
@@ -631,7 +631,7 @@ func canonicalDurableBatchRejection(
 // bounded whole-batch disposition which a durable store may replay directly.
 // Callers which have an expected source identity must additionally compare the
 // batch ID and sequence with that identity.
-func ValidateDurableBatchRejection(rejection *opensplunkv1.BatchReject) error {
+func ValidateDurableBatchRejection(rejection *opensplunk.BatchReject) error {
 	if rejection == nil {
 		return errors.New("durable batch rejection is required")
 	}
@@ -642,10 +642,10 @@ func ValidateDurableBatchRejection(rejection *opensplunkv1.BatchReject) error {
 		return errors.New("durable batch rejection has an invalid batch sequence")
 	}
 	code := rejection.GetCode()
-	if code == opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_UNSPECIFIED {
+	if code == opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_UNSPECIFIED {
 		return errors.New("durable batch rejection has an unspecified code")
 	}
-	if _, known := opensplunkv1.BatchRejectionCode_name[int32(code)]; !known {
+	if _, known := opensplunk.BatchRejectionCode_name[int32(code)]; !known {
 		return errors.New("durable batch rejection has an unknown code")
 	}
 	if !validDurableBatchRejectText(rejection.GetMessage(), maximumBatchRejectMessageBytes) {
@@ -677,8 +677,8 @@ func ValidateDurableBatchRejection(rejection *opensplunkv1.BatchReject) error {
 	if len(rejection.ProtoReflect().GetUnknown()) != 0 {
 		return errors.New("durable batch rejection contains unknown fields")
 	}
-	response := &opensplunkv1.CollectResponse{
-		Payload: &opensplunkv1.CollectResponse_BatchReject{BatchReject: rejection},
+	response := &opensplunk.CollectResponse{
+		Payload: &opensplunk.CollectResponse_BatchReject{BatchReject: rejection},
 	}
 	responseSize, sizeOK := protobufSizeUint64(response)
 	if !sizeOK || responseSize > durableBatchRejectResponseBudget {
@@ -692,15 +692,15 @@ func validDurableBatchRejectText(value string, maximum int) bool {
 }
 
 func boundedBatchRejectResponse(
-	rejection *opensplunkv1.BatchReject,
+	rejection *opensplunk.BatchReject,
 	budget uint64,
-) *opensplunkv1.CollectResponse {
+) *opensplunk.CollectResponse {
 	if rejection == nil {
-		return &opensplunkv1.CollectResponse{
-			Payload: &opensplunkv1.CollectResponse_BatchReject{},
+		return &opensplunk.CollectResponse{
+			Payload: &opensplunk.CollectResponse_BatchReject{},
 		}
 	}
-	boundedRejection := &opensplunkv1.BatchReject{
+	boundedRejection := &opensplunk.BatchReject{
 		BatchId:       rejection.GetBatchId(),
 		BatchSequence: rejection.GetBatchSequence(),
 		Code:          rejection.GetCode(),
@@ -709,7 +709,7 @@ func boundedBatchRejectResponse(
 			maximumBatchRejectMessageBytes,
 			"batch rejected; oversized message omitted",
 		),
-		Violations: make([]*opensplunkv1.FieldViolation, len(rejection.GetViolations())),
+		Violations: make([]*opensplunk.FieldViolation, len(rejection.GetViolations())),
 	}
 	// A batch can fail an earlier envelope check (for example collector-ID
 	// mismatch) before batch_id itself is validated. Never reflect an unbounded
@@ -719,12 +719,12 @@ func boundedBatchRejectResponse(
 	}
 	for index, violation := range rejection.GetViolations() {
 		if violation == nil {
-			boundedRejection.Violations[index] = &opensplunkv1.FieldViolation{
+			boundedRejection.Violations[index] = &opensplunk.FieldViolation{
 				FieldPath: "violations", Code: "invalid", Message: "invalid violation detail omitted",
 			}
 			continue
 		}
-		boundedRejection.Violations[index] = &opensplunkv1.FieldViolation{
+		boundedRejection.Violations[index] = &opensplunk.FieldViolation{
 			FieldPath: boundedProtocolText(
 				violation.GetFieldPath(),
 				maximumBatchRejectViolationFieldPathBytes,
@@ -742,8 +742,8 @@ func boundedBatchRejectResponse(
 			),
 		}
 	}
-	response := &opensplunkv1.CollectResponse{
-		Payload: &opensplunkv1.CollectResponse_BatchReject{BatchReject: boundedRejection},
+	response := &opensplunk.CollectResponse{
+		Payload: &opensplunk.CollectResponse_BatchReject{BatchReject: boundedRejection},
 	}
 	responseSize, sizeOK := protobufSizeUint64(response)
 	if sizeOK && responseSize <= budget {
@@ -755,23 +755,23 @@ func boundedBatchRejectResponse(
 	// response transport limit. Retain the largest ordered prefix that fits and
 	// append an explicit summary marker. Binary search avoids repeatedly sizing
 	// every prefix under adversarial input.
-	summary := &opensplunkv1.FieldViolation{
+	summary := &opensplunk.FieldViolation{
 		FieldPath: "violations",
 		Code:      "truncated",
 		Message:   "additional field violations omitted to stay within the protocol response limit",
 	}
-	build := func(prefix int) *opensplunkv1.CollectResponse {
-		bounded := &opensplunkv1.BatchReject{
+	build := func(prefix int) *opensplunk.CollectResponse {
+		bounded := &opensplunk.BatchReject{
 			BatchId:       boundedRejection.GetBatchId(),
 			BatchSequence: boundedRejection.GetBatchSequence(),
 			Code:          boundedRejection.GetCode(),
 			Message:       boundedRejection.GetMessage(),
-			Violations:    make([]*opensplunkv1.FieldViolation, prefix+1),
+			Violations:    make([]*opensplunk.FieldViolation, prefix+1),
 		}
 		copy(bounded.Violations, boundedRejection.GetViolations()[:prefix])
 		bounded.Violations[prefix] = summary
-		return &opensplunkv1.CollectResponse{
-			Payload: &opensplunkv1.CollectResponse_BatchReject{BatchReject: bounded},
+		return &opensplunk.CollectResponse{
+			Payload: &opensplunk.CollectResponse_BatchReject{BatchReject: bounded},
 		}
 	}
 	low, high := 0, len(boundedRejection.GetViolations())
@@ -791,7 +791,7 @@ func boundedBatchRejectResponse(
 	}
 	// All fields above are bounded, so this is defensive against future proto
 	// growth. Preserve only the stable rejection category and sequence.
-	return &opensplunkv1.CollectResponse{Payload: &opensplunkv1.CollectResponse_BatchReject{BatchReject: &opensplunkv1.BatchReject{
+	return &opensplunk.CollectResponse{Payload: &opensplunk.CollectResponse_BatchReject{BatchReject: &opensplunk.BatchReject{
 		BatchSequence: boundedRejection.GetBatchSequence(),
 		Code:          boundedRejection.GetCode(),
 		Message:       "batch rejected; response details omitted",
@@ -806,13 +806,13 @@ func boundedProtocolText(value string, maximum int, fallback string) string {
 }
 
 func responseWithRetryBatch(
-	batch *opensplunkv1.EventBatch,
-	reason opensplunkv1.RetryBatchReason,
+	batch *opensplunk.EventBatch,
+	reason opensplunk.RetryBatchReason,
 	retryAfter time.Duration,
 	message string,
-) *opensplunkv1.CollectResponse {
-	return &opensplunkv1.CollectResponse{
-		Payload: &opensplunkv1.CollectResponse_RetryBatch{RetryBatch: &opensplunkv1.RetryBatch{
+) *opensplunk.CollectResponse {
+	return &opensplunk.CollectResponse{
+		Payload: &opensplunk.CollectResponse_RetryBatch{RetryBatch: &opensplunk.RetryBatch{
 			BatchId:       batch.GetBatchId(),
 			BatchSequence: batch.GetBatchSequence(),
 			Reason:        reason,
@@ -826,30 +826,27 @@ func responseWithRetryBatch(
 // bounds before hashing or consulting durable identity state. These checks are
 // intentionally independent of mutable deployment policy so a committed retry
 // can recover its original acknowledgment after limits or wall time change.
-func (s *Service) validateBatchHardEnvelope(batch *opensplunkv1.EventBatch, state *streamState) (uint64, []uint64, *opensplunkv1.BatchReject) {
+func (s *Service) validateBatchHardEnvelope(batch *opensplunk.EventBatch, state *streamState) (uint64, []uint64, *opensplunk.BatchReject) {
 	if batch == nil {
-		return 0, nil, batchRejection(nil, opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_PROTOCOL_VIOLATION, "batch payload is required", "batch", "required")
+		return 0, nil, batchRejection(nil, opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_PROTOCOL_VIOLATION, "batch payload is required", "batch", "required")
 	}
 	if batch.GetCollectorId() != state.collectorID {
-		return 0, nil, batchRejection(batch, opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_COLLECTOR_ID_MISMATCH, "batch collector_id does not match hello", "collector_id", "collector_id_mismatch")
+		return 0, nil, batchRejection(batch, opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_COLLECTOR_ID_MISMATCH, "batch collector_id does not match hello", "collector_id", "collector_id_mismatch")
 	}
 	if !validIdentifier(batch.GetBatchId(), HardMaxIDBytes) {
-		return 0, nil, batchRejection(batch, opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_INVALID_BATCH_ID, "batch_id is empty or has an invalid format", "batch_id", "invalid_batch_id")
+		return 0, nil, batchRejection(batch, opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_INVALID_BATCH_ID, "batch_id is empty or has an invalid format", "batch_id", "invalid_batch_id")
 	}
 	if batch.GetBatchSequence() == 0 {
-		return 0, nil, batchRejection(batch, opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_SEQUENCE_CONFLICT, "batch_sequence must be positive", "batch_sequence", "invalid_sequence")
-	}
-	if batch.GetProtocolMajor() != state.protocolMajor || batch.GetProtocolMinor() != state.protocolMinor {
-		return 0, nil, batchRejection(batch, opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_PROTOCOL_VIOLATION, "batch protocol version does not match hello", "protocol_major", "protocol_mismatch")
+		return 0, nil, batchRejection(batch, opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_SEQUENCE_CONFLICT, "batch_sequence must be positive", "batch_sequence", "invalid_sequence")
 	}
 	if batch.GetCreatedAt() == nil || batch.GetCreatedAt().CheckValid() != nil {
-		return 0, nil, batchRejection(batch, opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_PROTOCOL_VIOLATION, "batch created_at is invalid", "created_at", "invalid_protobuf_timestamp")
+		return 0, nil, batchRejection(batch, opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_PROTOCOL_VIOLATION, "batch created_at is invalid", "created_at", "invalid_protobuf_timestamp")
 	}
 	if len(batch.GetEvents()) == 0 {
-		return 0, nil, batchRejection(batch, opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS, "batch must contain at least one event", "events", "required")
+		return 0, nil, batchRejection(batch, opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS, "batch must contain at least one event", "events", "required")
 	}
 	if _, ok := boundedBatchEventCount(batch); !ok {
-		return 0, nil, batchRejection(batch, opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_TOO_MANY_EVENTS, "batch contains too many events", "events", "too_many_events")
+		return 0, nil, batchRejection(batch, opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_TOO_MANY_EVENTS, "batch contains too many events", "events", "too_many_events")
 	}
 	sizes := make([]uint64, len(batch.GetEvents()))
 	var totalBytes uint64
@@ -858,7 +855,7 @@ func (s *Service) validateBatchHardEnvelope(batch *opensplunkv1.EventBatch, stat
 		if !ok || size > HardMaxEventBytes {
 			return 0, nil, batchRejection(
 				batch,
-				opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE,
+				opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE,
 				"batch contains an event which exceeds the hard size limit",
 				fmt.Sprintf("events[%d]", eventIndex),
 				"event_too_large",
@@ -869,15 +866,15 @@ func (s *Service) validateBatchHardEnvelope(batch *opensplunkv1.EventBatch, stat
 	}
 	actualBytes := totalBytes
 	if actualBytes > HardMaxBatchBytes || batch.GetUncompressedSizeBytes() > HardMaxBatchBytes || batch.GetUncompressedSizeBytes() != actualBytes {
-		return 0, nil, batchRejection(batch, opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE, "batch size is invalid or exceeds the hard limit", "uncompressed_size_bytes", "batch_size_mismatch_or_limit")
+		return 0, nil, batchRejection(batch, opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE, "batch size is invalid or exceeds the hard limit", "uncompressed_size_bytes", "batch_size_mismatch_or_limit")
 	}
 	if !digestsEqual(batch.GetEventIdsSha256(), EventIDDigest(batch.GetEvents())) {
-		return 0, nil, batchRejection(batch, opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_EVENT_ID_DIGEST_MISMATCH, "event ID digest does not match the ordered events", "event_ids_sha256", "digest_mismatch")
+		return 0, nil, batchRejection(batch, opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_EVENT_ID_DIGEST_MISMATCH, "event ID digest does not match the ordered events", "event_ids_sha256", "digest_mismatch")
 	}
 	return totalBytes, sizes, nil
 }
 
-func boundedBatchEventCount(batch *opensplunkv1.EventBatch) (uint32, bool) {
+func boundedBatchEventCount(batch *opensplunk.EventBatch) (uint32, bool) {
 	if batch == nil {
 		return 0, false
 	}
@@ -892,19 +889,19 @@ func boundedBatchEventCount(batch *opensplunkv1.EventBatch) (uint32, bool) {
 // validateBatchPolicy enforces deployment-configurable limits only after an
 // exact durable lookup has missed. It must never precede recovery of a stored
 // acknowledgment because these limits and the wall clock can change.
-func (s *Service) validateBatchPolicy(batch *opensplunkv1.EventBatch, receivedAt time.Time, uncompressedBytes uint64) *opensplunkv1.BatchReject {
+func (s *Service) validateBatchPolicy(batch *opensplunk.EventBatch, receivedAt time.Time, uncompressedBytes uint64) *opensplunk.BatchReject {
 	if !validIdentifier(batch.GetBatchId(), s.config.Limits.MaxIDBytes) {
-		return batchRejection(batch, opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_INVALID_BATCH_ID, "batch_id exceeds the configured limit", "batch_id", "invalid_batch_id")
+		return batchRejection(batch, opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_INVALID_BATCH_ID, "batch_id exceeds the configured limit", "batch_id", "invalid_batch_id")
 	}
 	if err := s.validator.validateTimestamp(batch.GetCreatedAt(), receivedAt); err != nil {
-		return batchRejection(batch, opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_PROTOCOL_VIOLATION, "batch created_at is outside accepted bounds", "created_at", err.Error())
+		return batchRejection(batch, opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_PROTOCOL_VIOLATION, "batch created_at is outside accepted bounds", "created_at", err.Error())
 	}
 	if uint64(len(batch.GetEvents())) > uint64(s.config.Limits.MaxBatchEvents) {
-		return batchRejection(batch, opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_TOO_MANY_EVENTS, "batch contains too many events", "events", "too_many_events")
+		return batchRejection(batch, opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_TOO_MANY_EVENTS, "batch contains too many events", "events", "too_many_events")
 	}
 	actualBytes := uncompressedBytes
 	if actualBytes > s.config.Limits.MaxBatchBytes || batch.GetUncompressedSizeBytes() > s.config.Limits.MaxBatchBytes {
-		return batchRejection(batch, opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE, "batch exceeds the configured size limit", "uncompressed_size_bytes", "batch_size_limit")
+		return batchRejection(batch, opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE, "batch exceeds the configured size limit", "uncompressed_size_bytes", "batch_size_limit")
 	}
 	return nil
 }
@@ -915,7 +912,7 @@ func recordBatchIdentity(
 	identity batchIdentity,
 	receivedAt time.Time,
 	maxInFlight uint32,
-) (time.Time, *opensplunkv1.BatchReject, bool) {
+) (time.Time, *opensplunk.BatchReject, bool) {
 	if state.pendingBatches == nil {
 		state.pendingBatches = make(map[uint64]pendingBatchIdentity)
 	}
@@ -929,7 +926,7 @@ func recordBatchIdentity(
 		return pending.receivedAt, nil, false
 	}
 	if state.hasHighestBatchSequence && sequence <= state.highestBatchSequence {
-		return time.Time{}, batchRejectionValues(identity.batchID, sequence, opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_SEQUENCE_CONFLICT, "batch_sequence was already completed or used for a different durable batch", "batch_sequence", "sequence_conflict"), false
+		return time.Time{}, batchRejectionValues(identity.batchID, sequence, opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_SEQUENCE_CONFLICT, "batch_sequence was already completed or used for a different durable batch", "batch_sequence", "sequence_conflict"), false
 	}
 	if uint64(len(state.pendingBatches)) >= uint64(maxInFlight) {
 		return time.Time{}, nil, true
@@ -975,12 +972,12 @@ func rememberDurablePendingBatchIdentity(
 	return true
 }
 
-func pendingBatchIdentityConflict(state *streamState, sequence uint64, identity batchIdentity) *opensplunkv1.BatchReject {
+func pendingBatchIdentityConflict(state *streamState, sequence uint64, identity batchIdentity) *opensplunk.BatchReject {
 	if pending, ok := state.pendingBatches[sequence]; ok && pending.identity != identity {
-		return batchRejectionValues(identity.batchID, sequence, opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_SEQUENCE_CONFLICT, "retry changed the durable batch payload", "batch_sequence", "sequence_conflict")
+		return batchRejectionValues(identity.batchID, sequence, opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_SEQUENCE_CONFLICT, "retry changed the durable batch payload", "batch_sequence", "sequence_conflict")
 	}
 	if previousSequence, ok := state.pendingSequencesByID[identity.batchID]; ok && previousSequence != sequence {
-		return batchRejectionValues(identity.batchID, sequence, opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_SEQUENCE_CONFLICT, "batch_id is already pending with a different sequence", "batch_id", "sequence_conflict")
+		return batchRejectionValues(identity.batchID, sequence, opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_SEQUENCE_CONFLICT, "batch_id is already pending with a different sequence", "batch_id", "sequence_conflict")
 	}
 	return nil
 }
@@ -1003,7 +1000,7 @@ func observeBatchSequence(state *streamState, sequence uint64) {
 	}
 }
 
-func batchFingerprint(batch *opensplunkv1.EventBatch) (batchIdentity, error) {
+func batchFingerprint(batch *opensplunk.EventBatch) (batchIdentity, error) {
 	encoded, err := (proto.MarshalOptions{Deterministic: true}).Marshal(batch)
 	if err != nil {
 		return batchIdentity{}, err
@@ -1014,20 +1011,20 @@ func batchFingerprint(batch *opensplunkv1.EventBatch) (batchIdentity, error) {
 	}, nil
 }
 
-func batchRejection(batch *opensplunkv1.EventBatch, code opensplunkv1.BatchRejectionCode, message, path, violationCode string) *opensplunkv1.BatchReject {
+func batchRejection(batch *opensplunk.EventBatch, code opensplunk.BatchRejectionCode, message, path, violationCode string) *opensplunk.BatchReject {
 	if batch == nil {
 		return batchRejectionValues("", 0, code, message, path, violationCode)
 	}
 	return batchRejectionValues(batch.GetBatchId(), batch.GetBatchSequence(), code, message, path, violationCode)
 }
 
-func batchRejectionValues(batchID string, sequence uint64, code opensplunkv1.BatchRejectionCode, message, path, violationCode string) *opensplunkv1.BatchReject {
-	return &opensplunkv1.BatchReject{
+func batchRejectionValues(batchID string, sequence uint64, code opensplunk.BatchRejectionCode, message, path, violationCode string) *opensplunk.BatchReject {
+	return &opensplunk.BatchReject{
 		BatchId:       batchID,
 		BatchSequence: sequence,
 		Code:          code,
 		Message:       message,
-		Violations: []*opensplunkv1.FieldViolation{{
+		Violations: []*opensplunk.FieldViolation{{
 			FieldPath: path,
 			Code:      violationCode,
 			Message:   message,
@@ -1035,8 +1032,8 @@ func batchRejectionValues(batchID string, sequence uint64, code opensplunkv1.Bat
 	}
 }
 
-func toProtoRejection(index uint32, eventID string, eventErr *EventError) *opensplunkv1.EventRejection {
-	return &opensplunkv1.EventRejection{
+func toProtoRejection(index uint32, eventID string, eventErr *EventError) *opensplunk.EventRejection {
+	return &opensplunk.EventRejection{
 		EventIndex: index,
 		EventId:    eventID,
 		Code:       eventErr.Code,
@@ -1045,14 +1042,14 @@ func toProtoRejection(index uint32, eventID string, eventErr *EventError) *opens
 	}
 }
 
-func rejectionViolations(rejections []*opensplunkv1.EventRejection) []*opensplunkv1.FieldViolation {
-	result := make([]*opensplunkv1.FieldViolation, 0, len(rejections))
+func rejectionViolations(rejections []*opensplunk.EventRejection) []*opensplunk.FieldViolation {
+	result := make([]*opensplunk.FieldViolation, 0, len(rejections))
 	for _, rejection := range rejections {
 		for _, violation := range rejection.GetViolations() {
 			if violation == nil {
 				continue
 			}
-			result = append(result, &opensplunkv1.FieldViolation{
+			result = append(result, &opensplunk.FieldViolation{
 				FieldPath: fmt.Sprintf("events[%d].%s", rejection.GetEventIndex(), violation.GetFieldPath()),
 				Code:      violation.GetCode(),
 				Message:   violation.GetMessage(),
@@ -1063,7 +1060,7 @@ func rejectionViolations(rejections []*opensplunkv1.EventRejection) []*opensplun
 }
 
 type retryInfo struct {
-	reason opensplunkv1.RetryBatchReason
+	reason opensplunk.RetryBatchReason
 	after  time.Duration
 }
 
@@ -1074,14 +1071,14 @@ func retryDetails(err error, defaultAfter time.Duration) (retryInfo, bool) {
 	var storeError *TransientStoreError
 	if errors.As(err, &storeError) {
 		reason := storeError.Reason
-		if reason == opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_UNSPECIFIED {
-			reason = opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE
+		if reason == opensplunk.RetryBatchReason_RETRY_BATCH_REASON_UNSPECIFIED {
+			reason = opensplunk.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE
 		}
 		after := storeError.RetryAfter
 		if after <= 0 {
 			after = defaultAfter
 		}
-		if reason == opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED &&
+		if reason == opensplunk.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED &&
 			after > ingestquota.MaximumRetryAfter {
 			after = ingestquota.MaximumRetryAfter
 		}
@@ -1090,14 +1087,14 @@ func retryDetails(err error, defaultAfter time.Duration) (retryInfo, bool) {
 	var temporary interface{ Temporary() bool }
 	if errors.As(err, &temporary) && temporary.Temporary() {
 		return retryInfo{
-			reason: opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE,
+			reason: opensplunk.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE,
 			after:  defaultAfter,
 		}, true
 	}
 	if code := status.Code(err); code == codes.Unavailable || code == codes.ResourceExhausted {
-		reason := opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE
+		reason := opensplunk.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE
 		if code == codes.ResourceExhausted {
-			reason = opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED
+			reason = opensplunk.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED
 		}
 		return retryInfo{reason: reason, after: defaultAfter}, true
 	}

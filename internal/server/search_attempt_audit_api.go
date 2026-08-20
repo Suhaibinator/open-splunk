@@ -9,7 +9,7 @@ import (
 	"github.com/Suhaibinator/SRouter/pkg/codec"
 	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/searchaudit"
 	"google.golang.org/protobuf/proto"
@@ -17,7 +17,7 @@ import (
 
 const (
 	searchAttemptAuditListRoute             = "/audit/search-attempts/list"
-	searchAttemptAuditListPath              = apiV1PathPrefix + searchAttemptAuditListRoute
+	searchAttemptAuditListPath              = apiPathPrefix + searchAttemptAuditListRoute
 	defaultSearchAttemptAuditListPageSize   = uint32(50)
 	maximumSearchAttemptAuditResponseBytes  = 2 << 20
 	maximumSearchAttemptAuditPageTokenBytes = 2 << 10
@@ -30,9 +30,9 @@ func (handler *apiHandler) searchAttemptAuditRoutes(
 ) []protobufRouteDefinition {
 	return []protobufRouteDefinition{
 		newForwardCompatibleProtoRoute[
-			*opensplunkv1.ListSearchAttemptAuditEventsRequest,
+			*opensplunk.ListSearchAttemptAuditEventsRequest,
 			*serializedSearchAttemptAuditListResponse](router.RouteConfig[
-			*opensplunkv1.ListSearchAttemptAuditEventsRequest,
+			*opensplunk.ListSearchAttemptAuditEventsRequest,
 			*serializedSearchAttemptAuditListResponse,
 		]{
 			Path:       searchAttemptAuditListRoute,
@@ -50,7 +50,7 @@ func (handler *apiHandler) searchAttemptAuditRoutes(
 
 func (handler *apiHandler) listSearchAttemptAuditEvents(
 	request *http.Request,
-	input *opensplunkv1.ListSearchAttemptAuditEventsRequest,
+	input *opensplunk.ListSearchAttemptAuditEventsRequest,
 ) (*serializedSearchAttemptAuditListResponse, error) {
 	tenantID, err := handler.administratorAuditTenantAccess(request)
 	if err != nil {
@@ -114,7 +114,7 @@ func (handler *apiHandler) listSearchAttemptAuditEvents(
 }
 
 func (handler *apiHandler) searchAttemptAuditListRequest(
-	input *opensplunkv1.ListSearchAttemptAuditEventsRequest,
+	input *opensplunk.ListSearchAttemptAuditEventsRequest,
 ) (searchaudit.ListRequest, error) {
 	if input == nil || len(input.ProtoReflect().GetUnknown()) != 0 {
 		return searchaudit.ListRequest{}, badRequestError(
@@ -177,13 +177,13 @@ func searchAttemptAuditListPageToProto(
 	tenantID string,
 	request searchaudit.ListRequest,
 	page searchaudit.ListPage,
-) (*opensplunkv1.ListSearchAttemptAuditEventsResponse, error) {
+) (*opensplunk.ListSearchAttemptAuditEventsResponse, error) {
 	if len(page.Events) > int(request.PageSize) {
 		return nil, errors.New(
 			"search attempt audit service returned too many rows",
 		)
 	}
-	events := make([]*opensplunkv1.SearchAttemptAuditEvent, len(page.Events))
+	events := make([]*opensplunk.SearchAttemptAuditEvent, len(page.Events))
 	var previous uint64
 	for index, event := range page.Events {
 		if index > 0 && event.Sequence >= previous {
@@ -224,7 +224,7 @@ func searchAttemptAuditListPageToProto(
 	if err != nil {
 		return nil, err
 	}
-	return &opensplunkv1.ListSearchAttemptAuditEventsResponse{
+	return &opensplunk.ListSearchAttemptAuditEventsResponse{
 		Events: events,
 		Page:   metadata,
 	}, nil
@@ -243,7 +243,7 @@ func searchAttemptAuditEventMatchesListRequest(
 func searchAttemptAuditEventToProto(
 	event searchaudit.Event,
 	expectedTenantID string,
-) (*opensplunkv1.SearchAttemptAuditEvent, error) {
+) (*opensplunk.SearchAttemptAuditEvent, error) {
 	if err := event.ValidateForTenant(expectedTenantID); err != nil {
 		return nil, errors.New(
 			"search attempt audit service returned an invalid event",
@@ -267,7 +267,7 @@ func searchAttemptAuditEventToProto(
 			"search attempt audit service returned an invalid actor",
 		)
 	}
-	var knowledgeSnapshot *opensplunkv1.KnowledgeSnapshotRef
+	var knowledgeSnapshot *opensplunk.KnowledgeSnapshotRef
 	if event.KnowledgeSnapshot != nil {
 		knowledgeSnapshot, err = knowledgesnapshot.CloneReference(
 			event.KnowledgeSnapshot,
@@ -278,7 +278,7 @@ func searchAttemptAuditEventToProto(
 			)
 		}
 	}
-	return &opensplunkv1.SearchAttemptAuditEvent{
+	return &opensplunk.SearchAttemptAuditEvent{
 		Sequence:          event.Sequence,
 		OccurredAt:        occurredAt,
 		ActorKind:         actorKind,
@@ -317,18 +317,18 @@ func searchAttemptAuditContextError(ctx context.Context) error {
 	return canceledRequestError(ctx, "search attempt audit request was canceled")
 }
 
-type serializedSearchAttemptAuditListResponse = boundedProtoResponse[*opensplunkv1.ListSearchAttemptAuditEventsResponse]
+type serializedSearchAttemptAuditListResponse = boundedProtoResponse[*opensplunk.ListSearchAttemptAuditEventsResponse]
 
 type serializedSearchAttemptAuditListCodec = boundedProtoCodec[
-	*opensplunkv1.ListSearchAttemptAuditEventsRequest,
-	*opensplunkv1.ListSearchAttemptAuditEventsResponse,
+	*opensplunk.ListSearchAttemptAuditEventsRequest,
+	*opensplunk.ListSearchAttemptAuditEventsResponse,
 ]
 
 func newSerializedSearchAttemptAuditListCodec() *serializedSearchAttemptAuditListCodec {
 	return newBoundedProtoCodec(
 		codec.NewProtoCodec[
-			*opensplunkv1.ListSearchAttemptAuditEventsRequest,
-			*opensplunkv1.ListSearchAttemptAuditEventsResponse,
+			*opensplunk.ListSearchAttemptAuditEventsRequest,
+			*opensplunk.ListSearchAttemptAuditEventsResponse,
 		](),
 		boundedProtoCodecOptions{
 			stateError:   "search attempt audit serialization state is invalid",

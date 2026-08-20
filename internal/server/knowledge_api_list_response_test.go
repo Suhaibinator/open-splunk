@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeattemptaudit"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
@@ -29,8 +29,8 @@ func TestKnowledgeHTTPListUsesDetachedCanonicalCatalogRequest(t *testing.T) {
 	)
 	description := "canonical needle description"
 	object.Definition.Description = &description
-	object.Definition.Selector = &opensplunkv1.KnowledgeSelector{
-		HostPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{Value: "prod-east-*"}},
+	object.Definition.Selector = &opensplunk.KnowledgeSelector{
+		HostPatterns: []*opensplunk.KnowledgeSelectorPattern{{Value: "prod-east-*"}},
 	}
 	object = canonicalKnowledgeListResponseObject(t, object)
 	total := uint64(1)
@@ -83,23 +83,23 @@ func TestKnowledgeHTTPListUsesDetachedCanonicalCatalogRequest(t *testing.T) {
 		knowledgeHTTPApps(),
 		appender,
 	)
-	response := knowledgeHTTPPost(t, handler, knowledgeObjectsListPath, &opensplunkv1.ListKnowledgeObjectsRequest{
-		Page:               &opensplunkv1.PageRequest{IncludeTotalSize: true},
+	response := knowledgeHTTPPost(t, handler, knowledgeObjectsListPath, &opensplunk.ListKnowledgeObjectsRequest{
+		Page:               &opensplunk.PageRequest{IncludeTotalSize: true},
 		AppIdFilter:        new(" \t" + knowledgeHTTPAppID + "\r"),
 		OwnerIdFilter:      new("\n" + knowledgeBoundaryOwnerID + " "),
 		TextFilter:         new(" needle "),
 		SelectorTextFilter: new("\tprod\r"),
-		ObjectTypeFilters: []opensplunkv1.KnowledgeObjectType{
-			opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
-			opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+		ObjectTypeFilters: []opensplunk.KnowledgeObjectType{
+			opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+			opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
 		},
-		StateFilters: []opensplunkv1.KnowledgeObjectState{
-			opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
-			opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+		StateFilters: []opensplunk.KnowledgeObjectState{
+			opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+			opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 		},
-		SharingScopeFilters: []opensplunkv1.SharingScope{
-			opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
-			opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+		SharingScopeFilters: []opensplunk.SharingScope{
+			opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
+			opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 		},
 	})
 	if response.Code != http.StatusOK || len(appender.snapshot()) != 0 {
@@ -112,12 +112,12 @@ func TestKnowledgeHTTPListRejectsAmplifyingCardinalityBeforeSerialization(
 ) {
 	t.Parallel()
 
-	request := &opensplunkv1.ListKnowledgeObjectsRequest{
-		ObjectTypeFilters: make([]opensplunkv1.KnowledgeObjectType, 8<<10),
+	request := &opensplunk.ListKnowledgeObjectsRequest{
+		ObjectTypeFilters: make([]opensplunk.KnowledgeObjectType, 8<<10),
 	}
 	for index := range request.ObjectTypeFilters {
 		request.ObjectTypeFilters[index] =
-			opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS
+			opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS
 	}
 	if size := proto.Size(request); size >= int(maximumKnowledgeSmallRequestBytes) {
 		t.Fatalf("amplifying request size=%d, transport maximum=%d", size, maximumKnowledgeSmallRequestBytes)
@@ -189,7 +189,7 @@ func TestKnowledgeHTTPListPreflightUsesNormalizedOptionalFilterByteLimits(t *tes
 		knowledgeHTTPApps(),
 		appender,
 	)
-	response := knowledgeHTTPPost(t, handler, knowledgeObjectsListPath, &opensplunkv1.ListKnowledgeObjectsRequest{
+	response := knowledgeHTTPPost(t, handler, knowledgeObjectsListPath, &opensplunk.ListKnowledgeObjectsRequest{
 		AppIdFilter:        pad(maximumApp),
 		OwnerIdFilter:      pad(maximumIdentity),
 		TextFilter:         pad(maximumText),
@@ -214,23 +214,23 @@ func TestKnowledgeHTTPListPreflightRejectsNormalizedOptionalFilterAboveLimit(
 
 	tests := []struct {
 		name    string
-		request *opensplunkv1.ListKnowledgeObjectsRequest
+		request *opensplunk.ListKnowledgeObjectsRequest
 	}{
 		{
 			name:    "app ID",
-			request: &opensplunkv1.ListKnowledgeObjectsRequest{AppIdFilter: new(" \t" + strings.Repeat("a", maximumKnowledgeAppIDBytes+1) + "\r ")},
+			request: &opensplunk.ListKnowledgeObjectsRequest{AppIdFilter: new(" \t" + strings.Repeat("a", maximumKnowledgeAppIDBytes+1) + "\r ")},
 		},
 		{
 			name:    "owner ID",
-			request: &opensplunkv1.ListKnowledgeObjectsRequest{OwnerIdFilter: new(" \t" + strings.Repeat("o", maximumKnowledgeIdentityBytes+1) + "\r ")},
+			request: &opensplunk.ListKnowledgeObjectsRequest{OwnerIdFilter: new(" \t" + strings.Repeat("o", maximumKnowledgeIdentityBytes+1) + "\r ")},
 		},
 		{
 			name:    "text",
-			request: &opensplunkv1.ListKnowledgeObjectsRequest{TextFilter: new(" \t" + strings.Repeat("t", maximumKnowledgeIdentityBytes+1) + "\r ")},
+			request: &opensplunk.ListKnowledgeObjectsRequest{TextFilter: new(" \t" + strings.Repeat("t", maximumKnowledgeIdentityBytes+1) + "\r ")},
 		},
 		{
 			name:    "selector text",
-			request: &opensplunkv1.ListKnowledgeObjectsRequest{SelectorTextFilter: new(" \t" + strings.Repeat("s", maximumKnowledgeIdentityBytes+1) + "\r ")},
+			request: &opensplunk.ListKnowledgeObjectsRequest{SelectorTextFilter: new(" \t" + strings.Repeat("s", maximumKnowledgeIdentityBytes+1) + "\r ")},
 		},
 	}
 	for _, test := range tests {
@@ -294,12 +294,12 @@ func TestKnowledgeHTTPListRejectsObjectsOutsideEveryNormalizedFilter(t *testing.
 	)
 	tests := []struct {
 		name    string
-		request *opensplunkv1.ListKnowledgeObjectsRequest
+		request *opensplunk.ListKnowledgeObjectsRequest
 		object  knowledgecatalog.Object
 	}{
 		{
 			name: "app ID",
-			request: &opensplunkv1.ListKnowledgeObjectsRequest{
+			request: &opensplunk.ListKnowledgeObjectsRequest{
 				AppIdFilter: new(knowledgeHTTPAppID),
 			},
 			object: knowledgeListResponseObject(
@@ -314,7 +314,7 @@ func TestKnowledgeHTTPListRejectsObjectsOutsideEveryNormalizedFilter(t *testing.
 		},
 		{
 			name: "owner ID",
-			request: &opensplunkv1.ListKnowledgeObjectsRequest{
+			request: &opensplunk.ListKnowledgeObjectsRequest{
 				OwnerIdFilter: new(knowledgeBoundaryOwnerID),
 			},
 			object: knowledgeListResponseObject(
@@ -329,32 +329,32 @@ func TestKnowledgeHTTPListRejectsObjectsOutsideEveryNormalizedFilter(t *testing.
 		},
 		{
 			name:    "name or description text",
-			request: &opensplunkv1.ListKnowledgeObjectsRequest{TextFilter: new("absent")},
+			request: &opensplunk.ListKnowledgeObjectsRequest{TextFilter: new("absent")},
 			object:  private,
 		},
 		{
 			name:    "selector text",
-			request: &opensplunkv1.ListKnowledgeObjectsRequest{SelectorTextFilter: new("absent")},
+			request: &opensplunk.ListKnowledgeObjectsRequest{SelectorTextFilter: new("absent")},
 			object:  private,
 		},
 		{
 			name: "object type",
-			request: &opensplunkv1.ListKnowledgeObjectsRequest{ObjectTypeFilters: []opensplunkv1.KnowledgeObjectType{
-				opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
+			request: &opensplunk.ListKnowledgeObjectsRequest{ObjectTypeFilters: []opensplunk.KnowledgeObjectType{
+				opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
 			}},
 			object: private,
 		},
 		{
 			name: "state",
-			request: &opensplunkv1.ListKnowledgeObjectsRequest{StateFilters: []opensplunkv1.KnowledgeObjectState{
-				opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
+			request: &opensplunk.ListKnowledgeObjectsRequest{StateFilters: []opensplunk.KnowledgeObjectState{
+				opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
 			}},
 			object: private,
 		},
 		{
 			name: "sharing scope",
-			request: &opensplunkv1.ListKnowledgeObjectsRequest{SharingScopeFilters: []opensplunkv1.SharingScope{
-				opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL,
+			request: &opensplunk.ListKnowledgeObjectsRequest{SharingScopeFilters: []opensplunk.SharingScope{
+				opensplunk.SharingScope_SHARING_SCOPE_GLOBAL,
 			}},
 			object: private,
 		},
@@ -413,23 +413,23 @@ func TestKnowledgeHTTPListRejectsDuplicatesAndNonCanonicalOrdering(t *testing.T)
 
 	tests := []struct {
 		name      string
-		sortBy    opensplunkv1.KnowledgeObjectSortBy
-		direction opensplunkv1.SortDirection
+		sortBy    opensplunk.KnowledgeObjectSortBy
+		direction opensplunk.SortDirection
 		objects   []knowledgecatalog.Object
 	}{
 		{name: "duplicate object ID", objects: []knowledgecatalog.Object{duplicateA, duplicateB}},
 		{name: "name ascending", objects: []knowledgecatalog.Object{bravo, alpha}},
-		{name: "name descending", direction: opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING, objects: []knowledgecatalog.Object{alpha, bravo}},
+		{name: "name descending", direction: opensplunk.SortDirection_SORT_DIRECTION_DESCENDING, objects: []knowledgecatalog.Object{alpha, bravo}},
 		{name: "name object-ID tie break", objects: []knowledgecatalog.Object{tieZulu, tieAlpha}},
-		{name: "created at", sortBy: opensplunkv1.KnowledgeObjectSortBy_KNOWLEDGE_OBJECT_SORT_BY_CREATED_AT, objects: []knowledgecatalog.Object{laterCreated, alpha}},
-		{name: "updated at", sortBy: opensplunkv1.KnowledgeObjectSortBy_KNOWLEDGE_OBJECT_SORT_BY_UPDATED_AT, objects: []knowledgecatalog.Object{laterUpdated, alpha}},
-		{name: "object type", sortBy: opensplunkv1.KnowledgeObjectSortBy_KNOWLEDGE_OBJECT_SORT_BY_OBJECT_TYPE, objects: []knowledgecatalog.Object{extraction, alpha}},
+		{name: "created at", sortBy: opensplunk.KnowledgeObjectSortBy_KNOWLEDGE_OBJECT_SORT_BY_CREATED_AT, objects: []knowledgecatalog.Object{laterCreated, alpha}},
+		{name: "updated at", sortBy: opensplunk.KnowledgeObjectSortBy_KNOWLEDGE_OBJECT_SORT_BY_UPDATED_AT, objects: []knowledgecatalog.Object{laterUpdated, alpha}},
+		{name: "object type", sortBy: opensplunk.KnowledgeObjectSortBy_KNOWLEDGE_OBJECT_SORT_BY_OBJECT_TYPE, objects: []knowledgecatalog.Object{extraction, alpha}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			assertKnowledgeHTTPListPageRejected(t, &opensplunkv1.ListKnowledgeObjectsRequest{
-				Page:          &opensplunkv1.PageRequest{PageSize: new(uint32(2))},
+			assertKnowledgeHTTPListPageRejected(t, &opensplunk.ListKnowledgeObjectsRequest{
+				Page:          &opensplunk.PageRequest{PageSize: new(uint32(2))},
 				SortBy:        test.sortBy,
 				SortDirection: test.direction,
 			}, knowledgecatalog.ListPage{Objects: test.objects, CatalogRevision: 2})
@@ -454,23 +454,23 @@ func TestKnowledgeHTTPListRejectsIncoherentContinuationMetadata(t *testing.T) {
 	overCatalog := uint64(knowledgecatalog.MaximumObjectsPerTenant + 1)
 	tests := []struct {
 		name    string
-		request *opensplunkv1.ListKnowledgeObjectsRequest
+		request *opensplunk.ListKnowledgeObjectsRequest
 		page    knowledgecatalog.ListPage
 	}{
-		{name: "oversized next token", request: &opensplunkv1.ListKnowledgeObjectsRequest{}, page: knowledgecatalog.ListPage{Objects: []knowledgecatalog.Object{object}, NextPageToken: strings.Repeat("x", maximumKnowledgePageTokenBytes+1), CatalogRevision: 2}},
-		{name: "control next token", request: &opensplunkv1.ListKnowledgeObjectsRequest{}, page: knowledgecatalog.ListPage{Objects: []knowledgecatalog.Object{object}, NextPageToken: "next\x00token", CatalogRevision: 2}},
-		{name: "control request token on successful page", request: &opensplunkv1.ListKnowledgeObjectsRequest{Page: &opensplunkv1.PageRequest{PageToken: new("current\x01token")}}, page: knowledgecatalog.ListPage{Objects: []knowledgecatalog.Object{object}, CatalogRevision: 2}},
-		{name: "echoed continuation", request: &opensplunkv1.ListKnowledgeObjectsRequest{Page: &opensplunkv1.PageRequest{PageToken: new("same-token")}}, page: knowledgecatalog.ListPage{Objects: []knowledgecatalog.Object{object}, NextPageToken: "same-token", CatalogRevision: 2}},
-		{name: "empty continued page", request: &opensplunkv1.ListKnowledgeObjectsRequest{Page: &opensplunkv1.PageRequest{PageToken: new("current-token")}}, page: knowledgecatalog.ListPage{CatalogRevision: 2}},
-		{name: "continuation without revision", request: &opensplunkv1.ListKnowledgeObjectsRequest{Page: &opensplunkv1.PageRequest{PageToken: new("current-token")}}, page: knowledgecatalog.ListPage{Objects: []knowledgecatalog.Object{object}}},
-		{name: "unexpected total", request: &opensplunkv1.ListKnowledgeObjectsRequest{}, page: knowledgecatalog.ListPage{Objects: []knowledgecatalog.Object{object}, TotalSize: &one, TotalSizeExact: true, CatalogRevision: 2}},
-		{name: "missing total", request: &opensplunkv1.ListKnowledgeObjectsRequest{Page: &opensplunkv1.PageRequest{IncludeTotalSize: true}}, page: knowledgecatalog.ListPage{Objects: []knowledgecatalog.Object{object}, CatalogRevision: 2}},
-		{name: "inexact total", request: &opensplunkv1.ListKnowledgeObjectsRequest{Page: &opensplunkv1.PageRequest{IncludeTotalSize: true}}, page: knowledgecatalog.ListPage{Objects: []knowledgecatalog.Object{object}, TotalSize: &one, CatalogRevision: 2}},
-		{name: "terminal first-page total mismatch", request: &opensplunkv1.ListKnowledgeObjectsRequest{Page: &opensplunkv1.PageRequest{IncludeTotalSize: true}}, page: knowledgecatalog.ListPage{Objects: []knowledgecatalog.Object{object}, TotalSize: &two, TotalSizeExact: true, CatalogRevision: 2}},
-		{name: "total exceeds catalog identity ceiling", request: &opensplunkv1.ListKnowledgeObjectsRequest{Page: &opensplunkv1.PageRequest{IncludeTotalSize: true}}, page: knowledgecatalog.ListPage{Objects: []knowledgecatalog.Object{object}, NextPageToken: "next-token", TotalSize: &overCatalog, TotalSizeExact: true, CatalogRevision: 2}},
-		{name: "continued total omits earlier rows", request: &opensplunkv1.ListKnowledgeObjectsRequest{Page: &opensplunkv1.PageRequest{PageToken: new("current-token"), IncludeTotalSize: true}}, page: knowledgecatalog.ListPage{Objects: []knowledgecatalog.Object{object}, TotalSize: &one, TotalSizeExact: true, CatalogRevision: 2}},
-		{name: "next token without remaining total", request: &opensplunkv1.ListKnowledgeObjectsRequest{Page: &opensplunkv1.PageRequest{IncludeTotalSize: true}}, page: knowledgecatalog.ListPage{Objects: []knowledgecatalog.Object{object}, NextPageToken: "next-token", TotalSize: &one, TotalSizeExact: true, CatalogRevision: 2}},
-		{name: "both-side continuation omits one side", request: &opensplunkv1.ListKnowledgeObjectsRequest{Page: &opensplunkv1.PageRequest{PageToken: new("current-token"), IncludeTotalSize: true}}, page: knowledgecatalog.ListPage{Objects: []knowledgecatalog.Object{object}, NextPageToken: "next-token", TotalSize: &two, TotalSizeExact: true, CatalogRevision: 2}},
+		{name: "oversized next token", request: &opensplunk.ListKnowledgeObjectsRequest{}, page: knowledgecatalog.ListPage{Objects: []knowledgecatalog.Object{object}, NextPageToken: strings.Repeat("x", maximumKnowledgePageTokenBytes+1), CatalogRevision: 2}},
+		{name: "control next token", request: &opensplunk.ListKnowledgeObjectsRequest{}, page: knowledgecatalog.ListPage{Objects: []knowledgecatalog.Object{object}, NextPageToken: "next\x00token", CatalogRevision: 2}},
+		{name: "control request token on successful page", request: &opensplunk.ListKnowledgeObjectsRequest{Page: &opensplunk.PageRequest{PageToken: new("current\x01token")}}, page: knowledgecatalog.ListPage{Objects: []knowledgecatalog.Object{object}, CatalogRevision: 2}},
+		{name: "echoed continuation", request: &opensplunk.ListKnowledgeObjectsRequest{Page: &opensplunk.PageRequest{PageToken: new("same-token")}}, page: knowledgecatalog.ListPage{Objects: []knowledgecatalog.Object{object}, NextPageToken: "same-token", CatalogRevision: 2}},
+		{name: "empty continued page", request: &opensplunk.ListKnowledgeObjectsRequest{Page: &opensplunk.PageRequest{PageToken: new("current-token")}}, page: knowledgecatalog.ListPage{CatalogRevision: 2}},
+		{name: "continuation without revision", request: &opensplunk.ListKnowledgeObjectsRequest{Page: &opensplunk.PageRequest{PageToken: new("current-token")}}, page: knowledgecatalog.ListPage{Objects: []knowledgecatalog.Object{object}}},
+		{name: "unexpected total", request: &opensplunk.ListKnowledgeObjectsRequest{}, page: knowledgecatalog.ListPage{Objects: []knowledgecatalog.Object{object}, TotalSize: &one, TotalSizeExact: true, CatalogRevision: 2}},
+		{name: "missing total", request: &opensplunk.ListKnowledgeObjectsRequest{Page: &opensplunk.PageRequest{IncludeTotalSize: true}}, page: knowledgecatalog.ListPage{Objects: []knowledgecatalog.Object{object}, CatalogRevision: 2}},
+		{name: "inexact total", request: &opensplunk.ListKnowledgeObjectsRequest{Page: &opensplunk.PageRequest{IncludeTotalSize: true}}, page: knowledgecatalog.ListPage{Objects: []knowledgecatalog.Object{object}, TotalSize: &one, CatalogRevision: 2}},
+		{name: "terminal first-page total mismatch", request: &opensplunk.ListKnowledgeObjectsRequest{Page: &opensplunk.PageRequest{IncludeTotalSize: true}}, page: knowledgecatalog.ListPage{Objects: []knowledgecatalog.Object{object}, TotalSize: &two, TotalSizeExact: true, CatalogRevision: 2}},
+		{name: "total exceeds catalog identity ceiling", request: &opensplunk.ListKnowledgeObjectsRequest{Page: &opensplunk.PageRequest{IncludeTotalSize: true}}, page: knowledgecatalog.ListPage{Objects: []knowledgecatalog.Object{object}, NextPageToken: "next-token", TotalSize: &overCatalog, TotalSizeExact: true, CatalogRevision: 2}},
+		{name: "continued total omits earlier rows", request: &opensplunk.ListKnowledgeObjectsRequest{Page: &opensplunk.PageRequest{PageToken: new("current-token"), IncludeTotalSize: true}}, page: knowledgecatalog.ListPage{Objects: []knowledgecatalog.Object{object}, TotalSize: &one, TotalSizeExact: true, CatalogRevision: 2}},
+		{name: "next token without remaining total", request: &opensplunk.ListKnowledgeObjectsRequest{Page: &opensplunk.PageRequest{IncludeTotalSize: true}}, page: knowledgecatalog.ListPage{Objects: []knowledgecatalog.Object{object}, NextPageToken: "next-token", TotalSize: &one, TotalSizeExact: true, CatalogRevision: 2}},
+		{name: "both-side continuation omits one side", request: &opensplunk.ListKnowledgeObjectsRequest{Page: &opensplunk.PageRequest{PageToken: new("current-token"), IncludeTotalSize: true}}, page: knowledgecatalog.ListPage{Objects: []knowledgecatalog.Object{object}, NextPageToken: "next-token", TotalSize: &two, TotalSizeExact: true, CatalogRevision: 2}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -600,7 +600,7 @@ func TestKnowledgeListPagePreflightsDefinitionAndResponseAllocationBounds(t *tes
 	}
 	t.Run("per definition", func(t *testing.T) {
 		object := base
-		definition := proto.Clone(base.Definition).(*opensplunkv1.KnowledgeObjectDefinition)
+		definition := proto.Clone(base.Definition).(*opensplunk.KnowledgeObjectDefinition)
 		description := strings.Repeat("x", knowledgecatalog.MaximumListResponseCanonicalDefinitionBytes+1)
 		definition.Description = &description
 		object.Definition = definition
@@ -618,7 +618,7 @@ func TestKnowledgeListPagePreflightsDefinitionAndResponseAllocationBounds(t *tes
 		second.KnowledgeObjectID = "ko-list-allocation-b"
 		second.Name = "allocation-b"
 		for index, object := range []*knowledgecatalog.Object{&first, &second} {
-			definition := proto.Clone(base.Definition).(*opensplunkv1.KnowledgeObjectDefinition)
+			definition := proto.Clone(base.Definition).(*opensplunk.KnowledgeObjectDefinition)
 			definition.Name = object.Name
 			description := strings.Repeat(
 				string(rune('a'+index)),
@@ -651,7 +651,7 @@ func TestKnowledgeListPagePreflightsDefinitionAndResponseAllocationBounds(t *tes
 
 func assertKnowledgeHTTPListPageRejected(
 	t *testing.T,
-	request *opensplunkv1.ListKnowledgeObjectsRequest,
+	request *opensplunk.ListKnowledgeObjectsRequest,
 	page knowledgecatalog.ListPage,
 ) {
 	t.Helper()
@@ -710,11 +710,11 @@ func knowledgeListResponseObject(
 	definition.Name = name
 	switch objectType {
 	case knowledgecatalog.ObjectTypeFieldExtraction:
-		definition.Body = &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
-			FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
+		definition.Body = &opensplunk.KnowledgeObjectDefinition_FieldExtraction{
+			FieldExtraction: &opensplunk.FieldExtractionDefinition{
 				InputField: "_raw",
-				Extraction: &opensplunkv1.FieldExtractionDefinition_Json{
-					Json: &opensplunkv1.JsonFieldExtractionDefinition{
+				Extraction: &opensplunk.FieldExtractionDefinition_Json{
+					Json: &opensplunk.JsonFieldExtractionDefinition{
 						Path:        "payload.value",
 						OutputField: "value",
 					},
@@ -722,8 +722,8 @@ func knowledgeListResponseObject(
 			},
 		}
 	case knowledgecatalog.ObjectTypeCalculatedField:
-		definition.Body = &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{
-			CalculatedField: &opensplunkv1.CalculatedFieldDefinition{
+		definition.Body = &opensplunk.KnowledgeObjectDefinition_CalculatedField{
+			CalculatedField: &opensplunk.CalculatedFieldDefinition{
 				DestinationField: "calculated_value",
 				Expression:       "lower(src)",
 			},
@@ -761,15 +761,15 @@ func canonicalKnowledgeListResponseObject(
 
 func knowledgeListProtoSharingScope(
 	value knowledgecatalog.SharingScope,
-) opensplunkv1.SharingScope {
+) opensplunk.SharingScope {
 	switch value {
 	case knowledgecatalog.SharingScopePrivate:
-		return opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE
+		return opensplunk.SharingScope_SHARING_SCOPE_PRIVATE
 	case knowledgecatalog.SharingScopeApp:
-		return opensplunkv1.SharingScope_SHARING_SCOPE_APP
+		return opensplunk.SharingScope_SHARING_SCOPE_APP
 	case knowledgecatalog.SharingScopeGlobal:
-		return opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL
+		return opensplunk.SharingScope_SHARING_SCOPE_GLOBAL
 	default:
-		return opensplunkv1.SharingScope_SHARING_SCOPE_UNSPECIFIED
+		return opensplunk.SharingScope_SHARING_SCOPE_UNSPECIFIED
 	}
 }

@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	MigrationVersion    = "current-source-v1"
+	MigrationIdentity   = "current-source"
 	MigrationIndexName  = "gradethis"
 	MigrationSource     = "gradethis-backend"
 	MigrationSourcetype = "go:zap:json"
@@ -24,8 +24,8 @@ const (
 var migrationBaseTime = time.Date(2026, time.July, 15, 12, 0, 0, 0, time.UTC)
 
 // MigrationSearchID identifies one investigation representative of the
-// current GradeThis/go-common log source. These searches are deliberately
-// separate from the product plan's exact v0.1 compatibility corpus.
+// current GradeThis/go-common log source. These searches are separate from
+// the canonical synthetic corpus.
 type MigrationSearchID string
 
 const (
@@ -142,7 +142,7 @@ type MigrationEvent struct {
 // MigrationProfile is a detached, deterministic, scanner-validated current
 // GradeThis source corpus.
 type MigrationProfile struct {
-	Version  string
+	Identity string
 	BaseTime time.Time
 	TraceID  string
 	Events   []MigrationEvent
@@ -173,38 +173,38 @@ func MigrationFixtureAt(baseTime time.Time) MigrationProfile {
 		migrationEvent(baseTime, "trace-database", 75*time.Second, "ERROR", "persistence_handler",
 			"persistence/assessment.go:118", "Database request failed", "persistence", sharedTrace),
 		migrationRequest(baseTime, "assessments-fast-microseconds", 2*time.Minute, false,
-			"/api/v1/assessments", 200, "800µs", 1),
+			"/api/assessments", 200, "800µs", 1),
 		migrationEvent(baseTime, "heartbeat-a", 150*time.Second, "INFO", "health",
 			"worker/health.go:42", "Heartbeat", "worker", ""),
 		migrationRequest(baseTime, "assessments-fast-milliseconds", 3*time.Minute, true,
-			"/api/v1/assessments", 200, "250ms", 2),
+			"/api/assessments", 200, "250ms", 2),
 		migrationEvent(baseTime, "cache-warning-a", 210*time.Second, "WARN", "cache",
 			"service/cache.go:71", "Cache refresh delayed", "service", ""),
 		migrationRequest(baseTime, "assessments-server-error", 4*time.Minute, false,
-			"/api/v1/assessments", 503, "1.2s", 3),
+			"/api/assessments", 503, "1.2s", 3),
 		migrationRequest(baseTime, "assessments-client-warning", 5*time.Minute, true,
-			"/api/v1/assessments", 429, "750ms", 4),
+			"/api/assessments", 429, "750ms", 4),
 		migrationEvent(baseTime, "heartbeat-b", 330*time.Second, "INFO", "health",
 			"worker/health.go:42", "Heartbeat", "worker", ""),
 		migrationRequest(baseTime, "submissions-fast", 6*time.Minute, false,
-			"/api/v1/submissions", 200, "80ms", 5),
+			"/api/submissions", 200, "80ms", 5),
 		migrationRootEvent(baseTime, "startup", 390*time.Second),
 		migrationRequest(baseTime, "submissions-server-error", 7*time.Minute, true,
-			"/api/v1/submissions", 500, "2s", 6),
+			"/api/submissions", 500, "2s", 6),
 		migrationEvent(baseTime, "cache-warning-b", 450*time.Second, "WARN", "cache",
 			"service/cache.go:71", "Cache refresh delayed", "service", ""),
 		migrationRequest(baseTime, "submissions-slow-success", 8*time.Minute, false,
-			"/api/v1/submissions", 200, "600ms", 7),
+			"/api/submissions", 200, "600ms", 7),
 		migrationEvent(baseTime, "heartbeat-c", 510*time.Second, "INFO", "health",
 			"worker/health.go:42", "Heartbeat", "worker", ""),
 		migrationRequest(baseTime, "reports-fast", 9*time.Minute, true,
-			"/api/v1/reports", 204, "1.5ms", 8),
+			"/api/reports", 204, "1.5ms", 8),
 		migrationEvent(baseTime, "dependency-error", 570*time.Second, "ERROR", "dependency",
 			"service/dependency.go:93", "Dependency unavailable", "service", ""),
 		migrationRequest(baseTime, "reports-client-warning", 10*time.Minute, false,
-			"/api/v1/reports", 404, "12ms", 9),
+			"/api/reports", 404, "12ms", 9),
 		migrationRequest(baseTime, "reports-slow-success", 11*time.Minute, true,
-			"/api/v1/reports", 200, "900ms", 10),
+			"/api/reports", 200, "900ms", 10),
 	}
 
 	var ndjson bytes.Buffer
@@ -214,7 +214,7 @@ func MigrationFixtureAt(baseTime time.Time) MigrationProfile {
 		ndjson.WriteByte('\n')
 	}
 	return MigrationProfile{
-		Version: MigrationVersion, BaseTime: baseTime, TraceID: sharedTrace,
+		Identity: MigrationIdentity, BaseTime: baseTime, TraceID: sharedTrace,
 		Events: cloneMigrationEvents(events), NDJSON: bytes.Clone(ndjson.Bytes()),
 	}
 }
@@ -343,9 +343,9 @@ func encodeMigrationEvent(event MigrationEvent) []byte {
 // ValidateMigration checks identity, source realism, deterministic encoding,
 // and the ordinary fixture scanner before the profile can reach a collector.
 func ValidateMigration(profile MigrationProfile) error {
-	if profile.Version != MigrationVersion || profile.BaseTime.IsZero() ||
+	if profile.Identity != MigrationIdentity || profile.BaseTime.IsZero() ||
 		profile.BaseTime.Location() != time.UTC {
-		return errors.New("GradeThis migration profile identity does not match current-source-v1")
+		return errors.New("GradeThis migration profile identity does not match the current source")
 	}
 	if !validHexID(profile.TraceID) {
 		return errors.New("GradeThis migration profile has an invalid trace ID")

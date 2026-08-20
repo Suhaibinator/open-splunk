@@ -9,7 +9,7 @@ import (
 	"reflect"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
@@ -67,14 +67,14 @@ type writerStateMachineModel struct {
 	objectID   string
 	version    uint64
 	state      knowledgecatalog.State
-	definition *opensplunkv1.KnowledgeObjectDefinition
+	definition *opensplunk.KnowledgeObjectDefinition
 	history    map[uint64]writerStateMachineVersion
 	commits    []*writerStateMachineCommit
 }
 
 type writerStateMachineVersion struct {
 	state      knowledgecatalog.State
-	definition *opensplunkv1.KnowledgeObjectDefinition
+	definition *opensplunk.KnowledgeObjectDefinition
 }
 
 type writerStateMachineCommit struct {
@@ -167,20 +167,20 @@ func (machine *writerStateMachine) runStep(name string, run func()) {
 
 func (machine *writerStateMachine) createDraft() {
 	description := fmt.Sprintf("state-machine description %016x", machine.seed)
-	request := &opensplunkv1.CreateKnowledgeObjectRequest{
+	request := &opensplunk.CreateKnowledgeObjectRequest{
 		Definition: writerAliasDefinition(
 			writerTestApp,
 			fmt.Sprintf("state-machine-%016x", machine.seed),
 			&description,
-			opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+			opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 			fmt.Sprintf("host-%016x", machine.seed),
 			"source_field",
 			fmt.Sprintf("destination_%016x", machine.seed),
 		),
-		InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+		InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 		ClientRequestId: machine.requestID("create"),
 	}
-	submitted := proto.Clone(request).(*opensplunkv1.CreateKnowledgeObjectRequest)
+	submitted := proto.Clone(request).(*opensplunk.CreateKnowledgeObjectRequest)
 	before := machine.snapshotIfInitialized()
 	response, err := machine.suite.harness.writer.Create(
 		machine.suite.harness.actorCtx,
@@ -197,7 +197,7 @@ func (machine *writerStateMachine) createDraft() {
 	machine.model = writerStateMachineModel{
 		objectID:   response.GetKnowledgeObject().GetKnowledgeObjectId(),
 		state:      knowledgecatalog.StateDraft,
-		definition: proto.Clone(submitted.GetDefinition()).(*opensplunkv1.KnowledgeObjectDefinition),
+		definition: proto.Clone(submitted.GetDefinition()).(*opensplunk.KnowledgeObjectDefinition),
 		history:    make(map[uint64]writerStateMachineVersion),
 	}
 	machine.finishCommit(before, &writerStateMachineCommit{
@@ -220,20 +220,20 @@ func (machine *writerStateMachine) updateMetadata(path string) {
 		writerTestAppTwo,
 		fmt.Sprintf("incoming-name-%016x-%d", machine.seed, machine.model.version),
 		&incomingDescription,
-		opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL,
+		opensplunk.SharingScope_SHARING_SCOPE_GLOBAL,
 		fmt.Sprintf("ignored-host-%016x", machine.seed),
 		"ignored_source",
 		"ignored_destination",
 	)
-	request := &opensplunkv1.UpdateKnowledgeObjectRequest{
+	request := &opensplunk.UpdateKnowledgeObjectRequest{
 		KnowledgeObjectId: machine.model.objectID,
 		ExpectedVersion:   machine.model.version,
 		Definition:        incoming,
 		UpdateMask:        &fieldmaskpb.FieldMask{Paths: []string{path}},
 		ClientRequestId:   machine.requestID("update-" + path),
 	}
-	submitted := proto.Clone(request).(*opensplunkv1.UpdateKnowledgeObjectRequest)
-	wantDefinition := proto.Clone(machine.model.definition).(*opensplunkv1.KnowledgeObjectDefinition)
+	submitted := proto.Clone(request).(*opensplunk.UpdateKnowledgeObjectRequest)
+	wantDefinition := proto.Clone(machine.model.definition).(*opensplunk.KnowledgeObjectDefinition)
 	switch path {
 	case "description":
 		wantDefinition.Description = new(incomingDescription)
@@ -268,13 +268,13 @@ func (machine *writerStateMachine) updateMetadata(path string) {
 }
 
 func (machine *writerStateMachine) disable() {
-	request := &opensplunkv1.SetKnowledgeObjectStateRequest{
+	request := &opensplunk.SetKnowledgeObjectStateRequest{
 		KnowledgeObjectId: machine.model.objectID,
 		ExpectedVersion:   machine.model.version,
-		State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+		State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 		ClientRequestId:   machine.requestID("disable"),
 	}
-	submitted := proto.Clone(request).(*opensplunkv1.SetKnowledgeObjectStateRequest)
+	submitted := proto.Clone(request).(*opensplunk.SetKnowledgeObjectStateRequest)
 	before := machine.snapshot()
 	response, err := machine.suite.harness.writer.SetState(
 		machine.suite.harness.actorCtx,
@@ -301,12 +301,12 @@ func (machine *writerStateMachine) disable() {
 }
 
 func (machine *writerStateMachine) delete() {
-	request := &opensplunkv1.DeleteKnowledgeObjectRequest{
+	request := &opensplunk.DeleteKnowledgeObjectRequest{
 		KnowledgeObjectId: machine.model.objectID,
 		ExpectedVersion:   machine.model.version,
 		ClientRequestId:   machine.requestID("delete"),
 	}
-	submitted := proto.Clone(request).(*opensplunkv1.DeleteKnowledgeObjectRequest)
+	submitted := proto.Clone(request).(*opensplunk.DeleteKnowledgeObjectRequest)
 	before := machine.snapshot()
 	response, err := machine.suite.harness.writer.Delete(
 		machine.suite.harness.actorCtx,
@@ -333,9 +333,9 @@ func (machine *writerStateMachine) delete() {
 }
 
 func (machine *writerStateMachine) staleUpdate() {
-	definition := proto.Clone(machine.model.definition).(*opensplunkv1.KnowledgeObjectDefinition)
+	definition := proto.Clone(machine.model.definition).(*opensplunk.KnowledgeObjectDefinition)
 	definition.Description = new("stale contender must never publish")
-	request := &opensplunkv1.UpdateKnowledgeObjectRequest{
+	request := &opensplunk.UpdateKnowledgeObjectRequest{
 		KnowledgeObjectId: machine.model.objectID,
 		ExpectedVersion:   machine.model.version - 1,
 		Definition:        definition,
@@ -346,19 +346,19 @@ func (machine *writerStateMachine) staleUpdate() {
 }
 
 func (machine *writerStateMachine) noopDisable() {
-	request := &opensplunkv1.SetKnowledgeObjectStateRequest{
+	request := &opensplunk.SetKnowledgeObjectStateRequest{
 		KnowledgeObjectId: machine.model.objectID,
 		ExpectedVersion:   machine.model.version,
-		State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+		State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 		ClientRequestId:   machine.requestID("noop-disable"),
 	}
 	machine.rejectUnchanged(request, control.ErrInvalidArgument)
 }
 
 func (machine *writerStateMachine) terminalUpdate() {
-	definition := proto.Clone(machine.model.definition).(*opensplunkv1.KnowledgeObjectDefinition)
+	definition := proto.Clone(machine.model.definition).(*opensplunk.KnowledgeObjectDefinition)
 	definition.Description = new("terminal update must never publish")
-	request := &opensplunkv1.UpdateKnowledgeObjectRequest{
+	request := &opensplunk.UpdateKnowledgeObjectRequest{
 		KnowledgeObjectId: machine.model.objectID,
 		ExpectedVersion:   machine.model.version,
 		Definition:        definition,
@@ -369,7 +369,7 @@ func (machine *writerStateMachine) terminalUpdate() {
 }
 
 func (machine *writerStateMachine) terminalDelete() {
-	request := &opensplunkv1.DeleteKnowledgeObjectRequest{
+	request := &opensplunk.DeleteKnowledgeObjectRequest{
 		KnowledgeObjectId: machine.model.objectID,
 		ExpectedVersion:   machine.model.version,
 		ClientRequestId:   machine.requestID("terminal-delete"),
@@ -379,7 +379,7 @@ func (machine *writerStateMachine) terminalDelete() {
 
 func (machine *writerStateMachine) alteredCreateConflict() {
 	commit := machine.model.commits[0]
-	request := proto.Clone(commit.request).(*opensplunkv1.CreateKnowledgeObjectRequest)
+	request := proto.Clone(commit.request).(*opensplunk.CreateKnowledgeObjectRequest)
 	request.Definition.Name = fmt.Sprintf("altered-%016x-%d", machine.seed, machine.rng.next()%1000)
 	machine.rejectUnchanged(request, knowledgecatalog.ErrIdempotencyConflict)
 }
@@ -390,19 +390,19 @@ func (machine *writerStateMachine) rejectUnchanged(request proto.Message, want e
 	var response proto.Message
 	var err error
 	switch typed := request.(type) {
-	case *opensplunkv1.CreateKnowledgeObjectRequest:
+	case *opensplunk.CreateKnowledgeObjectRequest:
 		response, err = machine.suite.harness.writer.Create(
 			machine.suite.harness.actorCtx, machine.suite.harness.writeScope, typed,
 		)
-	case *opensplunkv1.UpdateKnowledgeObjectRequest:
+	case *opensplunk.UpdateKnowledgeObjectRequest:
 		response, err = machine.suite.harness.writer.Update(
 			machine.suite.harness.actorCtx, machine.suite.harness.writeScope, typed,
 		)
-	case *opensplunkv1.SetKnowledgeObjectStateRequest:
+	case *opensplunk.SetKnowledgeObjectStateRequest:
 		response, err = machine.suite.harness.writer.SetState(
 			machine.suite.harness.actorCtx, machine.suite.harness.writeScope, typed,
 		)
-	case *opensplunkv1.DeleteKnowledgeObjectRequest:
+	case *opensplunk.DeleteKnowledgeObjectRequest:
 		response, err = machine.suite.harness.writer.Delete(
 			machine.suite.harness.actorCtx, machine.suite.harness.writeScope, typed,
 		)
@@ -425,19 +425,19 @@ func (machine *writerStateMachine) replay(commit *writerStateMachineCommit) {
 	var response proto.Message
 	var err error
 	switch typed := request.(type) {
-	case *opensplunkv1.CreateKnowledgeObjectRequest:
+	case *opensplunk.CreateKnowledgeObjectRequest:
 		response, err = machine.suite.harness.writer.Create(
 			machine.suite.harness.actorCtx, machine.suite.harness.writeScope, typed,
 		)
-	case *opensplunkv1.UpdateKnowledgeObjectRequest:
+	case *opensplunk.UpdateKnowledgeObjectRequest:
 		response, err = machine.suite.harness.writer.Update(
 			machine.suite.harness.actorCtx, machine.suite.harness.writeScope, typed,
 		)
-	case *opensplunkv1.SetKnowledgeObjectStateRequest:
+	case *opensplunk.SetKnowledgeObjectStateRequest:
 		response, err = machine.suite.harness.writer.SetState(
 			machine.suite.harness.actorCtx, machine.suite.harness.writeScope, typed,
 		)
-	case *opensplunkv1.DeleteKnowledgeObjectRequest:
+	case *opensplunk.DeleteKnowledgeObjectRequest:
 		response, err = machine.suite.harness.writer.Delete(
 			machine.suite.harness.actorCtx, machine.suite.harness.writeScope, typed,
 		)
@@ -475,7 +475,7 @@ func (machine *writerStateMachine) finishCommit(
 	commit.catalogToken = bytes.Clone(token)
 	machine.model.history[machine.model.version] = writerStateMachineVersion{
 		state:      machine.model.state,
-		definition: proto.Clone(machine.model.definition).(*opensplunkv1.KnowledgeObjectDefinition),
+		definition: proto.Clone(machine.model.definition).(*opensplunk.KnowledgeObjectDefinition),
 	}
 	machine.model.commits = append(machine.model.commits, commit)
 	machine.suite.committed++
@@ -503,15 +503,15 @@ func (machine *writerStateMachine) finishCommit(
 }
 
 func (machine *writerStateMachine) assertResponseMatchesModel(response proto.Message) {
-	var object *opensplunkv1.KnowledgeObject
+	var object *opensplunk.KnowledgeObject
 	switch typed := response.(type) {
-	case *opensplunkv1.CreateKnowledgeObjectResponse:
+	case *opensplunk.CreateKnowledgeObjectResponse:
 		object = typed.GetKnowledgeObject()
-	case *opensplunkv1.UpdateKnowledgeObjectResponse:
+	case *opensplunk.UpdateKnowledgeObjectResponse:
 		object = typed.GetKnowledgeObject()
-	case *opensplunkv1.SetKnowledgeObjectStateResponse:
+	case *opensplunk.SetKnowledgeObjectStateResponse:
 		object = typed.GetKnowledgeObject()
-	case *opensplunkv1.DeleteKnowledgeObjectResponse:
+	case *opensplunk.DeleteKnowledgeObjectResponse:
 		if typed.GetKnowledgeObjectId() != machine.model.objectID || typed.GetDeletedVersion() != machine.model.version {
 			machine.Fatalf("Delete response = %v, want %q version %d", typed, machine.model.objectID, machine.model.version)
 		}
@@ -739,16 +739,16 @@ func (machine *writerStateMachine) assertRequestDetached(got, want proto.Message
 
 func (machine *writerStateMachine) poisonRequest(request proto.Message) {
 	switch typed := request.(type) {
-	case *opensplunkv1.CreateKnowledgeObjectRequest:
+	case *opensplunk.CreateKnowledgeObjectRequest:
 		typed.Definition.Name = "caller-poisoned-create"
 		typed.ClientRequestId = "caller-poisoned-create-request"
-	case *opensplunkv1.UpdateKnowledgeObjectRequest:
+	case *opensplunk.UpdateKnowledgeObjectRequest:
 		typed.Definition.Name = "caller-poisoned-update"
 		typed.KnowledgeObjectId = "caller-poisoned-update-object"
-	case *opensplunkv1.SetKnowledgeObjectStateRequest:
+	case *opensplunk.SetKnowledgeObjectStateRequest:
 		typed.KnowledgeObjectId = "caller-poisoned-set-state-object"
 		typed.ExpectedVersion++
-	case *opensplunkv1.DeleteKnowledgeObjectRequest:
+	case *opensplunk.DeleteKnowledgeObjectRequest:
 		typed.KnowledgeObjectId = "caller-poisoned-delete-object"
 		typed.ExpectedVersion++
 	default:
@@ -758,16 +758,16 @@ func (machine *writerStateMachine) poisonRequest(request proto.Message) {
 
 func (machine *writerStateMachine) poisonResponse(response proto.Message) {
 	switch typed := response.(type) {
-	case *opensplunkv1.CreateKnowledgeObjectResponse:
+	case *opensplunk.CreateKnowledgeObjectResponse:
 		typed.KnowledgeObject.Definition.Name = "caller-poisoned-create-response"
 		typed.TenantCatalogStateToken[0] ^= 0xff
-	case *opensplunkv1.UpdateKnowledgeObjectResponse:
+	case *opensplunk.UpdateKnowledgeObjectResponse:
 		typed.KnowledgeObject.Definition.Name = "caller-poisoned-update-response"
 		typed.TenantCatalogStateToken[0] ^= 0xff
-	case *opensplunkv1.SetKnowledgeObjectStateResponse:
+	case *opensplunk.SetKnowledgeObjectStateResponse:
 		typed.KnowledgeObject.Definition.Name = "caller-poisoned-state-response"
 		typed.TenantCatalogStateToken[0] ^= 0xff
-	case *opensplunkv1.DeleteKnowledgeObjectResponse:
+	case *opensplunk.DeleteKnowledgeObjectResponse:
 		typed.KnowledgeObjectId = "caller-poisoned-delete-response"
 		typed.TenantCatalogStateToken[0] ^= 0xff
 	default:
@@ -784,13 +784,13 @@ func (machine *writerStateMachine) Fatalf(format string, arguments ...any) {
 func writerStateMachineResponseCatalog(t *testing.T, response proto.Message) (uint64, []byte) {
 	t.Helper()
 	switch typed := response.(type) {
-	case *opensplunkv1.CreateKnowledgeObjectResponse:
+	case *opensplunk.CreateKnowledgeObjectResponse:
 		return typed.GetTenantCatalogRevision(), typed.GetTenantCatalogStateToken()
-	case *opensplunkv1.UpdateKnowledgeObjectResponse:
+	case *opensplunk.UpdateKnowledgeObjectResponse:
 		return typed.GetTenantCatalogRevision(), typed.GetTenantCatalogStateToken()
-	case *opensplunkv1.SetKnowledgeObjectStateResponse:
+	case *opensplunk.SetKnowledgeObjectStateResponse:
 		return typed.GetTenantCatalogRevision(), typed.GetTenantCatalogStateToken()
-	case *opensplunkv1.DeleteKnowledgeObjectResponse:
+	case *opensplunk.DeleteKnowledgeObjectResponse:
 		return typed.GetTenantCatalogRevision(), typed.GetTenantCatalogStateToken()
 	default:
 		t.Fatalf("unsupported response catalog type %T", response)
@@ -800,7 +800,7 @@ func writerStateMachineResponseCatalog(t *testing.T, response proto.Message) (ui
 
 func writerStateMachineDefinitionDigest(
 	t *testing.T,
-	definition *opensplunkv1.KnowledgeObjectDefinition,
+	definition *opensplunk.KnowledgeObjectDefinition,
 ) ([sha256.Size]byte, int) {
 	t.Helper()
 	encoded, err := (proto.MarshalOptions{Deterministic: true}).Marshal(definition)
@@ -810,15 +810,15 @@ func writerStateMachineDefinitionDigest(
 	return sha256.Sum256(encoded), len(encoded)
 }
 
-func writerStateMachineProtoState(state knowledgecatalog.State) opensplunkv1.KnowledgeObjectState {
+func writerStateMachineProtoState(state knowledgecatalog.State) opensplunk.KnowledgeObjectState {
 	switch state {
 	case knowledgecatalog.StateDraft:
-		return opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT
+		return opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT
 	case knowledgecatalog.StateDisabled:
-		return opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED
+		return opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED
 	case knowledgecatalog.StateDeleted:
-		return opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DELETED
+		return opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DELETED
 	default:
-		return opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_UNSPECIFIED
+		return opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_UNSPECIFIED
 	}
 }

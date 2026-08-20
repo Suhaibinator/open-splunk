@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
@@ -553,16 +553,16 @@ func cloneCompiledKnowledgeAliasSourceForTest(
 
 func knowledgeAliasSourceDefinitionForTest(
 	source string,
-) *opensplunkv1.KnowledgeObjectDefinition {
-	return &opensplunkv1.KnowledgeObjectDefinition{
+) *opensplunk.KnowledgeObjectDefinition {
+	return &opensplunk.KnowledgeObjectDefinition{
 		AppId:        "app",
 		Name:         "alias-source-boundary",
-		SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{
-			FieldAlias: &opensplunkv1.FieldAliasDefinition{
+		SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{
+			FieldAlias: &opensplunk.FieldAliasDefinition{
 				SourceField:       source,
 				DestinationField:  "copied_source",
-				OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+				OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
 			},
 		},
 	}

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/collectoradmission"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
@@ -76,11 +76,11 @@ func TestRuntimeIngestionTokenLastUseSurvivesHTTPGRPCReopen(t *testing.T) {
 	createResponse := postRuntimeAppProto(
 		t,
 		firstHandler,
-		"/api/v1/ingestion-tokens/create",
-		&opensplunkv1.CreateIngestionTokenRequest{
-			Definition: &opensplunkv1.IngestionTokenDefinition{
+		"/api/ingestion-tokens/create",
+		&opensplunk.CreateIngestionTokenRequest{
+			Definition: &opensplunk.IngestionTokenDefinition{
 				Name: "native collector",
-				Constraints: &opensplunkv1.IngestionTokenConstraints{
+				Constraints: &opensplunk.IngestionTokenConstraints{
 					AllowedIndexNames: []string{"main"},
 					BoundCollectorId:  &collectorID,
 				},
@@ -97,7 +97,7 @@ func TestRuntimeIngestionTokenLastUseSurvivesHTTPGRPCReopen(t *testing.T) {
 			createResponse.Body.String(),
 		)
 	}
-	var created opensplunkv1.CreateIngestionTokenResponse
+	var created opensplunk.CreateIngestionTokenResponse
 	unmarshalRuntimeAppResponse(t, createResponse, &created)
 	if created.GetPlaintextToken() == "" ||
 		created.GetIngestionToken().GetCreatedAt() == nil ||
@@ -296,13 +296,12 @@ func runtimeCollectorHello(
 	plaintextToken string,
 	collectorID string,
 	acceptedAt time.Time,
-) (*opensplunkv1.CollectResponse, error) {
+) (*opensplunk.CollectResponse, error) {
 	t.Helper()
 	config := ingest.DefaultConfig()
 	config.Clock = func() time.Time { return acceptedAt }
 	config.NewStreamID = func() string { return "stream-runtime-test" }
 	config.ServerInstanceID = "server-runtime-test"
-	config.ServerVersion = "runtime-test"
 	fleet, err := collectorfleet.New(db)
 	if err != nil {
 		t.Fatal(err)
@@ -337,7 +336,7 @@ func runtimeCollectorHello(
 
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	opensplunkv1.RegisterCollectorIngestServiceServer(grpcServer, service)
+	opensplunk.RegisterCollectorIngestServiceServer(grpcServer, service)
 	serveDone := make(chan error, 1)
 	go func() {
 		serveDone <- grpcServer.Serve(listener)
@@ -365,7 +364,7 @@ func runtimeCollectorHello(
 			metadata.Pairs("authorization", "Bearer "+plaintextToken),
 		),
 	)
-	stream, err := opensplunkv1.NewCollectorIngestServiceClient(connection).
+	stream, err := opensplunk.NewCollectorIngestServiceClient(connection).
 		Collect(streamContext)
 	if err != nil {
 		cancel()
@@ -374,18 +373,16 @@ func runtimeCollectorHello(
 		_ = listener.Close()
 		t.Fatal(err)
 	}
-	if err := stream.Send(&opensplunkv1.CollectRequest{
+	if err := stream.Send(&opensplunk.CollectRequest{
 		StreamSequence: 1,
 		SentAt:         timestamppb.New(acceptedAt),
-		Payload: &opensplunkv1.CollectRequest_Hello{
-			Hello: &opensplunkv1.CollectorHello{
-				CollectorId:      collectorID,
-				InstanceId:       "instance-runtime-test",
-				ProtocolMajor:    1,
-				ProtocolMinor:    0,
-				CollectorVersion: "runtime-test",
-				Hostname:         "runtime-host",
-				StartedAt:        timestamppb.New(acceptedAt.Add(-time.Hour)),
+		Payload: &opensplunk.CollectRequest_Hello{
+			Hello: &opensplunk.CollectorHello{
+				CollectorId:    collectorID,
+				InstanceId:     "instance-runtime-test",
+				SourceRevision: "development",
+				Hostname:       "runtime-host",
+				StartedAt:      timestamppb.New(acceptedAt.Add(-time.Hour)),
 			},
 		},
 	}); err != nil {
@@ -416,13 +413,13 @@ func getRuntimeIngestionToken(
 	handler http.Handler,
 	administratorToken []byte,
 	tokenID string,
-) *opensplunkv1.IngestionToken {
+) *opensplunk.IngestionToken {
 	t.Helper()
 	response := postRuntimeAppProto(
 		t,
 		handler,
-		"/api/v1/ingestion-tokens/get",
-		&opensplunkv1.GetIngestionTokenRequest{
+		"/api/ingestion-tokens/get",
+		&opensplunk.GetIngestionTokenRequest{
 			IngestionTokenId: tokenID,
 		},
 		administratorToken,
@@ -434,24 +431,24 @@ func getRuntimeIngestionToken(
 			response.Body.String(),
 		)
 	}
-	var decoded opensplunkv1.GetIngestionTokenResponse
+	var decoded opensplunk.GetIngestionTokenResponse
 	unmarshalRuntimeAppResponse(t, response, &decoded)
-	return proto.Clone(decoded.GetIngestionToken()).(*opensplunkv1.IngestionToken)
+	return proto.Clone(decoded.GetIngestionToken()).(*opensplunk.IngestionToken)
 }
 
 func listRuntimeIngestionTokens(
 	t *testing.T,
 	handler http.Handler,
 	administratorToken []byte,
-) *opensplunkv1.ListIngestionTokensResponse {
+) *opensplunk.ListIngestionTokensResponse {
 	t.Helper()
 	response := postRuntimeAppProto(
 		t,
 		handler,
-		"/api/v1/ingestion-tokens/list",
-		&opensplunkv1.ListIngestionTokensRequest{
-			SortBy:        opensplunkv1.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_LAST_USED_AT,
-			SortDirection: opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING,
+		"/api/ingestion-tokens/list",
+		&opensplunk.ListIngestionTokensRequest{
+			SortBy:        opensplunk.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_LAST_USED_AT,
+			SortDirection: opensplunk.SortDirection_SORT_DIRECTION_ASCENDING,
 		},
 		administratorToken,
 	)
@@ -462,14 +459,14 @@ func listRuntimeIngestionTokens(
 			response.Body.String(),
 		)
 	}
-	var decoded opensplunkv1.ListIngestionTokensResponse
+	var decoded opensplunk.ListIngestionTokensResponse
 	unmarshalRuntimeAppResponse(t, response, &decoded)
 	return &decoded
 }
 
 func assertRuntimeTokenLastUse(
 	t *testing.T,
-	token *opensplunkv1.IngestionToken,
+	token *opensplunk.IngestionToken,
 	acceptedAt time.Time,
 	initialVersion uint64,
 	initialUpdatedAt time.Time,

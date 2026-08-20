@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/searchanalysis"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -58,8 +58,8 @@ func TestSearchFieldServiceLimitsAndTypedNilAreValidated(t *testing.T) {
 		SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, SearchFields: service,
 		MaximumPageSize: 1_000, WebUI: testUI(),
 	})
-	bootstrapResponse := postProto(t, bounded, "/api/v1/system/bootstrap", &opensplunkv1.GetSystemBootstrapRequest{})
-	var bootstrap opensplunkv1.GetSystemBootstrapResponse
+	bootstrapResponse := postProto(t, bounded, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{})
+	var bootstrap opensplunk.GetSystemBootstrapResponse
 	unmarshalResponse(t, bootstrapResponse, &bootstrap)
 	if bootstrap.GetLimits().GetMaximumPageSize() != 1_000 {
 		t.Fatalf("advertised page size = %d, want unrelated browser limit 1000", bootstrap.GetLimits().GetMaximumPageSize())
@@ -76,11 +76,11 @@ func TestSearchFieldServiceLimitsAndTypedNilAreValidated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("typed-nil field service: %v", err)
 	}
-	response := postProto(t, handler, searchFieldsListPath, &opensplunkv1.ListSearchFieldsRequest{SearchJobId: "job"})
+	response := postProto(t, handler, searchFieldsListPath, &opensplunk.ListSearchFieldsRequest{SearchJobId: "job"})
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("typed-nil route status = %d, body = %s", response.Code, response.Body.String())
 	}
-	response = postProto(t, handler, searchFieldSummaryPath, &opensplunkv1.GetSearchFieldSummaryRequest{SearchJobId: "job", FieldName: "message"})
+	response = postProto(t, handler, searchFieldSummaryPath, &opensplunk.GetSearchFieldSummaryRequest{SearchJobId: "job", FieldName: "message"})
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("typed-nil summary route status = %d, body = %s", response.Code, response.Body.String())
 	}

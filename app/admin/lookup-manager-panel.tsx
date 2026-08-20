@@ -6,19 +6,19 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   SharingScope,
   type FieldViolation,
-} from "@/gen/ts/open_splunk/v1/common";
+} from "@/gen/ts/open_splunk/common";
 import {
   KnowledgeOverwriteBehavior,
   KnowledgeSelector,
   KnowledgeSelectorMatchKind,
-} from "@/gen/ts/open_splunk/v1/knowledge";
+} from "@/gen/ts/open_splunk/knowledge";
 import {
   LookupDefinition,
   LookupState,
   type Lookup,
   type LookupFieldMapping,
-} from "@/gen/ts/open_splunk/v1/lookup";
-import type { PreviewLookupResponse } from "@/gen/ts/open_splunk/v1/lookup_api";
+} from "@/gen/ts/open_splunk/lookup";
+import type { PreviewLookupResponse } from "@/gen/ts/open_splunk/lookup_api";
 import { isOptionalRouteUnavailable } from "@/lib/api";
 import { createErrorMessage } from "@/lib/error-message";
 

@@ -25,7 +25,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 )
 
@@ -361,14 +361,14 @@ func TestBackendHECSlowCompressedReadDeadline(t *testing.T) {
 	)
 	postGC := backendHECSlowLatestGC(t, serverProcess.Logs())
 
-	var operations opensplunkv1.GetHECOperationalSnapshotResponse
+	var operations opensplunk.GetHECOperationalSnapshotResponse
 	postAdministratorProto(
 		t,
 		ctx,
 		httpClient,
-		baseURL+"/api/v1/hec/operations/get",
+		baseURL+"/api/hec/operations/get",
 		administratorToken,
-		&opensplunkv1.GetHECOperationalSnapshotRequest{},
+		&opensplunk.GetHECOperationalSnapshotRequest{},
 		&operations,
 	)
 	protocolFailures := make(map[uint32]uint64, len(operations.GetProtocolFailures()))

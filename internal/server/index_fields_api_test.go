@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/searchanalysis"
@@ -115,7 +115,7 @@ func TestIndexFieldsConfigurationAndRouteRegistration(t *testing.T) {
 		t,
 		without,
 		indexFieldsListPath,
-		&opensplunkv1.ListIndexFieldsRequest{},
+		&opensplunk.ListIndexFieldsRequest{},
 	)
 	if response.Code != http.StatusNotFound {
 		t.Fatalf(
@@ -136,7 +136,7 @@ func TestIndexFieldsConfigurationAndRouteRegistration(t *testing.T) {
 		t,
 		with,
 		indexFieldsListPath,
-		&opensplunkv1.ListIndexFieldsRequest{},
+		&opensplunk.ListIndexFieldsRequest{},
 	)
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf(
@@ -366,14 +366,14 @@ func TestIndexFieldsSelectorsResolveOneTrustedScopeAndSerializePage(
 	timezone := "America/Los_Angeles"
 	pageSize := uint32(5)
 	nameFilter := "mess"
-	selectors := []*opensplunkv1.IndexSelector{
+	selectors := []*opensplunk.IndexSelector{
 		{
-			Selector: &opensplunkv1.IndexSelector_IndexId{
+			Selector: &opensplunk.IndexSelector_IndexId{
 				IndexId: index.ID,
 			},
 		},
 		{
-			Selector: &opensplunkv1.IndexSelector_IndexName{
+			Selector: &opensplunk.IndexSelector_IndexName{
 				IndexName: " GRADETHIS-PROD ",
 			},
 		},
@@ -382,14 +382,14 @@ func TestIndexFieldsSelectorsResolveOneTrustedScopeAndSerializePage(
 		response := postAuthenticatedIndexFields(
 			t,
 			handler,
-			&opensplunkv1.ListIndexFieldsRequest{
+			&opensplunk.ListIndexFieldsRequest{
 				Selector: selector,
-				TimeRange: &opensplunkv1.TimeRangeSpec{
+				TimeRange: &opensplunk.TimeRangeSpec{
 					Earliest: &earliest,
 					Latest:   &latest,
 					Timezone: &timezone,
 				},
-				Page: &opensplunkv1.PageRequest{
+				Page: &opensplunk.PageRequest{
 					PageSize:         &pageSize,
 					IncludeTotalSize: true,
 				},
@@ -404,7 +404,7 @@ func TestIndexFieldsSelectorsResolveOneTrustedScopeAndSerializePage(
 				response.Body.String(),
 			)
 		}
-		var decoded opensplunkv1.ListIndexFieldsResponse
+		var decoded opensplunk.ListIndexFieldsResponse
 		unmarshalResponse(t, response, &decoded)
 		if len(decoded.GetFields()) != 1 ||
 			decoded.GetFields()[0].GetFieldName() != "message" ||
@@ -526,15 +526,15 @@ func TestIndexFieldsAdmitsEveryCurrentGORMRecordAndRejectsTombstones(
 		),
 		Config{},
 	)
-	selectors := func(index control.Index) []*opensplunkv1.IndexSelector {
-		return []*opensplunkv1.IndexSelector{
+	selectors := func(index control.Index) []*opensplunk.IndexSelector {
+		return []*opensplunk.IndexSelector{
 			{
-				Selector: &opensplunkv1.IndexSelector_IndexId{
+				Selector: &opensplunk.IndexSelector_IndexId{
 					IndexId: index.ID,
 				},
 			},
 			{
-				Selector: &opensplunkv1.IndexSelector_IndexName{
+				Selector: &opensplunk.IndexSelector_IndexName{
 					IndexName: strings.ToUpper(index.Definition.Name),
 				},
 			},
@@ -630,34 +630,34 @@ func TestIndexFieldsValidatesTimePageAndPreservesCursorBytes(
 	tooMany := defaultMaximumPageSize + 1
 	for _, test := range []struct {
 		name    string
-		request *opensplunkv1.ListIndexFieldsRequest
+		request *opensplunk.ListIndexFieldsRequest
 	}{
-		{name: "missing selector", request: func() *opensplunkv1.ListIndexFieldsRequest {
+		{name: "missing selector", request: func() *opensplunk.ListIndexFieldsRequest {
 			candidate := indexFieldsRequestForName(index.Definition.Name)
 			candidate.Selector = nil
 			return candidate
 		}()},
-		{name: "missing time range", request: &opensplunkv1.ListIndexFieldsRequest{Selector: valid.Selector}},
-		{name: "missing earliest", request: func() *opensplunkv1.ListIndexFieldsRequest {
+		{name: "missing time range", request: &opensplunk.ListIndexFieldsRequest{Selector: valid.Selector}},
+		{name: "missing earliest", request: func() *opensplunk.ListIndexFieldsRequest {
 			candidate := indexFieldsRequestForName(index.Definition.Name)
 			candidate.TimeRange.Earliest = nil
 			return candidate
 		}()},
-		{name: "inverted time range", request: func() *opensplunkv1.ListIndexFieldsRequest {
+		{name: "inverted time range", request: func() *opensplunk.ListIndexFieldsRequest {
 			candidate := indexFieldsRequestForName(index.Definition.Name)
 			earliest, latest := "now", "-24h"
 			candidate.TimeRange.Earliest = &earliest
 			candidate.TimeRange.Latest = &latest
 			return candidate
 		}()},
-		{name: "zero page", request: func() *opensplunkv1.ListIndexFieldsRequest {
+		{name: "zero page", request: func() *opensplunk.ListIndexFieldsRequest {
 			candidate := indexFieldsRequestForName(index.Definition.Name)
-			candidate.Page = &opensplunkv1.PageRequest{PageSize: &zero}
+			candidate.Page = &opensplunk.PageRequest{PageSize: &zero}
 			return candidate
 		}()},
-		{name: "page above browser maximum", request: func() *opensplunkv1.ListIndexFieldsRequest {
+		{name: "page above browser maximum", request: func() *opensplunk.ListIndexFieldsRequest {
 			candidate := indexFieldsRequestForName(index.Definition.Name)
-			candidate.Page = &opensplunkv1.PageRequest{PageSize: &tooMany}
+			candidate.Page = &opensplunk.PageRequest{PageSize: &tooMany}
 			return candidate
 		}()},
 	} {
@@ -680,7 +680,7 @@ func TestIndexFieldsValidatesTimePageAndPreservesCursorBytes(
 
 	service.err = searchanalysis.ErrInvalidFieldCursor
 	const token = " signed cursor bytes \t"
-	valid.Page = &opensplunkv1.PageRequest{PageToken: new(token)}
+	valid.Page = &opensplunk.PageRequest{PageToken: new(token)}
 	response := postAuthenticatedIndexFields(t, handler, valid)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf(
@@ -865,16 +865,16 @@ func newIndexFieldsTestHandler(
 	return handler
 }
 
-func indexFieldsRequestForName(name string) *opensplunkv1.ListIndexFieldsRequest {
+func indexFieldsRequestForName(name string) *opensplunk.ListIndexFieldsRequest {
 	earliest := "-24h"
 	latest := "now"
-	return &opensplunkv1.ListIndexFieldsRequest{
-		Selector: &opensplunkv1.IndexSelector{
-			Selector: &opensplunkv1.IndexSelector_IndexName{
+	return &opensplunk.ListIndexFieldsRequest{
+		Selector: &opensplunk.IndexSelector{
+			Selector: &opensplunk.IndexSelector_IndexName{
 				IndexName: name,
 			},
 		},
-		TimeRange: &opensplunkv1.TimeRangeSpec{
+		TimeRange: &opensplunk.TimeRangeSpec{
 			Earliest: &earliest,
 			Latest:   &latest,
 		},
@@ -884,7 +884,7 @@ func indexFieldsRequestForName(name string) *opensplunkv1.ListIndexFieldsRequest
 func postAuthenticatedIndexFields(
 	t *testing.T,
 	handler http.Handler,
-	request *opensplunkv1.ListIndexFieldsRequest,
+	request *opensplunk.ListIndexFieldsRequest,
 ) *httptest.ResponseRecorder {
 	t.Helper()
 	authenticated := &adminIntegrationHandler{

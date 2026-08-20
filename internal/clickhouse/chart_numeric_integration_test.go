@@ -11,7 +11,7 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 )
@@ -281,8 +281,8 @@ func chartNumericStoreFixture(
 	t.Helper()
 	info := "INFO"
 	var events []*ingest.StoredEvent
-	add := func(id, row string, series *string, metric *opensplunkv1.TypedValue) {
-		fields := []*opensplunkv1.TypedObjectField{
+	add := func(id, row string, series *string, metric *opensplunk.TypedValue) {
+		fields := []*opensplunk.TypedObjectField{
 			typedField("path", typedString(row)),
 		}
 		if series != nil {

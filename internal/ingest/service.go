@@ -16,7 +16,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/buildmetadata"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
@@ -33,11 +33,8 @@ type Config struct {
 	Limits                Limits
 	Redaction             RedactionPolicy
 	DefaultIndexRetention time.Duration
-	ProtocolMajor         uint32
-	ProtocolMinor         uint32
 	ServerInstanceID      string
-	ServerVersion         string
-	Build                 *opensplunkv1.BuildMetadata
+	Build                 *opensplunk.BuildMetadata
 	HeartbeatInterval     time.Duration
 	MaxInFlightBatches    uint32
 	MaxStreamsPerSubject  uint32
@@ -49,8 +46,6 @@ type Config struct {
 	StreamRegistry        CollectorStreamRegistry
 	SessionErrorHandler   func(error)
 }
-
-const defaultServerVersion = "development"
 
 // DefaultIndexRetention is the shared deployment default used by the native
 // service and the server CLI when an index keeps the zero inheritance sentinel.
@@ -67,8 +62,6 @@ func DefaultConfig() Config {
 	return Config{
 		Limits:                DefaultLimits(),
 		DefaultIndexRetention: DefaultIndexRetention,
-		ProtocolMajor:         1,
-		ProtocolMinor:         0,
 		HeartbeatInterval:     15 * time.Second,
 		MaxInFlightBatches:    1,
 		MaxStreamsPerSubject:  4,
@@ -81,7 +74,7 @@ func DefaultConfig() Config {
 
 // Service is the authenticated collector gRPC ingestion boundary.
 type Service struct {
-	opensplunkv1.UnimplementedCollectorIngestServiceServer
+	opensplunk.UnimplementedCollectorIngestServiceServer
 
 	config         Config
 	validator      *Validator
@@ -101,28 +94,18 @@ func NewService(config Config, authorizer Authorizer, store EventStore) (*Servic
 	if config.Limits == (Limits{}) {
 		config.Limits = defaults.Limits
 	}
-	if config.ProtocolMajor == 0 {
-		config.ProtocolMajor = defaults.ProtocolMajor
-	}
 	if config.DefaultIndexRetention == 0 {
 		config.DefaultIndexRetention = defaults.DefaultIndexRetention
 	}
 	if config.ServerInstanceID == "" {
 		config.ServerInstanceID = randomID()
 	}
-	config.ServerVersion = strings.TrimSpace(config.ServerVersion)
 	if config.Build != nil {
-		clonedBuild, serverVersion, err := buildmetadata.Normalize(config.Build, config.ServerVersion)
+		clonedBuild, err := buildmetadata.Normalize(config.Build)
 		if err != nil {
-			if errors.Is(err, buildmetadata.ErrVersionMismatch) {
-				return nil, errors.New("ingest server version does not match structured build metadata")
-			}
 			return nil, fmt.Errorf("ingest build metadata: %w", err)
 		}
-		config.ServerVersion = serverVersion
 		config.Build = clonedBuild
-	} else if config.ServerVersion == "" {
-		config.ServerVersion = defaultServerVersion
 	}
 	if config.HeartbeatInterval == 0 {
 		config.HeartbeatInterval = defaults.HeartbeatInterval
@@ -198,7 +181,7 @@ func NewService(config Config, authorizer Authorizer, store EventStore) (*Servic
 	}, nil
 }
 
-func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServer) error {
+func (s *Service) Collect(stream opensplunk.CollectorIngestService_CollectServer) error {
 	token, err := bearerToken(stream.Context())
 	if err != nil {
 		return status.Error(codes.Unauthenticated, "valid bearer authentication is required")
@@ -380,23 +363,18 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 	state := streamState{
 		collectorID:        hello.GetCollectorId(),
 		instanceID:         hello.GetInstanceId(),
-		protocolMajor:      hello.GetProtocolMajor(),
-		protocolMinor:      hello.GetProtocolMinor(),
 		authorization:      authorization,
 		indexPolicies:      resolvedIndexes.byName,
 		eventAuthorization: eventAuthorization,
 	}
 	responseSequence := uint64(1)
-	if err := stream.Send(&opensplunkv1.CollectResponse{
+	if err := stream.Send(&opensplunk.CollectResponse{
 		StreamSequence: responseSequence,
 		SentAt:         timestamppb.New(acceptedAt),
-		Payload: &opensplunkv1.CollectResponse_Ready{Ready: &opensplunkv1.CollectorReady{
+		Payload: &opensplunk.CollectResponse_Ready{Ready: &opensplunk.CollectorReady{
 			StreamId:                 streamID,
 			ServerInstanceId:         s.config.ServerInstanceID,
-			ServerVersion:            s.config.ServerVersion,
 			Build:                    buildmetadata.Clone(s.config.Build),
-			ProtocolMajor:            s.config.ProtocolMajor,
-			ProtocolMinor:            hello.GetProtocolMinor(),
 			ServerTime:               timestamppb.New(acceptedAt),
 			HeartbeatInterval:        durationpb.New(s.config.HeartbeatInterval),
 			MaxInFlightBatches:       s.config.MaxInFlightBatches,
@@ -404,7 +382,7 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 			MaxBatchBytes:            s.config.Limits.MaxBatchBytes,
 			MaxEventBytes:            s.config.Limits.MaxEventBytes,
 			AuthorizedIndexes:        authorizedIndexPolicyNames(resolvedIndexes.policies),
-			AcknowledgmentDurability: opensplunkv1.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED,
+			AcknowledgmentDurability: opensplunk.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED,
 		}},
 	}); err != nil {
 		return err
@@ -438,7 +416,7 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 		}
 		var heartbeatSnapshot *collectorfleet.Heartbeat
 		switch payload := request.GetPayload().(type) {
-		case *opensplunkv1.CollectRequest_Heartbeat:
+		case *opensplunk.CollectRequest_Heartbeat:
 			if err := s.validateHeartbeat(payload.Heartbeat, &state, boundaryAt); err != nil {
 				return err
 			}
@@ -454,7 +432,7 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 		}
 		var deferredAuthority, authorizationErr error
 		switch request.GetPayload().(type) {
-		case *opensplunkv1.CollectRequest_Heartbeat, *opensplunkv1.CollectRequest_Batch:
+		case *opensplunk.CollectRequest_Heartbeat, *opensplunk.CollectRequest_Batch:
 			deferredAuthority, authorizationErr = s.refreshLeaseAuthorization(
 				authorizationContext,
 				token,
@@ -469,16 +447,16 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 		if authorizationErr != nil {
 			return authorizationErr
 		}
-		if _, heartbeat := request.GetPayload().(*opensplunkv1.CollectRequest_Heartbeat); heartbeat &&
+		if _, heartbeat := request.GetPayload().(*opensplunk.CollectRequest_Heartbeat); heartbeat &&
 			deferredAuthority != nil {
 			return authorityRPCError(deferredAuthority)
 		}
 		expectedRequestSequence++
 
 		switch payload := request.GetPayload().(type) {
-		case *opensplunkv1.CollectRequest_Hello:
+		case *opensplunk.CollectRequest_Hello:
 			return status.Error(codes.InvalidArgument, "CollectorHello may only appear as the first request")
-		case *opensplunkv1.CollectRequest_Heartbeat:
+		case *opensplunk.CollectRequest_Heartbeat:
 			applied, err := s.sessionManager.RecordHeartbeat(
 				authorizationContext,
 				lease.Lease,
@@ -496,12 +474,12 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 				return supersededStreamRPCError()
 			}
 			continue
-		case *opensplunkv1.CollectRequest_Goodbye:
+		case *opensplunk.CollectRequest_Goodbye:
 			if payload.Goodbye == nil {
 				return status.Error(codes.InvalidArgument, "goodbye payload is required")
 			}
 			return nil
-		case *opensplunkv1.CollectRequest_Batch:
+		case *opensplunk.CollectRequest_Batch:
 			response, err := s.processBatchWithDeferredAuthority(
 				stream.Context(),
 				payload.Batch,
@@ -532,10 +510,10 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 				throttle.EffectiveUntil = timestamppb.New(
 					sentAt.Add(throttle.GetMinimumSendDelay().AsDuration()),
 				)
-				followup := &opensplunkv1.CollectResponse{
+				followup := &opensplunk.CollectResponse{
 					StreamSequence: responseSequence,
 					SentAt:         timestamppb.New(sentAt),
-					Payload: &opensplunkv1.CollectResponse_Throttle{
+					Payload: &opensplunk.CollectResponse_Throttle{
 						Throttle: throttle,
 					},
 				}
@@ -550,13 +528,13 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 }
 
 type collectRequestResult struct {
-	request *opensplunkv1.CollectRequest
+	request *opensplunk.CollectRequest
 	err     error
 }
 
 func receiveCollectRequests(
 	stream interface {
-		Recv() (*opensplunkv1.CollectRequest, error)
+		Recv() (*opensplunk.CollectRequest, error)
 	},
 ) (<-chan collectRequestResult, func()) {
 	received := make(chan collectRequestResult)
@@ -1031,7 +1009,7 @@ func heartbeatPersistenceRPCError(err error) error {
 }
 
 func (s *Service) validateRequestEnvelope(
-	request *opensplunkv1.CollectRequest,
+	request *opensplunk.CollectRequest,
 	expectedSequence uint64,
 	reference time.Time,
 ) error {
@@ -1050,7 +1028,7 @@ func (s *Service) validateRequestEnvelope(
 	return nil
 }
 
-func (s *Service) validateHello(hello *opensplunkv1.CollectorHello, authorization Authorization) error {
+func (s *Service) validateHello(hello *opensplunk.CollectorHello, authorization Authorization) error {
 	if hello == nil {
 		return status.Error(codes.InvalidArgument, "hello payload is required")
 	}
@@ -1063,14 +1041,11 @@ func (s *Service) validateHello(hello *opensplunkv1.CollectorHello, authorizatio
 	if authorization.CollectorID != hello.GetCollectorId() {
 		return status.Error(codes.PermissionDenied, "token is not authorized for this collector_id")
 	}
-	if hello.GetProtocolMajor() != s.config.ProtocolMajor || hello.GetProtocolMinor() > s.config.ProtocolMinor {
-		return status.Error(codes.FailedPrecondition, "collector protocol version is not supported")
-	}
 	if hello.GetStartedAt() == nil || hello.GetStartedAt().CheckValid() != nil {
 		return status.Error(codes.InvalidArgument, "started_at is invalid")
 	}
 	for _, value := range []string{
-		hello.GetCollectorVersion(), hello.GetHostname(), hello.GetOperatingSystem(), hello.GetArchitecture(),
+		hello.GetSourceRevision(), hello.GetHostname(), hello.GetOperatingSystem(), hello.GetArchitecture(),
 	} {
 		if !utf8.ValidString(value) {
 			return status.Error(codes.InvalidArgument, "hello contains invalid UTF-8")
@@ -1086,7 +1061,7 @@ func (s *Service) validateHello(hello *opensplunkv1.CollectorHello, authorizatio
 }
 
 func (s *Service) validateHeartbeat(
-	heartbeat *opensplunkv1.CollectorHeartbeat,
+	heartbeat *opensplunk.CollectorHeartbeat,
 	state *streamState,
 	reference time.Time,
 ) error {
@@ -1108,12 +1083,10 @@ func (s *Service) validateHeartbeat(
 type streamState struct {
 	collectorID        string
 	instanceID         string
-	protocolMajor      uint32
-	protocolMinor      uint32
 	authorization      Authorization
 	indexPolicies      map[string]resolvedIndexPolicy
 	eventAuthorization eventAuthorizationMatcher
-	pendingThrottle    *opensplunkv1.Throttle
+	pendingThrottle    *opensplunk.Throttle
 
 	hasHighestBatchSequence bool
 	highestBatchSequence    uint64
@@ -1242,4 +1215,4 @@ func digestsEqual(left, right []byte) bool {
 
 const sha256Size = 32
 
-var _ opensplunkv1.CollectorIngestServiceServer = (*Service)(nil)
+var _ opensplunk.CollectorIngestServiceServer = (*Service)(nil)

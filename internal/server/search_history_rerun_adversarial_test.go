@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
 )
 
@@ -18,28 +18,28 @@ func TestCreateSearchHistoryRerunRejectsMalformedSourceShapes(t *testing.T) {
 
 	for _, test := range []struct {
 		name        string
-		request     func() *opensplunkv1.CreateSearchJobRequest
+		request     func() *opensplunk.CreateSearchJobRequest
 		wantMessage string
 	}{
 		{
 			name: "missing history ID",
-			request: func() *opensplunkv1.CreateSearchJobRequest {
-				return &opensplunkv1.CreateSearchJobRequest{Source: &opensplunkv1.SearchJobSource{
-					Origin: opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN,
+			request: func() *opensplunk.CreateSearchJobRequest {
+				return &opensplunk.CreateSearchJobRequest{Source: &opensplunk.SearchJobSource{
+					Origin: opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN,
 				}}
 			},
 			wantMessage: "history-rerun origin requires a history search ID",
 		},
 		{
 			name: "empty history ID",
-			request: func() *opensplunkv1.CreateSearchJobRequest {
+			request: func() *opensplunk.CreateSearchJobRequest {
 				return historyRerunRequest("")
 			},
 			wantMessage: "search job ID is invalid",
 		},
 		{
 			name: "saved-search ID also supplied",
-			request: func() *opensplunkv1.CreateSearchJobRequest {
+			request: func() *opensplunk.CreateSearchJobRequest {
 				request := historyRerunRequest("history-original")
 				request.Source.SavedSearchId = new("saved-forged")
 				return request
@@ -48,7 +48,7 @@ func TestCreateSearchHistoryRerunRejectsMalformedSourceShapes(t *testing.T) {
 		},
 		{
 			name: "dashboard ID also supplied",
-			request: func() *opensplunkv1.CreateSearchJobRequest {
+			request: func() *opensplunk.CreateSearchJobRequest {
 				request := historyRerunRequest("history-original")
 				request.Source.DashboardId = new("dashboard-forged")
 				return request
@@ -57,10 +57,10 @@ func TestCreateSearchHistoryRerunRejectsMalformedSourceShapes(t *testing.T) {
 		},
 		{
 			name: "ad-hoc origin with history ID",
-			request: func() *opensplunkv1.CreateSearchJobRequest {
+			request: func() *opensplunk.CreateSearchJobRequest {
 				request := createRequest("-1h", "now", "main")
-				request.Source = &opensplunkv1.SearchJobSource{
-					Origin:          opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_AD_HOC,
+				request.Source = &opensplunk.SearchJobSource{
+					Origin:          opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_AD_HOC,
 					HistorySearchId: new("history-forged"),
 				}
 				return request
@@ -69,10 +69,10 @@ func TestCreateSearchHistoryRerunRejectsMalformedSourceShapes(t *testing.T) {
 		},
 		{
 			name: "saved-search origin with history ID",
-			request: func() *opensplunkv1.CreateSearchJobRequest {
+			request: func() *opensplunk.CreateSearchJobRequest {
 				request := createRequest("-1h", "now", "main")
-				request.Source = &opensplunkv1.SearchJobSource{
-					Origin:          opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH,
+				request.Source = &opensplunk.SearchJobSource{
+					Origin:          opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH,
 					HistorySearchId: new("history-forged"),
 				}
 				return request
@@ -81,9 +81,9 @@ func TestCreateSearchHistoryRerunRejectsMalformedSourceShapes(t *testing.T) {
 		},
 		{
 			name: "unspecified origin with history ID",
-			request: func() *opensplunkv1.CreateSearchJobRequest {
+			request: func() *opensplunk.CreateSearchJobRequest {
 				request := createRequest("-1h", "now", "main")
-				request.Source = &opensplunkv1.SearchJobSource{
+				request.Source = &opensplunk.SearchJobSource{
 					HistorySearchId: new("history-forged"),
 				}
 				return request
@@ -98,7 +98,7 @@ func TestCreateSearchHistoryRerunRejectsMalformedSourceShapes(t *testing.T) {
 				context.Context,
 				searchhistory.AccessScope,
 				string,
-			) (*opensplunkv1.SearchHistoryEntry, error) {
+			) (*opensplunk.SearchHistoryEntry, error) {
 				t.Fatal("malformed source reached history storage")
 				return nil, nil
 			}}
@@ -116,7 +116,7 @@ func TestCreateSearchHistoryRerunRejectsMalformedSourceShapes(t *testing.T) {
 			response := postProto(
 				t,
 				handler,
-				"/api/v1/search/jobs/create",
+				"/api/search/jobs/create",
 				test.request(),
 			)
 			if response.Code != http.StatusBadRequest ||
@@ -140,42 +140,42 @@ func TestCreateSearchHistoryRerunRejectsRequestOptionsBeforeLookup(t *testing.T)
 
 	for _, test := range []struct {
 		name        string
-		mutate      func(*opensplunkv1.CreateSearchJobRequest)
+		mutate      func(*opensplunk.CreateSearchJobRequest)
 		wantMessage string
 	}{
 		{
 			name: "client request ID",
-			mutate: func(request *opensplunkv1.CreateSearchJobRequest) {
+			mutate: func(request *opensplunk.CreateSearchJobRequest) {
 				request.ClientRequestId = new("client-1")
 			},
 			wantMessage: "client request idempotency is not supported",
 		},
 		{
 			name: "job preview",
-			mutate: func(request *opensplunkv1.CreateSearchJobRequest) {
-				request.Options = &opensplunkv1.SearchJobOptions{EnablePreview: true}
+			mutate: func(request *opensplunk.CreateSearchJobRequest) {
+				request.Options = &opensplunk.SearchJobOptions{EnablePreview: true}
 			},
 			wantMessage: "job-level preview options are not supported",
 		},
 		{
 			name: "job preview row limit",
-			mutate: func(request *opensplunkv1.CreateSearchJobRequest) {
+			mutate: func(request *opensplunk.CreateSearchJobRequest) {
 				limit := uint32(1)
-				request.Options = &opensplunkv1.SearchJobOptions{PreviewRowLimit: &limit}
+				request.Options = &opensplunk.SearchJobOptions{PreviewRowLimit: &limit}
 			},
 			wantMessage: "job-level preview options are not supported",
 		},
 		{
 			name: "eager field discovery",
-			mutate: func(request *opensplunkv1.CreateSearchJobRequest) {
-				request.Options = &opensplunkv1.SearchJobOptions{EnableFieldDiscovery: true}
+			mutate: func(request *opensplunk.CreateSearchJobRequest) {
+				request.Options = &opensplunk.SearchJobOptions{EnableFieldDiscovery: true}
 			},
 			wantMessage: "eager field discovery and timeline options are not supported",
 		},
 		{
 			name: "eager timeline",
-			mutate: func(request *opensplunkv1.CreateSearchJobRequest) {
-				request.Options = &opensplunkv1.SearchJobOptions{EnableTimeline: true}
+			mutate: func(request *opensplunk.CreateSearchJobRequest) {
+				request.Options = &opensplunk.SearchJobOptions{EnableTimeline: true}
 			},
 			wantMessage: "eager field discovery and timeline options are not supported",
 		},
@@ -187,7 +187,7 @@ func TestCreateSearchHistoryRerunRejectsRequestOptionsBeforeLookup(t *testing.T)
 				context.Context,
 				searchhistory.AccessScope,
 				string,
-			) (*opensplunkv1.SearchHistoryEntry, error) {
+			) (*opensplunk.SearchHistoryEntry, error) {
 				t.Fatal("forbidden request option reached history storage")
 				return nil, nil
 			}}
@@ -207,7 +207,7 @@ func TestCreateSearchHistoryRerunRejectsRequestOptionsBeforeLookup(t *testing.T)
 			response := postProto(
 				t,
 				handler,
-				"/api/v1/search/jobs/create",
+				"/api/search/jobs/create",
 				request,
 			)
 			if response.Code != http.StatusBadRequest ||
@@ -242,7 +242,7 @@ func TestCreateSearchHistoryRerunWithoutHistoryServiceIsUnsupported(t *testing.T
 	response := postProto(
 		t,
 		handler,
-		"/api/v1/search/jobs/create",
+		"/api/search/jobs/create",
 		historyRerunRequest("history-original"),
 	)
 	if response.Code != http.StatusBadRequest ||
@@ -261,56 +261,56 @@ func TestCreateSearchHistoryRerunAuthorizesLegacyAndStaticApps(t *testing.T) {
 
 	for _, test := range []struct {
 		name       string
-		mutate     func(*opensplunkv1.SearchHistoryEntry)
+		mutate     func(*opensplunk.SearchHistoryEntry)
 		bootstrap  BootstrapConfig
 		wantStatus int
 		wantAppID  string
 	}{
 		{
 			name: "legacy absent app",
-			mutate: func(entry *opensplunkv1.SearchHistoryEntry) {
+			mutate: func(entry *opensplunk.SearchHistoryEntry) {
 				entry.Definition.AppId = nil
 			},
 			wantStatus: http.StatusOK,
 		},
 		{
 			name: "legacy explicit empty app",
-			mutate: func(entry *opensplunkv1.SearchHistoryEntry) {
+			mutate: func(entry *opensplunk.SearchHistoryEntry) {
 				entry.Definition.AppId = new("")
 			},
 			wantStatus: http.StatusOK,
 		},
 		{
 			name:   "matching static app",
-			mutate: func(*opensplunkv1.SearchHistoryEntry) {},
-			bootstrap: BootstrapConfig{Apps: []*opensplunkv1.AppSummary{{
+			mutate: func(*opensplunk.SearchHistoryEntry) {},
+			bootstrap: BootstrapConfig{Apps: []*opensplunk.AppSummary{{
 				AppId:       "app-main",
 				Slug:        "main",
 				DisplayName: "Main",
-				State:       opensplunkv1.AppState_APP_STATE_ACTIVE,
+				State:       opensplunk.AppState_APP_STATE_ACTIVE,
 			}}},
 			wantStatus: http.StatusOK,
 			wantAppID:  "app-main",
 		},
 		{
 			name:   "missing static app",
-			mutate: func(*opensplunkv1.SearchHistoryEntry) {},
-			bootstrap: BootstrapConfig{Apps: []*opensplunkv1.AppSummary{{
+			mutate: func(*opensplunk.SearchHistoryEntry) {},
+			bootstrap: BootstrapConfig{Apps: []*opensplunk.AppSummary{{
 				AppId:       "app-other",
 				Slug:        "other",
 				DisplayName: "Other",
-				State:       opensplunkv1.AppState_APP_STATE_ACTIVE,
+				State:       opensplunk.AppState_APP_STATE_ACTIVE,
 			}}},
 			wantStatus: http.StatusForbidden,
 		},
 		{
 			name:   "matching archived static app",
-			mutate: func(*opensplunkv1.SearchHistoryEntry) {},
-			bootstrap: BootstrapConfig{Apps: []*opensplunkv1.AppSummary{{
+			mutate: func(*opensplunk.SearchHistoryEntry) {},
+			bootstrap: BootstrapConfig{Apps: []*opensplunk.AppSummary{{
 				AppId:       "app-main",
 				Slug:        "main",
 				DisplayName: "Main",
-				State:       opensplunkv1.AppState_APP_STATE_ARCHIVED,
+				State:       opensplunk.AppState_APP_STATE_ARCHIVED,
 			}}},
 			wantStatus: http.StatusForbidden,
 		},
@@ -320,14 +320,14 @@ func TestCreateSearchHistoryRerunAuthorizesLegacyAndStaticApps(t *testing.T) {
 
 			entry := historyRerunEntry(
 				"history-original",
-				opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
+				opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
 			)
 			test.mutate(entry)
 			history := &fakeSearchHistory{getFn: func(
 				context.Context,
 				searchhistory.AccessScope,
 				string,
-			) (*opensplunkv1.SearchHistoryEntry, error) {
+			) (*opensplunk.SearchHistoryEntry, error) {
 				return entry, nil
 			}}
 			jobs := &fakeSearchJobs{createJob: completeJobForApp("history-rerun-app", test.wantAppID)}
@@ -344,7 +344,7 @@ func TestCreateSearchHistoryRerunAuthorizesLegacyAndStaticApps(t *testing.T) {
 			response := postProto(
 				t,
 				handler,
-				"/api/v1/search/jobs/create",
+				"/api/search/jobs/create",
 				historyRerunRequest("history-original"),
 			)
 			if response.Code != test.wantStatus {
@@ -436,10 +436,10 @@ func TestCreateSearchHistoryRerunMapsLiveAppCatalogFailures(t *testing.T) {
 				context.Context,
 				searchhistory.AccessScope,
 				string,
-			) (*opensplunkv1.SearchHistoryEntry, error) {
+			) (*opensplunk.SearchHistoryEntry, error) {
 				return historyRerunEntry(
 					"history-original",
-					opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
+					opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
 				), nil
 			}}
 			indexes := activeHistoryRerunIndexCatalog("main")
@@ -457,7 +457,7 @@ func TestCreateSearchHistoryRerunMapsLiveAppCatalogFailures(t *testing.T) {
 			response := postProto(
 				t,
 				handler,
-				"/api/v1/search/jobs/create",
+				"/api/search/jobs/create",
 				historyRerunRequest("history-original"),
 			)
 			if response.Code != test.wantStatus ||
@@ -489,72 +489,72 @@ func TestCreateSearchHistoryRerunRejectsMalformedTrustedDefinition(t *testing.T)
 
 	for _, test := range []struct {
 		name   string
-		mutate func(*opensplunkv1.SearchHistoryEntry)
+		mutate func(*opensplunk.SearchHistoryEntry)
 	}{
 		{
 			name: "missing time intent",
-			mutate: func(entry *opensplunkv1.SearchHistoryEntry) {
+			mutate: func(entry *opensplunk.SearchHistoryEntry) {
 				entry.Definition.TimeRange = nil
 			},
 		},
 		{
 			name: "missing earliest time intent",
-			mutate: func(entry *opensplunkv1.SearchHistoryEntry) {
+			mutate: func(entry *opensplunk.SearchHistoryEntry) {
 				entry.Definition.TimeRange.Earliest = nil
 			},
 		},
 		{
 			name: "padded time intent",
-			mutate: func(entry *opensplunkv1.SearchHistoryEntry) {
+			mutate: func(entry *opensplunk.SearchHistoryEntry) {
 				entry.Definition.TimeRange.Earliest = new(" -2h ")
 			},
 		},
 		{
 			name: "invalid canonical time expression",
-			mutate: func(entry *opensplunkv1.SearchHistoryEntry) {
+			mutate: func(entry *opensplunk.SearchHistoryEntry) {
 				entry.Definition.TimeRange.Earliest = new("yesterday-ish")
 			},
 		},
 		{
 			name: "padded timezone",
-			mutate: func(entry *opensplunkv1.SearchHistoryEntry) {
+			mutate: func(entry *opensplunk.SearchHistoryEntry) {
 				entry.Definition.TimeRange.Timezone = new(" UTC ")
 			},
 		},
 		{
 			name: "invalid canonical timezone",
-			mutate: func(entry *opensplunkv1.SearchHistoryEntry) {
+			mutate: func(entry *opensplunk.SearchHistoryEntry) {
 				entry.Definition.TimeRange.Timezone = new("Mars/Olympus")
 			},
 		},
 		{
 			name: "padded app ID",
-			mutate: func(entry *opensplunkv1.SearchHistoryEntry) {
+			mutate: func(entry *opensplunk.SearchHistoryEntry) {
 				entry.Definition.AppId = new(" app-main ")
 			},
 		},
 		{
 			name: "duplicate requested index",
-			mutate: func(entry *opensplunkv1.SearchHistoryEntry) {
+			mutate: func(entry *opensplunk.SearchHistoryEntry) {
 				entry.Definition.IndexScope = []string{"main", "main"}
 			},
 		},
 		{
 			name: "duplicate effective index",
-			mutate: func(entry *opensplunkv1.SearchHistoryEntry) {
+			mutate: func(entry *opensplunk.SearchHistoryEntry) {
 				entry.EffectiveIndexScope = []string{"main", "main"}
 			},
 		},
 		{
 			name: "effective scope widens requested scope",
-			mutate: func(entry *opensplunkv1.SearchHistoryEntry) {
+			mutate: func(entry *opensplunk.SearchHistoryEntry) {
 				entry.Definition.IndexScope = []string{"main"}
 				entry.EffectiveIndexScope = []string{"main", "other"}
 			},
 		},
 		{
 			name: "empty reusable index scope",
-			mutate: func(entry *opensplunkv1.SearchHistoryEntry) {
+			mutate: func(entry *opensplunk.SearchHistoryEntry) {
 				entry.Definition.IndexScope = nil
 				entry.EffectiveIndexScope = nil
 			},
@@ -565,14 +565,14 @@ func TestCreateSearchHistoryRerunRejectsMalformedTrustedDefinition(t *testing.T)
 
 			entry := historyRerunEntry(
 				"history-original",
-				opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
+				opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
 			)
 			test.mutate(entry)
 			history := &fakeSearchHistory{getFn: func(
 				context.Context,
 				searchhistory.AccessScope,
 				string,
-			) (*opensplunkv1.SearchHistoryEntry, error) {
+			) (*opensplunk.SearchHistoryEntry, error) {
 				return entry, nil
 			}}
 			indexes := activeHistoryRerunIndexCatalog("main", "other")
@@ -591,7 +591,7 @@ func TestCreateSearchHistoryRerunRejectsMalformedTrustedDefinition(t *testing.T)
 			response := postProto(
 				t,
 				handler,
-				"/api/v1/search/jobs/create",
+				"/api/search/jobs/create",
 				historyRerunRequest("history-original"),
 			)
 			if response.Code != http.StatusInternalServerError ||
@@ -644,10 +644,10 @@ func TestCreateSearchHistoryRerunMapsIndexCatalogFailures(t *testing.T) {
 				context.Context,
 				searchhistory.AccessScope,
 				string,
-			) (*opensplunkv1.SearchHistoryEntry, error) {
+			) (*opensplunk.SearchHistoryEntry, error) {
 				return historyRerunEntry(
 					"history-original",
-					opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
+					opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
 				), nil
 			}}
 			indexes := &historyRerunIndexCatalog{
@@ -672,7 +672,7 @@ func TestCreateSearchHistoryRerunMapsIndexCatalogFailures(t *testing.T) {
 			response := postProto(
 				t,
 				handler,
-				"/api/v1/search/jobs/create",
+				"/api/search/jobs/create",
 				historyRerunRequest("history-original"),
 			)
 			if response.Code != test.wantStatus ||
@@ -708,10 +708,10 @@ func TestCreateSearchHistoryRerunMapsJobAdmissionCancellation(t *testing.T) {
 				context.Context,
 				searchhistory.AccessScope,
 				string,
-			) (*opensplunkv1.SearchHistoryEntry, error) {
+			) (*opensplunk.SearchHistoryEntry, error) {
 				return historyRerunEntry(
 					"history-original",
-					opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
+					opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
 				), nil
 			}}
 			jobs := &fakeSearchJobs{createErr: operationErr}
@@ -728,7 +728,7 @@ func TestCreateSearchHistoryRerunMapsJobAdmissionCancellation(t *testing.T) {
 			response := postProto(
 				t,
 				handler,
-				"/api/v1/search/jobs/create",
+				"/api/search/jobs/create",
 				historyRerunRequest("history-original"),
 			)
 			if response.Code != http.StatusRequestTimeout ||
@@ -759,7 +759,7 @@ func TestCreateSearchHistoryRerunResolvesNamedZoneDayIntentAtFreshAdmission(t *t
 	admissionTime := time.Date(2026, time.July, 24, 18, 30, 0, 0, time.UTC)
 	entry := historyRerunEntry(
 		"history-original",
-		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
+		opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
 	)
 	entry.Definition.TimeRange.Earliest = new("-1d@d")
 	entry.Definition.TimeRange.Latest = new("@d")
@@ -768,7 +768,7 @@ func TestCreateSearchHistoryRerunResolvesNamedZoneDayIntentAtFreshAdmission(t *t
 		context.Context,
 		searchhistory.AccessScope,
 		string,
-	) (*opensplunkv1.SearchHistoryEntry, error) {
+	) (*opensplunk.SearchHistoryEntry, error) {
 		return entry, nil
 	}}
 	jobs := &fakeSearchJobs{createJob: completeJobForApp("history-rerun-named-zone", "app-main")}
@@ -786,7 +786,7 @@ func TestCreateSearchHistoryRerunResolvesNamedZoneDayIntentAtFreshAdmission(t *t
 	response := postProto(
 		t,
 		handler,
-		"/api/v1/search/jobs/create",
+		"/api/search/jobs/create",
 		historyRerunRequest("history-original"),
 	)
 	if response.Code != http.StatusOK {
@@ -824,7 +824,7 @@ func TestCreateSearchHistoryRerunRejectsTimeIntentThatExpiredAgainstFreshClock(t
 
 	entry := historyRerunEntry(
 		"history-original",
-		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
+		opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
 	)
 	entry.Definition.TimeRange.Earliest = new("now")
 	entry.Definition.TimeRange.Latest = new("2026-07-24T18:00:00Z")
@@ -832,7 +832,7 @@ func TestCreateSearchHistoryRerunRejectsTimeIntentThatExpiredAgainstFreshClock(t
 		context.Context,
 		searchhistory.AccessScope,
 		string,
-	) (*opensplunkv1.SearchHistoryEntry, error) {
+	) (*opensplunk.SearchHistoryEntry, error) {
 		return entry, nil
 	}}
 	jobs := &fakeSearchJobs{createJob: completeJob("must-not-create")}
@@ -852,7 +852,7 @@ func TestCreateSearchHistoryRerunRejectsTimeIntentThatExpiredAgainstFreshClock(t
 	response := postProto(
 		t,
 		handler,
-		"/api/v1/search/jobs/create",
+		"/api/search/jobs/create",
 		historyRerunRequest("history-original"),
 	)
 	if response.Code != http.StatusConflict ||

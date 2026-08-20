@@ -17,7 +17,7 @@
 //     collector.proto contract (SHA-256 over each UTF-8 event_id prefixed by its
 //     unsigned 32-bit big-endian byte length).
 //
-// The queue deals in *opensplunkv1.EventBatch directly rather than a redundant
+// The queue deals in *opensplunk.EventBatch directly rather than a redundant
 // record struct: the sealed proto already carries exactly batch_id,
 // batch_sequence, created_at, and events, the on-disk record IS the marshaled
 // proto, and the sender transmits it without remapping. collector_id and the
@@ -37,7 +37,7 @@
 //
 //	[uint32 big-endian payload length]
 //	[uint32 big-endian CRC32C (Castagnoli) of the payload]
-//	[payload: marshaled opensplunkv1.EventBatch]
+//	[payload: marshaled opensplunk.EventBatch]
 //
 // On open the queue replays segments in order, validating each record's CRC. A
 // record that fails validation, or a truncated trailing record from a crash

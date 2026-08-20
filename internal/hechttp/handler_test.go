@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/hec"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
@@ -316,6 +316,48 @@ func TestHandlerKeepsHECRoutesIsolatedAndEnforcesMethods(t *testing.T) {
 			body:   `{"text":"Invalid data format","code":6}`,
 		},
 		{
+			name:   "pre-release event version",
+			method: http.MethodPost,
+			target: "/services/collector/event/0.4",
+			status: http.StatusNotFound,
+			body:   `{"text":"Invalid data format","code":6}`,
+		},
+		{
+			name:   "pre-release raw version",
+			method: http.MethodPost,
+			target: "/services/collector/raw/0.4",
+			status: http.StatusNotFound,
+			body:   `{"text":"Invalid data format","code":6}`,
+		},
+		{
+			name:   "pre-release health version",
+			method: http.MethodGet,
+			target: "/services/collector/health/0.4",
+			status: http.StatusNotFound,
+			body:   `{"text":"Invalid data format","code":6}`,
+		},
+		{
+			name:   "former event version",
+			method: http.MethodPost,
+			target: "/services/collector/event/1.0",
+			status: http.StatusNotFound,
+			body:   `{"text":"Invalid data format","code":6}`,
+		},
+		{
+			name:   "former raw version",
+			method: http.MethodPost,
+			target: "/services/collector/raw/1.0",
+			status: http.StatusNotFound,
+			body:   `{"text":"Invalid data format","code":6}`,
+		},
+		{
+			name:   "former health version",
+			method: http.MethodGet,
+			target: "/services/collector/health/1.0",
+			status: http.StatusNotFound,
+			body:   `{"text":"Invalid data format","code":6}`,
+		},
+		{
 			name:   "percent-encoded route segment",
 			method: http.MethodPost,
 			target: "/services/collector/%65vent",
@@ -500,7 +542,7 @@ func TestHandlerJSONSuccessBuildsAtomicAdmissionAndReturnsAck(t *testing.T) {
 				`{"index":"main","host":"event-host","event":{"n":2}}`
 			response := perform(harness.handler, hecRequest(
 				http.MethodPost,
-				"/services/collector/event/1.0",
+				"/services/collector/event",
 				"application/json; charset=UTF-8",
 				"Splunk private-json-secret",
 				test.channel,
@@ -595,7 +637,7 @@ func TestHandlerRawQueryChannelAndLineBreakerSuccess(t *testing.T) {
 			return testAuthentication("raw-token-id", false), nil
 		}
 	})
-	target := "/services/collector/raw/1.0?time=1700000000.25&host=raw-host" +
+	target := "/services/collector/raw?time=1700000000.25&host=raw-host" +
 		"&source=raw-source&sourcetype=raw-type&index=main&channel=" + testChannel
 	response := perform(harness.handler, hecRequest(
 		http.MethodPost,
@@ -769,7 +811,7 @@ func TestHandlerHealthShallowAuthenticatedAndUnhealthyResults(t *testing.T) {
 			})
 			target := test.target
 			if target == "" {
-				target = "/services/collector/health/1.0"
+				target = "/services/collector/health"
 			}
 			response := perform(harness.handler, hecRequest(
 				http.MethodGet,
@@ -862,7 +904,7 @@ func TestHandlerMapsRateLimitAndDurableCapacityErrorsExactly(t *testing.T) {
 			name: "rate limited",
 			err: &ingest.TransientStoreError{
 				Err:        errors.New("private quota internals"),
-				Reason:     opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED,
+				Reason:     opensplunk.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED,
 				RetryAfter: 1500 * time.Millisecond,
 			},
 			wantStatus: http.StatusTooManyRequests,

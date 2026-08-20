@@ -5029,7 +5029,7 @@ func TestCompileChartStaysInsideTheCompiledByteCeiling(t *testing.T) {
 	t.Parallel()
 
 	compiled := compileSPL(t, `index=gradethis message="Request metrics" status>=500
-| rex field=path "^/api/v1/(?<area>[^/?]+)"
+| rex field=path "^/api/(?<area>[^/?]+)"
 | eval duration_ms=tonumber(replace(duration, "ms$", ""))
 | bin duration_ms span=100 AS latency_band
 | chart count OVER latency_band BY area`)

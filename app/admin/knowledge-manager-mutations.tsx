@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 
-import { SharingScope } from "@/gen/ts/open_splunk/v1/common";
+import { SharingScope } from "@/gen/ts/open_splunk/common";
 import {
   CalculatedFieldDefinition,
   FieldAliasDefinition,
@@ -14,7 +14,7 @@ import {
   KnowledgeSelector,
   KnowledgeSelectorMatchKind,
   type KnowledgeObjectDefinition as KnowledgeObjectDefinitionMessage,
-} from "@/gen/ts/open_splunk/v1/knowledge";
+} from "@/gen/ts/open_splunk/knowledge";
 import {
   CreateKnowledgeObjectRequest,
   DeleteKnowledgeObjectRequest,
@@ -22,7 +22,7 @@ import {
   SetKnowledgeObjectStateRequest,
   UpdateKnowledgeObjectRequest,
   ValidateKnowledgeObjectRequest,
-} from "@/gen/ts/open_splunk/v1/knowledge_api";
+} from "@/gen/ts/open_splunk/knowledge_api";
 
 import { joinedPatterns, lines } from "./knowledge-lookup-text";
 import type { KnowledgeManagerAppOption } from "./knowledge-manager-feature";

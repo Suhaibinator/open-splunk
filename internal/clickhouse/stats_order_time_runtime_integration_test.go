@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/chcol"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -47,9 +47,9 @@ func TestStatsOrderAndTimeAgainstClickHouse(t *testing.T) {
 		eventTime time.Time,
 		processOrder uint64,
 		label *string,
-		counter *opensplunkv1.TypedValue,
+		counter *opensplunk.TypedValue,
 	) *ingest.StoredEvent {
-		fields := []*opensplunkv1.TypedObjectField{
+		fields := []*opensplunk.TypedObjectField{
 			typedField("cohort", typedString(cohort)),
 			typedField("process_order", typedUint(processOrder)),
 		}

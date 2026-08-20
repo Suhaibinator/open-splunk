@@ -1,5 +1,5 @@
-// Package gradethiscorpus defines the versioned, synthetic GradeThis fixture
-// and the ten first-release SPL searches from the product architecture plan.
+// Package gradethiscorpus defines the canonical synthetic GradeThis fixture
+// and the supported SPL investigations that exercise it.
 //
 // The package is test support, but it deliberately exposes one source of truth
 // for compiler, ClickHouse, protocol, and browser acceptance tests. No fixture
@@ -18,12 +18,12 @@ import (
 )
 
 const (
-	Version    = "v0.1"
-	IndexName  = "gradethis"
-	Host       = "gradethis-fixture"
-	Source     = "app.log"
-	Sourcetype = "go:zap:json"
-	Service    = "gradethis"
+	ProfileIdentity = "canonical"
+	IndexName       = "gradethis"
+	Host            = "gradethis-fixture"
+	Source          = "app.log"
+	Sourcetype      = "go:zap:json"
+	Service         = "gradethis"
 
 	tracePlaceholder = "<trace-id>"
 )
@@ -67,8 +67,8 @@ func (search Search) Render(traceID string) (string, error) {
 	return strings.ReplaceAll(search.Template, tracePlaceholder, traceID), nil
 }
 
-// Searches returns independent copies of the product plan's exact ten
-// first-release searches in their documented order.
+// Searches returns independent copies of the ten canonical searches in their
+// documented order.
 func Searches() []Search {
 	searches := []Search{
 		{
@@ -169,9 +169,9 @@ type Event struct {
 	RawLine      []byte
 }
 
-// Profile contains a detached copy of the versioned fixture.
+// Profile contains a detached copy of the canonical fixture.
 type Profile struct {
-	Version   string
+	Identity  string
 	BaseTime  time.Time
 	IndexTime time.Time
 	TraceID   string
@@ -186,24 +186,24 @@ func Fixture() Profile {
 	events := []Event{
 		event("trace-start", 30*time.Second, "INFO", "api", "api_handler.SRouter", "router/router.go:701", "Request started"),
 		event("trace-database-error", 90*time.Second, "ERROR", "persistence", "persistence_handler", "persistence/queries.go:118", "Database request failed"),
-		request("assessments-200-a", 2*time.Minute, "/api/v1/assessments", 200, "800ms", 8101),
+		request("assessments-200-a", 2*time.Minute, "/api/assessments", 200, "800ms", 8101),
 		event("heartbeat-a", 3*time.Minute, "INFO", "worker", "health", "worker/health.go:42", "Heartbeat"),
-		request("assessments-503-a", 3*time.Minute+30*time.Second, "/api/v1/assessments", 503, "800ms", 9111),
+		request("assessments-503-a", 3*time.Minute+30*time.Second, "/api/assessments", 503, "800ms", 9111),
 		event("dependency-warning-a", 4*time.Minute, "WARN", "worker", "dependency", "worker/retry.go:87", "Dependency retry scheduled"),
-		request("assessments-200-b", 5*time.Minute+30*time.Second, "/api/v1/assessments", 200, "800ms", 8102),
+		request("assessments-200-b", 5*time.Minute+30*time.Second, "/api/assessments", 200, "800ms", 8102),
 		event("heartbeat-b", 6*time.Minute, "INFO", "worker", "health", "worker/health.go:42", "Heartbeat"),
-		request("assessments-503-b", 6*time.Minute+30*time.Second, "/api/v1/assessments", 503, "800ms", 9112),
+		request("assessments-503-b", 6*time.Minute+30*time.Second, "/api/assessments", 503, "800ms", 9112),
 		event("dependency-warning-b", 7*time.Minute, "WARN", "worker", "dependency", "worker/retry.go:87", "Dependency retry scheduled"),
-		request("assessments-200-c", 8*time.Minute, "/api/v1/assessments", 200, "800ms", 8103),
+		request("assessments-200-c", 8*time.Minute, "/api/assessments", 200, "800ms", 8103),
 		event("heartbeat-c", 9*time.Minute, "INFO", "worker", "health", "worker/health.go:42", "Heartbeat"),
-		request("assessments-503-c", 9*time.Minute+30*time.Second, "/api/v1/assessments", 503, "800ms", 9113),
+		request("assessments-503-c", 9*time.Minute+30*time.Second, "/api/assessments", 503, "800ms", 9113),
 		event("deadline-database-error", 10*time.Minute+30*time.Second, "ERROR", "persistence", "persistence_handler", "persistence/queries.go:126", "Database request failed"),
-		request("assessments-200-d", 11*time.Minute, "/api/v1/assessments", 200, "800ms", 8104),
-		request("submissions-200-a", 11*time.Minute+30*time.Second, "/api/v1/submissions", 200, "300ms", 4101),
+		request("assessments-200-d", 11*time.Minute, "/api/assessments", 200, "800ms", 8104),
+		request("submissions-200-a", 11*time.Minute+30*time.Second, "/api/submissions", 200, "300ms", 4101),
 		event("dependency-warning-c", 12*time.Minute, "WARN", "worker", "dependency", "worker/retry.go:87", "Dependency retry scheduled"),
-		request("submissions-200-b", 12*time.Minute+30*time.Second, "/api/v1/submissions", 200, "300ms", 4102),
+		request("submissions-200-b", 12*time.Minute+30*time.Second, "/api/submissions", 200, "300ms", 4102),
 		event("heartbeat-d", 13*time.Minute+30*time.Second, "INFO", "worker", "health", "worker/health.go:42", "Heartbeat"),
-		request("submissions-500", 14*time.Minute, "/api/v1/submissions", 500, "300ms", 5101),
+		request("submissions-500", 14*time.Minute, "/api/submissions", 500, "300ms", 5101),
 	}
 	events[0].TraceID, events[0].SpanID = sharedTrace, "1111111111111111"
 	events[1].TraceID, events[1].SpanID = sharedTrace, "2222222222222222"
@@ -219,7 +219,7 @@ func Fixture() Profile {
 		ndjson.WriteByte('\n')
 	}
 	return Profile{
-		Version:   Version,
+		Identity:  ProfileIdentity,
 		BaseTime:  baseTime,
 		IndexTime: indexTime,
 		TraceID:   sharedTrace,
@@ -231,8 +231,8 @@ func Fixture() Profile {
 // Validate checks manifest invariants and scans every line for sensitive or
 // non-synthetic data.
 func Validate(profile Profile) error {
-	if profile.Version != Version || !profile.BaseTime.Equal(baseTime) || !profile.IndexTime.Equal(indexTime) {
-		return errors.New("GradeThis corpus profile identity does not match v0.1")
+	if profile.Identity != ProfileIdentity || !profile.BaseTime.Equal(baseTime) || !profile.IndexTime.Equal(indexTime) {
+		return errors.New("GradeThis corpus profile identity does not match the canonical fixture")
 	}
 	if len(Searches()) != 10 {
 		return errors.New("GradeThis corpus must contain exactly ten searches")
@@ -312,7 +312,7 @@ func request(id string, offset time.Duration, path string, status int64, duratio
 		Logger: "api_handler.SRouter", Caller: "router/router.go:735",
 		Message: "Request metrics", Method: "POST", Path: path, Status: status,
 		Duration: duration, Bytes: bytes, IP: fmt.Sprintf("192.0.2.%d", 10+ordinal),
-		UserAgent: "open-splunk-corpus/0.1", Request: true,
+		UserAgent: "open-splunk-corpus", Request: true,
 		TraceID: fmt.Sprintf("%032x", 1000+ordinal+int(offset/time.Second)),
 		SpanID:  fmt.Sprintf("%016x", 2000+ordinal+int(offset/time.Second)),
 	}

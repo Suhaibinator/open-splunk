@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
 	"google.golang.org/protobuf/proto"
 )
@@ -114,8 +114,8 @@ func TestAdmissionPreparerPrepareHECNormalizesAndPlansPolicy(t *testing.T) {
 	auditEvent := request.Events[1].Event
 	auditEvent.Host = "host-b"
 	auditEvent.Source = "/var/log/audit.log"
-	mainBefore := proto.Clone(mainEvent).(*opensplunkv1.LogEvent)
-	auditBefore := proto.Clone(auditEvent).(*opensplunkv1.LogEvent)
+	mainBefore := proto.Clone(mainEvent).(*opensplunk.LogEvent)
+	auditBefore := proto.Clone(auditEvent).(*opensplunk.LogEvent)
 
 	batch, err := preparer.Prepare(request)
 	if err != nil {
@@ -225,7 +225,7 @@ func TestAdmissionPreparerStageIsRequestAtomicAtLowestFailure(t *testing.T) {
 	}
 	if failure.EventIndex != 1 || failure.EventID != "event-first-bad" ||
 		failure.Failure == nil ||
-		failure.Failure.Code != opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_TOO_MANY_FIELDS {
+		failure.Failure.Code != opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_TOO_MANY_FIELDS {
 		t.Fatalf("Stage() failure = %+v, want ordinal 1 field-limit failure", failure)
 	}
 	if store.storeCalls != 0 || store.stageCalls != 0 || len(store.staged) != 0 {
@@ -386,21 +386,21 @@ func TestAdmissionPreparerEnforcesEventAuthorityAndIndexLimits(t *testing.T) {
 	tests := []struct {
 		name     string
 		mutate   func(*AdmissionRequest)
-		wantCode opensplunkv1.EventRejectionCode
+		wantCode opensplunk.EventRejectionCode
 	}{
 		{
 			name: "host constraint",
 			mutate: func(request *AdmissionRequest) {
 				request.Authorization.AllowedHostRegexes = []string{`allowed-host`}
 			},
-			wantCode: opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_HOST,
+			wantCode: opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_HOST,
 		},
 		{
 			name: "source constraint",
 			mutate: func(request *AdmissionRequest) {
 				request.Authorization.AllowedSourceRegexes = []string{`/allowed/.*`}
 			},
-			wantCode: opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_SOURCE,
+			wantCode: opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_SOURCE,
 		},
 		{
 			name: "index field limit",
@@ -408,14 +408,14 @@ func TestAdmissionPreparerEnforcesEventAuthorityAndIndexLimits(t *testing.T) {
 				request.Authorization.AuthorizedIndexes[0].Limits.MaxFieldCount = 1
 				request.Events[0].Event.Fields = object(stringField("one", "1"), stringField("two", "2"))
 			},
-			wantCode: opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_TOO_MANY_FIELDS,
+			wantCode: opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_TOO_MANY_FIELDS,
 		},
 		{
 			name: "unauthorized index",
 			mutate: func(request *AdmissionRequest) {
 				request.Events[0].Event.IndexName = "secret"
 			},
-			wantCode: opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_INDEX,
+			wantCode: opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_INDEX,
 		},
 	}
 	for _, test := range tests {
@@ -559,7 +559,7 @@ func admissionTestHECRequest(events ...AdmissionEvent) AdmissionRequest {
 	}
 }
 
-func admissionTestStringField(event *opensplunkv1.LogEvent, name string) string {
+func admissionTestStringField(event *opensplunk.LogEvent, name string) string {
 	for _, field := range event.GetFields().GetFields() {
 		if field.GetName() == name {
 			return field.GetValue().GetStringValue()

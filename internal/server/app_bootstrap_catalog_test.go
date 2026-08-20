@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 )
 
 type fakeBootstrapAppCatalog struct {
@@ -84,7 +84,7 @@ func TestBootstrapAppCatalogIsLiveTenantScopedAndActiveOnly(t *testing.T) {
 	bootstrap := readBootstrap(
 		t,
 		handler,
-		&opensplunkv1.GetSystemBootstrapRequest{
+		&opensplunk.GetSystemBootstrapRequest{
 			PreferredAppId: new("app_archived"),
 		},
 	)
@@ -106,7 +106,7 @@ func TestBootstrapAppCatalogIsLiveTenantScopedAndActiveOnly(t *testing.T) {
 			alpha.GetDefaultIndexNames(),
 			[]string{"archive", "main"},
 		) ||
-		alpha.GetState() != opensplunkv1.AppState_APP_STATE_ACTIVE {
+		alpha.GetState() != opensplunk.AppState_APP_STATE_ACTIVE {
 		t.Fatalf("active app projection = %+v", alpha)
 	}
 	calls, tenantID, maximum := catalog.captured()
@@ -124,7 +124,7 @@ func TestBootstrapAppCatalogIsLiveTenantScopedAndActiveOnly(t *testing.T) {
 	bootstrap = readBootstrap(
 		t,
 		handler,
-		&opensplunkv1.GetSystemBootstrapRequest{
+		&opensplunk.GetSystemBootstrapRequest{
 			PreferredAppId: new("app_missing"),
 		},
 	)
@@ -138,7 +138,7 @@ func TestBootstrapAppCatalogIsLiveTenantScopedAndActiveOnly(t *testing.T) {
 	bootstrap = readBootstrap(
 		t,
 		handler,
-		&opensplunkv1.GetSystemBootstrapRequest{
+		&opensplunk.GetSystemBootstrapRequest{
 			PreferredAppId: new("app_zeta"),
 		},
 	)
@@ -160,7 +160,7 @@ func TestBootstrapAppCatalogIsLiveTenantScopedAndActiveOnly(t *testing.T) {
 	bootstrap = readBootstrap(
 		t,
 		handler,
-		&opensplunkv1.GetSystemBootstrapRequest{
+		&opensplunk.GetSystemBootstrapRequest{
 			PreferredAppId: new("app_alpha"),
 		},
 	)
@@ -181,7 +181,7 @@ func TestBootstrapAppCatalogIsLiveTenantScopedAndActiveOnly(t *testing.T) {
 	bootstrap = readBootstrap(
 		t,
 		handler,
-		&opensplunkv1.GetSystemBootstrapRequest{},
+		&opensplunk.GetSystemBootstrapRequest{},
 	)
 	if got := bootstrap.GetApps(); len(got) != 2 ||
 		got[0].GetAppId() != "app_beta" ||
@@ -352,8 +352,8 @@ func TestBootstrapAppCatalogRejectsCorruptIncompleteAndDuplicateOutput(
 			response := postProto(
 				t,
 				handler,
-				"/api/v1/system/bootstrap",
-				&opensplunkv1.GetSystemBootstrapRequest{},
+				"/api/system/bootstrap",
+				&opensplunk.GetSystemBootstrapRequest{},
 			)
 			if response.Code != http.StatusInternalServerError ||
 				!strings.Contains(
@@ -384,8 +384,8 @@ func TestBootstrapAppCatalogMapsCancellationAndStorageFailure(t *testing.T) {
 		response := postProto(
 			t,
 			handler,
-			"/api/v1/system/bootstrap",
-			&opensplunkv1.GetSystemBootstrapRequest{},
+			"/api/system/bootstrap",
+			&opensplunk.GetSystemBootstrapRequest{},
 		)
 		if response.Code != http.StatusServiceUnavailable ||
 			strings.Contains(response.Body.String(), "password") {
@@ -407,8 +407,8 @@ func TestBootstrapAppCatalogMapsCancellationAndStorageFailure(t *testing.T) {
 		response := postProto(
 			t,
 			handler,
-			"/api/v1/system/bootstrap",
-			&opensplunkv1.GetSystemBootstrapRequest{},
+			"/api/system/bootstrap",
+			&opensplunk.GetSystemBootstrapRequest{},
 		)
 		if response.Code != http.StatusRequestTimeout {
 			t.Fatalf(
@@ -442,8 +442,8 @@ func TestBootstrapAppCatalogMapsCancellationAndStorageFailure(t *testing.T) {
 		response := postProto(
 			t,
 			handler,
-			"/api/v1/system/bootstrap",
-			&opensplunkv1.GetSystemBootstrapRequest{},
+			"/api/system/bootstrap",
+			&opensplunk.GetSystemBootstrapRequest{},
 		)
 		if response.Code != http.StatusRequestTimeout {
 			t.Fatalf(
@@ -461,7 +461,7 @@ func TestBootstrapAppCatalogMapsCancellationAndStorageFailure(t *testing.T) {
 }
 
 func TestBootstrapAppCatalogTypedNilAndSourceConflict(t *testing.T) {
-	staticApp := &opensplunkv1.AppSummary{
+	staticApp := &opensplunk.AppSummary{
 		AppId:       "static-app",
 		Slug:        "static",
 		DisplayName: "Static",
@@ -473,13 +473,13 @@ func TestBootstrapAppCatalogTypedNilAndSourceConflict(t *testing.T) {
 		AppCatalog: typedNil,
 		WebUI:      testUI(),
 		Bootstrap: BootstrapConfig{
-			Apps: []*opensplunkv1.AppSummary{staticApp},
+			Apps: []*opensplunk.AppSummary{staticApp},
 		},
 	})
 	bootstrap := readBootstrap(
 		t,
 		handler,
-		&opensplunkv1.GetSystemBootstrapRequest{},
+		&opensplunk.GetSystemBootstrapRequest{},
 	)
 	if got := bootstrap.GetApps(); len(got) != 1 ||
 		got[0].GetAppId() != "static-app" {
@@ -495,7 +495,7 @@ func TestBootstrapAppCatalogTypedNilAndSourceConflict(t *testing.T) {
 		},
 		WebUI: testUI(),
 		Bootstrap: BootstrapConfig{
-			Apps: []*opensplunkv1.AppSummary{staticApp},
+			Apps: []*opensplunk.AppSummary{staticApp},
 		},
 	})
 	if err == nil || !strings.Contains(
@@ -532,8 +532,8 @@ func TestBootstrapAppCatalogDoesNotRequireAdministratorBearer(t *testing.T) {
 	response := postProto(
 		t,
 		handler,
-		"/api/v1/system/bootstrap",
-		&opensplunkv1.GetSystemBootstrapRequest{},
+		"/api/system/bootstrap",
+		&opensplunk.GetSystemBootstrapRequest{},
 	)
 	if response.Code != http.StatusOK {
 		t.Fatalf(
@@ -564,13 +564,13 @@ func validBootstrapCatalogApp(
 func readBootstrap(
 	t *testing.T,
 	handler http.Handler,
-	request *opensplunkv1.GetSystemBootstrapRequest,
-) *opensplunkv1.GetSystemBootstrapResponse {
+	request *opensplunk.GetSystemBootstrapRequest,
+) *opensplunk.GetSystemBootstrapResponse {
 	t.Helper()
 	response := postProto(
 		t,
 		handler,
-		"/api/v1/system/bootstrap",
+		"/api/system/bootstrap",
 		request,
 	)
 	if response.Code != http.StatusOK {
@@ -580,7 +580,7 @@ func readBootstrap(
 			response.Body,
 		)
 	}
-	bootstrap := &opensplunkv1.GetSystemBootstrapResponse{}
+	bootstrap := &opensplunk.GetSystemBootstrapResponse{}
 	unmarshalResponse(t, response, bootstrap)
 	return bootstrap
 }

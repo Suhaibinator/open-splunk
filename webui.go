@@ -50,7 +50,6 @@ type MigrationMetadata struct {
 // detail so callers cannot mutate or depend on it.
 type ReleaseMetadata struct {
 	FormatVersion        uint32
-	ApplicationVersion   string
 	SourceRevision       string
 	UIBuildID            string
 	UI                   ComponentMetadata
@@ -87,10 +86,7 @@ func loadRelease(filesystem fs.FS, expectedIdentity buildinfo.Identity) (Release
 	if filesystem == nil {
 		return Release{}, errors.New("load embedded release: filesystem is required")
 	}
-	expectedIdentity, err := buildinfo.Parse(
-		expectedIdentity.ApplicationVersion,
-		expectedIdentity.SourceRevision,
-	)
+	expectedIdentity, err := buildinfo.Parse(expectedIdentity.SourceRevision)
 	if err != nil {
 		return Release{}, fmt.Errorf("load embedded release: invalid compiled identity: %w", err)
 	}
@@ -102,16 +98,14 @@ func loadRelease(filesystem fs.FS, expectedIdentity buildinfo.Identity) (Release
 	if err != nil {
 		return Release{}, fmt.Errorf("load embedded release: %w", err)
 	}
-	manifestIdentity, err := buildinfo.Parse(manifest.ApplicationVersion, manifest.SourceRevision)
+	manifestIdentity, err := buildinfo.Parse(manifest.SourceRevision)
 	if err != nil {
 		return Release{}, fmt.Errorf("load embedded release: invalid manifest identity: %w", err)
 	}
 	if !manifestIdentity.Equal(expectedIdentity) {
 		return Release{}, fmt.Errorf(
-			"load embedded release: manifest identity %s at %s does not match compiled identity %s at %s",
-			manifestIdentity.ApplicationVersion,
+			"load embedded release: manifest source revision %s does not match compiled source revision %s",
 			manifestIdentity.SourceRevision,
-			expectedIdentity.ApplicationVersion,
 			expectedIdentity.SourceRevision,
 		)
 	}
@@ -125,10 +119,9 @@ func loadRelease(filesystem fs.FS, expectedIdentity buildinfo.Identity) (Release
 	return Release{
 		WebUI: webUI,
 		Metadata: ReleaseMetadata{
-			FormatVersion:      manifest.FormatVersion,
-			ApplicationVersion: manifest.ApplicationVersion,
-			SourceRevision:     manifest.SourceRevision,
-			UIBuildID:          manifest.UIBuildID,
+			FormatVersion:  manifest.FormatVersion,
+			SourceRevision: manifest.SourceRevision,
+			UIBuildID:      manifest.UIBuildID,
 			UI: ComponentMetadata{
 				SHA256: manifest.UI.SHA256, FileCount: manifest.UI.FileCount, ByteCount: manifest.UI.ByteCount,
 			},

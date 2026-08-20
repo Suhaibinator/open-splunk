@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
 	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
 )
@@ -27,7 +27,7 @@ type AdmissionConfig struct {
 // diagnostics only; policy and quota accounting always recompute the exact
 // serialized source-event size before normalization or redaction.
 type AdmissionEvent struct {
-	Event             *opensplunkv1.LogEvent
+	Event             *opensplunk.LogEvent
 	UncompressedBytes uint64
 }
 
@@ -167,7 +167,7 @@ func (preparer *AdmissionPreparer) Prepare(request AdmissionRequest) (StoreBatch
 		}
 		if candidate.Event == nil {
 			return failure(eventFailure(
-				opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_VALUE_INVALID,
+				opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_VALUE_INVALID,
 				"event is required",
 				"event",
 				"event_required",
@@ -175,7 +175,7 @@ func (preparer *AdmissionPreparer) Prepare(request AdmissionRequest) (StoreBatch
 		}
 		if !validIdentifier(eventID, preparer.limits.MaxIDBytes) {
 			return failure(eventFailure(
-				opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_EVENT_ID,
+				opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_EVENT_ID,
 				"event_id is empty or has an invalid format",
 				"event_id",
 				"invalid_event_id",
@@ -183,7 +183,7 @@ func (preparer *AdmissionPreparer) Prepare(request AdmissionRequest) (StoreBatch
 		}
 		if _, duplicate := seenEventIDs[eventID]; duplicate {
 			return failure(eventFailure(
-				opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_EVENT_ID,
+				opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_EVENT_ID,
 				"event_id is duplicated within the batch",
 				"event_id",
 				"duplicate_event_id",
@@ -192,7 +192,7 @@ func (preparer *AdmissionPreparer) Prepare(request AdmissionRequest) (StoreBatch
 		seenEventIDs[eventID] = struct{}{}
 		if !validIndexName(candidate.Event.GetIndexName()) {
 			return failure(eventFailure(
-				opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_INDEX,
+				opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_INDEX,
 				"index_name is empty or has an invalid format",
 				"index_name",
 				"invalid_index",
@@ -201,7 +201,7 @@ func (preparer *AdmissionPreparer) Prepare(request AdmissionRequest) (StoreBatch
 		policy, authorized := authority.policies[candidate.Event.GetIndexName()]
 		if !authorized {
 			return failure(eventFailure(
-				opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_INDEX,
+				opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_INDEX,
 				"token is not authorized for the requested index",
 				"index_name",
 				"unauthorized_index",
@@ -309,7 +309,7 @@ func (preparer *AdmissionPreparer) Prepare(request AdmissionRequest) (StoreBatch
 		ReceivedAt:         request.ReceivedAt,
 		Events:             storedEvents,
 		RetentionByIndex:   retentionByIndex,
-		RejectedEvents:     []*opensplunkv1.EventRejection{},
+		RejectedEvents:     []*opensplunk.EventRejection{},
 		QuotaAdmission:     &ingestquota.Admission{Charges: quotaCharges},
 		QuotaEvaluatedAt:   request.QuotaEvaluatedAt,
 		HECAdmission:       hecAdmission,

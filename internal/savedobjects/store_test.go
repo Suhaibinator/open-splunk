@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -55,20 +55,20 @@ func openTestStore(t *testing.T) (*control.DB, *Store) {
 	return database, store
 }
 
-func savedSearchDefinition(name, appID string) *opensplunkv1.SavedSearchDefinition {
+func savedSearchDefinition(name, appID string) *opensplunk.SavedSearchDefinition {
 	description := " description for " + name + " "
 	app := " " + appID + " "
-	return &opensplunkv1.SavedSearchDefinition{
+	return &opensplunk.SavedSearchDefinition{
 		Name:        " " + name + " ",
 		Description: &description,
-		Search: &opensplunkv1.SearchDefinition{
+		Search: &opensplunk.SearchDefinition{
 			Spl:                "index=main | stats count by host",
 			AppId:              &app,
 			IndexScope:         []string{" main ", "audit", "main"},
 			SelectedFields:     []string{" host ", "count", "host"},
-			PreferredResultTab: opensplunkv1.SearchResultTab_SEARCH_RESULT_TAB_UNSPECIFIED,
+			PreferredResultTab: opensplunk.SearchResultTab_SEARCH_RESULT_TAB_UNSPECIFIED,
 		},
-		SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+		SharingScope: opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 	}
 }
 
@@ -247,29 +247,29 @@ func TestSavedSearchGORMListUsesOwnerKeysetIndexes(t *testing.T) {
 	integerCursor := int64(1)
 	tests := []struct {
 		name          string
-		sortBy        opensplunkv1.SavedSearchSortBy
-		sortDirection opensplunkv1.SortDirection
+		sortBy        opensplunk.SavedSearchSortBy
+		sortDirection opensplunk.SortDirection
 		cursor        listCursor
 		wantIndex     string
 	}{
 		{
 			name:          "name ascending",
-			sortBy:        opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_NAME,
-			sortDirection: opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING,
+			sortBy:        opensplunk.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_NAME,
+			sortDirection: opensplunk.SortDirection_SORT_DIRECTION_ASCENDING,
 			cursor:        listCursor{StringKey: "middle", SavedSearch: "ss_middle"},
 			wantIndex:     "saved_searches_owner_name_id_idx",
 		},
 		{
 			name:          "created descending",
-			sortBy:        opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_CREATED_AT,
-			sortDirection: opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING,
+			sortBy:        opensplunk.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_CREATED_AT,
+			sortDirection: opensplunk.SortDirection_SORT_DIRECTION_DESCENDING,
 			cursor:        listCursor{IntegerKey: &integerCursor, SavedSearch: "ss_middle"},
 			wantIndex:     "saved_searches_owner_created_id_idx",
 		},
 		{
 			name:          "updated ascending",
-			sortBy:        opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_UPDATED_AT,
-			sortDirection: opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING,
+			sortBy:        opensplunk.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_UPDATED_AT,
+			sortDirection: opensplunk.SortDirection_SORT_DIRECTION_ASCENDING,
 			cursor:        listCursor{IntegerKey: &integerCursor, SavedSearch: "ss_middle"},
 			wantIndex:     "saved_searches_owner_updated_id_idx",
 		},
@@ -340,7 +340,7 @@ func TestCreateGetUpdateDeleteNormalizeAndDoNotAlias(t *testing.T) {
 	if created.Definition.Name != "Errors" || created.Definition.GetDescription() != "description for Errors" || created.Definition.GetOwnerId() != "user-1" || created.Definition.Search.GetAppId() != "search" {
 		t.Fatalf("Create() did not normalize definition: %+v", created.Definition)
 	}
-	if created.Definition.Search.PreferredResultTab != opensplunkv1.SearchResultTab_SEARCH_RESULT_TAB_EVENTS || !slices.Equal(created.Definition.Search.IndexScope, []string{"main", "audit"}) {
+	if created.Definition.Search.PreferredResultTab != opensplunk.SearchResultTab_SEARCH_RESULT_TAB_EVENTS || !slices.Equal(created.Definition.Search.IndexScope, []string{"main", "audit"}) {
 		t.Fatalf("Create() did not normalize search: %+v", created.Definition.Search)
 	}
 
@@ -356,7 +356,7 @@ func TestCreateGetUpdateDeleteNormalizeAndDoNotAlias(t *testing.T) {
 		t.Fatalf("persistent definition aliased caller: %+v", got.Definition)
 	}
 
-	patch := &opensplunkv1.SavedSearchDefinition{Name: " Renamed ", Search: &opensplunkv1.SearchDefinition{Spl: "ignored"}}
+	patch := &opensplunk.SavedSearchDefinition{Name: " Renamed ", Search: &opensplunk.SearchDefinition{Spl: "ignored"}}
 	updated, err := store.Update(ctx, scope, got.SavedSearchId, 1, patch, &fieldmaskpb.FieldMask{Paths: []string{"definition.name"}})
 	if err != nil {
 		t.Fatalf("Update() error = %v", err)
@@ -469,24 +469,24 @@ func TestValidationOwnershipAndSharing(t *testing.T) {
 	scope := AccessScope{OwnerID: "owner"}
 	tests := []struct {
 		name   string
-		mutate func(*opensplunkv1.SavedSearchDefinition)
+		mutate func(*opensplunk.SavedSearchDefinition)
 	}{
-		{name: "nil search", mutate: func(definition *opensplunkv1.SavedSearchDefinition) { definition.Search = nil }},
-		{name: "empty name", mutate: func(definition *opensplunkv1.SavedSearchDefinition) { definition.Name = "  " }},
-		{name: "empty SPL", mutate: func(definition *opensplunkv1.SavedSearchDefinition) { definition.Search.Spl = "\n" }},
-		{name: "invalid sharing", mutate: func(definition *opensplunkv1.SavedSearchDefinition) { definition.SharingScope = 99 }},
-		{name: "app sharing no app", mutate: func(definition *opensplunkv1.SavedSearchDefinition) {
-			definition.SharingScope = opensplunkv1.SharingScope_SHARING_SCOPE_APP
+		{name: "nil search", mutate: func(definition *opensplunk.SavedSearchDefinition) { definition.Search = nil }},
+		{name: "empty name", mutate: func(definition *opensplunk.SavedSearchDefinition) { definition.Name = "  " }},
+		{name: "empty SPL", mutate: func(definition *opensplunk.SavedSearchDefinition) { definition.Search.Spl = "\n" }},
+		{name: "invalid sharing", mutate: func(definition *opensplunk.SavedSearchDefinition) { definition.SharingScope = 99 }},
+		{name: "app sharing no app", mutate: func(definition *opensplunk.SavedSearchDefinition) {
+			definition.SharingScope = opensplunk.SharingScope_SHARING_SCOPE_APP
 			definition.Search.AppId = nil
 		}},
-		{name: "owner mismatch", mutate: func(definition *opensplunkv1.SavedSearchDefinition) {
+		{name: "owner mismatch", mutate: func(definition *opensplunk.SavedSearchDefinition) {
 			other := "other"
 			definition.OwnerId = &other
 		}},
-		{name: "too many fields", mutate: func(definition *opensplunkv1.SavedSearchDefinition) {
+		{name: "too many fields", mutate: func(definition *opensplunk.SavedSearchDefinition) {
 			definition.Search.SelectedFields = make([]string, maximumRepeatedFields+1)
 		}},
-		{name: "bad result tab", mutate: func(definition *opensplunkv1.SavedSearchDefinition) { definition.Search.PreferredResultTab = 99 }},
+		{name: "bad result tab", mutate: func(definition *opensplunk.SavedSearchDefinition) { definition.Search.PreferredResultTab = 99 }},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -501,9 +501,9 @@ func TestValidationOwnershipAndSharing(t *testing.T) {
 		t.Fatalf("Create(empty scope) error = %v", err)
 	}
 	definition := savedSearchDefinition("default sharing", "")
-	definition.SharingScope = opensplunkv1.SharingScope_SHARING_SCOPE_UNSPECIFIED
+	definition.SharingScope = opensplunk.SharingScope_SHARING_SCOPE_UNSPECIFIED
 	created, err := store.Create(ctx, scope, definition)
-	if err != nil || created.Definition.SharingScope != opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE {
+	if err != nil || created.Definition.SharingScope != opensplunk.SharingScope_SHARING_SCOPE_PRIVATE {
 		t.Fatalf("default sharing Create() = (%+v,%v)", created, err)
 	}
 }
@@ -525,7 +525,7 @@ func TestUniquenessClassificationAndOwnerIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rename := proto.Clone(second.Definition).(*opensplunkv1.SavedSearchDefinition)
+	rename := proto.Clone(second.Definition).(*opensplunk.SavedSearchDefinition)
 	rename.Name = "Same"
 	if _, err := store.Update(ctx, AccessScope{OwnerID: "owner-a"}, second.SavedSearchId, 1, rename, nil); !errors.Is(err, control.ErrAlreadyExists) {
 		t.Fatalf("conflicting rename error = %v, want ErrAlreadyExists", err)
@@ -559,7 +559,7 @@ func TestConcurrentOptimisticUpdateAllowsOneWriter(t *testing.T) {
 		wait.Add(1)
 		go func(name string) {
 			defer wait.Done()
-			definition := proto.Clone(created.Definition).(*opensplunkv1.SavedSearchDefinition)
+			definition := proto.Clone(created.Definition).(*opensplunk.SavedSearchDefinition)
 			definition.Name = name
 			<-start
 			_, err := store.Update(ctx, scope, created.SavedSearchId, 1, definition, nil)
@@ -718,15 +718,15 @@ func TestListPaginationFiltersSortingCursorBindingAndNoAliasing(t *testing.T) {
 	_, store := openTestStore(t)
 	ctx := context.Background()
 	scope := AccessScope{OwnerID: "owner"}
-	definitions := []*opensplunkv1.SavedSearchDefinition{
+	definitions := []*opensplunk.SavedSearchDefinition{
 		savedSearchDefinition("delta", "app-a"),
 		savedSearchDefinition("Alpha", "app-a"),
 		savedSearchDefinition("charlie", "app-b"),
 		savedSearchDefinition("bravo", "app-a"),
 		savedSearchDefinition("Echo", "app-a"),
 	}
-	definitions[2].SharingScope = opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL
-	definitions[4].SharingScope = opensplunkv1.SharingScope_SHARING_SCOPE_APP
+	definitions[2].SharingScope = opensplunk.SharingScope_SHARING_SCOPE_GLOBAL
+	definitions[4].SharingScope = opensplunk.SharingScope_SHARING_SCOPE_APP
 	for _, definition := range definitions {
 		if _, err := store.Create(ctx, scope, definition); err != nil {
 			t.Fatalf("Create(%q) error = %v", definition.Name, err)
@@ -767,7 +767,7 @@ func TestListPaginationFiltersSortingCursorBindingAndNoAliasing(t *testing.T) {
 
 	app := "app-a"
 	text := "A"
-	private := []opensplunkv1.SharingScope{opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE}
+	private := []opensplunk.SharingScope{opensplunk.SharingScope_SHARING_SCOPE_PRIVATE}
 	filtered, err := store.List(ctx, scope, ListRequest{AppIDFilter: &app, TextFilter: &text, SharingScopeFilters: private})
 	if err != nil {
 		t.Fatalf("filtered List() error = %v", err)
@@ -782,16 +782,16 @@ func TestListPaginationFiltersSortingCursorBindingAndNoAliasing(t *testing.T) {
 
 	sortTests := []struct {
 		name      string
-		sortBy    opensplunkv1.SavedSearchSortBy
-		direction opensplunkv1.SortDirection
+		sortBy    opensplunk.SavedSearchSortBy
+		direction opensplunk.SortDirection
 		want      []string
 	}{
-		{name: "name ascending", sortBy: opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_NAME, direction: opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING, want: []string{"Alpha", "Echo", "bravo", "charlie", "delta"}},
-		{name: "name descending", sortBy: opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_NAME, direction: opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING, want: []string{"delta", "charlie", "bravo", "Echo", "Alpha"}},
-		{name: "created ascending", sortBy: opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_CREATED_AT, direction: opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING, want: []string{"delta", "Alpha", "charlie", "bravo", "Echo"}},
-		{name: "created descending", sortBy: opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_CREATED_AT, direction: opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING, want: []string{"Echo", "bravo", "charlie", "Alpha", "delta"}},
-		{name: "updated ascending", sortBy: opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_UPDATED_AT, direction: opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING, want: []string{"Alpha", "charlie", "bravo", "Echo", "delta"}},
-		{name: "updated descending", sortBy: opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_UPDATED_AT, direction: opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING, want: []string{"delta", "Echo", "bravo", "charlie", "Alpha"}},
+		{name: "name ascending", sortBy: opensplunk.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_NAME, direction: opensplunk.SortDirection_SORT_DIRECTION_ASCENDING, want: []string{"Alpha", "Echo", "bravo", "charlie", "delta"}},
+		{name: "name descending", sortBy: opensplunk.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_NAME, direction: opensplunk.SortDirection_SORT_DIRECTION_DESCENDING, want: []string{"delta", "charlie", "bravo", "Echo", "Alpha"}},
+		{name: "created ascending", sortBy: opensplunk.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_CREATED_AT, direction: opensplunk.SortDirection_SORT_DIRECTION_ASCENDING, want: []string{"delta", "Alpha", "charlie", "bravo", "Echo"}},
+		{name: "created descending", sortBy: opensplunk.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_CREATED_AT, direction: opensplunk.SortDirection_SORT_DIRECTION_DESCENDING, want: []string{"Echo", "bravo", "charlie", "Alpha", "delta"}},
+		{name: "updated ascending", sortBy: opensplunk.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_UPDATED_AT, direction: opensplunk.SortDirection_SORT_DIRECTION_ASCENDING, want: []string{"Alpha", "charlie", "bravo", "Echo", "delta"}},
+		{name: "updated descending", sortBy: opensplunk.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_UPDATED_AT, direction: opensplunk.SortDirection_SORT_DIRECTION_DESCENDING, want: []string{"delta", "Echo", "bravo", "charlie", "Alpha"}},
 	}
 	for _, test := range sortTests {
 		t.Run(test.name, func(t *testing.T) {
@@ -817,8 +817,8 @@ func TestListPaginationFiltersSortingCursorBindingAndNoAliasing(t *testing.T) {
 	}
 
 	descending, err := store.List(ctx, scope, ListRequest{
-		PageSize: 5, SortBy: opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_CREATED_AT,
-		SortDirection: opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING,
+		PageSize: 5, SortBy: opensplunk.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_CREATED_AT,
+		SortDirection: opensplunk.SortDirection_SORT_DIRECTION_DESCENDING,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -844,8 +844,8 @@ func TestListPaginationFiltersSortingCursorBindingAndNoAliasing(t *testing.T) {
 		"app":       {PageSize: 1, PageToken: token, AppIDFilter: &changedApp},
 		"text":      {PageSize: 1, PageToken: token, TextFilter: &text},
 		"sharing":   {PageSize: 1, PageToken: token, SharingScopeFilters: private},
-		"sort":      {PageSize: 1, PageToken: token, SortBy: opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_UPDATED_AT},
-		"direction": {PageSize: 1, PageToken: token, SortDirection: opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING},
+		"sort":      {PageSize: 1, PageToken: token, SortBy: opensplunk.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_UPDATED_AT},
+		"direction": {PageSize: 1, PageToken: token, SortDirection: opensplunk.SortDirection_SORT_DIRECTION_DESCENDING},
 	} {
 		t.Run("cursor binding "+name, func(t *testing.T) {
 			if _, err := store.List(ctx, scope, changed); !errors.Is(err, control.ErrInvalidArgument) {
@@ -1016,7 +1016,7 @@ func TestMalformedStoredProtoAndMetadataAreRejected(t *testing.T) {
 		t.Fatalf("Get(mismatched metadata) error = %v, want internal persistence error", err)
 	}
 
-	invalidDefinitionProto, err := proto.Marshal(&opensplunkv1.SavedSearchDefinition{Name: "missing search"})
+	invalidDefinitionProto, err := proto.Marshal(&opensplunk.SavedSearchDefinition{Name: "missing search"})
 	if err != nil {
 		t.Fatal(err)
 	}

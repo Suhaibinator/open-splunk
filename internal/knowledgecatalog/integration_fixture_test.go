@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
@@ -21,7 +21,7 @@ type integrationFutureDefinition struct {
 	digest     [sha256.Size]byte
 	metadata   knowledgedefinition.Normalized
 	bodyField  []byte
-	definition *opensplunkv1.KnowledgeObjectDefinition
+	definition *opensplunk.KnowledgeObjectDefinition
 }
 
 // newIntegrationFutureDefinition starts from canonical known metadata, removes
@@ -44,7 +44,7 @@ func newIntegrationFutureDefinition(
 	if err != nil {
 		t.Fatalf("normalize future metadata: %v", err)
 	}
-	definition, ok := proto.Clone(metadata.Definition).(*opensplunkv1.KnowledgeObjectDefinition)
+	definition, ok := proto.Clone(metadata.Definition).(*opensplunk.KnowledgeObjectDefinition)
 	if !ok || definition == nil {
 		t.Fatal("clone future metadata")
 	}
@@ -69,7 +69,7 @@ func newIntegrationFutureDefinition(
 		t.Fatalf("future definition bytes = %d, maximum %d", len(stored), knowledgedefinition.MaximumCanonicalBytes)
 	}
 	digest := sha256.Sum256(stored)
-	decoded := &opensplunkv1.KnowledgeObjectDefinition{}
+	decoded := &opensplunk.KnowledgeObjectDefinition{}
 	if err := (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(stored, decoded); err != nil {
 		t.Fatalf("unmarshal future fixture: %v", err)
 	}
@@ -219,7 +219,7 @@ func stageIntegrationKnownPublication(
 	t *testing.T,
 	database *control.DB,
 	objectID string,
-	definition *opensplunkv1.KnowledgeObjectDefinition,
+	definition *opensplunk.KnowledgeObjectDefinition,
 	state State,
 	mutation string,
 	timestamp int64,
@@ -546,7 +546,7 @@ func advanceIntegrationCatalogRevision(t *testing.T, tx *sql.Tx) {
 	}
 }
 
-func integrationUnknownBody(definition *opensplunkv1.KnowledgeObjectDefinition) []byte {
+func integrationUnknownBody(definition *opensplunk.KnowledgeObjectDefinition) []byte {
 	if definition == nil {
 		return nil
 	}

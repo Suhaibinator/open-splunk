@@ -63,10 +63,10 @@ func TestServiceReturnsClippedContinuousTimelineFromImmutableSnapshot(t *testing
 	}
 }
 
-func TestServiceRebuildsIdentityPreservingV03TimelinePipeline(t *testing.T) {
+func TestServiceRebuildsIdentityPreservingPipelineTimelinePipeline(t *testing.T) {
 	t.Parallel()
 	snapshot := timelineTestSnapshot()
-	snapshot.ID = "timeline-v03-identity-preserving"
+	snapshot.ID = "timeline-pipeline-identity-preserving"
 	snapshot.SPL = `index=main` +
 		` | regex message!="^debug$"` +
 		` | sort 0 +_time` +
@@ -89,7 +89,7 @@ func TestServiceRebuildsIdentityPreservingV03TimelinePipeline(t *testing.T) {
 		Request{SearchJobID: snapshot.ID},
 	)
 	if err != nil {
-		t.Fatalf("Get(v0.3 event pipeline): %v", err)
+		t.Fatalf("Get(pipeline event pipeline): %v", err)
 	}
 	if !result.Complete || compiler.query == nil {
 		t.Fatalf("timeline result/compiler = %#v/%#v", result, compiler.query)

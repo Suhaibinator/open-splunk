@@ -7,16 +7,16 @@ import (
 	"fmt"
 	"math"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/collector"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 )
 
-// StoredFixture is the canonical decoded v0.1 corpus after it has traversed
+// StoredFixture is the canonical decoded corpus after it has traversed
 // the production collector decoder and an EventStore.
 type StoredFixture struct {
 	Profile    Profile
-	EventsByID map[string]*opensplunkv1.LogEvent
+	EventsByID map[string]*opensplunk.LogEvent
 }
 
 // StoreCanonical decodes and stores the exact canonical twenty-event batch.
@@ -50,7 +50,7 @@ func StoreCanonical(
 	eventCount := uint32(len(profile.Events))
 	decoder, err := collector.NewDecoder(collector.DecodeConfig{
 		Format:     collector.InputFormatNDJSON,
-		InputID:    "gradethis-corpus-v0.1",
+		InputID:    "gradethis-corpus-input",
 		IndexName:  IndexName,
 		Source:     Source,
 		Sourcetype: Sourcetype,
@@ -66,7 +66,7 @@ func StoreCanonical(
 
 	events := make([]*ingest.StoredEvent, 0, len(profile.Events))
 	eventsByID := make(
-		map[string]*opensplunkv1.LogEvent,
+		map[string]*opensplunk.LogEvent,
 		len(profile.Events),
 	)
 	var offset uint64
@@ -80,7 +80,7 @@ func StoreCanonical(
 		event, decodeErr := decoder.Decode(
 			expected.RawLine,
 			collector.SourcePosition{
-				FileIdentity:          "gradethis-corpus-v0.1",
+				FileIdentity:          "gradethis-corpus-file",
 				SourcePath:            Source,
 				FileFingerprintLength: 4096,
 				StartOffset:           offset,
@@ -100,7 +100,7 @@ func StoreCanonical(
 			Event:       event,
 			TenantID:    targetTenant,
 			CollectorID: "gradethis-corpus",
-			BatchID:     "gradethis-corpus-v0.1",
+			BatchID:     "gradethis-corpus-batch",
 			IndexTime:   profile.IndexTime,
 		})
 		eventsByID[expected.ID] = event
@@ -116,7 +116,7 @@ func StoreCanonical(
 	result, err := store.Store(ctx, ingest.StoreBatch{
 		TenantID:           targetTenant,
 		CollectorID:        "gradethis-corpus",
-		BatchID:            "gradethis-corpus-v0.1",
+		BatchID:            "gradethis-corpus-batch",
 		BatchSequence:      1,
 		OriginalEventCount: eventCount,
 		SourceBatchSHA256:  digest,

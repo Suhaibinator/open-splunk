@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/collectorlimits"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -16,7 +16,7 @@ const (
 )
 
 func collectorHelloSnapshot(
-	hello *opensplunkv1.CollectorHello,
+	hello *opensplunk.CollectorHello,
 ) (collectorfleet.Hello, error) {
 	if hello == nil ||
 		hello.GetStartedAt() == nil ||
@@ -70,9 +70,7 @@ func collectorHelloSnapshot(
 	}
 	return collectorfleet.Hello{
 		InstanceID:                    hello.GetInstanceId(),
-		ProtocolMajor:                 hello.GetProtocolMajor(),
-		ProtocolMinor:                 hello.GetProtocolMinor(),
-		CollectorVersion:              hello.GetCollectorVersion(),
+		SourceRevision:                hello.GetSourceRevision(),
 		Hostname:                      hello.GetHostname(),
 		OperatingSystem:               hello.GetOperatingSystem(),
 		Architecture:                  hello.GetArchitecture(),
@@ -84,7 +82,7 @@ func collectorHelloSnapshot(
 }
 
 func collectorHeartbeatSnapshot(
-	heartbeat *opensplunkv1.CollectorHeartbeat,
+	heartbeat *opensplunk.CollectorHeartbeat,
 	observationSequence uint64,
 	receivedAt time.Time,
 ) (collectorfleet.Heartbeat, error) {

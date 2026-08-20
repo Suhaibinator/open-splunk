@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
@@ -26,51 +26,51 @@ func TestMutationRequestPreflightAcceptsWriterShapesWithoutMutation(t *testing.T
 	}{
 		{
 			name: "draft create",
-			request: &opensplunkv1.CreateKnowledgeObjectRequest{
-				Definition:      &opensplunkv1.KnowledgeObjectDefinition{},
-				InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+			request: &opensplunk.CreateKnowledgeObjectRequest{
+				Definition:      &opensplunk.KnowledgeObjectDefinition{},
+				InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 				ClientRequestId: mutationPreflightRequestID,
 			},
 		},
 		{
 			name: "active create remains a valid shape",
-			request: &opensplunkv1.CreateKnowledgeObjectRequest{
-				Definition:      &opensplunkv1.KnowledgeObjectDefinition{},
-				InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
+			request: &opensplunk.CreateKnowledgeObjectRequest{
+				Definition:      &opensplunk.KnowledgeObjectDefinition{},
+				InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
 				ClientRequestId: mutationPreflightRequestID,
 			},
 		},
 		{
 			name: "update",
-			request: &opensplunkv1.UpdateKnowledgeObjectRequest{
+			request: &opensplunk.UpdateKnowledgeObjectRequest{
 				KnowledgeObjectId: "ko-preflight",
 				ExpectedVersion:   1,
-				Definition:        &opensplunkv1.KnowledgeObjectDefinition{},
+				Definition:        &opensplunk.KnowledgeObjectDefinition{},
 				UpdateMask:        &fieldmaskpb.FieldMask{Paths: []string{"name"}},
 				ClientRequestId:   mutationPreflightRequestID,
 			},
 		},
 		{
 			name: "active state remains a valid shape",
-			request: &opensplunkv1.SetKnowledgeObjectStateRequest{
+			request: &opensplunk.SetKnowledgeObjectStateRequest{
 				KnowledgeObjectId: "ko-preflight",
 				ExpectedVersion:   1,
-				State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
+				State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
 				ClientRequestId:   mutationPreflightRequestID,
 			},
 		},
 		{
 			name: "disabled state",
-			request: &opensplunkv1.SetKnowledgeObjectStateRequest{
+			request: &opensplunk.SetKnowledgeObjectStateRequest{
 				KnowledgeObjectId: "ko-preflight",
 				ExpectedVersion:   1,
-				State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+				State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 				ClientRequestId:   mutationPreflightRequestID,
 			},
 		},
 		{
 			name: "delete",
-			request: &opensplunkv1.DeleteKnowledgeObjectRequest{
+			request: &opensplunk.DeleteKnowledgeObjectRequest{
 				KnowledgeObjectId: "ko-preflight",
 				ExpectedVersion:   1,
 				ClientRequestId:   mutationPreflightRequestID,
@@ -92,10 +92,10 @@ func TestMutationRequestPreflightValidatesClientIdentityAndDetachedWireShape(
 ) {
 	t.Parallel()
 
-	create := func(requestID string) *opensplunkv1.CreateKnowledgeObjectRequest {
-		return &opensplunkv1.CreateKnowledgeObjectRequest{
-			Definition:      &opensplunkv1.KnowledgeObjectDefinition{},
-			InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+	create := func(requestID string) *opensplunk.CreateKnowledgeObjectRequest {
+		return &opensplunk.CreateKnowledgeObjectRequest{
+			Definition:      &opensplunk.KnowledgeObjectDefinition{},
+			InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 			ClientRequestId: requestID,
 		}
 	}
@@ -136,9 +136,9 @@ func TestMutationRequestPreflightValidatesClientIdentityAndDetachedWireShape(
 
 	t.Run("selector entry limit", func(t *testing.T) {
 		request := create(mutationPreflightRequestID)
-		request.Definition.Selector = &opensplunkv1.KnowledgeSelector{
+		request.Definition.Selector = &opensplunk.KnowledgeSelector{
 			IndexPatterns: make(
-				[]*opensplunkv1.KnowledgeSelectorPattern,
+				[]*opensplunk.KnowledgeSelectorPattern,
 				knowledge.MaximumSelectorPatternsPerDimension+1,
 			),
 		}
@@ -150,10 +150,10 @@ func TestMutationRequestPreflightValidatesClientIdentityAndDetachedWireShape(
 
 	t.Run("extraction output entry limit", func(t *testing.T) {
 		request := create(mutationPreflightRequestID)
-		request.Definition.Body = &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
-			FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
-				Extraction: &opensplunkv1.FieldExtractionDefinition_Regex{
-					Regex: &opensplunkv1.RegexFieldExtractionDefinition{
+		request.Definition.Body = &opensplunk.KnowledgeObjectDefinition_FieldExtraction{
+			FieldExtraction: &opensplunk.FieldExtractionDefinition{
+				Extraction: &opensplunk.FieldExtractionDefinition_Regex{
+					Regex: &opensplunk.RegexFieldExtractionDefinition{
 						OutputFields: make(
 							[]string,
 							knowledgedefinition.MaximumFieldExtractionOutputs+1,
@@ -189,42 +189,42 @@ func TestMutationRequestPreflightPreservesWriterFieldPrecedence(t *testing.T) {
 	}{
 		{
 			name: "create definition before state and request identity",
-			request: &opensplunkv1.CreateKnowledgeObjectRequest{
-				InitialState: opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_UNSPECIFIED,
+			request: &opensplunk.CreateKnowledgeObjectRequest{
+				InitialState: opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_UNSPECIFIED,
 			},
 			contains: "create request and definition",
 		},
 		{
 			name: "create state before request identity",
-			request: &opensplunkv1.CreateKnowledgeObjectRequest{
-				Definition: &opensplunkv1.KnowledgeObjectDefinition{},
+			request: &opensplunk.CreateKnowledgeObjectRequest{
+				Definition: &opensplunk.KnowledgeObjectDefinition{},
 			},
 			contains: "initial state",
 		},
 		{
 			name: "update identity before mask and request identity",
-			request: &opensplunkv1.UpdateKnowledgeObjectRequest{
-				Definition: &opensplunkv1.KnowledgeObjectDefinition{},
+			request: &opensplunk.UpdateKnowledgeObjectRequest{
+				Definition: &opensplunk.KnowledgeObjectDefinition{},
 			},
 			contains: "identity, version, and definition",
 		},
 		{
 			name: "update mask before request identity",
-			request: &opensplunkv1.UpdateKnowledgeObjectRequest{
+			request: &opensplunk.UpdateKnowledgeObjectRequest{
 				KnowledgeObjectId: "ko-preflight",
 				ExpectedVersion:   1,
-				Definition:        &opensplunkv1.KnowledgeObjectDefinition{},
+				Definition:        &opensplunk.KnowledgeObjectDefinition{},
 			},
 			contains: "update mask",
 		},
 		{
 			name:     "state identity before transition and request identity",
-			request:  &opensplunkv1.SetKnowledgeObjectStateRequest{},
+			request:  &opensplunk.SetKnowledgeObjectStateRequest{},
 			contains: "state request identity and version",
 		},
 		{
 			name: "state transition before request identity",
-			request: &opensplunkv1.SetKnowledgeObjectStateRequest{
+			request: &opensplunk.SetKnowledgeObjectStateRequest{
 				KnowledgeObjectId: "ko-preflight",
 				ExpectedVersion:   1,
 			},
@@ -232,7 +232,7 @@ func TestMutationRequestPreflightPreservesWriterFieldPrecedence(t *testing.T) {
 		},
 		{
 			name:     "delete identity before request identity",
-			request:  &opensplunkv1.DeleteKnowledgeObjectRequest{},
+			request:  &opensplunk.DeleteKnowledgeObjectRequest{},
 			contains: "delete request identity and version",
 		},
 	}
@@ -274,13 +274,13 @@ func assertMutationRequestPreflightParity(
 
 func validateMutationPreflightRequest(request proto.Message) error {
 	switch request := request.(type) {
-	case *opensplunkv1.CreateKnowledgeObjectRequest:
+	case *opensplunk.CreateKnowledgeObjectRequest:
 		return ValidateCreateKnowledgeObjectRequest(request)
-	case *opensplunkv1.UpdateKnowledgeObjectRequest:
+	case *opensplunk.UpdateKnowledgeObjectRequest:
 		return ValidateUpdateKnowledgeObjectRequest(request)
-	case *opensplunkv1.SetKnowledgeObjectStateRequest:
+	case *opensplunk.SetKnowledgeObjectStateRequest:
 		return ValidateSetKnowledgeObjectStateRequest(request)
-	case *opensplunkv1.DeleteKnowledgeObjectRequest:
+	case *opensplunk.DeleteKnowledgeObjectRequest:
 		return ValidateDeleteKnowledgeObjectRequest(request)
 	default:
 		return errors.New("unsupported mutation preflight request type")
@@ -301,13 +301,13 @@ func prepareMutationPreflightRequest(
 		Role: audit.ActorRoleAdministrator,
 	}
 	switch request := request.(type) {
-	case *opensplunkv1.CreateKnowledgeObjectRequest:
+	case *opensplunk.CreateKnowledgeObjectRequest:
 		return prepareCreateMutation(scope, actor, request)
-	case *opensplunkv1.UpdateKnowledgeObjectRequest:
+	case *opensplunk.UpdateKnowledgeObjectRequest:
 		return prepareUpdateMutation(scope, actor, request)
-	case *opensplunkv1.SetKnowledgeObjectStateRequest:
+	case *opensplunk.SetKnowledgeObjectStateRequest:
 		return prepareSetStateMutation(scope, actor, request)
-	case *opensplunkv1.DeleteKnowledgeObjectRequest:
+	case *opensplunk.DeleteKnowledgeObjectRequest:
 		return prepareDeleteMutation(scope, actor, request)
 	default:
 		return preparedMutation{}, errors.New("unsupported mutation preflight request type")

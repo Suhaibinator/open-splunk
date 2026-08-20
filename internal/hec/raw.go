@@ -8,7 +8,7 @@ import (
 	"unicode/utf8"
 )
 
-// RawDecoder implements the fixed v0.1 breaker: LF terminates, one immediately
+// RawDecoder implements the fixed breaker: LF terminates, one immediately
 // preceding CR is stripped, empty resulting segments are skipped, and a final
 // nonempty unterminated segment is emitted. It carries no state across HTTP
 // requests.

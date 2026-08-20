@@ -6,13 +6,13 @@ import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { SharingScope } from "@/gen/ts/open_splunk/v1/common";
+import { SharingScope } from "@/gen/ts/open_splunk/common";
 import {
   KnowledgeOverwriteBehavior,
   KnowledgeSelectorMatchKind,
-} from "@/gen/ts/open_splunk/v1/knowledge";
-import { Lookup, LookupState } from "@/gen/ts/open_splunk/v1/lookup";
-import { PreviewLookupResponse } from "@/gen/ts/open_splunk/v1/lookup_api";
+} from "@/gen/ts/open_splunk/knowledge";
+import { Lookup, LookupState } from "@/gen/ts/open_splunk/lookup";
+import { PreviewLookupResponse } from "@/gen/ts/open_splunk/lookup_api";
 
 import { selectorPatternKind } from "./lookup-manager-contract";
 import {

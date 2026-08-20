@@ -204,7 +204,7 @@ type eventShape struct {
 }
 
 func (g *Generator) shape(ordinal uint64) (eventShape, error) {
-	paths := [...]string{"/api/v1/search/jobs/create", "/api/v1/search/jobs/get", "/api/v1/search/jobs/results", "/healthz", "/api/v1/indexes/list"}
+	paths := [...]string{"/api/search/jobs/create", "/api/search/jobs/get", "/api/search/jobs/results", "/healthz", "/api/indexes/list"}
 	methods := [...]string{"POST", "POST", "POST", "GET", "POST"}
 	seed := seedBits(g.cfg.Seed)
 	pathIndex := mix(seed, ordinal, 1) % uint64(len(paths))

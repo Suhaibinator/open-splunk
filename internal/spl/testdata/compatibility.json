@@ -1,0 +1,6436 @@
+{
+  "format_version": 1,
+  "fixtures": {
+    "reference.pipeline-commands": {
+      "runner": "reference",
+      "input": {
+        "schema": [
+          {
+            "name": "id",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "message",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "n",
+            "kind": "number",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "host",
+            "kind": "string",
+            "nullable": true,
+            "multivalue": false
+          },
+          {
+            "name": "route",
+            "kind": "string",
+            "nullable": true,
+            "multivalue": false
+          },
+          {
+            "name": "optional",
+            "kind": "string",
+            "nullable": true,
+            "multivalue": false
+          },
+          {
+            "name": "tags",
+            "kind": "string",
+            "nullable": true,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "string": "a"
+            },
+            {
+              "string": "keep timeout"
+            },
+            {
+              "number": 2
+            },
+            {
+              "string": "api"
+            },
+            {
+              "string": "v1"
+            },
+            {
+              "null": true
+            },
+            {
+              "string": "red,,blue"
+            }
+          ],
+          [
+            {
+              "string": "b"
+            },
+            {
+              "string": "keep"
+            },
+            {
+              "number": 3
+            },
+            {
+              "string": "worker"
+            },
+            {
+              "missing": true
+            },
+            {
+              "string": "present"
+            },
+            {
+              "null": true
+            }
+          ],
+          [
+            {
+              "string": "c"
+            },
+            {
+              "string": "reject"
+            },
+            {
+              "number": 5
+            },
+            {
+              "missing": true
+            },
+            {
+              "missing": true
+            },
+            {
+              "missing": true
+            },
+            {
+              "string": "green"
+            }
+          ]
+        ]
+      },
+      "program": [
+        {
+          "op": "regex",
+          "field": "message",
+          "pattern": "reject",
+          "negated": true
+        },
+        {
+          "op": "reverse"
+        },
+        {
+          "op": "accum",
+          "input": "n",
+          "output": "running"
+        },
+        {
+          "op": "strcat",
+          "parts": [
+            {
+              "field": "host"
+            },
+            {
+              "literal": "/"
+            },
+            {
+              "field": "route"
+            }
+          ],
+          "output": "endpoint",
+          "all_required": false
+        },
+        {
+          "op": "addinfo",
+          "minimum": 1,
+          "maximum": 9,
+          "started": 5,
+          "sid": "search-reference"
+        },
+        {
+          "op": "fillnull",
+          "fields": [
+            "optional"
+          ],
+          "value": "unknown"
+        },
+        {
+          "op": "addtotals",
+          "fields": [
+            "n",
+            "running"
+          ],
+          "output": "total"
+        },
+        {
+          "op": "delta",
+          "input": "running",
+          "output": "step",
+          "period": 1
+        },
+        {
+          "op": "makemv",
+          "field": "tags",
+          "delimiter": ",",
+          "allow_empty": false
+        },
+        {
+          "op": "mvexpand",
+          "field": "tags",
+          "limit": 2
+        }
+      ],
+      "expected": {
+        "schema": [
+          {
+            "name": "id",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "message",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "n",
+            "kind": "number",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "host",
+            "kind": "string",
+            "nullable": true,
+            "multivalue": false
+          },
+          {
+            "name": "route",
+            "kind": "string",
+            "nullable": true,
+            "multivalue": false
+          },
+          {
+            "name": "optional",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "tags",
+            "kind": "string",
+            "nullable": true,
+            "multivalue": false
+          },
+          {
+            "name": "running",
+            "kind": "number",
+            "nullable": true,
+            "multivalue": false
+          },
+          {
+            "name": "endpoint",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "info_min_time",
+            "kind": "number",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "info_max_time",
+            "kind": "number",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "info_search_time",
+            "kind": "number",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "info_sid",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "total",
+            "kind": "number",
+            "nullable": true,
+            "multivalue": false
+          },
+          {
+            "name": "step",
+            "kind": "number",
+            "nullable": true,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "string": "b"
+            },
+            {
+              "string": "keep"
+            },
+            {
+              "number": 3
+            },
+            {
+              "string": "worker"
+            },
+            {
+              "missing": true
+            },
+            {
+              "string": "present"
+            },
+            {
+              "null": true
+            },
+            {
+              "number": 3
+            },
+            {
+              "string": "worker/"
+            },
+            {
+              "number": 1
+            },
+            {
+              "number": 9
+            },
+            {
+              "number": 5
+            },
+            {
+              "string": "search-reference"
+            },
+            {
+              "number": 6
+            },
+            {
+              "null": true
+            }
+          ],
+          [
+            {
+              "string": "a"
+            },
+            {
+              "string": "keep timeout"
+            },
+            {
+              "number": 2
+            },
+            {
+              "string": "api"
+            },
+            {
+              "string": "v1"
+            },
+            {
+              "string": "unknown"
+            },
+            {
+              "string": "red"
+            },
+            {
+              "number": 5
+            },
+            {
+              "string": "api/v1"
+            },
+            {
+              "number": 1
+            },
+            {
+              "number": 9
+            },
+            {
+              "number": 5
+            },
+            {
+              "string": "search-reference"
+            },
+            {
+              "number": 7
+            },
+            {
+              "number": 2
+            }
+          ],
+          [
+            {
+              "string": "a"
+            },
+            {
+              "string": "keep timeout"
+            },
+            {
+              "number": 2
+            },
+            {
+              "string": "api"
+            },
+            {
+              "string": "v1"
+            },
+            {
+              "string": "unknown"
+            },
+            {
+              "string": "blue"
+            },
+            {
+              "number": 5
+            },
+            {
+              "string": "api/v1"
+            },
+            {
+              "number": 1
+            },
+            {
+              "number": 9
+            },
+            {
+              "number": 5
+            },
+            {
+              "string": "search-reference"
+            },
+            {
+              "number": 7
+            },
+            {
+              "number": 2
+            }
+          ]
+        ]
+      }
+    },
+    "reference.regex-positive": {
+      "runner": "reference",
+      "input": {
+        "schema": [
+          {
+            "name": "_raw",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "string": "timeout"
+            }
+          ],
+          [
+            {
+              "string": "ok"
+            }
+          ],
+          [
+            {
+              "string": "TIMEOUT later"
+            }
+          ]
+        ]
+      },
+      "program": [
+        {
+          "op": "regex",
+          "field": "_raw",
+          "pattern": "(?i)timeout",
+          "negated": false
+        }
+      ],
+      "expected": {
+        "schema": [
+          {
+            "name": "_raw",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "string": "timeout"
+            }
+          ],
+          [
+            {
+              "string": "TIMEOUT later"
+            }
+          ]
+        ]
+      }
+    },
+    "reference.regex-negative": {
+      "runner": "reference",
+      "input": {
+        "schema": [
+          {
+            "name": "message",
+            "kind": "string",
+            "nullable": true,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "string": "reject"
+            }
+          ],
+          [
+            {
+              "string": "keep"
+            }
+          ],
+          [
+            {
+              "missing": true
+            }
+          ],
+          [
+            {
+              "null": true
+            }
+          ]
+        ]
+      },
+      "program": [
+        {
+          "op": "regex",
+          "field": "message",
+          "pattern": "reject",
+          "negated": true
+        }
+      ],
+      "expected": {
+        "schema": [
+          {
+            "name": "message",
+            "kind": "string",
+            "nullable": true,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "string": "keep"
+            }
+          ],
+          [
+            {
+              "missing": true
+            }
+          ],
+          [
+            {
+              "null": true
+            }
+          ]
+        ]
+      }
+    },
+    "reference.reverse": {
+      "runner": "reference",
+      "input": {
+        "schema": [
+          {
+            "name": "id",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "string": "a"
+            }
+          ],
+          [
+            {
+              "string": "b"
+            }
+          ],
+          [
+            {
+              "string": "c"
+            }
+          ]
+        ]
+      },
+      "program": [
+        {
+          "op": "reverse"
+        },
+        {
+          "op": "reverse"
+        }
+      ],
+      "expected": {
+        "schema": [
+          {
+            "name": "id",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "string": "a"
+            }
+          ],
+          [
+            {
+              "string": "b"
+            }
+          ],
+          [
+            {
+              "string": "c"
+            }
+          ]
+        ]
+      }
+    },
+    "reference.accum-default": {
+      "runner": "reference",
+      "input": {
+        "schema": [
+          {
+            "name": "bytes",
+            "kind": "number",
+            "nullable": true,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "number": 2
+            }
+          ],
+          [
+            {
+              "null": true
+            }
+          ],
+          [
+            {
+              "number": 3
+            }
+          ]
+        ]
+      },
+      "program": [
+        {
+          "op": "accum",
+          "input": "bytes",
+          "output": "bytes"
+        }
+      ],
+      "expected": {
+        "schema": [
+          {
+            "name": "bytes",
+            "kind": "number",
+            "nullable": true,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "number": 2
+            }
+          ],
+          [
+            {
+              "number": 2
+            }
+          ],
+          [
+            {
+              "number": 5
+            }
+          ]
+        ]
+      }
+    },
+    "reference.accum-output": {
+      "runner": "reference",
+      "input": {
+        "schema": [
+          {
+            "name": "bytes",
+            "kind": "number",
+            "nullable": true,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "null": true
+            }
+          ],
+          [
+            {
+              "number": 2
+            }
+          ],
+          [
+            {
+              "number": 3
+            }
+          ]
+        ]
+      },
+      "program": [
+        {
+          "op": "accum",
+          "input": "bytes",
+          "output": "running_bytes"
+        }
+      ],
+      "expected": {
+        "schema": [
+          {
+            "name": "bytes",
+            "kind": "number",
+            "nullable": true,
+            "multivalue": false
+          },
+          {
+            "name": "running_bytes",
+            "kind": "number",
+            "nullable": true,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "null": true
+            },
+            {
+              "null": true
+            }
+          ],
+          [
+            {
+              "number": 2
+            },
+            {
+              "number": 2
+            }
+          ],
+          [
+            {
+              "number": 3
+            },
+            {
+              "number": 5
+            }
+          ]
+        ]
+      }
+    },
+    "reference.strcat-default": {
+      "runner": "reference",
+      "input": {
+        "schema": [
+          {
+            "name": "host",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "missing",
+            "kind": "string",
+            "nullable": true,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "string": "api"
+            },
+            {
+              "missing": true
+            }
+          ],
+          [
+            {
+              "string": "worker"
+            },
+            {
+              "string": "v1"
+            }
+          ]
+        ]
+      },
+      "program": [
+        {
+          "op": "strcat",
+          "parts": [
+            {
+              "field": "host"
+            },
+            {
+              "literal": "/"
+            },
+            {
+              "field": "missing"
+            }
+          ],
+          "output": "endpoint",
+          "all_required": false
+        }
+      ],
+      "expected": {
+        "schema": [
+          {
+            "name": "host",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "missing",
+            "kind": "string",
+            "nullable": true,
+            "multivalue": false
+          },
+          {
+            "name": "endpoint",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "string": "api"
+            },
+            {
+              "missing": true
+            },
+            {
+              "string": "api/"
+            }
+          ],
+          [
+            {
+              "string": "worker"
+            },
+            {
+              "string": "v1"
+            },
+            {
+              "string": "worker/v1"
+            }
+          ]
+        ]
+      }
+    },
+    "reference.strcat-required": {
+      "runner": "reference",
+      "input": {
+        "schema": [
+          {
+            "name": "service",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "route",
+            "kind": "string",
+            "nullable": true,
+            "multivalue": false
+          },
+          {
+            "name": "route_key",
+            "kind": "string",
+            "nullable": true,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "string": "api"
+            },
+            {
+              "string": "v1"
+            },
+            {
+              "string": "old"
+            }
+          ],
+          [
+            {
+              "string": "worker"
+            },
+            {
+              "missing": true
+            },
+            {
+              "string": "keep"
+            }
+          ]
+        ]
+      },
+      "program": [
+        {
+          "op": "strcat",
+          "parts": [
+            {
+              "field": "service"
+            },
+            {
+              "literal": "/"
+            },
+            {
+              "field": "route"
+            }
+          ],
+          "output": "route_key",
+          "all_required": true
+        }
+      ],
+      "expected": {
+        "schema": [
+          {
+            "name": "service",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "route",
+            "kind": "string",
+            "nullable": true,
+            "multivalue": false
+          },
+          {
+            "name": "route_key",
+            "kind": "string",
+            "nullable": true,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "string": "api"
+            },
+            {
+              "string": "v1"
+            },
+            {
+              "string": "api/v1"
+            }
+          ],
+          [
+            {
+              "string": "worker"
+            },
+            {
+              "missing": true
+            },
+            {
+              "string": "keep"
+            }
+          ]
+        ]
+      }
+    },
+    "reference.addinfo": {
+      "runner": "reference",
+      "input": {
+        "schema": [
+          {
+            "name": "id",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "string": "a"
+            }
+          ]
+        ]
+      },
+      "program": [
+        {
+          "op": "addinfo",
+          "minimum": 100,
+          "maximum": 200,
+          "started": 150,
+          "sid": "sid-1"
+        }
+      ],
+      "expected": {
+        "schema": [
+          {
+            "name": "id",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "info_min_time",
+            "kind": "number",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "info_max_time",
+            "kind": "number",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "info_search_time",
+            "kind": "number",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "info_sid",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "string": "a"
+            },
+            {
+              "number": 100
+            },
+            {
+              "number": 200
+            },
+            {
+              "number": 150
+            },
+            {
+              "string": "sid-1"
+            }
+          ]
+        ]
+      }
+    },
+    "reference.fillnull-default": {
+      "runner": "reference",
+      "input": {
+        "schema": [
+          {
+            "name": "host",
+            "kind": "string",
+            "nullable": true,
+            "multivalue": false
+          },
+          {
+            "name": "route",
+            "kind": "string",
+            "nullable": true,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "missing": true
+            },
+            {
+              "string": "v1"
+            }
+          ],
+          [
+            {
+              "null": true
+            },
+            {
+              "missing": true
+            }
+          ],
+          [
+            {
+              "string": "api"
+            },
+            {
+              "string": "v2"
+            }
+          ]
+        ]
+      },
+      "program": [
+        {
+          "op": "fillnull",
+          "fields": [
+            "host",
+            "route"
+          ],
+          "value": "0"
+        }
+      ],
+      "expected": {
+        "schema": [
+          {
+            "name": "host",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "route",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "string": "0"
+            },
+            {
+              "string": "v1"
+            }
+          ],
+          [
+            {
+              "string": "0"
+            },
+            {
+              "string": "0"
+            }
+          ],
+          [
+            {
+              "string": "api"
+            },
+            {
+              "string": "v2"
+            }
+          ]
+        ]
+      }
+    },
+    "reference.fillnull-unicode": {
+      "runner": "reference",
+      "input": {
+        "schema": [
+          {
+            "name": "host",
+            "kind": "string",
+            "nullable": true,
+            "multivalue": false
+          },
+          {
+            "name": "route",
+            "kind": "string",
+            "nullable": true,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "missing": true
+            },
+            {
+              "null": true
+            }
+          ]
+        ]
+      },
+      "program": [
+        {
+          "op": "fillnull",
+          "fields": [
+            "host",
+            "route"
+          ],
+          "value": "未知"
+        }
+      ],
+      "expected": {
+        "schema": [
+          {
+            "name": "host",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "route",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "string": "未知"
+            },
+            {
+              "string": "未知"
+            }
+          ]
+        ]
+      }
+    },
+    "reference.addtotals": {
+      "runner": "reference",
+      "input": {
+        "schema": [
+          {
+            "name": "bytes_in",
+            "kind": "number",
+            "nullable": true,
+            "multivalue": false
+          },
+          {
+            "name": "bytes_out",
+            "kind": "number",
+            "nullable": true,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "number": 2
+            },
+            {
+              "number": 3
+            }
+          ],
+          [
+            {
+              "number": 4
+            },
+            {
+              "null": true
+            }
+          ]
+        ]
+      },
+      "program": [
+        {
+          "op": "addtotals",
+          "fields": [
+            "bytes_in",
+            "bytes_out"
+          ],
+          "output": "total"
+        }
+      ],
+      "expected": {
+        "schema": [
+          {
+            "name": "bytes_in",
+            "kind": "number",
+            "nullable": true,
+            "multivalue": false
+          },
+          {
+            "name": "bytes_out",
+            "kind": "number",
+            "nullable": true,
+            "multivalue": false
+          },
+          {
+            "name": "total",
+            "kind": "number",
+            "nullable": true,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "number": 2
+            },
+            {
+              "number": 3
+            },
+            {
+              "number": 5
+            }
+          ],
+          [
+            {
+              "number": 4
+            },
+            {
+              "null": true
+            },
+            {
+              "number": 4
+            }
+          ]
+        ]
+      }
+    },
+    "reference.addtotals-ineligible": {
+      "runner": "reference",
+      "input": {
+        "schema": [
+          {
+            "name": "event_id",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "string": "a"
+            }
+          ]
+        ]
+      },
+      "program": [
+        {
+          "op": "addtotals",
+          "fields": [
+            "missing",
+            "other"
+          ],
+          "output": "total"
+        }
+      ],
+      "expected": {
+        "schema": [
+          {
+            "name": "event_id",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "total",
+            "kind": "number",
+            "nullable": true,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "string": "a"
+            },
+            {
+              "number": 0
+            }
+          ]
+        ]
+      }
+    },
+    "reference.delta-default": {
+      "runner": "reference",
+      "input": {
+        "schema": [
+          {
+            "name": "bytes",
+            "kind": "number",
+            "nullable": false,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "number": 2
+            }
+          ],
+          [
+            {
+              "number": 5
+            }
+          ],
+          [
+            {
+              "number": 9
+            }
+          ]
+        ]
+      },
+      "program": [
+        {
+          "op": "delta",
+          "input": "bytes",
+          "output": "delta(bytes)",
+          "period": 1
+        }
+      ],
+      "expected": {
+        "schema": [
+          {
+            "name": "bytes",
+            "kind": "number",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "delta(bytes)",
+            "kind": "number",
+            "nullable": true,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "number": 2
+            },
+            {
+              "null": true
+            }
+          ],
+          [
+            {
+              "number": 5
+            },
+            {
+              "number": 3
+            }
+          ],
+          [
+            {
+              "number": 9
+            },
+            {
+              "number": 4
+            }
+          ]
+        ]
+      }
+    },
+    "reference.delta-output": {
+      "runner": "reference",
+      "input": {
+        "schema": [
+          {
+            "name": "bytes",
+            "kind": "number",
+            "nullable": false,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "number": 1
+            }
+          ],
+          [
+            {
+              "number": 2
+            }
+          ],
+          [
+            {
+              "number": 3
+            }
+          ],
+          [
+            {
+              "number": 4
+            }
+          ],
+          [
+            {
+              "number": 5
+            }
+          ]
+        ]
+      },
+      "program": [
+        {
+          "op": "delta",
+          "input": "bytes",
+          "output": "change",
+          "period": 3
+        }
+      ],
+      "expected": {
+        "schema": [
+          {
+            "name": "bytes",
+            "kind": "number",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "change",
+            "kind": "number",
+            "nullable": true,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "number": 1
+            },
+            {
+              "null": true
+            }
+          ],
+          [
+            {
+              "number": 2
+            },
+            {
+              "null": true
+            }
+          ],
+          [
+            {
+              "number": 3
+            },
+            {
+              "null": true
+            }
+          ],
+          [
+            {
+              "number": 4
+            },
+            {
+              "number": 3
+            }
+          ],
+          [
+            {
+              "number": 5
+            },
+            {
+              "number": 3
+            }
+          ]
+        ]
+      }
+    },
+    "reference.makemv-unicode": {
+      "runner": "reference",
+      "input": {
+        "schema": [
+          {
+            "name": "tags",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "string": "a💥界💥界b"
+            }
+          ]
+        ]
+      },
+      "program": [
+        {
+          "op": "makemv",
+          "field": "tags",
+          "delimiter": "💥界",
+          "allow_empty": true
+        }
+      ],
+      "expected": {
+        "schema": [
+          {
+            "name": "tags",
+            "kind": "list",
+            "nullable": true,
+            "multivalue": true
+          }
+        ],
+        "rows": [
+          [
+            {
+              "list": [
+                {
+                  "string": "a"
+                },
+                {
+                  "string": ""
+                },
+                {
+                  "string": "b"
+                }
+              ]
+            }
+          ]
+        ]
+      }
+    },
+    "reference.makemv-null": {
+      "runner": "reference",
+      "input": {
+        "schema": [
+          {
+            "name": "missing",
+            "kind": "string",
+            "nullable": true,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "missing": true
+            }
+          ],
+          [
+            {
+              "null": true
+            }
+          ]
+        ]
+      },
+      "program": [
+        {
+          "op": "makemv",
+          "field": "missing",
+          "delimiter": ",",
+          "allow_empty": false
+        }
+      ],
+      "expected": {
+        "schema": [
+          {
+            "name": "missing",
+            "kind": "list",
+            "nullable": true,
+            "multivalue": true
+          }
+        ],
+        "rows": [
+          [
+            {
+              "null": true
+            }
+          ],
+          [
+            {
+              "null": true
+            }
+          ]
+        ]
+      }
+    },
+    "reference.mvexpand": {
+      "runner": "reference",
+      "input": {
+        "schema": [
+          {
+            "name": "event_id",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "tags",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "string": "a"
+            },
+            {
+              "string": "red,blue"
+            }
+          ],
+          [
+            {
+              "string": "b"
+            },
+            {
+              "string": "green"
+            }
+          ]
+        ]
+      },
+      "program": [
+        {
+          "op": "makemv",
+          "field": "tags",
+          "delimiter": ",",
+          "allow_empty": false
+        },
+        {
+          "op": "mvexpand",
+          "field": "tags",
+          "limit": 100
+        }
+      ],
+      "expected": {
+        "schema": [
+          {
+            "name": "event_id",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "tags",
+            "kind": "string",
+            "nullable": true,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "string": "a"
+            },
+            {
+              "string": "red"
+            }
+          ],
+          [
+            {
+              "string": "a"
+            },
+            {
+              "string": "blue"
+            }
+          ],
+          [
+            {
+              "string": "b"
+            },
+            {
+              "string": "green"
+            }
+          ]
+        ]
+      }
+    },
+    "reference.mvexpand-empty": {
+      "runner": "reference",
+      "input": {
+        "schema": [
+          {
+            "name": "tags",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "string": ""
+            }
+          ]
+        ]
+      },
+      "program": [
+        {
+          "op": "makemv",
+          "field": "tags",
+          "delimiter": ",",
+          "allow_empty": false
+        },
+        {
+          "op": "mvexpand",
+          "field": "tags",
+          "limit": 0
+        }
+      ],
+      "expected": {
+        "schema": [
+          {
+            "name": "tags",
+            "kind": "string",
+            "nullable": true,
+            "multivalue": false
+          }
+        ],
+        "rows": []
+      }
+    },
+    "reference.mvexpand-scalars": {
+      "runner": "reference",
+      "input": {
+        "schema": [
+          {
+            "name": "id",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "value",
+            "kind": "dynamic",
+            "nullable": false,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "string": "string"
+            },
+            {
+              "string": "x"
+            }
+          ],
+          [
+            {
+              "string": "number"
+            },
+            {
+              "number": 7
+            }
+          ],
+          [
+            {
+              "string": "bool"
+            },
+            {
+              "bool": true
+            }
+          ],
+          [
+            {
+              "string": "time"
+            },
+            {
+              "time": 1700000000
+            }
+          ]
+        ]
+      },
+      "program": [
+        {
+          "op": "mvexpand",
+          "field": "value",
+          "limit": 0
+        }
+      ],
+      "expected": {
+        "schema": [
+          {
+            "name": "id",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "value",
+            "kind": "dynamic",
+            "nullable": false,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "string": "string"
+            },
+            {
+              "string": "x"
+            }
+          ],
+          [
+            {
+              "string": "number"
+            },
+            {
+              "number": 7
+            }
+          ],
+          [
+            {
+              "string": "bool"
+            },
+            {
+              "bool": true
+            }
+          ],
+          [
+            {
+              "string": "time"
+            },
+            {
+              "time": 1700000000
+            }
+          ]
+        ]
+      }
+    },
+    "reference.mvexpand-null-forms": {
+      "runner": "reference",
+      "input": {
+        "schema": [
+          {
+            "name": "id",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "values",
+            "kind": "list",
+            "nullable": true,
+            "multivalue": true
+          }
+        ],
+        "rows": [
+          [
+            {
+              "string": "missing"
+            },
+            {
+              "missing": true
+            }
+          ],
+          [
+            {
+              "string": "whole-null"
+            },
+            {
+              "null": true
+            }
+          ],
+          [
+            {
+              "string": "member-null"
+            },
+            {
+              "list": [
+                {
+                  "null": true
+                },
+                {
+                  "string": "tail"
+                }
+              ]
+            }
+          ]
+        ]
+      },
+      "program": [
+        {
+          "op": "mvexpand",
+          "field": "values",
+          "limit": 0
+        }
+      ],
+      "expected": {
+        "schema": [
+          {
+            "name": "id",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "values",
+            "kind": "string",
+            "nullable": true,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "string": "missing"
+            },
+            {
+              "null": true
+            }
+          ],
+          [
+            {
+              "string": "whole-null"
+            },
+            {
+              "null": true
+            }
+          ],
+          [
+            {
+              "string": "member-null"
+            },
+            {
+              "null": true
+            }
+          ],
+          [
+            {
+              "string": "member-null"
+            },
+            {
+              "string": "tail"
+            }
+          ]
+        ]
+      }
+    },
+    "reference.composed-order": {
+      "runner": "reference",
+      "input": {
+        "schema": [
+          {
+            "name": "id",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "n",
+            "kind": "number",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "tags",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "string": "a"
+            },
+            {
+              "number": 2
+            },
+            {
+              "string": "x,y"
+            }
+          ],
+          [
+            {
+              "string": "b"
+            },
+            {
+              "number": 3
+            },
+            {
+              "string": "z"
+            }
+          ]
+        ]
+      },
+      "program": [
+        {
+          "op": "reverse"
+        },
+        {
+          "op": "accum",
+          "input": "n",
+          "output": "running"
+        },
+        {
+          "op": "delta",
+          "input": "running",
+          "output": "change",
+          "period": 1
+        },
+        {
+          "op": "makemv",
+          "field": "tags",
+          "delimiter": ",",
+          "allow_empty": false
+        },
+        {
+          "op": "mvexpand",
+          "field": "tags",
+          "limit": 0
+        },
+        {
+          "op": "reverse"
+        }
+      ],
+      "expected": {
+        "schema": [
+          {
+            "name": "id",
+            "kind": "string",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "n",
+            "kind": "number",
+            "nullable": false,
+            "multivalue": false
+          },
+          {
+            "name": "tags",
+            "kind": "string",
+            "nullable": true,
+            "multivalue": false
+          },
+          {
+            "name": "running",
+            "kind": "number",
+            "nullable": true,
+            "multivalue": false
+          },
+          {
+            "name": "change",
+            "kind": "number",
+            "nullable": true,
+            "multivalue": false
+          }
+        ],
+        "rows": [
+          [
+            {
+              "string": "a"
+            },
+            {
+              "number": 2
+            },
+            {
+              "string": "y"
+            },
+            {
+              "number": 5
+            },
+            {
+              "number": 2
+            }
+          ],
+          [
+            {
+              "string": "a"
+            },
+            {
+              "number": 2
+            },
+            {
+              "string": "x"
+            },
+            {
+              "number": 5
+            },
+            {
+              "number": 2
+            }
+          ],
+          [
+            {
+              "string": "b"
+            },
+            {
+              "number": 3
+            },
+            {
+              "string": "z"
+            },
+            {
+              "number": 3
+            },
+            {
+              "null": true
+            }
+          ]
+        ]
+      }
+    },
+    "evidence.pipeline-composition": {
+      "runner": "evidence",
+      "evidence": "pipeline-composition-executable-source",
+      "targets": [
+        {
+          "path": "internal/clickhouse/pipeline_commands_adversarial_compiler_test.go",
+          "test": "TestPipelineCommandsComposeWithExactRetainedKnowledgeEvidence"
+        }
+      ],
+      "assertions": [
+        "regex",
+        "mvexpand"
+      ],
+      "claim": {
+        "parse": "accept"
+      }
+    },
+    "evidence.saved-search": {
+      "runner": "evidence",
+      "evidence": "server-saved-object-pipeline-launch",
+      "targets": [
+        {
+          "path": "internal/server/pipeline_commands_saved_history_adversarial_test.go",
+          "test": "TestPipelineSavedSearchExecutionUsesPersistedCommandDefinition"
+        }
+      ],
+      "assertions": [
+        "captured.SPL",
+        "pipelinePersistedCommandSPL"
+      ],
+      "claim": {
+        "surfaces": "saved-search"
+      }
+    },
+    "evidence.history-rerun": {
+      "runner": "evidence",
+      "evidence": "server-history-pipeline-rerun",
+      "targets": [
+        {
+          "path": "internal/server/pipeline_commands_saved_history_adversarial_test.go",
+          "test": "TestPipelineHistoryRerunReconstructsPersistedCommandDefinition"
+        }
+      ],
+      "assertions": [
+        "History",
+        "pipelinePersistedCommandSPL"
+      ],
+      "claim": {
+        "surfaces": "history"
+      }
+    },
+    "evidence.public-paging": {
+      "runner": "evidence",
+      "evidence": "pipeline-public-paging",
+      "targets": [
+        {
+          "path": "internal/export/pipeline_multivalue_vertical_adversarial_external_test.go",
+          "test": "TestPipelinePinnedClickHousePublishesNullableListsThroughPagingAndExport"
+        }
+      ],
+      "assertions": [
+        "Export",
+        "mvexpand"
+      ],
+      "claim": {
+        "surfaces": "two-page-public-result",
+        "parse": "accept"
+      }
+    },
+    "evidence.optional-multivalue": {
+      "runner": "evidence",
+      "evidence": "queryexec-optional-multivalue-two-row-transport",
+      "targets": [
+        {
+          "path": "internal/queryexec/pipeline_optional_multivalue_transport_adversarial_test.go",
+          "test": "TestPipelineOptionalMultivalueTransportDistinguishesNullEmptyAndMembers"
+        }
+      ],
+      "assertions": [
+        "present typed empty",
+        "ordered Unicode and empty members"
+      ],
+      "expected": {
+        "schema": [
+          {
+            "name": "tags",
+            "kind": "list",
+            "nullable": true,
+            "multivalue": true
+          }
+        ],
+        "rows": [
+          [
+            {
+              "null": true
+            }
+          ],
+          [
+            {
+              "list": []
+            }
+          ],
+          [
+            {
+              "list": [
+                {
+                  "string": "a"
+                },
+                {
+                  "string": ""
+                },
+                {
+                  "string": "界"
+                },
+                {
+                  "string": "a"
+                }
+              ]
+            }
+          ]
+        ]
+      }
+    },
+    "evidence.invalid-presence": {
+      "runner": "evidence",
+      "evidence": "optional-multivalue-presence-bit-2",
+      "targets": [
+        {
+          "path": "internal/queryexec/pipeline_optional_multivalue_transport_adversarial_test.go",
+          "test": "TestPipelineOptionalMultivalueTransportRejectsForgedNativeValues"
+        },
+        {
+          "path": "internal/queryexec/pipeline_optional_multivalue_transport_adversarial_test.go",
+          "test": "TestPipelineOptionalMultivalueTransportRejectsLateForgedRowAtomically"
+        }
+      ],
+      "assertions": [
+        "presence outside Boolean domain",
+        "malformed-late-row"
+      ],
+      "failure": {
+        "phase": "executor",
+        "code": "invalid-result",
+        "atomic": true,
+        "row_count": 0,
+        "result_bytes": 0
+      }
+    },
+    "evidence.query-wide-expansion": {
+      "runner": "evidence",
+      "evidence": "two-10000-row-mvexpand-stages",
+      "targets": [
+        {
+          "path": "internal/clickhouse/pipeline_commands_adversarial_integration_test.go",
+          "test": "TestPipelineAdversarialAgainstClickHouse"
+        }
+      ],
+      "assertions": [
+        "v03-mvexpand-query-rows",
+        "MVExpandQueryRowsLimitMarker"
+      ],
+      "failure": {
+        "phase": "executor",
+        "code": "execution-limit",
+        "marker": "open-splunk: mvexpand query rows exceed the limit",
+        "atomic": true,
+        "row_count": 0,
+        "result_bytes": 0
+      }
+    },
+    "evidence.retained-before-head": {
+      "runner": "evidence",
+      "evidence": "retained-bytes-before-downstream-head",
+      "targets": [
+        {
+          "path": "internal/clickhouse/pipeline_commands_adversarial_integration_test.go",
+          "test": "TestPipelineAdversarialAgainstClickHouse"
+        }
+      ],
+      "assertions": [
+        "v03-mvexpand-retained",
+        "MVExpandRetainedBytesLimitMarker"
+      ],
+      "failure": {
+        "phase": "executor",
+        "code": "execution-limit",
+        "marker": "open-splunk: mvexpand retained bytes exceed the limit",
+        "atomic": true,
+        "row_count": 0,
+        "result_bytes": 0
+      }
+    },
+    "evidence.fillnull-mvexpand-dynamic": {
+      "runner": "evidence",
+      "evidence": "fillnull-dynamic-publication-before-mvexpand",
+      "targets": [
+        {
+          "path": "internal/clickhouse/pipeline_fillnull_mvexpand_composition_regression_test.go",
+          "test": "TestCompilePipelineFillNullDynamicThenMVExpandMaterializesThePublicField"
+        },
+        {
+          "path": "internal/clickhouse/pipeline_fillnull_mvexpand_composition_regression_test.go",
+          "test": "TestPipelineFillNullDynamicThenMVExpandAgainstClickHouse"
+        }
+      ],
+      "assertions": [
+        "fields event_id optional_mv",
+        "table event_id optional_mv",
+        "UnsupportedMVExpandValueMarker"
+      ],
+      "claim": {
+        "parse": "accept",
+        "order": "member-order",
+        "surfaces": "dynamic-composition"
+      }
+    },
+    "evidence.fillnull-private-physical": {
+      "runner": "evidence",
+      "evidence": "fillnull-private-physical-publication",
+      "targets": [
+        {
+          "path": "internal/clickhouse/pipeline_fillnull_private_physical_composition_test.go",
+          "test": "TestCompilePipelineFillNullBindsPrivatePhysicalColumns"
+        },
+        {
+          "path": "internal/clickhouse/pipeline_fillnull_private_physical_composition_test.go",
+          "test": "TestPipelineFillNullAfterPrivatePhysicalProducersAgainstClickHouse"
+        }
+      ],
+      "assertions": [
+        "__os_group_0",
+        "fixed Number stats BY direct",
+        "fixed Bool stats BY direct"
+      ],
+      "claim": {
+        "parse": "accept",
+        "surfaces": "dynamic-composition"
+      }
+    },
+    "evidence.fillnull-invalid-path-stats-literal": {
+      "runner": "evidence",
+      "evidence": "fillnull-invalid-path-stats-literal-namespace-overlap",
+      "targets": [
+        {
+          "path": "internal/clickhouse/pipeline_public_namespace_overlap_compiler_test.go",
+          "test": "TestPipelineFillNullRepublishesInvalidPathStatsLiteralNamespaceOverlap"
+        },
+        {
+          "path": "internal/clickhouse/pipeline_commands_adversarial_integration_test.go",
+          "test": "TestPipelineAdversarialAgainstClickHouse"
+        }
+      ],
+      "assertions": [
+        "parent..child",
+        "fillnull did not republish invalid-path physical namespace overlap",
+        "opaque stats alias survives new parent publication"
+      ],
+      "claim": {
+        "parse": "accept",
+        "surfaces": "dynamic-composition"
+      }
+    },
+    "evidence.valid-prefix-marker": {
+      "runner": "evidence",
+      "evidence": "atomic-query-valid-first-row-invalid-later-row",
+      "targets": [
+        {
+          "path": "internal/queryexec/atomic_result_barrier_adversarial_test.go",
+          "test": "TestAtomicResultBarrierRejectsLateFailureWithoutPublishing"
+        },
+        {
+          "path": "internal/queryexec/pipeline_optional_multivalue_transport_adversarial_test.go",
+          "test": "TestPipelineOptionalMultivalueTransportRejectsLateForgedRowAtomically"
+        }
+      ],
+      "assertions": [
+        "later row conversion failure",
+        "malformed-late-row"
+      ],
+      "failure": {
+        "phase": "executor",
+        "code": "invalid-result",
+        "atomic": true,
+        "row_count": 0,
+        "result_bytes": 0
+      }
+    },
+    "evidence.sink-ceiling": {
+      "runner": "evidence",
+      "evidence": "atomic-manager-max-rows-below-produced-rows",
+      "targets": [
+        {
+          "path": "internal/searchjobs/pipeline_commands_public_paging_adversarial_test.go",
+          "test": "TestPipelineAtomicResultRowLimitStagesNoPreviewAndPublishesNothing"
+        }
+      ],
+      "assertions": [
+        "MaxRows",
+        "FailureResourceLimit",
+        "ErrResultsUnavailable"
+      ],
+      "failure": {
+        "phase": "publication-preflight",
+        "code": "resource-limit",
+        "atomic": true,
+        "row_count": 0,
+        "result_bytes": 0
+      }
+    },
+    "evidence.unsupported-multivalue": {
+      "runner": "evidence",
+      "evidence": "clickhouse-code-395-unsupported-mvexpand-marker",
+      "operation": "mvexpand",
+      "trials": [
+        {
+          "name": "numeric-member",
+          "input": {
+            "schema": [
+              {
+                "name": "value",
+                "kind": "list",
+                "nullable": false,
+                "multivalue": true
+              }
+            ],
+            "rows": [
+              [
+                {
+                  "list": [
+                    {
+                      "string": "ok"
+                    },
+                    {
+                      "number": 7
+                    }
+                  ]
+                }
+              ]
+            ]
+          },
+          "failure": {
+            "phase": "executor",
+            "code": "unsupported-value",
+            "marker": "open-splunk: mvexpand input value is unsupported",
+            "atomic": true,
+            "row_count": 0,
+            "result_bytes": 0
+          },
+          "assertions": [
+            "v03-mvexpand-mixed-number",
+            "UnsupportedMVExpandValueMarker"
+          ]
+        },
+        {
+          "name": "bool-member",
+          "input": {
+            "schema": [
+              {
+                "name": "value",
+                "kind": "list",
+                "nullable": false,
+                "multivalue": true
+              }
+            ],
+            "rows": [
+              [
+                {
+                  "list": [
+                    {
+                      "string": "ok"
+                    },
+                    {
+                      "bool": true
+                    }
+                  ]
+                }
+              ]
+            ]
+          },
+          "failure": {
+            "phase": "executor",
+            "code": "unsupported-value",
+            "marker": "open-splunk: mvexpand input value is unsupported",
+            "atomic": true,
+            "row_count": 0,
+            "result_bytes": 0
+          },
+          "assertions": [
+            "v03-mvexpand-mixed-bool",
+            "UnsupportedMVExpandValueMarker"
+          ]
+        },
+        {
+          "name": "nested-member",
+          "input": {
+            "schema": [
+              {
+                "name": "value",
+                "kind": "list",
+                "nullable": false,
+                "multivalue": true
+              }
+            ],
+            "rows": [
+              [
+                {
+                  "list": [
+                    {
+                      "list": [
+                        {
+                          "string": "nested"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            ]
+          },
+          "failure": {
+            "phase": "executor",
+            "code": "unsupported-value",
+            "marker": "open-splunk: mvexpand input value is unsupported",
+            "atomic": true,
+            "row_count": 0,
+            "result_bytes": 0
+          },
+          "assertions": [
+            "v03-mvexpand-nested",
+            "UnsupportedMVExpandValueMarker"
+          ]
+        },
+        {
+          "name": "object-member",
+          "input": {
+            "schema": [
+              {
+                "name": "value",
+                "kind": "list",
+                "nullable": false,
+                "multivalue": true
+              }
+            ],
+            "rows": [
+              [
+                {
+                  "list": [
+                    {
+                      "object": {
+                        "child": {
+                          "string": "x"
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            ]
+          },
+          "failure": {
+            "phase": "executor",
+            "code": "unsupported-value",
+            "marker": "open-splunk: mvexpand input value is unsupported",
+            "atomic": true,
+            "row_count": 0,
+            "result_bytes": 0
+          },
+          "assertions": [
+            "v03-mvexpand-object",
+            "UnsupportedMVExpandValueMarker"
+          ]
+        },
+        {
+          "name": "bytes-scalar",
+          "input": {
+            "schema": [
+              {
+                "name": "value",
+                "kind": "bytes",
+                "nullable": false,
+                "multivalue": false
+              }
+            ],
+            "rows": [
+              [
+                {
+                  "bytes_hex": "00ff41"
+                }
+              ]
+            ]
+          },
+          "failure": {
+            "phase": "executor",
+            "code": "unsupported-value",
+            "marker": "open-splunk: mvexpand input value is unsupported",
+            "atomic": true,
+            "row_count": 0,
+            "result_bytes": 0
+          },
+          "assertions": [
+            "v03-mvexpand-bytes",
+            "UnsupportedMVExpandValueMarker"
+          ]
+        }
+      ],
+      "targets": [
+        {
+          "path": "internal/queryexec/pipeline_runtime_marker_adversarial_test.go",
+          "test": "TestPipelineRuntimeMarkersAreCompletelyClassifiedAndRedacted"
+        },
+        {
+          "path": "internal/clickhouse/pipeline_commands_adversarial_integration_test.go",
+          "test": "TestPipelineAdversarialAgainstClickHouse"
+        }
+      ]
+    },
+    "evidence.makemv-rejected-domains": {
+      "runner": "evidence",
+      "evidence": "makemv-rejected-domain-matrix",
+      "operation": "makemv",
+      "trials": [
+        {
+          "name": "number",
+          "input": {
+            "schema": [
+              {
+                "name": "value",
+                "kind": "number",
+                "nullable": false,
+                "multivalue": false
+              }
+            ],
+            "rows": [
+              [
+                {
+                  "number": 7
+                }
+              ]
+            ]
+          },
+          "failure": {
+            "phase": "executor",
+            "code": "unsupported-value",
+            "marker": "open-splunk: makemv input value is unsupported",
+            "atomic": true,
+            "row_count": 0,
+            "result_bytes": 0
+          },
+          "assertions": [
+            "v03-makemv-number",
+            "UnsupportedMakeMVValueMarker"
+          ]
+        },
+        {
+          "name": "already-multivalue",
+          "input": {
+            "schema": [
+              {
+                "name": "value",
+                "kind": "list",
+                "nullable": false,
+                "multivalue": true
+              }
+            ],
+            "rows": [
+              [
+                {
+                  "list": [
+                    {
+                      "string": "a"
+                    },
+                    {
+                      "string": "b"
+                    }
+                  ]
+                }
+              ]
+            ]
+          },
+          "failure": {
+            "phase": "executor",
+            "code": "unsupported-value",
+            "marker": "open-splunk: makemv input value is unsupported",
+            "atomic": true,
+            "row_count": 0,
+            "result_bytes": 0
+          },
+          "assertions": [
+            "v03-makemv-array",
+            "UnsupportedMakeMVValueMarker"
+          ]
+        },
+        {
+          "name": "invalid-utf8-bytes",
+          "input": {
+            "schema": [
+              {
+                "name": "value",
+                "kind": "bytes",
+                "nullable": false,
+                "multivalue": false
+              }
+            ],
+            "rows": [
+              [
+                {
+                  "bytes_hex": "ff41"
+                }
+              ]
+            ]
+          },
+          "failure": {
+            "phase": "executor",
+            "code": "unsupported-value",
+            "marker": "open-splunk: makemv input value is unsupported",
+            "atomic": true,
+            "row_count": 0,
+            "result_bytes": 0
+          },
+          "assertions": [
+            "v03-fixed-binary-present",
+            "UnsupportedMakeMVValueMarker"
+          ]
+        },
+        {
+          "name": "container",
+          "input": {
+            "schema": [
+              {
+                "name": "value",
+                "kind": "object",
+                "nullable": false,
+                "multivalue": false
+              }
+            ],
+            "rows": [
+              [
+                {
+                  "object": {
+                    "child": {
+                      "string": "x"
+                    }
+                  }
+                }
+              ]
+            ]
+          },
+          "failure": {
+            "phase": "executor",
+            "code": "unsupported-value",
+            "marker": "open-splunk: makemv input value is unsupported",
+            "atomic": true,
+            "row_count": 0,
+            "result_bytes": 0
+          },
+          "assertions": [
+            "v03-makemv-array",
+            "UnsupportedMakeMVValueMarker"
+          ]
+        }
+      ],
+      "targets": [
+        {
+          "path": "internal/clickhouse/pipeline_commands_adversarial_integration_test.go",
+          "test": "TestPipelineAdversarialAgainstClickHouse"
+        },
+        {
+          "path": "internal/queryexec/pipeline_runtime_marker_adversarial_test.go",
+          "test": "TestPipelineRuntimeMarkersAreCompletelyClassifiedAndRedacted"
+        },
+        {
+          "path": "internal/clickhouse/pipeline_fillnull_container_compiler_test.go",
+          "test": "TestPipelineFixedRawProvenancePipelinesCompileWithAtomicConsumers"
+        }
+      ]
+    }
+  },
+  "rules": [
+    {
+      "id": "SPL-PROFILE-001",
+      "summary": "All authored, retained, and knowledge search surfaces use the current cumulative contract.",
+      "cases": [
+        {
+          "name": "authored arithmetic",
+          "profile": "AuthoredExpressionProfile",
+          "source": "index=main | eval value=1+2",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "knowledge arithmetic remains closed",
+          "profile": "KnowledgeExpressionProfile",
+          "source": "1+2",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_EVAL_EXPRESSION"
+          }
+        },
+        {
+          "name": "production vertical",
+          "source": "index=api | eval ratio=(used/capacity)*100 | where environment IN (\"production\",\"staging\") AND ratio>90 | stats avg(ratio) AS mean_ratio BY route",
+          "expect": {
+            "surfaces": [
+              "validation",
+              "job",
+              "paging",
+              "inspection",
+              "history",
+              "rerun",
+              "saved-search",
+              "csv",
+              "jsonl",
+              "field-catalog",
+              "field-summary",
+              "browser"
+            ]
+          }
+        },
+        {
+          "name": "downstream composition",
+          "source": "index=api | eval weighted=(request_bytes+response_bytes)*retry_count | eventstats avg(weighted) AS mean | streamstats sum(weighted) AS running | bin weighted span=10 | chart avg(weighted) OVER route BY status",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "pipeline command composition",
+          "source": "index=main | regex message=\"ok\" | reverse | accum n AS running | strcat host \"/\" source route | addinfo | fillnull value=\"0\" optional | addtotals fieldname=total n running | delta running AS step p=2 | makemv delim=\",\" tags | mvexpand tags limit=2",
+          "evidence": "pipeline-composition-executable-source",
+          "fixture": "evidence.pipeline-composition",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "independent pipeline command semantics",
+          "source": "index=main | regex message!=\"reject\" | reverse | accum n AS running | strcat host \"/\" route endpoint | addinfo | fillnull value=\"unknown\" optional | addtotals fieldname=total n running | delta running AS step p=1 | makemv delim=\",\" tags | mvexpand tags limit=2",
+          "evidence": "pipeline-command-reference-model",
+          "fixture": "reference.pipeline-commands",
+          "expect": {
+            "surfaces": "complete"
+          }
+        },
+        {
+          "name": "saved search uses persisted source",
+          "evidence": "server-saved-object-pipeline-launch",
+          "fixture": "evidence.saved-search",
+          "expect": {
+            "surfaces": "saved-search"
+          }
+        },
+        {
+          "name": "history rerun",
+          "evidence": "server-history-pipeline-rerun",
+          "fixture": "evidence.history-rerun",
+          "expect": {
+            "surfaces": "history"
+          }
+        },
+        {
+          "name": "public paging",
+          "source": "index=main | regex message!=\"reject\" | sort 0 +event_id | reverse | accum n AS running | strcat host \"/\" source endpoint | addinfo | fillnull value=\"unknown\" optional | addtotals fieldname=total n running | delta running AS step p=1 | makemv delim=\",\" tags | mvexpand tags | reverse | table event_id tags running endpoint optional total step info_sid",
+          "evidence": "pipeline-public-paging",
+          "fixture": "evidence.public-paging",
+          "expect": {
+            "surfaces": "two-page-public-result",
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "pipeline commands compose with lookup",
+          "source": "index=main | regex message=\"ok\" | reverse | accum n AS running | strcat host \"/\" source route | addinfo | fillnull value=\"0\" optional | addtotals fieldname=total n running | delta running AS step p=2 | makemv delim=\",\" tags | mvexpand tags limit=2 | lookup service_catalog service_id AS service_id OUTPUTNEW owner",
+          "expect": {
+            "parse": "accept",
+            "commands": 11
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-GRAMMAR-001",
+      "summary": "One eval grammar serves every existing predicate consumer.",
+      "cases": [
+        {
+          "name": "eval",
+          "source": "index=main | eval value=(left+right)*2",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "where",
+          "source": "index=main | where (left+right)*2>=10",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "if",
+          "source": "index=main | eval value=if(status IN (500,503), used/capacity, 0)",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "case",
+          "source": "index=main | eval value=case(status==200, bytes/1024, status==500, -1)",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "conditional count",
+          "source": "index=main | stats count(eval(status IN (500,502,503))) AS failures",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "base search membership excluded",
+          "source": "index=main status IN (500,503)",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_EXPRESSION"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-PRECEDENCE-001",
+      "summary": "Arithmetic, concatenation, comparison, and Boolean precedence is fixed.",
+      "cases": [
+        {
+          "name": "multiplication before addition",
+          "expression": "1+2*3",
+          "expect": {
+            "value": {
+              "double": 7
+            }
+          }
+        },
+        {
+          "name": "group before multiplication",
+          "expression": "(1+2)*3",
+          "expect": {
+            "value": {
+              "double": 9
+            }
+          }
+        },
+        {
+          "name": "division associates left",
+          "expression": "20/5/2",
+          "expect": {
+            "value": {
+              "double": 2
+            }
+          }
+        },
+        {
+          "name": "unary associates right",
+          "expression": "- - 2",
+          "expect": {
+            "value": {
+              "double": 2
+            }
+          }
+        },
+        {
+          "name": "arithmetic before concatenation prefix",
+          "expression": "\"value=\" . 1+2",
+          "expect": {
+            "value": {
+              "string": "value=3"
+            }
+          }
+        },
+        {
+          "name": "arithmetic before concatenation suffix",
+          "expression": "1+2 . \"ms\"",
+          "expect": {
+            "value": {
+              "string": "3ms"
+            }
+          }
+        },
+        {
+          "name": "equality synonym",
+          "source": "index=main | where status==200",
+          "expect": {
+            "parse": "accept"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-GROUPING-001",
+      "summary": "Scalar and Boolean grouping cannot introduce truthiness or Boolean assignment.",
+      "cases": [
+        {
+          "name": "scalar group",
+          "source": "index=main | eval value=(bytes+overhead)/1024",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "Boolean group",
+          "source": "index=main | where (status=500 OR status=503) AND attempts>1",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "grouped scalar is not predicate",
+          "source": "index=main | where (bytes+1)",
+          "expect": {
+            "diagnostic": "SPL_EXPECTED_COMPARISON"
+          }
+        },
+        {
+          "name": "grouped Boolean is not scalar",
+          "source": "index=main | eval value=(status=500 OR status=503)",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_EVAL_EXPRESSION"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-LEXER-001",
+      "summary": "Operators tokenize in scalar contexts without changing base-search words.",
+      "cases": [
+        {
+          "name": "unspaced division",
+          "source": "index=main | eval kib=bytes/1024",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "unspaced subtraction",
+          "source": "index=main | eval delta=used-capacity",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "signed exponent",
+          "source": "index=main | eval value=1e-3*1000",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "hyphenated base value preserved",
+          "source": "index=main host=api-west-1 | table host",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "ambiguous legacy spelling is subtraction",
+          "source": "index=main | eval value=request-bytes",
+          "expect": {
+            "parse": "accept"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-QUOTED-FIELD-001",
+      "summary": "Single quotes name exact scalar, eval-destination, stats-input, stats-BY, and table fields.",
+      "cases": [
+        {
+          "name": "operator field",
+          "source": "index=main | eval value='request-bytes'/1024",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "space field",
+          "source": "index=main | where 'HTTP Status' IN (500,502)",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "quoted destination",
+          "source": "index=main | eval 'error-rate'=errors/requests",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "escaped quote",
+          "source": "index=main | eval value='owner\\'s field'",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "quote and path escaped backslash",
+          "source": "index=main | eval value='path\\\\\\\\leaf'",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "invalid escape",
+          "source": "index=main | eval value='bad\\nfield'",
+          "expect": {
+            "diagnostic": "SPL_INVALID_FIELD_QUOTE_ESCAPE"
+          }
+        },
+        {
+          "name": "unterminated",
+          "source": "index=main | eval value='field",
+          "expect": {
+            "diagnostic": "SPL_UNTERMINATED_FIELD_QUOTE"
+          }
+        },
+        {
+          "name": "empty",
+          "source": "index=main | eval value=''",
+          "expect": {
+            "diagnostic": "SPL_EXPECTED_FIELD"
+          }
+        },
+        {
+          "name": "quoted stats aggregate",
+          "source": "index=main | stats avg('request-bytes') BY 'HTTP Status'",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "quoted stats output and table",
+          "source": "index=main | stats avg('request-bytes') AS \"Mean Bytes\" BY 'HTTP Status' | table 'HTTP Status', 'Mean Bytes'",
+          "expect": {
+            "parse": "accept"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-STATS-BY-MULTIVALUE-001",
+      "summary": "Stats BY expands bounded top-level scalar-member multivalues and rejects nested containers atomically.",
+      "cases": [
+        {
+          "name": "raw multivalue grouping",
+          "source": "index=main | stats count BY tags",
+          "row_fixture": "stats-by-scalar-and-string-multivalue",
+          "evidence": "stats-by-live-raw-multivalue",
+          "expect": {
+            "parse": "accept",
+            "relation": "one-group-occurrence-per-scalar-member"
+          }
+        },
+        {
+          "name": "split-value deduplication",
+          "source": "index=main | stats count BY tags dedup_splitvals=true",
+          "row_fixture": "stats-by-duplicate-string-members",
+          "evidence": "stats-by-live-split-deduplication",
+          "expect": {
+            "parse": "accept",
+            "relation": "per-field-members-deduplicated-before-grouping"
+          }
+        },
+        {
+          "name": "missing null and empty inputs",
+          "source": "index=main | stats count BY tags",
+          "row_fixture": "stats-by-missing-whole-null-null-members-and-empty",
+          "evidence": "stats-by-live-empty-domain",
+          "expect": {
+            "relation": "missing-whole-null-null-members-and-empty-arrays-contribute-no-group"
+          }
+        },
+        {
+          "name": "authored Cartesian product",
+          "source": "index=main | stats count BY tags zones",
+          "row_fixture": "stats-by-two-multivalue-fields",
+          "evidence": "stats-by-live-cartesian-product",
+          "expect": {
+            "parse": "accept",
+            "relation": "cartesian-product-in-authored-field-order"
+          }
+        },
+        {
+          "name": "fixed multivalue preserves String and Bytes members",
+          "source": "index=main | stats values(host) AS members | stats count BY members",
+          "row_fixture": "stats-by-fixed-array-valid-and-invalid-utf8-host-members",
+          "evidence": "stats-by-live-string-or-bytes-publication",
+          "expect": {
+            "relation": "nullable-mixed-valid-utf8-string-invalid-utf8-bytes"
+          }
+        },
+        {
+          "name": "exact 10000 combination boundary",
+          "source": "index=main | stats count BY tags zones | stats count AS groups",
+          "row_fixture": "stats-by-100-by-100-members",
+          "evidence": "stats-by-live-exact-10000-boundary",
+          "expect": {
+            "relation": "10000-groups"
+          }
+        },
+        {
+          "name": "10001 combinations fail atomically",
+          "source": "index=main | stats count BY tags zones | head 1",
+          "row_fixture": "stats-by-101-by-100-members",
+          "evidence": "stats-by-live-10001-rejection",
+          "expect": {
+            "job_failure": "execution-limit-sanitized-atomic-no-prefix"
+          }
+        },
+        {
+          "name": "nested container rejection",
+          "source": "index=main | stats count BY tags | search count>100 | head 1",
+          "row_fixture": "stats-by-nested-container",
+          "evidence": "stats-by-live-container-rejection",
+          "expect": {
+            "job_failure": "unsupported-value-sanitized"
+          }
+        },
+        {
+          "name": "late marker publication is atomic",
+          "source": "index=main | stats count BY tags | search count>=1",
+          "row_fixture": "stats-by-valid-prefix-then-container",
+          "evidence": "stats-by-executor-late-marker-atomic",
+          "expect": {
+            "job_failure": "atomic-no-public-prefix"
+          }
+        },
+        {
+          "name": "public preview remains empty",
+          "source": "index=main | stats count BY tags | search count>=1",
+          "row_fixture": "stats-by-staged-prefix-then-unsupported-failure",
+          "evidence": "stats-by-manager-no-public-prefix",
+          "expect": {
+            "job_failure": "preview-and-paging-unavailable-no-public-prefix"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-ARITHMETIC-TYPE-001",
+      "summary": "Arithmetic is nullable Float64 and rejects statically unsupported domains.",
+      "cases": [
+        {
+          "name": "unary plus",
+          "expression": "+2",
+          "expect": {
+            "value": {
+              "double": 2
+            }
+          }
+        },
+        {
+          "name": "unary minus",
+          "expression": "-2",
+          "expect": {
+            "value": {
+              "double": -2
+            }
+          }
+        },
+        {
+          "name": "all binary operators",
+          "expression": "((8+2)-1)*3/9%4",
+          "expect": {
+            "value": {
+              "double": 3
+            }
+          }
+        },
+        {
+          "name": "string plus excluded",
+          "source": "index=main | eval value=\"a\"+\"b\"",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_ARITHMETIC_VALUE_TYPE",
+            "suggestion": "period"
+          }
+        },
+        {
+          "name": "numeric-looking fixed String excluded",
+          "source": "index=main | eval value=\"12\"+1",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_ARITHMETIC_VALUE_TYPE"
+          }
+        },
+        {
+          "name": "canonical time excluded",
+          "source": "index=main | eval value=_time+1",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_ARITHMETIC_VALUE_TYPE"
+          }
+        },
+        {
+          "name": "Boolean excluded",
+          "source": "index=main | eval value=true+1",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_ARITHMETIC_VALUE_TYPE"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-ARITHMETIC-NULL-001",
+      "summary": "Missing and incompatible runtime values produce present null; malformed tags fail atomically.",
+      "cases": [
+        {
+          "name": "missing",
+          "expression": "missing+1",
+          "row": {},
+          "expect": {
+            "value": {
+              "null": true,
+              "present": true
+            }
+          }
+        },
+        {
+          "name": "explicit null",
+          "expression": "value+1",
+          "row": {
+            "value": null
+          },
+          "expect": {
+            "value": {
+              "null": true,
+              "present": true
+            }
+          }
+        },
+        {
+          "name": "numeric String",
+          "expression": "value+1",
+          "row": {
+            "value": "2.5"
+          },
+          "expect": {
+            "value": {
+              "double": 3.5
+            }
+          }
+        },
+        {
+          "name": "String whitespace",
+          "expression": "value+1",
+          "row": {
+            "value": " 2.5 "
+          },
+          "expect": {
+            "value": {
+              "null": true
+            }
+          }
+        },
+        {
+          "name": "String nonfinite",
+          "expression": "value+1",
+          "row": {
+            "value": "NaN"
+          },
+          "expect": {
+            "value": {
+              "null": true
+            }
+          }
+        },
+        {
+          "name": "String too large",
+          "expression": "value+1",
+          "row_fixture": "numeric-string-4097-bytes",
+          "expect": {
+            "value": {
+              "null": true
+            }
+          }
+        },
+        {
+          "name": "integer precision boundary",
+          "expression": "value+0",
+          "row": {
+            "value": 9007199254740992
+          },
+          "expect": {
+            "value": {
+              "double_text": "9007199254740992"
+            }
+          }
+        },
+        {
+          "name": "malformed decimal tag",
+          "expression": "value+1",
+          "row_fixture": "malformed-decimal-v1",
+          "expect": {
+            "job_failure": "unsupported-value-sanitized"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-ARITHMETIC-EXCEPTION-001",
+      "summary": "Zero divisors are null and computed IEEE non-finite values are transported.",
+      "cases": [
+        {
+          "name": "positive zero division",
+          "expression": "1/0",
+          "expect": {
+            "value": {
+              "null": true
+            }
+          }
+        },
+        {
+          "name": "negative zero division",
+          "expression": "1/-0.0",
+          "expect": {
+            "value": {
+              "null": true
+            }
+          }
+        },
+        {
+          "name": "zero remainder",
+          "expression": "1%0",
+          "expect": {
+            "value": {
+              "null": true
+            }
+          }
+        },
+        {
+          "name": "negative remainder",
+          "expression": "-5%2",
+          "expect": {
+            "value": {
+              "double": -1
+            }
+          }
+        },
+        {
+          "name": "negative divisor remainder",
+          "expression": "5%-2",
+          "expect": {
+            "value": {
+              "double": 1
+            }
+          }
+        },
+        {
+          "name": "both negative remainder",
+          "expression": "-5%-2",
+          "expect": {
+            "value": {
+              "double": -1
+            }
+          }
+        },
+        {
+          "name": "finite remainder infinity",
+          "expression": "5%inf",
+          "row": {
+            "inf": {
+              "positive_infinity": true
+            }
+          },
+          "expect": {
+            "value": {
+              "double": 5
+            }
+          }
+        },
+        {
+          "name": "infinity remainder finite",
+          "expression": "inf%5",
+          "row": {
+            "inf": {
+              "positive_infinity": true
+            }
+          },
+          "expect": {
+            "value": {
+              "nan": true
+            }
+          }
+        },
+        {
+          "name": "negative zero normalized",
+          "expression": "-0.0+0",
+          "expect": {
+            "value": {
+              "double": 0,
+              "negative_zero": false
+            }
+          }
+        },
+        {
+          "name": "division retains negative zero",
+          "expression": "0/-2",
+          "expect": {
+            "value": {
+              "double": 0,
+              "negative_zero": true
+            }
+          }
+        },
+        {
+          "name": "overflow",
+          "expression": "1e308*1e308",
+          "expect": {
+            "value": {
+              "positive_infinity": true
+            }
+          }
+        },
+        {
+          "name": "NaN publication",
+          "expression": "inf-inf",
+          "row": {
+            "inf": {
+              "positive_infinity": true
+            }
+          },
+          "expect": {
+            "value": {
+              "nan": true
+            }
+          }
+        },
+        {
+          "name": "NaN equality false",
+          "expression": "nan=nan",
+          "row": {
+            "nan": {
+              "nan": true
+            }
+          },
+          "expect": {
+            "boolean": false
+          }
+        },
+        {
+          "name": "NaN inequality true",
+          "expression": "nan!=nan",
+          "row": {
+            "nan": {
+              "nan": true
+            }
+          },
+          "expect": {
+            "boolean": true
+          }
+        },
+        {
+          "name": "NaN ordered false",
+          "expression": "nan>0",
+          "row": {
+            "nan": {
+              "nan": true
+            }
+          },
+          "expect": {
+            "boolean": false
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-ARITHMETIC-EVALUATION-001",
+      "summary": "Operands are source ordered, single occurrence, row preserving, and conditionally short circuited.",
+      "cases": [
+        {
+          "name": "left associative occurrence",
+          "source": "index=main | eval value=dynamic/2/3",
+          "expect": {
+            "explain": {
+              "source_occurrences": 1,
+              "event_scans": 1,
+              "array_join": false
+            }
+          }
+        },
+        {
+          "name": "unselected malformed branch",
+          "source": "index=main | eval value=if(status=200, 1, malformed+1)",
+          "row_fixture": "status-200-malformed-tag",
+          "expect": {
+            "value": {
+              "double": 1
+            }
+          }
+        },
+        {
+          "name": "arithmetic conditional needs Float branch",
+          "source": "index=main | eval value=if(status=200, used+1, 0.0)",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "arithmetic conditional integer branch rejected",
+          "source": "index=main | eval value=if(status=200, used+1, 0)",
+          "expect": {
+            "diagnostic_phase": "compile",
+            "diagnostic": "SPL_UNSUPPORTED_IF_BRANCH_TYPE"
+          }
+        },
+        {
+          "name": "row cardinality",
+          "source": "index=main | eval value=(a+b)*c",
+          "expect": {
+            "relation": {
+              "fanout": 1
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-MEMBERSHIP-001",
+      "summary": "Function and infix membership reuse eval equality without backend IN coercion.",
+      "cases": [
+        {
+          "name": "function",
+          "source": "index=main | where in(status,400,401,403)",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "infix",
+          "source": "index=main | where status IN (400,401,403)",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "not infix",
+          "source": "index=main | where status NOT IN (200,201)",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "field candidates",
+          "source": "index=main | where needle IN (left,right)",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "expression candidates",
+          "source": "index=main | where value IN (base+1,(base+2)*2)",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "String case sensitive",
+          "expression": "value IN (\"prod\")",
+          "row": {
+            "value": "Prod"
+          },
+          "expect": {
+            "boolean": false
+          }
+        },
+        {
+          "name": "wildcard literal",
+          "expression": "value IN (\"5*\")",
+          "row": {
+            "value": "500"
+          },
+          "expect": {
+            "boolean": false
+          }
+        },
+        {
+          "name": "NaN never matches",
+          "expression": "value IN (candidate)",
+          "row": {
+            "value": {
+              "nan": true
+            },
+            "candidate": {
+              "nan": true
+            }
+          },
+          "expect": {
+            "boolean": false
+          }
+        },
+        {
+          "name": "later malformed candidate still fails",
+          "expression": "value IN (1,bad)",
+          "row_fixture": "value-1-malformed-decimal-candidate",
+          "expect": {
+            "job_failure": "unsupported-value-sanitized"
+          }
+        },
+        {
+          "name": "empty",
+          "source": "index=main | where status IN ()",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_MEMBERSHIP_SYNTAX"
+          }
+        },
+        {
+          "name": "trailing comma",
+          "source": "index=main | where status IN (500,)",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_MEMBERSHIP_SYNTAX"
+          }
+        },
+        {
+          "name": "thirty third candidate",
+          "row_fixture": "membership-33-candidates",
+          "expect": {
+            "diagnostic": "SPL_QUERY_TOO_COMPLEX"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-MEMBERSHIP-NULL-001",
+      "summary": "Membership and NOT IN use exact three-valued logic.",
+      "cases": [
+        {
+          "name": "earlier match before null",
+          "expression": "value IN (1,null)",
+          "row": {
+            "value": 1
+          },
+          "expect": {
+            "boolean": true
+          }
+        },
+        {
+          "name": "no match plus null",
+          "expression": "value IN (1,null)",
+          "row": {
+            "value": 2
+          },
+          "expect": {
+            "boolean": null
+          }
+        },
+        {
+          "name": "null input",
+          "expression": "value IN (1,2)",
+          "row": {
+            "value": null
+          },
+          "expect": {
+            "boolean": null
+          }
+        },
+        {
+          "name": "not true",
+          "expression": "value NOT IN (1,2)",
+          "row": {
+            "value": 1
+          },
+          "expect": {
+            "boolean": false
+          }
+        },
+        {
+          "name": "not null",
+          "expression": "value NOT IN (1,null)",
+          "row": {
+            "value": 2
+          },
+          "expect": {
+            "boolean": null
+          }
+        },
+        {
+          "name": "direct assignment rejected",
+          "source": "index=main | eval selected=status IN (200,201)",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_EVAL_EXPRESSION"
+          }
+        },
+        {
+          "name": "explicit Boolean comparison excluded",
+          "source": "index=main | where (status IN (200,201))=true",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_MEMBERSHIP_SYNTAX"
+          }
+        },
+        {
+          "name": "if consumer",
+          "source": "index=main | eval selected=if(status IN (200,201),\"yes\",\"no\")",
+          "expect": {
+            "parse": "accept"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-EXPRESSION-LIMITS-001",
+      "summary": "Parser, planner, and compiler enforce independent expression ceilings.",
+      "cases": [
+        {
+          "name": "operator 256",
+          "row_fixture": "arithmetic-256-operators",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "operator 257",
+          "row_fixture": "arithmetic-257-operators",
+          "expect": {
+            "diagnostic": "SPL_QUERY_TOO_COMPLEX"
+          }
+        },
+        {
+          "name": "unary chain 33",
+          "row_fixture": "unary-33",
+          "expect": {
+            "diagnostic": "SPL_QUERY_TOO_COMPLEX"
+          }
+        },
+        {
+          "name": "membership aggregate 257",
+          "row_fixture": "membership-query-257-candidates",
+          "expect": {
+            "diagnostic": "SPL_QUERY_TOO_COMPLEX"
+          }
+        },
+        {
+          "name": "forged cycle",
+          "row_fixture": "forged-arithmetic-cycle",
+          "expect": {
+            "diagnostic": "SPL_QUERY_TOO_COMPLEX",
+            "phase": "planner-and-compiler"
+          }
+        },
+        {
+          "name": "node SQL 64KiB",
+          "row_fixture": "arithmetic-sql-overflow",
+          "expect": {
+            "diagnostic": "SPL_QUERY_TOO_COMPLEX"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-SECURITY-001",
+      "summary": "Expressions cannot widen authority, author SQL, expand rows, or disclose payloads.",
+      "cases": [
+        {
+          "name": "calculated index does not widen",
+          "source": "index=authorized | eval index=\"unauthorized\" | where index=\"unauthorized\"",
+          "expect": {
+            "authorized_indexes": [
+              "authorized"
+            ]
+          }
+        },
+        {
+          "name": "private quoted field rejected",
+          "source": "index=main | eval value='__os_private'+1",
+          "expect": {
+            "diagnostic": "SPL_INVALID_FIELD"
+          }
+        },
+        {
+          "name": "bound literal",
+          "source": "index=main | where value IN (\"'); DROP TABLE events; --\")",
+          "expect": {
+            "sql_literal_fragments": 0,
+            "bound_arguments": 1
+          }
+        },
+        {
+          "name": "no expansion",
+          "source": "index=main | eval value=(a+b)*c | where value IN (1,2,3)",
+          "expect": {
+            "explain": {
+              "event_scans": 1,
+              "array_join": false,
+              "fanout": 1
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-EXPRESSION-DIAGNOSTICS-001",
+      "summary": "Failures have stable codes, minimal ranges, and payload-free suggestions.",
+      "cases": [
+        {
+          "name": "string plus",
+          "source": "index=main | eval value=\"a\"+\"b\"",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_ARITHMETIC_VALUE_TYPE",
+            "range_text": "\"a\""
+          }
+        },
+        {
+          "name": "unterminated field quote",
+          "source": "index=main | eval value='field",
+          "expect": {
+            "diagnostic": "SPL_UNTERMINATED_FIELD_QUOTE",
+            "range_text": "'"
+          }
+        },
+        {
+          "name": "candidate overflow",
+          "row_fixture": "membership-33-candidates",
+          "expect": {
+            "diagnostic": "SPL_QUERY_TOO_COMPLEX",
+            "range": "membership-list"
+          }
+        },
+        {
+          "name": "Boolean assignment",
+          "source": "index=main | eval value=in(status,200)",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_EVAL_EXPRESSION"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-FIELDS-001",
+      "summary": "Command fields are exact, unquoted, source-located, and outside the private namespace.",
+      "cases": [
+        {
+          "name": "exact field accepted",
+          "source": "index=main | fillnull host",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "quoted command field rejected",
+          "source": "index=main | fillnull 'host name'",
+          "expect": {
+            "diagnostic": "SPL_EXPECTED_FIELD"
+          }
+        },
+        {
+          "name": "private field rejected",
+          "source": "index=main | delta __os_pipeline_ordinal",
+          "expect": {
+            "diagnostic": "SPL_RESERVED_FIELD"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-REGEX-001",
+      "summary": "Regex filtering shares the bounded RE2 match profile and negative missing/null behavior.",
+      "cases": [
+        {
+          "name": "raw positive",
+          "source": "index=main | regex \"(?i)timeout\"",
+          "fixture": "reference.regex-positive",
+          "expect": {
+            "parse": "accept",
+            "relation": "filter"
+          }
+        },
+        {
+          "name": "field negative",
+          "source": "index=main | regex message!=\"reject\"",
+          "fixture": "reference.regex-negative",
+          "expect": {
+            "parse": "accept",
+            "value": "missing-and-null-kept"
+          }
+        },
+        {
+          "name": "dynamic pattern rejected",
+          "source": "index=main | regex message=pattern",
+          "expect": {
+            "diagnostic": "SPL_EXPECTED_REGEX_PATTERN"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-REVERSE-001",
+      "summary": "Reverse inverts the complete deterministic established order without changing rows or fields.",
+      "cases": [
+        {
+          "name": "repeated stable reversal",
+          "source": "index=main | sort 0 +event_id | reverse | reverse",
+          "fixture": "reference.reverse",
+          "expect": {
+            "parse": "accept",
+            "order": "original-established-order"
+          }
+        },
+        {
+          "name": "arguments rejected",
+          "source": "index=main | reverse 2",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_REVERSE_SYNTAX"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-ACCUM-001",
+      "summary": "Accum is the shared current-row-inclusive global streamstats numeric sum.",
+      "cases": [
+        {
+          "name": "default replacement",
+          "source": "index=main | sort 0 +event_id | accum bytes",
+          "fixture": "reference.accum-default",
+          "expect": {
+            "parse": "accept",
+            "type": "nullable-float64"
+          }
+        },
+        {
+          "name": "explicit output",
+          "source": "index=main | accum bytes AS running_bytes",
+          "fixture": "reference.accum-output",
+          "expect": {
+            "parse": "accept",
+            "order": "pipeline"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-STRCAT-001",
+      "summary": "Strcat shares bounded period concatenation with an explicit all-required write policy.",
+      "cases": [
+        {
+          "name": "default missing as empty",
+          "source": "index=main | strcat host \"/\" missing endpoint",
+          "fixture": "reference.strcat-default",
+          "expect": {
+            "parse": "accept",
+            "value": "missing-source-empty"
+          }
+        },
+        {
+          "name": "all required",
+          "source": "index=main | strcat allrequired=true service \"/\" route route_key",
+          "fixture": "reference.strcat-required",
+          "expect": {
+            "parse": "accept",
+            "value": "preserve-destination-when-source-null"
+          }
+        },
+        {
+          "name": "minimum arity",
+          "source": "index=main | strcat host endpoint",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_STRCAT_SYNTAX"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-ADDINFO-001",
+      "summary": "Addinfo overwrites four fields from the immutable admitted search snapshot.",
+      "cases": [
+        {
+          "name": "immutable metadata",
+          "source": "index=main | addinfo | table info_min_time info_max_time info_search_time info_sid",
+          "fixture": "reference.addinfo",
+          "expect": {
+            "parse": "accept",
+            "surfaces": "admitted-snapshot"
+          }
+        },
+        {
+          "name": "arguments rejected",
+          "source": "index=main | addinfo now",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_ADDINFO_SYNTAX"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-FILLNULL-001",
+      "summary": "Fillnull writes one quoted String only to explicit missing or null fields.",
+      "cases": [
+        {
+          "name": "default zero String",
+          "source": "index=main | fillnull host route",
+          "fixture": "reference.fillnull-default",
+          "expect": {
+            "parse": "accept",
+            "value": "0"
+          }
+        },
+        {
+          "name": "explicit Unicode String",
+          "source": "index=main | fillnull value=\"未知\" host route",
+          "fixture": "reference.fillnull-unicode",
+          "expect": {
+            "parse": "accept",
+            "type": "string"
+          }
+        },
+        {
+          "name": "private physical producers materialize the authored field",
+          "source": "index=main | stats count BY level | fillnull value=\"fallback\" level | table level count",
+          "evidence": "fillnull-private-physical-publication",
+          "fixture": "evidence.fillnull-private-physical",
+          "expect": {
+            "parse": "accept",
+            "surfaces": "dynamic-composition"
+          }
+        },
+        {
+          "name": "invalid-path stats literal survives ancestor publication",
+          "source": "index=main | stats count AS \"parent..child\" | fillnull value=\"fallback\" parent",
+          "evidence": "fillnull-invalid-path-stats-literal-namespace-overlap",
+          "fixture": "evidence.fillnull-invalid-path-stats-literal",
+          "expect": {
+            "parse": "accept",
+            "surfaces": "dynamic-composition"
+          }
+        },
+        {
+          "name": "implicit schema form rejected",
+          "source": "index=main | fillnull value=\"0\"",
+          "expect": {
+            "diagnostic": "SPL_EXPECTED_FIELD"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-ADDTOTALS-001",
+      "summary": "Addtotals computes one explicit nullable Float64 row total and treats ineligible inputs as zero.",
+      "cases": [
+        {
+          "name": "bounded row total",
+          "source": "index=main | addtotals row=true col=false fieldname=total bytes_in bytes_out",
+          "fixture": "reference.addtotals",
+          "expect": {
+            "parse": "accept",
+            "type": "nullable-float64"
+          }
+        },
+        {
+          "name": "all ineligible zero",
+          "source": "index=main | table event_id | addtotals fieldname=total missing other",
+          "fixture": "reference.addtotals-ineligible",
+          "expect": {
+            "value": {
+              "double": 0
+            }
+          }
+        },
+        {
+          "name": "column totals deferred",
+          "source": "index=main | addtotals col=true bytes",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_ADDTOTALS_SYNTAX"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-DELTA-001",
+      "summary": "Delta performs bounded numeric subtraction against an established prior row.",
+      "cases": [
+        {
+          "name": "default lag and output",
+          "source": "index=main | sort 0 +event_id | delta bytes",
+          "fixture": "reference.delta-default",
+          "expect": {
+            "parse": "accept",
+            "type": "nullable-float64"
+          }
+        },
+        {
+          "name": "lag before alias",
+          "source": "index=main | delta bytes p=3 AS change",
+          "fixture": "reference.delta-output",
+          "expect": {
+            "parse": "accept",
+            "order": "pipeline"
+          }
+        },
+        {
+          "name": "zero lag rejected",
+          "source": "index=main | delta bytes p=0",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_DELTA_SYNTAX"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-MAKEMV-001",
+      "summary": "Makemv constructs a bounded optional typed String List with literal delimiter semantics.",
+      "cases": [
+        {
+          "name": "Unicode delimiter and empty members",
+          "source": "index=main | makemv delim=\"💥界\" allowempty=true tags",
+          "fixture": "reference.makemv-unicode",
+          "expect": {
+            "parse": "accept",
+            "type": "nullable-list-string"
+          }
+        },
+        {
+          "name": "missing remains null",
+          "source": "index=main | makemv delim=\",\" missing",
+          "fixture": "reference.makemv-null",
+          "expect": {
+            "value": {
+              "null": true
+            }
+          }
+        },
+        {
+          "name": "non-String multivalue Bytes and container inputs rejected",
+          "source": "index=main | makemv delim=\",\" value",
+          "evidence": "makemv-rejected-domain-matrix",
+          "fixture": "evidence.makemv-rejected-domains",
+          "expect": {
+            "atomic": true,
+            "diagnostic_phase": "executor"
+          }
+        },
+        {
+          "name": "empty delimiter rejected",
+          "source": "index=main | makemv delim=\"\" tags",
+          "expect": {
+            "diagnostic": "SPL_UNSUPPORTED_MAKEMV_SYNTAX"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-MVEXPAND-001",
+      "summary": "Mvexpand emits bounded copied rows in member order with cumulative trusted charging.",
+      "cases": [
+        {
+          "name": "bounded expansion",
+          "source": "index=main | makemv delim=\",\" tags | mvexpand tags limit=100",
+          "fixture": "reference.mvexpand",
+          "expect": {
+            "parse": "accept",
+            "order": "member-order"
+          }
+        },
+        {
+          "name": "empty list emits no rows",
+          "source": "index=main | makemv delim=\",\" tags | mvexpand tags",
+          "fixture": "reference.mvexpand-empty",
+          "expect": {
+            "value": "present-empty-emits-zero"
+          }
+        },
+        {
+          "name": "String Number Bool and time scalars preserve one row",
+          "source": "index=main | mvexpand value",
+          "fixture": "reference.mvexpand-scalars",
+          "expect": {
+            "order": "member-order",
+            "type": "scalar-preserved"
+          }
+        },
+        {
+          "name": "missing whole null and explicit null member forms",
+          "source": "index=main | mvexpand values",
+          "fixture": "reference.mvexpand-null-forms",
+          "expect": {
+            "value": "missing-whole-null-and-null-member"
+          }
+        },
+        {
+          "name": "fillnull Dynamic publication composes through projection into mvexpand",
+          "source": "index=main | fillnull value=\"fallback\" optional_mv | fields event_id optional_mv | mvexpand optional_mv | table event_id optional_mv",
+          "evidence": "fillnull-dynamic-publication-before-mvexpand",
+          "fixture": "evidence.fillnull-mvexpand-dynamic",
+          "expect": {
+            "parse": "accept",
+            "order": "member-order",
+            "surfaces": "dynamic-composition"
+          }
+        },
+        {
+          "name": "limit overflow",
+          "source": "index=main | mvexpand tags limit=1001",
+          "expect": {
+            "diagnostic": "SPL_QUERY_TOO_COMPLEX"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-MULTIVALUE-TYPE-001",
+      "summary": "A sealed presence sidecar distinguishes null from present empty typed String Lists.",
+      "cases": [
+        {
+          "name": "null versus empty",
+          "evidence": "queryexec-optional-multivalue-two-row-transport",
+          "fixture": "evidence.optional-multivalue",
+          "expect": {
+            "type": "nullable-list-string",
+            "value": [
+              null,
+              []
+            ]
+          }
+        },
+        {
+          "name": "invalid presence fails",
+          "evidence": "optional-multivalue-presence-bit-2",
+          "fixture": "evidence.invalid-presence",
+          "expect": {
+            "atomic": true,
+            "diagnostic_phase": "executor"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-ORDER-001",
+      "summary": "Order-sensitive commands consume durable private relation and tie lineage that never becomes public.",
+      "cases": [
+        {
+          "name": "composed order",
+          "source": "index=main | sort 0 +event_id | reverse | accum n AS running | delta running AS change | makemv delim=\",\" tags | mvexpand tags | reverse",
+          "fixture": "reference.composed-order",
+          "expect": {
+            "order": "durable-private-lineage",
+            "surfaces": "private-columns-redacted"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-PIPELINE-LIMITS-001",
+      "summary": "Source and data-dependent command costs are charged at every trusted boundary.",
+      "cases": [
+        {
+          "name": "field list overflow",
+          "evidence": "fillnull-and-addtotals-65th-field",
+          "expect": {
+            "diagnostic": "SPL_QUERY_TOO_COMPLEX",
+            "diagnostic_phase": "parser"
+          }
+        },
+        {
+          "name": "query-wide expansion",
+          "evidence": "two-10000-row-mvexpand-stages",
+          "fixture": "evidence.query-wide-expansion",
+          "expect": {
+            "resource": "15000-cumulative-rows",
+            "atomic": true,
+            "diagnostic_phase": "executor"
+          }
+        },
+        {
+          "name": "retained bytes before head",
+          "source": "index=main | mvexpand tags | head 1",
+          "evidence": "retained-bytes-before-downstream-head",
+          "fixture": "evidence.retained-before-head",
+          "expect": {
+            "resource": "pre-downstream-stage-charge",
+            "atomic": true,
+            "diagnostic_phase": "executor"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-ATOMIC-001",
+      "summary": "Hard resource and malformed-value failures publish no observable result prefix.",
+      "cases": [
+        {
+          "name": "valid prefix then marker",
+          "evidence": "atomic-query-valid-first-row-invalid-later-row",
+          "fixture": "evidence.valid-prefix-marker",
+          "expect": {
+            "atomic": true,
+            "diagnostic_phase": "executor",
+            "value": {
+              "row_count": 0,
+              "result_bytes": 0
+            }
+          }
+        },
+        {
+          "name": "sink ceiling",
+          "evidence": "atomic-manager-max-rows-below-produced-rows",
+          "fixture": "evidence.sink-ceiling",
+          "expect": {
+            "atomic": true,
+            "diagnostic_phase": "publication-preflight"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-PIPELINE-DIAGNOSTICS-001",
+      "summary": "Diagnostics and runtime marker classification are stable, source-located, and secret-free.",
+      "cases": [
+        {
+          "name": "oversized delimiter range",
+          "evidence": "1025-byte-makemv-delimiter",
+          "expect": {
+            "diagnostic": "SPL_QUERY_TOO_COMPLEX",
+            "range": "delimiter-token"
+          }
+        },
+        {
+          "name": "unsupported multivalue redacted",
+          "evidence": "clickhouse-code-395-unsupported-mvexpand-marker",
+          "fixture": "evidence.unsupported-multivalue",
+          "expect": {
+            "diagnostic": "unsupported-value",
+            "diagnostic_phase": "executor",
+            "atomic": true,
+            "surfaces": "no-sql-or-values"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-LOOKUP-SYNTAX-001",
+      "summary": "Explicit lookup syntax preserves ordered exact key and output mappings.",
+      "cases": [
+        {
+          "name": "overwrite composite key",
+          "source": "index=main | lookup service_catalog region AS event_region code AS status_code OUTPUT description AS status_description owner",
+          "expect": {
+            "parse": "accept",
+            "command": "lookup",
+            "mode": "OUTPUT",
+            "keys": 2,
+            "outputs": 2
+          }
+        },
+        {
+          "name": "preserve existing output",
+          "source": "index=main | lookup service_catalog service_id AS service_key OUTPUTNEW owner tier team",
+          "expect": {
+            "parse": "accept",
+            "command": "lookup",
+            "mode": "OUTPUTNEW",
+            "keys": 1,
+            "outputs": 3
+          }
+        },
+        {
+          "name": "key mapping requires AS",
+          "source": "index=main | lookup service_catalog service_id service_key OUTPUT owner",
+          "expect": {
+            "parse": "reject",
+            "diagnostic": "SPL_EXPECTED_AS"
+          }
+        },
+        {
+          "name": "output mode is required",
+          "source": "index=main | lookup service_catalog service_id AS service_key",
+          "expect": {
+            "parse": "reject",
+            "diagnostic": "SPL_UNSUPPORTED_LOOKUP_SYNTAX"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-LOOKUP-BOUNDS-001",
+      "summary": "Lookup key and output cardinality is rejected before execution when it exceeds the fixed boundary.",
+      "cases": [
+        {
+          "name": "fifth key",
+          "source": "index=main | lookup catalog k1 AS e1 k2 AS e2 k3 AS e3 k4 AS e4 k5 AS e5 OUTPUT owner",
+          "expect": {
+            "parse": "reject",
+            "diagnostic": "SPL_QUERY_TOO_COMPLEX"
+          }
+        },
+        {
+          "name": "seventeenth output",
+          "source": "index=main | lookup catalog id AS event_id OUTPUT o1 o2 o3 o4 o5 o6 o7 o8 o9 o10 o11 o12 o13 o14 o15 o16 o17",
+          "expect": {
+            "parse": "reject",
+            "diagnostic": "SPL_QUERY_TOO_COMPLEX"
+          }
+        }
+      ]
+    }
+  ],
+  "stats_inventory": {
+    "format_version": 1,
+    "as_of": "2026-08-11",
+    "authority": [
+      "docs/spl.md",
+      "internal/spl/testdata/compatibility.json"
+    ],
+    "target": {
+      "language": "SPL1",
+      "product": "Splunk Enterprise",
+      "command_version": "10.0",
+      "eval_in_stats_version": "10.2",
+      "spl2_out_of_scope": true
+    },
+    "status_values": [
+      "implemented",
+      "currently_missing",
+      "oracle_required"
+    ],
+    "evidence_values": [
+      "tested",
+      "not_tested",
+      "missing"
+    ],
+    "evidence_layers": {
+      "syntax_and_plan": "parser and logical-plan coverage",
+      "clickhouse_lowering": "compiler SQL-shape coverage",
+      "pinned_runtime": "stored-event execution against digest-pinned ClickHouse 26.7.3.19",
+      "ui_rendering": "generic statistics-table sparkline-marker or multivalue-delimiter presentation without replacing typed cells"
+    },
+    "official_sources": [
+      {
+        "id": "stats-10.0",
+        "url": "https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/search-commands/stats"
+      },
+      {
+        "id": "functions-10.0",
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/statistical-and-charting-functions/statistical-and-charting-functions"
+      },
+      {
+        "id": "aggregate-10.0",
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/statistical-and-charting-functions/aggregate-functions"
+      },
+      {
+        "id": "multivalue-10.0",
+        "url": "https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/statistical-and-charting-functions/multivalue-stats-and-chart-functions"
+      },
+      {
+        "id": "event-order-10.0",
+        "url": "https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/statistical-and-charting-functions/event-order-functions"
+      },
+      {
+        "id": "time-10.0",
+        "url": "https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/statistical-and-charting-functions/time-functions"
+      },
+      {
+        "id": "time-bins-10.0",
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/search-manual/10.0/specify-time-ranges/search-using-time-bins-and-spans"
+      },
+      {
+        "id": "limits-10.0",
+        "url": "https://help.splunk.com/en/splunk-enterprise/administer/admin-manual/10.0/configuration-file-reference/10.0.0-configuration-file-reference/limits.conf"
+      },
+      {
+        "id": "eval-stats-10.2",
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/search-manual/10.2/calculate-statistics/use-stats-with-eval-expressions-and-functions"
+      }
+    ],
+    "implementation_evidence": [
+      "internal/spl/ast.go",
+      "internal/spl/parser.go",
+      "internal/spl/stats_extended_parser_test.go",
+      "internal/spl/stats_options_parser_test.go",
+      "internal/spl/stats_quoted_alias_parser_test.go",
+      "internal/spl/stats_sparkline_parser_test.go",
+      "internal/spl/stats_field_glob.go",
+      "internal/spl/stats_field_glob_test.go",
+      "internal/spl/stats_wildcard_parser_test.go",
+      "internal/plan/builder.go",
+      "internal/plan/analysis.go",
+      "internal/plan/plan.go",
+      "internal/plan/stats_extended_plan_test.go",
+      "internal/plan/stats_options_plan_test.go",
+      "internal/plan/stats_aggregate_source.go",
+      "internal/plan/stats_quoted_alias_plan_test.go",
+      "internal/plan/stats_sparkline_plan_test.go",
+      "internal/plan/stats_wildcard.go",
+      "internal/plan/stats_wildcard_plan_test.go",
+      "internal/plan/stats_wildcard_runtime.go",
+      "internal/plan/stats_wildcard_runtime_test.go",
+      "internal/clickhouse/compiler.go",
+      "internal/clickhouse/compiled_query_execution.go",
+      "internal/clickhouse/result_field_presentation.go",
+      "internal/clickhouse/stats_delimiter_presentation_test.go",
+      "internal/clickhouse/stats_partitions_execution_hint_test.go",
+      "internal/clickhouse/stats_command_options.go",
+      "internal/clickhouse/stats_command_options_test.go",
+      "internal/clickhouse/stats_distribution_aggregate.go",
+      "internal/clickhouse/stats_distribution_compiler_test.go",
+      "internal/clickhouse/stats_multivalue_group.go",
+      "internal/clickhouse/stats_multivalue_group_test.go",
+      "internal/clickhouse/stats_multivalue_group_runtime_integration_test.go",
+      "internal/clickhouse/stats_multivalue_expansion_limit.go",
+      "internal/clickhouse/stats_multivalue_expansion_limit_test.go",
+      "internal/clickhouse/stats_multivalue_expansion_limit_runtime_integration_test.go",
+      "internal/clickhouse/stats_numeric_aggregate.go",
+      "internal/clickhouse/stats_numeric_compiler_test.go",
+      "internal/clickhouse/stats_order_time_compiler_test.go",
+      "internal/clickhouse/stats_phase2_compiler_test.go",
+      "internal/clickhouse/stats_distribution_runtime_integration_test.go",
+      "internal/clickhouse/stats_numeric_runtime_integration_test.go",
+      "internal/clickhouse/stats_order_time_runtime_integration_test.go",
+      "internal/clickhouse/stats_quoted_compiler_test.go",
+      "internal/clickhouse/stats_sparkline.go",
+      "internal/clickhouse/stats_sparkline_test.go",
+      "internal/clickhouse/stats_sparkline_compiler_test.go",
+      "internal/clickhouse/stats_sparkline_runtime_integration_test.go",
+      "internal/clickhouse/stats_sparkline_pipeline_runtime_integration_test.go",
+      "internal/clickhouse/stats_wildcard_inventory.go",
+      "internal/clickhouse/stats_wildcard_inventory_test.go",
+      "internal/queryexec/executor.go",
+      "internal/queryexec/stats_delimiter_transport_test.go",
+      "internal/queryexec/stats_partitions_settings_test.go",
+      "internal/queryexec/stats_wildcard_inventory.go",
+      "internal/queryexec/stats_wildcard_inventory_test.go",
+      "internal/queryexec/stats_wildcard_inventory_integration_test.go",
+      "internal/searchjobs/types.go",
+      "internal/searchjobs/manager.go",
+      "internal/searchjobs/column_presentation_test.go",
+      "internal/searchjobs/stats_wildcard_execution.go",
+      "internal/searchjobs/stats_wildcard_manager_test.go",
+      "internal/searchsnapshot/stats_wildcard_replay_test.go",
+      "internal/searchjobproto/result.go",
+      "internal/searchjobproto/result_test.go",
+      "proto/open_splunk/result.proto",
+      "gen/go/open_splunk/result.pb.go",
+      "gen/ts/open_splunk/result.ts",
+      "lib/search/backend-data.ts",
+      "lib/search/backend-data.test.ts",
+      "lib/api/result-column-presentation.ts",
+      "lib/api/result-column-presentation.test.ts",
+      "app/search-workspace/live-preview.ts",
+      "app/search-workspace/live-preview.test.ts",
+      "app/search-workspace/statistics-multivalue.ts",
+      "app/search-workspace/statistics-multivalue.test.ts",
+      "app/search-workspace/statistics-sparkline.ts",
+      "app/search-workspace/statistics-sparkline.test.ts",
+      "app/search-workspace/panels/statistics-panel.tsx",
+      "app/globals.css"
+    ],
+    "documented_grammar": "| stats [partitions=<num>] [allnum=<bool>] [delim=<string>] (<stats-agg-term>... | <sparkline-agg-term>...) [BY <field-list>] [dedup_splitvals=<boolean>]",
+    "command_options": [
+      {
+        "id": "partitions",
+        "syntax": "partitions=<num>",
+        "documented_default": 0,
+        "resolved_default": 1,
+        "documented_maximum": 100,
+        "status": "implemented",
+        "current_boundary": "parser preserves authored unsigned 64-bit values; plan resolves 0 to 1 and clamps values above 100 to 100; each stats stage contributes min(partitions,4) to a sealed whole-query max_threads hint, multiple stages take the minimum, and the executor never raises a stricter configured cap; this is a bounded ClickHouse approximation, not Splunk stage-local reduce topology",
+        "evidence": {
+          "syntax_and_plan": "tested",
+          "clickhouse_lowering": "tested",
+          "pinned_runtime": "not_tested"
+        },
+        "runtime_scope": "executor max_threads settings are tested; no Splunk stage-local partition topology or partition-dependent order is claimed",
+        "oracle_case_ids": [
+          "O-partitions-order"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "limits-10.0"
+        ]
+      },
+      {
+        "id": "allnum",
+        "syntax": "allnum=<bool>",
+        "documented_default": false,
+        "status": "implemented",
+        "current_boundary": "allnum=true suppresses affected numerical results per BY group when a present nonnumeric scalar or MV member is present; missing and null do not participate; allnum=false retains eligible numeric values",
+        "evidence": {
+          "syntax_and_plan": "tested",
+          "clickhouse_lowering": "tested",
+          "pinned_runtime": "tested"
+        },
+        "runtime_scope": "avg and range over mixed, invalid, empty, and singleton stored Dynamic groups",
+        "oracle_case_ids": [
+          "O-measure-values"
+        ],
+        "source_ids": [
+          "stats-10.0"
+        ]
+      },
+      {
+        "id": "delim",
+        "syntax": "delim=<string>",
+        "documented_default": " ",
+        "status": "implemented",
+        "current_boundary": "the effective delimiter is sealed as optional ordinal presentation metadata only on list/values outputs; it survives exact rename/table/project, clears on overwrite or non-MV transforms, resets across downstream stats, and crosses search-job plus optional protobuf transport so the generic statistics table can join string members for display; typed MV cells and exports remain unchanged",
+        "evidence": {
+          "syntax_and_plan": "tested",
+          "clickhouse_lowering": "tested",
+          "pinned_runtime": "not_tested",
+          "ui_rendering": "tested"
+        },
+        "runtime_scope": "underlying list/values execution is pinned separately; focused compiler, executor, search-job, protobuf, browser validation, typed-adaptation, and empty-versus-absent display tests cover the delimiter contract without SQL value coercion",
+        "oracle_case_ids": [
+          "O-delim"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "multivalue-10.0"
+        ]
+      },
+      {
+        "id": "by",
+        "syntax": "BY <field-list>",
+        "documented_default": null,
+        "status": "implemented",
+        "current_boundary": "one clause with at most 16 exact unquoted or single-quoted fields; each resolved input may be a fixed scalar, fixed Array(String), or raw Dynamic scalar or multivalue",
+        "evidence": {
+          "syntax_and_plan": "tested",
+          "clickhouse_lowering": "tested",
+          "pinned_runtime": "tested"
+        },
+        "runtime_scope": "raw Dynamic scalar/MV grouping, missing exclusion, duplicate multiplicity, optional deduplication, Cartesian expansion, and atomic nested-container rejection; fixed values() output feeding downstream BY is compiler-tested",
+        "oracle_case_ids": [
+          "O-by-values",
+          "O-output-order"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "multivalue-10.0"
+        ]
+      },
+      {
+        "id": "dedup_splitvals",
+        "syntax": "dedup_splitvals=<boolean>",
+        "documented_default": false,
+        "status": "implemented",
+        "current_boundary": "false preserves duplicate members and their aggregate multiplicity; true deduplicates each BY field before staged Cartesian expansion; scalar fields are unchanged",
+        "evidence": {
+          "syntax_and_plan": "tested",
+          "clickhouse_lowering": "tested",
+          "pinned_runtime": "tested"
+        },
+        "runtime_scope": "raw Dynamic multivalue inputs with duplicate members, for one and multiple BY fields",
+        "oracle_case_ids": [
+          "O-by-values"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "multivalue-10.0"
+        ]
+      }
+    ],
+    "aggregates": [
+      {
+        "id": "avg",
+        "category": "aggregate",
+        "spellings": [
+          "avg(field)"
+        ],
+        "status": "implemented",
+        "current_boundary": "exact numeric field input, including a single-quoted exact field, or eval(bounded scalar) input; Boolean eval results are accepted and contribute no numeric value; AS is optional and eval defaults preserve the authored invocation under O-alias-schema",
+        "oracle_case_ids": [
+          "O-measure-values"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "aggregate-10.0"
+        ]
+      },
+      {
+        "id": "mean",
+        "category": "aggregate",
+        "spellings": [
+          "mean(field)"
+        ],
+        "equivalent_to": "avg",
+        "status": "implemented",
+        "current_boundary": "exact numeric field input, including a single-quoted exact field, or eval(bounded scalar) input; Boolean eval results are accepted and contribute no numeric value; AS is optional and eval defaults preserve the authored invocation under O-alias-schema",
+        "note": "documented for stats and used by a stats example despite omission from the command function table; lowered as average while preserving the authored default output name",
+        "oracle_case_ids": [
+          "O-measure-values"
+        ],
+        "source_ids": [
+          "aggregate-10.0",
+          "stats-10.0"
+        ]
+      },
+      {
+        "id": "count",
+        "category": "aggregate",
+        "spellings": [
+          "count",
+          "count(field)",
+          "c(field)"
+        ],
+        "aliases": [
+          "c"
+        ],
+        "status": "implemented",
+        "current_boundary": "c requires a field; count(field) and c(field) canonicalize the default output to count(field)",
+        "oracle_case_ids": [
+          "O-measure-values"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "aggregate-10.0"
+        ]
+      },
+      {
+        "id": "distinct_count",
+        "category": "aggregate",
+        "spellings": [
+          "distinct_count(field)",
+          "dc(field)"
+        ],
+        "aliases": [
+          "dc"
+        ],
+        "status": "implemented",
+        "current_boundary": "exact string set with a fixed per-group ceiling; default output canonicalizes to dc(field)",
+        "oracle_case_ids": [
+          "O-measure-values"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "aggregate-10.0"
+        ]
+      },
+      {
+        "id": "estdc",
+        "category": "aggregate",
+        "spellings": [
+          "estdc(field)"
+        ],
+        "status": "implemented",
+        "current_boundary": "uniqCombined64Array(17) over normalized lexical strings; bounded constant-size state, but not claimed equivalent to Splunk's configured digest or exact-below-threshold rule",
+        "evidence": {
+          "syntax_and_plan": "tested",
+          "clickhouse_lowering": "tested",
+          "pinned_runtime": "tested"
+        },
+        "runtime_scope": "empty, singleton, small lexical distinctions, 10000 values, and stored Dynamic fields; eval lowering is compiler-tested but not separately runtime-pinned",
+        "oracle_case_ids": [
+          "O-estdc",
+          "O-measure-values"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "aggregate-10.0",
+          "limits-10.0"
+        ]
+      },
+      {
+        "id": "estdc_error",
+        "category": "aggregate",
+        "spellings": [
+          "estdc_error(field)"
+        ],
+        "status": "implemented",
+        "current_boundary": "provisional local ratio: zero below 1000 estimated values and the HLL17 relative-error constant otherwise",
+        "evidence": {
+          "syntax_and_plan": "tested",
+          "clickhouse_lowering": "tested",
+          "pinned_runtime": "tested"
+        },
+        "runtime_scope": "small and 10000-value inputs plus stored Dynamic fields; eval lowering is compiler-tested but not separately runtime-pinned",
+        "oracle_case_ids": [
+          "O-estdc"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "aggregate-10.0"
+        ]
+      },
+      {
+        "id": "exactperc",
+        "category": "aggregate",
+        "spellings": [
+          "exactpercN(field)"
+        ],
+        "status": "implemented",
+        "current_boundary": "exact nearest-rank sort over normalized Float64 values with state linear in eligible values; integer N from 1 through 99",
+        "evidence": {
+          "syntax_and_plan": "tested",
+          "clickhouse_lowering": "tested",
+          "pinned_runtime": "tested"
+        },
+        "runtime_scope": "p50 and p95, empty, singleton, and stored Dynamic fields; eval lowering is compiler-tested but not separately runtime-pinned",
+        "oracle_case_ids": [
+          "O-percentile",
+          "O-measure-values"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "aggregate-10.0",
+          "limits-10.0"
+        ]
+      },
+      {
+        "id": "max",
+        "category": "aggregate",
+        "spellings": [
+          "max(field)"
+        ],
+        "status": "implemented",
+        "current_boundary": "exact field input with deterministic Open Splunk mixed ordering",
+        "oracle_case_ids": [
+          "O-min-max-order",
+          "O-measure-values"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "aggregate-10.0"
+        ]
+      },
+      {
+        "id": "median",
+        "category": "aggregate",
+        "spellings": [
+          "median(field)"
+        ],
+        "status": "implemented",
+        "current_boundary": "bounded quantilesGKOrNullArray(100, 0.5) lowering; approximate and explicitly provisional",
+        "evidence": {
+          "syntax_and_plan": "tested",
+          "clickhouse_lowering": "tested",
+          "pinned_runtime": "tested"
+        },
+        "runtime_scope": "empty, singleton, small numeric input, and stored Dynamic fields; eval lowering is compiler-tested but not separately runtime-pinned",
+        "oracle_case_ids": [
+          "O-percentile",
+          "O-measure-values"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "aggregate-10.0",
+          "limits-10.0"
+        ]
+      },
+      {
+        "id": "min",
+        "category": "aggregate",
+        "spellings": [
+          "min(field)"
+        ],
+        "status": "implemented",
+        "current_boundary": "exact field input with deterministic Open Splunk mixed ordering",
+        "oracle_case_ids": [
+          "O-min-max-order",
+          "O-measure-values"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "aggregate-10.0"
+        ]
+      },
+      {
+        "id": "mode",
+        "category": "aggregate",
+        "spellings": [
+          "mode(field)"
+        ],
+        "status": "implemented",
+        "current_boundary": "exact sumMap lexical frequencies with state linear in distinct values; deterministic local ties choose the bytewise-lowest key",
+        "evidence": {
+          "syntax_and_plan": "tested",
+          "clickhouse_lowering": "tested",
+          "pinned_runtime": "tested"
+        },
+        "runtime_scope": "empty, singleton, unique winner, bytewise ties, and stored Dynamic fields; eval lowering is compiler-tested but not separately runtime-pinned",
+        "oracle_case_ids": [
+          "O-mode-tie",
+          "O-measure-values"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "aggregate-10.0"
+        ]
+      },
+      {
+        "id": "perc",
+        "category": "aggregate",
+        "spellings": [
+          "percN(field)",
+          "pN(field)"
+        ],
+        "aliases": [
+          "pN"
+        ],
+        "status": "implemented",
+        "current_boundary": "integer N from 1 through 99; exact field or eval(bounded scalar) input with optional AS; field-input default output canonicalizes to percN(field), while eval defaults preserve the authored invocation under O-alias-schema; quantilesGK accuracy 100",
+        "oracle_case_ids": [
+          "O-percentile"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "functions-10.0",
+          "aggregate-10.0",
+          "limits-10.0"
+        ]
+      },
+      {
+        "id": "range",
+        "category": "aggregate",
+        "spellings": [
+          "range(field)"
+        ],
+        "status": "implemented",
+        "current_boundary": "exact numeric field input or eval(bounded scalar) input; AS is optional",
+        "oracle_case_ids": [
+          "O-measure-values"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "aggregate-10.0"
+        ]
+      },
+      {
+        "id": "stdev",
+        "category": "aggregate",
+        "spellings": [
+          "stdev(field)"
+        ],
+        "status": "implemented",
+        "current_boundary": "exact numeric field input or eval(bounded scalar) input; AS is optional",
+        "oracle_case_ids": [
+          "O-measure-values"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "aggregate-10.0"
+        ]
+      },
+      {
+        "id": "stdevp",
+        "category": "aggregate",
+        "spellings": [
+          "stdevp(field)"
+        ],
+        "status": "implemented",
+        "current_boundary": "exact numeric field input or eval(bounded scalar) input; AS is optional",
+        "oracle_case_ids": [
+          "O-measure-values"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "aggregate-10.0"
+        ]
+      },
+      {
+        "id": "sum",
+        "category": "aggregate",
+        "spellings": [
+          "sum(field)"
+        ],
+        "status": "implemented",
+        "current_boundary": "exact numeric field input or eval(bounded scalar) input; AS is optional",
+        "oracle_case_ids": [
+          "O-measure-values"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "aggregate-10.0"
+        ]
+      },
+      {
+        "id": "sumsq",
+        "category": "aggregate",
+        "spellings": [
+          "sumsq(field)"
+        ],
+        "status": "implemented",
+        "current_boundary": "exact numeric field input or eval(bounded scalar) input; AS is optional",
+        "oracle_case_ids": [
+          "O-measure-values"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "aggregate-10.0"
+        ]
+      },
+      {
+        "id": "upperperc",
+        "category": "aggregate",
+        "spellings": [
+          "upperpercN(field)"
+        ],
+        "status": "implemented",
+        "current_boundary": "provisional bounded two-level GK lowering; no claim of equivalence to Splunk's proprietary upper percentile digest",
+        "evidence": {
+          "syntax_and_plan": "tested",
+          "clickhouse_lowering": "tested",
+          "pinned_runtime": "tested"
+        },
+        "runtime_scope": "p50, empty, singleton, small and larger numeric inputs, and stored Dynamic fields; eval lowering is compiler-tested but not separately runtime-pinned",
+        "oracle_case_ids": [
+          "O-percentile",
+          "O-measure-values"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "aggregate-10.0"
+        ]
+      },
+      {
+        "id": "var",
+        "category": "aggregate",
+        "spellings": [
+          "var(field)"
+        ],
+        "status": "implemented",
+        "current_boundary": "exact numeric field input or eval(bounded scalar) input; AS is optional",
+        "oracle_case_ids": [
+          "O-measure-values"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "aggregate-10.0"
+        ]
+      },
+      {
+        "id": "varp",
+        "category": "aggregate",
+        "spellings": [
+          "varp(field)"
+        ],
+        "status": "implemented",
+        "current_boundary": "exact numeric field input or eval(bounded scalar) input; AS is optional",
+        "oracle_case_ids": [
+          "O-measure-values"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "aggregate-10.0"
+        ]
+      },
+      {
+        "id": "first",
+        "category": "event_order",
+        "spellings": [
+          "first(field)"
+        ],
+        "status": "implemented",
+        "current_boundary": "first eligible lexical value in current pipeline processing order using a deterministic row ordinal",
+        "evidence": {
+          "syntax_and_plan": "tested",
+          "clickhouse_lowering": "tested",
+          "pinned_runtime": "tested"
+        },
+        "runtime_scope": "field and eval inputs; empty, all-ineligible, singleton, equal event time, and processing order deliberately different from chronology",
+        "oracle_case_ids": [
+          "O-event-order-tie",
+          "O-measure-values"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "event-order-10.0"
+        ]
+      },
+      {
+        "id": "last",
+        "category": "event_order",
+        "spellings": [
+          "last(field)"
+        ],
+        "status": "implemented",
+        "current_boundary": "last eligible lexical value in current pipeline processing order using a deterministic row ordinal",
+        "evidence": {
+          "syntax_and_plan": "tested",
+          "clickhouse_lowering": "tested",
+          "pinned_runtime": "tested"
+        },
+        "runtime_scope": "field and eval inputs; empty, all-ineligible, singleton, equal event time, and processing order deliberately different from chronology",
+        "oracle_case_ids": [
+          "O-event-order-tie",
+          "O-measure-values"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "event-order-10.0"
+        ]
+      },
+      {
+        "id": "list",
+        "category": "multivalue",
+        "spellings": [
+          "list(field)"
+        ],
+        "status": "implemented",
+        "current_boundary": "first 100 eligible values in pipeline order with fixed byte and whole-result publication ceilings",
+        "oracle_case_ids": [
+          "O-measure-values",
+          "O-delim"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "multivalue-10.0",
+          "limits-10.0"
+        ]
+      },
+      {
+        "id": "values",
+        "category": "multivalue",
+        "spellings": [
+          "values(field)"
+        ],
+        "status": "implemented",
+        "current_boundary": "exact lexical values with fixed per-group and whole-result publication ceilings",
+        "oracle_case_ids": [
+          "O-measure-values",
+          "O-delim"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "multivalue-10.0",
+          "limits-10.0"
+        ]
+      },
+      {
+        "id": "earliest",
+        "category": "time",
+        "spellings": [
+          "earliest(field)"
+        ],
+        "status": "implemented",
+        "current_boundary": "exact field input and canonical time required",
+        "oracle_case_ids": [
+          "O-time",
+          "O-measure-values"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "time-10.0",
+          "limits-10.0"
+        ]
+      },
+      {
+        "id": "earliest_time",
+        "category": "time",
+        "spellings": [
+          "earliest_time(field)"
+        ],
+        "status": "implemented",
+        "current_boundary": "nullable Unix seconds for the earliest eligible occurrence; unmodified canonical _time is required",
+        "evidence": {
+          "syntax_and_plan": "tested",
+          "clickhouse_lowering": "tested",
+          "pinned_runtime": "tested"
+        },
+        "runtime_scope": "field and eval inputs; empty, all-ineligible, singleton, equal-time, and processing-versus-chronology cases",
+        "oracle_case_ids": [
+          "O-time",
+          "O-measure-values"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "time-10.0",
+          "limits-10.0"
+        ]
+      },
+      {
+        "id": "latest",
+        "category": "time",
+        "spellings": [
+          "latest(field)"
+        ],
+        "status": "implemented",
+        "current_boundary": "exact field input and canonical time required",
+        "oracle_case_ids": [
+          "O-time",
+          "O-measure-values"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "time-10.0",
+          "limits-10.0"
+        ]
+      },
+      {
+        "id": "latest_time",
+        "category": "time",
+        "spellings": [
+          "latest_time(field)"
+        ],
+        "status": "implemented",
+        "current_boundary": "nullable Unix seconds for the latest eligible occurrence; unmodified canonical _time is required",
+        "evidence": {
+          "syntax_and_plan": "tested",
+          "clickhouse_lowering": "tested",
+          "pinned_runtime": "tested"
+        },
+        "runtime_scope": "field and eval inputs; empty, all-ineligible, singleton, equal-time, and processing-versus-chronology cases",
+        "oracle_case_ids": [
+          "O-time",
+          "O-measure-values"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "time-10.0",
+          "limits-10.0"
+        ]
+      },
+      {
+        "id": "rate",
+        "category": "time",
+        "spellings": [
+          "rate(field)"
+        ],
+        "status": "implemented",
+        "current_boundary": "chronological eligible endpoint formula; null for fewer than two eligible event rows or zero duration; counter resets currently use the no-reset formula",
+        "evidence": {
+          "syntax_and_plan": "tested",
+          "clickhouse_lowering": "tested",
+          "pinned_runtime": "tested"
+        },
+        "runtime_scope": "field and eval inputs; empty, all-ineligible, singleton, equal-time, processing-versus-chronology, and provisional reset cases",
+        "oracle_case_ids": [
+          "O-time",
+          "O-rate-reset",
+          "O-measure-values"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "time-10.0",
+          "limits-10.0"
+        ]
+      }
+    ],
+    "cross_cutting_surface": [
+      {
+        "id": "multiple-aggregate-separators",
+        "status": "implemented",
+        "current_boundary": "comma or whitespace separated; at most 16 measures",
+        "source_ids": [
+          "stats-10.0"
+        ]
+      },
+      {
+        "id": "eval-count-explicit",
+        "syntax": "count(eval(Boolean predicate)) AS output",
+        "status": "implemented",
+        "current_boundary": "bounded where-predicate grammar and 32 query-wide predicate leaves",
+        "source_ids": [
+          "stats-10.0",
+          "eval-stats-10.2"
+        ]
+      },
+      {
+        "id": "eval-count-default-alias",
+        "syntax": "count(eval(expression))",
+        "status": "implemented",
+        "current_boundary": "bounded Boolean predicate input; the output name preserves the exact authored aggregate invocation, including case and spacing, under O-alias-schema",
+        "evidence": {
+          "syntax_and_plan": "tested",
+          "clickhouse_lowering": "tested",
+          "pinned_runtime": "not_tested"
+        },
+        "oracle_case_ids": [
+          "O-alias-schema"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "eval-stats-10.2"
+        ]
+      },
+      {
+        "id": "eval-numeric-explicit",
+        "syntax": "numeric-stats-function(eval(bounded scalar expression)) AS output",
+        "functions": [
+          "pN",
+          "percN",
+          "exactpercN",
+          "upperpercN",
+          "median",
+          "sum",
+          "avg",
+          "mean",
+          "range",
+          "sumsq",
+          "stdev",
+          "stdevp",
+          "var",
+          "varp",
+          "rate"
+        ],
+        "status": "implemented",
+        "current_boundary": "bounded authored scalar grammar, including Boolean results; numeric families treat Boolean results as ineligible; explicit AS is supported but optional",
+        "oracle_case_ids": [
+          "O-measure-values",
+          "O-percentile",
+          "O-alias-schema"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "eval-stats-10.2"
+        ]
+      },
+      {
+        "id": "eval-numeric-default-alias",
+        "syntax": "numeric-stats-function(eval(bounded scalar expression))",
+        "functions": [
+          "pN",
+          "percN",
+          "exactpercN",
+          "upperpercN",
+          "median",
+          "sum",
+          "avg",
+          "mean",
+          "range",
+          "sumsq",
+          "stdev",
+          "stdevp",
+          "var",
+          "varp",
+          "rate"
+        ],
+        "status": "implemented",
+        "current_boundary": "the output name preserves the exact authored aggregate invocation, including case and spacing, under O-alias-schema",
+        "evidence": {
+          "syntax_and_plan": "tested",
+          "clickhouse_lowering": "tested",
+          "pinned_runtime": "not_tested"
+        },
+        "oracle_case_ids": [
+          "O-alias-schema"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "eval-stats-10.2"
+        ]
+      },
+      {
+        "id": "eval-general",
+        "syntax": "supported non-count field-taking stats-function(eval(bounded scalar expression)) [AS output]",
+        "status": "implemented",
+        "current_boundary": "all currently supported non-count field-taking families accept bounded scalar eval, including Boolean results, with optional AS; numeric families treat Boolean results as ineligible; implicit output preserves the authored invocation under O-alias-schema; count(eval(...)) remains the separate Boolean predicate subset; distribution eval variants are compiler-tested but not separately runtime-pinned",
+        "evidence": {
+          "syntax_and_plan": "tested",
+          "clickhouse_lowering": "tested",
+          "pinned_runtime": "tested"
+        },
+        "runtime_scope": "representative numeric and order/time families; exact-field runtime covers distribution families",
+        "oracle_case_ids": [
+          "O-measure-values",
+          "O-alias-schema"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "eval-stats-10.2"
+        ]
+      },
+      {
+        "id": "wildcard-input",
+        "syntax": "stats-function(<wc-field>)",
+        "status": "implemented",
+        "current_boundary": "deterministic case-sensitive expansion against closed ordered upstream OutputFields or a sealed raw/open inventory ordered by aggregate ordinal and exact field bytes; zero matches, unsupported or private names, more than 16 post-expansion measures, duplicate sources, output collisions, poisoned metadata, and authority drift fail closed",
+        "evidence": {
+          "syntax_and_plan": "tested",
+          "clickhouse_lowering": "tested",
+          "pinned_runtime": "tested"
+        },
+        "oracle_case_ids": [
+          "O-wildcard"
+        ],
+        "source_ids": [
+          "stats-10.0"
+        ]
+      },
+      {
+        "id": "wildcard-implicit",
+        "syntax": "bare non-count stats-function interpreted as stats-function(*)",
+        "status": "implemented",
+        "current_boundary": "documented deprecated form; expands as implicit * against either a closed ordered upstream schema or the sealed raw/open inventory; bare count remains row count",
+        "evidence": {
+          "syntax_and_plan": "tested",
+          "clickhouse_lowering": "tested",
+          "pinned_runtime": "not_tested"
+        },
+        "note": "documented but deprecated; raw/open expansion uses the same bounded two-phase authority as an explicit wildcard",
+        "oracle_case_ids": [
+          "O-wildcard"
+        ],
+        "source_ids": [
+          "stats-10.0"
+        ]
+      },
+      {
+        "id": "input-quoted-exact",
+        "syntax": "stats-function('exact field')",
+        "status": "implemented",
+        "current_boundary": "one decoded literal SPL field name for ordinary and sparkline aggregates; wildcard, empty, reserved, private, and invalidly escaped names fail closed",
+        "evidence": {
+          "syntax_and_plan": "tested",
+          "clickhouse_lowering": "tested",
+          "pinned_runtime": "not_tested"
+        },
+        "source_ids": [
+          "stats-10.0",
+          "aggregate-10.0"
+        ]
+      },
+      {
+        "id": "alias-exact",
+        "syntax": "AS exact_output",
+        "status": "implemented",
+        "current_boundary": "duplicate output fields rejected",
+        "oracle_case_ids": [
+          "O-alias-schema"
+        ],
+        "source_ids": [
+          "stats-10.0"
+        ]
+      },
+      {
+        "id": "alias-quoted",
+        "syntax": "AS \"output name\"",
+        "status": "implemented",
+        "current_boundary": "double-quoted literal output names are decoded and preserved through downstream schema; empty, control-containing, reserved, and private outputs fail closed; single-quoted aliases are rejected",
+        "evidence": {
+          "syntax_and_plan": "tested",
+          "clickhouse_lowering": "tested",
+          "pinned_runtime": "not_tested"
+        },
+        "oracle_case_ids": [
+          "O-alias-schema"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "aggregate-10.0"
+        ]
+      },
+      {
+        "id": "alias-wildcard",
+        "syntax": "AS <wc-field>",
+        "status": "implemented",
+        "current_boundary": "closed-schema and sealed raw/open wildcard aliases require equal input/output star counts; captures are deterministic left-to-right with the final literal suffix-anchored and substitute only into a valid exact unquoted output; invalid names and collisions fail closed",
+        "evidence": {
+          "syntax_and_plan": "tested",
+          "clickhouse_lowering": "tested",
+          "pinned_runtime": "tested"
+        },
+        "oracle_case_ids": [
+          "O-wildcard",
+          "O-alias-schema"
+        ],
+        "source_ids": [
+          "stats-10.0"
+        ]
+      },
+      {
+        "id": "wildcard-open-schema",
+        "syntax": "stats wildcard aggregate over raw/open Dynamic event fields",
+        "status": "implemented",
+        "current_boundary": "sealed two-phase execution compiles only the canonical prefix under its immutable read scope, inventories visible canonical, Dynamic, calculated, and knowledge-generated names without values, matches anchored globs case-sensitively, orders pairs by aggregate ordinal then exact field bytes, and uses pair 17 as an overflow sentinel for the 16-measure ceiling; the opaque expansion is bound into final execution and snapshot replay authority; metadata poison, zero matches, invalid/private names, forged rows or prefixes, scope drift, changed knowledge, and overflow reject atomically",
+        "evidence": {
+          "syntax_and_plan": "tested",
+          "clickhouse_lowering": "tested",
+          "pinned_runtime": "tested"
+        },
+        "runtime_scope": "digest-pinned ClickHouse covers exact bytewise ordering, anchored case-sensitive multistar matching with a literal regex metacharacter, wildcard alias captures, the overflow sentinel, and nonmatching poisoned metadata; manager coverage binds legacy, knowledge-generated, retained replay, read-scope, and shared runtime-budget paths",
+        "oracle_case_ids": [
+          "O-wildcard"
+        ],
+        "source_ids": [
+          "stats-10.0"
+        ]
+      },
+      {
+        "id": "alias-same-source-twice-rejection",
+        "status": "implemented",
+        "current_boundary": "canonical exact-field equivalences across c/count, dc/distinct_count, pN/percN, avg/mean, quoted/unquoted exact fields, and equivalent sparklines at one span are rejected; different functions, inputs, and sparkline spans remain valid; repeated identical eval/predicate sources deliberately remain distinct under O-alias-schema",
+        "evidence": {
+          "syntax_and_plan": "tested",
+          "clickhouse_lowering": "not_tested",
+          "pinned_runtime": "not_tested"
+        },
+        "oracle_case_ids": [
+          "O-alias-schema"
+        ],
+        "source_ids": [
+          "stats-10.0"
+        ]
+      },
+      {
+        "id": "by-exact-tuple",
+        "syntax": "BY field1, field2",
+        "status": "implemented",
+        "current_boundary": "at most 16 exact unquoted or single-quoted fields, each scalar or multivalue at runtime",
+        "oracle_case_ids": [
+          "O-by-values",
+          "O-output-order"
+        ],
+        "source_ids": [
+          "stats-10.0"
+        ]
+      },
+      {
+        "id": "by-wildcard-rejection",
+        "status": "implemented",
+        "source_ids": [
+          "stats-10.0"
+        ]
+      },
+      {
+        "id": "by-quoted-field",
+        "status": "implemented",
+        "current_boundary": "single-quoted exact fields decode to literal BY names; wildcard, reserved, and private names fail closed",
+        "evidence": {
+          "syntax_and_plan": "tested",
+          "clickhouse_lowering": "tested",
+          "pinned_runtime": "not_tested"
+        },
+        "source_ids": [
+          "stats-10.0"
+        ]
+      },
+      {
+        "id": "by-multivalue",
+        "status": "implemented",
+        "current_boundary": "raw Dynamic scalar/MV and fixed Array(String) inputs; duplicates are preserved by default or removed per field with dedup_splitvals=true; multiple fields form a staged Cartesian product capped at 10000 combinations per source event before expansion; missing/null/empty inputs emit no group and nested containers reject atomically",
+        "evidence": {
+          "syntax_and_plan": "tested",
+          "clickhouse_lowering": "tested",
+          "pinned_runtime": "tested"
+        },
+        "runtime_scope": "raw Dynamic scalar/MV grouping, duplicate-preserving and deduplicated modes, multiple-field Cartesian products, exact 10000-combination boundary, 10100 overflow, 16-field adversarial overflow, empty final dimension, atomic failure behind downstream head, missing exclusion, and nested-container rejection; fixed values() output feeding downstream BY is compiler-tested",
+        "oracle_case_ids": [
+          "O-by-values"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "multivalue-10.0"
+        ]
+      },
+      {
+        "id": "global-and-grouped-result-shape",
+        "status": "implemented",
+        "oracle_case_ids": [
+          "O-empty-input",
+          "O-by-values",
+          "O-output-order"
+        ],
+        "source_ids": [
+          "stats-10.0"
+        ]
+      },
+      {
+        "id": "sparkline-term",
+        "syntax": "sparkline(stats-function [span]) [AS output]",
+        "status": "implemented",
+        "current_boundary": "stats-only AST, plan, and ClickHouse lowering over the unmodified canonical _time; ordinary and sparkline measures share one event scan; output is Array(String) with ##__SPARKLINE__## first",
+        "evidence": {
+          "syntax_and_plan": "tested",
+          "clickhouse_lowering": "tested",
+          "pinned_runtime": "tested"
+        },
+        "runtime_scope": "mixed ordinary and sparkline measures, global and multivalue-BY results, empty global input, downstream mvcount/where/table, marker publication, and resource failures over stored events",
+        "oracle_case_ids": [
+          "O-sparkline-publication",
+          "O-empty-input",
+          "O-time"
+        ],
+        "source_ids": [
+          "stats-10.0"
+        ]
+      },
+      {
+        "id": "sparkline-count",
+        "status": "implemented",
+        "current_boundary": "sparkline(count) and sparkline(count()) count rows; sparkline(count(field)) and sparkline(c(field)) count eligible values; missing bins publish zero",
+        "evidence": {
+          "syntax_and_plan": "tested",
+          "clickhouse_lowering": "tested",
+          "pinned_runtime": "tested"
+        },
+        "oracle_case_ids": [
+          "O-sparkline-publication",
+          "O-measure-values"
+        ],
+        "source_ids": [
+          "stats-10.0"
+        ]
+      },
+      {
+        "id": "sparkline-functions",
+        "spellings": [
+          "c",
+          "count",
+          "dc",
+          "mean",
+          "avg",
+          "stdev",
+          "stdevp",
+          "var",
+          "varp",
+          "sum",
+          "sumsq",
+          "min",
+          "max",
+          "range"
+        ],
+        "status": "implemented",
+        "current_boundary": "all documented spellings lower through bounded per-bucket states; exact dc retains the 100000-distinct-values cap per BY group and bucket",
+        "evidence": {
+          "syntax_and_plan": "tested",
+          "clickhouse_lowering": "tested",
+          "pinned_runtime": "tested"
+        },
+        "runtime_scope": "all semantic lowerings plus the mean alias, missing bins, singleton and stored Dynamic values",
+        "oracle_case_ids": [
+          "O-sparkline-publication",
+          "O-measure-values",
+          "O-min-max-order"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "aggregate-10.0"
+        ]
+      },
+      {
+        "id": "sparkline-span",
+        "status": "implemented",
+        "current_boundary": "explicit us, ms, cs, ds, s, m, h, d, and mon spans; automatic selection chooses the first official 1s,5s,10s,30s,1m,5m,10m,30m,1h,1d,1mon grid with at most 100 numeric bins; day and month grids use search-local civil boundaries; oversized explicit grids fail closed",
+        "evidence": {
+          "syntax_and_plan": "tested",
+          "clickhouse_lowering": "tested",
+          "pinned_runtime": "tested"
+        },
+        "runtime_scope": "automatic and explicit spans, DST and month boundaries, missing bins, and point-limit sentinels over stored events",
+        "oracle_case_ids": [
+          "O-sparkline-grid",
+          "O-sparkline-publication",
+          "O-time"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "limits-10.0",
+          "time-bins-10.0"
+        ]
+      },
+      {
+        "id": "sparkline-statistics-rendering",
+        "status": "implemented",
+        "current_boundary": "the generic statistics table recognizes only marker-prefixed sparkline arrays and renders their numeric points as an accessible inline SVG; missing buckets break line segments and all-missing series retain an accessible empty-state label; rendering is presentation-only, while the typed Array(String) value remains authoritative for result transport and export",
+        "evidence": {
+          "ui_rendering": "tested"
+        },
+        "oracle_case_ids": [
+          "O-sparkline-publication"
+        ],
+        "source_ids": [
+          "stats-10.0"
+        ]
+      },
+      {
+        "id": "sparkline-wildcard-alias",
+        "status": "implemented",
+        "current_boundary": "ordinary and AS-capture sparkline wildcards expand against either the same closed ordered upstream schema or sealed raw/open inventory with deterministic captures, post-expansion 16-measure limit, and collision checks; raw/open sparkline expansion shares the ordinary stats inventory authority but is not separately runtime-pinned",
+        "evidence": {
+          "syntax_and_plan": "tested",
+          "clickhouse_lowering": "tested",
+          "pinned_runtime": "not_tested"
+        },
+        "oracle_case_ids": [
+          "O-wildcard"
+        ],
+        "source_ids": [
+          "stats-10.0"
+        ]
+      }
+    ],
+    "documented_defaults": [
+      {
+        "id": "default_partitions",
+        "value": 1,
+        "current_boundary": "authored partitions=0 resolves to this value and a stats stage caps the complete ClickHouse query at one thread; this is not stage-local partition topology",
+        "source_ids": [
+          "stats-10.0",
+          "limits-10.0"
+        ]
+      },
+      {
+        "id": "partitions_limit",
+        "value": 100,
+        "current_boundary": "the parser retains any authored unsigned 64-bit value and the logical plan clamps the effective value to this maximum",
+        "source_ids": [
+          "limits-10.0"
+        ]
+      },
+      {
+        "id": "approx_dc_threshold",
+        "value": 1000,
+        "current_boundary": "used by the provisional local estdc_error ratio, while local estdc uses a different ClickHouse state",
+        "oracle_case_ids": [
+          "O-estdc"
+        ],
+        "source_ids": [
+          "aggregate-10.0",
+          "limits-10.0"
+        ]
+      },
+      {
+        "id": "dc_digest_bits",
+        "value": 10,
+        "unit": "bits_exponent_for_bytes",
+        "note": "1 KiB Splunk digest; not asserted equivalent to local uniqCombined64(17)",
+        "oracle_case_ids": [
+          "O-estdc"
+        ],
+        "source_ids": [
+          "limits-10.0"
+        ]
+      },
+      {
+        "id": "check_for_invalid_time",
+        "value": false,
+        "source_ids": [
+          "stats-10.0",
+          "limits-10.0"
+        ]
+      },
+      {
+        "id": "list_maxsize",
+        "value": 100,
+        "unit": "values",
+        "source_ids": [
+          "multivalue-10.0",
+          "limits-10.0"
+        ]
+      },
+      {
+        "id": "sparkline_maxsize",
+        "value": 100,
+        "unit": "bucket_values",
+        "current_boundary": "Open Splunk emits at most 100 bucket strings plus the marker; whether the marker consumes this maximum remains O-sparkline-publication",
+        "oracle_case_ids": [
+          "O-sparkline-publication"
+        ],
+        "source_ids": [
+          "stats-10.0",
+          "limits-10.0"
+        ]
+      },
+      {
+        "id": "maxvalues",
+        "value": 0,
+        "meaning": "unlimited",
+        "source_ids": [
+          "multivalue-10.0",
+          "limits-10.0"
+        ]
+      },
+      {
+        "id": "maxvaluesize",
+        "value": 0,
+        "meaning": "unlimited",
+        "source_ids": [
+          "limits-10.0"
+        ]
+      },
+      {
+        "id": "stats_maxresultrows",
+        "value": 50000,
+        "meaning": "in-memory and spill threshold, not documented output truncation",
+        "source_ids": [
+          "limits-10.0"
+        ]
+      },
+      {
+        "id": "natural_sort_output",
+        "value": true,
+        "meaning": "applies when output size is at least maxresultrows",
+        "source_ids": [
+          "limits-10.0"
+        ]
+      },
+      {
+        "id": "perc_method",
+        "value": "nearest-rank",
+        "oracle_case_ids": [
+          "O-percentile"
+        ],
+        "source_ids": [
+          "limits-10.0"
+        ]
+      },
+      {
+        "id": "perc_digest_type",
+        "value": "tdigest",
+        "oracle_case_ids": [
+          "O-percentile"
+        ],
+        "source_ids": [
+          "limits-10.0"
+        ]
+      }
+    ],
+    "oracle_cases": [
+      {
+        "id": "O-percentile",
+        "status": "oracle_required",
+        "reason": "official pages conflict on suffix range, nearest-rank versus interpolated examples, and radix-tree versus tdigest",
+        "current_open_splunk_behavior": "integer suffix 1 through 99; exact nearest-rank exactperc; ordinary GK perc; bounded GK median; provisional two-level GK upperperc",
+        "source_ids": [
+          "stats-10.0",
+          "functions-10.0",
+          "aggregate-10.0",
+          "limits-10.0"
+        ]
+      },
+      {
+        "id": "O-estdc",
+        "status": "oracle_required",
+        "reason": "official threshold and digest settings do not establish equivalence to ClickHouse uniqCombined64(17) or the local HLL17 error estimate",
+        "current_open_splunk_behavior": "uniqCombined64Array(17); estdc_error is zero below 1000 estimated values and the HLL17 relative-error constant otherwise",
+        "source_ids": [
+          "stats-10.0",
+          "aggregate-10.0",
+          "limits-10.0"
+        ]
+      },
+      {
+        "id": "O-min-max-order",
+        "status": "oracle_required",
+        "reason": "mixed values and symbols lack a complete portable ordering contract",
+        "current_open_splunk_behavior": "deterministic typed mixed ordering",
+        "source_ids": [
+          "aggregate-10.0"
+        ]
+      },
+      {
+        "id": "O-measure-values",
+        "status": "oracle_required",
+        "reason": "missing, null, empty string, MV members, containers, all-ineligible output, and allnum participation are not specified for every function",
+        "source_ids": [
+          "stats-10.0",
+          "aggregate-10.0",
+          "multivalue-10.0",
+          "time-10.0"
+        ]
+      },
+      {
+        "id": "O-by-values",
+        "status": "oracle_required",
+        "reason": "missing, null, and empty keys; null or mixed-type MV-member representation; member order; resulting BY-row order; and a per-event expansion ceiling are not completely pinned",
+        "current_open_splunk_behavior": "missing/null/empty inputs emit no group; supported scalar members are lexicalized; duplicate members are preserved unless dedup_splitvals=true; multiple MV fields form a Cartesian product capped at 10000 combinations per source event before expansion; nested containers reject the complete operation atomically",
+        "source_ids": [
+          "stats-10.0",
+          "multivalue-10.0"
+        ]
+      },
+      {
+        "id": "O-output-order",
+        "status": "oracle_required",
+        "reason": "no general BY result order is promised below the conditional natural-sort threshold",
+        "source_ids": [
+          "stats-10.0",
+          "limits-10.0"
+        ]
+      },
+      {
+        "id": "O-empty-input",
+        "status": "oracle_required",
+        "reason": "global row existence and each aggregate's empty result are not comprehensively specified",
+        "source_ids": [
+          "stats-10.0",
+          "aggregate-10.0"
+        ]
+      },
+      {
+        "id": "O-time",
+        "status": "oracle_required",
+        "reason": "equal-time and multivalue-member ties plus missing or noncanonical time are incomplete or configuration dependent",
+        "source_ids": [
+          "stats-10.0",
+          "event-order-10.0",
+          "time-10.0",
+          "limits-10.0"
+        ]
+      },
+      {
+        "id": "O-event-order-tie",
+        "status": "oracle_required",
+        "reason": "first and last are defined by processing order, but otherwise-tied processing rows have no portable normative tie-breaker",
+        "current_open_splunk_behavior": "deterministic internal stable row identity closes pipeline-order ties",
+        "source_ids": [
+          "stats-10.0",
+          "event-order-10.0"
+        ]
+      },
+      {
+        "id": "O-rate-reset",
+        "status": "oracle_required",
+        "reason": "the pinned description refers to counter resets and largest values without enough detail to reproduce reset accumulation",
+        "current_open_splunk_behavior": "no-reset chronological endpoint formula; reset inputs can produce a negative rate",
+        "source_ids": [
+          "stats-10.0",
+          "time-10.0",
+          "limits-10.0"
+        ]
+      },
+      {
+        "id": "O-mode-tie",
+        "status": "oracle_required",
+        "reason": "mode tie-breaking is undocumented",
+        "source_ids": [
+          "aggregate-10.0"
+        ]
+      },
+      {
+        "id": "O-wildcard",
+        "status": "oracle_required",
+        "reason": "expansion order, zero matches, wildcard alias substitution, default names, and collisions are not normative",
+        "current_open_splunk_behavior": "matching is case-sensitive with deterministic left-to-right captures and a suffix-anchored final literal; closed schemas retain upstream order, while raw/open inventory is ordered by aggregate ordinal then exact field bytes across visible canonical, Dynamic, calculated, and knowledge-generated names; zero matches, invalid/private names, limits, duplicates, collisions, metadata poison, or authority drift fail closed; Splunk's exact raw/open ordering and matching still require an oracle",
+        "source_ids": [
+          "stats-10.0"
+        ]
+      },
+      {
+        "id": "O-delim",
+        "status": "oracle_required",
+        "reason": "sources describe typed multivalue outputs and a delimiter without defining logical versus display behavior",
+        "current_open_splunk_behavior": "list and values remain typed MV arrays for result transport and exports; the effective delimiter is optional flat-table presentation metadata only",
+        "source_ids": [
+          "stats-10.0",
+          "multivalue-10.0"
+        ]
+      },
+      {
+        "id": "O-alias-schema",
+        "status": "oracle_required",
+        "reason": "default eval and wildcard names, quoting, case, and collisions are not comprehensively specified",
+        "source_ids": [
+          "stats-10.0",
+          "eval-stats-10.2"
+        ]
+      },
+      {
+        "id": "O-partitions-order",
+        "status": "oracle_required",
+        "reason": "parallel reduction effects on order-sensitive and approximate functions are undocumented",
+        "current_open_splunk_behavior": "the smallest min(partitions,4) across stats stages is a sealed whole-query max_threads cap; no Splunk stage-local reduce topology or partition-dependent ordering is claimed",
+        "source_ids": [
+          "stats-10.0",
+          "limits-10.0"
+        ]
+      },
+      {
+        "id": "O-sparkline-publication",
+        "status": "oracle_required",
+        "reason": "the marker and sparkline_maxsize are documented, but the sources do not say whether the marker consumes one slot or how non-count missing and null buckets are encoded",
+        "current_open_splunk_behavior": "up to 100 numeric or lexical bucket strings plus ##__SPARKLINE__##; missing count and dc bins publish 0, while missing numeric, min, and max bins publish an empty string",
+        "source_ids": [
+          "stats-10.0",
+          "limits-10.0"
+        ]
+      },
+      {
+        "id": "O-sparkline-grid",
+        "status": "oracle_required",
+        "reason": "local day and month boundaries are documented, but the anchor for explicit spans of multiple civil days or months is not",
+        "current_open_splunk_behavior": "deterministic proleptic-Gregorian civil day and month indices in the search timezone",
+        "source_ids": [
+          "stats-10.0",
+          "time-bins-10.0"
+        ]
+      }
+    ],
+    "open_splunk_resource_ceilings": [
+      {
+        "id": "spl_source_bytes",
+        "value": 16384,
+        "unit": "bytes",
+        "policy": "hard"
+      },
+      {
+        "id": "syntax_tokens",
+        "value": 1024,
+        "unit": "tokens",
+        "policy": "hard"
+      },
+      {
+        "id": "pipeline_commands",
+        "value": 64,
+        "unit": "commands",
+        "policy": "hard"
+      },
+      {
+        "id": "stats_measures",
+        "value": 16,
+        "unit": "measures",
+        "policy": "hard"
+      },
+      {
+        "id": "stats_by_fields",
+        "value": 16,
+        "unit": "fields",
+        "policy": "hard"
+      },
+      {
+        "id": "scalar_nesting",
+        "value": 32,
+        "unit": "levels",
+        "policy": "hard"
+      },
+      {
+        "id": "coalesce_arguments_per_call",
+        "value": 32,
+        "unit": "arguments",
+        "policy": "hard"
+      },
+      {
+        "id": "case_branches_per_call",
+        "value": 16,
+        "unit": "branches",
+        "policy": "hard"
+      },
+      {
+        "id": "unary_operator_chain",
+        "value": 32,
+        "unit": "operators",
+        "policy": "hard"
+      },
+      {
+        "id": "concatenation_operands_per_expression",
+        "value": 32,
+        "unit": "operands",
+        "policy": "hard"
+      },
+      {
+        "id": "membership_candidates_per_list",
+        "value": 32,
+        "unit": "candidates",
+        "policy": "hard"
+      },
+      {
+        "id": "eval_where_predicate_leaves",
+        "value": 32,
+        "unit": "query_wide_leaves",
+        "policy": "hard"
+      },
+      {
+        "id": "arithmetic_operators",
+        "value": 256,
+        "unit": "query_wide_operators",
+        "policy": "hard"
+      },
+      {
+        "id": "concatenation_operand_occurrences",
+        "value": 256,
+        "unit": "query_wide_occurrences",
+        "policy": "hard"
+      },
+      {
+        "id": "membership_candidates",
+        "value": 256,
+        "unit": "query_wide_candidates",
+        "policy": "hard"
+      },
+      {
+        "id": "compiled_sql_bytes",
+        "value": 262144,
+        "unit": "bytes",
+        "policy": "hard"
+      },
+      {
+        "id": "executor_query_size",
+        "value": 1048576,
+        "unit": "bytes",
+        "policy": "production_default"
+      },
+      {
+        "id": "execution_time",
+        "value": 120,
+        "unit": "seconds",
+        "policy": "production_default"
+      },
+      {
+        "id": "query_threads",
+        "value": 4,
+        "unit": "threads",
+        "policy": "production_default"
+      },
+      {
+        "id": "query_memory",
+        "value": 1073741824,
+        "unit": "bytes",
+        "policy": "production_default"
+      },
+      {
+        "id": "rows_to_read",
+        "value": 250000000,
+        "unit": "rows",
+        "policy": "production_default"
+      },
+      {
+        "id": "bytes_to_read",
+        "value": 68719476736,
+        "unit": "bytes",
+        "policy": "production_default"
+      },
+      {
+        "id": "result_rows",
+        "value": 10001,
+        "unit": "rows",
+        "policy": "production_default",
+        "overflow": "throw"
+      },
+      {
+        "id": "result_bytes",
+        "value": 134217728,
+        "unit": "bytes",
+        "policy": "production_default",
+        "overflow": "throw"
+      },
+      {
+        "id": "flat_multivalue_delimiter_bytes_per_column",
+        "value": 16384,
+        "unit": "bytes",
+        "policy": "hard",
+        "overflow": "invalid_result"
+      },
+      {
+        "id": "ordinary_group_by_rows",
+        "value": 10001,
+        "unit": "groups",
+        "policy": "production_default",
+        "overflow": "throw"
+      },
+      {
+        "id": "dc_values_per_group",
+        "value": 100000,
+        "unit": "values",
+        "policy": "hard",
+        "overflow": "throw"
+      },
+      {
+        "id": "sparkline_bucket_values_per_cell",
+        "value": 100,
+        "unit": "bucket_values",
+        "policy": "hard",
+        "overflow": "compile_failure_for_oversized_explicit_grid_or_throw_on_runtime_sentinel",
+        "note": "the separate leading marker yields 101 physical Array(String) elements under O-sparkline-publication",
+        "oracle_case_ids": [
+          "O-sparkline-publication"
+        ]
+      },
+      {
+        "id": "sparkline_bytes_per_cell",
+        "value": 8388608,
+        "unit": "bytes",
+        "policy": "hard",
+        "overflow": "throw",
+        "note": "includes the marker; the executor result cap remains independent"
+      },
+      {
+        "id": "sparkline_dc_values_per_group_bucket",
+        "value": 100000,
+        "unit": "distinct_values",
+        "policy": "hard",
+        "overflow": "throw"
+      },
+      {
+        "id": "exactperc_state",
+        "scaling": "linear_in_eligible_values",
+        "policy": "query_memory_bounded",
+        "dedicated_per_group_cap": null
+      },
+      {
+        "id": "mode_state",
+        "scaling": "linear_in_distinct_eligible_lexical_values",
+        "policy": "query_memory_bounded",
+        "dedicated_per_group_cap": null
+      },
+      {
+        "id": "stats_multivalue_by_expansion",
+        "value": 10000,
+        "unit": "cartesian_combinations_per_source_event",
+        "scaling": "cartesian_product_of_effective_by_field_member_cardinalities",
+        "policy": "hard",
+        "overflow": "throw_before_first_array_join"
+      },
+      {
+        "id": "values_values_per_group",
+        "value": 10000,
+        "unit": "values",
+        "policy": "hard",
+        "overflow": "throw"
+      },
+      {
+        "id": "values_bytes_per_group",
+        "value": 524288,
+        "unit": "bytes",
+        "policy": "hard",
+        "overflow": "throw"
+      },
+      {
+        "id": "values_values_per_result",
+        "value": 100000,
+        "unit": "values",
+        "policy": "hard",
+        "overflow": "throw"
+      },
+      {
+        "id": "values_bytes_per_result",
+        "value": 8388608,
+        "unit": "bytes",
+        "policy": "hard",
+        "overflow": "throw"
+      },
+      {
+        "id": "list_values_per_group",
+        "value": 100,
+        "unit": "values",
+        "policy": "hard",
+        "overflow": "truncate_to_first_values"
+      },
+      {
+        "id": "list_bytes_per_group",
+        "value": 524288,
+        "unit": "bytes",
+        "policy": "hard",
+        "overflow": "throw"
+      },
+      {
+        "id": "list_values_per_result",
+        "value": 100000,
+        "unit": "values",
+        "policy": "hard",
+        "overflow": "throw"
+      },
+      {
+        "id": "list_bytes_per_result",
+        "value": 8388608,
+        "unit": "bytes",
+        "policy": "hard",
+        "overflow": "throw"
+      }
+    ]
+  }
+}

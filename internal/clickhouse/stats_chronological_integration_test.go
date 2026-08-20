@@ -10,7 +10,7 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/chcol"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -32,7 +32,7 @@ func testStatsChronologicalAgainstClickHouse(
 		id string,
 		source string,
 		eventTime time.Time,
-		fields ...*opensplunkv1.TypedObjectField,
+		fields ...*opensplunk.TypedObjectField,
 	) *ingest.StoredEvent {
 		event := compilerIntegrationEvent(
 			id,

@@ -3,9 +3,8 @@
 package collectorlimits
 
 const (
-	// A validated build identity can contain a 64-byte semantic version, a
-	// 64-byte source revision, and the three-byte " (...)" wrapper.
-	MaximumCollectorVersionBytes          = 131
+	// Source revisions are either the development sentinel or a full Git hash.
+	MaximumSourceRevisionBytes            = 64
 	MaximumHostnameBytes                  = 255
 	MaximumOperatingSystemBytes           = 128
 	MaximumArchitectureBytes              = 128

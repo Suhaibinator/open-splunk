@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 )
 
@@ -25,25 +25,25 @@ func TestRetainedResultTruncationFlowsThroughSearchRoutes(t *testing.T) {
 	}
 	handler := newTestHandler(t, Config{SearchJobs: jobs, Indexes: fakeIndexCatalog{}, WebUI: testUI()})
 
-	response := postProto(t, handler, "/api/v1/search/jobs/get", &opensplunkv1.GetSearchJobRequest{SearchJobId: job.ID})
+	response := postProto(t, handler, "/api/search/jobs/get", &opensplunk.GetSearchJobRequest{SearchJobId: job.ID})
 	if response.Code != http.StatusOK {
 		t.Fatalf("get status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var got opensplunkv1.GetSearchJobResponse
+	var got opensplunk.GetSearchJobResponse
 	unmarshalResponse(t, response, &got)
 	if !got.GetSearchJob().GetResultsTruncated() || len(got.GetSearchJob().GetWarnings()) != 1 ||
 		got.GetSearchJob().GetWarnings()[0].GetCode() != "RESULTS_TRUNCATED" {
 		t.Fatalf("truncated search job = %+v", got.GetSearchJob())
 	}
 
-	response = postProto(t, handler, "/api/v1/search/jobs/results", &opensplunkv1.GetSearchResultsRequest{
+	response = postProto(t, handler, "/api/search/jobs/results", &opensplunk.GetSearchResultsRequest{
 		SearchJobId: job.ID,
-		Page:        &opensplunkv1.PageRequest{IncludeTotalSize: true},
+		Page:        &opensplunk.PageRequest{IncludeTotalSize: true},
 	})
 	if response.Code != http.StatusOK {
 		t.Fatalf("results status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var results opensplunkv1.GetSearchResultsResponse
+	var results opensplunk.GetSearchResultsResponse
 	unmarshalResponse(t, response, &results)
 	page := results.GetResultPage()
 	if page.GetSnapshotComplete() || page.GetPage().GetTotalSizeExact() || page.GetPage().GetTotalSize() != 10_000 {

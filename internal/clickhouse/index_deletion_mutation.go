@@ -626,7 +626,7 @@ func validateIndexDataDeletionRequest(
 	}
 	if request.ProtocolVersion != indexDataDeletionProtocolVersion {
 		return errors.New(
-			"advance ClickHouse index data deletion: unsupported mutation protocol version",
+			"advance ClickHouse index data deletion: unsupported mutation protocol version; provision fresh state",
 		)
 	}
 	if request.TenantID == "" ||

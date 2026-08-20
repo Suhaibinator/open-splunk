@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { GetSystemBootstrapResponse } from "@/gen/ts/open_splunk/v1/system_api";
+import { GetSystemBootstrapResponse } from "@/gen/ts/open_splunk/system_api";
 
 import { isAdministratorRoutePath } from "./administrator-session";
 import { createOpenSplunkApiClient, OpenSplunkApiClient } from "./open-splunk-client";
@@ -128,7 +128,8 @@ test("every bound route carries the authorization its registered path implies", 
       isAdministratorRoutePath(route.path) ? "administrator" : "none",
       route.path,
     );
-    assert.match(route.path, /^\/api\/v1\//);
+    assert.match(route.path, /^\/api\//);
+    assert.doesNotMatch(route.path, /^\/api\/v\d/u);
   }
 });
 
@@ -157,5 +158,5 @@ test("the factory binds routes onto a real transport and preserves the route pat
     fetch: fetchStub,
   });
   await client.system.bootstrap({});
-  assert.deepEqual(seen, ["https://example.test/base/api/v1/system/bootstrap"]);
+  assert.deepEqual(seen, ["https://example.test/base/api/system/bootstrap"]);
 });

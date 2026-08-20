@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 )
@@ -87,7 +87,7 @@ type hardeningSummaryLease struct {
 }
 
 //nolint:unparam // Both results are required by knowledgeSnapshotSummaryProvider.
-func (lease *hardeningSummaryLease) knowledgeSnapshotSummary() (*opensplunkv1.KnowledgeSnapshotSummary, error) {
+func (lease *hardeningSummaryLease) knowledgeSnapshotSummary() (*opensplunk.KnowledgeSnapshotSummary, error) {
 	lease.summaryCalls.Add(1)
 	return nil, nil
 }

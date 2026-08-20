@@ -344,7 +344,7 @@ func TestAnalyzeSuggestionContextIncompleteGrammar(t *testing.T) {
 	}
 }
 
-func TestAnalyzeSuggestionContextV02OperatorsReplaceOnlyTheActiveFragment(t *testing.T) {
+func TestAnalyzeSuggestionContextAuthoredOperatorsReplaceOnlyTheActiveFragment(t *testing.T) {
 	t.Parallel()
 
 	for _, source := range []string{
@@ -1236,7 +1236,7 @@ func maximumScalarSuggestionFixture() (string, int) {
 	return value, strings.LastIndex(value, "toSuffix") + len("to")
 }
 
-func TestAnalyzeSuggestionContextV02MaximumScalarShapeBoundsAllocations(t *testing.T) {
+func TestAnalyzeSuggestionContextAuthoredMaximumScalarShapeBoundsAllocations(t *testing.T) {
 	source, cursor := maximumScalarSuggestionFixture()
 	var context SuggestionContext
 	var diagnostic *Diagnostic
@@ -1258,7 +1258,7 @@ func TestAnalyzeSuggestionContextV02MaximumScalarShapeBoundsAllocations(t *testi
 	}
 }
 
-func BenchmarkAnalyzeSuggestionContextV02MaximumScalarShape(b *testing.B) {
+func BenchmarkAnalyzeSuggestionContextAuthoredMaximumScalarShape(b *testing.B) {
 	source, cursor := maximumScalarSuggestionFixture()
 	b.ReportAllocs()
 	b.SetBytes(int64(len(source)))

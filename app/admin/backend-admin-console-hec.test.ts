@@ -4,7 +4,7 @@ import test from "node:test";
 import {
   IngestionTokenPurpose,
   IngestionTokenState,
-} from "../../gen/ts/open_splunk/v1/collector_admin";
+} from "../../gen/ts/open_splunk/collector_admin";
 import {
   hecCurlExample,
   hecProfileFromForm,
@@ -25,7 +25,7 @@ test("only active and disabled tokens expose reversible state controls", () => {
       ingestionTokenId: "token",
       version: 1n,
       name: "managed",
-      tokenPrefix: "ost_v1_safe",
+      tokenPrefix: "ost_safe",
       purpose,
       state: IngestionTokenState.INGESTION_TOKEN_STATE_ACTIVE,
       constraints: undefined,
@@ -42,7 +42,7 @@ test("only active and disabled tokens expose reversible state controls", () => {
       ingestionTokenId: "token",
       version: 2n,
       name: "managed",
-      tokenPrefix: "ost_v1_safe",
+      tokenPrefix: "ost_safe",
       purpose,
       state: IngestionTokenState.INGESTION_TOKEN_STATE_DISABLED,
       constraints: undefined,
@@ -239,13 +239,20 @@ test("ambiguous-create guard round-trips HEC identity without a secret", () => {
   assert.equal(restored?.recovery.definition.maxUncompressedBytesPerSecond, 1_048_576n);
 });
 
-test("pre-HEC native create guards remain readable", () => {
+test("unsupported create-guard schemas fail closed", () => {
+  assert.equal(parsePersistedTokenCreateGuard(
+    JSON.stringify({ schemaVersion: 2 }),
+    "https://splunk.example",
+  ), null);
+});
+
+test("incomplete create guards fail closed within the current schema", () => {
   const apiBaseUrl = "https://splunk.example";
-  const legacyGuard = {
+  const incompleteGuard = {
     schemaVersion: 1,
     apiBaseUrl,
-    attemptId: "attempt-legacy",
-    ownerId: "owner-legacy",
+    attemptId: "attempt-incomplete",
+    ownerId: "owner-incomplete",
     mode: "ambiguous",
     definition: {
       name: "native-token",
@@ -266,12 +273,8 @@ test("pre-HEC native create guards remain readable", () => {
     failureMessage: "pending",
     knownIssuedTokenId: null,
   };
-  const restored = parsePersistedTokenCreateGuard(JSON.stringify(legacyGuard), apiBaseUrl);
-  assert.equal(
-    restored?.recovery.definition.purpose,
-    IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR,
-  );
-  assert.equal(restored?.recovery.definition.hecProfile, undefined);
+  const restored = parsePersistedTokenCreateGuard(JSON.stringify(incompleteGuard), apiBaseUrl);
+  assert.equal(restored, null);
 });
 
 test("malformed persisted HEC scope fails closed without throwing", () => {

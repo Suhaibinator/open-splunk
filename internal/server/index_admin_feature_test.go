@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 )
@@ -77,10 +77,10 @@ func TestIndexAdministrationFeatureRequiresCompleteRouteFamily(t *testing.T) {
 					"example.com",
 				},
 				Bootstrap: BootstrapConfig{
-					Features: []opensplunkv1.ServerFeature{
-						opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH,
-						opensplunkv1.ServerFeature_SERVER_FEATURE_INDEX_ADMIN,
-						opensplunkv1.ServerFeature_SERVER_FEATURE_INDEX_ADMIN,
+					Features: []opensplunk.ServerFeature{
+						opensplunk.ServerFeature_SERVER_FEATURE_SEARCH,
+						opensplunk.ServerFeature_SERVER_FEATURE_INDEX_ADMIN,
+						opensplunk.ServerFeature_SERVER_FEATURE_INDEX_ADMIN,
 					},
 				},
 			}
@@ -103,8 +103,8 @@ func TestIndexAdministrationFeatureRequiresCompleteRouteFamily(t *testing.T) {
 			response := postProto(
 				t,
 				handler,
-				"/api/v1/system/bootstrap",
-				&opensplunkv1.GetSystemBootstrapRequest{},
+				"/api/system/bootstrap",
+				&opensplunk.GetSystemBootstrapRequest{},
 			)
 			if response.Code != http.StatusOK {
 				t.Fatalf(
@@ -113,11 +113,11 @@ func TestIndexAdministrationFeatureRequiresCompleteRouteFamily(t *testing.T) {
 					response.Body.String(),
 				)
 			}
-			var bootstrap opensplunkv1.GetSystemBootstrapResponse
+			var bootstrap opensplunk.GetSystemBootstrapResponse
 			unmarshalResponse(t, response, &bootstrap)
 			if got := countServerFeature(
 				bootstrap.GetFeatures(),
-				opensplunkv1.ServerFeature_SERVER_FEATURE_INDEX_ADMIN,
+				opensplunk.ServerFeature_SERVER_FEATURE_INDEX_ADMIN,
 			); got != test.want {
 				t.Fatalf(
 					"index administration feature count = %d, want %d; features = %v",

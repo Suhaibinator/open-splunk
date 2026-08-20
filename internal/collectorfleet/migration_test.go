@@ -337,11 +337,11 @@ func TestCollectorFleetMigrationInstallsStrictFencingConstraints(t *testing.T) {
 	if err := database.SQLDB().QueryRowContext(ctx, `
 		SELECT name
 		FROM schema_migrations
-		WHERE version = 13`).Scan(&migrationName); err != nil {
+		WHERE version = 1`).Scan(&migrationName); err != nil {
 		t.Fatalf("read collector fleet migration: %v", err)
 	}
-	if migrationName != "0013_collector_fleet.sql" {
-		t.Fatalf("migration 13 name = %q", migrationName)
+	if migrationName != "0001_baseline.sql" {
+		t.Fatalf("baseline migration name = %q", migrationName)
 	}
 
 	now := time.Date(2026, 7, 29, 3, 0, 0, 0, time.UTC)
@@ -557,12 +557,12 @@ func TestCollectorFleetCatalogRevisionTriggersFenceVisibleMutations(t *testing.T
 				INSERT INTO collector_runtime (
 					tenant_id, collector_id, telemetry_revision, lease_generation,
 					boot_epoch, stream_id, active_instance_id,
-					protocol_major, protocol_minor, collector_version, hostname,
+					source_revision, hostname,
 					operating_system, architecture, started_at_unix_micro,
 					connected_at_unix_micro, last_seen_at_unix_micro
 				) VALUES (
 					?, 'catalog-second', 1, 1, 'boot', 'stream', 'instance',
-					1, 0, '1.0.0', 'host', 'linux', 'amd64', 1, 1, 1
+					'development', 'host', 'linux', 'amd64', 1, 1, 1
 				)`,
 			args: []any{lease.TenantID},
 		},

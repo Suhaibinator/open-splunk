@@ -8,7 +8,7 @@ import (
 	"math"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 )
 
 // Sentinel errors. Callers classify them with errors.Is.
@@ -67,15 +67,13 @@ type Options struct {
 	// SyncInterval is used when Sync == SyncInterval.
 	SyncInterval time.Duration
 
-	// CollectorID, ProtocolMajor, and ProtocolMinor are stamped onto every
-	// sealed EventBatch so the sender transmits it without further mutation.
-	CollectorID   string
-	ProtocolMajor uint32
-	ProtocolMinor uint32
+	// CollectorID is stamped onto every sealed EventBatch so the sender
+	// transmits it without further mutation.
+	CollectorID string
 }
 
 // Stats is a point-in-time snapshot of queue depth. It maps onto the queue-
-// depth fields of opensplunkv1.CollectorQueueStats (queued_events, queued_bytes,
+// depth fields of opensplunk.CollectorQueueStats (queued_events, queued_bytes,
 // oldest_event_age); the sender contributes the delivery counters (sent,
 // acknowledged, retried, rejected, dropped).
 type Stats struct {
@@ -164,12 +162,12 @@ type Queue interface {
 	// and monotonic batch_sequence, computing event_ids_sha256 and size, and
 	// persisting the record per the sync policy. It returns the sealed batch
 	// ready for transmission, or ErrQueueFull when MaxQueueBytes is reached.
-	Append(events []*opensplunkv1.LogEvent) (*opensplunkv1.EventBatch, error)
+	Append(events []*opensplunk.LogEvent) (*opensplunk.EventBatch, error)
 
 	// NextBatch blocks until an unacked batch is available or ctx is done,
 	// returning batches in ascending batch_sequence. After a resume the first
 	// batch returned is the lowest unacked sequence.
-	NextBatch(ctx context.Context) (*opensplunkv1.EventBatch, error)
+	NextBatch(ctx context.Context) (*opensplunk.EventBatch, error)
 
 	// Ack marks exactly one batch terminal. Out-of-order terminal acks are held
 	// in memory until every earlier queued batch is terminal; only then does the
@@ -235,7 +233,7 @@ func Open(opts Options) (ResumeQueue, error) {
 // collector.proto: SHA-256 over each event's UTF-8 event_id, each prefixed by
 // its unsigned 32-bit big-endian byte length. Exposed so the server-side and
 // tests can compute the same digest.
-func ComputeEventIDsDigest(events []*opensplunkv1.LogEvent) []byte {
+func ComputeEventIDsDigest(events []*opensplunk.LogEvent) []byte {
 	h := sha256.New()
 	var length [4]byte
 	for _, event := range events {

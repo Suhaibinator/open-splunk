@@ -13,8 +13,7 @@ import (
 const releaseFixtureRevision = "abcdef0123456789abcdef0123456789abcdef01"
 
 var releaseFixtureIdentity = buildinfo.Identity{
-	ApplicationVersion: "0.1.0",
-	SourceRevision:     releaseFixtureRevision,
+	SourceRevision: releaseFixtureRevision,
 }
 
 func releaseFixture(t *testing.T) fstest.MapFS {
@@ -33,17 +32,17 @@ func releaseFixture(t *testing.T) fstest.MapFS {
 		"out/_next/static/app.0123456789ab.js": {
 			Data: []byte("release UI"),
 		},
-		"proto/open_splunk/v1/system.proto": {
+		"proto/open_splunk/system.proto": {
 			Data: []byte("syntax = \"proto3\";\n"),
 		},
-		"migrations/sqlite/0001_control.sql": {
+		"migrations/sqlite/0001_baseline.sql": {
 			Data: []byte("SELECT 1;\n"),
 		},
-		"migrations/clickhouse/0001_events.sql": {
+		"migrations/clickhouse/0001_baseline.sql": {
 			Data: []byte("SELECT 1;\n"),
 		},
 	}
-	manifest, err := buildassets.Generate(files, "0.1.0", releaseFixtureRevision)
+	manifest, err := buildassets.Generate(files, releaseFixtureRevision)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +73,7 @@ func TestLoadReleaseValidatesAndScopesEmbeddedFiles(t *testing.T) {
 	if err != nil || len(manifest) == 0 {
 		t.Fatalf("read manifest = %d bytes, %v", len(manifest), err)
 	}
-	if _, err := fs.ReadFile(release.WebUI, "proto/open_splunk/v1/system.proto"); err == nil {
+	if _, err := fs.ReadFile(release.WebUI, "proto/open_splunk/system.proto"); err == nil {
 		t.Fatal("WebUI exposed embedded protobuf sources")
 	}
 }
@@ -118,7 +117,7 @@ func TestLoadReleaseRejectsMissingMalformedAndTamperedManifest(t *testing.T) {
 		{
 			name: "tampered protobuf",
 			mutate: func(files fstest.MapFS) {
-				files["proto/open_splunk/v1/system.proto"].Data = []byte("tampered")
+				files["proto/open_splunk/system.proto"].Data = []byte("tampered")
 			},
 			wantDetail: "protobuf",
 		},
@@ -140,10 +139,7 @@ func TestLoadReleaseRejectsSelfConsistentManifestForWrongCompiledIdentity(t *tes
 	t.Parallel()
 
 	files := releaseFixture(t)
-	wrongIdentity := buildinfo.Identity{
-		ApplicationVersion: "9.9.9",
-		SourceRevision:     releaseFixtureRevision,
-	}
+	wrongIdentity := buildinfo.Identity{SourceRevision: strings.Repeat("9", 40)}
 	wrongBuildID, err := wrongIdentity.UIBuildID()
 	if err != nil {
 		t.Fatal(err)
@@ -151,7 +147,6 @@ func TestLoadReleaseRejectsSelfConsistentManifestForWrongCompiledIdentity(t *tes
 	files[".next/BUILD_ID"] = &fstest.MapFile{Data: []byte(wrongBuildID)}
 	manifest, err := buildassets.Generate(
 		files,
-		wrongIdentity.ApplicationVersion,
 		wrongIdentity.SourceRevision,
 	)
 	if err != nil {
@@ -165,7 +160,7 @@ func TestLoadReleaseRejectsSelfConsistentManifestForWrongCompiledIdentity(t *tes
 	delete(files, ".next/BUILD_ID")
 
 	_, err = loadRelease(files, releaseFixtureIdentity)
-	if err == nil || !strings.Contains(err.Error(), "compiled identity") {
-		t.Fatalf("loadRelease error = %v, want compiled identity mismatch", err)
+	if err == nil || !strings.Contains(err.Error(), "compiled source revision") {
+		t.Fatalf("loadRelease error = %v, want compiled source-revision mismatch", err)
 	}
 }

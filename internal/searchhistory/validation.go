@@ -12,10 +12,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/protostrict"
-	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -47,7 +46,7 @@ func normalizeScope(scope AccessScope) (AccessScope, error) {
 	return scope, nil
 }
 
-func normalizeEntry(input *opensplunkv1.SearchHistoryEntry) (*opensplunkv1.SearchHistoryEntry, indexedEntry, error) {
+func normalizeEntry(input *opensplunk.SearchHistoryEntry) (*opensplunk.SearchHistoryEntry, indexedEntry, error) {
 	if input == nil {
 		return nil, indexedEntry{}, invalid("search-history entry is required")
 	}
@@ -55,7 +54,7 @@ func normalizeEntry(input *opensplunkv1.SearchHistoryEntry) (*opensplunkv1.Searc
 	if err != nil {
 		return nil, indexedEntry{}, err
 	}
-	entry := proto.Clone(input).(*opensplunkv1.SearchHistoryEntry)
+	entry := proto.Clone(input).(*opensplunk.SearchHistoryEntry)
 	entry.KnowledgeSnapshot = knowledgeSnapshot
 	if err := protostrict.RejectUnknownFields(entry.ProtoReflect(), "search-history entry"); err != nil {
 		return nil, indexedEntry{}, invalid(err.Error())
@@ -117,9 +116,6 @@ func normalizeEntry(input *opensplunkv1.SearchHistoryEntry) (*opensplunkv1.Searc
 	if entry.MatchedEvents > math.MaxInt64 {
 		return nil, indexedEntry{}, invalid("matched event count is outside the supported range")
 	}
-	if !searchjobs.ValidCompilerVersion(entry.CompilerVersion) {
-		return nil, indexedEntry{}, invalid("compiler version is invalid")
-	}
 	if err := validateWarnings(entry.Warnings); err != nil {
 		return nil, indexedEntry{}, err
 	}
@@ -146,7 +142,7 @@ func normalizeEntry(input *opensplunkv1.SearchHistoryEntry) (*opensplunkv1.Searc
 	return entry, indexed, nil
 }
 
-func normalizeSearchDefinition(definition *opensplunkv1.SearchDefinition) error {
+func normalizeSearchDefinition(definition *opensplunk.SearchDefinition) error {
 	// SPL is reusable user intent. Validate it without trimming or otherwise
 	// rewriting bytes so "Open in Search" restores exactly what was entered.
 	if strings.TrimSpace(definition.Spl) == "" {
@@ -209,18 +205,18 @@ func normalizeSearchDefinition(definition *opensplunkv1.SearchDefinition) error 
 			*value = trimmed
 		}
 	}
-	if definition.PreferredResultTab < opensplunkv1.SearchResultTab_SEARCH_RESULT_TAB_UNSPECIFIED || definition.PreferredResultTab > opensplunkv1.SearchResultTab_SEARCH_RESULT_TAB_VISUALIZATION {
+	if definition.PreferredResultTab < opensplunk.SearchResultTab_SEARCH_RESULT_TAB_UNSPECIFIED || definition.PreferredResultTab > opensplunk.SearchResultTab_SEARCH_RESULT_TAB_VISUALIZATION {
 		return invalid("preferred result tab is invalid")
 	}
 	return nil
 }
 
-func normalizeSource(entry *opensplunkv1.SearchHistoryEntry) error {
+func normalizeSource(entry *opensplunk.SearchHistoryEntry) error {
 	if entry.Source == nil {
-		entry.Source = &opensplunkv1.SearchJobSource{Origin: opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_AD_HOC}
+		entry.Source = &opensplunk.SearchJobSource{Origin: opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_AD_HOC}
 	}
 	source := entry.Source
-	if source.Origin < opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_AD_HOC || source.Origin > opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_API {
+	if source.Origin < opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_AD_HOC || source.Origin > opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_API {
 		return invalid("search origin is invalid")
 	}
 	for _, field := range []struct {
@@ -243,15 +239,15 @@ func normalizeSource(entry *opensplunkv1.SearchHistoryEntry) error {
 		*value = trimmed
 	}
 	switch source.Origin {
-	case opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH:
+	case opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH:
 		if source.SavedSearchId == nil || source.HistorySearchId != nil || source.DashboardId != nil {
 			return invalid("saved-search origin requires a saved-search ID")
 		}
-	case opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN:
+	case opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN:
 		if source.HistorySearchId == nil || source.SavedSearchId != nil || source.DashboardId != nil {
 			return invalid("history-rerun origin requires a history search ID")
 		}
-	case opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_DASHBOARD:
+	case opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_DASHBOARD:
 		if source.DashboardId == nil || source.SavedSearchId != nil || source.HistorySearchId != nil {
 			return invalid("dashboard origin requires a dashboard ID")
 		}
@@ -263,7 +259,7 @@ func normalizeSource(entry *opensplunkv1.SearchHistoryEntry) error {
 	return nil
 }
 
-func normalizeEffectiveScope(entry *opensplunkv1.SearchHistoryEntry) error {
+func normalizeEffectiveScope(entry *opensplunk.SearchHistoryEntry) error {
 	if len(entry.EffectiveIndexScope) > maximumIndexScope {
 		return invalid(fmt.Sprintf("effective index scope cannot contain more than %d indexes", maximumIndexScope))
 	}
@@ -285,7 +281,7 @@ func normalizeEffectiveScope(entry *opensplunkv1.SearchHistoryEntry) error {
 	return nil
 }
 
-func validateResolvedRange(value *opensplunkv1.ResolvedTimeRange) error {
+func validateResolvedRange(value *opensplunk.ResolvedTimeRange) error {
 	if value == nil {
 		return nil
 	}
@@ -306,7 +302,7 @@ func validateResolvedRange(value *opensplunkv1.ResolvedTimeRange) error {
 	return validateText("resolved time zone", value.Timezone, 1024, false)
 }
 
-func validateWarnings(warnings []*opensplunkv1.ApiWarning) error {
+func validateWarnings(warnings []*opensplunk.ApiWarning) error {
 	if len(warnings) > maximumWarnings {
 		return invalid(fmt.Sprintf("warnings cannot contain more than %d values", maximumWarnings))
 	}
@@ -331,17 +327,17 @@ func validateWarnings(warnings []*opensplunkv1.ApiWarning) error {
 	return nil
 }
 
-func validateFailure(state opensplunkv1.SearchJobState, failure *opensplunkv1.SearchFailure) error {
+func validateFailure(state opensplunk.SearchJobState, failure *opensplunk.SearchFailure) error {
 	if failure == nil {
-		if state == opensplunkv1.SearchJobState_SEARCH_JOB_STATE_FAILED {
+		if state == opensplunk.SearchJobState_SEARCH_JOB_STATE_FAILED {
 			return invalid("failed history entries require a safe failure summary")
 		}
 		return nil
 	}
-	if state != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_FAILED {
+	if state != opensplunk.SearchJobState_SEARCH_JOB_STATE_FAILED {
 		return invalid("only failed history entries may contain a failure summary")
 	}
-	if failure.Code < opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_INVALID_SPL || failure.Code > opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_RESULT_EXPIRED {
+	if failure.Code < opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_INVALID_SPL || failure.Code > opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_RESULT_EXPIRED {
 		return invalid("failure code is invalid")
 	}
 	if err := validateText("failure message", failure.Message, maximumFailureMessageBytes, false); err != nil {
@@ -397,8 +393,8 @@ func checkedDuration(value *durationpb.Duration) (time.Duration, error) {
 	return time.Duration(value.Seconds)*time.Second + time.Duration(value.Nanos), nil
 }
 
-func terminalState(state opensplunkv1.SearchJobState) bool {
-	return state >= opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED && state <= opensplunkv1.SearchJobState_SEARCH_JOB_STATE_EXPIRED
+func terminalState(state opensplunk.SearchJobState) bool {
+	return state >= opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED && state <= opensplunk.SearchJobState_SEARCH_JOB_STATE_EXPIRED
 }
 
 func validateText(name, value string, maximum int, allowEmpty bool) error {
@@ -440,12 +436,12 @@ func persistedDataError(operation string, err error) error {
 	return fmt.Errorf("%s: %w", operation, err)
 }
 
-func decodeEntry(encoded, expectedChecksum []byte) (*opensplunkv1.SearchHistoryEntry, indexedEntry, error) {
+func decodeEntry(encoded, expectedChecksum []byte) (*opensplunk.SearchHistoryEntry, indexedEntry, error) {
 	checksum := sha256.Sum256(encoded)
 	if len(expectedChecksum) != sha256.Size || !bytes.Equal(checksum[:], expectedChecksum) {
 		return nil, indexedEntry{}, errors.New("search-history entry checksum mismatch")
 	}
-	entry := new(opensplunkv1.SearchHistoryEntry)
+	entry := new(opensplunk.SearchHistoryEntry)
 	if err := (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(encoded, entry); err != nil {
 		return nil, indexedEntry{}, fmt.Errorf("decode search-history entry: %w", err)
 	}

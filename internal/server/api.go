@@ -11,20 +11,19 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/SRouter/pkg/router"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/buildmetadata"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobproto"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
-	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const maximumRequestedIndexes = 128
 
-func (handler *apiHandler) getSystemBootstrap(request *http.Request, input *opensplunkv1.GetSystemBootstrapRequest) (*opensplunkv1.GetSystemBootstrapResponse, error) {
+func (handler *apiHandler) getSystemBootstrap(request *http.Request, input *opensplunk.GetSystemBootstrapRequest) (*opensplunk.GetSystemBootstrapResponse, error) {
 	indexes, err := handler.indexes.ListIndexes(request.Context())
 	if contextErr := requestContextFailure(request.Context(), err); contextErr != nil {
 		return nil, bootstrapContextError(contextErr)
@@ -32,7 +31,7 @@ func (handler *apiHandler) getSystemBootstrap(request *http.Request, input *open
 	if err != nil {
 		return nil, unavailableError("control plane is unavailable")
 	}
-	indexSummaries := make([]*opensplunkv1.IndexSummary, len(indexes))
+	indexSummaries := make([]*opensplunk.IndexSummary, len(indexes))
 	for index, record := range indexes {
 		indexSummaries[index] = indexSummaryToProto(record)
 	}
@@ -69,14 +68,11 @@ func (handler *apiHandler) getSystemBootstrap(request *http.Request, input *open
 	if selectedAppID == "" && len(apps) > 0 {
 		selectedAppID = apps[0].GetAppId()
 	}
-	response := &opensplunkv1.GetSystemBootstrapResponse{
-		ServerVersion:           handler.bootstrap.ServerVersion,
-		ApiVersion:              handler.bootstrap.APIVersion,
-		SplCompatibilityVersion: spl.CompatibilityVersion,
-		Build:                   buildmetadata.Clone(handler.bootstrap.Build),
-		SearchWebsocketPath:     handler.bootstrap.SearchWebSocketPath,
-		Features:                slices.Clone(handler.bootstrap.Features),
-		Limits: &opensplunkv1.BrowserApiLimits{
+	response := &opensplunk.GetSystemBootstrapResponse{
+		Build:               buildmetadata.Clone(handler.bootstrap.Build),
+		SearchWebsocketPath: handler.bootstrap.SearchWebSocketPath,
+		Features:            slices.Clone(handler.bootstrap.Features),
+		Limits: &opensplunk.BrowserApiLimits{
 			MaximumPageSize:               handler.maximumPageSize,
 			MaximumPreviewRows:            handler.bootstrap.MaximumPreviewRows,
 			MaximumWebsocketSubscriptions: handler.bootstrap.MaximumSubscriptions,
@@ -114,12 +110,12 @@ func bootstrapContextError(err error) error {
 
 func appCatalogSummariesToProto(
 	catalog AppCatalogResult,
-) ([]*opensplunkv1.AppSummary, error) {
+) ([]*opensplunk.AppSummary, error) {
 	if !catalog.Complete || len(catalog.Apps) > maximumBootstrapApps {
 		return nil, errors.New("active app catalog is incomplete or exceeds its bound")
 	}
 
-	apps := make([]*opensplunkv1.AppSummary, 0, len(catalog.Apps))
+	apps := make([]*opensplunk.AppSummary, 0, len(catalog.Apps))
 	seenIDs := make(map[string]struct{}, len(catalog.Apps))
 	seenSlugs := make(map[string]struct{}, len(catalog.Apps))
 	for _, app := range catalog.Apps {
@@ -161,17 +157,17 @@ func appCatalogSummariesToProto(
 		}
 		seenIDs[appID] = struct{}{}
 		seenSlugs[slug] = struct{}{}
-		apps = append(apps, &opensplunkv1.AppSummary{
+		apps = append(apps, &opensplunk.AppSummary{
 			AppId:             strings.Clone(appID),
 			Slug:              strings.Clone(slug),
 			DisplayName:       strings.Clone(displayName),
 			DefaultIndexNames: slices.Clone(indexNames),
-			State:             opensplunkv1.AppState_APP_STATE_ACTIVE,
+			State:             opensplunk.AppState_APP_STATE_ACTIVE,
 		})
 	}
 	slices.SortFunc(
 		apps,
-		func(left, right *opensplunkv1.AppSummary) int {
+		func(left, right *opensplunk.AppSummary) int {
 			if order := strings.Compare(left.GetSlug(), right.GetSlug()); order != 0 {
 				return order
 			}
@@ -181,13 +177,13 @@ func appCatalogSummariesToProto(
 	return apps, nil
 }
 
-func (handler *apiHandler) createSearchJob(request *http.Request, input *opensplunkv1.CreateSearchJobRequest) (*opensplunkv1.CreateSearchJobResponse, error) {
+func (handler *apiHandler) createSearchJob(request *http.Request, input *opensplunk.CreateSearchJobRequest) (*opensplunk.CreateSearchJobResponse, error) {
 	var (
 		resolved     resolvedSearchDefinition
 		source       searchjobs.JobSource
 		err          error
-		historyRerun = input.GetSource().GetOrigin() == opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN
-		savedLaunch  = input.GetSource().GetOrigin() == opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH
+		historyRerun = input.GetSource().GetOrigin() == opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN
+		savedLaunch  = input.GetSource().GetOrigin() == opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH
 	)
 	switch {
 	case historyRerun:
@@ -201,7 +197,7 @@ func (handler *apiHandler) createSearchJob(request *http.Request, input *openspl
 			input,
 		)
 	default:
-		resolved, err = handler.resolveSearchDefinition(input.GetDefinition(), func(definition *opensplunkv1.SearchDefinition) error {
+		resolved, err = handler.resolveSearchDefinition(input.GetDefinition(), func(definition *opensplunk.SearchDefinition) error {
 			return rejectUnsupportedCreateFields(input, definition)
 		})
 		if err == nil {
@@ -272,7 +268,7 @@ func (handler *apiHandler) createSearchJob(request *http.Request, input *openspl
 	if err != nil {
 		return nil, internalError()
 	}
-	return &opensplunkv1.CreateSearchJobResponse{SearchJob: converted}, nil
+	return &opensplunk.CreateSearchJobResponse{SearchJob: converted}, nil
 }
 
 // resolveSavedSearchLaunch makes the persisted reusable definition—not a
@@ -282,13 +278,13 @@ func (handler *apiHandler) createSearchJob(request *http.Request, input *openspl
 // exclusively from the cloned saved record.
 func (handler *apiHandler) resolveSavedSearchLaunch(
 	ctx context.Context,
-	input *opensplunkv1.CreateSearchJobRequest,
+	input *opensplunk.CreateSearchJobRequest,
 ) (resolvedSearchDefinition, searchjobs.JobSource, error) {
 	if err := rejectUnsupportedCreateFields(input, nil); err != nil {
 		return resolvedSearchDefinition{}, searchjobs.JobSource{}, badRequestError(err.Error())
 	}
 	sourceInput := input.GetSource()
-	if sourceInput.GetOrigin() != opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH ||
+	if sourceInput.GetOrigin() != opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH ||
 		sourceInput.SavedSearchId == nil || sourceInput.HistorySearchId != nil ||
 		sourceInput.DashboardId != nil {
 		return resolvedSearchDefinition{}, searchjobs.JobSource{},
@@ -309,7 +305,7 @@ func (handler *apiHandler) resolveSavedSearchLaunch(
 	}
 	resolved, err := handler.resolveSearchDefinition(
 		trusted.GetDefinition().GetSearch(),
-		func(*opensplunkv1.SearchDefinition) error { return nil },
+		func(*opensplunk.SearchDefinition) error { return nil },
 	)
 	if err != nil || resolved.AppID != savedSearchAppID(trusted) {
 		return resolvedSearchDefinition{}, searchjobs.JobSource{}, internalError()
@@ -349,7 +345,7 @@ func historyRerunContextError(
 
 func (handler *apiHandler) resolveHistoryRerun(
 	ctx context.Context,
-	input *opensplunkv1.CreateSearchJobRequest,
+	input *opensplunk.CreateSearchJobRequest,
 ) (resolvedSearchDefinition, searchjobs.JobSource, error) {
 	if input.GetDefinition() != nil {
 		return resolvedSearchDefinition{}, searchjobs.JobSource{},
@@ -360,7 +356,7 @@ func (handler *apiHandler) resolveHistoryRerun(
 			badRequestError(err.Error())
 	}
 	source := input.GetSource()
-	if source == nil || source.GetOrigin() != opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN ||
+	if source == nil || source.GetOrigin() != opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN ||
 		source.HistorySearchId == nil || source.SavedSearchId != nil || source.DashboardId != nil {
 		return resolvedSearchDefinition{}, searchjobs.JobSource{},
 			badRequestError("history-rerun origin requires a history search ID")
@@ -424,8 +420,8 @@ func (handler *apiHandler) resolveHistoryRerun(
 }
 
 func trustedHistoryRerunDefinition(
-	entry *opensplunkv1.SearchHistoryEntry,
-) (*opensplunkv1.SearchDefinition, error) {
+	entry *opensplunk.SearchHistoryEntry,
+) (*opensplunk.SearchDefinition, error) {
 	stored := entry.GetDefinition()
 	if stored == nil || stored.GetTimeRange() == nil ||
 		stored.GetTimeRange().Earliest == nil || stored.GetTimeRange().Latest == nil {
@@ -487,9 +483,9 @@ func trustedHistoryRerunDefinition(
 		return nil, errors.New("history entry does not contain a reusable index scope")
 	}
 
-	return &opensplunkv1.SearchDefinition{
+	return &opensplunk.SearchDefinition{
 		Spl: strings.Clone(stored.GetSpl()),
-		TimeRange: &opensplunkv1.TimeRangeSpec{
+		TimeRange: &opensplunk.TimeRangeSpec{
 			Earliest: cloneOptionalString(stored.GetTimeRange().Earliest),
 			Latest:   cloneOptionalString(stored.GetTimeRange().Latest),
 			Timezone: cloneOptionalString(stored.GetTimeRange().Timezone),
@@ -531,19 +527,19 @@ func (handler *apiHandler) authorizeSearchApp(
 }
 
 func activeHistoryRerunAppExists(
-	apps []*opensplunkv1.AppSummary,
+	apps []*opensplunk.AppSummary,
 	appID string,
 ) bool {
 	for _, app := range apps {
 		if app.GetAppId() == appID &&
-			app.GetState() == opensplunkv1.AppState_APP_STATE_ACTIVE {
+			app.GetState() == opensplunk.AppState_APP_STATE_ACTIVE {
 			return true
 		}
 	}
 	return false
 }
 
-func (handler *apiHandler) getSearchJob(request *http.Request, input *opensplunkv1.GetSearchJobRequest) (*opensplunkv1.GetSearchJobResponse, error) {
+func (handler *apiHandler) getSearchJob(request *http.Request, input *opensplunk.GetSearchJobRequest) (*opensplunk.GetSearchJobResponse, error) {
 	id := strings.TrimSpace(input.GetSearchJobId())
 	if id == "" {
 		return nil, badRequestError("search job ID is required")
@@ -570,10 +566,10 @@ func (handler *apiHandler) getSearchJob(request *http.Request, input *opensplunk
 	}
 	// Generated SQL is intentionally not present in the search-job layer and is
 	// never accepted from or exposed to an ordinary browser request.
-	return &opensplunkv1.GetSearchJobResponse{SearchJob: converted}, nil
+	return &opensplunk.GetSearchJobResponse{SearchJob: converted}, nil
 }
 
-func (handler *apiHandler) getSearchResults(request *http.Request, input *opensplunkv1.GetSearchResultsRequest) (*serializedSearchResultsResponse, error) {
+func (handler *apiHandler) getSearchResults(request *http.Request, input *opensplunk.GetSearchResultsRequest) (*serializedSearchResultsResponse, error) {
 	id := strings.TrimSpace(input.GetSearchJobId())
 	if id == "" {
 		return nil, badRequestError("search job ID is required")
@@ -627,13 +623,13 @@ func (handler *apiHandler) getSearchResults(request *http.Request, input *opensp
 	}
 	transferred = true
 	return &serializedSearchResultsResponse{
-		message: &opensplunkv1.GetSearchResultsResponse{SearchJobId: id, ResultPage: converted},
+		message: &opensplunk.GetSearchResultsResponse{SearchJobId: id, ResultPage: converted},
 		ctx:     request.Context(),
 		release: release,
 	}, nil
 }
 
-func (handler *apiHandler) cancelSearchJob(request *http.Request, input *opensplunkv1.CancelSearchJobRequest) (*opensplunkv1.CancelSearchJobResponse, error) {
+func (handler *apiHandler) cancelSearchJob(request *http.Request, input *opensplunk.CancelSearchJobRequest) (*opensplunk.CancelSearchJobResponse, error) {
 	id := strings.TrimSpace(input.GetSearchJobId())
 	if id == "" {
 		return nil, badRequestError("search job ID is required")
@@ -665,7 +661,7 @@ func (handler *apiHandler) cancelSearchJob(request *http.Request, input *openspl
 	if err != nil {
 		return nil, internalError()
 	}
-	return &opensplunkv1.CancelSearchJobResponse{SearchJob: converted}, nil
+	return &opensplunk.CancelSearchJobResponse{SearchJob: converted}, nil
 }
 
 func (handler *apiHandler) accessScope() searchjobs.AccessScope {
@@ -687,8 +683,8 @@ type resolvedSearchDefinition struct {
 }
 
 func (handler *apiHandler) resolveSearchDefinition(
-	definition *opensplunkv1.SearchDefinition,
-	rejectUnsupported func(*opensplunkv1.SearchDefinition) error,
+	definition *opensplunk.SearchDefinition,
+	rejectUnsupported func(*opensplunk.SearchDefinition) error,
 ) (resolvedSearchDefinition, error) {
 	if definition == nil {
 		return resolvedSearchDefinition{}, badRequestError("search definition is required")
@@ -816,7 +812,7 @@ func isSearchableIndexRecord(record control.Index, requestedName string) bool {
 		record.Definition.Name == requestedName
 }
 
-func rejectUnsupportedCreateFields(input *opensplunkv1.CreateSearchJobRequest, definition *opensplunkv1.SearchDefinition) error {
+func rejectUnsupportedCreateFields(input *opensplunk.CreateSearchJobRequest, definition *opensplunk.SearchDefinition) error {
 	if input.ClientRequestId != nil {
 		return errors.New("client request idempotency is not supported")
 	}
@@ -832,14 +828,14 @@ func rejectUnsupportedCreateFields(input *opensplunkv1.CreateSearchJobRequest, d
 	return rejectUnsupportedSearchDefinitionFields(definition)
 }
 
-func rejectUnsupportedSearchDefinitionFields(definition *opensplunkv1.SearchDefinition) error {
-	if definition.GetPreferredResultTab() != opensplunkv1.SearchResultTab_SEARCH_RESULT_TAB_UNSPECIFIED || len(definition.GetSelectedFields()) != 0 || definition.GetVisualization() != nil {
+func rejectUnsupportedSearchDefinitionFields(definition *opensplunk.SearchDefinition) error {
+	if definition.GetPreferredResultTab() != opensplunk.SearchResultTab_SEARCH_RESULT_TAB_UNSPECIFIED || len(definition.GetSelectedFields()) != 0 || definition.GetVisualization() != nil {
 		return errors.New("search presentation metadata is not supported")
 	}
 	return nil
 }
 
-func (handler *apiHandler) pageRequest(page *opensplunkv1.PageRequest) (int, string, bool, error) {
+func (handler *apiHandler) pageRequest(page *opensplunk.PageRequest) (int, string, bool, error) {
 	if page == nil {
 		return 0, "", false, nil
 	}
@@ -860,7 +856,7 @@ func (handler *apiHandler) pageRequest(page *opensplunkv1.PageRequest) (int, str
 	return int(pageSize), pageToken, page.GetIncludeTotalSize(), nil
 }
 
-func resolveSearchTimeRange(spec *opensplunkv1.TimeRangeSpec, now time.Time) (searchtime.Range, error) {
+func resolveSearchTimeRange(spec *opensplunk.TimeRangeSpec, now time.Time) (searchtime.Range, error) {
 	if spec == nil || spec.Earliest == nil || spec.Latest == nil {
 		return searchtime.Range{}, errors.New("earliest and latest time expressions are required")
 	}
@@ -870,23 +866,23 @@ func resolveSearchTimeRange(spec *opensplunkv1.TimeRangeSpec, now time.Time) (se
 func (handler *apiHandler) resolveSearchJobSource(
 	ctx context.Context,
 	requestedAppID string,
-	input *opensplunkv1.SearchJobSource,
+	input *opensplunk.SearchJobSource,
 ) (string, searchjobs.JobSource, error) {
 	appID, err := normalizeSearchAppID(requestedAppID)
 	if err != nil {
 		return "", searchjobs.JobSource{}, badRequestError("search app ID is invalid")
 	}
-	if input == nil || input.GetOrigin() == opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_UNSPECIFIED &&
+	if input == nil || input.GetOrigin() == opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_UNSPECIFIED &&
 		input.SavedSearchId == nil && input.HistorySearchId == nil && input.DashboardId == nil {
 		return appID, searchjobs.JobSource{Origin: searchjobs.JobOriginAdHoc}, nil
 	}
-	if input.GetOrigin() == opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_AD_HOC {
+	if input.GetOrigin() == opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_AD_HOC {
 		if input.SavedSearchId != nil || input.HistorySearchId != nil || input.DashboardId != nil {
 			return "", searchjobs.JobSource{}, badRequestError("ad-hoc search source cannot include an object ID")
 		}
 		return appID, searchjobs.JobSource{Origin: searchjobs.JobOriginAdHoc}, nil
 	}
-	if input.GetOrigin() != opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH ||
+	if input.GetOrigin() != opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH ||
 		input.SavedSearchId == nil || input.HistorySearchId != nil || input.DashboardId != nil {
 		return "", searchjobs.JobSource{}, badRequestError("search job source metadata is invalid or unsupported")
 	}

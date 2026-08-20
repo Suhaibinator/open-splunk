@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"gorm.io/gorm"
@@ -86,23 +86,23 @@ func TestWriterAmbiguousCommitReturnsConcurrentDurableReplay(t *testing.T) {
 		name      string
 		route     string
 		requestID string
-		invoke    func(*writerFaultHarness, *opensplunkv1.KnowledgeObject) (proto.Message, error)
-		validate  func(*testing.T, *opensplunkv1.KnowledgeObject, proto.Message)
+		invoke    func(*writerFaultHarness, *opensplunk.KnowledgeObject) (proto.Message, error)
+		validate  func(*testing.T, *opensplunk.KnowledgeObject, proto.Message)
 	}{
 		{
 			name:      "create",
 			route:     mutationRouteCreate,
 			requestID: "ambiguous-create-target-request-01",
-			invoke: func(harness *writerFaultHarness, _ *opensplunkv1.KnowledgeObject) (proto.Message, error) {
+			invoke: func(harness *writerFaultHarness, _ *opensplunk.KnowledgeObject) (proto.Message, error) {
 				return harness.writer.Create(
 					harness.actorContext,
 					harness.scope,
 					writerFaultCreateRequest("ambiguous-create-durable", "ambiguous-create-target-request-01"),
 				)
 			},
-			validate: func(t *testing.T, _ *opensplunkv1.KnowledgeObject, response proto.Message) {
+			validate: func(t *testing.T, _ *opensplunk.KnowledgeObject, response proto.Message) {
 				t.Helper()
-				typed, ok := response.(*opensplunkv1.CreateKnowledgeObjectResponse)
+				typed, ok := response.(*opensplunk.CreateKnowledgeObjectResponse)
 				if !ok || typed.GetKnowledgeObject().GetVersion() != 1 ||
 					typed.GetKnowledgeObject().GetDefinition().GetName() != "ambiguous-create-durable" {
 					t.Fatalf("durable ambiguous Create response = %v", response)
@@ -113,11 +113,11 @@ func TestWriterAmbiguousCommitReturnsConcurrentDurableReplay(t *testing.T) {
 			name:      "update",
 			route:     mutationRouteUpdate,
 			requestID: "ambiguous-update-target-request-01",
-			invoke: func(harness *writerFaultHarness, object *opensplunkv1.KnowledgeObject) (proto.Message, error) {
-				definition := proto.Clone(object.GetDefinition()).(*opensplunkv1.KnowledgeObjectDefinition)
+			invoke: func(harness *writerFaultHarness, object *opensplunk.KnowledgeObject) (proto.Message, error) {
+				definition := proto.Clone(object.GetDefinition()).(*opensplunk.KnowledgeObjectDefinition)
 				description := "durable concurrent target update"
 				definition.Description = &description
-				return harness.writer.Update(harness.actorContext, harness.scope, &opensplunkv1.UpdateKnowledgeObjectRequest{
+				return harness.writer.Update(harness.actorContext, harness.scope, &opensplunk.UpdateKnowledgeObjectRequest{
 					KnowledgeObjectId: object.GetKnowledgeObjectId(),
 					ExpectedVersion:   object.GetVersion(),
 					Definition:        definition,
@@ -125,9 +125,9 @@ func TestWriterAmbiguousCommitReturnsConcurrentDurableReplay(t *testing.T) {
 					ClientRequestId:   "ambiguous-update-target-request-01",
 				})
 			},
-			validate: func(t *testing.T, object *opensplunkv1.KnowledgeObject, response proto.Message) {
+			validate: func(t *testing.T, object *opensplunk.KnowledgeObject, response proto.Message) {
 				t.Helper()
-				typed, ok := response.(*opensplunkv1.UpdateKnowledgeObjectResponse)
+				typed, ok := response.(*opensplunk.UpdateKnowledgeObjectResponse)
 				if !ok || typed.GetKnowledgeObject().GetKnowledgeObjectId() != object.GetKnowledgeObjectId() ||
 					typed.GetKnowledgeObject().GetVersion() != 2 ||
 					typed.GetKnowledgeObject().GetDefinition().GetDescription() != "durable concurrent target update" {
@@ -139,20 +139,20 @@ func TestWriterAmbiguousCommitReturnsConcurrentDurableReplay(t *testing.T) {
 			name:      "set_state_disabled",
 			route:     mutationRouteSetState,
 			requestID: "ambiguous-disable-target-request-01",
-			invoke: func(harness *writerFaultHarness, object *opensplunkv1.KnowledgeObject) (proto.Message, error) {
-				return harness.writer.SetState(harness.actorContext, harness.scope, &opensplunkv1.SetKnowledgeObjectStateRequest{
+			invoke: func(harness *writerFaultHarness, object *opensplunk.KnowledgeObject) (proto.Message, error) {
+				return harness.writer.SetState(harness.actorContext, harness.scope, &opensplunk.SetKnowledgeObjectStateRequest{
 					KnowledgeObjectId: object.GetKnowledgeObjectId(),
 					ExpectedVersion:   object.GetVersion(),
-					State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+					State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 					ClientRequestId:   "ambiguous-disable-target-request-01",
 				})
 			},
-			validate: func(t *testing.T, object *opensplunkv1.KnowledgeObject, response proto.Message) {
+			validate: func(t *testing.T, object *opensplunk.KnowledgeObject, response proto.Message) {
 				t.Helper()
-				typed, ok := response.(*opensplunkv1.SetKnowledgeObjectStateResponse)
+				typed, ok := response.(*opensplunk.SetKnowledgeObjectStateResponse)
 				if !ok || typed.GetKnowledgeObject().GetKnowledgeObjectId() != object.GetKnowledgeObjectId() ||
 					typed.GetKnowledgeObject().GetVersion() != 2 ||
-					typed.GetKnowledgeObject().GetState() != opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED {
+					typed.GetKnowledgeObject().GetState() != opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED {
 					t.Fatalf("durable ambiguous SetState response = %v", response)
 				}
 			},
@@ -161,16 +161,16 @@ func TestWriterAmbiguousCommitReturnsConcurrentDurableReplay(t *testing.T) {
 			name:      "delete",
 			route:     mutationRouteDelete,
 			requestID: "ambiguous-delete-target-request-01",
-			invoke: func(harness *writerFaultHarness, object *opensplunkv1.KnowledgeObject) (proto.Message, error) {
-				return harness.writer.Delete(harness.actorContext, harness.scope, &opensplunkv1.DeleteKnowledgeObjectRequest{
+			invoke: func(harness *writerFaultHarness, object *opensplunk.KnowledgeObject) (proto.Message, error) {
+				return harness.writer.Delete(harness.actorContext, harness.scope, &opensplunk.DeleteKnowledgeObjectRequest{
 					KnowledgeObjectId: object.GetKnowledgeObjectId(),
 					ExpectedVersion:   object.GetVersion(),
 					ClientRequestId:   "ambiguous-delete-target-request-01",
 				})
 			},
-			validate: func(t *testing.T, object *opensplunkv1.KnowledgeObject, response proto.Message) {
+			validate: func(t *testing.T, object *opensplunk.KnowledgeObject, response proto.Message) {
 				t.Helper()
-				typed, ok := response.(*opensplunkv1.DeleteKnowledgeObjectResponse)
+				typed, ok := response.(*opensplunk.DeleteKnowledgeObjectResponse)
 				if !ok || typed.GetKnowledgeObjectId() != object.GetKnowledgeObjectId() || typed.GetDeletedVersion() != 2 {
 					t.Fatalf("durable ambiguous Delete response = %v", response)
 				}
@@ -203,10 +203,10 @@ func TestWriterAmbiguousCommitReturnsConcurrentDurableReplay(t *testing.T) {
 				case <-t.Context().Done():
 					return
 				}
-				definition := proto.Clone(companion.GetDefinition()).(*opensplunkv1.KnowledgeObjectDefinition)
+				definition := proto.Clone(companion.GetDefinition()).(*opensplunk.KnowledgeObjectDefinition)
 				description := "interleaved tenant revision before exact retry"
 				definition.Description = &description
-				interleaved, err := harness.writer.Update(harness.actorContext, harness.scope, &opensplunkv1.UpdateKnowledgeObjectRequest{
+				interleaved, err := harness.writer.Update(harness.actorContext, harness.scope, &opensplunk.UpdateKnowledgeObjectRequest{
 					KnowledgeObjectId: companion.GetKnowledgeObjectId(),
 					ExpectedVersion:   companion.GetVersion(),
 					Definition:        definition,
@@ -292,7 +292,7 @@ func TestWriterAmbiguousCommitReturnsConcurrentDurableReplay(t *testing.T) {
 }
 
 type writerAmbiguousConcurrentResult struct {
-	interleaved *opensplunkv1.UpdateKnowledgeObjectResponse
+	interleaved *opensplunk.UpdateKnowledgeObjectResponse
 	replayed    proto.Message
 	err         error
 }
@@ -302,7 +302,7 @@ func createWriterAmbiguousCommitObject(
 	harness *writerFaultHarness,
 	name string,
 	requestID string,
-) *opensplunkv1.KnowledgeObject {
+) *opensplunk.KnowledgeObject {
 	t.Helper()
 	request := writerFaultCreateRequest(name, requestID)
 	response, err := harness.writer.Create(harness.actorContext, harness.scope, request)
@@ -315,13 +315,13 @@ func createWriterAmbiguousCommitObject(
 func writerAmbiguousResponseCatalog(t *testing.T, response proto.Message) (uint64, []byte) {
 	t.Helper()
 	switch typed := response.(type) {
-	case *opensplunkv1.CreateKnowledgeObjectResponse:
+	case *opensplunk.CreateKnowledgeObjectResponse:
 		return typed.GetTenantCatalogRevision(), typed.GetTenantCatalogStateToken()
-	case *opensplunkv1.UpdateKnowledgeObjectResponse:
+	case *opensplunk.UpdateKnowledgeObjectResponse:
 		return typed.GetTenantCatalogRevision(), typed.GetTenantCatalogStateToken()
-	case *opensplunkv1.SetKnowledgeObjectStateResponse:
+	case *opensplunk.SetKnowledgeObjectStateResponse:
 		return typed.GetTenantCatalogRevision(), typed.GetTenantCatalogStateToken()
-	case *opensplunkv1.DeleteKnowledgeObjectResponse:
+	case *opensplunk.DeleteKnowledgeObjectResponse:
 		return typed.GetTenantCatalogRevision(), typed.GetTenantCatalogStateToken()
 	default:
 		t.Fatalf("unsupported ambiguous response type %T", response)

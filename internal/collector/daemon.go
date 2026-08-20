@@ -19,7 +19,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/buildinfo"
 	"github.com/Suhaibinator/open-splunk/internal/collector/config"
 	"github.com/Suhaibinator/open-splunk/internal/collector/framing"
@@ -34,10 +34,7 @@ import (
 
 // Wire-protocol version the collector speaks; must match the server's expected
 // major (see internal/ingest DefaultConfig). Frozen with the protobuf contract.
-const (
-	protocolMajor uint32 = 1
-	protocolMinor uint32 = 0
-)
+const ()
 
 // Batching, backpressure, and shutdown defaults. Batching is by the COMMON
 // rules: flush a pending batch when it reaches defaultBatchMaxEvents events, or
@@ -260,8 +257,6 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 		SegmentMaxBytes: defaultSegmentMaxBytes,
 		Sync:            wal.SyncAlways,
 		CollectorID:     collectorID,
-		ProtocolMajor:   protocolMajor,
-		ProtocolMinor:   protocolMinor,
 	})
 	if err != nil {
 		_ = checkpoints.Close()
@@ -307,7 +302,7 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 
 	var (
 		inputs        []*inputRuntime
-		registrations []*opensplunkv1.CollectorInputRegistration
+		registrations []*opensplunk.CollectorInputRegistration
 		anyMultiline  bool
 	)
 	for i := range cfg.Inputs {
@@ -344,24 +339,22 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 		Token:       tokenLoader(cfg.Server.TokenFile),
 		Compression: cfg.Server.Compression,
 
-		CollectorID:   collectorID,
-		InstanceID:    instanceID,
-		ProtocolMajor: protocolMajor,
-		ProtocolMinor: protocolMinor,
+		CollectorID: collectorID,
+		InstanceID:  instanceID,
 		Hello: sender.HelloInfo{
-			CollectorVersion: identity.DisplayVersion(),
-			Hostname:         hostname,
-			OperatingSystem:  runtime.GOOS,
-			Architecture:     runtime.GOARCH,
-			StartedAt:        time.Now().UTC(),
-			Capabilities:     capabilities(cfg, anyMultiline),
-			Inputs:           registrations,
+			SourceRevision:  identity.SourceRevision,
+			Hostname:        hostname,
+			OperatingSystem: runtime.GOOS,
+			Architecture:    runtime.GOARCH,
+			StartedAt:       time.Now().UTC(),
+			Capabilities:    capabilities(cfg, anyMultiline),
+			Inputs:          registrations,
 		},
 
 		DialTimeout: 10 * time.Second,
 		Backoff:     sender.BackoffPolicy{Initial: time.Second, Max: 30 * time.Second, Multiplier: 2, Jitter: 0.2},
 		Logger:      logger,
-		InputHealth: func() []*opensplunkv1.CollectorInputHealth { return inputHealthSnapshot(inputs) },
+		InputHealth: func() []*opensplunk.CollectorInputHealth { return inputHealthSnapshot(inputs) },
 		LocalDroppedEventsTotal: func() uint64 {
 			if daemonRuntime == nil {
 				return 0
@@ -591,9 +584,9 @@ type durableLineageField struct {
 }
 
 func (redactor *durableRedactor) beforePipeline(
-	event *opensplunkv1.LogEvent,
+	event *opensplunk.LogEvent,
 	constantNames map[string]struct{},
-) *opensplunkv1.LogEvent {
+) *opensplunk.LogEvent {
 	if redactor == nil || event == nil {
 		return event
 	}
@@ -611,7 +604,7 @@ func (redactor *durableRedactor) beforePipeline(
 // already-recorded alias because their original raw/message bytes still cross
 // the WAL boundary.
 func (redactor *durableRedactor) activeAliases(
-	event *opensplunkv1.LogEvent,
+	event *opensplunk.LogEvent,
 	constantNames map[string]struct{},
 ) []ingest.TopLevelAliasRedaction {
 	if len(redactor.lineage) == 0 || event.GetFields() == nil {
@@ -883,7 +876,7 @@ func buildProcessorRuntime(procs []config.ProcessorConfig) (*Pipeline, *durableR
 // buildInput constructs the tailer, decoder, and server-side registration for a
 // single input. defaultHost is used when the input does not set an explicit
 // host. It returns whether the input uses multiline framing.
-func buildInput(in *config.InputConfig, defaultHost string, checkpoints input.ManagerCheckpointStore) (*inputRuntime, *opensplunkv1.CollectorInputRegistration, bool, error) {
+func buildInput(in *config.InputConfig, defaultHost string, checkpoints input.ManagerCheckpointStore) (*inputRuntime, *opensplunk.CollectorInputRegistration, bool, error) {
 	if in.MaxEventBytes > config.ByteSize(math.MaxInt) {
 		return nil, nil, false, fmt.Errorf(
 			"input %q: max_event_bytes %s exceeds platform limit %d",
@@ -959,9 +952,9 @@ func buildInput(in *config.InputConfig, defaultHost string, checkpoints input.Ma
 		return nil, nil, false, fmt.Errorf("input %q: %w", in.ID, err)
 	}
 
-	reg := &opensplunkv1.CollectorInputRegistration{
+	reg := &opensplunk.CollectorInputRegistration{
 		InputId:    in.ID,
-		InputType:  opensplunkv1.CollectorInputType_COLLECTOR_INPUT_TYPE_FILE,
+		InputType:  opensplunk.CollectorInputType_COLLECTOR_INPUT_TYPE_FILE,
 		IndexName:  index,
 		Source:     new(source),
 		Sourcetype: new(sourcetype),
@@ -973,7 +966,7 @@ func buildInput(in *config.InputConfig, defaultHost string, checkpoints input.Ma
 // TypedObject fields, extracting the canonical "service" key into its own return
 // value (the decoder rejects it as a constant because it is reserved metadata).
 // Keys are emitted in sorted order for deterministic output.
-func buildConstants(fields map[string]string) (string, *opensplunkv1.TypedObject) {
+func buildConstants(fields map[string]string) (string, *opensplunk.TypedObject) {
 	if len(fields) == 0 {
 		return "", nil
 	}
@@ -984,49 +977,49 @@ func buildConstants(fields map[string]string) (string, *opensplunkv1.TypedObject
 	sort.Strings(keys)
 
 	var service string
-	converted := make([]*opensplunkv1.TypedObjectField, 0, len(keys))
+	converted := make([]*opensplunk.TypedObjectField, 0, len(keys))
 	for _, k := range keys {
 		if strings.ToLower(k) == "service" {
 			service = fields[k]
 			continue
 		}
-		converted = append(converted, &opensplunkv1.TypedObjectField{
+		converted = append(converted, &opensplunk.TypedObjectField{
 			Name:  k,
-			Value: &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_StringValue{StringValue: fields[k]}},
+			Value: &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_StringValue{StringValue: fields[k]}},
 		})
 	}
 	if len(converted) == 0 {
 		return service, nil
 	}
-	return service, &opensplunkv1.TypedObject{Fields: converted}
+	return service, &opensplunk.TypedObject{Fields: converted}
 }
 
 // capabilities returns the CollectorCapabilities advertised in the Hello.
-func capabilities(cfg *config.Config, anyMultiline bool) []opensplunkv1.CollectorCapability {
-	caps := []opensplunkv1.CollectorCapability{
-		opensplunkv1.CollectorCapability_COLLECTOR_CAPABILITY_FILE_INPUT,
-		opensplunkv1.CollectorCapability_COLLECTOR_CAPABILITY_DURABLE_QUEUE,
-		opensplunkv1.CollectorCapability_COLLECTOR_CAPABILITY_PARTIAL_EVENT_REJECTION,
-		opensplunkv1.CollectorCapability_COLLECTOR_CAPABILITY_TYPED_FIELDS,
+func capabilities(cfg *config.Config, anyMultiline bool) []opensplunk.CollectorCapability {
+	caps := []opensplunk.CollectorCapability{
+		opensplunk.CollectorCapability_COLLECTOR_CAPABILITY_FILE_INPUT,
+		opensplunk.CollectorCapability_COLLECTOR_CAPABILITY_DURABLE_QUEUE,
+		opensplunk.CollectorCapability_COLLECTOR_CAPABILITY_PARTIAL_EVENT_REJECTION,
+		opensplunk.CollectorCapability_COLLECTOR_CAPABILITY_TYPED_FIELDS,
 	}
 	if cfg.Server.Compression == "gzip" {
-		caps = append(caps, opensplunkv1.CollectorCapability_COLLECTOR_CAPABILITY_GZIP)
+		caps = append(caps, opensplunk.CollectorCapability_COLLECTOR_CAPABILITY_GZIP)
 	}
 	if anyMultiline {
-		caps = append(caps, opensplunkv1.CollectorCapability_COLLECTOR_CAPABILITY_MULTILINE)
+		caps = append(caps, opensplunk.CollectorCapability_COLLECTOR_CAPABILITY_MULTILINE)
 	}
 	return caps
 }
 
 // inputHealthSnapshot converts each input Manager's Health into the protobuf
 // message the sender embeds in heartbeats.
-func inputHealthSnapshot(inputs []*inputRuntime) []*opensplunkv1.CollectorInputHealth {
-	out := make([]*opensplunkv1.CollectorInputHealth, 0, len(inputs))
+func inputHealthSnapshot(inputs []*inputRuntime) []*opensplunk.CollectorInputHealth {
+	out := make([]*opensplunk.CollectorInputHealth, 0, len(inputs))
 	for _, ir := range inputs {
 		h := ir.manager.Health()
 		active := collectorlimits.ClampFleetCounter(h.ActiveSources)
 		discovered := max(collectorlimits.ClampFleetCounter(h.DiscoveredSources), active)
-		ch := &opensplunkv1.CollectorInputHealth{
+		ch := &opensplunk.CollectorInputHealth{
 			InputId:           h.InputID,
 			State:             h.State,
 			StatusMessage:     sanitizeCollectorBoundaryText(h.StatusMessage, maximumReportedInputStatusBytes),

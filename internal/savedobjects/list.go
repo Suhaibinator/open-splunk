@@ -10,7 +10,7 @@ import (
 	"slices"
 	"strings"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"gorm.io/gorm"
 )
@@ -27,9 +27,9 @@ type normalizedListRequest struct {
 	includeTotal        bool
 	appIDFilter         *string
 	textFilter          *string
-	sharingScopeFilters []opensplunkv1.SharingScope
-	sortBy              opensplunkv1.SavedSearchSortBy
-	sortDirection       opensplunkv1.SortDirection
+	sharingScopeFilters []opensplunk.SharingScope
+	sortBy              opensplunk.SavedSearchSortBy
+	sortDirection       opensplunk.SortDirection
 }
 
 // List returns an owner-scoped keyset page. Text filtering follows SQLite's
@@ -47,7 +47,7 @@ func (store *Store) List(ctx context.Context, scope AccessScope, request ListReq
 	if err != nil {
 		return ListResult{}, err
 	}
-	stringSort := normalized.sortBy == opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_NAME
+	stringSort := normalized.sortBy == opensplunk.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_NAME
 	cursor := listCursor{}
 	if normalized.pageToken != "" {
 		cursor, err = decodeListCursor(store.cursorKey, normalized.pageToken, filterHash, stringSort)
@@ -70,7 +70,7 @@ func (store *Store) List(ctx context.Context, scope AccessScope, request ListReq
 	if listed.Error != nil {
 		return ListResult{}, mapContextError(ctx, "list saved searches", listed.Error)
 	}
-	result := ListResult{SavedSearches: make([]*opensplunkv1.SavedSearch, 0, normalized.pageSize)}
+	result := ListResult{SavedSearches: make([]*opensplunk.SavedSearch, 0, normalized.pageSize)}
 	for _, record := range records {
 		savedSearch, err := savedSearchFromRecord(record)
 		if err != nil {
@@ -83,12 +83,12 @@ func (store *Store) List(ctx context.Context, scope AccessScope, request ListReq
 		last := result.SavedSearches[len(result.SavedSearches)-1]
 		nextCursor := listCursor{FilterHash: filterHash, SavedSearch: last.SavedSearchId}
 		switch normalized.sortBy {
-		case opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_NAME:
+		case opensplunk.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_NAME:
 			nextCursor.StringKey = last.Definition.Name
-		case opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_CREATED_AT:
+		case opensplunk.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_CREATED_AT:
 			value := last.CreatedAt.AsTime().UnixMicro()
 			nextCursor.IntegerKey = &value
-		case opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_UPDATED_AT:
+		case opensplunk.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_UPDATED_AT:
 			value := last.UpdatedAt.AsTime().UnixMicro()
 			nextCursor.IntegerKey = &value
 		}
@@ -153,17 +153,17 @@ func normalizeListRequest(scope AccessScope, request ListRequest) (normalizedLis
 	slices.Sort(sharingScopes)
 	sharingScopes = slices.Compact(sharingScopes)
 	sortBy := request.SortBy
-	if sortBy == opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_UNSPECIFIED {
-		sortBy = opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_NAME
+	if sortBy == opensplunk.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_UNSPECIFIED {
+		sortBy = opensplunk.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_NAME
 	}
-	if sortBy < opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_NAME || sortBy > opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_UPDATED_AT {
+	if sortBy < opensplunk.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_NAME || sortBy > opensplunk.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_UPDATED_AT {
 		return normalizedListRequest{}, fmt.Errorf("%w: saved-search sort field is invalid", control.ErrInvalidArgument)
 	}
 	direction := request.SortDirection
-	if direction == opensplunkv1.SortDirection_SORT_DIRECTION_UNSPECIFIED {
-		direction = opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING
+	if direction == opensplunk.SortDirection_SORT_DIRECTION_UNSPECIFIED {
+		direction = opensplunk.SortDirection_SORT_DIRECTION_ASCENDING
 	}
-	if direction != opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING && direction != opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING {
+	if direction != opensplunk.SortDirection_SORT_DIRECTION_ASCENDING && direction != opensplunk.SortDirection_SORT_DIRECTION_DESCENDING {
 		return normalizedListRequest{}, fmt.Errorf("%w: sort direction is invalid", control.ErrInvalidArgument)
 	}
 	return normalizedListRequest{
@@ -189,7 +189,7 @@ func listFilterHash(request normalizedListRequest) (string, error) {
 		sharingScopes[index] = int32(scope)
 	}
 	payload, err := json.Marshal(filterFingerprint{
-		Version: 1, OwnerID: request.ownerID, AppID: request.appIDFilter,
+		Version: savedSearchCursorVersion, OwnerID: request.ownerID, AppID: request.appIDFilter,
 		Text: request.textFilter, SharingScopes: sharingScopes,
 		SortBy: int32(request.sortBy), Direction: int32(request.sortDirection),
 	})
@@ -221,11 +221,11 @@ func applySavedSearchListFilters(
 	return query
 }
 
-func savedSearchSortColumn(sortBy opensplunkv1.SavedSearchSortBy) string {
+func savedSearchSortColumn(sortBy opensplunk.SavedSearchSortBy) string {
 	switch sortBy {
-	case opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_NAME:
+	case opensplunk.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_NAME:
 		return "name"
-	case opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_CREATED_AT:
+	case opensplunk.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_CREATED_AT:
 		return "created_at_unix_micro"
 	default:
 		return "updated_at_unix_micro"
@@ -242,11 +242,11 @@ func applySavedSearchListCursor(
 	}
 	column := savedSearchSortColumn(request.sortBy)
 	comparison := "<"
-	if request.sortDirection == opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING {
+	if request.sortDirection == opensplunk.SortDirection_SORT_DIRECTION_ASCENDING {
 		comparison = ">"
 	}
 	var key any = cursor.StringKey
-	if request.sortBy != opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_NAME {
+	if request.sortBy != opensplunk.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_NAME {
 		key = *cursor.IntegerKey
 	}
 	// #nosec G201 -- column and comparison come from fixed, validated enum sets; all values stay bound parameters.
@@ -256,7 +256,7 @@ func applySavedSearchListCursor(
 
 func applySavedSearchListOrder(query *gorm.DB, request normalizedListRequest) *gorm.DB {
 	direction := "DESC"
-	if request.sortDirection == opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING {
+	if request.sortDirection == opensplunk.SortDirection_SORT_DIRECTION_ASCENDING {
 		direction = "ASC"
 	}
 	column := savedSearchSortColumn(request.sortBy)

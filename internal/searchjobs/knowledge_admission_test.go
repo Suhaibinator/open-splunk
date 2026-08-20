@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
@@ -709,7 +709,7 @@ func newEmptyKnowledgeResolver(t *testing.T) (KnowledgeResolver, string) {
 	}), appID
 }
 
-func assertEmptyKnowledgeSummary(t *testing.T, summary *opensplunkv1.KnowledgeSnapshotSummary) {
+func assertEmptyKnowledgeSummary(t *testing.T, summary *opensplunk.KnowledgeSnapshotSummary) {
 	t.Helper()
 	if summary == nil || summary.GetRef() == nil || summary.GetRef().GetObjectCount() != 0 {
 		t.Fatalf("knowledge summary = %#v, want present empty authority", summary)

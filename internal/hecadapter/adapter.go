@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/hec"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
@@ -43,7 +43,7 @@ func JSON(context RequestContext, envelopes []hec.Envelope) (ingest.AdmissionReq
 	if err := validateContext(context); err != nil {
 		return ingest.AdmissionRequest{}, err
 	}
-	events := make([]*opensplunkv1.LogEvent, 0, len(envelopes))
+	events := make([]*opensplunk.LogEvent, 0, len(envelopes))
 	for _, envelope := range envelopes {
 		event, err := convertEnvelope(context, envelope)
 		if err != nil {
@@ -72,16 +72,16 @@ func Raw(
 		return ingest.AdmissionRequest{}, err
 	}
 	eventTime := context.ReceivedAt
-	timeSource := opensplunkv1.EventTimeSource_EVENT_TIME_SOURCE_RECEIVED_AT_FALLBACK
+	timeSource := opensplunk.EventTimeSource_EVENT_TIME_SOURCE_RECEIVED_AT_FALLBACK
 	if query.Time.Present {
 		nanoseconds, parseErr := hec.ParseEpochNanoseconds(query.Time.Value)
 		if parseErr != nil {
 			return ingest.AdmissionRequest{}, hec.NewProtocolError(hec.ErrorInvalidDataFormat, parseErr)
 		}
 		eventTime = time.Unix(0, nanoseconds).UTC()
-		timeSource = opensplunkv1.EventTimeSource_EVENT_TIME_SOURCE_PARSED
+		timeSource = opensplunk.EventTimeSource_EVENT_TIME_SOURCE_PARSED
 	}
-	events := make([]*opensplunkv1.LogEvent, 0, len(lines))
+	events := make([]*opensplunk.LogEvent, 0, len(lines))
 	for ordinal, line := range lines {
 		if len(line) == 0 || strings.IndexByte(string(line), 0) >= 0 {
 			return ingest.AdmissionRequest{}, hec.NewEventError(
@@ -121,7 +121,7 @@ func validateContext(context RequestContext) error {
 	return nil
 }
 
-func convertEnvelope(context RequestContext, envelope hec.Envelope) (*opensplunkv1.LogEvent, error) {
+func convertEnvelope(context RequestContext, envelope hec.Envelope) (*opensplunk.LogEvent, error) {
 	metadata, err := hec.DecodeEnvelopeMetadata(envelope)
 	if err != nil {
 		return nil, err
@@ -147,9 +147,9 @@ func convertEnvelope(context RequestContext, envelope hec.Envelope) (*opensplunk
 		value := envelope.Event.Value.StringValue
 		message = &value
 	}
-	timeSource := opensplunkv1.EventTimeSource_EVENT_TIME_SOURCE_RECEIVED_AT_FALLBACK
+	timeSource := opensplunk.EventTimeSource_EVENT_TIME_SOURCE_RECEIVED_AT_FALLBACK
 	if explicit {
-		timeSource = opensplunkv1.EventTimeSource_EVENT_TIME_SOURCE_PARSED
+		timeSource = opensplunk.EventTimeSource_EVENT_TIME_SOURCE_PARSED
 	}
 	return canonicalEvent(
 		context,
@@ -225,12 +225,12 @@ func canonicalEvent(
 	ordinal int,
 	metadata hec.MetadataValues,
 	eventTime time.Time,
-	timeSource opensplunkv1.EventTimeSource,
+	timeSource opensplunk.EventTimeSource,
 	raw []byte,
 	message *string,
-	fields *opensplunkv1.TypedObject,
-) *opensplunkv1.LogEvent {
-	return &opensplunkv1.LogEvent{
+	fields *opensplunk.TypedObject,
+) *opensplunk.LogEvent {
+	return &opensplunk.LogEvent{
 		EventId:         context.RequestID + "-" + strconv.Itoa(ordinal),
 		IndexName:       metadata.Index.Value,
 		EventTime:       timestamppb.New(eventTime),
@@ -241,39 +241,39 @@ func canonicalEvent(
 		Sourcetype:      metadata.Sourcetype.Value,
 		Message:         message,
 		Raw:             raw,
-		RawEncoding:     opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+		RawEncoding:     opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 		Fields:          fields,
 	}
 }
 
-func typedFields(envelope hec.Envelope) (*opensplunkv1.TypedObject, error) {
+func typedFields(envelope hec.Envelope) (*opensplunk.TypedObject, error) {
 	if !envelope.Fields.Present {
 		return nil, nil
 	}
 	if err := hec.ValidateEnvelopeFields(envelope); err != nil {
 		return nil, err
 	}
-	fields := make([]*opensplunkv1.TypedObjectField, 0, len(envelope.Fields.Value.ObjectValue))
+	fields := make([]*opensplunk.TypedObjectField, 0, len(envelope.Fields.Value.ObjectValue))
 	for _, field := range envelope.Fields.Value.ObjectValue {
 		value, err := typedValue(field.Value)
 		if err != nil {
 			return nil, hec.NewEventError(hec.ErrorIndexedFields, envelope.Number, err)
 		}
-		fields = append(fields, &opensplunkv1.TypedObjectField{Name: field.Name, Value: value})
+		fields = append(fields, &opensplunk.TypedObjectField{Name: field.Name, Value: value})
 	}
-	return &opensplunkv1.TypedObject{Fields: fields}, nil
+	return &opensplunk.TypedObject{Fields: fields}, nil
 }
 
-func typedValue(value hec.JSONValue) (*opensplunkv1.TypedValue, error) {
+func typedValue(value hec.JSONValue) (*opensplunk.TypedValue, error) {
 	switch value.Kind {
 	case hec.JSONNull:
-		return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_NullValue{
-			NullValue: opensplunkv1.NullValue_NULL_VALUE_NULL,
+		return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_NullValue{
+			NullValue: opensplunk.NullValue_NULL_VALUE_NULL,
 		}}, nil
 	case hec.JSONString:
-		return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_StringValue{StringValue: value.StringValue}}, nil
+		return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_StringValue{StringValue: value.StringValue}}, nil
 	case hec.JSONBoolean:
-		return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_BoolValue{BoolValue: value.BooleanValue}}, nil
+		return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_BoolValue{BoolValue: value.BooleanValue}}, nil
 	case hec.JSONNumber:
 		classified, err := hec.ClassifyFieldNumber(value.NumberValue)
 		if err != nil {
@@ -281,18 +281,18 @@ func typedValue(value hec.JSONValue) (*opensplunkv1.TypedValue, error) {
 		}
 		switch classified.Kind {
 		case hec.FieldNumberSint64:
-			return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_Sint64Value{Sint64Value: classified.Sint64}}, nil
+			return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_Sint64Value{Sint64Value: classified.Sint64}}, nil
 		case hec.FieldNumberUint64:
-			return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_Uint64Value{Uint64Value: classified.Uint64}}, nil
+			return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_Uint64Value{Uint64Value: classified.Uint64}}, nil
 		case hec.FieldNumberDecimal:
-			return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_DecimalValue{
-				DecimalValue: &opensplunkv1.DecimalValue{Value: classified.Decimal},
+			return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_DecimalValue{
+				DecimalValue: &opensplunk.DecimalValue{Value: classified.Decimal},
 			}}, nil
 		default:
 			return nil, errors.New("HEC field number classification is invalid")
 		}
 	case hec.JSONArray:
-		values := make([]*opensplunkv1.TypedValue, 0, len(value.ArrayValue))
+		values := make([]*opensplunk.TypedValue, 0, len(value.ArrayValue))
 		for _, item := range value.ArrayValue {
 			converted, err := typedValue(item)
 			if err != nil {
@@ -300,8 +300,8 @@ func typedValue(value hec.JSONValue) (*opensplunkv1.TypedValue, error) {
 			}
 			values = append(values, converted)
 		}
-		return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_ListValue{
-			ListValue: &opensplunkv1.TypedValueList{Values: values},
+		return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_ListValue{
+			ListValue: &opensplunk.TypedValueList{Values: values},
 		}}, nil
 	default:
 		return nil, errors.New("HEC field value is unsupported")
@@ -310,7 +310,7 @@ func typedValue(value hec.JSONValue) (*opensplunkv1.TypedValue, error) {
 
 func admissionRequest(
 	context RequestContext,
-	events []*opensplunkv1.LogEvent,
+	events []*opensplunk.LogEvent,
 ) (ingest.AdmissionRequest, error) {
 	if len(events) == 0 || len(events) > math.MaxUint32 {
 		return ingest.AdmissionRequest{}, hec.NewProtocolError(hec.ErrorInternal, errors.New("HEC event count is outside durable bounds"))
@@ -361,7 +361,7 @@ func admissionRequest(
 	}, nil
 }
 
-func semanticDigest(channel hec.Channel, acknowledgment bool, events []*opensplunkv1.LogEvent) ([sha256.Size]byte, error) {
+func semanticDigest(channel hec.Channel, acknowledgment bool, events []*opensplunk.LogEvent) ([sha256.Size]byte, error) {
 	hash := sha256.New()
 	_, _ = hash.Write([]byte(semanticDigestDomain))
 	if acknowledgment {

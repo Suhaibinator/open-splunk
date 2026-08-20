@@ -2125,7 +2125,6 @@ func deploymentRecoveryVerificationFixture(
 			RecoverySetID:        recoverySetID,
 			Scope:                "deployment-recovery-set",
 			ClickHouseIncluded:   true,
-			ApplicationVersion:   release.ApplicationVersion,
 			SourceRevision:       release.SourceRevision,
 			SQLiteMigrations:     release.SQLiteMigrations,
 			ClickHouseMigrations: release.ClickHouseMigrations,

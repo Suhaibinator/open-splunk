@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 )
@@ -260,13 +260,13 @@ func TestAuthoredDynamicBinInPlaceClearsKnowledgeSidecars(t *testing.T) {
 
 func authoredSidecarProgram(t *testing.T) knowledgeprogram.Program {
 	t.Helper()
-	return knowledgeFusedFieldProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{
+	return knowledgeFusedFieldProgram(t, []*opensplunk.KnowledgeObjectDefinition{
 		knowledgeAliasSidecarDefinition(
 			"container-alias",
 			"payload",
 			"copied_payload",
 			"east",
-			opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+			opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 		),
 	})
 }

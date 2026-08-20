@@ -1,0 +1,150 @@
+syntax = "proto3";
+
+package open_splunk;
+
+import "google/protobuf/field_mask.proto";
+import "open_splunk/common.proto";
+import "open_splunk/index.proto";
+import "open_splunk/result.proto";
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk;opensplunk";
+
+// POST /api/indexes/create
+message CreateIndexRequest {
+  IndexDefinition definition = 1;
+  optional string client_request_id = 2;
+}
+
+message CreateIndexResponse {
+  Index index = 1;
+}
+
+// POST /api/indexes/get
+message GetIndexRequest {
+  IndexSelector selector = 1;
+}
+
+message GetIndexResponse {
+  Index index = 1;
+}
+
+enum IndexSortBy {
+  INDEX_SORT_BY_UNSPECIFIED = 0;
+  INDEX_SORT_BY_NAME = 1;
+  INDEX_SORT_BY_CREATED_AT = 2;
+  INDEX_SORT_BY_UPDATED_AT = 3;
+  INDEX_SORT_BY_EVENT_COUNT = 4;
+  INDEX_SORT_BY_STORAGE_BYTES = 5;
+}
+
+// POST /api/indexes/list
+message ListIndexesRequest {
+  // page tokens are authenticated metadata keysets bound to one catalog
+  // revision. Any index definition, state, or visibility mutation invalidates
+  // an outstanding continuation rather than allowing duplicate or skipped
+  // rows.
+  PageRequest page = 1;
+  repeated IndexState state_filters = 2;
+  // text_filter is a literal substring match across name, display name, and
+  // description. ASCII letters are case-insensitive; non-ASCII code points
+  // are case-sensitive. '%' and '_' have no wildcard meaning.
+  optional string text_filter = 3;
+  IndexSortBy sort_by = 4;
+  SortDirection sort_direction = 5;
+  bool include_stats = 6;
+}
+
+message IndexListItem {
+  Index index = 1;
+  optional IndexStats stats = 2;
+}
+
+message ListIndexesResponse {
+  repeated IndexListItem indexes = 1;
+  PageResponse page = 2;
+}
+
+// POST /api/indexes/update
+message UpdateIndexRequest {
+  IndexSelector selector = 1;
+  uint64 expected_version = 2;
+  IndexDefinition definition = 3;
+  google.protobuf.FieldMask update_mask = 4;
+}
+
+message UpdateIndexResponse {
+  Index index = 1;
+}
+
+// POST /api/indexes/state/set
+message SetIndexStateRequest {
+  IndexSelector selector = 1;
+  uint64 expected_version = 2;
+  IndexState state = 3;
+}
+
+message SetIndexStateResponse {
+  Index index = 1;
+}
+
+enum IndexDataDeletionMode {
+  INDEX_DATA_DELETION_MODE_UNSPECIFIED = 0;
+  INDEX_DATA_DELETION_MODE_KEEP_DATA = 1;
+  INDEX_DATA_DELETION_MODE_DELETE_DATA = 2;
+}
+
+// POST /api/indexes/delete
+message DeleteIndexRequest {
+  IndexSelector selector = 1;
+  uint64 expected_version = 2;
+  IndexDataDeletionMode data_deletion_mode = 3;
+  string confirmation_name = 4;
+}
+
+message DeleteIndexResponse {
+  string index_id = 1;
+  optional string deletion_operation_id = 2;
+}
+
+// POST /api/indexes/stats/get
+message GetIndexStatsRequest {
+  IndexSelector selector = 1;
+}
+
+message GetIndexStatsResponse {
+  IndexStats stats = 1;
+}
+
+// POST /api/indexes/fields/list
+//
+// This administrator-only operation resolves selector through the current,
+// non-tombstoned GORM control-plane catalog before capturing one immutable
+// native ClickHouse analysis snapshot. It does not require an active or
+// search-enabled index.
+message ListIndexFieldsRequest {
+  // selector accepts the stable ID or canonical name of the same current
+  // catalog record.
+  IndexSelector selector = 1;
+
+  // time_range is required, and both earliest and latest must be present.
+  // Relative expressions are resolved once for the initial catalog snapshot.
+  TimeRangeSpec time_range = 2;
+
+  // page uses an opaque cursor over that cached snapshot. A continuation may
+  // change page_size but must preserve the selector identity, time intent, and
+  // name_filter that produced it.
+  PageRequest page = 3;
+
+  // name_filter is an optional case-sensitive substring match on field names.
+  optional string name_filter = 4;
+}
+
+// Fields are exact, bytewise-name-sorted profiles from one bounded snapshot.
+// This catalog does not populate FieldProfile.distinct_count or claim a
+// distinct-count approximation.
+message ListIndexFieldsResponse {
+  repeated FieldProfile fields = 1;
+
+  // total_size is exact when the request asks for it.
+  PageResponse page = 2;
+}

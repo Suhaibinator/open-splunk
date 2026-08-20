@@ -1,0 +1,97 @@
+syntax = "proto3";
+
+package open_splunk;
+
+import "open_splunk/common.proto";
+import "open_splunk/knowledge.proto";
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk;opensplunk";
+
+// POST /api/search/jobs/inspect
+// The authenticated administrator's tenant and owner identity are derived
+// from the browser principal and are deliberately not accepted on the wire.
+message InspectSearchJobRequest {
+  string search_job_id = 1;
+}
+
+enum SearchInspectionOutputKind {
+  SEARCH_INSPECTION_OUTPUT_KIND_UNSPECIFIED = 0;
+  SEARCH_INSPECTION_OUTPUT_KIND_OPEN = 1;
+  SEARCH_INSPECTION_OUTPUT_KIND_STATIC = 2;
+  SEARCH_INSPECTION_OUTPUT_KIND_DYNAMIC = 3;
+}
+
+message SearchInspectionLogicalStage {
+  uint32 stage_index = 1;
+  string operator = 2;
+  repeated string input_fields = 3;
+  repeated string output_fields = 4;
+  // Present only for authored SPL stages. Generated knowledge stages have no
+  // authored source coordinate and leave this message absent.
+  SourceRange source_range = 5;
+  // One entry per canonical knowledge object represented by this physical
+  // logical stage, ordered by ascending redacted object ordinal. Current
+  // browser responses use only redacted_object.
+  repeated KnowledgeProvenance operator_provenance = 6;
+  // Output occurrences remain distinct because selector-disjoint objects may
+  // legitimately target the same field. Entries are ordered by output field,
+  // then by ascending redacted object ordinal.
+  repeated SearchInspectionOutputProvenance output_provenance = 7;
+}
+
+message SearchInspectionOutputProvenance {
+  string output_field = 1;
+  KnowledgeProvenance provenance = 2;
+}
+
+// SearchInspectionOutputShape describes the final logical relation. fields is
+// the complete ordered schema for STATIC output and the fixed prefix for
+// DYNAMIC output; max_dynamic_fields is nonzero only for DYNAMIC output.
+message SearchInspectionOutputShape {
+  SearchInspectionOutputKind kind = 1;
+  repeated string fields = 2;
+  uint32 max_dynamic_fields = 3;
+}
+
+message SearchInspectionLogicalPlan {
+  repeated SearchInspectionLogicalStage stages = 1;
+  repeated string referenced_fields = 2;
+  SearchInspectionOutputShape output = 3;
+}
+
+// SearchInspectionPhysicalIndex exposes only safe schema names and selection
+// counters. It never contains predicates, rendered expressions, or literals.
+message SearchInspectionPhysicalIndex {
+  string type = 1;
+  string name = 2;
+  repeated string keys = 3;
+  uint64 initial_parts = 4;
+  uint64 selected_parts = 5;
+  uint64 initial_granules = 6;
+  uint64 selected_granules = 7;
+}
+
+message SearchInspectionPhysicalRead {
+  repeated string columns = 1;
+  repeated SearchInspectionPhysicalIndex indexes = 2;
+}
+
+// SearchInspectionPhysicalPlan is the bounded, literal-free structural
+// projection parsed from the raw ClickHouse structured PLAN response.
+message SearchInspectionPhysicalPlan {
+  repeated string node_types = 1;
+  repeated SearchInspectionPhysicalRead reads = 2;
+}
+
+// The SQL and raw EXPLAIN text are administrator-sensitive diagnostics. The
+// response does not expose the compiler argument vector as a separate field;
+// raw EXPLAIN may contain rendered bound values. Execution rows are excluded.
+message InspectSearchJobResponse {
+  string search_job_id = 1;
+  SearchInspectionLogicalPlan logical_plan = 2;
+  SearchInspectionPhysicalPlan physical_plan = 3;
+  string generated_sql = 4;
+  string explain_text = 5;
+  string diagnostic_query_id = 6;
+  optional KnowledgeSnapshotSummary knowledge_snapshot = 7;
+}

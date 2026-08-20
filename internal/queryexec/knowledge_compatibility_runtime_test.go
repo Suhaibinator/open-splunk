@@ -9,7 +9,7 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
@@ -214,24 +214,24 @@ func knowledgeCompatibilityRequireCompiledOutputs(
 
 func knowledgeCompatibilityRuntimeProgram(t *testing.T) knowledgeprogram.Program {
 	t.Helper()
-	replace := opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING
-	preserve := opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING
-	selector := func() *opensplunkv1.KnowledgeSelector {
-		return &opensplunkv1.KnowledgeSelector{IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{
+	replace := opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING
+	preserve := opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING
+	selector := func() *opensplunk.KnowledgeSelector {
+		return &opensplunk.KnowledgeSelector{IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{{
 			Value:     knowledgeCompatibilityPrimaryIndex,
-			MatchKind: opensplunkv1.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT,
+			MatchKind: opensplunk.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT,
 		}}}
 	}
-	definitions := []*opensplunkv1.KnowledgeObjectDefinition{
+	definitions := []*opensplunk.KnowledgeObjectDefinition{
 		{
 			AppId: "knowledge-app", Name: "a-compat-regex",
-			SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
+			SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
 			Selector:     selector(),
-			Body: &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
-				FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
+			Body: &opensplunk.KnowledgeObjectDefinition_FieldExtraction{
+				FieldExtraction: &opensplunk.FieldExtractionDefinition{
 					InputField: "_raw", OverwriteBehavior: replace,
-					Extraction: &opensplunkv1.FieldExtractionDefinition_Regex{
-						Regex: &opensplunkv1.RegexFieldExtractionDefinition{
+					Extraction: &opensplunk.FieldExtractionDefinition_Regex{
+						Regex: &opensplunk.RegexFieldExtractionDefinition{
 							Pattern:      `kind=(?P<regex_edge>[a-z]+)?$`,
 							OutputFields: []string{"regex_edge"},
 						},
@@ -241,13 +241,13 @@ func knowledgeCompatibilityRuntimeProgram(t *testing.T) knowledgeprogram.Program
 		},
 		{
 			AppId: "knowledge-app", Name: "b-compat-regex-preserve",
-			SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
+			SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
 			Selector:     selector(),
-			Body: &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
-				FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
+			Body: &opensplunk.KnowledgeObjectDefinition_FieldExtraction{
+				FieldExtraction: &opensplunk.FieldExtractionDefinition{
 					InputField: "_raw", OverwriteBehavior: preserve,
-					Extraction: &opensplunkv1.FieldExtractionDefinition_Regex{
-						Regex: &opensplunkv1.RegexFieldExtractionDefinition{
+					Extraction: &opensplunk.FieldExtractionDefinition_Regex{
+						Regex: &opensplunk.RegexFieldExtractionDefinition{
 							Pattern:      `kind=(?P<regex_preserve_edge>[a-z]+)?$`,
 							OutputFields: []string{"regex_preserve_edge"},
 						},
@@ -257,13 +257,13 @@ func knowledgeCompatibilityRuntimeProgram(t *testing.T) knowledgeprogram.Program
 		},
 		{
 			AppId: "knowledge-app", Name: "c-compat-json",
-			SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
+			SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
 			Selector:     selector(),
-			Body: &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
-				FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
+			Body: &opensplunk.KnowledgeObjectDefinition_FieldExtraction{
+				FieldExtraction: &opensplunk.FieldExtractionDefinition{
 					InputField: "_raw", OverwriteBehavior: replace,
-					Extraction: &opensplunkv1.FieldExtractionDefinition_Json{
-						Json: &opensplunkv1.JsonFieldExtractionDefinition{
+					Extraction: &opensplunk.FieldExtractionDefinition_Json{
+						Json: &opensplunk.JsonFieldExtractionDefinition{
 							Path: "nested.value", OutputField: "json_edge",
 						},
 					},
@@ -286,10 +286,10 @@ func knowledgeCompatibilityRuntimeProgram(t *testing.T) knowledgeprogram.Program
 		),
 		{
 			AppId: "knowledge-app", Name: "a-compat-calculated",
-			SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
+			SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
 			Selector:     selector(),
-			Body: &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{
-				CalculatedField: &opensplunkv1.CalculatedFieldDefinition{
+			Body: &opensplunk.KnowledgeObjectDefinition_CalculatedField{
+				CalculatedField: &opensplunk.CalculatedFieldDefinition{
 					DestinationField:  "calculated_edge",
 					Expression:        "calculated_source",
 					OverwriteBehavior: replace,
@@ -298,10 +298,10 @@ func knowledgeCompatibilityRuntimeProgram(t *testing.T) knowledgeprogram.Program
 		},
 		{
 			AppId: "knowledge-app", Name: "b-compat-calculated-preserve",
-			SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
+			SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
 			Selector:     selector(),
-			Body: &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{
-				CalculatedField: &opensplunkv1.CalculatedFieldDefinition{
+			Body: &opensplunk.KnowledgeObjectDefinition_CalculatedField{
+				CalculatedField: &opensplunk.CalculatedFieldDefinition{
 					DestinationField:  "calculated_preserve_edge",
 					Expression:        "calculated_source",
 					OverwriteBehavior: preserve,
@@ -316,8 +316,8 @@ func knowledgeCompatibilityRuntimeFixtures(
 	base time.Time,
 	indexTime time.Time,
 ) []knowledgeCompatibilityRuntimeFixture {
-	utf8Encoding := uint8(opensplunkv1.RawEncoding_RAW_ENCODING_UTF8)
-	binaryEncoding := uint8(opensplunkv1.RawEncoding_RAW_ENCODING_BINARY)
+	utf8Encoding := uint8(opensplunk.RawEncoding_RAW_ENCODING_UTF8)
+	binaryEncoding := uint8(opensplunk.RawEncoding_RAW_ENCODING_BINARY)
 	fixture := func(
 		id string,
 		indexName string,

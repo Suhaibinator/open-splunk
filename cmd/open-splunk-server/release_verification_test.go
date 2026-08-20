@@ -6,16 +6,14 @@ import (
 	"testing"
 
 	opensplunk "github.com/Suhaibinator/open-splunk"
-	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
-func TestEmbeddedReleaseVerificationIncludesCurrentSPLIdentity(t *testing.T) {
+func TestEmbeddedReleaseVerificationIncludesSourceIdentity(t *testing.T) {
 	t.Parallel()
 
 	release := opensplunk.Release{Metadata: opensplunk.ReleaseMetadata{
-		ApplicationVersion: "1.2.3",
-		SourceRevision:     strings.Repeat("a", 40),
-		UIBuildID:          "ui-build",
+		SourceRevision: strings.Repeat("a", 40),
+		UIBuildID:      "ui-build",
 		UI: opensplunk.ComponentMetadata{
 			SHA256: strings.Repeat("b", 64),
 		},
@@ -24,9 +22,7 @@ func TestEmbeddedReleaseVerificationIncludesCurrentSPLIdentity(t *testing.T) {
 	if err := writeEmbeddedReleaseVerification(&output, release); err != nil {
 		t.Fatalf("writeEmbeddedReleaseVerification() error = %v", err)
 	}
-	want := "application_version=1.2.3\n" +
-		"source_revision=" + strings.Repeat("a", 40) + "\n" +
-		"spl_compatibility_version=" + spl.CompatibilityVersion + "\n" +
+	want := "source_revision=" + strings.Repeat("a", 40) + "\n" +
 		"ui_build_id=ui-build\n" +
 		"ui_sha256=" + strings.Repeat("b", 64) + "\n"
 	if output.String() != want {

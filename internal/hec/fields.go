@@ -27,8 +27,8 @@ const (
 	FieldNumberDecimal
 )
 
-// FieldNumber contains exactly one value selected by Kind. Decimal is the
-// canonical decimal/v1 spelling (lowercase normalized exponent).
+// FieldNumber contains exactly one value selected by Kind. Decimal uses the
+// canonical spelling with a lowercase normalized exponent.
 type FieldNumber struct {
 	Kind    FieldNumberKind
 	Sint64  int64
@@ -116,7 +116,7 @@ func ClassifyFieldNumber(number json.Number) (FieldNumber, error) {
 	return FieldNumber{Kind: FieldNumberDecimal, Decimal: jsonnumber.NormalizeDecimalLexeme(text)}, nil
 }
 
-// validateBoundedNumberLexeme applies the common HEC v0.1 lexical and
+// validateBoundedNumberLexeme applies the common HEC lexical and
 // exponent bounds before any exact big-number conversion. json.Decoder already
 // enforces JSON number grammar for numeric tokens; numeric strings used for
 // time are checked separately before calling this helper.

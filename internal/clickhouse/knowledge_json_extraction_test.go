@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/splpath"
@@ -18,8 +18,8 @@ func TestCompileKnowledgeJSONExtractionPinsGatingScalarDomainAndArguments(t *tes
 	extraction := knowledgeJSONExtractionFixture(
 		t,
 		knowledgeprogram.ReplaceExisting,
-		&opensplunkv1.KnowledgeSelector{
-			IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{
+		&opensplunk.KnowledgeSelector{
+			IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{
 				{Value: "prod*"},
 				{Value: "audit"},
 			},
@@ -195,7 +195,7 @@ func TestCompileKnowledgeJSONExtractionRejectsDisagreeingAuthority(t *testing.T)
 func knowledgeJSONExtractionFixture(
 	t *testing.T,
 	overwrite knowledgeprogram.OverwriteBehavior,
-	selector *opensplunkv1.KnowledgeSelector,
+	selector *opensplunk.KnowledgeSelector,
 ) knowledgeprogram.JSONExtraction {
 	t.Helper()
 	return knowledgeJSONExtractionFixturePath(
@@ -209,24 +209,24 @@ func knowledgeJSONExtractionFixture(
 func knowledgeJSONExtractionFixturePath(
 	t *testing.T,
 	overwrite knowledgeprogram.OverwriteBehavior,
-	selector *opensplunkv1.KnowledgeSelector,
+	selector *opensplunk.KnowledgeSelector,
 	path string,
 ) knowledgeprogram.JSONExtraction {
 	t.Helper()
-	protobufOverwrite := opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING
+	protobufOverwrite := opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING
 	if overwrite == knowledgeprogram.ReplaceExisting {
-		protobufOverwrite = opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING
+		protobufOverwrite = opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING
 	}
-	program := knowledgePreparationProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{
+	program := knowledgePreparationProgram(t, []*opensplunk.KnowledgeObjectDefinition{
 		{
-			AppId: "app", Name: "json-fixture", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
+			AppId: "app", Name: "json-fixture", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
 			Selector: selector,
-			Body: &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
-				FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
+			Body: &opensplunk.KnowledgeObjectDefinition_FieldExtraction{
+				FieldExtraction: &opensplunk.FieldExtractionDefinition{
 					InputField:        "_raw",
 					OverwriteBehavior: protobufOverwrite,
-					Extraction: &opensplunkv1.FieldExtractionDefinition_Json{
-						Json: &opensplunkv1.JsonFieldExtractionDefinition{
+					Extraction: &opensplunk.FieldExtractionDefinition_Json{
+						Json: &opensplunk.JsonFieldExtractionDefinition{
 							Path: path, OutputField: "knowledge_value",
 						},
 					},

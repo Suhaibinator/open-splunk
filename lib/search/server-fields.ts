@@ -2,9 +2,9 @@ import {
   type FieldProfile,
   type FieldSummary,
   type FieldValueCount,
-} from "@/gen/ts/open_splunk/v1/result";
-import { ServerFeature } from "@/gen/ts/open_splunk/v1/system_api";
-import { ValueType, type TypedValue } from "@/gen/ts/open_splunk/v1/value";
+} from "@/gen/ts/open_splunk/result";
+import { ServerFeature } from "@/gen/ts/open_splunk/system_api";
+import { ValueType, type TypedValue } from "@/gen/ts/open_splunk/value";
 import type {
   DemoField,
   DemoFieldValue,

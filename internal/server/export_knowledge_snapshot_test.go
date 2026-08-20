@@ -5,9 +5,8 @@ import (
 	"crypto/sha256"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
-	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -66,29 +65,28 @@ func TestExportJobProjectionRejectsInvalidKnowledgeSummary(t *testing.T) {
 	}
 }
 
-func validExportProjectionKnowledgeSummary() *opensplunkv1.KnowledgeSnapshotSummary {
-	return &opensplunkv1.KnowledgeSnapshotSummary{
-		Ref: &opensplunkv1.KnowledgeSnapshotRef{
-			SnapshotSha256:               bytes.Repeat([]byte{0x31}, sha256.Size),
-			TenantCatalogRevision:        8,
-			TenantCatalogStateToken:      bytes.Repeat([]byte{0x42}, sha256.Size),
-			ObjectCount:                  1,
-			CompilerCompatibilityVersion: knowledgesnapshot.CompilerCompatibilityVersion,
-			LookupAssetCount:             1,
+func validExportProjectionKnowledgeSummary() *opensplunk.KnowledgeSnapshotSummary {
+	return &opensplunk.KnowledgeSnapshotSummary{
+		Ref: &opensplunk.KnowledgeSnapshotRef{
+			SnapshotSha256:          bytes.Repeat([]byte{0x31}, sha256.Size),
+			TenantCatalogRevision:   8,
+			TenantCatalogStateToken: bytes.Repeat([]byte{0x42}, sha256.Size),
+			ObjectCount:             1,
+			LookupAssetCount:        1,
 		},
-		Objects: []*opensplunkv1.KnowledgeSnapshotObjectSummary{{
+		Objects: []*opensplunk.KnowledgeSnapshotObjectSummary{{
 			ResolutionOrdinal: 0,
-			ObjectType:        opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
-			Stage:             opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
-			Disclosure: &opensplunkv1.KnowledgeSnapshotObjectSummary_AuthorizedObject{
-				AuthorizedObject: &opensplunkv1.KnowledgeSnapshotAuthorizedObjectSummary{
+			ObjectType:        opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
+			Stage:             opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
+			Disclosure: &opensplunk.KnowledgeSnapshotObjectSummary_AuthorizedObject{
+				AuthorizedObject: &opensplunk.KnowledgeSnapshotAuthorizedObjectSummary{
 					KnowledgeObjectId: "object-1",
 					Version:           4,
 					Name:              "extract-one",
 				},
 			},
 		}},
-		LookupAssets: []*opensplunkv1.KnowledgeSnapshotLookupAsset{
+		LookupAssets: []*opensplunk.KnowledgeSnapshotLookupAsset{
 			serverLookupSnapshotAsset(),
 		},
 	}

@@ -7,7 +7,7 @@ import (
 	"slices"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"google.golang.org/protobuf/proto"
@@ -35,7 +35,7 @@ func TestLookupVersionProvenanceChangesSnapshotDigestAndRetainedSummary(
 
 	firstSummary := first.Summary()
 	secondSummary := second.Summary()
-	for name, summary := range map[string]*opensplunkv1.KnowledgeSnapshotSummary{
+	for name, summary := range map[string]*opensplunk.KnowledgeSnapshotSummary{
 		"v1": firstSummary,
 		"v2": secondSummary,
 	} {
@@ -171,33 +171,33 @@ func TestLookupVersionProvenanceRejectsNoncanonicalOrTamperedInventory(
 
 	summaryTests := []struct {
 		name   string
-		mutate func(*opensplunkv1.KnowledgeSnapshotSummary)
+		mutate func(*opensplunk.KnowledgeSnapshotSummary)
 	}{
-		{name: "count mismatch", mutate: func(value *opensplunkv1.KnowledgeSnapshotSummary) {
+		{name: "count mismatch", mutate: func(value *opensplunk.KnowledgeSnapshotSummary) {
 			value.Ref.LookupAssetCount = 0
 		}},
-		{name: "ordinal", mutate: func(value *opensplunkv1.KnowledgeSnapshotSummary) {
+		{name: "ordinal", mutate: func(value *opensplunk.KnowledgeSnapshotSummary) {
 			value.LookupAssets[0].AssetOrdinal = 1
 		}},
-		{name: "logical identity", mutate: func(value *opensplunkv1.KnowledgeSnapshotSummary) {
+		{name: "logical identity", mutate: func(value *opensplunk.KnowledgeSnapshotSummary) {
 			value.LookupAssets[0].LookupId = ""
 		}},
-		{name: "logical version", mutate: func(value *opensplunkv1.KnowledgeSnapshotSummary) {
+		{name: "logical version", mutate: func(value *opensplunk.KnowledgeSnapshotSummary) {
 			value.LookupAssets[0].LookupVersion = 0
 		}},
-		{name: "size", mutate: func(value *opensplunkv1.KnowledgeSnapshotSummary) {
+		{name: "size", mutate: func(value *opensplunk.KnowledgeSnapshotSummary) {
 			value.LookupAssets[0].Asset.SizeBytes = 0
 		}},
-		{name: "digest", mutate: func(value *opensplunkv1.KnowledgeSnapshotSummary) {
+		{name: "digest", mutate: func(value *opensplunk.KnowledgeSnapshotSummary) {
 			value.LookupAssets[0].Asset.ContentSha256 = nil
 		}},
-		{name: "unknown", mutate: func(value *opensplunkv1.KnowledgeSnapshotSummary) {
+		{name: "unknown", mutate: func(value *opensplunk.KnowledgeSnapshotSummary) {
 			value.LookupAssets[0].ProtoReflect().SetUnknown(smallUnknownField())
 		}},
 	}
 	for _, test := range summaryTests {
 		t.Run("summary "+test.name, func(t *testing.T) {
-			candidate := proto.Clone(valid.Summary()).(*opensplunkv1.KnowledgeSnapshotSummary)
+			candidate := proto.Clone(valid.Summary()).(*opensplunk.KnowledgeSnapshotSummary)
 			test.mutate(candidate)
 			if validateErr := ValidateSummary(candidate); !errors.Is(validateErr, ErrInvalidInput) {
 				t.Fatalf("ValidateSummary(tampered) = %v", validateErr)

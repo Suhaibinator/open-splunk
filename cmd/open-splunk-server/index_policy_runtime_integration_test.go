@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/collectoradmission"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
@@ -101,7 +101,6 @@ func TestRuntimeIndexPoliciesRefreshWithoutCollectorReconnect(t *testing.T) {
 	config.Clock = func() time.Time { return now }
 	config.NewStreamID = func() string { return streamID }
 	config.ServerInstanceID = "server-index-policy-runtime"
-	config.ServerVersion = "index-policy-runtime-test"
 	heartbeatRuntime := newCommandHeartbeatRuntime(t, fleet, config.HeartbeatInterval)
 	config.SessionManager = collectorSessionManager{
 		admission:  admissions,
@@ -119,17 +118,15 @@ func TestRuntimeIndexPoliciesRefreshWithoutCollectorReconnect(t *testing.T) {
 	}
 	stream := openIndexPolicyRuntimeStream(t, service, issued.Secret.Plaintext())
 
-	if err := stream.Send(&opensplunkv1.CollectRequest{
+	if err := stream.Send(&opensplunk.CollectRequest{
 		StreamSequence: 1,
 		SentAt:         timestamppb.New(now),
-		Payload: &opensplunkv1.CollectRequest_Hello{Hello: &opensplunkv1.CollectorHello{
-			CollectorId:      collectorID,
-			InstanceId:       "instance-index-policy-runtime",
-			ProtocolMajor:    1,
-			ProtocolMinor:    0,
-			CollectorVersion: "index-policy-runtime-test",
-			Hostname:         "index-policy-runtime-host",
-			StartedAt:        timestamppb.New(now.Add(-time.Hour)),
+		Payload: &opensplunk.CollectRequest_Hello{Hello: &opensplunk.CollectorHello{
+			CollectorId:    collectorID,
+			InstanceId:     "instance-index-policy-runtime",
+			SourceRevision: "development",
+			Hostname:       "index-policy-runtime-host",
+			StartedAt:      timestamppb.New(now.Add(-time.Hour)),
 		}},
 	}); err != nil {
 		t.Fatal(err)
@@ -159,8 +156,8 @@ func TestRuntimeIndexPoliciesRefreshWithoutCollectorReconnect(t *testing.T) {
 	)
 	initialResponse := sendIndexPolicyRuntimeBatch(t, stream, 2, initialBatch, now)
 	assertIndexPolicyRuntimeAck(t, initialResponse, "batch-index-policy-v1", 1, 3, []indexPolicyRuntimeRejection{
-		{eventIndex: 2, eventID: "event-main-fields-v1", code: opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_TOO_MANY_FIELDS},
-		{eventIndex: 4, eventID: "event-audit-depth-v1", code: opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_NESTING_TOO_DEEP},
+		{eventIndex: 2, eventID: "event-main-fields-v1", code: opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_TOO_MANY_FIELDS},
+		{eventIndex: 4, eventID: "event-audit-depth-v1", code: opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_NESTING_TOO_DEEP},
 	})
 	stored := capture.snapshot()
 	if len(stored) != 1 {
@@ -196,7 +193,7 @@ func TestRuntimeIndexPoliciesRefreshWithoutCollectorReconnect(t *testing.T) {
 	assertIndexPolicyRuntimeAck(t, updatedResponse, "batch-index-policy-v2", 2, 2, []indexPolicyRuntimeRejection{{
 		eventIndex: 1,
 		eventID:    "event-main-fields-v2",
-		code:       opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_TOO_MANY_FIELDS,
+		code:       opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_TOO_MANY_FIELDS,
 	}})
 	stored = capture.snapshot()
 	if len(stored) != 2 {
@@ -223,7 +220,7 @@ func TestRuntimeIndexPoliciesRefreshWithoutCollectorReconnect(t *testing.T) {
 	if disabledReject == nil ||
 		disabledReject.GetBatchId() != "batch-index-policy-disabled" ||
 		disabledReject.GetBatchSequence() != 3 ||
-		disabledReject.GetCode() != opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS ||
+		disabledReject.GetCode() != opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS ||
 		len(disabledReject.GetViolations()) != 1 ||
 		disabledReject.GetViolations()[0].GetFieldPath() != "events[0].index_name" ||
 		disabledReject.GetViolations()[0].GetCode() != "unauthorized_index" {
@@ -259,10 +256,10 @@ func TestRuntimeIndexPoliciesRefreshWithoutCollectorReconnect(t *testing.T) {
 	if _, err := database.UpdateIndex(ctx, auditIndex.ID, auditIndex.Version, auditDefinition); err != nil {
 		t.Fatal(err)
 	}
-	if err := stream.Send(&opensplunkv1.CollectRequest{
+	if err := stream.Send(&opensplunk.CollectRequest{
 		StreamSequence: 6,
 		SentAt:         timestamppb.New(now),
-		Payload:        &opensplunkv1.CollectRequest_Batch{Batch: auditBatch},
+		Payload:        &opensplunk.CollectRequest_Batch{Batch: auditBatch},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -284,10 +281,10 @@ func TestRuntimeIndexPoliciesRefreshWithoutCollectorReconnect(t *testing.T) {
 		indexPolicyRuntimeEvent(t, "event-no-authority", "audit", "", now,
 			indexPolicyRuntimeStringField("one", "1")),
 	)
-	if err := stream.Send(&opensplunkv1.CollectRequest{
+	if err := stream.Send(&opensplunk.CollectRequest{
 		StreamSequence: 7,
 		SentAt:         timestamppb.New(now),
-		Payload:        &opensplunkv1.CollectRequest_Batch{Batch: freshBatch},
+		Payload:        &opensplunk.CollectRequest_Batch{Batch: freshBatch},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -300,20 +297,20 @@ func TestRuntimeIndexPoliciesRefreshWithoutCollectorReconnect(t *testing.T) {
 }
 
 type indexPolicyRuntimeCollectStream interface {
-	Send(*opensplunkv1.CollectRequest) error
-	Recv() (*opensplunkv1.CollectResponse, error)
+	Send(*opensplunk.CollectRequest) error
+	Recv() (*opensplunk.CollectResponse, error)
 }
 
 func openIndexPolicyRuntimeStream(
 	t *testing.T,
-	service opensplunkv1.CollectorIngestServiceServer,
+	service opensplunk.CollectorIngestServiceServer,
 	plaintextToken string,
 ) indexPolicyRuntimeCollectStream {
 	t.Helper()
 
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	opensplunkv1.RegisterCollectorIngestServiceServer(grpcServer, service)
+	opensplunk.RegisterCollectorIngestServiceServer(grpcServer, service)
 	serveDone := make(chan error, 1)
 	go func() {
 		serveDone <- grpcServer.Serve(listener)
@@ -337,7 +334,7 @@ func openIndexPolicyRuntimeStream(
 		),
 		10*time.Second,
 	)
-	stream, err := opensplunkv1.NewCollectorIngestServiceClient(connection).Collect(streamContext)
+	stream, err := opensplunk.NewCollectorIngestServiceClient(connection).Collect(streamContext)
 	if err != nil {
 		cancelStream()
 		_ = connection.Close()
@@ -374,47 +371,47 @@ func indexPolicyRuntimeEvent(
 	indexName string,
 	sourcetype string,
 	at time.Time,
-	fields ...*opensplunkv1.TypedObjectField,
-) *opensplunkv1.LogEvent {
+	fields ...*opensplunk.TypedObjectField,
+) *opensplunk.LogEvent {
 	t.Helper()
 
 	message := eventID
-	return &opensplunkv1.LogEvent{
+	return &opensplunk.LogEvent{
 		EventId:     eventID,
 		IndexName:   indexName,
 		EventTime:   timestamppb.New(at.Add(-time.Second)),
 		CollectedAt: timestamppb.New(at),
-		EventTimeSource: opensplunkv1.
+		EventTimeSource: opensplunk.
 			EventTimeSource_EVENT_TIME_SOURCE_PARSED,
 		Host:        "index-policy-runtime-host",
 		Source:      "/var/log/index-policy-runtime.log",
 		Sourcetype:  sourcetype,
-		Severity:    opensplunkv1.LogSeverity_LOG_SEVERITY_INFO,
+		Severity:    opensplunk.LogSeverity_LOG_SEVERITY_INFO,
 		Message:     &message,
 		Raw:         []byte(message),
-		RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
-		Fields:      &opensplunkv1.TypedObject{Fields: fields},
+		RawEncoding: opensplunk.RawEncoding_RAW_ENCODING_UTF8,
+		Fields:      &opensplunk.TypedObject{Fields: fields},
 	}
 }
 
-func indexPolicyRuntimeStringField(name, value string) *opensplunkv1.TypedObjectField {
-	return &opensplunkv1.TypedObjectField{
+func indexPolicyRuntimeStringField(name, value string) *opensplunk.TypedObjectField {
+	return &opensplunk.TypedObjectField{
 		Name: name,
-		Value: &opensplunkv1.TypedValue{
-			Kind: &opensplunkv1.TypedValue_StringValue{StringValue: value},
+		Value: &opensplunk.TypedValue{
+			Kind: &opensplunk.TypedValue_StringValue{StringValue: value},
 		},
 	}
 }
 
 func indexPolicyRuntimeObjectField(
 	name string,
-	fields ...*opensplunkv1.TypedObjectField,
-) *opensplunkv1.TypedObjectField {
-	return &opensplunkv1.TypedObjectField{
+	fields ...*opensplunk.TypedObjectField,
+) *opensplunk.TypedObjectField {
+	return &opensplunk.TypedObjectField{
 		Name: name,
-		Value: &opensplunkv1.TypedValue{
-			Kind: &opensplunkv1.TypedValue_ObjectValue{
-				ObjectValue: &opensplunkv1.TypedObject{Fields: fields},
+		Value: &opensplunk.TypedValue{
+			Kind: &opensplunk.TypedValue_ObjectValue{
+				ObjectValue: &opensplunk.TypedObject{Fields: fields},
 			},
 		},
 	}
@@ -425,11 +422,11 @@ func indexPolicyRuntimeBatch(
 	batchID string,
 	batchSequence uint64,
 	createdAt time.Time,
-	events ...*opensplunkv1.LogEvent,
-) *opensplunkv1.EventBatch {
+	events ...*opensplunk.LogEvent,
+) *opensplunk.EventBatch {
 	t.Helper()
 
-	return &opensplunkv1.EventBatch{
+	return &opensplunk.EventBatch{
 		CollectorId:           "collector-index-policy-runtime",
 		BatchId:               batchID,
 		BatchSequence:         batchSequence,
@@ -437,8 +434,6 @@ func indexPolicyRuntimeBatch(
 		Events:                events,
 		UncompressedSizeBytes: ingest.UncompressedEventBytes(events),
 		EventIdsSha256:        ingest.EventIDDigest(events),
-		ProtocolMajor:         1,
-		ProtocolMinor:         0,
 	}
 }
 
@@ -446,15 +441,15 @@ func sendIndexPolicyRuntimeBatch(
 	t *testing.T,
 	stream indexPolicyRuntimeCollectStream,
 	streamSequence uint64,
-	batch *opensplunkv1.EventBatch,
+	batch *opensplunk.EventBatch,
 	sentAt time.Time,
-) *opensplunkv1.CollectResponse {
+) *opensplunk.CollectResponse {
 	t.Helper()
 
-	if err := stream.Send(&opensplunkv1.CollectRequest{
+	if err := stream.Send(&opensplunk.CollectRequest{
 		StreamSequence: streamSequence,
 		SentAt:         timestamppb.New(sentAt),
-		Payload:        &opensplunkv1.CollectRequest_Batch{Batch: batch},
+		Payload:        &opensplunk.CollectRequest_Batch{Batch: batch},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -468,12 +463,12 @@ func sendIndexPolicyRuntimeBatch(
 type indexPolicyRuntimeRejection struct {
 	eventIndex uint32
 	eventID    string
-	code       opensplunkv1.EventRejectionCode
+	code       opensplunk.EventRejectionCode
 }
 
 func assertIndexPolicyRuntimeAck(
 	t *testing.T,
-	response *opensplunkv1.CollectResponse,
+	response *opensplunk.CollectResponse,
 	batchID string,
 	batchSequence uint64,
 	accepted uint32,
@@ -486,7 +481,7 @@ func assertIndexPolicyRuntimeAck(
 		ack.GetAcknowledgedThroughBatchSequence() != batchSequence ||
 		ack.GetAcceptedEventCount() != accepted || ack.GetDuplicateEventCount() != 0 ||
 		len(ack.GetRejectedEvents()) != len(wantRejections) ||
-		ack.GetDurability() != opensplunkv1.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED {
+		ack.GetDurability() != opensplunk.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED {
 		t.Fatalf("batch acknowledgment = %#v", response)
 	}
 	for index, want := range wantRejections {
@@ -564,7 +559,7 @@ func (store *indexPolicyRuntimeEventStore) LookupBatch(
 		return ingest.StoredBatchNotFound, ingest.StoreResult{}, nil
 	}
 	if result.BatchRejection != nil {
-		result.BatchRejection = proto.Clone(result.BatchRejection).(*opensplunkv1.BatchReject)
+		result.BatchRejection = proto.Clone(result.BatchRejection).(*opensplunk.BatchReject)
 		return ingest.StoredBatchRejected, result, nil
 	}
 	result.Duplicate = result.Accepted
@@ -584,7 +579,7 @@ func (store *indexPolicyRuntimeEventStore) RejectBatch(
 	}
 	if existing, ok := store.results[rejected.Identity]; ok {
 		if existing.BatchRejection != nil {
-			existing.BatchRejection = proto.Clone(existing.BatchRejection).(*opensplunkv1.BatchReject)
+			existing.BatchRejection = proto.Clone(existing.BatchRejection).(*opensplunk.BatchReject)
 		} else {
 			existing.Duplicate = existing.Accepted
 			existing.Accepted = 0
@@ -593,11 +588,11 @@ func (store *indexPolicyRuntimeEventStore) RejectBatch(
 		return existing, nil
 	}
 	result := ingest.StoreResult{
-		BatchRejection: proto.Clone(rejected.Rejection).(*opensplunkv1.BatchReject),
+		BatchRejection: proto.Clone(rejected.Rejection).(*opensplunk.BatchReject),
 	}
 	store.results[rejected.Identity] = result
 	return ingest.StoreResult{
-		BatchRejection: proto.Clone(result.BatchRejection).(*opensplunkv1.BatchReject),
+		BatchRejection: proto.Clone(result.BatchRejection).(*opensplunk.BatchReject),
 	}, nil
 }
 
@@ -623,7 +618,7 @@ func indexPolicyRuntimeCloneBatch(batch ingest.StoreBatch) ingest.StoreBatch {
 		}
 		cloned := *event
 		if event.Event != nil {
-			cloned.Event = proto.Clone(event.Event).(*opensplunkv1.LogEvent)
+			cloned.Event = proto.Clone(event.Event).(*opensplunk.LogEvent)
 		}
 		detached.Events[index] = &cloned
 	}
@@ -634,12 +629,12 @@ func indexPolicyRuntimeCloneBatch(batch ingest.StoreBatch) ingest.StoreBatch {
 }
 
 func indexPolicyRuntimeCloneRejections(
-	values []*opensplunkv1.EventRejection,
-) []*opensplunkv1.EventRejection {
-	cloned := make([]*opensplunkv1.EventRejection, len(values))
+	values []*opensplunk.EventRejection,
+) []*opensplunk.EventRejection {
+	cloned := make([]*opensplunk.EventRejection, len(values))
 	for index, rejection := range values {
 		if rejection != nil {
-			cloned[index] = proto.Clone(rejection).(*opensplunkv1.EventRejection)
+			cloned[index] = proto.Clone(rejection).(*opensplunk.EventRejection)
 		}
 	}
 	return cloned

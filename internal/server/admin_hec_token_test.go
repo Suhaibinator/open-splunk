@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
@@ -16,9 +16,9 @@ func TestIngestionTokenPurposeParsingPreservesLegacyNativeWithoutInferringHEC(t 
 	t.Parallel()
 
 	binding := "collector-legacy-wire"
-	legacy, err := tokenDefinitionFromProto(&opensplunkv1.IngestionTokenDefinition{
+	legacy, err := tokenDefinitionFromProto(&opensplunk.IngestionTokenDefinition{
 		Name: "legacy native",
-		Constraints: &opensplunkv1.IngestionTokenConstraints{
+		Constraints: &opensplunk.IngestionTokenConstraints{
 			AllowedIndexNames: []string{"main"},
 			BoundCollectorId:  &binding,
 		},
@@ -32,12 +32,12 @@ func TestIngestionTokenPurposeParsingPreservesLegacyNativeWithoutInferringHEC(t 
 		t.Fatalf("legacy native definition = %#v", legacy)
 	}
 
-	if _, err := tokenDefinitionFromProto(&opensplunkv1.IngestionTokenDefinition{
+	if _, err := tokenDefinitionFromProto(&opensplunk.IngestionTokenDefinition{
 		Name: "ambiguous unbound",
-		Constraints: &opensplunkv1.IngestionTokenConstraints{
+		Constraints: &opensplunk.IngestionTokenConstraints{
 			AllowedIndexNames: []string{"main"},
 		},
-		HecProfile: &opensplunkv1.IngestionTokenHecProfile{},
+		HecProfile: &opensplunk.IngestionTokenHecProfile{},
 	}); err == nil || !strings.Contains(err.Error(), "purpose is required") {
 		t.Fatalf("unspecified unbound purpose error = %v", err)
 	}
@@ -46,13 +46,13 @@ func TestIngestionTokenPurposeParsingPreservesLegacyNativeWithoutInferringHEC(t 
 	defaultHost := "hec-producer"
 	defaultSource := "/var/log/app.json"
 	defaultSourcetype := "_json"
-	hec, err := tokenDefinitionFromProto(&opensplunkv1.IngestionTokenDefinition{
+	hec, err := tokenDefinitionFromProto(&opensplunk.IngestionTokenDefinition{
 		Name:    "HEC",
-		Purpose: opensplunkv1.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_HEC,
-		Constraints: &opensplunkv1.IngestionTokenConstraints{
+		Purpose: opensplunk.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_HEC,
+		Constraints: &opensplunk.IngestionTokenConstraints{
 			AllowedIndexNames: []string{"main", "audit"},
 		},
-		HecProfile: &opensplunkv1.IngestionTokenHecProfile{
+		HecProfile: &opensplunk.IngestionTokenHecProfile{
 			DefaultIndexName:      &defaultIndex,
 			DefaultHost:           &defaultHost,
 			DefaultSource:         &defaultSource,
@@ -70,31 +70,31 @@ func TestIngestionTokenPurposeParsingPreservesLegacyNativeWithoutInferringHEC(t 
 		t.Fatalf("parsed HEC definition = %#v", hec)
 	}
 
-	for label, definition := range map[string]*opensplunkv1.IngestionTokenDefinition{
+	for label, definition := range map[string]*opensplunk.IngestionTokenDefinition{
 		"HEC binding": {
 			Name:    "HEC bound",
-			Purpose: opensplunkv1.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_HEC,
-			Constraints: &opensplunkv1.IngestionTokenConstraints{
+			Purpose: opensplunk.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_HEC,
+			Constraints: &opensplunk.IngestionTokenConstraints{
 				AllowedIndexNames: []string{"main"},
 				BoundCollectorId:  &binding,
 			},
-			HecProfile: &opensplunkv1.IngestionTokenHecProfile{},
+			HecProfile: &opensplunk.IngestionTokenHecProfile{},
 		},
 		"HEC missing profile": {
 			Name:    "HEC missing profile",
-			Purpose: opensplunkv1.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_HEC,
-			Constraints: &opensplunkv1.IngestionTokenConstraints{
+			Purpose: opensplunk.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_HEC,
+			Constraints: &opensplunk.IngestionTokenConstraints{
 				AllowedIndexNames: []string{"main"},
 			},
 		},
 		"native profile": {
 			Name:    "native profile",
-			Purpose: opensplunkv1.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR,
-			Constraints: &opensplunkv1.IngestionTokenConstraints{
+			Purpose: opensplunk.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR,
+			Constraints: &opensplunk.IngestionTokenConstraints{
 				AllowedIndexNames: []string{"main"},
 				BoundCollectorId:  &binding,
 			},
-			HecProfile: &opensplunkv1.IngestionTokenHecProfile{},
+			HecProfile: &opensplunk.IngestionTokenHecProfile{},
 		},
 	} {
 		if _, err := tokenDefinitionFromProto(definition); err == nil {
@@ -117,14 +117,14 @@ func TestHECIngestionTokenAdministrativeHTTPVertical(t *testing.T) {
 	defaultHost := "hec-producer"
 	defaultSource := "/var/log/app.json"
 	defaultSourcetype := "_json"
-	create := &opensplunkv1.CreateIngestionTokenRequest{
-		Definition: &opensplunkv1.IngestionTokenDefinition{
+	create := &opensplunk.CreateIngestionTokenRequest{
+		Definition: &opensplunk.IngestionTokenDefinition{
 			Name:    "HEC production",
-			Purpose: opensplunkv1.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_HEC,
-			Constraints: &opensplunkv1.IngestionTokenConstraints{
+			Purpose: opensplunk.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_HEC,
+			Constraints: &opensplunk.IngestionTokenConstraints{
 				AllowedIndexNames: []string{"audit", "main"},
 			},
-			HecProfile: &opensplunkv1.IngestionTokenHecProfile{
+			HecProfile: &opensplunk.IngestionTokenHecProfile{
 				DefaultIndexName:      &defaultIndex,
 				DefaultHost:           &defaultHost,
 				DefaultSource:         &defaultSource,
@@ -136,16 +136,16 @@ func TestHECIngestionTokenAdministrativeHTTPVertical(t *testing.T) {
 	response := postProto(
 		t,
 		handler,
-		"/api/v1/ingestion-tokens/create",
+		"/api/ingestion-tokens/create",
 		create,
 	)
 	if response.Code != http.StatusOK {
 		t.Fatalf("HEC create status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var created opensplunkv1.CreateIngestionTokenResponse
+	var created opensplunk.CreateIngestionTokenResponse
 	unmarshalResponse(t, response, &created)
 	token := created.GetIngestionToken()
-	if token.GetPurpose() != opensplunkv1.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_HEC ||
+	if token.GetPurpose() != opensplunk.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_HEC ||
 		token.GetConstraints().BoundCollectorId != nil ||
 		token.GetHecProfile() == nil ||
 		token.GetHecProfile().GetDefaultIndexName() != defaultIndex ||
@@ -158,8 +158,8 @@ func TestHECIngestionTokenAdministrativeHTTPVertical(t *testing.T) {
 	response = postProto(
 		t,
 		handler,
-		"/api/v1/ingestion-tokens/get",
-		&opensplunkv1.GetIngestionTokenRequest{
+		"/api/ingestion-tokens/get",
+		&opensplunk.GetIngestionTokenRequest{
 			IngestionTokenId: token.GetIngestionTokenId(),
 		},
 	)
@@ -169,7 +169,7 @@ func TestHECIngestionTokenAdministrativeHTTPVertical(t *testing.T) {
 	if strings.Contains(response.Body.String(), plaintext) {
 		t.Fatal("HEC get response disclosed plaintext credential")
 	}
-	var got opensplunkv1.GetIngestionTokenResponse
+	var got opensplunk.GetIngestionTokenResponse
 	unmarshalResponse(t, response, &got)
 	if got.GetIngestionToken().GetPurpose() != token.GetPurpose() ||
 		got.GetIngestionToken().GetHecProfile().GetDefaultHost() != defaultHost {
@@ -179,17 +179,17 @@ func TestHECIngestionTokenAdministrativeHTTPVertical(t *testing.T) {
 	response = postProto(
 		t,
 		handler,
-		"/api/v1/ingestion-tokens/list",
-		&opensplunkv1.ListIngestionTokensRequest{},
+		"/api/ingestion-tokens/list",
+		&opensplunk.ListIngestionTokensRequest{},
 	)
 	if response.Code != http.StatusOK {
 		t.Fatalf("HEC list status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var listed opensplunkv1.ListIngestionTokensResponse
+	var listed opensplunk.ListIngestionTokensResponse
 	unmarshalResponse(t, response, &listed)
 	if len(listed.GetIngestionTokens()) != 1 ||
 		listed.GetIngestionTokens()[0].GetPurpose() !=
-			opensplunkv1.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_HEC {
+			opensplunk.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_HEC {
 		t.Fatalf("HEC list response = %#v", &listed)
 	}
 
@@ -197,12 +197,12 @@ func TestHECIngestionTokenAdministrativeHTTPVertical(t *testing.T) {
 	response = postProto(
 		t,
 		handler,
-		"/api/v1/ingestion-tokens/update",
-		&opensplunkv1.UpdateIngestionTokenRequest{
+		"/api/ingestion-tokens/update",
+		&opensplunk.UpdateIngestionTokenRequest{
 			IngestionTokenId: token.GetIngestionTokenId(),
 			ExpectedVersion:  token.GetVersion(),
-			Definition: &opensplunkv1.IngestionTokenDefinition{
-				HecProfile: &opensplunkv1.IngestionTokenHecProfile{
+			Definition: &opensplunk.IngestionTokenDefinition{
+				HecProfile: &opensplunk.IngestionTokenHecProfile{
 					DefaultHost: &replacementHost,
 				},
 			},
@@ -214,7 +214,7 @@ func TestHECIngestionTokenAdministrativeHTTPVertical(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("HEC update status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var updated opensplunkv1.UpdateIngestionTokenResponse
+	var updated opensplunk.UpdateIngestionTokenResponse
 	unmarshalResponse(t, response, &updated)
 	if updated.GetIngestionToken().GetVersion() != token.GetVersion()+1 ||
 		updated.GetIngestionToken().GetHecProfile().GetDefaultHost() != replacementHost ||
@@ -226,8 +226,8 @@ func TestHECIngestionTokenAdministrativeHTTPVertical(t *testing.T) {
 	response = postProto(
 		t,
 		handler,
-		"/api/v1/ingestion-tokens/state/set",
-		&opensplunkv1.SetIngestionTokenEnabledRequest{
+		"/api/ingestion-tokens/state/set",
+		&opensplunk.SetIngestionTokenEnabledRequest{
 			IngestionTokenId: token.GetIngestionTokenId(),
 			ExpectedVersion:  updated.GetIngestionToken().GetVersion(),
 			Enabled:          false,
@@ -236,12 +236,12 @@ func TestHECIngestionTokenAdministrativeHTTPVertical(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("HEC disable status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var disabled opensplunkv1.SetIngestionTokenEnabledResponse
+	var disabled opensplunk.SetIngestionTokenEnabledResponse
 	unmarshalResponse(t, response, &disabled)
 	if disabled.GetIngestionToken().GetVersion() !=
 		updated.GetIngestionToken().GetVersion()+1 ||
 		disabled.GetIngestionToken().GetState() !=
-			opensplunkv1.IngestionTokenState_INGESTION_TOKEN_STATE_DISABLED ||
+			opensplunk.IngestionTokenState_INGESTION_TOKEN_STATE_DISABLED ||
 		disabled.GetIngestionToken().GetRevokedAt() != nil {
 		t.Fatalf("disabled HEC token = %#v", &disabled)
 	}
@@ -252,8 +252,8 @@ func TestHECIngestionTokenAdministrativeHTTPVertical(t *testing.T) {
 	response = postProto(
 		t,
 		handler,
-		"/api/v1/ingestion-tokens/state/set",
-		&opensplunkv1.SetIngestionTokenEnabledRequest{
+		"/api/ingestion-tokens/state/set",
+		&opensplunk.SetIngestionTokenEnabledRequest{
 			IngestionTokenId: token.GetIngestionTokenId(),
 			ExpectedVersion:  disabled.GetIngestionToken().GetVersion(),
 			Enabled:          true,
@@ -262,12 +262,12 @@ func TestHECIngestionTokenAdministrativeHTTPVertical(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("HEC re-enable status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var enabled opensplunkv1.SetIngestionTokenEnabledResponse
+	var enabled opensplunk.SetIngestionTokenEnabledResponse
 	unmarshalResponse(t, response, &enabled)
 	if enabled.GetIngestionToken().GetVersion() !=
 		disabled.GetIngestionToken().GetVersion()+1 ||
 		enabled.GetIngestionToken().GetState() !=
-			opensplunkv1.IngestionTokenState_INGESTION_TOKEN_STATE_ACTIVE ||
+			opensplunk.IngestionTokenState_INGESTION_TOKEN_STATE_ACTIVE ||
 		enabled.GetIngestionToken().GetRevokedAt() != nil {
 		t.Fatalf("re-enabled HEC token = %#v", &enabled)
 	}
@@ -285,11 +285,11 @@ func TestHECIngestionTokenAdministrativeHTTPVertical(t *testing.T) {
 	response = postProto(
 		t,
 		handler,
-		"/api/v1/ingestion-tokens/update",
-		&opensplunkv1.UpdateIngestionTokenRequest{
+		"/api/ingestion-tokens/update",
+		&opensplunk.UpdateIngestionTokenRequest{
 			IngestionTokenId: token.GetIngestionTokenId(),
 			ExpectedVersion:  updated.GetIngestionToken().GetVersion(),
-			Definition: &opensplunkv1.IngestionTokenDefinition{
+			Definition: &opensplunk.IngestionTokenDefinition{
 				HecProfile: ackDisabled,
 			},
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"hec_profile"}},
@@ -302,8 +302,8 @@ func TestHECIngestionTokenAdministrativeHTTPVertical(t *testing.T) {
 	response = postProto(
 		t,
 		handler,
-		"/api/v1/ingestion-tokens/revoke",
-		&opensplunkv1.RevokeIngestionTokenRequest{
+		"/api/ingestion-tokens/revoke",
+		&opensplunk.RevokeIngestionTokenRequest{
 			IngestionTokenId: token.GetIngestionTokenId(),
 			ExpectedVersion:  enabled.GetIngestionToken().GetVersion(),
 		},
@@ -311,12 +311,12 @@ func TestHECIngestionTokenAdministrativeHTTPVertical(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("HEC revoke status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var revoked opensplunkv1.RevokeIngestionTokenResponse
+	var revoked opensplunk.RevokeIngestionTokenResponse
 	unmarshalResponse(t, response, &revoked)
 	if revoked.GetIngestionToken().GetState() !=
-		opensplunkv1.IngestionTokenState_INGESTION_TOKEN_STATE_REVOKED ||
+		opensplunk.IngestionTokenState_INGESTION_TOKEN_STATE_REVOKED ||
 		revoked.GetIngestionToken().GetPurpose() !=
-			opensplunkv1.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_HEC ||
+			opensplunk.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_HEC ||
 		revoked.GetIngestionToken().GetHecProfile().GetDefaultHost() != replacementHost {
 		t.Fatalf("revoked HEC token = %#v", &revoked)
 	}
@@ -324,8 +324,8 @@ func TestHECIngestionTokenAdministrativeHTTPVertical(t *testing.T) {
 	response = postProto(
 		t,
 		handler,
-		"/api/v1/ingestion-tokens/state/set",
-		&opensplunkv1.SetIngestionTokenEnabledRequest{
+		"/api/ingestion-tokens/state/set",
+		&opensplunk.SetIngestionTokenEnabledRequest{
 			IngestionTokenId: token.GetIngestionTokenId(),
 			ExpectedVersion:  revoked.GetIngestionToken().GetVersion(),
 			Enabled:          true,
@@ -350,10 +350,10 @@ func TestApplyHECTokenUpdateFencesImmutablePurposeAndAcknowledgment(t *testing.T
 	}
 	if _, err := applyTokenUpdate(
 		current,
-		&opensplunkv1.IngestionTokenDefinition{
-			Purpose: opensplunkv1.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR,
+		&opensplunk.IngestionTokenDefinition{
+			Purpose: opensplunk.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR,
 			Name:    "changed",
-			Constraints: &opensplunkv1.IngestionTokenConstraints{
+			Constraints: &opensplunk.IngestionTokenConstraints{
 				AllowedIndexNames: []string{"main"},
 			},
 		},
@@ -363,8 +363,8 @@ func TestApplyHECTokenUpdateFencesImmutablePurposeAndAcknowledgment(t *testing.T
 	}
 	if _, err := applyTokenUpdate(
 		current,
-		&opensplunkv1.IngestionTokenDefinition{
-			HecProfile: &opensplunkv1.IngestionTokenHecProfile{},
+		&opensplunk.IngestionTokenDefinition{
+			HecProfile: &opensplunk.IngestionTokenHecProfile{},
 		},
 		&fieldmaskpb.FieldMask{Paths: []string{"hec_profile"}},
 	); !errors.Is(err, errImmutableTokenHECAcknowledgment) {
@@ -388,11 +388,11 @@ func TestApplyHECTokenUpdateMovesDefaultWithScopeRegardlessOfMaskOrder(t *testin
 	audit := "audit"
 	updated, err := applyTokenUpdate(
 		current,
-		&opensplunkv1.IngestionTokenDefinition{
-			Constraints: &opensplunkv1.IngestionTokenConstraints{
+		&opensplunk.IngestionTokenDefinition{
+			Constraints: &opensplunk.IngestionTokenConstraints{
 				AllowedIndexNames: []string{"audit"},
 			},
-			HecProfile: &opensplunkv1.IngestionTokenHecProfile{
+			HecProfile: &opensplunk.IngestionTokenHecProfile{
 				DefaultIndexName: &audit,
 			},
 		},

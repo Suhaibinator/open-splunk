@@ -73,8 +73,6 @@ export function KnowledgeInspectionSection({
         <dd>{NUMBER_FORMAT.format(knowledge.objectCount)}</dd>
         <dt>Lookup assets</dt>
         <dd>{NUMBER_FORMAT.format(knowledge.lookupAssetCount)}</dd>
-        <dt>Compiler compatibility</dt>
-        <dd>{knowledge.compilerCompatibilityVersion}</dd>
       </dl>
       {knowledge.objectCount === 0 ? (
         <p>No Tier-1 field objects were applied.</p>

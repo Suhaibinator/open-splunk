@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"google.golang.org/protobuf/proto"
@@ -27,41 +27,41 @@ func TestIndexAdministrationPolicyRoundTripAgainstSQLite(t *testing.T) {
 		ingest.HardMaxEventAge,
 	)
 
-	response := postProto(t, handler, "/api/v1/indexes/create", &opensplunkv1.CreateIndexRequest{Definition: definition})
+	response := postProto(t, handler, "/api/indexes/create", &opensplunk.CreateIndexRequest{Definition: definition})
 	if response.Code != http.StatusOK {
 		t.Fatalf("create status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var created opensplunkv1.CreateIndexResponse
+	var created opensplunk.CreateIndexResponse
 	unmarshalResponse(t, response, &created)
 	current := created.GetIndex()
 	if current.GetIndexId() == "" || current.GetVersion() != 1 || !proto.Equal(current.GetDefinition(), definition) {
 		t.Fatalf("created index = %+v, want definition %+v", current, definition)
 	}
 
-	response = postProto(t, handler, "/api/v1/indexes/get", &opensplunkv1.GetIndexRequest{Selector: adminIndexPolicySelector(current.GetIndexId())})
+	response = postProto(t, handler, "/api/indexes/get", &opensplunk.GetIndexRequest{Selector: adminIndexPolicySelector(current.GetIndexId())})
 	if response.Code != http.StatusOK {
 		t.Fatalf("get status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var got opensplunkv1.GetIndexResponse
+	var got opensplunk.GetIndexResponse
 	unmarshalResponse(t, response, &got)
 	if !proto.Equal(got.GetIndex(), current) {
 		t.Fatalf("get index = %+v, want %+v", got.GetIndex(), current)
 	}
 
-	response = postProto(t, handler, "/api/v1/indexes/list", &opensplunkv1.ListIndexesRequest{})
+	response = postProto(t, handler, "/api/indexes/list", &opensplunk.ListIndexesRequest{})
 	if response.Code != http.StatusOK {
 		t.Fatalf("list status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var listed opensplunkv1.ListIndexesResponse
+	var listed opensplunk.ListIndexesResponse
 	unmarshalResponse(t, response, &listed)
 	if len(listed.GetIndexes()) != 1 || !proto.Equal(listed.GetIndexes()[0].GetIndex(), current) {
 		t.Fatalf("listed indexes = %+v, want [%+v]", listed.GetIndexes(), current)
 	}
 
-	response = postProto(t, handler, "/api/v1/indexes/update", &opensplunkv1.UpdateIndexRequest{
+	response = postProto(t, handler, "/api/indexes/update", &opensplunk.UpdateIndexRequest{
 		Selector:        adminIndexPolicySelector(current.GetIndexId()),
 		ExpectedVersion: current.GetVersion(),
-		Definition: &opensplunkv1.IndexDefinition{Limits: &opensplunkv1.IndexLimits{
+		Definition: &opensplunk.IndexDefinition{Limits: &opensplunk.IndexLimits{
 			MaxEventBytes: new(ingest.HardMaxEventBytes + 1),
 		}},
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"limits.max_event_bytes"}},
@@ -69,7 +69,7 @@ func TestIndexAdministrationPolicyRoundTripAgainstSQLite(t *testing.T) {
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("over-limit update status = %d, body = %s", response.Code, response.Body.String())
 	}
-	response = postProto(t, handler, "/api/v1/indexes/get", &opensplunkv1.GetIndexRequest{Selector: adminIndexPolicySelector(current.GetIndexId())})
+	response = postProto(t, handler, "/api/indexes/get", &opensplunk.GetIndexRequest{Selector: adminIndexPolicySelector(current.GetIndexId())})
 	if response.Code != http.StatusOK {
 		t.Fatalf("get after rejected update status = %d, body = %s", response.Code, response.Body.String())
 	}
@@ -79,16 +79,16 @@ func TestIndexAdministrationPolicyRoundTripAgainstSQLite(t *testing.T) {
 	}
 
 	replacement := adminIndexPolicyLimits(256<<10, 128, 16, 2*time.Minute, 90*24*time.Hour)
-	response = postProto(t, handler, "/api/v1/indexes/update", &opensplunkv1.UpdateIndexRequest{
+	response = postProto(t, handler, "/api/indexes/update", &opensplunk.UpdateIndexRequest{
 		Selector:        adminIndexPolicySelector(current.GetIndexId()),
 		ExpectedVersion: current.GetVersion(),
-		Definition:      &opensplunkv1.IndexDefinition{Limits: replacement},
+		Definition:      &opensplunk.IndexDefinition{Limits: replacement},
 		UpdateMask:      &fieldmaskpb.FieldMask{Paths: []string{"limits"}},
 	})
 	if response.Code != http.StatusOK {
 		t.Fatalf("parent limits update status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var updated opensplunkv1.UpdateIndexResponse
+	var updated opensplunk.UpdateIndexResponse
 	unmarshalResponse(t, response, &updated)
 	current = updated.GetIndex()
 	if current.GetVersion() != 2 || current.GetDefinition().GetDefaultSourcetype() != "go:zap:json" ||
@@ -96,10 +96,10 @@ func TestIndexAdministrationPolicyRoundTripAgainstSQLite(t *testing.T) {
 		t.Fatalf("parent limits update = %+v", current)
 	}
 
-	response = postProto(t, handler, "/api/v1/indexes/update", &opensplunkv1.UpdateIndexRequest{
+	response = postProto(t, handler, "/api/indexes/update", &opensplunk.UpdateIndexRequest{
 		Selector:        adminIndexPolicySelector(current.GetIndexId()),
 		ExpectedVersion: current.GetVersion(),
-		Definition: &opensplunkv1.IndexDefinition{Limits: &opensplunkv1.IndexLimits{
+		Definition: &opensplunk.IndexDefinition{Limits: &opensplunk.IndexLimits{
 			MaxEventBytes:     new(uint64(0)),
 			MaxFieldCount:     new(uint32(0)),
 			MaxNestingDepth:   new(uint32(0)),
@@ -124,10 +124,10 @@ func TestIndexAdministrationPolicyRoundTripAgainstSQLite(t *testing.T) {
 		t.Fatalf("leaf limits clear = %+v", current)
 	}
 
-	response = postProto(t, handler, "/api/v1/indexes/update", &opensplunkv1.UpdateIndexRequest{
+	response = postProto(t, handler, "/api/indexes/update", &opensplunk.UpdateIndexRequest{
 		Selector:        adminIndexPolicySelector(current.GetIndexId()),
 		ExpectedVersion: current.GetVersion(),
-		Definition:      &opensplunkv1.IndexDefinition{DefaultSourcetype: new("")},
+		Definition:      &opensplunk.IndexDefinition{DefaultSourcetype: new("")},
 		UpdateMask:      &fieldmaskpb.FieldMask{Paths: []string{"default_sourcetype"}},
 	})
 	if response.Code != http.StatusOK {
@@ -145,47 +145,47 @@ func TestIndexAdministrationPolicyRejectsInvalidLimits(t *testing.T) {
 
 	tests := []struct {
 		name   string
-		limits *opensplunkv1.IndexLimits
+		limits *opensplunk.IndexLimits
 	}{
 		{
 			name: "event bytes above hard ceiling",
-			limits: &opensplunkv1.IndexLimits{
+			limits: &opensplunk.IndexLimits{
 				MaxEventBytes: new(ingest.HardMaxEventBytes + 1),
 			},
 		},
 		{
 			name: "field count above hard ceiling",
-			limits: &opensplunkv1.IndexLimits{
+			limits: &opensplunk.IndexLimits{
 				MaxFieldCount: new(ingest.HardMaxFields + 1),
 			},
 		},
 		{
 			name: "nesting depth above hard ceiling",
-			limits: &opensplunkv1.IndexLimits{
+			limits: &opensplunk.IndexLimits{
 				MaxNestingDepth: new(ingest.HardMaxNestingDepth + 1),
 			},
 		},
 		{
 			name: "future skew above hard ceiling",
-			limits: &opensplunkv1.IndexLimits{
+			limits: &opensplunk.IndexLimits{
 				MaximumFutureSkew: durationpb.New(ingest.HardMaxFutureSkew + time.Nanosecond),
 			},
 		},
 		{
 			name: "event age above hard ceiling",
-			limits: &opensplunkv1.IndexLimits{
+			limits: &opensplunk.IndexLimits{
 				MaximumEventAge: durationpb.New(ingest.HardMaxEventAge + time.Nanosecond),
 			},
 		},
 		{
 			name: "negative future skew",
-			limits: &opensplunkv1.IndexLimits{
+			limits: &opensplunk.IndexLimits{
 				MaximumFutureSkew: durationpb.New(-time.Nanosecond),
 			},
 		},
 		{
 			name: "invalid event age duration",
-			limits: &opensplunkv1.IndexLimits{
+			limits: &opensplunk.IndexLimits{
 				MaximumEventAge: &durationpb.Duration{Seconds: 1, Nanos: 1_000_000_000},
 			},
 		},
@@ -198,15 +198,15 @@ func TestIndexAdministrationPolicyRejectsInvalidLimits(t *testing.T) {
 			handler, _, _ := newAdminIntegrationHandler(t)
 			definition := adminTestIndexProto("invalid-policy")
 			definition.Limits = test.limits
-			response := postProto(t, handler, "/api/v1/indexes/create", &opensplunkv1.CreateIndexRequest{Definition: definition})
+			response := postProto(t, handler, "/api/indexes/create", &opensplunk.CreateIndexRequest{Definition: definition})
 			if response.Code != http.StatusBadRequest {
 				t.Fatalf("create status = %d, body = %s", response.Code, response.Body.String())
 			}
-			response = postProto(t, handler, "/api/v1/indexes/list", &opensplunkv1.ListIndexesRequest{})
+			response = postProto(t, handler, "/api/indexes/list", &opensplunk.ListIndexesRequest{})
 			if response.Code != http.StatusOK {
 				t.Fatalf("list status = %d, body = %s", response.Code, response.Body.String())
 			}
-			var listed opensplunkv1.ListIndexesResponse
+			var listed opensplunk.ListIndexesResponse
 			unmarshalResponse(t, response, &listed)
 			if len(listed.GetIndexes()) != 0 {
 				t.Fatalf("rejected create persisted indexes = %+v", listed.GetIndexes())
@@ -224,17 +224,17 @@ func TestIndexAdministrationPolicyRejectsRetentionPastStorageHorizon(t *testing.
 	response := postProto(
 		t,
 		handler,
-		"/api/v1/indexes/create",
-		&opensplunkv1.CreateIndexRequest{Definition: definition},
+		"/api/indexes/create",
+		&opensplunk.CreateIndexRequest{Definition: definition},
 	)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("create status = %d, body = %s", response.Code, response.Body.String())
 	}
-	response = postProto(t, handler, "/api/v1/indexes/list", &opensplunkv1.ListIndexesRequest{})
+	response = postProto(t, handler, "/api/indexes/list", &opensplunk.ListIndexesRequest{})
 	if response.Code != http.StatusOK {
 		t.Fatalf("list status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var listed opensplunkv1.ListIndexesResponse
+	var listed opensplunk.ListIndexesResponse
 	unmarshalResponse(t, response, &listed)
 	if len(listed.GetIndexes()) != 0 {
 		t.Fatalf("rejected retention persisted indexes = %+v", listed.GetIndexes())
@@ -292,8 +292,8 @@ func adminIndexPolicyLimits(
 	maxNestingDepth uint32,
 	maximumFutureSkew time.Duration,
 	maximumEventAge time.Duration,
-) *opensplunkv1.IndexLimits {
-	return &opensplunkv1.IndexLimits{
+) *opensplunk.IndexLimits {
+	return &opensplunk.IndexLimits{
 		MaxEventBytes:     new(maxEventBytes),
 		MaxFieldCount:     new(maxFieldCount),
 		MaxNestingDepth:   new(maxNestingDepth),
@@ -302,8 +302,8 @@ func adminIndexPolicyLimits(
 	}
 }
 
-func adminIndexPolicySelector(indexID string) *opensplunkv1.IndexSelector {
-	return &opensplunkv1.IndexSelector{
-		Selector: &opensplunkv1.IndexSelector_IndexId{IndexId: indexID},
+func adminIndexPolicySelector(indexID string) *opensplunk.IndexSelector {
+	return &opensplunk.IndexSelector{
+		Selector: &opensplunk.IndexSelector_IndexId{IndexId: indexID},
 	}
 }

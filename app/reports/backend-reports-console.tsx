@@ -3,8 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 
-import { SharingScope, SortDirection } from "@/gen/ts/open_splunk/v1/common";
-import { SavedSearchSortBy } from "@/gen/ts/open_splunk/v1/saved_search_api";
+import { SharingScope, SortDirection } from "@/gen/ts/open_splunk/common";
+import { SavedSearchSortBy } from "@/gen/ts/open_splunk/saved_search_api";
 import {
   createOpenSplunkApiClient,
   getSystemBootstrap,

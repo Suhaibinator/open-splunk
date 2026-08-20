@@ -8,7 +8,7 @@ import (
 	"slices"
 	"strings"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/protobuf/proto"
 	"modernc.org/sqlite"
 )
@@ -49,7 +49,7 @@ func lookupDefinitionTextContains(
 	if !ok || needle == "" || needle != strings.ToLower(needle) {
 		return nil, fmt.Errorf("lookup definition text predicate received invalid search text")
 	}
-	definition := &opensplunkv1.LookupDefinition{}
+	definition := &opensplunk.LookupDefinition{}
 	if err := (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(definitionBytes, definition); err != nil {
 		return nil, fmt.Errorf("decode lookup definition text projection: %w", err)
 	}

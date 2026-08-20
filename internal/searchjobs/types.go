@@ -11,7 +11,7 @@ import (
 	"unicode/utf8"
 	"unsafe"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 	"google.golang.org/protobuf/proto"
@@ -249,7 +249,6 @@ type JobListItem struct {
 	TenantID          string
 	SPL               string
 	NormalizedSPL     string
-	CompilerVersion   string
 	RequestedIndexes  []string
 	EffectiveIndexes  []string
 	TimeRange         searchtime.Intent
@@ -258,7 +257,7 @@ type JobListItem struct {
 	Earliest          time.Time
 	Latest            time.Time
 	IndexTimeCutoff   time.Time
-	KnowledgeSnapshot *opensplunkv1.KnowledgeSnapshotSummary
+	KnowledgeSnapshot *opensplunk.KnowledgeSnapshotSummary
 	State             State
 	// ScannedRows and ScannedBytes are the exact executor-reported progress
 	// received so far. They are not inferred from retained result rows.
@@ -301,7 +300,6 @@ type Job struct {
 	OwnerID          string
 	SPL              string
 	NormalizedSPL    string
-	CompilerVersion  string
 	TenantID         string
 	RequestedIndexes []string
 	EffectiveIndexes []string
@@ -316,7 +314,7 @@ type Job struct {
 	// inventory prefix sealed for this exact admission. Nil means the legacy
 	// knowledge-disabled path; a present zero-object summary is distinct and
 	// proves that configured admission observed an empty active authority.
-	KnowledgeSnapshot *opensplunkv1.KnowledgeSnapshotSummary
+	KnowledgeSnapshot *opensplunk.KnowledgeSnapshotSummary
 	State             State
 	Schema            *Schema
 	// ScannedRows and ScannedBytes are the exact executor-reported progress
@@ -703,11 +701,11 @@ func cloneJobSummary(source Job) Job {
 	return result
 }
 
-func cloneKnowledgeSnapshotSummary(source *opensplunkv1.KnowledgeSnapshotSummary) *opensplunkv1.KnowledgeSnapshotSummary {
+func cloneKnowledgeSnapshotSummary(source *opensplunk.KnowledgeSnapshotSummary) *opensplunk.KnowledgeSnapshotSummary {
 	if source == nil {
 		return nil
 	}
-	cloned, _ := proto.Clone(source).(*opensplunkv1.KnowledgeSnapshotSummary)
+	cloned, _ := proto.Clone(source).(*opensplunk.KnowledgeSnapshotSummary)
 	return cloned
 }
 

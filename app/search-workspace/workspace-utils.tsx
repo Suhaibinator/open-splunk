@@ -1,6 +1,6 @@
 import type { PointerEvent, ReactNode } from "react";
 
-import { SearchJobState } from "@/gen/ts/open_splunk/v1/search";
+import { SearchJobState } from "@/gen/ts/open_splunk/search";
 import { DEMO_EVENTS, type DemoEvent, type DemoScalar } from "@/lib/demo/search-data";
 import {
   isSplOffsetInQuotedValue,

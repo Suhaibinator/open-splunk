@@ -30,7 +30,7 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
@@ -57,8 +57,7 @@ const (
 	eventExpiresAtColumn          = 25
 	eventVisibilitySequenceColumn = 26
 
-	legacyReservationMetadataVersion = byte(3)
-	reservationMetadataVersion       = byte(4)
+	reservationMetadataVersion = byte(1)
 )
 
 var (
@@ -764,7 +763,7 @@ func (s *Store) storeAdmitted(
 		if !resumeOnly && errors.Is(err, visibility.ErrReservationGone) {
 			return ingest.StoreResult{}, &ingest.TransientStoreError{
 				Err:        fmt.Errorf("reserve fresh ClickHouse visibility sequence: %w", err),
-				Reason:     opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
+				Reason:     opensplunk.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
 				RetryAfter: s.retryAfter,
 			}
 		}
@@ -1229,7 +1228,7 @@ func (s *Store) noteTerminalRejection(metadataBytes uint64) {
 func (s *Store) finalizationFailure(operation string, err error) error {
 	return &ingest.TransientStoreError{
 		Err:        fmt.Errorf("%s: %w", operation, err),
-		Reason:     opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE,
+		Reason:     opensplunk.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE,
 		RetryAfter: s.retryAfter,
 	}
 }
@@ -1246,12 +1245,12 @@ func (s *Store) visibilityFailure(operation string, err error) error {
 	}
 	var quotaExceeded *ingestquota.ExceededError
 	if errors.As(err, &quotaExceeded) {
-		var throttleReason opensplunkv1.ThrottleReason
+		var throttleReason opensplunk.ThrottleReason
 		switch quotaExceeded.Scope.Kind {
 		case ingestquota.ScopeKindToken:
-			throttleReason = opensplunkv1.ThrottleReason_THROTTLE_REASON_TOKEN_QUOTA
+			throttleReason = opensplunk.ThrottleReason_THROTTLE_REASON_TOKEN_QUOTA
 		case ingestquota.ScopeKindIndex:
-			throttleReason = opensplunkv1.ThrottleReason_THROTTLE_REASON_INDEX_QUOTA
+			throttleReason = opensplunk.ThrottleReason_THROTTLE_REASON_INDEX_QUOTA
 		default:
 			return fmt.Errorf("%s: quota denial has an invalid scope: %w", operation, err)
 		}
@@ -1264,7 +1263,7 @@ func (s *Store) visibilityFailure(operation string, err error) error {
 		}
 		return &ingest.TransientStoreError{
 			Err:            fmt.Errorf("%s: %w", operation, err),
-			Reason:         opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED,
+			Reason:         opensplunk.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED,
 			ThrottleReason: throttleReason,
 			RetryAfter:     retryAfter,
 		}
@@ -1276,13 +1275,13 @@ func (s *Store) visibilityFailure(operation string, err error) error {
 		errors.Is(err, visibility.ErrAmbiguousBarrier) {
 		return &ingest.TransientStoreError{
 			Err:        fmt.Errorf("%s: %w", operation, err),
-			Reason:     opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
+			Reason:     opensplunk.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
 			RetryAfter: s.retryAfter,
 		}
 	}
 	return &ingest.TransientStoreError{
 		Err:        fmt.Errorf("%s: %w", operation, err),
-		Reason:     opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE,
+		Reason:     opensplunk.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE,
 		RetryAfter: s.retryAfter,
 	}
 }
@@ -1474,16 +1473,16 @@ func (s *Store) rowsForBatch(ctx context.Context, batch ingest.StoreBatch, prior
 		if !stored.IndexTime.Equal(batch.ReceivedAt) {
 			return nil, fmt.Errorf("store ClickHouse batch: event %d index time does not match its batch", i)
 		}
-		if event.GetEventTimeSource() < opensplunkv1.EventTimeSource_EVENT_TIME_SOURCE_PARSED ||
-			event.GetEventTimeSource() > opensplunkv1.EventTimeSource_EVENT_TIME_SOURCE_RECEIVED_AT_FALLBACK {
+		if event.GetEventTimeSource() < opensplunk.EventTimeSource_EVENT_TIME_SOURCE_PARSED ||
+			event.GetEventTimeSource() > opensplunk.EventTimeSource_EVENT_TIME_SOURCE_RECEIVED_AT_FALLBACK {
 			return nil, fmt.Errorf("store ClickHouse batch: event %d has invalid event_time_source", i)
 		}
-		if event.GetSeverity() < opensplunkv1.LogSeverity_LOG_SEVERITY_UNSPECIFIED ||
-			event.GetSeverity() > opensplunkv1.LogSeverity_LOG_SEVERITY_FATAL {
+		if event.GetSeverity() < opensplunk.LogSeverity_LOG_SEVERITY_UNSPECIFIED ||
+			event.GetSeverity() > opensplunk.LogSeverity_LOG_SEVERITY_FATAL {
 			return nil, fmt.Errorf("store ClickHouse batch: event %d has invalid severity", i)
 		}
-		if event.GetRawEncoding() != opensplunkv1.RawEncoding_RAW_ENCODING_UTF8 &&
-			event.GetRawEncoding() != opensplunkv1.RawEncoding_RAW_ENCODING_BINARY {
+		if event.GetRawEncoding() != opensplunk.RawEncoding_RAW_ENCODING_UTF8 &&
+			event.GetRawEncoding() != opensplunk.RawEncoding_RAW_ENCODING_BINARY {
 			return nil, fmt.Errorf("store ClickHouse batch: event %d has invalid raw_encoding", i)
 		}
 
@@ -1560,7 +1559,7 @@ func (s *Store) rowsForBatch(ctx context.Context, batch ingest.StoreBatch, prior
 	return rows, nil
 }
 
-func convertTypedObject(object *opensplunkv1.TypedObject) (*clickhousedriver.JSON, []string, []uint8, error) {
+func convertTypedObject(object *opensplunk.TypedObject) (*clickhousedriver.JSON, []string, []uint8, error) {
 	document := clickhousedriver.NewJSON()
 	if object == nil {
 		return document, []string{}, []uint8{}, nil
@@ -1587,7 +1586,7 @@ func convertTypedObject(object *opensplunkv1.TypedObject) (*clickhousedriver.JSO
 
 func flattenTypedObject(
 	document *clickhousedriver.JSON,
-	object *opensplunkv1.TypedObject,
+	object *opensplunk.TypedObject,
 	logicalPrefix, physicalPrefix []string,
 	fieldTypes map[string]eventfields.StoredValueType,
 	physicalPaths map[string]string,
@@ -1616,7 +1615,7 @@ func flattenTypedObject(
 
 		logicalPath := appendPath(logicalPrefix, field.GetName())
 		physicalPath := appendPath(physicalPrefix, eventfields.EncodePhysicalPathSegment(field.GetName()))
-		if nested, ok := field.GetValue().GetKind().(*opensplunkv1.TypedValue_ObjectValue); ok {
+		if nested, ok := field.GetValue().GetKind().(*opensplunk.TypedValue_ObjectValue); ok {
 			if nested.ObjectValue == nil {
 				return fmt.Errorf("typed object field %q has a nil object", field.GetName())
 			}
@@ -1655,80 +1654,80 @@ func flattenTypedObject(
 	return nil
 }
 
-func storedValueType(value *opensplunkv1.TypedValue) (eventfields.StoredValueType, error) {
+func storedValueType(value *opensplunk.TypedValue) (eventfields.StoredValueType, error) {
 	if value == nil || value.GetKind() == nil {
 		return 0, errors.New("typed value kind is required")
 	}
 	switch value.GetKind().(type) {
-	case *opensplunkv1.TypedValue_NullValue:
+	case *opensplunk.TypedValue_NullValue:
 		return eventfields.StoredValueTypeNull, nil
-	case *opensplunkv1.TypedValue_StringValue:
+	case *opensplunk.TypedValue_StringValue:
 		return eventfields.StoredValueTypeString, nil
-	case *opensplunkv1.TypedValue_Sint64Value:
+	case *opensplunk.TypedValue_Sint64Value:
 		return eventfields.StoredValueTypeSint64, nil
-	case *opensplunkv1.TypedValue_Uint64Value:
+	case *opensplunk.TypedValue_Uint64Value:
 		return eventfields.StoredValueTypeUint64, nil
-	case *opensplunkv1.TypedValue_DoubleValue:
+	case *opensplunk.TypedValue_DoubleValue:
 		return eventfields.StoredValueTypeDouble, nil
-	case *opensplunkv1.TypedValue_BoolValue:
+	case *opensplunk.TypedValue_BoolValue:
 		return eventfields.StoredValueTypeBool, nil
-	case *opensplunkv1.TypedValue_BytesValue:
+	case *opensplunk.TypedValue_BytesValue:
 		return eventfields.StoredValueTypeBytes, nil
-	case *opensplunkv1.TypedValue_TimestampValue:
+	case *opensplunk.TypedValue_TimestampValue:
 		return eventfields.StoredValueTypeTimestamp, nil
-	case *opensplunkv1.TypedValue_DurationValue:
+	case *opensplunk.TypedValue_DurationValue:
 		return eventfields.StoredValueTypeDuration, nil
-	case *opensplunkv1.TypedValue_ListValue:
+	case *opensplunk.TypedValue_ListValue:
 		return eventfields.StoredValueTypeList, nil
-	case *opensplunkv1.TypedValue_ObjectValue:
+	case *opensplunk.TypedValue_ObjectValue:
 		return eventfields.StoredValueTypeObject, nil
-	case *opensplunkv1.TypedValue_DecimalValue:
+	case *opensplunk.TypedValue_DecimalValue:
 		return eventfields.StoredValueTypeDecimal, nil
 	default:
 		return 0, errors.New("typed value kind is unsupported")
 	}
 }
 
-func typedValueToNative(value *opensplunkv1.TypedValue) (any, error) {
+func typedValueToNative(value *opensplunk.TypedValue) (any, error) {
 	if value == nil || value.GetKind() == nil {
 		return nil, errors.New("typed value kind is required")
 	}
 	switch kind := value.GetKind().(type) {
-	case *opensplunkv1.TypedValue_NullValue:
-		if kind.NullValue != opensplunkv1.NullValue_NULL_VALUE_NULL {
+	case *opensplunk.TypedValue_NullValue:
+		if kind.NullValue != opensplunk.NullValue_NULL_VALUE_NULL {
 			return nil, errors.New("typed null value is invalid")
 		}
 		return nil, nil
-	case *opensplunkv1.TypedValue_StringValue:
+	case *opensplunk.TypedValue_StringValue:
 		if !utf8.ValidString(kind.StringValue) {
 			return nil, errors.New("typed string is not valid UTF-8")
 		}
 		return kind.StringValue, nil
-	case *opensplunkv1.TypedValue_Sint64Value:
+	case *opensplunk.TypedValue_Sint64Value:
 		return kind.Sint64Value, nil
-	case *opensplunkv1.TypedValue_Uint64Value:
+	case *opensplunk.TypedValue_Uint64Value:
 		return kind.Uint64Value, nil
-	case *opensplunkv1.TypedValue_DoubleValue:
+	case *opensplunk.TypedValue_DoubleValue:
 		if math.IsNaN(kind.DoubleValue) || math.IsInf(kind.DoubleValue, 0) {
 			return nil, errors.New("typed double must be finite")
 		}
 		return kind.DoubleValue, nil
-	case *opensplunkv1.TypedValue_BoolValue:
+	case *opensplunk.TypedValue_BoolValue:
 		return kind.BoolValue, nil
-	case *opensplunkv1.TypedValue_BytesValue:
+	case *opensplunk.TypedValue_BytesValue:
 		return extendedValue("bytes/v1", base64.RawStdEncoding.EncodeToString(kind.BytesValue)), nil
-	case *opensplunkv1.TypedValue_TimestampValue:
+	case *opensplunk.TypedValue_TimestampValue:
 		if kind.TimestampValue == nil || kind.TimestampValue.CheckValid() != nil {
 			return nil, errors.New("typed timestamp is invalid")
 		}
 		return extendedValue("timestamp/v1", kind.TimestampValue.AsTime().UTC().Format(time.RFC3339Nano)), nil
-	case *opensplunkv1.TypedValue_DurationValue:
+	case *opensplunk.TypedValue_DurationValue:
 		if !ingest.DurationFitsResultRange(kind.DurationValue) {
 			return nil, errors.New("typed duration is invalid")
 		}
 		encoded := strconv.FormatInt(kind.DurationValue.GetSeconds(), 10) + ":" + strconv.FormatInt(int64(kind.DurationValue.GetNanos()), 10)
 		return extendedValue("duration/v1", encoded), nil
-	case *opensplunkv1.TypedValue_ListValue:
+	case *opensplunk.TypedValue_ListValue:
 		if kind.ListValue == nil {
 			return nil, errors.New("typed list is nil")
 		}
@@ -1745,7 +1744,7 @@ func typedValueToNative(value *opensplunkv1.TypedValue) (any, error) {
 			items = append(items, dynamic)
 		}
 		return clickhousedriver.NewDynamicWithType(items, "Array(Dynamic)"), nil
-	case *opensplunkv1.TypedValue_ObjectValue:
+	case *opensplunk.TypedValue_ObjectValue:
 		if kind.ObjectValue == nil {
 			return nil, errors.New("typed object is nil")
 		}
@@ -1754,19 +1753,19 @@ func typedValueToNative(value *opensplunkv1.TypedValue) (any, error) {
 			return nil, err
 		}
 		return clickhousedriver.NewDynamicWithType(object, "Map(String, Dynamic)"), nil
-	case *opensplunkv1.TypedValue_DecimalValue:
+	case *opensplunk.TypedValue_DecimalValue:
 		if kind.DecimalValue == nil || !decimalValuePattern.MatchString(kind.DecimalValue.GetValue()) {
 			return nil, errors.New("typed decimal is invalid")
 		}
 		return extendedValue("decimal/v1", kind.DecimalValue.GetValue()), nil
-	case *opensplunkv1.TypedValue_MissingValue:
+	case *opensplunk.TypedValue_MissingValue:
 		return nil, errors.New("missing typed value cannot be stored")
 	default:
 		return nil, fmt.Errorf("unsupported typed value kind %T", kind)
 	}
 }
 
-func typedObjectToDynamicMap(object *opensplunkv1.TypedObject) (map[string]clickhousedriver.Dynamic, error) {
+func typedObjectToDynamicMap(object *opensplunk.TypedObject) (map[string]clickhousedriver.Dynamic, error) {
 	result := make(map[string]clickhousedriver.Dynamic, len(object.GetFields()))
 	for i, field := range object.GetFields() {
 		if field == nil {
@@ -1861,22 +1860,7 @@ func eventExpirationForMetadata(
 	if metadataVersion == reservationMetadataVersion {
 		return eventExpiration(indexTime, retention)
 	}
-	if metadataVersion != legacyReservationMetadataVersion {
-		return time.Time{}, errors.New("unsupported retention metadata version")
-	}
-	// Version 3 admitted arbitrary positive nanosecond durations and relied on
-	// the native DateTime64(3) encoder to truncate them. Preserve that exact
-	// pre-upgrade replay contract so an ambiguous reservation cannot wedge the
-	// contiguous visibility cutoff. New reservations always use version 4.
-	if retention <= 0 {
-		return time.Time{}, errors.New("duration must be positive")
-	}
-	indexTime = eventStoreMillis(indexTime)
-	expiresAt := indexTime.Add(retention)
-	if !expiresAt.After(indexTime) {
-		return time.Time{}, errors.New("expiration overflows")
-	}
-	return expiresAt, nil
+	return time.Time{}, errors.New("unsupported retention metadata version; provision fresh ingestion state")
 }
 
 func cloneOptionalString(value *string) any {
@@ -2017,7 +2001,7 @@ type reservationMetadata struct {
 	RetentionByIndex   map[string]time.Duration
 	BatchSequence      uint64
 	OriginalEventCount uint32
-	RejectedEvents     []*opensplunkv1.EventRejection
+	RejectedEvents     []*opensplunk.EventRejection
 }
 
 func encodeReservationMetadata(rows [][]any, batch ingest.StoreBatch) ([]byte, error) {
@@ -2122,10 +2106,9 @@ func decodeReservationMetadata(metadata []byte) (reservationMetadata, error) {
 	header := make([]byte, 5)
 	if _, err := io.ReadFull(reader, header); err != nil ||
 		!bytes.Equal(header[:4], []byte{'O', 'S', 'V', 'M'}) ||
-		(header[4] != legacyReservationMetadataVersion && header[4] != reservationMetadataVersion) {
-		return reservationMetadata{}, errors.New("visibility reservation metadata has an invalid version")
+		header[4] != reservationMetadataVersion {
+		return reservationMetadata{}, errors.New("visibility reservation metadata has an unsupported version; provision fresh ingestion state")
 	}
-	version := header[4]
 	readUint64 := func() (uint64, error) {
 		var number [8]byte
 		if _, err := io.ReadFull(reader, number[:]); err != nil {
@@ -2150,7 +2133,7 @@ func decodeReservationMetadata(metadata []byte) (reservationMetadata, error) {
 		}
 		duration, err := readUint64()
 		if err != nil || duration == 0 || duration > math.MaxInt64 ||
-			(version == reservationMetadataVersion && time.Duration(duration)%time.Millisecond != 0) {
+			time.Duration(duration)%time.Millisecond != 0 {
 			return reservationMetadata{}, errors.New("visibility reservation metadata has an invalid retention duration")
 		}
 		index := string(name)
@@ -2182,7 +2165,7 @@ func decodeReservationMetadata(metadata []byte) (reservationMetadata, error) {
 	if rejectionCount > originalEventCount || uint64(rejectionCount) > uint64(reader.Len())/9 {
 		return reservationMetadata{}, errors.New("visibility reservation metadata has an invalid rejection count")
 	}
-	rejections := make([]*opensplunkv1.EventRejection, 0, rejectionCount)
+	rejections := make([]*opensplunk.EventRejection, 0, rejectionCount)
 	seenRejections := make(map[uint32]struct{}, rejectionCount)
 	for index := range rejectionCount {
 		length, err := readUint64()
@@ -2194,7 +2177,7 @@ func decodeReservationMetadata(metadata []byte) (reservationMetadata, error) {
 		if _, err := io.ReadFull(reader, encoded); err != nil {
 			return reservationMetadata{}, errors.New("visibility reservation metadata is truncated")
 		}
-		rejection := new(opensplunkv1.EventRejection)
+		rejection := new(opensplunk.EventRejection)
 		if err := (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(encoded, rejection); err != nil ||
 			rejection.GetEventIndex() >= originalEventCount {
 			return reservationMetadata{}, fmt.Errorf("visibility reservation metadata rejection %d is invalid", index)
@@ -2209,7 +2192,7 @@ func decodeReservationMetadata(metadata []byte) (reservationMetadata, error) {
 		return reservationMetadata{}, errors.New("visibility reservation metadata has trailing bytes")
 	}
 	return reservationMetadata{
-		Version:            version,
+		Version:            reservationMetadataVersion,
 		RetentionByIndex:   retentionByIndex,
 		BatchSequence:      batchSequence,
 		OriginalEventCount: originalEventCount,
@@ -2261,20 +2244,20 @@ func (s *Store) classifyError(err error) error {
 	return &ingest.TransientStoreError{Err: err, Reason: reason, RetryAfter: s.retryAfter}
 }
 
-func transientStoreReason(err error) (opensplunkv1.RetryBatchReason, bool) {
+func transientStoreReason(err error) (opensplunk.RetryBatchReason, bool) {
 	if errors.Is(err, clickhousedriver.ErrAcquireConnTimeout) {
-		return opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY, true
+		return opensplunk.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY, true
 	}
 	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
 		errors.Is(err, clickhousedriver.ErrConnectionClosed) ||
 		errors.Is(err, sqldriver.ErrBadConn) ||
 		errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET) ||
 		errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ETIMEDOUT) {
-		return opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE, true
+		return opensplunk.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE, true
 	}
 	var networkError net.Error
 	if errors.As(err, &networkError) {
-		return opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE, true
+		return opensplunk.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE, true
 	}
 	var operationError *clickhousedriver.OpError
 	if errors.As(err, &operationError) && operationError.Err != nil {
@@ -2284,17 +2267,17 @@ func transientStoreReason(err error) (opensplunkv1.RetryBatchReason, bool) {
 	}
 	var exception *clickhousedriver.Exception
 	if !errors.As(err, &exception) {
-		return opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_UNSPECIFIED, false
+		return opensplunk.RetryBatchReason_RETRY_BATCH_REASON_UNSPECIFIED, false
 	}
 	switch exception.Code {
 	case 364:
-		return opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED, true
+		return opensplunk.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED, true
 	case 202, 203, 241, 252, 745:
-		return opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY, true
+		return opensplunk.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY, true
 	case 95, 96, 159, 209, 210, 225, 242, 243, 279, 285, 286, 319, 341, 999:
-		return opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE, true
+		return opensplunk.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE, true
 	default:
-		return opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_UNSPECIFIED, false
+		return opensplunk.RetryBatchReason_RETRY_BATCH_REASON_UNSPECIFIED, false
 	}
 }
 

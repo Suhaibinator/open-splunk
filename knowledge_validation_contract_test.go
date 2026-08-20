@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -19,7 +19,7 @@ import (
 func TestKnowledgeValidationContractPinsCandidateScopedWireLayout(t *testing.T) {
 	t.Parallel()
 
-	file := opensplunkv1.File_open_splunk_v1_knowledge_api_proto
+	file := opensplunk.File_open_splunk_knowledge_api_proto
 	intent := file.Enums().ByName("KnowledgeValidationIntent")
 	if intent == nil || intent.Values().Len() != 3 {
 		t.Fatalf("KnowledgeValidationIntent descriptor = %v, want three values", intent)
@@ -57,11 +57,11 @@ func TestKnowledgeValidationContractPinsCandidateScopedWireLayout(t *testing.T) 
 	if request == nil || request.Fields().Len() != 5 {
 		t.Fatalf("ValidateKnowledgeObjectRequest descriptor = %v, want five fields", request)
 	}
-	definition := validationContractRequireField(t, request, "definition", 1, protoreflect.MessageKind, "open_splunk.v1.KnowledgeObjectDefinition")
+	definition := validationContractRequireField(t, request, "definition", 1, protoreflect.MessageKind, "open_splunk.KnowledgeObjectDefinition")
 	objectID := validationContractRequireField(t, request, "knowledge_object_id", 2, protoreflect.StringKind, "")
 	expectedVersion := validationContractRequireField(t, request, "expected_version", 3, protoreflect.Uint64Kind, "")
 	updateMask := validationContractRequireField(t, request, "update_mask", 4, protoreflect.MessageKind, "google.protobuf.FieldMask")
-	intentField := validationContractRequireField(t, request, "intent", 5, protoreflect.EnumKind, "open_splunk.v1.KnowledgeValidationIntent")
+	intentField := validationContractRequireField(t, request, "intent", 5, protoreflect.EnumKind, "open_splunk.KnowledgeValidationIntent")
 	if !objectID.HasPresence() || !objectID.HasOptionalKeyword() ||
 		!expectedVersion.HasPresence() || !expectedVersion.HasOptionalKeyword() {
 		t.Error("create/update scalar presence is not pinned by proto3 optional fields")
@@ -96,7 +96,7 @@ func TestKnowledgeValidationContractPinsCandidateScopedWireLayout(t *testing.T) 
 		t.Fatalf("PreviewKnowledgeObjectRequest descriptor = %v, want six fields", previewRequest)
 	}
 	retainedJobID := validationContractRequireField(t, previewRequest, "retained_search_job_id", 1, protoreflect.StringKind, "")
-	previewDefinition := validationContractRequireField(t, previewRequest, "definition", 2, protoreflect.MessageKind, "open_splunk.v1.KnowledgeObjectDefinition")
+	previewDefinition := validationContractRequireField(t, previewRequest, "definition", 2, protoreflect.MessageKind, "open_splunk.KnowledgeObjectDefinition")
 	previewObjectID := validationContractRequireField(t, previewRequest, "knowledge_object_id", 3, protoreflect.StringKind, "")
 	previewExpectedVersion := validationContractRequireField(t, previewRequest, "expected_version", 4, protoreflect.Uint64Kind, "")
 	previewUpdateMask := validationContractRequireField(t, previewRequest, "update_mask", 5, protoreflect.MessageKind, "google.protobuf.FieldMask")
@@ -146,8 +146,8 @@ func TestKnowledgeValidationContractPinsCandidateScopedWireLayout(t *testing.T) 
 	if dependency == nil || dependency.Fields().Len() != 2 {
 		t.Fatalf("KnowledgeValidationDependency descriptor = %v, want two fields", dependency)
 	}
-	validationContractRequireField(t, dependency, "target", 1, protoreflect.MessageKind, "open_splunk.v1.KnowledgeManagementObjectVersionIdentity")
-	validationContractRequireField(t, dependency, "role", 2, protoreflect.EnumKind, "open_splunk.v1.KnowledgeDependencyRole")
+	validationContractRequireField(t, dependency, "target", 1, protoreflect.MessageKind, "open_splunk.KnowledgeManagementObjectVersionIdentity")
+	validationContractRequireField(t, dependency, "role", 2, protoreflect.EnumKind, "open_splunk.KnowledgeDependencyRole")
 	validationContractRequireProtoComments(t, "message KnowledgeValidationDependency {",
 		"excludes a source identity, definition digests",
 		"Only ACTIVE_PUBLICATION may",
@@ -162,7 +162,7 @@ func TestKnowledgeValidationContractPinsCandidateScopedWireLayout(t *testing.T) 
 		t.Fatalf("KnowledgeValidationDiagnostic descriptor = %v, want two fields", diagnostic)
 	}
 	validationContractRequireField(t, diagnostic, "field_path", 1, protoreflect.StringKind, "")
-	validationContractRequireField(t, diagnostic, "diagnostic", 2, protoreflect.MessageKind, "open_splunk.v1.Diagnostic")
+	validationContractRequireField(t, diagnostic, "diagnostic", 2, protoreflect.MessageKind, "open_splunk.Diagnostic")
 	validationContractRequireProtoComments(t, "message KnowledgeValidationDiagnostic {",
 		"offsets are relative to the UTF-8 scalar value at field_path",
 		"present source_range requires",
@@ -261,13 +261,13 @@ func TestKnowledgeValidationContractPinsCandidateScopedWireLayout(t *testing.T) 
 		}
 	}
 	validationContractRequireField(t, result, "valid", 1, protoreflect.BoolKind, "")
-	validationContractRequireField(t, result, "object_type", 2, protoreflect.EnumKind, "open_splunk.v1.KnowledgeObjectType")
-	normalized := validationContractRequireField(t, result, "normalized_definition", 3, protoreflect.MessageKind, "open_splunk.v1.KnowledgeObjectDefinition")
+	validationContractRequireField(t, result, "object_type", 2, protoreflect.EnumKind, "open_splunk.KnowledgeObjectType")
+	normalized := validationContractRequireField(t, result, "normalized_definition", 3, protoreflect.MessageKind, "open_splunk.KnowledgeObjectDefinition")
 	digest := validationContractRequireField(t, result, "definition_sha256", 4, protoreflect.BytesKind, "")
-	fieldViolations := validationContractRequireField(t, result, "field_violations", 5, protoreflect.MessageKind, "open_splunk.v1.FieldViolation")
-	resourcesField := validationContractRequireField(t, result, "resources", 8, protoreflect.MessageKind, "open_splunk.v1.KnowledgeResourceEstimate")
-	dependencies := validationContractRequireField(t, result, "dependencies", 9, protoreflect.MessageKind, "open_splunk.v1.KnowledgeValidationDependency")
-	diagnostics := validationContractRequireField(t, result, "diagnostics", 10, protoreflect.MessageKind, "open_splunk.v1.KnowledgeValidationDiagnostic")
+	fieldViolations := validationContractRequireField(t, result, "field_violations", 5, protoreflect.MessageKind, "open_splunk.FieldViolation")
+	resourcesField := validationContractRequireField(t, result, "resources", 8, protoreflect.MessageKind, "open_splunk.KnowledgeResourceEstimate")
+	dependencies := validationContractRequireField(t, result, "dependencies", 9, protoreflect.MessageKind, "open_splunk.KnowledgeValidationDependency")
+	diagnostics := validationContractRequireField(t, result, "diagnostics", 10, protoreflect.MessageKind, "open_splunk.KnowledgeValidationDiagnostic")
 	violationsTruncated := validationContractRequireField(t, result, "field_violations_truncated", 11, protoreflect.BoolKind, "")
 	diagnosticsTruncated := validationContractRequireField(t, result, "diagnostics_truncated", 12, protoreflect.BoolKind, "")
 	if !normalized.HasPresence() || !normalized.HasOptionalKeyword() ||
@@ -359,7 +359,7 @@ func TestKnowledgeValidationContractPinsCandidateScopedWireLayout(t *testing.T) 
 	if response == nil || response.Fields().Len() != 2 {
 		t.Fatalf("ValidateKnowledgeObjectResponse descriptor = %v, want two fields", response)
 	}
-	validationContractRequireField(t, response, "result", 1, protoreflect.MessageKind, "open_splunk.v1.KnowledgeValidationResult")
+	validationContractRequireField(t, response, "result", 1, protoreflect.MessageKind, "open_splunk.KnowledgeValidationResult")
 	validationContractRequireField(t, response, "tenant_catalog_revision", 2, protoreflect.Uint64Kind, "")
 	resultField := response.Fields().ByName("result")
 	revisionField := response.Fields().ByName("tenant_catalog_revision")
@@ -393,7 +393,7 @@ func TestKnowledgeValidationContractPinsCandidateScopedWireLayout(t *testing.T) 
 	if previewResponse == nil {
 		t.Fatal("PreviewKnowledgeObjectResponse descriptor is missing")
 	}
-	validationContractRequireField(t, previewResponse, "validation", 1, protoreflect.MessageKind, "open_splunk.v1.KnowledgeValidationResult")
+	validationContractRequireField(t, previewResponse, "validation", 1, protoreflect.MessageKind, "open_splunk.KnowledgeValidationResult")
 	validationContractRequireField(t, previewResponse, "tenant_catalog_revision", 7, protoreflect.Uint64Kind, "")
 	validationContractRequireProtoComments(t, "message PreviewKnowledgeObjectResponse {",
 		"no independent validation intent",
@@ -413,11 +413,11 @@ func TestKnowledgeValidationContractPreservesPresenceAndReservedDraftWire(t *tes
 
 	emptyID := ""
 	zeroVersion := uint64(0)
-	update := &opensplunkv1.ValidateKnowledgeObjectRequest{
+	update := &opensplunk.ValidateKnowledgeObjectRequest{
 		KnowledgeObjectId: &emptyID,
 		ExpectedVersion:   &zeroVersion,
 		UpdateMask:        &fieldmaskpb.FieldMask{},
-		Intent:            opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION,
+		Intent:            opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION,
 	}
 	updateWire, err := proto.MarshalOptions{Deterministic: true}.Marshal(update)
 	if err != nil {
@@ -426,7 +426,7 @@ func TestKnowledgeValidationContractPreservesPresenceAndReservedDraftWire(t *tes
 	if got := validationContractWireFieldNumbers(t, updateWire); !slices.Equal(got, []protowire.Number{2, 3, 4, 5}) {
 		t.Fatalf("present-empty update wire fields = %v, want [2 3 4 5]", got)
 	}
-	var decodedUpdate opensplunkv1.ValidateKnowledgeObjectRequest
+	var decodedUpdate opensplunk.ValidateKnowledgeObjectRequest
 	if err := proto.Unmarshal(updateWire, &decodedUpdate); err != nil {
 		t.Fatalf("unmarshal present-empty update envelope: %v", err)
 	}
@@ -436,9 +436,9 @@ func TestKnowledgeValidationContractPreservesPresenceAndReservedDraftWire(t *tes
 		t.Fatalf("present-empty update envelope lost presence: %+v", &decodedUpdate)
 	}
 
-	create := &opensplunkv1.ValidateKnowledgeObjectRequest{
+	create := &opensplunk.ValidateKnowledgeObjectRequest{
 		Definition: validationContractMinimalDefinition(),
-		Intent:     opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+		Intent:     opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
 	}
 	createWire, err := proto.MarshalOptions{Deterministic: true}.Marshal(create)
 	if err != nil {
@@ -447,7 +447,7 @@ func TestKnowledgeValidationContractPreservesPresenceAndReservedDraftWire(t *tes
 	if got := validationContractWireFieldNumbers(t, createWire); !slices.Equal(got, []protowire.Number{1, 5}) {
 		t.Fatalf("create wire fields = %v, want definition/intent fields [1 5]", got)
 	}
-	var decodedCreate opensplunkv1.ValidateKnowledgeObjectRequest
+	var decodedCreate opensplunk.ValidateKnowledgeObjectRequest
 	if err := proto.Unmarshal(createWire, &decodedCreate); err != nil {
 		t.Fatalf("unmarshal create envelope: %v", err)
 	}
@@ -456,7 +456,7 @@ func TestKnowledgeValidationContractPreservesPresenceAndReservedDraftWire(t *tes
 		t.Fatalf("create envelope acquired update presence: %+v", &decodedCreate)
 	}
 
-	previewCreate := &opensplunkv1.PreviewKnowledgeObjectRequest{
+	previewCreate := &opensplunk.PreviewKnowledgeObjectRequest{
 		RetainedSearchJobId: "job-preview-create",
 		Definition:          validationContractMinimalDefinition(),
 	}
@@ -467,7 +467,7 @@ func TestKnowledgeValidationContractPreservesPresenceAndReservedDraftWire(t *tes
 	if got := validationContractWireFieldNumbers(t, previewCreateWire); !slices.Equal(got, []protowire.Number{1, 2}) {
 		t.Fatalf("Preview create wire fields = %v, want retained job/definition fields [1 2]", got)
 	}
-	var decodedPreviewCreate opensplunkv1.PreviewKnowledgeObjectRequest
+	var decodedPreviewCreate opensplunk.PreviewKnowledgeObjectRequest
 	if err := proto.Unmarshal(previewCreateWire, &decodedPreviewCreate); err != nil {
 		t.Fatalf("unmarshal Preview create envelope: %v", err)
 	}
@@ -479,7 +479,7 @@ func TestKnowledgeValidationContractPreservesPresenceAndReservedDraftWire(t *tes
 	}
 
 	zeroRows := uint32(0)
-	previewPresentEmptyUpdate := &opensplunkv1.PreviewKnowledgeObjectRequest{
+	previewPresentEmptyUpdate := &opensplunk.PreviewKnowledgeObjectRequest{
 		RetainedSearchJobId: "job-preview-update",
 		Definition:          validationContractMinimalDefinition(),
 		KnowledgeObjectId:   &emptyID,
@@ -497,7 +497,7 @@ func TestKnowledgeValidationContractPreservesPresenceAndReservedDraftWire(t *tes
 	) {
 		t.Fatalf("present-empty Preview update wire fields = %v, want [1 2 3 4 5 6]", got)
 	}
-	var decodedPreviewUpdate opensplunkv1.PreviewKnowledgeObjectRequest
+	var decodedPreviewUpdate opensplunk.PreviewKnowledgeObjectRequest
 	if err := proto.Unmarshal(previewPresentEmptyUpdateWire, &decodedPreviewUpdate); err != nil {
 		t.Fatalf("unmarshal present-empty Preview update envelope: %v", err)
 	}
@@ -508,7 +508,7 @@ func TestKnowledgeValidationContractPreservesPresenceAndReservedDraftWire(t *tes
 		t.Fatalf("present-empty Preview update envelope lost presence: %+v", &decodedPreviewUpdate)
 	}
 
-	resourceEstimate := &opensplunkv1.KnowledgeResourceEstimate{
+	resourceEstimate := &opensplunk.KnowledgeResourceEstimate{
 		SelectorPatterns:          1,
 		NormalizedDefinitionBytes: 2,
 		DependencyNodes:           3,
@@ -533,7 +533,7 @@ func TestKnowledgeValidationContractPreservesPresenceAndReservedDraftWire(t *tes
 	) {
 		t.Fatalf("candidate resource wire fields = %v, want append-only [1..10 12 13 14]", got)
 	}
-	var decodedResources opensplunkv1.KnowledgeResourceEstimate
+	var decodedResources opensplunk.KnowledgeResourceEstimate
 	if err := proto.Unmarshal(resourceWire, &decodedResources); err != nil {
 		t.Fatalf("unmarshal complete candidate resource estimate: %v", err)
 	}
@@ -541,7 +541,7 @@ func TestKnowledgeValidationContractPreservesPresenceAndReservedDraftWire(t *tes
 		t.Fatalf("candidate resource wire round trip = %+v, want %+v", &decodedResources, resourceEstimate)
 	}
 	emptyResourceWire, err := proto.MarshalOptions{Deterministic: true}.Marshal(
-		&opensplunkv1.KnowledgeResourceEstimate{},
+		&opensplunk.KnowledgeResourceEstimate{},
 	)
 	if err != nil {
 		t.Fatalf("marshal empty candidate resource estimate: %v", err)
@@ -550,11 +550,11 @@ func TestKnowledgeValidationContractPreservesPresenceAndReservedDraftWire(t *tes
 		t.Fatalf("zero-default candidate resource wire = %x, want empty", emptyResourceWire)
 	}
 
-	legacyDiagnostic, err := proto.Marshal(&opensplunkv1.Diagnostic{Code: "LEGACY_UNLOCATED"})
+	legacyDiagnostic, err := proto.Marshal(&opensplunk.Diagnostic{Code: "LEGACY_UNLOCATED"})
 	if err != nil {
 		t.Fatalf("marshal legacy diagnostic: %v", err)
 	}
-	legacyDependency, err := proto.Marshal(&opensplunkv1.KnowledgeObjectDependency{})
+	legacyDependency, err := proto.Marshal(&opensplunk.KnowledgeObjectDependency{})
 	if err != nil {
 		t.Fatalf("marshal legacy dependency: %v", err)
 	}
@@ -568,7 +568,7 @@ func TestKnowledgeValidationContractPreservesPresenceAndReservedDraftWire(t *tes
 	legacyWire = protowire.AppendTag(legacyWire, 8, protowire.BytesType)
 	legacyWire = protowire.AppendBytes(legacyWire, legacyResourceUnknown)
 
-	var decodedLegacy opensplunkv1.KnowledgeValidationResult
+	var decodedLegacy opensplunk.KnowledgeValidationResult
 	if err := proto.Unmarshal(legacyWire, &decodedLegacy); err != nil {
 		t.Fatalf("unmarshal pre-route draft result: %v", err)
 	}
@@ -586,7 +586,7 @@ func TestKnowledgeValidationContractPreservesPresenceAndReservedDraftWire(t *tes
 	if err != nil {
 		t.Fatalf("remarshal pre-route draft result: %v", err)
 	}
-	var decodedAgain opensplunkv1.KnowledgeValidationResult
+	var decodedAgain opensplunk.KnowledgeValidationResult
 	if err := proto.Unmarshal(roundTrip, &decodedAgain); err != nil {
 		t.Fatalf("re-unmarshal pre-route draft result: %v", err)
 	}
@@ -596,19 +596,19 @@ func TestKnowledgeValidationContractPreservesPresenceAndReservedDraftWire(t *tes
 		t.Fatal("reserved pre-route draft fields did not survive a Go wire round trip")
 	}
 
-	result := &opensplunkv1.KnowledgeValidationResult{
-		Dependencies: []*opensplunkv1.KnowledgeValidationDependency{{
-			Target: &opensplunkv1.KnowledgeManagementObjectVersionIdentity{
+	result := &opensplunk.KnowledgeValidationResult{
+		Dependencies: []*opensplunk.KnowledgeValidationDependency{{
+			Target: &opensplunk.KnowledgeManagementObjectVersionIdentity{
 				KnowledgeObjectId: "ko-target",
 				Version:           7,
 			},
-			Role: opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
+			Role: opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
 		}},
-		Diagnostics: []*opensplunkv1.KnowledgeValidationDiagnostic{{
+		Diagnostics: []*opensplunk.KnowledgeValidationDiagnostic{{
 			FieldPath: "field_extraction.regex.pattern",
-			Diagnostic: &opensplunkv1.Diagnostic{
+			Diagnostic: &opensplunk.Diagnostic{
 				Code:     "SPL_EXAMPLE",
-				Severity: opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_WARNING,
+				Severity: opensplunk.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_WARNING,
 				Message:  "example",
 			},
 		}},
@@ -627,9 +627,9 @@ func TestKnowledgeValidationContractPreservesPresenceAndReservedDraftWire(t *tes
 func TestKnowledgeValidationContractPinsAggregateTextBudgetBoundaries(t *testing.T) {
 	t.Parallel()
 
-	violations := make([]*opensplunkv1.FieldViolation, 64)
+	violations := make([]*opensplunk.FieldViolation, 64)
 	for index := range violations {
-		violations[index] = &opensplunkv1.FieldViolation{
+		violations[index] = &opensplunk.FieldViolation{
 			FieldPath: fmt.Sprintf("p%03d", index),
 			Code:      "C",
 			Message:   strings.Repeat("v", 4091),
@@ -657,13 +657,13 @@ func TestKnowledgeValidationContractPinsAggregateTextBudgetBoundaries(t *testing
 		)
 	}
 
-	diagnostics := make([]*opensplunkv1.KnowledgeValidationDiagnostic, 192)
+	diagnostics := make([]*opensplunk.KnowledgeValidationDiagnostic, 192)
 	for index := range diagnostics {
-		diagnostics[index] = &opensplunkv1.KnowledgeValidationDiagnostic{
+		diagnostics[index] = &opensplunk.KnowledgeValidationDiagnostic{
 			FieldPath: fmt.Sprintf("p%03d", index),
-			Diagnostic: &opensplunkv1.Diagnostic{
+			Diagnostic: &opensplunk.Diagnostic{
 				Code:        "C",
-				Severity:    opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_WARNING,
+				Severity:    opensplunk.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_WARNING,
 				Message:     strings.Repeat("d", 4091),
 				Suggestions: []string{},
 			},
@@ -691,11 +691,11 @@ func TestKnowledgeValidationContractPinsAggregateTextBudgetBoundaries(t *testing
 		)
 	}
 
-	withSuggestions := []*opensplunkv1.KnowledgeValidationDiagnostic{{
+	withSuggestions := []*opensplunk.KnowledgeValidationDiagnostic{{
 		FieldPath: "p",
-		Diagnostic: &opensplunkv1.Diagnostic{
+		Diagnostic: &opensplunk.Diagnostic{
 			Code:        "C",
-			Severity:    opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_WARNING,
+			Severity:    opensplunk.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_WARNING,
 			Message:     "M",
 			Suggestions: []string{"one", "é"},
 		},
@@ -705,38 +705,38 @@ func TestKnowledgeValidationContractPinsAggregateTextBudgetBoundaries(t *testing
 		t.Fatalf("diagnostic suggestion charge = retained:%d bytes:%d truncated:%t, want 1/8/false", retained, textBytes, truncated)
 	}
 
-	duplicateViolation := []*opensplunkv1.FieldViolation{violations[0], proto.Clone(violations[0]).(*opensplunkv1.FieldViolation)}
+	duplicateViolation := []*opensplunk.FieldViolation{violations[0], proto.Clone(violations[0]).(*opensplunk.FieldViolation)}
 	retained, _, truncated = validationContractFieldViolationPrefix(duplicateViolation)
 	if retained != 1 || truncated {
 		t.Fatalf("duplicate field violations = retained:%d truncated:%t, want 1/false", retained, truncated)
 	}
 
-	warningFill := make([]*opensplunkv1.KnowledgeValidationDiagnostic, 192)
+	warningFill := make([]*opensplunk.KnowledgeValidationDiagnostic, 192)
 	for index := range warningFill {
-		warningFill[index] = &opensplunkv1.KnowledgeValidationDiagnostic{
+		warningFill[index] = &opensplunk.KnowledgeValidationDiagnostic{
 			FieldPath: fmt.Sprintf("w%03d", index),
-			Diagnostic: &opensplunkv1.Diagnostic{
+			Diagnostic: &opensplunk.Diagnostic{
 				Code:     "W",
-				Severity: opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_WARNING,
+				Severity: opensplunk.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_WARNING,
 				Message:  strings.Repeat("w", 4091),
 			},
 		}
 	}
-	errorDiagnostic := &opensplunkv1.KnowledgeValidationDiagnostic{
+	errorDiagnostic := &opensplunk.KnowledgeValidationDiagnostic{
 		FieldPath: "z",
-		Diagnostic: &opensplunkv1.Diagnostic{
+		Diagnostic: &opensplunk.Diagnostic{
 			Code:     "E",
-			Severity: opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR,
+			Severity: opensplunk.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR,
 			Message:  "invalid",
 		},
 	}
 	warningFill = append(
 		warningFill,
 		errorDiagnostic,
-		proto.Clone(errorDiagnostic).(*opensplunkv1.KnowledgeValidationDiagnostic),
+		proto.Clone(errorDiagnostic).(*opensplunk.KnowledgeValidationDiagnostic),
 	)
 	canonical := validationContractCanonicalDiagnostics(warningFill)
-	if len(canonical) != 193 || canonical[0].GetDiagnostic().GetSeverity() != opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR {
+	if len(canonical) != 193 || canonical[0].GetDiagnostic().GetSeverity() != opensplunk.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR {
 		t.Fatalf("ERROR-first deduplicated diagnostics = len:%d first:%v", len(canonical), canonical[0].GetDiagnostic().GetSeverity())
 	}
 	retained, textBytes, truncated = validationContractDiagnosticPrefix(warningFill)
@@ -750,9 +750,9 @@ func TestKnowledgeValidationContractPinsAggregateTextBudgetBoundaries(t *testing
 		)
 	}
 
-	tinyViolations := make([]*opensplunkv1.FieldViolation, validationContractMaximumIssues+1)
+	tinyViolations := make([]*opensplunk.FieldViolation, validationContractMaximumIssues+1)
 	for index := range tinyViolations {
-		tinyViolations[index] = &opensplunkv1.FieldViolation{
+		tinyViolations[index] = &opensplunk.FieldViolation{
 			FieldPath: fmt.Sprintf("c%03d", index),
 			Code:      "C",
 			Message:   "m",
@@ -767,13 +767,13 @@ func TestKnowledgeValidationContractPinsAggregateTextBudgetBoundaries(t *testing
 		t.Fatalf("257 tiny violations = retained:%d bytes:%d truncated:%t", retained, textBytes, truncated)
 	}
 
-	tinyDiagnostics := make([]*opensplunkv1.KnowledgeValidationDiagnostic, validationContractMaximumIssues+1)
+	tinyDiagnostics := make([]*opensplunk.KnowledgeValidationDiagnostic, validationContractMaximumIssues+1)
 	for index := range tinyDiagnostics {
-		tinyDiagnostics[index] = &opensplunkv1.KnowledgeValidationDiagnostic{
+		tinyDiagnostics[index] = &opensplunk.KnowledgeValidationDiagnostic{
 			FieldPath: fmt.Sprintf("c%03d", index),
-			Diagnostic: &opensplunkv1.Diagnostic{
+			Diagnostic: &opensplunk.Diagnostic{
 				Code:     "C",
-				Severity: opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_WARNING,
+				Severity: opensplunk.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_WARNING,
 				Message:  "m",
 			},
 		}
@@ -808,18 +808,18 @@ func TestKnowledgeValidationContractPinsExpectedVersionSignedBoundary(t *testing
 
 			objectID := "ko-version-boundary"
 			version := test.version
-			request := &opensplunkv1.ValidateKnowledgeObjectRequest{
+			request := &opensplunk.ValidateKnowledgeObjectRequest{
 				Definition:        validationContractMinimalDefinition(),
 				KnowledgeObjectId: &objectID,
 				ExpectedVersion:   &version,
 				UpdateMask:        &fieldmaskpb.FieldMask{Paths: []string{"name"}},
-				Intent:            opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+				Intent:            opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
 			}
 			wire, err := proto.MarshalOptions{Deterministic: true}.Marshal(request)
 			if err != nil {
 				t.Fatalf("marshal expected-version boundary request: %v", err)
 			}
-			var decoded opensplunkv1.ValidateKnowledgeObjectRequest
+			var decoded opensplunk.ValidateKnowledgeObjectRequest
 			if err := proto.Unmarshal(wire, &decoded); err != nil {
 				t.Fatalf("unmarshal expected-version boundary request: %v", err)
 			}
@@ -841,28 +841,28 @@ func validationContractExpectedVersionAllowed(version uint64) bool {
 	return version >= 1 && version <= validationContractMaximumExpectedVersion
 }
 
-func validationContractMinimalDefinition() *opensplunkv1.KnowledgeObjectDefinition {
-	return &opensplunkv1.KnowledgeObjectDefinition{
+func validationContractMinimalDefinition() *opensplunk.KnowledgeObjectDefinition {
+	return &opensplunk.KnowledgeObjectDefinition{
 		AppId:        "app_AAAAAAAAAAAAAAAAAAAAAA",
 		Name:         "revenue",
-		SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
-		Selector: &opensplunkv1.KnowledgeSelector{
-			IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{
-				MatchKind: opensplunkv1.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT,
+		SharingScope: opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
+		Selector: &opensplunk.KnowledgeSelector{
+			IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{{
+				MatchKind: opensplunk.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT,
 				Value:     "main",
 			}},
 		},
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{
-			FieldAlias: &opensplunkv1.FieldAliasDefinition{
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{
+			FieldAlias: &opensplunk.FieldAliasDefinition{
 				SourceField:       "source.value",
 				DestinationField:  "derived.value",
-				OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+				OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
 			},
 		},
 	}
 }
 
-func validationContractFieldViolationPrefix(input []*opensplunkv1.FieldViolation) (int, int, bool) {
+func validationContractFieldViolationPrefix(input []*opensplunk.FieldViolation) (int, int, bool) {
 	canonical := validationContractCanonicalFieldViolations(input)
 	textBytes := 0
 	for index, violation := range canonical {
@@ -878,7 +878,7 @@ func validationContractFieldViolationPrefix(input []*opensplunkv1.FieldViolation
 	return len(canonical), textBytes, false
 }
 
-func validationContractDiagnosticPrefix(input []*opensplunkv1.KnowledgeValidationDiagnostic) (int, int, bool) {
+func validationContractDiagnosticPrefix(input []*opensplunk.KnowledgeValidationDiagnostic) (int, int, bool) {
 	canonical := validationContractCanonicalDiagnostics(input)
 	textBytes := 0
 	for index, diagnostic := range canonical {
@@ -898,9 +898,9 @@ func validationContractDiagnosticPrefix(input []*opensplunkv1.KnowledgeValidatio
 	return len(canonical), textBytes, false
 }
 
-func validationContractCanonicalFieldViolations(input []*opensplunkv1.FieldViolation) []*opensplunkv1.FieldViolation {
+func validationContractCanonicalFieldViolations(input []*opensplunk.FieldViolation) []*opensplunk.FieldViolation {
 	canonical := slices.Clone(input)
-	slices.SortFunc(canonical, func(left, right *opensplunkv1.FieldViolation) int {
+	slices.SortFunc(canonical, func(left, right *opensplunk.FieldViolation) int {
 		if order := cmp.Compare(left.GetFieldPath(), right.GetFieldPath()); order != 0 {
 			return order
 		}
@@ -909,20 +909,20 @@ func validationContractCanonicalFieldViolations(input []*opensplunkv1.FieldViola
 		}
 		return cmp.Compare(left.GetMessage(), right.GetMessage())
 	})
-	return slices.CompactFunc(canonical, func(left, right *opensplunkv1.FieldViolation) bool {
+	return slices.CompactFunc(canonical, func(left, right *opensplunk.FieldViolation) bool {
 		return proto.Equal(left, right)
 	})
 }
 
-func validationContractCanonicalDiagnostics(input []*opensplunkv1.KnowledgeValidationDiagnostic) []*opensplunkv1.KnowledgeValidationDiagnostic {
+func validationContractCanonicalDiagnostics(input []*opensplunk.KnowledgeValidationDiagnostic) []*opensplunk.KnowledgeValidationDiagnostic {
 	canonical := slices.Clone(input)
 	slices.SortFunc(canonical, validationContractCompareDiagnostics)
-	return slices.CompactFunc(canonical, func(left, right *opensplunkv1.KnowledgeValidationDiagnostic) bool {
+	return slices.CompactFunc(canonical, func(left, right *opensplunk.KnowledgeValidationDiagnostic) bool {
 		return proto.Equal(left, right)
 	})
 }
 
-func validationContractCompareDiagnostics(left, right *opensplunkv1.KnowledgeValidationDiagnostic) int {
+func validationContractCompareDiagnostics(left, right *opensplunk.KnowledgeValidationDiagnostic) int {
 	leftValue := left.GetDiagnostic()
 	rightValue := right.GetDiagnostic()
 	if order := cmp.Compare(
@@ -943,7 +943,7 @@ func validationContractCompareDiagnostics(left, right *opensplunkv1.KnowledgeVal
 		return 1
 	}
 	if leftRange != nil {
-		for _, positions := range [][2]*opensplunkv1.SourcePosition{
+		for _, positions := range [][2]*opensplunk.SourcePosition{
 			{leftRange.GetStart(), rightRange.GetStart()},
 			{leftRange.GetEnd(), rightRange.GetEnd()},
 		} {
@@ -959,7 +959,7 @@ func validationContractCompareDiagnostics(left, right *opensplunkv1.KnowledgeVal
 		return order
 	}
 	if leftRange != nil {
-		for _, positions := range [][2]*opensplunkv1.SourcePosition{
+		for _, positions := range [][2]*opensplunk.SourcePosition{
 			{leftRange.GetStart(), rightRange.GetStart()},
 			{leftRange.GetEnd(), rightRange.GetEnd()},
 		} {
@@ -981,13 +981,13 @@ func validationContractCompareDiagnostics(left, right *opensplunkv1.KnowledgeVal
 	return cmp.Compare(len(leftSuggestions), len(rightSuggestions))
 }
 
-func validationContractDiagnosticSeverityRank(severity opensplunkv1.DiagnosticSeverity) int {
+func validationContractDiagnosticSeverityRank(severity opensplunk.DiagnosticSeverity) int {
 	switch severity {
-	case opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR:
+	case opensplunk.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR:
 		return 0
-	case opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_WARNING:
+	case opensplunk.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_WARNING:
 		return 1
-	case opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_INFO:
+	case opensplunk.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_INFO:
 		return 2
 	default:
 		return 3
@@ -1049,7 +1049,7 @@ func validationContractNameReserved(message protoreflect.MessageDescriptor, name
 
 func validationContractRequireProtoComments(t *testing.T, anchor string, fragments ...string) {
 	t.Helper()
-	source, err := os.ReadFile("proto/open_splunk/v1/knowledge_api.proto")
+	source, err := os.ReadFile("proto/open_splunk/knowledge_api.proto")
 	if err != nil {
 		t.Fatalf("read knowledge validation protobuf source: %v", err)
 	}
@@ -1091,7 +1091,7 @@ func validationContractRequireNestedProtoComments(
 	fragments ...string,
 ) {
 	t.Helper()
-	source, err := os.ReadFile("proto/open_splunk/v1/knowledge_api.proto")
+	source, err := os.ReadFile("proto/open_splunk/knowledge_api.proto")
 	if err != nil {
 		t.Fatalf("read knowledge validation protobuf source: %v", err)
 	}

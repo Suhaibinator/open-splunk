@@ -6,24 +6,23 @@ import (
 	"testing"
 )
 
-func TestParseAcceptsCanonicalDevelopmentAndReleaseIdentities(t *testing.T) {
+func TestParseAcceptsCanonicalDevelopmentAndImmutableIdentities(t *testing.T) {
 	t.Parallel()
 
 	for _, test := range []struct {
-		version  string
 		revision string
 		release  bool
 	}{
-		{version: "0.1.0", revision: DevelopmentRevision},
-		{version: "1.2.3-rc.1+build.5", revision: strings.Repeat("a", 40), release: true},
-		{version: "2.0.0", revision: strings.Repeat("f", 64), release: true},
+		{revision: DevelopmentRevision},
+		{revision: strings.Repeat("a", 40), release: true},
+		{revision: strings.Repeat("f", 64), release: true},
 	} {
-		identity, err := Parse(test.version, test.revision)
+		identity, err := Parse(test.revision)
 		if err != nil {
-			t.Fatalf("Parse(%q, %q): %v", test.version, test.revision, err)
+			t.Fatalf("Parse(%q): %v", test.revision, err)
 		}
-		if identity.Release() != test.release {
-			t.Fatalf("Release(%q) = %t", test.revision, identity.Release())
+		if identity.Publishable() != test.release {
+			t.Fatalf("Publishable(%q) = %t", test.revision, identity.Publishable())
 		}
 	}
 }
@@ -31,31 +30,23 @@ func TestParseAcceptsCanonicalDevelopmentAndReleaseIdentities(t *testing.T) {
 func TestParseRejectsNoncanonicalIdentity(t *testing.T) {
 	t.Parallel()
 
-	for _, test := range []struct {
-		version  string
-		revision string
-	}{
-		{version: "1.0.0-01", revision: DevelopmentRevision},
-		{version: "1.0.0-alpha..1", revision: DevelopmentRevision},
-		{version: "1.0.0+build.", revision: DevelopmentRevision},
-		{version: " 1.0.0", revision: DevelopmentRevision},
-		{version: "1.0.0", revision: "01234567"},
-		{version: "1.0.0", revision: strings.Repeat("A", 40)},
+	for _, revision := range []string{
+		"", "01234567", strings.Repeat("A", 40), strings.Repeat("a", 39),
 	} {
-		if _, err := Parse(test.version, test.revision); err == nil {
-			t.Fatalf("Parse(%q, %q) error = nil", test.version, test.revision)
+		if _, err := Parse(revision); err == nil {
+			t.Fatalf("Parse(%q) error = nil", revision)
 		}
 	}
 }
 
-func TestUIBuildIDIsDomainSeparatedVersionSensitiveAndAdBlockerSafe(t *testing.T) {
+func TestUIBuildIDIsDomainSeparatedRevisionSensitiveAndAdBlockerSafe(t *testing.T) {
 	t.Parallel()
 
-	left, err := Parse("1.0.0", "ad"+strings.Repeat("0", 38))
+	left, err := Parse("ad" + strings.Repeat("0", 38))
 	if err != nil {
 		t.Fatal(err)
 	}
-	right, err := Parse("1.0.0", "da"+strings.Repeat("0", 38))
+	right, err := Parse("da" + strings.Repeat("0", 38))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,50 +61,35 @@ func TestUIBuildIDIsDomainSeparatedVersionSensitiveAndAdBlockerSafe(t *testing.T
 	if strings.Contains(strings.ToLower(leftID), "ad") {
 		t.Fatalf("UI build ID %q contains ad-blocker token", leftID)
 	}
-	if leftID != "r794427mgh1k73212247721j70hgn9h4kknngk19nj356810km7k5397635k45m0g" {
-		t.Fatalf("UI build ID = %q", leftID)
-	}
 	if leftID == rightID {
 		t.Fatalf("distinct revisions share UI build ID %q", leftID)
 	}
-	otherVersion := left
-	otherVersion.ApplicationVersion = "1.0.1"
-	otherVersionID, err := otherVersion.UIBuildID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if otherVersionID == leftID {
-		t.Fatalf("distinct application versions share UI build ID %q", leftID)
-	}
 }
 
-func TestDisplayVersionPreservesFullIdentity(t *testing.T) {
+func TestPublishableIdentityRequiresAnImmutableRevision(t *testing.T) {
 	t.Parallel()
 
 	revision := strings.Repeat("1", 40)
-	identity, err := Parse("1.2.3", revision)
+	identity, err := Parse(revision)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := identity.DisplayVersion(), "1.2.3 ("+revision+")"; got != want {
-		t.Fatalf("DisplayVersion = %q, want %q", got, want)
+	if err := identity.ValidatePublishable(); err != nil {
+		t.Fatalf("ValidatePublishable: %v", err)
 	}
-	if err := identity.ValidateRelease(); err != nil {
-		t.Fatalf("ValidateRelease: %v", err)
-	}
-	development, err := Parse("1.2.3", DevelopmentRevision)
+	development, err := Parse(DevelopmentRevision)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := development.ValidateRelease(); err == nil {
-		t.Fatal("development ValidateRelease error = nil")
+	if err := development.ValidatePublishable(); err == nil {
+		t.Fatal("development ValidatePublishable error = nil")
 	}
 }
 
 func TestWriteIdentityAndDigestValidation(t *testing.T) {
 	t.Parallel()
 
-	identity, err := Parse("1.2.3", strings.Repeat("a", 40))
+	identity, err := Parse(strings.Repeat("a", 40))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,8 +97,7 @@ func TestWriteIdentityAndDigestValidation(t *testing.T) {
 	if err := WriteIdentity(&output, identity); err != nil {
 		t.Fatalf("WriteIdentity: %v", err)
 	}
-	want := "application_version=1.2.3\nsource_revision=" +
-		strings.Repeat("a", 40) + "\n"
+	want := "source_revision=" + strings.Repeat("a", 40) + "\n"
 	if output.String() != want {
 		t.Fatalf("WriteIdentity output = %q, want %q", output.String(), want)
 	}

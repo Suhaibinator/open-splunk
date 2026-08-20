@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -362,20 +362,20 @@ func changedEnabledEmptySearchAnalysisSnapshots(
 			OwnerID:        template.OwnerID,
 			WritableAppIDs: []string{searchAnalysisAuthorityAppID},
 		},
-		&opensplunkv1.CreateKnowledgeObjectRequest{
-			Definition: &opensplunkv1.KnowledgeObjectDefinition{
+		&opensplunk.CreateKnowledgeObjectRequest{
+			Definition: &opensplunk.KnowledgeObjectDefinition{
 				AppId:        searchAnalysisAuthorityAppID,
 				Name:         "field-analysis-draft",
-				SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
-				Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{
-					FieldAlias: &opensplunkv1.FieldAliasDefinition{
+				SharingScope: opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
+				Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{
+					FieldAlias: &opensplunk.FieldAliasDefinition{
 						SourceField:       "source_field",
 						DestinationField:  "destination_field",
-						OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+						OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
 					},
 				},
 			},
-			InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+			InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 			ClientRequestId: "field-analysis-authority-change",
 		},
 	); err != nil {

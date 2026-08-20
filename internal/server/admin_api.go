@@ -26,7 +26,7 @@ import (
 	"github.com/Suhaibinator/SRouter/pkg/codec"
 	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/asciifold"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
@@ -267,43 +267,43 @@ func canonicalHTTPAuthority(input string) (string, string, error) {
 
 func (handler *apiHandler) indexAdministrationRoutes(noAuth router.AuthLevel, smallRequestBytes int64) []protobufRouteDefinition {
 	routes := []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute[*opensplunkv1.CreateIndexRequest, *opensplunkv1.CreateIndexResponse](router.RouteConfig[*opensplunkv1.CreateIndexRequest, *opensplunkv1.CreateIndexResponse]{
+		newForwardCompatibleProtoRoute[*opensplunk.CreateIndexRequest, *opensplunk.CreateIndexResponse](router.RouteConfig[*opensplunk.CreateIndexRequest, *opensplunk.CreateIndexResponse]{
 			Path: "/indexes/create", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunkv1.CreateIndexRequest, *opensplunkv1.CreateIndexResponse](), Handler: handler.createIndex,
+			Codec: codec.NewProtoCodec[*opensplunk.CreateIndexRequest, *opensplunk.CreateIndexResponse](), Handler: handler.createIndex,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunkv1.GetIndexRequest, *opensplunkv1.GetIndexResponse](router.RouteConfig[*opensplunkv1.GetIndexRequest, *opensplunkv1.GetIndexResponse]{
+		newForwardCompatibleProtoRoute[*opensplunk.GetIndexRequest, *opensplunk.GetIndexResponse](router.RouteConfig[*opensplunk.GetIndexRequest, *opensplunk.GetIndexResponse]{
 			Path: "/indexes/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunkv1.GetIndexRequest, *opensplunkv1.GetIndexResponse](), Handler: handler.getIndex,
+			Codec: codec.NewProtoCodec[*opensplunk.GetIndexRequest, *opensplunk.GetIndexResponse](), Handler: handler.getIndex,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunkv1.ListIndexesRequest, *serializedIndexListResponse](router.RouteConfig[*opensplunkv1.ListIndexesRequest, *serializedIndexListResponse]{
+		newForwardCompatibleProtoRoute[*opensplunk.ListIndexesRequest, *serializedIndexListResponse](router.RouteConfig[*opensplunk.ListIndexesRequest, *serializedIndexListResponse]{
 			Path: "/indexes/list", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedIndexListCodec(), Handler: handler.listIndexes,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunkv1.UpdateIndexRequest, *opensplunkv1.UpdateIndexResponse](router.RouteConfig[*opensplunkv1.UpdateIndexRequest, *opensplunkv1.UpdateIndexResponse]{
+		newForwardCompatibleProtoRoute[*opensplunk.UpdateIndexRequest, *opensplunk.UpdateIndexResponse](router.RouteConfig[*opensplunk.UpdateIndexRequest, *opensplunk.UpdateIndexResponse]{
 			Path: "/indexes/update", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunkv1.UpdateIndexRequest, *opensplunkv1.UpdateIndexResponse](), Handler: handler.updateIndex,
+			Codec: codec.NewProtoCodec[*opensplunk.UpdateIndexRequest, *opensplunk.UpdateIndexResponse](), Handler: handler.updateIndex,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunkv1.SetIndexStateRequest, *opensplunkv1.SetIndexStateResponse](router.RouteConfig[*opensplunkv1.SetIndexStateRequest, *opensplunkv1.SetIndexStateResponse]{
+		newForwardCompatibleProtoRoute[*opensplunk.SetIndexStateRequest, *opensplunk.SetIndexStateResponse](router.RouteConfig[*opensplunk.SetIndexStateRequest, *opensplunk.SetIndexStateResponse]{
 			Path: "/indexes/state/set", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunkv1.SetIndexStateRequest, *opensplunkv1.SetIndexStateResponse](), Handler: handler.setIndexState,
+			Codec: codec.NewProtoCodec[*opensplunk.SetIndexStateRequest, *opensplunk.SetIndexStateResponse](), Handler: handler.setIndexState,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunkv1.DeleteIndexRequest, *opensplunkv1.DeleteIndexResponse](router.RouteConfig[*opensplunkv1.DeleteIndexRequest, *opensplunkv1.DeleteIndexResponse]{
+		newForwardCompatibleProtoRoute[*opensplunk.DeleteIndexRequest, *opensplunk.DeleteIndexResponse](router.RouteConfig[*opensplunk.DeleteIndexRequest, *opensplunk.DeleteIndexResponse]{
 			Path: "/indexes/delete", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunkv1.DeleteIndexRequest, *opensplunkv1.DeleteIndexResponse](), Handler: handler.deleteIndex,
+			Codec: codec.NewProtoCodec[*opensplunk.DeleteIndexRequest, *opensplunk.DeleteIndexResponse](), Handler: handler.deleteIndex,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
 	}
 	if handler.indexStatistics != nil {
 		routes = append(
 			routes,
-			newForwardCompatibleProtoRoute[*opensplunkv1.GetIndexStatsRequest, *opensplunkv1.GetIndexStatsResponse](router.RouteConfig[*opensplunkv1.GetIndexStatsRequest, *opensplunkv1.GetIndexStatsResponse]{
+			newForwardCompatibleProtoRoute[*opensplunk.GetIndexStatsRequest, *opensplunk.GetIndexStatsResponse](router.RouteConfig[*opensplunk.GetIndexStatsRequest, *opensplunk.GetIndexStatsResponse]{
 				Path: "/indexes/stats/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-				Codec: codec.NewProtoCodec[*opensplunkv1.GetIndexStatsRequest, *opensplunkv1.GetIndexStatsResponse](), Handler: handler.getIndexStatistics,
+				Codec: codec.NewProtoCodec[*opensplunk.GetIndexStatsRequest, *opensplunk.GetIndexStatsResponse](), Handler: handler.getIndexStatistics,
 				SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 			}),
 		)
@@ -311,7 +311,7 @@ func (handler *apiHandler) indexAdministrationRoutes(noAuth router.AuthLevel, sm
 	if handler.indexFields != nil {
 		routes = append(
 			routes,
-			newForwardCompatibleProtoRoute[*opensplunkv1.ListIndexFieldsRequest, *serializedIndexFieldsResponse](router.RouteConfig[*opensplunkv1.ListIndexFieldsRequest, *serializedIndexFieldsResponse]{
+			newForwardCompatibleProtoRoute[*opensplunk.ListIndexFieldsRequest, *serializedIndexFieldsResponse](router.RouteConfig[*opensplunk.ListIndexFieldsRequest, *serializedIndexFieldsResponse]{
 				Path: indexFieldsListRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 				Codec: newSerializedIndexFieldsCodec(), Handler: handler.listIndexFields,
 				SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
@@ -323,40 +323,40 @@ func (handler *apiHandler) indexAdministrationRoutes(noAuth router.AuthLevel, sm
 
 func (handler *apiHandler) ingestionTokenRoutes(noAuth router.AuthLevel, requestBytes, smallRequestBytes int64) []protobufRouteDefinition {
 	return []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute[*opensplunkv1.CreateIngestionTokenRequest, *opensplunkv1.CreateIngestionTokenResponse](router.RouteConfig[*opensplunkv1.CreateIngestionTokenRequest, *opensplunkv1.CreateIngestionTokenResponse]{
+		newForwardCompatibleProtoRoute[*opensplunk.CreateIngestionTokenRequest, *opensplunk.CreateIngestionTokenResponse](router.RouteConfig[*opensplunk.CreateIngestionTokenRequest, *opensplunk.CreateIngestionTokenResponse]{
 			Path: "/ingestion-tokens/create", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunkv1.CreateIngestionTokenRequest, *opensplunkv1.CreateIngestionTokenResponse](), Handler: handler.createIngestionToken,
+			Codec: codec.NewProtoCodec[*opensplunk.CreateIngestionTokenRequest, *opensplunk.CreateIngestionTokenResponse](), Handler: handler.createIngestionToken,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: requestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunkv1.GetIngestionTokenRequest, *opensplunkv1.GetIngestionTokenResponse](router.RouteConfig[*opensplunkv1.GetIngestionTokenRequest, *opensplunkv1.GetIngestionTokenResponse]{
+		newForwardCompatibleProtoRoute[*opensplunk.GetIngestionTokenRequest, *opensplunk.GetIngestionTokenResponse](router.RouteConfig[*opensplunk.GetIngestionTokenRequest, *opensplunk.GetIngestionTokenResponse]{
 			Path: "/ingestion-tokens/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunkv1.GetIngestionTokenRequest, *opensplunkv1.GetIngestionTokenResponse](), Handler: handler.getIngestionToken,
+			Codec: codec.NewProtoCodec[*opensplunk.GetIngestionTokenRequest, *opensplunk.GetIngestionTokenResponse](), Handler: handler.getIngestionToken,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunkv1.ListIngestionTokensRequest, *serializedTokenListResponse](router.RouteConfig[*opensplunkv1.ListIngestionTokensRequest, *serializedTokenListResponse]{
+		newForwardCompatibleProtoRoute[*opensplunk.ListIngestionTokensRequest, *serializedTokenListResponse](router.RouteConfig[*opensplunk.ListIngestionTokensRequest, *serializedTokenListResponse]{
 			Path: "/ingestion-tokens/list", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedTokenListCodec(), Handler: handler.listIngestionTokens,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunkv1.UpdateIngestionTokenRequest, *opensplunkv1.UpdateIngestionTokenResponse](router.RouteConfig[*opensplunkv1.UpdateIngestionTokenRequest, *opensplunkv1.UpdateIngestionTokenResponse]{
+		newForwardCompatibleProtoRoute[*opensplunk.UpdateIngestionTokenRequest, *opensplunk.UpdateIngestionTokenResponse](router.RouteConfig[*opensplunk.UpdateIngestionTokenRequest, *opensplunk.UpdateIngestionTokenResponse]{
 			Path: "/ingestion-tokens/update", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunkv1.UpdateIngestionTokenRequest, *opensplunkv1.UpdateIngestionTokenResponse](), Handler: handler.updateIngestionToken,
+			Codec: codec.NewProtoCodec[*opensplunk.UpdateIngestionTokenRequest, *opensplunk.UpdateIngestionTokenResponse](), Handler: handler.updateIngestionToken,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: requestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunkv1.SetIngestionTokenEnabledRequest, *opensplunkv1.SetIngestionTokenEnabledResponse](router.RouteConfig[*opensplunkv1.SetIngestionTokenEnabledRequest, *opensplunkv1.SetIngestionTokenEnabledResponse]{
+		newForwardCompatibleProtoRoute[*opensplunk.SetIngestionTokenEnabledRequest, *opensplunk.SetIngestionTokenEnabledResponse](router.RouteConfig[*opensplunk.SetIngestionTokenEnabledRequest, *opensplunk.SetIngestionTokenEnabledResponse]{
 			Path: "/ingestion-tokens/state/set", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunkv1.SetIngestionTokenEnabledRequest, *opensplunkv1.SetIngestionTokenEnabledResponse](), Handler: handler.setIngestionTokenEnabled,
+			Codec: codec.NewProtoCodec[*opensplunk.SetIngestionTokenEnabledRequest, *opensplunk.SetIngestionTokenEnabledResponse](), Handler: handler.setIngestionTokenEnabled,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunkv1.RevokeIngestionTokenRequest, *opensplunkv1.RevokeIngestionTokenResponse](router.RouteConfig[*opensplunkv1.RevokeIngestionTokenRequest, *opensplunkv1.RevokeIngestionTokenResponse]{
+		newForwardCompatibleProtoRoute[*opensplunk.RevokeIngestionTokenRequest, *opensplunk.RevokeIngestionTokenResponse](router.RouteConfig[*opensplunk.RevokeIngestionTokenRequest, *opensplunk.RevokeIngestionTokenResponse]{
 			Path: "/ingestion-tokens/revoke", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: codec.NewProtoCodec[*opensplunkv1.RevokeIngestionTokenRequest, *opensplunkv1.RevokeIngestionTokenResponse](), Handler: handler.revokeIngestionToken,
+			Codec: codec.NewProtoCodec[*opensplunk.RevokeIngestionTokenRequest, *opensplunk.RevokeIngestionTokenResponse](), Handler: handler.revokeIngestionToken,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
 	}
 }
 
-func (handler *apiHandler) createIndex(request *http.Request, input *opensplunkv1.CreateIndexRequest) (*opensplunkv1.CreateIndexResponse, error) {
+func (handler *apiHandler) createIndex(request *http.Request, input *opensplunk.CreateIndexRequest) (*opensplunk.CreateIndexResponse, error) {
 	if input.ClientRequestId != nil {
 		return nil, badRequestError("client request idempotency is not supported")
 	}
@@ -372,10 +372,10 @@ func (handler *apiHandler) createIndex(request *http.Request, input *opensplunkv
 	if err != nil || converted.GetVersion() != 1 {
 		return nil, internalError()
 	}
-	return &opensplunkv1.CreateIndexResponse{Index: converted}, nil
+	return &opensplunk.CreateIndexResponse{Index: converted}, nil
 }
 
-func (handler *apiHandler) getIndex(request *http.Request, input *opensplunkv1.GetIndexRequest) (*opensplunkv1.GetIndexResponse, error) {
+func (handler *apiHandler) getIndex(request *http.Request, input *opensplunk.GetIndexRequest) (*opensplunk.GetIndexResponse, error) {
 	record, err := handler.resolveIndex(request.Context(), input.GetSelector())
 	if err := mapAdministrativeCallError(request.Context(), err, "index"); err != nil {
 		return nil, err
@@ -384,13 +384,13 @@ func (handler *apiHandler) getIndex(request *http.Request, input *opensplunkv1.G
 	if err != nil {
 		return nil, internalError()
 	}
-	return &opensplunkv1.GetIndexResponse{Index: converted}, nil
+	return &opensplunk.GetIndexResponse{Index: converted}, nil
 }
 
 func (handler *apiHandler) getIndexStatistics(
 	request *http.Request,
-	input *opensplunkv1.GetIndexStatsRequest,
-) (*opensplunkv1.GetIndexStatsResponse, error) {
+	input *opensplunk.GetIndexStatsRequest,
+) (*opensplunk.GetIndexStatsResponse, error) {
 	record, err := handler.resolveIndex(
 		request.Context(),
 		input.GetSelector(),
@@ -438,7 +438,7 @@ func (handler *apiHandler) getIndexStatistics(
 	if err != nil {
 		return nil, internalError()
 	}
-	return &opensplunkv1.GetIndexStatsResponse{Stats: converted}, nil
+	return &opensplunk.GetIndexStatsResponse{Stats: converted}, nil
 }
 
 func mapIndexStatisticsCallError(ctx context.Context, operationErr error) error {
@@ -454,7 +454,7 @@ func mapIndexStatisticsCallError(ctx context.Context, operationErr error) error 
 func indexStatisticsToProto(
 	scope clickhouse.IndexStatisticsRequest,
 	result clickhouse.IndexStatisticsResult,
-) (*opensplunkv1.IndexStats, error) {
+) (*opensplunk.IndexStats, error) {
 	if result.TenantID != scope.TenantID ||
 		result.IndexID != scope.IndexID ||
 		result.IndexName != scope.IndexName ||
@@ -472,7 +472,7 @@ func indexStatisticsToProto(
 	if err != nil {
 		return nil, errors.New("invalid index statistics measurement time")
 	}
-	converted := &opensplunkv1.IndexStats{
+	converted := &opensplunk.IndexStats{
 		IndexId:      result.IndexID,
 		EventCount:   result.EventCount,
 		StorageBytes: result.StorageBytes,
@@ -519,7 +519,7 @@ func indexStatisticsToProto(
 	return converted, nil
 }
 
-func (handler *apiHandler) listIndexes(request *http.Request, input *opensplunkv1.ListIndexesRequest) (*serializedIndexListResponse, error) {
+func (handler *apiHandler) listIndexes(request *http.Request, input *opensplunk.ListIndexesRequest) (*serializedIndexListResponse, error) {
 	pageSize, pageToken, includeTotal, err := handler.adminPageRequest(input.GetPage(), maximumIndexRowsPerResponse)
 	if err != nil {
 		return nil, badRequestError(err.Error())
@@ -661,7 +661,7 @@ func (handler *apiHandler) listIndexes(request *http.Request, input *opensplunkv
 			}
 		}
 	}
-	message := &opensplunkv1.ListIndexesResponse{Indexes: items, Page: page}
+	message := &opensplunk.ListIndexesResponse{Indexes: items, Page: page}
 	if proto.Size(message) > maximumAdminListResponseBytes {
 		return nil, internalError()
 	}
@@ -670,16 +670,16 @@ func (handler *apiHandler) listIndexes(request *http.Request, input *opensplunkv
 }
 
 func controlIndexStateFilters(
-	input []opensplunkv1.IndexState,
+	input []opensplunk.IndexState,
 ) []control.IndexState {
 	result := make([]control.IndexState, 0, len(input))
 	for _, state := range input {
 		switch state {
-		case opensplunkv1.IndexState_INDEX_STATE_ACTIVE:
+		case opensplunk.IndexState_INDEX_STATE_ACTIVE:
 			result = append(result, control.IndexStateActive)
-		case opensplunkv1.IndexState_INDEX_STATE_ARCHIVED:
+		case opensplunk.IndexState_INDEX_STATE_ARCHIVED:
 			result = append(result, control.IndexStateArchived)
-		case opensplunkv1.IndexState_INDEX_STATE_DELETING:
+		case opensplunk.IndexState_INDEX_STATE_DELETING:
 			result = append(result, control.IndexStateDeleting)
 		}
 	}
@@ -694,11 +694,11 @@ func optionalIndexListTextFilter(input string) *string {
 	return &value
 }
 
-func controlIndexSortBy(input opensplunkv1.IndexSortBy) control.IndexSortBy {
+func controlIndexSortBy(input opensplunk.IndexSortBy) control.IndexSortBy {
 	switch input {
-	case opensplunkv1.IndexSortBy_INDEX_SORT_BY_CREATED_AT:
+	case opensplunk.IndexSortBy_INDEX_SORT_BY_CREATED_AT:
 		return control.IndexSortByCreatedAt
-	case opensplunkv1.IndexSortBy_INDEX_SORT_BY_UPDATED_AT:
+	case opensplunk.IndexSortBy_INDEX_SORT_BY_UPDATED_AT:
 		return control.IndexSortByUpdatedAt
 	default:
 		return control.IndexSortByName
@@ -706,9 +706,9 @@ func controlIndexSortBy(input opensplunkv1.IndexSortBy) control.IndexSortBy {
 }
 
 func controlIndexSortDirection(
-	input opensplunkv1.SortDirection,
+	input opensplunk.SortDirection,
 ) control.IndexSortDirection {
-	if input == opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING {
+	if input == opensplunk.SortDirection_SORT_DIRECTION_DESCENDING {
 		return control.IndexSortDescending
 	}
 	return control.IndexSortAscending
@@ -745,7 +745,7 @@ func cloneIndexListRequest(
 
 func (handler *apiHandler) indexListCursor(
 	token, fingerprint string,
-	sortBy opensplunkv1.IndexSortBy,
+	sortBy opensplunk.IndexSortBy,
 ) (*control.IndexListCursor, error) {
 	cursor, err := decodeAdminCursor(handler.adminCursorKey[:], token)
 	if err != nil ||
@@ -762,9 +762,9 @@ func (handler *apiHandler) indexListCursor(
 		IndexID:         strings.Clone(cursor.IndexID),
 	}
 	switch sortBy {
-	case opensplunkv1.IndexSortBy_INDEX_SORT_BY_NAME,
-		opensplunkv1.IndexSortBy_INDEX_SORT_BY_CREATED_AT,
-		opensplunkv1.IndexSortBy_INDEX_SORT_BY_UPDATED_AT:
+	case opensplunk.IndexSortBy_INDEX_SORT_BY_NAME,
+		opensplunk.IndexSortBy_INDEX_SORT_BY_CREATED_AT,
+		opensplunk.IndexSortBy_INDEX_SORT_BY_UPDATED_AT:
 	default:
 		return nil, errors.New("invalid index page token")
 	}
@@ -784,8 +784,8 @@ func (handler *apiHandler) indexListResult(
 	requestToken string,
 ) (
 	[]control.Index,
-	[]*opensplunkv1.IndexListItem,
-	*opensplunkv1.PageResponse,
+	[]*opensplunk.IndexListItem,
+	*opensplunk.PageResponse,
 	error,
 ) {
 	if request.PageSize == 0 ||
@@ -815,7 +815,7 @@ func (handler *apiHandler) indexListResult(
 		textMatcher = &matcher
 	}
 	items := make(
-		[]*opensplunkv1.IndexListItem,
+		[]*opensplunk.IndexListItem,
 		0,
 		len(selected),
 	)
@@ -857,7 +857,7 @@ func (handler *apiHandler) indexListResult(
 		seenNames[record.Definition.Name] = struct{}{}
 		items = append(
 			items,
-			&opensplunkv1.IndexListItem{Index: converted},
+			&opensplunk.IndexListItem{Index: converted},
 		)
 	}
 	if result.NextCursor != nil {
@@ -1064,7 +1064,7 @@ func equalIndexListCursor(
 
 func (handler *apiHandler) indexListStatisticsBatch(
 	records []control.Index,
-	items []*opensplunkv1.IndexListItem,
+	items []*opensplunk.IndexListItem,
 ) (clickhouse.IndexStatisticsBatchRequest, error) {
 	if len(records) == 0 ||
 		len(records) > maximumIndexRowsPerResponse ||
@@ -1155,7 +1155,7 @@ func (handler *apiHandler) readIndexListStatistics(
 func (handler *apiHandler) attachIndexListStatistics(
 	batch clickhouse.IndexStatisticsBatchRequest,
 	records []control.Index,
-	items []*opensplunkv1.IndexListItem,
+	items []*opensplunk.IndexListItem,
 	results []clickhouse.IndexStatisticsResult,
 ) error {
 	if len(records) == 0 ||
@@ -1205,7 +1205,7 @@ func (handler *apiHandler) attachIndexListStatistics(
 	if eligiblePosition != len(batch.Indexes) {
 		return errors.New("unexpected index statistics batch scope")
 	}
-	converted := make(map[string]*opensplunkv1.IndexStats, len(results))
+	converted := make(map[string]*opensplunk.IndexStats, len(results))
 	for _, result := range results {
 		scope, exists := expected[result.IndexID]
 		if !exists || scope.IndexName != result.IndexName {
@@ -1243,7 +1243,7 @@ func (handler *apiHandler) attachIndexListStatistics(
 	return nil
 }
 
-func (handler *apiHandler) updateIndex(request *http.Request, input *opensplunkv1.UpdateIndexRequest) (*opensplunkv1.UpdateIndexResponse, error) {
+func (handler *apiHandler) updateIndex(request *http.Request, input *opensplunk.UpdateIndexRequest) (*opensplunk.UpdateIndexResponse, error) {
 	if err := administrationExpectedVersion(input.GetExpectedVersion()); err != nil {
 		return nil, badRequestError(err.Error())
 	}
@@ -1263,10 +1263,10 @@ func (handler *apiHandler) updateIndex(request *http.Request, input *opensplunkv
 	if err != nil || record.ID != current.ID || record.Version != input.GetExpectedVersion()+1 {
 		return nil, internalError()
 	}
-	return &opensplunkv1.UpdateIndexResponse{Index: converted}, nil
+	return &opensplunk.UpdateIndexResponse{Index: converted}, nil
 }
 
-func (handler *apiHandler) setIndexState(request *http.Request, input *opensplunkv1.SetIndexStateRequest) (*opensplunkv1.SetIndexStateResponse, error) {
+func (handler *apiHandler) setIndexState(request *http.Request, input *opensplunk.SetIndexStateRequest) (*opensplunk.SetIndexStateResponse, error) {
 	if err := administrationExpectedVersion(input.GetExpectedVersion()); err != nil {
 		return nil, badRequestError(err.Error())
 	}
@@ -1286,17 +1286,17 @@ func (handler *apiHandler) setIndexState(request *http.Request, input *opensplun
 	if err != nil || record.ID != current.ID || record.Version != input.GetExpectedVersion()+1 || record.State != state {
 		return nil, internalError()
 	}
-	return &opensplunkv1.SetIndexStateResponse{Index: converted}, nil
+	return &opensplunk.SetIndexStateResponse{Index: converted}, nil
 }
 
-func (handler *apiHandler) deleteIndex(request *http.Request, input *opensplunkv1.DeleteIndexRequest) (*opensplunkv1.DeleteIndexResponse, error) {
+func (handler *apiHandler) deleteIndex(request *http.Request, input *opensplunk.DeleteIndexRequest) (*opensplunk.DeleteIndexResponse, error) {
 	if err := administrationExpectedVersion(input.GetExpectedVersion()); err != nil {
 		return nil, badRequestError(err.Error())
 	}
 	deleteData := false
 	switch input.GetDataDeletionMode() {
-	case opensplunkv1.IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_KEEP_DATA:
-	case opensplunkv1.IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_DELETE_DATA:
+	case opensplunk.IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_KEEP_DATA:
+	case opensplunk.IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_DELETE_DATA:
 		if handler.indexDataDeletionAdmission == nil ||
 			handler.indexDataDeletionWaker == nil {
 			return nil, badRequestError(
@@ -1367,7 +1367,7 @@ func (handler *apiHandler) deleteIndex(request *http.Request, input *opensplunkv
 			return nil, internalError()
 		}
 		operationID := strings.Clone(operation.ID)
-		return &opensplunkv1.DeleteIndexResponse{
+		return &opensplunk.DeleteIndexResponse{
 			IndexId:             strings.Clone(current.ID),
 			DeletionOperationId: &operationID,
 		}, nil
@@ -1394,7 +1394,7 @@ func (handler *apiHandler) deleteIndex(request *http.Request, input *opensplunkv
 	if deletedID != current.ID {
 		return nil, internalError()
 	}
-	return &opensplunkv1.DeleteIndexResponse{IndexId: strings.Clone(deletedID)}, nil
+	return &opensplunk.DeleteIndexResponse{IndexId: strings.Clone(deletedID)}, nil
 }
 
 func validIndexDeletionAdmission(
@@ -1422,7 +1422,7 @@ func validIndexDeletionAdmission(
 		operation.DeletingVersion == archivedVersion+1
 }
 
-func (handler *apiHandler) createIngestionToken(request *http.Request, input *opensplunkv1.CreateIngestionTokenRequest) (*opensplunkv1.CreateIngestionTokenResponse, error) {
+func (handler *apiHandler) createIngestionToken(request *http.Request, input *opensplunk.CreateIngestionTokenRequest) (*opensplunk.CreateIngestionTokenResponse, error) {
 	if input.ClientRequestId != nil {
 		return nil, badRequestError("client request idempotency is not supported")
 	}
@@ -1441,13 +1441,13 @@ func (handler *apiHandler) createIngestionToken(request *http.Request, input *op
 	}
 	// Plaintext() is called only at this one response construction site. The
 	// secret is never formatted, logged, copied into metadata, or persisted.
-	return &opensplunkv1.CreateIngestionTokenResponse{
+	return &opensplunk.CreateIngestionTokenResponse{
 		IngestionToken: converted,
 		PlaintextToken: plaintext,
 	}, nil
 }
 
-func (handler *apiHandler) getIngestionToken(request *http.Request, input *opensplunkv1.GetIngestionTokenRequest) (*opensplunkv1.GetIngestionTokenResponse, error) {
+func (handler *apiHandler) getIngestionToken(request *http.Request, input *opensplunk.GetIngestionTokenRequest) (*opensplunk.GetIngestionTokenResponse, error) {
 	id, err := adminObjectID(input.GetIngestionTokenId(), "ingestion token ID")
 	if err != nil {
 		return nil, badRequestError(err.Error())
@@ -1460,10 +1460,10 @@ func (handler *apiHandler) getIngestionToken(request *http.Request, input *opens
 	if err != nil || converted.GetIngestionTokenId() != id {
 		return nil, internalError()
 	}
-	return &opensplunkv1.GetIngestionTokenResponse{IngestionToken: converted}, nil
+	return &opensplunk.GetIngestionTokenResponse{IngestionToken: converted}, nil
 }
 
-func (handler *apiHandler) listIngestionTokens(request *http.Request, input *opensplunkv1.ListIngestionTokensRequest) (*serializedTokenListResponse, error) {
+func (handler *apiHandler) listIngestionTokens(request *http.Request, input *opensplunk.ListIngestionTokensRequest) (*serializedTokenListResponse, error) {
 	pageSize, pageToken, includeTotal, err := handler.adminPageRequest(input.GetPage(), maximumTokenRowsPerResponse)
 	if err != nil {
 		return nil, badRequestError(err.Error())
@@ -1519,7 +1519,7 @@ func (handler *apiHandler) listIngestionTokens(request *http.Request, input *ope
 		return nil, badRequestError(err.Error())
 	}
 	end := min(start+pageSize, len(filtered))
-	items := make([]*opensplunkv1.IngestionToken, 0, end-start)
+	items := make([]*opensplunk.IngestionToken, 0, end-start)
 	for _, record := range filtered[start:end] {
 		converted, err := tokenToProto(record)
 		if err != nil {
@@ -1531,7 +1531,7 @@ func (handler *apiHandler) listIngestionTokens(request *http.Request, input *ope
 	if err != nil {
 		return nil, internalError()
 	}
-	message := &opensplunkv1.ListIngestionTokensResponse{IngestionTokens: items, Page: page}
+	message := &opensplunk.ListIngestionTokensResponse{IngestionTokens: items, Page: page}
 	if proto.Size(message) > maximumAdminListResponseBytes {
 		return nil, internalError()
 	}
@@ -1539,7 +1539,7 @@ func (handler *apiHandler) listIngestionTokens(request *http.Request, input *ope
 	return &serializedTokenListResponse{message: message, ctx: request.Context(), release: release}, nil
 }
 
-func (handler *apiHandler) updateIngestionToken(request *http.Request, input *opensplunkv1.UpdateIngestionTokenRequest) (*opensplunkv1.UpdateIngestionTokenResponse, error) {
+func (handler *apiHandler) updateIngestionToken(request *http.Request, input *opensplunk.UpdateIngestionTokenRequest) (*opensplunk.UpdateIngestionTokenResponse, error) {
 	id, err := adminObjectID(input.GetIngestionTokenId(), "ingestion token ID")
 	if err != nil {
 		return nil, badRequestError(err.Error())
@@ -1571,13 +1571,13 @@ func (handler *apiHandler) updateIngestionToken(request *http.Request, input *op
 	if err != nil || record.ID != id || record.Version != input.GetExpectedVersion()+1 {
 		return nil, internalError()
 	}
-	return &opensplunkv1.UpdateIngestionTokenResponse{IngestionToken: converted}, nil
+	return &opensplunk.UpdateIngestionTokenResponse{IngestionToken: converted}, nil
 }
 
 func (handler *apiHandler) setIngestionTokenEnabled(
 	request *http.Request,
-	input *opensplunkv1.SetIngestionTokenEnabledRequest,
-) (*opensplunkv1.SetIngestionTokenEnabledResponse, error) {
+	input *opensplunk.SetIngestionTokenEnabledRequest,
+) (*opensplunk.SetIngestionTokenEnabledResponse, error) {
 	id, err := adminObjectID(
 		input.GetIngestionTokenId(),
 		"ingestion token ID",
@@ -1613,12 +1613,12 @@ func (handler *apiHandler) setIngestionTokenEnabled(
 		!record.RevokedAt.IsZero() {
 		return nil, internalError()
 	}
-	return &opensplunkv1.SetIngestionTokenEnabledResponse{
+	return &opensplunk.SetIngestionTokenEnabledResponse{
 		IngestionToken: converted,
 	}, nil
 }
 
-func (handler *apiHandler) revokeIngestionToken(request *http.Request, input *opensplunkv1.RevokeIngestionTokenRequest) (*opensplunkv1.RevokeIngestionTokenResponse, error) {
+func (handler *apiHandler) revokeIngestionToken(request *http.Request, input *opensplunk.RevokeIngestionTokenRequest) (*opensplunk.RevokeIngestionTokenResponse, error) {
 	id, err := adminObjectID(input.GetIngestionTokenId(), "ingestion token ID")
 	if err != nil {
 		return nil, badRequestError(err.Error())
@@ -1637,21 +1637,21 @@ func (handler *apiHandler) revokeIngestionToken(request *http.Request, input *op
 	if err != nil || record.ID != id || record.Version != input.GetExpectedVersion()+1 || record.State != auth.CollectorTokenStateRevoked {
 		return nil, internalError()
 	}
-	return &opensplunkv1.RevokeIngestionTokenResponse{IngestionToken: converted}, nil
+	return &opensplunk.RevokeIngestionTokenResponse{IngestionToken: converted}, nil
 }
 
-func (handler *apiHandler) resolveIndex(ctx context.Context, selector *opensplunkv1.IndexSelector) (control.Index, error) {
+func (handler *apiHandler) resolveIndex(ctx context.Context, selector *opensplunk.IndexSelector) (control.Index, error) {
 	if selector == nil {
 		return control.Index{}, fmt.Errorf("%w: index selector is required", control.ErrInvalidArgument)
 	}
 	switch selected := selector.GetSelector().(type) {
-	case *opensplunkv1.IndexSelector_IndexId:
+	case *opensplunk.IndexSelector_IndexId:
 		id, err := adminObjectID(selected.IndexId, "index ID")
 		if err != nil {
 			return control.Index{}, fmt.Errorf("%w: %w", control.ErrInvalidArgument, err)
 		}
 		return handler.indexAdmin.GetIndex(ctx, id)
-	case *opensplunkv1.IndexSelector_IndexName:
+	case *opensplunk.IndexSelector_IndexName:
 		name, err := control.NormalizeIndexName(selected.IndexName)
 		if err != nil {
 			return control.Index{}, fmt.Errorf("%w: index name is invalid", control.ErrInvalidArgument)
@@ -1662,7 +1662,7 @@ func (handler *apiHandler) resolveIndex(ctx context.Context, selector *opensplun
 	}
 }
 
-func indexDefinitionFromProto(input *opensplunkv1.IndexDefinition) (control.IndexDefinition, error) {
+func indexDefinitionFromProto(input *opensplunk.IndexDefinition) (control.IndexDefinition, error) {
 	if input == nil {
 		return control.IndexDefinition{}, errors.New("index definition is required")
 	}
@@ -1716,7 +1716,7 @@ func indexDefinitionFromProto(input *opensplunkv1.IndexDefinition) (control.Inde
 	}, nil
 }
 
-func applyIndexUpdate(current control.IndexDefinition, input *opensplunkv1.IndexDefinition, mask *fieldmaskpb.FieldMask) (control.IndexDefinition, error) {
+func applyIndexUpdate(current control.IndexDefinition, input *opensplunk.IndexDefinition, mask *fieldmaskpb.FieldMask) (control.IndexDefinition, error) {
 	if input == nil {
 		return control.IndexDefinition{}, errors.New("index definition is required")
 	}
@@ -1820,7 +1820,7 @@ func applyIndexUpdate(current control.IndexDefinition, input *opensplunkv1.Index
 	return result, nil
 }
 
-func indexLimitsFromProto(input *opensplunkv1.IndexLimits) (control.IndexLimits, error) {
+func indexLimitsFromProto(input *opensplunk.IndexLimits) (control.IndexLimits, error) {
 	if input == nil {
 		return control.IndexLimits{}, nil
 	}
@@ -1842,7 +1842,7 @@ func indexLimitsFromProto(input *opensplunkv1.IndexLimits) (control.IndexLimits,
 	return limits, nil
 }
 
-func indexToProto(record control.Index) (*opensplunkv1.Index, error) {
+func indexToProto(record control.Index) (*opensplunk.Index, error) {
 	if err := record.Definition.Limits.Validate(); err != nil {
 		return nil, errors.New("invalid index record")
 	}
@@ -1860,7 +1860,7 @@ func indexToProto(record control.Index) (*opensplunkv1.Index, error) {
 		validateAdminText(record.Definition.Description, maximumDescriptionBytes, true, true) != nil ||
 		!indexpolicy.ValidDefaultSourcetype(record.Definition.DefaultSourcetype) ||
 		record.Definition.RetentionPeriod < 0 || record.Definition.RetentionPeriod%time.Millisecond != 0 ||
-		indexStateToProto(record.State) == opensplunkv1.IndexState_INDEX_STATE_UNSPECIFIED ||
+		indexStateToProto(record.State) == opensplunk.IndexState_INDEX_STATE_UNSPECIFIED ||
 		record.CreatedAt.IsZero() || record.UpdatedAt.Before(record.CreatedAt) {
 		return nil, errors.New("invalid index record")
 	}
@@ -1879,7 +1879,7 @@ func indexToProto(record control.Index) (*opensplunkv1.Index, error) {
 	); err != nil {
 		return nil, errors.New("invalid index record")
 	}
-	definition := &opensplunkv1.IndexDefinition{
+	definition := &opensplunk.IndexDefinition{
 		Name: record.Definition.Name, DisplayName: record.Definition.DisplayName,
 		IngestionAccess: accessState(record.Definition.IngestionEnabled), SearchAccess: accessState(record.Definition.SearchEnabled),
 	}
@@ -1896,17 +1896,17 @@ func indexToProto(record control.Index) (*opensplunkv1.Index, error) {
 	definition.IngestionRateLimits = ingestionRateLimitsToProto(
 		record.Definition.IngestionRateLimits,
 	)
-	return &opensplunkv1.Index{
+	return &opensplunk.Index{
 		IndexId: record.ID, Version: record.Version, Definition: definition,
 		State: indexStateToProto(record.State), CreatedAt: created, UpdatedAt: updated,
 	}, nil
 }
 
-func indexLimitsToProto(limits control.IndexLimits) *opensplunkv1.IndexLimits {
+func indexLimitsToProto(limits control.IndexLimits) *opensplunk.IndexLimits {
 	if limits == (control.IndexLimits{}) {
 		return nil
 	}
-	result := &opensplunkv1.IndexLimits{}
+	result := &opensplunk.IndexLimits{}
 	if limits.MaxEventBytes != 0 {
 		result.MaxEventBytes = new(limits.MaxEventBytes)
 	}
@@ -1928,7 +1928,7 @@ func indexLimitsToProto(limits control.IndexLimits) *opensplunkv1.IndexLimits {
 }
 
 func ingestionRateLimitsFromProto(
-	input *opensplunkv1.IngestionRateLimits,
+	input *opensplunk.IngestionRateLimits,
 ) (ingestquota.Limits, error) {
 	if input == nil {
 		return ingestquota.Limits{}, nil
@@ -1945,11 +1945,11 @@ func ingestionRateLimitsFromProto(
 
 func ingestionRateLimitsToProto(
 	limits ingestquota.Limits,
-) *opensplunkv1.IngestionRateLimits {
+) *opensplunk.IngestionRateLimits {
 	if limits == (ingestquota.Limits{}) {
 		return nil
 	}
-	result := &opensplunkv1.IngestionRateLimits{}
+	result := &opensplunk.IngestionRateLimits{}
 	if limits.MaxEventsPerSecond != 0 {
 		result.MaxEventsPerSecond = new(limits.MaxEventsPerSecond)
 	}
@@ -1961,7 +1961,7 @@ func ingestionRateLimitsToProto(
 	return result
 }
 
-func tokenDefinitionFromProto(input *opensplunkv1.IngestionTokenDefinition) (auth.UpdateCollectorTokenRequest, error) {
+func tokenDefinitionFromProto(input *opensplunk.IngestionTokenDefinition) (auth.UpdateCollectorTokenRequest, error) {
 	return tokenDefinitionFromProtoWithCurrent(
 		input,
 		auth.CollectorToken{},
@@ -1970,7 +1970,7 @@ func tokenDefinitionFromProto(input *opensplunkv1.IngestionTokenDefinition) (aut
 }
 
 func tokenDefinitionFromProtoWithCurrent(
-	input *opensplunkv1.IngestionTokenDefinition,
+	input *opensplunk.IngestionTokenDefinition,
 	current auth.CollectorToken,
 	creating bool,
 ) (auth.UpdateCollectorTokenRequest, error) {
@@ -2073,17 +2073,17 @@ func tokenDefinitionFromProtoWithCurrent(
 }
 
 func tokenPurposeFromProto(
-	input opensplunkv1.IngestionTokenPurpose,
+	input opensplunk.IngestionTokenPurpose,
 	hasCollectorBinding bool,
 	current auth.IngestionTokenPurpose,
 	creating bool,
 ) (auth.IngestionTokenPurpose, error) {
 	switch input {
-	case opensplunkv1.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR:
+	case opensplunk.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR:
 		return auth.IngestionTokenPurposeNativeCollector, nil
-	case opensplunkv1.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_HEC:
+	case opensplunk.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_HEC:
 		return auth.IngestionTokenPurposeHEC, nil
-	case opensplunkv1.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_UNSPECIFIED:
+	case opensplunk.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_UNSPECIFIED:
 		// Older native administration clients predate the purpose field. Their
 		// required immutable collector binding makes the legacy intent
 		// unambiguous, so retain wire compatibility without ever inferring HEC.
@@ -2099,19 +2099,19 @@ func tokenPurposeFromProto(
 
 func tokenPurposeToProto(
 	input auth.IngestionTokenPurpose,
-) opensplunkv1.IngestionTokenPurpose {
+) opensplunk.IngestionTokenPurpose {
 	switch input {
 	case auth.IngestionTokenPurposeNativeCollector:
-		return opensplunkv1.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR
+		return opensplunk.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR
 	case auth.IngestionTokenPurposeHEC:
-		return opensplunkv1.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_HEC
+		return opensplunk.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_HEC
 	default:
-		return opensplunkv1.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_UNSPECIFIED
+		return opensplunk.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_UNSPECIFIED
 	}
 }
 
 func tokenHECProfileFromProto(
-	input *opensplunkv1.IngestionTokenHecProfile,
+	input *opensplunk.IngestionTokenHecProfile,
 	purpose auth.IngestionTokenPurpose,
 	allowedIndexNames []string,
 	current auth.HECTokenProfile,
@@ -2198,8 +2198,8 @@ func tokenHECASCIIEdgeWhitespace(value byte) bool {
 
 func tokenHECProfileToProto(
 	profile auth.HECTokenProfile,
-) *opensplunkv1.IngestionTokenHecProfile {
-	result := &opensplunkv1.IngestionTokenHecProfile{
+) *opensplunk.IngestionTokenHecProfile {
+	result := &opensplunk.IngestionTokenHecProfile{
 		IndexerAcknowledgment: profile.IndexerAcknowledgment,
 	}
 	if profile.DefaultIndexName != "" {
@@ -2226,7 +2226,7 @@ func normalizeTokenConstraintRegexes(input []string, dimension string) ([]string
 }
 
 func tokenCollectorBinding(
-	constraints *opensplunkv1.IngestionTokenConstraints,
+	constraints *opensplunk.IngestionTokenConstraints,
 	purpose auth.IngestionTokenPurpose,
 	currentBinding string,
 	requireBinding bool,
@@ -2274,7 +2274,7 @@ func asciiLetterOrDigit(value byte) bool {
 		value >= '0' && value <= '9'
 }
 
-func applyTokenUpdate(current auth.CollectorToken, input *opensplunkv1.IngestionTokenDefinition, mask *fieldmaskpb.FieldMask) (auth.UpdateCollectorTokenRequest, error) {
+func applyTokenUpdate(current auth.CollectorToken, input *opensplunk.IngestionTokenDefinition, mask *fieldmaskpb.FieldMask) (auth.UpdateCollectorTokenRequest, error) {
 	if input == nil {
 		return auth.UpdateCollectorTokenRequest{}, errors.New("ingestion token definition is required")
 	}
@@ -2312,7 +2312,7 @@ func applyTokenUpdate(current auth.CollectorToken, input *opensplunkv1.Ingestion
 				return auth.UpdateCollectorTokenRequest{}, errors.New("ingestion token description is invalid")
 			}
 		case "constraints":
-			partial := &opensplunkv1.IngestionTokenDefinition{
+			partial := &opensplunk.IngestionTokenDefinition{
 				Name:        result.Name,
 				Constraints: input.GetConstraints(),
 				Purpose:     tokenPurposeToProto(result.Purpose),
@@ -2432,7 +2432,7 @@ func applyTokenUpdate(current auth.CollectorToken, input *opensplunkv1.Ingestion
 	return result, nil
 }
 
-func tokenToProto(record auth.CollectorToken) (*opensplunkv1.IngestionToken, error) {
+func tokenToProto(record auth.CollectorToken) (*opensplunk.IngestionToken, error) {
 	purpose := record.Purpose
 	if purpose == "" {
 		// Test doubles and older internal adapters predate the domain field. The
@@ -2458,7 +2458,7 @@ func tokenToProto(record auth.CollectorToken) (*opensplunkv1.IngestionToken, err
 		}
 		previousScope = scope
 	}
-	var hecProfile *opensplunkv1.IngestionTokenHecProfile
+	var hecProfile *opensplunk.IngestionTokenHecProfile
 	switch purpose {
 	case auth.IngestionTokenPurposeNativeCollector:
 		if record.HECProfile != (auth.HECTokenProfile{}) {
@@ -2496,7 +2496,7 @@ func tokenToProto(record auth.CollectorToken) (*opensplunkv1.IngestionToken, err
 		return nil, errors.New("invalid ingestion token timestamps")
 	}
 	state := tokenStateToProto(record.State)
-	if state == opensplunkv1.IngestionTokenState_INGESTION_TOKEN_STATE_UNSPECIFIED {
+	if state == opensplunk.IngestionTokenState_INGESTION_TOKEN_STATE_UNSPECIFIED {
 		return nil, errors.New("invalid ingestion token state")
 	}
 	if (!record.ExpiresAt.IsZero() && !record.ExpiresAt.After(record.CreatedAt)) ||
@@ -2506,11 +2506,11 @@ func tokenToProto(record auth.CollectorToken) (*opensplunkv1.IngestionToken, err
 		(!record.RevokedAt.IsZero() && record.RevokedAt.Before(record.CreatedAt)) {
 		return nil, errors.New("invalid ingestion token lifecycle timestamps")
 	}
-	result := &opensplunkv1.IngestionToken{
+	result := &opensplunk.IngestionToken{
 		IngestionTokenId: record.ID, Version: record.Version, Name: record.Name,
 		TokenPrefix: record.Prefix, State: state,
 		Purpose: tokenPurposeToProto(purpose), HecProfile: hecProfile,
-		Constraints: &opensplunkv1.IngestionTokenConstraints{
+		Constraints: &opensplunk.IngestionTokenConstraints{
 			AllowedIndexNames:    slices.Clone(record.AllowedIndexNames),
 			AllowedHostRegexes:   slices.Clone(record.AllowedHostRegexes),
 			AllowedSourceRegexes: slices.Clone(record.AllowedSourceRegexes),
@@ -2545,39 +2545,39 @@ func tokenToProto(record auth.CollectorToken) (*opensplunkv1.IngestionToken, err
 	return result, nil
 }
 
-func tokenStateToProto(state auth.CollectorTokenState) opensplunkv1.IngestionTokenState {
+func tokenStateToProto(state auth.CollectorTokenState) opensplunk.IngestionTokenState {
 	switch state {
 	case auth.CollectorTokenStateActive:
-		return opensplunkv1.IngestionTokenState_INGESTION_TOKEN_STATE_ACTIVE
+		return opensplunk.IngestionTokenState_INGESTION_TOKEN_STATE_ACTIVE
 	case auth.CollectorTokenStateDisabled:
-		return opensplunkv1.IngestionTokenState_INGESTION_TOKEN_STATE_DISABLED
+		return opensplunk.IngestionTokenState_INGESTION_TOKEN_STATE_DISABLED
 	case auth.CollectorTokenStateRevoked:
-		return opensplunkv1.IngestionTokenState_INGESTION_TOKEN_STATE_REVOKED
+		return opensplunk.IngestionTokenState_INGESTION_TOKEN_STATE_REVOKED
 	case auth.CollectorTokenStateExpired:
-		return opensplunkv1.IngestionTokenState_INGESTION_TOKEN_STATE_EXPIRED
+		return opensplunk.IngestionTokenState_INGESTION_TOKEN_STATE_EXPIRED
 	default:
-		return opensplunkv1.IngestionTokenState_INGESTION_TOKEN_STATE_UNSPECIFIED
+		return opensplunk.IngestionTokenState_INGESTION_TOKEN_STATE_UNSPECIFIED
 	}
 }
 
-func accessStateFromProto(state opensplunkv1.IndexAccessState, field string) (bool, error) {
+func accessStateFromProto(state opensplunk.IndexAccessState, field string) (bool, error) {
 	switch state {
-	case opensplunkv1.IndexAccessState_INDEX_ACCESS_STATE_ENABLED:
+	case opensplunk.IndexAccessState_INDEX_ACCESS_STATE_ENABLED:
 		return true, nil
-	case opensplunkv1.IndexAccessState_INDEX_ACCESS_STATE_DISABLED:
+	case opensplunk.IndexAccessState_INDEX_ACCESS_STATE_DISABLED:
 		return false, nil
 	default:
 		return false, fmt.Errorf("%s must be enabled or disabled", field)
 	}
 }
 
-func indexStateFromProto(state opensplunkv1.IndexState) (control.IndexState, error) {
+func indexStateFromProto(state opensplunk.IndexState) (control.IndexState, error) {
 	switch state {
-	case opensplunkv1.IndexState_INDEX_STATE_ACTIVE:
+	case opensplunk.IndexState_INDEX_STATE_ACTIVE:
 		return control.IndexStateActive, nil
-	case opensplunkv1.IndexState_INDEX_STATE_ARCHIVED:
+	case opensplunk.IndexState_INDEX_STATE_ARCHIVED:
 		return control.IndexStateArchived, nil
-	case opensplunkv1.IndexState_INDEX_STATE_DELETING:
+	case opensplunk.IndexState_INDEX_STATE_DELETING:
 		return "", errors.New("deleting state is managed by index deletion")
 	default:
 		return "", errors.New("index state is invalid")
@@ -2676,13 +2676,13 @@ func mapAdministrativeCallError(ctx context.Context, operationErr error, object 
 	}
 }
 
-func normalizeIndexStateFilters(input []opensplunkv1.IndexState) ([]opensplunkv1.IndexState, error) {
+func normalizeIndexStateFilters(input []opensplunk.IndexState) ([]opensplunk.IndexState, error) {
 	if len(input) > 3 {
 		return nil, errors.New("too many index state filters")
 	}
 	result := slices.Clone(input)
 	for _, state := range result {
-		if state < opensplunkv1.IndexState_INDEX_STATE_ACTIVE || state > opensplunkv1.IndexState_INDEX_STATE_DELETING {
+		if state < opensplunk.IndexState_INDEX_STATE_ACTIVE || state > opensplunk.IndexState_INDEX_STATE_DELETING {
 			return nil, errors.New("index state filter is invalid")
 		}
 	}
@@ -2690,13 +2690,13 @@ func normalizeIndexStateFilters(input []opensplunkv1.IndexState) ([]opensplunkv1
 	return slices.Compact(result), nil
 }
 
-func normalizeTokenStateFilters(input []opensplunkv1.IngestionTokenState) ([]opensplunkv1.IngestionTokenState, error) {
+func normalizeTokenStateFilters(input []opensplunk.IngestionTokenState) ([]opensplunk.IngestionTokenState, error) {
 	if len(input) > 4 {
 		return nil, errors.New("too many ingestion token state filters")
 	}
 	result := slices.Clone(input)
 	for _, state := range result {
-		if state < opensplunkv1.IngestionTokenState_INGESTION_TOKEN_STATE_ACTIVE || state > opensplunkv1.IngestionTokenState_INGESTION_TOKEN_STATE_EXPIRED {
+		if state < opensplunk.IngestionTokenState_INGESTION_TOKEN_STATE_ACTIVE || state > opensplunk.IngestionTokenState_INGESTION_TOKEN_STATE_EXPIRED {
 			return nil, errors.New("ingestion token state filter is invalid")
 		}
 	}
@@ -2715,36 +2715,36 @@ func normalizeAdminFilter(input *string) (string, error) {
 	return filter, nil
 }
 
-func normalizeIndexSort(sortBy opensplunkv1.IndexSortBy, direction opensplunkv1.SortDirection) (opensplunkv1.IndexSortBy, opensplunkv1.SortDirection, error) {
-	if sortBy == opensplunkv1.IndexSortBy_INDEX_SORT_BY_UNSPECIFIED {
-		sortBy = opensplunkv1.IndexSortBy_INDEX_SORT_BY_NAME
+func normalizeIndexSort(sortBy opensplunk.IndexSortBy, direction opensplunk.SortDirection) (opensplunk.IndexSortBy, opensplunk.SortDirection, error) {
+	if sortBy == opensplunk.IndexSortBy_INDEX_SORT_BY_UNSPECIFIED {
+		sortBy = opensplunk.IndexSortBy_INDEX_SORT_BY_NAME
 	}
-	if sortBy < opensplunkv1.IndexSortBy_INDEX_SORT_BY_NAME || sortBy > opensplunkv1.IndexSortBy_INDEX_SORT_BY_UPDATED_AT {
+	if sortBy < opensplunk.IndexSortBy_INDEX_SORT_BY_NAME || sortBy > opensplunk.IndexSortBy_INDEX_SORT_BY_UPDATED_AT {
 		return 0, 0, errors.New("index statistics sorts are not available in this API version")
 	}
 	direction, err := normalizeSortDirection(direction)
 	return sortBy, direction, err
 }
 
-func normalizeTokenSort(sortBy opensplunkv1.IngestionTokenSortBy, direction opensplunkv1.SortDirection) (opensplunkv1.IngestionTokenSortBy, opensplunkv1.SortDirection, error) {
-	if sortBy == opensplunkv1.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_UNSPECIFIED {
-		sortBy = opensplunkv1.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_NAME
+func normalizeTokenSort(sortBy opensplunk.IngestionTokenSortBy, direction opensplunk.SortDirection) (opensplunk.IngestionTokenSortBy, opensplunk.SortDirection, error) {
+	if sortBy == opensplunk.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_UNSPECIFIED {
+		sortBy = opensplunk.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_NAME
 	}
-	if sortBy != opensplunkv1.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_NAME &&
-		sortBy != opensplunkv1.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_CREATED_AT &&
-		sortBy != opensplunkv1.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_LAST_USED_AT &&
-		sortBy != opensplunkv1.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_EXPIRES_AT {
+	if sortBy != opensplunk.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_NAME &&
+		sortBy != opensplunk.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_CREATED_AT &&
+		sortBy != opensplunk.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_LAST_USED_AT &&
+		sortBy != opensplunk.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_EXPIRES_AT {
 		return 0, 0, errors.New("ingestion token sort is invalid")
 	}
 	direction, err := normalizeSortDirection(direction)
 	return sortBy, direction, err
 }
 
-func normalizeSortDirection(direction opensplunkv1.SortDirection) (opensplunkv1.SortDirection, error) {
-	if direction == opensplunkv1.SortDirection_SORT_DIRECTION_UNSPECIFIED {
-		return opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING, nil
+func normalizeSortDirection(direction opensplunk.SortDirection) (opensplunk.SortDirection, error) {
+	if direction == opensplunk.SortDirection_SORT_DIRECTION_UNSPECIFIED {
+		return opensplunk.SortDirection_SORT_DIRECTION_ASCENDING, nil
 	}
-	if direction != opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING && direction != opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING {
+	if direction != opensplunk.SortDirection_SORT_DIRECTION_ASCENDING && direction != opensplunk.SortDirection_SORT_DIRECTION_DESCENDING {
 		return 0, errors.New("sort direction is invalid")
 	}
 	return direction, nil
@@ -2757,8 +2757,8 @@ func administrationExpectedVersion(version uint64) error {
 	return nil
 }
 
-func filterAndSortTokens(input []auth.CollectorToken, states []opensplunkv1.IngestionTokenState, indexName, text string, sortBy opensplunkv1.IngestionTokenSortBy, direction opensplunkv1.SortDirection) []auth.CollectorToken {
-	stateSet := make(map[opensplunkv1.IngestionTokenState]struct{}, len(states))
+func filterAndSortTokens(input []auth.CollectorToken, states []opensplunk.IngestionTokenState, indexName, text string, sortBy opensplunk.IngestionTokenSortBy, direction opensplunk.SortDirection) []auth.CollectorToken {
+	stateSet := make(map[opensplunk.IngestionTokenState]struct{}, len(states))
 	for _, state := range states {
 		stateSet[state] = struct{}{}
 	}
@@ -2784,19 +2784,19 @@ func filterAndSortTokens(input []auth.CollectorToken, states []opensplunkv1.Inge
 	sort.Slice(result, func(left, right int) bool {
 		comparison := 0
 		switch sortBy {
-		case opensplunkv1.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_NAME:
+		case opensplunk.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_NAME:
 			comparison = strings.Compare(strings.ToLower(result[left].Name), strings.ToLower(result[right].Name))
-		case opensplunkv1.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_CREATED_AT:
+		case opensplunk.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_CREATED_AT:
 			comparison = result[left].CreatedAt.Compare(result[right].CreatedAt)
-		case opensplunkv1.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_LAST_USED_AT:
+		case opensplunk.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_LAST_USED_AT:
 			comparison = compareOptionalTime(result[left].LastUsedAt, result[right].LastUsedAt)
-		case opensplunkv1.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_EXPIRES_AT:
+		case opensplunk.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_EXPIRES_AT:
 			comparison = compareOptionalTime(result[left].ExpiresAt, result[right].ExpiresAt)
 		}
 		if comparison == 0 {
 			comparison = strings.Compare(result[left].ID, result[right].ID)
 		}
-		if direction == opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING {
+		if direction == opensplunk.SortDirection_SORT_DIRECTION_DESCENDING {
 			return comparison > 0
 		}
 		return comparison < 0
@@ -2817,7 +2817,7 @@ func compareOptionalTime(left, right time.Time) int {
 	return left.Compare(right)
 }
 
-func (handler *apiHandler) adminPageRequest(page *opensplunkv1.PageRequest, endpointMaximum int) (int, string, bool, error) {
+func (handler *apiHandler) adminPageRequest(page *opensplunk.PageRequest, endpointMaximum int) (int, string, bool, error) {
 	pageSize, pageToken, includeTotal, err := handler.pageRequest(page)
 	if err != nil {
 		return 0, "", false, err
@@ -2860,8 +2860,8 @@ func (handler *apiHandler) adminPageStart(token, endpoint, fingerprint, snapshot
 	return cursor.Offset, nil
 }
 
-func (handler *apiHandler) adminPageResponse(endpoint, fingerprint, snapshot string, end, total int, includeTotal bool) (*opensplunkv1.PageResponse, error) {
-	result := &opensplunkv1.PageResponse{}
+func (handler *apiHandler) adminPageResponse(endpoint, fingerprint, snapshot string, end, total int, includeTotal bool) (*opensplunk.PageResponse, error) {
+	result := &opensplunk.PageResponse{}
 	if end < total {
 		token, err := encodeAdminCursor(handler.adminCursorKey[:], adminCursor{
 			Version: adminCursorVersion, Endpoint: endpoint, Fingerprint: fingerprint, Snapshot: snapshot, Offset: end,
@@ -3031,13 +3031,13 @@ func signAdminCursor(key, payload []byte) []byte {
 	return mac.Sum(nil)
 }
 
-type serializedIndexListResponse = boundedProtoResponse[*opensplunkv1.ListIndexesResponse]
+type serializedIndexListResponse = boundedProtoResponse[*opensplunk.ListIndexesResponse]
 
-type serializedIndexListCodec = boundedProtoCodec[*opensplunkv1.ListIndexesRequest, *opensplunkv1.ListIndexesResponse]
+type serializedIndexListCodec = boundedProtoCodec[*opensplunk.ListIndexesRequest, *opensplunk.ListIndexesResponse]
 
 func newSerializedIndexListCodec() *serializedIndexListCodec {
 	return newBoundedProtoCodec(
-		codec.NewProtoCodec[*opensplunkv1.ListIndexesRequest, *opensplunkv1.ListIndexesResponse](),
+		codec.NewProtoCodec[*opensplunk.ListIndexesRequest, *opensplunk.ListIndexesResponse](),
 		boundedProtoCodecOptions{
 			stateError:   "index list serialization state is invalid",
 			messageError: "index list serialization state is invalid",
@@ -3045,13 +3045,13 @@ func newSerializedIndexListCodec() *serializedIndexListCodec {
 	)
 }
 
-type serializedTokenListResponse = boundedProtoResponse[*opensplunkv1.ListIngestionTokensResponse]
+type serializedTokenListResponse = boundedProtoResponse[*opensplunk.ListIngestionTokensResponse]
 
-type serializedTokenListCodec = boundedProtoCodec[*opensplunkv1.ListIngestionTokensRequest, *opensplunkv1.ListIngestionTokensResponse]
+type serializedTokenListCodec = boundedProtoCodec[*opensplunk.ListIngestionTokensRequest, *opensplunk.ListIngestionTokensResponse]
 
 func newSerializedTokenListCodec() *serializedTokenListCodec {
 	return newBoundedProtoCodec(
-		codec.NewProtoCodec[*opensplunkv1.ListIngestionTokensRequest, *opensplunkv1.ListIngestionTokensResponse](),
+		codec.NewProtoCodec[*opensplunk.ListIngestionTokensRequest, *opensplunk.ListIngestionTokensResponse](),
 		boundedProtoCodecOptions{
 			stateError:   "ingestion token list serialization state is invalid",
 			messageError: "ingestion token list serialization state is invalid",

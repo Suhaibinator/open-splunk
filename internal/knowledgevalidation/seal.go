@@ -7,7 +7,7 @@ import (
 	"math"
 	"slices"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -26,7 +26,7 @@ func sealValidateResponse(ctx context.Context, result Result, tenantCatalogRevis
 	if result.state == nil || result.state.value == nil || maximumBytes < 1 || tenantCatalogRevision > math.MaxInt64 {
 		return SealedValidateResponse{}, ErrInvariant
 	}
-	cloned, ok := proto.Clone(result.state.value).(*opensplunkv1.KnowledgeValidationResult)
+	cloned, ok := proto.Clone(result.state.value).(*opensplunk.KnowledgeValidationResult)
 	if !ok || cloned == nil {
 		return SealedValidateResponse{}, ErrInvariant
 	}
@@ -34,7 +34,7 @@ func sealValidateResponse(ctx context.Context, result Result, tenantCatalogRevis
 	if err := validateResult(ctx, cloned, result.state.kind, sources); err != nil {
 		return SealedValidateResponse{}, err
 	}
-	response := &opensplunkv1.ValidateKnowledgeObjectResponse{
+	response := &opensplunk.ValidateKnowledgeObjectResponse{
 		Result:                cloned,
 		TenantCatalogRevision: tenantCatalogRevision,
 	}
@@ -62,7 +62,7 @@ func sealValidateResponse(ctx context.Context, result Result, tenantCatalogRevis
 
 func validateResult(
 	ctx context.Context,
-	result *opensplunkv1.KnowledgeValidationResult,
+	result *opensplunk.KnowledgeValidationResult,
 	kind resultKind,
 	diagnosticSources []diagnosticSource,
 ) error {
@@ -84,7 +84,7 @@ func validateResult(
 	}
 	hasError := false
 	for _, value := range result.GetDiagnostics() {
-		if value.GetDiagnostic().GetSeverity() == opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR {
+		if value.GetDiagnostic().GetSeverity() == opensplunk.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR {
 			hasError = true
 			break
 		}
@@ -139,7 +139,7 @@ func validateResult(
 	return nil
 }
 
-func zeroPublicationResources(resources *opensplunkv1.KnowledgeResourceEstimate) bool {
+func zeroPublicationResources(resources *opensplunk.KnowledgeResourceEstimate) bool {
 	return resources.GetDependencyNodes() == 0 && resources.GetDependencyEdges() == 0 &&
 		resources.GetGeneratedOperators() == 0 && resources.GetGeneratedFields() == 0 &&
 		resources.GetRegexPrograms() == 0 && resources.GetEstimatedRegexWorkUnits() == 0 &&
@@ -148,7 +148,7 @@ func zeroPublicationResources(resources *opensplunkv1.KnowledgeResourceEstimate)
 		resources.GetScalarPredicates() == 0
 }
 
-func resourcesMatchCharges(resources *opensplunkv1.KnowledgeResourceEstimate, charges intrinsicCharges) bool {
+func resourcesMatchCharges(resources *opensplunk.KnowledgeResourceEstimate, charges intrinsicCharges) bool {
 	return resources.GetGeneratedOperators() == charges.generatedOperators &&
 		resources.GetGeneratedFields() == charges.generatedFields &&
 		resources.GetRegexPrograms() == charges.regexPrograms &&
@@ -160,7 +160,7 @@ func resourcesMatchCharges(resources *opensplunkv1.KnowledgeResourceEstimate, ch
 		resources.GetScalarPredicates() == charges.scalarPredicates
 }
 
-func validateFieldViolationProjection(ctx context.Context, values []*opensplunkv1.FieldViolation) error {
+func validateFieldViolationProjection(ctx context.Context, values []*opensplunk.FieldViolation) error {
 	if len(values) > MaximumIssues {
 		return ErrInvariant
 	}
@@ -190,7 +190,7 @@ func validateFieldViolationProjection(ctx context.Context, values []*opensplunkv
 
 func validateDiagnosticProjection(
 	ctx context.Context,
-	values []*opensplunkv1.KnowledgeValidationDiagnostic,
+	values []*opensplunk.KnowledgeValidationDiagnostic,
 	sources []diagnosticSource,
 ) error {
 	if len(values) > MaximumIssues || len(values) != len(sources) {
@@ -250,7 +250,7 @@ func validateDiagnosticProjection(
 	return nil
 }
 
-func equalSourceRange(left, right *opensplunkv1.SourceRange) bool {
+func equalSourceRange(left, right *opensplunk.SourceRange) bool {
 	if left == nil || right == nil || left.GetStart() == nil || right.GetStart() == nil ||
 		left.GetEnd() == nil || right.GetEnd() == nil {
 		return false
@@ -263,7 +263,7 @@ func equalSourceRange(left, right *opensplunkv1.SourceRange) bool {
 		left.GetEnd().GetColumn() == right.GetEnd().GetColumn()
 }
 
-func validateDependencyProjection(ctx context.Context, values []*opensplunkv1.KnowledgeValidationDependency, resources *opensplunkv1.KnowledgeResourceEstimate) error {
+func validateDependencyProjection(ctx context.Context, values []*opensplunk.KnowledgeValidationDependency, resources *opensplunk.KnowledgeResourceEstimate) error {
 	if len(values) > MaximumDependencies || resources == nil ||
 		resources.GetDependencyEdges() != uint32(len(values)) { // #nosec G115 -- len(values) is bounded by MaximumDependencies first.
 		return ErrInvariant
@@ -278,7 +278,7 @@ func validateDependencyProjection(ctx context.Context, values []*opensplunkv1.Kn
 		if value == nil || value.GetTarget() == nil ||
 			!validIdentity(value.GetTarget().GetKnowledgeObjectId(), maximumObjectIDBytes) ||
 			value.GetTarget().GetVersion() == 0 || value.GetTarget().GetVersion() > math.MaxInt64 ||
-			value.GetRole() != opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT {
+			value.GetRole() != opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT {
 			return ErrInvariant
 		}
 		if index > 0 {
@@ -296,7 +296,7 @@ func validateDependencyProjection(ctx context.Context, values []*opensplunkv1.Kn
 	return nil
 }
 
-func compareDependency(left, right *opensplunkv1.KnowledgeValidationDependency) int {
+func compareDependency(left, right *opensplunk.KnowledgeValidationDependency) int {
 	if left.GetTarget().GetKnowledgeObjectId() < right.GetTarget().GetKnowledgeObjectId() {
 		return -1
 	}
@@ -375,11 +375,11 @@ func issueDescriptorContract() error {
 		message protoreflect.MessageDescriptor
 		fields  []fieldContract
 	}{
-		{(&opensplunkv1.FieldViolation{}).ProtoReflect().Descriptor(), []fieldContract{{"field_path", 1}, {"code", 2}, {"message", 3}}},
-		{(&opensplunkv1.KnowledgeValidationDiagnostic{}).ProtoReflect().Descriptor(), []fieldContract{{"field_path", 1}, {"diagnostic", 2}}},
-		{(&opensplunkv1.Diagnostic{}).ProtoReflect().Descriptor(), []fieldContract{{"code", 1}, {"severity", 2}, {"message", 3}, {"source_range", 4}, {"suggestions", 5}}},
-		{(&opensplunkv1.SourceRange{}).ProtoReflect().Descriptor(), []fieldContract{{"start", 1}, {"end", 2}}},
-		{(&opensplunkv1.SourcePosition{}).ProtoReflect().Descriptor(), []fieldContract{{"byte_offset", 1}, {"line", 2}, {"column", 3}}},
+		{(&opensplunk.FieldViolation{}).ProtoReflect().Descriptor(), []fieldContract{{"field_path", 1}, {"code", 2}, {"message", 3}}},
+		{(&opensplunk.KnowledgeValidationDiagnostic{}).ProtoReflect().Descriptor(), []fieldContract{{"field_path", 1}, {"diagnostic", 2}}},
+		{(&opensplunk.Diagnostic{}).ProtoReflect().Descriptor(), []fieldContract{{"code", 1}, {"severity", 2}, {"message", 3}, {"source_range", 4}, {"suggestions", 5}}},
+		{(&opensplunk.SourceRange{}).ProtoReflect().Descriptor(), []fieldContract{{"start", 1}, {"end", 2}}},
+		{(&opensplunk.SourcePosition{}).ProtoReflect().Descriptor(), []fieldContract{{"byte_offset", 1}, {"line", 2}, {"column", 3}}},
 	}
 	for _, check := range checks {
 		if check.message == nil || check.message.Fields().Len() != len(check.fields) {
@@ -400,13 +400,13 @@ type fieldContract struct {
 	number protoreflect.FieldNumber
 }
 
-func validObjectType(value opensplunkv1.KnowledgeObjectType, allowUnspecified bool) bool {
-	if allowUnspecified && value == opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_UNSPECIFIED {
+func validObjectType(value opensplunk.KnowledgeObjectType, allowUnspecified bool) bool {
+	if allowUnspecified && value == opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_UNSPECIFIED {
 		return true
 	}
-	return slices.Contains([]opensplunkv1.KnowledgeObjectType{
-		opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
-		opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
-		opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD,
+	return slices.Contains([]opensplunk.KnowledgeObjectType{
+		opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
+		opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+		opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD,
 	}, value)
 }

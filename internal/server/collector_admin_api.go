@@ -14,7 +14,7 @@ import (
 	"github.com/Suhaibinator/SRouter/pkg/codec"
 	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"google.golang.org/protobuf/proto"
@@ -29,7 +29,7 @@ const (
 	// capacity depend on malformed trusted output.
 	maximumCollectorAdministrationResponse = 16 << 20
 	maximumCollectorDisplayNameBytes       = 255
-	maximumCollectorVersionBytes           = 128
+	maximumSourceRevisionBytes             = 128
 	maximumCollectorHostnameBytes          = 255
 	maximumCollectorOperatingSystemBytes   = 128
 	maximumCollectorArchitectureBytes      = 128
@@ -45,9 +45,9 @@ func (handler *apiHandler) collectorAdministrationRoutes(
 ) []protobufRouteDefinition {
 	return []protobufRouteDefinition{
 		newForwardCompatibleProtoRoute[
-			*opensplunkv1.ListCollectorsRequest,
+			*opensplunk.ListCollectorsRequest,
 			*serializedListCollectorsResponse](router.RouteConfig[
-			*opensplunkv1.ListCollectorsRequest,
+			*opensplunk.ListCollectorsRequest,
 			*serializedListCollectorsResponse,
 		]{
 			Path:       "/collectors/list",
@@ -61,9 +61,9 @@ func (handler *apiHandler) collectorAdministrationRoutes(
 			},
 		}),
 		newForwardCompatibleProtoRoute[
-			*opensplunkv1.GetCollectorRequest,
+			*opensplunk.GetCollectorRequest,
 			*serializedGetCollectorResponse](router.RouteConfig[
-			*opensplunkv1.GetCollectorRequest,
+			*opensplunk.GetCollectorRequest,
 			*serializedGetCollectorResponse,
 		]{
 			Path:       "/collectors/get",
@@ -77,9 +77,9 @@ func (handler *apiHandler) collectorAdministrationRoutes(
 			},
 		}),
 		newForwardCompatibleProtoRoute[
-			*opensplunkv1.UpdateCollectorRequest,
+			*opensplunk.UpdateCollectorRequest,
 			*serializedUpdateCollectorResponse](router.RouteConfig[
-			*opensplunkv1.UpdateCollectorRequest,
+			*opensplunk.UpdateCollectorRequest,
 			*serializedUpdateCollectorResponse,
 		]{
 			Path:       "/collectors/update",
@@ -93,9 +93,9 @@ func (handler *apiHandler) collectorAdministrationRoutes(
 			},
 		}),
 		newForwardCompatibleProtoRoute[
-			*opensplunkv1.SetCollectorEnabledRequest,
+			*opensplunk.SetCollectorEnabledRequest,
 			*serializedSetCollectorEnabledResponse](router.RouteConfig[
-			*opensplunkv1.SetCollectorEnabledRequest,
+			*opensplunk.SetCollectorEnabledRequest,
 			*serializedSetCollectorEnabledResponse,
 		]{
 			Path:       "/collectors/state/set",
@@ -113,7 +113,7 @@ func (handler *apiHandler) collectorAdministrationRoutes(
 
 func (handler *apiHandler) listCollectors(
 	request *http.Request,
-	input *opensplunkv1.ListCollectorsRequest,
+	input *opensplunk.ListCollectorsRequest,
 ) (*serializedListCollectorsResponse, error) {
 	scope, err := handler.collectorAdministrationAccess(request)
 	if err != nil {
@@ -179,7 +179,7 @@ func (handler *apiHandler) listCollectors(
 
 func (handler *apiHandler) getCollector(
 	request *http.Request,
-	input *opensplunkv1.GetCollectorRequest,
+	input *opensplunk.GetCollectorRequest,
 ) (*serializedGetCollectorResponse, error) {
 	scope, err := handler.collectorAdministrationAccess(request)
 	if err != nil {
@@ -230,7 +230,7 @@ func (handler *apiHandler) getCollector(
 	if err != nil {
 		return nil, internalError()
 	}
-	message := &opensplunkv1.GetCollectorResponse{Collector: converted}
+	message := &opensplunk.GetCollectorResponse{Collector: converted}
 	transferred = true
 	return &serializedGetCollectorResponse{
 		message: message,
@@ -241,7 +241,7 @@ func (handler *apiHandler) getCollector(
 
 func (handler *apiHandler) updateCollector(
 	request *http.Request,
-	input *opensplunkv1.UpdateCollectorRequest,
+	input *opensplunk.UpdateCollectorRequest,
 ) (*serializedUpdateCollectorResponse, error) {
 	scope, err := handler.collectorAdministrationAccess(request)
 	if err != nil {
@@ -304,7 +304,7 @@ func (handler *apiHandler) updateCollector(
 		!equalOptionalString(snapshot.DisplayName, displayName) {
 		return nil, internalError()
 	}
-	message := &opensplunkv1.UpdateCollectorResponse{
+	message := &opensplunk.UpdateCollectorResponse{
 		Collector: converted,
 	}
 	transferred = true
@@ -319,7 +319,7 @@ func (handler *apiHandler) updateCollector(
 
 func (handler *apiHandler) setCollectorEnabled(
 	request *http.Request,
-	input *opensplunkv1.SetCollectorEnabledRequest,
+	input *opensplunk.SetCollectorEnabledRequest,
 ) (*serializedSetCollectorEnabledResponse, error) {
 	scope, err := handler.collectorAdministrationAccess(request)
 	if err != nil {
@@ -390,7 +390,7 @@ func (handler *apiHandler) setCollectorEnabled(
 	if err != nil || snapshot.AdministrativeState != state {
 		return nil, internalError()
 	}
-	message := &opensplunkv1.SetCollectorEnabledResponse{
+	message := &opensplunk.SetCollectorEnabledResponse{
 		Collector: converted,
 	}
 	transferred = true
@@ -414,7 +414,7 @@ func (handler *apiHandler) collectorAdministrationAccess(
 }
 
 func (handler *apiHandler) collectorAdministrationListRequest(
-	input *opensplunkv1.ListCollectorsRequest,
+	input *opensplunk.ListCollectorsRequest,
 ) (collectorfleet.ListRequest, error) {
 	if input == nil {
 		return collectorfleet.ListRequest{}, errors.New(
@@ -509,7 +509,7 @@ func (handler *apiHandler) collectorAdministrationListRequest(
 }
 
 func normalizeCollectorDisplayNameUpdate(
-	input *opensplunkv1.UpdateCollectorRequest,
+	input *opensplunk.UpdateCollectorRequest,
 ) (string, uint64, *string, error) {
 	if input == nil {
 		return "", 0, nil, errors.New("collector update is required")
@@ -600,16 +600,16 @@ func normalizeCollectorTextFilter(input *string) (*string, error) {
 }
 
 func collectorConnectionStateFromProto(
-	input opensplunkv1.CollectorConnectionState,
+	input opensplunk.CollectorConnectionState,
 ) (collectorfleet.ConnectionState, error) {
 	switch input {
-	case opensplunkv1.CollectorConnectionState_COLLECTOR_CONNECTION_STATE_ONLINE:
+	case opensplunk.CollectorConnectionState_COLLECTOR_CONNECTION_STATE_ONLINE:
 		return collectorfleet.ConnectionStateOnline, nil
-	case opensplunkv1.CollectorConnectionState_COLLECTOR_CONNECTION_STATE_STALE:
+	case opensplunk.CollectorConnectionState_COLLECTOR_CONNECTION_STATE_STALE:
 		return collectorfleet.ConnectionStateStale, nil
-	case opensplunkv1.CollectorConnectionState_COLLECTOR_CONNECTION_STATE_OFFLINE:
+	case opensplunk.CollectorConnectionState_COLLECTOR_CONNECTION_STATE_OFFLINE:
 		return collectorfleet.ConnectionStateOffline, nil
-	case opensplunkv1.CollectorConnectionState_COLLECTOR_CONNECTION_STATE_DISABLED:
+	case opensplunk.CollectorConnectionState_COLLECTOR_CONNECTION_STATE_DISABLED:
 		return collectorfleet.ConnectionStateDisabled, nil
 	default:
 		return "", errors.New("collector connection state is invalid")
@@ -618,29 +618,29 @@ func collectorConnectionStateFromProto(
 
 func collectorConnectionStateToProto(
 	input collectorfleet.ConnectionState,
-) (opensplunkv1.CollectorConnectionState, error) {
+) (opensplunk.CollectorConnectionState, error) {
 	switch input {
 	case collectorfleet.ConnectionStateOnline:
-		return opensplunkv1.CollectorConnectionState_COLLECTOR_CONNECTION_STATE_ONLINE, nil
+		return opensplunk.CollectorConnectionState_COLLECTOR_CONNECTION_STATE_ONLINE, nil
 	case collectorfleet.ConnectionStateStale:
-		return opensplunkv1.CollectorConnectionState_COLLECTOR_CONNECTION_STATE_STALE, nil
+		return opensplunk.CollectorConnectionState_COLLECTOR_CONNECTION_STATE_STALE, nil
 	case collectorfleet.ConnectionStateOffline:
-		return opensplunkv1.CollectorConnectionState_COLLECTOR_CONNECTION_STATE_OFFLINE, nil
+		return opensplunk.CollectorConnectionState_COLLECTOR_CONNECTION_STATE_OFFLINE, nil
 	case collectorfleet.ConnectionStateDisabled:
-		return opensplunkv1.CollectorConnectionState_COLLECTOR_CONNECTION_STATE_DISABLED, nil
+		return opensplunk.CollectorConnectionState_COLLECTOR_CONNECTION_STATE_DISABLED, nil
 	default:
-		return opensplunkv1.CollectorConnectionState_COLLECTOR_CONNECTION_STATE_UNSPECIFIED,
+		return opensplunk.CollectorConnectionState_COLLECTOR_CONNECTION_STATE_UNSPECIFIED,
 			errors.New("collector connection state is invalid")
 	}
 }
 
 func collectorAdministrativeStateFromProto(
-	input opensplunkv1.CollectorAdministrativeState,
+	input opensplunk.CollectorAdministrativeState,
 ) (collectorfleet.AdministrativeState, error) {
 	switch input {
-	case opensplunkv1.CollectorAdministrativeState_COLLECTOR_ADMINISTRATIVE_STATE_ENABLED:
+	case opensplunk.CollectorAdministrativeState_COLLECTOR_ADMINISTRATIVE_STATE_ENABLED:
 		return collectorfleet.AdministrativeStateEnabled, nil
-	case opensplunkv1.CollectorAdministrativeState_COLLECTOR_ADMINISTRATIVE_STATE_DISABLED:
+	case opensplunk.CollectorAdministrativeState_COLLECTOR_ADMINISTRATIVE_STATE_DISABLED:
 		return collectorfleet.AdministrativeStateDisabled, nil
 	default:
 		return "", errors.New("collector administrative state is invalid")
@@ -649,30 +649,30 @@ func collectorAdministrativeStateFromProto(
 
 func collectorAdministrativeStateToProto(
 	input collectorfleet.AdministrativeState,
-) (opensplunkv1.CollectorAdministrativeState, error) {
+) (opensplunk.CollectorAdministrativeState, error) {
 	switch input {
 	case collectorfleet.AdministrativeStateEnabled:
-		return opensplunkv1.CollectorAdministrativeState_COLLECTOR_ADMINISTRATIVE_STATE_ENABLED, nil
+		return opensplunk.CollectorAdministrativeState_COLLECTOR_ADMINISTRATIVE_STATE_ENABLED, nil
 	case collectorfleet.AdministrativeStateDisabled:
-		return opensplunkv1.CollectorAdministrativeState_COLLECTOR_ADMINISTRATIVE_STATE_DISABLED, nil
+		return opensplunk.CollectorAdministrativeState_COLLECTOR_ADMINISTRATIVE_STATE_DISABLED, nil
 	default:
-		return opensplunkv1.CollectorAdministrativeState_COLLECTOR_ADMINISTRATIVE_STATE_UNSPECIFIED,
+		return opensplunk.CollectorAdministrativeState_COLLECTOR_ADMINISTRATIVE_STATE_UNSPECIFIED,
 			errors.New("collector administrative state is invalid")
 	}
 }
 
 func collectorSortFromProto(
-	input opensplunkv1.CollectorSortBy,
+	input opensplunk.CollectorSortBy,
 ) (collectorfleet.CollectorSortBy, error) {
 	switch input {
-	case opensplunkv1.CollectorSortBy_COLLECTOR_SORT_BY_UNSPECIFIED,
-		opensplunkv1.CollectorSortBy_COLLECTOR_SORT_BY_DISPLAY_NAME:
+	case opensplunk.CollectorSortBy_COLLECTOR_SORT_BY_UNSPECIFIED,
+		opensplunk.CollectorSortBy_COLLECTOR_SORT_BY_DISPLAY_NAME:
 		return collectorfleet.CollectorSortByDisplayName, nil
-	case opensplunkv1.CollectorSortBy_COLLECTOR_SORT_BY_HOSTNAME:
+	case opensplunk.CollectorSortBy_COLLECTOR_SORT_BY_HOSTNAME:
 		return collectorfleet.CollectorSortByHostname, nil
-	case opensplunkv1.CollectorSortBy_COLLECTOR_SORT_BY_LAST_SEEN_AT:
+	case opensplunk.CollectorSortBy_COLLECTOR_SORT_BY_LAST_SEEN_AT:
 		return collectorfleet.CollectorSortByLastSeenAt, nil
-	case opensplunkv1.CollectorSortBy_COLLECTOR_SORT_BY_QUEUE_BYTES:
+	case opensplunk.CollectorSortBy_COLLECTOR_SORT_BY_QUEUE_BYTES:
 		return collectorfleet.CollectorSortByQueueBytes, nil
 	default:
 		return "", errors.New("collector sort field is invalid")
@@ -680,13 +680,13 @@ func collectorSortFromProto(
 }
 
 func collectorSortDirectionFromProto(
-	input opensplunkv1.SortDirection,
+	input opensplunk.SortDirection,
 ) (collectorfleet.SortDirection, error) {
 	switch input {
-	case opensplunkv1.SortDirection_SORT_DIRECTION_UNSPECIFIED,
-		opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING:
+	case opensplunk.SortDirection_SORT_DIRECTION_UNSPECIFIED,
+		opensplunk.SortDirection_SORT_DIRECTION_ASCENDING:
 		return collectorfleet.SortAscending, nil
-	case opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING:
+	case opensplunk.SortDirection_SORT_DIRECTION_DESCENDING:
 		return collectorfleet.SortDescending, nil
 	default:
 		return "", errors.New("collector sort direction is invalid")
@@ -697,7 +697,7 @@ func collectorAdministrationListToProto(
 	scope collectorfleet.Scope,
 	request collectorfleet.ListRequest,
 	result collectorfleet.ListResult,
-) (*opensplunkv1.ListCollectorsResponse, error) {
+) (*opensplunk.ListCollectorsResponse, error) {
 	if len(result.Entries) > int(request.PageSize) ||
 		len(result.Entries) >
 			int(collectorfleet.MaximumCollectorListPageSize) {
@@ -731,7 +731,7 @@ func collectorAdministrationListToProto(
 		}
 	}
 	collectors := make(
-		[]*opensplunkv1.CollectorRecord,
+		[]*opensplunk.CollectorRecord,
 		0,
 		len(result.Entries),
 	)
@@ -748,7 +748,7 @@ func collectorAdministrationListToProto(
 		seen[collectorID] = struct{}{}
 		collectors = append(collectors, converted)
 	}
-	page := &opensplunkv1.PageResponse{
+	page := &opensplunk.PageResponse{
 		TotalSizeExact: result.TotalSizeExact,
 	}
 	if result.NextPageToken != nil {
@@ -760,7 +760,7 @@ func collectorAdministrationListToProto(
 		total := *result.TotalSize
 		page.TotalSize = &total
 	}
-	return &opensplunkv1.ListCollectorsResponse{
+	return &opensplunk.ListCollectorsResponse{
 		Collectors: collectors,
 		Page:       page,
 	}, nil
@@ -769,7 +769,7 @@ func collectorAdministrationListToProto(
 func collectorCatalogEntryToProto(
 	scope collectorfleet.Scope,
 	entry collectorfleet.CatalogEntry,
-) (*opensplunkv1.CollectorRecord, error) {
+) (*opensplunk.CollectorRecord, error) {
 	collector := entry.Collector
 	if collector.TenantID != scope.TenantID {
 		return nil, errors.New("collector tenant is invalid")
@@ -779,7 +779,7 @@ func collectorCatalogEntryToProto(
 		return nil, err
 	}
 	if collector.Version == 0 || collector.Version > math.MaxInt64 {
-		return nil, errors.New("collector version is invalid")
+		return nil, errors.New("source revision is invalid")
 	}
 	displayName, err := normalizeCollectorDisplayName(collector.DisplayName)
 	if err != nil ||
@@ -809,9 +809,9 @@ func collectorCatalogEntryToProto(
 	if err != nil {
 		return nil, err
 	}
-	collectorVersion, err := collectorOptionalMetadata(
-		collector.CollectorVersion,
-		maximumCollectorVersionBytes,
+	sourceRevision, err := collectorOptionalMetadata(
+		collector.SourceRevision,
+		maximumSourceRevisionBytes,
 	)
 	if err != nil {
 		return nil, err
@@ -879,13 +879,13 @@ func collectorCatalogEntryToProto(
 			disconnectedAt.AsTime().Before(lastSeenAt.AsTime())) {
 		return nil, errors.New("collector disconnect time is invalid")
 	}
-	return &opensplunkv1.CollectorRecord{
+	return &opensplunk.CollectorRecord{
 		CollectorId:         collectorID,
 		Version:             collector.Version,
 		DisplayName:         displayName,
 		ConnectionState:     connectionState,
 		ActiveInstanceId:    activeInstanceID,
-		CollectorVersion:    collectorVersion,
+		SourceRevision:      sourceRevision,
 		Hostname:            hostname,
 		OperatingSystem:     operatingSystem,
 		Architecture:        architecture,
@@ -937,11 +937,11 @@ func collectorOptionalMetadata(
 
 func collectorCapabilitiesToProto(
 	input []uint32,
-) ([]opensplunkv1.CollectorCapability, error) {
+) ([]opensplunk.CollectorCapability, error) {
 	if len(input) > maximumCollectorCapabilities {
 		return nil, errors.New("collector capabilities are invalid")
 	}
-	result := make([]opensplunkv1.CollectorCapability, len(input))
+	result := make([]opensplunk.CollectorCapability, len(input))
 	var previous uint32
 	for index, capability := range input {
 		if capability == 0 ||
@@ -949,7 +949,7 @@ func collectorCapabilitiesToProto(
 			(index > 0 && capability <= previous) {
 			return nil, errors.New("collector capabilities are invalid")
 		}
-		result[index] = opensplunkv1.CollectorCapability(capability)
+		result[index] = opensplunk.CollectorCapability(capability)
 		previous = capability
 	}
 	return result, nil
@@ -976,7 +976,7 @@ func collectorAuthorizedIndexes(input []string) ([]string, error) {
 
 func collectorQueueToProto(
 	input collectorfleet.QueueTelemetry,
-) (*opensplunkv1.CollectorQueueStats, error) {
+) (*opensplunk.CollectorQueueStats, error) {
 	for _, value := range []uint64{
 		input.QueuedEvents,
 		input.QueuedBytes,
@@ -1000,7 +1000,7 @@ func collectorQueueToProto(
 			return nil, errors.New("collector queue age is invalid")
 		}
 	}
-	return &opensplunkv1.CollectorQueueStats{
+	return &opensplunk.CollectorQueueStats{
 		QueuedEvents:            input.QueuedEvents,
 		QueuedBytes:             input.QueuedBytes,
 		OldestEventAge:          oldestEventAge,
@@ -1014,11 +1014,11 @@ func collectorQueueToProto(
 
 func collectorInputHealthToProto(
 	input []collectorfleet.InputHealth,
-) ([]*opensplunkv1.CollectorInputHealth, error) {
+) ([]*opensplunk.CollectorInputHealth, error) {
 	if len(input) > maximumCollectorInputHealth {
 		return nil, errors.New("collector input health is invalid")
 	}
-	result := make([]*opensplunkv1.CollectorInputHealth, len(input))
+	result := make([]*opensplunk.CollectorInputHealth, len(input))
 	for index, item := range input {
 		if !validTokenCollectorID(item.InputID) ||
 			(index > 0 && input[index-1].InputID >= item.InputID) ||
@@ -1045,9 +1045,9 @@ func collectorInputHealthToProto(
 		if err != nil {
 			return nil, err
 		}
-		result[index] = &opensplunkv1.CollectorInputHealth{
+		result[index] = &opensplunk.CollectorInputHealth{
 			InputId:           strings.Clone(item.InputID),
-			State:             opensplunkv1.CollectorInputState(item.State),
+			State:             opensplunk.CollectorInputState(item.State),
 			StatusMessage:     strings.Clone(item.StatusMessage),
 			DiscoveredSources: item.DiscoveredSources,
 			ActiveSources:     item.ActiveSources,
@@ -1075,7 +1075,7 @@ func collectorAdministrationSnapshotToProto(
 	expectedVersion uint64,
 	input collectorfleet.AdministrationSnapshot,
 	allowTerminalDisable bool,
-) (*opensplunkv1.CollectorAdministrationSnapshot, error) {
+) (*opensplunk.CollectorAdministrationSnapshot, error) {
 	if input.TenantID != scope.TenantID ||
 		input.CollectorID != collectorID ||
 		input.Version == 0 ||
@@ -1122,7 +1122,7 @@ func collectorAdministrationSnapshotToProto(
 			"collector administration timestamps are invalid",
 		)
 	}
-	return &opensplunkv1.CollectorAdministrationSnapshot{
+	return &opensplunk.CollectorAdministrationSnapshot{
 		CollectorId:         strings.Clone(input.CollectorID),
 		Version:             input.Version,
 		DisplayName:         displayName,
@@ -1195,7 +1195,7 @@ func mapCollectorAdministrationCallError(
 	case errors.Is(operationErr, control.ErrVersionConflict):
 		return router.NewHTTPError(
 			http.StatusConflict,
-			"collector version conflict",
+			"source revision conflict",
 		)
 	case errors.Is(operationErr, control.ErrCapacityExceeded):
 		return router.NewHTTPError(
@@ -1207,78 +1207,78 @@ func mapCollectorAdministrationCallError(
 	}
 }
 
-type serializedListCollectorsResponse = boundedProtoResponse[*opensplunkv1.ListCollectorsResponse]
+type serializedListCollectorsResponse = boundedProtoResponse[*opensplunk.ListCollectorsResponse]
 
 type serializedListCollectorsCodec = boundedProtoCodec[
-	*opensplunkv1.ListCollectorsRequest,
-	*opensplunkv1.ListCollectorsResponse,
+	*opensplunk.ListCollectorsRequest,
+	*opensplunk.ListCollectorsResponse,
 ]
 
 func newSerializedListCollectorsCodec() *serializedListCollectorsCodec {
 	return newCollectorAdministrationCodec[
-		*opensplunkv1.ListCollectorsRequest,
-		*opensplunkv1.ListCollectorsResponse,
+		*opensplunk.ListCollectorsRequest,
+		*opensplunk.ListCollectorsResponse,
 	](
 		codec.NewProtoCodec[
-			*opensplunkv1.ListCollectorsRequest,
-			*opensplunkv1.ListCollectorsResponse,
+			*opensplunk.ListCollectorsRequest,
+			*opensplunk.ListCollectorsResponse,
 		](),
 	)
 }
 
-type serializedGetCollectorResponse = boundedProtoResponse[*opensplunkv1.GetCollectorResponse]
+type serializedGetCollectorResponse = boundedProtoResponse[*opensplunk.GetCollectorResponse]
 
 type serializedGetCollectorCodec = boundedProtoCodec[
-	*opensplunkv1.GetCollectorRequest,
-	*opensplunkv1.GetCollectorResponse,
+	*opensplunk.GetCollectorRequest,
+	*opensplunk.GetCollectorResponse,
 ]
 
 func newSerializedGetCollectorCodec() *serializedGetCollectorCodec {
 	return newCollectorAdministrationCodec[
-		*opensplunkv1.GetCollectorRequest,
-		*opensplunkv1.GetCollectorResponse,
+		*opensplunk.GetCollectorRequest,
+		*opensplunk.GetCollectorResponse,
 	](
 		codec.NewProtoCodec[
-			*opensplunkv1.GetCollectorRequest,
-			*opensplunkv1.GetCollectorResponse,
+			*opensplunk.GetCollectorRequest,
+			*opensplunk.GetCollectorResponse,
 		](),
 	)
 }
 
-type serializedUpdateCollectorResponse = boundedProtoResponse[*opensplunkv1.UpdateCollectorResponse]
+type serializedUpdateCollectorResponse = boundedProtoResponse[*opensplunk.UpdateCollectorResponse]
 
 type serializedUpdateCollectorCodec = boundedProtoCodec[
-	*opensplunkv1.UpdateCollectorRequest,
-	*opensplunkv1.UpdateCollectorResponse,
+	*opensplunk.UpdateCollectorRequest,
+	*opensplunk.UpdateCollectorResponse,
 ]
 
 func newSerializedUpdateCollectorCodec() *serializedUpdateCollectorCodec {
 	return newCollectorAdministrationCodec[
-		*opensplunkv1.UpdateCollectorRequest,
-		*opensplunkv1.UpdateCollectorResponse,
+		*opensplunk.UpdateCollectorRequest,
+		*opensplunk.UpdateCollectorResponse,
 	](
 		codec.NewProtoCodec[
-			*opensplunkv1.UpdateCollectorRequest,
-			*opensplunkv1.UpdateCollectorResponse,
+			*opensplunk.UpdateCollectorRequest,
+			*opensplunk.UpdateCollectorResponse,
 		](),
 	)
 }
 
-type serializedSetCollectorEnabledResponse = boundedProtoResponse[*opensplunkv1.SetCollectorEnabledResponse]
+type serializedSetCollectorEnabledResponse = boundedProtoResponse[*opensplunk.SetCollectorEnabledResponse]
 
 type serializedSetCollectorEnabledCodec = boundedProtoCodec[
-	*opensplunkv1.SetCollectorEnabledRequest,
-	*opensplunkv1.SetCollectorEnabledResponse,
+	*opensplunk.SetCollectorEnabledRequest,
+	*opensplunk.SetCollectorEnabledResponse,
 ]
 
 func newSerializedSetCollectorEnabledCodec() *serializedSetCollectorEnabledCodec {
 	return newCollectorAdministrationCodec[
-		*opensplunkv1.SetCollectorEnabledRequest,
-		*opensplunkv1.SetCollectorEnabledResponse,
+		*opensplunk.SetCollectorEnabledRequest,
+		*opensplunk.SetCollectorEnabledResponse,
 	](
 		codec.NewProtoCodec[
-			*opensplunkv1.SetCollectorEnabledRequest,
-			*opensplunkv1.SetCollectorEnabledResponse,
+			*opensplunk.SetCollectorEnabledRequest,
+			*opensplunk.SetCollectorEnabledResponse,
 		](),
 	)
 }

@@ -8,7 +8,7 @@ import (
 	"slices"
 	"strings"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
@@ -39,11 +39,11 @@ type normalizedValidationScope struct {
 }
 
 type normalizedValidationRequest struct {
-	definition      *opensplunkv1.KnowledgeObjectDefinition
+	definition      *opensplunk.KnowledgeObjectDefinition
 	objectID        string
 	expectedVersion int64
 	updatePaths     []string
-	intent          opensplunkv1.KnowledgeValidationIntent
+	intent          opensplunk.KnowledgeValidationIntent
 	update          bool
 }
 
@@ -64,7 +64,7 @@ const (
 func (writer *Writer) Validate(
 	ctx context.Context,
 	scope ValidationScope,
-	request *opensplunkv1.ValidateKnowledgeObjectRequest,
+	request *opensplunk.ValidateKnowledgeObjectRequest,
 ) (sealed knowledgevalidation.SealedValidateResponse, returnedErr error) {
 	var authorized *AuthorizedContext
 	defer func() {
@@ -146,12 +146,12 @@ func normalizeValidationScope(scope ValidationScope) (normalizedValidationScope,
 // request envelope. It performs no clone or candidate definition validation;
 // candidate issues deliberately remain for the in-band knowledgevalidation
 // builders.
-func ValidateKnowledgeObjectRequest(request *opensplunkv1.ValidateKnowledgeObjectRequest) error {
+func ValidateKnowledgeObjectRequest(request *opensplunk.ValidateKnowledgeObjectRequest) error {
 	return validateValidationRequestEnvelope(request)
 }
 
 func normalizeValidationRequest(
-	request *opensplunkv1.ValidateKnowledgeObjectRequest,
+	request *opensplunk.ValidateKnowledgeObjectRequest,
 ) (normalizedValidationRequest, error) {
 	if err := validateValidationRequestEnvelope(request); err != nil {
 		return normalizedValidationRequest{}, err
@@ -168,7 +168,7 @@ func normalizeValidationRequest(
 
 	definitionView := request.GetDefinition()
 	issue := appliedValidationCardinalityIssue(definitionView, update, paths)
-	var detachedDefinition *opensplunkv1.KnowledgeObjectDefinition
+	var detachedDefinition *opensplunk.KnowledgeObjectDefinition
 	if issue != validationCardinalityNone {
 		// The witness is newly allocated and contains no caller-owned scalar or
 		// submessage. Keeping it directly also preserves a selected typed-nil
@@ -184,7 +184,7 @@ func normalizeValidationRequest(
 			return normalizedValidationRequest{}, err
 		}
 		var ok bool
-		detachedDefinition, ok = proto.Clone(definitionView).(*opensplunkv1.KnowledgeObjectDefinition)
+		detachedDefinition, ok = proto.Clone(definitionView).(*opensplunk.KnowledgeObjectDefinition)
 		if !ok || detachedDefinition == nil {
 			return normalizedValidationRequest{}, invalidValidationEnvelope("definition cannot be detached")
 		}
@@ -204,7 +204,7 @@ func normalizeValidationRequest(
 	return prepared, nil
 }
 
-func preflightValidationRequestPayload(request *opensplunkv1.ValidateKnowledgeObjectRequest) error {
+func preflightValidationRequestPayload(request *opensplunk.ValidateKnowledgeObjectRequest) error {
 	if size := proto.Size(request); size <= 0 || size > maximumValidationRequestBytes {
 		return fmt.Errorf(
 			"%w: knowledge validation request exceeds its byte limit",
@@ -215,10 +215,10 @@ func preflightValidationRequestPayload(request *opensplunkv1.ValidateKnowledgeOb
 }
 
 func validationRequestView(
-	request *opensplunkv1.ValidateKnowledgeObjectRequest,
-	definition *opensplunkv1.KnowledgeObjectDefinition,
-) *opensplunkv1.ValidateKnowledgeObjectRequest {
-	return &opensplunkv1.ValidateKnowledgeObjectRequest{
+	request *opensplunk.ValidateKnowledgeObjectRequest,
+	definition *opensplunk.KnowledgeObjectDefinition,
+) *opensplunk.ValidateKnowledgeObjectRequest {
+	return &opensplunk.ValidateKnowledgeObjectRequest{
 		Definition:        definition,
 		KnowledgeObjectId: request.KnowledgeObjectId,
 		ExpectedVersion:   request.ExpectedVersion,
@@ -228,7 +228,7 @@ func validationRequestView(
 }
 
 func appliedValidationCardinalityIssue(
-	definition *opensplunkv1.KnowledgeObjectDefinition,
+	definition *opensplunk.KnowledgeObjectDefinition,
 	update bool,
 	paths []string,
 ) validationCardinalityIssue {
@@ -270,10 +270,10 @@ func appliedValidationCardinalityIssue(
 // passed the O(1) cardinality admission above. Unselected caller data never
 // enters either the byte authority or the clone.
 func validationUpdateDefinitionView(
-	definition *opensplunkv1.KnowledgeObjectDefinition,
+	definition *opensplunk.KnowledgeObjectDefinition,
 	paths []string,
-) *opensplunkv1.KnowledgeObjectDefinition {
-	result := &opensplunkv1.KnowledgeObjectDefinition{}
+) *opensplunk.KnowledgeObjectDefinition {
+	result := &opensplunk.KnowledgeObjectDefinition{}
 	for _, path := range paths {
 		switch path {
 		case "app_id":
@@ -288,17 +288,17 @@ func validationUpdateDefinitionView(
 			result.Selector = definition.GetSelector()
 		case "field_extraction":
 			if body := definition.GetFieldExtraction(); body != nil {
-				result.Body = &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
+				result.Body = &opensplunk.KnowledgeObjectDefinition_FieldExtraction{
 					FieldExtraction: body,
 				}
 			}
 		case "field_alias":
 			if body := definition.GetFieldAlias(); body != nil {
-				result.Body = &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{FieldAlias: body}
+				result.Body = &opensplunk.KnowledgeObjectDefinition_FieldAlias{FieldAlias: body}
 			}
 		case "calculated_field":
 			if body := definition.GetCalculatedField(); body != nil {
-				result.Body = &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{
+				result.Body = &opensplunk.KnowledgeObjectDefinition_CalculatedField{
 					CalculatedField: body,
 				}
 			}
@@ -308,15 +308,15 @@ func validationUpdateDefinitionView(
 }
 
 func validationCardinalityWitness(
-	definition *opensplunkv1.KnowledgeObjectDefinition,
+	definition *opensplunk.KnowledgeObjectDefinition,
 	issue validationCardinalityIssue,
-) *opensplunkv1.KnowledgeObjectDefinition {
-	result := &opensplunkv1.KnowledgeObjectDefinition{}
+) *opensplunk.KnowledgeObjectDefinition {
+	result := &opensplunk.KnowledgeObjectDefinition{}
 	if issue == validationCardinalityExtractionOutputs {
-		result.Body = &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
-			FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
-				Extraction: &opensplunkv1.FieldExtractionDefinition_Regex{
-					Regex: &opensplunkv1.RegexFieldExtractionDefinition{
+		result.Body = &opensplunk.KnowledgeObjectDefinition_FieldExtraction{
+			FieldExtraction: &opensplunk.FieldExtractionDefinition{
+				Extraction: &opensplunk.FieldExtractionDefinition_Regex{
+					Regex: &opensplunk.RegexFieldExtractionDefinition{
 						OutputFields: make(
 							[]string,
 							knowledgedefinition.MaximumFieldExtractionOutputs+1,
@@ -328,9 +328,9 @@ func validationCardinalityWitness(
 		return result
 	}
 	copyValidationBodyKind(result, definition)
-	result.Selector = &opensplunkv1.KnowledgeSelector{}
+	result.Selector = &opensplunk.KnowledgeSelector{}
 	patterns := make(
-		[]*opensplunkv1.KnowledgeSelectorPattern,
+		[]*opensplunk.KnowledgeSelectorPattern,
 		knowledge.MaximumSelectorPatternsPerDimension+1,
 	)
 	switch issue {
@@ -347,37 +347,37 @@ func validationCardinalityWitness(
 }
 
 func copyValidationBodyKind(
-	target *opensplunkv1.KnowledgeObjectDefinition,
-	source *opensplunkv1.KnowledgeObjectDefinition,
+	target *opensplunk.KnowledgeObjectDefinition,
+	source *opensplunk.KnowledgeObjectDefinition,
 ) {
 	switch source.GetBody().(type) {
-	case *opensplunkv1.KnowledgeObjectDefinition_FieldExtraction:
-		var body *opensplunkv1.FieldExtractionDefinition
+	case *opensplunk.KnowledgeObjectDefinition_FieldExtraction:
+		var body *opensplunk.FieldExtractionDefinition
 		if source.GetFieldExtraction() != nil {
-			body = &opensplunkv1.FieldExtractionDefinition{}
+			body = &opensplunk.FieldExtractionDefinition{}
 		}
-		target.Body = &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
+		target.Body = &opensplunk.KnowledgeObjectDefinition_FieldExtraction{
 			FieldExtraction: body,
 		}
-	case *opensplunkv1.KnowledgeObjectDefinition_FieldAlias:
-		var body *opensplunkv1.FieldAliasDefinition
+	case *opensplunk.KnowledgeObjectDefinition_FieldAlias:
+		var body *opensplunk.FieldAliasDefinition
 		if source.GetFieldAlias() != nil {
-			body = &opensplunkv1.FieldAliasDefinition{}
+			body = &opensplunk.FieldAliasDefinition{}
 		}
-		target.Body = &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{FieldAlias: body}
-	case *opensplunkv1.KnowledgeObjectDefinition_CalculatedField:
-		var body *opensplunkv1.CalculatedFieldDefinition
+		target.Body = &opensplunk.KnowledgeObjectDefinition_FieldAlias{FieldAlias: body}
+	case *opensplunk.KnowledgeObjectDefinition_CalculatedField:
+		var body *opensplunk.CalculatedFieldDefinition
 		if source.GetCalculatedField() != nil {
-			body = &opensplunkv1.CalculatedFieldDefinition{}
+			body = &opensplunk.CalculatedFieldDefinition{}
 		}
-		target.Body = &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{
+		target.Body = &opensplunk.KnowledgeObjectDefinition_CalculatedField{
 			CalculatedField: body,
 		}
 	}
 }
 
 func validateValidationRequestEnvelope(
-	request *opensplunkv1.ValidateKnowledgeObjectRequest,
+	request *opensplunk.ValidateKnowledgeObjectRequest,
 ) error {
 	if request == nil || request.GetDefinition() == nil {
 		return invalidValidationEnvelope("request and definition are required")
@@ -387,8 +387,8 @@ func validateValidationRequestEnvelope(
 		return invalidValidationEnvelope("request contains unknown envelope fields")
 	}
 	switch request.GetIntent() {
-	case opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
-		opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION:
+	case opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+		opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION:
 	default:
 		return invalidValidationEnvelope("intent must select inactive storage or active publication")
 	}

@@ -30,8 +30,8 @@ func TestApplyClickHouseMigrationsCleanAndIdempotent(t *testing.T) {
 	}
 
 	wantHistory := []clickHouseMigrationLedgerRow{
-		{Version: 1, Name: "create_events", RowCount: 1},
-		{Version: 2, Name: "add_visibility", RowCount: 1},
+		{Version: 1, Name: "baseline", RowCount: 1},
+		{Version: 2, Name: "add_example_index", RowCount: 1},
 	}
 	if got := connection.historySnapshot(); !reflect.DeepEqual(got, wantHistory) {
 		t.Fatalf("history after clean apply = %#v, want %#v", got, wantHistory)
@@ -55,7 +55,7 @@ func TestApplyClickHouseMigrationsAppliesOnlyPendingSuffix(t *testing.T) {
 	connection := &fakeClickHouseMigrationConnection{
 		ledgerExists: true,
 		history: []clickHouseMigrationLedgerRow{
-			{Version: 1, Name: "create_events", RowCount: 1},
+			{Version: 1, Name: "baseline", RowCount: 1},
 		},
 	}
 	if err := ApplyClickHouseMigrations(context.Background(), connection, testClickHouseMigrations()); err != nil {
@@ -67,7 +67,7 @@ func TestApplyClickHouseMigrationsAppliesOnlyPendingSuffix(t *testing.T) {
 		t.Fatalf("pending statement count = %d, want 2; statements = %#v", len(statements), statements)
 	}
 	for _, statement := range statements {
-		if strings.Contains(statement, "create_events") || strings.Contains(statement, "CREATE TABLE") {
+		if strings.Contains(statement, "baseline") || strings.Contains(statement, "CREATE TABLE") {
 			t.Fatalf("re-executed applied migration statement %q", statement)
 		}
 	}
@@ -94,7 +94,7 @@ func TestApplyClickHouseMigrationsRetriesPartialMigration(t *testing.T) {
 		t.Fatalf("retry ApplyClickHouseMigrations() error = %v", err)
 	}
 	if got := connection.historySnapshot(); len(got) != 2 {
-		t.Fatalf("history after retry = %#v, want two migrations", got)
+		t.Fatalf("history after retry = %#v, want baseline plus one future migration", got)
 	}
 	if got := connection.countExecutedContaining("CREATE TABLE IF NOT EXISTS open_splunk.events"); got != 2 {
 		t.Fatalf("restart-safe first DDL execution count = %d, want 2", got)
@@ -111,25 +111,25 @@ func TestApplyClickHouseMigrationsRejectsDriftBeforeDDL(t *testing.T) {
 		{
 			name: "renamed",
 			history: []clickHouseMigrationLedgerRow{
-				{Version: 1, Name: "not_create_events", RowCount: 1},
+				{Version: 1, Name: "not_baseline", RowCount: 1},
 			},
 		},
 		{
 			name: "duplicate",
 			history: []clickHouseMigrationLedgerRow{
-				{Version: 1, Name: "create_events", RowCount: 2},
+				{Version: 1, Name: "baseline", RowCount: 2},
 			},
 		},
 		{
 			name: "gap",
 			history: []clickHouseMigrationLedgerRow{
-				{Version: 2, Name: "add_visibility", RowCount: 1},
+				{Version: 2, Name: "add_example_index", RowCount: 1},
 			},
 		},
 		{
 			name: "two names for version",
 			history: []clickHouseMigrationLedgerRow{
-				{Version: 1, Name: "create_events", RowCount: 1},
+				{Version: 1, Name: "baseline", RowCount: 1},
 				{Version: 1, Name: "other", RowCount: 1},
 			},
 		},
@@ -158,7 +158,7 @@ func TestApplyClickHouseMigrationsRejectsNewerDatabaseBeforeDDL(t *testing.T) {
 	connection := &fakeClickHouseMigrationConnection{
 		ledgerExists: true,
 		history: []clickHouseMigrationLedgerRow{
-			{Version: 1, Name: "create_events", RowCount: 1},
+			{Version: 1, Name: "baseline", RowCount: 1},
 			{Version: 3, Name: "from_the_future", RowCount: 1},
 		},
 	}
@@ -175,9 +175,9 @@ func TestApplyClickHouseMigrationsVerifiesLedgerAfterDDL(t *testing.T) {
 	t.Parallel()
 
 	files := fstest.MapFS{
-		"0001_create_events.sql": &fstest.MapFile{Data: []byte(`
+		"0001_baseline.sql": &fstest.MapFile{Data: []byte(`
 			CREATE TABLE open_splunk.events (id UInt64);
-			INSERT INTO open_splunk.schema_migrations SELECT 1, 'create_events';
+			INSERT INTO open_splunk.schema_migrations SELECT 1, 'baseline';
 		`)},
 	}
 	connection := &fakeClickHouseMigrationConnection{suppressLedgerWrites: true}
@@ -187,7 +187,7 @@ func TestApplyClickHouseMigrationsVerifiesLedgerAfterDDL(t *testing.T) {
 	}
 }
 
-func TestApplyClickHouseMigrationsRejectsOwnedTableWithoutLedger(t *testing.T) {
+func TestApplyClickHouseMigrationsRejectsManagedTableWithoutLedger(t *testing.T) {
 	t.Parallel()
 
 	connection := &fakeClickHouseMigrationConnection{tables: []string{"events"}}
@@ -196,7 +196,7 @@ func TestApplyClickHouseMigrationsRejectsOwnedTableWithoutLedger(t *testing.T) {
 		t.Fatalf("ApplyClickHouseMigrations() error = %v, want ErrClickHouseMigrationDrift", err)
 	}
 	if got := connection.statementsSnapshot(); len(got) != 0 {
-		t.Fatalf("executed statements before rejecting unowned schema: %#v", got)
+		t.Fatalf("executed statements before rejecting unmanaged schema: %#v", got)
 	}
 }
 
@@ -277,14 +277,14 @@ func TestLoadShippedClickHouseMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadClickHouseMigrations(shipped) error = %v", err)
 	}
-	if len(loaded) != 5 {
-		t.Fatalf("shipped migration count = %d, want 5", len(loaded))
+	if len(loaded) != 1 {
+		t.Fatalf("shipped migration count = %d, want 1", len(loaded))
 	}
-	if loaded[0].name != "create_events" || loaded[1].name != "add_visibility_sequence" || loaded[2].name != "add_field_metadata" || loaded[3].name != "create_recovery_sets" || loaded[4].name != "add_ingest_source" {
-		t.Fatalf("shipped migration names = %q, %q, %q, %q, %q", loaded[0].name, loaded[1].name, loaded[2].name, loaded[3].name, loaded[4].name)
+	if loaded[0].version != 1 || loaded[0].name != "baseline" {
+		t.Fatalf("shipped migration = version %d name %q, want version 1 baseline", loaded[0].version, loaded[0].name)
 	}
-	if len(loaded[0].statements) != 4 || len(loaded[1].statements) != 4 || len(loaded[2].statements) != 5 || len(loaded[3].statements) != 3 || len(loaded[4].statements) != 5 {
-		t.Fatalf("shipped statement counts = %d, %d, %d, %d, %d; want 4, 4, 5, 3, 5", len(loaded[0].statements), len(loaded[1].statements), len(loaded[2].statements), len(loaded[3].statements), len(loaded[4].statements))
+	if len(loaded[0].statements) != 6 {
+		t.Fatalf("shipped baseline statement count = %d, want 6", len(loaded[0].statements))
 	}
 }
 
@@ -296,17 +296,13 @@ func TestApplyShippedClickHouseMigrationsThroughNativeInterface(t *testing.T) {
 		t.Fatalf("ApplyClickHouseMigrations(shipped) error = %v", err)
 	}
 	want := []clickHouseMigrationLedgerRow{
-		{Version: 1, Name: "create_events", RowCount: 1},
-		{Version: 2, Name: "add_visibility_sequence", RowCount: 1},
-		{Version: 3, Name: "add_field_metadata", RowCount: 1},
-		{Version: 4, Name: "create_recovery_sets", RowCount: 1},
-		{Version: 5, Name: "add_ingest_source", RowCount: 1},
+		{Version: 1, Name: "baseline", RowCount: 1},
 	}
 	if got := connection.historySnapshot(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("shipped migration history = %#v, want %#v", got, want)
 	}
-	if got := len(connection.statementsSnapshot()); got != 21 {
-		t.Fatalf("shipped executed statement count = %d, want 21", got)
+	if got := len(connection.statementsSnapshot()); got != 6 {
+		t.Fatalf("shipped executed statement count = %d, want 6", got)
 	}
 }
 
@@ -359,14 +355,14 @@ func TestSplitClickHouseStatementsRejectsUnterminatedLexemes(t *testing.T) {
 
 func testClickHouseMigrations() fstest.MapFS {
 	return fstest.MapFS{
-		"0001_create_events.sql": &fstest.MapFile{Data: []byte(`
+		"0001_baseline.sql": &fstest.MapFile{Data: []byte(`
 			CREATE TABLE IF NOT EXISTS open_splunk.schema_migrations (version UInt32, name String);
 			CREATE TABLE IF NOT EXISTS open_splunk.events (id UInt64);
-			INSERT INTO open_splunk.schema_migrations SELECT 1, 'create_events';
+			INSERT INTO open_splunk.schema_migrations SELECT 1, 'baseline';
 		`)},
-		"0002_add_visibility.sql": &fstest.MapFile{Data: []byte(`
-			ALTER TABLE open_splunk.events ADD COLUMN IF NOT EXISTS visibility UInt64;
-			INSERT INTO open_splunk.schema_migrations SELECT 2, 'add_visibility';
+		"0002_add_example_index.sql": &fstest.MapFile{Data: []byte(`
+			ALTER TABLE open_splunk.events ADD INDEX IF NOT EXISTS idx_example id TYPE minmax GRANULARITY 1;
+			INSERT INTO open_splunk.schema_migrations SELECT 2, 'add_example_index';
 		`)},
 	}
 }

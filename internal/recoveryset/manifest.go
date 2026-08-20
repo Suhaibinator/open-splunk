@@ -70,7 +70,6 @@ type Manifest struct {
 	RecoverySetID        string                          `json:"recovery_set_id"`
 	Scope                string                          `json:"scope"`
 	ClickHouseIncluded   bool                            `json:"clickhouse_included"`
-	ApplicationVersion   string                          `json:"application_version"`
 	SourceRevision       string                          `json:"source_revision"`
 	SQLiteMigrations     controlbackup.MigrationIdentity `json:"sqlite_migrations"`
 	ClickHouseMigrations controlbackup.MigrationIdentity `json:"clickhouse_migrations"`
@@ -89,7 +88,7 @@ func unmarshalManifest(encoded []byte) (Manifest, error) {
 func validateManifest(manifest Manifest) error {
 	if manifest.FormatVersion != manifestFormatVersion {
 		return fmt.Errorf(
-			"deployment recovery-set manifest format version %d is unsupported",
+			"deployment recovery-set manifest format version %d is unsupported; create a fresh recovery set",
 			manifest.FormatVersion,
 		)
 	}
@@ -208,7 +207,7 @@ func validateManifestRelease(
 	actual := manifest.releaseIdentity()
 	if actual != expected {
 		return errors.New(
-			"deployment recovery set was created by a different release; verify it with the original release",
+			"deployment recovery set was created by a different source or migration identity",
 		)
 	}
 	return nil
@@ -216,7 +215,6 @@ func validateManifestRelease(
 
 func (manifest Manifest) releaseIdentity() controlbackup.ReleaseIdentity {
 	return controlbackup.ReleaseIdentity{
-		ApplicationVersion:   manifest.ApplicationVersion,
 		SourceRevision:       manifest.SourceRevision,
 		SQLiteMigrations:     manifest.SQLiteMigrations,
 		ClickHouseMigrations: manifest.ClickHouseMigrations,

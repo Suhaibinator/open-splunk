@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"gorm.io/gorm"
 )
 
@@ -62,7 +62,7 @@ type SearchAttemptAuditEvent struct {
 	OccurredAt        time.Time
 	SearchJobID       string
 	OwnerID           string
-	KnowledgeSnapshot *opensplunkv1.KnowledgeSnapshotRef
+	KnowledgeSnapshot *opensplunk.KnowledgeSnapshotRef
 }
 
 // SearchAttemptAuditAppender publishes one admitted-search event through the
@@ -139,7 +139,7 @@ func ResolveRetentionPolicy(
 // Filter is the normalized semantic filter shared by List and Clear.
 type Filter struct {
 	AppID         *string
-	StateFilters  []opensplunkv1.SearchJobState
+	StateFilters  []opensplunk.SearchJobState
 	Text          *string
 	SavedSearchID *string
 	CreatedAfter  *time.Time
@@ -152,20 +152,20 @@ type ListRequest struct {
 	PageToken           string
 	IncludeTotal        bool
 	AppIDFilter         *string
-	StateFilters        []opensplunkv1.SearchJobState
+	StateFilters        []opensplunk.SearchJobState
 	TextFilter          *string
 	SavedSearchIDFilter *string
 	CreatedAfter        *time.Time
 	CreatedBefore       *time.Time
-	SortBy              opensplunkv1.SearchHistorySortBy
-	SortDirection       opensplunkv1.SortDirection
+	SortBy              opensplunk.SearchHistorySortBy
+	SortDirection       opensplunk.SortDirection
 }
 
 // ListResult is detached from persistent storage. TotalSize is present only
 // when requested; it is exact for its individual count query, while separate
 // page calls are intentionally not a cross-request SQLite snapshot.
 type ListResult struct {
-	Entries        []*opensplunkv1.SearchHistoryEntry
+	Entries        []*opensplunk.SearchHistoryEntry
 	NextPageToken  *string
 	TotalSize      *uint64
 	TotalSizeExact bool

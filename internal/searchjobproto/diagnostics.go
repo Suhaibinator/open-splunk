@@ -3,19 +3,19 @@ package searchjobproto
 import (
 	"slices"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 )
 
 // Diagnostics projects detached, user-safe SPL diagnostics for every search
 // transport. Keeping this conversion shared prevents HTTP and WebSocket
 // failures from disagreeing about source coordinates.
-func Diagnostics(diagnostics []searchjobs.Diagnostic) []*opensplunkv1.Diagnostic {
-	result := make([]*opensplunkv1.Diagnostic, len(diagnostics))
+func Diagnostics(diagnostics []searchjobs.Diagnostic) []*opensplunk.Diagnostic {
+	result := make([]*opensplunk.Diagnostic, len(diagnostics))
 	for index, diagnostic := range diagnostics {
-		converted := &opensplunkv1.Diagnostic{
+		converted := &opensplunk.Diagnostic{
 			Code:        diagnostic.Code,
-			Severity:    opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR,
+			Severity:    opensplunk.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR,
 			Message:     diagnostic.Message,
 			Suggestions: slices.Clone(diagnostic.Suggestions),
 		}
@@ -27,21 +27,21 @@ func Diagnostics(diagnostics []searchjobs.Diagnostic) []*opensplunkv1.Diagnostic
 
 // SourceRange projects a diagnostic's validated source coordinates, or nil
 // when the diagnostic carries no representable range.
-func SourceRange(diagnostic searchjobs.Diagnostic) *opensplunkv1.SourceRange {
+func SourceRange(diagnostic searchjobs.Diagnostic) *opensplunk.SourceRange {
 	if !diagnostic.ValidSourceRange() {
 		return nil
 	}
-	return &opensplunkv1.SourceRange{
+	return &opensplunk.SourceRange{
 		// #nosec G115 -- ValidSourceRange proves offsets non-negative
 		// and protobuf-representable line and column values.
-		Start: &opensplunkv1.SourcePosition{
+		Start: &opensplunk.SourcePosition{
 			ByteOffset: uint64(diagnostic.ByteOffset),
 			Line:       uint32(diagnostic.Line),
 			Column:     uint32(diagnostic.Column),
 		},
 		// #nosec G115 -- ValidSourceRange proves offsets non-negative
 		// and protobuf-representable line and column values.
-		End: &opensplunkv1.SourcePosition{
+		End: &opensplunk.SourcePosition{
 			ByteOffset: uint64(diagnostic.EndByteOffset),
 			Line:       uint32(diagnostic.EndLine),
 			Column:     uint32(diagnostic.EndColumn),

@@ -3,14 +3,13 @@ package knowledgesnapshot
 import (
 	"bytes"
 	"crypto/sha256"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"math"
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 )
@@ -38,8 +37,7 @@ func TestSnapshotReferenceSummaryEqualityRetentionAndDetachment(t *testing.T) {
 	if !bytes.Equal(reference.GetSnapshotSha256(), snapshot.message.GetSnapshotSha256()) ||
 		!bytes.Equal(reference.GetTenantCatalogStateToken(), snapshot.message.GetTenantCatalogStateToken()) ||
 		reference.GetTenantCatalogRevision() != snapshot.message.GetTenantCatalogRevision() ||
-		reference.GetObjectCount() != uint32(len(snapshot.message.GetObjects())) ||
-		reference.GetCompilerCompatibilityVersion() != CompilerCompatibilityVersion {
+		reference.GetObjectCount() != uint32(len(snapshot.message.GetObjects())) {
 		t.Fatalf("reference = %+v", reference)
 	}
 	if size := proto.Size(reference); size <= 0 || size > MaximumReferenceBytes {
@@ -128,7 +126,6 @@ func TestSnapshotReferenceSummaryForEnabledEmptyAuthority(t *testing.T) {
 	}
 	summary := snapshot.Summary()
 	if summary == nil || summary.GetRef() == nil || summary.GetRef().GetObjectCount() != 0 ||
-		summary.GetRef().GetLookupAssetCountUnknown() ||
 		summary.GetRef().GetLookupAssetCount() != 0 ||
 		len(summary.GetObjects()) != 0 || summary.GetObjectsTruncated() {
 		t.Fatalf("enabled empty summary = %+v", summary)
@@ -145,41 +142,26 @@ func TestValidateKnowledgeSnapshotReferenceRejectsNoncanonicalAuthority(t *testi
 	}
 	tests := []struct {
 		name   string
-		mutate func(*opensplunkv1.KnowledgeSnapshotRef)
+		mutate func(*opensplunk.KnowledgeSnapshotRef)
 		want   error
 	}{
-		{name: "digest short", mutate: func(value *opensplunkv1.KnowledgeSnapshotRef) { value.SnapshotSha256 = value.SnapshotSha256[:31] }, want: ErrInvalidInput},
-		{name: "state token short", mutate: func(value *opensplunkv1.KnowledgeSnapshotRef) {
+		{name: "digest short", mutate: func(value *opensplunk.KnowledgeSnapshotRef) { value.SnapshotSha256 = value.SnapshotSha256[:31] }, want: ErrInvalidInput},
+		{name: "state token short", mutate: func(value *opensplunk.KnowledgeSnapshotRef) {
 			value.TenantCatalogStateToken = value.TenantCatalogStateToken[:31]
 		}, want: ErrInvalidInput},
-		{name: "revision", mutate: func(value *opensplunkv1.KnowledgeSnapshotRef) { value.TenantCatalogRevision = math.MaxInt64 }, want: ErrInvalidInput},
-		{name: "object count", mutate: func(value *opensplunkv1.KnowledgeSnapshotRef) { value.ObjectCount = MaximumExecutableObjects + 1 }, want: ErrResourceLimit},
-		{name: "current lookup count unknown", mutate: func(value *opensplunkv1.KnowledgeSnapshotRef) { value.LookupAssetCountUnknown = true }, want: ErrInvalidInput},
-		{name: "legacy unknown count nonzero", mutate: func(value *opensplunkv1.KnowledgeSnapshotRef) {
-			value.CompilerCompatibilityVersion = "0.1"
-			value.LookupAssetCount = 1
-			value.LookupAssetCountUnknown = true
-		}, want: ErrInvalidInput},
-		{name: "lookup count", mutate: func(value *opensplunkv1.KnowledgeSnapshotRef) {
+		{name: "revision", mutate: func(value *opensplunk.KnowledgeSnapshotRef) { value.TenantCatalogRevision = math.MaxInt64 }, want: ErrInvalidInput},
+		{name: "object count", mutate: func(value *opensplunk.KnowledgeSnapshotRef) { value.ObjectCount = MaximumExecutableObjects + 1 }, want: ErrResourceLimit},
+		{name: "lookup count", mutate: func(value *opensplunk.KnowledgeSnapshotRef) {
 			value.LookupAssetCount = MaximumLookupAssets + 1
 		}, want: ErrResourceLimit},
-		{name: "compatibility empty", mutate: func(value *opensplunkv1.KnowledgeSnapshotRef) { value.CompilerCompatibilityVersion = "" }, want: ErrInvalidInput},
-		{name: "compatibility too long", mutate: func(value *opensplunkv1.KnowledgeSnapshotRef) {
-			value.CompilerCompatibilityVersion = strings.Repeat("v", MaximumCompilerCompatibilityVersionBytes+1)
-		}, want: ErrInvalidInput},
-		{name: "compatibility invalid utf8", mutate: func(value *opensplunkv1.KnowledgeSnapshotRef) {
-			value.CompilerCompatibilityVersion = string([]byte{0xff})
-		}, want: ErrInvalidInput},
-		{name: "compatibility whitespace", mutate: func(value *opensplunkv1.KnowledgeSnapshotRef) { value.CompilerCompatibilityVersion = " 0.1" }, want: ErrInvalidInput},
-		{name: "compatibility control", mutate: func(value *opensplunkv1.KnowledgeSnapshotRef) { value.CompilerCompatibilityVersion = "0\x001" }, want: ErrInvalidInput},
-		{name: "unknown", mutate: func(value *opensplunkv1.KnowledgeSnapshotRef) { value.ProtoReflect().SetUnknown(smallUnknownField()) }, want: ErrInvalidInput},
-		{name: "wire bound", mutate: func(value *opensplunkv1.KnowledgeSnapshotRef) {
+		{name: "unknown", mutate: func(value *opensplunk.KnowledgeSnapshotRef) { value.ProtoReflect().SetUnknown(smallUnknownField()) }, want: ErrInvalidInput},
+		{name: "wire bound", mutate: func(value *opensplunk.KnowledgeSnapshotRef) {
 			value.ProtoReflect().SetUnknown(bytesUnknownField(MaximumReferenceBytes))
 		}, want: ErrResourceLimit},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			candidate := proto.Clone(valid).(*opensplunkv1.KnowledgeSnapshotRef)
+			candidate := proto.Clone(valid).(*opensplunk.KnowledgeSnapshotRef)
 			test.mutate(candidate)
 			if err := ValidateReference(candidate); !errors.Is(err, test.want) {
 				t.Fatalf("ValidateReference() error = %v, want %v", err, test.want)
@@ -192,41 +174,6 @@ func TestValidateKnowledgeSnapshotReferenceRejectsNoncanonicalAuthority(t *testi
 	if err := ValidateReference(nil); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("ValidateReference(nil) error = %v", err)
 	}
-	legacy := proto.Clone(valid).(*opensplunkv1.KnowledgeSnapshotRef)
-	legacy.CompilerCompatibilityVersion = "0.1"
-	legacy.LookupAssetCount = 0
-	legacy.LookupAssetCountUnknown = true
-	if err := ValidateReference(legacy); err != nil {
-		t.Fatalf("ValidateReference(released v0.1 unknown lookup count): %v", err)
-	}
-	legacySummary := &opensplunkv1.KnowledgeSnapshotSummary{Ref: legacy}
-	legacySummary.Ref.ObjectCount = 0
-	legacySummary.Ref.LookupAssetCountUnknown = false
-	if err := ValidateSummary(legacySummary); err != nil {
-		t.Fatalf("ValidateSummary(released v0.1 zero-lookup wire): %v", err)
-	}
-}
-
-func TestReleasedV01EnabledEmptySummaryWireRemainsReadable(t *testing.T) {
-	t.Parallel()
-	encoded, err := base64.StdEncoding.DecodeString(
-		"ClIKIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fEIGAgICAgIAQGiAgISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+PyoDMC4x",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var summary opensplunkv1.KnowledgeSnapshotSummary
-	if err := proto.Unmarshal(encoded, &summary); err != nil {
-		t.Fatalf("unmarshal released v0.1 summary: %v", err)
-	}
-	if summary.GetRef() == nil || summary.GetRef().GetLookupAssetCountUnknown() ||
-		summary.GetRef().GetCompilerCompatibilityVersion() != "0.1" ||
-		len(summary.GetLookupAssets()) != 0 {
-		t.Fatalf("released v0.1 summary = %#v", &summary)
-	}
-	if err := ValidateSummary(&summary); err != nil {
-		t.Fatalf("ValidateSummary(released v0.1 wire): %v", err)
-	}
 }
 
 func TestValidateKnowledgeSnapshotSummaryBoundariesAndDisclosure(t *testing.T) {
@@ -234,8 +181,8 @@ func TestValidateKnowledgeSnapshotSummaryBoundariesAndDisclosure(t *testing.T) {
 	if err := ValidateSummary(valid); err != nil {
 		t.Fatalf("ValidateSummary(valid): %v", err)
 	}
-	redacted := proto.Clone(valid).(*opensplunkv1.KnowledgeSnapshotSummary)
-	redacted.Objects[0].Disclosure = &opensplunkv1.KnowledgeSnapshotObjectSummary_Redacted{Redacted: true}
+	redacted := proto.Clone(valid).(*opensplunk.KnowledgeSnapshotSummary)
+	redacted.Objects[0].Disclosure = &opensplunk.KnowledgeSnapshotObjectSummary_Redacted{Redacted: true}
 	if err := ValidateSummary(redacted); err != nil {
 		t.Fatalf("ValidateSummary(redacted): %v", err)
 	}
@@ -255,72 +202,68 @@ func TestValidateKnowledgeSnapshotSummaryBoundariesAndDisclosure(t *testing.T) {
 
 	tests := []struct {
 		name   string
-		mutate func(*opensplunkv1.KnowledgeSnapshotSummary)
+		mutate func(*opensplunk.KnowledgeSnapshotSummary)
 		want   error
 	}{
-		{name: "reference absent", mutate: func(value *opensplunkv1.KnowledgeSnapshotSummary) { value.Ref = nil }, want: ErrInvalidInput},
-		{name: "reference unknown", mutate: func(value *opensplunkv1.KnowledgeSnapshotSummary) {
+		{name: "reference absent", mutate: func(value *opensplunk.KnowledgeSnapshotSummary) { value.Ref = nil }, want: ErrInvalidInput},
+		{name: "reference unknown", mutate: func(value *opensplunk.KnowledgeSnapshotSummary) {
 			value.Ref.ProtoReflect().SetUnknown(smallUnknownField())
 		}, want: ErrInvalidInput},
-		{name: "reference lookup count unknown", mutate: func(value *opensplunkv1.KnowledgeSnapshotSummary) {
-			value.Ref.CompilerCompatibilityVersion = "0.1"
-			value.Ref.LookupAssetCountUnknown = true
+		{name: "prefix short", mutate: func(value *opensplunk.KnowledgeSnapshotSummary) { value.Objects = nil }, want: ErrInvalidInput},
+		{name: "prefix long", mutate: func(value *opensplunk.KnowledgeSnapshotSummary) {
+			value.Objects = append(value.Objects, proto.Clone(value.Objects[0]).(*opensplunk.KnowledgeSnapshotObjectSummary))
 		}, want: ErrInvalidInput},
-		{name: "prefix short", mutate: func(value *opensplunkv1.KnowledgeSnapshotSummary) { value.Objects = nil }, want: ErrInvalidInput},
-		{name: "prefix long", mutate: func(value *opensplunkv1.KnowledgeSnapshotSummary) {
-			value.Objects = append(value.Objects, proto.Clone(value.Objects[0]).(*opensplunkv1.KnowledgeSnapshotObjectSummary))
-		}, want: ErrInvalidInput},
-		{name: "prefix over retained bound", mutate: func(value *opensplunkv1.KnowledgeSnapshotSummary) {
+		{name: "prefix over retained bound", mutate: func(value *opensplunk.KnowledgeSnapshotSummary) {
 			value.Ref.ObjectCount = MaximumSummaryObjects + 1
-			value.Objects = make([]*opensplunkv1.KnowledgeSnapshotObjectSummary, MaximumSummaryObjects+1)
+			value.Objects = make([]*opensplunk.KnowledgeSnapshotObjectSummary, MaximumSummaryObjects+1)
 		}, want: ErrResourceLimit},
-		{name: "truncation marker", mutate: func(value *opensplunkv1.KnowledgeSnapshotSummary) { value.ObjectsTruncated = true }, want: ErrInvalidInput},
-		{name: "nil object", mutate: func(value *opensplunkv1.KnowledgeSnapshotSummary) { value.Objects[0] = nil }, want: ErrInvalidInput},
-		{name: "ordinal", mutate: func(value *opensplunkv1.KnowledgeSnapshotSummary) { value.Objects[0].ResolutionOrdinal = 1 }, want: ErrInvalidInput},
-		{name: "object unknown", mutate: func(value *opensplunkv1.KnowledgeSnapshotSummary) {
+		{name: "truncation marker", mutate: func(value *opensplunk.KnowledgeSnapshotSummary) { value.ObjectsTruncated = true }, want: ErrInvalidInput},
+		{name: "nil object", mutate: func(value *opensplunk.KnowledgeSnapshotSummary) { value.Objects[0] = nil }, want: ErrInvalidInput},
+		{name: "ordinal", mutate: func(value *opensplunk.KnowledgeSnapshotSummary) { value.Objects[0].ResolutionOrdinal = 1 }, want: ErrInvalidInput},
+		{name: "object unknown", mutate: func(value *opensplunk.KnowledgeSnapshotSummary) {
 			value.Objects[0].ProtoReflect().SetUnknown(smallUnknownField())
 		}, want: ErrInvalidInput},
-		{name: "object type", mutate: func(value *opensplunkv1.KnowledgeSnapshotSummary) {
-			value.Objects[0].ObjectType = opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_UNSPECIFIED
+		{name: "object type", mutate: func(value *opensplunk.KnowledgeSnapshotSummary) {
+			value.Objects[0].ObjectType = opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_UNSPECIFIED
 		}, want: ErrInvalidInput},
-		{name: "stage", mutate: func(value *opensplunkv1.KnowledgeSnapshotSummary) {
-			value.Objects[0].Stage = opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD
+		{name: "stage", mutate: func(value *opensplunk.KnowledgeSnapshotSummary) {
+			value.Objects[0].Stage = opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD
 		}, want: ErrInvalidInput},
 		{name: "stage regression", mutate: makeStageRegression, want: ErrInvalidInput},
-		{name: "disclosure absent", mutate: func(value *opensplunkv1.KnowledgeSnapshotSummary) { value.Objects[0].Disclosure = nil }, want: ErrInvalidInput},
-		{name: "authorized absent", mutate: func(value *opensplunkv1.KnowledgeSnapshotSummary) {
-			value.Objects[0].Disclosure = &opensplunkv1.KnowledgeSnapshotObjectSummary_AuthorizedObject{}
+		{name: "disclosure absent", mutate: func(value *opensplunk.KnowledgeSnapshotSummary) { value.Objects[0].Disclosure = nil }, want: ErrInvalidInput},
+		{name: "authorized absent", mutate: func(value *opensplunk.KnowledgeSnapshotSummary) {
+			value.Objects[0].Disclosure = &opensplunk.KnowledgeSnapshotObjectSummary_AuthorizedObject{}
 		}, want: ErrInvalidInput},
-		{name: "authorized unknown", mutate: func(value *opensplunkv1.KnowledgeSnapshotSummary) {
+		{name: "authorized unknown", mutate: func(value *opensplunk.KnowledgeSnapshotSummary) {
 			value.Objects[0].GetAuthorizedObject().ProtoReflect().SetUnknown(smallUnknownField())
 		}, want: ErrInvalidInput},
-		{name: "object id empty", mutate: func(value *opensplunkv1.KnowledgeSnapshotSummary) {
+		{name: "object id empty", mutate: func(value *opensplunk.KnowledgeSnapshotSummary) {
 			value.Objects[0].GetAuthorizedObject().KnowledgeObjectId = ""
 		}, want: ErrInvalidInput},
-		{name: "object id too long", mutate: func(value *opensplunkv1.KnowledgeSnapshotSummary) {
+		{name: "object id too long", mutate: func(value *opensplunk.KnowledgeSnapshotSummary) {
 			value.Objects[0].GetAuthorizedObject().KnowledgeObjectId = strings.Repeat("i", maximumObjectIDBytes+1)
 		}, want: ErrInvalidInput},
-		{name: "version zero", mutate: func(value *opensplunkv1.KnowledgeSnapshotSummary) { value.Objects[0].GetAuthorizedObject().Version = 0 }, want: ErrInvalidInput},
-		{name: "version too high", mutate: func(value *opensplunkv1.KnowledgeSnapshotSummary) {
+		{name: "version zero", mutate: func(value *opensplunk.KnowledgeSnapshotSummary) { value.Objects[0].GetAuthorizedObject().Version = 0 }, want: ErrInvalidInput},
+		{name: "version too high", mutate: func(value *opensplunk.KnowledgeSnapshotSummary) {
 			value.Objects[0].GetAuthorizedObject().Version = uint64(math.MaxInt64) + 1
 		}, want: ErrInvalidInput},
-		{name: "name empty", mutate: func(value *opensplunkv1.KnowledgeSnapshotSummary) { value.Objects[0].GetAuthorizedObject().Name = "" }, want: ErrInvalidInput},
-		{name: "name too long", mutate: func(value *opensplunkv1.KnowledgeSnapshotSummary) {
+		{name: "name empty", mutate: func(value *opensplunk.KnowledgeSnapshotSummary) { value.Objects[0].GetAuthorizedObject().Name = "" }, want: ErrInvalidInput},
+		{name: "name too long", mutate: func(value *opensplunk.KnowledgeSnapshotSummary) {
 			value.Objects[0].GetAuthorizedObject().Name = strings.Repeat("n", maximumIdentityBytes+1)
 		}, want: ErrInvalidInput},
-		{name: "redacted false", mutate: func(value *opensplunkv1.KnowledgeSnapshotSummary) {
-			value.Objects[0].Disclosure = &opensplunkv1.KnowledgeSnapshotObjectSummary_Redacted{}
+		{name: "redacted false", mutate: func(value *opensplunk.KnowledgeSnapshotSummary) {
+			value.Objects[0].Disclosure = &opensplunk.KnowledgeSnapshotObjectSummary_Redacted{}
 		}, want: ErrInvalidInput},
-		{name: "summary unknown", mutate: func(value *opensplunkv1.KnowledgeSnapshotSummary) {
+		{name: "summary unknown", mutate: func(value *opensplunk.KnowledgeSnapshotSummary) {
 			value.ProtoReflect().SetUnknown(smallUnknownField())
 		}, want: ErrInvalidInput},
-		{name: "wire bound", mutate: func(value *opensplunkv1.KnowledgeSnapshotSummary) {
+		{name: "wire bound", mutate: func(value *opensplunk.KnowledgeSnapshotSummary) {
 			value.ProtoReflect().SetUnknown(bytesUnknownField(MaximumSummaryBytes))
 		}, want: ErrResourceLimit},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			candidate := proto.Clone(valid).(*opensplunkv1.KnowledgeSnapshotSummary)
+			candidate := proto.Clone(valid).(*opensplunk.KnowledgeSnapshotSummary)
 			test.mutate(candidate)
 			if err := ValidateSummary(candidate); !errors.Is(err, test.want) {
 				t.Fatalf("ValidateSummary() error = %v, want %v", err, test.want)
@@ -335,29 +278,28 @@ func TestValidateKnowledgeSnapshotSummaryBoundariesAndDisclosure(t *testing.T) {
 	}
 }
 
-func validSnapshotReference() *opensplunkv1.KnowledgeSnapshotRef {
-	return &opensplunkv1.KnowledgeSnapshotRef{
-		SnapshotSha256:               bytes.Repeat([]byte{0x11}, sha256.Size),
-		TenantCatalogRevision:        maximumCatalogRevision,
-		TenantCatalogStateToken:      bytes.Repeat([]byte{0x22}, sha256.Size),
-		ObjectCount:                  1,
-		CompilerCompatibilityVersion: CompilerCompatibilityVersion,
-		LookupAssetCount:             0,
+func validSnapshotReference() *opensplunk.KnowledgeSnapshotRef {
+	return &opensplunk.KnowledgeSnapshotRef{
+		SnapshotSha256:          bytes.Repeat([]byte{0x11}, sha256.Size),
+		TenantCatalogRevision:   maximumCatalogRevision,
+		TenantCatalogStateToken: bytes.Repeat([]byte{0x22}, sha256.Size),
+		ObjectCount:             1,
+		LookupAssetCount:        0,
 	}
 }
 
-func validSnapshotSummary(objectCount int) *opensplunkv1.KnowledgeSnapshotSummary {
+func validSnapshotSummary(objectCount int) *opensplunk.KnowledgeSnapshotSummary {
 	reference := validSnapshotReference()
 	reference.ObjectCount = uint32(objectCount)
 	prefixCount := min(objectCount, MaximumSummaryObjects)
-	objects := make([]*opensplunkv1.KnowledgeSnapshotObjectSummary, prefixCount)
+	objects := make([]*opensplunk.KnowledgeSnapshotObjectSummary, prefixCount)
 	for position := range objects {
-		objects[position] = &opensplunkv1.KnowledgeSnapshotObjectSummary{
+		objects[position] = &opensplunk.KnowledgeSnapshotObjectSummary{
 			ResolutionOrdinal: uint32(position),
-			ObjectType:        opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
-			Stage:             opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
-			Disclosure: &opensplunkv1.KnowledgeSnapshotObjectSummary_AuthorizedObject{
-				AuthorizedObject: &opensplunkv1.KnowledgeSnapshotAuthorizedObjectSummary{
+			ObjectType:        opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+			Stage:             opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
+			Disclosure: &opensplunk.KnowledgeSnapshotObjectSummary_AuthorizedObject{
+				AuthorizedObject: &opensplunk.KnowledgeSnapshotAuthorizedObjectSummary{
 					KnowledgeObjectId: strings.Repeat("i", maximumObjectIDBytes-3) + fmt.Sprintf("%03d", position),
 					Version:           uint64(position + 1),
 					Name:              strings.Repeat("n", maximumIdentityBytes-3) + fmt.Sprintf("%03d", position),
@@ -365,19 +307,19 @@ func validSnapshotSummary(objectCount int) *opensplunkv1.KnowledgeSnapshotSummar
 			},
 		}
 	}
-	return &opensplunkv1.KnowledgeSnapshotSummary{
+	return &opensplunk.KnowledgeSnapshotSummary{
 		Ref: reference, Objects: objects, ObjectsTruncated: objectCount > MaximumSummaryObjects,
 	}
 }
 
-func makeStageRegression(value *opensplunkv1.KnowledgeSnapshotSummary) {
+func makeStageRegression(value *opensplunk.KnowledgeSnapshotSummary) {
 	value.Ref.ObjectCount = 2
-	value.Objects = append(value.Objects, proto.Clone(value.Objects[0]).(*opensplunkv1.KnowledgeSnapshotObjectSummary))
-	value.Objects[0].ObjectType = opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD
-	value.Objects[0].Stage = opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD
+	value.Objects = append(value.Objects, proto.Clone(value.Objects[0]).(*opensplunk.KnowledgeSnapshotObjectSummary))
+	value.Objects[0].ObjectType = opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD
+	value.Objects[0].Stage = opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD
 	value.Objects[1].ResolutionOrdinal = 1
-	value.Objects[1].ObjectType = opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION
-	value.Objects[1].Stage = opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION
+	value.Objects[1].ObjectType = opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION
+	value.Objects[1].Stage = opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION
 }
 
 func smallUnknownField() []byte {

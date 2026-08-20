@@ -13,7 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/collector/framing"
 	"github.com/Suhaibinator/open-splunk/internal/collectorlimits"
 )
@@ -97,7 +97,7 @@ type manager struct {
 	lastErrorNs atomic.Int64
 
 	stateMu sync.Mutex
-	state   opensplunkv1.CollectorInputState
+	state   opensplunk.CollectorInputState
 	status  string
 
 	// sourceErrors retains the current per-tailer failure independently of the
@@ -152,7 +152,7 @@ func NewManager(cfg Config, checkpoints ManagerCheckpointStore) (Manager, error)
 		stagedTransaction: make(chan struct{}, maxConcurrentStagedTransactions),
 		tailers:           make(map[string]*tailer),
 		sourceErrors:      make(map[string]string),
-		state:             opensplunkv1.CollectorInputState_COLLECTOR_INPUT_STATE_STARTING,
+		state:             opensplunk.CollectorInputState_COLLECTOR_INPUT_STATE_STARTING,
 	}
 	return m, nil
 }
@@ -659,16 +659,16 @@ func (m *manager) updateState(discovered int, openErr string) {
 	defer m.stateMu.Unlock()
 	switch {
 	case discovered == 0:
-		m.state = opensplunkv1.CollectorInputState_COLLECTOR_INPUT_STATE_MISSING
+		m.state = opensplunk.CollectorInputState_COLLECTOR_INPUT_STATE_MISSING
 		m.status = fmt.Sprintf("no files match include globs %v", m.cfg.Include)
 	case readErr != "":
-		m.state = opensplunkv1.CollectorInputState_COLLECTOR_INPUT_STATE_ERROR
+		m.state = opensplunk.CollectorInputState_COLLECTOR_INPUT_STATE_ERROR
 		m.status = readErr
 	case openErr != "":
-		m.state = opensplunkv1.CollectorInputState_COLLECTOR_INPUT_STATE_UNREADABLE
+		m.state = opensplunk.CollectorInputState_COLLECTOR_INPUT_STATE_UNREADABLE
 		m.status = openErr
 	default:
-		m.state = opensplunkv1.CollectorInputState_COLLECTOR_INPUT_STATE_HEALTHY
+		m.state = opensplunk.CollectorInputState_COLLECTOR_INPUT_STATE_HEALTHY
 		m.status = ""
 	}
 }
@@ -687,7 +687,7 @@ func (m *manager) setReadError(key, path string, err error) {
 	status := selectedSourceError(m.sourceErrors)
 	m.stateMu.Lock()
 	defer m.stateMu.Unlock()
-	m.state = opensplunkv1.CollectorInputState_COLLECTOR_INPUT_STATE_ERROR
+	m.state = opensplunk.CollectorInputState_COLLECTOR_INPUT_STATE_ERROR
 	m.status = status
 }
 

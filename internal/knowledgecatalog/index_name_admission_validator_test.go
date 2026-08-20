@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
@@ -847,11 +847,11 @@ func indexAdmissionTestRequest(
 }
 
 func indexAdmissionTestDefinition(
-	definition *opensplunkv1.KnowledgeObjectDefinition,
+	definition *opensplunk.KnowledgeObjectDefinition,
 	indexPattern string,
-) *opensplunkv1.KnowledgeObjectDefinition {
-	definition.Selector = &opensplunkv1.KnowledgeSelector{
-		IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{Value: indexPattern}},
+) *opensplunk.KnowledgeObjectDefinition {
+	definition.Selector = &opensplunk.KnowledgeSelector{
+		IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{{Value: indexPattern}},
 	}
 	return definition
 }
@@ -893,7 +893,7 @@ func insertIndexAdmissionTenantObject(
 	database *control.DB,
 	tenantID, objectID, ownerID string,
 	timestamp int64,
-	definition *opensplunkv1.KnowledgeObjectDefinition,
+	definition *opensplunk.KnowledgeObjectDefinition,
 ) {
 	t.Helper()
 	normalized, err := knowledgedefinition.Normalize(definition)

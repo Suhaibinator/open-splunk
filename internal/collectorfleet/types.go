@@ -14,21 +14,21 @@ const (
 	// process-local MaximumActiveCollectors liveness bound.
 	MaximumDurableCollectorsPerTenant = 256
 
-	maximumTenantIDBytes         = 255
-	maximumDisplayNameBytes      = 255
-	maximumCollectorVersionBytes = collectorlimits.MaximumCollectorVersionBytes
-	maximumHostnameBytes         = collectorlimits.MaximumHostnameBytes
-	maximumOperatingSystemBytes  = collectorlimits.MaximumOperatingSystemBytes
-	maximumArchitectureBytes     = collectorlimits.MaximumArchitectureBytes
-	maximumCapabilities          = collectorlimits.MaximumCapabilities
-	maximumAuthorizedIndexes     = collectorlimits.MaximumAuthorizedIndexes
-	maximumInputs                = collectorlimits.MaximumInputs
-	maximumSourceBytes           = collectorlimits.MaximumSourceBytes
-	maximumSourcetypeBytes       = collectorlimits.MaximumSourcetypeBytes
-	maximumStatusMessageBytes    = collectorlimits.MaximumInputStatusMessageBytes
-	maximumSnapshotBytes         = collectorlimits.MaximumSnapshotBytes
-	maximumPersistedEnumValue    = uint32(1<<31 - 1)
-	maximumPublicUnixMicro       = int64(253_402_300_799_999_999)
+	maximumTenantIDBytes        = 255
+	maximumDisplayNameBytes     = 255
+	maximumSourceRevisionBytes  = collectorlimits.MaximumSourceRevisionBytes
+	maximumHostnameBytes        = collectorlimits.MaximumHostnameBytes
+	maximumOperatingSystemBytes = collectorlimits.MaximumOperatingSystemBytes
+	maximumArchitectureBytes    = collectorlimits.MaximumArchitectureBytes
+	maximumCapabilities         = collectorlimits.MaximumCapabilities
+	maximumAuthorizedIndexes    = collectorlimits.MaximumAuthorizedIndexes
+	maximumInputs               = collectorlimits.MaximumInputs
+	maximumSourceBytes          = collectorlimits.MaximumSourceBytes
+	maximumSourcetypeBytes      = collectorlimits.MaximumSourcetypeBytes
+	maximumStatusMessageBytes   = collectorlimits.MaximumInputStatusMessageBytes
+	maximumSnapshotBytes        = collectorlimits.MaximumSnapshotBytes
+	maximumPersistedEnumValue   = uint32(1<<31 - 1)
+	maximumPublicUnixMicro      = int64(253_402_300_799_999_999)
 )
 
 var (
@@ -83,9 +83,7 @@ type InputRegistration struct {
 // with the trusted index scope resolved from the bearer credential.
 type Hello struct {
 	InstanceID                    string
-	ProtocolMajor                 uint32
-	ProtocolMinor                 uint32
-	CollectorVersion              string
+	SourceRevision                string
 	Hostname                      string
 	OperatingSystem               string
 	Architecture                  string
@@ -190,16 +188,14 @@ type Collector struct {
 	LeaseGeneration   uint64
 	ActiveLease       *ActiveLease
 
-	ProtocolMajor    uint32
-	ProtocolMinor    uint32
-	CollectorVersion string
-	Hostname         string
-	OperatingSystem  string
-	Architecture     string
-	StartedAt        time.Time
-	ConnectedAt      time.Time
-	LastSeenAt       time.Time
-	DisconnectedAt   *time.Time
+	SourceRevision  string
+	Hostname        string
+	OperatingSystem string
+	Architecture    string
+	StartedAt       time.Time
+	ConnectedAt     time.Time
+	LastSeenAt      time.Time
+	DisconnectedAt  *time.Time
 
 	ObservationSequence           uint64
 	ObservedAt                    time.Time

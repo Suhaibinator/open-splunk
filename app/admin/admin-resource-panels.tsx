@@ -3,21 +3,21 @@
 import type { FormEvent } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { AppState, type AppWorkspace } from "@/gen/ts/open_splunk/v1/app";
-import { AppSortBy } from "@/gen/ts/open_splunk/v1/app_api";
+import { AppState, type AppWorkspace } from "@/gen/ts/open_splunk/app";
+import { AppSortBy } from "@/gen/ts/open_splunk/app_api";
 import {
   CollectorAdministrativeState,
   CollectorConnectionState,
   type CollectorRecord,
-} from "@/gen/ts/open_splunk/v1/collector_admin";
-import { CollectorSortBy } from "@/gen/ts/open_splunk/v1/collector_admin_api";
+} from "@/gen/ts/open_splunk/collector_admin";
+import { CollectorSortBy } from "@/gen/ts/open_splunk/collector_admin_api";
 import {
   collectorCapabilityToJSON,
   collectorInputStateToJSON,
   type CollectorInputHealth,
-} from "@/gen/ts/open_splunk/v1/collector";
-import { SortDirection } from "@/gen/ts/open_splunk/v1/common";
-import { ServerFeature } from "@/gen/ts/open_splunk/v1/system_api";
+} from "@/gen/ts/open_splunk/collector";
+import { SortDirection } from "@/gen/ts/open_splunk/common";
+import { ServerFeature } from "@/gen/ts/open_splunk/system_api";
 import {
   createOpenSplunkApiClient,
   isOptionalRouteUnavailable,
@@ -538,7 +538,7 @@ export function CollectorFleetPanel({ apiBaseUrl, bootstrap }: PanelProps) {
             const connection = collectorConnectionLabel(collector.connectionState);
             const disabled = collector.administrativeState === CollectorAdministrativeState.COLLECTOR_ADMINISTRATIVE_STATE_DISABLED;
             return <tr key={collector.collectorId}>
-              <td><strong>{collector.displayName || collector.hostname || collector.collectorId}</strong><small className="table-secondary">{collector.collectorId}{collector.collectorVersion ? ` · v${collector.collectorVersion}` : ""}</small></td>
+              <td><strong>{collector.displayName || collector.hostname || collector.collectorId}</strong><small className="table-secondary">{collector.collectorId}{collector.sourceRevision ? ` · rev ${collector.sourceRevision.slice(0, 12)}` : ""}</small></td>
               <td><span className={`status-label status-label--${connection === "Online" ? "complete" : connection === "Stale" ? "warning" : "neutral"}`}><i />{connection}</span><small className="table-secondary">{disabled ? "Administratively disabled" : `${collector.operatingSystem ?? "OS unknown"}${collector.architecture ? ` / ${collector.architecture}` : ""}`}</small></td>
               <td>{collector.queue === undefined ? "Not reported" : <>{formatBytes(collector.queue.queuedBytes)}<small className="table-secondary">{collector.queue.queuedEvents.toLocaleString()} events · oldest {formatAge(collector.queue.oldestEventAge?.seconds, collector.queue.oldestEventAge?.nanos)}</small></>}</td>
               <td>{collector.inputs.length.toLocaleString()}<small className="table-secondary">{collector.inputs.filter((input) => titleCaseEnum(collectorInputStateToJSON(input.state), "COLLECTOR_INPUT_STATE_") === "Healthy").length.toLocaleString()} healthy</small></td>
@@ -555,7 +555,7 @@ export function CollectorFleetPanel({ apiBaseUrl, bootstrap }: PanelProps) {
       {modal === "details" && target !== null ? <Modal wide title={target.displayName || target.collectorId} subtitle="Live collector metadata from the server." onClose={() => setModal(null)} footer={<button className="button primary" type="button" onClick={() => setModal(null)}>Close</button>}>
         <div className="collector-detail-stack">
           <dl className="backend-definition-list">
-            <div><dt>Collector ID</dt><dd><code>{target.collectorId}</code></dd></div><div><dt>Hostname</dt><dd>{target.hostname ?? "Not reported"}</dd></div><div><dt>Runtime</dt><dd>{[target.operatingSystem, target.architecture, target.collectorVersion ? `v${target.collectorVersion}` : undefined].filter(Boolean).join(" · ") || "Not reported"}</dd></div><div><dt>Active instance</dt><dd>{target.activeInstanceId ?? "None"}</dd></div><div><dt>Connected</dt><dd>{formatDate(target.connectedAt)}</dd></div><div><dt>Last seen</dt><dd>{formatDate(target.lastSeenAt)}</dd></div>
+            <div><dt>Collector ID</dt><dd><code>{target.collectorId}</code></dd></div><div><dt>Hostname</dt><dd>{target.hostname ?? "Not reported"}</dd></div><div><dt>Runtime</dt><dd>{[target.operatingSystem, target.architecture, target.sourceRevision ? `rev ${target.sourceRevision.slice(0, 12)}` : undefined].filter(Boolean).join(" · ") || "Not reported"}</dd></div><div><dt>Active instance</dt><dd>{target.activeInstanceId ?? "None"}</dd></div><div><dt>Connected</dt><dd>{formatDate(target.connectedAt)}</dd></div><div><dt>Last seen</dt><dd>{formatDate(target.lastSeenAt)}</dd></div>
           </dl>
           <section className="suite-card"><header className="suite-card-header"><div><h3>Durable queue</h3><p>Backlog, delivery, and rejection telemetry.</p></div></header>{target.queue === undefined ? <BackendResourceState kind="empty" title="Queue telemetry unavailable" message="The collector has not reported queue statistics." /> : <dl className="backend-definition-list"><div><dt>Queued</dt><dd>{target.queue.queuedEvents.toLocaleString()} events · {formatBytes(target.queue.queuedBytes)}</dd></div><div><dt>Oldest event</dt><dd>{formatAge(target.queue.oldestEventAge?.seconds, target.queue.oldestEventAge?.nanos)}</dd></div><div><dt>Sent / acknowledged</dt><dd>{target.queue.sentEventsTotal.toLocaleString()} / {target.queue.acknowledgedEventsTotal.toLocaleString()}</dd></div><div><dt>Retried batches</dt><dd>{target.queue.retriedBatchesTotal.toLocaleString()}</dd></div><div><dt>Rejected / dropped</dt><dd>{target.queue.rejectedEventsTotal.toLocaleString()} / {target.queue.droppedEventsTotal.toLocaleString()}</dd></div></dl>}</section>
           <section className="suite-card"><header className="suite-card-header"><div><h3>Inputs</h3><p>Health and progress for every reported input.</p></div></header><InputRows inputs={target.inputs} /></section>

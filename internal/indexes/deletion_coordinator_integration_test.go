@@ -17,7 +17,7 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/indexes"
@@ -1065,19 +1065,19 @@ func coordinatorStoreBatch(
 		CollectorID: collectorID,
 		BatchID:     batchID,
 		IndexTime:   indexTime,
-		Event: &opensplunkv1.LogEvent{
+		Event: &opensplunk.LogEvent{
 			EventId:         fixture.eventID,
 			IndexName:       fixture.indexName,
 			EventTime:       timestamppb.New(fixture.eventTime),
 			CollectedAt:     timestamppb.New(fixture.eventTime.Add(-time.Second)),
-			EventTimeSource: opensplunkv1.EventTimeSource_EVENT_TIME_SOURCE_PARSED,
+			EventTimeSource: opensplunk.EventTimeSource_EVENT_TIME_SOURCE_PARSED,
 			Host:            "coordinator-host",
 			Source:          "coordinator.log",
 			Sourcetype:      "open_splunk:coordinator",
-			Severity:        opensplunkv1.LogSeverity_LOG_SEVERITY_INFO,
+			Severity:        opensplunk.LogSeverity_LOG_SEVERITY_INFO,
 			Raw:             []byte(`{"message":"coordinator deletion fixture"}`),
-			RawEncoding:     opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
-			Fields:          &opensplunkv1.TypedObject{},
+			RawEncoding:     opensplunk.RawEncoding_RAW_ENCODING_UTF8,
+			Fields:          &opensplunk.TypedObject{},
 		},
 	}
 	return ingest.StoreBatch{

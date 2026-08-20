@@ -7,7 +7,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -28,7 +28,7 @@ type fieldIssue struct {
 type diagnosticIssue struct {
 	path        string
 	code        string
-	severity    opensplunkv1.DiagnosticSeverity
+	severity    opensplunk.DiagnosticSeverity
 	message     string
 	rangeValue  *byteRange
 	suggestions []string
@@ -47,12 +47,12 @@ type diagnosticSource struct {
 }
 
 type projectedDiagnostic struct {
-	value  *opensplunkv1.KnowledgeValidationDiagnostic
+	value  *opensplunk.KnowledgeValidationDiagnostic
 	source diagnosticSource
 }
 
-func canonicalFieldViolations(ctx context.Context, input []fieldIssue) ([]*opensplunkv1.FieldViolation, bool, error) {
-	values := make([]*opensplunkv1.FieldViolation, 0, len(input))
+func canonicalFieldViolations(ctx context.Context, input []fieldIssue) ([]*opensplunk.FieldViolation, bool, error) {
+	values := make([]*opensplunk.FieldViolation, 0, len(input))
 	for index, issue := range input {
 		if index%64 == 0 {
 			if err := contextError(ctx); err != nil {
@@ -63,14 +63,14 @@ func canonicalFieldViolations(ctx context.Context, input []fieldIssue) ([]*opens
 			!validIssueScalar(issue.message, maximumIssueMessage) {
 			return nil, false, ErrInvariant
 		}
-		values = append(values, &opensplunkv1.FieldViolation{
+		values = append(values, &opensplunk.FieldViolation{
 			FieldPath: strings.Clone(issue.path),
 			Code:      strings.Clone(issue.code),
 			Message:   strings.Clone(issue.message),
 		})
 	}
 	slices.SortFunc(values, compareFieldViolations)
-	values = slices.CompactFunc(values, func(left, right *opensplunkv1.FieldViolation) bool {
+	values = slices.CompactFunc(values, func(left, right *opensplunk.FieldViolation) bool {
 		return left.GetFieldPath() == right.GetFieldPath() && left.GetCode() == right.GetCode() &&
 			left.GetMessage() == right.GetMessage()
 	})
@@ -93,7 +93,7 @@ func canonicalFieldViolations(ctx context.Context, input []fieldIssue) ([]*opens
 func canonicalDiagnosticsWithSources(
 	ctx context.Context,
 	input []diagnosticIssue,
-) ([]*opensplunkv1.KnowledgeValidationDiagnostic, []diagnosticSource, bool, error) {
+) ([]*opensplunk.KnowledgeValidationDiagnostic, []diagnosticSource, bool, error) {
 	projected := make([]projectedDiagnostic, 0, len(input))
 	for index, issue := range input {
 		if index%64 == 0 {
@@ -149,7 +149,7 @@ func canonicalDiagnosticsWithSources(
 		}
 		textBytes += charge
 	}
-	values := make([]*opensplunkv1.KnowledgeValidationDiagnostic, retained)
+	values := make([]*opensplunk.KnowledgeValidationDiagnostic, retained)
 	sources := make([]diagnosticSource, retained)
 	for index := range retained {
 		values[index] = projected[index].value
@@ -158,7 +158,7 @@ func canonicalDiagnosticsWithSources(
 	return values, sources, truncated, nil
 }
 
-func projectDiagnostic(ctx context.Context, issue diagnosticIssue) (*opensplunkv1.KnowledgeValidationDiagnostic, error) {
+func projectDiagnostic(ctx context.Context, issue diagnosticIssue) (*opensplunk.KnowledgeValidationDiagnostic, error) {
 	if !validPath(issue.path) || !validIssueScalar(issue.code, maximumIssueCodeBytes) ||
 		!validIssueScalar(issue.message, maximumIssueMessage) || severityRank(issue.severity) < 0 {
 		return nil, ErrInvariant
@@ -185,7 +185,7 @@ func projectDiagnostic(ctx context.Context, issue diagnosticIssue) (*opensplunkv
 	}
 	slices.Sort(suggestions)
 
-	diagnostic := &opensplunkv1.Diagnostic{
+	diagnostic := &opensplunk.Diagnostic{
 		Code:        strings.Clone(issue.code),
 		Severity:    issue.severity,
 		Message:     strings.Clone(issue.message),
@@ -198,13 +198,13 @@ func projectDiagnostic(ctx context.Context, issue diagnosticIssue) (*opensplunkv
 		}
 		diagnostic.SourceRange = sourceRange
 	}
-	return &opensplunkv1.KnowledgeValidationDiagnostic{
+	return &opensplunk.KnowledgeValidationDiagnostic{
 		FieldPath:  strings.Clone(issue.path),
 		Diagnostic: diagnostic,
 	}, nil
 }
 
-func publicRange(ctx context.Context, value byteRange) (*opensplunkv1.SourceRange, error) {
+func publicRange(ctx context.Context, value byteRange) (*opensplunk.SourceRange, error) {
 	if !utf8.ValidString(value.source) || value.start > value.end || value.end > uint64(len(value.source)) ||
 		!utf8.ValidString(value.source[:value.start]) || !utf8.ValidString(value.source[:value.end]) {
 		return nil, ErrInvariant
@@ -217,10 +217,10 @@ func publicRange(ctx context.Context, value byteRange) (*opensplunkv1.SourceRang
 	if err != nil {
 		return nil, err
 	}
-	return &opensplunkv1.SourceRange{Start: start, End: end}, nil
+	return &opensplunk.SourceRange{Start: start, End: end}, nil
 }
 
-func sourcePosition(ctx context.Context, source string, offset uint64) (*opensplunkv1.SourcePosition, error) {
+func sourcePosition(ctx context.Context, source string, offset uint64) (*opensplunk.SourcePosition, error) {
 	if offset > uint64(len(source)) || !utf8.ValidString(source[:offset]) {
 		return nil, ErrInvariant
 	}
@@ -244,10 +244,10 @@ func sourcePosition(ctx context.Context, source string, offset uint64) (*openspl
 			column++
 		}
 	}
-	return &opensplunkv1.SourcePosition{ByteOffset: offset, Line: line, Column: column}, nil
+	return &opensplunk.SourcePosition{ByteOffset: offset, Line: line, Column: column}, nil
 }
 
-func compareFieldViolations(left, right *opensplunkv1.FieldViolation) int {
+func compareFieldViolations(left, right *opensplunk.FieldViolation) int {
 	if order := cmp.Compare(left.GetFieldPath(), right.GetFieldPath()); order != 0 {
 		return order
 	}
@@ -257,7 +257,7 @@ func compareFieldViolations(left, right *opensplunkv1.FieldViolation) int {
 	return cmp.Compare(left.GetMessage(), right.GetMessage())
 }
 
-func compareDiagnostics(left, right *opensplunkv1.KnowledgeValidationDiagnostic) int {
+func compareDiagnostics(left, right *opensplunk.KnowledgeValidationDiagnostic) int {
 	leftDiagnostic, rightDiagnostic := left.GetDiagnostic(), right.GetDiagnostic()
 	if order := cmp.Compare(severityRank(leftDiagnostic.GetSeverity()), severityRank(rightDiagnostic.GetSeverity())); order != 0 {
 		return order
@@ -287,7 +287,7 @@ func compareDiagnostics(left, right *opensplunkv1.KnowledgeValidationDiagnostic)
 		return order
 	}
 	if leftRange != nil {
-		for _, positions := range [][2]*opensplunkv1.SourcePosition{
+		for _, positions := range [][2]*opensplunk.SourcePosition{
 			{leftRange.GetStart(), rightRange.GetStart()},
 			{leftRange.GetEnd(), rightRange.GetEnd()},
 		} {
@@ -308,13 +308,13 @@ func compareDiagnostics(left, right *opensplunkv1.KnowledgeValidationDiagnostic)
 	return cmp.Compare(len(leftSuggestions), len(rightSuggestions))
 }
 
-func severityRank(severity opensplunkv1.DiagnosticSeverity) int {
+func severityRank(severity opensplunk.DiagnosticSeverity) int {
 	switch severity {
-	case opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR:
+	case opensplunk.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR:
 		return 0
-	case opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_WARNING:
+	case opensplunk.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_WARNING:
 		return 1
-	case opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_INFO:
+	case opensplunk.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_INFO:
 		return 2
 	default:
 		return -1

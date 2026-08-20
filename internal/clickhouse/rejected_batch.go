@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
 	"google.golang.org/protobuf/proto"
@@ -17,7 +17,7 @@ const batchRejectionMetadataVersion = byte(1)
 
 var batchRejectionMetadataMagic = [4]byte{'O', 'S', 'B', 'R'}
 
-func encodeBatchRejectionMetadata(rejection *opensplunkv1.BatchReject) ([]byte, error) {
+func encodeBatchRejectionMetadata(rejection *opensplunk.BatchReject) ([]byte, error) {
 	if err := ingest.ValidateDurableBatchRejection(rejection); err != nil {
 		return nil, fmt.Errorf("store terminal batch rejection: %w", err)
 	}
@@ -42,7 +42,7 @@ func encodeBatchRejectionMetadata(rejection *opensplunkv1.BatchReject) ([]byte, 
 	return metadata, nil
 }
 
-func decodeBatchRejectionMetadata(metadata []byte) (*opensplunkv1.BatchReject, error) {
+func decodeBatchRejectionMetadata(metadata []byte) (*opensplunk.BatchReject, error) {
 	const (
 		headerBytes  = len(batchRejectionMetadataMagic) + 1 + 8
 		minimumBytes = headerBytes + sha256.Size
@@ -60,14 +60,14 @@ func decodeBatchRejectionMetadata(metadata []byte) (*opensplunkv1.BatchReject, e
 		return nil, errors.New("terminal batch rejection metadata has an invalid header")
 	}
 	if payload[len(batchRejectionMetadataMagic)] != batchRejectionMetadataVersion {
-		return nil, errors.New("terminal batch rejection metadata has an invalid version")
+		return nil, errors.New("terminal batch rejection metadata has an unsupported version; provision fresh visibility state")
 	}
 	length := binary.BigEndian.Uint64(payload[len(batchRejectionMetadataMagic)+1 : headerBytes])
 	encoded := payload[headerBytes:]
 	if length == 0 || length != uint64(len(encoded)) {
 		return nil, errors.New("terminal batch rejection metadata has an invalid response length")
 	}
-	rejection := new(opensplunkv1.BatchReject)
+	rejection := new(opensplunk.BatchReject)
 	if err := (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(encoded, rejection); err != nil {
 		return nil, fmt.Errorf("decode terminal batch rejection response: %w", err)
 	}

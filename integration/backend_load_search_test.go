@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -57,14 +57,14 @@ func newBackendLoadSearchSpec(plan backendLoadPlan, fixtureStart time.Time) back
 	}
 }
 
-func (spec backendLoadSearchSpec) request() *opensplunkv1.CreateSearchJobRequest {
+func (spec backendLoadSearchSpec) request() *opensplunk.CreateSearchJobRequest {
 	earliest := spec.Earliest.Format(time.RFC3339Nano)
 	latest := spec.Latest.Format(time.RFC3339Nano)
 	timezone := spec.Timezone
-	return &opensplunkv1.CreateSearchJobRequest{
-		Definition: &opensplunkv1.SearchDefinition{
+	return &opensplunk.CreateSearchJobRequest{
+		Definition: &opensplunk.SearchDefinition{
 			Spl: spec.SPL,
-			TimeRange: &opensplunkv1.TimeRangeSpec{
+			TimeRange: &opensplunk.TimeRangeSpec{
 				Earliest: &earliest,
 				Latest:   &latest,
 				Timezone: &timezone,
@@ -114,16 +114,16 @@ const (
 
 var backendLoadSearchAggregateColumns = [...]struct {
 	name      string
-	valueType opensplunkv1.ValueType
+	valueType opensplunk.ValueType
 	nullable  bool
 }{
-	{name: "events", valueType: opensplunkv1.ValueType_VALUE_TYPE_UINT64},
-	{name: "event_ids", valueType: opensplunkv1.ValueType_VALUE_TYPE_UINT64},
-	{name: "request_ids", valueType: opensplunkv1.ValueType_VALUE_TYPE_UINT64},
-	{name: "user_ids", valueType: opensplunkv1.ValueType_VALUE_TYPE_UINT64},
-	{name: "event_times", valueType: opensplunkv1.ValueType_VALUE_TYPE_UINT64},
-	{name: "first_event_at", valueType: opensplunkv1.ValueType_VALUE_TYPE_TIMESTAMP, nullable: true},
-	{name: "last_event_at", valueType: opensplunkv1.ValueType_VALUE_TYPE_TIMESTAMP, nullable: true},
+	{name: "events", valueType: opensplunk.ValueType_VALUE_TYPE_UINT64},
+	{name: "event_ids", valueType: opensplunk.ValueType_VALUE_TYPE_UINT64},
+	{name: "request_ids", valueType: opensplunk.ValueType_VALUE_TYPE_UINT64},
+	{name: "user_ids", valueType: opensplunk.ValueType_VALUE_TYPE_UINT64},
+	{name: "event_times", valueType: opensplunk.ValueType_VALUE_TYPE_UINT64},
+	{name: "first_event_at", valueType: opensplunk.ValueType_VALUE_TYPE_TIMESTAMP, nullable: true},
+	{name: "last_event_at", valueType: opensplunk.ValueType_VALUE_TYPE_TIMESTAMP, nullable: true},
 }
 
 func runBackendLoadSearch(
@@ -170,11 +170,11 @@ func createBackendLoadSearch(
 	baseURL string,
 	spec backendLoadSearchSpec,
 ) (backendLoadSearchAdmission, error) {
-	var created opensplunkv1.CreateSearchJobResponse
+	var created opensplunk.CreateSearchJobResponse
 	if _, err := postProtoRequest(
 		ctx,
 		client,
-		baseURL+"/api/v1/search/jobs/create",
+		baseURL+"/api/search/jobs/create",
 		spec.request(),
 		&created,
 	); err != nil {
@@ -241,8 +241,8 @@ func collectBackendLoadSearch(
 
 	results := fetchAllCompletedSearchResults(t, ctx, client, baseURL, admission.JobID, 1, 1)
 	columns := results.schema.GetColumns()
-	if completed.GetResultKind() != opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS ||
-		results.schema.GetResultKind() != opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS ||
+	if completed.GetResultKind() != opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS ||
+		results.schema.GetResultKind() != opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS ||
 		len(columns) != len(backendLoadSearchAggregateColumns) ||
 		len(results.rows) != 1 ||
 		len(results.rows[0].GetCells()) != len(backendLoadSearchAggregateColumns) {
@@ -268,7 +268,7 @@ func collectBackendLoadSearch(
 	unsigned := func(index int) uint64 {
 		t.Helper()
 		value := cells[index]
-		if _, ok := value.GetKind().(*opensplunkv1.TypedValue_Uint64Value); !ok {
+		if _, ok := value.GetKind().(*opensplunk.TypedValue_Uint64Value); !ok {
 			t.Fatalf(
 				"backend load aggregate cell %q = %+v, want UInt64",
 				backendLoadSearchAggregateColumns[index].name,
@@ -280,7 +280,7 @@ func collectBackendLoadSearch(
 	timestamp := func(index int) time.Time {
 		t.Helper()
 		value := cells[index]
-		if _, ok := value.GetKind().(*opensplunkv1.TypedValue_TimestampValue); !ok {
+		if _, ok := value.GetKind().(*opensplunk.TypedValue_TimestampValue); !ok {
 			t.Fatalf(
 				"backend load aggregate cell %q = %+v, want Timestamp",
 				backendLoadSearchAggregateColumns[index].name,

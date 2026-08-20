@@ -266,7 +266,7 @@ usage:
                                                    start the collector (default)
   open-splunk-collector validate [-config PATH]    validate configuration and exit
   open-splunk-collector identity [-config PATH]    initialize and print stable ID
-  open-splunk-collector version                    print the compiled build identity
+  open-splunk-source revision                    print the compiled build identity
 
 flags:
   -config PATH       configuration file (default `+defaultConfigPath+`)

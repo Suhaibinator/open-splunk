@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 )
 
@@ -64,7 +64,7 @@ func TestChartBreakTransportWebSocketReplaysTheWholePivotAfterReconnect(t *testi
 	observation := readPreviewObservations(t, client, "pivot")["pivot"]
 
 	schema := observation.schema.GetResultSchemaAvailable().GetSchema()
-	if schema.GetResultKind() != opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS {
+	if schema.GetResultKind() != opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS {
 		t.Fatalf("pivot result kind = %v, want statistics", schema.GetResultKind())
 	}
 	assertChartBreakTransportPivotSchema(t, schema, job)
@@ -135,12 +135,12 @@ func TestChartBreakTransportWebSocketPivotCountColumnsAreNotEventMetadata(t *tes
 		t.Fatalf("pivot schema published %d columns, want %d", len(columns), len(names)+1)
 	}
 	for index, column := range columns[1:] {
-		if column.GetValueType() != opensplunkv1.ValueType_VALUE_TYPE_UINT64 {
+		if column.GetValueType() != opensplunk.ValueType_VALUE_TYPE_UINT64 {
 			t.Fatalf("count column %q value type = %v", column.GetFieldName(), column.GetValueType())
 		}
 		semantic := column.GetSemanticType()
-		if semantic != opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_UNSPECIFIED &&
-			semantic != opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_METRIC {
+		if semantic != opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_UNSPECIFIED &&
+			semantic != opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_METRIC {
 			t.Fatalf("chart count column %d (%q) is advertised as %v, but it is an unsigned occurrence "+
 				"count whose name is a runtime field value, not event metadata",
 				index+1, column.GetFieldName(), semantic)
@@ -148,7 +148,7 @@ func TestChartBreakTransportWebSocketPivotCountColumnsAreNotEventMetadata(t *tes
 	}
 }
 
-func assertChartBreakTransportPivotSchema(t *testing.T, schema *opensplunkv1.ResultSchema, job searchjobs.Job) {
+func assertChartBreakTransportPivotSchema(t *testing.T, schema *opensplunk.ResultSchema, job searchjobs.Job) {
 	t.Helper()
 	columns := schema.GetColumns()
 	if len(columns) != len(job.Schema.Columns) {
@@ -159,9 +159,9 @@ func assertChartBreakTransportPivotSchema(t *testing.T, schema *opensplunkv1.Res
 		if got.GetFieldName() != want.Name || got.GetDisplayName() != want.Name {
 			t.Fatalf("column %d = %q/%q, want %q", index, got.GetFieldName(), got.GetDisplayName(), want.Name)
 		}
-		wantType := opensplunkv1.ValueType_VALUE_TYPE_UINT64
+		wantType := opensplunk.ValueType_VALUE_TYPE_UINT64
 		if index == 0 {
-			wantType = opensplunkv1.ValueType_VALUE_TYPE_STRING
+			wantType = opensplunk.ValueType_VALUE_TYPE_STRING
 		}
 		if got.GetValueType() != wantType || got.GetNullable() || got.GetMultivalue() {
 			t.Fatalf("column %d = %+v, want %v and no nullable/multivalue flags", index, got, wantType)
@@ -171,12 +171,12 @@ func assertChartBreakTransportPivotSchema(t *testing.T, schema *opensplunkv1.Res
 
 func assertChartBreakTransportPivotPreview(
 	t *testing.T,
-	preview *opensplunkv1.ResultPreview,
+	preview *opensplunk.ResultPreview,
 	labels []string,
 	counts [][]uint64,
 ) {
 	t.Helper()
-	if preview.GetUpdateMode() != opensplunkv1.PreviewUpdateMode_PREVIEW_UPDATE_MODE_RESET {
+	if preview.GetUpdateMode() != opensplunk.PreviewUpdateMode_PREVIEW_UPDATE_MODE_RESET {
 		t.Fatalf("pivot preview update mode = %v, want reset", preview.GetUpdateMode())
 	}
 	rows := preview.GetRows()

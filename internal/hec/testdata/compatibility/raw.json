@@ -1,5 +1,5 @@
 {
-  "format_version": "hec-compatibility-fixture-v0.1",
+  "format_version": 1,
   "cases": [
     {
       "id": "raw.fixed-breaker-skips-empty-lines",
@@ -37,7 +37,7 @@
       "rule": "raw query metadata applies to every line and exact request time overrides receive time",
       "request": {
         "method": "POST",
-        "path": "/services/collector/raw/1.0",
+        "path": "/services/collector/raw",
         "headers": [{"name": "Authorization", "value": "Splunk {{token:primary}}"}],
         "query": [
           {"name": "channel", "value": "fe0ecfad-13d5-401b-847d-77833bd77131"},

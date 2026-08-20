@@ -1,4 +1,4 @@
-// Package hechttp exposes the bounded HEC v0.1 HTTP compatibility surface.
+// Package hechttp exposes the bounded HEC HTTP compatibility surface.
 // It adapts protocol requests to shared ingestion admission and never writes
 // directly to ClickHouse or chooses authorization policy itself.
 package hechttp
@@ -18,7 +18,7 @@ import (
 	"sync"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/hec"
 	"github.com/Suhaibinator/open-splunk/internal/hecadapter"
@@ -34,7 +34,7 @@ const (
 )
 
 // Authenticator resolves a plaintext HEC credential into a safe, current
-// versioned policy snapshot and records successful token use.
+// policy snapshot and records successful token use.
 type Authenticator interface {
 	AuthenticateHEC(context.Context, string) (auth.Authentication, error)
 }
@@ -516,7 +516,7 @@ func (handler *Handler) stage(
 		}
 		var transient *ingest.TransientStoreError
 		if errors.As(err, &transient) &&
-			transient.Reason == opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED {
+			transient.Reason == opensplunk.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED {
 			handler.metrics.observeRateLimitedRequest()
 		}
 		status, retryAfter, failure := mapStageError(err)
@@ -604,10 +604,10 @@ func mapStageError(err error) (int, time.Duration, error) {
 		kind := hec.ErrorInvalidDataFormat
 		if admissionFailure.Failure != nil {
 			switch admissionFailure.Failure.Code {
-			case opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_INDEX,
-				opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_INDEX:
+			case opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_INDEX,
+				opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_INDEX:
 				kind = hec.ErrorIncorrectIndex
-			case opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_EVENT_TOO_LARGE:
+			case opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_EVENT_TOO_LARGE:
 				kind = hec.ErrorEventTooLarge
 			default:
 				for _, violation := range admissionFailure.Failure.Violations {
@@ -636,7 +636,7 @@ func mapStageError(err error) (int, time.Duration, error) {
 	}
 	var transient *ingest.TransientStoreError
 	if errors.As(err, &transient) {
-		if transient.Reason == opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED {
+		if transient.Reason == opensplunk.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED {
 			return http.StatusTooManyRequests, transient.RetryAfter, hec.NewProtocolError(hec.ErrorServerBusy, err)
 		}
 		return 0, transient.RetryAfter, hec.NewProtocolError(hec.ErrorServerBusy, err)

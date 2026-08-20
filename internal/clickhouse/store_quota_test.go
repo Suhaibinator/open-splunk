@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
@@ -53,21 +53,21 @@ func TestStoreMapsVisibilityQuotaDenial(t *testing.T) {
 	for _, test := range []struct {
 		name           string
 		kind           ingestquota.ScopeKind
-		wantThrottle   opensplunkv1.ThrottleReason
+		wantThrottle   opensplunk.ThrottleReason
 		retryAfter     time.Duration
 		wantRetryAfter time.Duration
 	}{
 		{
 			name:           "token",
 			kind:           ingestquota.ScopeKindToken,
-			wantThrottle:   opensplunkv1.ThrottleReason_THROTTLE_REASON_TOKEN_QUOTA,
+			wantThrottle:   opensplunk.ThrottleReason_THROTTLE_REASON_TOKEN_QUOTA,
 			retryAfter:     37 * time.Second,
 			wantRetryAfter: 37 * time.Second,
 		},
 		{
 			name:           "index",
 			kind:           ingestquota.ScopeKindIndex,
-			wantThrottle:   opensplunkv1.ThrottleReason_THROTTLE_REASON_INDEX_QUOTA,
+			wantThrottle:   opensplunk.ThrottleReason_THROTTLE_REASON_INDEX_QUOTA,
 			retryAfter:     2 * time.Hour,
 			wantRetryAfter: time.Hour,
 		},
@@ -91,7 +91,7 @@ func TestStoreMapsVisibilityQuotaDenial(t *testing.T) {
 			if !errors.As(err, &transient) {
 				t.Fatalf("Store error = %v, want TransientStoreError", err)
 			}
-			if transient.Reason != opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED {
+			if transient.Reason != opensplunk.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED {
 				t.Fatalf("retry reason = %v, want RATE_LIMITED", transient.Reason)
 			}
 			if transient.ThrottleReason != test.wantThrottle {

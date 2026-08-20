@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"google.golang.org/protobuf/proto"
 )
@@ -42,16 +42,16 @@ func TestSearchJobListRouteRoundTripScopeFiltersAndSafeProjection(t *testing.T) 
 	handler := newSearchJobListTestHandler(t, jobs, Config{})
 	pageSize := uint32(2)
 	pageToken, appID, text := "page-1", " app-main ", " ERROR "
-	response := postProto(t, handler, searchJobsListPath, &opensplunkv1.ListSearchJobsRequest{
-		Page: &opensplunkv1.PageRequest{
+	response := postProto(t, handler, searchJobsListPath, &opensplunk.ListSearchJobsRequest{
+		Page: &opensplunk.PageRequest{
 			PageSize:         &pageSize,
 			PageToken:        &pageToken,
 			IncludeTotalSize: true,
 		},
-		StateFilters: []opensplunkv1.SearchJobState{
-			opensplunkv1.SearchJobState_SEARCH_JOB_STATE_FAILED,
-			opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
-			opensplunkv1.SearchJobState_SEARCH_JOB_STATE_FAILED,
+		StateFilters: []opensplunk.SearchJobState{
+			opensplunk.SearchJobState_SEARCH_JOB_STATE_FAILED,
+			opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
+			opensplunk.SearchJobState_SEARCH_JOB_STATE_FAILED,
 		},
 		AppIdFilter: &appID,
 		TextFilter:  &text,
@@ -86,7 +86,7 @@ func TestSearchJobListRouteRoundTripScopeFiltersAndSafeProjection(t *testing.T) 
 		t.Fatalf("text filter = %#v", captured.TextFilter)
 	}
 
-	var decoded opensplunkv1.ListSearchJobsResponse
+	var decoded opensplunk.ListSearchJobsResponse
 	unmarshalResponse(t, response, &decoded)
 	if decoded.GetPage() == nil || decoded.GetPage().GetNextPageToken() != "next-page" ||
 		decoded.GetPage().GetTotalSize() != total || !decoded.GetPage().GetTotalSizeExact() {
@@ -100,7 +100,7 @@ func TestSearchJobListRouteRoundTripScopeFiltersAndSafeProjection(t *testing.T) 
 		first.GetDefinition().GetAppId() != "app-main" || first.GetNormalizedSpl() != failed.NormalizedSPL ||
 		!slices.Equal(first.GetDefinition().GetIndexScope(), failed.RequestedIndexes) ||
 		!slices.Equal(first.GetEffectiveIndexScope(), failed.EffectiveIndexes) ||
-		first.GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_FAILED ||
+		first.GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_FAILED ||
 		first.GetFailure() == nil || first.GetFailure().GetMessage() != failed.Failure.Message {
 		t.Fatalf("safe projection = %+v", first)
 	}
@@ -114,21 +114,21 @@ func TestSearchJobListRouteRoundTripScopeFiltersAndSafeProjection(t *testing.T) 
 }
 
 func TestSearchJobListUsesBoundedCanonicalOptions(t *testing.T) {
-	allStates := []opensplunkv1.SearchJobState{
-		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_EXPIRED,
-		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_CANCELED,
-		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_FAILED,
-		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
-		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_RUNNING,
-		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_PLANNING,
-		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_PARSING,
-		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_QUEUED,
-		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_RUNNING,
+	allStates := []opensplunk.SearchJobState{
+		opensplunk.SearchJobState_SEARCH_JOB_STATE_EXPIRED,
+		opensplunk.SearchJobState_SEARCH_JOB_STATE_CANCELED,
+		opensplunk.SearchJobState_SEARCH_JOB_STATE_FAILED,
+		opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
+		opensplunk.SearchJobState_SEARCH_JOB_STATE_RUNNING,
+		opensplunk.SearchJobState_SEARCH_JOB_STATE_PLANNING,
+		opensplunk.SearchJobState_SEARCH_JOB_STATE_PARSING,
+		opensplunk.SearchJobState_SEARCH_JOB_STATE_QUEUED,
+		opensplunk.SearchJobState_SEARCH_JOB_STATE_RUNNING,
 	}
 	emptyApp, whitespaceText := " \t ", " \n "
 	jobs := &fakeSearchJobs{}
 	handler := newSearchJobListTestHandler(t, jobs, Config{MaximumPageSize: 7})
-	response := postProto(t, handler, searchJobsListPath, &opensplunkv1.ListSearchJobsRequest{
+	response := postProto(t, handler, searchJobsListPath, &opensplunk.ListSearchJobsRequest{
 		StateFilters: allStates,
 		AppIdFilter:  &emptyApp,
 		TextFilter:   &whitespaceText,
@@ -164,8 +164,8 @@ func TestSearchJobListUsesBoundedCanonicalOptions(t *testing.T) {
 	jobs = &fakeSearchJobs{}
 	handler = newSearchJobListTestHandler(t, jobs, Config{MaximumPageSize: 100})
 	requested := uint32(91)
-	response = postProto(t, handler, searchJobsListPath, &opensplunkv1.ListSearchJobsRequest{
-		Page: &opensplunkv1.PageRequest{PageSize: &requested},
+	response = postProto(t, handler, searchJobsListPath, &opensplunk.ListSearchJobsRequest{
+		Page: &opensplunk.PageRequest{PageSize: &requested},
 	})
 	if response.Code != http.StatusOK {
 		t.Fatalf("clamped status = %d, body = %s", response.Code, response.Body.String())
@@ -180,9 +180,9 @@ func TestSearchJobListUsesBoundedCanonicalOptions(t *testing.T) {
 
 func TestSearchJobListRejectsInvalidOptionsBeforeService(t *testing.T) {
 	zero := uint32(0)
-	tooManyStates := make([]opensplunkv1.SearchJobState, maximumSearchJobListStateFilters+1)
+	tooManyStates := make([]opensplunk.SearchJobState, maximumSearchJobListStateFilters+1)
 	for index := range tooManyStates {
-		tooManyStates[index] = opensplunkv1.SearchJobState_SEARCH_JOB_STATE_QUEUED
+		tooManyStates[index] = opensplunk.SearchJobState_SEARCH_JOB_STATE_QUEUED
 	}
 	oversizedApp := strings.Repeat("a", maximumSavedSearchAppIDBytes+1)
 	controlApp := "bad\napp"
@@ -191,22 +191,22 @@ func TestSearchJobListRejectsInvalidOptionsBeforeService(t *testing.T) {
 	paddedToken := " signed-token "
 	tests := []struct {
 		name    string
-		request *opensplunkv1.ListSearchJobsRequest
+		request *opensplunk.ListSearchJobsRequest
 	}{
-		{name: "explicit zero page size", request: &opensplunkv1.ListSearchJobsRequest{Page: &opensplunkv1.PageRequest{PageSize: &zero}}},
-		{name: "oversized token", request: &opensplunkv1.ListSearchJobsRequest{Page: &opensplunkv1.PageRequest{PageToken: &oversizedToken}}},
-		{name: "padded token", request: &opensplunkv1.ListSearchJobsRequest{Page: &opensplunkv1.PageRequest{PageToken: &paddedToken}}},
-		{name: "too many raw states", request: &opensplunkv1.ListSearchJobsRequest{StateFilters: tooManyStates}},
-		{name: "unspecified state", request: &opensplunkv1.ListSearchJobsRequest{StateFilters: []opensplunkv1.SearchJobState{
-			opensplunkv1.SearchJobState_SEARCH_JOB_STATE_UNSPECIFIED,
+		{name: "explicit zero page size", request: &opensplunk.ListSearchJobsRequest{Page: &opensplunk.PageRequest{PageSize: &zero}}},
+		{name: "oversized token", request: &opensplunk.ListSearchJobsRequest{Page: &opensplunk.PageRequest{PageToken: &oversizedToken}}},
+		{name: "padded token", request: &opensplunk.ListSearchJobsRequest{Page: &opensplunk.PageRequest{PageToken: &paddedToken}}},
+		{name: "too many raw states", request: &opensplunk.ListSearchJobsRequest{StateFilters: tooManyStates}},
+		{name: "unspecified state", request: &opensplunk.ListSearchJobsRequest{StateFilters: []opensplunk.SearchJobState{
+			opensplunk.SearchJobState_SEARCH_JOB_STATE_UNSPECIFIED,
 		}}},
-		{name: "finalizing state", request: &opensplunkv1.ListSearchJobsRequest{StateFilters: []opensplunkv1.SearchJobState{
-			opensplunkv1.SearchJobState_SEARCH_JOB_STATE_FINALIZING,
+		{name: "finalizing state", request: &opensplunk.ListSearchJobsRequest{StateFilters: []opensplunk.SearchJobState{
+			opensplunk.SearchJobState_SEARCH_JOB_STATE_FINALIZING,
 		}}},
-		{name: "unknown state", request: &opensplunkv1.ListSearchJobsRequest{StateFilters: []opensplunkv1.SearchJobState{opensplunkv1.SearchJobState(100)}}},
-		{name: "oversized app", request: &opensplunkv1.ListSearchJobsRequest{AppIdFilter: &oversizedApp}},
-		{name: "control app", request: &opensplunkv1.ListSearchJobsRequest{AppIdFilter: &controlApp}},
-		{name: "oversized text", request: &opensplunkv1.ListSearchJobsRequest{TextFilter: &oversizedText}},
+		{name: "unknown state", request: &opensplunk.ListSearchJobsRequest{StateFilters: []opensplunk.SearchJobState{opensplunk.SearchJobState(100)}}},
+		{name: "oversized app", request: &opensplunk.ListSearchJobsRequest{AppIdFilter: &oversizedApp}},
+		{name: "control app", request: &opensplunk.ListSearchJobsRequest{AppIdFilter: &controlApp}},
+		{name: "oversized text", request: &opensplunk.ListSearchJobsRequest{TextFilter: &oversizedText}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -232,12 +232,12 @@ func TestSearchJobListRejectsMaliciousServiceOutput(t *testing.T) {
 	}
 	tests := []struct {
 		name    string
-		request *opensplunkv1.ListSearchJobsRequest
+		request *opensplunk.ListSearchJobsRequest
 		page    func() searchjobs.JobListPage
 	}{
 		{
 			name:    "cross owner",
-			request: &opensplunkv1.ListSearchJobsRequest{},
+			request: &opensplunk.ListSearchJobsRequest{},
 			page: func() searchjobs.JobListPage {
 				job := baseJob("job-a", testNow)
 				job.OwnerID = "other"
@@ -246,7 +246,7 @@ func TestSearchJobListRejectsMaliciousServiceOutput(t *testing.T) {
 		},
 		{
 			name:    "cross tenant",
-			request: &opensplunkv1.ListSearchJobsRequest{},
+			request: &opensplunk.ListSearchJobsRequest{},
 			page: func() searchjobs.JobListPage {
 				job := baseJob("job-a", testNow)
 				job.TenantID = "other"
@@ -255,7 +255,7 @@ func TestSearchJobListRejectsMaliciousServiceOutput(t *testing.T) {
 		},
 		{
 			name:    "failed state missing failure",
-			request: &opensplunkv1.ListSearchJobsRequest{},
+			request: &opensplunk.ListSearchJobsRequest{},
 			page: func() searchjobs.JobListPage {
 				job := baseJob("job-a", testNow)
 				job.State = searchjobs.StateFailed
@@ -264,7 +264,7 @@ func TestSearchJobListRejectsMaliciousServiceOutput(t *testing.T) {
 		},
 		{
 			name:    "nonfailed state carries failure",
-			request: &opensplunkv1.ListSearchJobsRequest{},
+			request: &opensplunk.ListSearchJobsRequest{},
 			page: func() searchjobs.JobListPage {
 				job := baseJob("job-a", testNow)
 				job.Failure = &searchjobs.Failure{Code: searchjobs.FailureExecution, Message: "failed"}
@@ -273,7 +273,7 @@ func TestSearchJobListRejectsMaliciousServiceOutput(t *testing.T) {
 		},
 		{
 			name:    "invalid failure code",
-			request: &opensplunkv1.ListSearchJobsRequest{},
+			request: &opensplunk.ListSearchJobsRequest{},
 			page: func() searchjobs.JobListPage {
 				job := baseJob("job-a", testNow)
 				job.State = searchjobs.StateFailed
@@ -283,7 +283,7 @@ func TestSearchJobListRejectsMaliciousServiceOutput(t *testing.T) {
 		},
 		{
 			name:    "blank failure message",
-			request: &opensplunkv1.ListSearchJobsRequest{},
+			request: &opensplunk.ListSearchJobsRequest{},
 			page: func() searchjobs.JobListPage {
 				job := baseJob("job-a", testNow)
 				job.State = searchjobs.StateFailed
@@ -293,7 +293,7 @@ func TestSearchJobListRejectsMaliciousServiceOutput(t *testing.T) {
 		},
 		{
 			name:    "invalid internal state",
-			request: &opensplunkv1.ListSearchJobsRequest{},
+			request: &opensplunk.ListSearchJobsRequest{},
 			page: func() searchjobs.JobListPage {
 				job := baseJob("job-a", testNow)
 				job.State = searchjobs.StateInvalid
@@ -302,14 +302,14 @@ func TestSearchJobListRejectsMaliciousServiceOutput(t *testing.T) {
 		},
 		{
 			name:    "empty ID",
-			request: &opensplunkv1.ListSearchJobsRequest{},
+			request: &opensplunk.ListSearchJobsRequest{},
 			page: func() searchjobs.JobListPage {
 				return listPage(baseJob("", testNow))
 			},
 		},
 		{
 			name:    "duplicate ID",
-			request: &opensplunkv1.ListSearchJobsRequest{},
+			request: &opensplunk.ListSearchJobsRequest{},
 			page: func() searchjobs.JobListPage {
 				first := baseJob("job-a", testNow)
 				second := baseJob("job-a", testNow.Add(-time.Second))
@@ -318,7 +318,7 @@ func TestSearchJobListRejectsMaliciousServiceOutput(t *testing.T) {
 		},
 		{
 			name:    "ascending creation time",
-			request: &opensplunkv1.ListSearchJobsRequest{},
+			request: &opensplunk.ListSearchJobsRequest{},
 			page: func() searchjobs.JobListPage {
 				first := baseJob("job-b", testNow.Add(-time.Second))
 				second := baseJob("job-a", testNow)
@@ -327,7 +327,7 @@ func TestSearchJobListRejectsMaliciousServiceOutput(t *testing.T) {
 		},
 		{
 			name:    "ascending ID tie break",
-			request: &opensplunkv1.ListSearchJobsRequest{},
+			request: &opensplunk.ListSearchJobsRequest{},
 			page: func() searchjobs.JobListPage {
 				first := baseJob("job-a", testNow)
 				second := baseJob("job-b", testNow)
@@ -336,32 +336,32 @@ func TestSearchJobListRejectsMaliciousServiceOutput(t *testing.T) {
 		},
 		{
 			name: "state filter mismatch",
-			request: &opensplunkv1.ListSearchJobsRequest{StateFilters: []opensplunkv1.SearchJobState{
-				opensplunkv1.SearchJobState_SEARCH_JOB_STATE_FAILED,
+			request: &opensplunk.ListSearchJobsRequest{StateFilters: []opensplunk.SearchJobState{
+				opensplunk.SearchJobState_SEARCH_JOB_STATE_FAILED,
 			}},
 			page: func() searchjobs.JobListPage { return listPage(baseJob("job-a", testNow)) },
 		},
 		{
 			name: "app filter mismatch",
-			request: func() *opensplunkv1.ListSearchJobsRequest {
+			request: func() *opensplunk.ListSearchJobsRequest {
 				app := "app-main"
-				return &opensplunkv1.ListSearchJobsRequest{AppIdFilter: &app}
+				return &opensplunk.ListSearchJobsRequest{AppIdFilter: &app}
 			}(),
 			page: func() searchjobs.JobListPage { return listPage(baseJob("job-a", testNow)) },
 		},
 		{
 			name: "text filter mismatch",
-			request: func() *opensplunkv1.ListSearchJobsRequest {
+			request: func() *opensplunk.ListSearchJobsRequest {
 				text := "needle"
-				return &opensplunkv1.ListSearchJobsRequest{TextFilter: &text}
+				return &opensplunk.ListSearchJobsRequest{TextFilter: &text}
 			}(),
 			page: func() searchjobs.JobListPage { return listPage(baseJob("job-a", testNow)) },
 		},
 		{
 			name: "more than requested",
-			request: func() *opensplunkv1.ListSearchJobsRequest {
+			request: func() *opensplunk.ListSearchJobsRequest {
 				size := uint32(1)
-				return &opensplunkv1.ListSearchJobsRequest{Page: &opensplunkv1.PageRequest{PageSize: &size}}
+				return &opensplunk.ListSearchJobsRequest{Page: &opensplunk.PageRequest{PageSize: &size}}
 			}(),
 			page: func() searchjobs.JobListPage {
 				return searchjobs.JobListPage{Jobs: []searchjobs.JobListItem{
@@ -372,7 +372,7 @@ func TestSearchJobListRejectsMaliciousServiceOutput(t *testing.T) {
 		},
 		{
 			name:    "token on short page",
-			request: &opensplunkv1.ListSearchJobsRequest{},
+			request: &opensplunk.ListSearchJobsRequest{},
 			page: func() searchjobs.JobListPage {
 				page := listPage(baseJob("job-a", testNow))
 				page.NextPageToken = "unexpected"
@@ -381,9 +381,9 @@ func TestSearchJobListRejectsMaliciousServiceOutput(t *testing.T) {
 		},
 		{
 			name: "invalid token",
-			request: func() *opensplunkv1.ListSearchJobsRequest {
+			request: func() *opensplunk.ListSearchJobsRequest {
 				size := uint32(1)
-				return &opensplunkv1.ListSearchJobsRequest{Page: &opensplunkv1.PageRequest{PageSize: &size}}
+				return &opensplunk.ListSearchJobsRequest{Page: &opensplunk.PageRequest{PageSize: &size}}
 			}(),
 			page: func() searchjobs.JobListPage {
 				page := listPage(baseJob("job-a", testNow))
@@ -393,9 +393,9 @@ func TestSearchJobListRejectsMaliciousServiceOutput(t *testing.T) {
 		},
 		{
 			name: "control byte in token",
-			request: func() *opensplunkv1.ListSearchJobsRequest {
+			request: func() *opensplunk.ListSearchJobsRequest {
 				size := uint32(1)
-				return &opensplunkv1.ListSearchJobsRequest{Page: &opensplunkv1.PageRequest{PageSize: &size}}
+				return &opensplunk.ListSearchJobsRequest{Page: &opensplunk.PageRequest{PageSize: &size}}
 			}(),
 			page: func() searchjobs.JobListPage {
 				page := listPage(baseJob("job-a", testNow))
@@ -405,7 +405,7 @@ func TestSearchJobListRejectsMaliciousServiceOutput(t *testing.T) {
 		},
 		{
 			name:    "unexpected total",
-			request: &opensplunkv1.ListSearchJobsRequest{},
+			request: &opensplunk.ListSearchJobsRequest{},
 			page: func() searchjobs.JobListPage {
 				page := listPage(baseJob("job-a", testNow))
 				page.TotalSize = new(uint64(1))
@@ -415,7 +415,7 @@ func TestSearchJobListRejectsMaliciousServiceOutput(t *testing.T) {
 		},
 		{
 			name:    "exact without total",
-			request: &opensplunkv1.ListSearchJobsRequest{},
+			request: &opensplunk.ListSearchJobsRequest{},
 			page: func() searchjobs.JobListPage {
 				page := listPage(baseJob("job-a", testNow))
 				page.TotalSizeExact = true
@@ -424,14 +424,14 @@ func TestSearchJobListRejectsMaliciousServiceOutput(t *testing.T) {
 		},
 		{
 			name: "missing requested total",
-			request: &opensplunkv1.ListSearchJobsRequest{Page: &opensplunkv1.PageRequest{
+			request: &opensplunk.ListSearchJobsRequest{Page: &opensplunk.PageRequest{
 				IncludeTotalSize: true,
 			}},
 			page: func() searchjobs.JobListPage { return listPage(baseJob("job-a", testNow)) },
 		},
 		{
 			name: "total smaller than page",
-			request: &opensplunkv1.ListSearchJobsRequest{Page: &opensplunkv1.PageRequest{
+			request: &opensplunk.ListSearchJobsRequest{Page: &opensplunk.PageRequest{
 				IncludeTotalSize: true,
 			}},
 			page: func() searchjobs.JobListPage {
@@ -447,7 +447,7 @@ func TestSearchJobListRejectsMaliciousServiceOutput(t *testing.T) {
 		},
 		{
 			name: "first terminal total exceeds page",
-			request: &opensplunkv1.ListSearchJobsRequest{Page: &opensplunkv1.PageRequest{
+			request: &opensplunk.ListSearchJobsRequest{Page: &opensplunk.PageRequest{
 				IncludeTotalSize: true,
 			}},
 			page: func() searchjobs.JobListPage {
@@ -460,9 +460,9 @@ func TestSearchJobListRejectsMaliciousServiceOutput(t *testing.T) {
 		},
 		{
 			name: "continued page total has no remaining item",
-			request: func() *opensplunkv1.ListSearchJobsRequest {
+			request: func() *opensplunk.ListSearchJobsRequest {
 				size := uint32(1)
-				return &opensplunkv1.ListSearchJobsRequest{Page: &opensplunkv1.PageRequest{
+				return &opensplunk.ListSearchJobsRequest{Page: &opensplunk.PageRequest{
 					PageSize: &size, IncludeTotalSize: true,
 				}}
 			}(),
@@ -497,7 +497,7 @@ func TestSearchJobListBoundsResponseAndHidesServiceErrors(t *testing.T) {
 		job := listSearchJob("job-a", testNow)
 		job.NormalizedSPL = strings.Repeat("x", maximumSearchJobListResponseBytes+1)
 		handler := newSearchJobListTestHandler(t, &fakeSearchJobs{listPage: listPage(job)}, Config{})
-		response := postProto(t, handler, searchJobsListPath, &opensplunkv1.ListSearchJobsRequest{})
+		response := postProto(t, handler, searchJobsListPath, &opensplunk.ListSearchJobsRequest{})
 		if response.Code != http.StatusInternalServerError {
 			t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 		}
@@ -509,7 +509,7 @@ func TestSearchJobListBoundsResponseAndHidesServiceErrors(t *testing.T) {
 	t.Run("service error secrecy", func(t *testing.T) {
 		const secret = "SELECT password FROM secret_table"
 		handler := newSearchJobListTestHandler(t, &fakeSearchJobs{listErr: errors.New(secret)}, Config{})
-		response := postProto(t, handler, searchJobsListPath, &opensplunkv1.ListSearchJobsRequest{})
+		response := postProto(t, handler, searchJobsListPath, &opensplunk.ListSearchJobsRequest{})
 		if response.Code != http.StatusInternalServerError {
 			t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 		}
@@ -521,7 +521,7 @@ func TestSearchJobListBoundsResponseAndHidesServiceErrors(t *testing.T) {
 	for _, operationErr := range []error{context.Canceled, context.DeadlineExceeded} {
 		t.Run(operationErr.Error(), func(t *testing.T) {
 			handler := newSearchJobListTestHandler(t, &fakeSearchJobs{listErr: operationErr}, Config{})
-			response := postProto(t, handler, searchJobsListPath, &opensplunkv1.ListSearchJobsRequest{})
+			response := postProto(t, handler, searchJobsListPath, &opensplunk.ListSearchJobsRequest{})
 			if response.Code != http.StatusRequestTimeout {
 				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 			}
@@ -533,7 +533,7 @@ func TestSearchJobListBoundsResponseAndHidesServiceErrors(t *testing.T) {
 		handler := newSearchJobListTestHandler(t, &fakeSearchJobs{
 			listErr: errors.Join(searchjobs.ErrInvalidListFilter, errors.New(detail)),
 		}, Config{})
-		response := postProto(t, handler, searchJobsListPath, &opensplunkv1.ListSearchJobsRequest{})
+		response := postProto(t, handler, searchJobsListPath, &opensplunk.ListSearchJobsRequest{})
 		if response.Code != http.StatusBadRequest {
 			t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 		}
@@ -553,7 +553,7 @@ func TestSearchJobListAcquiresSerializationPermitBeforeService(t *testing.T) {
 		return searchjobs.JobListPage{}, nil
 	}}
 	handler := newSearchJobListTestHandler(t, jobs, Config{MaximumConcurrentResponses: 1})
-	payload, err := proto.Marshal(&opensplunkv1.ListSearchJobsRequest{})
+	payload, err := proto.Marshal(&opensplunk.ListSearchJobsRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -597,7 +597,7 @@ func TestSearchJobListCancellationPreventsResponseTransfer(t *testing.T) {
 		return listPage(listSearchJob("job-a", testNow)), nil
 	}}
 	handler := newSearchJobListTestHandler(t, jobs, Config{})
-	payload, err := proto.Marshal(&opensplunkv1.ListSearchJobsRequest{})
+	payload, err := proto.Marshal(&opensplunk.ListSearchJobsRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -623,7 +623,7 @@ func TestSearchJobListRouteIsExactAndPostOnly(t *testing.T) {
 		t.Fatalf("GET response = %d, Allow %q", response.Code, response.Header().Get("Allow"))
 	}
 
-	response = postProto(t, handler, searchJobsListPath+"/extra", &opensplunkv1.ListSearchJobsRequest{})
+	response = postProto(t, handler, searchJobsListPath+"/extra", &opensplunk.ListSearchJobsRequest{})
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("suffix status = %d, body = %s", response.Code, response.Body.String())
 	}
@@ -660,7 +660,6 @@ func listItem(job searchjobs.Job) searchjobs.JobListItem {
 		TenantID:          job.TenantID,
 		SPL:               job.SPL,
 		NormalizedSPL:     job.NormalizedSPL,
-		CompilerVersion:   job.CompilerVersion,
 		RequestedIndexes:  slices.Clone(job.RequestedIndexes),
 		EffectiveIndexes:  slices.Clone(job.EffectiveIndexes),
 		TimeRange:         job.TimeRange,
@@ -692,12 +691,12 @@ func listItem(job searchjobs.Job) searchjobs.JobListItem {
 }
 
 func cloneKnowledgeSnapshotSummaryForListTest(
-	summary *opensplunkv1.KnowledgeSnapshotSummary,
-) *opensplunkv1.KnowledgeSnapshotSummary {
+	summary *opensplunk.KnowledgeSnapshotSummary,
+) *opensplunk.KnowledgeSnapshotSummary {
 	if summary == nil {
 		return nil
 	}
-	return proto.Clone(summary).(*opensplunkv1.KnowledgeSnapshotSummary)
+	return proto.Clone(summary).(*opensplunk.KnowledgeSnapshotSummary)
 }
 
 func listPage(jobs ...searchjobs.Job) searchjobs.JobListPage {

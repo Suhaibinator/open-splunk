@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
@@ -1259,8 +1259,8 @@ func knowledgeUInt128Sum(expressions []string) string {
 func validateKnowledgeAliasOperation(operation knowledgeprogram.Alias) error {
 	if err := validateKnowledgeFieldOrigin(
 		operation.Origin(),
-		opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
-		opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
+		opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+		opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
 		"field_alias.destination_field",
 	); err != nil {
 		return fmt.Errorf("compile ClickHouse knowledge alias: %w", err)
@@ -1275,8 +1275,8 @@ func validateKnowledgeAliasOperation(operation knowledgeprogram.Alias) error {
 func validateKnowledgeCalculatedOperation(operation knowledgeprogram.Calculated) error {
 	if err := validateKnowledgeFieldOrigin(
 		operation.Origin(),
-		opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD,
-		opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD,
+		opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD,
+		opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD,
 		"calculated_field.expression",
 	); err != nil {
 		return fmt.Errorf("compile ClickHouse knowledge calculated field: %w", err)
@@ -1289,8 +1289,8 @@ func validateKnowledgeCalculatedOperation(operation knowledgeprogram.Calculated)
 
 func validateKnowledgeFieldOrigin(
 	origin knowledgeprogram.Origin,
-	objectType opensplunkv1.KnowledgeObjectType,
-	stage opensplunkv1.KnowledgeSearchStage,
+	objectType opensplunk.KnowledgeObjectType,
+	stage opensplunk.KnowledgeSearchStage,
 	location string,
 ) error {
 	if origin.ObjectType() != objectType || origin.Stage() != stage ||
@@ -1300,9 +1300,9 @@ func validateKnowledgeFieldOrigin(
 		return errors.New("object provenance is invalid")
 	}
 	switch origin.SharingScope() {
-	case opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
-		opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-		opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL:
+	case opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
+		opensplunk.SharingScope_SHARING_SCOPE_APP,
+		opensplunk.SharingScope_SHARING_SCOPE_GLOBAL:
 		return nil
 	default:
 		return errors.New("sharing provenance is invalid")

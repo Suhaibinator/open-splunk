@@ -139,8 +139,8 @@ func TestValidateClickHouseMigrationLedgerIsReadOnlyCompleteAndCanonical(
 		databaseName: databaseName,
 		tables:       []string{"events", "recovery_sets", "schema_migrations"},
 		history: []clickHouseMigrationLedgerRow{
-			{Version: 1, Name: "create_events", RowCount: 1},
-			{Version: 2, Name: "add_visibility", RowCount: 1},
+			{Version: 1, Name: "baseline", RowCount: 1},
+			{Version: 2, Name: "add_example_index", RowCount: 1},
 		},
 	}
 	identity, err := ValidateClickHouseMigrationLedger(
@@ -156,7 +156,7 @@ func TestValidateClickHouseMigrationLedgerIsReadOnlyCompleteAndCanonical(
 		t.Fatalf("latest migration version = %d, want 2", identity.LatestVersion)
 	}
 	if got, want := hex.EncodeToString(identity.SHA256[:]),
-		"6b699ae4f42e6fad60d365af98d6cfbb20f0b5691a532ef7e83e131f4d4154e1"; got != want {
+		"3f9f48893a3eb61b8277eac262112f0ad73731971c3b37661c4d1adb3c4bddd4"; got != want {
 		t.Fatalf("migration-ledger SHA-256 = %s, want %s", got, want)
 	}
 	if got := connection.callsSnapshot(); len(got) != 2 {
@@ -404,7 +404,7 @@ func TestValidateClickHouseMigrationLedgerRejectsIncompleteOrUnsafeDatabase(
 		databaseName: "open_splunk",
 		tables:       []string{"events", "recovery_sets", "schema_migrations"},
 		history: []clickHouseMigrationLedgerRow{
-			{Version: 1, Name: "create_events", RowCount: 1},
+			{Version: 1, Name: "baseline", RowCount: 1},
 		},
 	}
 	_, err := ValidateClickHouseMigrationLedger(
@@ -1046,7 +1046,7 @@ func expectedTestClickHouseMigrationLedgerIdentity(
 ) ClickHouseMigrationLedgerIdentity {
 	t.Helper()
 	digest, err := hex.DecodeString(
-		"6b699ae4f42e6fad60d365af98d6cfbb20f0b5691a532ef7e83e131f4d4154e1",
+		"3f9f48893a3eb61b8277eac262112f0ad73731971c3b37661c4d1adb3c4bddd4",
 	)
 	if err != nil {
 		t.Fatalf("decode test migration identity: %v", err)
@@ -1154,8 +1154,8 @@ func validFakeClickHouseRecoveryValidationConnection(
 		recoveryArchiveMarkersUUID: "55555555-5555-4555-8555-555555555555",
 		maximumVisibility:          42,
 		history: []clickHouseMigrationLedgerRow{
-			{Version: 1, Name: "create_events", RowCount: 1},
-			{Version: 2, Name: "add_visibility", RowCount: 1},
+			{Version: 1, Name: "baseline", RowCount: 1},
+			{Version: 2, Name: "add_example_index", RowCount: 1},
 		},
 		physicalSchema: fakeClickHousePhysicalSchemaRow{
 			tableCount:                       physical.tableCount,

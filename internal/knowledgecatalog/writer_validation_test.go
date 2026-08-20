@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgevalidation"
@@ -70,7 +70,7 @@ func newWriterValidationHarness(
 	}
 }
 
-func validationAliasDefinition(name string, withIndex bool) *opensplunkv1.KnowledgeObjectDefinition {
+func validationAliasDefinition(name string, withIndex bool) *opensplunk.KnowledgeObjectDefinition {
 	definition := aliasDefinition(testApp, name, SharingScopePrivate, nil, "validation-host-*")
 	if withIndex {
 		definition = writerActiveRouteDefinition(definition, "main")
@@ -79,10 +79,10 @@ func validationAliasDefinition(name string, withIndex bool) *opensplunkv1.Knowle
 }
 
 func validationCreateRequest(
-	definition *opensplunkv1.KnowledgeObjectDefinition,
-	intent opensplunkv1.KnowledgeValidationIntent,
-) *opensplunkv1.ValidateKnowledgeObjectRequest {
-	return &opensplunkv1.ValidateKnowledgeObjectRequest{
+	definition *opensplunk.KnowledgeObjectDefinition,
+	intent opensplunk.KnowledgeValidationIntent,
+) *opensplunk.ValidateKnowledgeObjectRequest {
+	return &opensplunk.ValidateKnowledgeObjectRequest{
 		Definition: definition,
 		Intent:     intent,
 	}
@@ -91,23 +91,23 @@ func validationCreateRequest(
 func validationUpdateRequest(
 	objectID string,
 	version uint64,
-	definition *opensplunkv1.KnowledgeObjectDefinition,
+	definition *opensplunk.KnowledgeObjectDefinition,
 	paths ...string,
-) *opensplunkv1.ValidateKnowledgeObjectRequest {
-	return &opensplunkv1.ValidateKnowledgeObjectRequest{
+) *opensplunk.ValidateKnowledgeObjectRequest {
+	return &opensplunk.ValidateKnowledgeObjectRequest{
 		Definition:        definition,
 		KnowledgeObjectId: new(objectID),
 		ExpectedVersion:   new(version),
 		UpdateMask:        &fieldmaskpb.FieldMask{Paths: paths},
-		Intent:            opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+		Intent:            opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
 	}
 }
 
 func TestValidateKnowledgeObjectRequestPresenceEnvelope(t *testing.T) {
-	validDefinition := &opensplunkv1.KnowledgeObjectDefinition{}
+	validDefinition := &opensplunk.KnowledgeObjectDefinition{}
 	validCreate := validationCreateRequest(
 		validDefinition,
-		opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+		opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
 	)
 	validUpdate := validationUpdateRequest(
 		"ko-validation-envelope",
@@ -125,29 +125,29 @@ func TestValidateKnowledgeObjectRequestPresenceEnvelope(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		request *opensplunkv1.ValidateKnowledgeObjectRequest
+		request *opensplunk.ValidateKnowledgeObjectRequest
 	}{
 		{name: "nil request"},
-		{name: "missing definition", request: &opensplunkv1.ValidateKnowledgeObjectRequest{
-			Intent: opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+		{name: "missing definition", request: &opensplunk.ValidateKnowledgeObjectRequest{
+			Intent: opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
 		}},
-		{name: "unspecified intent", request: &opensplunkv1.ValidateKnowledgeObjectRequest{Definition: validDefinition}},
-		{name: "unknown intent", request: &opensplunkv1.ValidateKnowledgeObjectRequest{
-			Definition: validDefinition, Intent: opensplunkv1.KnowledgeValidationIntent(99),
+		{name: "unspecified intent", request: &opensplunk.ValidateKnowledgeObjectRequest{Definition: validDefinition}},
+		{name: "unknown intent", request: &opensplunk.ValidateKnowledgeObjectRequest{
+			Definition: validDefinition, Intent: opensplunk.KnowledgeValidationIntent(99),
 		}},
-		{name: "create expected version present", request: &opensplunkv1.ValidateKnowledgeObjectRequest{
+		{name: "create expected version present", request: &opensplunk.ValidateKnowledgeObjectRequest{
 			Definition: validDefinition, ExpectedVersion: new(uint64(0)),
-			Intent: opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+			Intent: opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
 		}},
-		{name: "create update mask present", request: &opensplunkv1.ValidateKnowledgeObjectRequest{
+		{name: "create update mask present", request: &opensplunk.ValidateKnowledgeObjectRequest{
 			Definition: validDefinition, UpdateMask: &fieldmaskpb.FieldMask{},
-			Intent: opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+			Intent: opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
 		}},
 		{name: "update empty present ID", request: validationUpdateRequest("", 1, validDefinition, "name")},
-		{name: "update expected version absent", request: &opensplunkv1.ValidateKnowledgeObjectRequest{
+		{name: "update expected version absent", request: &opensplunk.ValidateKnowledgeObjectRequest{
 			Definition: validDefinition, KnowledgeObjectId: new("ko-validation-envelope"),
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"name"}},
-			Intent:     opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+			Intent:     opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
 		}},
 		{name: "update expected version zero", request: validationUpdateRequest("ko-validation-envelope", 0, validDefinition, "name")},
 		{name: "update expected version overflow", request: validationUpdateRequest("ko-validation-envelope", math.MaxInt64+1, validDefinition, "name")},
@@ -162,7 +162,7 @@ func TestValidateKnowledgeObjectRequestPresenceEnvelope(t *testing.T) {
 		})
 	}
 
-	unknownEnvelope := proto.Clone(validCreate).(*opensplunkv1.ValidateKnowledgeObjectRequest)
+	unknownEnvelope := proto.Clone(validCreate).(*opensplunk.ValidateKnowledgeObjectRequest)
 	unknownEnvelope.ProtoReflect().SetUnknown(protowire.AppendVarint(
 		protowire.AppendTag(nil, 19000, protowire.VarintType),
 		1,
@@ -170,7 +170,7 @@ func TestValidateKnowledgeObjectRequestPresenceEnvelope(t *testing.T) {
 	if err := ValidateKnowledgeObjectRequest(unknownEnvelope); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("unknown request envelope error = %v, want ErrInvalidArgument", err)
 	}
-	unknownMask := proto.Clone(validUpdate).(*opensplunkv1.ValidateKnowledgeObjectRequest)
+	unknownMask := proto.Clone(validUpdate).(*opensplunk.ValidateKnowledgeObjectRequest)
 	unknownMask.GetUpdateMask().ProtoReflect().SetUnknown(protowire.AppendVarint(
 		protowire.AppendTag(nil, 19000, protowire.VarintType),
 		1,
@@ -178,7 +178,7 @@ func TestValidateKnowledgeObjectRequestPresenceEnvelope(t *testing.T) {
 	if err := ValidateKnowledgeObjectRequest(unknownMask); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("unknown update mask error = %v, want ErrInvalidArgument", err)
 	}
-	unknownCandidate := proto.Clone(validCreate).(*opensplunkv1.ValidateKnowledgeObjectRequest)
+	unknownCandidate := proto.Clone(validCreate).(*opensplunk.ValidateKnowledgeObjectRequest)
 	unknownCandidate.GetDefinition().ProtoReflect().SetUnknown(protowire.AppendVarint(
 		protowire.AppendTag(nil, 19000, protowire.VarintType),
 		1,
@@ -192,9 +192,9 @@ func TestWriterValidateInactiveIsDetachedRevisionZeroAndSideEffectFree(t *testin
 	database, writer, scope := newWriterValidationHarness(t, false)
 	request := validationCreateRequest(
 		validationAliasDefinition("validation-inactive", false),
-		opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+		opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
 	)
-	submitted := proto.Clone(request).(*opensplunkv1.ValidateKnowledgeObjectRequest)
+	submitted := proto.Clone(request).(*opensplunk.ValidateKnowledgeObjectRequest)
 	before := readValidationPersistenceSnapshot(t, database)
 
 	sealed, err := writer.Validate(t.Context(), scope, request)
@@ -232,15 +232,15 @@ func TestWriterValidateGateFollowsEnvelopeAndPrecedesCandidateWork(t *testing.T)
 	}
 	defer writer.validationGate.Release()
 
-	malformed := &opensplunkv1.ValidateKnowledgeObjectRequest{
-		Intent: opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+	malformed := &opensplunk.ValidateKnowledgeObjectRequest{
+		Intent: opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
 	}
 	if _, err := writer.Validate(t.Context(), scope, malformed); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("malformed envelope under full gate error = %v, want ErrInvalidArgument", err)
 	}
 	candidate := validationCreateRequest(
 		validationAliasDefinition("validation-gated", false),
-		opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+		opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
 	)
 	candidate.Definition.ProtoReflect().SetUnknown(protowire.AppendVarint(
 		protowire.AppendTag(nil, 19000, protowire.VarintType),
@@ -269,7 +269,7 @@ func TestWriterValidateUpdateAppliesExactMaskWithoutMutationOnlyChecks(t *testin
 	request := validationUpdateRequest(
 		"ko-validation-update",
 		1,
-		&opensplunkv1.KnowledgeObjectDefinition{Name: "validation-applied"},
+		&opensplunk.KnowledgeObjectDefinition{Name: "validation-applied"},
 		"name",
 	)
 	sealed, err := writer.Validate(t.Context(), scope, request)
@@ -286,7 +286,7 @@ func TestWriterValidateUpdateAppliesExactMaskWithoutMutationOnlyChecks(t *testin
 	noOp := validationUpdateRequest(
 		"ko-validation-update",
 		1,
-		&opensplunkv1.KnowledgeObjectDefinition{Name: "validation-current"},
+		&opensplunk.KnowledgeObjectDefinition{Name: "validation-current"},
 		"name",
 	)
 	if _, err := writer.Validate(t.Context(), scope, noOp); err != nil {
@@ -295,7 +295,7 @@ func TestWriterValidateUpdateAppliesExactMaskWithoutMutationOnlyChecks(t *testin
 	wrongVersion := validationUpdateRequest(
 		"ko-validation-update",
 		2,
-		&opensplunkv1.KnowledgeObjectDefinition{Name: "validation-applied"},
+		&opensplunk.KnowledgeObjectDefinition{Name: "validation-applied"},
 		"name",
 	)
 	if _, err := writer.Validate(t.Context(), scope, wrongVersion); !errors.Is(err, control.ErrVersionConflict) {
@@ -339,7 +339,7 @@ func TestWriterValidateActiveProjectsOnlyAuthorizedCandidateDependencies(t *test
 	), "main")
 	request := validationCreateRequest(
 		candidate,
-		opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION,
+		opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION,
 	)
 	before := readValidationPersistenceSnapshot(t, database)
 	sealed, err := writer.Validate(t.Context(), scope, request)
@@ -354,7 +354,7 @@ func TestWriterValidateActiveProjectsOnlyAuthorizedCandidateDependencies(t *test
 	if !response.GetResult().GetValid() || len(dependencies) != 1 ||
 		dependencies[0].GetTarget().GetKnowledgeObjectId() != "ko-validation-target" ||
 		dependencies[0].GetTarget().GetVersion() != 1 ||
-		dependencies[0].GetRole() != opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT {
+		dependencies[0].GetRole() != opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT {
 		t.Fatalf("ACTIVE dependency response = %v", response)
 	}
 
@@ -437,7 +437,7 @@ func TestWriterValidateRejectsOpaqueAppliedCurrentBodyOutOfBand(t *testing.T) {
 	request := validationUpdateRequest(
 		"ko-validation-opaque-current",
 		1,
-		&opensplunkv1.KnowledgeObjectDefinition{Description: &description},
+		&opensplunk.KnowledgeObjectDefinition{Description: &description},
 		"description",
 	)
 	if _, err := writer.Validate(t.Context(), scope, request); !errors.Is(err, control.ErrInvalidArgument) {
@@ -451,7 +451,7 @@ func TestWriterValidateCancellationIsDefinitiveAndDoesNotEnterSQLite(t *testing.
 	cancel()
 	_, err := writer.Validate(ctx, scope, validationCreateRequest(
 		validationAliasDefinition("validation-canceled", false),
-		opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+		opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
 	))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled validation error = %v, want context.Canceled", err)

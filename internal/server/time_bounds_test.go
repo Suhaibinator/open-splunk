@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 )
 
@@ -13,7 +13,7 @@ func TestAbsoluteTimeRangeUsesPracticalClickHouseNanosecondBounds(t *testing.T) 
 
 	minimum := clickhouse.MinimumSearchTime()
 	maximum := clickhouse.MaximumSearchTime()
-	exact := &opensplunkv1.TimeRangeSpec{
+	exact := &opensplunk.TimeRangeSpec{
 		Earliest: new(minimum.Format(time.RFC3339Nano)),
 		Latest:   new(maximum.Format(time.RFC3339Nano)),
 	}
@@ -35,7 +35,7 @@ func TestAbsoluteTimeRangeUsesPracticalClickHouseNanosecondBounds(t *testing.T) 
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			spec := &opensplunkv1.TimeRangeSpec{
+			spec := &opensplunk.TimeRangeSpec{
 				Earliest: new(test.earliest.Format(time.RFC3339Nano)),
 				Latest:   new(test.latest.Format(time.RFC3339Nano)),
 			}
@@ -83,7 +83,7 @@ func TestPublishedTimePresetsResolveThroughProtobufAdapter(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			spec := &opensplunkv1.TimeRangeSpec{
+			spec := &opensplunk.TimeRangeSpec{
 				Earliest: new(test.earliest),
 				Latest:   new(test.latest),
 				Timezone: &timezone,
@@ -112,7 +112,7 @@ func TestPublishedTimePresetsResolveThroughProtobufAdapter(t *testing.T) {
 		})
 	}
 
-	invalid := &opensplunkv1.TimeRangeSpec{
+	invalid := &opensplunk.TimeRangeSpec{
 		Earliest: new("-1h"),
 		Latest:   new("0"),
 		Timezone: &timezone,

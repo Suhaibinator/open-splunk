@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/SRouter/pkg/codec"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/searchanalysis"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobproto"
@@ -23,7 +23,7 @@ type searchFieldSummaryValueIdentity struct {
 	canonical string
 }
 
-func (handler *apiHandler) getSearchFieldSummary(request *http.Request, input *opensplunkv1.GetSearchFieldSummaryRequest) (*serializedSearchFieldSummaryResponse, error) {
+func (handler *apiHandler) getSearchFieldSummary(request *http.Request, input *opensplunk.GetSearchFieldSummaryRequest) (*serializedSearchFieldSummaryResponse, error) {
 	if input == nil {
 		return nil, badRequestError("search field summary request is required")
 	}
@@ -90,7 +90,7 @@ func searchFieldSummaryToProto(
 	summary searchanalysis.FieldSummary,
 	request searchanalysis.GetFieldSummaryRequest,
 	maximumValues uint32,
-) (*opensplunkv1.GetSearchFieldSummaryResponse, error) {
+) (*opensplunk.GetSearchFieldSummaryResponse, error) {
 	if ctx == nil {
 		return nil, errors.New("search field summary conversion context is required")
 	}
@@ -150,7 +150,7 @@ func searchFieldSummaryToProto(
 	if observedNonNull > *summary.Profile.DistinctCount {
 		return nil, errors.New("search field summary observed types exceed its distinct values")
 	}
-	topValues := make([]*opensplunkv1.FieldValueCount, len(summary.TopValues))
+	topValues := make([]*opensplunk.FieldValueCount, len(summary.TopValues))
 	seen := make(map[searchFieldSummaryValueIdentity]struct{}, len(summary.TopValues))
 	topKinds := make(map[searchjobs.ValueKind]struct{}, len(summary.TopValues))
 	var exactCountTotal uint64
@@ -201,7 +201,7 @@ func searchFieldSummaryToProto(
 		if exactCountTotal > nonNullEvents {
 			return nil, errors.New("search field summary counts exceed present values")
 		}
-		topValues[index] = &opensplunkv1.FieldValueCount{
+		topValues[index] = &opensplunk.FieldValueCount{
 			Value: converted, Count: item.Count, CountIsApproximate: item.CountIsApproximate,
 		}
 		previousCount = item.Count
@@ -244,7 +244,7 @@ func searchFieldSummaryToProto(
 		}
 	}
 
-	return &opensplunkv1.GetSearchFieldSummaryResponse{FieldSummary: &opensplunkv1.FieldSummary{
+	return &opensplunk.GetSearchFieldSummaryResponse{FieldSummary: &opensplunk.FieldSummary{
 		Profile: profile, TopValues: topValues, TopValuesAreApproximate: summary.TopValuesAreApproximate,
 	}}, nil
 }
@@ -315,13 +315,13 @@ func searchFieldSummaryDisplay(value searchjobs.Value) (string, error) {
 	}
 }
 
-type serializedSearchFieldSummaryResponse = boundedProtoResponse[*opensplunkv1.GetSearchFieldSummaryResponse]
+type serializedSearchFieldSummaryResponse = boundedProtoResponse[*opensplunk.GetSearchFieldSummaryResponse]
 
-type serializedSearchFieldSummaryCodec = boundedProtoCodec[*opensplunkv1.GetSearchFieldSummaryRequest, *opensplunkv1.GetSearchFieldSummaryResponse]
+type serializedSearchFieldSummaryCodec = boundedProtoCodec[*opensplunk.GetSearchFieldSummaryRequest, *opensplunk.GetSearchFieldSummaryResponse]
 
 func newSerializedSearchFieldSummaryCodec() *serializedSearchFieldSummaryCodec {
 	return newBoundedProtoCodec(
-		codec.NewProtoCodec[*opensplunkv1.GetSearchFieldSummaryRequest, *opensplunkv1.GetSearchFieldSummaryResponse](),
+		codec.NewProtoCodec[*opensplunk.GetSearchFieldSummaryRequest, *opensplunk.GetSearchFieldSummaryResponse](),
 		boundedProtoCodecOptions{
 			stateError:   "search field summary serialization state is invalid",
 			messageError: "search field summary response is missing",

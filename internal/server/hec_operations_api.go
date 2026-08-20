@@ -6,20 +6,20 @@ import (
 	"github.com/Suhaibinator/SRouter/pkg/codec"
 	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
 	hecOperationsRoute = "/hec/operations/get"
-	hecOperationsPath  = apiV1PathPrefix + hecOperationsRoute
+	hecOperationsPath  = apiPathPrefix + hecOperationsRoute
 )
 
 func (handler *apiHandler) getHECOperationalSnapshot(
 	request *http.Request,
-	_ *opensplunkv1.GetHECOperationalSnapshotRequest,
-) (*opensplunkv1.GetHECOperationalSnapshotResponse, error) {
+	_ *opensplunk.GetHECOperationalSnapshotRequest,
+) (*opensplunk.GetHECOperationalSnapshotResponse, error) {
 	snapshot, err := handler.hecOperations.HECOperationalSnapshot(request.Context())
 	if contextErr := requestContextFailure(request.Context(), err); contextErr != nil {
 		return nil, router.NewHTTPError(
@@ -35,7 +35,7 @@ func (handler *apiHandler) getHECOperationalSnapshot(
 
 func hecOperationalSnapshotToProto(
 	snapshot HECOperationalSnapshot,
-) (*opensplunkv1.GetHECOperationalSnapshotResponse, error) {
+) (*opensplunk.GetHECOperationalSnapshotResponse, error) {
 	observedAt := timestamppb.New(snapshot.ObservedAt.Round(0).UTC())
 	stagingDuration := durationpb.New(snapshot.StagingDuration)
 	oldestPendingAge := durationpb.New(snapshot.OldestPendingOutboxAge)
@@ -44,16 +44,16 @@ func hecOperationalSnapshotToProto(
 		snapshot.OldestPendingOutboxAge < 0 {
 		return nil, internalError()
 	}
-	protocolFailures := make([]*opensplunkv1.HECProtocolFailureMetric, 0, len(snapshot.ProtocolFailures)-1)
+	protocolFailures := make([]*opensplunk.HECProtocolFailureMetric, 0, len(snapshot.ProtocolFailures)-1)
 	for code := 1; code < len(snapshot.ProtocolFailures); code++ {
-		protocolFailures = append(protocolFailures, &opensplunkv1.HECProtocolFailureMetric{
+		protocolFailures = append(protocolFailures, &opensplunk.HECProtocolFailureMetric{
 			Code:  uint32(code), // #nosec G115 -- fixed array index is at most 31.
 			Count: snapshot.ProtocolFailures[code],
 		})
 	}
-	return &opensplunkv1.GetHECOperationalSnapshotResponse{
+	return &opensplunk.GetHECOperationalSnapshotResponse{
 		ObservedAt: observedAt,
-		Request: &opensplunkv1.HECRequestOperationalMetrics{
+		Request: &opensplunk.HECRequestOperationalMetrics{
 			Requests:               snapshot.Requests,
 			Events:                 snapshot.Events,
 			UncompressedBytes:      snapshot.UncompressedBytes,
@@ -66,7 +66,7 @@ func hecOperationalSnapshotToProto(
 			StagingDuration:        stagingDuration,
 			ShutdownRejections:     snapshot.ShutdownRejections,
 		},
-		Durable: &opensplunkv1.HECDurableOperationalMetrics{
+		Durable: &opensplunk.HECDurableOperationalMetrics{
 			QueueAvailable:            snapshot.QueueAvailable,
 			PendingOutboxReservations: snapshot.PendingOutboxReservations,
 			PendingOutboxBytes:        snapshot.PendingOutboxBytes,
@@ -74,13 +74,13 @@ func hecOperationalSnapshotToProto(
 			RequestCapacityAvailable:  snapshot.RequestCapacityAvailable,
 			RetainedRequests:          snapshot.RetainedRequests,
 		},
-		Reconciliation: &opensplunkv1.HECReconciliationOperationalMetrics{
+		Reconciliation: &opensplunk.HECReconciliationOperationalMetrics{
 			Available:   snapshot.ReconciliationAvailable,
 			Successes:   snapshot.ReconciliationSuccesses,
 			Retries:     snapshot.ReconciliationRetries,
 			Ambiguities: snapshot.ReconciliationAmbiguities,
 		},
-		Acknowledgments: &opensplunkv1.HECAcknowledgmentOperationalMetrics{
+		Acknowledgments: &opensplunk.HECAcknowledgmentOperationalMetrics{
 			Available:              snapshot.AcknowledgmentAvailable,
 			ActiveChannels:         snapshot.ActiveChannels,
 			RetainedChannels:       snapshot.RetainedChannels,
@@ -102,16 +102,16 @@ func (handler *apiHandler) hecOperationalRoutes(
 ) []protobufRouteDefinition {
 	return []protobufRouteDefinition{
 		newForwardCompatibleProtoRoute[
-			*opensplunkv1.GetHECOperationalSnapshotRequest,
-			*opensplunkv1.GetHECOperationalSnapshotResponse,
+			*opensplunk.GetHECOperationalSnapshotRequest,
+			*opensplunk.GetHECOperationalSnapshotResponse,
 		](router.RouteConfig[
-			*opensplunkv1.GetHECOperationalSnapshotRequest,
-			*opensplunkv1.GetHECOperationalSnapshotResponse,
+			*opensplunk.GetHECOperationalSnapshotRequest,
+			*opensplunk.GetHECOperationalSnapshotResponse,
 		]{
 			Path:       hecOperationsRoute,
 			Methods:    []router.HttpMethod{router.MethodPost},
 			AuthLevel:  &noAuth,
-			Codec:      codec.NewProtoCodec[*opensplunkv1.GetHECOperationalSnapshotRequest, *opensplunkv1.GetHECOperationalSnapshotResponse](),
+			Codec:      codec.NewProtoCodec[*opensplunk.GetHECOperationalSnapshotRequest, *opensplunk.GetHECOperationalSnapshotResponse](),
 			Handler:    handler.getHECOperationalSnapshot,
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},

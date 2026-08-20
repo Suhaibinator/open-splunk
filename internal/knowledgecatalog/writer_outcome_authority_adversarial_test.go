@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"google.golang.org/protobuf/proto"
 )
@@ -16,12 +16,12 @@ func TestWriterReplayRejectsTamperedCompactOutcomeAuthorities(t *testing.T) {
 	tests := []struct {
 		name   string
 		slug   string
-		tamper func(*testing.T, *writerFaultHarness, string, *opensplunkv1.KnowledgeMutationOutcomeRecord)
+		tamper func(*testing.T, *writerFaultHarness, string, *opensplunk.KnowledgeMutationOutcomeRecord)
 	}{
 		{
 			name: "outcome state token",
 			slug: "outcome-state-token",
-			tamper: func(t *testing.T, harness *writerFaultHarness, requestID string, envelope *opensplunkv1.KnowledgeMutationOutcomeRecord) {
+			tamper: func(t *testing.T, harness *writerFaultHarness, requestID string, envelope *opensplunk.KnowledgeMutationOutcomeRecord) {
 				t.Helper()
 				envelope.TenantCatalogStateToken = bytes.Repeat([]byte{0x92}, catalogStateTokenBytes)
 				updateWriterOutcomeReceipt(t, harness, requestID,
@@ -31,7 +31,7 @@ func TestWriterReplayRejectsTamperedCompactOutcomeAuthorities(t *testing.T) {
 		{
 			name: "outcome revision",
 			slug: "outcome-revision",
-			tamper: func(t *testing.T, harness *writerFaultHarness, requestID string, envelope *opensplunkv1.KnowledgeMutationOutcomeRecord) {
+			tamper: func(t *testing.T, harness *writerFaultHarness, requestID string, envelope *opensplunk.KnowledgeMutationOutcomeRecord) {
 				t.Helper()
 				envelope.TenantCatalogRevision++
 				updateWriterOutcomeReceipt(t, harness, requestID,
@@ -41,7 +41,7 @@ func TestWriterReplayRejectsTamperedCompactOutcomeAuthorities(t *testing.T) {
 		{
 			name: "outcome immutable digest",
 			slug: "outcome-immutable-digest",
-			tamper: func(t *testing.T, harness *writerFaultHarness, requestID string, envelope *opensplunkv1.KnowledgeMutationOutcomeRecord) {
+			tamper: func(t *testing.T, harness *writerFaultHarness, requestID string, envelope *opensplunk.KnowledgeMutationOutcomeRecord) {
 				t.Helper()
 				envelope.GetObject().DefinitionSha256 = bytes.Clone(envelope.GetObject().GetDefinitionSha256())
 				envelope.GetObject().DefinitionSha256[0] ^= 0xff
@@ -65,7 +65,7 @@ func TestWriterReplayRejectsTamperedCompactOutcomeAuthorities(t *testing.T) {
 			response, err := harness.writer.Create(
 				harness.actorContext,
 				harness.scope,
-				proto.Clone(request).(*opensplunkv1.CreateKnowledgeObjectRequest),
+				proto.Clone(request).(*opensplunk.CreateKnowledgeObjectRequest),
 			)
 			if response != nil || !errors.Is(err, ErrCorrupt) {
 				t.Fatalf("Create() with tampered outcome authority = (%v, %v), want nil/ErrCorrupt", response, err)
@@ -103,7 +103,7 @@ func TestWriterReceiptSnapshotPairIsForeignKeyBoundAndIndependentlyReplayVerifie
 	replayed, err := harness.writer.Create(
 		harness.actorContext,
 		harness.scope,
-		proto.Clone(request).(*opensplunkv1.CreateKnowledgeObjectRequest),
+		proto.Clone(request).(*opensplunk.CreateKnowledgeObjectRequest),
 	)
 	if err != nil || !proto.Equal(replayed, committed) {
 		t.Fatalf("replay after rejected row tamper = (%v, %v), want %v", replayed, err, committed)
@@ -126,7 +126,7 @@ func TestWriterReceiptSnapshotPairIsForeignKeyBoundAndIndependentlyReplayVerifie
 	response, err := harness.writer.Create(
 		harness.actorContext,
 		harness.scope,
-		proto.Clone(request).(*opensplunkv1.CreateKnowledgeObjectRequest),
+		proto.Clone(request).(*opensplunk.CreateKnowledgeObjectRequest),
 	)
 	if response != nil || !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("replay with coordinated forged snapshot pair = (%v, %v), want nil/ErrCorrupt", response, err)
@@ -184,7 +184,7 @@ func TestWriterReplayRejectsCoordinatedOutcomeAndRowAuditRebinding(t *testing.T)
 	envelope := readWriterOutcomeEnvelope(t, harness, first.GetClientRequestId())
 	originalAuditSequence := envelope.GetSuccessfulAuditSequence()
 	originalOutcome := marshalWriterOutcomeEnvelope(t, envelope)
-	envelope.AuditAuthority = &opensplunkv1.KnowledgeMutationOutcomeRecord_SuccessfulAuditSequence{
+	envelope.AuditAuthority = &opensplunk.KnowledgeMutationOutcomeRecord_SuccessfulAuditSequence{
 		SuccessfulAuditSequence: duplicate.Sequence,
 	}
 	updateWriterOutcomeReceiptWithoutForeignKeys(
@@ -199,7 +199,7 @@ func TestWriterReplayRejectsCoordinatedOutcomeAndRowAuditRebinding(t *testing.T)
 	response, err := harness.writer.Create(
 		harness.actorContext,
 		harness.scope,
-		proto.Clone(first).(*opensplunkv1.CreateKnowledgeObjectRequest),
+		proto.Clone(first).(*opensplunk.CreateKnowledgeObjectRequest),
 	)
 	if response != nil || !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("Create() with rebound audit authority = (%v, %v), want nil/ErrCorrupt", response, err)
@@ -302,7 +302,7 @@ func TestWriterReplayRejectsWholeReceiptRebindingAcrossEquivalentCreates(t *test
 	response, err := harness.writer.Create(
 		harness.actorContext,
 		harness.scope,
-		proto.Clone(first).(*opensplunkv1.CreateKnowledgeObjectRequest),
+		proto.Clone(first).(*opensplunk.CreateKnowledgeObjectRequest),
 	)
 	if response != nil || !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("Create() with whole rebound receipt = (%v, %v), want nil/ErrCorrupt", response, err)
@@ -339,7 +339,7 @@ func readWriterOutcomeEnvelope(
 	t *testing.T,
 	harness *writerFaultHarness,
 	requestID string,
-) *opensplunkv1.KnowledgeMutationOutcomeRecord {
+) *opensplunk.KnowledgeMutationOutcomeRecord {
 	t.Helper()
 	var encoded []byte
 	if err := harness.database.SQLDB().QueryRowContext(t.Context(), `SELECT outcome_proto
@@ -354,7 +354,7 @@ func readWriterOutcomeEnvelope(
 	).Scan(&encoded); err != nil {
 		t.Fatalf("read compact outcome: %v", err)
 	}
-	envelope := &opensplunkv1.KnowledgeMutationOutcomeRecord{}
+	envelope := &opensplunk.KnowledgeMutationOutcomeRecord{}
 	if err := (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(encoded, envelope); err != nil ||
 		len(envelope.ProtoReflect().GetUnknown()) != 0 || envelope.GetObject() == nil {
 		t.Fatalf("decode compact outcome = (%v, %v)", envelope, err)
@@ -364,7 +364,7 @@ func readWriterOutcomeEnvelope(
 
 func marshalWriterOutcomeEnvelope(
 	t *testing.T,
-	envelope *opensplunkv1.KnowledgeMutationOutcomeRecord,
+	envelope *opensplunk.KnowledgeMutationOutcomeRecord,
 ) []byte {
 	t.Helper()
 	encoded, err := (proto.MarshalOptions{Deterministic: true}).Marshal(envelope)

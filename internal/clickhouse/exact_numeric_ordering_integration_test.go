@@ -8,7 +8,7 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -116,7 +116,7 @@ func testExactNumericOrderingAgainstClickHouse(
 	newEvent := func(
 		id string,
 		service string,
-		fields ...*opensplunkv1.TypedObjectField,
+		fields ...*opensplunk.TypedObjectField,
 	) *ingest.StoredEvent {
 		event := compilerIntegrationEvent(
 			id,
@@ -172,7 +172,7 @@ func testExactNumericOrderingAgainstClickHouse(
 	newBoundaryEvent := func(
 		id string,
 		group string,
-		value *opensplunkv1.TypedValue,
+		value *opensplunk.TypedValue,
 	) *ingest.StoredEvent {
 		event := newEvent(
 			id,

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { GetSearchTimelineResponse } from "../../gen/ts/open_splunk/v1/search_api";
+import type { GetSearchTimelineResponse } from "../../gen/ts/open_splunk/search_api";
 import { adaptSearchTimeline } from "./server-timeline";
 
 function trackDateTimeFormatConstructions<T>(

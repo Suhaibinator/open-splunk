@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
 )
@@ -366,7 +366,7 @@ func insertOrphanVersion(t *testing.T, database *control.DB, objectID string, ve
 	).Scan(&appID, &ownerID, &objectType, &name, &sharingScope); err != nil {
 		t.Fatalf("read orphan predecessor identity: %v", err)
 	}
-	var definition *opensplunkv1.KnowledgeObjectDefinition
+	var definition *opensplunk.KnowledgeObjectDefinition
 	switch ObjectType(objectType) {
 	case ObjectTypeFieldExtraction:
 		definition = dependencyExtractionDefinition(

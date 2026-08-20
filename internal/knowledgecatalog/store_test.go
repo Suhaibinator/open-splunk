@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
@@ -29,7 +29,7 @@ const (
 var testCursorKey = []byte("knowledge-catalog-test-cursor-key-at-least-32-bytes")
 
 type fixtureVersion struct {
-	definition   *opensplunkv1.KnowledgeObjectDefinition
+	definition   *opensplunk.KnowledgeObjectDefinition
 	state        State
 	mutation     string
 	reason       *string
@@ -653,22 +653,22 @@ func insertSelectorRows(t *testing.T, tx *sql.Tx, objectID string, version int64
 	}
 }
 
-func aliasDefinition(appID, name string, scope SharingScope, description *string, hostPattern string) *opensplunkv1.KnowledgeObjectDefinition {
-	protoScope := opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE
+func aliasDefinition(appID, name string, scope SharingScope, description *string, hostPattern string) *opensplunk.KnowledgeObjectDefinition {
+	protoScope := opensplunk.SharingScope_SHARING_SCOPE_PRIVATE
 	switch scope {
 	case SharingScopeApp:
-		protoScope = opensplunkv1.SharingScope_SHARING_SCOPE_APP
+		protoScope = opensplunk.SharingScope_SHARING_SCOPE_APP
 	case SharingScopeGlobal:
-		protoScope = opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL
+		protoScope = opensplunk.SharingScope_SHARING_SCOPE_GLOBAL
 	}
-	definition := &opensplunkv1.KnowledgeObjectDefinition{
+	definition := &opensplunk.KnowledgeObjectDefinition{
 		AppId: appID, Name: name, Description: description, SharingScope: protoScope,
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunkv1.FieldAliasDefinition{
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunk.FieldAliasDefinition{
 			SourceField: "source", DestinationField: "source_alias",
 		}},
 	}
 	if hostPattern != "" {
-		definition.Selector = &opensplunkv1.KnowledgeSelector{HostPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{Value: hostPattern}}}
+		definition.Selector = &opensplunk.KnowledgeSelector{HostPatterns: []*opensplunk.KnowledgeSelectorPattern{{Value: hostPattern}}}
 	}
 	return definition
 }

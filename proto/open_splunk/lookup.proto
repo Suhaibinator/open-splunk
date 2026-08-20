@@ -1,0 +1,64 @@
+syntax = "proto3";
+
+package open_splunk;
+
+import "google/protobuf/timestamp.proto";
+import "open_splunk/common.proto";
+import "open_splunk/knowledge.proto";
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk;opensplunk";
+
+// LookupState is the durable lifecycle of one logical lookup. Staged upload
+// bytes are private implementation state and never appear in this projection.
+enum LookupState {
+  LOOKUP_STATE_UNSPECIFIED = 0;
+  LOOKUP_STATE_ACTIVE = 1;
+  LOOKUP_STATE_DISABLED = 2;
+  LOOKUP_STATE_DELETED = 3;
+}
+
+message LookupFieldMapping {
+  string lookup_field = 1;
+  string event_field = 2;
+}
+
+// LookupDefinition owns logical matching and enrichment. csv_data is carried
+// only by mutation requests and is never echoed through catalog responses.
+message LookupDefinition {
+  string app_id = 1;
+  string name = 2;
+  optional string description = 3;
+  SharingScope sharing_scope = 4;
+  KnowledgeSelector selector = 5;
+  bool automatic = 6;
+  repeated LookupFieldMapping key_mappings = 7;
+  repeated LookupFieldMapping output_mappings = 8;
+  KnowledgeOverwriteBehavior overwrite_behavior = 9;
+}
+
+// Lookup is the bounded safe projection of one immutable published version.
+message Lookup {
+  string lookup_id = 1;
+  string tenant_id = 2;
+  string owner_id = 3;
+  uint64 version = 4;
+  LookupState state = 5;
+  LookupDefinition definition = 6;
+  repeated string columns = 7;
+  uint64 row_count = 8;
+  uint64 canonical_size_bytes = 9;
+  bytes source_sha256 = 10;
+  bytes content_sha256 = 11;
+  google.protobuf.Timestamp created_at = 12;
+  google.protobuf.Timestamp updated_at = 13;
+  optional google.protobuf.Timestamp disabled_at = 14;
+  optional google.protobuf.Timestamp deleted_at = 15;
+}
+
+message LookupVersionReference {
+  string lookup_id = 1;
+  uint64 version = 2;
+  bytes content_sha256 = 3;
+  uint64 canonical_size_bytes = 4;
+  uint64 row_count = 5;
+}

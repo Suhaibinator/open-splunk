@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	moderncsqlite "modernc.org/sqlite"
@@ -320,17 +320,17 @@ func disableHistoricalOnlyActiveTarget(
 	}
 	response, err := writer.SetState(ctx, WriteScope{
 		TenantID: testTenant, OwnerID: testOwner, WritableAppIDs: []string{testApp},
-	}, &opensplunkv1.SetKnowledgeObjectStateRequest{
+	}, &opensplunk.SetKnowledgeObjectStateRequest{
 		KnowledgeObjectId: targetID,
 		ExpectedVersion:   expectedVersion,
-		State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+		State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 		ClientRequestId:   "historical-dependent-disable-0001",
 	})
 	if err != nil {
 		t.Fatalf("SetState(target with historical-only dependents): %v", err)
 	}
 	if response.GetKnowledgeObject().GetVersion() != expectedVersion+1 ||
-		response.GetKnowledgeObject().GetState() != opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED {
+		response.GetKnowledgeObject().GetState() != opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED {
 		t.Fatalf("SetState(target with historical-only dependents) = %#v", response)
 	}
 }

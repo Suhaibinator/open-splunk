@@ -52,8 +52,7 @@ func TestManifestRejectsInvalidFields(t *testing.T) {
 		"ClickHouse excluded": func(value *Manifest) {
 			value.ClickHouseIncluded = false
 		},
-		"application version": func(value *Manifest) { value.ApplicationVersion = "latest" },
-		"source revision":     func(value *Manifest) { value.SourceRevision = "main" },
+		"source revision": func(value *Manifest) { value.SourceRevision = "main" },
 		"SQLite migration digest": func(value *Manifest) {
 			value.SQLiteMigrations.SHA256 = strings.Repeat("A", 64)
 		},
@@ -168,13 +167,12 @@ func validTestManifest() Manifest {
 		RecoverySetID:      recoverySetID,
 		Scope:              deploymentRecoverySetScope,
 		ClickHouseIncluded: true,
-		ApplicationVersion: "0.1.0",
 		SourceRevision:     "development",
 		SQLiteMigrations: controlbackup.MigrationIdentity{
-			SHA256: strings.Repeat("1", 64), LatestVersion: 21,
+			SHA256: strings.Repeat("1", 64), LatestVersion: 1,
 		},
 		ClickHouseMigrations: controlbackup.MigrationIdentity{
-			SHA256: strings.Repeat("2", 64), LatestVersion: 4,
+			SHA256: strings.Repeat("2", 64), LatestVersion: 1,
 		},
 		ControlPlane: ControlPlaneIdentity{
 			Directory: controlPlaneDirectory,

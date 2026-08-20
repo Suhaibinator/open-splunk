@@ -89,7 +89,6 @@ func (snapshot Snapshot) ValidateRetainedExecutionAuthority(
 	message := snapshot.message
 	if message == nil || !facts.valid ||
 		message.GetFormatVersion() != FormatVersion ||
-		message.GetCompilerCompatibilityVersion() != CompilerCompatibilityVersion ||
 		message.GetTenantId() != tenantID ||
 		message.GetPrincipalId() != principalID ||
 		message.GetAppId() == "" || message.GetAppId() != appID ||
@@ -131,7 +130,6 @@ func mintRetainedExecutionAuthorityFacts(
 	message := snapshot.message
 	if message == nil || message.GetBudgetCharges() == nil ||
 		message.GetFormatVersion() != FormatVersion ||
-		message.GetCompilerCompatibilityVersion() != CompilerCompatibilityVersion ||
 		message.GetAppId() == "" || snapshot.prelude.IsZero() ||
 		len(snapshot.encoded) == 0 ||
 		!bytes.Equal(message.GetSnapshotSha256(), snapshot.digest[:]) {

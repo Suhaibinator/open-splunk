@@ -1,10 +1,10 @@
-import { SharingScope } from "@/gen/ts/open_splunk/v1/common";
+import { SharingScope } from "@/gen/ts/open_splunk/common";
 import {
   KnowledgeOverwriteBehavior,
   KnowledgeSelectorMatchKind,
   type KnowledgeSelectorPattern,
-} from "@/gen/ts/open_splunk/v1/knowledge";
-import type { LookupDefinition, LookupFieldMapping } from "@/gen/ts/open_splunk/v1/lookup";
+} from "@/gen/ts/open_splunk/knowledge";
+import type { LookupDefinition, LookupFieldMapping } from "@/gen/ts/open_splunk/lookup";
 
 const LOOKUP_LIST_PAGE_SIZE = 100;
 const LOOKUP_MAXIMUM_MANAGED = 2_048;
@@ -49,7 +49,7 @@ export const LOOKUP_MANAGER_CONTRACT = Object.freeze({
   maximumViolationMessageBytes: 4 << 10,
   sha256Bytes: 32,
 });
-const CANONICAL_SELECTOR_DOMAIN = "open-splunk/knowledge-selector/v1\0";
+const CANONICAL_SELECTOR_DOMAIN = "open-splunk/knowledge-selector\0";
 
 export function textBytes(value: string): number {
   return new TextEncoder().encode(value).byteLength;

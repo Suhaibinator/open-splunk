@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"google.golang.org/protobuf/proto"
@@ -100,7 +100,7 @@ func TestWriterRollsBackAtEveryCreatePrecommitBoundary(t *testing.T) {
 				t.Fatalf("Create retry after %s rollback: %v", boundary, err)
 			}
 			if retried.GetKnowledgeObject().GetVersion() != 1 ||
-				retried.GetKnowledgeObject().GetState() != opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT ||
+				retried.GetKnowledgeObject().GetState() != opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT ||
 				retried.GetTenantCatalogRevision() != 1 || len(retried.GetTenantCatalogStateToken()) != 32 {
 				t.Fatalf("Create retry after %s = %v", boundary, retried)
 			}
@@ -315,29 +315,29 @@ func (harness *writerFaultHarness) close(t *testing.T) {
 	harness.database = nil
 }
 
-func writerFaultCreateRequest(name, requestID string) *opensplunkv1.CreateKnowledgeObjectRequest {
+func writerFaultCreateRequest(name, requestID string) *opensplunk.CreateKnowledgeObjectRequest {
 	description := "fault-injection definition for " + name
-	return &opensplunkv1.CreateKnowledgeObjectRequest{
-		Definition: &opensplunkv1.KnowledgeObjectDefinition{
+	return &opensplunk.CreateKnowledgeObjectRequest{
+		Definition: &opensplunk.KnowledgeObjectDefinition{
 			AppId:        writerFaultApp,
 			Name:         name,
 			Description:  &description,
-			SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
-			Selector: &opensplunkv1.KnowledgeSelector{
-				HostPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{
-					MatchKind: opensplunkv1.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT,
+			SharingScope: opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
+			Selector: &opensplunk.KnowledgeSelector{
+				HostPatterns: []*opensplunk.KnowledgeSelectorPattern{{
+					MatchKind: opensplunk.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT,
 					Value:     "fault-host-" + name,
 				}},
 			},
-			Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{
-				FieldAlias: &opensplunkv1.FieldAliasDefinition{
+			Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{
+				FieldAlias: &opensplunk.FieldAliasDefinition{
 					SourceField:       "source_field",
 					DestinationField:  "destination_field",
-					OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+					OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
 				},
 			},
 		},
-		InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+		InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 		ClientRequestId: requestID,
 	}
 }
@@ -346,15 +346,15 @@ func writerFaultRouteInvocation(
 	t *testing.T,
 	harness *writerFaultHarness,
 	route string,
-	object *opensplunkv1.KnowledgeObject,
+	object *opensplunk.KnowledgeObject,
 ) func() (uint64, error) {
 	t.Helper()
 	switch route {
 	case "update":
-		definition := proto.Clone(object.GetDefinition()).(*opensplunkv1.KnowledgeObjectDefinition)
+		definition := proto.Clone(object.GetDefinition()).(*opensplunk.KnowledgeObjectDefinition)
 		description := "updated through fault injection"
 		definition.Description = &description
-		request := &opensplunkv1.UpdateKnowledgeObjectRequest{
+		request := &opensplunk.UpdateKnowledgeObjectRequest{
 			KnowledgeObjectId: object.GetKnowledgeObjectId(),
 			ExpectedVersion:   1,
 			Definition:        definition,
@@ -369,10 +369,10 @@ func writerFaultRouteInvocation(
 			return response.GetKnowledgeObject().GetVersion(), err
 		}
 	case "disable":
-		request := &opensplunkv1.SetKnowledgeObjectStateRequest{
+		request := &opensplunk.SetKnowledgeObjectStateRequest{
 			KnowledgeObjectId: object.GetKnowledgeObjectId(),
 			ExpectedVersion:   1,
-			State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+			State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 			ClientRequestId:   "route-disable-request-001",
 		}
 		return func() (uint64, error) {
@@ -383,7 +383,7 @@ func writerFaultRouteInvocation(
 			return response.GetKnowledgeObject().GetVersion(), err
 		}
 	case "delete":
-		request := &opensplunkv1.DeleteKnowledgeObjectRequest{
+		request := &opensplunk.DeleteKnowledgeObjectRequest{
 			KnowledgeObjectId: object.GetKnowledgeObjectId(),
 			ExpectedVersion:   1,
 			ClientRequestId:   "route-delete-request-0001",

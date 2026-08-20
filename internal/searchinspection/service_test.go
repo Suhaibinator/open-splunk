@@ -183,13 +183,13 @@ func TestInspectBuildsProjectsCompilesOnceAndExplainsExactQuery(t *testing.T) {
 	}
 }
 
-func TestInspectExpressionV02BuildsCompilesProjectsAndRedacts(t *testing.T) {
+func TestInspectAuthoredExpressionBuildsCompilesProjectsAndRedacts(t *testing.T) {
 	const source = `index=sensitive-index-7f2c | eval adjusted='request-bytes'/314159 | where adjusted>0 AND service IN ("private-member-alpha", "private-member-beta") | table adjusted`
 	snapshot := validInspectionSnapshotForSource(source)
 	searches := &inspectionSearches{snapshots: []searchjobs.ExecutionSnapshot{snapshot, snapshot}}
 	compiler := &inspectionCompiler{}
 	explainer := &inspectionExplainer{
-		result: inspectionExplainResult("open-splunk-explain-v0.2"),
+		result: inspectionExplainResult("open-splunk-explain-authored-expression"),
 	}
 	service := newInspectionTestService(t, inspectionTestConfig{
 		Searches: searches, Compiler: compiler, Explainer: explainer,
@@ -201,18 +201,18 @@ func TestInspectExpressionV02BuildsCompilesProjectsAndRedacts(t *testing.T) {
 		Request{SearchJobID: snapshot.ID},
 	)
 	if err != nil {
-		t.Fatalf("Inspect(v0.2) error = %v", err)
+		t.Fatalf("Inspect(authored expression) error = %v", err)
 	}
 	if searches.callCount() != 2 || compiler.callCount() != 1 || explainer.callCount() != 1 {
 		t.Fatalf(
-			"v0.2 inspection calls = snapshots %d compiler %d explainer %d",
+			"authored expression inspection calls = snapshots %d compiler %d explainer %d",
 			searches.callCount(), compiler.callCount(), explainer.callCount(),
 		)
 	}
 	if got := stageOperators(result.Plan); !slices.Equal(got, []string{
 		"Scan", "Filter", "Extend", "Filter", "Project",
 	}) {
-		t.Fatalf("v0.2 inspection operators = %v", got)
+		t.Fatalf("authored expression inspection operators = %v", got)
 	}
 	if !slices.Equal(result.Plan.Stages[2].InputFields, []string{"request-bytes"}) ||
 		!slices.Equal(result.Plan.Stages[2].OutputFields, []string{"adjusted"}) ||
@@ -222,17 +222,17 @@ func TestInspectExpressionV02BuildsCompilesProjectsAndRedacts(t *testing.T) {
 		}) ||
 		result.Plan.Output.Kind != OutputKindStatic ||
 		!slices.Equal(result.Plan.Output.Fields, []string{"adjusted"}) {
-		t.Fatalf("v0.2 logical projection = %#v", result.Plan)
+		t.Fatalf("authored expression logical projection = %#v", result.Plan)
 	}
 	compiled := compiler.lastQuery()
 	if !compiled.HasValidExecutionSeal() || !compiled.EqualForExecution(explainer.lastQuery()) ||
 		result.GeneratedSQL != compiled.SQL {
-		t.Fatal("v0.2 inspection did not explain the exact compiler authority")
+		t.Fatal("authored expression inspection did not explain the exact compiler authority")
 	}
 	rendered := fmt.Sprintf("%#v %s", result.Plan, result.GeneratedSQL)
 	for _, literal := range []string{"private-member-alpha", "private-member-beta"} {
 		if strings.Contains(rendered, literal) {
-			t.Fatalf("v0.2 inspection leaked authored literal %q: %s", literal, rendered)
+			t.Fatalf("authored expression inspection leaked authored literal %q: %s", literal, rendered)
 		}
 	}
 }

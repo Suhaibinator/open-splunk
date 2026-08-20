@@ -6,7 +6,7 @@ import Link from "next/link";
 import {
   SearchJobState,
   type SearchProgress,
-} from "@/gen/ts/open_splunk/v1/search";
+} from "@/gen/ts/open_splunk/search";
 import {
   createOpenSplunkApiClient,
   getSystemBootstrap,

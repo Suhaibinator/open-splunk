@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"google.golang.org/protobuf/proto"
 	"gorm.io/gorm"
@@ -146,7 +146,7 @@ func TestAuditedStorePublishesCompleteSavedSearchLifecycleInsideMutationTransact
 		t.Fatalf("read operations emitted audit events: %#v", calls)
 	}
 
-	replacement := proto.Clone(created.Definition).(*opensplunkv1.SavedSearchDefinition)
+	replacement := proto.Clone(created.Definition).(*opensplunk.SavedSearchDefinition)
 	replacement.Name = "lifecycle-updated"
 	updated, err := audited.Update(
 		ctx,
@@ -256,7 +256,7 @@ func TestAuditedStoreRollsBackEverySavedSearchMutationWhenAuditFails(t *testing.
 			store := newSavedSearchAuditRawStore(t, database, dependencies.options())
 			ctx := context.Background()
 			scope := AccessScope{OwnerID: "owner"}
-			var existing *opensplunkv1.SavedSearch
+			var existing *opensplunk.SavedSearch
 			if action != SavedSearchMutationAuditActionCreate {
 				var err error
 				existing, err = store.Create(ctx, scope, savedSearchDefinition("rollback-source", ""))
@@ -277,7 +277,7 @@ func TestAuditedStoreRollsBackEverySavedSearchMutationWhenAuditFails(t *testing.
 					savedSearchDefinition("rollback-create", ""),
 				)
 			case SavedSearchMutationAuditActionUpdate:
-				replacement := proto.Clone(existing.Definition).(*opensplunkv1.SavedSearchDefinition)
+				replacement := proto.Clone(existing.Definition).(*opensplunk.SavedSearchDefinition)
 				replacement.Name = "must-roll-back"
 				_, mutationErr = audited.Update(
 					ctx,
@@ -365,7 +365,7 @@ func TestAuditedStoreDoesNotAuditRejectedSavedSearchOperations(t *testing.T) {
 	); !errors.Is(err, control.ErrVersionConflict) {
 		t.Fatalf("stale Update() error = %v, want ErrVersionConflict", err)
 	}
-	conflicting := proto.Clone(second.Definition).(*opensplunkv1.SavedSearchDefinition)
+	conflicting := proto.Clone(second.Definition).(*opensplunk.SavedSearchDefinition)
 	conflicting.Name = first.Definition.Name
 	if _, err := audited.Update(
 		ctx,
@@ -472,7 +472,7 @@ func TestAuditedStoreIDCollisionsPublishOnlyTheCommittedSavedSearch(t *testing.T
 			})
 			ctx := context.Background()
 			scope := AccessScope{OwnerID: "owner"}
-			var source *opensplunkv1.SavedSearch
+			var source *opensplunk.SavedSearch
 			if test.action == SavedSearchMutationAuditActionDuplicate {
 				var err error
 				source, err = seed.Create(ctx, scope, savedSearchDefinition("source", ""))
@@ -500,7 +500,7 @@ func TestAuditedStoreIDCollisionsPublishOnlyTheCommittedSavedSearch(t *testing.T
 			})
 			appender := &recordingSavedSearchAuditAppender{}
 			audited := newSavedSearchAuditStore(t, store, appender)
-			var result *opensplunkv1.SavedSearch
+			var result *opensplunk.SavedSearch
 			var err error
 			if test.action == SavedSearchMutationAuditActionCreate {
 				result, err = audited.Create(ctx, scope, savedSearchDefinition("collision-retry", ""))
@@ -552,7 +552,7 @@ func TestAuditedStoreConcurrentSavedSearchMutationsPublishOnlyTheWinner(t *testi
 		errorsByWriter := make(chan error, 2)
 		for _, name := range []string{"winner-a", "winner-b"} {
 			go func() {
-				replacement := proto.Clone(created.Definition).(*opensplunkv1.SavedSearchDefinition)
+				replacement := proto.Clone(created.Definition).(*opensplunk.SavedSearchDefinition)
 				replacement.Name = name
 				<-start
 				_, updateErr := audited.Update(

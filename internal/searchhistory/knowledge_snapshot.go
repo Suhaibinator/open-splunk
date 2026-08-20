@@ -1,7 +1,7 @@
 package searchhistory
 
 import (
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 )
 
@@ -10,8 +10,8 @@ import (
 // snapshot authority. In particular, the authority rejects an amplified
 // repeated shape before walking or cloning it.
 func cloneKnowledgeSnapshotSummary(
-	input *opensplunkv1.KnowledgeSnapshotSummary,
-) (*opensplunkv1.KnowledgeSnapshotSummary, error) {
+	input *opensplunk.KnowledgeSnapshotSummary,
+) (*opensplunk.KnowledgeSnapshotSummary, error) {
 	if input == nil {
 		return nil, nil
 	}

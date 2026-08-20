@@ -80,7 +80,6 @@ func TestManifestValidationRejectsEveryBoundedContractViolation(t *testing.T) {
 		"recovery id":              func(value *Manifest) { value.RecoverySetID = strings.Repeat("A", recoverySetIDHexBytes) },
 		"scope":                    func(value *Manifest) { value.Scope = "deployment" },
 		"clickhouse included":      func(value *Manifest) { value.ClickHouseIncluded = true },
-		"application version":      func(value *Manifest) { value.ApplicationVersion = "latest" },
 		"source revision":          func(value *Manifest) { value.SourceRevision = "main" },
 		"sqlite digest":            func(value *Manifest) { value.SQLiteMigrations.SHA256 = "bad" },
 		"sqlite version":           func(value *Manifest) { value.SQLiteMigrations.LatestVersion = 0 },
@@ -116,7 +115,7 @@ func TestManifestValidationRejectsEveryBoundedContractViolation(t *testing.T) {
 	}
 }
 
-func TestManifestRequiresExactExpectedRelease(t *testing.T) {
+func TestManifestRequiresExactExpectedSourceAndMigrations(t *testing.T) {
 	t.Parallel()
 
 	manifest := validTestManifest()
@@ -125,8 +124,7 @@ func TestManifestRequiresExactExpectedRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, mutate := range map[string]func(*ReleaseIdentity){
-		"application version": func(value *ReleaseIdentity) { value.ApplicationVersion = "0.2.0" },
-		"source revision":     func(value *ReleaseIdentity) { value.SourceRevision = strings.Repeat("b", 40) },
+		"source revision": func(value *ReleaseIdentity) { value.SourceRevision = strings.Repeat("b", 40) },
 		"sqlite digest": func(value *ReleaseIdentity) {
 			value.SQLiteMigrations.SHA256 = strings.Repeat("b", 64)
 		},
@@ -141,7 +139,7 @@ func TestManifestRequiresExactExpectedRelease(t *testing.T) {
 			changed := expected
 			mutate(&changed)
 			if err := validateManifestRelease(manifest, changed); err == nil {
-				t.Fatal("mismatched release succeeded")
+				t.Fatal("mismatched source or migrations succeeded")
 			}
 		})
 	}
@@ -154,11 +152,10 @@ func validTestManifest() Manifest {
 		RecoverySetID:               strings.Repeat("a", recoverySetIDHexBytes),
 		Scope:                       controlPlaneOnlyScope,
 		ClickHouseIncluded:          false,
-		ApplicationVersion:          "0.1.0",
 		SourceRevision:              "development",
-		SQLiteMigrations:            MigrationIdentity{SHA256: strings.Repeat("1", 64), LatestVersion: 21},
+		SQLiteMigrations:            MigrationIdentity{SHA256: strings.Repeat("1", 64), LatestVersion: 1},
 		SQLiteMigrationLedgerSHA256: strings.Repeat("7", 64),
-		ClickHouseMigrations:        MigrationIdentity{SHA256: strings.Repeat("2", 64), LatestVersion: 7},
+		ClickHouseMigrations:        MigrationIdentity{SHA256: strings.Repeat("2", 64), LatestVersion: 1},
 		Database: FileIdentity{
 			Name: databaseFilename, SizeBytes: 4096, SHA256: strings.Repeat("3", 64),
 		},

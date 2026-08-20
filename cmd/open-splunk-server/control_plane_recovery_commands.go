@@ -183,8 +183,7 @@ func loadControlPlaneRecoveryRelease() (controlbackup.ReleaseIdentity, error) {
 		)
 	}
 	return controlbackup.ReleaseIdentity{
-		ApplicationVersion: release.Metadata.ApplicationVersion,
-		SourceRevision:     release.Metadata.SourceRevision,
+		SourceRevision: release.Metadata.SourceRevision,
 		SQLiteMigrations: controlbackup.MigrationIdentity{
 			SHA256:        release.Metadata.SQLiteMigrations.SHA256,
 			LatestVersion: release.Metadata.SQLiteMigrations.LatestVersion,

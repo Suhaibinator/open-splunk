@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 )
@@ -34,15 +34,15 @@ func TestStatsMultivalueByExpansionLimitAgainstClickHouse(t *testing.T) {
 	connection, store := chartEdgeStartClickHouse(t, ctx)
 	indexTime := time.Date(2026, time.August, 11, 21, 0, 0, 0, time.UTC)
 
-	uniqueList := func(prefix string, count int) *opensplunkv1.TypedValue {
-		members := make([]*opensplunkv1.TypedValue, count)
+	uniqueList := func(prefix string, count int) *opensplunk.TypedValue {
+		members := make([]*opensplunk.TypedValue, count)
 		for index := range members {
 			members[index] = typedString(fmt.Sprintf("%s-%03d", prefix, index))
 		}
 		return typedList(members...)
 	}
-	repeatedList := func(value string, count int) *opensplunkv1.TypedValue {
-		members := make([]*opensplunkv1.TypedValue, count)
+	repeatedList := func(value string, count int) *opensplunk.TypedValue {
+		members := make([]*opensplunk.TypedValue, count)
 		for index := range members {
 			members[index] = typedString(value)
 		}
@@ -51,7 +51,7 @@ func TestStatsMultivalueByExpansionLimitAgainstClickHouse(t *testing.T) {
 	newEvent := func(
 		id string,
 		source string,
-		fields ...*opensplunkv1.TypedObjectField,
+		fields ...*opensplunk.TypedObjectField,
 	) *ingest.StoredEvent {
 		event := testStoredEvent(id, "stats-mv-by-limit", indexTime)
 		event.Event.Source = source
@@ -59,7 +59,7 @@ func TestStatsMultivalueByExpansionLimitAgainstClickHouse(t *testing.T) {
 		return event
 	}
 
-	highDimensionFields := make([]*opensplunkv1.TypedObjectField, 16)
+	highDimensionFields := make([]*opensplunk.TypedObjectField, 16)
 	highDimensionNames := make([]string, len(highDimensionFields))
 	for index := range highDimensionFields {
 		name := fmt.Sprintf("dimension_%02d", index)

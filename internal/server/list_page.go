@@ -6,7 +6,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 )
 
 type boundedListPageMetadata struct {
@@ -23,7 +23,7 @@ func boundedListPageResponse(
 	requestToken string,
 	includeTotal bool,
 	maximumTokenBytes int,
-) (*opensplunkv1.PageResponse, error) {
+) (*opensplunk.PageResponse, error) {
 	if result.itemCount < 0 {
 		return nil, errors.New(
 			serviceName + " service returned an invalid item count",
@@ -32,7 +32,7 @@ func boundedListPageResponse(
 	// #nosec G115 -- the non-negative item count always comes from len() on an
 	// in-memory, transport-bounded response slice.
 	itemCount := uint64(result.itemCount)
-	page := &opensplunkv1.PageResponse{}
+	page := &opensplunk.PageResponse{}
 	if result.nextPageToken != "" {
 		if !validBoundedListPageToken(
 			result.nextPageToken,
@@ -87,7 +87,7 @@ func boundedListPageResponse(
 // and bounded page-token validation. The noun prefixes every error message so
 // each endpoint keeps its own wording.
 func (handler *apiHandler) boundedListPageRequest(
-	page *opensplunkv1.PageRequest,
+	page *opensplunk.PageRequest,
 	noun string,
 	defaultPageSize uint32,
 	serviceMaximum uint32,

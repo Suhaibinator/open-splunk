@@ -69,7 +69,7 @@ const FIELD_PROFILES: FieldProfile[] = [
   { name: "level", type: "string", coverage: 94.2, cardinality: 4, example: "ERROR" },
   { name: "duration_ms", type: "number", coverage: 77.1, cardinality: 1_842, example: "827" },
   { name: "trace_id", type: "string", coverage: 71.4, cardinality: 10_293, example: "4b9f0f06…" },
-  { name: "path", type: "string", coverage: 66.9, cardinality: 42, example: "/api/v1/submissions/grade" },
+  { name: "path", type: "string", coverage: 66.9, cardinality: 42, example: "/api/submissions/grade" },
   { name: "user_id", type: "string", coverage: 36.2, cardinality: 3_106, example: "usr_8W4H20" },
   { name: "submission_id", type: "string", coverage: 22.5, cardinality: 1_904, example: "sub_01J1QF8…" },
   { name: "retry_count", type: "number", coverage: 8.7, cardinality: 5, example: "3" },

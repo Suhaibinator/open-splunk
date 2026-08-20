@@ -66,11 +66,11 @@ func TestDeploymentNativeRecoveryClickHouseLifecycle(t *testing.T) {
 	recoverySource := ingest.NativeCollectorSource("native-recovery-fixture-collector")
 	if err := admin.Exec(ctx, `
 		INSERT INTO open_splunk.events
-			(event_id, event_time, index_time, raw,
+			(event_id, event_time, index_time, raw, field_metadata_version,
 			 collector_id, ingest_source_kind, ingest_source_id,
 			 visibility_seq, expires_at)
 		VALUES
-			('recovery-fixture', now64(9), now64(3), 'durable recovery fixture',
+			('recovery-fixture', now64(9), now64(3), 'durable recovery fixture', 1,
 			 ?, ?, ?, 42, addYears(now64(3), 1))`,
 		recoverySource.CollectorID,
 		uint8(recoverySource.Kind),
@@ -231,11 +231,11 @@ func TestDeploymentNativeRecoveryClickHouseLifecycle(t *testing.T) {
 	originalArchiveIdentity := fixture.archiveIdentity(t, ctx, requestA.ArchiveName)
 	if err := admin.Exec(ctx, `
 		INSERT INTO open_splunk.events
-			(event_id, event_time, index_time, raw,
+			(event_id, event_time, index_time, raw, field_metadata_version,
 			 collector_id, ingest_source_kind, ingest_source_id,
 			 visibility_seq, expires_at)
 		VALUES
-			('same-alias-replacement', now64(9), now64(3), 'archive replacement payload',
+			('same-alias-replacement', now64(9), now64(3), 'archive replacement payload', 1,
 			 ?, ?, ?, 42, addYears(now64(3), 1))`,
 		recoverySource.CollectorID,
 		uint8(recoverySource.Kind),
@@ -1234,7 +1234,7 @@ func nativeRecoveryIntegrationVerification(
 		Manifest: recoveryset.Manifest{
 			RecoverySetID: recoverySetID,
 			ClickHouseMigrations: controlbackup.MigrationIdentity{
-				LatestVersion: 5,
+				LatestVersion: 1,
 			},
 			ClickHouse: recoveryset.ClickHouseIdentity{
 				ServerVersion:                   identity.ServerVersion,

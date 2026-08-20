@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/Suhaibinator/SRouter/pkg/router"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
 )
@@ -16,39 +16,39 @@ func TestKnowledgeDefinitionSanitizersRejectRepeatedShapeBeforeUnknownWalks(
 ) {
 	t.Parallel()
 
-	newDefinition := func() *opensplunkv1.KnowledgeObjectDefinition {
+	newDefinition := func() *opensplunk.KnowledgeObjectDefinition {
 		patterns := make(
-			[]*opensplunkv1.KnowledgeSelectorPattern,
+			[]*opensplunk.KnowledgeSelectorPattern,
 			knowledge.MaximumSelectorPatternsPerDimension+1,
 		)
 		for index := range patterns {
-			patterns[index] = &opensplunkv1.KnowledgeSelectorPattern{}
+			patterns[index] = &opensplunk.KnowledgeSelectorPattern{}
 		}
 		// If reflection traversal ran first, this would produce the distinct
 		// unsupported-fields error. The shape preflight must win instead.
 		addKnowledgeHTTPUnknown(patterns[0])
-		return &opensplunkv1.KnowledgeObjectDefinition{
-			Selector: &opensplunkv1.KnowledgeSelector{IndexPatterns: patterns},
+		return &opensplunk.KnowledgeObjectDefinition{
+			Selector: &opensplunk.KnowledgeSelector{IndexPatterns: patterns},
 		}
 	}
 	tests := []struct {
 		name     string
-		sanitize func(*opensplunkv1.KnowledgeObjectDefinition) error
+		sanitize func(*opensplunk.KnowledgeObjectDefinition) error
 	}{
 		{
 			name: "create",
-			sanitize: func(definition *opensplunkv1.KnowledgeObjectDefinition) error {
+			sanitize: func(definition *opensplunk.KnowledgeObjectDefinition) error {
 				_, err := forwardCompatibleProtoSanitizer(
-					&opensplunkv1.CreateKnowledgeObjectRequest{Definition: definition},
+					&opensplunk.CreateKnowledgeObjectRequest{Definition: definition},
 				)
 				return err
 			},
 		},
 		{
 			name: "update",
-			sanitize: func(definition *opensplunkv1.KnowledgeObjectDefinition) error {
+			sanitize: func(definition *opensplunk.KnowledgeObjectDefinition) error {
 				_, err := forwardCompatibleProtoSanitizer(
-					&opensplunkv1.UpdateKnowledgeObjectRequest{Definition: definition},
+					&opensplunk.UpdateKnowledgeObjectRequest{Definition: definition},
 				)
 				return err
 			},
@@ -74,19 +74,19 @@ func TestKnowledgeDefinitionSanitizersRejectRepeatedShapeBeforeUnknownWalks(
 func TestKnowledgeDefinitionRepeatedShapePinsEveryEntryBoundary(t *testing.T) {
 	t.Parallel()
 
-	patterns := func(count int) []*opensplunkv1.KnowledgeSelectorPattern {
-		return make([]*opensplunkv1.KnowledgeSelectorPattern, count)
+	patterns := func(count int) []*opensplunk.KnowledgeSelectorPattern {
+		return make([]*opensplunk.KnowledgeSelectorPattern, count)
 	}
 	selectorMaximum := knowledge.MaximumSelectorPatternsPerDimension
 	outputMaximum := knowledgedefinition.MaximumFieldExtractionOutputs
 	tests := []struct {
 		name       string
-		definition *opensplunkv1.KnowledgeObjectDefinition
+		definition *opensplunk.KnowledgeObjectDefinition
 		want       bool
 	}{
 		{
 			name: "all selector dimensions at maximum",
-			definition: &opensplunkv1.KnowledgeObjectDefinition{Selector: &opensplunkv1.KnowledgeSelector{
+			definition: &opensplunk.KnowledgeObjectDefinition{Selector: &opensplunk.KnowledgeSelector{
 				IndexPatterns:      patterns(selectorMaximum),
 				HostPatterns:       patterns(selectorMaximum),
 				SourcePatterns:     patterns(selectorMaximum),
@@ -96,24 +96,24 @@ func TestKnowledgeDefinitionRepeatedShapePinsEveryEntryBoundary(t *testing.T) {
 		},
 		{
 			name: "host dimension above maximum",
-			definition: &opensplunkv1.KnowledgeObjectDefinition{Selector: &opensplunkv1.KnowledgeSelector{
+			definition: &opensplunk.KnowledgeObjectDefinition{Selector: &opensplunk.KnowledgeSelector{
 				HostPatterns: patterns(selectorMaximum + 1),
 			}},
 		},
 		{
 			name: "regex outputs at maximum",
-			definition: &opensplunkv1.KnowledgeObjectDefinition{Body: &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
-				FieldExtraction: &opensplunkv1.FieldExtractionDefinition{Extraction: &opensplunkv1.FieldExtractionDefinition_Regex{
-					Regex: &opensplunkv1.RegexFieldExtractionDefinition{OutputFields: make([]string, outputMaximum)},
+			definition: &opensplunk.KnowledgeObjectDefinition{Body: &opensplunk.KnowledgeObjectDefinition_FieldExtraction{
+				FieldExtraction: &opensplunk.FieldExtractionDefinition{Extraction: &opensplunk.FieldExtractionDefinition_Regex{
+					Regex: &opensplunk.RegexFieldExtractionDefinition{OutputFields: make([]string, outputMaximum)},
 				}},
 			}},
 			want: true,
 		},
 		{
 			name: "regex outputs above maximum",
-			definition: &opensplunkv1.KnowledgeObjectDefinition{Body: &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
-				FieldExtraction: &opensplunkv1.FieldExtractionDefinition{Extraction: &opensplunkv1.FieldExtractionDefinition_Regex{
-					Regex: &opensplunkv1.RegexFieldExtractionDefinition{OutputFields: make([]string, outputMaximum+1)},
+			definition: &opensplunk.KnowledgeObjectDefinition{Body: &opensplunk.KnowledgeObjectDefinition_FieldExtraction{
+				FieldExtraction: &opensplunk.FieldExtractionDefinition{Extraction: &opensplunk.FieldExtractionDefinition_Regex{
+					Regex: &opensplunk.RegexFieldExtractionDefinition{OutputFields: make([]string, outputMaximum+1)},
 				}},
 			}},
 		},

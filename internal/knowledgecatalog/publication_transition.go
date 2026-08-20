@@ -15,7 +15,7 @@ import (
 	"sort"
 	"strings"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
@@ -101,11 +101,11 @@ type publicationTransitionPersistenceEndpoint struct {
 	state                       State
 	objectID                    string
 	version                     int64
-	objectType                  opensplunkv1.KnowledgeObjectType
+	objectType                  opensplunk.KnowledgeObjectType
 	name                        string
 	appID                       string
 	ownerID                     string
-	sharingScope                opensplunkv1.SharingScope
+	sharingScope                opensplunk.SharingScope
 	definitionDigest            [sha256.Size]byte
 	existingDependenciesPresent bool
 	existingDependencies        []publicationPersistedDependency
@@ -317,8 +317,8 @@ type publicationTransitionWinnerKey struct {
 	definitionDigest [sha256.Size]byte
 	ownerID          string
 	appID            string
-	sharingScope     opensplunkv1.SharingScope
-	objectType       opensplunkv1.KnowledgeObjectType
+	sharingScope     opensplunk.SharingScope
+	objectType       opensplunk.KnowledgeObjectType
 	name             string
 }
 
@@ -1299,7 +1299,7 @@ func validatePublicationTransitionCandidateDependencyScalars(
 		if dependency.ordinal != int64(index) ||
 			!validIdentity(dependency.targetObjectID, maximumObjectIDBytes) ||
 			dependency.targetVersion < 1 ||
-			dependency.role != opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT ||
+			dependency.role != opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT ||
 			(index > 0 && !publicationPersistedDependencyAfter(dependencies[index-1], dependency)) {
 			return fmt.Errorf(
 				"%w: publication transition candidate dependency rows are malformed",
@@ -1739,7 +1739,7 @@ func publicationTransitionLinkedCanonicalObject(
 	result := *semantic
 	result.canonical = semantic.canonical
 	semanticObject := semantic.canonical.object
-	result.canonical.object = &opensplunkv1.KnowledgeSnapshotObject{
+	result.canonical.object = &opensplunk.KnowledgeSnapshotObject{
 		ResolutionOrdinal: semanticObject.GetResolutionOrdinal(),
 		Stage:             semanticObject.GetStage(),
 		StageOrdinal:      semanticObject.GetStageOrdinal(),
@@ -1886,11 +1886,11 @@ func publicationTransitionPrincipalClasses(
 			)
 		}
 		if object.canonical.object.GetSharingScope() !=
-			opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL {
+			opensplunk.SharingScope_SHARING_SCOPE_GLOBAL {
 			representedApps[appID] = struct{}{}
 		}
 		if object.canonical.object.GetSharingScope() ==
-			opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE {
+			opensplunk.SharingScope_SHARING_SCOPE_PRIVATE {
 			privatePrincipals[publicationTransitionPrivatePrincipalKey{
 				appID:   strings.Clone(appID),
 				ownerID: strings.Clone(object.canonical.object.GetOwnerId()),
@@ -1978,12 +1978,12 @@ func validatePublicationTransitionClassHydration(
 			}
 			charge := publicationTransitionObjectHydrationCharge(object)
 			switch object.canonical.object.GetSharingScope() {
-			case opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL:
+			case opensplunk.SharingScope_SHARING_SCOPE_GLOBAL:
 				result.global = publicationTransitionAddHydrationCharge(result.global, charge)
-			case opensplunkv1.SharingScope_SHARING_SCOPE_APP:
+			case opensplunk.SharingScope_SHARING_SCOPE_APP:
 				appID := object.canonical.object.GetAppId()
 				result.apps[appID] = publicationTransitionAddHydrationCharge(result.apps[appID], charge)
-			case opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE:
+			case opensplunk.SharingScope_SHARING_SCOPE_PRIVATE:
 				key := publicationTransitionPrivatePrincipalKey{
 					appID:   object.canonical.object.GetAppId(),
 					ownerID: object.canonical.object.GetOwnerId(),
@@ -2329,7 +2329,7 @@ func selectPublicationTransitionWinners(
 		candidateAtHighest bool
 	}
 	type nameKey struct {
-		objectType opensplunkv1.KnowledgeObjectType
+		objectType opensplunk.KnowledgeObjectType
 		name       string
 	}
 	groups := make(map[nameKey]precedenceGroup)
@@ -2422,19 +2422,19 @@ func selectPublicationTransitionWinners(
 
 func publicationTransitionVisibilityRank(
 	class publicationTransitionPrincipalClass,
-	object *opensplunkv1.KnowledgeSnapshotObject,
+	object *opensplunk.KnowledgeSnapshotObject,
 ) (uint8, bool) {
 	if object == nil {
 		return 0, false
 	}
 	switch object.GetSharingScope() {
-	case opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL:
+	case opensplunk.SharingScope_SHARING_SCOPE_GLOBAL:
 		return 1, true
-	case opensplunkv1.SharingScope_SHARING_SCOPE_APP:
+	case opensplunk.SharingScope_SHARING_SCOPE_APP:
 		if class.kind != publicationTransitionGenericApp && class.appID == object.GetAppId() {
 			return 2, true
 		}
-	case opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE:
+	case opensplunk.SharingScope_SHARING_SCOPE_PRIVATE:
 		if class.kind == publicationTransitionPrivatePrincipal &&
 			class.appID == object.GetAppId() && class.ownerID == object.GetOwnerId() {
 			return 3, true

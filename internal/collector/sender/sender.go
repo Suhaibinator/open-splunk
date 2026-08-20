@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/collector/wal"
 	"github.com/Suhaibinator/open-splunk/internal/collectorlimits"
 	"google.golang.org/grpc"
@@ -43,13 +43,13 @@ type BackoffPolicy struct {
 
 // HelloInfo is the static collector identity advertised in CollectorHello.
 type HelloInfo struct {
-	CollectorVersion string
-	Hostname         string
-	OperatingSystem  string
-	Architecture     string
-	StartedAt        time.Time
-	Capabilities     []opensplunkv1.CollectorCapability
-	Inputs           []*opensplunkv1.CollectorInputRegistration
+	SourceRevision  string
+	Hostname        string
+	OperatingSystem string
+	Architecture    string
+	StartedAt       time.Time
+	Capabilities    []opensplunk.CollectorCapability
+	Inputs          []*opensplunk.CollectorInputRegistration
 }
 
 // Options configures a Sender. It is fully self-contained; the daemon builds it
@@ -63,11 +63,9 @@ type Options struct {
 	// Compression is the gRPC compressor name (e.g. "gzip"); empty means none.
 	Compression string
 
-	CollectorID   string
-	InstanceID    string
-	ProtocolMajor uint32
-	ProtocolMinor uint32
-	Hello         HelloInfo
+	CollectorID string
+	InstanceID  string
+	Hello       HelloInfo
 
 	DialTimeout time.Duration
 	Backoff     BackoffPolicy
@@ -78,7 +76,7 @@ type Options struct {
 
 	// InputHealth is a nil-safe provider of per-input health for heartbeats. The
 	// daemon wires it after construction; a nil provider yields no input health.
-	InputHealth func() []*opensplunkv1.CollectorInputHealth
+	InputHealth func() []*opensplunk.CollectorInputHealth
 	// LocalDroppedEventsTotal supplies cumulative drops that occur before an
 	// EventBatch reaches this sender (decode/processing failures and local
 	// admission dead letters). Heartbeats saturating-add it to sender-owned drops.
@@ -94,7 +92,7 @@ type Options struct {
 // DeadLetterRecord is one rejected event and why it was rejected, serialized as
 // a single JSON object per line in the dead-letter file.
 type DeadLetterRecord struct {
-	Event         *opensplunkv1.LogEvent
+	Event         *opensplunk.LogEvent
 	BatchID       string
 	BatchSequence uint64
 	// Code is the string form of an EventRejectionCode or BatchRejectionCode.
@@ -112,7 +110,7 @@ type DeadLetterSink interface {
 }
 
 // Stats is a point-in-time snapshot of delivery progress. It contributes the
-// delivery counters of opensplunkv1.CollectorQueueStats (queue depth comes from
+// delivery counters of opensplunk.CollectorQueueStats (queue depth comes from
 // wal.Stats).
 type Stats struct {
 	Connected               bool
@@ -157,14 +155,14 @@ type Sender struct {
 	// Injected for determinism in tests; production defaults set in New.
 	now          func() time.Time
 	rand         func() float64
-	dial         func() (opensplunkv1.CollectorIngestServiceClient, func() error, error)
+	dial         func() (opensplunk.CollectorIngestServiceClient, func() error, error)
 	drainTimeout time.Duration
 	// A connection must remain Ready for this long before it is allowed to reset
 	// exponential reconnect backoff. Otherwise a server that accepts Hello and
 	// immediately drops every stream turns a tight failure loop into attempt zero.
 	backoffResetAfter time.Duration
 
-	client    opensplunkv1.CollectorIngestServiceClient
+	client    opensplunk.CollectorIngestServiceClient
 	closeConn func() error
 
 	mu    sync.Mutex
@@ -335,7 +333,7 @@ func (s *Sender) ensureClient() error {
 	return nil
 }
 
-func (s *Sender) grpcDial() (opensplunkv1.CollectorIngestServiceClient, func() error, error) {
+func (s *Sender) grpcDial() (opensplunk.CollectorIngestServiceClient, func() error, error) {
 	var creds credentials.TransportCredentials
 	if s.opts.TLS.Enabled {
 		cfg, err := buildTLSConfig(s.opts.TLS)
@@ -354,7 +352,7 @@ func (s *Sender) grpcDial() (opensplunkv1.CollectorIngestServiceClient, func() e
 	if err != nil {
 		return nil, nil, err
 	}
-	return opensplunkv1.NewCollectorIngestServiceClient(conn), conn.Close, nil
+	return opensplunk.NewCollectorIngestServiceClient(conn), conn.Close, nil
 }
 
 func buildTLSConfig(t TLSConfig) (*tls.Config, error) {
@@ -398,7 +396,7 @@ func (s *Sender) sleep(ctx context.Context, d time.Duration) bool {
 // deferBatchRetry records the latest server-mandated retry instant for a
 // durable batch. Deadlines are connection-independent: reconnecting cannot
 // turn a delayed RetryBatch into an immediate WAL replay.
-func (s *Sender) deferBatchRetry(batch *opensplunkv1.EventBatch, delay time.Duration) {
+func (s *Sender) deferBatchRetry(batch *opensplunk.EventBatch, delay time.Duration) {
 	if delay < 0 {
 		delay = 0
 	}
@@ -416,7 +414,7 @@ func (s *Sender) deferBatchRetry(batch *opensplunkv1.EventBatch, delay time.Dura
 
 // batchRetryWait returns how much longer batch must remain held. Expired and
 // stale sequence entries are removed eagerly to keep the map bounded.
-func (s *Sender) batchRetryWait(batch *opensplunkv1.EventBatch, now time.Time) time.Duration {
+func (s *Sender) batchRetryWait(batch *opensplunk.EventBatch, now time.Time) time.Duration {
 	sequence := batch.GetBatchSequence()
 	s.retryMu.Lock()
 	defer s.retryMu.Unlock()
@@ -482,7 +480,7 @@ func (s *Sender) setLastError(err error) {
 	s.mu.Unlock()
 }
 
-func (s *Sender) markSent(batch *opensplunkv1.EventBatch) {
+func (s *Sender) markSent(batch *opensplunk.EventBatch) {
 	s.mu.Lock()
 	s.stats.SentEventsTotal += uint64(len(batch.GetEvents()))
 	s.stats.LastSentBatchSequence = batch.GetBatchSequence()
@@ -569,7 +567,7 @@ func (s *Sender) commitTerminal(batchSequence uint64, cumulative bool) (uint64, 
 	return s.queue.Stats().LastAckedBatchSequence, nil
 }
 
-func (s *Sender) buildHeartbeat() *opensplunkv1.CollectorHeartbeat {
+func (s *Sender) buildHeartbeat() *opensplunk.CollectorHeartbeat {
 	queueStats := s.queue.Stats()
 	s.mu.Lock()
 	delivery := s.stats
@@ -582,7 +580,7 @@ func (s *Sender) buildHeartbeat() *opensplunkv1.CollectorHeartbeat {
 			s.opts.LocalDroppedEventsTotal(),
 		)
 	}
-	qs := &opensplunkv1.CollectorQueueStats{
+	qs := &opensplunk.CollectorQueueStats{
 		QueuedEvents:            collectorlimits.ClampFleetCounter(queueStats.QueuedEvents),
 		QueuedBytes:             collectorlimits.ClampFleetCounter(queueStats.QueuedBytes),
 		SentEventsTotal:         collectorlimits.ClampFleetCounter(delivery.SentEventsTotal),
@@ -594,7 +592,7 @@ func (s *Sender) buildHeartbeat() *opensplunkv1.CollectorHeartbeat {
 	if queueStats.OldestEventAge > 0 {
 		qs.OldestEventAge = durationpb.New(queueStats.OldestEventAge)
 	}
-	hb := &opensplunkv1.CollectorHeartbeat{
+	hb := &opensplunk.CollectorHeartbeat{
 		CollectorId: s.opts.CollectorID,
 		InstanceId:  s.opts.InstanceID,
 		ObservedAt:  timestamppb.New(s.now().UTC()),

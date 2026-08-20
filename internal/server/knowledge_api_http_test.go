@@ -15,7 +15,7 @@ import (
 
 	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
@@ -164,10 +164,10 @@ func (catalog *knowledgeHTTPCatalog) graphCalls() (int, int) {
 type knowledgeHTTPWriter struct {
 	mu sync.Mutex
 
-	createFn func(context.Context, knowledgecatalog.WriteScope, *opensplunkv1.CreateKnowledgeObjectRequest) (*opensplunkv1.CreateKnowledgeObjectResponse, error)
-	updateFn func(context.Context, knowledgecatalog.WriteScope, *opensplunkv1.UpdateKnowledgeObjectRequest) (*opensplunkv1.UpdateKnowledgeObjectResponse, error)
-	stateFn  func(context.Context, knowledgecatalog.WriteScope, *opensplunkv1.SetKnowledgeObjectStateRequest) (*opensplunkv1.SetKnowledgeObjectStateResponse, error)
-	deleteFn func(context.Context, knowledgecatalog.WriteScope, *opensplunkv1.DeleteKnowledgeObjectRequest) (*opensplunkv1.DeleteKnowledgeObjectResponse, error)
+	createFn func(context.Context, knowledgecatalog.WriteScope, *opensplunk.CreateKnowledgeObjectRequest) (*opensplunk.CreateKnowledgeObjectResponse, error)
+	updateFn func(context.Context, knowledgecatalog.WriteScope, *opensplunk.UpdateKnowledgeObjectRequest) (*opensplunk.UpdateKnowledgeObjectResponse, error)
+	stateFn  func(context.Context, knowledgecatalog.WriteScope, *opensplunk.SetKnowledgeObjectStateRequest) (*opensplunk.SetKnowledgeObjectStateResponse, error)
+	deleteFn func(context.Context, knowledgecatalog.WriteScope, *opensplunk.DeleteKnowledgeObjectRequest) (*opensplunk.DeleteKnowledgeObjectResponse, error)
 	calls    [4]int
 }
 
@@ -181,7 +181,7 @@ func (*knowledgeHTTPBlockingAuthenticator) Authenticate(
 	return auth.BrowserPrincipal{}, ctx.Err()
 }
 
-func (writer *knowledgeHTTPWriter) Create(ctx context.Context, scope knowledgecatalog.WriteScope, request *opensplunkv1.CreateKnowledgeObjectRequest) (*opensplunkv1.CreateKnowledgeObjectResponse, error) {
+func (writer *knowledgeHTTPWriter) Create(ctx context.Context, scope knowledgecatalog.WriteScope, request *opensplunk.CreateKnowledgeObjectRequest) (*opensplunk.CreateKnowledgeObjectResponse, error) {
 	writer.mu.Lock()
 	writer.calls[0]++
 	fn := writer.createFn
@@ -192,7 +192,7 @@ func (writer *knowledgeHTTPWriter) Create(ctx context.Context, scope knowledgeca
 	return fn(ctx, scope, request)
 }
 
-func (writer *knowledgeHTTPWriter) Update(ctx context.Context, scope knowledgecatalog.WriteScope, request *opensplunkv1.UpdateKnowledgeObjectRequest) (*opensplunkv1.UpdateKnowledgeObjectResponse, error) {
+func (writer *knowledgeHTTPWriter) Update(ctx context.Context, scope knowledgecatalog.WriteScope, request *opensplunk.UpdateKnowledgeObjectRequest) (*opensplunk.UpdateKnowledgeObjectResponse, error) {
 	writer.mu.Lock()
 	writer.calls[1]++
 	fn := writer.updateFn
@@ -203,7 +203,7 @@ func (writer *knowledgeHTTPWriter) Update(ctx context.Context, scope knowledgeca
 	return fn(ctx, scope, request)
 }
 
-func (writer *knowledgeHTTPWriter) SetState(ctx context.Context, scope knowledgecatalog.WriteScope, request *opensplunkv1.SetKnowledgeObjectStateRequest) (*opensplunkv1.SetKnowledgeObjectStateResponse, error) {
+func (writer *knowledgeHTTPWriter) SetState(ctx context.Context, scope knowledgecatalog.WriteScope, request *opensplunk.SetKnowledgeObjectStateRequest) (*opensplunk.SetKnowledgeObjectStateResponse, error) {
 	writer.mu.Lock()
 	writer.calls[2]++
 	fn := writer.stateFn
@@ -214,7 +214,7 @@ func (writer *knowledgeHTTPWriter) SetState(ctx context.Context, scope knowledge
 	return fn(ctx, scope, request)
 }
 
-func (writer *knowledgeHTTPWriter) Delete(ctx context.Context, scope knowledgecatalog.WriteScope, request *opensplunkv1.DeleteKnowledgeObjectRequest) (*opensplunkv1.DeleteKnowledgeObjectResponse, error) {
+func (writer *knowledgeHTTPWriter) Delete(ctx context.Context, scope knowledgecatalog.WriteScope, request *opensplunk.DeleteKnowledgeObjectRequest) (*opensplunk.DeleteKnowledgeObjectResponse, error) {
 	writer.mu.Lock()
 	writer.calls[3]++
 	fn := writer.deleteFn
@@ -274,7 +274,7 @@ func newKnowledgeHTTPRouter(handler *apiHandler) http.Handler {
 		GlobalTimeout:     0,
 		GlobalMaxBodySize: maximumKnowledgeMutationRequestBytes,
 		SubRouters: []router.SubRouterConfig{{
-			PathPrefix: "/api/v1",
+			PathPrefix: "/api",
 			AuthLevel:  &noAuth,
 			Middlewares: []sroutercommon.Middleware{
 				disableAPICaching,
@@ -323,16 +323,16 @@ func knowledgeHTTPPost(
 	return response
 }
 
-func knowledgeHTTPDefinition(scope opensplunkv1.SharingScope) *opensplunkv1.KnowledgeObjectDefinition {
-	return &opensplunkv1.KnowledgeObjectDefinition{
+func knowledgeHTTPDefinition(scope opensplunk.SharingScope) *opensplunk.KnowledgeObjectDefinition {
+	return &opensplunk.KnowledgeObjectDefinition{
 		AppId:        knowledgeHTTPAppID,
 		Name:         "knowledge-http-object",
 		SharingScope: scope,
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{
-			FieldAlias: &opensplunkv1.FieldAliasDefinition{
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{
+			FieldAlias: &opensplunk.FieldAliasDefinition{
 				SourceField:       "src",
 				DestinationField:  "dst",
-				OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+				OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
 			},
 		},
 	}
@@ -340,7 +340,7 @@ func knowledgeHTTPDefinition(scope opensplunkv1.SharingScope) *opensplunkv1.Know
 
 func knowledgeHTTPObject() knowledgecatalog.Object {
 	created := time.Date(2026, time.August, 7, 12, 0, 0, 123456000, time.UTC)
-	definition := knowledgeHTTPDefinition(opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE)
+	definition := knowledgeHTTPDefinition(opensplunk.SharingScope_SHARING_SCOPE_PRIVATE)
 	encoded, err := (proto.MarshalOptions{Deterministic: true}).Marshal(definition)
 	if err != nil {
 		panic(err)
@@ -363,7 +363,7 @@ func knowledgeHTTPObject() knowledgecatalog.Object {
 	}
 }
 
-func knowledgeHTTPProtoObject(t *testing.T) *opensplunkv1.KnowledgeObject {
+func knowledgeHTTPProtoObject(t *testing.T) *opensplunk.KnowledgeObject {
 	t.Helper()
 	result, err := knowledgecatalog.ObjectToProto(knowledgeHTTPObject())
 	if err != nil {
@@ -398,7 +398,7 @@ func TestKnowledgeHTTPTestRouterServesExistingEightManagementHandlers(
 	object := knowledgeHTTPObject()
 	objectMessage := knowledgeHTTPProtoObject(t)
 	updatedObject := object
-	updatedObject.Definition = proto.Clone(object.Definition).(*opensplunkv1.KnowledgeObjectDefinition)
+	updatedObject.Definition = proto.Clone(object.Definition).(*opensplunk.KnowledgeObjectDefinition)
 	updatedObject.Name = "knowledge-http-object-updated"
 	updatedObject.Definition.Name = updatedObject.Name
 	updatedObject.Version = 2
@@ -507,21 +507,21 @@ func TestKnowledgeHTTPTestRouterServesExistingEightManagementHandlers(
 		}
 	}
 	writer := &knowledgeHTTPWriter{
-		createFn: func(_ context.Context, scope knowledgecatalog.WriteScope, _ *opensplunkv1.CreateKnowledgeObjectRequest) (*opensplunkv1.CreateKnowledgeObjectResponse, error) {
+		createFn: func(_ context.Context, scope knowledgecatalog.WriteScope, _ *opensplunk.CreateKnowledgeObjectRequest) (*opensplunk.CreateKnowledgeObjectResponse, error) {
 			validateWrite(scope)
-			return &opensplunkv1.CreateKnowledgeObjectResponse{KnowledgeObject: objectMessage, TenantCatalogRevision: 8, TenantCatalogStateToken: token}, nil
+			return &opensplunk.CreateKnowledgeObjectResponse{KnowledgeObject: objectMessage, TenantCatalogRevision: 8, TenantCatalogStateToken: token}, nil
 		},
-		updateFn: func(_ context.Context, scope knowledgecatalog.WriteScope, _ *opensplunkv1.UpdateKnowledgeObjectRequest) (*opensplunkv1.UpdateKnowledgeObjectResponse, error) {
+		updateFn: func(_ context.Context, scope knowledgecatalog.WriteScope, _ *opensplunk.UpdateKnowledgeObjectRequest) (*opensplunk.UpdateKnowledgeObjectResponse, error) {
 			validateWrite(scope)
-			return &opensplunkv1.UpdateKnowledgeObjectResponse{KnowledgeObject: updatedObjectMessage, TenantCatalogRevision: 9, TenantCatalogStateToken: token}, nil
+			return &opensplunk.UpdateKnowledgeObjectResponse{KnowledgeObject: updatedObjectMessage, TenantCatalogRevision: 9, TenantCatalogStateToken: token}, nil
 		},
-		stateFn: func(_ context.Context, scope knowledgecatalog.WriteScope, _ *opensplunkv1.SetKnowledgeObjectStateRequest) (*opensplunkv1.SetKnowledgeObjectStateResponse, error) {
+		stateFn: func(_ context.Context, scope knowledgecatalog.WriteScope, _ *opensplunk.SetKnowledgeObjectStateRequest) (*opensplunk.SetKnowledgeObjectStateResponse, error) {
 			validateWrite(scope)
-			return &opensplunkv1.SetKnowledgeObjectStateResponse{KnowledgeObject: disabledObjectMessage, TenantCatalogRevision: 10, TenantCatalogStateToken: token}, nil
+			return &opensplunk.SetKnowledgeObjectStateResponse{KnowledgeObject: disabledObjectMessage, TenantCatalogRevision: 10, TenantCatalogStateToken: token}, nil
 		},
-		deleteFn: func(_ context.Context, scope knowledgecatalog.WriteScope, _ *opensplunkv1.DeleteKnowledgeObjectRequest) (*opensplunkv1.DeleteKnowledgeObjectResponse, error) {
+		deleteFn: func(_ context.Context, scope knowledgecatalog.WriteScope, _ *opensplunk.DeleteKnowledgeObjectRequest) (*opensplunk.DeleteKnowledgeObjectResponse, error) {
 			validateWrite(scope)
-			return &opensplunkv1.DeleteKnowledgeObjectResponse{KnowledgeObjectId: object.KnowledgeObjectID, DeletedVersion: 2, TenantCatalogRevision: 11, TenantCatalogStateToken: token}, nil
+			return &opensplunk.DeleteKnowledgeObjectResponse{KnowledgeObjectId: object.KnowledgeObjectID, DeletedVersion: 2, TenantCatalogRevision: 11, TenantCatalogStateToken: token}, nil
 		},
 	}
 	appender := &knowledgeBoundaryAppender{}
@@ -543,49 +543,49 @@ func TestKnowledgeHTTPTestRouterServesExistingEightManagementHandlers(
 	}{
 		{
 			name: "create", path: knowledgeObjectsCreatePath,
-			request:  &opensplunkv1.CreateKnowledgeObjectRequest{Definition: knowledgeHTTPDefinition(opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE), InitialState: opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT, ClientRequestId: "request-create-0001"},
-			response: &opensplunkv1.CreateKnowledgeObjectResponse{},
+			request:  &opensplunk.CreateKnowledgeObjectRequest{Definition: knowledgeHTTPDefinition(opensplunk.SharingScope_SHARING_SCOPE_PRIVATE), InitialState: opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT, ClientRequestId: "request-create-0001"},
+			response: &opensplunk.CreateKnowledgeObjectResponse{},
 		},
 		{
 			name: "get", path: knowledgeObjectsGetPath,
-			request:  &opensplunkv1.GetKnowledgeObjectRequest{KnowledgeObjectId: object.KnowledgeObjectID},
-			response: &opensplunkv1.GetKnowledgeObjectResponse{},
+			request:  &opensplunk.GetKnowledgeObjectRequest{KnowledgeObjectId: object.KnowledgeObjectID},
+			response: &opensplunk.GetKnowledgeObjectResponse{},
 		},
 		{
 			name: "list", path: knowledgeObjectsListPath,
-			request:  &opensplunkv1.ListKnowledgeObjectsRequest{Page: &opensplunkv1.PageRequest{PageSize: new(uint32(1)), IncludeTotalSize: true}},
-			response: &opensplunkv1.ListKnowledgeObjectsResponse{},
+			request:  &opensplunk.ListKnowledgeObjectsRequest{Page: &opensplunk.PageRequest{PageSize: new(uint32(1)), IncludeTotalSize: true}},
+			response: &opensplunk.ListKnowledgeObjectsResponse{},
 		},
 		{
 			name: "dependencies", path: knowledgeObjectsDependenciesPath,
-			request:  &opensplunkv1.ListKnowledgeObjectDependenciesRequest{KnowledgeObjectId: object.KnowledgeObjectID},
-			response: &opensplunkv1.ListKnowledgeObjectDependenciesResponse{},
+			request:  &opensplunk.ListKnowledgeObjectDependenciesRequest{KnowledgeObjectId: object.KnowledgeObjectID},
+			response: &opensplunk.ListKnowledgeObjectDependenciesResponse{},
 		},
 		{
 			name: "dependents", path: knowledgeObjectsDependentsPath,
-			request:  &opensplunkv1.ListKnowledgeObjectDependentsRequest{KnowledgeObjectId: object.KnowledgeObjectID},
-			response: &opensplunkv1.ListKnowledgeObjectDependentsResponse{},
+			request:  &opensplunk.ListKnowledgeObjectDependentsRequest{KnowledgeObjectId: object.KnowledgeObjectID},
+			response: &opensplunk.ListKnowledgeObjectDependentsResponse{},
 		},
 		{
 			name: "update", path: knowledgeObjectsUpdatePath,
-			request: &opensplunkv1.UpdateKnowledgeObjectRequest{
+			request: &opensplunk.UpdateKnowledgeObjectRequest{
 				KnowledgeObjectId: object.KnowledgeObjectID,
 				ExpectedVersion:   1,
-				Definition:        proto.Clone(updatedObject.Definition).(*opensplunkv1.KnowledgeObjectDefinition),
+				Definition:        proto.Clone(updatedObject.Definition).(*opensplunk.KnowledgeObjectDefinition),
 				UpdateMask:        &fieldmaskpb.FieldMask{Paths: []string{"name"}},
 				ClientRequestId:   "request-update-0001",
 			},
-			response: &opensplunkv1.UpdateKnowledgeObjectResponse{},
+			response: &opensplunk.UpdateKnowledgeObjectResponse{},
 		},
 		{
 			name: "set state", path: knowledgeObjectsSetStatePath,
-			request:  &opensplunkv1.SetKnowledgeObjectStateRequest{KnowledgeObjectId: object.KnowledgeObjectID, ExpectedVersion: 1, State: opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED, ClientRequestId: "request-state-0001"},
-			response: &opensplunkv1.SetKnowledgeObjectStateResponse{},
+			request:  &opensplunk.SetKnowledgeObjectStateRequest{KnowledgeObjectId: object.KnowledgeObjectID, ExpectedVersion: 1, State: opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED, ClientRequestId: "request-state-0001"},
+			response: &opensplunk.SetKnowledgeObjectStateResponse{},
 		},
 		{
 			name: "delete", path: knowledgeObjectsDeletePath,
-			request:  &opensplunkv1.DeleteKnowledgeObjectRequest{KnowledgeObjectId: object.KnowledgeObjectID, ExpectedVersion: 1, ClientRequestId: "request-delete-0001"},
-			response: &opensplunkv1.DeleteKnowledgeObjectResponse{},
+			request:  &opensplunk.DeleteKnowledgeObjectRequest{KnowledgeObjectId: object.KnowledgeObjectID, ExpectedVersion: 1, ClientRequestId: "request-delete-0001"},
+			response: &opensplunk.DeleteKnowledgeObjectResponse{},
 		},
 	}
 	for _, test := range tests {
@@ -675,9 +675,9 @@ func TestKnowledgeHTTPDefinitionUnknownFieldsAreRejectedButOuterUnknownsAreDisca
 		writer := &knowledgeHTTPWriter{}
 		apps := knowledgeHTTPApps()
 		_, httpHandler := newKnowledgeHTTPHandler(t, auth.BrowserRoleAdministrator, &knowledgeHTTPCatalog{}, writer, apps, appender)
-		request := &opensplunkv1.CreateKnowledgeObjectRequest{
-			Definition:      knowledgeHTTPDefinition(opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE),
-			InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+		request := &opensplunk.CreateKnowledgeObjectRequest{
+			Definition:      knowledgeHTTPDefinition(opensplunk.SharingScope_SHARING_SCOPE_PRIVATE),
+			InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 			ClientRequestId: "request-unknown-definition",
 		}
 		addKnowledgeHTTPUnknown(request.GetDefinition().GetFieldAlias())
@@ -697,18 +697,18 @@ func TestKnowledgeHTTPDefinitionUnknownFieldsAreRejectedButOuterUnknownsAreDisca
 		apps := knowledgeHTTPApps()
 		_, httpHandler := newKnowledgeHTTPHandler(t, auth.BrowserRoleAdministrator, &knowledgeHTTPCatalog{}, writer, apps, appender)
 		const hostilePatternCount = 8 << 10
-		patterns := make([]*opensplunkv1.KnowledgeSelectorPattern, hostilePatternCount)
+		patterns := make([]*opensplunk.KnowledgeSelectorPattern, hostilePatternCount)
 		for index := range patterns {
-			patterns[index] = &opensplunkv1.KnowledgeSelectorPattern{}
+			patterns[index] = &opensplunk.KnowledgeSelectorPattern{}
 		}
-		request := &opensplunkv1.CreateKnowledgeObjectRequest{
+		request := &opensplunk.CreateKnowledgeObjectRequest{
 			Definition: knowledgeHTTPDefinition(
-				opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+				opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 			),
-			InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+			InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 			ClientRequestId: "request-amplifying-selector",
 		}
-		request.Definition.Selector = &opensplunkv1.KnowledgeSelector{IndexPatterns: patterns}
+		request.Definition.Selector = &opensplunk.KnowledgeSelector{IndexPatterns: patterns}
 		if len(patterns) <= knowledge.MaximumSelectorPatternsPerDimension ||
 			int64(proto.Size(request)) >= maximumKnowledgeMutationRequestBytes {
 			t.Fatalf("fixture patterns=%d bytes=%d", len(patterns), proto.Size(request))
@@ -728,17 +728,17 @@ func TestKnowledgeHTTPDefinitionUnknownFieldsAreRejectedButOuterUnknownsAreDisca
 		appender := &knowledgeBoundaryAppender{}
 		apps := knowledgeHTTPApps()
 		writer := &knowledgeHTTPWriter{
-			createFn: func(_ context.Context, _ knowledgecatalog.WriteScope, request *opensplunkv1.CreateKnowledgeObjectRequest) (*opensplunkv1.CreateKnowledgeObjectResponse, error) {
+			createFn: func(_ context.Context, _ knowledgecatalog.WriteScope, request *opensplunk.CreateKnowledgeObjectRequest) (*opensplunk.CreateKnowledgeObjectResponse, error) {
 				if len(request.ProtoReflect().GetUnknown()) != 0 {
 					t.Fatal("outer request unknown fields reached Writer")
 				}
-				return &opensplunkv1.CreateKnowledgeObjectResponse{KnowledgeObject: knowledgeHTTPProtoObject(t), TenantCatalogRevision: 1, TenantCatalogStateToken: bytes.Repeat([]byte{1}, 32)}, nil
+				return &opensplunk.CreateKnowledgeObjectResponse{KnowledgeObject: knowledgeHTTPProtoObject(t), TenantCatalogRevision: 1, TenantCatalogStateToken: bytes.Repeat([]byte{1}, 32)}, nil
 			},
 		}
 		_, httpHandler := newKnowledgeHTTPHandler(t, auth.BrowserRoleAdministrator, &knowledgeHTTPCatalog{}, writer, apps, appender)
-		request := &opensplunkv1.CreateKnowledgeObjectRequest{
-			Definition:      knowledgeHTTPDefinition(opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE),
-			InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+		request := &opensplunk.CreateKnowledgeObjectRequest{
+			Definition:      knowledgeHTTPDefinition(opensplunk.SharingScope_SHARING_SCOPE_PRIVATE),
+			InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 			ClientRequestId: "request-outer-unknown",
 		}
 		addKnowledgeHTTPUnknown(request)
@@ -807,28 +807,28 @@ func TestKnowledgeHTTPDefinitiveErrorMappingAndConflictBodyUniformity(
 				}
 			}
 			writer := &knowledgeHTTPWriter{
-				createFn: func(context.Context, knowledgecatalog.WriteScope, *opensplunkv1.CreateKnowledgeObjectRequest) (*opensplunkv1.CreateKnowledgeObjectResponse, error) {
+				createFn: func(context.Context, knowledgecatalog.WriteScope, *opensplunk.CreateKnowledgeObjectRequest) (*opensplunk.CreateKnowledgeObjectResponse, error) {
 					return nil, err
 				},
-				updateFn: func(context.Context, knowledgecatalog.WriteScope, *opensplunkv1.UpdateKnowledgeObjectRequest) (*opensplunkv1.UpdateKnowledgeObjectResponse, error) {
+				updateFn: func(context.Context, knowledgecatalog.WriteScope, *opensplunk.UpdateKnowledgeObjectRequest) (*opensplunk.UpdateKnowledgeObjectResponse, error) {
 					return nil, err
 				},
 			}
 			appender := &knowledgeBoundaryAppender{}
 			_, httpHandler := newKnowledgeHTTPHandler(t, auth.BrowserRoleAdministrator, &knowledgeHTTPCatalog{}, writer, knowledgeHTTPApps(), appender)
 			path := knowledgeObjectsCreatePath
-			request := proto.Message(&opensplunkv1.CreateKnowledgeObjectRequest{
-				Definition:      knowledgeHTTPDefinition(opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE),
-				InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+			request := proto.Message(&opensplunk.CreateKnowledgeObjectRequest{
+				Definition:      knowledgeHTTPDefinition(opensplunk.SharingScope_SHARING_SCOPE_PRIVATE),
+				InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 				ClientRequestId: "request-error-mapping",
 			})
 			wantAction := knowledgeattemptaudit.ActionCreate
 			if test.wantContext && test.authorized != nil && test.authorized.Object != nil {
 				path = knowledgeObjectsUpdatePath
-				request = &opensplunkv1.UpdateKnowledgeObjectRequest{
+				request = &opensplunk.UpdateKnowledgeObjectRequest{
 					KnowledgeObjectId: object.KnowledgeObjectID,
 					ExpectedVersion:   object.Version,
-					Definition:        knowledgeHTTPDefinition(opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE),
+					Definition:        knowledgeHTTPDefinition(opensplunk.SharingScope_SHARING_SCOPE_PRIVATE),
 					UpdateMask:        &fieldmaskpb.FieldMask{Paths: []string{"name"}},
 					ClientRequestId:   "request-error-mapping",
 				}
@@ -883,12 +883,12 @@ func TestKnowledgeHTTPRejectsAuthorizedErrorContextUnboundFromRequest(
 			knowledgecatalog.ErrorDispositionDefinitiveRejection,
 		)
 	}
-	validUpdate := func() *opensplunkv1.UpdateKnowledgeObjectRequest {
+	validUpdate := func() *opensplunk.UpdateKnowledgeObjectRequest {
 		definition := knowledgeHTTPDefinition(
-			opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+			opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 		)
 		definition.Name = "knowledge-http-object-updated"
-		return &opensplunkv1.UpdateKnowledgeObjectRequest{
+		return &opensplunk.UpdateKnowledgeObjectRequest{
 			KnowledgeObjectId: object.KnowledgeObjectID,
 			ExpectedVersion:   object.Version,
 			Definition:        definition,
@@ -907,26 +907,26 @@ func TestKnowledgeHTTPRejectsAuthorizedErrorContextUnboundFromRequest(
 		{
 			name: "create app differs from submitted app",
 			path: knowledgeObjectsCreatePath,
-			request: &opensplunkv1.CreateKnowledgeObjectRequest{
+			request: &opensplunk.CreateKnowledgeObjectRequest{
 				Definition: knowledgeHTTPDefinition(
-					opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+					opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 				),
-				InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+				InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 				ClientRequestId: "context-binding-create-0001",
 			},
 			catalog: &knowledgeHTTPCatalog{},
 			writer: &knowledgeHTTPWriter{createFn: func(
 				context.Context,
 				knowledgecatalog.WriteScope,
-				*opensplunkv1.CreateKnowledgeObjectRequest,
-			) (*opensplunkv1.CreateKnowledgeObjectResponse, error) {
+				*opensplunk.CreateKnowledgeObjectRequest,
+			) (*opensplunk.CreateKnowledgeObjectResponse, error) {
 				return nil, definitive(control.ErrCapacityExceeded, &foreignApp)
 			}},
 		},
 		{
 			name: "list app differs from explicit filter",
 			path: knowledgeObjectsListPath,
-			request: &opensplunkv1.ListKnowledgeObjectsRequest{
+			request: &opensplunk.ListKnowledgeObjectsRequest{
 				AppIdFilter: new(knowledgeHTTPAppID),
 			},
 			catalog: &knowledgeHTTPCatalog{listFn: func(
@@ -945,7 +945,7 @@ func TestKnowledgeHTTPRejectsAuthorizedErrorContextUnboundFromRequest(
 		{
 			name: "get object differs from submitted object",
 			path: knowledgeObjectsGetPath,
-			request: &opensplunkv1.GetKnowledgeObjectRequest{
+			request: &opensplunk.GetKnowledgeObjectRequest{
 				KnowledgeObjectId: object.KnowledgeObjectID,
 			},
 			catalog: &knowledgeHTTPCatalog{getFn: func(
@@ -970,27 +970,27 @@ func TestKnowledgeHTTPRejectsAuthorizedErrorContextUnboundFromRequest(
 			writer: &knowledgeHTTPWriter{updateFn: func(
 				context.Context,
 				knowledgecatalog.WriteScope,
-				*opensplunkv1.UpdateKnowledgeObjectRequest,
-			) (*opensplunkv1.UpdateKnowledgeObjectResponse, error) {
+				*opensplunk.UpdateKnowledgeObjectRequest,
+			) (*opensplunk.UpdateKnowledgeObjectResponse, error) {
 				return nil, definitive(control.ErrVersionConflict, &foreignObject)
 			}},
 		},
 		{
 			name: "bare create idempotency conflict",
 			path: knowledgeObjectsCreatePath,
-			request: &opensplunkv1.CreateKnowledgeObjectRequest{
+			request: &opensplunk.CreateKnowledgeObjectRequest{
 				Definition: knowledgeHTTPDefinition(
-					opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+					opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 				),
-				InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+				InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 				ClientRequestId: "context-binding-create-0002",
 			},
 			catalog: &knowledgeHTTPCatalog{},
 			writer: &knowledgeHTTPWriter{createFn: func(
 				context.Context,
 				knowledgecatalog.WriteScope,
-				*opensplunkv1.CreateKnowledgeObjectRequest,
-			) (*opensplunkv1.CreateKnowledgeObjectResponse, error) {
+				*opensplunk.CreateKnowledgeObjectRequest,
+			) (*opensplunk.CreateKnowledgeObjectResponse, error) {
 				return nil, definitive(knowledgecatalog.ErrIdempotencyConflict, nil)
 			}},
 		},
@@ -1002,8 +1002,8 @@ func TestKnowledgeHTTPRejectsAuthorizedErrorContextUnboundFromRequest(
 			writer: &knowledgeHTTPWriter{updateFn: func(
 				context.Context,
 				knowledgecatalog.WriteScope,
-				*opensplunkv1.UpdateKnowledgeObjectRequest,
-			) (*opensplunkv1.UpdateKnowledgeObjectResponse, error) {
+				*opensplunk.UpdateKnowledgeObjectRequest,
+			) (*opensplunk.UpdateKnowledgeObjectResponse, error) {
 				return nil, definitive(control.ErrDependencyConflict, nil)
 			}},
 		},
@@ -1058,18 +1058,18 @@ func TestKnowledgeHTTPAllowsIdempotencyConflictReceiptContextWithinScope(
 		{
 			name: "create reused key belongs to another authorized app",
 			path: knowledgeObjectsCreatePath,
-			request: &opensplunkv1.CreateKnowledgeObjectRequest{
+			request: &opensplunk.CreateKnowledgeObjectRequest{
 				Definition: knowledgeHTTPDefinition(
-					opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+					opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 				),
-				InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+				InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 				ClientRequestId: "context-binding-create-0003",
 			},
 			writer: &knowledgeHTTPWriter{createFn: func(
 				context.Context,
 				knowledgecatalog.WriteScope,
-				*opensplunkv1.CreateKnowledgeObjectRequest,
-			) (*opensplunkv1.CreateKnowledgeObjectResponse, error) {
+				*opensplunk.CreateKnowledgeObjectRequest,
+			) (*opensplunk.CreateKnowledgeObjectResponse, error) {
 				err := knowledgecatalog.WithAuthorizedContext(
 					knowledgecatalog.ErrIdempotencyConflict,
 					knowledgecatalog.AuthorizedContext{AppID: knowledgeHTTPOtherAppID},
@@ -1085,10 +1085,10 @@ func TestKnowledgeHTTPAllowsIdempotencyConflictReceiptContextWithinScope(
 			path: knowledgeObjectsUpdatePath,
 			request: func() proto.Message {
 				definition := knowledgeHTTPDefinition(
-					opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+					opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 				)
 				definition.Name = "knowledge-http-object-updated"
-				return &opensplunkv1.UpdateKnowledgeObjectRequest{
+				return &opensplunk.UpdateKnowledgeObjectRequest{
 					KnowledgeObjectId: object.KnowledgeObjectID,
 					ExpectedVersion:   object.Version,
 					Definition:        definition,
@@ -1100,8 +1100,8 @@ func TestKnowledgeHTTPAllowsIdempotencyConflictReceiptContextWithinScope(
 			writer: &knowledgeHTTPWriter{updateFn: func(
 				context.Context,
 				knowledgecatalog.WriteScope,
-				*opensplunkv1.UpdateKnowledgeObjectRequest,
-			) (*opensplunkv1.UpdateKnowledgeObjectResponse, error) {
+				*opensplunk.UpdateKnowledgeObjectRequest,
+			) (*opensplunk.UpdateKnowledgeObjectResponse, error) {
 				err := knowledgecatalog.WithAuthorizedContext(
 					knowledgecatalog.ErrIdempotencyConflict,
 					knowledgecatalog.AuthorizedContext{
@@ -1164,27 +1164,27 @@ func TestKnowledgeHTTPRefinesOnlyValidatedSemanticActions(t *testing.T) {
 	}{
 		{
 			name: "scope change", path: knowledgeObjectsUpdatePath,
-			request:    &opensplunkv1.UpdateKnowledgeObjectRequest{KnowledgeObjectId: "ko-http-object-1", ExpectedVersion: 1, Definition: knowledgeHTTPDefinition(opensplunkv1.SharingScope_SHARING_SCOPE_APP), UpdateMask: knowledgeHTTPScopeChangeMask(), ClientRequestId: "scope-change-request-0001"},
+			request:    &opensplunk.UpdateKnowledgeObjectRequest{KnowledgeObjectId: "ko-http-object-1", ExpectedVersion: 1, Definition: knowledgeHTTPDefinition(opensplunk.SharingScope_SHARING_SCOPE_APP), UpdateMask: knowledgeHTTPScopeChangeMask(), ClientRequestId: "scope-change-request-0001"},
 			wantAction: knowledgeattemptaudit.ActionScopeChange, wantReason: knowledgeattemptaudit.ReasonInvalidDefinition, wantStatus: http.StatusBadRequest, wantWriter: [4]int{0, 1, 0, 0},
 		},
 		{
 			name: "ordinary update", path: knowledgeObjectsUpdatePath,
-			request:    &opensplunkv1.UpdateKnowledgeObjectRequest{KnowledgeObjectId: "ko-http-object-1", ExpectedVersion: 1, Definition: knowledgeHTTPDefinition(opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE), UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"name"}}, ClientRequestId: "ordinary-update-request-0001"},
+			request:    &opensplunk.UpdateKnowledgeObjectRequest{KnowledgeObjectId: "ko-http-object-1", ExpectedVersion: 1, Definition: knowledgeHTTPDefinition(opensplunk.SharingScope_SHARING_SCOPE_PRIVATE), UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"name"}}, ClientRequestId: "ordinary-update-request-0001"},
 			wantAction: knowledgeattemptaudit.ActionUpdate, wantReason: knowledgeattemptaudit.ReasonInvalidDefinition, wantStatus: http.StatusBadRequest, wantWriter: [4]int{0, 1, 0, 0},
 		},
 		{
 			name: "enable", path: knowledgeObjectsSetStatePath,
-			request:    &opensplunkv1.SetKnowledgeObjectStateRequest{KnowledgeObjectId: "ko-http-object-1", ExpectedVersion: 1, State: opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE, ClientRequestId: "enable-request-0001"},
+			request:    &opensplunk.SetKnowledgeObjectStateRequest{KnowledgeObjectId: "ko-http-object-1", ExpectedVersion: 1, State: opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE, ClientRequestId: "enable-request-0001"},
 			wantAction: knowledgeattemptaudit.ActionEnable, wantReason: knowledgeattemptaudit.ReasonServiceUnavailable, wantStatus: http.StatusServiceUnavailable,
 		},
 		{
 			name: "disable", path: knowledgeObjectsSetStatePath,
-			request:    &opensplunkv1.SetKnowledgeObjectStateRequest{KnowledgeObjectId: "ko-http-object-1", ExpectedVersion: 1, State: opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED, ClientRequestId: "disable-request-0001"},
+			request:    &opensplunk.SetKnowledgeObjectStateRequest{KnowledgeObjectId: "ko-http-object-1", ExpectedVersion: 1, State: opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED, ClientRequestId: "disable-request-0001"},
 			wantAction: knowledgeattemptaudit.ActionDisable, wantReason: knowledgeattemptaudit.ReasonInvalidDefinition, wantStatus: http.StatusBadRequest, wantWriter: [4]int{0, 0, 1, 0},
 		},
 		{
 			name: "invalid state retains route fallback", path: knowledgeObjectsSetStatePath,
-			request:    &opensplunkv1.SetKnowledgeObjectStateRequest{KnowledgeObjectId: "ko-http-object-1", ExpectedVersion: 1, State: opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT, ClientRequestId: "invalid-state"},
+			request:    &opensplunk.SetKnowledgeObjectStateRequest{KnowledgeObjectId: "ko-http-object-1", ExpectedVersion: 1, State: opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT, ClientRequestId: "invalid-state"},
 			wantAction: knowledgeattemptaudit.ActionUpdate, wantReason: knowledgeattemptaudit.ReasonInvalidDefinition, wantStatus: http.StatusBadRequest,
 		},
 	}
@@ -1196,10 +1196,10 @@ func TestKnowledgeHTTPRefinesOnlyValidatedSemanticActions(t *testing.T) {
 				knowledgecatalog.ErrorDispositionDefinitiveRejection,
 			)
 			writer := &knowledgeHTTPWriter{
-				updateFn: func(context.Context, knowledgecatalog.WriteScope, *opensplunkv1.UpdateKnowledgeObjectRequest) (*opensplunkv1.UpdateKnowledgeObjectResponse, error) {
+				updateFn: func(context.Context, knowledgecatalog.WriteScope, *opensplunk.UpdateKnowledgeObjectRequest) (*opensplunk.UpdateKnowledgeObjectResponse, error) {
 					return nil, rejection
 				},
-				stateFn: func(context.Context, knowledgecatalog.WriteScope, *opensplunkv1.SetKnowledgeObjectStateRequest) (*opensplunkv1.SetKnowledgeObjectStateResponse, error) {
+				stateFn: func(context.Context, knowledgecatalog.WriteScope, *opensplunk.SetKnowledgeObjectStateRequest) (*opensplunk.SetKnowledgeObjectStateResponse, error) {
 					return nil, rejection
 				},
 			}
@@ -1219,7 +1219,7 @@ func TestKnowledgeHTTPRefinesOnlyValidatedSemanticActions(t *testing.T) {
 		appender := &knowledgeBoundaryAppender{}
 		writer := &knowledgeHTTPWriter{}
 		_, httpHandler := newKnowledgeHTTPHandler(t, auth.BrowserRoleAdministrator, &knowledgeHTTPCatalog{}, writer, knowledgeHTTPApps(), appender)
-		request := &opensplunkv1.UpdateKnowledgeObjectRequest{Definition: knowledgeHTTPDefinition(opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE)}
+		request := &opensplunk.UpdateKnowledgeObjectRequest{Definition: knowledgeHTTPDefinition(opensplunk.SharingScope_SHARING_SCOPE_PRIVATE)}
 		addKnowledgeHTTPUnknown(request.GetDefinition())
 		response := knowledgeHTTPPost(t, httpHandler, knowledgeObjectsUpdatePath, request)
 		calls := appender.snapshot()
@@ -1260,7 +1260,7 @@ func TestKnowledgeHTTPAppScopeFailuresCloseBeforeService(t *testing.T) {
 			catalog := &knowledgeHTTPCatalog{}
 			appender := &knowledgeBoundaryAppender{}
 			_, httpHandler := newKnowledgeHTTPHandler(t, auth.BrowserRoleAdministrator, catalog, &knowledgeHTTPWriter{}, apps, appender)
-			response := knowledgeHTTPPost(t, httpHandler, knowledgeObjectsGetPath, &opensplunkv1.GetKnowledgeObjectRequest{KnowledgeObjectId: "ko-http-object-1"})
+			response := knowledgeHTTPPost(t, httpHandler, knowledgeObjectsGetPath, &opensplunk.GetKnowledgeObjectRequest{KnowledgeObjectId: "ko-http-object-1"})
 			getCalls, listCalls := catalog.calls()
 			calls := appender.snapshot()
 			if response.Code != http.StatusServiceUnavailable || getCalls != 0 || listCalls != 0 ||
@@ -1278,68 +1278,68 @@ func TestKnowledgeHTTPListPreflightPinsCatalogRequestBounds(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		request *opensplunkv1.ListKnowledgeObjectsRequest
+		request *opensplunk.ListKnowledgeObjectsRequest
 	}{
 		{
 			name: "page size",
-			request: &opensplunkv1.ListKnowledgeObjectsRequest{
-				Page: &opensplunkv1.PageRequest{
+			request: &opensplunk.ListKnowledgeObjectsRequest{
+				Page: &opensplunk.PageRequest{
 					PageSize: new(uint32(knowledgecatalog.MaximumPageSize + 1)),
 				},
 			},
 		},
 		{
 			name: "page token whitespace",
-			request: &opensplunkv1.ListKnowledgeObjectsRequest{
-				Page: &opensplunkv1.PageRequest{
+			request: &opensplunk.ListKnowledgeObjectsRequest{
+				Page: &opensplunk.PageRequest{
 					PageToken: new(" invalid-cursor "),
 				},
 			},
 		},
 		{
 			name: "empty app filter",
-			request: &opensplunkv1.ListKnowledgeObjectsRequest{
+			request: &opensplunk.ListKnowledgeObjectsRequest{
 				AppIdFilter: new(""),
 			},
 		},
 		{
 			name: "control text filter",
-			request: &opensplunkv1.ListKnowledgeObjectsRequest{
+			request: &opensplunk.ListKnowledgeObjectsRequest{
 				TextFilter: new("invalid\x7ftext"),
 			},
 		},
 		{
 			name: "object type cardinality",
-			request: &opensplunkv1.ListKnowledgeObjectsRequest{
-				ObjectTypeFilters: []opensplunkv1.KnowledgeObjectType{
-					opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
-					opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
-					opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD,
-					opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+			request: &opensplunk.ListKnowledgeObjectsRequest{
+				ObjectTypeFilters: []opensplunk.KnowledgeObjectType{
+					opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+					opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
+					opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD,
+					opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
 				},
 			},
 		},
 		{
 			name: "state cardinality",
-			request: &opensplunkv1.ListKnowledgeObjectsRequest{
-				StateFilters: []opensplunkv1.KnowledgeObjectState{
-					opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
-					opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
-					opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
-					opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_QUARANTINED,
-					opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DELETED,
-					opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+			request: &opensplunk.ListKnowledgeObjectsRequest{
+				StateFilters: []opensplunk.KnowledgeObjectState{
+					opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+					opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
+					opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+					opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_QUARANTINED,
+					opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DELETED,
+					opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 				},
 			},
 		},
 		{
 			name: "sharing scope cardinality",
-			request: &opensplunkv1.ListKnowledgeObjectsRequest{
-				SharingScopeFilters: []opensplunkv1.SharingScope{
-					opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
-					opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-					opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL,
-					opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+			request: &opensplunk.ListKnowledgeObjectsRequest{
+				SharingScopeFilters: []opensplunk.SharingScope{
+					opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
+					opensplunk.SharingScope_SHARING_SCOPE_APP,
+					opensplunk.SharingScope_SHARING_SCOPE_GLOBAL,
+					opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 				},
 			},
 		},
@@ -1398,7 +1398,7 @@ func TestKnowledgeHTTPSerializationCapacityRejectsBeforeScopeAndService(t *testi
 	for range cap(handler.serializationGate) {
 		handler.serializationGate <- struct{}{}
 	}
-	response := knowledgeHTTPPost(t, httpHandler, knowledgeObjectsGetPath, &opensplunkv1.GetKnowledgeObjectRequest{KnowledgeObjectId: "ko-http-object-1"})
+	response := knowledgeHTTPPost(t, httpHandler, knowledgeObjectsGetPath, &opensplunk.GetKnowledgeObjectRequest{KnowledgeObjectId: "ko-http-object-1"})
 	for range cap(handler.serializationGate) {
 		<-handler.serializationGate
 	}
@@ -1430,13 +1430,13 @@ func TestKnowledgeHTTPCommittedAndIndeterminateMutationErrorsAreNeverRejected(
 			if test.disposition != nil {
 				err = knowledgecatalog.WithErrorDisposition(err, *test.disposition)
 			}
-			writer := &knowledgeHTTPWriter{createFn: func(context.Context, knowledgecatalog.WriteScope, *opensplunkv1.CreateKnowledgeObjectRequest) (*opensplunkv1.CreateKnowledgeObjectResponse, error) {
+			writer := &knowledgeHTTPWriter{createFn: func(context.Context, knowledgecatalog.WriteScope, *opensplunk.CreateKnowledgeObjectRequest) (*opensplunk.CreateKnowledgeObjectResponse, error) {
 				return nil, err
 			}}
 			appender := &knowledgeBoundaryAppender{}
 			_, httpHandler := newKnowledgeHTTPHandler(t, auth.BrowserRoleAdministrator, &knowledgeHTTPCatalog{}, writer, knowledgeHTTPApps(), appender)
-			response := knowledgeHTTPPost(t, httpHandler, knowledgeObjectsCreatePath, &opensplunkv1.CreateKnowledgeObjectRequest{
-				Definition: knowledgeHTTPDefinition(opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE), InitialState: opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT, ClientRequestId: "outcome-test-request-0001",
+			response := knowledgeHTTPPost(t, httpHandler, knowledgeObjectsCreatePath, &opensplunk.CreateKnowledgeObjectRequest{
+				Definition: knowledgeHTTPDefinition(opensplunk.SharingScope_SHARING_SCOPE_PRIVATE), InitialState: opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT, ClientRequestId: "outcome-test-request-0001",
 			})
 			if response.Code != http.StatusServiceUnavailable || response.Body.String() != knowledgeManagementUnavailableBody ||
 				writer.callCounts() != [4]int{1, 0, 0, 0} || len(appender.snapshot()) != 0 {
@@ -1451,10 +1451,10 @@ func TestKnowledgeHTTPJournalFailureReplacesApplicationRejection(t *testing.T) {
 
 	appender := &knowledgeBoundaryAppender{err: errors.New("journal unavailable")}
 	_, httpHandler := newKnowledgeHTTPHandler(t, auth.BrowserRoleAdministrator, &knowledgeHTTPCatalog{}, &knowledgeHTTPWriter{}, knowledgeHTTPApps(), appender)
-	response := knowledgeHTTPPost(t, httpHandler, knowledgeObjectsSetStatePath, &opensplunkv1.SetKnowledgeObjectStateRequest{
+	response := knowledgeHTTPPost(t, httpHandler, knowledgeObjectsSetStatePath, &opensplunk.SetKnowledgeObjectStateRequest{
 		KnowledgeObjectId: "ko-http-object-1",
 		ExpectedVersion:   1,
-		State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+		State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 		ClientRequestId:   "invalid-state",
 	})
 	if response.Code != http.StatusServiceUnavailable ||
@@ -1553,8 +1553,8 @@ func TestKnowledgeHTTPReadCancellationReleasesSerializationPermit(t *testing.T) 
 	}}
 	appender := &knowledgeBoundaryAppender{}
 	_, httpHandler := newKnowledgeHTTPHandler(t, auth.BrowserRoleAdministrator, catalog, &knowledgeHTTPWriter{}, knowledgeHTTPApps(), appender)
-	first := knowledgeHTTPPost(t, httpHandler, knowledgeObjectsGetPath, &opensplunkv1.GetKnowledgeObjectRequest{KnowledgeObjectId: "ko-http-object-1"})
-	second := knowledgeHTTPPost(t, httpHandler, knowledgeObjectsGetPath, &opensplunkv1.GetKnowledgeObjectRequest{KnowledgeObjectId: "ko-http-object-1"})
+	first := knowledgeHTTPPost(t, httpHandler, knowledgeObjectsGetPath, &opensplunk.GetKnowledgeObjectRequest{KnowledgeObjectId: "ko-http-object-1"})
+	second := knowledgeHTTPPost(t, httpHandler, knowledgeObjectsGetPath, &opensplunk.GetKnowledgeObjectRequest{KnowledgeObjectId: "ko-http-object-1"})
 	attempts := appender.snapshot()
 	if first.Code != http.StatusRequestTimeout || second.Code != http.StatusOK ||
 		len(attempts) != 1 || attempts[0].definition.Reason != knowledgeattemptaudit.ReasonServiceUnavailable {
@@ -1591,19 +1591,19 @@ func TestKnowledgeHTTPGetRejectsMismatchedSameScopeProjectionWithoutLeak(
 
 	tests := []struct {
 		name    string
-		request *opensplunkv1.GetKnowledgeObjectRequest
+		request *opensplunk.GetKnowledgeObjectRequest
 		mutate  func(*knowledgecatalog.Object)
 	}{
 		{
 			name:    "wrong object identity",
-			request: &opensplunkv1.GetKnowledgeObjectRequest{KnowledgeObjectId: "ko-http-object-1"},
+			request: &opensplunk.GetKnowledgeObjectRequest{KnowledgeObjectId: "ko-http-object-1"},
 			mutate: func(object *knowledgecatalog.Object) {
 				object.KnowledgeObjectID = "ko-same-scope-secret-other"
 			},
 		},
 		{
 			name: "wrong historical version",
-			request: &opensplunkv1.GetKnowledgeObjectRequest{
+			request: &opensplunk.GetKnowledgeObjectRequest{
 				KnowledgeObjectId: "ko-http-object-1",
 				Version:           new(uint64(3)),
 			},
@@ -1679,7 +1679,7 @@ func TestKnowledgeHTTPIdentityValidationMatchesCatalogASCIIWhitespaceContract(
 		t,
 		httpHandler,
 		knowledgeObjectsGetPath,
-		&opensplunkv1.GetKnowledgeObjectRequest{
+		&opensplunk.GetKnowledgeObjectRequest{
 			KnowledgeObjectId: returned.KnowledgeObjectID,
 		},
 	)
@@ -1691,7 +1691,7 @@ func TestKnowledgeHTTPIdentityValidationMatchesCatalogASCIIWhitespaceContract(
 			appender.snapshot(),
 		)
 	}
-	decoded := &opensplunkv1.GetKnowledgeObjectResponse{}
+	decoded := &opensplunk.GetKnowledgeObjectResponse{}
 	if err := proto.Unmarshal(response.Body.Bytes(), decoded); err != nil {
 		t.Fatalf("unmarshal response: %v", err)
 	}
@@ -1711,7 +1711,7 @@ func TestKnowledgeHTTPReadScopeAcceptsTenantGlobalObjectFromUnreadableSourceApp(
 	global.SharingScope = knowledgecatalog.SharingScopeGlobal
 	global.Definition.AppId = knowledgeHTTPOtherAppID
 	global.Definition.SharingScope =
-		opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL
+		opensplunk.SharingScope_SHARING_SCOPE_GLOBAL
 	encoded, err := (proto.MarshalOptions{Deterministic: true}).Marshal(
 		global.Definition,
 	)
@@ -1753,7 +1753,7 @@ func TestKnowledgeHTTPReadScopeAcceptsTenantGlobalObjectFromUnreadableSourceApp(
 		t,
 		httpHandler,
 		knowledgeObjectsGetPath,
-		&opensplunkv1.GetKnowledgeObjectRequest{
+		&opensplunk.GetKnowledgeObjectRequest{
 			KnowledgeObjectId: global.KnowledgeObjectID,
 		},
 	)
@@ -1761,7 +1761,7 @@ func TestKnowledgeHTTPReadScopeAcceptsTenantGlobalObjectFromUnreadableSourceApp(
 		t,
 		httpHandler,
 		knowledgeObjectsListPath,
-		&opensplunkv1.ListKnowledgeObjectsRequest{},
+		&opensplunk.ListKnowledgeObjectsRequest{},
 	)
 	if get.Code != http.StatusOK || list.Code != http.StatusOK ||
 		len(appender.snapshot()) != 0 {
@@ -1789,7 +1789,7 @@ func TestKnowledgeHTTPHandlersDetachReadAndMutationResponsesBeforeEncoding(
 		}}
 		handler, _ := newKnowledgeHTTPHandler(t, auth.BrowserRoleAdministrator, catalog, &knowledgeHTTPWriter{}, knowledgeHTTPApps(), &knowledgeBoundaryAppender{})
 		request := knowledgeHTTPDirectAdministratorRequest(t, knowledgeObjectsGetPath)
-		serialized, err := handler.getKnowledgeObject(request, &opensplunkv1.GetKnowledgeObjectRequest{KnowledgeObjectId: source.KnowledgeObjectID})
+		serialized, err := handler.getKnowledgeObject(request, &opensplunk.GetKnowledgeObjectRequest{KnowledgeObjectId: source.KnowledgeObjectID})
 		if err != nil {
 			t.Fatalf("getKnowledgeObject: %v", err)
 		}
@@ -1808,19 +1808,19 @@ func TestKnowledgeHTTPHandlersDetachReadAndMutationResponsesBeforeEncoding(
 	})
 
 	t.Run("mutation", func(t *testing.T) {
-		definition := knowledgeHTTPDefinition(opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE)
-		source := &opensplunkv1.CreateKnowledgeObjectResponse{
+		definition := knowledgeHTTPDefinition(opensplunk.SharingScope_SHARING_SCOPE_PRIVATE)
+		source := &opensplunk.CreateKnowledgeObjectResponse{
 			KnowledgeObject:         knowledgeHTTPProtoObject(t),
 			TenantCatalogRevision:   1,
 			TenantCatalogStateToken: bytes.Repeat([]byte{0x61}, 32),
 		}
-		writer := &knowledgeHTTPWriter{createFn: func(context.Context, knowledgecatalog.WriteScope, *opensplunkv1.CreateKnowledgeObjectRequest) (*opensplunkv1.CreateKnowledgeObjectResponse, error) {
+		writer := &knowledgeHTTPWriter{createFn: func(context.Context, knowledgecatalog.WriteScope, *opensplunk.CreateKnowledgeObjectRequest) (*opensplunk.CreateKnowledgeObjectResponse, error) {
 			return source, nil
 		}}
 		handler, _ := newKnowledgeHTTPHandler(t, auth.BrowserRoleAdministrator, &knowledgeHTTPCatalog{}, writer, knowledgeHTTPApps(), &knowledgeBoundaryAppender{})
 		request := knowledgeHTTPDirectAdministratorRequest(t, knowledgeObjectsCreatePath)
-		serialized, err := handler.createKnowledgeObject(request, &opensplunkv1.CreateKnowledgeObjectRequest{
-			Definition: definition, InitialState: opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT, ClientRequestId: "detach-mutation-request-0001",
+		serialized, err := handler.createKnowledgeObject(request, &opensplunk.CreateKnowledgeObjectRequest{
+			Definition: definition, InitialState: opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT, ClientRequestId: "detach-mutation-request-0001",
 		})
 		if err != nil {
 			t.Fatalf("createKnowledgeObject: %v", err)
@@ -1857,9 +1857,9 @@ func TestKnowledgeHTTPCodecEnforcesResponseBoundAndAlwaysReleasesPermit(
 	description := strings.Repeat("x", maximumKnowledgeObjectResponseBytes+1)
 	releases := 0
 	result := &serializedCreateKnowledgeObjectResponse{
-		message: &opensplunkv1.CreateKnowledgeObjectResponse{
-			KnowledgeObject: &opensplunkv1.KnowledgeObject{
-				Definition: &opensplunkv1.KnowledgeObjectDefinition{Description: &description},
+		message: &opensplunk.CreateKnowledgeObjectResponse{
+			KnowledgeObject: &opensplunk.KnowledgeObject{
+				Definition: &opensplunk.KnowledgeObjectDefinition{Description: &description},
 			},
 		},
 		ctx: context.Background(),

@@ -1,60 +1,60 @@
-# Releasing
+# Development builds and publication status
 
-Release preparation may use an ordinary development branch, but publication is
-always cut from `main` by pushing a `vX.Y.Z` tag. There is no long-lived
-publication branch and no manual publication step.
+Open Splunk has not declared its first official release. There is no supported
+product version, release tag, upgrade path, backward-compatibility window, or
+published artifact contract yet. Source revision is the only authoritative
+development build identity.
 
-## Procedure
+Do not present current binaries, images, protobufs, routes, databases, state
+directories, backups, cursors, or retained artifacts as stable across source
+revisions. Private entity revisions, migration numbers, and format counters are
+implementation mechanics and are not product versions.
 
-1. Merge the release content to `main`.
-2. Wait for the `CI` workflow to finish green on that exact merge commit.
-3. Tag that commit and push the tag:
+## Reproducible development artifacts
 
-   ```sh
-   git fetch origin main
-   git tag v0.4.0 <merge-commit>
-   git push origin v0.4.0
-   ```
+Development work may use the artifact launchers to prove that a clean commit
+produces internally consistent server and collector outputs:
 
-   The tag must match `vMAJOR.MINOR.PATCH`; prerelease and build-metadata
-   suffixes are rejected.
+```sh
+OPEN_SPLUNK_SOURCE_REVISION="$(git rev-parse HEAD)" \
+make release
+```
 
-## What the publication workflow verifies
+The launcher requires a clean committed revision, materializes committed files
+and modes into a disposable tree, omits ignored/untracked worktree content,
+uses pinned tools and fresh caches, scrubs ambient workspace/build controls,
+forces backend UI mode, and verifies embedded assets and linked binary build
+identity before atomic publication under `build/`.
 
-`.github/workflows/publish-images.yml` runs on `push` of a `v*` tag and gates
-publication on three conditions:
+`make oci` applies the same source-revision discipline to local server and
+collector images. Both images must come from the same commit and default to the
+full immutable source revision as their tag; do not push them under a semantic
+release tag or a floating `latest` tag.
 
-- The tag matches `^v[0-9]+\.[0-9]+\.[0-9]+$`, and the checked-out revision is
-  the tagged commit.
-- The tagged commit is an ancestor of `origin/main`, so a tag on an unmerged
-  branch cannot publish.
-- At least one completed `CI` workflow run for that exact commit concluded
-  `success`.
+## Validation
 
-The application version is the tag without its leading `v`. The current SPL
-compatibility identity comes from
-`scripts/read-spl-compatibility-version.mjs`; it is compiled into the server
-and verified before publication. There is no caller-selectable compatibility
-profile. Image creation time and
-`SOURCE_DATE_EPOCH` are taken from the tagged commit, so the build is
-reproducible from the tag alone.
+A candidate development artifact should pass, for the same source revision:
 
-Application `0.4.0` uses cumulative compatibility profile `0.4`, as summarized
-in [`versioning.md`](versioning.md).
+- `make docs-check`, protobuf lint/generation, and deterministic regeneration;
+- `make test`, frontend lint/typecheck/tests, and `make build`;
+- required ClickHouse and shipped-browser verticals; and
+- the HEC, recovery, load/soak, and OCI gates appropriate to the change.
 
-## What it publishes
+Passing those checks proves only the tested source revision. It does not create
+a public compatibility or support commitment.
 
-For the tagged commit, the workflow builds and pushes both consumable images
-for `linux/amd64` and `linux/arm64`:
+## Work required before the first release
 
-- `ghcr.io/<owner>/open-splunk-server:<version>`
-- `ghcr.io/<owner>/open-splunk-collector:<version>`
+Before publishing an official release, the project must choose and implement:
 
-Each architecture is pushed by digest, then joined into one multi-architecture
-manifest per image. The workflow inspects the published manifest and fails if
-both platforms are not present. No `latest` tag is published; every release is
-addressable only by its exact version.
+- product version and tag syntax plus artifact/image naming;
+- protobuf/HTTP/gRPC and authored-SPL evolution policy;
+- database, backup, cursor, collector-state, and retained-artifact migration
+  boundaries;
+- deprecation, support-window, rollback, and security-response policy;
+- publication credentials, provenance/signing, release notes, and operator
+  upgrade guidance; and
+- CI gates that enforce every declared promise.
 
-If the gate fails, fix the underlying problem on `main`, let CI go green again,
-and tag the new commit with a new version. Do not move or force-push a release
-tag.
+Until that work is complete, use [the roadmap](roadmap.md) as the source of
+truth and treat current outputs as development artifacts only.

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -23,13 +23,13 @@ func TestWriterCreateReplayRejectsRequestDigestRebinding(t *testing.T) {
 	}
 	original := created.GetKnowledgeObject()
 
-	altered := proto.Clone(request).(*opensplunkv1.CreateKnowledgeObjectRequest)
+	altered := proto.Clone(request).(*opensplunk.CreateKnowledgeObjectRequest)
 	// Duplicate selector patterns normalize to the same stored definition, but
 	// remain distinct canonical request bytes. This isolates the immutable
 	// request-digest bridge from definition-authority replay validation.
 	altered.GetDefinition().GetSelector().HostPatterns = append(
 		altered.GetDefinition().GetSelector().HostPatterns,
-		proto.Clone(altered.GetDefinition().GetSelector().GetHostPatterns()[0]).(*opensplunkv1.KnowledgeSelectorPattern),
+		proto.Clone(altered.GetDefinition().GetSelector().GetHostPatterns()[0]).(*opensplunk.KnowledgeSelectorPattern),
 	)
 	alteredPrepared := prepareWriterReplayBindingCreate(t, harness, altered)
 	restoreDigest := tamperWriterReplayRequestDigest(
@@ -73,9 +73,9 @@ func TestWriterUpdateReplayRejectsRequestDigestRebinding(t *testing.T) {
 	objectID := created.GetKnowledgeObject().GetKnowledgeObjectId()
 
 	originalDescription := "the originally committed masked description"
-	originalDefinition := proto.Clone(created.GetKnowledgeObject().GetDefinition()).(*opensplunkv1.KnowledgeObjectDefinition)
+	originalDefinition := proto.Clone(created.GetKnowledgeObject().GetDefinition()).(*opensplunk.KnowledgeObjectDefinition)
 	originalDefinition.Description = &originalDescription
-	request := &opensplunkv1.UpdateKnowledgeObjectRequest{
+	request := &opensplunk.UpdateKnowledgeObjectRequest{
 		KnowledgeObjectId: objectID,
 		ExpectedVersion:   1,
 		Definition:        originalDefinition,
@@ -90,7 +90,7 @@ func TestWriterUpdateReplayRejectsRequestDigestRebinding(t *testing.T) {
 		t.Fatalf("committed Update definition = %v", updated.GetKnowledgeObject().GetDefinition())
 	}
 
-	altered := proto.Clone(request).(*opensplunkv1.UpdateKnowledgeObjectRequest)
+	altered := proto.Clone(request).(*opensplunk.UpdateKnowledgeObjectRequest)
 	// Name is intentionally outside the description-only mask. The committed
 	// candidate therefore remains identical while the canonical request digest
 	// changes, isolating the immutable digest bridge.
@@ -118,7 +118,7 @@ func TestWriterUpdateReplayRejectsRequestDigestRebinding(t *testing.T) {
 func prepareWriterReplayBindingCreate(
 	t *testing.T,
 	harness *writerFaultHarness,
-	request *opensplunkv1.CreateKnowledgeObjectRequest,
+	request *opensplunk.CreateKnowledgeObjectRequest,
 ) preparedMutation {
 	t.Helper()
 	scope, err := normalizeWriteScope(harness.scope)
@@ -139,7 +139,7 @@ func prepareWriterReplayBindingCreate(
 func prepareWriterReplayBindingUpdate(
 	t *testing.T,
 	harness *writerFaultHarness,
-	request *opensplunkv1.UpdateKnowledgeObjectRequest,
+	request *opensplunk.UpdateKnowledgeObjectRequest,
 ) preparedMutation {
 	t.Helper()
 	scope, err := normalizeWriteScope(harness.scope)
@@ -251,7 +251,7 @@ func assertWriterReplayStoredDefinition(
 	harness *writerFaultHarness,
 	objectID string,
 	version int64,
-	want *opensplunkv1.KnowledgeObjectDefinition,
+	want *opensplunk.KnowledgeObjectDefinition,
 ) {
 	t.Helper()
 	wantBytes, err := (proto.MarshalOptions{Deterministic: true}).Marshal(want)

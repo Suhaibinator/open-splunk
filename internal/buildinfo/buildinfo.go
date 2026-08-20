@@ -1,4 +1,4 @@
-// Package buildinfo owns the immutable identity shared by release binaries,
+// Package buildinfo owns the immutable identity shared by development binaries,
 // embedded assets, and runtime protocol surfaces.
 package buildinfo
 
@@ -16,20 +16,14 @@ import (
 
 const (
 	DevelopmentRevision        = "development"
-	DefaultApplicationVersion  = "0.4.0"
 	AssetManifestFormatVersion = uint32(1)
 )
 
 var (
-	// applicationVersion and sourceRevision are set only by the supported
-	// release build's -ldflags. Development builds deliberately retain the
-	// explicit sentinel so they cannot be mistaken for release artifacts.
-	applicationVersion = DefaultApplicationVersion
-	sourceRevision     = DevelopmentRevision
+	// sourceRevision is set only by the supported build's -ldflags.
+	// Development builds deliberately retain the explicit sentinel.
+	sourceRevision = DevelopmentRevision
 
-	applicationVersionPattern = regexp.MustCompile(
-		`^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$`,
-	)
 	sourceRevisionPattern   = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
 	revisionBuildIDReplacer = strings.NewReplacer(
 		"a", "g",
@@ -41,18 +35,14 @@ var (
 	)
 )
 
-// Identity binds a semantic application version to one exact source tree.
+// Identity names one exact source tree without claiming a product version.
 type Identity struct {
-	ApplicationVersion string
-	SourceRevision     string
+	SourceRevision string
 }
 
 // Parse validates an identity without normalizing it. Build inputs must already
 // be canonical so the same bytes cross language and process boundaries.
-func Parse(version, revision string) (Identity, error) {
-	if len(version) == 0 || len(version) > 64 || !applicationVersionPattern.MatchString(version) {
-		return Identity{}, fmt.Errorf("application version %q is invalid", version)
-	}
+func Parse(revision string) (Identity, error) {
 	if revision != DevelopmentRevision && !sourceRevisionPattern.MatchString(revision) {
 		return Identity{}, fmt.Errorf(
 			"source revision %q must be %s or a full lowercase Git hash",
@@ -60,12 +50,12 @@ func Parse(version, revision string) (Identity, error) {
 			DevelopmentRevision,
 		)
 	}
-	return Identity{ApplicationVersion: version, SourceRevision: revision}, nil
+	return Identity{SourceRevision: revision}, nil
 }
 
 // Current returns the identity compiled into the calling binary.
 func Current() (Identity, error) {
-	identity, err := Parse(applicationVersion, sourceRevision)
+	identity, err := Parse(sourceRevision)
 	if err != nil {
 		return Identity{}, fmt.Errorf("load compiled build identity: %w", err)
 	}
@@ -77,44 +67,36 @@ func Current() (Identity, error) {
 // contain "ad", which Next itself avoids because ad blockers can reject
 // matching static paths.
 func (identity Identity) UIBuildID() (string, error) {
-	validated, err := Parse(identity.ApplicationVersion, identity.SourceRevision)
+	validated, err := Parse(identity.SourceRevision)
 	if err != nil {
 		return "", err
 	}
 	hash := sha256.New()
-	_, _ = hash.Write([]byte("open-splunk-ui-build-v1\x00"))
-	_, _ = hash.Write([]byte(validated.ApplicationVersion))
-	_, _ = hash.Write([]byte{0})
+	_, _ = hash.Write([]byte("open-splunk-ui-build\x00"))
 	_, _ = hash.Write([]byte(validated.SourceRevision))
 	return "r" + revisionBuildIDReplacer.Replace(hex.EncodeToString(hash.Sum(nil))), nil
 }
 
-// Release reports whether the identity is suitable for a published artifact.
-func (identity Identity) Release() bool {
-	_, err := Parse(identity.ApplicationVersion, identity.SourceRevision)
+// Publishable reports whether the identity is suitable for an immutable
+// development artifact.
+func (identity Identity) Publishable() bool {
+	_, err := Parse(identity.SourceRevision)
 	return err == nil && identity.SourceRevision != DevelopmentRevision
 }
 
-// DisplayVersion is the unambiguous value used on legacy protocol fields that
-// cannot yet carry structured build metadata.
-func (identity Identity) DisplayVersion() string {
-	return identity.ApplicationVersion + " (" + identity.SourceRevision + ")"
-}
-
-// WriteIdentity emits the stable machine-readable identity prefix shared by
-// every supported release binary.
+// WriteIdentity emits the machine-readable identity shared by development
+// binaries built from the same source tree.
 func WriteIdentity(output io.Writer, identity Identity) error {
 	if output == nil {
 		return errors.New("build identity output is required")
 	}
-	validated, err := Parse(identity.ApplicationVersion, identity.SourceRevision)
+	validated, err := Parse(identity.SourceRevision)
 	if err != nil {
 		return err
 	}
 	_, err = fmt.Fprintf(
 		output,
-		"application_version=%s\nsource_revision=%s\n",
-		validated.ApplicationVersion,
+		"source_revision=%s\n",
 		validated.SourceRevision,
 	)
 	return err
@@ -128,17 +110,16 @@ func ValidSHA256(value string) bool {
 
 // Equal reports exact cross-component identity equality.
 func (identity Identity) Equal(other Identity) bool {
-	return identity.ApplicationVersion == other.ApplicationVersion &&
-		identity.SourceRevision == other.SourceRevision
+	return identity.SourceRevision == other.SourceRevision
 }
 
-// ValidateRelease refuses the development sentinel.
-func (identity Identity) ValidateRelease() error {
-	if _, err := Parse(identity.ApplicationVersion, identity.SourceRevision); err != nil {
+// ValidatePublishable refuses the development sentinel.
+func (identity Identity) ValidatePublishable() error {
+	if _, err := Parse(identity.SourceRevision); err != nil {
 		return err
 	}
-	if !identity.Release() {
-		return errors.New("source revision development is not valid for a release")
+	if !identity.Publishable() {
+		return errors.New("source revision development is not valid for an immutable artifact")
 	}
 	return nil
 }

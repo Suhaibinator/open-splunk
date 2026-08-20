@@ -12,7 +12,7 @@ import (
 	"github.com/Suhaibinator/SRouter/pkg/codec"
 	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobproto"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -22,7 +22,7 @@ import (
 
 const (
 	searchSuggestionsRoute = "/search/suggestions"
-	searchSuggestionsPath  = apiV1PathPrefix + searchSuggestionsRoute
+	searchSuggestionsPath  = apiPathPrefix + searchSuggestionsRoute
 
 	// These bounds independently validate an implementation of
 	// SearchSuggestions before any dependency-owned data reaches protobuf
@@ -47,9 +47,9 @@ func (handler *apiHandler) searchSuggestionRoutes(
 ) []protobufRouteDefinition {
 	return []protobufRouteDefinition{
 		newForwardCompatibleProtoRoute[
-			*opensplunkv1.GetSearchSuggestionsRequest,
+			*opensplunk.GetSearchSuggestionsRequest,
 			*serializedSearchSuggestionsResponse](router.RouteConfig[
-			*opensplunkv1.GetSearchSuggestionsRequest,
+			*opensplunk.GetSearchSuggestionsRequest,
 			*serializedSearchSuggestionsResponse,
 		]{
 			Path: searchSuggestionsRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
@@ -62,7 +62,7 @@ func (handler *apiHandler) searchSuggestionRoutes(
 
 func (handler *apiHandler) getSearchSuggestions(
 	request *http.Request,
-	input *opensplunkv1.GetSearchSuggestionsRequest,
+	input *opensplunk.GetSearchSuggestionsRequest,
 ) (*serializedSearchSuggestionsResponse, error) {
 	if input == nil {
 		return nil, badRequestError("search suggestion request is required")
@@ -176,7 +176,7 @@ func searchSuggestionsResultToProto(
 	cursor int,
 	result searchsuggestions.Result,
 	maximum uint32,
-) (*opensplunkv1.GetSearchSuggestionsResponse, error) {
+) (*opensplunk.GetSearchSuggestionsResponse, error) {
 	if ctx == nil {
 		return nil, errors.New("search suggestion conversion context is required")
 	}
@@ -193,7 +193,7 @@ func searchSuggestionsResultToProto(
 		return nil, errors.New("invalid search suggestion result bounds")
 	}
 
-	suggestions := make([]*opensplunkv1.SearchSuggestion, len(result.Suggestions))
+	suggestions := make([]*opensplunk.SearchSuggestion, len(result.Suggestions))
 	seen := make(map[string]struct{}, len(result.Suggestions))
 	var replacement spl.Range
 	var previousRelevance float64
@@ -240,7 +240,7 @@ func searchSuggestionsResultToProto(
 		}
 		seen[deduplicationKey] = struct{}{}
 
-		converted := &opensplunkv1.SearchSuggestion{
+		converted := &opensplunk.SearchSuggestion{
 			Kind:             kind,
 			Label:            suggestion.Label,
 			InsertionText:    suggestion.Insertion,
@@ -262,7 +262,7 @@ func searchSuggestionsResultToProto(
 			return nil, errors.New("invalid search suggestion diagnostic")
 		}
 	}
-	return &opensplunkv1.GetSearchSuggestionsResponse{
+	return &opensplunk.GetSearchSuggestionsResponse{
 		Suggestions: suggestions,
 		Diagnostics: searchjobproto.Diagnostics(result.Diagnostics),
 	}, nil
@@ -270,20 +270,20 @@ func searchSuggestionsResultToProto(
 
 func searchSuggestionKindToProto(
 	kind spl.SuggestionKind,
-) (opensplunkv1.SearchSuggestionKind, bool) {
+) (opensplunk.SearchSuggestionKind, bool) {
 	switch kind {
 	case spl.SuggestionKindCommand:
-		return opensplunkv1.SearchSuggestionKind_SEARCH_SUGGESTION_KIND_COMMAND, true
+		return opensplunk.SearchSuggestionKind_SEARCH_SUGGESTION_KIND_COMMAND, true
 	case spl.SuggestionKindFunction:
-		return opensplunkv1.SearchSuggestionKind_SEARCH_SUGGESTION_KIND_FUNCTION, true
+		return opensplunk.SearchSuggestionKind_SEARCH_SUGGESTION_KIND_FUNCTION, true
 	case spl.SuggestionKindField:
-		return opensplunkv1.SearchSuggestionKind_SEARCH_SUGGESTION_KIND_FIELD, true
+		return opensplunk.SearchSuggestionKind_SEARCH_SUGGESTION_KIND_FIELD, true
 	case spl.SuggestionKindKeyword:
-		return opensplunkv1.SearchSuggestionKind_SEARCH_SUGGESTION_KIND_KEYWORD, true
+		return opensplunk.SearchSuggestionKind_SEARCH_SUGGESTION_KIND_KEYWORD, true
 	case spl.SuggestionKindIndex:
-		return opensplunkv1.SearchSuggestionKind_SEARCH_SUGGESTION_KIND_INDEX, true
+		return opensplunk.SearchSuggestionKind_SEARCH_SUGGESTION_KIND_INDEX, true
 	default:
-		return opensplunkv1.SearchSuggestionKind_SEARCH_SUGGESTION_KIND_UNSPECIFIED, false
+		return opensplunk.SearchSuggestionKind_SEARCH_SUGGESTION_KIND_UNSPECIFIED, false
 	}
 }
 
@@ -397,17 +397,17 @@ func searchSuggestionPositionAt(source string, offset int) spl.Position {
 	return position
 }
 
-func searchSuggestionRangeToProto(sourceRange spl.Range) *opensplunkv1.SourceRange {
+func searchSuggestionRangeToProto(sourceRange spl.Range) *opensplunk.SourceRange {
 	// #nosec G115 -- validSearchSuggestionRange proves offsets non-negative and
 	// exact positions necessarily fit in the bounded source's uint32 line and
 	// column representation.
-	return &opensplunkv1.SourceRange{
-		Start: &opensplunkv1.SourcePosition{
+	return &opensplunk.SourceRange{
+		Start: &opensplunk.SourcePosition{
 			ByteOffset: uint64(sourceRange.Start.Offset),
 			Line:       uint32(sourceRange.Start.Line),
 			Column:     uint32(sourceRange.Start.Column),
 		},
-		End: &opensplunkv1.SourcePosition{
+		End: &opensplunk.SourcePosition{
 			ByteOffset: uint64(sourceRange.End.Offset),
 			Line:       uint32(sourceRange.End.Line),
 			Column:     uint32(sourceRange.End.Column),
@@ -466,18 +466,18 @@ func searchSuggestionRequestContextError(ctx context.Context) error {
 // The hard response field/count bounds above keep successful messages below
 // this codec's independent ceiling. The serialization gate prevents many
 // worst-case completion responses from retaining their encodings at once.
-type serializedSearchSuggestionsResponse = boundedProtoResponse[*opensplunkv1.GetSearchSuggestionsResponse]
+type serializedSearchSuggestionsResponse = boundedProtoResponse[*opensplunk.GetSearchSuggestionsResponse]
 
 type serializedSearchSuggestionsCodec = boundedProtoCodec[
-	*opensplunkv1.GetSearchSuggestionsRequest,
-	*opensplunkv1.GetSearchSuggestionsResponse,
+	*opensplunk.GetSearchSuggestionsRequest,
+	*opensplunk.GetSearchSuggestionsResponse,
 ]
 
 func newSerializedSearchSuggestionsCodec() *serializedSearchSuggestionsCodec {
 	return newBoundedProtoCodec(
 		codec.NewProtoCodec[
-			*opensplunkv1.GetSearchSuggestionsRequest,
-			*opensplunkv1.GetSearchSuggestionsResponse,
+			*opensplunk.GetSearchSuggestionsRequest,
+			*opensplunk.GetSearchSuggestionsResponse,
 		](),
 		boundedProtoCodecOptions{
 			stateError:   "search suggestion serialization state is invalid",

@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
 	"google.golang.org/protobuf/proto"
@@ -25,10 +25,10 @@ func TestWriterConcurrentOptimisticUpdateHasExactlyOneWinner(t *testing.T) {
 	ready.Add(contenders)
 	for index := range contenders {
 		go func() {
-			definition := proto.Clone(object.GetDefinition()).(*opensplunkv1.KnowledgeObjectDefinition)
+			definition := proto.Clone(object.GetDefinition()).(*opensplunk.KnowledgeObjectDefinition)
 			description := fmt.Sprintf("optimistic winner %02d", index)
 			definition.Description = &description
-			request := &opensplunkv1.UpdateKnowledgeObjectRequest{
+			request := &opensplunk.UpdateKnowledgeObjectRequest{
 				KnowledgeObjectId: object.GetKnowledgeObjectId(),
 				ExpectedVersion:   1,
 				Definition:        definition,
@@ -45,7 +45,7 @@ func TestWriterConcurrentOptimisticUpdateHasExactlyOneWinner(t *testing.T) {
 	close(start)
 
 	winner := -1
-	var winnerResponse *opensplunkv1.UpdateKnowledgeObjectResponse
+	var winnerResponse *opensplunk.UpdateKnowledgeObjectResponse
 	conflicts := 0
 	for range contenders {
 		result := <-results
@@ -109,17 +109,17 @@ func TestWriterConcurrentOptimisticUpdateHasExactlyOneWinner(t *testing.T) {
 func TestWriterConcurrentSameIdempotencyKeyConvergesOnOneOutcome(t *testing.T) {
 	harness := newWriterBlackboxHarness(t)
 	description := "same-key concurrent create"
-	request := &opensplunkv1.CreateKnowledgeObjectRequest{
+	request := &opensplunk.CreateKnowledgeObjectRequest{
 		Definition: writerAliasDefinition(
 			writerTestApp,
 			"same-key-race",
 			&description,
-			opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+			opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 			"same-key-host",
 			"source_field",
 			"destination_field",
 		),
-		InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+		InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 		ClientRequestId: "same-key-create-request-01",
 	}
 
@@ -130,7 +130,7 @@ func TestWriterConcurrentSameIdempotencyKeyConvergesOnOneOutcome(t *testing.T) {
 	ready.Add(contenders)
 	for index := range contenders {
 		go func() {
-			cloned := proto.Clone(request).(*opensplunkv1.CreateKnowledgeObjectRequest)
+			cloned := proto.Clone(request).(*opensplunk.CreateKnowledgeObjectRequest)
 			ready.Done()
 			<-start
 			response, err := harness.writer.Create(harness.actorCtx, harness.writeScope, cloned)
@@ -140,7 +140,7 @@ func TestWriterConcurrentSameIdempotencyKeyConvergesOnOneOutcome(t *testing.T) {
 	ready.Wait()
 	close(start)
 
-	var committed *opensplunkv1.CreateKnowledgeObjectResponse
+	var committed *opensplunk.CreateKnowledgeObjectResponse
 	for range contenders {
 		result := <-results
 		if result.err != nil {
@@ -194,7 +194,7 @@ func TestWriterConcurrentAlteredSameKeyCommitsExactlyOneSubmittedBody(t *testing
 				body = "b"
 				request = requestB
 			}
-			cloned := proto.Clone(request).(*opensplunkv1.CreateKnowledgeObjectRequest)
+			cloned := proto.Clone(request).(*opensplunk.CreateKnowledgeObjectRequest)
 			ready.Done()
 			<-start
 			response, err := harness.writer.Create(harness.actorCtx, harness.writeScope, cloned)
@@ -207,7 +207,7 @@ func TestWriterConcurrentAlteredSameKeyCommitsExactlyOneSubmittedBody(t *testing
 	winningBody := ""
 	winnerCount := 0
 	conflictCount := 0
-	var committed *opensplunkv1.CreateKnowledgeObjectResponse
+	var committed *opensplunk.CreateKnowledgeObjectResponse
 	for range contenders {
 		result := <-results
 		switch {
@@ -245,38 +245,38 @@ func TestWriterConcurrentAlteredSameKeyCommitsExactlyOneSubmittedBody(t *testing
 	assertWriterCatalogIntegrity(t, harness.database)
 }
 
-func writerConcurrentCreateRequest(name, requestID string) *opensplunkv1.CreateKnowledgeObjectRequest {
+func writerConcurrentCreateRequest(name, requestID string) *opensplunk.CreateKnowledgeObjectRequest {
 	description := "concurrent definition for " + name
-	return &opensplunkv1.CreateKnowledgeObjectRequest{
+	return &opensplunk.CreateKnowledgeObjectRequest{
 		Definition: writerAliasDefinition(
 			writerTestApp,
 			name,
 			&description,
-			opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+			opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 			"host-"+name,
 			"source_field",
 			"destination_field",
 		),
-		InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+		InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 		ClientRequestId: requestID,
 	}
 }
 
 type writerUpdateRaceResult struct {
 	index    int
-	response *opensplunkv1.UpdateKnowledgeObjectResponse
+	response *opensplunk.UpdateKnowledgeObjectResponse
 	err      error
 }
 
 type writerCreateRaceResult struct {
 	index    int
-	response *opensplunkv1.CreateKnowledgeObjectResponse
+	response *opensplunk.CreateKnowledgeObjectResponse
 	err      error
 }
 
 type writerAlteredKeyRaceResult struct {
 	index    int
 	body     string
-	response *opensplunkv1.CreateKnowledgeObjectResponse
+	response *opensplunk.CreateKnowledgeObjectResponse
 	err      error
 }

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/gorilla/websocket"
@@ -210,7 +210,7 @@ func previewSnapshot(job searchjobs.Job, rows ...searchjobs.ResultRow) searchjob
 	}
 }
 
-func subscribeWithPreview(requestID, subscriptionID, jobID string, after, limit uint64) *opensplunkv1.SearchWebSocketCommand {
+func subscribeWithPreview(requestID, subscriptionID, jobID string, after, limit uint64) *opensplunk.SearchWebSocketCommand {
 	command := subscribeCommand(requestID, subscriptionID, jobID, after)
 	rowLimit := uint32(limit)
 	input := command.GetSubscribe().Subscriptions[0]
@@ -220,10 +220,10 @@ func subscribeWithPreview(requestID, subscriptionID, jobID string, after, limit 
 }
 
 type previewObservation struct {
-	ack      *opensplunkv1.SubscriptionAcknowledged
-	schema   *opensplunkv1.SearchWebSocketEvent
-	preview  *opensplunkv1.SearchWebSocketEvent
-	terminal *opensplunkv1.SearchWebSocketEvent
+	ack      *opensplunk.SubscriptionAcknowledged
+	schema   *opensplunk.SearchWebSocketEvent
+	preview  *opensplunk.SearchWebSocketEvent
+	terminal *opensplunk.SearchWebSocketEvent
 }
 
 func readPreviewObservations(
@@ -315,7 +315,7 @@ func TestWebSocketPreviewFollowsSchemaAndResetsBoundedTypedRows(t *testing.T) {
 	preview := observation.preview.GetResultPreview()
 	if preview.GetSearchJobId() != job.ID || preview.GetSchemaId() != job.ID ||
 		preview.GetPreviewRevision() != job.Version ||
-		preview.GetUpdateMode() != opensplunkv1.PreviewUpdateMode_PREVIEW_UPDATE_MODE_RESET ||
+		preview.GetUpdateMode() != opensplunk.PreviewUpdateMode_PREVIEW_UPDATE_MODE_RESET ||
 		len(preview.GetRows()) != 2 || !preview.GetTruncated() {
 		t.Fatalf("typed bounded preview = %+v", preview)
 	}
@@ -385,7 +385,7 @@ func TestWebSocketPreviewPublishesWhenVisiblePrefixChanges(t *testing.T) {
 		searchjobs.ResultRow{Ordinal: 0, Values: []searchjobs.Value{searchjobs.StringValue("first")}},
 		searchjobs.ResultRow{Ordinal: 1, Values: []searchjobs.Value{searchjobs.StringValue("second")}},
 	))
-	var updated *opensplunkv1.SearchWebSocketEvent
+	var updated *opensplunk.SearchWebSocketEvent
 	for range 3 {
 		event := readEvent(t, client)
 		if event.GetResultPreview() != nil {
@@ -412,10 +412,10 @@ func TestWebSocketPreviewUsesOneCanonicalSequenceForDifferentSubscriberLimits(t 
 		config.MaximumPreviewRows = 3
 	})
 	client := fixture.dial()
-	command := &opensplunkv1.SearchWebSocketCommand{
+	command := &opensplunk.SearchWebSocketCommand{
 		RequestId: "shared",
-		Payload: &opensplunkv1.SearchWebSocketCommand_Subscribe{Subscribe: &opensplunkv1.SubscribeSearchJobsCommand{
-			Subscriptions: []*opensplunkv1.SearchSubscription{
+		Payload: &opensplunk.SearchWebSocketCommand_Subscribe{Subscribe: &opensplunk.SubscribeSearchJobsCommand{
+			Subscriptions: []*opensplunk.SearchSubscription{
 				subscribeWithPreview("unused", "low", job.ID, 0, 1).GetSubscribe().Subscriptions[0],
 				subscribeWithPreview("unused", "high", job.ID, 0, 3).GetSubscribe().Subscriptions[0],
 			},
@@ -520,10 +520,10 @@ func TestWebSocketPreviewOptOutReceivesZeroRowContinuityMarker(t *testing.T) {
 	})
 	client := fixture.dial()
 	optedOut := subscribeCommand("unused", "metadata-only", job.ID, 0).GetSubscribe().Subscriptions[0]
-	command := &opensplunkv1.SearchWebSocketCommand{
+	command := &opensplunk.SearchWebSocketCommand{
 		RequestId: "mixed-preview",
-		Payload: &opensplunkv1.SearchWebSocketCommand_Subscribe{Subscribe: &opensplunkv1.SubscribeSearchJobsCommand{
-			Subscriptions: []*opensplunkv1.SearchSubscription{
+		Payload: &opensplunk.SearchWebSocketCommand_Subscribe{Subscribe: &opensplunk.SubscribeSearchJobsCommand{
+			Subscriptions: []*opensplunk.SearchSubscription{
 				subscribeWithPreview("unused", "with-preview", job.ID, 0, 2).GetSubscribe().Subscriptions[0],
 				optedOut,
 			},
@@ -543,7 +543,7 @@ func TestWebSocketPreviewOptOutReceivesZeroRowContinuityMarker(t *testing.T) {
 	marker := markerEvent.GetResultPreview()
 	if len(marker.GetRows()) != 0 || !marker.GetTruncated() ||
 		marker.GetPreviewRevision() != fullEvent.GetResultPreview().GetPreviewRevision() ||
-		marker.GetUpdateMode() != opensplunkv1.PreviewUpdateMode_PREVIEW_UPDATE_MODE_RESET {
+		marker.GetUpdateMode() != opensplunk.PreviewUpdateMode_PREVIEW_UPDATE_MODE_RESET {
 		t.Fatalf("opt-out continuity marker = %+v", marker)
 	}
 }
@@ -644,7 +644,7 @@ func TestExpiredPreviewCannotReplayRowsAndRemovedTombstoneRetiresTarget(t *testi
 		t.Fatalf("expired replay exposed retained result rows: %+v", preview)
 	}
 	if resynchronization := next.GetResynchronizationRequired(); resynchronization == nil ||
-		resynchronization.GetReason() != opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED {
+		resynchronization.GetReason() != opensplunk.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED {
 		t.Fatalf("expired replay event = %+v", next)
 	}
 
@@ -653,7 +653,7 @@ func TestExpiredPreviewCannotReplayRowsAndRemovedTombstoneRetiresTarget(t *testi
 	writeCommand(t, removed, subscribeWithPreview("removed", "removed", job.ID, 0, 1))
 	protocolError := readEvent(t, removed).GetProtocolError()
 	if protocolError == nil ||
-		protocolError.GetCode() != opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_JOB_NOT_FOUND {
+		protocolError.GetCode() != opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_JOB_NOT_FOUND {
 		t.Fatalf("removed tombstone subscription = %+v", protocolError)
 	}
 	fixture.service.mu.Lock()
@@ -718,7 +718,7 @@ func TestWebSocketFailureInvalidatesPreviouslyPublishedPreview(t *testing.T) {
 	job.Failure = &searchjobs.Failure{Code: searchjobs.FailureExecution, Message: "failed"}
 	reader.set(searchjobs.PreviewSnapshot{Job: job, Revision: initial.GetResultPreview().GetPreviewRevision() + 1})
 
-	var reset, terminal *opensplunkv1.SearchWebSocketEvent
+	var reset, terminal *opensplunk.SearchWebSocketEvent
 	for reads := 0; reads < 6 && terminal == nil; reads++ {
 		event := readEvent(t, client)
 		if event.GetResultPreview() != nil {
@@ -733,7 +733,7 @@ func TestWebSocketFailureInvalidatesPreviouslyPublishedPreview(t *testing.T) {
 	}
 	if reset == nil || terminal == nil || reset.GetSequence() <= initial.GetSequence() ||
 		terminal.GetSequence() != reset.GetSequence()+1 || len(reset.GetResultPreview().GetRows()) != 0 ||
-		reset.GetResultPreview().GetUpdateMode() != opensplunkv1.PreviewUpdateMode_PREVIEW_UPDATE_MODE_RESET {
+		reset.GetResultPreview().GetUpdateMode() != opensplunk.PreviewUpdateMode_PREVIEW_UPDATE_MODE_RESET {
 		t.Fatalf("failed preview invalidation = reset:%+v terminal:%+v", reset, terminal)
 	}
 }
@@ -748,46 +748,46 @@ func TestWebSocketRejectsInvalidPreviewOptions(t *testing.T) {
 
 	tests := []struct {
 		name        string
-		command     func() *opensplunkv1.SearchWebSocketCommand
-		wantCode    opensplunkv1.SearchWebSocketProtocolErrorCode
+		command     func() *opensplunk.SearchWebSocketCommand
+		wantCode    opensplunk.SearchWebSocketProtocolErrorCode
 		wantField   string
 		withExports bool
 	}{
 		{
 			name: "zero row limit",
-			command: func() *opensplunkv1.SearchWebSocketCommand {
+			command: func() *opensplunk.SearchWebSocketCommand {
 				return subscribeWithPreview("zero", "zero", job.ID, 0, 0)
 			},
-			wantCode:  opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND,
+			wantCode:  opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND,
 			wantField: "preview_row_limit",
 		},
 		{
 			name: "over maximum row limit",
-			command: func() *opensplunkv1.SearchWebSocketCommand {
+			command: func() *opensplunk.SearchWebSocketCommand {
 				return subscribeWithPreview("over", "over", job.ID, 0, 4)
 			},
-			wantCode:  opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND,
+			wantCode:  opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND,
 			wantField: "preview_row_limit",
 		},
 		{
 			name: "row limit without previews",
-			command: func() *opensplunkv1.SearchWebSocketCommand {
+			command: func() *opensplunk.SearchWebSocketCommand {
 				command := subscribeCommand("disabled", "disabled", job.ID, 0)
 				limit := uint32(1)
 				command.GetSubscribe().Subscriptions[0].PreviewRowLimit = &limit
 				return command
 			},
-			wantCode:  opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND,
+			wantCode:  opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND,
 			wantField: "preview_row_limit",
 		},
 		{
 			name: "export previews",
-			command: func() *opensplunkv1.SearchWebSocketCommand {
+			command: func() *opensplunk.SearchWebSocketCommand {
 				command := subscribeExportCommand("export", "export", "export-preview-options", 0)
 				command.GetSubscribe().Subscriptions[0].IncludePreviews = true
 				return command
 			},
-			wantCode:    opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND,
+			wantCode:    opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND,
 			wantField:   "include_previews",
 			withExports: true,
 		},
@@ -851,9 +851,9 @@ func TestWebSocketReplayFiltersPreviewToChangedRowLimit(t *testing.T) {
 		t.Fatalf("initial preview rows = %d", len(originalPreview.GetRows()))
 	}
 
-	writeCommand(t, client, &opensplunkv1.SearchWebSocketCommand{
+	writeCommand(t, client, &opensplunk.SearchWebSocketCommand{
 		RequestId: "remove-initial",
-		Payload: &opensplunkv1.SearchWebSocketCommand_Unsubscribe{Unsubscribe: &opensplunkv1.UnsubscribeSearchJobsCommand{
+		Payload: &opensplunk.SearchWebSocketCommand_Unsubscribe{Unsubscribe: &opensplunk.UnsubscribeSearchJobsCommand{
 			SubscriptionIds: []string{"initial"},
 		}},
 	})
@@ -869,7 +869,7 @@ func TestWebSocketReplayFiltersPreviewToChangedRowLimit(t *testing.T) {
 	if ack == nil || !ack.GetReplayWillFollow() {
 		t.Fatalf("resume acknowledgment = %+v", ackEvent)
 	}
-	var replayed *opensplunkv1.SearchWebSocketEvent
+	var replayed *opensplunk.SearchWebSocketEvent
 	for range 4 {
 		event := readEvent(t, client)
 		if event.GetResynchronizationRequired() != nil || event.GetProtocolError() != nil {
@@ -911,7 +911,7 @@ func TestWebSocketOversizedPreviewRowDegradesToEmptyTruncatedReset(t *testing.T)
 	observation := readPreviewObservations(t, client, "oversized")["oversized"]
 	preview := observation.preview.GetResultPreview()
 	if len(preview.GetRows()) != 0 || !preview.GetTruncated() ||
-		preview.GetUpdateMode() != opensplunkv1.PreviewUpdateMode_PREVIEW_UPDATE_MODE_RESET {
+		preview.GetUpdateMode() != opensplunk.PreviewUpdateMode_PREVIEW_UPDATE_MODE_RESET {
 		t.Fatalf("oversized-row fallback preview = %+v", preview)
 	}
 	fixture.service.mu.Lock()

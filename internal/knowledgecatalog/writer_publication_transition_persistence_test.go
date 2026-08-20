@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"gorm.io/gorm"
@@ -326,10 +326,10 @@ func TestWriterActiveEnableRequiresCurrentIndexWinningWitness(t *testing.T) {
 	_, err = harness.writer.SetState(
 		harness.actorContext,
 		harness.scope,
-		&opensplunkv1.SetKnowledgeObjectStateRequest{
+		&opensplunk.SetKnowledgeObjectStateRequest{
 			KnowledgeObjectId: created.GetKnowledgeObject().GetKnowledgeObjectId(),
 			ExpectedVersion:   created.GetKnowledgeObject().GetVersion(),
-			State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
+			State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
 			ClientRequestId:   "transition-gate-enable-0001",
 		},
 	)
@@ -436,10 +436,10 @@ func newWriterTransitionPersistenceFixture(t *testing.T) *writerTransitionPersis
 	prepared, err := prepareSetStateMutation(
 		normalizedScope,
 		actor,
-		&opensplunkv1.SetKnowledgeObjectStateRequest{
+		&opensplunk.SetKnowledgeObjectStateRequest{
 			KnowledgeObjectId: writerTransitionPersistenceCandidateID,
 			ExpectedVersion:   1,
-			State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+			State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 			ClientRequestId:   "writer-transition-disable-0001",
 		},
 	)
@@ -603,10 +603,10 @@ func newWriterACTIVETransitionPersistenceFixture(t *testing.T) *writerTransition
 	prepared, err := prepareSetStateMutation(
 		normalizedScope,
 		actor,
-		&opensplunkv1.SetKnowledgeObjectStateRequest{
+		&opensplunk.SetKnowledgeObjectStateRequest{
 			KnowledgeObjectId: writerTransitionPersistenceCandidateID,
 			ExpectedVersion:   2,
-			State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
+			State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
 			ClientRequestId:   "writer-transition-enable-0001",
 		},
 	)
@@ -656,7 +656,7 @@ func newWriterACTIVETransitionPersistenceFixture(t *testing.T) *writerTransition
 			ordinal:        dependency.Ordinal,
 			targetObjectID: dependency.TargetObjectID,
 			targetVersion:  dependency.TargetObjectVersion,
-			role:           opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
+			role:           opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
 		}
 	}
 	afterWinner := publicationCloneWinner(beforeWinner)

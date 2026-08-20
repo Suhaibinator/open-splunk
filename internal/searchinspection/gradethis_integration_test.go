@@ -143,7 +143,7 @@ var gradeThisInspectionExpectedColumns = map[gradethiscorpus.SearchID][]string{
 	},
 }
 
-// TestGradeThisInspectionServiceAgainstClickHouse proves that all ten exact
+// TestGradeThisInspectionServiceAgainstClickHouse proves that pipeline commands exact
 // compatibility snapshots traverse the real internal Service, compiler, and
 // Explainer against the deterministic five-part load fixture.
 func TestGradeThisInspectionServiceAgainstClickHouse(t *testing.T) {
@@ -325,7 +325,7 @@ func TestGradeThisInspectionServiceAgainstClickHouse(t *testing.T) {
 		CursorKey: []byte(
 			"0123456789abcdef0123456789abcdef",
 		),
-		CursorScope: "gradethis-inspection-corpus-v0.1",
+		CursorScope: "gradethis-inspection-corpus",
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -11,7 +11,7 @@ import (
 )
 
 // ResultCode is the documented Splunk HEC numeric result taxonomy. Open
-// Splunk emits only the subset selected by the v0.1 contract, but retaining
+// Splunk emits only the selected subset, but retaining
 // the complete bounded catalog keeps health and capacity results unambiguous.
 type ResultCode int
 

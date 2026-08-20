@@ -15,7 +15,7 @@ var (
 )
 
 // ProtoSizeLowerBound returns a conservative lower bound for the serialized
-// open_splunk.v1.TypedValue produced from value. It reads immutable private
+// open_splunk.TypedValue produced from value. It reads immutable private
 // storage directly: strings, bytes, lists, and objects are never cloned.
 //
 // When the lower bound exceeds stopAfter, size saturates at stopAfter+1 and

@@ -16,7 +16,7 @@ import (
 	"slices"
 	"strings"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
@@ -161,7 +161,7 @@ func (service *Service) Preview(
 	ctx context.Context,
 	access searchjobs.AccessScope,
 	validationScope knowledgecatalog.ValidationScope,
-	request *opensplunkv1.PreviewKnowledgeObjectRequest,
+	request *opensplunk.PreviewKnowledgeObjectRequest,
 ) (SealedResponse, error) {
 	if ctx == nil || !service.Ready() || request == nil {
 		return SealedResponse{}, ErrInvalidRequest
@@ -289,14 +289,14 @@ func previewMaximumRows(value *uint32) (uint32, error) {
 }
 
 func activeValidationView(
-	request *opensplunkv1.PreviewKnowledgeObjectRequest,
-) *opensplunkv1.ValidateKnowledgeObjectRequest {
-	return &opensplunkv1.ValidateKnowledgeObjectRequest{
+	request *opensplunk.PreviewKnowledgeObjectRequest,
+) *opensplunk.ValidateKnowledgeObjectRequest {
+	return &opensplunk.ValidateKnowledgeObjectRequest{
 		Definition:        request.Definition,
 		KnowledgeObjectId: request.KnowledgeObjectId,
 		ExpectedVersion:   request.ExpectedVersion,
 		UpdateMask:        request.UpdateMask,
-		Intent:            opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION,
+		Intent:            opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION,
 	}
 }
 
@@ -318,8 +318,8 @@ func cloneValidationScope(scope knowledgecatalog.ValidationScope) knowledgecatal
 func prospectiveProgram(
 	ctx context.Context,
 	execution searchjobs.ExecutionSnapshot,
-	request *opensplunkv1.PreviewKnowledgeObjectRequest,
-	validation *opensplunkv1.KnowledgeValidationResult,
+	request *opensplunk.PreviewKnowledgeObjectRequest,
+	validation *opensplunk.KnowledgeValidationResult,
 ) (knowledgeprogram.Program, error) {
 	if err := ctx.Err(); err != nil {
 		return knowledgeprogram.Program{}, err
@@ -333,10 +333,10 @@ func prospectiveProgram(
 	if snapshot == nil {
 		return knowledgeprogram.Program{}, ErrUnavailable
 	}
-	objects := make([]*opensplunkv1.KnowledgeSnapshotObject, 0, len(snapshot.GetObjects())+1)
-	byID := make(map[string]*opensplunkv1.KnowledgeSnapshotObject, len(snapshot.GetObjects())+1)
+	objects := make([]*opensplunk.KnowledgeSnapshotObject, 0, len(snapshot.GetObjects())+1)
+	byID := make(map[string]*opensplunk.KnowledgeSnapshotObject, len(snapshot.GetObjects())+1)
 	for _, object := range snapshot.GetObjects() {
-		cloned, ok := proto.Clone(object).(*opensplunkv1.KnowledgeSnapshotObject)
+		cloned, ok := proto.Clone(object).(*opensplunk.KnowledgeSnapshotObject)
 		if !ok || cloned == nil || cloned.GetKnowledgeObjectId() == "" {
 			return knowledgeprogram.Program{}, ErrUnavailable
 		}
@@ -347,7 +347,7 @@ func prospectiveProgram(
 		byID[cloned.GetKnowledgeObjectId()] = cloned
 	}
 
-	normalized, ok := proto.Clone(validation.GetNormalizedDefinition()).(*opensplunkv1.KnowledgeObjectDefinition)
+	normalized, ok := proto.Clone(validation.GetNormalizedDefinition()).(*opensplunk.KnowledgeObjectDefinition)
 	if !ok || normalized == nil {
 		return knowledgeprogram.Program{}, ErrInvariant
 	}
@@ -378,7 +378,7 @@ func prospectiveProgram(
 			return knowledgeprogram.Program{}, ErrResourceLimit
 		}
 	}
-	candidate := &opensplunkv1.KnowledgeSnapshotObject{
+	candidate := &opensplunk.KnowledgeSnapshotObject{
 		Stage:             stage,
 		KnowledgeObjectId: candidateID,
 		Version:           candidateVersion,
@@ -391,7 +391,7 @@ func prospectiveProgram(
 		DefinitionSha256:  bytes.Clone(validation.GetDefinitionSha256()),
 	}
 	objects = append(objects, candidate)
-	slices.SortFunc(objects, func(left, right *opensplunkv1.KnowledgeSnapshotObject) int {
+	slices.SortFunc(objects, func(left, right *opensplunk.KnowledgeSnapshotObject) int {
 		_, _, leftRank, leftOK := candidateTypeAndStage(left.GetDefinition())
 		_, _, rightRank, rightOK := candidateTypeAndStage(right.GetDefinition())
 		if !leftOK || !rightOK {
@@ -405,7 +405,7 @@ func prospectiveProgram(
 		}
 		return strings.Compare(left.GetKnowledgeObjectId(), right.GetKnowledgeObjectId())
 	})
-	stageOrdinals := make(map[opensplunkv1.KnowledgeSearchStage]uint32, 3)
+	stageOrdinals := make(map[opensplunk.KnowledgeSearchStage]uint32, 3)
 	for index, object := range objects {
 		object.ResolutionOrdinal = uint32(index)
 		object.StageOrdinal = stageOrdinals[object.GetStage()]
@@ -429,7 +429,7 @@ func prospectiveProgram(
 func previewObjectID(
 	jobID string,
 	digest []byte,
-	existing map[string]*opensplunkv1.KnowledgeSnapshotObject,
+	existing map[string]*opensplunk.KnowledgeSnapshotObject,
 ) string {
 	for nonce := uint32(0); nonce <= knowledgeprogram.MaximumObjects; nonce++ {
 		hash := sha256.New()
@@ -448,39 +448,39 @@ func previewObjectID(
 }
 
 func candidateTypeAndStage(
-	definition *opensplunkv1.KnowledgeObjectDefinition,
-) (opensplunkv1.KnowledgeObjectType, opensplunkv1.KnowledgeSearchStage, uint8, bool) {
+	definition *opensplunk.KnowledgeObjectDefinition,
+) (opensplunk.KnowledgeObjectType, opensplunk.KnowledgeSearchStage, uint8, bool) {
 	objectType := objectTypeForDefinition(definition)
 	stage, rank, ok := knowledgedefinition.StageForObjectType(objectType)
 	return objectType, stage, rank, ok
 }
 
 func objectTypeForDefinition(
-	definition *opensplunkv1.KnowledgeObjectDefinition,
-) opensplunkv1.KnowledgeObjectType {
+	definition *opensplunk.KnowledgeObjectDefinition,
+) opensplunk.KnowledgeObjectType {
 	switch definition.GetBody().(type) {
-	case *opensplunkv1.KnowledgeObjectDefinition_FieldExtraction:
-		return opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION
-	case *opensplunkv1.KnowledgeObjectDefinition_FieldAlias:
-		return opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS
-	case *opensplunkv1.KnowledgeObjectDefinition_CalculatedField:
-		return opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD
+	case *opensplunk.KnowledgeObjectDefinition_FieldExtraction:
+		return opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION
+	case *opensplunk.KnowledgeObjectDefinition_FieldAlias:
+		return opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS
+	case *opensplunk.KnowledgeObjectDefinition_CalculatedField:
+		return opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD
 	default:
-		return opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_UNSPECIFIED
+		return opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_UNSPECIFIED
 	}
 }
 
 type directDependency struct {
 	id      string
 	version uint64
-	role    opensplunkv1.KnowledgeDependencyRole
+	role    opensplunk.KnowledgeDependencyRole
 }
 
 func candidateDependenciesMatch(
 	candidateID string,
 	candidateVersion uint64,
-	programDependencies []*opensplunkv1.KnowledgeObjectDependency,
-	validated []*opensplunkv1.KnowledgeValidationDependency,
+	programDependencies []*opensplunk.KnowledgeObjectDependency,
+	validated []*opensplunk.KnowledgeValidationDependency,
 ) error {
 	derived := make([]directDependency, 0, len(validated))
 	for _, dependency := range programDependencies {
@@ -549,8 +549,8 @@ func validateCompiledPreview(
 }
 
 type projection struct {
-	schema    *opensplunkv1.ResultSchema
-	rows      []*opensplunkv1.ResultRow
+	schema    *opensplunk.ResultSchema
+	rows      []*opensplunk.ResultRow
 	truncated bool
 }
 
@@ -566,10 +566,10 @@ type projectionSink struct {
 		searchjobs.Schema,
 		[]searchjobs.ResultRow,
 		int,
-	) ([]*opensplunkv1.ResultRow, error)
+	) ([]*opensplunk.ResultRow, error)
 	schema    searchjobs.Schema
-	public    *opensplunkv1.ResultSchema
-	rows      []*opensplunkv1.ResultRow
+	public    *opensplunk.ResultSchema
+	rows      []*opensplunk.ResultRow
 	bytes     int
 	set       bool
 	truncated bool
@@ -656,7 +656,7 @@ func executeProjection(
 		ctx: ctx, jobID: jobID, shape: shape, maximumRows: maximumRows,
 		maximumBytes: MaximumResponseBytes,
 		convertRows:  searchjobproto.Rows,
-		rows:         make([]*opensplunkv1.ResultRow, 0, maximumRows),
+		rows:         make([]*opensplunk.ResultRow, 0, maximumRows),
 	}
 	err := executor.Execute(ctx, compiled, sink)
 	if err != nil && (!errors.Is(err, errRowLimit) || !sink.truncated) {

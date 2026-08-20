@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
@@ -106,8 +106,8 @@ func FuzzApplyKnowledgeDefinitionMaskIsDetachedAndStable(f *testing.F) {
 		if maskErr != nil {
 			return
 		}
-		currentBefore := proto.Clone(current).(*opensplunkv1.KnowledgeObjectDefinition)
-		incomingBefore := proto.Clone(incoming).(*opensplunkv1.KnowledgeObjectDefinition)
+		currentBefore := proto.Clone(current).(*opensplunk.KnowledgeObjectDefinition)
+		incomingBefore := proto.Clone(incoming).(*opensplunk.KnowledgeObjectDefinition)
 		first, firstErr := applyKnowledgeDefinitionMask(current, incoming, paths)
 		second, secondErr := applyKnowledgeDefinitionMask(current, incoming, paths)
 		if !sameWriterFuzzError(firstErr, secondErr) || !proto.Equal(first, second) {
@@ -128,11 +128,11 @@ func FuzzApplyKnowledgeDefinitionMaskIsDetachedAndStable(f *testing.F) {
 
 func FuzzPrepareCreateMutationCanonicalDigest(f *testing.F) {
 	validDescription := "description"
-	validRequest := &opensplunkv1.CreateKnowledgeObjectRequest{
+	validRequest := &opensplunk.CreateKnowledgeObjectRequest{
 		Definition: aliasDefinition(
 			testApp, "writer-fuzz-valid", SharingScopePrivate, &validDescription, "host-valid",
 		),
-		InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+		InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 		ClientRequestId: "writer-fuzz-valid-request-0001",
 	}
 	validScope := normalizedWriteScope{
@@ -158,12 +158,12 @@ func FuzzPrepareCreateMutationCanonicalDigest(f *testing.F) {
 		if len(requestID)+len(name)+len(description)+len(host) > 16<<10 {
 			t.Skip()
 		}
-		request := &opensplunkv1.CreateKnowledgeObjectRequest{
+		request := &opensplunk.CreateKnowledgeObjectRequest{
 			Definition:      aliasDefinition(testApp, name, SharingScopePrivate, &description, host),
-			InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+			InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 			ClientRequestId: requestID,
 		}
-		before := proto.Clone(request).(*opensplunkv1.CreateKnowledgeObjectRequest)
+		before := proto.Clone(request).(*opensplunk.CreateKnowledgeObjectRequest)
 		scope := normalizedWriteScope{tenantID: testTenant, ownerID: testOwner, writableAppIDs: []string{testApp}}
 		actor := audit.Actor{Kind: audit.ActorKindBrowser, ID: testOwner, Role: audit.ActorRoleAdministrator}
 		first, firstErr := prepareCreateMutation(scope, actor, request)
@@ -182,7 +182,7 @@ func FuzzPrepareCreateMutationCanonicalDigest(f *testing.F) {
 			first.requestDigest != digestMutationRequest(mutationRouteCreate, testOwner, first.requestBytes) {
 			t.Fatal("successful request preparation is not canonical")
 		}
-		decoded := &opensplunkv1.CreateKnowledgeObjectRequest{}
+		decoded := &opensplunk.CreateKnowledgeObjectRequest{}
 		if err := proto.Unmarshal(first.requestBytes, decoded); err != nil || decoded.GetClientRequestId() != "" {
 			t.Fatalf("canonical request payload retained key or failed decode: %v, %q", err, decoded.GetClientRequestId())
 		}
@@ -242,7 +242,7 @@ func FuzzKnowledgeOutcomeReferenceStrictDecode(f *testing.F) {
 	withTopLevelUnknown = protowire.AppendTag(withTopLevelUnknown, 127, protowire.VarintType)
 	withTopLevelUnknown = protowire.AppendVarint(withTopLevelUnknown, 1)
 	f.Add(withTopLevelUnknown)
-	withNestedUnknown := &opensplunkv1.KnowledgeMutationOutcomeRecord{}
+	withNestedUnknown := &opensplunk.KnowledgeMutationOutcomeRecord{}
 	if err := proto.Unmarshal(valid, withNestedUnknown); err != nil {
 		f.Fatalf("decode valid nested-unknown seed: %v", err)
 	}
@@ -275,7 +275,7 @@ func FuzzKnowledgeOutcomeReferenceStrictDecode(f *testing.F) {
 			}
 			return
 		}
-		outcome := &opensplunkv1.KnowledgeMutationOutcomeRecord{}
+		outcome := &opensplunk.KnowledgeMutationOutcomeRecord{}
 		unmarshalErr := (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(encoded, outcome)
 		canonical, marshalErr := (proto.MarshalOptions{Deterministic: true}).Marshal(outcome)
 		if unmarshalErr != nil || marshalErr != nil || !bytes.Equal(canonical, encoded) ||

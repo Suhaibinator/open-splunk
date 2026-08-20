@@ -9,7 +9,7 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 )
 
 const (
@@ -299,7 +299,7 @@ func insertRawTextIndexFixtures(
 	}
 	for row := range rawTextIndexFixtureRows {
 		raw := []byte("quiet filler")
-		encoding := uint8(opensplunkv1.RawEncoding_RAW_ENCODING_UTF8)
+		encoding := uint8(opensplunk.RawEncoding_RAW_ENCODING_UTF8)
 		switch row {
 		case rawTextIndexCaseFoldRow:
 			raw = []byte("NEEDLE42")
@@ -315,7 +315,7 @@ func insertRawTextIndexFixtures(
 			raw = []byte("éneedle42é")
 		case rawTextIndexBinaryBoundaryRow:
 			raw = []byte{0xff, ' ', 'N', 'E', 'E', 'D', 'L', 'E', '4', '2', ' ', 0x00}
-			encoding = uint8(opensplunkv1.RawEncoding_RAW_ENCODING_BINARY)
+			encoding = uint8(opensplunk.RawEncoding_RAW_ENCODING_BINARY)
 		case rawTextIndexSecondTokenRow:
 			raw = []byte("needle42 secondtoken")
 		case rawTextIndexOtherTermRow:

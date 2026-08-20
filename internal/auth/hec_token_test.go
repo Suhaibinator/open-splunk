@@ -219,7 +219,7 @@ func TestAuthenticateHECRejectsInactiveExpiredRevokedAndUnknownCredentials(t *te
 		"disabled": {disabled.Secret.Plaintext(), ErrInactiveToken},
 		"expired":  {expired.Secret.Plaintext(), ErrUnauthorized},
 		"revoked":  {revoked.Secret.Plaintext(), ErrUnauthorized},
-		"unknown":  {"ost_v1_not-a-real-credential", ErrUnauthorized},
+		"unknown":  {"ost_not-a-real-credential", ErrUnauthorized},
 	} {
 		if _, err := store.AuthenticateHEC(
 			ctx,
@@ -539,7 +539,7 @@ func TestIngestionTokenPurposeCreationValidation(t *testing.T) {
 func TestHECMetadataDefaultPreservesNonASCIIEdgeWhitespace(t *testing.T) {
 	t.Parallel()
 	if !validHECMetadataDefault("\u00a0producer\u00a0") {
-		t.Fatal("non-ASCII edge whitespace must be preserved by the HEC v0.1 contract")
+		t.Fatal("non-ASCII edge whitespace must be preserved by the HEC token contract")
 	}
 	for _, value := range []string{" producer", "producer ", "\tproducer", "producer\n"} {
 		if validHECMetadataDefault(value) {

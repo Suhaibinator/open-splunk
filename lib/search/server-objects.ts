@@ -3,22 +3,22 @@ import {
   SharingScope,
   type ApiWarning,
   type ResolvedTimeRange,
-} from "@/gen/ts/open_splunk/v1/common";
-import type { SearchHistoryEntry } from "@/gen/ts/open_splunk/v1/history";
+} from "@/gen/ts/open_splunk/common";
+import type { SearchHistoryEntry } from "@/gen/ts/open_splunk/history";
 import {
   SearchHistorySortBy,
   type SearchHistoryFilter,
-} from "@/gen/ts/open_splunk/v1/history_api";
-import type { SavedSearch } from "@/gen/ts/open_splunk/v1/saved_search";
-import { SavedSearchSortBy } from "@/gen/ts/open_splunk/v1/saved_search_api";
+} from "@/gen/ts/open_splunk/history_api";
+import type { SavedSearch } from "@/gen/ts/open_splunk/saved_search";
+import { SavedSearchSortBy } from "@/gen/ts/open_splunk/saved_search_api";
 import {
   SearchJobState,
   SearchResultTab,
   type SearchDefinition,
   type SearchJobSource,
-} from "@/gen/ts/open_splunk/v1/search";
-import type { VisualizationSpec } from "@/gen/ts/open_splunk/v1/result";
-import { ServerFeature } from "@/gen/ts/open_splunk/v1/system_api";
+} from "@/gen/ts/open_splunk/search";
+import type { VisualizationSpec } from "@/gen/ts/open_splunk/result";
+import { ServerFeature } from "@/gen/ts/open_splunk/system_api";
 import type {
   DemoHistoryEntry,
   DemoSavedSearch,
@@ -84,7 +84,6 @@ export interface ServerSearchHistoryEntry {
   warnings: ApiWarning[];
   warningCount: number;
   failureMessage: string | null;
-  compilerVersion: string;
   createdAt: Date | null;
   startedAt: Date | null;
   finishedAt: Date | null;
@@ -137,7 +136,6 @@ export function adaptSearchHistoryEntry(entry: SearchHistoryEntry): ServerSearch
     warnings: [...entry.warnings],
     warningCount: entry.warnings.length,
     failureMessage: entry.failure?.message ?? null,
-    compilerVersion: entry.compilerVersion,
     createdAt: validDate(entry.createdAt),
     startedAt: validDate(entry.startedAt),
     finishedAt: validDate(entry.finishedAt),
@@ -218,7 +216,6 @@ export function searchHistoryToDemo(entry: ServerSearchHistoryEntry): DemoHistor
     appId: entry.search.appId,
     sourceLabel: serverSearchJobOriginLabel(entry.source),
     resolvedTimeRange: formatResolvedHistoryRange(entry.resolvedTimeRange),
-    compilerVersion: entry.compilerVersion || undefined,
     state: historyState(entry.finalState),
     events: safeNumber(resultCount),
     eventsExact: resultCount > BigInt(Number.MAX_SAFE_INTEGER)

@@ -9,7 +9,7 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/chcol"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 )
 
 // testEventStatsMaximumAgainstClickHouse reuses the deliberately adversarial
@@ -238,7 +238,7 @@ func testEventStatsMaximumAgainstClickHouse(
 	).Scan(&highSeverity); queryErr != nil {
 		t.Fatalf("execute native UInt8 eventstats max: %v\nSQL: %s", queryErr, severity.SQL)
 	}
-	wantSeverity := uint8(opensplunkv1.LogSeverity_LOG_SEVERITY_WARN)
+	wantSeverity := uint8(opensplunk.LogSeverity_LOG_SEVERITY_WARN)
 	if highSeverity == nil || *highSeverity != wantSeverity {
 		t.Fatalf("native UInt8 eventstats max = %v, want %d", highSeverity, wantSeverity)
 	}

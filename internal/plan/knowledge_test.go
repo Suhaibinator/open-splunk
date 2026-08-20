@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 )
@@ -331,57 +331,57 @@ func testKnowledgeAuthoredQuery() *Query {
 
 func testKnowledgeProgram(t *testing.T) knowledgeprogram.Program {
 	t.Helper()
-	definitions := []*opensplunkv1.KnowledgeObjectDefinition{
+	definitions := []*opensplunk.KnowledgeObjectDefinition{
 		{
-			AppId: "app", Name: "a-regex", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+			AppId: "app", Name: "a-regex", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 			Selector: testKnowledgeSelector("index", "main"),
-			Body: &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
+			Body: &opensplunk.KnowledgeObjectDefinition_FieldExtraction{FieldExtraction: &opensplunk.FieldExtractionDefinition{
 				InputField: "_raw",
-				Extraction: &opensplunkv1.FieldExtractionDefinition_Regex{Regex: &opensplunkv1.RegexFieldExtractionDefinition{
+				Extraction: &opensplunk.FieldExtractionDefinition_Regex{Regex: &opensplunk.RegexFieldExtractionDefinition{
 					Pattern: `(?P<rex_out>x)`, OutputFields: []string{"rex_out"},
 				}},
 			}},
 		},
 		{
-			AppId: "app", Name: "b-json", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
-			Body: &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
+			AppId: "app", Name: "b-json", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
+			Body: &opensplunk.KnowledgeObjectDefinition_FieldExtraction{FieldExtraction: &opensplunk.FieldExtractionDefinition{
 				InputField: "_raw",
-				Extraction: &opensplunkv1.FieldExtractionDefinition_Json{Json: &opensplunkv1.JsonFieldExtractionDefinition{
+				Extraction: &opensplunk.FieldExtractionDefinition_Json{Json: &opensplunk.JsonFieldExtractionDefinition{
 					Path: "payload.id", OutputField: "json_out",
 				}},
 			}},
 		},
 		{
-			AppId: "app", Name: "alias", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+			AppId: "app", Name: "alias", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 			Selector: testKnowledgeSelector("host", "web*"),
-			Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunkv1.FieldAliasDefinition{
+			Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunk.FieldAliasDefinition{
 				SourceField: "status", DestinationField: "status_copy",
 			}},
 		},
 		{
-			AppId: "app", Name: "calculated", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+			AppId: "app", Name: "calculated", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 			Selector: testKnowledgeSelector("source", "api"),
-			Body: &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{CalculatedField: &opensplunkv1.CalculatedFieldDefinition{
+			Body: &opensplunk.KnowledgeObjectDefinition_CalculatedField{CalculatedField: &opensplunk.CalculatedFieldDefinition{
 				DestinationField: "calculated_out",
 				Expression:       `if(source="api", sourcetype, host)`,
 			}},
 		},
 	}
-	objects := make([]*opensplunkv1.KnowledgeSnapshotObject, len(definitions))
-	stageOrdinals := map[opensplunkv1.KnowledgeSearchStage]uint32{}
+	objects := make([]*opensplunk.KnowledgeSnapshotObject, len(definitions))
+	stageOrdinals := map[opensplunk.KnowledgeSearchStage]uint32{}
 	for index, definition := range definitions {
 		normalized, err := knowledgedefinition.Normalize(definition)
 		if err != nil {
 			t.Fatalf("Normalize(%s): %v", definition.GetName(), err)
 		}
-		stage := opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION
+		stage := opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION
 		switch normalized.ObjectType {
-		case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS:
-			stage = opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS
-		case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD:
-			stage = opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD
+		case opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS:
+			stage = opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS
+		case opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD:
+			stage = opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD
 		}
-		objects[index] = &opensplunkv1.KnowledgeSnapshotObject{
+		objects[index] = &opensplunk.KnowledgeSnapshotObject{
 			ResolutionOrdinal: uint32(index),
 			Stage:             stage,
 			StageOrdinal:      stageOrdinals[stage],
@@ -404,9 +404,9 @@ func testKnowledgeProgram(t *testing.T) knowledgeprogram.Program {
 	return program
 }
 
-func testKnowledgeSelector(dimension, value string) *opensplunkv1.KnowledgeSelector {
-	pattern := []*opensplunkv1.KnowledgeSelectorPattern{{Value: value}}
-	selector := &opensplunkv1.KnowledgeSelector{}
+func testKnowledgeSelector(dimension, value string) *opensplunk.KnowledgeSelector {
+	pattern := []*opensplunk.KnowledgeSelectorPattern{{Value: value}}
+	selector := &opensplunk.KnowledgeSelector{}
 	switch dimension {
 	case "index":
 		selector.IndexPatterns = pattern

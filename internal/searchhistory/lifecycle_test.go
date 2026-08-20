@@ -7,16 +7,16 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func pendingHistoryEntry(id, spl string, created time.Time) *opensplunkv1.SearchHistoryEntry {
-	entry := historyEntry(id, spl, "search", opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED, created)
-	entry.FinalState = opensplunkv1.SearchJobState_SEARCH_JOB_STATE_QUEUED
+func pendingHistoryEntry(id, spl string, created time.Time) *opensplunk.SearchHistoryEntry {
+	entry := historyEntry(id, spl, "search", opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED, created)
+	entry.FinalState = opensplunk.SearchJobState_SEARCH_JOB_STATE_QUEUED
 	entry.MatchedEvents = 0
 	entry.ScannedRows = 0
 	entry.ScannedBytes = 0
@@ -38,12 +38,12 @@ func TestBeginAttemptIsDurableIdempotentScopedAndNotYetVisible(t *testing.T) {
 	// bounds retain nanoseconds as part of the immutable search intent.
 	created := time.Date(2026, time.July, 27, 12, 34, 56, 123_456_789, time.UTC)
 	pending := pendingHistoryEntry("job-pending", "  index=main | head 1\n", created)
-	original := proto.Clone(pending).(*opensplunkv1.SearchHistoryEntry)
+	original := proto.Clone(pending).(*opensplunk.SearchHistoryEntry)
 	started, err := store.BeginAttempt(ctx, scope, pending)
 	if err != nil {
 		t.Fatalf("BeginAttempt() error = %v", err)
 	}
-	if started.FinalState != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_QUEUED || started.FinishedAt != nil || started.Definition.Spl != pending.Definition.Spl {
+	if started.FinalState != opensplunk.SearchJobState_SEARCH_JOB_STATE_QUEUED || started.FinishedAt != nil || started.Definition.Spl != pending.Definition.Spl {
 		t.Fatalf("BeginAttempt() = %+v", started)
 	}
 	if got, want := started.CreatedAt.AsTime(), time.UnixMicro(created.UnixMicro()).UTC(); !got.Equal(want) {
@@ -71,7 +71,7 @@ func TestBeginAttemptIsDurableIdempotentScopedAndNotYetVisible(t *testing.T) {
 	if _, err := store.BeginAttempt(ctx, scope, original); err != nil {
 		t.Fatalf("idempotent BeginAttempt() error = %v", err)
 	}
-	changed := proto.Clone(original).(*opensplunkv1.SearchHistoryEntry)
+	changed := proto.Clone(original).(*opensplunk.SearchHistoryEntry)
 	changed.Definition.Spl = "index=other"
 	if _, err := store.BeginAttempt(ctx, scope, changed); !errors.Is(err, control.ErrVersionConflict) {
 		t.Fatalf("changed BeginAttempt() error = %v, want ErrVersionConflict", err)
@@ -90,12 +90,12 @@ func TestCompleteAttemptAtomicallyMovesPendingToTerminalHistory(t *testing.T) {
 	if _, err := store.BeginAttempt(ctx, scope, pending); err != nil {
 		t.Fatal(err)
 	}
-	terminal := historyEntry("job-complete", pending.Definition.Spl, "search", opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED, created)
+	terminal := historyEntry("job-complete", pending.Definition.Spl, "search", opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED, created)
 	completed, err := store.CompleteAttempt(ctx, scope, terminal)
 	if err != nil {
 		t.Fatalf("CompleteAttempt() error = %v", err)
 	}
-	if completed.FinalState != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED {
+	if completed.FinalState != opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED {
 		t.Fatalf("completed state = %v", completed.FinalState)
 	}
 	var pendingRows, terminalRows int
@@ -126,7 +126,7 @@ func TestCompleteAttemptRejectsChangedImmutableAdmission(t *testing.T) {
 	if _, err := store.BeginAttempt(ctx, scope, pending); err != nil {
 		t.Fatal(err)
 	}
-	terminal := historyEntry("job-changed", "index=other", "search", opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED, created)
+	terminal := historyEntry("job-changed", "index=other", "search", opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED, created)
 	if _, err := store.CompleteAttempt(ctx, scope, terminal); !errors.Is(err, control.ErrVersionConflict) {
 		t.Fatalf("CompleteAttempt(changed) error = %v, want ErrVersionConflict", err)
 	}
@@ -153,8 +153,8 @@ func TestRecoverInterruptedFinalizesPendingAttempts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.FinalState != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_FAILED ||
-		got.Failure.GetCode() != opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_INTERNAL ||
+	if got.FinalState != opensplunk.SearchJobState_SEARCH_JOB_STATE_FAILED ||
+		got.Failure.GetCode() != opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_INTERNAL ||
 		!got.Failure.GetRetryable() || got.FinishedAt.AsTime() != now ||
 		got.Duration.AsDuration() != 30*time.Second || got.Definition.Spl != pending.Definition.Spl {
 		t.Fatalf("recovered entry = %+v", got)
@@ -186,13 +186,13 @@ func TestRecoverInterruptedPreservesProvenanceAndExactRangeAcrossRestart(t *test
 	timezone := "America/Los_Angeles"
 	pending := pendingHistoryEntry("job-restart-provenance", "index=main | table message", now.Add(-time.Minute))
 	pending.Definition.AppId = &appID
-	pending.Definition.TimeRange = &opensplunkv1.TimeRangeSpec{
+	pending.Definition.TimeRange = &opensplunk.TimeRangeSpec{
 		Earliest: new("-1d"), Latest: new("now"), Timezone: &timezone,
 	}
-	pending.Source = &opensplunkv1.SearchJobSource{
-		Origin: opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH, SavedSearchId: &savedID,
+	pending.Source = &opensplunk.SearchJobSource{
+		Origin: opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH, SavedSearchId: &savedID,
 	}
-	pending.ResolvedTimeRange = &opensplunkv1.ResolvedTimeRange{
+	pending.ResolvedTimeRange = &opensplunk.ResolvedTimeRange{
 		Earliest: timestamppb.New(now.Add(-23 * time.Hour)), Latest: timestamppb.New(now), Timezone: timezone,
 	}
 	if _, err := store.BeginAttempt(ctx, scope, pending); err != nil {
@@ -218,11 +218,11 @@ func TestRecoverInterruptedPreservesProvenanceAndExactRangeAcrossRestart(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.GetFinalState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_FAILED ||
+	if got.GetFinalState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_FAILED ||
 		got.GetDefinition().GetSpl() != pending.GetDefinition().GetSpl() || got.GetDefinition().GetAppId() != appID ||
 		got.GetDefinition().GetTimeRange().GetEarliest() != "-1d" || got.GetDefinition().GetTimeRange().GetLatest() != "now" ||
 		got.GetDefinition().GetTimeRange().GetTimezone() != timezone ||
-		got.GetSource().GetOrigin() != opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH ||
+		got.GetSource().GetOrigin() != opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH ||
 		got.GetSource().GetSavedSearchId() != savedID ||
 		!got.GetResolvedTimeRange().GetEarliest().AsTime().Equal(pending.GetResolvedTimeRange().GetEarliest().AsTime()) ||
 		!got.GetResolvedTimeRange().GetLatest().AsTime().Equal(pending.GetResolvedTimeRange().GetLatest().AsTime()) ||
@@ -234,23 +234,23 @@ func TestRecoverInterruptedPreservesProvenanceAndExactRangeAcrossRestart(t *test
 func TestPendingAttemptValidation(t *testing.T) {
 	_, store := openTestStore(t, Options{})
 	base := pendingHistoryEntry("pending-invalid", "index=main", time.Now().UTC())
-	for name, mutate := range map[string]func(*opensplunkv1.SearchHistoryEntry){
-		"terminal state": func(entry *opensplunkv1.SearchHistoryEntry) {
-			entry.FinalState = opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED
+	for name, mutate := range map[string]func(*opensplunk.SearchHistoryEntry){
+		"terminal state": func(entry *opensplunk.SearchHistoryEntry) {
+			entry.FinalState = opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED
 		},
-		"finished timestamp": func(entry *opensplunkv1.SearchHistoryEntry) {
+		"finished timestamp": func(entry *opensplunk.SearchHistoryEntry) {
 			entry.FinishedAt = timestamppb.Now()
 		},
-		"failure": func(entry *opensplunkv1.SearchHistoryEntry) {
-			entry.Failure = &opensplunkv1.SearchFailure{Code: opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_INTERNAL, Message: "bad"}
+		"failure": func(entry *opensplunk.SearchHistoryEntry) {
+			entry.Failure = &opensplunk.SearchFailure{Code: opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_INTERNAL, Message: "bad"}
 		},
-		"duration": func(entry *opensplunkv1.SearchHistoryEntry) {
+		"duration": func(entry *opensplunk.SearchHistoryEntry) {
 			entry.Duration = durationpb.New(time.Second)
 		},
-		"counter": func(entry *opensplunkv1.SearchHistoryEntry) { entry.ScannedRows = 1 },
+		"counter": func(entry *opensplunk.SearchHistoryEntry) { entry.ScannedRows = 1 },
 	} {
 		t.Run(name, func(t *testing.T) {
-			entry := proto.Clone(base).(*opensplunkv1.SearchHistoryEntry)
+			entry := proto.Clone(base).(*opensplunk.SearchHistoryEntry)
 			mutate(entry)
 			if _, err := store.BeginAttempt(context.Background(), AccessScope{TenantID: "tenant", OwnerID: "owner"}, entry); !errors.Is(err, control.ErrInvalidArgument) {
 				t.Fatalf("BeginAttempt() error = %v, want ErrInvalidArgument", err)
@@ -318,7 +318,7 @@ func TestRecordCompletesExistingPendingAttempt(t *testing.T) {
 	if _, err := store.BeginAttempt(ctx, scope, pending); err != nil {
 		t.Fatal(err)
 	}
-	terminal := historyEntry(pending.SearchJobId, pending.Definition.Spl, "search", opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED, created)
+	terminal := historyEntry(pending.SearchJobId, pending.Definition.Spl, "search", opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED, created)
 	if _, err := store.Record(ctx, scope, terminal); err != nil {
 		t.Fatalf("Record() error = %v", err)
 	}

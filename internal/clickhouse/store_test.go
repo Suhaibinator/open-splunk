@@ -20,7 +20,7 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/column"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
@@ -527,7 +527,7 @@ func TestStoreBoundsRepeatedReservationGoneAsServerBusy(t *testing.T) {
 	assertTransient(
 		t,
 		err,
-		opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
+		opensplunk.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
 	)
 	var gone *ingest.StoredBatchGoneError
 	if errors.As(err, &gone) {
@@ -809,7 +809,7 @@ func TestReconcilePendingPrunesAfterReplayFailureWithoutMaskingIt(t *testing.T) 
 	}
 	var transient *ingest.TransientStoreError
 	if !errors.As(err, &transient) ||
-		transient.Reason != opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE {
+		transient.Reason != opensplunk.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE {
 		t.Fatalf("joined retry = %#v, want primary replay classification", transient)
 	}
 	if sequencer.pruneCalls != 1 {
@@ -1241,7 +1241,7 @@ func TestStoreRetryUsesPersistedRetentionBeforeLivePolicy(t *testing.T) {
 	}
 }
 
-func TestStoreRetryReplaysLegacyUnalignedRetentionMetadata(t *testing.T) {
+func TestStoreRetryRejectsUnsupportedRetentionMetadata(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -1273,41 +1273,42 @@ func TestStoreRetryReplaysLegacyUnalignedRetentionMetadata(t *testing.T) {
 	if len(current) < 5 || current[4] != reservationMetadataVersion {
 		t.Fatalf("new reservation metadata version = %v, want %d", current, reservationMetadataVersion)
 	}
-	unalignedV4 := rewriteSingleIndexReservationMetadata(
+	unaligned := rewriteSingleIndexReservationMetadata(
 		t,
 		current,
 		reservationMetadataVersion,
 		1500*time.Microsecond,
 	)
-	if _, err := decodeReservationMetadata(unalignedV4); err == nil ||
+	if _, err := decodeReservationMetadata(unaligned); err == nil ||
 		!strings.Contains(err.Error(), "retention duration") {
-		t.Fatalf("unaligned v4 metadata error = %v, want invalid retention duration", err)
+		t.Fatalf("unaligned metadata error = %v, want invalid retention duration", err)
 	}
-	legacy := rewriteSingleIndexReservationMetadata(
+	unsupported := rewriteSingleIndexReservationMetadata(
 		t,
 		current,
-		legacyReservationMetadataVersion,
-		1500*time.Microsecond,
+		reservationMetadataVersion+1,
+		time.Millisecond,
 	)
+	if _, err := decodeReservationMetadata(unsupported); err == nil ||
+		!strings.Contains(err.Error(), "fresh ingestion state") {
+		t.Fatalf("unsupported metadata error = %v, want fresh-state rejection", err)
+	}
 	if _, err := controlDB.SQLDB().ExecContext(ctx, `
 		UPDATE ingest_visibility_reservations
 		SET metadata = ?
-		WHERE sequence = 1`, legacy); err != nil {
-		t.Fatalf("install legacy reservation metadata: %v", err)
+		WHERE sequence = 1`, unsupported); err != nil {
+		t.Fatalf("install unsupported reservation metadata: %v", err)
 	}
 
-	unavailablePolicy := &fakeRetentionProvider{err: errors.New("legacy retry consulted live policy")}
+	unavailablePolicy := &fakeRetentionProvider{err: errors.New("unsupported retry consulted live policy")}
 	retryConnection := &fakeStoreConnection{batch: &fakeWriteBatch{}}
 	retry := mustTestStoreWithVisibility(t, retryConnection, unavailablePolicy, sequencer)
-	if _, err := retry.Store(ctx, batch); err != nil {
-		t.Fatalf("retry legacy unaligned reservation: %v", err)
+	if _, err := retry.Store(ctx, batch); err == nil ||
+		!strings.Contains(err.Error(), "fresh ingestion state") {
+		t.Fatalf("retry unsupported reservation error = %v, want fresh-state rejection", err)
 	}
 	if len(unavailablePolicy.calls) != 0 {
-		t.Fatalf("legacy retry consulted live retention: %v", unavailablePolicy.calls)
-	}
-	wantExpiry := eventStoreMillis(batch.ReceivedAt).Add(1500 * time.Microsecond)
-	if got := retryConnection.batch.rows[0][eventExpiresAtColumn]; got != wantExpiry {
-		t.Fatalf("legacy retry expires_at = %v, want exact pre-driver value %v", got, wantExpiry)
+		t.Fatalf("unsupported retry consulted live retention: %v", unavailablePolicy.calls)
 	}
 }
 
@@ -1416,7 +1417,7 @@ func TestConvertTypedObjectRejectsAggregateFieldMetadataOverLimit(t *testing.T) 
 	t.Parallel()
 
 	parentName := strings.Repeat(".", eventfields.MaximumDynamicPathSegmentBytes)
-	leaves := make([]*opensplunkv1.TypedObjectField, 140)
+	leaves := make([]*opensplunk.TypedObjectField, 140)
 	for index := range leaves {
 		leaves[index] = typedField(fmt.Sprintf("leaf%04d", index), typedString("value"))
 	}
@@ -1436,20 +1437,20 @@ func TestStoredValueTypeCodesMatchProtobufValueType(t *testing.T) {
 
 	pairs := []struct {
 		stored eventfields.StoredValueType
-		wire   opensplunkv1.ValueType
+		wire   opensplunk.ValueType
 	}{
-		{eventfields.StoredValueTypeNull, opensplunkv1.ValueType_VALUE_TYPE_NULL},
-		{eventfields.StoredValueTypeString, opensplunkv1.ValueType_VALUE_TYPE_STRING},
-		{eventfields.StoredValueTypeSint64, opensplunkv1.ValueType_VALUE_TYPE_SINT64},
-		{eventfields.StoredValueTypeUint64, opensplunkv1.ValueType_VALUE_TYPE_UINT64},
-		{eventfields.StoredValueTypeDouble, opensplunkv1.ValueType_VALUE_TYPE_DOUBLE},
-		{eventfields.StoredValueTypeBool, opensplunkv1.ValueType_VALUE_TYPE_BOOL},
-		{eventfields.StoredValueTypeBytes, opensplunkv1.ValueType_VALUE_TYPE_BYTES},
-		{eventfields.StoredValueTypeTimestamp, opensplunkv1.ValueType_VALUE_TYPE_TIMESTAMP},
-		{eventfields.StoredValueTypeDuration, opensplunkv1.ValueType_VALUE_TYPE_DURATION},
-		{eventfields.StoredValueTypeList, opensplunkv1.ValueType_VALUE_TYPE_LIST},
-		{eventfields.StoredValueTypeObject, opensplunkv1.ValueType_VALUE_TYPE_OBJECT},
-		{eventfields.StoredValueTypeDecimal, opensplunkv1.ValueType_VALUE_TYPE_DECIMAL},
+		{eventfields.StoredValueTypeNull, opensplunk.ValueType_VALUE_TYPE_NULL},
+		{eventfields.StoredValueTypeString, opensplunk.ValueType_VALUE_TYPE_STRING},
+		{eventfields.StoredValueTypeSint64, opensplunk.ValueType_VALUE_TYPE_SINT64},
+		{eventfields.StoredValueTypeUint64, opensplunk.ValueType_VALUE_TYPE_UINT64},
+		{eventfields.StoredValueTypeDouble, opensplunk.ValueType_VALUE_TYPE_DOUBLE},
+		{eventfields.StoredValueTypeBool, opensplunk.ValueType_VALUE_TYPE_BOOL},
+		{eventfields.StoredValueTypeBytes, opensplunk.ValueType_VALUE_TYPE_BYTES},
+		{eventfields.StoredValueTypeTimestamp, opensplunk.ValueType_VALUE_TYPE_TIMESTAMP},
+		{eventfields.StoredValueTypeDuration, opensplunk.ValueType_VALUE_TYPE_DURATION},
+		{eventfields.StoredValueTypeList, opensplunk.ValueType_VALUE_TYPE_LIST},
+		{eventfields.StoredValueTypeObject, opensplunk.ValueType_VALUE_TYPE_OBJECT},
+		{eventfields.StoredValueTypeDecimal, opensplunk.ValueType_VALUE_TYPE_DECIMAL},
 	}
 	for _, pair := range pairs {
 		if uint8(pair.stored) != uint8(pair.wire) {
@@ -1470,7 +1471,7 @@ func TestConvertNilTypedObjectReturnsVersionableEmptyMetadata(t *testing.T) {
 func TestTypedValueToNativeRejectsDurationOutsideResultRange(t *testing.T) {
 	t.Parallel()
 
-	value := &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_DurationValue{
+	value := &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_DurationValue{
 		DurationValue: &durationpb.Duration{Seconds: 9_223_372_037},
 	}}
 	if _, err := typedValueToNative(value); err == nil || !strings.Contains(err.Error(), "duration") {
@@ -1803,14 +1804,14 @@ func TestStoreClassifiesErrorsAndReleasesBatch(t *testing.T) {
 		name       string
 		prepareErr error
 		sendErr    error
-		wantReason opensplunkv1.RetryBatchReason
+		wantReason opensplunk.RetryBatchReason
 		permanent  bool
 	}{
-		{name: "network", prepareErr: &net.OpError{Op: "dial", Net: "tcp", Err: io.EOF}, wantReason: opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE},
-		{name: "pool busy", prepareErr: clickhousedriver.ErrAcquireConnTimeout, wantReason: opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY},
-		{name: "bad connection", prepareErr: sqldriver.ErrBadConn, wantReason: opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE},
-		{name: "rate limited", prepareErr: &clickhousedriver.Exception{Code: 364, Name: "RECEIVED_ERROR_TOO_MANY_REQUESTS"}, wantReason: opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED},
-		{name: "send EOF", sendErr: io.ErrUnexpectedEOF, wantReason: opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE},
+		{name: "network", prepareErr: &net.OpError{Op: "dial", Net: "tcp", Err: io.EOF}, wantReason: opensplunk.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE},
+		{name: "pool busy", prepareErr: clickhousedriver.ErrAcquireConnTimeout, wantReason: opensplunk.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY},
+		{name: "bad connection", prepareErr: sqldriver.ErrBadConn, wantReason: opensplunk.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE},
+		{name: "rate limited", prepareErr: &clickhousedriver.Exception{Code: 364, Name: "RECEIVED_ERROR_TOO_MANY_REQUESTS"}, wantReason: opensplunk.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED},
+		{name: "send EOF", sendErr: io.ErrUnexpectedEOF, wantReason: opensplunk.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE},
 		{name: "schema", prepareErr: &clickhousedriver.Exception{Code: 60, Name: "UNKNOWN_TABLE"}, permanent: true},
 	}
 	for _, test := range tests {
@@ -2442,11 +2443,11 @@ func testStoredEvent(id, index string, indexTime time.Time) *ingest.StoredEvent 
 	eventTime := time.Date(2026, 7, 21, 3, 4, 5, 123456789, time.FixedZone("event-offset", 5*60*60))
 	return &ingest.StoredEvent{
 		TenantID: "tenant", CollectorID: "collector", BatchID: "batch", IndexTime: indexTime,
-		Event: &opensplunkv1.LogEvent{
+		Event: &opensplunk.LogEvent{
 			EventId: id, IndexName: index, EventTime: timestamppb.New(eventTime), CollectedAt: timestamppb.New(eventTime.Add(-time.Second)),
-			EventTimeSource: opensplunkv1.EventTimeSource_EVENT_TIME_SOURCE_PARSED,
-			Host:            "host", Source: "app.log", Sourcetype: "go:zap:json", Severity: opensplunkv1.LogSeverity_LOG_SEVERITY_INFO,
-			Raw: []byte("{\"message\":\"hello\"}"), RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+			EventTimeSource: opensplunk.EventTimeSource_EVENT_TIME_SOURCE_PARSED,
+			Host:            "host", Source: "app.log", Sourcetype: "go:zap:json", Severity: opensplunk.LogSeverity_LOG_SEVERITY_INFO,
+			Raw: []byte("{\"message\":\"hello\"}"), RawEncoding: opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 			Fields: typedObjectValue(typedField("status", typedUint(200))),
 		},
 	}
@@ -2499,7 +2500,7 @@ func assertDynamicType(t *testing.T, document *clickhousedriver.JSON, path, want
 		t.Fatalf("dynamic type at %q = %#v (%T), want %q", path, value, value, want)
 	}
 }
-func assertTransient(t *testing.T, err error, reason opensplunkv1.RetryBatchReason) {
+func assertTransient(t *testing.T, err error, reason opensplunk.RetryBatchReason) {
 	t.Helper()
 	var transient *ingest.TransientStoreError
 	if !errors.As(err, &transient) || transient.Reason != reason || transient.RetryAfter <= 0 {
@@ -2511,45 +2512,45 @@ func isTransient(err error) bool {
 	return errors.As(err, &transient)
 }
 
-func typedField(name string, value *opensplunkv1.TypedValue) *opensplunkv1.TypedObjectField {
-	return &opensplunkv1.TypedObjectField{Name: name, Value: value}
+func typedField(name string, value *opensplunk.TypedValue) *opensplunk.TypedObjectField {
+	return &opensplunk.TypedObjectField{Name: name, Value: value}
 }
-func typedObjectValue(fields ...*opensplunkv1.TypedObjectField) *opensplunkv1.TypedObject {
-	return &opensplunkv1.TypedObject{Fields: fields}
+func typedObjectValue(fields ...*opensplunk.TypedObjectField) *opensplunk.TypedObject {
+	return &opensplunk.TypedObject{Fields: fields}
 }
-func typedNull() *opensplunkv1.TypedValue {
-	return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_NullValue{NullValue: opensplunkv1.NullValue_NULL_VALUE_NULL}}
+func typedNull() *opensplunk.TypedValue {
+	return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_NullValue{NullValue: opensplunk.NullValue_NULL_VALUE_NULL}}
 }
-func typedString(v string) *opensplunkv1.TypedValue {
-	return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_StringValue{StringValue: v}}
+func typedString(v string) *opensplunk.TypedValue {
+	return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_StringValue{StringValue: v}}
 }
-func typedSint(v int64) *opensplunkv1.TypedValue {
-	return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_Sint64Value{Sint64Value: v}}
+func typedSint(v int64) *opensplunk.TypedValue {
+	return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_Sint64Value{Sint64Value: v}}
 }
-func typedUint(v uint64) *opensplunkv1.TypedValue {
-	return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_Uint64Value{Uint64Value: v}}
+func typedUint(v uint64) *opensplunk.TypedValue {
+	return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_Uint64Value{Uint64Value: v}}
 }
-func typedDouble(v float64) *opensplunkv1.TypedValue {
-	return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_DoubleValue{DoubleValue: v}}
+func typedDouble(v float64) *opensplunk.TypedValue {
+	return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_DoubleValue{DoubleValue: v}}
 }
-func typedBool(v bool) *opensplunkv1.TypedValue {
-	return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_BoolValue{BoolValue: v}}
+func typedBool(v bool) *opensplunk.TypedValue {
+	return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_BoolValue{BoolValue: v}}
 }
-func typedBytes(v []byte) *opensplunkv1.TypedValue {
-	return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_BytesValue{BytesValue: v}}
+func typedBytes(v []byte) *opensplunk.TypedValue {
+	return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_BytesValue{BytesValue: v}}
 }
-func typedTimestamp(v time.Time) *opensplunkv1.TypedValue {
-	return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_TimestampValue{TimestampValue: timestamppb.New(v)}}
+func typedTimestamp(v time.Time) *opensplunk.TypedValue {
+	return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_TimestampValue{TimestampValue: timestamppb.New(v)}}
 }
-func typedDuration(v time.Duration) *opensplunkv1.TypedValue {
-	return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_DurationValue{DurationValue: durationpb.New(v)}}
+func typedDuration(v time.Duration) *opensplunk.TypedValue {
+	return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_DurationValue{DurationValue: durationpb.New(v)}}
 }
-func typedDecimal(v string) *opensplunkv1.TypedValue {
-	return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_DecimalValue{DecimalValue: &opensplunkv1.DecimalValue{Value: v}}}
+func typedDecimal(v string) *opensplunk.TypedValue {
+	return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_DecimalValue{DecimalValue: &opensplunk.DecimalValue{Value: v}}}
 }
-func typedList(v ...*opensplunkv1.TypedValue) *opensplunkv1.TypedValue {
-	return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_ListValue{ListValue: &opensplunkv1.TypedValueList{Values: v}}}
+func typedList(v ...*opensplunk.TypedValue) *opensplunk.TypedValue {
+	return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_ListValue{ListValue: &opensplunk.TypedValueList{Values: v}}}
 }
-func typedObject(fields ...*opensplunkv1.TypedObjectField) *opensplunkv1.TypedValue {
-	return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_ObjectValue{ObjectValue: typedObjectValue(fields...)}}
+func typedObject(fields ...*opensplunk.TypedObjectField) *opensplunk.TypedValue {
+	return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_ObjectValue{ObjectValue: typedObjectValue(fields...)}}
 }

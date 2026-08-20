@@ -6,7 +6,7 @@ import {
   ExportFormat,
   ExportJobState,
   type ExportJob,
-} from "@/gen/ts/open_splunk/v1/export";
+} from "@/gen/ts/open_splunk/export";
 import {
   createOpenSplunkApiClient,
   isAdvertisedFeatureRouteUnavailable,

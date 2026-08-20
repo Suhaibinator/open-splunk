@@ -6,13 +6,13 @@ import {
   SearchInspectionOutputKind,
   type SearchInspectionLogicalStage,
   type SearchInspectionOutputProvenance,
-} from "@/gen/ts/open_splunk/v1/search_inspection_api";
+} from "@/gen/ts/open_splunk/search_inspection_api";
 import {
   KnowledgeObjectType,
   KnowledgeSearchStage,
   type KnowledgeProvenance,
   type KnowledgeSnapshotObjectSummary,
-} from "@/gen/ts/open_splunk/v1/knowledge";
+} from "@/gen/ts/open_splunk/knowledge";
 
 import { adaptSearchJobInspection } from "./server-inspection";
 
@@ -137,9 +137,7 @@ function addKnowledge(
       tenantCatalogRevision: maximumCatalogRevision,
       tenantCatalogStateToken: new Uint8Array(32).fill(0x24),
       objectCount: count,
-      compilerCompatibilityVersion: "open-splunk-v0.1",
       lookupAssetCount: 0,
-      lookupAssetCountUnknown: false,
     },
     objects: Array.from(
       { length: Math.min(count, 64) },
@@ -171,9 +169,7 @@ function addExtraction(response: InspectSearchJobResponse): InspectSearchJobResp
       tenantCatalogRevision: 1n,
       tenantCatalogStateToken: new Uint8Array(32).fill(0xbb),
       objectCount: 1,
-      compilerCompatibilityVersion: "compiler-v1",
       lookupAssetCount: 0,
-      lookupAssetCountUnknown: false,
     },
     objects: [redactedSummary(0, extractionType, extractionStage)],
     objectsTruncated: false,
@@ -199,9 +195,7 @@ function addJsonExtraction(response: InspectSearchJobResponse): InspectSearchJob
       tenantCatalogRevision: 2n,
       tenantCatalogStateToken: new Uint8Array(32).fill(0xdd),
       objectCount: 1,
-      compilerCompatibilityVersion: "compiler-json-v1",
       lookupAssetCount: 0,
-      lookupAssetCountUnknown: false,
     },
     objects: [redactedSummary(0, extractionType, extractionStage)],
     objectsTruncated: false,
@@ -229,9 +223,7 @@ function addLookup(
       tenantCatalogRevision: 3n,
       tenantCatalogStateToken: new Uint8Array(32).fill(0xff),
       objectCount: 0,
-      compilerCompatibilityVersion: "open-splunk-v0.4",
       lookupAssetCount: 1,
-      lookupAssetCountUnknown: false,
     },
     objects: [],
     objectsTruncated: false,
@@ -331,9 +323,7 @@ test("absent and enabled-empty Knowledge authority stay distinct", () => {
       tenantCatalogRevision: maximumCatalogRevision,
       tenantCatalogStateToken: new Uint8Array(32).fill(0x34),
       objectCount: 0,
-      compilerCompatibilityVersion: "x".repeat(128),
       lookupAssetCount: 0,
-      lookupAssetCountUnknown: false,
     },
     objects: [],
     objectsTruncated: false,
@@ -382,7 +372,7 @@ test("explicit and automatic lookup stages retain only logical fields", () => {
   }
 });
 
-test("all v0.3 authored operators remain inspectable", () => {
+test("all authored operators remain inspectable", () => {
   for (const operator of [
     "RegexFilter",
     "Reverse",
@@ -431,10 +421,6 @@ test("automatic lookup stage is unique at the generated prefix boundary", () => 
 });
 
 test("lookup summary count is exact, bounded, and identity-redacted", () => {
-  const unknown = addLookup(baseResponse());
-  unknown.knowledgeSnapshot!.ref!.lookupAssetCountUnknown = true;
-  assertInvalid(unknown);
-
   const overflow = addLookup(baseResponse());
   overflow.knowledgeSnapshot!.ref!.lookupAssetCount = 17;
   assertInvalid(overflow);
@@ -675,56 +661,18 @@ test("cumulative field occurrences and logical strings use global byte budgets",
   assertInvalid(stringOverflow);
 });
 
-test("reference commitments, revision, count, and compiler canonicality fail closed", () => {
+test("reference commitments, revision, and count fail closed", () => {
   const mutations: Array<(response: InspectSearchJobResponse) => void> = [
     (response) => { response.knowledgeSnapshot!.ref!.snapshotSha256 = new Uint8Array(31); },
     (response) => { response.knowledgeSnapshot!.ref!.tenantCatalogStateToken = new Uint8Array(31); },
     (response) => { response.knowledgeSnapshot!.ref!.tenantCatalogRevision = maximumCatalogRevision + 1n; },
     (response) => { response.knowledgeSnapshot!.ref!.objectCount = 257; },
-    (response) => { response.knowledgeSnapshot!.ref!.compilerCompatibilityVersion = " x"; },
-    (response) => { response.knowledgeSnapshot!.ref!.compilerCompatibilityVersion = "x\u0000"; },
-    (response) => { response.knowledgeSnapshot!.ref!.compilerCompatibilityVersion = "x".repeat(129); },
   ];
   for (const mutate of mutations) {
     const response = addKnowledge(baseResponse(), 1);
     mutate(response);
     assertInvalid(response);
   }
-  for (const edge of [
-    " ",
-    "\t",
-    "\n",
-    "\v",
-    "\f",
-    "\r",
-    "\u00a0",
-    "\u1680",
-    "\u2000",
-    "\u202f",
-    "\u205f",
-    "\u3000",
-  ]) {
-    for (const compiler of [`${edge}compiler`, `compiler${edge}`]) {
-      const response = addKnowledge(baseResponse(), 1);
-      response.knowledgeSnapshot!.ref!.compilerCompatibilityVersion = compiler;
-      assertInvalid(response);
-    }
-  }
-  for (const compiler of ["compiler\u007f", "compiler\u0085", "compiler\ud800"]) {
-    const response = addKnowledge(baseResponse(), 1);
-    response.knowledgeSnapshot!.ref!.compilerCompatibilityVersion = compiler;
-    assertInvalid(response);
-  }
-
-  const byteOrderMark = addKnowledge(baseResponse(), 1);
-  byteOrderMark.knowledgeSnapshot!.ref!.compilerCompatibilityVersion = "\ufeffcompiler";
-  const accepted = adaptSearchJobInspection(byteOrderMark, jobId, true);
-  assert.equal(
-    accepted.knowledge?.state === "enabled"
-      ? accepted.knowledge.compilerCompatibilityVersion
-      : null,
-    "\ufeffcompiler",
-  );
 });
 
 test("feature-off still validates non-nested logical structure without reading provenance", () => {
@@ -821,15 +769,12 @@ test("malicious display primitives remain inert data and no Knowledge identity i
     outputField: malicious,
     provenance: response.logicalPlan!.stages[1]!.operatorProvenance[0],
   }];
-  response.knowledgeSnapshot!.ref!.compilerCompatibilityVersion = "<script>secret()</script>";
   const view = adaptSearchJobInspection(response, jobId, true);
   assert.equal(view.logicalPlan.stages[1]!.outputFields[0], malicious);
   assert.equal(view.knowledge?.state, "enabled");
   if (view.knowledge?.state !== "enabled") assert.fail("Knowledge was not enabled");
-  assert.equal(view.knowledge.compilerCompatibilityVersion, "<script>secret()</script>");
   const keys = Object.keys(view.knowledge).toSorted();
   assert.deepEqual(keys, [
-    "compilerCompatibilityVersion",
     "digestSha256",
     "lookupAssetCount",
     "objectCount",
@@ -846,7 +791,6 @@ test("nonempty Knowledge adaptation is detached from every decoded container", (
   const snapshotView = view.knowledge;
   if (snapshotView?.state !== "enabled") assert.fail("Knowledge was not enabled");
   const digest = snapshotView.digestSha256;
-  const compiler = snapshotView.compilerCompatibilityVersion;
   const summaryObject = { ...snapshotView.objects[0]! };
   const operatorObject = { ...view.logicalPlan.stages[1]!.operatorProvenance[0]! };
   const outputObject = {
@@ -856,7 +800,6 @@ test("nonempty Knowledge adaptation is detached from every decoded container", (
 
   response.knowledgeSnapshot!.ref!.snapshotSha256.fill(0);
   response.knowledgeSnapshot!.ref!.tenantCatalogStateToken.fill(0);
-  response.knowledgeSnapshot!.ref!.compilerCompatibilityVersion = "changed";
   response.knowledgeSnapshot!.objects[0]!.disclosure = undefined;
   const operatorSource = response.logicalPlan!.stages[1]!.operatorProvenance[0]!.source;
   if (operatorSource?.$case === "redactedObject") {
@@ -865,7 +808,6 @@ test("nonempty Knowledge adaptation is detached from every decoded container", (
   response.logicalPlan!.stages[1]!.outputProvenance[0]!.outputField = "changed";
 
   assert.equal(snapshotView.digestSha256, digest);
-  assert.equal(snapshotView.compilerCompatibilityVersion, compiler);
   assert.deepEqual(snapshotView.objects[0], summaryObject);
   assert.deepEqual(view.logicalPlan.stages[1]!.operatorProvenance[0], operatorObject);
   assert.deepEqual(view.logicalPlan.stages[1]!.outputProvenance[0], outputObject);

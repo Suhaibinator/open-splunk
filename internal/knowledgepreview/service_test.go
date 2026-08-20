@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -219,26 +219,26 @@ func waitForCompletedPreviewJob(
 	t.Fatal("timed out waiting for retained preview job")
 }
 
-func invalidPreviewRequest() *opensplunkv1.PreviewKnowledgeObjectRequest {
-	return &opensplunkv1.PreviewKnowledgeObjectRequest{
+func invalidPreviewRequest() *opensplunk.PreviewKnowledgeObjectRequest {
+	return &opensplunk.PreviewKnowledgeObjectRequest{
 		RetainedSearchJobId: previewTestJob,
-		Definition: &opensplunkv1.KnowledgeObjectDefinition{
+		Definition: &opensplunk.KnowledgeObjectDefinition{
 			AppId: previewTestApp, Name: "invalid-preview",
-			SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+			SharingScope: opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 		},
 	}
 }
 
-func validAliasPreviewRequest() *opensplunkv1.PreviewKnowledgeObjectRequest {
-	return &opensplunkv1.PreviewKnowledgeObjectRequest{
+func validAliasPreviewRequest() *opensplunk.PreviewKnowledgeObjectRequest {
+	return &opensplunk.PreviewKnowledgeObjectRequest{
 		RetainedSearchJobId: previewTestJob,
-		Definition: &opensplunkv1.KnowledgeObjectDefinition{
+		Definition: &opensplunk.KnowledgeObjectDefinition{
 			AppId: previewTestApp, Name: "preview-alias",
-			SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
-			Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{
-				FieldAlias: &opensplunkv1.FieldAliasDefinition{
+			SharingScope: opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
+			Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{
+				FieldAlias: &opensplunk.FieldAliasDefinition{
 					SourceField: "_raw", DestinationField: "preview_value",
-					OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+					OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
 				},
 			},
 		},
@@ -501,26 +501,26 @@ func TestPreviewRejectsCurrentCatalogDependencyAbsentFromRetainedSnapshot(t *tes
 	created, err := fixture.writer.Create(
 		actorContext,
 		fixture.scope.Write,
-		&opensplunkv1.CreateKnowledgeObjectRequest{
-			Definition: &opensplunkv1.KnowledgeObjectDefinition{
+		&opensplunk.CreateKnowledgeObjectRequest{
+			Definition: &opensplunk.KnowledgeObjectDefinition{
 				AppId: previewTestApp, Name: "late-extraction-target",
-				SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
-				Selector: &opensplunkv1.KnowledgeSelector{IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{
+				SharingScope: opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
+				Selector: &opensplunk.KnowledgeSelector{IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{{
 					Value: "main",
 				}}},
-				Body: &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
-					FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
+				Body: &opensplunk.KnowledgeObjectDefinition_FieldExtraction{
+					FieldExtraction: &opensplunk.FieldExtractionDefinition{
 						InputField:        "_raw",
-						OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
-						Extraction: &opensplunkv1.FieldExtractionDefinition_Json{
-							Json: &opensplunkv1.JsonFieldExtractionDefinition{
+						OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+						Extraction: &opensplunk.FieldExtractionDefinition_Json{
+							Json: &opensplunk.JsonFieldExtractionDefinition{
 								Path: "payload.value", OutputField: "late_generated_field",
 							},
 						},
 					},
 				},
 			},
-			InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
+			InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
 			ClientRequestId: "preview-create-target-0001",
 		},
 	)
@@ -529,7 +529,7 @@ func TestPreviewRejectsCurrentCatalogDependencyAbsentFromRetainedSnapshot(t *tes
 	}
 	request := validAliasPreviewRequest()
 	request.Definition.Name = "depends-on-late-target"
-	request.Definition.Selector = &opensplunkv1.KnowledgeSelector{IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{
+	request.Definition.Selector = &opensplunk.KnowledgeSelector{IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{{
 		Value: "main",
 	}}}
 	request.Definition.GetFieldAlias().SourceField = "late_generated_field"
@@ -561,12 +561,12 @@ func TestSealResponseRejectsUnknownSchemaAndEnforcesExactResponseCap(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	schema := &opensplunkv1.ResultSchema{
+	schema := &opensplunk.ResultSchema{
 		SchemaId: previewTestJob, Revision: 1,
-		ResultKind: opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
-		Columns: []*opensplunkv1.ResultColumn{{
+		ResultKind: opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS,
+		Columns: []*opensplunk.ResultColumn{{
 			FieldName: "status", DisplayName: "status",
-			ValueType: opensplunkv1.ValueType_VALUE_TYPE_STRING,
+			ValueType: opensplunk.ValueType_VALUE_TYPE_STRING,
 		}},
 	}
 	unknown := cloneSchema(schema)
@@ -588,14 +588,14 @@ func TestSealResponseRejectsUnknownSchemaAndEnforcesExactResponseCap(t *testing.
 		t.Fatal(err)
 	}
 	responseSize := func(valueBytes int) int {
-		candidate := &opensplunkv1.PreviewKnowledgeObjectResponse{
+		candidate := &opensplunk.PreviewKnowledgeObjectResponse{
 			Validation:   validation.GetResult(),
 			BeforeSchema: schema,
 			AfterSchema:  schema,
-			BeforeRows: []*opensplunkv1.ResultRow{{
+			BeforeRows: []*opensplunk.ResultRow{{
 				RowId: previewTestJob + ":0",
-				Cells: []*opensplunkv1.TypedValue{{
-					Kind: &opensplunkv1.TypedValue_StringValue{
+				Cells: []*opensplunk.TypedValue{{
+					Kind: &opensplunk.TypedValue_StringValue{
 						StringValue: strings.Repeat("x", valueBytes),
 					},
 				}},
@@ -620,11 +620,11 @@ func TestSealResponseRejectsUnknownSchemaAndEnforcesExactResponseCap(t *testing.
 	if got := responseSize(low); got != MaximumResponseBytes {
 		t.Fatalf("could not construct exact response cap: size(%d) = %d", low, got)
 	}
-	exactRow := func(valueBytes int) *opensplunkv1.ResultRow {
-		return &opensplunkv1.ResultRow{
+	exactRow := func(valueBytes int) *opensplunk.ResultRow {
+		return &opensplunk.ResultRow{
 			RowId: previewTestJob + ":0",
-			Cells: []*opensplunkv1.TypedValue{{
-				Kind: &opensplunkv1.TypedValue_StringValue{
+			Cells: []*opensplunk.TypedValue{{
+				Kind: &opensplunk.TypedValue_StringValue{
 					StringValue: strings.Repeat("x", valueBytes),
 				},
 			}},
@@ -632,7 +632,7 @@ func TestSealResponseRejectsUnknownSchemaAndEnforcesExactResponseCap(t *testing.
 	}
 	exact, err := SealResponse(context.Background(), ResponseInput{
 		Validation: sealedValidation, BeforeSchema: schema, AfterSchema: schema,
-		BeforeRows: []*opensplunkv1.ResultRow{exactRow(low)},
+		BeforeRows: []*opensplunk.ResultRow{exactRow(low)},
 		JobID:      previewTestJob, MaximumRows: 1,
 	})
 	if err != nil {
@@ -646,7 +646,7 @@ func TestSealResponseRejectsUnknownSchemaAndEnforcesExactResponseCap(t *testing.
 	}
 	if _, err := SealResponse(context.Background(), ResponseInput{
 		Validation: sealedValidation, BeforeSchema: schema, AfterSchema: schema,
-		BeforeRows: []*opensplunkv1.ResultRow{exactRow(low + 1)},
+		BeforeRows: []*opensplunk.ResultRow{exactRow(low + 1)},
 		JobID:      previewTestJob, MaximumRows: 1,
 	}); !errors.Is(err, ErrResponseTooLarge) {
 		t.Fatalf("SealResponse(one over cap) error = %v, want ErrResponseTooLarge", err)
@@ -682,7 +682,7 @@ func TestProjectionSinkPreflightRejectsOversizedValuesBeforeConversion(t *testin
 					searchjobs.Schema,
 					[]searchjobs.ResultRow,
 					int,
-				) ([]*opensplunkv1.ResultRow, error) {
+				) ([]*opensplunk.ResultRow, error) {
 					conversionCalls.Add(1)
 					return nil, errors.New("conversion must not run")
 				},

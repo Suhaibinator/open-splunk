@@ -1,6 +1,7 @@
 package hec
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -25,7 +26,11 @@ func DecodeAcknowledgmentRequest(source io.Reader, limits Limits) (Acknowledgmen
 	}
 	maximumBody := min(limits.MaximumAcknowledgmentBodyBytes, limits.MaximumDecompressedBodyBytes)
 	limited := newHardLimitReader(source, maximumBody, ErrorDecompressedBodyTooLarge)
-	decoder := json.NewDecoder(newUTF8ValidatingReader(limited))
+	body, err := io.ReadAll(newUTF8ValidatingReader(limited))
+	if err != nil {
+		return AcknowledgmentRequest{}, wrapProtocolError(ErrorInvalidDataFormat, err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.UseNumber()
 
 	opening, err := decoder.Token()

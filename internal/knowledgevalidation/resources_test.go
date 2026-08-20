@@ -6,16 +6,16 @@ import (
 	"fmt"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 )
 
-func validationDependency(id string, version uint64) *opensplunkv1.KnowledgeValidationDependency {
-	return &opensplunkv1.KnowledgeValidationDependency{
-		Target: &opensplunkv1.KnowledgeManagementObjectVersionIdentity{
+func validationDependency(id string, version uint64) *opensplunk.KnowledgeValidationDependency {
+	return &opensplunk.KnowledgeValidationDependency{
+		Target: &opensplunk.KnowledgeManagementObjectVersionIdentity{
 			KnowledgeObjectId: id,
 			Version:           version,
 		},
-		Role: opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
+		Role: opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
 	}
 }
 
@@ -23,7 +23,7 @@ func TestActiveDependenciesSortAndDriveResourceFormulas(t *testing.T) {
 	candidate := mustActiveCandidate(t, aliasDefinition("alias-dependencies"))
 	publication := ActivePublication{
 		Candidate: ExactIdentity{KnowledgeObjectID: "candidate-a", Version: 9},
-		Dependencies: []*opensplunkv1.KnowledgeValidationDependency{
+		Dependencies: []*opensplunk.KnowledgeValidationDependency{
 			validationDependency("target-b", 2),
 			validationDependency("target-a", 3),
 		},
@@ -65,7 +65,7 @@ func TestActiveDependenciesRejectDuplicatesAndSelfByObjectID(t *testing.T) {
 			name: "duplicate",
 			publication: ActivePublication{
 				Candidate: ExactIdentity{KnowledgeObjectID: "candidate-a", Version: 1},
-				Dependencies: []*opensplunkv1.KnowledgeValidationDependency{
+				Dependencies: []*opensplunk.KnowledgeValidationDependency{
 					validationDependency("target-a", 1),
 					validationDependency("target-a", 1),
 				},
@@ -75,23 +75,23 @@ func TestActiveDependenciesRejectDuplicatesAndSelfByObjectID(t *testing.T) {
 			name: "self same version",
 			publication: ActivePublication{
 				Candidate:    ExactIdentity{KnowledgeObjectID: "candidate-a", Version: 1},
-				Dependencies: []*opensplunkv1.KnowledgeValidationDependency{validationDependency("candidate-a", 1)},
+				Dependencies: []*opensplunk.KnowledgeValidationDependency{validationDependency("candidate-a", 1)},
 			},
 		},
 		{
 			name: "self different version",
 			publication: ActivePublication{
 				Candidate:    ExactIdentity{KnowledgeObjectID: "candidate-a", Version: 1},
-				Dependencies: []*opensplunkv1.KnowledgeValidationDependency{validationDependency("candidate-a", 99)},
+				Dependencies: []*opensplunk.KnowledgeValidationDependency{validationDependency("candidate-a", 99)},
 			},
 		},
 		{
 			name: "wrong role",
 			publication: ActivePublication{
 				Candidate: ExactIdentity{KnowledgeObjectID: "candidate-a", Version: 1},
-				Dependencies: []*opensplunkv1.KnowledgeValidationDependency{{
+				Dependencies: []*opensplunk.KnowledgeValidationDependency{{
 					Target: validationDependency("target-a", 1).Target,
-					Role:   opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_LOOKUP_ASSET,
+					Role:   opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_LOOKUP_ASSET,
 				}},
 			},
 		},
@@ -99,21 +99,21 @@ func TestActiveDependenciesRejectDuplicatesAndSelfByObjectID(t *testing.T) {
 			name: "zero target version",
 			publication: ActivePublication{
 				Candidate:    ExactIdentity{KnowledgeObjectID: "candidate-a", Version: 1},
-				Dependencies: []*opensplunkv1.KnowledgeValidationDependency{validationDependency("target-a", 0)},
+				Dependencies: []*opensplunk.KnowledgeValidationDependency{validationDependency("target-a", 0)},
 			},
 		},
 		{
 			name: "dependency unknown field",
 			publication: ActivePublication{
 				Candidate:    ExactIdentity{KnowledgeObjectID: "candidate-a", Version: 1},
-				Dependencies: []*opensplunkv1.KnowledgeValidationDependency{unknownDependency},
+				Dependencies: []*opensplunk.KnowledgeValidationDependency{unknownDependency},
 			},
 		},
 		{
 			name: "target unknown field",
 			publication: ActivePublication{
 				Candidate:    ExactIdentity{KnowledgeObjectID: "candidate-a", Version: 1},
-				Dependencies: []*opensplunkv1.KnowledgeValidationDependency{unknownTarget},
+				Dependencies: []*opensplunk.KnowledgeValidationDependency{unknownTarget},
 			},
 		},
 	}
@@ -128,7 +128,7 @@ func TestActiveDependenciesRejectDuplicatesAndSelfByObjectID(t *testing.T) {
 
 func TestActiveDependencyUniqueCap(t *testing.T) {
 	candidate := mustActiveCandidate(t, aliasDefinition("alias-dependency-cap"))
-	dependencies := make([]*opensplunkv1.KnowledgeValidationDependency, MaximumDependencies+1)
+	dependencies := make([]*opensplunk.KnowledgeValidationDependency, MaximumDependencies+1)
 	for index := range dependencies {
 		dependencies[index] = validationDependency(fmt.Sprintf("target-%04d", index), 1)
 	}
@@ -152,13 +152,13 @@ func TestActiveDependencyUniqueCap(t *testing.T) {
 func TestActiveIntrinsicResourceFieldsIncludeAppendedCharges(t *testing.T) {
 	tests := []struct {
 		name       string
-		definition *opensplunkv1.KnowledgeObjectDefinition
-		check      func(*testing.T, *opensplunkv1.KnowledgeResourceEstimate)
+		definition *opensplunk.KnowledgeObjectDefinition
+		check      func(*testing.T, *opensplunk.KnowledgeResourceEstimate)
 	}{
 		{
 			name:       "regex extraction outputs",
 			definition: regexDefinition("regex-resources", "value"),
-			check: func(t *testing.T, resources *opensplunkv1.KnowledgeResourceEstimate) {
+			check: func(t *testing.T, resources *opensplunk.KnowledgeResourceEstimate) {
 				if resources.GetExtractionOutputs() != 1 || resources.GetRegexPrograms() != 1 ||
 					resources.GetEstimatedRegexWorkUnits() == 0 || resources.GetJsonEvaluationWorkUnits() != 0 ||
 					resources.GetScalarPredicates() != 0 {
@@ -169,7 +169,7 @@ func TestActiveIntrinsicResourceFieldsIncludeAppendedCharges(t *testing.T) {
 		{
 			name:       "JSON evaluation work",
 			definition: jsonDefinition("json-resources", "server.name"),
-			check: func(t *testing.T, resources *opensplunkv1.KnowledgeResourceEstimate) {
+			check: func(t *testing.T, resources *opensplunk.KnowledgeResourceEstimate) {
 				if resources.GetExtractionOutputs() != 1 || resources.GetJsonEvaluationWorkUnits() == 0 ||
 					resources.GetRegexPrograms() != 0 || resources.GetScalarPredicates() != 0 {
 					t.Fatalf("JSON resources = %+v", resources)
@@ -179,7 +179,7 @@ func TestActiveIntrinsicResourceFieldsIncludeAppendedCharges(t *testing.T) {
 		{
 			name:       "scalar predicates",
 			definition: calculatedDefinition("calculated-resources", `if(host="api", 1, 0)`),
-			check: func(t *testing.T, resources *opensplunkv1.KnowledgeResourceEstimate) {
+			check: func(t *testing.T, resources *opensplunk.KnowledgeResourceEstimate) {
 				if resources.GetScalarExpressions() != 1 || resources.GetScalarExpressionNodes() == 0 ||
 					resources.GetScalarPredicates() == 0 || resources.GetExtractionOutputs() != 0 ||
 					resources.GetJsonEvaluationWorkUnits() != 0 {

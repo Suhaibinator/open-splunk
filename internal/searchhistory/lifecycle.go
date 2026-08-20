@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -33,14 +33,14 @@ type pendingIndexedEntry struct {
 
 type pendingAttempt struct {
 	scope   AccessScope
-	entry   *opensplunkv1.SearchHistoryEntry
+	entry   *opensplunk.SearchHistoryEntry
 	indexed pendingIndexedEntry
 }
 
 // BeginAttempt durably admits a queued search before asynchronous parsing or
 // execution begins. An exact retry is idempotent; a changed retry cannot
 // rewrite the original search intent.
-func (store *Store) BeginAttempt(ctx context.Context, scope AccessScope, input *opensplunkv1.SearchHistoryEntry) (result *opensplunkv1.SearchHistoryEntry, returnedErr error) {
+func (store *Store) BeginAttempt(ctx context.Context, scope AccessScope, input *opensplunk.SearchHistoryEntry) (result *opensplunk.SearchHistoryEntry, returnedErr error) {
 	if err := validateContext(ctx); err != nil {
 		return nil, err
 	}
@@ -153,18 +153,18 @@ func (store *Store) BeginAttempt(ctx context.Context, scope AccessScope, input *
 }
 
 func cloneKnowledgeSnapshotRef(
-	input *opensplunkv1.KnowledgeSnapshotRef,
-) *opensplunkv1.KnowledgeSnapshotRef {
+	input *opensplunk.KnowledgeSnapshotRef,
+) *opensplunk.KnowledgeSnapshotRef {
 	if input == nil {
 		return nil
 	}
-	return proto.Clone(input).(*opensplunkv1.KnowledgeSnapshotRef)
+	return proto.Clone(input).(*opensplunk.KnowledgeSnapshotRef)
 }
 
 // CompleteAttempt atomically publishes a terminal entry and removes its
 // pending journal row. It also accepts a terminal-only call for compatibility
 // with synchronous callers of Record.
-func (store *Store) CompleteAttempt(ctx context.Context, scope AccessScope, input *opensplunkv1.SearchHistoryEntry) (result *opensplunkv1.SearchHistoryEntry, returnedErr error) {
+func (store *Store) CompleteAttempt(ctx context.Context, scope AccessScope, input *opensplunk.SearchHistoryEntry) (result *opensplunk.SearchHistoryEntry, returnedErr error) {
 	if err := validateContext(ctx); err != nil {
 		return nil, err
 	}
@@ -291,11 +291,11 @@ func (store *Store) RecoverInterrupted(ctx context.Context, scope AccessScope) (
 			}
 			duration = finished.Sub(started)
 		}
-		terminal.FinalState = opensplunkv1.SearchJobState_SEARCH_JOB_STATE_FAILED
+		terminal.FinalState = opensplunk.SearchJobState_SEARCH_JOB_STATE_FAILED
 		terminal.FinishedAt = timestamppb.New(finished)
 		terminal.Duration = durationpb.New(duration)
-		terminal.Failure = &opensplunkv1.SearchFailure{
-			Code:      opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_INTERNAL,
+		terminal.Failure = &opensplunk.SearchFailure{
+			Code:      opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_INTERNAL,
 			Message:   "search interrupted by server restart",
 			Retryable: true,
 		}
@@ -335,7 +335,7 @@ func (store *Store) RecoverInterrupted(ctx context.Context, scope AccessScope) (
 	return recovered, nil
 }
 
-func normalizePendingEntry(input *opensplunkv1.SearchHistoryEntry) (*opensplunkv1.SearchHistoryEntry, pendingIndexedEntry, error) {
+func normalizePendingEntry(input *opensplunk.SearchHistoryEntry) (*opensplunk.SearchHistoryEntry, pendingIndexedEntry, error) {
 	if input == nil {
 		return nil, pendingIndexedEntry{}, invalid("search-history entry is required")
 	}
@@ -348,7 +348,7 @@ func normalizePendingEntry(input *opensplunkv1.SearchHistoryEntry) (*opensplunkv
 	}
 	entry := cloneEntry(input)
 	entry.KnowledgeSnapshot = knowledgeSnapshot
-	if entry.FinalState != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_QUEUED {
+	if entry.FinalState != opensplunk.SearchJobState_SEARCH_JOB_STATE_QUEUED {
 		return nil, pendingIndexedEntry{}, invalid("pending attempt state must be queued")
 	}
 	if entry.FinishedAt != nil || entry.Duration != nil || entry.Failure != nil || len(entry.Warnings) != 0 ||
@@ -360,7 +360,7 @@ func normalizePendingEntry(input *opensplunkv1.SearchHistoryEntry) (*opensplunkv
 	// canceled state. The synthetic finish only brackets an optional started_at;
 	// it is removed before the pending entry is encoded.
 	synthetic := cloneEntry(entry)
-	synthetic.FinalState = opensplunkv1.SearchJobState_SEARCH_JOB_STATE_CANCELED
+	synthetic.FinalState = opensplunk.SearchJobState_SEARCH_JOB_STATE_CANCELED
 	synthetic.FinishedAt = cloneTimestamp(synthetic.CreatedAt)
 	if synthetic.StartedAt != nil && synthetic.StartedAt.CheckValid() == nil &&
 		(synthetic.FinishedAt == nil || synthetic.FinishedAt.CheckValid() != nil || synthetic.StartedAt.AsTime().After(synthetic.FinishedAt.AsTime())) {
@@ -371,7 +371,7 @@ func normalizePendingEntry(input *opensplunkv1.SearchHistoryEntry) (*opensplunkv
 	if err != nil {
 		return nil, pendingIndexedEntry{}, err
 	}
-	normalized.FinalState = opensplunkv1.SearchJobState_SEARCH_JOB_STATE_QUEUED
+	normalized.FinalState = opensplunk.SearchJobState_SEARCH_JOB_STATE_QUEUED
 	normalized.FinishedAt = nil
 	normalized.Duration = nil
 	normalized.Failure = nil
@@ -391,12 +391,12 @@ func normalizePendingEntry(input *opensplunkv1.SearchHistoryEntry) (*opensplunkv
 	return normalized, indexed, nil
 }
 
-func decodePendingEntry(encoded, expectedChecksum []byte) (*opensplunkv1.SearchHistoryEntry, pendingIndexedEntry, error) {
+func decodePendingEntry(encoded, expectedChecksum []byte) (*opensplunk.SearchHistoryEntry, pendingIndexedEntry, error) {
 	checksum := sha256.Sum256(encoded)
 	if len(expectedChecksum) != sha256.Size || !bytes.Equal(checksum[:], expectedChecksum) {
 		return nil, pendingIndexedEntry{}, errors.New("pending search-history entry checksum mismatch")
 	}
-	entry := new(opensplunkv1.SearchHistoryEntry)
+	entry := new(opensplunk.SearchHistoryEntry)
 	if err := (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(encoded, entry); err != nil {
 		return nil, pendingIndexedEntry{}, fmt.Errorf("decode pending search-history entry: %w", err)
 	}
@@ -426,13 +426,12 @@ func pendingAttemptFromRecord(record pendingHistoryRecord) (*pendingAttempt, err
 	return &pendingAttempt{scope: scope, entry: entry, indexed: indexed}, nil
 }
 
-func sameAdmission(pending, terminal *opensplunkv1.SearchHistoryEntry) bool {
+func sameAdmission(pending, terminal *opensplunk.SearchHistoryEntry) bool {
 	return pending.SearchJobId == terminal.SearchJobId &&
 		proto.Equal(pending.Definition, terminal.Definition) &&
 		proto.Equal(pending.Source, terminal.Source) &&
 		proto.Equal(pending.ResolvedTimeRange, terminal.ResolvedTimeRange) &&
 		proto.Equal(pending.KnowledgeSnapshot, terminal.KnowledgeSnapshot) &&
-		pending.CompilerVersion == terminal.CompilerVersion &&
 		proto.Equal(pending.CreatedAt, terminal.CreatedAt)
 }
 

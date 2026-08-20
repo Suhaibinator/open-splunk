@@ -71,9 +71,6 @@ const (
 	// MaximumScopeIndexes is the hard manager-wide ceiling for authorized and
 	// requested index-scope entries retained with one search.
 	MaximumScopeIndexes = 256
-	// MaximumCompilerVersionBytes bounds the immutable compatibility identity
-	// retained with each authored search and projected by public transports.
-	MaximumCompilerVersionBytes = 128
 )
 
 var (
@@ -752,10 +749,6 @@ func (manager *Manager) Create(ctx context.Context, request CreateRequest) (Job,
 	if err != nil || metadataBytes > manager.maxMetadataBytes {
 		return Job{}, ErrCapacity
 	}
-	metadataBytes, err = checkedAdd(metadataBytes, uint64(len(spl.CompatibilityVersion)))
-	if err != nil || metadataBytes > manager.maxMetadataBytes {
-		return Job{}, ErrCapacity
-	}
 	if prepared != nil {
 		metadataBytes, err = checkedAdd(metadataBytes, prepared.metadataBytes)
 		if err != nil || metadataBytes > manager.maxMetadataBytes {
@@ -797,7 +790,6 @@ func (manager *Manager) Create(ctx context.Context, request CreateRequest) (Job,
 			Latest:           request.TimeRange.Latest(),
 			IndexTimeCutoff:  now,
 			VisibilityCutoff: visibilityCutoff,
-			CompilerVersion:  spl.CompatibilityVersion,
 			State:            StateQueued,
 			CreatedAt:        now,
 		},
@@ -1223,13 +1215,6 @@ func canonicalJobMetadataIdentifier(value string, maximumBytes int, allowEmpty b
 		}
 	}
 	return true
-}
-
-// ValidCompilerVersion reports whether value is a non-empty canonical
-// authored-SPL compatibility identity. Boundaries that retain an empty value
-// solely for legacy records must handle that exception explicitly.
-func ValidCompilerVersion(value string) bool {
-	return canonicalJobMetadataIdentifier(value, MaximumCompilerVersionBytes, false)
 }
 
 func validAccessScope(access AccessScope) bool {

@@ -17,7 +17,7 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/chcol"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
@@ -45,7 +45,7 @@ type binEdgeNumericCase struct {
 	text string
 	// number is the identical value stored as a real number, or nil when the
 	// spelling has no numeric twin (NaN spellings, overflowing exponents, ...).
-	number *opensplunkv1.TypedValue
+	number *opensplunk.TypedValue
 
 	wantType  string
 	wantValue string
@@ -419,8 +419,8 @@ func TestBinEdgeNumericDynamicStringsAgainstClickHouse(t *testing.T) {
 	indexTime := time.Date(2026, 7, 21, 3, 4, 6, 987654321, time.UTC)
 	cases := binEdgeNumericCases()
 
-	textFields := make([]*opensplunkv1.TypedObjectField, 0, len(cases)+2)
-	numberFields := make([]*opensplunkv1.TypedObjectField, 0, len(cases)+2)
+	textFields := make([]*opensplunk.TypedObjectField, 0, len(cases)+2)
+	numberFields := make([]*opensplunk.TypedObjectField, 0, len(cases)+2)
 	seenText := make(map[string]struct{}, len(cases))
 	seenNumber := make(map[string]struct{}, len(cases))
 	for _, testCase := range cases {
@@ -1457,7 +1457,7 @@ func binEdgeInsertRawDecimalEnvelopes(
 			fixture.eventTime.UTC(),
 			fixture.indexTime.UTC().Truncate(time.Millisecond),
 			nil,
-			uint8(opensplunkv1.EventTimeSource_EVENT_TIME_SOURCE_PARSED),
+			uint8(opensplunk.EventTimeSource_EVENT_TIME_SOURCE_PARSED),
 			"poison-host",
 			"poison-source",
 			"poison",
@@ -1466,7 +1466,7 @@ func binEdgeInsertRawDecimalEnvelopes(
 			nil,
 			nil,
 			[]byte(fixture.eventID),
-			uint8(opensplunkv1.RawEncoding_RAW_ENCODING_UTF8),
+			uint8(opensplunk.RawEncoding_RAW_ENCODING_UTF8),
 			nil,
 			nil,
 			document,
@@ -1544,7 +1544,7 @@ func binEdgeNumericBucket(
 	return gotType, gotValue
 }
 
-func binEdgeNumericEvent(id string, fields ...*opensplunkv1.TypedObjectField) *ingest.StoredEvent {
+func binEdgeNumericEvent(id string, fields ...*opensplunk.TypedObjectField) *ingest.StoredEvent {
 	event := testStoredEvent(id, "compiler", time.Date(2026, 7, 21, 3, 4, 6, 987654321, time.UTC))
 	event.Event.Host = "api"
 	event.Event.Raw = []byte("bin edge numeric fixture")

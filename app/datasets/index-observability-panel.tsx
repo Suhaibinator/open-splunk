@@ -2,9 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { IndexStats } from "@/gen/ts/open_splunk/v1/index";
-import type { FieldProfile } from "@/gen/ts/open_splunk/v1/result";
-import { valueTypeToJSON } from "@/gen/ts/open_splunk/v1/value";
+import type { IndexStats } from "@/gen/ts/open_splunk/index";
+import type { FieldProfile } from "@/gen/ts/open_splunk/result";
+import { valueTypeToJSON } from "@/gen/ts/open_splunk/value";
 import {
   isOptionalRouteUnavailable,
   type BrowserIndexModel,

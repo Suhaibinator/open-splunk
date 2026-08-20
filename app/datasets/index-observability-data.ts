@@ -1,5 +1,5 @@
-import type { ListIndexFieldsResponse } from "@/gen/ts/open_splunk/v1/index_api";
-import type { FieldProfile } from "@/gen/ts/open_splunk/v1/result";
+import type { ListIndexFieldsResponse } from "@/gen/ts/open_splunk/index_api";
+import type { FieldProfile } from "@/gen/ts/open_splunk/result";
 
 export interface IndexFieldSnapshot {
   fields: FieldProfile[];

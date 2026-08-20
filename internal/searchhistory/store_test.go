@@ -11,9 +11,8 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
-	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -40,41 +39,40 @@ func openTestStore(t *testing.T, options Options) (*control.DB, *Store) {
 	return database, store
 }
 
-func historyEntry(id, spl, app string, state opensplunkv1.SearchJobState, created time.Time) *opensplunkv1.SearchHistoryEntry {
+func historyEntry(id, spl, app string, state opensplunk.SearchJobState, created time.Time) *opensplunk.SearchHistoryEntry {
 	appID := app
 	finished := created.Add(5 * time.Second)
-	entry := &opensplunkv1.SearchHistoryEntry{
+	entry := &opensplunk.SearchHistoryEntry{
 		SearchJobId: id,
-		Definition: &opensplunkv1.SearchDefinition{
+		Definition: &opensplunk.SearchDefinition{
 			Spl:        spl,
 			AppId:      &appID,
 			IndexScope: []string{"main"},
-			TimeRange: &opensplunkv1.TimeRangeSpec{
+			TimeRange: &opensplunk.TimeRangeSpec{
 				Earliest: new("-15m"),
 				Latest:   new("now"),
 			},
 		},
-		Source:              &opensplunkv1.SearchJobSource{Origin: opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_AD_HOC},
+		Source:              &opensplunk.SearchJobSource{Origin: opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_AD_HOC},
 		EffectiveIndexScope: []string{"main"},
-		ResolvedTimeRange: &opensplunkv1.ResolvedTimeRange{
+		ResolvedTimeRange: &opensplunk.ResolvedTimeRange{
 			Earliest: timestamppb.New(created.Add(-15 * time.Minute)),
 			Latest:   timestamppb.New(created),
 			Timezone: "UTC",
 		},
-		FinalState:      state,
-		MatchedEvents:   12,
-		ScannedRows:     20,
-		ScannedBytes:    2_000,
-		ProducedRows:    12,
-		Duration:        durationpb.New(5 * time.Second),
-		CompilerVersion: "0.1",
-		CreatedAt:       timestamppb.New(created),
-		StartedAt:       timestamppb.New(created.Add(time.Second)),
-		FinishedAt:      timestamppb.New(finished),
+		FinalState:    state,
+		MatchedEvents: 12,
+		ScannedRows:   20,
+		ScannedBytes:  2_000,
+		ProducedRows:  12,
+		Duration:      durationpb.New(5 * time.Second),
+		CreatedAt:     timestamppb.New(created),
+		StartedAt:     timestamppb.New(created.Add(time.Second)),
+		FinishedAt:    timestamppb.New(finished),
 	}
-	if state == opensplunkv1.SearchJobState_SEARCH_JOB_STATE_FAILED {
-		entry.Failure = &opensplunkv1.SearchFailure{
-			Code:    opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_EXECUTION,
+	if state == opensplunk.SearchJobState_SEARCH_JOB_STATE_FAILED {
+		entry.Failure = &opensplunk.SearchFailure{
+			Code:    opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_EXECUTION,
 			Message: "search execution failed",
 		}
 	}
@@ -113,7 +111,7 @@ func TestRecordGetIsImmutableDeterministicScopedAndDetached(t *testing.T) {
 	ctx := context.Background()
 	scope := AccessScope{TenantID: " tenant ", OwnerID: " owner "}
 	created := time.Date(2026, time.July, 22, 12, 0, 0, 123_456_789, time.UTC)
-	input := historyEntry("job-1", " index=main | head 10 ", " search ", opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED, created)
+	input := historyEntry("job-1", " index=main | head 10 ", " search ", opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED, created)
 	recorded, err := store.Record(ctx, scope, input)
 	if err != nil {
 		t.Fatalf("Record() error = %v", err)
@@ -160,7 +158,7 @@ func TestRecordGetIsImmutableDeterministicScopedAndDetached(t *testing.T) {
 	if _, err := store.Record(ctx, scope, got); err != nil {
 		t.Fatalf("idempotent Record() error = %v", err)
 	}
-	changed := proto.Clone(got).(*opensplunkv1.SearchHistoryEntry)
+	changed := proto.Clone(got).(*opensplunk.SearchHistoryEntry)
 	changed.MatchedEvents++
 	if _, err := store.Record(ctx, scope, changed); !errors.Is(err, control.ErrVersionConflict) {
 		t.Fatalf("changed Record() error = %v, want ErrVersionConflict", err)
@@ -172,45 +170,42 @@ func TestRecordGetIsImmutableDeterministicScopedAndDetached(t *testing.T) {
 
 func TestRecordValidationRejectsUnsafeOrIncompleteEntries(t *testing.T) {
 	_, store := openTestStore(t, Options{})
-	valid := historyEntry("job", "index=main", "search", opensplunkv1.SearchJobState_SEARCH_JOB_STATE_FAILED, time.Now().UTC())
+	valid := historyEntry("job", "index=main", "search", opensplunk.SearchJobState_SEARCH_JOB_STATE_FAILED, time.Now().UTC())
 	tests := []struct {
 		name   string
-		mutate func(*opensplunkv1.SearchHistoryEntry)
+		mutate func(*opensplunk.SearchHistoryEntry)
 	}{
-		{name: "missing definition", mutate: func(entry *opensplunkv1.SearchHistoryEntry) { entry.Definition = nil }},
-		{name: "empty spl", mutate: func(entry *opensplunkv1.SearchHistoryEntry) { entry.Definition.Spl = " \n" }},
-		{name: "nonterminal", mutate: func(entry *opensplunkv1.SearchHistoryEntry) {
-			entry.FinalState = opensplunkv1.SearchJobState_SEARCH_JOB_STATE_RUNNING
+		{name: "missing definition", mutate: func(entry *opensplunk.SearchHistoryEntry) { entry.Definition = nil }},
+		{name: "empty spl", mutate: func(entry *opensplunk.SearchHistoryEntry) { entry.Definition.Spl = " \n" }},
+		{name: "nonterminal", mutate: func(entry *opensplunk.SearchHistoryEntry) {
+			entry.FinalState = opensplunk.SearchJobState_SEARCH_JOB_STATE_RUNNING
 		}},
-		{name: "bad resolved range", mutate: func(entry *opensplunkv1.SearchHistoryEntry) {
+		{name: "bad resolved range", mutate: func(entry *opensplunk.SearchHistoryEntry) {
 			entry.ResolvedTimeRange.Latest = entry.ResolvedTimeRange.Earliest
 		}},
-		{name: "negative duration", mutate: func(entry *opensplunkv1.SearchHistoryEntry) { entry.Duration = durationpb.New(-time.Second) }},
-		{name: "duration overflow", mutate: func(entry *opensplunkv1.SearchHistoryEntry) {
+		{name: "negative duration", mutate: func(entry *opensplunk.SearchHistoryEntry) { entry.Duration = durationpb.New(-time.Second) }},
+		{name: "duration overflow", mutate: func(entry *opensplunk.SearchHistoryEntry) {
 			entry.Duration = &durationpb.Duration{Seconds: int64(^uint64(0)>>1)/int64(time.Second) + 1}
 		}},
-		{name: "finished before created", mutate: func(entry *opensplunkv1.SearchHistoryEntry) {
+		{name: "finished before created", mutate: func(entry *opensplunk.SearchHistoryEntry) {
 			entry.FinishedAt = timestamppb.New(entry.CreatedAt.AsTime().Add(-time.Second))
 		}},
-		{name: "source ID mismatch", mutate: func(entry *opensplunkv1.SearchHistoryEntry) {
+		{name: "source ID mismatch", mutate: func(entry *opensplunk.SearchHistoryEntry) {
 			entry.Source.SavedSearchId = new("saved-unrelated")
 		}},
-		{name: "too many indexes", mutate: func(entry *opensplunkv1.SearchHistoryEntry) {
+		{name: "too many indexes", mutate: func(entry *opensplunk.SearchHistoryEntry) {
 			entry.EffectiveIndexScope = make([]string, maximumIndexScope+1)
 		}},
-		{name: "noncanonical compiler version", mutate: func(entry *opensplunkv1.SearchHistoryEntry) {
-			entry.CompilerVersion = " " + spl.CompatibilityVersion + " "
-		}},
-		{name: "failure secret-sized", mutate: func(entry *opensplunkv1.SearchHistoryEntry) {
-			entry.Failure = &opensplunkv1.SearchFailure{
-				Code:    opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_EXECUTION,
+		{name: "failure secret-sized", mutate: func(entry *opensplunk.SearchHistoryEntry) {
+			entry.Failure = &opensplunk.SearchFailure{
+				Code:    opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_EXECUTION,
 				Message: string(make([]byte, maximumFailureMessageBytes+1)),
 			}
 		}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			entry := proto.Clone(valid).(*opensplunkv1.SearchHistoryEntry)
+			entry := proto.Clone(valid).(*opensplunk.SearchHistoryEntry)
 			test.mutate(entry)
 			if _, err := store.Record(context.Background(), AccessScope{TenantID: "tenant", OwnerID: "owner"}, entry); !errors.Is(err, control.ErrInvalidArgument) {
 				t.Fatalf("Record() error = %v, want ErrInvalidArgument", err)
@@ -225,16 +220,16 @@ func TestRecordValidationRejectsUnsafeOrIncompleteEntries(t *testing.T) {
 func TestRecordRejectsUnknownProtobufFieldsRecursively(t *testing.T) {
 	_, store := openTestStore(t, Options{})
 	scope := AccessScope{TenantID: "tenant", OwnerID: "owner"}
-	for name, mutate := range map[string]func(*opensplunkv1.SearchHistoryEntry){
-		"root": func(entry *opensplunkv1.SearchHistoryEntry) {
+	for name, mutate := range map[string]func(*opensplunk.SearchHistoryEntry){
+		"root": func(entry *opensplunk.SearchHistoryEntry) {
 			entry.ProtoReflect().SetUnknown([]byte{0xa0, 0x06, 0x01})
 		},
-		"nested": func(entry *opensplunkv1.SearchHistoryEntry) {
+		"nested": func(entry *opensplunk.SearchHistoryEntry) {
 			entry.Definition.ProtoReflect().SetUnknown([]byte{0xa0, 0x06, 0x01})
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			entry := historyEntry("unknown-"+name, "index=main", "search", opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED, time.Now().UTC())
+			entry := historyEntry("unknown-"+name, "index=main", "search", opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED, time.Now().UTC())
 			mutate(entry)
 			if _, err := store.Record(context.Background(), scope, entry); !errors.Is(err, control.ErrInvalidArgument) {
 				t.Fatalf("Record() error = %v, want ErrInvalidArgument", err)
@@ -251,7 +246,7 @@ func TestIdleOwnerHistoryIsPrunedOnRead(t *testing.T) {
 	scope := AccessScope{TenantID: "tenant", OwnerID: "owner"}
 	if _, err := store.Record(context.Background(), scope, historyEntry(
 		"idle", "  index=main | head 1\n", "search",
-		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED, now,
+		opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED, now,
 	)); err != nil {
 		t.Fatal(err)
 	}
@@ -287,14 +282,14 @@ func TestListKeysetPaginationFiltersSortsAndBindsCursor(t *testing.T) {
 	ctx := context.Background()
 	scope := AccessScope{TenantID: "tenant", OwnerID: "owner"}
 	base := time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)
-	entries := []*opensplunkv1.SearchHistoryEntry{
-		historyEntry("job-a", "index=main error", "search", opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED, base),
-		historyEntry("job-b", "index=main warning", "search", opensplunkv1.SearchJobState_SEARCH_JOB_STATE_FAILED, base.Add(time.Minute)),
-		historyEntry("job-c", "index=audit error", "audit", opensplunkv1.SearchJobState_SEARCH_JOB_STATE_CANCELED, base.Add(2*time.Minute)),
-		historyEntry("job-d", "index=main Error timeout", "search", opensplunkv1.SearchJobState_SEARCH_JOB_STATE_FAILED, base.Add(3*time.Minute)),
+	entries := []*opensplunk.SearchHistoryEntry{
+		historyEntry("job-a", "index=main error", "search", opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED, base),
+		historyEntry("job-b", "index=main warning", "search", opensplunk.SearchJobState_SEARCH_JOB_STATE_FAILED, base.Add(time.Minute)),
+		historyEntry("job-c", "index=audit error", "audit", opensplunk.SearchJobState_SEARCH_JOB_STATE_CANCELED, base.Add(2*time.Minute)),
+		historyEntry("job-d", "index=main Error timeout", "search", opensplunk.SearchJobState_SEARCH_JOB_STATE_FAILED, base.Add(3*time.Minute)),
 	}
 	savedID := "saved-1"
-	entries[3].Source = &opensplunkv1.SearchJobSource{Origin: opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH, SavedSearchId: &savedID}
+	entries[3].Source = &opensplunk.SearchJobSource{Origin: opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH, SavedSearchId: &savedID}
 	entries[0].MatchedEvents = 2
 	entries[1].MatchedEvents = 20
 	entries[2].MatchedEvents = 1
@@ -304,7 +299,7 @@ func TestListKeysetPaginationFiltersSortsAndBindsCursor(t *testing.T) {
 			t.Fatalf("Record(%s) error = %v", entry.SearchJobId, err)
 		}
 	}
-	if _, err := store.Record(ctx, AccessScope{TenantID: "tenant", OwnerID: "other"}, historyEntry("job-other", "error", "search", opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED, base)); err != nil {
+	if _, err := store.Record(ctx, AccessScope{TenantID: "tenant", OwnerID: "other"}, historyEntry("job-other", "error", "search", opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED, base)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -336,11 +331,11 @@ func TestListKeysetPaginationFiltersSortsAndBindsCursor(t *testing.T) {
 		PageSize:    10,
 		AppIDFilter: &app,
 		TextFilter:  &text,
-		StateFilters: []opensplunkv1.SearchJobState{
-			opensplunkv1.SearchJobState_SEARCH_JOB_STATE_FAILED,
+		StateFilters: []opensplunk.SearchJobState{
+			opensplunk.SearchJobState_SEARCH_JOB_STATE_FAILED,
 		},
-		SortBy:        opensplunkv1.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_MATCHED_EVENTS,
-		SortDirection: opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING,
+		SortBy:        opensplunk.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_MATCHED_EVENTS,
+		SortDirection: opensplunk.SortDirection_SORT_DIRECTION_ASCENDING,
 	}
 	page, err := store.List(ctx, scope, filtered)
 	if err != nil {
@@ -441,7 +436,7 @@ func TestDeleteClearPruneAndCorruptionDetection(t *testing.T) {
 	scope := AccessScope{TenantID: "tenant", OwnerID: "owner"}
 	for index, created := range []time.Time{now.Add(-3 * time.Hour), now.Add(-90 * time.Minute), now.Add(-30 * time.Minute), now} {
 		id := fmt.Sprintf("job-%d", index)
-		if _, err := store.Record(ctx, scope, historyEntry(id, "index=main", "search", opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED, created)); err != nil {
+		if _, err := store.Record(ctx, scope, historyEntry(id, "index=main", "search", opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED, created)); err != nil {
 			t.Fatalf("Record(%s) error = %v", id, err)
 		}
 	}
@@ -462,9 +457,9 @@ func TestDeleteClearPruneAndCorruptionDetection(t *testing.T) {
 		t.Fatalf("cross-owner Delete() error = %v, want ErrNotFound", err)
 	}
 
-	for _, entry := range []*opensplunkv1.SearchHistoryEntry{
-		historyEntry("clear-a", "index=main alpha", "search", opensplunkv1.SearchJobState_SEARCH_JOB_STATE_FAILED, now),
-		historyEntry("clear-b", "index=audit beta", "audit", opensplunkv1.SearchJobState_SEARCH_JOB_STATE_FAILED, now),
+	for _, entry := range []*opensplunk.SearchHistoryEntry{
+		historyEntry("clear-a", "index=main alpha", "search", opensplunk.SearchJobState_SEARCH_JOB_STATE_FAILED, now),
+		historyEntry("clear-b", "index=audit beta", "audit", opensplunk.SearchJobState_SEARCH_JOB_STATE_FAILED, now),
 	} {
 		if _, err := store.Record(ctx, scope, entry); err != nil {
 			t.Fatal(err)
@@ -484,7 +479,7 @@ func TestDeleteClearPruneAndCorruptionDetection(t *testing.T) {
 	}
 }
 
-func entryIDs(entries []*opensplunkv1.SearchHistoryEntry) []string {
+func entryIDs(entries []*opensplunk.SearchHistoryEntry) []string {
 	ids := make([]string, len(entries))
 	for index, entry := range entries {
 		ids[index] = entry.SearchJobId

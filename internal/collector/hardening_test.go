@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/collector/input"
 	"github.com/Suhaibinator/open-splunk/internal/collector/sender"
 	"github.com/Suhaibinator/open-splunk/internal/collector/wal"
@@ -54,7 +54,6 @@ func TestDaemonOversizedEventDeadLettered(t *testing.T) {
 		MaxQueueBytes: 8, // smaller than any real single-event batch record
 		Sync:          wal.SyncAlways,
 		CollectorID:   "cid",
-		ProtocolMajor: protocolMajor,
 	})
 	if err != nil {
 		t.Fatalf("open queue: %v", err)
@@ -81,7 +80,7 @@ func TestDaemonOversizedEventDeadLettered(t *testing.T) {
 
 	processed := make(chan processedEvent, 1)
 	processed <- processedEvent{
-		event:   &opensplunkv1.LogEvent{EventId: "e1", IndexName: "main"},
+		event:   &opensplunk.LogEvent{EventId: "e1", IndexName: "main"},
 		inputID: inputID, identity: identity, path: "/x.log", endOffset: 42,
 		lineNumber: 1, nextLineNumber: 3, size: 10,
 	}
@@ -122,8 +121,8 @@ type splitAcceptQueue struct {
 }
 
 func (q *splitAcceptQueue) Append(
-	events []*opensplunkv1.LogEvent,
-) (*opensplunkv1.EventBatch, error) {
+	events []*opensplunk.LogEvent,
+) (*opensplunk.EventBatch, error) {
 	q.appendCalls.Add(1)
 	if len(events) > 1 {
 		return nil, wal.ErrBatchTooLarge
@@ -134,7 +133,7 @@ func (q *splitAcceptQueue) Append(
 func TestSuccessfulOversizedSplitResetsOriginalBatch(t *testing.T) {
 	t.Parallel()
 	underlying, err := wal.Open(wal.Options{
-		Dir: t.TempDir(), Sync: wal.SyncAlways, CollectorID: "cid", ProtocolMajor: protocolMajor,
+		Dir: t.TempDir(), Sync: wal.SyncAlways, CollectorID: "cid",
 	})
 	if err != nil {
 		t.Fatalf("open queue: %v", err)
@@ -145,7 +144,7 @@ func TestSuccessfulOversizedSplitResetsOriginalBatch(t *testing.T) {
 	b := &pendingBatch{}
 	for _, id := range []string{"first", "second"} {
 		b.add(processedEvent{
-			event: &opensplunkv1.LogEvent{EventId: id}, size: len(id),
+			event: &opensplunk.LogEvent{EventId: id}, size: len(id),
 		})
 	}
 
@@ -176,8 +175,8 @@ func TestSuccessfulOversizedSplitResetsOriginalBatch(t *testing.T) {
 }
 
 func (q *secondAppendTooLargeQueue) Append(
-	events []*opensplunkv1.LogEvent,
-) (*opensplunkv1.EventBatch, error) {
+	events []*opensplunk.LogEvent,
+) (*opensplunk.EventBatch, error) {
 	if q.appendCalls.Add(1) == 2 {
 		return nil, wal.ErrBatchTooLarge
 	}
@@ -187,7 +186,7 @@ func (q *secondAppendTooLargeQueue) Append(
 func TestOversizedDeadLetterDoesNotCheckpointPastPendingWAL(t *testing.T) {
 	t.Parallel()
 	underlying, err := wal.Open(wal.Options{
-		Dir: t.TempDir(), Sync: wal.SyncAlways, CollectorID: "cid", ProtocolMajor: protocolMajor,
+		Dir: t.TempDir(), Sync: wal.SyncAlways, CollectorID: "cid",
 	})
 	if err != nil {
 		t.Fatalf("open queue: %v", err)
@@ -253,7 +252,7 @@ type splitShutdownQueue struct {
 	secondCalls atomic.Int64
 }
 
-func (q *splitShutdownQueue) Append(events []*opensplunkv1.LogEvent) (*opensplunkv1.EventBatch, error) {
+func (q *splitShutdownQueue) Append(events []*opensplunk.LogEvent) (*opensplunk.EventBatch, error) {
 	if len(events) > 1 {
 		return nil, wal.ErrBatchTooLarge
 	}
@@ -290,12 +289,12 @@ func TestShutdownSplitCannotCheckpointPastAbandonedEarlierEvent(t *testing.T) {
 	}
 	b := &pendingBatch{}
 	b.add(processedEvent{
-		event: &opensplunkv1.LogEvent{EventId: "earlier"}, inputID: "input",
+		event: &opensplunk.LogEvent{EventId: "earlier"}, inputID: "input",
 		identity: identity, path: "/x.log", endOffset: 100, lineNumber: 1,
 		nextLineNumber: 2, size: 10,
 	})
 	b.add(processedEvent{
-		event: &opensplunkv1.LogEvent{EventId: "later-oversized"}, inputID: "input",
+		event: &opensplunk.LogEvent{EventId: "later-oversized"}, inputID: "input",
 		identity: identity, path: "/x.log", endOffset: 200, lineNumber: 2,
 		nextLineNumber: 3, size: 10,
 	})
@@ -316,7 +315,7 @@ func TestShutdownSplitCannotCheckpointPastAbandonedEarlierEvent(t *testing.T) {
 	}
 }
 
-func (q *alwaysFullQueue) Append([]*opensplunkv1.LogEvent) (*opensplunkv1.EventBatch, error) {
+func (q *alwaysFullQueue) Append([]*opensplunk.LogEvent) (*opensplunk.EventBatch, error) {
 	q.calls.Add(1)
 	return nil, wal.ErrQueueFull
 }
@@ -335,7 +334,7 @@ func TestFlushShutdownDoesNotBusySpin(t *testing.T) {
 	}
 	b := &pendingBatch{}
 	b.add(processedEvent{
-		event:     &opensplunkv1.LogEvent{EventId: "e1"},
+		event:     &opensplunk.LogEvent{EventId: "e1"},
 		identity:  input.FileIdentity{Device: 1, Inode: 2, Generation: 1, Fingerprint: "fp"},
 		endOffset: 1, size: 10,
 	})

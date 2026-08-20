@@ -26,7 +26,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
@@ -34,7 +34,7 @@ import (
 )
 
 const (
-	compatibilityFormatVersion = "hec-compatibility-fixture-v0.1"
+	compatibilityFormatVersion = uint32(1)
 	compatibilityTenantID      = "tenant-hec-compatibility"
 	compatibilityRequestID     = "0123456789abcdef0123456789abcdef"
 )
@@ -58,7 +58,7 @@ var (
 )
 
 type compatibilityDocument struct {
-	FormatVersion string              `json:"format_version"`
+	FormatVersion uint32              `json:"format_version"`
 	Cases         []compatibilityCase `json:"cases"`
 }
 
@@ -294,7 +294,7 @@ func loadCompatibilityCorpus() ([]compatibilityCase, error) {
 			return nil, closeErr
 		}
 		if document.FormatVersion != compatibilityFormatVersion {
-			return nil, fmt.Errorf("%s: unknown format_version %q", name, document.FormatVersion)
+			return nil, fmt.Errorf("%s: unknown format_version %d", name, document.FormatVersion)
 		}
 		if len(document.Cases) == 0 {
 			return nil, fmt.Errorf("%s: cases must not be empty", name)
@@ -605,7 +605,7 @@ func (fake *compatibilityAdmission) Stage(_ context.Context, request ingest.Admi
 			return ingest.StageResult{}, &ingest.AdmissionFailure{
 				EventIndex: uint32(ordinal), // #nosec G115 -- bounded above.
 				Failure: &ingest.EventError{
-					Code: opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_INDEX,
+					Code: opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_INDEX,
 				},
 			}
 		}
@@ -622,7 +622,7 @@ func (fake *compatibilityAdmission) Stage(_ context.Context, request ingest.Admi
 		fake.durable.Quota = "unchanged"
 		return ingest.StageResult{}, &ingest.TransientStoreError{
 			Err:        errors.New("compatibility quota limited"),
-			Reason:     opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED,
+			Reason:     opensplunk.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED,
 			RetryAfter: time.Duration(*fake.setup.RetryAfterSeconds) * time.Second,
 		}
 	case fake.conditions["staging_busy"]:
@@ -885,9 +885,9 @@ func assertCompatibilityEvents(t *testing.T, got []ingest.AdmissionEvent, want [
 		}
 		gotTimeSource := ""
 		switch event.GetEventTimeSource() {
-		case opensplunkv1.EventTimeSource_EVENT_TIME_SOURCE_PARSED:
+		case opensplunk.EventTimeSource_EVENT_TIME_SOURCE_PARSED:
 			gotTimeSource = "explicit"
-		case opensplunkv1.EventTimeSource_EVENT_TIME_SOURCE_RECEIVED_AT_FALLBACK:
+		case opensplunk.EventTimeSource_EVENT_TIME_SOURCE_RECEIVED_AT_FALLBACK:
 			gotTimeSource = "received_at_fallback"
 		default:
 			gotTimeSource = event.GetEventTimeSource().String()
@@ -922,7 +922,7 @@ func compatibilityTimestampNanos(timestamp *timestamppb.Timestamp) string {
 	return result.String()
 }
 
-func assertCompatibilityValue(t *testing.T, location string, got *opensplunkv1.TypedValue, want compatibilityValue) {
+func assertCompatibilityValue(t *testing.T, location string, got *opensplunk.TypedValue, want compatibilityValue) {
 	t.Helper()
 	if got == nil {
 		t.Errorf("%s value is nil", location)
@@ -930,7 +930,7 @@ func assertCompatibilityValue(t *testing.T, location string, got *opensplunkv1.T
 	}
 	switch want.Kind {
 	case "null":
-		if _, ok := got.Kind.(*opensplunkv1.TypedValue_NullValue); !ok {
+		if _, ok := got.Kind.(*opensplunk.TypedValue_NullValue); !ok {
 			t.Errorf("%s kind = %T, want null", location, got.Kind)
 		}
 	case "string":
@@ -938,7 +938,7 @@ func assertCompatibilityValue(t *testing.T, location string, got *opensplunkv1.T
 		if err := json.Unmarshal(want.Value, &value); err != nil {
 			t.Fatalf("%s decode expected string: %v", location, err)
 		}
-		if _, ok := got.Kind.(*opensplunkv1.TypedValue_StringValue); !ok || got.GetStringValue() != value {
+		if _, ok := got.Kind.(*opensplunk.TypedValue_StringValue); !ok || got.GetStringValue() != value {
 			t.Errorf("%s value = %#v, want string %q", location, got.Kind, value)
 		}
 	case "sint64":
@@ -950,7 +950,7 @@ func assertCompatibilityValue(t *testing.T, location string, got *opensplunkv1.T
 		if err != nil {
 			t.Fatalf("%s expected sint64 %q: %v", location, authored, err)
 		}
-		if _, ok := got.Kind.(*opensplunkv1.TypedValue_Sint64Value); !ok || got.GetSint64Value() != value {
+		if _, ok := got.Kind.(*opensplunk.TypedValue_Sint64Value); !ok || got.GetSint64Value() != value {
 			t.Errorf("%s value = %#v, want sint64 %d", location, got.Kind, value)
 		}
 	case "uint64":
@@ -962,7 +962,7 @@ func assertCompatibilityValue(t *testing.T, location string, got *opensplunkv1.T
 		if err != nil {
 			t.Fatalf("%s expected uint64 %q: %v", location, authored, err)
 		}
-		if _, ok := got.Kind.(*opensplunkv1.TypedValue_Uint64Value); !ok || got.GetUint64Value() != value {
+		if _, ok := got.Kind.(*opensplunk.TypedValue_Uint64Value); !ok || got.GetUint64Value() != value {
 			t.Errorf("%s value = %#v, want uint64 %d", location, got.Kind, value)
 		}
 	case "decimal":
@@ -970,7 +970,7 @@ func assertCompatibilityValue(t *testing.T, location string, got *opensplunkv1.T
 		if err := json.Unmarshal(want.Value, &value); err != nil {
 			t.Fatalf("%s decode expected decimal: %v", location, err)
 		}
-		if _, ok := got.Kind.(*opensplunkv1.TypedValue_DecimalValue); !ok || got.GetDecimalValue().GetValue() != value {
+		if _, ok := got.Kind.(*opensplunk.TypedValue_DecimalValue); !ok || got.GetDecimalValue().GetValue() != value {
 			t.Errorf("%s value = %#v, want decimal %q", location, got.Kind, value)
 		}
 	case "bool":
@@ -978,11 +978,11 @@ func assertCompatibilityValue(t *testing.T, location string, got *opensplunkv1.T
 		if err := json.Unmarshal(want.Value, &value); err != nil {
 			t.Fatalf("%s decode expected bool: %v", location, err)
 		}
-		if _, ok := got.Kind.(*opensplunkv1.TypedValue_BoolValue); !ok || got.GetBoolValue() != value {
+		if _, ok := got.Kind.(*opensplunk.TypedValue_BoolValue); !ok || got.GetBoolValue() != value {
 			t.Errorf("%s value = %#v, want bool %t", location, got.Kind, value)
 		}
 	case "list":
-		list, ok := got.Kind.(*opensplunkv1.TypedValue_ListValue)
+		list, ok := got.Kind.(*opensplunk.TypedValue_ListValue)
 		if !ok || list.ListValue == nil {
 			t.Errorf("%s kind = %T, want list", location, got.Kind)
 			return

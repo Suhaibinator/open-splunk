@@ -10,7 +10,7 @@ import (
 
 	"github.com/Suhaibinator/SRouter/pkg/codec"
 	"github.com/Suhaibinator/SRouter/pkg/router"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/asciifold"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobproto"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -29,7 +29,7 @@ const (
 
 func (handler *apiHandler) listSearchJobs(
 	request *http.Request,
-	input *opensplunkv1.ListSearchJobsRequest,
+	input *opensplunk.ListSearchJobsRequest,
 ) (*serializedSearchJobListResponse, error) {
 	if err := validateSearchJobListRequest(input); err != nil {
 		return nil, badRequestError(err.Error())
@@ -91,7 +91,7 @@ func (handler *apiHandler) listSearchJobs(
 		return nil, internalError()
 	}
 
-	converted := make([]*opensplunkv1.SearchJob, len(page.Jobs))
+	converted := make([]*opensplunk.SearchJob, len(page.Jobs))
 	seenIDs := make(map[string]struct{}, len(page.Jobs))
 	projectionNow := handler.now()
 	var previous searchjobs.Job
@@ -129,7 +129,7 @@ func (handler *apiHandler) listSearchJobs(
 	if err != nil {
 		return nil, internalError()
 	}
-	message := &opensplunkv1.ListSearchJobsResponse{SearchJobs: converted, Page: pageResponse}
+	message := &opensplunk.ListSearchJobsResponse{SearchJobs: converted, Page: pageResponse}
 	if proto.Size(message) > maximumSearchJobListResponseBytes {
 		return nil, internalError()
 	}
@@ -152,7 +152,6 @@ func searchJobListItemAsJob(item searchjobs.JobListItem) searchjobs.Job {
 		TenantID:          item.TenantID,
 		SPL:               item.SPL,
 		NormalizedSPL:     item.NormalizedSPL,
-		CompilerVersion:   item.CompilerVersion,
 		RequestedIndexes:  slices.Clone(item.RequestedIndexes),
 		EffectiveIndexes:  slices.Clone(item.EffectiveIndexes),
 		TimeRange:         item.TimeRange,
@@ -183,7 +182,7 @@ func searchJobListItemAsJob(item searchjobs.JobListItem) searchjobs.Job {
 	return result
 }
 
-func (handler *apiHandler) searchJobListPageRequest(page *opensplunkv1.PageRequest) (int, string, bool, error) {
+func (handler *apiHandler) searchJobListPageRequest(page *opensplunk.PageRequest) (int, string, bool, error) {
 	if page != nil && page.PageToken != nil && strings.TrimSpace(page.GetPageToken()) != page.GetPageToken() {
 		return 0, "", false, errors.New("page token is invalid")
 	}
@@ -204,7 +203,7 @@ func (handler *apiHandler) searchJobListPageRequest(page *opensplunkv1.PageReque
 	return min(pageSize, maximumSearchJobListRows), pageToken, includeTotal, nil
 }
 
-func searchJobListStateFilters(input []opensplunkv1.SearchJobState) ([]searchjobs.State, error) {
+func searchJobListStateFilters(input []opensplunk.SearchJobState) ([]searchjobs.State, error) {
 	if len(input) > maximumSearchJobListStateFilters {
 		return nil, errors.New("state filters cannot contain more than 16 values")
 	}
@@ -225,23 +224,23 @@ func searchJobListStateFilters(input []opensplunkv1.SearchJobState) ([]searchjob
 	return result, nil
 }
 
-func searchJobListState(input opensplunkv1.SearchJobState) (searchjobs.State, bool) {
+func searchJobListState(input opensplunk.SearchJobState) (searchjobs.State, bool) {
 	switch input {
-	case opensplunkv1.SearchJobState_SEARCH_JOB_STATE_QUEUED:
+	case opensplunk.SearchJobState_SEARCH_JOB_STATE_QUEUED:
 		return searchjobs.StateQueued, true
-	case opensplunkv1.SearchJobState_SEARCH_JOB_STATE_PARSING:
+	case opensplunk.SearchJobState_SEARCH_JOB_STATE_PARSING:
 		return searchjobs.StateParsing, true
-	case opensplunkv1.SearchJobState_SEARCH_JOB_STATE_PLANNING:
+	case opensplunk.SearchJobState_SEARCH_JOB_STATE_PLANNING:
 		return searchjobs.StatePlanning, true
-	case opensplunkv1.SearchJobState_SEARCH_JOB_STATE_RUNNING:
+	case opensplunk.SearchJobState_SEARCH_JOB_STATE_RUNNING:
 		return searchjobs.StateRunning, true
-	case opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED:
+	case opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED:
 		return searchjobs.StateCompleted, true
-	case opensplunkv1.SearchJobState_SEARCH_JOB_STATE_FAILED:
+	case opensplunk.SearchJobState_SEARCH_JOB_STATE_FAILED:
 		return searchjobs.StateFailed, true
-	case opensplunkv1.SearchJobState_SEARCH_JOB_STATE_CANCELED:
+	case opensplunk.SearchJobState_SEARCH_JOB_STATE_CANCELED:
 		return searchjobs.StateCanceled, true
-	case opensplunkv1.SearchJobState_SEARCH_JOB_STATE_EXPIRED:
+	case opensplunk.SearchJobState_SEARCH_JOB_STATE_EXPIRED:
 		return searchjobs.StateExpired, true
 	default:
 		// UNSPECIFIED, FINALIZING, and values unknown to this binary all fail
@@ -260,14 +259,13 @@ func validSearchJobListItem(
 	if job.OwnerID != scope.OwnerID || job.TenantID != scope.TenantID ||
 		job.Schema != nil || job.CreatedAt.IsZero() ||
 		strings.TrimSpace(job.ID) != job.ID ||
-		validateBoundedIdentifier(job.ID, maximumSearchJobListJobIDBytes, false) != nil ||
-		!searchjobs.ValidCompilerVersion(job.CompilerVersion) {
+		validateBoundedIdentifier(job.ID, maximumSearchJobListJobIDBytes, false) != nil {
 		return false
 	}
 	if !validSearchJobListFailure(job.State, job.Failure) {
 		return false
 	}
-	if searchjobproto.State(job.State) == opensplunkv1.SearchJobState_SEARCH_JOB_STATE_UNSPECIFIED {
+	if searchjobproto.State(job.State) == opensplunk.SearchJobState_SEARCH_JOB_STATE_UNSPECIFIED {
 		return false
 	}
 	if len(states) != 0 && !slices.Contains(states, job.State) {
@@ -297,7 +295,7 @@ func searchJobListPageResponse(
 	pageSize int,
 	requestToken string,
 	includeTotal bool,
-) (*opensplunkv1.PageResponse, error) {
+) (*opensplunk.PageResponse, error) {
 	return boundedListPageResponse(
 		"search job",
 		boundedListPageMetadata{
@@ -313,7 +311,7 @@ func searchJobListPageResponse(
 	)
 }
 
-func validateSearchJobListRequest(input *opensplunkv1.ListSearchJobsRequest) error {
+func validateSearchJobListRequest(input *opensplunk.ListSearchJobsRequest) error {
 	if input == nil {
 		return errors.New("search job list request is required")
 	}
@@ -356,13 +354,13 @@ func searchJobListRequestContextError(ctx context.Context) error {
 	return canceledRequestError(ctx, "search job list request was canceled")
 }
 
-type serializedSearchJobListResponse = boundedProtoResponse[*opensplunkv1.ListSearchJobsResponse]
+type serializedSearchJobListResponse = boundedProtoResponse[*opensplunk.ListSearchJobsResponse]
 
-type serializedSearchJobListCodec = boundedProtoCodec[*opensplunkv1.ListSearchJobsRequest, *opensplunkv1.ListSearchJobsResponse]
+type serializedSearchJobListCodec = boundedProtoCodec[*opensplunk.ListSearchJobsRequest, *opensplunk.ListSearchJobsResponse]
 
 func newSerializedSearchJobListCodec() *serializedSearchJobListCodec {
 	return newBoundedProtoCodec(
-		codec.NewProtoCodec[*opensplunkv1.ListSearchJobsRequest, *opensplunkv1.ListSearchJobsResponse](),
+		codec.NewProtoCodec[*opensplunk.ListSearchJobsRequest, *opensplunk.ListSearchJobsResponse](),
 		boundedProtoCodecOptions{
 			stateError:   "search job list serialization state is invalid",
 			messageError: "search job list response is missing",

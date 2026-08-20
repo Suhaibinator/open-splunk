@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -68,12 +68,12 @@ func TestKnowledgeSnapshotSharedGoTypeScriptWireGolden(t *testing.T) {
 		t.Fatal("Go deterministic final wire differs from the shared Go/TypeScript fixture")
 	}
 
-	b1 := proto.Clone(snapshot.Proto()).(*opensplunkv1.KnowledgeSnapshot)
+	b1 := proto.Clone(snapshot.Proto()).(*opensplunk.KnowledgeSnapshot)
 	b1.SnapshotSha256 = nil
 	b1Wire := deterministicMessage(t, b1)
 	assertSnapshotWireHash(t, "B1", b1Wire, fixture.B1.ByteLength, fixture.B1.SHA256)
 
-	b0 := proto.Clone(b1).(*opensplunkv1.KnowledgeSnapshot)
+	b0 := proto.Clone(b1).(*opensplunk.KnowledgeSnapshot)
 	if b0.BudgetCharges == nil {
 		t.Fatal("finalized snapshot omitted budget charges")
 	}

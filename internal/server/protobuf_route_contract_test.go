@@ -121,14 +121,14 @@ func TestProtobufRouteInventoryFailsClosed(t *testing.T) {
 	const source = `package server
 import (
 	"github.com/Suhaibinator/SRouter/pkg/router"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 )
-type ambiguousResponse = pair[*opensplunkv1.GetAppRequest, *opensplunkv1.GetAppResponse]
-type nestedAmbiguousResponse = outer[ambiguousResponse, *opensplunkv1.GetSystemBootstrapResponse]
+type ambiguousResponse = pair[*opensplunk.GetAppRequest, *opensplunk.GetAppResponse]
+type nestedAmbiguousResponse = outer[ambiguousResponse, *opensplunk.GetSystemBootstrapResponse]
 type aliasedRoute = protobufRouteDefinition
 type lookalikeRoute struct { definition router.RouteDefinition }
-var direct = newForwardCompatibleProtoRoute[*opensplunkv1.GetAppRequest, *opensplunkv1.GetAppResponse](router.RouteConfig[*opensplunkv1.GetAppRequest, *opensplunkv1.GetAppResponse]{})
-var indirect = newForwardCompatibleProtoRoute[*opensplunkv1.GetAppRequest, *opensplunkv1.GetAppResponse]
+var direct = newForwardCompatibleProtoRoute[*opensplunk.GetAppRequest, *opensplunk.GetAppResponse](router.RouteConfig[*opensplunk.GetAppRequest, *opensplunk.GetAppResponse]{})
+var indirect = newForwardCompatibleProtoRoute[*opensplunk.GetAppRequest, *opensplunk.GetAppResponse]
 var converted = (protobufRouteDefinition)(lookalikeRoute{definition: router.RouteConfigBase{}})
 func bypasses() {
 	var wrapped protobufRouteDefinition
@@ -266,7 +266,7 @@ func registeredProtobufHTTPRoutes(t *testing.T) map[string]protobufHTTPRouteSign
 			if !ok {
 				t.Fatalf("unresolved protobuf response type at %s", position)
 			}
-			fullPath := apiV1PathPrefix + path
+			fullPath := apiPathPrefix + path
 			if _, duplicate := registered[fullPath]; duplicate {
 				t.Fatalf("duplicate registered protobuf route %q", fullPath)
 			}
@@ -860,7 +860,7 @@ func protobufRouteMessageTypeCandidates(
 		return protobufRouteMessageTypeCandidates(typed.X, types, visiting)
 	case *ast.SelectorExpr:
 		packageName, ok := typed.X.(*ast.Ident)
-		if ok && packageName.Name == "opensplunkv1" {
+		if ok && packageName.Name == "opensplunk" {
 			return typed.Sel.Name, 1
 		}
 		return "", 0
@@ -918,7 +918,7 @@ func protobufRouteFixtureWire(
 ) ([]byte, []byte) {
 	t.Helper()
 	messageType, err := protoregistry.GlobalTypes.FindMessageByName(
-		protoreflect.FullName("open_splunk.v1." + typeName),
+		protoreflect.FullName("open_splunk." + typeName),
 	)
 	if err != nil {
 		t.Fatalf("find %s: %v", typeName, err)
@@ -1126,7 +1126,7 @@ func assertGoResponseAcceptsFutureWire(
 func newProtobufRouteFixtureMessage(t *testing.T, typeName string) proto.Message {
 	t.Helper()
 	messageType, err := protoregistry.GlobalTypes.FindMessageByName(
-		protoreflect.FullName("open_splunk.v1." + typeName),
+		protoreflect.FullName("open_splunk." + typeName),
 	)
 	if err != nil {
 		t.Fatalf("find %s: %v", typeName, err)

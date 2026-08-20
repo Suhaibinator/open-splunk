@@ -33,7 +33,7 @@ func TestGradeThisCompatibilityCorpus(t *testing.T) {
 
 // TestGradeThisCurrentMigrationCorpus keeps the representative current
 // GradeThis/go-common investigations compiling independently from the exact
-// product-plan v0.1 corpus. In particular it pins the current request-summary
+// product-plan knowledge expression corpus. In particular it pins the current request-summary
 // message and µs/ms/s duration extraction contract.
 func TestGradeThisCurrentMigrationCorpus(t *testing.T) {
 	t.Parallel()
@@ -60,7 +60,7 @@ func TestRexCompatibilityCorpus(t *testing.T) {
 	queries := []string{
 		`index=gradethis | rex "method=(?<raw_method>[A-Z]+)\s+path=(?<raw_path>\S+)\s+status=(?<raw_status>\d+)" | table raw_method raw_path raw_status`,
 		`index=gradethis message="Request summary statistics" | rex field=duration "^(?<duration_value>\d+(?:\.\d+)?)(?<duration_unit>µs|ms)$" | stats count BY duration_unit`,
-		`index=gradethis | rex field=path "^/api/v1/(?<area>[^/?]+)(?:/(?<resource>[^/?]+))?" | stats count BY area, resource | sort -count`,
+		`index=gradethis | rex field=path "^/api/(?<area>[^/?]+)(?:/(?<resource>[^/?]+))?" | stats count BY area, resource | sort -count`,
 		`index=gradethis message="GORM slow query" | rex field=sql "^\s*(?<sql_verb>[A-Za-z]+)\b" | stats count BY sql_verb`,
 	}
 	for _, source := range queries {

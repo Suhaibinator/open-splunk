@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"gorm.io/gorm"
 )
@@ -47,14 +47,14 @@ func TestValidatePublicationTransitionPersistenceTargetsPresentEmpty(t *testing.
 	expected := publicationTransitionPersistenceTestCandidate()
 	authority := candidateDependencyAuthority{state: &candidateDependencyAuthorityState{
 		candidate:   expected,
-		sourceStage: opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD,
+		sourceStage: opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD,
 	}}
 	if _, err := validatePublicationTransitionPersistenceTargets(
 		t.Context(),
 		database.GORMDB(),
 		testTenant,
 		expected,
-		opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD,
+		opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD,
 		authority,
 	); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("base-handle persistence authority error = %v, want invalid argument", err)
@@ -65,7 +65,7 @@ func TestValidatePublicationTransitionPersistenceTargetsPresentEmpty(t *testing.
 		tx,
 		testTenant,
 		expected,
-		opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD,
+		opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD,
 		authority,
 	)
 	if err != nil || len(projection) != 0 {
@@ -76,7 +76,7 @@ func TestValidatePublicationTransitionPersistenceTargetsPresentEmpty(t *testing.
 		tx,
 		testTenant,
 		expected,
-		opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD,
+		opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD,
 		candidateDependencyAuthority{},
 	); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("zero persistence authority error = %v, want invalid argument", err)
@@ -108,7 +108,7 @@ func TestValidatePublicationTransitionPersistenceTargetsRejectsAuthorityDrift(t 
 		{
 			name: "source stage",
 			mutate: func(authority *candidateDependencyAuthority) {
-				authority.state.sourceStage = opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS
+				authority.state.sourceStage = opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS
 			},
 			want: control.ErrDependencyConflict,
 		},
@@ -130,7 +130,7 @@ func TestValidatePublicationTransitionPersistenceTargetsRejectsAuthorityDrift(t 
 			name: "type stage",
 			mutate: func(authority *candidateDependencyAuthority) {
 				authority.state.targets[0].targetStage =
-					opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS
+					opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS
 			},
 			want: ErrCorrupt,
 		},
@@ -138,7 +138,7 @@ func TestValidatePublicationTransitionPersistenceTargetsRejectsAuthorityDrift(t 
 			name: "role",
 			mutate: func(authority *candidateDependencyAuthority) {
 				authority.state.targets[0].role =
-					opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_UNSPECIFIED
+					opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_UNSPECIFIED
 			},
 			want: ErrCorrupt,
 		},
@@ -357,7 +357,7 @@ func publicationTransitionPersistenceTestAuthority(
 	targetID string,
 ) (
 	publicationCandidateAuthority,
-	opensplunkv1.KnowledgeSearchStage,
+	opensplunk.KnowledgeSearchStage,
 	candidateDependencyAuthority,
 ) {
 	t.Helper()
@@ -386,7 +386,7 @@ func publicationTransitionPersistenceTestAuthority(
 	var targetDigest [sha256.Size]byte
 	copy(targetDigest[:], version.DefinitionDigest)
 	expected := publicationTransitionPersistenceTestCandidate()
-	sourceStage := opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD
+	sourceStage := opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD
 	return expected, sourceStage, candidateDependencyAuthority{state: &candidateDependencyAuthorityState{
 		candidate:   expected,
 		sourceStage: sourceStage,
@@ -395,7 +395,7 @@ func publicationTransitionPersistenceTestAuthority(
 			version:          version.ObjectVersion,
 			definitionDigest: targetDigest,
 			ownerID:          version.OwnerID,
-			role:             opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
+			role:             opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
 			targetStage:      targetStage,
 		}},
 		projection: []publicationDependency{{

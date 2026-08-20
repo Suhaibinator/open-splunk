@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestParseStoredContainerMetadataSupportsLegacyAndCurrentVersions(t *testing.T) {
+func TestParseStoredContainerMetadataSupportsCurrentVersion(t *testing.T) {
 	t.Parallel()
 
 	names := []string{
@@ -23,14 +23,6 @@ func TestParseStoredContainerMetadataSupportsLegacyAndCurrentVersions(t *testing
 		{"field_types"},
 		{"literal.root", `slash\key`},
 		{"tenant_id"},
-	}
-
-	legacy, err := ParseStoredContainerMetadata(names, []uint8{}, 0)
-	if err != nil {
-		t.Fatalf("ParseStoredContainerMetadata(v0): %v", err)
-	}
-	if !reflect.DeepEqual(legacy.Paths, wantPaths) || legacy.Types != nil {
-		t.Fatalf("v0 metadata = %#v, want paths %#v and nil types", legacy, wantPaths)
 	}
 
 	typeCodes := []uint8{
@@ -89,7 +81,7 @@ func TestParseStoredContainerMetadataRejectsVersionsAlignmentAndTypes(t *testing
 		types   []uint8
 		version uint8
 	}{
-		{name: "v0 types", names: []string{"a"}, types: []uint8{uint8(StoredValueTypeString)}},
+		{name: "old version", names: []string{"a"}, types: []uint8{uint8(StoredValueTypeString)}},
 		{name: "v1 missing type", names: []string{"a"}, version: CurrentFieldMetadataVersion},
 		{name: "v1 extra type", types: []uint8{uint8(StoredValueTypeString)}, version: CurrentFieldMetadataVersion},
 		{name: "v1 unspecified type", names: []string{"a"}, types: []uint8{0}, version: CurrentFieldMetadataVersion},

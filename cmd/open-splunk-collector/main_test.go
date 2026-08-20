@@ -196,8 +196,7 @@ func TestWriteBuildIdentityReportsCompiledReleaseFields(t *testing.T) {
 	if err := writeBuildIdentity(&output); err != nil {
 		t.Fatalf("writeBuildIdentity: %v", err)
 	}
-	want := "application_version=" + identity.ApplicationVersion +
-		"\nsource_revision=" + identity.SourceRevision + "\n"
+	want := "source_revision=" + identity.SourceRevision + "\n"
 	if got := output.String(); got != want {
 		t.Fatalf("build identity = %q, want %q", got, want)
 	}

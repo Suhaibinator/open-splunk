@@ -13,7 +13,7 @@ import (
 	clickhouserow "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 )
 
-func TestValidateClickHousePhysicalSchemaAcceptsExactReleaseContract(
+func TestValidateClickHousePhysicalSchemaAcceptsExactContract(
 	t *testing.T,
 ) {
 	t.Parallel()
@@ -65,8 +65,8 @@ func TestClickHousePhysicalSchemaQueryBoundsFilteredCatalogInput(t *testing.T) {
 			max_result_rows = 1,
 			max_result_bytes = %d,
 			result_overflow_mode = 'throw'`,
-		clickHouseReleaseOwnedTableSentinel,
-		clickHouseReleaseOwnedTableSentinel,
+		clickHouseManagedTableSentinel,
+		clickHouseManagedTableSentinel,
 		clickHousePhysicalSchemaReadLimit,
 		clickHousePhysicalSchemaMemoryLimit,
 		clickHousePhysicalSchemaResultLimit,
@@ -138,7 +138,7 @@ func TestValidateClickHousePhysicalSchemaForDatabaseRejectsUnsafeNameWithoutQuer
 	}
 }
 
-func TestClickHousePhysicalSchemaDefinitionsMatchPinnedReleaseDigests(
+func TestClickHousePhysicalSchemaDefinitionsMatchPinnedDigests(
 	t *testing.T,
 ) {
 	t.Parallel()
@@ -156,7 +156,7 @@ func TestClickHousePhysicalSchemaDefinitionsMatchPinnedReleaseDigests(
 		{
 			name:       "events",
 			definition: clickHouseEventsPhysicalSchemaDefinition,
-			want:       "616df71621140192ee7c8e1e3c328219c8e9c7600a23f7b4458aebed7640f719",
+			want:       "9595c526e7c382d38a8ddb7a77e9f2d84c312e3c6703108b5627d5c604247850",
 		},
 		{
 			name:       "recovery sets",
@@ -175,7 +175,7 @@ func TestClickHousePhysicalSchemaDefinitionsMatchPinnedReleaseDigests(
 
 			got := fmt.Sprintf("%x", sha256.Sum256([]byte(test.definition)))
 			if got != test.want {
-				t.Fatalf("release physical-schema digest = %s, want %s", got, test.want)
+				t.Fatalf("physical-schema digest = %s, want %s", got, test.want)
 			}
 		})
 	}
@@ -233,7 +233,7 @@ func TestValidateClickHousePhysicalSchemaRejectsTableSetOrDefinitionDrift(
 			mutate: func(connection *fakeClickHousePhysicalSchemaConnection) {
 				connection.eventsDefinition = strings.Replace(
 					connection.eventsDefinition,
-					"`field_types` Array(UInt8) DEFAULT [] CODEC(ZSTD(1)), ",
+					"`field_types` Array(UInt8) CODEC(ZSTD(1)), ",
 					"",
 					1,
 				)

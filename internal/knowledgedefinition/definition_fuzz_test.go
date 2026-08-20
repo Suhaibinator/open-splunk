@@ -5,7 +5,7 @@ import (
 	"crypto/sha256"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 )
@@ -56,7 +56,7 @@ func FuzzNormalizeNeverPanicsAndSuccessIsIdempotent(f *testing.F) {
 		if len(data) > MaximumCanonicalBytes {
 			return
 		}
-		definition := &opensplunkv1.KnowledgeObjectDefinition{}
+		definition := &opensplunk.KnowledgeObjectDefinition{}
 		if err := (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(data, definition); err != nil {
 			return
 		}
@@ -96,7 +96,7 @@ func FuzzDecodeCanonicalFutureBodyNeverPanicsAndSuccessIsStable(f *testing.F) {
 		decoded, err := DecodeCanonicalInactiveFutureBody(
 			data,
 			digest[:],
-			opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+			opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 		)
 		if err != nil {
 			return
@@ -108,7 +108,7 @@ func FuzzDecodeCanonicalFutureBodyNeverPanicsAndSuccessIsStable(f *testing.F) {
 		again, err := DecodeCanonicalInactiveFutureBody(
 			decoded.Bytes,
 			decoded.Digest[:],
-			opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+			opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 		)
 		if err != nil {
 			t.Fatalf("successful future decode is not repeatable: %v", err)

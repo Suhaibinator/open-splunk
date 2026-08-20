@@ -39,7 +39,7 @@ type jobListFilterFingerprint struct {
 
 func jobListFilterHash(access AccessScope, request normalizedJobListRequest) (string, error) {
 	payload, err := json.Marshal(jobListFilterFingerprint{
-		Version:  1,
+		Version:  jobListCursorVersion,
 		TenantID: access.TenantID,
 		OwnerID:  access.OwnerID,
 		AppID:    request.appID,

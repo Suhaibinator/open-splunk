@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
@@ -178,15 +178,15 @@ func statsWildcardReplayCandidateProgram(
 	ownerID string,
 ) knowledgeprogram.Program {
 	t.Helper()
-	definition := &opensplunkv1.KnowledgeObjectDefinition{
+	definition := &opensplunk.KnowledgeObjectDefinition{
 		AppId:        appID,
 		Name:         "candidate-alias",
-		SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{
-			FieldAlias: &opensplunkv1.FieldAliasDefinition{
+		SharingScope: opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{
+			FieldAlias: &opensplunk.FieldAliasDefinition{
 				SourceField:       "bytes",
 				DestinationField:  "candidate_bytes",
-				OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+				OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
 			},
 		},
 	}
@@ -194,9 +194,9 @@ func statsWildcardReplayCandidateProgram(
 	if err != nil {
 		t.Fatalf("knowledgedefinition.Normalize(): %v", err)
 	}
-	program, err := knowledgeprogram.Prepare(knowledgeprogram.Input{Objects: []*opensplunkv1.KnowledgeSnapshotObject{{
+	program, err := knowledgeprogram.Prepare(knowledgeprogram.Input{Objects: []*opensplunk.KnowledgeSnapshotObject{{
 		ResolutionOrdinal: 0,
-		Stage:             opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
+		Stage:             opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
 		StageOrdinal:      0,
 		KnowledgeObjectId: "ko-stats-wildcard-replay-candidate",
 		Version:           1,

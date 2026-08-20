@@ -16,7 +16,7 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
@@ -144,8 +144,8 @@ func TestBinEdgeMetadataAgainstClickHouse(t *testing.T) {
 	// A wide event pushes its last leaves out of the bounded dynamic-path budget
 	// and into ClickHouse's shared-data encoding, where the runtime type must
 	// still be readable for classification.
-	numericPads := make([]*opensplunkv1.TypedObjectField, 0, 300)
-	textPads := make([]*opensplunkv1.TypedObjectField, 0, 300)
+	numericPads := make([]*opensplunk.TypedObjectField, 0, 300)
+	textPads := make([]*opensplunk.TypedObjectField, 0, 300)
 	for index := range 300 {
 		// Every leaf spells the same value, so the assertion below does not
 		// depend on which leaves ClickHouse chose to keep as subcolumns.
@@ -1082,7 +1082,7 @@ func binEdgeMetadataCluster(t *testing.T, ctx context.Context) (clickhousedriver
 func binEdgeMetadataEvent(
 	id, index, batch, raw string,
 	indexTime time.Time,
-	fields ...*opensplunkv1.TypedObjectField,
+	fields ...*opensplunk.TypedObjectField,
 ) *ingest.StoredEvent {
 	event := testStoredEvent(id, index, indexTime)
 	event.BatchID = batch

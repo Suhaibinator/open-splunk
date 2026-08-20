@@ -6,7 +6,7 @@ import (
 	"slices"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"google.golang.org/protobuf/proto"
 )
@@ -143,7 +143,7 @@ func TestKnowledgeSnapshotAcceptanceFinalizesExactPublicCompilerAuthority(t *tes
 
 	substitutionInput := snapshotGoldenInput(t)
 	alias := substitutionInput.Objects[len(substitutionInput.Objects)-1]
-	definition := proto.Clone(alias.Definition).(*opensplunkv1.KnowledgeObjectDefinition)
+	definition := proto.Clone(alias.Definition).(*opensplunk.KnowledgeObjectDefinition)
 	definition.Name = "alias-b"
 	substitutionInput.Objects[len(substitutionInput.Objects)-1] = snapshotObject(
 		t,

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -20,7 +20,7 @@ func TestSenderThrottleReducedLimitsDoesNotDeadLetter(t *testing.T) {
 	fs := newFakeServer()
 	var mu sync.Mutex
 	seen := 0
-	fs.onBatch = func(fs *fakeServer, b *opensplunkv1.EventBatch) {
+	fs.onBatch = func(fs *fakeServer, b *opensplunk.EventBatch) {
 		mu.Lock()
 		seen++
 		n := seen
@@ -28,9 +28,9 @@ func TestSenderThrottleReducedLimitsDoesNotDeadLetter(t *testing.T) {
 		if n == 1 {
 			// After the first batch, impose a throttle with a tiny max_batch_bytes
 			// that expires shortly. The next (100-byte) batch exceeds it.
-			_ = fs.send(&opensplunkv1.CollectResponse{
-				Payload: &opensplunkv1.CollectResponse_Throttle{Throttle: &opensplunkv1.Throttle{
-					Reason:         opensplunkv1.ThrottleReason_THROTTLE_REASON_SERVER_LOAD,
+			_ = fs.send(&opensplunk.CollectResponse{
+				Payload: &opensplunk.CollectResponse_Throttle{Throttle: &opensplunk.Throttle{
+					Reason:         opensplunk.ThrottleReason_THROTTLE_REASON_SERVER_LOAD,
 					MaxBatchBytes:  1,
 					EffectiveUntil: timestamppb.New(time.Now().Add(100 * time.Millisecond)),
 				}},
@@ -65,7 +65,7 @@ func TestSenderThrottleReducedLimitsDoesNotDeadLetter(t *testing.T) {
 func TestSenderExceedsReadyLimitsDeadLetters(t *testing.T) {
 	t.Parallel()
 	fs := newFakeServer()
-	fs.readyFn = func() *opensplunkv1.CollectorReady {
+	fs.readyFn = func() *opensplunk.CollectorReady {
 		r := defaultReady()
 		r.MaxBatchBytes = 50 // permanent negotiated cap
 		return r
@@ -83,7 +83,7 @@ func TestSenderExceedsReadyLimitsDeadLetters(t *testing.T) {
 	waitFor(t, "oversized batch dead-lettered", func() bool { return len(sink.snapshot()) == 1 })
 
 	rec := sink.snapshot()[0]
-	if rec.Code != opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE.String() {
+	if rec.Code != opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE.String() {
 		t.Fatalf("dead-letter code = %q, want BATCH_TOO_LARGE", rec.Code)
 	}
 	cancel()
@@ -93,7 +93,7 @@ func TestSenderExceedsReadyLimitsDeadLetters(t *testing.T) {
 func TestSenderRetainsMultiEventBatchThatRequiresLosslessRepacking(t *testing.T) {
 	t.Parallel()
 	fs := newFakeServer()
-	fs.readyFn = func() *opensplunkv1.CollectorReady {
+	fs.readyFn = func() *opensplunk.CollectorReady {
 		ready := defaultReady()
 		ready.MaxBatchEvents = 1
 		return ready
@@ -124,7 +124,7 @@ func TestSenderRetainsMultiEventBatchThatRequiresLosslessRepacking(t *testing.T)
 func TestSenderDeadLettersSingleEventAboveNegotiatedEventLimit(t *testing.T) {
 	t.Parallel()
 	fs := newFakeServer()
-	fs.readyFn = func() *opensplunkv1.CollectorReady {
+	fs.readyFn = func() *opensplunk.CollectorReady {
 		ready := defaultReady()
 		ready.MaxEventBytes = 1
 		return ready
@@ -135,7 +135,7 @@ func TestSenderDeadLettersSingleEventAboveNegotiatedEventLimit(t *testing.T) {
 	cancel, done := runSender(t, s)
 	waitFor(t, "single oversized event terminally handled", func() bool { return q.ackedSeq() == 1 })
 	records := sink.snapshot()
-	if len(records) != 1 || records[0].Code != opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_EVENT_TOO_LARGE.String() {
+	if len(records) != 1 || records[0].Code != opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_EVENT_TOO_LARGE.String() {
 		t.Fatalf("single-event negotiated dead letter = %+v", records)
 	}
 	cancel()
@@ -150,7 +150,7 @@ func TestSenderRetryFloodCoalescesToSingleResend(t *testing.T) {
 	fs := newFakeServer()
 	var mu sync.Mutex
 	deliveries := 0
-	fs.onBatch = func(fs *fakeServer, b *opensplunkv1.EventBatch) {
+	fs.onBatch = func(fs *fakeServer, b *opensplunk.EventBatch) {
 		mu.Lock()
 		deliveries++
 		n := deliveries
@@ -158,11 +158,11 @@ func TestSenderRetryFloodCoalescesToSingleResend(t *testing.T) {
 		if n == 1 {
 			// Flood identical RetryBatch messages before the (delayed) resend fires.
 			for range 100 {
-				_ = fs.send(&opensplunkv1.CollectResponse{
-					Payload: &opensplunkv1.CollectResponse_RetryBatch{RetryBatch: &opensplunkv1.RetryBatch{
+				_ = fs.send(&opensplunk.CollectResponse{
+					Payload: &opensplunk.CollectResponse_RetryBatch{RetryBatch: &opensplunk.RetryBatch{
 						BatchId:       b.GetBatchId(),
 						BatchSequence: b.GetBatchSequence(),
-						Reason:        opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
+						Reason:        opensplunk.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
 						RetryAfter:    durationpb.New(60 * time.Millisecond),
 					}},
 				})

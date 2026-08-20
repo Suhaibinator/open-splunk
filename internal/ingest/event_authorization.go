@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"slices"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/tokenconstraint"
 )
 
@@ -125,7 +125,7 @@ func (matcher eventAuthorizationMatcher) rejection(event *StoredEvent) *EventErr
 	}
 	if !eventAuthorizationDimensionAllows(matcher.hosts, event.Event.GetHost()) {
 		return eventFailure(
-			opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_HOST,
+			opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_HOST,
 			"token is not authorized for the event host",
 			"host",
 			"unauthorized_host",
@@ -133,7 +133,7 @@ func (matcher eventAuthorizationMatcher) rejection(event *StoredEvent) *EventErr
 	}
 	if !eventAuthorizationDimensionAllows(matcher.sources, event.Event.GetSource()) {
 		return eventFailure(
-			opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_SOURCE,
+			opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_SOURCE,
 			"token is not authorized for the event source",
 			"source",
 			"unauthorized_source",

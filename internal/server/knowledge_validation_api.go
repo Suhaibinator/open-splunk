@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/Suhaibinator/SRouter/pkg/router"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeattemptaudit"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
@@ -20,7 +20,7 @@ import (
 // the Validate-specific codec before it reaches catalog authority.
 func (handler *apiHandler) validateKnowledgeObject(
 	request *http.Request,
-	input *opensplunkv1.ValidateKnowledgeObjectRequest,
+	input *opensplunk.ValidateKnowledgeObjectRequest,
 ) (*serializedValidateKnowledgeObjectResponse, error) {
 	if err := knowledgecatalog.ValidateKnowledgeObjectRequest(input); err != nil {
 		return nil, handler.rejectKnowledgeRequest(
@@ -124,11 +124,11 @@ type knowledgeValidationRequestAuthority struct {
 	update   bool
 	objectID string
 	appID    string
-	intent   opensplunkv1.KnowledgeValidationIntent
+	intent   opensplunk.KnowledgeValidationIntent
 }
 
 func detachKnowledgeValidationRequestAuthority(
-	request *opensplunkv1.ValidateKnowledgeObjectRequest,
+	request *opensplunk.ValidateKnowledgeObjectRequest,
 ) knowledgeValidationRequestAuthority {
 	authority := knowledgeValidationRequestAuthority{
 		intent: request.GetIntent(),
@@ -262,7 +262,7 @@ func knowledgeValidationErrorApplies(
 	case knowledgeValidationErrorVersionConflict:
 		return authority.update
 	case knowledgeValidationErrorDependencyConflict:
-		return authority.intent == opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION
+		return authority.intent == opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION
 	case knowledgeValidationErrorInvalidArgument,
 		knowledgeValidationErrorCapacity,
 		knowledgeValidationErrorCanceled,

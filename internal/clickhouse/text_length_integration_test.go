@@ -7,7 +7,7 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 )
 
 func testTextLengthAgainstClickHouse(
@@ -39,7 +39,7 @@ func testTextLengthAgainstClickHouse(
 
 	binaryEvent := testStoredEvent("text-length-binary", "textlength", indexTime)
 	binaryEvent.Event.Raw = []byte("VALID ASCII MARKED BINARY")
-	binaryEvent.Event.RawEncoding = opensplunkv1.RawEncoding_RAW_ENCODING_BINARY
+	binaryEvent.Event.RawEncoding = opensplunk.RawEncoding_RAW_ENCODING_BINARY
 
 	compile, queryContext := storeScalarFunctionIntegrationFixtures(
 		ctx,

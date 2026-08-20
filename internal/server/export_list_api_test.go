@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"google.golang.org/protobuf/proto"
@@ -54,20 +54,20 @@ func TestExportListRouteRoundTripsScopeCanonicalFiltersAndAllStates(t *testing.T
 	})
 	pageSize := uint32(len(jobs))
 	pageToken, searchJobID := "current-export-page", "search-1"
-	request := &opensplunkv1.ListExportJobsRequest{
-		Page: &opensplunkv1.PageRequest{
+	request := &opensplunk.ListExportJobsRequest{
+		Page: &opensplunk.PageRequest{
 			PageSize:         &pageSize,
 			PageToken:        &pageToken,
 			IncludeTotalSize: true,
 		},
-		StateFilters: []opensplunkv1.ExportJobState{
-			opensplunkv1.ExportJobState_EXPORT_JOB_STATE_EXPIRED,
-			opensplunkv1.ExportJobState_EXPORT_JOB_STATE_FAILED,
-			opensplunkv1.ExportJobState_EXPORT_JOB_STATE_QUEUED,
-			opensplunkv1.ExportJobState_EXPORT_JOB_STATE_COMPLETED,
-			opensplunkv1.ExportJobState_EXPORT_JOB_STATE_RUNNING,
-			opensplunkv1.ExportJobState_EXPORT_JOB_STATE_CANCELED,
-			opensplunkv1.ExportJobState_EXPORT_JOB_STATE_FAILED,
+		StateFilters: []opensplunk.ExportJobState{
+			opensplunk.ExportJobState_EXPORT_JOB_STATE_EXPIRED,
+			opensplunk.ExportJobState_EXPORT_JOB_STATE_FAILED,
+			opensplunk.ExportJobState_EXPORT_JOB_STATE_QUEUED,
+			opensplunk.ExportJobState_EXPORT_JOB_STATE_COMPLETED,
+			opensplunk.ExportJobState_EXPORT_JOB_STATE_RUNNING,
+			opensplunk.ExportJobState_EXPORT_JOB_STATE_CANCELED,
+			opensplunk.ExportJobState_EXPORT_JOB_STATE_FAILED,
 		},
 		SearchJobIdFilter: &searchJobID,
 	}
@@ -102,18 +102,18 @@ func TestExportListRouteRoundTripsScopeCanonicalFiltersAndAllStates(t *testing.T
 		t.Fatalf("search job filter = %#v", captured.SearchJobIDFilter)
 	}
 
-	var decoded opensplunkv1.ListExportJobsResponse
+	var decoded opensplunk.ListExportJobsResponse
 	unmarshalResponse(t, response, &decoded)
 	if len(decoded.GetExportJobs()) != len(states) {
 		t.Fatalf("jobs = %d, want %d", len(decoded.GetExportJobs()), len(states))
 	}
-	for index, want := range []opensplunkv1.ExportJobState{
-		opensplunkv1.ExportJobState_EXPORT_JOB_STATE_QUEUED,
-		opensplunkv1.ExportJobState_EXPORT_JOB_STATE_RUNNING,
-		opensplunkv1.ExportJobState_EXPORT_JOB_STATE_COMPLETED,
-		opensplunkv1.ExportJobState_EXPORT_JOB_STATE_FAILED,
-		opensplunkv1.ExportJobState_EXPORT_JOB_STATE_CANCELED,
-		opensplunkv1.ExportJobState_EXPORT_JOB_STATE_EXPIRED,
+	for index, want := range []opensplunk.ExportJobState{
+		opensplunk.ExportJobState_EXPORT_JOB_STATE_QUEUED,
+		opensplunk.ExportJobState_EXPORT_JOB_STATE_RUNNING,
+		opensplunk.ExportJobState_EXPORT_JOB_STATE_COMPLETED,
+		opensplunk.ExportJobState_EXPORT_JOB_STATE_FAILED,
+		opensplunk.ExportJobState_EXPORT_JOB_STATE_CANCELED,
+		opensplunk.ExportJobState_EXPORT_JOB_STATE_EXPIRED,
 	} {
 		if got := decoded.GetExportJobs()[index].GetState(); got != want {
 			t.Fatalf("job %d state = %v, want %v", index, got, want)
@@ -142,7 +142,7 @@ func TestExportListDefaultsAndCapsPageSizeAtFifteen(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			service := &fakeExports{}
 			handler := newExportListTestHandler(t, service, test.config)
-			response := postProto(t, handler, exportJobsListPath, &opensplunkv1.ListExportJobsRequest{})
+			response := postProto(t, handler, exportJobsListPath, &opensplunk.ListExportJobsRequest{})
 			if response.Code != http.StatusOK {
 				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 			}
@@ -181,12 +181,12 @@ func TestExportListAllowsPageSizeAndTotalOptionToChangeOnContinuation(t *testing
 	handler := newExportListTestHandler(t, service, Config{})
 	token, searchJobID := "opaque-continuation", "search-1"
 	firstSize, secondSize := uint32(1), uint32(7)
-	stateFilters := []opensplunkv1.ExportJobState{
-		opensplunkv1.ExportJobState_EXPORT_JOB_STATE_RUNNING,
+	stateFilters := []opensplunk.ExportJobState{
+		opensplunk.ExportJobState_EXPORT_JOB_STATE_RUNNING,
 	}
-	for _, request := range []*opensplunkv1.ListExportJobsRequest{
+	for _, request := range []*opensplunk.ListExportJobsRequest{
 		{
-			Page: &opensplunkv1.PageRequest{
+			Page: &opensplunk.PageRequest{
 				PageSize:  &firstSize,
 				PageToken: &token,
 			},
@@ -194,7 +194,7 @@ func TestExportListAllowsPageSizeAndTotalOptionToChangeOnContinuation(t *testing
 			SearchJobIdFilter: &searchJobID,
 		},
 		{
-			Page: &opensplunkv1.PageRequest{
+			Page: &opensplunk.PageRequest{
 				PageSize:         &secondSize,
 				PageToken:        &token,
 				IncludeTotalSize: true,
@@ -237,11 +237,11 @@ func TestExportListRejectsInvalidRequestBeforeService(t *testing.T) {
 	paddedToken := " signed-token "
 	controlToken := "signed\x00token"
 	tooManyStates := make(
-		[]opensplunkv1.ExportJobState,
+		[]opensplunk.ExportJobState,
 		maximumExportListStateFilters+1,
 	)
 	for index := range tooManyStates {
-		tooManyStates[index] = opensplunkv1.ExportJobState_EXPORT_JOB_STATE_QUEUED
+		tooManyStates[index] = opensplunk.ExportJobState_EXPORT_JOB_STATE_QUEUED
 	}
 	emptySearchID := " \t "
 	paddedSearchID := " search-1 "
@@ -252,59 +252,59 @@ func TestExportListRejectsInvalidRequestBeforeService(t *testing.T) {
 	controlSearchID := "search\nid"
 	tests := []struct {
 		name    string
-		request *opensplunkv1.ListExportJobsRequest
+		request *opensplunk.ListExportJobsRequest
 	}{
 		{
 			name: "explicit zero page size",
-			request: &opensplunkv1.ListExportJobsRequest{
-				Page: &opensplunkv1.PageRequest{PageSize: &zero},
+			request: &opensplunk.ListExportJobsRequest{
+				Page: &opensplunk.PageRequest{PageSize: &zero},
 			},
 		},
 		{
 			name: "page size above endpoint maximum",
-			request: &opensplunkv1.ListExportJobsRequest{
-				Page: &opensplunkv1.PageRequest{PageSize: &aboveMaximum},
+			request: &opensplunk.ListExportJobsRequest{
+				Page: &opensplunk.PageRequest{PageSize: &aboveMaximum},
 			},
 		},
 		{
 			name: "oversized token",
-			request: &opensplunkv1.ListExportJobsRequest{
-				Page: &opensplunkv1.PageRequest{PageToken: &oversizedToken},
+			request: &opensplunk.ListExportJobsRequest{
+				Page: &opensplunk.PageRequest{PageToken: &oversizedToken},
 			},
 		},
 		{
 			name: "padded token",
-			request: &opensplunkv1.ListExportJobsRequest{
-				Page: &opensplunkv1.PageRequest{PageToken: &paddedToken},
+			request: &opensplunk.ListExportJobsRequest{
+				Page: &opensplunk.PageRequest{PageToken: &paddedToken},
 			},
 		},
 		{
 			name: "control token",
-			request: &opensplunkv1.ListExportJobsRequest{
-				Page: &opensplunkv1.PageRequest{PageToken: &controlToken},
+			request: &opensplunk.ListExportJobsRequest{
+				Page: &opensplunk.PageRequest{PageToken: &controlToken},
 			},
 		},
-		{name: "too many raw states", request: &opensplunkv1.ListExportJobsRequest{
+		{name: "too many raw states", request: &opensplunk.ListExportJobsRequest{
 			StateFilters: tooManyStates,
 		}},
-		{name: "unspecified state", request: &opensplunkv1.ListExportJobsRequest{
-			StateFilters: []opensplunkv1.ExportJobState{
-				opensplunkv1.ExportJobState_EXPORT_JOB_STATE_UNSPECIFIED,
+		{name: "unspecified state", request: &opensplunk.ListExportJobsRequest{
+			StateFilters: []opensplunk.ExportJobState{
+				opensplunk.ExportJobState_EXPORT_JOB_STATE_UNSPECIFIED,
 			},
 		}},
-		{name: "unknown state", request: &opensplunkv1.ListExportJobsRequest{
-			StateFilters: []opensplunkv1.ExportJobState{opensplunkv1.ExportJobState(99)},
+		{name: "unknown state", request: &opensplunk.ListExportJobsRequest{
+			StateFilters: []opensplunk.ExportJobState{opensplunk.ExportJobState(99)},
 		}},
-		{name: "empty search job filter", request: &opensplunkv1.ListExportJobsRequest{
+		{name: "empty search job filter", request: &opensplunk.ListExportJobsRequest{
 			SearchJobIdFilter: &emptySearchID,
 		}},
-		{name: "padded search job filter", request: &opensplunkv1.ListExportJobsRequest{
+		{name: "padded search job filter", request: &opensplunk.ListExportJobsRequest{
 			SearchJobIdFilter: &paddedSearchID,
 		}},
-		{name: "oversized search job filter", request: &opensplunkv1.ListExportJobsRequest{
+		{name: "oversized search job filter", request: &opensplunk.ListExportJobsRequest{
 			SearchJobIdFilter: &oversizedSearchID,
 		}},
-		{name: "control search job filter", request: &opensplunkv1.ListExportJobsRequest{
+		{name: "control search job filter", request: &opensplunk.ListExportJobsRequest{
 			SearchJobIdFilter: &controlSearchID,
 		}},
 	}
@@ -332,12 +332,12 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 	}
 	tests := []struct {
 		name    string
-		request *opensplunkv1.ListExportJobsRequest
+		request *opensplunk.ListExportJobsRequest
 		page    func() exportjobs.ListPage
 	}{
 		{
 			name:    "cross owner",
-			request: &opensplunkv1.ListExportJobsRequest{},
+			request: &opensplunk.ListExportJobsRequest{},
 			page: func() exportjobs.ListPage {
 				items := exportListItems(base("export-a", testNow))
 				items[0].OwnerID = "other-owner"
@@ -346,7 +346,7 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name:    "cross tenant",
-			request: &opensplunkv1.ListExportJobsRequest{},
+			request: &opensplunk.ListExportJobsRequest{},
 			page: func() exportjobs.ListPage {
 				items := exportListItems(base("export-a", testNow))
 				items[0].TenantID = "other-tenant"
@@ -355,7 +355,7 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name:    "invalid state",
-			request: &opensplunkv1.ListExportJobsRequest{},
+			request: &opensplunk.ListExportJobsRequest{},
 			page: func() exportjobs.ListPage {
 				job := base("export-a", testNow)
 				job.State = exportjobs.StateInvalid
@@ -364,7 +364,7 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name:    "empty ID",
-			request: &opensplunkv1.ListExportJobsRequest{},
+			request: &opensplunk.ListExportJobsRequest{},
 			page: func() exportjobs.ListPage {
 				return exportjobs.ListPage{Jobs: exportListItems(
 					base("", testNow),
@@ -373,7 +373,7 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name:    "padded ID",
-			request: &opensplunkv1.ListExportJobsRequest{},
+			request: &opensplunk.ListExportJobsRequest{},
 			page: func() exportjobs.ListPage {
 				return exportjobs.ListPage{Jobs: exportListItems(
 					base(" export-a ", testNow),
@@ -382,7 +382,7 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name:    "zero version",
-			request: &opensplunkv1.ListExportJobsRequest{},
+			request: &opensplunk.ListExportJobsRequest{},
 			page: func() exportjobs.ListPage {
 				job := base("export-a", testNow)
 				job.Version = 0
@@ -391,7 +391,7 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name:    "invalid format",
-			request: &opensplunkv1.ListExportJobsRequest{},
+			request: &opensplunk.ListExportJobsRequest{},
 			page: func() exportjobs.ListPage {
 				job := base("export-a", testNow)
 				job.Format = exportjobs.FormatInvalid
@@ -400,7 +400,7 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name:    "duplicate selected column",
-			request: &opensplunkv1.ListExportJobsRequest{},
+			request: &opensplunk.ListExportJobsRequest{},
 			page: func() exportjobs.ListPage {
 				job := base("export-a", testNow)
 				job.Columns = []string{"message", "message"}
@@ -409,7 +409,7 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name:    "empty selected column",
-			request: &opensplunkv1.ListExportJobsRequest{},
+			request: &opensplunk.ListExportJobsRequest{},
 			page: func() exportjobs.ListPage {
 				job := base("export-a", testNow)
 				job.Columns = []string{""}
@@ -418,7 +418,7 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name:    "control byte in selected column",
-			request: &opensplunkv1.ListExportJobsRequest{},
+			request: &opensplunk.ListExportJobsRequest{},
 			page: func() exportjobs.ListPage {
 				job := base("export-a", testNow)
 				job.Columns = []string{"message\ninjected"}
@@ -427,7 +427,7 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name:    "queued state has progress",
-			request: &opensplunkv1.ListExportJobsRequest{},
+			request: &opensplunk.ListExportJobsRequest{},
 			page: func() exportjobs.ListPage {
 				job := base("export-a", testNow)
 				job.Progress.RowsWritten = 1
@@ -436,7 +436,7 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name:    "progress timestamp precedes creation",
-			request: &opensplunkv1.ListExportJobsRequest{},
+			request: &opensplunk.ListExportJobsRequest{},
 			page: func() exportjobs.ListPage {
 				job := base("export-a", testNow)
 				job.Progress.UpdatedAt = job.CreatedAt.Add(-time.Second)
@@ -445,7 +445,7 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name:    "started timestamp precedes creation",
-			request: &opensplunkv1.ListExportJobsRequest{},
+			request: &opensplunk.ListExportJobsRequest{},
 			page: func() exportjobs.ListPage {
 				job := validListExportJob(
 					"export-a",
@@ -458,7 +458,7 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name:    "progress timestamp precedes start",
-			request: &opensplunkv1.ListExportJobsRequest{},
+			request: &opensplunk.ListExportJobsRequest{},
 			page: func() exportjobs.ListPage {
 				job := validListExportJob(
 					"export-a",
@@ -471,7 +471,7 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name:    "finished timestamp precedes start",
-			request: &opensplunkv1.ListExportJobsRequest{},
+			request: &opensplunk.ListExportJobsRequest{},
 			page: func() exportjobs.ListPage {
 				job := validListExportJob(
 					"export-a",
@@ -484,7 +484,7 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name:    "expiration precedes finish",
-			request: &opensplunkv1.ListExportJobsRequest{},
+			request: &opensplunk.ListExportJobsRequest{},
 			page: func() exportjobs.ListPage {
 				job := validListExportJob(
 					"export-a",
@@ -498,7 +498,7 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name:    "failed state missing failure",
-			request: &opensplunkv1.ListExportJobsRequest{},
+			request: &opensplunk.ListExportJobsRequest{},
 			page: func() exportjobs.ListPage {
 				job := validListExportJob(
 					"export-a",
@@ -511,7 +511,7 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name:    "queued state carries failure",
-			request: &opensplunkv1.ListExportJobsRequest{},
+			request: &opensplunk.ListExportJobsRequest{},
 			page: func() exportjobs.ListPage {
 				job := base("export-a", testNow)
 				job.Failure = &exportjobs.Failure{
@@ -523,7 +523,7 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name:    "invalid failure code",
-			request: &opensplunkv1.ListExportJobsRequest{},
+			request: &opensplunk.ListExportJobsRequest{},
 			page: func() exportjobs.ListPage {
 				job := validListExportJob(
 					"export-a",
@@ -536,7 +536,7 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name:    "failure leaks dependency detail",
-			request: &opensplunkv1.ListExportJobsRequest{},
+			request: &opensplunk.ListExportJobsRequest{},
 			page: func() exportjobs.ListPage {
 				job := validListExportJob(
 					"export-a",
@@ -549,7 +549,7 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name:    "failure retryability disagrees with code",
-			request: &opensplunkv1.ListExportJobsRequest{},
+			request: &opensplunk.ListExportJobsRequest{},
 			page: func() exportjobs.ListPage {
 				job := validListExportJob(
 					"export-a",
@@ -562,7 +562,7 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name:    "completed state missing artifact",
-			request: &opensplunkv1.ListExportJobsRequest{},
+			request: &opensplunk.ListExportJobsRequest{},
 			page: func() exportjobs.ListPage {
 				job := validListExportJob(
 					"export-a",
@@ -575,7 +575,7 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name:    "artifact counters disagree with progress",
-			request: &opensplunkv1.ListExportJobsRequest{},
+			request: &opensplunk.ListExportJobsRequest{},
 			page: func() exportjobs.ListPage {
 				job := validListExportJob(
 					"export-a",
@@ -588,7 +588,7 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name:    "artifact filename disagrees with ID",
-			request: &opensplunkv1.ListExportJobsRequest{},
+			request: &opensplunk.ListExportJobsRequest{},
 			page: func() exportjobs.ListPage {
 				job := validListExportJob(
 					"export-a",
@@ -601,7 +601,7 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name:    "artifact media type disagrees with format",
-			request: &opensplunkv1.ListExportJobsRequest{},
+			request: &opensplunk.ListExportJobsRequest{},
 			page: func() exportjobs.ListPage {
 				job := validListExportJob(
 					"export-a",
@@ -614,9 +614,9 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name: "state filter mismatch",
-			request: &opensplunkv1.ListExportJobsRequest{
-				StateFilters: []opensplunkv1.ExportJobState{
-					opensplunkv1.ExportJobState_EXPORT_JOB_STATE_FAILED,
+			request: &opensplunk.ListExportJobsRequest{
+				StateFilters: []opensplunk.ExportJobState{
+					opensplunk.ExportJobState_EXPORT_JOB_STATE_FAILED,
 				},
 			},
 			page: func() exportjobs.ListPage {
@@ -625,9 +625,9 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name: "search job filter mismatch",
-			request: func() *opensplunkv1.ListExportJobsRequest {
+			request: func() *opensplunk.ListExportJobsRequest {
 				filter := "search-other"
-				return &opensplunkv1.ListExportJobsRequest{SearchJobIdFilter: &filter}
+				return &opensplunk.ListExportJobsRequest{SearchJobIdFilter: &filter}
 			}(),
 			page: func() exportjobs.ListPage {
 				return exportjobs.ListPage{Jobs: exportListItems(base("export-a", testNow))}
@@ -635,7 +635,7 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name:    "duplicate ID",
-			request: &opensplunkv1.ListExportJobsRequest{},
+			request: &opensplunk.ListExportJobsRequest{},
 			page: func() exportjobs.ListPage {
 				return exportjobs.ListPage{Jobs: exportListItems(
 					base("export-a", testNow),
@@ -645,7 +645,7 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name:    "ascending creation time",
-			request: &opensplunkv1.ListExportJobsRequest{},
+			request: &opensplunk.ListExportJobsRequest{},
 			page: func() exportjobs.ListPage {
 				return exportjobs.ListPage{Jobs: exportListItems(
 					base("export-b", testNow.Add(-time.Second)),
@@ -655,7 +655,7 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name:    "ascending ID tie break",
-			request: &opensplunkv1.ListExportJobsRequest{},
+			request: &opensplunk.ListExportJobsRequest{},
 			page: func() exportjobs.ListPage {
 				return exportjobs.ListPage{Jobs: exportListItems(
 					base("export-a", testNow),
@@ -665,10 +665,10 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name: "more than requested",
-			request: func() *opensplunkv1.ListExportJobsRequest {
+			request: func() *opensplunk.ListExportJobsRequest {
 				size := uint32(1)
-				return &opensplunkv1.ListExportJobsRequest{
-					Page: &opensplunkv1.PageRequest{PageSize: &size},
+				return &opensplunk.ListExportJobsRequest{
+					Page: &opensplunk.PageRequest{PageSize: &size},
 				}
 			}(),
 			page: func() exportjobs.ListPage {
@@ -680,7 +680,7 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name:    "token on short page",
-			request: &opensplunkv1.ListExportJobsRequest{},
+			request: &opensplunk.ListExportJobsRequest{},
 			page: func() exportjobs.ListPage {
 				return exportjobs.ListPage{
 					Jobs:          exportListItems(base("export-a", testNow)),
@@ -690,10 +690,10 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name: "replayed token",
-			request: func() *opensplunkv1.ListExportJobsRequest {
+			request: func() *opensplunk.ListExportJobsRequest {
 				size := uint32(1)
 				token := "same-token"
-				return &opensplunkv1.ListExportJobsRequest{Page: &opensplunkv1.PageRequest{
+				return &opensplunk.ListExportJobsRequest{Page: &opensplunk.PageRequest{
 					PageSize: &size, PageToken: &token,
 				}}
 			}(),
@@ -706,10 +706,10 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name: "invalid response token",
-			request: func() *opensplunkv1.ListExportJobsRequest {
+			request: func() *opensplunk.ListExportJobsRequest {
 				size := uint32(1)
-				return &opensplunkv1.ListExportJobsRequest{
-					Page: &opensplunkv1.PageRequest{PageSize: &size},
+				return &opensplunk.ListExportJobsRequest{
+					Page: &opensplunk.PageRequest{PageSize: &size},
 				}
 			}(),
 			page: func() exportjobs.ListPage {
@@ -721,10 +721,10 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name: "oversized response token",
-			request: func() *opensplunkv1.ListExportJobsRequest {
+			request: func() *opensplunk.ListExportJobsRequest {
 				size := uint32(1)
-				return &opensplunkv1.ListExportJobsRequest{
-					Page: &opensplunkv1.PageRequest{PageSize: &size},
+				return &opensplunk.ListExportJobsRequest{
+					Page: &opensplunk.PageRequest{PageSize: &size},
 				}
 			}(),
 			page: func() exportjobs.ListPage {
@@ -739,7 +739,7 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name:    "unexpected total",
-			request: &opensplunkv1.ListExportJobsRequest{},
+			request: &opensplunk.ListExportJobsRequest{},
 			page: func() exportjobs.ListPage {
 				total := uint64(1)
 				return exportjobs.ListPage{
@@ -751,7 +751,7 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name:    "exact flag without total",
-			request: &opensplunkv1.ListExportJobsRequest{},
+			request: &opensplunk.ListExportJobsRequest{},
 			page: func() exportjobs.ListPage {
 				return exportjobs.ListPage{
 					Jobs:           exportListItems(base("export-a", testNow)),
@@ -761,7 +761,7 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name: "missing requested total",
-			request: &opensplunkv1.ListExportJobsRequest{Page: &opensplunkv1.PageRequest{
+			request: &opensplunk.ListExportJobsRequest{Page: &opensplunk.PageRequest{
 				IncludeTotalSize: true,
 			}},
 			page: func() exportjobs.ListPage {
@@ -770,7 +770,7 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name: "total smaller than page",
-			request: &opensplunkv1.ListExportJobsRequest{Page: &opensplunkv1.PageRequest{
+			request: &opensplunk.ListExportJobsRequest{Page: &opensplunk.PageRequest{
 				IncludeTotalSize: true,
 			}},
 			page: func() exportjobs.ListPage {
@@ -787,7 +787,7 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name: "first terminal page total mismatch",
-			request: &opensplunkv1.ListExportJobsRequest{Page: &opensplunkv1.PageRequest{
+			request: &opensplunk.ListExportJobsRequest{Page: &opensplunk.PageRequest{
 				IncludeTotalSize: true,
 			}},
 			page: func() exportjobs.ListPage {
@@ -801,9 +801,9 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 		},
 		{
 			name: "continued page total has no remaining item",
-			request: func() *opensplunkv1.ListExportJobsRequest {
+			request: func() *opensplunk.ListExportJobsRequest {
 				size := uint32(1)
-				return &opensplunkv1.ListExportJobsRequest{Page: &opensplunkv1.PageRequest{
+				return &opensplunk.ListExportJobsRequest{Page: &opensplunk.PageRequest{
 					PageSize: &size, IncludeTotalSize: true,
 				}}
 			}(),
@@ -861,7 +861,7 @@ func TestExportListAcceptsInternallyConsistentServiceClockSkew(t *testing.T) {
 		t,
 		handler,
 		exportJobsListPath,
-		&opensplunkv1.ListExportJobsRequest{},
+		&opensplunk.ListExportJobsRequest{},
 	)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
@@ -934,7 +934,7 @@ func TestExportListMapsErrorsWithoutLeakingDetails(t *testing.T) {
 				t,
 				handler,
 				exportJobsListPath,
-				&opensplunkv1.ListExportJobsRequest{},
+				&opensplunk.ListExportJobsRequest{},
 			)
 			if response.Code != test.status {
 				t.Fatalf(
@@ -972,7 +972,7 @@ func TestExportListAcquiresSerializationPermitBeforeService(t *testing.T) {
 		service,
 		Config{MaximumConcurrentResponses: 1},
 	)
-	payload, err := proto.Marshal(&opensplunkv1.ListExportJobsRequest{})
+	payload, err := proto.Marshal(&opensplunk.ListExportJobsRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1025,7 +1025,7 @@ func TestExportListCancellationPreventsProtobufTransfer(t *testing.T) {
 		return exportjobs.ListPage{}, nil
 	}}
 	handler := newExportListTestHandler(t, service, Config{})
-	payload, err := proto.Marshal(&opensplunkv1.ListExportJobsRequest{})
+	payload, err := proto.Marshal(&opensplunk.ListExportJobsRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1061,7 +1061,7 @@ func TestExportListRejectsOversizedServiceProjection(t *testing.T) {
 		t,
 		handler,
 		exportJobsListPath,
-		&opensplunkv1.ListExportJobsRequest{},
+		&opensplunk.ListExportJobsRequest{},
 	)
 	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
@@ -1093,7 +1093,7 @@ func TestExportListRouteIsExactAndPostOnly(t *testing.T) {
 		t,
 		handler,
 		exportJobsListPath+"/extra",
-		&opensplunkv1.ListExportJobsRequest{},
+		&opensplunk.ListExportJobsRequest{},
 	)
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("suffix status = %d, body = %s", response.Code, response.Body.String())

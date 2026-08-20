@@ -7,7 +7,7 @@ import (
 	"slices"
 	"strconv"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
@@ -199,8 +199,8 @@ func validateKnowledgeJSONExtractionAuthority(
 	authority knowledgeJSONExtractionAuthority,
 ) ([]splpath.Step, error) {
 	origin := authority.origin
-	if origin.ObjectType() != opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION ||
-		origin.Stage() != opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION ||
+	if origin.ObjectType() != opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION ||
+		origin.Stage() != opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION ||
 		origin.Version() == 0 || origin.ObjectID() == "" || origin.Name() == "" ||
 		origin.AppID() == "" || origin.OwnerID() == "" ||
 		origin.DefinitionLocation() != "field_extraction.json.path" {
@@ -209,9 +209,9 @@ func validateKnowledgeJSONExtractionAuthority(
 		)
 	}
 	switch origin.SharingScope() {
-	case opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
-		opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-		opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL:
+	case opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
+		opensplunk.SharingScope_SHARING_SCOPE_APP,
+		opensplunk.SharingScope_SHARING_SCOPE_GLOBAL:
 	default:
 		return nil, errors.New(
 			"compile ClickHouse knowledge JSON extraction: sharing provenance is invalid",

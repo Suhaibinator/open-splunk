@@ -1446,7 +1446,7 @@ func newLiveLoadWorkload(t *testing.T) []liveLoadWorkItem {
 			body:        []byte(`{"event":"single"}`),
 		},
 		{
-			path:        "/services/collector/event/1.0",
+			path:        "/services/collector/event",
 			credential:  "transport-b",
 			channel:     testChannel,
 			contentType: "application/json",

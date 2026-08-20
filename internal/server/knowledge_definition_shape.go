@@ -1,7 +1,7 @@
 package server
 
 import (
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
 )
@@ -10,7 +10,7 @@ import (
 // cloning, or marshaling at configurable dependency boundaries. A protobuf
 // wire ceiling does not bound the heap represented by repeated empty messages.
 func boundedKnowledgeDefinitionRepeatedShape(
-	definition *opensplunkv1.KnowledgeObjectDefinition,
+	definition *opensplunk.KnowledgeObjectDefinition,
 ) bool {
 	if definition == nil {
 		return true

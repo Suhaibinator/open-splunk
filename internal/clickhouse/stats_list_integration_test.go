@@ -10,7 +10,7 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -32,7 +32,7 @@ func testStatsListAgainstClickHouse(
 		id string,
 		source string,
 		eventTime time.Time,
-		fields ...*opensplunkv1.TypedObjectField,
+		fields ...*opensplunk.TypedObjectField,
 	) *ingest.StoredEvent {
 		event := compilerIntegrationEvent(id, "stats-list-host", "stats list fixture", indexTime, fields...)
 		event.BatchID = "stats-list-main"
@@ -134,7 +134,7 @@ func testStatsListAgainstClickHouse(
 		))
 	}
 
-	fixedListMembers := make([]*opensplunkv1.TypedValue, MaximumStatsListValuesPerGroup)
+	fixedListMembers := make([]*opensplunk.TypedValue, MaximumStatsListValuesPerGroup)
 	for index := range fixedListMembers {
 		fixedListMembers[index] = typedString(fmt.Sprintf("fixed-%03d", index))
 	}

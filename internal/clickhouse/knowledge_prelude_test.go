@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 )
@@ -53,7 +53,7 @@ func TestCompileKnowledgePreludeDistinguishesAbsentEmptyAndDerivesMixedProof(t *
 		t.Fatal("present empty prelude accepted a non-Scan input state")
 	}
 
-	program := knowledgePreludeProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{
+	program := knowledgePreludeProgram(t, []*opensplunk.KnowledgeObjectDefinition{
 		knowledgeJSONStageDefinition("a-json", "json_value", "payload.value", "east"),
 		knowledgeRegexStageDefinition("b-regex", `(?P<regex_value>[a-z]+)`, []string{"regex_value"}, "west"),
 		knowledgePreludeAliasDefinition("c-alias", "host", "alias_value"),
@@ -152,16 +152,16 @@ func TestCompileKnowledgePreludeSupportsEveryOptionalStageCombination(t *testing
 	calculated := knowledgePreludeCalculatedDefinition("c-calculated", "calculated_value", "lower(source)")
 	tests := []struct {
 		name        string
-		definitions []*opensplunkv1.KnowledgeObjectDefinition
+		definitions []*opensplunk.KnowledgeObjectDefinition
 		stageKinds  []compiledKnowledgePreludeStageKind
 	}{
-		{name: "extraction", definitions: []*opensplunkv1.KnowledgeObjectDefinition{extraction}, stageKinds: []compiledKnowledgePreludeStageKind{compiledKnowledgePreludeStageExtraction}},
-		{name: "alias", definitions: []*opensplunkv1.KnowledgeObjectDefinition{alias}, stageKinds: []compiledKnowledgePreludeStageKind{compiledKnowledgePreludeStageAlias}},
-		{name: "calculated", definitions: []*opensplunkv1.KnowledgeObjectDefinition{calculated}, stageKinds: []compiledKnowledgePreludeStageKind{compiledKnowledgePreludeStageCalculated}},
-		{name: "extraction alias", definitions: []*opensplunkv1.KnowledgeObjectDefinition{extraction, alias}, stageKinds: []compiledKnowledgePreludeStageKind{compiledKnowledgePreludeStageExtraction, compiledKnowledgePreludeStageAlias}},
-		{name: "extraction calculated", definitions: []*opensplunkv1.KnowledgeObjectDefinition{extraction, calculated}, stageKinds: []compiledKnowledgePreludeStageKind{compiledKnowledgePreludeStageExtraction, compiledKnowledgePreludeStageCalculated}},
-		{name: "alias calculated", definitions: []*opensplunkv1.KnowledgeObjectDefinition{alias, calculated}, stageKinds: []compiledKnowledgePreludeStageKind{compiledKnowledgePreludeStageAlias, compiledKnowledgePreludeStageCalculated}},
-		{name: "all", definitions: []*opensplunkv1.KnowledgeObjectDefinition{extraction, alias, calculated}, stageKinds: []compiledKnowledgePreludeStageKind{compiledKnowledgePreludeStageExtraction, compiledKnowledgePreludeStageAlias, compiledKnowledgePreludeStageCalculated}},
+		{name: "extraction", definitions: []*opensplunk.KnowledgeObjectDefinition{extraction}, stageKinds: []compiledKnowledgePreludeStageKind{compiledKnowledgePreludeStageExtraction}},
+		{name: "alias", definitions: []*opensplunk.KnowledgeObjectDefinition{alias}, stageKinds: []compiledKnowledgePreludeStageKind{compiledKnowledgePreludeStageAlias}},
+		{name: "calculated", definitions: []*opensplunk.KnowledgeObjectDefinition{calculated}, stageKinds: []compiledKnowledgePreludeStageKind{compiledKnowledgePreludeStageCalculated}},
+		{name: "extraction alias", definitions: []*opensplunk.KnowledgeObjectDefinition{extraction, alias}, stageKinds: []compiledKnowledgePreludeStageKind{compiledKnowledgePreludeStageExtraction, compiledKnowledgePreludeStageAlias}},
+		{name: "extraction calculated", definitions: []*opensplunk.KnowledgeObjectDefinition{extraction, calculated}, stageKinds: []compiledKnowledgePreludeStageKind{compiledKnowledgePreludeStageExtraction, compiledKnowledgePreludeStageCalculated}},
+		{name: "alias calculated", definitions: []*opensplunk.KnowledgeObjectDefinition{alias, calculated}, stageKinds: []compiledKnowledgePreludeStageKind{compiledKnowledgePreludeStageAlias, compiledKnowledgePreludeStageCalculated}},
+		{name: "all", definitions: []*opensplunk.KnowledgeObjectDefinition{extraction, alias, calculated}, stageKinds: []compiledKnowledgePreludeStageKind{compiledKnowledgePreludeStageExtraction, compiledKnowledgePreludeStageAlias, compiledKnowledgePreludeStageCalculated}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -189,7 +189,7 @@ func TestCompileKnowledgePreludeSupportsEveryOptionalStageCombination(t *testing
 }
 
 func TestCompileKnowledgePreludeRejectsForgedPreparationAndPriorWork(t *testing.T) {
-	program := knowledgePreludeProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{
+	program := knowledgePreludeProgram(t, []*opensplunk.KnowledgeObjectDefinition{
 		knowledgeJSONStageDefinition("json", "json_value", "payload.value", "east"),
 	})
 	base := knowledgePreludePreparationForTest(program)
@@ -248,28 +248,28 @@ func knowledgePreludePreparationForTest(
 
 func knowledgePreludeProgram(
 	t *testing.T,
-	definitions []*opensplunkv1.KnowledgeObjectDefinition,
+	definitions []*opensplunk.KnowledgeObjectDefinition,
 ) knowledgeprogram.Program {
 	t.Helper()
-	objects := make([]*opensplunkv1.KnowledgeSnapshotObject, len(definitions))
-	stageOrdinals := make(map[opensplunkv1.KnowledgeSearchStage]uint32)
+	objects := make([]*opensplunk.KnowledgeSnapshotObject, len(definitions))
+	stageOrdinals := make(map[opensplunk.KnowledgeSearchStage]uint32)
 	for index, definition := range definitions {
 		normalized, err := knowledgedefinition.Normalize(definition)
 		if err != nil {
 			t.Fatalf("Normalize(%d): %v", index, err)
 		}
-		var stage opensplunkv1.KnowledgeSearchStage
+		var stage opensplunk.KnowledgeSearchStage
 		switch normalized.ObjectType {
-		case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION:
-			stage = opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION
-		case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS:
-			stage = opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS
-		case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD:
-			stage = opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD
+		case opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION:
+			stage = opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION
+		case opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS:
+			stage = opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS
+		case opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD:
+			stage = opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD
 		default:
 			t.Fatalf("unexpected object type %v", normalized.ObjectType)
 		}
-		objects[index] = &opensplunkv1.KnowledgeSnapshotObject{
+		objects[index] = &opensplunk.KnowledgeSnapshotObject{
 			ResolutionOrdinal: uint32(index),
 			Stage:             stage,
 			StageOrdinal:      stageOrdinals[stage],
@@ -294,13 +294,13 @@ func knowledgePreludeProgram(
 
 func knowledgePreludeAliasDefinition(
 	name, source, destination string,
-) *opensplunkv1.KnowledgeObjectDefinition {
-	return &opensplunkv1.KnowledgeObjectDefinition{
-		AppId: "app", Name: name, SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{
-			FieldAlias: &opensplunkv1.FieldAliasDefinition{
+) *opensplunk.KnowledgeObjectDefinition {
+	return &opensplunk.KnowledgeObjectDefinition{
+		AppId: "app", Name: name, SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{
+			FieldAlias: &opensplunk.FieldAliasDefinition{
 				SourceField: source, DestinationField: destination,
-				OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+				OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 			},
 		},
 	}
@@ -308,13 +308,13 @@ func knowledgePreludeAliasDefinition(
 
 func knowledgePreludeCalculatedDefinition(
 	name, destination, expression string,
-) *opensplunkv1.KnowledgeObjectDefinition {
-	return &opensplunkv1.KnowledgeObjectDefinition{
-		AppId: "app", Name: name, SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-		Body: &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{
-			CalculatedField: &opensplunkv1.CalculatedFieldDefinition{
+) *opensplunk.KnowledgeObjectDefinition {
+	return &opensplunk.KnowledgeObjectDefinition{
+		AppId: "app", Name: name, SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+		Body: &opensplunk.KnowledgeObjectDefinition_CalculatedField{
+			CalculatedField: &opensplunk.CalculatedFieldDefinition{
 				DestinationField: destination, Expression: expression,
-				OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+				OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 			},
 		},
 	}

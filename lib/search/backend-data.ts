@@ -3,8 +3,8 @@ import {
   ResultSetKind,
   type ResultRow,
   type ResultSchema,
-} from "@/gen/ts/open_splunk/v1/result";
-import { ValueType, type TypedValue } from "@/gen/ts/open_splunk/v1/value";
+} from "@/gen/ts/open_splunk/result";
+import { ValueType, type TypedValue } from "@/gen/ts/open_splunk/value";
 import type {
   DemoEvent,
   DemoField,

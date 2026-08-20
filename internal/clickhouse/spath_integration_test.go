@@ -12,7 +12,7 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
@@ -906,7 +906,7 @@ func spathStoreFixture(t *testing.T, ctx context.Context, store *Store, indexTim
 		spathEvent(
 			"s-scalars",
 			[]byte(scalarJSON),
-			opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+			opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 			0,
 			typedField("prior", typedString("old-scalar")),
 			typedField("json_source", typedString(`{"value":"replaced"}`)),
@@ -915,21 +915,21 @@ func spathStoreFixture(t *testing.T, ctx context.Context, store *Store, indexTim
 		spathEvent(
 			"s-miss",
 			[]byte(`{"payload":{"other":"value"}}`),
-			opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+			opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 			1,
 			typedField("prior", typedSint(17)),
 		),
 		spathEvent(
 			"s-malformed",
 			[]byte(`{"payload":`),
-			opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+			opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 			2,
 			typedField("prior", typedBool(false)),
 		),
 		spathEvent(
 			"s-binary",
 			[]byte(`{"payload":{"text":"must-not-parse"}}`),
-			opensplunkv1.RawEncoding_RAW_ENCODING_BINARY,
+			opensplunk.RawEncoding_RAW_ENCODING_BINARY,
 			3,
 			typedField("prior", typedNull()),
 		),
@@ -937,63 +937,63 @@ func spathStoreFixture(t *testing.T, ctx context.Context, store *Store, indexTim
 	limitExact := spathEvent(
 		"s-limit-exact",
 		bytes.Repeat([]byte{'x'}, 1024),
-		opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+		opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 		5,
 	)
 	limitExact.Event.IndexName = spathLimitIndex
 	limitOver := spathEvent(
 		"s-limit-over",
 		append(bytes.Repeat([]byte{'x'}, 1024), 'y'),
-		opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+		opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 		6,
 	)
 	limitOver.Event.IndexName = spathLimitIndex
 	corrupt := spathEvent(
 		"s-corrupt",
 		[]byte{0xff, '{', '}'},
-		opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+		opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 		7,
 	)
 	corrupt.Event.IndexName = spathCorruptIndex
 	tokenHeavy := spathEvent(
 		"s-token-over",
 		[]byte(`{"values":[`+strings.Repeat("0,", MaximumSpathJSONTokens/2+1)+`0]}`),
-		opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+		opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 		22,
 	)
 	tokenHeavy.Event.IndexName = spathLimitIndex
 	malformedTokenHeavy := spathEvent(
 		"s-token-malformed-over",
 		[]byte(`{"values":[`+strings.Repeat("0,", MaximumSpathJSONTokens/2+1)),
-		opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+		opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 		23,
 	)
 	malformedTokenHeavy.Event.IndexName = spathLimitIndex
 	tokenExact := spathEvent(
 		"s-token-exact",
 		[]byte(strings.Repeat("0,", MaximumSpathJSONTokens/2)),
-		opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+		opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 		24,
 	)
 	tokenExact.Event.IndexName = spathLimitIndex
 	validTokenUnder := spathEvent(
 		"s-token-valid-under",
 		[]byte(`{"values":[`+strings.Repeat("0,", (MaximumSpathJSONTokens-5)/2)+`0]}`),
-		opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+		opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 		25,
 	)
 	validTokenUnder.Event.IndexName = spathLimitIndex
 	validTokenOver := spathEvent(
 		"s-token-valid-over",
 		[]byte(`{"values":[`+strings.Repeat("0,", (MaximumSpathJSONTokens-3)/2)+`0]}`),
-		opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+		opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 		26,
 	)
 	validTokenOver.Event.IndexName = spathLimitIndex
 	poison := spathEvent(
 		"s-poison",
 		[]byte(`{"payload":{"poison":{"must":"not execute"}}}`),
-		opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+		opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 		4,
 	)
 	poison.Event.IndexName = "spath-poison"
@@ -1018,7 +1018,7 @@ func spathStoreFixture(t *testing.T, ctx context.Context, store *Store, indexTim
 		numeric := spathEvent(
 			fixture.id,
 			[]byte(`{"value":`+fixture.value+`}`),
-			opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+			opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 			10+index,
 		)
 		numeric.Event.IndexName = spathNumericIndex
@@ -1028,7 +1028,7 @@ func spathStoreFixture(t *testing.T, ctx context.Context, store *Store, indexTim
 		parity := spathEvent(
 			fixture.EventID,
 			[]byte(`{"value":`+fixture.Lexeme+`}`),
-			opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+			opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 			40+index,
 		)
 		parity.Event.IndexName = spathParityIndex
@@ -1055,9 +1055,9 @@ func spathStoreFixture(t *testing.T, ctx context.Context, store *Store, indexTim
 func spathEvent(
 	id string,
 	raw []byte,
-	rawEncoding opensplunkv1.RawEncoding,
+	rawEncoding opensplunk.RawEncoding,
 	second int,
-	fields ...*opensplunkv1.TypedObjectField,
+	fields ...*opensplunk.TypedObjectField,
 ) *ingest.StoredEvent {
 	eventTime := time.Date(2026, time.July, 25, 11, 59, second, 0, time.UTC)
 	return &ingest.StoredEvent{
@@ -1065,16 +1065,16 @@ func spathEvent(
 		CollectorID: "collector",
 		BatchID:     "spath-integration-batch",
 		IndexTime:   time.Date(2026, time.July, 25, 12, 0, 0, 0, time.UTC),
-		Event: &opensplunkv1.LogEvent{
+		Event: &opensplunk.LogEvent{
 			EventId:         id,
 			IndexName:       spathIntegrationIndex,
 			EventTime:       timestamppb.New(eventTime),
 			CollectedAt:     timestamppb.New(eventTime),
-			EventTimeSource: opensplunkv1.EventTimeSource_EVENT_TIME_SOURCE_PARSED,
+			EventTimeSource: opensplunk.EventTimeSource_EVENT_TIME_SOURCE_PARSED,
 			Host:            "api",
 			Source:          "app.log",
 			Sourcetype:      "json",
-			Severity:        opensplunkv1.LogSeverity_LOG_SEVERITY_INFO,
+			Severity:        opensplunk.LogSeverity_LOG_SEVERITY_INFO,
 			Raw:             raw,
 			RawEncoding:     rawEncoding,
 			Message:         new("spath integration fixture"),

@@ -11,7 +11,7 @@ import {
   useState,
 } from "react";
 
-import { ValueType } from "@/gen/ts/open_splunk/v1/value";
+import { ValueType } from "@/gen/ts/open_splunk/value";
 import type { DemoScalar, TimelinePoint } from "@/lib/demo/search-data";
 import {
   compareWorkspaceNumericValues,

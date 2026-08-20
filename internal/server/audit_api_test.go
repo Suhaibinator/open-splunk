@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -57,15 +57,15 @@ func TestIndexAuditProtoTaxonomyRoundTripsAndAcceptsCompleteFilterSet(t *testing
 
 	tests := []struct {
 		action  audit.Action
-		proto   opensplunkv1.AuditAction
+		proto   opensplunk.AuditAction
 		version uint64
 	}{
-		{audit.ActionIndexCreate, opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_CREATE, 1},
-		{audit.ActionIndexUpdate, opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_UPDATE, 2},
-		{audit.ActionIndexActivate, opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_ACTIVATE, 2},
-		{audit.ActionIndexArchive, opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_ARCHIVE, 2},
-		{audit.ActionIndexDeleteKeepData, opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_DELETE_KEEP_DATA, 2},
-		{audit.ActionIndexDeleteData, opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_DELETE_DATA, 3},
+		{audit.ActionIndexCreate, opensplunk.AuditAction_AUDIT_ACTION_INDEX_CREATE, 1},
+		{audit.ActionIndexUpdate, opensplunk.AuditAction_AUDIT_ACTION_INDEX_UPDATE, 2},
+		{audit.ActionIndexActivate, opensplunk.AuditAction_AUDIT_ACTION_INDEX_ACTIVATE, 2},
+		{audit.ActionIndexArchive, opensplunk.AuditAction_AUDIT_ACTION_INDEX_ARCHIVE, 2},
+		{audit.ActionIndexDeleteKeepData, opensplunk.AuditAction_AUDIT_ACTION_INDEX_DELETE_KEEP_DATA, 2},
+		{audit.ActionIndexDeleteData, opensplunk.AuditAction_AUDIT_ACTION_INDEX_DELETE_DATA, 3},
 	}
 	for _, testCase := range tests {
 		t.Run(string(testCase.action), func(t *testing.T) {
@@ -96,42 +96,42 @@ func TestIndexAuditProtoTaxonomyRoundTripsAndAcceptsCompleteFilterSet(t *testing
 				t.Fatalf("auditEventToProto(%q): %v", testCase.action, err)
 			}
 			if message.GetAction() != testCase.proto ||
-				message.GetTargetKind() != opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_INDEX {
+				message.GetTargetKind() != opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_INDEX {
 				t.Fatalf("index audit proto = %+v", message)
 			}
 		})
 	}
 
-	indexTarget := opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_INDEX
-	allActions := []opensplunkv1.AuditAction{
-		opensplunkv1.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_CREATE,
-		opensplunkv1.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_UPDATE,
-		opensplunkv1.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_REVOKE,
-		opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_CREATE,
-		opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_UPDATE,
-		opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_ACTIVATE,
-		opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_ARCHIVE,
-		opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_DELETE_KEEP_DATA,
-		opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_DELETE_DATA,
-		opensplunkv1.AuditAction_AUDIT_ACTION_APP_CREATE,
-		opensplunkv1.AuditAction_AUDIT_ACTION_APP_UPDATE,
-		opensplunkv1.AuditAction_AUDIT_ACTION_APP_ACTIVATE,
-		opensplunkv1.AuditAction_AUDIT_ACTION_APP_ARCHIVE,
-		opensplunkv1.AuditAction_AUDIT_ACTION_APP_DELETE,
-		opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_CREATE,
-		opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_UPDATE,
-		opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_DUPLICATE,
-		opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_DELETE,
-		opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_CREATE,
-		opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_UPDATE,
-		opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_SCOPE_CHANGE,
-		opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_ENABLE,
-		opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_DISABLE,
-		opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_DELETE,
+	indexTarget := opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_INDEX
+	allActions := []opensplunk.AuditAction{
+		opensplunk.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_CREATE,
+		opensplunk.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_UPDATE,
+		opensplunk.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_REVOKE,
+		opensplunk.AuditAction_AUDIT_ACTION_INDEX_CREATE,
+		opensplunk.AuditAction_AUDIT_ACTION_INDEX_UPDATE,
+		opensplunk.AuditAction_AUDIT_ACTION_INDEX_ACTIVATE,
+		opensplunk.AuditAction_AUDIT_ACTION_INDEX_ARCHIVE,
+		opensplunk.AuditAction_AUDIT_ACTION_INDEX_DELETE_KEEP_DATA,
+		opensplunk.AuditAction_AUDIT_ACTION_INDEX_DELETE_DATA,
+		opensplunk.AuditAction_AUDIT_ACTION_APP_CREATE,
+		opensplunk.AuditAction_AUDIT_ACTION_APP_UPDATE,
+		opensplunk.AuditAction_AUDIT_ACTION_APP_ACTIVATE,
+		opensplunk.AuditAction_AUDIT_ACTION_APP_ARCHIVE,
+		opensplunk.AuditAction_AUDIT_ACTION_APP_DELETE,
+		opensplunk.AuditAction_AUDIT_ACTION_SAVED_SEARCH_CREATE,
+		opensplunk.AuditAction_AUDIT_ACTION_SAVED_SEARCH_UPDATE,
+		opensplunk.AuditAction_AUDIT_ACTION_SAVED_SEARCH_DUPLICATE,
+		opensplunk.AuditAction_AUDIT_ACTION_SAVED_SEARCH_DELETE,
+		opensplunk.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_CREATE,
+		opensplunk.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_UPDATE,
+		opensplunk.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_SCOPE_CHANGE,
+		opensplunk.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_ENABLE,
+		opensplunk.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_DISABLE,
+		opensplunk.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_DELETE,
 	}
 	service := &fakeAuditEvents{}
 	handler := newAuditTestHandler(t, service)
-	response := postAuthenticatedAudit(t, handler, &opensplunkv1.ListAuditEventsRequest{
+	response := postAuthenticatedAudit(t, handler, &opensplunk.ListAuditEventsRequest{
 		ActionFilters:    allActions,
 		TargetKindFilter: &indexTarget,
 	})
@@ -150,15 +150,15 @@ func TestKnowledgeAuditProtoTaxonomyAndMetadataRoundTrip(t *testing.T) {
 
 	for _, testCase := range []struct {
 		action  audit.Action
-		proto   opensplunkv1.AuditAction
+		proto   opensplunk.AuditAction
 		version uint64
 	}{
-		{audit.ActionKnowledgeObjectCreate, opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_CREATE, 1},
-		{audit.ActionKnowledgeObjectUpdate, opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_UPDATE, 2},
-		{audit.ActionKnowledgeObjectScopeChange, opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_SCOPE_CHANGE, 2},
-		{audit.ActionKnowledgeObjectEnable, opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_ENABLE, 2},
-		{audit.ActionKnowledgeObjectDisable, opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_DISABLE, 2},
-		{audit.ActionKnowledgeObjectDelete, opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_DELETE, 2},
+		{audit.ActionKnowledgeObjectCreate, opensplunk.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_CREATE, 1},
+		{audit.ActionKnowledgeObjectUpdate, opensplunk.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_UPDATE, 2},
+		{audit.ActionKnowledgeObjectScopeChange, opensplunk.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_SCOPE_CHANGE, 2},
+		{audit.ActionKnowledgeObjectEnable, opensplunk.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_ENABLE, 2},
+		{audit.ActionKnowledgeObjectDisable, opensplunk.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_DISABLE, 2},
+		{audit.ActionKnowledgeObjectDelete, opensplunk.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_DELETE, 2},
 	} {
 		t.Run(string(testCase.action), func(t *testing.T) {
 			t.Parallel()
@@ -193,23 +193,23 @@ func TestKnowledgeAuditProtoTaxonomyAndMetadataRoundTrip(t *testing.T) {
 				t.Fatalf("auditEventToProto(%q): %v", testCase.action, err)
 			}
 			if message.GetAction() != testCase.proto ||
-				message.GetTargetKind() != opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT ||
+				message.GetTargetKind() != opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT ||
 				message.AppId == nil || message.GetAppId() != "app_AAAAAAAAAAAAAAAAAAAAAA" ||
-				message.ObjectType == nil || message.GetObjectType() != opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION ||
-				message.SharingScope == nil || message.GetSharingScope() != opensplunkv1.SharingScope_SHARING_SCOPE_APP {
+				message.ObjectType == nil || message.GetObjectType() != opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION ||
+				message.SharingScope == nil || message.GetSharingScope() != opensplunk.SharingScope_SHARING_SCOPE_APP {
 				t.Fatalf("knowledge-object audit proto = %+v", message)
 			}
 		})
 	}
 
 	fromProto, ok := auditTargetKindFromProto(
-		opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT,
+		opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT,
 	)
 	if !ok || fromProto != audit.TargetKindKnowledgeObject {
 		t.Fatalf("auditTargetKindFromProto(knowledge object) = (%q, %t)", fromProto, ok)
 	}
 	toProto, ok := auditTargetKindToProto(audit.TargetKindKnowledgeObject)
-	if !ok || toProto != opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT {
+	if !ok || toProto != opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT {
 		t.Fatalf("auditTargetKindToProto(knowledge object) = (%v, %t)", toProto, ok)
 	}
 	legacy, err := auditEventToProto(audit.Event{
@@ -234,14 +234,14 @@ func TestAppAuditProtoTaxonomyRoundTrips(t *testing.T) {
 
 	for _, testCase := range []struct {
 		action  audit.Action
-		proto   opensplunkv1.AuditAction
+		proto   opensplunk.AuditAction
 		version uint64
 	}{
-		{audit.ActionAppCreate, opensplunkv1.AuditAction_AUDIT_ACTION_APP_CREATE, 1},
-		{audit.ActionAppUpdate, opensplunkv1.AuditAction_AUDIT_ACTION_APP_UPDATE, 2},
-		{audit.ActionAppActivate, opensplunkv1.AuditAction_AUDIT_ACTION_APP_ACTIVATE, 3},
-		{audit.ActionAppArchive, opensplunkv1.AuditAction_AUDIT_ACTION_APP_ARCHIVE, 4},
-		{audit.ActionAppDelete, opensplunkv1.AuditAction_AUDIT_ACTION_APP_DELETE, 4},
+		{audit.ActionAppCreate, opensplunk.AuditAction_AUDIT_ACTION_APP_CREATE, 1},
+		{audit.ActionAppUpdate, opensplunk.AuditAction_AUDIT_ACTION_APP_UPDATE, 2},
+		{audit.ActionAppActivate, opensplunk.AuditAction_AUDIT_ACTION_APP_ACTIVATE, 3},
+		{audit.ActionAppArchive, opensplunk.AuditAction_AUDIT_ACTION_APP_ARCHIVE, 4},
+		{audit.ActionAppDelete, opensplunk.AuditAction_AUDIT_ACTION_APP_DELETE, 4},
 	} {
 		t.Run(string(testCase.action), func(t *testing.T) {
 			t.Parallel()
@@ -271,7 +271,7 @@ func TestAppAuditProtoTaxonomyRoundTrips(t *testing.T) {
 				t.Fatalf("auditEventToProto(%q): %v", testCase.action, err)
 			}
 			if message.GetAction() != testCase.proto ||
-				message.GetTargetKind() != opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_APP ||
+				message.GetTargetKind() != opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_APP ||
 				message.GetTargetId() != "app-observability" ||
 				message.GetTargetVersion() != testCase.version {
 				t.Fatalf("app audit proto = %+v", message)
@@ -280,13 +280,13 @@ func TestAppAuditProtoTaxonomyRoundTrips(t *testing.T) {
 	}
 
 	fromProto, ok := auditTargetKindFromProto(
-		opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_APP,
+		opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_APP,
 	)
 	if !ok || fromProto != audit.TargetKindApp {
 		t.Fatalf("auditTargetKindFromProto(app) = (%q, %t)", fromProto, ok)
 	}
 	toProto, ok := auditTargetKindToProto(audit.TargetKindApp)
-	if !ok || toProto != opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_APP {
+	if !ok || toProto != opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_APP {
 		t.Fatalf("auditTargetKindToProto(app) = (%v, %t)", toProto, ok)
 	}
 }
@@ -296,13 +296,13 @@ func TestSavedSearchAuditProtoTaxonomyRoundTrips(t *testing.T) {
 
 	for _, testCase := range []struct {
 		action  audit.Action
-		proto   opensplunkv1.AuditAction
+		proto   opensplunk.AuditAction
 		version uint64
 	}{
-		{audit.ActionSavedSearchCreate, opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_CREATE, 1},
-		{audit.ActionSavedSearchUpdate, opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_UPDATE, 2},
-		{audit.ActionSavedSearchDuplicate, opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_DUPLICATE, 1},
-		{audit.ActionSavedSearchDelete, opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_DELETE, 1},
+		{audit.ActionSavedSearchCreate, opensplunk.AuditAction_AUDIT_ACTION_SAVED_SEARCH_CREATE, 1},
+		{audit.ActionSavedSearchUpdate, opensplunk.AuditAction_AUDIT_ACTION_SAVED_SEARCH_UPDATE, 2},
+		{audit.ActionSavedSearchDuplicate, opensplunk.AuditAction_AUDIT_ACTION_SAVED_SEARCH_DUPLICATE, 1},
+		{audit.ActionSavedSearchDelete, opensplunk.AuditAction_AUDIT_ACTION_SAVED_SEARCH_DELETE, 1},
 	} {
 		t.Run(string(testCase.action), func(t *testing.T) {
 			t.Parallel()
@@ -332,8 +332,8 @@ func TestSavedSearchAuditProtoTaxonomyRoundTrips(t *testing.T) {
 				t.Fatalf("auditEventToProto(%q): %v", testCase.action, err)
 			}
 			if message.GetAction() != testCase.proto ||
-				message.GetTargetKind() != opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_SAVED_SEARCH ||
-				message.GetActorRole() != opensplunkv1.AuditActorRole_AUDIT_ACTOR_ROLE_USER ||
+				message.GetTargetKind() != opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_SAVED_SEARCH ||
+				message.GetActorRole() != opensplunk.AuditActorRole_AUDIT_ACTOR_ROLE_USER ||
 				message.GetTargetId() != "saved-search-observability" ||
 				message.GetTargetVersion() != testCase.version {
 				t.Fatalf("saved-search audit proto = %+v", message)
@@ -342,13 +342,13 @@ func TestSavedSearchAuditProtoTaxonomyRoundTrips(t *testing.T) {
 	}
 
 	fromProto, ok := auditTargetKindFromProto(
-		opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_SAVED_SEARCH,
+		opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_SAVED_SEARCH,
 	)
 	if !ok || fromProto != audit.TargetKindSavedSearch {
 		t.Fatalf("auditTargetKindFromProto(saved search) = (%q, %t)", fromProto, ok)
 	}
 	toProto, ok := auditTargetKindToProto(audit.TargetKindSavedSearch)
-	if !ok || toProto != opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_SAVED_SEARCH {
+	if !ok || toProto != opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_SAVED_SEARCH {
 		t.Fatalf("auditTargetKindToProto(saved search) = (%v, %t)", toProto, ok)
 	}
 }
@@ -395,15 +395,15 @@ func TestAuditEventListUsesAuthenticatedTenantAndProjectsBoundedPage(t *testing.
 	}}
 	handler := newAuditTestHandler(t, service)
 	actorID := browserGateOwnerID
-	targetKind := opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_INGESTION_TOKEN
-	request := &opensplunkv1.ListAuditEventsRequest{
-		Page: &opensplunkv1.PageRequest{
+	targetKind := opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_INGESTION_TOKEN
+	request := &opensplunk.ListAuditEventsRequest{
+		Page: &opensplunk.PageRequest{
 			PageSize:         new(uint32(2)),
 			IncludeTotalSize: true,
 		},
-		ActionFilters: []opensplunkv1.AuditAction{
-			opensplunkv1.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_CREATE,
-			opensplunkv1.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_REVOKE,
+		ActionFilters: []opensplunk.AuditAction{
+			opensplunk.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_CREATE,
+			opensplunk.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_REVOKE,
 		},
 		ActorIdFilter:    &actorID,
 		TargetKindFilter: &targetKind,
@@ -426,7 +426,7 @@ func TestAuditEventListUsesAuthenticatedTenantAndProjectsBoundedPage(t *testing.
 		t.Fatalf("audit list call = %d/%q/%#v", calls, tenantID, gotRequest)
 	}
 
-	var decoded opensplunkv1.ListAuditEventsResponse
+	var decoded opensplunk.ListAuditEventsResponse
 	unmarshalResponse(t, response, &decoded)
 	if len(decoded.GetAuditEvents()) != 2 ||
 		decoded.GetPage().GetNextPageToken() != "signed-next-page" ||
@@ -437,11 +437,11 @@ func TestAuditEventListUsesAuthenticatedTenantAndProjectsBoundedPage(t *testing.
 	first := decoded.GetAuditEvents()[0]
 	if first.GetSequence() != 3 ||
 		!first.GetOccurredAt().AsTime().Equal(anchor) ||
-		first.GetActorKind() != opensplunkv1.AuditActorKind_AUDIT_ACTOR_KIND_BROWSER ||
+		first.GetActorKind() != opensplunk.AuditActorKind_AUDIT_ACTOR_KIND_BROWSER ||
 		first.GetActorId() != browserGateOwnerID ||
-		first.GetActorRole() != opensplunkv1.AuditActorRole_AUDIT_ACTOR_ROLE_ADMINISTRATOR ||
-		first.GetAction() != opensplunkv1.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_REVOKE ||
-		first.GetTargetKind() != opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_INGESTION_TOKEN ||
+		first.GetActorRole() != opensplunk.AuditActorRole_AUDIT_ACTOR_ROLE_ADMINISTRATOR ||
+		first.GetAction() != opensplunk.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_REVOKE ||
+		first.GetTargetKind() != opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_INGESTION_TOKEN ||
 		first.GetTargetId() != "token-3" || first.GetTargetVersion() != 4 {
 		t.Fatalf("first audit event = %#v", first)
 	}
@@ -516,11 +516,11 @@ func TestAuditEventHTTPVerticalCapturesAuthenticatedTokenCreationWithoutSecrets(
 	createResponse := postProto(
 		t,
 		handler,
-		"/api/v1/ingestion-tokens/create",
-		&opensplunkv1.CreateIngestionTokenRequest{
-			Definition: &opensplunkv1.IngestionTokenDefinition{
+		"/api/ingestion-tokens/create",
+		&opensplunk.CreateIngestionTokenRequest{
+			Definition: &opensplunk.IngestionTokenDefinition{
 				Name: "audited browser token",
-				Constraints: &opensplunkv1.IngestionTokenConstraints{
+				Constraints: &opensplunk.IngestionTokenConstraints{
 					AllowedIndexNames: []string{"main"},
 					BoundCollectorId:  &boundCollectorID,
 				},
@@ -534,7 +534,7 @@ func TestAuditEventHTTPVerticalCapturesAuthenticatedTokenCreationWithoutSecrets(
 			createResponse.Body.String(),
 		)
 	}
-	var created opensplunkv1.CreateIngestionTokenResponse
+	var created opensplunk.CreateIngestionTokenResponse
 	unmarshalResponse(t, createResponse, &created)
 	plaintext := created.GetPlaintextToken()
 	token := created.GetIngestionToken()
@@ -551,8 +551,8 @@ func TestAuditEventHTTPVerticalCapturesAuthenticatedTokenCreationWithoutSecrets(
 		t,
 		handler,
 		auditEventsListPath,
-		&opensplunkv1.ListAuditEventsRequest{
-			Page: &opensplunkv1.PageRequest{IncludeTotalSize: true},
+		&opensplunk.ListAuditEventsRequest{
+			Page: &opensplunk.PageRequest{IncludeTotalSize: true},
 		},
 	)
 	if auditResponse.Code != http.StatusOK {
@@ -573,7 +573,7 @@ func TestAuditEventHTTPVerticalCapturesAuthenticatedTokenCreationWithoutSecrets(
 		}
 	}
 
-	var listed opensplunkv1.ListAuditEventsResponse
+	var listed opensplunk.ListAuditEventsResponse
 	unmarshalResponse(t, auditResponse, &listed)
 	if len(listed.GetAuditEvents()) != 1 ||
 		listed.GetPage().GetTotalSize() != 1 ||
@@ -582,11 +582,11 @@ func TestAuditEventHTTPVerticalCapturesAuthenticatedTokenCreationWithoutSecrets(
 	}
 	event := listed.GetAuditEvents()[0]
 	if event.GetSequence() != 1 ||
-		event.GetActorKind() != opensplunkv1.AuditActorKind_AUDIT_ACTOR_KIND_BROWSER ||
+		event.GetActorKind() != opensplunk.AuditActorKind_AUDIT_ACTOR_KIND_BROWSER ||
 		event.GetActorId() != browserGateOwnerID ||
-		event.GetActorRole() != opensplunkv1.AuditActorRole_AUDIT_ACTOR_ROLE_ADMINISTRATOR ||
-		event.GetAction() != opensplunkv1.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_CREATE ||
-		event.GetTargetKind() != opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_INGESTION_TOKEN ||
+		event.GetActorRole() != opensplunk.AuditActorRole_AUDIT_ACTOR_ROLE_ADMINISTRATOR ||
+		event.GetAction() != opensplunk.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_CREATE ||
+		event.GetTargetKind() != opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_INGESTION_TOKEN ||
 		event.GetTargetId() != token.GetIngestionTokenId() ||
 		event.GetTargetVersion() != token.GetVersion() {
 		t.Fatalf("audited token creation = %+v", event)
@@ -692,61 +692,61 @@ func TestAuditEventListRequiresAdministratorBeforeBodyOrServiceWork(t *testing.T
 func TestAuditEventListRejectsInvalidFiltersBeforeStorage(t *testing.T) {
 	t.Parallel()
 
-	target := opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_UNSPECIFIED
+	target := opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_UNSPECIFIED
 	oversizedActor := string(bytes.Repeat([]byte{'a'}, 256))
 	paddedActor := " administrator"
 	tests := []struct {
 		name    string
-		request *opensplunkv1.ListAuditEventsRequest
+		request *opensplunk.ListAuditEventsRequest
 	}{
 		{
 			name: "unspecified action",
-			request: &opensplunkv1.ListAuditEventsRequest{ActionFilters: []opensplunkv1.AuditAction{
-				opensplunkv1.AuditAction_AUDIT_ACTION_UNSPECIFIED,
+			request: &opensplunk.ListAuditEventsRequest{ActionFilters: []opensplunk.AuditAction{
+				opensplunk.AuditAction_AUDIT_ACTION_UNSPECIFIED,
 			}},
 		},
 		{
 			name: "duplicate action",
-			request: &opensplunkv1.ListAuditEventsRequest{ActionFilters: []opensplunkv1.AuditAction{
-				opensplunkv1.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_CREATE,
-				opensplunkv1.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_CREATE,
+			request: &opensplunk.ListAuditEventsRequest{ActionFilters: []opensplunk.AuditAction{
+				opensplunk.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_CREATE,
+				opensplunk.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_CREATE,
 			}},
 		},
 		{
 			name:    "unspecified target",
-			request: &opensplunkv1.ListAuditEventsRequest{TargetKindFilter: &target},
+			request: &opensplunk.ListAuditEventsRequest{TargetKindFilter: &target},
 		},
 		{
 			name:    "oversized actor",
-			request: &opensplunkv1.ListAuditEventsRequest{ActorIdFilter: &oversizedActor},
+			request: &opensplunk.ListAuditEventsRequest{ActorIdFilter: &oversizedActor},
 		},
 		{
 			name:    "padded actor",
-			request: &opensplunkv1.ListAuditEventsRequest{ActorIdFilter: &paddedActor},
+			request: &opensplunk.ListAuditEventsRequest{ActorIdFilter: &paddedActor},
 		},
 		{
 			name: "too many actions",
-			request: &opensplunkv1.ListAuditEventsRequest{ActionFilters: []opensplunkv1.AuditAction{
-				opensplunkv1.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_CREATE,
-				opensplunkv1.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_UPDATE,
-				opensplunkv1.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_REVOKE,
-				opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_CREATE,
-				opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_UPDATE,
-				opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_ACTIVATE,
-				opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_ARCHIVE,
-				opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_DELETE_KEEP_DATA,
-				opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_DELETE_DATA,
-				opensplunkv1.AuditAction_AUDIT_ACTION_APP_CREATE,
-				opensplunkv1.AuditAction_AUDIT_ACTION_APP_UPDATE,
-				opensplunkv1.AuditAction_AUDIT_ACTION_APP_ACTIVATE,
-				opensplunkv1.AuditAction_AUDIT_ACTION_APP_ARCHIVE,
-				opensplunkv1.AuditAction_AUDIT_ACTION_APP_DELETE,
-				opensplunkv1.AuditAction_AUDIT_ACTION_APP_CREATE,
+			request: &opensplunk.ListAuditEventsRequest{ActionFilters: []opensplunk.AuditAction{
+				opensplunk.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_CREATE,
+				opensplunk.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_UPDATE,
+				opensplunk.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_REVOKE,
+				opensplunk.AuditAction_AUDIT_ACTION_INDEX_CREATE,
+				opensplunk.AuditAction_AUDIT_ACTION_INDEX_UPDATE,
+				opensplunk.AuditAction_AUDIT_ACTION_INDEX_ACTIVATE,
+				opensplunk.AuditAction_AUDIT_ACTION_INDEX_ARCHIVE,
+				opensplunk.AuditAction_AUDIT_ACTION_INDEX_DELETE_KEEP_DATA,
+				opensplunk.AuditAction_AUDIT_ACTION_INDEX_DELETE_DATA,
+				opensplunk.AuditAction_AUDIT_ACTION_APP_CREATE,
+				opensplunk.AuditAction_AUDIT_ACTION_APP_UPDATE,
+				opensplunk.AuditAction_AUDIT_ACTION_APP_ACTIVATE,
+				opensplunk.AuditAction_AUDIT_ACTION_APP_ARCHIVE,
+				opensplunk.AuditAction_AUDIT_ACTION_APP_DELETE,
+				opensplunk.AuditAction_AUDIT_ACTION_APP_CREATE,
 			}},
 		},
 		{
 			name: "oversized page",
-			request: &opensplunkv1.ListAuditEventsRequest{Page: &opensplunkv1.PageRequest{
+			request: &opensplunk.ListAuditEventsRequest{Page: &opensplunk.PageRequest{
 				PageSize: new(uint32(audit.MaximumListPageSize + 1)),
 			}},
 		},
@@ -786,7 +786,7 @@ func TestAuditEventListClampsDefaultPageSizeToServerMaximum(t *testing.T) {
 	response := postAuthenticatedAudit(
 		t,
 		handler,
-		&opensplunkv1.ListAuditEventsRequest{},
+		&opensplunk.ListAuditEventsRequest{},
 	)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
@@ -802,7 +802,7 @@ func TestAuditEventListMapsStorageFailureAndAdvertisesManagedFeature(t *testing.
 
 	service := &fakeAuditEvents{err: audit.ErrCorrupt}
 	handler := newAuditTestHandler(t, service)
-	response := postAuthenticatedAudit(t, handler, &opensplunkv1.ListAuditEventsRequest{})
+	response := postAuthenticatedAudit(t, handler, &opensplunk.ListAuditEventsRequest{})
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("corrupt storage status = %d, body = %s", response.Code, response.Body.String())
 	}
@@ -810,15 +810,15 @@ func TestAuditEventListMapsStorageFailureAndAdvertisesManagedFeature(t *testing.
 	bootstrap := postProto(
 		t,
 		handler,
-		"/api/v1/system/bootstrap",
-		&opensplunkv1.GetSystemBootstrapRequest{},
+		"/api/system/bootstrap",
+		&opensplunk.GetSystemBootstrapRequest{},
 	)
 	if bootstrap.Code != http.StatusOK {
 		t.Fatalf("bootstrap status = %d, body = %s", bootstrap.Code, bootstrap.Body.String())
 	}
-	var decoded opensplunkv1.GetSystemBootstrapResponse
+	var decoded opensplunk.GetSystemBootstrapResponse
 	unmarshalResponse(t, bootstrap, &decoded)
-	if !slices.Contains(decoded.GetFeatures(), opensplunkv1.ServerFeature_SERVER_FEATURE_AUDIT_SEARCH) {
+	if !slices.Contains(decoded.GetFeatures(), opensplunk.ServerFeature_SERVER_FEATURE_AUDIT_SEARCH) {
 		t.Fatalf("bootstrap features = %v, want audit search", decoded.GetFeatures())
 	}
 
@@ -829,13 +829,13 @@ func TestAuditEventListMapsStorageFailureAndAdvertisesManagedFeature(t *testing.
 		WebUI:                testUI(),
 		TenantID:             browserGateTenantID,
 		OwnerID:              browserGateOwnerID,
-		Bootstrap: BootstrapConfig{Features: []opensplunkv1.ServerFeature{
-			opensplunkv1.ServerFeature_SERVER_FEATURE_AUDIT_SEARCH,
+		Bootstrap: BootstrapConfig{Features: []opensplunk.ServerFeature{
+			opensplunk.ServerFeature_SERVER_FEATURE_AUDIT_SEARCH,
 		}},
 	})
-	disabledBootstrap := postProto(t, disabled, "/api/v1/system/bootstrap", &opensplunkv1.GetSystemBootstrapRequest{})
+	disabledBootstrap := postProto(t, disabled, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{})
 	unmarshalResponse(t, disabledBootstrap, &decoded)
-	if slices.Contains(decoded.GetFeatures(), opensplunkv1.ServerFeature_SERVER_FEATURE_AUDIT_SEARCH) {
+	if slices.Contains(decoded.GetFeatures(), opensplunk.ServerFeature_SERVER_FEATURE_AUDIT_SEARCH) {
 		t.Fatalf("unconfigured handler advertised audit search: %v", decoded.GetFeatures())
 	}
 }
@@ -846,7 +846,7 @@ func TestAuditEventListMapsInvalidCursorWithoutLeakingStorageDetails(t *testing.
 	secret := "database-password-audit-secret"
 	service := &fakeAuditEvents{err: errors.Join(audit.ErrInvalidCursor, errors.New(secret))}
 	handler := newAuditTestHandler(t, service)
-	response := postAuthenticatedAudit(t, handler, &opensplunkv1.ListAuditEventsRequest{})
+	response := postAuthenticatedAudit(t, handler, &opensplunk.ListAuditEventsRequest{})
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("invalid cursor status = %d, body = %s", response.Code, response.Body.String())
 	}
@@ -868,7 +868,7 @@ func TestAuditEventListMapsConfigurationAndStorageFailuresToUnavailable(t *testi
 		response := postAuthenticatedAudit(
 			t,
 			handler,
-			&opensplunkv1.ListAuditEventsRequest{},
+			&opensplunk.ListAuditEventsRequest{},
 		)
 		if response.Code != http.StatusServiceUnavailable {
 			t.Fatalf("storage failure status = %d, body = %s", response.Code, response.Body.String())
@@ -974,7 +974,7 @@ func TestAuditEventProjectionRejectsInvalidServiceRows(t *testing.T) {
 		mutate(&event)
 		service := &fakeAuditEvents{page: audit.ListPage{Events: []audit.Event{event}}}
 		handler := newAuditTestHandler(t, service)
-		response := postAuthenticatedAudit(t, handler, &opensplunkv1.ListAuditEventsRequest{})
+		response := postAuthenticatedAudit(t, handler, &opensplunk.ListAuditEventsRequest{})
 		if response.Code != http.StatusInternalServerError {
 			t.Fatalf("invalid event %#v status = %d, body = %s", event, response.Code, response.Body.String())
 		}

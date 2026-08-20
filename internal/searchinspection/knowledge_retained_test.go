@@ -237,8 +237,7 @@ func TestInspectRestoresRetainedExplicitAndAutomaticLookupPlans(t *testing.T) {
 				t.Fatalf("retained %s lookup stage = %#v", test.name, stage)
 			}
 			if result.KnowledgeSnapshot == nil ||
-				result.KnowledgeSnapshot.GetRef().GetLookupAssetCount() != 1 ||
-				result.KnowledgeSnapshot.GetRef().GetLookupAssetCountUnknown() {
+				result.KnowledgeSnapshot.GetRef().GetLookupAssetCount() != 1 {
 				t.Fatalf("retained lookup summary = %#v", result.KnowledgeSnapshot)
 			}
 			if err := ValidateResult(result); err != nil {

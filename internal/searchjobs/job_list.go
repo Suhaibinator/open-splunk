@@ -408,7 +408,6 @@ func cloneJobListItem(source Job) JobListItem {
 		TenantID:          source.TenantID,
 		SPL:               source.SPL,
 		NormalizedSPL:     source.NormalizedSPL,
-		CompilerVersion:   source.CompilerVersion,
 		RequestedIndexes:  cloneStrings(source.RequestedIndexes),
 		EffectiveIndexes:  cloneStrings(source.EffectiveIndexes),
 		TimeRange:         source.TimeRange,

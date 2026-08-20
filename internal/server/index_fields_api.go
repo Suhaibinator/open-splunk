@@ -7,14 +7,14 @@ import (
 
 	"github.com/Suhaibinator/SRouter/pkg/codec"
 	"github.com/Suhaibinator/SRouter/pkg/router"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/searchanalysis"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 )
 
 func (handler *apiHandler) listIndexFields(
 	request *http.Request,
-	input *opensplunkv1.ListIndexFieldsRequest,
+	input *opensplunk.ListIndexFieldsRequest,
 ) (*serializedIndexFieldsResponse, error) {
 	if input == nil {
 		return nil, badRequestError("index field request is required")
@@ -116,7 +116,7 @@ func (handler *apiHandler) listIndexFields(
 	if err := indexFieldsRequestContextError(request.Context()); err != nil {
 		return nil, err
 	}
-	response := &opensplunkv1.ListIndexFieldsResponse{
+	response := &opensplunk.ListIndexFieldsResponse{
 		Fields: fields,
 		Page:   page,
 	}
@@ -174,13 +174,13 @@ func indexFieldsRequestContextError(ctx context.Context) error {
 
 // A bounded index-field page has the same worst-case field-name expansion as
 // a completed-search catalog and therefore shares its serialization ceiling.
-type serializedIndexFieldsResponse = boundedProtoResponse[*opensplunkv1.ListIndexFieldsResponse]
+type serializedIndexFieldsResponse = boundedProtoResponse[*opensplunk.ListIndexFieldsResponse]
 
-type serializedIndexFieldsCodec = boundedProtoCodec[*opensplunkv1.ListIndexFieldsRequest, *opensplunkv1.ListIndexFieldsResponse]
+type serializedIndexFieldsCodec = boundedProtoCodec[*opensplunk.ListIndexFieldsRequest, *opensplunk.ListIndexFieldsResponse]
 
 func newSerializedIndexFieldsCodec() *serializedIndexFieldsCodec {
 	return newBoundedProtoCodec(
-		codec.NewProtoCodec[*opensplunkv1.ListIndexFieldsRequest, *opensplunkv1.ListIndexFieldsResponse](),
+		codec.NewProtoCodec[*opensplunk.ListIndexFieldsRequest, *opensplunk.ListIndexFieldsResponse](),
 		boundedProtoCodecOptions{
 			stateError:   "index field serialization state is invalid",
 			messageError: "index field response is missing",

@@ -6,7 +6,7 @@ import (
 	"slices"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
@@ -16,7 +16,7 @@ import (
 
 func TestPrepareKnowledgeCompilationRejectsPhysicalFieldAuthorityBeforeLowering(t *testing.T) {
 	programWithAliases := func(count int) knowledgeprogram.Program {
-		definitions := make([]*opensplunkv1.KnowledgeObjectDefinition, count)
+		definitions := make([]*opensplunk.KnowledgeObjectDefinition, count)
 		for index := range definitions {
 			definitions[index] = knowledgePreludeAliasDefinition(
 				fmt.Sprintf("physical-alias-%03d", index),
@@ -139,21 +139,21 @@ func TestPrepareKnowledgeCompilationDistinguishesLegacyAndPresentEmpty(t *testin
 func TestPrepareKnowledgeCompilationReturnsExactPrefixAndAuthoredSuffix(t *testing.T) {
 	t.Parallel()
 
-	program := knowledgePreparationProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{
+	program := knowledgePreparationProgram(t, []*opensplunk.KnowledgeObjectDefinition{
 		{
-			AppId: "app", Name: "a-regex", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-			Body: &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
+			AppId: "app", Name: "a-regex", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+			Body: &opensplunk.KnowledgeObjectDefinition_FieldExtraction{FieldExtraction: &opensplunk.FieldExtractionDefinition{
 				InputField: "_raw",
-				Extraction: &opensplunkv1.FieldExtractionDefinition_Regex{Regex: &opensplunkv1.RegexFieldExtractionDefinition{
+				Extraction: &opensplunk.FieldExtractionDefinition_Regex{Regex: &opensplunk.RegexFieldExtractionDefinition{
 					Pattern: `(?P<knowledge_word>[a-z]+)`, OutputFields: []string{"knowledge_word"},
 				}},
 			}},
 		},
 		{
-			AppId: "app", Name: "b-json", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-			Body: &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
+			AppId: "app", Name: "b-json", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+			Body: &opensplunk.KnowledgeObjectDefinition_FieldExtraction{FieldExtraction: &opensplunk.FieldExtractionDefinition{
 				InputField: "_raw",
-				Extraction: &opensplunkv1.FieldExtractionDefinition_Json{Json: &opensplunkv1.JsonFieldExtractionDefinition{
+				Extraction: &opensplunk.FieldExtractionDefinition_Json{Json: &opensplunk.JsonFieldExtractionDefinition{
 					Path: "knowledge.value", OutputField: "knowledge_value",
 				}},
 			}},
@@ -204,21 +204,21 @@ func TestPrepareKnowledgeCompilationReturnsExactPrefixAndAuthoredSuffix(t *testi
 func TestPrepareKnowledgeCompilationRejectsMalformedPrefixes(t *testing.T) {
 	t.Parallel()
 
-	program := knowledgePreparationProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{
+	program := knowledgePreparationProgram(t, []*opensplunk.KnowledgeObjectDefinition{
 		{
-			AppId: "app", Name: "a-regex", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-			Body: &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
+			AppId: "app", Name: "a-regex", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+			Body: &opensplunk.KnowledgeObjectDefinition_FieldExtraction{FieldExtraction: &opensplunk.FieldExtractionDefinition{
 				InputField: "_raw",
-				Extraction: &opensplunkv1.FieldExtractionDefinition_Regex{Regex: &opensplunkv1.RegexFieldExtractionDefinition{
+				Extraction: &opensplunk.FieldExtractionDefinition_Regex{Regex: &opensplunk.RegexFieldExtractionDefinition{
 					Pattern: `(?P<first>x)`, OutputFields: []string{"first"},
 				}},
 			}},
 		},
 		{
-			AppId: "app", Name: "b-json", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-			Body: &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
+			AppId: "app", Name: "b-json", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+			Body: &opensplunk.KnowledgeObjectDefinition_FieldExtraction{FieldExtraction: &opensplunk.FieldExtractionDefinition{
 				InputField: "_raw",
-				Extraction: &opensplunkv1.FieldExtractionDefinition_Json{Json: &opensplunkv1.JsonFieldExtractionDefinition{
+				Extraction: &opensplunk.FieldExtractionDefinition_Json{Json: &opensplunk.JsonFieldExtractionDefinition{
 					Path: "payload.value", OutputField: "second",
 				}},
 			}},
@@ -364,18 +364,18 @@ func TestPrepareKnowledgeCompilationRequiresExactAuthoredPredicateEvidence(t *te
 
 func knowledgePreparationProgram(
 	t *testing.T,
-	definitions []*opensplunkv1.KnowledgeObjectDefinition,
+	definitions []*opensplunk.KnowledgeObjectDefinition,
 ) knowledgeprogram.Program {
 	t.Helper()
-	objects := make([]*opensplunkv1.KnowledgeSnapshotObject, len(definitions))
+	objects := make([]*opensplunk.KnowledgeSnapshotObject, len(definitions))
 	for index, definition := range definitions {
 		normalized, err := knowledgedefinition.Normalize(definition)
 		if err != nil {
 			t.Fatalf("Normalize(%d): %v", index, err)
 		}
-		objects[index] = &opensplunkv1.KnowledgeSnapshotObject{
+		objects[index] = &opensplunk.KnowledgeSnapshotObject{
 			ResolutionOrdinal: uint32(index),
-			Stage:             opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
+			Stage:             opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
 			StageOrdinal:      uint32(index),
 			KnowledgeObjectId: "object-" + normalized.Name,
 			Version:           1,

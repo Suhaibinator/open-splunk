@@ -7,7 +7,7 @@ import (
 	"math"
 	"strings"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
@@ -21,15 +21,7 @@ const (
 	MaximumSummaryBytes = 32 << 10
 	// MaximumSummaryObjects is the exact canonical prefix retained when a
 	// snapshot contains more executable objects.
-	MaximumSummaryObjects = 64
-	// MaximumCompilerCompatibilityVersionBytes bounds the canonical compiler
-	// compatibility identity independently of the snapshot body.
-	MaximumCompilerCompatibilityVersionBytes = 128
-	// LegacySnapshotCompilerVersion identifies the only released snapshot
-	// identity whose audit rows may lack the later lookup-count column. It is a
-	// persisted-data migration marker, never a selectable runtime profile.
-	LegacySnapshotCompilerVersion = "0.1"
-
+	MaximumSummaryObjects      = 64
 	retainedProtoMessageCharge = 512
 	retainedRepeatedSlotCharge = 32
 )
@@ -37,7 +29,7 @@ const (
 // ValidateReference validates one present, bounded, definition-free snapshot
 // identity. Absence has lifecycle meaning and must be handled by its enclosing
 // record rather than represented by a nil reference here.
-func ValidateReference(reference *opensplunkv1.KnowledgeSnapshotRef) error {
+func ValidateReference(reference *opensplunk.KnowledgeSnapshotRef) error {
 	if reference == nil {
 		return fmt.Errorf("%w: knowledge snapshot reference is absent", ErrInvalidInput)
 	}
@@ -54,26 +46,12 @@ func ValidateReference(reference *opensplunkv1.KnowledgeSnapshotRef) error {
 	if reference.GetObjectCount() > MaximumExecutableObjects {
 		return fmt.Errorf("%w: knowledge snapshot reference object count exceeds %d", ErrResourceLimit, MaximumExecutableObjects)
 	}
-	if reference.GetLookupAssetCountUnknown() &&
-		(reference.GetCompilerCompatibilityVersion() != LegacySnapshotCompilerVersion ||
-			reference.GetLookupAssetCount() != 0) {
-		return fmt.Errorf(
-			"%w: knowledge snapshot reference lookup asset count marker is invalid",
-			ErrInvalidInput,
-		)
-	}
 	if reference.GetLookupAssetCount() > MaximumLookupAssets {
 		return fmt.Errorf(
 			"%w: knowledge snapshot reference lookup asset count exceeds %d",
 			ErrResourceLimit,
 			MaximumLookupAssets,
 		)
-	}
-	if !validIdentity(
-		reference.GetCompilerCompatibilityVersion(),
-		MaximumCompilerCompatibilityVersionBytes,
-	) {
-		return fmt.Errorf("%w: knowledge snapshot compiler compatibility version is not canonical", ErrInvalidInput)
 	}
 	if len(reference.ProtoReflect().GetUnknown()) != 0 {
 		return fmt.Errorf("%w: knowledge snapshot reference contains unknown fields", ErrInvalidInput)
@@ -82,11 +60,11 @@ func ValidateReference(reference *opensplunkv1.KnowledgeSnapshotRef) error {
 }
 
 // CloneReference validates and detaches one retained reference.
-func CloneReference(reference *opensplunkv1.KnowledgeSnapshotRef) (*opensplunkv1.KnowledgeSnapshotRef, error) {
+func CloneReference(reference *opensplunk.KnowledgeSnapshotRef) (*opensplunk.KnowledgeSnapshotRef, error) {
 	if err := ValidateReference(reference); err != nil {
 		return nil, err
 	}
-	cloned, ok := proto.Clone(reference).(*opensplunkv1.KnowledgeSnapshotRef)
+	cloned, ok := proto.Clone(reference).(*opensplunk.KnowledgeSnapshotRef)
 	if !ok || cloned == nil {
 		return nil, fmt.Errorf("%w: knowledge snapshot reference cannot be detached", ErrInvalidInput)
 	}
@@ -96,7 +74,7 @@ func CloneReference(reference *opensplunkv1.KnowledgeSnapshotRef) (*opensplunkv1
 // ValidateSummary validates one exact canonical inventory prefix. Authorized
 // identity and redaction are mutually exclusive at the protobuf type level;
 // this additionally rejects an absent disclosure and false redaction.
-func ValidateSummary(summary *opensplunkv1.KnowledgeSnapshotSummary) error {
+func ValidateSummary(summary *opensplunk.KnowledgeSnapshotSummary) error {
 	if summary == nil {
 		return fmt.Errorf("%w: knowledge snapshot summary is absent", ErrInvalidInput)
 	}
@@ -121,12 +99,6 @@ func ValidateSummary(summary *opensplunkv1.KnowledgeSnapshotSummary) error {
 	}
 	if err := ValidateReference(summary.GetRef()); err != nil {
 		return fmt.Errorf("knowledge snapshot summary reference: %w", err)
-	}
-	if summary.GetRef().GetLookupAssetCountUnknown() {
-		return fmt.Errorf(
-			"%w: knowledge snapshot summary lookup inventory count is unknown",
-			ErrInvalidInput,
-		)
 	}
 	if len(summary.GetLookupAssets()) != int(summary.GetRef().GetLookupAssetCount()) {
 		return fmt.Errorf(
@@ -169,11 +141,11 @@ func ValidateSummary(summary *opensplunkv1.KnowledgeSnapshotSummary) error {
 		previousStageRank = stageRank
 
 		switch disclosure := object.GetDisclosure().(type) {
-		case *opensplunkv1.KnowledgeSnapshotObjectSummary_AuthorizedObject:
+		case *opensplunk.KnowledgeSnapshotObjectSummary_AuthorizedObject:
 			if err := validateAuthorizedObjectSummary(disclosure.AuthorizedObject); err != nil {
 				return fmt.Errorf("knowledge snapshot summary object %d: %w", position, err)
 			}
-		case *opensplunkv1.KnowledgeSnapshotObjectSummary_Redacted:
+		case *opensplunk.KnowledgeSnapshotObjectSummary_Redacted:
 			if !disclosure.Redacted {
 				return fmt.Errorf("%w: knowledge snapshot summary object %d has false redaction", ErrInvalidInput, position)
 			}
@@ -185,18 +157,18 @@ func ValidateSummary(summary *opensplunkv1.KnowledgeSnapshotSummary) error {
 }
 
 // CloneSummary validates and detaches one retained inventory.
-func CloneSummary(summary *opensplunkv1.KnowledgeSnapshotSummary) (*opensplunkv1.KnowledgeSnapshotSummary, error) {
+func CloneSummary(summary *opensplunk.KnowledgeSnapshotSummary) (*opensplunk.KnowledgeSnapshotSummary, error) {
 	if err := ValidateSummary(summary); err != nil {
 		return nil, err
 	}
-	cloned, ok := proto.Clone(summary).(*opensplunkv1.KnowledgeSnapshotSummary)
+	cloned, ok := proto.Clone(summary).(*opensplunk.KnowledgeSnapshotSummary)
 	if !ok || cloned == nil {
 		return nil, fmt.Errorf("%w: knowledge snapshot summary cannot be detached", ErrInvalidInput)
 	}
 	return cloned, nil
 }
 
-func validateAuthorizedObjectSummary(summary *opensplunkv1.KnowledgeSnapshotAuthorizedObjectSummary) error {
+func validateAuthorizedObjectSummary(summary *opensplunk.KnowledgeSnapshotAuthorizedObjectSummary) error {
 	if summary == nil {
 		return fmt.Errorf("%w: authorized object identity is absent", ErrInvalidInput)
 	}
@@ -213,17 +185,16 @@ func validateAuthorizedObjectSummary(summary *opensplunkv1.KnowledgeSnapshotAuth
 
 // Reference returns a detached, definition-free identity minted only from the
 // finalized immutable authority. A zero Snapshot returns nil.
-func (snapshot Snapshot) Reference() *opensplunkv1.KnowledgeSnapshotRef {
+func (snapshot Snapshot) Reference() *opensplunk.KnowledgeSnapshotRef {
 	if snapshot.message == nil {
 		return nil
 	}
-	return &opensplunkv1.KnowledgeSnapshotRef{
-		SnapshotSha256:               bytes.Clone(snapshot.message.GetSnapshotSha256()),
-		TenantCatalogRevision:        snapshot.message.GetTenantCatalogRevision(),
-		TenantCatalogStateToken:      bytes.Clone(snapshot.message.GetTenantCatalogStateToken()),
-		ObjectCount:                  uint32(len(snapshot.message.GetObjects())), // #nosec G115 -- finalized snapshots are bounded by MaximumObjects.
-		CompilerCompatibilityVersion: strings.Clone(snapshot.message.GetCompilerCompatibilityVersion()),
-		LookupAssetCount:             uint32(len(snapshot.message.GetLookupAssets())), // #nosec G115 -- finalized lookup assets are bounded by sixteen.
+	return &opensplunk.KnowledgeSnapshotRef{
+		SnapshotSha256:          bytes.Clone(snapshot.message.GetSnapshotSha256()),
+		TenantCatalogRevision:   snapshot.message.GetTenantCatalogRevision(),
+		TenantCatalogStateToken: bytes.Clone(snapshot.message.GetTenantCatalogStateToken()),
+		ObjectCount:             uint32(len(snapshot.message.GetObjects())),      // #nosec G115 -- finalized snapshots are bounded by MaximumObjects.
+		LookupAssetCount:        uint32(len(snapshot.message.GetLookupAssets())), // #nosec G115 -- finalized lookup assets are bounded by sixteen.
 	}
 }
 
@@ -231,20 +202,20 @@ func (snapshot Snapshot) Reference() *opensplunkv1.KnowledgeSnapshotRef {
 // only from the finalized immutable authority. Object identities are retained
 // as authorized disclosures; response projections may replace them with the
 // redacted oneof without changing position, type, or stage.
-func (snapshot Snapshot) Summary() *opensplunkv1.KnowledgeSnapshotSummary {
+func (snapshot Snapshot) Summary() *opensplunk.KnowledgeSnapshotSummary {
 	if snapshot.message == nil {
 		return nil
 	}
 	objectCount := len(snapshot.message.GetObjects())
 	prefixCount := min(objectCount, MaximumSummaryObjects)
-	objects := make([]*opensplunkv1.KnowledgeSnapshotObjectSummary, prefixCount)
+	objects := make([]*opensplunk.KnowledgeSnapshotObjectSummary, prefixCount)
 	for position, object := range snapshot.message.GetObjects()[:prefixCount] {
-		objects[position] = &opensplunkv1.KnowledgeSnapshotObjectSummary{
+		objects[position] = &opensplunk.KnowledgeSnapshotObjectSummary{
 			ResolutionOrdinal: object.GetResolutionOrdinal(),
 			ObjectType:        object.GetObjectType(),
 			Stage:             object.GetStage(),
-			Disclosure: &opensplunkv1.KnowledgeSnapshotObjectSummary_AuthorizedObject{
-				AuthorizedObject: &opensplunkv1.KnowledgeSnapshotAuthorizedObjectSummary{
+			Disclosure: &opensplunk.KnowledgeSnapshotObjectSummary_AuthorizedObject{
+				AuthorizedObject: &opensplunk.KnowledgeSnapshotAuthorizedObjectSummary{
 					KnowledgeObjectId: strings.Clone(object.GetKnowledgeObjectId()),
 					Version:           object.GetVersion(),
 					Name:              strings.Clone(object.GetName()),
@@ -252,7 +223,7 @@ func (snapshot Snapshot) Summary() *opensplunkv1.KnowledgeSnapshotSummary {
 			},
 		}
 	}
-	return &opensplunkv1.KnowledgeSnapshotSummary{
+	return &opensplunk.KnowledgeSnapshotSummary{
 		Ref:              snapshot.Reference(),
 		Objects:          objects,
 		ObjectsTruncated: objectCount > MaximumSummaryObjects,

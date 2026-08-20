@@ -9,7 +9,7 @@ import (
 
 	"github.com/Suhaibinator/SRouter/pkg/codec"
 	"github.com/Suhaibinator/SRouter/pkg/router"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/protostrict"
 	"google.golang.org/protobuf/proto"
@@ -24,7 +24,7 @@ const (
 
 func (handler *apiHandler) listExportJobs(
 	request *http.Request,
-	input *opensplunkv1.ListExportJobsRequest,
+	input *opensplunk.ListExportJobsRequest,
 ) (*serializedExportListResponse, error) {
 	if err := validateExportListRequest(input); err != nil {
 		return nil, badRequestError(err.Error())
@@ -77,7 +77,7 @@ func (handler *apiHandler) listExportJobs(
 		return nil, internalError()
 	}
 
-	converted := make([]*opensplunkv1.ExportJob, len(page.Jobs))
+	converted := make([]*opensplunk.ExportJob, len(page.Jobs))
 	seenIDs := make(map[string]struct{}, len(page.Jobs))
 	projectionNow := handler.now()
 	var previous exportjobs.Job
@@ -103,8 +103,8 @@ func (handler *apiHandler) listExportJobs(
 
 		projected, projectionErr := exportJobToProto(job, projectionNow)
 		if projectionErr != nil ||
-			projected.GetState() == opensplunkv1.ExportJobState_EXPORT_JOB_STATE_UNSPECIFIED ||
-			projected.GetFormat() == opensplunkv1.ExportFormat_EXPORT_FORMAT_UNSPECIFIED {
+			projected.GetState() == opensplunk.ExportJobState_EXPORT_JOB_STATE_UNSPECIFIED ||
+			projected.GetFormat() == opensplunk.ExportFormat_EXPORT_FORMAT_UNSPECIFIED {
 			return nil, internalError()
 		}
 		converted[index] = projected
@@ -119,7 +119,7 @@ func (handler *apiHandler) listExportJobs(
 	if err != nil {
 		return nil, internalError()
 	}
-	message := &opensplunkv1.ListExportJobsResponse{
+	message := &opensplunk.ListExportJobsResponse{
 		ExportJobs: converted,
 		Page:       pageResponse,
 	}
@@ -138,7 +138,7 @@ func (handler *apiHandler) listExportJobs(
 }
 
 func (handler *apiHandler) exportListPageRequest(
-	page *opensplunkv1.PageRequest,
+	page *opensplunk.PageRequest,
 ) (int, string, bool, error) {
 	if page != nil {
 		if page.PageSize != nil && page.GetPageSize() > maximumExportListRows {
@@ -169,7 +169,7 @@ func (handler *apiHandler) exportListPageRequest(
 }
 
 func exportListStateFilters(
-	input []opensplunkv1.ExportJobState,
+	input []opensplunk.ExportJobState,
 ) ([]exportjobs.State, error) {
 	if len(input) > maximumExportListStateFilters {
 		return nil, errors.New("state filters contain too many values")
@@ -192,20 +192,20 @@ func exportListStateFilters(
 }
 
 func exportListState(
-	input opensplunkv1.ExportJobState,
+	input opensplunk.ExportJobState,
 ) (exportjobs.State, bool) {
 	switch input {
-	case opensplunkv1.ExportJobState_EXPORT_JOB_STATE_QUEUED:
+	case opensplunk.ExportJobState_EXPORT_JOB_STATE_QUEUED:
 		return exportjobs.StateQueued, true
-	case opensplunkv1.ExportJobState_EXPORT_JOB_STATE_RUNNING:
+	case opensplunk.ExportJobState_EXPORT_JOB_STATE_RUNNING:
 		return exportjobs.StateRunning, true
-	case opensplunkv1.ExportJobState_EXPORT_JOB_STATE_COMPLETED:
+	case opensplunk.ExportJobState_EXPORT_JOB_STATE_COMPLETED:
 		return exportjobs.StateCompleted, true
-	case opensplunkv1.ExportJobState_EXPORT_JOB_STATE_FAILED:
+	case opensplunk.ExportJobState_EXPORT_JOB_STATE_FAILED:
 		return exportjobs.StateFailed, true
-	case opensplunkv1.ExportJobState_EXPORT_JOB_STATE_CANCELED:
+	case opensplunk.ExportJobState_EXPORT_JOB_STATE_CANCELED:
 		return exportjobs.StateCanceled, true
-	case opensplunkv1.ExportJobState_EXPORT_JOB_STATE_EXPIRED:
+	case opensplunk.ExportJobState_EXPORT_JOB_STATE_EXPIRED:
 		return exportjobs.StateExpired, true
 	default:
 		return exportjobs.StateInvalid, false
@@ -254,7 +254,7 @@ func exportListPageResponse(
 	pageSize int,
 	requestToken string,
 	includeTotal bool,
-) (*opensplunkv1.PageResponse, error) {
+) (*opensplunk.PageResponse, error) {
 	return boundedListPageResponse(
 		"export",
 		boundedListPageMetadata{
@@ -271,7 +271,7 @@ func exportListPageResponse(
 }
 
 func validateExportListRequest(
-	input *opensplunkv1.ListExportJobsRequest,
+	input *opensplunk.ListExportJobsRequest,
 ) error {
 	if input == nil {
 		return errors.New("export list request is required")
@@ -317,18 +317,18 @@ func exportListRequestContextError(ctx context.Context) error {
 	return canceledRequestError(ctx, "export list request was canceled")
 }
 
-type serializedExportListResponse = boundedProtoResponse[*opensplunkv1.ListExportJobsResponse]
+type serializedExportListResponse = boundedProtoResponse[*opensplunk.ListExportJobsResponse]
 
 type serializedExportListCodec = boundedProtoCodec[
-	*opensplunkv1.ListExportJobsRequest,
-	*opensplunkv1.ListExportJobsResponse,
+	*opensplunk.ListExportJobsRequest,
+	*opensplunk.ListExportJobsResponse,
 ]
 
 func newSerializedExportListCodec() *serializedExportListCodec {
 	return newBoundedProtoCodec(
 		codec.NewProtoCodec[
-			*opensplunkv1.ListExportJobsRequest,
-			*opensplunkv1.ListExportJobsResponse,
+			*opensplunk.ListExportJobsRequest,
+			*opensplunk.ListExportJobsResponse,
 		](),
 		boundedProtoCodecOptions{
 			stateError:   "export list serialization state is invalid",

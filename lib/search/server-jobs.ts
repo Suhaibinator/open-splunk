@@ -5,8 +5,8 @@ import {
   type SearchJob,
   type SearchJobSource,
   type SearchProgress,
-} from "@/gen/ts/open_splunk/v1/search";
-import { ServerFeature } from "@/gen/ts/open_splunk/v1/system_api";
+} from "@/gen/ts/open_splunk/search";
+import { ServerFeature } from "@/gen/ts/open_splunk/system_api";
 import { validDate } from "@/lib/api/duration";
 import type { OpenSplunkApiClient } from "@/lib/api/open-splunk-client";
 import {

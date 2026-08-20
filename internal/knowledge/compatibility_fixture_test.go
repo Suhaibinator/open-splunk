@@ -10,12 +10,12 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/testsupport/knowledgecompat"
 )
 
-const compatibilityFixtureSHA256 = "35cae144db3ae70ca26ac82fb5fee4e106983967b7425e636cc1509651057071"
+const compatibilityFixtureSHA256 = "9ab12561fe350c6daa5d1131f82b8ddd41a2a4664c3153fd2f400b0803b417d9"
 
-func TestCompatibilityV0_1FixtureContract(t *testing.T) {
+func TestCompatibilityFixtureContract(t *testing.T) {
 	t.Parallel()
 
-	encoded, err := os.ReadFile("testdata/compatibility-v0.1.json")
+	encoded, err := os.ReadFile("testdata/compatibility.json")
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
 	}
@@ -23,11 +23,11 @@ func TestCompatibilityV0_1FixtureContract(t *testing.T) {
 		t.Fatalf("fixture SHA-256 = %s, want %s; intentional corpus changes must update the reviewed digest", digest, compatibilityFixtureSHA256)
 	}
 	fixture := knowledgecompat.Load(t)
-	if fixture.CompatibilityVersion != knowledgecompat.CompatibilityVersion {
+	if fixture.FormatVersion != knowledgecompat.FormatVersion {
 		t.Fatalf(
-			"historical compatibility version = %q, want %q",
-			fixture.CompatibilityVersion,
-			knowledgecompat.CompatibilityVersion,
+			"corpus format = %d, want %d",
+			fixture.FormatVersion,
+			knowledgecompat.FormatVersion,
 		)
 	}
 	if len(fixture.Cases) != 55 {

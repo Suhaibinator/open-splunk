@@ -4,18 +4,18 @@ import {
   AuditActorRole,
   AuditTargetKind,
   type AuditEvent,
-} from "@/gen/ts/open_splunk/v1/audit";
-import { SharingScope } from "@/gen/ts/open_splunk/v1/common";
-import { KnowledgeObjectType } from "@/gen/ts/open_splunk/v1/knowledge";
+} from "@/gen/ts/open_splunk/audit";
+import { SharingScope } from "@/gen/ts/open_splunk/common";
+import { KnowledgeObjectType } from "@/gen/ts/open_splunk/knowledge";
 import type {
   ListAuditEventsRequest,
   ListAuditEventsResponse,
-} from "@/gen/ts/open_splunk/v1/audit_api";
-import type { SearchAttemptAuditEvent } from "@/gen/ts/open_splunk/v1/search_attempt_audit";
+} from "@/gen/ts/open_splunk/audit_api";
+import type { SearchAttemptAuditEvent } from "@/gen/ts/open_splunk/search_attempt_audit";
 import type {
   ListSearchAttemptAuditEventsRequest,
   ListSearchAttemptAuditEventsResponse,
-} from "@/gen/ts/open_splunk/v1/search_attempt_audit_api";
+} from "@/gen/ts/open_splunk/search_attempt_audit_api";
 import { isHttpStatus, type ProtobufRequestOptions } from "@/lib/api";
 import { canonicalBoundedServerText } from "@/lib/search/server-text";
 

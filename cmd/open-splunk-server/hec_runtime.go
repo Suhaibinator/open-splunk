@@ -118,7 +118,7 @@ type runtimeHECConfig struct {
 	Metrics               *hechttp.Metrics
 }
 
-// newRuntimeHECHandler composes the complete selected HEC v0.1 surface. It
+// newRuntimeHECHandler composes the complete selected HEC surface. It
 // returns an error rather than registering JSON without raw, ACK, health, or
 // the shared durable admission boundary.
 func newRuntimeHECHandler(config runtimeHECConfig) (*hechttp.Handler, error) {

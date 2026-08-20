@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
@@ -13,7 +13,7 @@ func TestValidationDiagnosticsAreDeterministic(t *testing.T) {
 	empty := ""
 	invalid := "bad\x00value"
 	definition := savedSearchDefinition("Errors", "app-main")
-	definition.Search.TimeRange = &opensplunkv1.TimeRangeSpec{Earliest: &empty, Latest: &empty}
+	definition.Search.TimeRange = &opensplunk.TimeRangeSpec{Earliest: &empty, Latest: &empty}
 	for iteration := range 50 {
 		_, _, _, err := normalizeAndEncodeDefinition(definition, "owner")
 		if err == nil || !strings.Contains(err.Error(), "earliest time") {
@@ -22,8 +22,8 @@ func TestValidationDiagnosticsAreDeterministic(t *testing.T) {
 	}
 
 	definition = savedSearchDefinition("Errors", "app-main")
-	definition.Search.Visualization = &opensplunkv1.VisualizationSpec{
-		Type:  opensplunkv1.VisualizationType_VISUALIZATION_TYPE_TABLE,
+	definition.Search.Visualization = &opensplunk.VisualizationSpec{
+		Type:  opensplunk.VisualizationType_VISUALIZATION_TYPE_TABLE,
 		Title: &invalid, XField: &invalid,
 	}
 	for iteration := range 50 {

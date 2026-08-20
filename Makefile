@@ -1,4 +1,4 @@
-.PHONY: build release oci build-ui build-server build-collector build-loggen lint proto proto-lint proto-tools release-go-deps test clean
+.PHONY: build release oci build-ui build-server build-collector build-loggen docs-check lint proto proto-lint proto-tools release-go-deps test clean
 
 override PROTOC_GEN_GO_VERSION := v1.36.12
 override PROTOC_GEN_GO_GRPC_VERSION := v1.6.2
@@ -45,15 +45,17 @@ override GO_TOOL_ENV := env \
 	GOFLAGS= \
 	GOTOOLCHAIN=local \
 	GOWORK=off
+# SQLite-backed tests use go-sqlite3, while release binaries remain pure-Go.
+# Override only the test invocation so build and publication tooling stays
+# reproducibly CGO-disabled.
+override GO_TEST_ENV := $(GO_TOOL_ENV) CGO_ENABLED=1
 OPEN_SPLUNK_DATA_MODE ?= backend
-OPEN_SPLUNK_APPLICATION_VERSION ?= 0.4.0
 OPEN_SPLUNK_SOURCE_REVISION ?= development
 override BUILDINFO_PACKAGE := github.com/Suhaibinator/open-splunk/internal/buildinfo
-override GO_BUILD_LDFLAGS = -X $(BUILDINFO_PACKAGE).applicationVersion=$(OPEN_SPLUNK_APPLICATION_VERSION) -X $(BUILDINFO_PACKAGE).sourceRevision=$(OPEN_SPLUNK_SOURCE_REVISION)
+override GO_BUILD_LDFLAGS = -X $(BUILDINFO_PACKAGE).sourceRevision=$(OPEN_SPLUNK_SOURCE_REVISION)
 
 build: build-server build-collector
 
-release: export OPEN_SPLUNK_APPLICATION_VERSION := $(value OPEN_SPLUNK_APPLICATION_VERSION)
 release: export OPEN_SPLUNK_SOURCE_REVISION := $(value OPEN_SPLUNK_SOURCE_REVISION)
 release:
 	test "$$($(GO_TOOL_ENV) go env GOVERSION)" = "go$(RELEASE_GO_VERSION)"
@@ -87,7 +89,6 @@ release:
 			OPEN_SPLUNK_REPOSITORY_ROOT="$$repo_root" \
 			bash "$$launcher"
 
-oci: export OPEN_SPLUNK_APPLICATION_VERSION := $(value OPEN_SPLUNK_APPLICATION_VERSION)
 oci: export OPEN_SPLUNK_SOURCE_REVISION := $(value OPEN_SPLUNK_SOURCE_REVISION)
 oci: export OPEN_SPLUNK_SERVER_IMAGE := $(value OPEN_SPLUNK_SERVER_IMAGE)
 oci: export OPEN_SPLUNK_COLLECTOR_IMAGE := $(value OPEN_SPLUNK_COLLECTOR_IMAGE)
@@ -129,16 +130,13 @@ build-ui: proto
 		NEXT_TELEMETRY_DISABLED=1 \
 		NODE_OPTIONS="" \
 		OPEN_SPLUNK_API_BASE_URL="" \
-		OPEN_SPLUNK_APPLICATION_VERSION="$(OPEN_SPLUNK_APPLICATION_VERSION)" \
 		OPEN_SPLUNK_DATA_MODE="$(OPEN_SPLUNK_DATA_MODE)" \
 		OPEN_SPLUNK_SOURCE_REVISION="$(OPEN_SPLUNK_SOURCE_REVISION)" \
 		TZ=UTC \
 		npm run build
 	test -f out/index.html
-	grep -Fq 'data-open-splunk-version="$(OPEN_SPLUNK_APPLICATION_VERSION)"' out/index.html
 	grep -Fq 'data-open-splunk-revision="$(OPEN_SPLUNK_SOURCE_REVISION)"' out/index.html
 	$(GO_TOOL_ENV) go run ./cmd/open-splunk-manifest \
-		-application-version "$(OPEN_SPLUNK_APPLICATION_VERSION)" \
 		-source-revision "$(OPEN_SPLUNK_SOURCE_REVISION)"
 	test -f out/asset-manifest.json
 
@@ -174,11 +172,14 @@ release-go-deps:
 	$(GO_TOOL_ENV) go mod download all
 	$(GO_TOOL_ENV) go mod verify
 
+docs-check:
+	npm run check:docs
+
 lint:
 	npm run lint
 
-test: lint
-	$(GO_TOOL_ENV) go test ./...
+test: docs-check lint
+	$(GO_TEST_ENV) go test ./...
 	npm run test:frontend
 	npm run typecheck
 

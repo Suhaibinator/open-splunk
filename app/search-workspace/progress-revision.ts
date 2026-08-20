@@ -1,4 +1,4 @@
-import type { SearchProgress } from "../../gen/ts/open_splunk/v1/search";
+import type { SearchProgress } from "../../gen/ts/open_splunk/search";
 
 const MAXIMUM_UINT64 = (1n << 64n) - 1n;
 

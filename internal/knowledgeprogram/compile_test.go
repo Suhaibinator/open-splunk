@@ -7,17 +7,17 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"google.golang.org/protobuf/proto"
 )
 
 func TestCompileDerivesCanonicalVersionPinnedDependencies(t *testing.T) {
-	definitions := []*opensplunkv1.KnowledgeObjectDefinition{
-		regexDefinition("extract-a", "extracted_a", nil, opensplunkv1.SharingScope_SHARING_SCOPE_APP, "app-a"),
-		regexDefinition("extract-b", "extracted_b", nil, opensplunkv1.SharingScope_SHARING_SCOPE_APP, "app-a"),
-		aliasDefinition("alias-a", "extracted_a", "alias_a", nil, opensplunkv1.SharingScope_SHARING_SCOPE_APP, "app-a"),
-		aliasDefinition("alias-b", "extracted_b", "alias_b", nil, opensplunkv1.SharingScope_SHARING_SCOPE_APP, "app-a"),
+	definitions := []*opensplunk.KnowledgeObjectDefinition{
+		regexDefinition("extract-a", "extracted_a", nil, opensplunk.SharingScope_SHARING_SCOPE_APP, "app-a"),
+		regexDefinition("extract-b", "extracted_b", nil, opensplunk.SharingScope_SHARING_SCOPE_APP, "app-a"),
+		aliasDefinition("alias-a", "extracted_a", "alias_a", nil, opensplunk.SharingScope_SHARING_SCOPE_APP, "app-a"),
+		aliasDefinition("alias-b", "extracted_b", "alias_b", nil, opensplunk.SharingScope_SHARING_SCOPE_APP, "app-a"),
 		calculatedDefinition("calculated-a", "calculated_a", "lower(alias_b)"),
 		calculatedDefinition("calculated-b", "calculated_b", "coalesce(alias_a, extracted_b)"),
 	}
@@ -46,7 +46,7 @@ func TestCompileDerivesCanonicalVersionPinnedDependencies(t *testing.T) {
 	if len(dependencies) != len(want) {
 		t.Fatalf("derived dependency count = %d, want %d", len(dependencies), len(want))
 	}
-	objects := make(map[string]*opensplunkv1.KnowledgeSnapshotObject, len(input.Objects))
+	objects := make(map[string]*opensplunk.KnowledgeSnapshotObject, len(input.Objects))
 	for _, object := range input.Objects {
 		objects[object.GetKnowledgeObjectId()] = object
 	}
@@ -56,7 +56,7 @@ func TestCompileDerivesCanonicalVersionPinnedDependencies(t *testing.T) {
 		sourceObject, targetObject := objects[expected.source], objects[expected.target]
 		if source.GetKnowledgeObjectId() != expected.source || target.GetKnowledgeObjectId() != expected.target ||
 			dependency.GetTopologicalDepth() != expected.depth || dependency.GetCanonicalOrdinal() != uint32(index) ||
-			dependency.GetRole() != opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT ||
+			dependency.GetRole() != opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT ||
 			dependency.GetSourceStage() != sourceObject.GetStage() || dependency.GetTargetStage() != targetObject.GetStage() ||
 			source.GetVersion() != sourceObject.GetVersion() || target.GetVersion() != targetObject.GetVersion() ||
 			!bytes.Equal(source.GetDefinitionSha256(), sourceObject.GetDefinitionSha256()) ||
@@ -259,19 +259,19 @@ func TestCompileEmptyAndNoEdgePrograms(t *testing.T) {
 
 	tests := []struct {
 		name        string
-		definitions []*opensplunkv1.KnowledgeObjectDefinition
+		definitions []*opensplunk.KnowledgeObjectDefinition
 	}{
 		{
 			name: "stored input",
-			definitions: []*opensplunkv1.KnowledgeObjectDefinition{
-				aliasDefinition("alias-a", "stored_field", "alias_value", nil, opensplunkv1.SharingScope_SHARING_SCOPE_APP, "app-a"),
+			definitions: []*opensplunk.KnowledgeObjectDefinition{
+				aliasDefinition("alias-a", "stored_field", "alias_value", nil, opensplunk.SharingScope_SHARING_SCOPE_APP, "app-a"),
 			},
 		},
 		{
 			name: "provably disjoint producer",
-			definitions: []*opensplunkv1.KnowledgeObjectDefinition{
-				regexDefinition("extract-a", "derived_input", hostSelector("api"), opensplunkv1.SharingScope_SHARING_SCOPE_APP, "app-a"),
-				aliasDefinition("alias-a", "derived_input", "alias_value", hostSelector("web"), opensplunkv1.SharingScope_SHARING_SCOPE_APP, "app-a"),
+			definitions: []*opensplunk.KnowledgeObjectDefinition{
+				regexDefinition("extract-a", "derived_input", hostSelector("api"), opensplunk.SharingScope_SHARING_SCOPE_APP, "app-a"),
+				aliasDefinition("alias-a", "derived_input", "alias_value", hostSelector("web"), opensplunk.SharingScope_SHARING_SCOPE_APP, "app-a"),
 			},
 		},
 	}
@@ -289,13 +289,13 @@ func TestCompileEmptyAndNoEdgePrograms(t *testing.T) {
 }
 
 func TestCompileEnforcesSelectorAndSharingAuthority(t *testing.T) {
-	private := opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE
-	app := opensplunkv1.SharingScope_SHARING_SCOPE_APP
-	global := opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL
+	private := opensplunk.SharingScope_SHARING_SCOPE_PRIVATE
+	app := opensplunk.SharingScope_SHARING_SCOPE_APP
+	global := opensplunk.SharingScope_SHARING_SCOPE_GLOBAL
 	tests := []struct {
 		name                           string
 		sourceSelector, targetSelector string
-		sourceScope, targetScope       opensplunkv1.SharingScope
+		sourceScope, targetScope       opensplunk.SharingScope
 		sourceApp, targetApp           string
 		targetOwner                    string
 		wantDependencies               int
@@ -316,7 +316,7 @@ func TestCompileEnforcesSelectorAndSharingAuthority(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			input := inputFromDefinitions(t, []*opensplunkv1.KnowledgeObjectDefinition{
+			input := inputFromDefinitions(t, []*opensplunk.KnowledgeObjectDefinition{
 				regexDefinition("extract-a", "derived_input", hostSelector(test.targetSelector), test.targetScope, test.targetApp),
 				aliasDefinition("alias-a", "derived_input", "alias_value", hostSelector(test.sourceSelector), test.sourceScope, test.sourceApp),
 			})
@@ -341,7 +341,7 @@ func TestCompileEnforcesSelectorAndSharingAuthority(t *testing.T) {
 }
 
 func TestSemanticDepthsRejectsCyclesAndEnforcesCeiling(t *testing.T) {
-	role := opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT
+	role := opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT
 	cycleObjects := []semanticObject{{key: semanticObjectKey{id: "a", version: 1}}, {key: semanticObjectKey{id: "b", version: 1}}}
 	cycle := map[semanticEdgeKey]struct{}{
 		{source: cycleObjects[0].key, target: cycleObjects[1].key, role: role}: {},
@@ -384,15 +384,15 @@ func TestCompileEnforcesDerivedDependencyCeiling(t *testing.T) {
 
 func regexDefinition(
 	name, output string,
-	selector *opensplunkv1.KnowledgeSelector,
-	scope opensplunkv1.SharingScope,
+	selector *opensplunk.KnowledgeSelector,
+	scope opensplunk.SharingScope,
 	appID string,
-) *opensplunkv1.KnowledgeObjectDefinition {
-	return &opensplunkv1.KnowledgeObjectDefinition{
+) *opensplunk.KnowledgeObjectDefinition {
+	return &opensplunk.KnowledgeObjectDefinition{
 		AppId: appID, Name: name, SharingScope: scope, Selector: selector,
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldExtraction{FieldExtraction: &opensplunk.FieldExtractionDefinition{
 			InputField: "_raw",
-			Extraction: &opensplunkv1.FieldExtractionDefinition_Regex{Regex: &opensplunkv1.RegexFieldExtractionDefinition{
+			Extraction: &opensplunk.FieldExtractionDefinition_Regex{Regex: &opensplunk.RegexFieldExtractionDefinition{
 				Pattern: "(?P<" + output + ">x)", OutputFields: []string{output},
 			}},
 		}},
@@ -401,13 +401,13 @@ func regexDefinition(
 
 func aliasDefinition(
 	name, source, destination string,
-	selector *opensplunkv1.KnowledgeSelector,
-	scope opensplunkv1.SharingScope,
+	selector *opensplunk.KnowledgeSelector,
+	scope opensplunk.SharingScope,
 	appID string,
-) *opensplunkv1.KnowledgeObjectDefinition {
-	return &opensplunkv1.KnowledgeObjectDefinition{
+) *opensplunk.KnowledgeObjectDefinition {
+	return &opensplunk.KnowledgeObjectDefinition{
 		AppId: appID, Name: name, SharingScope: scope, Selector: selector,
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunkv1.FieldAliasDefinition{
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunk.FieldAliasDefinition{
 			SourceField: source, DestinationField: destination,
 		}},
 	}
@@ -415,32 +415,32 @@ func aliasDefinition(
 
 func calculatedDefinition(
 	name, destination, expression string,
-) *opensplunkv1.KnowledgeObjectDefinition {
-	return &opensplunkv1.KnowledgeObjectDefinition{
-		AppId: "app-a", Name: name, SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-		Body: &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{CalculatedField: &opensplunkv1.CalculatedFieldDefinition{
+) *opensplunk.KnowledgeObjectDefinition {
+	return &opensplunk.KnowledgeObjectDefinition{
+		AppId: "app-a", Name: name, SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+		Body: &opensplunk.KnowledgeObjectDefinition_CalculatedField{CalculatedField: &opensplunk.CalculatedFieldDefinition{
 			DestinationField: destination, Expression: expression,
 		}},
 	}
 }
 
-func hostSelector(pattern string) *opensplunkv1.KnowledgeSelector {
+func hostSelector(pattern string) *opensplunk.KnowledgeSelector {
 	if pattern == "" {
 		return nil
 	}
-	return &opensplunkv1.KnowledgeSelector{
-		HostPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{Value: pattern}},
+	return &opensplunk.KnowledgeSelector{
+		HostPatterns: []*opensplunk.KnowledgeSelectorPattern{{Value: pattern}},
 	}
 }
 
-func denseDependencyDefinitions(targets int) []*opensplunkv1.KnowledgeObjectDefinition {
-	definitions := make([]*opensplunkv1.KnowledgeObjectDefinition, 0, targets+MaximumScalarExpressions)
+func denseDependencyDefinitions(targets int) []*opensplunk.KnowledgeObjectDefinition {
+	definitions := make([]*opensplunk.KnowledgeObjectDefinition, 0, targets+MaximumScalarExpressions)
 	fields := make([]string, targets)
 	for index := range fields {
 		fields[index] = fmt.Sprintf("input_%02d", index)
 		definitions = append(definitions, regexDefinition(
 			fmt.Sprintf("extract-%02d", index), fields[index], nil,
-			opensplunkv1.SharingScope_SHARING_SCOPE_APP, "app-a",
+			opensplunk.SharingScope_SHARING_SCOPE_APP, "app-a",
 		))
 	}
 	expression := denseDependencyExpression(fields)

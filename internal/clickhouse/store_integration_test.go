@@ -21,7 +21,7 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
@@ -200,9 +200,6 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 	})
 	t.Run("write freeze drains ambiguous multi-index insert", func(t *testing.T) {
 		testWriteFreezeDrainsAmbiguousInsert(t, ctx, config, queryConnection, indexTime)
-	})
-	t.Run("legacy v3 unaligned retention replays through native encoder", func(t *testing.T) {
-		testLegacyUnalignedRetentionNativeReplay(t, ctx, store.connection, queryConnection)
 	})
 	var count uint64
 	if err := queryConnection.QueryRow(ctx, "SELECT count() FROM open_splunk.events WHERE event_id = ?", "native-event").Scan(&count); err != nil {
@@ -519,8 +516,8 @@ func testQuotaDenialAgainstClickHouse(
 	if !errors.As(storeErr, &transient) {
 		t.Fatalf("store above quota error = %v, want TransientStoreError", storeErr)
 	}
-	if transient.Reason != opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED ||
-		transient.ThrottleReason != opensplunkv1.ThrottleReason_THROTTLE_REASON_TOKEN_QUOTA ||
+	if transient.Reason != opensplunk.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED ||
+		transient.ThrottleReason != opensplunk.ThrottleReason_THROTTLE_REASON_TOKEN_QUOTA ||
 		transient.RetryAfter != time.Second {
 		t.Fatalf("store above quota error = %+v", transient)
 	}
@@ -1045,111 +1042,6 @@ func testWriteFreezeDrainsAmbiguousInsert(
 		).Scan(&count); err != nil || count != 1 {
 			t.Fatalf("deduplicated row %q count = %d, error = %v, want 1", eventID, count, err)
 		}
-	}
-}
-
-func testLegacyUnalignedRetentionNativeReplay(
-	t *testing.T,
-	ctx context.Context,
-	nativeConnection storeConnection,
-	queryConnection clickhousedriver.Conn,
-) {
-	t.Helper()
-
-	controlDB, err := control.Open(ctx, filepath.Join(t.TempDir(), "legacy-retention-control.sqlite"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer controlDB.Close()
-	sequencer, err := visibility.NewSQLite(ctx, controlDB)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = sequencer.Close() }()
-	// The production TTL is evaluated against ClickHouse wall time. This
-	// fixture intentionally retains for only 1.5ms, so keep its event in the
-	// near future or the TTL worker can delete it before the assertion.
-	legacyIndexTime := time.Now().UTC().Add(time.Hour)
-	event := testStoredEvent("native-legacy-retention", "main", legacyIndexTime)
-	event.CollectorID = "native-legacy-retention-collector"
-	event.BatchID = "native-legacy-retention-batch"
-	batch := ingest.StoreBatch{
-		TenantID:          "tenant",
-		CollectorID:       event.CollectorID,
-		BatchID:           event.BatchID,
-		BatchSequence:     1,
-		SourceBatchSHA256: testSourceBatchDigest(event.BatchID),
-		ReceivedAt:        legacyIndexTime,
-		Events:            []*ingest.StoredEvent{event},
-	}
-	first, err := newStore(
-		&fakeStoreConnection{batch: &fakeWriteBatch{sendErr: io.ErrUnexpectedEOF}},
-		"open_splunk",
-		"events",
-		fixedRetention(time.Millisecond),
-		sequencer,
-		time.Now,
-		time.Second,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := first.Store(ctx, batch); !isTransient(err) {
-		t.Fatalf("initial legacy replay setup error = %v, want transient", err)
-	}
-	var metadata []byte
-	if err := controlDB.SQLDB().QueryRowContext(ctx, `
-		SELECT metadata
-		FROM ingest_visibility_reservations
-		WHERE sequence = 1`).Scan(&metadata); err != nil {
-		t.Fatalf("read legacy replay metadata: %v", err)
-	}
-	metadata = rewriteSingleIndexReservationMetadata(
-		t,
-		metadata,
-		legacyReservationMetadataVersion,
-		1500*time.Microsecond,
-	)
-	if _, err := controlDB.SQLDB().ExecContext(ctx, `
-		UPDATE ingest_visibility_reservations
-		SET metadata = ?
-		WHERE sequence = 1`, metadata); err != nil {
-		t.Fatalf("install legacy replay metadata: %v", err)
-	}
-
-	unavailablePolicy := &fakeRetentionProvider{err: errors.New("legacy native replay consulted live policy")}
-	replay, err := newStore(
-		nativeConnection,
-		"open_splunk",
-		"events",
-		unavailablePolicy,
-		sequencer,
-		time.Now,
-		time.Second,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := replay.Store(ctx, batch); err != nil {
-		t.Fatalf("native legacy retention replay: %v", err)
-	}
-	if len(unavailablePolicy.calls) != 0 {
-		t.Fatalf("native legacy replay consulted live retention: %v", unavailablePolicy.calls)
-	}
-	var storedExpiry time.Time
-	if err := queryConnection.QueryRow(
-		ctx,
-		"SELECT expires_at FROM open_splunk.events WHERE event_id = ?",
-		event.Event.GetEventId(),
-	).Scan(&storedExpiry); err != nil {
-		t.Fatalf("read native legacy expiry: %v", err)
-	}
-	wantExpiry := eventStoreMillis(legacyIndexTime).Add(time.Millisecond)
-	if !storedExpiry.Equal(wantExpiry) {
-		t.Fatalf("native legacy expiry = %v, want truncated %v", storedExpiry, wantExpiry)
-	}
-	if cutoff, err := replay.VisibilityCutoff(ctx); err != nil || cutoff != 1 {
-		t.Fatalf("legacy replay visibility cutoff = %d, %v; want 1", cutoff, err)
 	}
 }
 
@@ -3260,7 +3152,7 @@ func testRexAgainstClickHouse(
 	indexTime time.Time,
 ) {
 	t.Helper()
-	newEvent := func(id, raw string, fields ...*opensplunkv1.TypedObjectField) *ingest.StoredEvent {
+	newEvent := func(id, raw string, fields ...*opensplunk.TypedObjectField) *ingest.StoredEvent {
 		event := compilerIntegrationEvent(id, "rex-host", raw, indexTime, fields...)
 		event.BatchID = "rex-batch"
 		event.Event.Source = "rex-fixture"
@@ -3269,10 +3161,10 @@ func testRexAgainstClickHouse(
 	events := []*ingest.StoredEvent{
 		newEvent(
 			"rex-match",
-			"method=POST path=/api/v1/search/jobs status=500 duration=600ms",
+			"method=POST path=/api/search/jobs status=500 duration=600ms",
 			typedField("duration_text", typedString("527.182µs")),
 			typedField("target", typedString("old-match")),
-			typedField("optional_path", typedString("/api/v1/jobs")),
+			typedField("optional_path", typedString("/api/jobs")),
 			typedField("numeric_source", typedSint(500)),
 			typedField("numeric_target", typedSint(42)),
 			typedField("binary_source", typedBytes([]byte{0, 255, 16})),
@@ -3343,7 +3235,7 @@ func testRexAgainstClickHouse(
 		{
 			name: "default raw simultaneous captures",
 			source: base + ` | rex "method=(?<method>[A-Z]+)\s+path=(?<path>\S+)\s+status=(?<status>\d+)"` +
-				` | where method="POST" AND path="/api/v1/search/jobs" AND status="500" | stats count`,
+				` | where method="POST" AND path="/api/search/jobs" AND status="500" | stats count`,
 			want: 1,
 		},
 		{
@@ -3391,7 +3283,7 @@ func testRexAgainstClickHouse(
 		},
 		{
 			name: "optional unmatched capture is present empty string",
-			source: base + ` event_id=rex-match | rex field=optional_path "^/api/v1/(?<area>[^/?]+)(?:/(?<resource>[^/?]+))?"` +
+			source: base + ` event_id=rex-match | rex field=optional_path "^/api/(?<area>[^/?]+)(?:/(?<resource>[^/?]+))?"` +
 				` | where area="jobs" AND resource="" | stats count`,
 			want: 1,
 		},
@@ -3569,7 +3461,7 @@ func testRexAgainstClickHouse(
 		quoteIdentifier(FieldSummaryValueTypeColumn) + " = toUInt8(" +
 		fmt.Sprint(uint8(eventfields.StoredValueTypeUint64)) + ") AND " +
 		quoteIdentifier(FieldSummaryEncodedValueColumn) + " = '" +
-		fmt.Sprint(int32(opensplunkv1.LogSeverity_LOG_SEVERITY_INFO)) + "' AND " +
+		fmt.Sprint(int32(opensplunk.LogSeverity_LOG_SEVERITY_INFO)) + "' AND " +
 		quoteIdentifier(FieldSummaryValueCountColumn) + " = 4) FROM (" + mixedSummary.SQL + ")"
 	var mixedSummaryRows, capturedProfileRows, preservedProfileRows uint64
 	var metadataInvalid, unsupported uint8
@@ -3656,8 +3548,8 @@ func testStatsAggregatesAgainstClickHouse(
 	indexTime time.Time,
 ) {
 	t.Helper()
-	newEvent := func(id, group string, fields ...*opensplunkv1.TypedObjectField) *ingest.StoredEvent {
-		fields = append([]*opensplunkv1.TypedObjectField{typedField("aggregate_group", typedString(group))}, fields...)
+	newEvent := func(id, group string, fields ...*opensplunk.TypedObjectField) *ingest.StoredEvent {
+		fields = append([]*opensplunk.TypedObjectField{typedField("aggregate_group", typedString(group))}, fields...)
 		event := compilerIntegrationEvent(id, "aggregate-host", "sum avg fixture", indexTime, fields...)
 		event.BatchID = "stats-sum-avg-batch"
 		event.Event.Source = "stats-sum-avg"
@@ -4631,7 +4523,7 @@ func testDedupAgainstClickHouse(
 	indexTime time.Time,
 ) {
 	t.Helper()
-	newEvent := func(id, source string, eventTime time.Time, fields ...*opensplunkv1.TypedObjectField) *ingest.StoredEvent {
+	newEvent := func(id, source string, eventTime time.Time, fields ...*opensplunk.TypedObjectField) *ingest.StoredEvent {
 		event := compilerIntegrationEvent(id, "dedup-host", "dedup fixture", indexTime, fields...)
 		event.BatchID = "dedup-batch"
 		event.Event.Source = source
@@ -4825,7 +4717,7 @@ func executeCompiledExpectingNoRows(ctx context.Context, connection clickhousedr
 	return rows.Err()
 }
 
-func compilerIntegrationEvent(id, host, raw string, indexTime time.Time, fields ...*opensplunkv1.TypedObjectField) *ingest.StoredEvent {
+func compilerIntegrationEvent(id, host, raw string, indexTime time.Time, fields ...*opensplunk.TypedObjectField) *ingest.StoredEvent {
 	event := testStoredEvent(id, "compiler", indexTime)
 	event.BatchID = "compiler-batch"
 	event.Event.Host = host

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeattemptaudit"
@@ -69,14 +69,14 @@ func knowledgeGraphConverterFixture(
 		edge.TargetCurrent = rootCurrent
 	}
 	return knowledgecatalog.DependencyListRequest{
-			KnowledgeObjectID: rootID,
-			PageSize:          2,
-		}, knowledgecatalog.DependencyPage{
-			Edges:           []knowledgecatalog.DependencyEdge{edge},
-			ResolvedObject:  knowledgecatalog.ObjectVersionIdentity{KnowledgeObjectID: rootID, Version: 3},
-			ResolvedCurrent: rootCurrent,
-			CatalogRevision: 10,
-		}
+		KnowledgeObjectID: rootID,
+		PageSize:          2,
+	}, knowledgecatalog.DependencyPage{
+		Edges:           []knowledgecatalog.DependencyEdge{edge},
+		ResolvedObject:  knowledgecatalog.ObjectVersionIdentity{KnowledgeObjectID: rootID, Version: 3},
+		ResolvedCurrent: rootCurrent,
+		CatalogRevision: 10,
+	}
 }
 
 func TestKnowledgeGraphHTTPServesHistoricalDependenciesAndCurrentDependents(
@@ -162,7 +162,7 @@ func TestKnowledgeGraphHTTPServesHistoricalDependenciesAndCurrentDependents(
 		knowledgeHTTPApps(),
 		appender,
 	)
-	dependenciesPage := &opensplunkv1.PageRequest{
+	dependenciesPage := &opensplunk.PageRequest{
 		PageSize:         new(uint32(1)),
 		IncludeTotalSize: true,
 	}
@@ -170,16 +170,16 @@ func TestKnowledgeGraphHTTPServesHistoricalDependenciesAndCurrentDependents(
 		t,
 		handler,
 		knowledgeObjectsDependenciesPath,
-		&opensplunkv1.ListKnowledgeObjectDependenciesRequest{
+		&opensplunk.ListKnowledgeObjectDependenciesRequest{
 			KnowledgeObjectId: rootID,
 			Version:           new(uint64(2)),
-			Page:              proto.Clone(dependenciesPage).(*opensplunkv1.PageRequest),
+			Page:              proto.Clone(dependenciesPage).(*opensplunk.PageRequest),
 		},
 	)
 	if dependenciesResponse.Code != http.StatusOK {
 		t.Fatalf("dependencies status=%d body=%q", dependenciesResponse.Code, dependenciesResponse.Body.String())
 	}
-	dependencies := &opensplunkv1.ListKnowledgeObjectDependenciesResponse{}
+	dependencies := &opensplunk.ListKnowledgeObjectDependenciesResponse{}
 	unmarshalResponse(t, dependenciesResponse, dependencies)
 	if len(dependencies.GetDependencies()) != 1 ||
 		dependencies.GetDependencies()[0].GetSource().GetVersion() != 2 ||
@@ -196,10 +196,10 @@ func TestKnowledgeGraphHTTPServesHistoricalDependenciesAndCurrentDependents(
 		t,
 		handler,
 		knowledgeObjectsDependentsPath,
-		&opensplunkv1.ListKnowledgeObjectDependentsRequest{
+		&opensplunk.ListKnowledgeObjectDependentsRequest{
 			KnowledgeObjectId: rootID,
 			Version:           new(uint64(2)),
-			Page: &opensplunkv1.PageRequest{
+			Page: &opensplunk.PageRequest{
 				PageSize:         new(uint32(2)),
 				IncludeTotalSize: true,
 			},
@@ -208,7 +208,7 @@ func TestKnowledgeGraphHTTPServesHistoricalDependenciesAndCurrentDependents(
 	if dependentsResponse.Code != http.StatusOK {
 		t.Fatalf("dependents status=%d body=%q", dependentsResponse.Code, dependentsResponse.Body.String())
 	}
-	dependents := &opensplunkv1.ListKnowledgeObjectDependentsResponse{}
+	dependents := &opensplunk.ListKnowledgeObjectDependentsResponse{}
 	unmarshalResponse(t, dependentsResponse, dependents)
 	if len(dependents.GetDependents()) != 1 ||
 		dependents.GetDependents()[0].GetSource().GetKnowledgeObjectId() != sourceID ||
@@ -251,7 +251,7 @@ func TestKnowledgeGraphConverterRejectsUntrustedPageAuthorityAndShape(
 			page.Edges[0].TargetCurrent.OwnerID = "owner-other"
 		}},
 		{name: "unsupported role", mutate: func(page *knowledgecatalog.DependencyPage) {
-			page.Edges[0].Role = opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_UNSPECIFIED
+			page.Edges[0].Role = opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_UNSPECIFIED
 		}},
 		{name: "exact self edge", mutate: func(page *knowledgecatalog.DependencyPage) {
 			page.Edges[0].Target = page.Edges[0].Source
@@ -491,7 +491,7 @@ func TestKnowledgeGraphConverterPinsMaximumResponseBelowTransportCap(
 	if err != nil {
 		t.Fatalf("maximum graph page: %v", err)
 	}
-	response := &opensplunkv1.ListKnowledgeObjectDependenciesResponse{
+	response := &opensplunk.ListKnowledgeObjectDependenciesResponse{
 		Dependencies:          converted.edges,
 		Page:                  converted.page,
 		TenantCatalogRevision: converted.revision,
@@ -515,12 +515,12 @@ func TestKnowledgeGraphHTTPPreflightsKnownFieldsBeforeScopeAndCatalog(
 	}{
 		{
 			name: "missing root", path: knowledgeObjectsDependenciesPath,
-			request:    &opensplunkv1.ListKnowledgeObjectDependenciesRequest{},
+			request:    &opensplunk.ListKnowledgeObjectDependenciesRequest{},
 			wantAction: knowledgeattemptaudit.ActionDependencies,
 		},
 		{
 			name: "zero version", path: knowledgeObjectsDependenciesPath,
-			request: &opensplunkv1.ListKnowledgeObjectDependenciesRequest{
+			request: &opensplunk.ListKnowledgeObjectDependenciesRequest{
 				KnowledgeObjectId: "ko-http-root-1",
 				Version:           new(uint64(0)),
 			},
@@ -528,9 +528,9 @@ func TestKnowledgeGraphHTTPPreflightsKnownFieldsBeforeScopeAndCatalog(
 		},
 		{
 			name: "page size", path: knowledgeObjectsDependentsPath,
-			request: &opensplunkv1.ListKnowledgeObjectDependentsRequest{
+			request: &opensplunk.ListKnowledgeObjectDependentsRequest{
 				KnowledgeObjectId: "ko-http-root-1",
-				Page: &opensplunkv1.PageRequest{
+				Page: &opensplunk.PageRequest{
 					PageSize: new(uint32(knowledgecatalog.MaximumPageSize + 1)),
 				},
 			},
@@ -538,9 +538,9 @@ func TestKnowledgeGraphHTTPPreflightsKnownFieldsBeforeScopeAndCatalog(
 		},
 		{
 			name: "control token", path: knowledgeObjectsDependenciesPath,
-			request: &opensplunkv1.ListKnowledgeObjectDependenciesRequest{
+			request: &opensplunk.ListKnowledgeObjectDependenciesRequest{
 				KnowledgeObjectId: "ko-http-root-1",
-				Page: &opensplunkv1.PageRequest{
+				Page: &opensplunk.PageRequest{
 					PageToken: new("cursor\nsecret"),
 				},
 			},
@@ -548,9 +548,9 @@ func TestKnowledgeGraphHTTPPreflightsKnownFieldsBeforeScopeAndCatalog(
 		},
 		{
 			name: "oversized token", path: knowledgeObjectsDependentsPath,
-			request: &opensplunkv1.ListKnowledgeObjectDependentsRequest{
+			request: &opensplunk.ListKnowledgeObjectDependentsRequest{
 				KnowledgeObjectId: "ko-http-root-1",
-				Page: &opensplunkv1.PageRequest{
+				Page: &opensplunk.PageRequest{
 					PageToken: new(strings.Repeat("x", maximumKnowledgePageTokenBytes+1)),
 				},
 			},
@@ -614,21 +614,21 @@ func TestKnowledgeGraphHTTPErrorsBindOnlyAnAuthorizedRequestedRoot(
 	}{
 		{
 			name: "not found strips forged context", path: knowledgeObjectsDependenciesPath,
-			request:   &opensplunkv1.ListKnowledgeObjectDependenciesRequest{KnowledgeObjectId: rootID},
+			request:   &opensplunk.ListKnowledgeObjectDependenciesRequest{KnowledgeObjectId: rootID},
 			direction: knowledgeGraphDependencies, cause: control.ErrNotFound,
 			wantStatus: http.StatusNotFound, wantReason: knowledgeattemptaudit.ReasonNotFoundOrForbidden,
 			wantAction: knowledgeattemptaudit.ActionDependencies,
 		},
 		{
 			name: "post-authorization invalid cursor retains bound root", path: knowledgeObjectsDependentsPath,
-			request:   &opensplunkv1.ListKnowledgeObjectDependentsRequest{KnowledgeObjectId: rootID},
+			request:   &opensplunk.ListKnowledgeObjectDependentsRequest{KnowledgeObjectId: rootID},
 			direction: knowledgeGraphDependents, cause: knowledgecatalog.ErrInvalidCursor,
 			wantStatus: http.StatusBadRequest, wantReason: knowledgeattemptaudit.ReasonInvalidDefinition,
 			wantAction: knowledgeattemptaudit.ActionDependents, wantAuthorized: true,
 		},
 		{
 			name: "impossible invalid argument collapses", path: knowledgeObjectsDependenciesPath,
-			request:   &opensplunkv1.ListKnowledgeObjectDependenciesRequest{KnowledgeObjectId: rootID},
+			request:   &opensplunk.ListKnowledgeObjectDependenciesRequest{KnowledgeObjectId: rootID},
 			direction: knowledgeGraphDependencies, cause: control.ErrInvalidArgument,
 			wantStatus: http.StatusServiceUnavailable, wantReason: knowledgeattemptaudit.ReasonServiceUnavailable,
 			wantAction: knowledgeattemptaudit.ActionDependencies,

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"google.golang.org/protobuf/proto"
@@ -98,12 +98,12 @@ func newWriterActiveRouteEmptyHarness(t *testing.T) writerActiveRouteHarness {
 
 func TestWriterRecognizedActiveCreateUpdateAndEnable(t *testing.T) {
 	harness := newWriterActiveRouteHarness(t)
-	createRequest := &opensplunkv1.CreateKnowledgeObjectRequest{
+	createRequest := &opensplunk.CreateKnowledgeObjectRequest{
 		Definition: writerActiveRouteDefinition(dependencyAliasDefinition(
 			testApp, "writer-active-candidate", SharingScopePrivate, nil,
 			"writer-active-edge-a", dependencyFixtureInputField, "active_alias_one",
 		), "main"),
-		InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
+		InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
 		ClientRequestId: "writer-active-create-0001",
 	}
 	created, err := harness.writer.Create(harness.actorContext, harness.scope, createRequest)
@@ -111,7 +111,7 @@ func TestWriterRecognizedActiveCreateUpdateAndEnable(t *testing.T) {
 		t.Fatalf("Create(ACTIVE): %v", err)
 	}
 	createdObject := created.GetKnowledgeObject()
-	if createdObject.GetState() != opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE ||
+	if createdObject.GetState() != opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE ||
 		createdObject.GetVersion() != 1 || !proto.Equal(
 		createdObject.GetDefinition(),
 		mustNormalizeWriterActiveRouteDefinition(t, createRequest.GetDefinition()),
@@ -124,9 +124,9 @@ func TestWriterRecognizedActiveCreateUpdateAndEnable(t *testing.T) {
 	)
 	assertWriterActiveRouteReplay(t, harness, mutationRouteCreate, createRequest, created)
 
-	updatedDefinition := proto.Clone(createdObject.GetDefinition()).(*opensplunkv1.KnowledgeObjectDefinition)
+	updatedDefinition := proto.Clone(createdObject.GetDefinition()).(*opensplunk.KnowledgeObjectDefinition)
 	updatedDefinition.Selector = writerActiveRouteSelector("main", "writer-active-edge-b")
-	updateRequest := &opensplunkv1.UpdateKnowledgeObjectRequest{
+	updateRequest := &opensplunk.UpdateKnowledgeObjectRequest{
 		KnowledgeObjectId: createdObject.GetKnowledgeObjectId(),
 		ExpectedVersion:   1,
 		Definition:        updatedDefinition,
@@ -137,7 +137,7 @@ func TestWriterRecognizedActiveCreateUpdateAndEnable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Update(ACTIVE): %v", err)
 	}
-	if updated.GetKnowledgeObject().GetState() != opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE ||
+	if updated.GetKnowledgeObject().GetState() != opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE ||
 		updated.GetKnowledgeObject().GetVersion() != 2 ||
 		!proto.Equal(
 			updated.GetKnowledgeObject().GetDefinition(),
@@ -151,12 +151,12 @@ func TestWriterRecognizedActiveCreateUpdateAndEnable(t *testing.T) {
 	)
 	assertWriterActiveRouteReplay(t, harness, mutationRouteUpdate, updateRequest, updated)
 
-	draftRequest := &opensplunkv1.CreateKnowledgeObjectRequest{
+	draftRequest := &opensplunk.CreateKnowledgeObjectRequest{
 		Definition: writerActiveRouteDefinition(dependencyAliasDefinition(
 			testApp, "writer-enable-candidate", SharingScopePrivate, nil,
 			"writer-active-edge-a", dependencyFixtureInputField, "active_alias_two",
 		), "main"),
-		InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+		InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 		ClientRequestId: "writer-enable-draft-0001",
 	}
 	draft, err := harness.writer.Create(harness.actorContext, harness.scope, draftRequest)
@@ -167,17 +167,17 @@ func TestWriterRecognizedActiveCreateUpdateAndEnable(t *testing.T) {
 		t, harness.database, draft.GetKnowledgeObject().GetKnowledgeObjectId(), 1,
 		StateDraft, "create", "",
 	)
-	enableRequest := &opensplunkv1.SetKnowledgeObjectStateRequest{
+	enableRequest := &opensplunk.SetKnowledgeObjectStateRequest{
 		KnowledgeObjectId: draft.GetKnowledgeObject().GetKnowledgeObjectId(),
 		ExpectedVersion:   1,
-		State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
+		State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
 		ClientRequestId:   "writer-active-enable-0001",
 	}
 	enabled, err := harness.writer.SetState(harness.actorContext, harness.scope, enableRequest)
 	if err != nil {
 		t.Fatalf("SetState(ACTIVE): %v", err)
 	}
-	if enabled.GetKnowledgeObject().GetState() != opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE ||
+	if enabled.GetKnowledgeObject().GetState() != opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE ||
 		enabled.GetKnowledgeObject().GetDisabledAt() != nil ||
 		!proto.Equal(
 			enabled.GetKnowledgeObject().GetDefinition(),
@@ -191,12 +191,12 @@ func TestWriterRecognizedActiveCreateUpdateAndEnable(t *testing.T) {
 	)
 	assertWriterActiveRouteReplay(t, harness, mutationRouteSetState, enableRequest, enabled)
 
-	disabledDraftRequest := &opensplunkv1.CreateKnowledgeObjectRequest{
+	disabledDraftRequest := &opensplunk.CreateKnowledgeObjectRequest{
 		Definition: writerActiveRouteDefinition(dependencyAliasDefinition(
 			testApp, "writer-disabled-enable-candidate", SharingScopePrivate, nil,
 			"writer-active-edge-b", dependencyFixtureInputField, "active_alias_three",
 		), "main"),
-		InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+		InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 		ClientRequestId: "writer-disabled-draft-0001",
 	}
 	disabledDraft, err := harness.writer.Create(
@@ -207,10 +207,10 @@ func TestWriterRecognizedActiveCreateUpdateAndEnable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create(DRAFT for disabled enable): %v", err)
 	}
-	disableRequest := &opensplunkv1.SetKnowledgeObjectStateRequest{
+	disableRequest := &opensplunk.SetKnowledgeObjectStateRequest{
 		KnowledgeObjectId: disabledDraft.GetKnowledgeObject().GetKnowledgeObjectId(),
 		ExpectedVersion:   1,
-		State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+		State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 		ClientRequestId:   "writer-disable-before-enable-0001",
 	}
 	disabled, err := harness.writer.SetState(harness.actorContext, harness.scope, disableRequest)
@@ -221,10 +221,10 @@ func TestWriterRecognizedActiveCreateUpdateAndEnable(t *testing.T) {
 		t, harness.database, disabledDraft.GetKnowledgeObject().GetKnowledgeObjectId(), 2,
 		StateDisabled, "disable", "",
 	)
-	disabledEnableRequest := &opensplunkv1.SetKnowledgeObjectStateRequest{
+	disabledEnableRequest := &opensplunk.SetKnowledgeObjectStateRequest{
 		KnowledgeObjectId: disabledDraft.GetKnowledgeObject().GetKnowledgeObjectId(),
 		ExpectedVersion:   2,
-		State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
+		State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
 		ClientRequestId:   "writer-disabled-enable-0001",
 	}
 	disabledEnabled, err := harness.writer.SetState(
@@ -235,7 +235,7 @@ func TestWriterRecognizedActiveCreateUpdateAndEnable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetState(DISABLED->ACTIVE): %v", err)
 	}
-	if disabledEnabled.GetKnowledgeObject().GetState() != opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE ||
+	if disabledEnabled.GetKnowledgeObject().GetState() != opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE ||
 		disabledEnabled.GetKnowledgeObject().GetDisabledAt() != nil ||
 		!proto.Equal(
 			disabledEnabled.GetKnowledgeObject().GetDefinition(),
@@ -271,12 +271,12 @@ func TestWriterRecognizedActiveCreateUpdateAndEnable(t *testing.T) {
 func TestWriterActiveTransitionRejectionsPrecedePublicationHooks(t *testing.T) {
 	t.Run("no current-index witness", func(t *testing.T) {
 		harness := newWriterActiveRouteHarness(t)
-		request := &opensplunkv1.CreateKnowledgeObjectRequest{
+		request := &opensplunk.CreateKnowledgeObjectRequest{
 			Definition: writerActiveRouteDefinition(dependencyAliasDefinition(
 				testApp, "writer-no-witness", SharingScopePrivate, nil,
 				"writer-no-witness-host", "source", "no_witness_alias",
 			), "index-that-does-not-exist"),
-			InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
+			InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
 			ClientRequestId: "writer-no-witness-0001",
 		}
 		before, err := readCatalogState(harness.database.GORMDB(), testTenant)
@@ -326,9 +326,9 @@ func TestWriterActiveTransitionRejectionsPrecedePublicationHooks(t *testing.T) {
 			_, err = harness.writer.Create(
 				harness.actorContext,
 				harness.scope,
-				&opensplunkv1.CreateKnowledgeObjectRequest{
-					Definition:      proto.Clone(definition).(*opensplunkv1.KnowledgeObjectDefinition),
-					InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
+				&opensplunk.CreateKnowledgeObjectRequest{
+					Definition:      proto.Clone(definition).(*opensplunk.KnowledgeObjectDefinition),
+					InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
 					ClientRequestId: "writer-collision-" + string(scope) + "-0001",
 				},
 			)
@@ -396,7 +396,7 @@ func TestWriterActiveUpdateRejectsExistingWinnerDependencyDrift(t *testing.T) {
 	_, err = harness.writer.Update(
 		harness.actorContext,
 		harness.scope,
-		&opensplunkv1.UpdateKnowledgeObjectRequest{
+		&opensplunk.UpdateKnowledgeObjectRequest{
 			KnowledgeObjectId: candidateID,
 			ExpectedVersion:   1,
 			Definition:        definition,
@@ -458,7 +458,7 @@ func TestWriterActiveUpdateDependentPrecedesMalformedInventory(t *testing.T) {
 	_, err = harness.writer.Update(
 		harness.actorContext,
 		harness.scope,
-		&opensplunkv1.UpdateKnowledgeObjectRequest{
+		&opensplunk.UpdateKnowledgeObjectRequest{
 			KnowledgeObjectId: candidateID,
 			ExpectedVersion:   1,
 			Definition:        definition,
@@ -493,12 +493,12 @@ func TestWriterActiveRoutesRequireActiveDefiningApp(t *testing.T) {
 		_, err = harness.writer.Create(
 			harness.actorContext,
 			harness.scope,
-			&opensplunkv1.CreateKnowledgeObjectRequest{
+			&opensplunk.CreateKnowledgeObjectRequest{
 				Definition: writerActiveRouteDefinition(dependencyExtractionDefinition(
 					testApp, "writer-archived-app-create", SharingScopePrivate, nil,
 					"writer-archived-app-host", "archived_app_output",
 				), "main"),
-				InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
+				InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
 				ClientRequestId: "writer-archived-create-0001",
 			},
 		)
@@ -510,12 +510,12 @@ func TestWriterActiveRoutesRequireActiveDefiningApp(t *testing.T) {
 
 	t.Run("enable", func(t *testing.T) {
 		harness := newWriterActiveRouteEmptyHarness(t)
-		draftRequest := &opensplunkv1.CreateKnowledgeObjectRequest{
+		draftRequest := &opensplunk.CreateKnowledgeObjectRequest{
 			Definition: writerActiveRouteDefinition(dependencyExtractionDefinition(
 				testApp, "writer-archived-app-enable", SharingScopePrivate, nil,
 				"writer-archived-app-host", "archived_app_output",
 			), "main"),
-			InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+			InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 			ClientRequestId: "writer-archived-draft-0001",
 		}
 		draft, err := harness.writer.Create(harness.actorContext, harness.scope, draftRequest)
@@ -537,10 +537,10 @@ func TestWriterActiveRoutesRequireActiveDefiningApp(t *testing.T) {
 		_, err = harness.writer.SetState(
 			harness.actorContext,
 			harness.scope,
-			&opensplunkv1.SetKnowledgeObjectStateRequest{
+			&opensplunk.SetKnowledgeObjectStateRequest{
 				KnowledgeObjectId: draft.GetKnowledgeObject().GetKnowledgeObjectId(),
 				ExpectedVersion:   1,
-				State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
+				State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
 				ClientRequestId:   "writer-archived-enable-0001",
 			},
 		)
@@ -575,12 +575,12 @@ func TestWriterActiveRoutesRequireActiveDefiningApp(t *testing.T) {
 			}
 			return nil
 		}
-		updatedDefinition := proto.Clone(definition).(*opensplunkv1.KnowledgeObjectDefinition)
+		updatedDefinition := proto.Clone(definition).(*opensplunk.KnowledgeObjectDefinition)
 		updatedDefinition.Description = new("archived app update")
 		_, err = harness.writer.Update(
 			harness.actorContext,
 			harness.scope,
-			&opensplunkv1.UpdateKnowledgeObjectRequest{
+			&opensplunk.UpdateKnowledgeObjectRequest{
 				KnowledgeObjectId: candidateID,
 				ExpectedVersion:   1,
 				Definition:        updatedDefinition,
@@ -614,10 +614,10 @@ func TestWriterActiveUpdateAndEnableRejectOpaqueFutureBodies(t *testing.T) {
 			}
 			return nil
 		}
-		incoming := &opensplunkv1.KnowledgeObjectDefinition{
+		incoming := &opensplunk.KnowledgeObjectDefinition{
 			Description: new("opaque ACTIVE update is forbidden"),
 		}
-		_, err = writer.Update(actorContext, scope, &opensplunkv1.UpdateKnowledgeObjectRequest{
+		_, err = writer.Update(actorContext, scope, &opensplunk.UpdateKnowledgeObjectRequest{
 			KnowledgeObjectId: objectID,
 			ExpectedVersion:   1,
 			Definition:        incoming,
@@ -650,10 +650,10 @@ func TestWriterActiveUpdateAndEnableRejectOpaqueFutureBodies(t *testing.T) {
 			}
 			return nil
 		}
-		_, err = writer.SetState(actorContext, scope, &opensplunkv1.SetKnowledgeObjectStateRequest{
+		_, err = writer.SetState(actorContext, scope, &opensplunk.SetKnowledgeObjectStateRequest{
 			KnowledgeObjectId: objectID,
 			ExpectedVersion:   1,
-			State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
+			State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
 			ClientRequestId:   "writer-opaque-enable-0001",
 		})
 		if !errors.Is(err, control.ErrInvalidArgument) {
@@ -1044,12 +1044,12 @@ func TestWriterActiveCreateRejectsAppTypeCapacityBeforeInventoryHook(t *testing.
 	_, err = harness.writer.Create(
 		harness.actorContext,
 		harness.scope,
-		&opensplunkv1.CreateKnowledgeObjectRequest{
+		&opensplunk.CreateKnowledgeObjectRequest{
 			Definition: writerActiveRouteDefinition(dependencyAliasDefinition(
 				testApp, "writer-route-capacity-candidate", SharingScopePrivate, nil,
 				"writer-route-capacity-host", "source", "capacity_candidate",
 			), "main"),
-			InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
+			InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
 			ClientRequestId: "writer-route-capacity-0001",
 		},
 	)
@@ -1060,20 +1060,20 @@ func TestWriterActiveCreateRejectsAppTypeCapacityBeforeInventoryHook(t *testing.
 }
 
 func writerActiveRouteDefinition(
-	definition *opensplunkv1.KnowledgeObjectDefinition,
+	definition *opensplunk.KnowledgeObjectDefinition,
 	indexName string,
-) *opensplunkv1.KnowledgeObjectDefinition {
+) *opensplunk.KnowledgeObjectDefinition {
 	if definition.Selector == nil {
-		definition.Selector = &opensplunkv1.KnowledgeSelector{}
+		definition.Selector = &opensplunk.KnowledgeSelector{}
 	}
-	definition.Selector.IndexPatterns = []*opensplunkv1.KnowledgeSelectorPattern{{Value: indexName}}
+	definition.Selector.IndexPatterns = []*opensplunk.KnowledgeSelectorPattern{{Value: indexName}}
 	return definition
 }
 
 func mustNormalizeWriterActiveRouteDefinition(
 	t *testing.T,
-	definition *opensplunkv1.KnowledgeObjectDefinition,
-) *opensplunkv1.KnowledgeObjectDefinition {
+	definition *opensplunk.KnowledgeObjectDefinition,
+) *opensplunk.KnowledgeObjectDefinition {
 	t.Helper()
 	normalized, err := normalizeMutationDefinition(definition)
 	if err != nil {
@@ -1082,10 +1082,10 @@ func mustNormalizeWriterActiveRouteDefinition(
 	return normalized.Definition
 }
 
-func writerActiveRouteSelector(indexName, host string) *opensplunkv1.KnowledgeSelector {
-	return &opensplunkv1.KnowledgeSelector{
-		IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{Value: indexName}},
-		HostPatterns:  []*opensplunkv1.KnowledgeSelectorPattern{{Value: host}},
+func writerActiveRouteSelector(indexName, host string) *opensplunk.KnowledgeSelector {
+	return &opensplunk.KnowledgeSelector{
+		IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{{Value: indexName}},
+		HostPatterns:  []*opensplunk.KnowledgeSelectorPattern{{Value: host}},
 	}
 }
 
@@ -1170,19 +1170,19 @@ func assertWriterActiveRouteReplay(
 		got, err = harness.writer.Create(
 			harness.actorContext,
 			harness.scope,
-			proto.Clone(request).(*opensplunkv1.CreateKnowledgeObjectRequest),
+			proto.Clone(request).(*opensplunk.CreateKnowledgeObjectRequest),
 		)
 	case mutationRouteUpdate:
 		got, err = harness.writer.Update(
 			harness.actorContext,
 			harness.scope,
-			proto.Clone(request).(*opensplunkv1.UpdateKnowledgeObjectRequest),
+			proto.Clone(request).(*opensplunk.UpdateKnowledgeObjectRequest),
 		)
 	case mutationRouteSetState:
 		got, err = harness.writer.SetState(
 			harness.actorContext,
 			harness.scope,
-			proto.Clone(request).(*opensplunkv1.SetKnowledgeObjectStateRequest),
+			proto.Clone(request).(*opensplunk.SetKnowledgeObjectStateRequest),
 		)
 	default:
 		t.Fatalf("unsupported replay route %q", route)

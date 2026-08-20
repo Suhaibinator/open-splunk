@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeattemptaudit"
 	"google.golang.org/protobuf/proto"
@@ -25,9 +25,9 @@ func TestKnowledgeHTTPPreflightsEveryMutationBeforeConfigurableWriter(
 		{
 			name: "create client identity",
 			path: knowledgeObjectsCreatePath,
-			request: &opensplunkv1.CreateKnowledgeObjectRequest{
-				Definition:      knowledgeHTTPDefinition(opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE),
-				InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+			request: &opensplunk.CreateKnowledgeObjectRequest{
+				Definition:      knowledgeHTTPDefinition(opensplunk.SharingScope_SHARING_SCOPE_PRIVATE),
+				InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 				ClientRequestId: "short",
 			},
 			wantAction: knowledgeattemptaudit.ActionCreate,
@@ -35,10 +35,10 @@ func TestKnowledgeHTTPPreflightsEveryMutationBeforeConfigurableWriter(
 		{
 			name: "update client identity",
 			path: knowledgeObjectsUpdatePath,
-			request: &opensplunkv1.UpdateKnowledgeObjectRequest{
+			request: &opensplunk.UpdateKnowledgeObjectRequest{
 				KnowledgeObjectId: "ko-preflight",
 				ExpectedVersion:   1,
-				Definition:        knowledgeHTTPDefinition(opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE),
+				Definition:        knowledgeHTTPDefinition(opensplunk.SharingScope_SHARING_SCOPE_PRIVATE),
 				UpdateMask:        &fieldmaskpb.FieldMask{Paths: []string{"name"}},
 				ClientRequestId:   "short",
 			},
@@ -47,10 +47,10 @@ func TestKnowledgeHTTPPreflightsEveryMutationBeforeConfigurableWriter(
 		{
 			name: "state client identity",
 			path: knowledgeObjectsSetStatePath,
-			request: &opensplunkv1.SetKnowledgeObjectStateRequest{
+			request: &opensplunk.SetKnowledgeObjectStateRequest{
 				KnowledgeObjectId: "ko-preflight",
 				ExpectedVersion:   1,
-				State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+				State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 				ClientRequestId:   "short",
 			},
 			// Semantic refinement occurs only after the entire request shape is
@@ -60,7 +60,7 @@ func TestKnowledgeHTTPPreflightsEveryMutationBeforeConfigurableWriter(
 		{
 			name: "delete client identity",
 			path: knowledgeObjectsDeletePath,
-			request: &opensplunkv1.DeleteKnowledgeObjectRequest{
+			request: &opensplunk.DeleteKnowledgeObjectRequest{
 				KnowledgeObjectId: "ko-preflight",
 				ExpectedVersion:   1,
 				ClientRequestId:   "short",
@@ -118,9 +118,9 @@ func TestKnowledgeHTTPActivePublicationGateRunsAfterMutationPreflight(
 		{
 			name: "valid active create is unavailable",
 			path: knowledgeObjectsCreatePath,
-			request: &opensplunkv1.CreateKnowledgeObjectRequest{
-				Definition:      knowledgeHTTPDefinition(opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE),
-				InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
+			request: &opensplunk.CreateKnowledgeObjectRequest{
+				Definition:      knowledgeHTTPDefinition(opensplunk.SharingScope_SHARING_SCOPE_PRIVATE),
+				InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
 				ClientRequestId: "active-create-request-0001",
 			},
 			wantStatus: http.StatusServiceUnavailable,
@@ -130,10 +130,10 @@ func TestKnowledgeHTTPActivePublicationGateRunsAfterMutationPreflight(
 		{
 			name: "valid active state is unavailable",
 			path: knowledgeObjectsSetStatePath,
-			request: &opensplunkv1.SetKnowledgeObjectStateRequest{
+			request: &opensplunk.SetKnowledgeObjectStateRequest{
 				KnowledgeObjectId: "ko-preflight",
 				ExpectedVersion:   1,
-				State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
+				State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
 				ClientRequestId:   "active-state-request-0001",
 			},
 			wantStatus: http.StatusServiceUnavailable,
@@ -143,9 +143,9 @@ func TestKnowledgeHTTPActivePublicationGateRunsAfterMutationPreflight(
 		{
 			name: "malformed active create is invalid first",
 			path: knowledgeObjectsCreatePath,
-			request: &opensplunkv1.CreateKnowledgeObjectRequest{
-				Definition:      knowledgeHTTPDefinition(opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE),
-				InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
+			request: &opensplunk.CreateKnowledgeObjectRequest{
+				Definition:      knowledgeHTTPDefinition(opensplunk.SharingScope_SHARING_SCOPE_PRIVATE),
+				InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
 				ClientRequestId: "short",
 			},
 			wantStatus: http.StatusBadRequest,
@@ -155,10 +155,10 @@ func TestKnowledgeHTTPActivePublicationGateRunsAfterMutationPreflight(
 		{
 			name: "malformed active state is invalid first",
 			path: knowledgeObjectsSetStatePath,
-			request: &opensplunkv1.SetKnowledgeObjectStateRequest{
+			request: &opensplunk.SetKnowledgeObjectStateRequest{
 				KnowledgeObjectId: "ko-preflight",
 				ExpectedVersion:   1,
-				State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
+				State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
 				ClientRequestId:   "short",
 			},
 			wantStatus: http.StatusBadRequest,

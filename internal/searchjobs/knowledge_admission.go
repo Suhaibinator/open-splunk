@@ -8,7 +8,7 @@ import (
 	"slices"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
@@ -23,7 +23,7 @@ type preparedKnowledgeAdmission struct {
 	compiled          clickhouse.CompiledQuery
 	snapshot          knowledgesnapshot.Snapshot
 	wildcardExpansion plan.StatsWildcardExpansion
-	summary           *opensplunkv1.KnowledgeSnapshotSummary
+	summary           *opensplunk.KnowledgeSnapshotSummary
 	effective         []string
 	metadataBytes     uint64
 	remainingRuntime  time.Duration

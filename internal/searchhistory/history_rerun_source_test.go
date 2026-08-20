@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 )
@@ -17,36 +17,36 @@ func TestNormalizeEntryUsesOriginSpecificProvenanceIDBounds(t *testing.T) {
 
 	for _, test := range []struct {
 		name       string
-		origin     opensplunkv1.SearchJobOrigin
+		origin     opensplunk.SearchJobOrigin
 		objectID   string
 		wantErr    bool
-		wantObject func(*opensplunkv1.SearchJobSource) string
+		wantObject func(*opensplunk.SearchJobSource) string
 	}{
 		{
 			name:     "history rerun exact limit",
-			origin:   opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN,
+			origin:   opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN,
 			objectID: strings.Repeat("h", maximumSearchJobIDBytes),
-			wantObject: func(source *opensplunkv1.SearchJobSource) string {
+			wantObject: func(source *opensplunk.SearchJobSource) string {
 				return source.GetHistorySearchId()
 			},
 		},
 		{
 			name:     "history rerun over limit",
-			origin:   opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN,
+			origin:   opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN,
 			objectID: strings.Repeat("h", maximumSearchJobIDBytes+1),
 			wantErr:  true,
 		},
 		{
 			name:     "saved search exact limit",
-			origin:   opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH,
+			origin:   opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH,
 			objectID: strings.Repeat("s", maximumSavedSearchIDBytes),
-			wantObject: func(source *opensplunkv1.SearchJobSource) string {
+			wantObject: func(source *opensplunk.SearchJobSource) string {
 				return source.GetSavedSearchId()
 			},
 		},
 		{
 			name:     "saved search over limit",
-			origin:   opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH,
+			origin:   opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH,
 			objectID: strings.Repeat("s", maximumSavedSearchIDBytes+1),
 			wantErr:  true,
 		},
@@ -58,7 +58,7 @@ func TestNormalizeEntryUsesOriginSpecificProvenanceIDBounds(t *testing.T) {
 				"job-source-boundary",
 				"index=main | head 1",
 				"search-app",
-				opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
+				opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
 				time.Date(2026, time.July, 24, 12, 0, 0, 0, time.UTC),
 			)
 			entry.Source = provenanceSource(test.origin, test.objectID)
@@ -117,21 +117,21 @@ func TestJobJournalRoundTripsMaximumHistoryRerunProvenanceID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get(finalized history rerun) error = %v", err)
 	}
-	if got.GetSource().GetOrigin() != opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN ||
+	if got.GetSource().GetOrigin() != opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN ||
 		got.GetSource().GetHistorySearchId() != historyID {
 		t.Fatalf("finalized history rerun source = %+v", got.GetSource())
 	}
 }
 
 func provenanceSource(
-	origin opensplunkv1.SearchJobOrigin,
+	origin opensplunk.SearchJobOrigin,
 	objectID string,
-) *opensplunkv1.SearchJobSource {
-	source := &opensplunkv1.SearchJobSource{Origin: origin}
+) *opensplunk.SearchJobSource {
+	source := &opensplunk.SearchJobSource{Origin: origin}
 	switch origin {
-	case opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN:
+	case opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN:
 		source.HistorySearchId = &objectID
-	case opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH:
+	case opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH:
 		source.SavedSearchId = &objectID
 	}
 	return source

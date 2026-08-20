@@ -3,7 +3,7 @@ import {
   SortDirection,
   SharingScope,
   type SourceRange,
-} from "@/gen/ts/open_splunk/v1/common";
+} from "@/gen/ts/open_splunk/common";
 import {
   KnowledgeDependencyRole,
   KnowledgeObject,
@@ -13,7 +13,7 @@ import {
   KnowledgeOverwriteBehavior,
   KnowledgeSelector,
   KnowledgeSelectorMatchKind,
-} from "@/gen/ts/open_splunk/v1/knowledge";
+} from "@/gen/ts/open_splunk/knowledge";
 import {
   CreateKnowledgeObjectRequest,
   CreateKnowledgeObjectResponse,
@@ -50,7 +50,7 @@ import {
   type UpdateKnowledgeObjectResponse as UpdateKnowledgeObjectResponseMessage,
   type ValidateKnowledgeObjectRequest as ValidateKnowledgeObjectRequestMessage,
   type ValidateKnowledgeObjectResponse as ValidateKnowledgeObjectResponseMessage,
-} from "@/gen/ts/open_splunk/v1/knowledge_api";
+} from "@/gen/ts/open_splunk/knowledge_api";
 import {
   ProtobufTransport,
   type ProtobufRequestOptions,
@@ -102,7 +102,7 @@ const MAXIMUM_SELECTOR_NORMALIZED_BYTES = 8 << 10;
 const MAXIMUM_SELECTOR_WILDCARD_WORK_UNITS = 1 << 10;
 const MAXIMUM_SEARCH_FIELD_PATH_SEGMENTS = 17;
 const MAXIMUM_SEARCH_FIELD_PATH_SEGMENT_BYTES = 256;
-const KNOWLEDGE_SELECTOR_CANONICAL_DOMAIN = "open-splunk/knowledge-selector/v1\0";
+const KNOWLEDGE_SELECTOR_CANONICAL_DOMAIN = "open-splunk/knowledge-selector\0";
 
 const KNOWLEDGE_UPDATE_MASK_PATHS = new Set([
   "app_id",

@@ -590,7 +590,7 @@ func TestRepresentableFieldNameMatchesCurrentSingleTokenGrammar(t *testing.T) {
 	}
 }
 
-func TestFieldSuggestionInsertionQuotesV02ScalarFields(t *testing.T) {
+func TestFieldSuggestionInsertionQuotesAuthoredScalarFields(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -620,7 +620,7 @@ func TestFieldSuggestionInsertionQuotesV02ScalarFields(t *testing.T) {
 	}
 }
 
-func TestSuggestQuotesOperatorFieldsOnlyInV02ScalarContexts(t *testing.T) {
+func TestSuggestQuotesOperatorFieldsOnlyInAuthoredScalarContexts(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {

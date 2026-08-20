@@ -14,7 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/collectorlimits"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/jsonnumber"
@@ -47,7 +47,7 @@ type DecodeConfig struct {
 	Sourcetype     string
 	Host           string
 	Service        string
-	ConstantFields *opensplunkv1.TypedObject
+	ConstantFields *opensplunk.TypedObject
 	MaxLineBytes   int
 	MaxJSONDepth   int
 	MaxJSONFields  int
@@ -71,7 +71,7 @@ type SourcePosition struct {
 // Decoder is immutable and safe for concurrent use.
 type Decoder struct {
 	cfg           DecodeConfig
-	constants     []*opensplunkv1.TypedObjectField
+	constants     []*opensplunk.TypedObjectField
 	constantNames map[string]struct{}
 }
 
@@ -123,7 +123,7 @@ func NewDecoder(cfg DecodeConfig) (*Decoder, error) {
 
 // Decode converts raw to an independent event. raw must not contain the file
 // delimiter; it is otherwise preserved byte-for-byte.
-func (d *Decoder) Decode(raw []byte, position SourcePosition, collectedAt time.Time) (*opensplunkv1.LogEvent, error) {
+func (d *Decoder) Decode(raw []byte, position SourcePosition, collectedAt time.Time) (*opensplunk.LogEvent, error) {
 	if len(raw) > d.cfg.MaxLineBytes {
 		return nil, fmt.Errorf("event has %d bytes, limit is %d", len(raw), d.cfg.MaxLineBytes)
 	}
@@ -153,29 +153,29 @@ func (d *Decoder) Decode(raw []byte, position SourcePosition, collectedAt time.T
 		return nil, fmt.Errorf("invalid collection time: %w", err)
 	}
 
-	event := &opensplunkv1.LogEvent{
+	event := &opensplunk.LogEvent{
 		EventId:         stableEventID(d.cfg.InputID, position, raw),
 		IndexName:       d.cfg.IndexName,
 		CollectedAt:     collectedTimestamp,
 		EventTime:       timestamppb.New(collectedAt),
-		EventTimeSource: opensplunkv1.EventTimeSource_EVENT_TIME_SOURCE_COLLECTED_AT_FALLBACK,
+		EventTimeSource: opensplunk.EventTimeSource_EVENT_TIME_SOURCE_COLLECTED_AT_FALLBACK,
 		Host:            d.cfg.Host,
 		Source:          d.cfg.Source,
 		Sourcetype:      d.cfg.Sourcetype,
 		Raw:             bytes.Clone(raw),
-		RawEncoding:     opensplunkv1.RawEncoding_RAW_ENCODING_BINARY,
-		Fields:          &opensplunkv1.TypedObject{},
+		RawEncoding:     opensplunk.RawEncoding_RAW_ENCODING_BINARY,
+		Fields:          &opensplunk.TypedObject{},
 		Origin:          sourceOrigin(d.cfg.InputID, position),
 	}
 	if d.cfg.Service != "" {
 		event.Service = new(d.cfg.Service)
 	}
 	if utf8.Valid(raw) {
-		event.RawEncoding = opensplunkv1.RawEncoding_RAW_ENCODING_UTF8
+		event.RawEncoding = opensplunk.RawEncoding_RAW_ENCODING_UTF8
 	}
 
 	if d.cfg.Format == InputFormatRaw {
-		if event.RawEncoding == opensplunkv1.RawEncoding_RAW_ENCODING_UTF8 {
+		if event.RawEncoding == opensplunk.RawEncoding_RAW_ENCODING_UTF8 {
 			event.Message = new(string(raw))
 		}
 		event.Fields = d.mergeConstants(nil)
@@ -197,7 +197,7 @@ func (d *Decoder) Decode(raw []byte, position SourcePosition, collectedAt time.T
 	return event, nil
 }
 
-func (d *Decoder) extractCanonical(event *opensplunkv1.LogEvent, object jsonObject, fallback time.Time) error {
+func (d *Decoder) extractCanonical(event *opensplunk.LogEvent, object jsonObject, fallback time.Time) error {
 	if value, found, err := oneCanonical(object, "timestamp", "ts", "time", "@timestamp"); err != nil {
 		return err
 	} else if found && value != nil {
@@ -209,7 +209,7 @@ func (d *Decoder) extractCanonical(event *opensplunkv1.LogEvent, object jsonObje
 		if err := event.EventTime.CheckValid(); err != nil {
 			return fmt.Errorf("invalid event timestamp: %w", err)
 		}
-		event.EventTimeSource = opensplunkv1.EventTimeSource_EVENT_TIME_SOURCE_PARSED
+		event.EventTimeSource = opensplunk.EventTimeSource_EVENT_TIME_SOURCE_PARSED
 	} else {
 		event.EventTime = timestamppb.New(fallback)
 	}
@@ -254,15 +254,15 @@ func (d *Decoder) extractCanonical(event *opensplunkv1.LogEvent, object jsonObje
 	return nil
 }
 
-func (d *Decoder) mergeConstants(dynamic []*opensplunkv1.TypedObjectField) *opensplunkv1.TypedObject {
-	fields := make([]*opensplunkv1.TypedObjectField, 0, len(dynamic)+len(d.constants))
+func (d *Decoder) mergeConstants(dynamic []*opensplunk.TypedObjectField) *opensplunk.TypedObject {
+	fields := make([]*opensplunk.TypedObjectField, 0, len(dynamic)+len(d.constants))
 	positions := make(map[string]int, len(dynamic)+len(d.constants))
 	for _, field := range dynamic {
 		positions[field.GetName()] = len(fields)
 		fields = append(fields, field)
 	}
 	for _, constant := range d.constants {
-		cloned := proto.Clone(constant).(*opensplunkv1.TypedObjectField)
+		cloned := proto.Clone(constant).(*opensplunk.TypedObjectField)
 		if index, exists := positions[constant.GetName()]; exists {
 			fields[index] = cloned
 			continue
@@ -270,7 +270,7 @@ func (d *Decoder) mergeConstants(dynamic []*opensplunkv1.TypedObjectField) *open
 		positions[constant.GetName()] = len(fields)
 		fields = append(fields, cloned)
 	}
-	return &opensplunkv1.TypedObject{Fields: fields}
+	return &opensplunk.TypedObject{Fields: fields}
 }
 
 type jsonObject []jsonField
@@ -382,8 +382,8 @@ func (p *jsonParser) value(depth int) (any, error) {
 	}
 }
 
-func dynamicFields(object jsonObject) ([]*opensplunkv1.TypedObjectField, error) {
-	fields := make([]*opensplunkv1.TypedObjectField, 0, len(object))
+func dynamicFields(object jsonObject) ([]*opensplunk.TypedObjectField, error) {
+	fields := make([]*opensplunk.TypedObjectField, 0, len(object))
 	for _, field := range object {
 		if eventfields.IsCollectorReservedRoot(field.name) {
 			continue
@@ -392,25 +392,25 @@ func dynamicFields(object jsonObject) ([]*opensplunkv1.TypedObjectField, error) 
 		if err != nil {
 			return nil, fmt.Errorf("field %q: %w", field.name, err)
 		}
-		fields = append(fields, &opensplunkv1.TypedObjectField{Name: field.name, Value: value})
+		fields = append(fields, &opensplunk.TypedObjectField{Name: field.name, Value: value})
 	}
 	return fields, nil
 }
 
-func typedJSONValue(value any) (*opensplunkv1.TypedValue, error) {
+func typedJSONValue(value any) (*opensplunk.TypedValue, error) {
 	switch value := value.(type) {
 	case nil:
-		return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_NullValue{
-			NullValue: opensplunkv1.NullValue_NULL_VALUE_NULL,
+		return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_NullValue{
+			NullValue: opensplunk.NullValue_NULL_VALUE_NULL,
 		}}, nil
 	case string:
-		return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_StringValue{StringValue: value}}, nil
+		return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_StringValue{StringValue: value}}, nil
 	case bool:
-		return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_BoolValue{BoolValue: value}}, nil
+		return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_BoolValue{BoolValue: value}}, nil
 	case json.Number:
 		return typedJSONNumber(value)
 	case jsonArray:
-		values := make([]*opensplunkv1.TypedValue, 0, len(value))
+		values := make([]*opensplunk.TypedValue, 0, len(value))
 		for i, item := range value {
 			converted, err := typedJSONValue(item)
 			if err != nil {
@@ -418,39 +418,39 @@ func typedJSONValue(value any) (*opensplunkv1.TypedValue, error) {
 			}
 			values = append(values, converted)
 		}
-		return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_ListValue{
-			ListValue: &opensplunkv1.TypedValueList{Values: values},
+		return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_ListValue{
+			ListValue: &opensplunk.TypedValueList{Values: values},
 		}}, nil
 	case jsonObject:
-		fields := make([]*opensplunkv1.TypedObjectField, 0, len(value))
+		fields := make([]*opensplunk.TypedObjectField, 0, len(value))
 		for _, field := range value {
 			converted, err := typedJSONValue(field.value)
 			if err != nil {
 				return nil, fmt.Errorf("field %q: %w", field.name, err)
 			}
-			fields = append(fields, &opensplunkv1.TypedObjectField{Name: field.name, Value: converted})
+			fields = append(fields, &opensplunk.TypedObjectField{Name: field.name, Value: converted})
 		}
-		return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_ObjectValue{
-			ObjectValue: &opensplunkv1.TypedObject{Fields: fields},
+		return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_ObjectValue{
+			ObjectValue: &opensplunk.TypedObject{Fields: fields},
 		}}, nil
 	default:
 		return nil, fmt.Errorf("unsupported decoded JSON value %T", value)
 	}
 }
 
-func typedJSONNumber(number json.Number) (*opensplunkv1.TypedValue, error) {
+func typedJSONNumber(number json.Number) (*opensplunk.TypedValue, error) {
 	classified := jsonnumber.Classify(number.String())
 	switch classified.Kind {
 	case jsonnumber.KindSint64:
-		return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_Sint64Value{
+		return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_Sint64Value{
 			Sint64Value: classified.Sint64,
 		}}, nil
 	case jsonnumber.KindUint64:
-		return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_Uint64Value{
+		return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_Uint64Value{
 			Uint64Value: classified.Uint64,
 		}}, nil
 	case jsonnumber.KindFloat64:
-		return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_DoubleValue{
+		return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_DoubleValue{
 			DoubleValue: classified.Float64,
 		}}, nil
 	case jsonnumber.KindDecimal:
@@ -460,9 +460,9 @@ func typedJSONNumber(number json.Number) (*opensplunkv1.TypedValue, error) {
 	}
 }
 
-func decimalTypedValue(value string) *opensplunkv1.TypedValue {
-	return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_DecimalValue{
-		DecimalValue: &opensplunkv1.DecimalValue{Value: value},
+func decimalTypedValue(value string) *opensplunk.TypedValue {
+	return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_DecimalValue{
+		DecimalValue: &opensplunk.DecimalValue{Value: value},
 	}}
 }
 
@@ -523,27 +523,27 @@ func oneCanonical(object jsonObject, names ...string) (any, bool, error) {
 	return value, found != "", nil
 }
 
-func severityForLevel(level string) opensplunkv1.LogSeverity {
+func severityForLevel(level string) opensplunk.LogSeverity {
 	switch strings.ToLower(strings.TrimSpace(level)) {
 	case "trace":
-		return opensplunkv1.LogSeverity_LOG_SEVERITY_TRACE
+		return opensplunk.LogSeverity_LOG_SEVERITY_TRACE
 	case "debug":
-		return opensplunkv1.LogSeverity_LOG_SEVERITY_DEBUG
+		return opensplunk.LogSeverity_LOG_SEVERITY_DEBUG
 	case "info", "information", "notice":
-		return opensplunkv1.LogSeverity_LOG_SEVERITY_INFO
+		return opensplunk.LogSeverity_LOG_SEVERITY_INFO
 	case "warn", "warning":
-		return opensplunkv1.LogSeverity_LOG_SEVERITY_WARN
+		return opensplunk.LogSeverity_LOG_SEVERITY_WARN
 	case "error", "dpanic":
-		return opensplunkv1.LogSeverity_LOG_SEVERITY_ERROR
+		return opensplunk.LogSeverity_LOG_SEVERITY_ERROR
 	case "fatal", "panic", "critical":
-		return opensplunkv1.LogSeverity_LOG_SEVERITY_FATAL
+		return opensplunk.LogSeverity_LOG_SEVERITY_FATAL
 	default:
-		return opensplunkv1.LogSeverity_LOG_SEVERITY_UNSPECIFIED
+		return opensplunk.LogSeverity_LOG_SEVERITY_UNSPECIFIED
 	}
 }
 
-func sourceOrigin(inputID string, position SourcePosition) *opensplunkv1.EventOrigin {
-	origin := &opensplunkv1.EventOrigin{InputId: inputID}
+func sourceOrigin(inputID string, position SourcePosition) *opensplunk.EventOrigin {
+	origin := &opensplunk.EventOrigin{InputId: inputID}
 	if position.FileIdentity != "" {
 		origin.FileIdentity = new(position.FileIdentity)
 		origin.FileFingerprintLength = new(position.FileFingerprintLength)
@@ -602,11 +602,11 @@ func writeHashBytes(hash byteWriter, value []byte) {
 	_, _ = hash.Write(value)
 }
 
-func cloneAndValidateConstants(object *opensplunkv1.TypedObject) ([]*opensplunkv1.TypedObjectField, error) {
+func cloneAndValidateConstants(object *opensplunk.TypedObject) ([]*opensplunk.TypedObjectField, error) {
 	if object == nil {
 		return nil, nil
 	}
-	result := make([]*opensplunkv1.TypedObjectField, 0, len(object.GetFields()))
+	result := make([]*opensplunk.TypedObjectField, 0, len(object.GetFields()))
 	seen := make(map[string]struct{}, len(object.GetFields()))
 	for i, field := range object.GetFields() {
 		if field == nil || field.GetName() == "" || field.GetValue() == nil || field.GetValue().GetKind() == nil {
@@ -622,7 +622,7 @@ func cloneAndValidateConstants(object *opensplunkv1.TypedObject) ([]*opensplunkv
 			return nil, fmt.Errorf("duplicate field %q", field.GetName())
 		}
 		seen[field.GetName()] = struct{}{}
-		result = append(result, proto.Clone(field).(*opensplunkv1.TypedObjectField))
+		result = append(result, proto.Clone(field).(*opensplunk.TypedObjectField))
 	}
 	return result, nil
 }

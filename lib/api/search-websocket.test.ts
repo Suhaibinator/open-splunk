@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { SearchJobState } from "../../gen/ts/open_splunk/v1/search";
+import { SearchJobState } from "../../gen/ts/open_splunk/search";
 import {
   ResynchronizationReason,
   SearchWebSocketCommand,
   type SearchWebSocketEvent,
   SearchWebSocketEvent as SearchWebSocketEventCodec,
   SearchWebSocketProtocolErrorCode,
-} from "../../gen/ts/open_splunk/v1/search_ws";
+} from "../../gen/ts/open_splunk/search_ws";
 import {
   SearchWebSocketClient,
   type SearchWebSocketClientOptions,
@@ -138,7 +138,7 @@ function resynchronizationEvent(
         reason,
         earliestAvailableSequence: latestSequence,
         latestSequence,
-        recoveryPath: "/api/v1/search/jobs/get",
+        recoveryPath: "/api/search/jobs/get",
       },
     },
   };
@@ -788,7 +788,7 @@ test("a subscription-scoped event cannot advance another target checkpoint", asy
   assert.ok(errors.some((message) => message.includes("does not match its subscription target")));
 });
 
-test("a future sequenced event variant remains forward compatible and advances its routed checkpoint", async (t) => {
+test("an unknown sequenced event variant advances its routed checkpoint", async (t) => {
   const { client, sockets } = clientFixture();
   t.after(() => client.dispose());
   const target = searchJobTarget("search-future-event");

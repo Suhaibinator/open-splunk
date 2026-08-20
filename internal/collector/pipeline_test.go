@@ -6,39 +6,39 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
 
 // --- test builders (names prefixed to avoid clashes with decoder_test.go) ---
 
-func plField(name string, value *opensplunkv1.TypedValue) *opensplunkv1.TypedObjectField {
-	return &opensplunkv1.TypedObjectField{Name: name, Value: value}
+func plField(name string, value *opensplunk.TypedValue) *opensplunk.TypedObjectField {
+	return &opensplunk.TypedObjectField{Name: name, Value: value}
 }
 
-func plInt(n int64) *opensplunkv1.TypedValue {
-	return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_Sint64Value{Sint64Value: n}}
+func plInt(n int64) *opensplunk.TypedValue {
+	return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_Sint64Value{Sint64Value: n}}
 }
 
-func plObj(fields ...*opensplunkv1.TypedObjectField) *opensplunkv1.TypedValue {
-	return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_ObjectValue{
-		ObjectValue: &opensplunkv1.TypedObject{Fields: fields},
+func plObj(fields ...*opensplunk.TypedObjectField) *opensplunk.TypedValue {
+	return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_ObjectValue{
+		ObjectValue: &opensplunk.TypedObject{Fields: fields},
 	}}
 }
 
-func plList(values ...*opensplunkv1.TypedValue) *opensplunkv1.TypedValue {
-	return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_ListValue{
-		ListValue: &opensplunkv1.TypedValueList{Values: values},
+func plList(values ...*opensplunk.TypedValue) *opensplunk.TypedValue {
+	return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_ListValue{
+		ListValue: &opensplunk.TypedValueList{Values: values},
 	}}
 }
 
 // plEvent builds a LogEvent with canonical metadata populated (so tests can
 // assert processors never touch it) and the given dynamic fields.
-func plEvent(fields ...*opensplunkv1.TypedObjectField) *opensplunkv1.LogEvent {
+func plEvent(fields ...*opensplunk.TypedObjectField) *opensplunk.LogEvent {
 	msg := "canonical message with token=should-not-be-touched"
 	lvl := "INFO"
-	return &opensplunkv1.LogEvent{
+	return &opensplunk.LogEvent{
 		EventId:    "evt-1",
 		IndexName:  "main",
 		Host:       "host-1",
@@ -47,12 +47,12 @@ func plEvent(fields ...*opensplunkv1.TypedObjectField) *opensplunkv1.LogEvent {
 		Level:      &lvl,
 		Message:    &msg,
 		Raw:        []byte(`{"token":"raw-secret"}`),
-		Fields:     &opensplunkv1.TypedObject{Fields: fields},
+		Fields:     &opensplunk.TypedObject{Fields: fields},
 	}
 }
 
 // plFieldNames returns the ordered top-level dynamic field names.
-func plFieldNames(e *opensplunkv1.LogEvent) []string {
+func plFieldNames(e *opensplunk.LogEvent) []string {
 	if e == nil || e.Fields == nil {
 		return nil
 	}
@@ -63,7 +63,7 @@ func plFieldNames(e *opensplunkv1.LogEvent) []string {
 	return names
 }
 
-func plLookup(e *opensplunkv1.LogEvent, name string) *opensplunkv1.TypedValue {
+func plLookup(e *opensplunk.LogEvent, name string) *opensplunk.TypedValue {
 	if e == nil || e.Fields == nil {
 		return nil
 	}
@@ -76,7 +76,7 @@ func plLookup(e *opensplunkv1.LogEvent, name string) *opensplunkv1.TypedValue {
 }
 
 // mustProcess runs p and fails the test on error.
-func mustProcess(t *testing.T, p Processor, e *opensplunkv1.LogEvent) *opensplunkv1.LogEvent {
+func mustProcess(t *testing.T, p Processor, e *opensplunk.LogEvent) *opensplunk.LogEvent {
 	t.Helper()
 	out, err := p.Process(e)
 	if err != nil {
@@ -87,7 +87,7 @@ func mustProcess(t *testing.T, p Processor, e *opensplunkv1.LogEvent) *opensplun
 
 // assertUnchanged asserts the original event was not mutated by comparing it to a
 // snapshot taken before processing.
-func assertUnchanged(t *testing.T, original, snapshot *opensplunkv1.LogEvent) {
+func assertUnchanged(t *testing.T, original, snapshot *opensplunk.LogEvent) {
 	t.Helper()
 	if !proto.Equal(original, snapshot) {
 		t.Fatalf("input event was mutated in place:\n got  %v\n want %v", original, snapshot)
@@ -111,20 +111,20 @@ func TestAllowProcessor(t *testing.T) {
 	tests := []struct {
 		name     string
 		allow    []string
-		fields   []*opensplunkv1.TypedObjectField
+		fields   []*opensplunk.TypedObjectField
 		want     []string // surviving field names, in order
 		wantNoop bool     // same pointer returned
 	}{
 		{
 			name:   "keeps only listed and preserves order",
 			allow:  []string{"a", "c"},
-			fields: []*opensplunkv1.TypedObjectField{plField("a", plInt(1)), plField("b", plInt(2)), plField("c", plInt(3))},
+			fields: []*opensplunk.TypedObjectField{plField("a", plInt(1)), plField("b", plInt(2)), plField("c", plInt(3))},
 			want:   []string{"a", "c"},
 		},
 		{
 			name:  "nested object under kept field is kept whole",
 			allow: []string{"keep"},
-			fields: []*opensplunkv1.TypedObjectField{
+			fields: []*opensplunk.TypedObjectField{
 				plField("keep", plObj(plField("inner", plInt(9)))),
 				plField("drop", plInt(1)),
 			},
@@ -133,13 +133,13 @@ func TestAllowProcessor(t *testing.T) {
 		{
 			name:   "case sensitive exact match",
 			allow:  []string{"Token"},
-			fields: []*opensplunkv1.TypedObjectField{plField("token", plInt(1)), plField("Token", plInt(2))},
+			fields: []*opensplunk.TypedObjectField{plField("token", plInt(1)), plField("Token", plInt(2))},
 			want:   []string{"Token"},
 		},
 		{
 			name:     "all kept is a no-op",
 			allow:    []string{"a", "b"},
-			fields:   []*opensplunkv1.TypedObjectField{plField("a", plInt(1)), plField("b", plInt(2))},
+			fields:   []*opensplunk.TypedObjectField{plField("a", plInt(1)), plField("b", plInt(2))},
 			want:     []string{"a", "b"},
 			wantNoop: true,
 		},
@@ -159,7 +159,7 @@ func TestAllowProcessor(t *testing.T) {
 				t.Fatalf("NewAllowProcessor: %v", err)
 			}
 			in := plEvent(tt.fields...)
-			snap := proto.Clone(in).(*opensplunkv1.LogEvent)
+			snap := proto.Clone(in).(*opensplunk.LogEvent)
 			out := mustProcess(t, p, in)
 			assertUnchanged(t, in, snap)
 			if tt.wantNoop && out != in {
@@ -189,34 +189,34 @@ func TestDenyProcessor(t *testing.T) {
 	tests := []struct {
 		name     string
 		deny     []string
-		fields   []*opensplunkv1.TypedObjectField
+		fields   []*opensplunk.TypedObjectField
 		want     []string
 		wantNoop bool
 	}{
 		{
 			name:   "removes listed",
 			deny:   []string{"b"},
-			fields: []*opensplunkv1.TypedObjectField{plField("a", plInt(1)), plField("b", plInt(2)), plField("c", plInt(3))},
+			fields: []*opensplunk.TypedObjectField{plField("a", plInt(1)), plField("b", plInt(2)), plField("c", plInt(3))},
 			want:   []string{"a", "c"},
 		},
 		{
 			name:     "empty deny is identity no-op",
 			deny:     nil,
-			fields:   []*opensplunkv1.TypedObjectField{plField("a", plInt(1))},
+			fields:   []*opensplunk.TypedObjectField{plField("a", plInt(1))},
 			want:     []string{"a"},
 			wantNoop: true,
 		},
 		{
 			name:     "no listed field present is a no-op",
 			deny:     []string{"x"},
-			fields:   []*opensplunkv1.TypedObjectField{plField("a", plInt(1))},
+			fields:   []*opensplunk.TypedObjectField{plField("a", plInt(1))},
 			want:     []string{"a"},
 			wantNoop: true,
 		},
 		{
 			name:     "case sensitive",
 			deny:     []string{"Token"},
-			fields:   []*opensplunkv1.TypedObjectField{plField("token", plInt(1))},
+			fields:   []*opensplunk.TypedObjectField{plField("token", plInt(1))},
 			want:     []string{"token"},
 			wantNoop: true,
 		},
@@ -229,7 +229,7 @@ func TestDenyProcessor(t *testing.T) {
 				t.Fatalf("NewDenyProcessor: %v", err)
 			}
 			in := plEvent(tt.fields...)
-			snap := proto.Clone(in).(*opensplunkv1.LogEvent)
+			snap := proto.Clone(in).(*opensplunk.LogEvent)
 			out := mustProcess(t, p, in)
 			assertUnchanged(t, in, snap)
 			if tt.wantNoop && out != in {
@@ -271,7 +271,7 @@ func TestRenameProcessor(t *testing.T) {
 	tests := []struct {
 		name     string
 		from, to string
-		fields   []*opensplunkv1.TypedObjectField
+		fields   []*opensplunk.TypedObjectField
 		want     []string
 		wantNoop bool
 		wantVal  int64 // value expected at `to` (via GetSint64Value)
@@ -279,28 +279,28 @@ func TestRenameProcessor(t *testing.T) {
 		{
 			name: "renames in place preserving position",
 			from: "old", to: "new",
-			fields:  []*opensplunkv1.TypedObjectField{plField("a", plInt(1)), plField("old", plInt(7)), plField("b", plInt(2))},
+			fields:  []*opensplunk.TypedObjectField{plField("a", plInt(1)), plField("old", plInt(7)), plField("b", plInt(2))},
 			want:    []string{"a", "new", "b"},
 			wantVal: 7,
 		},
 		{
 			name: "renamed field replaces pre-existing target",
 			from: "old", to: "dest",
-			fields:  []*opensplunkv1.TypedObjectField{plField("dest", plInt(100)), plField("old", plInt(7)), plField("z", plInt(2))},
+			fields:  []*opensplunk.TypedObjectField{plField("dest", plInt(100)), plField("old", plInt(7)), plField("z", plInt(2))},
 			want:    []string{"old_becomes_dest_here_placeholder"}, // replaced below
 			wantVal: 7,
 		},
 		{
 			name: "missing from is a no-op",
 			from: "absent", to: "new",
-			fields:   []*opensplunkv1.TypedObjectField{plField("a", plInt(1))},
+			fields:   []*opensplunk.TypedObjectField{plField("a", plInt(1))},
 			want:     []string{"a"},
 			wantNoop: true,
 		},
 		{
 			name: "case sensitive from",
 			from: "Old", to: "new",
-			fields:   []*opensplunkv1.TypedObjectField{plField("old", plInt(1))},
+			fields:   []*opensplunk.TypedObjectField{plField("old", plInt(1))},
 			want:     []string{"old"},
 			wantNoop: true,
 		},
@@ -313,7 +313,7 @@ func TestRenameProcessor(t *testing.T) {
 				t.Fatalf("NewRenameProcessor: %v", err)
 			}
 			in := plEvent(tt.fields...)
-			snap := proto.Clone(in).(*opensplunkv1.LogEvent)
+			snap := proto.Clone(in).(*opensplunk.LogEvent)
 			out := mustProcess(t, p, in)
 			assertUnchanged(t, in, snap)
 			if tt.wantNoop && out != in {
@@ -348,13 +348,13 @@ func TestFieldRemovingMutatorsCompactOwnedSliceInPlace(t *testing.T) {
 	tests := []struct {
 		name    string
 		mutator pipelineMutator
-		fields  []*opensplunkv1.TypedObjectField
+		fields  []*opensplunk.TypedObjectField
 		want    []string
 	}{
 		{
 			name:    "allow",
 			mutator: &allowProcessor{keep: map[string]struct{}{"a": {}, "c": {}}},
-			fields: []*opensplunkv1.TypedObjectField{
+			fields: []*opensplunk.TypedObjectField{
 				plField("a", plInt(1)), plField("b", plInt(2)), plField("c", plInt(3)),
 			},
 			want: []string{"a", "c"},
@@ -362,7 +362,7 @@ func TestFieldRemovingMutatorsCompactOwnedSliceInPlace(t *testing.T) {
 		{
 			name:    "deny",
 			mutator: &denyProcessor{deny: map[string]struct{}{"b": {}}},
-			fields: []*opensplunkv1.TypedObjectField{
+			fields: []*opensplunk.TypedObjectField{
 				plField("a", plInt(1)), plField("b", plInt(2)), plField("c", plInt(3)),
 			},
 			want: []string{"a", "c"},
@@ -370,7 +370,7 @@ func TestFieldRemovingMutatorsCompactOwnedSliceInPlace(t *testing.T) {
 		{
 			name:    "rename",
 			mutator: &renameProcessor{from: "old", to: "dest"},
-			fields: []*opensplunkv1.TypedObjectField{
+			fields: []*opensplunk.TypedObjectField{
 				plField("dest", plInt(1)), plField("old", plInt(2)), plField("z", plInt(3)),
 			},
 			want: []string{"dest", "z"},
@@ -402,15 +402,15 @@ func TestFieldRemovingMutatorsCompactOwnedSliceInPlace(t *testing.T) {
 func TestFieldRemovingMutatorsDoNotAllocate(t *testing.T) {
 	tests := []struct {
 		name  string
-		setup func() (pipelineMutator, *opensplunkv1.LogEvent, func())
+		setup func() (pipelineMutator, *opensplunk.LogEvent, func())
 	}{
 		{
 			name: "allow",
-			setup: func() (pipelineMutator, *opensplunkv1.LogEvent, func()) {
+			setup: func() (pipelineMutator, *opensplunk.LogEvent, func()) {
 				a := plField("a", plInt(1))
 				b := plField("b", plInt(2))
 				c := plField("c", plInt(3))
-				backing := []*opensplunkv1.TypedObjectField{a, b, c}
+				backing := []*opensplunk.TypedObjectField{a, b, c}
 				event := plEvent(backing...)
 				return &allowProcessor{keep: map[string]struct{}{"a": {}, "c": {}}}, event, func() {
 					backing[0], backing[1], backing[2] = a, b, c
@@ -420,11 +420,11 @@ func TestFieldRemovingMutatorsDoNotAllocate(t *testing.T) {
 		},
 		{
 			name: "deny",
-			setup: func() (pipelineMutator, *opensplunkv1.LogEvent, func()) {
+			setup: func() (pipelineMutator, *opensplunk.LogEvent, func()) {
 				a := plField("a", plInt(1))
 				b := plField("b", plInt(2))
 				c := plField("c", plInt(3))
-				backing := []*opensplunkv1.TypedObjectField{a, b, c}
+				backing := []*opensplunk.TypedObjectField{a, b, c}
 				event := plEvent(backing...)
 				return &denyProcessor{deny: map[string]struct{}{"b": {}}}, event, func() {
 					backing[0], backing[1], backing[2] = a, b, c
@@ -434,11 +434,11 @@ func TestFieldRemovingMutatorsDoNotAllocate(t *testing.T) {
 		},
 		{
 			name: "rename",
-			setup: func() (pipelineMutator, *opensplunkv1.LogEvent, func()) {
+			setup: func() (pipelineMutator, *opensplunk.LogEvent, func()) {
 				dest := plField("dest", plInt(1))
 				old := plField("old", plInt(2))
 				z := plField("z", plInt(3))
-				backing := []*opensplunkv1.TypedObjectField{dest, old, z}
+				backing := []*opensplunk.TypedObjectField{dest, old, z}
 				event := plEvent(backing...)
 				return &renameProcessor{from: "old", to: "dest"}, event, func() {
 					dest.Name = "dest"
@@ -486,7 +486,7 @@ func TestBuiltInCloneOnWriteOutputDoesNotAliasInput(t *testing.T) {
 				plField("old", plInt(3)),
 				plField("secret", stringValue("value")),
 			)
-			snapshot := proto.Clone(in).(*opensplunkv1.LogEvent)
+			snapshot := proto.Clone(in).(*opensplunk.LogEvent)
 			out := mustProcess(t, tt.processor, in)
 			if out == in {
 				t.Fatal("mutating processor returned its input pointer")
@@ -526,7 +526,7 @@ func TestRedactProcessor(t *testing.T) {
 			plField("secretObj", plObj(plField("inner", plInt(9)))),
 			plField("secretList", plList(plInt(1), plInt(2))),
 		)
-		snap := proto.Clone(in).(*opensplunkv1.LogEvent)
+		snap := proto.Clone(in).(*opensplunk.LogEvent)
 		out := mustProcess(t, p, in)
 		assertUnchanged(t, in, snap)
 		if out == in {
@@ -563,7 +563,7 @@ func TestRedactProcessor(t *testing.T) {
 				plObj(plField("name", stringValue("bob")), plField("password", stringValue("pw2"))),
 			)),
 		)
-		snap := proto.Clone(in).(*opensplunkv1.LogEvent)
+		snap := proto.Clone(in).(*opensplunk.LogEvent)
 		out := mustProcess(t, p, in)
 		assertUnchanged(t, in, snap)
 
@@ -624,10 +624,10 @@ func TestRedactProcessor(t *testing.T) {
 
 // pipeFunc is a test Processor built from a closure.
 type pipeFunc struct {
-	fn func(*opensplunkv1.LogEvent) (*opensplunkv1.LogEvent, error)
+	fn func(*opensplunk.LogEvent) (*opensplunk.LogEvent, error)
 }
 
-func (p pipeFunc) Process(e *opensplunkv1.LogEvent) (*opensplunkv1.LogEvent, error) {
+func (p pipeFunc) Process(e *opensplunk.LogEvent) (*opensplunk.LogEvent, error) {
 	return p.fn(e)
 }
 
@@ -670,10 +670,10 @@ func TestPipelineProcess(t *testing.T) {
 	t.Run("stops on drop", func(t *testing.T) {
 		t.Parallel()
 		reached := false
-		drop := pipeFunc{fn: func(*opensplunkv1.LogEvent) (*opensplunkv1.LogEvent, error) {
+		drop := pipeFunc{fn: func(*opensplunk.LogEvent) (*opensplunk.LogEvent, error) {
 			return nil, nil
 		}}
-		after := pipeFunc{fn: func(e *opensplunkv1.LogEvent) (*opensplunkv1.LogEvent, error) {
+		after := pipeFunc{fn: func(e *opensplunk.LogEvent) (*opensplunk.LogEvent, error) {
 			reached = true
 			return e, nil
 		}}
@@ -692,10 +692,10 @@ func TestPipelineProcess(t *testing.T) {
 	t.Run("stops on error", func(t *testing.T) {
 		t.Parallel()
 		reached := false
-		boom := pipeFunc{fn: func(*opensplunkv1.LogEvent) (*opensplunkv1.LogEvent, error) {
+		boom := pipeFunc{fn: func(*opensplunk.LogEvent) (*opensplunk.LogEvent, error) {
 			return nil, errors.New("boom")
 		}}
-		after := pipeFunc{fn: func(e *opensplunkv1.LogEvent) (*opensplunkv1.LogEvent, error) {
+		after := pipeFunc{fn: func(e *opensplunk.LogEvent) (*opensplunk.LogEvent, error) {
 			reached = true
 			return e, nil
 		}}
@@ -718,7 +718,7 @@ func TestPipelineProcess(t *testing.T) {
 		redact, _ := NewRedactProcessor([]string{"password"}, "***")
 
 		in := plEvent(plField("user_password", stringValue("hunter2")))
-		snap := proto.Clone(in).(*opensplunkv1.LogEvent)
+		snap := proto.Clone(in).(*opensplunk.LogEvent)
 
 		// rename -> redact: field is renamed first, so redact catches it.
 		out, err := NewPipeline(rename, redact).Process(in)
@@ -757,12 +757,12 @@ func TestPipelineBuiltinsShareOneClone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var afterDeny, afterRename *opensplunkv1.LogEvent
-	observeDeny := pipeFunc{fn: func(event *opensplunkv1.LogEvent) (*opensplunkv1.LogEvent, error) {
+	var afterDeny, afterRename *opensplunk.LogEvent
+	observeDeny := pipeFunc{fn: func(event *opensplunk.LogEvent) (*opensplunk.LogEvent, error) {
 		afterDeny = event
 		return event, nil
 	}}
-	observeRename := pipeFunc{fn: func(event *opensplunkv1.LogEvent) (*opensplunkv1.LogEvent, error) {
+	observeRename := pipeFunc{fn: func(event *opensplunk.LogEvent) (*opensplunk.LogEvent, error) {
 		afterRename = event
 		return event, nil
 	}}
@@ -771,7 +771,7 @@ func TestPipelineBuiltinsShareOneClone(t *testing.T) {
 		plField("old", plInt(2)),
 		plField("secret", plInt(3)),
 	)
-	snapshot := proto.Clone(in).(*opensplunkv1.LogEvent)
+	snapshot := proto.Clone(in).(*opensplunk.LogEvent)
 	out, err := NewPipeline(deny, observeDeny, rename, observeRename, redact).Process(in)
 	if err != nil {
 		t.Fatal(err)

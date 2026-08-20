@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -65,7 +65,7 @@ func TestWriterQuarantinedTerminalStateWinsBeforeDefinitionHydration(t *testing.
 		{
 			name: "update",
 			call: func() error {
-				_, err := writer.Update(ctx, scope, &opensplunkv1.UpdateKnowledgeObjectRequest{
+				_, err := writer.Update(ctx, scope, &opensplunk.UpdateKnowledgeObjectRequest{
 					KnowledgeObjectId: "ko-writer-quarantined-terminal",
 					ExpectedVersion:   2,
 					Definition: aliasDefinition(
@@ -80,10 +80,10 @@ func TestWriterQuarantinedTerminalStateWinsBeforeDefinitionHydration(t *testing.
 		{
 			name: "set state",
 			call: func() error {
-				_, err := writer.SetState(ctx, scope, &opensplunkv1.SetKnowledgeObjectStateRequest{
+				_, err := writer.SetState(ctx, scope, &opensplunk.SetKnowledgeObjectStateRequest{
 					KnowledgeObjectId: "ko-writer-quarantined-terminal",
 					ExpectedVersion:   2,
-					State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+					State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 					ClientRequestId:   "quarantined-state-0001",
 				})
 				return err
@@ -92,7 +92,7 @@ func TestWriterQuarantinedTerminalStateWinsBeforeDefinitionHydration(t *testing.
 		{
 			name: "delete",
 			call: func() error {
-				_, err := writer.Delete(ctx, scope, &opensplunkv1.DeleteKnowledgeObjectRequest{
+				_, err := writer.Delete(ctx, scope, &opensplunk.DeleteKnowledgeObjectRequest{
 					KnowledgeObjectId: "ko-writer-quarantined-terminal",
 					ExpectedVersion:   2,
 					ClientRequestId:   "quarantined-delete-0001",
@@ -167,14 +167,14 @@ func TestWriterActiveDependentsBlockDisableAndDeleteAtomically(t *testing.T) {
 			scope := WriteScope{TenantID: testTenant, OwnerID: testOwner, WritableAppIDs: []string{testApp}}
 			before := readTerminalWriterSnapshot(t, database)
 			if route == "disable" {
-				_, err = writer.SetState(ctx, scope, &opensplunkv1.SetKnowledgeObjectStateRequest{
+				_, err = writer.SetState(ctx, scope, &opensplunk.SetKnowledgeObjectStateRequest{
 					KnowledgeObjectId: targetID,
 					ExpectedVersion:   1,
-					State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+					State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 					ClientRequestId:   "dependent-disable-0001",
 				})
 			} else {
-				_, err = writer.Delete(ctx, scope, &opensplunkv1.DeleteKnowledgeObjectRequest{
+				_, err = writer.Delete(ctx, scope, &opensplunk.DeleteKnowledgeObjectRequest{
 					KnowledgeObjectId: targetID,
 					ExpectedVersion:   1,
 					ClientRequestId:   "dependent-delete-0001",

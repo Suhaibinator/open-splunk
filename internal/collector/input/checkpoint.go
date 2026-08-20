@@ -25,7 +25,7 @@ const checkpointFileName = "checkpoints.json"
 
 // checkpointFormatVersion is written into the store file so a future format
 // change can be detected on load.
-const checkpointFormatVersion = 2
+const checkpointFormatVersion = 1
 
 const maximumCheckpointInputIDBytes = int(protocolid.MaximumBytes)
 
@@ -169,20 +169,9 @@ func (s *fileCheckpointStore) load() error {
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return fmt.Errorf("collector/input: corrupt checkpoint file %s: %w", s.path, err)
 	}
-	switch doc.Version {
-	case checkpointFormatVersion:
-	case 1:
-		if len(doc.Checkpoints) != 0 {
-			return fmt.Errorf(
-				"collector/input: checkpoint file %s uses unsupported version 1 with %d checkpoints; remove or reset it before starting this greenfield version",
-				s.path,
-				len(doc.Checkpoints),
-			)
-		}
-		return nil
-	default:
+	if doc.Version != checkpointFormatVersion {
 		return fmt.Errorf(
-			"collector/input: checkpoint file %s uses unsupported version %d",
+			"collector/input: checkpoint file %s uses unsupported version %d; provision fresh collector state",
 			s.path,
 			doc.Version,
 		)

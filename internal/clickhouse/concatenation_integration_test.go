@@ -8,7 +8,7 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
@@ -46,7 +46,7 @@ func testConcatAgainstClickHouse(
 
 	binaryEvent := testStoredEvent("concat-binary", "concat", indexTime)
 	binaryEvent.Event.Raw = []byte{0xff, 0, 'b', 'y', 't', 'e', 's'}
-	binaryEvent.Event.RawEncoding = opensplunkv1.RawEncoding_RAW_ENCODING_BINARY
+	binaryEvent.Event.RawEncoding = opensplunk.RawEncoding_RAW_ENCODING_BINARY
 
 	compile, queryContext := storeScalarFunctionIntegrationFixtures(
 		ctx,
@@ -422,16 +422,16 @@ func insertConcatDynamicDecimalFixtures(
 		indexTime.UTC(),
 		indexTime.UTC().Truncate(time.Millisecond),
 		nil,
-		uint8(opensplunkv1.EventTimeSource_EVENT_TIME_SOURCE_PARSED),
+		uint8(opensplunk.EventTimeSource_EVENT_TIME_SOURCE_PARSED),
 		"concat-host",
 		"concat-source",
 		"concat",
 		nil,
-		uint8(opensplunkv1.LogSeverity_LOG_SEVERITY_INFO),
+		uint8(opensplunk.LogSeverity_LOG_SEVERITY_INFO),
 		nil,
 		nil,
 		[]byte("concat Dynamic Decimal fixture"),
-		uint8(opensplunkv1.RawEncoding_RAW_ENCODING_UTF8),
+		uint8(opensplunk.RawEncoding_RAW_ENCODING_UTF8),
 		nil,
 		nil,
 		document,

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -126,7 +126,7 @@ func TestCollectActivatesExactLeaseWhileProcessPromotionIsCurrentAndFinalized(t 
 	servicePointer.Store(harness.server)
 
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1)
+	sendHello(t, stream)
 	ready := recvResponse(t, stream).GetReady()
 	if ready == nil {
 		t.Fatal("first response was not Ready")
@@ -254,7 +254,7 @@ func TestCollectMapsHeartbeatActivationFailuresBeforeReadyAndCleansExactLease(
 			harness := newServiceHarness(t, config, authorizer, store)
 			stream := harness.stream(t, "Bearer good-token")
 
-			sendHello(t, stream, 1)
+			sendHello(t, stream)
 			var activatedLease collectorfleet.Lease
 			select {
 			case activatedLease = <-activationStarted:
@@ -363,7 +363,7 @@ func TestCollectUsesFreshAdmissionAuthorityAndDetachedExactCleanup(t *testing.T)
 	config.SessionManager = manager
 	harness := newServiceHarness(t, config, authorizer, acceptingStore())
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1)
+	sendHello(t, stream)
 	ready := recvResponse(t, stream).GetReady()
 	if ready == nil ||
 		len(ready.GetAuthorizedIndexes()) != 1 ||
@@ -434,7 +434,7 @@ func TestCollectCleansCommittedLeaseWhenAdmissionResultIsInvalid(t *testing.T) {
 	config.SessionManager = manager
 	harness := newServiceHarness(t, config, authorizer, acceptingStore())
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1)
+	sendHello(t, stream)
 	response, err := stream.Recv()
 	if response != nil || status.Code(err) != codes.Unavailable {
 		t.Fatalf("Recv() = (%#v, %v), want nil/Unavailable", response, err)
@@ -644,17 +644,17 @@ func TestCollectAuthorizesExactLeaseAndPersistsHeartbeatBeforeBatch(t *testing.T
 	config.SessionManager = manager
 	harness := newServiceHarness(t, config, authorizer, store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1)
+	sendHello(t, stream)
 	_ = recvResponse(t, stream)
-	if err := stream.Send(&opensplunkv1.CollectRequest{
+	if err := stream.Send(&opensplunk.CollectRequest{
 		StreamSequence: 2,
 		SentAt:         timestamppb.New(validationTestNow),
-		Payload: &opensplunkv1.CollectRequest_Heartbeat{
-			Heartbeat: &opensplunkv1.CollectorHeartbeat{
+		Payload: &opensplunk.CollectRequest_Heartbeat{
+			Heartbeat: &opensplunk.CollectorHeartbeat{
 				CollectorId: "collector-a",
 				InstanceId:  "instance-a",
 				ObservedAt:  timestamppb.New(validationTestNow),
-				Queue: &opensplunkv1.CollectorQueueStats{
+				Queue: &opensplunk.CollectorQueueStats{
 					QueuedEvents: 3,
 					QueuedBytes:  42,
 				},
@@ -739,7 +739,7 @@ func TestCollectStaleDurableLeaseNeverStartsBatchWork(t *testing.T) {
 	config.SessionManager = manager
 	harness := newServiceHarness(t, config, authorizer, store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1)
+	sendHello(t, stream)
 	_ = recvResponse(t, stream)
 	batch := validTestBatch(
 		"collector-a",
@@ -788,13 +788,13 @@ func TestCollectHeartbeatNoOpMeansLeaseLost(t *testing.T) {
 	config.SessionManager = manager
 	harness := newServiceHarness(t, config, authorizer, acceptingStore())
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1)
+	sendHello(t, stream)
 	_ = recvResponse(t, stream)
-	if err := stream.Send(&opensplunkv1.CollectRequest{
+	if err := stream.Send(&opensplunk.CollectRequest{
 		StreamSequence: 2,
 		SentAt:         timestamppb.New(validationTestNow),
-		Payload: &opensplunkv1.CollectRequest_Heartbeat{
-			Heartbeat: &opensplunkv1.CollectorHeartbeat{
+		Payload: &opensplunk.CollectRequest_Heartbeat{
+			Heartbeat: &opensplunk.CollectorHeartbeat{
 				CollectorId: "collector-a",
 				InstanceId:  "instance-a",
 				ObservedAt:  timestamppb.New(validationTestNow),
@@ -888,7 +888,7 @@ func TestCollectSerializesDurableAdmissionThroughProcessActivationPerCollector(t
 	harness := newServiceHarness(t, config, authorizer, acceptingStore())
 
 	first := harness.stream(t, "Bearer first-token")
-	sendHello(t, first, 1)
+	sendHello(t, first)
 	select {
 	case <-firstAdmitStarted:
 	case <-time.After(time.Second):
@@ -896,7 +896,7 @@ func TestCollectSerializesDurableAdmissionThroughProcessActivationPerCollector(t
 	}
 
 	second := harness.stream(t, "Bearer second-token")
-	sendHello(t, second, 1)
+	sendHello(t, second)
 	select {
 	case <-secondPreauthorized:
 	case <-time.After(time.Second):

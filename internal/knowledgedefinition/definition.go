@@ -13,7 +13,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/splpath"
@@ -65,13 +65,13 @@ var (
 // storage/indexing authorities. Definition, Bytes, and Description do not
 // alias caller-owned memory. Selector is immutable and race-safe.
 type Normalized struct {
-	Definition   *opensplunkv1.KnowledgeObjectDefinition
+	Definition   *opensplunk.KnowledgeObjectDefinition
 	Bytes        []byte
 	Digest       [sha256.Size]byte
-	ObjectType   opensplunkv1.KnowledgeObjectType
+	ObjectType   opensplunk.KnowledgeObjectType
 	AppID        string
 	Name         string
-	SharingScope opensplunkv1.SharingScope
+	SharingScope opensplunk.SharingScope
 	Description  *string
 	Selector     *knowledge.Selector
 }
@@ -82,12 +82,12 @@ type Normalized struct {
 // Bytes remains the immutable storage authority. This type deliberately has no
 // ObjectType: the current binary cannot infer semantics from an unreadable body.
 type ForwardCompatible struct {
-	Definition   *opensplunkv1.KnowledgeObjectDefinition
+	Definition   *opensplunk.KnowledgeObjectDefinition
 	Bytes        []byte
 	Digest       [sha256.Size]byte
 	AppID        string
 	Name         string
-	SharingScope opensplunkv1.SharingScope
+	SharingScope opensplunk.SharingScope
 	Description  *string
 	Selector     *knowledge.Selector
 }
@@ -96,7 +96,7 @@ type ForwardCompatible struct {
 // produces its one deterministic canonical storage representation. It does not
 // decide whether a draft is executable; active publication must additionally
 // compile and budget the body and dependency graph.
-func Normalize(input *opensplunkv1.KnowledgeObjectDefinition) (Normalized, error) {
+func Normalize(input *opensplunk.KnowledgeObjectDefinition) (Normalized, error) {
 	if input == nil {
 		return Normalized{}, invalidDefinitionRoot("definition", errors.New("is required"))
 	}
@@ -107,7 +107,7 @@ func Normalize(input *opensplunkv1.KnowledgeObjectDefinition) (Normalized, error
 		return Normalized{}, err
 	}
 
-	definition, ok := proto.Clone(input).(*opensplunkv1.KnowledgeObjectDefinition)
+	definition, ok := proto.Clone(input).(*opensplunk.KnowledgeObjectDefinition)
 	if !ok || definition == nil {
 		// This is an invariant/infrastructure failure, not candidate-authored
 		// invalidity which a validation endpoint may safely report in-band.
@@ -149,7 +149,7 @@ func Normalize(input *opensplunkv1.KnowledgeObjectDefinition) (Normalized, error
 // preflightInput rejects shapes that could otherwise amplify memory while
 // cloning or recursively walking a caller-constructed message. The transport
 // applies its own request bound, but this package also defends direct callers.
-func preflightInput(input *opensplunkv1.KnowledgeObjectDefinition) error {
+func preflightInput(input *opensplunk.KnowledgeObjectDefinition) error {
 	if selector := input.GetSelector(); selector != nil {
 		counts := [...]struct {
 			path  string
@@ -222,7 +222,7 @@ func DecodeCanonical(data, expectedDigest []byte) (Normalized, error) {
 		return Normalized{}, err
 	}
 
-	definition := &opensplunkv1.KnowledgeObjectDefinition{}
+	definition := &opensplunk.KnowledgeObjectDefinition{}
 	if err := (proto.UnmarshalOptions{DiscardUnknown: false, RecursionLimit: 32}).Unmarshal(data, definition); err != nil {
 		return Normalized{}, fmt.Errorf("%w: malformed protobuf", ErrNonCanonical)
 	}
@@ -248,12 +248,12 @@ func DecodeCanonical(data, expectedDigest []byte) (Normalized, error) {
 // metadata. Canonical top-level future metadata fields are retained.
 func DecodeCanonicalInactiveFutureBody(
 	data, expectedDigest []byte,
-	state opensplunkv1.KnowledgeObjectState,
+	state opensplunk.KnowledgeObjectState,
 ) (ForwardCompatible, error) {
 	switch state {
-	case opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
-		opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
-		opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DELETED:
+	case opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+		opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+		opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DELETED:
 	default:
 		return ForwardCompatible{}, fmt.Errorf(
 			"%w: lifecycle state %d cannot expose an unknown body",
@@ -270,7 +270,7 @@ func decodeCanonicalFutureBody(data, expectedDigest []byte) (ForwardCompatible, 
 		return ForwardCompatible{}, err
 	}
 
-	definition := &opensplunkv1.KnowledgeObjectDefinition{}
+	definition := &opensplunk.KnowledgeObjectDefinition{}
 	if err := (proto.UnmarshalOptions{DiscardUnknown: false, RecursionLimit: 32}).Unmarshal(data, definition); err != nil {
 		return ForwardCompatible{}, fmt.Errorf("%w: malformed protobuf", ErrNonCanonical)
 	}
@@ -295,7 +295,7 @@ func decodeCanonicalFutureBody(data, expectedDigest []byte) (ForwardCompatible, 
 	if !ok || known == nil {
 		return ForwardCompatible{}, fmt.Errorf("%w: definition could not be cloned", ErrNonCanonical)
 	}
-	canonical, ok := proto.Clone(known).(*opensplunkv1.KnowledgeObjectDefinition)
+	canonical, ok := proto.Clone(known).(*opensplunk.KnowledgeObjectDefinition)
 	if !ok || canonical == nil {
 		return ForwardCompatible{}, fmt.Errorf("%w: definition metadata could not be cloned", ErrNonCanonical)
 	}
@@ -317,9 +317,9 @@ func decodeCanonicalFutureBody(data, expectedDigest []byte) (ForwardCompatible, 
 }
 
 func cloneWithoutTopLevelUnknown(
-	definition *opensplunkv1.KnowledgeObjectDefinition,
-) (*opensplunkv1.KnowledgeObjectDefinition, bool) {
-	cloned, ok := proto.Clone(definition).(*opensplunkv1.KnowledgeObjectDefinition)
+	definition *opensplunk.KnowledgeObjectDefinition,
+) (*opensplunk.KnowledgeObjectDefinition, bool) {
+	cloned, ok := proto.Clone(definition).(*opensplunk.KnowledgeObjectDefinition)
 	if !ok || cloned == nil {
 		return nil, false
 	}
@@ -346,7 +346,7 @@ func verifyStoredBytes(data, expectedDigest []byte) ([sha256.Size]byte, error) {
 }
 
 func normalizeMetadata(
-	definition *opensplunkv1.KnowledgeObjectDefinition,
+	definition *opensplunk.KnowledgeObjectDefinition,
 ) (*string, *knowledge.Selector, error) {
 	appID, err := normalizeRequiredText(definition.GetAppId(), MaximumAppIDBytes)
 	if err != nil {
@@ -378,11 +378,11 @@ func normalizeMetadata(
 	return description, selector, nil
 }
 
-func normalizeSelector(input *opensplunkv1.KnowledgeSelector) (*knowledge.Selector, *opensplunkv1.KnowledgeSelector, error) {
+func normalizeSelector(input *opensplunk.KnowledgeSelector) (*knowledge.Selector, *opensplunk.KnowledgeSelector, error) {
 	dimensions := []struct {
 		path      string
 		dimension knowledge.Dimension
-		patterns  []*opensplunkv1.KnowledgeSelectorPattern
+		patterns  []*opensplunk.KnowledgeSelectorPattern
 	}{
 		{path: "selector.index_patterns", dimension: knowledge.DimensionIndex},
 		{path: "selector.host_patterns", dimension: knowledge.DimensionHost},
@@ -411,11 +411,11 @@ func normalizeSelector(input *opensplunkv1.KnowledgeSelector) (*knowledge.Select
 			if err != nil {
 				return nil, nil, invalid(path+".value", err)
 			}
-			expected := opensplunkv1.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_WILDCARD
+			expected := opensplunk.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_WILDCARD
 			if pattern.IsLiteral() {
-				expected = opensplunkv1.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT
+				expected = opensplunk.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT
 			}
-			if submitted.GetMatchKind() != opensplunkv1.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_UNSPECIFIED &&
+			if submitted.GetMatchKind() != opensplunk.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_UNSPECIFIED &&
 				submitted.GetMatchKind() != expected {
 				return nil, nil, invalid(path+".match_kind", errors.New("disagrees with normalized value"))
 			}
@@ -431,7 +431,7 @@ func normalizeSelector(input *opensplunkv1.KnowledgeSelector) (*knowledge.Select
 	if err != nil {
 		return nil, nil, invalid("selector", err)
 	}
-	canonical := &opensplunkv1.KnowledgeSelector{}
+	canonical := &opensplunk.KnowledgeSelector{}
 	canonical.IndexPatterns, err = canonicalPatterns(compiled, knowledge.DimensionIndex)
 	if err != nil {
 		return nil, nil, err
@@ -454,22 +454,22 @@ func normalizeSelector(input *opensplunkv1.KnowledgeSelector) (*knowledge.Select
 	return compiled, canonical, nil
 }
 
-func canonicalPatterns(selector *knowledge.Selector, dimension knowledge.Dimension) ([]*opensplunkv1.KnowledgeSelectorPattern, error) {
+func canonicalPatterns(selector *knowledge.Selector, dimension knowledge.Dimension) ([]*opensplunk.KnowledgeSelectorPattern, error) {
 	values := selector.Patterns(dimension)
 	if len(values) == 0 {
 		return nil, nil
 	}
-	patterns := make([]*opensplunkv1.KnowledgeSelectorPattern, 0, len(values))
+	patterns := make([]*opensplunk.KnowledgeSelectorPattern, 0, len(values))
 	for _, value := range values {
 		pattern, err := knowledge.NormalizePattern(value)
 		if err != nil {
 			return nil, fmt.Errorf("%w: selector canonicalization failed", ErrInvalidDefinition)
 		}
-		matchKind := opensplunkv1.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_WILDCARD
+		matchKind := opensplunk.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_WILDCARD
 		if pattern.IsLiteral() {
-			matchKind = opensplunkv1.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT
+			matchKind = opensplunk.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT
 		}
-		patterns = append(patterns, &opensplunkv1.KnowledgeSelectorPattern{
+		patterns = append(patterns, &opensplunk.KnowledgeSelectorPattern{
 			MatchKind: matchKind,
 			Value:     value,
 		})
@@ -477,38 +477,38 @@ func canonicalPatterns(selector *knowledge.Selector, dimension knowledge.Dimensi
 	return patterns, nil
 }
 
-func normalizeBody(definition *opensplunkv1.KnowledgeObjectDefinition) (opensplunkv1.KnowledgeObjectType, error) {
+func normalizeBody(definition *opensplunk.KnowledgeObjectDefinition) (opensplunk.KnowledgeObjectType, error) {
 	switch body := definition.GetBody().(type) {
-	case *opensplunkv1.KnowledgeObjectDefinition_FieldExtraction:
+	case *opensplunk.KnowledgeObjectDefinition_FieldExtraction:
 		if body == nil || body.FieldExtraction == nil {
 			return 0, invalid("field_extraction", errors.New("is required"))
 		}
 		if err := normalizeFieldExtraction(body.FieldExtraction); err != nil {
 			return 0, err
 		}
-		return opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION, nil
-	case *opensplunkv1.KnowledgeObjectDefinition_FieldAlias:
+		return opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION, nil
+	case *opensplunk.KnowledgeObjectDefinition_FieldAlias:
 		if body == nil || body.FieldAlias == nil {
 			return 0, invalid("field_alias", errors.New("is required"))
 		}
 		if err := normalizeFieldAlias(body.FieldAlias); err != nil {
 			return 0, err
 		}
-		return opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS, nil
-	case *opensplunkv1.KnowledgeObjectDefinition_CalculatedField:
+		return opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS, nil
+	case *opensplunk.KnowledgeObjectDefinition_CalculatedField:
 		if body == nil || body.CalculatedField == nil {
 			return 0, invalid("calculated_field", errors.New("is required"))
 		}
 		if err := normalizeCalculatedField(body.CalculatedField); err != nil {
 			return 0, err
 		}
-		return opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD, nil
+		return opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD, nil
 	default:
 		return 0, invalid("body", errors.New("is missing or unknown"))
 	}
 }
 
-func normalizeFieldExtraction(body *opensplunkv1.FieldExtractionDefinition) error {
+func normalizeFieldExtraction(body *opensplunk.FieldExtractionDefinition) error {
 	input := body.GetInputField()
 	if input == "" {
 		input = "_raw"
@@ -529,7 +529,7 @@ func normalizeFieldExtraction(body *opensplunkv1.FieldExtractionDefinition) erro
 	body.OverwriteBehavior = overwrite
 
 	switch extraction := body.GetExtraction().(type) {
-	case *opensplunkv1.FieldExtractionDefinition_Regex:
+	case *opensplunk.FieldExtractionDefinition_Regex:
 		if extraction == nil || extraction.Regex == nil {
 			return invalid("field_extraction.regex", errors.New("is required"))
 		}
@@ -553,7 +553,7 @@ func normalizeFieldExtraction(body *opensplunkv1.FieldExtractionDefinition) erro
 			seen[destination.String()] = struct{}{}
 			extraction.Regex.OutputFields[index] = destination.String()
 		}
-	case *opensplunkv1.FieldExtractionDefinition_Json:
+	case *opensplunk.FieldExtractionDefinition_Json:
 		if extraction == nil || extraction.Json == nil {
 			return invalid("field_extraction.json", errors.New("is required"))
 		}
@@ -573,7 +573,7 @@ func normalizeFieldExtraction(body *opensplunkv1.FieldExtractionDefinition) erro
 	return nil
 }
 
-func normalizeFieldAlias(body *opensplunkv1.FieldAliasDefinition) error {
+func normalizeFieldAlias(body *opensplunk.FieldAliasDefinition) error {
 	source, err := normalizeSourceField(body.GetSourceField())
 	if err != nil {
 		return invalid("field_alias.source_field", err)
@@ -595,7 +595,7 @@ func normalizeFieldAlias(body *opensplunkv1.FieldAliasDefinition) error {
 	return nil
 }
 
-func normalizeCalculatedField(body *opensplunkv1.CalculatedFieldDefinition) error {
+func normalizeCalculatedField(body *opensplunk.CalculatedFieldDefinition) error {
 	destination, err := knowledge.NormalizeFieldDestination(body.GetDestinationField())
 	if err != nil {
 		return invalid("calculated_field.destination_field", err)
@@ -614,12 +614,12 @@ func normalizeCalculatedField(body *opensplunkv1.CalculatedFieldDefinition) erro
 	return nil
 }
 
-func normalizeOverwrite(value opensplunkv1.KnowledgeOverwriteBehavior) (opensplunkv1.KnowledgeOverwriteBehavior, error) {
+func normalizeOverwrite(value opensplunk.KnowledgeOverwriteBehavior) (opensplunk.KnowledgeOverwriteBehavior, error) {
 	switch value {
-	case opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_UNSPECIFIED:
-		return opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING, nil
-	case opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
-		opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING:
+	case opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_UNSPECIFIED:
+		return opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING, nil
+	case opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+		opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING:
 		return value, nil
 	default:
 		return 0, errors.New("is unknown")
@@ -694,10 +694,10 @@ func validateText(value string, maximumBytes int) error {
 	return nil
 }
 
-func validSharingScope(scope opensplunkv1.SharingScope) bool {
-	return scope == opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE ||
-		scope == opensplunkv1.SharingScope_SHARING_SCOPE_APP ||
-		scope == opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL
+func validSharingScope(scope opensplunk.SharingScope) bool {
+	return scope == opensplunk.SharingScope_SHARING_SCOPE_PRIVATE ||
+		scope == opensplunk.SharingScope_SHARING_SCOPE_APP ||
+		scope == opensplunk.SharingScope_SHARING_SCOPE_GLOBAL
 }
 
 type definitionIssuePath struct {

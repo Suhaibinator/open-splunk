@@ -1,4 +1,4 @@
-// Package buildassets defines and verifies the deterministic release-asset
+// Package buildassets defines and verifies the deterministic build-asset
 // manifest shared by the frontend build and the embedded Go server.
 package buildassets
 
@@ -81,7 +81,6 @@ type MigrationDigest struct {
 // absolute paths, GOOS/GOARCH, and other ambient build-machine data.
 type Manifest struct {
 	FormatVersion        uint32            `json:"format_version"`
-	ApplicationVersion   string            `json:"application_version"`
 	SourceRevision       string            `json:"source_revision"`
 	UIBuildID            string            `json:"ui_build_id"`
 	UI                   UIComponentDigest `json:"ui"`
@@ -101,14 +100,13 @@ type treeInventory struct {
 }
 
 // Generate computes a manifest from a repository-rooted filesystem. Next's
-// build ID must already match the complete application identity, binding every
-// HTML/RSC reference to the same version and revision before hashes are
-// computed.
-func Generate(filesystem fs.FS, applicationVersion, sourceRevision string) (Manifest, error) {
+// build ID must already match the source identity, binding every HTML/RSC
+// reference to the same revision before hashes are computed.
+func Generate(filesystem fs.FS, sourceRevision string) (Manifest, error) {
 	if filesystem == nil {
 		return Manifest{}, errors.New("generate build manifest: filesystem is required")
 	}
-	identity, err := buildinfo.Parse(applicationVersion, sourceRevision)
+	identity, err := buildinfo.Parse(sourceRevision)
 	if err != nil {
 		return Manifest{}, fmt.Errorf("generate build manifest: %w", err)
 	}
@@ -126,10 +124,9 @@ func Generate(filesystem fs.FS, applicationVersion, sourceRevision string) (Mani
 	}
 	if buildID != expectedBuildID {
 		return Manifest{}, fmt.Errorf(
-			"generate build manifest: Next build ID %q does not match derived ID %q for application identity %q at %q",
+			"generate build manifest: Next build ID %q does not match derived ID %q for source revision %q",
 			buildID,
 			expectedBuildID,
-			applicationVersion,
 			sourceRevision,
 		)
 	}
@@ -185,10 +182,9 @@ func computeManifest(
 		return Manifest{}, fmt.Errorf("generate build manifest: inventory ClickHouse migrations: %w", err)
 	}
 	return Manifest{
-		FormatVersion:      ManifestFormatVersion,
-		ApplicationVersion: identity.ApplicationVersion,
-		SourceRevision:     identity.SourceRevision,
-		UIBuildID:          uiBuildID,
+		FormatVersion:  ManifestFormatVersion,
+		SourceRevision: identity.SourceRevision,
+		UIBuildID:      uiBuildID,
 		UI: UIComponentDigest{
 			SHA256:    ui.component.SHA256,
 			FileCount: ui.component.FileCount,
@@ -582,7 +578,7 @@ func validateManifestShape(manifest Manifest) (buildinfo.Identity, error) {
 			ManifestFormatVersion,
 		)
 	}
-	identity, err := buildinfo.Parse(manifest.ApplicationVersion, manifest.SourceRevision)
+	identity, err := buildinfo.Parse(manifest.SourceRevision)
 	if err != nil {
 		return buildinfo.Identity{}, err
 	}
@@ -591,7 +587,7 @@ func validateManifestShape(manifest Manifest) (buildinfo.Identity, error) {
 		return buildinfo.Identity{}, err
 	}
 	if manifest.UIBuildID != expectedBuildID {
-		return buildinfo.Identity{}, errors.New("UI build ID does not match the complete application identity's derived ID")
+		return buildinfo.Identity{}, errors.New("UI build ID does not match the source identity's derived ID")
 	}
 	if err := validateUIComponent(manifest.UI); err != nil {
 		return buildinfo.Identity{}, err

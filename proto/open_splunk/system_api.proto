@@ -1,0 +1,75 @@
+syntax = "proto3";
+
+package open_splunk;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+import "open_splunk/app.proto";
+import "open_splunk/common.proto";
+import "open_splunk/index.proto";
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk;opensplunk";
+
+enum ServerFeature {
+  SERVER_FEATURE_UNSPECIFIED = 0;
+  SERVER_FEATURE_SEARCH = 1;
+  SERVER_FEATURE_SEARCH_PREVIEW = 2;
+  SERVER_FEATURE_FIELD_DISCOVERY = 3;
+  SERVER_FEATURE_TIMELINE = 4;
+  SERVER_FEATURE_SAVED_SEARCHES = 5;
+  SERVER_FEATURE_SEARCH_HISTORY = 6;
+  SERVER_FEATURE_EXPORT_CSV = 7;
+  SERVER_FEATURE_EXPORT_JSON_LINES = 8;
+  SERVER_FEATURE_COLLECTOR_ADMIN = 9;
+  // The complete configured index-administration family is available:
+  // CRUD/state, statistics, field catalog, and physical deletion. This is
+  // capability discovery, not a dependency-health or caller-entitlement flag.
+  SERVER_FEATURE_INDEX_ADMIN = 10;
+  SERVER_FEATURE_APP_ADMIN = 11;
+  SERVER_FEATURE_PLAN_INSPECTION = 12;
+  SERVER_FEATURE_AUDIT_SEARCH = 13;
+  SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT = 14;
+  // The server emits this value only when the complete Tier-1 field-knowledge
+  // CRUD, validation, resolution, snapshot, execution, and browser family
+  // exists. Lookup management has its own additive capability below.
+  // Declaring the wire value alone does not advertise the feature.
+  SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS = 15;
+  // The complete configured HEC family is available: JSON, raw,
+  // acknowledgment, health, purpose isolation, and durable staging.
+  SERVER_FEATURE_HEC_INGESTION = 16;
+  // The complete immutable lookup family is available: asset and definition
+  // CRUD, admission resolution, snapshot retention, derived execution, and
+  // browser management. Field knowledge capability 15 is also required.
+  SERVER_FEATURE_LOOKUP_MANAGEMENT = 17;
+}
+
+message BrowserApiLimits {
+  uint32 maximum_page_size = 1;
+  uint32 maximum_preview_rows = 2;
+  uint32 maximum_websocket_subscriptions = 3;
+  uint64 maximum_websocket_frame_bytes = 4;
+  uint64 maximum_export_rows = 5;
+  uint64 maximum_export_bytes = 6;
+  google.protobuf.Duration default_search_timeout = 7;
+  google.protobuf.Duration search_result_retention = 8;
+  uint32 maximum_timeline_buckets = 9;
+  uint32 maximum_field_summary_values = 10;
+}
+
+// POST /api/system/bootstrap
+message GetSystemBootstrapRequest {
+  optional string preferred_app_id = 1;
+}
+
+message GetSystemBootstrapResponse {
+  reserved 1, 2, 3;
+  reserved "server_version", "api_version", "spl_compatibility_version";
+  string search_websocket_path = 4;
+  repeated ServerFeature features = 5;
+  BrowserApiLimits limits = 6;
+  repeated AppSummary apps = 7;
+  repeated IndexSummary indexes = 8;
+  optional string selected_app_id = 9;
+  google.protobuf.Timestamp server_time = 10;
+  BuildMetadata build = 11;
+}

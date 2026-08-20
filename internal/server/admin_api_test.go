@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"google.golang.org/protobuf/proto"
@@ -25,11 +25,11 @@ func TestIndexAdministrationLifecycleAgainstSQLite(t *testing.T) {
 
 	handler, _, _ := newAdminIntegrationHandler(t)
 	description := "production logs"
-	response := postProto(t, handler, "/api/v1/indexes/create", &opensplunkv1.CreateIndexRequest{Definition: &opensplunkv1.IndexDefinition{
+	response := postProto(t, handler, "/api/indexes/create", &opensplunk.CreateIndexRequest{Definition: &opensplunk.IndexDefinition{
 		Name: " GRADETHIS-PROD ", DisplayName: "GradeThis production", Description: &description,
 		RetentionPeriod: durationpb.New(30 * 24 * time.Hour),
-		IngestionAccess: opensplunkv1.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
-		SearchAccess:    opensplunkv1.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
+		IngestionAccess: opensplunk.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
+		SearchAccess:    opensplunk.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
 	}})
 	if response.Code != http.StatusOK {
 		t.Fatalf("create status = %d, body = %s", response.Code, response.Body.String())
@@ -37,7 +37,7 @@ func TestIndexAdministrationLifecycleAgainstSQLite(t *testing.T) {
 	if response.Header().Get("Cache-Control") != "no-store" || response.Header().Get("Pragma") != "no-cache" {
 		t.Fatalf("secret-safe cache headers = %v", response.Header())
 	}
-	var created opensplunkv1.CreateIndexResponse
+	var created opensplunk.CreateIndexResponse
 	unmarshalResponse(t, response, &created)
 	index := created.GetIndex()
 	if index.GetIndexId() == "" || index.GetVersion() != 1 || index.GetDefinition().GetName() != "gradethis-prod" ||
@@ -45,93 +45,93 @@ func TestIndexAdministrationLifecycleAgainstSQLite(t *testing.T) {
 		t.Fatalf("created index = %+v", index)
 	}
 
-	response = postProto(t, handler, "/api/v1/indexes/get", &opensplunkv1.GetIndexRequest{Selector: &opensplunkv1.IndexSelector{
-		Selector: &opensplunkv1.IndexSelector_IndexName{IndexName: "GRADETHIS-PROD"},
+	response = postProto(t, handler, "/api/indexes/get", &opensplunk.GetIndexRequest{Selector: &opensplunk.IndexSelector{
+		Selector: &opensplunk.IndexSelector_IndexName{IndexName: "GRADETHIS-PROD"},
 	}})
 	if response.Code != http.StatusOK {
 		t.Fatalf("get status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var got opensplunkv1.GetIndexResponse
+	var got opensplunk.GetIndexResponse
 	unmarshalResponse(t, response, &got)
 	if !proto.Equal(got.GetIndex(), index) {
 		t.Fatalf("get index = %+v, want %+v", got.GetIndex(), index)
 	}
 
 	updatedDescription := "retained application logs"
-	response = postProto(t, handler, "/api/v1/indexes/update", &opensplunkv1.UpdateIndexRequest{
-		Selector:        &opensplunkv1.IndexSelector{Selector: &opensplunkv1.IndexSelector_IndexId{IndexId: index.GetIndexId()}},
+	response = postProto(t, handler, "/api/indexes/update", &opensplunk.UpdateIndexRequest{
+		Selector:        &opensplunk.IndexSelector{Selector: &opensplunk.IndexSelector_IndexId{IndexId: index.GetIndexId()}},
 		ExpectedVersion: index.GetVersion(),
-		Definition:      &opensplunkv1.IndexDefinition{Description: &updatedDescription},
+		Definition:      &opensplunk.IndexDefinition{Description: &updatedDescription},
 		UpdateMask:      &fieldmaskpb.FieldMask{Paths: []string{"description"}},
 	})
 	if response.Code != http.StatusOK {
 		t.Fatalf("update status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var updated opensplunkv1.UpdateIndexResponse
+	var updated opensplunk.UpdateIndexResponse
 	unmarshalResponse(t, response, &updated)
 	if updated.GetIndex().GetVersion() != 2 || updated.GetIndex().GetDefinition().GetDescription() != updatedDescription ||
 		updated.GetIndex().GetDefinition().GetName() != "gradethis-prod" ||
-		updated.GetIndex().GetDefinition().GetIngestionAccess() != opensplunkv1.IndexAccessState_INDEX_ACCESS_STATE_ENABLED {
+		updated.GetIndex().GetDefinition().GetIngestionAccess() != opensplunk.IndexAccessState_INDEX_ACCESS_STATE_ENABLED {
 		t.Fatalf("updated index = %+v", updated.GetIndex())
 	}
 
-	response = postProto(t, handler, "/api/v1/indexes/update", &opensplunkv1.UpdateIndexRequest{
-		Selector:        &opensplunkv1.IndexSelector{Selector: &opensplunkv1.IndexSelector_IndexId{IndexId: index.GetIndexId()}},
+	response = postProto(t, handler, "/api/indexes/update", &opensplunk.UpdateIndexRequest{
+		Selector:        &opensplunk.IndexSelector{Selector: &opensplunk.IndexSelector_IndexId{IndexId: index.GetIndexId()}},
 		ExpectedVersion: 1,
-		Definition:      &opensplunkv1.IndexDefinition{Description: &description},
+		Definition:      &opensplunk.IndexDefinition{Description: &description},
 		UpdateMask:      &fieldmaskpb.FieldMask{Paths: []string{"description"}},
 	})
 	if response.Code != http.StatusConflict {
 		t.Fatalf("stale update status = %d, body = %s", response.Code, response.Body.String())
 	}
 
-	response = postProto(t, handler, "/api/v1/indexes/state/set", &opensplunkv1.SetIndexStateRequest{
-		Selector:        &opensplunkv1.IndexSelector{Selector: &opensplunkv1.IndexSelector_IndexId{IndexId: index.GetIndexId()}},
+	response = postProto(t, handler, "/api/indexes/state/set", &opensplunk.SetIndexStateRequest{
+		Selector:        &opensplunk.IndexSelector{Selector: &opensplunk.IndexSelector_IndexId{IndexId: index.GetIndexId()}},
 		ExpectedVersion: 2,
-		State:           opensplunkv1.IndexState_INDEX_STATE_ARCHIVED,
+		State:           opensplunk.IndexState_INDEX_STATE_ARCHIVED,
 	})
 	if response.Code != http.StatusOK {
 		t.Fatalf("state status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var state opensplunkv1.SetIndexStateResponse
+	var state opensplunk.SetIndexStateResponse
 	unmarshalResponse(t, response, &state)
-	if state.GetIndex().GetVersion() != 3 || state.GetIndex().GetState() != opensplunkv1.IndexState_INDEX_STATE_ARCHIVED {
+	if state.GetIndex().GetVersion() != 3 || state.GetIndex().GetState() != opensplunk.IndexState_INDEX_STATE_ARCHIVED {
 		t.Fatalf("state response = %+v", state.GetIndex())
 	}
 
-	response = postProto(t, handler, "/api/v1/indexes/delete", &opensplunkv1.DeleteIndexRequest{
-		Selector: &opensplunkv1.IndexSelector{
-			Selector: &opensplunkv1.IndexSelector_IndexName{IndexName: "GRADETHIS-PROD"},
+	response = postProto(t, handler, "/api/indexes/delete", &opensplunk.DeleteIndexRequest{
+		Selector: &opensplunk.IndexSelector{
+			Selector: &opensplunk.IndexSelector_IndexName{IndexName: "GRADETHIS-PROD"},
 		},
 		ExpectedVersion:  3,
-		DataDeletionMode: opensplunkv1.IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_KEEP_DATA,
+		DataDeletionMode: opensplunk.IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_KEEP_DATA,
 		ConfirmationName: "gradethis-prod",
 	})
 	if response.Code != http.StatusOK {
 		t.Fatalf("delete status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var deleted opensplunkv1.DeleteIndexResponse
+	var deleted opensplunk.DeleteIndexResponse
 	unmarshalResponse(t, response, &deleted)
 	if deleted.GetIndexId() != index.GetIndexId() || deleted.DeletionOperationId != nil {
 		t.Fatalf("delete response = %+v", &deleted)
 	}
 
-	response = postProto(t, handler, "/api/v1/indexes/get", &opensplunkv1.GetIndexRequest{Selector: &opensplunkv1.IndexSelector{
-		Selector: &opensplunkv1.IndexSelector_IndexId{IndexId: index.GetIndexId()},
+	response = postProto(t, handler, "/api/indexes/get", &opensplunk.GetIndexRequest{Selector: &opensplunk.IndexSelector{
+		Selector: &opensplunk.IndexSelector_IndexId{IndexId: index.GetIndexId()},
 	}})
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("deleted get status = %d, body = %s", response.Code, response.Body.String())
 	}
-	response = postProto(t, handler, "/api/v1/indexes/list", &opensplunkv1.ListIndexesRequest{})
+	response = postProto(t, handler, "/api/indexes/list", &opensplunk.ListIndexesRequest{})
 	if response.Code != http.StatusOK {
 		t.Fatalf("post-delete list status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var listed opensplunkv1.ListIndexesResponse
+	var listed opensplunk.ListIndexesResponse
 	unmarshalResponse(t, response, &listed)
 	if len(listed.GetIndexes()) != 0 {
 		t.Fatalf("post-delete indexes = %+v", listed.GetIndexes())
 	}
-	response = postProto(t, handler, "/api/v1/indexes/create", &opensplunkv1.CreateIndexRequest{
+	response = postProto(t, handler, "/api/indexes/create", &opensplunk.CreateIndexRequest{
 		Definition: adminTestIndexProto("gradethis-prod"),
 	})
 	if response.Code != http.StatusConflict {
@@ -150,13 +150,13 @@ func TestAdministrativeListPaginationIsBoundAndTamperSafe(t *testing.T) {
 		}
 	}
 	pageSize := uint32(1)
-	response := postProto(t, handler, "/api/v1/indexes/list", &opensplunkv1.ListIndexesRequest{
-		Page: &opensplunkv1.PageRequest{PageSize: &pageSize, IncludeTotalSize: true},
+	response := postProto(t, handler, "/api/indexes/list", &opensplunk.ListIndexesRequest{
+		Page: &opensplunk.PageRequest{PageSize: &pageSize, IncludeTotalSize: true},
 	})
 	if response.Code != http.StatusOK {
 		t.Fatalf("first list status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var first opensplunkv1.ListIndexesResponse
+	var first opensplunk.ListIndexesResponse
 	unmarshalResponse(t, response, &first)
 	if len(first.GetIndexes()) != 1 || first.GetIndexes()[0].GetIndex().GetDefinition().GetName() != "alpha" ||
 		first.GetPage().GetTotalSize() != 3 || !first.GetPage().GetTotalSizeExact() || first.GetPage().GetNextPageToken() == "" {
@@ -169,28 +169,28 @@ func TestAdministrativeListPaginationIsBoundAndTamperSafe(t *testing.T) {
 		replacement = "B"
 	}
 	tampered := token[:len(token)-1] + replacement
-	response = postProto(t, handler, "/api/v1/indexes/list", &opensplunkv1.ListIndexesRequest{
-		Page: &opensplunkv1.PageRequest{PageSize: &pageSize, PageToken: &tampered, IncludeTotalSize: true},
+	response = postProto(t, handler, "/api/indexes/list", &opensplunk.ListIndexesRequest{
+		Page: &opensplunk.PageRequest{PageSize: &pageSize, PageToken: &tampered, IncludeTotalSize: true},
 	})
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("tampered cursor status = %d, body = %s", response.Code, response.Body.String())
 	}
 
 	filter := "bravo"
-	response = postProto(t, handler, "/api/v1/indexes/list", &opensplunkv1.ListIndexesRequest{
-		Page: &opensplunkv1.PageRequest{PageSize: &pageSize, PageToken: &token, IncludeTotalSize: true}, TextFilter: &filter,
+	response = postProto(t, handler, "/api/indexes/list", &opensplunk.ListIndexesRequest{
+		Page: &opensplunk.PageRequest{PageSize: &pageSize, PageToken: &token, IncludeTotalSize: true}, TextFilter: &filter,
 	})
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("cross-filter cursor status = %d, body = %s", response.Code, response.Body.String())
 	}
 
-	response = postProto(t, handler, "/api/v1/indexes/list", &opensplunkv1.ListIndexesRequest{
-		Page: &opensplunkv1.PageRequest{PageSize: &pageSize, PageToken: &token, IncludeTotalSize: true},
+	response = postProto(t, handler, "/api/indexes/list", &opensplunk.ListIndexesRequest{
+		Page: &opensplunk.PageRequest{PageSize: &pageSize, PageToken: &token, IncludeTotalSize: true},
 	})
 	if response.Code != http.StatusOK {
 		t.Fatalf("second list status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var second opensplunkv1.ListIndexesResponse
+	var second opensplunk.ListIndexesResponse
 	unmarshalResponse(t, response, &second)
 	if len(second.GetIndexes()) != 1 || second.GetIndexes()[0].GetIndex().GetDefinition().GetName() != "bravo" {
 		t.Fatalf("second page = %+v", &second)
@@ -199,8 +199,8 @@ func TestAdministrativeListPaginationIsBoundAndTamperSafe(t *testing.T) {
 	if _, err := db.CreateIndex(ctx, adminTestIndex("delta")); err != nil {
 		t.Fatalf("CreateIndex(delta): %v", err)
 	}
-	response = postProto(t, handler, "/api/v1/indexes/list", &opensplunkv1.ListIndexesRequest{
-		Page: &opensplunkv1.PageRequest{PageSize: &pageSize, PageToken: &token, IncludeTotalSize: true},
+	response = postProto(t, handler, "/api/indexes/list", &opensplunk.ListIndexesRequest{
+		Page: &opensplunk.PageRequest{PageSize: &pageSize, PageToken: &token, IncludeTotalSize: true},
 	})
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("stale cursor status = %d, body = %s", response.Code, response.Body.String())
@@ -234,10 +234,10 @@ func TestIngestionTokenLifecycleReturnsPlaintextOnlyAtCreation(t *testing.T) {
 	description := "application collector"
 	boundCollectorID := "collector-production"
 	expires := timestamppb.New(time.Now().UTC().Add(24 * time.Hour))
-	response := postProto(t, handler, "/api/v1/ingestion-tokens/create", &opensplunkv1.CreateIngestionTokenRequest{
-		Definition: &opensplunkv1.IngestionTokenDefinition{
+	response := postProto(t, handler, "/api/ingestion-tokens/create", &opensplunk.CreateIngestionTokenRequest{
+		Definition: &opensplunk.IngestionTokenDefinition{
 			Name: "production", Description: &description,
-			Constraints: &opensplunkv1.IngestionTokenConstraints{
+			Constraints: &opensplunk.IngestionTokenConstraints{
 				AllowedIndexNames: []string{"main"}, BoundCollectorId: &boundCollectorID,
 			},
 			ExpiresAt: expires,
@@ -249,7 +249,7 @@ func TestIngestionTokenLifecycleReturnsPlaintextOnlyAtCreation(t *testing.T) {
 	if response.Header().Get("Cache-Control") != "no-store" || response.Header().Get("Pragma") != "no-cache" {
 		t.Fatalf("token response cache headers = %v", response.Header())
 	}
-	var created opensplunkv1.CreateIngestionTokenResponse
+	var created opensplunk.CreateIngestionTokenResponse
 	unmarshalResponse(t, response, &created)
 	plaintext := created.GetPlaintextToken()
 	token := created.GetIngestionToken()
@@ -262,30 +262,30 @@ func TestIngestionTokenLifecycleReturnsPlaintextOnlyAtCreation(t *testing.T) {
 		t.Fatalf("Authorize(main): %v", err)
 	}
 
-	response = postProto(t, handler, "/api/v1/ingestion-tokens/get", &opensplunkv1.GetIngestionTokenRequest{IngestionTokenId: token.GetIngestionTokenId()})
+	response = postProto(t, handler, "/api/ingestion-tokens/get", &opensplunk.GetIngestionTokenRequest{IngestionTokenId: token.GetIngestionTokenId()})
 	if response.Code != http.StatusOK || bytes.Contains(response.Body.Bytes(), []byte(plaintext)) {
 		t.Fatalf("get token response leaked plaintext: status %d body %x", response.Code, response.Body.Bytes())
 	}
-	var got opensplunkv1.GetIngestionTokenResponse
+	var got opensplunk.GetIngestionTokenResponse
 	unmarshalResponse(t, response, &got)
 	if got.GetIngestionToken().GetTokenPrefix() != token.GetTokenPrefix() ||
 		got.GetIngestionToken().GetConstraints().GetBoundCollectorId() != boundCollectorID {
 		t.Fatalf("get token = %+v", got.GetIngestionToken())
 	}
 
-	response = postProto(t, handler, "/api/v1/ingestion-tokens/update", &opensplunkv1.UpdateIngestionTokenRequest{
+	response = postProto(t, handler, "/api/ingestion-tokens/update", &opensplunk.UpdateIngestionTokenRequest{
 		IngestionTokenId: token.GetIngestionTokenId(), ExpectedVersion: 1,
-		Definition: &opensplunkv1.IngestionTokenDefinition{Constraints: &opensplunkv1.IngestionTokenConstraints{AllowedIndexNames: []string{"audit"}}},
+		Definition: &opensplunk.IngestionTokenDefinition{Constraints: &opensplunk.IngestionTokenConstraints{AllowedIndexNames: []string{"audit"}}},
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"constraints"}},
 	})
 	if response.Code != http.StatusOK {
 		t.Fatalf("update token status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var updated opensplunkv1.UpdateIngestionTokenResponse
+	var updated opensplunk.UpdateIngestionTokenResponse
 	unmarshalResponse(t, response, &updated)
 	if updated.GetIngestionToken().GetVersion() != 2 || !proto.Equal(
 		updated.GetIngestionToken().GetConstraints(),
-		&opensplunkv1.IngestionTokenConstraints{
+		&opensplunk.IngestionTokenConstraints{
 			AllowedIndexNames: []string{"audit"}, BoundCollectorId: &boundCollectorID,
 		},
 	) {
@@ -298,9 +298,9 @@ func TestIngestionTokenLifecycleReturnsPlaintextOnlyAtCreation(t *testing.T) {
 		t.Fatalf("Authorize(new scope): %v", err)
 	}
 
-	response = postProto(t, handler, "/api/v1/ingestion-tokens/update", &opensplunkv1.UpdateIngestionTokenRequest{
+	response = postProto(t, handler, "/api/ingestion-tokens/update", &opensplunk.UpdateIngestionTokenRequest{
 		IngestionTokenId: token.GetIngestionTokenId(), ExpectedVersion: 2,
-		Definition: &opensplunkv1.IngestionTokenDefinition{Constraints: &opensplunkv1.IngestionTokenConstraints{
+		Definition: &opensplunk.IngestionTokenDefinition{Constraints: &opensplunk.IngestionTokenConstraints{
 			BoundCollectorId: &boundCollectorID,
 		}},
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"constraints.bound_collector_id"}},
@@ -308,7 +308,7 @@ func TestIngestionTokenLifecycleReturnsPlaintextOnlyAtCreation(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("same-binding update status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var rebound opensplunkv1.UpdateIngestionTokenResponse
+	var rebound opensplunk.UpdateIngestionTokenResponse
 	unmarshalResponse(t, response, &rebound)
 	if rebound.GetIngestionToken().GetVersion() != 3 ||
 		rebound.GetIngestionToken().GetConstraints().GetBoundCollectorId() != boundCollectorID ||
@@ -318,9 +318,9 @@ func TestIngestionTokenLifecycleReturnsPlaintextOnlyAtCreation(t *testing.T) {
 	}
 
 	differentCollectorID := "collector-other"
-	response = postProto(t, handler, "/api/v1/ingestion-tokens/update", &opensplunkv1.UpdateIngestionTokenRequest{
+	response = postProto(t, handler, "/api/ingestion-tokens/update", &opensplunk.UpdateIngestionTokenRequest{
 		IngestionTokenId: token.GetIngestionTokenId(), ExpectedVersion: 3,
-		Definition: &opensplunkv1.IngestionTokenDefinition{Constraints: &opensplunkv1.IngestionTokenConstraints{
+		Definition: &opensplunk.IngestionTokenDefinition{Constraints: &opensplunk.IngestionTokenConstraints{
 			BoundCollectorId: &differentCollectorID,
 		}},
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"constraints.bound_collector_id"}},
@@ -331,11 +331,11 @@ func TestIngestionTokenLifecycleReturnsPlaintextOnlyAtCreation(t *testing.T) {
 		t.Fatalf("immutable-binding response = status %d body %q", response.Code, response.Body.String())
 	}
 
-	response = postProto(t, handler, "/api/v1/ingestion-tokens/list", &opensplunkv1.ListIngestionTokensRequest{})
+	response = postProto(t, handler, "/api/ingestion-tokens/list", &opensplunk.ListIngestionTokensRequest{})
 	if response.Code != http.StatusOK || bytes.Contains(response.Body.Bytes(), []byte(plaintext)) {
 		t.Fatalf("list token response leaked plaintext: status %d body %x", response.Code, response.Body.Bytes())
 	}
-	var listed opensplunkv1.ListIngestionTokensResponse
+	var listed opensplunk.ListIngestionTokensResponse
 	unmarshalResponse(t, response, &listed)
 	if len(listed.GetIngestionTokens()) != 1 ||
 		listed.GetIngestionTokens()[0].GetIngestionTokenId() != token.GetIngestionTokenId() ||
@@ -343,15 +343,15 @@ func TestIngestionTokenLifecycleReturnsPlaintextOnlyAtCreation(t *testing.T) {
 		t.Fatalf("listed tokens = %+v", listed.GetIngestionTokens())
 	}
 
-	response = postProto(t, handler, "/api/v1/ingestion-tokens/revoke", &opensplunkv1.RevokeIngestionTokenRequest{
+	response = postProto(t, handler, "/api/ingestion-tokens/revoke", &opensplunk.RevokeIngestionTokenRequest{
 		IngestionTokenId: token.GetIngestionTokenId(), ExpectedVersion: 3,
 	})
 	if response.Code != http.StatusOK {
 		t.Fatalf("revoke token status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var revoked opensplunkv1.RevokeIngestionTokenResponse
+	var revoked opensplunk.RevokeIngestionTokenResponse
 	unmarshalResponse(t, response, &revoked)
-	if revoked.GetIngestionToken().GetVersion() != 4 || revoked.GetIngestionToken().GetState() != opensplunkv1.IngestionTokenState_INGESTION_TOKEN_STATE_REVOKED ||
+	if revoked.GetIngestionToken().GetVersion() != 4 || revoked.GetIngestionToken().GetState() != opensplunk.IngestionTokenState_INGESTION_TOKEN_STATE_REVOKED ||
 		revoked.GetIngestionToken().GetRevokedAt() == nil {
 		t.Fatalf("revoked token = %+v", revoked.GetIngestionToken())
 	}
@@ -389,17 +389,17 @@ func TestIngestionTokenListFiltersSortsAndReportsExactTotals(t *testing.T) {
 	indexFilter := "AUDIT"
 	textFilter := "beta"
 	pageSize := uint32(1)
-	response := postProto(t, handler, "/api/v1/ingestion-tokens/list", &opensplunkv1.ListIngestionTokensRequest{
-		Page:            &opensplunkv1.PageRequest{PageSize: &pageSize, IncludeTotalSize: true},
-		StateFilters:    []opensplunkv1.IngestionTokenState{opensplunkv1.IngestionTokenState_INGESTION_TOKEN_STATE_ACTIVE},
+	response := postProto(t, handler, "/api/ingestion-tokens/list", &opensplunk.ListIngestionTokensRequest{
+		Page:            &opensplunk.PageRequest{PageSize: &pageSize, IncludeTotalSize: true},
+		StateFilters:    []opensplunk.IngestionTokenState{opensplunk.IngestionTokenState_INGESTION_TOKEN_STATE_ACTIVE},
 		IndexNameFilter: &indexFilter, TextFilter: &textFilter,
-		SortBy:        opensplunkv1.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_NAME,
-		SortDirection: opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING,
+		SortBy:        opensplunk.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_NAME,
+		SortDirection: opensplunk.SortDirection_SORT_DIRECTION_DESCENDING,
 	})
 	if response.Code != http.StatusOK {
 		t.Fatalf("list token status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var listed opensplunkv1.ListIngestionTokensResponse
+	var listed opensplunk.ListIngestionTokensResponse
 	unmarshalResponse(t, response, &listed)
 	if len(listed.GetIngestionTokens()) != 1 || listed.GetIngestionTokens()[0].GetName() != "Beta audit" ||
 		listed.GetPage().GetTotalSize() != 1 || !listed.GetPage().GetTotalSizeExact() || listed.GetPage().GetNextPageToken() != "" {
@@ -463,31 +463,31 @@ func TestPrunedIngestionTokenTombstonesDisappearFromAdministrativeCatalog(t *tes
 	indexFilter := "AUDIT"
 	textFilter := "RETENTION FIXTURE"
 	pageSize := uint32(1)
-	states := []opensplunkv1.IngestionTokenState{
-		opensplunkv1.IngestionTokenState_INGESTION_TOKEN_STATE_REVOKED,
+	states := []opensplunk.IngestionTokenState{
+		opensplunk.IngestionTokenState_INGESTION_TOKEN_STATE_REVOKED,
 	}
-	listRequest := func(pageToken string) *opensplunkv1.ListIngestionTokensRequest {
-		page := &opensplunkv1.PageRequest{
+	listRequest := func(pageToken string) *opensplunk.ListIngestionTokensRequest {
+		page := &opensplunk.PageRequest{
 			PageSize:         &pageSize,
 			IncludeTotalSize: true,
 		}
 		if pageToken != "" {
 			page.PageToken = &pageToken
 		}
-		return &opensplunkv1.ListIngestionTokensRequest{
+		return &opensplunk.ListIngestionTokensRequest{
 			Page:            page,
 			StateFilters:    states,
 			IndexNameFilter: &indexFilter,
 			TextFilter:      &textFilter,
-			SortBy:          opensplunkv1.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_NAME,
-			SortDirection:   opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING,
+			SortBy:          opensplunk.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_NAME,
+			SortDirection:   opensplunk.SortDirection_SORT_DIRECTION_ASCENDING,
 		}
 	}
 
 	response := postProto(
 		t,
 		handler,
-		"/api/v1/ingestion-tokens/list",
+		"/api/ingestion-tokens/list",
 		listRequest(""),
 	)
 	if response.Code != http.StatusOK {
@@ -497,7 +497,7 @@ func TestPrunedIngestionTokenTombstonesDisappearFromAdministrativeCatalog(t *tes
 			response.Body.String(),
 		)
 	}
-	var before opensplunkv1.ListIngestionTokensResponse
+	var before opensplunk.ListIngestionTokensResponse
 	unmarshalResponse(t, response, &before)
 	if len(before.GetIngestionTokens()) != 1 ||
 		before.GetIngestionTokens()[0].GetIngestionTokenId() !=
@@ -528,19 +528,19 @@ func TestPrunedIngestionTokenTombstonesDisappearFromAdministrativeCatalog(t *tes
 		response = postProto(
 			t,
 			handler,
-			"/api/v1/ingestion-tokens/get",
-			&opensplunkv1.GetIngestionTokenRequest{
+			"/api/ingestion-tokens/get",
+			&opensplunk.GetIngestionTokenRequest{
 				IngestionTokenId: matching[tokenIndex].Token.ID,
 			},
 		)
 		switch response.Code {
 		case http.StatusOK:
-			var retained opensplunkv1.GetIngestionTokenResponse
+			var retained opensplunk.GetIngestionTokenResponse
 			unmarshalResponse(t, response, &retained)
 			if retained.GetIngestionToken().GetIngestionTokenId() !=
 				matching[tokenIndex].Token.ID ||
 				retained.GetIngestionToken().GetState() !=
-					opensplunkv1.IngestionTokenState_INGESTION_TOKEN_STATE_REVOKED {
+					opensplunk.IngestionTokenState_INGESTION_TOKEN_STATE_REVOKED {
 				t.Fatalf(
 					"retained matching token = %+v",
 					retained.GetIngestionToken(),
@@ -569,8 +569,8 @@ func TestPrunedIngestionTokenTombstonesDisappearFromAdministrativeCatalog(t *tes
 	response = postProto(
 		t,
 		handler,
-		"/api/v1/ingestion-tokens/get",
-		&opensplunkv1.GetIngestionTokenRequest{
+		"/api/ingestion-tokens/get",
+		&opensplunk.GetIngestionTokenRequest{
 			IngestionTokenId: trigger.Token.ID,
 		},
 	)
@@ -581,12 +581,12 @@ func TestPrunedIngestionTokenTombstonesDisappearFromAdministrativeCatalog(t *tes
 			response.Body.String(),
 		)
 	}
-	var retainedTrigger opensplunkv1.GetIngestionTokenResponse
+	var retainedTrigger opensplunk.GetIngestionTokenResponse
 	unmarshalResponse(t, response, &retainedTrigger)
 	if retainedTrigger.GetIngestionToken().GetIngestionTokenId() !=
 		trigger.Token.ID ||
 		retainedTrigger.GetIngestionToken().GetState() !=
-			opensplunkv1.IngestionTokenState_INGESTION_TOKEN_STATE_REVOKED {
+			opensplunk.IngestionTokenState_INGESTION_TOKEN_STATE_REVOKED {
 		t.Fatalf(
 			"retained trigger token = %+v",
 			retainedTrigger.GetIngestionToken(),
@@ -600,7 +600,7 @@ func TestPrunedIngestionTokenTombstonesDisappearFromAdministrativeCatalog(t *tes
 	response = postProto(
 		t,
 		handler,
-		"/api/v1/ingestion-tokens/list",
+		"/api/ingestion-tokens/list",
 		listRequest(staleCursor),
 	)
 	if response.Code != http.StatusBadRequest {
@@ -617,7 +617,7 @@ func TestPrunedIngestionTokenTombstonesDisappearFromAdministrativeCatalog(t *tes
 		response = postProto(
 			t,
 			handler,
-			"/api/v1/ingestion-tokens/list",
+			"/api/ingestion-tokens/list",
 			listRequest(cursor),
 		)
 		if response.Code != http.StatusOK {
@@ -628,7 +628,7 @@ func TestPrunedIngestionTokenTombstonesDisappearFromAdministrativeCatalog(t *tes
 				response.Body.String(),
 			)
 		}
-		var page opensplunkv1.ListIngestionTokensResponse
+		var page opensplunk.ListIngestionTokensResponse
 		unmarshalResponse(t, response, &page)
 		if len(page.GetIngestionTokens()) != 1 ||
 			page.GetIngestionTokens()[0].GetIngestionTokenId() !=
@@ -650,16 +650,16 @@ func TestPrunedIngestionTokenTombstonesDisappearFromAdministrativeCatalog(t *tes
 	response = postProto(
 		t,
 		handler,
-		"/api/v1/ingestion-tokens/list",
-		&opensplunkv1.ListIngestionTokensRequest{
-			Page: &opensplunkv1.PageRequest{
+		"/api/ingestion-tokens/list",
+		&opensplunk.ListIngestionTokensRequest{
+			Page: &opensplunk.PageRequest{
 				IncludeTotalSize: true,
 			},
 			StateFilters:    states,
 			IndexNameFilter: &indexFilter,
 			TextFilter:      &textFilter,
-			SortBy:          opensplunkv1.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_NAME,
-			SortDirection:   opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING,
+			SortBy:          opensplunk.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_NAME,
+			SortDirection:   opensplunk.SortDirection_SORT_DIRECTION_DESCENDING,
 		},
 	)
 	if response.Code != http.StatusOK {
@@ -669,7 +669,7 @@ func TestPrunedIngestionTokenTombstonesDisappearFromAdministrativeCatalog(t *tes
 			response.Body.String(),
 		)
 	}
-	var revokedOnly opensplunkv1.ListIngestionTokensResponse
+	var revokedOnly opensplunk.ListIngestionTokensResponse
 	unmarshalResponse(t, response, &revokedOnly)
 	if len(revokedOnly.GetIngestionTokens()) != len(retainedMatching) ||
 		revokedOnly.GetPage().GetTotalSize() != uint64(len(retainedMatching)) ||
@@ -721,10 +721,10 @@ func TestAdministrativeIngestionTokenCapacityIsSanitizedAndRecoverable(
 	first := createDirect("first capacity fixture", "collector-first")
 	second := createDirect("second capacity fixture", "collector-second")
 
-	request := &opensplunkv1.CreateIngestionTokenRequest{
-		Definition: &opensplunkv1.IngestionTokenDefinition{
+	request := &opensplunk.CreateIngestionTokenRequest{
+		Definition: &opensplunk.IngestionTokenDefinition{
 			Name: "replacement capacity fixture",
-			Constraints: &opensplunkv1.IngestionTokenConstraints{
+			Constraints: &opensplunk.IngestionTokenConstraints{
 				AllowedIndexNames: []string{"audit"},
 				BoundCollectorId:  new("collector-replacement"),
 			},
@@ -733,7 +733,7 @@ func TestAdministrativeIngestionTokenCapacityIsSanitizedAndRecoverable(
 	response := postProto(
 		t,
 		handler,
-		"/api/v1/ingestion-tokens/create",
+		"/api/ingestion-tokens/create",
 		request,
 	)
 	if response.Code != http.StatusTooManyRequests {
@@ -778,7 +778,7 @@ func TestAdministrativeIngestionTokenCapacityIsSanitizedAndRecoverable(
 	response = postProto(
 		t,
 		handler,
-		"/api/v1/ingestion-tokens/create",
+		"/api/ingestion-tokens/create",
 		request,
 	)
 	if response.Code != http.StatusOK {
@@ -788,7 +788,7 @@ func TestAdministrativeIngestionTokenCapacityIsSanitizedAndRecoverable(
 			response.Body.String(),
 		)
 	}
-	var created opensplunkv1.CreateIngestionTokenResponse
+	var created opensplunk.CreateIngestionTokenResponse
 	unmarshalResponse(t, response, &created)
 	if created.GetIngestionToken().GetName() !=
 		request.GetDefinition().GetName() ||
@@ -862,8 +862,8 @@ func TestAdministrativeRevokePruneFailureIsSanitizedAndRollsBack(
 	response := postProto(
 		t,
 		handler,
-		"/api/v1/ingestion-tokens/revoke",
-		&opensplunkv1.RevokeIngestionTokenRequest{
+		"/api/ingestion-tokens/revoke",
+		&opensplunk.RevokeIngestionTokenRequest{
 			IngestionTokenId: current.Token.ID,
 			ExpectedVersion:  current.Token.Version,
 		},
@@ -980,112 +980,112 @@ func TestAdministrativeValidationAndStatusMapping(t *testing.T) {
 		status  int
 	}{
 		{
-			name: "missing index", path: "/api/v1/indexes/get",
-			request: &opensplunkv1.GetIndexRequest{Selector: &opensplunkv1.IndexSelector{Selector: &opensplunkv1.IndexSelector_IndexName{IndexName: "missing"}}},
+			name: "missing index", path: "/api/indexes/get",
+			request: &opensplunk.GetIndexRequest{Selector: &opensplunk.IndexSelector{Selector: &opensplunk.IndexSelector_IndexName{IndexName: "missing"}}},
 			status:  http.StatusNotFound,
 		},
 		{
-			name: "unspecified access", path: "/api/v1/indexes/create",
-			request: &opensplunkv1.CreateIndexRequest{Definition: &opensplunkv1.IndexDefinition{Name: "invalid"}},
+			name: "unspecified access", path: "/api/indexes/create",
+			request: &opensplunk.CreateIndexRequest{Definition: &opensplunk.IndexDefinition{Name: "invalid"}},
 			status:  http.StatusBadRequest,
 		},
 		{
-			name: "duplicate index", path: "/api/v1/indexes/create",
-			request: &opensplunkv1.CreateIndexRequest{Definition: adminTestIndexProto("main")},
+			name: "duplicate index", path: "/api/indexes/create",
+			request: &opensplunk.CreateIndexRequest{Definition: adminTestIndexProto("main")},
 			status:  http.StatusConflict,
 		},
 		{
-			name: "unconfigured stats", path: "/api/v1/indexes/list",
-			request: &opensplunkv1.ListIndexesRequest{IncludeStats: true},
+			name: "unconfigured stats", path: "/api/indexes/list",
+			request: &opensplunk.ListIndexesRequest{IncludeStats: true},
 			status:  http.StatusServiceUnavailable,
 		},
 		{
-			name: "present empty index idempotency key", path: "/api/v1/indexes/create",
-			request: &opensplunkv1.CreateIndexRequest{
+			name: "present empty index idempotency key", path: "/api/indexes/create",
+			request: &opensplunk.CreateIndexRequest{
 				Definition: adminTestIndexProto("empty-index-idempotency"), ClientRequestId: new(""),
 			},
 			status: http.StatusBadRequest,
 		},
 		{
-			name: "sub-millisecond index retention", path: "/api/v1/indexes/create",
+			name: "sub-millisecond index retention", path: "/api/indexes/create",
 			request: func() proto.Message {
 				definition := adminTestIndexProto("sub-millisecond-retention")
 				definition.RetentionPeriod = durationpb.New(time.Nanosecond)
-				return &opensplunkv1.CreateIndexRequest{Definition: definition}
+				return &opensplunk.CreateIndexRequest{Definition: definition}
 			}(),
 			status: http.StatusBadRequest,
 		},
 		{
-			name: "unspecified index deletion mode", path: "/api/v1/indexes/delete",
-			request: &opensplunkv1.DeleteIndexRequest{
-				Selector:        &opensplunkv1.IndexSelector{Selector: &opensplunkv1.IndexSelector_IndexId{IndexId: deletionTarget.ID}},
+			name: "unspecified index deletion mode", path: "/api/indexes/delete",
+			request: &opensplunk.DeleteIndexRequest{
+				Selector:        &opensplunk.IndexSelector{Selector: &opensplunk.IndexSelector_IndexId{IndexId: deletionTarget.ID}},
 				ExpectedVersion: deletionTarget.Version, ConfirmationName: deletionTarget.Definition.Name,
 			},
 			status: http.StatusBadRequest,
 		},
 		{
-			name: "physical index deletion is unavailable", path: "/api/v1/indexes/delete",
-			request: &opensplunkv1.DeleteIndexRequest{
-				Selector:         &opensplunkv1.IndexSelector{Selector: &opensplunkv1.IndexSelector_IndexId{IndexId: deletionTarget.ID}},
+			name: "physical index deletion is unavailable", path: "/api/indexes/delete",
+			request: &opensplunk.DeleteIndexRequest{
+				Selector:         &opensplunk.IndexSelector{Selector: &opensplunk.IndexSelector_IndexId{IndexId: deletionTarget.ID}},
 				ExpectedVersion:  deletionTarget.Version,
-				DataDeletionMode: opensplunkv1.IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_DELETE_DATA,
+				DataDeletionMode: opensplunk.IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_DELETE_DATA,
 				ConfirmationName: deletionTarget.Definition.Name,
 			},
 			status: http.StatusBadRequest,
 		},
 		{
-			name: "noncanonical index delete confirmation", path: "/api/v1/indexes/delete",
-			request: &opensplunkv1.DeleteIndexRequest{
-				Selector:         &opensplunkv1.IndexSelector{Selector: &opensplunkv1.IndexSelector_IndexId{IndexId: deletionTarget.ID}},
+			name: "noncanonical index delete confirmation", path: "/api/indexes/delete",
+			request: &opensplunk.DeleteIndexRequest{
+				Selector:         &opensplunk.IndexSelector{Selector: &opensplunk.IndexSelector_IndexId{IndexId: deletionTarget.ID}},
 				ExpectedVersion:  deletionTarget.Version,
-				DataDeletionMode: opensplunkv1.IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_KEEP_DATA,
+				DataDeletionMode: opensplunk.IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_KEEP_DATA,
 				ConfirmationName: " DELETE-TARGET ",
 			},
 			status: http.StatusBadRequest,
 		},
 		{
-			name: "wrong index delete confirmation", path: "/api/v1/indexes/delete",
-			request: &opensplunkv1.DeleteIndexRequest{
-				Selector:         &opensplunkv1.IndexSelector{Selector: &opensplunkv1.IndexSelector_IndexId{IndexId: deletionTarget.ID}},
+			name: "wrong index delete confirmation", path: "/api/indexes/delete",
+			request: &opensplunk.DeleteIndexRequest{
+				Selector:         &opensplunk.IndexSelector{Selector: &opensplunk.IndexSelector_IndexId{IndexId: deletionTarget.ID}},
 				ExpectedVersion:  deletionTarget.Version,
-				DataDeletionMode: opensplunkv1.IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_KEEP_DATA,
+				DataDeletionMode: opensplunk.IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_KEEP_DATA,
 				ConfirmationName: "main",
 			},
 			status: http.StatusBadRequest,
 		},
 		{
-			name: "stale index deletion", path: "/api/v1/indexes/delete",
-			request: &opensplunkv1.DeleteIndexRequest{
-				Selector:         &opensplunkv1.IndexSelector{Selector: &opensplunkv1.IndexSelector_IndexId{IndexId: deletionTarget.ID}},
+			name: "stale index deletion", path: "/api/indexes/delete",
+			request: &opensplunk.DeleteIndexRequest{
+				Selector:         &opensplunk.IndexSelector{Selector: &opensplunk.IndexSelector_IndexId{IndexId: deletionTarget.ID}},
 				ExpectedVersion:  deletionTarget.Version - 1,
-				DataDeletionMode: opensplunkv1.IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_KEEP_DATA,
+				DataDeletionMode: opensplunk.IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_KEEP_DATA,
 				ConfirmationName: deletionTarget.Definition.Name,
 			},
 			status: http.StatusConflict,
 		},
 		{
-			name: "active index deletion", path: "/api/v1/indexes/delete",
-			request: &opensplunkv1.DeleteIndexRequest{
-				Selector:         &opensplunkv1.IndexSelector{Selector: &opensplunkv1.IndexSelector_IndexName{IndexName: "main"}},
+			name: "active index deletion", path: "/api/indexes/delete",
+			request: &opensplunk.DeleteIndexRequest{
+				Selector:         &opensplunk.IndexSelector{Selector: &opensplunk.IndexSelector_IndexName{IndexName: "main"}},
 				ExpectedVersion:  1,
-				DataDeletionMode: opensplunkv1.IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_KEEP_DATA,
+				DataDeletionMode: opensplunk.IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_KEEP_DATA,
 				ConfirmationName: "main",
 			},
 			status: http.StatusConflict,
 		},
 		{
-			name: "managed deleting state", path: "/api/v1/indexes/state/set",
-			request: &opensplunkv1.SetIndexStateRequest{
-				Selector:        &opensplunkv1.IndexSelector{Selector: &opensplunkv1.IndexSelector_IndexName{IndexName: "main"}},
+			name: "managed deleting state", path: "/api/indexes/state/set",
+			request: &opensplunk.SetIndexStateRequest{
+				Selector:        &opensplunk.IndexSelector{Selector: &opensplunk.IndexSelector_IndexName{IndexName: "main"}},
 				ExpectedVersion: 1,
-				State:           opensplunkv1.IndexState_INDEX_STATE_DELETING,
+				State:           opensplunk.IndexState_INDEX_STATE_DELETING,
 			},
 			status: http.StatusBadRequest,
 		},
 		{
-			name: "invalid token constraints", path: "/api/v1/ingestion-tokens/create",
-			request: &opensplunkv1.CreateIngestionTokenRequest{Definition: &opensplunkv1.IngestionTokenDefinition{
-				Name: "bad", Constraints: &opensplunkv1.IngestionTokenConstraints{
+			name: "invalid token constraints", path: "/api/ingestion-tokens/create",
+			request: &opensplunk.CreateIngestionTokenRequest{Definition: &opensplunk.IngestionTokenDefinition{
+				Name: "bad", Constraints: &opensplunk.IngestionTokenConstraints{
 					AllowedIndexNames: []string{"main"}, AllowedHostRegexes: []string{"["},
 					BoundCollectorId: new("collector-bad"),
 				},
@@ -1093,17 +1093,17 @@ func TestAdministrativeValidationAndStatusMapping(t *testing.T) {
 			status: http.StatusBadRequest,
 		},
 		{
-			name: "missing token collector binding", path: "/api/v1/ingestion-tokens/create",
-			request: &opensplunkv1.CreateIngestionTokenRequest{Definition: &opensplunkv1.IngestionTokenDefinition{
-				Name: "unbound", Constraints: &opensplunkv1.IngestionTokenConstraints{AllowedIndexNames: []string{"main"}},
+			name: "missing token collector binding", path: "/api/ingestion-tokens/create",
+			request: &opensplunk.CreateIngestionTokenRequest{Definition: &opensplunk.IngestionTokenDefinition{
+				Name: "unbound", Constraints: &opensplunk.IngestionTokenConstraints{AllowedIndexNames: []string{"main"}},
 			}},
 			status: http.StatusBadRequest,
 		},
 		{
-			name: "present empty token idempotency key", path: "/api/v1/ingestion-tokens/create",
-			request: &opensplunkv1.CreateIngestionTokenRequest{
-				Definition: &opensplunkv1.IngestionTokenDefinition{
-					Name: "empty-token-idempotency", Constraints: &opensplunkv1.IngestionTokenConstraints{
+			name: "present empty token idempotency key", path: "/api/ingestion-tokens/create",
+			request: &opensplunk.CreateIngestionTokenRequest{
+				Definition: &opensplunk.IngestionTokenDefinition{
+					Name: "empty-token-idempotency", Constraints: &opensplunk.IngestionTokenConstraints{
 						AllowedIndexNames: []string{"main"}, BoundCollectorId: new("collector-idempotency"),
 					},
 				},
@@ -1112,15 +1112,15 @@ func TestAdministrativeValidationAndStatusMapping(t *testing.T) {
 			status: http.StatusBadRequest,
 		},
 		{
-			name: "present empty revocation reason", path: "/api/v1/ingestion-tokens/revoke",
-			request: &opensplunkv1.RevokeIngestionTokenRequest{
+			name: "present empty revocation reason", path: "/api/ingestion-tokens/revoke",
+			request: &opensplunk.RevokeIngestionTokenRequest{
 				IngestionTokenId: "tok_missing", ExpectedVersion: 1, Reason: new(""),
 			},
 			status: http.StatusBadRequest,
 		},
 		{
-			name: "missing token", path: "/api/v1/ingestion-tokens/get",
-			request: &opensplunkv1.GetIngestionTokenRequest{IngestionTokenId: "tok_missing"},
+			name: "missing token", path: "/api/ingestion-tokens/get",
+			request: &opensplunk.GetIngestionTokenRequest{IngestionTokenId: "tok_missing"},
 			status:  http.StatusNotFound,
 		},
 	}
@@ -1160,14 +1160,14 @@ func TestAdministrativeCapabilitiesDoNotOverstatePartialRouteFamilies(t *testing
 	t.Parallel()
 
 	handler, _, _ := newAdminIntegrationHandler(t)
-	response := postProto(t, handler, "/api/v1/system/bootstrap", &opensplunkv1.GetSystemBootstrapRequest{})
+	response := postProto(t, handler, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{})
 	if response.Code != http.StatusOK {
 		t.Fatalf("bootstrap status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var bootstrap opensplunkv1.GetSystemBootstrapResponse
+	var bootstrap opensplunk.GetSystemBootstrapResponse
 	unmarshalResponse(t, response, &bootstrap)
-	if containsFeature(bootstrap.GetFeatures(), opensplunkv1.ServerFeature_SERVER_FEATURE_INDEX_ADMIN) ||
-		containsFeature(bootstrap.GetFeatures(), opensplunkv1.ServerFeature_SERVER_FEATURE_COLLECTOR_ADMIN) {
+	if containsFeature(bootstrap.GetFeatures(), opensplunk.ServerFeature_SERVER_FEATURE_INDEX_ADMIN) ||
+		containsFeature(bootstrap.GetFeatures(), opensplunk.ServerFeature_SERVER_FEATURE_COLLECTOR_ADMIN) {
 		t.Fatalf("bootstrap features = %v", bootstrap.GetFeatures())
 	}
 }
@@ -1207,8 +1207,8 @@ func TestAdministrativeRoutesRejectDNSRebindingAndCrossOriginBrowsers(t *testing
 	if _, err := db.CreateIndex(context.Background(), adminTestIndex("main")); err != nil {
 		t.Fatalf("CreateIndex(main): %v", err)
 	}
-	requestMessage := &opensplunkv1.CreateIngestionTokenRequest{Definition: &opensplunkv1.IngestionTokenDefinition{
-		Name: "browser", Constraints: &opensplunkv1.IngestionTokenConstraints{
+	requestMessage := &opensplunk.CreateIngestionTokenRequest{Definition: &opensplunk.IngestionTokenDefinition{
+		Name: "browser", Constraints: &opensplunk.IngestionTokenConstraints{
 			AllowedIndexNames: []string{"main"}, BoundCollectorId: new("collector-browser"),
 		},
 	}}
@@ -1225,14 +1225,14 @@ func TestAdministrativeRoutesRejectDNSRebindingAndCrossOriginBrowsers(t *testing
 		"empty port":            {"Host": "example.com:", "Origin": "http://example.com:"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			response := postProtoHeaders(t, handler, "/api/v1/ingestion-tokens/create", requestMessage, headers)
+			response := postProtoHeaders(t, handler, "/api/ingestion-tokens/create", requestMessage, headers)
 			if response.Code != http.StatusForbidden {
 				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 			}
 		})
 	}
 
-	response := postProtoHeaders(t, handler, "/api/v1/ingestion-tokens/create", requestMessage, map[string]string{
+	response := postProtoHeaders(t, handler, "/api/ingestion-tokens/create", requestMessage, map[string]string{
 		"Host": "example.com", "Origin": "http://example.com", "Sec-Fetch-Site": "same-origin",
 	})
 	if response.Code != http.StatusOK {
@@ -1243,7 +1243,7 @@ func TestAdministrativeRoutesRejectDNSRebindingAndCrossOriginBrowsers(t *testing
 	if err != nil {
 		t.Fatalf("marshal duplicate-origin request: %v", err)
 	}
-	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/ingestion-tokens/create", bytes.NewReader(payload))
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/ingestion-tokens/create", bytes.NewReader(payload))
 	request.Host = "example.com"
 	request.Header.Set("Content-Type", "application/x-protobuf")
 	request.Header.Add("Origin", "http://example.com")
@@ -1341,15 +1341,15 @@ func adminTestIndex(name string) control.IndexDefinition {
 	return control.IndexDefinition{Name: name, DisplayName: name, IngestionEnabled: true, SearchEnabled: true}
 }
 
-func adminTestIndexProto(name string) *opensplunkv1.IndexDefinition {
-	return &opensplunkv1.IndexDefinition{
+func adminTestIndexProto(name string) *opensplunk.IndexDefinition {
+	return &opensplunk.IndexDefinition{
 		Name: name, DisplayName: name,
-		IngestionAccess: opensplunkv1.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
-		SearchAccess:    opensplunkv1.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
+		IngestionAccess: opensplunk.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
+		SearchAccess:    opensplunk.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
 	}
 }
 
-func containsFeature(features []opensplunkv1.ServerFeature, target opensplunkv1.ServerFeature) bool {
+func containsFeature(features []opensplunk.ServerFeature, target opensplunk.ServerFeature) bool {
 	return slices.Contains(features, target)
 }
 

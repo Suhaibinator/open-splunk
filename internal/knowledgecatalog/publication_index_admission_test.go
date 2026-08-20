@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 )
 
@@ -553,7 +553,7 @@ func TestValidatePublicationIndexNameAdmissionRejectsDependencyDrift(t *testing.
 		ordinal:        0,
 		targetObjectID: "ko-admission-target",
 		targetVersion:  3,
-		role: opensplunkv1.
+		role: opensplunk.
 			KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
 	}}
 	exactInput := publicationIndexAdmissionTestInventory(
@@ -629,7 +629,7 @@ func TestValidatePublicationIndexNameAdmissionDependencyClosureTaxonomy(t *testi
 				ordinal:        0,
 				targetObjectID: "ko-topology-global-target",
 				targetVersion:  3,
-				role: opensplunkv1.
+				role: opensplunk.
 					KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
 			}},
 		}
@@ -670,7 +670,7 @@ func TestValidatePublicationIndexNameAdmissionDependencyClosureTaxonomy(t *testi
 				ordinal:        0,
 				targetObjectID: "ko-globally-missing-target",
 				targetVersion:  1,
-				role: opensplunkv1.
+				role: opensplunk.
 					KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
 			}},
 		}
@@ -722,7 +722,7 @@ func TestValidatePublicationIndexNameAdmissionDependencyClosureTaxonomy(t *testi
 				ordinal:        0,
 				targetObjectID: "ko-malformed-target",
 				targetVersion:  1,
-				role: opensplunkv1.
+				role: opensplunk.
 					KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
 			}},
 		}

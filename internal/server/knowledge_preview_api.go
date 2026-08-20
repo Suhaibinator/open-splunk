@@ -6,7 +6,7 @@ import (
 	"net/http"
 
 	"github.com/Suhaibinator/SRouter/pkg/router"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeattemptaudit"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgepreview"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -14,7 +14,7 @@ import (
 
 func (handler *apiHandler) previewKnowledgeObject(
 	request *http.Request,
-	input *opensplunkv1.PreviewKnowledgeObjectRequest,
+	input *opensplunk.PreviewKnowledgeObjectRequest,
 ) (*serializedPreviewKnowledgeObjectResponse, error) {
 	if err := validatePreviewKnowledgeObjectRequestEnvelope(input); err != nil {
 		return nil, handler.rejectKnowledgeRequest(

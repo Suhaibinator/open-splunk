@@ -9,16 +9,15 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/SRouter/pkg/router"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/exportjobproto"
-	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"google.golang.org/protobuf/types/known/durationpb"
 )
 
-const exportDownloadPath = "/api/v1/search/exports/download"
+const exportDownloadPath = "/api/search/exports/download"
 
-func (handler *apiHandler) createExportJob(request *http.Request, input *opensplunkv1.CreateExportJobRequest) (*opensplunkv1.CreateExportJobResponse, error) {
+func (handler *apiHandler) createExportJob(request *http.Request, input *opensplunk.CreateExportJobRequest) (*opensplunk.CreateExportJobResponse, error) {
 	if input == nil || input.GetDefinition() == nil {
 		return nil, badRequestError("export definition is required")
 	}
@@ -37,10 +36,10 @@ func (handler *apiHandler) createExportJob(request *http.Request, input *openspl
 	if err != nil {
 		return nil, internalError()
 	}
-	return &opensplunkv1.CreateExportJobResponse{ExportJob: converted}, nil
+	return &opensplunk.CreateExportJobResponse{ExportJob: converted}, nil
 }
 
-func (handler *apiHandler) getExportJob(request *http.Request, input *opensplunkv1.GetExportJobRequest) (*opensplunkv1.GetExportJobResponse, error) {
+func (handler *apiHandler) getExportJob(request *http.Request, input *opensplunk.GetExportJobRequest) (*opensplunk.GetExportJobResponse, error) {
 	if input == nil {
 		return nil, badRequestError("export job request is required")
 	}
@@ -56,7 +55,7 @@ func (handler *apiHandler) getExportJob(request *http.Request, input *opensplunk
 	if err != nil {
 		return nil, internalError()
 	}
-	response := &opensplunkv1.GetExportJobResponse{ExportJob: converted}
+	response := &opensplunk.GetExportJobResponse{ExportJob: converted}
 	if input.GetIssueDownloadGrant() {
 		grant, grantErr := handler.exports.CreateDownloadGrant(request.Context(), handler.accessScope(), id)
 		if callErr := mapExportGrantCallError(request.Context(), grantErr); callErr != nil {
@@ -66,7 +65,7 @@ func (handler *apiHandler) getExportJob(request *http.Request, input *opensplunk
 		if timestampErr != nil {
 			return nil, internalError()
 		}
-		response.DownloadGrant = &opensplunkv1.ExportDownloadGrant{
+		response.DownloadGrant = &opensplunk.ExportDownloadGrant{
 			DownloadPath:  exportDownloadPath,
 			DownloadToken: grant.Token,
 			ExpiresAt:     expiresAt,
@@ -75,7 +74,7 @@ func (handler *apiHandler) getExportJob(request *http.Request, input *opensplunk
 	return response, nil
 }
 
-func (handler *apiHandler) cancelExportJob(request *http.Request, input *opensplunkv1.CancelExportJobRequest) (*opensplunkv1.CancelExportJobResponse, error) {
+func (handler *apiHandler) cancelExportJob(request *http.Request, input *opensplunk.CancelExportJobRequest) (*opensplunk.CancelExportJobResponse, error) {
 	if input == nil {
 		return nil, badRequestError("export cancellation request is required")
 	}
@@ -94,10 +93,10 @@ func (handler *apiHandler) cancelExportJob(request *http.Request, input *openspl
 	if err != nil {
 		return nil, internalError()
 	}
-	return &opensplunkv1.CancelExportJobResponse{ExportJob: converted}, nil
+	return &opensplunk.CancelExportJobResponse{ExportJob: converted}, nil
 }
 
-func exportRequestFromProto(definition *opensplunkv1.ExportDefinition) (exportjobs.CreateRequest, error) {
+func exportRequestFromProto(definition *opensplunk.ExportDefinition) (exportjobs.CreateRequest, error) {
 	searchJobID := strings.TrimSpace(definition.GetSearchJobId())
 	if searchJobID == "" {
 		return exportjobs.CreateRequest{}, errors.New("search job ID is required")
@@ -115,35 +114,35 @@ func exportRequestFromProto(definition *opensplunkv1.ExportDefinition) (exportjo
 		ByteLimit:   definition.GetByteLimit(),
 	}
 	switch options := definition.GetFormatOptions().(type) {
-	case *opensplunkv1.ExportDefinition_Csv:
+	case *opensplunk.ExportDefinition_Csv:
 		if options.Csv == nil {
 			return exportjobs.CreateRequest{}, errors.New("CSV options are required")
 		}
 		result.Format = exportjobs.FormatCSV
 		switch options.Csv.GetHeaderMode() {
-		case opensplunkv1.CsvHeaderMode_CSV_HEADER_MODE_UNSPECIFIED:
+		case opensplunk.CsvHeaderMode_CSV_HEADER_MODE_UNSPECIFIED:
 			result.CSV.HeaderMode = exportjobs.CSVHeaderDefault
-		case opensplunkv1.CsvHeaderMode_CSV_HEADER_MODE_FIELD_NAMES:
+		case opensplunk.CsvHeaderMode_CSV_HEADER_MODE_FIELD_NAMES:
 			result.CSV.HeaderMode = exportjobs.CSVHeaderFieldNames
-		case opensplunkv1.CsvHeaderMode_CSV_HEADER_MODE_DISPLAY_NAMES:
+		case opensplunk.CsvHeaderMode_CSV_HEADER_MODE_DISPLAY_NAMES:
 			result.CSV.HeaderMode = exportjobs.CSVHeaderDisplayNames
-		case opensplunkv1.CsvHeaderMode_CSV_HEADER_MODE_NONE:
+		case opensplunk.CsvHeaderMode_CSV_HEADER_MODE_NONE:
 			result.CSV.HeaderMode = exportjobs.CSVHeaderNone
 		default:
 			return exportjobs.CreateRequest{}, errors.New("CSV header mode is invalid")
 		}
-	case *opensplunkv1.ExportDefinition_JsonLines:
+	case *opensplunk.ExportDefinition_JsonLines:
 		if options.JsonLines == nil {
 			return exportjobs.CreateRequest{}, errors.New("JSON Lines options are required")
 		}
 		result.Format = exportjobs.FormatJSONLines
 		result.JSONLines.IncludeTypeMetadata = options.JsonLines.GetIncludeTypeMetadata()
 		switch options.JsonLines.GetIntegerEncoding() {
-		case opensplunkv1.JsonIntegerEncoding_JSON_INTEGER_ENCODING_UNSPECIFIED:
+		case opensplunk.JsonIntegerEncoding_JSON_INTEGER_ENCODING_UNSPECIFIED:
 			result.JSONLines.IntegerEncoding = exportjobs.JSONIntegerDefault
-		case opensplunkv1.JsonIntegerEncoding_JSON_INTEGER_ENCODING_NUMBER_WHEN_SAFE:
+		case opensplunk.JsonIntegerEncoding_JSON_INTEGER_ENCODING_NUMBER_WHEN_SAFE:
 			result.JSONLines.IntegerEncoding = exportjobs.JSONIntegerNumberWhenSafe
-		case opensplunkv1.JsonIntegerEncoding_JSON_INTEGER_ENCODING_STRING:
+		case opensplunk.JsonIntegerEncoding_JSON_INTEGER_ENCODING_STRING:
 			result.JSONLines.IntegerEncoding = exportjobs.JSONIntegerString
 		default:
 			return exportjobs.CreateRequest{}, errors.New("JSON integer encoding is invalid")
@@ -154,10 +153,7 @@ func exportRequestFromProto(definition *opensplunkv1.ExportDefinition) (exportjo
 	return result, nil
 }
 
-func exportJobToProto(job exportjobs.Job, now time.Time) (*opensplunkv1.ExportJob, error) {
-	if job.CompilerVersion != "" && !searchjobs.ValidCompilerVersion(job.CompilerVersion) {
-		return nil, errors.New("export job contains an invalid compiler version")
-	}
+func exportJobToProto(job exportjobs.Job, now time.Time) (*opensplunk.ExportJob, error) {
 	knowledgeSnapshot, err := projectKnowledgeSnapshotSummary(job.KnowledgeSnapshot)
 	if err != nil {
 		return nil, err
@@ -166,7 +162,7 @@ func exportJobToProto(job exportjobs.Job, now time.Time) (*opensplunkv1.ExportJo
 	if err != nil {
 		return nil, err
 	}
-	definition := &opensplunkv1.ExportDefinition{
+	definition := &opensplunk.ExportDefinition{
 		SearchJobId: job.SearchJobID,
 		Columns:     slices.Clone(job.Columns),
 		RowLimit:    new(job.RowLimit),
@@ -174,9 +170,9 @@ func exportJobToProto(job exportjobs.Job, now time.Time) (*opensplunkv1.ExportJo
 	}
 	switch job.Format {
 	case exportjobs.FormatCSV:
-		definition.FormatOptions = &opensplunkv1.ExportDefinition_Csv{Csv: &opensplunkv1.CsvExportOptions{HeaderMode: csvHeaderModeToProto(job.CSV.HeaderMode)}}
+		definition.FormatOptions = &opensplunk.ExportDefinition_Csv{Csv: &opensplunk.CsvExportOptions{HeaderMode: csvHeaderModeToProto(job.CSV.HeaderMode)}}
 	case exportjobs.FormatJSONLines:
-		definition.FormatOptions = &opensplunkv1.ExportDefinition_JsonLines{JsonLines: &opensplunkv1.JsonLinesExportOptions{
+		definition.FormatOptions = &opensplunk.ExportDefinition_JsonLines{JsonLines: &opensplunk.JsonLinesExportOptions{
 			IntegerEncoding:     jsonIntegerEncodingToProto(job.JSONLines.IntegerEncoding),
 			IncludeTypeMetadata: job.JSONLines.IncludeTypeMetadata,
 		}}
@@ -199,13 +195,13 @@ func exportJobToProto(job exportjobs.Job, now time.Time) (*opensplunkv1.ExportJo
 	if !job.StartedAt.IsZero() && end.After(job.StartedAt) {
 		elapsed = end.Sub(job.StartedAt)
 	}
-	result := &opensplunkv1.ExportJob{
+	result := &opensplunk.ExportJob{
 		ExportJobId:  job.ID,
 		StateVersion: job.Version,
 		Definition:   definition,
 		Format:       exportFormatToProto(job.Format),
 		State:        exportjobproto.State(job.State),
-		Progress: &opensplunkv1.ExportProgress{
+		Progress: &opensplunk.ExportProgress{
 			RowsWritten:  job.Progress.RowsWritten,
 			BytesWritten: job.Progress.BytesWritten,
 			Elapsed:      durationpb.New(elapsed),
@@ -213,14 +209,13 @@ func exportJobToProto(job exportjobs.Job, now time.Time) (*opensplunkv1.ExportJo
 		},
 		CreatedAt:         createdAt,
 		KnowledgeSnapshot: knowledgeSnapshot,
-		CompilerVersion:   job.CompilerVersion,
 	}
 	if job.Artifact != nil {
 		artifactExpiresAt, timestampErr := validTimestamp(job.Artifact.ExpiresAt)
 		if timestampErr != nil {
 			return nil, timestampErr
 		}
-		result.Artifact = &opensplunkv1.ExportArtifact{
+		result.Artifact = &opensplunk.ExportArtifact{
 			FileName:  job.Artifact.FileName,
 			MediaType: job.Artifact.MediaType,
 			SizeBytes: job.Artifact.SizeBytes,
@@ -229,7 +224,7 @@ func exportJobToProto(job exportjobs.Job, now time.Time) (*opensplunkv1.ExportJo
 		}
 	}
 	if job.Failure != nil {
-		result.Failure = &opensplunkv1.ExportFailure{
+		result.Failure = &opensplunk.ExportFailure{
 			Code:      exportjobproto.FailureCode(job.Failure.Code),
 			Message:   job.Failure.Message,
 			Retryable: job.Failure.Retryable,
@@ -256,37 +251,37 @@ func exportJobToProto(job exportjobs.Job, now time.Time) (*opensplunkv1.ExportJo
 	return result, nil
 }
 
-func exportFormatToProto(format exportjobs.Format) opensplunkv1.ExportFormat {
+func exportFormatToProto(format exportjobs.Format) opensplunk.ExportFormat {
 	if format == exportjobs.FormatCSV {
-		return opensplunkv1.ExportFormat_EXPORT_FORMAT_CSV
+		return opensplunk.ExportFormat_EXPORT_FORMAT_CSV
 	}
 	if format == exportjobs.FormatJSONLines {
-		return opensplunkv1.ExportFormat_EXPORT_FORMAT_JSON_LINES
+		return opensplunk.ExportFormat_EXPORT_FORMAT_JSON_LINES
 	}
-	return opensplunkv1.ExportFormat_EXPORT_FORMAT_UNSPECIFIED
+	return opensplunk.ExportFormat_EXPORT_FORMAT_UNSPECIFIED
 }
 
-func csvHeaderModeToProto(mode exportjobs.CSVHeaderMode) opensplunkv1.CsvHeaderMode {
+func csvHeaderModeToProto(mode exportjobs.CSVHeaderMode) opensplunk.CsvHeaderMode {
 	switch mode {
 	case exportjobs.CSVHeaderFieldNames:
-		return opensplunkv1.CsvHeaderMode_CSV_HEADER_MODE_FIELD_NAMES
+		return opensplunk.CsvHeaderMode_CSV_HEADER_MODE_FIELD_NAMES
 	case exportjobs.CSVHeaderDisplayNames:
-		return opensplunkv1.CsvHeaderMode_CSV_HEADER_MODE_DISPLAY_NAMES
+		return opensplunk.CsvHeaderMode_CSV_HEADER_MODE_DISPLAY_NAMES
 	case exportjobs.CSVHeaderNone:
-		return opensplunkv1.CsvHeaderMode_CSV_HEADER_MODE_NONE
+		return opensplunk.CsvHeaderMode_CSV_HEADER_MODE_NONE
 	default:
-		return opensplunkv1.CsvHeaderMode_CSV_HEADER_MODE_UNSPECIFIED
+		return opensplunk.CsvHeaderMode_CSV_HEADER_MODE_UNSPECIFIED
 	}
 }
 
-func jsonIntegerEncodingToProto(encoding exportjobs.JSONIntegerEncoding) opensplunkv1.JsonIntegerEncoding {
+func jsonIntegerEncodingToProto(encoding exportjobs.JSONIntegerEncoding) opensplunk.JsonIntegerEncoding {
 	switch encoding {
 	case exportjobs.JSONIntegerNumberWhenSafe:
-		return opensplunkv1.JsonIntegerEncoding_JSON_INTEGER_ENCODING_NUMBER_WHEN_SAFE
+		return opensplunk.JsonIntegerEncoding_JSON_INTEGER_ENCODING_NUMBER_WHEN_SAFE
 	case exportjobs.JSONIntegerString:
-		return opensplunkv1.JsonIntegerEncoding_JSON_INTEGER_ENCODING_STRING
+		return opensplunk.JsonIntegerEncoding_JSON_INTEGER_ENCODING_STRING
 	default:
-		return opensplunkv1.JsonIntegerEncoding_JSON_INTEGER_ENCODING_UNSPECIFIED
+		return opensplunk.JsonIntegerEncoding_JSON_INTEGER_ENCODING_UNSPECIFIED
 	}
 }
 

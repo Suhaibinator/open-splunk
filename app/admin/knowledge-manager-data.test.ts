@@ -10,7 +10,7 @@ import {
   DiagnosticSeverity,
   SharingScope,
   SortDirection,
-} from "@/gen/ts/open_splunk/v1/common";
+} from "@/gen/ts/open_splunk/common";
 import {
   KnowledgeDependencyRole,
   KnowledgeObject,
@@ -19,7 +19,7 @@ import {
   KnowledgeObjectType,
   KnowledgeOverwriteBehavior,
   KnowledgeSelectorMatchKind,
-} from "@/gen/ts/open_splunk/v1/knowledge";
+} from "@/gen/ts/open_splunk/knowledge";
 import {
   CreateKnowledgeObjectRequest,
   CreateKnowledgeObjectResponse,
@@ -45,8 +45,8 @@ import {
   type ListKnowledgeObjectDependentsResponse as ListKnowledgeObjectDependentsResponseMessage,
   type ListKnowledgeObjectsRequest,
   type ListKnowledgeObjectsResponse as ListKnowledgeObjectsResponseMessage,
-} from "@/gen/ts/open_splunk/v1/knowledge_api";
-import { ServerFeature } from "@/gen/ts/open_splunk/v1/system_api";
+} from "@/gen/ts/open_splunk/knowledge_api";
+import { ServerFeature } from "@/gen/ts/open_splunk/system_api";
 import {
   HttpError,
   PROTOBUF_CONTENT_TYPE,
@@ -455,7 +455,7 @@ test("knowledge mutation client sends the five exact generated-protobuf authorit
     const bytes = new Uint8Array(await new Response(init?.body).arrayBuffer());
     let responseBytes: Uint8Array;
     switch (routePath) {
-      case "/api/v1/knowledge/objects/create":
+      case "/api/knowledge/objects/create":
         assert.deepEqual(CreateKnowledgeObjectRequest.decode(bytes), fixtures.create);
         responseBytes = CreateKnowledgeObjectResponse.encode(
           CreateKnowledgeObjectResponse.fromPartial({
@@ -469,7 +469,7 @@ test("knowledge mutation client sends the five exact generated-protobuf authorit
           }),
         ).finish();
         break;
-      case "/api/v1/knowledge/objects/validate":
+      case "/api/knowledge/objects/validate":
         assert.deepEqual(ValidateKnowledgeObjectRequest.decode(bytes), fixtures.validate);
         responseBytes = ValidateKnowledgeObjectResponse.encode(
           ValidateKnowledgeObjectResponse.fromPartial({
@@ -489,7 +489,7 @@ test("knowledge mutation client sends the five exact generated-protobuf authorit
           }),
         ).finish();
         break;
-      case "/api/v1/knowledge/objects/update":
+      case "/api/knowledge/objects/update":
         assert.deepEqual(UpdateKnowledgeObjectRequest.decode(bytes), fixtures.update);
         responseBytes = UpdateKnowledgeObjectResponse.encode(
           UpdateKnowledgeObjectResponse.fromPartial({
@@ -503,7 +503,7 @@ test("knowledge mutation client sends the five exact generated-protobuf authorit
           }),
         ).finish();
         break;
-      case "/api/v1/knowledge/objects/set-state":
+      case "/api/knowledge/objects/set-state":
         assert.deepEqual(SetKnowledgeObjectStateRequest.decode(bytes), fixtures.setState);
         responseBytes = SetKnowledgeObjectStateResponse.encode(
           SetKnowledgeObjectStateResponse.fromPartial({
@@ -517,7 +517,7 @@ test("knowledge mutation client sends the five exact generated-protobuf authorit
           }),
         ).finish();
         break;
-      case "/api/v1/knowledge/objects/delete":
+      case "/api/knowledge/objects/delete":
         assert.deepEqual(DeleteKnowledgeObjectRequest.decode(bytes), fixtures.delete);
         responseBytes = DeleteKnowledgeObjectResponse.encode(
           DeleteKnowledgeObjectResponse.fromPartial({
@@ -558,11 +558,11 @@ test("knowledge mutation client sends the five exact generated-protobuf authorit
   assert.equal(stated.knowledgeObject.state, KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_DISABLED);
   assert.equal(deleted.deletedVersion, 5n);
   assert.deepEqual(paths, [
-    "/api/v1/knowledge/objects/create",
-    "/api/v1/knowledge/objects/validate",
-    "/api/v1/knowledge/objects/update",
-    "/api/v1/knowledge/objects/set-state",
-    "/api/v1/knowledge/objects/delete",
+    "/api/knowledge/objects/create",
+    "/api/knowledge/objects/validate",
+    "/api/knowledge/objects/update",
+    "/api/knowledge/objects/set-state",
+    "/api/knowledge/objects/delete",
   ]);
 });
 
@@ -572,18 +572,18 @@ test("knowledge mutation adapters reject request mismatches and malformed succes
   const token = new Uint8Array(32).fill(4);
   const responseForPath = async (pathValue: string): Promise<Uint8Array> => {
     switch (pathValue) {
-      case "/api/v1/knowledge/objects/create":
+      case "/api/knowledge/objects/create":
         return CreateKnowledgeObjectResponse.encode(
           CreateKnowledgeObjectResponse.fromPartial({
             tenantCatalogRevision: 1n,
             tenantCatalogStateToken: token,
           }),
         ).finish();
-      case "/api/v1/knowledge/objects/validate":
+      case "/api/knowledge/objects/validate":
         return ValidateKnowledgeObjectResponse.encode(
           ValidateKnowledgeObjectResponse.fromPartial({ tenantCatalogRevision: 1n }),
         ).finish();
-      case "/api/v1/knowledge/objects/update":
+      case "/api/knowledge/objects/update":
         return UpdateKnowledgeObjectResponse.encode(
           UpdateKnowledgeObjectResponse.fromPartial({
             knowledgeObject: await sealedMutationObject({
@@ -596,7 +596,7 @@ test("knowledge mutation adapters reject request mismatches and malformed succes
             tenantCatalogStateToken: token,
           }),
         ).finish();
-      case "/api/v1/knowledge/objects/set-state":
+      case "/api/knowledge/objects/set-state":
         return SetKnowledgeObjectStateResponse.encode(
           SetKnowledgeObjectStateResponse.fromPartial({
             knowledgeObject: await sealedMutationObject({
@@ -607,7 +607,7 @@ test("knowledge mutation adapters reject request mismatches and malformed succes
             tenantCatalogStateToken: token,
           }),
         ).finish();
-      case "/api/v1/knowledge/objects/delete":
+      case "/api/knowledge/objects/delete":
         return DeleteKnowledgeObjectResponse.encode(
           DeleteKnowledgeObjectResponse.fromPartial({
             knowledgeObjectId: fixtures.delete.knowledgeObjectId,

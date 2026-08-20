@@ -85,7 +85,7 @@ func InspectionLoadCohorts(
 }
 
 // ValidateInspectionLoad proves that cohorts remain the exact detached
-// pruning profile paired with the immutable v0.1 fixture.
+// pruning profile paired with the immutable canonical fixture.
 func ValidateInspectionLoad(
 	profile Profile,
 	targetTenant string,

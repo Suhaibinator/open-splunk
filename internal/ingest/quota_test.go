@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
 	"google.golang.org/protobuf/proto"
@@ -76,8 +76,6 @@ func TestProcessBatchBuildsAtomicAcceptedEventQuotaAdmission(t *testing.T) {
 	authorization.AuthorizedIndexes = resolved.policies
 	state := &streamState{
 		collectorID:   "collector-a",
-		protocolMajor: 1,
-		protocolMinor: 0,
 		authorization: authorization,
 		indexPolicies: resolved.byName,
 	}
@@ -88,7 +86,7 @@ func TestProcessBatchBuildsAtomicAcceptedEventQuotaAdmission(t *testing.T) {
 		stringField("token", "source-secret"),
 		stringField("status", "200"),
 	)
-	mainSource := proto.Clone(mainEvent).(*opensplunkv1.LogEvent)
+	mainSource := proto.Clone(mainEvent).(*opensplunk.LogEvent)
 	auditEvent := validTestEvent("event-audit", "audit")
 	unauthorizedEvent := validTestEvent("event-secret", "secret")
 	batch := validTestBatch(
@@ -116,7 +114,7 @@ func TestProcessBatchBuildsAtomicAcceptedEventQuotaAdmission(t *testing.T) {
 	if !proto.Equal(mainEvent, mainSource) {
 		t.Fatalf("source event was mutated:\n got: %+v\nwant: %+v", mainEvent, mainSource)
 	}
-	var storedMain *opensplunkv1.LogEvent
+	var storedMain *opensplunk.LogEvent
 	for _, event := range stored.Events {
 		if event.Event.GetEventId() == mainEvent.GetEventId() {
 			storedMain = event.Event
@@ -129,7 +127,7 @@ func TestProcessBatchBuildsAtomicAcceptedEventQuotaAdmission(t *testing.T) {
 		t.Fatalf("normalized main event = %+v, source = %+v", storedMain, mainSource)
 	}
 	mainBytes := uint64(proto.Size(mainSource))
-	auditBytes := UncompressedEventBytes([]*opensplunkv1.LogEvent{auditEvent})
+	auditBytes := UncompressedEventBytes([]*opensplunk.LogEvent{auditEvent})
 	want := []ingestquota.Charge{
 		{
 			Scope: ingestquota.ScopeKey{
@@ -256,7 +254,7 @@ func TestCollectRefreshesQuotaRatesBeforeNextStore(t *testing.T) {
 			config.SessionManager = manager
 			harness := newServiceHarness(t, config, authorizer, store)
 			stream := harness.stream(t, "Bearer good-token")
-			sendHello(t, stream, 1)
+			sendHello(t, stream)
 			_ = recvResponse(t, stream)
 
 			batch := validTestBatch(
@@ -293,9 +291,9 @@ func TestCollectSequencesQuotaRetryThenThrottle(t *testing.T) {
 	store := EventStoreFunc(func(context.Context, StoreBatch) (StoreResult, error) {
 		return StoreResult{}, &TransientStoreError{
 			Err:            errors.New("index quota"),
-			Reason:         opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED,
+			Reason:         opensplunk.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED,
 			RetryAfter:     2 * time.Hour,
-			ThrottleReason: opensplunkv1.ThrottleReason_THROTTLE_REASON_INDEX_QUOTA,
+			ThrottleReason: opensplunk.ThrottleReason_THROTTLE_REASON_INDEX_QUOTA,
 		}
 	})
 	config := testServiceConfig()
@@ -315,7 +313,7 @@ func TestCollectSequencesQuotaRetryThenThrottle(t *testing.T) {
 		store,
 	)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1)
+	sendHello(t, stream)
 	_ = recvResponse(t, stream)
 	batch := validTestBatch(
 		"collector-a",
@@ -329,7 +327,7 @@ func TestCollectSequencesQuotaRetryThenThrottle(t *testing.T) {
 	retryResponse := recvResponse(t, stream)
 	retry := retryResponse.GetRetryBatch()
 	if retryResponse.GetStreamSequence() != 2 || retry == nil ||
-		retry.GetReason() != opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED ||
+		retry.GetReason() != opensplunk.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED ||
 		retry.GetRetryAfter().AsDuration() != ingestquota.MaximumRetryAfter ||
 		retry.GetMessage() != "ingestion rate limit reached" {
 		t.Fatalf("retry response = %+v", retryResponse)
@@ -337,7 +335,7 @@ func TestCollectSequencesQuotaRetryThenThrottle(t *testing.T) {
 	throttleResponse := recvResponse(t, stream)
 	throttle := throttleResponse.GetThrottle()
 	if throttleResponse.GetStreamSequence() != 3 || throttle == nil ||
-		throttle.GetReason() != opensplunkv1.ThrottleReason_THROTTLE_REASON_INDEX_QUOTA ||
+		throttle.GetReason() != opensplunk.ThrottleReason_THROTTLE_REASON_INDEX_QUOTA ||
 		throttle.GetMinimumSendDelay().AsDuration() != ingestquota.MaximumRetryAfter ||
 		throttleResponse.GetSentAt() == nil || throttle.GetEffectiveUntil() == nil ||
 		throttle.GetEffectiveUntil().AsTime().Sub(throttleResponse.GetSentAt().AsTime()) !=

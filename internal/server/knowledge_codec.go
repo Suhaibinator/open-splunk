@@ -2,7 +2,7 @@ package server
 
 import (
 	"github.com/Suhaibinator/SRouter/pkg/codec"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
@@ -17,53 +17,53 @@ const (
 	maximumKnowledgeUnknownDepth        = 32
 )
 
-type serializedCreateKnowledgeObjectResponse = boundedProtoResponse[*opensplunkv1.CreateKnowledgeObjectResponse]
-type serializedGetKnowledgeObjectResponse = boundedProtoResponse[*opensplunkv1.GetKnowledgeObjectResponse]
-type serializedListKnowledgeObjectsResponse = boundedProtoResponse[*opensplunkv1.ListKnowledgeObjectsResponse]
-type serializedListKnowledgeObjectDependenciesResponse = boundedProtoResponse[*opensplunkv1.ListKnowledgeObjectDependenciesResponse]
-type serializedListKnowledgeObjectDependentsResponse = boundedProtoResponse[*opensplunkv1.ListKnowledgeObjectDependentsResponse]
-type serializedUpdateKnowledgeObjectResponse = boundedProtoResponse[*opensplunkv1.UpdateKnowledgeObjectResponse]
-type serializedSetKnowledgeObjectStateResponse = boundedProtoResponse[*opensplunkv1.SetKnowledgeObjectStateResponse]
-type serializedDeleteKnowledgeObjectResponse = boundedProtoResponse[*opensplunkv1.DeleteKnowledgeObjectResponse]
+type serializedCreateKnowledgeObjectResponse = boundedProtoResponse[*opensplunk.CreateKnowledgeObjectResponse]
+type serializedGetKnowledgeObjectResponse = boundedProtoResponse[*opensplunk.GetKnowledgeObjectResponse]
+type serializedListKnowledgeObjectsResponse = boundedProtoResponse[*opensplunk.ListKnowledgeObjectsResponse]
+type serializedListKnowledgeObjectDependenciesResponse = boundedProtoResponse[*opensplunk.ListKnowledgeObjectDependenciesResponse]
+type serializedListKnowledgeObjectDependentsResponse = boundedProtoResponse[*opensplunk.ListKnowledgeObjectDependentsResponse]
+type serializedUpdateKnowledgeObjectResponse = boundedProtoResponse[*opensplunk.UpdateKnowledgeObjectResponse]
+type serializedSetKnowledgeObjectStateResponse = boundedProtoResponse[*opensplunk.SetKnowledgeObjectStateResponse]
+type serializedDeleteKnowledgeObjectResponse = boundedProtoResponse[*opensplunk.DeleteKnowledgeObjectResponse]
 
 type serializedCreateKnowledgeObjectCodec = boundedProtoCodec[
-	*opensplunkv1.CreateKnowledgeObjectRequest,
-	*opensplunkv1.CreateKnowledgeObjectResponse,
+	*opensplunk.CreateKnowledgeObjectRequest,
+	*opensplunk.CreateKnowledgeObjectResponse,
 ]
 type serializedGetKnowledgeObjectCodec = boundedProtoCodec[
-	*opensplunkv1.GetKnowledgeObjectRequest,
-	*opensplunkv1.GetKnowledgeObjectResponse,
+	*opensplunk.GetKnowledgeObjectRequest,
+	*opensplunk.GetKnowledgeObjectResponse,
 ]
 type serializedListKnowledgeObjectsCodec = boundedProtoCodec[
-	*opensplunkv1.ListKnowledgeObjectsRequest,
-	*opensplunkv1.ListKnowledgeObjectsResponse,
+	*opensplunk.ListKnowledgeObjectsRequest,
+	*opensplunk.ListKnowledgeObjectsResponse,
 ]
 type serializedListKnowledgeObjectDependenciesCodec = boundedProtoCodec[
-	*opensplunkv1.ListKnowledgeObjectDependenciesRequest,
-	*opensplunkv1.ListKnowledgeObjectDependenciesResponse,
+	*opensplunk.ListKnowledgeObjectDependenciesRequest,
+	*opensplunk.ListKnowledgeObjectDependenciesResponse,
 ]
 type serializedListKnowledgeObjectDependentsCodec = boundedProtoCodec[
-	*opensplunkv1.ListKnowledgeObjectDependentsRequest,
-	*opensplunkv1.ListKnowledgeObjectDependentsResponse,
+	*opensplunk.ListKnowledgeObjectDependentsRequest,
+	*opensplunk.ListKnowledgeObjectDependentsResponse,
 ]
 type serializedUpdateKnowledgeObjectCodec = boundedProtoCodec[
-	*opensplunkv1.UpdateKnowledgeObjectRequest,
-	*opensplunkv1.UpdateKnowledgeObjectResponse,
+	*opensplunk.UpdateKnowledgeObjectRequest,
+	*opensplunk.UpdateKnowledgeObjectResponse,
 ]
 type serializedSetKnowledgeObjectStateCodec = boundedProtoCodec[
-	*opensplunkv1.SetKnowledgeObjectStateRequest,
-	*opensplunkv1.SetKnowledgeObjectStateResponse,
+	*opensplunk.SetKnowledgeObjectStateRequest,
+	*opensplunk.SetKnowledgeObjectStateResponse,
 ]
 type serializedDeleteKnowledgeObjectCodec = boundedProtoCodec[
-	*opensplunkv1.DeleteKnowledgeObjectRequest,
-	*opensplunkv1.DeleteKnowledgeObjectResponse,
+	*opensplunk.DeleteKnowledgeObjectRequest,
+	*opensplunk.DeleteKnowledgeObjectResponse,
 ]
 
 func newSerializedCreateKnowledgeObjectCodec() *serializedCreateKnowledgeObjectCodec {
 	return newKnowledgeBoundedProtoCodec(
 		codec.NewProtoCodec[
-			*opensplunkv1.CreateKnowledgeObjectRequest,
-			*opensplunkv1.CreateKnowledgeObjectResponse,
+			*opensplunk.CreateKnowledgeObjectRequest,
+			*opensplunk.CreateKnowledgeObjectResponse,
 		](),
 		maximumKnowledgeObjectResponseBytes,
 		"create",
@@ -73,8 +73,8 @@ func newSerializedCreateKnowledgeObjectCodec() *serializedCreateKnowledgeObjectC
 func newSerializedGetKnowledgeObjectCodec() *serializedGetKnowledgeObjectCodec {
 	return newKnowledgeBoundedProtoCodec(
 		codec.NewProtoCodec[
-			*opensplunkv1.GetKnowledgeObjectRequest,
-			*opensplunkv1.GetKnowledgeObjectResponse,
+			*opensplunk.GetKnowledgeObjectRequest,
+			*opensplunk.GetKnowledgeObjectResponse,
 		](),
 		maximumKnowledgeObjectResponseBytes,
 		"get",
@@ -84,8 +84,8 @@ func newSerializedGetKnowledgeObjectCodec() *serializedGetKnowledgeObjectCodec {
 func newSerializedListKnowledgeObjectsCodec() *serializedListKnowledgeObjectsCodec {
 	return newKnowledgeBoundedProtoCodec(
 		codec.NewProtoCodec[
-			*opensplunkv1.ListKnowledgeObjectsRequest,
-			*opensplunkv1.ListKnowledgeObjectsResponse,
+			*opensplunk.ListKnowledgeObjectsRequest,
+			*opensplunk.ListKnowledgeObjectsResponse,
 		](),
 		maximumKnowledgeListResponseBytes,
 		"list",
@@ -95,8 +95,8 @@ func newSerializedListKnowledgeObjectsCodec() *serializedListKnowledgeObjectsCod
 func newSerializedListKnowledgeObjectDependenciesCodec() *serializedListKnowledgeObjectDependenciesCodec {
 	return newKnowledgeBoundedProtoCodec(
 		codec.NewProtoCodec[
-			*opensplunkv1.ListKnowledgeObjectDependenciesRequest,
-			*opensplunkv1.ListKnowledgeObjectDependenciesResponse,
+			*opensplunk.ListKnowledgeObjectDependenciesRequest,
+			*opensplunk.ListKnowledgeObjectDependenciesResponse,
 		](),
 		maximumKnowledgeGraphResponseBytes,
 		"dependencies",
@@ -106,8 +106,8 @@ func newSerializedListKnowledgeObjectDependenciesCodec() *serializedListKnowledg
 func newSerializedListKnowledgeObjectDependentsCodec() *serializedListKnowledgeObjectDependentsCodec {
 	return newKnowledgeBoundedProtoCodec(
 		codec.NewProtoCodec[
-			*opensplunkv1.ListKnowledgeObjectDependentsRequest,
-			*opensplunkv1.ListKnowledgeObjectDependentsResponse,
+			*opensplunk.ListKnowledgeObjectDependentsRequest,
+			*opensplunk.ListKnowledgeObjectDependentsResponse,
 		](),
 		maximumKnowledgeGraphResponseBytes,
 		"dependents",
@@ -117,8 +117,8 @@ func newSerializedListKnowledgeObjectDependentsCodec() *serializedListKnowledgeO
 func newSerializedUpdateKnowledgeObjectCodec() *serializedUpdateKnowledgeObjectCodec {
 	return newKnowledgeBoundedProtoCodec(
 		codec.NewProtoCodec[
-			*opensplunkv1.UpdateKnowledgeObjectRequest,
-			*opensplunkv1.UpdateKnowledgeObjectResponse,
+			*opensplunk.UpdateKnowledgeObjectRequest,
+			*opensplunk.UpdateKnowledgeObjectResponse,
 		](),
 		maximumKnowledgeObjectResponseBytes,
 		"update",
@@ -128,8 +128,8 @@ func newSerializedUpdateKnowledgeObjectCodec() *serializedUpdateKnowledgeObjectC
 func newSerializedSetKnowledgeObjectStateCodec() *serializedSetKnowledgeObjectStateCodec {
 	return newKnowledgeBoundedProtoCodec(
 		codec.NewProtoCodec[
-			*opensplunkv1.SetKnowledgeObjectStateRequest,
-			*opensplunkv1.SetKnowledgeObjectStateResponse,
+			*opensplunk.SetKnowledgeObjectStateRequest,
+			*opensplunk.SetKnowledgeObjectStateResponse,
 		](),
 		maximumKnowledgeObjectResponseBytes,
 		"set-state",
@@ -139,8 +139,8 @@ func newSerializedSetKnowledgeObjectStateCodec() *serializedSetKnowledgeObjectSt
 func newSerializedDeleteKnowledgeObjectCodec() *serializedDeleteKnowledgeObjectCodec {
 	return newKnowledgeBoundedProtoCodec(
 		codec.NewProtoCodec[
-			*opensplunkv1.DeleteKnowledgeObjectRequest,
-			*opensplunkv1.DeleteKnowledgeObjectResponse,
+			*opensplunk.DeleteKnowledgeObjectRequest,
+			*opensplunk.DeleteKnowledgeObjectResponse,
 		](),
 		maximumKnowledgeObjectResponseBytes,
 		"delete",
@@ -164,7 +164,7 @@ func newKnowledgeBoundedProtoCodec[Request any, Message proto.Message](
 }
 
 func rejectUnknownKnowledgeDefinition(
-	definition *opensplunkv1.KnowledgeObjectDefinition,
+	definition *opensplunk.KnowledgeObjectDefinition,
 ) error {
 	if definition == nil {
 		return nil

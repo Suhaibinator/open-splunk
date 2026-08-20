@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -123,7 +123,7 @@ func TestCollectAcceptsDurableTrustedTenantIdentityBeyondProtocolIDLimit(t *test
 		acceptingStore(),
 	)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1)
+	sendHello(t, stream)
 	if ready := recvResponse(t, stream).GetReady(); ready == nil {
 		t.Fatal("response was not Ready")
 	}
@@ -144,14 +144,14 @@ func TestCollectLastValidHelloSupersedesIdleStreamAcrossTokens(t *testing.T) {
 	harness := newServiceHarness(t, config, authorizer, acceptingStore())
 
 	first := harness.stream(t, "Bearer first-token")
-	sendHello(t, first, 1)
+	sendHello(t, first)
 	firstReady := recvResponse(t, first).GetReady()
 	if firstReady == nil {
 		t.Fatal("first response was not Ready")
 	}
 
 	second := harness.stream(t, "Bearer second-token")
-	sendHello(t, second, 1)
+	sendHello(t, second)
 	secondReady := recvResponse(t, second).GetReady()
 	if secondReady == nil {
 		t.Fatal("second response was not Ready")
@@ -189,11 +189,11 @@ func TestCollectSameTokenTakeoverBypassesSteadyStateLimit(t *testing.T) {
 	harness := newServiceHarness(t, config, staticTestAuthorizer(), acceptingStore())
 
 	first := harness.stream(t, "Bearer good-token")
-	sendHello(t, first, 1)
+	sendHello(t, first)
 	_ = recvResponse(t, first)
 
 	second := harness.stream(t, "Bearer good-token")
-	sendHello(t, second, 1)
+	sendHello(t, second)
 	if ready := recvResponse(t, second).GetReady(); ready == nil {
 		t.Fatal("replacement response was not Ready")
 	}
@@ -228,7 +228,7 @@ func TestCollectNewestPreHelloAttemptSupersedesOlderSameIdentity(t *testing.T) {
 	)
 
 	second := harness.stream(t, "Bearer good-token")
-	sendHello(t, second, 1)
+	sendHello(t, second)
 	if ready := recvResponse(t, second).GetReady(); ready == nil {
 		t.Fatal("newest pre-Hello attempt response was not Ready")
 	}
@@ -274,7 +274,7 @@ func TestCollectPreHelloTakeoverCancelsTokenUseRecording(t *testing.T) {
 	harness := newServiceHarness(t, config, staticTestAuthorizer(), acceptingStore())
 
 	first := harness.stream(t, "Bearer good-token")
-	sendHello(t, first, 1)
+	sendHello(t, first)
 	select {
 	case <-recordingStarted:
 	case <-time.After(time.Second):
@@ -282,7 +282,7 @@ func TestCollectPreHelloTakeoverCancelsTokenUseRecording(t *testing.T) {
 	}
 
 	second := harness.stream(t, "Bearer good-token")
-	sendHello(t, second, 1)
+	sendHello(t, second)
 	if ready := recvResponse(t, second).GetReady(); ready == nil {
 		t.Fatal("replacement response was not Ready")
 	}
@@ -314,13 +314,13 @@ func TestCollectInvalidHelloDoesNotSupersedeCurrentLease(t *testing.T) {
 	)
 
 	first := harness.stream(t, "Bearer first-token")
-	sendHello(t, first, 1)
+	sendHello(t, first)
 	_ = recvResponse(t, first)
 
 	invalid := harness.stream(t, "Bearer second-token")
-	sendHello(t, invalid, 2)
-	if _, err := invalid.Recv(); status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("invalid successor error = %v, want FailedPrecondition", err)
+	sendInvalidHello(t, invalid)
+	if _, err := invalid.Recv(); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("invalid successor error = %v, want InvalidArgument", err)
 	}
 
 	sendGoodbye(t, first)
@@ -345,12 +345,12 @@ func TestCollectDoesNotFenceDifferentTrustedCollectorKeys(t *testing.T) {
 	)
 	type activeStream struct {
 		token  string
-		stream opensplunkv1.CollectorIngestService_CollectClient
+		stream opensplunk.CollectorIngestService_CollectClient
 	}
 	streams := make([]activeStream, 0, len(authorizations))
 	for token, authorization := range authorizations {
 		stream := harness.stream(t, "Bearer "+token)
-		if err := stream.Send(helloRequestFor(1, authorization.CollectorID, 1, 0)); err != nil {
+		if err := stream.Send(helloRequestFor(1, authorization.CollectorID)); err != nil {
 			t.Fatal(err)
 		}
 		if ready := recvResponse(t, stream).GetReady(); ready == nil {
@@ -404,12 +404,12 @@ func TestCollectRejectsPostReadyAuthorizationScopeChanges(t *testing.T) {
 			})
 			harness := newServiceHarness(t, testServiceConfig(), authorizer, acceptingStore())
 			stream := harness.stream(t, "Bearer private-token")
-			sendHello(t, stream, 1)
+			sendHello(t, stream)
 			_ = recvResponse(t, stream)
-			if err := stream.Send(&opensplunkv1.CollectRequest{
+			if err := stream.Send(&opensplunk.CollectRequest{
 				StreamSequence: 2,
 				SentAt:         timestamppb.New(validationTestNow),
-				Payload: &opensplunkv1.CollectRequest_Heartbeat{Heartbeat: &opensplunkv1.CollectorHeartbeat{
+				Payload: &opensplunk.CollectRequest_Heartbeat{Heartbeat: &opensplunk.CollectorHeartbeat{
 					CollectorId: "collector-a",
 					InstanceId:  "instance-a",
 					ObservedAt:  timestamppb.New(validationTestNow),
@@ -446,12 +446,12 @@ func TestCollectReauthorizesHeartbeat(t *testing.T) {
 	})
 	harness := newServiceHarness(t, testServiceConfig(), authorizer, acceptingStore())
 	stream := harness.stream(t, "Bearer private-token")
-	sendHello(t, stream, 1)
+	sendHello(t, stream)
 	_ = recvResponse(t, stream)
-	if err := stream.Send(&opensplunkv1.CollectRequest{
+	if err := stream.Send(&opensplunk.CollectRequest{
 		StreamSequence: 2,
 		SentAt:         timestamppb.New(validationTestNow),
-		Payload: &opensplunkv1.CollectRequest_Heartbeat{Heartbeat: &opensplunkv1.CollectorHeartbeat{
+		Payload: &opensplunk.CollectRequest_Heartbeat{Heartbeat: &opensplunk.CollectorHeartbeat{
 			CollectorId: "collector-a",
 			InstanceId:  "instance-a",
 			ObservedAt:  timestamppb.New(validationTestNow),
@@ -483,7 +483,7 @@ func TestCollectGoodbyeChecksLeaseWithoutReauthorization(t *testing.T) {
 	})
 	harness := newServiceHarness(t, testServiceConfig(), authorizer, acceptingStore())
 	stream := harness.stream(t, "Bearer private-token")
-	sendHello(t, stream, 1)
+	sendHello(t, stream)
 	_ = recvResponse(t, stream)
 	sendGoodbye(t, stream)
 	if _, err := stream.Recv(); !errors.Is(err, io.EOF) {
@@ -504,13 +504,13 @@ func TestCollectValidatesEnvelopeBeforeReauthorization(t *testing.T) {
 	})
 	harness := newServiceHarness(t, testServiceConfig(), authorizer, acceptingStore())
 	stream := harness.stream(t, "Bearer private-token")
-	sendHello(t, stream, 1)
+	sendHello(t, stream)
 	_ = recvResponse(t, stream)
 
-	if err := stream.Send(&opensplunkv1.CollectRequest{
+	if err := stream.Send(&opensplunk.CollectRequest{
 		StreamSequence: 3,
 		SentAt:         timestamppb.New(validationTestNow),
-		Payload: &opensplunkv1.CollectRequest_Heartbeat{Heartbeat: &opensplunkv1.CollectorHeartbeat{
+		Payload: &opensplunk.CollectRequest_Heartbeat{Heartbeat: &opensplunk.CollectorHeartbeat{
 			CollectorId: "collector-a",
 			InstanceId:  "instance-a",
 			ObservedAt:  timestamppb.New(validationTestNow),
@@ -555,7 +555,7 @@ func TestCollectTakeoverCancelsBlockedAuthorizationRefresh(t *testing.T) {
 	harness := newServiceHarness(t, testServiceConfigWithUniqueStreamIDs(), authorizer, store)
 
 	first := harness.stream(t, "Bearer first-token")
-	sendHello(t, first, 1)
+	sendHello(t, first)
 	_ = recvResponse(t, first)
 	batch := validTestBatch("collector-a", "blocked-refresh-batch", 1, validTestEvent("event-a", "main"))
 	if err := first.Send(batchRequest(2, batch)); err != nil {
@@ -568,7 +568,7 @@ func TestCollectTakeoverCancelsBlockedAuthorizationRefresh(t *testing.T) {
 	}
 
 	second := harness.stream(t, "Bearer second-token")
-	sendHello(t, second, 1)
+	sendHello(t, second)
 	_ = recvResponse(t, second)
 
 	firstResult := make(chan error, 1)
@@ -622,7 +622,7 @@ func TestCollectStaleRequestDoesNotStartDurableBatchWork(t *testing.T) {
 	harness := newServiceHarness(t, testServiceConfigWithUniqueStreamIDs(), authorizer, store)
 
 	first := harness.stream(t, "Bearer first-token")
-	sendHello(t, first, 1)
+	sendHello(t, first)
 	_ = recvResponse(t, first)
 	batch := validTestBatch("collector-a", "stale-batch", 1, validTestEvent("event-a", "main"))
 	if err := first.Send(batchRequest(2, batch)); err != nil {
@@ -635,7 +635,7 @@ func TestCollectStaleRequestDoesNotStartDurableBatchWork(t *testing.T) {
 	}
 
 	second := harness.stream(t, "Bearer second-token")
-	sendHello(t, second, 1)
+	sendHello(t, second)
 	_ = recvResponse(t, second)
 	close(allowRefresh)
 
@@ -671,7 +671,7 @@ func TestCollectBatchLinearizedBeforeTakeoverMayFinish(t *testing.T) {
 	harness := newServiceHarness(t, testServiceConfigWithUniqueStreamIDs(), authorizer, store)
 
 	first := harness.stream(t, "Bearer first-token")
-	sendHello(t, first, 1)
+	sendHello(t, first)
 	_ = recvResponse(t, first)
 	batch := validTestBatch("collector-a", "admitted-batch", 1, validTestEvent("event-a", "main"))
 	if err := first.Send(batchRequest(2, batch)); err != nil {
@@ -684,7 +684,7 @@ func TestCollectBatchLinearizedBeforeTakeoverMayFinish(t *testing.T) {
 	}
 
 	second := harness.stream(t, "Bearer second-token")
-	sendHello(t, second, 1)
+	sendHello(t, second)
 	_ = recvResponse(t, second)
 	close(allowStore)
 
@@ -733,14 +733,14 @@ func testServiceConfigWithUniqueStreamIDs() Config {
 
 func sendGoodbye(
 	t *testing.T,
-	stream opensplunkv1.CollectorIngestService_CollectClient,
+	stream opensplunk.CollectorIngestService_CollectClient,
 ) {
 	t.Helper()
-	if err := stream.Send(&opensplunkv1.CollectRequest{
+	if err := stream.Send(&opensplunk.CollectRequest{
 		StreamSequence: 2,
 		SentAt:         timestamppb.New(validationTestNow),
-		Payload: &opensplunkv1.CollectRequest_Goodbye{Goodbye: &opensplunkv1.CollectorGoodbye{
-			Reason: opensplunkv1.CollectorGoodbyeReason_COLLECTOR_GOODBYE_REASON_SHUTDOWN,
+		Payload: &opensplunk.CollectRequest_Goodbye{Goodbye: &opensplunk.CollectorGoodbye{
+			Reason: opensplunk.CollectorGoodbyeReason_COLLECTOR_GOODBYE_REASON_SHUTDOWN,
 		}},
 	}); err != nil {
 		t.Fatal(err)

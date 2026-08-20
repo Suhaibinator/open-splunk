@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"strings"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -119,7 +119,7 @@ type scannedRecord struct {
 	payloadOff int64
 	payloadLen uint32
 	crc        uint32
-	batch      *opensplunkv1.EventBatch
+	batch      *opensplunk.EventBatch
 }
 
 // scanResult is the outcome of scanning a single segment file.
@@ -222,7 +222,7 @@ func walkSegment(path string, visit func(scannedRecord) error) (scanResult, erro
 			res.badOffset, res.corrupt = off, true
 			return res, nil
 		}
-		var batch opensplunkv1.EventBatch
+		var batch opensplunk.EventBatch
 		if err := proto.Unmarshal(payload, &batch); err != nil {
 			res.badOffset, res.corrupt = off, true
 			return res, nil
@@ -486,7 +486,7 @@ func uniqueCorruptName(base string) (string, error) {
 
 // readRecordPayload reads and CRC-verifies a single payload located at off with
 // the given length from path, returning the unmarshaled EventBatch.
-func readRecordPayload(path string, off int64, length uint32, wantCRC uint32) (*opensplunkv1.EventBatch, error) {
+func readRecordPayload(path string, off int64, length uint32, wantCRC uint32) (*opensplunk.EventBatch, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -502,7 +502,7 @@ func readRecordPayload(path string, off int64, length uint32, wantCRC uint32) (*
 	if crc32c(buf) != wantCRC {
 		return nil, fmt.Errorf("collector/wal: CRC mismatch reading %s: %w", filepath.Base(path), ErrCorruptSegment)
 	}
-	var batch opensplunkv1.EventBatch
+	var batch opensplunk.EventBatch
 	if err := proto.Unmarshal(buf, &batch); err != nil {
 		return nil, fmt.Errorf("collector/wal: unmarshal record in %s: %w", filepath.Base(path), ErrCorruptSegment)
 	}

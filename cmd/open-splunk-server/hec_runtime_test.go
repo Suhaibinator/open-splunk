@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/hechttp"
@@ -261,14 +261,14 @@ func TestRuntimeHECHandlerOwnsNamespaceDelegatesBrowserAndStagesDurably(t *testi
 	delegated := httptest.NewRecorder()
 	handler.ServeHTTP(
 		delegated,
-		httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/system/bootstrap", nil),
+		httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/system/bootstrap", nil),
 	)
 	if delegated.Code != 299 || delegated.Header().Get("X-Delegated") != "true" ||
 		delegated.Body.String() != "browser" {
 		t.Fatalf("delegated response = (%d, %q, %q)", delegated.Code, delegated.Header().Get("X-Delegated"), delegated.Body.String())
 	}
 	if calls, method, path := next.snapshot(); calls != 1 || method != http.MethodPost ||
-		path != "/api/v1/system/bootstrap" {
+		path != "/api/system/bootstrap" {
 		t.Fatalf("browser delegation = (%d, %q, %q)", calls, method, path)
 	}
 
@@ -446,11 +446,11 @@ func TestNewRuntimeHECOperationsRequiresCompleteDependencies(t *testing.T) {
 }
 
 func TestHECServerFeatureOrdinalIsStable(t *testing.T) {
-	feature := opensplunkv1.ServerFeature_SERVER_FEATURE_HEC_INGESTION
+	feature := opensplunk.ServerFeature_SERVER_FEATURE_HEC_INGESTION
 	if got := int32(feature); got != 16 {
 		t.Fatalf("SERVER_FEATURE_HEC_INGESTION = %d, want stable ordinal 16", got)
 	}
-	if got := opensplunkv1.ServerFeature_name[int32(feature)]; got != "SERVER_FEATURE_HEC_INGESTION" {
+	if got := opensplunk.ServerFeature_name[int32(feature)]; got != "SERVER_FEATURE_HEC_INGESTION" {
 		t.Fatalf("HEC server feature name = %q", got)
 	}
 }

@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -24,13 +24,11 @@ type knowledgeSnapshotSummaryWireRecord struct {
 }
 
 type knowledgeSnapshotReferenceContract struct {
-	SnapshotSHA256               string `json:"snapshotSha256"`
-	TenantCatalogRevision        string `json:"tenantCatalogRevision"`
-	TenantCatalogStateToken      string `json:"tenantCatalogStateToken"`
-	ObjectCount                  uint32 `json:"objectCount"`
-	CompilerCompatibilityVersion string `json:"compilerCompatibilityVersion"`
-	LookupAssetCount             uint32 `json:"lookupAssetCount"`
-	LookupAssetCountUnknown      bool   `json:"lookupAssetCountUnknown"`
+	SnapshotSHA256          string `json:"snapshotSha256"`
+	TenantCatalogRevision   string `json:"tenantCatalogRevision"`
+	TenantCatalogStateToken string `json:"tenantCatalogStateToken"`
+	ObjectCount             uint32 `json:"objectCount"`
+	LookupAssetCount        uint32 `json:"lookupAssetCount"`
 }
 
 type knowledgeSnapshotAuthorizedObjectContract struct {
@@ -73,8 +71,8 @@ func TestKnowledgeSnapshotReferenceAndSummarySharedGoTypeScriptWireGolden(t *tes
 	if err := json.Unmarshal(encodedFixture, &fixture); err != nil {
 		t.Fatalf("decode shared knowledge snapshot summary fixture: %v", err)
 	}
-	if fixture.Version != 2 || len(fixture.Cases) != 3 {
-		t.Fatalf("fixture = version %d with %d cases, want version 2 with 3 cases", fixture.Version, len(fixture.Cases))
+	if fixture.Version != 1 || len(fixture.Cases) != 3 {
+		t.Fatalf("fixture = version %d with %d cases, want version 1 with 3 cases", fixture.Version, len(fixture.Cases))
 	}
 
 	seen := make(map[string]bool, len(fixture.Cases))
@@ -99,17 +97,17 @@ func TestKnowledgeSnapshotReferenceAndSummarySharedGoTypeScriptWireGolden(t *tes
 				}
 				refWire := deterministicContractWire(t, summary.GetRef())
 				assertKnowledgeSummaryWireRecord(t, "reference", refWire, *contract.RefWire)
-				assertKnowledgeSummaryWireRoundTrip(t, "reference", refWire, summary.GetRef(), &opensplunkv1.KnowledgeSnapshotRef{})
+				assertKnowledgeSummaryWireRoundTrip(t, "reference", refWire, summary.GetRef(), &opensplunk.KnowledgeSnapshotRef{})
 
 				summaryWire := deterministicContractWire(t, summary)
 				assertKnowledgeSummaryWireRecord(t, "summary", summaryWire, *contract.SummaryWire)
-				assertKnowledgeSummaryWireRoundTrip(t, "summary", summaryWire, summary, &opensplunkv1.KnowledgeSnapshotSummary{})
+				assertKnowledgeSummaryWireRoundTrip(t, "summary", summaryWire, summary, &opensplunk.KnowledgeSnapshotSummary{})
 			}
 
-			job := &opensplunkv1.SearchJob{KnowledgeSnapshot: summary}
+			job := &opensplunk.SearchJob{KnowledgeSnapshot: summary}
 			jobWire := deterministicContractWire(t, job)
 			assertKnowledgeSummaryWireRecord(t, "SearchJob attachment", jobWire, contract.SearchJobWire)
-			var decodedJob opensplunkv1.SearchJob
+			var decodedJob opensplunk.SearchJob
 			if err := proto.Unmarshal(jobWire, &decodedJob); err != nil {
 				t.Fatalf("unmarshal SearchJob attachment: %v", err)
 			}
@@ -153,7 +151,7 @@ func TestKnowledgeSnapshotReferenceAndSummarySharedGoTypeScriptWireGolden(t *tes
 func knowledgeSnapshotSummaryFromContract(
 	t *testing.T,
 	contract knowledgeSnapshotSummaryWireCase,
-) *opensplunkv1.KnowledgeSnapshotSummary {
+) *opensplunk.KnowledgeSnapshotSummary {
 	t.Helper()
 	if contract.Ref == nil {
 		return nil
@@ -165,23 +163,21 @@ func knowledgeSnapshotSummaryFromContract(
 	}
 	digest := decodeKnowledgeSummaryHex(t, "snapshot SHA-256", contract.Ref.SnapshotSHA256, sha256.Size)
 	stateToken := decodeKnowledgeSummaryHex(t, "tenant catalog state token", contract.Ref.TenantCatalogStateToken, sha256.Size)
-	summary := &opensplunkv1.KnowledgeSnapshotSummary{
-		Ref: &opensplunkv1.KnowledgeSnapshotRef{
-			SnapshotSha256:               digest,
-			TenantCatalogRevision:        revision,
-			TenantCatalogStateToken:      stateToken,
-			ObjectCount:                  contract.Ref.ObjectCount,
-			CompilerCompatibilityVersion: contract.Ref.CompilerCompatibilityVersion,
-			LookupAssetCount:             contract.Ref.LookupAssetCount,
-			LookupAssetCountUnknown:      contract.Ref.LookupAssetCountUnknown,
+	summary := &opensplunk.KnowledgeSnapshotSummary{
+		Ref: &opensplunk.KnowledgeSnapshotRef{
+			SnapshotSha256:          digest,
+			TenantCatalogRevision:   revision,
+			TenantCatalogStateToken: stateToken,
+			ObjectCount:             contract.Ref.ObjectCount,
+			LookupAssetCount:        contract.Ref.LookupAssetCount,
 		},
 		ObjectsTruncated: contract.ObjectsTruncated,
 	}
 	for index, object := range contract.Objects {
-		entry := &opensplunkv1.KnowledgeSnapshotObjectSummary{
+		entry := &opensplunk.KnowledgeSnapshotObjectSummary{
 			ResolutionOrdinal: object.ResolutionOrdinal,
-			ObjectType:        opensplunkv1.KnowledgeObjectType(object.ObjectType),
-			Stage:             opensplunkv1.KnowledgeSearchStage(object.Stage),
+			ObjectType:        opensplunk.KnowledgeObjectType(object.ObjectType),
+			Stage:             opensplunk.KnowledgeSearchStage(object.Stage),
 		}
 		switch {
 		case object.AuthorizedObject != nil && object.Redacted == nil:
@@ -189,8 +185,8 @@ func knowledgeSnapshotSummaryFromContract(
 			if err != nil {
 				t.Fatalf("parse object %d authorized version: %v", index, err)
 			}
-			entry.Disclosure = &opensplunkv1.KnowledgeSnapshotObjectSummary_AuthorizedObject{
-				AuthorizedObject: &opensplunkv1.KnowledgeSnapshotAuthorizedObjectSummary{
+			entry.Disclosure = &opensplunk.KnowledgeSnapshotObjectSummary_AuthorizedObject{
+				AuthorizedObject: &opensplunk.KnowledgeSnapshotAuthorizedObjectSummary{
 					KnowledgeObjectId: object.AuthorizedObject.KnowledgeObjectID,
 					Version:           version,
 					Name:              object.AuthorizedObject.Name,
@@ -200,7 +196,7 @@ func knowledgeSnapshotSummaryFromContract(
 			if !*object.Redacted {
 				t.Fatalf("object %d redacted disclosure must be true", index)
 			}
-			entry.Disclosure = &opensplunkv1.KnowledgeSnapshotObjectSummary_Redacted{Redacted: true}
+			entry.Disclosure = &opensplunk.KnowledgeSnapshotObjectSummary_Redacted{Redacted: true}
 		default:
 			t.Fatalf("object %d must contain exactly one authorized or redacted disclosure", index)
 		}
@@ -209,7 +205,7 @@ func knowledgeSnapshotSummaryFromContract(
 	return summary
 }
 
-func assertAuthorizedAndRedactedSummaryContract(t *testing.T, summary *opensplunkv1.KnowledgeSnapshotSummary) {
+func assertAuthorizedAndRedactedSummaryContract(t *testing.T, summary *opensplunk.KnowledgeSnapshotSummary) {
 	t.Helper()
 	if summary == nil || summary.GetRef() == nil || summary.GetRef().GetObjectCount() != 2 ||
 		len(summary.GetObjects()) != 2 || summary.GetObjectsTruncated() {
@@ -225,10 +221,10 @@ func assertAuthorizedAndRedactedSummaryContract(t *testing.T, summary *opensplun
 	if authorized.GetVersion() <= maximumJavaScriptSafeInteger {
 		t.Fatalf("authorized object version = %d, want greater than JavaScript safe integer", authorized.GetVersion())
 	}
-	if _, ok := summary.GetObjects()[0].GetDisclosure().(*opensplunkv1.KnowledgeSnapshotObjectSummary_AuthorizedObject); !ok {
+	if _, ok := summary.GetObjects()[0].GetDisclosure().(*opensplunk.KnowledgeSnapshotObjectSummary_AuthorizedObject); !ok {
 		t.Fatalf("first disclosure = %T, want authorized object", summary.GetObjects()[0].GetDisclosure())
 	}
-	if disclosure, ok := summary.GetObjects()[1].GetDisclosure().(*opensplunkv1.KnowledgeSnapshotObjectSummary_Redacted); !ok || !disclosure.Redacted {
+	if disclosure, ok := summary.GetObjects()[1].GetDisclosure().(*opensplunk.KnowledgeSnapshotObjectSummary_Redacted); !ok || !disclosure.Redacted {
 		t.Fatalf("second disclosure = %#v, want explicit redacted=true", summary.GetObjects()[1].GetDisclosure())
 	}
 }

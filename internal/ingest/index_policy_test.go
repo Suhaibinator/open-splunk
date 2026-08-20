@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -21,61 +21,61 @@ func TestCollectAppliesEachPerIndexLimitToOnlyThatIndex(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		limits     func(*opensplunkv1.LogEvent) IndexLimits
-		mutate     func(*opensplunkv1.LogEvent)
-		rejectCode opensplunkv1.EventRejectionCode
+		limits     func(*opensplunk.LogEvent) IndexLimits
+		mutate     func(*opensplunk.LogEvent)
+		rejectCode opensplunk.EventRejectionCode
 	}{
 		{
 			name: "encoded event bytes",
-			limits: func(event *opensplunkv1.LogEvent) IndexLimits {
+			limits: func(event *opensplunk.LogEvent) IndexLimits {
 				return IndexLimits{MaxEventBytes: uint64(proto.Size(event) - 1)}
 			},
-			mutate: func(event *opensplunkv1.LogEvent) {
+			mutate: func(event *opensplunk.LogEvent) {
 				event.Raw = []byte(strings.Repeat("x", 1024))
 			},
-			rejectCode: opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_EVENT_TOO_LARGE,
+			rejectCode: opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_EVENT_TOO_LARGE,
 		},
 		{
 			name: "field count",
-			limits: func(*opensplunkv1.LogEvent) IndexLimits {
+			limits: func(*opensplunk.LogEvent) IndexLimits {
 				return IndexLimits{MaxFieldCount: 1}
 			},
-			mutate: func(event *opensplunkv1.LogEvent) {
+			mutate: func(event *opensplunk.LogEvent) {
 				event.Fields = object(stringField("one", "1"), stringField("two", "2"))
 			},
-			rejectCode: opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_TOO_MANY_FIELDS,
+			rejectCode: opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_TOO_MANY_FIELDS,
 		},
 		{
 			name: "nesting depth",
-			limits: func(*opensplunkv1.LogEvent) IndexLimits {
+			limits: func(*opensplunk.LogEvent) IndexLimits {
 				return IndexLimits{MaxNestingDepth: 1}
 			},
-			mutate: func(event *opensplunkv1.LogEvent) {
+			mutate: func(event *opensplunk.LogEvent) {
 				event.Fields = object(objectField("nested", object(stringField("leaf", "value"))))
 			},
-			rejectCode: opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_NESTING_TOO_DEEP,
+			rejectCode: opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_NESTING_TOO_DEEP,
 		},
 		{
 			name: "future skew",
-			limits: func(*opensplunkv1.LogEvent) IndexLimits {
+			limits: func(*opensplunk.LogEvent) IndexLimits {
 				return IndexLimits{MaximumFutureSkew: time.Second}
 			},
-			mutate: func(event *opensplunkv1.LogEvent) {
+			mutate: func(event *opensplunk.LogEvent) {
 				event.EventTime = timestamppb.New(validationTestNow.Add(2 * time.Second))
 				event.CollectedAt = timestamppb.New(validationTestNow.Add(2 * time.Second))
 			},
-			rejectCode: opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_TIMESTAMP,
+			rejectCode: opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_TIMESTAMP,
 		},
 		{
 			name: "event age",
-			limits: func(*opensplunkv1.LogEvent) IndexLimits {
+			limits: func(*opensplunk.LogEvent) IndexLimits {
 				return IndexLimits{MaximumEventAge: time.Hour}
 			},
-			mutate: func(event *opensplunkv1.LogEvent) {
+			mutate: func(event *opensplunk.LogEvent) {
 				event.EventTime = timestamppb.New(validationTestNow.Add(-2 * time.Hour))
 				event.CollectedAt = timestamppb.New(validationTestNow.Add(-2 * time.Hour))
 			},
-			rejectCode: opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_TIMESTAMP,
+			rejectCode: opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_TIMESTAMP,
 		},
 	}
 
@@ -103,7 +103,7 @@ func TestCollectAppliesEachPerIndexLimitToOnlyThatIndex(t *testing.T) {
 			})
 			harness := newServiceHarness(t, testServiceConfig(), authorizer, store)
 			stream := harness.stream(t, "Bearer good-token")
-			sendHello(t, stream, 1)
+			sendHello(t, stream)
 			_ = recvResponse(t, stream)
 			batchID := "batch-limit-" + strings.ReplaceAll(test.name, " ", "-")
 			if err := stream.Send(batchRequest(2, validTestBatch(
@@ -215,7 +215,7 @@ func TestCollectAppliesDefaultSourcetypeAndSnapshotsExactRetention(t *testing.T)
 	})
 	harness := newServiceHarness(t, testServiceConfig(), authorizer, store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1)
+	sendHello(t, stream)
 	_ = recvResponse(t, stream)
 
 	defaulted := validTestEvent("event-defaulted", "main")
@@ -266,7 +266,7 @@ func TestCollectUsesServerReceiveTimeForPerIndexTimestampLimits(t *testing.T) {
 	})
 	harness := newServiceHarness(t, testServiceConfig(), authorizer, acceptingStore())
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1)
+	sendHello(t, stream)
 	_ = recvResponse(t, stream)
 
 	event := validTestEvent("event-reference", "main")
@@ -332,7 +332,7 @@ func TestCollectKeepsAuthorizationBoundaryTimeThroughPolicyRefresh(t *testing.T)
 	})
 	harness := newServiceHarness(t, config, authorizer, store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1)
+	sendHello(t, stream)
 	_ = recvResponse(t, stream)
 
 	event := validTestEvent("event-boundary", "main")
@@ -408,14 +408,14 @@ func TestCollectUsesOneServerTimeSnapshotAcrossHeartbeatBoundary(t *testing.T) {
 	config.SessionManager = manager
 	harness := newServiceHarness(t, config, authorizer, acceptingStore())
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1)
+	sendHello(t, stream)
 	_ = recvResponse(t, stream)
 
 	measure.Store(true)
-	if err := stream.Send(&opensplunkv1.CollectRequest{
+	if err := stream.Send(&opensplunk.CollectRequest{
 		StreamSequence: 2,
 		SentAt:         timestamppb.New(boundary),
-		Payload: &opensplunkv1.CollectRequest_Heartbeat{Heartbeat: &opensplunkv1.CollectorHeartbeat{
+		Payload: &opensplunk.CollectRequest_Heartbeat{Heartbeat: &opensplunk.CollectorHeartbeat{
 			CollectorId: "collector-a", InstanceId: "instance-a", ObservedAt: timestamppb.New(boundary),
 		}},
 	}); err != nil {
@@ -491,12 +491,12 @@ func TestCollectMutableIndexAuthorityFailureBlocksHeartbeatBeforePersistence(t *
 			config.SessionManager = manager
 			harness := newServiceHarness(t, config, authorizer, acceptingStore())
 			stream := harness.stream(t, "Bearer good-token")
-			sendHello(t, stream, 1)
+			sendHello(t, stream)
 			_ = recvResponse(t, stream)
-			if err := stream.Send(&opensplunkv1.CollectRequest{
+			if err := stream.Send(&opensplunk.CollectRequest{
 				StreamSequence: 2,
 				SentAt:         timestamppb.New(validationTestNow),
-				Payload: &opensplunkv1.CollectRequest_Heartbeat{Heartbeat: &opensplunkv1.CollectorHeartbeat{
+				Payload: &opensplunk.CollectRequest_Heartbeat{Heartbeat: &opensplunk.CollectorHeartbeat{
 					CollectorId: "collector-a", InstanceId: "instance-a", ObservedAt: timestamppb.New(validationTestNow),
 				}},
 			}); err != nil {
@@ -556,7 +556,7 @@ func TestValidatorDefaultSourcetypeRechecksEffectiveEventSize(t *testing.T) {
 		ReceivedAt:        validationTestNow,
 		DefaultSourcetype: "policy:default-that-expands-the-event",
 	}); rejection == nil ||
-		rejection.Code != opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_EVENT_TOO_LARGE ||
+		rejection.Code != opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_EVENT_TOO_LARGE ||
 		rejection.Violations[0].GetCode() != "event_too_large_after_redaction" {
 		t.Fatalf("default-expanded rejection = %#v", rejection)
 	}
@@ -585,7 +585,7 @@ func TestCollectAppliesIndexTimestampPolicyFromServerReceiveTime(t *testing.T) {
 	})
 	harness := newServiceHarness(t, testServiceConfig(), authorizer, store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1)
+	sendHello(t, stream)
 	_ = recvResponse(t, stream)
 
 	collectorReference := validationTestNow.Add(-2 * time.Hour)
@@ -602,7 +602,7 @@ func TestCollectAppliesIndexTimestampPolicyFromServerReceiveTime(t *testing.T) {
 	}
 	ack := recvResponse(t, stream).GetBatchAck()
 	if ack == nil || ack.GetAcceptedEventCount() != 1 || len(ack.GetRejectedEvents()) != 1 ||
-		ack.GetRejectedEvents()[0].GetCode() != opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_TIMESTAMP ||
+		ack.GetRejectedEvents()[0].GetCode() != opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_TIMESTAMP ||
 		ack.GetRejectedEvents()[0].GetViolations()[0].GetCode() != "timestamp_too_old" {
 		t.Fatalf("server-time policy acknowledgment = %#v", ack)
 	}
@@ -642,13 +642,13 @@ func TestCollectClassifiesInvalidAndUnauthorizedIndexesBeforeDeepValidation(t *t
 	})
 	harness := newServiceHarness(t, testServiceConfig(), authorizer, store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1)
+	sendHello(t, stream)
 	_ = recvResponse(t, stream)
 
-	unauthorized := &opensplunkv1.LogEvent{EventId: "shared-id", IndexName: "forbidden"}
+	unauthorized := &opensplunk.LogEvent{EventId: "shared-id", IndexName: "forbidden"}
 	duplicate := validTestEvent("shared-id", "main")
-	invalid := &opensplunkv1.LogEvent{EventId: "invalid-index", IndexName: "Invalid Name"}
-	invalidID := &opensplunkv1.LogEvent{EventId: " bad ", IndexName: "Invalid Name"}
+	invalid := &opensplunk.LogEvent{EventId: "invalid-index", IndexName: "Invalid Name"}
+	invalidID := &opensplunk.LogEvent{EventId: " bad ", IndexName: "Invalid Name"}
 	valid := validTestEvent("event-valid", "main")
 	if err := stream.Send(batchRequest(2, validTestBatch(
 		"collector-a", "batch-index-precheck", 1,
@@ -660,17 +660,17 @@ func TestCollectClassifiesInvalidAndUnauthorizedIndexesBeforeDeepValidation(t *t
 	if ack == nil || ack.GetAcceptedEventCount() != 1 || len(ack.GetRejectedEvents()) != 4 {
 		t.Fatalf("batch acknowledgment = %#v", ack)
 	}
-	if got := ack.GetRejectedEvents()[0].GetCode(); got != opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_INDEX {
+	if got := ack.GetRejectedEvents()[0].GetCode(); got != opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_INDEX {
 		t.Fatalf("unauthorized event rejection = %v", got)
 	}
-	if got := ack.GetRejectedEvents()[1]; got.GetCode() != opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_EVENT_ID ||
+	if got := ack.GetRejectedEvents()[1]; got.GetCode() != opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_EVENT_ID ||
 		got.GetViolations()[0].GetCode() != "duplicate_event_id" {
 		t.Fatalf("duplicate event rejection = %#v", got)
 	}
-	if got := ack.GetRejectedEvents()[2].GetCode(); got != opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_INDEX {
+	if got := ack.GetRejectedEvents()[2].GetCode(); got != opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_INDEX {
 		t.Fatalf("invalid-index event rejection = %v", got)
 	}
-	if got := ack.GetRejectedEvents()[3].GetCode(); got != opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_EVENT_ID {
+	if got := ack.GetRejectedEvents()[3].GetCode(); got != opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_EVENT_ID {
 		t.Fatalf("invalid-ID event rejection = %v", got)
 	}
 	if len(stored.Events) != 1 || stored.Events[0].Event.GetEventId() != "event-valid" {
@@ -715,7 +715,7 @@ func TestCollectRefreshesResolvedIndexPolicyAtEveryBatchBoundary(t *testing.T) {
 	store := &recoverableTestStore{}
 	harness := newServiceHarness(t, config, authorizer, store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1)
+	sendHello(t, stream)
 	_ = recvResponse(t, stream)
 
 	first := validTestEvent("event-first", "main")
@@ -732,7 +732,7 @@ func TestCollectRefreshesResolvedIndexPolicyAtEveryBatchBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	if reject := recvResponse(t, stream).GetBatchReject(); reject == nil ||
-		reject.GetCode() != opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS {
+		reject.GetCode() != opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS {
 		t.Fatalf("refreshed policy response = %#v", reject)
 	}
 	if refreshes != 2 || store.storeCalls != 1 || store.rejectCalls != 1 ||
@@ -792,7 +792,7 @@ func TestCollectDurableRetryPrecedesMutableIndexAuthorityFailure(t *testing.T) {
 			store := &recoverableTestStore{}
 			harness := newServiceHarness(t, config, authorizer, store)
 			stream := harness.stream(t, "Bearer good-token")
-			sendHello(t, stream, 1)
+			sendHello(t, stream)
 			_ = recvResponse(t, stream)
 
 			batch := validTestBatch(
@@ -878,7 +878,7 @@ func TestCollectRejectedRetryPrecedesMutableIndexAuthorityFailure(t *testing.T) 
 	}
 	rejection := batchRejection(
 		batch,
-		opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE,
+		opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE,
 		"original durable policy rejection",
 		"events",
 		"original_policy_limit",
@@ -898,7 +898,7 @@ func TestCollectRejectedRetryPrecedesMutableIndexAuthorityFailure(t *testing.T) 
 	config.SessionManager = manager
 	harness := newServiceHarness(t, config, authorizer, store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1)
+	sendHello(t, stream)
 	_ = recvResponse(t, stream)
 	if err := stream.Send(batchRequest(2, batch)); err != nil {
 		t.Fatal(err)
@@ -958,7 +958,7 @@ func TestCollectPendingRetryPrecedesMutableIndexAuthorityFailure(t *testing.T) {
 			config.SessionManager = manager
 			harness := newServiceHarness(t, config, authorizer, store)
 			stream := harness.stream(t, "Bearer good-token")
-			sendHello(t, stream, 1)
+			sendHello(t, stream)
 			_ = recvResponse(t, stream)
 			if err := stream.Send(batchRequest(2, validTestBatch(
 				"collector-a", "batch-pending-policy", 1, validTestEvent("event-pending", "main"),
@@ -1027,7 +1027,7 @@ func TestCollectFatalOrMalformedLeaseAuthorizationNeverLooksUpDurableBatch(t *te
 			store := &recoverableTestStore{}
 			harness := newServiceHarness(t, config, authorizer, store)
 			stream := harness.stream(t, "Bearer good-token")
-			sendHello(t, stream, 1)
+			sendHello(t, stream)
 			_ = recvResponse(t, stream)
 			if err := stream.Send(batchRequest(2, validTestBatch(
 				"collector-a", "batch-no-lookup", 1, validTestEvent("event-no-lookup", "main"),
@@ -1050,23 +1050,23 @@ func TestProcessBatchDeferredIndexAuthorityMasksEveryUnprovenDurableOutcome(t *t
 	tests := []struct {
 		name  string
 		store deferredAuthorityTestStore
-		setup func(*testing.T, *Service, *streamState, *opensplunkv1.EventBatch)
+		setup func(*testing.T, *Service, *streamState, *opensplunk.EventBatch)
 	}{
 		{
 			name: "hard envelope rejection",
-			setup: func(_ *testing.T, _ *Service, _ *streamState, batch *opensplunkv1.EventBatch) {
+			setup: func(_ *testing.T, _ *Service, _ *streamState, batch *opensplunk.EventBatch) {
 				batch.CollectorId = "other-collector"
 			},
 		},
 		{
 			name: "fingerprint failure",
-			setup: func(_ *testing.T, _ *Service, _ *streamState, batch *opensplunkv1.EventBatch) {
+			setup: func(_ *testing.T, _ *Service, _ *streamState, batch *opensplunk.EventBatch) {
 				batch.Events[0].Host = string([]byte{0xff})
 			},
 		},
 		{
 			name: "pending identity conflict",
-			setup: func(t *testing.T, service *Service, state *streamState, _ *opensplunkv1.EventBatch) {
+			setup: func(t *testing.T, service *Service, state *streamState, _ *opensplunk.EventBatch) {
 				other := validTestBatch(
 					"collector-a", "other-batch", 1, validTestEvent("other-event", "main"),
 				)
@@ -1174,7 +1174,7 @@ func TestCollectFailsClosedForInvalidAdmittedIndexPolicies(t *testing.T) {
 			})
 			harness := newServiceHarness(t, testServiceConfig(), authorizer, acceptingStore())
 			stream := harness.stream(t, "Bearer good-token")
-			sendHello(t, stream, 1)
+			sendHello(t, stream)
 			_, err := stream.Recv()
 			if got := status.Code(err); got != codes.Unavailable {
 				t.Fatalf("Collect error = %v (%v), want Unavailable", err, got)

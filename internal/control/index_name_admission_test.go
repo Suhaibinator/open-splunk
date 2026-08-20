@@ -543,14 +543,84 @@ func assertIndexNameCount(t *testing.T, database *DB, name string, want int64) {
 
 func seedActiveKnowledgeAdmissionEvidence(t *testing.T, database *DB) {
 	t.Helper()
-	seedKnowledgeStatePrerequisites(t, database.SQLDB())
-	insertKnowledgeStateVersion(t, database.SQLDB(), stateVersionFixture{
-		objectID:  "ko-index-admission",
-		version:   1,
-		state:     "active",
-		mutation:  "create",
-		timestamp: 10,
-	})
+	tx, err := database.SQLDB().BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("begin active knowledge admission evidence: %v", err)
+	}
+	if _, err := tx.ExecContext(t.Context(), `
+		INSERT INTO app_workspaces (
+			app_id, tenant_id, version, slug, display_name, description,
+			default_time_range_present, state,
+			created_at_unix_micro, updated_at_unix_micro
+		) VALUES (
+			'app_AAAAAAAAAAAAAAAAAAAAAA', 'tenant-a', 1,
+			'knowledge-admission', 'Knowledge admission', '', 0, 'active', 1, 1
+		);
+		INSERT INTO knowledge_catalog_tenants (tenant_id)
+		SELECT 'tenant-a'
+		WHERE NOT EXISTS (
+			SELECT 1 FROM knowledge_catalog_tenants WHERE tenant_id = 'tenant-a'
+		);
+		INSERT INTO knowledge_definition_blobs (
+			tenant_id, definition_digest, definition_proto,
+			definition_bytes, created_at_unix_micro
+		) VALUES ('tenant-a', zeroblob(32), X'01', 1, 1);
+		INSERT INTO knowledge_projection_tenant_ledgers (tenant_id)
+		SELECT 'tenant-a'
+		WHERE NOT EXISTS (
+			SELECT 1 FROM knowledge_projection_tenant_ledgers
+			WHERE tenant_id = 'tenant-a'
+		);
+		INSERT INTO knowledge_object_versions (
+			tenant_id, knowledge_object_id, object_version,
+			app_id, owner_id, object_type, name, sharing_scope, state,
+			definition_digest, dependency_count, mutation_kind,
+			created_at_unix_micro
+		) VALUES (
+			'tenant-a', 'ko-index-admission', 1,
+			'app_AAAAAAAAAAAAAAAAAAAAAA', 'owner-a', 'field_extraction',
+			'ko-index-admission', 'private', 'active', zeroblob(32), 0,
+			'create', 10
+		);
+		INSERT INTO knowledge_object_dependency_seals (
+			tenant_id, knowledge_object_id, object_version, dependency_count
+		) VALUES ('tenant-a', 'ko-index-admission', 1, 0);
+		INSERT INTO knowledge_object_list_projections (
+			tenant_id, knowledge_object_id, object_version,
+			app_id, owner_id, object_type, name, sharing_scope, state,
+			description_present, description,
+			index_selector_count, host_selector_count,
+			source_selector_count, sourcetype_selector_count,
+			selector_value_bytes, canonical_selector_bytes
+		) VALUES (
+			'tenant-a', 'ko-index-admission', 1,
+			'app_AAAAAAAAAAAAAAAAAAAAAA', 'owner-a', 'field_extraction',
+			'ko-index-admission', 'private', 'active', 0, '', 0, 0, 0, 0, 0, 43
+		);
+		INSERT INTO knowledge_object_list_projection_seals (
+			tenant_id, knowledge_object_id, object_version,
+			projection_bytes, canonical_selector_bytes
+		) SELECT tenant_id, knowledge_object_id, object_version,
+		         projection_bytes, canonical_selector_bytes
+		    FROM knowledge_object_list_projections
+		   WHERE tenant_id = 'tenant-a'
+		     AND knowledge_object_id = 'ko-index-admission'
+		     AND object_version = 1;
+		INSERT INTO knowledge_objects (
+			tenant_id, knowledge_object_id, current_version,
+			app_id, owner_id, object_type, name, sharing_scope, state,
+			definition_digest, created_at_unix_micro, updated_at_unix_micro
+		) VALUES (
+			'tenant-a', 'ko-index-admission', 1,
+			'app_AAAAAAAAAAAAAAAAAAAAAA', 'owner-a', 'field_extraction',
+			'ko-index-admission', 'private', 'active', zeroblob(32), 10, 10
+		)`); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("seed active knowledge admission evidence: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit active knowledge admission evidence: %v", err)
+	}
 }
 
 func corruptActiveKnowledgeAdmissionEvidence(

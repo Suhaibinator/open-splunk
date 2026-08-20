@@ -42,8 +42,8 @@ func chartBreakPipelineUpstreams() []chartBreakPipelineUpstream {
 		{"eval chained assignments", `index=gradethis | eval first=replace(duration, "ms$", ""), second=tonumber(first)`, "second", "level"},
 		{"eval overwrites a canonical column", `index=gradethis | eval message=replace(message, "old", "new")`, "path", "message"},
 
-		{"rex capture as column", `index=gradethis | rex field=path "^/api/v1/(?<area>[^/?]+)"`, "path", "area"},
-		{"rex capture as row", `index=gradethis | rex field=path "^/api/v1/(?<area>[^/?]+)"`, "area", "level"},
+		{"rex capture as column", `index=gradethis | rex field=path "^/api/(?<area>[^/?]+)"`, "path", "area"},
+		{"rex capture as row", `index=gradethis | rex field=path "^/api/(?<area>[^/?]+)"`, "area", "level"},
 		{"rex captures on both axes", `index=gradethis | rex "method=(?<method>[A-Z]+)\s+path=(?<route>\S+)"`, "route", "method"},
 		{"rex overwriting its own input", `index=gradethis | rex field=status "^(?<status>\d+)-(?<tail>.*)$"`, "status", "tail"},
 
@@ -92,7 +92,7 @@ func chartBreakPipelineUpstreams() []chartBreakPipelineUpstream {
 		{
 			name: "deep mixed pipeline",
 			upstream: `index=gradethis message="Request metrics" status>=500 ` +
-				`| rex field=path "^/api/v1/(?<area>[^/?]+)" ` +
+				`| rex field=path "^/api/(?<area>[^/?]+)" ` +
 				`| eval duration_ms=tonumber(replace(duration, "ms$", "")) ` +
 				`| bin duration_ms span=100 AS latency_band ` +
 				`| where severity>1 ` +

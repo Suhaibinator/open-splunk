@@ -1,5 +1,5 @@
 {
-  "format_version": "hec-compatibility-fixture-v0.1",
+  "format_version": 1,
   "cases": [
     {
       "id": "auth.disabled-token",
@@ -225,7 +225,7 @@
     },
     {
       "id": "transport.concatenated-gzip-members-rejected",
-      "rule": "multiple individually valid gzip members are not one accepted v0.1 body",
+      "rule": "multiple individually valid gzip members are not one accepted request body",
       "request": {
         "method": "POST",
         "path": "/services/collector/event",

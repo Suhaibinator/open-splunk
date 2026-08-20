@@ -15,7 +15,7 @@ import (
 	"testing"
 
 	"github.com/Suhaibinator/SRouter/pkg/router"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -87,11 +87,11 @@ func knowledgeValidationDirectRequest(
 }
 
 func knowledgeValidationCreateRequest(
-	definition *opensplunkv1.KnowledgeObjectDefinition,
-) *opensplunkv1.ValidateKnowledgeObjectRequest {
-	return &opensplunkv1.ValidateKnowledgeObjectRequest{
+	definition *opensplunk.KnowledgeObjectDefinition,
+) *opensplunk.ValidateKnowledgeObjectRequest {
+	return &opensplunk.ValidateKnowledgeObjectRequest{
 		Definition: definition,
-		Intent:     opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+		Intent:     opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
 	}
 }
 
@@ -160,24 +160,24 @@ func TestKnowledgeValidateHandlerReturnsSealedResultsWithoutSideEffects(
 
 	tests := []struct {
 		name       string
-		definition *opensplunkv1.KnowledgeObjectDefinition
+		definition *opensplunk.KnowledgeObjectDefinition
 		wantValid  bool
 	}{
 		{
 			name: "valid inactive candidate",
 			definition: knowledgeHTTPDefinition(
-				opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+				opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 			),
 			wantValid: true,
 		},
 		{
 			name: "invalid candidate remains in band",
-			definition: &opensplunkv1.KnowledgeObjectDefinition{
+			definition: &opensplunk.KnowledgeObjectDefinition{
 				AppId:        knowledgeHTTPAppID,
 				Name:         "invalid-validation-candidate",
-				SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
-				Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{
-					FieldAlias: &opensplunkv1.FieldAliasDefinition{},
+				SharingScope: opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
+				Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{
+					FieldAlias: &opensplunk.FieldAliasDefinition{},
 				},
 			},
 			wantValid: false,
@@ -250,7 +250,7 @@ func TestKnowledgeValidateHandlerTransfersLiveContextWithPermit(t *testing.T) {
 	serialized, err := harness.handler.validateKnowledgeObject(
 		request,
 		knowledgeValidationCreateRequest(knowledgeHTTPDefinition(
-			opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+			opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 		)),
 	)
 	if err != nil || serialized == nil || len(harness.handler.serializationGate) != 1 {
@@ -289,7 +289,7 @@ func TestKnowledgeValidateHandlerRejectsEnvelopeBeforeAdmissionAndApps(
 	)
 	_, err := harness.handler.validateKnowledgeObject(
 		request,
-		&opensplunkv1.ValidateKnowledgeObjectRequest{},
+		&opensplunk.ValidateKnowledgeObjectRequest{},
 	)
 	if status := knowledgeValidationHTTPStatus(t, err); status != http.StatusBadRequest {
 		t.Fatalf("status=%d, want %d", status, http.StatusBadRequest)
@@ -322,7 +322,7 @@ func TestKnowledgeValidateHandlerAdmissionPrecedesCandidateAuthority(
 	})
 	attempts := &knowledgeValidationAttemptLog{}
 	definition := knowledgeHTTPDefinition(
-		opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+		opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 	)
 	definition.AppId = strings.Repeat(" ", 4<<20)
 	_, err := harness.handler.validateKnowledgeObject(
@@ -368,7 +368,7 @@ func TestKnowledgeValidateHandlerRequiresExactWriterBeforeAppCatalog(
 			},
 		),
 		knowledgeValidationCreateRequest(knowledgeHTTPDefinition(
-			opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+			opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 		)),
 	)
 	if status := knowledgeValidationHTTPStatus(t, err); status != http.StatusServiceUnavailable {
@@ -414,7 +414,7 @@ func TestKnowledgeValidateHandlerAppFailuresAreClosedAndReleasePermit(
 					},
 				),
 				knowledgeValidationCreateRequest(knowledgeHTTPDefinition(
-					opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+					opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 				)),
 			)
 			if status := knowledgeValidationHTTPStatus(t, err); status != http.StatusServiceUnavailable {
@@ -444,7 +444,7 @@ func TestKnowledgeValidateHandlerMissingCreateAppIsUniformAndJournaled(
 	harness := newKnowledgePersistenceHarness(t, nil)
 	before := readKnowledgeValidationPersistenceCounts(t, harness)
 	definition := knowledgeHTTPDefinition(
-		opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+		opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 	)
 	definition.AppId = knowledgeHTTPOtherAppID
 	request := knowledgeValidationDirectRequest(
@@ -497,16 +497,16 @@ func TestKnowledgeValidateHandlerUpdateConflictJournalsExactObject(
 	t *testing.T,
 ) {
 	harness := newKnowledgePersistenceHarness(t, nil)
-	created := &opensplunkv1.CreateKnowledgeObjectResponse{}
+	created := &opensplunk.CreateKnowledgeObjectResponse{}
 	knowledgePersistenceOK(
 		t,
 		harness.http,
 		knowledgeObjectsCreatePath,
-		&opensplunkv1.CreateKnowledgeObjectRequest{
+		&opensplunk.CreateKnowledgeObjectRequest{
 			Definition: knowledgeHTTPDefinition(
-				opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+				opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 			),
-			InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+			InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 			ClientRequestId: "validation-update-conflict-create-0001",
 		},
 		created,
@@ -515,12 +515,12 @@ func TestKnowledgeValidateHandlerUpdateConflictJournalsExactObject(
 	objectID := created.GetKnowledgeObject().GetKnowledgeObjectId()
 	expectedVersion := uint64(2)
 	description := "candidate must not publish"
-	validation := &opensplunkv1.ValidateKnowledgeObjectRequest{
-		Definition:        &opensplunkv1.KnowledgeObjectDefinition{Description: &description},
+	validation := &opensplunk.ValidateKnowledgeObjectRequest{
+		Definition:        &opensplunk.KnowledgeObjectDefinition{Description: &description},
 		KnowledgeObjectId: &objectID,
 		ExpectedVersion:   &expectedVersion,
 		UpdateMask:        &fieldmaskpb.FieldMask{Paths: []string{"description"}},
-		Intent:            opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+		Intent:            opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
 	}
 	request := knowledgeValidationDirectRequest(
 		t,
@@ -604,7 +604,7 @@ func TestKnowledgeValidationScopeCloneIsIndependent(t *testing.T) {
 }
 
 func TestKnowledgeValidationBindingUsesExactASCIINormalization(t *testing.T) {
-	ascii := knowledgeHTTPDefinition(opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE)
+	ascii := knowledgeHTTPDefinition(opensplunk.SharingScope_SHARING_SCOPE_PRIVATE)
 	ascii.AppId = " \t" + knowledgeHTTPAppID + "\r\n"
 	if got := detachKnowledgeValidationRequestAuthority(
 		knowledgeValidationCreateRequest(ascii),
@@ -612,7 +612,7 @@ func TestKnowledgeValidationBindingUsesExactASCIINormalization(t *testing.T) {
 		t.Fatalf("ASCII-normalized app=%q, want %q", got, knowledgeHTTPAppID)
 	}
 
-	nonASCII := knowledgeHTTPDefinition(opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE)
+	nonASCII := knowledgeHTTPDefinition(opensplunk.SharingScope_SHARING_SCOPE_PRIVATE)
 	nonASCII.AppId = "\u00a0" + knowledgeHTTPAppID + "\u00a0"
 	if got := detachKnowledgeValidationRequestAuthority(
 		knowledgeValidationCreateRequest(nonASCII),
@@ -644,10 +644,10 @@ func definitiveKnowledgeValidationError(err error) error {
 
 func TestKnowledgeValidationErrorSanitizerIsClosed(t *testing.T) {
 	createInactive := knowledgeValidationRequestAuthority{
-		intent: opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+		intent: opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
 	}
 	createActive := knowledgeValidationRequestAuthority{
-		intent: opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION,
+		intent: opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION,
 	}
 	updateInactive := createInactive
 	updateInactive.update = true
@@ -811,7 +811,7 @@ func TestKnowledgeValidationPathIsRegisteredInExactManagementBoundary(t *testing
 		httpHandler,
 		knowledgeObjectsValidatePath,
 		knowledgeValidationCreateRequest(knowledgeHTTPDefinition(
-			opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+			opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 		)),
 	)
 	if response.Code != http.StatusServiceUnavailable {

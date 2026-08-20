@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
@@ -26,7 +26,7 @@ func TestCompileKnowledgeRuntimeGuard(t *testing.T) {
 	state.privateColumns = []string{private}
 	state.order = []compiledSortKey{{valueSQL: quoteIdentifier(internalSortTimeColumn)}}
 	state.tieBreakers = []compiledSortKey{{valueSQL: quoteIdentifier(internalSortIDColumn)}}
-	program := knowledgePreludeProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{
+	program := knowledgePreludeProgram(t, []*opensplunk.KnowledgeObjectDefinition{
 		knowledgeRegexStageDefinition(
 			"guard-regex",
 			`(?P<guard_value>[a-z]+)`,
@@ -182,7 +182,7 @@ func TestCompileKnowledgeRuntimeGuard(t *testing.T) {
 	})
 
 	t.Run("optional rex", func(t *testing.T) {
-		jsonProgram := knowledgePreludeProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{
+		jsonProgram := knowledgePreludeProgram(t, []*opensplunk.KnowledgeObjectDefinition{
 			knowledgeJSONStageDefinition("guard-json", "json_value", "payload.value", "east"),
 		})
 		jsonPreparation := knowledgePreludePreparationForTest(jsonProgram)
@@ -294,15 +294,15 @@ func TestCompileKnowledgeRuntimeGuard(t *testing.T) {
 }
 
 func TestCompileKnowledgeRuntimeGuardAccountsAliasCopies(t *testing.T) {
-	program := knowledgePreludeProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{{
+	program := knowledgePreludeProgram(t, []*opensplunk.KnowledgeObjectDefinition{{
 		AppId:        "app",
 		Name:         "guard-alias",
-		SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{
-			FieldAlias: &opensplunkv1.FieldAliasDefinition{
+		SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{
+			FieldAlias: &opensplunk.FieldAliasDefinition{
 				SourceField:       "host",
 				DestinationField:  "copied_host",
-				OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+				OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 			},
 		},
 	}})

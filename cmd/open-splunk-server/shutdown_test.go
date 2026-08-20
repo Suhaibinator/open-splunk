@@ -13,7 +13,7 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchws"
@@ -122,7 +122,7 @@ func TestShutdownDrainsDeletionAdmissionWakeBeforeRuntimeClose(t *testing.T) {
 			httptest.NewRequestWithContext(
 				context.Background(),
 				http.MethodPost,
-				"/api/v1/indexes/delete",
+				"/api/indexes/delete",
 				nil,
 			),
 		)
@@ -264,7 +264,7 @@ func TestShutdownHTTPServerUnblocksActiveWebSocketHandlerEvenOnCloseError(t *tes
 			httptest.NewRequestWithContext(
 				context.Background(),
 				http.MethodGet,
-				"/api/v1/search/ws",
+				"/api/search/ws",
 				nil,
 			),
 		)
@@ -331,7 +331,7 @@ func TestShutdownHTTPServerClosesActualUpgradedWebSocket(t *testing.T) {
 
 	dialer := websocket.Dialer{HandshakeTimeout: time.Second}
 	connection, response, err := dialer.Dial(
-		"ws"+strings.TrimPrefix(httpServer.URL, "http")+"/api/v1/search/ws",
+		"ws"+strings.TrimPrefix(httpServer.URL, "http")+"/api/search/ws",
 		nil,
 	)
 	if err != nil {
@@ -350,14 +350,14 @@ func TestShutdownHTTPServerClosesActualUpgradedWebSocket(t *testing.T) {
 	}
 	_ = response.Body.Close()
 
-	command := &opensplunkv1.SearchWebSocketCommand{
+	command := &opensplunk.SearchWebSocketCommand{
 		RequestId: "shutdown-blocked-provider",
-		Payload: &opensplunkv1.SearchWebSocketCommand_Subscribe{
-			Subscribe: &opensplunkv1.SubscribeSearchJobsCommand{
-				Subscriptions: []*opensplunkv1.SearchSubscription{{
+		Payload: &opensplunk.SearchWebSocketCommand_Subscribe{
+			Subscribe: &opensplunk.SubscribeSearchJobsCommand{
+				Subscriptions: []*opensplunk.SearchSubscription{{
 					SubscriptionId: "shutdown-subscription",
-					Target: &opensplunkv1.JobTarget{
-						Target: &opensplunkv1.JobTarget_SearchJobId{
+					Target: &opensplunk.JobTarget{
+						Target: &opensplunk.JobTarget_SearchJobId{
 							SearchJobId: "shutdown-search",
 						},
 					},

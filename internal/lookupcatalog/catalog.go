@@ -17,7 +17,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/lookupasset"
 	"github.com/Suhaibinator/open-splunk/internal/lookupdefinition"
@@ -98,7 +98,7 @@ func New(database *control.DB, assets lookupasset.Repository, options Options) (
 type CreateRequest struct {
 	TenantID   string
 	OwnerID    string
-	Definition *opensplunkv1.LookupDefinition
+	Definition *opensplunk.LookupDefinition
 	Asset      lookupasset.Version
 }
 
@@ -107,7 +107,7 @@ type ReplaceRequest struct {
 	OwnerID         string
 	LookupID        string
 	ExpectedVersion uint64
-	Definition      *opensplunkv1.LookupDefinition
+	Definition      *opensplunk.LookupDefinition
 	Asset           lookupasset.Version
 }
 
@@ -123,7 +123,7 @@ type StateRequest struct {
 	OwnerID         string
 	LookupID        string
 	ExpectedVersion uint64
-	State           opensplunkv1.LookupState
+	State           opensplunk.LookupState
 }
 
 // ListPageRequest is one normalized management-list query. Position and
@@ -133,10 +133,10 @@ type ListPageRequest struct {
 	TenantID         string
 	OwnerID          string
 	AppID            string
-	States           []opensplunkv1.LookupState
+	States           []opensplunk.LookupState
 	TextFilter       string
-	SortBy           opensplunkv1.LookupSortBy
-	SortDirection    opensplunkv1.SortDirection
+	SortBy           opensplunk.LookupSortBy
+	SortDirection    opensplunk.SortDirection
 	Limit            uint32
 	Position         *ListPosition
 	ExpectedSnapshot *ListSnapshot
@@ -162,7 +162,7 @@ type ListSnapshot struct {
 
 // ListPage is one bounded, detached current-definition page.
 type ListPage struct {
-	Lookups      []*opensplunkv1.Lookup
+	Lookups      []*opensplunk.Lookup
 	NextPosition *ListPosition
 	Snapshot     ListSnapshot
 	TotalSize    *uint64
@@ -176,7 +176,7 @@ type ResolveScope struct {
 }
 
 type Resolved struct {
-	Lookup *opensplunkv1.Lookup
+	Lookup *opensplunk.Lookup
 	Asset  lookupasset.Version
 }
 
@@ -264,7 +264,7 @@ func requireDefinitionCapacity(
 	return nil
 }
 
-func (catalog *Catalog) Create(ctx context.Context, request CreateRequest) (*opensplunkv1.Lookup, error) {
+func (catalog *Catalog) Create(ctx context.Context, request CreateRequest) (*opensplunk.Lookup, error) {
 	if err := catalog.validateContext(ctx); err != nil {
 		return nil, err
 	}
@@ -314,7 +314,7 @@ func (catalog *Catalog) CreatePublished(
 	ctx context.Context,
 	transaction lookupasset.PublicationTransaction,
 	request CreateRequest,
-) (*opensplunkv1.Lookup, error) {
+) (*opensplunk.Lookup, error) {
 	if err := catalog.validateContext(ctx); err != nil {
 		return nil, err
 	}
@@ -371,7 +371,7 @@ func (catalog *Catalog) CreatePublished(
 	return nil, fmt.Errorf("%w: lookup identity or logical name repeatedly collided", ErrConflict)
 }
 
-func (catalog *Catalog) createRows(ctx context.Context, tenantID, ownerID, lookupID string, definition *opensplunkv1.LookupDefinition, definitionBytes []byte, asset lookupasset.Version, now time.Time) (*opensplunkv1.Lookup, error) {
+func (catalog *Catalog) createRows(ctx context.Context, tenantID, ownerID, lookupID string, definition *opensplunk.LookupDefinition, definitionBytes []byte, asset lookupasset.Version, now time.Time) (*opensplunk.Lookup, error) {
 	tx, err := catalog.database.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin lookup creation: %w", err)
@@ -403,11 +403,11 @@ func createRowsInTransaction(
 	tenantID string,
 	ownerID string,
 	lookupID string,
-	definition *opensplunkv1.LookupDefinition,
+	definition *opensplunk.LookupDefinition,
 	definitionBytes []byte,
 	asset lookupasset.Version,
 	now time.Time,
-) (*opensplunkv1.Lookup, error) {
+) (*opensplunk.Lookup, error) {
 	// The public non-atomic path performs an early check before parsing the
 	// asset, but the app can be archived before this transaction begins. Keep
 	// the authoritative check on the same SQLite transaction as publication.
@@ -447,10 +447,10 @@ func createRowsInTransaction(
 	); err != nil {
 		return nil, err
 	}
-	return projection(tenantID, ownerID, lookupID, 1, opensplunkv1.LookupState_LOOKUP_STATE_ACTIVE, definition, asset, now, now, time.Time{}, time.Time{}), nil
+	return projection(tenantID, ownerID, lookupID, 1, opensplunk.LookupState_LOOKUP_STATE_ACTIVE, definition, asset, now, now, time.Time{}, time.Time{}), nil
 }
 
-func (catalog *Catalog) Replace(ctx context.Context, request ReplaceRequest) (*opensplunkv1.Lookup, error) {
+func (catalog *Catalog) Replace(ctx context.Context, request ReplaceRequest) (*opensplunk.Lookup, error) {
 	if err := catalog.validateContext(ctx); err != nil {
 		return nil, err
 	}
@@ -502,7 +502,7 @@ func (catalog *Catalog) ReplacePublished(
 	ctx context.Context,
 	transaction lookupasset.PublicationTransaction,
 	request ReplaceRequest,
-) (*opensplunkv1.Lookup, error) {
+) (*opensplunk.Lookup, error) {
 	if err := catalog.validateContext(ctx); err != nil {
 		return nil, err
 	}
@@ -546,11 +546,11 @@ func replaceRowsInTransaction(
 	ctx context.Context,
 	transaction lookupasset.PublicationTransaction,
 	request ReplaceRequest,
-	definition *opensplunkv1.LookupDefinition,
+	definition *opensplunk.LookupDefinition,
 	definitionBytes []byte,
 	asset lookupasset.Version,
 	now time.Time,
-) (*opensplunkv1.Lookup, error) {
+) (*opensplunk.Lookup, error) {
 	// This must run inside the publication transaction. The early caller check
 	// only avoids unnecessary asset validation for an already-archived app.
 	if err := requireActiveApp(
@@ -714,7 +714,7 @@ func insertVersion(
 	return nil
 }
 
-func (catalog *Catalog) Get(ctx context.Context, request GetRequest) (*opensplunkv1.Lookup, error) {
+func (catalog *Catalog) Get(ctx context.Context, request GetRequest) (*opensplunk.Lookup, error) {
 	if err := catalog.validateContext(ctx); err != nil {
 		return nil, err
 	}
@@ -730,7 +730,7 @@ func (catalog *Catalog) Get(ctx context.Context, request GetRequest) (*opensplun
 	if record.lookup.GetOwnerId() != request.OwnerID {
 		return nil, ErrNotFound
 	}
-	return proto.Clone(record.lookup).(*opensplunkv1.Lookup), nil
+	return proto.Clone(record.lookup).(*opensplunk.Lookup), nil
 }
 
 // GetResolved returns an owner-authorized logical projection together with
@@ -752,12 +752,12 @@ func (catalog *Catalog) GetResolved(ctx context.Context, request GetRequest) (Re
 
 // SetState applies an optimistic lifecycle transition. The definition version
 // is copied immutably so Lookup.version remains a complete mutation token.
-func (catalog *Catalog) SetState(ctx context.Context, request StateRequest) (*opensplunkv1.Lookup, error) {
+func (catalog *Catalog) SetState(ctx context.Context, request StateRequest) (*opensplunk.Lookup, error) {
 	if err := catalog.validateContext(ctx); err != nil {
 		return nil, err
 	}
 	if !validIdentity(request.TenantID, 255) || !validIdentity(request.OwnerID, 255) || !validIdentity(request.LookupID, 128) || request.ExpectedVersion == 0 ||
-		(request.State != opensplunkv1.LookupState_LOOKUP_STATE_ACTIVE && request.State != opensplunkv1.LookupState_LOOKUP_STATE_DISABLED && request.State != opensplunkv1.LookupState_LOOKUP_STATE_DELETED) {
+		(request.State != opensplunk.LookupState_LOOKUP_STATE_ACTIVE && request.State != opensplunk.LookupState_LOOKUP_STATE_DISABLED && request.State != opensplunk.LookupState_LOOKUP_STATE_DELETED) {
 		return nil, fmt.Errorf("%w: lookup state authority is invalid", ErrInvalid)
 	}
 	now, err := catalog.now()
@@ -779,24 +779,24 @@ func (catalog *Catalog) SetState(ctx context.Context, request StateRequest) (*op
 		return nil, fmt.Errorf("read lookup state authority: %w", err)
 	}
 	if owner != request.OwnerID || current != request.ExpectedVersion || currentState == "DELETED" ||
-		(request.State == opensplunkv1.LookupState_LOOKUP_STATE_DELETED && currentState != "DISABLED") {
+		(request.State == opensplunk.LookupState_LOOKUP_STATE_DELETED && currentState != "DISABLED") {
 		return nil, ErrConflict
 	}
-	if currentState == "ACTIVE" && request.State == opensplunkv1.LookupState_LOOKUP_STATE_ACTIVE ||
-		currentState == "DISABLED" && request.State == opensplunkv1.LookupState_LOOKUP_STATE_DISABLED {
+	if currentState == "ACTIVE" && request.State == opensplunk.LookupState_LOOKUP_STATE_ACTIVE ||
+		currentState == "DISABLED" && request.State == opensplunk.LookupState_LOOKUP_STATE_DISABLED {
 		return nil, ErrConflict
 	}
 	now, err = nextMutationTime(now, previousUpdatedMicro)
 	if err != nil {
 		return nil, err
 	}
-	if request.State == opensplunkv1.LookupState_LOOKUP_STATE_ACTIVE {
+	if request.State == opensplunk.LookupState_LOOKUP_STATE_ACTIVE {
 		if err := requireActiveApp(ctx, tx, request.TenantID, appID); err != nil {
 			return nil, err
 		}
 	}
-	terminal := request.State == opensplunkv1.LookupState_LOOKUP_STATE_DISABLED ||
-		request.State == opensplunkv1.LookupState_LOOKUP_STATE_DELETED
+	terminal := request.State == opensplunk.LookupState_LOOKUP_STATE_DISABLED ||
+		request.State == opensplunk.LookupState_LOOKUP_STATE_DELETED
 	if err := requireDefinitionCapacity(ctx, tx, request.TenantID, false, terminal); err != nil {
 		return nil, err
 	}
@@ -804,11 +804,11 @@ func (catalog *Catalog) SetState(ctx context.Context, request StateRequest) (*op
 	mutationKind := mutationEnable
 	disabledValue, deletedValue := any(nil), any(nil)
 	switch request.State {
-	case opensplunkv1.LookupState_LOOKUP_STATE_DISABLED:
+	case opensplunk.LookupState_LOOKUP_STATE_DISABLED:
 		nextState = "DISABLED"
 		mutationKind = mutationDisable
 		disabledValue = now.UnixMicro()
-	case opensplunkv1.LookupState_LOOKUP_STATE_DELETED:
+	case opensplunk.LookupState_LOOKUP_STATE_DELETED:
 		if !currentDisabledMicro.Valid {
 			return nil, ErrCorrupt
 		}
@@ -906,7 +906,7 @@ func (catalog *Catalog) ResolveAdmission(
 		if recordErr != nil {
 			return AdmissionResolution{}, recordErr
 		}
-		if record.lookup.GetState() != opensplunkv1.LookupState_LOOKUP_STATE_ACTIVE ||
+		if record.lookup.GetState() != opensplunk.LookupState_LOOKUP_STATE_ACTIVE ||
 			record.lookup.GetDefinition().GetName() != name {
 			return AdmissionResolution{}, ErrConflict
 		}
@@ -1036,7 +1036,7 @@ func (catalog *Catalog) resolveAutomaticProjectionRecords(
 			_ = rows.Close()
 			return nil, projectionErr
 		}
-		if record.lookup.GetState() != opensplunkv1.LookupState_LOOKUP_STATE_ACTIVE ||
+		if record.lookup.GetState() != opensplunk.LookupState_LOOKUP_STATE_ACTIVE ||
 			!record.lookup.GetDefinition().GetAutomatic() ||
 			record.lookup.GetDefinition().GetName() != registry.name {
 			_ = rows.Close()
@@ -1149,12 +1149,12 @@ func (catalog *Catalog) resolutionWinnerID(
 }
 
 func sharingRank(value int32) int {
-	switch opensplunkv1.SharingScope(value) {
-	case opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE:
+	switch opensplunk.SharingScope(value) {
+	case opensplunk.SharingScope_SHARING_SCOPE_PRIVATE:
 		return 0
-	case opensplunkv1.SharingScope_SHARING_SCOPE_APP:
+	case opensplunk.SharingScope_SHARING_SCOPE_APP:
 		return 1
-	case opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL:
+	case opensplunk.SharingScope_SHARING_SCOPE_GLOBAL:
 		return 2
 	default:
 		return -1
@@ -1162,7 +1162,7 @@ func sharingRank(value int32) int {
 }
 
 type persistedProjection struct {
-	lookup   *opensplunkv1.Lookup
+	lookup   *opensplunk.Lookup
 	assetRef lookupasset.VersionRef
 }
 
@@ -1277,7 +1277,7 @@ func projectPersisted(
 	if err != nil || len(columns) != int(version.columnCount) {
 		return persistedProjection{}, ErrCorrupt
 	}
-	definition := &opensplunkv1.LookupDefinition{}
+	definition := &opensplunk.LookupDefinition{}
 	if err := (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(version.definitionBytes, definition); err != nil {
 		return persistedProjection{}, ErrCorrupt
 	}
@@ -1518,7 +1518,7 @@ func resolvePersistedProjectionAsset(
 	return Resolved{Lookup: record.lookup, Asset: asset}, nil
 }
 
-func normalizeAgainstAsset(ctx context.Context, definition *opensplunkv1.LookupDefinition, asset lookupasset.Version) (lookupdefinition.Normalized, lookupasset.Version, error) {
+func normalizeAgainstAsset(ctx context.Context, definition *opensplunk.LookupDefinition, asset lookupasset.Version) (lookupdefinition.Normalized, lookupasset.Version, error) {
 	normalized, err := lookupdefinition.Normalize(definition, asset.Asset.Headers())
 	if err != nil {
 		return lookupdefinition.Normalized{}, lookupasset.Version{}, err
@@ -1529,7 +1529,7 @@ func normalizeAgainstAsset(ctx context.Context, definition *opensplunkv1.LookupD
 	return normalized, asset, nil
 }
 
-func (catalog *Catalog) validateDefinitionAsset(ctx context.Context, tenantID string, definition *opensplunkv1.LookupDefinition, supplied lookupasset.Version) (lookupdefinition.Normalized, lookupasset.Version, error) {
+func (catalog *Catalog) validateDefinitionAsset(ctx context.Context, tenantID string, definition *opensplunk.LookupDefinition, supplied lookupasset.Version) (lookupdefinition.Normalized, lookupasset.Version, error) {
 	if supplied.Ref.TenantID != tenantID {
 		return lookupdefinition.Normalized{}, lookupasset.Version{}, fmt.Errorf("%w: asset tenant does not match definition tenant", ErrInvalid)
 	}
@@ -1543,7 +1543,7 @@ func (catalog *Catalog) validateDefinitionAsset(ctx context.Context, tenantID st
 func validatePublishedDefinition(
 	ctx context.Context,
 	tenantID string,
-	definition *opensplunkv1.LookupDefinition,
+	definition *opensplunk.LookupDefinition,
 	asset lookupasset.Version,
 ) (lookupdefinition.Normalized, lookupasset.Version, error) {
 	if asset.Ref.TenantID != tenantID || asset.Asset == nil ||
@@ -1571,7 +1571,7 @@ func validatePublishedDefinition(
 	return normalizeAgainstAsset(ctx, definition, asset)
 }
 
-func deterministicDefinition(definition *opensplunkv1.LookupDefinition) ([]byte, error) {
+func deterministicDefinition(definition *opensplunk.LookupDefinition) ([]byte, error) {
 	bytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(definition)
 	if err != nil || len(bytes) == 0 || len(bytes) > 64<<10 {
 		return nil, fmt.Errorf("%w: lookup definition wire form is invalid", ErrInvalid)
@@ -1667,7 +1667,7 @@ func versionStateTimes(
 	createdMicro int64,
 	disabledMicro sql.NullInt64,
 	deletedMicro sql.NullInt64,
-) (opensplunkv1.LookupState, time.Time, time.Time, error) {
+) (opensplunk.LookupState, time.Time, time.Time, error) {
 	lookupState, disabled, deleted, err := stateTimes(
 		state,
 		nullTime(disabledMicro),
@@ -1697,7 +1697,7 @@ func versionStateTimes(
 	return lookupState, disabled, deleted, nil
 }
 
-func projection(tenantID, ownerID, lookupID string, version uint64, state opensplunkv1.LookupState, definition *opensplunkv1.LookupDefinition, asset lookupasset.Version, created, updated, disabled, deleted time.Time) *opensplunkv1.Lookup {
+func projection(tenantID, ownerID, lookupID string, version uint64, state opensplunk.LookupState, definition *opensplunk.LookupDefinition, asset lookupasset.Version, created, updated, disabled, deleted time.Time) *opensplunk.Lookup {
 	return projectionMetadata(
 		tenantID,
 		ownerID,
@@ -1722,8 +1722,8 @@ func projectionMetadata(
 	ownerID string,
 	lookupID string,
 	version uint64,
-	state opensplunkv1.LookupState,
-	definition *opensplunkv1.LookupDefinition,
+	state opensplunk.LookupState,
+	definition *opensplunk.LookupDefinition,
 	columns []string,
 	rowCount uint64,
 	canonicalSize uint64,
@@ -1733,10 +1733,10 @@ func projectionMetadata(
 	updated time.Time,
 	disabled time.Time,
 	deleted time.Time,
-) *opensplunkv1.Lookup {
-	result := &opensplunkv1.Lookup{
+) *opensplunk.Lookup {
+	result := &opensplunk.Lookup{
 		LookupId: lookupID, TenantId: tenantID, OwnerId: ownerID, Version: version, State: state,
-		Definition: proto.Clone(definition).(*opensplunkv1.LookupDefinition), Columns: slices.Clone(columns), RowCount: rowCount,
+		Definition: proto.Clone(definition).(*opensplunk.LookupDefinition), Columns: slices.Clone(columns), RowCount: rowCount,
 		CanonicalSizeBytes: canonicalSize, SourceSha256: slices.Clone(sourceDigest[:]), ContentSha256: slices.Clone(contentDigest[:]),
 		CreatedAt: timestamppb.New(created), UpdatedAt: timestamppb.New(updated),
 	}
@@ -1749,13 +1749,13 @@ func projectionMetadata(
 	return result
 }
 
-func stateTimes(value string, disabled, deleted time.Time) (opensplunkv1.LookupState, time.Time, time.Time, error) {
+func stateTimes(value string, disabled, deleted time.Time) (opensplunk.LookupState, time.Time, time.Time, error) {
 	switch value {
 	case "ACTIVE":
 		if !disabled.IsZero() || !deleted.IsZero() {
 			return 0, time.Time{}, time.Time{}, ErrCorrupt
 		}
-		return opensplunkv1.LookupState_LOOKUP_STATE_ACTIVE, time.Time{}, time.Time{}, nil
+		return opensplunk.LookupState_LOOKUP_STATE_ACTIVE, time.Time{}, time.Time{}, nil
 	case "DISABLED":
 		if disabled.IsZero() {
 			return 0, time.Time{}, time.Time{}, ErrCorrupt
@@ -1763,12 +1763,12 @@ func stateTimes(value string, disabled, deleted time.Time) (opensplunkv1.LookupS
 		if !deleted.IsZero() {
 			return 0, time.Time{}, time.Time{}, ErrCorrupt
 		}
-		return opensplunkv1.LookupState_LOOKUP_STATE_DISABLED, disabled, time.Time{}, nil
+		return opensplunk.LookupState_LOOKUP_STATE_DISABLED, disabled, time.Time{}, nil
 	case "DELETED":
 		if disabled.IsZero() || deleted.IsZero() || deleted.Before(disabled) {
 			return 0, time.Time{}, time.Time{}, ErrCorrupt
 		}
-		return opensplunkv1.LookupState_LOOKUP_STATE_DELETED, disabled, deleted, nil
+		return opensplunk.LookupState_LOOKUP_STATE_DELETED, disabled, deleted, nil
 	default:
 		return 0, time.Time{}, time.Time{}, ErrCorrupt
 	}
@@ -1843,7 +1843,7 @@ func storageCapacity(err error) bool {
 func cloneResolved(values []Resolved) []Resolved {
 	result := make([]Resolved, len(values))
 	for index, value := range values {
-		result[index] = Resolved{Lookup: proto.Clone(value.Lookup).(*opensplunkv1.Lookup), Asset: value.Asset}
+		result[index] = Resolved{Lookup: proto.Clone(value.Lookup).(*opensplunk.Lookup), Asset: value.Asset}
 	}
 	return result
 }

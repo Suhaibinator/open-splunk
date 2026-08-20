@@ -11,18 +11,15 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
-
-	"github.com/Suhaibinator/open-splunk/internal/buildinfo"
 )
 
 const (
 	testSourceRevision = "0123456789abcdef0123456789abcdef01234567"
-	testUIBuildID      = "r811kmm584928672429nj86105939698n1mj68327jmn0n0jm4n0kj986n9k88j10"
+	testUIBuildID      = "r4g31m9hnm8k57j757h57g6028068355704j729m1132264gkng3193840986g4j2"
 	testManifestGolden = `{
   "format_version": 1,
-  "application_version": "0.1.0",
   "source_revision": "0123456789abcdef0123456789abcdef01234567",
-  "ui_build_id": "r811kmm584928672429nj86105939698n1mj68327jmn0n0jm4n0kj986n9k88j10",
+  "ui_build_id": "r4g31m9hnm8k57j757h57g6028068355704j729m1132264gkng3193840986g4j2",
   "ui": {
     "sha256": "7d6d71c176bb18db6cd155fce479a4a463c77a2074f96c416143eb08437e4c9d",
     "file_count": 2,
@@ -41,9 +38,9 @@ const (
     ]
   },
   "protobuf_schema": {
-    "sha256": "c7ff23532e2c55eead11b878b97066c9506237cc8a55f326f5c60510609b9cb0",
+    "sha256": "1e5e4cb78d1409c2b3c757cfeedeaf02504cb4a6329208bb61e58fb77b511a8f",
     "file_count": 1,
-    "byte_count": 43
+    "byte_count": 40
   },
   "sqlite_migrations": {
     "sha256": "80b910820be2c9a6c0375361f38e5e4e177d49a31576b682c62ae1023faa9dfb",
@@ -72,8 +69,8 @@ func validFixture() fstest.MapFS {
 		"out/_next/static/chunks/app.0123456789ab.js": {
 			Data: []byte("console.log('open splunk');"),
 		},
-		"proto/open_splunk/v1/system_api.proto": {
-			Data: []byte("syntax = \"proto3\";\npackage open_splunk.v1;\n"),
+		"proto/open_splunk/system_api.proto": {
+			Data: []byte("syntax = \"proto3\";\npackage open_splunk;\n"),
 		},
 		"migrations/sqlite/0001_control.sql": {
 			Data: []byte("CREATE TABLE control (id TEXT PRIMARY KEY);\n"),
@@ -132,7 +129,7 @@ func (info understatedSizeInfo) Size() int64 {
 
 func mustGenerate(t *testing.T, filesystem fs.FS) Manifest {
 	t.Helper()
-	manifest, err := Generate(filesystem, "0.1.0", testSourceRevision)
+	manifest, err := Generate(filesystem, testSourceRevision)
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -146,7 +143,7 @@ func TestGenerateBoundsReadsWhenFileSizeChangesAfterInventory(t *testing.T) {
 		FS:   validFixture(),
 		path: "out/index.html",
 	}
-	if _, err := Generate(filesystem, "0.1.0", testSourceRevision); err == nil ||
+	if _, err := Generate(filesystem, testSourceRevision); err == nil ||
 		!strings.Contains(err.Error(), "read") ||
 		!strings.Contains(err.Error(), "expected") {
 		t.Fatalf("Generate understated-size error = %v", err)
@@ -161,8 +158,8 @@ func TestGenerateProducesCanonicalComponentBoundManifest(t *testing.T) {
 	if manifest.FormatVersion != ManifestFormatVersion {
 		t.Fatalf("format version = %d", manifest.FormatVersion)
 	}
-	if manifest.ApplicationVersion != "0.1.0" || manifest.SourceRevision != testSourceRevision {
-		t.Fatalf("identity = %q %q", manifest.ApplicationVersion, manifest.SourceRevision)
+	if manifest.SourceRevision != testSourceRevision {
+		t.Fatalf("source revision = %q", manifest.SourceRevision)
 	}
 	if manifest.UIBuildID != testUIBuildID {
 		t.Fatalf("UI build ID = %q", manifest.UIBuildID)
@@ -211,39 +208,12 @@ func TestGenerateProducesCanonicalComponentBoundManifest(t *testing.T) {
 	}
 }
 
-func TestGenerateUsesTheCompleteNonDefaultApplicationIdentity(t *testing.T) {
-	t.Parallel()
-
-	const applicationVersion = "12.34.56-rc.7+release"
-	fixture := cloneFixture(validFixture())
-	identity, err := buildinfo.Parse(applicationVersion, testSourceRevision)
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
-	buildID, err := identity.UIBuildID()
-	if err != nil {
-		t.Fatalf("UIBuildID: %v", err)
-	}
-	fixture[".next/BUILD_ID"].Data = []byte(buildID + "\n")
-
-	manifest, err := Generate(fixture, applicationVersion, testSourceRevision)
-	if err != nil {
-		t.Fatalf("Generate: %v", err)
-	}
-	if manifest.ApplicationVersion != applicationVersion || manifest.UIBuildID != buildID {
-		t.Fatalf("manifest identity = %q %q", manifest.ApplicationVersion, manifest.UIBuildID)
-	}
-	if err := Validate(fixture, manifest); err != nil {
-		t.Fatalf("Validate: %v", err)
-	}
-}
-
 func TestGenerateAcceptsNestedProtobufPackagesCoveredByRecursiveEmbed(t *testing.T) {
 	t.Parallel()
 
 	fixture := cloneFixture(validFixture())
-	fixture["proto/open_splunk/v2/nested/system_api.proto"] = &fstest.MapFile{
-		Data: []byte("syntax = \"proto3\";\npackage open_splunk.v2.nested;\n"),
+	fixture["proto/open_splunk/nested/system_api.proto"] = &fstest.MapFile{
+		Data: []byte("syntax = \"proto3\";\npackage open_splunk.nested;\n"),
 	}
 
 	manifest := mustGenerate(t, fixture)
@@ -266,9 +236,9 @@ func TestRepositoryProtobufInventoryCoversCurrentSourceContractTree(t *testing.T
 		t.Fatalf("protobuf file count = %d, want multiple files", inventory.component.FileCount)
 	}
 	if !slices.ContainsFunc(inventory.files, func(file FileDigest) bool {
-		return file.Path == "open_splunk/v1/system_api.proto"
+		return file.Path == "open_splunk/system_api.proto"
 	}) {
-		t.Fatal("protobuf inventory omitted open_splunk/v1/system_api.proto")
+		t.Fatal("protobuf inventory omitted open_splunk/system_api.proto")
 	}
 	if slices.ContainsFunc(inventory.files, func(file FileDigest) bool {
 		return !strings.HasSuffix(file.Path, ".proto")
@@ -312,7 +282,7 @@ func TestGenerateRejectsInputsGoEmbedWouldOmit(t *testing.T) {
 		},
 		{
 			name:       "non-protobuf source file",
-			path:       "proto/open_splunk/v2/README.md",
+			path:       "proto/open_splunk/README.md",
 			data:       "not a wire schema\n",
 			wantDetail: "non-.proto",
 		},
@@ -323,7 +293,7 @@ func TestGenerateRejectsInputsGoEmbedWouldOmit(t *testing.T) {
 			fixture := cloneFixture(validFixture())
 			fixture[test.path] = &fstest.MapFile{Data: []byte(test.data)}
 
-			_, err := Generate(fixture, "0.1.0", testSourceRevision)
+			_, err := Generate(fixture, testSourceRevision)
 			if err == nil || !strings.Contains(err.Error(), test.wantDetail) {
 				t.Fatalf("Generate error = %v, want detail %q", err, test.wantDetail)
 			}
@@ -349,7 +319,7 @@ func TestGenerateBindsEachComponentWithoutCrossComponentDrift(t *testing.T) {
 		},
 		{
 			name: "protobuf",
-			path: "proto/open_splunk/v1/system_api.proto",
+			path: "proto/open_splunk/system_api.proto",
 			wantChanged: func(manifest Manifest) string {
 				return manifest.ProtobufSchema.SHA256
 			},
@@ -423,57 +393,28 @@ func TestGenerateRejectsInvalidOrIncompleteInputs(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		version    string
 		revision   string
 		mutate     func(fstest.MapFS)
 		wantDetail string
 	}{
 		{
-			name:       "invalid application version",
-			version:    "0.1.0\nforged",
-			revision:   testSourceRevision,
-			wantDetail: "application version",
-		},
-		{
-			name:       "numeric prerelease with leading zero",
-			version:    "1.0.0-01",
-			revision:   testSourceRevision,
-			wantDetail: "application version",
-		},
-		{
-			name:       "empty prerelease identifier",
-			version:    "1.0.0-alpha..1",
-			revision:   testSourceRevision,
-			wantDetail: "application version",
-		},
-		{
-			name:       "empty build identifier",
-			version:    "1.0.0+build.",
-			revision:   testSourceRevision,
-			wantDetail: "application version",
-		},
-		{
 			name:       "short revision",
-			version:    "0.1.0",
 			revision:   "01234567",
 			wantDetail: "source revision",
 		},
 		{
 			name:       "uppercase revision",
-			version:    "0.1.0",
 			revision:   strings.ToUpper(testSourceRevision),
 			wantDetail: "source revision",
 		},
 		{
 			name:       "missing index",
-			version:    "0.1.0",
 			revision:   testSourceRevision,
 			mutate:     func(files fstest.MapFS) { delete(files, "out/index.html") },
 			wantDetail: "index.html",
 		},
 		{
 			name:     "oversized HTML",
-			version:  "0.1.0",
 			revision: testSourceRevision,
 			mutate: func(files fstest.MapFS) {
 				files["out/index.html"].Data = bytes.Repeat([]byte("x"), maximumHTMLBytes+1)
@@ -482,7 +423,6 @@ func TestGenerateRejectsInvalidOrIncompleteInputs(t *testing.T) {
 		},
 		{
 			name:     "missing referenced asset",
-			version:  "0.1.0",
 			revision: testSourceRevision,
 			mutate: func(files fstest.MapFS) {
 				delete(files, "out/_next/static/chunks/app.0123456789ab.js")
@@ -491,7 +431,6 @@ func TestGenerateRejectsInvalidOrIncompleteInputs(t *testing.T) {
 		},
 		{
 			name:     "build ID mismatch",
-			version:  "0.1.0",
 			revision: testSourceRevision,
 			mutate: func(files fstest.MapFS) {
 				files[".next/BUILD_ID"].Data = []byte(testSourceRevision + "\n")
@@ -500,7 +439,6 @@ func TestGenerateRejectsInvalidOrIncompleteInputs(t *testing.T) {
 		},
 		{
 			name:     "migration gap",
-			version:  "0.1.0",
 			revision: testSourceRevision,
 			mutate: func(files fstest.MapFS) {
 				delete(files, "migrations/sqlite/0001_control.sql")
@@ -509,7 +447,6 @@ func TestGenerateRejectsInvalidOrIncompleteInputs(t *testing.T) {
 		},
 		{
 			name:     "symbolic link",
-			version:  "0.1.0",
 			revision: testSourceRevision,
 			mutate: func(files fstest.MapFS) {
 				files["out/link"] = &fstest.MapFile{Mode: fs.ModeSymlink}
@@ -524,7 +461,7 @@ func TestGenerateRejectsInvalidOrIncompleteInputs(t *testing.T) {
 			if test.mutate != nil {
 				test.mutate(fixture)
 			}
-			_, err := Generate(fixture, test.version, test.revision)
+			_, err := Generate(fixture, test.revision)
 			if err == nil || !strings.Contains(err.Error(), test.wantDetail) {
 				t.Fatalf("Generate error = %v, want detail %q", err, test.wantDetail)
 			}
@@ -548,14 +485,14 @@ func TestGenerateRejectsSymlinkedTreeRoot(t *testing.T) {
 	}
 	writeTestFile(filepath.Join(root, ".next", "BUILD_ID"), testUIBuildID)
 	writeTestFile(filepath.Join(externalUI, "index.html"), "<!doctype html>")
-	writeTestFile(filepath.Join(root, "proto", "open_splunk", "v1", "system.proto"), "syntax = \"proto3\";\n")
+	writeTestFile(filepath.Join(root, "proto", "open_splunk", "system.proto"), "syntax = \"proto3\";\n")
 	writeTestFile(filepath.Join(root, "migrations", "sqlite", "0001_control.sql"), "SELECT 1;\n")
 	writeTestFile(filepath.Join(root, "migrations", "clickhouse", "0001_events.sql"), "SELECT 1;\n")
 	if err := os.Symlink(externalUI, filepath.Join(root, "out")); err != nil {
 		t.Skipf("symbolic links are unavailable: %v", err)
 	}
 
-	if _, err := Generate(os.DirFS(root), "0.1.0", testSourceRevision); err == nil ||
+	if _, err := Generate(os.DirFS(root), testSourceRevision); err == nil ||
 		!strings.Contains(err.Error(), "symbolic link") {
 		t.Fatalf("Generate error = %v, want symbolic-link root rejection", err)
 	}
@@ -577,7 +514,7 @@ func TestGenerateRejectsAssetMissingFromNonRootRoute(t *testing.T) {
 	}
 
 	delete(fixture, "out/_next/static/chunks/search.0123456789ab.js")
-	if _, err := Generate(fixture, "0.1.0", testSourceRevision); err == nil ||
+	if _, err := Generate(fixture, testSourceRevision); err == nil ||
 		!strings.Contains(err.Error(), "search/index.html") {
 		t.Fatalf("Generate error = %v, want missing search route asset", err)
 	}
@@ -617,7 +554,7 @@ func TestValidateRejectsTamperingMissingAndExtraFiles(t *testing.T) {
 		{
 			name: "tampered protobuf",
 			mutate: func(files fstest.MapFS) {
-				files["proto/open_splunk/v1/system_api.proto"].Data = []byte("changed")
+				files["proto/open_splunk/system_api.proto"].Data = []byte("changed")
 			},
 			wantDetail: "protobuf",
 		},

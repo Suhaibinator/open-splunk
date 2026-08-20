@@ -8,7 +8,7 @@ the browser UI, HTTP API, WebSocket service, collector gRPC endpoint, and both
 migration sets. ClickHouse data, SQLite/control-plane state, export artifacts,
 and remote collector state remain external.
 
-The optional HTTP Event Collector (HEC) compatibility surface is disabled by
+The optional HTTP Event Collector (HEC) facade is disabled by
 default. When enabled, it shares the existing browser/API HTTPS listener and
 does not publish a separate port 8088.
 
@@ -16,22 +16,20 @@ The default stack intentionally does not run a collector. Collectors belong on
 log-producing hosts, and the GradeThis collector cutover is a separate
 deployment unit.
 
-## Release images
+## Development images
 
-Pushing a `vX.Y.Z` semantic-version tag runs the single **Publish release
-images** workflow. One successful run publishes the complete consumable image
-set from the same tagged commit:
+No official image version has been published. Build both local images from the
+same clean source revision. The default tag is that full revision:
 
 ```text
-ghcr.io/suhaibinator/open-splunk-server:X.Y.Z
-ghcr.io/suhaibinator/open-splunk-collector:X.Y.Z
+open-splunk-server:<full-source-revision>
+open-splunk-collector:<full-source-revision>
 ```
 
-Both references are immutable versioned multi-platform manifests containing
-Linux AMD64 and ARM64 images. The workflow does not publish a floating
-`latest` tag. SemVer build metadata uses `_` in the OCI tag because `+` is not
-valid there. Use the server image for the Compose stack and the collector image
-on log-producing hosts; do not mix versions from different releases.
+Treat source revision as the identity. Do not push these under a semantic
+release tag or floating `latest`, and do not mix server and collector images
+from different revisions. The first supported publication policy is future
+work described in [`docs/releasing.md`](../docs/releasing.md).
 
 ## Build and start
 
@@ -48,17 +46,15 @@ Build both local OCI images from the exact current commit:
 ```sh
 cd ..
 git status --short
-export OPEN_SPLUNK_APPLICATION_VERSION=0.4.0
 export OPEN_SPLUNK_SOURCE_REVISION="$(git rev-parse HEAD)"
 make oci
 ```
 
-The current runtime is application `0.4.0` with compatibility profile `0.4`.
-The OCI build derives that profile from committed source; it is not a
-caller-selectable build input.
+The current runtime is a development build. Its full source revision is the
+authoritative identity, not a compatibility profile.
 
 `git status --short` must be empty. `make oci` refuses a dirty worktree, a
-short or mismatched revision, an invalid semantic version, unsafe image names,
+short or mismatched revision, unsafe image names,
 and unsupported target platforms. The Make target executes the launcher and
 snapshot materializer stored in the current commit, and Docker receives only
 that materialized commit rather than working-tree files. It builds the server
@@ -85,13 +81,13 @@ start the stack:
 
 ```sh
 cd deploy
-OPEN_SPLUNK_APPLICATION_VERSION=0.4.0 ./generate-env.sh
+./generate-env.sh
 docker compose up --detach --wait
 ```
 
-The application version passed to `generate-env.sh` must match the version
-used by `make oci`. The generator records the full committed source revision,
-commit timestamp, and matching local server image tag in `.env`. The production
+The generator records the full committed source revision, commit timestamp,
+and matching local server image tag in `.env`; that revision must be the one
+used by `make oci`. The production
 Compose file has no source-build fallback: it uses only the prebuilt local
 server image and fails if that image is absent.
 
@@ -158,7 +154,7 @@ The HEC base URL is the existing browser/API origin, normally
 `https://localhost:${OPEN_SPLUNK_SERVER_HTTP_PORT:-8080}`. It uses the same
 generated certificate and CA. The host mapping remains loopback-only and no
 plaintext listener is added. See the
-[HEC deployment and operations runbook](../docs/hec-deployment.md) before
+[HEC deployment and operations reference](../docs/hec.md#enablement-and-deployment) before
 publishing the endpoint or onboarding a producer.
 
 ## Administrator credential
@@ -184,7 +180,7 @@ When creating a HEC credential, choose the immutable **HTTP Event Collector
 decide at creation whether indexer acknowledgment is enabled. The HEC
 plaintext token is shown once and must be moved directly into the producer's
 secret store. The
-[HEC runbook](../docs/hec-deployment.md#create-a-hec-token-in-administration)
+[HEC reference](../docs/hec.md#enablement-and-deployment)
 contains the complete sequence.
 
 ## Container and secret boundaries
@@ -216,7 +212,7 @@ not receive source files or apply the application schema. The one-shot
 `clickhouse-migrator` uses the exact same prebuilt image as the server, mounts
 only the ClickHouse CA and migration-password file, validates the pinned server
 version and exact migrator grant allowlist, applies `migrations.ClickHouse()`
-from the binary, validates the exact release-owned physical schema, clears its
+from the binary, validates the exact source-owned physical schema, clears its
 credential, and exits. It requires six consecutive fresh authenticated TLS
 probes before DDL, so the official image's temporary initialization server
 cannot create a false-ready race with the final server.
@@ -247,12 +243,12 @@ Initialization creates six distinct identities:
   recovery helpers receive this credential.
 - `open_splunk_migrator` can create only the embedded schema and migration
   ledger, and can inspect only the metadata needed to prove their exact
-  definitions. It is used only by the exact-release one-shot migrator.
+  definitions. It is used only by the exact-image one-shot migrator.
 - `open_splunk_runtime` can insert/select events and read the narrowly required
   index-statistics metadata.
 - `open_splunk_deletion` can submit and reconcile physical data deletion. Its
   event reads are restricted to the logical index identity columns.
-- `open_splunk_backup` can create a native backup of the release-owned
+- `open_splunk_backup` can create a native backup of the source-owned
   `open_splunk` database and inspect only the schema, visibility, and mutation
   metadata needed to prove a quiescent source. Database-scoped `SHOW TABLES`
   ensures administrator-owned extras cannot be hidden from the exact physical
@@ -261,7 +257,7 @@ Initialization creates six distinct identities:
   `recovery_archive_markers` table, used to bind one native archive and to
   synchronously clear an interrupted backup marker.
 - `open_splunk_restore` can create only the canonical `open_splunk` database
-  and its four exact release-owned tables, inspect only the metadata and
+  and its four exact source-owned tables, inspect only the metadata and
   bounded columns needed to validate the restored state, including scoped
   `SHOW TABLES` visibility for administrator-owned extras, write its singleton
   receipt, and consume its archive marker. Native `RESTORE` unavoidably
@@ -279,42 +275,28 @@ with ingestion, search, export, or inspection.
 `clickhouse-init.sh` rejects every server version other than `26.7.3.19` and
 provisions or rotates all six principals. For every managed non-bootstrap
 principal, it first removes all prior direct privileges and role assignments,
-then reapplies the exact release allowlist. The grants name their future
+then reapplies the exact image allowlist. The grants name their future
 database/table targets, so they can be installed before the schema exists. The
 hook runs on every ClickHouse container start; it never reads migration SQL.
 The image's passwordless base `default` user is removed.
 
 After ClickHouse becomes healthy, `clickhouse-migrator` connects through
-verified native TLS and applies only the migrations embedded in its image.
-The runner accepts an existing ledger only when it is an exact prefix of that
-release, applies a pending suffix idempotently, records each ledger row last,
-and verifies the complete ledger afterward. Before reporting success it also
-requires the `open_splunk` table set to contain exactly `events`,
-`schema_migrations`, `recovery_archive_markers`, and `recovery_sets`, and
-compares all four complete
-canonical `system.tables.create_table_query` definitions with the definitions
-produced by this pinned ClickHouse release. Missing or extra objects and any
-change to a column, type, default, codec, index, constraint, engine, key, TTL,
-or table setting fail even when the ledger is complete. Renamed, duplicate,
-gapped, or otherwise drifted history fails before DDL. An older image rejects
-a database migrated by a newer image; there is no automatic down-migration or
-schema rollback. The long-running server starts only after a zero exit and
-then validates the exact runtime and deletion grant allowlists before opening
-normal services. It has no migrator session or credential.
+verified native TLS and applies only the baseline/migrations embedded in its
+image. A fresh database begins with the current source baseline. The runner records each
+ClickHouse ledger row last, verifies exact names and digests, and requires the
+source-owned table set and canonical `system.tables.create_table_query`
+definitions to match exactly before reporting success. Missing or extra
+objects, physical-schema drift, and a renamed, duplicate, gapped, or unexpected
+ledger fail closed. The long-running server starts only after a zero exit and
+then validates the exact runtime and deletion grant allowlists. It has no
+migrator session or credential.
 
-For an upgrade, build a new immutable server tag from the exact clean commit,
-change `OPEN_SPLUNK_SERVER_IMAGE` in `.env` to that tag, and run:
-
-```sh
-docker compose up --detach --wait --no-build
-```
-
-The image change recreates the one-shot migrator before Compose replaces the
-long-running server. Keep the previous image and volumes until the new stack is
-healthy, but do not point an older release at a schema the newer release has
-advanced: its migrator will fail closed. A same-tag local image replacement is
-not an upgrade signal; use immutable tags, or deliberately add
-`--force-recreate` after verifying the tag contents.
+Databases and volumes belong to the source contract that created them. Do not
+try to repair or adopt an unrecognized ledger; provision fresh SQLite and
+ClickHouse volumes. Old data is never automatically upgraded, rewritten, or
+erased. Keep it separately if forensic access is required. The complete
+schema, ledger, retry, and future migration mechanics are in
+[`migrations/README.md`](../migrations/README.md).
 
 Credential rotation is coordinated. Atomically replace the migration, runtime,
 deletion, backup, and restore password files, update all six distinct
@@ -350,7 +332,7 @@ The stack owns seven named volumes:
   including when `server-state` is rebound to a fresh restore volume.
 
 `docker compose up --detach --wait` is safe to repeat. An unchanged successful
-one-shot migrator remains completed; changing the release image reruns it.
+one-shot migrator remains completed; changing the source image reruns it.
 Recreating the server retains its token, master key, and SQLite state.
 Recreating ClickHouse retains events and reruns the idempotent principal
 provisioning contract; use the coordinated rotation operation above when its
@@ -370,7 +352,7 @@ stack.
 
 The supported recovery unit pairs the SQLite visibility/control plane with the
 ClickHouse event database. The `recovery` Compose profile provides five
-exact-release one-shot services:
+exact-image one-shot services:
 
 - `deployment-backup` runs `backup-deployment-recovery-set` against a stopped
   server and a healthy, quiescent ClickHouse server;
@@ -401,10 +383,10 @@ The outer recovery-set directory contains exactly `manifest.json` and an
 unchanged `control-plane` backup child. The ClickHouse-native
 `<recovery_set_id>.tar.zst` archive remains on the separate recovery disk. The
 canonical outer manifest binds the child manifest and external archive by
-exact name, size, and SHA-256, and also records the exact application release,
+exact name, size, and SHA-256, and also records the exact build identity,
 migration identities, ClickHouse server version, source database/table UUIDs,
 maximum visibility sequence, native backup operation UUID, and the UUID of the
-release-owned archive-marker table. Verification
+source-owned archive-marker table. Verification
 recursively verifies the control-plane snapshot, master key, administrator
 token, outer manifest, archive bytes, and ownership metadata. Renaming,
 swapping, truncating, or combining members from different recovery sets fails
@@ -542,7 +524,7 @@ marker identities cannot be established exactly.
 
 ### Restore a recovery set
 
-Restore with the exact Open Splunk release recorded in the manifest. Retain
+Restore with the exact Open Splunk source revision recorded in the manifest. Retain
 the paired `server-recovery` and `clickhouse-recovery` volumes and the existing
 `server-lock` volume, but use fresh
 `clickhouse-data`, `clickhouse-logs`, `server-state`, and `server-exports`
@@ -627,7 +609,7 @@ phase is interrupted, rerunning the same deployment restore revalidates the
 ClickHouse receipt and resumes only an exact prefix of those three files.
 Both the preflight and final control restore bind the recursively verified
 child to the outer recovery-set ID and child-manifest SHA-256, so replacing it
-with another same-release bundle after ClickHouse completion still fails before
+with another same-revision bundle after ClickHouse completion still fails before
 any control target is mutated.
 Every control-plane staging and publication boundary also revalidates that the
 database-lock pathname still names the held inode; replacement, removal,
@@ -649,7 +631,7 @@ validated. Before a future backup, recreate ClickHouse with the base file and
 the retained recovery-target binding, dropping only the restore overlay, to
 return only ClickHouse's recovery mount to its normal writable mode.
 
-After a successful restore, use the exact-release migrator to verify the
+After a successful restore, use the exact-image migrator to verify the
 restored schema, then start the server directly from restored state. Do not run
 `server-bootstrap`, because doing so could mask a missing restored
 administrator token.
@@ -667,7 +649,7 @@ may be recreated by rerunning their source searches.
 ### Lower-level control-plane-only commands
 
 Hot-copying the SQLite database, WAL, or sidecar files is not a supported
-backup. The same release still provides lower-level control-plane-only
+backup. The same source tree still provides lower-level control-plane-only
 commands for maintenance that intentionally does not claim deployment
 recovery. Stop the Open Splunk server before using them.
 
@@ -729,23 +711,22 @@ by copying files manually.
 
 ## Collector image
 
-The same release pipeline that publishes the backend publishes the
-multi-platform `ghcr.io/suhaibinator/open-splunk-collector:<version>` image
-for Linux AMD64 and ARM64. Docker selects the matching architecture during a
-normal pull. A local `make oci` build also creates
-`open-splunk-collector:<version>` for its selected
+The same development artifact build that creates the backend creates the
+`open-splunk-collector:<label>` image for the selected Linux architecture.
+A local `make oci` build creates
+`open-splunk-collector:<label>` for its selected
 `OPEN_SPLUNK_OCI_PLATFORM`. The non-root scratch image defaults to:
 
 ```text
 open-splunk-collector run -config /etc/open-splunk/collector.yaml
 ```
 
-The complete Docker runbook covers TLS compatible with this Compose stack,
+The complete Docker runbook covers TLS matching this Compose stack,
 network exposure, index and token prerequisites, exact mounts, UID `65532`
-permissions, identity bootstrap, validation, startup, monitoring, upgrades,
-token rotation, WAL recovery, disk pressure, and dead-letter handling:
+permissions, identity bootstrap, validation, startup, monitoring, source
+changes, token rotation, WAL recovery, disk pressure, and dead-letter handling:
 
-[`docs/collector-deployment.md`](../docs/collector-deployment.md)
+[`docs/ingestion.md`](../docs/ingestion.md#development-deployment)
 
 The default Compose file deliberately has no collector service. Its collector
 port remains bound to host loopback, so make a deliberate firewall-restricted

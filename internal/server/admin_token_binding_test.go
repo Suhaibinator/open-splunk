@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
@@ -39,9 +39,9 @@ func TestIngestionTokenCollectorBindingValidation(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			parsed, err := tokenDefinitionFromProto(&opensplunkv1.IngestionTokenDefinition{
+			parsed, err := tokenDefinitionFromProto(&opensplunk.IngestionTokenDefinition{
 				Name: "token",
-				Constraints: &opensplunkv1.IngestionTokenConstraints{
+				Constraints: &opensplunk.IngestionTokenConstraints{
 					AllowedIndexNames: []string{"main"},
 					BoundCollectorId:  test.binding,
 				},
@@ -68,9 +68,9 @@ func TestApplyIngestionTokenUpdatePreservesAndFencesCollectorBinding(t *testing.
 	current := adminLastUsedToken("tok_binding", "token", testNow)
 	current.BoundCollectorID = "collector-current"
 
-	full, err := applyTokenUpdate(current, &opensplunkv1.IngestionTokenDefinition{
+	full, err := applyTokenUpdate(current, &opensplunk.IngestionTokenDefinition{
 		Name: "replacement",
-		Constraints: &opensplunkv1.IngestionTokenConstraints{
+		Constraints: &opensplunk.IngestionTokenConstraints{
 			AllowedIndexNames: []string{"audit"},
 		},
 	}, nil)
@@ -83,9 +83,9 @@ func TestApplyIngestionTokenUpdatePreservesAndFencesCollectorBinding(t *testing.
 	}
 
 	sameBinding := current.BoundCollectorID
-	fullRoundTrip, err := applyTokenUpdate(current, &opensplunkv1.IngestionTokenDefinition{
+	fullRoundTrip, err := applyTokenUpdate(current, &opensplunk.IngestionTokenDefinition{
 		Name: "replacement",
-		Constraints: &opensplunkv1.IngestionTokenConstraints{
+		Constraints: &opensplunk.IngestionTokenConstraints{
 			AllowedIndexNames: []string{"audit"},
 			BoundCollectorId:  &sameBinding,
 		},
@@ -98,8 +98,8 @@ func TestApplyIngestionTokenUpdatePreservesAndFencesCollectorBinding(t *testing.
 		t.Fatalf("full same-binding update = %+v", fullRoundTrip)
 	}
 
-	wholeConstraints, err := applyTokenUpdate(current, &opensplunkv1.IngestionTokenDefinition{
-		Constraints: &opensplunkv1.IngestionTokenConstraints{
+	wholeConstraints, err := applyTokenUpdate(current, &opensplunk.IngestionTokenDefinition{
+		Constraints: &opensplunk.IngestionTokenConstraints{
 			AllowedIndexNames: []string{"audit"},
 		},
 	}, &fieldmaskpb.FieldMask{Paths: []string{"constraints"}})
@@ -111,8 +111,8 @@ func TestApplyIngestionTokenUpdatePreservesAndFencesCollectorBinding(t *testing.
 		t.Fatalf("whole constraints update = %+v", wholeConstraints)
 	}
 
-	masked, err := applyTokenUpdate(current, &opensplunkv1.IngestionTokenDefinition{
-		Constraints: &opensplunkv1.IngestionTokenConstraints{BoundCollectorId: &sameBinding},
+	masked, err := applyTokenUpdate(current, &opensplunk.IngestionTokenDefinition{
+		Constraints: &opensplunk.IngestionTokenConstraints{BoundCollectorId: &sameBinding},
 	}, &fieldmaskpb.FieldMask{Paths: []string{"definition.constraints.bound_collector_id"}})
 	if err != nil {
 		t.Fatalf("masked same-binding update: %v", err)
@@ -125,8 +125,8 @@ func TestApplyIngestionTokenUpdatePreservesAndFencesCollectorBinding(t *testing.
 	legacy := current
 	legacy.BoundCollectorID = ""
 	newBinding := "collector-enrolled"
-	bound, err := applyTokenUpdate(legacy, &opensplunkv1.IngestionTokenDefinition{
-		Constraints: &opensplunkv1.IngestionTokenConstraints{BoundCollectorId: &newBinding},
+	bound, err := applyTokenUpdate(legacy, &opensplunk.IngestionTokenDefinition{
+		Constraints: &opensplunk.IngestionTokenConstraints{BoundCollectorId: &newBinding},
 	}, &fieldmaskpb.FieldMask{Paths: []string{"constraints.bound_collector_id"}})
 	if err != nil {
 		t.Fatalf("legacy one-way bind: %v", err)
@@ -141,8 +141,8 @@ func TestApplyIngestionTokenUpdatePreservesAndFencesCollectorBinding(t *testing.
 		"change": "collector-other",
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, updateErr := applyTokenUpdate(current, &opensplunkv1.IngestionTokenDefinition{
-				Constraints: &opensplunkv1.IngestionTokenConstraints{BoundCollectorId: &candidate},
+			_, updateErr := applyTokenUpdate(current, &opensplunk.IngestionTokenDefinition{
+				Constraints: &opensplunk.IngestionTokenConstraints{BoundCollectorId: &candidate},
 			}, &fieldmaskpb.FieldMask{Paths: []string{"constraints.bound_collector_id"}})
 			if !errors.Is(updateErr, errImmutableTokenCollectorBinding) {
 				t.Fatalf("error = %v, want immutable binding conflict", updateErr)
@@ -150,8 +150,8 @@ func TestApplyIngestionTokenUpdatePreservesAndFencesCollectorBinding(t *testing.
 		})
 	}
 
-	if _, err := applyTokenUpdate(current, &opensplunkv1.IngestionTokenDefinition{
-		Constraints: &opensplunkv1.IngestionTokenConstraints{},
+	if _, err := applyTokenUpdate(current, &opensplunk.IngestionTokenDefinition{
+		Constraints: &opensplunk.IngestionTokenConstraints{},
 	}, &fieldmaskpb.FieldMask{Paths: []string{"constraints.bound_collector_id"}}); err == nil {
 		t.Fatal("masked update accepted an absent bound collector ID")
 	}
@@ -196,10 +196,10 @@ func TestIngestionTokenAllowsCredentialRotationForSameCollector(t *testing.T) {
 	binding := "collector-rotation"
 	ids := make(map[string]struct{}, 2)
 	for _, name := range []string{"current", "replacement"} {
-		response := postProto(t, handler, "/api/v1/ingestion-tokens/create", &opensplunkv1.CreateIngestionTokenRequest{
-			Definition: &opensplunkv1.IngestionTokenDefinition{
+		response := postProto(t, handler, "/api/ingestion-tokens/create", &opensplunk.CreateIngestionTokenRequest{
+			Definition: &opensplunk.IngestionTokenDefinition{
 				Name: name,
-				Constraints: &opensplunkv1.IngestionTokenConstraints{
+				Constraints: &opensplunk.IngestionTokenConstraints{
 					AllowedIndexNames: []string{"main"},
 					BoundCollectorId:  &binding,
 				},
@@ -208,7 +208,7 @@ func TestIngestionTokenAllowsCredentialRotationForSameCollector(t *testing.T) {
 		if response.Code != http.StatusOK {
 			t.Fatalf("create %s token status = %d, body = %s", name, response.Code, response.Body)
 		}
-		var created opensplunkv1.CreateIngestionTokenResponse
+		var created opensplunk.CreateIngestionTokenResponse
 		unmarshalResponse(t, response, &created)
 		token := created.GetIngestionToken()
 		if created.GetPlaintextToken() == "" ||
@@ -232,14 +232,14 @@ func TestIngestionTokenCollectorBindingInvalidatesPaginationSnapshot(t *testing.
 	}}
 	handler := newAdminTokenHandler(t, tokens)
 	pageSize := uint32(1)
-	request := &opensplunkv1.ListIngestionTokensRequest{
-		Page: &opensplunkv1.PageRequest{PageSize: &pageSize},
+	request := &opensplunk.ListIngestionTokensRequest{
+		Page: &opensplunk.PageRequest{PageSize: &pageSize},
 	}
-	response := postProto(t, handler, "/api/v1/ingestion-tokens/list", request)
+	response := postProto(t, handler, "/api/ingestion-tokens/list", request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("first page status = %d, body = %s", response.Code, response.Body)
 	}
-	var first opensplunkv1.ListIngestionTokensResponse
+	var first opensplunk.ListIngestionTokensResponse
 	unmarshalResponse(t, response, &first)
 	cursor := first.GetPage().GetNextPageToken()
 	if cursor == "" {
@@ -248,7 +248,7 @@ func TestIngestionTokenCollectorBindingInvalidatesPaginationSnapshot(t *testing.
 
 	tokens.setBoundCollectorID("tok_bravo", "collector-bravo")
 	request.Page.PageToken = &cursor
-	response = postProto(t, handler, "/api/v1/ingestion-tokens/list", request)
+	response = postProto(t, handler, "/api/ingestion-tokens/list", request)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("stale binding cursor status = %d, body = %s", response.Code, response.Body)
 	}

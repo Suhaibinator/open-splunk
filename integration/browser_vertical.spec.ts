@@ -24,33 +24,33 @@ import {
   GetSearchResultsResponse,
   ValidateSearchRequest,
   ValidateSearchResponse,
-} from "../gen/ts/open_splunk/v1/search_api";
+} from "../gen/ts/open_splunk/search_api";
 import {
   AuditAction,
   AuditActorKind,
   AuditActorRole,
   AuditTargetKind,
-} from "../gen/ts/open_splunk/v1/audit";
+} from "../gen/ts/open_splunk/audit";
 import {
   ListAuditEventsRequest,
   ListAuditEventsResponse,
-} from "../gen/ts/open_splunk/v1/audit_api";
-import { AppState } from "../gen/ts/open_splunk/v1/app";
-import { IndexAccessState, IndexState } from "../gen/ts/open_splunk/v1/index";
+} from "../gen/ts/open_splunk/audit_api";
+import { AppState } from "../gen/ts/open_splunk/app";
+import { IndexAccessState, IndexState } from "../gen/ts/open_splunk/index";
 import {
   DeleteSearchHistoryEntryRequest,
   DeleteSearchHistoryEntryResponse,
   ListSearchHistoryResponse,
-} from "../gen/ts/open_splunk/v1/history_api";
+} from "../gen/ts/open_splunk/history_api";
 import {
   GetSystemBootstrapResponse,
   ServerFeature,
-} from "../gen/ts/open_splunk/v1/system_api";
+} from "../gen/ts/open_splunk/system_api";
 import {
   DiagnosticSeverity,
   SharingScope,
   SortDirection,
-} from "../gen/ts/open_splunk/v1/common";
+} from "../gen/ts/open_splunk/common";
 import {
   KnowledgeDependencyRole,
   KnowledgeObject,
@@ -60,12 +60,12 @@ import {
   KnowledgeOverwriteBehavior,
   KnowledgeSearchStage,
   KnowledgeSelectorMatchKind,
-} from "../gen/ts/open_splunk/v1/knowledge";
+} from "../gen/ts/open_splunk/knowledge";
 import {
   InspectSearchJobRequest,
   InspectSearchJobResponse,
   SearchInspectionOutputKind,
-} from "../gen/ts/open_splunk/v1/search_inspection_api";
+} from "../gen/ts/open_splunk/search_inspection_api";
 import {
   CreateKnowledgeObjectRequest,
   CreateKnowledgeObjectResponse,
@@ -89,28 +89,28 @@ import {
   UpdateKnowledgeObjectResponse,
   ValidateKnowledgeObjectRequest,
   ValidateKnowledgeObjectResponse,
-} from "../gen/ts/open_splunk/v1/knowledge_api";
-import { ListIndexesResponse } from "../gen/ts/open_splunk/v1/index_api";
-import { ListIngestionTokensResponse } from "../gen/ts/open_splunk/v1/collector_admin_api";
+} from "../gen/ts/open_splunk/knowledge_api";
+import { ListIndexesResponse } from "../gen/ts/open_splunk/index_api";
+import { ListIngestionTokensResponse } from "../gen/ts/open_splunk/collector_admin_api";
 import {
   SearchExecutionPhase,
   SearchFailureCode,
   SearchJobOrigin,
   SearchJobState,
   type SearchProgress,
-} from "../gen/ts/open_splunk/v1/search";
+} from "../gen/ts/open_splunk/search";
 import {
   ColumnSemanticType,
   ResultRow,
   ResultSchema,
   ResultSetKind,
-} from "../gen/ts/open_splunk/v1/result";
-import { TypedValue, ValueType } from "../gen/ts/open_splunk/v1/value";
+} from "../gen/ts/open_splunk/result";
+import { TypedValue, ValueType } from "../gen/ts/open_splunk/value";
 import {
   ResynchronizationReason,
   SearchWebSocketCommand,
   SearchWebSocketEvent,
-} from "../gen/ts/open_splunk/v1/search_ws";
+} from "../gen/ts/open_splunk/search_ws";
 import { MAXIMUM_BROWSER_RESULT_COLUMNS } from "../lib/api/pagination";
 import {
   BROWSER_DIAGNOSTIC_TRUNCATION_SUFFIX,
@@ -268,7 +268,7 @@ test("backend diagnostics remain authoritative and prevent browser dispatch", as
   const safety = observeBrowserSafety(page);
 
   await page.route(
-    (url) => url.origin === origin && url.pathname === "/api/v1/search/validate",
+    (url) => url.origin === origin && url.pathname === "/api/search/validate",
     async (route) => {
       const wire = route.request().postDataBuffer();
       if (wire === null) throw new Error("diagnostic Validate omitted its protobuf body");
@@ -321,12 +321,10 @@ test("Search Job Inspector renders only capability-gated redacted Knowledge auth
   const indexName = indexMatch?.[1] ?? indexMatch?.[2] ?? "main";
   const maliciousField =
     "generated-<img src=x onerror=globalThis.__inspectionExecuted=true>";
-  const maliciousCompiler =
-    "compiler-<script>globalThis.__inspectionExecuted=true</script>";
   const longGeneratedSQL = `SELECT ${"x".repeat(4_096)}`;
   const capabilityOffSecret = "SECRET_CAPABILITY_OFF_KNOWLEDGE_IDENTITY";
   const foreignSecret = "SECRET_FOREIGN_KNOWLEDGE_IDENTITY";
-  const staleCompiler = "STALE_ABORTED_INSPECTION_COMPILER";
+  const staleInspectionMarker = "STALE_ABORTED_INSPECTION_QUERY";
   const resultSchema = {
     schemaId: "inspection-statistics-v1",
     revision: 1n,
@@ -420,7 +418,6 @@ test("Search Job Inspector renders only capability-gated redacted Knowledge auth
           tenantCatalogRevision: 7n,
           tenantCatalogStateToken: new Uint8Array(32).fill(0x24),
           objectCount: 1,
-          compilerCompatibilityVersion: maliciousCompiler,
         },
         objects: [{
           resolutionOrdinal: 0,
@@ -435,21 +432,18 @@ test("Search Job Inspector renders only capability-gated redacted Knowledge auth
 
   page.on("request", (request) => {
     const url = new URL(request.url());
-    if (url.origin === origin && url.pathname.startsWith("/api/v1/")) {
+    if (url.origin === origin && url.pathname.startsWith("/api/")) {
       apiTraffic.push({ method: request.method(), pathname: url.pathname });
     }
   });
   await page.route(
-    (url) => url.origin === origin && url.pathname === "/api/v1/system/bootstrap",
+    (url) => url.origin === origin && url.pathname === "/api/system/bootstrap",
     (route) => route.fulfill({
       status: 200,
       headers: protobufHeaders,
       body: Buffer.from(GetSystemBootstrapResponse.encode(
         GetSystemBootstrapResponse.fromPartial({
-          serverVersion: "search-inspection-browser-test",
-          apiVersion: "v1",
-          splCompatibilityVersion: "0.4",
-          searchWebsocketPath: "/api/v1/search/ws",
+          searchWebsocketPath: "/api/search/ws",
           features: [
             ServerFeature.SERVER_FEATURE_SEARCH,
             ServerFeature.SERVER_FEATURE_PLAN_INSPECTION,
@@ -480,7 +474,7 @@ test("Search Job Inspector renders only capability-gated redacted Knowledge auth
     }),
   );
   await page.route(
-    (url) => url.origin === origin && url.pathname === "/api/v1/search/validate",
+    (url) => url.origin === origin && url.pathname === "/api/search/validate",
     async (route) => {
       const wire = route.request().postDataBuffer();
       if (wire === null) throw new Error("inspection search Validate omitted its protobuf body");
@@ -504,7 +498,7 @@ test("Search Job Inspector renders only capability-gated redacted Knowledge auth
     },
   );
   await page.route(
-    (url) => url.origin === origin && url.pathname === "/api/v1/search/jobs/create",
+    (url) => url.origin === origin && url.pathname === "/api/search/jobs/create",
     async (route) => {
       const wire = route.request().postDataBuffer();
       if (wire === null) throw new Error("inspection search Create omitted its protobuf body");
@@ -525,7 +519,6 @@ test("Search Job Inspector renders only capability-gated redacted Knowledge auth
               stateVersion: 1n,
               definition: request.definition,
               source: { origin: SearchJobOrigin.SEARCH_JOB_ORIGIN_AD_HOC },
-              compilerVersion: "0.4",
               effectiveIndexScope: [indexName],
               resolvedTimeRange: {
                 earliest: new Date("2026-08-10T11:00:00.000Z"),
@@ -553,7 +546,7 @@ test("Search Job Inspector renders only capability-gated redacted Knowledge auth
     },
   );
   await page.route(
-    (url) => url.origin === origin && url.pathname === "/api/v1/search/jobs/results",
+    (url) => url.origin === origin && url.pathname === "/api/search/jobs/results",
     async (route) => {
       const wire = route.request().postDataBuffer();
       if (wire === null) throw new Error("inspection search Results omitted its protobuf body");
@@ -580,7 +573,7 @@ test("Search Job Inspector renders only capability-gated redacted Knowledge auth
     },
   );
   await page.route(
-    (url) => url.origin === origin && url.pathname === "/api/v1/search/jobs/inspect",
+    (url) => url.origin === origin && url.pathname === "/api/search/jobs/inspect",
     async (route) => {
       const wire = route.request().postDataBuffer();
       if (wire === null) throw new Error("inspection request omitted its protobuf body");
@@ -594,7 +587,7 @@ test("Search Job Inspector renders only capability-gated redacted Knowledge auth
         });
         heldInspection.release = null;
         const staleResponse = inspectionResponse(request.searchJobId);
-        staleResponse.knowledgeSnapshot!.ref!.compilerCompatibilityVersion = staleCompiler;
+        staleResponse.diagnosticQueryId = staleInspectionMarker;
         try {
           await route.fulfill({
             status: 200,
@@ -680,7 +673,6 @@ test("Search Job Inspector renders only capability-gated redacted Knowledge auth
     await expect(dialog.getByText("ParallelExtend", { exact: true })).toBeVisible({ timeout });
     await expect(dialog).toContainText(maliciousField);
     await expect(dialog.getByRole("region", { name: "Knowledge authority" })).toHaveCount(0);
-    await expect(dialog).not.toContainText(maliciousCompiler);
     await expect(dialog).not.toContainText(capabilityOffSecret);
     await expect(page.locator("body")).not.toContainText(capabilityOffSecret);
     await expect(dialog).not.toContainText("Calculated field");
@@ -692,7 +684,7 @@ test("Search Job Inspector renders only capability-gated redacted Knowledge auth
     expect(inspectRequests).toEqual([{ searchJobId: "inspection-job-1" }]);
     expect(apiTraffic.slice(trafficBeforeInspect)).toEqual([{
       method: "POST",
-      pathname: "/api/v1/search/jobs/inspect",
+      pathname: "/api/search/jobs/inspect",
     }]);
     await page.keyboard.press("Escape");
     await expect(dialog).toHaveCount(0);
@@ -724,7 +716,6 @@ test("Search Job Inspector renders only capability-gated redacted Knowledge auth
     await expect(knowledgeRegion).toContainText("42".repeat(32), { timeout });
     await expect(knowledgeRegion).toContainText("Catalog revision7");
     await expect(knowledgeRegion).toContainText("Applicable objects1");
-    await expect(knowledgeRegion).toContainText(maliciousCompiler);
     await expect(knowledgeRegion).toContainText("Redacted ordinal 0 · Calculated field");
     await expect(dialog).toContainText("Calculated field · ordinal 0");
     await expect(dialog).toContainText(
@@ -747,8 +738,8 @@ test("Search Job Inspector renders only capability-gated redacted Knowledge auth
       { searchJobId: "inspection-job-2" },
     ]);
     expect(apiTraffic.slice(trafficBeforeInspect)).toEqual([
-      { method: "POST", pathname: "/api/v1/search/jobs/inspect" },
-      { method: "POST", pathname: "/api/v1/search/jobs/inspect" },
+      { method: "POST", pathname: "/api/search/jobs/inspect" },
+      { method: "POST", pathname: "/api/search/jobs/inspect" },
     ]);
 
     await page.setViewportSize({ width: 375, height: 812 });
@@ -797,7 +788,7 @@ test("Search Job Inspector renders only capability-gated redacted Knowledge auth
       local: Object.entries(localStorage),
       session: Object.entries(sessionStorage),
     }))).toEqual(inspectorStorage);
-    expect(apiTraffic.filter(({ pathname }) => pathname.startsWith("/api/v1/knowledge/")))
+    expect(apiTraffic.filter(({ pathname }) => pathname.startsWith("/api/knowledge/")))
       .toEqual([]);
     assertBrowserSafety(safety);
     await dialog.getByRole("button", { name: "Done" }).click();
@@ -825,32 +816,31 @@ test("Search Job Inspector renders only capability-gated redacted Knowledge auth
 
       await inspectTrigger.click();
       dialog = page.getByRole("dialog", { name: "Search job inspector" });
-      const knowledgeRegion = dialog.getByRole("region", { name: "Knowledge authority" });
-      await expect(knowledgeRegion).toContainText(maliciousCompiler, { timeout });
-      await expect(dialog).not.toContainText(staleCompiler);
+      await expect(dialog).toContainText("inspection-diagnostic-query", { timeout });
+      await expect(dialog).not.toContainText(staleInspectionMarker);
 
       heldInspection.release?.();
       await heldInspection.settled;
       await waitForBrowserRender(page);
-      await expect(knowledgeRegion).toContainText(maliciousCompiler);
-      await expect(dialog).not.toContainText(staleCompiler);
+      await expect(dialog).toContainText("inspection-diagnostic-query");
+      await expect(dialog).not.toContainText(staleInspectionMarker);
       expect(inspectRequests.slice(requestCountBeforeRace)).toEqual([
         { searchJobId: "inspection-job-2" },
         { searchJobId: "inspection-job-2" },
       ]);
       expect(apiTraffic.slice(trafficBeforeRace)).toEqual([
-        { method: "POST", pathname: "/api/v1/search/jobs/inspect" },
-        { method: "POST", pathname: "/api/v1/search/jobs/inspect" },
+        { method: "POST", pathname: "/api/search/jobs/inspect" },
+        { method: "POST", pathname: "/api/search/jobs/inspect" },
       ]);
       expect(page.url()).toBe(inspectorURL);
       expect(await page.evaluate(() => ({
         local: Object.entries(localStorage),
         session: Object.entries(sessionStorage),
       }))).toEqual(inspectorStorage);
-      expect(apiTraffic.filter(({ pathname }) => pathname.startsWith("/api/v1/knowledge/")))
+      expect(apiTraffic.filter(({ pathname }) => pathname.startsWith("/api/knowledge/")))
         .toEqual([]);
       assertBrowserSafety(safety, [
-        /^POST \/api\/v1\/search\/jobs\/inspect: net::ERR_ABORTED$/u,
+        /^POST \/api\/search\/jobs\/inspect: net::ERR_ABORTED$/u,
       ]);
       await page.keyboard.press("Escape");
       await expect(dialog).toHaveCount(0);
@@ -874,21 +864,18 @@ test("Mutation Audit renders historical Knowledge events without the Knowledge f
 
   page.on("request", (request) => {
     const url = new URL(request.url());
-    if (url.origin === origin && url.pathname.startsWith("/api/v1/")) {
+    if (url.origin === origin && url.pathname.startsWith("/api/")) {
       apiTraffic.push({ method: request.method(), pathname: url.pathname });
     }
   });
   await page.route(
-    (url) => url.origin === origin && url.pathname === "/api/v1/system/bootstrap",
+    (url) => url.origin === origin && url.pathname === "/api/system/bootstrap",
     (route) => route.fulfill({
       status: 200,
       headers: protobufHeaders,
       body: Buffer.from(GetSystemBootstrapResponse.encode(
         GetSystemBootstrapResponse.fromPartial({
-          serverVersion: "knowledge-audit-browser-test",
-          apiVersion: "v1",
-          splCompatibilityVersion: "0.4",
-          searchWebsocketPath: "/api/v1/search/ws",
+          searchWebsocketPath: "/api/search/ws",
           // Historical journal visibility deliberately omits the dormant Knowledge feature.
           features: [ServerFeature.SERVER_FEATURE_AUDIT_SEARCH],
           limits: { maximumPageSize: 25 },
@@ -898,7 +885,7 @@ test("Mutation Audit renders historical Knowledge events without the Knowledge f
     }),
   );
   await page.route(
-    (url) => url.origin === origin && url.pathname === "/api/v1/audit/events/list",
+    (url) => url.origin === origin && url.pathname === "/api/audit/events/list",
     async (route) => {
       const wire = route.request().postDataBuffer();
       if (wire === null) throw new Error("audit List request omitted its protobuf body");
@@ -996,9 +983,9 @@ test("Mutation Audit renders historical Knowledge events without the Knowledge f
     ));
     expect(apiTraffic.slice(trafficBeforeAudit)).toEqual(Array.from(
       { length: auditRequests.length },
-      () => ({ method: "POST", pathname: "/api/v1/audit/events/list" }),
+      () => ({ method: "POST", pathname: "/api/audit/events/list" }),
     ));
-    expect(apiTraffic.filter(({ pathname }) => pathname.startsWith("/api/v1/knowledge/")))
+    expect(apiTraffic.filter(({ pathname }) => pathname.startsWith("/api/knowledge/")))
       .toEqual([]);
     expect(page.url()).toBe(activityURL);
     expect(await page.evaluate(() => ({
@@ -1113,16 +1100,13 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one exact
 
   page.on("request", (request) => requestedURLs.push(request.url()));
   await page.route(
-    (url) => url.origin === origin && url.pathname === "/api/v1/system/bootstrap",
+    (url) => url.origin === origin && url.pathname === "/api/system/bootstrap",
     (route) => route.fulfill({
       status: 200,
       headers: protobufHeaders,
       body: Buffer.from(GetSystemBootstrapResponse.encode(
         GetSystemBootstrapResponse.fromPartial({
-          serverVersion: "knowledge-browser-test",
-          apiVersion: "v1",
-          splCompatibilityVersion: "0.4",
-          searchWebsocketPath: "/api/v1/search/ws",
+          searchWebsocketPath: "/api/search/ws",
           features: knowledgeAdvertised
             ? [ServerFeature.SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS]
             : [],
@@ -1140,7 +1124,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one exact
     }),
   );
   await page.route(
-    (url) => url.origin === origin && url.pathname === "/api/v1/indexes/list",
+    (url) => url.origin === origin && url.pathname === "/api/indexes/list",
     (route) => route.fulfill({
       status: 200,
       headers: protobufHeaders,
@@ -1152,7 +1136,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one exact
     }),
   );
   await page.route(
-    (url) => url.origin === origin && url.pathname === "/api/v1/ingestion-tokens/list",
+    (url) => url.origin === origin && url.pathname === "/api/ingestion-tokens/list",
     (route) => route.fulfill({
       status: 200,
       headers: protobufHeaders,
@@ -1164,7 +1148,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one exact
     }),
   );
   await page.route(
-    (url) => url.origin === origin && url.pathname === "/api/v1/knowledge/objects/list",
+    (url) => url.origin === origin && url.pathname === "/api/knowledge/objects/list",
     async (route) => {
       const wire = route.request().postDataBuffer();
       if (wire === null) throw new Error("knowledge List request omitted its protobuf body");
@@ -1206,7 +1190,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one exact
   }
 
   await page.route(
-    (url) => url.origin === origin && url.pathname === "/api/v1/knowledge/objects/validate",
+    (url) => url.origin === origin && url.pathname === "/api/knowledge/objects/validate",
     async (route) => {
       mutationAuthorization(route);
       const wire = route.request().postDataBuffer();
@@ -1273,7 +1257,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one exact
     },
   );
   await page.route(
-    (url) => url.origin === origin && url.pathname === "/api/v1/knowledge/objects/create",
+    (url) => url.origin === origin && url.pathname === "/api/knowledge/objects/create",
     async (route) => {
       mutationAuthorization(route);
       const wire = route.request().postDataBuffer();
@@ -1311,7 +1295,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one exact
     },
   );
   await page.route(
-    (url) => url.origin === origin && url.pathname === "/api/v1/knowledge/objects/update",
+    (url) => url.origin === origin && url.pathname === "/api/knowledge/objects/update",
     async (route) => {
       mutationAuthorization(route);
       const wire = route.request().postDataBuffer();
@@ -1344,7 +1328,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one exact
     },
   );
   await page.route(
-    (url) => url.origin === origin && url.pathname === "/api/v1/knowledge/objects/set-state",
+    (url) => url.origin === origin && url.pathname === "/api/knowledge/objects/set-state",
     async (route) => {
       mutationAuthorization(route);
       const wire = route.request().postDataBuffer();
@@ -1375,7 +1359,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one exact
     },
   );
   await page.route(
-    (url) => url.origin === origin && url.pathname === "/api/v1/knowledge/objects/delete",
+    (url) => url.origin === origin && url.pathname === "/api/knowledge/objects/delete",
     async (route) => {
       mutationAuthorization(route);
       const wire = route.request().postDataBuffer();
@@ -1398,7 +1382,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one exact
     },
   );
   await page.route(
-    (url) => url.origin === origin && url.pathname === "/api/v1/knowledge/objects/preview",
+    (url) => url.origin === origin && url.pathname === "/api/knowledge/objects/preview",
     async (route) => {
       mutationAuthorization(route);
       const wire = route.request().postDataBuffer();
@@ -1454,7 +1438,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one exact
     },
   );
   await page.route(
-    (url) => url.origin === origin && url.pathname === "/api/v1/knowledge/objects/get",
+    (url) => url.origin === origin && url.pathname === "/api/knowledge/objects/get",
     async (route) => {
       const wire = route.request().postDataBuffer();
       if (wire === null) throw new Error("knowledge Get request omitted its protobuf body");
@@ -1533,7 +1517,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one exact
     },
   );
   await page.route(
-    (url) => url.origin === origin && url.pathname === "/api/v1/knowledge/objects/dependencies",
+    (url) => url.origin === origin && url.pathname === "/api/knowledge/objects/dependencies",
     async (route) => {
       const wire = route.request().postDataBuffer();
       if (wire === null) throw new Error("knowledge Dependencies request omitted its protobuf body");
@@ -1577,7 +1561,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one exact
     },
   );
   await page.route(
-    (url) => url.origin === origin && url.pathname === "/api/v1/knowledge/objects/dependents",
+    (url) => url.origin === origin && url.pathname === "/api/knowledge/objects/dependents",
     async (route) => {
       const wire = route.request().postDataBuffer();
       if (wire === null) throw new Error("knowledge Dependents request omitted its protobuf body");
@@ -1627,7 +1611,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one exact
   await expect(page.getByText("API connected", { exact: true })).toBeVisible({ timeout });
   await expect(page.locator(".admin-sidebar button").filter({ hasText: "Knowledge Manager" }))
     .toHaveCount(0);
-  expect(requestedURLs.filter((value) => value.includes("/api/v1/knowledge/"))).toEqual([]);
+  expect(requestedURLs.filter((value) => value.includes("/api/knowledge/"))).toEqual([]);
 
   knowledgeAdvertised = true;
   await page.goto(new URL("/signin/", origin).href, {
@@ -2323,24 +2307,24 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one exact
   expect(new URL(page.url()).search).toBe("");
   expect(requestedURLs.filter((value) => {
     const pathname = new URL(value).pathname;
-    return pathname.startsWith("/api/v1/knowledge/") && !new Set([
-      "/api/v1/knowledge/objects/list",
-      "/api/v1/knowledge/objects/get",
-      "/api/v1/knowledge/objects/dependencies",
-      "/api/v1/knowledge/objects/dependents",
+    return pathname.startsWith("/api/knowledge/") && !new Set([
+      "/api/knowledge/objects/list",
+      "/api/knowledge/objects/get",
+      "/api/knowledge/objects/dependencies",
+      "/api/knowledge/objects/dependents",
     ]).has(pathname);
   }).map((value) => new URL(value).pathname)).toEqual([
-    "/api/v1/knowledge/objects/preview",
-    "/api/v1/knowledge/objects/validate",
-    "/api/v1/knowledge/objects/validate",
-    "/api/v1/knowledge/objects/validate",
-    "/api/v1/knowledge/objects/create",
-    "/api/v1/knowledge/objects/set-state",
-    "/api/v1/knowledge/objects/validate",
-    "/api/v1/knowledge/objects/update",
-    "/api/v1/knowledge/objects/set-state",
-    "/api/v1/knowledge/objects/set-state",
-    "/api/v1/knowledge/objects/delete",
+    "/api/knowledge/objects/preview",
+    "/api/knowledge/objects/validate",
+    "/api/knowledge/objects/validate",
+    "/api/knowledge/objects/validate",
+    "/api/knowledge/objects/create",
+    "/api/knowledge/objects/set-state",
+    "/api/knowledge/objects/validate",
+    "/api/knowledge/objects/update",
+    "/api/knowledge/objects/set-state",
+    "/api/knowledge/objects/set-state",
+    "/api/knowledge/objects/delete",
   ]);
 });
 
@@ -2371,16 +2355,13 @@ test("history Run again delegates persisted intent with source-only rerun proven
   let historyRerunSourceMissing = false;
 
   await page.route(
-    (url) => url.origin === origin && url.pathname === "/api/v1/system/bootstrap",
+    (url) => url.origin === origin && url.pathname === "/api/system/bootstrap",
     (route) => route.fulfill({
       status: 200,
       headers: protobufHeaders,
       body: Buffer.from(GetSystemBootstrapResponse.encode(
         GetSystemBootstrapResponse.fromPartial({
-          serverVersion: "history-rerun-test",
-          apiVersion: "v1",
-          splCompatibilityVersion: "0.4",
-          searchWebsocketPath: "/api/v1/search/ws",
+          searchWebsocketPath: "/api/search/ws",
           features: [
             ServerFeature.SERVER_FEATURE_SEARCH,
             ServerFeature.SERVER_FEATURE_SEARCH_HISTORY,
@@ -2408,7 +2389,7 @@ test("history Run again delegates persisted intent with source-only rerun proven
     }),
   );
   await page.route(
-    (url) => url.origin === origin && url.pathname === "/api/v1/search/history/list",
+    (url) => url.origin === origin && url.pathname === "/api/search/history/list",
     (route) => route.fulfill({
       status: 200,
       headers: protobufHeaders,
@@ -2429,7 +2410,6 @@ test("history Run again delegates persisted intent with source-only rerun proven
             finalState: SearchJobState.SEARCH_JOB_STATE_COMPLETED,
             producedRows: 1n,
             duration: { seconds: 1n, nanos: 0 },
-            compilerVersion: "open-splunk-v0.1",
             createdAt: new Date("2026-08-04T11:59:58.000Z"),
             startedAt: new Date("2026-08-04T11:59:59.000Z"),
             finishedAt: new Date("2026-08-04T12:00:00.000Z"),
@@ -2448,7 +2428,6 @@ test("history Run again delegates persisted intent with source-only rerun proven
             finalState: SearchJobState.SEARCH_JOB_STATE_COMPLETED,
             producedRows: 1n,
             duration: { seconds: 1n, nanos: 0 },
-            compilerVersion: "open-splunk-v0.1",
             createdAt: new Date("2026-08-04T11:59:55.000Z"),
             startedAt: new Date("2026-08-04T11:59:56.000Z"),
             finishedAt: new Date("2026-08-04T11:59:57.000Z"),
@@ -2459,7 +2438,7 @@ test("history Run again delegates persisted intent with source-only rerun proven
     }),
   );
   await page.route(
-    (url) => url.origin === origin && url.pathname === "/api/v1/search/history/delete",
+    (url) => url.origin === origin && url.pathname === "/api/search/history/delete",
     async (route) => {
       const requestWire = route.request().postDataBuffer();
       if (requestWire === null) throw new Error("history delete request omitted its protobuf body");
@@ -2476,7 +2455,7 @@ test("history Run again delegates persisted intent with source-only rerun proven
     },
   );
   await page.route(
-    (url) => url.origin === origin && url.pathname === "/api/v1/search/validate",
+    (url) => url.origin === origin && url.pathname === "/api/search/validate",
     async (route) => {
       const requestWire = route.request().postDataBuffer();
       if (requestWire === null) throw new Error("history ordinary Validate omitted its protobuf body");
@@ -2501,7 +2480,7 @@ test("history Run again delegates persisted intent with source-only rerun proven
     },
   );
   await page.route(
-    (url) => url.origin === origin && url.pathname === "/api/v1/search/jobs/create",
+    (url) => url.origin === origin && url.pathname === "/api/search/jobs/create",
     async (route) => {
       const requestWire = route.request().postDataBuffer();
       if (requestWire === null) throw new Error("history rerun create request omitted its protobuf body");
@@ -2545,7 +2524,6 @@ test("history Run again delegates persisted intent with source-only rerun proven
               source: historyRerun
                 ? request.source
                 : { origin: SearchJobOrigin.SEARCH_JOB_ORIGIN_AD_HOC },
-              compilerVersion: "0.4",
               effectiveIndexScope: admittedDefinition.indexScope,
               resolvedTimeRange: {
                 earliest: new Date("2026-08-04T11:00:01.000Z"),
@@ -2591,7 +2569,7 @@ test("history Run again delegates persisted intent with source-only rerun proven
   const deleteResponse = page.waitForResponse((response) => {
     const responseURL = new URL(response.url());
     return responseURL.origin === origin
-      && responseURL.pathname === "/api/v1/search/history/delete"
+      && responseURL.pathname === "/api/search/history/delete"
       && response.status() === 200;
   });
   await page.getByTestId("history-list").getByRole("row").filter({
@@ -2617,7 +2595,7 @@ test("history Run again delegates persisted intent with source-only rerun proven
     const requestURL = new URL(request.url());
     return request.method() === "POST"
       && requestURL.origin === origin
-      && requestURL.pathname === "/api/v1/search/jobs/create";
+      && requestURL.pathname === "/api/search/jobs/create";
   });
   await page.getByTestId("run-search").click();
   await postDeleteCreateRequest;
@@ -2641,7 +2619,7 @@ test("history Run again delegates persisted intent with source-only rerun proven
     const requestURL = new URL(request.url());
     return request.method() === "POST"
       && requestURL.origin === origin
-      && requestURL.pathname === "/api/v1/search/jobs/create";
+      && requestURL.pathname === "/api/search/jobs/create";
   });
   await historyRow.getByRole("button", { name: "Run again", exact: true }).click();
   await rerunRequestPromise;
@@ -2677,7 +2655,7 @@ test("history Run again delegates persisted intent with source-only rerun proven
   const missingRerunResponse = page.waitForResponse((response) => {
     const responseURL = new URL(response.url());
     return responseURL.origin === origin
-      && responseURL.pathname === "/api/v1/search/jobs/create"
+      && responseURL.pathname === "/api/search/jobs/create"
       && response.status() === 404;
   });
   await refreshedHistoryRow.getByRole("button", { name: "Run again", exact: true }).click();
@@ -2745,7 +2723,7 @@ test("failed search terminal rejects without waiting for results", async () => {
   const pageEvents = new EventEmitter();
   const socketEvents = new EventEmitter();
   const controlledSocket = Object.assign(socketEvents, {
-    url: () => `${origin.replace(/^http/, "ws")}/api/v1/search/ws`,
+    url: () => `${origin.replace(/^http/, "ws")}/api/search/ws`,
   });
   const protocolObservation = observeSearchProtocol(
     pageEvents as unknown as Page,
@@ -2807,7 +2785,7 @@ test("renders a fixed 1,000-row statistics result with bounded browser work", as
     settleResultsRoute = resolve;
   });
   const fixedResultsRouteMatcher = (url: URL): boolean =>
-    url.origin === origin && url.pathname === "/api/v1/search/jobs/results";
+    url.origin === origin && url.pathname === "/api/search/jobs/results";
   await page.route(
     fixedResultsRouteMatcher,
     async (route) => {
@@ -3150,7 +3128,7 @@ test("browser cancellation is authoritative and does not reconnect", async ({ pa
   let fulfilledCancellationResponses = 0;
   const cancellationResponses: CancelSearchJobResponse[] = [];
   await page.route(
-    (url) => url.origin === origin && url.pathname === "/api/v1/search/jobs/cancel",
+    (url) => url.origin === origin && url.pathname === "/api/search/jobs/cancel",
     async (route) => {
       cancellationRequests += 1;
       if (cancellationRequests > 1) {
@@ -3266,7 +3244,7 @@ test("live preview resumes from the exact retained WebSocket sequence", async ({
     releaseAuthoritativeRecovery = resolve;
   });
   await page.route(
-    (url) => url.origin === origin && url.pathname === "/api/v1/search/jobs/get",
+    (url) => url.origin === origin && url.pathname === "/api/search/jobs/get",
     async (route) => {
       await authoritativeRecoveryGate;
       await route.continue();
@@ -3359,7 +3337,7 @@ test("live preview recovers from real sequence expiration and a transient snapsh
   let initialJobStateVersion: bigint | undefined;
   const authoritativeSnapshots: GetSearchJobResponse[] = [];
   await page.route(
-    (url) => url.origin === origin && url.pathname === "/api/v1/search/jobs/get",
+    (url) => url.origin === origin && url.pathname === "/api/search/jobs/get",
     async (route) => {
       authoritativeJobRequests += 1;
       const requestOrdinal = authoritativeJobRequests;
@@ -3647,7 +3625,7 @@ test(sequenceGapScenario.title, async ({ page }) => {
   const authoritativeResultSnapshots: GetSearchResultsResponse[] = [];
   if (restOnlyTerminal) {
     await page.route(
-      (url) => url.origin === origin && url.pathname === "/api/v1/search/jobs/results",
+      (url) => url.origin === origin && url.pathname === "/api/search/jobs/results",
       async (route) => {
         authoritativeResultsRequests += 1;
         if (authoritativeResultsRequests > 1) {
@@ -3696,7 +3674,7 @@ test(sequenceGapScenario.title, async ({ page }) => {
   let fulfilledAuthoritativeJobRequests = 0;
   const authoritativeSnapshots: GetSearchJobResponse[] = [];
   await page.route(
-    (url) => url.origin === origin && url.pathname === "/api/v1/search/jobs/get",
+    (url) => url.origin === origin && url.pathname === "/api/search/jobs/get",
     async (route) => {
       authoritativeJobRequests += 1;
       const requestOrdinal = authoritativeJobRequests;
@@ -4625,7 +4603,7 @@ async function stopFixedResultRenderingObservation(
     const resultResource = performance.getEntriesByType("resource")
       .findLast((entry) => {
         try {
-          return new URL(entry.name).pathname === "/api/v1/search/jobs/results";
+          return new URL(entry.name).pathname === "/api/search/jobs/results";
         } catch {
           return false;
         }
@@ -5010,7 +4988,7 @@ async function installBrowserWebSocketFrameRecorder(
       const socketHTTPURL = new URL(socketURL);
       socketHTTPURL.protocol = socketURL.protocol === "wss:" ? "https:" : "http:";
       return socketHTTPURL.origin === expectedSocketOrigin
-        && socketURL.pathname === "/api/v1/search/ws";
+        && socketURL.pathname === "/api/search/ws";
     };
     const NativeWebSocket = window.WebSocket;
     class RecordingWebSocket extends NativeWebSocket {
@@ -5132,7 +5110,7 @@ function httpOriginForWebSocket(socketURL: URL): string {
 
 function matchesSearchWebSocketURL(socketURL: URL, expectedOrigin: string): boolean {
   return httpOriginForWebSocket(socketURL) === expectedOrigin
-    && socketURL.pathname === "/api/v1/search/ws";
+    && socketURL.pathname === "/api/search/ws";
 }
 
 function rejectExcessWebSocketRoute(client: WebSocketRoute): void {
@@ -5301,14 +5279,14 @@ function observeBrowserSafety(page: Page): BrowserSafetyObservation {
     const requestURL = new URL(request.url());
     if (
       requestURL.origin === origin
-      && requestURL.pathname === "/api/v1/search/jobs/create"
+      && requestURL.pathname === "/api/search/jobs/create"
       && request.method() === "POST"
     ) {
       createRequests += 1;
     }
     if (
       requestURL.origin === origin
-      && requestURL.pathname === "/api/v1/search/jobs/results"
+      && requestURL.pathname === "/api/search/jobs/results"
       && request.method() === "POST"
     ) {
       resultsRequests += 1;
@@ -5657,7 +5635,7 @@ interface SearchResponseWaiters {
 
 function waitForCreateSearchResponse(page: Page): Promise<Response> {
   const createResponsePromise = page.waitForResponse(
-    (response) => matchesAPIResponse(response, origin, "/api/v1/search/jobs/create"),
+    (response) => matchesAPIResponse(response, origin, "/api/search/jobs/create"),
     { timeout },
   );
   // Page teardown can reject the waiter before the normal await is reached.
@@ -5669,7 +5647,7 @@ function waitForCreateSearchResponse(page: Page): Promise<Response> {
 function waitForSearchResponses(page: Page): SearchResponseWaiters {
   const createResponsePromise = waitForCreateSearchResponse(page);
   const resultsResponsePromise = page.waitForResponse(
-    (response) => matchesAPIResponse(response, origin, "/api/v1/search/jobs/results"),
+    (response) => matchesAPIResponse(response, origin, "/api/search/jobs/results"),
     { timeout },
   );
   // Canceled and failed searches may tear the page down before results exist.
@@ -7000,7 +6978,7 @@ async function interceptSequenceExpiration(
               !== ResynchronizationReason.RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED
             || required.earliestAvailableSequence !== expectedLatestSequence
             || required.latestSequence !== expectedLatestSequence
-            || required.recoveryPath !== "/api/v1/search/jobs/get"
+            || required.recoveryPath !== "/api/search/jobs/get"
           ) {
             throw new Error(
               `expiration connection ${connectionOrdinal} resynchronization frame was invalid`,

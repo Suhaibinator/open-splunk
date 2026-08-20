@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/collector/framing"
 )
 
@@ -173,11 +173,11 @@ type CheckpointStore interface {
 }
 
 // Health is a point-in-time snapshot of one input's status. Its fields mirror
-// opensplunkv1.CollectorInputHealth one-to-one; the daemon converts a Health
+// opensplunk.CollectorInputHealth one-to-one; the daemon converts a Health
 // into that protobuf message for heartbeats.
 type Health struct {
 	InputID           string
-	State             opensplunkv1.CollectorInputState
+	State             opensplunk.CollectorInputState
 	StatusMessage     string
 	DiscoveredSources uint64
 	ActiveSources     uint64

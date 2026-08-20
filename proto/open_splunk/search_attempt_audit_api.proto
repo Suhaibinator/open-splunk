@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package open_splunk;
+
+import "open_splunk/common.proto";
+import "open_splunk/search_attempt_audit.proto";
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk;opensplunk";
+
+// POST /api/audit/search-attempts/list
+// Lists retained search attempts in descending sequence order. Filters are
+// exact, and page tokens are bound to the filter set that produced them.
+message ListSearchAttemptAuditEventsRequest {
+  PageRequest page = 1;
+  optional string actor_id_filter = 2;
+  optional string owner_id_filter = 3;
+}
+
+message ListSearchAttemptAuditEventsResponse {
+  repeated SearchAttemptAuditEvent events = 1;
+  PageResponse page = 2;
+}

@@ -3,13 +3,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
-import { SortDirection } from "@/gen/ts/open_splunk/v1/common";
+import { SortDirection } from "@/gen/ts/open_splunk/common";
 import {
   IndexAccessState,
   IndexState,
   type Index,
-} from "@/gen/ts/open_splunk/v1/index";
-import { IndexSortBy } from "@/gen/ts/open_splunk/v1/index_api";
+} from "@/gen/ts/open_splunk/index";
+import { IndexSortBy } from "@/gen/ts/open_splunk/index_api";
 import {
   createOpenSplunkApiClient,
   getSystemBootstrap,

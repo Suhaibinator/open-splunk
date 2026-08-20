@@ -17,7 +17,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/cursorcodec"
 	"github.com/Suhaibinator/open-splunk/internal/lookupasset"
 	"github.com/Suhaibinator/open-splunk/internal/lookupcatalog"
@@ -34,7 +34,7 @@ const (
 	MaximumTextBytes   = lookupcatalog.MaximumListTextBytes
 	MaximumPageToken   = 4 << 10
 
-	cursorVersion = 2
+	cursorVersion = 1
 	cursorDomain  = "lookup-list-cursor"
 )
 
@@ -59,13 +59,13 @@ type AssetRepository interface {
 
 // CatalogRepository is the complete logical-definition dependency.
 type CatalogRepository interface {
-	CreatePublished(context.Context, lookupasset.PublicationTransaction, lookupcatalog.CreateRequest) (*opensplunkv1.Lookup, error)
-	Replace(context.Context, lookupcatalog.ReplaceRequest) (*opensplunkv1.Lookup, error)
-	ReplacePublished(context.Context, lookupasset.PublicationTransaction, lookupcatalog.ReplaceRequest) (*opensplunkv1.Lookup, error)
-	Get(context.Context, lookupcatalog.GetRequest) (*opensplunkv1.Lookup, error)
+	CreatePublished(context.Context, lookupasset.PublicationTransaction, lookupcatalog.CreateRequest) (*opensplunk.Lookup, error)
+	Replace(context.Context, lookupcatalog.ReplaceRequest) (*opensplunk.Lookup, error)
+	ReplacePublished(context.Context, lookupasset.PublicationTransaction, lookupcatalog.ReplaceRequest) (*opensplunk.Lookup, error)
+	Get(context.Context, lookupcatalog.GetRequest) (*opensplunk.Lookup, error)
 	GetResolved(context.Context, lookupcatalog.GetRequest) (lookupcatalog.Resolved, error)
 	ListPage(context.Context, lookupcatalog.ListPageRequest) (lookupcatalog.ListPage, error)
-	SetState(context.Context, lookupcatalog.StateRequest) (*opensplunkv1.Lookup, error)
+	SetState(context.Context, lookupcatalog.StateRequest) (*opensplunk.Lookup, error)
 }
 
 type Config struct {
@@ -107,7 +107,7 @@ func (service *Service) Ready() bool {
 	return service != nil && service.ready && !nilcheck.IsNil(service.assets) && !nilcheck.IsNil(service.catalog)
 }
 
-func (service *Service) Create(ctx context.Context, scope Scope, input *opensplunkv1.CreateLookupRequest) (*opensplunkv1.CreateLookupResponse, error) {
+func (service *Service) Create(ctx context.Context, scope Scope, input *opensplunk.CreateLookupRequest) (*opensplunk.CreateLookupResponse, error) {
 	if err := service.validate(ctx, scope); err != nil {
 		return nil, err
 	}
@@ -122,10 +122,10 @@ func (service *Service) Create(ctx context.Context, scope Scope, input *opensplu
 	if err != nil {
 		return nil, classify(err)
 	}
-	return &opensplunkv1.CreateLookupResponse{Lookup: cloneLookup(lookup)}, nil
+	return &opensplunk.CreateLookupResponse{Lookup: cloneLookup(lookup)}, nil
 }
 
-func (service *Service) Get(ctx context.Context, scope Scope, input *opensplunkv1.GetLookupRequest) (*opensplunkv1.GetLookupResponse, error) {
+func (service *Service) Get(ctx context.Context, scope Scope, input *opensplunk.GetLookupRequest) (*opensplunk.GetLookupResponse, error) {
 	if err := service.validate(ctx, scope); err != nil {
 		return nil, err
 	}
@@ -139,10 +139,10 @@ func (service *Service) Get(ctx context.Context, scope Scope, input *opensplunkv
 	if err != nil {
 		return nil, classify(err)
 	}
-	return &opensplunkv1.GetLookupResponse{Lookup: cloneLookup(lookup)}, nil
+	return &opensplunk.GetLookupResponse{Lookup: cloneLookup(lookup)}, nil
 }
 
-func (service *Service) Replace(ctx context.Context, scope Scope, input *opensplunkv1.ReplaceLookupRequest) (*opensplunkv1.ReplaceLookupResponse, error) {
+func (service *Service) Replace(ctx context.Context, scope Scope, input *opensplunk.ReplaceLookupRequest) (*opensplunk.ReplaceLookupResponse, error) {
 	if err := service.validate(ctx, scope); err != nil {
 		return nil, err
 	}
@@ -155,11 +155,11 @@ func (service *Service) Replace(ctx context.Context, scope Scope, input *openspl
 	if err != nil {
 		return nil, classify(err)
 	}
-	if current.Lookup.GetVersion() != input.GetExpectedVersion() || current.Lookup.GetState() == opensplunkv1.LookupState_LOOKUP_STATE_DELETED {
+	if current.Lookup.GetVersion() != input.GetExpectedVersion() || current.Lookup.GetState() == opensplunk.LookupState_LOOKUP_STATE_DELETED {
 		return nil, ErrConflict
 	}
 
-	var definition *opensplunkv1.LookupDefinition
+	var definition *opensplunk.LookupDefinition
 	if input.CsvData != nil {
 		if len(input.GetCsvData()) == 0 {
 			return nil, fmt.Errorf("%w: present csv_data must be nonempty", ErrInvalid)
@@ -180,7 +180,7 @@ func (service *Service) Replace(ctx context.Context, scope Scope, input *openspl
 		if publishErr != nil {
 			return nil, classify(publishErr)
 		}
-		return &opensplunkv1.ReplaceLookupResponse{Lookup: cloneLookup(lookup)}, nil
+		return &opensplunk.ReplaceLookupResponse{Lookup: cloneLookup(lookup)}, nil
 	}
 	normalized, normalizeErr := lookupdefinition.Normalize(input.GetDefinition(), current.Asset.Asset.Headers())
 	if normalizeErr != nil {
@@ -194,15 +194,15 @@ func (service *Service) Replace(ctx context.Context, scope Scope, input *openspl
 	if err != nil {
 		return nil, classify(err)
 	}
-	return &opensplunkv1.ReplaceLookupResponse{Lookup: cloneLookup(lookup)}, nil
+	return &opensplunk.ReplaceLookupResponse{Lookup: cloneLookup(lookup)}, nil
 }
 
-func (service *Service) SetState(ctx context.Context, scope Scope, input *opensplunkv1.SetLookupStateRequest) (*opensplunkv1.SetLookupStateResponse, error) {
+func (service *Service) SetState(ctx context.Context, scope Scope, input *opensplunk.SetLookupStateRequest) (*opensplunk.SetLookupStateResponse, error) {
 	if err := service.validate(ctx, scope); err != nil {
 		return nil, err
 	}
 	if input == nil || !validIdentity(input.GetLookupId(), 128) || input.GetExpectedVersion() == 0 || input.GetExpectedVersion() > math.MaxInt64 ||
-		(input.GetState() != opensplunkv1.LookupState_LOOKUP_STATE_ACTIVE && input.GetState() != opensplunkv1.LookupState_LOOKUP_STATE_DISABLED) {
+		(input.GetState() != opensplunk.LookupState_LOOKUP_STATE_ACTIVE && input.GetState() != opensplunk.LookupState_LOOKUP_STATE_DISABLED) {
 		return nil, fmt.Errorf("%w: state route accepts only ACTIVE or DISABLED with an exact version", ErrInvalid)
 	}
 	lookup, err := service.catalog.SetState(ctx, lookupcatalog.StateRequest{
@@ -212,10 +212,10 @@ func (service *Service) SetState(ctx context.Context, scope Scope, input *opensp
 	if err != nil {
 		return nil, classify(err)
 	}
-	return &opensplunkv1.SetLookupStateResponse{Lookup: cloneLookup(lookup)}, nil
+	return &opensplunk.SetLookupStateResponse{Lookup: cloneLookup(lookup)}, nil
 }
 
-func (service *Service) Delete(ctx context.Context, scope Scope, input *opensplunkv1.DeleteLookupRequest) (*opensplunkv1.DeleteLookupResponse, error) {
+func (service *Service) Delete(ctx context.Context, scope Scope, input *opensplunk.DeleteLookupRequest) (*opensplunk.DeleteLookupResponse, error) {
 	if err := service.validate(ctx, scope); err != nil {
 		return nil, err
 	}
@@ -230,23 +230,23 @@ func (service *Service) Delete(ctx context.Context, scope Scope, input *opensplu
 	}
 	if current.GetVersion() != input.GetExpectedVersion() ||
 		current.GetDefinition().GetName() != input.GetConfirmationName() ||
-		current.GetState() != opensplunkv1.LookupState_LOOKUP_STATE_DISABLED {
+		current.GetState() != opensplunk.LookupState_LOOKUP_STATE_DISABLED {
 		return nil, ErrConflict
 	}
 	deleted, err := service.catalog.SetState(ctx, lookupcatalog.StateRequest{
 		TenantID: scope.TenantID, OwnerID: scope.OwnerID, LookupID: input.GetLookupId(),
-		ExpectedVersion: input.GetExpectedVersion(), State: opensplunkv1.LookupState_LOOKUP_STATE_DELETED,
+		ExpectedVersion: input.GetExpectedVersion(), State: opensplunk.LookupState_LOOKUP_STATE_DELETED,
 	})
 	if err != nil {
 		return nil, classify(err)
 	}
-	if deleted == nil || deleted.GetLookupId() != input.GetLookupId() || deleted.GetVersion() != input.GetExpectedVersion()+1 || deleted.GetState() != opensplunkv1.LookupState_LOOKUP_STATE_DELETED {
+	if deleted == nil || deleted.GetLookupId() != input.GetLookupId() || deleted.GetVersion() != input.GetExpectedVersion()+1 || deleted.GetState() != opensplunk.LookupState_LOOKUP_STATE_DELETED {
 		return nil, ErrUnavailable
 	}
-	return &opensplunkv1.DeleteLookupResponse{LookupId: strings.Clone(deleted.GetLookupId()), Version: deleted.GetVersion()}, nil
+	return &opensplunk.DeleteLookupResponse{LookupId: strings.Clone(deleted.GetLookupId()), Version: deleted.GetVersion()}, nil
 }
 
-func (service *Service) Preview(ctx context.Context, scope Scope, input *opensplunkv1.PreviewLookupRequest) (*opensplunkv1.PreviewLookupResponse, error) {
+func (service *Service) Preview(ctx context.Context, scope Scope, input *opensplunk.PreviewLookupRequest) (*opensplunk.PreviewLookupResponse, error) {
 	if err := service.validate(ctx, scope); err != nil {
 		return nil, err
 	}
@@ -261,13 +261,13 @@ func (service *Service) Preview(ctx context.Context, scope Scope, input *openspl
 		return nil, fmt.Errorf("%w: maximum_rows must be between 1 and %d", ErrInvalid, MaximumPreviewRows)
 	}
 	sourceDigest := sha256.Sum256(input.GetCsvData())
-	response := &opensplunkv1.PreviewLookupResponse{SourceSha256: slices.Clone(sourceDigest[:])}
+	response := &opensplunk.PreviewLookupResponse{SourceSha256: slices.Clone(sourceDigest[:])}
 	asset, err := lookupasset.ParseCSVContext(ctx, bytes.NewReader(input.GetCsvData()), lookupasset.DefaultLimits())
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return nil, err
 		}
-		response.Violations = []*opensplunkv1.FieldViolation{previewViolation("csv_data", err)}
+		response.Violations = []*opensplunk.FieldViolation{previewViolation("csv_data", err)}
 		return response, nil
 	}
 	response.Columns = asset.Headers()
@@ -276,30 +276,30 @@ func (service *Service) Preview(ctx context.Context, scope Scope, input *openspl
 	response.ContentSha256 = slices.Clone(contentDigest[:])
 	normalized, err := lookupdefinition.Normalize(input.GetDefinition(), response.Columns)
 	if err != nil {
-		response.Violations = []*opensplunkv1.FieldViolation{previewViolation("definition", err)}
+		response.Violations = []*opensplunk.FieldViolation{previewViolation("definition", err)}
 		return response, nil
 	}
 	if err := validateDefinitionKeys(ctx, asset, normalized.Definition); err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return nil, err
 		}
-		response.Violations = []*opensplunkv1.FieldViolation{previewViolation("definition.key_mappings", err)}
+		response.Violations = []*opensplunk.FieldViolation{previewViolation("definition.key_mappings", err)}
 		return response, nil
 	}
 	previewRows := min(asset.RowCount(), uint64(maximumRows))
 	response.Truncated = previewRows < asset.RowCount()
-	response.Rows = make([]*opensplunkv1.LookupPreviewRow, previewRows)
+	response.Rows = make([]*opensplunk.LookupPreviewRow, previewRows)
 	for index := range response.Rows {
 		values, ok := asset.Row(index)
 		if !ok {
 			return nil, ErrUnavailable
 		}
-		response.Rows[index] = &opensplunkv1.LookupPreviewRow{Values: values}
+		response.Rows[index] = &opensplunk.LookupPreviewRow{Values: values}
 	}
 	return response, nil
 }
 
-func (service *Service) List(ctx context.Context, scope Scope, input *opensplunkv1.ListLookupsRequest) (*opensplunkv1.ListLookupsResponse, error) {
+func (service *Service) List(ctx context.Context, scope Scope, input *opensplunk.ListLookupsRequest) (*opensplunk.ListLookupsResponse, error) {
 	if err := service.validate(ctx, scope); err != nil {
 		return nil, err
 	}
@@ -343,14 +343,14 @@ func (service *Service) List(ctx context.Context, scope Scope, input *opensplunk
 		}
 		return nil, classify(err)
 	}
-	pageItems := make([]*opensplunkv1.Lookup, len(listed.Lookups))
+	pageItems := make([]*opensplunk.Lookup, len(listed.Lookups))
 	for index, lookup := range listed.Lookups {
 		if lookup == nil || lookup.GetDefinition() == nil {
 			return nil, ErrUnavailable
 		}
 		pageItems[index] = cloneLookup(lookup)
 	}
-	page := &opensplunkv1.PageResponse{}
+	page := &opensplunk.PageResponse{}
 	if listed.NextPosition != nil {
 		token, encodeErr := service.encodeListCursor(
 			fingerprint,
@@ -371,16 +371,16 @@ func (service *Service) List(ctx context.Context, scope Scope, input *opensplunk
 		page.TotalSize = &total
 		page.TotalSizeExact = true
 	}
-	return &opensplunkv1.ListLookupsResponse{Lookups: pageItems, Page: page}, nil
+	return &opensplunk.ListLookupsResponse{Lookups: pageItems, Page: page}, nil
 }
 
 func (service *Service) createPublished(
 	ctx context.Context,
 	scope Scope,
 	asset *lookupasset.Asset,
-	definition *opensplunkv1.LookupDefinition,
-) (*opensplunkv1.Lookup, error) {
-	var lookup *opensplunkv1.Lookup
+	definition *opensplunk.LookupDefinition,
+) (*opensplunk.Lookup, error) {
+	var lookup *opensplunk.Lookup
 	err := service.publishStaged(
 		ctx,
 		scope,
@@ -416,9 +416,9 @@ func (service *Service) replacePublished(
 	current lookupcatalog.Resolved,
 	expectedVersion uint64,
 	asset *lookupasset.Asset,
-	definition *opensplunkv1.LookupDefinition,
-) (*opensplunkv1.Lookup, error) {
-	var lookup *opensplunkv1.Lookup
+	definition *opensplunk.LookupDefinition,
+) (*opensplunk.Lookup, error) {
+	var lookup *opensplunk.Lookup
 	err := service.publishStaged(
 		ctx,
 		scope,
@@ -481,7 +481,7 @@ func (service *Service) publishStaged(
 	return nil
 }
 
-func prepareAssetDefinition(ctx context.Context, csvData []byte, definition *opensplunkv1.LookupDefinition) (*lookupasset.Asset, *opensplunkv1.LookupDefinition, error) {
+func prepareAssetDefinition(ctx context.Context, csvData []byte, definition *opensplunk.LookupDefinition) (*lookupasset.Asset, *opensplunk.LookupDefinition, error) {
 	asset, err := lookupasset.ParseCSVContext(ctx, bytes.NewReader(csvData), lookupasset.DefaultLimits())
 	if err != nil {
 		return nil, nil, err
@@ -493,7 +493,7 @@ func prepareAssetDefinition(ctx context.Context, csvData []byte, definition *ope
 	return asset, normalized.Definition, nil
 }
 
-func validateDefinitionKeys(ctx context.Context, asset *lookupasset.Asset, definition *opensplunkv1.LookupDefinition) error {
+func validateDefinitionKeys(ctx context.Context, asset *lookupasset.Asset, definition *opensplunk.LookupDefinition) error {
 	return lookupasset.ValidateUniqueKeysContext(ctx, asset, lookupdefinition.KeyColumns(definition))
 }
 
@@ -512,17 +512,17 @@ type normalizedListRequest struct {
 	pageToken    string
 	includeTotal bool
 	appID        string
-	states       []opensplunkv1.LookupState
+	states       []opensplunk.LookupState
 	text         string
-	sortBy       opensplunkv1.LookupSortBy
-	direction    opensplunkv1.SortDirection
+	sortBy       opensplunk.LookupSortBy
+	direction    opensplunk.SortDirection
 }
 
-func normalizeList(input *opensplunkv1.ListLookupsRequest) (normalizedListRequest, error) {
+func normalizeList(input *opensplunk.ListLookupsRequest) (normalizedListRequest, error) {
 	if input == nil {
-		input = &opensplunkv1.ListLookupsRequest{}
+		input = &opensplunk.ListLookupsRequest{}
 	}
-	result := normalizedListRequest{pageSize: DefaultPageSize, sortBy: opensplunkv1.LookupSortBy_LOOKUP_SORT_BY_NAME, direction: opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING}
+	result := normalizedListRequest{pageSize: DefaultPageSize, sortBy: opensplunk.LookupSortBy_LOOKUP_SORT_BY_NAME, direction: opensplunk.SortDirection_SORT_DIRECTION_ASCENDING}
 	if page := input.GetPage(); page != nil {
 		if page.PageSize != nil {
 			result.pageSize = page.GetPageSize()
@@ -544,7 +544,7 @@ func normalizeList(input *opensplunkv1.ListLookupsRequest) (normalizedListReques
 	}
 	result.states = slices.Clone(input.GetStateFilters())
 	for _, state := range result.states {
-		if state < opensplunkv1.LookupState_LOOKUP_STATE_ACTIVE || state > opensplunkv1.LookupState_LOOKUP_STATE_DELETED {
+		if state < opensplunk.LookupState_LOOKUP_STATE_ACTIVE || state > opensplunk.LookupState_LOOKUP_STATE_DELETED {
 			return normalizedListRequest{}, fmt.Errorf("%w: state filter is invalid", ErrInvalid)
 		}
 	}
@@ -557,16 +557,16 @@ func normalizeList(input *opensplunkv1.ListLookupsRequest) (normalizedListReques
 		}
 		result.text = strings.ToLower(text)
 	}
-	if input.GetSortBy() != opensplunkv1.LookupSortBy_LOOKUP_SORT_BY_UNSPECIFIED {
+	if input.GetSortBy() != opensplunk.LookupSortBy_LOOKUP_SORT_BY_UNSPECIFIED {
 		result.sortBy = input.GetSortBy()
 	}
-	if result.sortBy < opensplunkv1.LookupSortBy_LOOKUP_SORT_BY_NAME || result.sortBy > opensplunkv1.LookupSortBy_LOOKUP_SORT_BY_UPDATED_AT {
+	if result.sortBy < opensplunk.LookupSortBy_LOOKUP_SORT_BY_NAME || result.sortBy > opensplunk.LookupSortBy_LOOKUP_SORT_BY_UPDATED_AT {
 		return normalizedListRequest{}, fmt.Errorf("%w: sort field is invalid", ErrInvalid)
 	}
-	if input.GetSortDirection() != opensplunkv1.SortDirection_SORT_DIRECTION_UNSPECIFIED {
+	if input.GetSortDirection() != opensplunk.SortDirection_SORT_DIRECTION_UNSPECIFIED {
 		result.direction = input.GetSortDirection()
 	}
-	if result.direction != opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING && result.direction != opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING {
+	if result.direction != opensplunk.SortDirection_SORT_DIRECTION_ASCENDING && result.direction != opensplunk.SortDirection_SORT_DIRECTION_DESCENDING {
 		return normalizedListRequest{}, fmt.Errorf("%w: sort direction is invalid", ErrInvalid)
 	}
 	return result, nil
@@ -624,7 +624,7 @@ func (service *Service) encodeListCursor(
 	fingerprint [sha256.Size]byte,
 	snapshot lookupcatalog.ListSnapshot,
 	position lookupcatalog.ListPosition,
-	sortBy opensplunkv1.LookupSortBy,
+	sortBy opensplunk.LookupSortBy,
 ) (string, error) {
 	cursor := lookupListCursor{
 		Version:     cursorVersion,
@@ -634,7 +634,7 @@ func (service *Service) encodeListCursor(
 		LookupID:    strings.Clone(position.LookupID),
 		Name:        strings.Clone(position.Name),
 	}
-	if sortBy != opensplunkv1.LookupSortBy_LOOKUP_SORT_BY_NAME {
+	if sortBy != opensplunk.LookupSortBy_LOOKUP_SORT_BY_NAME {
 		value := position.UnixMicro
 		cursor.UnixMicro = &value
 	}
@@ -657,7 +657,7 @@ func (service *Service) encodeListCursor(
 func (service *Service) decodeListCursor(
 	token string,
 	fingerprint [sha256.Size]byte,
-	sortBy opensplunkv1.LookupSortBy,
+	sortBy opensplunk.LookupSortBy,
 ) (lookupListCursor, error) {
 	var cursor lookupListCursor
 	if err := cursorcodec.Decode(
@@ -676,7 +676,7 @@ func (service *Service) decodeListCursor(
 func validLookupListCursor(
 	cursor lookupListCursor,
 	fingerprint [sha256.Size]byte,
-	sortBy opensplunkv1.LookupSortBy,
+	sortBy opensplunk.LookupSortBy,
 ) bool {
 	decodedFingerprint, fingerprintErr := base64.RawURLEncoding.DecodeString(cursor.Fingerprint)
 	decodedState, stateErr := base64.RawURLEncoding.DecodeString(cursor.State)
@@ -690,10 +690,10 @@ func validLookupListCursor(
 		return false
 	}
 	switch sortBy {
-	case opensplunkv1.LookupSortBy_LOOKUP_SORT_BY_NAME:
+	case opensplunk.LookupSortBy_LOOKUP_SORT_BY_NAME:
 		return cursor.UnixMicro == nil && lookupdefinition.IsValidLookupName(cursor.Name)
-	case opensplunkv1.LookupSortBy_LOOKUP_SORT_BY_CREATED_AT,
-		opensplunkv1.LookupSortBy_LOOKUP_SORT_BY_UPDATED_AT:
+	case opensplunk.LookupSortBy_LOOKUP_SORT_BY_CREATED_AT,
+		opensplunk.LookupSortBy_LOOKUP_SORT_BY_UPDATED_AT:
 		return cursor.Name == "" && cursor.UnixMicro != nil && *cursor.UnixMicro > 0
 	default:
 		return false
@@ -707,7 +707,7 @@ func (cursor lookupListCursor) stateDigest() [sha256.Size]byte {
 	return digest
 }
 
-func previewViolation(path string, err error) *opensplunkv1.FieldViolation {
+func previewViolation(path string, err error) *opensplunk.FieldViolation {
 	code := "LOOKUP_INVALID"
 	switch {
 	case errors.Is(err, lookupasset.ErrResourceLimit), errors.Is(err, lookupcatalog.ErrCapacity):
@@ -719,7 +719,7 @@ func previewViolation(path string, err error) *opensplunkv1.FieldViolation {
 	case errors.Is(err, lookupdefinition.ErrInvalid):
 		code = "LOOKUP_DEFINITION_INVALID"
 	}
-	return &opensplunkv1.FieldViolation{FieldPath: path, Code: code, Message: strings.Clone(err.Error())}
+	return &opensplunk.FieldViolation{FieldPath: path, Code: code, Message: strings.Clone(err.Error())}
 }
 
 func classify(err error) error {
@@ -750,11 +750,11 @@ func classify(err error) error {
 	}
 }
 
-func cloneLookup(value *opensplunkv1.Lookup) *opensplunkv1.Lookup {
+func cloneLookup(value *opensplunk.Lookup) *opensplunk.Lookup {
 	if value == nil {
 		return nil
 	}
-	return proto.Clone(value).(*opensplunkv1.Lookup)
+	return proto.Clone(value).(*opensplunk.Lookup)
 }
 
 var validIdentity = lookupdefinition.ValidIdentity

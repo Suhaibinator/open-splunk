@@ -114,7 +114,7 @@ func TestServeHTTPRejectsBeforeUpgradeAfterClose(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	request, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://example.test/api/v1/search/ws", nil)
+	request, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://example.test/api/search/ws", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

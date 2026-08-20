@@ -291,7 +291,7 @@ SELECT
 		char(123),
 		'"duration":"9999ms","error":"connection refused",',
 		'"layer":"load","level":"ERROR","logger":"load-decoy",',
-		'"message":"Request metrics","path":"/api/v1/decoy",',
+		'"message":"Request metrics","path":"/api/decoy",',
 		'"status":599,"sequence":',
 		toString(number),
 		char(125)
@@ -303,7 +303,7 @@ SELECT
 		concat(
 			char(123),
 			'"duration":"9999ms","layer":"load","logger":"load-decoy",',
-			'"path":"/api/v1/decoy","status":599',
+			'"path":"/api/decoy","status":599',
 			char(125)
 		)
 		AS JSON

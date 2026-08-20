@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
@@ -18,13 +18,13 @@ import (
 func TestWriterCreateDraftPublishesAtomicallyAndReplaysCompactOutcome(t *testing.T) {
 	harness := newWriterBlackboxHarness(t)
 	request, response := harness.createDraft(t, "atomic-create", "create-atomic-request-0001")
-	committed := proto.Clone(response).(*opensplunkv1.CreateKnowledgeObjectResponse)
+	committed := proto.Clone(response).(*opensplunk.CreateKnowledgeObjectResponse)
 	object := response.GetKnowledgeObject()
 	assertWriterProtoObject(t, object, writerProtoObjectExpectation{
 		ID:         "ko_0000000000000000000001",
 		Definition: request.GetDefinition(),
 		Version:    1,
-		State:      opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+		State:      opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 		CreatedUS:  10_001,
 		UpdatedUS:  10_001,
 	})
@@ -115,7 +115,7 @@ func TestWriterCreateDraftPublishesAtomicallyAndReplaysCompactOutcome(t *testing
 
 	unauthorizedScope := harness.writeScope
 	unauthorizedScope.WritableAppIDs = []string{writerTestAppTwo}
-	if _, err := harness.writer.Create(harness.actorCtx, unauthorizedScope, proto.Clone(request).(*opensplunkv1.CreateKnowledgeObjectRequest)); !errors.Is(err, control.ErrNotFound) {
+	if _, err := harness.writer.Create(harness.actorCtx, unauthorizedScope, proto.Clone(request).(*opensplunk.CreateKnowledgeObjectRequest)); !errors.Is(err, control.ErrNotFound) {
 		t.Fatalf("unauthorized exact replay error = %v, want ErrNotFound", err)
 	}
 	assertWriterAuthoritySnapshotsEqual(t, readWriterAuthoritySnapshot(t, harness.database), snapshot)
@@ -123,7 +123,7 @@ func TestWriterCreateDraftPublishesAtomicallyAndReplaysCompactOutcome(t *testing
 	replayed, err := harness.writer.Create(
 		harness.actorCtx,
 		harness.writeScope,
-		proto.Clone(request).(*opensplunkv1.CreateKnowledgeObjectRequest),
+		proto.Clone(request).(*opensplunk.CreateKnowledgeObjectRequest),
 	)
 	if err != nil {
 		t.Fatalf("exact Create replay: %v", err)
@@ -146,7 +146,7 @@ func TestWriterCreateDraftPublishesAtomicallyAndReplaysCompactOutcome(t *testing
 		t.Fatalf("reconstructed replay was affected by caller mutation: got %v want %v", detachedReplay, committed)
 	}
 
-	altered := proto.Clone(request).(*opensplunkv1.CreateKnowledgeObjectRequest)
+	altered := proto.Clone(request).(*opensplunk.CreateKnowledgeObjectRequest)
 	altered.Definition.Name = "altered-same-idempotency-key"
 	if _, err := harness.writer.Create(harness.actorCtx, harness.writeScope, altered); !errors.Is(err, knowledgecatalog.ErrIdempotencyConflict) {
 		t.Fatalf("altered Create replay error = %v, want ErrIdempotencyConflict", err)
@@ -158,17 +158,17 @@ func TestWriterCreateDraftPublishesAtomicallyAndReplaysCompactOutcome(t *testing
 func TestWriterLargeDraftReplayReconstructsResponseFromCompactReference(t *testing.T) {
 	harness := newWriterBlackboxHarness(t)
 	description := strings.Repeat("d", 16<<10)
-	request := &opensplunkv1.CreateKnowledgeObjectRequest{
+	request := &opensplunk.CreateKnowledgeObjectRequest{
 		Definition: writerAliasDefinition(
 			writerTestApp,
 			"large-compact-replay",
 			&description,
-			opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+			opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 			"large-compact-host",
 			"source_field",
 			"destination_field",
 		),
-		InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+		InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 		ClientRequestId: "large-compact-request-0001",
 	}
 	response, err := harness.writer.Create(harness.actorCtx, harness.writeScope, request)
@@ -194,7 +194,7 @@ func TestWriterLargeDraftReplayReconstructsResponseFromCompactReference(t *testi
 	replayed, err := harness.writer.Create(
 		harness.actorCtx,
 		harness.writeScope,
-		proto.Clone(request).(*opensplunkv1.CreateKnowledgeObjectRequest),
+		proto.Clone(request).(*opensplunk.CreateKnowledgeObjectRequest),
 	)
 	if err != nil || !proto.Equal(replayed, response) {
 		t.Fatalf("large Create replay = (%v, %v), want %v", replayed, err, response)
@@ -209,27 +209,27 @@ func TestWriterActivePublicationRequiresCurrentIndexWinningWitness(t *testing.T)
 	stable := readWriterAuthoritySnapshot(t, harness.database)
 
 	activeDescription := "must not publish without the active validator"
-	if _, err := harness.writer.Create(harness.actorCtx, harness.writeScope, &opensplunkv1.CreateKnowledgeObjectRequest{
+	if _, err := harness.writer.Create(harness.actorCtx, harness.writeScope, &opensplunk.CreateKnowledgeObjectRequest{
 		Definition: writerAliasDefinition(
 			writerTestApp,
 			"active-create-fail-closed",
 			&activeDescription,
-			opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+			opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 			"active-create-host",
 			"source_field",
 			"destination_field",
 		),
-		InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
+		InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
 		ClientRequestId: "active-create-request-0001",
 	}); !errors.Is(err, control.ErrDependencyConflict) {
 		t.Fatalf("Create(ACTIVE) error = %v, want dependency conflict", err)
 	}
 	assertWriterAuthoritySnapshotsEqual(t, readWriterAuthoritySnapshot(t, harness.database), stable)
 
-	if _, err := harness.writer.SetState(harness.actorCtx, harness.writeScope, &opensplunkv1.SetKnowledgeObjectStateRequest{
+	if _, err := harness.writer.SetState(harness.actorCtx, harness.writeScope, &opensplunk.SetKnowledgeObjectStateRequest{
 		KnowledgeObjectId: draft.GetKnowledgeObject().GetKnowledgeObjectId(),
 		ExpectedVersion:   1,
-		State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
+		State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
 		ClientRequestId:   "active-enable-request-0001",
 	}); !errors.Is(err, control.ErrDependencyConflict) {
 		t.Fatalf("SetState(ACTIVE) error = %v, want dependency conflict", err)
@@ -288,9 +288,9 @@ func TestWriterIdempotencyKeyPartitionsByActorAndRouteAndBindsOwner(t *testing.T
 		t.Fatal("actor-ID-partitioned idempotency key replayed another actor's outcome")
 	}
 
-	updateDefinition := proto.Clone(first.GetKnowledgeObject().GetDefinition()).(*opensplunkv1.KnowledgeObjectDefinition)
+	updateDefinition := proto.Clone(first.GetKnowledgeObject().GetDefinition()).(*opensplunk.KnowledgeObjectDefinition)
 	updateDefinition.Description = new("route-partitioned update")
-	updateResponse, err := harness.writer.Update(harness.actorCtx, harness.writeScope, &opensplunkv1.UpdateKnowledgeObjectRequest{
+	updateResponse, err := harness.writer.Update(harness.actorCtx, harness.writeScope, &opensplunk.UpdateKnowledgeObjectRequest{
 		KnowledgeObjectId: first.GetKnowledgeObject().GetKnowledgeObjectId(),
 		ExpectedVersion:   1,
 		Definition:        updateDefinition,
@@ -330,12 +330,12 @@ func TestWriterUpdateUsesOnlyExactTopLevelMaskAuthority(t *testing.T) {
 		writerTestAppTwo,
 		"unmasked-name-must-not-win",
 		&description,
-		opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL,
+		opensplunk.SharingScope_SHARING_SCOPE_GLOBAL,
 		"unmasked-host-must-not-win",
 		"unmasked_source",
 		"unmasked_destination",
 	)
-	descriptionRequest := &opensplunkv1.UpdateKnowledgeObjectRequest{
+	descriptionRequest := &opensplunk.UpdateKnowledgeObjectRequest{
 		KnowledgeObjectId: createdObject.GetKnowledgeObjectId(),
 		ExpectedVersion:   1,
 		Definition:        incoming,
@@ -346,45 +346,45 @@ func TestWriterUpdateUsesOnlyExactTopLevelMaskAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatalf("description-only Update: %v", err)
 	}
-	expectedDescriptionDefinition := proto.Clone(createdObject.GetDefinition()).(*opensplunkv1.KnowledgeObjectDefinition)
+	expectedDescriptionDefinition := proto.Clone(createdObject.GetDefinition()).(*opensplunk.KnowledgeObjectDefinition)
 	expectedDescriptionDefinition.Description = &description
 	assertWriterProtoObject(t, descriptionResponse.GetKnowledgeObject(), writerProtoObjectExpectation{
 		ID:         createdObject.GetKnowledgeObjectId(),
 		Definition: expectedDescriptionDefinition,
 		Version:    2,
-		State:      opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+		State:      opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 		CreatedUS:  10_001,
 		UpdatedUS:  10_002,
 	})
-	descriptionCommitted := proto.Clone(descriptionResponse).(*opensplunkv1.UpdateKnowledgeObjectResponse)
+	descriptionCommitted := proto.Clone(descriptionResponse).(*opensplunk.UpdateKnowledgeObjectResponse)
 	afterDescription := readWriterAuthoritySnapshot(t, harness.database)
 
 	descriptionReplay, err := harness.writer.Update(
 		harness.actorCtx,
 		harness.writeScope,
-		proto.Clone(descriptionRequest).(*opensplunkv1.UpdateKnowledgeObjectRequest),
+		proto.Clone(descriptionRequest).(*opensplunk.UpdateKnowledgeObjectRequest),
 	)
 	if err != nil || !proto.Equal(descriptionReplay, descriptionCommitted) {
 		t.Fatalf("exact Update replay = (%v, %v), want %v", descriptionReplay, err, descriptionCommitted)
 	}
 	assertWriterAuthoritySnapshotsEqual(t, readWriterAuthoritySnapshot(t, harness.database), afterDescription)
 
-	alteredUnmasked := proto.Clone(descriptionRequest).(*opensplunkv1.UpdateKnowledgeObjectRequest)
+	alteredUnmasked := proto.Clone(descriptionRequest).(*opensplunk.UpdateKnowledgeObjectRequest)
 	alteredUnmasked.Definition.Name = "different-unmasked-submitted-body"
 	if _, err := harness.writer.Update(harness.actorCtx, harness.writeScope, alteredUnmasked); !errors.Is(err, knowledgecatalog.ErrIdempotencyConflict) {
 		t.Fatalf("altered unmasked retry error = %v, want ErrIdempotencyConflict", err)
 	}
 	assertWriterAuthoritySnapshotsEqual(t, readWriterAuthoritySnapshot(t, harness.database), afterDescription)
 
-	moved := proto.Clone(expectedDescriptionDefinition).(*opensplunkv1.KnowledgeObjectDefinition)
+	moved := proto.Clone(expectedDescriptionDefinition).(*opensplunk.KnowledgeObjectDefinition)
 	moved.AppId = writerTestAppTwo
 	moved.Name = "masked-update-moved"
-	moved.SharingScope = opensplunkv1.SharingScope_SHARING_SCOPE_APP
-	moved.Selector = &opensplunkv1.KnowledgeSelector{HostPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{
-		MatchKind: opensplunkv1.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT,
+	moved.SharingScope = opensplunk.SharingScope_SHARING_SCOPE_APP
+	moved.Selector = &opensplunk.KnowledgeSelector{HostPatterns: []*opensplunk.KnowledgeSelectorPattern{{
+		MatchKind: opensplunk.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT,
 		Value:     "moved-host",
 	}}}
-	movedResponse, err := harness.writer.Update(harness.actorCtx, harness.writeScope, &opensplunkv1.UpdateKnowledgeObjectRequest{
+	movedResponse, err := harness.writer.Update(harness.actorCtx, harness.writeScope, &opensplunk.UpdateKnowledgeObjectRequest{
 		KnowledgeObjectId: createdObject.GetKnowledgeObjectId(),
 		ExpectedVersion:   2,
 		Definition:        moved,
@@ -398,18 +398,18 @@ func TestWriterUpdateUsesOnlyExactTopLevelMaskAuthority(t *testing.T) {
 		ID:         createdObject.GetKnowledgeObjectId(),
 		Definition: moved,
 		Version:    3,
-		State:      opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+		State:      opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 		CreatedUS:  10_001,
 		UpdatedUS:  10_003,
 	})
 
-	bodyChanged := proto.Clone(moved).(*opensplunkv1.KnowledgeObjectDefinition)
-	bodyChanged.Body = &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunkv1.FieldAliasDefinition{
+	bodyChanged := proto.Clone(moved).(*opensplunk.KnowledgeObjectDefinition)
+	bodyChanged.Body = &opensplunk.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunk.FieldAliasDefinition{
 		SourceField:       "new_source",
 		DestinationField:  "new_destination",
-		OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+		OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
 	}}
-	bodyResponse, err := harness.writer.Update(harness.actorCtx, harness.writeScope, &opensplunkv1.UpdateKnowledgeObjectRequest{
+	bodyResponse, err := harness.writer.Update(harness.actorCtx, harness.writeScope, &opensplunk.UpdateKnowledgeObjectRequest{
 		KnowledgeObjectId: createdObject.GetKnowledgeObjectId(),
 		ExpectedVersion:   3,
 		Definition:        bodyChanged,
@@ -423,7 +423,7 @@ func TestWriterUpdateUsesOnlyExactTopLevelMaskAuthority(t *testing.T) {
 		ID:         createdObject.GetKnowledgeObjectId(),
 		Definition: bodyChanged,
 		Version:    4,
-		State:      opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+		State:      opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 		CreatedUS:  10_001,
 		UpdatedUS:  10_004,
 	})
@@ -434,25 +434,25 @@ func TestWriterUpdateUsesOnlyExactTopLevelMaskAuthority(t *testing.T) {
 	)
 
 	stable := readWriterAuthoritySnapshot(t, harness.database)
-	invalidRequests := []*opensplunkv1.UpdateKnowledgeObjectRequest{
+	invalidRequests := []*opensplunk.UpdateKnowledgeObjectRequest{
 		{
 			KnowledgeObjectId: createdObject.GetKnowledgeObjectId(), ExpectedVersion: 4,
-			Definition: proto.Clone(bodyChanged).(*opensplunkv1.KnowledgeObjectDefinition),
+			Definition: proto.Clone(bodyChanged).(*opensplunk.KnowledgeObjectDefinition),
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"description"}}, ClientRequestId: "masked-no-op-request-0001",
 		},
 		{
 			KnowledgeObjectId: createdObject.GetKnowledgeObjectId(), ExpectedVersion: 4,
-			Definition: proto.Clone(bodyChanged).(*opensplunkv1.KnowledgeObjectDefinition),
+			Definition: proto.Clone(bodyChanged).(*opensplunk.KnowledgeObjectDefinition),
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"name", "app_id"}}, ClientRequestId: "masked-unsorted-request-01",
 		},
 		{
 			KnowledgeObjectId: createdObject.GetKnowledgeObjectId(), ExpectedVersion: 4,
-			Definition: proto.Clone(bodyChanged).(*opensplunkv1.KnowledgeObjectDefinition),
+			Definition: proto.Clone(bodyChanged).(*opensplunk.KnowledgeObjectDefinition),
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"name", "name"}}, ClientRequestId: "masked-duplicate-request-1",
 		},
 		{
 			KnowledgeObjectId: createdObject.GetKnowledgeObjectId(), ExpectedVersion: 4,
-			Definition: proto.Clone(bodyChanged).(*opensplunkv1.KnowledgeObjectDefinition),
+			Definition: proto.Clone(bodyChanged).(*opensplunk.KnowledgeObjectDefinition),
 			UpdateMask: nil, ClientRequestId: "masked-empty-request-00001",
 		},
 	}
@@ -463,12 +463,12 @@ func TestWriterUpdateUsesOnlyExactTopLevelMaskAuthority(t *testing.T) {
 		assertWriterAuthoritySnapshotsEqual(t, readWriterAuthoritySnapshot(t, harness.database), stable)
 	}
 
-	typeChange := proto.Clone(bodyChanged).(*opensplunkv1.KnowledgeObjectDefinition)
-	typeChange.Body = &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{CalculatedField: &opensplunkv1.CalculatedFieldDefinition{
+	typeChange := proto.Clone(bodyChanged).(*opensplunk.KnowledgeObjectDefinition)
+	typeChange.Body = &opensplunk.KnowledgeObjectDefinition_CalculatedField{CalculatedField: &opensplunk.CalculatedFieldDefinition{
 		DestinationField: "calculated_output",
 		Expression:       "1 + 1",
 	}}
-	if _, err := harness.writer.Update(harness.actorCtx, harness.writeScope, &opensplunkv1.UpdateKnowledgeObjectRequest{
+	if _, err := harness.writer.Update(harness.actorCtx, harness.writeScope, &opensplunk.UpdateKnowledgeObjectRequest{
 		KnowledgeObjectId: createdObject.GetKnowledgeObjectId(),
 		ExpectedVersion:   4,
 		Definition:        typeChange,
@@ -492,10 +492,10 @@ func TestWriterDisableDeleteAndHistoryAreImmutable(t *testing.T) {
 	_, created := harness.createDraft(t, "lifecycle-history", "history-create-request-0001")
 	createdObject := created.GetKnowledgeObject()
 
-	disableRequest := &opensplunkv1.SetKnowledgeObjectStateRequest{
+	disableRequest := &opensplunk.SetKnowledgeObjectStateRequest{
 		KnowledgeObjectId: createdObject.GetKnowledgeObjectId(),
 		ExpectedVersion:   1,
-		State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+		State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 		ClientRequestId:   "history-disable-request-001",
 	}
 	disabled, err := harness.writer.SetState(harness.actorCtx, harness.writeScope, disableRequest)
@@ -506,7 +506,7 @@ func TestWriterDisableDeleteAndHistoryAreImmutable(t *testing.T) {
 		ID:         createdObject.GetKnowledgeObjectId(),
 		Definition: createdObject.GetDefinition(),
 		Version:    2,
-		State:      opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+		State:      opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 		CreatedUS:  10_001,
 		UpdatedUS:  10_002,
 		DisabledUS: 10_002,
@@ -514,11 +514,11 @@ func TestWriterDisableDeleteAndHistoryAreImmutable(t *testing.T) {
 	if !bytes.Equal(disabled.GetKnowledgeObject().GetDefinitionSha256(), createdObject.GetDefinitionSha256()) {
 		t.Fatal("disable did not copy the current immutable definition digest")
 	}
-	disabledCommitted := proto.Clone(disabled).(*opensplunkv1.SetKnowledgeObjectStateResponse)
+	disabledCommitted := proto.Clone(disabled).(*opensplunk.SetKnowledgeObjectStateResponse)
 
-	updatedDefinition := proto.Clone(disabled.GetKnowledgeObject().GetDefinition()).(*opensplunkv1.KnowledgeObjectDefinition)
+	updatedDefinition := proto.Clone(disabled.GetKnowledgeObject().GetDefinition()).(*opensplunk.KnowledgeObjectDefinition)
 	updatedDefinition.Description = new("edited while disabled")
-	updated, err := harness.writer.Update(harness.actorCtx, harness.writeScope, &opensplunkv1.UpdateKnowledgeObjectRequest{
+	updated, err := harness.writer.Update(harness.actorCtx, harness.writeScope, &opensplunk.UpdateKnowledgeObjectRequest{
 		KnowledgeObjectId: createdObject.GetKnowledgeObjectId(),
 		ExpectedVersion:   2,
 		Definition:        updatedDefinition,
@@ -532,13 +532,13 @@ func TestWriterDisableDeleteAndHistoryAreImmutable(t *testing.T) {
 		ID:         createdObject.GetKnowledgeObjectId(),
 		Definition: updatedDefinition,
 		Version:    3,
-		State:      opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+		State:      opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 		CreatedUS:  10_001,
 		UpdatedUS:  10_003,
 		DisabledUS: 10_002,
 	})
 
-	deleteRequest := &opensplunkv1.DeleteKnowledgeObjectRequest{
+	deleteRequest := &opensplunk.DeleteKnowledgeObjectRequest{
 		KnowledgeObjectId: createdObject.GetKnowledgeObjectId(),
 		ExpectedVersion:   3,
 		ClientRequestId:   "history-delete-request-0001",
@@ -563,7 +563,7 @@ func TestWriterDisableDeleteAndHistoryAreImmutable(t *testing.T) {
 	history := []struct {
 		version    uint64
 		state      knowledgecatalog.State
-		definition *opensplunkv1.KnowledgeObjectDefinition
+		definition *opensplunk.KnowledgeObjectDefinition
 		disabledUS int64
 		updatedUS  int64
 	}{
@@ -587,13 +587,13 @@ func TestWriterDisableDeleteAndHistoryAreImmutable(t *testing.T) {
 	if err != nil || !proto.Equal(disableReplay, disabledCommitted) {
 		t.Fatalf("disable replay after delete = (%v, %v), want %v", disableReplay, err, disabledCommitted)
 	}
-	deleteCommitted := proto.Clone(deleted).(*opensplunkv1.DeleteKnowledgeObjectResponse)
+	deleteCommitted := proto.Clone(deleted).(*opensplunk.DeleteKnowledgeObjectResponse)
 	deleteReplay, err := harness.writer.Delete(harness.actorCtx, harness.writeScope, deleteRequest)
 	if err != nil || !proto.Equal(deleteReplay, deleteCommitted) {
 		t.Fatalf("delete replay = (%v, %v), want %v", deleteReplay, err, deleteCommitted)
 	}
 	stable := readWriterAuthoritySnapshot(t, harness.database)
-	if _, err := harness.writer.Update(harness.actorCtx, harness.writeScope, &opensplunkv1.UpdateKnowledgeObjectRequest{
+	if _, err := harness.writer.Update(harness.actorCtx, harness.writeScope, &opensplunk.UpdateKnowledgeObjectRequest{
 		KnowledgeObjectId: createdObject.GetKnowledgeObjectId(),
 		ExpectedVersion:   4,
 		Definition:        updatedDefinition,
@@ -602,7 +602,7 @@ func TestWriterDisableDeleteAndHistoryAreImmutable(t *testing.T) {
 	}); !errors.Is(err, control.ErrVersionConflict) {
 		t.Fatalf("authorized Update after delete error = %v, want ErrVersionConflict", err)
 	}
-	if _, err := harness.writer.Delete(harness.actorCtx, harness.writeScope, &opensplunkv1.DeleteKnowledgeObjectRequest{
+	if _, err := harness.writer.Delete(harness.actorCtx, harness.writeScope, &opensplunk.DeleteKnowledgeObjectRequest{
 		KnowledgeObjectId: createdObject.GetKnowledgeObjectId(),
 		ExpectedVersion:   4,
 		ClientRequestId:   "history-delete-terminal-001",
@@ -648,15 +648,15 @@ func TestWriterDisableDeleteAndHistoryAreImmutable(t *testing.T) {
 
 type writerProtoObjectExpectation struct {
 	ID         string
-	Definition *opensplunkv1.KnowledgeObjectDefinition
+	Definition *opensplunk.KnowledgeObjectDefinition
 	Version    uint64
-	State      opensplunkv1.KnowledgeObjectState
+	State      opensplunk.KnowledgeObjectState
 	CreatedUS  int64
 	UpdatedUS  int64
 	DisabledUS int64
 }
 
-func assertWriterProtoObject(t *testing.T, object *opensplunkv1.KnowledgeObject, want writerProtoObjectExpectation) {
+func assertWriterProtoObject(t *testing.T, object *opensplunk.KnowledgeObject, want writerProtoObjectExpectation) {
 	t.Helper()
 	if object == nil {
 		t.Fatal("writer returned a nil knowledge object")
@@ -665,7 +665,7 @@ func assertWriterProtoObject(t *testing.T, object *opensplunkv1.KnowledgeObject,
 		object.GetTenantId() != writerTestTenant ||
 		object.GetAppId() != want.Definition.GetAppId() ||
 		object.GetOwnerId() != writerTestOwner ||
-		object.GetObjectType() != opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS ||
+		object.GetObjectType() != opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS ||
 		object.GetName() != want.Definition.GetName() ||
 		object.GetVersion() != want.Version ||
 		object.GetSharingScope() != want.Definition.GetSharingScope() ||
@@ -712,7 +712,7 @@ func getWriterObject(
 
 func assertWriterProtoMatchesStored(
 	t *testing.T,
-	object *opensplunkv1.KnowledgeObject,
+	object *opensplunk.KnowledgeObject,
 	stored knowledgecatalog.Object,
 ) {
 	t.Helper()

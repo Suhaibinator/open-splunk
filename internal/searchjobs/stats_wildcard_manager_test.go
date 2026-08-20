@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -308,8 +308,7 @@ func TestStatsWildcardExpansionPrivateAuthorityParticipatesInMetadataCapacity(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	baseBytes, err = checkedAdd(baseBytes, uint64(len(spl.CompatibilityVersion)))
-	if err != nil || prepared.metadataBytes < wildcardBytes {
+	if prepared.metadataBytes < wildcardBytes {
 		t.Fatalf("base/prepared metadata = %d/%d: %v", baseBytes, prepared.metadataBytes, err)
 	}
 	withoutWildcard, err := checkedAdd(baseBytes, prepared.metadataBytes-wildcardBytes)
@@ -458,26 +457,26 @@ func newCalculatedFieldKnowledgeResolver(
 	if err != nil {
 		t.Fatalf("audit.WithActor(): %v", err)
 	}
-	definition := &opensplunkv1.KnowledgeObjectDefinition{
+	definition := &opensplunk.KnowledgeObjectDefinition{
 		AppId:        appID,
 		Name:         "stats-wildcard-calculated",
-		SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
-		Selector: &opensplunkv1.KnowledgeSelector{
-			IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{Value: "main"}},
+		SharingScope: opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
+		Selector: &opensplunk.KnowledgeSelector{
+			IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{{Value: "main"}},
 		},
-		Body: &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{
-			CalculatedField: &opensplunkv1.CalculatedFieldDefinition{
+		Body: &opensplunk.KnowledgeObjectDefinition_CalculatedField{
+			CalculatedField: &opensplunk.CalculatedFieldDefinition{
 				DestinationField:  destination,
 				Expression:        "1",
-				OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+				OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 			},
 		},
 	}
 	if _, err := writer.Create(actorContext, knowledgecatalog.WriteScope{
 		TenantID: tenantID, OwnerID: "owner", WritableAppIDs: []string{appID},
-	}, &opensplunkv1.CreateKnowledgeObjectRequest{
+	}, &opensplunk.CreateKnowledgeObjectRequest{
 		Definition:      definition,
-		InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
+		InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
 		ClientRequestId: "stats-wildcard-calculated-create-0001",
 	}); err != nil {
 		t.Fatalf("Writer.Create(calculated field): %v", err)

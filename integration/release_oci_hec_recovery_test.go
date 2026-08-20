@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 )
 
 const releaseOCIHECRecoveryChannel = "123e4567-e89b-42d3-a456-426614174099"
@@ -324,21 +324,21 @@ func releaseOCICreateHECRecoveryToken(
 ) (plaintext string, tokenID string, tokenPrefix string) {
 	t.Helper()
 	defaultIndex := indexName
-	var created opensplunkv1.CreateIngestionTokenResponse
+	var created opensplunk.CreateIngestionTokenResponse
 	postAdministratorProto(
 		t,
 		ctx,
 		client,
-		baseURL+"/api/v1/ingestion-tokens/create",
+		baseURL+"/api/ingestion-tokens/create",
 		administratorToken,
-		&opensplunkv1.CreateIngestionTokenRequest{
-			Definition: &opensplunkv1.IngestionTokenDefinition{
+		&opensplunk.CreateIngestionTokenRequest{
+			Definition: &opensplunk.IngestionTokenDefinition{
 				Name:    "Release OCI paired HEC recovery",
-				Purpose: opensplunkv1.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_HEC,
-				Constraints: &opensplunkv1.IngestionTokenConstraints{
+				Purpose: opensplunk.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_HEC,
+				Constraints: &opensplunk.IngestionTokenConstraints{
 					AllowedIndexNames: []string{indexName},
 				},
-				HecProfile: &opensplunkv1.IngestionTokenHecProfile{
+				HecProfile: &opensplunk.IngestionTokenHecProfile{
 					DefaultIndexName:      &defaultIndex,
 					IndexerAcknowledgment: true,
 				},
@@ -350,7 +350,7 @@ func releaseOCICreateHECRecoveryToken(
 	plaintext = created.GetPlaintextToken()
 	if plaintext == "" || metadata.GetIngestionTokenId() == "" ||
 		metadata.GetTokenPrefix() == "" || !strings.HasPrefix(plaintext, metadata.GetTokenPrefix()) ||
-		metadata.GetPurpose() != opensplunkv1.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_HEC ||
+		metadata.GetPurpose() != opensplunk.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_HEC ||
 		metadata.GetHecProfile().GetDefaultIndexName() != indexName ||
 		!metadata.GetHecProfile().GetIndexerAcknowledgment() ||
 		!slices.Equal(metadata.GetConstraints().GetAllowedIndexNames(), []string{indexName}) {
@@ -368,14 +368,14 @@ func releaseOCIAssertRestoredHECToken(
 	state *releaseOCIHECRecoveryState,
 ) {
 	t.Helper()
-	var response opensplunkv1.GetIngestionTokenResponse
+	var response opensplunk.GetIngestionTokenResponse
 	wire := postAdministratorProto(
 		t,
 		ctx,
 		client,
-		baseURL+"/api/v1/ingestion-tokens/get",
+		baseURL+"/api/ingestion-tokens/get",
 		administratorToken,
-		&opensplunkv1.GetIngestionTokenRequest{IngestionTokenId: state.tokenID},
+		&opensplunk.GetIngestionTokenRequest{IngestionTokenId: state.tokenID},
 		&response,
 	)
 	if bytes.Contains(wire, []byte(state.plaintextToken)) {
@@ -384,8 +384,8 @@ func releaseOCIAssertRestoredHECToken(
 	metadata := response.GetIngestionToken()
 	if metadata.GetIngestionTokenId() != state.tokenID ||
 		metadata.GetTokenPrefix() != state.tokenPrefix ||
-		metadata.GetState() != opensplunkv1.IngestionTokenState_INGESTION_TOKEN_STATE_ACTIVE ||
-		metadata.GetPurpose() != opensplunkv1.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_HEC ||
+		metadata.GetState() != opensplunk.IngestionTokenState_INGESTION_TOKEN_STATE_ACTIVE ||
+		metadata.GetPurpose() != opensplunk.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_HEC ||
 		metadata.GetHecProfile().GetDefaultIndexName() != state.indexName ||
 		!metadata.GetHecProfile().GetIndexerAcknowledgment() ||
 		!slices.Equal(metadata.GetConstraints().GetAllowedIndexNames(), []string{state.indexName}) {

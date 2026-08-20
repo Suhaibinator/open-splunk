@@ -1,6 +1,6 @@
 import type { Duration } from "@/gen/ts/google/protobuf/duration";
-import type { GetSearchTimelineResponse } from "@/gen/ts/open_splunk/v1/search_api";
-import { ServerFeature } from "@/gen/ts/open_splunk/v1/system_api";
+import type { GetSearchTimelineResponse } from "@/gen/ts/open_splunk/search_api";
+import { ServerFeature } from "@/gen/ts/open_splunk/system_api";
 import type { TimelinePoint } from "@/lib/demo/search-data";
 import { durationToMilliseconds } from "@/lib/api/duration";
 import type { OpenSplunkApiClient } from "@/lib/api/open-splunk-client";

@@ -3,17 +3,17 @@ import {
   ResultSetKind,
   type ResultRow,
   type ResultSchema,
-} from "../../gen/ts/open_splunk/v1/result";
+} from "../../gen/ts/open_splunk/result";
 import {
   PreviewUpdateMode,
   type ResultPreview,
-} from "../../gen/ts/open_splunk/v1/search_ws";
+} from "../../gen/ts/open_splunk/search_ws";
 import {
   MissingValue,
   NullValue,
   ValueType,
   type TypedValue,
-} from "../../gen/ts/open_splunk/v1/value";
+} from "../../gen/ts/open_splunk/value";
 import { validateBrowserResultColumnCount } from "../../lib/api/pagination";
 import { validFlatMultivalueColumnPresentation } from "../../lib/api/result-column-presentation";
 

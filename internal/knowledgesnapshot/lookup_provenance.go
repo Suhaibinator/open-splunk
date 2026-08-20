@@ -7,7 +7,7 @@ import (
 	"math"
 	"strings"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/lookupasset"
 	"google.golang.org/protobuf/proto"
@@ -31,7 +31,7 @@ type trustedLookupAssetEvidence struct {
 func canonicalSnapshotLookupAssets(
 	tenantID string,
 	evidence []trustedLookupAssetEvidence,
-) ([]*opensplunkv1.KnowledgeSnapshotLookupAsset, error) {
+) ([]*opensplunk.KnowledgeSnapshotLookupAsset, error) {
 	if len(evidence) > MaximumLookupAssets {
 		return nil, fmt.Errorf(
 			"%w: lookup asset versions exceed %d",
@@ -39,7 +39,7 @@ func canonicalSnapshotLookupAssets(
 			MaximumLookupAssets,
 		)
 	}
-	assets := make([]*opensplunkv1.KnowledgeSnapshotLookupAsset, len(evidence))
+	assets := make([]*opensplunk.KnowledgeSnapshotLookupAsset, len(evidence))
 	for index, item := range evidence {
 		if item.tenantID != tenantID {
 			return nil, fmt.Errorf(
@@ -48,11 +48,11 @@ func canonicalSnapshotLookupAssets(
 				index,
 			)
 		}
-		assets[index] = &opensplunkv1.KnowledgeSnapshotLookupAsset{
+		assets[index] = &opensplunk.KnowledgeSnapshotLookupAsset{
 			AssetOrdinal:  uint32(index), // #nosec G115 -- compiler lookup stages are bounded by sixteen.
 			LookupId:      strings.Clone(item.lookupID),
 			LookupVersion: item.lookupVersion,
-			Asset: &opensplunkv1.KnowledgeLookupAssetVersionReference{
+			Asset: &opensplunk.KnowledgeLookupAssetVersionReference{
 				LookupAssetId: strings.Clone(item.objectID),
 				Version:       item.version,
 				SizeBytes:     item.sizeBytes,
@@ -67,7 +67,7 @@ func canonicalSnapshotLookupAssets(
 }
 
 func validateSnapshotLookupAssets(
-	assets []*opensplunkv1.KnowledgeSnapshotLookupAsset,
+	assets []*opensplunk.KnowledgeSnapshotLookupAsset,
 ) error {
 	if len(assets) > MaximumLookupAssets {
 		return fmt.Errorf(
@@ -76,7 +76,7 @@ func validateSnapshotLookupAssets(
 			MaximumLookupAssets,
 		)
 	}
-	var previous *opensplunkv1.KnowledgeSnapshotLookupAsset
+	var previous *opensplunk.KnowledgeSnapshotLookupAsset
 	for index, entry := range assets {
 		if entry == nil || entry.GetAsset() == nil {
 			return fmt.Errorf(
@@ -136,8 +136,8 @@ func validateSnapshotLookupAssets(
 }
 
 func compareSnapshotLookupAssetReferences(
-	left *opensplunkv1.KnowledgeSnapshotLookupAsset,
-	right *opensplunkv1.KnowledgeSnapshotLookupAsset,
+	left *opensplunk.KnowledgeSnapshotLookupAsset,
+	right *opensplunk.KnowledgeSnapshotLookupAsset,
 ) int {
 	if compared := strings.Compare(left.GetLookupId(), right.GetLookupId()); compared != 0 {
 		return compared
@@ -169,17 +169,17 @@ func compareSnapshotLookupAssetReferences(
 }
 
 func cloneSnapshotLookupAssets(
-	assets []*opensplunkv1.KnowledgeSnapshotLookupAsset,
-) []*opensplunkv1.KnowledgeSnapshotLookupAsset {
+	assets []*opensplunk.KnowledgeSnapshotLookupAsset,
+) []*opensplunk.KnowledgeSnapshotLookupAsset {
 	if assets == nil {
 		return nil
 	}
-	result := make([]*opensplunkv1.KnowledgeSnapshotLookupAsset, len(assets))
+	result := make([]*opensplunk.KnowledgeSnapshotLookupAsset, len(assets))
 	for index, asset := range assets {
 		if asset == nil {
 			continue
 		}
-		result[index], _ = proto.Clone(asset).(*opensplunkv1.KnowledgeSnapshotLookupAsset)
+		result[index], _ = proto.Clone(asset).(*opensplunk.KnowledgeSnapshotLookupAsset)
 	}
 	return result
 }

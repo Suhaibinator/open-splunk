@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 )
@@ -30,38 +30,38 @@ func TestDefinitionIssuesBecomeClosedInvalidFieldViolations(t *testing.T) {
 	}
 	tests := []struct {
 		name       string
-		definition *opensplunkv1.KnowledgeObjectDefinition
-		objectType opensplunkv1.KnowledgeObjectType
+		definition *opensplunk.KnowledgeObjectDefinition
+		objectType opensplunk.KnowledgeObjectType
 		code       string
 		message    string
 	}{
 		{
 			name:       "missing body",
-			definition: &opensplunkv1.KnowledgeObjectDefinition{},
-			objectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_UNSPECIFIED,
+			definition: &opensplunk.KnowledgeObjectDefinition{},
+			objectType: opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_UNSPECIFIED,
 			code:       "KNOWLEDGE_DEFINITION_INVALID",
 			message:    "candidate definition field is invalid",
 		},
 		{
 			name:       "recursive unknown field",
 			definition: unknown,
-			objectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+			objectType: opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
 			code:       "KNOWLEDGE_DEFINITION_UNKNOWN_FIELD",
 			message:    "candidate definition contains an unknown protobuf field",
 		},
 		{
 			name:       "preflight resource limit",
 			definition: regexDefinition("regex-too-many-outputs", tooManyOutputs...),
-			objectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
+			objectType: opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
 			code:       "KNOWLEDGE_DEFINITION_RESOURCE_LIMIT",
 			message:    "candidate definition exceeds a resource limit",
 		},
 		{
 			name: "known alias body",
-			definition: &opensplunkv1.KnowledgeObjectDefinition{
-				Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunkv1.FieldAliasDefinition{}},
+			definition: &opensplunk.KnowledgeObjectDefinition{
+				Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunk.FieldAliasDefinition{}},
 			},
-			objectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+			objectType: opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
 			code:       "KNOWLEDGE_DEFINITION_INVALID",
 			message:    "candidate definition field is invalid",
 		},
@@ -226,7 +226,7 @@ func TestAllowedProgramIssueRequiresExactCodePathRangeShape(t *testing.T) {
 	full := &knowledgeprogram.ScalarRange{EndByteOffset: uint32(len("lower(host)"))}
 	tests := []struct {
 		name       string
-		definition *opensplunkv1.KnowledgeObjectDefinition
+		definition *opensplunk.KnowledgeObjectDefinition
 		issue      knowledgeprogram.Issue
 		want       bool
 	}{

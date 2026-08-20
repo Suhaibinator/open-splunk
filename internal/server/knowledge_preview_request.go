@@ -3,7 +3,7 @@ package server
 import (
 	"fmt"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
 )
@@ -14,7 +14,7 @@ import (
 // It performs no retained-job lookup or authorization, and maximum_rows is
 // preserved without assigning a default, bound, or execution meaning.
 func validatePreviewKnowledgeObjectRequestEnvelope(
-	request *opensplunkv1.PreviewKnowledgeObjectRequest,
+	request *opensplunk.PreviewKnowledgeObjectRequest,
 ) error {
 	if request == nil {
 		return fmt.Errorf(
@@ -44,13 +44,13 @@ func validatePreviewKnowledgeObjectRequestEnvelope(
 // Writer.Validate remains the sole boundary which applies an update to current
 // catalog authority and detaches the bounded selected candidate.
 func previewKnowledgeObjectActiveValidationView(
-	request *opensplunkv1.PreviewKnowledgeObjectRequest,
-) *opensplunkv1.ValidateKnowledgeObjectRequest {
-	return &opensplunkv1.ValidateKnowledgeObjectRequest{
+	request *opensplunk.PreviewKnowledgeObjectRequest,
+) *opensplunk.ValidateKnowledgeObjectRequest {
+	return &opensplunk.ValidateKnowledgeObjectRequest{
 		Definition:        request.Definition,
 		KnowledgeObjectId: request.KnowledgeObjectId,
 		ExpectedVersion:   request.ExpectedVersion,
 		UpdateMask:        request.UpdateMask,
-		Intent:            opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION,
+		Intent:            opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION,
 	}
 }

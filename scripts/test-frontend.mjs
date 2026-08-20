@@ -9,11 +9,10 @@ const workspace = process.cwd();
 const outputDirectory = await mkdtemp(path.join(tmpdir(), "open-splunk-frontend-tests-"));
 const scriptTests = [
   "build-ui-output.test.mjs",
-  "check-buf-breaking.test.mjs",
+  "check-docs.test.mjs",
   "compile-protos.test.mjs",
   "materialize-git-snapshot.test.mjs",
   "run-go-race-shard.test.mjs",
-  "read-spl-compatibility-version.test.mjs",
   "build-release.test.mjs",
   "build-oci.test.mjs",
 ];
@@ -39,7 +38,7 @@ const testFiles = [
   path.join("lib", "api", "open-splunk-client-routes.test.ts"),
   path.join("lib", "api", "well-formed-text.test.ts"),
   path.join("lib", "api", "administrator-session.test.ts"),
-  path.join("lib", "api", "protobuf-forward-compat.test.ts"),
+  path.join("lib", "api", "protobuf-contracts.test.ts"),
   path.join("lib", "api", "result-column-presentation.test.ts"),
   path.join("lib", "api", "search-websocket.test.ts"),
   path.join("lib", "api", "system-bootstrap.test.ts"),

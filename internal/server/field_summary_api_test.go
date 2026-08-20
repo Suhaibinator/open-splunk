@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/Suhaibinator/SRouter/pkg/router"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/searchanalysis"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -45,13 +45,13 @@ func TestSearchFieldSummaryRoundTripsExactTypedValuesAndScope(t *testing.T) {
 			},
 		}, nil
 	}
-	response := postProto(t, searchFieldsTestHandler(t, service), searchFieldSummaryPath, &opensplunkv1.GetSearchFieldSummaryRequest{
+	response := postProto(t, searchFieldsTestHandler(t, service), searchFieldSummaryPath, &opensplunk.GetSearchFieldSummaryRequest{
 		SearchJobId: "  job-1\n", FieldName: `labels.kubernetes\.io/app `, MaxValues: new(uint32(3)),
 	})
 	if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "application/x-protobuf" {
 		t.Fatalf("status/headers/body = %d/%v/%s", response.Code, response.Header(), response.Body.String())
 	}
-	var decoded opensplunkv1.GetSearchFieldSummaryResponse
+	var decoded opensplunk.GetSearchFieldSummaryResponse
 	unmarshalResponse(t, response, &decoded)
 	summary := decoded.GetFieldSummary()
 	if summary == nil || summary.GetProfile().GetFieldName() != `labels.kubernetes\.io/app ` ||
@@ -79,13 +79,13 @@ func TestSearchFieldSummaryInputValidationAndExactRoute(t *testing.T) {
 	handler := searchFieldsTestHandler(t, service)
 	tests := []struct {
 		name    string
-		request *opensplunkv1.GetSearchFieldSummaryRequest
+		request *opensplunk.GetSearchFieldSummaryRequest
 	}{
-		{name: "missing job", request: &opensplunkv1.GetSearchFieldSummaryRequest{FieldName: "message"}},
-		{name: "missing field", request: &opensplunkv1.GetSearchFieldSummaryRequest{SearchJobId: "job"}},
-		{name: "zero limit", request: &opensplunkv1.GetSearchFieldSummaryRequest{SearchJobId: "job", FieldName: "message", MaxValues: new(uint32(0))}},
-		{name: "large limit", request: &opensplunkv1.GetSearchFieldSummaryRequest{SearchJobId: "job", FieldName: "message", MaxValues: new(uint32(21))}},
-		{name: "service validation", request: &opensplunkv1.GetSearchFieldSummaryRequest{SearchJobId: "job", FieldName: " "}},
+		{name: "missing job", request: &opensplunk.GetSearchFieldSummaryRequest{FieldName: "message"}},
+		{name: "missing field", request: &opensplunk.GetSearchFieldSummaryRequest{SearchJobId: "job"}},
+		{name: "zero limit", request: &opensplunk.GetSearchFieldSummaryRequest{SearchJobId: "job", FieldName: "message", MaxValues: new(uint32(0))}},
+		{name: "large limit", request: &opensplunk.GetSearchFieldSummaryRequest{SearchJobId: "job", FieldName: "message", MaxValues: new(uint32(21))}},
+		{name: "service validation", request: &opensplunk.GetSearchFieldSummaryRequest{SearchJobId: "job", FieldName: " "}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -99,7 +99,7 @@ func TestSearchFieldSummaryInputValidationAndExactRoute(t *testing.T) {
 		t.Fatalf("invalid requests reached service %d times", service.summaryCallCount())
 	}
 
-	response := postProto(t, handler, searchFieldSummaryPath+"/extra", &opensplunkv1.GetSearchFieldSummaryRequest{SearchJobId: "job", FieldName: "message"})
+	response := postProto(t, handler, searchFieldSummaryPath+"/extra", &opensplunk.GetSearchFieldSummaryRequest{SearchJobId: "job", FieldName: "message"})
 	if response.Code != http.StatusNotFound || service.summaryCallCount() != 1 {
 		t.Fatalf("suffix status/calls = %d/%d", response.Code, service.summaryCallCount())
 	}
@@ -111,7 +111,7 @@ func TestSearchFieldSummaryInputValidationAndExactRoute(t *testing.T) {
 	}
 
 	disabled := newTestHandler(t, Config{SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, WebUI: testUI()})
-	response = postProto(t, disabled, searchFieldSummaryPath, &opensplunkv1.GetSearchFieldSummaryRequest{SearchJobId: "job", FieldName: "message"})
+	response = postProto(t, disabled, searchFieldSummaryPath, &opensplunk.GetSearchFieldSummaryRequest{SearchJobId: "job", FieldName: "message"})
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("disabled status = %d, body = %s", response.Code, response.Body.String())
 	}
@@ -141,7 +141,7 @@ func TestSearchFieldSummaryMapsErrorsWithoutLeakingDetails(t *testing.T) {
 			service.summaryFn = func(context.Context, searchjobs.AccessScope, searchanalysis.GetFieldSummaryRequest) (searchanalysis.FieldSummary, error) {
 				return searchanalysis.FieldSummary{}, errors.Join(test.err, errors.New("backend-secret"))
 			}
-			response := postProto(t, searchFieldsTestHandler(t, service), searchFieldSummaryPath, &opensplunkv1.GetSearchFieldSummaryRequest{SearchJobId: "job", FieldName: "message"})
+			response := postProto(t, searchFieldsTestHandler(t, service), searchFieldSummaryPath, &opensplunk.GetSearchFieldSummaryRequest{SearchJobId: "job", FieldName: "message"})
 			if response.Code != test.want || strings.Contains(response.Body.String(), "backend-secret") {
 				t.Fatalf("status/body = %d/%q, want %d sanitized", response.Code, response.Body.String(), test.want)
 			}
@@ -288,7 +288,7 @@ func TestSearchFieldSummarySerializationCapacityIsNonblockingAndAcquiredAfterSer
 		maximumFieldSummaryValues: 20, serializationGate: make(chan struct{}, 1),
 	}
 	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, searchFieldSummaryPath, nil)
-	input := &opensplunkv1.GetSearchFieldSummaryRequest{SearchJobId: "job", FieldName: "message"}
+	input := &opensplunk.GetSearchFieldSummaryRequest{SearchJobId: "job", FieldName: "message"}
 	first, err := handler.getSearchFieldSummary(request, input)
 	if err != nil || first == nil || len(handler.serializationGate) != 1 {
 		t.Fatalf("first response/error/gate = %+v/%v/%d", first, err, len(handler.serializationGate))

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -25,7 +25,7 @@ func TestJobJournalPersistsExactDetachedKnowledgeSnapshotSummary(t *testing.T) {
 	now := time.Date(2026, time.August, 8, 12, 0, 0, 123_456_789, time.UTC)
 	want := historyKnowledgeSnapshotSummary(2)
 	queued := journalJob("journal-knowledge", searchjobs.StateQueued, now)
-	queued.KnowledgeSnapshot = proto.Clone(want).(*opensplunkv1.KnowledgeSnapshotSummary)
+	queued.KnowledgeSnapshot = proto.Clone(want).(*opensplunk.KnowledgeSnapshotSummary)
 	if err := journal.Admit(context.Background(), queued); err != nil {
 		t.Fatalf("Admit() error = %v", err)
 	}
@@ -34,7 +34,7 @@ func TestJobJournalPersistsExactDetachedKnowledgeSnapshotSummary(t *testing.T) {
 	queued.KnowledgeSnapshot.LookupAssets[0].Asset.ContentSha256[0] ^= 0xff
 
 	terminal := journalJob("journal-knowledge", searchjobs.StateCompleted, now)
-	terminal.KnowledgeSnapshot = proto.Clone(want).(*opensplunkv1.KnowledgeSnapshotSummary)
+	terminal.KnowledgeSnapshot = proto.Clone(want).(*opensplunk.KnowledgeSnapshotSummary)
 	terminal.EffectiveIndexes = []string{"main"}
 	terminal.StartedAt = now.Add(-30 * time.Second)
 	terminal.FinishedAt = now.Add(-10 * time.Second)
@@ -60,7 +60,7 @@ func TestKnowledgeSnapshotSummaryIsDetachedIdempotentAndImmutableAcrossLifecycle
 	created := time.Now().UTC().Add(-time.Minute)
 	want := historyKnowledgeSnapshotSummary(2)
 	pending := pendingHistoryEntry("snapshot-lifecycle", "index=main", created)
-	pending.KnowledgeSnapshot = proto.Clone(want).(*opensplunkv1.KnowledgeSnapshotSummary)
+	pending.KnowledgeSnapshot = proto.Clone(want).(*opensplunk.KnowledgeSnapshotSummary)
 
 	admitted, err := store.BeginAttempt(ctx, scope, pending)
 	if err != nil {
@@ -74,13 +74,13 @@ func TestKnowledgeSnapshotSummaryIsDetachedIdempotentAndImmutableAcrossLifecycle
 	admitted.KnowledgeSnapshot.Ref.SnapshotSha256[0] ^= 0xff
 
 	canonicalPending := pendingHistoryEntry("snapshot-lifecycle", "index=main", created)
-	canonicalPending.KnowledgeSnapshot = proto.Clone(want).(*opensplunkv1.KnowledgeSnapshotSummary)
+	canonicalPending.KnowledgeSnapshot = proto.Clone(want).(*opensplunk.KnowledgeSnapshotSummary)
 	if retried, retryErr := store.BeginAttempt(ctx, scope, canonicalPending); retryErr != nil || !proto.Equal(retried.GetKnowledgeSnapshot(), want) {
 		t.Fatalf("idempotent BeginAttempt() = (%+v, %v)", retried, retryErr)
 	}
 
-	terminal := historyEntry("snapshot-lifecycle", canonicalPending.Definition.Spl, "search", opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED, created)
-	terminal.KnowledgeSnapshot = proto.Clone(want).(*opensplunkv1.KnowledgeSnapshotSummary)
+	terminal := historyEntry("snapshot-lifecycle", canonicalPending.Definition.Spl, "search", opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED, created)
+	terminal.KnowledgeSnapshot = proto.Clone(want).(*opensplunk.KnowledgeSnapshotSummary)
 	completed, err := store.CompleteAttempt(ctx, scope, terminal)
 	if err != nil {
 		t.Fatalf("CompleteAttempt() error = %v", err)
@@ -96,11 +96,11 @@ func TestKnowledgeSnapshotSummaryIsDetachedIdempotentAndImmutableAcrossLifecycle
 }
 
 func TestCompleteAttemptRejectsChangedOrRemovedKnowledgeSnapshotAdmission(t *testing.T) {
-	tests := map[string]func(*opensplunkv1.SearchHistoryEntry){
-		"changed digest": func(entry *opensplunkv1.SearchHistoryEntry) {
+	tests := map[string]func(*opensplunk.SearchHistoryEntry){
+		"changed digest": func(entry *opensplunk.SearchHistoryEntry) {
 			entry.KnowledgeSnapshot.Ref.SnapshotSha256[0] ^= 0xff
 		},
-		"removed configured summary": func(entry *opensplunkv1.SearchHistoryEntry) {
+		"removed configured summary": func(entry *opensplunk.SearchHistoryEntry) {
 			entry.KnowledgeSnapshot = nil
 		},
 	}
@@ -115,8 +115,8 @@ func TestCompleteAttemptRejectsChangedOrRemovedKnowledgeSnapshotAdmission(t *tes
 			if _, err := store.BeginAttempt(ctx, scope, pending); err != nil {
 				t.Fatal(err)
 			}
-			terminal := historyEntry("snapshot-conflict", pending.Definition.Spl, "search", opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED, created)
-			terminal.KnowledgeSnapshot = proto.Clone(pending.KnowledgeSnapshot).(*opensplunkv1.KnowledgeSnapshotSummary)
+			terminal := historyEntry("snapshot-conflict", pending.Definition.Spl, "search", opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED, created)
+			terminal.KnowledgeSnapshot = proto.Clone(pending.KnowledgeSnapshot).(*opensplunk.KnowledgeSnapshotSummary)
 			mutate(terminal)
 			if _, err := store.CompleteAttempt(ctx, scope, terminal); !errors.Is(err, control.ErrVersionConflict) {
 				t.Fatalf("CompleteAttempt() error = %v, want ErrVersionConflict", err)
@@ -140,9 +140,9 @@ func TestHistoryNormalizationRejectsInvalidKnowledgeSummaryBeforeClone(t *testin
 
 	amplified := historyKnowledgeSnapshotSummary(0)
 	amplified.Ref.ObjectCount = knowledgesnapshot.MaximumSummaryObjects + 1
-	amplified.Objects = make([]*opensplunkv1.KnowledgeSnapshotObjectSummary, knowledgesnapshot.MaximumSummaryObjects+1)
+	amplified.Objects = make([]*opensplunk.KnowledgeSnapshotObjectSummary, knowledgesnapshot.MaximumSummaryObjects+1)
 
-	for name, summary := range map[string]*opensplunkv1.KnowledgeSnapshotSummary{
+	for name, summary := range map[string]*opensplunk.KnowledgeSnapshotSummary{
 		"unknown field":            unknown,
 		"oversized wire shape":     oversized,
 		"amplified repeated shape": amplified,
@@ -162,12 +162,12 @@ func TestPersistedKnowledgeSnapshotCorruptionIsNotCallerInvalidArgument(t *testi
 	ctx := context.Background()
 	scope := AccessScope{TenantID: "tenant", OwnerID: "owner"}
 	created := time.Now().UTC().Add(-time.Minute)
-	entry := historyEntry("snapshot-corruption", "index=main", "search", opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED, created)
+	entry := historyEntry("snapshot-corruption", "index=main", "search", opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED, created)
 	entry.KnowledgeSnapshot = historyKnowledgeSnapshotSummary(1)
 	if _, err := store.Record(ctx, scope, entry); err != nil {
 		t.Fatal(err)
 	}
-	rewriteStoredHistoryProto(t, database, &historyRecord{}, entry.SearchJobId, func(stored *opensplunkv1.SearchHistoryEntry) {
+	rewriteStoredHistoryProto(t, database, &historyRecord{}, entry.SearchJobId, func(stored *opensplunk.SearchHistoryEntry) {
 		stored.KnowledgeSnapshot.Objects[0].ProtoReflect().SetUnknown(
 			protowire.AppendVarint(protowire.AppendTag(nil, 100, protowire.VarintType), 1),
 		)
@@ -176,23 +176,22 @@ func TestPersistedKnowledgeSnapshotCorruptionIsNotCallerInvalidArgument(t *testi
 	assertPersistedCorruption(t, "Get knowledge snapshot", err)
 }
 
-func historyKnowledgeSnapshotSummary(objectCount int) *opensplunkv1.KnowledgeSnapshotSummary {
-	ref := &opensplunkv1.KnowledgeSnapshotRef{
-		SnapshotSha256:               bytes.Repeat([]byte{0x42}, sha256.Size),
-		TenantCatalogRevision:        7,
-		TenantCatalogStateToken:      bytes.Repeat([]byte{0x73}, sha256.Size),
-		ObjectCount:                  uint32(objectCount),
-		CompilerCompatibilityVersion: knowledgesnapshot.CompilerCompatibilityVersion,
-		LookupAssetCount:             1,
+func historyKnowledgeSnapshotSummary(objectCount int) *opensplunk.KnowledgeSnapshotSummary {
+	ref := &opensplunk.KnowledgeSnapshotRef{
+		SnapshotSha256:          bytes.Repeat([]byte{0x42}, sha256.Size),
+		TenantCatalogRevision:   7,
+		TenantCatalogStateToken: bytes.Repeat([]byte{0x73}, sha256.Size),
+		ObjectCount:             uint32(objectCount),
+		LookupAssetCount:        1,
 	}
-	objects := make([]*opensplunkv1.KnowledgeSnapshotObjectSummary, objectCount)
+	objects := make([]*opensplunk.KnowledgeSnapshotObjectSummary, objectCount)
 	for index := range objects {
-		objects[index] = &opensplunkv1.KnowledgeSnapshotObjectSummary{
+		objects[index] = &opensplunk.KnowledgeSnapshotObjectSummary{
 			ResolutionOrdinal: uint32(index),
-			ObjectType:        opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
-			Stage:             opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
-			Disclosure: &opensplunkv1.KnowledgeSnapshotObjectSummary_AuthorizedObject{
-				AuthorizedObject: &opensplunkv1.KnowledgeSnapshotAuthorizedObjectSummary{
+			ObjectType:        opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+			Stage:             opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
+			Disclosure: &opensplunk.KnowledgeSnapshotObjectSummary_AuthorizedObject{
+				AuthorizedObject: &opensplunk.KnowledgeSnapshotAuthorizedObjectSummary{
 					KnowledgeObjectId: "object-" + string(rune('a'+index)),
 					Version:           uint64(index + 1),
 					Name:              "Object " + string(rune('A'+index)),
@@ -200,14 +199,14 @@ func historyKnowledgeSnapshotSummary(objectCount int) *opensplunkv1.KnowledgeSna
 			},
 		}
 	}
-	return &opensplunkv1.KnowledgeSnapshotSummary{
+	return &opensplunk.KnowledgeSnapshotSummary{
 		Ref:     ref,
 		Objects: objects,
-		LookupAssets: []*opensplunkv1.KnowledgeSnapshotLookupAsset{{
+		LookupAssets: []*opensplunk.KnowledgeSnapshotLookupAsset{{
 			AssetOrdinal:  0,
 			LookupId:      "lookup-history",
 			LookupVersion: 6,
-			Asset: &opensplunkv1.KnowledgeLookupAssetVersionReference{
+			Asset: &opensplunk.KnowledgeLookupAssetVersionReference{
 				LookupAssetId: "asset-history",
 				Version:       4,
 				SizeBytes:     128,

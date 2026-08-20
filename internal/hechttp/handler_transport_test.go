@@ -26,7 +26,7 @@ func TestHandlerHTTPProtocolVersionsShareOneDurableBoundary(t *testing.T) {
 			harness := newHandlerHarness(t, nil)
 			request := hecRequest(
 				http.MethodPost,
-				"/services/collector/event/1.0",
+				"/services/collector/event",
 				"application/json",
 				"Splunk private-protocol-secret",
 				"",

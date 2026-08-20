@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sort"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"google.golang.org/protobuf/proto"
 )
@@ -18,7 +18,7 @@ type semanticObjectKey struct {
 type semanticEdgeKey struct {
 	source semanticObjectKey
 	target semanticObjectKey
-	role   opensplunkv1.KnowledgeDependencyRole
+	role   opensplunk.KnowledgeDependencyRole
 }
 
 type semanticObject struct {
@@ -36,7 +36,7 @@ type semanticObject struct {
 // graph, including its source depths.
 func validateProgramSemantics(
 	state *programState,
-	dependencies []*opensplunkv1.KnowledgeObjectDependency,
+	dependencies []*opensplunk.KnowledgeObjectDependency,
 ) error {
 	expected, err := deriveCanonicalDependencies(state)
 	if err != nil {
@@ -62,7 +62,7 @@ func validateProgramSemantics(
 
 func deriveCanonicalDependencies(
 	state *programState,
-) ([]*opensplunkv1.KnowledgeObjectDependency, error) {
+) ([]*opensplunk.KnowledgeObjectDependency, error) {
 	objects, err := semanticObjects(state)
 	if err != nil {
 		return nil, err
@@ -90,17 +90,17 @@ func deriveCanonicalDependencies(
 	for _, object := range objects {
 		byKey[object.key] = object
 	}
-	dependencies := make([]*opensplunkv1.KnowledgeObjectDependency, 0, len(edges))
+	dependencies := make([]*opensplunk.KnowledgeObjectDependency, 0, len(edges))
 	for edge := range edges {
 		source, sourceFound := byKey[edge.source]
 		target, targetFound := byKey[edge.target]
 		if !sourceFound || !targetFound {
 			return nil, fmt.Errorf("%w: derived dependency endpoint is absent", ErrInvalidProgram)
 		}
-		dependencies = append(dependencies, &opensplunkv1.KnowledgeObjectDependency{
+		dependencies = append(dependencies, &opensplunk.KnowledgeObjectDependency{
 			Source: semanticVersionReference(source),
-			Target: &opensplunkv1.KnowledgeDependencyTarget{
-				Target: &opensplunkv1.KnowledgeDependencyTarget_Object{
+			Target: &opensplunk.KnowledgeDependencyTarget{
+				Target: &opensplunk.KnowledgeDependencyTarget_Object{
 					Object: semanticVersionReference(target),
 				},
 			},
@@ -121,8 +121,8 @@ func deriveCanonicalDependencies(
 
 func semanticVersionReference(
 	object semanticObject,
-) *opensplunkv1.KnowledgeObjectVersionReference {
-	return &opensplunkv1.KnowledgeObjectVersionReference{
+) *opensplunk.KnowledgeObjectVersionReference {
+	return &opensplunk.KnowledgeObjectVersionReference{
 		KnowledgeObjectId: object.origin.objectID,
 		Version:           object.origin.version,
 		DefinitionSha256:  bytes.Clone(object.origin.definitionDigest[:]),
@@ -268,7 +268,7 @@ func deriveSemanticEdges(objects []semanticObject) (map[semanticEdgeKey]struct{}
 			edges[semanticEdgeKey{
 				source: source.key,
 				target: target.key,
-				role:   opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
+				role:   opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
 			}] = struct{}{}
 		}
 	}
@@ -323,16 +323,16 @@ func semanticDepths(
 
 func semanticDependencyScopeAllows(source, target Origin) bool {
 	switch source.sharingScope {
-	case opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE:
-		return target.sharingScope == opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL ||
-			target.sharingScope == opensplunkv1.SharingScope_SHARING_SCOPE_APP && target.appID == source.appID ||
-			target.sharingScope == opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE &&
+	case opensplunk.SharingScope_SHARING_SCOPE_PRIVATE:
+		return target.sharingScope == opensplunk.SharingScope_SHARING_SCOPE_GLOBAL ||
+			target.sharingScope == opensplunk.SharingScope_SHARING_SCOPE_APP && target.appID == source.appID ||
+			target.sharingScope == opensplunk.SharingScope_SHARING_SCOPE_PRIVATE &&
 				target.appID == source.appID && target.ownerID == source.ownerID
-	case opensplunkv1.SharingScope_SHARING_SCOPE_APP:
-		return target.sharingScope == opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL ||
-			target.sharingScope == opensplunkv1.SharingScope_SHARING_SCOPE_APP && target.appID == source.appID
-	case opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL:
-		return target.sharingScope == opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL
+	case opensplunk.SharingScope_SHARING_SCOPE_APP:
+		return target.sharingScope == opensplunk.SharingScope_SHARING_SCOPE_GLOBAL ||
+			target.sharingScope == opensplunk.SharingScope_SHARING_SCOPE_APP && target.appID == source.appID
+	case opensplunk.SharingScope_SHARING_SCOPE_GLOBAL:
+		return target.sharingScope == opensplunk.SharingScope_SHARING_SCOPE_GLOBAL
 	default:
 		return false
 	}

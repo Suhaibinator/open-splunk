@@ -12,10 +12,10 @@ import {
   AuditActorRole,
   AuditTargetKind,
   type AuditEvent,
-} from "@/gen/ts/open_splunk/v1/audit";
-import { SharingScope } from "@/gen/ts/open_splunk/v1/common";
-import { KnowledgeObjectType } from "@/gen/ts/open_splunk/v1/knowledge";
-import type { SearchAttemptAuditEvent } from "@/gen/ts/open_splunk/v1/search_attempt_audit";
+} from "@/gen/ts/open_splunk/audit";
+import { SharingScope } from "@/gen/ts/open_splunk/common";
+import { KnowledgeObjectType } from "@/gen/ts/open_splunk/knowledge";
+import type { SearchAttemptAuditEvent } from "@/gen/ts/open_splunk/search_attempt_audit";
 import { HttpError } from "@/lib/api";
 
 import {
@@ -88,7 +88,7 @@ function httpError(status: number): HttpError {
   return new HttpError({
     status,
     message: `HTTP ${status}`,
-    url: "/api/v1/audit/events/list",
+    url: "/api/audit/events/list",
   });
 }
 

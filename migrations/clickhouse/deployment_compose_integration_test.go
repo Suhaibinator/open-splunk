@@ -1095,9 +1095,9 @@ func validateComposePrincipalsAndSchema(
 				(
 					event_id, tenant_id, index_name, event_time, index_time,
 					collector_id, ingest_source_kind, ingest_source_id,
-					expires_at, visibility_seq
+					field_metadata_version, expires_at, visibility_seq
 				)
-			 VALUES (?, ?, ?, now64(9), now64(3), ?, ?, ?,
+			 VALUES (?, ?, ?, now64(9), now64(3), ?, ?, ?, 1,
 			         now64(3) + INTERVAL 1 DAY, 1)`,
 			markerEventID,
 			markerTenant,
@@ -1118,13 +1118,13 @@ func validateComposePrincipalsAndSchema(
 		   AND tenant_id = ?
 		   AND index_name = ?
 		   AND visibility_seq = 1
-		   AND field_metadata_version = 0
+		   AND field_metadata_version = 1
 		   AND empty(field_types)`,
 		markerEventID,
 		markerTenant,
 		markerIndex,
 	).Scan(&markerCount); err != nil {
-		t.Fatalf("query persistent Compose marker event and migrated columns: %v", err)
+		t.Fatalf("query persistent Compose marker event and current columns: %v", err)
 	}
 	if markerCount != 1 {
 		t.Fatalf(

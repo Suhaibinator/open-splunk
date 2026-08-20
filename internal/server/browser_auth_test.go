@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
@@ -26,29 +26,29 @@ const (
 )
 
 var browserGateAdministratorPaths = []string{
-	"/api/v1/indexes/create",
-	"/api/v1/indexes/get",
-	"/api/v1/indexes/list",
-	"/api/v1/indexes/update",
-	"/api/v1/indexes/state/set",
-	"/api/v1/indexes/delete",
-	"/api/v1/ingestion-tokens/create",
-	"/api/v1/ingestion-tokens/get",
-	"/api/v1/ingestion-tokens/list",
-	"/api/v1/ingestion-tokens/update",
-	"/api/v1/ingestion-tokens/state/set",
-	"/api/v1/ingestion-tokens/revoke",
+	"/api/indexes/create",
+	"/api/indexes/get",
+	"/api/indexes/list",
+	"/api/indexes/update",
+	"/api/indexes/state/set",
+	"/api/indexes/delete",
+	"/api/ingestion-tokens/create",
+	"/api/ingestion-tokens/get",
+	"/api/ingestion-tokens/list",
+	"/api/ingestion-tokens/update",
+	"/api/ingestion-tokens/state/set",
+	"/api/ingestion-tokens/revoke",
 	hecOperationsPath,
-	"/api/v1/collectors/get",
-	"/api/v1/collectors/list",
-	"/api/v1/collectors/update",
-	"/api/v1/collectors/state/set",
-	"/api/v1/apps/create",
-	"/api/v1/apps/get",
-	"/api/v1/apps/list",
-	"/api/v1/apps/update",
-	"/api/v1/apps/state/set",
-	"/api/v1/apps/delete",
+	"/api/collectors/get",
+	"/api/collectors/list",
+	"/api/collectors/update",
+	"/api/collectors/state/set",
+	"/api/apps/create",
+	"/api/apps/get",
+	"/api/apps/list",
+	"/api/apps/update",
+	"/api/apps/state/set",
+	"/api/apps/delete",
 	searchInspectionPath,
 }
 
@@ -465,8 +465,8 @@ func TestBrowserAuthenticationIsScopedAndOrderedAfterExactRouteAndOriginChecks(t
 	ordinary := postProto(
 		t,
 		handler,
-		"/api/v1/system/bootstrap",
-		&opensplunkv1.GetSystemBootstrapRequest{},
+		"/api/system/bootstrap",
+		&opensplunk.GetSystemBootstrapRequest{},
 	)
 	if ordinary.Code != http.StatusOK {
 		t.Fatalf(
@@ -486,21 +486,21 @@ func TestBrowserAuthenticationIsScopedAndOrderedAfterExactRouteAndOriginChecks(t
 	}{
 		{
 			name: "unknown route", method: http.MethodPost,
-			path: "/api/v1/indexes/unknown", status: http.StatusNotFound,
+			path: "/api/indexes/unknown", status: http.StatusNotFound,
 		},
 		{
 			name: "wrong method", method: http.MethodGet,
-			path: "/api/v1/indexes/list", host: "attacker.example",
+			path: "/api/indexes/list", host: "attacker.example",
 			status: http.StatusMethodNotAllowed,
 		},
 		{
 			name: "untrusted host", method: http.MethodPost,
-			path: "/api/v1/indexes/list", host: "attacker.example",
+			path: "/api/indexes/list", host: "attacker.example",
 			status: http.StatusForbidden,
 		},
 		{
 			name: "foreign origin", method: http.MethodPost,
-			path: "/api/v1/indexes/list", host: "example.com",
+			path: "/api/indexes/list", host: "example.com",
 			origin: "http://attacker.example", status: http.StatusForbidden,
 		},
 	}
@@ -585,7 +585,7 @@ func TestAdministratorAuthorizationHeaderParsingFailsClosedBeforeWork(t *testing
 			request := httptest.NewRequestWithContext(
 				context.Background(),
 				http.MethodPost,
-				"/api/v1/indexes/list",
+				"/api/indexes/list",
 				nil,
 			)
 			request.Body = body
@@ -711,7 +711,7 @@ func TestAdministratorAuthenticationAndAuthorizationOutcomesAreSafe(t *testing.T
 			request := httptest.NewRequestWithContext(
 				context.Background(),
 				http.MethodPost,
-				"/api/v1/indexes/list",
+				"/api/indexes/list",
 				nil,
 			)
 			request.Body = body
@@ -803,7 +803,7 @@ func TestAdministratorAuthenticationUsesRequestCancellationAndRouteDeadline(t *t
 			httptest.NewRequestWithContext(
 				ctx,
 				http.MethodPost,
-				"/api/v1/indexes/list",
+				"/api/indexes/list",
 				nil,
 			),
 			adminIntegrationBearerToken,
@@ -830,7 +830,7 @@ func TestAdministratorAuthenticationUsesRequestCancellationAndRouteDeadline(t *t
 			httptest.NewRequestWithContext(
 				context.Background(),
 				http.MethodPost,
-				"/api/v1/indexes/list",
+				"/api/indexes/list",
 				nil,
 			),
 			adminIntegrationBearerToken,
@@ -887,7 +887,7 @@ func TestAdministratorAuthenticationPrecedesProtobufDecoding(t *testing.T) {
 			request := httptest.NewRequestWithContext(
 				context.Background(),
 				http.MethodPost,
-				"/api/v1/indexes/list",
+				"/api/indexes/list",
 				bytes.NewReader([]byte{0xff}),
 			)
 			request.Header.Set("Content-Type", "application/x-protobuf")
@@ -949,7 +949,7 @@ func TestAuthenticateBrowserAcceptsUserAndDetachesSecurityContext(t *testing.T) 
 	request := httptest.NewRequestWithContext(
 		upstreamContext,
 		http.MethodPost,
-		"/api/v1/knowledge/objects/list",
+		"/api/knowledge/objects/list",
 		nil,
 	)
 	lowercaseAuthorizationHeader := strings.ToLower("Authorization")
@@ -1126,7 +1126,7 @@ func TestAuthenticateBrowserFailureMappingsAreStable(t *testing.T) {
 			request := httptest.NewRequestWithContext(
 				context.Background(),
 				http.MethodPost,
-				"/api/v1/knowledge/objects/list",
+				"/api/knowledge/objects/list",
 				nil,
 			)
 			request.Header.Set(
@@ -1204,7 +1204,7 @@ func TestValidAdministratorPrincipalIsExactAndCredentialBufferIsCleared(t *testi
 		authenticator,
 		defaultRouteTimeout,
 	)
-	payload, err := proto.Marshal(&opensplunkv1.ListIndexesRequest{})
+	payload, err := proto.Marshal(&opensplunk.ListIndexesRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1219,7 +1219,7 @@ func TestValidAdministratorPrincipalIsExactAndCredentialBufferIsCleared(t *testi
 	request := httptest.NewRequestWithContext(
 		upstreamContext,
 		http.MethodPost,
-		"/api/v1/indexes/list",
+		"/api/indexes/list",
 		bytes.NewReader(payload),
 	)
 	request.Header.Set("Content-Type", "application/x-protobuf")
@@ -1313,7 +1313,7 @@ func TestAuthorizedDownstreamRequestStripsEveryAuthorizationKeyVariant(t *testin
 			api := &apiHandler{
 				browserAuthenticator: authenticator,
 				administratorRoutes: map[string]struct{}{
-					"/api/v1/indexes/list": {},
+					"/api/indexes/list": {},
 				},
 				tenantID:     browserGateTenantID,
 				ownerID:      browserGateOwnerID,
@@ -1332,7 +1332,7 @@ func TestAuthorizedDownstreamRequestStripsEveryAuthorizationKeyVariant(t *testin
 			request := httptest.NewRequestWithContext(
 				context.Background(),
 				http.MethodPost,
-				"/api/v1/indexes/list",
+				"/api/indexes/list",
 				nil,
 			)
 			request.Header[headerName] = []string{

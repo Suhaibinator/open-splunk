@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Suhaibinator/open-splunk/migrations"
 	"gorm.io/gorm"
 )
 
@@ -192,124 +191,6 @@ func TestAppLifecycleIsTenantScopedVersionedAndReferentiallySafe(t *testing.T) {
 
 	if mainIndex.State != IndexStateActive || audit.State != IndexStateActive {
 		t.Fatalf("test index states changed: main=%s audit=%s", mainIndex.State, audit.State)
-	}
-}
-
-func TestAppMigrationGrandfathersLegacyLabelsButGuardsCanonicalIDs(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "legacy-app-upgrade.sqlite")
-	raw, err := sql.Open("sqlite", sqliteDSN(path))
-	if err != nil {
-		t.Fatalf("open legacy SQLite: %v", err)
-	}
-	defer raw.Close()
-	if err := ApplyMigrations(ctx, raw, migrationsBefore(t, "0010_")); err != nil {
-		t.Fatalf("apply pre-app migrations: %v", err)
-	}
-	const grandfatheredID = "app_000000000000000000000A"
-	if _, err := raw.ExecContext(ctx, `
-		INSERT INTO saved_searches (
-			saved_search_id, version, name, app_id, owner_id, sharing_scope,
-			definition_proto, created_at_unix_micro, updated_at_unix_micro
-		) VALUES ('legacy-canonical', 1, 'legacy', ?, 'owner', 1, X'01', 1, 1)`,
-		grandfatheredID,
-	); err != nil {
-		t.Fatalf("insert pre-migration canonical-looking namespace: %v", err)
-	}
-	if err := ApplyMigrations(ctx, raw, migrations.SQLite()); err != nil {
-		t.Fatalf("apply app migration: %v", err)
-	}
-	if _, err := raw.ExecContext(ctx, `
-		INSERT INTO app_workspaces (
-			app_id, tenant_id, version, slug, display_name, description,
-			default_time_range_present, state,
-			created_at_unix_micro, updated_at_unix_micro
-		) VALUES (?, 'tenant', 1, 'legacy-adoption', 'Legacy adoption', '', 0, 'active', 1, 1)`,
-		grandfatheredID,
-	); err == nil {
-		t.Fatal("app row adopted a grandfathered saved-search namespace")
-	}
-	const noncanonicalTailID = "app_000000000000000000000B"
-	if ValidCanonicalAppID(noncanonicalTailID) {
-		t.Fatal("code accepted a noncanonical base64url tail")
-	}
-	if _, err := raw.ExecContext(ctx, `
-		INSERT INTO app_workspaces (
-			app_id, tenant_id, version, slug, display_name, description,
-			default_time_range_present, state,
-			created_at_unix_micro, updated_at_unix_micro
-		) VALUES (?, 'tenant', 1, 'bad-tail', 'Bad tail', '', 0, 'active', 1, 1)`,
-		noncanonicalTailID,
-	); err == nil {
-		t.Fatal("SQL schema accepted a noncanonical base64url tail")
-	}
-	if _, err := raw.ExecContext(ctx, `
-		INSERT INTO saved_searches (
-			saved_search_id, version, name, app_id, owner_id, sharing_scope,
-			definition_proto, created_at_unix_micro, updated_at_unix_micro
-		) VALUES ('legacy-canonical-second', 1, 'legacy second', ?, 'owner', 1, X'01', 2, 2)`,
-		grandfatheredID,
-	); err != nil {
-		t.Fatalf("grandfathered canonical namespace insert: %v", err)
-	}
-	if _, err := raw.ExecContext(ctx, `
-		INSERT INTO saved_searches (
-			saved_search_id, version, name, app_id, owner_id, sharing_scope,
-			definition_proto, created_at_unix_micro, updated_at_unix_micro
-		) VALUES ('legacy-label', 1, 'legacy label', 'app-main', 'owner', 1, X'01', 3, 3)`); err != nil {
-		t.Fatalf("legacy slug-like namespace insert: %v", err)
-	}
-	const missingCanonicalID = "app_000000000000000000000Q"
-	if _, err := raw.ExecContext(ctx, `
-		INSERT INTO saved_searches (
-			saved_search_id, version, name, app_id, owner_id, sharing_scope,
-			definition_proto, created_at_unix_micro, updated_at_unix_micro
-		) VALUES ('missing-canonical', 1, 'missing', ?, 'owner', 1, X'01', 4, 4)`,
-		missingCanonicalID,
-	); err == nil {
-		t.Fatal("new missing canonical namespace unexpectedly succeeded")
-	}
-	if _, err := raw.ExecContext(ctx, `
-		UPDATE saved_searches SET app_id = ?
-		WHERE saved_search_id = 'legacy-label'`,
-		missingCanonicalID,
-	); err == nil {
-		t.Fatal("update to missing canonical namespace unexpectedly succeeded")
-	}
-	if err := raw.Close(); err != nil {
-		t.Fatalf("close upgraded raw database: %v", err)
-	}
-	database, err := Open(ctx, path)
-	if err != nil {
-		t.Fatalf("open upgraded control database: %v", err)
-	}
-	defer database.Close()
-	var idCalls int
-	catalog, err := NewAppCatalog(database, AppCatalogOptions{
-		CursorKey: []byte("app-catalog-test-cursor-key-32-bytes-minimum"),
-		IDGenerator: func() (string, error) {
-			idCalls++
-			if idCalls == 1 {
-				return grandfatheredID, nil
-			}
-			return "app_000000000000000000000g", nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	created, err := catalog.CreateApp(
-		ctx,
-		AppAccessScope{TenantID: "tenant"},
-		validAppDefinition("collision-safe"),
-	)
-	if err != nil {
-		t.Fatalf("CreateApp(after legacy ID collision): %v", err)
-	}
-	if idCalls != 2 || created.ID != "app_000000000000000000000g" {
-		t.Fatalf("legacy namespace collision calls/ID = %d/%q", idCalls, created.ID)
 	}
 }
 

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"google.golang.org/protobuf/proto"
 )
@@ -66,7 +66,7 @@ func TestIncompleteRetentionHasTruthfulBoundsAndNeverPublishesUnreplayableEvents
 	target.epochEstablished = true
 	target.mu.Unlock()
 	resume := newConnection(service, nil)
-	if failure := resume.subscribe("resume-incomplete", &opensplunkv1.SubscribeSearchJobsCommand{Subscriptions: []*opensplunkv1.SearchSubscription{{
+	if failure := resume.subscribe("resume-incomplete", &opensplunk.SubscribeSearchJobsCommand{Subscriptions: []*opensplunk.SearchSubscription{{
 		SubscriptionId: "resume-incomplete", Target: target.key.protobuf(), AfterSequence: latest,
 	}}}); failure != nil {
 		t.Fatalf("resume incomplete subscribe = %v", failure)
@@ -74,7 +74,7 @@ func TestIncompleteRetentionHasTruthfulBoundsAndNeverPublishesUnreplayableEvents
 	resumeEvents := drainTestConnection(t, resume)
 	if len(resumeEvents) != 2 || resumeEvents[0].GetSubscriptionAcknowledged() == nil ||
 		resumeEvents[1].GetResynchronizationRequired() == nil ||
-		resumeEvents[1].GetResynchronizationRequired().GetReason() != opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED {
+		resumeEvents[1].GetResynchronizationRequired().GetReason() != opensplunk.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED {
 		t.Fatalf("incomplete reconnect events = %+v", resumeEvents)
 	}
 	resume.removeAllSubscriptions()
@@ -119,9 +119,9 @@ func TestIncompleteRetentionHasTruthfulBoundsAndNeverPublishesUnreplayableEvents
 	target.publishMu.Unlock()
 }
 
-func drainTestConnection(t *testing.T, connection *connection) []*opensplunkv1.SearchWebSocketEvent {
+func drainTestConnection(t *testing.T, connection *connection) []*opensplunk.SearchWebSocketEvent {
 	t.Helper()
-	var events []*opensplunkv1.SearchWebSocketEvent
+	var events []*opensplunk.SearchWebSocketEvent
 	for {
 		frame, _, _, state := connection.nextFrame()
 		if state == writerIdle {
@@ -131,7 +131,7 @@ func drainTestConnection(t *testing.T, connection *connection) []*opensplunkv1.S
 			t.Fatalf("nextFrame state = %v", state)
 		}
 		connection.completeFrame(uint64(len(frame)))
-		var event opensplunkv1.SearchWebSocketEvent
+		var event opensplunk.SearchWebSocketEvent
 		if err := proto.Unmarshal(frame, &event); err != nil {
 			t.Fatal(err)
 		}
@@ -186,7 +186,7 @@ func TestPollingBackoffResynchronizesAndRecovers(t *testing.T) {
 
 	reader.delete(job.ID)
 	resync := readEvent(t, client).GetResynchronizationRequired()
-	if resync == nil || resync.GetReason() != opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_STATE_DIVERGED {
+	if resync == nil || resync.GetReason() != opensplunk.ResynchronizationReason_RESYNCHRONIZATION_REASON_STATE_DIVERGED {
 		t.Fatalf("failure resynchronization = %+v", resync)
 	}
 	job.Version++
@@ -233,9 +233,9 @@ func TestTerminalReconnectReplaysAndOverdueCurrentResynchronizesBeforeRefresh(t 
 		t.Fatal("terminal event is missing")
 	}
 
-	writeCommand(t, client, &opensplunkv1.SearchWebSocketCommand{
+	writeCommand(t, client, &opensplunk.SearchWebSocketCommand{
 		RequestId: "remove-terminal",
-		Payload: &opensplunkv1.SearchWebSocketCommand_Unsubscribe{Unsubscribe: &opensplunkv1.UnsubscribeSearchJobsCommand{
+		Payload: &opensplunk.SearchWebSocketCommand_Unsubscribe{Unsubscribe: &opensplunk.UnsubscribeSearchJobsCommand{
 			SubscriptionIds: []string{"terminal-1"},
 		}},
 	})
@@ -258,9 +258,9 @@ func TestTerminalReconnectReplaysAndOverdueCurrentResynchronizesBeforeRefresh(t 
 	if replayedTerminal.GetSearchTerminal() == nil || replayedTerminal.GetSequence() != firstTerminal.GetSequence() {
 		t.Fatalf("replayed terminal = %+v", replayedTerminal)
 	}
-	writeCommand(t, client, &opensplunkv1.SearchWebSocketCommand{
+	writeCommand(t, client, &opensplunk.SearchWebSocketCommand{
 		RequestId: "remove-replay",
-		Payload: &opensplunkv1.SearchWebSocketCommand_Unsubscribe{Unsubscribe: &opensplunkv1.UnsubscribeSearchJobsCommand{
+		Payload: &opensplunk.SearchWebSocketCommand_Unsubscribe{Unsubscribe: &opensplunk.UnsubscribeSearchJobsCommand{
 			SubscriptionIds: []string{"terminal-replay"},
 		}},
 	})
@@ -272,11 +272,11 @@ func TestTerminalReconnectReplaysAndOverdueCurrentResynchronizesBeforeRefresh(t 
 		t.Fatal("overdue terminal acknowledgment is missing")
 	}
 	resync := readEvent(t, client).GetResynchronizationRequired()
-	if resync == nil || resync.GetReason() != opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED {
+	if resync == nil || resync.GetReason() != opensplunk.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED {
 		t.Fatalf("overdue terminal resynchronization = %+v", resync)
 	}
 	secondState := readEvent(t, client)
-	if secondState.GetSearchStateChanged() == nil || secondState.GetSearchStateChanged().GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_EXPIRED {
+	if secondState.GetSearchStateChanged() == nil || secondState.GetSearchStateChanged().GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_EXPIRED {
 		t.Fatalf("refreshed state = %+v", secondState)
 	}
 	if secondState.GetSequence() <= firstTerminal.GetSequence() || firstState.GetSearchStateChanged() == nil {
@@ -338,7 +338,7 @@ func TestScopedLookupDoesNotRetainOrDiscloseForeignTarget(t *testing.T) {
 	client := fixture.dial()
 	writeCommand(t, client, subscribeCommand("foreign", "foreign", job.ID, 0))
 	protocolError := readEvent(t, client).GetProtocolError()
-	if protocolError == nil || protocolError.GetCode() != opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_JOB_NOT_FOUND {
+	if protocolError == nil || protocolError.GetCode() != opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_JOB_NOT_FOUND {
 		t.Fatalf("foreign target response = %+v", protocolError)
 	}
 	fixture.service.mu.Lock()

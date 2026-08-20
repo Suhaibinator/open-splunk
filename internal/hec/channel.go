@@ -8,7 +8,7 @@ import "errors"
 type Channel string
 
 // ParseChannel validates the canonical hyphenated GUID grammar selected by
-// HEC v0.1. UUID variant and version bits are deliberately not constrained.
+// HEC. UUID variant and version bits are deliberately not constrained.
 func ParseChannel(value string, maximumBytes int) (Channel, error) {
 	if maximumBytes <= 0 || maximumBytes > HardMaximumChannelBytes ||
 		len(value) == 0 || len(value) > maximumBytes || len(value) != 36 {

@@ -7,7 +7,7 @@ import (
 	"os"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -16,33 +16,33 @@ import (
 func TestTypedValueRoundTripPreservesDistinctKinds(t *testing.T) {
 	t.Parallel()
 
-	values := map[string]*opensplunkv1.TypedValue{
+	values := map[string]*opensplunk.TypedValue{
 		"minimum signed integer": {
-			Kind: &opensplunkv1.TypedValue_Sint64Value{Sint64Value: int64(-1 << 63)},
+			Kind: &opensplunk.TypedValue_Sint64Value{Sint64Value: int64(-1 << 63)},
 		},
 		"maximum unsigned integer": {
-			Kind: &opensplunkv1.TypedValue_Uint64Value{Uint64Value: ^uint64(0)},
+			Kind: &opensplunk.TypedValue_Uint64Value{Uint64Value: ^uint64(0)},
 		},
 		"decimal": {
-			Kind: &opensplunkv1.TypedValue_DecimalValue{
-				DecimalValue: &opensplunkv1.DecimalValue{Value: "12345678901234567890.000000001"},
+			Kind: &opensplunk.TypedValue_DecimalValue{
+				DecimalValue: &opensplunk.DecimalValue{Value: "12345678901234567890.000000001"},
 			},
 		},
 		"explicit null": {
-			Kind: &opensplunkv1.TypedValue_NullValue{NullValue: opensplunkv1.NullValue_NULL_VALUE_NULL},
+			Kind: &opensplunk.TypedValue_NullValue{NullValue: opensplunk.NullValue_NULL_VALUE_NULL},
 		},
 		"missing field": {
-			Kind: &opensplunkv1.TypedValue_MissingValue{MissingValue: opensplunkv1.MissingValue_MISSING_VALUE_MISSING},
+			Kind: &opensplunk.TypedValue_MissingValue{MissingValue: opensplunk.MissingValue_MISSING_VALUE_MISSING},
 		},
 		"nested object": {
-			Kind: &opensplunkv1.TypedValue_ObjectValue{
-				ObjectValue: &opensplunkv1.TypedObject{Fields: []*opensplunkv1.TypedObjectField{
+			Kind: &opensplunk.TypedValue_ObjectValue{
+				ObjectValue: &opensplunk.TypedObject{Fields: []*opensplunk.TypedObjectField{
 					{
 						Name: "items",
-						Value: &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_ListValue{
-							ListValue: &opensplunkv1.TypedValueList{Values: []*opensplunkv1.TypedValue{
-								{Kind: &opensplunkv1.TypedValue_BoolValue{BoolValue: true}},
-								{Kind: &opensplunkv1.TypedValue_BytesValue{BytesValue: []byte{0x00, 0xff}}},
+						Value: &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_ListValue{
+							ListValue: &opensplunk.TypedValueList{Values: []*opensplunk.TypedValue{
+								{Kind: &opensplunk.TypedValue_BoolValue{BoolValue: true}},
+								{Kind: &opensplunk.TypedValue_BytesValue{BytesValue: []byte{0x00, 0xff}}},
 							}},
 						}},
 					},
@@ -60,7 +60,7 @@ func TestTypedValueRoundTripPreservesDistinctKinds(t *testing.T) {
 				t.Fatalf("marshal: %v", err)
 			}
 
-			var decoded opensplunkv1.TypedValue
+			var decoded opensplunk.TypedValue
 			if err := proto.Unmarshal(wire, &decoded); err != nil {
 				t.Fatalf("unmarshal: %v", err)
 			}
@@ -74,9 +74,8 @@ func TestTypedValueRoundTripPreservesDistinctKinds(t *testing.T) {
 func TestGeneratedGoMessagesRetainKnownFieldsFromFuturePeers(t *testing.T) {
 	t.Parallel()
 
-	wire, err := proto.Marshal(&opensplunkv1.GetSystemBootstrapResponse{
-		ApiVersion:              "v1",
-		SplCompatibilityVersion: "0.4",
+	wire, err := proto.Marshal(&opensplunk.GetSystemBootstrapResponse{
+		SearchWebsocketPath: "/api/search/ws",
 	})
 	if err != nil {
 		t.Fatalf("marshal current response: %v", err)
@@ -86,12 +85,11 @@ func TestGeneratedGoMessagesRetainKnownFieldsFromFuturePeers(t *testing.T) {
 		"future-response-field",
 	)
 
-	var decoded opensplunkv1.GetSystemBootstrapResponse
+	var decoded opensplunk.GetSystemBootstrapResponse
 	if err := proto.Unmarshal(wire, &decoded); err != nil {
 		t.Fatalf("unmarshal future response: %v", err)
 	}
-	if decoded.GetApiVersion() != "v1" ||
-		decoded.GetSplCompatibilityVersion() != "0.4" {
+	if decoded.GetSearchWebsocketPath() != "/api/search/ws" {
 		t.Fatalf("known response fields = %+v", &decoded)
 	}
 	if len(decoded.ProtoReflect().GetUnknown()) == 0 {
@@ -99,10 +97,68 @@ func TestGeneratedGoMessagesRetainKnownFieldsFromFuturePeers(t *testing.T) {
 	}
 }
 
+func TestPublicVersionIdentityFieldsRemainRemovedAndReserved(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		message protoreflect.MessageDescriptor
+		fields  map[protoreflect.Name]protoreflect.FieldNumber
+	}{
+		{
+			name:    "build metadata",
+			message: opensplunk.File_open_splunk_common_proto.Messages().ByName("BuildMetadata"),
+			fields: map[protoreflect.Name]protoreflect.FieldNumber{
+				"application_version": 1,
+			},
+		},
+		{
+			name:    "system bootstrap",
+			message: opensplunk.File_open_splunk_system_api_proto.Messages().ByName("GetSystemBootstrapResponse"),
+			fields: map[protoreflect.Name]protoreflect.FieldNumber{
+				"server_version":            1,
+				"api_version":               2,
+				"spl_compatibility_version": 3,
+			},
+		},
+		{
+			name:    "collector ready",
+			message: opensplunk.File_open_splunk_collector_proto.Messages().ByName("CollectorReady"),
+			fields: map[protoreflect.Name]protoreflect.FieldNumber{
+				"server_version": 3,
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			if test.message == nil {
+				t.Fatal("message descriptor is missing")
+			}
+			for name, number := range test.fields {
+				if field := test.message.Fields().ByName(name); field != nil {
+					t.Errorf("removed field %s is present at wire number %d", name, field.Number())
+				}
+				if field := test.message.Fields().ByNumber(number); field != nil {
+					t.Errorf("reserved wire number %d is occupied by %s", number, field.Name())
+				}
+				if !test.message.ReservedNames().Has(name) {
+					t.Errorf("removed field name %s is not reserved", name)
+				}
+				if !test.message.ReservedRanges().Has(number) {
+					t.Errorf("removed field wire number %d is not reserved", number)
+				}
+			}
+		})
+	}
+}
+
 func TestCollectorServiceDescriptorIsBidirectionalStreaming(t *testing.T) {
 	t.Parallel()
 
-	service := opensplunkv1.File_open_splunk_v1_collector_proto.Services().ByName(protoreflect.Name("CollectorIngestService"))
+	service := opensplunk.File_open_splunk_collector_proto.Services().ByName(protoreflect.Name("CollectorIngestService"))
 	if service == nil {
 		t.Fatal("CollectorIngestService descriptor is missing")
 	}
@@ -113,10 +169,10 @@ func TestCollectorServiceDescriptorIsBidirectionalStreaming(t *testing.T) {
 	if !method.IsStreamingClient() || !method.IsStreamingServer() {
 		t.Fatalf("Collect must be bidirectional streaming: client=%t server=%t", method.IsStreamingClient(), method.IsStreamingServer())
 	}
-	if got := method.Input().FullName(); got != "open_splunk.v1.CollectRequest" {
+	if got := method.Input().FullName(); got != "open_splunk.CollectRequest" {
 		t.Fatalf("unexpected request type: %s", got)
 	}
-	if got := method.Output().FullName(); got != "open_splunk.v1.CollectResponse" {
+	if got := method.Output().FullName(); got != "open_splunk.CollectResponse" {
 		t.Fatalf("unexpected response type: %s", got)
 	}
 }
@@ -125,15 +181,15 @@ func TestEventRejectionAuthorizationCodesKeepStableWireNumbers(t *testing.T) {
 	t.Parallel()
 
 	tests := map[string]struct {
-		code opensplunkv1.EventRejectionCode
+		code opensplunk.EventRejectionCode
 		want int32
 	}{
 		"host": {
-			code: opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_HOST,
+			code: opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_HOST,
 			want: 11,
 		},
 		"source": {
-			code: opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_SOURCE,
+			code: opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_SOURCE,
 			want: 12,
 		},
 	}
@@ -150,7 +206,7 @@ func TestEventRejectionAuthorizationCodesKeepStableWireNumbers(t *testing.T) {
 func TestKnowledgeSnapshotContractIsCanonicalIntegerOnly(t *testing.T) {
 	t.Parallel()
 
-	file := opensplunkv1.File_open_splunk_v1_knowledge_proto
+	file := opensplunk.File_open_splunk_knowledge_proto
 	var inspectMessages func(protoreflect.MessageDescriptors)
 	inspectMessages = func(messages protoreflect.MessageDescriptors) {
 		for index := 0; index < messages.Len(); index++ {
@@ -220,7 +276,7 @@ func TestKnowledgeSnapshotContractIsCanonicalIntegerOnly(t *testing.T) {
 		}
 	}
 	inspectDigestTree(snapshot)
-	if unknown := (&opensplunkv1.KnowledgeSnapshot{}).ProtoReflect().GetUnknown(); len(unknown) != 0 {
+	if unknown := (&opensplunk.KnowledgeSnapshot{}).ProtoReflect().GetUnknown(); len(unknown) != 0 {
 		t.Fatalf("new KnowledgeSnapshot has %d unknown bytes, want none", len(unknown))
 	}
 
@@ -302,7 +358,7 @@ func TestKnowledgeSnapshotReferenceAndSummaryKeepExactWireContracts(t *testing.T
 		fields []fieldContract
 	}
 
-	file := opensplunkv1.File_open_splunk_v1_knowledge_proto
+	file := opensplunk.File_open_splunk_knowledge_proto
 	contracts := []messageContract{
 		{
 			name: "KnowledgeSnapshotRef",
@@ -311,9 +367,7 @@ func TestKnowledgeSnapshotReferenceAndSummaryKeepExactWireContracts(t *testing.T
 				{name: "tenant_catalog_revision", number: 2, kind: protoreflect.Uint64Kind, cardinality: protoreflect.Optional},
 				{name: "tenant_catalog_state_token", number: 3, kind: protoreflect.BytesKind, cardinality: protoreflect.Optional},
 				{name: "object_count", number: 4, kind: protoreflect.Uint32Kind, cardinality: protoreflect.Optional},
-				{name: "compiler_compatibility_version", number: 5, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
 				{name: "lookup_asset_count", number: 6, kind: protoreflect.Uint32Kind, cardinality: protoreflect.Optional},
-				{name: "lookup_asset_count_unknown", number: 7, kind: protoreflect.BoolKind, cardinality: protoreflect.Optional},
 			},
 		},
 		{
@@ -333,14 +387,14 @@ func TestKnowledgeSnapshotReferenceAndSummaryKeepExactWireContracts(t *testing.T
 					number:      2,
 					kind:        protoreflect.EnumKind,
 					cardinality: protoreflect.Optional,
-					enum:        "open_splunk.v1.KnowledgeObjectType",
+					enum:        "open_splunk.KnowledgeObjectType",
 				},
 				{
 					name:        "stage",
 					number:      3,
 					kind:        protoreflect.EnumKind,
 					cardinality: protoreflect.Optional,
-					enum:        "open_splunk.v1.KnowledgeSearchStage",
+					enum:        "open_splunk.KnowledgeSearchStage",
 				},
 				{
 					name:        "authorized_object",
@@ -348,7 +402,7 @@ func TestKnowledgeSnapshotReferenceAndSummaryKeepExactWireContracts(t *testing.T
 					kind:        protoreflect.MessageKind,
 					cardinality: protoreflect.Optional,
 					hasPresence: true,
-					message:     "open_splunk.v1.KnowledgeSnapshotAuthorizedObjectSummary",
+					message:     "open_splunk.KnowledgeSnapshotAuthorizedObjectSummary",
 					oneof:       "disclosure",
 				},
 				{
@@ -370,14 +424,14 @@ func TestKnowledgeSnapshotReferenceAndSummaryKeepExactWireContracts(t *testing.T
 					kind:        protoreflect.MessageKind,
 					cardinality: protoreflect.Optional,
 					hasPresence: true,
-					message:     "open_splunk.v1.KnowledgeSnapshotRef",
+					message:     "open_splunk.KnowledgeSnapshotRef",
 				},
 				{
 					name:        "objects",
 					number:      2,
 					kind:        protoreflect.MessageKind,
 					cardinality: protoreflect.Repeated,
-					message:     "open_splunk.v1.KnowledgeSnapshotObjectSummary",
+					message:     "open_splunk.KnowledgeSnapshotObjectSummary",
 				},
 				{name: "objects_truncated", number: 3, kind: protoreflect.BoolKind, cardinality: protoreflect.Optional},
 				{
@@ -385,7 +439,7 @@ func TestKnowledgeSnapshotReferenceAndSummaryKeepExactWireContracts(t *testing.T
 					number:      4,
 					kind:        protoreflect.MessageKind,
 					cardinality: protoreflect.Repeated,
-					message:     "open_splunk.v1.KnowledgeSnapshotLookupAsset",
+					message:     "open_splunk.KnowledgeSnapshotLookupAsset",
 				},
 			},
 		},
@@ -479,38 +533,38 @@ func TestKnowledgeSnapshotReferenceAndSummaryKeepExactWireContracts(t *testing.T
 	}{
 		{
 			name:    "search job",
-			file:    opensplunkv1.File_open_splunk_v1_search_proto,
+			file:    opensplunk.File_open_splunk_search_proto,
 			message: "SearchJob",
 			number:  23,
-			value:   "open_splunk.v1.KnowledgeSnapshotSummary",
+			value:   "open_splunk.KnowledgeSnapshotSummary",
 		},
 		{
 			name:    "history entry",
-			file:    opensplunkv1.File_open_splunk_v1_history_proto,
+			file:    opensplunk.File_open_splunk_history_proto,
 			message: "SearchHistoryEntry",
 			number:  18,
-			value:   "open_splunk.v1.KnowledgeSnapshotSummary",
+			value:   "open_splunk.KnowledgeSnapshotSummary",
 		},
 		{
 			name:    "attempt audit",
-			file:    opensplunkv1.File_open_splunk_v1_search_attempt_audit_proto,
+			file:    opensplunk.File_open_splunk_search_attempt_audit_proto,
 			message: "SearchAttemptAuditEvent",
 			number:  8,
-			value:   "open_splunk.v1.KnowledgeSnapshotRef",
+			value:   "open_splunk.KnowledgeSnapshotRef",
 		},
 		{
 			name:    "inspection response",
-			file:    opensplunkv1.File_open_splunk_v1_search_inspection_api_proto,
+			file:    opensplunk.File_open_splunk_search_inspection_api_proto,
 			message: "InspectSearchJobResponse",
 			number:  7,
-			value:   "open_splunk.v1.KnowledgeSnapshotSummary",
+			value:   "open_splunk.KnowledgeSnapshotSummary",
 		},
 		{
 			name:    "export job",
-			file:    opensplunkv1.File_open_splunk_v1_export_proto,
+			file:    opensplunk.File_open_splunk_export_proto,
 			message: "ExportJob",
 			number:  13,
-			value:   "open_splunk.v1.KnowledgeSnapshotSummary",
+			value:   "open_splunk.KnowledgeSnapshotSummary",
 		},
 	}
 	for _, attachment := range attachments {
@@ -554,7 +608,7 @@ func TestKnowledgeSnapshotReferenceAndSummaryKeepExactWireContracts(t *testing.T
 func TestFieldExtractionDefinitionDeterministicWireMatchesCrossLanguageGolden(t *testing.T) {
 	t.Parallel()
 
-	descriptor := opensplunkv1.File_open_splunk_v1_knowledge_proto.Messages().ByName("FieldExtractionDefinition")
+	descriptor := opensplunk.File_open_splunk_knowledge_proto.Messages().ByName("FieldExtractionDefinition")
 	if descriptor == nil {
 		t.Fatal("FieldExtractionDefinition descriptor is missing")
 	}
@@ -625,21 +679,21 @@ func TestFieldExtractionDefinitionDeterministicWireMatchesCrossLanguageGolden(t 
 			}
 			seen[contract.Name] = true
 
-			message := &opensplunkv1.FieldExtractionDefinition{
+			message := &opensplunk.FieldExtractionDefinition{
 				InputField:        contract.InputField,
-				OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior(contract.OverwriteBehavior),
+				OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior(contract.OverwriteBehavior),
 			}
 			switch {
 			case contract.Regex != nil && contract.JSON == nil:
-				message.Extraction = &opensplunkv1.FieldExtractionDefinition_Regex{
-					Regex: &opensplunkv1.RegexFieldExtractionDefinition{
+				message.Extraction = &opensplunk.FieldExtractionDefinition_Regex{
+					Regex: &opensplunk.RegexFieldExtractionDefinition{
 						Pattern:      contract.Regex.Pattern,
 						OutputFields: append([]string(nil), contract.Regex.OutputFields...),
 					},
 				}
 			case contract.JSON != nil && contract.Regex == nil:
-				message.Extraction = &opensplunkv1.FieldExtractionDefinition_Json{
-					Json: &opensplunkv1.JsonFieldExtractionDefinition{
+				message.Extraction = &opensplunk.FieldExtractionDefinition_Json{
+					Json: &opensplunk.JsonFieldExtractionDefinition{
 						Path:        contract.JSON.Path,
 						OutputField: contract.JSON.OutputField,
 					},
@@ -674,7 +728,7 @@ func TestFieldExtractionDefinitionDeterministicWireMatchesCrossLanguageGolden(t 
 func TestKnowledgeManagementDependencyProjectionMatchesCrossLanguageGolden(t *testing.T) {
 	t.Parallel()
 
-	file := opensplunkv1.File_open_splunk_v1_knowledge_api_proto
+	file := opensplunk.File_open_splunk_knowledge_api_proto
 	identity := file.Messages().ByName("KnowledgeManagementObjectVersionIdentity")
 	if identity == nil || identity.Fields().Len() != 2 {
 		t.Fatalf("management object-version identity descriptor = %v", identity)
@@ -707,7 +761,7 @@ func TestKnowledgeManagementDependencyProjectionMatchesCrossLanguageGolden(t *te
 	}
 	if field := edgeDescriptor.Fields().ByName("role"); field == nil ||
 		field.Number() != 3 || field.Kind() != protoreflect.EnumKind || field.Enum() == nil ||
-		field.Enum().FullName() != "open_splunk.v1.KnowledgeDependencyRole" {
+		field.Enum().FullName() != "open_splunk.KnowledgeDependencyRole" {
 		t.Errorf("management edge role = %v, want KnowledgeDependencyRole field 3", field)
 	}
 	for _, forbidden := range []protoreflect.Name{
@@ -769,22 +823,22 @@ func TestKnowledgeManagementDependencyProjectionMatchesCrossLanguageGolden(t *te
 		t.Fatalf("management-dependency fixture is invalid: %+v", fixture)
 	}
 
-	source := &opensplunkv1.KnowledgeManagementObjectVersionIdentity{
+	source := &opensplunk.KnowledgeManagementObjectVersionIdentity{
 		KnowledgeObjectId: fixture.Source.KnowledgeObjectID,
 		Version:           fixture.Source.Version,
 	}
-	target := &opensplunkv1.KnowledgeManagementObjectVersionIdentity{
+	target := &opensplunk.KnowledgeManagementObjectVersionIdentity{
 		KnowledgeObjectId: fixture.Target.KnowledgeObjectID,
 		Version:           fixture.Target.Version,
 	}
-	edge := &opensplunkv1.KnowledgeManagementDependencyEdge{
+	edge := &opensplunk.KnowledgeManagementDependencyEdge{
 		Source: source,
 		Target: target,
-		Role:   opensplunkv1.KnowledgeDependencyRole(fixture.Role),
+		Role:   opensplunk.KnowledgeDependencyRole(fixture.Role),
 	}
 	nextPageToken := fixture.NextPageToken
 	totalSize := fixture.TotalSize
-	page := &opensplunkv1.PageResponse{
+	page := &opensplunk.PageResponse{
 		NextPageToken:  &nextPageToken,
 		TotalSize:      &totalSize,
 		TotalSizeExact: true,
@@ -797,8 +851,8 @@ func TestKnowledgeManagementDependencyProjectionMatchesCrossLanguageGolden(t *te
 		{name: "edge", message: edge, wireHex: fixture.EdgeWireHex},
 		{
 			name: "dependencies response",
-			message: &opensplunkv1.ListKnowledgeObjectDependenciesResponse{
-				Dependencies:          []*opensplunkv1.KnowledgeManagementDependencyEdge{edge},
+			message: &opensplunk.ListKnowledgeObjectDependenciesResponse{
+				Dependencies:          []*opensplunk.KnowledgeManagementDependencyEdge{edge},
 				Page:                  page,
 				TenantCatalogRevision: fixture.TenantCatalogRevision,
 				ResolvedObject:        source,
@@ -807,8 +861,8 @@ func TestKnowledgeManagementDependencyProjectionMatchesCrossLanguageGolden(t *te
 		},
 		{
 			name: "dependents response",
-			message: &opensplunkv1.ListKnowledgeObjectDependentsResponse{
-				Dependents:            []*opensplunkv1.KnowledgeManagementDependencyEdge{edge},
+			message: &opensplunk.ListKnowledgeObjectDependentsResponse{
+				Dependents:            []*opensplunk.KnowledgeManagementDependencyEdge{edge},
 				Page:                  page,
 				TenantCatalogRevision: fixture.TenantCatalogRevision,
 				ResolvedObject:        target,
@@ -841,7 +895,7 @@ func TestKnowledgeManagementDependencyProjectionMatchesCrossLanguageGolden(t *te
 func TestTierOneKnowledgeDefinitionBodiesKeepStableWireNumbers(t *testing.T) {
 	t.Parallel()
 
-	descriptor := opensplunkv1.File_open_splunk_v1_knowledge_proto.Messages().ByName("KnowledgeObjectDefinition")
+	descriptor := opensplunk.File_open_splunk_knowledge_proto.Messages().ByName("KnowledgeObjectDefinition")
 	if descriptor == nil {
 		t.Fatal("KnowledgeObjectDefinition descriptor is missing")
 	}
@@ -854,7 +908,7 @@ func TestTierOneKnowledgeDefinitionBodiesKeepStableWireNumbers(t *testing.T) {
 		"field_alias":      11,
 		"calculated_field": 12,
 	}
-	calculated := opensplunkv1.File_open_splunk_v1_knowledge_proto.Messages().ByName("CalculatedFieldDefinition")
+	calculated := opensplunk.File_open_splunk_knowledge_proto.Messages().ByName("CalculatedFieldDefinition")
 	if calculated == nil {
 		t.Fatal("CalculatedFieldDefinition is missing")
 	}
@@ -878,7 +932,7 @@ func TestTierOneKnowledgeDefinitionBodiesKeepStableWireNumbers(t *testing.T) {
 		t.Fatalf("client-authored KnowledgeObjectDefinition.stage_order is present at wire field %d", field.Number())
 	}
 
-	object := opensplunkv1.File_open_splunk_v1_knowledge_proto.Messages().ByName("KnowledgeObject")
+	object := opensplunk.File_open_splunk_knowledge_proto.Messages().ByName("KnowledgeObject")
 	if object == nil {
 		t.Fatal("KnowledgeObject descriptor is missing")
 	}
@@ -928,7 +982,7 @@ func TestTierOneKnowledgeDefinitionBodiesKeepStableWireNumbers(t *testing.T) {
 func TestKnowledgeFeatureWireNumberIsReservedButNotImplied(t *testing.T) {
 	t.Parallel()
 
-	if got := int32(opensplunkv1.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS); got != 15 {
+	if got := int32(opensplunk.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS); got != 15 {
 		t.Fatalf("knowledge field objects feature wire number = %d, want 15", got)
 	}
 }
@@ -936,14 +990,14 @@ func TestKnowledgeFeatureWireNumberIsReservedButNotImplied(t *testing.T) {
 func TestKnowledgeRecoveryAndMutationAuthorityKeepStableWireContracts(t *testing.T) {
 	t.Parallel()
 
-	if got := int32(opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_QUARANTINED); got != 4 {
+	if got := int32(opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_QUARANTINED); got != 4 {
 		t.Fatalf("quarantined knowledge state wire number = %d, want 4", got)
 	}
-	if got := int32(opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DELETED); got != 5 {
+	if got := int32(opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DELETED); got != 5 {
 		t.Fatalf("deleted knowledge state wire number = %d, want 5", got)
 	}
 
-	apiFile := opensplunkv1.File_open_splunk_v1_knowledge_api_proto
+	apiFile := opensplunk.File_open_splunk_knowledge_api_proto
 	for _, messageName := range []protoreflect.Name{
 		"CreateKnowledgeObjectRequest",
 		"UpdateKnowledgeObjectRequest",
@@ -999,7 +1053,7 @@ func TestKnowledgeMutationResponsesPairRevisionAndStateToken(t *testing.T) {
 			fieldCount:     3,
 			revisionNumber: 2,
 			tokenNumber:    3,
-			message: &opensplunkv1.CreateKnowledgeObjectResponse{
+			message: &opensplunk.CreateKnowledgeObjectResponse{
 				TenantCatalogRevision:   7,
 				TenantCatalogStateToken: token,
 			},
@@ -1010,7 +1064,7 @@ func TestKnowledgeMutationResponsesPairRevisionAndStateToken(t *testing.T) {
 			fieldCount:     3,
 			revisionNumber: 2,
 			tokenNumber:    3,
-			message: &opensplunkv1.UpdateKnowledgeObjectResponse{
+			message: &opensplunk.UpdateKnowledgeObjectResponse{
 				TenantCatalogRevision:   7,
 				TenantCatalogStateToken: token,
 			},
@@ -1021,7 +1075,7 @@ func TestKnowledgeMutationResponsesPairRevisionAndStateToken(t *testing.T) {
 			fieldCount:     3,
 			revisionNumber: 2,
 			tokenNumber:    3,
-			message: &opensplunkv1.SetKnowledgeObjectStateResponse{
+			message: &opensplunk.SetKnowledgeObjectStateResponse{
 				TenantCatalogRevision:   7,
 				TenantCatalogStateToken: token,
 			},
@@ -1032,7 +1086,7 @@ func TestKnowledgeMutationResponsesPairRevisionAndStateToken(t *testing.T) {
 			fieldCount:     4,
 			revisionNumber: 3,
 			tokenNumber:    4,
-			message: &opensplunkv1.DeleteKnowledgeObjectResponse{
+			message: &opensplunk.DeleteKnowledgeObjectResponse{
 				TenantCatalogRevision:   7,
 				TenantCatalogStateToken: token,
 			},
@@ -1040,7 +1094,7 @@ func TestKnowledgeMutationResponsesPairRevisionAndStateToken(t *testing.T) {
 		},
 	}
 
-	file := opensplunkv1.File_open_splunk_v1_knowledge_api_proto
+	file := opensplunk.File_open_splunk_knowledge_api_proto
 	for _, test := range tests {
 		t.Run(string(test.name), func(t *testing.T) {
 			t.Parallel()
@@ -1085,7 +1139,7 @@ func TestKnowledgeMutationResponsesPairRevisionAndStateToken(t *testing.T) {
 func TestKnowledgeMutationOutcomeRecordPinsCanonicalAuthorityWire(t *testing.T) {
 	t.Parallel()
 
-	descriptor := opensplunkv1.File_open_splunk_v1_knowledge_api_proto.Messages().ByName("KnowledgeMutationOutcomeRecord")
+	descriptor := opensplunk.File_open_splunk_knowledge_api_proto.Messages().ByName("KnowledgeMutationOutcomeRecord")
 	if descriptor == nil {
 		t.Fatal("KnowledgeMutationOutcomeRecord descriptor is missing")
 	}
@@ -1122,17 +1176,17 @@ func TestKnowledgeMutationOutcomeRecordPinsCanonicalAuthorityWire(t *testing.T) 
 		}
 	}
 
-	message := &opensplunkv1.KnowledgeMutationOutcomeRecord{
+	message := &opensplunk.KnowledgeMutationOutcomeRecord{
 		Route:        "objects.update",
 		MutationKind: "scope_change",
-		Object: &opensplunkv1.KnowledgeObjectVersionReference{
+		Object: &opensplunk.KnowledgeObjectVersionReference{
 			KnowledgeObjectId: "ko-1",
 			Version:           7,
 			DefinitionSha256:  []byte{1, 2},
 		},
 		TenantCatalogRevision:   9,
 		TenantCatalogStateToken: []byte{0xaa, 0xbb},
-		AuditAuthority: &opensplunkv1.KnowledgeMutationOutcomeRecord_SuccessfulAuditSequence{
+		AuditAuthority: &opensplunk.KnowledgeMutationOutcomeRecord_SuccessfulAuditSequence{
 			SuccessfulAuditSequence: 11,
 		},
 		OccurredAtUnixMicro:      13,
@@ -1163,7 +1217,7 @@ func TestKnowledgeMutationOutcomeRecordPinsCanonicalAuthorityWire(t *testing.T) 
 func TestKnowledgeProvenanceVariantsCannotMixIdentityAndRedaction(t *testing.T) {
 	t.Parallel()
 
-	file := opensplunkv1.File_open_splunk_v1_knowledge_proto
+	file := opensplunk.File_open_splunk_knowledge_proto
 	provenance := file.Messages().ByName("KnowledgeProvenance")
 	if provenance == nil {
 		t.Fatal("KnowledgeProvenance descriptor is missing")
@@ -1212,7 +1266,7 @@ func TestKnowledgeProvenanceVariantsCannotMixIdentityAndRedaction(t *testing.T) 
 func TestSearchInspectionProvenanceKeepsAppendOnlyWireContract(t *testing.T) {
 	t.Parallel()
 
-	file := opensplunkv1.File_open_splunk_v1_search_inspection_api_proto
+	file := opensplunk.File_open_splunk_search_inspection_api_proto
 	stage := file.Messages().ByName("SearchInspectionLogicalStage")
 	if stage == nil {
 		t.Fatal("SearchInspectionLogicalStage descriptor is missing")
@@ -1221,8 +1275,8 @@ func TestSearchInspectionProvenanceKeepsAppendOnlyWireContract(t *testing.T) {
 		number  protoreflect.FieldNumber
 		message protoreflect.FullName
 	}{
-		"operator_provenance": {6, "open_splunk.v1.KnowledgeProvenance"},
-		"output_provenance":   {7, "open_splunk.v1.SearchInspectionOutputProvenance"},
+		"operator_provenance": {6, "open_splunk.KnowledgeProvenance"},
+		"output_provenance":   {7, "open_splunk.SearchInspectionOutputProvenance"},
 	} {
 		field := stage.Fields().ByName(name)
 		if field == nil || field.Number() != contract.number ||
@@ -1257,7 +1311,7 @@ func TestSearchInspectionProvenanceKeepsAppendOnlyWireContract(t *testing.T) {
 		provenance.Cardinality() != protoreflect.Optional ||
 		!provenance.HasPresence() || provenance.HasOptionalKeyword() ||
 		provenance.Message() == nil ||
-		provenance.Message().FullName() != "open_splunk.v1.KnowledgeProvenance" {
+		provenance.Message().FullName() != "open_splunk.KnowledgeProvenance" {
 		t.Errorf("SearchInspectionOutputProvenance.provenance = %+v, want present message field 2", provenance)
 	}
 }
@@ -1265,7 +1319,7 @@ func TestSearchInspectionProvenanceKeepsAppendOnlyWireContract(t *testing.T) {
 func TestKnowledgeApiFamiliesExposeOptimisticAndBoundedContracts(t *testing.T) {
 	t.Parallel()
 
-	file := opensplunkv1.File_open_splunk_v1_knowledge_api_proto
+	file := opensplunk.File_open_splunk_knowledge_api_proto
 	tests := map[protoreflect.Name][]protoreflect.Name{
 		"ListKnowledgeObjectsRequest": {
 			"page",

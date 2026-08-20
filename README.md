@@ -1,171 +1,134 @@
 # Open Splunk
 
-Open Splunk is a single-node log search and analytics application with an SPL-compatible query layer over ClickHouse.
+Open Splunk is a pre-release single-node log search and analytics application
+with a bounded SPL-like query layer over ClickHouse. Its source contracts are
+under active development; no public release or backward-compatibility policy
+has been declared.
 
-The server is written in Go. Its browser UI is a statically exported Next.js application embedded into the server executable at build time. Log-producing hosts run the separate Go collector and send protobuf batches to the server over gRPC.
+The Go server embeds a statically exported Next.js browser application. A
+separate Go collector tails application logs and delivers durable protobuf
+batches over authenticated gRPC. The server also offers an optional bounded
+HTTP Event Collector facade.
 
 ## Repository layout
 
 ```text
-app/                    Next.js App Router source
+app/                      Next.js App Router source
 cmd/
-  open-splunk-server/   Self-contained server application
-  open-splunk-collector/ Log collector deployed beside applications
-  open-splunk-loggen/   Test and benchmark event generator
-configs/examples/       Example runtime configuration
-deploy/                 Local and production deployment assets
-docs/                   Product, architecture, and operational documentation
-gen/
-  go/                   Generated Go protobuf and gRPC code
-  ts/                   Generated TypeScript protobuf code
-internal/               Private Go application packages
-migrations/
-  clickhouse/            ClickHouse schema migrations
-  sqlite/                SQLite control-plane migrations
-out/                    Generated Next.js static export embedded by Go
-proto/open_splunk/v1/   Versioned protobuf source contracts
-public/                 Next.js public assets
-scripts/                Build and developer automation
-go.mod                  Root Go module
-Makefile                Canonical local build and test targets
-package.json            Root Next.js/TypeScript workspace
-next.config.ts          Static-export configuration
-webui.go                Go embed boundary for the generated UI
+  open-splunk-server/     self-contained server
+  open-splunk-collector/  host-side log collector
+  open-splunk-loggen/     test/benchmark event generator
+configs/examples/         example runtime configuration
+deploy/                   production-shaped local deployment
+docs/                     current product and operations reference
+gen/go/                   generated Go protobuf/gRPC code
+gen/ts/                   generated TypeScript protobuf code
+integration/              executable shipped-product gates
+internal/                 private Go packages
+migrations/               SQLite and ClickHouse schema baselines
+proto/open_splunk/        current protobuf source contracts
+public/                   static browser assets
+scripts/                  build and validation automation
 ```
 
-The root TypeScript files (`package.json`, `next.config.ts`, and `tsconfig.json`) define the Next.js application. The root Go package embeds `out/`, which is why the generated static export lives at the repository root.
+The root TypeScript workspace builds the static browser export under `out/`.
+The root Go package embeds that export in the server executable.
 
-## Initial commands
+## Develop and build
+
+Use the exact Go, Node.js, and npm versions pinned by `go.mod`, `.node-version`,
+and `package.json`:
 
 ```sh
-go version   # go1.26.6; also pinned in go.mod
-node --version # v26.7.0; also pinned in .node-version
-npm --version  # 11.19.0; also pinned in package.json
 make proto-tools
 make proto
-go test ./...
+make test
 make build
 ```
 
-`make build` performs a backend-mode UI export before compiling the server,
-generates and verifies the embedded asset manifest, and links the same build
-identity into the server and collector. Direct `go build` is only a development
-compile check; use the Make target for a runnable embedded server.
+`make proto` lints and compiles every schema under `proto/` into
+`gen/go/open_splunk` and `gen/ts/open_splunk`. Generation uses pinned
+Buf and plugin versions; generated files are never edited manually.
 
-Published artifacts use the stricter `make release` target. It requires the
-exact Node.js/npm versions pinned above and
-`OPEN_SPLUNK_SOURCE_REVISION` to equal the clean checkout's full Git revision.
-The build derives the current SPL compatibility identity from the committed
-source and fails before publication if the embedded server reports anything
-different. Callers cannot select another compatibility profile.
-The release launcher materializes raw blobs and executable modes from that
-committed `HEAD` into a disposable tree; ignored and untracked worktree files
-are omitted and cannot enter the artifact. It installs the lockfile-pinned
-frontend and protobuf tools into fresh caches under a scrubbed environment,
-forces backend data mode, disables ambient Go workspace/VCS/build controls,
-verifies the embedded payload plus the linked server/collector/log-generator
-identities, and atomically publishes only the verified files under `build/`.
-`make` necessarily parses the physical Makefile, so that file and the commands
-resolved from `PATH` are the release-launcher trust boundary. The launcher
-executes `scripts/build-release.sh` from committed `HEAD`; no other live
-checkout file is used as a release build input:
-
-```sh
-OPEN_SPLUNK_APPLICATION_VERSION=0.4.0 \
-OPEN_SPLUNK_SOURCE_REVISION="$(git rev-parse HEAD)" make release
-```
-
-This release is application `0.4.0` with the single cumulative compatibility
-profile `0.4`; see [`docs/versioning.md`](docs/versioning.md).
-
-For the production-shaped, non-root server and collector OCI images plus the
-digest-pinned server/ClickHouse Compose stack, follow
-[`deploy/README.md`](deploy/README.md). The OCI build is separately anchored to
-a clean committed snapshot, serializes equivalent destination references in
-the Docker daemon across independent clones, and transactionally restores both
-prior tags if pair publication fails. The production Compose file consumes
-that prebuilt image and cannot silently rebuild a dirty checkout.
-
-Each `vX.Y.Z` release tag runs one publication pipeline for both consumable
-images: `open-splunk-server` and `open-splunk-collector`, each for AMD64 and
-ARM64. See [`docs/releasing.md`](docs/releasing.md) for the exact tagging and
-publication procedure. For an end-to-end remote collector deployment using that
-release's collector image, follow
-[`docs/collector-deployment.md`](docs/collector-deployment.md).
-
-The server can also expose a bounded Splunk-compatible HTTP Event Collector
-surface. HEC is disabled by default and shares the existing browser/API HTTPS
-listener instead of opening port 8088. See the
-[`docs/hec-deployment.md`](docs/hec-deployment.md) operator runbook for
-enablement, token creation, TLS-safe examples, retry semantics, limits, and
-recovery behavior.
-
-For frontend-only design work, build the deterministic demo workspace
-explicitly:
+`make build` exports the backend-mode UI, generates/verifies the embedded asset
+manifest, and links one build identity into server, collector, and log
+generator. Direct `go build` is only a compile check. For deterministic UI-only
+demo work:
 
 ```sh
 OPEN_SPLUNK_DATA_MODE=demo npm run build
 ```
 
-`OPEN_SPLUNK_DATA_MODE=demo make build-server` is also available for a
-self-contained demonstration binary. The normal `make build` and
-`make build-server` targets intentionally default to backend mode.
-`OPEN_SPLUNK_API_BASE_URL` is a build-time test override, not a browser
-setting. The production Go server intentionally requires browser HTTP and
-WebSocket traffic to remain same-origin. Use the serving origin with API routes
-exposed at their advertised root paths, or a test double with an explicit
-trusted-origin policy; a cross-origin URL or arbitrary path prefix is not
-supported by the Go server.
+Production browser traffic is same-origin. The API is rooted at `/api`, the
+search WebSocket at `/api/search/ws`, and the native gRPC service is
+`open_splunk.CollectorIngestService/Collect`. See [API contracts](docs/api.md).
 
-`make proto` compiles every schema under `proto/` into Go protobuf/gRPC code in
-`gen/go` and `ts-proto` codecs in `gen/ts`. Run `make proto-tools` once to
-install the pinned Go generators and JavaScript dependencies. Generation uses
-the lockfile-pinned Buf compiler, so an ambient `protoc` installation is not
-required and cannot change generated bytes.
+## Development build
 
-`make proto-lint` runs the schema compatibility/style linter without regenerating code. `make proto` runs it automatically before generation.
-
-In VS Code, **Run Build Task** (`Cmd+Shift+B` on macOS or `Ctrl+Shift+B` elsewhere) runs the default **Generate protobufs (Go, gRPC, TypeScript)** task, which delegates to `make proto`.
-
-The backend includes the protobuf HTTP API, authenticated gRPC ingestion, an
-optional HEC compatibility facade, collector WAL and file tailing, the SQLite
-control plane, ClickHouse storage, bounded search jobs, and the executable SPL
-authored-search subset documented in
-[`docs/spl-compatibility-v0.4.md`](docs/spl-compatibility-v0.4.md). Its
-knowledge and lookup behavior is part of that same profile; calculated-field
-expressions deliberately retain their smaller closed reusable-expression
-grammar. Before upgrading retained searches, follow the
-[`v0.4 migration guide`](docs/spl-compatibility-v0.4-migration.md).
-The default Go test suite is self-contained. The pinned ClickHouse and full
-collector-to-browser tests are opt-in because they start ephemeral Docker
-containers; the browser vertical also requires the pinned Playwright browser:
-
-The shipped [`configs/examples/collector.yaml`](configs/examples/collector.yaml)
-is the sanitized GradeThis migration profile. It takes the server, private
-token file, durable state directory, resolved GradeThis log path, application
-host, and environment from explicit environment variables. The backend
-vertical validates and runs that exact file through its pre-WAL sanitizer,
-proves trusted metadata, and executes representative current GradeThis
-searches without an OpenTelemetry log collector.
+Build identity is the full source revision. Until the first supported release
+is defined, do not publish semantically versioned artifacts:
 
 ```sh
-OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
-go test ./internal/queryexec \
-  -run '^TestGradeThisCompatibilityV0_1AgainstClickHouse$' -count=1 -v
+OPEN_SPLUNK_SOURCE_REVISION="$(git rev-parse HEAD)" \
+make release
+```
 
+The artifact launcher requires a clean committed revision, materializes only
+committed inputs into a disposable tree, installs pinned tools into fresh
+caches, scrubs ambient workspace/build controls, verifies the embedded payload
+and linked binary identities, and publishes atomically under `build/`.
+Server and collector images must come from the same source revision. See
+[Build and publication status](docs/releasing.md).
+
+For the non-root server/collector images and digest-pinned ClickHouse Compose
+stack, follow [Deployment](deploy/README.md). The Compose stack consumes a
+prebuilt image and cannot silently rebuild a dirty checkout.
+
+## Product boundaries
+
+The backend includes protobuf HTTP, authenticated native gRPC ingestion, the
+optional HEC facade, collector WAL/tailing, SQLite control plane, ClickHouse
+event storage, bounded jobs/exports, field knowledge, immutable CSV lookups,
+auditing, and the cumulative authored SPL profile documented in [SPL](docs/spl.md).
+
+The project currently supports fresh development state only. Retaining data
+across arbitrary source revisions is not a compatibility promise. Unknown or
+inconsistent databases, state directories, backups, cursors, WAL/checkpoints,
+snapshots, and retained artifacts fail closed and are never silently deleted
+or rewritten. See [Architecture](docs/architecture.md) and
+[database mechanics](migrations/README.md).
+
+Native collectors are documented in [Ingestion](docs/ingestion.md). HEC is
+disabled by default, shares the existing HTTPS listener, and exposes only its
+exact unversioned routes; see [HEC](docs/hec.md).
+
+## Integration gates
+
+The default Go/frontend suite is self-contained. ClickHouse, shipped-browser,
+HEC load/soak, recovery, and OCI tests are opt-in because they start containers
+or long-running workloads. Common entry points include:
+
+```sh
 OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
 go test ./internal/queryexec -run TestExecutorAndManagerAgainstClickHouse
 
 npm ci
 npx --no-install playwright install chromium
-OPEN_SPLUNK_BACKEND_INTEGRATION=1 go test ./integration -run TestBackendVertical
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+go test ./integration -run TestBackendVertical
 
 OPEN_SPLUNK_OCI_INTEGRATION=1 \
-OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.7.3.19@sha256:f90a77560f72b10802106ee49e9870e41668cbc496e280c3911f6e3b216657f3 \
-go test ./integration -run '^TestReleaseOCIComposeContract$' -count=1 -timeout=20m -v
+go test ./integration -run '^TestReleaseOCIComposeContract$' \
+  -count=1 -timeout=20m -v
 ```
 
-See [`integration/README.md`](integration/README.md) for the exact vertical
-coverage and browser override.
+Use the repository-pinned ClickHouse digest unless intentionally comparing a
+different pinned image. [Integration testing](integration/README.md) describes
+the exact environment variables and evidence produced by each gate.
 
-See [the product and architecture plan](docs/product-architecture-plan.md) for the complete design.
+## Documentation
+
+The [documentation index](docs/README.md) links the current architecture, API,
+SPL, knowledge, ingestion, HEC, audit, roadmap, and release references. The
+repository intentionally does not retain release-by-release implementation
+plans or migration guides.

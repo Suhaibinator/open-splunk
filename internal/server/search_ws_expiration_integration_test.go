@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -355,12 +355,12 @@ func subscribeExpirationTarget(
 	includePreviews bool,
 ) {
 	t.Helper()
-	target := &opensplunkv1.JobTarget{}
+	target := &opensplunk.JobTarget{}
 	switch {
 	case subscription.searchJobID != "":
-		target.Target = &opensplunkv1.JobTarget_SearchJobId{SearchJobId: subscription.searchJobID}
+		target.Target = &opensplunk.JobTarget_SearchJobId{SearchJobId: subscription.searchJobID}
 	case subscription.exportJobID != "":
-		target.Target = &opensplunkv1.JobTarget_ExportJobId{ExportJobId: subscription.exportJobID}
+		target.Target = &opensplunk.JobTarget_ExportJobId{ExportJobId: subscription.exportJobID}
 	default:
 		t.Fatal("expiration subscription has no target")
 	}
@@ -392,7 +392,7 @@ func readExpirationTargetEvent(
 	t *testing.T,
 	connection *websocket.Conn,
 	subscription *expirationSubscription,
-) *opensplunkv1.SearchWebSocketEvent {
+) *opensplunk.SearchWebSocketEvent {
 	t.Helper()
 	event := readSearchWebSocketEvent(t, connection)
 	if event.GetSubscriptionId() != subscription.id ||
@@ -410,7 +410,7 @@ func readExpirationTargetEvent(
 	return event
 }
 
-func sameExpirationTarget(target *opensplunkv1.JobTarget, subscription *expirationSubscription) bool {
+func sameExpirationTarget(target *opensplunk.JobTarget, subscription *expirationSubscription) bool {
 	if target == nil {
 		return false
 	}
@@ -424,11 +424,11 @@ func readExpirationProjectionUntil(
 	t *testing.T,
 	connection *websocket.Conn,
 	subscription *expirationSubscription,
-	terminal func(*opensplunkv1.SearchWebSocketEvent) bool,
-) []*opensplunkv1.SearchWebSocketEvent {
+	terminal func(*opensplunk.SearchWebSocketEvent) bool,
+) []*opensplunk.SearchWebSocketEvent {
 	t.Helper()
 	const maximumProjectionFrames = 8
-	events := make([]*opensplunkv1.SearchWebSocketEvent, 0, maximumProjectionFrames)
+	events := make([]*opensplunk.SearchWebSocketEvent, 0, maximumProjectionFrames)
 	for range maximumProjectionFrames {
 		event := readExpirationTargetEvent(t, connection, subscription)
 		events = append(events, event)
@@ -515,10 +515,10 @@ func waitForExpirationClockWaiters(t *testing.T, clock *expirationTestClock, wan
 
 func assertExpirationSocketPong(t *testing.T, connection *websocket.Conn, nonce string) {
 	t.Helper()
-	writeSearchWebSocketCommand(t, connection, &opensplunkv1.SearchWebSocketCommand{
+	writeSearchWebSocketCommand(t, connection, &opensplunk.SearchWebSocketCommand{
 		RequestId: "ping-" + nonce,
-		Payload: &opensplunkv1.SearchWebSocketCommand_Ping{
-			Ping: &opensplunkv1.SearchWebSocketPing{Nonce: nonce},
+		Payload: &opensplunk.SearchWebSocketCommand_Ping{
+			Ping: &opensplunk.SearchWebSocketPing{Nonce: nonce},
 		},
 	})
 	event := readSearchWebSocketEvent(t, connection)
@@ -544,7 +544,7 @@ func assertExpirationSocketClosesWithoutEvent(t *testing.T, connection *websocke
 		}
 		switch messageType {
 		case websocket.BinaryMessage:
-			event := new(opensplunkv1.SearchWebSocketEvent)
+			event := new(opensplunk.SearchWebSocketEvent)
 			_ = proto.Unmarshal(payload, event)
 			t.Fatalf("%s received stale application frame after tombstone removal: bytes=%d event=%+v", label, len(payload), event)
 		default:
@@ -605,11 +605,11 @@ func TestSearchWebSocketRealManagersExpireLeasedResultsArtifactsAndTombstones(t 
 		searchJobID: searchJobID,
 	}
 	subscribeExpirationTarget(t, searchConnection, searchSubscription, true)
-	initialSearch := make([]*opensplunkv1.SearchWebSocketEvent, 0, 4)
+	initialSearch := make([]*opensplunk.SearchWebSocketEvent, 0, 4)
 	for range 4 {
 		initialSearch = append(initialSearch, readExpirationTargetEvent(t, searchConnection, searchSubscription))
 	}
-	if initialSearch[0].GetSearchStateChanged().GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_RUNNING ||
+	if initialSearch[0].GetSearchStateChanged().GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_RUNNING ||
 		initialSearch[1].GetSearchProgress() == nil ||
 		initialSearch[2].GetResultSchemaAvailable() == nil ||
 		len(initialSearch[3].GetResultPreview().GetRows()) != 1 ||
@@ -631,24 +631,24 @@ func TestSearchWebSocketRealManagersExpireLeasedResultsArtifactsAndTombstones(t 
 		t,
 		searchConnection,
 		searchSubscription,
-		func(event *opensplunkv1.SearchWebSocketEvent) bool {
+		func(event *opensplunk.SearchWebSocketEvent) bool {
 			return event.GetSearchTerminal() != nil
 		},
 	)
 	if len(completedSearchEvents) != 3 ||
-		completedSearchEvents[0].GetSearchStateChanged().GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED ||
+		completedSearchEvents[0].GetSearchStateChanged().GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED ||
 		completedSearchEvents[1].GetSearchProgress() == nil ||
-		completedSearchEvents[2].GetSearchTerminal().GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED ||
+		completedSearchEvents[2].GetSearchTerminal().GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED ||
 		completedSearchEvents[2].GetSearchTerminal().GetFailure() != nil ||
 		!completedSearchEvents[2].GetSearchTerminal().GetResultsExpireAt().AsTime().Equal(completedSearch.ExpiresAt) {
 		t.Fatalf("completed retained-result projection = %+v", completedSearchEvents)
 	}
 	waitForExpirationClockWaiters(t, fixture.clock, 1)
 
-	var createdExport opensplunkv1.CreateExportJobResponse
+	var createdExport opensplunk.CreateExportJobResponse
 	fixture.post(
-		"/api/v1/search/exports/create",
-		&opensplunkv1.CreateExportJobRequest{Definition: csvExportDefinition(searchJobID)},
+		"/api/search/exports/create",
+		&opensplunk.CreateExportJobRequest{Definition: csvExportDefinition(searchJobID)},
 		&createdExport,
 	)
 	if createdExport.GetExportJob().GetExportJobId() != exportJobID {
@@ -676,14 +676,14 @@ func TestSearchWebSocketRealManagersExpireLeasedResultsArtifactsAndTombstones(t 
 		t,
 		exportConnection,
 		exportSubscription,
-		func(event *opensplunkv1.SearchWebSocketEvent) bool {
+		func(event *opensplunk.SearchWebSocketEvent) bool {
 			return event.GetExportTerminal() != nil
 		},
 	)
 	if len(initialExport) != 3 ||
-		initialExport[0].GetExportStateChanged().GetState() != opensplunkv1.ExportJobState_EXPORT_JOB_STATE_COMPLETED ||
+		initialExport[0].GetExportStateChanged().GetState() != opensplunk.ExportJobState_EXPORT_JOB_STATE_COMPLETED ||
 		initialExport[1].GetExportProgress() == nil ||
-		initialExport[2].GetExportTerminal().GetState() != opensplunkv1.ExportJobState_EXPORT_JOB_STATE_COMPLETED ||
+		initialExport[2].GetExportTerminal().GetState() != opensplunk.ExportJobState_EXPORT_JOB_STATE_COMPLETED ||
 		initialExport[2].GetExportTerminal().GetArtifact().GetRowCount() != 1 {
 		t.Fatalf("completed export projection = %+v", initialExport)
 	}
@@ -696,8 +696,8 @@ func TestSearchWebSocketRealManagersExpireLeasedResultsArtifactsAndTombstones(t 
 		"main",
 	)
 	diagnosticRequest.Definition.Spl = "index=main | where"
-	var createdDiagnostic opensplunkv1.CreateSearchJobResponse
-	fixture.post("/api/v1/search/jobs/create", diagnosticRequest, &createdDiagnostic)
+	var createdDiagnostic opensplunk.CreateSearchJobResponse
+	fixture.post("/api/search/jobs/create", diagnosticRequest, &createdDiagnostic)
 	if createdDiagnostic.GetSearchJob().GetSearchJobId() != diagnosticJobID {
 		t.Fatalf("created diagnostic search = %+v", createdDiagnostic.GetSearchJob())
 	}
@@ -722,13 +722,13 @@ func TestSearchWebSocketRealManagersExpireLeasedResultsArtifactsAndTombstones(t 
 		t,
 		diagnosticConnection,
 		diagnosticSubscription,
-		func(event *opensplunkv1.SearchWebSocketEvent) bool {
+		func(event *opensplunk.SearchWebSocketEvent) bool {
 			return event.GetSearchTerminal() != nil
 		},
 	)
 	initialFailure := initialDiagnostic[len(initialDiagnostic)-1].GetSearchTerminal().GetFailure()
 	if len(initialDiagnostic) != 3 ||
-		initialDiagnostic[0].GetSearchStateChanged().GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_FAILED ||
+		initialDiagnostic[0].GetSearchStateChanged().GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_FAILED ||
 		initialDiagnostic[1].GetSearchProgress() == nil ||
 		initialFailure == nil || len(initialFailure.GetDiagnostics()) == 0 {
 		t.Fatalf("failed diagnostic projection = %+v", initialDiagnostic)
@@ -803,7 +803,7 @@ func TestSearchWebSocketRealManagersExpireLeasedResultsArtifactsAndTombstones(t 
 		t,
 		searchConnection,
 		searchSubscription,
-		func(event *opensplunkv1.SearchWebSocketEvent) bool {
+		func(event *opensplunk.SearchWebSocketEvent) bool {
 			return event.GetSearchTerminal() != nil
 		},
 	)
@@ -815,14 +815,14 @@ func TestSearchWebSocketRealManagersExpireLeasedResultsArtifactsAndTombstones(t 
 	expiredSearchPreview := expiredSearchEvents[2].GetResultPreview()
 	expiredSearchTerminal := expiredSearchEvents[3].GetSearchTerminal()
 	if expiredSearchState.GetSearchJobId() != searchJobID ||
-		expiredSearchState.GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_EXPIRED ||
+		expiredSearchState.GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_EXPIRED ||
 		expiredSearchProgress == nil ||
 		expiredSearchPreview.GetSearchJobId() != searchJobID ||
-		expiredSearchPreview.GetUpdateMode() != opensplunkv1.PreviewUpdateMode_PREVIEW_UPDATE_MODE_RESET ||
+		expiredSearchPreview.GetUpdateMode() != opensplunk.PreviewUpdateMode_PREVIEW_UPDATE_MODE_RESET ||
 		len(expiredSearchPreview.GetRows()) != 0 ||
 		expiredSearchPreview.GetTruncated() ||
 		expiredSearchTerminal.GetSearchJobId() != searchJobID ||
-		expiredSearchTerminal.GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_EXPIRED ||
+		expiredSearchTerminal.GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_EXPIRED ||
 		expiredSearchTerminal.GetFailure() != nil {
 		t.Fatalf("expired retained-result projection = %+v", expiredSearchEvents)
 	}
@@ -831,14 +831,14 @@ func TestSearchWebSocketRealManagersExpireLeasedResultsArtifactsAndTombstones(t 
 		t,
 		exportConnection,
 		exportSubscription,
-		func(event *opensplunkv1.SearchWebSocketEvent) bool {
+		func(event *opensplunk.SearchWebSocketEvent) bool {
 			return event.GetExportTerminal() != nil
 		},
 	)
 	if len(expiredExportEvents) != 3 ||
-		expiredExportEvents[0].GetExportStateChanged().GetState() != opensplunkv1.ExportJobState_EXPORT_JOB_STATE_EXPIRED ||
+		expiredExportEvents[0].GetExportStateChanged().GetState() != opensplunk.ExportJobState_EXPORT_JOB_STATE_EXPIRED ||
 		expiredExportEvents[1].GetExportProgress() == nil ||
-		expiredExportEvents[2].GetExportTerminal().GetState() != opensplunkv1.ExportJobState_EXPORT_JOB_STATE_EXPIRED ||
+		expiredExportEvents[2].GetExportTerminal().GetState() != opensplunk.ExportJobState_EXPORT_JOB_STATE_EXPIRED ||
 		expiredExportEvents[2].GetExportTerminal().GetArtifact() != nil {
 		t.Fatalf("expired export projection = %+v", expiredExportEvents)
 	}
@@ -850,8 +850,8 @@ func TestSearchWebSocketRealManagersExpireLeasedResultsArtifactsAndTombstones(t 
 		searchWebSocketTargetSubscribeCommand(
 			"stale-artifact-replay",
 			"stale-artifact-subscription",
-			&opensplunkv1.JobTarget{
-				Target: &opensplunkv1.JobTarget_ExportJobId{ExportJobId: exportJobID},
+			&opensplunk.JobTarget{
+				Target: &opensplunk.JobTarget_ExportJobId{ExportJobId: exportJobID},
 			},
 			staleArtifactCheckpoint,
 			false,
@@ -870,7 +870,7 @@ func TestSearchWebSocketRealManagersExpireLeasedResultsArtifactsAndTombstones(t 
 	staleArtifactResync := readSearchWebSocketEvent(t, staleArtifactConnection)
 	if staleArtifactResync.GetSequence() != 0 ||
 		staleArtifactResync.GetResynchronizationRequired().GetReason() !=
-			opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED ||
+			opensplunk.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED ||
 		staleArtifactResync.GetResynchronizationRequired().GetTarget().GetExportJobId() != exportJobID {
 		t.Fatalf("stale-artifact replay response = %+v", staleArtifactResync)
 	}
@@ -879,15 +879,15 @@ func TestSearchWebSocketRealManagersExpireLeasedResultsArtifactsAndTombstones(t 
 		t,
 		diagnosticConnection,
 		diagnosticSubscription,
-		func(event *opensplunkv1.SearchWebSocketEvent) bool {
+		func(event *opensplunk.SearchWebSocketEvent) bool {
 			return event.GetSearchTerminal() != nil
 		},
 	)
 	expiredDiagnosticTerminal := expiredDiagnosticEvents[len(expiredDiagnosticEvents)-1].GetSearchTerminal()
 	if len(expiredDiagnosticEvents) != 3 ||
-		expiredDiagnosticEvents[0].GetSearchStateChanged().GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_EXPIRED ||
+		expiredDiagnosticEvents[0].GetSearchStateChanged().GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_EXPIRED ||
 		expiredDiagnosticEvents[1].GetSearchProgress() == nil ||
-		expiredDiagnosticTerminal.GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_EXPIRED ||
+		expiredDiagnosticTerminal.GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_EXPIRED ||
 		len(expiredDiagnosticTerminal.GetFailure().GetDiagnostics()) == 0 {
 		t.Fatalf("expired diagnostic projection = %+v", expiredDiagnosticEvents)
 	}

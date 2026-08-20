@@ -8,7 +8,7 @@ import (
 	"slices"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 )
 
@@ -97,7 +97,7 @@ func TestPublicationActiveValidationPreservesMutationCommitmentGolden(t *testing
 	if authority.state == nil {
 		t.Fatal("mutation compatibility authority is absent")
 	}
-	const want = "11079f4fa8ab70f7e80e29b4ce34a717725b15b4ff0d84c3c87f5fa4b7e1e547"
+	const want = "2992add356e000c554be7856213fd0cd29a0c71a01a37be7d4c35cdf01dae35d"
 	if got := fmt.Sprintf("%x", authority.state.transitionCommitment); got != want {
 		t.Fatalf("mutation transition commitment = %s, want %s", got, want)
 	}
@@ -292,7 +292,7 @@ func TestValidatePublicationActiveCandidateChecksBaselineBeforeCandidateConflict
 		ordinal:        0,
 		targetObjectID: "ko-validation-baseline-target",
 		targetVersion:  1,
-		role:           opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
+		role:           opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
 	}}
 	input.expectedDependencyCount = 1
 	decision, err = validatePublicationActiveCandidate(t.Context(), input)
@@ -655,7 +655,7 @@ func publicationActiveValidationTargetAbsentInventory(
 			ordinal:        0,
 			targetObjectID: target.object.KnowledgeObjectID,
 			targetVersion:  int64(target.object.Version),
-			role:           opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
+			role:           opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
 		}},
 	}
 	candidate := publicationWinner{object: publicationTestObject(
@@ -773,7 +773,7 @@ func publicationActiveValidationMixedConflictInventory(
 			ordinal:        0,
 			targetObjectID: target.object.KnowledgeObjectID,
 			targetVersion:  int64(target.object.Version),
-			role:           opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
+			role:           opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
 		}},
 	}
 	conflicting := publicationWinner{
@@ -790,8 +790,8 @@ func publicationActiveValidationMixedConflictInventory(
 	candidateDefinition := dependencyExtractionDefinition(
 		"app-a", "validation-mixed-slot", SharingScopeApp, nil, "", "replacement_input",
 	)
-	candidateDefinition.Selector = &opensplunkv1.KnowledgeSelector{
-		IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{
+	candidateDefinition.Selector = &opensplunk.KnowledgeSelector{
+		IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{
 			{Value: absentIndex},
 			{Value: conflictIndex},
 		},

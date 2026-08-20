@@ -7,9 +7,9 @@ import {
   SearchWebSocketEvent as SearchWebSocketEventCodec,
   type SearchWebSocketProtocolError,
   SearchWebSocketProtocolErrorCode,
-} from "@/gen/ts/open_splunk/v1/search_ws";
+} from "@/gen/ts/open_splunk/search_ws";
 
-export const DEFAULT_SEARCH_WEBSOCKET_PATH = "/api/v1/search/ws";
+export const DEFAULT_SEARCH_WEBSOCKET_PATH = "/api/search/ws";
 
 const SOCKET_CONNECTING = 0;
 const SOCKET_OPEN = 1;
@@ -214,7 +214,7 @@ function validateEventEnvelope(event: SearchWebSocketEvent): string | undefined 
   const payload = event.payload?.$case;
   if (payload === undefined) {
     // ts-proto intentionally discards unknown oneof fields. Preserve protocol
-    // forward compatibility by treating a positively sequenced, fully routed
+    // unknown-event handling by treating a positively sequenced, fully routed
     // unknown variant as target-scoped opaque progress. Sequence-zero unknown
     // controls are likewise safe for generic observers to ignore.
     if (!isUnknownTargetEvent(event)) return undefined;

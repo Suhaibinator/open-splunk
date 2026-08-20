@@ -6,7 +6,7 @@ import (
 	"io"
 	"net/http"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgevalidation"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
@@ -28,13 +28,13 @@ func newValidateKnowledgeObjectCodec() *validateKnowledgeObjectCodec {
 	return &validateKnowledgeObjectCodec{}
 }
 
-func (*validateKnowledgeObjectCodec) NewRequest() *opensplunkv1.ValidateKnowledgeObjectRequest {
-	return &opensplunkv1.ValidateKnowledgeObjectRequest{}
+func (*validateKnowledgeObjectCodec) NewRequest() *opensplunk.ValidateKnowledgeObjectRequest {
+	return &opensplunk.ValidateKnowledgeObjectRequest{}
 }
 
 func (codec *validateKnowledgeObjectCodec) Decode(
 	request *http.Request,
-) (*opensplunkv1.ValidateKnowledgeObjectRequest, error) {
+) (*opensplunk.ValidateKnowledgeObjectRequest, error) {
 	if request == nil || request.Body == nil {
 		return nil, errors.New("knowledge validation request body is unavailable")
 	}
@@ -51,7 +51,7 @@ func (codec *validateKnowledgeObjectCodec) Decode(
 
 func (*validateKnowledgeObjectCodec) DecodeBytes(
 	data []byte,
-) (*opensplunkv1.ValidateKnowledgeObjectRequest, error) {
+) (*opensplunk.ValidateKnowledgeObjectRequest, error) {
 	if int64(len(data)) > maximumKnowledgeMutationRequestBytes {
 		return nil, &http.MaxBytesError{Limit: maximumKnowledgeMutationRequestBytes}
 	}
@@ -70,12 +70,12 @@ func (*validateKnowledgeObjectCodec) DecodeBytes(
 	if err != nil {
 		return nil, err
 	}
-	result := &opensplunkv1.ValidateKnowledgeObjectRequest{
+	result := &opensplunk.ValidateKnowledgeObjectRequest{
 		Definition:        candidate.candidateDefinition,
 		KnowledgeObjectId: candidate.objectID,
 		ExpectedVersion:   candidate.expectedVersion,
 		UpdateMask:        candidate.updateMask,
-		Intent:            opensplunkv1.KnowledgeValidationIntent(int32(intent)), // #nosec G115 -- protobuf varints intentionally retain generated unmarshal truncation semantics.
+		Intent:            opensplunk.KnowledgeValidationIntent(int32(intent)), // #nosec G115 -- protobuf varints intentionally retain generated unmarshal truncation semantics.
 	}
 	setValidateUnknown(result, candidate.unknown)
 	return result, nil
@@ -91,7 +91,7 @@ type sealedValidateKnowledgeObjectResponse[Message proto.Message] struct {
 	release func()
 }
 
-type serializedValidateKnowledgeObjectResponse = sealedValidateKnowledgeObjectResponse[*opensplunkv1.ValidateKnowledgeObjectResponse]
+type serializedValidateKnowledgeObjectResponse = sealedValidateKnowledgeObjectResponse[*opensplunk.ValidateKnowledgeObjectResponse]
 
 func newSerializedValidateKnowledgeObjectResponse(
 	ctx context.Context,

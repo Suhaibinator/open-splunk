@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/SRouter/pkg/router"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/searchanalysis"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -121,9 +121,9 @@ func TestSearchFieldsRoundTripPreservesScopeRequestAndProfiles(t *testing.T) {
 		SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, SearchFields: service,
 		WebUI: testUI(), TenantID: "tenant-fields", OwnerID: "owner-fields",
 	})
-	response := postProto(t, handler, searchFieldsListPath, &opensplunkv1.ListSearchFieldsRequest{
+	response := postProto(t, handler, searchFieldsListPath, &opensplunk.ListSearchFieldsRequest{
 		SearchJobId: "  job-1  ",
-		Page: &opensplunkv1.PageRequest{
+		Page: &opensplunk.PageRequest{
 			PageSize: &pageSize, PageToken: &pageToken, IncludeTotalSize: true,
 		},
 		NameFilter: &nameFilter, InterestingOnly: true,
@@ -137,7 +137,7 @@ func TestSearchFieldsRoundTripPreservesScopeRequestAndProfiles(t *testing.T) {
 		t.Fatalf("field headers = %v", response.Header())
 	}
 
-	var decoded opensplunkv1.ListSearchFieldsResponse
+	var decoded opensplunk.ListSearchFieldsResponse
 	unmarshalResponse(t, response, &decoded)
 	if len(decoded.GetFields()) != 2 || decoded.GetPage() == nil ||
 		decoded.GetPage().GetNextPageToken() != "next-exact" ||
@@ -147,10 +147,10 @@ func TestSearchFieldsRoundTripPreservesScopeRequestAndProfiles(t *testing.T) {
 	}
 	first := decoded.GetFields()[0]
 	if first.GetFieldName() != "path latency" || first.GetDisplayName() != "Path latency" ||
-		first.GetValueType() != opensplunkv1.ValueType_VALUE_TYPE_DOUBLE ||
-		!slices.Equal(first.GetObservedValueTypes(), []opensplunkv1.ValueType{
-			opensplunkv1.ValueType_VALUE_TYPE_NULL,
-			opensplunkv1.ValueType_VALUE_TYPE_DOUBLE,
+		first.GetValueType() != opensplunk.ValueType_VALUE_TYPE_DOUBLE ||
+		!slices.Equal(first.GetObservedValueTypes(), []opensplunk.ValueType{
+			opensplunk.ValueType_VALUE_TYPE_NULL,
+			opensplunk.ValueType_VALUE_TYPE_DOUBLE,
 		}) ||
 		first.GetEventCount() != 10 || first.GetNullCount() != 2 || first.GetMissingCount() != 3 ||
 		first.DistinctCount == nil || first.GetDistinctCount() != distinct ||
@@ -158,7 +158,7 @@ func TestSearchFieldsRoundTripPreservesScopeRequestAndProfiles(t *testing.T) {
 		t.Fatalf("first field = %+v", first)
 	}
 	second := decoded.GetFields()[1]
-	if second.GetValueType() != opensplunkv1.ValueType_VALUE_TYPE_UINT64 ||
+	if second.GetValueType() != opensplunk.ValueType_VALUE_TYPE_UINT64 ||
 		second.DistinctCount != nil || second.GetDistinctCountIsApproximate() {
 		t.Fatalf("second field = %+v", second)
 	}
@@ -175,11 +175,11 @@ func TestSearchFieldsPreservesOmittedPageOptionsAndOmitsUnrequestedTotal(t *test
 			TotalFields: 1,
 		}, nil
 	}
-	response := postProto(t, searchFieldsTestHandler(t, service), searchFieldsListPath, &opensplunkv1.ListSearchFieldsRequest{SearchJobId: "job-1"})
+	response := postProto(t, searchFieldsTestHandler(t, service), searchFieldsListPath, &opensplunk.ListSearchFieldsRequest{SearchJobId: "job-1"})
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var decoded opensplunkv1.ListSearchFieldsResponse
+	var decoded opensplunk.ListSearchFieldsResponse
 	unmarshalResponse(t, response, &decoded)
 	if decoded.GetPage() == nil || decoded.GetPage().TotalSize != nil || decoded.GetPage().GetTotalSizeExact() {
 		t.Fatalf("unrequested total was exposed: %+v", decoded.GetPage())
@@ -196,19 +196,19 @@ func TestSearchFieldsRouteFeatureAndTrustBoundary(t *testing.T) {
 	}
 	handler := newTestHandler(t, Config{
 		SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, SearchFields: service, WebUI: testUI(),
-		Bootstrap: BootstrapConfig{Features: []opensplunkv1.ServerFeature{
-			opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH,
-			opensplunkv1.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY,
-			opensplunkv1.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY,
+		Bootstrap: BootstrapConfig{Features: []opensplunk.ServerFeature{
+			opensplunk.ServerFeature_SERVER_FEATURE_SEARCH,
+			opensplunk.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY,
+			opensplunk.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY,
 		}},
 	})
 
-	bootstrapResponse := postProto(t, handler, "/api/v1/system/bootstrap", &opensplunkv1.GetSystemBootstrapRequest{})
-	var bootstrap opensplunkv1.GetSystemBootstrapResponse
+	bootstrapResponse := postProto(t, handler, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{})
+	var bootstrap opensplunk.GetSystemBootstrapResponse
 	unmarshalResponse(t, bootstrapResponse, &bootstrap)
 	count := 0
 	for _, feature := range bootstrap.GetFeatures() {
-		if feature == opensplunkv1.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY {
+		if feature == opensplunk.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY {
 			count++
 		}
 	}
@@ -216,7 +216,7 @@ func TestSearchFieldsRouteFeatureAndTrustBoundary(t *testing.T) {
 		t.Fatalf("field discovery feature/limit = %v/%d", bootstrap.GetFeatures(), bootstrap.GetLimits().GetMaximumFieldSummaryValues())
 	}
 
-	response := postProto(t, handler, searchFieldsListPath+"/extra", &opensplunkv1.ListSearchFieldsRequest{SearchJobId: "job"})
+	response := postProto(t, handler, searchFieldsListPath+"/extra", &opensplunk.ListSearchFieldsRequest{SearchJobId: "job"})
 	if response.Code != http.StatusNotFound || service.callCount() != 0 {
 		t.Fatalf("suffix status/calls = %d/%d", response.Code, service.callCount())
 	}
@@ -234,7 +234,7 @@ func TestSearchFieldsRouteFeatureAndTrustBoundary(t *testing.T) {
 		t.Fatalf("media status/calls = %d/%d", response.Code, service.callCount())
 	}
 
-	payload, err := proto.Marshal(&opensplunkv1.ListSearchFieldsRequest{SearchJobId: "job"})
+	payload, err := proto.Marshal(&opensplunk.ListSearchFieldsRequest{SearchJobId: "job"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,17 +264,17 @@ func TestSearchFieldsRouteFeatureAndTrustBoundary(t *testing.T) {
 
 	disabled := newTestHandler(t, Config{
 		SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, WebUI: testUI(),
-		Bootstrap: BootstrapConfig{Features: []opensplunkv1.ServerFeature{
-			opensplunkv1.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY,
+		Bootstrap: BootstrapConfig{Features: []opensplunk.ServerFeature{
+			opensplunk.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY,
 		}},
 	})
-	response = postProto(t, disabled, searchFieldsListPath, &opensplunkv1.ListSearchFieldsRequest{SearchJobId: "job"})
+	response = postProto(t, disabled, searchFieldsListPath, &opensplunk.ListSearchFieldsRequest{SearchJobId: "job"})
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("disabled route status = %d, body = %s", response.Code, response.Body.String())
 	}
-	bootstrapResponse = postProto(t, disabled, "/api/v1/system/bootstrap", &opensplunkv1.GetSystemBootstrapRequest{})
+	bootstrapResponse = postProto(t, disabled, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{})
 	unmarshalResponse(t, bootstrapResponse, &bootstrap)
-	if slices.Contains(bootstrap.GetFeatures(), opensplunkv1.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY) {
+	if slices.Contains(bootstrap.GetFeatures(), opensplunk.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY) {
 		t.Fatalf("disabled field discovery advertised in %v", bootstrap.GetFeatures())
 	}
 }
@@ -286,17 +286,17 @@ func TestSearchFieldsInputValidation(t *testing.T) {
 	aboveBrowser := defaultMaximumPageSize + 1
 	tests := []struct {
 		name       string
-		request    *opensplunkv1.ListSearchFieldsRequest
+		request    *opensplunk.ListSearchFieldsRequest
 		wantStatus int
 		wantCalls  int
 		wantPage   uint32
 	}{
-		{name: "missing ID", request: &opensplunkv1.ListSearchFieldsRequest{}, wantStatus: http.StatusBadRequest},
-		{name: "blank ID", request: &opensplunkv1.ListSearchFieldsRequest{SearchJobId: " \t\n "}, wantStatus: http.StatusBadRequest},
-		{name: "zero page", request: &opensplunkv1.ListSearchFieldsRequest{SearchJobId: "job", Page: &opensplunkv1.PageRequest{PageSize: &zero}}, wantStatus: http.StatusBadRequest},
-		{name: "page above endpoint maximum is clamped", request: &opensplunkv1.ListSearchFieldsRequest{SearchJobId: "job", Page: &opensplunkv1.PageRequest{PageSize: &tooMany}}, wantStatus: http.StatusUnprocessableEntity, wantCalls: 1, wantPage: 10},
-		{name: "page above browser maximum", request: &opensplunkv1.ListSearchFieldsRequest{SearchJobId: "job", Page: &opensplunkv1.PageRequest{PageSize: &aboveBrowser}}, wantStatus: http.StatusBadRequest},
-		{name: "valid exact endpoint maximum", request: &opensplunkv1.ListSearchFieldsRequest{SearchJobId: "job", Page: &opensplunkv1.PageRequest{PageSize: &exact}}, wantStatus: http.StatusUnprocessableEntity, wantCalls: 1, wantPage: 10},
+		{name: "missing ID", request: &opensplunk.ListSearchFieldsRequest{}, wantStatus: http.StatusBadRequest},
+		{name: "blank ID", request: &opensplunk.ListSearchFieldsRequest{SearchJobId: " \t\n "}, wantStatus: http.StatusBadRequest},
+		{name: "zero page", request: &opensplunk.ListSearchFieldsRequest{SearchJobId: "job", Page: &opensplunk.PageRequest{PageSize: &zero}}, wantStatus: http.StatusBadRequest},
+		{name: "page above endpoint maximum is clamped", request: &opensplunk.ListSearchFieldsRequest{SearchJobId: "job", Page: &opensplunk.PageRequest{PageSize: &tooMany}}, wantStatus: http.StatusUnprocessableEntity, wantCalls: 1, wantPage: 10},
+		{name: "page above browser maximum", request: &opensplunk.ListSearchFieldsRequest{SearchJobId: "job", Page: &opensplunk.PageRequest{PageSize: &aboveBrowser}}, wantStatus: http.StatusBadRequest},
+		{name: "valid exact endpoint maximum", request: &opensplunk.ListSearchFieldsRequest{SearchJobId: "job", Page: &opensplunk.PageRequest{PageSize: &exact}}, wantStatus: http.StatusUnprocessableEntity, wantCalls: 1, wantPage: 10},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -352,7 +352,7 @@ func TestSearchFieldsErrorMappingIsSanitized(t *testing.T) {
 					return searchanalysis.FieldPage{}, fmt.Errorf("secret backend detail: %w", test.err)
 				},
 			}
-			response := postProto(t, searchFieldsTestHandler(t, service), searchFieldsListPath, &opensplunkv1.ListSearchFieldsRequest{SearchJobId: "job"})
+			response := postProto(t, searchFieldsTestHandler(t, service), searchFieldsListPath, &opensplunk.ListSearchFieldsRequest{SearchJobId: "job"})
 			if response.Code != test.want {
 				t.Fatalf("status = %d, want %d; body = %s", response.Code, test.want, response.Body.String())
 			}
@@ -550,7 +550,7 @@ func TestSearchFieldsExecutionDoesNotOccupySerializationCapacity(t *testing.T) {
 		SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, SearchFields: service, WebUI: testUI(),
 		MaximumConcurrentResponses: 1,
 	})
-	payload, err := proto.Marshal(&opensplunkv1.ListSearchFieldsRequest{SearchJobId: "job"})
+	payload, err := proto.Marshal(&opensplunk.ListSearchFieldsRequest{SearchJobId: "job"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -568,7 +568,7 @@ func TestSearchFieldsExecutionDoesNotOccupySerializationCapacity(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("first field request did not enter the service")
 	}
-	second := postProto(t, handler, searchFieldsListPath, &opensplunkv1.ListSearchFieldsRequest{SearchJobId: "job"})
+	second := postProto(t, handler, searchFieldsListPath, &opensplunk.ListSearchFieldsRequest{SearchJobId: "job"})
 	if second.Code != http.StatusOK || service.callCount() != 2 {
 		t.Fatalf("second status/calls = %d/%d, body = %s", second.Code, service.callCount(), second.Body.String())
 	}
@@ -599,7 +599,7 @@ func TestSearchFieldsSerializationCapacityIsNonblocking(t *testing.T) {
 		serializationGate: make(chan struct{}, 1),
 	}
 	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, searchFieldsListPath, nil)
-	input := &opensplunkv1.ListSearchFieldsRequest{SearchJobId: "job"}
+	input := &opensplunk.ListSearchFieldsRequest{SearchJobId: "job"}
 	first, err := handler.listSearchFields(request, input)
 	if err != nil || first == nil || len(handler.serializationGate) != 1 {
 		t.Fatalf("first response/error/gate = %+v/%v/%d", first, err, len(handler.serializationGate))
@@ -630,7 +630,7 @@ func TestSearchFieldsCancellationAfterServiceResultReleasesSerializationPermit(t
 		SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, SearchFields: service, WebUI: testUI(),
 		MaximumConcurrentResponses: 1,
 	})
-	payload, err := proto.Marshal(&opensplunkv1.ListSearchFieldsRequest{SearchJobId: "job"})
+	payload, err := proto.Marshal(&opensplunk.ListSearchFieldsRequest{SearchJobId: "job"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -650,7 +650,7 @@ func TestSearchFieldsCancellationAfterServiceResultReleasesSerializationPermit(t
 		}, nil
 	}
 	service.mu.Unlock()
-	response = postProto(t, handler, searchFieldsListPath, &opensplunkv1.ListSearchFieldsRequest{SearchJobId: "job"})
+	response = postProto(t, handler, searchFieldsListPath, &opensplunk.ListSearchFieldsRequest{SearchJobId: "job"})
 	if response.Code != http.StatusOK {
 		t.Fatalf("follow-up status = %d, body = %s", response.Code, response.Body.String())
 	}
@@ -675,7 +675,7 @@ func TestSearchFieldsMaximumValidResponseFitsByteCap(t *testing.T) {
 			return searchanalysis.FieldPage{Fields: profiles, TotalFields: uint64(fieldCount)}, nil
 		},
 	}
-	response := postProto(t, searchFieldsTestHandler(t, service), searchFieldsListPath, &opensplunkv1.ListSearchFieldsRequest{SearchJobId: "job"})
+	response := postProto(t, searchFieldsTestHandler(t, service), searchFieldsListPath, &opensplunk.ListSearchFieldsRequest{SearchJobId: "job"})
 	if response.Code != http.StatusOK || response.Body.Len() <= 8<<20 || response.Body.Len() > maximumSearchFieldResponseBytes {
 		t.Fatalf("status/body bytes = %d/%d", response.Code, response.Body.Len())
 	}

@@ -7,7 +7,7 @@ import (
 	"errors"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 )
 
@@ -109,7 +109,7 @@ type Object struct {
 	Version           uint64
 	SharingScope      SharingScope
 	State             State
-	Definition        *opensplunkv1.KnowledgeObjectDefinition
+	Definition        *opensplunk.KnowledgeObjectDefinition
 	DefinitionSHA256  []byte
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
@@ -180,10 +180,10 @@ type CurrentRegistryAuthority struct {
 	State             State
 }
 
-type DependencyRole = opensplunkv1.KnowledgeDependencyRole
+type DependencyRole = opensplunk.KnowledgeDependencyRole
 
 const (
-	DependencyRoleFieldInput = opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT
+	DependencyRoleFieldInput = opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT
 )
 
 // DependencyEdge is one direct persisted object-to-object edge. Ordinal is a

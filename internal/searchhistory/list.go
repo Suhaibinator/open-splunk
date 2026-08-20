@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -21,7 +21,7 @@ import (
 type normalizedFilter struct {
 	scope          AccessScope
 	appID          *string
-	states         []opensplunkv1.SearchJobState
+	states         []opensplunk.SearchJobState
 	text           *string
 	savedSearchID  *string
 	createdAfter   *int64
@@ -34,8 +34,8 @@ type normalizedListRequest struct {
 	pageSize     uint32
 	pageToken    string
 	includeTotal bool
-	sortBy       opensplunkv1.SearchHistorySortBy
-	direction    opensplunkv1.SortDirection
+	sortBy       opensplunk.SearchHistorySortBy
+	direction    opensplunk.SortDirection
 }
 
 // List returns an owner-scoped keyset page. SQLite's lower() makes text
@@ -72,7 +72,7 @@ func (store *Store) List(ctx context.Context, scope AccessScope, request ListReq
 		return ListResult{}, mapContextError(ctx, "list search history", query.Error)
 	}
 
-	result := ListResult{Entries: make([]*opensplunkv1.SearchHistoryEntry, 0, normalized.pageSize)}
+	result := ListResult{Entries: make([]*opensplunk.SearchHistoryEntry, 0, normalized.pageSize)}
 	for _, record := range records {
 		entry, err := historyEntryFromRecord(record)
 		if err != nil {
@@ -134,17 +134,17 @@ func normalizeListRequest(scope AccessScope, request ListRequest) (normalizedLis
 		return normalizedListRequest{}, err
 	}
 	sortBy := request.SortBy
-	if sortBy == opensplunkv1.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_UNSPECIFIED {
-		sortBy = opensplunkv1.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_CREATED_AT
+	if sortBy == opensplunk.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_UNSPECIFIED {
+		sortBy = opensplunk.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_CREATED_AT
 	}
-	if sortBy < opensplunkv1.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_CREATED_AT || sortBy > opensplunkv1.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_MATCHED_EVENTS {
+	if sortBy < opensplunk.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_CREATED_AT || sortBy > opensplunk.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_MATCHED_EVENTS {
 		return normalizedListRequest{}, invalid("search-history sort field is invalid")
 	}
 	direction := request.SortDirection
-	if direction == opensplunkv1.SortDirection_SORT_DIRECTION_UNSPECIFIED {
-		direction = opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING
+	if direction == opensplunk.SortDirection_SORT_DIRECTION_UNSPECIFIED {
+		direction = opensplunk.SortDirection_SORT_DIRECTION_DESCENDING
 	}
-	if direction != opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING && direction != opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING {
+	if direction != opensplunk.SortDirection_SORT_DIRECTION_ASCENDING && direction != opensplunk.SortDirection_SORT_DIRECTION_DESCENDING {
 		return normalizedListRequest{}, invalid("sort direction is invalid")
 	}
 	return normalizedListRequest{
@@ -241,7 +241,7 @@ func listFilterHash(request normalizedListRequest) (string, error) {
 		states[index] = int32(state)
 	}
 	payload, err := json.Marshal(filterFingerprint{
-		Version: 1, TenantID: request.filter.scope.TenantID,
+		Version: historyCursorVersion, TenantID: request.filter.scope.TenantID,
 		OwnerID: request.filter.scope.OwnerID, AppID: request.filter.appID,
 		States: states, Text: request.filter.text,
 		SavedSearchID: request.filter.savedSearchID,
@@ -289,7 +289,7 @@ func historyListQuery(database *gorm.DB, request normalizedListRequest, cursor l
 	column := sortColumn(request.sortBy)
 	comparison := ">"
 	descending := false
-	if request.direction == opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING {
+	if request.direction == opensplunk.SortDirection_SORT_DIRECTION_DESCENDING {
 		comparison = "<"
 		descending = true
 	}
@@ -305,26 +305,26 @@ func historyListQuery(database *gorm.DB, request normalizedListRequest, cursor l
 		Limit(int(request.pageSize) + 1)
 }
 
-func sortColumn(sortBy opensplunkv1.SearchHistorySortBy) string {
+func sortColumn(sortBy opensplunk.SearchHistorySortBy) string {
 	switch sortBy {
-	case opensplunkv1.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_FINISHED_AT:
+	case opensplunk.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_FINISHED_AT:
 		return "finished_at_unix_micro"
-	case opensplunkv1.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_DURATION:
+	case opensplunk.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_DURATION:
 		return "duration_nanoseconds"
-	case opensplunkv1.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_MATCHED_EVENTS:
+	case opensplunk.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_MATCHED_EVENTS:
 		return "matched_events"
 	default:
 		return "created_at_unix_micro"
 	}
 }
 
-func entrySortKey(entry *opensplunkv1.SearchHistoryEntry, sortBy opensplunkv1.SearchHistorySortBy) (int64, error) {
+func entrySortKey(entry *opensplunk.SearchHistoryEntry, sortBy opensplunk.SearchHistorySortBy) (int64, error) {
 	switch sortBy {
-	case opensplunkv1.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_FINISHED_AT:
+	case opensplunk.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_FINISHED_AT:
 		return entry.FinishedAt.AsTime().UnixMicro(), nil
-	case opensplunkv1.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_DURATION:
+	case opensplunk.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_DURATION:
 		return int64(entry.Duration.AsDuration()), nil
-	case opensplunkv1.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_MATCHED_EVENTS:
+	case opensplunk.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_MATCHED_EVENTS:
 		if entry.MatchedEvents > math.MaxInt64 {
 			return 0, errors.New("search-history matched event count exceeds cursor range")
 		}

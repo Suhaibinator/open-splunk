@@ -13,7 +13,7 @@ import (
 	"testing/fstest"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -322,11 +322,11 @@ func (runtimeSuggestionIndexes) GetIndexByName(
 
 type runtimeSavedSearches struct{}
 
-func (runtimeSavedSearches) Create(context.Context, savedobjects.AccessScope, *opensplunkv1.SavedSearchDefinition) (*opensplunkv1.SavedSearch, error) {
+func (runtimeSavedSearches) Create(context.Context, savedobjects.AccessScope, *opensplunk.SavedSearchDefinition) (*opensplunk.SavedSearch, error) {
 	return nil, control.ErrNotFound
 }
 
-func (runtimeSavedSearches) Get(context.Context, savedobjects.AccessScope, string) (*opensplunkv1.SavedSearch, error) {
+func (runtimeSavedSearches) Get(context.Context, savedobjects.AccessScope, string) (*opensplunk.SavedSearch, error) {
 	return nil, control.ErrNotFound
 }
 
@@ -334,11 +334,11 @@ func (runtimeSavedSearches) List(context.Context, savedobjects.AccessScope, save
 	return savedobjects.ListResult{}, nil
 }
 
-func (runtimeSavedSearches) Update(context.Context, savedobjects.AccessScope, string, uint64, *opensplunkv1.SavedSearchDefinition, *fieldmaskpb.FieldMask) (*opensplunkv1.SavedSearch, error) {
+func (runtimeSavedSearches) Update(context.Context, savedobjects.AccessScope, string, uint64, *opensplunk.SavedSearchDefinition, *fieldmaskpb.FieldMask) (*opensplunk.SavedSearch, error) {
 	return nil, control.ErrNotFound
 }
 
-func (runtimeSavedSearches) Duplicate(context.Context, savedobjects.AccessScope, string, string, *string) (*opensplunkv1.SavedSearch, error) {
+func (runtimeSavedSearches) Duplicate(context.Context, savedobjects.AccessScope, string, string, *string) (*opensplunk.SavedSearch, error) {
 	return nil, control.ErrNotFound
 }
 
@@ -353,31 +353,31 @@ func TestRuntimeHTTPHandlerAdvertisesEnforcedTimelineService(t *testing.T) {
 		t.Fatalf("newRuntimeHTTPHandler: %v", err)
 	}
 
-	payload, err := proto.Marshal(&opensplunkv1.GetSystemBootstrapRequest{})
+	payload, err := proto.Marshal(&opensplunk.GetSystemBootstrapRequest{})
 	if err != nil {
 		t.Fatalf("marshal bootstrap request: %v", err)
 	}
-	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "http://127.0.0.1/api/v1/system/bootstrap", bytes.NewReader(payload))
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "http://127.0.0.1/api/system/bootstrap", bytes.NewReader(payload))
 	request.Header.Set("Content-Type", "application/x-protobuf")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("bootstrap status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var decoded opensplunkv1.GetSystemBootstrapResponse
+	var decoded opensplunk.GetSystemBootstrapResponse
 	if err := proto.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
 		t.Fatalf("unmarshal bootstrap response: %v", err)
 	}
-	if !slices.Contains(decoded.GetFeatures(), opensplunkv1.ServerFeature_SERVER_FEATURE_TIMELINE) {
+	if !slices.Contains(decoded.GetFeatures(), opensplunk.ServerFeature_SERVER_FEATURE_TIMELINE) {
 		t.Fatalf("bootstrap features = %v, want timeline", decoded.GetFeatures())
 	}
 	if decoded.GetLimits().GetMaximumTimelineBuckets() != 1_000 {
 		t.Fatalf("maximum timeline buckets = %d, want enforcing service default 1000", decoded.GetLimits().GetMaximumTimelineBuckets())
 	}
-	if !slices.Contains(decoded.GetFeatures(), opensplunkv1.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY) {
+	if !slices.Contains(decoded.GetFeatures(), opensplunk.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY) {
 		t.Fatalf("bootstrap features = %v, want field discovery", decoded.GetFeatures())
 	}
-	if slices.Contains(decoded.GetFeatures(), opensplunkv1.ServerFeature_SERVER_FEATURE_INDEX_ADMIN) {
+	if slices.Contains(decoded.GetFeatures(), opensplunk.ServerFeature_SERVER_FEATURE_INDEX_ADMIN) {
 		t.Fatalf(
 			"partial index administration advertised as complete: %v",
 			decoded.GetFeatures(),
@@ -423,10 +423,10 @@ func TestRuntimeHTTPHandlerServesComposedSearchSuggestionsWithoutCreatingJob(t *
 	source := "index=main | head"
 	cursor := len("index=main | he")
 	earliest, latest, timezone := "-24h", "now", "UTC"
-	payload, err := proto.Marshal(&opensplunkv1.GetSearchSuggestionsRequest{
+	payload, err := proto.Marshal(&opensplunk.GetSearchSuggestionsRequest{
 		Spl:              source,
 		CursorByteOffset: uint64(cursor),
-		TimeRange: &opensplunkv1.TimeRangeSpec{
+		TimeRange: &opensplunk.TimeRangeSpec{
 			Earliest: &earliest,
 			Latest:   &latest,
 			Timezone: &timezone,
@@ -439,7 +439,7 @@ func TestRuntimeHTTPHandlerServesComposedSearchSuggestionsWithoutCreatingJob(t *
 	request := httptest.NewRequestWithContext(
 		context.Background(),
 		http.MethodPost,
-		"http://127.0.0.1/api/v1/search/suggestions",
+		"http://127.0.0.1/api/search/suggestions",
 		bytes.NewReader(payload),
 	)
 	request.Header.Set("Content-Type", "application/x-protobuf")
@@ -448,13 +448,13 @@ func TestRuntimeHTTPHandlerServesComposedSearchSuggestionsWithoutCreatingJob(t *
 	if response.Code != http.StatusOK {
 		t.Fatalf("suggestion status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var decoded opensplunkv1.GetSearchSuggestionsResponse
+	var decoded opensplunk.GetSearchSuggestionsResponse
 	if err := proto.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
 		t.Fatalf("unmarshal suggestion response: %v", err)
 	}
 	foundHead := false
 	for _, suggestion := range decoded.GetSuggestions() {
-		if suggestion.GetKind() == opensplunkv1.SearchSuggestionKind_SEARCH_SUGGESTION_KIND_COMMAND &&
+		if suggestion.GetKind() == opensplunk.SearchSuggestionKind_SEARCH_SUGGESTION_KIND_COMMAND &&
 			suggestion.GetLabel() == "head" {
 			foundHead = true
 			break
@@ -489,21 +489,21 @@ func TestRuntimeHTTPHandlerServesConfiguredFieldCatalog(t *testing.T) {
 		t.Fatalf("newRuntimeHTTPHandler: %v", err)
 	}
 
-	payload, err := proto.Marshal(&opensplunkv1.ListSearchFieldsRequest{
+	payload, err := proto.Marshal(&opensplunk.ListSearchFieldsRequest{
 		SearchJobId: snapshot.ID,
-		Page:        &opensplunkv1.PageRequest{IncludeTotalSize: true},
+		Page:        &opensplunk.PageRequest{IncludeTotalSize: true},
 	})
 	if err != nil {
 		t.Fatalf("marshal field request: %v", err)
 	}
-	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "http://127.0.0.1/api/v1/search/jobs/fields/list", bytes.NewReader(payload))
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "http://127.0.0.1/api/search/jobs/fields/list", bytes.NewReader(payload))
 	request.Header.Set("Content-Type", "application/x-protobuf")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("field-list status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var decoded opensplunkv1.ListSearchFieldsResponse
+	var decoded opensplunk.ListSearchFieldsResponse
 	if err := proto.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
 		t.Fatalf("unmarshal field response: %v", err)
 	}
@@ -538,17 +538,17 @@ func TestRuntimeHTTPHandlerServesConfiguredIndexFieldCatalog(t *testing.T) {
 
 	earliest := "2026-07-22T01:00:00Z"
 	latest := "2026-07-22T02:00:00Z"
-	payload, err := proto.Marshal(&opensplunkv1.ListIndexFieldsRequest{
-		Selector: &opensplunkv1.IndexSelector{
-			Selector: &opensplunkv1.IndexSelector_IndexName{
+	payload, err := proto.Marshal(&opensplunk.ListIndexFieldsRequest{
+		Selector: &opensplunk.IndexSelector{
+			Selector: &opensplunk.IndexSelector_IndexName{
 				IndexName: "main",
 			},
 		},
-		TimeRange: &opensplunkv1.TimeRangeSpec{
+		TimeRange: &opensplunk.TimeRangeSpec{
 			Earliest: &earliest,
 			Latest:   &latest,
 		},
-		Page: &opensplunkv1.PageRequest{IncludeTotalSize: true},
+		Page: &opensplunk.PageRequest{IncludeTotalSize: true},
 	})
 	if err != nil {
 		t.Fatalf("marshal index field request: %v", err)
@@ -556,7 +556,7 @@ func TestRuntimeHTTPHandlerServesConfiguredIndexFieldCatalog(t *testing.T) {
 	request := httptest.NewRequestWithContext(
 		context.Background(),
 		http.MethodPost,
-		"http://127.0.0.1/api/v1/indexes/fields/list",
+		"http://127.0.0.1/api/indexes/fields/list",
 		bytes.NewReader(payload),
 	)
 	request.Header.Set("Content-Type", "application/x-protobuf")
@@ -573,7 +573,7 @@ func TestRuntimeHTTPHandlerServesConfiguredIndexFieldCatalog(t *testing.T) {
 			response.Body.String(),
 		)
 	}
-	var decoded opensplunkv1.ListIndexFieldsResponse
+	var decoded opensplunk.ListIndexFieldsResponse
 	if err := proto.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
 		t.Fatalf("unmarshal index field response: %v", err)
 	}
@@ -610,7 +610,7 @@ func TestRuntimeHTTPHandlerServesConfiguredFieldSummary(t *testing.T) {
 	}
 
 	maximumValues := uint32(2)
-	payload, err := proto.Marshal(&opensplunkv1.GetSearchFieldSummaryRequest{
+	payload, err := proto.Marshal(&opensplunk.GetSearchFieldSummaryRequest{
 		SearchJobId: snapshot.ID,
 		FieldName:   "level",
 		MaxValues:   &maximumValues,
@@ -618,14 +618,14 @@ func TestRuntimeHTTPHandlerServesConfiguredFieldSummary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal field summary request: %v", err)
 	}
-	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "http://127.0.0.1/api/v1/search/jobs/field-summary", bytes.NewReader(payload))
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "http://127.0.0.1/api/search/jobs/field-summary", bytes.NewReader(payload))
 	request.Header.Set("Content-Type", "application/x-protobuf")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("field-summary status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var decoded opensplunkv1.GetSearchFieldSummaryResponse
+	var decoded opensplunk.GetSearchFieldSummaryResponse
 	if err := proto.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
 		t.Fatalf("unmarshal field summary response: %v", err)
 	}

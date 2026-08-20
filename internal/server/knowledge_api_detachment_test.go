@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeattemptaudit"
@@ -23,15 +23,15 @@ func knowledgeHTTPDetachedResponseObject(
 	t *testing.T,
 	objectID string,
 	version uint64,
-	state opensplunkv1.KnowledgeObjectState,
-	definition *opensplunkv1.KnowledgeObjectDefinition,
-) *opensplunkv1.KnowledgeObject {
+	state opensplunk.KnowledgeObjectState,
+	definition *opensplunk.KnowledgeObjectDefinition,
+) *opensplunk.KnowledgeObject {
 	t.Helper()
 	message := knowledgeHTTPProtoObject(t)
 	message.KnowledgeObjectId = objectID
 	message.Version = version
 	message.State = state
-	message.Definition = proto.Clone(definition).(*opensplunkv1.KnowledgeObjectDefinition)
+	message.Definition = proto.Clone(definition).(*opensplunk.KnowledgeObjectDefinition)
 	message.AppId = definition.GetAppId()
 	message.Name = definition.GetName()
 	message.SharingScope = definition.GetSharingScope()
@@ -39,7 +39,7 @@ func knowledgeHTTPDetachedResponseObject(
 		message.GetCreatedAt().AsTime().Add(time.Duration(version-1) * time.Microsecond),
 	)
 	message.DisabledAt = nil
-	if state == opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED {
+	if state == opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED {
 		message.DisabledAt = proto.Clone(message.GetUpdatedAt()).(*timestamppb.Timestamp)
 	}
 	encoded, err := (proto.MarshalOptions{Deterministic: true}).Marshal(message.GetDefinition())
@@ -57,7 +57,7 @@ func knowledgeHTTPDetachedMutationToken() []byte {
 
 func knowledgeHTTPRecomputeDefinitionDigest(
 	t *testing.T,
-	object *opensplunkv1.KnowledgeObject,
+	object *opensplunk.KnowledgeObject,
 ) {
 	t.Helper()
 	encoded, err := (proto.MarshalOptions{Deterministic: true}).Marshal(
@@ -75,7 +75,7 @@ func TestCloneKnowledgeMessageBoundedRejectsOversizedBeforeDetachment(
 ) {
 	t.Parallel()
 
-	small := &opensplunkv1.DeleteKnowledgeObjectResponse{
+	small := &opensplunk.DeleteKnowledgeObjectResponse{
 		KnowledgeObjectId: "ko-bounded-clone",
 		DeletedVersion:    1,
 	}
@@ -91,8 +91,8 @@ func TestCloneKnowledgeMessageBoundedRejectsOversizedBeforeDetachment(
 		t.Fatalf("detached object ID=%q", cloned.GetKnowledgeObjectId())
 	}
 
-	oversized := &opensplunkv1.CreateKnowledgeObjectResponse{
-		KnowledgeObject: &opensplunkv1.KnowledgeObject{
+	oversized := &opensplunk.CreateKnowledgeObjectResponse{
+		KnowledgeObject: &opensplunk.KnowledgeObject{
 			DefinitionSha256: make(
 				[]byte,
 				maximumKnowledgeObjectResponseBytes+1,
@@ -161,7 +161,7 @@ func TestKnowledgeHTTPGetRequestVersionIsDetachedFromCatalogMutation(t *testing.
 		t,
 		handler,
 		knowledgeObjectsGetPath,
-		&opensplunkv1.GetKnowledgeObjectRequest{
+		&opensplunk.GetKnowledgeObjectRequest{
 			KnowledgeObjectId: returned.KnowledgeObjectID,
 			Version:           new(uint64(1)),
 		},
@@ -202,11 +202,11 @@ func TestKnowledgeHTTPMutationRequestAuthorityIsDetachedFromWriter(t *testing.T)
 			name: "create definition",
 			path: knowledgeObjectsCreatePath,
 			request: func() proto.Message {
-				return &opensplunkv1.CreateKnowledgeObjectRequest{
+				return &opensplunk.CreateKnowledgeObjectRequest{
 					Definition: knowledgeHTTPDefinition(
-						opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+						opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 					),
-					InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+					InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 					ClientRequestId: "detached-create-request-0001",
 				}
 			},
@@ -214,10 +214,10 @@ func TestKnowledgeHTTPMutationRequestAuthorityIsDetachedFromWriter(t *testing.T)
 				return &knowledgeHTTPWriter{createFn: func(
 					_ context.Context,
 					_ knowledgecatalog.WriteScope,
-					request *opensplunkv1.CreateKnowledgeObjectRequest,
-				) (*opensplunkv1.CreateKnowledgeObjectResponse, error) {
+					request *opensplunk.CreateKnowledgeObjectRequest,
+				) (*opensplunk.CreateKnowledgeObjectResponse, error) {
 					request.Definition.Name = mutatedCreateName
-					return &opensplunkv1.CreateKnowledgeObjectResponse{
+					return &opensplunk.CreateKnowledgeObjectResponse{
 						KnowledgeObject: knowledgeHTTPDetachedResponseObject(
 							t,
 							"ko-writer-created-object",
@@ -237,10 +237,10 @@ func TestKnowledgeHTTPMutationRequestAuthorityIsDetachedFromWriter(t *testing.T)
 			path: knowledgeObjectsUpdatePath,
 			request: func() proto.Message {
 				definition := knowledgeHTTPDefinition(
-					opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+					opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 				)
 				definition.Name = "client-selected-update-name"
-				return &opensplunkv1.UpdateKnowledgeObjectRequest{
+				return &opensplunk.UpdateKnowledgeObjectRequest{
 					KnowledgeObjectId: "ko-http-object-1",
 					ExpectedVersion:   1,
 					Definition:        definition,
@@ -252,15 +252,15 @@ func TestKnowledgeHTTPMutationRequestAuthorityIsDetachedFromWriter(t *testing.T)
 				return &knowledgeHTTPWriter{updateFn: func(
 					_ context.Context,
 					_ knowledgecatalog.WriteScope,
-					request *opensplunkv1.UpdateKnowledgeObjectRequest,
-				) (*opensplunkv1.UpdateKnowledgeObjectResponse, error) {
+					request *opensplunk.UpdateKnowledgeObjectRequest,
+				) (*opensplunk.UpdateKnowledgeObjectResponse, error) {
 					request.Definition.Name = mutatedUpdateName
-					return &opensplunkv1.UpdateKnowledgeObjectResponse{
+					return &opensplunk.UpdateKnowledgeObjectResponse{
 						KnowledgeObject: knowledgeHTTPDetachedResponseObject(
 							t,
 							request.GetKnowledgeObjectId(),
 							request.GetExpectedVersion()+1,
-							opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+							opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 							request.GetDefinition(),
 						),
 						TenantCatalogRevision:   2,
@@ -274,10 +274,10 @@ func TestKnowledgeHTTPMutationRequestAuthorityIsDetachedFromWriter(t *testing.T)
 			name: "set state identity",
 			path: knowledgeObjectsSetStatePath,
 			request: func() proto.Message {
-				return &opensplunkv1.SetKnowledgeObjectStateRequest{
+				return &opensplunk.SetKnowledgeObjectStateRequest{
 					KnowledgeObjectId: "ko-http-object-1",
 					ExpectedVersion:   1,
-					State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+					State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 					ClientRequestId:   "detached-state-request-0001",
 				}
 			},
@@ -285,17 +285,17 @@ func TestKnowledgeHTTPMutationRequestAuthorityIsDetachedFromWriter(t *testing.T)
 				return &knowledgeHTTPWriter{stateFn: func(
 					_ context.Context,
 					_ knowledgecatalog.WriteScope,
-					request *opensplunkv1.SetKnowledgeObjectStateRequest,
-				) (*opensplunkv1.SetKnowledgeObjectStateResponse, error) {
+					request *opensplunk.SetKnowledgeObjectStateRequest,
+				) (*opensplunk.SetKnowledgeObjectStateResponse, error) {
 					request.KnowledgeObjectId = mutatedStateID
-					return &opensplunkv1.SetKnowledgeObjectStateResponse{
+					return &opensplunk.SetKnowledgeObjectStateResponse{
 						KnowledgeObject: knowledgeHTTPDetachedResponseObject(
 							t,
 							request.GetKnowledgeObjectId(),
 							request.GetExpectedVersion()+1,
 							request.GetState(),
 							knowledgeHTTPDefinition(
-								opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+								opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 							),
 						),
 						TenantCatalogRevision:   2,
@@ -309,7 +309,7 @@ func TestKnowledgeHTTPMutationRequestAuthorityIsDetachedFromWriter(t *testing.T)
 			name: "delete identity and version",
 			path: knowledgeObjectsDeletePath,
 			request: func() proto.Message {
-				return &opensplunkv1.DeleteKnowledgeObjectRequest{
+				return &opensplunk.DeleteKnowledgeObjectRequest{
 					KnowledgeObjectId: "ko-http-object-1",
 					ExpectedVersion:   1,
 					ClientRequestId:   "detached-delete-request-0001",
@@ -319,11 +319,11 @@ func TestKnowledgeHTTPMutationRequestAuthorityIsDetachedFromWriter(t *testing.T)
 				return &knowledgeHTTPWriter{deleteFn: func(
 					_ context.Context,
 					_ knowledgecatalog.WriteScope,
-					request *opensplunkv1.DeleteKnowledgeObjectRequest,
-				) (*opensplunkv1.DeleteKnowledgeObjectResponse, error) {
+					request *opensplunk.DeleteKnowledgeObjectRequest,
+				) (*opensplunk.DeleteKnowledgeObjectResponse, error) {
 					request.KnowledgeObjectId = mutatedDeleteID
 					request.ExpectedVersion = 2
-					return &opensplunkv1.DeleteKnowledgeObjectResponse{
+					return &opensplunk.DeleteKnowledgeObjectResponse{
 						KnowledgeObjectId:       request.GetKnowledgeObjectId(),
 						DeletedVersion:          request.GetExpectedVersion() + 1,
 						TenantCatalogRevision:   request.GetExpectedVersion() + 1,
@@ -380,14 +380,14 @@ func TestKnowledgeHTTPSuccessResponseValidationRejectsUnavailableActiveAndStaleM
 	token := knowledgeHTTPDetachedMutationToken()
 
 	createDefinition := knowledgeHTTPDefinition(
-		opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+		opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 	)
-	draftCreateRequest := &opensplunkv1.CreateKnowledgeObjectRequest{
+	draftCreateRequest := &opensplunk.CreateKnowledgeObjectRequest{
 		Definition:      createDefinition,
-		InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+		InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 		ClientRequestId: "response-gate-create-0001",
 	}
-	draftCreateResponse := &opensplunkv1.CreateKnowledgeObjectResponse{
+	draftCreateResponse := &opensplunk.CreateKnowledgeObjectResponse{
 		KnowledgeObject: knowledgeHTTPDetachedResponseObject(
 			t,
 			"ko-response-gate-create",
@@ -407,7 +407,7 @@ func TestKnowledgeHTTPSuccessResponseValidationRejectsUnavailableActiveAndStaleM
 	) {
 		t.Fatal("valid draft Create response fixture was rejected")
 	}
-	missingCreatedAt := proto.Clone(draftCreateResponse).(*opensplunkv1.CreateKnowledgeObjectResponse)
+	missingCreatedAt := proto.Clone(draftCreateResponse).(*opensplunk.CreateKnowledgeObjectResponse)
 	missingCreatedAt.KnowledgeObject.CreatedAt = nil
 	if !validKnowledgeProtoDefinitionAuthority(missingCreatedAt.GetKnowledgeObject()) ||
 		validKnowledgeCreateResponseAfterDefinitionAuthorityForPolicy(
@@ -418,10 +418,10 @@ func TestKnowledgeHTTPSuccessResponseValidationRejectsUnavailableActiveAndStaleM
 		) {
 		t.Fatal("prevalidated definition bypassed post-clone scalar validation")
 	}
-	activeCreateRequest := proto.Clone(draftCreateRequest).(*opensplunkv1.CreateKnowledgeObjectRequest)
-	activeCreateRequest.InitialState = opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE
-	activeCreateResponse := proto.Clone(draftCreateResponse).(*opensplunkv1.CreateKnowledgeObjectResponse)
-	activeCreateResponse.KnowledgeObject.State = opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE
+	activeCreateRequest := proto.Clone(draftCreateRequest).(*opensplunk.CreateKnowledgeObjectRequest)
+	activeCreateRequest.InitialState = opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE
+	activeCreateResponse := proto.Clone(draftCreateResponse).(*opensplunk.CreateKnowledgeObjectResponse)
+	activeCreateResponse.KnowledgeObject.State = opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE
 	if !validKnowledgeObjectScalarLifecycleEnvelope(activeCreateResponse.GetKnowledgeObject()) ||
 		!validKnowledgeProtoDefinitionAuthority(activeCreateResponse.GetKnowledgeObject()) ||
 		validKnowledgeCreateResponseWithPolicy(
@@ -444,22 +444,22 @@ func TestKnowledgeHTTPSuccessResponseValidationRejectsUnavailableActiveAndStaleM
 	}
 
 	updateDefinition := knowledgeHTTPDefinition(
-		opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+		opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 	)
 	updateDefinition.Name = "response-gate-updated-name"
-	updateRequest := &opensplunkv1.UpdateKnowledgeObjectRequest{
+	updateRequest := &opensplunk.UpdateKnowledgeObjectRequest{
 		KnowledgeObjectId: "ko-http-object-1",
 		ExpectedVersion:   1,
 		Definition:        updateDefinition,
 		UpdateMask:        &fieldmaskpb.FieldMask{Paths: []string{"name"}},
 		ClientRequestId:   "response-gate-update-0001",
 	}
-	draftUpdateResponse := &opensplunkv1.UpdateKnowledgeObjectResponse{
+	draftUpdateResponse := &opensplunk.UpdateKnowledgeObjectResponse{
 		KnowledgeObject: knowledgeHTTPDetachedResponseObject(
 			t,
 			updateRequest.GetKnowledgeObjectId(),
 			2,
-			opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+			opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 			updateDefinition,
 		),
 		TenantCatalogRevision:   2,
@@ -474,7 +474,7 @@ func TestKnowledgeHTTPSuccessResponseValidationRejectsUnavailableActiveAndStaleM
 	) {
 		t.Fatal("valid draft Update response fixture was rejected")
 	}
-	wrongUpdateIdentity := proto.Clone(draftUpdateResponse).(*opensplunkv1.UpdateKnowledgeObjectResponse)
+	wrongUpdateIdentity := proto.Clone(draftUpdateResponse).(*opensplunk.UpdateKnowledgeObjectResponse)
 	wrongUpdateIdentity.KnowledgeObject.KnowledgeObjectId = "ko-response-gate-wrong"
 	if !validKnowledgeProtoDefinitionAuthority(wrongUpdateIdentity.GetKnowledgeObject()) ||
 		validKnowledgeUpdateResponseAfterDefinitionAuthorityForPolicy(
@@ -485,8 +485,8 @@ func TestKnowledgeHTTPSuccessResponseValidationRejectsUnavailableActiveAndStaleM
 		) {
 		t.Fatal("prevalidated definition bypassed post-clone request binding")
 	}
-	activeUpdateResponse := proto.Clone(draftUpdateResponse).(*opensplunkv1.UpdateKnowledgeObjectResponse)
-	activeUpdateResponse.KnowledgeObject.State = opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE
+	activeUpdateResponse := proto.Clone(draftUpdateResponse).(*opensplunk.UpdateKnowledgeObjectResponse)
+	activeUpdateResponse.KnowledgeObject.State = opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE
 	if !validKnowledgeObjectScalarLifecycleEnvelope(activeUpdateResponse.GetKnowledgeObject()) ||
 		!validKnowledgeProtoDefinitionAuthority(activeUpdateResponse.GetKnowledgeObject()) ||
 		validKnowledgeUpdateResponseWithPolicy(
@@ -508,20 +508,20 @@ func TestKnowledgeHTTPSuccessResponseValidationRejectsUnavailableActiveAndStaleM
 		t.Fatal("certified ACTIVE Update replay response was rejected")
 	}
 
-	disabledStateRequest := &opensplunkv1.SetKnowledgeObjectStateRequest{
+	disabledStateRequest := &opensplunk.SetKnowledgeObjectStateRequest{
 		KnowledgeObjectId: "ko-http-object-1",
 		ExpectedVersion:   1,
-		State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+		State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 		ClientRequestId:   "response-gate-state-0001",
 	}
-	disabledStateResponse := &opensplunkv1.SetKnowledgeObjectStateResponse{
+	disabledStateResponse := &opensplunk.SetKnowledgeObjectStateResponse{
 		KnowledgeObject: knowledgeHTTPDetachedResponseObject(
 			t,
 			disabledStateRequest.GetKnowledgeObjectId(),
 			2,
 			disabledStateRequest.GetState(),
 			knowledgeHTTPDefinition(
-				opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+				opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 			),
 		),
 		TenantCatalogRevision:   2,
@@ -536,10 +536,10 @@ func TestKnowledgeHTTPSuccessResponseValidationRejectsUnavailableActiveAndStaleM
 	) {
 		t.Fatal("valid disabled SetState response fixture was rejected")
 	}
-	activeStateRequest := proto.Clone(disabledStateRequest).(*opensplunkv1.SetKnowledgeObjectStateRequest)
-	activeStateRequest.State = opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE
-	activeStateResponse := proto.Clone(disabledStateResponse).(*opensplunkv1.SetKnowledgeObjectStateResponse)
-	activeStateResponse.KnowledgeObject.State = opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE
+	activeStateRequest := proto.Clone(disabledStateRequest).(*opensplunk.SetKnowledgeObjectStateRequest)
+	activeStateRequest.State = opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE
+	activeStateResponse := proto.Clone(disabledStateResponse).(*opensplunk.SetKnowledgeObjectStateResponse)
+	activeStateResponse.KnowledgeObject.State = opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE
 	activeStateResponse.KnowledgeObject.DisabledAt = nil
 	if !validKnowledgeObjectScalarLifecycleEnvelope(activeStateResponse.GetKnowledgeObject()) ||
 		!validKnowledgeProtoDefinitionAuthority(activeStateResponse.GetKnowledgeObject()) ||
@@ -561,7 +561,7 @@ func TestKnowledgeHTTPSuccessResponseValidationRejectsUnavailableActiveAndStaleM
 	) {
 		t.Fatal("certified ACTIVE SetState replay response was rejected")
 	}
-	staleDisabledResponse := proto.Clone(disabledStateResponse).(*opensplunkv1.SetKnowledgeObjectStateResponse)
+	staleDisabledResponse := proto.Clone(disabledStateResponse).(*opensplunk.SetKnowledgeObjectStateResponse)
 	staleDisabledResponse.KnowledgeObject.DisabledAt = timestamppb.New(
 		staleDisabledResponse.GetKnowledgeObject().GetCreatedAt().AsTime(),
 	)
@@ -594,11 +594,11 @@ func TestKnowledgeHTTPSetStateRejectsImpossibleDefinitionAuthorityWithoutFalseRe
 
 	tests := []struct {
 		name   string
-		mutate func(*opensplunkv1.KnowledgeObject)
+		mutate func(*opensplunk.KnowledgeObject)
 	}{
 		{
 			name: "definition exceeds catalog ceiling",
-			mutate: func(object *opensplunkv1.KnowledgeObject) {
+			mutate: func(object *opensplunk.KnowledgeObject) {
 				description := strings.Repeat(
 					"x",
 					knowledgedefinition.MaximumCanonicalBytes+1,
@@ -608,17 +608,17 @@ func TestKnowledgeHTTPSetStateRejectsImpossibleDefinitionAuthorityWithoutFalseRe
 		},
 		{
 			name: "recognized definition is noncanonical",
-			mutate: func(object *opensplunkv1.KnowledgeObject) {
+			mutate: func(object *opensplunk.KnowledgeObject) {
 				empty := ""
 				object.Definition.Description = &empty
 			},
 		},
 		{
 			name: "selector node count exceeds clone-safe ceiling",
-			mutate: func(object *opensplunkv1.KnowledgeObject) {
-				object.Definition.Selector = &opensplunkv1.KnowledgeSelector{
+			mutate: func(object *opensplunk.KnowledgeObject) {
+				object.Definition.Selector = &opensplunk.KnowledgeSelector{
 					IndexPatterns: make(
-						[]*opensplunkv1.KnowledgeSelectorPattern,
+						[]*opensplunk.KnowledgeSelectorPattern,
 						knowledge.MaximumSelectorPatternsPerDimension+1,
 					),
 				}
@@ -631,20 +631,20 @@ func TestKnowledgeHTTPSetStateRejectsImpossibleDefinitionAuthorityWithoutFalseRe
 			writer := &knowledgeHTTPWriter{stateFn: func(
 				context.Context,
 				knowledgecatalog.WriteScope,
-				*opensplunkv1.SetKnowledgeObjectStateRequest,
-			) (*opensplunkv1.SetKnowledgeObjectStateResponse, error) {
+				*opensplunk.SetKnowledgeObjectStateRequest,
+			) (*opensplunk.SetKnowledgeObjectStateResponse, error) {
 				object := knowledgeHTTPDetachedResponseObject(
 					t,
 					"ko-http-object-1",
 					2,
-					opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+					opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 					knowledgeHTTPDefinition(
-						opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+						opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 					),
 				)
 				test.mutate(object)
 				knowledgeHTTPRecomputeDefinitionDigest(t, object)
-				response := &opensplunkv1.SetKnowledgeObjectStateResponse{
+				response := &opensplunk.SetKnowledgeObjectStateResponse{
 					KnowledgeObject:         object,
 					TenantCatalogRevision:   2,
 					TenantCatalogStateToken: knowledgeHTTPDetachedMutationToken(),
@@ -667,10 +667,10 @@ func TestKnowledgeHTTPSetStateRejectsImpossibleDefinitionAuthorityWithoutFalseRe
 				t,
 				handler,
 				knowledgeObjectsSetStatePath,
-				&opensplunkv1.SetKnowledgeObjectStateRequest{
+				&opensplunk.SetKnowledgeObjectStateRequest{
 					KnowledgeObjectId: "ko-http-object-1",
 					ExpectedVersion:   1,
-					State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+					State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 					ClientRequestId:   "definition-authority-state-0001",
 				},
 			)

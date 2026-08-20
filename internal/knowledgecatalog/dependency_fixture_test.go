@@ -1,6 +1,6 @@
 package knowledgecatalog
 
-import opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+import opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 
 const dependencyFixtureInputField = "dependency_input"
 
@@ -9,13 +9,13 @@ func dependencyExtractionDefinition(
 	scope SharingScope,
 	description *string,
 	hostPattern, outputField string,
-) *opensplunkv1.KnowledgeObjectDefinition {
+) *opensplunk.KnowledgeObjectDefinition {
 	definition := aliasDefinition(appID, name, scope, description, hostPattern)
-	definition.Body = &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
-		FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
+	definition.Body = &opensplunk.KnowledgeObjectDefinition_FieldExtraction{
+		FieldExtraction: &opensplunk.FieldExtractionDefinition{
 			InputField: "_raw",
-			Extraction: &opensplunkv1.FieldExtractionDefinition_Json{
-				Json: &opensplunkv1.JsonFieldExtractionDefinition{
+			Extraction: &opensplunk.FieldExtractionDefinition_Json{
+				Json: &opensplunk.JsonFieldExtractionDefinition{
 					Path:        "payload.value",
 					OutputField: outputField,
 				},
@@ -30,10 +30,10 @@ func dependencyAliasDefinition(
 	scope SharingScope,
 	description *string,
 	hostPattern, sourceField, destinationField string,
-) *opensplunkv1.KnowledgeObjectDefinition {
+) *opensplunk.KnowledgeObjectDefinition {
 	definition := aliasDefinition(appID, name, scope, description, hostPattern)
-	definition.Body = &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{
-		FieldAlias: &opensplunkv1.FieldAliasDefinition{
+	definition.Body = &opensplunk.KnowledgeObjectDefinition_FieldAlias{
+		FieldAlias: &opensplunk.FieldAliasDefinition{
 			SourceField:      sourceField,
 			DestinationField: destinationField,
 		},
@@ -46,10 +46,10 @@ func dependencyCalculatedDefinition(
 	scope SharingScope,
 	description *string,
 	hostPattern, expression, destinationField string,
-) *opensplunkv1.KnowledgeObjectDefinition {
+) *opensplunk.KnowledgeObjectDefinition {
 	definition := aliasDefinition(appID, name, scope, description, hostPattern)
-	definition.Body = &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{
-		CalculatedField: &opensplunkv1.CalculatedFieldDefinition{
+	definition.Body = &opensplunk.KnowledgeObjectDefinition_CalculatedField{
+		CalculatedField: &opensplunk.CalculatedFieldDefinition{
 			DestinationField: destinationField,
 			Expression:       expression,
 		},

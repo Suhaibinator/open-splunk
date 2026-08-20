@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -277,7 +277,7 @@ func TestGORMStoreReopenPreservesTerminalHistoryAndCursor(t *testing.T) {
 			id,
 			"index=main | head 1",
 			"search",
-			opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
+			opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
 			now.Add(time.Duration(index-3)*time.Minute),
 		)
 		if _, err := store.Record(ctx, scope, entry); err != nil {
@@ -326,10 +326,10 @@ func TestGORMListKeysetPaginationPreservesEverySortAndTieBreaker(t *testing.T) {
 	base := time.Date(2026, time.July, 28, 12, 0, 0, 0, time.UTC)
 	_, store := openTestStore(t, Options{Clock: func() time.Time { return base.Add(time.Hour) }})
 	scope := AccessScope{TenantID: "tenant", OwnerID: "owner"}
-	entries := []*opensplunkv1.SearchHistoryEntry{
-		historyEntry("sort-a", "index=main", "search", opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED, base),
-		historyEntry("sort-b", "index=main", "search", opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED, base),
-		historyEntry("sort-c", "index=main", "search", opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED, base.Add(time.Minute)),
+	entries := []*opensplunk.SearchHistoryEntry{
+		historyEntry("sort-a", "index=main", "search", opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED, base),
+		historyEntry("sort-b", "index=main", "search", opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED, base),
+		historyEntry("sort-c", "index=main", "search", opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED, base.Add(time.Minute)),
 	}
 	entries[0].FinishedAt = timestamppb.New(base.Add(20 * time.Second))
 	entries[1].FinishedAt = timestamppb.New(base.Add(10 * time.Second))
@@ -348,48 +348,48 @@ func TestGORMListKeysetPaginationPreservesEverySortAndTieBreaker(t *testing.T) {
 
 	tests := []struct {
 		name      string
-		sortBy    opensplunkv1.SearchHistorySortBy
-		direction opensplunkv1.SortDirection
+		sortBy    opensplunk.SearchHistorySortBy
+		direction opensplunk.SortDirection
 		want      []string
 	}{
 		{
-			name: "created ascending", sortBy: opensplunkv1.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_CREATED_AT,
-			direction: opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING,
+			name: "created ascending", sortBy: opensplunk.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_CREATED_AT,
+			direction: opensplunk.SortDirection_SORT_DIRECTION_ASCENDING,
 			want:      []string{"sort-a", "sort-b", "sort-c"},
 		},
 		{
-			name: "created descending", sortBy: opensplunkv1.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_CREATED_AT,
-			direction: opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING,
+			name: "created descending", sortBy: opensplunk.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_CREATED_AT,
+			direction: opensplunk.SortDirection_SORT_DIRECTION_DESCENDING,
 			want:      []string{"sort-c", "sort-b", "sort-a"},
 		},
 		{
-			name: "finished ascending", sortBy: opensplunkv1.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_FINISHED_AT,
-			direction: opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING,
+			name: "finished ascending", sortBy: opensplunk.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_FINISHED_AT,
+			direction: opensplunk.SortDirection_SORT_DIRECTION_ASCENDING,
 			want:      []string{"sort-b", "sort-a", "sort-c"},
 		},
 		{
-			name: "finished descending", sortBy: opensplunkv1.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_FINISHED_AT,
-			direction: opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING,
+			name: "finished descending", sortBy: opensplunk.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_FINISHED_AT,
+			direction: opensplunk.SortDirection_SORT_DIRECTION_DESCENDING,
 			want:      []string{"sort-c", "sort-a", "sort-b"},
 		},
 		{
-			name: "duration ascending", sortBy: opensplunkv1.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_DURATION,
-			direction: opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING,
+			name: "duration ascending", sortBy: opensplunk.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_DURATION,
+			direction: opensplunk.SortDirection_SORT_DIRECTION_ASCENDING,
 			want:      []string{"sort-b", "sort-c", "sort-a"},
 		},
 		{
-			name: "duration descending", sortBy: opensplunkv1.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_DURATION,
-			direction: opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING,
+			name: "duration descending", sortBy: opensplunk.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_DURATION,
+			direction: opensplunk.SortDirection_SORT_DIRECTION_DESCENDING,
 			want:      []string{"sort-a", "sort-c", "sort-b"},
 		},
 		{
-			name: "matched ascending", sortBy: opensplunkv1.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_MATCHED_EVENTS,
-			direction: opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING,
+			name: "matched ascending", sortBy: opensplunk.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_MATCHED_EVENTS,
+			direction: opensplunk.SortDirection_SORT_DIRECTION_ASCENDING,
 			want:      []string{"sort-c", "sort-a", "sort-b"},
 		},
 		{
-			name: "matched descending", sortBy: opensplunkv1.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_MATCHED_EVENTS,
-			direction: opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING,
+			name: "matched descending", sortBy: opensplunk.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_MATCHED_EVENTS,
+			direction: opensplunk.SortDirection_SORT_DIRECTION_DESCENDING,
 			want:      []string{"sort-b", "sort-a", "sort-c"},
 		},
 	}

@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
@@ -495,13 +495,13 @@ func TestPublicationActiveTransitionAuthorityRejectsRemovalDependencySwap(t *tes
 			ordinal:        0,
 			targetObjectID: targets[0].object.KnowledgeObjectID,
 			targetVersion:  int64(targets[0].object.Version),
-			role:           opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
+			role:           opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
 		},
 		{
 			ordinal:        1,
 			targetObjectID: targets[1].object.KnowledgeObjectID,
 			targetVersion:  int64(targets[1].object.Version),
-			role:           opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
+			role:           opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
 		},
 	}
 	candidate := publicationWinner{
@@ -1142,11 +1142,11 @@ func publicationTransitionTestInventory(
 }
 
 func publicationTransitionTestIndexDefinition(
-	definition *opensplunkv1.KnowledgeObjectDefinition,
+	definition *opensplunk.KnowledgeObjectDefinition,
 	pattern string,
-) *opensplunkv1.KnowledgeObjectDefinition {
-	definition.Selector = &opensplunkv1.KnowledgeSelector{
-		IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{Value: pattern}},
+) *opensplunk.KnowledgeObjectDefinition {
+	definition.Selector = &opensplunk.KnowledgeSelector{
+		IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{{Value: pattern}},
 	}
 	return definition
 }

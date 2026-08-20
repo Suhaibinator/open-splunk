@@ -1,5 +1,5 @@
 {
-  "format_version": "hec-compatibility-fixture-v0.1",
+  "format_version": 1,
   "cases": [
     {
       "id": "health.shallow-unauthenticated-healthy",
@@ -15,7 +15,7 @@
     {
       "id": "health.queue-unhealthy",
       "rule": "the shallow probe reports only durable queue unavailability without queue depth",
-      "request": {"method": "GET", "path": "/services/collector/health/1.0", "headers": [], "query": [], "body": {"kind": "utf8", "value": ""}},
+      "request": {"method": "GET", "path": "/services/collector/health", "headers": [], "query": [], "body": {"kind": "utf8", "value": ""}},
       "setup": {"received_at": "2026-08-10T12:00:00Z", "indexes": [], "conditions": ["queue_unhealthy"]},
       "expect": {
         "http": {"status": 503, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"HEC is unhealthy, queues are full\",\"code\":18}"},

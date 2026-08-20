@@ -61,7 +61,7 @@ func readMeta(dir string) (walMeta, bool, error) {
 	}
 	if m.FormatVersion != currentFormatVersion {
 		return walMeta{}, false, fmt.Errorf(
-			"collector/wal: meta has unsupported format_version %d (want %d)",
+			"collector/wal: meta has unsupported format_version %d (want %d); provision fresh collector state",
 			m.FormatVersion, currentFormatVersion,
 		)
 	}

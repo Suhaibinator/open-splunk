@@ -50,7 +50,7 @@ type Limits struct {
 	HeaderBytes int
 }
 
-// DefaultLimits returns the fixed v0.4 CSV resource contract.
+// DefaultLimits returns the fixed CSV resource contract.
 func DefaultLimits() Limits {
 	return Limits{
 		SourceBytes: MaximumSourceBytes,
@@ -85,7 +85,7 @@ func normalizeLimits(input Limits) (Limits, error) {
 			*values[index] = defaultValues[index]
 		}
 		if *values[index] < 1 || *values[index] > defaultValues[index] {
-			return Limits{}, fmt.Errorf("%w: CSV limits must be positive and no larger than the v0.4 hard limits", ErrInvalidArgument)
+			return Limits{}, fmt.Errorf("%w: CSV limits must be positive and no larger than the hard limits", ErrInvalidArgument)
 		}
 	}
 	if input.HeaderBytes > input.CellBytes || input.CellBytes > input.RowBytes {

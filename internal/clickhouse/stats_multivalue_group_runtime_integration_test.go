@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 )
@@ -36,7 +36,7 @@ func TestStatsMultivalueByAgainstClickHouse(t *testing.T) {
 	newEvent := func(
 		id string,
 		source string,
-		fields ...*opensplunkv1.TypedObjectField,
+		fields ...*opensplunk.TypedObjectField,
 	) *ingest.StoredEvent {
 		event := testStoredEvent(id, "stats-mv-by", indexTime)
 		event.Event.Source = source

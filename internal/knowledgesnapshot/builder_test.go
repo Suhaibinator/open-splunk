@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/splregex"
@@ -120,7 +120,7 @@ func TestPrepareCanonicalAuthorityOrderChargesDigestAndDetachment(t *testing.T) 
 	}
 	for index, warning := range first.base.GetWarnings() {
 		if warning.GetWarningOrdinal() != uint32(index) ||
-			warning.GetKind() != opensplunkv1.KnowledgeSnapshotWarningKind_KNOWLEDGE_SNAPSHOT_WARNING_KIND_SHADOWED_OBJECT ||
+			warning.GetKind() != opensplunk.KnowledgeSnapshotWarningKind_KNOWLEDGE_SNAPSHOT_WARNING_KIND_SHADOWED_OBJECT ||
 			warning.ObjectResolutionOrdinal != nil || warning.ShadowOrdinal == nil ||
 			warning.GetShadowOrdinal() != uint32(index) {
 			t.Fatalf("warning %d = %+v", index, warning)
@@ -156,9 +156,9 @@ func TestPrepareCanonicalAuthorityOrderChargesDigestAndDetachment(t *testing.T) 
 	}
 	assertSnapshotDigest(t, firstSnapshot.Proto())
 	digest := firstSnapshot.Digest()
-	const wantDigest = "a993d85ffeb0bfb7863de27d016843f568b9c397b91e55beca0f0fb230bb726d"
-	if firstSnapshot.CanonicalBytes() != 1272 || hex.EncodeToString(digest[:]) != wantDigest {
-		t.Fatalf("nonzero golden = canonical %d digest %x, want 1272/%s", firstSnapshot.CanonicalBytes(), digest, wantDigest)
+	const wantDigest = "e160993dee27d198a3094ed4caf0d27632bf3f596074c0f725adabd3d788a3d1"
+	if firstSnapshot.CanonicalBytes() != 1267 || hex.EncodeToString(digest[:]) != wantDigest {
+		t.Fatalf("nonzero golden = canonical %d digest %x, want 1267/%s", firstSnapshot.CanonicalBytes(), digest, wantDigest)
 	}
 
 	// Input, every clone-returning Authority accessor, and finalized Snapshot
@@ -230,8 +230,8 @@ func TestPrepareEmptyAuthorityAbsentAndPresentRevisionGoldens(t *testing.T) {
 		wantCharge  uint64
 		wantDigest  string
 	}{
-		{name: "absent app revision", wantCharge: 91, wantDigest: "09884862ad5c4fa15144a4dae40ec67d52ff3181f4bd7cb7da5209788361a3a9"},
-		{name: "present app revision", appRevision: new(uint64(1)), wantCharge: 93, wantDigest: "6abd3f96e00abbc97a7f852057c815b92831c347498968d91e6f553cbe45e7d1"},
+		{name: "absent app revision", wantCharge: 86, wantDigest: "2e715b6a5cc8e346d86701292b112545778e84c3e59efb1a2cb8f66e515e708e"},
+		{name: "present app revision", appRevision: new(uint64(1)), wantCharge: 88, wantDigest: "9e7732ad29459be74c810d07d1f77bf498bcebd20f2d1e4e2ee358c6b8a5a37c"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -501,12 +501,12 @@ func TestFinalizeChecksEverySharedCompilerCeiling(t *testing.T) {
 }
 
 func TestPrepareShadowsUseFinalWinnerOrdinalsAcrossInterleavedLosers(t *testing.T) {
-	firstWinner := aliasObject(t, "ko-winner-first", 1, "first", "app-a", "owner-a", opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE, nil)
-	secondWinner := aliasObject(t, "ko-winner-second", 2, "second", "app-a", "owner-a", opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE, nil)
-	firstApp := aliasObject(t, "ko-zzz-first-app", 3, "first", "app-a", "owner-app", opensplunkv1.SharingScope_SHARING_SCOPE_APP, nil)
-	firstGlobal := aliasObject(t, "ko-aaa-first-global", 4, "first", "app-origin", "owner-global", opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL, nil)
-	secondApp := aliasObject(t, "ko-aaa-second-app", 5, "second", "app-a", "owner-app", opensplunkv1.SharingScope_SHARING_SCOPE_APP, nil)
-	secondGlobal := aliasObject(t, "ko-zzz-second-global", 6, "second", "app-origin", "owner-global", opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL, nil)
+	firstWinner := aliasObject(t, "ko-winner-first", 1, "first", "app-a", "owner-a", opensplunk.SharingScope_SHARING_SCOPE_PRIVATE, nil)
+	secondWinner := aliasObject(t, "ko-winner-second", 2, "second", "app-a", "owner-a", opensplunk.SharingScope_SHARING_SCOPE_PRIVATE, nil)
+	firstApp := aliasObject(t, "ko-zzz-first-app", 3, "first", "app-a", "owner-app", opensplunk.SharingScope_SHARING_SCOPE_APP, nil)
+	firstGlobal := aliasObject(t, "ko-aaa-first-global", 4, "first", "app-origin", "owner-global", opensplunk.SharingScope_SHARING_SCOPE_GLOBAL, nil)
+	secondApp := aliasObject(t, "ko-aaa-second-app", 5, "second", "app-a", "owner-app", opensplunk.SharingScope_SHARING_SCOPE_APP, nil)
+	secondGlobal := aliasObject(t, "ko-zzz-second-global", 6, "second", "app-origin", "owner-global", opensplunk.SharingScope_SHARING_SCOPE_GLOBAL, nil)
 	authority, err := Prepare(Input{
 		TenantID: "tenant-a", PrincipalID: "owner-a", AppID: "app-a",
 		TenantCatalogStateToken:    bytes.Repeat([]byte{0x11}, sha256.Size),
@@ -540,60 +540,60 @@ func TestPrepareShadowsUseFinalWinnerOrdinalsAcrossInterleavedLosers(t *testing.
 func TestPrepareCompilesEveryWinnerAndShadowSemantically(t *testing.T) {
 	tests := []struct {
 		name    string
-		invalid func(name, app string, scope opensplunkv1.SharingScope) *opensplunkv1.KnowledgeObjectDefinition
-		valid   func(name, app string, scope opensplunkv1.SharingScope) *opensplunkv1.KnowledgeObjectDefinition
+		invalid func(name, app string, scope opensplunk.SharingScope) *opensplunk.KnowledgeObjectDefinition
+		valid   func(name, app string, scope opensplunk.SharingScope) *opensplunk.KnowledgeObjectDefinition
 	}{
 		{
 			name: "unsupported regex",
-			invalid: func(name, app string, scope opensplunkv1.SharingScope) *opensplunkv1.KnowledgeObjectDefinition {
+			invalid: func(name, app string, scope opensplunk.SharingScope) *opensplunk.KnowledgeObjectDefinition {
 				return regexDefinition(name, app, scope, `(?=x)(?P<out>x)`, []string{"out"})
 			},
 			valid: validRegexDefinition,
 		},
 		{
 			name: "unnamed regex capture",
-			invalid: func(name, app string, scope opensplunkv1.SharingScope) *opensplunkv1.KnowledgeObjectDefinition {
+			invalid: func(name, app string, scope opensplunk.SharingScope) *opensplunk.KnowledgeObjectDefinition {
 				return regexDefinition(name, app, scope, `(x)(?P<out>x)`, []string{"out"})
 			},
 			valid: validRegexDefinition,
 		},
 		{
 			name: "regex output mismatch",
-			invalid: func(name, app string, scope opensplunkv1.SharingScope) *opensplunkv1.KnowledgeObjectDefinition {
+			invalid: func(name, app string, scope opensplunk.SharingScope) *opensplunk.KnowledgeObjectDefinition {
 				return regexDefinition(name, app, scope, `(?P<actual>x)`, []string{"declared"})
 			},
 			valid: validRegexDefinition,
 		},
 		{
 			name: "invalid JSON path",
-			invalid: func(name, app string, scope opensplunkv1.SharingScope) *opensplunkv1.KnowledgeObjectDefinition {
+			invalid: func(name, app string, scope opensplunk.SharingScope) *opensplunk.KnowledgeObjectDefinition {
 				return jsonDefinition(name, app, scope, "a..b", "out")
 			},
-			valid: func(name, app string, scope opensplunkv1.SharingScope) *opensplunkv1.KnowledgeObjectDefinition {
+			valid: func(name, app string, scope opensplunk.SharingScope) *opensplunk.KnowledgeObjectDefinition {
 				return jsonDefinition(name, app, scope, "a.b[0]", "out")
 			},
 		},
 		{
 			name: "invalid calculated expression",
-			invalid: func(name, app string, scope opensplunkv1.SharingScope) *opensplunkv1.KnowledgeObjectDefinition {
+			invalid: func(name, app string, scope opensplunk.SharingScope) *opensplunk.KnowledgeObjectDefinition {
 				return calculatedDefinition(name, app, scope, "lower(", "out")
 			},
-			valid: func(name, app string, scope opensplunkv1.SharingScope) *opensplunkv1.KnowledgeObjectDefinition {
+			valid: func(name, app string, scope opensplunk.SharingScope) *opensplunk.KnowledgeObjectDefinition {
 				return calculatedDefinition(name, app, scope, "lower(source)", "out")
 			},
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name+" winner", func(t *testing.T) {
-			object := snapshotObject(t, "ko-invalid", 1, "owner-a", test.invalid("object", "app-a", opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE))
+			object := snapshotObject(t, "ko-invalid", 1, "owner-a", test.invalid("object", "app-a", opensplunk.SharingScope_SHARING_SCOPE_PRIVATE))
 			input := minimalInput([]Object{object})
 			if _, err := Prepare(input); !errors.Is(err, ErrInvalidInput) {
 				t.Fatalf("Prepare() error = %v, want ErrInvalidInput", err)
 			}
 		})
 		t.Run(test.name+" shadow", func(t *testing.T) {
-			winner := snapshotObject(t, "ko-winner", 1, "owner-a", test.valid("object", "app-a", opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE))
-			loser := snapshotObject(t, "ko-loser", 2, "owner-global", test.invalid("object", "app-origin", opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL))
+			winner := snapshotObject(t, "ko-winner", 1, "owner-a", test.valid("object", "app-a", opensplunk.SharingScope_SHARING_SCOPE_PRIVATE))
+			loser := snapshotObject(t, "ko-loser", 2, "owner-global", test.invalid("object", "app-origin", opensplunk.SharingScope_SHARING_SCOPE_GLOBAL))
 			input := minimalInput([]Object{winner})
 			input.Shadows = []Shadow{shadowFromObject(winner, loser)}
 			if _, err := Prepare(input); !errors.Is(err, ErrInvalidInput) {
@@ -618,27 +618,27 @@ func TestPrepareEnforcesDependencySharingFieldsSelectorsAndIsolatedNodes(t *test
 		mutate func(*Input)
 	}{
 		{name: "sharing", mutate: func(input *Input) {
-			rebuildObject(t, input, "ko-extraction", "owner-app", func(definition *opensplunkv1.KnowledgeObjectDefinition) {
+			rebuildObject(t, input, "ko-extraction", "owner-app", func(definition *opensplunk.KnowledgeObjectDefinition) {
 				definition.AppId = "app-current"
-				definition.SharingScope = opensplunkv1.SharingScope_SHARING_SCOPE_APP
+				definition.SharingScope = opensplunk.SharingScope_SHARING_SCOPE_APP
 			})
-			rebuildObject(t, input, "ko-alias", "owner-global", func(definition *opensplunkv1.KnowledgeObjectDefinition) {
+			rebuildObject(t, input, "ko-alias", "owner-global", func(definition *opensplunk.KnowledgeObjectDefinition) {
 				definition.AppId = "app-origin"
-				definition.SharingScope = opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL
+				definition.SharingScope = opensplunk.SharingScope_SHARING_SCOPE_GLOBAL
 			})
 		}},
 		{name: "field intersection", mutate: func(input *Input) {
-			rebuildObject(t, input, "ko-alias", "owner-app", func(definition *opensplunkv1.KnowledgeObjectDefinition) {
+			rebuildObject(t, input, "ko-alias", "owner-app", func(definition *opensplunk.KnowledgeObjectDefinition) {
 				definition.GetFieldAlias().SourceField = "missing_field"
 			})
 		}},
 		{name: "selector implication", mutate: func(input *Input) {
-			rebuildObject(t, input, "ko-alias", "owner-app", func(definition *opensplunkv1.KnowledgeObjectDefinition) {
+			rebuildObject(t, input, "ko-alias", "owner-app", func(definition *opensplunk.KnowledgeObjectDefinition) {
 				definition.Selector = nil
 			})
 		}},
 		{name: "calculated inputs", mutate: func(input *Input) {
-			rebuildObject(t, input, "ko-calculated", "owner-current", func(definition *opensplunkv1.KnowledgeObjectDefinition) {
+			rebuildObject(t, input, "ko-calculated", "owner-current", func(definition *opensplunk.KnowledgeObjectDefinition) {
 				definition.GetCalculatedField().Expression = "lower(missing_field)"
 			})
 		}},
@@ -670,7 +670,7 @@ func TestPrepareEnforcesAggregateWinningSemanticBounds(t *testing.T) {
 				}
 				name := fmt.Sprintf("regex-%02d", index)
 				objects[index] = snapshotObject(t, "ko-"+name, uint64(index+1), "owner-a", regexDefinition(
-					name, "app-a", opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL, pattern.String(), outputs,
+					name, "app-a", opensplunk.SharingScope_SHARING_SCOPE_GLOBAL, pattern.String(), outputs,
 				))
 			}
 			return objects
@@ -680,7 +680,7 @@ func TestPrepareEnforcesAggregateWinningSemanticBounds(t *testing.T) {
 			for index := range objects {
 				name := fmt.Sprintf("json-%02d", index)
 				objects[index] = snapshotObject(t, "ko-"+name, uint64(index+1), "owner-a", jsonDefinition(
-					name, "app-a", opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL, "root", fmt.Sprintf("out_%02d", index),
+					name, "app-a", opensplunk.SharingScope_SHARING_SCOPE_GLOBAL, "root", fmt.Sprintf("out_%02d", index),
 				))
 			}
 			return objects
@@ -690,7 +690,7 @@ func TestPrepareEnforcesAggregateWinningSemanticBounds(t *testing.T) {
 			for index := range objects {
 				name := fmt.Sprintf("calculated-%02d", index)
 				objects[index] = snapshotObject(t, "ko-"+name, uint64(index+1), "owner-a", calculatedDefinition(
-					name, "app-a", opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL,
+					name, "app-a", opensplunk.SharingScope_SHARING_SCOPE_GLOBAL,
 					"lower(source)", fmt.Sprintf("out_%02d", index),
 				))
 			}
@@ -706,15 +706,15 @@ func TestPrepareEnforcesAggregateWinningSemanticBounds(t *testing.T) {
 			}
 			return []Object{
 				snapshotObject(t, "ko-predicates-a", 1, "owner-a", calculatedDefinition(
-					"predicates-a", "app-a", opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL,
+					"predicates-a", "app-a", opensplunk.SharingScope_SHARING_SCOPE_GLOBAL,
 					caseExpression(0), "out_a",
 				)),
 				snapshotObject(t, "ko-predicates-b", 2, "owner-a", calculatedDefinition(
-					"predicates-b", "app-a", opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL,
+					"predicates-b", "app-a", opensplunk.SharingScope_SHARING_SCOPE_GLOBAL,
 					caseExpression(16), "out_b",
 				)),
 				snapshotObject(t, "ko-predicates-c", 3, "owner-a", calculatedDefinition(
-					"predicates-c", "app-a", opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL,
+					"predicates-c", "app-a", opensplunk.SharingScope_SHARING_SCOPE_GLOBAL,
 					"if(extra=1,1,0)", "out_c",
 				)),
 			}
@@ -735,9 +735,9 @@ func TestPrepareRejectsCandidateAggregateAndCanonicalSkeletonBounds(t *testing.T
 		description := strings.Repeat("d", 12<<10)
 		for index := range MaximumExecutableObjects {
 			name := fmt.Sprintf("large-%03d", index)
-			winner := aliasObject(t, "ko-winner-"+name, uint64(index+1), name, "app-a", "owner-a", opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE, &description)
-			appLoser := aliasObject(t, "ko-app-"+name, uint64(index+1001), name, "app-a", "owner-app", opensplunkv1.SharingScope_SHARING_SCOPE_APP, &description)
-			globalLoser := aliasObject(t, "ko-global-"+name, uint64(index+2001), name, "app-origin", "owner-global", opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL, &description)
+			winner := aliasObject(t, "ko-winner-"+name, uint64(index+1), name, "app-a", "owner-a", opensplunk.SharingScope_SHARING_SCOPE_PRIVATE, &description)
+			appLoser := aliasObject(t, "ko-app-"+name, uint64(index+1001), name, "app-a", "owner-app", opensplunk.SharingScope_SHARING_SCOPE_APP, &description)
+			globalLoser := aliasObject(t, "ko-global-"+name, uint64(index+2001), name, "app-origin", "owner-global", opensplunk.SharingScope_SHARING_SCOPE_GLOBAL, &description)
 			input.Objects = append(input.Objects, winner)
 			input.Shadows = append(input.Shadows, shadowFromObject(winner, appLoser), shadowFromObject(winner, globalLoser))
 		}
@@ -753,7 +753,7 @@ func TestPrepareRejectsCandidateAggregateAndCanonicalSkeletonBounds(t *testing.T
 			name := fmt.Sprintf("canonical-%03d", index)
 			input.Objects = append(input.Objects, aliasObject(
 				t, "ko-"+name, uint64(index+1), name, "app-a", "owner-a",
-				opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE, &description,
+				opensplunk.SharingScope_SHARING_SCOPE_PRIVATE, &description,
 			))
 		}
 		if result, err := Prepare(input); !result.IsZero() || !errors.Is(err, ErrResourceLimit) {
@@ -790,10 +790,10 @@ func TestPrepareRejectsInvalidAuthoritiesAndStructuralBounds(t *testing.T) {
 			input.Dependencies[0].TargetVersion = 5
 		}, want: ErrInvalidInput},
 		{name: "unsupported dependency role", mutate: func(input *Input) {
-			input.Dependencies[0].Role = opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_LOOKUP_ASSET
+			input.Dependencies[0].Role = opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_LOOKUP_ASSET
 		}, want: ErrInvalidInput},
 		{name: "shadow winner", mutate: func(input *Input) { input.Shadows[0].WinnerObjectID = "ko-missing" }, want: ErrInvalidInput},
-		{name: "shadow precedence", mutate: func(input *Input) { input.Shadows[0].SharingScope = opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE }, want: ErrInvalidInput},
+		{name: "shadow precedence", mutate: func(input *Input) { input.Shadows[0].SharingScope = opensplunk.SharingScope_SHARING_SCOPE_PRIVATE }, want: ErrInvalidInput},
 		{name: "object ceiling", mutate: func(input *Input) { input.Objects = make([]Object, MaximumExecutableObjects+1) }, want: ErrResourceLimit},
 		{name: "dependency ceiling", mutate: func(input *Input) { input.Dependencies = make([]Dependency, MaximumDependencyEdges+1) }, want: ErrResourceLimit},
 		{name: "shadow ceiling", mutate: func(input *Input) { input.Shadows = make([]Shadow, MaximumShadows+1) }, want: ErrResourceLimit},
@@ -812,16 +812,16 @@ func TestPrepareRejectsInvalidAuthoritiesAndStructuralBounds(t *testing.T) {
 func TestPrepareRejectsAggregateSelectorWork(t *testing.T) {
 	input := minimalInput(nil)
 	for index := range 2 {
-		patterns := make([]*opensplunkv1.KnowledgeSelectorPattern, 16)
+		patterns := make([]*opensplunk.KnowledgeSelectorPattern, 16)
 		for pattern := range patterns {
-			patterns[pattern] = &opensplunkv1.KnowledgeSelectorPattern{Value: strings.Repeat("*?", 6) + string(rune('a'+pattern))}
+			patterns[pattern] = &opensplunk.KnowledgeSelectorPattern{Value: strings.Repeat("*?", 6) + string(rune('a'+pattern))}
 		}
 		name := fmt.Sprintf("work-%d", index)
 		input.Objects = append(input.Objects, aliasObject(
 			t, "ko-"+name, uint64(index+1), name, "app-a", "owner-a",
-			opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL, nil,
+			opensplunk.SharingScope_SHARING_SCOPE_GLOBAL, nil,
 		))
-		input.Objects[index].Definition.Selector = &opensplunkv1.KnowledgeSelector{HostPatterns: patterns}
+		input.Objects[index].Definition.Selector = &opensplunk.KnowledgeSelector{HostPatterns: patterns}
 		input.Objects[index] = snapshotObject(
 			t, input.Objects[index].KnowledgeObjectID, input.Objects[index].Version,
 			input.Objects[index].OwnerID, input.Objects[index].Definition,
@@ -866,15 +866,15 @@ func TestPrepareRejectsPossibleParallelDestinationCollisionsAndChains(t *testing
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			definition := func(name, source, destination, selector string) *opensplunkv1.KnowledgeObjectDefinition {
-				var selectorMessage *opensplunkv1.KnowledgeSelector
+			definition := func(name, source, destination, selector string) *opensplunk.KnowledgeObjectDefinition {
+				var selectorMessage *opensplunk.KnowledgeSelector
 				if selector != "" {
-					selectorMessage = &opensplunkv1.KnowledgeSelector{IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{Value: selector}}}
+					selectorMessage = &opensplunk.KnowledgeSelector{IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{{Value: selector}}}
 				}
-				return &opensplunkv1.KnowledgeObjectDefinition{
-					AppId: "app-a", Name: name, SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+				return &opensplunk.KnowledgeObjectDefinition{
+					AppId: "app-a", Name: name, SharingScope: opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 					Selector: selectorMessage,
-					Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunkv1.FieldAliasDefinition{
+					Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunk.FieldAliasDefinition{
 						SourceField: source, DestinationField: destination,
 					}},
 				}
@@ -900,33 +900,33 @@ func TestPrepareRejectsPossibleParallelDestinationCollisionsAndChains(t *testing
 func TestPrepareParallelValidationCoversEveryExecutableBody(t *testing.T) {
 	tests := []struct {
 		name  string
-		left  *opensplunkv1.KnowledgeObjectDefinition
-		right *opensplunkv1.KnowledgeObjectDefinition
+		left  *opensplunk.KnowledgeObjectDefinition
+		right *opensplunk.KnowledgeObjectDefinition
 	}{
 		{
 			name:  "regex and JSON destination collision",
-			left:  regexDefinition("regex", "app-a", opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE, `(?P<shared>x)`, []string{"shared"}),
-			right: jsonDefinition("json", "app-a", opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE, "payload.value", "shared"),
+			left:  regexDefinition("regex", "app-a", opensplunk.SharingScope_SHARING_SCOPE_PRIVATE, `(?P<shared>x)`, []string{"shared"}),
+			right: jsonDefinition("json", "app-a", opensplunk.SharingScope_SHARING_SCOPE_PRIVATE, "payload.value", "shared"),
 		},
 		{
 			name: "calculated destination collision",
 			left: calculatedDefinition(
-				"calculated-left", "app-a", opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+				"calculated-left", "app-a", opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 				"lower(left)", "shared",
 			),
 			right: calculatedDefinition(
-				"calculated-right", "app-a", opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+				"calculated-right", "app-a", opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 				"upper(right)", "shared",
 			),
 		},
 		{
 			name: "calculated same-stage chain",
 			left: calculatedDefinition(
-				"calculated-left", "app-a", opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+				"calculated-left", "app-a", opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 				"lower(raw)", "intermediate",
 			),
 			right: calculatedDefinition(
-				"calculated-right", "app-a", opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+				"calculated-right", "app-a", opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 				"upper(intermediate)", "result",
 			),
 		},
@@ -947,35 +947,35 @@ func TestPrepareParallelValidationCoversEveryExecutableBody(t *testing.T) {
 func snapshotGoldenInput(t *testing.T) Input {
 	t.Helper()
 	appRevision := uint64(19)
-	alphaSelector := &opensplunkv1.KnowledgeSelector{
-		IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{Value: "alpha"}},
+	alphaSelector := &opensplunk.KnowledgeSelector{
+		IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{{Value: "alpha"}},
 	}
-	extraction := snapshotObject(t, "ko-extraction", 4, "owner-global", &opensplunkv1.KnowledgeObjectDefinition{
-		AppId: "app-origin", Name: "extract-a", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL,
-		Selector: &opensplunkv1.KnowledgeSelector{IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{Value: "z*"}, {Value: "alpha"}}},
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
-			InputField: "_raw", Extraction: &opensplunkv1.FieldExtractionDefinition_Regex{Regex: &opensplunkv1.RegexFieldExtractionDefinition{
+	extraction := snapshotObject(t, "ko-extraction", 4, "owner-global", &opensplunk.KnowledgeObjectDefinition{
+		AppId: "app-origin", Name: "extract-a", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_GLOBAL,
+		Selector: &opensplunk.KnowledgeSelector{IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{{Value: "z*"}, {Value: "alpha"}}},
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldExtraction{FieldExtraction: &opensplunk.FieldExtractionDefinition{
+			InputField: "_raw", Extraction: &opensplunk.FieldExtractionDefinition_Regex{Regex: &opensplunk.RegexFieldExtractionDefinition{
 				Pattern: `(?P<source_field>[a-z]+)`, OutputFields: []string{"source_field"},
 			}},
 		}},
 	})
-	alias := snapshotObject(t, "ko-alias", 5, "owner-app", &opensplunkv1.KnowledgeObjectDefinition{
-		AppId: "app-current", Name: "alias-a", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-		Selector: proto.Clone(alphaSelector).(*opensplunkv1.KnowledgeSelector),
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunkv1.FieldAliasDefinition{
+	alias := snapshotObject(t, "ko-alias", 5, "owner-app", &opensplunk.KnowledgeObjectDefinition{
+		AppId: "app-current", Name: "alias-a", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+		Selector: proto.Clone(alphaSelector).(*opensplunk.KnowledgeSelector),
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunk.FieldAliasDefinition{
 			SourceField: "source_field", DestinationField: "alias_field",
 		}},
 	})
-	shadowWinner := snapshotObject(t, "ko-shadow-winner", 6, "owner-current", &opensplunkv1.KnowledgeObjectDefinition{
-		AppId: "app-current", Name: "shared", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunkv1.FieldAliasDefinition{
+	shadowWinner := snapshotObject(t, "ko-shadow-winner", 6, "owner-current", &opensplunk.KnowledgeObjectDefinition{
+		AppId: "app-current", Name: "shared", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunk.FieldAliasDefinition{
 			SourceField: "shadow_source", DestinationField: "private_shared",
 		}},
 	})
-	calculated := snapshotObject(t, "ko-calculated", 7, "owner-current", &opensplunkv1.KnowledgeObjectDefinition{
-		AppId: "app-current", Name: "calculated-a", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
-		Selector: proto.Clone(alphaSelector).(*opensplunkv1.KnowledgeSelector),
-		Body: &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{CalculatedField: &opensplunkv1.CalculatedFieldDefinition{
+	calculated := snapshotObject(t, "ko-calculated", 7, "owner-current", &opensplunk.KnowledgeObjectDefinition{
+		AppId: "app-current", Name: "calculated-a", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
+		Selector: proto.Clone(alphaSelector).(*opensplunk.KnowledgeSelector),
+		Body: &opensplunk.KnowledgeObjectDefinition_CalculatedField{CalculatedField: &opensplunk.CalculatedFieldDefinition{
 			DestinationField: "calculated_field", Expression: "lower(alias_field)",
 		}},
 	})
@@ -989,12 +989,12 @@ func snapshotGoldenInput(t *testing.T) Input {
 		EffectiveAuthorizedIndexes: []string{"zeta", "alpha", "zeta"},
 		Objects:                    []Object{calculated, shadowWinner, extraction, alias},
 		Dependencies: []Dependency{
-			{SourceObjectID: "ko-calculated", SourceVersion: 7, TargetObjectID: "ko-alias", TargetVersion: 5, Role: opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT},
-			{SourceObjectID: "ko-alias", SourceVersion: 5, TargetObjectID: "ko-extraction", TargetVersion: 4, Role: opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT},
+			{SourceObjectID: "ko-calculated", SourceVersion: 7, TargetObjectID: "ko-alias", TargetVersion: 5, Role: opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT},
+			{SourceObjectID: "ko-alias", SourceVersion: 5, TargetObjectID: "ko-extraction", TargetVersion: 4, Role: opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT},
 		},
 		Shadows: []Shadow{
-			snapshotShadow(t, "ko-shadow-winner", 6, "ko-shadow-global", 8, "app-origin", "owner-global", opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL),
-			snapshotShadow(t, "ko-shadow-winner", 6, "ko-shadow-app", 9, "app-current", "owner-app", opensplunkv1.SharingScope_SHARING_SCOPE_APP),
+			snapshotShadow(t, "ko-shadow-winner", 6, "ko-shadow-global", 8, "app-origin", "owner-global", opensplunk.SharingScope_SHARING_SCOPE_GLOBAL),
+			snapshotShadow(t, "ko-shadow-winner", 6, "ko-shadow-app", 9, "app-current", "owner-app", opensplunk.SharingScope_SHARING_SCOPE_APP),
 		},
 	}
 }
@@ -1008,7 +1008,7 @@ func minimalInput(objects []Object) Input {
 	}
 }
 
-func snapshotObject(t *testing.T, id string, version uint64, owner string, definition *opensplunkv1.KnowledgeObjectDefinition) Object {
+func snapshotObject(t *testing.T, id string, version uint64, owner string, definition *opensplunk.KnowledgeObjectDefinition) Object {
 	t.Helper()
 	normalized, err := knowledgedefinition.Normalize(definition)
 	if err != nil {
@@ -1032,13 +1032,13 @@ func aliasObject(
 	id string,
 	version uint64,
 	name, appID, ownerID string,
-	scope opensplunkv1.SharingScope,
+	scope opensplunk.SharingScope,
 	description *string,
 ) Object {
 	t.Helper()
-	return snapshotObject(t, id, version, ownerID, &opensplunkv1.KnowledgeObjectDefinition{
+	return snapshotObject(t, id, version, ownerID, &opensplunk.KnowledgeObjectDefinition{
 		AppId: appID, Name: name, Description: description, SharingScope: scope,
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunkv1.FieldAliasDefinition{
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunk.FieldAliasDefinition{
 			SourceField: "source", DestinationField: "destination_" + name,
 		}},
 	})
@@ -1046,33 +1046,33 @@ func aliasObject(
 
 func regexDefinition(
 	name, appID string,
-	scope opensplunkv1.SharingScope,
+	scope opensplunk.SharingScope,
 	pattern string,
 	outputs []string,
-) *opensplunkv1.KnowledgeObjectDefinition {
-	return &opensplunkv1.KnowledgeObjectDefinition{
+) *opensplunk.KnowledgeObjectDefinition {
+	return &opensplunk.KnowledgeObjectDefinition{
 		AppId: appID, Name: name, SharingScope: scope,
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
-			InputField: "_raw", Extraction: &opensplunkv1.FieldExtractionDefinition_Regex{Regex: &opensplunkv1.RegexFieldExtractionDefinition{
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldExtraction{FieldExtraction: &opensplunk.FieldExtractionDefinition{
+			InputField: "_raw", Extraction: &opensplunk.FieldExtractionDefinition_Regex{Regex: &opensplunk.RegexFieldExtractionDefinition{
 				Pattern: pattern, OutputFields: slices.Clone(outputs),
 			}},
 		}},
 	}
 }
 
-func validRegexDefinition(name, appID string, scope opensplunkv1.SharingScope) *opensplunkv1.KnowledgeObjectDefinition {
+func validRegexDefinition(name, appID string, scope opensplunk.SharingScope) *opensplunk.KnowledgeObjectDefinition {
 	return regexDefinition(name, appID, scope, `(?P<out>x)`, []string{"out"})
 }
 
 func jsonDefinition(
 	name, appID string,
-	scope opensplunkv1.SharingScope,
+	scope opensplunk.SharingScope,
 	path, output string,
-) *opensplunkv1.KnowledgeObjectDefinition {
-	return &opensplunkv1.KnowledgeObjectDefinition{
+) *opensplunk.KnowledgeObjectDefinition {
+	return &opensplunk.KnowledgeObjectDefinition{
 		AppId: appID, Name: name, SharingScope: scope,
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
-			InputField: "_raw", Extraction: &opensplunkv1.FieldExtractionDefinition_Json{Json: &opensplunkv1.JsonFieldExtractionDefinition{
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldExtraction{FieldExtraction: &opensplunk.FieldExtractionDefinition{
+			InputField: "_raw", Extraction: &opensplunk.FieldExtractionDefinition_Json{Json: &opensplunk.JsonFieldExtractionDefinition{
 				Path: path, OutputField: output,
 			}},
 		}},
@@ -1081,12 +1081,12 @@ func jsonDefinition(
 
 func calculatedDefinition(
 	name, appID string,
-	scope opensplunkv1.SharingScope,
+	scope opensplunk.SharingScope,
 	expression, output string,
-) *opensplunkv1.KnowledgeObjectDefinition {
-	return &opensplunkv1.KnowledgeObjectDefinition{
+) *opensplunk.KnowledgeObjectDefinition {
+	return &opensplunk.KnowledgeObjectDefinition{
 		AppId: appID, Name: name, SharingScope: scope,
-		Body: &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{CalculatedField: &opensplunkv1.CalculatedFieldDefinition{
+		Body: &opensplunk.KnowledgeObjectDefinition_CalculatedField{CalculatedField: &opensplunk.CalculatedFieldDefinition{
 			DestinationField: output, Expression: expression,
 		}},
 	}
@@ -1100,7 +1100,7 @@ func snapshotShadow(
 	version uint64,
 	appID string,
 	ownerID string,
-	scope opensplunkv1.SharingScope,
+	scope opensplunk.SharingScope,
 ) Shadow {
 	t.Helper()
 	object := aliasObject(t, id, version, "shared", appID, ownerID, scope, nil)
@@ -1127,14 +1127,14 @@ func rebuildObject(
 	t *testing.T,
 	input *Input,
 	id, owner string,
-	mutate func(*opensplunkv1.KnowledgeObjectDefinition),
+	mutate func(*opensplunk.KnowledgeObjectDefinition),
 ) {
 	t.Helper()
 	for index, object := range input.Objects {
 		if object.KnowledgeObjectID != id {
 			continue
 		}
-		definition := proto.Clone(object.Definition).(*opensplunkv1.KnowledgeObjectDefinition)
+		definition := proto.Clone(object.Definition).(*opensplunk.KnowledgeObjectDefinition)
 		mutate(definition)
 		input.Objects[index] = snapshotObject(t, id, object.Version, owner, definition)
 		return
@@ -1151,7 +1151,7 @@ func cloneSnapshotInput(input Input) Input {
 	for index := range input.Objects {
 		cloned.Objects[index] = input.Objects[index]
 		if input.Objects[index].Definition != nil {
-			cloned.Objects[index].Definition = proto.Clone(input.Objects[index].Definition).(*opensplunkv1.KnowledgeObjectDefinition)
+			cloned.Objects[index].Definition = proto.Clone(input.Objects[index].Definition).(*opensplunk.KnowledgeObjectDefinition)
 		}
 		cloned.Objects[index].DefinitionSHA256 = bytes.Clone(input.Objects[index].DefinitionSHA256)
 	}
@@ -1160,7 +1160,7 @@ func cloneSnapshotInput(input Input) Input {
 	for index := range input.Shadows {
 		cloned.Shadows[index] = input.Shadows[index]
 		if input.Shadows[index].Definition != nil {
-			cloned.Shadows[index].Definition = proto.Clone(input.Shadows[index].Definition).(*opensplunkv1.KnowledgeObjectDefinition)
+			cloned.Shadows[index].Definition = proto.Clone(input.Shadows[index].Definition).(*opensplunk.KnowledgeObjectDefinition)
 		}
 		cloned.Shadows[index].DefinitionSHA256 = bytes.Clone(input.Shadows[index].DefinitionSHA256)
 	}
@@ -1194,9 +1194,9 @@ func deterministicMessage(t *testing.T, message proto.Message) []byte {
 	return encoded
 }
 
-func assertSnapshotDigest(t *testing.T, snapshot *opensplunkv1.KnowledgeSnapshot) {
+func assertSnapshotDigest(t *testing.T, snapshot *opensplunk.KnowledgeSnapshot) {
 	t.Helper()
-	clone := proto.Clone(snapshot).(*opensplunkv1.KnowledgeSnapshot)
+	clone := proto.Clone(snapshot).(*opensplunk.KnowledgeSnapshot)
 	wantDigest := bytes.Clone(clone.GetSnapshotSha256())
 	clone.SnapshotSha256 = nil
 	encoded, err := (proto.MarshalOptions{Deterministic: true}).Marshal(clone)

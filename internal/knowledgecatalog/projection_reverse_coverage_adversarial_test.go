@@ -47,7 +47,7 @@ func TestIntegrationAuthorizedRogueProjectionsCannotConsumeListDriverBound(t *te
 		)
 		SELECT ?, printf('aaa-rogue-projection-%05d', value), 1,
 		       ?, ?, 'field_alias', 'aaa-rogue-projection', 'private', 'draft',
-		       0, '', 0, 0, 0, 0, 0, 46
+		       0, '', 0, 0, 0, 0, 0, 43
 		FROM sequence
 	`, maximumObjectsPerTenant+1, testTenant, testApp, testOwner); err != nil {
 		t.Fatalf("insert rogue visible projections: %v", err)

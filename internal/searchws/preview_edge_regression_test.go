@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/gorilla/websocket"
 	"google.golang.org/protobuf/proto"
@@ -86,23 +86,23 @@ func previewEdgeProjection(
 	schemaID string,
 	includePreview bool,
 ) targetProjection {
-	events := []*opensplunkv1.SearchWebSocketEvent{
-		{Payload: &opensplunkv1.SearchWebSocketEvent_SearchStateChanged{
-			SearchStateChanged: &opensplunkv1.SearchJobStateChanged{
-				SearchJobId: "search", State: opensplunkv1.SearchJobState_SEARCH_JOB_STATE_RUNNING, StateVersion: 1,
+	events := []*opensplunk.SearchWebSocketEvent{
+		{Payload: &opensplunk.SearchWebSocketEvent_SearchStateChanged{
+			SearchStateChanged: &opensplunk.SearchJobStateChanged{
+				SearchJobId: "search", State: opensplunk.SearchJobState_SEARCH_JOB_STATE_RUNNING, StateVersion: 1,
 			},
 		}},
-		{Payload: &opensplunkv1.SearchWebSocketEvent_SearchProgress{
-			SearchProgress: &opensplunkv1.SearchProgress{
-				Phase: opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_EXECUTING,
+		{Payload: &opensplunk.SearchWebSocketEvent_SearchProgress{
+			SearchProgress: &opensplunk.SearchProgress{
+				Phase: opensplunk.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_EXECUTING,
 			},
 		}},
-		{Payload: &opensplunkv1.SearchWebSocketEvent_ResultSchemaAvailable{
-			ResultSchemaAvailable: &opensplunkv1.ResultSchemaAvailable{
+		{Payload: &opensplunk.SearchWebSocketEvent_ResultSchemaAvailable{
+			ResultSchemaAvailable: &opensplunk.ResultSchemaAvailable{
 				SearchJobId: "search",
-				Schema: &opensplunkv1.ResultSchema{
+				Schema: &opensplunk.ResultSchema{
 					SchemaId: schemaID, Revision: 1,
-					ResultKind: opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS,
+					ResultKind: opensplunk.ResultSetKind_RESULT_SET_KIND_EVENTS,
 				},
 			},
 		}},
@@ -110,12 +110,12 @@ func previewEdgeProjection(
 	previewRows := uint32(0)
 	if includePreview {
 		previewRows = 1
-		events = append(events, &opensplunkv1.SearchWebSocketEvent{
-			Payload: &opensplunkv1.SearchWebSocketEvent_ResultPreview{
-				ResultPreview: &opensplunkv1.ResultPreview{
+		events = append(events, &opensplunk.SearchWebSocketEvent{
+			Payload: &opensplunk.SearchWebSocketEvent_ResultPreview{
+				ResultPreview: &opensplunk.ResultPreview{
 					SearchJobId: "search", SchemaId: schemaID, PreviewRevision: 1,
-					UpdateMode: opensplunkv1.PreviewUpdateMode_PREVIEW_UPDATE_MODE_RESET,
-					Rows:       []*opensplunkv1.ResultRow{{RowId: "row", Ordinal: 0}},
+					UpdateMode: opensplunk.PreviewUpdateMode_PREVIEW_UPDATE_MODE_RESET,
+					Rows:       []*opensplunk.ResultRow{{RowId: "row", Ordinal: 0}},
 				},
 			},
 		})
@@ -129,11 +129,11 @@ func previewEdgeTerminalProjection(version uint64, incarnation time.Time) target
 	return targetProjection{
 		version: version, incarnation: incarnation, previewRows: 1,
 		invalidatesPreview: true, terminal: true,
-		events: []*opensplunkv1.SearchWebSocketEvent{{
-			Payload: &opensplunkv1.SearchWebSocketEvent_SearchTerminal{
-				SearchTerminal: &opensplunkv1.SearchJobTerminal{
+		events: []*opensplunk.SearchWebSocketEvent{{
+			Payload: &opensplunk.SearchWebSocketEvent_SearchTerminal{
+				SearchTerminal: &opensplunk.SearchJobTerminal{
 					SearchJobId:  "search",
-					State:        opensplunkv1.SearchJobState_SEARCH_JOB_STATE_FAILED,
+					State:        opensplunk.SearchJobState_SEARCH_JOB_STATE_FAILED,
 					StateVersion: version,
 				},
 			},
@@ -206,7 +206,7 @@ func TestPreviewDemandRemovalStoresReplayableClearUntilFullProjection(t *testing
 	}
 	clearData := append([]byte(nil), cleared.data...)
 	target.mu.Unlock()
-	var clearEvent opensplunkv1.SearchWebSocketEvent
+	var clearEvent opensplunk.SearchWebSocketEvent
 	if err := proto.Unmarshal(clearData, &clearEvent); err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +278,7 @@ func TestCurrentBootstrapDoesNotRebroadcastDiscontinuousStateToExistingSubscribe
 		1,
 		adversarialNow.Add(-time.Hour),
 		false,
-		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_RUNNING,
+		opensplunk.SearchJobState_SEARCH_JOB_STATE_RUNNING,
 		1,
 		true,
 	), true)
@@ -602,8 +602,8 @@ func TestCurrentSubscriptionRechecksContinuityAfterRefreshBarrier(t *testing.T) 
 	defer connection.cancel()
 	result := make(chan *commandFailure, 1)
 	go func() {
-		result <- connection.subscribe("barrier", &opensplunkv1.SubscribeSearchJobsCommand{
-			Subscriptions: []*opensplunkv1.SearchSubscription{
+		result <- connection.subscribe("barrier", &opensplunk.SubscribeSearchJobsCommand{
+			Subscriptions: []*opensplunk.SearchSubscription{
 				{SubscriptionId: "first", Target: targetKey{kind: targetKindSearch, id: "barrier-first"}.protobuf()},
 				{SubscriptionId: "second", Target: targetKey{kind: targetKindSearch, id: "barrier-second"}.protobuf()},
 			},
@@ -639,7 +639,7 @@ func TestCurrentSubscriptionRechecksContinuityAfterRefreshBarrier(t *testing.T) 
 			continue
 		}
 		if required := event.GetResynchronizationRequired(); required != nil {
-			resynchronized = required.GetReason() == opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED
+			resynchronized = required.GetReason() == opensplunk.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED
 		}
 	}
 	if !resynchronized {

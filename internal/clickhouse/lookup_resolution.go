@@ -22,7 +22,7 @@ const (
 	// MaximumLookupStagesPerQuery bounds both retained asset payload and the
 	// number of hash joins added to one physical query.
 	MaximumLookupStagesPerQuery = 16
-	// MaximumLookupKeys is the v0.4 exact-composite-key compatibility bound.
+	// MaximumLookupKeys is the exact-composite-key compatibility bound.
 	MaximumLookupKeys = 4
 	// MaximumLookupMatchKeyComponentsPerEvent is the independent runtime match
 	// work ceiling across all explicit and automatic stages. One event never

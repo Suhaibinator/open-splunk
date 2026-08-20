@@ -76,7 +76,7 @@ const (
 	MaxHECRequestsPerToken = 100_000
 	// MaxHECAcknowledgmentsPerQuery bounds public status lookup work.
 	MaxHECAcknowledgmentsPerQuery = 1_000
-	// HECTerminalRetention is the fixed v0.1 period for indexed and failed HEC
+	// HECTerminalRetention is the fixed period for indexed and failed HEC
 	// acknowledgment authority. Operational telemetry classifies rows older
 	// than this period as expired until bounded cleanup deletes them.
 	HECTerminalRetention = 24 * time.Hour

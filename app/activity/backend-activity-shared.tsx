@@ -1,4 +1,4 @@
-import { SearchJobState } from "@/gen/ts/open_splunk/v1/search";
+import { SearchJobState } from "@/gen/ts/open_splunk/search";
 
 import { formatMediumDateTime } from "../_components/date-format";
 

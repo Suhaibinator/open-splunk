@@ -13,7 +13,7 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	internalclickhouse "github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
@@ -446,18 +446,18 @@ func TestClickHouseServicePrincipalLifecycle(t *testing.T) {
 		CollectorID: "principal-collector",
 		BatchID:     batchID,
 		IndexTime:   indexTime,
-		Event: &opensplunkv1.LogEvent{
+		Event: &opensplunk.LogEvent{
 			EventId:         eventID,
 			IndexName:       indexName,
 			EventTime:       timestamppb.New(indexTime.Add(-time.Second)),
-			EventTimeSource: opensplunkv1.EventTimeSource_EVENT_TIME_SOURCE_PARSED,
+			EventTimeSource: opensplunk.EventTimeSource_EVENT_TIME_SOURCE_PARSED,
 			Host:            "principal-host",
 			Source:          "principal.log",
 			Sourcetype:      "open_splunk:principal",
-			Severity:        opensplunkv1.LogSeverity_LOG_SEVERITY_INFO,
+			Severity:        opensplunk.LogSeverity_LOG_SEVERITY_INFO,
 			Raw:             []byte(`{"message":"principal lifecycle"}`),
-			RawEncoding:     opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
-			Fields:          &opensplunkv1.TypedObject{},
+			RawEncoding:     opensplunk.RawEncoding_RAW_ENCODING_UTF8,
+			Fields:          &opensplunk.TypedObject{},
 		},
 	}
 	result, err := store.Store(ctx, ingest.StoreBatch{

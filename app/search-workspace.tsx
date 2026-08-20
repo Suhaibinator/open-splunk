@@ -16,13 +16,13 @@ import {
 } from "react";
 import Link from "next/link";
 
-import { SharingScope } from "@/gen/ts/open_splunk/v1/common";
-import type { ResolvedTimeRange } from "@/gen/ts/open_splunk/v1/common";
+import { SharingScope } from "@/gen/ts/open_splunk/common";
+import type { ResolvedTimeRange } from "@/gen/ts/open_splunk/common";
 import {
   ExportJobState,
   type ExportJob,
-} from "@/gen/ts/open_splunk/v1/export";
-import type { SearchHistoryFilter } from "@/gen/ts/open_splunk/v1/history_api";
+} from "@/gen/ts/open_splunk/export";
+import type { SearchHistoryFilter } from "@/gen/ts/open_splunk/history_api";
 import {
   DEMO_EVENTS,
   DEMO_FIELDS,
@@ -46,7 +46,7 @@ import {
   type ResultRow,
   type ResultSchema,
   type VisualizationSpec,
-} from "@/gen/ts/open_splunk/v1/result";
+} from "@/gen/ts/open_splunk/result";
 import {
   SearchJobOrigin,
   SearchJobState,
@@ -54,13 +54,13 @@ import {
   type SearchDefinition,
   type SearchJob,
   type SearchProgress,
-} from "@/gen/ts/open_splunk/v1/search";
+} from "@/gen/ts/open_splunk/search";
 import {
   SearchWebSocketProtocolErrorCode,
   type ResultPreview,
   type SearchWebSocketEvent,
-} from "@/gen/ts/open_splunk/v1/search_ws";
-import { ServerFeature } from "@/gen/ts/open_splunk/v1/system_api";
+} from "@/gen/ts/open_splunk/search_ws";
+import { ServerFeature } from "@/gen/ts/open_splunk/system_api";
 import {
   analyzeSPLIndexScope,
   assertBrowserResultPageBounds,
@@ -877,16 +877,15 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const diagnostic = useMemo(() => query.trim().length === 0 ? null : getQueryDiagnostic(query), [query]);
   const editorDiagnostic = useMemo(() => {
     if (!backendEnabled || diagnostic?.kind !== "unsupported") return diagnostic;
-    const compatibility = backendBootstrapModel?.splCompatibilityVersion;
     return {
       ...diagnostic,
       message: `Command “${diagnostic.token}” is newer than this editor's local command catalog.`,
-      suggestion: `Run the search to let the connected server${compatibility ? ` (${compatibility})` : ""} validate it.`,
+      suggestion: "Run the search to let the connected server validate it.",
       actionLabel: undefined,
       removeStart: undefined,
       removeEnd: undefined,
     };
-  }, [backendBootstrapModel?.splCompatibilityVersion, backendEnabled, diagnostic]);
+  }, [backendEnabled, diagnostic]);
   const completionContext = useMemo(() => completionContextAt(query, editorCaret), [editorCaret, query]);
   const filteredCompletions = useMemo(() => {
     if (backendEnabled && backendCompletions !== null) return backendCompletions;
@@ -3351,7 +3350,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         ) {
           // State and progress have their own monotonic revision fences. Keep
           // the broader epoch only for versionless schema, preview, warning,
-          // and forward-compatible target updates.
+          // and unknown target updates.
           backendLiveUpdateEpochRef.current += 1n;
         }
         switch (event.payload?.$case) {

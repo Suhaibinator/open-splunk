@@ -481,7 +481,7 @@ func TestArithmeticMembershipCompositionVisitorsPreserveOrderedDependencies(t *t
 	assertDiagnosticCode(t, err, "SPL_AMBIGUOUS_EVENTSTATS_FIELD")
 }
 
-func TestKnowledgeV01ExpressionVisitorRejectsAuthoredV02Nodes(t *testing.T) {
+func TestKnowledgeExpressionVisitorRejectsAuthoredAuthoredNodes(t *testing.T) {
 	t.Parallel()
 
 	literal := &spl.ScalarLiteralExpr{Value: spl.Literal{Kind: spl.LiteralKindInteger, Text: "1"}}
@@ -500,7 +500,7 @@ func TestKnowledgeV01ExpressionVisitorRejectsAuthoredV02Nodes(t *testing.T) {
 		t.Fatal("knowledge visitor accepted nested membership")
 	}
 	if knowledgeExpressionUsesAuthoredOnlySyntax(&spl.ScalarFieldExpr{Field: "host"}) {
-		t.Fatal("knowledge visitor rejected a v0.1 field")
+		t.Fatal("knowledge expression visitor rejected a supported field")
 	}
 
 	for _, source := range []string{`host+1`, `if(host IN ("api"), 1, 0)`} {

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
@@ -179,7 +179,7 @@ type EventContext struct {
 // StoredEvent is the normalized event passed across the storage trust
 // boundary. Event is an independent clone of the collector message.
 type StoredEvent struct {
-	Event       *opensplunkv1.LogEvent
+	Event       *opensplunk.LogEvent
 	TenantID    string
 	Source      IngestionSource
 	CollectorID string
@@ -189,9 +189,9 @@ type StoredEvent struct {
 
 // EventError is a permanent, event-scoped validation failure.
 type EventError struct {
-	Code       opensplunkv1.EventRejectionCode
+	Code       opensplunk.EventRejectionCode
 	Message    string
-	Violations []*opensplunkv1.FieldViolation
+	Violations []*opensplunk.FieldViolation
 }
 
 func (e *EventError) Error() string {
@@ -334,7 +334,7 @@ type StoreBatch struct {
 	// RejectedEvents is the original, terminal disposition for source events
 	// omitted from Events. Durable stores retain it so a lost acknowledgment is
 	// reproduced exactly even if authorization or validation policy changes.
-	RejectedEvents []*opensplunkv1.EventRejection
+	RejectedEvents []*opensplunk.EventRejection
 	// QuotaAdmission is the trusted token-and-index charge for this fresh
 	// normalized batch. Nil is reserved for legacy callers and identity-only
 	// durable replay. QuotaEvaluatedAt is attempt-scoped and must not reuse the
@@ -385,7 +385,7 @@ type StoreBatchIdentity struct {
 type StoreBatchRejection struct {
 	Identity   StoreBatchIdentity
 	ReceivedAt time.Time
-	Rejection  *opensplunkv1.BatchReject
+	Rejection  *opensplunk.BatchReject
 }
 
 // StoredBatchState reports whether an exact source batch is absent, has a
@@ -412,8 +412,8 @@ type StoreResult struct {
 	AcknowledgedThrough *uint64
 	CommittedAt         time.Time
 	OriginalEventCount  uint32
-	RejectedEvents      []*opensplunkv1.EventRejection
-	BatchRejection      *opensplunkv1.BatchReject
+	RejectedEvents      []*opensplunk.EventRejection
+	BatchRejection      *opensplunk.BatchReject
 }
 
 // StageResult reports the durable disposition reached without requiring the
@@ -475,8 +475,8 @@ func (f EventStoreFunc) Store(ctx context.Context, batch StoreBatch) (StoreResul
 // resend the exact same batch.
 type TransientStoreError struct {
 	Err            error
-	Reason         opensplunkv1.RetryBatchReason
-	ThrottleReason opensplunkv1.ThrottleReason
+	Reason         opensplunk.RetryBatchReason
+	ThrottleReason opensplunk.ThrottleReason
 	RetryAfter     time.Duration
 }
 

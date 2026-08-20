@@ -7,11 +7,10 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
-	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
 func journalJob(id string, state searchjobs.State, now time.Time) searchjobs.Job {
@@ -25,7 +24,7 @@ func journalJob(id string, state searchjobs.State, now time.Time) searchjobs.Job
 		AppID:    "search-app",
 		Source:   searchjobs.JobSource{Origin: searchjobs.JobOriginSavedSearch, ObjectID: "saved-1"},
 		Earliest: now.Add(-time.Hour), Latest: now,
-		State: state, CompilerVersion: spl.CompatibilityVersion, CreatedAt: now.Add(-time.Minute),
+		State: state, CreatedAt: now.Add(-time.Minute),
 	}
 }
 
@@ -67,12 +66,12 @@ func TestJobJournalAdmitsAndFinalizesDetachedSearchMetadata(t *testing.T) {
 	}
 	if got.Definition.GetSpl() != " \nindex=main | head 1\t" || got.Definition.GetTimeRange().GetEarliest() != "-1h" ||
 		got.Definition.GetTimeRange().GetLatest() != "now" || got.Definition.GetTimeRange().GetTimezone() != "America/Los_Angeles" ||
-		got.Definition.GetAppId() != "search-app" || got.Source.GetOrigin() != opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH ||
+		got.Definition.GetAppId() != "search-app" || got.Source.GetOrigin() != opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH ||
 		got.Source.GetSavedSearchId() != "saved-1" || !got.ResolvedTimeRange.GetEarliest().AsTime().Equal(terminal.Earliest) ||
 		!got.ResolvedTimeRange.GetLatest().AsTime().Equal(terminal.Latest) || got.ResolvedTimeRange.GetTimezone() != "America/Los_Angeles" ||
-		got.FinalState != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED || got.ScannedRows != 70 ||
+		got.FinalState != opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED || got.ScannedRows != 70 ||
 		got.ScannedBytes != 7_000 || got.ProducedRows != 7 ||
-		got.Duration.AsDuration() != 20*time.Second || got.CompilerVersion != spl.CompatibilityVersion || len(got.EffectiveIndexScope) != 1 {
+		got.Duration.AsDuration() != 20*time.Second || len(got.EffectiveIndexScope) != 1 {
 		t.Fatalf("terminal history = %+v", got)
 	}
 	if got.MatchedEvents != 0 {
@@ -117,7 +116,7 @@ func TestJobJournalMapsAndBoundsSafeFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	sourceRange := got.Failure.GetDiagnostics()[0].GetSourceRange()
-	if got.Failure.GetCode() != opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_INVALID_SPL || !got.Failure.GetRetryable() ||
+	if got.Failure.GetCode() != opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_INVALID_SPL || !got.Failure.GetRetryable() ||
 		len(got.Failure.GetMessage()) > maximumFailureMessageBytes || !strings.HasPrefix(got.Failure.GetMessage(), "é") ||
 		got.Failure.GetDiagnostics()[0].GetCode() != "SPL_PARSE" ||
 		sourceRange.GetStart().GetByteOffset() != 7 || sourceRange.GetStart().GetColumn() != 2 ||
@@ -146,10 +145,5 @@ func TestJobJournalRejectsInvalidConstructionAndTransitions(t *testing.T) {
 	malformedIntent.TimeRange = searchtime.Intent{TimezoneSpecified: true}
 	if err := journal.Admit(context.Background(), malformedIntent); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("Admit(malformed timezone presence) error = %v", err)
-	}
-	mismatch := journalJob("version-mismatch", searchjobs.StateQueued, now)
-	mismatch.CompilerVersion = "0.1"
-	if err := journal.Admit(context.Background(), mismatch); !errors.Is(err, control.ErrInvalidArgument) {
-		t.Fatalf("Admit(compiler-version mismatch) error = %v", err)
 	}
 }

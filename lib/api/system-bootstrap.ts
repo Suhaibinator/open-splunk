@@ -1,21 +1,19 @@
 import {
   ServerFeature,
   type GetSystemBootstrapResponse,
-} from "@/gen/ts/open_splunk/v1/system_api";
+} from "@/gen/ts/open_splunk/system_api";
 import {
   IndexAccessState,
   IndexState,
   type IndexSummary,
-} from "@/gen/ts/open_splunk/v1/index";
-import type { BuildMetadata } from "@/gen/ts/open_splunk/v1/common";
+} from "@/gen/ts/open_splunk/index";
+import type { BuildMetadata } from "@/gen/ts/open_splunk/common";
 
 import { durationToMilliseconds } from "./duration";
 import type { OpenSplunkApiClient } from "./open-splunk-client";
 import type { ProtobufRequestOptions } from "./protobuf-transport";
-import { canonicalBoundedServerText } from "@/lib/search/server-text";
 
 export const MAXIMUM_BROWSER_BOOTSTRAP_APPS = 256;
-export const MAXIMUM_SPL_COMPATIBILITY_VERSION_BYTES = 128;
 
 export interface BrowserApiLimitsModel {
   maximumPageSize: number;
@@ -42,9 +40,6 @@ export interface BrowserIndexModel {
 }
 
 export interface SystemBootstrapModel {
-  serverVersion: string;
-  apiVersion: string;
-  splCompatibilityVersion: string;
   build: BuildMetadata | null;
   searchWebsocketPath: string | null;
   features: ReadonlySet<ServerFeature>;
@@ -101,18 +96,7 @@ export function adaptSystemBootstrap(response: GetSystemBootstrapResponse): Syst
     throw new TypeError("System bootstrap did not include a valid server clock.");
   }
   const serverTime = new Date(response.serverTime);
-  const splCompatibilityVersion = canonicalBoundedServerText(
-    response.splCompatibilityVersion,
-    MAXIMUM_SPL_COMPATIBILITY_VERSION_BYTES,
-    true,
-  );
-  if (splCompatibilityVersion === null) {
-    throw new TypeError("System bootstrap included a noncanonical SPL compatibility identity.");
-  }
   return {
-    serverVersion: response.serverVersion,
-    apiVersion: response.apiVersion,
-    splCompatibilityVersion,
     build: response.build === undefined ? null : { ...response.build },
     searchWebsocketPath: sameOriginPath(response.searchWebsocketPath),
     features: new Set(response.features.filter((feature) =>

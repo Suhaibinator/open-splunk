@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -114,29 +114,29 @@ func TestRuntimeIndexAdministrationPublishesAuthenticatedAudit(t *testing.T) {
 		firstHandler,
 		bearerToken,
 		dataIndex,
-		opensplunkv1.IndexState_INDEX_STATE_ARCHIVED,
+		opensplunk.IndexState_INDEX_STATE_ARCHIVED,
 	)
 	dataIndex = setRuntimeIndexStateForAudit(
 		t,
 		firstHandler,
 		bearerToken,
 		dataIndex,
-		opensplunkv1.IndexState_INDEX_STATE_ACTIVE,
+		opensplunk.IndexState_INDEX_STATE_ACTIVE,
 	)
 	dataIndex = setRuntimeIndexStateForAudit(
 		t,
 		firstHandler,
 		bearerToken,
 		dataIndex,
-		opensplunkv1.IndexState_INDEX_STATE_ARCHIVED,
+		opensplunk.IndexState_INDEX_STATE_ARCHIVED,
 	)
 	if dataIndex.GetVersion() != 5 {
 		t.Fatalf("data index version = %d, want 5", dataIndex.GetVersion())
 	}
-	deleteDataRequest := &opensplunkv1.DeleteIndexRequest{
+	deleteDataRequest := &opensplunk.DeleteIndexRequest{
 		Selector:         runtimeIndexAuditSelector(dataIndex.GetIndexId()),
 		ExpectedVersion:  dataIndex.GetVersion(),
-		DataDeletionMode: opensplunkv1.IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_DELETE_DATA,
+		DataDeletionMode: opensplunk.IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_DELETE_DATA,
 		ConfirmationName: dataIndexName,
 	}
 	firstDeletion := deleteRuntimeIndexForAudit(
@@ -177,16 +177,16 @@ func TestRuntimeIndexAdministrationPublishesAuthenticatedAudit(t *testing.T) {
 		firstHandler,
 		bearerToken,
 		keepIndex,
-		opensplunkv1.IndexState_INDEX_STATE_ARCHIVED,
+		opensplunk.IndexState_INDEX_STATE_ARCHIVED,
 	)
 	keepDeletion := deleteRuntimeIndexForAudit(
 		t,
 		firstHandler,
 		bearerToken,
-		&opensplunkv1.DeleteIndexRequest{
+		&opensplunk.DeleteIndexRequest{
 			Selector:         runtimeIndexAuditSelector(keepIndex.GetIndexId()),
 			ExpectedVersion:  keepIndex.GetVersion(),
-			DataDeletionMode: opensplunkv1.IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_KEEP_DATA,
+			DataDeletionMode: opensplunk.IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_KEEP_DATA,
 			ConfirmationName: keepIndexName,
 		},
 	)
@@ -196,14 +196,14 @@ func TestRuntimeIndexAdministrationPublishesAuthenticatedAudit(t *testing.T) {
 	}
 
 	firstPageSize := uint32(5)
-	indexTargetKind := opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_INDEX
-	var firstPage opensplunkv1.ListAuditEventsResponse
+	indexTargetKind := opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_INDEX
+	var firstPage opensplunk.ListAuditEventsResponse
 	firstPagePayload := postRuntimeProtoOK(
 		t,
 		firstHandler,
-		"/api/v1/audit/events/list",
-		&opensplunkv1.ListAuditEventsRequest{
-			Page: &opensplunkv1.PageRequest{
+		"/api/audit/events/list",
+		&opensplunk.ListAuditEventsRequest{
+			Page: &opensplunk.PageRequest{
 				PageSize:         &firstPageSize,
 				IncludeTotalSize: true,
 			},
@@ -284,13 +284,13 @@ func TestRuntimeIndexAdministrationPublishesAuthenticatedAudit(t *testing.T) {
 
 	secondPageSize := firstPageSize
 	continuation := firstPageMetadata.GetNextPageToken()
-	var secondPage opensplunkv1.ListAuditEventsResponse
+	var secondPage opensplunk.ListAuditEventsResponse
 	secondPagePayload := postRuntimeProtoOK(
 		t,
 		secondHandler,
-		"/api/v1/audit/events/list",
-		&opensplunkv1.ListAuditEventsRequest{
-			Page: &opensplunkv1.PageRequest{
+		"/api/audit/events/list",
+		&opensplunk.ListAuditEventsRequest{
+			Page: &opensplunk.PageRequest{
 				PageSize:         &secondPageSize,
 				PageToken:        &continuation,
 				IncludeTotalSize: true,
@@ -313,21 +313,21 @@ func TestRuntimeIndexAdministrationPublishesAuthenticatedAudit(t *testing.T) {
 
 	listedEvents := append(
 		append(
-			[]*opensplunkv1.AuditEvent(nil),
+			[]*opensplunk.AuditEvent(nil),
 			firstPage.GetAuditEvents()...,
 		),
 		secondPage.GetAuditEvents()...,
 	)
 	expectations := []runtimeIndexAuditExpectation{
-		{opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_DELETE_KEEP_DATA, keepIndex.GetIndexId(), 2},
-		{opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_ARCHIVE, keepIndex.GetIndexId(), 2},
-		{opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_CREATE, keepIndex.GetIndexId(), 1},
-		{opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_DELETE_DATA, dataIndex.GetIndexId(), 6},
-		{opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_ARCHIVE, dataIndex.GetIndexId(), 5},
-		{opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_ACTIVATE, dataIndex.GetIndexId(), 4},
-		{opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_ARCHIVE, dataIndex.GetIndexId(), 3},
-		{opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_UPDATE, dataIndex.GetIndexId(), 2},
-		{opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_CREATE, dataIndex.GetIndexId(), 1},
+		{opensplunk.AuditAction_AUDIT_ACTION_INDEX_DELETE_KEEP_DATA, keepIndex.GetIndexId(), 2},
+		{opensplunk.AuditAction_AUDIT_ACTION_INDEX_ARCHIVE, keepIndex.GetIndexId(), 2},
+		{opensplunk.AuditAction_AUDIT_ACTION_INDEX_CREATE, keepIndex.GetIndexId(), 1},
+		{opensplunk.AuditAction_AUDIT_ACTION_INDEX_DELETE_DATA, dataIndex.GetIndexId(), 6},
+		{opensplunk.AuditAction_AUDIT_ACTION_INDEX_ARCHIVE, dataIndex.GetIndexId(), 5},
+		{opensplunk.AuditAction_AUDIT_ACTION_INDEX_ACTIVATE, dataIndex.GetIndexId(), 4},
+		{opensplunk.AuditAction_AUDIT_ACTION_INDEX_ARCHIVE, dataIndex.GetIndexId(), 3},
+		{opensplunk.AuditAction_AUDIT_ACTION_INDEX_UPDATE, dataIndex.GetIndexId(), 2},
+		{opensplunk.AuditAction_AUDIT_ACTION_INDEX_CREATE, dataIndex.GetIndexId(), 1},
 	}
 	assertRuntimeIndexAuditEvents(t, listedEvents, expectations)
 	for _, canary := range payloadCanaries {
@@ -400,8 +400,8 @@ func TestRuntimeIndexAdministrationPublishesAuthenticatedAudit(t *testing.T) {
 	wrongScopeResponse := postRuntimeAppProto(
 		t,
 		wrongScopeHandler,
-		"/api/v1/audit/events/list",
-		&opensplunkv1.ListAuditEventsRequest{},
+		"/api/audit/events/list",
+		&opensplunk.ListAuditEventsRequest{},
 		wrongBearerToken,
 	)
 	if wrongScopeResponse.Code != http.StatusForbidden {
@@ -458,8 +458,8 @@ func TestRuntimeIndexAdministrationAuditFailureRollsBack(t *testing.T) {
 	response := postRuntimeAppProto(
 		t,
 		handler,
-		"/api/v1/indexes/create",
-		&opensplunkv1.CreateIndexRequest{
+		"/api/indexes/create",
+		&opensplunk.CreateIndexRequest{
 			Definition: runtimeIndexAuditDefinition(
 				indexName,
 				"Rollback audit mutation",
@@ -507,14 +507,14 @@ func TestRuntimeIndexAdministrationAuditFailureRollsBack(t *testing.T) {
 }
 
 type runtimeIndexAuditExpectation struct {
-	action  opensplunkv1.AuditAction
+	action  opensplunk.AuditAction
 	indexID string
 	version uint64
 }
 
 func assertRuntimeIndexAuditEvents(
 	t *testing.T,
-	events []*opensplunkv1.AuditEvent,
+	events []*opensplunk.AuditEvent,
 	expectations []runtimeIndexAuditExpectation,
 ) {
 	t.Helper()
@@ -525,11 +525,11 @@ func assertRuntimeIndexAuditEvents(
 		event := events[index]
 		wantSequence := uint64(len(expectations) - index)
 		if event.GetSequence() != wantSequence ||
-			event.GetActorKind() != opensplunkv1.AuditActorKind_AUDIT_ACTOR_KIND_BROWSER ||
+			event.GetActorKind() != opensplunk.AuditActorKind_AUDIT_ACTOR_KIND_BROWSER ||
 			event.GetActorId() != runtimeIndexAuditOwnerID ||
-			event.GetActorRole() != opensplunkv1.AuditActorRole_AUDIT_ACTOR_ROLE_ADMINISTRATOR ||
+			event.GetActorRole() != opensplunk.AuditActorRole_AUDIT_ACTOR_ROLE_ADMINISTRATOR ||
 			event.GetAction() != expectation.action ||
-			event.GetTargetKind() != opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_INDEX ||
+			event.GetTargetKind() != opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_INDEX ||
 			event.GetTargetId() != expectation.indexID ||
 			event.GetTargetVersion() != expectation.version ||
 			event.GetOccurredAt() == nil ||
@@ -638,14 +638,14 @@ func createRuntimeIndexForAudit(
 	name string,
 	displayName string,
 	description string,
-) *opensplunkv1.Index {
+) *opensplunk.Index {
 	t.Helper()
-	var response opensplunkv1.CreateIndexResponse
+	var response opensplunk.CreateIndexResponse
 	postRuntimeProtoOK(
 		t,
 		handler,
-		"/api/v1/indexes/create",
-		&opensplunkv1.CreateIndexRequest{
+		"/api/indexes/create",
+		&opensplunk.CreateIndexRequest{
 			Definition: runtimeIndexAuditDefinition(
 				name,
 				displayName,
@@ -666,19 +666,19 @@ func updateRuntimeIndexDescriptionForAudit(
 	t *testing.T,
 	handler http.Handler,
 	bearerToken []byte,
-	index *opensplunkv1.Index,
+	index *opensplunk.Index,
 	description string,
-) *opensplunkv1.Index {
+) *opensplunk.Index {
 	t.Helper()
-	var response opensplunkv1.UpdateIndexResponse
+	var response opensplunk.UpdateIndexResponse
 	postRuntimeProtoOK(
 		t,
 		handler,
-		"/api/v1/indexes/update",
-		&opensplunkv1.UpdateIndexRequest{
+		"/api/indexes/update",
+		&opensplunk.UpdateIndexRequest{
 			Selector:        runtimeIndexAuditSelector(index.GetIndexId()),
 			ExpectedVersion: index.GetVersion(),
-			Definition: &opensplunkv1.IndexDefinition{
+			Definition: &opensplunk.IndexDefinition{
 				Description: &description,
 			},
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"description"}},
@@ -696,16 +696,16 @@ func setRuntimeIndexStateForAudit(
 	t *testing.T,
 	handler http.Handler,
 	bearerToken []byte,
-	index *opensplunkv1.Index,
-	state opensplunkv1.IndexState,
-) *opensplunkv1.Index {
+	index *opensplunk.Index,
+	state opensplunk.IndexState,
+) *opensplunk.Index {
 	t.Helper()
-	var response opensplunkv1.SetIndexStateResponse
+	var response opensplunk.SetIndexStateResponse
 	postRuntimeProtoOK(
 		t,
 		handler,
-		"/api/v1/indexes/state/set",
-		&opensplunkv1.SetIndexStateRequest{
+		"/api/indexes/state/set",
+		&opensplunk.SetIndexStateRequest{
 			Selector:        runtimeIndexAuditSelector(index.GetIndexId()),
 			ExpectedVersion: index.GetVersion(),
 			State:           state,
@@ -724,14 +724,14 @@ func deleteRuntimeIndexForAudit(
 	t *testing.T,
 	handler http.Handler,
 	bearerToken []byte,
-	request *opensplunkv1.DeleteIndexRequest,
-) *opensplunkv1.DeleteIndexResponse {
+	request *opensplunk.DeleteIndexRequest,
+) *opensplunk.DeleteIndexResponse {
 	t.Helper()
-	var response opensplunkv1.DeleteIndexResponse
+	var response opensplunk.DeleteIndexResponse
 	postRuntimeProtoOK(
 		t,
 		handler,
-		"/api/v1/indexes/delete",
+		"/api/indexes/delete",
 		request,
 		&response,
 		bearerToken,
@@ -743,19 +743,19 @@ func runtimeIndexAuditDefinition(
 	name string,
 	displayName string,
 	description string,
-) *opensplunkv1.IndexDefinition {
-	return &opensplunkv1.IndexDefinition{
+) *opensplunk.IndexDefinition {
+	return &opensplunk.IndexDefinition{
 		Name:            name,
 		DisplayName:     displayName,
 		Description:     &description,
-		IngestionAccess: opensplunkv1.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
-		SearchAccess:    opensplunkv1.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
+		IngestionAccess: opensplunk.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
+		SearchAccess:    opensplunk.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
 	}
 }
 
-func runtimeIndexAuditSelector(indexID string) *opensplunkv1.IndexSelector {
-	return &opensplunkv1.IndexSelector{
-		Selector: &opensplunkv1.IndexSelector_IndexId{IndexId: indexID},
+func runtimeIndexAuditSelector(indexID string) *opensplunk.IndexSelector {
+	return &opensplunk.IndexSelector{
+		Selector: &opensplunk.IndexSelector_IndexId{IndexId: indexID},
 	}
 }
 

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
 	"google.golang.org/protobuf/proto"
 )
@@ -31,7 +31,7 @@ func TestWriterIdempotencyReclaimRejectsCorruptVersionLifecycleAndAuditAuthoriti
 					t.Fatalf("read reclaim outcome: %v", err)
 				}
 				fixture.originalOutcome = bytes.Clone(encoded)
-				envelope := &opensplunkv1.KnowledgeMutationOutcomeRecord{}
+				envelope := &opensplunk.KnowledgeMutationOutcomeRecord{}
 				if err := proto.Unmarshal(encoded, envelope); err != nil ||
 					len(envelope.GetObject().GetDefinitionSha256()) != 32 {
 					t.Fatalf("decode reclaim outcome = (%v, %v)", envelope, err)

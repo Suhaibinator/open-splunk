@@ -10,7 +10,7 @@ import (
 	"errors"
 	"math"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -40,7 +40,7 @@ type Result struct{ state *resultState }
 
 type resultState struct {
 	kind              resultKind
-	value             *opensplunkv1.KnowledgeValidationResult
+	value             *opensplunk.KnowledgeValidationResult
 	diagnosticSources []diagnosticSource
 }
 
@@ -67,10 +67,10 @@ type activePreparationState struct {
 type ActiveCandidate struct{ state *activeCandidateState }
 
 type activeCandidateState struct {
-	normalized      *opensplunkv1.KnowledgeObjectDefinition
+	normalized      *opensplunk.KnowledgeObjectDefinition
 	normalizedBytes uint64
 	digest          [sha256.Size]byte
-	objectType      opensplunkv1.KnowledgeObjectType
+	objectType      opensplunk.KnowledgeObjectType
 	patterns        uint32
 	charges         intrinsicCharges
 }
@@ -87,13 +87,13 @@ type ExactIdentity struct {
 // shape and bounds but cannot prove catalog completeness or visibility.
 type ActivePublication struct {
 	Candidate    ExactIdentity
-	Dependencies []*opensplunkv1.KnowledgeValidationDependency
+	Dependencies []*opensplunk.KnowledgeValidationDependency
 }
 
 // SealedValidateResponse retains one checked response and its exact
 // deterministic protobuf encoding. Accessors always detach their results.
 type SealedValidateResponse struct {
-	response          *opensplunkv1.ValidateKnowledgeObjectResponse
+	response          *opensplunk.ValidateKnowledgeObjectResponse
 	wire              []byte
 	kind              resultKind
 	diagnosticSources []diagnosticSource
@@ -116,14 +116,14 @@ func (preparation ActivePreparation) Candidate() (ActiveCandidate, bool) {
 }
 
 // Normalized returns detached normalized definition and digest authorities.
-func (candidate ActiveCandidate) Normalized(ctx context.Context) (*opensplunkv1.KnowledgeObjectDefinition, [sha256.Size]byte, error) {
+func (candidate ActiveCandidate) Normalized(ctx context.Context) (*opensplunk.KnowledgeObjectDefinition, [sha256.Size]byte, error) {
 	if err := contextError(ctx); err != nil {
 		return nil, [sha256.Size]byte{}, err
 	}
 	if candidate.state == nil || candidate.state.normalized == nil {
 		return nil, [sha256.Size]byte{}, ErrInvariant
 	}
-	cloned, ok := proto.Clone(candidate.state.normalized).(*opensplunkv1.KnowledgeObjectDefinition)
+	cloned, ok := proto.Clone(candidate.state.normalized).(*opensplunk.KnowledgeObjectDefinition)
 	if !ok || cloned == nil {
 		return nil, [sha256.Size]byte{}, ErrInvariant
 	}
@@ -134,7 +134,7 @@ func (candidate ActiveCandidate) Normalized(ctx context.Context) (*opensplunkv1.
 }
 
 // Proto returns a detached validation-result projection.
-func (result Result) Proto(ctx context.Context) (*opensplunkv1.KnowledgeValidationResult, error) {
+func (result Result) Proto(ctx context.Context) (*opensplunk.KnowledgeValidationResult, error) {
 	if err := contextError(ctx); err != nil {
 		return nil, err
 	}
@@ -144,7 +144,7 @@ func (result Result) Proto(ctx context.Context) (*opensplunkv1.KnowledgeValidati
 	if err := validateResult(ctx, result.state.value, result.state.kind, result.state.diagnosticSources); err != nil {
 		return nil, err
 	}
-	cloned, ok := proto.Clone(result.state.value).(*opensplunkv1.KnowledgeValidationResult)
+	cloned, ok := proto.Clone(result.state.value).(*opensplunk.KnowledgeValidationResult)
 	if !ok || cloned == nil {
 		return nil, ErrInvariant
 	}
@@ -155,7 +155,7 @@ func (result Result) Proto(ctx context.Context) (*opensplunkv1.KnowledgeValidati
 }
 
 // Proto returns a detached sealed-response projection.
-func (response SealedValidateResponse) Proto(ctx context.Context) (*opensplunkv1.ValidateKnowledgeObjectResponse, error) {
+func (response SealedValidateResponse) Proto(ctx context.Context) (*opensplunk.ValidateKnowledgeObjectResponse, error) {
 	if err := contextError(ctx); err != nil {
 		return nil, err
 	}
@@ -175,7 +175,7 @@ func (response SealedValidateResponse) Proto(ctx context.Context) (*opensplunkv1
 	if err != nil || len(wire) > MaximumResponseBytes || !bytes.Equal(wire, response.wire) {
 		return nil, ErrInvariant
 	}
-	cloned, ok := proto.Clone(response.response).(*opensplunkv1.ValidateKnowledgeObjectResponse)
+	cloned, ok := proto.Clone(response.response).(*opensplunk.ValidateKnowledgeObjectResponse)
 	if !ok || cloned == nil {
 		return nil, ErrInvariant
 	}
@@ -193,13 +193,13 @@ func (response SealedValidateResponse) DeterministicBytes() []byte {
 func newResult(
 	ctx context.Context,
 	kind resultKind,
-	value *opensplunkv1.KnowledgeValidationResult,
+	value *opensplunk.KnowledgeValidationResult,
 	diagnosticSources []diagnosticSource,
 ) (Result, error) {
 	if value == nil {
 		return Result{}, ErrInvariant
 	}
-	cloned, ok := proto.Clone(value).(*opensplunkv1.KnowledgeValidationResult)
+	cloned, ok := proto.Clone(value).(*opensplunk.KnowledgeValidationResult)
 	if !ok || cloned == nil {
 		return Result{}, ErrInvariant
 	}

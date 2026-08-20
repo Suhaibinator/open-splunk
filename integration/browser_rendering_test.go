@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
@@ -176,10 +176,8 @@ func TestBrowserFixedResultRendering(t *testing.T) {
 		MaximumPageSize: browserRenderingRowCount,
 		Now:             func() time.Time { return anchor },
 		Bootstrap: server.BootstrapConfig{
-			ServerVersion: "browser-rendering-test",
-			APIVersion:    "v1",
-			Features: []opensplunkv1.ServerFeature{
-				opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH,
+			Features: []opensplunk.ServerFeature{
+				opensplunk.ServerFeature_SERVER_FEATURE_SEARCH,
 			},
 		},
 	})
@@ -195,11 +193,11 @@ func TestBrowserFixedResultRendering(t *testing.T) {
 		func(response http.ResponseWriter, request *http.Request) {
 			if request.Method == http.MethodPost {
 				switch request.URL.Path {
-				case "/api/v1/search/jobs/create":
+				case "/api/search/jobs/create":
 					createCalls.Add(1)
-				case "/api/v1/search/jobs/get":
+				case "/api/search/jobs/get":
 					getCalls.Add(1)
-				case "/api/v1/search/jobs/results":
+				case "/api/search/jobs/results":
 					resultCalls.Add(1)
 				}
 			}

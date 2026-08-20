@@ -1,5 +1,5 @@
 {
-  "format_version": "hec-compatibility-fixture-v0.1",
+  "format_version": 1,
   "cases": [
     {
       "id": "json.string-token-and-index-defaults",
@@ -142,7 +142,7 @@
       "rule": "absent host, source, and sourcetype use fixed non-secret fallbacks when no token or index default exists",
       "request": {
         "method": "POST",
-        "path": "/services/collector/event/1.0",
+        "path": "/services/collector/event",
         "headers": [{"name": "Authorization", "value": "Splunk {{token:primary}}"}],
         "query": [],
         "body": {"kind": "utf8", "value": "{\"event\":{}}{\"event\":[]}"}

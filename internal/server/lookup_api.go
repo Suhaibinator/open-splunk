@@ -12,7 +12,7 @@ import (
 	"github.com/Suhaibinator/SRouter/pkg/codec"
 	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/lookupasset"
 	"github.com/Suhaibinator/open-splunk/internal/lookupcatalog"
@@ -32,13 +32,13 @@ const (
 	lookupDeleteRoute   = "/knowledge/lookups/delete"
 	lookupPreviewRoute  = "/knowledge/lookups/preview"
 
-	lookupCreatePath   = apiV1PathPrefix + lookupCreateRoute
-	lookupGetPath      = apiV1PathPrefix + lookupGetRoute
-	lookupListPath     = apiV1PathPrefix + lookupListRoute
-	lookupReplacePath  = apiV1PathPrefix + lookupReplaceRoute
-	lookupSetStatePath = apiV1PathPrefix + lookupSetStateRoute
-	lookupDeletePath   = apiV1PathPrefix + lookupDeleteRoute
-	lookupPreviewPath  = apiV1PathPrefix + lookupPreviewRoute
+	lookupCreatePath   = apiPathPrefix + lookupCreateRoute
+	lookupGetPath      = apiPathPrefix + lookupGetRoute
+	lookupListPath     = apiPathPrefix + lookupListRoute
+	lookupReplacePath  = apiPathPrefix + lookupReplaceRoute
+	lookupSetStatePath = apiPathPrefix + lookupSetStateRoute
+	lookupDeletePath   = apiPathPrefix + lookupDeleteRoute
+	lookupPreviewPath  = apiPathPrefix + lookupPreviewRoute
 
 	// The semantic maximum includes 8 MiB of CSV plus 20 canonical event paths,
 	// 64 selector patterns, a description, and protobuf framing.
@@ -48,28 +48,28 @@ const (
 	maximumLookupProtoDepth           = 32
 )
 
-// LookupManagement is the complete v0.4 administrator surface. One dependency
+// LookupManagement is the complete lookup administrator surface. One dependency
 // owns every route so partial configuration cannot expose a misleading API.
 type LookupManagement interface {
 	Ready() bool
-	Create(context.Context, lookupservice.Scope, *opensplunkv1.CreateLookupRequest) (*opensplunkv1.CreateLookupResponse, error)
-	Get(context.Context, lookupservice.Scope, *opensplunkv1.GetLookupRequest) (*opensplunkv1.GetLookupResponse, error)
-	List(context.Context, lookupservice.Scope, *opensplunkv1.ListLookupsRequest) (*opensplunkv1.ListLookupsResponse, error)
-	Replace(context.Context, lookupservice.Scope, *opensplunkv1.ReplaceLookupRequest) (*opensplunkv1.ReplaceLookupResponse, error)
-	SetState(context.Context, lookupservice.Scope, *opensplunkv1.SetLookupStateRequest) (*opensplunkv1.SetLookupStateResponse, error)
-	Delete(context.Context, lookupservice.Scope, *opensplunkv1.DeleteLookupRequest) (*opensplunkv1.DeleteLookupResponse, error)
-	Preview(context.Context, lookupservice.Scope, *opensplunkv1.PreviewLookupRequest) (*opensplunkv1.PreviewLookupResponse, error)
+	Create(context.Context, lookupservice.Scope, *opensplunk.CreateLookupRequest) (*opensplunk.CreateLookupResponse, error)
+	Get(context.Context, lookupservice.Scope, *opensplunk.GetLookupRequest) (*opensplunk.GetLookupResponse, error)
+	List(context.Context, lookupservice.Scope, *opensplunk.ListLookupsRequest) (*opensplunk.ListLookupsResponse, error)
+	Replace(context.Context, lookupservice.Scope, *opensplunk.ReplaceLookupRequest) (*opensplunk.ReplaceLookupResponse, error)
+	SetState(context.Context, lookupservice.Scope, *opensplunk.SetLookupStateRequest) (*opensplunk.SetLookupStateResponse, error)
+	Delete(context.Context, lookupservice.Scope, *opensplunk.DeleteLookupRequest) (*opensplunk.DeleteLookupResponse, error)
+	Preview(context.Context, lookupservice.Scope, *opensplunk.PreviewLookupRequest) (*opensplunk.PreviewLookupResponse, error)
 }
 
 var _ LookupManagement = (*lookupservice.Service)(nil)
 
-type serializedCreateLookupResponse = boundedProtoResponse[*opensplunkv1.CreateLookupResponse]
-type serializedGetLookupResponse = boundedProtoResponse[*opensplunkv1.GetLookupResponse]
-type serializedListLookupsResponse = boundedProtoResponse[*opensplunkv1.ListLookupsResponse]
-type serializedReplaceLookupResponse = boundedProtoResponse[*opensplunkv1.ReplaceLookupResponse]
-type serializedSetLookupStateResponse = boundedProtoResponse[*opensplunkv1.SetLookupStateResponse]
-type serializedDeleteLookupResponse = boundedProtoResponse[*opensplunkv1.DeleteLookupResponse]
-type serializedPreviewLookupResponse = boundedProtoResponse[*opensplunkv1.PreviewLookupResponse]
+type serializedCreateLookupResponse = boundedProtoResponse[*opensplunk.CreateLookupResponse]
+type serializedGetLookupResponse = boundedProtoResponse[*opensplunk.GetLookupResponse]
+type serializedListLookupsResponse = boundedProtoResponse[*opensplunk.ListLookupsResponse]
+type serializedReplaceLookupResponse = boundedProtoResponse[*opensplunk.ReplaceLookupResponse]
+type serializedSetLookupStateResponse = boundedProtoResponse[*opensplunk.SetLookupStateResponse]
+type serializedDeleteLookupResponse = boundedProtoResponse[*opensplunk.DeleteLookupResponse]
+type serializedPreviewLookupResponse = boundedProtoResponse[*opensplunk.PreviewLookupResponse]
 
 func newLookupBoundedCodec[Request any, Message proto.Message](inner codec.Codec[Request, Message], operation string) *boundedProtoCodec[Request, Message] {
 	return newBoundedProtoCodec(inner, boundedProtoCodecOptions{
@@ -84,58 +84,58 @@ func (handler *apiHandler) lookupManagementConfigured() bool {
 
 func (handler *apiHandler) lookupManagementRoutes(noAuth router.AuthLevel) []protobufRouteDefinition {
 	return []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute[*opensplunkv1.CreateLookupRequest, *serializedCreateLookupResponse](router.RouteConfig[*opensplunkv1.CreateLookupRequest, *serializedCreateLookupResponse]{
+		newForwardCompatibleProtoRoute[*opensplunk.CreateLookupRequest, *serializedCreateLookupResponse](router.RouteConfig[*opensplunk.CreateLookupRequest, *serializedCreateLookupResponse]{
 			Path: lookupCreateRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newLookupBoundedCodec(codec.NewProtoCodec[*opensplunkv1.CreateLookupRequest, *opensplunkv1.CreateLookupResponse](), "create"), Handler: handler.createLookup,
+			Codec: newLookupBoundedCodec(codec.NewProtoCodec[*opensplunk.CreateLookupRequest, *opensplunk.CreateLookupResponse](), "create"), Handler: handler.createLookup,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumLookupMutationRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunkv1.GetLookupRequest, *serializedGetLookupResponse](router.RouteConfig[*opensplunkv1.GetLookupRequest, *serializedGetLookupResponse]{
+		newForwardCompatibleProtoRoute[*opensplunk.GetLookupRequest, *serializedGetLookupResponse](router.RouteConfig[*opensplunk.GetLookupRequest, *serializedGetLookupResponse]{
 			Path: lookupGetRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newLookupBoundedCodec(codec.NewProtoCodec[*opensplunkv1.GetLookupRequest, *opensplunkv1.GetLookupResponse](), "get"), Handler: handler.getLookup,
+			Codec: newLookupBoundedCodec(codec.NewProtoCodec[*opensplunk.GetLookupRequest, *opensplunk.GetLookupResponse](), "get"), Handler: handler.getLookup,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumLookupSmallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunkv1.ListLookupsRequest, *serializedListLookupsResponse](router.RouteConfig[*opensplunkv1.ListLookupsRequest, *serializedListLookupsResponse]{
+		newForwardCompatibleProtoRoute[*opensplunk.ListLookupsRequest, *serializedListLookupsResponse](router.RouteConfig[*opensplunk.ListLookupsRequest, *serializedListLookupsResponse]{
 			Path: lookupListRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newLookupBoundedCodec(codec.NewProtoCodec[*opensplunkv1.ListLookupsRequest, *opensplunkv1.ListLookupsResponse](), "list"), Handler: handler.listLookups,
+			Codec: newLookupBoundedCodec(codec.NewProtoCodec[*opensplunk.ListLookupsRequest, *opensplunk.ListLookupsResponse](), "list"), Handler: handler.listLookups,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumLookupSmallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunkv1.ReplaceLookupRequest, *serializedReplaceLookupResponse](router.RouteConfig[*opensplunkv1.ReplaceLookupRequest, *serializedReplaceLookupResponse]{
+		newForwardCompatibleProtoRoute[*opensplunk.ReplaceLookupRequest, *serializedReplaceLookupResponse](router.RouteConfig[*opensplunk.ReplaceLookupRequest, *serializedReplaceLookupResponse]{
 			Path: lookupReplaceRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newLookupBoundedCodec(codec.NewProtoCodec[*opensplunkv1.ReplaceLookupRequest, *opensplunkv1.ReplaceLookupResponse](), "replace"), Handler: handler.replaceLookup,
+			Codec: newLookupBoundedCodec(codec.NewProtoCodec[*opensplunk.ReplaceLookupRequest, *opensplunk.ReplaceLookupResponse](), "replace"), Handler: handler.replaceLookup,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumLookupMutationRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunkv1.SetLookupStateRequest, *serializedSetLookupStateResponse](router.RouteConfig[*opensplunkv1.SetLookupStateRequest, *serializedSetLookupStateResponse]{
+		newForwardCompatibleProtoRoute[*opensplunk.SetLookupStateRequest, *serializedSetLookupStateResponse](router.RouteConfig[*opensplunk.SetLookupStateRequest, *serializedSetLookupStateResponse]{
 			Path: lookupSetStateRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newLookupBoundedCodec(codec.NewProtoCodec[*opensplunkv1.SetLookupStateRequest, *opensplunkv1.SetLookupStateResponse](), "set state"), Handler: handler.setLookupState,
+			Codec: newLookupBoundedCodec(codec.NewProtoCodec[*opensplunk.SetLookupStateRequest, *opensplunk.SetLookupStateResponse](), "set state"), Handler: handler.setLookupState,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumLookupSmallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunkv1.DeleteLookupRequest, *serializedDeleteLookupResponse](router.RouteConfig[*opensplunkv1.DeleteLookupRequest, *serializedDeleteLookupResponse]{
+		newForwardCompatibleProtoRoute[*opensplunk.DeleteLookupRequest, *serializedDeleteLookupResponse](router.RouteConfig[*opensplunk.DeleteLookupRequest, *serializedDeleteLookupResponse]{
 			Path: lookupDeleteRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newLookupBoundedCodec(codec.NewProtoCodec[*opensplunkv1.DeleteLookupRequest, *opensplunkv1.DeleteLookupResponse](), "delete"), Handler: handler.deleteLookup,
+			Codec: newLookupBoundedCodec(codec.NewProtoCodec[*opensplunk.DeleteLookupRequest, *opensplunk.DeleteLookupResponse](), "delete"), Handler: handler.deleteLookup,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumLookupSmallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunkv1.PreviewLookupRequest, *serializedPreviewLookupResponse](router.RouteConfig[*opensplunkv1.PreviewLookupRequest, *serializedPreviewLookupResponse]{
+		newForwardCompatibleProtoRoute[*opensplunk.PreviewLookupRequest, *serializedPreviewLookupResponse](router.RouteConfig[*opensplunk.PreviewLookupRequest, *serializedPreviewLookupResponse]{
 			Path: lookupPreviewRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newLookupBoundedCodec(codec.NewProtoCodec[*opensplunkv1.PreviewLookupRequest, *opensplunkv1.PreviewLookupResponse](), "preview"), Handler: handler.previewLookup,
+			Codec: newLookupBoundedCodec(codec.NewProtoCodec[*opensplunk.PreviewLookupRequest, *opensplunk.PreviewLookupResponse](), "preview"), Handler: handler.previewLookup,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumLookupMutationRequestBytes},
 		}),
 	}
 }
 
-func (handler *apiHandler) createLookup(request *http.Request, input *opensplunkv1.CreateLookupRequest) (*serializedCreateLookupResponse, error) {
-	return invokeLookup(handler, request, input, handler.lookupManagement.Create, func(response *opensplunkv1.CreateLookupResponse, scope lookupservice.Scope) bool {
-		return response != nil && validLookupProjection(response.GetLookup(), scope) && response.GetLookup().GetVersion() == 1 && response.GetLookup().GetState() == opensplunkv1.LookupState_LOOKUP_STATE_ACTIVE
+func (handler *apiHandler) createLookup(request *http.Request, input *opensplunk.CreateLookupRequest) (*serializedCreateLookupResponse, error) {
+	return invokeLookup(handler, request, input, handler.lookupManagement.Create, func(response *opensplunk.CreateLookupResponse, scope lookupservice.Scope) bool {
+		return response != nil && validLookupProjection(response.GetLookup(), scope) && response.GetLookup().GetVersion() == 1 && response.GetLookup().GetState() == opensplunk.LookupState_LOOKUP_STATE_ACTIVE
 	})
 }
 
-func (handler *apiHandler) getLookup(request *http.Request, input *opensplunkv1.GetLookupRequest) (*serializedGetLookupResponse, error) {
-	return invokeLookup(handler, request, input, handler.lookupManagement.Get, func(response *opensplunkv1.GetLookupResponse, scope lookupservice.Scope) bool {
+func (handler *apiHandler) getLookup(request *http.Request, input *opensplunk.GetLookupRequest) (*serializedGetLookupResponse, error) {
+	return invokeLookup(handler, request, input, handler.lookupManagement.Get, func(response *opensplunk.GetLookupResponse, scope lookupservice.Scope) bool {
 		return response != nil && validLookupProjection(response.GetLookup(), scope) && response.GetLookup().GetLookupId() == input.GetLookupId() && (input.Version == nil || response.GetLookup().GetVersion() == input.GetVersion())
 	})
 }
 
-func (handler *apiHandler) listLookups(request *http.Request, input *opensplunkv1.ListLookupsRequest) (*serializedListLookupsResponse, error) {
-	return invokeLookup(handler, request, input, handler.lookupManagement.List, func(response *opensplunkv1.ListLookupsResponse, scope lookupservice.Scope) bool {
+func (handler *apiHandler) listLookups(request *http.Request, input *opensplunk.ListLookupsRequest) (*serializedListLookupsResponse, error) {
+	return invokeLookup(handler, request, input, handler.lookupManagement.List, func(response *opensplunk.ListLookupsResponse, scope lookupservice.Scope) bool {
 		if response == nil || response.GetPage() == nil || len(response.GetLookups()) > lookupservice.MaximumPageSize {
 			return false
 		}
@@ -165,26 +165,26 @@ func (handler *apiHandler) listLookups(request *http.Request, input *opensplunkv
 	})
 }
 
-func (handler *apiHandler) replaceLookup(request *http.Request, input *opensplunkv1.ReplaceLookupRequest) (*serializedReplaceLookupResponse, error) {
-	return invokeLookup(handler, request, input, handler.lookupManagement.Replace, func(response *opensplunkv1.ReplaceLookupResponse, scope lookupservice.Scope) bool {
+func (handler *apiHandler) replaceLookup(request *http.Request, input *opensplunk.ReplaceLookupRequest) (*serializedReplaceLookupResponse, error) {
+	return invokeLookup(handler, request, input, handler.lookupManagement.Replace, func(response *opensplunk.ReplaceLookupResponse, scope lookupservice.Scope) bool {
 		return response != nil && validLookupProjection(response.GetLookup(), scope) && response.GetLookup().GetLookupId() == input.GetLookupId() && response.GetLookup().GetVersion() == input.GetExpectedVersion()+1
 	})
 }
 
-func (handler *apiHandler) setLookupState(request *http.Request, input *opensplunkv1.SetLookupStateRequest) (*serializedSetLookupStateResponse, error) {
-	return invokeLookup(handler, request, input, handler.lookupManagement.SetState, func(response *opensplunkv1.SetLookupStateResponse, scope lookupservice.Scope) bool {
+func (handler *apiHandler) setLookupState(request *http.Request, input *opensplunk.SetLookupStateRequest) (*serializedSetLookupStateResponse, error) {
+	return invokeLookup(handler, request, input, handler.lookupManagement.SetState, func(response *opensplunk.SetLookupStateResponse, scope lookupservice.Scope) bool {
 		return response != nil && validLookupProjection(response.GetLookup(), scope) && response.GetLookup().GetLookupId() == input.GetLookupId() && response.GetLookup().GetVersion() == input.GetExpectedVersion()+1 && response.GetLookup().GetState() == input.GetState()
 	})
 }
 
-func (handler *apiHandler) deleteLookup(request *http.Request, input *opensplunkv1.DeleteLookupRequest) (*serializedDeleteLookupResponse, error) {
-	return invokeLookup(handler, request, input, handler.lookupManagement.Delete, func(response *opensplunkv1.DeleteLookupResponse, _ lookupservice.Scope) bool {
+func (handler *apiHandler) deleteLookup(request *http.Request, input *opensplunk.DeleteLookupRequest) (*serializedDeleteLookupResponse, error) {
+	return invokeLookup(handler, request, input, handler.lookupManagement.Delete, func(response *opensplunk.DeleteLookupResponse, _ lookupservice.Scope) bool {
 		return response != nil && response.GetLookupId() == input.GetLookupId() && response.GetVersion() == input.GetExpectedVersion()+1
 	})
 }
 
-func (handler *apiHandler) previewLookup(request *http.Request, input *opensplunkv1.PreviewLookupRequest) (*serializedPreviewLookupResponse, error) {
-	return invokeLookup(handler, request, input, handler.lookupManagement.Preview, func(response *opensplunkv1.PreviewLookupResponse, _ lookupservice.Scope) bool {
+func (handler *apiHandler) previewLookup(request *http.Request, input *opensplunk.PreviewLookupRequest) (*serializedPreviewLookupResponse, error) {
+	return invokeLookup(handler, request, input, handler.lookupManagement.Preview, func(response *opensplunk.PreviewLookupResponse, _ lookupservice.Scope) bool {
 		return validLookupPreview(response)
 	})
 }
@@ -258,7 +258,7 @@ func mapLookupCallError(ctx context.Context, err error) error {
 // boundedLookupDefinitionRepeatedShape runs before reflection, cloning, or
 // normalization at configurable boundaries. A raw protobuf byte ceiling does
 // not bound the heap represented by repeated empty messages.
-func boundedLookupDefinitionRepeatedShape(definition *opensplunkv1.LookupDefinition) bool {
+func boundedLookupDefinitionRepeatedShape(definition *opensplunk.LookupDefinition) bool {
 	if definition == nil {
 		return true
 	}
@@ -277,7 +277,7 @@ func boundedLookupDefinitionRepeatedShape(definition *opensplunkv1.LookupDefinit
 // rejectUnknownLookupDefinition prevents a newer client's persisted semantic
 // fields from being silently discarded while retaining forward compatibility
 // for unknown request-envelope fields.
-func rejectUnknownLookupDefinition(definition *opensplunkv1.LookupDefinition) error {
+func rejectUnknownLookupDefinition(definition *opensplunk.LookupDefinition) error {
 	if definition == nil {
 		return nil
 	}
@@ -290,7 +290,7 @@ func rejectUnknownLookupDefinition(definition *opensplunkv1.LookupDefinition) er
 	return nil
 }
 
-func validLookupProjection(lookup *opensplunkv1.Lookup, scope lookupservice.Scope) bool {
+func validLookupProjection(lookup *opensplunk.Lookup, scope lookupservice.Scope) bool {
 	if lookup == nil || lookup.GetDefinition() == nil || lookup.GetTenantId() != scope.TenantID || lookup.GetOwnerId() != scope.OwnerID ||
 		lookup.GetVersion() == 0 || lookup.GetVersion() > math.MaxInt64 || !validLookupManagementIdentity(lookup.GetLookupId(), 128) ||
 		!boundedLookupDefinitionRepeatedShape(lookup.GetDefinition()) || !validLookupColumns(lookup.GetColumns(), false) ||
@@ -304,11 +304,11 @@ func validLookupProjection(lookup *opensplunkv1.Lookup, scope lookupservice.Scop
 		return false
 	}
 	switch lookup.GetState() {
-	case opensplunkv1.LookupState_LOOKUP_STATE_ACTIVE:
+	case opensplunk.LookupState_LOOKUP_STATE_ACTIVE:
 		return lookup.DisabledAt == nil && lookup.DeletedAt == nil
-	case opensplunkv1.LookupState_LOOKUP_STATE_DISABLED:
+	case opensplunk.LookupState_LOOKUP_STATE_DISABLED:
 		return validLookupLifecycleTime(lookup.GetDisabledAt(), lookup.GetCreatedAt(), lookup.GetUpdatedAt()) && lookup.DeletedAt == nil
-	case opensplunkv1.LookupState_LOOKUP_STATE_DELETED:
+	case opensplunk.LookupState_LOOKUP_STATE_DELETED:
 		return validLookupLifecycleTime(lookup.GetDisabledAt(), lookup.GetCreatedAt(), lookup.GetUpdatedAt()) &&
 			validLookupLifecycleTime(lookup.GetDeletedAt(), lookup.GetDisabledAt(), lookup.GetUpdatedAt())
 	default:
@@ -359,7 +359,7 @@ func validLookupManagementIdentity(value string, maximum int) bool {
 	return true
 }
 
-func validLookupPreview(response *opensplunkv1.PreviewLookupResponse) bool {
+func validLookupPreview(response *opensplunk.PreviewLookupResponse) bool {
 	if response == nil || !validLookupColumns(response.GetColumns(), true) ||
 		len(response.GetRows()) > lookupservice.MaximumPreviewRows || len(response.GetViolations()) > 8 ||
 		response.GetTotalRows() > lookupasset.MaximumRows || len(response.GetSourceSha256()) != 32 {

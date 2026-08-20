@@ -1,5 +1,5 @@
-import type { ResultColumn } from "@/gen/ts/open_splunk/v1/result";
-import { ValueType } from "@/gen/ts/open_splunk/v1/value";
+import type { ResultColumn } from "@/gen/ts/open_splunk/result";
+import { ValueType } from "@/gen/ts/open_splunk/value";
 
 export const MAXIMUM_FLAT_MULTIVALUE_DELIMITER_BYTES = 16 << 10;
 

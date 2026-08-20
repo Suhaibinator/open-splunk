@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
@@ -23,7 +23,6 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
-	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
@@ -203,9 +202,9 @@ func TestSavedSearchAndHistoryRerunResolveCurrentKnowledgeWhileExportRetainsOrig
 		OwnerID:        knowledgeSavedSearchOwnerID,
 		WritableAppIDs: []string{knowledgeSavedSearchAppID},
 	}
-	createdObject, err := writer.Create(actor, writeScope, &opensplunkv1.CreateKnowledgeObjectRequest{
+	createdObject, err := writer.Create(actor, writeScope, &opensplunk.CreateKnowledgeObjectRequest{
 		Definition:      knowledgeSavedSearchDefinition(knowledgeSavedSearchV1),
-		InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
+		InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
 		ClientRequestId: "knowledge-saved-search-v1",
 	})
 	if err != nil {
@@ -232,7 +231,7 @@ func TestSavedSearchAndHistoryRerunResolveCurrentKnowledgeWhileExportRetainsOrig
 	savedDefinition.Search.Spl = knowledgeSavedSearchSPL
 	savedDefinition.Search.IndexScope = []string{"main"}
 	timezone := "UTC"
-	savedDefinition.Search.TimeRange = &opensplunkv1.TimeRangeSpec{
+	savedDefinition.Search.TimeRange = &opensplunk.TimeRangeSpec{
 		Earliest: new("-1h"), Latest: new("now"), Timezone: &timezone,
 	}
 	saved, err := savedSearches.Create(
@@ -316,22 +315,21 @@ func TestSavedSearchAndHistoryRerunResolveCurrentKnowledgeWhileExportRetainsOrig
 		Now:                  func() time.Time { return anchor },
 	})
 
-	savedRunDefinition := proto.Clone(saved.GetDefinition().GetSearch()).(*opensplunkv1.SearchDefinition)
+	savedRunDefinition := proto.Clone(saved.GetDefinition().GetSearch()).(*opensplunk.SearchDefinition)
 	// Search creation consumes execution intent only. Saved-search presentation
 	// defaults remain owned by the saved object and are not job input.
-	savedRunDefinition.PreferredResultTab = opensplunkv1.SearchResultTab_SEARCH_RESULT_TAB_UNSPECIFIED
+	savedRunDefinition.PreferredResultTab = opensplunk.SearchResultTab_SEARCH_RESULT_TAB_UNSPECIFIED
 	savedRunDefinition.SelectedFields = nil
 	savedRunDefinition.Visualization = nil
-	savedRun := &opensplunkv1.CreateSearchJobRequest{
+	savedRun := &opensplunk.CreateSearchJobRequest{
 		Definition: savedRunDefinition,
-		Source: &opensplunkv1.SearchJobSource{
-			Origin:        opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH,
+		Source: &opensplunk.SearchJobSource{
+			Origin:        opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH,
 			SavedSearchId: new(saved.GetSavedSearchId()),
 		},
 	}
 	original := createKnowledgeSavedSearchJob(t, handler, manager, savedRun, jobIDs[0])
 	requireKnowledgeSavedSearchSummary(t, original.KnowledgeSnapshot, 1)
-	requireKnowledgeSavedSearchCompilerVersion(t, original.CompilerVersion, "original saved-search job")
 	savedSource := searchjobs.JobSource{
 		Origin: searchjobs.JobOriginSavedSearch, ObjectID: knowledgeSavedSearchID,
 	}
@@ -345,9 +343,9 @@ func TestSavedSearchAndHistoryRerunResolveCurrentKnowledgeWhileExportRetainsOrig
 		t.Fatal("saved-search v1 did not reach executor")
 	}
 
-	definitionV2 := proto.Clone(objectV1.GetDefinition()).(*opensplunkv1.KnowledgeObjectDefinition)
+	definitionV2 := proto.Clone(objectV1.GetDefinition()).(*opensplunk.KnowledgeObjectDefinition)
 	definitionV2.GetFieldExtraction().GetRegex().Pattern = knowledgeSavedSearchPattern(knowledgeSavedSearchV2)
-	updatedObject, err := writer.Update(actor, writeScope, &opensplunkv1.UpdateKnowledgeObjectRequest{
+	updatedObject, err := writer.Update(actor, writeScope, &opensplunk.UpdateKnowledgeObjectRequest{
 		KnowledgeObjectId: objectV1.GetKnowledgeObjectId(),
 		ExpectedVersion:   1,
 		Definition:        definitionV2,
@@ -370,7 +368,6 @@ func TestSavedSearchAndHistoryRerunResolveCurrentKnowledgeWhileExportRetainsOrig
 
 	freshSaved := createKnowledgeSavedSearchJob(t, handler, manager, savedRun, jobIDs[1])
 	requireKnowledgeSavedSearchSummary(t, freshSaved.KnowledgeSnapshot, 2)
-	requireKnowledgeSavedSearchCompilerVersion(t, freshSaved.CompilerVersion, "fresh saved-search job")
 	if freshSaved.Source != savedSource {
 		t.Fatalf("fresh saved-search source = %#v, want %#v", freshSaved.Source, savedSource)
 	}
@@ -388,9 +385,8 @@ func TestSavedSearchAndHistoryRerunResolveCurrentKnowledgeWhileExportRetainsOrig
 	freshSaved = waitKnowledgeSavedSearchJob(t, manager, access, freshSaved.ID)
 	originalHistory := waitKnowledgeSavedSearchHistory(t, history, original.ID)
 	requireKnowledgeSavedSearchSummary(t, originalHistory.GetKnowledgeSnapshot(), 1)
-	requireKnowledgeSavedSearchCompilerVersion(t, originalHistory.GetCompilerVersion(), "original history")
 	if originalHistory.GetSource().GetOrigin() !=
-		opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH ||
+		opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH ||
 		originalHistory.GetSource().GetSavedSearchId() != knowledgeSavedSearchID ||
 		!sameKnowledgeSavedSearchDigest(
 			originalHistory.GetKnowledgeSnapshot(),
@@ -407,7 +403,6 @@ func TestSavedSearchAndHistoryRerunResolveCurrentKnowledgeWhileExportRetainsOrig
 		jobIDs[2],
 	)
 	requireKnowledgeSavedSearchSummary(t, historyRerun.KnowledgeSnapshot, 2)
-	requireKnowledgeSavedSearchCompilerVersion(t, historyRerun.CompilerVersion, "history rerun job")
 	historySource := searchjobs.JobSource{
 		Origin: searchjobs.JobOriginHistoryRerun, ObjectID: original.ID,
 	}
@@ -421,7 +416,6 @@ func TestSavedSearchAndHistoryRerunResolveCurrentKnowledgeWhileExportRetainsOrig
 	historyRerun = waitKnowledgeSavedSearchJob(t, manager, access, historyRerun.ID)
 	rererunHistory := waitKnowledgeSavedSearchHistory(t, history, historyRerun.ID)
 	requireKnowledgeSavedSearchSummary(t, rererunHistory.GetKnowledgeSnapshot(), 2)
-	requireKnowledgeSavedSearchCompilerVersion(t, rererunHistory.GetCompilerVersion(), "history rerun journal")
 
 	executionV1 := knowledgeSavedSearchExecution(t, manager, access, original.ID)
 	executionSavedV2 := knowledgeSavedSearchExecution(t, manager, access, freshSaved.ID)
@@ -455,7 +449,7 @@ func TestSavedSearchAndHistoryRerunResolveCurrentKnowledgeWhileExportRetainsOrig
 	if retainedV1.KnowledgePrelude.Equal(retainedSavedV2.KnowledgePrelude) ||
 		retainedV1.CompiledQuery.EqualForExecution(retainedSavedV2.CompiledQuery) ||
 		!retainedV1.CompiledQuery.EqualForExecution(observedV1) {
-		t.Fatal("v1/v2 retained program or compiler identity did not rotate exactly")
+		t.Fatal("the retained program did not rotate with the knowledge-object revision")
 	}
 
 	reexecution, err := exportjobs.NewReexecutionSource(exportjobs.ReexecutionSourceConfig{
@@ -495,7 +489,6 @@ func TestSavedSearchAndHistoryRerunResolveCurrentKnowledgeWhileExportRetainsOrig
 	}
 	exportJob = waitKnowledgeSavedSearchExport(t, exports, access, exportJob.ID)
 	requireKnowledgeSavedSearchSummary(t, exportJob.KnowledgeSnapshot, 1)
-	requireKnowledgeSavedSearchCompilerVersion(t, exportJob.CompilerVersion, "retained export")
 	if !bytes.Equal(
 		exportJob.KnowledgeSnapshot.GetRef().GetSnapshotSha256(),
 		original.KnowledgeSnapshot.GetRef().GetSnapshotSha256(),
@@ -512,28 +505,21 @@ func TestSavedSearchAndHistoryRerunResolveCurrentKnowledgeWhileExportRetainsOrig
 	}
 }
 
-func requireKnowledgeSavedSearchCompilerVersion(t *testing.T, got, surface string) {
-	t.Helper()
-	if got != spl.CompatibilityVersion {
-		t.Fatalf("%s compiler version = %q, want %q", surface, got, spl.CompatibilityVersion)
-	}
-}
-
-func knowledgeSavedSearchDefinition(value string) *opensplunkv1.KnowledgeObjectDefinition {
-	return &opensplunkv1.KnowledgeObjectDefinition{
+func knowledgeSavedSearchDefinition(value string) *opensplunk.KnowledgeObjectDefinition {
+	return &opensplunk.KnowledgeObjectDefinition{
 		AppId:        knowledgeSavedSearchAppID,
 		Name:         "saved-search-lifecycle-extraction",
-		SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
-		Selector: &opensplunkv1.KnowledgeSelector{IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{
-			MatchKind: opensplunkv1.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT,
+		SharingScope: opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
+		Selector: &opensplunk.KnowledgeSelector{IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{{
+			MatchKind: opensplunk.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT,
 			Value:     "main",
 		}}},
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
-			FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldExtraction{
+			FieldExtraction: &opensplunk.FieldExtractionDefinition{
 				InputField:        "_raw",
-				OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
-				Extraction: &opensplunkv1.FieldExtractionDefinition_Regex{
-					Regex: &opensplunkv1.RegexFieldExtractionDefinition{
+				OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+				Extraction: &opensplunk.FieldExtractionDefinition_Regex{
+					Regex: &opensplunk.RegexFieldExtractionDefinition{
 						Pattern:      knowledgeSavedSearchPattern(value),
 						OutputFields: []string{knowledgeSavedSearchField},
 					},
@@ -551,15 +537,15 @@ func createKnowledgeSavedSearchJob(
 	t *testing.T,
 	handler *Handler,
 	manager *searchjobs.Manager,
-	request *opensplunkv1.CreateSearchJobRequest,
+	request *opensplunk.CreateSearchJobRequest,
 	wantID string,
 ) searchjobs.Job {
 	t.Helper()
-	response := postProto(t, handler, "/api/v1/search/jobs/create", request)
+	response := postProto(t, handler, "/api/search/jobs/create", request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("create knowledge saved-search job status=%d body=%q", response.Code, response.Body.String())
 	}
-	var decoded opensplunkv1.CreateSearchJobResponse
+	var decoded opensplunk.CreateSearchJobResponse
 	unmarshalResponse(t, response, &decoded)
 	if decoded.GetSearchJob().GetSearchJobId() != wantID {
 		t.Fatalf("created knowledge saved-search job ID=%q, want %q", decoded.GetSearchJob().GetSearchJobId(), wantID)
@@ -602,7 +588,7 @@ func waitKnowledgeSavedSearchHistory(
 	t *testing.T,
 	history *searchhistory.Store,
 	id string,
-) *opensplunkv1.SearchHistoryEntry {
+) *opensplunk.SearchHistoryEntry {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
@@ -656,7 +642,7 @@ func requireKnowledgeSavedSearchExecution(
 
 func requireKnowledgeSavedSearchSummary(
 	t *testing.T,
-	summary *opensplunkv1.KnowledgeSnapshotSummary,
+	summary *opensplunk.KnowledgeSnapshotSummary,
 	version uint64,
 ) {
 	t.Helper()
@@ -669,8 +655,8 @@ func requireKnowledgeSavedSearchSummary(
 }
 
 func sameKnowledgeSavedSearchDigest(
-	left *opensplunkv1.KnowledgeSnapshotSummary,
-	right *opensplunkv1.KnowledgeSnapshotSummary,
+	left *opensplunk.KnowledgeSnapshotSummary,
+	right *opensplunk.KnowledgeSnapshotSummary,
 ) bool {
 	return left != nil && right != nil &&
 		bytes.Equal(

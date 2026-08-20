@@ -4,6 +4,5 @@ modules:
 lint:
   use:
     - STANDARD
-breaking:
-  use:
-    - FILE
+  except:
+    - PACKAGE_VERSION_SUFFIX

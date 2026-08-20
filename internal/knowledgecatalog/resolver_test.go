@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
@@ -232,35 +232,35 @@ func TestResolverPrunesBeforeWholeObjectPrecedenceAndDetaches(t *testing.T) {
 func TestResolverCompilesEveryVisibleDefinitionBeforeSelectorPruning(t *testing.T) {
 	tests := []struct {
 		name       string
-		definition func() *opensplunkv1.KnowledgeObjectDefinition
+		definition func() *opensplunk.KnowledgeObjectDefinition
 	}{
 		{
 			name: "malformed regex",
-			definition: func() *opensplunkv1.KnowledgeObjectDefinition {
+			definition: func() *opensplunk.KnowledgeObjectDefinition {
 				return resolutionRegexDefinition(testAppTwo, "collision", SharingScopeGlobal, "other", `(?<field>`, []string{"field"})
 			},
 		},
 		{
 			name: "regex output mismatch",
-			definition: func() *opensplunkv1.KnowledgeObjectDefinition {
+			definition: func() *opensplunk.KnowledgeObjectDefinition {
 				return resolutionRegexDefinition(testAppTwo, "collision", SharingScopeGlobal, "other", `(?<actual>\w+)`, []string{"declared"})
 			},
 		},
 		{
 			name: "unnamed regex capture",
-			definition: func() *opensplunkv1.KnowledgeObjectDefinition {
+			definition: func() *opensplunk.KnowledgeObjectDefinition {
 				return resolutionRegexDefinition(testAppTwo, "collision", SharingScopeGlobal, "other", `(\w+)(?<actual>\w+)`, []string{"actual"})
 			},
 		},
 		{
 			name: "malformed JSON path",
-			definition: func() *opensplunkv1.KnowledgeObjectDefinition {
+			definition: func() *opensplunk.KnowledgeObjectDefinition {
 				return resolutionJSONDefinition(testAppTwo, "collision", SharingScopeGlobal, "other", "payload..value", "field")
 			},
 		},
 		{
 			name: "malformed calculated expression",
-			definition: func() *opensplunkv1.KnowledgeObjectDefinition {
+			definition: func() *opensplunk.KnowledgeObjectDefinition {
 				return resolutionCalculatedDefinition(testAppTwo, "collision", SharingScopeGlobal, "other", "lower(", "field")
 			},
 		},
@@ -497,8 +497,8 @@ func TestResolverVisibleLoserCorruptionFailsClosedButHiddenBodyIsNotRead(t *test
 			"",
 			dependencyFixtureInputField,
 		)
-		target.Selector = &opensplunkv1.KnowledgeSelector{
-			IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{Value: "other"}},
+		target.Selector = &opensplunk.KnowledgeSelector{
+			IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{{Value: "other"}},
 		}
 		insertFixtureObject(t, database, fixtureObject{id: "ko-loser-dependency-target", versions: []fixtureVersion{{
 			definition: target, state: StateActive, mutation: "create", timestamp: 10,
@@ -512,8 +512,8 @@ func TestResolverVisibleLoserCorruptionFailsClosedButHiddenBodyIsNotRead(t *test
 			dependencyFixtureInputField,
 			"loser-output",
 		)
-		source.Selector = &opensplunkv1.KnowledgeSelector{
-			IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{Value: "main"}},
+		source.Selector = &opensplunk.KnowledgeSelector{
+			IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{{Value: "main"}},
 		}
 		insertFixtureObject(t, database, fixtureObject{id: "ko-invalid-global-loser", versions: []fixtureVersion{{
 			definition: source, state: StateActive, mutation: "create", timestamp: 11,
@@ -937,12 +937,12 @@ func resolutionAliasDefinition(
 	appID, name string,
 	scope SharingScope,
 	indexPattern string,
-) *opensplunkv1.KnowledgeObjectDefinition {
+) *opensplunk.KnowledgeObjectDefinition {
 	definition := aliasDefinition(appID, name, scope, nil, "")
 	definition.GetFieldAlias().DestinationField = "resolved_" + strings.ReplaceAll(name, "-", "_")
 	if indexPattern != "" {
-		definition.Selector = &opensplunkv1.KnowledgeSelector{
-			IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{Value: indexPattern}},
+		definition.Selector = &opensplunk.KnowledgeSelector{
+			IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{{Value: indexPattern}},
 		}
 	}
 	return definition
@@ -953,13 +953,13 @@ func resolutionRegexDefinition(
 	scope SharingScope,
 	indexPattern, pattern string,
 	outputs []string,
-) *opensplunkv1.KnowledgeObjectDefinition {
+) *opensplunk.KnowledgeObjectDefinition {
 	definition := resolutionAliasDefinition(appID, name, scope, indexPattern)
-	definition.Body = &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
-		FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
+	definition.Body = &opensplunk.KnowledgeObjectDefinition_FieldExtraction{
+		FieldExtraction: &opensplunk.FieldExtractionDefinition{
 			InputField: "_raw",
-			Extraction: &opensplunkv1.FieldExtractionDefinition_Regex{
-				Regex: &opensplunkv1.RegexFieldExtractionDefinition{
+			Extraction: &opensplunk.FieldExtractionDefinition_Regex{
+				Regex: &opensplunk.RegexFieldExtractionDefinition{
 					Pattern: pattern, OutputFields: slices.Clone(outputs),
 				},
 			},
@@ -972,13 +972,13 @@ func resolutionJSONDefinition(
 	appID, name string,
 	scope SharingScope,
 	indexPattern, path, output string,
-) *opensplunkv1.KnowledgeObjectDefinition {
+) *opensplunk.KnowledgeObjectDefinition {
 	definition := resolutionAliasDefinition(appID, name, scope, indexPattern)
-	definition.Body = &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
-		FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
+	definition.Body = &opensplunk.KnowledgeObjectDefinition_FieldExtraction{
+		FieldExtraction: &opensplunk.FieldExtractionDefinition{
 			InputField: "_raw",
-			Extraction: &opensplunkv1.FieldExtractionDefinition_Json{
-				Json: &opensplunkv1.JsonFieldExtractionDefinition{Path: path, OutputField: output},
+			Extraction: &opensplunk.FieldExtractionDefinition_Json{
+				Json: &opensplunk.JsonFieldExtractionDefinition{Path: path, OutputField: output},
 			},
 		},
 	}
@@ -989,10 +989,10 @@ func resolutionCalculatedDefinition(
 	appID, name string,
 	scope SharingScope,
 	indexPattern, expression, output string,
-) *opensplunkv1.KnowledgeObjectDefinition {
+) *opensplunk.KnowledgeObjectDefinition {
 	definition := resolutionAliasDefinition(appID, name, scope, indexPattern)
-	definition.Body = &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{
-		CalculatedField: &opensplunkv1.CalculatedFieldDefinition{
+	definition.Body = &opensplunk.KnowledgeObjectDefinition_CalculatedField{
+		CalculatedField: &opensplunk.CalculatedFieldDefinition{
 			Expression: expression, DestinationField: output,
 		},
 	}
@@ -1025,8 +1025,8 @@ func insertResolutionDependencyPair(
 		dependencyFixtureInputField,
 	)
 	if targetIndex != "" {
-		target.Selector = &opensplunkv1.KnowledgeSelector{
-			IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{Value: targetIndex}},
+		target.Selector = &opensplunk.KnowledgeSelector{
+			IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{{Value: targetIndex}},
 		}
 	}
 	insertFixtureObject(t, database, fixtureObject{id: "ko-dependency-target", versions: []fixtureVersion{{
@@ -1042,8 +1042,8 @@ func insertResolutionDependencyPair(
 		"dependency-output",
 	)
 	if sourceIndex != "" {
-		source.Selector = &opensplunkv1.KnowledgeSelector{
-			IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{Value: sourceIndex}},
+		source.Selector = &opensplunk.KnowledgeSelector{
+			IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{{Value: sourceIndex}},
 		}
 	}
 	insertFixtureObject(t, database, fixtureObject{id: "ko-dependency-source", versions: []fixtureVersion{{

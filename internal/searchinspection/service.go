@@ -17,7 +17,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
@@ -67,7 +67,7 @@ type Result struct {
 	// KnowledgeSnapshot is the bounded, definition-free inventory for the
 	// exact retained execution authority. It is absent on the legacy path.
 	// Browser projections must apply current-policy redaction before release.
-	KnowledgeSnapshot *opensplunkv1.KnowledgeSnapshotSummary
+	KnowledgeSnapshot *opensplunk.KnowledgeSnapshotSummary
 }
 
 type completedSearches interface {
@@ -333,7 +333,7 @@ func (service *Service) Inspect(
 		return Result{}, err
 	}
 
-	var knowledgeSummary *opensplunkv1.KnowledgeSnapshotSummary
+	var knowledgeSummary *opensplunk.KnowledgeSnapshotSummary
 	var compiled clickhouse.CompiledQuery
 	if retainedKnowledge == nil {
 		compiled, err = service.compiler.Compile(logical)

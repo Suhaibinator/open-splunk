@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 1,
   "cases": [
     {
       "name": "absent",
@@ -18,25 +18,24 @@
         "snapshotSha256": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
         "tenantCatalogRevision": "9007199254740993",
         "tenantCatalogStateToken": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
-        "objectCount": 0,
-        "compilerCompatibilityVersion": "0.1"
+        "objectCount": 0
       },
       "objects": [],
       "objectsTruncated": false,
       "refWire": {
-        "byteLength": 82,
-        "sha256": "e8548c75f4acdee750b9a5cd4067432e3a9f0969e5e778a2cb5b782bc3a5d0c2",
-        "wireBase64": "CiAAAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHxCBgICAgICAEBogICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8qAzAuMQ=="
+        "byteLength": 77,
+        "sha256": "0f09e794c2676675f0849b43325bd75e3742c3650ae47dff1b0ee6e1dabba9c5",
+        "wireBase64": "CiAAAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHxCBgICAgICAEBogICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8="
       },
       "summaryWire": {
-        "byteLength": 84,
-        "sha256": "a2a0c8d30dc13d5615d796fa06e9ac9e339ee4d5f2e649a73d40d6c55d1c451b",
-        "wireBase64": "ClIKIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fEIGAgICAgIAQGiAgISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+PyoDMC4x"
+        "byteLength": 79,
+        "sha256": "251b63e88423107cb6daa1cb9264c197a0715471e78b89c7e726ec8c1e1843ee",
+        "wireBase64": "Ck0KIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fEIGAgICAgIAQGiAgISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+Pw=="
       },
       "searchJobWire": {
-        "byteLength": 87,
-        "sha256": "7dccd876ad2c88aff9a573dab7580d65c160c8945b9689a080dcf30855465286",
-        "wireBase64": "ugFUClIKIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fEIGAgICAgIAQGiAgISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+PyoDMC4x"
+        "byteLength": 82,
+        "sha256": "93d00c20b8fe08e5ae90bbeefd4652d256cce724ec5ca668e5e9708b9c798e22",
+        "wireBase64": "ugFPCk0KIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fEIGAgICAgIAQGiAgISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+Pw=="
       }
     },
     {
@@ -46,7 +45,6 @@
         "tenantCatalogRevision": "9007199254740995",
         "tenantCatalogStateToken": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
         "objectCount": 2,
-        "compilerCompatibilityVersion": "0.4",
         "lookupAssetCount": 0
       },
       "objects": [
@@ -69,19 +67,19 @@
       ],
       "objectsTruncated": false,
       "refWire": {
-        "byteLength": 84,
-        "sha256": "0a84d209a81d49d8c5fa178f0509dd2185f6f4039b0687ae7f71332556a3baeb",
-        "wireBase64": "CiCrq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urqxCDgICAgICAEBogzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc0gAioDMC40"
+        "byteLength": 79,
+        "sha256": "6a1fc09bd671b51e348f286c86ea9070460e77f9c80f4c863806a73d48dc4701",
+        "wireBase64": "CiCrq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urqxCDgICAgICAEBogzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc0gAg=="
       },
       "summaryWire": {
-        "byteLength": 140,
-        "sha256": "c36231f4026c7a02b8a34c1ee4c8e64ca846cec58346aa84f657e6686bffc2e7",
-        "wireBase64": "ClQKIKurq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urEIOAgICAgIAQGiDNzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3NzSACKgMwLjQSKhABGAEiJAoKa28tdmlzaWJsZRCFgICAgICAEBoNdmlzaWJsZV9maWVsZBIICAEQAhgCKAE="
+        "byteLength": 135,
+        "sha256": "1cee822e0aa9aa24a26d11bb8862cc2901c7d47946dedefe6149e011eb8a5cdc",
+        "wireBase64": "Ck8KIKurq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urEIOAgICAgIAQGiDNzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3NzSACEioQARgBIiQKCmtvLXZpc2libGUQhYCAgICAgBAaDXZpc2libGVfZmllbGQSCAgBEAIYAigB"
       },
       "searchJobWire": {
-        "byteLength": 144,
-        "sha256": "0ed471cd0df430cf5040cc28868a7535361ab3d01ab1f91a18c831b343877749",
-        "wireBase64": "ugGMAQpUCiCrq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urqxCDgICAgICAEBogzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc0gAioDMC40EioQARgBIiQKCmtvLXZpc2libGUQhYCAgICAgBAaDXZpc2libGVfZmllbGQSCAgBEAIYAigB"
+        "byteLength": 139,
+        "sha256": "0ce91b6ba493212dd1dff8309367cd55b69fd5d0edbb095df6e7165f8847292d",
+        "wireBase64": "ugGHAQpPCiCrq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urqxCDgICAgICAEBogzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc0gAhIqEAEYASIkCgprby12aXNpYmxlEIWAgICAgIAQGg12aXNpYmxlX2ZpZWxkEggIARACGAIoAQ=="
       }
     }
   ]

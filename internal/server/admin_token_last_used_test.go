@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 )
 
@@ -65,12 +65,12 @@ func TestIngestionTokenLastUsedSortIsDeterministic(t *testing.T) {
 
 	tests := []struct {
 		name      string
-		direction opensplunkv1.SortDirection
+		direction opensplunk.SortDirection
 		wantIDs   []string
 	}{
 		{
 			name:      "ascending",
-			direction: opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING,
+			direction: opensplunk.SortDirection_SORT_DIRECTION_ASCENDING,
 			wantIDs: []string{
 				"tok_early",
 				"tok_tie_a",
@@ -81,7 +81,7 @@ func TestIngestionTokenLastUsedSortIsDeterministic(t *testing.T) {
 		},
 		{
 			name:      "descending",
-			direction: opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING,
+			direction: opensplunk.SortDirection_SORT_DIRECTION_DESCENDING,
 			wantIDs: []string{
 				"tok_unused_b",
 				"tok_unused_a",
@@ -100,7 +100,7 @@ func TestIngestionTokenLastUsedSortIsDeterministic(t *testing.T) {
 				nil,
 				"",
 				"",
-				opensplunkv1.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_LAST_USED_AT,
+				opensplunk.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_LAST_USED_AT,
 				test.direction,
 			)
 			gotIDs := make([]string, 0, len(sorted))
@@ -126,19 +126,19 @@ func TestIngestionTokenLastUsedListPaginationIsBoundAndStaleSafe(t *testing.T) {
 	}}
 	handler := newAdminTokenHandler(t, tokens)
 	pageSize := uint32(1)
-	request := &opensplunkv1.ListIngestionTokensRequest{
-		Page: &opensplunkv1.PageRequest{
+	request := &opensplunk.ListIngestionTokensRequest{
+		Page: &opensplunk.PageRequest{
 			PageSize:         &pageSize,
 			IncludeTotalSize: true,
 		},
-		SortBy: opensplunkv1.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_LAST_USED_AT,
+		SortBy: opensplunk.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_LAST_USED_AT,
 	}
 
-	response := postProto(t, handler, "/api/v1/ingestion-tokens/list", request)
+	response := postProto(t, handler, "/api/ingestion-tokens/list", request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("first page status = %d, body = %s", response.Code, response.Body)
 	}
-	var first opensplunkv1.ListIngestionTokensResponse
+	var first opensplunk.ListIngestionTokensResponse
 	unmarshalResponse(t, response, &first)
 	if len(first.GetIngestionTokens()) != 1 ||
 		first.GetIngestionTokens()[0].GetIngestionTokenId() != "tok_early" ||
@@ -153,15 +153,15 @@ func TestIngestionTokenLastUsedListPaginationIsBoundAndStaleSafe(t *testing.T) {
 	response = postProto(
 		t,
 		handler,
-		"/api/v1/ingestion-tokens/get",
-		&opensplunkv1.GetIngestionTokenRequest{
+		"/api/ingestion-tokens/get",
+		&opensplunk.GetIngestionTokenRequest{
 			IngestionTokenId: "tok_early",
 		},
 	)
 	if response.Code != http.StatusOK {
 		t.Fatalf("get status = %d, body = %s", response.Code, response.Body)
 	}
-	var got opensplunkv1.GetIngestionTokenResponse
+	var got opensplunk.GetIngestionTokenResponse
 	unmarshalResponse(t, response, &got)
 	if got.GetIngestionToken().GetLastUsedAt() == nil ||
 		!got.GetIngestionToken().GetLastUsedAt().AsTime().Equal(early) {
@@ -169,30 +169,30 @@ func TestIngestionTokenLastUsedListPaginationIsBoundAndStaleSafe(t *testing.T) {
 	}
 
 	request.Page.PageToken = &cursor
-	response = postProto(t, handler, "/api/v1/ingestion-tokens/list", request)
+	response = postProto(t, handler, "/api/ingestion-tokens/list", request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("second page status = %d, body = %s", response.Code, response.Body)
 	}
-	var second opensplunkv1.ListIngestionTokensResponse
+	var second opensplunk.ListIngestionTokensResponse
 	unmarshalResponse(t, response, &second)
 	if len(second.GetIngestionTokens()) != 1 ||
 		second.GetIngestionTokens()[0].GetIngestionTokenId() != "tok_later" {
 		t.Fatalf("second page = %+v", &second)
 	}
 
-	descending := &opensplunkv1.ListIngestionTokensRequest{
-		Page: &opensplunkv1.PageRequest{
+	descending := &opensplunk.ListIngestionTokensRequest{
+		Page: &opensplunk.PageRequest{
 			PageSize:         &pageSize,
 			PageToken:        &cursor,
 			IncludeTotalSize: true,
 		},
-		SortBy:        opensplunkv1.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_LAST_USED_AT,
-		SortDirection: opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING,
+		SortBy:        opensplunk.IngestionTokenSortBy_INGESTION_TOKEN_SORT_BY_LAST_USED_AT,
+		SortDirection: opensplunk.SortDirection_SORT_DIRECTION_DESCENDING,
 	}
 	response = postProto(
 		t,
 		handler,
-		"/api/v1/ingestion-tokens/list",
+		"/api/ingestion-tokens/list",
 		descending,
 	)
 	if response.Code != http.StatusBadRequest {
@@ -207,7 +207,7 @@ func TestIngestionTokenLastUsedListPaginationIsBoundAndStaleSafe(t *testing.T) {
 	// position in the sorted result. The cursor must still become stale because
 	// the projected metadata changed.
 	tokens.setLastUsedAt("tok_later", testNow.Add(-30*time.Minute))
-	response = postProto(t, handler, "/api/v1/ingestion-tokens/list", request)
+	response = postProto(t, handler, "/api/ingestion-tokens/list", request)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf(
 			"stale last-used cursor status = %d, body = %s",
@@ -326,7 +326,7 @@ func adminLastUsedToken(
 		ID:                id,
 		Version:           1,
 		Name:              name,
-		Prefix:            "ost_v1_safe",
+		Prefix:            "ost_safe",
 		State:             auth.CollectorTokenStateActive,
 		AllowedIndexNames: []string{"main"},
 		CreatedAt:         createdAt,

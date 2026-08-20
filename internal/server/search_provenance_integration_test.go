@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -105,7 +105,7 @@ func TestSavedSearchProvenanceSurvivesExecutionAndSourceDeletion(t *testing.T) {
 	}
 	savedDefinition := savedSearchDefinition(ownerID, appID, "Errors")
 	savedDefinition.Search.Spl = searchSPL
-	savedDefinition.Search.TimeRange = &opensplunkv1.TimeRangeSpec{
+	savedDefinition.Search.TimeRange = &opensplunk.TimeRangeSpec{
 		Earliest: new("-1d"), Latest: new("now"),
 		Timezone: new(location.String()),
 	}
@@ -177,24 +177,24 @@ func TestSavedSearchProvenanceSurvivesExecutionAndSourceDeletion(t *testing.T) {
 		Now:                  func() time.Time { return anchor },
 	})
 	timezone := location.String()
-	request := &opensplunkv1.CreateSearchJobRequest{
-		Definition: &opensplunkv1.SearchDefinition{
+	request := &opensplunk.CreateSearchJobRequest{
+		Definition: &opensplunk.SearchDefinition{
 			Spl: searchSPL,
-			TimeRange: &opensplunkv1.TimeRangeSpec{
+			TimeRange: &opensplunk.TimeRangeSpec{
 				Earliest: new("-1d"), Latest: new("now"), Timezone: &timezone,
 			},
 			IndexScope: []string{"main"},
 		},
-		Source: &opensplunkv1.SearchJobSource{
-			Origin:        opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH,
+		Source: &opensplunk.SearchJobSource{
+			Origin:        opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH,
 			SavedSearchId: new(saved.GetSavedSearchId()),
 		},
 	}
-	response := postProto(t, handler, "/api/v1/search/jobs/create", request)
+	response := postProto(t, handler, "/api/search/jobs/create", request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("create status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var createdResponse opensplunkv1.CreateSearchJobResponse
+	var createdResponse opensplunk.CreateSearchJobResponse
 	unmarshalResponse(t, response, &createdResponse)
 	assertProvenanceSnapshot(t, createdResponse.GetSearchJob(), jobID, appID, savedID, searchSPL, wantEarliest, anchor)
 
@@ -209,11 +209,11 @@ func TestSavedSearchProvenanceSurvivesExecutionAndSourceDeletion(t *testing.T) {
 	if _, err := savedSearches.Get(ctx, savedobjects.AccessScope{OwnerID: ownerID}, savedID); !errors.Is(err, control.ErrNotFound) {
 		t.Fatalf("deleted saved-search lookup error = %v, want ErrNotFound", err)
 	}
-	response = postProto(t, handler, "/api/v1/search/jobs/get", &opensplunkv1.GetSearchJobRequest{SearchJobId: jobID})
+	response = postProto(t, handler, "/api/search/jobs/get", &opensplunk.GetSearchJobRequest{SearchJobId: jobID})
 	if response.Code != http.StatusOK {
 		t.Fatalf("post-deletion job status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var liveResponse opensplunkv1.GetSearchJobResponse
+	var liveResponse opensplunk.GetSearchJobResponse
 	unmarshalResponse(t, response, &liveResponse)
 	assertProvenanceSnapshot(t, liveResponse.GetSearchJob(), jobID, appID, savedID, searchSPL, wantEarliest, anchor)
 	releaseOnce.Do(func() { close(release) })
@@ -232,11 +232,11 @@ func TestSavedSearchProvenanceSurvivesExecutionAndSourceDeletion(t *testing.T) {
 	}
 	assertHistoryProvenanceSnapshot(t, historyEntry, jobID, appID, savedID, searchSPL, wantEarliest, anchor)
 
-	response = postProto(t, handler, "/api/v1/search/history/get", &opensplunkv1.GetSearchHistoryEntryRequest{SearchJobId: jobID})
+	response = postProto(t, handler, "/api/search/history/get", &opensplunk.GetSearchHistoryEntryRequest{SearchJobId: jobID})
 	if response.Code != http.StatusOK {
 		t.Fatalf("history status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var historyResponse opensplunkv1.GetSearchHistoryEntryResponse
+	var historyResponse opensplunk.GetSearchHistoryEntryResponse
 	unmarshalResponse(t, response, &historyResponse)
 	assertHistoryProvenanceSnapshot(t, historyResponse.GetHistoryEntry(), jobID, appID, savedID, searchSPL, wantEarliest, anchor)
 
@@ -253,7 +253,7 @@ func TestSavedSearchProvenanceSurvivesExecutionAndSourceDeletion(t *testing.T) {
 
 func assertProvenanceSnapshot(
 	t *testing.T,
-	job *opensplunkv1.SearchJob,
+	job *opensplunk.SearchJob,
 	jobID, appID, savedID, wantSPL string,
 	wantEarliest, wantLatest time.Time,
 ) {
@@ -264,7 +264,7 @@ func assertProvenanceSnapshot(
 		job.GetDefinition().GetTimeRange().GetLatest() != "now" ||
 		job.GetDefinition().GetTimeRange().Timezone == nil ||
 		job.GetDefinition().GetTimeRange().GetTimezone() != "America/Los_Angeles" ||
-		job.GetSource().GetOrigin() != opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH ||
+		job.GetSource().GetOrigin() != opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH ||
 		job.GetSource().GetSavedSearchId() != savedID ||
 		!job.GetResolvedTimeRange().GetEarliest().AsTime().Equal(wantEarliest) ||
 		!job.GetResolvedTimeRange().GetLatest().AsTime().Equal(wantLatest) ||
@@ -275,20 +275,20 @@ func assertProvenanceSnapshot(
 
 func assertHistoryProvenanceSnapshot(
 	t *testing.T,
-	entry *opensplunkv1.SearchHistoryEntry,
+	entry *opensplunk.SearchHistoryEntry,
 	jobID, appID, savedID, wantSPL string,
 	wantEarliest, wantLatest time.Time,
 ) {
 	t.Helper()
 	if entry == nil || entry.GetSearchJobId() != jobID ||
-		entry.GetFinalState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED ||
+		entry.GetFinalState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED ||
 		entry.GetDefinition().GetSpl() != wantSPL ||
 		entry.GetDefinition().GetAppId() != appID ||
 		entry.GetDefinition().GetTimeRange().GetEarliest() != "-1d" ||
 		entry.GetDefinition().GetTimeRange().GetLatest() != "now" ||
 		entry.GetDefinition().GetTimeRange().Timezone == nil ||
 		entry.GetDefinition().GetTimeRange().GetTimezone() != "America/Los_Angeles" ||
-		entry.GetSource().GetOrigin() != opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH ||
+		entry.GetSource().GetOrigin() != opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH ||
 		entry.GetSource().GetSavedSearchId() != savedID ||
 		!entry.GetResolvedTimeRange().GetEarliest().AsTime().Equal(wantEarliest) ||
 		!entry.GetResolvedTimeRange().GetLatest().AsTime().Equal(wantLatest) ||

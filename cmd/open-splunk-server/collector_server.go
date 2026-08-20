@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"google.golang.org/grpc"
@@ -41,7 +41,7 @@ type collectorServerConfig struct {
 func openCollectorServer(
 	ctx context.Context,
 	config collectorServerConfig,
-	service opensplunkv1.CollectorIngestServiceServer,
+	service opensplunk.CollectorIngestServiceServer,
 ) (*grpc.Server, net.Listener, error) {
 	if err := validateCollectorServerConfig(config); err != nil {
 		return nil, nil, err
@@ -64,7 +64,7 @@ func openCollectorServer(
 	}
 	listener := newConnectionLimitedListener(rawListener, collectorMaxConnections)
 	server := grpc.NewServer(serverOptions...)
-	opensplunkv1.RegisterCollectorIngestServiceServer(server, service)
+	opensplunk.RegisterCollectorIngestServiceServer(server, service)
 	return server, listener, nil
 }
 

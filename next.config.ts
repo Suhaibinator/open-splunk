@@ -12,16 +12,6 @@ if (
   );
 }
 
-const applicationVersion = (process.env.OPEN_SPLUNK_APPLICATION_VERSION ?? "0.4.0").trim();
-if (
-  applicationVersion.length > 64
-  || !/^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(
-    applicationVersion,
-  )
-) {
-  throw new Error("OPEN_SPLUNK_APPLICATION_VERSION must be a semantic version.");
-}
-
 const revisionBuildIDCharacters: Readonly<Record<string, string>> = {
   a: "g",
   b: "h",
@@ -31,9 +21,7 @@ const revisionBuildIDCharacters: Readonly<Record<string, string>> = {
   f: "n",
 };
 const identityDigest = createHash("sha256")
-  .update("open-splunk-ui-build-v1\0")
-  .update(applicationVersion)
-  .update("\0")
+  .update("open-splunk-ui-build\0")
   .update(sourceRevision)
   .digest("hex");
 const uiBuildID = `r${identityDigest.replace(
@@ -53,7 +41,6 @@ const nextConfig: NextConfig = {
   trailingSlash: true,
   generateBuildId: async () => uiBuildID,
   env: {
-    NEXT_PUBLIC_OPEN_SPLUNK_APPLICATION_VERSION: applicationVersion,
     NEXT_PUBLIC_OPEN_SPLUNK_SOURCE_REVISION: sourceRevision,
   },
   images: {

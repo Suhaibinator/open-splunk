@@ -11,7 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
 	"google.golang.org/protobuf/proto"
@@ -165,7 +165,7 @@ func decodeStoreOutbox(encoded []byte) (ingest.StoreBatch, error) {
 		if readErr != nil || len(payload) == 0 {
 			return ingest.StoreBatch{}, fmt.Errorf("decode ClickHouse outbox event %d: invalid payload", index)
 		}
-		event := new(opensplunkv1.LogEvent)
+		event := new(opensplunk.LogEvent)
 		if err := (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(payload, event); err != nil {
 			return ingest.StoreBatch{}, fmt.Errorf("decode ClickHouse outbox event %d: %w", index, err)
 		}
@@ -187,14 +187,14 @@ func decodeStoreOutbox(encoded []byte) (ingest.StoreBatch, error) {
 	return batch, nil
 }
 
-func cloneEventRejections(values []*opensplunkv1.EventRejection) []*opensplunkv1.EventRejection {
+func cloneEventRejections(values []*opensplunk.EventRejection) []*opensplunk.EventRejection {
 	if values == nil {
 		return nil
 	}
-	cloned := make([]*opensplunkv1.EventRejection, len(values))
+	cloned := make([]*opensplunk.EventRejection, len(values))
 	for index, value := range values {
 		if value != nil {
-			cloned[index] = proto.Clone(value).(*opensplunkv1.EventRejection)
+			cloned[index] = proto.Clone(value).(*opensplunk.EventRejection)
 		}
 	}
 	return cloned

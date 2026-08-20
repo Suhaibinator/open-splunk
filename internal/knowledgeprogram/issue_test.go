@@ -8,7 +8,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"github.com/Suhaibinator/open-splunk/internal/splpath"
 	"github.com/Suhaibinator/open-splunk/internal/splregex"
@@ -98,7 +98,7 @@ func TestCandidateRegexIssuesPreserveLegacyFailureContract(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			definition := regexIssueDefinition(test.pattern, test.outputs)
-			input := inputFromDefinitions(t, []*opensplunkv1.KnowledgeObjectDefinition{definition})
+			input := inputFromDefinitions(t, []*opensplunk.KnowledgeObjectDefinition{definition})
 			_, err := Compile(input.Objects)
 			if err == nil {
 				t.Fatal("Compile(candidate) succeeded")
@@ -166,7 +166,7 @@ func TestCandidateJSONPathIssuesHaveCanonicalUTF8ByteRanges(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			definition := jsonIssueDefinition(test.path)
-			input := inputFromDefinitions(t, []*opensplunkv1.KnowledgeObjectDefinition{definition})
+			input := inputFromDefinitions(t, []*opensplunk.KnowledgeObjectDefinition{definition})
 			_, err := Compile(input.Objects)
 			if err == nil || err.Error() != "invalid knowledge program: object 0 JSON extraction is not executable" ||
 				!errors.Is(err, ErrInvalidProgram) {
@@ -195,7 +195,7 @@ func TestCandidateJSONPathIssuesHaveCanonicalUTF8ByteRanges(t *testing.T) {
 func TestCandidateCalculatedIssueRetainsSPLDiagnosticAndCanonicalTrimBasis(t *testing.T) {
 	raw := " \n\tcoalesce(\"😀\", mystery(host)) \r\n"
 	definition := calculatedIssueDefinition(raw)
-	input := inputFromDefinitions(t, []*opensplunkv1.KnowledgeObjectDefinition{definition})
+	input := inputFromDefinitions(t, []*opensplunk.KnowledgeObjectDefinition{definition})
 	canonical := input.Objects[0].Definition.GetCalculatedField().GetExpression()
 	if canonical != `coalesce("😀", mystery(host))` {
 		t.Fatalf("canonical expression = %q", canonical)
@@ -231,7 +231,7 @@ func TestCandidateCalculatedIssueRetainsSPLDiagnosticAndCanonicalTrimBasis(t *te
 func TestCandidateCalculatedEOFBasisAndBooleanRange(t *testing.T) {
 	t.Run("parser EOF after trailing trim", func(t *testing.T) {
 		raw := "\n\tlower(host \r\n"
-		input := inputFromDefinitions(t, []*opensplunkv1.KnowledgeObjectDefinition{calculatedIssueDefinition(raw)})
+		input := inputFromDefinitions(t, []*opensplunk.KnowledgeObjectDefinition{calculatedIssueDefinition(raw)})
 		canonical := input.Objects[0].Definition.GetCalculatedField().GetExpression()
 		_, err := Compile(input.Objects)
 		issue, ok := CandidateIssueFromError(err, 0)
@@ -260,7 +260,7 @@ func TestCandidateCalculatedEOFBasisAndBooleanRange(t *testing.T) {
 
 	t.Run("direct Boolean covers canonical expression", func(t *testing.T) {
 		raw := " \tisnull(host)\r\n"
-		input := inputFromDefinitions(t, []*opensplunkv1.KnowledgeObjectDefinition{calculatedIssueDefinition(raw)})
+		input := inputFromDefinitions(t, []*opensplunk.KnowledgeObjectDefinition{calculatedIssueDefinition(raw)})
 		canonical := input.Objects[0].Definition.GetCalculatedField().GetExpression()
 		_, err := Compile(input.Objects)
 		if err == nil || err.Error() != "invalid knowledge program: object 0 calculated expression cannot directly assign a Boolean function result" {
@@ -277,7 +277,7 @@ func TestCandidateCalculatedEOFBasisAndBooleanRange(t *testing.T) {
 }
 
 func TestCandidateIssueExtractionIsIndexBoundWrappedAndDetached(t *testing.T) {
-	definitions := []*opensplunkv1.KnowledgeObjectDefinition{
+	definitions := []*opensplunk.KnowledgeObjectDefinition{
 		regexIssueDefinition(`(?P<first>x)`, []string{"first"}),
 		regexIssueDefinition(`(?P<second>`, []string{"second"}),
 	}
@@ -304,7 +304,7 @@ func TestCandidateIssueExtractionIsIndexBoundWrappedAndDetached(t *testing.T) {
 		t.Fatalf("issue aliases scalar projection: %#v", second)
 	}
 
-	calculated := inputFromDefinitions(t, []*opensplunkv1.KnowledgeObjectDefinition{
+	calculated := inputFromDefinitions(t, []*opensplunk.KnowledgeObjectDefinition{
 		calculatedIssueDefinition("mystery(host)"),
 	})
 	_, calculatedErr := Compile(calculated.Objects)
@@ -330,7 +330,7 @@ func TestCandidateIssueExtractionIsIndexBoundWrappedAndDetached(t *testing.T) {
 
 func TestPrepareAndCohortAuthorityFailuresRemainUntyped(t *testing.T) {
 	t.Run("Prepare candidate syntax remains opaque", func(t *testing.T) {
-		input := inputFromDefinitions(t, []*opensplunkv1.KnowledgeObjectDefinition{
+		input := inputFromDefinitions(t, []*opensplunk.KnowledgeObjectDefinition{
 			calculatedIssueDefinition("mystery(host)"),
 		})
 		_, err := Prepare(input)
@@ -344,7 +344,7 @@ func TestPrepareAndCohortAuthorityFailuresRemainUntyped(t *testing.T) {
 	})
 
 	t.Run("object authority fails before later candidate", func(t *testing.T) {
-		input := inputFromDefinitions(t, []*opensplunkv1.KnowledgeObjectDefinition{
+		input := inputFromDefinitions(t, []*opensplunk.KnowledgeObjectDefinition{
 			regexIssueDefinition(`(?P<first>x)`, []string{"first"}),
 			calculatedIssueDefinition("mystery(host)"),
 		})
@@ -359,7 +359,7 @@ func TestPrepareAndCohortAuthorityFailuresRemainUntyped(t *testing.T) {
 	})
 
 	t.Run("earlier candidate issue fails before later authority", func(t *testing.T) {
-		input := inputFromDefinitions(t, []*opensplunkv1.KnowledgeObjectDefinition{
+		input := inputFromDefinitions(t, []*opensplunk.KnowledgeObjectDefinition{
 			regexIssueDefinition(`(?P<first>`, []string{"first"}),
 			calculatedIssueDefinition("lower(host)"),
 		})
@@ -374,7 +374,7 @@ func TestPrepareAndCohortAuthorityFailuresRemainUntyped(t *testing.T) {
 	})
 
 	t.Run("definition authority disagreement", func(t *testing.T) {
-		input := inputFromDefinitions(t, []*opensplunkv1.KnowledgeObjectDefinition{
+		input := inputFromDefinitions(t, []*opensplunk.KnowledgeObjectDefinition{
 			calculatedIssueDefinition("lower(host)"),
 		})
 		input.Objects[0].Definition.GetCalculatedField().Expression = "mystery(host)"
@@ -388,7 +388,7 @@ func TestPrepareAndCohortAuthorityFailuresRemainUntyped(t *testing.T) {
 	})
 
 	t.Run("aggregate object limit", func(t *testing.T) {
-		_, err := Compile(make([]*opensplunkv1.KnowledgeSnapshotObject, MaximumObjects+1))
+		_, err := Compile(make([]*opensplunk.KnowledgeSnapshotObject, MaximumObjects+1))
 		if !errors.Is(err, ErrResourceLimit) {
 			t.Fatalf("Compile error = %v", err)
 		}
@@ -398,9 +398,9 @@ func TestPrepareAndCohortAuthorityFailuresRemainUntyped(t *testing.T) {
 	})
 
 	t.Run("same-stage cohort conflict", func(t *testing.T) {
-		left := aliasDefinition("alias-a", "source_a", "shared", nil, opensplunkv1.SharingScope_SHARING_SCOPE_APP, "app-a")
-		right := aliasDefinition("alias-b", "source_b", "shared", nil, opensplunkv1.SharingScope_SHARING_SCOPE_APP, "app-a")
-		input := inputFromDefinitions(t, []*opensplunkv1.KnowledgeObjectDefinition{left, right})
+		left := aliasDefinition("alias-a", "source_a", "shared", nil, opensplunk.SharingScope_SHARING_SCOPE_APP, "app-a")
+		right := aliasDefinition("alias-b", "source_b", "shared", nil, opensplunk.SharingScope_SHARING_SCOPE_APP, "app-a")
+		input := inputFromDefinitions(t, []*opensplunk.KnowledgeObjectDefinition{left, right})
 		_, err := Compile(input.Objects)
 		if !errors.Is(err, ErrInvalidProgram) {
 			t.Fatalf("Compile error = %v", err)
@@ -413,9 +413,9 @@ func TestPrepareAndCohortAuthorityFailuresRemainUntyped(t *testing.T) {
 	})
 
 	t.Run("selector implication conflict", func(t *testing.T) {
-		extraction := regexDefinition("extract-a", "derived", hostSelector("api-*"), opensplunkv1.SharingScope_SHARING_SCOPE_APP, "app-a")
-		alias := aliasDefinition("alias-a", "derived", "alias_value", hostSelector("api-?"), opensplunkv1.SharingScope_SHARING_SCOPE_APP, "app-a")
-		input := inputFromDefinitions(t, []*opensplunkv1.KnowledgeObjectDefinition{extraction, alias})
+		extraction := regexDefinition("extract-a", "derived", hostSelector("api-*"), opensplunk.SharingScope_SHARING_SCOPE_APP, "app-a")
+		alias := aliasDefinition("alias-a", "derived", "alias_value", hostSelector("api-?"), opensplunk.SharingScope_SHARING_SCOPE_APP, "app-a")
+		input := inputFromDefinitions(t, []*opensplunk.KnowledgeObjectDefinition{extraction, alias})
 		_, err := Compile(input.Objects)
 		if !errors.Is(err, ErrInvalidProgram) {
 			t.Fatalf("Compile error = %v", err)
@@ -473,34 +473,34 @@ func TestIssuePublicShapeCarriesNoObjectOrCatalogAuthority(t *testing.T) {
 	}
 }
 
-func regexIssueDefinition(pattern string, outputs []string) *opensplunkv1.KnowledgeObjectDefinition {
-	return &opensplunkv1.KnowledgeObjectDefinition{
-		AppId: "app-a", Name: "extract-a", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
+func regexIssueDefinition(pattern string, outputs []string) *opensplunk.KnowledgeObjectDefinition {
+	return &opensplunk.KnowledgeObjectDefinition{
+		AppId: "app-a", Name: "extract-a", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldExtraction{FieldExtraction: &opensplunk.FieldExtractionDefinition{
 			InputField: "_raw",
-			Extraction: &opensplunkv1.FieldExtractionDefinition_Regex{Regex: &opensplunkv1.RegexFieldExtractionDefinition{
+			Extraction: &opensplunk.FieldExtractionDefinition_Regex{Regex: &opensplunk.RegexFieldExtractionDefinition{
 				Pattern: pattern, OutputFields: append([]string(nil), outputs...),
 			}},
 		}},
 	}
 }
 
-func jsonIssueDefinition(path string) *opensplunkv1.KnowledgeObjectDefinition {
-	return &opensplunkv1.KnowledgeObjectDefinition{
-		AppId: "app-a", Name: "extract-json", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
+func jsonIssueDefinition(path string) *opensplunk.KnowledgeObjectDefinition {
+	return &opensplunk.KnowledgeObjectDefinition{
+		AppId: "app-a", Name: "extract-json", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldExtraction{FieldExtraction: &opensplunk.FieldExtractionDefinition{
 			InputField: "_raw",
-			Extraction: &opensplunkv1.FieldExtractionDefinition_Json{Json: &opensplunkv1.JsonFieldExtractionDefinition{
+			Extraction: &opensplunk.FieldExtractionDefinition_Json{Json: &opensplunk.JsonFieldExtractionDefinition{
 				Path: path, OutputField: "json_value",
 			}},
 		}},
 	}
 }
 
-func calculatedIssueDefinition(expression string) *opensplunkv1.KnowledgeObjectDefinition {
-	return &opensplunkv1.KnowledgeObjectDefinition{
-		AppId: "app-a", Name: "calculated-a", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-		Body: &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{CalculatedField: &opensplunkv1.CalculatedFieldDefinition{
+func calculatedIssueDefinition(expression string) *opensplunk.KnowledgeObjectDefinition {
+	return &opensplunk.KnowledgeObjectDefinition{
+		AppId: "app-a", Name: "calculated-a", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+		Body: &opensplunk.KnowledgeObjectDefinition_CalculatedField{CalculatedField: &opensplunk.CalculatedFieldDefinition{
 			DestinationField: "calculated_value", Expression: expression,
 		}},
 	}

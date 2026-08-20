@@ -4,13 +4,13 @@ import (
 	"bytes"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/protobuf/encoding/protowire"
 )
 
 func TestCloneWithoutTopLevelUnknownDoesNotMutateOrAliasSource(t *testing.T) {
 	t.Parallel()
-	source := &opensplunkv1.KnowledgeObjectDefinition{AppId: "source-app"}
+	source := &opensplunk.KnowledgeObjectDefinition{AppId: "source-app"}
 	unknown := protowire.AppendBytes(
 		protowire.AppendTag(nil, 13, protowire.BytesType),
 		[]byte("future-body"),

@@ -116,9 +116,7 @@ func admissionRequest(
 		AcceptedAt:  acceptedAt,
 		Hello: collectorfleet.Hello{
 			InstanceID:        "instance-1",
-			ProtocolMajor:     1,
-			ProtocolMinor:     0,
-			CollectorVersion:  "1.2.3",
+			SourceRevision:    "development",
 			Hostname:          "collector.example",
 			OperatingSystem:   "linux",
 			Architecture:      "amd64",
@@ -223,9 +221,7 @@ func TestAdmitCapacityRollsBackTokenUseAndNewCollectorIdentity(
 			ReceivedAt:  request.AcceptedAt,
 			Hello: collectorfleet.Hello{
 				InstanceID:        "instance-" + collectorID,
-				ProtocolMajor:     request.Hello.ProtocolMajor,
-				ProtocolMinor:     request.Hello.ProtocolMinor,
-				CollectorVersion:  request.Hello.CollectorVersion,
+				SourceRevision:    request.Hello.SourceRevision,
 				Hostname:          collectorID + ".example",
 				OperatingSystem:   request.Hello.OperatingSystem,
 				Architecture:      request.Hello.Architecture,

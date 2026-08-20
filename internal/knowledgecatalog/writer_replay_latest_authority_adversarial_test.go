@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -48,7 +48,7 @@ func TestWriterImmutableQuarantineReplayRedactionSurvivesRegistryRollback(t *tes
 			response, err := harness.writer.Create(
 				harness.actorContext,
 				harness.scope,
-				proto.Clone(request).(*opensplunkv1.CreateKnowledgeObjectRequest),
+				proto.Clone(request).(*opensplunk.CreateKnowledgeObjectRequest),
 			)
 			if response != nil || !errors.Is(err, ErrIdempotentOutcomeRedacted) {
 				t.Fatalf("replay = (%v, %v), want nil/fixed redaction", response, err)
@@ -107,7 +107,7 @@ func TestWriterLatestImmutableOwnerOrAppNondisclosurePrecedesReceiptAndBody(t *t
 			response, err := harness.writer.Create(
 				harness.actorContext,
 				harness.scope,
-				proto.Clone(request).(*opensplunkv1.CreateKnowledgeObjectRequest),
+				proto.Clone(request).(*opensplunk.CreateKnowledgeObjectRequest),
 			)
 			if response != nil || !errors.Is(err, control.ErrNotFound) {
 				t.Fatalf("hidden latest replay = (%v, %v), want nil/ErrNotFound", response, err)
@@ -130,10 +130,10 @@ func TestWriterHistoricalReplayVersionOwnerSameWidthTamperIsCorruptAndReadOnly(t
 	if err != nil {
 		t.Fatalf("commit Create baseline: %v", err)
 	}
-	definition := proto.Clone(created.GetKnowledgeObject().GetDefinition()).(*opensplunkv1.KnowledgeObjectDefinition)
+	definition := proto.Clone(created.GetKnowledgeObject().GetDefinition()).(*opensplunk.KnowledgeObjectDefinition)
 	description := "publish a current v2 before corrupting retained v1 owner authority"
 	definition.Description = &description
-	updateRequest := &opensplunkv1.UpdateKnowledgeObjectRequest{
+	updateRequest := &opensplunk.UpdateKnowledgeObjectRequest{
 		KnowledgeObjectId: created.GetKnowledgeObject().GetKnowledgeObjectId(),
 		ExpectedVersion:   1,
 		Definition:        definition,
@@ -155,7 +155,7 @@ func TestWriterHistoricalReplayVersionOwnerSameWidthTamperIsCorruptAndReadOnly(t
 	response, err := harness.writer.Create(
 		harness.actorContext,
 		harness.scope,
-		proto.Clone(createRequest).(*opensplunkv1.CreateKnowledgeObjectRequest),
+		proto.Clone(createRequest).(*opensplunk.CreateKnowledgeObjectRequest),
 	)
 	if response != nil || !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("historical owner-tampered replay = (%v, %v), want nil/ErrCorrupt", response, err)

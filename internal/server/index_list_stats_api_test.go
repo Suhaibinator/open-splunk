@@ -11,13 +11,13 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 )
 
-const indexListPath = "/api/v1/indexes/list"
+const indexListPath = "/api/indexes/list"
 
 func TestIndexListStatisticsEnrichOnlyTheSelectedPageInOneTrustedBatch(
 	t *testing.T,
@@ -99,10 +99,10 @@ func TestIndexListStatisticsEnrichOnlyTheSelectedPageInOneTrustedBatch(
 	response := postAuthenticatedIndexList(
 		t,
 		handler,
-		&opensplunkv1.ListIndexesRequest{
-			Page:          &opensplunkv1.PageRequest{PageSize: &pageSize},
-			SortBy:        opensplunkv1.IndexSortBy_INDEX_SORT_BY_NAME,
-			SortDirection: opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING,
+		&opensplunk.ListIndexesRequest{
+			Page:          &opensplunk.PageRequest{PageSize: &pageSize},
+			SortBy:        opensplunk.IndexSortBy_INDEX_SORT_BY_NAME,
+			SortDirection: opensplunk.SortDirection_SORT_DIRECTION_DESCENDING,
 			IncludeStats:  true,
 		},
 	)
@@ -113,7 +113,7 @@ func TestIndexListStatisticsEnrichOnlyTheSelectedPageInOneTrustedBatch(
 			response.Body.String(),
 		)
 	}
-	var decoded opensplunkv1.ListIndexesResponse
+	var decoded opensplunk.ListIndexesResponse
 	unmarshalResponse(t, response, &decoded)
 	items := decoded.GetIndexes()
 	if len(items) != 2 ||
@@ -237,14 +237,14 @@ func TestIndexListStatisticsSkipDeletingRecordsButEnrichReadableRecords(
 	response := postAuthenticatedIndexList(
 		t,
 		handler,
-		&opensplunkv1.ListIndexesRequest{IncludeStats: true},
+		&opensplunk.ListIndexesRequest{IncludeStats: true},
 	)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var decoded opensplunkv1.ListIndexesResponse
+	var decoded opensplunk.ListIndexesResponse
 	unmarshalResponse(t, response, &decoded)
-	items := make(map[string]*opensplunkv1.IndexListItem, 3)
+	items := make(map[string]*opensplunk.IndexListItem, 3)
 	for _, item := range decoded.GetIndexes() {
 		items[item.GetIndex().GetDefinition().GetName()] = item
 	}
@@ -293,12 +293,12 @@ func TestIndexListStatisticsAllDeletingPageDoesNoSnapshotOrNativeWork(
 	response := postAuthenticatedIndexList(
 		t,
 		handler,
-		&opensplunkv1.ListIndexesRequest{IncludeStats: true},
+		&opensplunk.ListIndexesRequest{IncludeStats: true},
 	)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var decoded opensplunkv1.ListIndexesResponse
+	var decoded opensplunk.ListIndexesResponse
 	unmarshalResponse(t, response, &decoded)
 	items := decoded.GetIndexes()
 	if len(items) != 2 ||
@@ -374,7 +374,7 @@ func TestIndexListStatisticsDoNoNativeWorkWhenDisabledOrPageIsEmpty(
 			response := postAuthenticatedIndexList(
 				t,
 				handler,
-				&opensplunkv1.ListIndexesRequest{
+				&opensplunk.ListIndexesRequest{
 					IncludeStats: test.includeStats,
 				},
 			)
@@ -385,7 +385,7 @@ func TestIndexListStatisticsDoNoNativeWorkWhenDisabledOrPageIsEmpty(
 					response.Body.String(),
 				)
 			}
-			var decoded opensplunkv1.ListIndexesResponse
+			var decoded opensplunk.ListIndexesResponse
 			unmarshalResponse(t, response, &decoded)
 			if test.createRecord {
 				if len(decoded.GetIndexes()) != 1 ||
@@ -433,7 +433,7 @@ func TestIndexListStatisticsRequireConfiguredDependenciesBeforeCatalogWork(
 	response := postAuthenticatedIndexList(
 		t,
 		handler,
-		&opensplunkv1.ListIndexesRequest{IncludeStats: true},
+		&opensplunk.ListIndexesRequest{IncludeStats: true},
 	)
 	if response.Code != http.StatusServiceUnavailable ||
 		strings.Contains(response.Body.String(), "nil") {
@@ -457,7 +457,7 @@ func TestIndexListStatisticsRequireConfiguredDependenciesBeforeCatalogWork(
 			indexListPath,
 			nil,
 		),
-		&opensplunkv1.ListIndexesRequest{IncludeStats: true},
+		&opensplunk.ListIndexesRequest{IncludeStats: true},
 	)
 	if result != nil || err == nil {
 		t.Fatalf(
@@ -488,9 +488,9 @@ func TestIndexListStatisticsSortsRemainRejectedBeforeNativeWork(
 	); err != nil {
 		t.Fatalf("CreateIndex: %v", err)
 	}
-	for _, sortBy := range []opensplunkv1.IndexSortBy{
-		opensplunkv1.IndexSortBy_INDEX_SORT_BY_EVENT_COUNT,
-		opensplunkv1.IndexSortBy_INDEX_SORT_BY_STORAGE_BYTES,
+	for _, sortBy := range []opensplunk.IndexSortBy{
+		opensplunk.IndexSortBy_INDEX_SORT_BY_EVENT_COUNT,
+		opensplunk.IndexSortBy_INDEX_SORT_BY_STORAGE_BYTES,
 	} {
 		t.Run(sortBy.String(), func(t *testing.T) {
 			t.Parallel()
@@ -511,7 +511,7 @@ func TestIndexListStatisticsSortsRemainRejectedBeforeNativeWork(
 			response := postAuthenticatedIndexList(
 				t,
 				handler,
-				&opensplunkv1.ListIndexesRequest{
+				&opensplunk.ListIndexesRequest{
 					SortBy:       sortBy,
 					IncludeStats: true,
 				},
@@ -588,8 +588,8 @@ func TestIndexListCursorBindsStatisticsModeBeforeNativeWork(t *testing.T) {
 			firstResponse := postAuthenticatedIndexList(
 				t,
 				handler,
-				&opensplunkv1.ListIndexesRequest{
-					Page: &opensplunkv1.PageRequest{
+				&opensplunk.ListIndexesRequest{
+					Page: &opensplunk.PageRequest{
 						PageSize: &pageSize,
 					},
 					IncludeStats: test.firstStats,
@@ -602,7 +602,7 @@ func TestIndexListCursorBindsStatisticsModeBeforeNativeWork(t *testing.T) {
 					firstResponse.Body.String(),
 				)
 			}
-			var first opensplunkv1.ListIndexesResponse
+			var first opensplunk.ListIndexesResponse
 			unmarshalResponse(t, firstResponse, &first)
 			token := first.GetPage().GetNextPageToken()
 			if token == "" {
@@ -611,8 +611,8 @@ func TestIndexListCursorBindsStatisticsModeBeforeNativeWork(t *testing.T) {
 			secondResponse := postAuthenticatedIndexList(
 				t,
 				handler,
-				&opensplunkv1.ListIndexesRequest{
-					Page: &opensplunkv1.PageRequest{
+				&opensplunk.ListIndexesRequest{
+					Page: &opensplunk.PageRequest{
 						PageSize:  &pageSize,
 						PageToken: &token,
 					},
@@ -770,7 +770,7 @@ func TestIndexListStatisticsRejectMalformedBatchResults(t *testing.T) {
 			response := postAuthenticatedIndexList(
 				t,
 				handler,
-				&opensplunkv1.ListIndexesRequest{IncludeStats: true},
+				&opensplunk.ListIndexesRequest{IncludeStats: true},
 			)
 			if response.Code != http.StatusInternalServerError {
 				t.Fatalf(
@@ -827,7 +827,7 @@ func TestIndexListStatisticsMapBatchFailuresWithoutDisclosure(t *testing.T) {
 			response := postAuthenticatedIndexList(
 				t,
 				handler,
-				&opensplunkv1.ListIndexesRequest{IncludeStats: true},
+				&opensplunk.ListIndexesRequest{IncludeStats: true},
 			)
 			if response.Code != test.status ||
 				strings.Contains(
@@ -897,7 +897,7 @@ func TestIndexListStatisticsDoNotHoldSerializationPermitDuringBatch(
 				indexListPath,
 				nil,
 			),
-			&opensplunkv1.ListIndexesRequest{IncludeStats: true},
+			&opensplunk.ListIndexesRequest{IncludeStats: true},
 		)
 		outcomes <- outcome{response: response, err: err}
 	}()
@@ -969,7 +969,7 @@ func TestIndexListSaturatedSerializationGateDoesNotBlockCatalogRead(
 			indexListPath,
 			nil,
 		),
-		&opensplunkv1.ListIndexesRequest{IncludeStats: true},
+		&opensplunk.ListIndexesRequest{IncludeStats: true},
 	)
 	if response != nil || err == nil {
 		t.Fatalf(
@@ -1028,7 +1028,7 @@ func newIndexListStatisticsTestHandler(
 func postAuthenticatedIndexList(
 	t *testing.T,
 	handler http.Handler,
-	request *opensplunkv1.ListIndexesRequest,
+	request *opensplunk.ListIndexesRequest,
 ) *httptest.ResponseRecorder {
 	t.Helper()
 	authenticated := &adminIntegrationHandler{

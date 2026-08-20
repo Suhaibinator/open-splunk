@@ -7,11 +7,11 @@ import {
   type ResultColumn,
   type ResultRow,
   type ResultSchema,
-} from "../../gen/ts/open_splunk/v1/result";
+} from "../../gen/ts/open_splunk/result";
 import {
   ValueType,
   type TypedValue,
-} from "../../gen/ts/open_splunk/v1/value";
+} from "../../gen/ts/open_splunk/value";
 import {
   adaptSearchResults,
   timechartValueFields,
@@ -308,14 +308,14 @@ test("runtime-wide chart results retain every split series in schema order", () 
   };
   const rows: ResultRow[] = [
     row("grade", 0n, [
-      stringValue("/api/v1/submissions/grade"),
+      stringValue("/api/submissions/grade"),
       uint64Value(4n),
       uint64Value(18n),
       uint64Value(0n),
       uint64Value(2n),
     ]),
     row("courses", 1n, [
-      stringValue("/api/v1/courses"),
+      stringValue("/api/courses"),
       uint64Value(9_007_199_254_740_993n),
       uint64Value(11n),
       uint64Value(1n),

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"slices"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/lookupcatalog"
@@ -198,9 +198,9 @@ func runtimeLookupContract(
 		}
 	}
 	switch normalized.Definition.GetOverwriteBehavior() {
-	case opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING:
+	case opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING:
 		contract.WriteMode = plan.LookupWriteModeOverwrite
-	case opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING:
+	case opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING:
 		contract.WriteMode = plan.LookupWriteModePreserveExisting
 	default:
 		return plan.Lookup{}, nil, errors.New(

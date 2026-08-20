@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"google.golang.org/protobuf/proto"
 )
@@ -87,10 +87,10 @@ func TestWriterRecognizedActiveRemovalRoutesUseTransitionAuthority(t *testing.T)
 				scope WriteScope,
 				objectID string,
 			) (proto.Message, error) {
-				return writer.SetState(ctx, scope, &opensplunkv1.SetKnowledgeObjectStateRequest{
+				return writer.SetState(ctx, scope, &opensplunk.SetKnowledgeObjectStateRequest{
 					KnowledgeObjectId: objectID,
 					ExpectedVersion:   1,
-					State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+					State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 					ClientRequestId:   "recognized-active-disable-0001",
 				})
 			},
@@ -104,7 +104,7 @@ func TestWriterRecognizedActiveRemovalRoutesUseTransitionAuthority(t *testing.T)
 				scope WriteScope,
 				objectID string,
 			) (proto.Message, error) {
-				return writer.Delete(ctx, scope, &opensplunkv1.DeleteKnowledgeObjectRequest{
+				return writer.Delete(ctx, scope, &opensplunk.DeleteKnowledgeObjectRequest{
 					KnowledgeObjectId: objectID,
 					ExpectedVersion:   1,
 					ClientRequestId:   "recognized-active-delete-00001",
@@ -188,10 +188,10 @@ func TestWriterRecognizedActiveRemovalRequiresCompleteAppInventory(t *testing.T)
 	_, err := harness.writer.SetState(
 		harness.actorContext,
 		harness.scope,
-		&opensplunkv1.SetKnowledgeObjectStateRequest{
+		&opensplunk.SetKnowledgeObjectStateRequest{
 			KnowledgeObjectId: harness.candidateID,
 			ExpectedVersion:   1,
-			State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+			State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 			ClientRequestId:   "recognized-missing-app-inventory-0001",
 		},
 	)
@@ -219,10 +219,10 @@ func TestWriterActiveDependentConflictPrecedesMalformedTransitionInventory(t *te
 	_, err := harness.writer.SetState(
 		harness.actorContext,
 		harness.scope,
-		&opensplunkv1.SetKnowledgeObjectStateRequest{
+		&opensplunk.SetKnowledgeObjectStateRequest{
 			KnowledgeObjectId: harness.targetID,
 			ExpectedVersion:   1,
-			State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+			State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 			ClientRequestId:   "recognized-dependent-precedence-0001",
 		},
 	)

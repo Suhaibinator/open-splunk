@@ -7,18 +7,20 @@ import (
 	"testing"
 
 	"github.com/Suhaibinator/SRouter/pkg/codec"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 )
 
 func TestBoundedProtoCodecEnforcesMarshalByteLimitAndReleasesPermit(t *testing.T) {
 	released := 0
 	bounded := newBoundedProtoCodec(
-		codec.NewProtoCodec[*opensplunkv1.GetSystemBootstrapRequest, *opensplunkv1.GetSystemBootstrapResponse](),
+		codec.NewProtoCodec[*opensplunk.GetSystemBootstrapRequest, *opensplunk.GetSystemBootstrapResponse](),
 		boundedProtoCodecOptions{maximumBytes: 1, sizeError: "test response is too large"},
 	)
 	response := httptest.NewRecorder()
-	err := bounded.Encode(response, &boundedProtoResponse[*opensplunkv1.GetSystemBootstrapResponse]{
-		message: &opensplunkv1.GetSystemBootstrapResponse{ServerVersion: "larger than one byte"},
+	err := bounded.Encode(response, &boundedProtoResponse[*opensplunk.GetSystemBootstrapResponse]{
+		message: &opensplunk.GetSystemBootstrapResponse{Features: []opensplunk.ServerFeature{
+			opensplunk.ServerFeature_SERVER_FEATURE_SEARCH,
+		}},
 		ctx:     context.Background(),
 		release: func() { released++ },
 	})

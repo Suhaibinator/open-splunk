@@ -429,10 +429,6 @@ func runBrowserRecoveryFixture(
 		OwnerID:         browserSequenceExpiredOwner,
 		TenantID:        browserSequenceExpiredTenant,
 		Now:             func() time.Time { return anchor },
-		Bootstrap: server.BootstrapConfig{
-			ServerVersion: "browser-recovery-test",
-			APIVersion:    "v1",
-		},
 	})
 	if err != nil {
 		closeContext, closeCancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -459,9 +455,9 @@ func runBrowserRecoveryFixture(
 		func(response http.ResponseWriter, request *http.Request) {
 			if request.Method == http.MethodPost {
 				switch request.URL.Path {
-				case "/api/v1/search/jobs/create":
+				case "/api/search/jobs/create":
 					serverCreateCalls.Add(1)
-				case "/api/v1/search/jobs/cancel":
+				case "/api/search/jobs/cancel":
 					serverCancelCalls.Add(1)
 				}
 			}

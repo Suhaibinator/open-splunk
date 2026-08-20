@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/protobuf/proto"
 )
 
 // eventOfExactProtoSize returns a valid event whose encoded size is exactly
 // target bytes, so hard-limit boundaries can be probed off-by-one.
-func eventOfExactProtoSize(t *testing.T, id string, target uint64) *opensplunkv1.LogEvent {
+func eventOfExactProtoSize(t *testing.T, id string, target uint64) *opensplunk.LogEvent {
 	t.Helper()
 	event := validTestEvent(id, "main")
 	event.Raw = nil
@@ -50,25 +50,25 @@ func TestValidateBatchHardEnvelopeSingleWalkMatchesPerEventProtoSize(t *testing.
 	t.Parallel()
 	service, state := hardEnvelopeTestService(t)
 
-	maxEvents := make([]*opensplunkv1.LogEvent, 0, HardMaxBatchEvents)
+	maxEvents := make([]*opensplunk.LogEvent, 0, HardMaxBatchEvents)
 	for index := range int(HardMaxBatchEvents) {
 		maxEvents = append(maxEvents, validTestEvent(fmt.Sprintf("event-%04d", index), "main"))
 	}
 
 	tests := []struct {
 		name   string
-		events []*opensplunkv1.LogEvent
+		events []*opensplunk.LogEvent
 	}{
-		{name: "single event", events: []*opensplunkv1.LogEvent{validTestEvent("event-1", "main")}},
-		{name: "nil interleaved", events: []*opensplunkv1.LogEvent{
+		{name: "single event", events: []*opensplunk.LogEvent{validTestEvent("event-1", "main")}},
+		{name: "nil interleaved", events: []*opensplunk.LogEvent{
 			nil,
 			validTestEvent("event-1", "main"),
 			nil,
 			validTestEvent("event-2", "main"),
 			nil,
 		}},
-		{name: "all nil", events: []*opensplunkv1.LogEvent{nil, nil}},
-		{name: "event exactly at hard limit", events: []*opensplunkv1.LogEvent{
+		{name: "all nil", events: []*opensplunk.LogEvent{nil, nil}},
+		{name: "event exactly at hard limit", events: []*opensplunk.LogEvent{
 			eventOfExactProtoSize(t, "event-max", HardMaxEventBytes),
 		}},
 		{name: "batch exactly at hard event count", events: maxEvents},
@@ -107,45 +107,45 @@ func TestValidateBatchHardEnvelopeBoundariesAndRejectionAccounting(t *testing.T)
 	t.Parallel()
 	service, state := hardEnvelopeTestService(t)
 
-	tooManyEvents := make([]*opensplunkv1.LogEvent, 0, HardMaxBatchEvents+1)
+	tooManyEvents := make([]*opensplunk.LogEvent, 0, HardMaxBatchEvents+1)
 	for index := range int(HardMaxBatchEvents) + 1 {
 		tooManyEvents = append(tooManyEvents, validTestEvent(fmt.Sprintf("event-%04d", index), "main"))
 	}
 
 	tests := []struct {
 		name       string
-		events     []*opensplunkv1.LogEvent
+		events     []*opensplunk.LogEvent
 		declared   uint64
 		overriding bool
-		wantCode   opensplunkv1.BatchRejectionCode
+		wantCode   opensplunk.BatchRejectionCode
 		wantRule   string
 	}{
 		{
 			name:     "event one byte over the hard limit",
-			events:   []*opensplunkv1.LogEvent{eventOfExactProtoSize(t, "event-max", HardMaxEventBytes+1)},
-			wantCode: opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE,
+			events:   []*opensplunk.LogEvent{eventOfExactProtoSize(t, "event-max", HardMaxEventBytes+1)},
+			wantCode: opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE,
 			wantRule: "event_too_large",
 		},
 		{
 			name:     "one event over the hard count",
 			events:   tooManyEvents,
-			wantCode: opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_TOO_MANY_EVENTS,
+			wantCode: opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_TOO_MANY_EVENTS,
 			wantRule: "too_many_events",
 		},
 		{
 			name:       "declared size overstates the walked sum",
-			events:     []*opensplunkv1.LogEvent{validTestEvent("event-1", "main")},
-			declared:   UncompressedEventBytes([]*opensplunkv1.LogEvent{validTestEvent("event-1", "main")}) + 1,
+			events:     []*opensplunk.LogEvent{validTestEvent("event-1", "main")},
+			declared:   UncompressedEventBytes([]*opensplunk.LogEvent{validTestEvent("event-1", "main")}) + 1,
 			overriding: true,
-			wantCode:   opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE,
+			wantCode:   opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE,
 			wantRule:   "batch_size_mismatch_or_limit",
 		},
 		{
 			name:       "oversize event outranks a mismatched declared size",
-			events:     []*opensplunkv1.LogEvent{eventOfExactProtoSize(t, "event-big", HardMaxEventBytes+1)},
+			events:     []*opensplunk.LogEvent{eventOfExactProtoSize(t, "event-big", HardMaxEventBytes+1)},
 			declared:   1,
 			overriding: true,
-			wantCode:   opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE,
+			wantCode:   opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE,
 			wantRule:   "event_too_large",
 		},
 	}
@@ -190,7 +190,7 @@ func TestProcessBatchChargesWalkedSizesWithNilEventHoles(t *testing.T) {
 
 	first := validTestEvent("event-1", "main")
 	second := eventOfExactProtoSize(t, "event-2", 4096)
-	events := []*opensplunkv1.LogEvent{nil, first, nil, second, nil}
+	events := []*opensplunk.LogEvent{nil, first, nil, second, nil}
 	batch := validTestBatch("collector-a", "batch-nil-holes", 1, events...)
 
 	response, err := service.processBatch(
@@ -204,12 +204,12 @@ func TestProcessBatchChargesWalkedSizesWithNilEventHoles(t *testing.T) {
 		t.Fatalf("batch ack = %+v", ack)
 	}
 	for index, rejected := range ack.GetRejectedEvents() {
-		if rejected.GetCode() != opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_VALUE_INVALID ||
+		if rejected.GetCode() != opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_VALUE_INVALID ||
 			rejected.GetEventIndex() != []uint32{0, 2, 4}[index] {
 			t.Fatalf("nil event rejections = %+v, want VALUE_INVALID at ordinals 0, 2, 4", ack.GetRejectedEvents())
 		}
 	}
-	wantBytes := UncompressedEventBytes([]*opensplunkv1.LogEvent{first, second})
+	wantBytes := UncompressedEventBytes([]*opensplunk.LogEvent{first, second})
 	if stored.QuotaAdmission == nil || len(stored.QuotaAdmission.Charges) == 0 {
 		t.Fatalf("stored quota admission = %+v", stored.QuotaAdmission)
 	}

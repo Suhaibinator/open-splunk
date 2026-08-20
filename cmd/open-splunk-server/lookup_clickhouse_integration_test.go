@@ -8,7 +8,7 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
 	"github.com/Suhaibinator/open-splunk/internal/lookupservice"
@@ -20,7 +20,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/migrations"
 )
 
-// TestLookupRuntimeManagerAgainstClickHouse is the production-shaped v0.4
+// TestLookupRuntimeManagerAgainstClickHouse is the production-shaped lookup
 // qualification for the boundary that unit tests cannot cover. It publishes a
 // lookup through the runtime management service, resolves and seals it through
 // Manager admission, attaches its immutable rows as a native external table,
@@ -43,20 +43,20 @@ func TestLookupRuntimeManagerAgainstClickHouse(t *testing.T) {
 	created, err := runtime.lookupManagement.Create(
 		ctx,
 		lookupserviceScope(),
-		&opensplunkv1.CreateLookupRequest{
-			Definition: &opensplunkv1.LookupDefinition{
+		&opensplunk.CreateLookupRequest{
+			Definition: &opensplunk.LookupDefinition{
 				AppId:        runtimeKnowledgeTestApp,
 				Name:         "service_owners",
-				SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-				KeyMappings: []*opensplunkv1.LookupFieldMapping{{
+				SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+				KeyMappings: []*opensplunk.LookupFieldMapping{{
 					LookupField: "service_id",
 					EventField:  "service_key",
 				}},
-				OutputMappings: []*opensplunkv1.LookupFieldMapping{{
+				OutputMappings: []*opensplunk.LookupFieldMapping{{
 					LookupField: "owner",
 					EventField:  "service_owner",
 				}},
-				OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+				OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
 			},
 			CsvData: []byte("service_id,owner\napi,platform\n,empty-match\n7,numeric-match\n"),
 		},
@@ -174,62 +174,62 @@ func TestLookupRuntimeManagerAgainstClickHouse(t *testing.T) {
 	automatic, err := runtime.lookupManagement.Create(
 		ctx,
 		lookupserviceScope(),
-		&opensplunkv1.CreateLookupRequest{
-			Definition: &opensplunkv1.LookupDefinition{
+		&opensplunk.CreateLookupRequest{
+			Definition: &opensplunk.LookupDefinition{
 				AppId:        runtimeKnowledgeTestApp,
 				Name:         "automatic_service_owners",
-				SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-				Selector: &opensplunkv1.KnowledgeSelector{
-					IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{
+				SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+				Selector: &opensplunk.KnowledgeSelector{
+					IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{{
 						Value: "main",
 					}},
 				},
 				Automatic: true,
-				KeyMappings: []*opensplunkv1.LookupFieldMapping{{
+				KeyMappings: []*opensplunk.LookupFieldMapping{{
 					LookupField: "service_id",
 					EventField:  "service_key",
 				}},
-				OutputMappings: []*opensplunkv1.LookupFieldMapping{{
+				OutputMappings: []*opensplunk.LookupFieldMapping{{
 					LookupField: "owner",
 					EventField:  "automatic_owner",
 				}},
-				OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+				OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 			},
 			CsvData: []byte("service_id,owner\napi,automatic-platform\n,automatic-empty\n"),
 		},
 	)
 	if err != nil {
-		t.Fatalf("publish v0.4 automatic lookup: %v", err)
+		t.Fatalf("publish automatic lookup: %v", err)
 	}
 	if automatic.GetLookup() == nil || automatic.GetLookup().GetVersion() != 1 ||
 		!automatic.GetLookup().GetDefinition().GetAutomatic() {
-		t.Fatalf("published v0.4 automatic lookup = %#v", automatic)
+		t.Fatalf("published automatic lookup = %#v", automatic)
 	}
 
 	automaticRequest := runtimeKnowledgeSearchRequest(t)
 	automaticRequest.SPL = "index=main | table event_id automatic_owner"
 	automaticJob, err := manager.Create(ctx, automaticRequest)
 	if err != nil {
-		t.Fatalf("admit v0.4 automatic lookup search: %v", err)
+		t.Fatalf("admit automatic lookup search: %v", err)
 	}
 	automaticCompleted := waitForLookupTerminal(t, manager, automaticJob.ID)
 	if automaticCompleted.State != searchjobs.StateCompleted ||
 		automaticCompleted.Failure != nil {
-		t.Fatalf("v0.4 automatic lookup search = %#v", automaticCompleted)
+		t.Fatalf("automatic lookup search = %#v", automaticCompleted)
 	}
 	automaticProvenance := automaticCompleted.KnowledgeSnapshot.GetLookupAssets()
 	if len(automaticProvenance) != 1 ||
 		automaticProvenance[0].GetLookupId() != automatic.GetLookup().GetLookupId() ||
 		automaticProvenance[0].GetLookupVersion() != 1 ||
 		automaticProvenance[0].GetAsset().GetVersion() != 1 {
-		t.Fatalf("v0.4 automatic lookup provenance = %#v", automaticProvenance)
+		t.Fatalf("automatic lookup provenance = %#v", automaticProvenance)
 	}
 	automaticPage, err := manager.Results(
 		automaticJob.ID,
 		searchjobs.PageRequest{Limit: 16},
 	)
 	if err != nil {
-		t.Fatalf("read v0.4 automatic lookup results: %v", err)
+		t.Fatalf("read automatic lookup results: %v", err)
 	}
 	requireLookupAutomaticResults(t, automaticPage)
 	requireLookupInspection(
@@ -497,7 +497,7 @@ func requireLookupAutomaticResults(t *testing.T, page searchjobs.ResultPage) {
 		len(page.Schema.Columns) != 2 ||
 		page.Schema.Columns[0].Name != "event_id" ||
 		page.Schema.Columns[1].Name != "automatic_owner" {
-		t.Fatalf("v0.4 automatic lookup result page = %#v", page)
+		t.Fatalf("automatic lookup result page = %#v", page)
 	}
 	want := map[string]*string{
 		"lookup-01-exact":         stringPointer("automatic-platform"),
@@ -508,27 +508,27 @@ func requireLookupAutomaticResults(t *testing.T, page searchjobs.ResultPage) {
 	}
 	for _, row := range page.Rows {
 		if len(row.Values) != 2 {
-			t.Fatalf("v0.4 automatic lookup row = %#v", row)
+			t.Fatalf("automatic lookup row = %#v", row)
 		}
 		id, ok := row.Values[0].String()
 		if !ok {
-			t.Fatalf("v0.4 automatic lookup event_id = %#v", row.Values[0])
+			t.Fatalf("automatic lookup event_id = %#v", row.Values[0])
 		}
 		expected, exists := want[id]
 		if !exists {
-			t.Fatalf("unexpected v0.4 automatic lookup event_id %q", id)
+			t.Fatalf("unexpected automatic lookup event_id %q", id)
 		}
 		delete(want, id)
 		if expected == nil {
 			if !row.Values[1].IsNull() {
-				t.Fatalf("v0.4 automatic lookup result %q = %#v, want null", id, row.Values[1])
+				t.Fatalf("automatic lookup result %q = %#v, want null", id, row.Values[1])
 			}
 			continue
 		}
 		value, valueOK := row.Values[1].String()
 		if !valueOK || value != *expected {
 			t.Fatalf(
-				"v0.4 automatic lookup result %q = %#v, want %q",
+				"automatic lookup result %q = %#v, want %q",
 				id,
 				row.Values[1],
 				*expected,
@@ -536,7 +536,7 @@ func requireLookupAutomaticResults(t *testing.T, page searchjobs.ResultPage) {
 		}
 	}
 	if len(want) != 0 {
-		t.Fatalf("missing v0.4 automatic lookup results: %#v", want)
+		t.Fatalf("missing automatic lookup results: %#v", want)
 	}
 }
 

@@ -15,12 +15,11 @@ import (
 	"testing/fstest"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/buildinfo"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
-	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 )
@@ -359,7 +358,7 @@ func (catalog fakeIndexCatalog) GetIndexByName(_ context.Context, name string) (
 }
 
 func TestBootstrapUsesProtobufAndLiveIndexes(t *testing.T) {
-	app := &opensplunkv1.AppSummary{AppId: "app-1", Slug: "main", DisplayName: "Main"}
+	app := &opensplunk.AppSummary{AppId: "app-1", Slug: "main", DisplayName: "Main"}
 	build := validServerBuildMetadata(t)
 	handler := newTestHandler(t, Config{
 		SearchJobs: &fakeSearchJobs{},
@@ -367,29 +366,26 @@ func TestBootstrapUsesProtobufAndLiveIndexes(t *testing.T) {
 			ID: "idx-1", Definition: control.IndexDefinition{Name: "main", DisplayName: "Main", SearchEnabled: true}, State: control.IndexStateActive,
 		}}},
 		WebUI:     testUI(),
-		Bootstrap: BootstrapConfig{Build: build, Apps: []*opensplunkv1.AppSummary{app}},
+		Bootstrap: BootstrapConfig{Build: build, Apps: []*opensplunk.AppSummary{app}},
 		Now:       func() time.Time { return testNow },
 	})
 
-	response := postProto(t, handler, "/api/v1/system/bootstrap", &opensplunkv1.GetSystemBootstrapRequest{})
+	response := postProto(t, handler, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{})
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
 	if got := response.Header().Get("Content-Type"); got != "application/x-protobuf" {
 		t.Fatalf("Content-Type = %q", got)
 	}
-	var decoded opensplunkv1.GetSystemBootstrapResponse
+	var decoded opensplunk.GetSystemBootstrapResponse
 	unmarshalResponse(t, response, &decoded)
-	if decoded.GetServerVersion() != "1.2.3 ("+strings.Repeat("a", 40)+")" ||
-		decoded.GetLimits().GetMaximumPageSize() != defaultMaximumPageSize ||
-		decoded.GetSplCompatibilityVersion() != spl.CompatibilityVersion {
+	if decoded.GetLimits().GetMaximumPageSize() != defaultMaximumPageSize {
 		t.Fatalf("bootstrap = %+v", &decoded)
 	}
-	if decoded.GetBuild().GetApplicationVersion() != "1.2.3" ||
-		decoded.GetBuild().GetSourceRevision() != strings.Repeat("a", 40) {
+	if decoded.GetBuild().GetSourceRevision() != strings.Repeat("a", 40) {
 		t.Fatalf("bootstrap build = %+v", decoded.GetBuild())
 	}
-	if !slices.Contains(decoded.GetFeatures(), opensplunkv1.ServerFeature_SERVER_FEATURE_SAVED_SEARCHES) {
+	if !slices.Contains(decoded.GetFeatures(), opensplunk.ServerFeature_SERVER_FEATURE_SAVED_SEARCHES) {
 		t.Fatalf("bootstrap features = %v, want saved searches", decoded.GetFeatures())
 	}
 	if len(decoded.GetIndexes()) != 1 || decoded.GetIndexes()[0].GetName() != "main" {
@@ -404,7 +400,7 @@ func TestBootstrapUsesProtobufAndLiveIndexes(t *testing.T) {
 	// Constructor input is detached.
 	app.DisplayName = "mutated"
 	build.SourceRevision = "mutated"
-	response = postProto(t, handler, "/api/v1/system/bootstrap", &opensplunkv1.GetSystemBootstrapRequest{})
+	response = postProto(t, handler, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{})
 	unmarshalResponse(t, response, &decoded)
 	if decoded.GetApps()[0].GetDisplayName() != "Main" {
 		t.Fatalf("app alias leaked: %+v", decoded.GetApps()[0])
@@ -414,18 +410,10 @@ func TestBootstrapUsesProtobufAndLiveIndexes(t *testing.T) {
 	}
 }
 
-func TestNormalizeBootstrapRejectsContradictoryOrMalformedBuildMetadata(t *testing.T) {
+func TestNormalizeBootstrapRejectsMalformedBuildMetadata(t *testing.T) {
 	t.Parallel()
 
 	build := validServerBuildMetadata(t)
-	if _, err := normalizeBootstrap(BootstrapConfig{
-		ServerVersion: "contradictory",
-		Build:         build,
-	}); err == nil || !strings.Contains(err.Error(), "does not match") {
-		t.Fatalf("contradictory server version error = %v", err)
-	}
-
-	build = validServerBuildMetadata(t)
 	build.UiSha256 = "malformed"
 	if _, err := normalizeBootstrap(BootstrapConfig{Build: build}); err == nil ||
 		!strings.Contains(err.Error(), "UI SHA-256") {
@@ -433,9 +421,9 @@ func TestNormalizeBootstrapRejectsContradictoryOrMalformedBuildMetadata(t *testi
 	}
 }
 
-func validServerBuildMetadata(t *testing.T) *opensplunkv1.BuildMetadata {
+func validServerBuildMetadata(t *testing.T) *opensplunk.BuildMetadata {
 	t.Helper()
-	identity, err := buildinfo.Parse("1.2.3", strings.Repeat("a", 40))
+	identity, err := buildinfo.Parse(strings.Repeat("a", 40))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -443,17 +431,13 @@ func validServerBuildMetadata(t *testing.T) *opensplunkv1.BuildMetadata {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &opensplunkv1.BuildMetadata{
-		ApplicationVersion:         identity.ApplicationVersion,
+	return &opensplunk.BuildMetadata{
 		SourceRevision:             identity.SourceRevision,
 		UiBuildId:                  uiBuildID,
 		UiSha256:                   strings.Repeat("1", 64),
 		ProtobufSchemaSha256:       strings.Repeat("2", 64),
 		SqliteMigrationsSha256:     strings.Repeat("3", 64),
-		SqliteMigrationVersion:     2,
 		ClickhouseMigrationsSha256: strings.Repeat("4", 64),
-		ClickhouseMigrationVersion: 1,
-		AssetManifestFormatVersion: 1,
 	}
 }
 
@@ -464,22 +448,22 @@ func TestSearchWebSocketRouteAndBootstrapUseServiceLimits(t *testing.T) {
 		SearchWebSocket: socket,
 		Indexes:         fakeIndexCatalog{},
 		WebUI:           testUI(),
-		Bootstrap: BootstrapConfig{Features: []opensplunkv1.ServerFeature{
-			opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH,
-			opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_PREVIEW,
-			opensplunkv1.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY,
-			opensplunkv1.ServerFeature_SERVER_FEATURE_TIMELINE,
-			opensplunkv1.ServerFeature_SERVER_FEATURE_PLAN_INSPECTION,
-			opensplunkv1.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS,
-			opensplunkv1.ServerFeature_SERVER_FEATURE_LOOKUP_MANAGEMENT,
+		Bootstrap: BootstrapConfig{Features: []opensplunk.ServerFeature{
+			opensplunk.ServerFeature_SERVER_FEATURE_SEARCH,
+			opensplunk.ServerFeature_SERVER_FEATURE_SEARCH_PREVIEW,
+			opensplunk.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY,
+			opensplunk.ServerFeature_SERVER_FEATURE_TIMELINE,
+			opensplunk.ServerFeature_SERVER_FEATURE_PLAN_INSPECTION,
+			opensplunk.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS,
+			opensplunk.ServerFeature_SERVER_FEATURE_LOOKUP_MANAGEMENT,
 		}},
 	})
 
-	bootstrapResponse := postProto(t, handler, "/api/v1/system/bootstrap", &opensplunkv1.GetSystemBootstrapRequest{})
+	bootstrapResponse := postProto(t, handler, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{})
 	if bootstrapResponse.Code != http.StatusOK {
 		t.Fatalf("bootstrap status = %d, body = %s", bootstrapResponse.Code, bootstrapResponse.Body.String())
 	}
-	var bootstrap opensplunkv1.GetSystemBootstrapResponse
+	var bootstrap opensplunk.GetSystemBootstrapResponse
 	unmarshalResponse(t, bootstrapResponse, &bootstrap)
 	if bootstrap.GetSearchWebsocketPath() != searchWebSocketPath {
 		t.Fatalf("websocket path = %q, want %q", bootstrap.GetSearchWebsocketPath(), searchWebSocketPath)
@@ -489,15 +473,15 @@ func TestSearchWebSocketRouteAndBootstrapUseServiceLimits(t *testing.T) {
 		bootstrap.GetLimits().GetMaximumWebsocketFrameBytes() != socket.MaximumFrameBytes() {
 		t.Fatalf("websocket limits = %+v", bootstrap.GetLimits())
 	}
-	if !slices.Contains(bootstrap.GetFeatures(), opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_PREVIEW) {
+	if !slices.Contains(bootstrap.GetFeatures(), opensplunk.ServerFeature_SERVER_FEATURE_SEARCH_PREVIEW) {
 		t.Fatalf("bootstrap features = %v, want search preview", bootstrap.GetFeatures())
 	}
-	for _, unsupported := range []opensplunkv1.ServerFeature{
-		opensplunkv1.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY,
-		opensplunkv1.ServerFeature_SERVER_FEATURE_TIMELINE,
-		opensplunkv1.ServerFeature_SERVER_FEATURE_PLAN_INSPECTION,
-		opensplunkv1.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS,
-		opensplunkv1.ServerFeature_SERVER_FEATURE_LOOKUP_MANAGEMENT,
+	for _, unsupported := range []opensplunk.ServerFeature{
+		opensplunk.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY,
+		opensplunk.ServerFeature_SERVER_FEATURE_TIMELINE,
+		opensplunk.ServerFeature_SERVER_FEATURE_PLAN_INSPECTION,
+		opensplunk.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS,
+		opensplunk.ServerFeature_SERVER_FEATURE_LOOKUP_MANAGEMENT,
 	} {
 		if slices.Contains(bootstrap.GetFeatures(), unsupported) {
 			t.Fatalf("unsupported feature %s was advertised", unsupported)
@@ -506,8 +490,8 @@ func TestSearchWebSocketRouteAndBootstrapUseServiceLimits(t *testing.T) {
 	knowledgeResponse := postProto(
 		t,
 		handler,
-		"/api/v1/knowledge/objects/list",
-		&opensplunkv1.ListKnowledgeObjectsRequest{},
+		"/api/knowledge/objects/list",
+		&opensplunk.ListKnowledgeObjectsRequest{},
 	)
 	if knowledgeResponse.Code != http.StatusNotFound {
 		t.Fatalf("unregistered knowledge route status = %d, want %d", knowledgeResponse.Code, http.StatusNotFound)
@@ -604,8 +588,8 @@ func TestSearchWebSocketLimitsAreValidated(t *testing.T) {
 
 func TestSearchWebSocketIsNotAdvertisedOrRoutedWithoutService(t *testing.T) {
 	handler := newTestHandler(t, Config{SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, WebUI: testUI()})
-	bootstrapResponse := postProto(t, handler, "/api/v1/system/bootstrap", &opensplunkv1.GetSystemBootstrapRequest{})
-	var bootstrap opensplunkv1.GetSystemBootstrapResponse
+	bootstrapResponse := postProto(t, handler, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{})
+	var bootstrap opensplunk.GetSystemBootstrapResponse
 	unmarshalResponse(t, bootstrapResponse, &bootstrap)
 	if bootstrap.GetSearchWebsocketPath() != "" || bootstrap.GetLimits().GetMaximumWebsocketSubscriptions() != 0 ||
 		bootstrap.GetLimits().GetMaximumWebsocketFrameBytes() != 0 {
@@ -629,21 +613,21 @@ func TestBrowserAPIRoutesDefaultToLoopbackWithoutAdministration(t *testing.T) {
 		t.Fatalf("NewHandler: %v", err)
 	}
 
-	response := postProtoHeaders(t, handler, "/api/v1/system/bootstrap", &opensplunkv1.GetSystemBootstrapRequest{}, map[string]string{
+	response := postProtoHeaders(t, handler, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{}, map[string]string{
 		"Host": "attacker.example", "Origin": "http://attacker.example",
 	})
 	if response.Code != http.StatusForbidden {
 		t.Fatalf("non-loopback default status = %d, body = %s", response.Code, response.Body.String())
 	}
 
-	response = postProtoHeaders(t, handler, "/api/v1/system/bootstrap", &opensplunkv1.GetSystemBootstrapRequest{}, map[string]string{
+	response = postProtoHeaders(t, handler, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{}, map[string]string{
 		"Host": "[::1]:8080", "Origin": "http://[::1]:8080", "Sec-Fetch-Site": "same-origin",
 	})
 	if response.Code != http.StatusOK {
 		t.Fatalf("IPv6 loopback status = %d, body = %s", response.Code, response.Body.String())
 	}
 
-	response = postProtoHeaders(t, handler, "/api/v1/system/bootstrap", &opensplunkv1.GetSystemBootstrapRequest{}, map[string]string{
+	response = postProtoHeaders(t, handler, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{}, map[string]string{
 		"Host": "localhost:8080",
 	})
 	if response.Code != http.StatusOK {
@@ -667,14 +651,14 @@ func TestProtobufMediaTypeMethodAndBodyLimit(t *testing.T) {
 		MaximumRequestBytes: 32,
 	})
 
-	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/system/bootstrap", bytes.NewReader(nil))
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/system/bootstrap", bytes.NewReader(nil))
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusUnsupportedMediaType {
 		t.Fatalf("wrong media status = %d", response.Code)
 	}
 
-	request = httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/v1/system/bootstrap", nil)
+	request = httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/system/bootstrap", nil)
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusMethodNotAllowed {
@@ -684,17 +668,17 @@ func TestProtobufMediaTypeMethodAndBodyLimit(t *testing.T) {
 		t.Fatalf("method error headers = %v", response.Header())
 	}
 
-	large := &opensplunkv1.GetSystemBootstrapRequest{PreferredAppId: new(strings.Repeat("a", 128))}
-	response = postProto(t, handler, "/api/v1/system/bootstrap", large)
+	large := &opensplunk.GetSystemBootstrapRequest{PreferredAppId: new(strings.Repeat("a", 128))}
+	response = postProto(t, handler, "/api/system/bootstrap", large)
 	if response.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("large body status = %d, body = %s", response.Code, response.Body.String())
 	}
 
-	exact := &opensplunkv1.GetSystemBootstrapRequest{PreferredAppId: new(strings.Repeat("a", 30))}
+	exact := &opensplunk.GetSystemBootstrapRequest{PreferredAppId: new(strings.Repeat("a", 30))}
 	if size := proto.Size(exact); size != 32 {
 		t.Fatalf("exact request size = %d, want 32", size)
 	}
-	response = postProto(t, handler, "/api/v1/system/bootstrap", exact)
+	response = postProto(t, handler, "/api/system/bootstrap", exact)
 	if response.Code != http.StatusOK {
 		t.Fatalf("exact-limit body status = %d, body = %s", response.Code, response.Body.String())
 	}
@@ -703,7 +687,7 @@ func TestProtobufMediaTypeMethodAndBodyLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request = httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/system/bootstrap", &oneByteReader{data: payload})
+	request = httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/system/bootstrap", &oneByteReader{data: payload})
 	request.Header.Set("Content-Type", "application/x-protobuf")
 	if request.ContentLength != -1 {
 		t.Fatalf("chunked request ContentLength = %d, want -1", request.ContentLength)
@@ -717,7 +701,7 @@ func TestProtobufMediaTypeMethodAndBodyLimit(t *testing.T) {
 	request = httptest.NewRequestWithContext(
 		context.Background(),
 		http.MethodPost,
-		"/api/v1/system/bootstrap",
+		"/api/system/bootstrap",
 		bytes.NewReader(futureProtobufField(strings.Repeat("x", 64))),
 	)
 	request.Header.Set("Content-Type", "application/x-protobuf")
@@ -738,7 +722,7 @@ func TestProtobufUnknownFieldsRemainForwardCompatible(t *testing.T) {
 		SearchJobs: jobs, Indexes: fakeIndexCatalog{}, WebUI: testUI(),
 	})
 	payload := futureProtobufField("future-client-field")
-	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/system/bootstrap", bytes.NewReader(payload))
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/system/bootstrap", bytes.NewReader(payload))
 	request.Header.Set("Content-Type", "application/x-protobuf")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -746,8 +730,8 @@ func TestProtobufUnknownFieldsRemainForwardCompatible(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
 
-	listRequest := &opensplunkv1.ListSearchJobsRequest{
-		Page: &opensplunkv1.PageRequest{},
+	listRequest := &opensplunk.ListSearchJobsRequest{
+		Page: &opensplunk.PageRequest{},
 	}
 	listRequest.ProtoReflect().SetUnknown(payload)
 	listRequest.Page.ProtoReflect().SetUnknown(payload)
@@ -766,10 +750,10 @@ func TestProtobufUnknownFieldsRemainForwardCompatible(t *testing.T) {
 		t.Fatalf("search-job list calls = %d, want 1", listCalls)
 	}
 
-	invalid := &opensplunkv1.ListSearchJobsRequest{
-		Page: &opensplunkv1.PageRequest{},
-		StateFilters: []opensplunkv1.SearchJobState{
-			opensplunkv1.SearchJobState(99),
+	invalid := &opensplunk.ListSearchJobsRequest{
+		Page: &opensplunk.PageRequest{},
+		StateFilters: []opensplunk.SearchJobState{
+			opensplunk.SearchJobState(99),
 		},
 	}
 	invalid.ProtoReflect().SetUnknown(payload)
@@ -807,7 +791,7 @@ func TestCreateSearchResolvesTimeIntentAndValidatesIndexScope(t *testing.T) {
 
 	valid := createRequest("2026-07-22T10:00:00-02:00", "2026-07-22T13:00:00Z", "MAIN")
 	valid.Definition.Spl = " \nindex=main | head 10\t"
-	response := postProto(t, handler, "/api/v1/search/jobs/create", valid)
+	response := postProto(t, handler, "/api/search/jobs/create", valid)
 	if response.Code != http.StatusOK {
 		t.Fatalf("create status = %d, body = %s", response.Code, response.Body.String())
 	}
@@ -828,7 +812,7 @@ func TestCreateSearchResolvesTimeIntentAndValidatesIndexScope(t *testing.T) {
 	}
 
 	relative := createRequest(" -24h ", " now ", "main")
-	response = postProto(t, handler, "/api/v1/search/jobs/create", relative)
+	response = postProto(t, handler, "/api/search/jobs/create", relative)
 	if response.Code != http.StatusOK {
 		t.Fatalf("relative create status = %d, body = %s", response.Code, response.Body.String())
 	}
@@ -844,7 +828,7 @@ func TestCreateSearchResolvesTimeIntentAndValidatesIndexScope(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		request    *opensplunkv1.CreateSearchJobRequest
+		request    *opensplunk.CreateSearchJobRequest
 		wantStatus int
 	}{
 		{name: "inverted time", request: createRequest("2026-07-22T14:00:00Z", "2026-07-22T13:00:00Z", "main"), wantStatus: http.StatusBadRequest},
@@ -854,7 +838,7 @@ func TestCreateSearchResolvesTimeIntentAndValidatesIndexScope(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			response := postProto(t, handler, "/api/v1/search/jobs/create", test.request)
+			response := postProto(t, handler, "/api/search/jobs/create", test.request)
 			if response.Code != test.wantStatus {
 				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 			}
@@ -870,7 +854,7 @@ func TestCreateSearchPreservesScopedSavedSearchProvenance(t *testing.T) {
 		appID   = "app-main"
 		savedID = "saved-1"
 	)
-	store := &fakeSavedSearches{getFn: func(_ context.Context, scope savedobjects.AccessScope, id string) (*opensplunkv1.SavedSearch, error) {
+	store := &fakeSavedSearches{getFn: func(_ context.Context, scope savedobjects.AccessScope, id string) (*opensplunk.SavedSearch, error) {
 		if scope.OwnerID != ownerID || id != savedID {
 			t.Fatalf("saved-search lookup = scope %+v ID %q", scope, id)
 		}
@@ -890,11 +874,11 @@ func TestCreateSearchPreservesScopedSavedSearchProvenance(t *testing.T) {
 	})
 
 	request := createRequest("-24h", "now", "main")
-	request.Source = &opensplunkv1.SearchJobSource{
-		Origin:        opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH,
+	request.Source = &opensplunk.SearchJobSource{
+		Origin:        opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH,
 		SavedSearchId: new(savedID),
 	}
-	response := postProto(t, handler, "/api/v1/search/jobs/create", request)
+	response := postProto(t, handler, "/api/search/jobs/create", request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("saved-source create status = %d, body = %s", response.Code, response.Body.String())
 	}
@@ -911,7 +895,7 @@ func TestCreateSearchPreservesScopedSavedSearchProvenance(t *testing.T) {
 	mismatch := createRequest("-24h", "now", "main")
 	mismatch.Definition.AppId = new("other-app")
 	mismatch.Source = request.Source
-	response = postProto(t, handler, "/api/v1/search/jobs/create", mismatch)
+	response = postProto(t, handler, "/api/search/jobs/create", mismatch)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("cross-app source status = %d, body = %s", response.Code, response.Body.String())
 	}
@@ -928,7 +912,7 @@ func TestCreateSearchRejectsNoncanonicalSavedSearchProvenance(t *testing.T) {
 
 	record := savedSearchRecord("saved-1", 1, "owner-1", "app-main", "Errors")
 	record.Definition.Search.AppId = new(" app-main ")
-	store := &fakeSavedSearches{getFn: func(context.Context, savedobjects.AccessScope, string) (*opensplunkv1.SavedSearch, error) {
+	store := &fakeSavedSearches{getFn: func(context.Context, savedobjects.AccessScope, string) (*opensplunk.SavedSearch, error) {
 		return record, nil
 	}}
 	jobs := &fakeSearchJobs{createJob: completeJob("job-never-created")}
@@ -944,11 +928,11 @@ func TestCreateSearchRejectsNoncanonicalSavedSearchProvenance(t *testing.T) {
 		Now:           func() time.Time { return testNow },
 	})
 	request := createRequest("-24h", "now", "main")
-	request.Source = &opensplunkv1.SearchJobSource{
-		Origin:        opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH,
+	request.Source = &opensplunk.SearchJobSource{
+		Origin:        opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH,
 		SavedSearchId: new("saved-1"),
 	}
-	response := postProto(t, handler, "/api/v1/search/jobs/create", request)
+	response := postProto(t, handler, "/api/search/jobs/create", request)
 	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
@@ -963,44 +947,44 @@ func TestCreateSearchRejectsNoncanonicalSavedSearchProvenance(t *testing.T) {
 func TestCreateSearchRejectsUnsupportedSemanticsBeforeCreatingJob(t *testing.T) {
 	tests := []struct {
 		name   string
-		mutate func(*opensplunkv1.CreateSearchJobRequest)
+		mutate func(*opensplunk.CreateSearchJobRequest)
 	}{
-		{name: "client request ID", mutate: func(request *opensplunkv1.CreateSearchJobRequest) { request.ClientRequestId = new("") }},
-		{name: "source ID without origin", mutate: func(request *opensplunkv1.CreateSearchJobRequest) {
-			request.Source = &opensplunkv1.SearchJobSource{SavedSearchId: new("saved-1")}
+		{name: "client request ID", mutate: func(request *opensplunk.CreateSearchJobRequest) { request.ClientRequestId = new("") }},
+		{name: "source ID without origin", mutate: func(request *opensplunk.CreateSearchJobRequest) {
+			request.Source = &opensplunk.SearchJobSource{SavedSearchId: new("saved-1")}
 		}},
-		{name: "saved search without ID", mutate: func(request *opensplunkv1.CreateSearchJobRequest) {
-			request.Source = &opensplunkv1.SearchJobSource{Origin: opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH}
+		{name: "saved search without ID", mutate: func(request *opensplunk.CreateSearchJobRequest) {
+			request.Source = &opensplunk.SearchJobSource{Origin: opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH}
 		}},
-		{name: "history source", mutate: func(request *opensplunkv1.CreateSearchJobRequest) {
-			request.Source = &opensplunkv1.SearchJobSource{HistorySearchId: new("")}
+		{name: "history source", mutate: func(request *opensplunk.CreateSearchJobRequest) {
+			request.Source = &opensplunk.SearchJobSource{HistorySearchId: new("")}
 		}},
-		{name: "dashboard source", mutate: func(request *opensplunkv1.CreateSearchJobRequest) {
-			request.Source = &opensplunkv1.SearchJobSource{DashboardId: new("")}
+		{name: "dashboard source", mutate: func(request *opensplunk.CreateSearchJobRequest) {
+			request.Source = &opensplunk.SearchJobSource{DashboardId: new("")}
 		}},
-		{name: "preview", mutate: func(request *opensplunkv1.CreateSearchJobRequest) {
-			request.Options = &opensplunkv1.SearchJobOptions{EnablePreview: true}
+		{name: "preview", mutate: func(request *opensplunk.CreateSearchJobRequest) {
+			request.Options = &opensplunk.SearchJobOptions{EnablePreview: true}
 		}},
-		{name: "field discovery", mutate: func(request *opensplunkv1.CreateSearchJobRequest) {
-			request.Options = &opensplunkv1.SearchJobOptions{EnableFieldDiscovery: true}
+		{name: "field discovery", mutate: func(request *opensplunk.CreateSearchJobRequest) {
+			request.Options = &opensplunk.SearchJobOptions{EnableFieldDiscovery: true}
 		}},
-		{name: "timeline", mutate: func(request *opensplunkv1.CreateSearchJobRequest) {
-			request.Options = &opensplunkv1.SearchJobOptions{EnableTimeline: true}
+		{name: "timeline", mutate: func(request *opensplunk.CreateSearchJobRequest) {
+			request.Options = &opensplunk.SearchJobOptions{EnableTimeline: true}
 		}},
-		{name: "preview row limit", mutate: func(request *opensplunkv1.CreateSearchJobRequest) {
+		{name: "preview row limit", mutate: func(request *opensplunk.CreateSearchJobRequest) {
 			limit := uint32(0)
-			request.Options = &opensplunkv1.SearchJobOptions{PreviewRowLimit: &limit}
+			request.Options = &opensplunk.SearchJobOptions{PreviewRowLimit: &limit}
 		}},
-		{name: "preferred result tab", mutate: func(request *opensplunkv1.CreateSearchJobRequest) {
-			request.Definition.PreferredResultTab = opensplunkv1.SearchResultTab_SEARCH_RESULT_TAB_EVENTS
+		{name: "preferred result tab", mutate: func(request *opensplunk.CreateSearchJobRequest) {
+			request.Definition.PreferredResultTab = opensplunk.SearchResultTab_SEARCH_RESULT_TAB_EVENTS
 		}},
-		{name: "selected fields", mutate: func(request *opensplunkv1.CreateSearchJobRequest) {
+		{name: "selected fields", mutate: func(request *opensplunk.CreateSearchJobRequest) {
 			request.Definition.SelectedFields = []string{"message"}
 		}},
-		{name: "visualization", mutate: func(request *opensplunkv1.CreateSearchJobRequest) {
-			request.Definition.Visualization = &opensplunkv1.VisualizationSpec{}
+		{name: "visualization", mutate: func(request *opensplunk.CreateSearchJobRequest) {
+			request.Definition.Visualization = &opensplunk.VisualizationSpec{}
 		}},
-		{name: "SPL NUL", mutate: func(request *opensplunkv1.CreateSearchJobRequest) {
+		{name: "SPL NUL", mutate: func(request *opensplunk.CreateSearchJobRequest) {
 			request.Definition.Spl = "index=main\x00 | head 1"
 		}},
 	}
@@ -1016,7 +1000,7 @@ func TestCreateSearchRejectsUnsupportedSemanticsBeforeCreatingJob(t *testing.T) 
 			})
 			request := createRequest("2026-07-22T12:00:00Z", "2026-07-22T13:00:00Z", "main")
 			test.mutate(request)
-			response := postProto(t, handler, "/api/v1/search/jobs/create", request)
+			response := postProto(t, handler, "/api/search/jobs/create", request)
 			if response.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 			}
@@ -1033,7 +1017,7 @@ func TestCreateSearchRejectsUnsupportedSemanticsBeforeCreatingJob(t *testing.T) 
 func TestSearchErrorMappingDoesNotExposeStorageDetails(t *testing.T) {
 	jobs := &fakeSearchJobs{getErr: errors.New("SELECT password FROM sqlite_secret")}
 	handler := newTestHandler(t, Config{SearchJobs: jobs, Indexes: fakeIndexCatalog{}, WebUI: testUI()})
-	response := postProto(t, handler, "/api/v1/search/jobs/get", &opensplunkv1.GetSearchJobRequest{SearchJobId: "job-1"})
+	response := postProto(t, handler, "/api/search/jobs/get", &opensplunk.GetSearchJobRequest{SearchJobId: "job-1"})
 	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d", response.Code)
 	}
@@ -1054,7 +1038,7 @@ func TestSearchErrorMappingDoesNotExposeStorageDetails(t *testing.T) {
 	}
 	for _, test := range statusTests {
 		jobs.getErr = test.err
-		response = postProto(t, handler, "/api/v1/search/jobs/get", &opensplunkv1.GetSearchJobRequest{SearchJobId: "job-1"})
+		response = postProto(t, handler, "/api/search/jobs/get", &opensplunk.GetSearchJobRequest{SearchJobId: "job-1"})
 		if response.Code != test.want {
 			t.Fatalf("error %v status = %d, want %d", test.err, response.Code, test.want)
 		}
@@ -1087,20 +1071,20 @@ func TestResultsAreBoundedAndTyped(t *testing.T) {
 	}}
 	handler := newTestHandler(t, Config{SearchJobs: jobs, Indexes: fakeIndexCatalog{}, WebUI: testUI(), MaximumPageSize: 50})
 	pageSize := uint32(10)
-	response := postProto(t, handler, "/api/v1/search/jobs/results", &opensplunkv1.GetSearchResultsRequest{
+	response := postProto(t, handler, "/api/search/jobs/results", &opensplunk.GetSearchResultsRequest{
 		SearchJobId: "job-1",
-		Page:        &opensplunkv1.PageRequest{PageSize: &pageSize, IncludeTotalSize: true},
+		Page:        &opensplunk.PageRequest{PageSize: &pageSize, IncludeTotalSize: true},
 	})
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var decoded opensplunkv1.GetSearchResultsResponse
+	var decoded opensplunk.GetSearchResultsResponse
 	unmarshalResponse(t, response, &decoded)
 	page := decoded.GetResultPage()
 	if len(page.GetSchema().GetColumns()) != 4 || page.GetSchema().GetColumns()[0].GetFieldName() != "message" {
 		t.Fatalf("schema = %+v", page.GetSchema())
 	}
-	if page.GetSchema().GetResultKind() != opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS {
+	if page.GetSchema().GetResultKind() != opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS {
 		t.Fatalf("result kind = %v, want statistics", page.GetSchema().GetResultKind())
 	}
 	if got := page.GetRows()[0].GetCells()[1].GetUint64Value(); got != 9 {
@@ -1123,14 +1107,14 @@ func TestResultsAreBoundedAndTyped(t *testing.T) {
 	}
 
 	tooLarge := uint32(51)
-	response = postProto(t, handler, "/api/v1/search/jobs/results", &opensplunkv1.GetSearchResultsRequest{
-		SearchJobId: "job-1", Page: &opensplunkv1.PageRequest{PageSize: &tooLarge},
+	response = postProto(t, handler, "/api/search/jobs/results", &opensplunk.GetSearchResultsRequest{
+		SearchJobId: "job-1", Page: &opensplunk.PageRequest{PageSize: &tooLarge},
 	})
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("oversized page status = %d", response.Code)
 	}
 
-	response = postProto(t, handler, "/api/v1/search/jobs/results", &opensplunkv1.GetSearchResultsRequest{
+	response = postProto(t, handler, "/api/search/jobs/results", &opensplunk.GetSearchResultsRequest{
 		SearchJobId: "job-1", Columns: []string{"missing"},
 	})
 	if response.Code != http.StatusBadRequest {
@@ -1141,7 +1125,7 @@ func TestResultsAreBoundedAndTyped(t *testing.T) {
 func TestCancelUsesScopedJobAndReturnsSnapshot(t *testing.T) {
 	jobs := &fakeSearchJobs{getJob: completeJob("job-1")}
 	handler := newTestHandler(t, Config{SearchJobs: jobs, Indexes: fakeIndexCatalog{}, WebUI: testUI(), OwnerID: "owner", TenantID: "tenant"})
-	response := postProto(t, handler, "/api/v1/search/jobs/cancel", &opensplunkv1.CancelSearchJobRequest{SearchJobId: "job-1"})
+	response := postProto(t, handler, "/api/search/jobs/cancel", &opensplunk.CancelSearchJobRequest{SearchJobId: "job-1"})
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
@@ -1168,7 +1152,7 @@ func TestCommittedSearchMutationsWinContextCancellationRace(t *testing.T) {
 			tenantID: "tenant-1",
 			now:      func() time.Time { return testNow },
 		}
-		request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/search/jobs/create", nil).WithContext(ctx)
+		request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/search/jobs/create", nil).WithContext(ctx)
 		response, err := handler.createSearchJob(request, createRequest(
 			"2026-07-22T11:00:00Z", "2026-07-22T12:00:00Z", "main",
 		))
@@ -1195,8 +1179,8 @@ func TestCommittedSearchMutationsWinContextCancellationRace(t *testing.T) {
 			tenantID: "tenant-1",
 			now:      func() time.Time { return testNow },
 		}
-		request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/search/jobs/cancel", nil).WithContext(ctx)
-		response, err := handler.cancelSearchJob(request, &opensplunkv1.CancelSearchJobRequest{SearchJobId: "job-cancel"})
+		request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/search/jobs/cancel", nil).WithContext(ctx)
+		response, err := handler.cancelSearchJob(request, &opensplunk.CancelSearchJobRequest{SearchJobId: "job-cancel"})
 		if !errors.Is(ctx.Err(), context.Canceled) {
 			t.Fatalf("request context error = %v, want context.Canceled", ctx.Err())
 		}
@@ -1219,8 +1203,8 @@ func TestSearchCancellationRejectsAlreadyCanceledRequestBeforeMutation(t *testin
 		tenantID: "tenant-1",
 		now:      func() time.Time { return testNow },
 	}
-	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/search/jobs/cancel", nil).WithContext(ctx)
-	response, err := handler.cancelSearchJob(request, &opensplunkv1.CancelSearchJobRequest{SearchJobId: "job-cancel"})
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/search/jobs/cancel", nil).WithContext(ctx)
+	response, err := handler.cancelSearchJob(request, &opensplunk.CancelSearchJobRequest{SearchJobId: "job-cancel"})
 	if !errors.Is(err, context.Canceled) || response != nil {
 		t.Fatalf("cancel response/error = %+v / %v, want context.Canceled", response, err)
 	}
@@ -1243,12 +1227,12 @@ func TestResultSerializationConcurrencyIsBounded(t *testing.T) {
 		SearchJobs: jobs, Indexes: fakeIndexCatalog{}, WebUI: testUI(),
 		MaximumConcurrentResponses: 1, RouteTimeout: time.Second,
 	})
-	payload, err := proto.Marshal(&opensplunkv1.GetSearchResultsRequest{SearchJobId: "job-1"})
+	payload, err := proto.Marshal(&opensplunk.GetSearchResultsRequest{SearchJobId: "job-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	serve := func() int {
-		request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/search/jobs/results", bytes.NewReader(payload))
+		request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/search/jobs/results", bytes.NewReader(payload))
 		request.Header.Set("Content-Type", "application/x-protobuf")
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, request)
@@ -1298,7 +1282,7 @@ func TestSlowResultUploadDoesNotConsumeSerializationCapacity(t *testing.T) {
 		MaximumConcurrentResponses: 1,
 	})
 	body := &blockingRequestBody{started: make(chan struct{}), release: make(chan struct{})}
-	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/search/jobs/results", body)
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/search/jobs/results", body)
 	request.Header.Set("Content-Type", "application/x-protobuf")
 	slowDone := make(chan int, 1)
 	go func() {
@@ -1312,7 +1296,7 @@ func TestSlowResultUploadDoesNotConsumeSerializationCapacity(t *testing.T) {
 		t.Fatal("slow body was not read")
 	}
 
-	response := postProto(t, handler, "/api/v1/search/jobs/results", &opensplunkv1.GetSearchResultsRequest{SearchJobId: "job-1"})
+	response := postProto(t, handler, "/api/search/jobs/results", &opensplunk.GetSearchResultsRequest{SearchJobId: "job-1"})
 	if response.Code != http.StatusOK {
 		t.Fatalf("normal result status = %d, body = %s", response.Code, response.Body.String())
 	}
@@ -1339,7 +1323,7 @@ func TestSynchronousDeadlinePreventsLateSuccess(t *testing.T) {
 		SearchJobs: jobs, Indexes: fakeIndexCatalog{}, WebUI: testUI(), RouteTimeout: 5 * time.Millisecond,
 	})
 	started := time.Now()
-	response := postProto(t, handler, "/api/v1/search/jobs/results", &opensplunkv1.GetSearchResultsRequest{SearchJobId: "job-1"})
+	response := postProto(t, handler, "/api/search/jobs/results", &opensplunk.GetSearchResultsRequest{SearchJobId: "job-1"})
 	if response.Code != http.StatusRequestTimeout {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
@@ -1357,7 +1341,7 @@ func TestControlPlaneDeadlineMapsToRequestTimeout(t *testing.T) {
 	handler := newTestHandler(t, Config{
 		SearchJobs: &fakeSearchJobs{}, Indexes: deadlineIndexCatalog{}, WebUI: testUI(), RouteTimeout: 5 * time.Millisecond,
 	})
-	response := postProto(t, handler, "/api/v1/system/bootstrap", &opensplunkv1.GetSystemBootstrapRequest{})
+	response := postProto(t, handler, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{})
 	if response.Code != http.StatusRequestTimeout {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
@@ -1376,7 +1360,7 @@ func TestSPAFallbackNeverShadowsAPI(t *testing.T) {
 		t.Fatalf("SPA cache = %q", response.Header().Get("Cache-Control"))
 	}
 
-	request = httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/v1/not-a-route", nil)
+	request = httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/not-a-route", nil)
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code == http.StatusOK || strings.Contains(response.Body.String(), "ui-marker") {
@@ -1384,6 +1368,16 @@ func TestSPAFallbackNeverShadowsAPI(t *testing.T) {
 	}
 	if response.Header().Get("Content-Type") != "application/json; charset=utf-8" || !strings.Contains(response.Body.String(), `"error"`) {
 		t.Fatalf("unknown API error envelope = headers %v body %q", response.Header(), response.Body.String())
+	}
+
+	for _, path := range []string{"/api/v0.4/system/bootstrap", "/api/v1/system/bootstrap"} {
+		request = httptest.NewRequestWithContext(context.Background(), http.MethodPost, path, nil)
+		response = httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusNotFound || strings.Contains(response.Body.String(), "ui-marker") ||
+			response.Header().Get("Content-Type") != "application/json; charset=utf-8" {
+			t.Fatalf("unsupported API namespace %q response = %d headers %v body %q", path, response.Code, response.Header(), response.Body.String())
+		}
 	}
 
 	request = httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/_next/static/app.abcdef12.js", nil)
@@ -1570,11 +1564,11 @@ func unmarshalResponse(t *testing.T, response *httptest.ResponseRecorder, messag
 	}
 }
 
-func createRequest(earliest, latest string, indexes ...string) *opensplunkv1.CreateSearchJobRequest {
+func createRequest(earliest, latest string, indexes ...string) *opensplunk.CreateSearchJobRequest {
 	timezone := "UTC"
-	return &opensplunkv1.CreateSearchJobRequest{Definition: &opensplunkv1.SearchDefinition{
+	return &opensplunk.CreateSearchJobRequest{Definition: &opensplunk.SearchDefinition{
 		Spl: "index=main | head 10",
-		TimeRange: &opensplunkv1.TimeRangeSpec{
+		TimeRange: &opensplunk.TimeRangeSpec{
 			Earliest: new(earliest), Latest: new(latest), Timezone: &timezone,
 		},
 		IndexScope: indexes,
@@ -1589,7 +1583,6 @@ func completeJob(id string) searchjobs.Job {
 		TenantID:         "tenant-1",
 		SPL:              "index=main | head 10",
 		NormalizedSPL:    "index=main | head 10",
-		CompilerVersion:  spl.CompatibilityVersion,
 		RequestedIndexes: []string{"main"},
 		EffectiveIndexes: []string{"main"},
 		Earliest:         testNow.Add(-time.Hour),

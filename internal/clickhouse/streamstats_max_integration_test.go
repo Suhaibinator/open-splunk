@@ -10,7 +10,7 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/chcol"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 )
@@ -59,15 +59,15 @@ func testStreamStatsMaximumAgainstClickHouse(
 		event.BatchID = "streamstats-max-bytes-batch"
 		event.CollectorID = streamStatsMaximumIntegrationCollectorID
 		event.Event.Source = "streamstats-max-bytes-fixture"
-		event.Event.RawEncoding = opensplunkv1.RawEncoding_RAW_ENCODING_BINARY
+		event.Event.RawEncoding = opensplunk.RawEncoding_RAW_ENCODING_BINARY
 		bytesEvents = append(bytesEvents, event)
 	}
 	for _, fixture := range []struct {
 		id       string
-		encoding opensplunkv1.RawEncoding
+		encoding opensplunk.RawEncoding
 	}{
-		{id: "streamstats-max-raw-tie-01-string", encoding: opensplunkv1.RawEncoding_RAW_ENCODING_UTF8},
-		{id: "streamstats-max-raw-tie-02-bytes", encoding: opensplunkv1.RawEncoding_RAW_ENCODING_BINARY},
+		{id: "streamstats-max-raw-tie-01-string", encoding: opensplunk.RawEncoding_RAW_ENCODING_UTF8},
+		{id: "streamstats-max-raw-tie-02-bytes", encoding: opensplunk.RawEncoding_RAW_ENCODING_BINARY},
 	} {
 		event := compilerIntegrationEvent(
 			fixture.id,

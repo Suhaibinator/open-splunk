@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
@@ -364,7 +364,7 @@ func TestCompileDeferredKnowledgeRelationMarkerPrecedenceAndIdentity(t *testing.
 	})
 
 	t.Run("event query precedence without rex", func(t *testing.T) {
-		program := knowledgePreludeProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{
+		program := knowledgePreludeProgram(t, []*opensplunk.KnowledgeObjectDefinition{
 			knowledgeJSONStageDefinition("deferred-json", "json_value", "payload.value", "east"),
 		})
 		compiled, err := compileDeferredKnowledgeRelation(
@@ -520,7 +520,7 @@ func TestCompileDeferredKnowledgeRelationMarkerPrecedenceAndIdentity(t *testing.
 
 func deferredMixedKnowledgeProgramForTest(t *testing.T) knowledgeprogram.Program {
 	t.Helper()
-	return knowledgePreludeProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{
+	return knowledgePreludeProgram(t, []*opensplunk.KnowledgeObjectDefinition{
 		knowledgeRegexStageDefinition(
 			"deferred-regex",
 			`(?P<regex_value>[a-z]+)`,

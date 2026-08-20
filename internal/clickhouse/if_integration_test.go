@@ -10,7 +10,7 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 )
 
 func testIfAgainstClickHouse(
@@ -215,7 +215,7 @@ func testIfAgainstClickHouse(
 	if queryErr := connection.QueryRow(queryContext, unsigned.SQL, unsigned.Args...).Scan(&unsignedValue); queryErr != nil {
 		t.Fatalf("execute UInt8 if: %v\nSQL: %s\nargs: %#v", queryErr, unsigned.SQL, unsigned.Args)
 	}
-	if want := uint8(opensplunkv1.LogSeverity_LOG_SEVERITY_INFO); unsignedValue != want {
+	if want := uint8(opensplunk.LogSeverity_LOG_SEVERITY_INFO); unsignedValue != want {
 		t.Fatalf("UInt8 if = %d, want %d", unsignedValue, want)
 	}
 

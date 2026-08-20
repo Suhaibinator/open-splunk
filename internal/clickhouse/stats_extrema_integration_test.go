@@ -9,7 +9,7 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/chcol"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -25,8 +25,8 @@ func testStatsExtremaAgainstClickHouse(
 	indexTime time.Time,
 ) {
 	t.Helper()
-	newEvent := func(id, group string, fields ...*opensplunkv1.TypedObjectField) *ingest.StoredEvent {
-		fields = append([]*opensplunkv1.TypedObjectField{
+	newEvent := func(id, group string, fields ...*opensplunk.TypedObjectField) *ingest.StoredEvent {
+		fields = append([]*opensplunk.TypedObjectField{
 			typedField("extrema_group", typedString(group)),
 		}, fields...)
 		event := compilerIntegrationEvent(id, "stats-extrema-host", "stats extrema fixture", indexTime, fields...)

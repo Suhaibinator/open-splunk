@@ -11,7 +11,7 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"gorm.io/gorm"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 )
 
 // SavedSearchMutationAuditAction identifies one successful saved-search
@@ -105,8 +105,8 @@ func (store *AuditedStore) publish(
 func (store *AuditedStore) Create(
 	ctx context.Context,
 	scope AccessScope,
-	definition *opensplunkv1.SavedSearchDefinition,
-) (*opensplunkv1.SavedSearch, error) {
+	definition *opensplunk.SavedSearchDefinition,
+) (*opensplunk.SavedSearch, error) {
 	return store.store.create(ctx, scope, definition, store.publish)
 }
 
@@ -115,7 +115,7 @@ func (store *AuditedStore) Get(
 	ctx context.Context,
 	scope AccessScope,
 	id string,
-) (*opensplunkv1.SavedSearch, error) {
+) (*opensplunk.SavedSearch, error) {
 	return store.store.Get(ctx, scope, id)
 }
 
@@ -135,9 +135,9 @@ func (store *AuditedStore) Update(
 	scope AccessScope,
 	id string,
 	expectedVersion uint64,
-	definition *opensplunkv1.SavedSearchDefinition,
+	definition *opensplunk.SavedSearchDefinition,
 	updateMask *fieldmaskpb.FieldMask,
-) (*opensplunkv1.SavedSearch, error) {
+) (*opensplunk.SavedSearch, error) {
 	return store.store.update(
 		ctx,
 		scope,
@@ -157,7 +157,7 @@ func (store *AuditedStore) Duplicate(
 	sourceID string,
 	newName string,
 	destinationAppID *string,
-) (*opensplunkv1.SavedSearch, error) {
+) (*opensplunk.SavedSearch, error) {
 	return store.store.duplicate(
 		ctx,
 		scope,

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 )
@@ -38,9 +38,9 @@ func TestStatsNumericMomentsAgainstClickHouse(t *testing.T) {
 	newEvent := func(
 		id string,
 		cohort string,
-		metric *opensplunkv1.TypedValue,
+		metric *opensplunk.TypedValue,
 	) *ingest.StoredEvent {
-		fields := []*opensplunkv1.TypedObjectField{
+		fields := []*opensplunk.TypedObjectField{
 			typedField("cohort", typedString(cohort)),
 		}
 		if metric != nil {

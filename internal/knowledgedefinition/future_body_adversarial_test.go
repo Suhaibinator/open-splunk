@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
@@ -36,12 +36,12 @@ func TestInactiveFutureBodyLifecycleGatePrecedesEveryByteAuthority(t *testing.T)
 		{name: "oversized", data: oversized, digest: make([]byte, sha256.Size)},
 		{name: "malformed", data: malformed, digest: malformedDigest[:]},
 	}
-	disallowed := []opensplunkv1.KnowledgeObjectState{
-		opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_UNSPECIFIED,
-		opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
-		opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_QUARANTINED,
-		opensplunkv1.KnowledgeObjectState(-1),
-		opensplunkv1.KnowledgeObjectState(99),
+	disallowed := []opensplunk.KnowledgeObjectState{
+		opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_UNSPECIFIED,
+		opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
+		opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_QUARANTINED,
+		opensplunk.KnowledgeObjectState(-1),
+		opensplunk.KnowledgeObjectState(99),
 	}
 	for _, state := range disallowed {
 		for _, input := range inputs {
@@ -61,10 +61,10 @@ func TestInactiveFutureBodyLifecycleGatePrecedesEveryByteAuthority(t *testing.T)
 	}
 }
 
-func TestKnowledgeDefinitionDescriptorPinsExactV01Namespace(t *testing.T) {
+func TestKnowledgeDefinitionDescriptorPinsExactNamespace(t *testing.T) {
 	t.Parallel()
 
-	descriptor := (&opensplunkv1.KnowledgeObjectDefinition{}).ProtoReflect().Descriptor()
+	descriptor := (&opensplunk.KnowledgeObjectDefinition{}).ProtoReflect().Descriptor()
 	body := descriptor.Oneofs().ByName("body")
 	if body == nil || body.IsSynthetic() {
 		t.Fatal("body must be a non-synthetic oneof")
@@ -86,7 +86,7 @@ func TestKnowledgeDefinitionDescriptorPinsExactV01Namespace(t *testing.T) {
 	}
 	fields := descriptor.Fields()
 	if fields.Len() != len(want) {
-		t.Fatalf("descriptor has %d fields, want exact v0.1 count %d", fields.Len(), len(want))
+		t.Fatalf("descriptor has %d fields, want exact knowledge-definition count %d", fields.Len(), len(want))
 	}
 	for index := 0; index < fields.Len(); index++ {
 		field := fields.Get(index)
@@ -142,7 +142,7 @@ func TestInactiveFutureBodyAcceptsAllocationEdgesAndAllMetadataWireKinds(t *test
 			digest := sha256.Sum256(data)
 
 			decoded, err := DecodeCanonicalInactiveFutureBody(
-				data, digest[:], opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+				data, digest[:], opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 			)
 			if err != nil {
 				t.Fatalf("DecodeCanonicalInactiveFutureBody: %v", err)
@@ -152,7 +152,7 @@ func TestInactiveFutureBodyAcceptsAllocationEdgesAndAllMetadataWireKinds(t *test
 				t.Fatal("unknown future body/metadata or immutable authorities changed")
 			}
 			if decoded.AppID != "app_AAAAAAAAAAAAAAAAAAAAAA" || decoded.Name != "future_name" ||
-				decoded.SharingScope != opensplunkv1.SharingScope_SHARING_SCOPE_APP ||
+				decoded.SharingScope != opensplunk.SharingScope_SHARING_SCOPE_APP ||
 				decoded.Description == nil || *decoded.Description != "future description" ||
 				decoded.Selector == nil || decoded.Selector.Stats().Patterns != 2 {
 				t.Fatalf("known metadata projection = %#v", decoded)
@@ -176,7 +176,7 @@ func TestInactiveFutureBodyPreservesRepeatedFutureMetadataField(t *testing.T) {
 	decoded, err := DecodeCanonicalInactiveFutureBody(
 		data,
 		digest[:],
-		opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+		opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 	)
 	if err != nil {
 		t.Fatalf("DecodeCanonicalInactiveFutureBody: %v", err)
@@ -261,7 +261,7 @@ func TestInactiveFutureBodyRejectsEveryAmbiguousWireClass(t *testing.T) {
 			t.Parallel()
 			digest := sha256.Sum256(test.data)
 			_, got := DecodeCanonicalInactiveFutureBody(
-				test.data, digest[:], opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+				test.data, digest[:], opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 			)
 			if !errors.Is(got, test.want) {
 				t.Fatalf("error = %v, want %v", got, test.want)
@@ -282,7 +282,7 @@ func TestInactiveFutureBodyPreservesDetachedKnownAndUnknownMetadata(t *testing.T
 	original := bytes.Clone(data)
 	digest := sha256.Sum256(data)
 	decoded, err := DecodeCanonicalInactiveFutureBody(
-		data, digest[:], opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+		data, digest[:], opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -302,7 +302,7 @@ func TestInactiveFutureBodyPreservesDetachedKnownAndUnknownMetadata(t *testing.T
 	decoded.Definition.ProtoReflect().SetUnknown(nil)
 
 	again, err := DecodeCanonicalInactiveFutureBody(
-		original, digest[:], opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DELETED,
+		original, digest[:], opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DELETED,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -340,7 +340,7 @@ func TestInactiveFutureBodyFourMiBBoundaryAndRepeatedShapePreflight(t *testing.T
 	}
 	digest := sha256.Sum256(exact)
 	if _, err := DecodeCanonicalInactiveFutureBody(
-		exact, digest[:], opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+		exact, digest[:], opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 	); err != nil {
 		t.Fatalf("exact four-MiB future body rejected: %v", err)
 	}
@@ -348,34 +348,34 @@ func TestInactiveFutureBodyFourMiBBoundaryAndRepeatedShapePreflight(t *testing.T
 	over := append(bytes.Clone(exact), 0)
 	overDigest := sha256.Sum256(over)
 	if _, err := DecodeCanonicalInactiveFutureBody(
-		over, overDigest[:], opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+		over, overDigest[:], opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 	); !errors.Is(err, ErrDefinitionTooLarge) {
 		t.Fatalf("boundary+1 error = %v, want ErrDefinitionTooLarge", err)
 	}
 
 	for _, dimension := range []struct {
 		name string
-		set  func(*opensplunkv1.KnowledgeSelector, []*opensplunkv1.KnowledgeSelectorPattern)
+		set  func(*opensplunk.KnowledgeSelector, []*opensplunk.KnowledgeSelectorPattern)
 	}{
-		{name: "index", set: func(s *opensplunkv1.KnowledgeSelector, p []*opensplunkv1.KnowledgeSelectorPattern) {
+		{name: "index", set: func(s *opensplunk.KnowledgeSelector, p []*opensplunk.KnowledgeSelectorPattern) {
 			s.IndexPatterns = p
 		}},
-		{name: "host", set: func(s *opensplunkv1.KnowledgeSelector, p []*opensplunkv1.KnowledgeSelectorPattern) {
+		{name: "host", set: func(s *opensplunk.KnowledgeSelector, p []*opensplunk.KnowledgeSelectorPattern) {
 			s.HostPatterns = p
 		}},
-		{name: "source", set: func(s *opensplunkv1.KnowledgeSelector, p []*opensplunkv1.KnowledgeSelectorPattern) {
+		{name: "source", set: func(s *opensplunk.KnowledgeSelector, p []*opensplunk.KnowledgeSelectorPattern) {
 			s.SourcePatterns = p
 		}},
-		{name: "sourcetype", set: func(s *opensplunkv1.KnowledgeSelector, p []*opensplunkv1.KnowledgeSelectorPattern) {
+		{name: "sourcetype", set: func(s *opensplunk.KnowledgeSelector, p []*opensplunk.KnowledgeSelectorPattern) {
 			s.SourcetypePatterns = p
 		}},
 	} {
 		t.Run("selector/"+dimension.name, func(t *testing.T) {
 			definition := adversarialFutureMetadata()
-			patterns := make([]*opensplunkv1.KnowledgeSelectorPattern, knowledge.MaximumSelectorPatternsPerDimension+1)
+			patterns := make([]*opensplunk.KnowledgeSelectorPattern, knowledge.MaximumSelectorPatternsPerDimension+1)
 			for index := range patterns {
-				patterns[index] = &opensplunkv1.KnowledgeSelectorPattern{
-					MatchKind: opensplunkv1.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT,
+				patterns[index] = &opensplunk.KnowledgeSelectorPattern{
+					MatchKind: opensplunk.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT,
 					Value:     "x",
 				}
 			}
@@ -383,7 +383,7 @@ func TestInactiveFutureBodyFourMiBBoundaryAndRepeatedShapePreflight(t *testing.T
 			data := futureDefinitionBytes(t, definition, []byte{1})
 			digest := sha256.Sum256(data)
 			if _, err := DecodeCanonicalInactiveFutureBody(
-				data, digest[:], opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+				data, digest[:], opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 			); !errors.Is(err, ErrNonCanonical) {
 				t.Fatalf("error = %v, want ErrNonCanonical resource rejection", err)
 			}
@@ -411,16 +411,16 @@ func TestInactiveFutureBodyErrorTaxonomyIsClosedAndStable(t *testing.T) {
 		name   string
 		data   []byte
 		digest []byte
-		state  opensplunkv1.KnowledgeObjectState
+		state  opensplunk.KnowledgeObjectState
 		want   error
 	}{
-		{name: "empty", state: opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED, want: ErrDefinitionTooLarge},
-		{name: "short digest", data: valid, digest: digest[:31], state: opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED, want: ErrDigestMismatch},
-		{name: "wrong digest", data: valid, digest: make([]byte, 32), state: opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED, want: ErrDigestMismatch},
-		{name: "malformed", data: malformed, digest: malformedDigest[:], state: opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED, want: ErrNonCanonical},
-		{name: "known body", data: known.Bytes, digest: known.Digest[:], state: opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED, want: ErrUnknownFutureBody},
-		{name: "noncanonical metadata", data: noncanonical, digest: noncanonicalDigest[:], state: opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED, want: ErrNonCanonical},
-		{name: "active valid future", data: valid, digest: digest[:], state: opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE, want: ErrUnknownFutureBody},
+		{name: "empty", state: opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED, want: ErrDefinitionTooLarge},
+		{name: "short digest", data: valid, digest: digest[:31], state: opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED, want: ErrDigestMismatch},
+		{name: "wrong digest", data: valid, digest: make([]byte, 32), state: opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED, want: ErrDigestMismatch},
+		{name: "malformed", data: malformed, digest: malformedDigest[:], state: opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED, want: ErrNonCanonical},
+		{name: "known body", data: known.Bytes, digest: known.Digest[:], state: opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED, want: ErrUnknownFutureBody},
+		{name: "noncanonical metadata", data: noncanonical, digest: noncanonicalDigest[:], state: opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED, want: ErrNonCanonical},
+		{name: "active valid future", data: valid, digest: digest[:], state: opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE, want: ErrUnknownFutureBody},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -433,20 +433,20 @@ func TestInactiveFutureBodyErrorTaxonomyIsClosedAndStable(t *testing.T) {
 	}
 }
 
-func adversarialFutureMetadata() *opensplunkv1.KnowledgeObjectDefinition {
+func adversarialFutureMetadata() *opensplunk.KnowledgeObjectDefinition {
 	description := "future description"
-	return &opensplunkv1.KnowledgeObjectDefinition{
+	return &opensplunk.KnowledgeObjectDefinition{
 		AppId:        "app_AAAAAAAAAAAAAAAAAAAAAA",
 		Name:         "future_name",
 		Description:  &description,
-		SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-		Selector: &opensplunkv1.KnowledgeSelector{
-			IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{
-				MatchKind: opensplunkv1.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT,
+		SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+		Selector: &opensplunk.KnowledgeSelector{
+			IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{{
+				MatchKind: opensplunk.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT,
 				Value:     "main",
 			}},
-			HostPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{
-				MatchKind: opensplunkv1.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_WILDCARD,
+			HostPatterns: []*opensplunk.KnowledgeSelectorPattern{{
+				MatchKind: opensplunk.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_WILDCARD,
 				Value:     "api-*",
 			}},
 		},

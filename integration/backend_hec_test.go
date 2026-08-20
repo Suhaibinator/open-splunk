@@ -22,7 +22,7 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
@@ -44,7 +44,7 @@ const (
 	backendHECMaximumAckID      = int64(1<<53 - 1)
 )
 
-// TestBackendHECVertical proves the selected HEC v0.1 boundary through the
+// TestBackendHECVertical proves the selected HEC boundary through the
 // shipped process rather than through in-process adapters:
 //
 //	Admin protobuf token provisioning -> TLS HEC JSON/raw -> durable ACK ->
@@ -148,19 +148,19 @@ func TestBackendHECVertical(t *testing.T) {
 	backendHECAssertAdvertised(t, ctx, httpClient, baseURL)
 	assertPlaintextCannotReachHTTPSHealth(t, ctx, httpAddress)
 
-	var createdIndex opensplunkv1.CreateIndexResponse
+	var createdIndex opensplunk.CreateIndexResponse
 	postAdministratorProto(
 		t,
 		ctx,
 		httpClient,
-		baseURL+"/api/v1/indexes/create",
+		baseURL+"/api/indexes/create",
 		administratorToken,
-		&opensplunkv1.CreateIndexRequest{Definition: &opensplunkv1.IndexDefinition{
+		&opensplunk.CreateIndexRequest{Definition: &opensplunk.IndexDefinition{
 			Name:            backendHECIndexName,
 			DisplayName:     "Backend HEC vertical integration",
 			RetentionPeriod: durationpb.New(24 * time.Hour),
-			IngestionAccess: opensplunkv1.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
-			SearchAccess:    opensplunkv1.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
+			IngestionAccess: opensplunk.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
+			SearchAccess:    opensplunk.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
 		}},
 		&createdIndex,
 	)
@@ -354,7 +354,7 @@ func TestBackendHECVertical(t *testing.T) {
 		t,
 		ctx,
 		httpClient,
-		baseURL+"/services/collector/event/1.0",
+		baseURL+"/services/collector/event",
 		plaintextToken,
 		backendHECJSONChannel,
 		"application/json",
@@ -458,9 +458,9 @@ func backendHECAssertProductSearch(
 			3,
 		)
 		backendHECRequireSearchColumns(t, results, []string{"source", "events"})
-		backendHECRequireSearchColumnTypes(t, results, []opensplunkv1.ValueType{
-			opensplunkv1.ValueType_VALUE_TYPE_STRING,
-			opensplunkv1.ValueType_VALUE_TYPE_UINT64,
+		backendHECRequireSearchColumnTypes(t, results, []opensplunk.ValueType{
+			opensplunk.ValueType_VALUE_TYPE_STRING,
+			opensplunk.ValueType_VALUE_TYPE_UINT64,
 		})
 		counts := make(map[string]uint64, len(results.rows))
 		for _, row := range results.rows {
@@ -494,9 +494,9 @@ func backendHECAssertProductSearch(
 			0,
 		)
 		backendHECRequireSearchColumns(t, results, []string{"_time", "count"})
-		backendHECRequireSearchColumnTypes(t, results, []opensplunkv1.ValueType{
-			opensplunkv1.ValueType_VALUE_TYPE_TIMESTAMP,
-			opensplunkv1.ValueType_VALUE_TYPE_UINT64,
+		backendHECRequireSearchColumnTypes(t, results, []opensplunk.ValueType{
+			opensplunk.ValueType_VALUE_TYPE_TIMESTAMP,
+			opensplunk.ValueType_VALUE_TYPE_UINT64,
 		})
 		var total uint64
 		var previous time.Time
@@ -529,20 +529,20 @@ func backendHECRunProductSearch(
 	earliest time.Time,
 	latest time.Time,
 	expectedRows uint64,
-) (*opensplunkv1.SearchJob, *collectedVerticalSearchResults) {
+) (*opensplunk.SearchJob, *collectedVerticalSearchResults) {
 	t.Helper()
 	earliestText := earliest.Format(time.RFC3339Nano)
 	latestText := latest.Format(time.RFC3339Nano)
 	timezone := "UTC"
-	var created opensplunkv1.CreateSearchJobResponse
+	var created opensplunk.CreateSearchJobResponse
 	postProto(
 		t,
 		ctx,
 		client,
-		baseURL+"/api/v1/search/jobs/create",
-		&opensplunkv1.CreateSearchJobRequest{Definition: &opensplunkv1.SearchDefinition{
+		baseURL+"/api/search/jobs/create",
+		&opensplunk.CreateSearchJobRequest{Definition: &opensplunk.SearchDefinition{
 			Spl: spl,
-			TimeRange: &opensplunkv1.TimeRangeSpec{
+			TimeRange: &opensplunk.TimeRangeSpec{
 				Earliest: &earliestText,
 				Latest:   &latestText,
 				Timezone: &timezone,
@@ -619,7 +619,7 @@ func backendHECRequireSearchColumns(
 func backendHECRequireSearchColumnTypes(
 	t *testing.T,
 	results *collectedVerticalSearchResults,
-	want []opensplunkv1.ValueType,
+	want []opensplunk.ValueType,
 ) {
 	t.Helper()
 	if results == nil || results.schema == nil || len(results.schema.GetColumns()) != len(want) {
@@ -637,63 +637,63 @@ func backendHECRequireSearchColumnTypes(
 	}
 }
 
-func backendHECSearchString(t *testing.T, value *opensplunkv1.TypedValue) string {
+func backendHECSearchString(t *testing.T, value *opensplunk.TypedValue) string {
 	t.Helper()
-	if _, ok := value.GetKind().(*opensplunkv1.TypedValue_StringValue); !ok {
+	if _, ok := value.GetKind().(*opensplunk.TypedValue_StringValue); !ok {
 		t.Fatalf("HEC product search cell = %+v, want string", value)
 	}
 	return value.GetStringValue()
 }
 
-func backendHECRequireSearchString(t *testing.T, value *opensplunkv1.TypedValue, want string) {
+func backendHECRequireSearchString(t *testing.T, value *opensplunk.TypedValue, want string) {
 	t.Helper()
 	if got := backendHECSearchString(t, value); got != want {
 		t.Fatalf("HEC product search string = %q, want %q", got, want)
 	}
 }
 
-func backendHECSearchUnsigned(t *testing.T, value *opensplunkv1.TypedValue) uint64 {
+func backendHECSearchUnsigned(t *testing.T, value *opensplunk.TypedValue) uint64 {
 	t.Helper()
-	if _, ok := value.GetKind().(*opensplunkv1.TypedValue_Uint64Value); !ok {
+	if _, ok := value.GetKind().(*opensplunk.TypedValue_Uint64Value); !ok {
 		t.Fatalf("HEC product search cell = %+v, want uint64", value)
 	}
 	return value.GetUint64Value()
 }
 
-func backendHECRequireSearchUnsigned(t *testing.T, value *opensplunkv1.TypedValue, want uint64) {
+func backendHECRequireSearchUnsigned(t *testing.T, value *opensplunk.TypedValue, want uint64) {
 	t.Helper()
 	if got := backendHECSearchUnsigned(t, value); got != want {
 		t.Fatalf("HEC product search uint64 = %d, want %d", got, want)
 	}
 }
 
-func backendHECRequireSearchSigned(t *testing.T, value *opensplunkv1.TypedValue, want int64) {
+func backendHECRequireSearchSigned(t *testing.T, value *opensplunk.TypedValue, want int64) {
 	t.Helper()
-	if _, ok := value.GetKind().(*opensplunkv1.TypedValue_Sint64Value); !ok ||
+	if _, ok := value.GetKind().(*opensplunk.TypedValue_Sint64Value); !ok ||
 		value.GetSint64Value() != want {
 		t.Fatalf("HEC product search cell = %+v, want sint64(%d)", value, want)
 	}
 }
 
-func backendHECRequireSearchBool(t *testing.T, value *opensplunkv1.TypedValue, want bool) {
+func backendHECRequireSearchBool(t *testing.T, value *opensplunk.TypedValue, want bool) {
 	t.Helper()
-	if _, ok := value.GetKind().(*opensplunkv1.TypedValue_BoolValue); !ok ||
+	if _, ok := value.GetKind().(*opensplunk.TypedValue_BoolValue); !ok ||
 		value.GetBoolValue() != want {
 		t.Fatalf("HEC product search cell = %+v, want bool(%t)", value, want)
 	}
 }
 
-func backendHECSearchTime(t *testing.T, value *opensplunkv1.TypedValue) time.Time {
+func backendHECSearchTime(t *testing.T, value *opensplunk.TypedValue) time.Time {
 	t.Helper()
 	timestamp := value.GetTimestampValue()
-	if _, ok := value.GetKind().(*opensplunkv1.TypedValue_TimestampValue); !ok ||
+	if _, ok := value.GetKind().(*opensplunk.TypedValue_TimestampValue); !ok ||
 		timestamp == nil || timestamp.CheckValid() != nil {
 		t.Fatalf("HEC product search cell = %+v, want valid timestamp", value)
 	}
 	return timestamp.AsTime()
 }
 
-func backendHECRequireSearchTime(t *testing.T, value *opensplunkv1.TypedValue, want time.Time) {
+func backendHECRequireSearchTime(t *testing.T, value *opensplunk.TypedValue, want time.Time) {
 	t.Helper()
 	if got := backendHECSearchTime(t, value); !got.Equal(want) {
 		t.Fatalf("HEC product search timestamp = %s, want %s", got, want)
@@ -706,31 +706,31 @@ func backendHECCreateToken(
 	client *http.Client,
 	baseURL string,
 	administratorToken string,
-) (string, *opensplunkv1.IngestionToken) {
+) (string, *opensplunk.IngestionToken) {
 	t.Helper()
 	defaultIndex := backendHECIndexName
 	defaultHost := backendHECDefaultHost
 	defaultSource := backendHECDefaultSource
 	defaultSourcetype := backendHECDefaultSourcetype
-	var created opensplunkv1.CreateIngestionTokenResponse
+	var created opensplunk.CreateIngestionTokenResponse
 	postAdministratorProto(
 		t,
 		ctx,
 		client,
-		baseURL+"/api/v1/ingestion-tokens/create",
+		baseURL+"/api/ingestion-tokens/create",
 		administratorToken,
-		&opensplunkv1.CreateIngestionTokenRequest{
-			Definition: &opensplunkv1.IngestionTokenDefinition{
+		&opensplunk.CreateIngestionTokenRequest{
+			Definition: &opensplunk.IngestionTokenDefinition{
 				Name:    "Backend HEC vertical token",
-				Purpose: opensplunkv1.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_HEC,
-				Constraints: &opensplunkv1.IngestionTokenConstraints{
+				Purpose: opensplunk.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_HEC,
+				Constraints: &opensplunk.IngestionTokenConstraints{
 					AllowedIndexNames:  []string{backendHECIndexName},
 					AllowedHostRegexes: []string{`^(hec-default-host-private|json-host|raw-host)$`},
 					AllowedSourceRegexes: []string{
 						`^(hec-default-source-private|json-source|raw-source)$`,
 					},
 				},
-				HecProfile: &opensplunkv1.IngestionTokenHecProfile{
+				HecProfile: &opensplunk.IngestionTokenHecProfile{
 					DefaultIndexName:      &defaultIndex,
 					DefaultHost:           &defaultHost,
 					DefaultSource:         &defaultSource,
@@ -744,7 +744,7 @@ func backendHECCreateToken(
 	plaintext := created.GetPlaintextToken()
 	metadata := created.GetIngestionToken()
 	if plaintext == "" || metadata.GetIngestionTokenId() == "" || metadata.GetVersion() != 1 ||
-		metadata.GetPurpose() != opensplunkv1.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_HEC ||
+		metadata.GetPurpose() != opensplunk.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_HEC ||
 		metadata.GetConstraints().BoundCollectorId != nil ||
 		!slices.Equal(metadata.GetConstraints().GetAllowedIndexNames(), []string{backendHECIndexName}) ||
 		metadata.GetHecProfile().GetDefaultIndexName() != backendHECIndexName ||
@@ -756,14 +756,14 @@ func backendHECCreateToken(
 		)
 	}
 
-	var got opensplunkv1.GetIngestionTokenResponse
+	var got opensplunk.GetIngestionTokenResponse
 	getWire := postAdministratorProto(
 		t,
 		ctx,
 		client,
-		baseURL+"/api/v1/ingestion-tokens/get",
+		baseURL+"/api/ingestion-tokens/get",
 		administratorToken,
-		&opensplunkv1.GetIngestionTokenRequest{IngestionTokenId: metadata.GetIngestionTokenId()},
+		&opensplunk.GetIngestionTokenRequest{IngestionTokenId: metadata.GetIngestionTokenId()},
 		&got,
 	)
 	if bytes.Contains(getWire, []byte(plaintext)) ||
@@ -771,14 +771,14 @@ func backendHECCreateToken(
 		got.GetIngestionToken().GetPurpose() != metadata.GetPurpose() {
 		t.Fatal("HEC token readback disclosed plaintext or changed token identity")
 	}
-	var listed opensplunkv1.ListIngestionTokensResponse
+	var listed opensplunk.ListIngestionTokensResponse
 	listWire := postAdministratorProto(
 		t,
 		ctx,
 		client,
-		baseURL+"/api/v1/ingestion-tokens/list",
+		baseURL+"/api/ingestion-tokens/list",
 		administratorToken,
-		&opensplunkv1.ListIngestionTokensRequest{},
+		&opensplunk.ListIngestionTokensRequest{},
 		&listed,
 	)
 	if bytes.Contains(listWire, []byte(plaintext)) {
@@ -809,18 +809,18 @@ func backendHECAssertAdvertised(
 	baseURL string,
 ) {
 	t.Helper()
-	var bootstrap opensplunkv1.GetSystemBootstrapResponse
+	var bootstrap opensplunk.GetSystemBootstrapResponse
 	postProto(
 		t,
 		ctx,
 		client,
-		baseURL+"/api/v1/system/bootstrap",
-		&opensplunkv1.GetSystemBootstrapRequest{},
+		baseURL+"/api/system/bootstrap",
+		&opensplunk.GetSystemBootstrapRequest{},
 		&bootstrap,
 	)
 	features := 0
 	for _, feature := range bootstrap.GetFeatures() {
-		if feature == opensplunkv1.ServerFeature_SERVER_FEATURE_HEC_INGESTION {
+		if feature == opensplunk.ServerFeature_SERVER_FEATURE_HEC_INGESTION {
 			features++
 		}
 	}
@@ -839,7 +839,7 @@ func backendHECAssertHealth(
 	request, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodGet,
-		baseURL+"/services/collector/health/1.0",
+		baseURL+"/services/collector/health",
 		nil,
 	)
 	if err != nil {
@@ -1116,7 +1116,7 @@ func backendHECAssertStoredProjection(
 	if string(raw) != backendHECJSONPayload || body != backendHECJSONPayload ||
 		host != "json-host" || source != "json-source" || sourcetype != "json-type" ||
 		!storedEventTime.Equal(eventTime) ||
-		timeSource != uint8(opensplunkv1.EventTimeSource_EVENT_TIME_SOURCE_PARSED) {
+		timeSource != uint8(opensplunk.EventTimeSource_EVENT_TIME_SOURCE_PARSED) {
 		t.Fatalf(
 			"stored HEC JSON projection mismatch = raw %t body %t metadata %q/%q/%q time %v source %d",
 			string(raw) == backendHECJSONPayload,
@@ -1210,7 +1210,7 @@ func backendHECAssertStoredProjection(
 	if objectRaw != wantObjectRaw || !objectBodyMissing || objectBatchID != batchID ||
 		objectEventID != batchID+"-1" || objectHost != backendHECDefaultHost ||
 		objectSource != backendHECDefaultSource || objectSourcetype != backendHECDefaultSourcetype ||
-		objectTimeSource != uint8(opensplunkv1.EventTimeSource_EVENT_TIME_SOURCE_RECEIVED_AT_FALLBACK) ||
+		objectTimeSource != uint8(opensplunk.EventTimeSource_EVENT_TIME_SOURCE_RECEIVED_AT_FALLBACK) ||
 		len(objectCollectorID) != 0 || objectSourceKind != uint8(ingest.IngestionSourceKindHEC) ||
 		string(objectSourceID) != tokenID || len(objectFieldNames) != 0 || len(objectFieldTypes) != 0 {
 		t.Fatal("stored HEC object/default-metadata projection is not exact")
@@ -1332,15 +1332,15 @@ func backendHECAssertAuditRedaction(
 	protectedValues []string,
 ) {
 	t.Helper()
-	var listed opensplunkv1.ListAuditEventsResponse
+	var listed opensplunk.ListAuditEventsResponse
 	wire := postAdministratorProto(
 		t,
 		ctx,
 		client,
-		baseURL+"/api/v1/audit/events/list",
+		baseURL+"/api/audit/events/list",
 		administratorToken,
-		&opensplunkv1.ListAuditEventsRequest{
-			Page: &opensplunkv1.PageRequest{IncludeTotalSize: true},
+		&opensplunk.ListAuditEventsRequest{
+			Page: &opensplunk.PageRequest{IncludeTotalSize: true},
 		},
 		&listed,
 	)
@@ -1354,8 +1354,8 @@ func backendHECAssertAuditRedaction(
 	}
 	foundTokenCreation := false
 	for _, event := range listed.GetAuditEvents() {
-		if event.GetAction() == opensplunkv1.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_CREATE &&
-			event.GetTargetKind() == opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_INGESTION_TOKEN {
+		if event.GetAction() == opensplunk.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_CREATE &&
+			event.GetTargetKind() == opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_INGESTION_TOKEN {
 			foundTokenCreation = true
 		}
 	}

@@ -17,21 +17,14 @@ if [[ $# -ne 0 ]]; then
   exit 2
 fi
 
-: "${OPEN_SPLUNK_APPLICATION_VERSION:?OPEN_SPLUNK_APPLICATION_VERSION is required}"
 : "${OPEN_SPLUNK_SOURCE_REVISION:?OPEN_SPLUNK_SOURCE_REVISION is required}"
 
-SEMANTIC_VERSION_PATTERN='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
-if [[ ${#OPEN_SPLUNK_APPLICATION_VERSION} -gt 64 ||
-      ! "$OPEN_SPLUNK_APPLICATION_VERSION" =~ $SEMANTIC_VERSION_PATTERN ]]; then
-  echo "error: OPEN_SPLUNK_APPLICATION_VERSION must be a semantic version" >&2
-  exit 1
-fi
 if [[ ! "$OPEN_SPLUNK_SOURCE_REVISION" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
   echo "error: OPEN_SPLUNK_SOURCE_REVISION must be a full lowercase Git hash" >&2
   exit 1
 fi
 
-DEFAULT_IMAGE_TAG="${OPEN_SPLUNK_APPLICATION_VERSION//+/_}"
+DEFAULT_IMAGE_TAG="$OPEN_SPLUNK_SOURCE_REVISION"
 SERVER_IMAGE_INPUT="${OPEN_SPLUNK_SERVER_IMAGE:-open-splunk-server:$DEFAULT_IMAGE_TAG}"
 COLLECTOR_IMAGE_INPUT="${OPEN_SPLUNK_COLLECTOR_IMAGE:-open-splunk-collector:$DEFAULT_IMAGE_TAG}"
 OCI_PLATFORM="${OPEN_SPLUNK_OCI_PLATFORM:-linux/amd64}"
@@ -559,23 +552,6 @@ env -i \
   TZ=UTC \
   node "$MATERIALIZER_BOOTSTRAP" "$REPO_ROOT" "$HEAD_REVISION" "$SOURCE_ROOT"
 
-CANONICAL_APPLICATION_VERSION="$(
-  env -i \
-    PATH="$PATH" \
-    HOME="$HOME_ROOT" \
-    TMPDIR="$TEMP_ROOT" \
-    NODE_OPTIONS= \
-    node -e '
-      const fs = require("node:fs");
-      const manifest = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-      process.stdout.write(manifest.version);
-    ' "$SOURCE_ROOT/package.json"
-)"
-if [[ "$OPEN_SPLUNK_APPLICATION_VERSION" != "$CANONICAL_APPLICATION_VERSION" ]]; then
-  echo "error: OPEN_SPLUNK_APPLICATION_VERSION $OPEN_SPLUNK_APPLICATION_VERSION does not match committed package version $CANONICAL_APPLICATION_VERSION" >&2
-  exit 1
-fi
-
 for required_path in Dockerfile .dockerignore oci/rootfs/etc/passwd oci/rootfs/etc/group; do
   if [[ -L "$SOURCE_ROOT/$required_path" || ! -f "$SOURCE_ROOT/$required_path" ]]; then
     echo "error: committed OCI build input must be a regular file: $required_path" >&2
@@ -600,7 +576,6 @@ build_target() {
     --platform "$OCI_PLATFORM"
     --target "$target"
     --tag "$temporary_image"
-    --build-arg "OPEN_SPLUNK_APPLICATION_VERSION=$OPEN_SPLUNK_APPLICATION_VERSION"
     --build-arg "OPEN_SPLUNK_SOURCE_REVISION=$OPEN_SPLUNK_SOURCE_REVISION"
     --build-arg "OPEN_SPLUNK_IMAGE_CREATED=$IMAGE_CREATED"
     --build-arg "OPEN_SPLUNK_SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH"

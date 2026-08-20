@@ -904,9 +904,7 @@ func runtimeForClaim(
 		TenantID: claim.scope.TenantID, CollectorID: claim.collectorID,
 		TelemetryRevision: telemetryRevision, LeaseGeneration: generation,
 		BootEpoch: &bootEpoch, StreamID: &streamID, ActiveInstanceID: &instanceID,
-		ProtocolMajor:        int64(claim.hello.ProtocolMajor),
-		ProtocolMinor:        int64(claim.hello.ProtocolMinor),
-		CollectorVersion:     claim.hello.CollectorVersion,
+		SourceRevision:       claim.hello.SourceRevision,
 		Hostname:             claim.hello.Hostname,
 		OperatingSystem:      claim.hello.OperatingSystem,
 		Architecture:         claim.hello.Architecture,
@@ -927,9 +925,7 @@ func runtimeUpdateValues(record runtimeRecord) map[string]any {
 		"boot_epoch":                       record.BootEpoch,
 		"stream_id":                        record.StreamID,
 		"active_instance_id":               record.ActiveInstanceID,
-		"protocol_major":                   record.ProtocolMajor,
-		"protocol_minor":                   record.ProtocolMinor,
-		"collector_version":                record.CollectorVersion,
+		"source_revision":                  record.SourceRevision,
 		"hostname":                         record.Hostname,
 		"operating_system":                 record.OperatingSystem,
 		"architecture":                     record.Architecture,
@@ -1405,17 +1401,13 @@ func collectorFromRecords(
 			return Collector{}, errors.New("invalid collector display name in control-plane database")
 		}
 	}
-	if runtime.ProtocolMajor < 0 || runtime.ProtocolMajor > math.MaxUint32 ||
-		runtime.ProtocolMinor < 0 || runtime.ProtocolMinor > math.MaxUint32 {
-		return Collector{}, errors.New("invalid collector protocol version in control-plane database")
-	}
 	helloSnapshotBytes := 0
 	for _, metadata := range []struct {
 		name    string
 		value   string
 		maximum int
 	}{
-		{"collector version", runtime.CollectorVersion, maximumCollectorVersionBytes},
+		{"source revision", runtime.SourceRevision, maximumSourceRevisionBytes},
 		{"hostname", runtime.Hostname, maximumHostnameBytes},
 		{"operating system", runtime.OperatingSystem, maximumOperatingSystemBytes},
 		{"architecture", runtime.Architecture, maximumArchitectureBytes},
@@ -1462,9 +1454,7 @@ func collectorFromRecords(
 		FirstSeenAt:         firstSeen, UpdatedAt: updatedAt,
 		TelemetryRevision: uint64(runtime.TelemetryRevision),
 		LeaseGeneration:   uint64(runtime.LeaseGeneration),
-		ProtocolMajor:     uint32(runtime.ProtocolMajor),
-		ProtocolMinor:     uint32(runtime.ProtocolMinor),
-		CollectorVersion:  runtime.CollectorVersion,
+		SourceRevision:    runtime.SourceRevision,
 		Hostname:          runtime.Hostname,
 		OperatingSystem:   runtime.OperatingSystem,
 		Architecture:      runtime.Architecture,

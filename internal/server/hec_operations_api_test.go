@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"google.golang.org/protobuf/proto"
 )
@@ -90,7 +90,7 @@ func TestHECOperationalSnapshotRouteIsBoundedAndAdministratorOnly(t *testing.T) 
 	if authorized.Code != http.StatusOK || service.callCount() != 1 {
 		t.Fatalf("authorized HEC operations = %d calls=%d body=%q", authorized.Code, service.callCount(), authorized.Body.String())
 	}
-	var decoded opensplunkv1.GetHECOperationalSnapshotResponse
+	var decoded opensplunk.GetHECOperationalSnapshotResponse
 	if err := proto.Unmarshal(authorized.Body.Bytes(), &decoded); err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +190,7 @@ func postHECOperations(
 	token string,
 ) *httptest.ResponseRecorder {
 	t.Helper()
-	payload, err := proto.Marshal(&opensplunkv1.GetHECOperationalSnapshotRequest{})
+	payload, err := proto.Marshal(&opensplunk.GetHECOperationalSnapshotRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}

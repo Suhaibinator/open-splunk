@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
@@ -23,7 +23,7 @@ import (
 )
 
 type definitionAuthority struct {
-	definition   *opensplunkv1.KnowledgeObjectDefinition
+	definition   *opensplunk.KnowledgeObjectDefinition
 	bytes        []byte
 	digest       []byte
 	objectType   ObjectType
@@ -146,8 +146,8 @@ type activePublicationNameRecord struct {
 func (writer *Writer) create(
 	ctx context.Context,
 	scope WriteScope,
-	request *opensplunkv1.CreateKnowledgeObjectRequest,
-) (result *opensplunkv1.CreateKnowledgeObjectResponse, returnedErr error) {
+	request *opensplunk.CreateKnowledgeObjectRequest,
+) (result *opensplunk.CreateKnowledgeObjectResponse, returnedErr error) {
 	var authorized *AuthorizedContext
 	replayOutcomeUnknown := false
 	receiptAbsenceProven := false
@@ -241,7 +241,7 @@ func (writer *Writer) create(
 		return nil, err
 	}
 	publicationState := StateDraft
-	if request.GetInitialState() == opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE {
+	if request.GetInitialState() == opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE {
 		publicationState = StateActive
 	}
 	if err := authorizeDefinitionApp(
@@ -357,7 +357,7 @@ func (writer *Writer) create(
 	if err != nil {
 		return nil, err
 	}
-	result = &opensplunkv1.CreateKnowledgeObjectResponse{
+	result = &opensplunk.CreateKnowledgeObjectResponse{
 		KnowledgeObject: projected,
 		// #nosec G115 -- publishMutation returns a validated positive catalog revision.
 		TenantCatalogRevision:   uint64(revision),
@@ -376,8 +376,8 @@ func (writer *Writer) create(
 func (writer *Writer) update(
 	ctx context.Context,
 	scope WriteScope,
-	request *opensplunkv1.UpdateKnowledgeObjectRequest,
-) (result *opensplunkv1.UpdateKnowledgeObjectResponse, returnedErr error) {
+	request *opensplunk.UpdateKnowledgeObjectRequest,
+) (result *opensplunk.UpdateKnowledgeObjectResponse, returnedErr error) {
 	var authorized *AuthorizedContext
 	replayOutcomeUnknown := false
 	receiptAbsenceProven := false
@@ -639,7 +639,7 @@ func (writer *Writer) update(
 	if err != nil {
 		return nil, err
 	}
-	result = &opensplunkv1.UpdateKnowledgeObjectResponse{
+	result = &opensplunk.UpdateKnowledgeObjectResponse{
 		KnowledgeObject: projected,
 		// #nosec G115 -- publishMutation returns a validated positive catalog revision.
 		TenantCatalogRevision:   uint64(revision),
@@ -658,8 +658,8 @@ func (writer *Writer) update(
 func (writer *Writer) setState(
 	ctx context.Context,
 	scope WriteScope,
-	request *opensplunkv1.SetKnowledgeObjectStateRequest,
-) (result *opensplunkv1.SetKnowledgeObjectStateResponse, returnedErr error) {
+	request *opensplunk.SetKnowledgeObjectStateRequest,
+) (result *opensplunk.SetKnowledgeObjectStateResponse, returnedErr error) {
 	var authorized *AuthorizedContext
 	replayOutcomeUnknown := false
 	receiptAbsenceProven := false
@@ -750,7 +750,7 @@ func (writer *Writer) setState(
 	if uint64(current.CurrentVersion) != request.GetExpectedVersion() {
 		return nil, control.ErrVersionConflict
 	}
-	enabling := request.GetState() == opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE
+	enabling := request.GetState() == opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE
 	if enabling {
 		if current.State == StateActive {
 			return nil, invalidMutation("state transition is a no-op")
@@ -902,7 +902,7 @@ func (writer *Writer) setState(
 	if err != nil {
 		return nil, err
 	}
-	result = &opensplunkv1.SetKnowledgeObjectStateResponse{
+	result = &opensplunk.SetKnowledgeObjectStateResponse{
 		KnowledgeObject: projected,
 		// #nosec G115 -- publishMutation returns a validated positive catalog revision.
 		TenantCatalogRevision:   uint64(revision),
@@ -921,8 +921,8 @@ func (writer *Writer) setState(
 func (writer *Writer) delete(
 	ctx context.Context,
 	scope WriteScope,
-	request *opensplunkv1.DeleteKnowledgeObjectRequest,
-) (result *opensplunkv1.DeleteKnowledgeObjectResponse, returnedErr error) {
+	request *opensplunk.DeleteKnowledgeObjectRequest,
+) (result *opensplunk.DeleteKnowledgeObjectResponse, returnedErr error) {
 	var authorized *AuthorizedContext
 	replayOutcomeUnknown := false
 	receiptAbsenceProven := false
@@ -1080,7 +1080,7 @@ func (writer *Writer) delete(
 	if err != nil {
 		return nil, err
 	}
-	result = &opensplunkv1.DeleteKnowledgeObjectResponse{
+	result = &opensplunk.DeleteKnowledgeObjectResponse{
 		KnowledgeObjectId: strings.Clone(plan.objectID),
 		// #nosec G115 -- the publication plan validates a positive deleted version.
 		DeletedVersion: uint64(plan.version),
@@ -1999,7 +1999,7 @@ func definitionAuthorityFromDecodedStored(
 		return definitionAuthority{}, fmt.Errorf("%w: stored definition authority is invalid", ErrCorrupt)
 	}
 	return definitionAuthority{
-		definition:   proto.Clone(decoded.Definition).(*opensplunkv1.KnowledgeObjectDefinition),
+		definition:   proto.Clone(decoded.Definition).(*opensplunk.KnowledgeObjectDefinition),
 		bytes:        bytes.Clone(blob.DefinitionProto),
 		digest:       bytes.Clone(decoded.Digest),
 		objectType:   version.ObjectType,
@@ -2028,7 +2028,7 @@ func authorityFromStoredVersion(tx *gorm.DB, version versionRecord) (definitionA
 }
 
 func authorityFromOpaqueMetadataUpdate(
-	definition *opensplunkv1.KnowledgeObjectDefinition,
+	definition *opensplunk.KnowledgeObjectDefinition,
 	state State,
 	objectType ObjectType,
 ) (definitionAuthority, error) {
@@ -2058,7 +2058,7 @@ func authorityFromOpaqueMetadataUpdate(
 	if !ok {
 		return definitionAuthority{}, invalidMutation("opaque future definition sharing scope is invalid")
 	}
-	detached, ok := proto.Clone(future.Definition).(*opensplunkv1.KnowledgeObjectDefinition)
+	detached, ok := proto.Clone(future.Definition).(*opensplunk.KnowledgeObjectDefinition)
 	if !ok || detached == nil {
 		return definitionAuthority{}, invalidMutation("opaque future definition metadata cannot be detached")
 	}
@@ -2077,7 +2077,7 @@ func authorityFromOpaqueMetadataUpdate(
 }
 
 func normalizeMutationDefinition(
-	definition *opensplunkv1.KnowledgeObjectDefinition,
+	definition *opensplunk.KnowledgeObjectDefinition,
 ) (knowledgedefinition.Normalized, error) {
 	normalized, err := knowledgedefinition.Normalize(definition)
 	if err == nil {
@@ -2096,7 +2096,7 @@ func authorityFromNormalized(normalized knowledgedefinition.Normalized) (definit
 		return definitionAuthority{}, invalidMutation("definition identity is unsupported")
 	}
 	return definitionAuthority{
-		definition:   proto.Clone(normalized.Definition).(*opensplunkv1.KnowledgeObjectDefinition),
+		definition:   proto.Clone(normalized.Definition).(*opensplunk.KnowledgeObjectDefinition),
 		bytes:        bytes.Clone(normalized.Bytes),
 		digest:       bytes.Clone(normalized.Digest[:]),
 		objectType:   objectType,
@@ -2236,7 +2236,7 @@ func recognizedPublicationObjectFromAuthority(
 		Version:           uint64(version),
 		SharingScope:      authority.sharingScope,
 		State:             state,
-		Definition:        proto.Clone(authority.definition).(*opensplunkv1.KnowledgeObjectDefinition),
+		Definition:        proto.Clone(authority.definition).(*opensplunk.KnowledgeObjectDefinition),
 		DefinitionSHA256:  bytes.Clone(authority.digest),
 	}, nil
 }

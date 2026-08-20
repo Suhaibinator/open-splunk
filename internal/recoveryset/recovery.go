@@ -369,7 +369,6 @@ func createWithHooks(
 		RecoverySetID:        childManifest.RecoverySetID,
 		Scope:                deploymentRecoverySetScope,
 		ClickHouseIncluded:   true,
-		ApplicationVersion:   childManifest.ApplicationVersion,
 		SourceRevision:       childManifest.SourceRevision,
 		SQLiteMigrations:     childManifest.SQLiteMigrations,
 		ClickHouseMigrations: childManifest.ClickHouseMigrations,
@@ -617,7 +616,6 @@ func Verify(
 	}
 	if childManifest.RecoverySetID != manifest.RecoverySetID ||
 		childManifest.CreatedAtUnixMicro != manifest.CreatedAtUnixMicro ||
-		childManifest.ApplicationVersion != manifest.ApplicationVersion ||
 		childManifest.SourceRevision != manifest.SourceRevision ||
 		childManifest.SQLiteMigrations != manifest.SQLiteMigrations ||
 		childManifest.ClickHouseMigrations != manifest.ClickHouseMigrations {

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/lookupasset"
 )
@@ -70,7 +70,7 @@ func TestCatalogHistoricalVersionsRetainExactLifecycleAndMonotonicTime(t *testin
 	firstDefinition := catalogDefinition(
 		appIDs[0],
 		"history-v1",
-		opensplunkv1.SharingScope_SHARING_SCOPE_APP,
+		opensplunk.SharingScope_SHARING_SCOPE_APP,
 		false,
 	)
 	created, err := catalog.Create(t.Context(), CreateRequest{
@@ -83,7 +83,7 @@ func TestCatalogHistoricalVersionsRetainExactLifecycleAndMonotonicTime(t *testin
 	secondDefinition := catalogDefinition(
 		appIDs[0],
 		"history-v2",
-		opensplunkv1.SharingScope_SHARING_SCOPE_APP,
+		opensplunk.SharingScope_SHARING_SCOPE_APP,
 		true,
 	)
 	replaced, err := catalog.Replace(t.Context(), ReplaceRequest{
@@ -97,7 +97,7 @@ func TestCatalogHistoricalVersionsRetainExactLifecycleAndMonotonicTime(t *testin
 	disabled, err := catalog.SetState(t.Context(), StateRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups",
 		LookupID: created.GetLookupId(), ExpectedVersion: replaced.GetVersion(),
-		State: opensplunkv1.LookupState_LOOKUP_STATE_DISABLED,
+		State: opensplunk.LookupState_LOOKUP_STATE_DISABLED,
 	})
 	if err != nil {
 		t.Fatalf("SetState(disabled): %v", err)
@@ -105,7 +105,7 @@ func TestCatalogHistoricalVersionsRetainExactLifecycleAndMonotonicTime(t *testin
 	deleted, err := catalog.SetState(t.Context(), StateRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups",
 		LookupID: created.GetLookupId(), ExpectedVersion: disabled.GetVersion(),
-		State: opensplunkv1.LookupState_LOOKUP_STATE_DELETED,
+		State: opensplunk.LookupState_LOOKUP_STATE_DELETED,
 	})
 	if err != nil {
 		t.Fatalf("SetState(deleted): %v", err)
@@ -114,15 +114,15 @@ func TestCatalogHistoricalVersionsRetainExactLifecycleAndMonotonicTime(t *testin
 	wants := []struct {
 		version    uint64
 		name       string
-		state      opensplunkv1.LookupState
+		state      opensplunk.LookupState
 		updated    time.Time
 		disabledAt time.Time
 		deletedAt  time.Time
 	}{
-		{1, "history-v1", opensplunkv1.LookupState_LOOKUP_STATE_ACTIVE, baseTime, time.Time{}, time.Time{}},
-		{2, "history-v2", opensplunkv1.LookupState_LOOKUP_STATE_ACTIVE, baseTime.Add(time.Microsecond), time.Time{}, time.Time{}},
-		{3, "history-v2", opensplunkv1.LookupState_LOOKUP_STATE_DISABLED, baseTime.Add(2 * time.Microsecond), baseTime.Add(2 * time.Microsecond), time.Time{}},
-		{4, "history-v2", opensplunkv1.LookupState_LOOKUP_STATE_DELETED, baseTime.Add(3 * time.Microsecond), baseTime.Add(2 * time.Microsecond), baseTime.Add(3 * time.Microsecond)},
+		{1, "history-v1", opensplunk.LookupState_LOOKUP_STATE_ACTIVE, baseTime, time.Time{}, time.Time{}},
+		{2, "history-v2", opensplunk.LookupState_LOOKUP_STATE_ACTIVE, baseTime.Add(time.Microsecond), time.Time{}, time.Time{}},
+		{3, "history-v2", opensplunk.LookupState_LOOKUP_STATE_DISABLED, baseTime.Add(2 * time.Microsecond), baseTime.Add(2 * time.Microsecond), time.Time{}},
+		{4, "history-v2", opensplunk.LookupState_LOOKUP_STATE_DELETED, baseTime.Add(3 * time.Microsecond), baseTime.Add(2 * time.Microsecond), baseTime.Add(3 * time.Microsecond)},
 	}
 	for _, want := range wants {
 		got, getErr := catalog.Get(t.Context(), GetRequest{
@@ -164,7 +164,7 @@ func TestCatalogRejectsExactNoOpReplacementButAllowsNewPhysicalVersion(t *testin
 	if err != nil {
 		t.Fatalf("New(): %v", err)
 	}
-	definition := catalogDefinition(appIDs[0], "no-op", opensplunkv1.SharingScope_SHARING_SCOPE_APP, false)
+	definition := catalogDefinition(appIDs[0], "no-op", opensplunk.SharingScope_SHARING_SCOPE_APP, false)
 	created, err := catalog.Create(t.Context(), CreateRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups", Definition: definition, Asset: asset,
 	})
@@ -239,7 +239,7 @@ func TestCatalogManagementProjectionDoesNotLoadAssetBodies(t *testing.T) {
 	}
 	created, err := catalog.Create(t.Context(), CreateRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups",
-		Definition: catalogDefinition(appIDs[0], "metadata-only", opensplunkv1.SharingScope_SHARING_SCOPE_APP, false),
+		Definition: catalogDefinition(appIDs[0], "metadata-only", opensplunk.SharingScope_SHARING_SCOPE_APP, false),
 		Asset:      asset,
 	})
 	if err != nil {
@@ -254,8 +254,8 @@ func TestCatalogManagementProjectionDoesNotLoadAssetBodies(t *testing.T) {
 	page, err := catalog.ListPage(t.Context(), ListPageRequest{
 		TenantID:      "tenant-lookups",
 		OwnerID:       "owner-lookups",
-		SortBy:        opensplunkv1.LookupSortBy_LOOKUP_SORT_BY_NAME,
-		SortDirection: opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING,
+		SortBy:        opensplunk.LookupSortBy_LOOKUP_SORT_BY_NAME,
+		SortDirection: opensplunk.SortDirection_SORT_DIRECTION_ASCENDING,
 		Limit:         10,
 	})
 	if err != nil || len(page.Lookups) != 1 || observed.getVersionCalls.Load() != 0 {
@@ -283,7 +283,7 @@ func TestCatalogListPageUsesOneBoundedJoinedProjection(t *testing.T) {
 		definition := catalogDefinition(
 			appIDs[0],
 			fmt.Sprintf("page-%03d", index),
-			opensplunkv1.SharingScope_SHARING_SCOPE_APP,
+			opensplunk.SharingScope_SHARING_SCOPE_APP,
 			false,
 		)
 		description := fmt.Sprintf("bounded page row %03d", index)
@@ -301,8 +301,8 @@ func TestCatalogListPageUsesOneBoundedJoinedProjection(t *testing.T) {
 
 	request := ListPageRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups", AppID: appIDs[0],
-		SortBy:        opensplunkv1.LookupSortBy_LOOKUP_SORT_BY_NAME,
-		SortDirection: opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING,
+		SortBy:        opensplunk.LookupSortBy_LOOKUP_SORT_BY_NAME,
+		SortDirection: opensplunk.SortDirection_SORT_DIRECTION_ASCENDING,
 		Limit:         50, IncludeTotal: true,
 	}
 	normalized, err := normalizeListPageRequest(request)
@@ -381,7 +381,7 @@ func TestCatalogListPageUsesOneBoundedJoinedProjection(t *testing.T) {
 	if _, err := catalog.SetState(t.Context(), StateRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups",
 		LookupID: first.Lookups[0].GetLookupId(), ExpectedVersion: first.Lookups[0].GetVersion(),
-		State: opensplunkv1.LookupState_LOOKUP_STATE_DISABLED,
+		State: opensplunk.LookupState_LOOKUP_STATE_DISABLED,
 	}); err != nil {
 		t.Fatalf("SetState(cursor invalidation): %v", err)
 	}
@@ -402,11 +402,11 @@ func TestCatalogAutomaticResolutionRejectsOverLimitBeforeAssetLoads(t *testing.T
 	if err != nil {
 		t.Fatalf("New(): %v", err)
 	}
-	created := make([]*opensplunkv1.Lookup, MaximumResolvedLookups+1)
+	created := make([]*opensplunk.Lookup, MaximumResolvedLookups+1)
 	for index := range created {
 		created[index], err = catalog.Create(t.Context(), CreateRequest{
 			TenantID: "tenant-lookups", OwnerID: "owner-lookups",
-			Definition: catalogDefinition(appIDs[0], fmt.Sprintf("auto-%02d", index), opensplunkv1.SharingScope_SHARING_SCOPE_APP, true),
+			Definition: catalogDefinition(appIDs[0], fmt.Sprintf("auto-%02d", index), opensplunk.SharingScope_SHARING_SCOPE_APP, true),
 			Asset:      asset,
 		})
 		if err != nil {
@@ -420,7 +420,7 @@ func TestCatalogAutomaticResolutionRejectsOverLimitBeforeAssetLoads(t *testing.T
 	}
 	if _, err := catalog.SetState(t.Context(), StateRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups", LookupID: created[0].GetLookupId(),
-		ExpectedVersion: created[0].GetVersion(), State: opensplunkv1.LookupState_LOOKUP_STATE_DISABLED,
+		ExpectedVersion: created[0].GetVersion(), State: opensplunk.LookupState_LOOKUP_STATE_DISABLED,
 	}); err != nil {
 		t.Fatalf("disable one automatic lookup: %v", err)
 	}
@@ -451,7 +451,7 @@ func TestCatalogResolutionRejectsAggregateCellsBeforeAssetLoads(t *testing.T) {
 		names[index] = fmt.Sprintf("cell-bound-%02d", index)
 		if _, err := catalog.Create(t.Context(), CreateRequest{
 			TenantID: "tenant-lookups", OwnerID: "owner-lookups",
-			Definition: catalogDefinition(appIDs[0], names[index], opensplunkv1.SharingScope_SHARING_SCOPE_APP, true),
+			Definition: catalogDefinition(appIDs[0], names[index], opensplunk.SharingScope_SHARING_SCOPE_APP, true),
 			Asset:      asset,
 		}); err != nil {
 			t.Fatalf("Create(%d): %v", index, err)
@@ -490,7 +490,7 @@ func TestCatalogAdmissionRejectsCombinedCellsBeforeEitherAssetSetLoads(t *testin
 		}
 		if _, err := catalog.Create(t.Context(), CreateRequest{
 			TenantID: "tenant-lookups", OwnerID: "owner-lookups",
-			Definition: catalogDefinition(appIDs[0], name, opensplunkv1.SharingScope_SHARING_SCOPE_APP, automatic),
+			Definition: catalogDefinition(appIDs[0], name, opensplunk.SharingScope_SHARING_SCOPE_APP, automatic),
 			Asset:      asset,
 		}); err != nil {
 			t.Fatalf("Create(%d): %v", index, err)
@@ -523,7 +523,7 @@ func TestCatalogAdmissionReturnsOrderedExplicitAndAutomaticAuthority(t *testing.
 	}
 	explicit, err := catalog.Create(t.Context(), CreateRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups",
-		Definition: catalogDefinition(appIDs[0], "z-explicit", opensplunkv1.SharingScope_SHARING_SCOPE_APP, false),
+		Definition: catalogDefinition(appIDs[0], "z-explicit", opensplunk.SharingScope_SHARING_SCOPE_APP, false),
 		Asset:      asset,
 	})
 	if err != nil {
@@ -531,7 +531,7 @@ func TestCatalogAdmissionReturnsOrderedExplicitAndAutomaticAuthority(t *testing.
 	}
 	automatic, err := catalog.Create(t.Context(), CreateRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups",
-		Definition: catalogDefinition(appIDs[0], "a-automatic", opensplunkv1.SharingScope_SHARING_SCOPE_APP, true),
+		Definition: catalogDefinition(appIDs[0], "a-automatic", opensplunk.SharingScope_SHARING_SCOPE_APP, true),
 		Asset:      asset,
 	})
 	if err != nil {
@@ -560,7 +560,7 @@ func TestCatalogResolutionSealsLogicalSnapshotBeforeAssetLoad(t *testing.T) {
 	}
 	created, err := baseCatalog.Create(t.Context(), CreateRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups",
-		Definition: catalogDefinition(appIDs[0], "snapshot", opensplunkv1.SharingScope_SHARING_SCOPE_APP, false),
+		Definition: catalogDefinition(appIDs[0], "snapshot", opensplunk.SharingScope_SHARING_SCOPE_APP, false),
 		Asset:      asset,
 	})
 	if err != nil {
@@ -594,14 +594,14 @@ func TestCatalogResolutionSealsLogicalSnapshotBeforeAssetLoad(t *testing.T) {
 	}
 	if _, err := baseCatalog.SetState(t.Context(), StateRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups", LookupID: created.GetLookupId(),
-		ExpectedVersion: created.GetVersion(), State: opensplunkv1.LookupState_LOOKUP_STATE_DISABLED,
+		ExpectedVersion: created.GetVersion(), State: opensplunk.LookupState_LOOKUP_STATE_DISABLED,
 	}); err != nil {
 		t.Fatalf("disable after resolution snapshot: %v", err)
 	}
 	close(observed.release)
 	result := <-completed
 	if result.err != nil || len(result.resolved) != 1 || result.resolved[0].Lookup.GetVersion() != 1 ||
-		result.resolved[0].Lookup.GetState() != opensplunkv1.LookupState_LOOKUP_STATE_ACTIVE {
+		result.resolved[0].Lookup.GetState() != opensplunk.LookupState_LOOKUP_STATE_ACTIVE {
 		t.Fatalf("sealed ResolveAdmission() = %#v, %v", result.resolved, result.err)
 	}
 	observed.block.Store(false)
@@ -623,7 +623,7 @@ func TestCatalogRejectsSameStateTransitionsWithoutBurningVersions(t *testing.T) 
 	}
 	created, err := catalog.Create(t.Context(), CreateRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups",
-		Definition: catalogDefinition(appIDs[0], "same-state", opensplunkv1.SharingScope_SHARING_SCOPE_APP, false),
+		Definition: catalogDefinition(appIDs[0], "same-state", opensplunk.SharingScope_SHARING_SCOPE_APP, false),
 		Asset:      asset,
 	})
 	if err != nil {
@@ -631,21 +631,21 @@ func TestCatalogRejectsSameStateTransitionsWithoutBurningVersions(t *testing.T) 
 	}
 	if _, err := catalog.SetState(t.Context(), StateRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups", LookupID: created.GetLookupId(),
-		ExpectedVersion: created.GetVersion(), State: opensplunkv1.LookupState_LOOKUP_STATE_ACTIVE,
+		ExpectedVersion: created.GetVersion(), State: opensplunk.LookupState_LOOKUP_STATE_ACTIVE,
 	}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("active-to-active SetState() error = %v", err)
 	}
 	assertLogicalVersionCount(t, database, 1)
 	disabled, err := catalog.SetState(t.Context(), StateRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups", LookupID: created.GetLookupId(),
-		ExpectedVersion: created.GetVersion(), State: opensplunkv1.LookupState_LOOKUP_STATE_DISABLED,
+		ExpectedVersion: created.GetVersion(), State: opensplunk.LookupState_LOOKUP_STATE_DISABLED,
 	})
 	if err != nil {
 		t.Fatalf("disable: %v", err)
 	}
 	if _, err := catalog.SetState(t.Context(), StateRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups", LookupID: created.GetLookupId(),
-		ExpectedVersion: disabled.GetVersion(), State: opensplunkv1.LookupState_LOOKUP_STATE_DISABLED,
+		ExpectedVersion: disabled.GetVersion(), State: opensplunk.LookupState_LOOKUP_STATE_DISABLED,
 	}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("disabled-to-disabled SetState() error = %v", err)
 	}
@@ -665,7 +665,7 @@ func TestCatalogOrdinaryCapacityRetainsTerminalLifecycleReserve(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New(): %v", err)
 	}
-	definition := catalogDefinition(appIDs[0], "version-reserve", opensplunkv1.SharingScope_SHARING_SCOPE_APP, false)
+	definition := catalogDefinition(appIDs[0], "version-reserve", opensplunk.SharingScope_SHARING_SCOPE_APP, false)
 	created, err := catalog.Create(t.Context(), CreateRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups", Definition: definition, Asset: firstAsset,
 	})
@@ -719,7 +719,7 @@ func TestCatalogOrdinaryCapacityRetainsTerminalLifecycleReserve(t *testing.T) {
 		t.Fatalf("direct ordinary reserve bypass error = %v", bypassErr)
 	}
 
-	changedDefinition := catalogDefinition(appIDs[0], "version-reserve", opensplunkv1.SharingScope_SHARING_SCOPE_APP, true)
+	changedDefinition := catalogDefinition(appIDs[0], "version-reserve", opensplunk.SharingScope_SHARING_SCOPE_APP, true)
 	if _, err := catalog.Replace(t.Context(), ReplaceRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups", LookupID: created.GetLookupId(),
 		ExpectedVersion: MaximumOrdinaryVersions, Definition: changedDefinition, Asset: secondAsset,
@@ -728,20 +728,20 @@ func TestCatalogOrdinaryCapacityRetainsTerminalLifecycleReserve(t *testing.T) {
 	}
 	disabled, err := catalog.SetState(t.Context(), StateRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups", LookupID: created.GetLookupId(),
-		ExpectedVersion: MaximumOrdinaryVersions, State: opensplunkv1.LookupState_LOOKUP_STATE_DISABLED,
+		ExpectedVersion: MaximumOrdinaryVersions, State: opensplunk.LookupState_LOOKUP_STATE_DISABLED,
 	})
 	if err != nil {
 		t.Fatalf("disable from terminal reserve: %v", err)
 	}
 	if _, err := catalog.SetState(t.Context(), StateRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups", LookupID: created.GetLookupId(),
-		ExpectedVersion: disabled.GetVersion(), State: opensplunkv1.LookupState_LOOKUP_STATE_ACTIVE,
+		ExpectedVersion: disabled.GetVersion(), State: opensplunk.LookupState_LOOKUP_STATE_ACTIVE,
 	}); !errors.Is(err, ErrCapacity) {
 		t.Fatalf("enable from terminal reserve error = %v", err)
 	}
 	deleted, err := catalog.SetState(t.Context(), StateRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups", LookupID: created.GetLookupId(),
-		ExpectedVersion: disabled.GetVersion(), State: opensplunkv1.LookupState_LOOKUP_STATE_DELETED,
+		ExpectedVersion: disabled.GetVersion(), State: opensplunk.LookupState_LOOKUP_STATE_DELETED,
 	})
 	if err != nil || deleted.GetVersion() != MaximumOrdinaryVersions+2 {
 		t.Fatalf("delete from terminal reserve = %#v, %v", deleted, err)
@@ -760,7 +760,7 @@ func TestCatalogDefinitionCapacityCountsRetainedTombstones(t *testing.T) {
 	}
 	created, err := catalog.Create(t.Context(), CreateRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups",
-		Definition: catalogDefinition(appIDs[0], "retained-tombstone", opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE, false),
+		Definition: catalogDefinition(appIDs[0], "retained-tombstone", opensplunk.SharingScope_SHARING_SCOPE_PRIVATE, false),
 		Asset:      asset,
 	})
 	if err != nil {
@@ -768,14 +768,14 @@ func TestCatalogDefinitionCapacityCountsRetainedTombstones(t *testing.T) {
 	}
 	disabled, err := catalog.SetState(t.Context(), StateRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups", LookupID: created.GetLookupId(),
-		ExpectedVersion: created.GetVersion(), State: opensplunkv1.LookupState_LOOKUP_STATE_DISABLED,
+		ExpectedVersion: created.GetVersion(), State: opensplunk.LookupState_LOOKUP_STATE_DISABLED,
 	})
 	if err != nil {
 		t.Fatalf("disable: %v", err)
 	}
 	if _, err := catalog.SetState(t.Context(), StateRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups", LookupID: created.GetLookupId(),
-		ExpectedVersion: disabled.GetVersion(), State: opensplunkv1.LookupState_LOOKUP_STATE_DELETED,
+		ExpectedVersion: disabled.GetVersion(), State: opensplunk.LookupState_LOOKUP_STATE_DELETED,
 	}); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
@@ -788,7 +788,7 @@ func TestCatalogDefinitionCapacityCountsRetainedTombstones(t *testing.T) {
 	}
 	if _, err := catalog.Create(t.Context(), CreateRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups",
-		Definition: catalogDefinition(appIDs[0], "over-identity-cap", opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE, false),
+		Definition: catalogDefinition(appIDs[0], "over-identity-cap", opensplunk.SharingScope_SHARING_SCOPE_PRIVATE, false),
 		Asset:      asset,
 	}); !errors.Is(err, ErrCapacity) {
 		t.Fatalf("Create(over retained identity cap) error = %v", err)
@@ -806,7 +806,7 @@ func TestCatalogMetadataProjectionRejectsCorruptRegistryTimestamp(t *testing.T) 
 	}
 	created, err := catalog.Create(t.Context(), CreateRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups",
-		Definition: catalogDefinition(appIDs[0], "corrupt-projection", opensplunkv1.SharingScope_SHARING_SCOPE_APP, false),
+		Definition: catalogDefinition(appIDs[0], "corrupt-projection", opensplunk.SharingScope_SHARING_SCOPE_APP, false),
 		Asset:      asset,
 	})
 	if err != nil {
@@ -852,7 +852,7 @@ func TestCatalogResolutionUsesVisibleWinnerAndAutomaticFlag(t *testing.T) {
 	}
 	appWinner, err := catalog.Create(t.Context(), CreateRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups",
-		Definition: catalogDefinition(appIDs[0], "services", opensplunkv1.SharingScope_SHARING_SCOPE_APP, true),
+		Definition: catalogDefinition(appIDs[0], "services", opensplunk.SharingScope_SHARING_SCOPE_APP, true),
 		Asset:      asset,
 	})
 	if err != nil {
@@ -860,7 +860,7 @@ func TestCatalogResolutionUsesVisibleWinnerAndAutomaticFlag(t *testing.T) {
 	}
 	global, err := catalog.Create(t.Context(), CreateRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups",
-		Definition: catalogDefinition(appIDs[1], "services", opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL, true),
+		Definition: catalogDefinition(appIDs[1], "services", opensplunk.SharingScope_SHARING_SCOPE_GLOBAL, true),
 		Asset:      asset,
 	})
 	if err != nil {
@@ -879,7 +879,7 @@ func TestCatalogResolutionUsesVisibleWinnerAndAutomaticFlag(t *testing.T) {
 		t.Fatalf("ResolveAdmission(app winner) = %#v, %v", automatic, err)
 	}
 
-	nonAutomatic := catalogDefinition(appIDs[0], "services", opensplunkv1.SharingScope_SHARING_SCOPE_APP, false)
+	nonAutomatic := catalogDefinition(appIDs[0], "services", opensplunk.SharingScope_SHARING_SCOPE_APP, false)
 	replaced, err := catalog.Replace(t.Context(), ReplaceRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups", LookupID: appWinner.GetLookupId(),
 		ExpectedVersion: appWinner.GetVersion(), Definition: nonAutomatic, Asset: asset,
@@ -895,9 +895,9 @@ func TestCatalogResolutionUsesVisibleWinnerAndAutomaticFlag(t *testing.T) {
 
 	disabled, err := catalog.SetState(t.Context(), StateRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups", LookupID: appWinner.GetLookupId(),
-		ExpectedVersion: replaced.GetVersion(), State: opensplunkv1.LookupState_LOOKUP_STATE_DISABLED,
+		ExpectedVersion: replaced.GetVersion(), State: opensplunk.LookupState_LOOKUP_STATE_DISABLED,
 	})
-	if err != nil || disabled.GetState() != opensplunkv1.LookupState_LOOKUP_STATE_DISABLED {
+	if err != nil || disabled.GetState() != opensplunk.LookupState_LOOKUP_STATE_DISABLED {
 		t.Fatalf("SetState(disabled) = %#v, %v", disabled, err)
 	}
 	admitted, err = catalog.ResolveAdmission(t.Context(), scope)
@@ -923,7 +923,7 @@ func TestCatalogNamespaceSupportsPrivateAppGlobalPrecedenceWithoutAmbiguity(t *t
 	if err != nil {
 		t.Fatalf("New(): %v", err)
 	}
-	create := func(owner string, sharing opensplunkv1.SharingScope, appID string) *opensplunkv1.Lookup {
+	create := func(owner string, sharing opensplunk.SharingScope, appID string) *opensplunk.Lookup {
 		t.Helper()
 		lookup, createErr := catalog.Create(t.Context(), CreateRequest{
 			TenantID: "tenant-lookups",
@@ -941,10 +941,10 @@ func TestCatalogNamespaceSupportsPrivateAppGlobalPrecedenceWithoutAmbiguity(t *t
 		}
 		return lookup
 	}
-	app := create("app-owner", opensplunkv1.SharingScope_SHARING_SCOPE_APP, appIDs[0])
-	privateA := create("private-a", opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE, appIDs[0])
-	privateB := create("private-b", opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE, appIDs[0])
-	global := create("global-owner", opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL, appIDs[1])
+	app := create("app-owner", opensplunk.SharingScope_SHARING_SCOPE_APP, appIDs[0])
+	privateA := create("private-a", opensplunk.SharingScope_SHARING_SCOPE_PRIVATE, appIDs[0])
+	privateB := create("private-b", opensplunk.SharingScope_SHARING_SCOPE_PRIVATE, appIDs[0])
+	global := create("global-owner", opensplunk.SharingScope_SHARING_SCOPE_GLOBAL, appIDs[1])
 
 	for _, test := range []struct {
 		principal string
@@ -974,7 +974,7 @@ func TestCatalogNamespaceSupportsPrivateAppGlobalPrecedenceWithoutAmbiguity(t *t
 	}
 	if _, err := catalog.Create(t.Context(), CreateRequest{
 		TenantID: "tenant-lookups", OwnerID: "second-global",
-		Definition: catalogDefinition(appIDs[0], "shadowed", opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL, true),
+		Definition: catalogDefinition(appIDs[0], "shadowed", opensplunk.SharingScope_SHARING_SCOPE_GLOBAL, true),
 		Asset:      asset,
 	}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("second global Create() error = %v", err)
@@ -984,7 +984,7 @@ func TestCatalogNamespaceSupportsPrivateAppGlobalPrecedenceWithoutAmbiguity(t *t
 		OwnerID:         "global-owner",
 		LookupID:        global.GetLookupId(),
 		ExpectedVersion: global.GetVersion(),
-		State:           opensplunkv1.LookupState_LOOKUP_STATE_DISABLED,
+		State:           opensplunk.LookupState_LOOKUP_STATE_DISABLED,
 	})
 	if err != nil {
 		t.Fatalf("disable global: %v", err)
@@ -994,13 +994,13 @@ func TestCatalogNamespaceSupportsPrivateAppGlobalPrecedenceWithoutAmbiguity(t *t
 		OwnerID:         "global-owner",
 		LookupID:        global.GetLookupId(),
 		ExpectedVersion: disabled.GetVersion(),
-		State:           opensplunkv1.LookupState_LOOKUP_STATE_DELETED,
+		State:           opensplunk.LookupState_LOOKUP_STATE_DELETED,
 	}); err != nil {
 		t.Fatalf("delete global: %v", err)
 	}
 	if _, err := catalog.Create(t.Context(), CreateRequest{
 		TenantID: "tenant-lookups", OwnerID: "second-global",
-		Definition: catalogDefinition(appIDs[0], "shadowed", opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL, true),
+		Definition: catalogDefinition(appIDs[0], "shadowed", opensplunk.SharingScope_SHARING_SCOPE_GLOBAL, true),
 		Asset:      asset,
 	}); err != nil {
 		t.Fatalf("recreate deleted global name: %v", err)
@@ -1014,7 +1014,7 @@ func TestCatalogRejectsDuplicateDefinitionKeysAndMigrationPointerCorruption(t *t
 	if err != nil {
 		t.Fatalf("New(): %v", err)
 	}
-	definition := catalogDefinition(appIDs[0], "services", opensplunkv1.SharingScope_SHARING_SCOPE_APP, false)
+	definition := catalogDefinition(appIDs[0], "services", opensplunk.SharingScope_SHARING_SCOPE_APP, false)
 	if _, err := catalog.Create(t.Context(), CreateRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups", Definition: definition, Asset: duplicate,
 	}); !errors.Is(err, lookupasset.ErrDuplicateKey) {
@@ -1064,7 +1064,7 @@ func TestCatalogResolveUsesThePublishedExactLookupNameLanguage(t *testing.T) {
 	const name = "service/catalog+世界"
 	created, err := catalog.Create(t.Context(), CreateRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups",
-		Definition: catalogDefinition(appIDs[0], name, opensplunkv1.SharingScope_SHARING_SCOPE_APP, false),
+		Definition: catalogDefinition(appIDs[0], name, opensplunk.SharingScope_SHARING_SCOPE_APP, false),
 		Asset:      asset,
 	})
 	if err != nil {
@@ -1090,14 +1090,14 @@ func TestCatalogEnforcesLookupAppLifecycleAuthority(t *testing.T) {
 	}
 	if _, err := catalog.Create(t.Context(), CreateRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups",
-		Definition: catalogDefinition("app_AAAAAAAAAAAAAAAAAAAAAA", "missing-app", opensplunkv1.SharingScope_SHARING_SCOPE_APP, false),
+		Definition: catalogDefinition("app_AAAAAAAAAAAAAAAAAAAAAA", "missing-app", opensplunk.SharingScope_SHARING_SCOPE_APP, false),
 		Asset:      asset,
 	}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("Create(missing app) error = %v, want conflict", err)
 	}
 	created, err := catalog.Create(t.Context(), CreateRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups",
-		Definition: catalogDefinition(appIDs[0], "app-lifecycle", opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL, true),
+		Definition: catalogDefinition(appIDs[0], "app-lifecycle", opensplunk.SharingScope_SHARING_SCOPE_GLOBAL, true),
 		Asset:      asset,
 	})
 	if err != nil {
@@ -1121,7 +1121,7 @@ func TestCatalogEnforcesLookupAppLifecycleAuthority(t *testing.T) {
 	}
 	disabled, err := catalog.SetState(t.Context(), StateRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups", LookupID: created.GetLookupId(),
-		ExpectedVersion: created.GetVersion(), State: opensplunkv1.LookupState_LOOKUP_STATE_DISABLED,
+		ExpectedVersion: created.GetVersion(), State: opensplunk.LookupState_LOOKUP_STATE_DISABLED,
 	})
 	if err != nil {
 		t.Fatalf("disable lookup: %v", err)
@@ -1150,29 +1150,29 @@ func TestCatalogEnforcesLookupAppLifecycleAuthority(t *testing.T) {
 	if _, err := catalog.Replace(t.Context(), ReplaceRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups", LookupID: created.GetLookupId(),
 		ExpectedVersion: disabled.GetVersion(),
-		Definition:      catalogDefinition(appIDs[0], "app-lifecycle-replaced", opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL, true),
+		Definition:      catalogDefinition(appIDs[0], "app-lifecycle-replaced", opensplunk.SharingScope_SHARING_SCOPE_GLOBAL, true),
 		Asset:           asset,
 	}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("Replace(in archived app) error = %v, want conflict", err)
 	}
 	if _, err := catalog.Create(t.Context(), CreateRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups",
-		Definition: catalogDefinition(appIDs[0], "archived-app-create", opensplunkv1.SharingScope_SHARING_SCOPE_APP, false),
+		Definition: catalogDefinition(appIDs[0], "archived-app-create", opensplunk.SharingScope_SHARING_SCOPE_APP, false),
 		Asset:      asset,
 	}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("Create(in archived app) error = %v, want conflict", err)
 	}
 	if _, err := catalog.SetState(t.Context(), StateRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups", LookupID: created.GetLookupId(),
-		ExpectedVersion: disabled.GetVersion(), State: opensplunkv1.LookupState_LOOKUP_STATE_ACTIVE,
+		ExpectedVersion: disabled.GetVersion(), State: opensplunk.LookupState_LOOKUP_STATE_ACTIVE,
 	}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("reactivate in archived app error = %v, want conflict", err)
 	}
 	deleted, err := catalog.SetState(t.Context(), StateRequest{
 		TenantID: "tenant-lookups", OwnerID: "owner-lookups", LookupID: created.GetLookupId(),
-		ExpectedVersion: disabled.GetVersion(), State: opensplunkv1.LookupState_LOOKUP_STATE_DELETED,
+		ExpectedVersion: disabled.GetVersion(), State: opensplunk.LookupState_LOOKUP_STATE_DELETED,
 	})
-	if err != nil || deleted.GetState() != opensplunkv1.LookupState_LOOKUP_STATE_DELETED {
+	if err != nil || deleted.GetState() != opensplunk.LookupState_LOOKUP_STATE_DELETED {
 		t.Fatalf("delete disabled lookup in archived app = %#v, %v", deleted, err)
 	}
 	if _, err := apps.DeleteApp(
@@ -1319,7 +1319,7 @@ func assertLogicalVersionCount(t *testing.T, database *control.DB, want int) {
 func seedOrdinaryVersionCapacity(
 	t *testing.T,
 	database *control.DB,
-	created *opensplunkv1.Lookup,
+	created *opensplunk.Lookup,
 	firstAsset lookupasset.Version,
 	secondAsset lookupasset.Version,
 ) {
@@ -1407,7 +1407,7 @@ func seedDefinitionIdentityCapacity(
 	for index := range count {
 		lookupID := fmt.Sprintf("lookup-retained-%04d", index)
 		name := fmt.Sprintf("retained-%04d", index)
-		definition := catalogDefinition(appID, name, opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE, false)
+		definition := catalogDefinition(appID, name, opensplunk.SharingScope_SHARING_SCOPE_PRIVATE, false)
 		definitionBytes, marshalErr := deterministicDefinition(definition)
 		if marshalErr != nil {
 			t.Fatalf("deterministicDefinition(%d): %v", index, marshalErr)
@@ -1457,13 +1457,13 @@ func seedDefinitionIdentityCapacity(
 func catalogDefinition(
 	appID string,
 	name string,
-	sharing opensplunkv1.SharingScope,
+	sharing opensplunk.SharingScope,
 	automatic bool,
-) *opensplunkv1.LookupDefinition {
-	return &opensplunkv1.LookupDefinition{
+) *opensplunk.LookupDefinition {
+	return &opensplunk.LookupDefinition{
 		AppId: appID, Name: name, SharingScope: sharing, Automatic: automatic,
-		KeyMappings:       []*opensplunkv1.LookupFieldMapping{{LookupField: "service_id", EventField: "service"}},
-		OutputMappings:    []*opensplunkv1.LookupFieldMapping{{LookupField: "owner", EventField: "owner"}},
-		OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+		KeyMappings:       []*opensplunk.LookupFieldMapping{{LookupField: "service_id", EventField: "service"}},
+		OutputMappings:    []*opensplunk.LookupFieldMapping{{LookupField: "owner", EventField: "owner"}},
+		OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
 	}
 }

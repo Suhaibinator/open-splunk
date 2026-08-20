@@ -1,4 +1,4 @@
-import type { KnowledgeObject } from "@/gen/ts/open_splunk/v1/knowledge";
+import type { KnowledgeObject } from "@/gen/ts/open_splunk/knowledge";
 import {
   KnowledgeValidationIntent,
   PreviewKnowledgeObjectRequest,
@@ -6,19 +6,19 @@ import {
   type KnowledgeValidationResult,
   type PreviewKnowledgeObjectRequest as PreviewKnowledgeObjectRequestMessage,
   type PreviewKnowledgeObjectResponse as PreviewKnowledgeObjectResponseMessage,
-} from "@/gen/ts/open_splunk/v1/knowledge_api";
+} from "@/gen/ts/open_splunk/knowledge_api";
 import {
   ColumnSemanticType,
   ResultSetKind,
   type ResultColumn,
   type ResultRow,
   type ResultSchema,
-} from "@/gen/ts/open_splunk/v1/result";
+} from "@/gen/ts/open_splunk/result";
 import {
   NullValue,
   ValueType,
   type TypedValue,
-} from "@/gen/ts/open_splunk/v1/value";
+} from "@/gen/ts/open_splunk/value";
 import {
   ProtobufTransport,
   type ProtobufRequestOptions,

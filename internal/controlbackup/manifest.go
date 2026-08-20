@@ -34,7 +34,7 @@ const (
 )
 
 // MigrationIdentity binds a contiguous migration ledger to the exact source
-// corpus shipped by one release.
+// corpus shipped by one build.
 type MigrationIdentity struct {
 	SHA256        string `json:"sha256"`
 	LatestVersion uint32 `json:"latest_version"`
@@ -49,10 +49,9 @@ type FileIdentity struct {
 }
 
 // ReleaseIdentity is the compatibility boundary required to verify or restore
-// a bundle. V1 intentionally requires the same release, then normal startup
-// may perform a separately controlled upgrade.
+// a bundle. The name is retained for callers, but identity is source- and
+// schema-based and does not include a product version.
 type ReleaseIdentity struct {
-	ApplicationVersion   string
 	SourceRevision       string
 	SQLiteMigrations     MigrationIdentity
 	ClickHouseMigrations MigrationIdentity
@@ -66,7 +65,6 @@ type Manifest struct {
 	RecoverySetID               string            `json:"recovery_set_id"`
 	Scope                       string            `json:"scope"`
 	ClickHouseIncluded          bool              `json:"clickhouse_included"`
-	ApplicationVersion          string            `json:"application_version"`
 	SourceRevision              string            `json:"source_revision"`
 	SQLiteMigrations            MigrationIdentity `json:"sqlite_migrations"`
 	SQLiteMigrationLedgerSHA256 string            `json:"sqlite_migration_ledger_sha256"`
@@ -81,7 +79,6 @@ type Manifest struct {
 // the manifest.
 func (manifest Manifest) ReleaseIdentity() ReleaseIdentity {
 	return ReleaseIdentity{
-		ApplicationVersion:   manifest.ApplicationVersion,
 		SourceRevision:       manifest.SourceRevision,
 		SQLiteMigrations:     manifest.SQLiteMigrations,
 		ClickHouseMigrations: manifest.ClickHouseMigrations,
@@ -152,7 +149,7 @@ func unmarshalManifest(encoded []byte) (Manifest, error) {
 
 func validateManifest(manifest Manifest) error {
 	if manifest.FormatVersion != manifestFormatVersion {
-		return fmt.Errorf("control-plane backup manifest format version %d is unsupported", manifest.FormatVersion)
+		return fmt.Errorf("control-plane backup manifest format version %d is unsupported; create a fresh backup", manifest.FormatVersion)
 	}
 	if manifest.CreatedAtUnixMicro <= 0 || manifest.CreatedAtUnixMicro > maximumTimestampUnixMicro {
 		return errors.New("control-plane backup manifest creation time is invalid")
@@ -163,8 +160,8 @@ func validateManifest(manifest Manifest) error {
 	if manifest.Scope != controlPlaneOnlyScope || manifest.ClickHouseIncluded {
 		return errors.New("control-plane backup manifest scope is invalid")
 	}
-	if _, err := buildinfo.Parse(manifest.ApplicationVersion, manifest.SourceRevision); err != nil {
-		return fmt.Errorf("control-plane backup manifest release identity is invalid: %w", err)
+	if _, err := buildinfo.Parse(manifest.SourceRevision); err != nil {
+		return fmt.Errorf("control-plane backup manifest source identity is invalid: %w", err)
 	}
 	if err := validateMigrationIdentity("SQLite", manifest.SQLiteMigrations); err != nil {
 		return err
@@ -200,7 +197,7 @@ func validateManifestRelease(manifest Manifest, expected ReleaseIdentity) error 
 		return err
 	}
 	if manifest.ReleaseIdentity() != expected {
-		return errors.New("control-plane backup was created by a different release; restore it with the original release first")
+		return errors.New("control-plane backup was created by a different source or migration identity")
 	}
 	return nil
 }
@@ -209,8 +206,8 @@ func validateManifestRelease(manifest Manifest, expected ReleaseIdentity) error 
 // attaching an operation-specific error prefix, so deployment recovery sets
 // can reuse the exact same rules.
 func ValidateReleaseIdentity(identity ReleaseIdentity) error {
-	if _, err := buildinfo.Parse(identity.ApplicationVersion, identity.SourceRevision); err != nil {
-		return fmt.Errorf("release identity is invalid: %w", err)
+	if _, err := buildinfo.Parse(identity.SourceRevision); err != nil {
+		return fmt.Errorf("source identity is invalid: %w", err)
 	}
 	if err := validateReleaseMigrationIdentity("SQLite", identity.SQLiteMigrations); err != nil {
 		return err

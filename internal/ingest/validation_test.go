@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -24,7 +24,7 @@ var validationTestNow = time.Date(2026, 7, 21, 18, 0, 0, 0, time.UTC)
 func TestValidateAndNormalizeEventDoesNotMutateInput(t *testing.T) {
 	v := newTestValidator(t, DefaultLimits())
 	event := validTestEvent("event-1", "main")
-	want := proto.Clone(event).(*opensplunkv1.LogEvent)
+	want := proto.Clone(event).(*opensplunk.LogEvent)
 
 	got, rejection := v.ValidateAndNormalizeEvent(event, EventContext{
 		ReceivedAt:  validationTestNow,
@@ -76,7 +76,7 @@ func TestValidateAndNormalizeEventUsesControlPlaneIndexNameBoundary(t *testing.T
 			assertEventRejectionCode(
 				t,
 				rejection,
-				opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_INDEX,
+				opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_INDEX,
 			)
 		})
 	}
@@ -94,7 +94,7 @@ func TestValidateAndNormalizeEventRejectsCanonicalFieldInjection(t *testing.T) {
 				event.Fields.Fields = append(event.Fields.Fields, stringField(name, "forged"))
 
 				_, rejection := v.ValidateAndNormalizeEvent(event, EventContext{ReceivedAt: validationTestNow})
-				assertEventRejectionCode(t, rejection, opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_FIELD_NAME_INVALID)
+				assertEventRejectionCode(t, rejection, opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_FIELD_NAME_INVALID)
 				if len(rejection.Violations) == 0 || rejection.Violations[0].FieldPath != "fields."+name ||
 					rejection.Violations[0].Code != "canonical_field_reserved" {
 					t.Fatalf("violations = %#v", rejection.Violations)
@@ -141,7 +141,7 @@ func TestValidateAndNormalizeEventValidatesNextSourceLine(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			event := validTestEvent("event-"+strings.ReplaceAll(test.name, " ", "-"), "main")
-			event.Origin = &opensplunkv1.EventOrigin{
+			event.Origin = &opensplunk.EventOrigin{
 				LineNumber:     test.line,
 				NextLineNumber: new(test.next),
 			}
@@ -149,7 +149,7 @@ func TestValidateAndNormalizeEventValidatesNextSourceLine(t *testing.T) {
 			assertEventRejectionCode(
 				t,
 				rejection,
-				opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_VALUE_INVALID,
+				opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_VALUE_INVALID,
 			)
 			if len(rejection.Violations) != 1 ||
 				rejection.Violations[0].GetFieldPath() != "origin.next_line_number" {
@@ -159,7 +159,7 @@ func TestValidateAndNormalizeEventValidatesNextSourceLine(t *testing.T) {
 	}
 
 	event := validTestEvent("event-valid-next-line", "main")
-	event.Origin = &opensplunkv1.EventOrigin{
+	event.Origin = &opensplunk.EventOrigin{
 		LineNumber:     proto.Uint64(3),
 		NextLineNumber: proto.Uint64(5),
 	}
@@ -177,27 +177,27 @@ func TestValidateAndNormalizeEventValidatesCheckpointRewriteGuard(t *testing.T) 
 	digest := strings.Repeat("ab", 32)
 	for _, test := range []struct {
 		name   string
-		origin *opensplunkv1.EventOrigin
+		origin *opensplunk.EventOrigin
 	}{
-		{name: "missing length", origin: &opensplunkv1.EventOrigin{
+		{name: "missing length", origin: &opensplunk.EventOrigin{
 			EndOffset: proto.Uint64(100), CheckpointGuardFingerprint: new(digest),
 		}},
-		{name: "missing fingerprint", origin: &opensplunkv1.EventOrigin{
+		{name: "missing fingerprint", origin: &opensplunk.EventOrigin{
 			EndOffset: proto.Uint64(100), CheckpointGuardLength: proto.Uint32(32),
 		}},
-		{name: "explicit empty guard", origin: &opensplunkv1.EventOrigin{
+		{name: "explicit empty guard", origin: &opensplunk.EventOrigin{
 			EndOffset: proto.Uint64(100), CheckpointGuardFingerprint: new(""), CheckpointGuardLength: proto.Uint32(0),
 		}},
-		{name: "missing end offset", origin: &opensplunkv1.EventOrigin{
+		{name: "missing end offset", origin: &opensplunk.EventOrigin{
 			CheckpointGuardFingerprint: new(digest), CheckpointGuardLength: proto.Uint32(32),
 		}},
-		{name: "guard exceeds end", origin: &opensplunkv1.EventOrigin{
+		{name: "guard exceeds end", origin: &opensplunk.EventOrigin{
 			EndOffset: proto.Uint64(31), CheckpointGuardFingerprint: new(digest), CheckpointGuardLength: proto.Uint32(32),
 		}},
-		{name: "guard exceeds absolute limit", origin: &opensplunkv1.EventOrigin{
+		{name: "guard exceeds absolute limit", origin: &opensplunk.EventOrigin{
 			EndOffset: proto.Uint64(2 << 20), CheckpointGuardFingerprint: new(digest), CheckpointGuardLength: proto.Uint32((1 << 20) + 1),
 		}},
-		{name: "noncanonical digest", origin: &opensplunkv1.EventOrigin{
+		{name: "noncanonical digest", origin: &opensplunk.EventOrigin{
 			EndOffset: proto.Uint64(100), CheckpointGuardFingerprint: new(strings.ToUpper(digest)), CheckpointGuardLength: proto.Uint32(32),
 		}},
 	} {
@@ -205,7 +205,7 @@ func TestValidateAndNormalizeEventValidatesCheckpointRewriteGuard(t *testing.T) 
 			event := validTestEvent("event-"+strings.ReplaceAll(test.name, " ", "-"), "main")
 			event.Origin = test.origin
 			_, rejection := validator.ValidateAndNormalizeEvent(event, EventContext{ReceivedAt: validationTestNow})
-			assertEventRejectionCode(t, rejection, opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_VALUE_INVALID)
+			assertEventRejectionCode(t, rejection, opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_VALUE_INVALID)
 			if len(rejection.Violations) != 1 ||
 				rejection.Violations[0].GetFieldPath() != "origin.checkpoint_guard_fingerprint" {
 				t.Fatalf("guard rejection = %+v", rejection)
@@ -214,7 +214,7 @@ func TestValidateAndNormalizeEventValidatesCheckpointRewriteGuard(t *testing.T) 
 	}
 
 	event := validTestEvent("event-valid-checkpoint-guard", "main")
-	event.Origin = &opensplunkv1.EventOrigin{
+	event.Origin = &opensplunk.EventOrigin{
 		EndOffset: proto.Uint64(100), CheckpointGuardFingerprint: new(digest), CheckpointGuardLength: proto.Uint32(32),
 	}
 	if _, rejection := validator.ValidateAndNormalizeEvent(event, EventContext{ReceivedAt: validationTestNow}); rejection != nil {
@@ -226,15 +226,15 @@ func TestTypedObjectValidation(t *testing.T) {
 	tests := []struct {
 		name   string
 		limits Limits
-		fields *opensplunkv1.TypedObject
-		code   opensplunkv1.EventRejectionCode
+		fields *opensplunk.TypedObject
+		code   opensplunk.EventRejectionCode
 	}{
 		{
 			name: "duplicate names in nested object",
 			fields: object(
 				objectField("nested", object(stringField("same", "one"), stringField("same", "two"))),
 			),
-			code: opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_FIELD_NAME_INVALID,
+			code: opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_FIELD_NAME_INVALID,
 		},
 		{
 			name: "too many recursively counted fields",
@@ -244,7 +244,7 @@ func TestTypedObjectValidation(t *testing.T) {
 				return limits
 			}(),
 			fields: object(stringField("one", "1"), objectField("nested", object(stringField("two", "2")))),
-			code:   opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_TOO_MANY_FIELDS,
+			code:   opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_TOO_MANY_FIELDS,
 		},
 		{
 			name: "object nesting too deep",
@@ -258,20 +258,20 @@ func TestTypedObjectValidation(t *testing.T) {
 					objectField("two", object(stringField("three", "value"))),
 				)),
 			),
-			code: opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_NESTING_TOO_DEEP,
+			code: opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_NESTING_TOO_DEEP,
 		},
 		{
 			name:   "unset value kind",
-			fields: object(&opensplunkv1.TypedObjectField{Name: "bad", Value: &opensplunkv1.TypedValue{}}),
-			code:   opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_VALUE_INVALID,
+			fields: object(&opensplunk.TypedObjectField{Name: "bad", Value: &opensplunk.TypedValue{}}),
+			code:   opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_VALUE_INVALID,
 		},
 		{
 			name: "non finite double",
-			fields: object(&opensplunkv1.TypedObjectField{
+			fields: object(&opensplunk.TypedObjectField{
 				Name:  "bad",
-				Value: &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_DoubleValue{DoubleValue: math.Inf(1)}},
+				Value: &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_DoubleValue{DoubleValue: math.Inf(1)}},
 			}),
-			code: opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_VALUE_INVALID,
+			code: opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_VALUE_INVALID,
 		},
 	}
 
@@ -309,7 +309,7 @@ func TestValidateAndNormalizeEventBoundsDurableFlattenedFieldMetadata(t *testing
 	assertEventRejectionCode(
 		t,
 		rejection,
-		opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_EVENT_TOO_LARGE,
+		opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_EVENT_TOO_LARGE,
 	)
 	if len(rejection.Violations) != 1 ||
 		rejection.Violations[0].Code != "field_metadata_too_large" {
@@ -370,14 +370,14 @@ func TestDurationFitsResultRangeBoundaries(t *testing.T) {
 
 	v := newTestValidator(t, DefaultLimits())
 	event := validTestEvent("event-duration", "main")
-	event.Fields = object(&opensplunkv1.TypedObjectField{
+	event.Fields = object(&opensplunk.TypedObjectField{
 		Name: "too_long",
-		Value: &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_DurationValue{
+		Value: &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_DurationValue{
 			DurationValue: &durationpb.Duration{Seconds: 9_223_372_037},
 		}},
 	})
 	_, rejection := v.ValidateAndNormalizeEvent(event, EventContext{ReceivedAt: validationTestNow})
-	assertEventRejectionCode(t, rejection, opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_VALUE_INVALID)
+	assertEventRejectionCode(t, rejection, opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_VALUE_INVALID)
 }
 
 func TestValidateAndNormalizeEventRedactsRecursivelyAndSanitizesRawJSON(t *testing.T) {
@@ -391,10 +391,10 @@ func TestValidateAndNormalizeEventRedactsRecursivelyAndSanitizesRawJSON(t *testi
 		stringField("tls.private_key", "typed-private-key"),
 		stringField("note", "token=typed-embedded"),
 		stringField("http.request.header.Authorization", "Bearer typed-header"),
-		&opensplunkv1.TypedObjectField{
+		&opensplunk.TypedObjectField{
 			Name: "items",
-			Value: &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_ListValue{ListValue: &opensplunkv1.TypedValueList{Values: []*opensplunkv1.TypedValue{
-				{Kind: &opensplunkv1.TypedValue_ObjectValue{ObjectValue: object(stringField("session-token", "typed-session"))}},
+			Value: &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_ListValue{ListValue: &opensplunk.TypedValueList{Values: []*opensplunk.TypedValue{
+				{Kind: &opensplunk.TypedValue_ObjectValue{ObjectValue: object(stringField("session-token", "typed-session"))}},
 			}}}},
 		},
 	)
@@ -866,7 +866,7 @@ func TestValidateAndNormalizeEventRedactsBinaryRawBytes(t *testing.T) {
 
 	v := newTestValidator(t, DefaultLimits())
 	event := validTestEvent("event-binary-secret", "main")
-	event.RawEncoding = opensplunkv1.RawEncoding_RAW_ENCODING_BINARY
+	event.RawEncoding = opensplunk.RawEncoding_RAW_ENCODING_BINARY
 	event.Raw = append([]byte{0xff, 0x00, ' '}, []byte(`password="binary-secret" safe=value`)...)
 
 	got, rejection := v.ValidateAndNormalizeEvent(event, EventContext{ReceivedAt: validationTestNow})
@@ -886,7 +886,7 @@ func TestValidateAndNormalizeEventRedactsUTF8JSONLabeledBinary(t *testing.T) {
 
 	v := newTestValidator(t, DefaultLimits())
 	event := validTestEvent("event-binary-json-secret", "main")
-	event.RawEncoding = opensplunkv1.RawEncoding_RAW_ENCODING_BINARY
+	event.RawEncoding = opensplunk.RawEncoding_RAW_ENCODING_BINARY
 	event.Raw = []byte(`{"pass\u0077ord":"binary-json-secret","safe":true}`)
 
 	got, rejection := v.ValidateAndNormalizeEvent(event, EventContext{ReceivedAt: validationTestNow})
@@ -1292,7 +1292,7 @@ func TestValidateAndNormalizeEventRechecksSizeAfterRedaction(t *testing.T) {
 	}
 
 	_, rejection := v.ValidateAndNormalizeEvent(event, EventContext{ReceivedAt: validationTestNow})
-	assertEventRejectionCode(t, rejection, opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_EVENT_TOO_LARGE)
+	assertEventRejectionCode(t, rejection, opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_EVENT_TOO_LARGE)
 }
 
 func TestValidateAndNormalizeEventEnforcesTimeAndSizeBounds(t *testing.T) {
@@ -1304,37 +1304,37 @@ func TestValidateAndNormalizeEventEnforcesTimeAndSizeBounds(t *testing.T) {
 
 	tests := []struct {
 		name string
-		edit func(*opensplunkv1.LogEvent)
-		code opensplunkv1.EventRejectionCode
+		edit func(*opensplunk.LogEvent)
+		code opensplunk.EventRejectionCode
 	}{
 		{
 			name: "invalid event ID",
-			edit: func(e *opensplunkv1.LogEvent) { e.EventId = "event id with spaces" },
-			code: opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_EVENT_ID,
+			edit: func(e *opensplunk.LogEvent) { e.EventId = "event id with spaces" },
+			code: opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_EVENT_ID,
 		},
 		{
 			name: "event timestamp too old",
-			edit: func(e *opensplunkv1.LogEvent) { e.EventTime = timestamppb.New(validationTestNow.Add(-25 * time.Hour)) },
-			code: opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_TIMESTAMP,
+			edit: func(e *opensplunk.LogEvent) { e.EventTime = timestamppb.New(validationTestNow.Add(-25 * time.Hour)) },
+			code: opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_TIMESTAMP,
 		},
 		{
 			name: "collection timestamp in future",
-			edit: func(e *opensplunkv1.LogEvent) {
+			edit: func(e *opensplunk.LogEvent) {
 				e.CollectedAt = timestamppb.New(validationTestNow.Add(2 * time.Minute))
 			},
-			code: opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_TIMESTAMP,
+			code: opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_TIMESTAMP,
 		},
 		{
 			name: "invalid protobuf timestamp",
-			edit: func(e *opensplunkv1.LogEvent) {
+			edit: func(e *opensplunk.LogEvent) {
 				e.EventTime = &timestamppb.Timestamp{Seconds: math.MaxInt64}
 			},
-			code: opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_TIMESTAMP,
+			code: opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_TIMESTAMP,
 		},
 		{
 			name: "event too large",
-			edit: func(e *opensplunkv1.LogEvent) { e.Raw = bytes.Repeat([]byte("x"), 1024) },
-			code: opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_EVENT_TOO_LARGE,
+			edit: func(e *opensplunk.LogEvent) { e.Raw = bytes.Repeat([]byte("x"), 1024) },
+			code: opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_EVENT_TOO_LARGE,
 		},
 	}
 
@@ -1420,7 +1420,7 @@ func TestNewServiceRejectsLimitsAboveHardCeiling(t *testing.T) {
 }
 
 func TestEventIDDigestUsesLengthPrefixedEventIDs(t *testing.T) {
-	events := []*opensplunkv1.LogEvent{{EventId: "a"}, {EventId: "bc"}}
+	events := []*opensplunk.LogEvent{{EventId: "a"}, {EventId: "bc"}}
 	h := sha256.New()
 	var size [4]byte
 	binary.BigEndian.PutUint32(size[:], 1)
@@ -1444,49 +1444,49 @@ func newTestValidator(t *testing.T, limits Limits) *Validator {
 	return v
 }
 
-func validTestEvent(id, index string) *opensplunkv1.LogEvent {
+func validTestEvent(id, index string) *opensplunk.LogEvent {
 	message := "request completed"
-	return &opensplunkv1.LogEvent{
+	return &opensplunk.LogEvent{
 		EventId:         id,
 		IndexName:       index,
 		EventTime:       timestamppb.New(validationTestNow.Add(-time.Minute)),
 		CollectedAt:     timestamppb.New(validationTestNow.Add(-30 * time.Second)),
-		EventTimeSource: opensplunkv1.EventTimeSource_EVENT_TIME_SOURCE_PARSED,
+		EventTimeSource: opensplunk.EventTimeSource_EVENT_TIME_SOURCE_PARSED,
 		Host:            "host-a",
 		Source:          "/var/log/app.log",
 		Sourcetype:      "json",
-		Severity:        opensplunkv1.LogSeverity_LOG_SEVERITY_INFO,
+		Severity:        opensplunk.LogSeverity_LOG_SEVERITY_INFO,
 		Message:         &message,
 		Raw:             []byte(`{"message":"request completed","status":200}`),
-		RawEncoding:     opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+		RawEncoding:     opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 		Fields:          object(stringField("status", "200")),
 	}
 }
 
-func object(fields ...*opensplunkv1.TypedObjectField) *opensplunkv1.TypedObject {
-	return &opensplunkv1.TypedObject{Fields: fields}
+func object(fields ...*opensplunk.TypedObjectField) *opensplunk.TypedObject {
+	return &opensplunk.TypedObject{Fields: fields}
 }
 
-func stringField(name, value string) *opensplunkv1.TypedObjectField {
-	return &opensplunkv1.TypedObjectField{
+func stringField(name, value string) *opensplunk.TypedObjectField {
+	return &opensplunk.TypedObjectField{
 		Name: name,
-		Value: &opensplunkv1.TypedValue{
-			Kind: &opensplunkv1.TypedValue_StringValue{StringValue: value},
+		Value: &opensplunk.TypedValue{
+			Kind: &opensplunk.TypedValue_StringValue{StringValue: value},
 		},
 	}
 }
 
-func objectField(name string, value *opensplunkv1.TypedObject) *opensplunkv1.TypedObjectField {
-	return &opensplunkv1.TypedObjectField{
+func objectField(name string, value *opensplunk.TypedObject) *opensplunk.TypedObjectField {
+	return &opensplunk.TypedObjectField{
 		Name: name,
-		Value: &opensplunkv1.TypedValue{
-			Kind: &opensplunkv1.TypedValue_ObjectValue{ObjectValue: value},
+		Value: &opensplunk.TypedValue{
+			Kind: &opensplunk.TypedValue_ObjectValue{ObjectValue: value},
 		},
 	}
 }
 
-func amplifiedFieldMetadataObject(parentNames []string, leafCount int) *opensplunkv1.TypedObject {
-	leaves := make([]*opensplunkv1.TypedObjectField, leafCount)
+func amplifiedFieldMetadataObject(parentNames []string, leafCount int) *opensplunk.TypedObject {
+	leaves := make([]*opensplunk.TypedObjectField, leafCount)
 	for index := range leaves {
 		leaves[index] = stringField(fmt.Sprintf("f%04d", index), "value")
 	}
@@ -1497,7 +1497,7 @@ func amplifiedFieldMetadataObject(parentNames []string, leafCount int) *opensplu
 	return nested
 }
 
-func assertEventRejectionCode(t *testing.T, rejection *EventError, want opensplunkv1.EventRejectionCode) {
+func assertEventRejectionCode(t *testing.T, rejection *EventError, want opensplunk.EventRejectionCode) {
 	t.Helper()
 	if rejection == nil {
 		t.Fatalf("rejection = nil, want %v", want)

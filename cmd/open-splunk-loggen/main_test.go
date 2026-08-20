@@ -26,8 +26,7 @@ func TestRunReportsCompiledBuildIdentity(t *testing.T) {
 	if err := run(context.Background(), []string{"-version"}, &output, &bytes.Buffer{}); err != nil {
 		t.Fatalf("run(-version): %v", err)
 	}
-	want := "application_version=" + identity.ApplicationVersion +
-		"\nsource_revision=" + identity.SourceRevision + "\n"
+	want := "source_revision=" + identity.SourceRevision + "\n"
 	if got := output.String(); got != want {
 		t.Fatalf("version output = %q, want %q", got, want)
 	}

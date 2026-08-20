@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 	"google.golang.org/protobuf/proto"
@@ -18,7 +18,7 @@ func TestResultKindForSPLKeepsTimeBinAsEvents(t *testing.T) {
 		`index=main | bin severity span=10`,
 		`index=main | bucket span=10 severity AS band`,
 	} {
-		if got := ResultShapeForSPL(source).Kind; got != opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS {
+		if got := ResultShapeForSPL(source).Kind; got != opensplunk.ResultSetKind_RESULT_SET_KIND_EVENTS {
 			t.Fatalf("%q result kind = %v, want events", source, got)
 		}
 	}
@@ -28,7 +28,7 @@ func TestResultKindForSPLKeepsTimeBinAsEvents(t *testing.T) {
 		`index=main | chart count OVER path BY level`,
 		`index=main | bin _time span=5m AS bucket_time | chart count OVER bucket_time BY level`,
 	} {
-		if got := ResultShapeForSPL(source).Kind; got != opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS {
+		if got := ResultShapeForSPL(source).Kind; got != opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS {
 			t.Fatalf("%q result kind = %v, want statistics", source, got)
 		}
 	}
@@ -53,7 +53,7 @@ func TestProgressProjectsSharedExactCountersAndTiming(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.GetPhase() != opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_COMPLETE ||
+	if got.GetPhase() != opensplunk.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_COMPLETE ||
 		got.GetStateVersion() != job.Version ||
 		got.GetScannedRows() != job.ScannedRows || got.GetScannedBytes() != job.ScannedBytes ||
 		got.GetProducedRows() != job.RowCount || got.GetResultBytes() != job.ResultBytes ||
@@ -69,11 +69,11 @@ func TestProgressProjectsSharedExactCountersAndTiming(t *testing.T) {
 func TestProgressDecodesLegacyWireWithoutStateVersion(t *testing.T) {
 	t.Parallel()
 
-	var got opensplunkv1.SearchProgress
+	var got opensplunk.SearchProgress
 	if err := proto.Unmarshal([]byte{0x08, 0x05}, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.GetPhase() != opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_EXECUTING ||
+	if got.GetPhase() != opensplunk.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_EXECUTING ||
 		got.GetStateVersion() != 0 {
 		t.Fatalf("legacy progress = %+v", &got)
 	}
@@ -163,15 +163,15 @@ func TestSourceMapsEveryOriginAndRejectsInvalidShapes(t *testing.T) {
 	tests := []struct {
 		name   string
 		source searchjobs.JobSource
-		origin opensplunkv1.SearchJobOrigin
+		origin opensplunk.SearchJobOrigin
 		id     string
 	}{
-		{name: "legacy zero value", origin: opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_AD_HOC},
-		{name: "ad hoc", source: searchjobs.JobSource{Origin: searchjobs.JobOriginAdHoc}, origin: opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_AD_HOC},
-		{name: "saved search", source: searchjobs.JobSource{Origin: searchjobs.JobOriginSavedSearch, ObjectID: "saved"}, origin: opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH, id: "saved"},
-		{name: "history", source: searchjobs.JobSource{Origin: searchjobs.JobOriginHistoryRerun, ObjectID: "history"}, origin: opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN, id: "history"},
-		{name: "dashboard", source: searchjobs.JobSource{Origin: searchjobs.JobOriginDashboard, ObjectID: "dashboard"}, origin: opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_DASHBOARD, id: "dashboard"},
-		{name: "api", source: searchjobs.JobSource{Origin: searchjobs.JobOriginAPI}, origin: opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_API},
+		{name: "legacy zero value", origin: opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_AD_HOC},
+		{name: "ad hoc", source: searchjobs.JobSource{Origin: searchjobs.JobOriginAdHoc}, origin: opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_AD_HOC},
+		{name: "saved search", source: searchjobs.JobSource{Origin: searchjobs.JobOriginSavedSearch, ObjectID: "saved"}, origin: opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH, id: "saved"},
+		{name: "history", source: searchjobs.JobSource{Origin: searchjobs.JobOriginHistoryRerun, ObjectID: "history"}, origin: opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN, id: "history"},
+		{name: "dashboard", source: searchjobs.JobSource{Origin: searchjobs.JobOriginDashboard, ObjectID: "dashboard"}, origin: opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_DASHBOARD, id: "dashboard"},
+		{name: "api", source: searchjobs.JobSource{Origin: searchjobs.JobOriginAPI}, origin: opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_API},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -183,21 +183,21 @@ func TestSourceMapsEveryOriginAndRejectsInvalidShapes(t *testing.T) {
 			if got.GetOrigin() != test.origin {
 				t.Fatalf("origin = %v, want %v", got.GetOrigin(), test.origin)
 			}
-			if (got.SavedSearchId != nil) != (test.origin == opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH) ||
-				(got.HistorySearchId != nil) != (test.origin == opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN) ||
-				(got.DashboardId != nil) != (test.origin == opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_DASHBOARD) {
+			if (got.SavedSearchId != nil) != (test.origin == opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH) ||
+				(got.HistorySearchId != nil) != (test.origin == opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN) ||
+				(got.DashboardId != nil) != (test.origin == opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_DASHBOARD) {
 				t.Fatalf("source pointer shape = %+v", got)
 			}
 			switch test.origin {
-			case opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH:
+			case opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH:
 				if got.GetSavedSearchId() != test.id {
 					t.Fatalf("saved-search ID = %q, want %q", got.GetSavedSearchId(), test.id)
 				}
-			case opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN:
+			case opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN:
 				if got.GetHistorySearchId() != test.id {
 					t.Fatalf("history ID = %q, want %q", got.GetHistorySearchId(), test.id)
 				}
-			case opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_DASHBOARD:
+			case opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_DASHBOARD:
 				if got.GetDashboardId() != test.id {
 					t.Fatalf("dashboard ID = %q, want %q", got.GetDashboardId(), test.id)
 				}

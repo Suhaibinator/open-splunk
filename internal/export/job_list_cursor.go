@@ -42,7 +42,7 @@ func exportListFilterHash(
 	request normalizedExportListRequest,
 ) (string, error) {
 	payload, err := json.Marshal(exportListFilterFingerprint{
-		Version:     1,
+		Version:     exportListCursorVersion,
 		TenantID:    access.TenantID,
 		OwnerID:     access.OwnerID,
 		States:      request.states,

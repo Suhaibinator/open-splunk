@@ -7,7 +7,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
@@ -296,7 +296,7 @@ func validInspectionKnowledgeStage(
 
 func validInspectionKnowledgeBinding(
 	objects []RedactedObjectProvenance,
-	summary *opensplunkv1.KnowledgeSnapshotSummary,
+	summary *opensplunk.KnowledgeSnapshotSummary,
 ) bool {
 	if summary == nil {
 		return len(objects) == 0

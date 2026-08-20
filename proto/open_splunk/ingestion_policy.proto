@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package open_splunk;
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk;opensplunk";
+
+// IngestionRateLimits configures independently optional event and encoded-byte
+// rates. A zero or omitted field leaves that dimension unlimited.
+message IngestionRateLimits {
+  optional uint64 max_events_per_second = 1;
+  optional uint64 max_uncompressed_bytes_per_second = 2;
+}

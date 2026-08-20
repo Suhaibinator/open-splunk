@@ -10,6 +10,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/Suhaibinator/open-splunk/internal/buildinfo"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/protocolid"
 )
@@ -70,10 +71,13 @@ func PrepareClaim(request ClaimRequest) (PreparedClaim, error) {
 		value   string
 		maximum int
 	}{
-		{"collector version", request.Hello.CollectorVersion, maximumCollectorVersionBytes},
+		{"source revision", request.Hello.SourceRevision, maximumSourceRevisionBytes},
 		{"hostname", request.Hello.Hostname, maximumHostnameBytes},
 		{"operating system", request.Hello.OperatingSystem, maximumOperatingSystemBytes},
 		{"architecture", request.Hello.Architecture, maximumArchitectureBytes},
+	}
+	if _, err := buildinfo.Parse(request.Hello.SourceRevision); err != nil {
+		return PreparedClaim{}, invalid("collector source revision is invalid")
 	}
 	aggregateBytes := 0
 	for _, field := range metadata {
@@ -122,9 +126,7 @@ func PrepareClaim(request ClaimRequest) (PreparedClaim, error) {
 			receivedAt:  receivedAt,
 			hello: Hello{
 				InstanceID:                    request.Hello.InstanceID,
-				ProtocolMajor:                 request.Hello.ProtocolMajor,
-				ProtocolMinor:                 request.Hello.ProtocolMinor,
-				CollectorVersion:              request.Hello.CollectorVersion,
+				SourceRevision:                request.Hello.SourceRevision,
 				Hostname:                      request.Hello.Hostname,
 				OperatingSystem:               request.Hello.OperatingSystem,
 				Architecture:                  request.Hello.Architecture,

@@ -10,7 +10,7 @@ import (
 	"github.com/Suhaibinator/SRouter/pkg/codec"
 	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"google.golang.org/protobuf/proto"
 )
@@ -28,9 +28,9 @@ func (handler *apiHandler) auditEventRoutes(
 ) []protobufRouteDefinition {
 	return []protobufRouteDefinition{
 		newForwardCompatibleProtoRoute[
-			*opensplunkv1.ListAuditEventsRequest,
+			*opensplunk.ListAuditEventsRequest,
 			*serializedAuditEventListResponse](router.RouteConfig[
-			*opensplunkv1.ListAuditEventsRequest,
+			*opensplunk.ListAuditEventsRequest,
 			*serializedAuditEventListResponse,
 		]{
 			Path:       auditEventsListRoute,
@@ -48,7 +48,7 @@ func (handler *apiHandler) auditEventRoutes(
 
 func (handler *apiHandler) listAuditEvents(
 	request *http.Request,
-	input *opensplunkv1.ListAuditEventsRequest,
+	input *opensplunk.ListAuditEventsRequest,
 ) (*serializedAuditEventListResponse, error) {
 	tenantID, err := handler.administratorAuditTenantAccess(request)
 	if err != nil {
@@ -115,7 +115,7 @@ func (handler *apiHandler) administratorAuditTenantAccess(
 }
 
 func (handler *apiHandler) auditListRequest(
-	input *opensplunkv1.ListAuditEventsRequest,
+	input *opensplunk.ListAuditEventsRequest,
 ) (audit.ListRequest, error) {
 	if input == nil || len(input.ProtoReflect().GetUnknown()) != 0 {
 		return audit.ListRequest{}, badRequestError(
@@ -196,11 +196,11 @@ func auditListPageToProto(
 	tenantID string,
 	request audit.ListRequest,
 	page audit.ListPage,
-) (*opensplunkv1.ListAuditEventsResponse, error) {
+) (*opensplunk.ListAuditEventsResponse, error) {
 	if len(page.Events) > int(request.PageSize) {
 		return nil, errors.New("audit event service returned too many rows")
 	}
-	events := make([]*opensplunkv1.AuditEvent, len(page.Events))
+	events := make([]*opensplunk.AuditEvent, len(page.Events))
 	var previous uint64
 	for index, event := range page.Events {
 		if index > 0 && event.Sequence >= previous {
@@ -239,7 +239,7 @@ func auditListPageToProto(
 	if err != nil {
 		return nil, err
 	}
-	return &opensplunkv1.ListAuditEventsResponse{
+	return &opensplunk.ListAuditEventsResponse{
 		AuditEvents: events,
 		Page:        metadata,
 	}, nil
@@ -259,7 +259,7 @@ func auditEventMatchesListRequest(event audit.Event, request audit.ListRequest) 
 func auditEventToProto(
 	event audit.Event,
 	expectedTenantID string,
-) (*opensplunkv1.AuditEvent, error) {
+) (*opensplunk.AuditEvent, error) {
 	if err := event.ValidateForTenant(expectedTenantID); err != nil {
 		return nil, errors.New("audit event service returned an invalid event")
 	}
@@ -283,7 +283,7 @@ func auditEventToProto(
 	if !ok {
 		return nil, errors.New("audit event service returned an invalid target")
 	}
-	message := &opensplunkv1.AuditEvent{
+	message := &opensplunk.AuditEvent{
 		Sequence:      event.Sequence,
 		OccurredAt:    occurredAt,
 		ActorKind:     actorKind,
@@ -314,185 +314,185 @@ func auditEventToProto(
 
 func auditKnowledgeObjectTypeToProto(
 	value audit.KnowledgeObjectType,
-) (opensplunkv1.KnowledgeObjectType, bool) {
+) (opensplunk.KnowledgeObjectType, bool) {
 	switch value {
 	case audit.KnowledgeObjectTypeFieldExtraction:
-		return opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION, true
+		return opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION, true
 	case audit.KnowledgeObjectTypeFieldAlias:
-		return opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS, true
+		return opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS, true
 	case audit.KnowledgeObjectTypeCalculatedField:
-		return opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD, true
+		return opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD, true
 	default:
-		return opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_UNSPECIFIED, false
+		return opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_UNSPECIFIED, false
 	}
 }
 
 func auditKnowledgeSharingScopeToProto(
 	value audit.KnowledgeSharingScope,
-) (opensplunkv1.SharingScope, bool) {
+) (opensplunk.SharingScope, bool) {
 	switch value {
 	case audit.KnowledgeSharingScopePrivate:
-		return opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE, true
+		return opensplunk.SharingScope_SHARING_SCOPE_PRIVATE, true
 	case audit.KnowledgeSharingScopeApp:
-		return opensplunkv1.SharingScope_SHARING_SCOPE_APP, true
+		return opensplunk.SharingScope_SHARING_SCOPE_APP, true
 	case audit.KnowledgeSharingScopeGlobal:
-		return opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL, true
+		return opensplunk.SharingScope_SHARING_SCOPE_GLOBAL, true
 	default:
-		return opensplunkv1.SharingScope_SHARING_SCOPE_UNSPECIFIED, false
+		return opensplunk.SharingScope_SHARING_SCOPE_UNSPECIFIED, false
 	}
 }
 
 func auditActorRoleToProto(
 	value audit.ActorRole,
-) (opensplunkv1.AuditActorRole, bool) {
+) (opensplunk.AuditActorRole, bool) {
 	switch value {
 	case audit.ActorRoleSystem:
-		return opensplunkv1.AuditActorRole_AUDIT_ACTOR_ROLE_SYSTEM, true
+		return opensplunk.AuditActorRole_AUDIT_ACTOR_ROLE_SYSTEM, true
 	case audit.ActorRoleUser:
-		return opensplunkv1.AuditActorRole_AUDIT_ACTOR_ROLE_USER, true
+		return opensplunk.AuditActorRole_AUDIT_ACTOR_ROLE_USER, true
 	case audit.ActorRoleAdministrator:
-		return opensplunkv1.AuditActorRole_AUDIT_ACTOR_ROLE_ADMINISTRATOR, true
+		return opensplunk.AuditActorRole_AUDIT_ACTOR_ROLE_ADMINISTRATOR, true
 	default:
-		return opensplunkv1.AuditActorRole_AUDIT_ACTOR_ROLE_UNSPECIFIED, false
+		return opensplunk.AuditActorRole_AUDIT_ACTOR_ROLE_UNSPECIFIED, false
 	}
 }
 
 func auditActorKindToProto(
 	value audit.ActorKind,
-) (opensplunkv1.AuditActorKind, bool) {
+) (opensplunk.AuditActorKind, bool) {
 	switch value {
 	case audit.ActorKindSystem:
-		return opensplunkv1.AuditActorKind_AUDIT_ACTOR_KIND_SYSTEM, true
+		return opensplunk.AuditActorKind_AUDIT_ACTOR_KIND_SYSTEM, true
 	case audit.ActorKindBrowser:
-		return opensplunkv1.AuditActorKind_AUDIT_ACTOR_KIND_BROWSER, true
+		return opensplunk.AuditActorKind_AUDIT_ACTOR_KIND_BROWSER, true
 	default:
-		return opensplunkv1.AuditActorKind_AUDIT_ACTOR_KIND_UNSPECIFIED, false
+		return opensplunk.AuditActorKind_AUDIT_ACTOR_KIND_UNSPECIFIED, false
 	}
 }
 
-func auditActionFromProto(value opensplunkv1.AuditAction) (audit.Action, bool) {
+func auditActionFromProto(value opensplunk.AuditAction) (audit.Action, bool) {
 	switch value {
-	case opensplunkv1.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_CREATE:
+	case opensplunk.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_CREATE:
 		return audit.ActionIngestionTokenCreate, true
-	case opensplunkv1.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_UPDATE:
+	case opensplunk.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_UPDATE:
 		return audit.ActionIngestionTokenUpdate, true
-	case opensplunkv1.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_REVOKE:
+	case opensplunk.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_REVOKE:
 		return audit.ActionIngestionTokenRevoke, true
-	case opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_CREATE:
+	case opensplunk.AuditAction_AUDIT_ACTION_INDEX_CREATE:
 		return audit.ActionIndexCreate, true
-	case opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_UPDATE:
+	case opensplunk.AuditAction_AUDIT_ACTION_INDEX_UPDATE:
 		return audit.ActionIndexUpdate, true
-	case opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_ACTIVATE:
+	case opensplunk.AuditAction_AUDIT_ACTION_INDEX_ACTIVATE:
 		return audit.ActionIndexActivate, true
-	case opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_ARCHIVE:
+	case opensplunk.AuditAction_AUDIT_ACTION_INDEX_ARCHIVE:
 		return audit.ActionIndexArchive, true
-	case opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_DELETE_KEEP_DATA:
+	case opensplunk.AuditAction_AUDIT_ACTION_INDEX_DELETE_KEEP_DATA:
 		return audit.ActionIndexDeleteKeepData, true
-	case opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_DELETE_DATA:
+	case opensplunk.AuditAction_AUDIT_ACTION_INDEX_DELETE_DATA:
 		return audit.ActionIndexDeleteData, true
-	case opensplunkv1.AuditAction_AUDIT_ACTION_APP_CREATE:
+	case opensplunk.AuditAction_AUDIT_ACTION_APP_CREATE:
 		return audit.ActionAppCreate, true
-	case opensplunkv1.AuditAction_AUDIT_ACTION_APP_UPDATE:
+	case opensplunk.AuditAction_AUDIT_ACTION_APP_UPDATE:
 		return audit.ActionAppUpdate, true
-	case opensplunkv1.AuditAction_AUDIT_ACTION_APP_ACTIVATE:
+	case opensplunk.AuditAction_AUDIT_ACTION_APP_ACTIVATE:
 		return audit.ActionAppActivate, true
-	case opensplunkv1.AuditAction_AUDIT_ACTION_APP_ARCHIVE:
+	case opensplunk.AuditAction_AUDIT_ACTION_APP_ARCHIVE:
 		return audit.ActionAppArchive, true
-	case opensplunkv1.AuditAction_AUDIT_ACTION_APP_DELETE:
+	case opensplunk.AuditAction_AUDIT_ACTION_APP_DELETE:
 		return audit.ActionAppDelete, true
-	case opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_CREATE:
+	case opensplunk.AuditAction_AUDIT_ACTION_SAVED_SEARCH_CREATE:
 		return audit.ActionSavedSearchCreate, true
-	case opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_UPDATE:
+	case opensplunk.AuditAction_AUDIT_ACTION_SAVED_SEARCH_UPDATE:
 		return audit.ActionSavedSearchUpdate, true
-	case opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_DUPLICATE:
+	case opensplunk.AuditAction_AUDIT_ACTION_SAVED_SEARCH_DUPLICATE:
 		return audit.ActionSavedSearchDuplicate, true
-	case opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_DELETE:
+	case opensplunk.AuditAction_AUDIT_ACTION_SAVED_SEARCH_DELETE:
 		return audit.ActionSavedSearchDelete, true
-	case opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_CREATE:
+	case opensplunk.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_CREATE:
 		return audit.ActionKnowledgeObjectCreate, true
-	case opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_UPDATE:
+	case opensplunk.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_UPDATE:
 		return audit.ActionKnowledgeObjectUpdate, true
-	case opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_SCOPE_CHANGE:
+	case opensplunk.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_SCOPE_CHANGE:
 		return audit.ActionKnowledgeObjectScopeChange, true
-	case opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_ENABLE:
+	case opensplunk.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_ENABLE:
 		return audit.ActionKnowledgeObjectEnable, true
-	case opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_DISABLE:
+	case opensplunk.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_DISABLE:
 		return audit.ActionKnowledgeObjectDisable, true
-	case opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_DELETE:
+	case opensplunk.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_DELETE:
 		return audit.ActionKnowledgeObjectDelete, true
 	default:
 		return "", false
 	}
 }
 
-func auditActionToProto(value audit.Action) (opensplunkv1.AuditAction, bool) {
+func auditActionToProto(value audit.Action) (opensplunk.AuditAction, bool) {
 	switch value {
 	case audit.ActionIngestionTokenCreate:
-		return opensplunkv1.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_CREATE, true
+		return opensplunk.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_CREATE, true
 	case audit.ActionIngestionTokenUpdate:
-		return opensplunkv1.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_UPDATE, true
+		return opensplunk.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_UPDATE, true
 	case audit.ActionIngestionTokenRevoke:
-		return opensplunkv1.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_REVOKE, true
+		return opensplunk.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_REVOKE, true
 	case audit.ActionIndexCreate:
-		return opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_CREATE, true
+		return opensplunk.AuditAction_AUDIT_ACTION_INDEX_CREATE, true
 	case audit.ActionIndexUpdate:
-		return opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_UPDATE, true
+		return opensplunk.AuditAction_AUDIT_ACTION_INDEX_UPDATE, true
 	case audit.ActionIndexActivate:
-		return opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_ACTIVATE, true
+		return opensplunk.AuditAction_AUDIT_ACTION_INDEX_ACTIVATE, true
 	case audit.ActionIndexArchive:
-		return opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_ARCHIVE, true
+		return opensplunk.AuditAction_AUDIT_ACTION_INDEX_ARCHIVE, true
 	case audit.ActionIndexDeleteKeepData:
-		return opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_DELETE_KEEP_DATA, true
+		return opensplunk.AuditAction_AUDIT_ACTION_INDEX_DELETE_KEEP_DATA, true
 	case audit.ActionIndexDeleteData:
-		return opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_DELETE_DATA, true
+		return opensplunk.AuditAction_AUDIT_ACTION_INDEX_DELETE_DATA, true
 	case audit.ActionAppCreate:
-		return opensplunkv1.AuditAction_AUDIT_ACTION_APP_CREATE, true
+		return opensplunk.AuditAction_AUDIT_ACTION_APP_CREATE, true
 	case audit.ActionAppUpdate:
-		return opensplunkv1.AuditAction_AUDIT_ACTION_APP_UPDATE, true
+		return opensplunk.AuditAction_AUDIT_ACTION_APP_UPDATE, true
 	case audit.ActionAppActivate:
-		return opensplunkv1.AuditAction_AUDIT_ACTION_APP_ACTIVATE, true
+		return opensplunk.AuditAction_AUDIT_ACTION_APP_ACTIVATE, true
 	case audit.ActionAppArchive:
-		return opensplunkv1.AuditAction_AUDIT_ACTION_APP_ARCHIVE, true
+		return opensplunk.AuditAction_AUDIT_ACTION_APP_ARCHIVE, true
 	case audit.ActionAppDelete:
-		return opensplunkv1.AuditAction_AUDIT_ACTION_APP_DELETE, true
+		return opensplunk.AuditAction_AUDIT_ACTION_APP_DELETE, true
 	case audit.ActionSavedSearchCreate:
-		return opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_CREATE, true
+		return opensplunk.AuditAction_AUDIT_ACTION_SAVED_SEARCH_CREATE, true
 	case audit.ActionSavedSearchUpdate:
-		return opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_UPDATE, true
+		return opensplunk.AuditAction_AUDIT_ACTION_SAVED_SEARCH_UPDATE, true
 	case audit.ActionSavedSearchDuplicate:
-		return opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_DUPLICATE, true
+		return opensplunk.AuditAction_AUDIT_ACTION_SAVED_SEARCH_DUPLICATE, true
 	case audit.ActionSavedSearchDelete:
-		return opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_DELETE, true
+		return opensplunk.AuditAction_AUDIT_ACTION_SAVED_SEARCH_DELETE, true
 	case audit.ActionKnowledgeObjectCreate:
-		return opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_CREATE, true
+		return opensplunk.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_CREATE, true
 	case audit.ActionKnowledgeObjectUpdate:
-		return opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_UPDATE, true
+		return opensplunk.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_UPDATE, true
 	case audit.ActionKnowledgeObjectScopeChange:
-		return opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_SCOPE_CHANGE, true
+		return opensplunk.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_SCOPE_CHANGE, true
 	case audit.ActionKnowledgeObjectEnable:
-		return opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_ENABLE, true
+		return opensplunk.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_ENABLE, true
 	case audit.ActionKnowledgeObjectDisable:
-		return opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_DISABLE, true
+		return opensplunk.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_DISABLE, true
 	case audit.ActionKnowledgeObjectDelete:
-		return opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_DELETE, true
+		return opensplunk.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_DELETE, true
 	default:
-		return opensplunkv1.AuditAction_AUDIT_ACTION_UNSPECIFIED, false
+		return opensplunk.AuditAction_AUDIT_ACTION_UNSPECIFIED, false
 	}
 }
 
 func auditTargetKindFromProto(
-	value opensplunkv1.AuditTargetKind,
+	value opensplunk.AuditTargetKind,
 ) (audit.TargetKind, bool) {
 	switch value {
-	case opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_INGESTION_TOKEN:
+	case opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_INGESTION_TOKEN:
 		return audit.TargetKindIngestionToken, true
-	case opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_INDEX:
+	case opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_INDEX:
 		return audit.TargetKindIndex, true
-	case opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_APP:
+	case opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_APP:
 		return audit.TargetKindApp, true
-	case opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_SAVED_SEARCH:
+	case opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_SAVED_SEARCH:
 		return audit.TargetKindSavedSearch, true
-	case opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT:
+	case opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT:
 		return audit.TargetKindKnowledgeObject, true
 	default:
 		return "", false
@@ -501,20 +501,20 @@ func auditTargetKindFromProto(
 
 func auditTargetKindToProto(
 	value audit.TargetKind,
-) (opensplunkv1.AuditTargetKind, bool) {
+) (opensplunk.AuditTargetKind, bool) {
 	switch value {
 	case audit.TargetKindIngestionToken:
-		return opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_INGESTION_TOKEN, true
+		return opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_INGESTION_TOKEN, true
 	case audit.TargetKindIndex:
-		return opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_INDEX, true
+		return opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_INDEX, true
 	case audit.TargetKindApp:
-		return opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_APP, true
+		return opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_APP, true
 	case audit.TargetKindSavedSearch:
-		return opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_SAVED_SEARCH, true
+		return opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_SAVED_SEARCH, true
 	case audit.TargetKindKnowledgeObject:
-		return opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT, true
+		return opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT, true
 	default:
-		return opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_UNSPECIFIED, false
+		return opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_UNSPECIFIED, false
 	}
 }
 
@@ -541,18 +541,18 @@ func auditListContextError(ctx context.Context) error {
 	return canceledRequestError(ctx, "audit event request was canceled")
 }
 
-type serializedAuditEventListResponse = boundedProtoResponse[*opensplunkv1.ListAuditEventsResponse]
+type serializedAuditEventListResponse = boundedProtoResponse[*opensplunk.ListAuditEventsResponse]
 
 type serializedAuditEventListCodec = boundedProtoCodec[
-	*opensplunkv1.ListAuditEventsRequest,
-	*opensplunkv1.ListAuditEventsResponse,
+	*opensplunk.ListAuditEventsRequest,
+	*opensplunk.ListAuditEventsResponse,
 ]
 
 func newSerializedAuditEventListCodec() *serializedAuditEventListCodec {
 	return newBoundedProtoCodec(
 		codec.NewProtoCodec[
-			*opensplunkv1.ListAuditEventsRequest,
-			*opensplunkv1.ListAuditEventsResponse,
+			*opensplunk.ListAuditEventsRequest,
+			*opensplunk.ListAuditEventsResponse,
 		](),
 		boundedProtoCodecOptions{
 			stateError:   "audit event serialization state is invalid",

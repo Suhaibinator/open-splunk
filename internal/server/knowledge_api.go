@@ -12,7 +12,7 @@ import (
 
 	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeattemptaudit"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
@@ -33,16 +33,16 @@ const (
 	knowledgeObjectsSetStateRoute     = "/knowledge/objects/set-state"
 	knowledgeObjectsDeleteRoute       = "/knowledge/objects/delete"
 
-	knowledgeObjectsCreatePath       = apiV1PathPrefix + knowledgeObjectsCreateRoute
-	knowledgeObjectsGetPath          = apiV1PathPrefix + knowledgeObjectsGetRoute
-	knowledgeObjectsListPath         = apiV1PathPrefix + knowledgeObjectsListRoute
-	knowledgeObjectsDependenciesPath = apiV1PathPrefix + knowledgeObjectsDependenciesRoute
-	knowledgeObjectsDependentsPath   = apiV1PathPrefix + knowledgeObjectsDependentsRoute
-	knowledgeObjectsValidatePath     = apiV1PathPrefix + knowledgeObjectsValidateRoute
-	knowledgeObjectsPreviewPath      = apiV1PathPrefix + knowledgeObjectsPreviewRoute
-	knowledgeObjectsUpdatePath       = apiV1PathPrefix + knowledgeObjectsUpdateRoute
-	knowledgeObjectsSetStatePath     = apiV1PathPrefix + knowledgeObjectsSetStateRoute
-	knowledgeObjectsDeletePath       = apiV1PathPrefix + knowledgeObjectsDeleteRoute
+	knowledgeObjectsCreatePath       = apiPathPrefix + knowledgeObjectsCreateRoute
+	knowledgeObjectsGetPath          = apiPathPrefix + knowledgeObjectsGetRoute
+	knowledgeObjectsListPath         = apiPathPrefix + knowledgeObjectsListRoute
+	knowledgeObjectsDependenciesPath = apiPathPrefix + knowledgeObjectsDependenciesRoute
+	knowledgeObjectsDependentsPath   = apiPathPrefix + knowledgeObjectsDependentsRoute
+	knowledgeObjectsValidatePath     = apiPathPrefix + knowledgeObjectsValidateRoute
+	knowledgeObjectsPreviewPath      = apiPathPrefix + knowledgeObjectsPreviewRoute
+	knowledgeObjectsUpdatePath       = apiPathPrefix + knowledgeObjectsUpdateRoute
+	knowledgeObjectsSetStatePath     = apiPathPrefix + knowledgeObjectsSetStateRoute
+	knowledgeObjectsDeletePath       = apiPathPrefix + knowledgeObjectsDeleteRoute
 
 	maximumKnowledgeApps                 = control.MaximumAppsPerTenant
 	maximumKnowledgeSmallRequestBytes    = int64(16 << 10)
@@ -95,23 +95,23 @@ type KnowledgeWriter interface {
 	Create(
 		context.Context,
 		knowledgecatalog.WriteScope,
-		*opensplunkv1.CreateKnowledgeObjectRequest,
-	) (*opensplunkv1.CreateKnowledgeObjectResponse, error)
+		*opensplunk.CreateKnowledgeObjectRequest,
+	) (*opensplunk.CreateKnowledgeObjectResponse, error)
 	Update(
 		context.Context,
 		knowledgecatalog.WriteScope,
-		*opensplunkv1.UpdateKnowledgeObjectRequest,
-	) (*opensplunkv1.UpdateKnowledgeObjectResponse, error)
+		*opensplunk.UpdateKnowledgeObjectRequest,
+	) (*opensplunk.UpdateKnowledgeObjectResponse, error)
 	SetState(
 		context.Context,
 		knowledgecatalog.WriteScope,
-		*opensplunkv1.SetKnowledgeObjectStateRequest,
-	) (*opensplunkv1.SetKnowledgeObjectStateResponse, error)
+		*opensplunk.SetKnowledgeObjectStateRequest,
+	) (*opensplunk.SetKnowledgeObjectStateResponse, error)
 	Delete(
 		context.Context,
 		knowledgecatalog.WriteScope,
-		*opensplunkv1.DeleteKnowledgeObjectRequest,
-	) (*opensplunkv1.DeleteKnowledgeObjectResponse, error)
+		*opensplunk.DeleteKnowledgeObjectRequest,
+	) (*opensplunk.DeleteKnowledgeObjectResponse, error)
 }
 
 var _ KnowledgeWriter = (*knowledgecatalog.Writer)(nil)
@@ -144,55 +144,55 @@ func (handler *apiHandler) knowledgeManagementRoutes(
 	noAuth router.AuthLevel,
 ) []protobufRouteDefinition {
 	routes := []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute[*opensplunkv1.CreateKnowledgeObjectRequest, *serializedCreateKnowledgeObjectResponse](router.RouteConfig[*opensplunkv1.CreateKnowledgeObjectRequest, *serializedCreateKnowledgeObjectResponse]{
+		newForwardCompatibleProtoRoute[*opensplunk.CreateKnowledgeObjectRequest, *serializedCreateKnowledgeObjectResponse](router.RouteConfig[*opensplunk.CreateKnowledgeObjectRequest, *serializedCreateKnowledgeObjectResponse]{
 			Path: knowledgeObjectsCreateRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedCreateKnowledgeObjectCodec(), Handler: handler.createKnowledgeObject,
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeMutationRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunkv1.GetKnowledgeObjectRequest, *serializedGetKnowledgeObjectResponse](router.RouteConfig[*opensplunkv1.GetKnowledgeObjectRequest, *serializedGetKnowledgeObjectResponse]{
+		newForwardCompatibleProtoRoute[*opensplunk.GetKnowledgeObjectRequest, *serializedGetKnowledgeObjectResponse](router.RouteConfig[*opensplunk.GetKnowledgeObjectRequest, *serializedGetKnowledgeObjectResponse]{
 			Path: knowledgeObjectsGetRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedGetKnowledgeObjectCodec(), Handler: handler.getKnowledgeObject,
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunkv1.ListKnowledgeObjectsRequest, *serializedListKnowledgeObjectsResponse](router.RouteConfig[*opensplunkv1.ListKnowledgeObjectsRequest, *serializedListKnowledgeObjectsResponse]{
+		newForwardCompatibleProtoRoute[*opensplunk.ListKnowledgeObjectsRequest, *serializedListKnowledgeObjectsResponse](router.RouteConfig[*opensplunk.ListKnowledgeObjectsRequest, *serializedListKnowledgeObjectsResponse]{
 			Path: knowledgeObjectsListRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedListKnowledgeObjectsCodec(), Handler: handler.listKnowledgeObjects,
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunkv1.ListKnowledgeObjectDependenciesRequest, *serializedListKnowledgeObjectDependenciesResponse](router.RouteConfig[*opensplunkv1.ListKnowledgeObjectDependenciesRequest, *serializedListKnowledgeObjectDependenciesResponse]{
+		newForwardCompatibleProtoRoute[*opensplunk.ListKnowledgeObjectDependenciesRequest, *serializedListKnowledgeObjectDependenciesResponse](router.RouteConfig[*opensplunk.ListKnowledgeObjectDependenciesRequest, *serializedListKnowledgeObjectDependenciesResponse]{
 			Path: knowledgeObjectsDependenciesRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedListKnowledgeObjectDependenciesCodec(), Handler: handler.listKnowledgeObjectDependencies,
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunkv1.ListKnowledgeObjectDependentsRequest, *serializedListKnowledgeObjectDependentsResponse](router.RouteConfig[*opensplunkv1.ListKnowledgeObjectDependentsRequest, *serializedListKnowledgeObjectDependentsResponse]{
+		newForwardCompatibleProtoRoute[*opensplunk.ListKnowledgeObjectDependentsRequest, *serializedListKnowledgeObjectDependentsResponse](router.RouteConfig[*opensplunk.ListKnowledgeObjectDependentsRequest, *serializedListKnowledgeObjectDependentsResponse]{
 			Path: knowledgeObjectsDependentsRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedListKnowledgeObjectDependentsCodec(), Handler: handler.listKnowledgeObjectDependents,
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunkv1.ValidateKnowledgeObjectRequest, *serializedValidateKnowledgeObjectResponse](router.RouteConfig[*opensplunkv1.ValidateKnowledgeObjectRequest, *serializedValidateKnowledgeObjectResponse]{
+		newForwardCompatibleProtoRoute[*opensplunk.ValidateKnowledgeObjectRequest, *serializedValidateKnowledgeObjectResponse](router.RouteConfig[*opensplunk.ValidateKnowledgeObjectRequest, *serializedValidateKnowledgeObjectResponse]{
 			Path: knowledgeObjectsValidateRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newValidateKnowledgeObjectCodec(), Handler: handler.validateKnowledgeObject,
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeMutationRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunkv1.UpdateKnowledgeObjectRequest, *serializedUpdateKnowledgeObjectResponse](router.RouteConfig[*opensplunkv1.UpdateKnowledgeObjectRequest, *serializedUpdateKnowledgeObjectResponse]{
+		newForwardCompatibleProtoRoute[*opensplunk.UpdateKnowledgeObjectRequest, *serializedUpdateKnowledgeObjectResponse](router.RouteConfig[*opensplunk.UpdateKnowledgeObjectRequest, *serializedUpdateKnowledgeObjectResponse]{
 			Path: knowledgeObjectsUpdateRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedUpdateKnowledgeObjectCodec(), Handler: handler.updateKnowledgeObject,
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeMutationRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunkv1.SetKnowledgeObjectStateRequest, *serializedSetKnowledgeObjectStateResponse](router.RouteConfig[*opensplunkv1.SetKnowledgeObjectStateRequest, *serializedSetKnowledgeObjectStateResponse]{
+		newForwardCompatibleProtoRoute[*opensplunk.SetKnowledgeObjectStateRequest, *serializedSetKnowledgeObjectStateResponse](router.RouteConfig[*opensplunk.SetKnowledgeObjectStateRequest, *serializedSetKnowledgeObjectStateResponse]{
 			Path: knowledgeObjectsSetStateRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedSetKnowledgeObjectStateCodec(), Handler: handler.setKnowledgeObjectState,
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunkv1.DeleteKnowledgeObjectRequest, *serializedDeleteKnowledgeObjectResponse](router.RouteConfig[*opensplunkv1.DeleteKnowledgeObjectRequest, *serializedDeleteKnowledgeObjectResponse]{
+		newForwardCompatibleProtoRoute[*opensplunk.DeleteKnowledgeObjectRequest, *serializedDeleteKnowledgeObjectResponse](router.RouteConfig[*opensplunk.DeleteKnowledgeObjectRequest, *serializedDeleteKnowledgeObjectResponse]{
 			Path: knowledgeObjectsDeleteRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedDeleteKnowledgeObjectCodec(), Handler: handler.deleteKnowledgeObject,
 			SourceType: router.Body,
@@ -202,7 +202,7 @@ func (handler *apiHandler) knowledgeManagementRoutes(
 	if handler.knowledgePreviewConfigured() {
 		routes = append(
 			routes,
-			newForwardCompatibleProtoRoute[*opensplunkv1.PreviewKnowledgeObjectRequest, *serializedPreviewKnowledgeObjectResponse](router.RouteConfig[*opensplunkv1.PreviewKnowledgeObjectRequest, *serializedPreviewKnowledgeObjectResponse]{
+			newForwardCompatibleProtoRoute[*opensplunk.PreviewKnowledgeObjectRequest, *serializedPreviewKnowledgeObjectResponse](router.RouteConfig[*opensplunk.PreviewKnowledgeObjectRequest, *serializedPreviewKnowledgeObjectResponse]{
 				Path: knowledgeObjectsPreviewRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 				Codec: newPreviewKnowledgeObjectRequestCodec(), Handler: handler.previewKnowledgeObject,
 				SourceType: router.Body,
@@ -334,7 +334,7 @@ func (scopes knowledgeScopes) allowsRead(
 
 func (handler *apiHandler) getKnowledgeObject(
 	request *http.Request,
-	input *opensplunkv1.GetKnowledgeObjectRequest,
+	input *opensplunk.GetKnowledgeObjectRequest,
 ) (*serializedGetKnowledgeObjectResponse, error) {
 	submitted, ok := cloneKnowledgeMessage(input)
 	if !ok ||
@@ -426,7 +426,7 @@ func (handler *apiHandler) getKnowledgeObject(
 	}
 	transferred = true
 	return &serializedGetKnowledgeObjectResponse{
-		message: &opensplunkv1.GetKnowledgeObjectResponse{
+		message: &opensplunk.GetKnowledgeObjectResponse{
 			KnowledgeObject: message,
 		},
 		ctx:     request.Context(),
@@ -436,7 +436,7 @@ func (handler *apiHandler) getKnowledgeObject(
 
 func (handler *apiHandler) listKnowledgeObjects(
 	request *http.Request,
-	input *opensplunkv1.ListKnowledgeObjectsRequest,
+	input *opensplunk.ListKnowledgeObjectsRequest,
 ) (*serializedListKnowledgeObjectsResponse, error) {
 	if !knowledgeListRequestPreflight(input) {
 		return nil, handler.rejectKnowledgeRequest(
@@ -542,23 +542,23 @@ func (handler *apiHandler) listKnowledgeObjects(
 
 func (handler *apiHandler) createKnowledgeObject(
 	request *http.Request,
-	input *opensplunkv1.CreateKnowledgeObjectRequest,
+	input *opensplunk.CreateKnowledgeObjectRequest,
 ) (*serializedCreateKnowledgeObjectResponse, error) {
 	return knowledgeMutationResponse(
 		handler,
 		request,
 		input,
-		func(scopes knowledgeScopes, serviceRequest *opensplunkv1.CreateKnowledgeObjectRequest) (*opensplunkv1.CreateKnowledgeObjectResponse, error) {
+		func(scopes knowledgeScopes, serviceRequest *opensplunk.CreateKnowledgeObjectRequest) (*opensplunk.CreateKnowledgeObjectResponse, error) {
 			if handler.knowledgeWriter == nil {
 				return nil, errors.New("knowledge writer is unavailable")
 			}
 			return handler.knowledgeWriter.Create(request.Context(), scopes.write, serviceRequest)
 		},
 		func(
-			response *opensplunkv1.CreateKnowledgeObjectResponse,
-			submitted *opensplunkv1.CreateKnowledgeObjectRequest,
+			response *opensplunk.CreateKnowledgeObjectResponse,
+			submitted *opensplunk.CreateKnowledgeObjectRequest,
 			scopes knowledgeScopes,
-		) (*opensplunkv1.CreateKnowledgeObjectResponse, bool) {
+		) (*opensplunk.CreateKnowledgeObjectResponse, bool) {
 			if response == nil ||
 				!validKnowledgeProtoDefinitionAuthority(response.GetKnowledgeObject()) {
 				return nil, false
@@ -575,7 +575,7 @@ func (handler *apiHandler) createKnowledgeObject(
 			)
 		},
 		func(
-			message *opensplunkv1.CreateKnowledgeObjectResponse,
+			message *opensplunk.CreateKnowledgeObjectResponse,
 			ctx context.Context,
 			release func(),
 		) *serializedCreateKnowledgeObjectResponse {
@@ -590,23 +590,23 @@ func (handler *apiHandler) createKnowledgeObject(
 
 func (handler *apiHandler) updateKnowledgeObject(
 	request *http.Request,
-	input *opensplunkv1.UpdateKnowledgeObjectRequest,
+	input *opensplunk.UpdateKnowledgeObjectRequest,
 ) (*serializedUpdateKnowledgeObjectResponse, error) {
 	return knowledgeMutationResponse(
 		handler,
 		request,
 		input,
-		func(scopes knowledgeScopes, serviceRequest *opensplunkv1.UpdateKnowledgeObjectRequest) (*opensplunkv1.UpdateKnowledgeObjectResponse, error) {
+		func(scopes knowledgeScopes, serviceRequest *opensplunk.UpdateKnowledgeObjectRequest) (*opensplunk.UpdateKnowledgeObjectResponse, error) {
 			if handler.knowledgeWriter == nil {
 				return nil, errors.New("knowledge writer is unavailable")
 			}
 			return handler.knowledgeWriter.Update(request.Context(), scopes.write, serviceRequest)
 		},
 		func(
-			response *opensplunkv1.UpdateKnowledgeObjectResponse,
-			submitted *opensplunkv1.UpdateKnowledgeObjectRequest,
+			response *opensplunk.UpdateKnowledgeObjectResponse,
+			submitted *opensplunk.UpdateKnowledgeObjectRequest,
 			scopes knowledgeScopes,
-		) (*opensplunkv1.UpdateKnowledgeObjectResponse, bool) {
+		) (*opensplunk.UpdateKnowledgeObjectResponse, bool) {
 			if response == nil ||
 				!validKnowledgeProtoDefinitionAuthority(response.GetKnowledgeObject()) {
 				return nil, false
@@ -623,7 +623,7 @@ func (handler *apiHandler) updateKnowledgeObject(
 			)
 		},
 		func(
-			message *opensplunkv1.UpdateKnowledgeObjectResponse,
+			message *opensplunk.UpdateKnowledgeObjectResponse,
 			ctx context.Context,
 			release func(),
 		) *serializedUpdateKnowledgeObjectResponse {
@@ -638,23 +638,23 @@ func (handler *apiHandler) updateKnowledgeObject(
 
 func (handler *apiHandler) setKnowledgeObjectState(
 	request *http.Request,
-	input *opensplunkv1.SetKnowledgeObjectStateRequest,
+	input *opensplunk.SetKnowledgeObjectStateRequest,
 ) (*serializedSetKnowledgeObjectStateResponse, error) {
 	return knowledgeMutationResponse(
 		handler,
 		request,
 		input,
-		func(scopes knowledgeScopes, serviceRequest *opensplunkv1.SetKnowledgeObjectStateRequest) (*opensplunkv1.SetKnowledgeObjectStateResponse, error) {
+		func(scopes knowledgeScopes, serviceRequest *opensplunk.SetKnowledgeObjectStateRequest) (*opensplunk.SetKnowledgeObjectStateResponse, error) {
 			if handler.knowledgeWriter == nil {
 				return nil, errors.New("knowledge writer is unavailable")
 			}
 			return handler.knowledgeWriter.SetState(request.Context(), scopes.write, serviceRequest)
 		},
 		func(
-			response *opensplunkv1.SetKnowledgeObjectStateResponse,
-			submitted *opensplunkv1.SetKnowledgeObjectStateRequest,
+			response *opensplunk.SetKnowledgeObjectStateResponse,
+			submitted *opensplunk.SetKnowledgeObjectStateRequest,
 			scopes knowledgeScopes,
-		) (*opensplunkv1.SetKnowledgeObjectStateResponse, bool) {
+		) (*opensplunk.SetKnowledgeObjectStateResponse, bool) {
 			if response == nil ||
 				!validKnowledgeProtoDefinitionAuthority(response.GetKnowledgeObject()) {
 				return nil, false
@@ -671,7 +671,7 @@ func (handler *apiHandler) setKnowledgeObjectState(
 			)
 		},
 		func(
-			message *opensplunkv1.SetKnowledgeObjectStateResponse,
+			message *opensplunk.SetKnowledgeObjectStateResponse,
 			ctx context.Context,
 			release func(),
 		) *serializedSetKnowledgeObjectStateResponse {
@@ -686,23 +686,23 @@ func (handler *apiHandler) setKnowledgeObjectState(
 
 func (handler *apiHandler) deleteKnowledgeObject(
 	request *http.Request,
-	input *opensplunkv1.DeleteKnowledgeObjectRequest,
+	input *opensplunk.DeleteKnowledgeObjectRequest,
 ) (*serializedDeleteKnowledgeObjectResponse, error) {
 	return knowledgeMutationResponse(
 		handler,
 		request,
 		input,
-		func(scopes knowledgeScopes, serviceRequest *opensplunkv1.DeleteKnowledgeObjectRequest) (*opensplunkv1.DeleteKnowledgeObjectResponse, error) {
+		func(scopes knowledgeScopes, serviceRequest *opensplunk.DeleteKnowledgeObjectRequest) (*opensplunk.DeleteKnowledgeObjectResponse, error) {
 			if handler.knowledgeWriter == nil {
 				return nil, errors.New("knowledge writer is unavailable")
 			}
 			return handler.knowledgeWriter.Delete(request.Context(), scopes.write, serviceRequest)
 		},
 		func(
-			response *opensplunkv1.DeleteKnowledgeObjectResponse,
-			submitted *opensplunkv1.DeleteKnowledgeObjectRequest,
+			response *opensplunk.DeleteKnowledgeObjectResponse,
+			submitted *opensplunk.DeleteKnowledgeObjectRequest,
 			scopes knowledgeScopes,
-		) (*opensplunkv1.DeleteKnowledgeObjectResponse, bool) {
+		) (*opensplunk.DeleteKnowledgeObjectResponse, bool) {
 			cloned, ok := cloneKnowledgeMessageBounded(
 				response,
 				maximumKnowledgeObjectResponseBytes,
@@ -710,7 +710,7 @@ func (handler *apiHandler) deleteKnowledgeObject(
 			return cloned, ok && validKnowledgeDeleteResponse(cloned, submitted, scopes)
 		},
 		func(
-			message *opensplunkv1.DeleteKnowledgeObjectResponse,
+			message *opensplunk.DeleteKnowledgeObjectResponse,
 			ctx context.Context,
 			release func(),
 		) *serializedDeleteKnowledgeObjectResponse {
@@ -826,13 +826,13 @@ func validateKnowledgeMutationRequest[Request proto.Message](
 	request Request,
 ) error {
 	switch typed := any(request).(type) {
-	case *opensplunkv1.CreateKnowledgeObjectRequest:
+	case *opensplunk.CreateKnowledgeObjectRequest:
 		return knowledgecatalog.ValidateCreateKnowledgeObjectRequest(typed)
-	case *opensplunkv1.UpdateKnowledgeObjectRequest:
+	case *opensplunk.UpdateKnowledgeObjectRequest:
 		return knowledgecatalog.ValidateUpdateKnowledgeObjectRequest(typed)
-	case *opensplunkv1.SetKnowledgeObjectStateRequest:
+	case *opensplunk.SetKnowledgeObjectStateRequest:
 		return knowledgecatalog.ValidateSetKnowledgeObjectStateRequest(typed)
-	case *opensplunkv1.DeleteKnowledgeObjectRequest:
+	case *opensplunk.DeleteKnowledgeObjectRequest:
 		return knowledgecatalog.ValidateDeleteKnowledgeObjectRequest(typed)
 	default:
 		return control.ErrInvalidArgument
@@ -844,7 +844,7 @@ func refineKnowledgeMutationAttempt[Request proto.Message](
 	input Request,
 ) error {
 	switch typed := any(input).(type) {
-	case *opensplunkv1.UpdateKnowledgeObjectRequest:
+	case *opensplunk.UpdateKnowledgeObjectRequest:
 		changesScope, err := knowledgecatalog.UpdateChangesSharingScope(
 			typed.GetUpdateMask(),
 		)
@@ -854,11 +854,11 @@ func refineKnowledgeMutationAttempt[Request proto.Message](
 		if changesScope {
 			refineKnowledgeAttempt(request, knowledgeattemptaudit.ActionScopeChange)
 		}
-	case *opensplunkv1.SetKnowledgeObjectStateRequest:
+	case *opensplunk.SetKnowledgeObjectStateRequest:
 		switch typed.GetState() {
-		case opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE:
+		case opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE:
 			refineKnowledgeAttempt(request, knowledgeattemptaudit.ActionEnable)
-		case opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED:
+		case opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED:
 			refineKnowledgeAttempt(request, knowledgeattemptaudit.ActionDisable)
 		}
 	}
@@ -869,10 +869,10 @@ func knowledgeMutationRequiresActivePublication[Request proto.Message](
 	request Request,
 ) bool {
 	switch typed := any(request).(type) {
-	case *opensplunkv1.CreateKnowledgeObjectRequest:
-		return typed.GetInitialState() == opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE
-	case *opensplunkv1.SetKnowledgeObjectStateRequest:
-		return typed.GetState() == opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE
+	case *opensplunk.CreateKnowledgeObjectRequest:
+		return typed.GetInitialState() == opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE
+	case *opensplunk.SetKnowledgeObjectStateRequest:
+		return typed.GetState() == opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE
 	default:
 		return false
 	}
@@ -1065,18 +1065,18 @@ func knowledgeRejectionBindingForMutation[Request proto.Message](
 ) knowledgeRejectionBinding {
 	binding := knowledgeRejectionBinding{scopes: scopes}
 	switch typed := any(request).(type) {
-	case *opensplunkv1.CreateKnowledgeObjectRequest:
+	case *opensplunk.CreateKnowledgeObjectRequest:
 		binding.kind = knowledgeRejectionBindingCreate
 		if normalized, err := knowledgedefinition.Normalize(typed.GetDefinition()); err == nil {
 			binding.appID = strings.Clone(normalized.AppID)
 		}
-	case *opensplunkv1.UpdateKnowledgeObjectRequest:
+	case *opensplunk.UpdateKnowledgeObjectRequest:
 		binding.kind = knowledgeRejectionBindingObject
 		binding.targetID = strings.Clone(typed.GetKnowledgeObjectId())
-	case *opensplunkv1.SetKnowledgeObjectStateRequest:
+	case *opensplunk.SetKnowledgeObjectStateRequest:
 		binding.kind = knowledgeRejectionBindingObject
 		binding.targetID = strings.Clone(typed.GetKnowledgeObjectId())
-	case *opensplunkv1.DeleteKnowledgeObjectRequest:
+	case *opensplunk.DeleteKnowledgeObjectRequest:
 		binding.kind = knowledgeRejectionBindingObject
 		binding.targetID = strings.Clone(typed.GetKnowledgeObjectId())
 	}
@@ -1210,7 +1210,7 @@ func knowledgeAttemptAuthorizedContext(
 }
 
 func validKnowledgeMutationObjectResponse(
-	object *opensplunkv1.KnowledgeObject,
+	object *opensplunk.KnowledgeObject,
 	revision uint64,
 	token []byte,
 	scopes knowledgeScopes,
@@ -1224,7 +1224,7 @@ func validKnowledgeMutationObjectResponse(
 }
 
 func validKnowledgeMutationObjectResponseAfterDefinitionAuthority(
-	object *opensplunkv1.KnowledgeObject,
+	object *opensplunk.KnowledgeObject,
 	revision uint64,
 	token []byte,
 	scopes knowledgeScopes,
@@ -1238,8 +1238,8 @@ func validKnowledgeMutationObjectResponseAfterDefinitionAuthority(
 }
 
 func validKnowledgeCreateResponseAfterDefinitionAuthorityForPolicy(
-	response *opensplunkv1.CreateKnowledgeObjectResponse,
-	request *opensplunkv1.CreateKnowledgeObjectRequest,
+	response *opensplunk.CreateKnowledgeObjectResponse,
+	request *opensplunk.CreateKnowledgeObjectRequest,
 	scopes knowledgeScopes,
 	allowUnavailableActiveReplay bool,
 ) bool {
@@ -1253,8 +1253,8 @@ func validKnowledgeCreateResponseAfterDefinitionAuthorityForPolicy(
 }
 
 func validKnowledgeCreateResponseWithPolicy(
-	response *opensplunkv1.CreateKnowledgeObjectResponse,
-	request *opensplunkv1.CreateKnowledgeObjectRequest,
+	response *opensplunk.CreateKnowledgeObjectResponse,
+	request *opensplunk.CreateKnowledgeObjectRequest,
 	scopes knowledgeScopes,
 	allowUnavailableActiveReplay bool,
 	definitionAuthorityValidated bool,
@@ -1264,7 +1264,7 @@ func validKnowledgeCreateResponseWithPolicy(
 		validObject = validKnowledgeMutationObjectResponseAfterDefinitionAuthority
 	}
 	if response == nil || request == nil || request.GetDefinition() == nil ||
-		request.GetInitialState() == opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE &&
+		request.GetInitialState() == opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE &&
 			!allowUnavailableActiveReplay ||
 		!validObject(
 			response.GetKnowledgeObject(),
@@ -1290,8 +1290,8 @@ func validKnowledgeCreateResponseWithPolicy(
 }
 
 func validKnowledgeUpdateResponseAfterDefinitionAuthorityForPolicy(
-	response *opensplunkv1.UpdateKnowledgeObjectResponse,
-	request *opensplunkv1.UpdateKnowledgeObjectRequest,
+	response *opensplunk.UpdateKnowledgeObjectResponse,
+	request *opensplunk.UpdateKnowledgeObjectRequest,
 	scopes knowledgeScopes,
 	allowUnavailableActiveReplay bool,
 ) bool {
@@ -1305,8 +1305,8 @@ func validKnowledgeUpdateResponseAfterDefinitionAuthorityForPolicy(
 }
 
 func validKnowledgeUpdateResponseWithPolicy(
-	response *opensplunkv1.UpdateKnowledgeObjectResponse,
-	request *opensplunkv1.UpdateKnowledgeObjectRequest,
+	response *opensplunk.UpdateKnowledgeObjectResponse,
+	request *opensplunk.UpdateKnowledgeObjectRequest,
 	scopes knowledgeScopes,
 	allowUnavailableActiveReplay bool,
 	definitionAuthorityValidated bool,
@@ -1329,10 +1329,10 @@ func validKnowledgeUpdateResponseWithPolicy(
 	object := response.GetKnowledgeObject()
 	return object.GetKnowledgeObjectId() == request.GetKnowledgeObjectId() &&
 		object.GetVersion() == request.GetExpectedVersion()+1 &&
-		(object.GetState() == opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT ||
-			object.GetState() == opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED ||
+		(object.GetState() == opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT ||
+			object.GetState() == opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED ||
 			allowUnavailableActiveReplay &&
-				object.GetState() == opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE) &&
+				object.GetState() == opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE) &&
 		knowledgecatalog.UpdateResultMatchesRequest(
 			object.GetDefinition(),
 			request.GetDefinition(),
@@ -1342,8 +1342,8 @@ func validKnowledgeUpdateResponseWithPolicy(
 }
 
 func validKnowledgeSetStateResponseAfterDefinitionAuthorityForPolicy(
-	response *opensplunkv1.SetKnowledgeObjectStateResponse,
-	request *opensplunkv1.SetKnowledgeObjectStateRequest,
+	response *opensplunk.SetKnowledgeObjectStateResponse,
+	request *opensplunk.SetKnowledgeObjectStateRequest,
 	scopes knowledgeScopes,
 	allowUnavailableActiveReplay bool,
 ) bool {
@@ -1357,8 +1357,8 @@ func validKnowledgeSetStateResponseAfterDefinitionAuthorityForPolicy(
 }
 
 func validKnowledgeSetStateResponseWithPolicy(
-	response *opensplunkv1.SetKnowledgeObjectStateResponse,
-	request *opensplunkv1.SetKnowledgeObjectStateRequest,
+	response *opensplunk.SetKnowledgeObjectStateResponse,
+	request *opensplunk.SetKnowledgeObjectStateRequest,
 	scopes knowledgeScopes,
 	allowUnavailableActiveReplay bool,
 	definitionAuthorityValidated bool,
@@ -1384,10 +1384,10 @@ func validKnowledgeSetStateResponseWithPolicy(
 		object.GetState() != request.GetState() {
 		return false
 	}
-	if request.GetState() == opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE {
+	if request.GetState() == opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE {
 		return allowUnavailableActiveReplay
 	}
-	return request.GetState() == opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED &&
+	return request.GetState() == opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED &&
 		validKnowledgeLifecycleTimestamp(
 			object.GetDisabledAt(),
 			object.GetUpdatedAt().AsTime(),
@@ -1395,8 +1395,8 @@ func validKnowledgeSetStateResponseWithPolicy(
 }
 
 func validKnowledgeDeleteResponse(
-	response *opensplunkv1.DeleteKnowledgeObjectResponse,
-	request *opensplunkv1.DeleteKnowledgeObjectRequest,
+	response *opensplunk.DeleteKnowledgeObjectResponse,
+	request *opensplunk.DeleteKnowledgeObjectRequest,
 	scopes knowledgeScopes,
 ) bool {
 	return response != nil && request != nil &&
@@ -1418,7 +1418,7 @@ func validKnowledgeDeleteResponse(
 // validKnowledgeProtoDefinitionAuthority succeeded before a potentially large
 // definition was cloned.
 func validKnowledgeObjectScalarLifecycleEnvelope(
-	object *opensplunkv1.KnowledgeObject,
+	object *opensplunk.KnowledgeObject,
 ) bool {
 	if object == nil ||
 		!validKnowledgeIdentity(object.GetKnowledgeObjectId(), maximumKnowledgeObjectIDBytes) ||
@@ -1446,13 +1446,13 @@ func validKnowledgeObjectScalarLifecycleEnvelope(
 	}
 	updated := object.GetUpdatedAt().AsTime()
 	switch object.GetState() {
-	case opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
-		opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE:
+	case opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+		opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE:
 		if object.GetDisabledAt() != nil || object.GetQuarantinedAt() != nil ||
 			object.GetDeletedAt() != nil || object.QuarantineReason != nil {
 			return false
 		}
-	case opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED:
+	case opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED:
 		if !validKnowledgeLifecycleTimestampRange(
 			object.GetDisabledAt(),
 			object.GetCreatedAt().AsTime(),
@@ -1462,14 +1462,14 @@ func validKnowledgeObjectScalarLifecycleEnvelope(
 			object.QuarantineReason != nil {
 			return false
 		}
-	case opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_QUARANTINED:
+	case opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_QUARANTINED:
 		return object.GetDefinition() == nil && len(object.GetDefinitionSha256()) == 0 &&
 			object.GetDisabledAt() == nil && object.GetDeletedAt() == nil &&
 			validKnowledgeLifecycleTimestamp(object.GetQuarantinedAt(), updated) &&
 			object.QuarantineReason != nil &&
 			(object.GetQuarantineReason() == "root_corruption" ||
 				object.GetQuarantineReason() == "dependency_recovery")
-	case opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DELETED:
+	case opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DELETED:
 		if object.GetDisabledAt() != nil || object.GetQuarantinedAt() != nil ||
 			!validKnowledgeLifecycleTimestamp(object.GetDeletedAt(), updated) ||
 			object.QuarantineReason != nil {
@@ -1482,17 +1482,17 @@ func validKnowledgeObjectScalarLifecycleEnvelope(
 }
 
 func knowledgeDefinitionObjectType(
-	definition *opensplunkv1.KnowledgeObjectDefinition,
-) (opensplunkv1.KnowledgeObjectType, bool) {
+	definition *opensplunk.KnowledgeObjectDefinition,
+) (opensplunk.KnowledgeObjectType, bool) {
 	switch definition.GetBody().(type) {
-	case *opensplunkv1.KnowledgeObjectDefinition_FieldExtraction:
-		return opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION, true
-	case *opensplunkv1.KnowledgeObjectDefinition_FieldAlias:
-		return opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS, true
-	case *opensplunkv1.KnowledgeObjectDefinition_CalculatedField:
-		return opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD, true
+	case *opensplunk.KnowledgeObjectDefinition_FieldExtraction:
+		return opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION, true
+	case *opensplunk.KnowledgeObjectDefinition_FieldAlias:
+		return opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS, true
+	case *opensplunk.KnowledgeObjectDefinition_CalculatedField:
+		return opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD, true
 	default:
-		return opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_UNSPECIFIED, false
+		return opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_UNSPECIFIED, false
 	}
 }
 
@@ -1528,7 +1528,7 @@ func validKnowledgeIdentity(value string, maximumBytes int) bool {
 }
 
 func knowledgeListRequest(
-	input *opensplunkv1.ListKnowledgeObjectsRequest,
+	input *opensplunk.ListKnowledgeObjectsRequest,
 ) (knowledgecatalog.ListRequest, error) {
 	if !knowledgeListRequestPreflight(input) {
 		return knowledgecatalog.ListRequest{}, control.ErrInvalidArgument
@@ -1572,23 +1572,23 @@ func knowledgeListRequest(
 		request.SharingScopeFilters = append(request.SharingScopeFilters, converted)
 	}
 	switch input.GetSortBy() {
-	case opensplunkv1.KnowledgeObjectSortBy_KNOWLEDGE_OBJECT_SORT_BY_UNSPECIFIED:
-	case opensplunkv1.KnowledgeObjectSortBy_KNOWLEDGE_OBJECT_SORT_BY_NAME:
+	case opensplunk.KnowledgeObjectSortBy_KNOWLEDGE_OBJECT_SORT_BY_UNSPECIFIED:
+	case opensplunk.KnowledgeObjectSortBy_KNOWLEDGE_OBJECT_SORT_BY_NAME:
 		request.SortBy = knowledgecatalog.SortByName
-	case opensplunkv1.KnowledgeObjectSortBy_KNOWLEDGE_OBJECT_SORT_BY_CREATED_AT:
+	case opensplunk.KnowledgeObjectSortBy_KNOWLEDGE_OBJECT_SORT_BY_CREATED_AT:
 		request.SortBy = knowledgecatalog.SortByCreatedAt
-	case opensplunkv1.KnowledgeObjectSortBy_KNOWLEDGE_OBJECT_SORT_BY_UPDATED_AT:
+	case opensplunk.KnowledgeObjectSortBy_KNOWLEDGE_OBJECT_SORT_BY_UPDATED_AT:
 		request.SortBy = knowledgecatalog.SortByUpdatedAt
-	case opensplunkv1.KnowledgeObjectSortBy_KNOWLEDGE_OBJECT_SORT_BY_OBJECT_TYPE:
+	case opensplunk.KnowledgeObjectSortBy_KNOWLEDGE_OBJECT_SORT_BY_OBJECT_TYPE:
 		request.SortBy = knowledgecatalog.SortByObjectType
 	default:
 		return knowledgecatalog.ListRequest{}, control.ErrInvalidArgument
 	}
 	switch input.GetSortDirection() {
-	case opensplunkv1.SortDirection_SORT_DIRECTION_UNSPECIFIED:
-	case opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING:
+	case opensplunk.SortDirection_SORT_DIRECTION_UNSPECIFIED:
+	case opensplunk.SortDirection_SORT_DIRECTION_ASCENDING:
 		request.SortDirection = knowledgecatalog.SortAscending
-	case opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING:
+	case opensplunk.SortDirection_SORT_DIRECTION_DESCENDING:
 		request.SortDirection = knowledgecatalog.SortDescending
 	default:
 		return knowledgecatalog.ListRequest{}, control.ErrInvalidArgument
@@ -1597,7 +1597,7 @@ func knowledgeListRequest(
 }
 
 func knowledgeListRequestPreflight(
-	input *opensplunkv1.ListKnowledgeObjectsRequest,
+	input *opensplunk.ListKnowledgeObjectsRequest,
 ) bool {
 	if input == nil ||
 		len(input.GetObjectTypeFilters()) > 3 ||
@@ -1644,7 +1644,7 @@ func knowledgeListPageToProto(
 	scopes knowledgeScopes,
 	request knowledgecatalog.ListRequest,
 	page knowledgecatalog.ListPage,
-) (*opensplunkv1.ListKnowledgeObjectsResponse, error) {
+) (*opensplunk.ListKnowledgeObjectsResponse, error) {
 	minimumTotalSize := uint64(len(page.Objects))
 	if request.PageToken != "" {
 		minimumTotalSize++
@@ -1683,7 +1683,7 @@ func knowledgeListPageToProto(
 	if !knowledgeListPagePreflight(scopes, request, page) {
 		return nil, errors.New("knowledge catalog returned an invalid object")
 	}
-	objects := make([]*opensplunkv1.KnowledgeObject, len(page.Objects))
+	objects := make([]*opensplunk.KnowledgeObject, len(page.Objects))
 	for index, object := range page.Objects {
 		if !validKnowledgeCatalogDefinitionAuthority(object) {
 			return nil, errors.New("knowledge catalog returned an invalid object")
@@ -1695,14 +1695,14 @@ func knowledgeListPageToProto(
 		}
 		objects[index] = converted
 	}
-	metadata := &opensplunkv1.PageResponse{TotalSizeExact: page.TotalSizeExact}
+	metadata := &opensplunk.PageResponse{TotalSizeExact: page.TotalSizeExact}
 	if page.NextPageToken != "" {
 		metadata.NextPageToken = new(strings.Clone(page.NextPageToken))
 	}
 	if page.TotalSize != nil {
 		metadata.TotalSize = new(*page.TotalSize)
 	}
-	response := &opensplunkv1.ListKnowledgeObjectsResponse{
+	response := &opensplunk.ListKnowledgeObjectsResponse{
 		KnowledgeObjects:      objects,
 		Page:                  metadata,
 		TenantCatalogRevision: page.CatalogRevision,
@@ -1871,14 +1871,14 @@ func knowledgeCatalogObjectMatchesListRequest(
 }
 
 func knowledgeSelectorContains(
-	definition *opensplunkv1.KnowledgeObjectDefinition,
+	definition *opensplunk.KnowledgeObjectDefinition,
 	filter string,
 ) bool {
 	if definition == nil || definition.GetSelector() == nil {
 		return false
 	}
 	selector := definition.GetSelector()
-	for _, patterns := range [][]*opensplunkv1.KnowledgeSelectorPattern{
+	for _, patterns := range [][]*opensplunk.KnowledgeSelectorPattern{
 		selector.GetIndexPatterns(),
 		selector.GetHostPatterns(),
 		selector.GetSourcePatterns(),
@@ -1942,7 +1942,7 @@ func compareKnowledgeListInt64(left, right int64) int {
 }
 
 func knowledgeObjectMatchesReadScopeAfterDefinitionAuthority(
-	object *opensplunkv1.KnowledgeObject,
+	object *opensplunk.KnowledgeObject,
 	scopes knowledgeScopes,
 ) bool {
 	if !validKnowledgeObjectScalarLifecycleEnvelope(object) ||
@@ -1957,29 +1957,29 @@ func knowledgeObjectMatchesReadScopeAfterDefinitionAuthority(
 }
 
 func knowledgeObjectMatchesGetRequest(
-	object *opensplunkv1.KnowledgeObject,
-	request *opensplunkv1.GetKnowledgeObjectRequest,
+	object *opensplunk.KnowledgeObject,
+	request *opensplunk.GetKnowledgeObjectRequest,
 ) bool {
 	if object == nil || request == nil ||
 		object.GetKnowledgeObjectId() != request.GetKnowledgeObjectId() {
 		return false
 	}
 	if request.Version == nil ||
-		object.GetState() == opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_QUARANTINED {
+		object.GetState() == opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_QUARANTINED {
 		return true
 	}
 	return object.GetVersion() == request.GetVersion()
 }
 
 func knowledgeObjectTypeFromProto(
-	value opensplunkv1.KnowledgeObjectType,
+	value opensplunk.KnowledgeObjectType,
 ) (knowledgecatalog.ObjectType, bool) {
 	switch value {
-	case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION:
+	case opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION:
 		return knowledgecatalog.ObjectTypeFieldExtraction, true
-	case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS:
+	case opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS:
 		return knowledgecatalog.ObjectTypeFieldAlias, true
-	case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD:
+	case opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD:
 		return knowledgecatalog.ObjectTypeCalculatedField, true
 	default:
 		return "", false
@@ -1987,18 +1987,18 @@ func knowledgeObjectTypeFromProto(
 }
 
 func knowledgeStateFromProto(
-	value opensplunkv1.KnowledgeObjectState,
+	value opensplunk.KnowledgeObjectState,
 ) (knowledgecatalog.State, bool) {
 	switch value {
-	case opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT:
+	case opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT:
 		return knowledgecatalog.StateDraft, true
-	case opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE:
+	case opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE:
 		return knowledgecatalog.StateActive, true
-	case opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED:
+	case opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED:
 		return knowledgecatalog.StateDisabled, true
-	case opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_QUARANTINED:
+	case opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_QUARANTINED:
 		return knowledgecatalog.StateQuarantined, true
-	case opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DELETED:
+	case opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DELETED:
 		return knowledgecatalog.StateDeleted, true
 	default:
 		return "", false
@@ -2006,14 +2006,14 @@ func knowledgeStateFromProto(
 }
 
 func knowledgeSharingScopeFromProto(
-	value opensplunkv1.SharingScope,
+	value opensplunk.SharingScope,
 ) (knowledgecatalog.SharingScope, bool) {
 	switch value {
-	case opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE:
+	case opensplunk.SharingScope_SHARING_SCOPE_PRIVATE:
 		return knowledgecatalog.SharingScopePrivate, true
-	case opensplunkv1.SharingScope_SHARING_SCOPE_APP:
+	case opensplunk.SharingScope_SHARING_SCOPE_APP:
 		return knowledgecatalog.SharingScopeApp, true
-	case opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL:
+	case opensplunk.SharingScope_SHARING_SCOPE_GLOBAL:
 		return knowledgecatalog.SharingScopeGlobal, true
 	default:
 		return "", false

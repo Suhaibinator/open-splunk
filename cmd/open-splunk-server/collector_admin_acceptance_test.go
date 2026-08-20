@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/collectoradmission"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
@@ -135,7 +135,6 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 	}
 	ingestConfig.NewStreamID = func() string { return onlineStreamID }
 	ingestConfig.ServerInstanceID = onlineBootEpoch
-	ingestConfig.ServerVersion = "collector-admin-acceptance"
 	heartbeatRuntime, err := collectorfleet.NewHeartbeatRuntime(
 		fleet,
 		collectorfleet.HeartbeatRuntimeConfig{
@@ -187,7 +186,7 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	opensplunkv1.RegisterCollectorIngestServiceServer(
+	opensplunk.RegisterCollectorIngestServiceServer(
 		grpcServer,
 		ingestService,
 	)
@@ -246,32 +245,30 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 		10*time.Second,
 	)
 	cancelCollectorStream = cancel
-	stream, err := opensplunkv1.NewCollectorIngestServiceClient(connection).
+	stream, err := opensplunk.NewCollectorIngestServiceClient(connection).
 		Collect(streamContext)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := stream.Send(&opensplunkv1.CollectRequest{
+	if err := stream.Send(&opensplunk.CollectRequest{
 		StreamSequence: 1,
 		SentAt:         timestamppb.New(connectedAt),
-		Payload: &opensplunkv1.CollectRequest_Hello{
-			Hello: &opensplunkv1.CollectorHello{
-				CollectorId:      onlineCollectorID,
-				InstanceId:       onlineInstanceID,
-				ProtocolMajor:    1,
-				ProtocolMinor:    0,
-				CollectorVersion: "collector-admin-acceptance",
-				Hostname:         "a-online.example",
-				OperatingSystem:  "linux",
-				Architecture:     "amd64",
-				StartedAt:        timestamppb.New(connectedAt.Add(-time.Minute)),
-				Capabilities: []opensplunkv1.CollectorCapability{
-					opensplunkv1.
+		Payload: &opensplunk.CollectRequest_Hello{
+			Hello: &opensplunk.CollectorHello{
+				CollectorId:     onlineCollectorID,
+				InstanceId:      onlineInstanceID,
+				SourceRevision:  "development",
+				Hostname:        "a-online.example",
+				OperatingSystem: "linux",
+				Architecture:    "amd64",
+				StartedAt:       timestamppb.New(connectedAt.Add(-time.Minute)),
+				Capabilities: []opensplunk.CollectorCapability{
+					opensplunk.
 						CollectorCapability_COLLECTOR_CAPABILITY_FILE_INPUT,
 				},
-				Inputs: []*opensplunkv1.CollectorInputRegistration{{
+				Inputs: []*opensplunk.CollectorInputRegistration{{
 					InputId: inputID,
-					InputType: opensplunkv1.
+					InputType: opensplunk.
 						CollectorInputType_COLLECTOR_INPUT_TYPE_FILE,
 					IndexName: "main",
 				}},
@@ -295,15 +292,15 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 	}
 
 	collectorClockUnixMicro.Store(heartbeatAt.UnixMicro())
-	if err := stream.Send(&opensplunkv1.CollectRequest{
+	if err := stream.Send(&opensplunk.CollectRequest{
 		StreamSequence: 2,
 		SentAt:         timestamppb.New(heartbeatAt),
-		Payload: &opensplunkv1.CollectRequest_Heartbeat{
-			Heartbeat: &opensplunkv1.CollectorHeartbeat{
+		Payload: &opensplunk.CollectRequest_Heartbeat{
+			Heartbeat: &opensplunk.CollectorHeartbeat{
 				CollectorId: onlineCollectorID,
 				InstanceId:  onlineInstanceID,
 				ObservedAt:  timestamppb.New(heartbeatAt),
-				Queue: &opensplunkv1.CollectorQueueStats{
+				Queue: &opensplunk.CollectorQueueStats{
 					QueuedEvents:            7,
 					QueuedBytes:             4096,
 					OldestEventAge:          durationpb.New(2 * time.Second),
@@ -312,9 +309,9 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 					RetriedBatchesTotal:     2,
 					RejectedEventsTotal:     1,
 				},
-				Inputs: []*opensplunkv1.CollectorInputHealth{{
+				Inputs: []*opensplunk.CollectorInputHealth{{
 					InputId: inputID,
-					State: opensplunkv1.
+					State: opensplunk.
 						CollectorInputState_COLLECTOR_INPUT_STATE_HEALTHY,
 					StatusMessage:     "healthy",
 					DiscoveredSources: 3,
@@ -350,8 +347,7 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 		ReceivedAt:  offlineConnectedAt,
 		Hello: collectorfleet.Hello{
 			InstanceID:        "instance-admin-offline",
-			ProtocolMajor:     1,
-			CollectorVersion:  "collector-admin-offline",
+			SourceRevision:    "development",
 			Hostname:          "z-offline.example",
 			OperatingSystem:   "linux",
 			Architecture:      "arm64",
@@ -412,8 +408,8 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 	bootstrapResponse := postCollectorAdminAcceptanceProto(
 		t,
 		firstHandler,
-		"/api/v1/system/bootstrap",
-		&opensplunkv1.GetSystemBootstrapRequest{},
+		"/api/system/bootstrap",
+		&opensplunk.GetSystemBootstrapRequest{},
 		administratorToken,
 	)
 	if bootstrapResponse.Code != http.StatusOK {
@@ -423,7 +419,7 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 			bootstrapResponse.Body,
 		)
 	}
-	var bootstrap opensplunkv1.GetSystemBootstrapResponse
+	var bootstrap opensplunk.GetSystemBootstrapResponse
 	unmarshalCollectorAdminAcceptanceResponse(
 		t,
 		bootstrapResponse,
@@ -431,13 +427,13 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 	)
 	if !slices.Contains(
 		bootstrap.GetFeatures(),
-		opensplunkv1.ServerFeature_SERVER_FEATURE_COLLECTOR_ADMIN,
+		opensplunk.ServerFeature_SERVER_FEATURE_COLLECTOR_ADMIN,
 	) {
 		t.Fatalf("bootstrap features = %v", bootstrap.GetFeatures())
 	}
 
 	displayName := "Primary collector"
-	updateRequest := &opensplunkv1.UpdateCollectorRequest{
+	updateRequest := &opensplunk.UpdateCollectorRequest{
 		CollectorId:     onlineCollectorID,
 		ExpectedVersion: persistedOnline.Version,
 		DisplayName:     &displayName,
@@ -456,7 +452,7 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 		response := postCollectorAdminAcceptanceProto(
 			t,
 			firstHandler,
-			"/api/v1/collectors/update",
+			"/api/collectors/update",
 			updateRequest,
 			bearer,
 		)
@@ -488,8 +484,8 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 	getResponse := postCollectorAdminAcceptanceProto(
 		t,
 		firstHandler,
-		"/api/v1/collectors/get",
-		&opensplunkv1.GetCollectorRequest{
+		"/api/collectors/get",
+		&opensplunk.GetCollectorRequest{
 			CollectorId: onlineCollectorID,
 		},
 		administratorToken,
@@ -501,7 +497,7 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 			getResponse.Body,
 		)
 	}
-	var onlineGet opensplunkv1.GetCollectorResponse
+	var onlineGet opensplunk.GetCollectorResponse
 	unmarshalCollectorAdminAcceptanceResponse(t, getResponse, &onlineGet)
 	assertCollectorAdminAcceptanceOnlineRecord(
 		t,
@@ -516,7 +512,7 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 	onlineListResponse := postCollectorAdminAcceptanceProto(
 		t,
 		firstHandler,
-		"/api/v1/collectors/list",
+		"/api/collectors/list",
 		onlineListRequest,
 		administratorToken,
 	)
@@ -527,7 +523,7 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 			onlineListResponse.Body,
 		)
 	}
-	var onlinePage opensplunkv1.ListCollectorsResponse
+	var onlinePage opensplunk.ListCollectorsResponse
 	unmarshalCollectorAdminAcceptanceResponse(
 		t,
 		onlineListResponse,
@@ -559,7 +555,7 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 	updateResponse := postCollectorAdminAcceptanceProto(
 		t,
 		firstHandler,
-		"/api/v1/collectors/update",
+		"/api/collectors/update",
 		updateRequest,
 		administratorToken,
 	)
@@ -570,7 +566,7 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 			updateResponse.Body,
 		)
 	}
-	var displayUpdated opensplunkv1.UpdateCollectorResponse
+	var displayUpdated opensplunk.UpdateCollectorResponse
 	unmarshalCollectorAdminAcceptanceResponse(
 		t,
 		updateResponse,
@@ -582,7 +578,7 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 		onlineCollectorID,
 		persistedOnline.Version+1,
 		displayName,
-		opensplunkv1.
+		opensplunk.
 			CollectorAdministrativeState_COLLECTOR_ADMINISTRATIVE_STATE_ENABLED,
 		connectedAt,
 		displayUpdatedAt,
@@ -592,7 +588,7 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 	invalidatedResponse := postCollectorAdminAcceptanceProto(
 		t,
 		firstHandler,
-		"/api/v1/collectors/list",
+		"/api/collectors/list",
 		invalidatedRequest,
 		administratorToken,
 	)
@@ -613,11 +609,11 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 	disableResponse := postCollectorAdminAcceptanceProto(
 		t,
 		firstHandler,
-		"/api/v1/collectors/state/set",
-		&opensplunkv1.SetCollectorEnabledRequest{
+		"/api/collectors/state/set",
+		&opensplunk.SetCollectorEnabledRequest{
 			CollectorId:     onlineCollectorID,
 			ExpectedVersion: persistedOnline.Version + 1,
-			AdministrativeState: opensplunkv1.
+			AdministrativeState: opensplunk.
 				CollectorAdministrativeState_COLLECTOR_ADMINISTRATIVE_STATE_DISABLED,
 		},
 		administratorToken,
@@ -629,7 +625,7 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 			disableResponse.Body,
 		)
 	}
-	var disabled opensplunkv1.SetCollectorEnabledResponse
+	var disabled opensplunk.SetCollectorEnabledResponse
 	unmarshalCollectorAdminAcceptanceResponse(
 		t,
 		disableResponse,
@@ -641,7 +637,7 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 		onlineCollectorID,
 		persistedOnline.Version+2,
 		displayName,
-		opensplunkv1.
+		opensplunk.
 			CollectorAdministrativeState_COLLECTOR_ADMINISTRATIVE_STATE_DISABLED,
 		connectedAt,
 		disabledAt,
@@ -650,8 +646,8 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 	disabledGetResponse := postCollectorAdminAcceptanceProto(
 		t,
 		firstHandler,
-		"/api/v1/collectors/get",
-		&opensplunkv1.GetCollectorRequest{
+		"/api/collectors/get",
+		&opensplunk.GetCollectorRequest{
 			CollectorId: onlineCollectorID,
 		},
 		administratorToken,
@@ -663,7 +659,7 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 			disabledGetResponse.Body,
 		)
 	}
-	var disabledGet opensplunkv1.GetCollectorResponse
+	var disabledGet opensplunk.GetCollectorResponse
 	unmarshalCollectorAdminAcceptanceResponse(
 		t,
 		disabledGetResponse,
@@ -690,7 +686,7 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 	stableListResponse := postCollectorAdminAcceptanceProto(
 		t,
 		firstHandler,
-		"/api/v1/collectors/list",
+		"/api/collectors/list",
 		collectorAdminAcceptanceListRequest(""),
 		administratorToken,
 	)
@@ -701,7 +697,7 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 			stableListResponse.Body,
 		)
 	}
-	var stableFirstPage opensplunkv1.ListCollectorsResponse
+	var stableFirstPage opensplunk.ListCollectorsResponse
 	unmarshalCollectorAdminAcceptanceResponse(
 		t,
 		stableListResponse,
@@ -711,7 +707,7 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 		stableFirstPage.GetCollectors()[0].GetCollectorId() !=
 			onlineCollectorID ||
 		stableFirstPage.GetCollectors()[0].GetConnectionState() !=
-			opensplunkv1.
+			opensplunk.
 				CollectorConnectionState_COLLECTOR_CONNECTION_STATE_DISABLED ||
 		stableFirstPage.GetPage() == nil ||
 		stableFirstPage.GetPage().NextPageToken == nil ||
@@ -779,7 +775,7 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 	reopenedContinuationResponse := postCollectorAdminAcceptanceProto(
 		t,
 		reopenedHandler,
-		"/api/v1/collectors/list",
+		"/api/collectors/list",
 		collectorAdminAcceptanceListRequest(stableOfflineCursor),
 		administratorToken,
 	)
@@ -790,7 +786,7 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 			reopenedContinuationResponse.Body,
 		)
 	}
-	var reopenedPage opensplunkv1.ListCollectorsResponse
+	var reopenedPage opensplunk.ListCollectorsResponse
 	unmarshalCollectorAdminAcceptanceResponse(
 		t,
 		reopenedContinuationResponse,
@@ -817,8 +813,8 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 	reopenedGetResponse := postCollectorAdminAcceptanceProto(
 		t,
 		reopenedHandler,
-		"/api/v1/collectors/get",
-		&opensplunkv1.GetCollectorRequest{
+		"/api/collectors/get",
+		&opensplunk.GetCollectorRequest{
 			CollectorId: offlineCollectorID,
 		},
 		administratorToken,
@@ -830,7 +826,7 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 			reopenedGetResponse.Body,
 		)
 	}
-	var reopenedGet opensplunkv1.GetCollectorResponse
+	var reopenedGet opensplunk.GetCollectorResponse
 	unmarshalCollectorAdminAcceptanceResponse(
 		t,
 		reopenedGetResponse,
@@ -911,16 +907,16 @@ func unmarshalCollectorAdminAcceptanceResponse(
 	}
 }
 
-func collectorAdminAcceptanceListRequest(pageToken string) *opensplunkv1.ListCollectorsRequest {
+func collectorAdminAcceptanceListRequest(pageToken string) *opensplunk.ListCollectorsRequest {
 	pageSize := uint32(1)
-	request := &opensplunkv1.ListCollectorsRequest{
-		Page: &opensplunkv1.PageRequest{
+	request := &opensplunk.ListCollectorsRequest{
+		Page: &opensplunk.PageRequest{
 			PageSize:         &pageSize,
 			IncludeTotalSize: true,
 		},
-		SortBy: opensplunkv1.
+		SortBy: opensplunk.
 			CollectorSortBy_COLLECTOR_SORT_BY_HOSTNAME,
-		SortDirection: opensplunkv1.
+		SortDirection: opensplunk.
 			SortDirection_SORT_DIRECTION_ASCENDING,
 	}
 	if pageToken != "" {
@@ -932,7 +928,7 @@ func collectorAdminAcceptanceListRequest(pageToken string) *opensplunkv1.ListCol
 
 func assertCollectorAdminAcceptanceOnlineRecord(
 	t *testing.T,
-	record *opensplunkv1.CollectorRecord,
+	record *opensplunk.CollectorRecord,
 	collectorID string,
 	instanceID string,
 	connectedAt time.Time,
@@ -944,12 +940,12 @@ func assertCollectorAdminAcceptanceOnlineRecord(
 		record.GetVersion() != 1 ||
 		record.DisplayName != nil ||
 		record.GetConnectionState() !=
-			opensplunkv1.
+			opensplunk.
 				CollectorConnectionState_COLLECTOR_CONNECTION_STATE_ONLINE ||
 		record.ActiveInstanceId == nil ||
 		record.GetActiveInstanceId() != instanceID ||
-		record.CollectorVersion == nil ||
-		record.GetCollectorVersion() != "collector-admin-acceptance" ||
+		record.SourceRevision == nil ||
+		record.GetSourceRevision() != "development" ||
 		record.Hostname == nil ||
 		record.GetHostname() != "a-online.example" ||
 		record.OperatingSystem == nil ||
@@ -958,14 +954,14 @@ func assertCollectorAdminAcceptanceOnlineRecord(
 		record.GetArchitecture() != "amd64" ||
 		!slices.Equal(
 			record.GetCapabilities(),
-			[]opensplunkv1.CollectorCapability{
-				opensplunkv1.
+			[]opensplunk.CollectorCapability{
+				opensplunk.
 					CollectorCapability_COLLECTOR_CAPABILITY_FILE_INPUT,
 			},
 		) ||
 		!slices.Equal(record.GetAuthorizedIndexes(), []string{"main"}) ||
 		record.GetAdministrativeState() !=
-			opensplunkv1.
+			opensplunk.
 				CollectorAdministrativeState_COLLECTOR_ADMINISTRATIVE_STATE_ENABLED ||
 		record.GetFirstSeenAt() == nil ||
 		!record.GetFirstSeenAt().AsTime().Equal(connectedAt) ||
@@ -991,7 +987,7 @@ func assertCollectorAdminAcceptanceOnlineRecord(
 	if len(record.GetInputs()) != 1 ||
 		record.GetInputs()[0].GetInputId() != "input-admin-online" ||
 		record.GetInputs()[0].GetState() !=
-			opensplunkv1.
+			opensplunk.
 				CollectorInputState_COLLECTOR_INPUT_STATE_HEALTHY ||
 		record.GetInputs()[0].GetStatusMessage() != "healthy" ||
 		record.GetInputs()[0].GetDiscoveredSources() != 3 ||
@@ -1006,11 +1002,11 @@ func assertCollectorAdminAcceptanceOnlineRecord(
 
 func assertCollectorAdminAcceptanceSnapshot(
 	t *testing.T,
-	snapshot *opensplunkv1.CollectorAdministrationSnapshot,
+	snapshot *opensplunk.CollectorAdministrationSnapshot,
 	collectorID string,
 	version uint64,
 	displayName string,
-	state opensplunkv1.CollectorAdministrativeState,
+	state opensplunk.CollectorAdministrativeState,
 	firstSeenAt time.Time,
 	updatedAt time.Time,
 ) {
@@ -1031,7 +1027,7 @@ func assertCollectorAdminAcceptanceSnapshot(
 
 func assertCollectorAdminAcceptanceDisabledRecord(
 	t *testing.T,
-	record *opensplunkv1.CollectorRecord,
+	record *opensplunk.CollectorRecord,
 	collectorID string,
 	displayName string,
 	version uint64,
@@ -1045,11 +1041,11 @@ func assertCollectorAdminAcceptanceDisabledRecord(
 		record.DisplayName == nil ||
 		record.GetDisplayName() != displayName ||
 		record.GetConnectionState() !=
-			opensplunkv1.
+			opensplunk.
 				CollectorConnectionState_COLLECTOR_CONNECTION_STATE_DISABLED ||
 		record.ActiveInstanceId != nil ||
 		record.GetAdministrativeState() !=
-			opensplunkv1.
+			opensplunk.
 				CollectorAdministrativeState_COLLECTOR_ADMINISTRATIVE_STATE_DISABLED ||
 		record.GetFirstSeenAt() == nil ||
 		!record.GetFirstSeenAt().AsTime().Equal(firstSeenAt) ||
@@ -1065,7 +1061,7 @@ func assertCollectorAdminAcceptanceDisabledRecord(
 
 func assertCollectorAdminAcceptanceOfflineRecord(
 	t *testing.T,
-	record *opensplunkv1.CollectorRecord,
+	record *opensplunk.CollectorRecord,
 	collectorID string,
 	connectedAt time.Time,
 	disconnectedAt time.Time,
@@ -1076,13 +1072,13 @@ func assertCollectorAdminAcceptanceOfflineRecord(
 		record.GetVersion() != 1 ||
 		record.DisplayName != nil ||
 		record.GetConnectionState() !=
-			opensplunkv1.
+			opensplunk.
 				CollectorConnectionState_COLLECTOR_CONNECTION_STATE_OFFLINE ||
 		record.ActiveInstanceId != nil ||
 		record.Hostname == nil ||
 		record.GetHostname() != "z-offline.example" ||
 		record.GetAdministrativeState() !=
-			opensplunkv1.
+			opensplunk.
 				CollectorAdministrativeState_COLLECTOR_ADMINISTRATIVE_STATE_ENABLED ||
 		record.GetFirstSeenAt() == nil ||
 		!record.GetFirstSeenAt().AsTime().Equal(connectedAt) ||

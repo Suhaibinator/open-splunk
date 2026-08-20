@@ -12,7 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/gorilla/websocket"
 	"google.golang.org/protobuf/proto"
 )
@@ -57,9 +57,9 @@ type requestedSubscription struct {
 }
 
 type commandFailure struct {
-	code                opensplunkv1.SearchWebSocketProtocolErrorCode
+	code                opensplunk.SearchWebSocketProtocolErrorCode
 	message             string
-	violations          []*opensplunkv1.FieldViolation
+	violations          []*opensplunk.FieldViolation
 	connectionWillClose bool
 }
 
@@ -216,19 +216,19 @@ func (connection *connection) readLoop() bool {
 			var closeError *websocket.CloseError
 			if errors.Is(err, websocket.ErrReadLimit) ||
 				(errors.As(err, &closeError) && closeError.Code == websocket.CloseMessageTooBig) {
-				return connection.fatalProtocolError("", opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_FRAME_TOO_LARGE, "binary command frame exceeds the configured limit")
+				return connection.fatalProtocolError("", opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_FRAME_TOO_LARGE, "binary command frame exceeds the configured limit")
 			}
 			return false
 		}
 		if messageType != websocket.BinaryMessage {
-			return connection.fatalProtocolError("", opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND, "application messages must be binary protobuf frames")
+			return connection.fatalProtocolError("", opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND, "application messages must be binary protobuf frames")
 		}
 		if uint64(len(data)) > connection.service.config.maximumFrameBytes {
-			return connection.fatalProtocolError("", opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_FRAME_TOO_LARGE, "binary command frame exceeds the configured limit")
+			return connection.fatalProtocolError("", opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_FRAME_TOO_LARGE, "binary command frame exceeds the configured limit")
 		}
-		var command opensplunkv1.SearchWebSocketCommand
+		var command opensplunk.SearchWebSocketCommand
 		if err := proto.Unmarshal(data, &command); err != nil {
-			if !connection.sendProtocolError("", opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND, "command is not valid protobuf", nil, false) {
+			if !connection.sendProtocolError("", opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND, "command is not valid protobuf", nil, false) {
 				return false
 			}
 			continue
@@ -236,7 +236,7 @@ func (connection *connection) readLoop() bool {
 		requestID := command.GetRequestId()
 		if !validProtocolString(requestID, maximumRequestIDBytes, true) {
 			violation := fieldViolation("request_id", "INVALID", "request_id must be non-empty, valid UTF-8, and within the byte limit")
-			if !connection.sendProtocolError("", opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND, "invalid request_id", []*opensplunkv1.FieldViolation{violation}, false) {
+			if !connection.sendProtocolError("", opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND, "invalid request_id", []*opensplunk.FieldViolation{violation}, false) {
 				return false
 			}
 			continue
@@ -255,19 +255,19 @@ func (connection *connection) readLoop() bool {
 	}
 }
 
-func (connection *connection) handleCommand(requestID string, command *opensplunkv1.SearchWebSocketCommand) *commandFailure {
+func (connection *connection) handleCommand(requestID string, command *opensplunk.SearchWebSocketCommand) *commandFailure {
 	switch payload := command.GetPayload().(type) {
-	case *opensplunkv1.SearchWebSocketCommand_Subscribe:
+	case *opensplunk.SearchWebSocketCommand_Subscribe:
 		if payload.Subscribe == nil {
 			return invalidCommand("subscribe payload is required", fieldViolation("subscribe", "REQUIRED", "subscribe payload is required"))
 		}
 		return connection.subscribe(requestID, payload.Subscribe)
-	case *opensplunkv1.SearchWebSocketCommand_Unsubscribe:
+	case *opensplunk.SearchWebSocketCommand_Unsubscribe:
 		if payload.Unsubscribe == nil {
 			return invalidCommand("unsubscribe payload is required", fieldViolation("unsubscribe", "REQUIRED", "unsubscribe payload is required"))
 		}
 		return connection.unsubscribe(requestID, payload.Unsubscribe)
-	case *opensplunkv1.SearchWebSocketCommand_Ping:
+	case *opensplunk.SearchWebSocketCommand_Ping:
 		if payload.Ping == nil {
 			return invalidCommand("ping payload is required", fieldViolation("ping", "REQUIRED", "ping payload is required"))
 		}
@@ -283,7 +283,7 @@ func (connection *connection) handleCommand(requestID string, command *opensplun
 	}
 }
 
-func (connection *connection) subscribe(requestID string, command *opensplunkv1.SubscribeSearchJobsCommand) *commandFailure {
+func (connection *connection) subscribe(requestID string, command *opensplunk.SubscribeSearchJobsCommand) *commandFailure {
 	pinned := make(map[*targetState]struct{})
 	defer func() {
 		for target := range pinned {
@@ -295,7 +295,7 @@ func (connection *connection) subscribe(requestID string, command *opensplunkv1.
 		return invalidCommand("at least one subscription is required", fieldViolation("subscribe.subscriptions", "REQUIRED", "at least one subscription is required"))
 	}
 	if len(connection.subscriptions)+len(inputs) > int(connection.service.config.maximumSubscriptions) {
-		return &commandFailure{code: opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_TOO_MANY_SUBSCRIPTIONS, message: "subscription limit exceeded"}
+		return &commandFailure{code: opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_TOO_MANY_SUBSCRIPTIONS, message: "subscription limit exceeded"}
 	}
 	requests := make([]requestedSubscription, 0, len(inputs))
 	seenIDs := make(map[string]struct{}, len(inputs))
@@ -343,7 +343,7 @@ func (connection *connection) subscribe(requestID string, command *opensplunkv1.
 	}
 	if len(connection.usedSubscriptionIDs)+len(requests) > maximumSubscriptionIDsPerConnection {
 		return &commandFailure{
-			code:                opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_TOO_MANY_SUBSCRIPTIONS,
+			code:                opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_TOO_MANY_SUBSCRIPTIONS,
 			message:             "connection subscription identity limit exceeded; reconnect before using new subscription IDs",
 			connectionWillClose: true,
 		}
@@ -355,10 +355,10 @@ func (connection *connection) subscribe(requestID string, command *opensplunkv1.
 			var err error
 			target, err = connection.service.resolveTarget(connection.ctx, requests[index].key)
 			if err != nil {
-				code := opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_JOB_NOT_FOUND
+				code := opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_JOB_NOT_FOUND
 				message := "job was not found"
 				if errors.Is(err, errTargetCapacity) {
-					code = opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_TOO_MANY_SUBSCRIPTIONS
+					code = opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_TOO_MANY_SUBSCRIPTIONS
 					message = "target capacity is exhausted"
 				}
 				return &commandFailure{code: code, message: message}
@@ -426,7 +426,7 @@ func (connection *connection) subscribe(requestID string, command *opensplunkv1.
 		if err := target.refreshForSubscription(
 			connection.ctx, refresh.previewRows, refresh.currentSnapshot,
 		); err != nil {
-			return &commandFailure{code: opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_JOB_NOT_FOUND, message: "job was not found"}
+			return &commandFailure{code: opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_JOB_NOT_FOUND, message: "job was not found"}
 		}
 		refreshedTargets[target] = struct{}{}
 	}
@@ -445,7 +445,7 @@ func (connection *connection) subscribe(requestID string, command *opensplunkv1.
 	defer batch.release()
 	batchTooLarge := func() *commandFailure {
 		return &commandFailure{
-			code:    opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_TOO_MANY_SUBSCRIPTIONS,
+			code:    opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_TOO_MANY_SUBSCRIPTIONS,
 			message: "subscription response exceeds the configured queue capacity",
 		}
 	}
@@ -474,30 +474,30 @@ func (connection *connection) subscribe(requestID string, command *opensplunkv1.
 		request.target.mu.Lock()
 		if request.target.retired {
 			request.target.mu.Unlock()
-			return &commandFailure{code: opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_JOB_NOT_FOUND, message: "job was not found"}
+			return &commandFailure{code: opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_JOB_NOT_FOUND, message: "job was not found"}
 		}
 		request.earliest, request.latest = request.target.replayBoundsLocked()
-		var reason opensplunkv1.ResynchronizationReason
+		var reason opensplunk.ResynchronizationReason
 		now := canonicalTime(connection.service.config.now())
 		overdueTerminal := request.target.terminal && !request.target.refreshAt.IsZero() && !request.target.refreshAt.After(now)
 		requiresResynchronization := request.target.currentIncomplete || overdueTerminal
 		if request.afterSequence == 0 {
 			if requiresResynchronization || !request.target.currentEventsContinuousLocked() {
-				reason = opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED
+				reason = opensplunk.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED
 			} else {
 				request.initialFrames = request.target.currentEventsLocked()
 			}
 		} else if !request.target.epochEstablished {
 			if request.afterSequence < request.target.epochStart || request.afterSequence > request.latest {
-				reason = opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_SERVER_RESTARTED
+				reason = opensplunk.ResynchronizationReason_RESYNCHRONIZATION_REASON_SERVER_RESTARTED
 			} else if requiresResynchronization {
-				reason = opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED
+				reason = opensplunk.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED
 			} else {
 				if request.afterSequence < request.latest {
 					var continuous bool
 					request.initialFrames, continuous = request.target.replayAfterLocked(request.afterSequence)
 					if !continuous {
-						reason = opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED
+						reason = opensplunk.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED
 					} else {
 						request.replayFollows = len(request.initialFrames) != 0
 					}
@@ -505,18 +505,18 @@ func (connection *connection) subscribe(requestID string, command *opensplunkv1.
 				// A boundary inside the random fresh-epoch range can only have
 				// come from this server's preceding restart recovery. Once its
 				// retained suffix is proven continuous, establish ordinary replay.
-				request.establishEpoch = reason == opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_UNSPECIFIED
+				request.establishEpoch = reason == opensplunk.ResynchronizationReason_RESYNCHRONIZATION_REASON_UNSPECIFIED
 			}
 		} else if requiresResynchronization {
-			reason = opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED
+			reason = opensplunk.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED
 		} else if request.afterSequence > request.latest ||
 			(request.target.epochStart > 1 && request.afterSequence < request.target.epochStart) {
-			reason = opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_STATE_DIVERGED
+			reason = opensplunk.ResynchronizationReason_RESYNCHRONIZATION_REASON_STATE_DIVERGED
 		} else if request.afterSequence < request.latest {
 			var continuous bool
 			request.initialFrames, continuous = request.target.replayAfterLocked(request.afterSequence)
 			if !continuous {
-				reason = opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED
+				reason = opensplunk.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED
 				request.initialFrames = nil
 			} else {
 				request.replayFollows = len(request.initialFrames) != 0
@@ -526,15 +526,15 @@ func (connection *connection) subscribe(requestID string, command *opensplunkv1.
 
 		ack, err := marshalEvent(subscriptionAcknowledgedEvent(requestID, *request, connection.service.config.now()), connection.service.config.maximumFrameBytes)
 		if err != nil {
-			return &commandFailure{code: opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND, message: "could not encode subscription acknowledgment"}
+			return &commandFailure{code: opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND, message: "could not encode subscription acknowledgment"}
 		}
 		if accepted, failure := appendFrame(ack); !accepted {
 			return failure
 		}
-		if reason != opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_UNSPECIFIED {
+		if reason != opensplunk.ResynchronizationReason_RESYNCHRONIZATION_REASON_UNSPECIFIED {
 			resync, err := marshalEvent(resynchronizationEvent(request.id, request.key, reason, request.earliest, request.latest, connection.service.config.now()), connection.service.config.maximumFrameBytes)
 			if err != nil {
-				return &commandFailure{code: opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND, message: "could not encode resynchronization event"}
+				return &commandFailure{code: opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND, message: "could not encode resynchronization event"}
 			}
 			if accepted, failure := appendFrame(resync); !accepted {
 				return failure
@@ -544,7 +544,7 @@ func (connection *connection) subscribe(requestID string, command *opensplunkv1.
 		for _, canonical := range request.initialFrames {
 			sequence, err := canonicalEventSequence(canonical)
 			if err != nil {
-				return &commandFailure{code: opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND, message: "could not read initial target state"}
+				return &commandFailure{code: opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND, message: "could not read initial target state"}
 			}
 			deliveries = append(deliveries, initialDelivery{request: request, canonical: canonical, sequence: sequence})
 		}
@@ -572,7 +572,7 @@ func (connection *connection) subscribe(requestID string, command *opensplunkv1.
 		canonical := group[0].canonical
 		preview, err := hasPreviewPayload(canonical)
 		if err != nil {
-			return false, &commandFailure{code: opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND, message: "could not read initial target state"}
+			return false, &commandFailure{code: opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND, message: "could not read initial target state"}
 		}
 		if preview {
 			releaseTailoring, acquireErr := connection.service.acquireTailoring(connection.ctx)
@@ -583,13 +583,13 @@ func (connection *connection) subscribe(requestID string, command *opensplunkv1.
 			defer releaseTailoring()
 			canonical, err = tailorPreviewEvent(canonical, group[0].request.previewRows)
 			if err != nil {
-				return false, &commandFailure{code: opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND, message: "could not encode initial target state"}
+				return false, &commandFailure{code: opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND, message: "could not encode initial target state"}
 			}
 		}
 		for _, delivery := range group {
 			result, stageErr := connection.stagePreparedCanonicalFrame(batch, canonical, delivery.request.id)
 			if stageErr != nil {
-				return false, &commandFailure{code: opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND, message: "could not encode initial target state"}
+				return false, &commandFailure{code: opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND, message: "could not encode initial target state"}
 			}
 			if accepted, failure := handleAppend(result); !accepted {
 				return false, failure
@@ -663,7 +663,7 @@ func (connection *connection) stagePreparedCanonicalFrame(
 	return batch.appendReserved(stamped, reservedBytes), nil
 }
 
-func (connection *connection) unsubscribe(requestID string, command *opensplunkv1.UnsubscribeSearchJobsCommand) *commandFailure {
+func (connection *connection) unsubscribe(requestID string, command *opensplunk.UnsubscribeSearchJobsCommand) *commandFailure {
 	ids := command.GetSubscriptionIds()
 	if len(ids) == 0 {
 		return invalidCommand("at least one subscription_id is required", fieldViolation("unsubscribe.subscription_ids", "REQUIRED", "at least one subscription_id is required"))
@@ -1036,7 +1036,7 @@ func (connection *connection) signalWriterLocked() {
 	}
 }
 
-func (connection *connection) fatalProtocolError(requestID string, code opensplunkv1.SearchWebSocketProtocolErrorCode, message string) bool {
+func (connection *connection) fatalProtocolError(requestID string, code opensplunk.SearchWebSocketProtocolErrorCode, message string) bool {
 	if !connection.sendProtocolError(requestID, code, message, nil, true) {
 		connection.hardClose()
 		return false
@@ -1045,17 +1045,17 @@ func (connection *connection) fatalProtocolError(requestID string, code opensplu
 	return true
 }
 
-func (connection *connection) sendProtocolError(requestID string, code opensplunkv1.SearchWebSocketProtocolErrorCode, message string, violations []*opensplunkv1.FieldViolation, willClose bool) bool {
+func (connection *connection) sendProtocolError(requestID string, code opensplunk.SearchWebSocketProtocolErrorCode, message string, violations []*opensplunk.FieldViolation, willClose bool) bool {
 	event := protocolErrorEvent(requestID, code, message, violations, willClose, connection.service.config.now())
 	return connection.enqueueEvent(event)
 }
 
-func (connection *connection) enqueueEvent(event *opensplunkv1.SearchWebSocketEvent) bool {
+func (connection *connection) enqueueEvent(event *opensplunk.SearchWebSocketEvent) bool {
 	data, err := marshalEvent(event, connection.service.config.maximumFrameBytes)
 	return err == nil && connection.enqueue(data)
 }
 
-func marshalEvent(event *opensplunkv1.SearchWebSocketEvent, maximumFrameBytes uint64) ([]byte, error) {
+func marshalEvent(event *opensplunk.SearchWebSocketEvent, maximumFrameBytes uint64) ([]byte, error) {
 	if event == nil || event.GetOccurredAt() == nil || event.GetOccurredAt().CheckValid() != nil {
 		return nil, errors.New("search websocket control event has an invalid timestamp")
 	}
@@ -1069,68 +1069,68 @@ func marshalEvent(event *opensplunkv1.SearchWebSocketEvent, maximumFrameBytes ui
 	return data, nil
 }
 
-func subscriptionAcknowledgedEvent(requestID string, request requestedSubscription, now time.Time) *opensplunkv1.SearchWebSocketEvent {
+func subscriptionAcknowledgedEvent(requestID string, request requestedSubscription, now time.Time) *opensplunk.SearchWebSocketEvent {
 	timestamp, _ := timestampToProto(now)
 	id := request.id
 	target := request.key.protobuf()
-	return &opensplunkv1.SearchWebSocketEvent{
-		OccurredAt: timestamp, SubscriptionId: &id, Target: proto.Clone(target).(*opensplunkv1.JobTarget),
-		Payload: &opensplunkv1.SearchWebSocketEvent_SubscriptionAcknowledged{SubscriptionAcknowledged: &opensplunkv1.SubscriptionAcknowledged{
+	return &opensplunk.SearchWebSocketEvent{
+		OccurredAt: timestamp, SubscriptionId: &id, Target: proto.Clone(target).(*opensplunk.JobTarget),
+		Payload: &opensplunk.SearchWebSocketEvent_SubscriptionAcknowledged{SubscriptionAcknowledged: &opensplunk.SubscriptionAcknowledged{
 			RequestId: requestID, SubscriptionId: id, Target: target,
 			EarliestAvailableSequence: request.earliest, LatestSequence: request.latest, ReplayWillFollow: request.replayFollows,
 		}},
 	}
 }
 
-func subscriptionRemovedEvent(requestID, subscriptionID string, now time.Time) *opensplunkv1.SearchWebSocketEvent {
+func subscriptionRemovedEvent(requestID, subscriptionID string, now time.Time) *opensplunk.SearchWebSocketEvent {
 	timestamp, _ := timestampToProto(now)
-	return &opensplunkv1.SearchWebSocketEvent{
+	return &opensplunk.SearchWebSocketEvent{
 		OccurredAt: timestamp, SubscriptionId: &subscriptionID,
-		Payload: &opensplunkv1.SearchWebSocketEvent_SubscriptionRemoved{SubscriptionRemoved: &opensplunkv1.SubscriptionRemoved{
+		Payload: &opensplunk.SearchWebSocketEvent_SubscriptionRemoved{SubscriptionRemoved: &opensplunk.SubscriptionRemoved{
 			RequestId: requestID, SubscriptionId: subscriptionID,
 		}},
 	}
 }
 
-func pongEvent(nonce string, now time.Time) *opensplunkv1.SearchWebSocketEvent {
+func pongEvent(nonce string, now time.Time) *opensplunk.SearchWebSocketEvent {
 	timestamp, _ := timestampToProto(now)
-	return &opensplunkv1.SearchWebSocketEvent{
+	return &opensplunk.SearchWebSocketEvent{
 		OccurredAt: timestamp,
-		Payload:    &opensplunkv1.SearchWebSocketEvent_Pong{Pong: &opensplunkv1.SearchWebSocketPong{Nonce: nonce, ServerTime: timestamp}},
+		Payload:    &opensplunk.SearchWebSocketEvent_Pong{Pong: &opensplunk.SearchWebSocketPong{Nonce: nonce, ServerTime: timestamp}},
 	}
 }
 
-func protocolErrorEvent(requestID string, code opensplunkv1.SearchWebSocketProtocolErrorCode, message string, violations []*opensplunkv1.FieldViolation, willClose bool, now time.Time) *opensplunkv1.SearchWebSocketEvent {
+func protocolErrorEvent(requestID string, code opensplunk.SearchWebSocketProtocolErrorCode, message string, violations []*opensplunk.FieldViolation, willClose bool, now time.Time) *opensplunk.SearchWebSocketEvent {
 	timestamp, _ := timestampToProto(now)
-	return &opensplunkv1.SearchWebSocketEvent{
+	return &opensplunk.SearchWebSocketEvent{
 		OccurredAt: timestamp,
-		Payload: &opensplunkv1.SearchWebSocketEvent_ProtocolError{ProtocolError: &opensplunkv1.SearchWebSocketProtocolError{
+		Payload: &opensplunk.SearchWebSocketEvent_ProtocolError{ProtocolError: &opensplunk.SearchWebSocketProtocolError{
 			RequestId: requestID, Code: code, Message: message, Violations: violations, ConnectionWillClose: willClose,
 		}},
 	}
 }
 
-func parseTarget(target *opensplunkv1.JobTarget, path string) (targetKey, *commandFailure) {
+func parseTarget(target *opensplunk.JobTarget, path string) (targetKey, *commandFailure) {
 	if target == nil {
-		return targetKey{}, &commandFailure{code: opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_TARGET, message: "target is required", violations: []*opensplunkv1.FieldViolation{fieldViolation(path, "REQUIRED", "target is required")}}
+		return targetKey{}, &commandFailure{code: opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_TARGET, message: "target is required", violations: []*opensplunk.FieldViolation{fieldViolation(path, "REQUIRED", "target is required")}}
 	}
 	var key targetKey
 	switch value := target.GetTarget().(type) {
-	case *opensplunkv1.JobTarget_SearchJobId:
+	case *opensplunk.JobTarget_SearchJobId:
 		if value == nil {
-			return targetKey{}, &commandFailure{code: opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_TARGET, message: "target kind is invalid", violations: []*opensplunkv1.FieldViolation{fieldViolation(path, "INVALID", "target kind is invalid")}}
+			return targetKey{}, &commandFailure{code: opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_TARGET, message: "target kind is invalid", violations: []*opensplunk.FieldViolation{fieldViolation(path, "INVALID", "target kind is invalid")}}
 		}
 		key = targetKey{kind: targetKindSearch, id: value.SearchJobId}
-	case *opensplunkv1.JobTarget_ExportJobId:
+	case *opensplunk.JobTarget_ExportJobId:
 		if value == nil {
-			return targetKey{}, &commandFailure{code: opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_TARGET, message: "target kind is invalid", violations: []*opensplunkv1.FieldViolation{fieldViolation(path, "INVALID", "target kind is invalid")}}
+			return targetKey{}, &commandFailure{code: opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_TARGET, message: "target kind is invalid", violations: []*opensplunk.FieldViolation{fieldViolation(path, "INVALID", "target kind is invalid")}}
 		}
 		key = targetKey{kind: targetKindExport, id: value.ExportJobId}
 	default:
-		return targetKey{}, &commandFailure{code: opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_TARGET, message: "target kind is required", violations: []*opensplunkv1.FieldViolation{fieldViolation(path, "REQUIRED", "one target kind is required")}}
+		return targetKey{}, &commandFailure{code: opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_TARGET, message: "target kind is required", violations: []*opensplunk.FieldViolation{fieldViolation(path, "REQUIRED", "one target kind is required")}}
 	}
 	if !validProtocolString(key.id, maximumTargetIDBytes, true) {
-		return targetKey{}, &commandFailure{code: opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_TARGET, message: "target identifier is invalid", violations: []*opensplunkv1.FieldViolation{fieldViolation(path, "INVALID", "target identifier is invalid")}}
+		return targetKey{}, &commandFailure{code: opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_TARGET, message: "target identifier is invalid", violations: []*opensplunk.FieldViolation{fieldViolation(path, "INVALID", "target identifier is invalid")}}
 	}
 	return key, nil
 }
@@ -1142,12 +1142,12 @@ func validProtocolString(value string, maximumBytes int, required bool) bool {
 	return !strings.ContainsAny(value, "\x00\r\n")
 }
 
-func fieldViolation(path, code, message string) *opensplunkv1.FieldViolation {
-	return &opensplunkv1.FieldViolation{FieldPath: path, Code: code, Message: message}
+func fieldViolation(path, code, message string) *opensplunk.FieldViolation {
+	return &opensplunk.FieldViolation{FieldPath: path, Code: code, Message: message}
 }
 
-func invalidCommand(message string, violation *opensplunkv1.FieldViolation) *commandFailure {
-	return &commandFailure{code: opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND, message: message, violations: []*opensplunkv1.FieldViolation{violation}}
+func invalidCommand(message string, violation *opensplunk.FieldViolation) *commandFailure {
+	return &commandFailure{code: opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND, message: message, violations: []*opensplunk.FieldViolation{violation}}
 }
 
 func uniqueSortedTargets(requests []requestedSubscription) []*targetState {

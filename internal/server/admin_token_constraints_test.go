@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/tokenconstraint"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -17,9 +17,9 @@ import (
 func TestIngestionTokenConstraintParsingIsCanonicalAndDetached(t *testing.T) {
 	t.Parallel()
 
-	input := &opensplunkv1.IngestionTokenDefinition{
+	input := &opensplunk.IngestionTokenDefinition{
 		Name: "constrained",
-		Constraints: &opensplunkv1.IngestionTokenConstraints{
+		Constraints: &opensplunk.IngestionTokenConstraints{
 			AllowedIndexNames:    []string{"main"},
 			AllowedHostRegexes:   []string{"^z$", "^a$", "^z$"},
 			AllowedSourceRegexes: []string{`^/var/log/[^/]+$`, `.*`, `.*`},
@@ -141,7 +141,7 @@ func TestApplyIngestionTokenUpdatePreservesAndReplacesConstraints(t *testing.T) 
 
 	masked, err := applyTokenUpdate(
 		current,
-		&opensplunkv1.IngestionTokenDefinition{Name: "renamed"},
+		&opensplunk.IngestionTokenDefinition{Name: "renamed"},
 		&fieldmaskpb.FieldMask{Paths: []string{"name"}},
 	)
 	if err != nil {
@@ -160,7 +160,7 @@ func TestApplyIngestionTokenUpdatePreservesAndReplacesConstraints(t *testing.T) 
 
 	replaced, err := applyTokenUpdate(
 		current,
-		&opensplunkv1.IngestionTokenDefinition{Constraints: &opensplunkv1.IngestionTokenConstraints{
+		&opensplunk.IngestionTokenDefinition{Constraints: &opensplunk.IngestionTokenConstraints{
 			AllowedIndexNames:    []string{"audit"},
 			AllowedHostRegexes:   []string{"^z$", "^a$", "^z$"},
 			AllowedSourceRegexes: []string{"^new-source$"},
@@ -230,10 +230,10 @@ func TestIngestionTokenConstraintAdministrativeRoundTrip(t *testing.T) {
 		t.Fatalf("CreateIndex(main): %v", err)
 	}
 	binding := "collector-round-trip"
-	response := postProto(t, handler, "/api/v1/ingestion-tokens/create", &opensplunkv1.CreateIngestionTokenRequest{
-		Definition: &opensplunkv1.IngestionTokenDefinition{
+	response := postProto(t, handler, "/api/ingestion-tokens/create", &opensplunk.CreateIngestionTokenRequest{
+		Definition: &opensplunk.IngestionTokenDefinition{
 			Name: "round trip",
-			Constraints: &opensplunkv1.IngestionTokenConstraints{
+			Constraints: &opensplunk.IngestionTokenConstraints{
 				AllowedIndexNames:    []string{"main"},
 				AllowedHostRegexes:   []string{"^z$", "^a$", "^z$"},
 				AllowedSourceRegexes: []string{"^source$"},
@@ -244,9 +244,9 @@ func TestIngestionTokenConstraintAdministrativeRoundTrip(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("create status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var created opensplunkv1.CreateIngestionTokenResponse
+	var created opensplunk.CreateIngestionTokenResponse
 	unmarshalResponse(t, response, &created)
-	wantCreatedConstraints := &opensplunkv1.IngestionTokenConstraints{
+	wantCreatedConstraints := &opensplunk.IngestionTokenConstraints{
 		AllowedIndexNames:    []string{"main"},
 		AllowedHostRegexes:   []string{"^a$", "^z$"},
 		AllowedSourceRegexes: []string{"^source$"},
@@ -257,33 +257,33 @@ func TestIngestionTokenConstraintAdministrativeRoundTrip(t *testing.T) {
 	}
 	tokenID := created.GetIngestionToken().GetIngestionTokenId()
 
-	response = postProto(t, handler, "/api/v1/ingestion-tokens/get", &opensplunkv1.GetIngestionTokenRequest{
+	response = postProto(t, handler, "/api/ingestion-tokens/get", &opensplunk.GetIngestionTokenRequest{
 		IngestionTokenId: tokenID,
 	})
 	if response.Code != http.StatusOK {
 		t.Fatalf("get status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var got opensplunkv1.GetIngestionTokenResponse
+	var got opensplunk.GetIngestionTokenResponse
 	unmarshalResponse(t, response, &got)
 	if !proto.Equal(got.GetIngestionToken().GetConstraints(), wantCreatedConstraints) {
 		t.Fatalf("get constraints = %+v", got.GetIngestionToken().GetConstraints())
 	}
 
-	response = postProto(t, handler, "/api/v1/ingestion-tokens/list", &opensplunkv1.ListIngestionTokensRequest{})
+	response = postProto(t, handler, "/api/ingestion-tokens/list", &opensplunk.ListIngestionTokensRequest{})
 	if response.Code != http.StatusOK {
 		t.Fatalf("list status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var listed opensplunkv1.ListIngestionTokensResponse
+	var listed opensplunk.ListIngestionTokensResponse
 	unmarshalResponse(t, response, &listed)
 	if len(listed.GetIngestionTokens()) != 1 ||
 		!proto.Equal(listed.GetIngestionTokens()[0].GetConstraints(), wantCreatedConstraints) {
 		t.Fatalf("listed tokens = %+v", listed.GetIngestionTokens())
 	}
 
-	response = postProto(t, handler, "/api/v1/ingestion-tokens/update", &opensplunkv1.UpdateIngestionTokenRequest{
+	response = postProto(t, handler, "/api/ingestion-tokens/update", &opensplunk.UpdateIngestionTokenRequest{
 		IngestionTokenId: tokenID,
 		ExpectedVersion:  created.GetIngestionToken().GetVersion(),
-		Definition: &opensplunkv1.IngestionTokenDefinition{Constraints: &opensplunkv1.IngestionTokenConstraints{
+		Definition: &opensplunk.IngestionTokenDefinition{Constraints: &opensplunk.IngestionTokenConstraints{
 			AllowedIndexNames:    []string{"main"},
 			AllowedHostRegexes:   []string{"^new-host$"},
 			AllowedSourceRegexes: []string{"^z$", "^a$"},
@@ -293,9 +293,9 @@ func TestIngestionTokenConstraintAdministrativeRoundTrip(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("update status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var updated opensplunkv1.UpdateIngestionTokenResponse
+	var updated opensplunk.UpdateIngestionTokenResponse
 	unmarshalResponse(t, response, &updated)
-	wantUpdatedConstraints := &opensplunkv1.IngestionTokenConstraints{
+	wantUpdatedConstraints := &opensplunk.IngestionTokenConstraints{
 		AllowedIndexNames:    []string{"main"},
 		AllowedHostRegexes:   []string{"^new-host$"},
 		AllowedSourceRegexes: []string{"^a$", "^z$"},
@@ -314,7 +314,7 @@ func TestIngestionTokenConstraintHTTPErrorIsGeneric(t *testing.T) {
 		t.Fatalf("CreateIndex(main): %v", err)
 	}
 	sensitivePattern := "private-tenant-source["
-	response := postProto(t, handler, "/api/v1/ingestion-tokens/create", &opensplunkv1.CreateIngestionTokenRequest{
+	response := postProto(t, handler, "/api/ingestion-tokens/create", &opensplunk.CreateIngestionTokenRequest{
 		Definition: tokenConstraintDefinition(nil, []string{sensitivePattern}),
 	})
 	if response.Code != http.StatusBadRequest ||
@@ -324,10 +324,10 @@ func TestIngestionTokenConstraintHTTPErrorIsGeneric(t *testing.T) {
 	}
 }
 
-func tokenConstraintDefinition(hosts, sources []string) *opensplunkv1.IngestionTokenDefinition {
-	return &opensplunkv1.IngestionTokenDefinition{
+func tokenConstraintDefinition(hosts, sources []string) *opensplunk.IngestionTokenDefinition {
+	return &opensplunk.IngestionTokenDefinition{
 		Name: "constraint test",
-		Constraints: &opensplunkv1.IngestionTokenConstraints{
+		Constraints: &opensplunk.IngestionTokenConstraints{
 			AllowedIndexNames:    []string{"main"},
 			AllowedHostRegexes:   hosts,
 			AllowedSourceRegexes: sources,

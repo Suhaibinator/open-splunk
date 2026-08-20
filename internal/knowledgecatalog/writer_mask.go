@@ -7,7 +7,7 @@ import (
 	"slices"
 	"strings"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
 	"google.golang.org/protobuf/proto"
@@ -48,10 +48,10 @@ func UpdateChangesSharingScope(mask *fieldmaskpb.FieldMask) (bool, error) {
 // not need a racy pre-update read. Inactive opaque future bodies retain their
 // canonical bytes and may match only metadata-only updates.
 func UpdateResultMatchesRequest(
-	result *opensplunkv1.KnowledgeObjectDefinition,
-	submitted *opensplunkv1.KnowledgeObjectDefinition,
+	result *opensplunk.KnowledgeObjectDefinition,
+	submitted *opensplunk.KnowledgeObjectDefinition,
 	mask *fieldmaskpb.FieldMask,
-	state opensplunkv1.KnowledgeObjectState,
+	state opensplunk.KnowledgeObjectState,
 ) bool {
 	paths, err := normalizeKnowledgeUpdateMask(mask)
 	if err != nil {
@@ -110,14 +110,14 @@ func normalizeKnowledgeUpdateMask(mask *fieldmaskpb.FieldMask) ([]string, error)
 }
 
 func applyKnowledgeDefinitionMask(
-	current *opensplunkv1.KnowledgeObjectDefinition,
-	incoming *opensplunkv1.KnowledgeObjectDefinition,
+	current *opensplunk.KnowledgeObjectDefinition,
+	incoming *opensplunk.KnowledgeObjectDefinition,
 	paths []string,
-) (*opensplunkv1.KnowledgeObjectDefinition, error) {
+) (*opensplunk.KnowledgeObjectDefinition, error) {
 	if current == nil || incoming == nil || len(paths) == 0 {
 		return nil, fmt.Errorf("%w: update definition and mask are required", control.ErrInvalidArgument)
 	}
-	result, ok := proto.Clone(current).(*opensplunkv1.KnowledgeObjectDefinition)
+	result, ok := proto.Clone(current).(*opensplunk.KnowledgeObjectDefinition)
 	if !ok || result == nil {
 		return nil, fmt.Errorf("%w: current definition cannot be cloned", ErrCorrupt)
 	}
@@ -135,28 +135,28 @@ func applyKnowledgeDefinitionMask(
 			if incoming.GetSelector() == nil {
 				result.Selector = nil
 			} else {
-				result.Selector = proto.Clone(incoming.GetSelector()).(*opensplunkv1.KnowledgeSelector)
+				result.Selector = proto.Clone(incoming.GetSelector()).(*opensplunk.KnowledgeSelector)
 			}
 		case "field_extraction":
 			if current.GetFieldExtraction() == nil || incoming.GetFieldExtraction() == nil {
 				return nil, invalidMutation("knowledge object type is immutable")
 			}
-			result.Body = &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
-				FieldExtraction: proto.Clone(incoming.GetFieldExtraction()).(*opensplunkv1.FieldExtractionDefinition),
+			result.Body = &opensplunk.KnowledgeObjectDefinition_FieldExtraction{
+				FieldExtraction: proto.Clone(incoming.GetFieldExtraction()).(*opensplunk.FieldExtractionDefinition),
 			}
 		case "field_alias":
 			if current.GetFieldAlias() == nil || incoming.GetFieldAlias() == nil {
 				return nil, invalidMutation("knowledge object type is immutable")
 			}
-			result.Body = &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{
-				FieldAlias: proto.Clone(incoming.GetFieldAlias()).(*opensplunkv1.FieldAliasDefinition),
+			result.Body = &opensplunk.KnowledgeObjectDefinition_FieldAlias{
+				FieldAlias: proto.Clone(incoming.GetFieldAlias()).(*opensplunk.FieldAliasDefinition),
 			}
 		case "calculated_field":
 			if current.GetCalculatedField() == nil || incoming.GetCalculatedField() == nil {
 				return nil, invalidMutation("knowledge object type is immutable")
 			}
-			result.Body = &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{
-				CalculatedField: proto.Clone(incoming.GetCalculatedField()).(*opensplunkv1.CalculatedFieldDefinition),
+			result.Body = &opensplunk.KnowledgeObjectDefinition_CalculatedField{
+				CalculatedField: proto.Clone(incoming.GetCalculatedField()).(*opensplunk.CalculatedFieldDefinition),
 			}
 		default:
 			return nil, invalidMutation("update mask contains an unsupported path")

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 )
 
@@ -153,7 +153,7 @@ func TestGraphOutgoingExactVersionPrivacyPaginationAndDetachedAuthority(t *testi
 
 func TestGraphIncomingCurrentSourcesAllLifecycleStatesAndExactTargetVersion(t *testing.T) {
 	database, store := newCatalogTestStore(t)
-	target := func(description string) *opensplunkv1.KnowledgeObjectDefinition {
+	target := func(description string) *opensplunk.KnowledgeObjectDefinition {
 		return dependencyExtractionDefinition(
 			testApp, "incoming-target", SharingScopePrivate, &description, "incoming-*", "raw_value",
 		)
@@ -163,7 +163,7 @@ func TestGraphIncomingCurrentSourcesAllLifecycleStatesAndExactTargetVersion(t *t
 		{definition: target("v2"), state: StateDraft, mutation: "update", timestamp: 11},
 	}})
 	dependency := []fixtureDependency{{targetObjectID: "ko-incoming-target", targetVersion: 1}}
-	alias := func(name string) *opensplunkv1.KnowledgeObjectDefinition {
+	alias := func(name string) *opensplunk.KnowledgeObjectDefinition {
 		return dependencyAliasDefinition(
 			testApp, name, SharingScopePrivate, nil, "incoming-*", "raw_value", name+"_value",
 		)

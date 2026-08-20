@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/collectoradmission"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
@@ -100,7 +100,6 @@ func TestRuntimeCollectorLifecyclePersistsHeartbeatAndFencesDisabledBatch(
 	}
 	config.NewStreamID = func() string { return streamID }
 	config.ServerInstanceID = bootEpoch
-	config.ServerVersion = "runtime-fleet-test"
 	heartbeatRuntime := newCommandHeartbeatRuntime(
 		t,
 		fleet,
@@ -131,7 +130,7 @@ func TestRuntimeCollectorLifecyclePersistsHeartbeatAndFencesDisabledBatch(
 
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	opensplunkv1.RegisterCollectorIngestServiceServer(grpcServer, service)
+	opensplunk.RegisterCollectorIngestServiceServer(grpcServer, service)
 	serveDone := make(chan error, 1)
 	go func() {
 		serveDone <- grpcServer.Serve(listener)
@@ -177,33 +176,31 @@ func TestRuntimeCollectorLifecyclePersistsHeartbeatAndFencesDisabledBatch(
 		10*time.Second,
 	)
 	t.Cleanup(cancelStream)
-	stream, err := opensplunkv1.NewCollectorIngestServiceClient(connection).
+	stream, err := opensplunk.NewCollectorIngestServiceClient(connection).
 		Collect(streamContext)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err := stream.Send(&opensplunkv1.CollectRequest{
+	if err := stream.Send(&opensplunk.CollectRequest{
 		StreamSequence: 1,
 		SentAt:         timestamppb.New(base),
-		Payload: &opensplunkv1.CollectRequest_Hello{
-			Hello: &opensplunkv1.CollectorHello{
-				CollectorId:      collectorID,
-				InstanceId:       instanceID,
-				ProtocolMajor:    1,
-				ProtocolMinor:    0,
-				CollectorVersion: "runtime-fleet-test",
-				Hostname:         "runtime-fleet-host",
-				OperatingSystem:  "linux",
-				Architecture:     "amd64",
-				StartedAt:        timestamppb.New(base.Add(-time.Minute)),
-				Capabilities: []opensplunkv1.CollectorCapability{
-					opensplunkv1.
+		Payload: &opensplunk.CollectRequest_Hello{
+			Hello: &opensplunk.CollectorHello{
+				CollectorId:     collectorID,
+				InstanceId:      instanceID,
+				SourceRevision:  "development",
+				Hostname:        "runtime-fleet-host",
+				OperatingSystem: "linux",
+				Architecture:    "amd64",
+				StartedAt:       timestamppb.New(base.Add(-time.Minute)),
+				Capabilities: []opensplunk.CollectorCapability{
+					opensplunk.
 						CollectorCapability_COLLECTOR_CAPABILITY_FILE_INPUT,
 				},
-				Inputs: []*opensplunkv1.CollectorInputRegistration{{
+				Inputs: []*opensplunk.CollectorInputRegistration{{
 					InputId: inputID,
-					InputType: opensplunkv1.
+					InputType: opensplunk.
 						CollectorInputType_COLLECTOR_INPUT_TYPE_FILE,
 					IndexName: "main",
 				}},
@@ -227,15 +224,15 @@ func TestRuntimeCollectorLifecyclePersistsHeartbeatAndFencesDisabledBatch(
 	clockUnixMicro.Store(heartbeatAt.UnixMicro())
 	lastSent := uint64(9)
 	lastAcknowledged := uint64(8)
-	if err := stream.Send(&opensplunkv1.CollectRequest{
+	if err := stream.Send(&opensplunk.CollectRequest{
 		StreamSequence: 2,
 		SentAt:         timestamppb.New(heartbeatAt),
-		Payload: &opensplunkv1.CollectRequest_Heartbeat{
-			Heartbeat: &opensplunkv1.CollectorHeartbeat{
+		Payload: &opensplunk.CollectRequest_Heartbeat{
+			Heartbeat: &opensplunk.CollectorHeartbeat{
 				CollectorId: collectorID,
 				InstanceId:  instanceID,
 				ObservedAt:  timestamppb.New(heartbeatAt),
-				Queue: &opensplunkv1.CollectorQueueStats{
+				Queue: &opensplunk.CollectorQueueStats{
 					QueuedEvents:            3,
 					QueuedBytes:             4096,
 					OldestEventAge:          durationpb.New(2 * time.Second),
@@ -244,9 +241,9 @@ func TestRuntimeCollectorLifecyclePersistsHeartbeatAndFencesDisabledBatch(
 					RetriedBatchesTotal:     2,
 					RejectedEventsTotal:     1,
 				},
-				Inputs: []*opensplunkv1.CollectorInputHealth{{
+				Inputs: []*opensplunk.CollectorInputHealth{{
 					InputId: inputID,
-					State: opensplunkv1.
+					State: opensplunk.
 						CollectorInputState_COLLECTOR_INPUT_STATE_HEALTHY,
 					StatusMessage:     "healthy",
 					DiscoveredSources: 2,
@@ -325,40 +322,38 @@ func TestRuntimeCollectorLifecyclePersistsHeartbeatAndFencesDisabledBatch(
 	}
 
 	message := "must not be stored after collector disable"
-	event := &opensplunkv1.LogEvent{
+	event := &opensplunk.LogEvent{
 		EventId:     "event-after-disable",
 		IndexName:   "main",
 		EventTime:   timestamppb.New(disabledAt.Add(-time.Second)),
 		CollectedAt: timestamppb.New(disabledAt),
-		EventTimeSource: opensplunkv1.
+		EventTimeSource: opensplunk.
 			EventTimeSource_EVENT_TIME_SOURCE_PARSED,
 		Host:        "runtime-fleet-host",
 		Source:      "/var/log/runtime-fleet.log",
 		Sourcetype:  "runtime:fleet",
-		Severity:    opensplunkv1.LogSeverity_LOG_SEVERITY_INFO,
+		Severity:    opensplunk.LogSeverity_LOG_SEVERITY_INFO,
 		Message:     &message,
 		Raw:         []byte(message),
-		RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+		RawEncoding: opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 	}
-	batch := &opensplunkv1.EventBatch{
+	batch := &opensplunk.EventBatch{
 		CollectorId:   collectorID,
 		BatchId:       "batch-after-disable",
 		BatchSequence: 1,
 		CreatedAt:     timestamppb.New(disabledAt),
-		Events:        []*opensplunkv1.LogEvent{event},
+		Events:        []*opensplunk.LogEvent{event},
 		UncompressedSizeBytes: ingest.UncompressedEventBytes(
-			[]*opensplunkv1.LogEvent{event},
+			[]*opensplunk.LogEvent{event},
 		),
 		EventIdsSha256: ingest.EventIDDigest(
-			[]*opensplunkv1.LogEvent{event},
+			[]*opensplunk.LogEvent{event},
 		),
-		ProtocolMajor: 1,
-		ProtocolMinor: 0,
 	}
-	if err := stream.Send(&opensplunkv1.CollectRequest{
+	if err := stream.Send(&opensplunk.CollectRequest{
 		StreamSequence: 3,
 		SentAt:         timestamppb.New(disabledAt),
-		Payload: &opensplunkv1.CollectRequest_Batch{
+		Payload: &opensplunk.CollectRequest_Batch{
 			Batch: batch,
 		},
 	}); err != nil {
@@ -465,7 +460,6 @@ func TestRuntimeCollectorLifecycleDisconnectsActiveLeaseOnGoodbye(
 	}
 	config.NewStreamID = func() string { return streamID }
 	config.ServerInstanceID = bootEpoch
-	config.ServerVersion = "runtime-cleanup-test"
 	heartbeatRuntime := newCommandHeartbeatRuntimeWithFlush(
 		t,
 		fleet,
@@ -495,7 +489,7 @@ func TestRuntimeCollectorLifecycleDisconnectsActiveLeaseOnGoodbye(
 
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	opensplunkv1.RegisterCollectorIngestServiceServer(grpcServer, service)
+	opensplunk.RegisterCollectorIngestServiceServer(grpcServer, service)
 	serveDone := make(chan error, 1)
 	go func() {
 		serveDone <- grpcServer.Serve(listener)
@@ -541,25 +535,23 @@ func TestRuntimeCollectorLifecycleDisconnectsActiveLeaseOnGoodbye(
 		10*time.Second,
 	)
 	t.Cleanup(cancelStream)
-	stream, err := opensplunkv1.NewCollectorIngestServiceClient(connection).
+	stream, err := opensplunk.NewCollectorIngestServiceClient(connection).
 		Collect(streamContext)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := stream.Send(&opensplunkv1.CollectRequest{
+	if err := stream.Send(&opensplunk.CollectRequest{
 		StreamSequence: 1,
 		SentAt:         timestamppb.New(base),
-		Payload: &opensplunkv1.CollectRequest_Hello{
-			Hello: &opensplunkv1.CollectorHello{
-				CollectorId:      collectorID,
-				InstanceId:       instanceID,
-				ProtocolMajor:    1,
-				ProtocolMinor:    0,
-				CollectorVersion: "runtime-cleanup-test",
-				Hostname:         "runtime-cleanup-host",
-				OperatingSystem:  "linux",
-				Architecture:     "amd64",
-				StartedAt:        timestamppb.New(base.Add(-time.Minute)),
+		Payload: &opensplunk.CollectRequest_Hello{
+			Hello: &opensplunk.CollectorHello{
+				CollectorId:     collectorID,
+				InstanceId:      instanceID,
+				SourceRevision:  "development",
+				Hostname:        "runtime-cleanup-host",
+				OperatingSystem: "linux",
+				Architecture:    "amd64",
+				StartedAt:       timestamppb.New(base.Add(-time.Minute)),
 			},
 		},
 	}); err != nil {
@@ -592,15 +584,15 @@ func TestRuntimeCollectorLifecycleDisconnectsActiveLeaseOnGoodbye(
 
 	heartbeatAt := base.Add(time.Second)
 	clockUnixMicro.Store(heartbeatAt.UnixMicro())
-	if err := stream.Send(&opensplunkv1.CollectRequest{
+	if err := stream.Send(&opensplunk.CollectRequest{
 		StreamSequence: 2,
 		SentAt:         timestamppb.New(heartbeatAt),
-		Payload: &opensplunkv1.CollectRequest_Heartbeat{
-			Heartbeat: &opensplunkv1.CollectorHeartbeat{
+		Payload: &opensplunk.CollectRequest_Heartbeat{
+			Heartbeat: &opensplunk.CollectorHeartbeat{
 				CollectorId: collectorID,
 				InstanceId:  instanceID,
 				ObservedAt:  timestamppb.New(heartbeatAt),
-				Queue: &opensplunkv1.CollectorQueueStats{
+				Queue: &opensplunk.CollectorQueueStats{
 					QueuedEvents: 4,
 					QueuedBytes:  1024,
 				},
@@ -612,12 +604,12 @@ func TestRuntimeCollectorLifecycleDisconnectsActiveLeaseOnGoodbye(
 
 	disconnectedAt := base.Add(2 * time.Second)
 	clockUnixMicro.Store(disconnectedAt.UnixMicro())
-	if err := stream.Send(&opensplunkv1.CollectRequest{
+	if err := stream.Send(&opensplunk.CollectRequest{
 		StreamSequence: 3,
 		SentAt:         timestamppb.New(disconnectedAt),
-		Payload: &opensplunkv1.CollectRequest_Goodbye{
-			Goodbye: &opensplunkv1.CollectorGoodbye{
-				Reason: opensplunkv1.
+		Payload: &opensplunk.CollectRequest_Goodbye{
+			Goodbye: &opensplunk.CollectorGoodbye{
+				Reason: opensplunk.
 					CollectorGoodbyeReason_COLLECTOR_GOODBYE_REASON_SHUTDOWN,
 			},
 		},
@@ -729,7 +721,6 @@ func TestRuntimeCollectorForcedStopDrainsHeartbeatBeforeDisconnect(
 	}
 	config.NewStreamID = func() string { return streamID }
 	config.ServerInstanceID = bootEpoch
-	config.ServerVersion = "runtime-forced-stop-test"
 	heartbeatRuntime := newCommandHeartbeatRuntimeWithFlush(
 		t,
 		fleet,
@@ -763,7 +754,7 @@ func TestRuntimeCollectorForcedStopDrainsHeartbeatBeforeDisconnect(
 
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	opensplunkv1.RegisterCollectorIngestServiceServer(grpcServer, service)
+	opensplunk.RegisterCollectorIngestServiceServer(grpcServer, service)
 	serveDone := make(chan error, 1)
 	go func() {
 		serveDone <- grpcServer.Serve(listener)
@@ -817,23 +808,21 @@ func TestRuntimeCollectorForcedStopDrainsHeartbeatBeforeDisconnect(
 		10*time.Second,
 	)
 	t.Cleanup(cancelStream)
-	stream, err := opensplunkv1.NewCollectorIngestServiceClient(connection).
+	stream, err := opensplunk.NewCollectorIngestServiceClient(connection).
 		Collect(streamContext)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := stream.Send(&opensplunkv1.CollectRequest{
+	if err := stream.Send(&opensplunk.CollectRequest{
 		StreamSequence: 1,
 		SentAt:         timestamppb.New(base),
-		Payload: &opensplunkv1.CollectRequest_Hello{
-			Hello: &opensplunkv1.CollectorHello{
-				CollectorId:      collectorID,
-				InstanceId:       instanceID,
-				ProtocolMajor:    1,
-				ProtocolMinor:    0,
-				CollectorVersion: "runtime-forced-stop-test",
-				Hostname:         "runtime-forced-stop-host",
-				StartedAt:        timestamppb.New(base.Add(-time.Minute)),
+		Payload: &opensplunk.CollectRequest_Hello{
+			Hello: &opensplunk.CollectorHello{
+				CollectorId:    collectorID,
+				InstanceId:     instanceID,
+				SourceRevision: "development",
+				Hostname:       "runtime-forced-stop-host",
+				StartedAt:      timestamppb.New(base.Add(-time.Minute)),
 			},
 		},
 	}); err != nil {
@@ -860,15 +849,15 @@ func TestRuntimeCollectorForcedStopDrainsHeartbeatBeforeDisconnect(
 
 	heartbeatAt := base.Add(time.Second)
 	clockUnixMicro.Store(heartbeatAt.UnixMicro())
-	if err := stream.Send(&opensplunkv1.CollectRequest{
+	if err := stream.Send(&opensplunk.CollectRequest{
 		StreamSequence: 2,
 		SentAt:         timestamppb.New(heartbeatAt),
-		Payload: &opensplunkv1.CollectRequest_Heartbeat{
-			Heartbeat: &opensplunkv1.CollectorHeartbeat{
+		Payload: &opensplunk.CollectRequest_Heartbeat{
+			Heartbeat: &opensplunk.CollectorHeartbeat{
 				CollectorId: collectorID,
 				InstanceId:  instanceID,
 				ObservedAt:  timestamppb.New(heartbeatAt),
-				Queue: &opensplunkv1.CollectorQueueStats{
+				Queue: &opensplunk.CollectorQueueStats{
 					QueuedEvents: 6,
 					QueuedBytes:  2048,
 				},

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"google.golang.org/protobuf/encoding/protowire"
@@ -39,7 +39,7 @@ func TestWriterOutcomeReferenceIsCompactCanonicalAndStrict(t *testing.T) {
 		!bytes.Equal(reference.GetDefinitionSha256(), digest) {
 		t.Fatalf("decoded compact outcome = %#v", reference)
 	}
-	outcome := &opensplunkv1.KnowledgeMutationOutcomeRecord{}
+	outcome := &opensplunk.KnowledgeMutationOutcomeRecord{}
 	if err := (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(encoded, outcome); err != nil {
 		t.Fatalf("decode outcome envelope: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestWriterOutcomeReferenceIsCompactCanonicalAndStrict(t *testing.T) {
 		t.Fatalf("decode outcome with unknown field = %v, want ErrCorrupt", err)
 	}
 
-	withNestedUnknown := proto.Clone(outcome).(*opensplunkv1.KnowledgeMutationOutcomeRecord)
+	withNestedUnknown := proto.Clone(outcome).(*opensplunk.KnowledgeMutationOutcomeRecord)
 	nestedUnknown := protowire.AppendTag(nil, 127, protowire.VarintType)
 	nestedUnknown = protowire.AppendVarint(nestedUnknown, 1)
 	withNestedUnknown.GetObject().ProtoReflect().SetUnknown(nestedUnknown)
@@ -421,10 +421,10 @@ func TestReplayRequestBindingRejectsRedirectedTargetsVersionsAndTransitions(t *t
 	t.Parallel()
 
 	prepared := idempotencyUnitPrepared()
-	prepared.requestBytes = mustCanonicalReplayRequest(t, &opensplunkv1.UpdateKnowledgeObjectRequest{
+	prepared.requestBytes = mustCanonicalReplayRequest(t, &opensplunk.UpdateKnowledgeObjectRequest{
 		KnowledgeObjectId: "ko_request_target",
 		ExpectedVersion:   8,
-		Definition:        &opensplunkv1.KnowledgeObjectDefinition{},
+		Definition:        &opensplunk.KnowledgeObjectDefinition{},
 	})
 	matchingUpdate := versionRecord{
 		KnowledgeObjectID: "ko_request_target",
@@ -446,10 +446,10 @@ func TestReplayRequestBindingRejectsRedirectedTargetsVersionsAndTransitions(t *t
 		t.Fatalf("validate wrong update successor = %v, want ErrCorrupt", err)
 	}
 
-	prepared.requestBytes = mustCanonicalReplayRequest(t, &opensplunkv1.SetKnowledgeObjectStateRequest{
+	prepared.requestBytes = mustCanonicalReplayRequest(t, &opensplunk.SetKnowledgeObjectStateRequest{
 		KnowledgeObjectId: "ko_request_target",
 		ExpectedVersion:   9,
-		State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+		State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 	})
 	matchingDisable := versionRecord{
 		KnowledgeObjectID: "ko_request_target",
@@ -467,9 +467,9 @@ func TestReplayRequestBindingRejectsRedirectedTargetsVersionsAndTransitions(t *t
 		t.Fatalf("validate wrong state transition = %v, want ErrCorrupt", err)
 	}
 
-	prepared.requestBytes = mustCanonicalReplayRequest(t, &opensplunkv1.CreateKnowledgeObjectRequest{
-		Definition:   &opensplunkv1.KnowledgeObjectDefinition{},
-		InitialState: opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+	prepared.requestBytes = mustCanonicalReplayRequest(t, &opensplunk.CreateKnowledgeObjectRequest{
+		Definition:   &opensplunk.KnowledgeObjectDefinition{},
+		InitialState: opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 	})
 	matchingCreate := versionRecord{ObjectVersion: 1, MutationKind: "create", State: StateDraft}
 	if err := validateReplayScalarRequestBinding(prepared, mutationRouteCreate, matchingCreate); err != nil {
@@ -481,7 +481,7 @@ func TestReplayRequestBindingRejectsRedirectedTargetsVersionsAndTransitions(t *t
 		t.Fatalf("validate wrong create initial state = %v, want ErrCorrupt", err)
 	}
 
-	prepared.requestBytes = mustCanonicalReplayRequest(t, &opensplunkv1.DeleteKnowledgeObjectRequest{
+	prepared.requestBytes = mustCanonicalReplayRequest(t, &opensplunk.DeleteKnowledgeObjectRequest{
 		KnowledgeObjectId: "ko_request_target",
 		ExpectedVersion:   10,
 	})
@@ -502,12 +502,12 @@ func TestKnowledgeObjectToProtoDetachesDefinitionDigestAndLifecycle(t *testing.T
 	now := time.Date(2026, time.August, 7, 12, 0, 0, 123000, time.UTC)
 	disabled := now.Add(time.Second)
 	digest := bytes.Repeat([]byte{0x66}, persistedKnowledgeDefinitionDigestBytes)
-	definition := &opensplunkv1.KnowledgeObjectDefinition{
+	definition := &opensplunk.KnowledgeObjectDefinition{
 		AppId:        idempotencyUnitApp,
 		Name:         "response-object",
-		SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{
-			FieldAlias: &opensplunkv1.FieldAliasDefinition{},
+		SharingScope: opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{
+			FieldAlias: &opensplunk.FieldAliasDefinition{},
 		},
 	}
 	object := Object{
@@ -530,9 +530,9 @@ func TestKnowledgeObjectToProtoDetachesDefinitionDigestAndLifecycle(t *testing.T
 	if err != nil {
 		t.Fatalf("ObjectToProto: %v", err)
 	}
-	if projection.GetState() != opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED ||
-		projection.GetObjectType() != opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS ||
-		projection.GetSharingScope() != opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE ||
+	if projection.GetState() != opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED ||
+		projection.GetObjectType() != opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS ||
+		projection.GetSharingScope() != opensplunk.SharingScope_SHARING_SCOPE_PRIVATE ||
 		projection.GetDisabledAt() == nil || projection.GetDefinition() == nil ||
 		!bytes.Equal(projection.GetDefinitionSha256(), digest) {
 		t.Fatalf("knowledge response projection = %#v", projection)

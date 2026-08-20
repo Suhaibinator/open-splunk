@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -90,26 +90,26 @@ func TestRuntimeSavedSearchAuditSurvivesStoreReopen(t *testing.T) {
 	earliest := "-24h"
 	latest := "now"
 	timezone := "UTC"
-	definition := &opensplunkv1.SavedSearchDefinition{
+	definition := &opensplunk.SavedSearchDefinition{
 		Name:        "Runtime audit search",
 		Description: &payloadCanary,
-		Search: &opensplunkv1.SearchDefinition{
+		Search: &opensplunk.SearchDefinition{
 			Spl:        "index=main | table _raw",
 			IndexScope: []string{"main"},
-			TimeRange: &opensplunkv1.TimeRangeSpec{
+			TimeRange: &opensplunk.TimeRangeSpec{
 				Earliest: &earliest,
 				Latest:   &latest,
 				Timezone: &timezone,
 			},
 		},
-		SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+		SharingScope: opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 	}
-	var createdResponse opensplunkv1.CreateSavedSearchResponse
+	var createdResponse opensplunk.CreateSavedSearchResponse
 	postRuntimeProtoOK(
 		t,
 		firstHandler,
-		"/api/v1/saved-searches/create",
-		&opensplunkv1.CreateSavedSearchRequest{Definition: definition},
+		"/api/saved-searches/create",
+		&opensplunk.CreateSavedSearchRequest{Definition: definition},
 		&createdResponse,
 		bearerToken,
 	)
@@ -197,12 +197,12 @@ func TestRuntimeSavedSearchAuditSurvivesStoreReopen(t *testing.T) {
 		}
 	})
 
-	var fetchedResponse opensplunkv1.GetSavedSearchResponse
+	var fetchedResponse opensplunk.GetSavedSearchResponse
 	postRuntimeProtoOK(
 		t,
 		secondHandler,
-		"/api/v1/saved-searches/get",
-		&opensplunkv1.GetSavedSearchRequest{
+		"/api/saved-searches/get",
+		&opensplunk.GetSavedSearchRequest{
 			SavedSearchId: created.GetSavedSearchId(),
 		},
 		&fetchedResponse,
@@ -222,22 +222,22 @@ func TestRuntimeSavedSearchAuditSurvivesStoreReopen(t *testing.T) {
 	fetchedID := fetched.GetSavedSearchId()
 	rerunDefinition := proto.Clone(
 		fetched.GetDefinition().GetSearch(),
-	).(*opensplunkv1.SearchDefinition)
+	).(*opensplunk.SearchDefinition)
 	// Saved searches retain presentation preferences, while job creation
 	// accepts execution intent only. This is the same projection a frontend
 	// performs after reopening an object.
-	rerunDefinition.PreferredResultTab = opensplunkv1.SearchResultTab_SEARCH_RESULT_TAB_UNSPECIFIED
+	rerunDefinition.PreferredResultTab = opensplunk.SearchResultTab_SEARCH_RESULT_TAB_UNSPECIFIED
 	rerunDefinition.SelectedFields = nil
 	rerunDefinition.Visualization = nil
-	var rerunResponse opensplunkv1.CreateSearchJobResponse
+	var rerunResponse opensplunk.CreateSearchJobResponse
 	postRuntimeProtoOK(
 		t,
 		secondHandler,
-		"/api/v1/search/jobs/create",
-		&opensplunkv1.CreateSearchJobRequest{
+		"/api/search/jobs/create",
+		&opensplunk.CreateSearchJobRequest{
 			Definition: rerunDefinition,
-			Source: &opensplunkv1.SearchJobSource{
-				Origin:        opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH,
+			Source: &opensplunk.SearchJobSource{
+				Origin:        opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH,
 				SavedSearchId: &fetchedID,
 			},
 		},
@@ -263,15 +263,15 @@ func TestRuntimeSavedSearchAuditSurvivesStoreReopen(t *testing.T) {
 		rerunServerTime,
 	)
 
-	var updatedResponse opensplunkv1.UpdateSavedSearchResponse
+	var updatedResponse opensplunk.UpdateSavedSearchResponse
 	postRuntimeProtoOK(
 		t,
 		secondHandler,
-		"/api/v1/saved-searches/update",
-		&opensplunkv1.UpdateSavedSearchRequest{
+		"/api/saved-searches/update",
+		&opensplunk.UpdateSavedSearchRequest{
 			SavedSearchId:   fetched.GetSavedSearchId(),
 			ExpectedVersion: fetched.GetVersion(),
-			Definition: &opensplunkv1.SavedSearchDefinition{
+			Definition: &opensplunk.SavedSearchDefinition{
 				Name: "Runtime audit search updated",
 			},
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"name"}},
@@ -286,12 +286,12 @@ func TestRuntimeSavedSearchAuditSurvivesStoreReopen(t *testing.T) {
 		t.Fatalf("updated saved search = %+v", updated)
 	}
 
-	var duplicatedResponse opensplunkv1.DuplicateSavedSearchResponse
+	var duplicatedResponse opensplunk.DuplicateSavedSearchResponse
 	postRuntimeProtoOK(
 		t,
 		secondHandler,
-		"/api/v1/saved-searches/duplicate",
-		&opensplunkv1.DuplicateSavedSearchRequest{
+		"/api/saved-searches/duplicate",
+		&opensplunk.DuplicateSavedSearchRequest{
 			SavedSearchId: updated.GetSavedSearchId(),
 			NewName:       "Runtime audit search copy",
 		},
@@ -306,12 +306,12 @@ func TestRuntimeSavedSearchAuditSurvivesStoreReopen(t *testing.T) {
 		t.Fatalf("duplicated saved search = %+v", duplicated)
 	}
 
-	var deletedResponse opensplunkv1.DeleteSavedSearchResponse
+	var deletedResponse opensplunk.DeleteSavedSearchResponse
 	postRuntimeProtoOK(
 		t,
 		secondHandler,
-		"/api/v1/saved-searches/delete",
-		&opensplunkv1.DeleteSavedSearchRequest{
+		"/api/saved-searches/delete",
+		&opensplunk.DeleteSavedSearchRequest{
 			SavedSearchId:   updated.GetSavedSearchId(),
 			ExpectedVersion: updated.GetVersion(),
 		},
@@ -323,8 +323,8 @@ func TestRuntimeSavedSearchAuditSurvivesStoreReopen(t *testing.T) {
 	}
 
 	pageSize := uint32(20)
-	listRequest := &opensplunkv1.ListAuditEventsRequest{
-		Page: &opensplunkv1.PageRequest{
+	listRequest := &opensplunk.ListAuditEventsRequest{
+		Page: &opensplunk.PageRequest{
 			PageSize:         &pageSize,
 			IncludeTotalSize: true,
 		},
@@ -332,7 +332,7 @@ func TestRuntimeSavedSearchAuditSurvivesStoreReopen(t *testing.T) {
 	unauthenticated := postRuntimeAppProto(
 		t,
 		secondHandler,
-		"/api/v1/audit/events/list",
+		"/api/audit/events/list",
 		listRequest,
 		nil,
 	)
@@ -346,7 +346,7 @@ func TestRuntimeSavedSearchAuditSurvivesStoreReopen(t *testing.T) {
 	auditResponse := postRuntimeAppProto(
 		t,
 		secondHandler,
-		"/api/v1/audit/events/list",
+		"/api/audit/events/list",
 		listRequest,
 		bearerToken,
 	)
@@ -360,26 +360,26 @@ func TestRuntimeSavedSearchAuditSurvivesStoreReopen(t *testing.T) {
 	if bytes.Contains(auditResponse.Body.Bytes(), []byte(payloadCanary)) {
 		t.Fatalf("audit response disclosed saved-search definition payload")
 	}
-	var listed opensplunkv1.ListAuditEventsResponse
+	var listed opensplunk.ListAuditEventsResponse
 	unmarshalRuntimeAppResponse(t, auditResponse, &listed)
 	expectations := []runtimeSavedSearchAuditExpectation{
 		{
-			action:   opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_DELETE,
+			action:   opensplunk.AuditAction_AUDIT_ACTION_SAVED_SEARCH_DELETE,
 			targetID: updated.GetSavedSearchId(),
 			version:  updated.GetVersion(),
 		},
 		{
-			action:   opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_DUPLICATE,
+			action:   opensplunk.AuditAction_AUDIT_ACTION_SAVED_SEARCH_DUPLICATE,
 			targetID: duplicated.GetSavedSearchId(),
 			version:  duplicated.GetVersion(),
 		},
 		{
-			action:   opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_UPDATE,
+			action:   opensplunk.AuditAction_AUDIT_ACTION_SAVED_SEARCH_UPDATE,
 			targetID: updated.GetSavedSearchId(),
 			version:  updated.GetVersion(),
 		},
 		{
-			action:   opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_CREATE,
+			action:   opensplunk.AuditAction_AUDIT_ACTION_SAVED_SEARCH_CREATE,
 			targetID: created.GetSavedSearchId(),
 			version:  created.GetVersion(),
 		},
@@ -433,14 +433,14 @@ func TestRuntimeSavedSearchMutationFailsClosedWithoutAuditJournal(t *testing.T) 
 	response := postRuntimeAppProto(
 		t,
 		handler,
-		"/api/v1/saved-searches/create",
-		&opensplunkv1.CreateSavedSearchRequest{
-			Definition: &opensplunkv1.SavedSearchDefinition{
+		"/api/saved-searches/create",
+		&opensplunk.CreateSavedSearchRequest{
+			Definition: &opensplunk.SavedSearchDefinition{
 				Name: "Must roll back",
-				Search: &opensplunkv1.SearchDefinition{
+				Search: &opensplunk.SearchDefinition{
 					Spl: payloadCanary,
 				},
-				SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+				SharingScope: opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 			},
 		},
 		bearerToken,
@@ -472,14 +472,14 @@ func TestRuntimeSavedSearchMutationFailsClosedWithoutAuditJournal(t *testing.T) 
 }
 
 type runtimeSavedSearchAuditExpectation struct {
-	action   opensplunkv1.AuditAction
+	action   opensplunk.AuditAction
 	targetID string
 	version  uint64
 }
 
 func assertRuntimeSavedSearchAuditEvents(
 	t *testing.T,
-	response *opensplunkv1.ListAuditEventsResponse,
+	response *opensplunk.ListAuditEventsResponse,
 	expectations []runtimeSavedSearchAuditExpectation,
 ) {
 	t.Helper()
@@ -496,11 +496,11 @@ func assertRuntimeSavedSearchAuditEvents(
 		event := response.GetAuditEvents()[index]
 		wantSequence := uint64(len(expectations) - index)
 		if event.GetSequence() != wantSequence ||
-			event.GetActorKind() != opensplunkv1.AuditActorKind_AUDIT_ACTOR_KIND_SYSTEM ||
+			event.GetActorKind() != opensplunk.AuditActorKind_AUDIT_ACTOR_KIND_SYSTEM ||
 			event.GetActorId() != runtimeSavedSearchSystemActorID ||
-			event.GetActorRole() != opensplunkv1.AuditActorRole_AUDIT_ACTOR_ROLE_SYSTEM ||
+			event.GetActorRole() != opensplunk.AuditActorRole_AUDIT_ACTOR_ROLE_SYSTEM ||
 			event.GetAction() != expectation.action ||
-			event.GetTargetKind() != opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_SAVED_SEARCH ||
+			event.GetTargetKind() != opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_SAVED_SEARCH ||
 			event.GetTargetId() != expectation.targetID ||
 			event.GetTargetVersion() != expectation.version ||
 			event.GetOccurredAt() == nil ||
@@ -580,8 +580,8 @@ func (runtimeSavedSearchRerunExecutor) Execute(
 
 func assertRuntimeSavedSearchRerunProvenance(
 	t *testing.T,
-	job *opensplunkv1.SearchJob,
-	savedSearch *opensplunkv1.SavedSearch,
+	job *opensplunk.SearchJob,
+	savedSearch *opensplunk.SavedSearch,
 	resolvedAt time.Time,
 ) {
 	t.Helper()
@@ -601,7 +601,7 @@ func waitForRuntimeSavedSearchRerunHistory(
 	t *testing.T,
 	store *searchhistory.Store,
 	jobID string,
-) *opensplunkv1.SearchHistoryEntry {
+) *opensplunk.SearchHistoryEntry {
 	t.Helper()
 	ctx := context.Background()
 	deadline := time.Now().Add(2 * time.Second)
@@ -626,13 +626,13 @@ func waitForRuntimeSavedSearchRerunHistory(
 
 func assertRuntimeSavedSearchRerunHistory(
 	t *testing.T,
-	entry *opensplunkv1.SearchHistoryEntry,
-	savedSearch *opensplunkv1.SavedSearch,
+	entry *opensplunk.SearchHistoryEntry,
+	savedSearch *opensplunk.SavedSearch,
 	resolvedAt time.Time,
 ) {
 	t.Helper()
 	if entry == nil ||
-		entry.GetFinalState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED {
+		entry.GetFinalState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED {
 		t.Fatalf("saved-search rerun history = %+v", entry)
 	}
 	assertRuntimeSavedSearchRerunRecord(
@@ -646,16 +646,16 @@ func assertRuntimeSavedSearchRerunHistory(
 
 type runtimeSavedSearchRerunRecord interface {
 	GetSearchJobId() string
-	GetDefinition() *opensplunkv1.SearchDefinition
-	GetSource() *opensplunkv1.SearchJobSource
-	GetResolvedTimeRange() *opensplunkv1.ResolvedTimeRange
+	GetDefinition() *opensplunk.SearchDefinition
+	GetSource() *opensplunk.SearchJobSource
+	GetResolvedTimeRange() *opensplunk.ResolvedTimeRange
 }
 
 func assertRuntimeSavedSearchRerunRecord(
 	t *testing.T,
 	kind string,
 	record runtimeSavedSearchRerunRecord,
-	savedSearch *opensplunkv1.SavedSearch,
+	savedSearch *opensplunk.SavedSearch,
 	resolvedAt time.Time,
 ) {
 	t.Helper()
@@ -666,7 +666,7 @@ func assertRuntimeSavedSearchRerunRecord(
 		record.GetDefinition().GetTimeRange().GetEarliest() != "-24h" ||
 		record.GetDefinition().GetTimeRange().GetLatest() != "now" ||
 		record.GetDefinition().GetTimeRange().GetTimezone() != "UTC" ||
-		record.GetSource().GetOrigin() != opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH ||
+		record.GetSource().GetOrigin() != opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH ||
 		record.GetSource().GetSavedSearchId() != savedSearch.GetSavedSearchId() ||
 		!record.GetResolvedTimeRange().GetEarliest().AsTime().Equal(wantEarliest) ||
 		!record.GetResolvedTimeRange().GetLatest().AsTime().Equal(resolvedAt) ||

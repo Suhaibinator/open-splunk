@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeattemptaudit"
@@ -91,7 +91,7 @@ func TestKnowledgeHTTPGetAndListValidateCatalogDefinitionAuthority(t *testing.T)
 			name: "recognized noncanonical metadata",
 			object: func(t *testing.T) knowledgecatalog.Object {
 				definition := knowledgeHTTPDefinition(
-					opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+					opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 				)
 				definition.Description = &empty
 				return knowledgeHTTPAuthorityObject(t, definition)
@@ -102,7 +102,7 @@ func TestKnowledgeHTTPGetAndListValidateCatalogDefinitionAuthority(t *testing.T)
 			name: "recognized nested unknown",
 			object: func(t *testing.T) knowledgecatalog.Object {
 				definition := knowledgeHTTPDefinition(
-					opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+					opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 				)
 				addKnowledgeHTTPUnknown(definition.GetFieldAlias())
 				return knowledgeHTTPAuthorityObject(t, definition)
@@ -122,7 +122,7 @@ func TestKnowledgeHTTPGetAndListValidateCatalogDefinitionAuthority(t *testing.T)
 			name: "definition over four MiB",
 			object: func(t *testing.T) knowledgecatalog.Object {
 				definition := knowledgeHTTPDefinition(
-					opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+					opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 				)
 				description := strings.Repeat(
 					"x",
@@ -137,9 +137,9 @@ func TestKnowledgeHTTPGetAndListValidateCatalogDefinitionAuthority(t *testing.T)
 			name: "definition repeated shape exceeds traversal ceiling",
 			object: func(*testing.T) knowledgecatalog.Object {
 				object := knowledgeHTTPObject()
-				object.Definition.Selector = &opensplunkv1.KnowledgeSelector{
+				object.Definition.Selector = &opensplunk.KnowledgeSelector{
 					IndexPatterns: make(
-						[]*opensplunkv1.KnowledgeSelectorPattern,
+						[]*opensplunk.KnowledgeSelectorPattern,
 						knowledge.MaximumSelectorPatternsPerDimension+1,
 					),
 				}
@@ -239,14 +239,14 @@ func TestKnowledgeHTTPGetAndListValidateCatalogDefinitionAuthority(t *testing.T)
 			{
 				name: "get",
 				path: knowledgeObjectsGetPath,
-				request: &opensplunkv1.GetKnowledgeObjectRequest{
+				request: &opensplunk.GetKnowledgeObjectRequest{
 					KnowledgeObjectId: "ko-http-object-1",
 				},
 			},
 			{
 				name:    "list",
 				path:    knowledgeObjectsListPath,
-				request: &opensplunkv1.ListKnowledgeObjectsRequest{},
+				request: &opensplunk.ListKnowledgeObjectsRequest{},
 			},
 		} {
 			t.Run(test.name+"/"+operation.name, func(t *testing.T) {
@@ -319,7 +319,7 @@ func TestKnowledgeHTTPGetAndListValidateCatalogDefinitionAuthority(t *testing.T)
 
 func knowledgeHTTPAuthorityObject(
 	t *testing.T,
-	definition *opensplunkv1.KnowledgeObjectDefinition,
+	definition *opensplunk.KnowledgeObjectDefinition,
 ) knowledgecatalog.Object {
 	t.Helper()
 	object := knowledgeHTTPObject()
@@ -342,7 +342,7 @@ func knowledgeHTTPFutureAuthorityObject(
 ) knowledgecatalog.Object {
 	t.Helper()
 	metadata := knowledgeHTTPDefinition(
-		opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+		opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 	)
 	metadata.Body = nil
 	if noncanonicalMetadata {
@@ -357,7 +357,7 @@ func knowledgeHTTPFutureAuthorityObject(
 		protowire.AppendTag(encoded, 13, protowire.BytesType),
 		[]byte{0x08, 0x01},
 	)
-	definition := &opensplunkv1.KnowledgeObjectDefinition{}
+	definition := &opensplunk.KnowledgeObjectDefinition{}
 	if err := (proto.UnmarshalOptions{
 		DiscardUnknown: false,
 		RecursionLimit: 32,
@@ -378,10 +378,10 @@ func knowledgeHTTPFutureAuthorityObject(
 func knowledgeHTTPFutureDefinitionAtSize(
 	t *testing.T,
 	target int,
-) *opensplunkv1.KnowledgeObjectDefinition {
+) *opensplunk.KnowledgeObjectDefinition {
 	t.Helper()
 	metadata := knowledgeHTTPDefinition(
-		opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+		opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 	)
 	metadata.Body = nil
 	known, err := (proto.MarshalOptions{Deterministic: true}).Marshal(metadata)
@@ -405,7 +405,7 @@ func knowledgeHTTPFutureDefinitionAtSize(
 	if len(encoded) != target {
 		t.Fatalf("constructed future definition=%d bytes, want %d", len(encoded), target)
 	}
-	definition := &opensplunkv1.KnowledgeObjectDefinition{}
+	definition := &opensplunk.KnowledgeObjectDefinition{}
 	if err := (proto.UnmarshalOptions{
 		DiscardUnknown: false,
 		RecursionLimit: 32,

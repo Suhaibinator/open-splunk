@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -103,9 +103,9 @@ func TestRuntimeAppCatalogAuditsEveryMutationWithAuthenticatedActor(t *testing.T
 	response := postRuntimeAppProto(
 		t,
 		handler,
-		"/api/v1/apps/create",
-		&opensplunkv1.CreateAppRequest{
-			Definition: &opensplunkv1.AppDefinition{
+		"/api/apps/create",
+		&opensplunk.CreateAppRequest{
+			Definition: &opensplunk.AppDefinition{
 				Slug:        "audited-app",
 				DisplayName: "Audited App",
 			},
@@ -119,24 +119,24 @@ func TestRuntimeAppCatalogAuditsEveryMutationWithAuthenticatedActor(t *testing.T
 			response.Body.String(),
 		)
 	}
-	var createdResponse opensplunkv1.CreateAppResponse
+	var createdResponse opensplunk.CreateAppResponse
 	unmarshalRuntimeAppResponse(t, response, &createdResponse)
 	created := createdResponse.GetApp()
 	if created == nil || created.GetVersion() != 1 {
 		t.Fatalf("created audited app = %#v", created)
 	}
 
-	selector := &opensplunkv1.AppSelector{
-		Selector: &opensplunkv1.AppSelector_AppId{AppId: created.GetAppId()},
+	selector := &opensplunk.AppSelector{
+		Selector: &opensplunk.AppSelector_AppId{AppId: created.GetAppId()},
 	}
 	response = postRuntimeAppProto(
 		t,
 		handler,
-		"/api/v1/apps/update",
-		&opensplunkv1.UpdateAppRequest{
+		"/api/apps/update",
+		&opensplunk.UpdateAppRequest{
 			Selector:        selector,
 			ExpectedVersion: created.GetVersion(),
-			Definition: &opensplunkv1.AppDefinition{
+			Definition: &opensplunk.AppDefinition{
 				DisplayName: "Updated Audited App",
 			},
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"display_name"}},
@@ -146,7 +146,7 @@ func TestRuntimeAppCatalogAuditsEveryMutationWithAuthenticatedActor(t *testing.T
 	if response.Code != http.StatusOK {
 		t.Fatalf("update status = %d, body = %s", response.Code, response.Body)
 	}
-	var updatedResponse opensplunkv1.UpdateAppResponse
+	var updatedResponse opensplunk.UpdateAppResponse
 	unmarshalRuntimeAppResponse(t, response, &updatedResponse)
 	updated := updatedResponse.GetApp()
 	if updated.GetVersion() != 2 ||
@@ -155,15 +155,15 @@ func TestRuntimeAppCatalogAuditsEveryMutationWithAuthenticatedActor(t *testing.T
 	}
 
 	setState := func(
-		current *opensplunkv1.AppWorkspace,
-		state opensplunkv1.AppState,
-	) *opensplunkv1.AppWorkspace {
+		current *opensplunk.AppWorkspace,
+		state opensplunk.AppState,
+	) *opensplunk.AppWorkspace {
 		t.Helper()
 		stateResponse := postRuntimeAppProto(
 			t,
 			handler,
-			"/api/v1/apps/state/set",
-			&opensplunkv1.SetAppStateRequest{
+			"/api/apps/state/set",
+			&opensplunk.SetAppStateRequest{
 				Selector:        selector,
 				ExpectedVersion: current.GetVersion(),
 				State:           state,
@@ -178,7 +178,7 @@ func TestRuntimeAppCatalogAuditsEveryMutationWithAuthenticatedActor(t *testing.T
 				stateResponse.Body,
 			)
 		}
-		var decoded opensplunkv1.SetAppStateResponse
+		var decoded opensplunk.SetAppStateResponse
 		unmarshalRuntimeAppResponse(t, stateResponse, &decoded)
 		if decoded.GetApp().GetVersion() != current.GetVersion()+1 ||
 			decoded.GetApp().GetState() != state {
@@ -188,22 +188,22 @@ func TestRuntimeAppCatalogAuditsEveryMutationWithAuthenticatedActor(t *testing.T
 	}
 	archived := setState(
 		updated,
-		opensplunkv1.AppState_APP_STATE_ARCHIVED,
+		opensplunk.AppState_APP_STATE_ARCHIVED,
 	)
 	active := setState(
 		archived,
-		opensplunkv1.AppState_APP_STATE_ACTIVE,
+		opensplunk.AppState_APP_STATE_ACTIVE,
 	)
 	finalArchived := setState(
 		active,
-		opensplunkv1.AppState_APP_STATE_ARCHIVED,
+		opensplunk.AppState_APP_STATE_ARCHIVED,
 	)
 
 	response = postRuntimeAppProto(
 		t,
 		handler,
-		"/api/v1/apps/delete",
-		&opensplunkv1.DeleteAppRequest{
+		"/api/apps/delete",
+		&opensplunk.DeleteAppRequest{
 			Selector:         selector,
 			ExpectedVersion:  finalArchived.GetVersion(),
 			ConfirmationSlug: "audited-app",
@@ -213,7 +213,7 @@ func TestRuntimeAppCatalogAuditsEveryMutationWithAuthenticatedActor(t *testing.T
 	if response.Code != http.StatusOK {
 		t.Fatalf("delete status = %d, body = %s", response.Code, response.Body)
 	}
-	var deletedResponse opensplunkv1.DeleteAppResponse
+	var deletedResponse opensplunk.DeleteAppResponse
 	unmarshalRuntimeAppResponse(t, response, &deletedResponse)
 	if deletedResponse.GetAppId() != created.GetAppId() {
 		t.Fatalf(
@@ -226,8 +226,8 @@ func TestRuntimeAppCatalogAuditsEveryMutationWithAuthenticatedActor(t *testing.T
 	response = postRuntimeAppProto(
 		t,
 		handler,
-		"/api/v1/apps/get",
-		&opensplunkv1.GetAppRequest{Selector: selector},
+		"/api/apps/get",
+		&opensplunk.GetAppRequest{Selector: selector},
 		bearerToken,
 	)
 	if response.Code != http.StatusNotFound {
@@ -235,13 +235,13 @@ func TestRuntimeAppCatalogAuditsEveryMutationWithAuthenticatedActor(t *testing.T
 	}
 
 	pageSize := uint32(20)
-	targetKind := opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_APP
+	targetKind := opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_APP
 	response = postRuntimeAppProto(
 		t,
 		handler,
-		"/api/v1/audit/events/list",
-		&opensplunkv1.ListAuditEventsRequest{
-			Page: &opensplunkv1.PageRequest{
+		"/api/audit/events/list",
+		&opensplunk.ListAuditEventsRequest{
+			Page: &opensplunk.PageRequest{
 				PageSize:         &pageSize,
 				IncludeTotalSize: true,
 			},
@@ -252,15 +252,15 @@ func TestRuntimeAppCatalogAuditsEveryMutationWithAuthenticatedActor(t *testing.T
 	if response.Code != http.StatusOK {
 		t.Fatalf("list app audit = %d, %s", response.Code, response.Body)
 	}
-	var page opensplunkv1.ListAuditEventsResponse
+	var page opensplunk.ListAuditEventsResponse
 	unmarshalRuntimeAppResponse(t, response, &page)
-	wantActions := []opensplunkv1.AuditAction{
-		opensplunkv1.AuditAction_AUDIT_ACTION_APP_DELETE,
-		opensplunkv1.AuditAction_AUDIT_ACTION_APP_ARCHIVE,
-		opensplunkv1.AuditAction_AUDIT_ACTION_APP_ACTIVATE,
-		opensplunkv1.AuditAction_AUDIT_ACTION_APP_ARCHIVE,
-		opensplunkv1.AuditAction_AUDIT_ACTION_APP_UPDATE,
-		opensplunkv1.AuditAction_AUDIT_ACTION_APP_CREATE,
+	wantActions := []opensplunk.AuditAction{
+		opensplunk.AuditAction_AUDIT_ACTION_APP_DELETE,
+		opensplunk.AuditAction_AUDIT_ACTION_APP_ARCHIVE,
+		opensplunk.AuditAction_AUDIT_ACTION_APP_ACTIVATE,
+		opensplunk.AuditAction_AUDIT_ACTION_APP_ARCHIVE,
+		opensplunk.AuditAction_AUDIT_ACTION_APP_UPDATE,
+		opensplunk.AuditAction_AUDIT_ACTION_APP_CREATE,
 	}
 	wantVersions := []uint64{5, 5, 4, 3, 2, 1}
 	if len(page.GetAuditEvents()) != len(wantActions) ||
@@ -275,10 +275,10 @@ func TestRuntimeAppCatalogAuditsEveryMutationWithAuthenticatedActor(t *testing.T
 			event.GetTargetKind() != targetKind ||
 			event.GetTargetId() != created.GetAppId() ||
 			event.GetActorKind() !=
-				opensplunkv1.AuditActorKind_AUDIT_ACTOR_KIND_BROWSER ||
+				opensplunk.AuditActorKind_AUDIT_ACTOR_KIND_BROWSER ||
 			event.GetActorId() != "administrator" ||
 			event.GetActorRole() !=
-				opensplunkv1.AuditActorRole_AUDIT_ACTOR_ROLE_ADMINISTRATOR {
+				opensplunk.AuditActorRole_AUDIT_ACTOR_ROLE_ADMINISTRATOR {
 			t.Fatalf(
 				"app audit event %d = %#v, want action/version %s/%d",
 				index,

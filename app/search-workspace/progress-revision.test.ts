@@ -4,7 +4,7 @@ import test from "node:test";
 import {
   SearchExecutionPhase,
   type SearchProgress,
-} from "../../gen/ts/open_splunk/v1/search";
+} from "../../gen/ts/open_splunk/search";
 import {
   reconcileSearchProgress,
   type ProgressRevisionState,

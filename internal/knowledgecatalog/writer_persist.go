@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
@@ -501,10 +501,10 @@ func writerRetentionAnchor(tx *gorm.DB, mutationMicros int64) (int64, error) {
 }
 
 type reconciledMutationOutcome struct {
-	create   *opensplunkv1.CreateKnowledgeObjectResponse
-	update   *opensplunkv1.UpdateKnowledgeObjectResponse
-	setState *opensplunkv1.SetKnowledgeObjectStateResponse
-	delete   *opensplunkv1.DeleteKnowledgeObjectResponse
+	create   *opensplunk.CreateKnowledgeObjectResponse
+	update   *opensplunk.UpdateKnowledgeObjectResponse
+	setState *opensplunk.SetKnowledgeObjectStateResponse
+	delete   *opensplunk.DeleteKnowledgeObjectResponse
 }
 
 func (writer *Writer) commitMutation(
@@ -1015,7 +1015,7 @@ func publicationTransitionPersistenceEndpointFromCurrent(
 			ordinal:        dependency.Ordinal,
 			targetObjectID: strings.Clone(dependency.TargetObjectID),
 			targetVersion:  dependency.TargetObjectVersion,
-			role:           opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
+			role:           opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
 		}
 	}
 	if !validPublicationTransitionPersistenceEndpoint(result) {
@@ -1036,7 +1036,7 @@ func publicationTransitionPersistedDependencies(
 			ordinal:        int64(index),
 			targetObjectID: strings.Clone(dependency.targetObjectID),
 			targetVersion:  dependency.targetVersion,
-			role:           opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
+			role:           opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
 		}
 	}
 	return result

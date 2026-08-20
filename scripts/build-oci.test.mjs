@@ -19,6 +19,11 @@ import { spawn, spawnSync } from "node:child_process";
 import test from "node:test";
 
 const workspace = process.cwd();
+const removedProductIdentityPattern = new RegExp([
+  ["OPEN_SPLUNK", "APPLICATION", "VERSION"].join("_"),
+  ["application", "version"].join("_"),
+  ["spl", "compatibility", "version"].join("_"),
+].join("|"));
 
 function git(fixture, args) {
   const result = spawnSync("git", ["-C", fixture, ...args], { encoding: "utf8" });
@@ -48,7 +53,7 @@ async function ociFixture(t) {
   );
   await writeFile(
     path.join(fixture, "package.json"),
-    '{"name":"open-splunk-oci-fixture","version":"0.4.0"}\n',
+    '{"name":"open-splunk-oci-fixture","private":true}\n',
   );
   await mkdir(path.join(fixture, "oci", "rootfs", "etc"), { recursive: true });
   await copyFile(
@@ -268,7 +273,6 @@ async function installDockerShim(fixture) {
 function buildOCIEnvironment(revision, docker, extraEnvironment = {}) {
   return {
     ...process.env,
-    OPEN_SPLUNK_APPLICATION_VERSION: "0.4.0",
     OPEN_SPLUNK_SOURCE_REVISION: revision,
     OPEN_SPLUNK_SERVER_IMAGE: "registry.invalid/open-splunk/server:test",
     OPEN_SPLUNK_COLLECTOR_IMAGE: "registry.invalid/open-splunk/collector:test",
@@ -350,7 +354,6 @@ function runMakeOCI(fixture, revision, docker, extraEnvironment = {}) {
       encoding: "utf8",
       env: {
         ...process.env,
-        OPEN_SPLUNK_APPLICATION_VERSION: "0.4.0",
         OPEN_SPLUNK_SOURCE_REVISION: revision,
         OPEN_SPLUNK_SERVER_IMAGE: "registry.invalid/open-splunk/server:test",
         OPEN_SPLUNK_COLLECTOR_IMAGE:
@@ -429,24 +432,10 @@ test("OCI targets are pinned scratch runtimes with a minimal non-root contract",
   );
   assert.match(
     dockerfile,
-    /actual_spl_compatibility_version=.*internal\/spl\/doc\.go/s,
+    /server_identity=.*sed -n '1p'/,
   );
-  assert.match(
-    dockerfile,
-    /printf '%s\\n' "\$\{actual_spl_compatibility_version\}" > \.spl-compatibility-version/,
-  );
-  assert.match(
-    dockerfile,
-    /spl_compatibility_version=%s[\s\S]*cat \.spl-compatibility-version/,
-  );
-  assert.match(
-    dockerfile,
-    /server_identity=.*sed -n '1,3p'/,
-  );
-  assert.match(
-    dockerfile,
-    /OPEN_SPLUNK_APPLICATION_VERSION.*does not match package\.json/s,
-  );
+  assert.doesNotMatch(dockerfile, removedProductIdentityPattern);
+  assert.doesNotMatch(dockerfile, /package\.json.*version|version.*package\.json/);
   assert.doesNotMatch(
     dockerfile,
     /OPEN_SPLUNK_EXPECTED_(?:SPL|KNOWLEDGE)_COMPATIBILITY_VERSION/,
@@ -457,7 +446,7 @@ test("OCI targets are pinned scratch runtimes with a minimal non-root contract",
   );
   assert.match(
     dockerfile,
-    /test "\$\{server_identity\}" = "\$\{expected_server\}"; \\\n+\s+test "\$\{collector_identity\}" = "\$\{expected_base\}";/,
+    /test "\$\{server_identity\}" = "\$\{expected_identity\}"; \\\n+\s+test "\$\{collector_identity\}" = "\$\{expected_identity\}";/,
   );
   assert.ok(
     (dockerfile.match(/^ARG SOURCE_DATE_EPOCH(?:=.*)?$/gm) ?? []).length >= 3,
@@ -491,119 +480,31 @@ test("OCI targets are pinned scratch runtimes with a minimal non-root contract",
       1,
       "scratch targets must copy a complete, timestamp-normalized rootfs",
     );
-    assert.match(target, /org\.opencontainers\.image\.version/);
+    assert.doesNotMatch(target, /org\.opencontainers\.image\.version/);
     assert.match(target, /org\.opencontainers\.image\.revision/);
     assert.match(target, /org\.opencontainers\.image\.created/);
   }
 });
 
-test("release publication creates immutable amd64 and arm64 GHCR images", async () => {
+test("publication configuration has no tag-driven product release", async () => {
   const workflowDirectory = path.join(workspace, ".github", "workflows");
+  const buildScript = await readFile(
+    path.join(workspace, "scripts", "build-oci.sh"),
+    "utf8",
+  );
   const publicationWorkflows = (await readdir(workflowDirectory))
     .filter((name) => /^publish.*\.ya?ml$/.test(name))
     .toSorted();
-  assert.deepEqual(publicationWorkflows, ["publish-images.yml"]);
-
-  const workflow = await readFile(
-    path.join(workflowDirectory, "publish-images.yml"),
-    "utf8",
-  );
-
-  assert.match(workflow, /tags:\n\s+- "v\*"/);
-  assert.match(
-    workflow,
-    /registry="ghcr\.io\/\$\{GITHUB_REPOSITORY_OWNER,,\}"/,
-  );
-  assert.match(workflow, /image_name: open-splunk-server/);
-  assert.match(workflow, /image_name: open-splunk-collector/);
-  assert.match(workflow, /target: server/);
-  assert.match(workflow, /target: collector/);
-  assert.equal(
-    (workflow.match(/platform: linux\/amd64\n\s+architecture: amd64/g) ?? [])
-      .length,
-    2,
-  );
-  assert.equal(
-    (workflow.match(/platform: linux\/arm64\n\s+architecture: arm64/g) ?? [])
-      .length,
-    2,
-  );
-  assert.match(workflow, /uses: docker\/build-push-action@v7/);
-  assert.match(workflow, /GITHUB_TOKEN: \$\{\{ github\.token \}\}/);
-  assert.match(workflow, /permissions:\n\s+actions: read\n\s+contents: read/);
-  assert.match(
-    workflow,
-    /if \[\[ ! "\$RELEASE_TAG" =~ \^v\[0-9\]\+\\\.\[0-9\]\+\\\.\[0-9\]\+\$ \]\]/,
-  );
-  assert.match(
-    workflow,
-    /git merge-base --is-ancestor "\$GITHUB_SHA" refs\/remotes\/origin\/main/,
-  );
-  assert.match(workflow, /-f head_sha="\$GITHUB_SHA"/);
-  assert.match(workflow, /select\(\.name == "CI" and \.conclusion == "success"\)/);
-  assert.match(
-    workflow,
-    /ref: \$\{\{ needs\.verify\.outputs\.release_revision \}\}/,
-  );
-  assert.match(
-    workflow,
-    /OPEN_SPLUNK_SOURCE_REVISION=\$\{\{ needs\.verify\.outputs\.release_revision \}\}/,
-  );
-  assert.match(
-    workflow,
-    /package_version="\$\(node -p 'require\("\.\/package\.json"\)\.version'\)"/,
-  );
-  assert.match(
-    workflow,
-    /compatibility_version="\$\(node scripts\/read-spl-compatibility-version\.mjs\)"/,
-  );
-  assert.match(
-    workflow,
-    /package_version" != "0\.4\.0" \|\| "\$compatibility_version" != "0\.4"/,
-  );
-  assert.match(
-    workflow,
-    /steps\.release\.outputs\.application_version.*package_version/,
-  );
-  assert.doesNotMatch(
-    workflow,
-    /OPEN_SPLUNK_EXPECTED_(?:SPL|KNOWLEDGE)_COMPATIBILITY_VERSION/,
-  );
-  assert.doesNotMatch(
-    workflow,
-    /read-knowledge-compatibility-version\.mjs|knowledge_compatibility_version/,
-  );
-  assert.doesNotMatch(workflow, /runtime_revision/);
-  assert.match(workflow, /push-by-digest=true/);
-  assert.match(workflow, /provenance: mode=max/);
-  assert.match(workflow, /sbom: true/);
-  assert.match(workflow, /docker buildx imagetools create --tag/);
-  assert.match(workflow, /expected_platforms=\$'linux\/amd64\\nlinux\/arm64'/);
-  assert.doesNotMatch(workflow, /IMAGE_TAG.*latest/);
+  assert.deepEqual(publicationWorkflows, []);
+  assert.match(buildScript, /DEFAULT_IMAGE_TAG="\$OPEN_SPLUNK_SOURCE_REVISION"/);
+  assert.doesNotMatch(buildScript, removedProductIdentityPattern);
 
   const ciWorkflow = await readFile(
     path.join(workflowDirectory, "ci.yml"),
     "utf8",
   );
-  assert.ok(
-    (ciWorkflow.match(
-      /application_version="\$\(node -p 'require\("\.\/package\.json"\)\.version'\)"/g,
-    ) ?? []).length >= 2,
-  );
-  assert.ok(
-    (ciWorkflow.match(
-      /application_version" != "0\.4\.0" \|\| "\$compatibility_version" != "0\.4"/g,
-    ) ?? []).length >= 2,
-  );
-  assert.doesNotMatch(
-    ciWorkflow,
-    /OPEN_SPLUNK_EXPECTED_(?:SPL|KNOWLEDGE)_COMPATIBILITY_VERSION/,
-  );
-  assert.doesNotMatch(
-    ciWorkflow,
-    /read-knowledge-compatibility-version\.mjs|knowledge_compatibility_version/,
-  );
-  assert.doesNotMatch(ciWorkflow, /if: env\.OPEN_SPLUNK_SPL_COMPATIBILITY_VERSION/);
+  assert.doesNotMatch(ciWorkflow, removedProductIdentityPattern);
+  assert.match(ciWorkflow, /OPEN_SPLUNK_SOURCE_REVISION: \$\{\{ github\.sha \}\}/);
 });
 
 test("images seed secure writable paths in their normalized rootfs trees", async () => {
@@ -720,7 +621,7 @@ test("OCI build anchors both local image tags to clean HEAD", async (t) => {
   assert.match(invocations, /build .*--platform linux\/amd64 .*--target server /);
   assert.match(invocations, /build .*--platform linux\/amd64 .*--target collector /);
   assert.doesNotMatch(invocations, /build --no-cache/);
-  assert.match(invocations, /--build-arg OPEN_SPLUNK_APPLICATION_VERSION=0\.4\.0/);
+  assert.doesNotMatch(invocations, removedProductIdentityPattern);
   assert.doesNotMatch(
     invocations,
     /OPEN_SPLUNK_EXPECTED_(?:SPL|KNOWLEDGE)_COMPATIBILITY_VERSION/,
@@ -750,23 +651,6 @@ test("OCI build anchors both local image tags to clean HEAD", async (t) => {
     ),
     [],
   );
-});
-
-test("OCI build rejects an application version that differs from package.json", async (t) => {
-  const fixture = await ociFixture(t);
-  const revision = git(fixture, ["rev-parse", "HEAD"]);
-  const docker = await installDockerShim(fixture);
-
-  const result = runBuildOCI(fixture, revision, docker, {
-    OPEN_SPLUNK_APPLICATION_VERSION: "0.4.1",
-  });
-
-  assert.equal(result.status, 1);
-  assert.match(
-    result.stderr,
-    /does not match committed package version 0\.4\.0/,
-  );
-  await assert.rejects(access(docker.log, constants.F_OK));
 });
 
 test("OCI cold rebuild bypasses cache for both targets and rejects unsafe values", async (t) => {
@@ -1146,10 +1030,6 @@ test("OCI build rejects unsafe identity, platform, and image references", async 
   const revision = git(fixture, ["rev-parse", "HEAD"]);
   const docker = await installDockerShim(fixture);
   const cases = [
-    {
-      environment: { OPEN_SPLUNK_APPLICATION_VERSION: "1.2.3;touch-pwned" },
-      message: /semantic version/,
-    },
     {
       environment: { OPEN_SPLUNK_OCI_PLATFORM: "linux/386" },
       message: /OCI platform/,

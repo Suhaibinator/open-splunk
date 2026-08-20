@@ -14,7 +14,7 @@ import (
 	"sort"
 	"strings"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
@@ -28,10 +28,6 @@ import (
 
 const (
 	FormatVersion = 1
-	// CompilerCompatibilityVersion binds newly created snapshots to the one
-	// current product compatibility profile. Historical values remain readable
-	// only where migration code handles an already-persisted snapshot.
-	CompilerCompatibilityVersion = spl.CompatibilityVersion
 
 	MaximumExecutableObjects        = 256
 	MaximumShadows                  = 512
@@ -59,11 +55,9 @@ const (
 	maximumCatalogRevision = uint64(math.MaxInt64 - 1)
 )
 
-// digestDomain identifies canonical snapshot wire format 1. The domain is a
-// wire-format identifier, not a selectable runtime compatibility profile.
-// CompilerCompatibilityVersion inside the hashed message prevents a retained
-// snapshot from being reinterpreted by a different compiler.
-const digestDomain = "open-splunk-knowledge-snapshot-v0.1\x00"
+// digestDomain identifies canonical snapshot wire format 1. The private format
+// guard changes whenever retained snapshot interpretation changes.
+const digestDomain = "open-splunk-knowledge-snapshot-format-1\x00"
 
 var (
 	ErrInvalidInput  = errors.New("invalid knowledge snapshot input")
@@ -76,12 +70,12 @@ var (
 type Object struct {
 	KnowledgeObjectID string
 	Version           uint64
-	ObjectType        opensplunkv1.KnowledgeObjectType
+	ObjectType        opensplunk.KnowledgeObjectType
 	Name              string
 	AppID             string
 	OwnerID           string
-	SharingScope      opensplunkv1.SharingScope
-	Definition        *opensplunkv1.KnowledgeObjectDefinition
+	SharingScope      opensplunk.SharingScope
+	Definition        *opensplunk.KnowledgeObjectDefinition
 	DefinitionSHA256  []byte
 }
 
@@ -91,11 +85,11 @@ type Object struct {
 type ObjectSummary struct {
 	KnowledgeObjectID string
 	Version           uint64
-	ObjectType        opensplunkv1.KnowledgeObjectType
+	ObjectType        opensplunk.KnowledgeObjectType
 	Name              string
 	AppID             string
 	OwnerID           string
-	SharingScope      opensplunkv1.SharingScope
+	SharingScope      opensplunk.SharingScope
 	DefinitionSHA256  []byte
 }
 
@@ -107,12 +101,12 @@ type Shadow struct {
 	WinnerVersion     uint64
 	KnowledgeObjectID string
 	Version           uint64
-	ObjectType        opensplunkv1.KnowledgeObjectType
+	ObjectType        opensplunk.KnowledgeObjectType
 	Name              string
 	AppID             string
 	OwnerID           string
-	SharingScope      opensplunkv1.SharingScope
-	Definition        *opensplunkv1.KnowledgeObjectDefinition
+	SharingScope      opensplunk.SharingScope
+	Definition        *opensplunk.KnowledgeObjectDefinition
 	DefinitionSHA256  []byte
 }
 
@@ -124,7 +118,7 @@ type Dependency struct {
 	SourceVersion  uint64
 	TargetObjectID string
 	TargetVersion  uint64
-	Role           opensplunkv1.KnowledgeDependencyRole
+	Role           opensplunk.KnowledgeDependencyRole
 }
 
 // Input contains the complete scalar and immutable catalog authority for one
@@ -180,7 +174,7 @@ type AuthoritySummary struct {
 // pair it with sealed whole-query compiler evidence before snapshot
 // finalization.
 type Authority struct {
-	base         *opensplunkv1.KnowledgeSnapshot
+	base         *opensplunk.KnowledgeSnapshot
 	objects      []Object
 	dependencies []Dependency
 	shadows      []Shadow
@@ -254,7 +248,7 @@ func (authority Authority) Prelude() knowledgeprogram.Program {
 // Snapshot is an opaque, immutable finalized snapshot. KO-0G deliberately
 // exposes no public constructor or finalization method for a nonzero value.
 type Snapshot struct {
-	message                *opensplunkv1.KnowledgeSnapshot
+	message                *opensplunk.KnowledgeSnapshot
 	encoded                []byte
 	digest                 [sha256.Size]byte
 	prelude                knowledgeprogram.Program
@@ -262,11 +256,11 @@ type Snapshot struct {
 }
 
 // Proto returns a detached protobuf representation.
-func (snapshot Snapshot) Proto() *opensplunkv1.KnowledgeSnapshot {
+func (snapshot Snapshot) Proto() *opensplunk.KnowledgeSnapshot {
 	if snapshot.message == nil {
 		return nil
 	}
-	cloned, _ := proto.Clone(snapshot.message).(*opensplunkv1.KnowledgeSnapshot)
+	cloned, _ := proto.Clone(snapshot.message).(*opensplunk.KnowledgeSnapshot)
 	return cloned
 }
 
@@ -293,7 +287,7 @@ func (snapshot Snapshot) Clone() Snapshot {
 	if snapshot.message == nil {
 		return Snapshot{}
 	}
-	message, ok := proto.Clone(snapshot.message).(*opensplunkv1.KnowledgeSnapshot)
+	message, ok := proto.Clone(snapshot.message).(*opensplunk.KnowledgeSnapshot)
 	if !ok || message == nil {
 		return Snapshot{}
 	}
@@ -316,7 +310,7 @@ type canonicalObject struct {
 	input      Object
 	normalized knowledgedefinition.Normalized
 	semantics  definitionSemantics
-	stage      opensplunkv1.KnowledgeSearchStage
+	stage      opensplunk.KnowledgeSearchStage
 	stageRank  uint8
 	ordinal    uint32
 }
@@ -402,13 +396,13 @@ func Prepare(input Input) (Authority, error) {
 		return Authority{}, err
 	}
 
-	snapshotObjects := make([]*opensplunkv1.KnowledgeSnapshotObject, len(objects))
+	snapshotObjects := make([]*opensplunk.KnowledgeSnapshotObject, len(objects))
 	authorityObjects := make([]Object, len(objects))
-	stageOrdinals := make(map[opensplunkv1.KnowledgeSearchStage]uint32, 3)
+	stageOrdinals := make(map[opensplunk.KnowledgeSearchStage]uint32, 3)
 	for index, object := range objects {
 		stageOrdinal := stageOrdinals[object.stage]
 		stageOrdinals[object.stage] = stageOrdinal + 1
-		snapshotObjects[index] = &opensplunkv1.KnowledgeSnapshotObject{
+		snapshotObjects[index] = &opensplunk.KnowledgeSnapshotObject{
 			ResolutionOrdinal: uint32(index),
 			Stage:             object.stage,
 			StageOrdinal:      stageOrdinal,
@@ -425,11 +419,11 @@ func Prepare(input Input) (Authority, error) {
 		authorityObjects[index] = canonicalAuthorityObject(object)
 	}
 
-	snapshotShadows := make([]*opensplunkv1.KnowledgeSnapshotShadow, len(shadows))
-	snapshotWarnings := make([]*opensplunkv1.KnowledgeSnapshotWarning, len(shadows))
+	snapshotShadows := make([]*opensplunk.KnowledgeSnapshotShadow, len(shadows))
+	snapshotWarnings := make([]*opensplunk.KnowledgeSnapshotWarning, len(shadows))
 	for index, shadow := range shadows {
 		winner := byKey[objectKey{id: shadow.WinnerObjectID, version: shadow.WinnerVersion}]
-		snapshotShadows[index] = &opensplunkv1.KnowledgeSnapshotShadow{
+		snapshotShadows[index] = &opensplunk.KnowledgeSnapshotShadow{
 			ShadowOrdinal:           uint32(index),
 			WinnerResolutionOrdinal: winner.ordinal,
 			KnowledgeObjectId:       strings.Clone(shadow.KnowledgeObjectID),
@@ -442,20 +436,20 @@ func Prepare(input Input) (Authority, error) {
 			DefinitionSha256:        bytes.Clone(shadow.DefinitionSHA256),
 		}
 		shadowOrdinal := uint32(index)
-		snapshotWarnings[index] = &opensplunkv1.KnowledgeSnapshotWarning{
+		snapshotWarnings[index] = &opensplunk.KnowledgeSnapshotWarning{
 			WarningOrdinal: uint32(index),
-			Kind:           opensplunkv1.KnowledgeSnapshotWarningKind_KNOWLEDGE_SNAPSHOT_WARNING_KIND_SHADOWED_OBJECT,
+			Kind:           opensplunk.KnowledgeSnapshotWarningKind_KNOWLEDGE_SNAPSHOT_WARNING_KIND_SHADOWED_OBJECT,
 			ShadowOrdinal:  &shadowOrdinal,
 		}
 	}
 
-	snapshotDependencies := make([]*opensplunkv1.KnowledgeObjectDependency, len(dependencies))
+	snapshotDependencies := make([]*opensplunk.KnowledgeObjectDependency, len(dependencies))
 	authorityDependencies := make([]Dependency, len(dependencies))
 	for index, dependency := range dependencies {
-		snapshotDependencies[index] = &opensplunkv1.KnowledgeObjectDependency{
+		snapshotDependencies[index] = &opensplunk.KnowledgeObjectDependency{
 			Source: versionReference(dependency.source),
-			Target: &opensplunkv1.KnowledgeDependencyTarget{
-				Target: &opensplunkv1.KnowledgeDependencyTarget_Object{
+			Target: &opensplunk.KnowledgeDependencyTarget{
+				Target: &opensplunk.KnowledgeDependencyTarget_Object{
 					Object: versionReference(dependency.target),
 				},
 			},
@@ -481,21 +475,20 @@ func Prepare(input Input) (Authority, error) {
 		return Authority{}, err
 	}
 
-	base := &opensplunkv1.KnowledgeSnapshot{
-		FormatVersion:                FormatVersion,
-		TenantId:                     strings.Clone(input.TenantID),
-		PrincipalId:                  strings.Clone(input.PrincipalID),
-		AppId:                        strings.Clone(input.AppID),
-		TenantCatalogRevision:        input.TenantCatalogRevision,
-		AppCatalogRevision:           cloneUint64(input.AppCatalogRevision),
-		CompilerCompatibilityVersion: CompilerCompatibilityVersion,
-		Objects:                      snapshotObjects,
-		Dependencies:                 snapshotDependencies,
-		LookupAssets:                 nil,
-		EffectiveAuthorizedIndexes:   slices.Clone(indexScope.IndexNames),
-		Shadows:                      snapshotShadows,
-		Warnings:                     snapshotWarnings,
-		BudgetCharges: &opensplunkv1.KnowledgeSnapshotBudgetCharges{
+	base := &opensplunk.KnowledgeSnapshot{
+		FormatVersion:              FormatVersion,
+		TenantId:                   strings.Clone(input.TenantID),
+		PrincipalId:                strings.Clone(input.PrincipalID),
+		AppId:                      strings.Clone(input.AppID),
+		TenantCatalogRevision:      input.TenantCatalogRevision,
+		AppCatalogRevision:         cloneUint64(input.AppCatalogRevision),
+		Objects:                    snapshotObjects,
+		Dependencies:               snapshotDependencies,
+		LookupAssets:               nil,
+		EffectiveAuthorizedIndexes: slices.Clone(indexScope.IndexNames),
+		Shadows:                    snapshotShadows,
+		Warnings:                   snapshotWarnings,
+		BudgetCharges: &opensplunk.KnowledgeSnapshotBudgetCharges{
 			ExecutableObjects:         uint32(len(objects)), // #nosec G115 -- objects are bounded by MaximumObjects.
 			SelectorPatterns:          selectorPatterns,
 			SelectorWildcardWorkUnits: selectorWork,
@@ -677,13 +670,13 @@ func compileDefinitionSemantics(normalized knowledgedefinition.Normalized) (defi
 	}
 	var semantics definitionSemantics
 	switch body := normalized.Definition.GetBody().(type) {
-	case *opensplunkv1.KnowledgeObjectDefinition_FieldExtraction:
+	case *opensplunk.KnowledgeObjectDefinition_FieldExtraction:
 		if body == nil || body.FieldExtraction == nil {
 			return definitionSemantics{}, errors.New("field extraction is nil")
 		}
 		semantics.inputFields = knowledge.CanonicalFields([]string{body.FieldExtraction.GetInputField()})
 		switch extraction := body.FieldExtraction.GetExtraction().(type) {
-		case *opensplunkv1.FieldExtractionDefinition_Regex:
+		case *opensplunk.FieldExtractionDefinition_Regex:
 			if extraction == nil || extraction.Regex == nil {
 				return definitionSemantics{}, errors.New("regex extraction is nil")
 			}
@@ -706,7 +699,7 @@ func compileDefinitionSemantics(normalized knowledgedefinition.Normalized) (defi
 			// The regex compiler returns a positive value bounded by MaximumExtractionProgramWorkUnits.
 			semantics.charges.ExtractionRegexWorkUnits = uint64(compiled.ProgramWorkUnits) // #nosec G115 -- the compiler-enforced bound is far below MaxUint64.
 			semantics.charges.ExtractionOutputs = uint32(len(outputs))                     // #nosec G115 -- regex outputs are bounded by the extraction limit.
-		case *opensplunkv1.FieldExtractionDefinition_Json:
+		case *opensplunk.FieldExtractionDefinition_Json:
 			if extraction == nil || extraction.Json == nil {
 				return definitionSemantics{}, errors.New("JSON extraction is nil")
 			}
@@ -725,14 +718,14 @@ func compileDefinitionSemantics(normalized knowledgedefinition.Normalized) (defi
 		default:
 			return definitionSemantics{}, errors.New("field extraction kind is unsupported")
 		}
-	case *opensplunkv1.KnowledgeObjectDefinition_FieldAlias:
+	case *opensplunk.KnowledgeObjectDefinition_FieldAlias:
 		if body == nil || body.FieldAlias == nil {
 			return definitionSemantics{}, errors.New("field alias is nil")
 		}
 		semantics.inputFields = knowledge.CanonicalFields([]string{body.FieldAlias.GetSourceField()})
 		semantics.outputFields = knowledge.CanonicalFields([]string{body.FieldAlias.GetDestinationField()})
 		semantics.charges.GeneratedFields = 1
-	case *opensplunkv1.KnowledgeObjectDefinition_CalculatedField:
+	case *opensplunk.KnowledgeObjectDefinition_CalculatedField:
 		if body == nil || body.CalculatedField == nil {
 			return definitionSemantics{}, errors.New("calculated field is nil")
 		}
@@ -840,7 +833,7 @@ func canonicalizeDependencies(
 	type edgeKey struct {
 		source objectKey
 		target objectKey
-		role   opensplunkv1.KnowledgeDependencyRole
+		role   opensplunk.KnowledgeDependencyRole
 	}
 	expected := make(map[edgeKey]struct{})
 	for sourceKey, source := range byKey {
@@ -865,7 +858,7 @@ func canonicalizeDependencies(
 			expected[edgeKey{
 				source: sourceKey,
 				target: targetKey,
-				role:   opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
+				role:   opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
 			}] = struct{}{}
 		}
 	}
@@ -878,7 +871,7 @@ func canonicalizeDependencies(
 	}
 	seen := make(map[edgeKey]struct{}, len(input))
 	for position, edge := range input {
-		if edge.Role != opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT {
+		if edge.Role != opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT {
 			return nil, 0, 0, fmt.Errorf("%w: dependency %d role is unsupported", ErrInvalidInput, position)
 		}
 		sourceKey := objectKey{id: edge.SourceObjectID, version: edge.SourceVersion}
@@ -1066,16 +1059,16 @@ func canonicalizeShadows(
 
 func dependencyScopeAllows(source, target Object) bool {
 	switch source.SharingScope {
-	case opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE:
-		return target.SharingScope == opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL ||
-			target.SharingScope == opensplunkv1.SharingScope_SHARING_SCOPE_APP && target.AppID == source.AppID ||
-			target.SharingScope == opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE &&
+	case opensplunk.SharingScope_SHARING_SCOPE_PRIVATE:
+		return target.SharingScope == opensplunk.SharingScope_SHARING_SCOPE_GLOBAL ||
+			target.SharingScope == opensplunk.SharingScope_SHARING_SCOPE_APP && target.AppID == source.AppID ||
+			target.SharingScope == opensplunk.SharingScope_SHARING_SCOPE_PRIVATE &&
 				target.AppID == source.AppID && target.OwnerID == source.OwnerID
-	case opensplunkv1.SharingScope_SHARING_SCOPE_APP:
-		return target.SharingScope == opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL ||
-			target.SharingScope == opensplunkv1.SharingScope_SHARING_SCOPE_APP && target.AppID == source.AppID
-	case opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL:
-		return target.SharingScope == opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL
+	case opensplunk.SharingScope_SHARING_SCOPE_APP:
+		return target.SharingScope == opensplunk.SharingScope_SHARING_SCOPE_GLOBAL ||
+			target.SharingScope == opensplunk.SharingScope_SHARING_SCOPE_APP && target.AppID == source.AppID
+	case opensplunk.SharingScope_SHARING_SCOPE_GLOBAL:
+		return target.SharingScope == opensplunk.SharingScope_SHARING_SCOPE_GLOBAL
 	default:
 		return false
 	}
@@ -1103,7 +1096,7 @@ func chargeCandidateDefinitionBytes(total *uint64, size int) error {
 	return nil
 }
 
-func validateBaseSkeletonSize(base *opensplunkv1.KnowledgeSnapshot) error {
+func validateBaseSkeletonSize(base *opensplunk.KnowledgeSnapshot) error {
 	if base == nil || base.BudgetCharges == nil {
 		return fmt.Errorf("%w: prepared snapshot skeleton is incomplete", ErrInvalidInput)
 	}
@@ -1125,7 +1118,7 @@ func finalize(authority Authority, evidence trustedCompilerEvidence) (Snapshot, 
 	if err != nil {
 		return Snapshot{}, err
 	}
-	snapshot, ok := proto.Clone(authority.base).(*opensplunkv1.KnowledgeSnapshot)
+	snapshot, ok := proto.Clone(authority.base).(*opensplunk.KnowledgeSnapshot)
 	if !ok || snapshot == nil || snapshot.BudgetCharges == nil {
 		return Snapshot{}, fmt.Errorf("%w: prepared authority cannot be detached", ErrInvalidInput)
 	}
@@ -1332,7 +1325,7 @@ func validateTrustedCompilerEvidence(
 }
 
 func digestSnapshot(
-	snapshot *opensplunkv1.KnowledgeSnapshot,
+	snapshot *opensplunk.KnowledgeSnapshot,
 	prelude knowledgeprogram.Program,
 ) (Snapshot, error) {
 	if prelude.IsZero() {
@@ -1379,7 +1372,7 @@ func digestSnapshot(
 	return result, nil
 }
 
-func stageForObjectType(objectType opensplunkv1.KnowledgeObjectType) (opensplunkv1.KnowledgeSearchStage, uint8, error) {
+func stageForObjectType(objectType opensplunk.KnowledgeObjectType) (opensplunk.KnowledgeSearchStage, uint8, error) {
 	stage, rank, ok := knowledgedefinition.StageForObjectType(objectType)
 	if !ok {
 		return 0, 0, fmt.Errorf("unsupported object type %d", objectType)
@@ -1387,26 +1380,26 @@ func stageForObjectType(objectType opensplunkv1.KnowledgeObjectType) (opensplunk
 	return stage, rank, nil
 }
 
-func precedenceRank(scope opensplunkv1.SharingScope) uint8 {
+func precedenceRank(scope opensplunk.SharingScope) uint8 {
 	switch scope {
-	case opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE:
+	case opensplunk.SharingScope_SHARING_SCOPE_PRIVATE:
 		return 3
-	case opensplunkv1.SharingScope_SHARING_SCOPE_APP:
+	case opensplunk.SharingScope_SHARING_SCOPE_APP:
 		return 2
-	case opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL:
+	case opensplunk.SharingScope_SHARING_SCOPE_GLOBAL:
 		return 1
 	default:
 		return 0
 	}
 }
 
-func authorizedIdentity(input Input, appID, ownerID string, scope opensplunkv1.SharingScope) bool {
+func authorizedIdentity(input Input, appID, ownerID string, scope opensplunk.SharingScope) bool {
 	switch scope {
-	case opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE:
+	case opensplunk.SharingScope_SHARING_SCOPE_PRIVATE:
 		return appID == input.AppID && ownerID == input.PrincipalID
-	case opensplunkv1.SharingScope_SHARING_SCOPE_APP:
+	case opensplunk.SharingScope_SHARING_SCOPE_APP:
 		return appID == input.AppID
-	case opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL:
+	case opensplunk.SharingScope_SHARING_SCOPE_GLOBAL:
 		return true
 	default:
 		return false
@@ -1431,8 +1424,8 @@ func canonicalAuthorityObject(object *canonicalObject) Object {
 	}
 }
 
-func versionReference(object *canonicalObject) *opensplunkv1.KnowledgeObjectVersionReference {
-	return &opensplunkv1.KnowledgeObjectVersionReference{
+func versionReference(object *canonicalObject) *opensplunk.KnowledgeObjectVersionReference {
+	return &opensplunk.KnowledgeObjectVersionReference{
 		KnowledgeObjectId: strings.Clone(object.input.KnowledgeObjectID),
 		Version:           object.input.Version,
 		DefinitionSha256:  bytes.Clone(object.input.DefinitionSHA256),
@@ -1449,7 +1442,7 @@ func cloneObjects(objects []Object) []Object {
 		cloned[index].OwnerID = strings.Clone(object.OwnerID)
 		cloned[index].DefinitionSHA256 = bytes.Clone(object.DefinitionSHA256)
 		if object.Definition != nil {
-			cloned[index].Definition, _ = proto.Clone(object.Definition).(*opensplunkv1.KnowledgeObjectDefinition)
+			cloned[index].Definition, _ = proto.Clone(object.Definition).(*opensplunk.KnowledgeObjectDefinition)
 		}
 	}
 	return cloned
@@ -1481,7 +1474,7 @@ func cloneShadow(shadow Shadow) Shadow {
 	cloned.OwnerID = strings.Clone(shadow.OwnerID)
 	cloned.DefinitionSHA256 = bytes.Clone(shadow.DefinitionSHA256)
 	if shadow.Definition != nil {
-		cloned.Definition, _ = proto.Clone(shadow.Definition).(*opensplunkv1.KnowledgeObjectDefinition)
+		cloned.Definition, _ = proto.Clone(shadow.Definition).(*opensplunk.KnowledgeObjectDefinition)
 	}
 	return cloned
 }

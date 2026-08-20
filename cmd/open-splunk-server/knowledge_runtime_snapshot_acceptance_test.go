@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
@@ -257,7 +257,7 @@ func waitForRuntimeKnowledgeSnapshotExecution(
 
 func requireRuntimeKnowledgeSnapshotSummary(
 	t *testing.T,
-	summary *opensplunkv1.KnowledgeSnapshotSummary,
+	summary *opensplunk.KnowledgeSnapshotSummary,
 	objectID string,
 	version uint64,
 	wantDigest []byte,
@@ -268,9 +268,9 @@ func requireRuntimeKnowledgeSnapshotSummary(
 		len(summary.GetObjects()) != 1 || summary.GetObjects()[0] == nil ||
 		summary.GetObjects()[0].GetResolutionOrdinal() != 0 ||
 		summary.GetObjects()[0].GetObjectType() !=
-			opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS ||
+			opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS ||
 		summary.GetObjects()[0].GetStage() !=
-			opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS ||
+			opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS ||
 		summary.GetObjects()[0].GetAuthorizedObject() == nil ||
 		summary.GetObjects()[0].GetAuthorizedObject().GetKnowledgeObjectId() != objectID ||
 		summary.GetObjects()[0].GetAuthorizedObject().GetVersion() != version ||
@@ -326,8 +326,8 @@ func requireRuntimeKnowledgeInspectionResult(
 	}
 	wantObject := searchinspection.RedactedObjectProvenance{
 		Ordinal:    0,
-		ObjectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
-		Stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
+		ObjectType: opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+		Stage:      opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
 	}
 	if generated == nil || generated.Index != 1 || generated.SourceRange != nil ||
 		!slices.Equal(generated.InputFields, []string{"index", "source_field"}) ||
@@ -457,16 +457,16 @@ func TestKnowledgeSnapshotManagerRetainsWriterResolvedActiveVersions(t *testing.
 		"snapshot_alias",
 		"runtime-knowledge-snapshot-create-0001",
 	)
-	createRequest.InitialState = opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE
-	createRequest.Definition.Selector = &opensplunkv1.KnowledgeSelector{
-		IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{Value: "main"}},
+	createRequest.InitialState = opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE
+	createRequest.Definition.Selector = &opensplunk.KnowledgeSelector{
+		IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{{Value: "main"}},
 	}
 	published, err := runtime.writer.Create(actorContext, writeScope, createRequest)
 	if err != nil {
 		t.Fatalf("publish ACTIVE v1: %v", err)
 	}
 	objectV1 := published.GetKnowledgeObject()
-	if objectV1.GetState() != opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE ||
+	if objectV1.GetState() != opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE ||
 		objectV1.GetVersion() != 1 {
 		t.Fatalf("published ACTIVE v1 = %v", objectV1)
 	}
@@ -532,12 +532,12 @@ func TestKnowledgeSnapshotManagerRetainsWriterResolvedActiveVersions(t *testing.
 		resolutionScope,
 	)
 
-	definitionV2 := proto.Clone(objectV1.GetDefinition()).(*opensplunkv1.KnowledgeObjectDefinition)
+	definitionV2 := proto.Clone(objectV1.GetDefinition()).(*opensplunk.KnowledgeObjectDefinition)
 	definitionV2.GetFieldAlias().DestinationField = "destination_snapshot_alias_v2"
 	updated, err := runtime.writer.Update(
 		actorContext,
 		writeScope,
-		&opensplunkv1.UpdateKnowledgeObjectRequest{
+		&opensplunk.UpdateKnowledgeObjectRequest{
 			KnowledgeObjectId: objectV1.GetKnowledgeObjectId(),
 			ExpectedVersion:   1,
 			Definition:        definitionV2,
@@ -550,7 +550,7 @@ func TestKnowledgeSnapshotManagerRetainsWriterResolvedActiveVersions(t *testing.
 	}
 	objectV2 := updated.GetKnowledgeObject()
 	if objectV2.GetKnowledgeObjectId() != objectV1.GetKnowledgeObjectId() ||
-		objectV2.GetState() != opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE ||
+		objectV2.GetState() != opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE ||
 		objectV2.GetVersion() != 2 ||
 		objectV2.GetDefinition().GetFieldAlias().GetDestinationField() !=
 			"destination_snapshot_alias_v2" {

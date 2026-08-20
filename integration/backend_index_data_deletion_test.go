@@ -17,7 +17,7 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
@@ -223,11 +223,11 @@ func TestBackendIndexDataDeletionLifecycle(t *testing.T) {
 			backendIndexDeletionNeighborName,
 	)
 	if target.GetVersion() != 2 ||
-		target.GetState() != opensplunkv1.IndexState_INDEX_STATE_ARCHIVED {
+		target.GetState() != opensplunk.IndexState_INDEX_STATE_ARCHIVED {
 		t.Fatalf("archived target = %+v", target)
 	}
 	if neighbor.GetVersion() != 1 ||
-		neighbor.GetState() != opensplunkv1.IndexState_INDEX_STATE_ACTIVE {
+		neighbor.GetState() != opensplunk.IndexState_INDEX_STATE_ACTIVE {
 		t.Fatalf("active neighbor = %+v", neighbor)
 	}
 
@@ -255,44 +255,44 @@ func TestBackendIndexDataDeletionLifecycle(t *testing.T) {
 	)
 
 	baseDeleteRequest := backendIndexDeletionPhysicalRequestByID(target)
-	zeroVersion := proto.Clone(baseDeleteRequest).(*opensplunkv1.DeleteIndexRequest)
+	zeroVersion := proto.Clone(baseDeleteRequest).(*opensplunk.DeleteIndexRequest)
 	zeroVersion.ExpectedVersion = 0
 	zeroVersion.Selector = nil
-	finalSQLiteVersion := proto.Clone(baseDeleteRequest).(*opensplunkv1.DeleteIndexRequest)
+	finalSQLiteVersion := proto.Clone(baseDeleteRequest).(*opensplunk.DeleteIndexRequest)
 	finalSQLiteVersion.ExpectedVersion = math.MaxInt64
 	finalSQLiteVersion.Selector = nil
-	aboveSQLiteRange := proto.Clone(baseDeleteRequest).(*opensplunkv1.DeleteIndexRequest)
+	aboveSQLiteRange := proto.Clone(baseDeleteRequest).(*opensplunk.DeleteIndexRequest)
 	aboveSQLiteRange.ExpectedVersion = uint64(math.MaxInt64) + 1
 	aboveSQLiteRange.Selector = nil
-	unspecifiedMode := proto.Clone(baseDeleteRequest).(*opensplunkv1.DeleteIndexRequest)
+	unspecifiedMode := proto.Clone(baseDeleteRequest).(*opensplunk.DeleteIndexRequest)
 	unspecifiedMode.DataDeletionMode =
-		opensplunkv1.IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_UNSPECIFIED
+		opensplunk.IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_UNSPECIFIED
 	unspecifiedMode.Selector = nil
-	unknownMode := proto.Clone(baseDeleteRequest).(*opensplunkv1.DeleteIndexRequest)
-	unknownMode.DataDeletionMode = opensplunkv1.IndexDataDeletionMode(99)
+	unknownMode := proto.Clone(baseDeleteRequest).(*opensplunk.DeleteIndexRequest)
+	unknownMode.DataDeletionMode = opensplunk.IndexDataDeletionMode(99)
 	unknownMode.Selector = nil
-	noncanonicalConfirmation := proto.Clone(baseDeleteRequest).(*opensplunkv1.DeleteIndexRequest)
+	noncanonicalConfirmation := proto.Clone(baseDeleteRequest).(*opensplunk.DeleteIndexRequest)
 	noncanonicalConfirmation.ConfirmationName =
 		" " + strings.ToUpper(backendIndexDeletionTargetName) + " "
 	noncanonicalConfirmation.Selector = nil
-	missingSelector := proto.Clone(baseDeleteRequest).(*opensplunkv1.DeleteIndexRequest)
+	missingSelector := proto.Clone(baseDeleteRequest).(*opensplunk.DeleteIndexRequest)
 	missingSelector.Selector = nil
-	missingIndex := proto.Clone(baseDeleteRequest).(*opensplunkv1.DeleteIndexRequest)
-	missingIndex.Selector = &opensplunkv1.IndexSelector{
-		Selector: &opensplunkv1.IndexSelector_IndexId{
+	missingIndex := proto.Clone(baseDeleteRequest).(*opensplunk.DeleteIndexRequest)
+	missingIndex.Selector = &opensplunk.IndexSelector{
+		Selector: &opensplunk.IndexSelector_IndexId{
 			IndexId: "idx_missing_backend_delete",
 		},
 	}
 	activeIndex := backendIndexDeletionPhysicalRequestByID(neighbor)
-	staleVersion := proto.Clone(baseDeleteRequest).(*opensplunkv1.DeleteIndexRequest)
+	staleVersion := proto.Clone(baseDeleteRequest).(*opensplunk.DeleteIndexRequest)
 	staleVersion.ExpectedVersion--
-	wrongConfirmation := proto.Clone(baseDeleteRequest).(*opensplunkv1.DeleteIndexRequest)
+	wrongConfirmation := proto.Clone(baseDeleteRequest).(*opensplunk.DeleteIndexRequest)
 	wrongConfirmation.ConfirmationName = backendIndexDeletionNeighborName
 
 	rejections := []struct {
 		name  string
 		token string
-		input *opensplunkv1.DeleteIndexRequest
+		input *opensplunk.DeleteIndexRequest
 		want  int
 	}{
 		{
@@ -371,7 +371,7 @@ func TestBackendIndexDataDeletionLifecycle(t *testing.T) {
 		status, body, requestErr := backendIndexDeletionPostProto(
 			ctx,
 			httpClient,
-			baseURL+"/api/v1/indexes/delete",
+			baseURL+"/api/indexes/delete",
 			rejection.token,
 			rejection.input,
 			nil,
@@ -436,7 +436,7 @@ func TestBackendIndexDataDeletionLifecycle(t *testing.T) {
 	type admissionResult struct {
 		status   int
 		body     []byte
-		response *opensplunkv1.DeleteIndexResponse
+		response *opensplunk.DeleteIndexResponse
 		err      error
 	}
 	startAdmissions := make(chan struct{})
@@ -447,11 +447,11 @@ func TestBackendIndexDataDeletionLifecycle(t *testing.T) {
 		go func() {
 			defer admissionCallers.Done()
 			<-startAdmissions
-			var response opensplunkv1.DeleteIndexResponse
+			var response opensplunk.DeleteIndexResponse
 			status, body, requestErr := backendIndexDeletionPostProto(
 				ctx,
 				httpClient,
-				baseURL+"/api/v1/indexes/delete",
+				baseURL+"/api/indexes/delete",
 				administratorToken,
 				backendIndexDeletionPhysicalRequestByID(target),
 				&response,
@@ -527,12 +527,12 @@ func TestBackendIndexDataDeletionLifecycle(t *testing.T) {
 	)
 	thirdServer := startServer()
 
-	var restartedResponse opensplunkv1.DeleteIndexResponse
+	var restartedResponse opensplunk.DeleteIndexResponse
 	restartedStatus, restartedBody, restartedErr :=
 		backendIndexDeletionPostProto(
 			ctx,
 			httpClient,
-			baseURL+"/api/v1/indexes/delete",
+			baseURL+"/api/indexes/delete",
 			administratorToken,
 			backendIndexDeletionPhysicalRequestByName(target),
 			&restartedResponse,
@@ -613,7 +613,7 @@ func TestBackendIndexDataDeletionLifecycle(t *testing.T) {
 		backendIndexDeletionPostProto(
 			ctx,
 			httpClient,
-			baseURL+"/api/v1/indexes/delete",
+			baseURL+"/api/indexes/delete",
 			administratorToken,
 			backendIndexDeletionPhysicalRequestByID(target),
 			nil,
@@ -705,24 +705,24 @@ func backendIndexDeletionArchiveIndex(
 	client *http.Client,
 	baseURL string,
 	administratorToken string,
-	index *opensplunkv1.Index,
-) *opensplunkv1.Index {
+	index *opensplunk.Index,
+) *opensplunk.Index {
 	t.Helper()
 
-	var response opensplunkv1.SetIndexStateResponse
+	var response opensplunk.SetIndexStateResponse
 	status, body, err := backendIndexDeletionPostProto(
 		ctx,
 		client,
-		baseURL+"/api/v1/indexes/state/set",
+		baseURL+"/api/indexes/state/set",
 		administratorToken,
-		&opensplunkv1.SetIndexStateRequest{
-			Selector: &opensplunkv1.IndexSelector{
-				Selector: &opensplunkv1.IndexSelector_IndexId{
+		&opensplunk.SetIndexStateRequest{
+			Selector: &opensplunk.IndexSelector{
+				Selector: &opensplunk.IndexSelector_IndexId{
 					IndexId: index.GetIndexId(),
 				},
 			},
 			ExpectedVersion: index.GetVersion(),
-			State: opensplunkv1.
+			State: opensplunk.
 				IndexState_INDEX_STATE_ARCHIVED,
 		},
 		&response,
@@ -741,41 +741,41 @@ func backendIndexDeletionArchiveIndex(
 	archived := response.GetIndex()
 	if archived.GetIndexId() != index.GetIndexId() ||
 		archived.GetVersion() != index.GetVersion()+1 ||
-		archived.GetState() != opensplunkv1.IndexState_INDEX_STATE_ARCHIVED {
+		archived.GetState() != opensplunk.IndexState_INDEX_STATE_ARCHIVED {
 		t.Fatalf("archived index = %+v, created = %+v", archived, index)
 	}
 	return archived
 }
 
 func backendIndexDeletionPhysicalRequestByID(
-	index *opensplunkv1.Index,
-) *opensplunkv1.DeleteIndexRequest {
-	return &opensplunkv1.DeleteIndexRequest{
-		Selector: &opensplunkv1.IndexSelector{
-			Selector: &opensplunkv1.IndexSelector_IndexId{
+	index *opensplunk.Index,
+) *opensplunk.DeleteIndexRequest {
+	return &opensplunk.DeleteIndexRequest{
+		Selector: &opensplunk.IndexSelector{
+			Selector: &opensplunk.IndexSelector_IndexId{
 				IndexId: index.GetIndexId(),
 			},
 		},
 		ExpectedVersion: index.GetVersion(),
-		DataDeletionMode: opensplunkv1.
+		DataDeletionMode: opensplunk.
 			IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_DELETE_DATA,
 		ConfirmationName: index.GetDefinition().GetName(),
 	}
 }
 
 func backendIndexDeletionPhysicalRequestByName(
-	index *opensplunkv1.Index,
-) *opensplunkv1.DeleteIndexRequest {
-	return &opensplunkv1.DeleteIndexRequest{
-		Selector: &opensplunkv1.IndexSelector{
-			Selector: &opensplunkv1.IndexSelector_IndexName{
+	index *opensplunk.Index,
+) *opensplunk.DeleteIndexRequest {
+	return &opensplunk.DeleteIndexRequest{
+		Selector: &opensplunk.IndexSelector{
+			Selector: &opensplunk.IndexSelector_IndexName{
 				IndexName: " " + strings.ToUpper(
 					index.GetDefinition().GetName(),
 				) + " ",
 			},
 		},
 		ExpectedVersion: index.GetVersion(),
-		DataDeletionMode: opensplunkv1.
+		DataDeletionMode: opensplunk.
 			IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_DELETE_DATA,
 		ConfirmationName: index.GetDefinition().GetName(),
 	}
@@ -983,8 +983,8 @@ func backendIndexDeletionAssertRejectedControlState(
 	t *testing.T,
 	ctx context.Context,
 	controlDBPath string,
-	target *opensplunkv1.Index,
-	neighbor *opensplunkv1.Index,
+	target *opensplunk.Index,
+	neighbor *opensplunk.Index,
 ) {
 	t.Helper()
 
@@ -1033,7 +1033,7 @@ func backendIndexDeletionInspectPendingControl(
 	ctx context.Context,
 	controlDBPath string,
 	operationID string,
-	target *opensplunkv1.Index,
+	target *opensplunk.Index,
 	tableUUID string,
 ) (
 	control.IndexDeletionOperation,
@@ -1284,7 +1284,7 @@ func backendIndexDeletionAssertStoredIndex(
 	t *testing.T,
 	ctx context.Context,
 	db *control.DB,
-	want *opensplunkv1.Index,
+	want *opensplunk.Index,
 	state control.IndexState,
 	version uint64,
 ) {
@@ -1405,7 +1405,7 @@ func backendIndexDeletionWaitForCatalogTombstone(
 	client *http.Client,
 	baseURL string,
 	administratorToken string,
-	target *opensplunkv1.Index,
+	target *opensplunk.Index,
 	process *managedProcess,
 	protectedValues []string,
 ) {
@@ -1419,15 +1419,15 @@ func backendIndexDeletionWaitForCatalogTombstone(
 		protectedValues,
 		"terminal catalog tombstone",
 		func(probeCtx context.Context) (bool, string, error) {
-			var response opensplunkv1.GetIndexResponse
+			var response opensplunk.GetIndexResponse
 			status, body, err := backendIndexDeletionPostProto(
 				probeCtx,
 				client,
-				baseURL+"/api/v1/indexes/get",
+				baseURL+"/api/indexes/get",
 				administratorToken,
-				&opensplunkv1.GetIndexRequest{
-					Selector: &opensplunkv1.IndexSelector{
-						Selector: &opensplunkv1.IndexSelector_IndexId{
+				&opensplunk.GetIndexRequest{
+					Selector: &opensplunk.IndexSelector{
+						Selector: &opensplunk.IndexSelector_IndexId{
 							IndexId: target.GetIndexId(),
 						},
 					},
@@ -1454,7 +1454,7 @@ func backendIndexDeletionWaitForCatalogTombstone(
 			index := response.GetIndex()
 			if index.GetIndexId() != target.GetIndexId() ||
 				index.GetState() !=
-					opensplunkv1.IndexState_INDEX_STATE_DELETING ||
+					opensplunk.IndexState_INDEX_STATE_DELETING ||
 				index.GetVersion() != target.GetVersion()+1 {
 				t.Fatalf(
 					"catalog index while deletion completes = %+v",

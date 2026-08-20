@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"google.golang.org/protobuf/proto"
@@ -61,7 +61,7 @@ func TestDeleteIndexDataAdmissionPersistsTrustedScopeAndWakes(t *testing.T) {
 	response := postProto(
 		t,
 		handler,
-		"/api/v1/indexes/delete",
+		"/api/indexes/delete",
 		request,
 	)
 	if response.Code != http.StatusOK {
@@ -71,7 +71,7 @@ func TestDeleteIndexDataAdmissionPersistsTrustedScopeAndWakes(t *testing.T) {
 			response.Body.String(),
 		)
 	}
-	var admitted opensplunkv1.DeleteIndexResponse
+	var admitted opensplunk.DeleteIndexResponse
 	unmarshalResponse(t, response, &admitted)
 	if admitted.GetIndexId() != archived.ID ||
 		admitted.DeletionOperationId == nil ||
@@ -107,7 +107,7 @@ func TestDeleteIndexDataAdmissionPersistsTrustedScopeAndWakes(t *testing.T) {
 	retryResponse := postProto(
 		t,
 		handler,
-		"/api/v1/indexes/delete",
+		"/api/indexes/delete",
 		request,
 	)
 	if retryResponse.Code != http.StatusOK {
@@ -117,7 +117,7 @@ func TestDeleteIndexDataAdmissionPersistsTrustedScopeAndWakes(t *testing.T) {
 			retryResponse.Body.String(),
 		)
 	}
-	var retried opensplunkv1.DeleteIndexResponse
+	var retried opensplunk.DeleteIndexResponse
 	unmarshalResponse(t, retryResponse, &retried)
 	if !proto.Equal(&admitted, &retried) {
 		t.Fatalf("retry response = %+v, want %+v", &retried, &admitted)
@@ -159,7 +159,7 @@ func TestDeleteIndexDataAdmissionConcurrentRetriesConverge(t *testing.T) {
 			request := httptest.NewRequestWithContext(
 				context.Background(),
 				http.MethodPost,
-				"http://example.com/api/v1/indexes/delete",
+				"http://example.com/api/indexes/delete",
 				bytes.NewReader(payload),
 			)
 			request.Header.Set("Content-Type", "application/x-protobuf")
@@ -181,7 +181,7 @@ func TestDeleteIndexDataAdmissionConcurrentRetriesConverge(t *testing.T) {
 				response.Body.String(),
 			)
 		}
-		var admitted opensplunkv1.DeleteIndexResponse
+		var admitted opensplunk.DeleteIndexResponse
 		unmarshalResponse(t, response, &admitted)
 		if admitted.GetIndexId() != archived.ID ||
 			admitted.GetDeletionOperationId() == "" {
@@ -263,8 +263,8 @@ func TestConcurrentKeepAndPhysicalIndexDeletionLeaveOneHTTPWinner(
 			"physical-mode-winner",
 		)
 		deleteRequest := physicalDeleteIndexRequest(archived)
-		keepRequest := proto.Clone(deleteRequest).(*opensplunkv1.DeleteIndexRequest)
-		keepRequest.DataDeletionMode = opensplunkv1.
+		keepRequest := proto.Clone(deleteRequest).(*opensplunk.DeleteIndexRequest)
+		keepRequest.DataDeletionMode = opensplunk.
 			IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_KEEP_DATA
 
 		deleteResult := make(chan *httptest.ResponseRecorder, 1)
@@ -272,7 +272,7 @@ func TestConcurrentKeepAndPhysicalIndexDeletionLeaveOneHTTPWinner(
 			deleteResult <- postProto(
 				t,
 				handler,
-				"/api/v1/indexes/delete",
+				"/api/indexes/delete",
 				deleteRequest,
 			)
 		}()
@@ -287,7 +287,7 @@ func TestConcurrentKeepAndPhysicalIndexDeletionLeaveOneHTTPWinner(
 		keepResponse := postProto(
 			t,
 			handler,
-			"/api/v1/indexes/delete",
+			"/api/indexes/delete",
 			keepRequest,
 		)
 		if keepResponse.Code != http.StatusConflict {
@@ -307,7 +307,7 @@ func TestConcurrentKeepAndPhysicalIndexDeletionLeaveOneHTTPWinner(
 				deleteResponse.Body.String(),
 			)
 		}
-		var decoded opensplunkv1.DeleteIndexResponse
+		var decoded opensplunk.DeleteIndexResponse
 		unmarshalResponse(t, deleteResponse, &decoded)
 		operation, err := db.NextIndexDeletionOperation(
 			context.Background(),
@@ -382,8 +382,8 @@ func TestConcurrentKeepAndPhysicalIndexDeletionLeaveOneHTTPWinner(
 			"keep-mode-winner",
 		)
 		deleteRequest := physicalDeleteIndexRequest(archived)
-		keepRequest := proto.Clone(deleteRequest).(*opensplunkv1.DeleteIndexRequest)
-		keepRequest.DataDeletionMode = opensplunkv1.
+		keepRequest := proto.Clone(deleteRequest).(*opensplunk.DeleteIndexRequest)
+		keepRequest.DataDeletionMode = opensplunk.
 			IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_KEEP_DATA
 
 		deleteResult := make(chan *httptest.ResponseRecorder, 1)
@@ -391,7 +391,7 @@ func TestConcurrentKeepAndPhysicalIndexDeletionLeaveOneHTTPWinner(
 			deleteResult <- postProto(
 				t,
 				handler,
-				"/api/v1/indexes/delete",
+				"/api/indexes/delete",
 				deleteRequest,
 			)
 		}()
@@ -403,7 +403,7 @@ func TestConcurrentKeepAndPhysicalIndexDeletionLeaveOneHTTPWinner(
 		keepResponse := postProto(
 			t,
 			handler,
-			"/api/v1/indexes/delete",
+			"/api/indexes/delete",
 			keepRequest,
 		)
 		if keepResponse.Code != http.StatusOK {
@@ -413,7 +413,7 @@ func TestConcurrentKeepAndPhysicalIndexDeletionLeaveOneHTTPWinner(
 				keepResponse.Body.String(),
 			)
 		}
-		var kept opensplunkv1.DeleteIndexResponse
+		var kept opensplunk.DeleteIndexResponse
 		unmarshalResponse(t, keepResponse, &kept)
 		if kept.GetIndexId() != archived.ID ||
 			kept.DeletionOperationId != nil {
@@ -481,7 +481,7 @@ func TestDeleteIndexDataAdmissionRequiresAuthenticationBeforeAdmission(
 	response := postProto(
 		t,
 		handler.raw,
-		"/api/v1/indexes/delete",
+		"/api/indexes/delete",
 		physicalDeleteIndexRequest(archived),
 	)
 	if response.Code != http.StatusUnauthorized {
@@ -514,13 +514,13 @@ func TestDeleteIndexDataAdmissionRejectsWithoutMutationOrWake(t *testing.T) {
 	tests := []struct {
 		name       string
 		wantStatus int
-		mutate     func(*opensplunkv1.DeleteIndexRequest, control.Index)
+		mutate     func(*opensplunk.DeleteIndexRequest, control.Index)
 	}{
 		{
 			name:       "zero version before selector",
 			wantStatus: http.StatusBadRequest,
 			mutate: func(
-				request *opensplunkv1.DeleteIndexRequest,
+				request *opensplunk.DeleteIndexRequest,
 				_ control.Index,
 			) {
 				request.ExpectedVersion = 0
@@ -531,7 +531,7 @@ func TestDeleteIndexDataAdmissionRejectsWithoutMutationOrWake(t *testing.T) {
 			name:       "final SQLite version",
 			wantStatus: http.StatusBadRequest,
 			mutate: func(
-				request *opensplunkv1.DeleteIndexRequest,
+				request *opensplunk.DeleteIndexRequest,
 				_ control.Index,
 			) {
 				request.ExpectedVersion = math.MaxInt64
@@ -542,7 +542,7 @@ func TestDeleteIndexDataAdmissionRejectsWithoutMutationOrWake(t *testing.T) {
 			name:       "version above SQLite range before selector",
 			wantStatus: http.StatusBadRequest,
 			mutate: func(
-				request *opensplunkv1.DeleteIndexRequest,
+				request *opensplunk.DeleteIndexRequest,
 				_ control.Index,
 			) {
 				request.ExpectedVersion = uint64(math.MaxInt64) + 1
@@ -553,11 +553,11 @@ func TestDeleteIndexDataAdmissionRejectsWithoutMutationOrWake(t *testing.T) {
 			name:       "invalid mode before confirmation and selector",
 			wantStatus: http.StatusBadRequest,
 			mutate: func(
-				request *opensplunkv1.DeleteIndexRequest,
+				request *opensplunk.DeleteIndexRequest,
 				_ control.Index,
 			) {
 				request.DataDeletionMode =
-					opensplunkv1.IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_UNSPECIFIED
+					opensplunk.IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_UNSPECIFIED
 				request.ConfirmationName = " PHYSICAL-TARGET "
 				request.Selector = nil
 			},
@@ -566,7 +566,7 @@ func TestDeleteIndexDataAdmissionRejectsWithoutMutationOrWake(t *testing.T) {
 			name:       "noncanonical confirmation before selector",
 			wantStatus: http.StatusBadRequest,
 			mutate: func(
-				request *opensplunkv1.DeleteIndexRequest,
+				request *opensplunk.DeleteIndexRequest,
 				_ control.Index,
 			) {
 				request.ConfirmationName = " PHYSICAL-TARGET "
@@ -577,7 +577,7 @@ func TestDeleteIndexDataAdmissionRejectsWithoutMutationOrWake(t *testing.T) {
 			name:       "missing selector",
 			wantStatus: http.StatusBadRequest,
 			mutate: func(
-				request *opensplunkv1.DeleteIndexRequest,
+				request *opensplunk.DeleteIndexRequest,
 				_ control.Index,
 			) {
 				request.Selector = nil
@@ -587,7 +587,7 @@ func TestDeleteIndexDataAdmissionRejectsWithoutMutationOrWake(t *testing.T) {
 			name:       "wrong confirmation",
 			wantStatus: http.StatusBadRequest,
 			mutate: func(
-				request *opensplunkv1.DeleteIndexRequest,
+				request *opensplunk.DeleteIndexRequest,
 				_ control.Index,
 			) {
 				request.ConfirmationName = "other-index"
@@ -597,7 +597,7 @@ func TestDeleteIndexDataAdmissionRejectsWithoutMutationOrWake(t *testing.T) {
 			name:       "stale version",
 			wantStatus: http.StatusConflict,
 			mutate: func(
-				request *opensplunkv1.DeleteIndexRequest,
+				request *opensplunk.DeleteIndexRequest,
 				index control.Index,
 			) {
 				request.ExpectedVersion = index.Version - 1
@@ -607,7 +607,7 @@ func TestDeleteIndexDataAdmissionRejectsWithoutMutationOrWake(t *testing.T) {
 			name:       "stale version before wrong canonical confirmation",
 			wantStatus: http.StatusConflict,
 			mutate: func(
-				request *opensplunkv1.DeleteIndexRequest,
+				request *opensplunk.DeleteIndexRequest,
 				index control.Index,
 			) {
 				request.ExpectedVersion = index.Version - 1
@@ -637,7 +637,7 @@ func TestDeleteIndexDataAdmissionRejectsWithoutMutationOrWake(t *testing.T) {
 			response := postProto(
 				t,
 				handler,
-				"/api/v1/indexes/delete",
+				"/api/indexes/delete",
 				request,
 			)
 			if response.Code != test.wantStatus {
@@ -701,7 +701,7 @@ func TestDeleteIndexDataAdmissionRejectsMissingAndNonArchivedIndexes(
 		response := postProto(
 			t,
 			handler,
-			"/api/v1/indexes/delete",
+			"/api/indexes/delete",
 			request,
 		)
 		if response.Code != http.StatusConflict {
@@ -736,21 +736,21 @@ func TestDeleteIndexDataAdmissionRejectsMissingAndNonArchivedIndexes(
 			nil,
 			waker,
 		)
-		request := &opensplunkv1.DeleteIndexRequest{
-			Selector: &opensplunkv1.IndexSelector{
-				Selector: &opensplunkv1.IndexSelector_IndexId{
+		request := &opensplunk.DeleteIndexRequest{
+			Selector: &opensplunk.IndexSelector{
+				Selector: &opensplunk.IndexSelector_IndexId{
 					IndexId: "idx_missing",
 				},
 			},
 			ExpectedVersion: 1,
-			DataDeletionMode: opensplunkv1.
+			DataDeletionMode: opensplunk.
 				IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_DELETE_DATA,
 			ConfirmationName: "missing-target",
 		}
 		response := postProto(
 			t,
 			handler,
-			"/api/v1/indexes/delete",
+			"/api/indexes/delete",
 			request,
 		)
 		if response.Code != http.StatusNotFound {
@@ -799,13 +799,13 @@ func TestKeepIndexDataWithPhysicalServicesDoesNotAdmitOrWake(t *testing.T) {
 		"keep-data-target",
 	)
 	request := physicalDeleteIndexRequest(archived)
-	request.DataDeletionMode = opensplunkv1.
+	request.DataDeletionMode = opensplunk.
 		IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_KEEP_DATA
 
 	response := postProto(
 		t,
 		handler,
-		"/api/v1/indexes/delete",
+		"/api/indexes/delete",
 		request,
 	)
 	if response.Code != http.StatusOK {
@@ -815,7 +815,7 @@ func TestKeepIndexDataWithPhysicalServicesDoesNotAdmitOrWake(t *testing.T) {
 			response.Body.String(),
 		)
 	}
-	var deleted opensplunkv1.DeleteIndexResponse
+	var deleted opensplunk.DeleteIndexResponse
 	unmarshalResponse(t, response, &deleted)
 	if deleted.GetIndexId() != archived.ID ||
 		deleted.DeletionOperationId != nil {
@@ -904,7 +904,7 @@ func TestDeleteIndexDataAdmissionMapsErrorsWithoutWaking(t *testing.T) {
 			response := postProto(
 				t,
 				handler,
-				"/api/v1/indexes/delete",
+				"/api/indexes/delete",
 				physicalDeleteIndexRequest(archived),
 			)
 			if response.Code != test.wantStatus {
@@ -1051,7 +1051,7 @@ func TestDeleteIndexDataAdmissionValidatesSuccessAfterWaking(t *testing.T) {
 			response := postProto(
 				t,
 				handler,
-				"/api/v1/indexes/delete",
+				"/api/indexes/delete",
 				physicalDeleteIndexRequest(archived),
 			)
 			if response.Code != http.StatusInternalServerError {
@@ -1107,7 +1107,7 @@ func TestDeleteIndexDataAdmissionSuccessWinsContextCancellation(
 		t,
 		ctx,
 		handler,
-		"/api/v1/indexes/delete",
+		"/api/indexes/delete",
 		physicalDeleteIndexRequest(archived),
 	)
 	cancelRequest()
@@ -1149,7 +1149,7 @@ func TestDeleteIndexDataAdmissionSurvivesControlPlaneRestart(t *testing.T) {
 	firstResponse := postProto(
 		t,
 		firstHandler,
-		"/api/v1/indexes/delete",
+		"/api/indexes/delete",
 		request,
 	)
 	if firstResponse.Code != http.StatusOK {
@@ -1159,7 +1159,7 @@ func TestDeleteIndexDataAdmissionSurvivesControlPlaneRestart(t *testing.T) {
 			firstResponse.Body.String(),
 		)
 	}
-	var first opensplunkv1.DeleteIndexResponse
+	var first opensplunk.DeleteIndexResponse
 	unmarshalResponse(t, firstResponse, &first)
 	if err := firstDB.Close(); err != nil {
 		t.Fatalf("close first control DB: %v", err)
@@ -1182,15 +1182,15 @@ func TestDeleteIndexDataAdmissionSurvivesControlPlaneRestart(t *testing.T) {
 		nil,
 		retryWaker,
 	)
-	request.Selector = &opensplunkv1.IndexSelector{
-		Selector: &opensplunkv1.IndexSelector_IndexName{
+	request.Selector = &opensplunk.IndexSelector{
+		Selector: &opensplunk.IndexSelector_IndexName{
 			IndexName: archived.Definition.Name,
 		},
 	}
 	retryResponse := postProto(
 		t,
 		retryHandler,
-		"/api/v1/indexes/delete",
+		"/api/indexes/delete",
 		request,
 	)
 	if retryResponse.Code != http.StatusOK {
@@ -1200,7 +1200,7 @@ func TestDeleteIndexDataAdmissionSurvivesControlPlaneRestart(t *testing.T) {
 			retryResponse.Body.String(),
 		)
 	}
-	var retried opensplunkv1.DeleteIndexResponse
+	var retried opensplunk.DeleteIndexResponse
 	unmarshalResponse(t, retryResponse, &retried)
 	if !proto.Equal(&first, &retried) {
 		t.Fatalf("restart retry = %+v, want %+v", &retried, &first)
@@ -1220,7 +1220,7 @@ func TestDeleteIndexDataAdmissionSurvivesControlPlaneRestart(t *testing.T) {
 	crossTenantResponse := postProto(
 		t,
 		crossTenantHandler,
-		"/api/v1/indexes/delete",
+		"/api/indexes/delete",
 		request,
 	)
 	if crossTenantResponse.Code != http.StatusConflict {
@@ -1462,15 +1462,15 @@ func createArchivedIndexForDeletionAPI(
 
 func physicalDeleteIndexRequest(
 	index control.Index,
-) *opensplunkv1.DeleteIndexRequest {
-	return &opensplunkv1.DeleteIndexRequest{
-		Selector: &opensplunkv1.IndexSelector{
-			Selector: &opensplunkv1.IndexSelector_IndexId{
+) *opensplunk.DeleteIndexRequest {
+	return &opensplunk.DeleteIndexRequest{
+		Selector: &opensplunk.IndexSelector{
+			Selector: &opensplunk.IndexSelector_IndexId{
 				IndexId: index.ID,
 			},
 		},
 		ExpectedVersion: index.Version,
-		DataDeletionMode: opensplunkv1.
+		DataDeletionMode: opensplunk.
 			IndexDataDeletionMode_INDEX_DATA_DELETION_MODE_DELETE_DATA,
 		ConfirmationName: index.Definition.Name,
 	}

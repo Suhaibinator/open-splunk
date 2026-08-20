@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
@@ -61,7 +61,7 @@ func TestWriterMetadataUpdatePreservesInactiveOpaqueFutureAuthority(t *testing.T
 	fixture.bodyField = append(bytes.Clone(futureMetadata), fixture.bodyField...)
 	fixture.bytes = append(bytes.Clone(knownBytes), fixture.bodyField...)
 	fixture.digest = sha256.Sum256(fixture.bytes)
-	fixture.definition = &opensplunkv1.KnowledgeObjectDefinition{}
+	fixture.definition = &opensplunk.KnowledgeObjectDefinition{}
 	if err := (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(fixture.bytes, fixture.definition); err != nil {
 		t.Fatalf("decode opaque writer fixture: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestWriterMetadataUpdatePreservesInactiveOpaqueFutureAuthority(t *testing.T
 		WritableAppIDs: []string{testApp},
 	}
 	updatedDescription := "metadata changed by the older server"
-	expectedDefinition := proto.Clone(fixture.definition).(*opensplunkv1.KnowledgeObjectDefinition)
+	expectedDefinition := proto.Clone(fixture.definition).(*opensplunk.KnowledgeObjectDefinition)
 	expectedDefinition.Description = &updatedDescription
 	expectedAuthority, err := authorityFromOpaqueMetadataUpdate(
 		expectedDefinition,
@@ -119,10 +119,10 @@ func TestWriterMetadataUpdatePreservesInactiveOpaqueFutureAuthority(t *testing.T
 	if err != nil {
 		t.Fatalf("build expected metadata-only opaque authority: %v", err)
 	}
-	request := &opensplunkv1.UpdateKnowledgeObjectRequest{
+	request := &opensplunk.UpdateKnowledgeObjectRequest{
 		KnowledgeObjectId: "ko-writer-future-metadata",
 		ExpectedVersion:   1,
-		Definition: &opensplunkv1.KnowledgeObjectDefinition{
+		Definition: &opensplunk.KnowledgeObjectDefinition{
 			Description: &updatedDescription,
 		},
 		UpdateMask:      &fieldmaskpb.FieldMask{Paths: []string{"description"}},
@@ -136,7 +136,7 @@ func TestWriterMetadataUpdatePreservesInactiveOpaqueFutureAuthority(t *testing.T
 		t.Fatalf("metadata-only opaque catalog authority = %v, want revision 4 and 32-byte token", response)
 	}
 	object := response.GetKnowledgeObject()
-	if object.GetVersion() != 2 || object.GetState() != opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT ||
+	if object.GetVersion() != 2 || object.GetState() != opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT ||
 		object.GetDefinition().GetDescription() != updatedDescription || object.GetDefinition().GetBody() != nil ||
 		!bytes.Equal(integrationUnknownBody(object.GetDefinition()), fixture.bodyField) ||
 		!bytes.Equal(object.GetDefinitionSha256(), expectedAuthority.digest) {
@@ -204,22 +204,22 @@ func TestWriterMetadataUpdatePreservesInactiveOpaqueFutureAuthority(t *testing.T
 	assertWriterInactiveOpaqueUpdateReceipt(t, database, response, expectedAuthority.digest)
 
 	stable := readWriterForwardCompatAuthoritySnapshot(t, database)
-	replayed, err := writer.Update(actorContext, scope, proto.Clone(request).(*opensplunkv1.UpdateKnowledgeObjectRequest))
+	replayed, err := writer.Update(actorContext, scope, proto.Clone(request).(*opensplunk.UpdateKnowledgeObjectRequest))
 	if err != nil || !proto.Equal(replayed, response) {
 		t.Fatalf("metadata-only opaque replay = %v, %v; want %v", replayed, err, response)
 	}
 	assertWriterForwardCompatAuthorityUnchanged(t, database, stable, "exact metadata-only replay")
 
-	submittedUnknown := proto.Clone(request).(*opensplunkv1.UpdateKnowledgeObjectRequest)
+	submittedUnknown := proto.Clone(request).(*opensplunk.UpdateKnowledgeObjectRequest)
 	submittedUnknown.ClientRequestId = "future-submitted-unknown-0001"
 	submittedUnknown.ExpectedVersion = 2
-	submittedUnknown.Definition = proto.Clone(fixture.definition).(*opensplunkv1.KnowledgeObjectDefinition)
+	submittedUnknown.Definition = proto.Clone(fixture.definition).(*opensplunk.KnowledgeObjectDefinition)
 	stable = readWriterForwardCompatAuthoritySnapshot(t, database)
 	if _, err := writer.Update(actorContext, scope, submittedUnknown); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("submitted opaque body Update() error = %v, want ErrInvalidArgument", err)
 	}
 	assertWriterForwardCompatAuthorityUnchanged(t, database, stable, "submitted unknown fields")
-	bodyEdit := proto.Clone(request).(*opensplunkv1.UpdateKnowledgeObjectRequest)
+	bodyEdit := proto.Clone(request).(*opensplunk.UpdateKnowledgeObjectRequest)
 	bodyEdit.ClientRequestId = "future-body-edit-rejected-01"
 	bodyEdit.ExpectedVersion = 2
 	bodyEdit.Definition = aliasDefinition(testApp, "writer-future-metadata", SharingScopePrivate, nil, "body-edit-*")
@@ -264,7 +264,7 @@ func TestOpaqueMetadataUpdateCanonicalByteCeiling(t *testing.T) {
 	}
 	for _, delta := range []int{-1, 0, 1} {
 		t.Run(fmt.Sprintf("delta_%+d", delta), func(t *testing.T) {
-			definition := proto.Clone(fixture.definition).(*opensplunkv1.KnowledgeObjectDefinition)
+			definition := proto.Clone(fixture.definition).(*opensplunk.KnowledgeObjectDefinition)
 			description := strings.Repeat("x", len(originalDescription)+delta)
 			definition.Description = &description
 			authority, err := authorityFromOpaqueMetadataUpdate(
@@ -359,7 +359,7 @@ type writerInactiveOpaqueVersionExpectation struct {
 func assertWriterInactiveOpaqueUpdateReceipt(
 	t *testing.T,
 	database *control.DB,
-	response *opensplunkv1.UpdateKnowledgeObjectResponse,
+	response *opensplunk.UpdateKnowledgeObjectResponse,
 	digest []byte,
 ) {
 	t.Helper()
@@ -411,7 +411,7 @@ func assertWriterInactiveOpaqueUpdateReceipt(
 			recoveryAuditSequence,
 		)
 	}
-	envelope := &opensplunkv1.KnowledgeMutationOutcomeRecord{}
+	envelope := &opensplunk.KnowledgeMutationOutcomeRecord{}
 	if err := (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(outcome, envelope); err != nil ||
 		len(envelope.ProtoReflect().GetUnknown()) != 0 || envelope.GetObject() == nil ||
 		envelope.GetRoute() != mutationRouteUpdate || envelope.GetMutationKind() != "update" ||
@@ -537,7 +537,7 @@ func assertWriterInactiveOpaqueImmutableAuthority(
 				expected,
 			)
 		}
-		decoded := &opensplunkv1.KnowledgeObjectDefinition{}
+		decoded := &opensplunk.KnowledgeObjectDefinition{}
 		if err := (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(definition, decoded); err != nil {
 			t.Fatalf("decode inactive opaque v%d: %v", version, err)
 		}

@@ -13,7 +13,7 @@ import (
 	"slices"
 	"strings"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
@@ -36,7 +36,7 @@ const (
 	MaximumScalarExpressionNodes = MaximumScalarExpressions * 1024
 	MaximumScalarPredicates      = 32
 	MaximumDependencyDepth       = 16
-	commitmentDomain             = "open-splunk-knowledge-prelude-v0.1\x00"
+	commitmentDomain             = "open-splunk-knowledge-prelude-format-1\x00"
 	retainedObjectCharge         = 32 << 10
 	retainedDependencyCharge     = 256
 	retainedOperatorSlotCharge   = 64
@@ -50,8 +50,8 @@ var (
 // Input is the executable subset of a canonical KnowledgeSnapshot. Shadows
 // and warnings are intentionally absent because they cannot affect execution.
 type Input struct {
-	Objects      []*opensplunkv1.KnowledgeSnapshotObject
-	Dependencies []*opensplunkv1.KnowledgeObjectDependency
+	Objects      []*opensplunk.KnowledgeSnapshotObject
+	Dependencies []*opensplunk.KnowledgeObjectDependency
 }
 
 // Charges are exact compiler-independent contributions of the program.
@@ -83,12 +83,12 @@ type Origin struct {
 	stageOrdinal      uint32
 	objectID          string
 	version           uint64
-	objectType        opensplunkv1.KnowledgeObjectType
+	objectType        opensplunk.KnowledgeObjectType
 	name              string
 	appID             string
 	ownerID           string
-	sharingScope      opensplunkv1.SharingScope
-	stage             opensplunkv1.KnowledgeSearchStage
+	sharingScope      opensplunk.SharingScope
+	stage             opensplunk.KnowledgeSearchStage
 	definitionDigest  [sha256.Size]byte
 	location          string
 }
@@ -97,14 +97,14 @@ func (origin Origin) ResolutionOrdinal() uint32 { return origin.resolutionOrdina
 func (origin Origin) StageOrdinal() uint32      { return origin.stageOrdinal }
 func (origin Origin) ObjectID() string          { return strings.Clone(origin.objectID) }
 func (origin Origin) Version() uint64           { return origin.version }
-func (origin Origin) ObjectType() opensplunkv1.KnowledgeObjectType {
+func (origin Origin) ObjectType() opensplunk.KnowledgeObjectType {
 	return origin.objectType
 }
 func (origin Origin) Name() string                            { return strings.Clone(origin.name) }
 func (origin Origin) AppID() string                           { return strings.Clone(origin.appID) }
 func (origin Origin) OwnerID() string                         { return strings.Clone(origin.ownerID) }
-func (origin Origin) SharingScope() opensplunkv1.SharingScope { return origin.sharingScope }
-func (origin Origin) Stage() opensplunkv1.KnowledgeSearchStage {
+func (origin Origin) SharingScope() opensplunk.SharingScope { return origin.sharingScope }
+func (origin Origin) Stage() opensplunk.KnowledgeSearchStage {
 	return origin.stage
 }
 func (origin Origin) DefinitionDigest() [sha256.Size]byte { return origin.definitionDigest }
@@ -266,7 +266,7 @@ type programState struct {
 	aliases       []Alias
 	calculated    []Calculated
 	operatorKinds []OperatorKind
-	dependencies  []*opensplunkv1.KnowledgeObjectDependency
+	dependencies  []*opensplunk.KnowledgeObjectDependency
 	charges       Charges
 	canonical     []byte
 	commitment    [sha256.Size]byte
@@ -340,7 +340,7 @@ func (program Program) OperatorKinds() []OperatorKind {
 	return slices.Clone(program.state.operatorKinds)
 }
 
-func (program Program) Dependencies() []*opensplunkv1.KnowledgeObjectDependency {
+func (program Program) Dependencies() []*opensplunk.KnowledgeObjectDependency {
 	if program.state == nil {
 		return nil
 	}
@@ -388,7 +388,7 @@ func (program Program) RetainedBytes() uint64 {
 // is the publication-facing boundary: callers provide object authorities, not
 // dependency authority. Every returned dependency is version- and
 // definition-digest-pinned and is available through Program.Dependencies.
-func Compile(objects []*opensplunkv1.KnowledgeSnapshotObject) (Program, error) {
+func Compile(objects []*opensplunk.KnowledgeSnapshotObject) (Program, error) {
 	state, _, err := compileObjects(objects, true)
 	if err != nil {
 		return Program{}, err
@@ -424,17 +424,17 @@ func Prepare(input Input) (Program, error) {
 }
 
 func compileObjects(
-	input []*opensplunkv1.KnowledgeSnapshotObject,
+	input []*opensplunk.KnowledgeSnapshotObject,
 	reportCandidateIssues bool,
-) (*programState, map[string]*opensplunkv1.KnowledgeSnapshotObject, error) {
+) (*programState, map[string]*opensplunk.KnowledgeSnapshotObject, error) {
 	if len(input) > MaximumObjects {
 		return nil, nil, fmt.Errorf("%w: more than %d objects", ErrResourceLimit, MaximumObjects)
 	}
 	state := &programState{}
 	state.objectCount = uint32(len(input)) // #nosec G115 -- input is bounded by MaximumObjects above.
-	stageOrdinals := map[opensplunkv1.KnowledgeSearchStage]uint32{}
-	var previous *opensplunkv1.KnowledgeSnapshotObject
-	objects := make(map[string]*opensplunkv1.KnowledgeSnapshotObject, len(input))
+	stageOrdinals := map[opensplunk.KnowledgeSearchStage]uint32{}
+	var previous *opensplunk.KnowledgeSnapshotObject
+	objects := make(map[string]*opensplunk.KnowledgeSnapshotObject, len(input))
 	names := make(map[string]struct{}, len(input))
 	var definitionBytes uint64
 	var selectorWork uint64
@@ -484,7 +484,7 @@ func compileObjects(
 			return nil, nil, fmt.Errorf("%w: selector work exceeds %d", ErrResourceLimit, knowledge.MaximumSelectorWildcardWorkUnits)
 		}
 		selectorWork += work
-		canonicalObject := &opensplunkv1.KnowledgeSnapshotObject{
+		canonicalObject := &opensplunk.KnowledgeSnapshotObject{
 			ResolutionOrdinal: object.GetResolutionOrdinal(),
 			Stage:             object.GetStage(),
 			StageOrdinal:      object.GetStageOrdinal(),
@@ -530,7 +530,7 @@ func compileObjects(
 
 func sealProgram(
 	state *programState,
-	dependencies []*opensplunkv1.KnowledgeObjectDependency,
+	dependencies []*opensplunk.KnowledgeObjectDependency,
 ) Program {
 	state.dependencies = dependencies
 	state.canonical = canonicalProgram(state)
@@ -540,7 +540,7 @@ func sealProgram(
 
 func appendObject(state *programState, normalized knowledgedefinition.Normalized, origin Origin, selector Selector) error {
 	switch body := normalized.Definition.GetBody().(type) {
-	case *opensplunkv1.KnowledgeObjectDefinition_FieldExtraction:
+	case *opensplunk.KnowledgeObjectDefinition_FieldExtraction:
 		if body == nil || body.FieldExtraction == nil {
 			return errors.New("field extraction is nil")
 		}
@@ -549,7 +549,7 @@ func appendObject(state *programState, normalized knowledgedefinition.Normalized
 			return err
 		}
 		switch extraction := body.FieldExtraction.GetExtraction().(type) {
-		case *opensplunkv1.FieldExtractionDefinition_Regex:
+		case *opensplunk.FieldExtractionDefinition_Regex:
 			compiled, err := splregex.CompileExtractionPattern(extraction.Regex.GetPattern())
 			if err != nil {
 				if issue, ok := regexCompilationIssue(err); ok {
@@ -608,7 +608,7 @@ func appendObject(state *programState, normalized knowledgedefinition.Normalized
 			state.charges.RegexPrograms++
 			state.charges.RegexWorkUnits += programWorkUnits
 			state.charges.ExtractionOutputs += uint32(len(captures)) // #nosec G115 -- captures are bounded by MaximumExtractionOutputs.
-		case *opensplunkv1.FieldExtractionDefinition_Json:
+		case *opensplunk.FieldExtractionDefinition_Json:
 			steps, err := splpath.ParseJSON(extraction.Json.GetPath())
 			if err != nil {
 				if issue, ok := jsonPathCompilationIssue(extraction.Json.GetPath(), err); ok {
@@ -637,7 +637,7 @@ func appendObject(state *programState, normalized knowledgedefinition.Normalized
 		default:
 			return errors.New("field extraction kind is unsupported")
 		}
-	case *opensplunkv1.KnowledgeObjectDefinition_FieldAlias:
+	case *opensplunk.KnowledgeObjectDefinition_FieldAlias:
 		overwrite, err := overwriteBehavior(body.FieldAlias.GetOverwriteBehavior())
 		if err != nil {
 			return err
@@ -645,7 +645,7 @@ func appendObject(state *programState, normalized knowledgedefinition.Normalized
 		origin.location = "field_alias.destination_field"
 		state.aliases = append(state.aliases, Alias{origin: origin, selector: selector, overwrite: overwrite, source: body.FieldAlias.GetSourceField(), destination: body.FieldAlias.GetDestinationField()})
 		state.charges.GeneratedFields++
-	case *opensplunkv1.KnowledgeObjectDefinition_CalculatedField:
+	case *opensplunk.KnowledgeObjectDefinition_CalculatedField:
 		overwrite, err := overwriteBehavior(body.CalculatedField.GetOverwriteBehavior())
 		if err != nil {
 			return err
@@ -701,13 +701,13 @@ func validateCharges(charges Charges) error {
 	return nil
 }
 
-func prepareDependencies(input []*opensplunkv1.KnowledgeObjectDependency, objects map[string]*opensplunkv1.KnowledgeSnapshotObject) ([]*opensplunkv1.KnowledgeObjectDependency, error) {
-	result := make([]*opensplunkv1.KnowledgeObjectDependency, len(input))
+func prepareDependencies(input []*opensplunk.KnowledgeObjectDependency, objects map[string]*opensplunk.KnowledgeSnapshotObject) ([]*opensplunk.KnowledgeObjectDependency, error) {
+	result := make([]*opensplunk.KnowledgeObjectDependency, len(input))
 	seen := make(map[string]struct{}, len(input))
-	var previous *opensplunkv1.KnowledgeObjectDependency
+	var previous *opensplunk.KnowledgeObjectDependency
 	for index, dependency := range input {
 		if dependency == nil || hasUnknown(dependency.ProtoReflect()) || dependency.GetCanonicalOrdinal() != uint32(index) ||
-			dependency.GetRole() != opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT ||
+			dependency.GetRole() != opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT ||
 			dependency.GetTopologicalDepth() > MaximumDependencyDepth {
 			return nil, fmt.Errorf("%w: dependency %d authority is invalid", ErrInvalidProgram, index)
 		}
@@ -729,7 +729,7 @@ func prepareDependencies(input []*opensplunkv1.KnowledgeObjectDependency, object
 		if previous != nil && !dependencyAfter(previous, dependency) {
 			return nil, fmt.Errorf("%w: dependency %d is not in canonical order", ErrInvalidProgram, index)
 		}
-		cloned, ok := proto.Clone(dependency).(*opensplunkv1.KnowledgeObjectDependency)
+		cloned, ok := proto.Clone(dependency).(*opensplunk.KnowledgeObjectDependency)
 		if !ok || cloned == nil {
 			return nil, fmt.Errorf("%w: dependency %d cannot be detached", ErrInvalidProgram, index)
 		}
@@ -842,7 +842,7 @@ func writeSelector(buffer *bytes.Buffer, selector Selector) {
 	}
 }
 
-func writeDependency(buffer *bytes.Buffer, dependency *opensplunkv1.KnowledgeObjectDependency) {
+func writeDependency(buffer *bytes.Buffer, dependency *opensplunk.KnowledgeObjectDependency) {
 	writeVersionReference(buffer, dependency.GetSource())
 	writeVersionReference(buffer, dependency.GetTarget().GetObject())
 	writeUint64(buffer, uint64(dependency.GetRole()))        // #nosec G115 -- validated dependencies contain closed nonnegative enums.
@@ -852,7 +852,7 @@ func writeDependency(buffer *bytes.Buffer, dependency *opensplunkv1.KnowledgeObj
 	writeUint64(buffer, uint64(dependency.GetCanonicalOrdinal()))
 }
 
-func writeVersionReference(buffer *bytes.Buffer, reference *opensplunkv1.KnowledgeObjectVersionReference) {
+func writeVersionReference(buffer *bytes.Buffer, reference *opensplunk.KnowledgeObjectVersionReference) {
 	writeString(buffer, reference.GetKnowledgeObjectId())
 	writeUint64(buffer, reference.GetVersion())
 	writeBytes(buffer, reference.GetDefinitionSha256())
@@ -894,7 +894,7 @@ func writeUint64(buffer *bytes.Buffer, value uint64) {
 	_, _ = buffer.Write(encoded[:])
 }
 
-func stageForType(objectType opensplunkv1.KnowledgeObjectType) (opensplunkv1.KnowledgeSearchStage, uint8, error) {
+func stageForType(objectType opensplunk.KnowledgeObjectType) (opensplunk.KnowledgeSearchStage, uint8, error) {
 	stage, rank, ok := knowledgedefinition.StageForObjectType(objectType)
 	if !ok {
 		return 0, 0, errors.New("object type is unsupported")
@@ -902,7 +902,7 @@ func stageForType(objectType opensplunkv1.KnowledgeObjectType) (opensplunkv1.Kno
 	return stage, rank, nil
 }
 
-func objectAfter(previous, current *opensplunkv1.KnowledgeSnapshotObject) bool {
+func objectAfter(previous, current *opensplunk.KnowledgeSnapshotObject) bool {
 	_, previousRank, previousErr := stageForType(previous.GetObjectType())
 	_, currentRank, currentErr := stageForType(current.GetObjectType())
 	if previousErr != nil || currentErr != nil || previousRank > currentRank {
@@ -917,7 +917,7 @@ func objectAfter(previous, current *opensplunkv1.KnowledgeSnapshotObject) bool {
 	return previous.GetKnowledgeObjectId() < current.GetKnowledgeObjectId()
 }
 
-func dependencyAfter(previous, current *opensplunkv1.KnowledgeObjectDependency) bool {
+func dependencyAfter(previous, current *opensplunk.KnowledgeObjectDependency) bool {
 	if previous.GetTopologicalDepth() != current.GetTopologicalDepth() {
 		return previous.GetTopologicalDepth() < current.GetTopologicalDepth()
 	}
@@ -941,30 +941,30 @@ func dependencyAfter(previous, current *opensplunkv1.KnowledgeObjectDependency) 
 	return previous.GetRole() < current.GetRole()
 }
 
-func originFor(object *opensplunkv1.KnowledgeSnapshotObject, stage opensplunkv1.KnowledgeSearchStage, location string) Origin {
+func originFor(object *opensplunk.KnowledgeSnapshotObject, stage opensplunk.KnowledgeSearchStage, location string) Origin {
 	var digest [sha256.Size]byte
 	copy(digest[:], object.GetDefinitionSha256())
 	return Origin{resolutionOrdinal: object.GetResolutionOrdinal(), stageOrdinal: object.GetStageOrdinal(), objectID: strings.Clone(object.GetKnowledgeObjectId()), version: object.GetVersion(), objectType: object.GetObjectType(), name: strings.Clone(object.GetName()), appID: strings.Clone(object.GetAppId()), ownerID: strings.Clone(object.GetOwnerId()), sharingScope: object.GetSharingScope(), stage: stage, definitionDigest: digest, location: location}
 }
 
-func locationForType(objectType opensplunkv1.KnowledgeObjectType) string {
+func locationForType(objectType opensplunk.KnowledgeObjectType) string {
 	switch objectType {
-	case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION:
+	case opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION:
 		return "field_extraction"
-	case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS:
+	case opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS:
 		return "field_alias"
-	case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD:
+	case opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD:
 		return "calculated_field"
 	default:
 		return ""
 	}
 }
 
-func overwriteBehavior(value opensplunkv1.KnowledgeOverwriteBehavior) (OverwriteBehavior, error) {
+func overwriteBehavior(value opensplunk.KnowledgeOverwriteBehavior) (OverwriteBehavior, error) {
 	switch value {
-	case opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING:
+	case opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING:
 		return PreserveExisting, nil
-	case opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING:
+	case opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING:
 		return ReplaceExisting, nil
 	default:
 		return OverwriteInvalid, errors.New("overwrite behavior is invalid")
@@ -999,10 +999,10 @@ func cloneCalculated(input []Calculated) []Calculated {
 	return result
 }
 
-func cloneDependencies(input []*opensplunkv1.KnowledgeObjectDependency) []*opensplunkv1.KnowledgeObjectDependency {
-	result := make([]*opensplunkv1.KnowledgeObjectDependency, len(input))
+func cloneDependencies(input []*opensplunk.KnowledgeObjectDependency) []*opensplunk.KnowledgeObjectDependency {
+	result := make([]*opensplunk.KnowledgeObjectDependency, len(input))
 	for index, dependency := range input {
-		result[index], _ = proto.Clone(dependency).(*opensplunkv1.KnowledgeObjectDependency)
+		result[index], _ = proto.Clone(dependency).(*opensplunk.KnowledgeObjectDependency)
 	}
 	return result
 }

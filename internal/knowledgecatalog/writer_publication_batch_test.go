@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"gorm.io/gorm"
@@ -334,7 +334,7 @@ func prepareWriterPublicationBatchPlan(
 		)
 		SELECT ?, printf('ko_writer_batch_target_%04d', ordinal), 1,
 		       ?, ?, 'field_alias', printf('writer-batch-target-%04d', ordinal),
-		       'private', 'draft', 0, '', 0, 0, 0, 0, 0, 46
+		       'private', 'draft', 0, '', 0, 0, 0, 0, 0, 43
 		FROM target`,
 			dependencyCount,
 			writerFaultTenant,
@@ -352,7 +352,7 @@ func prepareWriterPublicationBatchPlan(
 			tenant_id, knowledge_object_id, object_version,
 			projection_bytes, canonical_selector_bytes
 		)
-		SELECT ?, printf('ko_writer_batch_target_%04d', ordinal), 1, 0, 46
+		SELECT ?, printf('ko_writer_batch_target_%04d', ordinal), 1, 0, 43
 		FROM target`, dependencyCount, writerFaultTenant); result.Error != nil {
 			t.Fatalf("seal publication dependency target projections: %v", result.Error)
 		}
@@ -408,20 +408,20 @@ func prepareWriterPublicationBatchPlan(
 func writerPublicationBatchSelector(
 	t *testing.T,
 	selectorCount int,
-) *opensplunkv1.KnowledgeSelector {
+) *opensplunk.KnowledgeSelector {
 	t.Helper()
-	selector := &opensplunkv1.KnowledgeSelector{}
+	selector := &opensplunk.KnowledgeSelector{}
 	if selectorCount == 0 {
 		return selector
 	}
 	for _, dimension := range writerPublicationSelectorDimensions() {
-		patterns := make([]*opensplunkv1.KnowledgeSelectorPattern, 0, knowledge.MaximumSelectorPatternsPerDimension)
+		patterns := make([]*opensplunk.KnowledgeSelectorPattern, 0, knowledge.MaximumSelectorPatternsPerDimension)
 		for ordinal := range knowledge.MaximumSelectorPatternsPerDimension {
-			matchKind := opensplunkv1.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT
+			matchKind := opensplunk.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT
 			if ordinal%2 != 0 {
-				matchKind = opensplunkv1.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_WILDCARD
+				matchKind = opensplunk.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_WILDCARD
 			}
-			patterns = append(patterns, &opensplunkv1.KnowledgeSelectorPattern{
+			patterns = append(patterns, &opensplunk.KnowledgeSelectorPattern{
 				MatchKind: matchKind,
 				Value:     writerPublicationSelectorValue(dimension, ordinal),
 			})

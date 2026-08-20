@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -141,9 +141,6 @@ type queue struct {
 func openQueue(opts Options) (*queue, error) {
 	if opts.Dir == "" {
 		return nil, errors.New("collector/wal: Options.Dir is required")
-	}
-	if opts.ProtocolMajor == 0 {
-		return nil, errors.New("collector/wal: ProtocolMajor must be non-zero")
 	}
 	if opts.Sync < SyncOnSeal || opts.Sync > SyncAlways {
 		return nil, fmt.Errorf("collector/wal: invalid sync policy %d", opts.Sync)
@@ -555,15 +552,6 @@ func (q *queue) validateRecoveredOwnership(segmentName string, record scannedRec
 			record.batch.GetBatchSequence(), segmentName, recoveredCollectorID, q.opts.CollectorID,
 		)
 	}
-	if record.batch.GetProtocolMajor() != q.opts.ProtocolMajor ||
-		record.batch.GetProtocolMinor() != q.opts.ProtocolMinor {
-		return fmt.Errorf(
-			"collector/wal: recovered batch %d in %s has protocol %d.%d, configured %d.%d",
-			record.batch.GetBatchSequence(), segmentName,
-			record.batch.GetProtocolMajor(), record.batch.GetProtocolMinor(),
-			q.opts.ProtocolMajor, q.opts.ProtocolMinor,
-		)
-	}
 	return nil
 }
 
@@ -624,7 +612,7 @@ func (q *queue) persistRecoveredSequenceFloorLocked(maxSeq uint64) error {
 }
 
 // Append implements Queue.Append.
-func (q *queue) Append(events []*opensplunkv1.LogEvent) (*opensplunkv1.EventBatch, error) {
+func (q *queue) Append(events []*opensplunk.LogEvent) (*opensplunk.EventBatch, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.closed {
@@ -642,7 +630,7 @@ func (q *queue) Append(events []*opensplunkv1.LogEvent) (*opensplunkv1.EventBatc
 	if eventIDsDigest == nil {
 		return nil, ErrBatchTooLarge
 	}
-	batch := &opensplunkv1.EventBatch{
+	batch := &opensplunk.EventBatch{
 		CollectorId:           q.opts.CollectorID,
 		BatchId:               uuid.NewString(),
 		BatchSequence:         seq,
@@ -650,8 +638,6 @@ func (q *queue) Append(events []*opensplunkv1.LogEvent) (*opensplunkv1.EventBatc
 		Events:                events,
 		UncompressedSizeBytes: uncompressedEventBytes(events),
 		EventIdsSha256:        eventIDsDigest,
-		ProtocolMajor:         q.opts.ProtocolMajor,
-		ProtocolMinor:         q.opts.ProtocolMinor,
 	}
 	payloadSize := proto.Size(batch)
 	if payloadSize < 0 {
@@ -898,7 +884,7 @@ func (q *queue) syncActiveLocked() error {
 }
 
 // NextBatch implements Queue.NextBatch.
-func (q *queue) NextBatch(ctx context.Context) (*opensplunkv1.EventBatch, error) {
+func (q *queue) NextBatch(ctx context.Context) (*opensplunk.EventBatch, error) {
 	for {
 		q.mu.Lock()
 		if q.closed {
@@ -926,7 +912,7 @@ func (q *queue) NextBatch(ctx context.Context) (*opensplunkv1.EventBatch, error)
 // readBatch loads and CRC-verifies an unacked batch from disk. The referenced
 // segment cannot be reclaimed while the batch is unacked, so the read is safe
 // without holding the queue lock.
-func (q *queue) readBatch(d batchDesc) (*opensplunkv1.EventBatch, error) {
+func (q *queue) readBatch(d batchDesc) (*opensplunk.EventBatch, error) {
 	return readRecordPayload(filepath.Join(q.dir, d.segName), d.payloadOff, d.payloadLen, d.crc)
 }
 
@@ -1142,7 +1128,7 @@ func (aggregator *sourceMarkAggregator) marks() []SourceCheckpointMark {
 // recovery). Invalid file origins retain one representative mark so
 // acknowledgment later fails closed instead of silently dropping source
 // coordinates.
-func checkpointMarksForBatch(batchSequence uint64, events []*opensplunkv1.LogEvent) []SourceCheckpointMark {
+func checkpointMarksForBatch(batchSequence uint64, events []*opensplunk.LogEvent) []SourceCheckpointMark {
 	bySource := make(map[sourceMarkKey]SourceCheckpointMark)
 	var invalid *SourceCheckpointMark
 	for eventIndex, event := range events {
@@ -1557,7 +1543,7 @@ func (q *queue) syncLoop(interval time.Duration) {
 // uncompressedEventBytes is the deterministic sum of protobuf-encoded event
 // sizes stamped into EventBatch.uncompressed_size_bytes, matching the server's
 // UncompressedEventBytes.
-func uncompressedEventBytes(events []*opensplunkv1.LogEvent) uint64 {
+func uncompressedEventBytes(events []*opensplunk.LogEvent) uint64 {
 	var total uint64
 	for _, event := range events {
 		protoBytes := proto.Size(event)

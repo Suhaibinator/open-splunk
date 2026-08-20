@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeattemptaudit"
@@ -37,16 +37,16 @@ func TestKnowledgeHTTPReadRoutesCollapseImpossibleCatalogSentinels(
 		cause      error
 		authorized knowledgecatalog.AuthorizedContext
 	}{
-		{name: "get invalid argument", path: knowledgeObjectsGetPath, request: &opensplunkv1.GetKnowledgeObjectRequest{KnowledgeObjectId: object.KnowledgeObjectID}, cause: control.ErrInvalidArgument, authorized: objectContext},
-		{name: "get invalid cursor", path: knowledgeObjectsGetPath, request: &opensplunkv1.GetKnowledgeObjectRequest{KnowledgeObjectId: object.KnowledgeObjectID}, cause: knowledgecatalog.ErrInvalidCursor, authorized: objectContext},
-		{name: "get page invalidated", path: knowledgeObjectsGetPath, request: &opensplunkv1.GetKnowledgeObjectRequest{KnowledgeObjectId: object.KnowledgeObjectID}, cause: control.ErrPageInvalidated, authorized: objectContext},
-		{name: "get version conflict", path: knowledgeObjectsGetPath, request: &opensplunkv1.GetKnowledgeObjectRequest{KnowledgeObjectId: object.KnowledgeObjectID}, cause: control.ErrVersionConflict, authorized: objectContext},
-		{name: "get capacity", path: knowledgeObjectsGetPath, request: &opensplunkv1.GetKnowledgeObjectRequest{KnowledgeObjectId: object.KnowledgeObjectID}, cause: control.ErrCapacityExceeded, authorized: objectContext},
-		{name: "list invalid argument", path: knowledgeObjectsListPath, request: &opensplunkv1.ListKnowledgeObjectsRequest{}, cause: control.ErrInvalidArgument, authorized: appContext},
-		{name: "list not found", path: knowledgeObjectsListPath, request: &opensplunkv1.ListKnowledgeObjectsRequest{}, cause: control.ErrNotFound, authorized: appContext},
-		{name: "list version conflict", path: knowledgeObjectsListPath, request: &opensplunkv1.ListKnowledgeObjectsRequest{}, cause: control.ErrVersionConflict, authorized: appContext},
-		{name: "list dependency conflict", path: knowledgeObjectsListPath, request: &opensplunkv1.ListKnowledgeObjectsRequest{}, cause: control.ErrDependencyConflict, authorized: appContext},
-		{name: "list capacity", path: knowledgeObjectsListPath, request: &opensplunkv1.ListKnowledgeObjectsRequest{}, cause: control.ErrCapacityExceeded, authorized: appContext},
+		{name: "get invalid argument", path: knowledgeObjectsGetPath, request: &opensplunk.GetKnowledgeObjectRequest{KnowledgeObjectId: object.KnowledgeObjectID}, cause: control.ErrInvalidArgument, authorized: objectContext},
+		{name: "get invalid cursor", path: knowledgeObjectsGetPath, request: &opensplunk.GetKnowledgeObjectRequest{KnowledgeObjectId: object.KnowledgeObjectID}, cause: knowledgecatalog.ErrInvalidCursor, authorized: objectContext},
+		{name: "get page invalidated", path: knowledgeObjectsGetPath, request: &opensplunk.GetKnowledgeObjectRequest{KnowledgeObjectId: object.KnowledgeObjectID}, cause: control.ErrPageInvalidated, authorized: objectContext},
+		{name: "get version conflict", path: knowledgeObjectsGetPath, request: &opensplunk.GetKnowledgeObjectRequest{KnowledgeObjectId: object.KnowledgeObjectID}, cause: control.ErrVersionConflict, authorized: objectContext},
+		{name: "get capacity", path: knowledgeObjectsGetPath, request: &opensplunk.GetKnowledgeObjectRequest{KnowledgeObjectId: object.KnowledgeObjectID}, cause: control.ErrCapacityExceeded, authorized: objectContext},
+		{name: "list invalid argument", path: knowledgeObjectsListPath, request: &opensplunk.ListKnowledgeObjectsRequest{}, cause: control.ErrInvalidArgument, authorized: appContext},
+		{name: "list not found", path: knowledgeObjectsListPath, request: &opensplunk.ListKnowledgeObjectsRequest{}, cause: control.ErrNotFound, authorized: appContext},
+		{name: "list version conflict", path: knowledgeObjectsListPath, request: &opensplunk.ListKnowledgeObjectsRequest{}, cause: control.ErrVersionConflict, authorized: appContext},
+		{name: "list dependency conflict", path: knowledgeObjectsListPath, request: &opensplunk.ListKnowledgeObjectsRequest{}, cause: control.ErrDependencyConflict, authorized: appContext},
+		{name: "list capacity", path: knowledgeObjectsListPath, request: &opensplunk.ListKnowledgeObjectsRequest{}, cause: control.ErrCapacityExceeded, authorized: appContext},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -120,7 +120,7 @@ func TestKnowledgeHTTPReadRoutesRetainOnlyTheirSupportedErrorFamilies(
 		{
 			name:       "get not found",
 			path:       knowledgeObjectsGetPath,
-			request:    &opensplunkv1.GetKnowledgeObjectRequest{KnowledgeObjectId: "ko-http-object-1"},
+			request:    &opensplunk.GetKnowledgeObjectRequest{KnowledgeObjectId: "ko-http-object-1"},
 			serviceErr: control.ErrNotFound,
 			wantStatus: http.StatusNotFound,
 			wantReason: knowledgeattemptaudit.ReasonNotFoundOrForbidden,
@@ -128,7 +128,7 @@ func TestKnowledgeHTTPReadRoutesRetainOnlyTheirSupportedErrorFamilies(
 		{
 			name:       "get cancellation",
 			path:       knowledgeObjectsGetPath,
-			request:    &opensplunkv1.GetKnowledgeObjectRequest{KnowledgeObjectId: "ko-http-object-1"},
+			request:    &opensplunk.GetKnowledgeObjectRequest{KnowledgeObjectId: "ko-http-object-1"},
 			serviceErr: context.Canceled,
 			wantStatus: http.StatusRequestTimeout,
 			wantReason: knowledgeattemptaudit.ReasonServiceUnavailable,
@@ -136,7 +136,7 @@ func TestKnowledgeHTTPReadRoutesRetainOnlyTheirSupportedErrorFamilies(
 		{
 			name:       "list invalid cursor",
 			path:       knowledgeObjectsListPath,
-			request:    &opensplunkv1.ListKnowledgeObjectsRequest{},
+			request:    &opensplunk.ListKnowledgeObjectsRequest{},
 			serviceErr: knowledgecatalog.ErrInvalidCursor,
 			wantStatus: http.StatusBadRequest,
 			wantReason: knowledgeattemptaudit.ReasonInvalidDefinition,
@@ -144,7 +144,7 @@ func TestKnowledgeHTTPReadRoutesRetainOnlyTheirSupportedErrorFamilies(
 		{
 			name:       "list page invalidated",
 			path:       knowledgeObjectsListPath,
-			request:    &opensplunkv1.ListKnowledgeObjectsRequest{},
+			request:    &opensplunk.ListKnowledgeObjectsRequest{},
 			serviceErr: control.ErrPageInvalidated,
 			wantStatus: http.StatusConflict,
 			wantReason: knowledgeattemptaudit.ReasonServiceUnavailable,
@@ -152,7 +152,7 @@ func TestKnowledgeHTTPReadRoutesRetainOnlyTheirSupportedErrorFamilies(
 		{
 			name:       "list cancellation",
 			path:       knowledgeObjectsListPath,
-			request:    &opensplunkv1.ListKnowledgeObjectsRequest{},
+			request:    &opensplunk.ListKnowledgeObjectsRequest{},
 			serviceErr: context.Canceled,
 			wantStatus: http.StatusRequestTimeout,
 			wantReason: knowledgeattemptaudit.ReasonServiceUnavailable,

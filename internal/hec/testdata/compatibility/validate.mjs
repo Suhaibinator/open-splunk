@@ -245,7 +245,7 @@ function validateTypedValue(value, location) {
   } else if (value.kind === "decimal") {
     const match = /[eE]([+-]?[0-9]+)$/.exec(value.value);
     if (match && (BigInt(match[1]) < -1024n || BigInt(match[1]) > 1024n)) {
-      errors.push(`${location}: decimal exponent exceeds v0.1 range`);
+      errors.push(`${location}: decimal exponent exceeds the supported range`);
     }
   } else if (value.kind === "list") {
     value.items.forEach((item, index) => validateTypedValue(item, `${location}/items/${index}`));

@@ -8,7 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -17,8 +17,8 @@ import (
 // Schema projects an executor result schema into its shared HTTP/WebSocket
 // representation. Column order is preserved because result cells are
 // positional.
-func Schema(schemaID string, schema searchjobs.Schema, shape ResultShape) (*opensplunkv1.ResultSchema, error) {
-	columns := make([]*opensplunkv1.ResultColumn, len(schema.Columns))
+func Schema(schemaID string, schema searchjobs.Schema, shape ResultShape) (*opensplunk.ResultSchema, error) {
+	columns := make([]*opensplunk.ResultColumn, len(schema.Columns))
 	seen := make(map[string]struct{}, len(schema.Columns))
 	for index, column := range schema.Columns {
 		if !column.ValidFlatMultivaluePresentation() {
@@ -38,15 +38,15 @@ func Schema(schemaID string, schema searchjobs.Schema, shape ResultShape) (*open
 		semantic := semanticType(column.Name)
 		if index > 0 &&
 			(shape.RuntimeNamedColumns ||
-				shape.Kind == opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES) {
-			semantic = opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_METRIC
+				shape.Kind == opensplunk.ResultSetKind_RESULT_SET_KIND_TIME_SERIES) {
+			semantic = opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_METRIC
 		}
 		var flatMultivalueDelimiter *string
 		if column.HasFlatMultivalueDelimiter {
 			value := strings.Clone(column.FlatMultivalueDelimiter)
 			flatMultivalueDelimiter = &value
 		}
-		columns[index] = &opensplunkv1.ResultColumn{
+		columns[index] = &opensplunk.ResultColumn{
 			FieldName:               column.Name,
 			DisplayName:             column.Name,
 			ValueType:               valueType,
@@ -57,7 +57,7 @@ func Schema(schemaID string, schema searchjobs.Schema, shape ResultShape) (*open
 			StatsSparkline:          column.StatsSparkline,
 		}
 	}
-	return &opensplunkv1.ResultSchema{
+	return &opensplunk.ResultSchema{
 		SchemaId:   schemaID,
 		Revision:   1,
 		ResultKind: shape.Kind,
@@ -74,7 +74,7 @@ func Rows(
 	schema searchjobs.Schema,
 	rows []searchjobs.ResultRow,
 	maximumRows int,
-) ([]*opensplunkv1.ResultRow, error) {
+) ([]*opensplunk.ResultRow, error) {
 	if ctx == nil {
 		return nil, errors.New("search result conversion context is required")
 	}
@@ -87,7 +87,7 @@ func Rows(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	result := make([]*opensplunkv1.ResultRow, len(rows))
+	result := make([]*opensplunk.ResultRow, len(rows))
 	for rowIndex, row := range rows {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -95,7 +95,7 @@ func Rows(
 		if len(row.Values) != len(schema.Columns) {
 			return nil, errors.New("search result row does not match schema")
 		}
-		cells := make([]*opensplunkv1.TypedValue, len(row.Values))
+		cells := make([]*opensplunk.TypedValue, len(row.Values))
 		for cellIndex, value := range row.Values {
 			converted, err := Value(ctx, value)
 			if err != nil {
@@ -103,7 +103,7 @@ func Rows(
 			}
 			cells[cellIndex] = converted
 		}
-		result[rowIndex] = &opensplunkv1.ResultRow{
+		result[rowIndex] = &opensplunk.ResultRow{
 			RowId:   fmt.Sprintf("%s:%d", jobID, row.Ordinal),
 			Ordinal: row.Ordinal,
 			Cells:   cells,
@@ -122,7 +122,7 @@ func ResultPage(
 	shape ResultShape,
 	includeTotal bool,
 	resultsTruncated bool,
-) (*opensplunkv1.ResultPage, error) {
+) (*opensplunk.ResultPage, error) {
 	schema, err := Schema(jobID, page.Schema, shape)
 	if err != nil {
 		return nil, err
@@ -131,14 +131,14 @@ func ResultPage(
 	if err != nil {
 		return nil, err
 	}
-	pageResponse := &opensplunkv1.PageResponse{TotalSizeExact: includeTotal && !resultsTruncated}
+	pageResponse := &opensplunk.PageResponse{TotalSizeExact: includeTotal && !resultsTruncated}
 	if page.NextCursor != "" {
 		pageResponse.NextPageToken = new(page.NextCursor)
 	}
 	if includeTotal {
 		pageResponse.TotalSize = new(page.TotalRows)
 	}
-	return &opensplunkv1.ResultPage{
+	return &opensplunk.ResultPage{
 		Schema: schema,
 		Rows:   rows,
 		Page:   pageResponse,
@@ -149,8 +149,8 @@ func ResultPage(
 }
 
 type protoValueFrame struct {
-	list         *opensplunkv1.TypedValueList
-	object       *opensplunkv1.TypedObject
+	list         *opensplunk.TypedValueList
+	object       *opensplunk.TypedObject
 	pendingField string
 	expected     int
 }
@@ -158,13 +158,13 @@ type protoValueFrame struct {
 // Value converts one immutable typed result value without recursive Go calls.
 // The context is checked for every detached traversal token so cancellation
 // remains responsive for deeply nested or wide structural values.
-func Value(ctx context.Context, value searchjobs.Value) (*opensplunkv1.TypedValue, error) {
+func Value(ctx context.Context, value searchjobs.Value) (*opensplunk.TypedValue, error) {
 	if ctx == nil {
 		return nil, errors.New("search result conversion context is required")
 	}
-	var root *opensplunkv1.TypedValue
+	var root *opensplunk.TypedValue
 	frames := make([]protoValueFrame, 0, 8)
-	attach := func(converted *opensplunkv1.TypedValue) error {
+	attach := func(converted *opensplunk.TypedValue) error {
 		if converted == nil {
 			return errors.New("search result value conversion produced an empty value")
 		}
@@ -189,7 +189,7 @@ func Value(ctx context.Context, value searchjobs.Value) (*opensplunkv1.TypedValu
 		if len(frame.object.Fields) >= frame.expected {
 			return errors.New("search result object contains too many fields")
 		}
-		frame.object.Fields = append(frame.object.Fields, &opensplunkv1.TypedObjectField{
+		frame.object.Fields = append(frame.object.Fields, &opensplunk.TypedObjectField{
 			Name:  frame.pendingField,
 			Value: converted,
 		})
@@ -201,46 +201,46 @@ func Value(ctx context.Context, value searchjobs.Value) (*opensplunkv1.TypedValu
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		var converted *opensplunkv1.TypedValue
+		var converted *opensplunk.TypedValue
 		switch token.Kind {
 		case searchjobs.ValueVisitNull:
-			converted = &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_NullValue{NullValue: opensplunkv1.NullValue_NULL_VALUE_NULL}}
+			converted = &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_NullValue{NullValue: opensplunk.NullValue_NULL_VALUE_NULL}}
 		case searchjobs.ValueVisitString:
 			if !utf8.ValidString(token.StringValue) {
 				return errors.New("search result string is not valid UTF-8")
 			}
-			converted = &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_StringValue{StringValue: token.StringValue}}
+			converted = &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_StringValue{StringValue: token.StringValue}}
 		case searchjobs.ValueVisitSigned:
-			converted = &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_Sint64Value{Sint64Value: token.SignedValue}}
+			converted = &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_Sint64Value{Sint64Value: token.SignedValue}}
 		case searchjobs.ValueVisitUnsigned:
-			converted = &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_Uint64Value{Uint64Value: token.UnsignedValue}}
+			converted = &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_Uint64Value{Uint64Value: token.UnsignedValue}}
 		case searchjobs.ValueVisitDouble:
-			converted = &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_DoubleValue{DoubleValue: token.DoubleValue}}
+			converted = &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_DoubleValue{DoubleValue: token.DoubleValue}}
 		case searchjobs.ValueVisitBool:
-			converted = &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_BoolValue{BoolValue: token.BoolValue}}
+			converted = &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_BoolValue{BoolValue: token.BoolValue}}
 		case searchjobs.ValueVisitBytes:
-			converted = &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_BytesValue{BytesValue: token.BytesValue}}
+			converted = &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_BytesValue{BytesValue: token.BytesValue}}
 		case searchjobs.ValueVisitTime:
 			timestamp, err := timestampToProto(token.TimeValue)
 			if err != nil {
 				return err
 			}
-			converted = &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_TimestampValue{TimestampValue: timestamp}}
+			converted = &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_TimestampValue{TimestampValue: timestamp}}
 		case searchjobs.ValueVisitDuration:
 			duration := durationpb.New(token.DurationValue)
 			if err := duration.CheckValid(); err != nil {
 				return errors.New("search result duration is outside protobuf range")
 			}
-			converted = &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_DurationValue{DurationValue: duration}}
+			converted = &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_DurationValue{DurationValue: duration}}
 		case searchjobs.ValueVisitDecimal:
 			canonical, err := searchjobs.CanonicalDecimal(token.StringValue)
 			if err != nil {
 				return err
 			}
-			converted = &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_DecimalValue{DecimalValue: &opensplunkv1.DecimalValue{Value: canonical}}}
+			converted = &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_DecimalValue{DecimalValue: &opensplunk.DecimalValue{Value: canonical}}}
 		case searchjobs.ValueVisitListBegin:
-			list := &opensplunkv1.TypedValueList{Values: make([]*opensplunkv1.TypedValue, 0, token.Length)}
-			converted = &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_ListValue{ListValue: list}}
+			list := &opensplunk.TypedValueList{Values: make([]*opensplunk.TypedValue, 0, token.Length)}
+			converted = &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_ListValue{ListValue: list}}
 			if err := attach(converted); err != nil {
 				return err
 			}
@@ -257,8 +257,8 @@ func Value(ctx context.Context, value searchjobs.Value) (*opensplunkv1.TypedValu
 			frames = frames[:len(frames)-1]
 			return nil
 		case searchjobs.ValueVisitObjectBegin:
-			object := &opensplunkv1.TypedObject{Fields: make([]*opensplunkv1.TypedObjectField, 0, token.Length)}
-			converted = &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_ObjectValue{ObjectValue: object}}
+			object := &opensplunk.TypedObject{Fields: make([]*opensplunk.TypedObjectField, 0, token.Length)}
+			converted = &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_ObjectValue{ObjectValue: object}}
 			if err := attach(converted); err != nil {
 				return err
 			}
@@ -298,65 +298,65 @@ func Value(ctx context.Context, value searchjobs.Value) (*opensplunkv1.TypedValu
 }
 
 // ValueKind maps a retained schema kind to its protobuf value type.
-func ValueKind(kind searchjobs.ValueKind) (opensplunkv1.ValueType, error) {
+func ValueKind(kind searchjobs.ValueKind) (opensplunk.ValueType, error) {
 	switch kind {
 	case searchjobs.ValueKindNull:
-		return opensplunkv1.ValueType_VALUE_TYPE_NULL, nil
+		return opensplunk.ValueType_VALUE_TYPE_NULL, nil
 	case searchjobs.ValueKindString:
-		return opensplunkv1.ValueType_VALUE_TYPE_STRING, nil
+		return opensplunk.ValueType_VALUE_TYPE_STRING, nil
 	case searchjobs.ValueKindSigned:
-		return opensplunkv1.ValueType_VALUE_TYPE_SINT64, nil
+		return opensplunk.ValueType_VALUE_TYPE_SINT64, nil
 	case searchjobs.ValueKindUnsigned:
-		return opensplunkv1.ValueType_VALUE_TYPE_UINT64, nil
+		return opensplunk.ValueType_VALUE_TYPE_UINT64, nil
 	case searchjobs.ValueKindDouble:
-		return opensplunkv1.ValueType_VALUE_TYPE_DOUBLE, nil
+		return opensplunk.ValueType_VALUE_TYPE_DOUBLE, nil
 	case searchjobs.ValueKindBool:
-		return opensplunkv1.ValueType_VALUE_TYPE_BOOL, nil
+		return opensplunk.ValueType_VALUE_TYPE_BOOL, nil
 	case searchjobs.ValueKindBytes:
-		return opensplunkv1.ValueType_VALUE_TYPE_BYTES, nil
+		return opensplunk.ValueType_VALUE_TYPE_BYTES, nil
 	case searchjobs.ValueKindTime:
-		return opensplunkv1.ValueType_VALUE_TYPE_TIMESTAMP, nil
+		return opensplunk.ValueType_VALUE_TYPE_TIMESTAMP, nil
 	case searchjobs.ValueKindDuration:
-		return opensplunkv1.ValueType_VALUE_TYPE_DURATION, nil
+		return opensplunk.ValueType_VALUE_TYPE_DURATION, nil
 	case searchjobs.ValueKindList:
-		return opensplunkv1.ValueType_VALUE_TYPE_LIST, nil
+		return opensplunk.ValueType_VALUE_TYPE_LIST, nil
 	case searchjobs.ValueKindObject:
-		return opensplunkv1.ValueType_VALUE_TYPE_OBJECT, nil
+		return opensplunk.ValueType_VALUE_TYPE_OBJECT, nil
 	case searchjobs.ValueKindDecimal:
-		return opensplunkv1.ValueType_VALUE_TYPE_DECIMAL, nil
+		return opensplunk.ValueType_VALUE_TYPE_DECIMAL, nil
 	case searchjobs.ValueKindMixed:
-		return opensplunkv1.ValueType_VALUE_TYPE_MIXED, nil
+		return opensplunk.ValueType_VALUE_TYPE_MIXED, nil
 	default:
-		return opensplunkv1.ValueType_VALUE_TYPE_UNSPECIFIED, errors.New("search result schema type is invalid")
+		return opensplunk.ValueType_VALUE_TYPE_UNSPECIFIED, errors.New("search result schema type is invalid")
 	}
 }
 
-func semanticType(field string) opensplunkv1.ColumnSemanticType {
+func semanticType(field string) opensplunk.ColumnSemanticType {
 	switch field {
 	case "_time":
-		return opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_EVENT_TIME
+		return opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_EVENT_TIME
 	case "_indextime":
-		return opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_INDEX_TIME
+		return opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_INDEX_TIME
 	case "_raw":
-		return opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_RAW
+		return opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_RAW
 	case "index":
-		return opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_INDEX
+		return opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_INDEX
 	case "host":
-		return opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_HOST
+		return opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_HOST
 	case "source":
-		return opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_SOURCE
+		return opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_SOURCE
 	case "sourcetype":
-		return opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_SOURCETYPE
+		return opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_SOURCETYPE
 	case "level":
-		return opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_LEVEL
+		return opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_LEVEL
 	case "message", "body":
-		return opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_MESSAGE
+		return opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_MESSAGE
 	case "trace_id":
-		return opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_TRACE_ID
+		return opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_TRACE_ID
 	case "span_id":
-		return opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_SPAN_ID
+		return opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_SPAN_ID
 	default:
-		return opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_UNSPECIFIED
+		return opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_UNSPECIFIED
 	}
 }
 

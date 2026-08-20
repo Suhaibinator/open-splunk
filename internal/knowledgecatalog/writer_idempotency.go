@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
@@ -523,10 +523,10 @@ func encodeOutcomeReference(authority mutationOutcomeAuthority) ([]byte, error) 
 		authority.mutationKind != "quarantine" && authority.successfulAuditSequence == 0 {
 		return nil, fmt.Errorf("%w: knowledge outcome audit reference is invalid", control.ErrInvalidArgument)
 	}
-	outcome := &opensplunkv1.KnowledgeMutationOutcomeRecord{
+	outcome := &opensplunk.KnowledgeMutationOutcomeRecord{
 		Route:        strings.Clone(authority.route),
 		MutationKind: strings.Clone(authority.mutationKind),
-		Object: &opensplunkv1.KnowledgeObjectVersionReference{
+		Object: &opensplunk.KnowledgeObjectVersionReference{
 			KnowledgeObjectId: strings.Clone(authority.objectID),
 			Version:           authority.version,
 			DefinitionSha256:  bytes.Clone(authority.digest),
@@ -538,11 +538,11 @@ func encodeOutcomeReference(authority mutationOutcomeAuthority) ([]byte, error) 
 		RetainUntilUnixMicro:     authority.retainUntilUnixMicro,
 	}
 	if authority.successfulAuditSequence != 0 {
-		outcome.AuditAuthority = &opensplunkv1.KnowledgeMutationOutcomeRecord_SuccessfulAuditSequence{
+		outcome.AuditAuthority = &opensplunk.KnowledgeMutationOutcomeRecord_SuccessfulAuditSequence{
 			SuccessfulAuditSequence: authority.successfulAuditSequence,
 		}
 	} else {
-		outcome.AuditAuthority = &opensplunkv1.KnowledgeMutationOutcomeRecord_RecoveryAuditSequence{
+		outcome.AuditAuthority = &opensplunk.KnowledgeMutationOutcomeRecord_RecoveryAuditSequence{
 			RecoveryAuditSequence: authority.recoveryAuditSequence,
 		}
 	}
@@ -570,12 +570,12 @@ func validOutcomeRetentionAuthority(authority mutationOutcomeAuthority) bool {
 		retentionMicros <= int64(maximumIdempotencyRetention/time.Microsecond)
 }
 
-func decodeOutcomeReference(record idempotencyRecord) (*opensplunkv1.KnowledgeObjectVersionReference, error) {
+func decodeOutcomeReference(record idempotencyRecord) (*opensplunk.KnowledgeObjectVersionReference, error) {
 	if record.OutcomeFormatVersion != mutationOutcomeFormatVersion ||
 		len(record.OutcomeProto) < 1 || len(record.OutcomeProto) > maximumMutationOutcomeBytes {
 		return nil, fmt.Errorf("%w: knowledge outcome receipt format is invalid", ErrCorrupt)
 	}
-	outcome := &opensplunkv1.KnowledgeMutationOutcomeRecord{}
+	outcome := &opensplunk.KnowledgeMutationOutcomeRecord{}
 	if err := (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(record.OutcomeProto, outcome); err != nil {
 		return nil, fmt.Errorf("%w: knowledge outcome reference is invalid", ErrCorrupt)
 	}
@@ -606,7 +606,7 @@ func decodeOutcomeReference(record idempotencyRecord) (*opensplunkv1.KnowledgeOb
 	if err != nil || !bytes.Equal(canonical, record.OutcomeProto) {
 		return nil, fmt.Errorf("%w: knowledge outcome reference is noncanonical", ErrCorrupt)
 	}
-	return proto.Clone(reference).(*opensplunkv1.KnowledgeObjectVersionReference), nil
+	return proto.Clone(reference).(*opensplunk.KnowledgeObjectVersionReference), nil
 }
 
 func validOutcomeDefinitionDigest(quarantine bool, digest []byte) bool {
@@ -617,7 +617,7 @@ func validOutcomeDefinitionDigest(quarantine bool, digest []byte) bool {
 }
 
 func outcomeAuditAuthorityAgrees(
-	outcome *opensplunkv1.KnowledgeMutationOutcomeRecord,
+	outcome *opensplunk.KnowledgeMutationOutcomeRecord,
 	record idempotencyRecord,
 ) bool {
 	if outcome == nil {
@@ -726,7 +726,7 @@ func validateReplayCommitAuthority(tx *gorm.DB, record idempotencyRecord) error 
 type replayAuthority struct {
 	current   registryRecord
 	version   versionRecord
-	reference *opensplunkv1.KnowledgeObjectVersionReference
+	reference *opensplunk.KnowledgeObjectVersionReference
 }
 
 func (writer *Writer) readReplayAuthority(
@@ -915,7 +915,7 @@ func (writer *Writer) validateReplayRequestBinding(
 
 	switch route {
 	case mutationRouteCreate:
-		request := &opensplunkv1.CreateKnowledgeObjectRequest{}
+		request := &opensplunk.CreateKnowledgeObjectRequest{}
 		if decodeCanonicalPreparedRequest(prepared.requestBytes, request) != nil {
 			return invalid()
 		}
@@ -928,7 +928,7 @@ func (writer *Writer) validateReplayRequestBinding(
 			return invalid()
 		}
 	case mutationRouteUpdate:
-		request := &opensplunkv1.UpdateKnowledgeObjectRequest{}
+		request := &opensplunk.UpdateKnowledgeObjectRequest{}
 		if decodeCanonicalPreparedRequest(prepared.requestBytes, request) != nil {
 			return invalid()
 		}
@@ -1010,18 +1010,18 @@ func validateReplayScalarRequestBinding(
 	}
 	switch route {
 	case mutationRouteCreate:
-		request := &opensplunkv1.CreateKnowledgeObjectRequest{}
+		request := &opensplunk.CreateKnowledgeObjectRequest{}
 		if decodeCanonicalPreparedRequest(prepared.requestBytes, request) != nil ||
 			request.GetClientRequestId() != "" || version.ObjectVersion != 1 ||
 			version.MutationKind != "create" {
 			return invalid()
 		}
 		switch request.GetInitialState() {
-		case opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT:
+		case opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT:
 			if version.State != StateDraft {
 				return invalid()
 			}
-		case opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE:
+		case opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE:
 			if version.State != StateActive {
 				return invalid()
 			}
@@ -1029,7 +1029,7 @@ func validateReplayScalarRequestBinding(
 			return invalid()
 		}
 	case mutationRouteUpdate:
-		request := &opensplunkv1.UpdateKnowledgeObjectRequest{}
+		request := &opensplunk.UpdateKnowledgeObjectRequest{}
 		if decodeCanonicalPreparedRequest(prepared.requestBytes, request) != nil ||
 			request.GetClientRequestId() != "" ||
 			!successorMatches(request.GetKnowledgeObjectId(), request.GetExpectedVersion()) ||
@@ -1037,18 +1037,18 @@ func validateReplayScalarRequestBinding(
 			return invalid()
 		}
 	case mutationRouteSetState:
-		request := &opensplunkv1.SetKnowledgeObjectStateRequest{}
+		request := &opensplunk.SetKnowledgeObjectStateRequest{}
 		if decodeCanonicalPreparedRequest(prepared.requestBytes, request) != nil ||
 			request.GetClientRequestId() != "" ||
 			!successorMatches(request.GetKnowledgeObjectId(), request.GetExpectedVersion()) {
 			return invalid()
 		}
 		switch request.GetState() {
-		case opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE:
+		case opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE:
 			if version.MutationKind != "enable" || version.State != StateActive {
 				return invalid()
 			}
-		case opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED:
+		case opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED:
 			if version.MutationKind != "disable" || version.State != StateDisabled {
 				return invalid()
 			}
@@ -1056,7 +1056,7 @@ func validateReplayScalarRequestBinding(
 			return invalid()
 		}
 	case mutationRouteDelete:
-		request := &opensplunkv1.DeleteKnowledgeObjectRequest{}
+		request := &opensplunk.DeleteKnowledgeObjectRequest{}
 		if decodeCanonicalPreparedRequest(prepared.requestBytes, request) != nil ||
 			request.GetClientRequestId() != "" ||
 			!successorMatches(request.GetKnowledgeObjectId(), request.GetExpectedVersion()) ||

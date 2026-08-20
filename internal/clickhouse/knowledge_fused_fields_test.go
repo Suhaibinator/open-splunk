@@ -6,28 +6,28 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 )
 
 func TestCompileKnowledgeAliasStageBuildsOneFrozenProjection(t *testing.T) {
-	program := knowledgeFusedFieldProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{
+	program := knowledgeFusedFieldProgram(t, []*opensplunk.KnowledgeObjectDefinition{
 		{
-			AppId: "app", Name: "alias-a", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-			Selector: &opensplunkv1.KnowledgeSelector{HostPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{Value: "api"}}},
-			Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunkv1.FieldAliasDefinition{
+			AppId: "app", Name: "alias-a", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+			Selector: &opensplunk.KnowledgeSelector{HostPatterns: []*opensplunk.KnowledgeSelectorPattern{{Value: "api"}}},
+			Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunk.FieldAliasDefinition{
 				SourceField: "host", DestinationField: "alias_host",
-				OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+				OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
 			}},
 		},
 		{
-			AppId: "app", Name: "alias-b", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-			Selector: &opensplunkv1.KnowledgeSelector{SourcePatterns: []*opensplunkv1.KnowledgeSelectorPattern{{Value: "service-*"}}},
-			Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunkv1.FieldAliasDefinition{
+			AppId: "app", Name: "alias-b", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+			Selector: &opensplunk.KnowledgeSelector{SourcePatterns: []*opensplunk.KnowledgeSelectorPattern{{Value: "service-*"}}},
+			Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunk.FieldAliasDefinition{
 				SourceField: "source", DestinationField: "alias_source",
-				OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+				OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 			}},
 		},
 	})
@@ -127,19 +127,19 @@ func TestCompileKnowledgeAliasStageBuildsOneFrozenProjection(t *testing.T) {
 }
 
 func TestCompileKnowledgeCalculatedStageUsesFrozenInputAndExactConversion(t *testing.T) {
-	program := knowledgeFusedFieldProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{
+	program := knowledgeFusedFieldProgram(t, []*opensplunk.KnowledgeObjectDefinition{
 		{
-			AppId: "app", Name: "calculated-a", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-			Body: &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{CalculatedField: &opensplunkv1.CalculatedFieldDefinition{
+			AppId: "app", Name: "calculated-a", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+			Body: &opensplunk.KnowledgeObjectDefinition_CalculatedField{CalculatedField: &opensplunk.CalculatedFieldDefinition{
 				DestinationField: "calculated_host", Expression: "lower(host)",
-				OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+				OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 			}},
 		},
 		{
-			AppId: "app", Name: "calculated-b", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-			Body: &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{CalculatedField: &opensplunkv1.CalculatedFieldDefinition{
+			AppId: "app", Name: "calculated-b", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+			Body: &opensplunk.KnowledgeObjectDefinition_CalculatedField{CalculatedField: &opensplunk.CalculatedFieldDefinition{
 				DestinationField: "calculated_source", Expression: "upper(source)",
-				OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+				OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
 			}},
 		},
 	})
@@ -186,21 +186,21 @@ func TestCompileKnowledgeCalculatedStageUsesFrozenInputAndExactConversion(t *tes
 }
 
 func TestCompileKnowledgeAliasStageGroupsDisjointDestinationWriters(t *testing.T) {
-	program := knowledgeFusedFieldProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{
+	program := knowledgeFusedFieldProgram(t, []*opensplunk.KnowledgeObjectDefinition{
 		{
-			AppId: "app", Name: "alias-east", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-			Selector: &opensplunkv1.KnowledgeSelector{IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{Value: "east"}}},
-			Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunkv1.FieldAliasDefinition{
+			AppId: "app", Name: "alias-east", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+			Selector: &opensplunk.KnowledgeSelector{IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{{Value: "east"}}},
+			Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunk.FieldAliasDefinition{
 				SourceField: "host", DestinationField: "shared_destination",
-				OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+				OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 			}},
 		},
 		{
-			AppId: "app", Name: "alias-west", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-			Selector: &opensplunkv1.KnowledgeSelector{IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{Value: "west"}}},
-			Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunkv1.FieldAliasDefinition{
+			AppId: "app", Name: "alias-west", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+			Selector: &opensplunk.KnowledgeSelector{IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{{Value: "west"}}},
+			Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunk.FieldAliasDefinition{
 				SourceField: "source", DestinationField: "shared_destination",
-				OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+				OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 			}},
 		},
 	})
@@ -242,14 +242,14 @@ func TestCompileKnowledgeAliasStageGroupsDisjointDestinationWriters(t *testing.T
 }
 
 func TestCompileKnowledgeAliasStageAcceptsProgramMaximumBeyondAuthoredWidth(t *testing.T) {
-	definitions := make([]*opensplunkv1.KnowledgeObjectDefinition, 65)
+	definitions := make([]*opensplunk.KnowledgeObjectDefinition, 65)
 	for index := range definitions {
 		name := fmt.Sprintf("alias-%03d", index)
-		definitions[index] = &opensplunkv1.KnowledgeObjectDefinition{
-			AppId: "app", Name: name, SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-			Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunkv1.FieldAliasDefinition{
+		definitions[index] = &opensplunk.KnowledgeObjectDefinition{
+			AppId: "app", Name: name, SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+			Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunk.FieldAliasDefinition{
 				SourceField: "host", DestinationField: fmt.Sprintf("destination_%03d", index),
-				OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+				OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 			}},
 		}
 	}
@@ -269,11 +269,11 @@ func TestCompileKnowledgeAliasStageAcceptsProgramMaximumBeyondAuthoredWidth(t *t
 }
 
 func TestCompileKnowledgeFusedStagesCarryCumulativeSelectorCharges(t *testing.T) {
-	aliasProgram := knowledgeFusedFieldProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{{
-		AppId: "app", Name: "alias", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunkv1.FieldAliasDefinition{
+	aliasProgram := knowledgeFusedFieldProgram(t, []*opensplunk.KnowledgeObjectDefinition{{
+		AppId: "app", Name: "alias", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunk.FieldAliasDefinition{
 			SourceField: "host", DestinationField: "copied_host",
-			OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+			OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 		}},
 	}})
 	first, err := compileKnowledgeAliasStage(
@@ -285,11 +285,11 @@ func TestCompileKnowledgeFusedStagesCarryCumulativeSelectorCharges(t *testing.T)
 	if err != nil {
 		t.Fatalf("compile alias stage: %v", err)
 	}
-	calculatedProgram := knowledgeFusedFieldProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{{
-		AppId: "app", Name: "calculated", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-		Body: &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{CalculatedField: &opensplunkv1.CalculatedFieldDefinition{
+	calculatedProgram := knowledgeFusedFieldProgram(t, []*opensplunk.KnowledgeObjectDefinition{{
+		AppId: "app", Name: "calculated", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+		Body: &opensplunk.KnowledgeObjectDefinition_CalculatedField{CalculatedField: &opensplunk.CalculatedFieldDefinition{
 			DestinationField: "lower_host", Expression: "lower(host)",
-			OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+			OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 		}},
 	}})
 	second, err := compileKnowledgeCalculatedStage(
@@ -323,11 +323,11 @@ func TestCompileKnowledgeFusedStagesCarryCumulativeSelectorCharges(t *testing.T)
 }
 
 func TestCompileKnowledgeFieldAssignmentKeepsPresentNullSeparate(t *testing.T) {
-	program := knowledgeFusedFieldProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{{
-		AppId: "app", Name: "calculated-null", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-		Body: &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{CalculatedField: &opensplunkv1.CalculatedFieldDefinition{
+	program := knowledgeFusedFieldProgram(t, []*opensplunk.KnowledgeObjectDefinition{{
+		AppId: "app", Name: "calculated-null", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+		Body: &opensplunk.KnowledgeObjectDefinition_CalculatedField{CalculatedField: &opensplunk.CalculatedFieldDefinition{
 			DestinationField: "calculated_null", Expression: "null",
-			OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+			OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 		}},
 	}})
 	compiled, err := compileKnowledgeCalculatedAssignment(
@@ -355,11 +355,11 @@ func TestCompileKnowledgeFieldAssignmentKeepsPresentNullSeparate(t *testing.T) {
 }
 
 func TestCompileKnowledgeFieldAssignmentsRetainTypedLoweringProof(t *testing.T) {
-	aliasProgram := knowledgeFusedFieldProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{{
-		AppId: "app", Name: "alias-proof", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunkv1.FieldAliasDefinition{
+	aliasProgram := knowledgeFusedFieldProgram(t, []*opensplunk.KnowledgeObjectDefinition{{
+		AppId: "app", Name: "alias-proof", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunk.FieldAliasDefinition{
 			SourceField: "host", DestinationField: "alias_host",
-			OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+			OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 		}},
 	}})
 	aliasOperation := aliasProgram.Aliases()[0]
@@ -388,11 +388,11 @@ func TestCompileKnowledgeFieldAssignmentsRetainTypedLoweringProof(t *testing.T) 
 		len(aliasStage.calculated) != 0 {
 		t.Fatalf("alias stage lowering proof = %#v", aliasStage)
 	}
-	otherAliasProgram := knowledgeFusedFieldProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{{
-		AppId: "app", Name: "other-alias-proof", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunkv1.FieldAliasDefinition{
+	otherAliasProgram := knowledgeFusedFieldProgram(t, []*opensplunk.KnowledgeObjectDefinition{{
+		AppId: "app", Name: "other-alias-proof", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunk.FieldAliasDefinition{
 			SourceField: "source", DestinationField: "other_alias",
-			OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+			OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 		}},
 	}})
 	otherAliasAssignment, err := compileKnowledgeAliasAssignment(
@@ -426,11 +426,11 @@ func TestCompileKnowledgeFieldAssignmentsRetainTypedLoweringProof(t *testing.T) 
 		t.Fatal("alias projection accepted an assignment without lowerer-retained authority")
 	}
 
-	calculatedProgram := knowledgeFusedFieldProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{{
-		AppId: "app", Name: "calculated-proof", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-		Body: &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{CalculatedField: &opensplunkv1.CalculatedFieldDefinition{
+	calculatedProgram := knowledgeFusedFieldProgram(t, []*opensplunk.KnowledgeObjectDefinition{{
+		AppId: "app", Name: "calculated-proof", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+		Body: &opensplunk.KnowledgeObjectDefinition_CalculatedField{CalculatedField: &opensplunk.CalculatedFieldDefinition{
 			DestinationField: "lower_host", Expression: "lower(host)",
-			OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+			OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 		}},
 	}})
 	calculatedOperation := calculatedProgram.CalculatedFields()[0]
@@ -463,11 +463,11 @@ func TestCompileKnowledgeFieldAssignmentsRetainTypedLoweringProof(t *testing.T) 
 		len(calculatedStage.aliases) != 0 {
 		t.Fatalf("calculated stage lowering proof = %#v", calculatedStage)
 	}
-	otherCalculatedProgram := knowledgeFusedFieldProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{{
-		AppId: "app", Name: "other-calculated-proof", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-		Body: &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{CalculatedField: &opensplunkv1.CalculatedFieldDefinition{
+	otherCalculatedProgram := knowledgeFusedFieldProgram(t, []*opensplunk.KnowledgeObjectDefinition{{
+		AppId: "app", Name: "other-calculated-proof", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+		Body: &opensplunk.KnowledgeObjectDefinition_CalculatedField{CalculatedField: &opensplunk.CalculatedFieldDefinition{
 			DestinationField: "upper_source", Expression: "upper(source)",
-			OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+			OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 		}},
 	}})
 	otherCalculatedAssignment, err := compileKnowledgeCalculatedAssignment(
@@ -520,26 +520,26 @@ func knowledgeFusedFieldState() compileState {
 
 func knowledgeFusedFieldProgram(
 	t *testing.T,
-	definitions []*opensplunkv1.KnowledgeObjectDefinition,
+	definitions []*opensplunk.KnowledgeObjectDefinition,
 ) knowledgeprogram.Program {
 	t.Helper()
-	objects := make([]*opensplunkv1.KnowledgeSnapshotObject, len(definitions))
-	stageOrdinals := make(map[opensplunkv1.KnowledgeSearchStage]uint32)
+	objects := make([]*opensplunk.KnowledgeSnapshotObject, len(definitions))
+	stageOrdinals := make(map[opensplunk.KnowledgeSearchStage]uint32)
 	for index, definition := range definitions {
 		normalized, err := knowledgedefinition.Normalize(definition)
 		if err != nil {
 			t.Fatalf("Normalize(%d): %v", index, err)
 		}
-		stage := opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_UNSPECIFIED
+		stage := opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_UNSPECIFIED
 		switch normalized.ObjectType {
-		case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS:
-			stage = opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS
-		case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD:
-			stage = opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD
+		case opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS:
+			stage = opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS
+		case opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD:
+			stage = opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD
 		default:
 			t.Fatalf("unexpected object type %v", normalized.ObjectType)
 		}
-		objects[index] = &opensplunkv1.KnowledgeSnapshotObject{
+		objects[index] = &opensplunk.KnowledgeSnapshotObject{
 			ResolutionOrdinal: uint32(index),
 			Stage:             stage,
 			StageOrdinal:      stageOrdinals[stage],

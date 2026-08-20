@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { ValueType } from "../../gen/ts/open_splunk/v1/value";
+import { ValueType } from "../../gen/ts/open_splunk/value";
 import {
   MAXIMUM_FLAT_MULTIVALUE_DELIMITER_BYTES,
   validFlatMultivalueColumnPresentation,

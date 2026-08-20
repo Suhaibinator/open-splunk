@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/collector/wal"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/collectorlimits"
@@ -38,9 +38,9 @@ import (
 type fakeQueue struct {
 	mu       sync.Mutex
 	cond     *sync.Cond
-	batches  []*opensplunkv1.EventBatch // ascending by batch sequence
-	cursor   int                        // index of the next batch to hand out
-	acked    uint64                     // highest acked sequence
+	batches  []*opensplunk.EventBatch // ascending by batch sequence
+	cursor   int                      // index of the next batch to hand out
+	acked    uint64                   // highest acked sequence
 	nextSeq  uint64
 	ackCalls []uint64
 	terminal map[uint64]struct{}
@@ -51,11 +51,11 @@ type nextBatchErrorQueue struct {
 	err error
 }
 
-func (q *nextBatchErrorQueue) NextBatch(context.Context) (*opensplunkv1.EventBatch, error) {
+func (q *nextBatchErrorQueue) NextBatch(context.Context) (*opensplunk.EventBatch, error) {
 	return nil, q.err
 }
 
-func newFakeQueue(batches ...*opensplunkv1.EventBatch) *fakeQueue {
+func newFakeQueue(batches ...*opensplunk.EventBatch) *fakeQueue {
 	q := &fakeQueue{batches: batches, terminal: make(map[uint64]struct{})}
 	q.cond = sync.NewCond(&q.mu)
 	if len(batches) > 0 {
@@ -66,17 +66,17 @@ func newFakeQueue(batches ...*opensplunkv1.EventBatch) *fakeQueue {
 	return q
 }
 
-func (q *fakeQueue) Append(events []*opensplunkv1.LogEvent) (*opensplunkv1.EventBatch, error) {
+func (q *fakeQueue) Append(events []*opensplunk.LogEvent) (*opensplunk.EventBatch, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	batch := &opensplunkv1.EventBatch{BatchSequence: q.nextSeq, Events: events}
+	batch := &opensplunk.EventBatch{BatchSequence: q.nextSeq, Events: events}
 	q.nextSeq++
 	q.batches = append(q.batches, batch)
 	q.cond.Broadcast()
 	return batch, nil
 }
 
-func (q *fakeQueue) NextBatch(ctx context.Context) (*opensplunkv1.EventBatch, error) {
+func (q *fakeQueue) NextBatch(ctx context.Context) (*opensplunk.EventBatch, error) {
 	// Wake the waiter if ctx is canceled while blocked.
 	stop := context.AfterFunc(ctx, func() {
 		q.mu.Lock()
@@ -258,7 +258,7 @@ func (aggregator *fakeSourceMarkAggregator) marks() []wal.SourceCheckpointMark {
 	return marks
 }
 
-func fakeSourceMarks(batch *opensplunkv1.EventBatch) []wal.SourceCheckpointMark {
+func fakeSourceMarks(batch *opensplunk.EventBatch) []wal.SourceCheckpointMark {
 	bySource := make(map[fakeSourceMarkKey]wal.SourceCheckpointMark)
 	var invalid *wal.SourceCheckpointMark
 	for index, event := range batch.GetEvents() {
@@ -450,28 +450,28 @@ func (m *memSink) snapshot() []DeadLetterRecord {
 // ---------------------------------------------------------------------------
 
 type fakeServer struct {
-	opensplunkv1.UnimplementedCollectorIngestServiceServer
+	opensplunk.UnimplementedCollectorIngestServiceServer
 
-	readyFn   func() *opensplunkv1.CollectorReady
-	onBatch   func(fs *fakeServer, batch *opensplunkv1.EventBatch)
+	readyFn   func() *opensplunk.CollectorReady
+	onBatch   func(fs *fakeServer, batch *opensplunk.EventBatch)
 	failCalls int // number of initial Collect calls that fail after Hello
 	failErr   error
 	// batchErr, when set, runs before onBatch; a non-nil return tears down the
 	// stream after the batch was received but before any ack is sent.
-	batchErr func(fs *fakeServer, batch *opensplunkv1.EventBatch) error
+	batchErr func(fs *fakeServer, batch *opensplunk.EventBatch) error
 
 	sendMu sync.Mutex
 
 	mu              sync.Mutex
-	stream          opensplunkv1.CollectorIngestService_CollectServer
+	stream          opensplunk.CollectorIngestService_CollectServer
 	respSeq         uint64
 	callCount       int
 	token           string
-	hello           *opensplunkv1.CollectorHello
-	received        []*opensplunkv1.EventBatch
-	byID            map[uint64]*opensplunkv1.EventBatch
+	hello           *opensplunk.CollectorHello
+	received        []*opensplunk.EventBatch
+	byID            map[uint64]*opensplunk.EventBatch
 	heartbeats      int
-	goodbye         *opensplunkv1.CollectorGoodbye
+	goodbye         *opensplunk.CollectorGoodbye
 	currentInFlight int
 	maxObserved     int
 }
@@ -479,25 +479,23 @@ type fakeServer struct {
 func newFakeServer() *fakeServer {
 	return &fakeServer{
 		readyFn: defaultReady,
-		byID:    make(map[uint64]*opensplunkv1.EventBatch),
+		byID:    make(map[uint64]*opensplunk.EventBatch),
 	}
 }
 
-func defaultReady() *opensplunkv1.CollectorReady {
-	return &opensplunkv1.CollectorReady{
+func defaultReady() *opensplunk.CollectorReady {
+	return &opensplunk.CollectorReady{
 		StreamId:                 "stream-x",
-		ProtocolMajor:            1,
-		ProtocolMinor:            0,
 		HeartbeatInterval:        durationpb.New(time.Hour),
 		MaxInFlightBatches:       1,
 		MaxBatchEvents:           1000,
 		MaxBatchBytes:            8 << 20,
 		MaxEventBytes:            1 << 20,
-		AcknowledgmentDurability: opensplunkv1.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED,
+		AcknowledgmentDurability: opensplunk.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED,
 	}
 }
 
-func (fs *fakeServer) Collect(stream opensplunkv1.CollectorIngestService_CollectServer) error {
+func (fs *fakeServer) Collect(stream opensplunk.CollectorIngestService_CollectServer) error {
 	fs.mu.Lock()
 	fs.callCount++
 	n := fs.callCount
@@ -528,8 +526,8 @@ func (fs *fakeServer) Collect(stream opensplunkv1.CollectorIngestService_Collect
 		return status.Error(codes.Unavailable, "transient failure")
 	}
 
-	if err := fs.send(&opensplunkv1.CollectResponse{
-		Payload: &opensplunkv1.CollectResponse_Ready{Ready: fs.readyFn()},
+	if err := fs.send(&opensplunk.CollectResponse{
+		Payload: &opensplunk.CollectResponse_Ready{Ready: fs.readyFn()},
 	}); err != nil {
 		return err
 	}
@@ -567,7 +565,7 @@ func (fs *fakeServer) Collect(stream opensplunkv1.CollectorIngestService_Collect
 	}
 }
 
-func (fs *fakeServer) send(resp *opensplunkv1.CollectResponse) error {
+func (fs *fakeServer) send(resp *opensplunk.CollectResponse) error {
 	fs.sendMu.Lock()
 	defer fs.sendMu.Unlock()
 	fs.mu.Lock()
@@ -579,15 +577,15 @@ func (fs *fakeServer) send(resp *opensplunkv1.CollectResponse) error {
 	return stream.Send(resp)
 }
 
-func (fs *fakeServer) ackBatch(seq uint64, accepted uint32, rejected ...*opensplunkv1.EventRejection) {
+func (fs *fakeServer) ackBatch(seq uint64, accepted uint32, rejected ...*opensplunk.EventRejection) {
 	fs.mu.Lock()
 	batch := fs.byID[seq]
 	fs.mu.Unlock()
-	_ = fs.send(&opensplunkv1.CollectResponse{
-		Payload: &opensplunkv1.CollectResponse_BatchAck{BatchAck: &opensplunkv1.BatchAck{
+	_ = fs.send(&opensplunk.CollectResponse{
+		Payload: &opensplunk.CollectResponse_BatchAck{BatchAck: &opensplunk.BatchAck{
 			BatchId:             batch.GetBatchId(),
 			BatchSequence:       seq,
-			Durability:          opensplunkv1.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED,
+			Durability:          opensplunk.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED,
 			AcceptedEventCount:  accepted,
 			DuplicateEventCount: 0,
 			RejectedEvents:      rejected,
@@ -601,21 +599,21 @@ func (fs *fakeServer) tokenSeen() string {
 	return fs.token
 }
 
-func (fs *fakeServer) helloSeen() *opensplunkv1.CollectorHello {
+func (fs *fakeServer) helloSeen() *opensplunk.CollectorHello {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 	return fs.hello
 }
 
-func (fs *fakeServer) receivedBatches() []*opensplunkv1.EventBatch {
+func (fs *fakeServer) receivedBatches() []*opensplunk.EventBatch {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
-	out := make([]*opensplunkv1.EventBatch, len(fs.received))
+	out := make([]*opensplunk.EventBatch, len(fs.received))
 	copy(out, fs.received)
 	return out
 }
 
-func (fs *fakeServer) goodbyeSeen() *opensplunkv1.CollectorGoodbye {
+func (fs *fakeServer) goodbyeSeen() *opensplunk.CollectorGoodbye {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 	return fs.goodbye
@@ -631,11 +629,11 @@ func (fs *fakeServer) calls() int {
 // test harness
 // ---------------------------------------------------------------------------
 
-func startServer(t *testing.T, srv opensplunkv1.CollectorIngestServiceServer) *grpc.ClientConn {
+func startServer(t *testing.T, srv opensplunk.CollectorIngestServiceServer) *grpc.ClientConn {
 	t.Helper()
 	lis := bufconn.Listen(1 << 20)
 	server := grpc.NewServer()
-	opensplunkv1.RegisterCollectorIngestServiceServer(server, srv)
+	opensplunk.RegisterCollectorIngestServiceServer(server, srv)
 	go func() { _ = server.Serve(lis) }()
 	t.Cleanup(server.Stop)
 
@@ -653,16 +651,14 @@ func startServer(t *testing.T, srv opensplunkv1.CollectorIngestServiceServer) *g
 
 func testOptions() Options {
 	return Options{
-		Address:       "bufnet",
-		Token:         func() (string, error) { return "test-token", nil },
-		CollectorID:   "collector-a",
-		InstanceID:    "instance-a",
-		ProtocolMajor: 1,
-		ProtocolMinor: 0,
+		Address:     "bufnet",
+		Token:       func() (string, error) { return "test-token", nil },
+		CollectorID: "collector-a",
+		InstanceID:  "instance-a",
 		Hello: HelloInfo{
-			CollectorVersion: "v-test",
-			Hostname:         "host-a",
-			StartedAt:        time.Now().Add(-time.Hour),
+			SourceRevision: "development",
+			Hostname:       "host-a",
+			StartedAt:      time.Now().Add(-time.Hour),
 		},
 		Backoff: BackoffPolicy{Initial: 5 * time.Millisecond, Max: 20 * time.Millisecond, Multiplier: 2, Jitter: 0.2},
 	}
@@ -674,7 +670,7 @@ func newTestSender(t *testing.T, opts Options, q wal.Queue, sink DeadLetterSink,
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.client = opensplunkv1.NewCollectorIngestServiceClient(conn)
+	s.client = opensplunk.NewCollectorIngestServiceClient(conn)
 	s.closeConn = func() error { return nil }
 	s.drainTimeout = 300 * time.Millisecond
 	s.rand = func() float64 { return 0.5 } // deterministic backoff
@@ -702,19 +698,17 @@ func waitFor(t *testing.T, msg string, cond func() bool) {
 	t.Fatalf("timed out waiting for: %s", msg)
 }
 
-func makeEvent(id, index string) *opensplunkv1.LogEvent {
-	return &opensplunkv1.LogEvent{EventId: id, IndexName: index}
+func makeEvent(id, index string) *opensplunk.LogEvent {
+	return &opensplunk.LogEvent{EventId: id, IndexName: index}
 }
 
-func fakeBatch(seq uint64, events ...*opensplunkv1.LogEvent) *opensplunkv1.EventBatch {
-	return &opensplunkv1.EventBatch{
+func fakeBatch(seq uint64, events ...*opensplunk.LogEvent) *opensplunk.EventBatch {
+	return &opensplunk.EventBatch{
 		CollectorId:   "collector-a",
 		BatchId:       "batch-" + itoa(seq),
 		BatchSequence: seq,
 		CreatedAt:     timestamppb.Now(),
 		Events:        events,
-		ProtocolMajor: 1,
-		ProtocolMinor: 0,
 	}
 }
 
@@ -739,7 +733,7 @@ func itoa(v uint64) string {
 func TestSenderHelloBatchAckWalAck(t *testing.T) {
 	t.Parallel()
 	fs := newFakeServer()
-	fs.onBatch = func(fs *fakeServer, b *opensplunkv1.EventBatch) {
+	fs.onBatch = func(fs *fakeServer, b *opensplunk.EventBatch) {
 		fs.ackBatch(b.GetBatchSequence(), uint32(len(b.GetEvents())))
 	}
 	conn := startServer(t, fs)
@@ -778,7 +772,7 @@ func TestSenderHelloBatchAckWalAck(t *testing.T) {
 func TestSenderCheckpointCallbackFailureLeavesBatchReplayable(t *testing.T) {
 	t.Parallel()
 	batch := fakeBatch(1, makeEvent("e1", "main"))
-	batch.Events[0].Origin = &opensplunkv1.EventOrigin{
+	batch.Events[0].Origin = &opensplunk.EventOrigin{
 		InputId:      "input-a",
 		FileIdentity: new("dev=1;ino=2;gen=1;fp=" + strings.Repeat("ab", 32)),
 		EndOffset:    proto.Uint64(1),
@@ -800,10 +794,10 @@ func TestSenderCheckpointCallbackFailureLeavesBatchReplayable(t *testing.T) {
 	c.inflight[1] = batch
 	c.inflightN = 1
 
-	err = c.handleAck(&opensplunkv1.BatchAck{
+	err = c.handleAck(&opensplunk.BatchAck{
 		BatchId:            batch.GetBatchId(),
 		BatchSequence:      1,
-		Durability:         opensplunkv1.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED,
+		Durability:         opensplunk.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED,
 		AcceptedEventCount: 1,
 	})
 	if !errors.Is(err, callbackErr) {
@@ -823,19 +817,19 @@ func TestSenderCheckpointCallbackFailureLeavesBatchReplayable(t *testing.T) {
 func TestSenderMalformedOriginCallbackFailureLeavesBatchReplayable(t *testing.T) {
 	t.Parallel()
 	identity := "dev=1;ino=2;gen=1;fp=" + strings.Repeat("ab", 32)
-	checkpointEvent := func(id string, origin *opensplunkv1.EventOrigin) *opensplunkv1.LogEvent {
+	checkpointEvent := func(id string, origin *opensplunk.EventOrigin) *opensplunk.LogEvent {
 		event := makeEvent(id, "main")
 		event.Origin = origin
 		return event
 	}
 	tests := []struct {
 		name       string
-		events     []*opensplunkv1.LogEvent
+		events     []*opensplunk.LogEvent
 		markIsFail func(wal.SourceCheckpointMark) bool
 	}{
 		{
 			name: "missing input ID",
-			events: []*opensplunkv1.LogEvent{checkpointEvent("e1", &opensplunkv1.EventOrigin{
+			events: []*opensplunk.LogEvent{checkpointEvent("e1", &opensplunk.EventOrigin{
 				FileIdentity: &identity,
 				EndOffset:    proto.Uint64(1),
 			})},
@@ -846,7 +840,7 @@ func TestSenderMalformedOriginCallbackFailureLeavesBatchReplayable(t *testing.T)
 		},
 		{
 			name: "missing file identity",
-			events: []*opensplunkv1.LogEvent{checkpointEvent("e1", &opensplunkv1.EventOrigin{
+			events: []*opensplunk.LogEvent{checkpointEvent("e1", &opensplunk.EventOrigin{
 				InputId:   "input-a",
 				EndOffset: proto.Uint64(1),
 			})},
@@ -857,7 +851,7 @@ func TestSenderMalformedOriginCallbackFailureLeavesBatchReplayable(t *testing.T)
 		},
 		{
 			name: "missing end offset",
-			events: []*opensplunkv1.LogEvent{checkpointEvent("e1", &opensplunkv1.EventOrigin{
+			events: []*opensplunk.LogEvent{checkpointEvent("e1", &opensplunk.EventOrigin{
 				InputId:      "input-a",
 				FileIdentity: &identity,
 			})},
@@ -868,14 +862,14 @@ func TestSenderMalformedOriginCallbackFailureLeavesBatchReplayable(t *testing.T)
 		},
 		{
 			name: "conflicting fingerprint metadata",
-			events: []*opensplunkv1.LogEvent{
-				checkpointEvent("e1", &opensplunkv1.EventOrigin{
+			events: []*opensplunk.LogEvent{
+				checkpointEvent("e1", &opensplunk.EventOrigin{
 					InputId:               "input-a",
 					FileIdentity:          &identity,
 					EndOffset:             proto.Uint64(1),
 					FileFingerprintLength: proto.Uint32(64),
 				}),
-				checkpointEvent("e2", &opensplunkv1.EventOrigin{
+				checkpointEvent("e2", &opensplunk.EventOrigin{
 					InputId:               "input-a",
 					FileIdentity:          &identity,
 					EndOffset:             proto.Uint64(2),
@@ -912,10 +906,10 @@ func TestSenderMalformedOriginCallbackFailureLeavesBatchReplayable(t *testing.T)
 			c.inflight[1] = batch
 			c.inflightN = 1
 
-			err = c.handleAck(&opensplunkv1.BatchAck{
+			err = c.handleAck(&opensplunk.BatchAck{
 				BatchId:            batch.GetBatchId(),
 				BatchSequence:      1,
-				Durability:         opensplunkv1.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED,
+				Durability:         opensplunk.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED,
 				AcceptedEventCount: uint32(len(batch.GetEvents())),
 			})
 			if !errors.Is(err, callbackErr) {
@@ -940,9 +934,9 @@ func TestSenderMalformedOriginCallbackFailureLeavesBatchReplayable(t *testing.T)
 func TestFakeQueueCumulativePreviewRetainsCrossBatchConflict(t *testing.T) {
 	t.Parallel()
 	identity := "dev=1;ino=2;gen=1;fp=" + strings.Repeat("ab", 32)
-	checkpointBatch := func(sequence uint64, offset uint64, fingerprintLength uint32) *opensplunkv1.EventBatch {
+	checkpointBatch := func(sequence uint64, offset uint64, fingerprintLength uint32) *opensplunk.EventBatch {
 		event := makeEvent("event-"+itoa(sequence), "main")
-		event.Origin = &opensplunkv1.EventOrigin{
+		event.Origin = &opensplunk.EventOrigin{
 			InputId:               "input-a",
 			FileIdentity:          &identity,
 			EndOffset:             &offset,
@@ -983,7 +977,7 @@ func TestSenderStreamSequenceStrictlyIncrements(t *testing.T) {
 	// every subsequent request; delivering a batch through it proves the sender's
 	// sequencing is correct. Covered end-to-end in TestSenderAgainstRealService.
 	fs := newFakeServer()
-	fs.onBatch = func(fs *fakeServer, b *opensplunkv1.EventBatch) {
+	fs.onBatch = func(fs *fakeServer, b *opensplunk.EventBatch) {
 		fs.ackBatch(b.GetBatchSequence(), 1)
 	}
 	conn := startServer(t, fs)
@@ -999,7 +993,7 @@ func TestSenderNoTokenInLogs(t *testing.T) {
 	t.Parallel()
 	const secret = "super-secret-token-abc123"
 	fs := newFakeServer()
-	fs.onBatch = func(fs *fakeServer, b *opensplunkv1.EventBatch) {
+	fs.onBatch = func(fs *fakeServer, b *opensplunk.EventBatch) {
 		fs.ackBatch(b.GetBatchSequence(), 1)
 	}
 	conn := startServer(t, fs)
@@ -1028,21 +1022,21 @@ func TestSenderNoTokenInLogs(t *testing.T) {
 func TestSenderResumeAfterReplaysBatchesForExplicitOutcomes(t *testing.T) {
 	t.Parallel()
 	fs := newFakeServer()
-	fs.readyFn = func() *opensplunkv1.CollectorReady {
+	fs.readyFn = func() *opensplunk.CollectorReady {
 		r := defaultReady()
 		resume := uint64(2)
 		r.ResumeAfterBatchSequence = &resume
 		return r
 	}
-	fs.onBatch = func(fs *fakeServer, b *opensplunkv1.EventBatch) {
+	fs.onBatch = func(fs *fakeServer, b *opensplunk.EventBatch) {
 		if b.GetBatchSequence() == 2 {
 			// Model a committed response that was lost before the collector could
 			// persist its rejected-event dead letter. Ingest's idempotency store
 			// replays this same terminal outcome when the WAL batch is resent.
-			fs.ackBatch(2, 1, &opensplunkv1.EventRejection{
+			fs.ackBatch(2, 1, &opensplunk.EventRejection{
 				EventIndex: 1,
 				EventId:    "e2-rejected",
-				Code:       opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_INDEX,
+				Code:       opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_INDEX,
 				Message:    "index not authorized",
 			})
 			return
@@ -1081,13 +1075,13 @@ func TestSenderResumeAfterReplaysBatchesForExplicitOutcomes(t *testing.T) {
 func TestSenderHonorsInFlightCap(t *testing.T) {
 	t.Parallel()
 	fs := newFakeServer()
-	fs.readyFn = func() *opensplunkv1.CollectorReady {
+	fs.readyFn = func() *opensplunk.CollectorReady {
 		r := defaultReady()
 		r.MaxInFlightBatches = 2
 		return r
 	}
 	arrived := make(chan uint64, 8)
-	fs.onBatch = func(fs *fakeServer, b *opensplunkv1.EventBatch) {
+	fs.onBatch = func(fs *fakeServer, b *opensplunk.EventBatch) {
 		fs.mu.Lock()
 		fs.currentInFlight++
 		if fs.currentInFlight > fs.maxObserved {
@@ -1099,7 +1093,7 @@ func TestSenderHonorsInFlightCap(t *testing.T) {
 	conn := startServer(t, fs)
 
 	const total = 5
-	batches := make([]*opensplunkv1.EventBatch, 0, total)
+	batches := make([]*opensplunk.EventBatch, 0, total)
 	for i := uint64(1); i <= total; i++ {
 		batches = append(batches, fakeBatch(i, makeEvent("e"+itoa(i), "main")))
 	}
@@ -1152,17 +1146,17 @@ func TestSenderRetryResendsIdenticalBytes(t *testing.T) {
 	fs := newFakeServer()
 	var mu sync.Mutex
 	attempts := 0
-	fs.onBatch = func(fs *fakeServer, b *opensplunkv1.EventBatch) {
+	fs.onBatch = func(fs *fakeServer, b *opensplunk.EventBatch) {
 		mu.Lock()
 		attempts++
 		attempt := attempts
 		mu.Unlock()
 		if attempt == 1 {
-			_ = fs.send(&opensplunkv1.CollectResponse{
-				Payload: &opensplunkv1.CollectResponse_RetryBatch{RetryBatch: &opensplunkv1.RetryBatch{
+			_ = fs.send(&opensplunk.CollectResponse{
+				Payload: &opensplunk.CollectResponse_RetryBatch{RetryBatch: &opensplunk.RetryBatch{
 					BatchId:       b.GetBatchId(),
 					BatchSequence: b.GetBatchSequence(),
-					Reason:        opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
+					Reason:        opensplunk.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
 					RetryAfter:    durationpb.New(20 * time.Millisecond),
 				}},
 			})
@@ -1209,12 +1203,12 @@ func TestSenderTerminalAckCancelsScheduledRetry(t *testing.T) {
 	t.Parallel()
 	fs := newFakeServer()
 	var once sync.Once
-	fs.onBatch = func(fs *fakeServer, batch *opensplunkv1.EventBatch) {
+	fs.onBatch = func(fs *fakeServer, batch *opensplunk.EventBatch) {
 		once.Do(func() {
-			_ = fs.send(&opensplunkv1.CollectResponse{
-				Payload: &opensplunkv1.CollectResponse_RetryBatch{RetryBatch: &opensplunkv1.RetryBatch{
+			_ = fs.send(&opensplunk.CollectResponse{
+				Payload: &opensplunk.CollectResponse_RetryBatch{RetryBatch: &opensplunk.RetryBatch{
 					BatchId: batch.GetBatchId(), BatchSequence: batch.GetBatchSequence(),
-					Reason:     opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
+					Reason:     opensplunk.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
 					RetryAfter: durationpb.New(150 * time.Millisecond),
 				}},
 			})
@@ -1239,12 +1233,12 @@ func TestSenderTerminalAckCancelsRetryBeforeCheckpointCommit(t *testing.T) {
 	t.Parallel()
 	fs := newFakeServer()
 	var responses sync.Once
-	fs.onBatch = func(fs *fakeServer, batch *opensplunkv1.EventBatch) {
+	fs.onBatch = func(fs *fakeServer, batch *opensplunk.EventBatch) {
 		responses.Do(func() {
-			_ = fs.send(&opensplunkv1.CollectResponse{
-				Payload: &opensplunkv1.CollectResponse_RetryBatch{RetryBatch: &opensplunkv1.RetryBatch{
+			_ = fs.send(&opensplunk.CollectResponse{
+				Payload: &opensplunk.CollectResponse_RetryBatch{RetryBatch: &opensplunk.RetryBatch{
 					BatchId: batch.GetBatchId(), BatchSequence: batch.GetBatchSequence(),
-					Reason:     opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
+					Reason:     opensplunk.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
 					RetryAfter: durationpb.New(20 * time.Millisecond),
 				}},
 			})
@@ -1253,7 +1247,7 @@ func TestSenderTerminalAckCancelsRetryBeforeCheckpointCommit(t *testing.T) {
 	}
 
 	batch := fakeBatch(1, makeEvent("e1", "main"))
-	batch.Events[0].Origin = &opensplunkv1.EventOrigin{
+	batch.Events[0].Origin = &opensplunk.EventOrigin{
 		InputId:      "input-a",
 		FileIdentity: new("dev=1;ino=2;gen=1;fp=" + strings.Repeat("ab", 32)),
 		EndOffset:    proto.Uint64(1),
@@ -1301,10 +1295,10 @@ func TestReleaseInflightPromptlyCancelsLongScheduledRetry(t *testing.T) {
 	c.inflight[1] = batch
 	c.inflightN = 1
 
-	if err := c.handleRetry(&opensplunkv1.RetryBatch{
+	if err := c.handleRetry(&opensplunk.RetryBatch{
 		BatchId:       batch.GetBatchId(),
 		BatchSequence: 1,
-		Reason:        opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
+		Reason:        opensplunk.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
 		RetryAfter:    durationpb.New(time.Hour),
 	}); err != nil {
 		t.Fatalf("handleRetry: %v", err)
@@ -1334,29 +1328,29 @@ func TestReleaseInflightPromptlyCancelsLongScheduledRetry(t *testing.T) {
 func TestSenderRejectsCumulativeAckThatOmitsEarlierTerminalOutcome(t *testing.T) {
 	t.Parallel()
 	fs := newFakeServer()
-	fs.readyFn = func() *opensplunkv1.CollectorReady {
+	fs.readyFn = func() *opensplunk.CollectorReady {
 		ready := defaultReady()
 		ready.MaxInFlightBatches = 2
 		return ready
 	}
-	fs.onBatch = func(fs *fakeServer, batch *opensplunkv1.EventBatch) {
+	fs.onBatch = func(fs *fakeServer, batch *opensplunk.EventBatch) {
 		switch batch.GetBatchSequence() {
 		case 1:
-			_ = fs.send(&opensplunkv1.CollectResponse{
-				Payload: &opensplunkv1.CollectResponse_RetryBatch{RetryBatch: &opensplunkv1.RetryBatch{
+			_ = fs.send(&opensplunk.CollectResponse{
+				Payload: &opensplunk.CollectResponse_RetryBatch{RetryBatch: &opensplunk.RetryBatch{
 					BatchId: batch.GetBatchId(), BatchSequence: 1,
-					Reason:     opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
+					Reason:     opensplunk.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
 					RetryAfter: durationpb.New(150 * time.Millisecond),
 				}},
 			})
 		case 2:
 			through := uint64(2)
-			_ = fs.send(&opensplunkv1.CollectResponse{
-				Payload: &opensplunkv1.CollectResponse_BatchAck{BatchAck: &opensplunkv1.BatchAck{
+			_ = fs.send(&opensplunk.CollectResponse{
+				Payload: &opensplunk.CollectResponse_BatchAck{BatchAck: &opensplunk.BatchAck{
 					BatchId:                          batch.GetBatchId(),
 					BatchSequence:                    2,
 					AcknowledgedThroughBatchSequence: &through,
-					Durability:                       opensplunkv1.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED,
+					Durability:                       opensplunk.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED,
 					AcceptedEventCount:               1,
 				}},
 			})
@@ -1365,13 +1359,13 @@ func TestSenderRejectsCumulativeAckThatOmitsEarlierTerminalOutcome(t *testing.T)
 
 	identity := "dev=1;ino=2;gen=1;fp=" + strings.Repeat("ab", 32)
 	batch1 := fakeBatch(1, makeEvent("e1", "main"))
-	batch1.Events[0].Origin = &opensplunkv1.EventOrigin{
+	batch1.Events[0].Origin = &opensplunk.EventOrigin{
 		InputId:      "input-a",
 		FileIdentity: &identity,
 		EndOffset:    proto.Uint64(1),
 	}
 	batch2 := fakeBatch(2, makeEvent("e2", "main"))
-	batch2.Events[0].Origin = &opensplunkv1.EventOrigin{
+	batch2.Events[0].Origin = &opensplunk.EventOrigin{
 		InputId:      "input-b",
 		FileIdentity: &identity,
 		EndOffset:    proto.Uint64(2),
@@ -1423,11 +1417,11 @@ func TestSenderRejectsCumulativeAckBeyondSentHighWater(t *testing.T) {
 	c.highestSentBatchSequence = 1
 	through := uint64(2)
 
-	err = c.handleAck(&opensplunkv1.BatchAck{
+	err = c.handleAck(&opensplunk.BatchAck{
 		BatchId:                          batch1.GetBatchId(),
 		BatchSequence:                    1,
 		AcknowledgedThroughBatchSequence: &through,
-		Durability:                       opensplunkv1.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED,
+		Durability:                       opensplunk.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED,
 		AcceptedEventCount:               1,
 	})
 	if err == nil || !strings.Contains(err.Error(), "exceeds highest batch sequence sent") {
@@ -1467,15 +1461,15 @@ func TestSenderThrottleAppliesSendDelay(t *testing.T) {
 	fs := newFakeServer()
 	var mu sync.Mutex
 	var recvTimes []time.Time
-	fs.onBatch = func(fs *fakeServer, b *opensplunkv1.EventBatch) {
+	fs.onBatch = func(fs *fakeServer, b *opensplunk.EventBatch) {
 		mu.Lock()
 		recvTimes = append(recvTimes, time.Now())
 		count := len(recvTimes)
 		mu.Unlock()
 		if count == 1 {
-			_ = fs.send(&opensplunkv1.CollectResponse{
-				Payload: &opensplunkv1.CollectResponse_Throttle{Throttle: &opensplunkv1.Throttle{
-					Reason:           opensplunkv1.ThrottleReason_THROTTLE_REASON_SERVER_LOAD,
+			_ = fs.send(&opensplunk.CollectResponse{
+				Payload: &opensplunk.CollectResponse_Throttle{Throttle: &opensplunk.Throttle{
+					Reason:           opensplunk.ThrottleReason_THROTTLE_REASON_SERVER_LOAD,
 					MinimumSendDelay: durationpb.New(minDelay),
 					EffectiveUntil:   timestamppb.New(time.Now().Add(10 * time.Second)),
 				}},
@@ -1509,18 +1503,18 @@ func TestSenderThrottleAppliesSendDelay(t *testing.T) {
 func TestSenderPartialRejectionDeadLettersExactEvents(t *testing.T) {
 	t.Parallel()
 	fs := newFakeServer()
-	fs.onBatch = func(fs *fakeServer, b *opensplunkv1.EventBatch) {
+	fs.onBatch = func(fs *fakeServer, b *opensplunk.EventBatch) {
 		fs.ackBatch(b.GetBatchSequence(), 1,
-			&opensplunkv1.EventRejection{
+			&opensplunk.EventRejection{
 				EventIndex: 1,
 				EventId:    "e2",
-				Code:       opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_INDEX,
+				Code:       opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_INDEX,
 				Message:    "index not authorized",
 			},
-			&opensplunkv1.EventRejection{
+			&opensplunk.EventRejection{
 				EventIndex: 2,
 				EventId:    "e3",
-				Code:       opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_FIELD_NAME_INVALID,
+				Code:       opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_FIELD_NAME_INVALID,
 				Message:    "bad field",
 			},
 		)
@@ -1543,7 +1537,7 @@ func TestSenderPartialRejectionDeadLettersExactEvents(t *testing.T) {
 		t.Fatalf("dead-lettered events = %q, %q, want e2, e3",
 			records[0].Event.GetEventId(), records[1].Event.GetEventId())
 	}
-	if records[0].Code != opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_INDEX.String() {
+	if records[0].Code != opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_INDEX.String() {
 		t.Fatalf("first record code = %q", records[0].Code)
 	}
 	waitFor(t, "rejected + accepted counted", func() bool {
@@ -1558,12 +1552,12 @@ func TestSenderPartialRejectionDeadLettersExactEvents(t *testing.T) {
 func TestSenderBatchRejectDeadLettersWholeBatch(t *testing.T) {
 	t.Parallel()
 	fs := newFakeServer()
-	fs.onBatch = func(fs *fakeServer, b *opensplunkv1.EventBatch) {
-		_ = fs.send(&opensplunkv1.CollectResponse{
-			Payload: &opensplunkv1.CollectResponse_BatchReject{BatchReject: &opensplunkv1.BatchReject{
+	fs.onBatch = func(fs *fakeServer, b *opensplunk.EventBatch) {
+		_ = fs.send(&opensplunk.CollectResponse{
+			Payload: &opensplunk.CollectResponse_BatchReject{BatchReject: &opensplunk.BatchReject{
 				BatchId:       b.GetBatchId(),
 				BatchSequence: b.GetBatchSequence(),
-				Code:          opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_EVENT_ID_DIGEST_MISMATCH,
+				Code:          opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_EVENT_ID_DIGEST_MISMATCH,
 				Message:       "digest mismatch",
 			}},
 		})
@@ -1579,7 +1573,7 @@ func TestSenderBatchRejectDeadLettersWholeBatch(t *testing.T) {
 
 	records := sink.snapshot()
 	for _, r := range records {
-		if r.Code != opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_EVENT_ID_DIGEST_MISMATCH.String() {
+		if r.Code != opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_EVENT_ID_DIGEST_MISMATCH.String() {
 			t.Fatalf("record code = %q", r.Code)
 		}
 	}
@@ -1590,11 +1584,11 @@ func TestSenderBatchRejectDeadLettersWholeBatch(t *testing.T) {
 func TestSenderDeadLetterFailureRetainsWALBatch(t *testing.T) {
 	t.Parallel()
 	fs := newFakeServer()
-	fs.onBatch = func(fs *fakeServer, b *opensplunkv1.EventBatch) {
-		_ = fs.send(&opensplunkv1.CollectResponse{
-			Payload: &opensplunkv1.CollectResponse_BatchReject{BatchReject: &opensplunkv1.BatchReject{
+	fs.onBatch = func(fs *fakeServer, b *opensplunk.EventBatch) {
+		_ = fs.send(&opensplunk.CollectResponse{
+			Payload: &opensplunk.CollectResponse_BatchReject{BatchReject: &opensplunk.BatchReject{
 				BatchId: b.GetBatchId(), BatchSequence: b.GetBatchSequence(),
-				Code: opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS,
+				Code: opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS,
 			}},
 		})
 	}
@@ -1620,7 +1614,7 @@ func TestSenderReconnectsWithBackoff(t *testing.T) {
 	t.Parallel()
 	fs := newFakeServer()
 	fs.failCalls = 1 // first Collect fails after Hello, forcing a reconnect
-	fs.onBatch = func(fs *fakeServer, b *opensplunkv1.EventBatch) {
+	fs.onBatch = func(fs *fakeServer, b *opensplunk.EventBatch) {
 		fs.ackBatch(b.GetBatchSequence(), 1)
 	}
 	conn := startServer(t, fs)
@@ -1650,20 +1644,20 @@ func TestSenderGoodbyeOnCancel(t *testing.T) {
 		t.Fatalf("Run returned %v, want context.Canceled", err)
 	}
 	waitFor(t, "goodbye received", func() bool { return fs.goodbyeSeen() != nil })
-	if got := fs.goodbyeSeen().GetReason(); got != opensplunkv1.CollectorGoodbyeReason_COLLECTOR_GOODBYE_REASON_SHUTDOWN {
+	if got := fs.goodbyeSeen().GetReason(); got != opensplunk.CollectorGoodbyeReason_COLLECTOR_GOODBYE_REASON_SHUTDOWN {
 		t.Fatalf("goodbye reason = %v, want SHUTDOWN", got)
 	}
 }
 
 type preReadyGoodbyeServer struct {
-	opensplunkv1.UnimplementedCollectorIngestServiceServer
+	opensplunk.UnimplementedCollectorIngestServiceServer
 	helloSeen   chan struct{}
 	goodbyeSeen chan struct{}
 	helloOnce   sync.Once
 	goodbyeOnce sync.Once
 }
 
-func (server *preReadyGoodbyeServer) Collect(stream opensplunkv1.CollectorIngestService_CollectServer) error {
+func (server *preReadyGoodbyeServer) Collect(stream opensplunk.CollectorIngestService_CollectServer) error {
 	request, err := stream.Recv()
 	if err != nil {
 		return err
@@ -1839,11 +1833,11 @@ func TestHandleAckRejectsHostileUint32EventIndex(t *testing.T) {
 	c.inflight[1] = batch
 	c.inflightN = 1
 	c.highestSentBatchSequence = 1
-	err = c.handleAck(&opensplunkv1.BatchAck{
+	err = c.handleAck(&opensplunk.BatchAck{
 		BatchId:       batch.GetBatchId(),
 		BatchSequence: 1,
-		Durability:    opensplunkv1.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED,
-		RejectedEvents: []*opensplunkv1.EventRejection{{
+		Durability:    opensplunk.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED,
+		RejectedEvents: []*opensplunk.EventRejection{{
 			EventIndex: ^uint32(0),
 		}},
 	})
@@ -1862,21 +1856,21 @@ func TestResponseAndThrottleTimestampsValidateBeforeStateMutation(t *testing.T) 
 		t.Fatalf("New: %v", err)
 	}
 	c := s.newConn(context.Background(), func() {}, func() {}, nil)
-	if err := c.validateResponse(&opensplunkv1.CollectResponse{StreamSequence: 1}); err == nil ||
+	if err := c.validateResponse(&opensplunk.CollectResponse{StreamSequence: 1}); err == nil ||
 		!strings.Contains(err.Error(), "sent_at") {
 		t.Fatalf("missing response sent_at = %v, want validation error", err)
 	}
 	serverSentAt := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
-	invalidThrottles := []*opensplunkv1.Throttle{
+	invalidThrottles := []*opensplunk.Throttle{
 		{MinimumSendDelay: durationpb.New(-time.Second)},
 		{MinimumSendDelay: durationpb.New(ingestquota.MaximumRetryAfter + time.Nanosecond)},
 		{EffectiveUntil: &timestamppb.Timestamp{Seconds: 253402300800}},
 		{EffectiveUntil: timestamppb.New(serverSentAt.Add(ingestquota.MaximumRetryAfter + time.Nanosecond))},
 	}
 	for _, throttle := range invalidThrottles {
-		resp := &opensplunkv1.CollectResponse{
+		resp := &opensplunk.CollectResponse{
 			SentAt:  timestamppb.New(serverSentAt),
-			Payload: &opensplunkv1.CollectResponse_Throttle{Throttle: throttle},
+			Payload: &opensplunk.CollectResponse_Throttle{Throttle: throttle},
 		}
 		if err := c.handleThrottle(resp); err == nil {
 			t.Fatalf("handleThrottle accepted invalid timing: %+v", throttle)
@@ -1900,7 +1894,7 @@ func TestRetryRejectsDelayAboveServerMaximumBeforeStateMutation(t *testing.T) {
 	c := s.newConn(context.Background(), func() {}, func() {}, nil)
 	c.inflight[1] = batch
 	c.inflightN = 1
-	err = c.handleRetry(&opensplunkv1.RetryBatch{
+	err = c.handleRetry(&opensplunk.RetryBatch{
 		BatchId:       batch.GetBatchId(),
 		BatchSequence: batch.GetBatchSequence(),
 		RetryAfter:    durationpb.New(ingestquota.MaximumRetryAfter + time.Nanosecond),
@@ -2044,7 +2038,7 @@ func TestSenderAgainstRealService(t *testing.T) {
 	}
 	conn := startServer(t, svc)
 
-	events := []*opensplunkv1.LogEvent{validLogEvent("event-a", "main")}
+	events := []*opensplunk.LogEvent{validLogEvent("event-a", "main")}
 	batch := validBatch("collector-a", "batch-1", 1, events...)
 	q := newFakeQueue(batch)
 
@@ -2100,7 +2094,7 @@ func TestSenderAgainstRealServicePartialRejectDeadLetters(t *testing.T) {
 
 	// event-a in authorized index "main"; event-b in an unauthorized index so the
 	// real server rejects exactly that one event.
-	events := []*opensplunkv1.LogEvent{
+	events := []*opensplunk.LogEvent{
 		validLogEvent("event-a", "main"),
 		validLogEvent("event-b", "forbidden"),
 	}
@@ -2120,7 +2114,7 @@ func TestSenderAgainstRealServicePartialRejectDeadLetters(t *testing.T) {
 	if len(records) != 1 || records[0].Event.GetEventId() != "event-b" {
 		t.Fatalf("dead-lettered records = %#v, want exactly event-b", records)
 	}
-	if records[0].Code != opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_INDEX.String() {
+	if records[0].Code != opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_INDEX.String() {
 		t.Fatalf("dead-letter code = %q, want UNAUTHORIZED_INDEX", records[0].Code)
 	}
 	cancel()
@@ -2188,30 +2182,30 @@ func (*realServiceSessionManager) Disconnect(
 	return true, nil
 }
 
-func validLogEvent(id, index string) *opensplunkv1.LogEvent {
+func validLogEvent(id, index string) *opensplunk.LogEvent {
 	msg := "request completed"
-	return &opensplunkv1.LogEvent{
+	return &opensplunk.LogEvent{
 		EventId:         id,
 		IndexName:       index,
 		EventTime:       timestamppb.New(time.Now().Add(-time.Minute)),
 		CollectedAt:     timestamppb.New(time.Now().Add(-30 * time.Second)),
-		EventTimeSource: opensplunkv1.EventTimeSource_EVENT_TIME_SOURCE_PARSED,
+		EventTimeSource: opensplunk.EventTimeSource_EVENT_TIME_SOURCE_PARSED,
 		Host:            "host-a",
 		Source:          "/var/log/app.log",
 		Sourcetype:      "json",
-		Severity:        opensplunkv1.LogSeverity_LOG_SEVERITY_INFO,
+		Severity:        opensplunk.LogSeverity_LOG_SEVERITY_INFO,
 		Message:         &msg,
 		Raw:             []byte(`{"message":"request completed","status":200}`),
-		RawEncoding:     opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
-		Fields: &opensplunkv1.TypedObject{Fields: []*opensplunkv1.TypedObjectField{{
+		RawEncoding:     opensplunk.RawEncoding_RAW_ENCODING_UTF8,
+		Fields: &opensplunk.TypedObject{Fields: []*opensplunk.TypedObjectField{{
 			Name:  "status",
-			Value: &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_StringValue{StringValue: "200"}},
+			Value: &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_StringValue{StringValue: "200"}},
 		}}},
 	}
 }
 
-func validBatch(collectorID, batchID string, seq uint64, events ...*opensplunkv1.LogEvent) *opensplunkv1.EventBatch {
-	return &opensplunkv1.EventBatch{
+func validBatch(collectorID, batchID string, seq uint64, events ...*opensplunk.LogEvent) *opensplunk.EventBatch {
+	return &opensplunk.EventBatch{
 		CollectorId:           collectorID,
 		BatchId:               batchID,
 		BatchSequence:         seq,
@@ -2219,8 +2213,6 @@ func validBatch(collectorID, batchID string, seq uint64, events ...*opensplunkv1
 		Events:                events,
 		UncompressedSizeBytes: ingest.UncompressedEventBytes(events),
 		EventIdsSha256:        ingest.EventIDDigest(events),
-		ProtocolMajor:         1,
-		ProtocolMinor:         0,
 	}
 }
 
@@ -2250,7 +2242,7 @@ func (b *syncBuffer) String() string {
 func TestSenderRedeliversOrphanedInflightAfterReconnect(t *testing.T) {
 	t.Parallel()
 	fs := newFakeServer()
-	fs.batchErr = func(fs *fakeServer, _ *opensplunkv1.EventBatch) error {
+	fs.batchErr = func(fs *fakeServer, _ *opensplunk.EventBatch) error {
 		if fs.calls() == 1 {
 			// First connection: the batch arrives but the stream dies before an
 			// ack, leaving it unacked behind the queue's delivery cursor.
@@ -2258,7 +2250,7 @@ func TestSenderRedeliversOrphanedInflightAfterReconnect(t *testing.T) {
 		}
 		return nil
 	}
-	fs.onBatch = func(fs *fakeServer, b *opensplunkv1.EventBatch) {
+	fs.onBatch = func(fs *fakeServer, b *opensplunk.EventBatch) {
 		fs.ackBatch(b.GetBatchSequence(), uint32(len(b.GetEvents())))
 	}
 	conn := startServer(t, fs)
@@ -2288,13 +2280,13 @@ func TestSenderRedeliversOrphanedInflightAfterReconnect(t *testing.T) {
 func TestSenderContinuesWhenResumePointUnknown(t *testing.T) {
 	t.Parallel()
 	fs := newFakeServer()
-	fs.readyFn = func() *opensplunkv1.CollectorReady {
+	fs.readyFn = func() *opensplunk.CollectorReady {
 		ready := defaultReady()
 		resume := uint64(500)
 		ready.ResumeAfterBatchSequence = &resume
 		return ready
 	}
-	fs.onBatch = func(fs *fakeServer, b *opensplunkv1.EventBatch) {
+	fs.onBatch = func(fs *fakeServer, b *opensplunk.EventBatch) {
 		fs.ackBatch(b.GetBatchSequence(), uint32(len(b.GetEvents())))
 	}
 	conn := startServer(t, fs)

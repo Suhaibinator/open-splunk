@@ -6,7 +6,7 @@ import (
 	"crypto/subtle"
 	"errors"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
 	"google.golang.org/protobuf/proto"
@@ -34,7 +34,7 @@ func validKnowledgeCatalogDefinitionAuthority(object knowledgecatalog.Object) bo
 }
 
 func validKnowledgeProtoDefinitionAuthority(
-	object *opensplunkv1.KnowledgeObject,
+	object *opensplunk.KnowledgeObject,
 ) bool {
 	if object == nil {
 		return false
@@ -61,9 +61,9 @@ func validKnowledgeProtoDefinitionAuthority(
 }
 
 type knowledgeDefinitionAuthority struct {
-	definition   *opensplunkv1.KnowledgeObjectDefinition
+	definition   *opensplunk.KnowledgeObjectDefinition
 	digest       []byte
-	state        opensplunkv1.KnowledgeObjectState
+	state        opensplunk.KnowledgeObjectState
 	objectType   knowledgecatalog.ObjectType
 	appID        string
 	name         string
@@ -71,7 +71,7 @@ type knowledgeDefinitionAuthority struct {
 }
 
 func validKnowledgeDefinitionAuthority(authority knowledgeDefinitionAuthority) bool {
-	if authority.state == opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_QUARANTINED {
+	if authority.state == opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_QUARANTINED {
 		return authority.definition == nil && len(authority.digest) == 0
 	}
 	if authority.definition == nil || len(authority.digest) != sha256.Size {
@@ -124,19 +124,19 @@ func validKnowledgeDefinitionAuthority(authority knowledgeDefinitionAuthority) b
 
 func knowledgeCatalogStateToProto(
 	state knowledgecatalog.State,
-) (opensplunkv1.KnowledgeObjectState, bool) {
+) (opensplunk.KnowledgeObjectState, bool) {
 	switch state {
 	case knowledgecatalog.StateDraft:
-		return opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT, true
+		return opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT, true
 	case knowledgecatalog.StateActive:
-		return opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE, true
+		return opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE, true
 	case knowledgecatalog.StateDisabled:
-		return opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED, true
+		return opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED, true
 	case knowledgecatalog.StateQuarantined:
-		return opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_QUARANTINED, true
+		return opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_QUARANTINED, true
 	case knowledgecatalog.StateDeleted:
-		return opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DELETED, true
+		return opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DELETED, true
 	default:
-		return opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_UNSPECIFIED, false
+		return opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_UNSPECIFIED, false
 	}
 }

@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
@@ -742,7 +742,7 @@ func publicationTransitionWinnersFromHydration(
 				ordinal:        dependency.Ordinal,
 				targetObjectID: strings.Clone(dependency.TargetObjectID),
 				targetVersion:  dependency.TargetObjectVersion,
-				role:           opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
+				role:           opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
 			}
 		}
 		if err := validatePersistedPublicationDependencyScalars(persisted); err != nil {

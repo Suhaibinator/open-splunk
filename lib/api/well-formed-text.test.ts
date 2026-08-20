@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { KnowledgeSelectorMatchKind } from "@/gen/ts/open_splunk/v1/knowledge";
-import { ValueType } from "@/gen/ts/open_splunk/v1/value";
+import { KnowledgeSelectorMatchKind } from "@/gen/ts/open_splunk/knowledge";
+import { ValueType } from "@/gen/ts/open_splunk/value";
 
 import {
   hasUnpairedSurrogate,

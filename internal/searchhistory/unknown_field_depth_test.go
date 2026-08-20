@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
@@ -23,32 +23,32 @@ func futureHistoryField() protoreflect.RawFields {
 // sees each of them through the store's public write path.
 func TestRecordRejectsUnknownFieldsAtEveryTreeDepth(t *testing.T) {
 	created := time.Now().UTC().Add(-time.Minute)
-	sample := func() *opensplunkv1.SearchHistoryEntry {
+	sample := func() *opensplunk.SearchHistoryEntry {
 		return historyEntry(
 			"depth", "index=main", "search",
-			opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED, created,
+			opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED, created,
 		)
 	}
-	tests := map[string]func(*opensplunkv1.SearchHistoryEntry) protoreflect.Message{
-		"root": func(entry *opensplunkv1.SearchHistoryEntry) protoreflect.Message {
+	tests := map[string]func(*opensplunk.SearchHistoryEntry) protoreflect.Message{
+		"root": func(entry *opensplunk.SearchHistoryEntry) protoreflect.Message {
 			return entry.ProtoReflect()
 		},
-		"definition": func(entry *opensplunkv1.SearchHistoryEntry) protoreflect.Message {
+		"definition": func(entry *opensplunk.SearchHistoryEntry) protoreflect.Message {
 			return entry.Definition.ProtoReflect()
 		},
-		"definition time range": func(entry *opensplunkv1.SearchHistoryEntry) protoreflect.Message {
+		"definition time range": func(entry *opensplunk.SearchHistoryEntry) protoreflect.Message {
 			return entry.Definition.TimeRange.ProtoReflect()
 		},
-		"source": func(entry *opensplunkv1.SearchHistoryEntry) protoreflect.Message {
+		"source": func(entry *opensplunk.SearchHistoryEntry) protoreflect.Message {
 			return entry.Source.ProtoReflect()
 		},
-		"resolved time range": func(entry *opensplunkv1.SearchHistoryEntry) protoreflect.Message {
+		"resolved time range": func(entry *opensplunk.SearchHistoryEntry) protoreflect.Message {
 			return entry.ResolvedTimeRange.ProtoReflect()
 		},
-		"resolved earliest well-known timestamp": func(entry *opensplunkv1.SearchHistoryEntry) protoreflect.Message {
+		"resolved earliest well-known timestamp": func(entry *opensplunk.SearchHistoryEntry) protoreflect.Message {
 			return entry.ResolvedTimeRange.Earliest.ProtoReflect()
 		},
-		"created-at well-known timestamp": func(entry *opensplunkv1.SearchHistoryEntry) protoreflect.Message {
+		"created-at well-known timestamp": func(entry *opensplunk.SearchHistoryEntry) protoreflect.Message {
 			return entry.CreatedAt.ProtoReflect()
 		},
 	}
@@ -86,9 +86,9 @@ func TestRecordSeparatesTypedNilFromUnknownFields(t *testing.T) {
 
 	typedNilDefinition := historyEntry(
 		"typed-nil", "index=main", "search",
-		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED, created,
+		opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED, created,
 	)
-	typedNilDefinition.Definition = (*opensplunkv1.SearchDefinition)(nil)
+	typedNilDefinition.Definition = (*opensplunk.SearchDefinition)(nil)
 	_, err := store.Record(ctx, scope, typedNilDefinition)
 	if !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("typed-nil definition error = %v, want ErrInvalidArgument", err)
@@ -97,7 +97,7 @@ func TestRecordSeparatesTypedNilFromUnknownFields(t *testing.T) {
 		t.Fatalf("typed-nil definition error = %q, want the missing-definition reason", got)
 	}
 
-	var typedNilEntry *opensplunkv1.SearchHistoryEntry
+	var typedNilEntry *opensplunk.SearchHistoryEntry
 	if _, err := store.Record(ctx, scope, typedNilEntry); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("typed-nil entry error = %v, want ErrInvalidArgument", err)
 	}
@@ -111,10 +111,10 @@ func TestRecordRejectsUnknownFieldsInsideRepeatedKnowledgeObjects(t *testing.T) 
 	created := time.Now().UTC().Add(-time.Minute)
 	entry := historyEntry(
 		"repeated", "index=main", "search",
-		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED, created,
+		opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED, created,
 	)
 	entry.KnowledgeSnapshot = historyKnowledgeSnapshotSummary(3)
-	clean := proto.Clone(entry).(*opensplunkv1.SearchHistoryEntry)
+	clean := proto.Clone(entry).(*opensplunk.SearchHistoryEntry)
 	objects := entry.KnowledgeSnapshot.Objects
 	objects[len(objects)-1].ProtoReflect().SetUnknown(futureHistoryField())
 

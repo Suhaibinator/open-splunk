@@ -249,8 +249,7 @@ func TestRecoveryCommandContextStopIsIdempotentAndCancels(t *testing.T) {
 
 func testRecoveryReleaseIdentity() controlbackup.ReleaseIdentity {
 	return controlbackup.ReleaseIdentity{
-		ApplicationVersion: "0.1.0",
-		SourceRevision:     "development",
+		SourceRevision: "development",
 		SQLiteMigrations: controlbackup.MigrationIdentity{
 			SHA256: strings.Repeat("1", 64), LatestVersion: 1,
 		},

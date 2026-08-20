@@ -17,8 +17,8 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
-	opensplunk "github.com/Suhaibinator/open-splunk"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunkroot "github.com/Suhaibinator/open-splunk"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/buildinfo"
@@ -37,7 +37,6 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchws"
 	"github.com/Suhaibinator/open-splunk/internal/server"
-	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
 	"github.com/Suhaibinator/open-splunk/migrations"
 )
@@ -144,7 +143,7 @@ func runWithOptions(config options) error {
 			return err
 		}
 	}
-	release, err := opensplunk.EmbeddedRelease()
+	release, err := opensplunkroot.EmbeddedRelease()
 	if err != nil {
 		return fmt.Errorf("open embedded release: %w", err)
 	}
@@ -174,17 +173,13 @@ func runWithOptions(config options) error {
 	if err != nil {
 		return err
 	}
-	buildMetadata := &opensplunkv1.BuildMetadata{
-		ApplicationVersion:         release.Metadata.ApplicationVersion,
+	buildMetadata := &opensplunk.BuildMetadata{
 		SourceRevision:             release.Metadata.SourceRevision,
 		UiBuildId:                  release.Metadata.UIBuildID,
 		UiSha256:                   release.Metadata.UI.SHA256,
 		ProtobufSchemaSha256:       release.Metadata.ProtobufSchema.SHA256,
 		SqliteMigrationsSha256:     release.Metadata.SQLiteMigrations.SHA256,
-		SqliteMigrationVersion:     release.Metadata.SQLiteMigrations.LatestVersion,
 		ClickhouseMigrationsSha256: release.Metadata.ClickHouseMigrations.SHA256,
-		ClickhouseMigrationVersion: release.Metadata.ClickHouseMigrations.LatestVersion,
-		AssetManifestFormatVersion: release.Metadata.FormatVersion,
 	}
 	exportSettings := defaultExportRuntimeSettings()
 	if err := exportSettings.validate(); err != nil {
@@ -479,7 +474,7 @@ func runWithOptions(config options) error {
 		}()
 	}
 	var collectorHeartbeats *collectorfleet.HeartbeatRuntime
-	var ingestService opensplunkv1.CollectorIngestServiceServer
+	var ingestService opensplunk.CollectorIngestServiceServer
 	if strings.TrimSpace(config.collectorAddress) != "" {
 		ingestConfig := ingest.DefaultConfig()
 		ingestConfig.SessionCleanupTimeout = collectorSessionCleanupTimeout
@@ -753,7 +748,6 @@ func runWithOptions(config options) error {
 		AdministrativeAllowedHosts: config.httpAllowedHosts,
 		BrowserAuthenticator:       browserAuthenticator,
 		Bootstrap: server.BootstrapConfig{
-			APIVersion:         "v1",
 			Build:              buildMetadata,
 			MaximumExportRows:  exportSettings.maximumRowLimit,
 			MaximumExportBytes: exportSettings.maximumByteLimit,
@@ -774,7 +768,7 @@ func runWithOptions(config options) error {
 		httpConfig.HECOperations = hecOperations
 		httpConfig.Bootstrap.Features = append(
 			httpConfig.Bootstrap.Features,
-			opensplunkv1.ServerFeature_SERVER_FEATURE_HEC_INGESTION,
+			opensplunk.ServerFeature_SERVER_FEATURE_HEC_INGESTION,
 		)
 	}
 	if err := configureRuntimeKnowledgeManagement(
@@ -851,7 +845,7 @@ func runWithOptions(config options) error {
 		httpTransport,
 	)
 	if config.hecEnabled {
-		log.Printf("HEC v0.1 enabled on the existing %s listener", httpTransport)
+		log.Printf("HEC enabled on the existing %s listener", httpTransport)
 	}
 	if collectorListener == nil {
 		log.Printf("collector gRPC listener disabled; configure -collector-grpc-address and TLS to enable ingestion")
@@ -889,21 +883,19 @@ func runWithOptions(config options) error {
 
 func writeEmbeddedReleaseVerification(
 	output io.Writer,
-	release opensplunk.Release,
+	release opensplunkroot.Release,
 ) error {
 	if output == nil {
 		return errors.New("write embedded release verification: output is nil")
 	}
 	if err := buildinfo.WriteIdentity(output, buildinfo.Identity{
-		ApplicationVersion: release.Metadata.ApplicationVersion,
-		SourceRevision:     release.Metadata.SourceRevision,
+		SourceRevision: release.Metadata.SourceRevision,
 	}); err != nil {
 		return err
 	}
 	_, err := fmt.Fprintf(
 		output,
-		"spl_compatibility_version=%s\nui_build_id=%s\nui_sha256=%s\n",
-		spl.CompatibilityVersion,
+		"ui_build_id=%s\nui_sha256=%s\n",
 		release.Metadata.UIBuildID,
 		release.Metadata.UI.SHA256,
 	)
@@ -1243,7 +1235,7 @@ func registerHECEnabledFlag(
 		&config.hecEnabled,
 		"hec-enabled",
 		false,
-		"enable the complete HEC v0.1 route set on the browser/API listener",
+		"enable the complete HEC route set on the browser/API listener",
 	)
 }
 

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
@@ -285,20 +285,20 @@ func insertRuntimeIndexAdmissionACTIVEObject(
 	timestamp int64,
 ) {
 	t.Helper()
-	definition := &opensplunkv1.KnowledgeObjectDefinition{
+	definition := &opensplunk.KnowledgeObjectDefinition{
 		AppId:        appID,
 		Name:         name,
-		SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-		Selector: &opensplunkv1.KnowledgeSelector{
-			IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{
+		SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+		Selector: &opensplunk.KnowledgeSelector{
+			IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{{
 				Value: indexPattern,
 			}},
 		},
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
-			FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldExtraction{
+			FieldExtraction: &opensplunk.FieldExtractionDefinition{
 				InputField: "_raw",
-				Extraction: &opensplunkv1.FieldExtractionDefinition_Json{
-					Json: &opensplunkv1.JsonFieldExtractionDefinition{
+				Extraction: &opensplunk.FieldExtractionDefinition_Json{
+					Json: &opensplunk.JsonFieldExtractionDefinition{
 						Path:        "payload.value",
 						OutputField: outputField,
 					},

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 )
 
 func TestFieldViolationCanonicalizationAndBounds(t *testing.T) {
@@ -57,11 +57,11 @@ func TestFieldViolationCanonicalizationAndBounds(t *testing.T) {
 
 func TestDiagnosticCanonicalizationTotalOrderAndSuggestions(t *testing.T) {
 	input := []diagnosticIssue{
-		{path: "z", code: "W", severity: opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_WARNING, message: "warning"},
-		{path: "a", code: "E2", severity: opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR, message: "located", rangeValue: &byteRange{start: 1, end: 2, source: "abc"}},
-		{path: "a", code: "E1", severity: opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR, message: "absent", suggestions: []string{"z", "a", "z"}},
-		{path: "a", code: "E1", severity: opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR, message: "absent", suggestions: []string{"a", "z"}},
-		{path: "a", code: "I", severity: opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_INFO, message: "info"},
+		{path: "z", code: "W", severity: opensplunk.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_WARNING, message: "warning"},
+		{path: "a", code: "E2", severity: opensplunk.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR, message: "located", rangeValue: &byteRange{start: 1, end: 2, source: "abc"}},
+		{path: "a", code: "E1", severity: opensplunk.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR, message: "absent", suggestions: []string{"z", "a", "z"}},
+		{path: "a", code: "E1", severity: opensplunk.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR, message: "absent", suggestions: []string{"a", "z"}},
+		{path: "a", code: "I", severity: opensplunk.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_INFO, message: "info"},
 	}
 	values, _, truncated, err := canonicalDiagnosticsWithSources(context.Background(), input)
 	if err != nil || truncated || len(values) != 4 {
@@ -69,8 +69,8 @@ func TestDiagnosticCanonicalizationTotalOrderAndSuggestions(t *testing.T) {
 	}
 	if values[0].GetDiagnostic().GetCode() != "E1" || values[0].GetDiagnostic().GetSourceRange() != nil ||
 		values[1].GetDiagnostic().GetCode() != "E2" || values[1].GetDiagnostic().GetSourceRange() == nil ||
-		values[2].GetDiagnostic().GetSeverity() != opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_WARNING ||
-		values[3].GetDiagnostic().GetSeverity() != opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_INFO {
+		values[2].GetDiagnostic().GetSeverity() != opensplunk.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_WARNING ||
+		values[3].GetDiagnostic().GetSeverity() != opensplunk.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_INFO {
 		t.Fatalf("diagnostic order = %+v", values)
 	}
 	suggestions := values[0].GetDiagnostic().GetSuggestions()
@@ -84,19 +84,19 @@ func TestDiagnosticBoundsRetainErrorBeforeWarningSaturation(t *testing.T) {
 	for index := range input {
 		input[index] = diagnosticIssue{
 			path: fmt.Sprintf("w%03d", index), code: "W",
-			severity: opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_WARNING,
+			severity: opensplunk.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_WARNING,
 			message:  strings.Repeat("w", 4091),
 		}
 	}
 	errorIssue := diagnosticIssue{
 		path: "z", code: "E",
-		severity: opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR,
+		severity: opensplunk.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR,
 		message:  "invalid",
 	}
 	input = append(input, errorIssue, errorIssue)
 	values, _, truncated, err := canonicalDiagnosticsWithSources(context.Background(), input)
 	if err != nil || !truncated || len(values) != 192 ||
-		values[0].GetDiagnostic().GetSeverity() != opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR {
+		values[0].GetDiagnostic().GetSeverity() != opensplunk.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR {
 		t.Fatalf("warning saturation = %d/%t/%v first=%+v", len(values), truncated, err, values[0])
 	}
 
@@ -104,7 +104,7 @@ func TestDiagnosticBoundsRetainErrorBeforeWarningSaturation(t *testing.T) {
 	for index := range tiny {
 		tiny[index] = diagnosticIssue{
 			path: fmt.Sprintf("c%03d", index), code: "C", message: "m",
-			severity: opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_WARNING,
+			severity: opensplunk.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_WARNING,
 		}
 	}
 	values, _, truncated, err = canonicalDiagnosticsWithSources(context.Background(), tiny)
@@ -126,13 +126,13 @@ func TestIssueEntryValidationFailsClosed(t *testing.T) {
 		tooManySuggestions[index] = fmt.Sprintf("s%02d", index)
 	}
 	if _, _, _, err := canonicalDiagnosticsWithSources(context.Background(), []diagnosticIssue{{
-		code: "C", severity: opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR,
+		code: "C", severity: opensplunk.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR,
 		message: "m", suggestions: tooManySuggestions,
 	}}); !errors.Is(err, ErrInvariant) {
 		t.Fatalf("too many suggestions error = %v", err)
 	}
 	if _, _, _, err := canonicalDiagnosticsWithSources(context.Background(), []diagnosticIssue{{
-		code: "C", severity: opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_UNSPECIFIED,
+		code: "C", severity: opensplunk.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_UNSPECIFIED,
 		message: "m",
 	}}); !errors.Is(err, ErrInvariant) {
 		t.Fatalf("unspecified severity error = %v", err)

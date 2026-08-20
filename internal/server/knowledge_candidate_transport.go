@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"unicode/utf8"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
 	"google.golang.org/protobuf/encoding/protowire"
@@ -211,7 +211,7 @@ func validateWireStringValue(value []byte) string {
 }
 
 type knowledgeCandidateRequestWireResult struct {
-	candidateDefinition *opensplunkv1.KnowledgeObjectDefinition
+	candidateDefinition *opensplunk.KnowledgeObjectDefinition
 	objectID            *string
 	expectedVersion     *uint64
 	updateMask          *fieldmaskpb.FieldMask
@@ -442,11 +442,11 @@ func (builder *validateDefinitionWireBuilder) consumeBody(field validateWireFiel
 	}
 }
 
-func (builder *validateDefinitionWireBuilder) finish() *opensplunkv1.KnowledgeObjectDefinition {
-	result := &opensplunkv1.KnowledgeObjectDefinition{
+func (builder *validateDefinitionWireBuilder) finish() *opensplunk.KnowledgeObjectDefinition {
+	result := &opensplunk.KnowledgeObjectDefinition{
 		AppId:        validateWireStringValue(builder.appID),
 		Name:         validateWireStringValue(builder.name),
-		SharingScope: opensplunkv1.SharingScope(int32(builder.sharingScope)), // #nosec G115 -- protobuf varints intentionally retain generated unmarshal truncation semantics.
+		SharingScope: opensplunk.SharingScope(int32(builder.sharingScope)), // #nosec G115 -- protobuf varints intentionally retain generated unmarshal truncation semantics.
 	}
 	if builder.descriptionPresent {
 		value := validateWireStringValue(builder.description)
@@ -458,15 +458,15 @@ func (builder *validateDefinitionWireBuilder) finish() *opensplunkv1.KnowledgeOb
 	switch builder.bodyNumber {
 	case 10:
 		if builder.projection.retains(10) {
-			result.Body = &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{FieldExtraction: builder.fieldExtraction.finish()}
+			result.Body = &opensplunk.KnowledgeObjectDefinition_FieldExtraction{FieldExtraction: builder.fieldExtraction.finish()}
 		}
 	case 11:
 		if builder.projection.retains(11) {
-			result.Body = &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{FieldAlias: builder.fieldAlias.finishFieldAlias()}
+			result.Body = &opensplunk.KnowledgeObjectDefinition_FieldAlias{FieldAlias: builder.fieldAlias.finishFieldAlias()}
 		}
 	case 12:
 		if builder.projection.retains(12) {
-			result.Body = &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{CalculatedField: builder.calculatedField.finishCalculatedField()}
+			result.Body = &opensplunk.KnowledgeObjectDefinition_CalculatedField{CalculatedField: builder.calculatedField.finishCalculatedField()}
 		}
 	}
 	setValidateUnknown(result, builder.unknown)
@@ -474,7 +474,7 @@ func (builder *validateDefinitionWireBuilder) finish() *opensplunkv1.KnowledgeOb
 }
 
 type validateSelectorWireBuilder struct {
-	patterns [4][]*opensplunkv1.KnowledgeSelectorPattern
+	patterns [4][]*opensplunk.KnowledgeSelectorPattern
 	unknown  []byte
 }
 
@@ -501,8 +501,8 @@ func (builder *validateSelectorWireBuilder) consume(data []byte) error {
 	})
 }
 
-func (builder *validateSelectorWireBuilder) finish() *opensplunkv1.KnowledgeSelector {
-	result := &opensplunkv1.KnowledgeSelector{
+func (builder *validateSelectorWireBuilder) finish() *opensplunk.KnowledgeSelector {
+	result := &opensplunk.KnowledgeSelector{
 		IndexPatterns:      builder.patterns[0],
 		HostPatterns:       builder.patterns[1],
 		SourcePatterns:     builder.patterns[2],
@@ -542,9 +542,9 @@ func (builder *validateSelectorPatternWireBuilder) consume(data []byte) error {
 	})
 }
 
-func (builder *validateSelectorPatternWireBuilder) finish() *opensplunkv1.KnowledgeSelectorPattern {
-	result := &opensplunkv1.KnowledgeSelectorPattern{
-		MatchKind: opensplunkv1.KnowledgeSelectorMatchKind(int32(builder.matchKind)), // #nosec G115 -- protobuf varints intentionally retain generated unmarshal truncation semantics.
+func (builder *validateSelectorPatternWireBuilder) finish() *opensplunk.KnowledgeSelectorPattern {
+	result := &opensplunk.KnowledgeSelectorPattern{
+		MatchKind: opensplunk.KnowledgeSelectorMatchKind(int32(builder.matchKind)), // #nosec G115 -- protobuf varints intentionally retain generated unmarshal truncation semantics.
 		Value:     validateWireStringValue(builder.value),
 	}
 	setValidateUnknown(result, builder.unknown)
@@ -612,16 +612,16 @@ func (builder *validateFieldExtractionWireBuilder) consume(data []byte) error {
 	})
 }
 
-func (builder *validateFieldExtractionWireBuilder) finish() *opensplunkv1.FieldExtractionDefinition {
-	result := &opensplunkv1.FieldExtractionDefinition{
+func (builder *validateFieldExtractionWireBuilder) finish() *opensplunk.FieldExtractionDefinition {
+	result := &opensplunk.FieldExtractionDefinition{
 		InputField:        validateWireStringValue(builder.inputField),
-		OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior(int32(builder.overwrite)), // #nosec G115 -- protobuf varints intentionally retain generated unmarshal truncation semantics.
+		OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior(int32(builder.overwrite)), // #nosec G115 -- protobuf varints intentionally retain generated unmarshal truncation semantics.
 	}
 	switch builder.extractionNumber {
 	case 2:
-		result.Extraction = &opensplunkv1.FieldExtractionDefinition_Regex{Regex: builder.regex.finish()}
+		result.Extraction = &opensplunk.FieldExtractionDefinition_Regex{Regex: builder.regex.finish()}
 	case 3:
-		result.Extraction = &opensplunkv1.FieldExtractionDefinition_Json{Json: builder.json.finish()}
+		result.Extraction = &opensplunk.FieldExtractionDefinition_Json{Json: builder.json.finish()}
 	}
 	setValidateUnknown(result, builder.unknown)
 	return result
@@ -667,8 +667,8 @@ func (builder *validateRegexWireBuilder) consume(data []byte) error {
 	})
 }
 
-func (builder *validateRegexWireBuilder) finish() *opensplunkv1.RegexFieldExtractionDefinition {
-	result := &opensplunkv1.RegexFieldExtractionDefinition{Pattern: validateWireStringValue(builder.pattern), OutputFields: make([]string, len(builder.outputs))}
+func (builder *validateRegexWireBuilder) finish() *opensplunk.RegexFieldExtractionDefinition {
+	result := &opensplunk.RegexFieldExtractionDefinition{Pattern: validateWireStringValue(builder.pattern), OutputFields: make([]string, len(builder.outputs))}
 	for index, output := range builder.outputs {
 		result.OutputFields[index] = validateWireStringValue(output)
 	}
@@ -712,8 +712,8 @@ func (builder *validateJSONWireBuilder) consume(data []byte) error {
 	})
 }
 
-func (builder *validateJSONWireBuilder) finish() *opensplunkv1.JsonFieldExtractionDefinition {
-	result := &opensplunkv1.JsonFieldExtractionDefinition{Path: validateWireStringValue(builder.path), OutputField: validateWireStringValue(builder.output)}
+func (builder *validateJSONWireBuilder) finish() *opensplunk.JsonFieldExtractionDefinition {
+	result := &opensplunk.JsonFieldExtractionDefinition{Path: validateWireStringValue(builder.path), OutputField: validateWireStringValue(builder.output)}
 	setValidateUnknown(result, builder.unknown)
 	return result
 }
@@ -764,21 +764,21 @@ func (builder *validateStringPairOverwriteWireBuilder) consume(data []byte) erro
 	})
 }
 
-func (builder *validateStringPairOverwriteWireBuilder) finishFieldAlias() *opensplunkv1.FieldAliasDefinition {
-	result := &opensplunkv1.FieldAliasDefinition{
+func (builder *validateStringPairOverwriteWireBuilder) finishFieldAlias() *opensplunk.FieldAliasDefinition {
+	result := &opensplunk.FieldAliasDefinition{
 		SourceField:       validateWireStringValue(builder.first),
 		DestinationField:  validateWireStringValue(builder.second),
-		OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior(int32(builder.overwrite)), // #nosec G115 -- protobuf varints intentionally retain generated unmarshal truncation semantics.
+		OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior(int32(builder.overwrite)), // #nosec G115 -- protobuf varints intentionally retain generated unmarshal truncation semantics.
 	}
 	setValidateUnknown(result, builder.unknown)
 	return result
 }
 
-func (builder *validateStringPairOverwriteWireBuilder) finishCalculatedField() *opensplunkv1.CalculatedFieldDefinition {
-	result := &opensplunkv1.CalculatedFieldDefinition{
+func (builder *validateStringPairOverwriteWireBuilder) finishCalculatedField() *opensplunk.CalculatedFieldDefinition {
+	result := &opensplunk.CalculatedFieldDefinition{
 		DestinationField:  validateWireStringValue(builder.first),
 		Expression:        validateWireStringValue(builder.second),
-		OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior(int32(builder.overwrite)), // #nosec G115 -- protobuf varints intentionally retain generated unmarshal truncation semantics.
+		OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior(int32(builder.overwrite)), // #nosec G115 -- protobuf varints intentionally retain generated unmarshal truncation semantics.
 	}
 	setValidateUnknown(result, builder.unknown)
 	return result

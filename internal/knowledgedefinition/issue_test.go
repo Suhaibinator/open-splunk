@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"google.golang.org/protobuf/proto"
 )
@@ -14,12 +14,12 @@ import (
 func TestNormalizeReturnsDeterministicCandidateIssuesInFailFastOrder(t *testing.T) {
 	t.Parallel()
 
-	regexDefinition := func() *opensplunkv1.KnowledgeObjectDefinition {
+	regexDefinition := func() *opensplunk.KnowledgeObjectDefinition {
 		definition := validBaseDefinition()
-		definition.Body = &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
-			FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
-				Extraction: &opensplunkv1.FieldExtractionDefinition_Regex{
-					Regex: &opensplunkv1.RegexFieldExtractionDefinition{
+		definition.Body = &opensplunk.KnowledgeObjectDefinition_FieldExtraction{
+			FieldExtraction: &opensplunk.FieldExtractionDefinition{
+				Extraction: &opensplunk.FieldExtractionDefinition_Regex{
+					Regex: &opensplunk.RegexFieldExtractionDefinition{
 						Pattern:      `(?<value>.+)`,
 						OutputFields: []string{"value", "other"},
 					},
@@ -31,13 +31,13 @@ func TestNormalizeReturnsDeterministicCandidateIssuesInFailFastOrder(t *testing.
 
 	tests := []struct {
 		name       string
-		definition func() *opensplunkv1.KnowledgeObjectDefinition
+		definition func() *opensplunk.KnowledgeObjectDefinition
 		want       Issue
 		wantText   string
 	}{
 		{
 			name:       "definition root",
-			definition: func() *opensplunkv1.KnowledgeObjectDefinition { return nil },
+			definition: func() *opensplunk.KnowledgeObjectDefinition { return nil },
 			want: Issue{
 				Code:    IssueCodeInvalidDefinition,
 				Message: "is required",
@@ -46,7 +46,7 @@ func TestNormalizeReturnsDeterministicCandidateIssuesInFailFastOrder(t *testing.
 		},
 		{
 			name: "metadata",
-			definition: func() *opensplunkv1.KnowledgeObjectDefinition {
+			definition: func() *opensplunk.KnowledgeObjectDefinition {
 				definition := validAliasDefinition()
 				definition.AppId = " \t "
 				return definition
@@ -60,7 +60,7 @@ func TestNormalizeReturnsDeterministicCandidateIssuesInFailFastOrder(t *testing.
 		},
 		{
 			name: "fail fast before body",
-			definition: func() *opensplunkv1.KnowledgeObjectDefinition {
+			definition: func() *opensplunk.KnowledgeObjectDefinition {
 				definition := validAliasDefinition()
 				definition.AppId = ""
 				definition.Body = nil
@@ -75,10 +75,10 @@ func TestNormalizeReturnsDeterministicCandidateIssuesInFailFastOrder(t *testing.
 		},
 		{
 			name: "nested selector value",
-			definition: func() *opensplunkv1.KnowledgeObjectDefinition {
+			definition: func() *opensplunk.KnowledgeObjectDefinition {
 				definition := validAliasDefinition()
 				definition.Selector.IndexPatterns[0].Value = "prod*"
-				definition.Selector.IndexPatterns[0].MatchKind = opensplunkv1.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT
+				definition.Selector.IndexPatterns[0].MatchKind = opensplunk.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT
 				return definition
 			},
 			want: Issue{
@@ -90,7 +90,7 @@ func TestNormalizeReturnsDeterministicCandidateIssuesInFailFastOrder(t *testing.
 		},
 		{
 			name: "body",
-			definition: func() *opensplunkv1.KnowledgeObjectDefinition {
+			definition: func() *opensplunk.KnowledgeObjectDefinition {
 				definition := validBaseDefinition()
 				definition.Body = nil
 				return definition
@@ -104,7 +104,7 @@ func TestNormalizeReturnsDeterministicCandidateIssuesInFailFastOrder(t *testing.
 		},
 		{
 			name: "repeated body field",
-			definition: func() *opensplunkv1.KnowledgeObjectDefinition {
+			definition: func() *opensplunk.KnowledgeObjectDefinition {
 				definition := regexDefinition()
 				definition.GetFieldExtraction().GetRegex().OutputFields[1] = " value "
 				return definition
@@ -139,20 +139,20 @@ func TestNormalizeUnknownFieldIssuesUseDefinitionRelativePaths(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		mutate   func(*opensplunkv1.KnowledgeObjectDefinition)
+		mutate   func(*opensplunk.KnowledgeObjectDefinition)
 		wantPath string
 		wantText string
 	}{
 		{
 			name: "root",
-			mutate: func(definition *opensplunkv1.KnowledgeObjectDefinition) {
+			mutate: func(definition *opensplunk.KnowledgeObjectDefinition) {
 				definition.ProtoReflect().SetUnknown(testUnknownField())
 			},
 			wantText: "knowledge definition contains unknown fields: definition",
 		},
 		{
 			name: "message",
-			mutate: func(definition *opensplunkv1.KnowledgeObjectDefinition) {
+			mutate: func(definition *opensplunk.KnowledgeObjectDefinition) {
 				definition.Selector.ProtoReflect().SetUnknown(testUnknownField())
 			},
 			wantPath: "selector",
@@ -160,7 +160,7 @@ func TestNormalizeUnknownFieldIssuesUseDefinitionRelativePaths(t *testing.T) {
 		},
 		{
 			name: "repeated message",
-			mutate: func(definition *opensplunkv1.KnowledgeObjectDefinition) {
+			mutate: func(definition *opensplunk.KnowledgeObjectDefinition) {
 				definition.Selector.IndexPatterns[0].ProtoReflect().SetUnknown(testUnknownField())
 			},
 			wantPath: "selector.index_patterns[0]",
@@ -168,7 +168,7 @@ func TestNormalizeUnknownFieldIssuesUseDefinitionRelativePaths(t *testing.T) {
 		},
 		{
 			name: "oneof message",
-			mutate: func(definition *opensplunkv1.KnowledgeObjectDefinition) {
+			mutate: func(definition *opensplunk.KnowledgeObjectDefinition) {
 				definition.GetFieldAlias().ProtoReflect().SetUnknown(testUnknownField())
 			},
 			wantPath: "field_alias",
@@ -221,19 +221,19 @@ func TestNormalizePreflightIssuesCoverEveryBoundedShape(t *testing.T) {
 
 	type selectorDimension struct {
 		path string
-		set  func(*opensplunkv1.KnowledgeSelector, []*opensplunkv1.KnowledgeSelectorPattern)
+		set  func(*opensplunk.KnowledgeSelector, []*opensplunk.KnowledgeSelectorPattern)
 	}
 	dimensions := []selectorDimension{
-		{path: "selector.index_patterns", set: func(selector *opensplunkv1.KnowledgeSelector, patterns []*opensplunkv1.KnowledgeSelectorPattern) {
+		{path: "selector.index_patterns", set: func(selector *opensplunk.KnowledgeSelector, patterns []*opensplunk.KnowledgeSelectorPattern) {
 			selector.IndexPatterns = patterns
 		}},
-		{path: "selector.host_patterns", set: func(selector *opensplunkv1.KnowledgeSelector, patterns []*opensplunkv1.KnowledgeSelectorPattern) {
+		{path: "selector.host_patterns", set: func(selector *opensplunk.KnowledgeSelector, patterns []*opensplunk.KnowledgeSelectorPattern) {
 			selector.HostPatterns = patterns
 		}},
-		{path: "selector.source_patterns", set: func(selector *opensplunkv1.KnowledgeSelector, patterns []*opensplunkv1.KnowledgeSelectorPattern) {
+		{path: "selector.source_patterns", set: func(selector *opensplunk.KnowledgeSelector, patterns []*opensplunk.KnowledgeSelectorPattern) {
 			selector.SourcePatterns = patterns
 		}},
-		{path: "selector.sourcetype_patterns", set: func(selector *opensplunkv1.KnowledgeSelector, patterns []*opensplunkv1.KnowledgeSelectorPattern) {
+		{path: "selector.sourcetype_patterns", set: func(selector *opensplunk.KnowledgeSelector, patterns []*opensplunk.KnowledgeSelectorPattern) {
 			selector.SourcetypePatterns = patterns
 		}},
 	}
@@ -242,7 +242,7 @@ func TestNormalizePreflightIssuesCoverEveryBoundedShape(t *testing.T) {
 			t.Parallel()
 			definition := validAliasDefinition()
 			patterns := make(
-				[]*opensplunkv1.KnowledgeSelectorPattern,
+				[]*opensplunk.KnowledgeSelectorPattern,
 				knowledge.MaximumSelectorPatternsPerDimension+1,
 			)
 			dimension.set(definition.Selector, patterns)
@@ -267,10 +267,10 @@ func TestNormalizePreflightIssuesCoverEveryBoundedShape(t *testing.T) {
 	t.Run("regex outputs", func(t *testing.T) {
 		t.Parallel()
 		definition := validBaseDefinition()
-		definition.Body = &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
-			FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
-				Extraction: &opensplunkv1.FieldExtractionDefinition_Regex{
-					Regex: &opensplunkv1.RegexFieldExtractionDefinition{
+		definition.Body = &opensplunk.KnowledgeObjectDefinition_FieldExtraction{
+			FieldExtraction: &opensplunk.FieldExtractionDefinition{
+				Extraction: &opensplunk.FieldExtractionDefinition_Regex{
+					Regex: &opensplunk.RegexFieldExtractionDefinition{
 						Pattern:      `(?<value>.+)`,
 						OutputFields: make([]string, MaximumFieldExtractionOutputs+1),
 					},
@@ -360,12 +360,12 @@ func TestNormalizeIssueErrorsPreserveLegacyRootParity(t *testing.T) {
 
 	lowerLevelCauses := []struct {
 		name       string
-		definition func() *opensplunkv1.KnowledgeObjectDefinition
+		definition func() *opensplunk.KnowledgeObjectDefinition
 		cause      error
 	}{
 		{
 			name: "invalid text",
-			definition: func() *opensplunkv1.KnowledgeObjectDefinition {
+			definition: func() *opensplunk.KnowledgeObjectDefinition {
 				definition := validAliasDefinition()
 				definition.Name = ""
 				return definition
@@ -374,7 +374,7 @@ func TestNormalizeIssueErrorsPreserveLegacyRootParity(t *testing.T) {
 		},
 		{
 			name: "field destination",
-			definition: func() *opensplunkv1.KnowledgeObjectDefinition {
+			definition: func() *opensplunk.KnowledgeObjectDefinition {
 				definition := validAliasDefinition()
 				definition.GetFieldAlias().DestinationField = "INDEX.private"
 				return definition
@@ -383,7 +383,7 @@ func TestNormalizeIssueErrorsPreserveLegacyRootParity(t *testing.T) {
 		},
 		{
 			name: "selector",
-			definition: func() *opensplunkv1.KnowledgeObjectDefinition {
+			definition: func() *opensplunk.KnowledgeObjectDefinition {
 				definition := validAliasDefinition()
 				definition.Selector.IndexPatterns[0].Value = `bad\qescape`
 				return definition
@@ -392,7 +392,7 @@ func TestNormalizeIssueErrorsPreserveLegacyRootParity(t *testing.T) {
 		},
 		{
 			name: "nested resource limit",
-			definition: func() *opensplunkv1.KnowledgeObjectDefinition {
+			definition: func() *opensplunk.KnowledgeObjectDefinition {
 				definition := validAliasDefinition()
 				definition.Name = strings.Repeat("n", knowledge.MaximumObjectNameBytes+1)
 				return definition

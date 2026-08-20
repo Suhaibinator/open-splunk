@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -18,14 +18,14 @@ func TestWriterHiddenCorruptRegistryIsIndistinguishableFromAbsence(t *testing.T)
 		writerTestAppTwo,
 		"hidden-corrupt-writer-object",
 		&description,
-		opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+		opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 		"hidden-corrupt-host",
 		"source_field",
 		"hidden_destination",
 	)
-	created, err := harness.writer.Create(harness.actorCtx, harness.writeScope, &opensplunkv1.CreateKnowledgeObjectRequest{
+	created, err := harness.writer.Create(harness.actorCtx, harness.writeScope, &opensplunk.CreateKnowledgeObjectRequest{
 		Definition:      hiddenDefinition,
-		InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+		InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 		ClientRequestId: "hidden-corrupt-create-0001",
 	})
 	if err != nil {
@@ -57,7 +57,7 @@ func TestWriterHiddenCorruptRegistryIsIndistinguishableFromAbsence(t *testing.T)
 	restrictedScope.WritableAppIDs = []string{writerTestApp}
 	stable := readWriterAuthoritySnapshot(t, harness.database)
 	missingID := "ko_missing_hidden_equivalent"
-	updatedDefinition := proto.Clone(hiddenDefinition).(*opensplunkv1.KnowledgeObjectDefinition)
+	updatedDefinition := proto.Clone(hiddenDefinition).(*opensplunk.KnowledgeObjectDefinition)
 	updatedDescription := "updated hidden draft"
 	updatedDefinition.Description = &updatedDescription
 
@@ -69,7 +69,7 @@ func TestWriterHiddenCorruptRegistryIsIndistinguishableFromAbsence(t *testing.T)
 		{
 			name: "update",
 			hidden: func() error {
-				_, err := harness.writer.Update(harness.actorCtx, restrictedScope, &opensplunkv1.UpdateKnowledgeObjectRequest{
+				_, err := harness.writer.Update(harness.actorCtx, restrictedScope, &opensplunk.UpdateKnowledgeObjectRequest{
 					KnowledgeObjectId: hiddenID,
 					ExpectedVersion:   1,
 					Definition:        updatedDefinition,
@@ -79,7 +79,7 @@ func TestWriterHiddenCorruptRegistryIsIndistinguishableFromAbsence(t *testing.T)
 				return err
 			},
 			absent: func() error {
-				_, err := harness.writer.Update(harness.actorCtx, restrictedScope, &opensplunkv1.UpdateKnowledgeObjectRequest{
+				_, err := harness.writer.Update(harness.actorCtx, restrictedScope, &opensplunk.UpdateKnowledgeObjectRequest{
 					KnowledgeObjectId: missingID,
 					ExpectedVersion:   1,
 					Definition:        updatedDefinition,
@@ -92,19 +92,19 @@ func TestWriterHiddenCorruptRegistryIsIndistinguishableFromAbsence(t *testing.T)
 		{
 			name: "set state",
 			hidden: func() error {
-				_, err := harness.writer.SetState(harness.actorCtx, restrictedScope, &opensplunkv1.SetKnowledgeObjectStateRequest{
+				_, err := harness.writer.SetState(harness.actorCtx, restrictedScope, &opensplunk.SetKnowledgeObjectStateRequest{
 					KnowledgeObjectId: hiddenID,
 					ExpectedVersion:   1,
-					State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+					State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 					ClientRequestId:   "hidden-corrupt-state-0001",
 				})
 				return err
 			},
 			absent: func() error {
-				_, err := harness.writer.SetState(harness.actorCtx, restrictedScope, &opensplunkv1.SetKnowledgeObjectStateRequest{
+				_, err := harness.writer.SetState(harness.actorCtx, restrictedScope, &opensplunk.SetKnowledgeObjectStateRequest{
 					KnowledgeObjectId: missingID,
 					ExpectedVersion:   1,
-					State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+					State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 					ClientRequestId:   "missing-corrupt-state-0001",
 				})
 				return err
@@ -113,7 +113,7 @@ func TestWriterHiddenCorruptRegistryIsIndistinguishableFromAbsence(t *testing.T)
 		{
 			name: "delete",
 			hidden: func() error {
-				_, err := harness.writer.Delete(harness.actorCtx, restrictedScope, &opensplunkv1.DeleteKnowledgeObjectRequest{
+				_, err := harness.writer.Delete(harness.actorCtx, restrictedScope, &opensplunk.DeleteKnowledgeObjectRequest{
 					KnowledgeObjectId: hiddenID,
 					ExpectedVersion:   1,
 					ClientRequestId:   "hidden-corrupt-delete-0001",
@@ -121,7 +121,7 @@ func TestWriterHiddenCorruptRegistryIsIndistinguishableFromAbsence(t *testing.T)
 				return err
 			},
 			absent: func() error {
-				_, err := harness.writer.Delete(harness.actorCtx, restrictedScope, &opensplunkv1.DeleteKnowledgeObjectRequest{
+				_, err := harness.writer.Delete(harness.actorCtx, restrictedScope, &opensplunk.DeleteKnowledgeObjectRequest{
 					KnowledgeObjectId: missingID,
 					ExpectedVersion:   1,
 					ClientRequestId:   "missing-corrupt-delete-0001",

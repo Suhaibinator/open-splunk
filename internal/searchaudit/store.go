@@ -8,7 +8,7 @@ import (
 	"slices"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
@@ -262,7 +262,7 @@ func validateAppendInputs(
 	store *Store,
 	tenantID string,
 	definition searchhistory.SearchAttemptAuditEvent,
-) (*opensplunkv1.KnowledgeSnapshotRef, error) {
+) (*opensplunk.KnowledgeSnapshotRef, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("%w: search-attempt audit context is nil", control.ErrInvalidArgument)
 	}

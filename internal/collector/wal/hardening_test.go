@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -123,16 +123,6 @@ func TestOpenRejectsInvalidOrUnknownMetaState(t *testing.T) {
 	}
 }
 
-func TestOpenRejectsZeroProtocolMajor(t *testing.T) {
-	t.Parallel()
-	opts := defaultOpts(t.TempDir())
-	opts.ProtocolMajor = 0
-	if opened, err := Open(opts); err == nil {
-		_ = opened.Close()
-		t.Fatal("Open accepted ProtocolMajor zero")
-	}
-}
-
 func TestRecoveryQuarantinesSparseRecordAboveStableAllocationBound(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -194,7 +184,7 @@ func TestAppendRejectsPayloadAboveStableRecoveryBound(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = q.Close() })
 
-	_, err = q.Append([]*opensplunkv1.LogEvent{{
+	_, err = q.Append([]*opensplunk.LogEvent{{
 		EventId: "oversized",
 		Raw:     make([]byte, int(maximumRecordPayloadBytes)+1),
 	}})
@@ -218,7 +208,7 @@ func TestRecoveryIgnoresLoweredMaxQueueForPreviouslyValidRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if _, err := q.Append([]*opensplunkv1.LogEvent{{
+	if _, err := q.Append([]*opensplunk.LogEvent{{
 		EventId: "retained",
 		Raw:     make([]byte, 256<<10),
 	}}); err != nil {

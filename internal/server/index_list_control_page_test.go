@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 )
 
@@ -70,19 +70,19 @@ func TestIndexListUsesNormalizedControlKeysetPages(t *testing.T) {
 	}
 	pageSize := uint32(1)
 	filter := " A "
-	input := &opensplunkv1.ListIndexesRequest{
-		Page: &opensplunkv1.PageRequest{
+	input := &opensplunk.ListIndexesRequest{
+		Page: &opensplunk.PageRequest{
 			PageSize:         &pageSize,
 			IncludeTotalSize: true,
 		},
-		StateFilters: []opensplunkv1.IndexState{
-			opensplunkv1.IndexState_INDEX_STATE_ARCHIVED,
-			opensplunkv1.IndexState_INDEX_STATE_ACTIVE,
-			opensplunkv1.IndexState_INDEX_STATE_ARCHIVED,
+		StateFilters: []opensplunk.IndexState{
+			opensplunk.IndexState_INDEX_STATE_ARCHIVED,
+			opensplunk.IndexState_INDEX_STATE_ACTIVE,
+			opensplunk.IndexState_INDEX_STATE_ARCHIVED,
 		},
 		TextFilter:    &filter,
-		SortBy:        opensplunkv1.IndexSortBy_INDEX_SORT_BY_CREATED_AT,
-		SortDirection: opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING,
+		SortBy:        opensplunk.IndexSortBy_INDEX_SORT_BY_CREATED_AT,
+		SortDirection: opensplunk.SortDirection_SORT_DIRECTION_DESCENDING,
 	}
 
 	first, err := handler.listIndexes(
@@ -108,8 +108,8 @@ func TestIndexListUsesNormalizedControlKeysetPages(t *testing.T) {
 	}
 	first.release()
 
-	secondInput := &opensplunkv1.ListIndexesRequest{
-		Page: &opensplunkv1.PageRequest{
+	secondInput := &opensplunk.ListIndexesRequest{
+		Page: &opensplunk.PageRequest{
 			PageSize:         &pageSize,
 			PageToken:        &token,
 			IncludeTotalSize: true,
@@ -236,8 +236,8 @@ func TestIndexListMapsInvalidatedCursorBeforeNativeStatistics(t *testing.T) {
 			indexListPath,
 			nil,
 		),
-		&opensplunkv1.ListIndexesRequest{
-			Page:         &opensplunkv1.PageRequest{PageSize: &pageSize},
+		&opensplunk.ListIndexesRequest{
+			Page:         &opensplunk.PageRequest{PageSize: &pageSize},
 			IncludeStats: true,
 		},
 	)
@@ -257,8 +257,8 @@ func TestIndexListMapsInvalidatedCursorBeforeNativeStatistics(t *testing.T) {
 			indexListPath,
 			nil,
 		),
-		&opensplunkv1.ListIndexesRequest{
-			Page: &opensplunkv1.PageRequest{
+		&opensplunk.ListIndexesRequest{
+			Page: &opensplunk.PageRequest{
 				PageSize:  &pageSize,
 				PageToken: &token,
 			},
@@ -526,7 +526,7 @@ func TestIndexListCursorRejectsTimestampOutsideControlRange(t *testing.T) {
 	if _, err := handler.indexListCursor(
 		token,
 		"test-fingerprint",
-		opensplunkv1.IndexSortBy_INDEX_SORT_BY_CREATED_AT,
+		opensplunk.IndexSortBy_INDEX_SORT_BY_CREATED_AT,
 	); err == nil {
 		t.Fatal("cursor timestamp outside the control range was accepted")
 	}

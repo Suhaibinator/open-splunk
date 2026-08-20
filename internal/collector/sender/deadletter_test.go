@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 )
 
 func TestFileDeadLetterSinkAppendsJSONL(t *testing.T) {
@@ -27,7 +27,7 @@ func TestFileDeadLetterSinkAppendsJSONL(t *testing.T) {
 
 	rejectedAt := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
 	if err := sink.WriteRecords([]DeadLetterRecord{{
-		Event:         &opensplunkv1.LogEvent{EventId: "e1", IndexName: "main"},
+		Event:         &opensplunk.LogEvent{EventId: "e1", IndexName: "main"},
 		BatchID:       "batch-1",
 		BatchSequence: 7,
 		Code:          "EVENT_REJECTION_CODE_UNAUTHORIZED_INDEX",
@@ -38,7 +38,7 @@ func TestFileDeadLetterSinkAppendsJSONL(t *testing.T) {
 	}
 	// A second call must append, not truncate.
 	if err := sink.WriteRecords([]DeadLetterRecord{{
-		Event:         &opensplunkv1.LogEvent{EventId: "e2"},
+		Event:         &opensplunk.LogEvent{EventId: "e2"},
 		BatchID:       "batch-1",
 		BatchSequence: 8,
 		Code:          "BATCH_REJECTION_CODE_BATCH_TOO_LARGE",
@@ -186,7 +186,7 @@ func TestFileDeadLetterSinkRotatesAndLimitsBackups(t *testing.T) {
 	records := make([]DeadLetterRecord, 4)
 	for index := range records {
 		records[index] = DeadLetterRecord{
-			Event:         &opensplunkv1.LogEvent{EventId: fmt.Sprintf("e%d", index+1)},
+			Event:         &opensplunk.LogEvent{EventId: fmt.Sprintf("e%d", index+1)},
 			BatchID:       "batch",
 			BatchSequence: uint64(index + 1),
 			Code:          "TEST_REJECTION",

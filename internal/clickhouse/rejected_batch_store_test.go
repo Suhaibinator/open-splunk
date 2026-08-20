@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
@@ -687,7 +687,7 @@ func TestBatchRejectionMetadataRejectsCorruptionAndInvalidMessages(t *testing.T)
 			metadata: mutateFraming(func(payload []byte) {
 				payload[len(batchRejectionMetadataMagic)]++
 			}),
-			wantError: "invalid version",
+			wantError: "unsupported version",
 		},
 		{
 			name: "valid checksum invalid length",
@@ -720,19 +720,19 @@ func TestBatchRejectionMetadataRejectsCorruptionAndInvalidMessages(t *testing.T)
 
 	for _, test := range []struct {
 		name string
-		edit func(*opensplunkv1.BatchReject)
+		edit func(*opensplunk.BatchReject)
 	}{
-		{name: "nil", edit: func(rejection *opensplunkv1.BatchReject) { *rejection = opensplunkv1.BatchReject{} }},
-		{name: "unspecified code", edit: func(rejection *opensplunkv1.BatchReject) {
-			rejection.Code = opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_UNSPECIFIED
+		{name: "nil", edit: func(rejection *opensplunk.BatchReject) { *rejection = opensplunk.BatchReject{} }},
+		{name: "unspecified code", edit: func(rejection *opensplunk.BatchReject) {
+			rejection.Code = opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_UNSPECIFIED
 		}},
-		{name: "unknown code", edit: func(rejection *opensplunkv1.BatchReject) { rejection.Code = 99 }},
-		{name: "nil violation", edit: func(rejection *opensplunkv1.BatchReject) {
+		{name: "unknown code", edit: func(rejection *opensplunk.BatchReject) { rejection.Code = 99 }},
+		{name: "nil violation", edit: func(rejection *opensplunk.BatchReject) {
 			rejection.Violations = append(rejection.Violations, nil)
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			rejection := proto.Clone(valid).(*opensplunkv1.BatchReject)
+			rejection := proto.Clone(valid).(*opensplunk.BatchReject)
 			test.edit(rejection)
 			if _, err := encodeBatchRejectionMetadata(rejection); err == nil {
 				t.Fatalf("encodeBatchRejectionMetadata accepted %#v", rejection)
@@ -752,12 +752,12 @@ func validStoreBatchRejection() ingest.StoreBatchRejection {
 			SourceBatchSHA256: batch.SourceBatchSHA256,
 		},
 		ReceivedAt: batch.ReceivedAt,
-		Rejection: &opensplunkv1.BatchReject{
+		Rejection: &opensplunk.BatchReject{
 			BatchId:       batch.BatchID,
 			BatchSequence: batch.BatchSequence,
-			Code:          opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS,
+			Code:          opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS,
 			Message:       "batch contains no authorized valid events",
-			Violations: []*opensplunkv1.FieldViolation{{
+			Violations: []*opensplunk.FieldViolation{{
 				FieldPath: "events[0].index_name",
 				Code:      "unauthorized_index",
 				Message:   "token is not authorized for the requested index",

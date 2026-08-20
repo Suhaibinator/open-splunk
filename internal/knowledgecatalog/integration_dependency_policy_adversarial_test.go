@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 )
 
@@ -339,7 +339,7 @@ func integrationDependencyDefinition(
 	identity integrationDependencyIdentity,
 	name string,
 	marker string,
-) *opensplunkv1.KnowledgeObjectDefinition {
+) *opensplunk.KnowledgeObjectDefinition {
 	description := fmt.Sprintf("%s dependency policy definition", marker)
 	if strings.Contains(name, "target") {
 		return dependencyExtractionDefinition(

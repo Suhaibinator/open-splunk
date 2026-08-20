@@ -8,7 +8,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"google.golang.org/protobuf/proto"
@@ -21,7 +21,7 @@ const (
 
 // BuildInactive normalizes a candidate for bounded inactive persistence. It
 // deliberately performs no publication compilation or dependency derivation.
-func BuildInactive(ctx context.Context, submitted *opensplunkv1.KnowledgeObjectDefinition) (Result, error) {
+func BuildInactive(ctx context.Context, submitted *opensplunk.KnowledgeObjectDefinition) (Result, error) {
 	if err := contextError(ctx); err != nil {
 		return Result{}, err
 	}
@@ -42,12 +42,12 @@ func BuildInactive(ctx context.Context, submitted *opensplunkv1.KnowledgeObjectD
 	if patterns > math.MaxUint32 {
 		return Result{}, ErrInvariant
 	}
-	result := &opensplunkv1.KnowledgeValidationResult{
+	result := &opensplunk.KnowledgeValidationResult{
 		Valid:                true,
 		ObjectType:           normalized.ObjectType,
 		NormalizedDefinition: normalized.Definition,
 		DefinitionSha256:     bytes.Clone(normalized.Digest[:]),
-		Resources: &opensplunkv1.KnowledgeResourceEstimate{
+		Resources: &opensplunk.KnowledgeResourceEstimate{
 			SelectorPatterns:          uint32(patterns),
 			NormalizedDefinitionBytes: uint64(len(normalized.Bytes)),
 		},
@@ -58,7 +58,7 @@ func BuildInactive(ctx context.Context, submitted *opensplunkv1.KnowledgeObjectD
 // PrepareActive normalizes and singleton-compiles only the submitted
 // candidate. It never compiles a catalog cohort and never classifies catalog or
 // transition failures.
-func PrepareActive(ctx context.Context, submitted *opensplunkv1.KnowledgeObjectDefinition) (ActivePreparation, error) {
+func PrepareActive(ctx context.Context, submitted *opensplunk.KnowledgeObjectDefinition) (ActivePreparation, error) {
 	if err := contextError(ctx); err != nil {
 		return ActivePreparation{}, err
 	}
@@ -89,10 +89,10 @@ func PrepareActive(ctx context.Context, submitted *opensplunkv1.KnowledgeObjectD
 		if !candidateIssue {
 			return ActivePreparation{}, ErrInvariant
 		}
-		var detachedSubmitted *opensplunkv1.KnowledgeObjectDefinition
+		var detachedSubmitted *opensplunk.KnowledgeObjectDefinition
 		if issue.Range != nil {
 			var ok bool
-			detachedSubmitted, ok = proto.Clone(submitted).(*opensplunkv1.KnowledgeObjectDefinition)
+			detachedSubmitted, ok = proto.Clone(submitted).(*opensplunk.KnowledgeObjectDefinition)
 			if !ok || detachedSubmitted == nil {
 				return ActivePreparation{}, ErrInvariant
 			}
@@ -138,7 +138,7 @@ func compileSingleton(normalized knowledgedefinition.Normalized) (knowledgeprogr
 	if !ok || normalized.Definition == nil {
 		return knowledgeprogram.Program{}, ErrInvariant
 	}
-	object := &opensplunkv1.KnowledgeSnapshotObject{
+	object := &opensplunk.KnowledgeSnapshotObject{
 		ResolutionOrdinal: 0,
 		Stage:             stage,
 		StageOrdinal:      0,
@@ -152,7 +152,7 @@ func compileSingleton(normalized knowledgedefinition.Normalized) (knowledgeprogr
 		Definition:        normalized.Definition,
 		DefinitionSha256:  bytes.Clone(normalized.Digest[:]),
 	}
-	return knowledgeprogram.Compile([]*opensplunkv1.KnowledgeSnapshotObject{object})
+	return knowledgeprogram.Compile([]*opensplunk.KnowledgeSnapshotObject{object})
 }
 
 // BuildDependencyUnavailable creates the only closed transition-adjacent
@@ -167,7 +167,7 @@ func (candidate ActiveCandidate) BuildDependencyUnavailable(ctx context.Context)
 	}
 	diagnostics, sources, truncated, err := canonicalDiagnosticsWithSources(ctx, []diagnosticIssue{{
 		code:     "KNOWLEDGE_DEPENDENCY_UNAVAILABLE",
-		severity: opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR,
+		severity: opensplunk.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR,
 		message:  "one or more candidate dependencies are unavailable",
 	}})
 	if err != nil || truncated || len(diagnostics) != 1 {
@@ -176,13 +176,13 @@ func (candidate ActiveCandidate) BuildDependencyUnavailable(ctx context.Context)
 		}
 		return Result{}, ErrInvariant
 	}
-	return newResult(ctx, resultKindInvalid, &opensplunkv1.KnowledgeValidationResult{
+	return newResult(ctx, resultKindInvalid, &opensplunk.KnowledgeValidationResult{
 		ObjectType:  candidate.state.objectType,
 		Diagnostics: diagnostics,
 	}, sources)
 }
 
-func invalidDefinitionResult(ctx context.Context, objectType opensplunkv1.KnowledgeObjectType, issue knowledgedefinition.Issue) (Result, error) {
+func invalidDefinitionResult(ctx context.Context, objectType opensplunk.KnowledgeObjectType, issue knowledgedefinition.Issue) (Result, error) {
 	message := ""
 	switch issue.Code {
 	case knowledgedefinition.IssueCodeInvalidDefinition:
@@ -203,7 +203,7 @@ func invalidDefinitionResult(ctx context.Context, objectType opensplunkv1.Knowle
 		}
 		return Result{}, ErrInvariant
 	}
-	return newResult(ctx, resultKindInvalid, &opensplunkv1.KnowledgeValidationResult{
+	return newResult(ctx, resultKindInvalid, &opensplunk.KnowledgeValidationResult{
 		ObjectType:      objectType,
 		FieldViolations: violations,
 	}, nil)
@@ -211,8 +211,8 @@ func invalidDefinitionResult(ctx context.Context, objectType opensplunkv1.Knowle
 
 func invalidProgramResult(
 	ctx context.Context,
-	submitted, normalized *opensplunkv1.KnowledgeObjectDefinition,
-	objectType opensplunkv1.KnowledgeObjectType,
+	submitted, normalized *opensplunk.KnowledgeObjectDefinition,
+	objectType opensplunk.KnowledgeObjectType,
 	issue knowledgeprogram.Issue,
 ) (Result, error) {
 	if !allowedProgramIssue(issue, normalized) {
@@ -221,7 +221,7 @@ func invalidProgramResult(
 	projected := diagnosticIssue{
 		path:        strings.Clone(issue.FieldPath),
 		code:        string(issue.Code),
-		severity:    opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR,
+		severity:    opensplunk.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR,
 		message:     strings.Clone(issue.Message),
 		suggestions: append([]string(nil), issue.Suggestions...),
 	}
@@ -239,13 +239,13 @@ func invalidProgramResult(
 		}
 		return Result{}, ErrInvariant
 	}
-	return newResult(ctx, resultKindInvalid, &opensplunkv1.KnowledgeValidationResult{
+	return newResult(ctx, resultKindInvalid, &opensplunk.KnowledgeValidationResult{
 		ObjectType:  objectType,
 		Diagnostics: diagnostics,
 	}, sources)
 }
 
-func allowedProgramIssue(issue knowledgeprogram.Issue, normalized *opensplunkv1.KnowledgeObjectDefinition) bool {
+func allowedProgramIssue(issue knowledgeprogram.Issue, normalized *opensplunk.KnowledgeObjectDefinition) bool {
 	if issue.FieldPath == "" || issue.Message == "" {
 		return false
 	}
@@ -297,14 +297,14 @@ func validRegexCaptureIssuePath(value string, outputCount int) bool {
 	return err == nil && parsed >= 0 && parsed < outputCount
 }
 
-func normalizedRegexDefinition(definition *opensplunkv1.KnowledgeObjectDefinition) *opensplunkv1.RegexFieldExtractionDefinition {
+func normalizedRegexDefinition(definition *opensplunk.KnowledgeObjectDefinition) *opensplunk.RegexFieldExtractionDefinition {
 	if definition == nil || definition.GetFieldExtraction() == nil {
 		return nil
 	}
 	return definition.GetFieldExtraction().GetRegex()
 }
 
-func normalizedJSONDefinition(definition *opensplunkv1.KnowledgeObjectDefinition) *opensplunkv1.JsonFieldExtractionDefinition {
+func normalizedJSONDefinition(definition *opensplunk.KnowledgeObjectDefinition) *opensplunk.JsonFieldExtractionDefinition {
 	if definition == nil || definition.GetFieldExtraction() == nil {
 		return nil
 	}
@@ -312,7 +312,7 @@ func normalizedJSONDefinition(definition *opensplunkv1.KnowledgeObjectDefinition
 }
 
 func rebaseProgramRange(
-	submitted, normalized *opensplunkv1.KnowledgeObjectDefinition,
+	submitted, normalized *opensplunk.KnowledgeObjectDefinition,
 	issue knowledgeprogram.Issue,
 ) (*byteRange, error) {
 	if submitted == nil || normalized == nil || issue.Range == nil {
@@ -376,18 +376,18 @@ func asciiWhitespace(value byte) bool {
 	return value == ' ' || value >= '\t' && value <= '\r'
 }
 
-func objectTypeFromDefinition(definition *opensplunkv1.KnowledgeObjectDefinition) opensplunkv1.KnowledgeObjectType {
+func objectTypeFromDefinition(definition *opensplunk.KnowledgeObjectDefinition) opensplunk.KnowledgeObjectType {
 	if definition == nil {
-		return opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_UNSPECIFIED
+		return opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_UNSPECIFIED
 	}
 	switch definition.GetBody().(type) {
-	case *opensplunkv1.KnowledgeObjectDefinition_FieldExtraction:
-		return opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION
-	case *opensplunkv1.KnowledgeObjectDefinition_FieldAlias:
-		return opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS
-	case *opensplunkv1.KnowledgeObjectDefinition_CalculatedField:
-		return opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD
+	case *opensplunk.KnowledgeObjectDefinition_FieldExtraction:
+		return opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION
+	case *opensplunk.KnowledgeObjectDefinition_FieldAlias:
+		return opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS
+	case *opensplunk.KnowledgeObjectDefinition_CalculatedField:
+		return opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD
 	default:
-		return opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_UNSPECIFIED
+		return opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_UNSPECIFIED
 	}
 }

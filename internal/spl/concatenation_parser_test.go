@@ -73,7 +73,7 @@ func TestParseConcatenationKeepsFixedStringPlusInArithmeticGrammar(t *testing.T)
 		}
 	}
 
-	// Authored v0.2 accepts + only as numeric arithmetic. The parser must not
+	// Authored authored expression accepts + only as numeric arithmetic. The parser must not
 	// silently reinterpret fixed String operands as SPL2 concatenation; the
 	// semantic planner owns their source-located unsupported-type diagnostic.
 	const plusSource = `index=main | eval value="left"+"right"`

@@ -12,15 +12,15 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/protobuf/proto"
 )
 
 // makeEvents builds a slice of minimal LogEvents from the given event IDs.
-func makeEvents(ids ...string) []*opensplunkv1.LogEvent {
-	evs := make([]*opensplunkv1.LogEvent, len(ids))
+func makeEvents(ids ...string) []*opensplunk.LogEvent {
+	evs := make([]*opensplunk.LogEvent, len(ids))
 	for i, id := range ids {
-		evs[i] = &opensplunkv1.LogEvent{EventId: id, IndexName: "main"}
+		evs[i] = &opensplunk.LogEvent{EventId: id, IndexName: "main"}
 	}
 	return evs
 }
@@ -32,8 +32,6 @@ func defaultOpts(dir string) Options {
 		SegmentMaxBytes: 1 << 20,
 		Sync:            SyncAlways,
 		CollectorID:     "collector-test",
-		ProtocolMajor:   1,
-		ProtocolMinor:   0,
 	}
 }
 
@@ -455,7 +453,7 @@ func TestRecoveryQuarantinesEverySegmentAfterCorruptGap(t *testing.T) {
 	identity := "dev=1;ino=2;gen=1;fp=" + strings.Repeat("ab", 32)
 	for sequence := 1; sequence <= 4; sequence++ {
 		event := makeEvents("event-" + itoaForTest(uint64(sequence)))[0]
-		event.Origin = &opensplunkv1.EventOrigin{
+		event.Origin = &opensplunk.EventOrigin{
 			InputId:               "input",
 			FileIdentity:          new(identity),
 			SourcePath:            new("/logs/app.log"),
@@ -464,7 +462,7 @@ func TestRecoveryQuarantinesEverySegmentAfterCorruptGap(t *testing.T) {
 			NextLineNumber:        new(uint64(sequence + 1)),
 			FileFingerprintLength: proto.Uint32(64),
 		}
-		if _, err := q.Append([]*opensplunkv1.LogEvent{event}); err != nil {
+		if _, err := q.Append([]*opensplunk.LogEvent{event}); err != nil {
 			t.Fatalf("Append %d: %v", sequence, err)
 		}
 	}
@@ -997,14 +995,14 @@ func TestPrepareAckCachesAndCoalescesSourceMarksAcrossRecovery(t *testing.T) {
 	for sequence, end := range []uint64{100, 200, 350} {
 		event := makeEvents("event")[0]
 		event.Raw = []byte(strings.Repeat("x", 64<<10))
-		event.Origin = &opensplunkv1.EventOrigin{
+		event.Origin = &opensplunk.EventOrigin{
 			InputId: "input", FileIdentity: new(identity),
 			SourcePath: new("/logs/app.log"),
 			EndOffset:  new(end), LineNumber: new(uint64(sequence + 1)),
 			NextLineNumber:        new(uint64(sequence + 2)),
 			FileFingerprintLength: proto.Uint32(1024),
 		}
-		if _, err := q.Append([]*opensplunkv1.LogEvent{event}); err != nil {
+		if _, err := q.Append([]*opensplunk.LogEvent{event}); err != nil {
 			t.Fatalf("Append %d: %v", sequence+1, err)
 		}
 	}
@@ -1070,15 +1068,15 @@ func TestPrepareAckCachesAndCoalescesSourceMarksAcrossRecovery(t *testing.T) {
 func TestCheckpointMarksScopeIdenticalFileIdentityByInput(t *testing.T) {
 	t.Parallel()
 	identity := "dev=1;ino=2;gen=1;fp=" + strings.Repeat("ac", 32)
-	event := func(inputID string, end uint64) *opensplunkv1.LogEvent {
-		return &opensplunkv1.LogEvent{Origin: &opensplunkv1.EventOrigin{
+	event := func(inputID string, end uint64) *opensplunk.LogEvent {
+		return &opensplunk.LogEvent{Origin: &opensplunk.EventOrigin{
 			InputId:      inputID,
 			FileIdentity: new(identity),
 			EndOffset:    new(end),
 		}}
 	}
 
-	marks := checkpointMarksForBatch(7, []*opensplunkv1.LogEvent{
+	marks := checkpointMarksForBatch(7, []*opensplunk.LogEvent{
 		event("input-b", 20),
 		event("input-a", 10),
 		event("input-a", 30),
@@ -1105,11 +1103,11 @@ func TestPrepareAckThroughCoalescesSourceMarksPerInputAcrossRecovery(t *testing.
 		t.Fatalf("Open: %v", err)
 	}
 	identity := "dev=3;ino=5;gen=1;fp=" + strings.Repeat("bd", 32)
-	event := func(inputID string, end uint64) *opensplunkv1.LogEvent {
-		return &opensplunkv1.LogEvent{
+	event := func(inputID string, end uint64) *opensplunk.LogEvent {
+		return &opensplunk.LogEvent{
 			EventId:   inputID + "-" + itoaForTest(end),
 			IndexName: "main",
-			Origin: &opensplunkv1.EventOrigin{
+			Origin: &opensplunk.EventOrigin{
 				InputId:               inputID,
 				FileIdentity:          new(identity),
 				SourcePath:            new("/logs/shared.log"),
@@ -1118,13 +1116,13 @@ func TestPrepareAckThroughCoalescesSourceMarksPerInputAcrossRecovery(t *testing.
 			},
 		}
 	}
-	if _, err := q.Append([]*opensplunkv1.LogEvent{
+	if _, err := q.Append([]*opensplunk.LogEvent{
 		event("input-a", 10),
 		event("input-b", 20),
 	}); err != nil {
 		t.Fatalf("Append first mixed-input batch: %v", err)
 	}
-	if _, err := q.Append([]*opensplunkv1.LogEvent{
+	if _, err := q.Append([]*opensplunk.LogEvent{
 		event("input-b", 50),
 		event("input-a", 40),
 	}); err != nil {
@@ -1178,18 +1176,18 @@ func TestCheckpointMarksRetainMissingInputOrSourceIdentity(t *testing.T) {
 	identity := "dev=1;ino=2;gen=1;fp=" + strings.Repeat("ce", 32)
 	tests := []struct {
 		name   string
-		origin *opensplunkv1.EventOrigin
+		origin *opensplunk.EventOrigin
 	}{
 		{
 			name: "missing input ID",
-			origin: &opensplunkv1.EventOrigin{
+			origin: &opensplunk.EventOrigin{
 				FileIdentity: new(identity),
 				EndOffset:    proto.Uint64(10),
 			},
 		},
 		{
 			name: "missing file identity",
-			origin: &opensplunkv1.EventOrigin{
+			origin: &opensplunk.EventOrigin{
 				InputId:   "input-a",
 				EndOffset: proto.Uint64(10),
 			},
@@ -1198,7 +1196,7 @@ func TestCheckpointMarksRetainMissingInputOrSourceIdentity(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			marks := checkpointMarksForBatch(1, []*opensplunkv1.LogEvent{{Origin: test.origin}})
+			marks := checkpointMarksForBatch(1, []*opensplunk.LogEvent{{Origin: test.origin}})
 			if len(marks) != 1 {
 				t.Fatalf("marks = %+v, want malformed source mark retained", marks)
 			}
@@ -1221,10 +1219,10 @@ func TestCheckpointMarksRetainMissingInputOrSourceIdentity(t *testing.T) {
 func TestCheckpointMarksKeepFingerprintConflictSticky(t *testing.T) {
 	t.Parallel()
 	identity := "dev=1;ino=2;gen=1;fp=" + strings.Repeat("cd", 32)
-	events := make([]*opensplunkv1.LogEvent, 0, 3)
+	events := make([]*opensplunk.LogEvent, 0, 3)
 	for index, length := range []uint32{10, 20, 20} {
 		event := makeEvents("event")[0]
-		event.Origin = &opensplunkv1.EventOrigin{
+		event.Origin = &opensplunk.EventOrigin{
 			InputId: "input", FileIdentity: new(identity),
 			SourcePath: new("/x.log"),
 			EndOffset:  new(uint64(index + 1)), FileFingerprintLength: new(length),
@@ -1240,8 +1238,8 @@ func TestCheckpointMarksKeepFingerprintConflictSticky(t *testing.T) {
 func TestCheckpointMarksPreferPresentNextLineAndKeepConflictSticky(t *testing.T) {
 	t.Parallel()
 	identity := "dev=1;ino=2;gen=1;fp=" + strings.Repeat("de", 32)
-	event := func(next *uint64) *opensplunkv1.LogEvent {
-		return &opensplunkv1.LogEvent{Origin: &opensplunkv1.EventOrigin{
+	event := func(next *uint64) *opensplunk.LogEvent {
+		return &opensplunk.LogEvent{Origin: &opensplunk.EventOrigin{
 			InputId:        "input",
 			FileIdentity:   new(identity),
 			EndOffset:      proto.Uint64(100),
@@ -1251,7 +1249,7 @@ func TestCheckpointMarksPreferPresentNextLineAndKeepConflictSticky(t *testing.T)
 	}
 
 	present := uint64(9)
-	marks := checkpointMarksForBatch(1, []*opensplunkv1.LogEvent{
+	marks := checkpointMarksForBatch(1, []*opensplunk.LogEvent{
 		event(nil),
 		event(&present),
 		event(nil),
@@ -1262,7 +1260,7 @@ func TestCheckpointMarksPreferPresentNextLineAndKeepConflictSticky(t *testing.T)
 	}
 
 	conflict := uint64(10)
-	marks = checkpointMarksForBatch(1, []*opensplunkv1.LogEvent{
+	marks = checkpointMarksForBatch(1, []*opensplunk.LogEvent{
 		event(&present),
 		event(&conflict),
 		event(nil),
@@ -1274,7 +1272,7 @@ func TestCheckpointMarksPreferPresentNextLineAndKeepConflictSticky(t *testing.T)
 	higherOffsetRegression := event(proto.Uint64(2))
 	higherOffsetRegression.Origin.EndOffset = proto.Uint64(200)
 	higherOffsetRegression.Origin.LineNumber = proto.Uint64(1)
-	marks = checkpointMarksForBatch(1, []*opensplunkv1.LogEvent{
+	marks = checkpointMarksForBatch(1, []*opensplunk.LogEvent{
 		event(proto.Uint64(101)),
 		higherOffsetRegression,
 	})
@@ -1288,11 +1286,11 @@ func TestCheckpointMarksRetainAndValidateRestartGuardsAcrossRecovery(t *testing.
 	identity := "dev=1;ino=2;gen=1;fp=" + strings.Repeat("ab", 32)
 	guard := strings.Repeat("cd", 32)
 	guardLength := uint32(64)
-	event := func(fingerprint *string, length *uint32) *opensplunkv1.LogEvent {
-		return &opensplunkv1.LogEvent{
+	event := func(fingerprint *string, length *uint32) *opensplunk.LogEvent {
+		return &opensplunk.LogEvent{
 			EventId:   "event",
 			IndexName: "main",
-			Origin: &opensplunkv1.EventOrigin{
+			Origin: &opensplunk.EventOrigin{
 				InputId:                    "input",
 				FileIdentity:               new(identity),
 				EndOffset:                  proto.Uint64(100),
@@ -1302,7 +1300,7 @@ func TestCheckpointMarksRetainAndValidateRestartGuardsAcrossRecovery(t *testing.
 		}
 	}
 
-	marks := checkpointMarksForBatch(1, []*opensplunkv1.LogEvent{
+	marks := checkpointMarksForBatch(1, []*opensplunk.LogEvent{
 		event(nil, nil),
 		event(&guard, &guardLength),
 		event(nil, nil),
@@ -1315,14 +1313,14 @@ func TestCheckpointMarksRetainAndValidateRestartGuardsAcrossRecovery(t *testing.
 	}
 
 	otherGuard := strings.Repeat("ef", 32)
-	marks = checkpointMarksForBatch(1, []*opensplunkv1.LogEvent{
+	marks = checkpointMarksForBatch(1, []*opensplunk.LogEvent{
 		event(&guard, &guardLength),
 		event(&otherGuard, &guardLength),
 	})
 	if len(marks) != 1 || !marks[0].ConflictingMetadata {
 		t.Fatalf("conflicting same-offset guards = %+v, want sticky conflict", marks)
 	}
-	marks = checkpointMarksForBatch(1, []*opensplunkv1.LogEvent{event(&guard, nil)})
+	marks = checkpointMarksForBatch(1, []*opensplunk.LogEvent{event(&guard, nil)})
 	if len(marks) != 1 || !marks[0].ConflictingMetadata ||
 		marks[0].HasGuardFingerprint == marks[0].HasGuardLength {
 		t.Fatalf("incomplete guard pair = %+v, want malformed mark retained", marks)
@@ -1333,7 +1331,7 @@ func TestCheckpointMarksRetainAndValidateRestartGuardsAcrossRecovery(t *testing.
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if _, err := q.Append([]*opensplunkv1.LogEvent{event(&guard, &guardLength)}); err != nil {
+	if _, err := q.Append([]*opensplunk.LogEvent{event(&guard, &guardLength)}); err != nil {
 		t.Fatalf("Append guarded event: %v", err)
 	}
 	if err := q.Close(); err != nil {
@@ -1352,30 +1350,6 @@ func TestCheckpointMarksRetainAndValidateRestartGuardsAcrossRecovery(t *testing.
 		pending[0].GuardLength != guardLength || !pending[0].HasGuardFingerprint ||
 		!pending[0].HasGuardLength {
 		t.Fatalf("recovered restart guard = %+v", pending)
-	}
-}
-
-func TestReopenRejectsProtocolMismatch(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	opts := defaultOpts(dir)
-	q, err := Open(opts)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	if _, err := q.Append(makeEvents("pending")); err != nil {
-		t.Fatalf("Append: %v", err)
-	}
-	if err := q.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	mismatch := opts
-	mismatch.ProtocolMinor++
-	if reopened, err := Open(mismatch); err == nil {
-		_ = reopened.Close()
-		t.Fatal("Open accepted a pending batch stamped with a different protocol")
-	} else if !strings.Contains(err.Error(), "has protocol 1.0, configured 1.1") {
-		t.Fatalf("Open protocol mismatch error = %v", err)
 	}
 }
 
@@ -1450,12 +1424,12 @@ func TestAckClearsRemovedDescriptorReferences(t *testing.T) {
 	identity := "dev=1;ino=2;gen=1;fp=" + strings.Repeat("ef", 32)
 	for sequence := 1; sequence <= 3; sequence++ {
 		event := makeEvents("event")[0]
-		event.Origin = &opensplunkv1.EventOrigin{
+		event.Origin = &opensplunk.EventOrigin{
 			InputId: "input", FileIdentity: new(identity),
 			SourcePath: new("/x.log"),
 			EndOffset:  new(uint64(sequence)), FileFingerprintLength: proto.Uint32(64),
 		}
-		if _, err := q.Append([]*opensplunkv1.LogEvent{event}); err != nil {
+		if _, err := q.Append([]*opensplunk.LogEvent{event}); err != nil {
 			t.Fatalf("Append %d: %v", sequence, err)
 		}
 	}
@@ -1681,9 +1655,9 @@ func BenchmarkAppend1KiBEvents(b *testing.B) {
 	for i := range payload {
 		payload[i] = byte('A' + i%26)
 	}
-	events := make([]*opensplunkv1.LogEvent, eventsPerBatch)
+	events := make([]*opensplunk.LogEvent, eventsPerBatch)
 	for i := range events {
-		events[i] = &opensplunkv1.LogEvent{EventId: "bench-event", IndexName: "main", Raw: payload}
+		events[i] = &opensplunk.LogEvent{EventId: "bench-event", IndexName: "main", Raw: payload}
 	}
 	if got := proto.Size(events[0]); got < 1024 {
 		b.Fatalf("event size %d < 1KiB", got)

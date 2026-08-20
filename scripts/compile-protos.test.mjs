@@ -33,9 +33,9 @@ async function createFixture(t, prefix) {
   const goBin = path.join(fixture, ".cache", "proto-tools");
   const directories = [
     path.join(fixture, "scripts"),
-    path.join(fixture, "proto", "open_splunk", "v1"),
-    path.join(fixture, "gen", "go", "open_splunk", "v1"),
-    path.join(fixture, "gen", "ts", "open_splunk", "v1"),
+    path.join(fixture, "proto", "open_splunk"),
+    path.join(fixture, "gen", "go", "open_splunk"),
+    path.join(fixture, "gen", "ts", "open_splunk"),
     fakeBin,
     nodeBin,
     goBin,
@@ -46,13 +46,13 @@ async function createFixture(t, prefix) {
     path.join(fixture, "scripts", "compile-protos.sh"),
   );
   await writeFile(
-    path.join(fixture, "proto", "open_splunk", "v1", "contract.proto"),
+    path.join(fixture, "proto", "open_splunk", "contract.proto"),
     'syntax = "proto3";\n',
   );
   await writeFile(path.join(fixture, "buf.gen.yaml"), "version: v2\nplugins: []\n");
 
-  const oldGo = path.join(fixture, "gen", "go", "open_splunk", "v1", "contract.pb.go");
-  const oldTypeScript = path.join(fixture, "gen", "ts", "open_splunk", "v1", "contract.ts");
+  const oldGo = path.join(fixture, "gen", "go", "open_splunk", "contract.pb.go");
+  const oldTypeScript = path.join(fixture, "gen", "ts", "open_splunk", "contract.ts");
   await writeFile(oldGo, "previous Go output\n");
   await writeFile(oldTypeScript, "previous TypeScript output\n");
   await executable(
@@ -157,8 +157,8 @@ if (process.env.PROTO_TEST_HOLD_READY) {
 const outputIndex = process.argv.indexOf("--output");
 if (outputIndex < 0 || outputIndex + 1 >= process.argv.length) process.exit(64);
 const output = process.argv[outputIndex + 1];
-const goDirectory = path.join(output, "gen", "go", "open_splunk", "v1");
-const tsDirectory = path.join(output, "gen", "ts", "open_splunk", "v1");
+const goDirectory = path.join(output, "gen", "go", "open_splunk");
+const tsDirectory = path.join(output, "gen", "ts", "open_splunk");
 mkdirSync(goDirectory, { recursive: true });
 mkdirSync(tsDirectory, { recursive: true });
 writeFileSync(path.join(goDirectory, "contract.pb.go"), "replacement Go output\\n");
@@ -169,7 +169,6 @@ for (const relativePath of [
   "google/protobuf/timestamp.ts",
   "index.google.protobuf.ts",
   "index.google.ts",
-  "index.open_splunk.v1.ts",
   "index.open_splunk.ts",
   "index.ts",
 ]) {
@@ -394,7 +393,6 @@ test("compile-protos preserves recovery data when rollback itself fails", async 
         transaction,
         "old-ts",
         "open_splunk",
-        "v1",
         "contract.ts",
       ),
       "utf8",

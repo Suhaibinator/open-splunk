@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 )
 
@@ -43,7 +43,7 @@ func TestPruneMaintenanceBatchPrunesExpiredTerminalRowsAcrossScopes(t *testing.T
 				fixture.id,
 				fmt.Sprintf("index=main | head %d", index+1),
 				"search",
-				opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
+				opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
 				fixture.created,
 			),
 		); err != nil {
@@ -150,7 +150,7 @@ func TestPruneMaintenanceBatchHardBoundsEveryDeleteTransaction(t *testing.T) {
 				id,
 				"index=main | head 1",
 				"search",
-				opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
+				opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
 				now,
 			),
 		); err != nil {
@@ -221,7 +221,7 @@ func TestPruneMaintenanceBatchShrinksIdlePriorScopeToNewCountLimit(t *testing.T)
 				id,
 				"index=main | head 1",
 				"search",
-				opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
+				opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
 				created,
 			),
 		); err != nil {
@@ -298,7 +298,7 @@ func TestPruneMaintenanceBatchContinuesOrderedCountScanAcrossScopes(t *testing.T
 					id,
 					"index=main | head 1",
 					"search",
-					opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
+					opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
 					now.Add(time.Duration(rowIndex-3)*time.Minute),
 				),
 			); err != nil {
@@ -364,7 +364,7 @@ func TestPruneMaintenanceBatchInterleavesAgeWithCountContinuation(t *testing.T) 
 				id,
 				"index=main | head 1",
 				"search",
-				opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
+				opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
 				now.Add(time.Duration(index)*time.Microsecond),
 			),
 		); err != nil {
@@ -379,7 +379,7 @@ func TestPruneMaintenanceBatchInterleavesAgeWithCountContinuation(t *testing.T) 
 			"expires-during-count-scan",
 			"index=main | head 1",
 			"search",
-			opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
+			opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
 			now.Add(-30*time.Minute),
 		),
 	); err != nil {
@@ -547,7 +547,7 @@ func TestScopedPruneCommitsBoundedProgressBeforeLaterBatchFailure(t *testing.T) 
 				id,
 				"index=main | head 1",
 				"search",
-				opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
+				opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
 				now,
 			),
 		); err != nil {

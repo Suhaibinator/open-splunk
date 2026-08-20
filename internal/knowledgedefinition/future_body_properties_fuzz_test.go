@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 )
@@ -58,10 +58,10 @@ func FuzzInactiveFutureBodyCanonicalWireRoundTrip(f *testing.F) {
 		}
 		digest := sha256.Sum256(data)
 
-		for _, state := range []opensplunkv1.KnowledgeObjectState{
-			opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
-			opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
-			opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DELETED,
+		for _, state := range []opensplunk.KnowledgeObjectState{
+			opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+			opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+			opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DELETED,
 		} {
 			decoded, decodeErr := DecodeCanonicalInactiveFutureBody(data, digest[:], state)
 			if decodeErr != nil {
@@ -73,7 +73,7 @@ func FuzzInactiveFutureBodyCanonicalWireRoundTrip(f *testing.F) {
 			}
 		}
 		if _, decodeErr := DecodeCanonicalInactiveFutureBody(
-			data, digest[:], opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
+			data, digest[:], opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
 		); !errors.Is(decodeErr, ErrUnknownFutureBody) {
 			t.Fatalf("active future body error = %v, want ErrUnknownFutureBody", decodeErr)
 		}
@@ -84,19 +84,19 @@ func FuzzInactiveFutureBodyCanonicalWireRoundTrip(f *testing.F) {
 }
 
 func FuzzInactiveFutureBodyDisallowedStateAlwaysWins(f *testing.F) {
-	f.Add(int32(opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE), []byte{}, []byte{})
-	f.Add(int32(opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_QUARANTINED), []byte{0x80}, make([]byte, 32))
+	f.Add(int32(opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE), []byte{}, []byte{})
+	f.Add(int32(opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_QUARANTINED), []byte{0x80}, make([]byte, 32))
 	f.Add(int32(99), []byte("arbitrary"), []byte("wrong digest"))
 
 	f.Fuzz(func(t *testing.T, rawState int32, data, digest []byte) {
 		if len(data) > 64<<10 || len(digest) > 1<<10 {
 			t.Skip()
 		}
-		state := opensplunkv1.KnowledgeObjectState(rawState)
+		state := opensplunk.KnowledgeObjectState(rawState)
 		switch state {
-		case opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
-			opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
-			opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DELETED:
+		case opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+			opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+			opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DELETED:
 			t.Skip()
 		}
 		_, err := DecodeCanonicalInactiveFutureBody(data, digest, state)

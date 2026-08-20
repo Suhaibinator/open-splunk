@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
 )
@@ -58,7 +58,7 @@ func TestSearchHistoryMaintenancePhysicallyPrunesExpiredTerminalScopes(t *testin
 		scope,
 		runtimeSearchHistoryEntry(
 			"expired",
-			opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
+			opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
 			now,
 		),
 	); err != nil {
@@ -69,7 +69,7 @@ func TestSearchHistoryMaintenancePhysicallyPrunesExpiredTerminalScopes(t *testin
 		otherScope,
 		runtimeSearchHistoryEntry(
 			"other-expired",
-			opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
+			opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
 			now,
 		),
 	); err != nil {
@@ -80,7 +80,7 @@ func TestSearchHistoryMaintenancePhysicallyPrunesExpiredTerminalScopes(t *testin
 		scope,
 		runtimeSearchHistoryEntry(
 			"pending-expired",
-			opensplunkv1.SearchJobState_SEARCH_JOB_STATE_QUEUED,
+			opensplunk.SearchJobState_SEARCH_JOB_STATE_QUEUED,
 			now,
 		),
 	); err != nil {
@@ -92,7 +92,7 @@ func TestSearchHistoryMaintenancePhysicallyPrunesExpiredTerminalScopes(t *testin
 		scope,
 		runtimeSearchHistoryEntry(
 			"boundary",
-			opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
+			opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
 			now,
 		),
 	); err != nil {

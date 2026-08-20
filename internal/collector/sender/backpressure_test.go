@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/collector/wal"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -21,7 +21,7 @@ func TestSenderRetryDelaySurvivesReconnect(t *testing.T) {
 	fs := newFakeServer()
 	var mu sync.Mutex
 	var receivedAt []time.Time
-	fs.batchErr = func(fs *fakeServer, batch *opensplunkv1.EventBatch) error {
+	fs.batchErr = func(fs *fakeServer, batch *opensplunk.EventBatch) error {
 		mu.Lock()
 		receivedAt = append(receivedAt, time.Now())
 		attempt := len(receivedAt)
@@ -29,11 +29,11 @@ func TestSenderRetryDelaySurvivesReconnect(t *testing.T) {
 		if attempt != 1 {
 			return nil
 		}
-		if err := fs.send(&opensplunkv1.CollectResponse{
-			Payload: &opensplunkv1.CollectResponse_RetryBatch{RetryBatch: &opensplunkv1.RetryBatch{
+		if err := fs.send(&opensplunk.CollectResponse{
+			Payload: &opensplunk.CollectResponse_RetryBatch{RetryBatch: &opensplunk.RetryBatch{
 				BatchId:       batch.GetBatchId(),
 				BatchSequence: batch.GetBatchSequence(),
-				Reason:        opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED,
+				Reason:        opensplunk.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED,
 				RetryAfter:    durationpb.New(retryAfter),
 			}},
 		}); err != nil {
@@ -41,7 +41,7 @@ func TestSenderRetryDelaySurvivesReconnect(t *testing.T) {
 		}
 		return io.ErrUnexpectedEOF
 	}
-	fs.onBatch = func(fs *fakeServer, batch *opensplunkv1.EventBatch) {
+	fs.onBatch = func(fs *fakeServer, batch *opensplunk.EventBatch) {
 		fs.ackBatch(batch.GetBatchSequence(), 1)
 	}
 
@@ -113,10 +113,10 @@ func TestTerminalAckClearsPersistentRetryDeadline(t *testing.T) {
 	c.highestSentBatchSequence = 1
 	s.deferBatchRetry(batch, time.Hour)
 
-	if err := c.handleAck(&opensplunkv1.BatchAck{
+	if err := c.handleAck(&opensplunk.BatchAck{
 		BatchId:            batch.GetBatchId(),
 		BatchSequence:      batch.GetBatchSequence(),
-		Durability:         opensplunkv1.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED,
+		Durability:         opensplunk.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED,
 		AcceptedEventCount: 1,
 	}); err != nil {
 		t.Fatalf("handleAck: %v", err)
@@ -144,10 +144,10 @@ func TestThrottleExpiryUsesServerRelativeDurationUnderClockSkew(t *testing.T) {
 	c := s.newConn(context.Background(), func() {}, func() {}, nil)
 	c.lastBatchSendAt = collectorReceivedAt
 
-	if err := c.handleThrottle(&opensplunkv1.CollectResponse{
+	if err := c.handleThrottle(&opensplunk.CollectResponse{
 		SentAt: timestamppb.New(serverSentAt),
-		Payload: &opensplunkv1.CollectResponse_Throttle{Throttle: &opensplunkv1.Throttle{
-			Reason:           opensplunkv1.ThrottleReason_THROTTLE_REASON_TOKEN_QUOTA,
+		Payload: &opensplunk.CollectResponse_Throttle{Throttle: &opensplunk.Throttle{
+			Reason:           opensplunk.ThrottleReason_THROTTLE_REASON_TOKEN_QUOTA,
 			MinimumSendDelay: durationpb.New(minimumDelay),
 			EffectiveUntil:   timestamppb.New(serverSentAt.Add(activeFor)),
 		}},
@@ -201,10 +201,10 @@ func TestPumpRechecksThrottleAfterBlockingNextBatch(t *testing.T) {
 	}
 
 	serverSentAt := time.Now()
-	if err := c.handleThrottle(&opensplunkv1.CollectResponse{
+	if err := c.handleThrottle(&opensplunk.CollectResponse{
 		SentAt: timestamppb.New(serverSentAt),
-		Payload: &opensplunkv1.CollectResponse_Throttle{Throttle: &opensplunkv1.Throttle{
-			Reason:           opensplunkv1.ThrottleReason_THROTTLE_REASON_TOKEN_QUOTA,
+		Payload: &opensplunk.CollectResponse_Throttle{Throttle: &opensplunk.Throttle{
+			Reason:           opensplunk.ThrottleReason_THROTTLE_REASON_TOKEN_QUOTA,
 			MinimumSendDelay: durationpb.New(minimumDelay),
 			EffectiveUntil:   timestamppb.New(serverSentAt.Add(time.Second)),
 		}},
@@ -268,10 +268,10 @@ func TestFiniteThrottleExpiryWakesInFlightCapacityWait(t *testing.T) {
 	}
 
 	serverSentAt := time.Now()
-	if err := c.handleThrottle(&opensplunkv1.CollectResponse{
+	if err := c.handleThrottle(&opensplunk.CollectResponse{
 		SentAt: timestamppb.New(serverSentAt),
-		Payload: &opensplunkv1.CollectResponse_Throttle{Throttle: &opensplunkv1.Throttle{
-			Reason:             opensplunkv1.ThrottleReason_THROTTLE_REASON_TOKEN_QUOTA,
+		Payload: &opensplunk.CollectResponse_Throttle{Throttle: &opensplunk.Throttle{
+			Reason:             opensplunk.ThrottleReason_THROTTLE_REASON_TOKEN_QUOTA,
 			EffectiveUntil:     timestamppb.New(serverSentAt.Add(activeFor)),
 			MaxInFlightBatches: 1,
 		}},
@@ -328,10 +328,10 @@ func TestSupersedingThrottleWakesLongPacingWait(t *testing.T) {
 	}
 
 	serverSentAt := time.Now()
-	if err := c.handleThrottle(&opensplunkv1.CollectResponse{
+	if err := c.handleThrottle(&opensplunk.CollectResponse{
 		SentAt: timestamppb.New(serverSentAt),
-		Payload: &opensplunkv1.CollectResponse_Throttle{Throttle: &opensplunkv1.Throttle{
-			Reason:           opensplunkv1.ThrottleReason_THROTTLE_REASON_TOKEN_QUOTA,
+		Payload: &opensplunk.CollectResponse_Throttle{Throttle: &opensplunk.Throttle{
+			Reason:           opensplunk.ThrottleReason_THROTTLE_REASON_TOKEN_QUOTA,
 			MinimumSendDelay: durationpb.New(time.Hour),
 			EffectiveUntil:   timestamppb.New(serverSentAt.Add(time.Hour)),
 		}},
@@ -346,10 +346,10 @@ func TestSupersedingThrottleWakesLongPacingWait(t *testing.T) {
 	}
 
 	liftedAt := time.Now()
-	if err := c.handleThrottle(&opensplunkv1.CollectResponse{
+	if err := c.handleThrottle(&opensplunk.CollectResponse{
 		SentAt: timestamppb.New(liftedAt),
-		Payload: &opensplunkv1.CollectResponse_Throttle{Throttle: &opensplunkv1.Throttle{
-			Reason:         opensplunkv1.ThrottleReason_THROTTLE_REASON_TOKEN_QUOTA,
+		Payload: &opensplunk.CollectResponse_Throttle{Throttle: &opensplunk.Throttle{
+			Reason:         opensplunk.ThrottleReason_THROTTLE_REASON_TOKEN_QUOTA,
 			EffectiveUntil: timestamppb.New(liftedAt),
 		}},
 	}); err != nil {
@@ -400,10 +400,10 @@ func TestReplacementThrottleReevaluatesRelaxedBatchLimit(t *testing.T) {
 		t.Fatal("pump did not block in NextBatch")
 	}
 
-	if err := c.handleThrottle(&opensplunkv1.CollectResponse{
+	if err := c.handleThrottle(&opensplunk.CollectResponse{
 		SentAt: timestamppb.Now(),
-		Payload: &opensplunkv1.CollectResponse_Throttle{Throttle: &opensplunkv1.Throttle{
-			Reason:        opensplunkv1.ThrottleReason_THROTTLE_REASON_TOKEN_QUOTA,
+		Payload: &opensplunk.CollectResponse_Throttle{Throttle: &opensplunk.Throttle{
+			Reason:        opensplunk.ThrottleReason_THROTTLE_REASON_TOKEN_QUOTA,
 			MaxBatchBytes: 1,
 		}},
 	}); err != nil {
@@ -416,10 +416,10 @@ func TestReplacementThrottleReevaluatesRelaxedBatchLimit(t *testing.T) {
 	case <-time.After(25 * time.Millisecond):
 	}
 
-	if err := c.handleThrottle(&opensplunkv1.CollectResponse{
+	if err := c.handleThrottle(&opensplunk.CollectResponse{
 		SentAt: timestamppb.Now(),
-		Payload: &opensplunkv1.CollectResponse_Throttle{Throttle: &opensplunkv1.Throttle{
-			Reason: opensplunkv1.ThrottleReason_THROTTLE_REASON_TOKEN_QUOTA,
+		Payload: &opensplunk.CollectResponse_Throttle{Throttle: &opensplunk.Throttle{
+			Reason: opensplunk.ThrottleReason_THROTTLE_REASON_TOKEN_QUOTA,
 		}},
 	}); err != nil {
 		t.Fatalf("handleThrottle: %v", err)
@@ -450,10 +450,10 @@ func TestTerminalReleaseCancelsRetryWaitingOutThrottle(t *testing.T) {
 	c.inflightN = 1
 
 	serverSentAt := time.Now()
-	if err := c.handleThrottle(&opensplunkv1.CollectResponse{
+	if err := c.handleThrottle(&opensplunk.CollectResponse{
 		SentAt: timestamppb.New(serverSentAt),
-		Payload: &opensplunkv1.CollectResponse_Throttle{Throttle: &opensplunkv1.Throttle{
-			Reason:         opensplunkv1.ThrottleReason_THROTTLE_REASON_TOKEN_QUOTA,
+		Payload: &opensplunk.CollectResponse_Throttle{Throttle: &opensplunk.Throttle{
+			Reason:         opensplunk.ThrottleReason_THROTTLE_REASON_TOKEN_QUOTA,
 			EffectiveUntil: timestamppb.New(serverSentAt.Add(time.Hour)),
 			MaxBatchBytes:  1,
 		}},
@@ -479,11 +479,11 @@ func TestTerminalReleaseCancelsRetryWaitingOutThrottle(t *testing.T) {
 	}
 }
 
-func retryFor(batch *opensplunkv1.EventBatch, delay time.Duration) *opensplunkv1.RetryBatch {
-	return &opensplunkv1.RetryBatch{
+func retryFor(batch *opensplunk.EventBatch, delay time.Duration) *opensplunk.RetryBatch {
+	return &opensplunk.RetryBatch{
 		BatchId:       batch.GetBatchId(),
 		BatchSequence: batch.GetBatchSequence(),
-		Reason:        opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED,
+		Reason:        opensplunk.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED,
 		RetryAfter:    durationpb.New(delay),
 	}
 }
@@ -495,7 +495,7 @@ type gatedNextBatchQueue struct {
 	once    sync.Once
 }
 
-func (q *gatedNextBatchQueue) NextBatch(ctx context.Context) (*opensplunkv1.EventBatch, error) {
+func (q *gatedNextBatchQueue) NextBatch(ctx context.Context) (*opensplunk.EventBatch, error) {
 	q.once.Do(func() { close(q.entered) })
 	select {
 	case <-ctx.Done():
@@ -510,14 +510,14 @@ type recordingCollectClient struct {
 	batchSentAt chan time.Time
 }
 
-func (c *recordingCollectClient) Send(req *opensplunkv1.CollectRequest) error {
+func (c *recordingCollectClient) Send(req *opensplunk.CollectRequest) error {
 	if req.GetBatch() != nil {
 		c.batchSentAt <- time.Now()
 	}
 	return nil
 }
 
-func (c *recordingCollectClient) Recv() (*opensplunkv1.CollectResponse, error) {
+func (c *recordingCollectClient) Recv() (*opensplunk.CollectResponse, error) {
 	return nil, io.EOF
 }
 

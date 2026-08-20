@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -62,7 +62,7 @@ func TestOpenCollectorServerRejectsIncompleteConfigurationBeforeListening(t *tes
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			candidate := opensplunkv1.CollectorIngestServiceServer(service)
+			candidate := opensplunk.CollectorIngestServiceServer(service)
 			if name == "missing service" {
 				candidate = nil
 			}
@@ -156,7 +156,7 @@ func TestConnectionLimitedListenerReleasesSlotOnClose(t *testing.T) {
 }
 
 type unimplementedCollectorService struct {
-	opensplunkv1.UnimplementedCollectorIngestServiceServer
+	opensplunk.UnimplementedCollectorIngestServiceServer
 }
 
 type fakeCollectorServerStream struct{}

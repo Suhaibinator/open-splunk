@@ -7,7 +7,7 @@ import (
 	"slices"
 	"strings"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 )
@@ -55,7 +55,7 @@ func (candidate ActiveCandidate) BuildValid(ctx context.Context, publication Act
 		return Result{}, err
 	}
 	charges := candidate.state.charges
-	resources := &opensplunkv1.KnowledgeResourceEstimate{
+	resources := &opensplunk.KnowledgeResourceEstimate{
 		SelectorPatterns:          candidate.state.patterns,
 		NormalizedDefinitionBytes: candidate.state.normalizedBytes,
 		DependencyNodes:           nodes,
@@ -70,7 +70,7 @@ func (candidate ActiveCandidate) BuildValid(ctx context.Context, publication Act
 		JsonEvaluationWorkUnits:   charges.jsonEvaluationWork,
 		ScalarPredicates:          charges.scalarPredicates,
 	}
-	result := &opensplunkv1.KnowledgeValidationResult{
+	result := &opensplunk.KnowledgeValidationResult{
 		Valid:                true,
 		ObjectType:           candidate.state.objectType,
 		NormalizedDefinition: candidate.state.normalized,
@@ -81,8 +81,8 @@ func (candidate ActiveCandidate) BuildValid(ctx context.Context, publication Act
 	return newResult(ctx, resultKindActive, result, nil)
 }
 
-func canonicalDependencies(ctx context.Context, publication ActivePublication) ([]*opensplunkv1.KnowledgeValidationDependency, uint32, error) {
-	values := make([]*opensplunkv1.KnowledgeValidationDependency, 0, min(len(publication.Dependencies), MaximumDependencies+1))
+func canonicalDependencies(ctx context.Context, publication ActivePublication) ([]*opensplunk.KnowledgeValidationDependency, uint32, error) {
+	values := make([]*opensplunk.KnowledgeValidationDependency, 0, min(len(publication.Dependencies), MaximumDependencies+1))
 	seen := make(map[string]struct{}, min(len(publication.Dependencies), MaximumDependencies+1))
 	nodes := make(map[string]struct{}, min(len(publication.Dependencies), MaximumDependencies+1))
 	for index, dependency := range publication.Dependencies {
@@ -95,7 +95,7 @@ func canonicalDependencies(ctx context.Context, publication ActivePublication) (
 			len(dependency.GetTarget().ProtoReflect().GetUnknown()) != 0 ||
 			!validIdentity(dependency.GetTarget().GetKnowledgeObjectId(), maximumObjectIDBytes) ||
 			dependency.GetTarget().GetVersion() == 0 || dependency.GetTarget().GetVersion() > math.MaxInt64 ||
-			dependency.GetRole() != opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT ||
+			dependency.GetRole() != opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT ||
 			dependency.GetTarget().GetKnowledgeObjectId() == publication.Candidate.KnowledgeObjectID {
 			return nil, 0, ErrInvariant
 		}
@@ -111,15 +111,15 @@ func canonicalDependencies(ctx context.Context, publication ActivePublication) (
 		seen[key] = struct{}{}
 		nodeKey := dependency.GetTarget().GetKnowledgeObjectId() + "\x00" + stringUint64(dependency.GetTarget().GetVersion())
 		nodes[nodeKey] = struct{}{}
-		values = append(values, &opensplunkv1.KnowledgeValidationDependency{
-			Target: &opensplunkv1.KnowledgeManagementObjectVersionIdentity{
+		values = append(values, &opensplunk.KnowledgeValidationDependency{
+			Target: &opensplunk.KnowledgeManagementObjectVersionIdentity{
 				KnowledgeObjectId: strings.Clone(dependency.GetTarget().GetKnowledgeObjectId()),
 				Version:           dependency.GetTarget().GetVersion(),
 			},
 			Role: dependency.GetRole(),
 		})
 	}
-	slices.SortFunc(values, func(left, right *opensplunkv1.KnowledgeValidationDependency) int {
+	slices.SortFunc(values, func(left, right *opensplunk.KnowledgeValidationDependency) int {
 		if order := cmp.Compare(left.GetTarget().GetKnowledgeObjectId(), right.GetTarget().GetKnowledgeObjectId()); order != 0 {
 			return order
 		}

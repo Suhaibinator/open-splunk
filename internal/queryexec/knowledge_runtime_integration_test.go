@@ -16,7 +16,7 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	clickhousedriverlib "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
@@ -176,35 +176,35 @@ func TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse(t *testing.T) {
 	earliest := base
 	latest := base.Add(2 * time.Minute)
 	program := knowledgeRuntimeProgram(t)
-	v02CompositionProgram := knowledgeRuntimeV02CompositionProgram(t)
-	v02CompositionCommitment, ok := v02CompositionProgram.Commitment()
+	authoredCompositionProgram := knowledgeRuntimeAuthoredCompositionProgram(t)
+	authoredCompositionCommitment, ok := authoredCompositionProgram.Commitment()
 	if !ok {
-		t.Fatal("v0.1 knowledge composition program has no commitment")
+		t.Fatal("knowledge composition program has no commitment")
 	}
-	v02CompositionProgramBeforeCompile := v02CompositionProgram.Clone()
-	v02CompositionPlan := knowledgeRuntimePlan(
+	authoredCompositionProgramBeforeCompile := authoredCompositionProgram.Clone()
+	authoredCompositionPlan := knowledgeRuntimePlan(
 		t,
 		`index=`+indexName+` service=matrix`+
 			` | eval adjusted=calculated_number+1`+
 			` | sort 0 +event_id | table event_id calculated_number adjusted`,
-		v02CompositionProgram,
+		authoredCompositionProgram,
 		tenantID,
 		[]string{indexName},
 		indexTime,
 		earliest,
 		latest,
 	)
-	v02Composition, err := (clickhouse.Compiler{}).Compile(v02CompositionPlan)
+	authoredComposition, err := (clickhouse.Compiler{}).Compile(authoredCompositionPlan)
 	if err != nil {
-		t.Fatalf("compile v0.1 knowledge plus authored v0.2 arithmetic: %v", err)
+		t.Fatalf("compile knowledge plus authored arithmetic: %v", err)
 	}
-	if !v02Composition.RequiresAtomicResult() || !v02Composition.HasValidExecutionSeal() {
-		t.Fatal("knowledge/v0.2 composition lacks atomic execution authority")
+	if !authoredComposition.RequiresAtomicResult() || !authoredComposition.HasValidExecutionSeal() {
+		t.Fatal("knowledge/authored expression composition lacks atomic execution authority")
 	}
-	commitmentAfterCompile, ok := v02CompositionProgram.Commitment()
-	if !ok || commitmentAfterCompile != v02CompositionCommitment ||
-		!v02CompositionProgram.Equal(v02CompositionProgramBeforeCompile) {
-		t.Fatal("authored v0.2 compilation changed the retained v0.1 knowledge identity")
+	commitmentAfterCompile, ok := authoredCompositionProgram.Commitment()
+	if !ok || commitmentAfterCompile != authoredCompositionCommitment ||
+		!authoredCompositionProgram.Equal(authoredCompositionProgramBeforeCompile) {
+		t.Fatal("authored compilation changed the retained knowledge identity")
 	}
 	matrix := compileKnowledgeRuntimeMatrix(
 		t,
@@ -387,7 +387,7 @@ func TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse(t *testing.T) {
 		}
 	}
 
-	runSubtest("compatibility v0.1 runtime edges", func(t *testing.T, ctx context.Context) {
+	runSubtest("compatibility knowledge expression runtime edges", func(t *testing.T, ctx context.Context) {
 		runKnowledgeCompatibilityRuntime(
 			t,
 			ctx,
@@ -406,10 +406,10 @@ func TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse(t *testing.T) {
 		knowledgeRuntimeAssertOrdinary(t, sink)
 	})
 
-	runSubtest("authored v0.2 arithmetic consumes retained v0.1 calculated field", func(t *testing.T, ctx context.Context) {
+	runSubtest("authored arithmetic consumes retained knowledge expression calculated field", func(t *testing.T, ctx context.Context) {
 		sink := &fakeSink{}
-		if err := executor.Execute(ctx, v02Composition, sink); err != nil {
-			t.Fatalf("execute knowledge/v0.2 composition: %v", err)
+		if err := executor.Execute(ctx, authoredComposition, sink); err != nil {
+			t.Fatalf("execute knowledge/authored expression composition: %v", err)
 		}
 		wantSchema := []searchjobs.Column{
 			{Name: "event_id", Kind: searchjobs.ValueKindString},
@@ -417,15 +417,15 @@ func TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse(t *testing.T) {
 			{Name: "adjusted", Kind: searchjobs.ValueKindDouble, Nullable: true},
 		}
 		if sink.setCalls != 1 || !slices.Equal(sink.schema.Columns, wantSchema) || len(sink.rows) != 4 {
-			t.Fatalf("knowledge/v0.2 result = schema %#v calls %d rows %#v, want schema %#v and 4 rows",
+			t.Fatalf("knowledge/authored expression result = schema %#v calls %d rows %#v, want schema %#v and 4 rows",
 				sink.schema, sink.setCalls, sink.rows, wantSchema)
 		}
 		wantIDs := []string{"knowledge-event-a", "knowledge-event-b", "knowledge-event-c", "knowledge-event-d"}
 		for index, row := range sink.rows {
-			knowledgeRuntimeRequireStringValue(t, row[0], wantIDs[index], "knowledge/v0.2 event_id")
-			knowledgeRuntimeRequireUnsignedValue(t, row[1], 1, "v0.1 calculated_number")
+			knowledgeRuntimeRequireStringValue(t, row[0], wantIDs[index], "knowledge/authored expression event_id")
+			knowledgeRuntimeRequireUnsignedValue(t, row[1], 1, "knowledge expression calculated_number")
 			if value, ok := row[2].Double(); !ok || value != 2 {
-				t.Fatalf("knowledge/v0.2 adjusted row %d = %#v, want Double(2)", index, row[2])
+				t.Fatalf("knowledge/authored expression adjusted row %d = %#v, want Double(2)", index, row[2])
 			}
 		}
 	})
@@ -1412,22 +1412,22 @@ func knowledgeRuntimePlan(
 	return logical
 }
 
-func knowledgeRuntimeV02CompositionProgram(t *testing.T) knowledgeprogram.Program {
+func knowledgeRuntimeAuthoredCompositionProgram(t *testing.T) knowledgeprogram.Program {
 	t.Helper()
-	return knowledgeRuntimePrepareProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{
+	return knowledgeRuntimePrepareProgram(t, []*opensplunk.KnowledgeObjectDefinition{
 		{
 			AppId:        "knowledge-app",
-			Name:         "v01-calculated-number",
-			SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-			Selector:     &opensplunkv1.KnowledgeSelector{},
-			Body: &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{
-				CalculatedField: &opensplunkv1.CalculatedFieldDefinition{
+			Name:         "knowledge-calculated-number",
+			SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+			Selector:     &opensplunk.KnowledgeSelector{},
+			Body: &opensplunk.KnowledgeObjectDefinition_CalculatedField{
+				CalculatedField: &opensplunk.CalculatedFieldDefinition{
 					DestinationField: "calculated_number",
 					// The retained Knowledge compiler deliberately remains on
-					// the v0.1 scalar profile. Authored v0.2 arithmetic consumes
+					// the knowledge-expression profile. Authored authored expression arithmetic consumes
 					// this numeric result only after the prelude is sealed.
 					Expression:        "severity",
-					OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+					OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 				},
 			},
 		},
@@ -1450,10 +1450,10 @@ func knowledgeRuntimeProgramWithExtraPayloadAliases(
 			extraPayloadAliases,
 		)
 	}
-	replace := opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING
-	selector := func(dimension string, value string) *opensplunkv1.KnowledgeSelector {
-		pattern := []*opensplunkv1.KnowledgeSelectorPattern{{Value: value}}
-		result := &opensplunkv1.KnowledgeSelector{}
+	replace := opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING
+	selector := func(dimension string, value string) *opensplunk.KnowledgeSelector {
+		pattern := []*opensplunk.KnowledgeSelectorPattern{{Value: value}}
+		result := &opensplunk.KnowledgeSelector{}
 		switch dimension {
 		case "index":
 			result.IndexPatterns = pattern
@@ -1468,16 +1468,16 @@ func knowledgeRuntimeProgramWithExtraPayloadAliases(
 		}
 		return result
 	}
-	definitions := []*opensplunkv1.KnowledgeObjectDefinition{
+	definitions := []*opensplunk.KnowledgeObjectDefinition{
 		{
 			AppId: "knowledge-app", Name: "a-extract-kind",
-			SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
+			SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
 			Selector:     selector("index", "knowledge-*"),
-			Body: &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
-				FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
+			Body: &opensplunk.KnowledgeObjectDefinition_FieldExtraction{
+				FieldExtraction: &opensplunk.FieldExtractionDefinition{
 					InputField: "_raw", OverwriteBehavior: replace,
-					Extraction: &opensplunkv1.FieldExtractionDefinition_Regex{
-						Regex: &opensplunkv1.RegexFieldExtractionDefinition{
+					Extraction: &opensplunk.FieldExtractionDefinition_Regex{
+						Regex: &opensplunk.RegexFieldExtractionDefinition{
 							Pattern:      `"kind":"(?P<regex_value>[a-z]+)"`,
 							OutputFields: []string{"regex_value"},
 						},
@@ -1487,13 +1487,13 @@ func knowledgeRuntimeProgramWithExtraPayloadAliases(
 		},
 		{
 			AppId: "knowledge-app", Name: "b-extract-json",
-			SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
+			SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
 			Selector:     selector("sourcetype", "knowledge:*"),
-			Body: &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
-				FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
+			Body: &opensplunk.KnowledgeObjectDefinition_FieldExtraction{
+				FieldExtraction: &opensplunk.FieldExtractionDefinition{
 					InputField: "_raw", OverwriteBehavior: replace,
-					Extraction: &opensplunkv1.FieldExtractionDefinition_Json{
-						Json: &opensplunkv1.JsonFieldExtractionDefinition{
+					Extraction: &opensplunk.FieldExtractionDefinition_Json{
+						Json: &opensplunk.JsonFieldExtractionDefinition{
 							Path: "nested.value", OutputField: "json_value",
 						},
 					},
@@ -1513,15 +1513,15 @@ func knowledgeRuntimeProgramWithExtraPayloadAliases(
 			"overwrite_source",
 			"preserved_value",
 			selector("source", "*Source"),
-			opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+			opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
 		),
 		knowledgeRuntimeAliasDefinition("j-replace-value", "overwrite_source", "replaced_value", selector("source", "*Source")),
 		{
 			AppId: "knowledge-app", Name: "a-calculated-source",
-			SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
+			SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
 			Selector:     selector("host", "fixture-*"),
-			Body: &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{
-				CalculatedField: &opensplunkv1.CalculatedFieldDefinition{
+			Body: &opensplunk.KnowledgeObjectDefinition_CalculatedField{
+				CalculatedField: &opensplunk.CalculatedFieldDefinition{
 					DestinationField:  "calculated_value",
 					Expression:        "lower(source)",
 					OverwriteBehavior: replace,
@@ -1549,13 +1549,13 @@ func knowledgeRuntimeProgramWithExtraPayloadAliases(
 
 func knowledgeRuntimeOverflowProgram(t *testing.T) knowledgeprogram.Program {
 	t.Helper()
-	definitions := make([]*opensplunkv1.KnowledgeObjectDefinition, knowledgeRuntimeOverflowAliasCount)
+	definitions := make([]*opensplunk.KnowledgeObjectDefinition, knowledgeRuntimeOverflowAliasCount)
 	for index := range definitions {
 		definitions[index] = knowledgeRuntimeAliasDefinition(
 			string(rune('a'+index))+"-overflow-copy",
 			"source",
 			"overflow_copy_"+string(rune('a'+index)),
-			&opensplunkv1.KnowledgeSelector{},
+			&opensplunk.KnowledgeSelector{},
 		)
 	}
 	return knowledgeRuntimePrepareProgram(t, definitions)
@@ -1565,14 +1565,14 @@ func knowledgeRuntimeAliasDefinition(
 	name string,
 	source string,
 	destination string,
-	selector *opensplunkv1.KnowledgeSelector,
-) *opensplunkv1.KnowledgeObjectDefinition {
+	selector *opensplunk.KnowledgeSelector,
+) *opensplunk.KnowledgeObjectDefinition {
 	return knowledgeRuntimeAliasDefinitionWithOverwrite(
 		name,
 		source,
 		destination,
 		selector,
-		opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+		opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 	)
 }
 
@@ -1580,15 +1580,15 @@ func knowledgeRuntimeAliasDefinitionWithOverwrite(
 	name string,
 	source string,
 	destination string,
-	selector *opensplunkv1.KnowledgeSelector,
-	overwrite opensplunkv1.KnowledgeOverwriteBehavior,
-) *opensplunkv1.KnowledgeObjectDefinition {
-	return &opensplunkv1.KnowledgeObjectDefinition{
+	selector *opensplunk.KnowledgeSelector,
+	overwrite opensplunk.KnowledgeOverwriteBehavior,
+) *opensplunk.KnowledgeObjectDefinition {
+	return &opensplunk.KnowledgeObjectDefinition{
 		AppId: "knowledge-app", Name: name,
-		SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
+		SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
 		Selector:     selector,
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{
-			FieldAlias: &opensplunkv1.FieldAliasDefinition{
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{
+			FieldAlias: &opensplunk.FieldAliasDefinition{
 				SourceField: source, DestinationField: destination,
 				OverwriteBehavior: overwrite,
 			},
@@ -1598,18 +1598,18 @@ func knowledgeRuntimeAliasDefinitionWithOverwrite(
 
 func knowledgeRuntimePrepareProgram(
 	t *testing.T,
-	definitions []*opensplunkv1.KnowledgeObjectDefinition,
+	definitions []*opensplunk.KnowledgeObjectDefinition,
 ) knowledgeprogram.Program {
 	t.Helper()
-	objects := make([]*opensplunkv1.KnowledgeSnapshotObject, len(definitions))
-	stageOrdinals := map[opensplunkv1.KnowledgeSearchStage]uint32{}
+	objects := make([]*opensplunk.KnowledgeSnapshotObject, len(definitions))
+	stageOrdinals := map[opensplunk.KnowledgeSearchStage]uint32{}
 	for index, definition := range definitions {
 		normalized, err := knowledgedefinition.Normalize(definition)
 		if err != nil {
 			t.Fatalf("normalize runtime knowledge definition %d: %v", index, err)
 		}
 		stage := knowledgeRuntimeStage(t, normalized.ObjectType)
-		objects[index] = &opensplunkv1.KnowledgeSnapshotObject{
+		objects[index] = &opensplunk.KnowledgeSnapshotObject{
 			ResolutionOrdinal: uint32(index),
 			Stage:             stage,
 			StageOrdinal:      stageOrdinals[stage],
@@ -1634,19 +1634,19 @@ func knowledgeRuntimePrepareProgram(
 
 func knowledgeRuntimeStage(
 	t *testing.T,
-	objectType opensplunkv1.KnowledgeObjectType,
-) opensplunkv1.KnowledgeSearchStage {
+	objectType opensplunk.KnowledgeObjectType,
+) opensplunk.KnowledgeSearchStage {
 	t.Helper()
 	switch objectType {
-	case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION:
-		return opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION
-	case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS:
-		return opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS
-	case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD:
-		return opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD
+	case opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION:
+		return opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION
+	case opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS:
+		return opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS
+	case opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD:
+		return opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD
 	default:
 		t.Fatalf("unsupported runtime knowledge object type %v", objectType)
-		return opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_UNSPECIFIED
+		return opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_UNSPECIFIED
 	}
 }
 

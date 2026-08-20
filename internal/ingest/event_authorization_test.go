@@ -9,7 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -233,7 +233,7 @@ func TestCollectAppliesEventAuthorizationAfterNormalizationBeforeQuota(t *testin
 	})
 	harness := newServiceHarness(t, testServiceConfig(), authorizer, store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1)
+	sendHello(t, stream)
 	_ = recvResponse(t, stream)
 
 	acceptedA := validTestEvent("accepted-a", "main")
@@ -246,7 +246,7 @@ func TestCollectAppliesEventAuthorizationAfterNormalizationBeforeQuota(t *testin
 	badSource.Source = "/var/log/app.log.1"
 	invalidBeforeAuthorization := validTestEvent("invalid-utf8", "main")
 	invalidBeforeAuthorization.Raw = []byte{0xff}
-	invalidBeforeAuthorization.RawEncoding = opensplunkv1.RawEncoding_RAW_ENCODING_UTF8
+	invalidBeforeAuthorization.RawEncoding = opensplunk.RawEncoding_RAW_ENCODING_UTF8
 	invalidBeforeAuthorization.Source = "/denied"
 	batch := validTestBatch(
 		"collector-a",
@@ -266,13 +266,13 @@ func TestCollectAppliesEventAuthorizationAfterNormalizationBeforeQuota(t *testin
 		t.Fatalf("partial authorization acknowledgment = %#v", ack)
 	}
 	for index, want := range []struct {
-		code      opensplunkv1.EventRejectionCode
+		code      opensplunk.EventRejectionCode
 		path      string
 		violation string
 	}{
-		{opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_HOST, "host", "unauthorized_host"},
-		{opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_SOURCE, "source", "unauthorized_source"},
-		{opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_VALUE_INVALID, "raw", "invalid_utf8"},
+		{opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_HOST, "host", "unauthorized_host"},
+		{opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_SOURCE, "source", "unauthorized_source"},
+		{opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_VALUE_INVALID, "raw", "invalid_utf8"},
 	} {
 		got := ack.GetRejectedEvents()[index]
 		if got.GetCode() != want.code || len(got.GetViolations()) != 1 ||
@@ -337,7 +337,7 @@ func TestCollectRefreshesEventAuthorizationAtEveryBatchBoundary(t *testing.T) {
 	})
 	harness := newServiceHarness(t, config, authorizer, store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1)
+	sendHello(t, stream)
 	_ = recvResponse(t, stream)
 
 	firstAllowed := validTestEvent("first-allowed", "main")
@@ -409,7 +409,7 @@ func TestCollectDurablyReplaysAllRejectedEventAuthorization(t *testing.T) {
 	store := &recoverableTestStore{}
 	harness := newServiceHarness(t, config, authorizer, store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1)
+	sendHello(t, stream)
 	_ = recvResponse(t, stream)
 
 	batch := validTestBatch(
@@ -419,7 +419,7 @@ func TestCollectDurablyReplaysAllRejectedEventAuthorization(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := recvResponse(t, stream).GetBatchReject()
-	if first == nil || first.GetCode() != opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS ||
+	if first == nil || first.GetCode() != opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS ||
 		len(first.GetViolations()) != 1 || first.GetViolations()[0].GetCode() != "unauthorized_host" {
 		t.Fatalf("first all-rejected response = %#v", first)
 	}
@@ -461,7 +461,7 @@ func TestCollectFailsClosedOnCorruptRefreshedEventAuthorization(t *testing.T) {
 	store := &deferredAuthorityTestStore{lookupState: StoredBatchNotFound}
 	harness := newServiceHarness(t, config, authorizer, store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1)
+	sendHello(t, stream)
 	_ = recvResponse(t, stream)
 	if err := stream.Send(batchRequest(2, validTestBatch(
 		"collector-a", "corrupt-event-authorization", 1, validTestEvent("event", "main"),
@@ -503,7 +503,7 @@ func TestCollectDefersTypedInvalidEventAuthorityUntilAfterDurableLookup(t *testi
 	store := &deferredAuthorityTestStore{lookupState: StoredBatchNotFound}
 	harness := newServiceHarness(t, config, authorizer, store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1)
+	sendHello(t, stream)
 	_ = recvResponse(t, stream)
 	if err := stream.Send(batchRequest(2, validTestBatch(
 		"collector-a", "typed-invalid-event-authorization", 1, validTestEvent("event", "main"),
@@ -530,7 +530,7 @@ func TestInvalidRefreshedEventAuthorizationDefersToEveryDurableOutcome(t *testin
 	acknowledged := batch.GetBatchSequence()
 	rejection := batchRejection(
 		batch,
-		opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS,
+		opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS,
 		"original durable event-authorization rejection",
 		"host",
 		"unauthorized_host",
@@ -540,7 +540,7 @@ func TestInvalidRefreshedEventAuthorizationDefersToEveryDurableOutcome(t *testin
 		state      StoredBatchState
 		lookup     StoreResult
 		resume     StoreResult
-		wantReject *opensplunkv1.BatchReject
+		wantReject *opensplunk.BatchReject
 		wantResume int
 	}{
 		{
@@ -631,7 +631,7 @@ func TestCollectRejectsCorruptAdmittedEventAuthorization(t *testing.T) {
 	config.SessionManager = manager
 	harness := newServiceHarness(t, config, authorizer, acceptingStore())
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1)
+	sendHello(t, stream)
 	if response, err := stream.Recv(); response != nil || status.Code(err) != codes.Unavailable {
 		t.Fatalf("corrupt admitted event authorization = (%#v, %v), want nil/Unavailable", response, err)
 	}
@@ -677,10 +677,10 @@ func TestEventAuthorizationRejectsHostBeforeSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stored := &StoredEvent{Event: &opensplunkv1.LogEvent{Host: "bad-host", Source: "/bad-source"}}
+	stored := &StoredEvent{Event: &opensplunk.LogEvent{Host: "bad-host", Source: "/bad-source"}}
 	rejection := matcher.rejection(stored)
 	if rejection == nil ||
-		rejection.Code != opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_HOST ||
+		rejection.Code != opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_HOST ||
 		len(rejection.Violations) != 1 || rejection.Violations[0].GetCode() != "unauthorized_host" {
 		t.Fatalf("dual-dimension rejection = %#v", rejection)
 	}

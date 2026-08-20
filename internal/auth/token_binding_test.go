@@ -115,7 +115,7 @@ func TestLegacyUnboundCollectorTokenFailsClosedUntilOneWayBinding(t *testing.T) 
 	}
 	now := time.Date(2026, 7, 28, 14, 0, 0, 0, time.UTC)
 	store.now = func() time.Time { return now }
-	const plaintext = "ost_v1_legacy-unbound-secret"
+	const plaintext = "ost_legacy-unbound-secret"
 	const tokenID = "tok_legacy_unbound"
 	seedUnboundCollectorToken(t, db, store, index.ID, tokenID, plaintext, now)
 
@@ -215,7 +215,7 @@ func TestConcurrentLegacyCollectorBindingHasOneCASWinner(t *testing.T) {
 	now := time.Date(2026, 7, 28, 15, 0, 0, 0, time.UTC)
 	store.now = func() time.Time { return now }
 	const tokenID = "tok_legacy_concurrent"
-	seedUnboundCollectorToken(t, db, store, index.ID, tokenID, "ost_v1_concurrent-secret", now)
+	seedUnboundCollectorToken(t, db, store, index.ID, tokenID, "ost_concurrent-secret", now)
 
 	const contenders = 8
 	start := make(chan struct{})
@@ -296,7 +296,7 @@ func TestCollectorBindingSurvivesDatabaseReopen(t *testing.T) {
 	now := time.Date(2026, 7, 28, 16, 0, 0, 0, time.UTC)
 	store.now = func() time.Time { return now }
 	const tokenID = "tok_legacy_reopen"
-	const plaintext = "ost_v1_reopen-secret"
+	const plaintext = "ost_reopen-secret"
 	seedUnboundCollectorToken(t, db, store, index.ID, tokenID, plaintext, now)
 	bound, err := store.UpdateCollectorToken(ctx, tokenID, 1, UpdateCollectorTokenRequest{
 		Name:              "legacy",
@@ -351,7 +351,7 @@ func TestCollectorBindingCorruptionFailsSafeDomainProjection(t *testing.T) {
 	}
 	now := time.Date(2026, 7, 28, 17, 0, 0, 0, time.UTC)
 	const tokenID = "tok_corrupt_binding"
-	const plaintext = "ost_v1_corrupt-secret"
+	const plaintext = "ost_corrupt-secret"
 
 	connection, err := db.SQLDB().Conn(ctx)
 	if err != nil {
@@ -366,7 +366,7 @@ func TestCollectorBindingCorruptionFailsSafeDomainProjection(t *testing.T) {
 			ingestion_token_id, version, name, description, token_prefix,
 			token_digest, state, created_at_unix_micro, updated_at_unix_micro,
 			bound_collector_id
-		) VALUES (?, 1, 'corrupt', '', 'ost_v1_corrupt', ?, 'active', ?, ?, ?)`,
+		) VALUES (?, 1, 'corrupt', '', 'ost_corrupt', ?, 'active', ?, ?, ?)`,
 		tokenID,
 		store.digest(plaintext),
 		now.UnixMicro(),
@@ -440,7 +440,7 @@ func seedUnboundCollectorToken(
 		INSERT INTO ingestion_tokens (
 			ingestion_token_id, version, name, description, token_prefix,
 			token_digest, state, created_at_unix_micro, updated_at_unix_micro
-		) VALUES (?, 1, 'legacy', '', 'ost_v1_legacy', ?, 'active', ?, ?)`,
+		) VALUES (?, 1, 'legacy', '', 'ost_legacy', ?, 'active', ?, ?)`,
 		tokenID,
 		store.digest(plaintext),
 		createdAt.UnixMicro(),

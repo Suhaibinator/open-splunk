@@ -47,7 +47,7 @@ func TestParseStatsNumericFamiliesAndMeanPreserveCanonicalDefaults(t *testing.T)
 	}
 }
 
-func TestParseStatsNumericEvalInputsUseV02ScalarGrammar(t *testing.T) {
+func TestParseStatsNumericEvalInputsUseAuthoredScalarGrammar(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {

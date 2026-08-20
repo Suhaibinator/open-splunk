@@ -11,13 +11,13 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 )
 
-const testSearchValidatePath = "/api/v1/search/validate"
+const testSearchValidatePath = "/api/search/validate"
 
 func TestValidateSearchReturnsAnalysisWithoutCreatingJob(t *testing.T) {
 	t.Parallel()
@@ -42,7 +42,7 @@ func TestValidateSearchReturnsAnalysisWithoutCreatingJob(t *testing.T) {
 		t.Fatalf("content type = %q", contentType)
 	}
 
-	decoded := &opensplunkv1.ValidateSearchResponse{}
+	decoded := &opensplunk.ValidateSearchResponse{}
 	unmarshalResponse(t, response, decoded)
 	if !decoded.GetValid() {
 		t.Fatalf("valid = false, diagnostics = %+v", decoded.GetDiagnostics())
@@ -53,7 +53,7 @@ func TestValidateSearchReturnsAnalysisWithoutCreatingJob(t *testing.T) {
 	if !slices.Equal(decoded.GetReferencedIndexes(), []string{"internal", "main"}) {
 		t.Fatalf("referenced indexes = %v", decoded.GetReferencedIndexes())
 	}
-	if decoded.GetPredictedResultKind() != opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS {
+	if decoded.GetPredictedResultKind() != opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS {
 		t.Fatalf("predicted result kind = %s", decoded.GetPredictedResultKind())
 	}
 	if len(decoded.GetDiagnostics()) != 0 {
@@ -84,7 +84,7 @@ func TestValidateSearchReportsReadFieldsRatherThanResultColumns(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
-	decoded := &opensplunkv1.ValidateSearchResponse{}
+	decoded := &opensplunk.ValidateSearchResponse{}
 	unmarshalResponse(t, response, decoded)
 	if !decoded.GetValid() {
 		t.Fatalf("valid = false, diagnostics = %+v", decoded.GetDiagnostics())
@@ -112,7 +112,7 @@ func TestValidateSearchReportsReadFieldsRatherThanResultColumns(t *testing.T) {
 	assertNoSearchValidationJobCreated(t, jobs)
 }
 
-func TestValidateSearchExpressionV02UsesTheProductionParserPlannerAndCompiler(t *testing.T) {
+func TestValidateSearchAuthoredExpressionUsesTheProductionParserPlannerAndCompiler(t *testing.T) {
 	t.Parallel()
 
 	jobs := newValidationSearchJobs(t)
@@ -130,7 +130,7 @@ func TestValidateSearchExpressionV02UsesTheProductionParserPlannerAndCompiler(t 
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
-	decoded := &opensplunkv1.ValidateSearchResponse{}
+	decoded := &opensplunk.ValidateSearchResponse{}
 	unmarshalResponse(t, response, decoded)
 	if !decoded.GetValid() || len(decoded.GetDiagnostics()) != 0 ||
 		decoded.GetNormalizedSpl() != strings.TrimSpace(source) {
@@ -138,7 +138,7 @@ func TestValidateSearchExpressionV02UsesTheProductionParserPlannerAndCompiler(t 
 	}
 	if !slices.Equal(decoded.GetReferencedIndexes(), []string{"main"}) ||
 		!slices.Equal(decoded.GetReferencedFields(), []string{"adjusted", "index", "request-bytes"}) ||
-		decoded.GetPredictedResultKind() != opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS {
+		decoded.GetPredictedResultKind() != opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS {
 		t.Fatalf(
 			"analysis = indexes %v fields %v kind %s",
 			decoded.GetReferencedIndexes(),
@@ -157,7 +157,7 @@ func TestValidateSearchExpressionV02UsesTheProductionParserPlannerAndCompiler(t 
 	if invalidResponse.Code != http.StatusOK {
 		t.Fatalf("invalid status = %d, body = %s", invalidResponse.Code, invalidResponse.Body.String())
 	}
-	invalid := &opensplunkv1.ValidateSearchResponse{}
+	invalid := &opensplunk.ValidateSearchResponse{}
 	unmarshalResponse(t, invalidResponse, invalid)
 	if invalid.GetValid() || invalid.NormalizedSpl != nil || len(invalid.GetDiagnostics()) != 1 ||
 		invalid.GetDiagnostics()[0].GetCode() != "SPL_UNSUPPORTED_EVAL_EXPRESSION" ||
@@ -231,7 +231,7 @@ func TestValidateSearchReturnsSourceLocatedParsePlanningAndCompilerDiagnostics(t
 			if response.Code != http.StatusOK {
 				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 			}
-			decoded := &opensplunkv1.ValidateSearchResponse{}
+			decoded := &opensplunk.ValidateSearchResponse{}
 			unmarshalResponse(t, response, decoded)
 			if decoded.GetValid() {
 				t.Fatal("valid = true")
@@ -240,7 +240,7 @@ func TestValidateSearchReturnsSourceLocatedParsePlanningAndCompilerDiagnostics(t
 				t.Fatalf("invalid response exposed normalized SPL %q", decoded.GetNormalizedSpl())
 			}
 			if len(decoded.GetReferencedIndexes()) != 0 || len(decoded.GetReferencedFields()) != 0 ||
-				decoded.GetPredictedResultKind() != opensplunkv1.ResultSetKind_RESULT_SET_KIND_UNSPECIFIED {
+				decoded.GetPredictedResultKind() != opensplunk.ResultSetKind_RESULT_SET_KIND_UNSPECIFIED {
 				t.Fatalf(
 					"invalid response exposed partial analysis: indexes=%v fields=%v result=%s",
 					decoded.GetReferencedIndexes(),
@@ -253,7 +253,7 @@ func TestValidateSearchReturnsSourceLocatedParsePlanningAndCompilerDiagnostics(t
 			}
 			diagnostic := decoded.GetDiagnostics()[0]
 			if diagnostic.GetCode() != test.code ||
-				diagnostic.GetSeverity() != opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR ||
+				diagnostic.GetSeverity() != opensplunk.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR ||
 				strings.TrimSpace(diagnostic.GetMessage()) == "" {
 				t.Fatalf("diagnostic = %+v, want code %q and error severity", diagnostic, test.code)
 			}
@@ -295,7 +295,7 @@ func TestValidateSearchReturnsSPLIndexScopeFailuresAsDiagnostics(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
-	decoded := &opensplunkv1.ValidateSearchResponse{}
+	decoded := &opensplunk.ValidateSearchResponse{}
 	unmarshalResponse(t, response, decoded)
 	if decoded.GetValid() || len(decoded.GetDiagnostics()) != 1 ||
 		decoded.GetDiagnostics()[0].GetCode() != "SPL_INDEX_FORBIDDEN" {
@@ -303,7 +303,7 @@ func TestValidateSearchReturnsSPLIndexScopeFailuresAsDiagnostics(t *testing.T) {
 	}
 	if decoded.NormalizedSpl != nil || len(decoded.GetReferencedIndexes()) != 0 ||
 		len(decoded.GetReferencedFields()) != 0 ||
-		decoded.GetPredictedResultKind() != opensplunkv1.ResultSetKind_RESULT_SET_KIND_UNSPECIFIED {
+		decoded.GetPredictedResultKind() != opensplunk.ResultSetKind_RESULT_SET_KIND_UNSPECIFIED {
 		t.Fatalf("invalid response exposed partial analysis: %+v", decoded)
 	}
 	sourceRange := decoded.GetDiagnostics()[0].GetSourceRange()
@@ -326,14 +326,14 @@ func TestValidateSearchSharesCreateTimeAndIndexAdmission(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		request    *opensplunkv1.ValidateSearchRequest
+		request    *opensplunk.ValidateSearchRequest
 		indexes    []control.Index
 		catalogErr error
 		wantStatus int
 	}{
 		{
 			name: "missing time range",
-			request: &opensplunkv1.ValidateSearchRequest{Definition: &opensplunkv1.SearchDefinition{
+			request: &opensplunk.ValidateSearchRequest{Definition: &opensplunk.SearchDefinition{
 				Spl: "index=main", IndexScope: []string{"main"},
 			}},
 			indexes:    []control.Index{active},
@@ -409,24 +409,24 @@ func TestValidateSearchRejectsUnsupportedDefinitionFieldsAndBoundsRequests(t *te
 
 	tests := []struct {
 		name   string
-		mutate func(*opensplunkv1.ValidateSearchRequest)
+		mutate func(*opensplunk.ValidateSearchRequest)
 	}{
-		{name: "missing definition", mutate: func(request *opensplunkv1.ValidateSearchRequest) { request.Definition = nil }},
-		{name: "blank SPL", mutate: func(request *opensplunkv1.ValidateSearchRequest) { request.Definition.Spl = " \n\t" }},
-		{name: "SPL NUL", mutate: func(request *opensplunkv1.ValidateSearchRequest) { request.Definition.Spl += "\x00" }},
-		{name: "invalid app ID", mutate: func(request *opensplunkv1.ValidateSearchRequest) {
+		{name: "missing definition", mutate: func(request *opensplunk.ValidateSearchRequest) { request.Definition = nil }},
+		{name: "blank SPL", mutate: func(request *opensplunk.ValidateSearchRequest) { request.Definition.Spl = " \n\t" }},
+		{name: "SPL NUL", mutate: func(request *opensplunk.ValidateSearchRequest) { request.Definition.Spl += "\x00" }},
+		{name: "invalid app ID", mutate: func(request *opensplunk.ValidateSearchRequest) {
 			request.Definition.AppId = new("app\x00main")
 		}},
-		{name: "preferred result tab", mutate: func(request *opensplunkv1.ValidateSearchRequest) {
-			request.Definition.PreferredResultTab = opensplunkv1.SearchResultTab_SEARCH_RESULT_TAB_EVENTS
+		{name: "preferred result tab", mutate: func(request *opensplunk.ValidateSearchRequest) {
+			request.Definition.PreferredResultTab = opensplunk.SearchResultTab_SEARCH_RESULT_TAB_EVENTS
 		}},
-		{name: "selected fields", mutate: func(request *opensplunkv1.ValidateSearchRequest) {
+		{name: "selected fields", mutate: func(request *opensplunk.ValidateSearchRequest) {
 			request.Definition.SelectedFields = []string{"message"}
 		}},
-		{name: "visualization", mutate: func(request *opensplunkv1.ValidateSearchRequest) {
-			request.Definition.Visualization = &opensplunkv1.VisualizationSpec{}
+		{name: "visualization", mutate: func(request *opensplunk.ValidateSearchRequest) {
+			request.Definition.Visualization = &opensplunk.VisualizationSpec{}
 		}},
-		{name: "too many indexes", mutate: func(request *opensplunkv1.ValidateSearchRequest) {
+		{name: "too many indexes", mutate: func(request *opensplunk.ValidateSearchRequest) {
 			request.Definition.IndexScope = make([]string, maximumRequestedIndexes+1)
 			for index := range request.Definition.IndexScope {
 				request.Definition.IndexScope[index] = "main"
@@ -662,15 +662,15 @@ func newValidationSearchJobs(t *testing.T) *fakeSearchJobs {
 	}
 }
 
-func newValidationAPIRequest(source string, indexes ...string) *opensplunkv1.ValidateSearchRequest {
+func newValidationAPIRequest(source string, indexes ...string) *opensplunk.ValidateSearchRequest {
 	return newValidationAPIRequestWithTime(source, "-24h", "now", indexes...)
 }
 
-func newValidationAPIRequestWithTime(source, earliest, latest string, indexes ...string) *opensplunkv1.ValidateSearchRequest {
+func newValidationAPIRequestWithTime(source, earliest, latest string, indexes ...string) *opensplunk.ValidateSearchRequest {
 	timezone := "UTC"
-	return &opensplunkv1.ValidateSearchRequest{Definition: &opensplunkv1.SearchDefinition{
+	return &opensplunk.ValidateSearchRequest{Definition: &opensplunk.SearchDefinition{
 		Spl: source,
-		TimeRange: &opensplunkv1.TimeRangeSpec{
+		TimeRange: &opensplunk.TimeRangeSpec{
 			Earliest: &earliest,
 			Latest:   &latest,
 			Timezone: &timezone,

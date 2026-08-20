@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
@@ -703,7 +703,7 @@ func resolveCandidatePrecedence(
 				TargetObjectID: dependency.TargetObjectID,
 				// #nosec G115 -- hydrated dependency target versions are validated as positive.
 				TargetVersion: uint64(dependency.TargetObjectVersion),
-				Role:          opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
+				Role:          opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
 			})
 		}
 	}
@@ -829,12 +829,12 @@ func compileResolutionDefinition(
 		selector:   normalized.Selector,
 	}
 	switch body := normalized.Definition.GetBody().(type) {
-	case *opensplunkv1.KnowledgeObjectDefinition_FieldExtraction:
+	case *opensplunk.KnowledgeObjectDefinition_FieldExtraction:
 		if body == nil || body.FieldExtraction == nil {
 			return resolutionDefinitionSemantics{}, errors.New("field extraction is nil")
 		}
 		switch extraction := body.FieldExtraction.GetExtraction().(type) {
-		case *opensplunkv1.FieldExtractionDefinition_Regex:
+		case *opensplunk.FieldExtractionDefinition_Regex:
 			if extraction == nil || extraction.Regex == nil {
 				return resolutionDefinitionSemantics{}, errors.New("regex extraction is nil")
 			}
@@ -858,7 +858,7 @@ func compileResolutionDefinition(
 			semantics.charges.ExtractionRegexWorkUnits = uint64(compiled.ProgramWorkUnits)
 			// #nosec G115 -- output cardinality is bounded by the compiled capture limit.
 			semantics.charges.ExtractionOutputs = uint32(len(outputs))
-		case *opensplunkv1.FieldExtractionDefinition_Json:
+		case *opensplunk.FieldExtractionDefinition_Json:
 			if extraction == nil || extraction.Json == nil {
 				return resolutionDefinitionSemantics{}, errors.New("JSON extraction is nil")
 			}
@@ -876,12 +876,12 @@ func compileResolutionDefinition(
 		default:
 			return resolutionDefinitionSemantics{}, errors.New("field extraction kind is unsupported")
 		}
-	case *opensplunkv1.KnowledgeObjectDefinition_FieldAlias:
+	case *opensplunk.KnowledgeObjectDefinition_FieldAlias:
 		if body == nil || body.FieldAlias == nil {
 			return resolutionDefinitionSemantics{}, errors.New("field alias is nil")
 		}
 		semantics.charges.GeneratedFields = 1
-	case *opensplunkv1.KnowledgeObjectDefinition_CalculatedField:
+	case *opensplunk.KnowledgeObjectDefinition_CalculatedField:
 		if body == nil || body.CalculatedField == nil {
 			return resolutionDefinitionSemantics{}, errors.New("calculated field is nil")
 		}
@@ -1034,7 +1034,7 @@ func resolutionSnapshotObject(object Object) (knowledgesnapshot.Object, error) {
 	if !typeOK || !scopeOK || object.Definition == nil {
 		return knowledgesnapshot.Object{}, fmt.Errorf("%w: active resolution object type is invalid", ErrCorrupt)
 	}
-	definition, ok := proto.Clone(object.Definition).(*opensplunkv1.KnowledgeObjectDefinition)
+	definition, ok := proto.Clone(object.Definition).(*opensplunk.KnowledgeObjectDefinition)
 	if !ok || definition == nil {
 		return knowledgesnapshot.Object{}, fmt.Errorf("%w: active resolution definition cannot be detached", ErrCorrupt)
 	}

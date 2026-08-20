@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 )
 
@@ -51,7 +51,7 @@ func TestStoreCanonicalStoresAndReturnsExactFixture(t *testing.T) {
 	}
 	if stored.TenantID != tenantID ||
 		stored.CollectorID != "gradethis-corpus" ||
-		stored.BatchID != "gradethis-corpus-v0.1" ||
+		stored.BatchID != "gradethis-corpus-batch" ||
 		stored.BatchSequence != 1 {
 		t.Fatalf(
 			"stored batch identity = tenant %q, collector %q, batch %q, sequence %d",
@@ -103,7 +103,7 @@ func TestStoreCanonicalStoresAndReturnsExactFixture(t *testing.T) {
 		}
 		if storedEvent.TenantID != tenantID ||
 			storedEvent.CollectorID != "gradethis-corpus" ||
-			storedEvent.BatchID != "gradethis-corpus-v0.1" ||
+			storedEvent.BatchID != "gradethis-corpus-batch" ||
 			!storedEvent.IndexTime.Equal(wantProfile.IndexTime) {
 			t.Fatalf(
 				"stored metadata for %q = %#v",
@@ -271,7 +271,7 @@ func TestStoreCanonicalRejectsInexactStoreResult(t *testing.T) {
 			result: ingest.StoreResult{
 				Accepted:           20,
 				OriginalEventCount: 20,
-				RejectedEvents: []*opensplunkv1.EventRejection{
+				RejectedEvents: []*opensplunk.EventRejection{
 					{},
 				},
 			},

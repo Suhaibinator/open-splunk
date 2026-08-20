@@ -77,7 +77,7 @@ func TestDeploymentClickHouseMigrationUsesOneVerifiedPrivilegedSession(
 				}
 				contents, readErr := fs.ReadFile(
 					migrationFiles,
-					"0004_create_recovery_sets.sql",
+					"0001_baseline.sql",
 				)
 				if readErr != nil ||
 					!strings.Contains(string(contents), "open_splunk.recovery_sets") {

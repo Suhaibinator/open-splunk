@@ -8,7 +8,7 @@ import (
 	"slices"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
 	"google.golang.org/protobuf/proto"
@@ -22,10 +22,10 @@ func TestPersistedTierOneBodyHydrationAndFilters(t *testing.T) {
 		id            string
 		body          string
 		owner         string
-		definition    *opensplunkv1.KnowledgeObjectDefinition
+		definition    *opensplunk.KnowledgeObjectDefinition
 		objectType    ObjectType
 		sharingScope  SharingScope
-		overwrite     opensplunkv1.KnowledgeOverwriteBehavior
+		overwrite     opensplunk.KnowledgeOverwriteBehavior
 		normalized    knowledgedefinition.Normalized
 		selectorToken string
 	}
@@ -34,28 +34,28 @@ func TestPersistedTierOneBodyHydrationAndFilters(t *testing.T) {
 			id: "ko-tier1-regex", body: "regex", owner: testOwner,
 			definition: tierOneMatrixDefinition("tier1-regex", SharingScopePrivate, "regex", "selector-regex-*"),
 			objectType: ObjectTypeFieldExtraction, sharingScope: SharingScopePrivate,
-			overwrite:     opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+			overwrite:     opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
 			selectorToken: "selector-regex",
 		},
 		{
 			id: "ko-tier1-json", body: "json", owner: "owner-b",
 			definition: tierOneMatrixDefinition("tier1-json", SharingScopeApp, "json", "selector-json-*"),
 			objectType: ObjectTypeFieldExtraction, sharingScope: SharingScopeApp,
-			overwrite:     opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+			overwrite:     opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 			selectorToken: "selector-json",
 		},
 		{
 			id: "ko-tier1-alias", body: "alias", owner: "owner-b",
 			definition: tierOneMatrixDefinition("tier1-alias", SharingScopeGlobal, "alias", "selector-alias-*"),
 			objectType: ObjectTypeFieldAlias, sharingScope: SharingScopeGlobal,
-			overwrite:     opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+			overwrite:     opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 			selectorToken: "selector-alias",
 		},
 		{
 			id: "ko-tier1-calculated", body: "calculated", owner: testOwner,
 			definition: tierOneMatrixDefinition("tier1-calculated", SharingScopePrivate, "calculated", "selector-calculated-*"),
 			objectType: ObjectTypeCalculatedField, sharingScope: SharingScopePrivate,
-			overwrite:     opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+			overwrite:     opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
 			selectorToken: "selector-calculated",
 		},
 	}
@@ -317,40 +317,40 @@ func TestListKeysetTraversalSortMatrix(t *testing.T) {
 	}
 }
 
-func tierOneMatrixDefinition(name string, scope SharingScope, body, selector string) *opensplunkv1.KnowledgeObjectDefinition {
+func tierOneMatrixDefinition(name string, scope SharingScope, body, selector string) *opensplunk.KnowledgeObjectDefinition {
 	description := "persisted Tier-1 " + body + " body for " + name
 	definition := aliasDefinition(testApp, name, scope, &description, selector)
 	switch body {
 	case "regex":
-		definition.Body = &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
-			FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
-				Extraction: &opensplunkv1.FieldExtractionDefinition_Regex{
-					Regex: &opensplunkv1.RegexFieldExtractionDefinition{
+		definition.Body = &opensplunk.KnowledgeObjectDefinition_FieldExtraction{
+			FieldExtraction: &opensplunk.FieldExtractionDefinition{
+				Extraction: &opensplunk.FieldExtractionDefinition_Regex{
+					Regex: &opensplunk.RegexFieldExtractionDefinition{
 						Pattern: `status=(?<status>[0-9]+)`, OutputFields: []string{"status"},
 					},
 				},
 			},
 		}
 	case "json":
-		definition.Body = &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
-			FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
+		definition.Body = &opensplunk.KnowledgeObjectDefinition_FieldExtraction{
+			FieldExtraction: &opensplunk.FieldExtractionDefinition{
 				InputField: "_raw",
-				Extraction: &opensplunkv1.FieldExtractionDefinition_Json{
-					Json: &opensplunkv1.JsonFieldExtractionDefinition{Path: "payload.user", OutputField: "user.name"},
+				Extraction: &opensplunk.FieldExtractionDefinition_Json{
+					Json: &opensplunk.JsonFieldExtractionDefinition{Path: "payload.user", OutputField: "user.name"},
 				},
-				OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+				OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 			},
 		}
 	case "alias":
-		definition.Body = &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{
-			FieldAlias: &opensplunkv1.FieldAliasDefinition{
+		definition.Body = &opensplunk.KnowledgeObjectDefinition_FieldAlias{
+			FieldAlias: &opensplunk.FieldAliasDefinition{
 				SourceField: "source", DestinationField: "source_alias",
-				OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+				OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 			},
 		}
 	case "calculated":
-		definition.Body = &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{
-			CalculatedField: &opensplunkv1.CalculatedFieldDefinition{
+		definition.Body = &opensplunk.KnowledgeObjectDefinition_CalculatedField{
+			CalculatedField: &opensplunk.CalculatedFieldDefinition{
 				DestinationField: "latency.class", Expression: `if(latency > 100, "slow", "fast")`,
 			},
 		}
@@ -366,7 +366,7 @@ func tierOneMatrixAssertObject(
 	wantID string,
 	wantType ObjectType,
 	wantScope SharingScope,
-	wantOverwrite opensplunkv1.KnowledgeOverwriteBehavior,
+	wantOverwrite opensplunk.KnowledgeOverwriteBehavior,
 	want knowledgedefinition.Normalized,
 ) {
 	t.Helper()
@@ -382,7 +382,7 @@ func tierOneMatrixAssertObject(
 	if !bytes.Equal(object.DefinitionSHA256, want.Digest[:]) || len(object.DefinitionSHA256) != 32 {
 		t.Fatalf("definition digest = %x, want %x", object.DefinitionSHA256, want.Digest)
 	}
-	var overwrite opensplunkv1.KnowledgeOverwriteBehavior
+	var overwrite opensplunk.KnowledgeOverwriteBehavior
 	switch wantType {
 	case ObjectTypeFieldExtraction:
 		overwrite = object.Definition.GetFieldExtraction().GetOverwriteBehavior()
@@ -397,19 +397,19 @@ func tierOneMatrixAssertObject(
 		t.Fatalf("overwrite enum = %v, want %v", overwrite, wantOverwrite)
 	}
 	patterns := object.Definition.GetSelector().GetHostPatterns()
-	if len(patterns) != 1 || patterns[0].GetMatchKind() != opensplunkv1.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_WILDCARD {
+	if len(patterns) != 1 || patterns[0].GetMatchKind() != opensplunk.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_WILDCARD {
 		t.Fatalf("canonical selector enum = %v, want one wildcard", patterns)
 	}
 }
 
-func tierOneMatrixMutateDefinition(definition *opensplunkv1.KnowledgeObjectDefinition) {
+func tierOneMatrixMutateDefinition(definition *opensplunk.KnowledgeObjectDefinition) {
 	definition.Name = "caller-mutated"
 	switch body := definition.GetBody().(type) {
-	case *opensplunkv1.KnowledgeObjectDefinition_FieldExtraction:
+	case *opensplunk.KnowledgeObjectDefinition_FieldExtraction:
 		body.FieldExtraction.InputField = "caller-mutated"
-	case *opensplunkv1.KnowledgeObjectDefinition_FieldAlias:
+	case *opensplunk.KnowledgeObjectDefinition_FieldAlias:
 		body.FieldAlias.SourceField = "caller-mutated"
-	case *opensplunkv1.KnowledgeObjectDefinition_CalculatedField:
+	case *opensplunk.KnowledgeObjectDefinition_CalculatedField:
 		body.CalculatedField.Expression = "caller-mutated"
 	}
 }

@@ -4,8 +4,8 @@ import {
   JsonIntegerEncoding,
   type ExportJob,
   type ExportProgress,
-} from "@/gen/ts/open_splunk/v1/export";
-import { ServerFeature } from "@/gen/ts/open_splunk/v1/system_api";
+} from "@/gen/ts/open_splunk/export";
+import { ServerFeature } from "@/gen/ts/open_splunk/system_api";
 import type { OpenSplunkApiClient } from "@/lib/api/open-splunk-client";
 import {
   SearchWebSocketClient,
@@ -25,13 +25,11 @@ import {
   supportsServerFeature,
   type SystemBootstrapModel,
 } from "@/lib/api/system-bootstrap";
-import { canonicalBoundedServerText } from "@/lib/search/server-text";
 
 export type ServerExportFormat = "csv" | "json-lines";
 
 const MAXIMUM_UINT64 = (1n << 64n) - 1n;
 const NANOSECONDS_PER_SECOND = 1_000_000_000n;
-const MAXIMUM_COMPILER_VERSION_BYTES = 128;
 
 export type ExportProgressRevisionState = {
   revision: bigint;
@@ -63,21 +61,6 @@ export type ExportProgressDecision =
 interface AuthoritativeExportSnapshot {
   job: ExportJob;
   progressRevision: NonNullable<ExportProgressRevisionState>;
-  compilerVersion: string;
-}
-
-function canonicalExportCompilerVersion(value: unknown): string {
-  // An absent field on a pre-provenance wire decodes as the empty string.
-  // Once observed, empty and non-empty identities are equally immutable.
-  const compilerVersion = canonicalBoundedServerText(
-    value,
-    MAXIMUM_COMPILER_VERSION_BYTES,
-    true,
-  );
-  if (compilerVersion === null) {
-    throw new TypeError("The export snapshot has an invalid compiler compatibility identity.");
-  }
-  return compilerVersion;
 }
 
 function isVersionedExportRevision(revision: bigint): boolean {
@@ -221,11 +204,7 @@ function reconcileAuthoritativeExportSnapshot(
   if (candidate.progress === undefined) {
     throw new TypeError("The export snapshot omitted progress.");
   }
-  const compilerVersion = canonicalExportCompilerVersion(candidate.compilerVersion);
   if (current !== null) {
-    if (compilerVersion !== current.compilerVersion) {
-      throw new Error("The export snapshot changed its compiler compatibility identity.");
-    }
     if (candidate.stateVersion < current.job.stateVersion) {
       throw new Error("The authoritative export snapshot is older than the applied state.");
     }
@@ -256,11 +235,9 @@ function reconcileAuthoritativeExportSnapshot(
   return {
     job: {
       ...candidate,
-      compilerVersion,
       progress: progressRevision.progress,
     },
     progressRevision,
-    compilerVersion,
   };
 }
 
@@ -511,7 +488,6 @@ function waitForServerExportWebSocket(
     );
     progressRevision = initialSnapshot.progressRevision;
     job = initialSnapshot.job;
-    let compilerVersion = initialSnapshot.compilerVersion;
     let settled = false;
     let recoveryTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
     let recoveryTimerImmediate = false;
@@ -525,14 +501,12 @@ function waitForServerExportWebSocket(
         {
           job,
           progressRevision: progressRevision!,
-          compilerVersion,
         },
         nextJob,
         initialJob.exportJobId,
       );
       progressRevision = reconciled.progressRevision;
       job = reconciled.job;
-      compilerVersion = reconciled.compilerVersion;
       options.onUpdate?.(job);
     }
 
@@ -820,7 +794,7 @@ function validatedDownloadUrl(downloadPath: string, apiBaseUrl: string | undefin
   const url = new URL(downloadPath, base);
   if (
     url.origin !== base.origin
-    || url.pathname !== "/api/v1/search/exports/download"
+    || url.pathname !== "/api/search/exports/download"
     || url.search.length > 0
     || url.hash.length > 0
     || url.username.length > 0

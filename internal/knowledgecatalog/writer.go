@@ -9,7 +9,7 @@ import (
 	"slices"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
@@ -166,8 +166,8 @@ func NewWriter(
 func (writer *Writer) Create(
 	ctx context.Context,
 	scope WriteScope,
-	request *opensplunkv1.CreateKnowledgeObjectRequest,
-) (result *opensplunkv1.CreateKnowledgeObjectResponse, returnedErr error) {
+	request *opensplunk.CreateKnowledgeObjectRequest,
+) (result *opensplunk.CreateKnowledgeObjectResponse, returnedErr error) {
 	result, returnedErr = writer.create(ctx, scope, request)
 	returnedErr = withDefaultErrorDisposition(
 		returnedErr,
@@ -181,8 +181,8 @@ func (writer *Writer) Create(
 func (writer *Writer) Update(
 	ctx context.Context,
 	scope WriteScope,
-	request *opensplunkv1.UpdateKnowledgeObjectRequest,
-) (result *opensplunkv1.UpdateKnowledgeObjectResponse, returnedErr error) {
+	request *opensplunk.UpdateKnowledgeObjectRequest,
+) (result *opensplunk.UpdateKnowledgeObjectResponse, returnedErr error) {
 	result, returnedErr = writer.update(ctx, scope, request)
 	returnedErr = withDefaultErrorDisposition(
 		returnedErr,
@@ -195,8 +195,8 @@ func (writer *Writer) Update(
 func (writer *Writer) SetState(
 	ctx context.Context,
 	scope WriteScope,
-	request *opensplunkv1.SetKnowledgeObjectStateRequest,
-) (result *opensplunkv1.SetKnowledgeObjectStateResponse, returnedErr error) {
+	request *opensplunk.SetKnowledgeObjectStateRequest,
+) (result *opensplunk.SetKnowledgeObjectStateResponse, returnedErr error) {
 	result, returnedErr = writer.setState(ctx, scope, request)
 	returnedErr = withDefaultErrorDisposition(
 		returnedErr,
@@ -210,8 +210,8 @@ func (writer *Writer) SetState(
 func (writer *Writer) Delete(
 	ctx context.Context,
 	scope WriteScope,
-	request *opensplunkv1.DeleteKnowledgeObjectRequest,
-) (result *opensplunkv1.DeleteKnowledgeObjectResponse, returnedErr error) {
+	request *opensplunk.DeleteKnowledgeObjectRequest,
+) (result *opensplunk.DeleteKnowledgeObjectResponse, returnedErr error) {
 	result, returnedErr = writer.delete(ctx, scope, request)
 	returnedErr = withDefaultErrorDisposition(
 		returnedErr,

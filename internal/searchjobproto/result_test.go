@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 )
 
@@ -32,36 +32,36 @@ func TestValuePreservesEverySupportedKindAndNestedShape(t *testing.T) {
 		name     string
 		value    searchjobs.Value
 		kindType any
-		check    func(*testing.T, *opensplunkv1.TypedValue)
+		check    func(*testing.T, *opensplunk.TypedValue)
 	}{
-		{name: "null", value: searchjobs.NullValue(), kindType: (*opensplunkv1.TypedValue_NullValue)(nil)},
-		{name: "string", value: searchjobs.StringValue("hello"), kindType: (*opensplunkv1.TypedValue_StringValue)(nil), check: func(t *testing.T, value *opensplunkv1.TypedValue) {
+		{name: "null", value: searchjobs.NullValue(), kindType: (*opensplunk.TypedValue_NullValue)(nil)},
+		{name: "string", value: searchjobs.StringValue("hello"), kindType: (*opensplunk.TypedValue_StringValue)(nil), check: func(t *testing.T, value *opensplunk.TypedValue) {
 			if value.GetStringValue() != "hello" {
 				t.Fatalf("string = %q", value.GetStringValue())
 			}
 		}},
-		{name: "signed", value: searchjobs.SignedValue(-9), kindType: (*opensplunkv1.TypedValue_Sint64Value)(nil)},
-		{name: "unsigned", value: searchjobs.UnsignedValue(math.MaxUint64), kindType: (*opensplunkv1.TypedValue_Uint64Value)(nil)},
-		{name: "double", value: searchjobs.DoubleValue(math.Inf(1)), kindType: (*opensplunkv1.TypedValue_DoubleValue)(nil), check: func(t *testing.T, value *opensplunkv1.TypedValue) {
+		{name: "signed", value: searchjobs.SignedValue(-9), kindType: (*opensplunk.TypedValue_Sint64Value)(nil)},
+		{name: "unsigned", value: searchjobs.UnsignedValue(math.MaxUint64), kindType: (*opensplunk.TypedValue_Uint64Value)(nil)},
+		{name: "double", value: searchjobs.DoubleValue(math.Inf(1)), kindType: (*opensplunk.TypedValue_DoubleValue)(nil), check: func(t *testing.T, value *opensplunk.TypedValue) {
 			if !math.IsInf(value.GetDoubleValue(), 1) {
 				t.Fatalf("double = %v", value.GetDoubleValue())
 			}
 		}},
-		{name: "bool", value: searchjobs.BoolValue(true), kindType: (*opensplunkv1.TypedValue_BoolValue)(nil)},
-		{name: "bytes", value: searchjobs.BytesValue([]byte{0, 1, 2}), kindType: (*opensplunkv1.TypedValue_BytesValue)(nil)},
-		{name: "timestamp", value: searchjobs.TimeValue(timestamp), kindType: (*opensplunkv1.TypedValue_TimestampValue)(nil), check: func(t *testing.T, value *opensplunkv1.TypedValue) {
+		{name: "bool", value: searchjobs.BoolValue(true), kindType: (*opensplunk.TypedValue_BoolValue)(nil)},
+		{name: "bytes", value: searchjobs.BytesValue([]byte{0, 1, 2}), kindType: (*opensplunk.TypedValue_BytesValue)(nil)},
+		{name: "timestamp", value: searchjobs.TimeValue(timestamp), kindType: (*opensplunk.TypedValue_TimestampValue)(nil), check: func(t *testing.T, value *opensplunk.TypedValue) {
 			if !value.GetTimestampValue().AsTime().Equal(timestamp) {
 				t.Fatalf("timestamp = %s", value.GetTimestampValue().AsTime())
 			}
 		}},
-		{name: "duration", value: searchjobs.DurationValue(-1500 * time.Millisecond), kindType: (*opensplunkv1.TypedValue_DurationValue)(nil)},
-		{name: "decimal", value: decimal, kindType: (*opensplunkv1.TypedValue_DecimalValue)(nil), check: func(t *testing.T, value *opensplunkv1.TypedValue) {
+		{name: "duration", value: searchjobs.DurationValue(-1500 * time.Millisecond), kindType: (*opensplunk.TypedValue_DurationValue)(nil)},
+		{name: "decimal", value: decimal, kindType: (*opensplunk.TypedValue_DecimalValue)(nil), check: func(t *testing.T, value *opensplunk.TypedValue) {
 			if value.GetDecimalValue().GetValue() != "1234" {
 				t.Fatalf("decimal = %q", value.GetDecimalValue().GetValue())
 			}
 		}},
-		{name: "list", value: searchjobs.ListValue(searchjobs.StringValue("one"), searchjobs.NullValue()), kindType: (*opensplunkv1.TypedValue_ListValue)(nil)},
-		{name: "object", value: object, kindType: (*opensplunkv1.TypedValue_ObjectValue)(nil), check: func(t *testing.T, value *opensplunkv1.TypedValue) {
+		{name: "list", value: searchjobs.ListValue(searchjobs.StringValue("one"), searchjobs.NullValue()), kindType: (*opensplunk.TypedValue_ListValue)(nil)},
+		{name: "object", value: object, kindType: (*opensplunk.TypedValue_ObjectValue)(nil), check: func(t *testing.T, value *opensplunk.TypedValue) {
 			fields := value.GetObjectValue().GetFields()
 			if len(fields) != 2 || fields[0].GetName() != "nested" || fields[1].GetName() != "raw" {
 				t.Fatalf("object fields = %+v", fields)
@@ -129,26 +129,26 @@ func TestSchemaPreservesOrderKindsAndSemantics(t *testing.T) {
 		{Name: "ERROR", Kind: searchjobs.ValueKindUnsigned, Nullable: true},
 		{Name: "body", Kind: searchjobs.ValueKindMixed, Multivalue: true},
 	}}
-	converted, err := Schema("schema-1", schema, ResultShape{Kind: opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES, RuntimeNamedColumns: true})
+	converted, err := Schema("schema-1", schema, ResultShape{Kind: opensplunk.ResultSetKind_RESULT_SET_KIND_TIME_SERIES, RuntimeNamedColumns: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if converted.GetSchemaId() != "schema-1" || converted.GetRevision() != 1 ||
-		converted.GetResultKind() != opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES ||
+		converted.GetResultKind() != opensplunk.ResultSetKind_RESULT_SET_KIND_TIME_SERIES ||
 		len(converted.GetColumns()) != len(schema.Columns) {
 		t.Fatalf("schema = %+v", converted)
 	}
 	if converted.GetColumns()[0].GetFieldName() != "_time" ||
-		converted.GetColumns()[0].GetSemanticType() != opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_EVENT_TIME {
+		converted.GetColumns()[0].GetSemanticType() != opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_EVENT_TIME {
 		t.Fatalf("time column = %+v", converted.GetColumns()[0])
 	}
 	for index := 1; index < len(converted.GetColumns()); index++ {
-		if converted.GetColumns()[index].GetSemanticType() != opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_METRIC {
+		if converted.GetColumns()[index].GetSemanticType() != opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_METRIC {
 			t.Fatalf("wide time-series column %d = %+v", index, converted.GetColumns()[index])
 		}
 	}
 	if !converted.GetColumns()[1].GetNullable() ||
-		converted.GetColumns()[2].GetValueType() != opensplunkv1.ValueType_VALUE_TYPE_MIXED ||
+		converted.GetColumns()[2].GetValueType() != opensplunk.ValueType_VALUE_TYPE_MIXED ||
 		!converted.GetColumns()[2].GetMultivalue() {
 		t.Fatalf("column flags/types = %+v", converted.GetColumns())
 	}
@@ -163,14 +163,14 @@ func TestSchemaMarksStaticTimeSeriesCountAsMetric(t *testing.T) {
 			{Name: "count", Kind: searchjobs.ValueKindUnsigned},
 		},
 	}, ResultShape{
-		Kind:                opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES,
+		Kind:                opensplunk.ResultSetKind_RESULT_SET_KIND_TIME_SERIES,
 		RuntimeNamedColumns: false,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := converted.GetColumns()[1].GetSemanticType(); got !=
-		opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_METRIC {
+		opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_METRIC {
 		t.Fatalf("count semantic = %v, want METRIC", got)
 	}
 }
@@ -189,7 +189,7 @@ func TestSchemaPreservesPresenceSensitiveFlatMultivalueDelimiter(t *testing.T) {
 			{Name: "hosts", Kind: searchjobs.ValueKindList, Multivalue: true},
 			{Name: "trend", Kind: searchjobs.ValueKindList, Multivalue: true, StatsSparkline: true},
 		},
-	}, ResultShape{Kind: opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS})
+	}, ResultShape{Kind: opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +215,7 @@ func TestSchemaRejectsMalformedColumns(t *testing.T) {
 		{Columns: []searchjobs.Column{{Name: "field", Kind: searchjobs.ValueKindList, Multivalue: true, FlatMultivalueDelimiter: string([]byte{0xff}), HasFlatMultivalueDelimiter: true}}},
 	}
 	for _, schema := range tests {
-		if _, err := Schema("schema", schema, ResultShape{Kind: opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS}); err == nil {
+		if _, err := Schema("schema", schema, ResultShape{Kind: opensplunk.ResultSetKind_RESULT_SET_KIND_EVENTS}); err == nil {
 			t.Fatalf("Schema(%+v) error = nil", schema)
 		}
 	}
@@ -273,7 +273,7 @@ func TestResultPagePreservesHTTPPagingAndCompleteness(t *testing.T) {
 		NextCursor: "next",
 		TotalRows:  10,
 		Complete:   false,
-	}, ResultShape{Kind: opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS}, true, true)
+	}, ResultShape{Kind: opensplunk.ResultSetKind_RESULT_SET_KIND_EVENTS}, true, true)
 	if err != nil {
 		t.Fatal(err)
 	}

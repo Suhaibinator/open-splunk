@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"google.golang.org/protobuf/proto"
@@ -102,19 +102,19 @@ func adversarialProjection(
 	version uint64,
 	incarnation time.Time,
 	terminal bool,
-	state opensplunkv1.SearchJobState,
+	state opensplunk.SearchJobState,
 	rows uint64,
 	includeProgress bool,
 ) targetProjection {
-	events := []*opensplunkv1.SearchWebSocketEvent{{
-		Payload: &opensplunkv1.SearchWebSocketEvent_SearchStateChanged{SearchStateChanged: &opensplunkv1.SearchJobStateChanged{
+	events := []*opensplunk.SearchWebSocketEvent{{
+		Payload: &opensplunk.SearchWebSocketEvent_SearchStateChanged{SearchStateChanged: &opensplunk.SearchJobStateChanged{
 			SearchJobId: "search", State: state, StateVersion: version,
 		}},
 	}}
 	if includeProgress {
-		events = append(events, &opensplunkv1.SearchWebSocketEvent{
-			Payload: &opensplunkv1.SearchWebSocketEvent_SearchProgress{SearchProgress: &opensplunkv1.SearchProgress{
-				Phase: opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_EXECUTING, ProducedRows: rows,
+		events = append(events, &opensplunk.SearchWebSocketEvent{
+			Payload: &opensplunk.SearchWebSocketEvent_SearchProgress{SearchProgress: &opensplunk.SearchProgress{
+				Phase: opensplunk.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_EXECUTING, ProducedRows: rows,
 			}},
 		})
 	}
@@ -128,11 +128,11 @@ func adversarialApply(t *testing.T, target *targetState, projection targetProjec
 	}
 }
 
-func adversarialDecode(t *testing.T, frames [][]byte) []*opensplunkv1.SearchWebSocketEvent {
+func adversarialDecode(t *testing.T, frames [][]byte) []*opensplunk.SearchWebSocketEvent {
 	t.Helper()
-	events := make([]*opensplunkv1.SearchWebSocketEvent, len(frames))
+	events := make([]*opensplunk.SearchWebSocketEvent, len(frames))
 	for index, frame := range frames {
-		event := new(opensplunkv1.SearchWebSocketEvent)
+		event := new(opensplunk.SearchWebSocketEvent)
 		if err := proto.Unmarshal(frame, event); err != nil {
 			t.Fatalf("frame[%d] is not a SearchWebSocketEvent: %v", index, err)
 		}
@@ -141,9 +141,9 @@ func adversarialDecode(t *testing.T, frames [][]byte) []*opensplunkv1.SearchWebS
 	return events
 }
 
-func adversarialDrain(t *testing.T, connection *connection) []*opensplunkv1.SearchWebSocketEvent {
+func adversarialDrain(t *testing.T, connection *connection) []*opensplunk.SearchWebSocketEvent {
 	t.Helper()
-	var events []*opensplunkv1.SearchWebSocketEvent
+	var events []*opensplunk.SearchWebSocketEvent
 	for {
 		frame, _, _, state := connection.nextFrame()
 		switch state {
@@ -151,7 +151,7 @@ func adversarialDrain(t *testing.T, connection *connection) []*opensplunkv1.Sear
 			return events
 		case writerFrame:
 			connection.completeFrame(uint64(len(frame)))
-			var event opensplunkv1.SearchWebSocketEvent
+			var event opensplunk.SearchWebSocketEvent
 			if err := proto.Unmarshal(frame, &event); err != nil {
 				t.Fatalf("queued frame is not a SearchWebSocketEvent: %v", err)
 			}
@@ -255,9 +255,9 @@ func TestAdversarialSearchProgressStateVersionPreventsTerminalFingerprintCollaps
 	adversarialApply(t, target, expiredProjection, false)
 	expiredEvents := adversarialDrain(t, connection)
 	if len(expiredEvents) != 3 ||
-		expiredEvents[0].GetSearchStateChanged().GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_EXPIRED ||
+		expiredEvents[0].GetSearchStateChanged().GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_EXPIRED ||
 		expiredEvents[1].GetSearchProgress() == nil ||
-		expiredEvents[2].GetSearchTerminal().GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_EXPIRED {
+		expiredEvents[2].GetSearchTerminal().GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_EXPIRED {
 		t.Fatalf("expired projection events = %+v", expiredEvents)
 	}
 	expiredProgress := expiredEvents[1].GetSearchProgress()
@@ -269,7 +269,7 @@ func TestAdversarialSearchProgressStateVersionPreventsTerminalFingerprintCollaps
 			expired.Version, completedEvents[2].GetSequence(),
 		)
 	}
-	completedAtExpiredVersion := proto.Clone(completedProgress).(*opensplunkv1.SearchProgress)
+	completedAtExpiredVersion := proto.Clone(completedProgress).(*opensplunk.SearchProgress)
 	completedAtExpiredVersion.StateVersion = expired.Version
 	if !proto.Equal(completedAtExpiredVersion, expiredProgress) {
 		t.Fatalf(
@@ -286,7 +286,7 @@ func TestAdversarialReplayRingKeepsContiguousCurrentOnlyTail(t *testing.T) {
 	incarnation := adversarialNow.Add(-time.Hour)
 
 	adversarialApply(t, target, adversarialProjection(
-		1, incarnation, false, opensplunkv1.SearchJobState_SEARCH_JOB_STATE_QUEUED, 1, true,
+		1, incarnation, false, opensplunk.SearchJobState_SEARCH_JOB_STATE_QUEUED, 1, true,
 	), true)
 
 	target.mu.Lock()
@@ -309,7 +309,7 @@ func TestAdversarialReplayRingKeepsContiguousCurrentOnlyTail(t *testing.T) {
 	}
 
 	adversarialApply(t, target, adversarialProjection(
-		2, incarnation, false, opensplunkv1.SearchJobState_SEARCH_JOB_STATE_RUNNING, 2, true,
+		2, incarnation, false, opensplunk.SearchJobState_SEARCH_JOB_STATE_RUNNING, 2, true,
 	), false)
 	target.mu.Lock()
 	if target.latest != base+4 || len(target.replay) != 1 || target.replay[0].sequence != base+3 {
@@ -345,7 +345,7 @@ func TestAdversarialIncompleteRetentionNeverPublishesUnretainedFramesAndRepairs(
 	base := adversarialSequenceBase
 	projection := adversarialProjection(
 		1, adversarialNow.Add(-time.Hour), false,
-		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_RUNNING, 0, false,
+		opensplunk.SearchJobState_SEARCH_JOB_STATE_RUNNING, 0, false,
 	)
 
 	if !service.reserveReplayBytes(minimumFrameBytes) {
@@ -357,7 +357,7 @@ func TestAdversarialIncompleteRetentionNeverPublishesUnretainedFramesAndRepairs(
 		t.Fatalf("first failed retention delivery = %+v, want one resynchronization", events)
 	}
 	resync := events[0].GetResynchronizationRequired()
-	if resync.GetReason() != opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED ||
+	if resync.GetReason() != opensplunk.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED ||
 		resync.GetEarliestAvailableSequence() != 0 || resync.GetLatestSequence() != base+1 {
 		t.Fatalf("first resynchronization = %+v", resync)
 	}
@@ -397,7 +397,7 @@ func TestAdversarialMissingStaticCategoryIsRetried(t *testing.T) {
 	base := adversarialSequenceBase
 	incarnation := adversarialNow.Add(-time.Hour)
 	adversarialApply(t, target, adversarialProjection(
-		1, incarnation, false, opensplunkv1.SearchJobState_SEARCH_JOB_STATE_QUEUED, 9, true,
+		1, incarnation, false, opensplunk.SearchJobState_SEARCH_JOB_STATE_QUEUED, 9, true,
 	), true)
 
 	target.mu.Lock()
@@ -405,7 +405,7 @@ func TestAdversarialMissingStaticCategoryIsRetried(t *testing.T) {
 	target.currentIncomplete = true
 	target.mu.Unlock()
 	adversarialApply(t, target, adversarialProjection(
-		2, incarnation, false, opensplunkv1.SearchJobState_SEARCH_JOB_STATE_RUNNING, 9, true,
+		2, incarnation, false, opensplunk.SearchJobState_SEARCH_JOB_STATE_RUNNING, 9, true,
 	), false)
 
 	target.mu.Lock()
@@ -515,19 +515,19 @@ func TestAdversarialDivergenceBoundaryRequiresResynchronization(t *testing.T) {
 	base := adversarialSequenceBase
 	adversarialApply(t, target, adversarialProjection(
 		5, adversarialNow.Add(-2*time.Hour), true,
-		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_RUNNING, 5, true,
+		opensplunk.SearchJobState_SEARCH_JOB_STATE_RUNNING, 5, true,
 	), true)
 	target.mu.Lock()
 	target.epochEstablished = true
 	target.mu.Unlock()
 	adversarialApply(t, target, adversarialProjection(
 		1, adversarialNow.Add(-time.Hour), true,
-		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED, 6, true,
+		opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED, 6, true,
 	), false)
 
 	connection := newConnection(service, nil)
 	defer connection.cancel()
-	failure := connection.subscribe("request", &opensplunkv1.SubscribeSearchJobsCommand{Subscriptions: []*opensplunkv1.SearchSubscription{{
+	failure := connection.subscribe("request", &opensplunk.SubscribeSearchJobsCommand{Subscriptions: []*opensplunk.SearchSubscription{{
 		SubscriptionId: "diverged",
 		Target:         target.key.protobuf(),
 		AfterSequence:  base + 2,
@@ -540,7 +540,7 @@ func TestAdversarialDivergenceBoundaryRequiresResynchronization(t *testing.T) {
 		t.Fatalf("divergence response = %+v", events)
 	}
 	resync := events[1].GetResynchronizationRequired()
-	if resync.GetReason() != opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_STATE_DIVERGED ||
+	if resync.GetReason() != opensplunk.ResynchronizationReason_RESYNCHRONIZATION_REASON_STATE_DIVERGED ||
 		resync.GetEarliestAvailableSequence() != base+3 || resync.GetLatestSequence() != base+4 {
 		t.Fatalf("divergence resynchronization = %+v", resync)
 	}
@@ -553,7 +553,7 @@ func TestAdversarialUnsubscribeMakesLateDeliveryNoOpSuccess(t *testing.T) {
 	connection := newConnection(service, nil)
 	defer connection.cancel()
 	subscription := adversarialAttach(target, connection, "removed")
-	if failure := connection.unsubscribe("request", &opensplunkv1.UnsubscribeSearchJobsCommand{
+	if failure := connection.unsubscribe("request", &opensplunk.UnsubscribeSearchJobsCommand{
 		SubscriptionIds: []string{"removed"},
 	}); failure != nil {
 		t.Fatalf("unsubscribe() = %v", failure)
@@ -567,7 +567,7 @@ func TestAdversarialUnsubscribeMakesLateDeliveryNoOpSuccess(t *testing.T) {
 	}
 	if !subscription.deliverControl(resynchronizationEvent(
 		"removed", target.key,
-		opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED,
+		opensplunk.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED,
 		0, adversarialSequenceBase, adversarialNow,
 	)) {
 		t.Fatal("late inactive control delivery reported failure")
@@ -592,7 +592,7 @@ func TestAdversarialStaleSameIncarnationProjectionIsIgnored(t *testing.T) {
 	target := adversarialNewTarget(service, "stale-projection")
 	newer := adversarialProjection(
 		11, adversarialNow.Add(-time.Hour), false,
-		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_RUNNING, 11, true,
+		opensplunk.SearchJobState_SEARCH_JOB_STATE_RUNNING, 11, true,
 	)
 	adversarialApply(t, target, newer, true)
 	target.mu.Lock()
@@ -601,7 +601,7 @@ func TestAdversarialStaleSameIncarnationProjectionIsIgnored(t *testing.T) {
 
 	stale := adversarialProjection(
 		10, adversarialNow.Add(-time.Hour), false,
-		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_RUNNING, 10, true,
+		opensplunk.SearchJobState_SEARCH_JOB_STATE_RUNNING, 10, true,
 	)
 	adversarialApply(t, target, stale, false)
 	target.mu.Lock()
@@ -675,7 +675,7 @@ func TestDisposablePreviewPressureClosesAndRetainsReplay(t *testing.T) {
 		)
 	}
 	healthyEvents := adversarialDrain(t, healthy)
-	var healthyRows []*opensplunkv1.ResultRow
+	var healthyRows []*opensplunk.ResultRow
 	if len(healthyEvents) == 1 {
 		healthyRows = healthyEvents[0].GetResultPreview().GetRows()
 	}
@@ -701,7 +701,7 @@ func TestDisposablePreviewPressureClosesAndRetainsReplay(t *testing.T) {
 		t.Fatal("retained preview replay was not accepted")
 	}
 	recoveredEvents := adversarialDrain(t, recovered)
-	var recoveredRows []*opensplunkv1.ResultRow
+	var recoveredRows []*opensplunk.ResultRow
 	if len(recoveredEvents) == 1 {
 		recoveredRows = recoveredEvents[0].GetResultPreview().GetRows()
 	}
@@ -731,7 +731,7 @@ func TestPreviewTailoringWorkDoesNotConsumeConnectionQueueBudget(t *testing.T) {
 	initial.previewRows = 2
 	initial.events[len(initial.events)-1].GetResultPreview().Rows = append(
 		initial.events[len(initial.events)-1].GetResultPreview().Rows,
-		&opensplunkv1.ResultRow{RowId: strings.Repeat("large-row-", 64), Ordinal: 1},
+		&opensplunk.ResultRow{RowId: strings.Repeat("large-row-", 64), Ordinal: 1},
 	)
 	adversarialApply(t, target, initial, true)
 
@@ -747,13 +747,13 @@ func TestPreviewTailoringWorkDoesNotConsumeConnectionQueueBudget(t *testing.T) {
 	changedPreview.Rows[0].RowId = "changed-tailored-row"
 	changedPreview.Rows = append(
 		changedPreview.Rows,
-		&opensplunkv1.ResultRow{RowId: strings.Repeat("large-row-", 64), Ordinal: 1},
+		&opensplunk.ResultRow{RowId: strings.Repeat("large-row-", 64), Ordinal: 1},
 	)
 	target.mu.Lock()
 	nextSequence := target.latest + 1
-	targetProto := proto.Clone(target.target).(*opensplunkv1.JobTarget)
+	targetProto := proto.Clone(target.target).(*opensplunk.JobTarget)
 	target.mu.Unlock()
-	canonicalEvent := proto.Clone(changed.events[len(changed.events)-1]).(*opensplunkv1.SearchWebSocketEvent)
+	canonicalEvent := proto.Clone(changed.events[len(changed.events)-1]).(*opensplunk.SearchWebSocketEvent)
 	canonicalEvent.Sequence = nextSequence
 	canonicalEvent.Target = targetProto
 	occurredAt, err := timestampToProto(adversarialNow)
@@ -788,7 +788,7 @@ func TestPreviewTailoringWorkDoesNotConsumeConnectionQueueBudget(t *testing.T) {
 	adversarialApply(t, target, changed, false)
 
 	healthyEvents := adversarialDrain(t, healthy)
-	var healthyRows []*opensplunkv1.ResultRow
+	var healthyRows []*opensplunk.ResultRow
 	if len(healthyEvents) == 1 {
 		healthyRows = healthyEvents[0].GetResultPreview().GetRows()
 	}
@@ -828,7 +828,7 @@ func TestInitialPreviewTailoringWorkDoesNotConsumeConnectionQueueBudget(t *testi
 	initial.previewRows = 2
 	initial.events[len(initial.events)-1].GetResultPreview().Rows = append(
 		initial.events[len(initial.events)-1].GetResultPreview().Rows,
-		&opensplunkv1.ResultRow{RowId: strings.Repeat("large-row-", 32), Ordinal: 1},
+		&opensplunk.ResultRow{RowId: strings.Repeat("large-row-", 32), Ordinal: 1},
 	)
 	adversarialApply(t, target, initial, true)
 	target.mu.Lock()
@@ -841,7 +841,7 @@ func TestInitialPreviewTailoringWorkDoesNotConsumeConnectionQueueBudget(t *testi
 	changedPreview.Rows[0].RowId = "changed-initial-tailored-row"
 	changedPreview.Rows = append(
 		changedPreview.Rows,
-		&opensplunkv1.ResultRow{RowId: strings.Repeat("large-row-", 32), Ordinal: 1},
+		&opensplunk.ResultRow{RowId: strings.Repeat("large-row-", 32), Ordinal: 1},
 	)
 	adversarialApply(t, target, changed, false)
 
@@ -852,7 +852,7 @@ func TestInitialPreviewTailoringWorkDoesNotConsumeConnectionQueueBudget(t *testi
 	if !continuous || len(replay) != 1 {
 		t.Fatalf("initial preview replay after %d = continuous:%t frames:%d", checkpoint, continuous, len(replay))
 	}
-	var canonicalEvent opensplunkv1.SearchWebSocketEvent
+	var canonicalEvent opensplunk.SearchWebSocketEvent
 	if err := proto.Unmarshal(replay[0], &canonicalEvent); err != nil {
 		t.Fatalf("decode retained preview: %v", err)
 	}
@@ -905,8 +905,8 @@ func TestInitialPreviewTailoringWorkDoesNotConsumeConnectionQueueBudget(t *testi
 		healthy.removeAllSubscriptions()
 		healthy.hardClose()
 	}()
-	failure := healthy.subscribe(requestID, &opensplunkv1.SubscribeSearchJobsCommand{
-		Subscriptions: []*opensplunkv1.SearchSubscription{{
+	failure := healthy.subscribe(requestID, &opensplunk.SubscribeSearchJobsCommand{
+		Subscriptions: []*opensplunk.SearchSubscription{{
 			SubscriptionId:  subscriptionID,
 			Target:          target.key.protobuf(),
 			AfterSequence:   checkpoint,
@@ -930,8 +930,8 @@ func TestInitialPreviewTailoringWorkDoesNotConsumeConnectionQueueBudget(t *testi
 	}
 
 	events := adversarialDrain(t, healthy)
-	var acknowledged *opensplunkv1.SubscriptionAcknowledged
-	var rows []*opensplunkv1.ResultRow
+	var acknowledged *opensplunk.SubscriptionAcknowledged
+	var rows []*opensplunk.ResultRow
 	if len(events) == 2 {
 		acknowledged = events[0].GetSubscriptionAcknowledged()
 		rows = events[1].GetResultPreview().GetRows()
@@ -1121,7 +1121,7 @@ func TestAdversarialRestartSequenceEpochRejectsOldNumericSequenceAfterEstablishm
 	secondTarget.mu.Unlock()
 	projection := adversarialProjection(
 		1, adversarialNow.Add(-time.Hour), false,
-		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_RUNNING, 1, true,
+		opensplunk.SearchJobState_SEARCH_JOB_STATE_RUNNING, 1, true,
 	)
 	adversarialApply(t, firstTarget, projection, true)
 	adversarialApply(t, secondTarget, projection, true)
@@ -1130,7 +1130,7 @@ func TestAdversarialRestartSequenceEpochRejectsOldNumericSequenceAfterEstablishm
 	firstTarget.mu.Unlock()
 
 	establisher := newConnection(secondService, nil)
-	if failure := establisher.subscribe("establish", &opensplunkv1.SubscribeSearchJobsCommand{Subscriptions: []*opensplunkv1.SearchSubscription{{
+	if failure := establisher.subscribe("establish", &opensplunk.SubscribeSearchJobsCommand{Subscriptions: []*opensplunk.SearchSubscription{{
 		SubscriptionId: "current", Target: secondTarget.key.protobuf(), AfterSequence: 0,
 	}}}); failure != nil {
 		t.Fatalf("establish subscribe() = %v", failure)
@@ -1155,14 +1155,14 @@ func TestAdversarialRestartSequenceEpochRejectsOldNumericSequenceAfterEstablishm
 
 	stale := newConnection(secondService, nil)
 	defer stale.cancel()
-	if failure := stale.subscribe("stale", &opensplunkv1.SubscribeSearchJobsCommand{Subscriptions: []*opensplunkv1.SearchSubscription{{
+	if failure := stale.subscribe("stale", &opensplunk.SubscribeSearchJobsCommand{Subscriptions: []*opensplunk.SearchSubscription{{
 		SubscriptionId: "stale", Target: secondTarget.key.protobuf(), AfterSequence: oldSequence,
 	}}}); failure != nil {
 		t.Fatalf("stale subscribe() = %v", failure)
 	}
 	events := adversarialDrain(t, stale)
 	if len(events) != 2 || events[1].GetResynchronizationRequired() == nil ||
-		events[1].GetResynchronizationRequired().GetReason() != opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_STATE_DIVERGED {
+		events[1].GetResynchronizationRequired().GetReason() != opensplunk.ResynchronizationReason_RESYNCHRONIZATION_REASON_STATE_DIVERGED {
 		t.Fatalf("stale pre-restart numeric sequence was accepted after epoch establishment: %+v", events)
 	}
 	stale.removeAllSubscriptions()
@@ -1195,7 +1195,7 @@ func TestAdversarialPermanentNotFoundPollBacksOffAndNotifiesOnce(t *testing.T) {
 	}
 	events := adversarialDrain(t, connection)
 	if len(events) != 1 || events[0].GetResynchronizationRequired() == nil ||
-		events[0].GetResynchronizationRequired().GetReason() != opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_STATE_DIVERGED {
+		events[0].GetResynchronizationRequired().GetReason() != opensplunk.ResynchronizationReason_RESYNCHRONIZATION_REASON_STATE_DIVERGED {
 		t.Fatalf("poll suppression notification = %+v", events)
 	}
 }
@@ -1219,7 +1219,7 @@ func TestAdversarialApplyRetireAndResolverPinsRace(t *testing.T) {
 		for index := 1; index <= actorIterations; index++ {
 			_, err := target.applyProjection(adversarialProjection(
 				uint64(index), incarnation, false,
-				opensplunkv1.SearchJobState_SEARCH_JOB_STATE_RUNNING, uint64(index), true,
+				opensplunk.SearchJobState_SEARCH_JOB_STATE_RUNNING, uint64(index), true,
 			), index == 1)
 			if err != nil && !errors.Is(err, errTargetRetired) {
 				errorsSeen <- err

@@ -2,7 +2,7 @@
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { KnowledgeObject } from "@/gen/ts/open_splunk/v1/knowledge";
+import type { KnowledgeObject } from "@/gen/ts/open_splunk/knowledge";
 
 import {
   KNOWLEDGE_LIFECYCLE_STATE_FILTER_OPTIONS,

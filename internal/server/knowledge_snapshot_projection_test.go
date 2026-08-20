@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
 	"google.golang.org/protobuf/encoding/protowire"
@@ -19,7 +19,7 @@ func TestSearchJobProjectionRedactsDetachedKnowledgeObjectDisclosures(t *testing
 
 	job := completeJob("job-knowledge-summary")
 	job.KnowledgeSnapshot = serverKnowledgeSnapshotSummary()
-	wantRef := proto.Clone(job.KnowledgeSnapshot.Ref).(*opensplunkv1.KnowledgeSnapshotRef)
+	wantRef := proto.Clone(job.KnowledgeSnapshot.Ref).(*opensplunk.KnowledgeSnapshotRef)
 
 	converted, err := searchJobToProto(job, testNow)
 	if err != nil {
@@ -58,9 +58,9 @@ func TestKnowledgeSnapshotProjectionRejectsUnknownOversizedAndAmplifiedShapes(t 
 	))
 	amplified := serverEmptyKnowledgeSnapshotSummary()
 	amplified.Ref.ObjectCount = knowledgesnapshot.MaximumSummaryObjects + 1
-	amplified.Objects = make([]*opensplunkv1.KnowledgeSnapshotObjectSummary, knowledgesnapshot.MaximumSummaryObjects+1)
+	amplified.Objects = make([]*opensplunk.KnowledgeSnapshotObjectSummary, knowledgesnapshot.MaximumSummaryObjects+1)
 
-	for name, summary := range map[string]*opensplunkv1.KnowledgeSnapshotSummary{
+	for name, summary := range map[string]*opensplunk.KnowledgeSnapshotSummary{
 		"unknown":   unknown,
 		"oversized": oversized,
 		"amplified": amplified,
@@ -82,7 +82,7 @@ func TestKnowledgeSnapshotProjectionPreservesTruncatedCanonicalPrefix(t *testing
 	input := serverKnowledgeSnapshotSummary()
 	input.Ref.ObjectCount = knowledgesnapshot.MaximumSummaryObjects + 1
 	for len(input.Objects) < knowledgesnapshot.MaximumSummaryObjects {
-		object := proto.Clone(input.Objects[1]).(*opensplunkv1.KnowledgeSnapshotObjectSummary)
+		object := proto.Clone(input.Objects[1]).(*opensplunk.KnowledgeSnapshotObjectSummary)
 		object.ResolutionOrdinal = uint32(len(input.Objects))
 		input.Objects = append(input.Objects, object)
 	}
@@ -117,32 +117,32 @@ func TestSearchHistoryGetAndListRedactKnowledgeObjectDisclosures(t *testing.T) {
 		"history-knowledge", testNow, "search-app", "",
 	)
 	entry.KnowledgeSnapshot = serverKnowledgeSnapshotSummary()
-	wantRef := proto.Clone(entry.KnowledgeSnapshot.Ref).(*opensplunkv1.KnowledgeSnapshotRef)
+	wantRef := proto.Clone(entry.KnowledgeSnapshot.Ref).(*opensplunk.KnowledgeSnapshotRef)
 	store := &fakeSearchHistory{
-		getFn: func(context.Context, searchhistory.AccessScope, string) (*opensplunkv1.SearchHistoryEntry, error) {
+		getFn: func(context.Context, searchhistory.AccessScope, string) (*opensplunk.SearchHistoryEntry, error) {
 			return entry, nil
 		},
 		listFn: func(context.Context, searchhistory.AccessScope, searchhistory.ListRequest) (searchhistory.ListResult, error) {
-			return searchhistory.ListResult{Entries: []*opensplunkv1.SearchHistoryEntry{entry}}, nil
+			return searchhistory.ListResult{Entries: []*opensplunk.SearchHistoryEntry{entry}}, nil
 		},
 	}
 	handler := newTestHandler(t, Config{
 		SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, SearchHistory: store, WebUI: testUI(),
 	})
 
-	getResponse := postProto(t, handler, "/api/v1/search/history/get", &opensplunkv1.GetSearchHistoryEntryRequest{SearchJobId: entry.SearchJobId})
+	getResponse := postProto(t, handler, "/api/search/history/get", &opensplunk.GetSearchHistoryEntryRequest{SearchJobId: entry.SearchJobId})
 	if getResponse.Code != http.StatusOK {
 		t.Fatalf("get status = %d, body = %s", getResponse.Code, getResponse.Body.String())
 	}
-	var got opensplunkv1.GetSearchHistoryEntryResponse
+	var got opensplunk.GetSearchHistoryEntryResponse
 	unmarshalResponse(t, getResponse, &got)
 	assertRedactedKnowledgeSnapshotSummary(t, got.GetHistoryEntry().GetKnowledgeSnapshot(), wantRef)
 
-	listResponse := postProto(t, handler, "/api/v1/search/history/list", &opensplunkv1.ListSearchHistoryRequest{})
+	listResponse := postProto(t, handler, "/api/search/history/list", &opensplunk.ListSearchHistoryRequest{})
 	if listResponse.Code != http.StatusOK {
 		t.Fatalf("list status = %d, body = %s", listResponse.Code, listResponse.Body.String())
 	}
-	var listed opensplunkv1.ListSearchHistoryResponse
+	var listed opensplunk.ListSearchHistoryResponse
 	unmarshalResponse(t, listResponse, &listed)
 	if len(listed.GetHistoryEntries()) != 1 {
 		t.Fatalf("listed entries = %d, want 1", len(listed.GetHistoryEntries()))
@@ -164,26 +164,26 @@ func TestSearchHistoryGetAndListFailClosedOnInvalidKnowledgeDependencyOutput(t *
 	invalid.KnowledgeSnapshot = serverEmptyKnowledgeSnapshotSummary()
 	invalid.KnowledgeSnapshot.Ref.ObjectCount = knowledgesnapshot.MaximumSummaryObjects + 1
 	invalid.KnowledgeSnapshot.Objects = make(
-		[]*opensplunkv1.KnowledgeSnapshotObjectSummary,
+		[]*opensplunk.KnowledgeSnapshotObjectSummary,
 		knowledgesnapshot.MaximumSummaryObjects+1,
 	)
 	store := &fakeSearchHistory{
-		getFn: func(context.Context, searchhistory.AccessScope, string) (*opensplunkv1.SearchHistoryEntry, error) {
+		getFn: func(context.Context, searchhistory.AccessScope, string) (*opensplunk.SearchHistoryEntry, error) {
 			return invalid, nil
 		},
 		listFn: func(context.Context, searchhistory.AccessScope, searchhistory.ListRequest) (searchhistory.ListResult, error) {
-			return searchhistory.ListResult{Entries: []*opensplunkv1.SearchHistoryEntry{invalid}}, nil
+			return searchhistory.ListResult{Entries: []*opensplunk.SearchHistoryEntry{invalid}}, nil
 		},
 	}
 	handler := newTestHandler(t, Config{
 		SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, SearchHistory: store, WebUI: testUI(),
 	})
 
-	getResponse := postProto(t, handler, "/api/v1/search/history/get", &opensplunkv1.GetSearchHistoryEntryRequest{SearchJobId: invalid.SearchJobId})
+	getResponse := postProto(t, handler, "/api/search/history/get", &opensplunk.GetSearchHistoryEntryRequest{SearchJobId: invalid.SearchJobId})
 	if getResponse.Code != http.StatusInternalServerError {
 		t.Fatalf("get status = %d, want 500; body = %s", getResponse.Code, getResponse.Body.String())
 	}
-	listResponse := postProto(t, handler, "/api/v1/search/history/list", &opensplunkv1.ListSearchHistoryRequest{})
+	listResponse := postProto(t, handler, "/api/search/history/list", &opensplunk.ListSearchHistoryRequest{})
 	if listResponse.Code != http.StatusInternalServerError {
 		t.Fatalf("list status = %d, want 500; body = %s", listResponse.Code, listResponse.Body.String())
 	}
@@ -191,8 +191,8 @@ func TestSearchHistoryGetAndListFailClosedOnInvalidKnowledgeDependencyOutput(t *
 
 func assertRedactedKnowledgeSnapshotSummary(
 	t *testing.T,
-	got *opensplunkv1.KnowledgeSnapshotSummary,
-	wantRef *opensplunkv1.KnowledgeSnapshotRef,
+	got *opensplunk.KnowledgeSnapshotSummary,
+	wantRef *opensplunk.KnowledgeSnapshotRef,
 ) {
 	t.Helper()
 	if got == nil || !proto.Equal(got.GetRef(), wantRef) || len(got.GetObjects()) != 2 || got.GetObjectsTruncated() {
@@ -210,48 +210,47 @@ func assertRedactedKnowledgeSnapshotSummary(
 		t.Fatalf("projected snapshot reference is invalid: %v", err)
 	}
 	if got.Objects[0].GetResolutionOrdinal() != 0 ||
-		got.Objects[0].GetObjectType() != opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION ||
-		got.Objects[0].GetStage() != opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION ||
+		got.Objects[0].GetObjectType() != opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION ||
+		got.Objects[0].GetStage() != opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION ||
 		got.Objects[1].GetResolutionOrdinal() != 1 ||
-		got.Objects[1].GetObjectType() != opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS ||
-		got.Objects[1].GetStage() != opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS {
+		got.Objects[1].GetObjectType() != opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS ||
+		got.Objects[1].GetStage() != opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS {
 		t.Fatalf("projected object metadata = %+v", got.Objects)
 	}
 }
 
-func serverKnowledgeSnapshotSummary() *opensplunkv1.KnowledgeSnapshotSummary {
-	return &opensplunkv1.KnowledgeSnapshotSummary{
-		Ref: &opensplunkv1.KnowledgeSnapshotRef{
-			SnapshotSha256:               bytes.Repeat([]byte{0x42}, sha256.Size),
-			TenantCatalogRevision:        7,
-			TenantCatalogStateToken:      bytes.Repeat([]byte{0x73}, sha256.Size),
-			ObjectCount:                  2,
-			CompilerCompatibilityVersion: knowledgesnapshot.CompilerCompatibilityVersion,
-			LookupAssetCount:             1,
+func serverKnowledgeSnapshotSummary() *opensplunk.KnowledgeSnapshotSummary {
+	return &opensplunk.KnowledgeSnapshotSummary{
+		Ref: &opensplunk.KnowledgeSnapshotRef{
+			SnapshotSha256:          bytes.Repeat([]byte{0x42}, sha256.Size),
+			TenantCatalogRevision:   7,
+			TenantCatalogStateToken: bytes.Repeat([]byte{0x73}, sha256.Size),
+			ObjectCount:             2,
+			LookupAssetCount:        1,
 		},
-		Objects: []*opensplunkv1.KnowledgeSnapshotObjectSummary{
+		Objects: []*opensplunk.KnowledgeSnapshotObjectSummary{
 			{
 				ResolutionOrdinal: 0,
-				ObjectType:        opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
-				Stage:             opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
-				Disclosure: &opensplunkv1.KnowledgeSnapshotObjectSummary_AuthorizedObject{
-					AuthorizedObject: &opensplunkv1.KnowledgeSnapshotAuthorizedObjectSummary{
+				ObjectType:        opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
+				Stage:             opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
+				Disclosure: &opensplunk.KnowledgeSnapshotObjectSummary_AuthorizedObject{
+					AuthorizedObject: &opensplunk.KnowledgeSnapshotAuthorizedObjectSummary{
 						KnowledgeObjectId: "extract-secret-id", Version: 11, Name: "Secret Extraction",
 					},
 				},
 			},
 			{
 				ResolutionOrdinal: 1,
-				ObjectType:        opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
-				Stage:             opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
-				Disclosure: &opensplunkv1.KnowledgeSnapshotObjectSummary_AuthorizedObject{
-					AuthorizedObject: &opensplunkv1.KnowledgeSnapshotAuthorizedObjectSummary{
+				ObjectType:        opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+				Stage:             opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
+				Disclosure: &opensplunk.KnowledgeSnapshotObjectSummary_AuthorizedObject{
+					AuthorizedObject: &opensplunk.KnowledgeSnapshotAuthorizedObjectSummary{
 						KnowledgeObjectId: "alias-secret-id", Version: 12, Name: "Secret Alias",
 					},
 				},
 			},
 		},
-		LookupAssets: []*opensplunkv1.KnowledgeSnapshotLookupAsset{
+		LookupAssets: []*opensplunk.KnowledgeSnapshotLookupAsset{
 			serverLookupSnapshotAsset(),
 		},
 	}
@@ -262,11 +261,11 @@ const (
 	serverLookupPhysicalID = "lookup-physical-secret-id"
 )
 
-func serverLookupSnapshotAsset() *opensplunkv1.KnowledgeSnapshotLookupAsset {
-	return &opensplunkv1.KnowledgeSnapshotLookupAsset{
+func serverLookupSnapshotAsset() *opensplunk.KnowledgeSnapshotLookupAsset {
+	return &opensplunk.KnowledgeSnapshotLookupAsset{
 		LookupId:      serverLookupLogicalID,
 		LookupVersion: 13,
-		Asset: &opensplunkv1.KnowledgeLookupAssetVersionReference{
+		Asset: &opensplunk.KnowledgeLookupAssetVersionReference{
 			LookupAssetId: serverLookupPhysicalID,
 			Version:       17,
 			SizeBytes:     64,
@@ -275,11 +274,10 @@ func serverLookupSnapshotAsset() *opensplunkv1.KnowledgeSnapshotLookupAsset {
 	}
 }
 
-func serverEmptyKnowledgeSnapshotSummary() *opensplunkv1.KnowledgeSnapshotSummary {
-	return &opensplunkv1.KnowledgeSnapshotSummary{Ref: &opensplunkv1.KnowledgeSnapshotRef{
-		SnapshotSha256:               bytes.Repeat([]byte{0x42}, sha256.Size),
-		TenantCatalogRevision:        7,
-		TenantCatalogStateToken:      bytes.Repeat([]byte{0x73}, sha256.Size),
-		CompilerCompatibilityVersion: knowledgesnapshot.CompilerCompatibilityVersion,
+func serverEmptyKnowledgeSnapshotSummary() *opensplunk.KnowledgeSnapshotSummary {
+	return &opensplunk.KnowledgeSnapshotSummary{Ref: &opensplunk.KnowledgeSnapshotRef{
+		SnapshotSha256:          bytes.Repeat([]byte{0x42}, sha256.Size),
+		TenantCatalogRevision:   7,
+		TenantCatalogStateToken: bytes.Repeat([]byte{0x73}, sha256.Size),
 	}}
 }

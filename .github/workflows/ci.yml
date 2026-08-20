@@ -49,14 +49,6 @@ jobs:
       - name: Format, lint, and generate contracts
         run: make proto
 
-      - name: Check API compatibility
-        if: github.event_name == 'pull_request'
-        env:
-          BASE_REF: ${{ github.base_ref }}
-        run: |
-          git branch --force "${BASE_REF}" "origin/${BASE_REF}"
-          node scripts/check-buf-breaking.mjs --against-ref "${BASE_REF}"
-
       - name: Verify generated code is current
         run: |
           proto_changes="$(git status --porcelain --untracked-files=all -- proto gen)"
@@ -97,6 +89,9 @@ jobs:
 
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=critical
+
+      - name: Check documentation
+        run: npm run check:docs
 
       - name: Lint
         run: npm run lint
@@ -299,8 +294,8 @@ jobs:
             package: ./internal/spl
             target_budgets: |
               ^FuzzParseDoesNotPanic$ 350000x
-              ^FuzzParseV02ExpressionFragmentsCanonicalize$ 150000x
-              ^FuzzParseV02ExpressionsAreDeterministicAndAtomic$ 250000x
+              ^FuzzParseAuthoredExpressionFragmentsCanonicalize$ 150000x
+              ^FuzzParseAuthoredExpressionsAreDeterministicAndAtomic$ 250000x
           - label: hec-protocol
             package: ./internal/hec
             target_budgets: |
@@ -437,7 +432,7 @@ jobs:
           OPEN_SPLUNK_CLICKHOUSE_INTEGRATION: "1"
         run: >-
           go test ./internal/queryexec ./internal/searchinspection ./internal/server
-          -run '^(TestGradeThis(CompatibilityV0_1|InspectionService)AgainstClickHouse|TestSearchInspectionRouteGradeThisAgainstClickHouse)$'
+          -run '^(TestGradeThis(Corpus|InspectionService)AgainstClickHouse|TestSearchInspectionRouteGradeThisAgainstClickHouse)$'
           -count=1
           -timeout=6m
           -p=1
@@ -499,8 +494,8 @@ jobs:
           -p=1
           -v
 
-  spl-compatibility-clickhouse:
-    name: SPL compatibility pinned ClickHouse verticals
+  spl-pipeline-clickhouse:
+    name: SPL pipeline pinned ClickHouse verticals
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -523,16 +518,7 @@ jobs:
         with:
           node-version-file: .node-version
 
-      - name: Verify active SPL compatibility identity
-        run: |
-          set -euo pipefail
-          compatibility_version="$(node scripts/read-spl-compatibility-version.mjs)"
-          if [[ "$compatibility_version" != "0.4" ]]; then
-            echo "::error::The active release profile requires SPL compatibility 0.4; found $compatibility_version."
-            exit 1
-          fi
-
-      - name: Verify exact SPL compatibility ClickHouse test inventory
+      - name: Verify exact SPL pipeline ClickHouse test inventory
         run: |
           set -euo pipefail
           require_exact_test() {
@@ -558,20 +544,20 @@ jobs:
           ./internal/clickhouse TestStatsMultivalueByExpansionLimitAgainstClickHouse
           ./internal/clickhouse TestStatsByUnsupportedCannotHideBehindMissingKeyAgainstClickHouse
           ./internal/queryexec TestStatsByFixedMultivalueStringOrBytesAgainstClickHouse
-          ./internal/queryexec TestSemanticBytesV02ManagerAgainstClickHouse
+          ./internal/queryexec TestAuthoredSemanticBytesManagerAgainstClickHouse
           ./internal/queryexec TestSemanticBytesModeManagerAgainstClickHouse
           ./internal/queryexec TestSparklineFeedsStatsByThroughManagerAgainstClickHouse
           EOF
           while read -r package name; do
             require_exact_test "$package" "$name"
           done <<'EOF'
-          ./internal/clickhouse TestV03AdversarialAgainstClickHouse
-          ./internal/clickhouse TestV03FillNullDynamicThenMVExpandAgainstClickHouse
-          ./internal/clickhouse TestV03FillNullAfterPrivatePhysicalProducersAgainstClickHouse
-          ./internal/export TestV03PinnedClickHousePublishesNullableListsThroughPagingAndExport
-          ./internal/clickhouse TestV03PinnedClickHouseRetainedTupleHasCanonicalBytes
+          ./internal/clickhouse TestPipelineAdversarialAgainstClickHouse
+          ./internal/clickhouse TestPipelineFillNullDynamicThenMVExpandAgainstClickHouse
+          ./internal/clickhouse TestPipelineFillNullAfterPrivatePhysicalProducersAgainstClickHouse
+          ./internal/export TestPipelinePinnedClickHousePublishesNullableListsThroughPagingAndExport
+          ./internal/clickhouse TestPipelinePinnedClickHouseRetainedTupleHasCanonicalBytes
           ./internal/queryexec TestSemanticBytesLineageManagerAgainstClickHouse
-          ./internal/queryexec TestV03AllTenPreserveUntouchedSemanticBytesThroughManagerAgainstClickHouse
+          ./internal/queryexec TestPipelineCommandsPreserveUntouchedSemanticBytesThroughManagerAgainstClickHouse
           EOF
           require_exact_test \
             ./cmd/open-splunk-server \
@@ -595,7 +581,7 @@ jobs:
           OPEN_SPLUNK_CLICKHOUSE_INTEGRATION: "1"
         run: >-
           go test ./internal/clickhouse ./internal/queryexec
-          -run '^(TestStatsByDeferredValidationAdversarialAgainstClickHouse|TestStatsMultivalueByAgainstClickHouse|TestStatsMultivalueByExpansionLimitAgainstClickHouse|TestStatsByUnsupportedCannotHideBehindMissingKeyAgainstClickHouse|TestStatsByFixedMultivalueStringOrBytesAgainstClickHouse|TestSemanticBytesV02ManagerAgainstClickHouse|TestSemanticBytesModeManagerAgainstClickHouse|TestSparklineFeedsStatsByThroughManagerAgainstClickHouse)$'
+          -run '^(TestStatsByDeferredValidationAdversarialAgainstClickHouse|TestStatsMultivalueByAgainstClickHouse|TestStatsMultivalueByExpansionLimitAgainstClickHouse|TestStatsByUnsupportedCannotHideBehindMissingKeyAgainstClickHouse|TestStatsByFixedMultivalueStringOrBytesAgainstClickHouse|TestAuthoredSemanticBytesManagerAgainstClickHouse|TestSemanticBytesModeManagerAgainstClickHouse|TestSparklineFeedsStatsByThroughManagerAgainstClickHouse)$'
           -count=1
           -timeout=15m
           -p=1
@@ -606,7 +592,7 @@ jobs:
           OPEN_SPLUNK_CLICKHOUSE_INTEGRATION: "1"
         run: >-
           go test ./internal/clickhouse
-          -run '^TestV03AdversarialAgainstClickHouse$'
+          -run '^TestPipelineAdversarialAgainstClickHouse$'
           -count=1
           -timeout=15m
           -p=1
@@ -617,7 +603,7 @@ jobs:
           OPEN_SPLUNK_CLICKHOUSE_INTEGRATION: "1"
         run: >-
           go test ./internal/clickhouse
-          -run '^(TestV03FillNullDynamicThenMVExpandAgainstClickHouse|TestV03FillNullAfterPrivatePhysicalProducersAgainstClickHouse)$'
+          -run '^(TestPipelineFillNullDynamicThenMVExpandAgainstClickHouse|TestPipelineFillNullAfterPrivatePhysicalProducersAgainstClickHouse)$'
           -count=1
           -timeout=15m
           -p=1
@@ -628,7 +614,7 @@ jobs:
           OPEN_SPLUNK_CLICKHOUSE_INTEGRATION: "1"
         run: >-
           go test ./internal/export
-          -run '^TestV03PinnedClickHousePublishesNullableListsThroughPagingAndExport$'
+          -run '^TestPipelinePinnedClickHousePublishesNullableListsThroughPagingAndExport$'
           -count=1
           -timeout=15m
           -p=1
@@ -639,7 +625,7 @@ jobs:
           OPEN_SPLUNK_CLICKHOUSE_INTEGRATION: "1"
         run: >-
           go test ./internal/clickhouse
-          -run '^TestV03PinnedClickHouseRetainedTupleHasCanonicalBytes$'
+          -run '^TestPipelinePinnedClickHouseRetainedTupleHasCanonicalBytes$'
           -count=1
           -timeout=15m
           -p=1
@@ -650,7 +636,7 @@ jobs:
           OPEN_SPLUNK_CLICKHOUSE_INTEGRATION: "1"
         run: >-
           go test ./internal/queryexec
-          -run '^(TestSemanticBytesLineageManagerAgainstClickHouse|TestV03AllTenPreserveUntouchedSemanticBytesThroughManagerAgainstClickHouse)$'
+          -run '^(TestSemanticBytesLineageManagerAgainstClickHouse|TestPipelineCommandsPreserveUntouchedSemanticBytesThroughManagerAgainstClickHouse)$'
           -count=1
           -timeout=15m
           -p=1
@@ -813,7 +799,7 @@ jobs:
         # and 30s cleanup headroom beneath this process deadline.
         run: >-
           go test ./cmd/open-splunk-server ./internal/clickhouse ./internal/indexes ./internal/queryexec ./internal/server ./integration ./migrations/clickhouse
-          -run '^Test(ClickHouseTLSServicePrincipalStartupLifecycle|ClickHouseServicePrincipalLifecycle|IndexDataDeletionCoordinatorAgainstClickHouse|IndexStatisticsReaderAgainstClickHouse|StoreAgainstClickHouse|NumericChartAgainstClickHouse|ChartPercentileAgainstClickHouse|ExpressionV02AgainstClickHouse|ExpressionV02ExecutorManagerAgainstClickHouse|ExecutorAndManagerAgainstClickHouse|DeploymentComposePersistentCredentialRotation|DeploymentNativeRecoveryClickHouseLifecycle|BackendIndexDataDeletionLifecycle|BackendVertical|Browser(FixedResultRendering|SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$'
+          -run '^Test(ClickHouseTLSServicePrincipalStartupLifecycle|ClickHouseServicePrincipalLifecycle|IndexDataDeletionCoordinatorAgainstClickHouse|IndexStatisticsReaderAgainstClickHouse|StoreAgainstClickHouse|NumericChartAgainstClickHouse|ChartPercentileAgainstClickHouse|AuthoredExpressionAgainstClickHouse|AuthoredExpressionExecutorManagerAgainstClickHouse|ExecutorAndManagerAgainstClickHouse|DeploymentComposePersistentCredentialRotation|DeploymentNativeRecoveryClickHouseLifecycle|BackendIndexDataDeletionLifecycle|BackendVertical|Browser(FixedResultRendering|SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$'
           -count=1
           -timeout=30m
           -p=1
@@ -901,17 +887,6 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version-file: .node-version
-
-      - name: Verify active release identity
-        run: |
-          set -euo pipefail
-          application_version="$(node -p 'require("./package.json").version')"
-          compatibility_version="$(node scripts/read-spl-compatibility-version.mjs)"
-          if [[ "$application_version" != "0.4.0" || "$compatibility_version" != "0.4" ]]; then
-            echo "::error::The active release profile is application 0.4.0 with SPL compatibility 0.4; found $application_version/$compatibility_version."
-            exit 1
-          fi
-          echo "OPEN_SPLUNK_APPLICATION_VERSION=$application_version" >>"$GITHUB_ENV"
 
       - name: Build and test release images with production Compose
         env:
@@ -1019,7 +994,7 @@ jobs:
       - go-vulnerability
       - protobuf
       - release-oci
-      - spl-compatibility-clickhouse
+      - spl-pipeline-clickhouse
     strategy:
       fail-fast: false
       matrix:
@@ -1045,17 +1020,6 @@ jobs:
         with:
           node-version-file: .node-version
 
-      - name: Verify active release identity
-        run: |
-          set -euo pipefail
-          application_version="$(node -p 'require("./package.json").version')"
-          compatibility_version="$(node scripts/read-spl-compatibility-version.mjs)"
-          if [[ "$application_version" != "0.4.0" || "$compatibility_version" != "0.4" ]]; then
-            echo "::error::The active release profile is application 0.4.0 with SPL compatibility 0.4; found $application_version/$compatibility_version."
-            exit 1
-          fi
-          echo "OPEN_SPLUNK_APPLICATION_VERSION=$application_version" >>"$GITHUB_ENV"
-
       - name: Verify OCI launcher portability on macOS Bash
         if: runner.os == 'macOS'
         run: node --test scripts/build-oci.test.mjs
@@ -1079,10 +1043,7 @@ jobs:
           ./build/open-splunk-server -verify-embedded-release > release-proof/verification.txt
           cmp build/release-verification.txt release-proof/verification.txt
           test "$(sed -n '1p' release-proof/verification.txt)" = \
-            "application_version=${OPEN_SPLUNK_APPLICATION_VERSION}"
-          compatibility_version="$(node scripts/read-spl-compatibility-version.mjs)"
-          test "$(sed -n '3p' release-proof/verification.txt)" = \
-            "spl_compatibility_version=${compatibility_version}"
+            "source_revision=${{ github.sha }}"
           cp build/asset-manifest.json release-proof/asset-manifest.json
           cp build/binary-identities.txt release-proof/binary-identities.txt
 

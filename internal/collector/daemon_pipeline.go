@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/collector/input"
 	"github.com/Suhaibinator/open-splunk/internal/collector/sender"
 	"github.com/Suhaibinator/open-splunk/internal/collector/wal"
@@ -18,7 +18,7 @@ import (
 // coupled checkpointing; the explicit fields remain for the local terminal
 // path when one oversized event cannot enter the WAL.
 type processedEvent struct {
-	event *opensplunkv1.LogEvent
+	event *opensplunk.LogEvent
 	// durabilityBarrier is a zero-payload input control record. The batcher
 	// acknowledges it only after every earlier processed event has crossed the
 	// durable queue boundary (or completed a deliberate terminal disposition).
@@ -55,7 +55,7 @@ type checkpointMark struct {
 // event.
 type pendingBatch struct {
 	items  []processedEvent
-	events []*opensplunkv1.LogEvent
+	events []*opensplunk.LogEvent
 	bytes  int
 }
 

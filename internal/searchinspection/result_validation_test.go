@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -467,28 +467,28 @@ func TestValidateResultAcceptsGeneratedKnowledgeProvenance(t *testing.T) {
 
 	operatorPairs := []struct {
 		operator   string
-		objectType opensplunkv1.KnowledgeObjectType
-		stage      opensplunkv1.KnowledgeSearchStage
+		objectType opensplunk.KnowledgeObjectType
+		stage      opensplunk.KnowledgeSearchStage
 	}{
 		{
 			operator:   "ConditionalExtract",
-			objectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
-			stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
+			objectType: opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
+			stage:      opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
 		},
 		{
 			operator:   "ConditionalExtractJSON",
-			objectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
-			stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
+			objectType: opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
+			stage:      opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
 		},
 		{
 			operator:   "CopyFieldAlias",
-			objectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
-			stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
+			objectType: opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+			stage:      opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
 		},
 		{
 			operator:   "ParallelExtend",
-			objectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD,
-			stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD,
+			objectType: opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD,
+			stage:      opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD,
 		},
 	}
 	for _, pair := range operatorPairs {
@@ -522,13 +522,13 @@ func TestValidateResultAcceptsGeneratedKnowledgeProvenance(t *testing.T) {
 		objects := []RedactedObjectProvenance{
 			{
 				Ordinal:    0,
-				ObjectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
-				Stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
+				ObjectType: opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+				Stage:      opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
 			},
 			{
 				Ordinal:    1,
-				ObjectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
-				Stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
+				ObjectType: opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+				Stage:      opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
 			},
 		}
 		result := resultValidationKnowledgeResult(
@@ -660,8 +660,8 @@ func TestValidateResultRejectsGeneratedProvenanceForgery(t *testing.T) {
 					stage.KnowledgeObjects,
 					RedactedObjectProvenance{
 						Ordinal:    2,
-						ObjectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
-						Stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
+						ObjectType: opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+						Stage:      opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
 					},
 				)
 			},
@@ -810,8 +810,8 @@ func TestValidateResultBindsKnowledgeSummaryToLogicalProvenance(t *testing.T) {
 			result: resultValidationTwoOriginAliasResult,
 			mutate: func(result *Result) {
 				object := result.KnowledgeSnapshot.Objects[0]
-				object.ObjectType = opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD
-				object.Stage = opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD
+				object.ObjectType = opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD
+				object.Stage = opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD
 			},
 		},
 	}
@@ -830,8 +830,8 @@ func TestValidateResultGeneratedProvenanceExactBounds(t *testing.T) {
 		for index := range generated {
 			object := RedactedObjectProvenance{
 				Ordinal:    uint32(index),
-				ObjectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
-				Stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
+				ObjectType: opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
+				Stage:      opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
 			}
 			generated[index] = resultValidationGeneratedStage(
 				"ConditionalExtract",
@@ -897,8 +897,8 @@ func TestValidateResultGeneratedProvenanceExactBounds(t *testing.T) {
 		overObjects := slices.Clone(objects)
 		overObjects = append(overObjects, RedactedObjectProvenance{
 			Ordinal:    maximumProjectedKnowledgeObjects,
-			ObjectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
-			Stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
+			ObjectType: opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+			Stage:      opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
 		})
 		overObjectOutputs := make([]OutputProvenance, len(overObjects))
 		for index, object := range overObjects {
@@ -928,8 +928,8 @@ func TestValidateResultGeneratedProvenanceExactBounds(t *testing.T) {
 		for index := range stages {
 			object := RedactedObjectProvenance{
 				Ordinal:    uint32(index),
-				ObjectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
-				Stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
+				ObjectType: opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
+				Stage:      opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
 			}
 			stages[index] = resultValidationGeneratedStage(
 				"ConditionalExtract",
@@ -1245,23 +1245,23 @@ func resultValidationFourOperatorResult(t *testing.T) Result {
 	objects := []RedactedObjectProvenance{
 		{
 			Ordinal:    0,
-			ObjectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
-			Stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
+			ObjectType: opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
+			Stage:      opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
 		},
 		{
 			Ordinal:    1,
-			ObjectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
-			Stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
+			ObjectType: opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
+			Stage:      opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
 		},
 		{
 			Ordinal:    2,
-			ObjectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
-			Stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
+			ObjectType: opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+			Stage:      opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
 		},
 		{
 			Ordinal:    3,
-			ObjectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD,
-			Stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD,
+			ObjectType: opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD,
+			Stage:      opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD,
 		},
 	}
 	operators := []string{
@@ -1305,8 +1305,8 @@ func resultValidationAliasObjects(count int) []RedactedObjectProvenance {
 	for index := range objects {
 		objects[index] = RedactedObjectProvenance{
 			Ordinal:    uint32(index),
-			ObjectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
-			Stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
+			ObjectType: opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+			Stage:      opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
 		}
 	}
 	return objects
@@ -1371,30 +1371,29 @@ func resultValidationResetStageIndexes(stages []PlanStage) {
 
 func resultValidationKnowledgeSummary(
 	objects []RedactedObjectProvenance,
-) *opensplunkv1.KnowledgeSnapshotSummary {
+) *opensplunk.KnowledgeSnapshotSummary {
 	prefixCount := min(len(objects), knowledgesnapshot.MaximumSummaryObjects)
 	prefix := make(
-		[]*opensplunkv1.KnowledgeSnapshotObjectSummary,
+		[]*opensplunk.KnowledgeSnapshotObjectSummary,
 		prefixCount,
 	)
 	for index, object := range objects[:prefixCount] {
-		prefix[index] = &opensplunkv1.KnowledgeSnapshotObjectSummary{
+		prefix[index] = &opensplunk.KnowledgeSnapshotObjectSummary{
 			ResolutionOrdinal: object.Ordinal,
 			ObjectType:        object.ObjectType,
 			Stage:             object.Stage,
-			Disclosure: &opensplunkv1.KnowledgeSnapshotObjectSummary_Redacted{
+			Disclosure: &opensplunk.KnowledgeSnapshotObjectSummary_Redacted{
 				Redacted: true,
 			},
 		}
 	}
-	return &opensplunkv1.KnowledgeSnapshotSummary{
-		Ref: &opensplunkv1.KnowledgeSnapshotRef{
-			SnapshotSha256:               bytes.Repeat([]byte{0x11}, sha256.Size),
-			TenantCatalogRevision:        1,
-			TenantCatalogStateToken:      bytes.Repeat([]byte{0x22}, sha256.Size),
-			ObjectCount:                  uint32(len(objects)),
-			CompilerCompatibilityVersion: knowledgesnapshot.CompilerCompatibilityVersion,
-			LookupAssetCount:             0,
+	return &opensplunk.KnowledgeSnapshotSummary{
+		Ref: &opensplunk.KnowledgeSnapshotRef{
+			SnapshotSha256:          bytes.Repeat([]byte{0x11}, sha256.Size),
+			TenantCatalogRevision:   1,
+			TenantCatalogStateToken: bytes.Repeat([]byte{0x22}, sha256.Size),
+			ObjectCount:             uint32(len(objects)),
+			LookupAssetCount:        0,
 		},
 		Objects:          prefix,
 		ObjectsTruncated: len(objects) > knowledgesnapshot.MaximumSummaryObjects,
@@ -1460,7 +1459,7 @@ func cloneResultValidationFixture(result Result) Result {
 	if result.KnowledgeSnapshot != nil {
 		cloned.KnowledgeSnapshot = proto.Clone(
 			result.KnowledgeSnapshot,
-		).(*opensplunkv1.KnowledgeSnapshotSummary)
+		).(*opensplunk.KnowledgeSnapshotSummary)
 	}
 	return cloned
 }

@@ -6,7 +6,7 @@ import (
 	"runtime"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
@@ -15,11 +15,11 @@ func TestWriterRoutesUseDetachedPreparedRequestSnapshot(t *testing.T) {
 	t.Run("create", func(t *testing.T) {
 		harness := newWriterFaultHarness(t)
 		request := writerFaultCreateRequest("detached-create", "detached-create-request-0001")
-		want := proto.Clone(request).(*opensplunkv1.CreateKnowledgeObjectRequest)
+		want := proto.Clone(request).(*opensplunk.CreateKnowledgeObjectRequest)
 		harness.writer.hook = func(_ context.Context, event writerHookEvent) error {
 			if event.Boundary == writerHookPrepared && event.Route == mutationRouteCreate {
-				*request = opensplunkv1.CreateKnowledgeObjectRequest{
-					InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
+				*request = opensplunk.CreateKnowledgeObjectRequest{
+					InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
 					ClientRequestId: "caller-mutated-create-request",
 				}
 			}
@@ -41,20 +41,20 @@ func TestWriterRoutesUseDetachedPreparedRequestSnapshot(t *testing.T) {
 	t.Run("update", func(t *testing.T) {
 		harness := newWriterFaultHarness(t)
 		created := commitDetachedRequestBaseline(t, harness, "detached-update")
-		definition := proto.Clone(created.GetDefinition()).(*opensplunkv1.KnowledgeObjectDefinition)
+		definition := proto.Clone(created.GetDefinition()).(*opensplunk.KnowledgeObjectDefinition)
 		description := "detached update description"
 		definition.Description = &description
-		request := &opensplunkv1.UpdateKnowledgeObjectRequest{
+		request := &opensplunk.UpdateKnowledgeObjectRequest{
 			KnowledgeObjectId: created.GetKnowledgeObjectId(),
 			ExpectedVersion:   created.GetVersion(),
 			Definition:        definition,
 			UpdateMask:        &fieldmaskpb.FieldMask{Paths: []string{"description"}},
 			ClientRequestId:   "detached-update-request-0001",
 		}
-		want := proto.Clone(request).(*opensplunkv1.UpdateKnowledgeObjectRequest)
+		want := proto.Clone(request).(*opensplunk.UpdateKnowledgeObjectRequest)
 		harness.writer.hook = func(_ context.Context, event writerHookEvent) error {
 			if event.Boundary == writerHookPrepared && event.Route == mutationRouteUpdate {
-				*request = opensplunkv1.UpdateKnowledgeObjectRequest{
+				*request = opensplunk.UpdateKnowledgeObjectRequest{
 					KnowledgeObjectId: "ko_caller_mutated_update_target",
 					ExpectedVersion:   99,
 					ClientRequestId:   "caller-mutated-update-request",
@@ -79,19 +79,19 @@ func TestWriterRoutesUseDetachedPreparedRequestSnapshot(t *testing.T) {
 	t.Run("set state", func(t *testing.T) {
 		harness := newWriterFaultHarness(t)
 		created := commitDetachedRequestBaseline(t, harness, "detached-state")
-		request := &opensplunkv1.SetKnowledgeObjectStateRequest{
+		request := &opensplunk.SetKnowledgeObjectStateRequest{
 			KnowledgeObjectId: created.GetKnowledgeObjectId(),
 			ExpectedVersion:   created.GetVersion(),
-			State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+			State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 			ClientRequestId:   "detached-state-request-0001",
 		}
-		want := proto.Clone(request).(*opensplunkv1.SetKnowledgeObjectStateRequest)
+		want := proto.Clone(request).(*opensplunk.SetKnowledgeObjectStateRequest)
 		harness.writer.hook = func(_ context.Context, event writerHookEvent) error {
 			if event.Boundary == writerHookPrepared && event.Route == mutationRouteSetState {
-				*request = opensplunkv1.SetKnowledgeObjectStateRequest{
+				*request = opensplunk.SetKnowledgeObjectStateRequest{
 					KnowledgeObjectId: "ko_caller_mutated_state_target",
 					ExpectedVersion:   99,
-					State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
+					State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
 					ClientRequestId:   "caller-mutated-state-request",
 				}
 			}
@@ -114,15 +114,15 @@ func TestWriterRoutesUseDetachedPreparedRequestSnapshot(t *testing.T) {
 	t.Run("delete", func(t *testing.T) {
 		harness := newWriterFaultHarness(t)
 		created := commitDetachedRequestBaseline(t, harness, "detached-delete")
-		request := &opensplunkv1.DeleteKnowledgeObjectRequest{
+		request := &opensplunk.DeleteKnowledgeObjectRequest{
 			KnowledgeObjectId: created.GetKnowledgeObjectId(),
 			ExpectedVersion:   created.GetVersion(),
 			ClientRequestId:   "detached-delete-request-0001",
 		}
-		want := proto.Clone(request).(*opensplunkv1.DeleteKnowledgeObjectRequest)
+		want := proto.Clone(request).(*opensplunk.DeleteKnowledgeObjectRequest)
 		harness.writer.hook = func(_ context.Context, event writerHookEvent) error {
 			if event.Boundary == writerHookPrepared && event.Route == mutationRouteDelete {
-				*request = opensplunkv1.DeleteKnowledgeObjectRequest{
+				*request = opensplunk.DeleteKnowledgeObjectRequest{
 					KnowledgeObjectId: "ko_caller_mutated_delete_target",
 					ExpectedVersion:   99,
 					ClientRequestId:   "caller-mutated-delete-request",
@@ -158,8 +158,8 @@ func TestWriterPreparedRequestSnapshotIsRaceIsolated(t *testing.T) {
 				var generation uint64
 				mutate := func() {
 					generation++
-					*request = opensplunkv1.CreateKnowledgeObjectRequest{
-						InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
+					*request = opensplunk.CreateKnowledgeObjectRequest{
+						InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
 						ClientRequestId: fmt.Sprintf("caller-race-create-%d", generation),
 					}
 				}
@@ -178,10 +178,10 @@ func TestWriterPreparedRequestSnapshotIsRaceIsolated(t *testing.T) {
 			route: mutationRouteUpdate,
 			exercise: func(t *testing.T, harness *writerFaultHarness) (func(), func() error) {
 				created := commitDetachedRequestBaseline(t, harness, "race-detached-update")
-				definition := proto.Clone(created.GetDefinition()).(*opensplunkv1.KnowledgeObjectDefinition)
+				definition := proto.Clone(created.GetDefinition()).(*opensplunk.KnowledgeObjectDefinition)
 				description := "race detached update"
 				definition.Description = &description
-				request := &opensplunkv1.UpdateKnowledgeObjectRequest{
+				request := &opensplunk.UpdateKnowledgeObjectRequest{
 					KnowledgeObjectId: created.GetKnowledgeObjectId(),
 					ExpectedVersion:   created.GetVersion(),
 					Definition:        definition,
@@ -191,7 +191,7 @@ func TestWriterPreparedRequestSnapshotIsRaceIsolated(t *testing.T) {
 				var generation uint64
 				mutate := func() {
 					generation++
-					*request = opensplunkv1.UpdateKnowledgeObjectRequest{
+					*request = opensplunk.UpdateKnowledgeObjectRequest{
 						KnowledgeObjectId: fmt.Sprintf("ko_caller_race_update_%d", generation),
 						ExpectedVersion:   99,
 					}
@@ -211,24 +211,24 @@ func TestWriterPreparedRequestSnapshotIsRaceIsolated(t *testing.T) {
 			route: mutationRouteSetState,
 			exercise: func(t *testing.T, harness *writerFaultHarness) (func(), func() error) {
 				created := commitDetachedRequestBaseline(t, harness, "race-detached-state")
-				request := &opensplunkv1.SetKnowledgeObjectStateRequest{
+				request := &opensplunk.SetKnowledgeObjectStateRequest{
 					KnowledgeObjectId: created.GetKnowledgeObjectId(),
 					ExpectedVersion:   created.GetVersion(),
-					State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+					State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 					ClientRequestId:   "race-detached-state-request-0001",
 				}
 				var generation uint64
 				mutate := func() {
 					generation++
-					*request = opensplunkv1.SetKnowledgeObjectStateRequest{
+					*request = opensplunk.SetKnowledgeObjectStateRequest{
 						KnowledgeObjectId: fmt.Sprintf("ko_caller_race_state_%d", generation),
 						ExpectedVersion:   99,
-						State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
+						State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
 					}
 				}
 				invoke := func() error {
 					response, err := harness.writer.SetState(harness.actorContext, harness.scope, request)
-					if err == nil && (response == nil || response.GetKnowledgeObject().GetState() != opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED) {
+					if err == nil && (response == nil || response.GetKnowledgeObject().GetState() != opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED) {
 						return fmt.Errorf("unexpected detached SetState response: %v", response)
 					}
 					return err
@@ -242,7 +242,7 @@ func TestWriterPreparedRequestSnapshotIsRaceIsolated(t *testing.T) {
 			exercise: func(t *testing.T, harness *writerFaultHarness) (func(), func() error) {
 				created := commitDetachedRequestBaseline(t, harness, "race-detached-delete")
 				objectID := created.GetKnowledgeObjectId()
-				request := &opensplunkv1.DeleteKnowledgeObjectRequest{
+				request := &opensplunk.DeleteKnowledgeObjectRequest{
 					KnowledgeObjectId: objectID,
 					ExpectedVersion:   created.GetVersion(),
 					ClientRequestId:   "race-detached-delete-request-0001",
@@ -250,7 +250,7 @@ func TestWriterPreparedRequestSnapshotIsRaceIsolated(t *testing.T) {
 				var generation uint64
 				mutate := func() {
 					generation++
-					*request = opensplunkv1.DeleteKnowledgeObjectRequest{
+					*request = opensplunk.DeleteKnowledgeObjectRequest{
 						KnowledgeObjectId: fmt.Sprintf("ko_caller_race_delete_%d", generation),
 						ExpectedVersion:   99,
 					}
@@ -321,7 +321,7 @@ func commitDetachedRequestBaseline(
 	t *testing.T,
 	harness *writerFaultHarness,
 	name string,
-) *opensplunkv1.KnowledgeObject {
+) *opensplunk.KnowledgeObject {
 	t.Helper()
 	response, err := harness.writer.Create(
 		harness.actorContext,

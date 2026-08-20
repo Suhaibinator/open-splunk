@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
@@ -24,7 +24,6 @@ type ExecutionSnapshot struct {
 	TenantID         string
 	AppID            string
 	SPL              string
-	CompilerVersion  string
 	EffectiveIndexes []string
 	Earliest         time.Time
 	Latest           time.Time
@@ -58,7 +57,7 @@ type ExecutionSnapshot struct {
 // execution.
 type RetainedKnowledgeExecution struct {
 	CompiledQuery    clickhouse.CompiledQuery
-	KnowledgeSummary *opensplunkv1.KnowledgeSnapshotSummary
+	KnowledgeSummary *opensplunk.KnowledgeSnapshotSummary
 	KnowledgePrelude knowledgeprogram.Program
 }
 
@@ -81,7 +80,7 @@ type knowledgeExecutionAuthorityFacts struct {
 type retainedKnowledgeAuthorityValidation struct {
 	digests  RetainedKnowledgeAuthorityDigests
 	compiled clickhouse.CompiledQuery
-	summary  *opensplunkv1.KnowledgeSnapshotSummary
+	summary  *opensplunk.KnowledgeSnapshotSummary
 	prelude  knowledgeprogram.Program
 }
 
@@ -266,7 +265,6 @@ func (snapshot ExecutionSnapshot) Equal(other ExecutionSnapshot) bool {
 		snapshot.TenantID == other.TenantID &&
 		snapshot.AppID == other.AppID &&
 		snapshot.SPL == other.SPL &&
-		snapshot.CompilerVersion == other.CompilerVersion &&
 		slices.Equal(snapshot.EffectiveIndexes, other.EffectiveIndexes) &&
 		snapshot.Earliest.Equal(other.Earliest) &&
 		snapshot.Latest.Equal(other.Latest) &&
@@ -349,7 +347,6 @@ func (manager *Manager) executionSnapshotLocked(
 		TenantID:               strings.Clone(entry.job.TenantID),
 		AppID:                  strings.Clone(entry.job.AppID),
 		SPL:                    strings.Clone(entry.job.SPL),
-		CompilerVersion:        strings.Clone(entry.job.CompilerVersion),
 		EffectiveIndexes:       cloneStrings(entry.job.EffectiveIndexes),
 		Earliest:               entry.job.Earliest,
 		Latest:                 entry.job.Latest,

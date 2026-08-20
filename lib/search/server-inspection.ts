@@ -3,16 +3,13 @@ import {
   type InspectSearchJobResponse,
   type SearchInspectionLogicalStage,
   type SearchInspectionPhysicalIndex,
-} from "@/gen/ts/open_splunk/v1/search_inspection_api";
+} from "@/gen/ts/open_splunk/search_inspection_api";
 import {
   KnowledgeObjectType,
   KnowledgeSearchStage,
   type KnowledgeSnapshotSummary,
-} from "@/gen/ts/open_splunk/v1/knowledge";
-import {
-  canonicalBoundedServerText,
-  isGoUnicodeSpace,
-} from "@/lib/search/server-text";
+} from "@/gen/ts/open_splunk/knowledge";
+import { isGoUnicodeSpace } from "@/lib/search/server-text";
 
 const UTF8 = new TextEncoder();
 const CONTROL_CHARACTER = /\p{Cc}/u;
@@ -38,7 +35,6 @@ const MAXIMUM_OUTPUT_PROVENANCE = 512;
 const MAXIMUM_AUTOMATIC_LOOKUP_OUTPUTS = 16 * 16;
 const MAXIMUM_SUMMARY_OBJECTS = 64;
 const MAXIMUM_LOOKUP_ASSETS = 16;
-const MAXIMUM_COMPILER_BYTES = 128;
 const MAXIMUM_GENERATED_SQL_BYTES = 256 << 10;
 const MAXIMUM_EXPLAIN_BYTES = 1 << 20;
 const MAXIMUM_EXPLAIN_LINES = 4_096;
@@ -247,7 +243,6 @@ export type ServerInspectionKnowledgeView =
     tenantCatalogRevision: bigint;
     objectCount: number;
     lookupAssetCount: number;
-    compilerCompatibilityVersion: string;
     objects: ServerInspectionRedactedProvenance[];
     objectsTruncated: boolean;
   };
@@ -839,11 +834,6 @@ function adaptPhysicalPlan(value: unknown): ServerInspectionPhysicalPlanView {
   return { nodeTypes, reads };
 }
 
-function canonicalCompiler(value: unknown): string {
-  return canonicalBoundedServerText(value, MAXIMUM_COMPILER_BYTES)
-    ?? invalidInspection();
-}
-
 function digestHex(value: unknown): string {
   if (!(value instanceof Uint8Array) || value.byteLength !== 32) return invalidInspection();
   return Array.from(value, (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -876,15 +866,13 @@ function adaptKnowledgeSummary(
   const rawLookupAssets = requireArray(value.lookupAssets, MAXIMUM_LOOKUP_ASSETS);
   const objectCount = uint32(value.ref.objectCount);
   const lookupAssetCount = uint32(value.ref.lookupAssetCount);
-  const lookupAssetCountUnknown = booleanValue(value.ref.lookupAssetCountUnknown);
   if (objectCount > MAXIMUM_KNOWLEDGE_OBJECTS || planObjects.length !== objectCount) {
     return invalidInspection();
   }
   // The administrator projection intentionally redacts every immutable lookup
   // identity while preserving the exact bounded count in the snapshot ref.
   if (
-    lookupAssetCountUnknown
-    || lookupAssetCount > MAXIMUM_LOOKUP_ASSETS
+    lookupAssetCount > MAXIMUM_LOOKUP_ASSETS
     || rawLookupAssets.length !== 0
   ) {
     return invalidInspection();
@@ -898,9 +886,6 @@ function adaptKnowledgeSummary(
   if (tenantCatalogRevision > MAXIMUM_CATALOG_REVISION) return invalidInspection();
   validateStateToken(value.ref.tenantCatalogStateToken);
   const digestSha256 = digestHex(value.ref.snapshotSha256);
-  const compilerCompatibilityVersion = canonicalCompiler(
-    value.ref.compilerCompatibilityVersion,
-  );
   let previousRank = 0;
   const objects = rawObjects.map((raw, index): ServerInspectionRedactedProvenance => {
     if (!isRecord(raw)) return invalidInspection();
@@ -929,7 +914,6 @@ function adaptKnowledgeSummary(
     tenantCatalogRevision,
     objectCount,
     lookupAssetCount,
-    compilerCompatibilityVersion,
     objects,
     objectsTruncated,
   };

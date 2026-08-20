@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -228,14 +228,14 @@ func TestAppAdministrationCreateDerivesScopeAndProjectsEveryField(
 	response := postAppAdministrationProto(
 		t,
 		handler,
-		"/api/v1/apps/create",
-		&opensplunkv1.CreateAppRequest{
-			Definition: &opensplunkv1.AppDefinition{
+		"/api/apps/create",
+		&opensplunk.CreateAppRequest{
+			Definition: &opensplunk.AppDefinition{
 				Slug:              " Grade_This ",
 				DisplayName:       " Grade This ",
 				Description:       &description,
 				DefaultIndexNames: []string{"main", " AUDIT ", "main"},
-				DefaultTimeRange: &opensplunkv1.TimeRangeSpec{
+				DefaultTimeRange: &opensplunk.TimeRangeSpec{
 					Earliest: &earliest,
 					Timezone: &timezone,
 				},
@@ -245,12 +245,12 @@ func TestAppAdministrationCreateDerivesScopeAndProjectsEveryField(
 	if response.Code != http.StatusOK {
 		t.Fatalf("create status = %d, body = %s", response.Code, response.Body)
 	}
-	var decoded opensplunkv1.CreateAppResponse
+	var decoded opensplunk.CreateAppResponse
 	unmarshalResponse(t, response, &decoded)
 	app := decoded.GetApp()
 	if app.GetAppId() != "app_0123456789ABCDEFGHIJKL" ||
 		app.GetVersion() != 1 ||
-		app.GetState() != opensplunkv1.AppState_APP_STATE_ACTIVE ||
+		app.GetState() != opensplunk.AppState_APP_STATE_ACTIVE ||
 		app.GetCreatedAt() == nil ||
 		app.GetUpdatedAt() == nil {
 		t.Fatalf("created app projection = %+v", app)
@@ -344,29 +344,29 @@ func TestAppAdministrationListUsesBoundedRevisionKeysetPaging(
 	handler := newAppAdministrationTestHandler(t, service, BootstrapConfig{})
 	size := uint32(2)
 	filter := " same "
-	request := &opensplunkv1.ListAppsRequest{
-		Page: &opensplunkv1.PageRequest{
+	request := &opensplunk.ListAppsRequest{
+		Page: &opensplunk.PageRequest{
 			PageSize:         &size,
 			IncludeTotalSize: true,
 		},
-		StateFilters: []opensplunkv1.AppState{
-			opensplunkv1.AppState_APP_STATE_ARCHIVED,
-			opensplunkv1.AppState_APP_STATE_ACTIVE,
+		StateFilters: []opensplunk.AppState{
+			opensplunk.AppState_APP_STATE_ARCHIVED,
+			opensplunk.AppState_APP_STATE_ACTIVE,
 		},
 		TextFilter:    &filter,
-		SortBy:        opensplunkv1.AppSortBy_APP_SORT_BY_UPDATED_AT,
-		SortDirection: opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING,
+		SortBy:        opensplunk.AppSortBy_APP_SORT_BY_UPDATED_AT,
+		SortDirection: opensplunk.SortDirection_SORT_DIRECTION_DESCENDING,
 	}
 	first := postAppAdministrationProto(
 		t,
 		handler,
-		"/api/v1/apps/list",
+		"/api/apps/list",
 		request,
 	)
 	if first.Code != http.StatusOK {
 		t.Fatalf("first list status = %d, body = %s", first.Code, first.Body)
 	}
-	var firstPage opensplunkv1.ListAppsResponse
+	var firstPage opensplunk.ListAppsResponse
 	unmarshalResponse(t, first, &firstPage)
 	if len(firstPage.GetApps()) != 1 ||
 		firstPage.GetApps()[0].GetAppId() != firstRecord.AppID ||
@@ -385,7 +385,7 @@ func TestAppAdministrationListUsesBoundedRevisionKeysetPaging(
 	second := postAppAdministrationProto(
 		t,
 		handler,
-		"/api/v1/apps/list",
+		"/api/apps/list",
 		request,
 	)
 	if second.Code != http.StatusOK {
@@ -396,7 +396,7 @@ func TestAppAdministrationListUsesBoundedRevisionKeysetPaging(
 		secondRequest.PageCursor != "updated:opaque-keyset" {
 		t.Fatalf("second service request = %#v", secondRequest)
 	}
-	var secondPage opensplunkv1.ListAppsResponse
+	var secondPage opensplunk.ListAppsResponse
 	unmarshalResponse(t, second, &secondPage)
 	if len(secondPage.GetApps()) != 1 ||
 		secondPage.GetApps()[0].GetAppId() != secondRecord.AppID ||
@@ -409,7 +409,7 @@ func TestAppAdministrationListUsesBoundedRevisionKeysetPaging(
 	filterMismatch := postAppAdministrationProto(
 		t,
 		handler,
-		"/api/v1/apps/list",
+		"/api/apps/list",
 		request,
 	)
 	if filterMismatch.Code != http.StatusBadRequest ||
@@ -429,7 +429,7 @@ func TestAppAdministrationListUsesBoundedRevisionKeysetPaging(
 	rejected := postAppAdministrationProto(
 		t,
 		handler,
-		"/api/v1/apps/list",
+		"/api/apps/list",
 		request,
 	)
 	if rejected.Code != http.StatusBadRequest ||
@@ -443,7 +443,7 @@ func TestAppAdministrationUpdateStateAndDeleteSemantics(t *testing.T) {
 
 	current := appAdministrationFixture(
 		"app_0123456789ABCDEFGHIJKL",
-		4,
+		1,
 		AppAdministrationStateActive,
 		AppAdministrationDefinition{
 			Slug:              "immutable",
@@ -483,7 +483,7 @@ func TestAppAdministrationUpdateStateAndDeleteSemantics(t *testing.T) {
 	) (AppAdministrationWorkspace, error) {
 		if scope.ActorID != browserGateOwnerID ||
 			selector != (AppAdministrationSelector{AppID: current.AppID}) ||
-			version != 4 {
+			version != 1 {
 			t.Fatalf(
 				"UpdateApp call = scope %#v selector %#v version %d",
 				scope,
@@ -498,7 +498,7 @@ func TestAppAdministrationUpdateStateAndDeleteSemantics(t *testing.T) {
 			t.Fatalf("UpdateApp replacement = %#v, want %#v", replacement, want)
 		}
 		updated := current
-		updated.Version = 5
+		updated.Version = 2
 		updated.Definition = replacement
 		updated.UpdatedAt = current.UpdatedAt.Add(time.Second)
 		current = updated
@@ -508,13 +508,13 @@ func TestAppAdministrationUpdateStateAndDeleteSemantics(t *testing.T) {
 	update := postAppAdministrationProto(
 		t,
 		handler,
-		"/api/v1/apps/update",
-		&opensplunkv1.UpdateAppRequest{
-			Selector: &opensplunkv1.AppSelector{
-				Selector: &opensplunkv1.AppSelector_Slug{Slug: "immutable"},
+		"/api/apps/update",
+		&opensplunk.UpdateAppRequest{
+			Selector: &opensplunk.AppSelector{
+				Selector: &opensplunk.AppSelector_Slug{Slug: "immutable"},
 			},
-			ExpectedVersion: 4,
-			Definition: &opensplunkv1.AppDefinition{
+			ExpectedVersion: 1,
+			Definition: &opensplunk.AppDefinition{
 				Slug:        "immutable",
 				DisplayName: " After ",
 			},
@@ -526,9 +526,9 @@ func TestAppAdministrationUpdateStateAndDeleteSemantics(t *testing.T) {
 	if update.Code != http.StatusOK {
 		t.Fatalf("update status = %d, body = %s", update.Code, update.Body)
 	}
-	var updated opensplunkv1.UpdateAppResponse
+	var updated opensplunk.UpdateAppResponse
 	unmarshalResponse(t, update, &updated)
-	if updated.GetApp().GetVersion() != 5 ||
+	if updated.GetApp().GetVersion() != 2 ||
 		updated.GetApp().GetDefinition().GetDisplayName() != "After" ||
 		updated.GetApp().GetDefinition().Description != nil ||
 		updated.GetApp().GetDefinition().GetDefaultTimeRange() == nil {
@@ -543,7 +543,7 @@ func TestAppAdministrationUpdateStateAndDeleteSemantics(t *testing.T) {
 		state AppAdministrationState,
 	) (AppAdministrationWorkspace, error) {
 		if selector != (AppAdministrationSelector{AppID: current.AppID}) ||
-			version != 5 ||
+			version != 2 ||
 			state != AppAdministrationStateArchived {
 			t.Fatalf(
 				"SetAppState call = %#v, %d, %s",
@@ -552,7 +552,7 @@ func TestAppAdministrationUpdateStateAndDeleteSemantics(t *testing.T) {
 				state,
 			)
 		}
-		current.Version = 6
+		current.Version = 3
 		current.State = state
 		current.UpdatedAt = current.UpdatedAt.Add(time.Second)
 		return current, nil
@@ -560,23 +560,23 @@ func TestAppAdministrationUpdateStateAndDeleteSemantics(t *testing.T) {
 	state := postAppAdministrationProto(
 		t,
 		handler,
-		"/api/v1/apps/state/set",
-		&opensplunkv1.SetAppStateRequest{
-			Selector: &opensplunkv1.AppSelector{
-				Selector: &opensplunkv1.AppSelector_Slug{Slug: "immutable"},
+		"/api/apps/state/set",
+		&opensplunk.SetAppStateRequest{
+			Selector: &opensplunk.AppSelector{
+				Selector: &opensplunk.AppSelector_Slug{Slug: "immutable"},
 			},
-			ExpectedVersion: 5,
-			State:           opensplunkv1.AppState_APP_STATE_ARCHIVED,
+			ExpectedVersion: 2,
+			State:           opensplunk.AppState_APP_STATE_ARCHIVED,
 		},
 	)
 	if state.Code != http.StatusOK {
 		t.Fatalf("state status = %d, body = %s", state.Code, state.Body)
 	}
-	var archived opensplunkv1.SetAppStateResponse
+	var archived opensplunk.SetAppStateResponse
 	unmarshalResponse(t, state, &archived)
-	if archived.GetApp().GetVersion() != 6 ||
+	if archived.GetApp().GetVersion() != 3 ||
 		archived.GetApp().GetState() !=
-			opensplunkv1.AppState_APP_STATE_ARCHIVED {
+			opensplunk.AppState_APP_STATE_ARCHIVED {
 		t.Fatalf("archived app = %+v", archived.GetApp())
 	}
 
@@ -588,7 +588,7 @@ func TestAppAdministrationUpdateStateAndDeleteSemantics(t *testing.T) {
 		confirmation string,
 	) (string, error) {
 		if selector != (AppAdministrationSelector{AppID: current.AppID}) ||
-			version != 6 ||
+			version != 3 ||
 			confirmation != "immutable" {
 			t.Fatalf(
 				"DeleteApp call = %#v, %d, %q",
@@ -602,19 +602,19 @@ func TestAppAdministrationUpdateStateAndDeleteSemantics(t *testing.T) {
 	deleted := postAppAdministrationProto(
 		t,
 		handler,
-		"/api/v1/apps/delete",
-		&opensplunkv1.DeleteAppRequest{
-			Selector: &opensplunkv1.AppSelector{
-				Selector: &opensplunkv1.AppSelector_Slug{Slug: "immutable"},
+		"/api/apps/delete",
+		&opensplunk.DeleteAppRequest{
+			Selector: &opensplunk.AppSelector{
+				Selector: &opensplunk.AppSelector_Slug{Slug: "immutable"},
 			},
-			ExpectedVersion:  6,
+			ExpectedVersion:  3,
 			ConfirmationSlug: "immutable",
 		},
 	)
 	if deleted.Code != http.StatusOK {
 		t.Fatalf("delete status = %d, body = %s", deleted.Code, deleted.Body)
 	}
-	var deleteResponse opensplunkv1.DeleteAppResponse
+	var deleteResponse opensplunk.DeleteAppResponse
 	unmarshalResponse(t, deleted, &deleteResponse)
 	if deleteResponse.GetAppId() != current.AppID {
 		t.Fatalf("deleted ID = %q", deleteResponse.GetAppId())
@@ -676,15 +676,15 @@ func TestAppAdministrationSetStateUsesDetachedDefinitionOracle(t *testing.T) {
 	response := postAppAdministrationProto(
 		t,
 		handler,
-		"/api/v1/apps/state/set",
-		&opensplunkv1.SetAppStateRequest{
-			Selector: &opensplunkv1.AppSelector{
-				Selector: &opensplunkv1.AppSelector_AppId{
+		"/api/apps/state/set",
+		&opensplunk.SetAppStateRequest{
+			Selector: &opensplunk.AppSelector{
+				Selector: &opensplunk.AppSelector_AppId{
 					AppId: stored.AppID,
 				},
 			},
 			ExpectedVersion: 1,
-			State:           opensplunkv1.AppState_APP_STATE_ARCHIVED,
+			State:           opensplunk.AppState_APP_STATE_ARCHIVED,
 		},
 	)
 	if response.Code != http.StatusInternalServerError ||
@@ -733,9 +733,9 @@ func TestAppAdministrationDeleteFailsClosedBeforeDestructiveCall(
 		},
 	}
 	handler := newAppAdministrationTestHandler(t, service, BootstrapConfig{})
-	request := &opensplunkv1.DeleteAppRequest{
-		Selector: &opensplunkv1.AppSelector{
-			Selector: &opensplunkv1.AppSelector_AppId{AppId: active.AppID},
+	request := &opensplunk.DeleteAppRequest{
+		Selector: &opensplunk.AppSelector{
+			Selector: &opensplunk.AppSelector_AppId{AppId: active.AppID},
 		},
 		ExpectedVersion:  2,
 		ConfirmationSlug: "protected",
@@ -743,7 +743,7 @@ func TestAppAdministrationDeleteFailsClosedBeforeDestructiveCall(
 	response := postAppAdministrationProto(
 		t,
 		handler,
-		"/api/v1/apps/delete",
+		"/api/apps/delete",
 		request,
 	)
 	if response.Code != http.StatusConflict {
@@ -758,7 +758,7 @@ func TestAppAdministrationDeleteFailsClosedBeforeDestructiveCall(
 	response = postAppAdministrationProto(
 		t,
 		handler,
-		"/api/v1/apps/delete",
+		"/api/apps/delete",
 		request,
 	)
 	if response.Code != http.StatusBadRequest ||
@@ -812,12 +812,12 @@ func TestAppAdministrationImmutableSlugAndVersionConflicts(t *testing.T) {
 		},
 	}
 	handler := newAppAdministrationTestHandler(t, service, BootstrapConfig{})
-	base := &opensplunkv1.UpdateAppRequest{
-		Selector: &opensplunkv1.AppSelector{
-			Selector: &opensplunkv1.AppSelector_AppId{AppId: current.AppID},
+	base := &opensplunk.UpdateAppRequest{
+		Selector: &opensplunk.AppSelector{
+			Selector: &opensplunk.AppSelector_AppId{AppId: current.AppID},
 		},
 		ExpectedVersion: 3,
-		Definition: &opensplunkv1.AppDefinition{
+		Definition: &opensplunk.AppDefinition{
 			Slug:        "renamed",
 			DisplayName: "Stable",
 		},
@@ -825,7 +825,7 @@ func TestAppAdministrationImmutableSlugAndVersionConflicts(t *testing.T) {
 	response := postAppAdministrationProto(
 		t,
 		handler,
-		"/api/v1/apps/update",
+		"/api/apps/update",
 		base,
 	)
 	if response.Code != http.StatusConflict {
@@ -837,7 +837,7 @@ func TestAppAdministrationImmutableSlugAndVersionConflicts(t *testing.T) {
 	response = postAppAdministrationProto(
 		t,
 		handler,
-		"/api/v1/apps/update",
+		"/api/apps/update",
 		base,
 	)
 	if response.Code != http.StatusBadRequest {
@@ -849,7 +849,7 @@ func TestAppAdministrationImmutableSlugAndVersionConflicts(t *testing.T) {
 	response = postAppAdministrationProto(
 		t,
 		handler,
-		"/api/v1/apps/update",
+		"/api/apps/update",
 		base,
 	)
 	if response.Code != http.StatusConflict {
@@ -861,13 +861,13 @@ func TestAppAdministrationImmutableSlugAndVersionConflicts(t *testing.T) {
 	state := postAppAdministrationProto(
 		t,
 		handler,
-		"/api/v1/apps/state/set",
-		&opensplunkv1.SetAppStateRequest{
-			Selector: &opensplunkv1.AppSelector{
-				Selector: &opensplunkv1.AppSelector_Slug{Slug: "stable"},
+		"/api/apps/state/set",
+		&opensplunk.SetAppStateRequest{
+			Selector: &opensplunk.AppSelector{
+				Selector: &opensplunk.AppSelector_Slug{Slug: "stable"},
 			},
 			ExpectedVersion: 2,
-			State:           opensplunkv1.AppState_APP_STATE_ARCHIVED,
+			State:           opensplunk.AppState_APP_STATE_ARCHIVED,
 		},
 	)
 	if state.Code != http.StatusConflict ||
@@ -925,7 +925,7 @@ func TestAppAdministrationRequestBoundaryOrderAndExactness(t *testing.T) {
 	method := httptest.NewRequestWithContext(
 		context.Background(),
 		http.MethodGet,
-		"/api/v1/apps/create",
+		"/api/apps/create",
 		nil,
 	)
 	method.Host = "example.com"
@@ -947,7 +947,7 @@ func TestAppAdministrationRequestBoundaryOrderAndExactness(t *testing.T) {
 	unknown := httptest.NewRequestWithContext(
 		context.Background(),
 		http.MethodPost,
-		"/api/v1/apps/create/",
+		"/api/apps/create/",
 		nil,
 	)
 	unknown.Host = "example.com"
@@ -969,7 +969,7 @@ func TestAppAdministrationRequestBoundaryOrderAndExactness(t *testing.T) {
 	untrusted := httptest.NewRequestWithContext(
 		context.Background(),
 		http.MethodPost,
-		"/api/v1/apps/create",
+		"/api/apps/create",
 		strings.NewReader("malformed"),
 	)
 	untrusted.Host = "attacker.example"
@@ -991,7 +991,7 @@ func TestAppAdministrationRequestBoundaryOrderAndExactness(t *testing.T) {
 	noCredential := httptest.NewRequestWithContext(
 		context.Background(),
 		http.MethodPost,
-		"/api/v1/apps/create",
+		"/api/apps/create",
 		strings.NewReader("malformed"),
 	)
 	noCredential.Host = "example.com"
@@ -1009,7 +1009,7 @@ func TestAppAdministrationRequestBoundaryOrderAndExactness(t *testing.T) {
 	wrongContent := httptest.NewRequestWithContext(
 		context.Background(),
 		http.MethodPost,
-		"/api/v1/apps/create",
+		"/api/apps/create",
 		strings.NewReader("malformed"),
 	)
 	wrongContent.Host = "example.com"
@@ -1032,7 +1032,7 @@ func TestAppAdministrationRequestBoundaryOrderAndExactness(t *testing.T) {
 	malformed := httptest.NewRequestWithContext(
 		context.Background(),
 		http.MethodPost,
-		"/api/v1/apps/create",
+		"/api/apps/create",
 		strings.NewReader("malformed"),
 	)
 	malformed.Host = "example.com"
@@ -1082,17 +1082,17 @@ func TestAppAdministrationDiscardsUnknownFieldsRecursively(t *testing.T) {
 	}
 	handler := newAppAdministrationTestHandler(t, service, BootstrapConfig{})
 	unknown := futureProtobufField("future-app-field")
-	topLevel := &opensplunkv1.GetAppRequest{
-		Selector: &opensplunkv1.AppSelector{
-			Selector: &opensplunkv1.AppSelector_AppId{AppId: "app_valid"},
+	topLevel := &opensplunk.GetAppRequest{
+		Selector: &opensplunk.AppSelector{
+			Selector: &opensplunk.AppSelector_AppId{AppId: "app_valid"},
 		},
 	}
 	topLevel.ProtoReflect().SetUnknown(unknown)
-	nested := proto.Clone(topLevel).(*opensplunkv1.GetAppRequest)
+	nested := proto.Clone(topLevel).(*opensplunk.GetAppRequest)
 	nested.ProtoReflect().SetUnknown(nil)
 	nested.Selector.ProtoReflect().SetUnknown(unknown)
-	page := &opensplunkv1.ListAppsRequest{
-		Page: &opensplunkv1.PageRequest{},
+	page := &opensplunk.ListAppsRequest{
+		Page: &opensplunk.PageRequest{},
 	}
 	page.Page.ProtoReflect().SetUnknown(unknown)
 
@@ -1100,9 +1100,9 @@ func TestAppAdministrationDiscardsUnknownFieldsRecursively(t *testing.T) {
 		path    string
 		request proto.Message
 	}{
-		"top level": {"/api/v1/apps/get", topLevel},
-		"selector":  {"/api/v1/apps/get", nested},
-		"page":      {"/api/v1/apps/list", page},
+		"top level": {"/api/apps/get", topLevel},
+		"selector":  {"/api/apps/get", nested},
+		"page":      {"/api/apps/list", page},
 	} {
 		t.Run(name, func(t *testing.T) {
 			response := postAppAdministrationProto(
@@ -1124,14 +1124,14 @@ func TestAppAdministrationDiscardsUnknownFieldsRecursively(t *testing.T) {
 		t.Fatalf("service calls = %v", service.calls())
 	}
 
-	unknownOnlySelector := &opensplunkv1.GetAppRequest{
-		Selector: &opensplunkv1.AppSelector{},
+	unknownOnlySelector := &opensplunk.GetAppRequest{
+		Selector: &opensplunk.AppSelector{},
 	}
 	unknownOnlySelector.Selector.ProtoReflect().SetUnknown(unknown)
 	response := postAppAdministrationProto(
 		t,
 		handler,
-		"/api/v1/apps/get",
+		"/api/apps/get",
 		unknownOnlySelector,
 	)
 	if response.Code != http.StatusBadRequest {
@@ -1163,12 +1163,12 @@ func TestEveryAppAdministrationRouteRejectsOrdinaryPrincipal(t *testing.T) {
 		},
 	)
 	for _, path := range []string{
-		"/api/v1/apps/create",
-		"/api/v1/apps/get",
-		"/api/v1/apps/list",
-		"/api/v1/apps/update",
-		"/api/v1/apps/state/set",
-		"/api/v1/apps/delete",
+		"/api/apps/create",
+		"/api/apps/get",
+		"/api/apps/list",
+		"/api/apps/update",
+		"/api/apps/state/set",
+		"/api/apps/delete",
 	} {
 		request := httptest.NewRequestWithContext(
 			context.Background(),
@@ -1228,39 +1228,39 @@ func TestAppAdministrationTimeRangePreservesIndependentPresence(
 	futureAbsolute := "2026-01-01T00:00:00Z"
 	tests := []struct {
 		name  string
-		input *opensplunkv1.TimeRangeSpec
+		input *opensplunk.TimeRangeSpec
 		want  *AppAdministrationTimeRange
 	}{
 		{name: "absent"},
 		{
 			name:  "present empty",
-			input: &opensplunkv1.TimeRangeSpec{},
+			input: &opensplunk.TimeRangeSpec{},
 			want:  &AppAdministrationTimeRange{},
 		},
 		{
 			name:  "earliest only",
-			input: &opensplunkv1.TimeRangeSpec{Earliest: &earliest},
+			input: &opensplunk.TimeRangeSpec{Earliest: &earliest},
 			want: &AppAdministrationTimeRange{
 				Earliest: new(earliest),
 			},
 		},
 		{
 			name:  "latest only",
-			input: &opensplunkv1.TimeRangeSpec{Latest: &latest},
+			input: &opensplunk.TimeRangeSpec{Latest: &latest},
 			want: &AppAdministrationTimeRange{
 				Latest: new(latest),
 			},
 		},
 		{
 			name:  "timezone only",
-			input: &opensplunkv1.TimeRangeSpec{Timezone: &timezone},
+			input: &opensplunk.TimeRangeSpec{Timezone: &timezone},
 			want: &AppAdministrationTimeRange{
 				Timezone: new(timezone),
 			},
 		},
 		{
 			name: "all",
-			input: &opensplunkv1.TimeRangeSpec{
+			input: &opensplunk.TimeRangeSpec{
 				Earliest: &earliest,
 				Latest:   &latest,
 				Timezone: &timezone,
@@ -1273,7 +1273,7 @@ func TestAppAdministrationTimeRangePreservesIndependentPresence(
 		},
 		{
 			name: "absolute intent independent of validation wall clock",
-			input: &opensplunkv1.TimeRangeSpec{
+			input: &opensplunk.TimeRangeSpec{
 				Earliest: &futureAbsolute,
 				Latest:   &latest,
 			},
@@ -1368,8 +1368,8 @@ func TestAppAdministrationRequestEnvelopeMatchesFieldBounds(t *testing.T) {
 		},
 	}
 	handler := newAppAdministrationTestHandler(t, service, BootstrapConfig{})
-	exact := &opensplunkv1.CreateAppRequest{
-		Definition: &opensplunkv1.AppDefinition{
+	exact := &opensplunk.CreateAppRequest{
+		Definition: &opensplunk.AppDefinition{
 			Slug:        "exact",
 			DisplayName: "Exact",
 			Description: &exactDescription,
@@ -1385,7 +1385,7 @@ func TestAppAdministrationRequestEnvelopeMatchesFieldBounds(t *testing.T) {
 	response := postAppAdministrationProto(
 		t,
 		handler,
-		"/api/v1/apps/create",
+		"/api/apps/create",
 		exact,
 	)
 	if response.Code != http.StatusOK {
@@ -1397,7 +1397,7 @@ func TestAppAdministrationRequestEnvelopeMatchesFieldBounds(t *testing.T) {
 	response = postAppAdministrationProto(
 		t,
 		handler,
-		"/api/v1/apps/create",
+		"/api/apps/create",
 		exact,
 	)
 	if response.Code != http.StatusBadRequest {
@@ -1407,7 +1407,7 @@ func TestAppAdministrationRequestEnvelopeMatchesFieldBounds(t *testing.T) {
 	outer := httptest.NewRequestWithContext(
 		context.Background(),
 		http.MethodPost,
-		"/api/v1/apps/create",
+		"/api/apps/create",
 		bytes.NewReader(make([]byte, maximumRequestBytes+1)),
 	)
 	outer.Host = "example.com"
@@ -1460,16 +1460,16 @@ func TestAppAdministrationStaleCatalogRevisionIsInvalidPageToken(
 	}
 	handler := newAppAdministrationTestHandler(t, service, BootstrapConfig{})
 	size := uint32(1)
-	request := &opensplunkv1.ListAppsRequest{
-		Page: &opensplunkv1.PageRequest{PageSize: &size},
+	request := &opensplunk.ListAppsRequest{
+		Page: &opensplunk.PageRequest{PageSize: &size},
 	}
 	first := postAppAdministrationProto(
 		t,
 		handler,
-		"/api/v1/apps/list",
+		"/api/apps/list",
 		request,
 	)
-	var decoded opensplunkv1.ListAppsResponse
+	var decoded opensplunk.ListAppsResponse
 	unmarshalResponse(t, first, &decoded)
 	if decoded.GetPage().NextPageToken == nil {
 		t.Fatalf("first page = %+v", &decoded)
@@ -1479,7 +1479,7 @@ func TestAppAdministrationStaleCatalogRevisionIsInvalidPageToken(
 	stale := postAppAdministrationProto(
 		t,
 		handler,
-		"/api/v1/apps/list",
+		"/api/apps/list",
 		request,
 	)
 	if stale.Code != http.StatusBadRequest ||
@@ -1518,9 +1518,9 @@ func TestAppAdministrationRejectsExplicitEmptyOrNonCanonicalPageToken(
 			response := postAppAdministrationProto(
 				t,
 				handler,
-				"/api/v1/apps/list",
-				&opensplunkv1.ListAppsRequest{
-					Page: &opensplunkv1.PageRequest{
+				"/api/apps/list",
+				&opensplunk.ListAppsRequest{
+					Page: &opensplunk.PageRequest{
 						PageToken: &token,
 					},
 				},
@@ -1583,16 +1583,16 @@ func TestAppAdministrationCursorSurvivesRestartAndClonesSigningKey(
 	key := bytes.Repeat([]byte{0x7b}, 32)
 	firstHandler := newAppAdministrationHandlerWithKey(t, service, key)
 	size := uint32(1)
-	request := &opensplunkv1.ListAppsRequest{
-		Page: &opensplunkv1.PageRequest{PageSize: &size},
+	request := &opensplunk.ListAppsRequest{
+		Page: &opensplunk.PageRequest{PageSize: &size},
 	}
 	first := postAppAdministrationProto(
 		t,
 		firstHandler,
-		"/api/v1/apps/list",
+		"/api/apps/list",
 		request,
 	)
-	var page opensplunkv1.ListAppsResponse
+	var page opensplunk.ListAppsResponse
 	unmarshalResponse(t, first, &page)
 	token := page.GetPage().GetNextPageToken()
 	if token == "" {
@@ -1606,7 +1606,7 @@ func TestAppAdministrationCursorSurvivesRestartAndClonesSigningKey(
 	originalAfterMutation := postAppAdministrationProto(
 		t,
 		firstHandler,
-		"/api/v1/apps/list",
+		"/api/apps/list",
 		request,
 	)
 	if originalAfterMutation.Code != http.StatusOK {
@@ -1625,7 +1625,7 @@ func TestAppAdministrationCursorSurvivesRestartAndClonesSigningKey(
 	second := postAppAdministrationProto(
 		t,
 		secondHandler,
-		"/api/v1/apps/list",
+		"/api/apps/list",
 		request,
 	)
 	if second.Code != http.StatusOK {
@@ -1646,7 +1646,7 @@ func TestAppAdministrationDescriptionCanonicalizesEmptyToAbsent(
 		}
 	}
 	definition, err := handler.appAdministrationDefinition(
-		&opensplunkv1.AppDefinition{
+		&opensplunk.AppDefinition{
 			Slug:        "empty-description",
 			DisplayName: "Empty Description",
 			Description: new(""),
@@ -1724,9 +1724,9 @@ func TestAppAdministrationErrorMappingIsFixedAndDetailFree(t *testing.T) {
 			response := postAppAdministrationProto(
 				t,
 				handler,
-				"/api/v1/apps/create",
-				&opensplunkv1.CreateAppRequest{
-					Definition: &opensplunkv1.AppDefinition{
+				"/api/apps/create",
+				&opensplunk.CreateAppRequest{
+					Definition: &opensplunk.AppDefinition{
 						Slug:        "error",
 						DisplayName: "Error",
 					},
@@ -1755,23 +1755,23 @@ func TestAppAdministrationFeaturesTypedNilAndCursorKeyConfiguration(
 	t.Parallel()
 
 	service := &fakeAppAdministration{}
-	requested := BootstrapConfig{Features: []opensplunkv1.ServerFeature{
-		opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH,
-		opensplunkv1.ServerFeature_SERVER_FEATURE_APP_ADMIN,
-		opensplunkv1.ServerFeature_SERVER_FEATURE_APP_ADMIN,
+	requested := BootstrapConfig{Features: []opensplunk.ServerFeature{
+		opensplunk.ServerFeature_SERVER_FEATURE_SEARCH,
+		opensplunk.ServerFeature_SERVER_FEATURE_APP_ADMIN,
+		opensplunk.ServerFeature_SERVER_FEATURE_APP_ADMIN,
 	}}
 	enabled := newAppAdministrationTestHandler(t, service, requested)
 	bootstrap := postProto(
 		t,
 		enabled,
-		"/api/v1/system/bootstrap",
-		&opensplunkv1.GetSystemBootstrapRequest{},
+		"/api/system/bootstrap",
+		&opensplunk.GetSystemBootstrapRequest{},
 	)
-	var decoded opensplunkv1.GetSystemBootstrapResponse
+	var decoded opensplunk.GetSystemBootstrapResponse
 	unmarshalResponse(t, bootstrap, &decoded)
 	if countFeature(
 		decoded.GetFeatures(),
-		opensplunkv1.ServerFeature_SERVER_FEATURE_APP_ADMIN,
+		opensplunk.ServerFeature_SERVER_FEATURE_APP_ADMIN,
 	) != 1 {
 		t.Fatalf("enabled features = %v", decoded.GetFeatures())
 	}
@@ -1792,21 +1792,21 @@ func TestAppAdministrationFeaturesTypedNilAndCursorKeyConfiguration(
 	bootstrap = postProto(
 		t,
 		disabled,
-		"/api/v1/system/bootstrap",
-		&opensplunkv1.GetSystemBootstrapRequest{},
+		"/api/system/bootstrap",
+		&opensplunk.GetSystemBootstrapRequest{},
 	)
 	unmarshalResponse(t, bootstrap, &decoded)
 	if countFeature(
 		decoded.GetFeatures(),
-		opensplunkv1.ServerFeature_SERVER_FEATURE_APP_ADMIN,
+		opensplunk.ServerFeature_SERVER_FEATURE_APP_ADMIN,
 	) != 0 {
 		t.Fatalf("disabled features = %v", decoded.GetFeatures())
 	}
 	route := postAppAdministrationProto(
 		t,
 		disabled,
-		"/api/v1/apps/list",
-		&opensplunkv1.ListAppsRequest{},
+		"/api/apps/list",
+		&opensplunk.ListAppsRequest{},
 	)
 	if route.Code != http.StatusNotFound {
 		t.Fatalf("disabled route = %d, %s", route.Code, route.Body)
@@ -1902,9 +1902,9 @@ func TestAppAdministrationCancellationAndCommittedSuccess(t *testing.T) {
 		t,
 		createContext,
 		handler,
-		"/api/v1/apps/create",
-		&opensplunkv1.CreateAppRequest{
-			Definition: &opensplunkv1.AppDefinition{
+		"/api/apps/create",
+		&opensplunk.CreateAppRequest{
+			Definition: &opensplunk.AppDefinition{
 				Slug:        "committed",
 				DisplayName: "Committed",
 			},
@@ -1921,10 +1921,10 @@ func TestAppAdministrationCancellationAndCommittedSuccess(t *testing.T) {
 		t,
 		getContext,
 		handler,
-		"/api/v1/apps/get",
-		&opensplunkv1.GetAppRequest{
-			Selector: &opensplunkv1.AppSelector{
-				Selector: &opensplunkv1.AppSelector_AppId{
+		"/api/apps/get",
+		&opensplunk.GetAppRequest{
+			Selector: &opensplunk.AppSelector{
+				Selector: &opensplunk.AppSelector_AppId{
 					AppId: "app_0123456789ABCDEFGHIJKL",
 				},
 			},
@@ -1996,9 +1996,9 @@ func TestAppAdministrationSerializationCapacityPrecedesMutation(
 		firstDone <- postAppAdministrationProto(
 			t,
 			handler,
-			"/api/v1/apps/create",
-			&opensplunkv1.CreateAppRequest{
-				Definition: &opensplunkv1.AppDefinition{
+			"/api/apps/create",
+			&opensplunk.CreateAppRequest{
+				Definition: &opensplunk.AppDefinition{
 					Slug:        "first",
 					DisplayName: "First",
 				},
@@ -2009,9 +2009,9 @@ func TestAppAdministrationSerializationCapacityPrecedesMutation(
 	second := postAppAdministrationProto(
 		t,
 		handler,
-		"/api/v1/apps/create",
-		&opensplunkv1.CreateAppRequest{
-			Definition: &opensplunkv1.AppDefinition{
+		"/api/apps/create",
+		&opensplunk.CreateAppRequest{
+			Definition: &opensplunk.AppDefinition{
 				Slug:        "second",
 				DisplayName: "Second",
 			},
@@ -2052,13 +2052,13 @@ func TestAppAdministrationDirectHandlerRequiresDetachedPrincipal(
 	request := httptest.NewRequestWithContext(
 		context.Background(),
 		http.MethodPost,
-		"/api/v1/apps/create",
+		"/api/apps/create",
 		nil,
 	)
 	_, err := handler.createApp(
 		request,
-		&opensplunkv1.CreateAppRequest{
-			Definition: &opensplunkv1.AppDefinition{
+		&opensplunk.CreateAppRequest{
+			Definition: &opensplunk.AppDefinition{
 				Slug:        "direct",
 				DisplayName: "Direct",
 			},
@@ -2137,9 +2137,9 @@ func TestAppAdministrationRejectsMalformedServiceResults(t *testing.T) {
 			response := postAppAdministrationProto(
 				t,
 				handler,
-				"/api/v1/apps/create",
-				&opensplunkv1.CreateAppRequest{
-					Definition: &opensplunkv1.AppDefinition{
+				"/api/apps/create",
+				&opensplunk.CreateAppRequest{
+					Definition: &opensplunk.AppDefinition{
 						Slug:        "valid",
 						DisplayName: "Valid",
 					},

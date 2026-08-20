@@ -13,7 +13,7 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 )
@@ -311,7 +311,7 @@ ORDER BY n`
 	if !t.Run("generated alias event boundary", func(t *testing.T) {
 		program := knowledgePreludeProgram(
 			t,
-			[]*opensplunkv1.KnowledgeObjectDefinition{
+			[]*opensplunk.KnowledgeObjectDefinition{
 				knowledgePreludeAliasDefinition(
 					"runtime-alias-boundary",
 					"host",
@@ -448,65 +448,65 @@ ORDER BY n`
 			source string,
 			destination string,
 			index string,
-			overwrite opensplunkv1.KnowledgeOverwriteBehavior,
-		) *opensplunkv1.KnowledgeObjectDefinition {
+			overwrite opensplunk.KnowledgeOverwriteBehavior,
+		) *opensplunk.KnowledgeObjectDefinition {
 			definition := knowledgePreludeAliasDefinition(name, source, destination)
-			definition.Body.(*opensplunkv1.KnowledgeObjectDefinition_FieldAlias).
+			definition.Body.(*opensplunk.KnowledgeObjectDefinition_FieldAlias).
 				FieldAlias.OverwriteBehavior = overwrite
 			if index != "" {
-				definition.Selector = &opensplunkv1.KnowledgeSelector{
-					IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{Value: index}},
+				definition.Selector = &opensplunk.KnowledgeSelector{
+					IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{{Value: index}},
 				}
 			}
 			return definition
 		}
 		tests := []struct {
 			name        string
-			definitions []*opensplunkv1.KnowledgeObjectDefinition
+			definitions []*opensplunk.KnowledgeObjectDefinition
 			probe       string
 		}{
 			{
 				name: "selector false",
-				definitions: []*opensplunkv1.KnowledgeObjectDefinition{
+				definitions: []*opensplunk.KnowledgeObjectDefinition{
 					aliasDefinition(
 						"a-false-danger",
 						"danger",
 						"false_out",
 						"east",
-						opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+						opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 					),
 				},
 				probe: `dynamicType("false_out") = 'None'`,
 			},
 			{
 				name: "preserve blocked",
-				definitions: []*opensplunkv1.KnowledgeObjectDefinition{
+				definitions: []*opensplunk.KnowledgeObjectDefinition{
 					aliasDefinition(
 						"a-preserve-danger",
 						"danger",
 						"alias_value",
 						"",
-						opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+						opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
 					),
 				},
 				probe: `dynamicElement("alias_value", 'String') = 'old'`,
 			},
 			{
 				name: "disjoint losing writer",
-				definitions: []*opensplunkv1.KnowledgeObjectDefinition{
+				definitions: []*opensplunk.KnowledgeObjectDefinition{
 					aliasDefinition(
 						"a-east-danger",
 						"danger",
 						"shared_out",
 						"east",
-						opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+						opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 					),
 					aliasDefinition(
 						"b-west-host",
 						"host",
 						"shared_out",
 						"west",
-						opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+						opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 					),
 				},
 				probe: `dynamicElement("shared_out", 'String') = 'FixtureHost'`,
@@ -568,14 +568,14 @@ ORDER BY n`
 			"calculated_value",
 			"lower(source)",
 		)
-		definition.Selector = &opensplunkv1.KnowledgeSelector{
-			IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{
+		definition.Selector = &opensplunk.KnowledgeSelector{
+			IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{{
 				Value: strings.Repeat("x", 250) + "*",
 			}},
 		}
 		program := knowledgePreludeProgram(
 			t,
-			[]*opensplunkv1.KnowledgeObjectDefinition{definition},
+			[]*opensplunk.KnowledgeObjectDefinition{definition},
 		)
 		calculated := program.CalculatedFields()
 		if len(calculated) != 1 {

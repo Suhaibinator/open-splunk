@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"google.golang.org/protobuf/proto"
@@ -243,35 +243,35 @@ func TestExportRoutesRoundTripProtobufAndScope(t *testing.T) {
 		WebUI: testUI(), OwnerID: ownerID, TenantID: tenantID, Now: func() time.Time { return testNow },
 	})
 	rowLimit, byteLimit := uint64(77), uint64(8_192)
-	response := postProto(t, handler, "/api/v1/search/exports/create", &opensplunkv1.CreateExportJobRequest{
-		Definition: &opensplunkv1.ExportDefinition{
+	response := postProto(t, handler, "/api/search/exports/create", &opensplunk.CreateExportJobRequest{
+		Definition: &opensplunk.ExportDefinition{
 			SearchJobId: " search-create ", Columns: []string{"_time", "message"}, RowLimit: &rowLimit, ByteLimit: &byteLimit,
-			FormatOptions: &opensplunkv1.ExportDefinition_Csv{Csv: &opensplunkv1.CsvExportOptions{
-				HeaderMode: opensplunkv1.CsvHeaderMode_CSV_HEADER_MODE_DISPLAY_NAMES,
+			FormatOptions: &opensplunk.ExportDefinition_Csv{Csv: &opensplunk.CsvExportOptions{
+				HeaderMode: opensplunk.CsvHeaderMode_CSV_HEADER_MODE_DISPLAY_NAMES,
 			}},
 		},
 	})
 	if response.Code != http.StatusOK {
 		t.Fatalf("create status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var created opensplunkv1.CreateExportJobResponse
+	var created opensplunk.CreateExportJobResponse
 	unmarshalResponse(t, response, &created)
 	if created.GetExportJob().GetExportJobId() != queued.ID ||
-		created.GetExportJob().GetFormat() != opensplunkv1.ExportFormat_EXPORT_FORMAT_CSV ||
-		created.GetExportJob().GetState() != opensplunkv1.ExportJobState_EXPORT_JOB_STATE_QUEUED {
+		created.GetExportJob().GetFormat() != opensplunk.ExportFormat_EXPORT_FORMAT_CSV ||
+		created.GetExportJob().GetState() != opensplunk.ExportJobState_EXPORT_JOB_STATE_QUEUED {
 		t.Fatalf("created job = %+v", created.GetExportJob())
 	}
 
-	response = postProto(t, handler, "/api/v1/search/exports/get", &opensplunkv1.GetExportJobRequest{
+	response = postProto(t, handler, "/api/search/exports/get", &opensplunk.GetExportJobRequest{
 		ExportJobId: " export-get ", IssueDownloadGrant: true,
 	})
 	if response.Code != http.StatusOK {
 		t.Fatalf("get status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var got opensplunkv1.GetExportJobResponse
+	var got opensplunk.GetExportJobResponse
 	unmarshalResponse(t, response, &got)
 	if got.GetExportJob().GetExportJobId() != completed.ID ||
-		got.GetExportJob().GetDefinition().GetJsonLines().GetIntegerEncoding() != opensplunkv1.JsonIntegerEncoding_JSON_INTEGER_ENCODING_STRING ||
+		got.GetExportJob().GetDefinition().GetJsonLines().GetIntegerEncoding() != opensplunk.JsonIntegerEncoding_JSON_INTEGER_ENCODING_STRING ||
 		!got.GetExportJob().GetDefinition().GetJsonLines().GetIncludeTypeMetadata() ||
 		got.GetExportJob().GetArtifact().GetSizeBytes() != 321 || got.GetExportJob().GetArtifact().GetRowCount() != 7 {
 		t.Fatalf("get job = %+v", got.GetExportJob())
@@ -282,14 +282,14 @@ func TestExportRoutesRoundTripProtobufAndScope(t *testing.T) {
 		t.Fatalf("download grant = %+v", got.GetDownloadGrant())
 	}
 
-	response = postProto(t, handler, "/api/v1/search/exports/cancel", &opensplunkv1.CancelExportJobRequest{ExportJobId: " export-cancel "})
+	response = postProto(t, handler, "/api/search/exports/cancel", &opensplunk.CancelExportJobRequest{ExportJobId: " export-cancel "})
 	if response.Code != http.StatusOK {
 		t.Fatalf("cancel status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var cancelResponse opensplunkv1.CancelExportJobResponse
+	var cancelResponse opensplunk.CancelExportJobResponse
 	unmarshalResponse(t, response, &cancelResponse)
 	if cancelResponse.GetExportJob().GetExportJobId() != canceled.ID ||
-		cancelResponse.GetExportJob().GetState() != opensplunkv1.ExportJobState_EXPORT_JOB_STATE_CANCELED {
+		cancelResponse.GetExportJob().GetState() != opensplunk.ExportJobState_EXPORT_JOB_STATE_CANCELED {
 		t.Fatalf("canceled job = %+v", cancelResponse.GetExportJob())
 	}
 
@@ -300,9 +300,9 @@ func TestExportRoutesRoundTripProtobufAndScope(t *testing.T) {
 }
 
 func TestExportRoutesValidateBeforeCallingService(t *testing.T) {
-	for name, definition := range map[string]*opensplunkv1.ExportDefinition{
-		"nil CSV options":        {SearchJobId: "search-1", FormatOptions: &opensplunkv1.ExportDefinition_Csv{}},
-		"nil JSON Lines options": {SearchJobId: "search-1", FormatOptions: &opensplunkv1.ExportDefinition_JsonLines{}},
+	for name, definition := range map[string]*opensplunk.ExportDefinition{
+		"nil CSV options":        {SearchJobId: "search-1", FormatOptions: &opensplunk.ExportDefinition_Csv{}},
+		"nil JSON Lines options": {SearchJobId: "search-1", FormatOptions: &opensplunk.ExportDefinition_JsonLines{}},
 	} {
 		t.Run(name+" in memory", func(t *testing.T) {
 			if _, err := exportRequestFromProto(definition); err == nil {
@@ -322,25 +322,25 @@ func TestExportRoutesValidateBeforeCallingService(t *testing.T) {
 		path    string
 		request proto.Message
 	}{
-		{name: "missing definition", path: "/api/v1/search/exports/create", request: &opensplunkv1.CreateExportJobRequest{}},
-		{name: "present client request ID", path: "/api/v1/search/exports/create", request: &opensplunkv1.CreateExportJobRequest{ClientRequestId: &clientID, Definition: csvExportDefinition("search-1")}},
-		{name: "missing search ID", path: "/api/v1/search/exports/create", request: &opensplunkv1.CreateExportJobRequest{Definition: csvExportDefinition(" ")}},
-		{name: "missing format", path: "/api/v1/search/exports/create", request: &opensplunkv1.CreateExportJobRequest{Definition: &opensplunkv1.ExportDefinition{SearchJobId: "search-1"}}},
-		{name: "zero row limit", path: "/api/v1/search/exports/create", request: &opensplunkv1.CreateExportJobRequest{Definition: func() *opensplunkv1.ExportDefinition {
+		{name: "missing definition", path: "/api/search/exports/create", request: &opensplunk.CreateExportJobRequest{}},
+		{name: "present client request ID", path: "/api/search/exports/create", request: &opensplunk.CreateExportJobRequest{ClientRequestId: &clientID, Definition: csvExportDefinition("search-1")}},
+		{name: "missing search ID", path: "/api/search/exports/create", request: &opensplunk.CreateExportJobRequest{Definition: csvExportDefinition(" ")}},
+		{name: "missing format", path: "/api/search/exports/create", request: &opensplunk.CreateExportJobRequest{Definition: &opensplunk.ExportDefinition{SearchJobId: "search-1"}}},
+		{name: "zero row limit", path: "/api/search/exports/create", request: &opensplunk.CreateExportJobRequest{Definition: func() *opensplunk.ExportDefinition {
 			definition := csvExportDefinition("search-1")
 			definition.RowLimit = &zero
 			return definition
 		}()}},
-		{name: "zero byte limit", path: "/api/v1/search/exports/create", request: &opensplunkv1.CreateExportJobRequest{Definition: func() *opensplunkv1.ExportDefinition {
+		{name: "zero byte limit", path: "/api/search/exports/create", request: &opensplunk.CreateExportJobRequest{Definition: func() *opensplunk.ExportDefinition {
 			definition := csvExportDefinition("search-1")
 			definition.ByteLimit = &zero
 			return definition
 		}()}},
-		{name: "invalid CSV header", path: "/api/v1/search/exports/create", request: &opensplunkv1.CreateExportJobRequest{Definition: &opensplunkv1.ExportDefinition{SearchJobId: "search-1", FormatOptions: &opensplunkv1.ExportDefinition_Csv{Csv: &opensplunkv1.CsvExportOptions{HeaderMode: 99}}}}},
-		{name: "invalid JSON integer mode", path: "/api/v1/search/exports/create", request: &opensplunkv1.CreateExportJobRequest{Definition: &opensplunkv1.ExportDefinition{SearchJobId: "search-1", FormatOptions: &opensplunkv1.ExportDefinition_JsonLines{JsonLines: &opensplunkv1.JsonLinesExportOptions{IntegerEncoding: 99}}}}},
-		{name: "missing get ID", path: "/api/v1/search/exports/get", request: &opensplunkv1.GetExportJobRequest{ExportJobId: " "}},
-		{name: "missing cancel ID", path: "/api/v1/search/exports/cancel", request: &opensplunkv1.CancelExportJobRequest{ExportJobId: " "}},
-		{name: "unsupported cancel reason", path: "/api/v1/search/exports/cancel", request: &opensplunkv1.CancelExportJobRequest{ExportJobId: "export-1", Reason: new("because")}},
+		{name: "invalid CSV header", path: "/api/search/exports/create", request: &opensplunk.CreateExportJobRequest{Definition: &opensplunk.ExportDefinition{SearchJobId: "search-1", FormatOptions: &opensplunk.ExportDefinition_Csv{Csv: &opensplunk.CsvExportOptions{HeaderMode: 99}}}}},
+		{name: "invalid JSON integer mode", path: "/api/search/exports/create", request: &opensplunk.CreateExportJobRequest{Definition: &opensplunk.ExportDefinition{SearchJobId: "search-1", FormatOptions: &opensplunk.ExportDefinition_JsonLines{JsonLines: &opensplunk.JsonLinesExportOptions{IntegerEncoding: 99}}}}},
+		{name: "missing get ID", path: "/api/search/exports/get", request: &opensplunk.GetExportJobRequest{ExportJobId: " "}},
+		{name: "missing cancel ID", path: "/api/search/exports/cancel", request: &opensplunk.CancelExportJobRequest{ExportJobId: " "}},
+		{name: "unsupported cancel reason", path: "/api/search/exports/cancel", request: &opensplunk.CancelExportJobRequest{ExportJobId: "export-1", Reason: new("because")}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -388,7 +388,7 @@ func TestExportErrorsMapToStableHTTPStatuses(t *testing.T) {
 			handler := newTestHandler(t, Config{
 				SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, Exports: service, WebUI: testUI(),
 			})
-			response := postProto(t, handler, "/api/v1/search/exports/get", &opensplunkv1.GetExportJobRequest{ExportJobId: "export-1"})
+			response := postProto(t, handler, "/api/search/exports/get", &opensplunk.GetExportJobRequest{ExportJobId: "export-1"})
 			if response.Code != test.want {
 				t.Fatalf("status = %d, want %d, body = %s", response.Code, test.want, response.Body.String())
 			}
@@ -414,7 +414,7 @@ func TestExportDownloadGrantFailureDoesNotReturnPartialJob(t *testing.T) {
 		},
 	}
 	handler := newTestHandler(t, Config{SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, Exports: service, WebUI: testUI()})
-	response := postProto(t, handler, "/api/v1/search/exports/get", &opensplunkv1.GetExportJobRequest{ExportJobId: "export-1", IssueDownloadGrant: true})
+	response := postProto(t, handler, "/api/search/exports/get", &opensplunk.GetExportJobRequest{ExportJobId: "export-1", IssueDownloadGrant: true})
 	if response.Code != http.StatusTooManyRequests {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
@@ -443,7 +443,7 @@ func TestExportDownloadGrantStateErrorsDescribeArtifacts(t *testing.T) {
 				},
 			}
 			handler := newTestHandler(t, Config{SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, Exports: service, WebUI: testUI()})
-			response := postProto(t, handler, "/api/v1/search/exports/get", &opensplunkv1.GetExportJobRequest{
+			response := postProto(t, handler, "/api/search/exports/get", &opensplunk.GetExportJobRequest{
 				ExportJobId: "export-1", IssueDownloadGrant: true,
 			})
 			if response.Code != test.want || !strings.Contains(response.Body.String(), "export artifact") || strings.Contains(response.Body.String(), "search result") {
@@ -472,11 +472,11 @@ func TestGetExportDoesNotIssueUnrequestedGrant(t *testing.T) {
 		},
 	}
 	handler := newTestHandler(t, Config{SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, Exports: service, WebUI: testUI()})
-	response := postProto(t, handler, "/api/v1/search/exports/get", &opensplunkv1.GetExportJobRequest{ExportJobId: "export-1"})
+	response := postProto(t, handler, "/api/search/exports/get", &opensplunk.GetExportJobRequest{ExportJobId: "export-1"})
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var decoded opensplunkv1.GetExportJobResponse
+	var decoded opensplunk.GetExportJobResponse
 	unmarshalResponse(t, response, &decoded)
 	if decoded.GetDownloadGrant() != nil {
 		t.Fatalf("unrequested grant = %+v", decoded.GetDownloadGrant())
@@ -491,7 +491,7 @@ func TestExportRoutesAreExactConditionalAndAdvertised(t *testing.T) {
 	service := &fakeExports{}
 	handler := newTestHandler(t, Config{SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, Exports: service, WebUI: testUI()})
 
-	request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/v1/search/exports/create", nil)
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/search/exports/create", nil)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != http.MethodPost {
@@ -510,26 +510,26 @@ func TestExportRoutesAreExactConditionalAndAdvertised(t *testing.T) {
 		t.Fatalf("download suffix status = %d", response.Code)
 	}
 
-	bootstrapResponse := postProto(t, handler, "/api/v1/system/bootstrap", &opensplunkv1.GetSystemBootstrapRequest{})
+	bootstrapResponse := postProto(t, handler, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{})
 	if bootstrapResponse.Code != http.StatusOK {
 		t.Fatalf("enabled bootstrap status = %d, body = %s", bootstrapResponse.Code, bootstrapResponse.Body.String())
 	}
-	var enabled opensplunkv1.GetSystemBootstrapResponse
+	var enabled opensplunk.GetSystemBootstrapResponse
 	unmarshalResponse(t, bootstrapResponse, &enabled)
-	if countServerFeature(enabled.GetFeatures(), opensplunkv1.ServerFeature_SERVER_FEATURE_EXPORT_CSV) != 1 ||
-		countServerFeature(enabled.GetFeatures(), opensplunkv1.ServerFeature_SERVER_FEATURE_EXPORT_JSON_LINES) != 1 {
+	if countServerFeature(enabled.GetFeatures(), opensplunk.ServerFeature_SERVER_FEATURE_EXPORT_CSV) != 1 ||
+		countServerFeature(enabled.GetFeatures(), opensplunk.ServerFeature_SERVER_FEATURE_EXPORT_JSON_LINES) != 1 {
 		t.Fatalf("enabled features = %v", enabled.GetFeatures())
 	}
 
 	disabled := newTestHandler(t, Config{
 		SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, WebUI: testUI(),
-		Bootstrap: BootstrapConfig{Features: []opensplunkv1.ServerFeature{
-			opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH,
-			opensplunkv1.ServerFeature_SERVER_FEATURE_EXPORT_CSV,
-			opensplunkv1.ServerFeature_SERVER_FEATURE_EXPORT_JSON_LINES,
+		Bootstrap: BootstrapConfig{Features: []opensplunk.ServerFeature{
+			opensplunk.ServerFeature_SERVER_FEATURE_SEARCH,
+			opensplunk.ServerFeature_SERVER_FEATURE_EXPORT_CSV,
+			opensplunk.ServerFeature_SERVER_FEATURE_EXPORT_JSON_LINES,
 		}},
 	})
-	response = postProto(t, disabled, "/api/v1/search/exports/get", &opensplunkv1.GetExportJobRequest{ExportJobId: "export-1"})
+	response = postProto(t, disabled, "/api/search/exports/get", &opensplunk.GetExportJobRequest{ExportJobId: "export-1"})
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("disabled typed route status = %d", response.Code)
 	}
@@ -537,7 +537,7 @@ func TestExportRoutesAreExactConditionalAndAdvertised(t *testing.T) {
 		t,
 		disabled,
 		exportJobsListPath,
-		&opensplunkv1.ListExportJobsRequest{},
+		&opensplunk.ListExportJobsRequest{},
 	)
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("disabled list route status = %d", response.Code)
@@ -548,11 +548,11 @@ func TestExportRoutesAreExactConditionalAndAdvertised(t *testing.T) {
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("disabled download route status = %d", response.Code)
 	}
-	bootstrapResponse = postProto(t, disabled, "/api/v1/system/bootstrap", &opensplunkv1.GetSystemBootstrapRequest{})
-	var disabledBootstrap opensplunkv1.GetSystemBootstrapResponse
+	bootstrapResponse = postProto(t, disabled, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{})
+	var disabledBootstrap opensplunk.GetSystemBootstrapResponse
 	unmarshalResponse(t, bootstrapResponse, &disabledBootstrap)
-	if countServerFeature(disabledBootstrap.GetFeatures(), opensplunkv1.ServerFeature_SERVER_FEATURE_EXPORT_CSV) != 0 ||
-		countServerFeature(disabledBootstrap.GetFeatures(), opensplunkv1.ServerFeature_SERVER_FEATURE_EXPORT_JSON_LINES) != 0 {
+	if countServerFeature(disabledBootstrap.GetFeatures(), opensplunk.ServerFeature_SERVER_FEATURE_EXPORT_CSV) != 0 ||
+		countServerFeature(disabledBootstrap.GetFeatures(), opensplunk.ServerFeature_SERVER_FEATURE_EXPORT_JSON_LINES) != 0 {
 		t.Fatalf("disabled features = %v", disabledBootstrap.GetFeatures())
 	}
 
@@ -708,7 +708,7 @@ func TestExportAPIRoutesRejectDNSRebindingBeforeServiceOrGrantUse(t *testing.T) 
 	})
 
 	hostileHeaders := map[string]string{"Host": "attacker.example", "Origin": "http://attacker.example"}
-	typed := postProtoHeaders(t, handler, "/api/v1/search/exports/create", &opensplunkv1.CreateExportJobRequest{
+	typed := postProtoHeaders(t, handler, "/api/search/exports/create", &opensplunk.CreateExportJobRequest{
 		Definition: csvExportDefinition("search-1"),
 	}, hostileHeaders)
 	if typed.Code != http.StatusForbidden {
@@ -718,7 +718,7 @@ func TestExportAPIRoutesRejectDNSRebindingBeforeServiceOrGrantUse(t *testing.T) 
 		t,
 		handler,
 		exportJobsListPath,
-		&opensplunkv1.ListExportJobsRequest{},
+		&opensplunk.ListExportJobsRequest{},
 		hostileHeaders,
 	)
 	if hostileList.Code != http.StatusForbidden {
@@ -752,7 +752,7 @@ func TestExportAPIRoutesRejectDNSRebindingBeforeServiceOrGrantUse(t *testing.T) 
 		t.Fatalf("hostile raw request consumed grant: redeem = %d", redeemCalls)
 	}
 
-	allowedTyped := postProtoHeaders(t, handler, "/api/v1/search/exports/create", &opensplunkv1.CreateExportJobRequest{
+	allowedTyped := postProtoHeaders(t, handler, "/api/search/exports/create", &opensplunk.CreateExportJobRequest{
 		Definition: csvExportDefinition("search-1"),
 	}, map[string]string{"Host": "example.com", "Origin": "http://example.com", "Sec-Fetch-Site": "same-origin"})
 	if allowedTyped.Code != http.StatusOK {
@@ -762,7 +762,7 @@ func TestExportAPIRoutesRejectDNSRebindingBeforeServiceOrGrantUse(t *testing.T) 
 		t,
 		handler,
 		exportJobsListPath,
-		&opensplunkv1.ListExportJobsRequest{},
+		&opensplunk.ListExportJobsRequest{},
 		map[string]string{
 			"Host":           "example.com",
 			"Origin":         "http://example.com",
@@ -837,7 +837,7 @@ func TestSlowDownloadsCannotStarveTypedAPICapacity(t *testing.T) {
 
 	// Typed work has an independent permit even while the download holds its
 	// own gate for the full response lifetime.
-	bootstrap := postProto(t, handler, "/api/v1/system/bootstrap", &opensplunkv1.GetSystemBootstrapRequest{})
+	bootstrap := postProto(t, handler, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{})
 	if bootstrap.Code != http.StatusOK {
 		t.Fatalf("typed API was starved by slow download: %d %s", bootstrap.Code, bootstrap.Body.String())
 	}
@@ -1024,11 +1024,11 @@ func testExportJob(id string, format exportjobs.Format, state exportjobs.State) 
 	return job
 }
 
-func csvExportDefinition(searchJobID string) *opensplunkv1.ExportDefinition {
-	return &opensplunkv1.ExportDefinition{
+func csvExportDefinition(searchJobID string) *opensplunk.ExportDefinition {
+	return &opensplunk.ExportDefinition{
 		SearchJobId: searchJobID,
-		FormatOptions: &opensplunkv1.ExportDefinition_Csv{Csv: &opensplunkv1.CsvExportOptions{
-			HeaderMode: opensplunkv1.CsvHeaderMode_CSV_HEADER_MODE_FIELD_NAMES,
+		FormatOptions: &opensplunk.ExportDefinition_Csv{Csv: &opensplunk.CsvExportOptions{
+			HeaderMode: opensplunk.CsvHeaderMode_CSV_HEADER_MODE_FIELD_NAMES,
 		}},
 	}
 }
@@ -1052,7 +1052,7 @@ func equalStrings(left, right []string) bool {
 	return true
 }
 
-func countServerFeature(features []opensplunkv1.ServerFeature, target opensplunkv1.ServerFeature) int {
+func countServerFeature(features []opensplunk.ServerFeature, target opensplunk.ServerFeature) int {
 	count := 0
 	for _, feature := range features {
 		if feature == target {

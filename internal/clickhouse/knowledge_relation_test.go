@@ -8,14 +8,14 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 )
 
 func TestCompileKnowledgeRelation(t *testing.T) {
-	program := knowledgePreludeProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{
+	program := knowledgePreludeProgram(t, []*opensplunk.KnowledgeObjectDefinition{
 		knowledgeJSONStageDefinition("a-json", "json_value", "payload.value", "east"),
 		knowledgeRegexStageDefinition(
 			"b-regex",
@@ -184,10 +184,10 @@ func TestCompileKnowledgeRelation(t *testing.T) {
 			target int
 			depth  uint32
 		}
-		extractionJSON := func(name, output string) *opensplunkv1.KnowledgeObjectDefinition {
+		extractionJSON := func(name, output string) *opensplunk.KnowledgeObjectDefinition {
 			return knowledgeJSONStageDefinition(name, output, "payload.value", "east")
 		}
-		extractionRegex := func(name, output string) *opensplunkv1.KnowledgeObjectDefinition {
+		extractionRegex := func(name, output string) *opensplunk.KnowledgeObjectDefinition {
 			return knowledgeRegexStageDefinition(
 				name,
 				`(?P<`+output+`>[a-z]+)`,
@@ -195,10 +195,10 @@ func TestCompileKnowledgeRelation(t *testing.T) {
 				"west",
 			)
 		}
-		alias := func(name, source, destination string) *opensplunkv1.KnowledgeObjectDefinition {
+		alias := func(name, source, destination string) *opensplunk.KnowledgeObjectDefinition {
 			return knowledgePreludeAliasDefinition(name, source, destination)
 		}
-		calculated := func(name, input, destination string) *opensplunkv1.KnowledgeObjectDefinition {
+		calculated := func(name, input, destination string) *opensplunk.KnowledgeObjectDefinition {
 			return knowledgePreludeCalculatedDefinition(
 				name,
 				destination,
@@ -206,17 +206,17 @@ func TestCompileKnowledgeRelation(t *testing.T) {
 			)
 		}
 		selected := func(
-			definition *opensplunkv1.KnowledgeObjectDefinition,
+			definition *opensplunk.KnowledgeObjectDefinition,
 			index string,
-		) *opensplunkv1.KnowledgeObjectDefinition {
-			definition.Selector = &opensplunkv1.KnowledgeSelector{
-				IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{Value: index}},
+		) *opensplunk.KnowledgeObjectDefinition {
+			definition.Selector = &opensplunk.KnowledgeSelector{
+				IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{{Value: index}},
 			}
 			return definition
 		}
 		tests := []struct {
 			name         string
-			definitions  []*opensplunkv1.KnowledgeObjectDefinition
+			definitions  []*opensplunk.KnowledgeObjectDefinition
 			dependencies []dependency
 			wantKinds    []compiledKnowledgePreludeStageKind
 			wantOffsets  []int
@@ -224,25 +224,25 @@ func TestCompileKnowledgeRelation(t *testing.T) {
 		}{
 			{
 				name:        "extraction only",
-				definitions: []*opensplunkv1.KnowledgeObjectDefinition{extractionJSON("e-json", "e_value")},
+				definitions: []*opensplunk.KnowledgeObjectDefinition{extractionJSON("e-json", "e_value")},
 				wantKinds:   []compiledKnowledgePreludeStageKind{compiledKnowledgePreludeStageExtraction},
 				wantOffsets: []int{0},
 			},
 			{
 				name:        "alias only",
-				definitions: []*opensplunkv1.KnowledgeObjectDefinition{alias("a-only", "host", "a_value")},
+				definitions: []*opensplunk.KnowledgeObjectDefinition{alias("a-only", "host", "a_value")},
 				wantKinds:   []compiledKnowledgePreludeStageKind{compiledKnowledgePreludeStageAlias},
 				wantOffsets: []int{0},
 			},
 			{
 				name:        "calculated only",
-				definitions: []*opensplunkv1.KnowledgeObjectDefinition{calculated("c-only", "source", "c_value")},
+				definitions: []*opensplunk.KnowledgeObjectDefinition{calculated("c-only", "source", "c_value")},
 				wantKinds:   []compiledKnowledgePreludeStageKind{compiledKnowledgePreludeStageCalculated},
 				wantOffsets: []int{0},
 			},
 			{
 				name: "extraction alias",
-				definitions: []*opensplunkv1.KnowledgeObjectDefinition{
+				definitions: []*opensplunk.KnowledgeObjectDefinition{
 					extractionJSON("ea-extract", "ea_extracted"),
 					selected(alias("ea-alias", "ea_extracted", "ea_alias"), "east"),
 				},
@@ -255,7 +255,7 @@ func TestCompileKnowledgeRelation(t *testing.T) {
 			},
 			{
 				name: "extraction calculated",
-				definitions: []*opensplunkv1.KnowledgeObjectDefinition{
+				definitions: []*opensplunk.KnowledgeObjectDefinition{
 					extractionRegex("ec-extract", "ec_extracted"),
 					selected(calculated("ec-calculated", "ec_extracted", "ec_calculated"), "west"),
 				},
@@ -269,7 +269,7 @@ func TestCompileKnowledgeRelation(t *testing.T) {
 			},
 			{
 				name: "alias calculated",
-				definitions: []*opensplunkv1.KnowledgeObjectDefinition{
+				definitions: []*opensplunk.KnowledgeObjectDefinition{
 					alias("ac-alias", "host", "ac_alias"),
 					calculated("ac-calculated", "ac_alias", "ac_calculated"),
 				},
@@ -282,7 +282,7 @@ func TestCompileKnowledgeRelation(t *testing.T) {
 			},
 			{
 				name: "extraction alias calculated chain",
-				definitions: []*opensplunkv1.KnowledgeObjectDefinition{
+				definitions: []*opensplunk.KnowledgeObjectDefinition{
 					extractionRegex("eac-extract", "eac_extracted"),
 					selected(alias("eac-alias", "eac_extracted", "eac_alias"), "west"),
 					selected(calculated("eac-calculated", "eac_alias", "eac_calculated"), "west"),
@@ -303,7 +303,7 @@ func TestCompileKnowledgeRelation(t *testing.T) {
 		for _, test := range tests {
 			t.Run(test.name, func(t *testing.T) {
 				objects := knowledgeRelationSnapshotObjects(t, test.definitions)
-				dependencies := make([]*opensplunkv1.KnowledgeObjectDependency, len(test.dependencies))
+				dependencies := make([]*opensplunk.KnowledgeObjectDependency, len(test.dependencies))
 				for index, edge := range test.dependencies {
 					dependencies[index] = knowledgeRelationDependency(
 						objects[edge.source],
@@ -398,28 +398,28 @@ func TestCompileKnowledgeRelation(t *testing.T) {
 
 func knowledgeRelationSnapshotObjects(
 	t *testing.T,
-	definitions []*opensplunkv1.KnowledgeObjectDefinition,
-) []*opensplunkv1.KnowledgeSnapshotObject {
+	definitions []*opensplunk.KnowledgeObjectDefinition,
+) []*opensplunk.KnowledgeSnapshotObject {
 	t.Helper()
-	objects := make([]*opensplunkv1.KnowledgeSnapshotObject, len(definitions))
-	stageOrdinals := make(map[opensplunkv1.KnowledgeSearchStage]uint32)
+	objects := make([]*opensplunk.KnowledgeSnapshotObject, len(definitions))
+	stageOrdinals := make(map[opensplunk.KnowledgeSearchStage]uint32)
 	for index, definition := range definitions {
 		normalized, err := knowledgedefinition.Normalize(definition)
 		if err != nil {
 			t.Fatalf("normalize definition %d: %v", index, err)
 		}
-		var stage opensplunkv1.KnowledgeSearchStage
+		var stage opensplunk.KnowledgeSearchStage
 		switch normalized.ObjectType {
-		case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION:
-			stage = opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION
-		case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS:
-			stage = opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS
-		case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD:
-			stage = opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD
+		case opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION:
+			stage = opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION
+		case opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS:
+			stage = opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS
+		case opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD:
+			stage = opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD
 		default:
 			t.Fatalf("unexpected object type %v", normalized.ObjectType)
 		}
-		objects[index] = &opensplunkv1.KnowledgeSnapshotObject{
+		objects[index] = &opensplunk.KnowledgeSnapshotObject{
 			ResolutionOrdinal: uint32(index),
 			Stage:             stage,
 			StageOrdinal:      stageOrdinals[stage],
@@ -439,25 +439,25 @@ func knowledgeRelationSnapshotObjects(
 }
 
 func knowledgeRelationDependency(
-	source, target *opensplunkv1.KnowledgeSnapshotObject,
+	source, target *opensplunk.KnowledgeSnapshotObject,
 	depth, ordinal uint32,
-) *opensplunkv1.KnowledgeObjectDependency {
-	return &opensplunkv1.KnowledgeObjectDependency{
-		Source: &opensplunkv1.KnowledgeObjectVersionReference{
+) *opensplunk.KnowledgeObjectDependency {
+	return &opensplunk.KnowledgeObjectDependency{
+		Source: &opensplunk.KnowledgeObjectVersionReference{
 			KnowledgeObjectId: source.GetKnowledgeObjectId(),
 			Version:           source.GetVersion(),
 			DefinitionSha256:  bytes.Clone(source.GetDefinitionSha256()),
 		},
-		Target: &opensplunkv1.KnowledgeDependencyTarget{
-			Target: &opensplunkv1.KnowledgeDependencyTarget_Object{
-				Object: &opensplunkv1.KnowledgeObjectVersionReference{
+		Target: &opensplunk.KnowledgeDependencyTarget{
+			Target: &opensplunk.KnowledgeDependencyTarget_Object{
+				Object: &opensplunk.KnowledgeObjectVersionReference{
 					KnowledgeObjectId: target.GetKnowledgeObjectId(),
 					Version:           target.GetVersion(),
 					DefinitionSha256:  bytes.Clone(target.GetDefinitionSha256()),
 				},
 			},
 		},
-		Role:             opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
+		Role:             opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
 		SourceStage:      source.GetStage(),
 		TargetStage:      target.GetStage(),
 		TopologicalDepth: depth,

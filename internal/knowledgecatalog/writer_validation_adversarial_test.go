@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
@@ -22,7 +22,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func validationOverCardinalitySelector(name string) *opensplunkv1.KnowledgeObjectDefinition {
+func validationOverCardinalitySelector(name string) *opensplunk.KnowledgeObjectDefinition {
 	return validationOverCardinalitySelectorCount(
 		name,
 		knowledge.MaximumSelectorPatternsPerDimension+1,
@@ -32,19 +32,19 @@ func validationOverCardinalitySelector(name string) *opensplunkv1.KnowledgeObjec
 func validationOverCardinalitySelectorCount(
 	name string,
 	count int,
-) *opensplunkv1.KnowledgeObjectDefinition {
+) *opensplunk.KnowledgeObjectDefinition {
 	definition := validationAliasDefinition(name, false)
 	definition.Selector.HostPatterns = make(
-		[]*opensplunkv1.KnowledgeSelectorPattern,
+		[]*opensplunk.KnowledgeSelectorPattern,
 		count,
 	)
 	// Exercise both an allocated empty entry and typed nil entries. Neither can
 	// be traversed or cloned before the length witness closes the candidate.
-	definition.Selector.HostPatterns[0] = &opensplunkv1.KnowledgeSelectorPattern{}
+	definition.Selector.HostPatterns[0] = &opensplunk.KnowledgeSelectorPattern{}
 	return definition
 }
 
-func validationOverCardinalityExtraction(name string) *opensplunkv1.KnowledgeObjectDefinition {
+func validationOverCardinalityExtraction(name string) *opensplunk.KnowledgeObjectDefinition {
 	return validationOverCardinalityExtractionCount(
 		name,
 		knowledgedefinition.MaximumFieldExtractionOutputs+1,
@@ -54,12 +54,12 @@ func validationOverCardinalityExtraction(name string) *opensplunkv1.KnowledgeObj
 func validationOverCardinalityExtractionCount(
 	name string,
 	count int,
-) *opensplunkv1.KnowledgeObjectDefinition {
+) *opensplunk.KnowledgeObjectDefinition {
 	definition := validationAliasDefinition(name, false)
-	definition.Body = &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
-		FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
-			Extraction: &opensplunkv1.FieldExtractionDefinition_Regex{
-				Regex: &opensplunkv1.RegexFieldExtractionDefinition{
+	definition.Body = &opensplunk.KnowledgeObjectDefinition_FieldExtraction{
+		FieldExtraction: &opensplunk.FieldExtractionDefinition{
+			Extraction: &opensplunk.FieldExtractionDefinition_Regex{
+				Regex: &opensplunk.RegexFieldExtractionDefinition{
 					OutputFields: make([]string, count),
 				},
 			},
@@ -71,7 +71,7 @@ func validationOverCardinalityExtractionCount(
 func requireValidationDefinitionResourceLimit(
 	t *testing.T,
 	sealed knowledgevalidation.SealedValidateResponse,
-	objectType opensplunkv1.KnowledgeObjectType,
+	objectType opensplunk.KnowledgeObjectType,
 	fieldPath string,
 ) {
 	t.Helper()
@@ -113,7 +113,7 @@ func TestWriterValidateActiveCreateIsAlphaInvariantAcrossFreshCollisionFamily(t 
 		), "main")
 		sealed, err := writer.Validate(t.Context(), scope, validationCreateRequest(
 			candidate,
-			opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION,
+			opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION,
 		))
 		if err != nil {
 			t.Fatalf("Validate(ACTIVE collision %q): %v", collisionID, err)
@@ -152,7 +152,7 @@ func TestWriterValidateActiveUpdateCoversDraftDisabledAndActiveCurrent(t *testin
 			timestamp: 10,
 		}},
 	})
-	alias := func(name string) *opensplunkv1.KnowledgeObjectDefinition {
+	alias := func(name string) *opensplunk.KnowledgeObjectDefinition {
 		return writerActiveRouteDefinition(dependencyAliasDefinition(
 			testApp,
 			name,
@@ -181,7 +181,7 @@ func TestWriterValidateActiveUpdateCoversDraftDisabledAndActiveCurrent(t *testin
 				}},
 			},
 			{
-				definition: proto.Clone(disabledDefinition).(*opensplunkv1.KnowledgeObjectDefinition),
+				definition: proto.Clone(disabledDefinition).(*opensplunk.KnowledgeObjectDefinition),
 				state:      StateDisabled, mutation: "disable", timestamp: 40,
 				dependencies: []fixtureDependency{{
 					targetObjectID: "ko-validation-lifecycle-target", targetVersion: 1,
@@ -215,10 +215,10 @@ func TestWriterValidateActiveUpdateCoversDraftDisabledAndActiveCurrent(t *testin
 			request := validationUpdateRequest(
 				test.objectID,
 				test.version,
-				&opensplunkv1.KnowledgeObjectDefinition{Name: currentName},
+				&opensplunk.KnowledgeObjectDefinition{Name: currentName},
 				"name",
 			)
-			request.Intent = opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION
+			request.Intent = opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION
 			sealed, err := writer.Validate(t.Context(), scope, request)
 			if err != nil {
 				t.Fatalf("Validate(ACTIVE %s): %v", test.name, err)
@@ -247,45 +247,45 @@ func TestWriterValidateCardinalityAdmissionStaysInBandWithoutCloneAmplification(
 	combined.Selector = validationOverCardinalitySelector("ignored-combined-selector").Selector
 	for _, test := range []struct {
 		name       string
-		definition *opensplunkv1.KnowledgeObjectDefinition
-		objectType opensplunkv1.KnowledgeObjectType
+		definition *opensplunk.KnowledgeObjectDefinition
+		objectType opensplunk.KnowledgeObjectType
 		fieldPath  string
-		intent     opensplunkv1.KnowledgeValidationIntent
+		intent     opensplunk.KnowledgeValidationIntent
 	}{
 		{
 			name:       "inactive selector with empty and nil entries",
 			definition: validationOverCardinalitySelector("validation-selector-inactive"),
-			objectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+			objectType: opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
 			fieldPath:  "selector.host_patterns",
-			intent:     opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+			intent:     opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
 		},
 		{
 			name:       "active selector with empty and nil entries",
 			definition: validationOverCardinalitySelector("validation-selector-active"),
-			objectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+			objectType: opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
 			fieldPath:  "selector.host_patterns",
-			intent:     opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION,
+			intent:     opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION,
 		},
 		{
 			name:       "inactive empty regex outputs",
 			definition: validationOverCardinalityExtraction("validation-outputs-inactive"),
-			objectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
+			objectType: opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
 			fieldPath:  "field_extraction.regex.output_fields",
-			intent:     opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+			intent:     opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
 		},
 		{
 			name:       "active empty regex outputs",
 			definition: validationOverCardinalityExtraction("validation-outputs-active"),
-			objectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
+			objectType: opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
 			fieldPath:  "field_extraction.regex.output_fields",
-			intent:     opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION,
+			intent:     opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION,
 		},
 		{
 			name:       "selector precedes regex outputs",
 			definition: combined,
-			objectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
+			objectType: opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
 			fieldPath:  "selector.host_patterns",
-			intent:     opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+			intent:     opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -313,7 +313,7 @@ func TestWriterValidateMillionEntryCardinalityCollapsesToBoundedWitness(t *testi
 	t.Run("selector nil messages", func(t *testing.T) {
 		request := validationCreateRequest(
 			validationOverCardinalitySelectorCount("validation-million-selector", hostileEntries),
-			opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+			opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
 		)
 		prepared, err := normalizeValidationRequest(request)
 		if err != nil {
@@ -329,7 +329,7 @@ func TestWriterValidateMillionEntryCardinalityCollapsesToBoundedWitness(t *testi
 		requireValidationDefinitionResourceLimit(
 			t,
 			sealed,
-			opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+			opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
 			"selector.host_patterns",
 		)
 	})
@@ -337,7 +337,7 @@ func TestWriterValidateMillionEntryCardinalityCollapsesToBoundedWitness(t *testi
 	t.Run("empty output strings", func(t *testing.T) {
 		request := validationCreateRequest(
 			validationOverCardinalityExtractionCount("validation-million-outputs", hostileEntries),
-			opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+			opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
 		)
 		prepared, err := normalizeValidationRequest(request)
 		if err != nil {
@@ -353,7 +353,7 @@ func TestWriterValidateMillionEntryCardinalityCollapsesToBoundedWitness(t *testi
 		requireValidationDefinitionResourceLimit(
 			t,
 			sealed,
-			opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
+			opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
 			"field_extraction.regex.output_fields",
 		)
 	})
@@ -396,11 +396,11 @@ func TestWriterValidateUpdateCardinalityHonorsRootMaskAndBodyApplicability(t *te
 	requireValidationDefinitionResourceLimit(
 		t,
 		sealed,
-		opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+		opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
 		"selector.host_patterns",
 	)
 
-	wrongVersion := proto.Clone(selectorRequest).(*opensplunkv1.ValidateKnowledgeObjectRequest)
+	wrongVersion := proto.Clone(selectorRequest).(*opensplunk.ValidateKnowledgeObjectRequest)
 	wrongVersion.ExpectedVersion = new(uint64(2))
 	if _, err := writer.Validate(t.Context(), scope, wrongVersion); !errors.Is(err, control.ErrVersionConflict) {
 		t.Fatalf("over-cardinality wrong-version error = %v, want ErrVersionConflict", err)
@@ -419,12 +419,12 @@ func TestWriterValidateUpdateCardinalityHonorsRootMaskAndBodyApplicability(t *te
 	requireValidationDefinitionResourceLimit(
 		t,
 		sealed,
-		opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
+		opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
 		"field_extraction.regex.output_fields",
 	)
 
 	typedNil := validationOverCardinalitySelector("ignored-by-mask")
-	typedNil.Body = &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{}
+	typedNil.Body = &opensplunk.KnowledgeObjectDefinition_FieldAlias{}
 	typedNilRequest := validationUpdateRequest(
 		"ko-validation-cardinality-alias",
 		1,
@@ -446,9 +446,9 @@ func TestWriterValidateUpdateCardinalityHonorsRootMaskAndBodyApplicability(t *te
 		t.Fatalf("different selected body error = %v, want ErrInvalidArgument", err)
 	}
 
-	nestedUnknown := &opensplunkv1.KnowledgeObjectDefinition{
-		Selector: &opensplunkv1.KnowledgeSelector{
-			HostPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{Value: "validation-unknown-*"}},
+	nestedUnknown := &opensplunk.KnowledgeObjectDefinition{
+		Selector: &opensplunk.KnowledgeSelector{
+			HostPatterns: []*opensplunk.KnowledgeSelectorPattern{{Value: "validation-unknown-*"}},
 		},
 	}
 	nestedUnknown.GetSelector().GetHostPatterns()[0].ProtoReflect().SetUnknown(protowire.AppendVarint(
@@ -490,7 +490,7 @@ func TestWriterValidateSelectedViewOwnsByteAuthority(t *testing.T) {
 	oversizedEnvelopeValue := strings.Repeat("x", maximumValidationRequestBytes+1)
 	tooLargeCreate := validationCreateRequest(
 		validationAliasDefinition("validation-selected-too-large", false),
-		opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+		opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
 	)
 	tooLargeCreate.Definition.Description = &oversizedEnvelopeValue
 	if err := ValidateKnowledgeObjectRequest(tooLargeCreate); err != nil {
@@ -527,7 +527,7 @@ func TestWriterValidateSelectedViewOwnsByteAuthority(t *testing.T) {
 	definitionLimitValue := strings.Repeat("x", knowledgedefinition.MaximumCanonicalBytes+1)
 	definitionTooLarge := validationCreateRequest(
 		validationAliasDefinition("validation-definition-too-large", false),
-		opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+		opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
 	)
 	definitionTooLarge.Definition.Description = &definitionLimitValue
 	sealed, err = writer.Validate(t.Context(), scope, definitionTooLarge)
@@ -537,7 +537,7 @@ func TestWriterValidateSelectedViewOwnsByteAuthority(t *testing.T) {
 	requireValidationDefinitionResourceLimit(
 		t,
 		sealed,
-		opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+		opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
 		"",
 	)
 }
@@ -572,7 +572,7 @@ func TestWriterValidateDetachesBeforeCallerContextCallback(t *testing.T) {
 	_, writer, scope := newWriterValidationHarness(t, false)
 	request := validationCreateRequest(
 		validationAliasDefinition("validation-context-detached", false),
-		opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+		opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
 	)
 	ctx := &validationRequestMutationContext{
 		Context: t.Context(),
@@ -601,7 +601,7 @@ func TestWriterValidateNilAndCanceledContextAdmissionPrecedence(t *testing.T) {
 	_, writer, scope := newWriterValidationHarness(t, false)
 	request := validationCreateRequest(
 		validationOverCardinalitySelectorCount("validation-context-precedence", 1<<20),
-		opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+		opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
 	)
 	if !writer.validationGate.TryAcquire() {
 		t.Fatal("failed to reserve validation gate")
@@ -634,7 +634,7 @@ func TestWriterValidateLocalInvalidityPrecedesAppAndInventoryAuthority(t *testin
 	), "main")
 	sealed, err := writer.Validate(t.Context(), scope, validationCreateRequest(
 		semanticInvalid,
-		opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION,
+		opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION,
 	))
 	if err != nil {
 		t.Fatalf("locally invalid ACTIVE candidate consulted archived app/inventory: %v", err)
@@ -652,7 +652,7 @@ func TestWriterValidateLocalInvalidityPrecedesAppAndInventoryAuthority(t *testin
 	))
 	sealed, err = writer.Validate(t.Context(), scope, validationCreateRequest(
 		definitionInvalid,
-		opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION,
+		opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION,
 	))
 	if err != nil {
 		t.Fatalf("definition-invalid ACTIVE candidate consulted archived app/inventory: %v", err)
@@ -665,7 +665,7 @@ func TestWriterValidateLocalInvalidityPrecedesAppAndInventoryAuthority(t *testin
 
 	inactiveArchived, err := writer.Validate(t.Context(), scope, validationCreateRequest(
 		validationAliasDefinition("validation-archived-inactive", false),
-		opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+		opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
 	))
 	if err != nil {
 		t.Fatalf("locally valid INACTIVE candidate in archived app: %v", err)
@@ -676,7 +676,7 @@ func TestWriterValidateLocalInvalidityPrecedesAppAndInventoryAuthority(t *testin
 	}
 	if _, err := writer.Validate(t.Context(), scope, validationCreateRequest(
 		validationAliasDefinition("validation-archived-active", true),
-		opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION,
+		opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION,
 	)); !errors.Is(err, control.ErrNotFound) {
 		t.Fatalf("locally valid ACTIVE archived-app error = %v, want ErrNotFound", err)
 	}
@@ -686,9 +686,9 @@ func TestWriterValidateLocalInvalidityPrecedesAppAndInventoryAuthority(t *testin
 	missingScope.Write.WritableAppIDs = []string{missingApp}
 	missingDefinition := validationAliasDefinition("validation-missing-app", false)
 	missingDefinition.AppId = missingApp
-	for _, intent := range []opensplunkv1.KnowledgeValidationIntent{
-		opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
-		opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION,
+	for _, intent := range []opensplunk.KnowledgeValidationIntent{
+		opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+		opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION,
 	} {
 		if _, err := writer.Validate(t.Context(), missingScope, validationCreateRequest(
 			missingDefinition,
@@ -714,7 +714,7 @@ func TestWriterValidateSharedGateAcrossConcreteWriters(t *testing.T) {
 	defer first.validationGate.Release()
 	_, err = second.Validate(t.Context(), scope, validationCreateRequest(
 		validationAliasDefinition("validation-shared-gate", false),
-		opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+		opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
 	))
 	if !errors.Is(err, control.ErrCapacityExceeded) {
 		t.Fatalf("second writer full-gate error = %v, want ErrCapacityExceeded", err)
@@ -733,7 +733,7 @@ func TestWriterValidateFreshIdentityAuthorityFailsClosedAndClipsWidths(t *testin
 				testApp, "validation-ledger-mismatch", SharingScopePrivate, nil,
 				"validation-ledger-*", "validation_ledger_output",
 			), "main"),
-			opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION,
+			opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION,
 		))
 		if !errors.Is(err, ErrCorrupt) {
 			t.Fatalf("identity-ledger mismatch error = %v, want ErrCorrupt", err)
@@ -794,9 +794,9 @@ func TestWriterValidateRootAuthorizationAndVersionPrecedeCandidateIssues(t *test
 			state:      StateDraft, mutation: "create", timestamp: 10,
 		}},
 	})
-	invalidDefinition := &opensplunkv1.KnowledgeObjectDefinition{
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{
-			FieldAlias: &opensplunkv1.FieldAliasDefinition{},
+	invalidDefinition := &opensplunk.KnowledgeObjectDefinition{
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{
+			FieldAlias: &opensplunk.FieldAliasDefinition{},
 		},
 	}
 	invalidDefinition.GetFieldAlias().ProtoReflect().SetUnknown(protowire.AppendVarint(
@@ -816,7 +816,7 @@ func TestWriterValidateRootAuthorizationAndVersionPrecedeCandidateIssues(t *test
 	} else if _, ok := AuthorizedContextFromError(err); ok {
 		t.Fatalf("unauthorized root error exposed an authorized context: %v", err)
 	}
-	wrongVersion := proto.Clone(request).(*opensplunkv1.ValidateKnowledgeObjectRequest)
+	wrongVersion := proto.Clone(request).(*opensplunk.ValidateKnowledgeObjectRequest)
 	wrongVersion.ExpectedVersion = new(uint64(2))
 	if _, err := writer.Validate(t.Context(), scope, wrongVersion); !errors.Is(err, control.ErrVersionConflict) {
 		t.Fatalf("wrong-version root error = %v, want ErrVersionConflict", err)
@@ -867,14 +867,14 @@ func TestWriterValidateTerminalLifecycleOrdering(t *testing.T) {
 			WHERE tenant_id = ?`, testTenant)
 		before := readValidationPersistenceSnapshot(t, database)
 		candidateSecret := "candidate-quarantine-secret"
-		for _, intent := range []opensplunkv1.KnowledgeValidationIntent{
-			opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
-			opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION,
+		for _, intent := range []opensplunk.KnowledgeValidationIntent{
+			opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+			opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION,
 		} {
 			request := validationUpdateRequest(
 				"ko-validation-quarantined",
 				2,
-				&opensplunkv1.KnowledgeObjectDefinition{Description: &candidateSecret},
+				&opensplunk.KnowledgeObjectDefinition{Description: &candidateSecret},
 				"description",
 			)
 			request.Intent = intent
@@ -901,7 +901,7 @@ func TestWriterValidateTerminalLifecycleOrdering(t *testing.T) {
 			versions: []fixtureVersion{
 				{definition: definition, state: StateDraft, mutation: "create", timestamp: 10},
 				{
-					definition: proto.Clone(definition).(*opensplunkv1.KnowledgeObjectDefinition),
+					definition: proto.Clone(definition).(*opensplunk.KnowledgeObjectDefinition),
 					state:      StateDeleted, mutation: "delete", timestamp: 20,
 				},
 			},
@@ -911,7 +911,7 @@ func TestWriterValidateTerminalLifecycleOrdering(t *testing.T) {
 		request := validationUpdateRequest(
 			"ko-validation-deleted",
 			2,
-			&opensplunkv1.KnowledgeObjectDefinition{Description: &updatedDescription},
+			&opensplunk.KnowledgeObjectDefinition{Description: &updatedDescription},
 			"description",
 		)
 		sealed, err := writer.Validate(t.Context(), scope, request)
@@ -924,8 +924,8 @@ func TestWriterValidateTerminalLifecycleOrdering(t *testing.T) {
 			t.Fatalf("deleted INACTIVE response = %v, %v", response, err)
 		}
 
-		active := proto.Clone(request).(*opensplunkv1.ValidateKnowledgeObjectRequest)
-		active.Intent = opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION
+		active := proto.Clone(request).(*opensplunk.ValidateKnowledgeObjectRequest)
+		active.Intent = opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION
 		_, activeErr := writer.Validate(t.Context(), scope, active)
 		if !errors.Is(activeErr, control.ErrVersionConflict) {
 			t.Fatalf("deleted ACTIVE error = %v, want ErrVersionConflict", activeErr)
@@ -958,14 +958,14 @@ func TestWriterValidateRevisionZeroRequiresEmptyPhysicalRegistry(t *testing.T) {
 		})
 		corruptIntegrationRevisionZeroState(t, database, emptyHead, "")
 		before := readValidationPersistenceSnapshot(t, database)
-		for _, intent := range []opensplunkv1.KnowledgeValidationIntent{
-			opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
-			opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION,
+		for _, intent := range []opensplunk.KnowledgeValidationIntent{
+			opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+			opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION,
 		} {
 			request := validationUpdateRequest(
 				objectID,
 				1,
-				&opensplunkv1.KnowledgeObjectDefinition{Name: "validation-revision-zero-authorized"},
+				&opensplunk.KnowledgeObjectDefinition{Name: "validation-revision-zero-authorized"},
 				"name",
 			)
 			request.Intent = intent
@@ -1002,7 +1002,7 @@ func TestWriterValidateRevisionZeroRequiresEmptyPhysicalRegistry(t *testing.T) {
 		before := readValidationPersistenceSnapshot(t, database)
 		_, err := writer.Validate(t.Context(), scope, validationCreateRequest(
 			validationAliasDefinition("validation-revision-zero-create", false),
-			opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+			opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
 		))
 		if !errors.Is(err, ErrCorrupt) {
 			t.Fatalf("revision-zero hidden-row create error = %v, want ErrCorrupt", err)
@@ -1048,7 +1048,7 @@ func TestWriterValidateProductionPathAlwaysRollsBackInjectedDML(t *testing.T) {
 	})
 	sealed, err := writer.Validate(t.Context(), scope, validationCreateRequest(
 		validationAliasDefinition("validation-rollback-sentinel", false),
-		opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+		opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
 	))
 	if err != nil {
 		t.Fatalf("Validate(injected rollback DML): %v", err)

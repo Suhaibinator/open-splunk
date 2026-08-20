@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -72,7 +72,7 @@ func TestCollectRecordsTokenUseOncePerValidStreamAdmission(t *testing.T) {
 
 	harness := newServiceHarness(t, config, authorizer, acceptingStore())
 	stream := harness.stream(t, "Bearer one-time-secret")
-	sendHello(t, stream, 1)
+	sendHello(t, stream)
 	response := recvResponse(t, stream)
 	if response.GetReady() == nil {
 		t.Fatalf("response payload = %T, want CollectorReady", response.GetPayload())
@@ -91,10 +91,10 @@ func TestCollectRecordsTokenUseOncePerValidStreamAdmission(t *testing.T) {
 		acceptedAt: validationTestNow,
 	}})
 
-	if err := stream.Send(&opensplunkv1.CollectRequest{
+	if err := stream.Send(&opensplunk.CollectRequest{
 		StreamSequence: 2,
 		SentAt:         timestamppb.New(validationTestNow),
-		Payload: &opensplunkv1.CollectRequest_Heartbeat{Heartbeat: &opensplunkv1.CollectorHeartbeat{
+		Payload: &opensplunk.CollectRequest_Heartbeat{Heartbeat: &opensplunk.CollectorHeartbeat{
 			CollectorId: "collector-a",
 			InstanceId:  "instance-a",
 			ObservedAt:  timestamppb.New(validationTestNow),
@@ -130,11 +130,11 @@ func TestCollectRecordsTokenUseOncePerValidStreamAdmission(t *testing.T) {
 		acceptedAt: validationTestNow,
 	}})
 
-	if err := stream.Send(&opensplunkv1.CollectRequest{
+	if err := stream.Send(&opensplunk.CollectRequest{
 		StreamSequence: 5,
 		SentAt:         timestamppb.New(validationTestNow),
-		Payload: &opensplunkv1.CollectRequest_Goodbye{Goodbye: &opensplunkv1.CollectorGoodbye{
-			Reason: opensplunkv1.CollectorGoodbyeReason_COLLECTOR_GOODBYE_REASON_SHUTDOWN,
+		Payload: &opensplunk.CollectRequest_Goodbye{Goodbye: &opensplunk.CollectorGoodbye{
+			Reason: opensplunk.CollectorGoodbyeReason_COLLECTOR_GOODBYE_REASON_SHUTDOWN,
 		}},
 	}); err != nil {
 		t.Fatal(err)
@@ -144,7 +144,7 @@ func TestCollectRecordsTokenUseOncePerValidStreamAdmission(t *testing.T) {
 	}
 
 	second := harness.stream(t, "Bearer one-time-secret")
-	sendHello(t, second, 1)
+	sendHello(t, second)
 	if got := recvResponse(t, second).GetReady(); got == nil {
 		t.Fatal("second stream response was not CollectorReady")
 	}
@@ -161,7 +161,7 @@ func TestCollectDoesNotRecordRejectedStreamAdmission(t *testing.T) {
 		name       string
 		authorizer Authorizer
 		configure  func(*Config)
-		send       func(*testing.T, opensplunkv1.CollectorIngestService_CollectClient)
+		send       func(*testing.T, opensplunk.CollectorIngestService_CollectClient)
 		wantCode   codes.Code
 	}{
 		{
@@ -169,17 +169,17 @@ func TestCollectDoesNotRecordRejectedStreamAdmission(t *testing.T) {
 			authorizer: AuthorizerFunc(func(context.Context, string) (Authorization, error) {
 				return Authorization{}, ErrUnauthorized
 			}),
-			send:     func(*testing.T, opensplunkv1.CollectorIngestService_CollectClient) {},
+			send:     func(*testing.T, opensplunk.CollectorIngestService_CollectClient) {},
 			wantCode: codes.Unauthenticated,
 		},
 		{
 			name:       "invalid hello",
 			authorizer: staticTestAuthorizer(),
-			send: func(t *testing.T, stream opensplunkv1.CollectorIngestService_CollectClient) {
+			send: func(t *testing.T, stream opensplunk.CollectorIngestService_CollectClient) {
 				t.Helper()
-				sendHello(t, stream, 2)
+				sendInvalidHello(t, stream)
 			},
-			wantCode: codes.FailedPrecondition,
+			wantCode: codes.InvalidArgument,
 		},
 		{
 			name:       "invalid allocated stream ID",
@@ -187,9 +187,9 @@ func TestCollectDoesNotRecordRejectedStreamAdmission(t *testing.T) {
 			configure: func(config *Config) {
 				config.NewStreamID = func() string { return "" }
 			},
-			send: func(t *testing.T, stream opensplunkv1.CollectorIngestService_CollectClient) {
+			send: func(t *testing.T, stream opensplunk.CollectorIngestService_CollectClient) {
 				t.Helper()
-				sendHello(t, stream, 1)
+				sendHello(t, stream)
 			},
 			wantCode: codes.Internal,
 		},
@@ -204,7 +204,7 @@ func TestCollectDoesNotRecordRejectedStreamAdmission(t *testing.T) {
 			}),
 			// Trusted authorization identity validation precedes the first request,
 			// so receive the terminal status without racing an unnecessary hello send.
-			send:     func(*testing.T, opensplunkv1.CollectorIngestService_CollectClient) {},
+			send:     func(*testing.T, opensplunk.CollectorIngestService_CollectClient) {},
 			wantCode: codes.Unavailable,
 		},
 	}
@@ -302,7 +302,7 @@ func TestCollectMapsSessionAdmissionFailuresBeforeReady(t *testing.T) {
 			config.SessionManager = manager
 			harness := newServiceHarness(t, config, staticTestAuthorizer(), acceptingStore())
 			stream := harness.stream(t, "Bearer good-token")
-			sendHello(t, stream, 1)
+			sendHello(t, stream)
 			response, err := stream.Recv()
 			if response != nil || status.Code(err) != tt.wantCode {
 				t.Fatalf("Recv() = (%#v, %v), want nil/%v", response, err, tt.wantCode)

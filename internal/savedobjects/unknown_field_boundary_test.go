@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/protostrict"
 	"google.golang.org/protobuf/encoding/protowire"
@@ -22,15 +22,15 @@ func futureSavedField() protoreflect.RawFields {
 // message slot a saved-search definition can reach.
 func TestCreateRejectsUnknownFieldsAtEveryReachableDepth(t *testing.T) {
 	scope := AccessScope{OwnerID: "owner"}
-	tests := map[string]func(*opensplunkv1.SavedSearchDefinition) protoreflect.Message{
-		"root": func(definition *opensplunkv1.SavedSearchDefinition) protoreflect.Message {
+	tests := map[string]func(*opensplunk.SavedSearchDefinition) protoreflect.Message{
+		"root": func(definition *opensplunk.SavedSearchDefinition) protoreflect.Message {
 			return definition.ProtoReflect()
 		},
-		"search": func(definition *opensplunkv1.SavedSearchDefinition) protoreflect.Message {
+		"search": func(definition *opensplunk.SavedSearchDefinition) protoreflect.Message {
 			return definition.Search.ProtoReflect()
 		},
-		"search time range": func(definition *opensplunkv1.SavedSearchDefinition) protoreflect.Message {
-			definition.Search.TimeRange = &opensplunkv1.TimeRangeSpec{
+		"search time range": func(definition *opensplunk.SavedSearchDefinition) protoreflect.Message {
+			definition.Search.TimeRange = &opensplunk.TimeRangeSpec{
 				Earliest: stringPointer("-15m"), Latest: stringPointer("now"),
 			}
 			return definition.Search.TimeRange.ProtoReflect()
@@ -117,7 +117,7 @@ func TestUpdateNeverPersistsUnknownFieldsRegardlessOfMask(t *testing.T) {
 func TestCreateSeparatesTypedNilFromUnknownFields(t *testing.T) {
 	_, store := openTestStore(t)
 	definition := savedSearchDefinition("typed-nil", "search")
-	definition.Search = (*opensplunkv1.SearchDefinition)(nil)
+	definition.Search = (*opensplunk.SearchDefinition)(nil)
 	if protostrict.ContainsUnknown(definition.ProtoReflect()) {
 		t.Fatal("typed-nil singular field reported as an unknown field")
 	}
@@ -126,7 +126,7 @@ func TestCreateSeparatesTypedNilFromUnknownFields(t *testing.T) {
 		t.Fatalf("Create() error = %v, want ErrInvalidArgument", err)
 	}
 
-	var typedNil *opensplunkv1.SavedSearchDefinition
+	var typedNil *opensplunk.SavedSearchDefinition
 	if _, err := store.Create(
 		context.Background(), AccessScope{OwnerID: "owner"}, typedNil,
 	); !errors.Is(err, control.ErrInvalidArgument) {

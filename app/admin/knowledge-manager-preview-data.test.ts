@@ -4,23 +4,23 @@ import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
 
-import { SharingScope } from "@/gen/ts/open_splunk/v1/common";
+import { SharingScope } from "@/gen/ts/open_splunk/common";
 import {
   KnowledgeObjectDefinition,
   KnowledgeObjectType,
   KnowledgeOverwriteBehavior,
-} from "@/gen/ts/open_splunk/v1/knowledge";
+} from "@/gen/ts/open_splunk/knowledge";
 import {
   PreviewKnowledgeObjectRequest,
   PreviewKnowledgeObjectResponse,
   type PreviewKnowledgeObjectRequest as PreviewKnowledgeObjectRequestMessage,
-} from "@/gen/ts/open_splunk/v1/knowledge_api";
+} from "@/gen/ts/open_splunk/knowledge_api";
 import {
   ResultRow,
   ResultSchema,
   ResultSetKind,
-} from "@/gen/ts/open_splunk/v1/result";
-import { TypedValue, ValueType } from "@/gen/ts/open_splunk/v1/value";
+} from "@/gen/ts/open_splunk/result";
+import { TypedValue, ValueType } from "@/gen/ts/open_splunk/value";
 import {
   PROTOBUF_CONTENT_TYPE,
   ProtobufResponseTooLargeError,

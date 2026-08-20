@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeattemptaudit"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
@@ -53,7 +53,7 @@ func knowledgeValidationRawPost(
 func knowledgeValidationHTTPResponse(
 	t *testing.T,
 	response *httptest.ResponseRecorder,
-) *opensplunkv1.ValidateKnowledgeObjectResponse {
+) *opensplunk.ValidateKnowledgeObjectResponse {
 	t.Helper()
 	if response.Code != http.StatusOK {
 		t.Fatalf("Validate status=%d body=%q", response.Code, response.Body.String())
@@ -61,7 +61,7 @@ func knowledgeValidationHTTPResponse(
 	if contentType := response.Header().Get("Content-Type"); contentType != "application/x-protobuf" {
 		t.Fatalf("Validate content type=%q", contentType)
 	}
-	decoded := &opensplunkv1.ValidateKnowledgeObjectResponse{}
+	decoded := &opensplunk.ValidateKnowledgeObjectResponse{}
 	if err := proto.Unmarshal(response.Body.Bytes(), decoded); err != nil {
 		t.Fatalf("decode Validate response: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestKnowledgeValidationHTTPWritesExactSealAndBoundsMillionEntryCandidates(
 ) {
 	harness, _, httpHandler, attempts := newKnowledgeValidationHTTPHarness(t)
 	definition := knowledgeHTTPDefinition(
-		opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+		opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 	)
 	result, err := knowledgevalidation.BuildInactive(t.Context(), definition)
 	if err != nil {
@@ -124,7 +124,7 @@ func TestKnowledgeValidationHTTPWritesExactSealAndBoundsMillionEntryCandidates(
 	selectedWire := validateTestBytesField(1, definitionPayload)
 	selectedWire = append(selectedWire, validateTestVarintField(
 		5,
-		uint64(opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE),
+		uint64(opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE),
 	)...)
 	selected := knowledgeValidationHTTPResponse(
 		t,
@@ -137,16 +137,16 @@ func TestKnowledgeValidationHTTPWritesExactSealAndBoundsMillionEntryCandidates(
 		t.Fatalf("million selected result=%v", selected)
 	}
 
-	created := &opensplunkv1.CreateKnowledgeObjectResponse{}
+	created := &opensplunk.CreateKnowledgeObjectResponse{}
 	knowledgePersistenceOK(
 		t,
 		httpHandler,
 		knowledgeObjectsCreatePath,
-		&opensplunkv1.CreateKnowledgeObjectRequest{
+		&opensplunk.CreateKnowledgeObjectRequest{
 			Definition: knowledgeHTTPDefinition(
-				opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+				opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 			),
-			InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+			InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 			ClientRequestId: "validation-http-million-create-0001",
 		},
 		created,
@@ -168,7 +168,7 @@ func TestKnowledgeValidationHTTPWritesExactSealAndBoundsMillionEntryCandidates(
 	)...)
 	unselectedWire = append(unselectedWire, validateTestVarintField(
 		5,
-		uint64(opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE),
+		uint64(opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE),
 	)...)
 	unselected := knowledgeValidationHTTPResponse(
 		t,
@@ -196,7 +196,7 @@ func TestKnowledgeValidationHTTPPreservesEnvelopeAndCandidateUnknownSemantics(
 	_, _, httpHandler, attempts := newKnowledgeValidationHTTPHarness(t)
 
 	outer := knowledgeValidationCreateRequest(knowledgeHTTPDefinition(
-		opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+		opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 	))
 	outer.ProtoReflect().SetUnknown(validateTestVarintField(100, 1))
 	outerResponse := knowledgeHTTPPost(
@@ -217,12 +217,12 @@ func TestKnowledgeValidationHTTPPreservesEnvelopeAndCandidateUnknownSemantics(
 		t,
 		httpHandler,
 		knowledgeObjectsValidatePath,
-		&opensplunkv1.ValidateKnowledgeObjectRequest{
-			Definition:        &opensplunkv1.KnowledgeObjectDefinition{Name: "mask-unknown"},
+		&opensplunk.ValidateKnowledgeObjectRequest{
+			Definition:        &opensplunk.KnowledgeObjectDefinition{Name: "mask-unknown"},
 			KnowledgeObjectId: &objectID,
 			ExpectedVersion:   &version,
 			UpdateMask:        mask,
-			Intent:            opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+			Intent:            opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
 		},
 	)
 	if maskResponse.Code != http.StatusBadRequest {
@@ -230,7 +230,7 @@ func TestKnowledgeValidationHTTPPreservesEnvelopeAndCandidateUnknownSemantics(
 	}
 
 	selectedDefinition := knowledgeHTTPDefinition(
-		opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+		opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 	)
 	selectedDefinition.GetFieldAlias().ProtoReflect().SetUnknown(
 		validateTestVarintField(102, 1),
@@ -251,25 +251,25 @@ func TestKnowledgeValidationHTTPPreservesEnvelopeAndCandidateUnknownSemantics(
 		t.Fatalf("selected nested unknown result=%v", selected)
 	}
 
-	created := &opensplunkv1.CreateKnowledgeObjectResponse{}
+	created := &opensplunk.CreateKnowledgeObjectResponse{}
 	knowledgePersistenceOK(
 		t,
 		httpHandler,
 		knowledgeObjectsCreatePath,
-		&opensplunkv1.CreateKnowledgeObjectRequest{
+		&opensplunk.CreateKnowledgeObjectRequest{
 			Definition: knowledgeHTTPDefinition(
-				opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+				opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 			),
-			InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+			InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 			ClientRequestId: "validation-http-unknown-create-0001",
 		},
 		created,
 	)
 	objectID = created.GetKnowledgeObject().GetKnowledgeObjectId()
-	unselectedDefinition := &opensplunkv1.KnowledgeObjectDefinition{
+	unselectedDefinition := &opensplunk.KnowledgeObjectDefinition{
 		Name: "unselected-nested-unknown",
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{
-			FieldAlias: &opensplunkv1.FieldAliasDefinition{},
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{
+			FieldAlias: &opensplunk.FieldAliasDefinition{},
 		},
 	}
 	unselectedDefinition.GetFieldAlias().ProtoReflect().SetUnknown(
@@ -281,12 +281,12 @@ func TestKnowledgeValidationHTTPPreservesEnvelopeAndCandidateUnknownSemantics(
 			t,
 			httpHandler,
 			knowledgeObjectsValidatePath,
-			&opensplunkv1.ValidateKnowledgeObjectRequest{
+			&opensplunk.ValidateKnowledgeObjectRequest{
 				Definition:        unselectedDefinition,
 				KnowledgeObjectId: &objectID,
 				ExpectedVersion:   &version,
 				UpdateMask:        &fieldmaskpb.FieldMask{Paths: []string{"name"}},
-				Intent:            opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+				Intent:            opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
 			},
 		),
 	)
@@ -330,7 +330,7 @@ func TestKnowledgeValidationHTTPWriterAdmissionAndAuthenticationOrdering(
 	wire := validateTestBytesField(1, definitionPayload)
 	wire = append(wire, validateTestVarintField(
 		5,
-		uint64(opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE),
+		uint64(opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE),
 	)...)
 	fullGate := knowledgeValidationRawPost(t, httpHandler, wire)
 	if fullGate.Code != http.StatusTooManyRequests ||

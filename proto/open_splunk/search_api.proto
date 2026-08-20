@@ -1,0 +1,170 @@
+syntax = "proto3";
+
+package open_splunk;
+
+import "google/protobuf/duration.proto";
+import "open_splunk/common.proto";
+import "open_splunk/result.proto";
+import "open_splunk/search.proto";
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk;opensplunk";
+
+// POST /api/search/jobs/create
+message CreateSearchJobRequest {
+  // Required for ordinary and saved-search creates. HISTORY_RERUN requests
+  // must omit definition so the server can replay the owner-scoped retained
+  // intent and resolve relative time again at admission.
+  SearchDefinition definition = 1;
+  SearchJobSource source = 2;
+  SearchJobOptions options = 3;
+  optional string client_request_id = 4;
+}
+
+message CreateSearchJobResponse {
+  SearchJob search_job = 1;
+}
+
+// POST /api/search/jobs/get
+message GetSearchJobRequest {
+  string search_job_id = 1;
+  bool include_plan = 2;
+  bool include_generated_sql = 3;
+}
+
+message GetSearchJobResponse {
+  SearchJob search_job = 1;
+}
+
+// POST /api/search/jobs/list
+// Lists the caller's retained transient jobs in created_at DESC,
+// search_job_id DESC order. Pagination fixes the admission high-water mark,
+// but job states remain live between calls; total_size_exact describes only
+// the individual request that produced it. app_id_filter is exact, while
+// text_filter matches source SPL with ASCII case folding.
+message ListSearchJobsRequest {
+  PageRequest page = 1;
+  repeated SearchJobState state_filters = 2;
+  optional string app_id_filter = 3;
+  optional string text_filter = 4;
+}
+
+message ListSearchJobsResponse {
+  // List summaries retain source SPL and safe lifecycle metadata, omit result
+  // schemas and failure diagnostics, and bound failure messages to 4 KiB.
+  repeated SearchJob search_jobs = 1;
+  PageResponse page = 2;
+}
+
+// POST /api/search/jobs/results
+message GetSearchResultsRequest {
+  string search_job_id = 1;
+  PageRequest page = 2;
+  repeated string columns = 3;
+  bool allow_partial_results = 4;
+}
+
+message GetSearchResultsResponse {
+  string search_job_id = 1;
+  ResultPage result_page = 2;
+}
+
+// POST /api/search/jobs/fields/list
+message ListSearchFieldsRequest {
+  string search_job_id = 1;
+  PageRequest page = 2;
+  optional string name_filter = 3;
+  bool interesting_only = 4;
+}
+
+message ListSearchFieldsResponse {
+  repeated FieldProfile fields = 1;
+  PageResponse page = 2;
+}
+
+// POST /api/search/jobs/field-summary
+// Returns an exact, bounded summary of one scalar field in the completed
+// job's final event relation. Field names are case-sensitive catalog names;
+// missing and explicit null values are excluded from top_values and distinct
+// count, while their profile counters remain explicit.
+message GetSearchFieldSummaryRequest {
+  string search_job_id = 1;
+  string field_name = 2;
+  // Omission uses the server default. Explicit zero is invalid.
+  optional uint32 max_values = 3;
+}
+
+message GetSearchFieldSummaryResponse {
+  FieldSummary field_summary = 1;
+}
+
+// POST /api/search/jobs/timeline
+message GetSearchTimelineRequest {
+  string search_job_id = 1;
+  optional uint32 max_buckets = 2;
+  optional google.protobuf.Duration preferred_bucket_width = 3;
+}
+
+message GetSearchTimelineResponse {
+  repeated TimelineBucket buckets = 1;
+  google.protobuf.Duration bucket_width = 2;
+  bool complete = 3;
+}
+
+// POST /api/search/jobs/cancel
+message CancelSearchJobRequest {
+  string search_job_id = 1;
+  optional string reason = 2;
+}
+
+message CancelSearchJobResponse {
+  SearchJob search_job = 1;
+}
+
+// POST /api/search/validate
+message ValidateSearchRequest {
+  SearchDefinition definition = 1;
+}
+
+message ValidateSearchResponse {
+  bool valid = 1;
+  optional string normalized_spl = 2;
+  repeated Diagnostic diagnostics = 3;
+  repeated string referenced_indexes = 4;
+  repeated string referenced_fields = 5;
+  ResultSetKind predicted_result_kind = 6;
+}
+
+enum SearchSuggestionKind {
+  SEARCH_SUGGESTION_KIND_UNSPECIFIED = 0;
+  SEARCH_SUGGESTION_KIND_COMMAND = 1;
+  SEARCH_SUGGESTION_KIND_FUNCTION = 2;
+  SEARCH_SUGGESTION_KIND_FIELD = 3;
+  SEARCH_SUGGESTION_KIND_VALUE = 4;
+  SEARCH_SUGGESTION_KIND_KEYWORD = 5;
+  SEARCH_SUGGESTION_KIND_INDEX = 6;
+}
+
+message SearchSuggestion {
+  SearchSuggestionKind kind = 1;
+  string label = 2;
+  string insertion_text = 3;
+  SourceRange replacement_range = 4;
+  optional string detail = 5;
+  optional string documentation = 6;
+  double relevance = 7;
+}
+
+// POST /api/search/suggestions
+message GetSearchSuggestionsRequest {
+  string spl = 1;
+  uint64 cursor_byte_offset = 2;
+  TimeRangeSpec time_range = 3;
+  optional string app_id = 4;
+  repeated string index_scope = 5;
+  optional uint32 max_suggestions = 6;
+}
+
+message GetSearchSuggestionsResponse {
+  repeated SearchSuggestion suggestions = 1;
+  repeated Diagnostic diagnostics = 2;
+}

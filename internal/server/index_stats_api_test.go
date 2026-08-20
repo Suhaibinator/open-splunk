@@ -11,13 +11,13 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 )
 
-const indexStatisticsPath = "/api/v1/indexes/stats/get"
+const indexStatisticsPath = "/api/indexes/stats/get"
 
 type recordingIndexStatistics struct {
 	mu            sync.Mutex
@@ -267,7 +267,7 @@ func TestIndexStatisticsRouteRegistrationTracksCompleteDependencies(
 		t,
 		withoutStatistics,
 		indexStatisticsPath,
-		&opensplunkv1.GetIndexStatsRequest{},
+		&opensplunk.GetIndexStatsRequest{},
 	)
 	if response.Code != http.StatusNotFound {
 		t.Fatalf(
@@ -288,7 +288,7 @@ func TestIndexStatisticsRouteRegistrationTracksCompleteDependencies(
 		t,
 		withStatistics,
 		indexStatisticsPath,
-		&opensplunkv1.GetIndexStatsRequest{},
+		&opensplunk.GetIndexStatsRequest{},
 	)
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf(
@@ -466,14 +466,14 @@ func TestIndexStatisticsSelectorsResolveCanonicalTrustedScopeAndOneSnapshot(
 		},
 	)
 
-	selectors := []*opensplunkv1.IndexSelector{
+	selectors := []*opensplunk.IndexSelector{
 		{
-			Selector: &opensplunkv1.IndexSelector_IndexId{
+			Selector: &opensplunk.IndexSelector_IndexId{
 				IndexId: " " + index.ID + " ",
 			},
 		},
 		{
-			Selector: &opensplunkv1.IndexSelector_IndexName{
+			Selector: &opensplunk.IndexSelector_IndexName{
 				IndexName: " GRADETHIS-PROD ",
 			},
 		},
@@ -482,7 +482,7 @@ func TestIndexStatisticsSelectorsResolveCanonicalTrustedScopeAndOneSnapshot(
 		response := postAuthenticatedIndexStatistics(
 			t,
 			handler,
-			&opensplunkv1.GetIndexStatsRequest{Selector: selector},
+			&opensplunk.GetIndexStatsRequest{Selector: selector},
 		)
 		if response.Code != http.StatusOK {
 			t.Fatalf(
@@ -499,7 +499,7 @@ func TestIndexStatisticsSelectorsResolveCanonicalTrustedScopeAndOneSnapshot(
 				response.Header().Get("Cache-Control"),
 			)
 		}
-		var decoded opensplunkv1.GetIndexStatsResponse
+		var decoded opensplunk.GetIndexStatsResponse
 		unmarshalResponse(t, response, &decoded)
 		stats := decoded.GetStats()
 		if stats == nil ||
@@ -585,9 +585,9 @@ func TestIndexStatisticsEmptyBoundsAndResponseAreDetached(
 	response := postAuthenticatedIndexStatistics(
 		t,
 		handler,
-		&opensplunkv1.GetIndexStatsRequest{
-			Selector: &opensplunkv1.IndexSelector{
-				Selector: &opensplunkv1.IndexSelector_IndexId{
+		&opensplunk.GetIndexStatsRequest{
+			Selector: &opensplunk.IndexSelector{
+				Selector: &opensplunk.IndexSelector_IndexId{
 					IndexId: index.ID,
 				},
 			},
@@ -596,7 +596,7 @@ func TestIndexStatisticsEmptyBoundsAndResponseAreDetached(
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var decoded opensplunkv1.GetIndexStatsResponse
+	var decoded opensplunk.GetIndexStatsResponse
 	unmarshalResponse(t, response, &decoded)
 	stats := decoded.GetStats()
 	if stats == nil ||
@@ -673,14 +673,14 @@ func TestIndexStatisticsTombstonesReturnNotFoundBeforeSnapshot(
 			return testNow
 		},
 	)
-	selectors := []*opensplunkv1.IndexSelector{
+	selectors := []*opensplunk.IndexSelector{
 		{
-			Selector: &opensplunkv1.IndexSelector_IndexId{
+			Selector: &opensplunk.IndexSelector_IndexId{
 				IndexId: archived.ID,
 			},
 		},
 		{
-			Selector: &opensplunkv1.IndexSelector_IndexName{
+			Selector: &opensplunk.IndexSelector_IndexName{
 				IndexName: archived.Definition.Name,
 			},
 		},
@@ -689,7 +689,7 @@ func TestIndexStatisticsTombstonesReturnNotFoundBeforeSnapshot(
 		response := postAuthenticatedIndexStatistics(
 			t,
 			handler,
-			&opensplunkv1.GetIndexStatsRequest{Selector: selector},
+			&opensplunk.GetIndexStatsRequest{Selector: selector},
 		)
 		if response.Code != http.StatusNotFound {
 			t.Fatalf(
@@ -781,9 +781,9 @@ func TestIndexStatisticsMapsCancellationAndDependencyErrors(
 			response := postAuthenticatedIndexStatistics(
 				t,
 				handler,
-				&opensplunkv1.GetIndexStatsRequest{
-					Selector: &opensplunkv1.IndexSelector{
-						Selector: &opensplunkv1.IndexSelector_IndexId{
+				&opensplunk.GetIndexStatsRequest{
+					Selector: &opensplunk.IndexSelector{
+						Selector: &opensplunk.IndexSelector_IndexId{
 							IndexId: index.ID,
 						},
 					},
@@ -865,9 +865,9 @@ func TestIndexStatisticsPropagatesRequestCancellation(
 		requestContext,
 		authenticated,
 		indexStatisticsPath,
-		&opensplunkv1.GetIndexStatsRequest{
-			Selector: &opensplunkv1.IndexSelector{
-				Selector: &opensplunkv1.IndexSelector_IndexId{
+		&opensplunk.GetIndexStatsRequest{
+			Selector: &opensplunk.IndexSelector{
+				Selector: &opensplunk.IndexSelector_IndexId{
 					IndexId: index.ID,
 				},
 			},
@@ -1026,9 +1026,9 @@ func TestIndexStatisticsRejectsMalformedResults(
 			response := postAuthenticatedIndexStatistics(
 				t,
 				handler,
-				&opensplunkv1.GetIndexStatsRequest{
-					Selector: &opensplunkv1.IndexSelector{
-						Selector: &opensplunkv1.IndexSelector_IndexName{
+				&opensplunk.GetIndexStatsRequest{
+					Selector: &opensplunk.IndexSelector{
+						Selector: &opensplunk.IndexSelector_IndexName{
 							IndexName: index.Definition.Name,
 						},
 					},
@@ -1103,7 +1103,7 @@ func indexStatisticsAuthenticator(
 func postAuthenticatedIndexStatistics(
 	t *testing.T,
 	handler http.Handler,
-	request *opensplunkv1.GetIndexStatsRequest,
+	request *opensplunk.GetIndexStatsRequest,
 ) *httptest.ResponseRecorder {
 	t.Helper()
 	authenticated := &adminIntegrationHandler{

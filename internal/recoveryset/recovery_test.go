@@ -612,7 +612,7 @@ func TestVerifyRejectsExternalArchiveTamperingAndUnsafeFiles(t *testing.T) {
 	}
 }
 
-func TestVerifyRejectsExtraOuterEntryAndMismatchedRelease(t *testing.T) {
+func TestVerifyRejectsExtraOuterEntryAndMismatchedSource(t *testing.T) {
 	t.Parallel()
 
 	fixture := newRecoverySetFixture(t)
@@ -631,7 +631,7 @@ func TestVerifyRejectsExtraOuterEntryAndMismatchedRelease(t *testing.T) {
 	options := fixture.verifyOptions()
 	options.Release.SourceRevision = strings.Repeat("f", 40)
 	if _, err := Verify(t.Context(), options); err == nil {
-		t.Fatal("Verify accepted a different release")
+		t.Fatal("Verify accepted a different source")
 	}
 }
 
@@ -724,13 +724,12 @@ func newRecoverySetFixture(t *testing.T) *recoverySetFixture {
 		destination:       filepath.Join(destinationParent, "deployment-recovery-set"),
 		archiveRoot:       archiveRoot,
 		release: controlbackup.ReleaseIdentity{
-			ApplicationVersion: "0.1.0",
-			SourceRevision:     "development",
+			SourceRevision: "development",
 			SQLiteMigrations: controlbackup.MigrationIdentity{
 				SHA256: strings.Repeat("1", sha256.Size*2), LatestVersion: migrationIdentity.LatestVersion,
 			},
 			ClickHouseMigrations: controlbackup.MigrationIdentity{
-				SHA256: strings.Repeat("2", sha256.Size*2), LatestVersion: 4,
+				SHA256: strings.Repeat("2", sha256.Size*2), LatestVersion: 1,
 			},
 		},
 		archivePolicy: ArchiveOwnershipPolicy{

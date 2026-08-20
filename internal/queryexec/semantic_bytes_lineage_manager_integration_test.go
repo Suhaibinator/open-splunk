@@ -10,7 +10,7 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -23,7 +23,7 @@ type semanticBytesLineageEvent struct {
 	id       string
 	at       time.Time
 	raw      []byte
-	encoding opensplunkv1.RawEncoding
+	encoding opensplunk.RawEncoding
 	host     string
 	source   string
 	service  *string
@@ -34,20 +34,20 @@ type semanticBytesLineageExpected struct {
 	payload []byte
 }
 
-// TestSemanticBytesV02ManagerAgainstClickHouse pins the semantic String/Bytes
-// lineage that belongs to the v0.2 candidate independently of the later v0.3
+// TestAuthoredSemanticBytesManagerAgainstClickHouse pins the semantic String/Bytes
+// lineage that belongs to the authored expression candidate independently of the later pipeline
 // command additions.
-func TestSemanticBytesV02ManagerAgainstClickHouse(t *testing.T) {
+func TestAuthoredSemanticBytesManagerAgainstClickHouse(t *testing.T) {
 	testSemanticBytesLineageManagerAgainstClickHouse(t, false)
 }
 
-// TestSemanticBytesLineageManagerAgainstClickHouse extends the v0.2 baseline
-// through the v0.3 fillnull and strcat commands at the public manager boundary.
+// TestSemanticBytesLineageManagerAgainstClickHouse extends the authored expression baseline
+// through the pipeline fillnull and strcat commands at the public manager boundary.
 func TestSemanticBytesLineageManagerAgainstClickHouse(t *testing.T) {
 	testSemanticBytesLineageManagerAgainstClickHouse(t, true)
 }
 
-func testSemanticBytesLineageManagerAgainstClickHouse(t *testing.T, includeV03 bool) {
+func testSemanticBytesLineageManagerAgainstClickHouse(t *testing.T, includePipeline bool) {
 	t.Helper()
 	if os.Getenv("OPEN_SPLUNK_CLICKHOUSE_INTEGRATION") != "1" {
 		t.Skip("set OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 to run the Docker integration test")
@@ -60,22 +60,22 @@ func testSemanticBytesLineageManagerAgainstClickHouse(t *testing.T, includeV03 b
 	events := []semanticBytesLineageEvent{
 		{
 			id: "semantic-01-utf8", at: earliest.Add(time.Minute),
-			raw: []byte("utf8-界"), encoding: opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+			raw: []byte("utf8-界"), encoding: opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 			source: "lineage",
 		},
 		{
 			id: "semantic-02-binary-valid", at: earliest.Add(2 * time.Minute),
-			raw: []byte("binary-valid-界"), encoding: opensplunkv1.RawEncoding_RAW_ENCODING_BINARY,
+			raw: []byte("binary-valid-界"), encoding: opensplunk.RawEncoding_RAW_ENCODING_BINARY,
 			source: "lineage",
 		},
 		{
 			id: "semantic-03-binary-invalid", at: earliest.Add(3 * time.Minute),
-			raw: invalid, encoding: opensplunkv1.RawEncoding_RAW_ENCODING_BINARY,
+			raw: invalid, encoding: opensplunk.RawEncoding_RAW_ENCODING_BINARY,
 			source: "lineage",
 		},
 		{
 			id: "semantic-04-null", at: earliest.Add(4 * time.Minute),
-			raw: []byte("null-control"), encoding: opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+			raw: []byte("null-control"), encoding: opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 			source: "lineage",
 		},
 	}
@@ -186,7 +186,7 @@ func testSemanticBytesLineageManagerAgainstClickHouse(t *testing.T, includeV03 b
 			name: "strcat", pipeline: ` | strcat "<" _raw ">" output`, expected: wrapped,
 		},
 	} {
-		if !includeV03 && (test.name == "fillnull" || test.name == "strcat") {
+		if !includePipeline && (test.name == "fillnull" || test.name == "strcat") {
 			continue
 		}
 		t.Run(test.name, func(t *testing.T) {
@@ -267,7 +267,7 @@ func TestSemanticBytesModeManagerAgainstClickHouse(t *testing.T) {
 	appendModeGroup := func(
 		service string,
 		winner []byte,
-		encoding opensplunkv1.RawEncoding,
+		encoding opensplunk.RawEncoding,
 	) {
 		serviceCopy := service
 		for repeat := range 3 {
@@ -281,24 +281,24 @@ func TestSemanticBytesModeManagerAgainstClickHouse(t *testing.T) {
 			id:       fmt.Sprintf("mode-%s-loser", service),
 			at:       earliest.Add(time.Duration(len(events)+1) * time.Minute),
 			raw:      []byte("ordinary-loser"),
-			encoding: opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+			encoding: opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 			source:   "mode", service: &serviceCopy,
 		})
 	}
-	appendModeGroup(utf8Service, []byte("modal-utf8-界"), opensplunkv1.RawEncoding_RAW_ENCODING_UTF8)
-	appendModeGroup(binaryValidService, []byte("modal-binary-valid"), opensplunkv1.RawEncoding_RAW_ENCODING_BINARY)
-	appendModeGroup(binaryInvalidService, invalid, opensplunkv1.RawEncoding_RAW_ENCODING_BINARY)
+	appendModeGroup(utf8Service, []byte("modal-utf8-界"), opensplunk.RawEncoding_RAW_ENCODING_UTF8)
+	appendModeGroup(binaryValidService, []byte("modal-binary-valid"), opensplunk.RawEncoding_RAW_ENCODING_BINARY)
+	appendModeGroup(binaryInvalidService, invalid, opensplunk.RawEncoding_RAW_ENCODING_BINARY)
 	appendModeTie := func(
 		service string,
 		firstRaw []byte,
-		firstEncoding opensplunkv1.RawEncoding,
+		firstEncoding opensplunk.RawEncoding,
 		secondRaw []byte,
-		secondEncoding opensplunkv1.RawEncoding,
+		secondEncoding opensplunk.RawEncoding,
 	) {
 		serviceCopy := service
 		for ordinal, value := range []struct {
 			raw      []byte
-			encoding opensplunkv1.RawEncoding
+			encoding opensplunk.RawEncoding
 		}{
 			{raw: firstRaw, encoding: firstEncoding},
 			{raw: secondRaw, encoding: secondEncoding},
@@ -315,18 +315,18 @@ func TestSemanticBytesModeManagerAgainstClickHouse(t *testing.T) {
 	appendModeTie(
 		payloadTieService,
 		[]byte("a"),
-		opensplunkv1.RawEncoding_RAW_ENCODING_BINARY,
+		opensplunk.RawEncoding_RAW_ENCODING_BINARY,
 		[]byte("z"),
-		opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+		opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 	)
 	// Identical payloads remain distinct modal values. Their equal-count tie is
 	// resolved String before Bytes by the local deterministic policy.
 	appendModeTie(
 		kindTieService,
 		[]byte("same"),
-		opensplunkv1.RawEncoding_RAW_ENCODING_BINARY,
+		opensplunk.RawEncoding_RAW_ENCODING_BINARY,
 		[]byte("same"),
-		opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+		opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 	)
 	ctx, executor := semanticBytesLineageStartClickHouse(t, indexTime, events)
 
@@ -567,7 +567,7 @@ func TestSparklineFeedsStatsByThroughManagerAgainstClickHouse(t *testing.T) {
 				id:       fmt.Sprintf("sparkline-%d-%d", hour, ordinal),
 				at:       earliest.Add(time.Duration(hour)*time.Hour + time.Duration(ordinal+1)*time.Minute),
 				raw:      []byte("sparkline"),
-				encoding: opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+				encoding: opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 				host:     hosts[hour][ordinal],
 				source:   "sparkline",
 			})

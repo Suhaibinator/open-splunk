@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
@@ -114,12 +114,12 @@ func TestSearchWebSocketFullServerIntegration(t *testing.T) {
 	)
 	defer connection.Close()
 
-	command := &opensplunkv1.SearchWebSocketCommand{
+	command := &opensplunk.SearchWebSocketCommand{
 		RequestId: "request-1",
-		Payload: &opensplunkv1.SearchWebSocketCommand_Subscribe{Subscribe: &opensplunkv1.SubscribeSearchJobsCommand{
-			Subscriptions: []*opensplunkv1.SearchSubscription{{
+		Payload: &opensplunk.SearchWebSocketCommand_Subscribe{Subscribe: &opensplunk.SubscribeSearchJobsCommand{
+			Subscriptions: []*opensplunk.SearchSubscription{{
 				SubscriptionId: "subscription-1",
-				Target: &opensplunkv1.JobTarget{Target: &opensplunkv1.JobTarget_SearchJobId{
+				Target: &opensplunk.JobTarget{Target: &opensplunk.JobTarget_SearchJobId{
 					SearchJobId: jobID,
 				}}, IncludePreviews: true, PreviewRowLimit: new(uint32(1)),
 			}},
@@ -156,7 +156,7 @@ func TestSearchWebSocketFullServerIntegration(t *testing.T) {
 		lastTargetSequence = event.GetSequence()
 		if state := event.GetSearchStateChanged(); state != nil {
 			if state.GetSearchJobId() != jobID ||
-				state.GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_RUNNING ||
+				state.GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_RUNNING ||
 				state.GetStateVersion() != job.Version {
 				t.Fatalf("search state event = %+v", state)
 			}
@@ -175,7 +175,7 @@ func TestSearchWebSocketFullServerIntegration(t *testing.T) {
 			sawSchema = true
 		}
 		if preview := event.GetResultPreview(); preview != nil {
-			if !sawSchema || preview.GetUpdateMode() != opensplunkv1.PreviewUpdateMode_PREVIEW_UPDATE_MODE_RESET ||
+			if !sawSchema || preview.GetUpdateMode() != opensplunk.PreviewUpdateMode_PREVIEW_UPDATE_MODE_RESET ||
 				len(preview.GetRows()) != 1 || preview.GetRows()[0].GetCells()[0].GetStringValue() != "typed preview" {
 				t.Fatalf("search preview event = %+v (schema seen %t)", preview, sawSchema)
 			}
@@ -197,9 +197,9 @@ func TestSearchWebSocketFullServerIntegration(t *testing.T) {
 	// either inherited deadline, this ping/pong exchange fails.
 	time.Sleep(4 * inheritedHTTPTimeout)
 	const pingNonce = "survived-http-deadlines"
-	writeSearchWebSocketCommand(t, connection, &opensplunkv1.SearchWebSocketCommand{
+	writeSearchWebSocketCommand(t, connection, &opensplunk.SearchWebSocketCommand{
 		RequestId: "request-ping",
-		Payload: &opensplunkv1.SearchWebSocketCommand_Ping{Ping: &opensplunkv1.SearchWebSocketPing{
+		Payload: &opensplunk.SearchWebSocketCommand_Ping{Ping: &opensplunk.SearchWebSocketPing{
 			Nonce: pingNonce,
 		}},
 	})
@@ -235,7 +235,7 @@ func TestSearchWebSocketFullServerIntegration(t *testing.T) {
 		case event.GetSearchStateChanged() != nil:
 			state := event.GetSearchStateChanged()
 			if state.GetSearchJobId() != jobID ||
-				state.GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED ||
+				state.GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED ||
 				state.GetStateVersion() != completed.Version {
 				t.Fatalf("completed search state event = %+v", state)
 			}
@@ -249,7 +249,7 @@ func TestSearchWebSocketFullServerIntegration(t *testing.T) {
 		case event.GetSearchTerminal() != nil:
 			terminal := event.GetSearchTerminal()
 			if terminal.GetSearchJobId() != jobID ||
-				terminal.GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED ||
+				terminal.GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED ||
 				terminal.GetStateVersion() != completed.Version || terminal.GetFailure() != nil ||
 				terminal.GetFinalProgress().GetProducedRows() != completed.RowCount ||
 				terminal.GetFinalProgress().GetResultBytes() != completed.ResultBytes ||
@@ -600,8 +600,8 @@ func (fixture *realSearchWebSocketFixture) createRunningSearch() {
 		"main",
 	)
 	request.Definition.Spl = "index=main | table message"
-	var response opensplunkv1.CreateSearchJobResponse
-	fixture.post("/api/v1/search/jobs/create", request, &response)
+	var response opensplunk.CreateSearchJobResponse
+	fixture.post("/api/search/jobs/create", request, &response)
 	if response.GetSearchJob().GetSearchJobId() != fixture.jobID {
 		fixture.t.Fatalf("created search = %+v", response.GetSearchJob())
 	}
@@ -652,12 +652,12 @@ func dialSearchWebSocket(t *testing.T, dialer *websocket.Dialer, socketURL, orig
 	return connection
 }
 
-func searchWebSocketSubscribeCommand(requestID, subscriptionID, jobID string, afterSequence uint64) *opensplunkv1.SearchWebSocketCommand {
+func searchWebSocketSubscribeCommand(requestID, subscriptionID, jobID string, afterSequence uint64) *opensplunk.SearchWebSocketCommand {
 	return searchWebSocketTargetSubscribeCommand(
 		requestID,
 		subscriptionID,
-		&opensplunkv1.JobTarget{
-			Target: &opensplunkv1.JobTarget_SearchJobId{SearchJobId: jobID},
+		&opensplunk.JobTarget{
+			Target: &opensplunk.JobTarget_SearchJobId{SearchJobId: jobID},
 		},
 		afterSequence,
 		false,
@@ -668,15 +668,15 @@ func searchWebSocketSubscribeCommand(requestID, subscriptionID, jobID string, af
 func searchWebSocketTargetSubscribeCommand(
 	requestID string,
 	subscriptionID string,
-	target *opensplunkv1.JobTarget,
+	target *opensplunk.JobTarget,
 	afterSequence uint64,
 	includePreviews bool,
 	previewRowLimit *uint32,
-) *opensplunkv1.SearchWebSocketCommand {
-	return &opensplunkv1.SearchWebSocketCommand{
+) *opensplunk.SearchWebSocketCommand {
+	return &opensplunk.SearchWebSocketCommand{
 		RequestId: requestID,
-		Payload: &opensplunkv1.SearchWebSocketCommand_Subscribe{Subscribe: &opensplunkv1.SubscribeSearchJobsCommand{
-			Subscriptions: []*opensplunkv1.SearchSubscription{{
+		Payload: &opensplunk.SearchWebSocketCommand_Subscribe{Subscribe: &opensplunk.SubscribeSearchJobsCommand{
+			Subscriptions: []*opensplunk.SearchSubscription{{
 				SubscriptionId:  subscriptionID,
 				Target:          target,
 				AfterSequence:   afterSequence,
@@ -703,7 +703,7 @@ func establishRealSearchWebSocketEpoch(
 	state := readSearchWebSocketEvent(t, connection)
 	progress := readSearchWebSocketEvent(t, connection)
 	schema := readSearchWebSocketEvent(t, connection)
-	if state.GetSearchStateChanged().GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_RUNNING ||
+	if state.GetSearchStateChanged().GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_RUNNING ||
 		progress.GetSearchProgress() == nil || schema.GetResultSchemaAvailable() == nil ||
 		state.GetSubscriptionId() != subscriptionID || progress.GetSubscriptionId() != subscriptionID ||
 		schema.GetSubscriptionId() != subscriptionID ||
@@ -781,15 +781,15 @@ func TestSearchWebSocketRealManagerReplaysOneEventThenExpiresSequence(t *testing
 	}
 	resynchronization := readSearchWebSocketEvent(t, expired).GetResynchronizationRequired()
 	if resynchronization == nil ||
-		resynchronization.GetReason() != opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED ||
+		resynchronization.GetReason() != opensplunk.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED ||
 		resynchronization.GetEarliestAvailableSequence() != secondProgress.GetSequence() ||
 		resynchronization.GetLatestSequence() != secondProgress.GetSequence() {
 		t.Fatalf("expired resynchronization = %+v", resynchronization)
 	}
 
-	var authoritative opensplunkv1.GetSearchJobResponse
-	fixture.post("/api/v1/search/jobs/get", &opensplunkv1.GetSearchJobRequest{SearchJobId: jobID}, &authoritative)
-	if authoritative.GetSearchJob().GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_RUNNING ||
+	var authoritative opensplunk.GetSearchJobResponse
+	fixture.post("/api/search/jobs/get", &opensplunk.GetSearchJobRequest{SearchJobId: jobID}, &authoritative)
+	if authoritative.GetSearchJob().GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_RUNNING ||
 		authoritative.GetSearchJob().GetProgress().GetScannedRows() != 15 ||
 		authoritative.GetSearchJob().GetProgress().GetScannedBytes() != 150 ||
 		authoritative.GetSearchJob().GetProgress().GetStateVersion() != secondProgress.GetSearchProgress().GetStateVersion() ||
@@ -829,10 +829,10 @@ func TestSearchWebSocketRealManagerReplaysCancellationAfterOfflineSocket(t *test
 		t.Fatalf("close offline websocket: %v", err)
 	}
 
-	var canceled opensplunkv1.CancelSearchJobResponse
-	fixture.post("/api/v1/search/jobs/cancel", &opensplunkv1.CancelSearchJobRequest{SearchJobId: jobID}, &canceled)
+	var canceled opensplunk.CancelSearchJobResponse
+	fixture.post("/api/search/jobs/cancel", &opensplunk.CancelSearchJobRequest{SearchJobId: jobID}, &canceled)
 	cancellationVersion := canceled.GetSearchJob().GetStateVersion()
-	if canceled.GetSearchJob().GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_CANCELED ||
+	if canceled.GetSearchJob().GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_CANCELED ||
 		cancellationVersion == 0 ||
 		canceled.GetSearchJob().GetProgress().GetStateVersion() != cancellationVersion {
 		t.Fatalf("cancel response = %+v", canceled.GetSearchJob())
@@ -851,11 +851,11 @@ func TestSearchWebSocketRealManagerReplaysCancellationAfterOfflineSocket(t *test
 	publishedState := readSearchWebSocketEvent(t, keeper)
 	publishedProgress := readSearchWebSocketEvent(t, keeper)
 	publishedTerminal := readSearchWebSocketEvent(t, keeper)
-	if publishedState.GetSearchStateChanged().GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_CANCELED ||
+	if publishedState.GetSearchStateChanged().GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_CANCELED ||
 		publishedState.GetSearchStateChanged().GetStateVersion() != cancellationVersion ||
-		publishedProgress.GetSearchProgress().GetPhase() != opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_COMPLETE ||
+		publishedProgress.GetSearchProgress().GetPhase() != opensplunk.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_COMPLETE ||
 		publishedProgress.GetSearchProgress().GetStateVersion() != cancellationVersion ||
-		publishedTerminal.GetSearchTerminal().GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_CANCELED ||
+		publishedTerminal.GetSearchTerminal().GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_CANCELED ||
 		publishedTerminal.GetSearchTerminal().GetStateVersion() != cancellationVersion ||
 		publishedTerminal.GetSearchTerminal().GetFinalProgress().GetStateVersion() != cancellationVersion ||
 		!proto.Equal(publishedTerminal.GetSearchTerminal().GetFinalProgress(), publishedProgress.GetSearchProgress()) ||
@@ -887,9 +887,9 @@ func TestSearchWebSocketRealManagerReplaysCancellationAfterOfflineSocket(t *test
 	state := readSearchWebSocketEvent(t, reconnected)
 	progress := readSearchWebSocketEvent(t, reconnected)
 	terminal := readSearchWebSocketEvent(t, reconnected)
-	if state.GetSearchStateChanged().GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_CANCELED ||
-		progress.GetSearchProgress().GetPhase() != opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_COMPLETE ||
-		terminal.GetSearchTerminal().GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_CANCELED ||
+	if state.GetSearchStateChanged().GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_CANCELED ||
+		progress.GetSearchProgress().GetPhase() != opensplunk.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_COMPLETE ||
+		terminal.GetSearchTerminal().GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_CANCELED ||
 		terminal.GetSearchTerminal().GetFailure() != nil ||
 		terminal.GetSearchTerminal().GetResultsExpireAt() == nil ||
 		state.GetSequence() != checkpoint+1 ||
@@ -901,9 +901,9 @@ func TestSearchWebSocketRealManagerReplaysCancellationAfterOfflineSocket(t *test
 		t.Fatalf("canceled websocket projection = (%+v, %+v, %+v)", state, progress, terminal)
 	}
 
-	var authoritative opensplunkv1.GetSearchJobResponse
-	fixture.post("/api/v1/search/jobs/get", &opensplunkv1.GetSearchJobRequest{SearchJobId: jobID}, &authoritative)
-	if authoritative.GetSearchJob().GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_CANCELED ||
+	var authoritative opensplunk.GetSearchJobResponse
+	fixture.post("/api/search/jobs/get", &opensplunk.GetSearchJobRequest{SearchJobId: jobID}, &authoritative)
+	if authoritative.GetSearchJob().GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_CANCELED ||
 		authoritative.GetSearchJob().GetStateVersion() != cancellationVersion ||
 		authoritative.GetSearchJob().GetProgress().GetStateVersion() != cancellationVersion ||
 		terminal.GetSearchTerminal().GetStateVersion() != cancellationVersion ||
@@ -917,7 +917,7 @@ func TestSearchWebSocketRealManagerReplaysCancellationAfterOfflineSocket(t *test
 	}
 }
 
-func writeSearchWebSocketCommand(t *testing.T, connection *websocket.Conn, command *opensplunkv1.SearchWebSocketCommand) {
+func writeSearchWebSocketCommand(t *testing.T, connection *websocket.Conn, command *opensplunk.SearchWebSocketCommand) {
 	t.Helper()
 	payload, err := proto.Marshal(command)
 	if err != nil {
@@ -931,7 +931,7 @@ func writeSearchWebSocketCommand(t *testing.T, connection *websocket.Conn, comma
 	}
 }
 
-func readSearchWebSocketEvent(t *testing.T, connection *websocket.Conn) *opensplunkv1.SearchWebSocketEvent {
+func readSearchWebSocketEvent(t *testing.T, connection *websocket.Conn) *opensplunk.SearchWebSocketEvent {
 	t.Helper()
 	if err := connection.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
 		t.Fatalf("set read deadline: %v", err)
@@ -943,7 +943,7 @@ func readSearchWebSocketEvent(t *testing.T, connection *websocket.Conn) *openspl
 	if messageType != websocket.BinaryMessage {
 		t.Fatalf("websocket message type = %d, want binary", messageType)
 	}
-	event := new(opensplunkv1.SearchWebSocketEvent)
+	event := new(opensplunk.SearchWebSocketEvent)
 	if err := proto.Unmarshal(frame, event); err != nil {
 		t.Fatalf("unmarshal websocket event: %v", err)
 	}
@@ -952,11 +952,11 @@ func readSearchWebSocketEvent(t *testing.T, connection *websocket.Conn) *openspl
 
 func assertSearchWebSocketBootstrapLimits(t *testing.T, client *http.Client, serverURL string, service *searchws.Service) {
 	t.Helper()
-	payload, err := proto.Marshal(&opensplunkv1.GetSystemBootstrapRequest{})
+	payload, err := proto.Marshal(&opensplunk.GetSystemBootstrapRequest{})
 	if err != nil {
 		t.Fatalf("marshal bootstrap request: %v", err)
 	}
-	request, err := http.NewRequestWithContext(context.Background(), http.MethodPost, serverURL+"/api/v1/system/bootstrap", bytes.NewReader(payload))
+	request, err := http.NewRequestWithContext(context.Background(), http.MethodPost, serverURL+"/api/system/bootstrap", bytes.NewReader(payload))
 	if err != nil {
 		t.Fatalf("create bootstrap request: %v", err)
 	}
@@ -975,7 +975,7 @@ func assertSearchWebSocketBootstrapLimits(t *testing.T, client *http.Client, ser
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("bootstrap status = %d body = %q", response.StatusCode, body)
 	}
-	var bootstrap opensplunkv1.GetSystemBootstrapResponse
+	var bootstrap opensplunk.GetSystemBootstrapResponse
 	if err := proto.Unmarshal(body, &bootstrap); err != nil {
 		t.Fatalf("unmarshal bootstrap response: %v", err)
 	}

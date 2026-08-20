@@ -5498,7 +5498,7 @@ button.knowledge-manager__row:hover { background: #f5f8f9; }
 .knowledge-manager select:focus-visible,
 .knowledge-manager textarea:focus-visible { outline: 3px solid rgb(42 120 158 / 28%); outline-offset: 1px; }
 
-/* Capability-gated v0.4 Lookup Manager */
+/* Capability-gated Lookup Manager */
 .lookup-manager { min-width: 0; }
 .lookup-manager__contract { align-items: center; background: #eef5f9; border: 1px solid #c4d7e0; display: grid; gap: 10px; grid-template-columns: auto minmax(0, 1fr); padding: 9px 11px; }
 .lookup-manager__contract > span { align-items: center; background: #4e839d; border-radius: 50%; color: white; display: flex; font-size: 10px; font-weight: 700; height: 24px; justify-content: center; width: 24px; }

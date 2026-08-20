@@ -2,7 +2,7 @@ package eventfields
 
 // StoredValueType is the stable semantic type code persisted alongside each
 // flattened dynamic field path. Codes deliberately match the corresponding
-// open_splunk.v1.ValueType values. Only concrete protobuf leaf types are
+// open_splunk.ValueType values. Only concrete protobuf leaf types are
 // storable: unspecified, mixed, and missing are query-result concepts.
 type StoredValueType uint8
 

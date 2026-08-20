@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
 	"google.golang.org/protobuf/proto"
@@ -56,7 +56,7 @@ func TestWriterReplayPrecedesNormalAndAbsoluteIdempotencyCapacity(t *testing.T) 
 	replayed, err := writer.Create(
 		harness.actorCtx,
 		harness.writeScope,
-		proto.Clone(request).(*opensplunkv1.CreateKnowledgeObjectRequest),
+		proto.Clone(request).(*opensplunk.CreateKnowledgeObjectRequest),
 	)
 	if err != nil || !proto.Equal(replayed, committed) {
 		t.Fatalf("exact replay at normal capacity = (%v, %v), want %v", replayed, err, committed)
@@ -94,7 +94,7 @@ func TestWriterReplayPrecedesNormalAndAbsoluteIdempotencyCapacity(t *testing.T) 
 	replayed, err = writer.Create(
 		harness.actorCtx,
 		harness.writeScope,
-		proto.Clone(request).(*opensplunkv1.CreateKnowledgeObjectRequest),
+		proto.Clone(request).(*opensplunk.CreateKnowledgeObjectRequest),
 	)
 	if err != nil || !proto.Equal(replayed, committed) {
 		t.Fatalf("exact replay at absolute capacity = (%v, %v), want %v", replayed, err, committed)
@@ -515,7 +515,7 @@ func TestWriterRetentionUsesDatabaseAnchorAndShortenedFenceCannotReexecute(t *te
 		t.Fatalf("stale-clock retention = occurred %d anchor %d retain %d, database window [%d,%d]",
 			occurredAt, retentionAnchor, retainUntil, beforeDatabaseTime, afterDatabaseTime)
 	}
-	envelope := &opensplunkv1.KnowledgeMutationOutcomeRecord{}
+	envelope := &opensplunk.KnowledgeMutationOutcomeRecord{}
 	if err := proto.Unmarshal(encodedOutcome, envelope); err != nil ||
 		envelope.GetOccurredAtUnixMicro() != occurredAt ||
 		envelope.GetRetentionAnchorUnixMicro() != retentionAnchor ||
@@ -535,7 +535,7 @@ func TestWriterRetentionUsesDatabaseAnchorAndShortenedFenceCannotReexecute(t *te
 		t.Fatalf("drop receipt immutability trigger: %v", err)
 	}
 	shortenedRetainUntil := occurredAt + int64(7*24*time.Hour/time.Microsecond)
-	shortenedEnvelope := proto.Clone(envelope).(*opensplunkv1.KnowledgeMutationOutcomeRecord)
+	shortenedEnvelope := proto.Clone(envelope).(*opensplunk.KnowledgeMutationOutcomeRecord)
 	shortenedEnvelope.RetentionAnchorUnixMicro = occurredAt
 	shortenedEnvelope.RetainUntilUnixMicro = shortenedRetainUntil
 	shortenedOutcome, err := (proto.MarshalOptions{Deterministic: true}).Marshal(shortenedEnvelope)
@@ -599,7 +599,7 @@ func TestWriterRetentionUsesDatabaseAnchorAndShortenedFenceCannotReexecute(t *te
 	if replayed, err := staleWriter.Create(
 		harness.actorCtx,
 		harness.writeScope,
-		proto.Clone(staleRequest).(*opensplunkv1.CreateKnowledgeObjectRequest),
+		proto.Clone(staleRequest).(*opensplunk.CreateKnowledgeObjectRequest),
 	); replayed != nil || !errors.Is(err, knowledgecatalog.ErrCorrupt) {
 		t.Fatalf("exact retry with shortened fence = (%v, %v), want nil/ErrCorrupt; original=%v", replayed, err, committed)
 	}
@@ -1369,16 +1369,16 @@ func stageSchemaValidExpiredQuarantineReceipt(
 		quarantineRetainUntil,
 	)
 	quarantineOutcome, err := (proto.MarshalOptions{Deterministic: true}).Marshal(
-		&opensplunkv1.KnowledgeMutationOutcomeRecord{
+		&opensplunk.KnowledgeMutationOutcomeRecord{
 			Route:        "objects.quarantine",
 			MutationKind: "quarantine",
-			Object: &opensplunkv1.KnowledgeObjectVersionReference{
+			Object: &opensplunk.KnowledgeObjectVersionReference{
 				KnowledgeObjectId: objectID,
 				Version:           2,
 			},
 			TenantCatalogRevision:   uint64(revision),
 			TenantCatalogStateToken: bytes.Clone(token),
-			AuditAuthority: &opensplunkv1.KnowledgeMutationOutcomeRecord_RecoveryAuditSequence{
+			AuditAuthority: &opensplunk.KnowledgeMutationOutcomeRecord_RecoveryAuditSequence{
 				RecoveryAuditSequence: 1,
 			},
 			OccurredAtUnixMicro:      quarantinedAtUnixMicro,
@@ -1489,7 +1489,7 @@ func seedCapacityReceiptCopies(t *testing.T, database *control.DB, seed capacity
 	).Scan(&sourceOutcome, &sourceOccurred, &sourceRevision); err != nil {
 		t.Fatalf("read source capacity receipt: %v", err)
 	}
-	envelope := &opensplunkv1.KnowledgeMutationOutcomeRecord{}
+	envelope := &opensplunk.KnowledgeMutationOutcomeRecord{}
 	if err := proto.Unmarshal(sourceOutcome, envelope); err != nil {
 		t.Fatalf("decode source capacity outcome: %v", err)
 	}
@@ -1591,7 +1591,7 @@ func seedCapacityReceiptCopies(t *testing.T, database *control.DB, seed capacity
 			requestID,
 			revision,
 		))
-		copyEnvelope := proto.Clone(envelope).(*opensplunkv1.KnowledgeMutationOutcomeRecord)
+		copyEnvelope := proto.Clone(envelope).(*opensplunk.KnowledgeMutationOutcomeRecord)
 		copyEnvelope.TenantCatalogRevision = uint64(revision)
 		copyEnvelope.TenantCatalogStateToken = bytes.Clone(token[:])
 		copyOutcome, err := (proto.MarshalOptions{Deterministic: true}).Marshal(copyEnvelope)
@@ -1747,19 +1747,19 @@ type capacityWriterCalls struct {
 	Clocks atomic.Int64
 }
 
-func capacityCreateRequest(name string, requestID string) *opensplunkv1.CreateKnowledgeObjectRequest {
+func capacityCreateRequest(name string, requestID string) *opensplunk.CreateKnowledgeObjectRequest {
 	description := "capacity definition for " + name
-	return &opensplunkv1.CreateKnowledgeObjectRequest{
+	return &opensplunk.CreateKnowledgeObjectRequest{
 		Definition: writerAliasDefinition(
 			writerTestApp,
 			name,
 			&description,
-			opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
+			opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
 			"host-"+name,
 			"source_field",
 			"destination_"+name,
 		),
-		InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+		InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 		ClientRequestId: requestID,
 	}
 }
@@ -1768,7 +1768,7 @@ func assertCapacityRejectedWithoutPublication(
 	t *testing.T,
 	harness *writerBlackboxHarness,
 	writer *knowledgecatalog.Writer,
-	request *opensplunkv1.CreateKnowledgeObjectRequest,
+	request *opensplunk.CreateKnowledgeObjectRequest,
 	want writerAuthoritySnapshot,
 ) {
 	t.Helper()

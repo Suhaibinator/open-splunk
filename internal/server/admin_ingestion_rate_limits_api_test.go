@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
@@ -22,13 +22,13 @@ func TestIndexAdministrationIngestionRateLimitsRoundTripAndMasks(t *testing.T) {
 	response := postProto(
 		t,
 		handler,
-		"/api/v1/indexes/create",
-		&opensplunkv1.CreateIndexRequest{Definition: definition},
+		"/api/indexes/create",
+		&opensplunk.CreateIndexRequest{Definition: definition},
 	)
 	if response.Code != http.StatusOK {
 		t.Fatalf("create status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var created opensplunkv1.CreateIndexResponse
+	var created opensplunk.CreateIndexResponse
 	unmarshalResponse(t, response, &created)
 	current := created.GetIndex()
 	if current.GetVersion() != 1 {
@@ -44,15 +44,15 @@ func TestIndexAdministrationIngestionRateLimitsRoundTripAndMasks(t *testing.T) {
 	response = postProto(
 		t,
 		handler,
-		"/api/v1/indexes/get",
-		&opensplunkv1.GetIndexRequest{
+		"/api/indexes/get",
+		&opensplunk.GetIndexRequest{
 			Selector: adminIndexPolicySelector(current.GetIndexId()),
 		},
 	)
 	if response.Code != http.StatusOK {
 		t.Fatalf("get status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var got opensplunkv1.GetIndexResponse
+	var got opensplunk.GetIndexResponse
 	unmarshalResponse(t, response, &got)
 	assertAdminIngestionRateLimits(
 		t,
@@ -61,7 +61,7 @@ func TestIndexAdministrationIngestionRateLimitsRoundTripAndMasks(t *testing.T) {
 		ingestquota.HardMaxUncompressedBytesPerSecond,
 	)
 
-	for name, invalid := range map[string]*opensplunkv1.IngestionRateLimits{
+	for name, invalid := range map[string]*opensplunk.IngestionRateLimits{
 		"events": adminIngestionRateLimits(
 			ingestquota.HardMaxEventsPerSecond+1,
 			ingestquota.HardMaxUncompressedBytesPerSecond,
@@ -75,11 +75,11 @@ func TestIndexAdministrationIngestionRateLimitsRoundTripAndMasks(t *testing.T) {
 			invalidResponse := postProto(
 				t,
 				handler,
-				"/api/v1/indexes/update",
-				&opensplunkv1.UpdateIndexRequest{
+				"/api/indexes/update",
+				&opensplunk.UpdateIndexRequest{
 					Selector:        adminIndexPolicySelector(current.GetIndexId()),
 					ExpectedVersion: current.GetVersion(),
-					Definition: &opensplunkv1.IndexDefinition{
+					Definition: &opensplunk.IndexDefinition{
 						IngestionRateLimits: invalid,
 					},
 					UpdateMask: &fieldmaskpb.FieldMask{
@@ -100,11 +100,11 @@ func TestIndexAdministrationIngestionRateLimitsRoundTripAndMasks(t *testing.T) {
 	response = postProto(
 		t,
 		handler,
-		"/api/v1/indexes/update",
-		&opensplunkv1.UpdateIndexRequest{
+		"/api/indexes/update",
+		&opensplunk.UpdateIndexRequest{
 			Selector:        adminIndexPolicySelector(current.GetIndexId()),
 			ExpectedVersion: current.GetVersion(),
-			Definition: &opensplunkv1.IndexDefinition{
+			Definition: &opensplunk.IndexDefinition{
 				IngestionRateLimits: adminIngestionRateLimits(400, 4<<20),
 			},
 			UpdateMask: &fieldmaskpb.FieldMask{
@@ -115,7 +115,7 @@ func TestIndexAdministrationIngestionRateLimitsRoundTripAndMasks(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("whole update status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var updated opensplunkv1.UpdateIndexResponse
+	var updated opensplunk.UpdateIndexResponse
 	unmarshalResponse(t, response, &updated)
 	current = updated.GetIndex()
 	assertAdminIngestionRateLimits(
@@ -128,11 +128,11 @@ func TestIndexAdministrationIngestionRateLimitsRoundTripAndMasks(t *testing.T) {
 	response = postProto(
 		t,
 		handler,
-		"/api/v1/indexes/update",
-		&opensplunkv1.UpdateIndexRequest{
+		"/api/indexes/update",
+		&opensplunk.UpdateIndexRequest{
 			Selector:        adminIndexPolicySelector(current.GetIndexId()),
 			ExpectedVersion: current.GetVersion(),
-			Definition: &opensplunkv1.IndexDefinition{
+			Definition: &opensplunk.IndexDefinition{
 				IngestionRateLimits: adminIngestionRateLimits(250, 0),
 			},
 			UpdateMask: &fieldmaskpb.FieldMask{
@@ -157,11 +157,11 @@ func TestIndexAdministrationIngestionRateLimitsRoundTripAndMasks(t *testing.T) {
 	response = postProto(
 		t,
 		handler,
-		"/api/v1/indexes/update",
-		&opensplunkv1.UpdateIndexRequest{
+		"/api/indexes/update",
+		&opensplunk.UpdateIndexRequest{
 			Selector:        adminIndexPolicySelector(current.GetIndexId()),
 			ExpectedVersion: current.GetVersion(),
-			Definition: &opensplunkv1.IndexDefinition{
+			Definition: &opensplunk.IndexDefinition{
 				IngestionRateLimits: adminIngestionRateLimits(0, 0),
 			},
 			UpdateMask: &fieldmaskpb.FieldMask{
@@ -186,11 +186,11 @@ func TestIndexAdministrationIngestionRateLimitsRoundTripAndMasks(t *testing.T) {
 	response = postProto(
 		t,
 		handler,
-		"/api/v1/indexes/update",
-		&opensplunkv1.UpdateIndexRequest{
+		"/api/indexes/update",
+		&opensplunk.UpdateIndexRequest{
 			Selector:        adminIndexPolicySelector(current.GetIndexId()),
 			ExpectedVersion: current.GetVersion(),
-			Definition: &opensplunkv1.IndexDefinition{
+			Definition: &opensplunk.IndexDefinition{
 				IngestionRateLimits: adminIngestionRateLimits(0, 0),
 			},
 			UpdateMask: &fieldmaskpb.FieldMask{
@@ -215,11 +215,11 @@ func TestIndexAdministrationIngestionRateLimitsRoundTripAndMasks(t *testing.T) {
 	response = postProto(
 		t,
 		handler,
-		"/api/v1/indexes/update",
-		&opensplunkv1.UpdateIndexRequest{
+		"/api/indexes/update",
+		&opensplunk.UpdateIndexRequest{
 			Selector:        adminIndexPolicySelector(current.GetIndexId()),
 			ExpectedVersion: current.GetVersion(),
-			Definition: &opensplunkv1.IndexDefinition{
+			Definition: &opensplunk.IndexDefinition{
 				IngestionRateLimits: adminIngestionRateLimits(125, 1<<20),
 			},
 			UpdateMask: &fieldmaskpb.FieldMask{
@@ -242,11 +242,11 @@ func TestIndexAdministrationIngestionRateLimitsRoundTripAndMasks(t *testing.T) {
 	response = postProto(
 		t,
 		handler,
-		"/api/v1/indexes/update",
-		&opensplunkv1.UpdateIndexRequest{
+		"/api/indexes/update",
+		&opensplunk.UpdateIndexRequest{
 			Selector:        adminIndexPolicySelector(current.GetIndexId()),
 			ExpectedVersion: current.GetVersion(),
-			Definition:      &opensplunkv1.IndexDefinition{},
+			Definition:      &opensplunk.IndexDefinition{},
 			UpdateMask: &fieldmaskpb.FieldMask{
 				Paths: []string{"ingestion_rate_limits"},
 			},
@@ -267,8 +267,8 @@ func TestIndexAdministrationIngestionRateLimitsRoundTripAndMasks(t *testing.T) {
 	response = postProto(
 		t,
 		handler,
-		"/api/v1/indexes/get",
-		&opensplunkv1.GetIndexRequest{
+		"/api/indexes/get",
+		&opensplunk.GetIndexRequest{
 			Selector: adminIndexPolicySelector(current.GetIndexId()),
 		},
 	)
@@ -298,11 +298,11 @@ func TestIngestionTokenAdministrationRateLimitsRoundTripAndMasks(t *testing.T) {
 	response := postProto(
 		t,
 		handler,
-		"/api/v1/ingestion-tokens/create",
-		&opensplunkv1.CreateIngestionTokenRequest{
-			Definition: &opensplunkv1.IngestionTokenDefinition{
+		"/api/ingestion-tokens/create",
+		&opensplunk.CreateIngestionTokenRequest{
+			Definition: &opensplunk.IngestionTokenDefinition{
 				Name: "rate limited token",
-				Constraints: &opensplunkv1.IngestionTokenConstraints{
+				Constraints: &opensplunk.IngestionTokenConstraints{
 					AllowedIndexNames: []string{"rate-token-index"},
 					BoundCollectorId:  &collectorID,
 				},
@@ -316,7 +316,7 @@ func TestIngestionTokenAdministrationRateLimitsRoundTripAndMasks(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("create status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var created opensplunkv1.CreateIngestionTokenResponse
+	var created opensplunk.CreateIngestionTokenResponse
 	unmarshalResponse(t, response, &created)
 	current := created.GetIngestionToken()
 	if current.GetVersion() != 1 || created.GetPlaintextToken() == "" {
@@ -332,15 +332,15 @@ func TestIngestionTokenAdministrationRateLimitsRoundTripAndMasks(t *testing.T) {
 	response = postProto(
 		t,
 		handler,
-		"/api/v1/ingestion-tokens/get",
-		&opensplunkv1.GetIngestionTokenRequest{
+		"/api/ingestion-tokens/get",
+		&opensplunk.GetIngestionTokenRequest{
 			IngestionTokenId: current.GetIngestionTokenId(),
 		},
 	)
 	if response.Code != http.StatusOK {
 		t.Fatalf("get status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var got opensplunkv1.GetIngestionTokenResponse
+	var got opensplunk.GetIngestionTokenResponse
 	unmarshalResponse(t, response, &got)
 	assertAdminIngestionRateLimits(
 		t,
@@ -349,7 +349,7 @@ func TestIngestionTokenAdministrationRateLimitsRoundTripAndMasks(t *testing.T) {
 		ingestquota.HardMaxUncompressedBytesPerSecond,
 	)
 
-	for name, invalid := range map[string]*opensplunkv1.IngestionRateLimits{
+	for name, invalid := range map[string]*opensplunk.IngestionRateLimits{
 		"events": adminIngestionRateLimits(
 			ingestquota.HardMaxEventsPerSecond+1,
 			ingestquota.HardMaxUncompressedBytesPerSecond,
@@ -363,11 +363,11 @@ func TestIngestionTokenAdministrationRateLimitsRoundTripAndMasks(t *testing.T) {
 			invalidResponse := postProto(
 				t,
 				handler,
-				"/api/v1/ingestion-tokens/update",
-				&opensplunkv1.UpdateIngestionTokenRequest{
+				"/api/ingestion-tokens/update",
+				&opensplunk.UpdateIngestionTokenRequest{
 					IngestionTokenId: current.GetIngestionTokenId(),
 					ExpectedVersion:  current.GetVersion(),
-					Definition: &opensplunkv1.IngestionTokenDefinition{
+					Definition: &opensplunk.IngestionTokenDefinition{
 						IngestionRateLimits: invalid,
 					},
 					UpdateMask: &fieldmaskpb.FieldMask{
@@ -388,11 +388,11 @@ func TestIngestionTokenAdministrationRateLimitsRoundTripAndMasks(t *testing.T) {
 	response = postProto(
 		t,
 		handler,
-		"/api/v1/ingestion-tokens/update",
-		&opensplunkv1.UpdateIngestionTokenRequest{
+		"/api/ingestion-tokens/update",
+		&opensplunk.UpdateIngestionTokenRequest{
 			IngestionTokenId: current.GetIngestionTokenId(),
 			ExpectedVersion:  current.GetVersion(),
-			Definition: &opensplunkv1.IngestionTokenDefinition{
+			Definition: &opensplunk.IngestionTokenDefinition{
 				IngestionRateLimits: adminIngestionRateLimits(800, 8<<20),
 			},
 			UpdateMask: &fieldmaskpb.FieldMask{
@@ -403,7 +403,7 @@ func TestIngestionTokenAdministrationRateLimitsRoundTripAndMasks(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("whole update status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var updated opensplunkv1.UpdateIngestionTokenResponse
+	var updated opensplunk.UpdateIngestionTokenResponse
 	unmarshalResponse(t, response, &updated)
 	current = updated.GetIngestionToken()
 	assertAdminIngestionRateLimits(t, current.GetIngestionRateLimits(), 800, 8<<20)
@@ -411,11 +411,11 @@ func TestIngestionTokenAdministrationRateLimitsRoundTripAndMasks(t *testing.T) {
 	response = postProto(
 		t,
 		handler,
-		"/api/v1/ingestion-tokens/update",
-		&opensplunkv1.UpdateIngestionTokenRequest{
+		"/api/ingestion-tokens/update",
+		&opensplunk.UpdateIngestionTokenRequest{
 			IngestionTokenId: current.GetIngestionTokenId(),
 			ExpectedVersion:  current.GetVersion(),
-			Definition: &opensplunkv1.IngestionTokenDefinition{
+			Definition: &opensplunk.IngestionTokenDefinition{
 				IngestionRateLimits: adminIngestionRateLimits(600, 0),
 			},
 			UpdateMask: &fieldmaskpb.FieldMask{
@@ -435,11 +435,11 @@ func TestIngestionTokenAdministrationRateLimitsRoundTripAndMasks(t *testing.T) {
 	response = postProto(
 		t,
 		handler,
-		"/api/v1/ingestion-tokens/update",
-		&opensplunkv1.UpdateIngestionTokenRequest{
+		"/api/ingestion-tokens/update",
+		&opensplunk.UpdateIngestionTokenRequest{
 			IngestionTokenId: current.GetIngestionTokenId(),
 			ExpectedVersion:  current.GetVersion(),
-			Definition: &opensplunkv1.IngestionTokenDefinition{
+			Definition: &opensplunk.IngestionTokenDefinition{
 				IngestionRateLimits: adminIngestionRateLimits(0, 0),
 			},
 			UpdateMask: &fieldmaskpb.FieldMask{
@@ -459,11 +459,11 @@ func TestIngestionTokenAdministrationRateLimitsRoundTripAndMasks(t *testing.T) {
 	response = postProto(
 		t,
 		handler,
-		"/api/v1/ingestion-tokens/update",
-		&opensplunkv1.UpdateIngestionTokenRequest{
+		"/api/ingestion-tokens/update",
+		&opensplunk.UpdateIngestionTokenRequest{
 			IngestionTokenId: current.GetIngestionTokenId(),
 			ExpectedVersion:  current.GetVersion(),
-			Definition: &opensplunkv1.IngestionTokenDefinition{
+			Definition: &opensplunk.IngestionTokenDefinition{
 				IngestionRateLimits: adminIngestionRateLimits(0, 0),
 			},
 			UpdateMask: &fieldmaskpb.FieldMask{
@@ -483,11 +483,11 @@ func TestIngestionTokenAdministrationRateLimitsRoundTripAndMasks(t *testing.T) {
 	response = postProto(
 		t,
 		handler,
-		"/api/v1/ingestion-tokens/update",
-		&opensplunkv1.UpdateIngestionTokenRequest{
+		"/api/ingestion-tokens/update",
+		&opensplunk.UpdateIngestionTokenRequest{
 			IngestionTokenId: current.GetIngestionTokenId(),
 			ExpectedVersion:  current.GetVersion(),
-			Definition: &opensplunkv1.IngestionTokenDefinition{
+			Definition: &opensplunk.IngestionTokenDefinition{
 				IngestionRateLimits: adminIngestionRateLimits(350, 2<<20),
 			},
 			UpdateMask: &fieldmaskpb.FieldMask{
@@ -505,11 +505,11 @@ func TestIngestionTokenAdministrationRateLimitsRoundTripAndMasks(t *testing.T) {
 	response = postProto(
 		t,
 		handler,
-		"/api/v1/ingestion-tokens/update",
-		&opensplunkv1.UpdateIngestionTokenRequest{
+		"/api/ingestion-tokens/update",
+		&opensplunk.UpdateIngestionTokenRequest{
 			IngestionTokenId: current.GetIngestionTokenId(),
 			ExpectedVersion:  current.GetVersion(),
-			Definition:       &opensplunkv1.IngestionTokenDefinition{},
+			Definition:       &opensplunk.IngestionTokenDefinition{},
 			UpdateMask: &fieldmaskpb.FieldMask{
 				Paths: []string{"ingestion_rate_limits"},
 			},
@@ -525,8 +525,8 @@ func TestIngestionTokenAdministrationRateLimitsRoundTripAndMasks(t *testing.T) {
 	response = postProto(
 		t,
 		handler,
-		"/api/v1/ingestion-tokens/get",
-		&opensplunkv1.GetIngestionTokenRequest{
+		"/api/ingestion-tokens/get",
+		&opensplunk.GetIngestionTokenRequest{
 			IngestionTokenId: current.GetIngestionTokenId(),
 		},
 	)
@@ -545,8 +545,8 @@ func TestIngestionTokenAdministrationRateLimitsRoundTripAndMasks(t *testing.T) {
 func adminIngestionRateLimits(
 	eventsPerSecond uint64,
 	uncompressedBytesPerSecond uint64,
-) *opensplunkv1.IngestionRateLimits {
-	return &opensplunkv1.IngestionRateLimits{
+) *opensplunk.IngestionRateLimits {
+	return &opensplunk.IngestionRateLimits{
 		MaxEventsPerSecond:            new(eventsPerSecond),
 		MaxUncompressedBytesPerSecond: new(uncompressedBytesPerSecond),
 	}
@@ -554,7 +554,7 @@ func adminIngestionRateLimits(
 
 func assertAdminIngestionRateLimits(
 	t *testing.T,
-	limits *opensplunkv1.IngestionRateLimits,
+	limits *opensplunk.IngestionRateLimits,
 	wantEventsPerSecond uint64,
 	wantUncompressedBytesPerSecond uint64,
 ) {

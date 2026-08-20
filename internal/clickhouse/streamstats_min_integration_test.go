@@ -9,7 +9,7 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/chcol"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -30,7 +30,7 @@ func testStreamStatsMinimumAgainstClickHouse(
 
 	newEvent := func(
 		id string,
-		fields ...*opensplunkv1.TypedObjectField,
+		fields ...*opensplunk.TypedObjectField,
 	) *ingest.StoredEvent {
 		event := compilerIntegrationEvent(
 			id,
@@ -46,7 +46,7 @@ func testStreamStatsMinimumAgainstClickHouse(
 	}
 	withGroup := func(event *ingest.StoredEvent, group string) *ingest.StoredEvent {
 		event.Event.Fields.Fields = append(
-			[]*opensplunkv1.TypedObjectField{
+			[]*opensplunk.TypedObjectField{
 				typedField("streamstats_min_group", typedString(group)),
 			},
 			event.Event.Fields.Fields...,

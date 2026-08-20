@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/SRouter/pkg/router"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -214,24 +214,24 @@ func TestCollectorAdministrationListPassesOpaqueTokenAndReleasesPermit(
 		context.Background(),
 		tenantID,
 		ownerID,
-		"/api/v1/collectors/list",
+		"/api/collectors/list",
 	)
 	result, err := handler.listCollectors(
 		request,
-		&opensplunkv1.ListCollectorsRequest{
-			Page: &opensplunkv1.PageRequest{
+		&opensplunk.ListCollectorsRequest{
+			Page: &opensplunk.PageRequest{
 				PageSize:         &pageSize,
 				PageToken:        &requestToken,
 				IncludeTotalSize: true,
 			},
-			StateFilters: []opensplunkv1.CollectorConnectionState{
-				opensplunkv1.CollectorConnectionState_COLLECTOR_CONNECTION_STATE_STALE,
-				opensplunkv1.CollectorConnectionState_COLLECTOR_CONNECTION_STATE_ONLINE,
+			StateFilters: []opensplunk.CollectorConnectionState{
+				opensplunk.CollectorConnectionState_COLLECTOR_CONNECTION_STATE_STALE,
+				opensplunk.CollectorConnectionState_COLLECTOR_CONNECTION_STATE_ONLINE,
 			},
 			IndexNameFilter: new("main"),
 			TextFilter:      new(" needle "),
-			SortBy:          opensplunkv1.CollectorSortBy_COLLECTOR_SORT_BY_QUEUE_BYTES,
-			SortDirection:   opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING,
+			SortBy:          opensplunk.CollectorSortBy_COLLECTOR_SORT_BY_QUEUE_BYTES,
+			SortDirection:   opensplunk.SortDirection_SORT_DIRECTION_DESCENDING,
 		},
 	)
 	if err != nil || result == nil {
@@ -259,7 +259,7 @@ func TestCollectorAdministrationListPassesOpaqueTokenAndReleasesPermit(
 			len(handler.serializationGate),
 		)
 	}
-	var decoded opensplunkv1.ListCollectorsResponse
+	var decoded opensplunk.ListCollectorsResponse
 	if err := proto.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
 		t.Fatalf("unmarshal response: %v", err)
 	}
@@ -308,11 +308,11 @@ func TestCollectorAdministrationReadSerializationCancellationReleasesPermit(
 		ctx,
 		tenantID,
 		ownerID,
-		"/api/v1/collectors/list",
+		"/api/collectors/list",
 	)
 	result, err := handler.listCollectors(
 		request,
-		&opensplunkv1.ListCollectorsRequest{},
+		&opensplunk.ListCollectorsRequest{},
 	)
 	if err != nil || result == nil ||
 		len(handler.serializationGate) != 1 {
@@ -396,12 +396,12 @@ func TestCollectorAdministrationCommittedMutationSurvivesCancellation(
 		ctx,
 		tenantID,
 		ownerID,
-		"/api/v1/collectors/update",
+		"/api/collectors/update",
 	)
 	displayName := " Production Collector "
 	result, err := handler.updateCollector(
 		request,
-		&opensplunkv1.UpdateCollectorRequest{
+		&opensplunk.UpdateCollectorRequest{
 			CollectorId:     collectorID,
 			ExpectedVersion: 1,
 			DisplayName:     &displayName,
@@ -434,7 +434,7 @@ func TestCollectorAdministrationCommittedMutationSurvivesCancellation(
 			len(handler.serializationGate),
 		)
 	}
-	var decoded opensplunkv1.UpdateCollectorResponse
+	var decoded opensplunk.UpdateCollectorResponse
 	if err := proto.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
 		t.Fatalf("unmarshal response: %v", err)
 	}
@@ -587,9 +587,9 @@ func TestCollectorAdministrationRejectsInvalidListOutputAndReleasesPermit(
 				ownerID,
 				service,
 			)
-			input := &opensplunkv1.ListCollectorsRequest{}
+			input := &opensplunk.ListCollectorsRequest{}
 			if test.includeTotal {
-				input.Page = &opensplunkv1.PageRequest{
+				input.Page = &opensplunk.PageRequest{
 					IncludeTotalSize: true,
 				}
 			}
@@ -599,7 +599,7 @@ func TestCollectorAdministrationRejectsInvalidListOutputAndReleasesPermit(
 					context.Background(),
 					tenantID,
 					ownerID,
-					"/api/v1/collectors/list",
+					"/api/collectors/list",
 				),
 				input,
 			)
@@ -664,9 +664,9 @@ func TestCollectorAdministrationRejectsInvalidMutationVersionAndReleasesPermit(
 			context.Background(),
 			tenantID,
 			ownerID,
-			"/api/v1/collectors/update",
+			"/api/collectors/update",
 		),
-		&opensplunkv1.UpdateCollectorRequest{
+		&opensplunk.UpdateCollectorRequest{
 			CollectorId:     collectorID,
 			ExpectedVersion: 1,
 			DisplayName:     &displayName,
@@ -725,11 +725,11 @@ func TestCollectorAdministrationRejectsTenantMismatchAndReleasesPermit(
 		context.Background(),
 		tenantID,
 		ownerID,
-		"/api/v1/collectors/get",
+		"/api/collectors/get",
 	)
 	result, err := handler.getCollector(
 		request,
-		&opensplunkv1.GetCollectorRequest{
+		&opensplunk.GetCollectorRequest{
 			CollectorId: "collector-output",
 		},
 	)
@@ -956,58 +956,58 @@ func TestCollectorAdministrationRejectsMalformedRequestsBeforeService(
 	}{
 		{
 			name: "explicit zero page size",
-			path: "/api/v1/collectors/list",
-			request: &opensplunkv1.ListCollectorsRequest{
-				Page: &opensplunkv1.PageRequest{PageSize: &zero},
+			path: "/api/collectors/list",
+			request: &opensplunk.ListCollectorsRequest{
+				Page: &opensplunk.PageRequest{PageSize: &zero},
 			},
 		},
 		{
 			name: "oversized page size",
-			path: "/api/v1/collectors/list",
-			request: &opensplunkv1.ListCollectorsRequest{
-				Page: &opensplunkv1.PageRequest{
+			path: "/api/collectors/list",
+			request: &opensplunk.ListCollectorsRequest{
+				Page: &opensplunk.PageRequest{
 					PageSize: &oversizedPage,
 				},
 			},
 		},
 		{
 			name: "explicit empty page token",
-			path: "/api/v1/collectors/list",
-			request: &opensplunkv1.ListCollectorsRequest{
-				Page: &opensplunkv1.PageRequest{
+			path: "/api/collectors/list",
+			request: &opensplunk.ListCollectorsRequest{
+				Page: &opensplunk.PageRequest{
 					PageToken: &emptyToken,
 				},
 			},
 		},
 		{
 			name: "oversized page token",
-			path: "/api/v1/collectors/list",
-			request: &opensplunkv1.ListCollectorsRequest{
-				Page: &opensplunkv1.PageRequest{
+			path: "/api/collectors/list",
+			request: &opensplunk.ListCollectorsRequest{
+				Page: &opensplunk.PageRequest{
 					PageToken: &oversizedToken,
 				},
 			},
 		},
 		{
 			name: "unknown state enum",
-			path: "/api/v1/collectors/list",
-			request: &opensplunkv1.ListCollectorsRequest{
-				StateFilters: []opensplunkv1.CollectorConnectionState{
-					opensplunkv1.CollectorConnectionState(99),
+			path: "/api/collectors/list",
+			request: &opensplunk.ListCollectorsRequest{
+				StateFilters: []opensplunk.CollectorConnectionState{
+					opensplunk.CollectorConnectionState(99),
 				},
 			},
 		},
 		{
 			name: "control text",
-			path: "/api/v1/collectors/list",
-			request: &opensplunkv1.ListCollectorsRequest{
+			path: "/api/collectors/list",
+			request: &opensplunk.ListCollectorsRequest{
 				TextFilter: &controlText,
 			},
 		},
 		{
 			name: "unsupported update mask",
-			path: "/api/v1/collectors/update",
-			request: &opensplunkv1.UpdateCollectorRequest{
+			path: "/api/collectors/update",
+			request: &opensplunk.UpdateCollectorRequest{
 				CollectorId:     collectorID,
 				ExpectedVersion: 1,
 				DisplayName:     &displayName,
@@ -1018,11 +1018,11 @@ func TestCollectorAdministrationRejectsMalformedRequestsBeforeService(
 		},
 		{
 			name: "unknown administrative enum",
-			path: "/api/v1/collectors/state/set",
-			request: &opensplunkv1.SetCollectorEnabledRequest{
+			path: "/api/collectors/state/set",
+			request: &opensplunk.SetCollectorEnabledRequest{
 				CollectorId:     collectorID,
 				ExpectedVersion: 1,
-				AdministrativeState: opensplunkv1.
+				AdministrativeState: opensplunk.
 					CollectorAdministrativeState(99),
 			},
 		},
@@ -1048,7 +1048,7 @@ func TestCollectorAdministrationRejectsMalformedRequestsBeforeService(
 	malformed := postCollectorAdministrationBytes(
 		t,
 		handler,
-		"/api/v1/collectors/get",
+		"/api/collectors/get",
 		[]byte{0x0a, 0xff},
 		collectorAdministrationBearerToken,
 	)
@@ -1067,8 +1067,8 @@ func TestCollectorAdministrationRejectsMalformedRequestsBeforeService(
 func TestCollectorAdministrationUpdateMaskIsExact(t *testing.T) {
 	t.Parallel()
 
-	valid := func() *opensplunkv1.UpdateCollectorRequest {
-		return &opensplunkv1.UpdateCollectorRequest{
+	valid := func() *opensplunk.UpdateCollectorRequest {
+		return &opensplunk.UpdateCollectorRequest{
 			CollectorId:     "collector-mask",
 			ExpectedVersion: 7,
 			UpdateMask: &fieldmaskpb.FieldMask{
@@ -1172,10 +1172,10 @@ func TestCollectorAdministrationErrorMappingIsSanitized(t *testing.T) {
 			message: "collector not found",
 		},
 		{
-			name:    "version conflict",
+			name:    "source revision conflict",
 			err:     control.ErrVersionConflict,
 			status:  http.StatusConflict,
-			message: "collector version conflict",
+			message: "source revision conflict",
 		},
 		{
 			name:    "capacity",
@@ -1300,8 +1300,8 @@ func TestCollectorAdministrationRoutesRequireAuthAndAdvertiseFeature(
 	unauthorized := postCollectorAdministrationProto(
 		t,
 		handler,
-		"/api/v1/collectors/get",
-		&opensplunkv1.GetCollectorRequest{CollectorId: collectorID},
+		"/api/collectors/get",
+		&opensplunk.GetCollectorRequest{CollectorId: collectorID},
 		"",
 	)
 	if unauthorized.Code != http.StatusUnauthorized ||
@@ -1319,18 +1319,18 @@ func TestCollectorAdministrationRoutesRequireAuthAndAdvertiseFeature(
 		request proto.Message
 	}{
 		{
-			path: "/api/v1/collectors/get",
-			request: &opensplunkv1.GetCollectorRequest{
+			path: "/api/collectors/get",
+			request: &opensplunk.GetCollectorRequest{
 				CollectorId: collectorID,
 			},
 		},
 		{
-			path:    "/api/v1/collectors/list",
-			request: &opensplunkv1.ListCollectorsRequest{},
+			path:    "/api/collectors/list",
+			request: &opensplunk.ListCollectorsRequest{},
 		},
 		{
-			path: "/api/v1/collectors/update",
-			request: &opensplunkv1.UpdateCollectorRequest{
+			path: "/api/collectors/update",
+			request: &opensplunk.UpdateCollectorRequest{
 				CollectorId:     collectorID,
 				ExpectedVersion: 1,
 				DisplayName:     &displayName,
@@ -1340,11 +1340,11 @@ func TestCollectorAdministrationRoutesRequireAuthAndAdvertiseFeature(
 			},
 		},
 		{
-			path: "/api/v1/collectors/state/set",
-			request: &opensplunkv1.SetCollectorEnabledRequest{
+			path: "/api/collectors/state/set",
+			request: &opensplunk.SetCollectorEnabledRequest{
 				CollectorId:         collectorID,
 				ExpectedVersion:     1,
-				AdministrativeState: opensplunkv1.CollectorAdministrativeState_COLLECTOR_ADMINISTRATIVE_STATE_DISABLED,
+				AdministrativeState: opensplunk.CollectorAdministrativeState_COLLECTOR_ADMINISTRATIVE_STATE_DISABLED,
 			},
 		},
 	}
@@ -1353,12 +1353,12 @@ func TestCollectorAdministrationRoutesRequireAuthAndAdvertiseFeature(
 			futureProtobufField("future-collector-request"),
 		)
 		switch request := route.request.(type) {
-		case *opensplunkv1.ListCollectorsRequest:
-			request.Page = &opensplunkv1.PageRequest{}
+		case *opensplunk.ListCollectorsRequest:
+			request.Page = &opensplunk.PageRequest{}
 			request.Page.ProtoReflect().SetUnknown(
 				futureProtobufField("future-collector-page"),
 			)
-		case *opensplunkv1.UpdateCollectorRequest:
+		case *opensplunk.UpdateCollectorRequest:
 			request.UpdateMask.ProtoReflect().SetUnknown(
 				futureProtobufField("future-collector-mask"),
 			)
@@ -1386,8 +1386,8 @@ func TestCollectorAdministrationRoutesRequireAuthAndAdvertiseFeature(
 	bootstrap := postCollectorAdministrationProto(
 		t,
 		handler,
-		"/api/v1/system/bootstrap",
-		&opensplunkv1.GetSystemBootstrapRequest{},
+		"/api/system/bootstrap",
+		&opensplunk.GetSystemBootstrapRequest{},
 		"",
 	)
 	if bootstrap.Code != http.StatusOK {
@@ -1397,13 +1397,13 @@ func TestCollectorAdministrationRoutesRequireAuthAndAdvertiseFeature(
 			bootstrap.Body,
 		)
 	}
-	var decoded opensplunkv1.GetSystemBootstrapResponse
+	var decoded opensplunk.GetSystemBootstrapResponse
 	if err := proto.Unmarshal(bootstrap.Body.Bytes(), &decoded); err != nil {
 		t.Fatalf("unmarshal bootstrap: %v", err)
 	}
 	if !slices.Contains(
 		decoded.GetFeatures(),
-		opensplunkv1.ServerFeature_SERVER_FEATURE_COLLECTOR_ADMIN,
+		opensplunk.ServerFeature_SERVER_FEATURE_COLLECTOR_ADMIN,
 	) {
 		t.Fatalf(
 			"bootstrap features = %v, want collector administration",
@@ -1551,7 +1551,7 @@ func validCollectorCatalogEntry(
 			AdministrativeState: collectorfleet.AdministrativeStateEnabled,
 			FirstSeenAt:         now.Add(-3 * time.Minute),
 			UpdatedAt:           now,
-			CollectorVersion:    "1.2.3",
+			SourceRevision:      "1.2.3",
 			Hostname:            "collector.example.test",
 			OperatingSystem:     "linux",
 			Architecture:        "amd64",

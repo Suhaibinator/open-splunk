@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 )
 
 // concurrentAdmissionStagingStore is a race-safe StagingEventStore for tests
@@ -31,7 +31,7 @@ type eventAuthorityTokenSpec struct {
 	name     string
 	hosts    []string
 	sources  []string
-	wantCode opensplunkv1.EventRejectionCode
+	wantCode opensplunk.EventRejectionCode
 }
 
 // authorityCacheRequest builds a HEC admission request for the canonical
@@ -47,16 +47,16 @@ func authorityCacheRequest(hosts, sources []string) AdmissionRequest {
 
 // stageAuthorityOutcome returns the event rejection code Stage produced, or
 // EVENT_REJECTION_CODE_UNSPECIFIED when the request was admitted.
-func stageAuthorityOutcome(preparer *AdmissionPreparer, request AdmissionRequest) (opensplunkv1.EventRejectionCode, error) {
+func stageAuthorityOutcome(preparer *AdmissionPreparer, request AdmissionRequest) (opensplunk.EventRejectionCode, error) {
 	_, err := preparer.Stage(context.Background(), request)
 	if err == nil {
-		return opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNSPECIFIED, nil
+		return opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_UNSPECIFIED, nil
 	}
 	var failure *AdmissionFailure
 	if errors.As(err, &failure) && failure.Failure != nil {
 		return failure.Failure.Code, nil
 	}
-	return opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNSPECIFIED, err
+	return opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_UNSPECIFIED, err
 }
 
 func eventAuthorityTokenSpecs() []eventAuthorityTokenSpec {
@@ -67,7 +67,7 @@ func eventAuthorityTokenSpecs() []eventAuthorityTokenSpec {
 		{
 			name:     "denies the host",
 			hosts:    []string{`host-b`},
-			wantCode: opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_HOST,
+			wantCode: opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_HOST,
 		},
 		{
 			// Same host dimension as "allows the host": a cache keyed on only
@@ -75,7 +75,7 @@ func eventAuthorityTokenSpecs() []eventAuthorityTokenSpec {
 			name:     "same hosts but denying source",
 			hosts:    []string{`host-a`},
 			sources:  []string{`/var/log/other\.log`},
-			wantCode: opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_SOURCE,
+			wantCode: opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_SOURCE,
 		},
 		{name: "multi pattern allow", hosts: []string{`host-a`, `host-z`}, sources: []string{`/var/log/app\.log`}},
 	}
@@ -139,19 +139,19 @@ func TestAdmissionPreparerEventAuthorityCacheSurvivesPatternListMutation(t *test
 
 	hosts := []string{`host-a`}
 	got, err := stageAuthorityOutcome(preparer, authorityCacheRequest(hosts, nil))
-	if err != nil || got != opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNSPECIFIED {
+	if err != nil || got != opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_UNSPECIFIED {
 		t.Fatalf("initial Stage() = (%v, %v), want admitted", got, err)
 	}
 
 	hosts[0] = `host-b`
 	got, err = stageAuthorityOutcome(preparer, authorityCacheRequest(hosts, nil))
-	if err != nil || got != opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_HOST {
+	if err != nil || got != opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_HOST {
 		t.Fatalf("Stage() after in-place mutation = (%v, %v), want UNAUTHORIZED_HOST", got, err)
 	}
 
 	hosts[0] = `host-a`
 	got, err = stageAuthorityOutcome(preparer, authorityCacheRequest(hosts, nil))
-	if err != nil || got != opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNSPECIFIED {
+	if err != nil || got != opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_UNSPECIFIED {
 		t.Fatalf("Stage() after restoring the pattern = (%v, %v), want admitted", got, err)
 	}
 
@@ -159,12 +159,12 @@ func TestAdmissionPreparerEventAuthorityCacheSurvivesPatternListMutation(t *test
 	// still matches the cached key.
 	sources := []string{`/var/log/app\.log`}
 	if got, err = stageAuthorityOutcome(preparer, authorityCacheRequest(hosts, sources)); err != nil ||
-		got != opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNSPECIFIED {
+		got != opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_UNSPECIFIED {
 		t.Fatalf("Stage() with an allowing source = (%v, %v), want admitted", got, err)
 	}
 	sources = append(sources, `/var/log/zzz\.log`)
 	if got, err = stageAuthorityOutcome(preparer, authorityCacheRequest(hosts, sources)); err != nil ||
-		got != opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNSPECIFIED {
+		got != opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_UNSPECIFIED {
 		t.Fatalf("Stage() with an appended source = (%v, %v), want admitted", got, err)
 	}
 }
@@ -177,7 +177,7 @@ func TestAdmissionPreparerEventAuthorityCacheIsNotPoisonedByRejectedPatterns(t *
 
 	denying := []string{`host-b`}
 	if got, err := stageAuthorityOutcome(preparer, authorityCacheRequest(denying, nil)); err != nil ||
-		got != opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_HOST {
+		got != opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_HOST {
 		t.Fatalf("Stage() = (%v, %v), want UNAUTHORIZED_HOST", got, err)
 	}
 	for _, corrupt := range [][]string{{`(`}, {`host-b`, `host-a`}, {""}} {
@@ -186,11 +186,11 @@ func TestAdmissionPreparerEventAuthorityCacheIsNotPoisonedByRejectedPatterns(t *
 		}
 	}
 	if got, err := stageAuthorityOutcome(preparer, authorityCacheRequest(denying, nil)); err != nil ||
-		got != opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_HOST {
+		got != opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_HOST {
 		t.Fatalf("Stage() after corrupt authorities = (%v, %v), want UNAUTHORIZED_HOST", got, err)
 	}
 	if got, err := stageAuthorityOutcome(preparer, authorityCacheRequest(nil, nil)); err != nil ||
-		got != opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNSPECIFIED {
+		got != opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_UNSPECIFIED {
 		t.Fatalf("unrestricted Stage() = (%v, %v), want admitted", got, err)
 	}
 }

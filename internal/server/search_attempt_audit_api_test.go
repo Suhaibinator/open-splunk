@@ -12,10 +12,9 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
-	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/searchaudit"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -59,7 +58,7 @@ func (service *fakeSearchAttemptAudit) snapshot() (
 func TestSearchAttemptAuditProtoContractIsNarrow(t *testing.T) {
 	t.Parallel()
 
-	event := (&opensplunkv1.SearchAttemptAuditEvent{}).ProtoReflect().Descriptor()
+	event := (&opensplunk.SearchAttemptAuditEvent{}).ProtoReflect().Descriptor()
 	assertExactProtoFields(t, event.Fields(), []protoFieldContract{
 		{name: "sequence", number: 1},
 		{name: "occurred_at", number: 2},
@@ -70,10 +69,10 @@ func TestSearchAttemptAuditProtoContractIsNarrow(t *testing.T) {
 		{name: "search_job_id", number: 7},
 		{name: "knowledge_snapshot", number: 8},
 	})
-	if got := event.Fields().ByName("actor_kind").Enum().FullName(); got != "open_splunk.v1.AuditActorKind" {
+	if got := event.Fields().ByName("actor_kind").Enum().FullName(); got != "open_splunk.AuditActorKind" {
 		t.Fatalf("actor_kind enum = %q", got)
 	}
-	if got := event.Fields().ByName("actor_role").Enum().FullName(); got != "open_splunk.v1.AuditActorRole" {
+	if got := event.Fields().ByName("actor_role").Enum().FullName(); got != "open_splunk.AuditActorRole" {
 		t.Fatalf("actor_role enum = %q", got)
 	}
 	for _, forbidden := range []protoreflect.Name{
@@ -84,20 +83,20 @@ func TestSearchAttemptAuditProtoContractIsNarrow(t *testing.T) {
 		}
 	}
 
-	request := (&opensplunkv1.ListSearchAttemptAuditEventsRequest{}).
+	request := (&opensplunk.ListSearchAttemptAuditEventsRequest{}).
 		ProtoReflect().Descriptor()
 	assertExactProtoFields(t, request.Fields(), []protoFieldContract{
 		{name: "page", number: 1},
 		{name: "actor_id_filter", number: 2},
 		{name: "owner_id_filter", number: 3},
 	})
-	response := (&opensplunkv1.ListSearchAttemptAuditEventsResponse{}).
+	response := (&opensplunk.ListSearchAttemptAuditEventsResponse{}).
 		ProtoReflect().Descriptor()
 	assertExactProtoFields(t, response.Fields(), []protoFieldContract{
 		{name: "events", number: 1},
 		{name: "page", number: 2},
 	})
-	if got := int32(opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT); got != 14 {
+	if got := int32(opensplunk.ServerFeature_SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT); got != 14 {
 		t.Fatalf("search attempt audit feature number = %d, want 14", got)
 	}
 }
@@ -105,13 +104,11 @@ func TestSearchAttemptAuditProtoContractIsNarrow(t *testing.T) {
 func TestSearchAttemptAuditProjectionRetainsDetachedSnapshotReference(t *testing.T) {
 	t.Parallel()
 
-	reference := &opensplunkv1.KnowledgeSnapshotRef{
-		SnapshotSha256:               bytes.Repeat([]byte{0x21}, 32),
-		TenantCatalogRevision:        7,
-		TenantCatalogStateToken:      bytes.Repeat([]byte{0x42}, 32),
-		ObjectCount:                  2,
-		CompilerCompatibilityVersion: "0.1",
-		LookupAssetCountUnknown:      true,
+	reference := &opensplunk.KnowledgeSnapshotRef{
+		SnapshotSha256:          bytes.Repeat([]byte{0x21}, 32),
+		TenantCatalogRevision:   7,
+		TenantCatalogStateToken: bytes.Repeat([]byte{0x42}, 32),
+		ObjectCount:             2,
 	}
 	event := searchaudit.Event{
 		Sequence:   1,
@@ -131,8 +128,7 @@ func TestSearchAttemptAuditProjectionRetainsDetachedSnapshotReference(t *testing
 		t.Fatalf("searchAttemptAuditEventToProto(): %v", err)
 	}
 	if converted.GetKnowledgeSnapshot() == reference ||
-		!proto.Equal(converted.GetKnowledgeSnapshot(), reference) ||
-		!converted.GetKnowledgeSnapshot().GetLookupAssetCountUnknown() {
+		!proto.Equal(converted.GetKnowledgeSnapshot(), reference) {
 		t.Fatalf("knowledge snapshot projection = %#v", converted.GetKnowledgeSnapshot())
 	}
 	wantDigest := bytes.Clone(converted.GetKnowledgeSnapshot().GetSnapshotSha256())
@@ -142,18 +138,8 @@ func TestSearchAttemptAuditProjectionRetainsDetachedSnapshotReference(t *testing
 		t.Fatal("projected knowledge snapshot aliases the dependency event")
 	}
 
-	current := proto.Clone(converted.GetKnowledgeSnapshot()).(*opensplunkv1.KnowledgeSnapshotRef)
-	current.CompilerCompatibilityVersion = knowledgesnapshot.CompilerCompatibilityVersion
-	current.LookupAssetCountUnknown = false
-	event.KnowledgeSnapshot = current
-	currentProjection, err := searchAttemptAuditEventToProto(event, browserGateTenantID)
-	if err != nil || currentProjection.GetKnowledgeSnapshot().GetLookupAssetCountUnknown() ||
-		currentProjection.GetKnowledgeSnapshot().GetLookupAssetCount() != 0 {
-		t.Fatalf("current exact-zero snapshot projection = (%#v, %v)", currentProjection, err)
-	}
-
 	invalid := event
-	invalid.KnowledgeSnapshot = &opensplunkv1.KnowledgeSnapshotRef{
+	invalid.KnowledgeSnapshot = &opensplunk.KnowledgeSnapshotRef{
 		SnapshotSha256: []byte("short"),
 	}
 	if got, invalidErr := searchAttemptAuditEventToProto(invalid, browserGateTenantID); invalidErr == nil || got != nil {
@@ -217,8 +203,8 @@ func TestSearchAttemptAuditListUsesAdministratorTenantAndExactFilters(
 	handler := newSearchAttemptAuditTestHandler(t, service)
 	actorID := browserGateOwnerID
 	ownerID := "searched-owner"
-	input := &opensplunkv1.ListSearchAttemptAuditEventsRequest{
-		Page: &opensplunkv1.PageRequest{
+	input := &opensplunk.ListSearchAttemptAuditEventsRequest{
+		Page: &opensplunk.PageRequest{
 			PageSize:         new(uint32(1)),
 			PageToken:        new("opaque-page"),
 			IncludeTotalSize: true,
@@ -241,7 +227,7 @@ func TestSearchAttemptAuditListUsesAdministratorTenantAndExactFilters(
 		t.Fatalf("search attempt audit call = %d/%q/%#v", calls, tenantID, request)
 	}
 
-	var decoded opensplunkv1.ListSearchAttemptAuditEventsResponse
+	var decoded opensplunk.ListSearchAttemptAuditEventsResponse
 	unmarshalResponse(t, response, &decoded)
 	if len(decoded.GetEvents()) != 1 ||
 		decoded.GetPage().GetNextPageToken() != "signed-next-page" ||
@@ -251,9 +237,9 @@ func TestSearchAttemptAuditListUsesAdministratorTenantAndExactFilters(
 	}
 	event := decoded.GetEvents()[0]
 	if event.GetSequence() != 9 || !event.GetOccurredAt().AsTime().Equal(anchor) ||
-		event.GetActorKind() != opensplunkv1.AuditActorKind_AUDIT_ACTOR_KIND_BROWSER ||
+		event.GetActorKind() != opensplunk.AuditActorKind_AUDIT_ACTOR_KIND_BROWSER ||
 		event.GetActorId() != browserGateOwnerID ||
-		event.GetActorRole() != opensplunkv1.AuditActorRole_AUDIT_ACTOR_ROLE_ADMINISTRATOR ||
+		event.GetActorRole() != opensplunk.AuditActorRole_AUDIT_ACTOR_ROLE_ADMINISTRATOR ||
 		event.GetOwnerId() != ownerID || event.GetSearchJobId() != "search-job-9" {
 		t.Fatalf("search attempt audit event = %#v", event)
 	}
@@ -265,23 +251,23 @@ func TestSearchAttemptAuditListRejectsInvalidRequestsBeforeStorage(t *testing.T)
 	oversized := strings.Repeat("a", maximumIdentityBytes+1)
 	for _, test := range []struct {
 		name    string
-		request *opensplunkv1.ListSearchAttemptAuditEventsRequest
+		request *opensplunk.ListSearchAttemptAuditEventsRequest
 	}{
 		{
 			name: "oversized page",
-			request: &opensplunkv1.ListSearchAttemptAuditEventsRequest{
-				Page: &opensplunkv1.PageRequest{
+			request: &opensplunk.ListSearchAttemptAuditEventsRequest{
+				Page: &opensplunk.PageRequest{
 					PageSize: new(uint32(searchaudit.MaximumListPageSize + 1)),
 				},
 			},
 		},
-		{name: "empty actor", request: &opensplunkv1.ListSearchAttemptAuditEventsRequest{
+		{name: "empty actor", request: &opensplunk.ListSearchAttemptAuditEventsRequest{
 			ActorIdFilter: new(""),
 		}},
-		{name: "padded owner", request: &opensplunkv1.ListSearchAttemptAuditEventsRequest{
+		{name: "padded owner", request: &opensplunk.ListSearchAttemptAuditEventsRequest{
 			OwnerIdFilter: new(" owner"),
 		}},
-		{name: "oversized owner", request: &opensplunkv1.ListSearchAttemptAuditEventsRequest{
+		{name: "oversized owner", request: &opensplunk.ListSearchAttemptAuditEventsRequest{
 			OwnerIdFilter: &oversized,
 		}},
 	} {
@@ -456,7 +442,7 @@ func TestSearchAttemptAuditListRejectsOutOfContractServicePages(t *testing.T) {
 	}
 	actorID := browserGateOwnerID
 	ownerID := "owner-a"
-	input := &opensplunkv1.ListSearchAttemptAuditEventsRequest{
+	input := &opensplunk.ListSearchAttemptAuditEventsRequest{
 		ActorIdFilter: &actorID,
 		OwnerIdFilter: &ownerID,
 	}
@@ -498,14 +484,14 @@ func TestSearchAttemptAuditFeatureAndRouteFollowServiceConfiguration(t *testing.
 	bootstrap := postProto(
 		t,
 		enabled,
-		"/api/v1/system/bootstrap",
-		&opensplunkv1.GetSystemBootstrapRequest{},
+		"/api/system/bootstrap",
+		&opensplunk.GetSystemBootstrapRequest{},
 	)
-	var enabledResponse opensplunkv1.GetSystemBootstrapResponse
+	var enabledResponse opensplunk.GetSystemBootstrapResponse
 	unmarshalResponse(t, bootstrap, &enabledResponse)
 	if !slices.Contains(
 		enabledResponse.GetFeatures(),
-		opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT,
+		opensplunk.ServerFeature_SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT,
 	) {
 		t.Fatalf("enabled features = %v", enabledResponse.GetFeatures())
 	}
@@ -517,28 +503,28 @@ func TestSearchAttemptAuditFeatureAndRouteFollowServiceConfiguration(t *testing.
 		WebUI:                testUI(),
 		TenantID:             browserGateTenantID,
 		OwnerID:              browserGateOwnerID,
-		Bootstrap: BootstrapConfig{Features: []opensplunkv1.ServerFeature{
-			opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT,
+		Bootstrap: BootstrapConfig{Features: []opensplunk.ServerFeature{
+			opensplunk.ServerFeature_SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT,
 		}},
 	})
 	disabledBootstrap := postProto(
 		t,
 		disabled,
-		"/api/v1/system/bootstrap",
-		&opensplunkv1.GetSystemBootstrapRequest{},
+		"/api/system/bootstrap",
+		&opensplunk.GetSystemBootstrapRequest{},
 	)
-	var disabledResponse opensplunkv1.GetSystemBootstrapResponse
+	var disabledResponse opensplunk.GetSystemBootstrapResponse
 	unmarshalResponse(t, disabledBootstrap, &disabledResponse)
 	if slices.Contains(
 		disabledResponse.GetFeatures(),
-		opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT,
+		opensplunk.ServerFeature_SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT,
 	) {
 		t.Fatalf("disabled features = %v", disabledResponse.GetFeatures())
 	}
 	route := postAuthenticatedSearchAttemptAudit(
 		t,
 		disabled,
-		&opensplunkv1.ListSearchAttemptAuditEventsRequest{},
+		&opensplunk.ListSearchAttemptAuditEventsRequest{},
 	)
 	if route.Code != http.StatusNotFound {
 		t.Fatalf("disabled route status = %d, body = %s", route.Code, route.Body.String())
@@ -564,7 +550,7 @@ func TestSearchAttemptAuditErrorsAreSanitized(t *testing.T) {
 			response := postAuthenticatedSearchAttemptAudit(
 				t,
 				handler,
-				&opensplunkv1.ListSearchAttemptAuditEventsRequest{},
+				&opensplunk.ListSearchAttemptAuditEventsRequest{},
 			)
 			if response.Code != test.want {
 				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
@@ -591,8 +577,8 @@ func TestSearchAttemptAuditCodecEnforcesTwoMiBResponseCeiling(t *testing.T) {
 	err := newSerializedSearchAttemptAuditListCodec().Encode(
 		response,
 		&serializedSearchAttemptAuditListResponse{
-			message: &opensplunkv1.ListSearchAttemptAuditEventsResponse{
-				Events: []*opensplunkv1.SearchAttemptAuditEvent{{
+			message: &opensplunk.ListSearchAttemptAuditEventsResponse{
+				Events: []*opensplunk.SearchAttemptAuditEvent{{
 					OwnerId: strings.Repeat(
 						"x",
 						maximumSearchAttemptAuditResponseBytes+1,

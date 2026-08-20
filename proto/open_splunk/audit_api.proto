@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package open_splunk;
+
+import "open_splunk/audit.proto";
+import "open_splunk/common.proto";
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk;opensplunk";
+
+// POST /api/audit/events/list
+// Lists retained events in descending sequence order. Filters are exact, and
+// page tokens are bound to the filter set that produced them.
+message ListAuditEventsRequest {
+  PageRequest page = 1;
+  repeated AuditAction action_filters = 2;
+  optional string actor_id_filter = 3;
+  optional AuditTargetKind target_kind_filter = 4;
+}
+
+message ListAuditEventsResponse {
+  repeated AuditEvent audit_events = 1;
+  PageResponse page = 2;
+}

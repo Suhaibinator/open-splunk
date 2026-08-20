@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/buildinfo"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -38,16 +38,11 @@ func TestCollectAuthenticatesBearerTokenAndNegotiatesReady(t *testing.T) {
 	config := testServiceConfig()
 	build := validServiceBuildMetadata(t)
 	config.Build = build
-	config.ServerVersion = ""
-	expectedServerVersion := buildinfo.Identity{
-		ApplicationVersion: build.GetApplicationVersion(),
-		SourceRevision:     build.GetSourceRevision(),
-	}.DisplayVersion()
 	harness := newServiceHarness(t, config, authorizer, acceptingStore())
 	build.SourceRevision = "mutated"
 	stream := harness.stream(t, "Bearer token-value")
 
-	sendHello(t, stream, 1)
+	sendHello(t, stream)
 	response := recvResponse(t, stream)
 	ready := response.GetReady()
 	if ready == nil {
@@ -59,18 +54,13 @@ func TestCollectAuthenticatesBearerTokenAndNegotiatesReady(t *testing.T) {
 	if response.GetStreamSequence() != 1 || ready.GetStreamId() != "stream-test" {
 		t.Fatalf("ready response = %#v", response)
 	}
-	if ready.GetBuild().GetApplicationVersion() != "1.2.3" ||
-		ready.GetBuild().GetSourceRevision() != strings.Repeat("a", 40) {
+	if ready.GetBuild().GetSourceRevision() != strings.Repeat("a", 40) {
 		t.Fatalf("ready build = %+v", ready.GetBuild())
-	}
-	if ready.GetServerVersion() != expectedServerVersion ||
-		ready.GetBuild().GetAssetManifestFormatVersion() != 1 {
-		t.Fatalf("ready release identity = %q %+v", ready.GetServerVersion(), ready.GetBuild())
 	}
 	if got, want := ready.GetAuthorizedIndexes(), []string{"main", "z-last"}; !equalStrings(got, want) {
 		t.Fatalf("authorized indexes = %v, want %v", got, want)
 	}
-	if ready.GetAcknowledgmentDurability() != opensplunkv1.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED {
+	if ready.GetAcknowledgmentDurability() != opensplunk.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED {
 		t.Fatalf("ack durability = %v", ready.GetAcknowledgmentDurability())
 	}
 }
@@ -97,19 +87,18 @@ func TestCollectSupportsMaximumControlPlaneIndexNameEndToEnd(t *testing.T) {
 	})
 	harness := newServiceHarness(t, testServiceConfig(), authorizer, store)
 	stream := harness.stream(t, "Bearer maximum-index-token")
-	if err := stream.Send(&opensplunkv1.CollectRequest{
+	if err := stream.Send(&opensplunk.CollectRequest{
 		StreamSequence: 1,
 		SentAt:         timestamppb.New(validationTestNow),
-		Payload: &opensplunkv1.CollectRequest_Hello{
-			Hello: &opensplunkv1.CollectorHello{
-				CollectorId:      "collector-a",
-				InstanceId:       "instance-a",
-				ProtocolMajor:    1,
-				CollectorVersion: "collector-test",
-				StartedAt:        timestamppb.New(validationTestNow.Add(-time.Hour)),
-				Inputs: []*opensplunkv1.CollectorInputRegistration{{
+		Payload: &opensplunk.CollectRequest_Hello{
+			Hello: &opensplunk.CollectorHello{
+				CollectorId:    "collector-a",
+				InstanceId:     "instance-a",
+				SourceRevision: "development",
+				StartedAt:      timestamppb.New(validationTestNow.Add(-time.Hour)),
+				Inputs: []*opensplunk.CollectorInputRegistration{{
 					InputId:   "input-a",
-					InputType: opensplunkv1.CollectorInputType_COLLECTOR_INPUT_TYPE_FILE,
+					InputType: opensplunk.CollectorInputType_COLLECTOR_INPUT_TYPE_FILE,
 					IndexName: indexName,
 				}},
 			},
@@ -142,18 +131,10 @@ func TestCollectSupportsMaximumControlPlaneIndexNameEndToEnd(t *testing.T) {
 	}
 }
 
-func TestNewServiceRejectsContradictoryOrMalformedBuildMetadata(t *testing.T) {
+func TestNewServiceRejectsMalformedBuildMetadata(t *testing.T) {
 	t.Parallel()
 
 	config := testServiceConfig()
-	config.Build = validServiceBuildMetadata(t)
-	if _, err := NewService(config, staticTestAuthorizer(), acceptingStore()); err == nil ||
-		!strings.Contains(err.Error(), "does not match") {
-		t.Fatalf("contradictory server version error = %v", err)
-	}
-
-	config = testServiceConfig()
-	config.ServerVersion = ""
 	config.Build = validServiceBuildMetadata(t)
 	config.Build.ProtobufSchemaSha256 = "malformed"
 	if _, err := NewService(config, staticTestAuthorizer(), acceptingStore()); err == nil ||
@@ -162,9 +143,9 @@ func TestNewServiceRejectsContradictoryOrMalformedBuildMetadata(t *testing.T) {
 	}
 }
 
-func validServiceBuildMetadata(t *testing.T) *opensplunkv1.BuildMetadata {
+func validServiceBuildMetadata(t *testing.T) *opensplunk.BuildMetadata {
 	t.Helper()
-	identity, err := buildinfo.Parse("1.2.3", strings.Repeat("a", 40))
+	identity, err := buildinfo.Parse(strings.Repeat("a", 40))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,17 +153,13 @@ func validServiceBuildMetadata(t *testing.T) *opensplunkv1.BuildMetadata {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &opensplunkv1.BuildMetadata{
-		ApplicationVersion:         identity.ApplicationVersion,
+	return &opensplunk.BuildMetadata{
 		SourceRevision:             identity.SourceRevision,
 		UiBuildId:                  uiBuildID,
 		UiSha256:                   strings.Repeat("1", 64),
 		ProtobufSchemaSha256:       strings.Repeat("2", 64),
 		SqliteMigrationsSha256:     strings.Repeat("3", 64),
-		SqliteMigrationVersion:     2,
 		ClickhouseMigrationsSha256: strings.Repeat("4", 64),
-		ClickhouseMigrationVersion: 1,
-		AssetManifestFormatVersion: 1,
 	}
 }
 
@@ -226,7 +203,7 @@ func TestCollectLimitsConcurrentPreHelloStreamsPerCredential(t *testing.T) {
 	})
 	harness := newServiceHarness(t, config, authorizer, acceptingStore())
 
-	streams := []opensplunkv1.CollectorIngestService_CollectClient{
+	streams := []opensplunk.CollectorIngestService_CollectClient{
 		harness.stream(t, "Bearer collector-a-token"),
 		harness.stream(t, "Bearer collector-b-token"),
 	}
@@ -260,7 +237,7 @@ func TestCollectLimitsConcurrentPreHelloStreamsPerCredential(t *testing.T) {
 	}
 
 	third := harness.stream(t, "Bearer collector-a-token")
-	sendHello(t, third, 1)
+	sendHello(t, third)
 	if ready := recvResponse(t, third).GetReady(); ready == nil {
 		t.Fatal("released per-credential stream capacity was not reusable")
 	}
@@ -272,12 +249,12 @@ func TestCollectEnforcesHelloFirstProtocolAndStreamSequence(t *testing.T) {
 
 	tests := []struct {
 		name string
-		send func(opensplunkv1.CollectorIngestService_CollectClient) error
+		send func(opensplunk.CollectorIngestService_CollectClient) error
 		code codes.Code
 	}{
 		{
 			name: "batch before hello",
-			send: func(stream opensplunkv1.CollectorIngestService_CollectClient) error {
+			send: func(stream opensplunk.CollectorIngestService_CollectClient) error {
 				batch := validTestBatch("collector-a", "batch-a", 1, validTestEvent("event-a", "main"))
 				return stream.Send(batchRequest(1, batch))
 			},
@@ -285,24 +262,10 @@ func TestCollectEnforcesHelloFirstProtocolAndStreamSequence(t *testing.T) {
 		},
 		{
 			name: "initial sequence is not one",
-			send: func(stream opensplunkv1.CollectorIngestService_CollectClient) error {
-				return stream.Send(helloRequest(2, 1, 0))
+			send: func(stream opensplunk.CollectorIngestService_CollectClient) error {
+				return stream.Send(helloRequest(2))
 			},
 			code: codes.InvalidArgument,
-		},
-		{
-			name: "unsupported major",
-			send: func(stream opensplunkv1.CollectorIngestService_CollectClient) error {
-				return stream.Send(helloRequest(1, 2, 0))
-			},
-			code: codes.FailedPrecondition,
-		},
-		{
-			name: "unsupported future minor",
-			send: func(stream opensplunkv1.CollectorIngestService_CollectClient) error {
-				return stream.Send(helloRequest(1, 1, 1))
-			},
-			code: codes.FailedPrecondition,
 		},
 	}
 
@@ -321,17 +284,17 @@ func TestCollectEnforcesHelloFirstProtocolAndStreamSequence(t *testing.T) {
 
 	t.Run("sequence gap after hello", func(t *testing.T) {
 		stream := harness.stream(t, "Bearer good-token")
-		sendHello(t, stream, 1)
+		sendHello(t, stream)
 		_ = recvResponse(t, stream)
-		heartbeat := &opensplunkv1.CollectorHeartbeat{
+		heartbeat := &opensplunk.CollectorHeartbeat{
 			CollectorId: "collector-a",
 			InstanceId:  "instance-a",
 			ObservedAt:  timestamppb.New(validationTestNow),
 		}
-		if err := stream.Send(&opensplunkv1.CollectRequest{
+		if err := stream.Send(&opensplunk.CollectRequest{
 			StreamSequence: 3,
 			SentAt:         timestamppb.New(validationTestNow),
-			Payload:        &opensplunkv1.CollectRequest_Heartbeat{Heartbeat: heartbeat},
+			Payload:        &opensplunk.CollectRequest_Heartbeat{Heartbeat: heartbeat},
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -355,7 +318,7 @@ func TestCollectEnforcesTokenAndPayloadCollectorIdentity(t *testing.T) {
 
 	t.Run("hello must match token binding", func(t *testing.T) {
 		stream := harness.stream(t, "Bearer good-token")
-		if err := stream.Send(helloRequestFor(1, "different-collector", 1, 0)); err != nil {
+		if err := stream.Send(helloRequestFor(1, "different-collector")); err != nil {
 			t.Fatal(err)
 		}
 		_, err := stream.Recv()
@@ -366,7 +329,7 @@ func TestCollectEnforcesTokenAndPayloadCollectorIdentity(t *testing.T) {
 
 	t.Run("batch collector must match hello", func(t *testing.T) {
 		stream := harness.stream(t, "Bearer good-token")
-		if err := stream.Send(helloRequestFor(1, "bound-collector", 1, 0)); err != nil {
+		if err := stream.Send(helloRequestFor(1, "bound-collector")); err != nil {
 			t.Fatal(err)
 		}
 		_ = recvResponse(t, stream)
@@ -375,7 +338,7 @@ func TestCollectEnforcesTokenAndPayloadCollectorIdentity(t *testing.T) {
 			t.Fatal(err)
 		}
 		response := recvResponse(t, stream)
-		if response.GetBatchReject().GetCode() != opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_COLLECTOR_ID_MISMATCH {
+		if response.GetBatchReject().GetCode() != opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_COLLECTOR_ID_MISMATCH {
 			t.Fatalf("batch rejection = %#v", response.GetBatchReject())
 		}
 	})
@@ -402,7 +365,7 @@ func TestCollectReauthorizesEveryBatch(t *testing.T) {
 	})
 	harness := newServiceHarness(t, testServiceConfig(), authorizer, store)
 	stream := harness.stream(t, "Bearer token-that-will-be-revoked")
-	sendHello(t, stream, 1)
+	sendHello(t, stream)
 	_ = recvResponse(t, stream)
 	batch := validTestBatch("collector-a", "batch-after-revocation", 1, validTestEvent("event-a", "main"))
 	if err := stream.Send(batchRequest(2, batch)); err != nil {
@@ -425,7 +388,7 @@ func TestCollectPartiallyRejectsEventsAndStoresOnlyNormalizedAuthorizedEvents(t 
 	})
 	harness := newServiceHarness(t, testServiceConfig(), staticTestAuthorizer(), store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1)
+	sendHello(t, stream)
 	_ = recvResponse(t, stream)
 
 	accepted := validTestEvent("event-accepted", "main")
@@ -458,10 +421,10 @@ func TestCollectPartiallyRejectsEventsAndStoresOnlyNormalizedAuthorizedEvents(t 
 	if stored.Events[0].Event.Fields.Fields[0].Value.GetStringValue() != DefaultRedactionReplacement {
 		t.Fatalf("stored secret = %q", stored.Events[0].Event.Fields.Fields[0].Value.GetStringValue())
 	}
-	if got := ack.GetRejectedEvents()[0]; got.GetCode() != opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_INDEX || got.GetEventIndex() != 1 {
+	if got := ack.GetRejectedEvents()[0]; got.GetCode() != opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_INDEX || got.GetEventIndex() != 1 {
 		t.Fatalf("first rejection = %#v", got)
 	}
-	if got := ack.GetRejectedEvents()[1]; got.GetCode() != opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_FIELD_NAME_INVALID || got.GetEventIndex() != 2 {
+	if got := ack.GetRejectedEvents()[1]; got.GetCode() != opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_FIELD_NAME_INVALID || got.GetEventIndex() != 2 {
 		t.Fatalf("second rejection = %#v", got)
 	}
 }
@@ -486,7 +449,7 @@ func TestCollectLostAckUsesOriginalDispositionAfterAuthorizationExpansion(t *tes
 	batch := validTestBatch("collector-a", "batch-lost-ack", 1, mainEvent, auditEvent)
 
 	first := harness.stream(t, "Bearer good-token")
-	sendHello(t, first, 1)
+	sendHello(t, first)
 	_ = recvResponse(t, first)
 	if err := first.Send(batchRequest(2, batch)); err != nil {
 		t.Fatal(err)
@@ -497,7 +460,7 @@ func TestCollectLostAckUsesOriginalDispositionAfterAuthorizationExpansion(t *tes
 	_ = first.CloseSend()
 
 	second := harness.stream(t, "Bearer good-token")
-	sendHello(t, second, 1)
+	sendHello(t, second)
 	_ = recvResponse(t, second)
 	if err := second.Send(batchRequest(2, batch)); err != nil {
 		t.Fatal(err)
@@ -509,7 +472,7 @@ func TestCollectLostAckUsesOriginalDispositionAfterAuthorizationExpansion(t *tes
 	}
 	if rejection := ack.GetRejectedEvents()[0]; rejection.GetEventIndex() != 1 ||
 		rejection.GetEventId() != "event-audit" ||
-		rejection.GetCode() != opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_INDEX {
+		rejection.GetCode() != opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_INDEX {
 		t.Fatalf("retried rejection = %#v, want original unauthorized decision", rejection)
 	}
 	if store.storeCalls != 1 || store.lookupCalls != 2 {
@@ -530,7 +493,7 @@ func TestCollectRetriesTransientStoreFailureThenAcknowledgesDuplicateOutcome(t *
 		if calls == 1 {
 			return StoreResult{}, &TransientStoreError{
 				Err:        errors.New("clickhouse unavailable"),
-				Reason:     opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE,
+				Reason:     opensplunk.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE,
 				RetryAfter: 250 * time.Millisecond,
 			}
 		}
@@ -538,7 +501,7 @@ func TestCollectRetriesTransientStoreFailureThenAcknowledgesDuplicateOutcome(t *
 	})
 	harness := newServiceHarness(t, testServiceConfig(), staticTestAuthorizer(), store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1)
+	sendHello(t, stream)
 	_ = recvResponse(t, stream)
 
 	batch := validTestBatch("collector-a", "batch-retry", 1, validTestEvent("event-a", "main"))
@@ -547,7 +510,7 @@ func TestCollectRetriesTransientStoreFailureThenAcknowledgesDuplicateOutcome(t *
 	}
 	response := recvResponse(t, stream)
 	retry := response.GetRetryBatch()
-	if retry == nil || retry.GetReason() != opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE {
+	if retry == nil || retry.GetReason() != opensplunk.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE {
 		t.Fatalf("retry response = %#v", response)
 	}
 	if retry.GetRetryAfter().AsDuration() != 250*time.Millisecond {
@@ -577,7 +540,7 @@ func TestCollectRetriesChangedStreamLocalPendingIdentity(t *testing.T) {
 	})
 	harness := newServiceHarness(t, testServiceConfig(), staticTestAuthorizer(), store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1)
+	sendHello(t, stream)
 	_ = recvResponse(t, stream)
 
 	batch := validTestBatch("collector-a", "batch-retry", 1, validTestEvent("event-a", "main"))
@@ -599,7 +562,7 @@ func TestCollectRetriesChangedStreamLocalPendingIdentity(t *testing.T) {
 	}
 	response := recvResponse(t, stream)
 	if retry := response.GetRetryBatch(); retry == nil ||
-		retry.GetReason() != opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY {
+		retry.GetReason() != opensplunk.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY {
 		t.Fatalf("response = %#v, want non-terminal SERVER_BUSY retry", response)
 	}
 	if storeCalls != 1 {
@@ -629,7 +592,7 @@ func TestCollectRetryReusesFirstServerReceiveTime(t *testing.T) {
 	})
 	harness := newServiceHarness(t, cfg, staticTestAuthorizer(), store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1)
+	sendHello(t, stream)
 	_ = recvResponse(t, stream)
 	batch := validTestBatch("collector-a", "batch-retry-time", 1, validTestEvent("event-a", "main"))
 	if err := stream.Send(batchRequest(2, batch)); err != nil {
@@ -734,7 +697,7 @@ func TestProcessBatchPersistsAndReplaysConfiguredBatchRejection(t *testing.T) {
 		t.Fatal(err)
 	}
 	if rejection := first.GetBatchReject(); rejection == nil ||
-		rejection.GetCode() != opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_TOO_MANY_EVENTS {
+		rejection.GetCode() != opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_TOO_MANY_EVENTS {
 		t.Fatalf("first response = %#v", first)
 	}
 	identity, err := batchFingerprint(batch)
@@ -814,7 +777,7 @@ func TestProcessBatchRejectsDurableStateDispositionMismatch(t *testing.T) {
 			state: StoredBatchCommitted,
 			result: StoreResult{BatchRejection: batchRejection(
 				batch,
-				opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS,
+				opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS,
 				"stored rejection",
 				"events",
 				"invalid",
@@ -856,7 +819,7 @@ func TestProcessBatchHandlesRejectionWhenPendingBatchResumes(t *testing.T) {
 	)
 	validRejection := batchRejection(
 		batch,
-		opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS,
+		opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS,
 		"concurrent rejection won the durable outcome",
 		"events",
 		"invalid",
@@ -864,7 +827,7 @@ func TestProcessBatchHandlesRejectionWhenPendingBatchResumes(t *testing.T) {
 	tests := []struct {
 		name       string
 		result     StoreResult
-		wantReject *opensplunkv1.BatchReject
+		wantReject *opensplunk.BatchReject
 		wantCode   codes.Code
 	}{
 		{
@@ -874,10 +837,10 @@ func TestProcessBatchHandlesRejectionWhenPendingBatchResumes(t *testing.T) {
 		},
 		{
 			name: "malformed terminal rejection",
-			result: StoreResult{BatchRejection: &opensplunkv1.BatchReject{
+			result: StoreResult{BatchRejection: &opensplunk.BatchReject{
 				BatchId:       "different-batch",
 				BatchSequence: batch.GetBatchSequence(),
-				Code:          opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS,
+				Code:          opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS,
 				Message:       "mismatched durable identity",
 			}},
 			wantCode: codes.Internal,
@@ -992,7 +955,7 @@ func TestProcessBatchPendingResumeTransientThenDisappearsContinuesFreshOnRetry(t
 		lookupStates: []StoredBatchState{StoredBatchPending, StoredBatchNotFound},
 		resumeErr: &TransientStoreError{
 			Err:        errors.New("pending attempt is still owned"),
-			Reason:     opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
+			Reason:     opensplunk.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
 			RetryAfter: time.Millisecond,
 		},
 	}
@@ -1012,7 +975,7 @@ func TestProcessBatchPendingResumeTransientThenDisappearsContinuesFreshOnRetry(t
 		context.Background(), batch, state, firstBoundary,
 	)
 	if processErr != nil ||
-		response.GetRetryBatch().GetReason() != opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY {
+		response.GetRetryBatch().GetReason() != opensplunk.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY {
 		t.Fatalf("first processBatch = (%#v, %v), want SERVER_BUSY retry", response, processErr)
 	}
 	pending, ok := state.pendingBatches[batch.GetBatchSequence()]
@@ -1055,7 +1018,7 @@ func TestProcessBatchDurablePendingRecoveryBypassesSoftCapacityAndHigherSequence
 		lookupStates: []StoredBatchState{StoredBatchPending, StoredBatchNotFound},
 		resumeErr: &TransientStoreError{
 			Err:    errors.New("pending attempt is still owned"),
-			Reason: opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
+			Reason: opensplunk.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
 		},
 	}
 	service, err := NewService(config, staticTestAuthorizer(), store)
@@ -1126,7 +1089,7 @@ func TestProcessBatchDurablePendingRecoveryHardBoundForcesReconnect(t *testing.T
 			name: "transient forces reconnect",
 			resumeErr: &TransientStoreError{
 				Err:    errors.New("pending attempt is still owned"),
-				Reason: opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
+				Reason: opensplunk.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
 			},
 			wantedCode: codes.Unavailable,
 		},
@@ -1144,7 +1107,7 @@ func TestProcessBatchDurablePendingRecoveryHardBoundForcesReconnect(t *testing.T
 			name: "transient wrapped cancellation remains canceled",
 			resumeErr: &TransientStoreError{
 				Err:    context.Canceled,
-				Reason: opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
+				Reason: opensplunk.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
 			},
 			wantedCode: codes.Canceled,
 		},
@@ -1152,7 +1115,7 @@ func TestProcessBatchDurablePendingRecoveryHardBoundForcesReconnect(t *testing.T
 			name: "transient wrapped deadline remains deadline",
 			resumeErr: &TransientStoreError{
 				Err:    context.DeadlineExceeded,
-				Reason: opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
+				Reason: opensplunk.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
 			},
 			wantedCode: codes.DeadlineExceeded,
 		},
@@ -1251,7 +1214,7 @@ func TestProcessBatchPersistsAllEventsInvalidRejection(t *testing.T) {
 	}
 	rejection := response.GetBatchReject()
 	if rejection == nil ||
-		rejection.GetCode() != opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS {
+		rejection.GetCode() != opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS {
 		t.Fatalf("response = %#v", response)
 	}
 	if store.rejectCalls != 1 || store.storeCalls != 0 ||
@@ -1287,18 +1250,18 @@ func TestProcessBatchRejectPersistenceFailurePreservesStorePrecedence(t *testing
 	tests := []struct {
 		name        string
 		err         error
-		wantRetry   opensplunkv1.RetryBatchReason
+		wantRetry   opensplunk.RetryBatchReason
 		wantCode    codes.Code
-		wantReject  opensplunkv1.BatchRejectionCode
+		wantReject  opensplunk.BatchRejectionCode
 		wantPending int
 	}{
 		{
 			name: "transient",
 			err: &TransientStoreError{
 				Err:    errors.New("terminal outcome store unavailable"),
-				Reason: opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE,
+				Reason: opensplunk.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE,
 			},
-			wantRetry:   opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE,
+			wantRetry:   opensplunk.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE,
 			wantPending: 1,
 		},
 		{name: "canceled", err: context.Canceled, wantCode: codes.Canceled, wantPending: 1},
@@ -1306,7 +1269,7 @@ func TestProcessBatchRejectPersistenceFailurePreservesStorePrecedence(t *testing
 		{
 			name:        "durable identity conflict",
 			err:         &DurableIdentityConflictError{Err: errors.New("identity reused")},
-			wantReject:  opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_SEQUENCE_CONFLICT,
+			wantReject:  opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_SEQUENCE_CONFLICT,
 			wantPending: 0,
 		},
 	}
@@ -1332,11 +1295,11 @@ func TestProcessBatchRejectPersistenceFailurePreservesStorePrecedence(t *testing
 				context.Background(), batch, state, validationTestNow,
 			)
 			switch {
-			case test.wantRetry != opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_UNSPECIFIED:
+			case test.wantRetry != opensplunk.RetryBatchReason_RETRY_BATCH_REASON_UNSPECIFIED:
 				if processErr != nil || response.GetRetryBatch().GetReason() != test.wantRetry {
 					t.Fatalf("processBatch = (%#v, %v), want retry %v", response, processErr, test.wantRetry)
 				}
-			case test.wantReject != opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_UNSPECIFIED:
+			case test.wantReject != opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_UNSPECIFIED:
 				if processErr != nil || response.GetBatchReject().GetCode() != test.wantReject {
 					t.Fatalf("processBatch = (%#v, %v), want rejection %v", response, processErr, test.wantReject)
 				}
@@ -1468,7 +1431,7 @@ func TestProcessBatchCapacityRetriesWithoutConsumingIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	retry := response.GetRetryBatch()
-	if retry == nil || retry.GetReason() != opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY {
+	if retry == nil || retry.GetReason() != opensplunk.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY {
 		t.Fatalf("capacity response = %#v, want SERVER_BUSY RetryBatch", response)
 	}
 	if state.highestBatchSequence != 1 {
@@ -1513,7 +1476,7 @@ func TestProcessBatchMapsDurableIdentityConflictToBatchReject(t *testing.T) {
 				t.Fatal(err)
 			}
 			rejection := response.GetBatchReject()
-			if rejection == nil || rejection.GetCode() != opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_SEQUENCE_CONFLICT {
+			if rejection == nil || rejection.GetCode() != opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_SEQUENCE_CONFLICT {
 				t.Fatalf("response = %#v, want SEQUENCE_CONFLICT", response)
 			}
 			if len(state.pendingBatches) != 0 {
@@ -1536,7 +1499,7 @@ func TestProcessBatchTerminallyRejectsExpandedDurableOutbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	events := make([]*opensplunkv1.LogEvent, 20)
+	events := make([]*opensplunk.LogEvent, 20)
 	for i := range events {
 		events[i] = validTestEvent(fmt.Sprintf("event-%d", i), "main")
 		events[i].Raw = []byte(strings.Repeat("token=x ", 105))
@@ -1549,7 +1512,7 @@ func TestProcessBatchTerminallyRejectsExpandedDurableOutbox(t *testing.T) {
 		t.Fatal(err)
 	}
 	if rejection := response.GetBatchReject(); rejection == nil ||
-		rejection.GetCode() != opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE {
+		rejection.GetCode() != opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE {
 		t.Fatalf("response = %#v, want terminal BATCH_TOO_LARGE", response)
 	}
 	if store.storeCalls != 0 || store.rejectCalls != 1 {
@@ -1565,7 +1528,7 @@ func TestProcessBatchTerminallyRejectsOversizedDurableOutcome(t *testing.T) {
 		t.Fatal(err)
 	}
 	const rejectedEvents = 280
-	events := make([]*opensplunkv1.LogEvent, 0, rejectedEvents+1)
+	events := make([]*opensplunk.LogEvent, 0, rejectedEvents+1)
 	longName := strings.Repeat("n", int(HardMaxFieldNameBytes))
 	for i := range rejectedEvents {
 		nested := object(stringField(longName, "value"))
@@ -1585,7 +1548,7 @@ func TestProcessBatchTerminallyRejectsOversizedDurableOutcome(t *testing.T) {
 		t.Fatal(err)
 	}
 	if rejection := response.GetBatchReject(); rejection == nil ||
-		rejection.GetCode() != opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE {
+		rejection.GetCode() != opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE {
 		t.Fatalf("response = %#v, want terminal BATCH_TOO_LARGE", response)
 	}
 	if store.storeCalls != 0 || store.rejectCalls != 1 {
@@ -1599,7 +1562,7 @@ func TestCollectDoesNotAcknowledgePermanentStoreFailure(t *testing.T) {
 	})
 	harness := newServiceHarness(t, testServiceConfig(), staticTestAuthorizer(), store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1)
+	sendHello(t, stream)
 	_ = recvResponse(t, stream)
 	batch := validTestBatch("collector-a", "batch-failure", 1, validTestEvent("event-a", "main"))
 	if err := stream.Send(batchRequest(2, batch)); err != nil {
@@ -1621,35 +1584,30 @@ func TestCollectRejectsInvalidBatchEnvelopesBeforeStorage(t *testing.T) {
 
 	tests := []struct {
 		name string
-		edit func(*opensplunkv1.EventBatch)
-		code opensplunkv1.BatchRejectionCode
+		edit func(*opensplunk.EventBatch)
+		code opensplunk.BatchRejectionCode
 	}{
 		{
 			name: "invalid batch ID",
-			edit: func(batch *opensplunkv1.EventBatch) { batch.BatchId = "bad id" },
-			code: opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_INVALID_BATCH_ID,
+			edit: func(batch *opensplunk.EventBatch) { batch.BatchId = "bad id" },
+			code: opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_INVALID_BATCH_ID,
 		},
 		{
 			name: "digest mismatch",
-			edit: func(batch *opensplunkv1.EventBatch) { batch.EventIdsSha256[0] ^= 0xff },
-			code: opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_EVENT_ID_DIGEST_MISMATCH,
+			edit: func(batch *opensplunk.EventBatch) { batch.EventIdsSha256[0] ^= 0xff },
+			code: opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_EVENT_ID_DIGEST_MISMATCH,
 		},
 		{
 			name: "declared size mismatch",
-			edit: func(batch *opensplunkv1.EventBatch) { batch.UncompressedSizeBytes++ },
-			code: opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE,
-		},
-		{
-			name: "protocol mismatch",
-			edit: func(batch *opensplunkv1.EventBatch) { batch.ProtocolMinor++ },
-			code: opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_PROTOCOL_VIOLATION,
+			edit: func(batch *opensplunk.EventBatch) { batch.UncompressedSizeBytes++ },
+			code: opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			stream := harness.stream(t, "Bearer good-token")
-			sendHello(t, stream, 1)
+			sendHello(t, stream)
 			_ = recvResponse(t, stream)
 			batch := validTestBatch("collector-a", "batch-a", 1, validTestEvent("event-a", "main"))
 			tt.edit(batch)
@@ -1674,7 +1632,7 @@ func TestCollectEnforcesBatchEventCountAndEncodedByteLimits(t *testing.T) {
 		store := &recoverableTestStore{}
 		harness := newServiceHarness(t, cfg, staticTestAuthorizer(), store)
 		stream := harness.stream(t, "Bearer good-token")
-		sendHello(t, stream, 1)
+		sendHello(t, stream)
 		_ = recvResponse(t, stream)
 		batch := validTestBatch(
 			"collector-a", "batch-count", 1,
@@ -1684,7 +1642,7 @@ func TestCollectEnforcesBatchEventCountAndEncodedByteLimits(t *testing.T) {
 		if err := stream.Send(batchRequest(2, batch)); err != nil {
 			t.Fatal(err)
 		}
-		if got := recvResponse(t, stream).GetBatchReject().GetCode(); got != opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_TOO_MANY_EVENTS {
+		if got := recvResponse(t, stream).GetBatchReject().GetCode(); got != opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_TOO_MANY_EVENTS {
 			t.Fatalf("batch rejection = %v", got)
 		}
 		if store.rejectCalls != 1 {
@@ -1695,21 +1653,21 @@ func TestCollectEnforcesBatchEventCountAndEncodedByteLimits(t *testing.T) {
 	t.Run("encoded bytes use actual events rather than trusting declared size", func(t *testing.T) {
 		first := validTestEvent("event-one", "main")
 		second := validTestEvent("event-two", "main")
-		oneEventBytes := UncompressedEventBytes([]*opensplunkv1.LogEvent{first})
-		allEventBytes := UncompressedEventBytes([]*opensplunkv1.LogEvent{first, second})
+		oneEventBytes := UncompressedEventBytes([]*opensplunk.LogEvent{first})
+		allEventBytes := UncompressedEventBytes([]*opensplunk.LogEvent{first, second})
 		cfg := testServiceConfig()
 		cfg.Limits.MaxEventBytes = oneEventBytes
 		cfg.Limits.MaxBatchBytes = allEventBytes - 1
 		store := &recoverableTestStore{}
 		harness := newServiceHarness(t, cfg, staticTestAuthorizer(), store)
 		stream := harness.stream(t, "Bearer good-token")
-		sendHello(t, stream, 1)
+		sendHello(t, stream)
 		_ = recvResponse(t, stream)
 		batch := validTestBatch("collector-a", "batch-bytes", 1, first, second)
 		if err := stream.Send(batchRequest(2, batch)); err != nil {
 			t.Fatal(err)
 		}
-		if got := recvResponse(t, stream).GetBatchReject().GetCode(); got != opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE {
+		if got := recvResponse(t, stream).GetBatchReject().GetCode(); got != opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE {
 			t.Fatalf("batch rejection = %v", got)
 		}
 		if store.rejectCalls != 1 {
@@ -1721,7 +1679,7 @@ func TestCollectEnforcesBatchEventCountAndEncodedByteLimits(t *testing.T) {
 func TestCollectPartiallyRejectsOversizedEvent(t *testing.T) {
 	small := validTestEvent("event-small", "main")
 	large := validTestEvent("event-large", "main")
-	smallBytes := UncompressedEventBytes([]*opensplunkv1.LogEvent{small})
+	smallBytes := UncompressedEventBytes([]*opensplunk.LogEvent{small})
 	large.Raw = append(large.Raw, bytes.Repeat([]byte("x"), 128)...)
 	cfg := testServiceConfig()
 	cfg.Limits.MaxEventBytes = smallBytes + 16
@@ -1732,7 +1690,7 @@ func TestCollectPartiallyRejectsOversizedEvent(t *testing.T) {
 	})
 	harness := newServiceHarness(t, cfg, staticTestAuthorizer(), store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1)
+	sendHello(t, stream)
 	_ = recvResponse(t, stream)
 	batch := validTestBatch("collector-a", "batch-event-size", 1, small, large)
 	if err := stream.Send(batchRequest(2, batch)); err != nil {
@@ -1742,7 +1700,7 @@ func TestCollectPartiallyRejectsOversizedEvent(t *testing.T) {
 	if ack == nil || ack.GetAcceptedEventCount() != 1 || len(ack.GetRejectedEvents()) != 1 {
 		t.Fatalf("ack = %#v", ack)
 	}
-	if ack.GetRejectedEvents()[0].GetCode() != opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_EVENT_TOO_LARGE {
+	if ack.GetRejectedEvents()[0].GetCode() != opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_EVENT_TOO_LARGE {
 		t.Fatalf("event rejection = %#v", ack.GetRejectedEvents()[0])
 	}
 	if len(stored.Events) != 1 || stored.Events[0].Event.GetEventId() != "event-small" {
@@ -1756,7 +1714,7 @@ func TestCollectRejectsInconsistentStoreAccountingWithoutAck(t *testing.T) {
 	})
 	harness := newServiceHarness(t, testServiceConfig(), staticTestAuthorizer(), store)
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1)
+	sendHello(t, stream)
 	_ = recvResponse(t, stream)
 	batch := validTestBatch("collector-a", "batch-accounting", 1, validTestEvent("event-a", "main"))
 	if err := stream.Send(batchRequest(2, batch)); err != nil {
@@ -1771,7 +1729,7 @@ func TestCollectRejectsInconsistentStoreAccountingWithoutAck(t *testing.T) {
 func TestCollectRetriesStreamLocalBatchSequenceConflict(t *testing.T) {
 	harness := newServiceHarness(t, testServiceConfig(), staticTestAuthorizer(), acceptingStore())
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1)
+	sendHello(t, stream)
 	_ = recvResponse(t, stream)
 
 	first := validTestBatch("collector-a", "batch-one", 1, validTestEvent("event-one", "main"))
@@ -1785,7 +1743,7 @@ func TestCollectRetriesStreamLocalBatchSequenceConflict(t *testing.T) {
 	}
 	response := recvResponse(t, stream)
 	if retry := response.GetRetryBatch(); retry == nil ||
-		retry.GetReason() != opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY {
+		retry.GetReason() != opensplunk.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY {
 		t.Fatalf("response = %#v, want non-terminal SERVER_BUSY retry", response)
 	}
 }
@@ -1793,13 +1751,13 @@ func TestCollectRetriesStreamLocalBatchSequenceConflict(t *testing.T) {
 func TestCollectClosesCleanlyAfterGoodbye(t *testing.T) {
 	harness := newServiceHarness(t, testServiceConfig(), staticTestAuthorizer(), acceptingStore())
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1)
+	sendHello(t, stream)
 	_ = recvResponse(t, stream)
-	if err := stream.Send(&opensplunkv1.CollectRequest{
+	if err := stream.Send(&opensplunk.CollectRequest{
 		StreamSequence: 2,
 		SentAt:         timestamppb.New(validationTestNow),
-		Payload: &opensplunkv1.CollectRequest_Goodbye{Goodbye: &opensplunkv1.CollectorGoodbye{
-			Reason: opensplunkv1.CollectorGoodbyeReason_COLLECTOR_GOODBYE_REASON_SHUTDOWN,
+		Payload: &opensplunk.CollectRequest_Goodbye{Goodbye: &opensplunk.CollectorGoodbye{
+			Reason: opensplunk.CollectorGoodbyeReason_COLLECTOR_GOODBYE_REASON_SHUTDOWN,
 		}},
 	}); err != nil {
 		t.Fatal(err)
@@ -1810,7 +1768,7 @@ func TestCollectClosesCleanlyAfterGoodbye(t *testing.T) {
 }
 
 type serviceHarness struct {
-	client opensplunkv1.CollectorIngestServiceClient
+	client opensplunk.CollectorIngestServiceClient
 	server *Service
 }
 
@@ -1827,7 +1785,7 @@ func newServiceHarness(t *testing.T, cfg Config, authorizer Authorizer, store Ev
 	}
 	listener := bufconn.Listen(1 << 20)
 	server := grpc.NewServer()
-	opensplunkv1.RegisterCollectorIngestServiceServer(server, service)
+	opensplunk.RegisterCollectorIngestServiceServer(server, service)
 	go func() {
 		_ = server.Serve(listener)
 	}()
@@ -1844,12 +1802,12 @@ func newServiceHarness(t *testing.T, cfg Config, authorizer Authorizer, store Ev
 	}
 	t.Cleanup(func() { _ = conn.Close() })
 	return &serviceHarness{
-		client: opensplunkv1.NewCollectorIngestServiceClient(conn),
+		client: opensplunk.NewCollectorIngestServiceClient(conn),
 		server: service,
 	}
 }
 
-func (h *serviceHarness) stream(t *testing.T, authorization string) opensplunkv1.CollectorIngestService_CollectClient {
+func (h *serviceHarness) stream(t *testing.T, authorization string) opensplunk.CollectorIngestService_CollectClient {
 	t.Helper()
 	ctx := context.Background()
 	if authorization != "" {
@@ -1867,9 +1825,6 @@ func testServiceConfig() Config {
 	cfg.Clock = func() time.Time { return validationTestNow }
 	cfg.NewStreamID = func() string { return "stream-test" }
 	cfg.ServerInstanceID = "server-test"
-	cfg.ServerVersion = "test-version"
-	cfg.ProtocolMajor = 1
-	cfg.ProtocolMinor = 0
 	return cfg
 }
 
@@ -2124,43 +2079,50 @@ func (store *recoverableTestStore) RejectBatch(
 	return store.result, nil
 }
 
-func sendHello(t *testing.T, stream opensplunkv1.CollectorIngestService_CollectClient, major uint32) {
+func sendHello(t *testing.T, stream opensplunk.CollectorIngestService_CollectClient) {
 	t.Helper()
-	if err := stream.Send(helloRequest(1, major, 0)); err != nil {
+	if err := stream.Send(helloRequest(1)); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func helloRequest(sequence uint64, major, minor uint32) *opensplunkv1.CollectRequest {
-	return helloRequestFor(sequence, "collector-a", major, minor)
+func sendInvalidHello(t *testing.T, stream opensplunk.CollectorIngestService_CollectClient) {
+	t.Helper()
+	request := helloRequest(1)
+	request.GetHello().InstanceId = ""
+	if err := stream.Send(request); err != nil {
+		t.Fatal(err)
+	}
 }
 
-func helloRequestFor(sequence uint64, collectorID string, major, minor uint32) *opensplunkv1.CollectRequest {
-	return &opensplunkv1.CollectRequest{
+func helloRequest(sequence uint64) *opensplunk.CollectRequest {
+	return helloRequestFor(sequence, "collector-a")
+}
+
+func helloRequestFor(sequence uint64, collectorID string) *opensplunk.CollectRequest {
+	return &opensplunk.CollectRequest{
 		StreamSequence: sequence,
 		SentAt:         timestamppb.New(validationTestNow),
-		Payload: &opensplunkv1.CollectRequest_Hello{Hello: &opensplunkv1.CollectorHello{
-			CollectorId:      collectorID,
-			InstanceId:       "instance-a",
-			ProtocolMajor:    major,
-			ProtocolMinor:    minor,
-			CollectorVersion: "test-collector",
-			Hostname:         "host-a",
-			StartedAt:        timestamppb.New(validationTestNow.Add(-time.Hour)),
+		Payload: &opensplunk.CollectRequest_Hello{Hello: &opensplunk.CollectorHello{
+			CollectorId:    collectorID,
+			InstanceId:     "instance-a",
+			SourceRevision: "development",
+			Hostname:       "host-a",
+			StartedAt:      timestamppb.New(validationTestNow.Add(-time.Hour)),
 		}},
 	}
 }
 
-func batchRequest(streamSequence uint64, batch *opensplunkv1.EventBatch) *opensplunkv1.CollectRequest {
-	return &opensplunkv1.CollectRequest{
+func batchRequest(streamSequence uint64, batch *opensplunk.EventBatch) *opensplunk.CollectRequest {
+	return &opensplunk.CollectRequest{
 		StreamSequence: streamSequence,
 		SentAt:         timestamppb.New(validationTestNow),
-		Payload:        &opensplunkv1.CollectRequest_Batch{Batch: batch},
+		Payload:        &opensplunk.CollectRequest_Batch{Batch: batch},
 	}
 }
 
-func validTestBatch(collectorID, batchID string, batchSequence uint64, events ...*opensplunkv1.LogEvent) *opensplunkv1.EventBatch {
-	return &opensplunkv1.EventBatch{
+func validTestBatch(collectorID, batchID string, batchSequence uint64, events ...*opensplunk.LogEvent) *opensplunk.EventBatch {
+	return &opensplunk.EventBatch{
 		CollectorId:           collectorID,
 		BatchId:               batchID,
 		BatchSequence:         batchSequence,
@@ -2168,12 +2130,10 @@ func validTestBatch(collectorID, batchID string, batchSequence uint64, events ..
 		Events:                events,
 		UncompressedSizeBytes: UncompressedEventBytes(events),
 		EventIdsSha256:        EventIDDigest(events),
-		ProtocolMajor:         1,
-		ProtocolMinor:         0,
 	}
 }
 
-func recvResponse(t *testing.T, stream opensplunkv1.CollectorIngestService_CollectClient) *opensplunkv1.CollectResponse {
+func recvResponse(t *testing.T, stream opensplunk.CollectorIngestService_CollectClient) *opensplunk.CollectResponse {
 	t.Helper()
 	response, err := stream.Recv()
 	if err != nil {
@@ -2212,9 +2172,7 @@ func testBatchStreamState(service *Service) *streamState {
 		service.config.Clock().UTC(),
 	)
 	return &streamState{
-		collectorID:   "collector-a",
-		protocolMajor: 1,
-		protocolMinor: 0,
+		collectorID: "collector-a",
 		authorization: Authorization{
 			TenantID:          "tenant-a",
 			AuthorizedIndexes: resolved.policies,

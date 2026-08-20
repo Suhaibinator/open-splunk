@@ -23,7 +23,7 @@ import (
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 )
 
 type fakeSearchInspections struct {
@@ -162,7 +162,7 @@ func TestSearchInspectionRouteUsesAuthenticatedPrincipalAndProjectsResult(
 	result = withServerKnowledgeInspectionProvenance(t, result)
 	service := &fakeSearchInspections{result: result}
 	handler := newSearchInspectionTestHandler(t, service, BootstrapConfig{})
-	requestMessage := &opensplunkv1.InspectSearchJobRequest{
+	requestMessage := &opensplunk.InspectSearchJobRequest{
 		SearchJobId: "inspection-job",
 	}
 	requestMessage.ProtoReflect().SetUnknown(
@@ -188,7 +188,7 @@ func TestSearchInspectionRouteUsesAuthenticatedPrincipalAndProjectsResult(
 	}) || request.SearchJobID != "inspection-job" {
 		t.Fatalf("inspection call = %#v/%#v", access, request)
 	}
-	var decoded opensplunkv1.InspectSearchJobResponse
+	var decoded opensplunk.InspectSearchJobResponse
 	unmarshalResponse(t, response, &decoded)
 	assertSearchInspectionProtoMatchesResult(
 		t,
@@ -245,14 +245,14 @@ func TestSearchInspectionResultProjectionDetachesRangesAndRedactedProvenance(
 	generated.OperatorProvenance[0].GetRedactedObject().RedactedObjectOrdinal = 99
 	generated.OutputProvenance[0].OutputField = "mutated_output"
 	generated.OutputProvenance[0].GetProvenance().GetRedactedObject().Stage =
-		opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD
+		opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD
 
 	if result.Plan.Stages[0].SourceRange == nil ||
 		result.Plan.Stages[0].SourceRange.Start.Line == 99 ||
 		result.Plan.Stages[1].KnowledgeObjects[0].Ordinal == 99 ||
 		result.Plan.Stages[1].OutputProvenance[0].Field == "mutated_output" ||
 		result.Plan.Stages[1].KnowledgeObjects[0].Stage !=
-			opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION {
+			opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION {
 		t.Fatal("protobuf projection aliases service-owned logical provenance")
 	}
 }
@@ -320,7 +320,7 @@ func TestSearchInspectionRouteRejectsNonAdministratorPrincipal(
 	response := postAuthenticatedInspection(
 		t,
 		handler,
-		&opensplunkv1.InspectSearchJobRequest{
+		&opensplunk.InspectSearchJobRequest{
 			SearchJobId: "inspection-job",
 		},
 	)
@@ -369,7 +369,7 @@ func TestSearchInspectionExactRouteAndMethodPrecedeAuthentication(
 		},
 		{
 			name: "case variant", method: http.MethodPost,
-			path: "/api/v1/search/jobs/Inspect", status: http.StatusNotFound,
+			path: "/api/search/jobs/Inspect", status: http.StatusNotFound,
 		},
 		{
 			name: "wrong method", method: http.MethodGet,
@@ -473,7 +473,7 @@ func TestSearchInspectionHandlerDefensivelyRejectsUntrustedPrincipals(
 			}
 			response, err := handler.inspectSearchJob(
 				request,
-				&opensplunkv1.InspectSearchJobRequest{
+				&opensplunk.InspectSearchJobRequest{
 					SearchJobId: "inspection-job",
 				},
 			)
@@ -493,7 +493,7 @@ func TestSearchInspectionRejectsMalformedRequestsBeforeServiceWork(
 ) {
 	t.Parallel()
 
-	unknown := &opensplunkv1.InspectSearchJobRequest{
+	unknown := &opensplunk.InspectSearchJobRequest{
 		SearchJobId: "inspection-job",
 	}
 	unknown.ProtoReflect().SetUnknown(
@@ -504,31 +504,31 @@ func TestSearchInspectionRejectsMalformedRequestsBeforeServiceWork(
 	)
 	tests := []struct {
 		name    string
-		request *opensplunkv1.InspectSearchJobRequest
+		request *opensplunk.InspectSearchJobRequest
 	}{
 		{name: "nil"},
-		{name: "empty", request: &opensplunkv1.InspectSearchJobRequest{}},
+		{name: "empty", request: &opensplunk.InspectSearchJobRequest{}},
 		{
 			name: "padded",
-			request: &opensplunkv1.InspectSearchJobRequest{
+			request: &opensplunk.InspectSearchJobRequest{
 				SearchJobId: " inspection-job",
 			},
 		},
 		{
 			name: "control",
-			request: &opensplunkv1.InspectSearchJobRequest{
+			request: &opensplunk.InspectSearchJobRequest{
 				SearchJobId: "inspection\njob",
 			},
 		},
 		{
 			name: "invalid UTF-8",
-			request: &opensplunkv1.InspectSearchJobRequest{
+			request: &opensplunk.InspectSearchJobRequest{
 				SearchJobId: string([]byte{0xff}),
 			},
 		},
 		{
 			name: "oversized",
-			request: &opensplunkv1.InspectSearchJobRequest{
+			request: &opensplunk.InspectSearchJobRequest{
 				SearchJobId: strings.Repeat(
 					"x",
 					searchjobs.MaximumJobIDBytes+1,
@@ -571,7 +571,7 @@ func TestSearchInspectionRouteBoundsRequestBeforeServiceWork(t *testing.T) {
 
 	service := &fakeSearchInspections{}
 	handler := newSearchInspectionTestHandler(t, service, BootstrapConfig{})
-	payload, err := proto.Marshal(&opensplunkv1.InspectSearchJobRequest{
+	payload, err := proto.Marshal(&opensplunk.InspectSearchJobRequest{
 		SearchJobId: "inspection-job",
 	})
 	if err != nil {
@@ -697,7 +697,7 @@ func TestSearchInspectionMapsServiceErrorsWithoutLeakingDiagnostics(
 			response := postAuthenticatedInspection(
 				t,
 				handler,
-				&opensplunkv1.InspectSearchJobRequest{
+				&opensplunk.InspectSearchJobRequest{
 					SearchJobId: "inspection-job",
 				},
 			)
@@ -739,7 +739,7 @@ func TestSearchInspectionRejectsMalformedServiceResultAtomically(
 	response := postAuthenticatedInspection(
 		t,
 		handler,
-		&opensplunkv1.InspectSearchJobRequest{
+		&opensplunk.InspectSearchJobRequest{
 			SearchJobId: "inspection-job",
 		},
 	)
@@ -774,7 +774,7 @@ func TestSearchInspectionRejectsInvalidKnowledgeSummaryAtomically(
 	response := postAuthenticatedInspection(
 		t,
 		handler,
-		&opensplunkv1.InspectSearchJobRequest{SearchJobId: "inspection-job"},
+		&opensplunk.InspectSearchJobRequest{SearchJobId: "inspection-job"},
 	)
 	if response.Code != http.StatusInternalServerError {
 		t.Fatalf(
@@ -812,7 +812,7 @@ func TestSearchInspectionCancellationAfterServiceSuccessIsAtomic(
 		},
 	}
 	handler := newSearchInspectionTestHandler(t, service, BootstrapConfig{})
-	payload, err := proto.Marshal(&opensplunkv1.InspectSearchJobRequest{
+	payload, err := proto.Marshal(&opensplunk.InspectSearchJobRequest{
 		SearchJobId: "inspection-job",
 	})
 	if err != nil {
@@ -878,7 +878,7 @@ func TestSearchInspectionSerializationCapacityIsFailFastAndReleased(
 		return postAuthenticatedInspection(
 			t,
 			handler,
-			&opensplunkv1.InspectSearchJobRequest{
+			&opensplunk.InspectSearchJobRequest{
 				SearchJobId: "inspection-job",
 			},
 		)
@@ -928,7 +928,7 @@ func TestSearchInspectionCodecBoundsResponseAndReleasesPermit(
 	err := newSerializedSearchInspectionCodec().Encode(
 		response,
 		&serializedSearchInspectionResponse{
-			message: &opensplunkv1.InspectSearchJobResponse{
+			message: &opensplunk.InspectSearchJobResponse{
 				GeneratedSql: strings.Repeat(
 					"x",
 					maximumSearchInspectionResponseBytes+1,
@@ -966,8 +966,8 @@ func TestSearchInspectionFeatureAndRouteFollowServiceAvailability(
 	bootstrap := postProto(
 		t,
 		implicitlyEnabled,
-		"/api/v1/system/bootstrap",
-		&opensplunkv1.GetSystemBootstrapRequest{},
+		"/api/system/bootstrap",
+		&opensplunk.GetSystemBootstrapRequest{},
 	)
 	if bootstrap.Code != http.StatusOK {
 		t.Fatalf(
@@ -976,19 +976,19 @@ func TestSearchInspectionFeatureAndRouteFollowServiceAvailability(
 			bootstrap.Body.String(),
 		)
 	}
-	var decoded opensplunkv1.GetSystemBootstrapResponse
+	var decoded opensplunk.GetSystemBootstrapResponse
 	unmarshalResponse(t, bootstrap, &decoded)
 	if countFeature(
 		decoded.GetFeatures(),
-		opensplunkv1.ServerFeature_SERVER_FEATURE_PLAN_INSPECTION,
+		opensplunk.ServerFeature_SERVER_FEATURE_PLAN_INSPECTION,
 	) != 1 {
 		t.Fatalf("implicitly enabled features = %v", decoded.GetFeatures())
 	}
 
-	requested := BootstrapConfig{Features: []opensplunkv1.ServerFeature{
-		opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH,
-		opensplunkv1.ServerFeature_SERVER_FEATURE_PLAN_INSPECTION,
-		opensplunkv1.ServerFeature_SERVER_FEATURE_PLAN_INSPECTION,
+	requested := BootstrapConfig{Features: []opensplunk.ServerFeature{
+		opensplunk.ServerFeature_SERVER_FEATURE_SEARCH,
+		opensplunk.ServerFeature_SERVER_FEATURE_PLAN_INSPECTION,
+		opensplunk.ServerFeature_SERVER_FEATURE_PLAN_INSPECTION,
 	}}
 	enabled := newSearchInspectionTestHandler(
 		t,
@@ -998,8 +998,8 @@ func TestSearchInspectionFeatureAndRouteFollowServiceAvailability(
 	bootstrap = postProto(
 		t,
 		enabled,
-		"/api/v1/system/bootstrap",
-		&opensplunkv1.GetSystemBootstrapRequest{},
+		"/api/system/bootstrap",
+		&opensplunk.GetSystemBootstrapRequest{},
 	)
 	if bootstrap.Code != http.StatusOK {
 		t.Fatalf(
@@ -1011,7 +1011,7 @@ func TestSearchInspectionFeatureAndRouteFollowServiceAvailability(
 	unmarshalResponse(t, bootstrap, &decoded)
 	if countFeature(
 		decoded.GetFeatures(),
-		opensplunkv1.ServerFeature_SERVER_FEATURE_PLAN_INSPECTION,
+		opensplunk.ServerFeature_SERVER_FEATURE_PLAN_INSPECTION,
 	) != 1 {
 		t.Fatalf("enabled features = %v", decoded.GetFeatures())
 	}
@@ -1032,20 +1032,20 @@ func TestSearchInspectionFeatureAndRouteFollowServiceAvailability(
 	bootstrap = postProto(
 		t,
 		disabled,
-		"/api/v1/system/bootstrap",
-		&opensplunkv1.GetSystemBootstrapRequest{},
+		"/api/system/bootstrap",
+		&opensplunk.GetSystemBootstrapRequest{},
 	)
 	unmarshalResponse(t, bootstrap, &decoded)
 	if countFeature(
 		decoded.GetFeatures(),
-		opensplunkv1.ServerFeature_SERVER_FEATURE_PLAN_INSPECTION,
+		opensplunk.ServerFeature_SERVER_FEATURE_PLAN_INSPECTION,
 	) != 0 {
 		t.Fatalf("disabled features = %v", decoded.GetFeatures())
 	}
 	response := postAuthenticatedInspection(
 		t,
 		disabled,
-		&opensplunkv1.InspectSearchJobRequest{
+		&opensplunk.InspectSearchJobRequest{
 			SearchJobId: "inspection-job",
 		},
 	)
@@ -1093,14 +1093,14 @@ func TestOrdinarySearchJobGetCannotRequestInspectionData(
 
 	service := &fakeSearchInspections{}
 	handler := newSearchInspectionTestHandler(t, service, BootstrapConfig{})
-	for _, request := range []*opensplunkv1.GetSearchJobRequest{
+	for _, request := range []*opensplunk.GetSearchJobRequest{
 		{SearchJobId: "inspection-job", IncludePlan: true},
 		{SearchJobId: "inspection-job", IncludeGeneratedSql: true},
 	} {
 		response := postProto(
 			t,
 			handler,
-			"/api/v1/search/jobs/get",
+			"/api/search/jobs/get",
 			request,
 		)
 		if response.Code != http.StatusBadRequest {
@@ -1334,13 +1334,13 @@ func withServerKnowledgeInspectionProvenance(
 	}
 	extraction := searchinspection.RedactedObjectProvenance{
 		Ordinal:    0,
-		ObjectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
-		Stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
+		ObjectType: opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
+		Stage:      opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
 	}
 	alias := searchinspection.RedactedObjectProvenance{
 		Ordinal:    1,
-		ObjectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
-		Stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
+		ObjectType: opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+		Stage:      opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
 	}
 	authored := slices.Clone(result.Plan.Stages)
 	stages := make([]searchinspection.PlanStage, 0, len(authored)+2)
@@ -1385,7 +1385,7 @@ func withServerKnowledgeInspectionProvenance(
 
 func assertSearchInspectionProtoMatchesResult(
 	t *testing.T,
-	actual *opensplunkv1.InspectSearchJobResponse,
+	actual *opensplunk.InspectSearchJobResponse,
 	jobID string,
 	expected searchinspection.Result,
 ) {
@@ -1577,7 +1577,7 @@ func assertSearchInspectionProtoMatchesResult(
 
 func assertSearchInspectionRedactedProvenance(
 	t *testing.T,
-	actual *opensplunkv1.KnowledgeProvenance,
+	actual *opensplunk.KnowledgeProvenance,
 	expected searchinspection.RedactedObjectProvenance,
 ) {
 	t.Helper()
@@ -1602,8 +1602,8 @@ func assertHTTPErrorStatus(t *testing.T, err error, status int) {
 }
 
 func countFeature(
-	features []opensplunkv1.ServerFeature,
-	target opensplunkv1.ServerFeature,
+	features []opensplunk.ServerFeature,
+	target opensplunk.ServerFeature,
 ) int {
 	count := 0
 	for _, feature := range features {

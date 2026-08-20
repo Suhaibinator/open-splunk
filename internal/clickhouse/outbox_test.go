@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"google.golang.org/protobuf/proto"
 )
@@ -114,7 +114,7 @@ func TestStoreOutboxRejectsCorruptionAndInconsistentDisposition(t *testing.T) {
 	}
 
 	batch.OriginalEventCount = 1
-	batch.RejectedEvents = []*opensplunkv1.EventRejection{{EventIndex: 0}}
+	batch.RejectedEvents = []*opensplunk.EventRejection{{EventIndex: 0}}
 	if _, err := encodeReservationMetadata([][]any{make([]any, len(eventInsertColumns))}, batch); err == nil {
 		t.Fatal("inconsistent accepted/rejected disposition was accepted")
 	}
@@ -160,16 +160,16 @@ func TestReservationMetadataRoundTripPreservesOriginalRejections(t *testing.T) {
 	row[2] = "main"
 	row[4] = indexTime
 	row[eventExpiresAtColumn] = indexTime.Add(72 * time.Hour)
-	rejection := &opensplunkv1.EventRejection{
+	rejection := &opensplunk.EventRejection{
 		EventIndex: 1,
 		EventId:    "rejected",
-		Code:       opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_INDEX,
+		Code:       opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_INDEX,
 		Message:    "original policy decision",
 	}
 	batch := ingest.StoreBatch{
 		BatchSequence:      41,
 		OriginalEventCount: 2,
-		RejectedEvents:     []*opensplunkv1.EventRejection{rejection},
+		RejectedEvents:     []*opensplunk.EventRejection{rejection},
 	}
 	encoded, err := encodeReservationMetadata([][]any{row}, batch)
 	if err != nil {

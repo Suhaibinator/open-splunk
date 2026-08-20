@@ -16,7 +16,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/collector/config"
 	"github.com/Suhaibinator/open-splunk/internal/collector/input"
 	"github.com/Suhaibinator/open-splunk/internal/collector/sender"
@@ -96,8 +96,8 @@ type blockedFirstAppendQueue struct {
 }
 
 func (q *blockedFirstAppendQueue) Append(
-	events []*opensplunkv1.LogEvent,
-) (*opensplunkv1.EventBatch, error) {
+	events []*opensplunk.LogEvent,
+) (*opensplunk.EventBatch, error) {
 	block := false
 	q.first.Do(func() {
 		block = true
@@ -246,7 +246,7 @@ func TestDaemonFileToWALWithheldAckKeepsDiscoveryCheckpoint(t *testing.T) {
 	// the decoded, index-routed events.
 	q, err := wal.Open(wal.Options{
 		Dir: filepath.Join(stateDir, walSubdir), Sync: wal.SyncAlways,
-		CollectorID: "cid", ProtocolMajor: protocolMajor, ProtocolMinor: protocolMinor,
+		CollectorID: "cid",
 	})
 	if err != nil {
 		t.Fatalf("reopen queue: %v", err)
@@ -622,7 +622,7 @@ func TestDaemonRedactsSecretsBeforeOfflineWALAppend(t *testing.T) {
 
 	queue, err := wal.Open(wal.Options{
 		Dir: filepath.Join(stateDir, walSubdir), Sync: wal.SyncAlways,
-		CollectorID: "cid", ProtocolMajor: protocolMajor, ProtocolMinor: protocolMinor,
+		CollectorID: "cid",
 	})
 	if err != nil {
 		t.Fatalf("reopen queue: %v", err)
@@ -661,7 +661,7 @@ func TestDaemonRedactsSecretsBeforeOfflineWALAppend(t *testing.T) {
 		t.Fatalf("offline WAL redaction lost safe data or its replacement: raw=%q message=%q",
 			event.GetRaw(), event.GetMessage())
 	}
-	fields := make(map[string]*opensplunkv1.TypedValue, len(event.GetFields().GetFields()))
+	fields := make(map[string]*opensplunk.TypedValue, len(event.GetFields().GetFields()))
 	for _, field := range event.GetFields().GetFields() {
 		fields[field.GetName()] = field.GetValue()
 	}
@@ -740,7 +740,7 @@ func TestBuildDurableRedactorRejectsUnsupportedProcessor(t *testing.T) {
 	t.Parallel()
 
 	unsupported := pipeFunc{
-		fn: func(event *opensplunkv1.LogEvent) (*opensplunkv1.LogEvent, error) {
+		fn: func(event *opensplunk.LogEvent) (*opensplunk.LogEvent, error) {
 			return event, nil
 		},
 	}
@@ -848,7 +848,7 @@ func TestDurableRedactorPreventsRenameDeclassification(t *testing.T) {
 				!bytes.Contains(out.GetRaw(), []byte(`"safe":"kept"`)) {
 				t.Fatalf("durable rename declassification = raw:%q event:%+v", out.GetRaw(), out)
 			}
-			var final *opensplunkv1.TypedValue
+			var final *opensplunk.TypedValue
 			for _, field := range out.GetFields().GetFields() {
 				if field.GetName() == test.finalField {
 					final = field.GetValue()
@@ -1104,10 +1104,10 @@ func TestDurableRedactorSeparatesConstantAliasFromRawAndMessageProvenance(t *tes
 			decoder, decodeErr := NewDecoder(DecodeConfig{
 				Format: test.format, InputID: "app", IndexName: "main",
 				Source: "s", Sourcetype: "st", Host: "h",
-				ConstantFields: &opensplunkv1.TypedObject{Fields: []*opensplunkv1.TypedObjectField{{
+				ConstantFields: &opensplunk.TypedObject{Fields: []*opensplunk.TypedObjectField{{
 					Name: "userID",
-					Value: &opensplunkv1.TypedValue{
-						Kind: &opensplunkv1.TypedValue_StringValue{StringValue: "constant-secret"},
+					Value: &opensplunk.TypedValue{
+						Kind: &opensplunk.TypedValue_StringValue{StringValue: "constant-secret"},
 					},
 				}}},
 			})
@@ -1425,7 +1425,7 @@ func TestInputHealthSnapshotSanitizesFleetBoundary(t *testing.T) {
 	inputs := []*inputRuntime{{
 		id: "input",
 		manager: fixedHealthManager{health: input.Health{
-			InputID: "input", State: opensplunkv1.CollectorInputState_COLLECTOR_INPUT_STATE_ERROR,
+			InputID: "input", State: opensplunk.CollectorInputState_COLLECTOR_INPUT_STATE_ERROR,
 			StatusMessage: invalidStatus, DiscoveredSources: 1, ActiveSources: 2,
 			EventsReadTotal: ^uint64(0), BytesReadTotal: ^uint64(0),
 		}},
@@ -1484,7 +1484,7 @@ func TestCollectorBoundaryTextValidation(t *testing.T) {
 
 // testEvent decodes raw at the given position into a LogEvent using a decoder
 // with fixed metadata, at a fixed collection time so encoded sizes are stable.
-func testEvent(t *testing.T, dec *Decoder, start, end, line uint64, raw string) *opensplunkv1.LogEvent {
+func testEvent(t *testing.T, dec *Decoder, start, end, line uint64, raw string) *opensplunk.LogEvent {
 	t.Helper()
 	pos := SourcePosition{FileIdentity: "dev=1;ino=2;fp=abc", StartOffset: start, EndOffset: end, LineNumber: line}
 	ev, err := dec.Decode([]byte(raw), pos, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
@@ -1529,7 +1529,6 @@ func TestDaemonBackpressureNoDrop(t *testing.T) {
 		MaxQueueBytes: oneBatch + 64,
 		Sync:          wal.SyncAlways,
 		CollectorID:   "cid",
-		ProtocolMajor: protocolMajor,
 	})
 	if err != nil {
 		t.Fatalf("open queue: %v", err)
@@ -1689,7 +1688,7 @@ func TestDaemonOutOfOrderTerminalAckDoesNotAdvancePastGap(t *testing.T) {
 func newTerminalCheckpointTestDaemon(t *testing.T) (*Daemon, input.FileIdentity) {
 	t.Helper()
 	q, err := wal.Open(wal.Options{
-		Dir: t.TempDir(), Sync: wal.SyncAlways, CollectorID: "cid", ProtocolMajor: protocolMajor,
+		Dir: t.TempDir(), Sync: wal.SyncAlways, CollectorID: "cid",
 	})
 	if err != nil {
 		t.Fatalf("wal.Open: %v", err)
@@ -1735,7 +1734,7 @@ func TestPendingBatchKeepsIdenticalFilesIndependentByInput(t *testing.T) {
 	batch := &pendingBatch{}
 	for inputID, offset := range map[string]uint64{"input-a": 100, "input-b": 200} {
 		batch.add(processedEvent{
-			event:   &opensplunkv1.LogEvent{EventId: inputID},
+			event:   &opensplunk.LogEvent{EventId: inputID},
 			inputID: inputID, identity: identity, path: "/logs/shared.log",
 			endOffset: offset, lineNumber: 1, nextLineNumber: 2, size: 1,
 		})
@@ -1757,7 +1756,7 @@ func TestPendingBatchKeepsIdenticalFilesIndependentByInput(t *testing.T) {
 
 type appendFailQueue struct{ wal.Queue }
 
-func (appendFailQueue) Append([]*opensplunkv1.LogEvent) (*opensplunkv1.EventBatch, error) {
+func (appendFailQueue) Append([]*opensplunk.LogEvent) (*opensplunk.EventBatch, error) {
 	return nil, errors.New("simulated WAL IO failure")
 }
 
@@ -1768,7 +1767,7 @@ func TestBatcherReturnsFatalAppendFailure(t *testing.T) {
 		batchMaxBytes: 1024, batchLinger: time.Hour,
 	}
 	processed := make(chan processedEvent, 1)
-	processed <- processedEvent{event: &opensplunkv1.LogEvent{EventId: "e1"}, size: 10}
+	processed <- processedEvent{event: &opensplunk.LogEvent{EventId: "e1"}, size: 10}
 	close(processed)
 	if err := d.runBatcher(context.Background(), processed); err == nil || !strings.Contains(err.Error(), "durable append failed") {
 		t.Fatalf("runBatcher error = %v, want fatal durable append failure", err)
@@ -1777,7 +1776,7 @@ func TestBatcherReturnsFatalAppendFailure(t *testing.T) {
 
 func TestBatcherFlushesBeforeCrossingByteCap(t *testing.T) {
 	t.Parallel()
-	q, err := wal.Open(wal.Options{Dir: t.TempDir(), Sync: wal.SyncAlways, CollectorID: "cid", ProtocolMajor: protocolMajor})
+	q, err := wal.Open(wal.Options{Dir: t.TempDir(), Sync: wal.SyncAlways, CollectorID: "cid"})
 	if err != nil {
 		t.Fatalf("open queue: %v", err)
 	}
@@ -1796,7 +1795,7 @@ func TestBatcherFlushesBeforeCrossingByteCap(t *testing.T) {
 	processed := make(chan processedEvent, 2)
 	for i := range 2 {
 		processed <- processedEvent{
-			event:   &opensplunkv1.LogEvent{EventId: fmt.Sprintf("e%d", i)},
+			event:   &opensplunk.LogEvent{EventId: fmt.Sprintf("e%d", i)},
 			inputID: "input", identity: identity, endOffset: uint64(i + 1), size: 6,
 		}
 	}
@@ -1816,7 +1815,7 @@ func TestDaemonGracefulShutdownFlushesPartialBatch(t *testing.T) {
 	dec := testDecoder(t)
 	identity := input.FileIdentity{Device: 3, Inode: 4, Fingerprint: "xyz"}
 
-	q, err := wal.Open(wal.Options{Dir: t.TempDir(), Sync: wal.SyncAlways, CollectorID: "cid", ProtocolMajor: protocolMajor})
+	q, err := wal.Open(wal.Options{Dir: t.TempDir(), Sync: wal.SyncAlways, CollectorID: "cid"})
 	if err != nil {
 		t.Fatalf("open queue: %v", err)
 	}
@@ -1872,14 +1871,14 @@ func TestDaemonGracefulShutdownFlushesPartialBatch(t *testing.T) {
 
 // measureBatchBytes returns the on-disk size of a single-event batch, used to
 // size a bounded queue precisely for the backpressure test.
-func measureBatchBytes(t *testing.T, ev *opensplunkv1.LogEvent) uint64 {
+func measureBatchBytes(t *testing.T, ev *opensplunk.LogEvent) uint64 {
 	t.Helper()
-	q, err := wal.Open(wal.Options{Dir: t.TempDir(), Sync: wal.SyncAlways, CollectorID: "cid", ProtocolMajor: protocolMajor})
+	q, err := wal.Open(wal.Options{Dir: t.TempDir(), Sync: wal.SyncAlways, CollectorID: "cid"})
 	if err != nil {
 		t.Fatalf("measure open: %v", err)
 	}
 	defer q.Close()
-	if _, err := q.Append([]*opensplunkv1.LogEvent{ev}); err != nil {
+	if _, err := q.Append([]*opensplunk.LogEvent{ev}); err != nil {
 		t.Fatalf("measure append: %v", err)
 	}
 	return q.Stats().QueuedBytes

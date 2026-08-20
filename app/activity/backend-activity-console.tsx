@@ -10,9 +10,9 @@ import {
 } from "react";
 import Link from "next/link";
 
-import type { SearchHistoryFilter } from "@/gen/ts/open_splunk/v1/history_api";
-import { SearchJobState } from "@/gen/ts/open_splunk/v1/search";
-import { ServerFeature } from "@/gen/ts/open_splunk/v1/system_api";
+import type { SearchHistoryFilter } from "@/gen/ts/open_splunk/history_api";
+import { SearchJobState } from "@/gen/ts/open_splunk/search";
+import { ServerFeature } from "@/gen/ts/open_splunk/system_api";
 import {
   createOpenSplunkApiClient,
   getSystemBootstrap,

@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/collector/framing"
 	"github.com/Suhaibinator/open-splunk/internal/collectorlimits"
 )
@@ -709,7 +709,7 @@ func TestManagerAppendWhileTailing(t *testing.T) {
 	}
 
 	waitFor(t, "healthy state", func() bool {
-		return h.mgr.Health().State == opensplunkv1.CollectorInputState_COLLECTOR_INPUT_STATE_HEALTHY
+		return h.mgr.Health().State == opensplunk.CollectorInputState_COLLECTOR_INPUT_STATE_HEALTHY
 	})
 }
 
@@ -767,7 +767,7 @@ func TestManagerStartAtEndReadsFileCreatedAfterStartup(t *testing.T) {
 	}, newStore(t))
 
 	waitFor(t, "initial scan completed", func() bool {
-		return h.mgr.Health().State == opensplunkv1.CollectorInputState_COLLECTOR_INPUT_STATE_MISSING
+		return h.mgr.Health().State == opensplunk.CollectorInputState_COLLECTOR_INPUT_STATE_MISSING
 	})
 	writeFileT(t, p, "created-before-discovery-1\ncreated-before-discovery-2\n")
 	h.waitForTexts([]string{"created-before-discovery-1", "created-before-discovery-2"})
@@ -2002,18 +2002,18 @@ func TestManagerHealthRetainsTailerErrorAcrossSuccessfulDiscoveryPolls(t *testin
 	m.setReadError("source", "/logs/app.log", errors.New("injected ReadAt failure"))
 	m.updateState(1, "")
 	first := m.Health()
-	if first.State != opensplunkv1.CollectorInputState_COLLECTOR_INPUT_STATE_ERROR ||
+	if first.State != opensplunk.CollectorInputState_COLLECTOR_INPUT_STATE_ERROR ||
 		!strings.Contains(first.StatusMessage, "injected ReadAt failure") {
 		t.Fatalf("health after tailer failure = %+v, want persistent ERROR", first)
 	}
 	m.updateState(1, "")
 	second := m.Health()
-	if second.State != opensplunkv1.CollectorInputState_COLLECTOR_INPUT_STATE_ERROR {
+	if second.State != opensplunk.CollectorInputState_COLLECTOR_INPUT_STATE_ERROR {
 		t.Fatalf("successful discovery overwrote tailer error: %+v", second)
 	}
 	m.clearReadError("source")
 	m.updateState(1, "")
-	if got := m.Health(); got.State != opensplunkv1.CollectorInputState_COLLECTOR_INPUT_STATE_HEALTHY {
+	if got := m.Health(); got.State != opensplunk.CollectorInputState_COLLECTOR_INPUT_STATE_HEALTHY {
 		t.Fatalf("health after source recovery = %+v, want HEALTHY", got)
 	}
 }
@@ -2116,7 +2116,7 @@ func TestManagerReportsMatchedNonRegularSourceAsUnreadable(t *testing.T) {
 	}, newStore(t))
 	waitFor(t, "nonregular source health", func() bool {
 		health := h.mgr.Health()
-		return health.State == opensplunkv1.CollectorInputState_COLLECTOR_INPUT_STATE_UNREADABLE &&
+		return health.State == opensplunk.CollectorInputState_COLLECTOR_INPUT_STATE_UNREADABLE &&
 			strings.Contains(health.StatusMessage, "not a regular file")
 	})
 }
@@ -2546,7 +2546,7 @@ func TestManagerDeletionDrainsAndStops(t *testing.T) {
 	}
 	waitFor(t, "input missing after deletion", func() bool {
 		hl := h.mgr.Health()
-		return hl.State == opensplunkv1.CollectorInputState_COLLECTOR_INPUT_STATE_MISSING &&
+		return hl.State == opensplunk.CollectorInputState_COLLECTOR_INPUT_STATE_MISSING &&
 			hl.ActiveSources == 0
 	})
 }
@@ -2945,14 +2945,14 @@ func TestManagerDelayedCreation(t *testing.T) {
 
 	waitFor(t, "missing while absent", func() bool {
 		hl := h.mgr.Health()
-		return hl.State == opensplunkv1.CollectorInputState_COLLECTOR_INPUT_STATE_MISSING &&
+		return hl.State == opensplunk.CollectorInputState_COLLECTOR_INPUT_STATE_MISSING &&
 			hl.StatusMessage != ""
 	})
 
 	writeFileT(t, p, "hello\n")
 	h.waitForTexts([]string{"hello"})
 	waitFor(t, "healthy after creation", func() bool {
-		return h.mgr.Health().State == opensplunkv1.CollectorInputState_COLLECTOR_INPUT_STATE_HEALTHY
+		return h.mgr.Health().State == opensplunk.CollectorInputState_COLLECTOR_INPUT_STATE_HEALTHY
 	})
 }
 

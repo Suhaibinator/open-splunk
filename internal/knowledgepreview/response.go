@@ -9,7 +9,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgevalidation"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"google.golang.org/protobuf/proto"
@@ -20,10 +20,10 @@ import (
 // it and binds it to the original job ID and selected row limit.
 type ResponseInput struct {
 	Validation   knowledgevalidation.SealedValidateResponse
-	BeforeSchema *opensplunkv1.ResultSchema
-	AfterSchema  *opensplunkv1.ResultSchema
-	BeforeRows   []*opensplunkv1.ResultRow
-	AfterRows    []*opensplunkv1.ResultRow
+	BeforeSchema *opensplunk.ResultSchema
+	AfterSchema  *opensplunk.ResultSchema
+	BeforeRows   []*opensplunk.ResultRow
+	AfterRows    []*opensplunk.ResultRow
 	Truncated    bool
 	JobID        string
 	MaximumRows  uint32
@@ -34,7 +34,7 @@ type ResponseInput struct {
 // plus all row/schema invariants before detaching.
 type SealedResponse struct {
 	validation  knowledgevalidation.SealedValidateResponse
-	response    *opensplunkv1.PreviewKnowledgeObjectResponse
+	response    *opensplunk.PreviewKnowledgeObjectResponse
 	wire        []byte
 	jobID       string
 	maximumRows uint32
@@ -52,7 +52,7 @@ func SealResponse(ctx context.Context, input ResponseInput) (SealedResponse, err
 	if err != nil || validation == nil || validation.GetResult() == nil {
 		return SealedResponse{}, ErrInvariant
 	}
-	transient := opensplunkv1.PreviewKnowledgeObjectResponse{
+	transient := opensplunk.PreviewKnowledgeObjectResponse{
 		Validation:            validation.GetResult(),
 		BeforeSchema:          input.BeforeSchema,
 		AfterSchema:           input.AfterSchema,
@@ -70,7 +70,7 @@ func SealResponse(ctx context.Context, input ResponseInput) (SealedResponse, err
 	if err := ctx.Err(); err != nil {
 		return SealedResponse{}, err
 	}
-	response := &opensplunkv1.PreviewKnowledgeObjectResponse{
+	response := &opensplunk.PreviewKnowledgeObjectResponse{
 		Validation:            validation.GetResult(),
 		BeforeSchema:          cloneSchema(input.BeforeSchema),
 		AfterSchema:           cloneSchema(input.AfterSchema),
@@ -103,7 +103,7 @@ func SealResponse(ctx context.Context, input ResponseInput) (SealedResponse, err
 
 // Proto returns a fully detached response after proving that neither the
 // retained protobuf nor its validation authority changed after sealing.
-func (sealed SealedResponse) Proto(ctx context.Context) (*opensplunkv1.PreviewKnowledgeObjectResponse, error) {
+func (sealed SealedResponse) Proto(ctx context.Context) (*opensplunk.PreviewKnowledgeObjectResponse, error) {
 	if ctx == nil || sealed.response == nil || len(sealed.wire) == 0 ||
 		sealed.jobID == "" || sealed.maximumRows == 0 ||
 		sealed.maximumRows > MaximumRows {
@@ -130,7 +130,7 @@ func (sealed SealedResponse) Proto(ctx context.Context) (*opensplunkv1.PreviewKn
 		!bytes.Equal(wire, sealed.wire) {
 		return nil, ErrInvariant
 	}
-	cloned, ok := proto.Clone(sealed.response).(*opensplunkv1.PreviewKnowledgeObjectResponse)
+	cloned, ok := proto.Clone(sealed.response).(*opensplunk.PreviewKnowledgeObjectResponse)
 	if !ok || cloned == nil {
 		return nil, ErrInvariant
 	}
@@ -147,8 +147,8 @@ func (sealed SealedResponse) DeterministicBytes() []byte {
 
 func validateResponse(
 	ctx context.Context,
-	response *opensplunkv1.PreviewKnowledgeObjectResponse,
-	validation *opensplunkv1.ValidateKnowledgeObjectResponse,
+	response *opensplunk.PreviewKnowledgeObjectResponse,
+	validation *opensplunk.ValidateKnowledgeObjectResponse,
 	jobID string,
 	maximumRows uint32,
 ) error {
@@ -186,7 +186,7 @@ func validateResponse(
 	return validateRows(ctx, response.GetAfterRows(), response.GetAfterSchema(), jobID, maximumRows)
 }
 
-func validateSchema(schema *opensplunkv1.ResultSchema, jobID string) error {
+func validateSchema(schema *opensplunk.ResultSchema, jobID string) error {
 	if schema == nil || len(schema.ProtoReflect().GetUnknown()) != 0 ||
 		schema.GetSchemaId() != jobID || schema.GetRevision() != 1 ||
 		!validResultKind(schema.GetResultKind()) || len(schema.GetColumns()) == 0 ||
@@ -212,8 +212,8 @@ func validateSchema(schema *opensplunkv1.ResultSchema, jobID string) error {
 
 func validateRows(
 	ctx context.Context,
-	rows []*opensplunkv1.ResultRow,
-	schema *opensplunkv1.ResultSchema,
+	rows []*opensplunk.ResultRow,
+	schema *opensplunk.ResultSchema,
 	jobID string,
 	maximumRows uint32,
 ) error {
@@ -242,38 +242,38 @@ func validateRows(
 	return nil
 }
 
-func validateTypedValue(value *opensplunkv1.TypedValue, depth int) error {
+func validateTypedValue(value *opensplunk.TypedValue, depth int) error {
 	if value == nil || depth > 32 || len(value.ProtoReflect().GetUnknown()) != 0 {
 		return ErrInvariant
 	}
 	switch selected := value.GetKind().(type) {
-	case *opensplunkv1.TypedValue_NullValue:
-		if selected.NullValue != opensplunkv1.NullValue_NULL_VALUE_NULL {
+	case *opensplunk.TypedValue_NullValue:
+		if selected.NullValue != opensplunk.NullValue_NULL_VALUE_NULL {
 			return ErrInvariant
 		}
-	case *opensplunkv1.TypedValue_StringValue:
+	case *opensplunk.TypedValue_StringValue:
 		if !utf8.ValidString(selected.StringValue) {
 			return ErrInvariant
 		}
-	case *opensplunkv1.TypedValue_Sint64Value,
-		*opensplunkv1.TypedValue_Uint64Value,
-		*opensplunkv1.TypedValue_DoubleValue,
-		*opensplunkv1.TypedValue_BoolValue,
-		*opensplunkv1.TypedValue_BytesValue:
+	case *opensplunk.TypedValue_Sint64Value,
+		*opensplunk.TypedValue_Uint64Value,
+		*opensplunk.TypedValue_DoubleValue,
+		*opensplunk.TypedValue_BoolValue,
+		*opensplunk.TypedValue_BytesValue:
 		return nil
-	case *opensplunkv1.TypedValue_TimestampValue:
+	case *opensplunk.TypedValue_TimestampValue:
 		if selected.TimestampValue == nil ||
 			len(selected.TimestampValue.ProtoReflect().GetUnknown()) != 0 ||
 			selected.TimestampValue.CheckValid() != nil {
 			return ErrInvariant
 		}
-	case *opensplunkv1.TypedValue_DurationValue:
+	case *opensplunk.TypedValue_DurationValue:
 		if selected.DurationValue == nil ||
 			len(selected.DurationValue.ProtoReflect().GetUnknown()) != 0 ||
 			selected.DurationValue.CheckValid() != nil {
 			return ErrInvariant
 		}
-	case *opensplunkv1.TypedValue_DecimalValue:
+	case *opensplunk.TypedValue_DecimalValue:
 		if selected.DecimalValue == nil ||
 			len(selected.DecimalValue.ProtoReflect().GetUnknown()) != 0 {
 			return ErrInvariant
@@ -281,7 +281,7 @@ func validateTypedValue(value *opensplunkv1.TypedValue, depth int) error {
 		if _, err := searchjobs.DecimalValue(selected.DecimalValue.GetValue()); err != nil {
 			return ErrInvariant
 		}
-	case *opensplunkv1.TypedValue_ListValue:
+	case *opensplunk.TypedValue_ListValue:
 		if selected.ListValue == nil ||
 			len(selected.ListValue.ProtoReflect().GetUnknown()) != 0 {
 			return ErrInvariant
@@ -291,7 +291,7 @@ func validateTypedValue(value *opensplunkv1.TypedValue, depth int) error {
 				return err
 			}
 		}
-	case *opensplunkv1.TypedValue_ObjectValue:
+	case *opensplunk.TypedValue_ObjectValue:
 		if selected.ObjectValue == nil ||
 			len(selected.ObjectValue.ProtoReflect().GetUnknown()) != 0 {
 			return ErrInvariant
@@ -316,42 +316,42 @@ func validateTypedValue(value *opensplunkv1.TypedValue, depth int) error {
 	return nil
 }
 
-func validResultKind(value opensplunkv1.ResultSetKind) bool {
+func validResultKind(value opensplunk.ResultSetKind) bool {
 	switch value {
-	case opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS,
-		opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS,
-		opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES:
+	case opensplunk.ResultSetKind_RESULT_SET_KIND_EVENTS,
+		opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS,
+		opensplunk.ResultSetKind_RESULT_SET_KIND_TIME_SERIES:
 		return true
 	default:
 		return false
 	}
 }
 
-func validColumnValueType(value opensplunkv1.ValueType) bool {
-	return value >= opensplunkv1.ValueType_VALUE_TYPE_NULL &&
-		value <= opensplunkv1.ValueType_VALUE_TYPE_MIXED
+func validColumnValueType(value opensplunk.ValueType) bool {
+	return value >= opensplunk.ValueType_VALUE_TYPE_NULL &&
+		value <= opensplunk.ValueType_VALUE_TYPE_MIXED
 }
 
-func validSemanticType(value opensplunkv1.ColumnSemanticType) bool {
-	return value >= opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_UNSPECIFIED &&
-		value <= opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_DIMENSION
+func validSemanticType(value opensplunk.ColumnSemanticType) bool {
+	return value >= opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_UNSPECIFIED &&
+		value <= opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_DIMENSION
 }
 
-func cloneSchema(input *opensplunkv1.ResultSchema) *opensplunkv1.ResultSchema {
+func cloneSchema(input *opensplunk.ResultSchema) *opensplunk.ResultSchema {
 	if input == nil {
 		return nil
 	}
-	cloned, _ := proto.Clone(input).(*opensplunkv1.ResultSchema)
+	cloned, _ := proto.Clone(input).(*opensplunk.ResultSchema)
 	return cloned
 }
 
-func cloneRows(input []*opensplunkv1.ResultRow) []*opensplunkv1.ResultRow {
+func cloneRows(input []*opensplunk.ResultRow) []*opensplunk.ResultRow {
 	if input == nil {
 		return nil
 	}
-	result := make([]*opensplunkv1.ResultRow, len(input))
+	result := make([]*opensplunk.ResultRow, len(input))
 	for index, row := range input {
-		result[index], _ = proto.Clone(row).(*opensplunkv1.ResultRow)
+		result[index], _ = proto.Clone(row).(*opensplunk.ResultRow)
 	}
 	return slices.Clone(result)
 }

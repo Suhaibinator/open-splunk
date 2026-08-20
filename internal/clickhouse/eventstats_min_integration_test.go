@@ -9,7 +9,7 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/chcol"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -30,7 +30,7 @@ func testEventStatsMinimumAgainstClickHouse(
 
 	newEvent := func(
 		id string,
-		fields ...*opensplunkv1.TypedObjectField,
+		fields ...*opensplunk.TypedObjectField,
 	) *ingest.StoredEvent {
 		event := compilerIntegrationEvent(
 			id,
@@ -48,7 +48,7 @@ func testEventStatsMinimumAgainstClickHouse(
 		group string,
 	) *ingest.StoredEvent {
 		event.Event.Fields.Fields = append(
-			[]*opensplunkv1.TypedObjectField{
+			[]*opensplunk.TypedObjectField{
 				typedField("eventstats_min_group", typedString(group)),
 			},
 			event.Event.Fields.Fields...,
@@ -120,12 +120,12 @@ func testEventStatsMinimumAgainstClickHouse(
 		event.Event.EventTime = timestamppb.New(
 			indexTime.Add(time.Duration(eventIndex) * time.Nanosecond),
 		)
-		event.Event.Severity = opensplunkv1.LogSeverity_LOG_SEVERITY_INFO
+		event.Event.Severity = opensplunk.LogSeverity_LOG_SEVERITY_INFO
 		event.Event.Raw = []byte(`{"value":"other"}`)
 	}
 	events[0].Event.Raw = []byte(`{"value":"wanted"}`)
-	events[0].Event.Severity = opensplunkv1.LogSeverity_LOG_SEVERITY_WARN
-	events[1].Event.Severity = opensplunkv1.LogSeverity_LOG_SEVERITY_TRACE
+	events[0].Event.Severity = opensplunk.LogSeverity_LOG_SEVERITY_WARN
+	events[1].Event.Severity = opensplunk.LogSeverity_LOG_SEVERITY_TRACE
 
 	if _, err := store.Store(ctx, ingest.StoreBatch{
 		TenantID:           "tenant",
@@ -912,7 +912,7 @@ func testEventStatsMinimumAgainstClickHouse(
 	).Scan(&lowSeverity); queryErr != nil {
 		t.Fatalf("execute native UInt8 eventstats min: %v\nSQL: %s", queryErr, severity.SQL)
 	}
-	wantSeverity := uint8(opensplunkv1.LogSeverity_LOG_SEVERITY_TRACE)
+	wantSeverity := uint8(opensplunk.LogSeverity_LOG_SEVERITY_TRACE)
 	if lowSeverity == nil || *lowSeverity != wantSeverity {
 		t.Fatalf("native UInt8 eventstats min = %v, want %d", lowSeverity, wantSeverity)
 	}

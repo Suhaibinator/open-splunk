@@ -3,7 +3,7 @@ package protostrict_test
 import (
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/protostrict"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
@@ -15,9 +15,9 @@ func withUnknown(message protoreflect.Message) {
 }
 
 func TestContainsUnknownAcceptsCleanMessage(t *testing.T) {
-	entry := &opensplunkv1.SearchHistoryEntry{
+	entry := &opensplunk.SearchHistoryEntry{
 		SearchJobId: "job-1",
-		Definition:  &opensplunkv1.SearchDefinition{Spl: "search index=main"},
+		Definition:  &opensplunk.SearchDefinition{Spl: "search index=main"},
 	}
 	if protostrict.ContainsUnknown(entry.ProtoReflect()) {
 		t.Fatalf("clean message reported as containing unknown fields")
@@ -28,7 +28,7 @@ func TestContainsUnknownAcceptsCleanMessage(t *testing.T) {
 }
 
 func TestContainsUnknownDetectsRootUnknownField(t *testing.T) {
-	entry := &opensplunkv1.SearchHistoryEntry{SearchJobId: "job-1"}
+	entry := &opensplunk.SearchHistoryEntry{SearchJobId: "job-1"}
 	withUnknown(entry.ProtoReflect())
 	if !protostrict.ContainsUnknown(entry.ProtoReflect()) {
 		t.Fatalf("root unknown field was not detected")
@@ -36,19 +36,19 @@ func TestContainsUnknownDetectsRootUnknownField(t *testing.T) {
 }
 
 func TestContainsUnknownDetectsNestedUnknownField(t *testing.T) {
-	definition := &opensplunkv1.SearchDefinition{Spl: "search index=main"}
+	definition := &opensplunk.SearchDefinition{Spl: "search index=main"}
 	withUnknown(definition.ProtoReflect())
-	entry := &opensplunkv1.SearchHistoryEntry{SearchJobId: "job-1", Definition: definition}
+	entry := &opensplunk.SearchHistoryEntry{SearchJobId: "job-1", Definition: definition}
 	if !protostrict.ContainsUnknown(entry.ProtoReflect()) {
 		t.Fatalf("nested unknown field was not detected")
 	}
 }
 
 func TestContainsUnknownDetectsRepeatedElementUnknownField(t *testing.T) {
-	nested := &opensplunkv1.SearchHistoryEntry{SearchJobId: "job-1"}
+	nested := &opensplunk.SearchHistoryEntry{SearchJobId: "job-1"}
 	withUnknown(nested.ProtoReflect())
-	response := &opensplunkv1.ListSearchHistoryResponse{
-		HistoryEntries: []*opensplunkv1.SearchHistoryEntry{
+	response := &opensplunk.ListSearchHistoryResponse{
+		HistoryEntries: []*opensplunk.SearchHistoryEntry{
 			{SearchJobId: "job-0"},
 			nested,
 		},
@@ -59,14 +59,14 @@ func TestContainsUnknownDetectsRepeatedElementUnknownField(t *testing.T) {
 }
 
 func TestContainsUnknownRejectsTypedNilMessage(t *testing.T) {
-	var entry *opensplunkv1.SearchHistoryEntry
+	var entry *opensplunk.SearchHistoryEntry
 	if !protostrict.ContainsUnknown(entry.ProtoReflect()) {
 		t.Fatalf("typed-nil message was accepted")
 	}
 }
 
 func TestRejectUnknownFieldsUsesSubjectInMessage(t *testing.T) {
-	entry := &opensplunkv1.SearchHistoryEntry{SearchJobId: "job-1"}
+	entry := &opensplunk.SearchHistoryEntry{SearchJobId: "job-1"}
 	withUnknown(entry.ProtoReflect())
 	err := protostrict.RejectUnknownFields(entry.ProtoReflect(), "search-history entry")
 	if err == nil || err.Error() != "search-history entry contains unknown protobuf fields" {

@@ -25,9 +25,8 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/collector/wal"
-	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -287,7 +286,7 @@ func TestReleaseOCIComposeContract(t *testing.T) {
 	releaseOCICreateIndex(t, ctx, client, baseURL, administratorToken, secondIndex)
 	bootstrap := releaseOCIBootstrap(t, ctx, client, baseURL)
 	for _, name := range []string{firstIndex, secondIndex} {
-		if !slices.ContainsFunc(bootstrap.GetIndexes(), func(index *opensplunkv1.IndexSummary) bool {
+		if !slices.ContainsFunc(bootstrap.GetIndexes(), func(index *opensplunk.IndexSummary) bool {
 			return index.GetName() == name
 		}) {
 			t.Fatalf("persisted bootstrap indexes do not contain %q: %+v", name, bootstrap.GetIndexes())
@@ -1572,13 +1571,13 @@ func (fixture *releaseOCIRecoveryFixture) assertPostRestoreState() {
 		fixture.restoredBaseURL,
 	)
 	for _, name := range fixture.preBackupIndexes {
-		if !slices.ContainsFunc(restoredBootstrap.GetIndexes(), func(index *opensplunkv1.IndexSummary) bool {
+		if !slices.ContainsFunc(restoredBootstrap.GetIndexes(), func(index *opensplunk.IndexSummary) bool {
 			return index.GetName() == name
 		}) {
 			t.Fatalf("restored bootstrap indexes do not contain %q: %+v", name, restoredBootstrap.GetIndexes())
 		}
 	}
-	if slices.ContainsFunc(restoredBootstrap.GetIndexes(), func(index *opensplunkv1.IndexSummary) bool {
+	if slices.ContainsFunc(restoredBootstrap.GetIndexes(), func(index *opensplunk.IndexSummary) bool {
 		return index.GetName() == fixture.postBackupIndex
 	}) {
 		t.Fatalf(
@@ -1676,7 +1675,7 @@ func (fixture *releaseOCIRecoveryFixture) assertPostRestoreState() {
 		fixture.restoredClient,
 		fixture.restoredBaseURL,
 	)
-	if !slices.ContainsFunc(restoredBootstrap.GetIndexes(), func(index *opensplunkv1.IndexSummary) bool {
+	if !slices.ContainsFunc(restoredBootstrap.GetIndexes(), func(index *opensplunk.IndexSummary) bool {
 		return index.GetName() == postRestoreIndex
 	}) {
 		t.Fatalf(
@@ -1705,17 +1704,17 @@ func releaseOCICreateIngestionCredential(
 	collectorID string,
 ) releaseOCIIngestionCredential {
 	t.Helper()
-	var created opensplunkv1.CreateIngestionTokenResponse
+	var created opensplunk.CreateIngestionTokenResponse
 	postAdministratorProto(
 		t,
 		ctx,
 		client,
-		baseURL+"/api/v1/ingestion-tokens/create",
+		baseURL+"/api/ingestion-tokens/create",
 		administratorToken,
-		&opensplunkv1.CreateIngestionTokenRequest{
-			Definition: &opensplunkv1.IngestionTokenDefinition{
+		&opensplunk.CreateIngestionTokenRequest{
+			Definition: &opensplunk.IngestionTokenDefinition{
 				Name: name,
-				Constraints: &opensplunkv1.IngestionTokenConstraints{
+				Constraints: &opensplunk.IngestionTokenConstraints{
 					AllowedIndexNames: []string{indexName},
 					BoundCollectorId:  &collectorID,
 				},
@@ -1726,7 +1725,7 @@ func releaseOCICreateIngestionCredential(
 	metadata := created.GetIngestionToken()
 	plaintext := created.GetPlaintextToken()
 	if metadata.GetIngestionTokenId() == "" || metadata.GetVersion() != 1 ||
-		metadata.GetState() != opensplunkv1.IngestionTokenState_INGESTION_TOKEN_STATE_ACTIVE ||
+		metadata.GetState() != opensplunk.IngestionTokenState_INGESTION_TOKEN_STATE_ACTIVE ||
 		metadata.GetTokenPrefix() == "" || plaintext == "" ||
 		!strings.HasPrefix(plaintext, metadata.GetTokenPrefix()) ||
 		metadata.GetConstraints().GetBoundCollectorId() != collectorID ||
@@ -1755,14 +1754,14 @@ func releaseOCIAssertRestoredIngestionCredential(
 	indexName string,
 ) {
 	t.Helper()
-	var response opensplunkv1.GetIngestionTokenResponse
+	var response opensplunk.GetIngestionTokenResponse
 	wire := postAdministratorProto(
 		t,
 		ctx,
 		client,
-		baseURL+"/api/v1/ingestion-tokens/get",
+		baseURL+"/api/ingestion-tokens/get",
 		administratorToken,
-		&opensplunkv1.GetIngestionTokenRequest{IngestionTokenId: credential.tokenID},
+		&opensplunk.GetIngestionTokenRequest{IngestionTokenId: credential.tokenID},
 		&response,
 	)
 	if bytes.Contains(wire, []byte(credential.plaintext)) {
@@ -1771,7 +1770,7 @@ func releaseOCIAssertRestoredIngestionCredential(
 	metadata := response.GetIngestionToken()
 	if metadata.GetIngestionTokenId() != credential.tokenID ||
 		metadata.GetTokenPrefix() != credential.tokenPrefix ||
-		metadata.GetState() != opensplunkv1.IngestionTokenState_INGESTION_TOKEN_STATE_ACTIVE ||
+		metadata.GetState() != opensplunk.IngestionTokenState_INGESTION_TOKEN_STATE_ACTIVE ||
 		metadata.GetLastUsedAt() == nil ||
 		metadata.GetConstraints().GetBoundCollectorId() != credential.collectorID ||
 		!slices.Equal(metadata.GetConstraints().GetAllowedIndexNames(), []string{indexName}) {
@@ -1824,7 +1823,7 @@ func releaseOCIIngestEvent(
 		streamContext,
 		metadata.Pairs("authorization", "Bearer "+credential.plaintext),
 	)
-	stream, err := opensplunkv1.NewCollectorIngestServiceClient(connection).Collect(streamContext)
+	stream, err := opensplunk.NewCollectorIngestServiceClient(connection).Collect(streamContext)
 	if err != nil {
 		t.Fatalf("open release recovery ingestion stream: %s", stack.redact(err.Error()))
 	}
@@ -1835,19 +1834,17 @@ func releaseOCIIngestEvent(
 		lastAcknowledged = &value
 	}
 	inputID := "oci-recovery-input-" + strings.TrimPrefix(credential.collectorID, "oci-recovery-collector-")
-	if err := stream.Send(&opensplunkv1.CollectRequest{
+	if err := stream.Send(&opensplunk.CollectRequest{
 		StreamSequence: 1,
 		SentAt:         timestamppb.New(now),
-		Payload: &opensplunkv1.CollectRequest_Hello{Hello: &opensplunkv1.CollectorHello{
+		Payload: &opensplunk.CollectRequest_Hello{Hello: &opensplunk.CollectorHello{
 			CollectorId:                   credential.collectorID,
 			InstanceId:                    credential.collectorID + "-instance-" + strconv.FormatUint(batchSequence, 10),
-			ProtocolMajor:                 1,
-			ProtocolMinor:                 0,
-			CollectorVersion:              "release-oci-recovery-test",
+			SourceRevision:                stack.values["OPEN_SPLUNK_SOURCE_REVISION"],
 			Hostname:                      "release-oci-recovery-test",
 			StartedAt:                     timestamppb.New(now.Add(-time.Minute)),
-			Capabilities:                  []opensplunkv1.CollectorCapability{opensplunkv1.CollectorCapability_COLLECTOR_CAPABILITY_FILE_INPUT},
-			Inputs:                        []*opensplunkv1.CollectorInputRegistration{{InputId: inputID, InputType: opensplunkv1.CollectorInputType_COLLECTOR_INPUT_TYPE_FILE, IndexName: indexName}},
+			Capabilities:                  []opensplunk.CollectorCapability{opensplunk.CollectorCapability_COLLECTOR_CAPABILITY_FILE_INPUT},
+			Inputs:                        []*opensplunk.CollectorInputRegistration{{InputId: inputID, InputType: opensplunk.CollectorInputType_COLLECTOR_INPUT_TYPE_FILE, IndexName: indexName}},
 			LastAcknowledgedBatchSequence: lastAcknowledged,
 		}},
 	}); err != nil {
@@ -1858,40 +1855,37 @@ func releaseOCIIngestEvent(
 		t.Fatalf("receive release recovery collector ready: %s", stack.redact(err.Error()))
 	}
 	ready := readyResponse.GetReady()
-	if ready == nil || ready.GetProtocolMajor() != 1 || ready.GetProtocolMinor() != 0 ||
-		!slices.Contains(ready.GetAuthorizedIndexes(), indexName) {
+	if ready == nil || !slices.Contains(ready.GetAuthorizedIndexes(), indexName) {
 		t.Fatalf("release recovery collector ready = %+v", ready)
 	}
-	event := &opensplunkv1.LogEvent{
+	event := &opensplunk.LogEvent{
 		EventId:         eventID,
 		IndexName:       indexName,
 		EventTime:       timestamppb.New(eventTime.UTC()),
 		CollectedAt:     timestamppb.New(eventTime.UTC().Add(100 * time.Millisecond)),
-		EventTimeSource: opensplunkv1.EventTimeSource_EVENT_TIME_SOURCE_PARSED,
+		EventTimeSource: opensplunk.EventTimeSource_EVENT_TIME_SOURCE_PARSED,
 		Host:            "release-oci-recovery-host",
 		Source:          "/var/log/release-oci-recovery.log",
 		Sourcetype:      "json",
-		Severity:        opensplunkv1.LogSeverity_LOG_SEVERITY_INFO,
+		Severity:        opensplunk.LogSeverity_LOG_SEVERITY_INFO,
 		Message:         &message,
 		Raw:             []byte(`{"message":"` + message + `"}`),
-		RawEncoding:     opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
-		Fields:          &opensplunkv1.TypedObject{},
+		RawEncoding:     opensplunk.RawEncoding_RAW_ENCODING_UTF8,
+		Fields:          &opensplunk.TypedObject{},
 	}
-	batch := &opensplunkv1.EventBatch{
+	batch := &opensplunk.EventBatch{
 		CollectorId:           credential.collectorID,
 		BatchId:               "oci-recovery-batch-" + eventID,
 		BatchSequence:         batchSequence,
 		CreatedAt:             timestamppb.New(now),
-		Events:                []*opensplunkv1.LogEvent{event},
+		Events:                []*opensplunk.LogEvent{event},
 		UncompressedSizeBytes: uint64(proto.Size(event)),
-		EventIdsSha256:        wal.ComputeEventIDsDigest([]*opensplunkv1.LogEvent{event}),
-		ProtocolMajor:         1,
-		ProtocolMinor:         0,
+		EventIdsSha256:        wal.ComputeEventIDsDigest([]*opensplunk.LogEvent{event}),
 	}
-	if err := stream.Send(&opensplunkv1.CollectRequest{
+	if err := stream.Send(&opensplunk.CollectRequest{
 		StreamSequence: 2,
 		SentAt:         timestamppb.New(time.Now().UTC()),
-		Payload:        &opensplunkv1.CollectRequest_Batch{Batch: batch},
+		Payload:        &opensplunk.CollectRequest_Batch{Batch: batch},
 	}); err != nil {
 		t.Fatalf("send release recovery event batch: %s", stack.redact(err.Error()))
 	}
@@ -1912,7 +1906,7 @@ func releaseOCIIngestEvent(
 		}
 		if acknowledgment.GetBatchId() != batch.GetBatchId() ||
 			acknowledgment.GetBatchSequence() != batchSequence ||
-			acknowledgment.GetDurability() != opensplunkv1.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED ||
+			acknowledgment.GetDurability() != opensplunk.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED ||
 			acknowledgment.GetAcceptedEventCount() != 1 ||
 			acknowledgment.GetDuplicateEventCount() != 0 ||
 			len(acknowledgment.GetRejectedEvents()) != 0 {
@@ -1920,11 +1914,11 @@ func releaseOCIIngestEvent(
 		}
 		break
 	}
-	if err := stream.Send(&opensplunkv1.CollectRequest{
+	if err := stream.Send(&opensplunk.CollectRequest{
 		StreamSequence: 3,
 		SentAt:         timestamppb.New(time.Now().UTC()),
-		Payload: &opensplunkv1.CollectRequest_Goodbye{Goodbye: &opensplunkv1.CollectorGoodbye{
-			Reason: opensplunkv1.CollectorGoodbyeReason_COLLECTOR_GOODBYE_REASON_SHUTDOWN,
+		Payload: &opensplunk.CollectRequest_Goodbye{Goodbye: &opensplunk.CollectorGoodbye{
+			Reason: opensplunk.CollectorGoodbyeReason_COLLECTOR_GOODBYE_REASON_SHUTDOWN,
 		}},
 	}); err != nil {
 		t.Fatalf("send release recovery collector goodbye: %s", stack.redact(err.Error()))
@@ -1950,15 +1944,15 @@ func releaseOCIAssertSearchEventIDs(
 	earliest := fixtureTime.Add(-time.Minute).Format(time.RFC3339Nano)
 	latest := fixtureTime.Add(time.Hour).Format(time.RFC3339Nano)
 	timezone := "UTC"
-	var created opensplunkv1.CreateSearchJobResponse
+	var created opensplunk.CreateSearchJobResponse
 	postProto(
 		t,
 		ctx,
 		client,
-		baseURL+"/api/v1/search/jobs/create",
-		&opensplunkv1.CreateSearchJobRequest{Definition: &opensplunkv1.SearchDefinition{
+		baseURL+"/api/search/jobs/create",
+		&opensplunk.CreateSearchJobRequest{Definition: &opensplunk.SearchDefinition{
 			Spl: "index=" + indexName + " | dedup event_id | table event_id",
-			TimeRange: &opensplunkv1.TimeRangeSpec{
+			TimeRange: &opensplunk.TimeRangeSpec{
 				Earliest: &earliest,
 				Latest:   &latest,
 				Timezone: &timezone,
@@ -1976,15 +1970,15 @@ func releaseOCIAssertSearchEventIDs(
 		t.Fatalf("completed release recovery search = %+v", completed)
 	}
 	pageSize := uint32(100)
-	var results opensplunkv1.GetSearchResultsResponse
+	var results opensplunk.GetSearchResultsResponse
 	postProto(
 		t,
 		ctx,
 		client,
-		baseURL+"/api/v1/search/jobs/results",
-		&opensplunkv1.GetSearchResultsRequest{
+		baseURL+"/api/search/jobs/results",
+		&opensplunk.GetSearchResultsRequest{
 			SearchJobId: jobID,
-			Page: &opensplunkv1.PageRequest{
+			Page: &opensplunk.PageRequest{
 				PageSize:         &pageSize,
 				IncludeTotalSize: true,
 			},
@@ -2013,7 +2007,7 @@ func releaseOCIAssertSearchEventIDs(
 			t.Fatalf("release recovery search row does not match schema: %+v", row)
 		}
 		value := row.GetCells()[columnIndex]
-		if _, ok := value.GetKind().(*opensplunkv1.TypedValue_StringValue); !ok || value.GetStringValue() == "" {
+		if _, ok := value.GetKind().(*opensplunk.TypedValue_StringValue); !ok || value.GetStringValue() == "" {
 			t.Fatalf("release recovery event_id cell = %+v", value)
 		}
 		got = append(got, value.GetStringValue())
@@ -2689,7 +2683,6 @@ func releaseOCIGenerateEnvironment(
 		values[key] = value
 	}
 	for _, key := range []string{
-		"OPEN_SPLUNK_APPLICATION_VERSION",
 		"OPEN_SPLUNK_SOURCE_REVISION",
 		"OPEN_SPLUNK_IMAGE_CREATED",
 		"OPEN_SPLUNK_SOURCE_DATE_EPOCH",
@@ -2790,7 +2783,6 @@ func releaseOCIAssertImageContract(
 			t.Fatalf("%s image user = %q", name, image.Config.User)
 		}
 		for label, want := range map[string]string{
-			"org.opencontainers.image.version":  stack.values["OPEN_SPLUNK_APPLICATION_VERSION"],
 			"org.opencontainers.image.revision": stack.values["OPEN_SPLUNK_SOURCE_REVISION"],
 			"org.opencontainers.image.created":  stack.values["OPEN_SPLUNK_IMAGE_CREATED"],
 			"org.opencontainers.image.source":   "https://github.com/Suhaibinator/open-splunk",
@@ -2826,19 +2818,10 @@ func releaseOCIAssertImageContract(
 		"server":    serverIdentity,
 		"collector": collectorIdentity,
 	} {
-		for _, expected := range []string{
-			"application_version=" + stack.values["OPEN_SPLUNK_APPLICATION_VERSION"],
-			"source_revision=" + stack.values["OPEN_SPLUNK_SOURCE_REVISION"],
-		} {
-			if !strings.Contains(identity, expected+"\n") && !strings.HasSuffix(identity, expected) {
-				t.Fatalf("%s image identity %q does not contain %q", name, identity, expected)
-			}
+		expected := "source_revision=" + stack.values["OPEN_SPLUNK_SOURCE_REVISION"]
+		if !strings.Contains(identity, expected+"\n") && !strings.HasSuffix(identity, expected) {
+			t.Fatalf("%s image identity %q does not contain %q", name, identity, expected)
 		}
-	}
-	expectedSPLIdentity := "spl_compatibility_version=" + spl.CompatibilityVersion
-	if !strings.Contains(serverIdentity, expectedSPLIdentity+"\n") &&
-		!strings.HasSuffix(serverIdentity, expectedSPLIdentity) {
-		t.Fatalf("server image identity %q does not contain %q", serverIdentity, expectedSPLIdentity)
 	}
 }
 
@@ -3801,7 +3784,6 @@ func releaseOCIAssertEmbeddedRelease(
 	}
 	for _, expected := range [][]byte{
 		[]byte("<title>Home | Open Splunk</title>"),
-		[]byte(`data-open-splunk-version="` + stack.values["OPEN_SPLUNK_APPLICATION_VERSION"] + `"`),
 		[]byte(`data-open-splunk-revision="` + stack.values["OPEN_SPLUNK_SOURCE_REVISION"] + `"`),
 		[]byte("Backend mode selected"),
 	} {
@@ -3814,12 +3796,11 @@ func releaseOCIAssertEmbeddedRelease(
 	}
 	bootstrap := releaseOCIBootstrap(t, ctx, client, baseURL)
 	build := bootstrap.GetBuild()
-	if build.GetApplicationVersion() != stack.values["OPEN_SPLUNK_APPLICATION_VERSION"] ||
-		build.GetSourceRevision() != stack.values["OPEN_SPLUNK_SOURCE_REVISION"] ||
-		bootstrap.GetServerVersion() != stack.values["OPEN_SPLUNK_APPLICATION_VERSION"]+" ("+stack.values["OPEN_SPLUNK_SOURCE_REVISION"]+")" ||
-		bootstrap.GetSplCompatibilityVersion() != spl.CompatibilityVersion ||
+	if build.GetSourceRevision() != stack.values["OPEN_SPLUNK_SOURCE_REVISION"] ||
 		build.GetUiBuildId() == "" || build.GetUiSha256() == "" ||
-		build.GetAssetManifestFormatVersion() != 1 {
+		build.GetProtobufSchemaSha256() == "" ||
+		build.GetSqliteMigrationsSha256() == "" ||
+		build.GetClickhouseMigrationsSha256() == "" {
 		t.Fatalf("release bootstrap identity = %+v", bootstrap)
 	}
 }
@@ -3829,15 +3810,15 @@ func releaseOCIBootstrap(
 	ctx context.Context,
 	client *http.Client,
 	baseURL string,
-) *opensplunkv1.GetSystemBootstrapResponse {
+) *opensplunk.GetSystemBootstrapResponse {
 	t.Helper()
-	result := &opensplunkv1.GetSystemBootstrapResponse{}
+	result := &opensplunk.GetSystemBootstrapResponse{}
 	postProto(
 		t,
 		ctx,
 		client,
-		baseURL+"/api/v1/system/bootstrap",
-		&opensplunkv1.GetSystemBootstrapRequest{},
+		baseURL+"/api/system/bootstrap",
+		&opensplunk.GetSystemBootstrapRequest{},
 		result,
 	)
 	return result
@@ -3852,21 +3833,21 @@ func releaseOCICreateIndex(
 	name string,
 ) {
 	t.Helper()
-	request := &opensplunkv1.CreateIndexRequest{
-		Definition: &opensplunkv1.IndexDefinition{
+	request := &opensplunk.CreateIndexRequest{
+		Definition: &opensplunk.IndexDefinition{
 			Name:            name,
 			DisplayName:     "Release OCI persistence proof",
 			RetentionPeriod: durationpb.New(24 * time.Hour),
-			IngestionAccess: opensplunkv1.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
-			SearchAccess:    opensplunkv1.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
+			IngestionAccess: opensplunk.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
+			SearchAccess:    opensplunk.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
 		},
 	}
-	response := &opensplunkv1.CreateIndexResponse{}
+	response := &opensplunk.CreateIndexResponse{}
 	postAdministratorProto(
 		t,
 		ctx,
 		client,
-		baseURL+"/api/v1/indexes/create",
+		baseURL+"/api/indexes/create",
 		administratorToken,
 		request,
 		response,

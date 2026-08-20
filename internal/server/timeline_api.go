@@ -10,7 +10,7 @@ import (
 	"github.com/Suhaibinator/SRouter/pkg/codec"
 	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/searchanalysis"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -18,7 +18,7 @@ import (
 
 func (handler *apiHandler) searchTimelineRoutes(noAuth router.AuthLevel, smallRequestBytes int64) []protobufRouteDefinition {
 	return []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute[*opensplunkv1.GetSearchTimelineRequest, *serializedSearchTimelineResponse](router.RouteConfig[*opensplunkv1.GetSearchTimelineRequest, *serializedSearchTimelineResponse]{
+		newForwardCompatibleProtoRoute[*opensplunk.GetSearchTimelineRequest, *serializedSearchTimelineResponse](router.RouteConfig[*opensplunk.GetSearchTimelineRequest, *serializedSearchTimelineResponse]{
 			Path: "/search/jobs/timeline", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedSearchTimelineCodec(), Handler: handler.getSearchTimeline,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
@@ -26,7 +26,7 @@ func (handler *apiHandler) searchTimelineRoutes(noAuth router.AuthLevel, smallRe
 	}
 }
 
-func (handler *apiHandler) getSearchTimeline(request *http.Request, input *opensplunkv1.GetSearchTimelineRequest) (*serializedSearchTimelineResponse, error) {
+func (handler *apiHandler) getSearchTimeline(request *http.Request, input *opensplunk.GetSearchTimelineRequest) (*serializedSearchTimelineResponse, error) {
 	if input == nil {
 		return nil, badRequestError("timeline request is required")
 	}
@@ -81,7 +81,7 @@ func (handler *apiHandler) getSearchTimeline(request *http.Request, input *opens
 	return &serializedSearchTimelineResponse{message: response, ctx: request.Context(), release: release}, nil
 }
 
-func searchTimelineResultToProto(result searchanalysis.Result, maximumBuckets uint32) (*opensplunkv1.GetSearchTimelineResponse, error) {
+func searchTimelineResultToProto(result searchanalysis.Result, maximumBuckets uint32) (*opensplunk.GetSearchTimelineResponse, error) {
 	if !result.Complete || result.BucketWidthSeconds <= 0 || maximumBuckets == 0 ||
 		len(result.Buckets) == 0 || uint64(len(result.Buckets)) > uint64(maximumBuckets) {
 		return nil, errors.New("invalid search timeline result")
@@ -91,7 +91,7 @@ func searchTimelineResultToProto(result searchanalysis.Result, maximumBuckets ui
 		return nil, errors.New("invalid search timeline bucket width")
 	}
 
-	buckets := make([]*opensplunkv1.TimelineBucket, len(result.Buckets))
+	buckets := make([]*opensplunk.TimelineBucket, len(result.Buckets))
 	var previousLatest time.Time
 	for index, bucket := range result.Buckets {
 		if bucket.Earliest.IsZero() || bucket.Latest.IsZero() || !bucket.Earliest.Before(bucket.Latest) ||
@@ -111,12 +111,12 @@ func searchTimelineResultToProto(result searchanalysis.Result, maximumBuckets ui
 		if !validTimelineBucketShape(bucket, index, len(result.Buckets), result.BucketWidthSeconds) {
 			return nil, errors.New("invalid search timeline bucket sequence")
 		}
-		buckets[index] = &opensplunkv1.TimelineBucket{
+		buckets[index] = &opensplunk.TimelineBucket{
 			Earliest: earliest, Latest: latest, EventCount: bucket.EventCount, Partial: bucket.Partial,
 		}
 		previousLatest = bucket.Latest
 	}
-	return &opensplunkv1.GetSearchTimelineResponse{
+	return &opensplunk.GetSearchTimelineResponse{
 		Buckets: buckets, BucketWidth: bucketWidth, Complete: true,
 	}, nil
 }
@@ -176,13 +176,13 @@ func timelineFloorAlignedSecond(seconds, widthSeconds int64) int64 {
 
 // A bounded grid is still large enough that many concurrent encodes should not
 // bypass MaximumConcurrentResponses.
-type serializedSearchTimelineResponse = boundedProtoResponse[*opensplunkv1.GetSearchTimelineResponse]
+type serializedSearchTimelineResponse = boundedProtoResponse[*opensplunk.GetSearchTimelineResponse]
 
-type serializedSearchTimelineCodec = boundedProtoCodec[*opensplunkv1.GetSearchTimelineRequest, *opensplunkv1.GetSearchTimelineResponse]
+type serializedSearchTimelineCodec = boundedProtoCodec[*opensplunk.GetSearchTimelineRequest, *opensplunk.GetSearchTimelineResponse]
 
 func newSerializedSearchTimelineCodec() *serializedSearchTimelineCodec {
 	return newBoundedProtoCodec(
-		codec.NewProtoCodec[*opensplunkv1.GetSearchTimelineRequest, *opensplunkv1.GetSearchTimelineResponse](),
+		codec.NewProtoCodec[*opensplunk.GetSearchTimelineRequest, *opensplunk.GetSearchTimelineResponse](),
 		boundedProtoCodecOptions{
 			stateError:   "search timeline serialization state is invalid",
 			messageError: "search timeline response is missing",

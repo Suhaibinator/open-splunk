@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -48,18 +48,18 @@ func TestPreviewKnowledgeObjectEnvelopeMatchesActiveValidation(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		request *opensplunkv1.PreviewKnowledgeObjectRequest
+		request *opensplunk.PreviewKnowledgeObjectRequest
 	}{
 		{
 			name: "create",
-			request: &opensplunkv1.PreviewKnowledgeObjectRequest{
+			request: &opensplunk.PreviewKnowledgeObjectRequest{
 				RetainedSearchJobId: "job-create",
 				Definition:          previewEnvelopeTestDefinition(),
 			},
 		},
 		{
 			name: "update",
-			request: &opensplunkv1.PreviewKnowledgeObjectRequest{
+			request: &opensplunk.PreviewKnowledgeObjectRequest{
 				RetainedSearchJobId: "job-update",
 				Definition:          previewEnvelopeTestDefinition(),
 				KnowledgeObjectId:   &objectID,
@@ -69,13 +69,13 @@ func TestPreviewKnowledgeObjectEnvelopeMatchesActiveValidation(t *testing.T) {
 		},
 		{
 			name: "definition absent",
-			request: &opensplunkv1.PreviewKnowledgeObjectRequest{
+			request: &opensplunk.PreviewKnowledgeObjectRequest{
 				RetainedSearchJobId: "job-definition-absent",
 			},
 		},
 		{
 			name: "create carries expected version",
-			request: &opensplunkv1.PreviewKnowledgeObjectRequest{
+			request: &opensplunk.PreviewKnowledgeObjectRequest{
 				RetainedSearchJobId: "job-create-version",
 				Definition:          previewEnvelopeTestDefinition(),
 				ExpectedVersion:     &version,
@@ -83,7 +83,7 @@ func TestPreviewKnowledgeObjectEnvelopeMatchesActiveValidation(t *testing.T) {
 		},
 		{
 			name: "create carries mask",
-			request: &opensplunkv1.PreviewKnowledgeObjectRequest{
+			request: &opensplunk.PreviewKnowledgeObjectRequest{
 				RetainedSearchJobId: "job-create-mask",
 				Definition:          previewEnvelopeTestDefinition(),
 				UpdateMask:          &fieldmaskpb.FieldMask{Paths: []string{"name"}},
@@ -91,7 +91,7 @@ func TestPreviewKnowledgeObjectEnvelopeMatchesActiveValidation(t *testing.T) {
 		},
 		{
 			name: "update empty object ID",
-			request: &opensplunkv1.PreviewKnowledgeObjectRequest{
+			request: &opensplunk.PreviewKnowledgeObjectRequest{
 				RetainedSearchJobId: "job-empty-object",
 				Definition:          previewEnvelopeTestDefinition(),
 				KnowledgeObjectId:   new(string),
@@ -101,7 +101,7 @@ func TestPreviewKnowledgeObjectEnvelopeMatchesActiveValidation(t *testing.T) {
 		},
 		{
 			name: "update version absent",
-			request: &opensplunkv1.PreviewKnowledgeObjectRequest{
+			request: &opensplunk.PreviewKnowledgeObjectRequest{
 				RetainedSearchJobId: "job-version-absent",
 				Definition:          previewEnvelopeTestDefinition(),
 				KnowledgeObjectId:   &objectID,
@@ -110,7 +110,7 @@ func TestPreviewKnowledgeObjectEnvelopeMatchesActiveValidation(t *testing.T) {
 		},
 		{
 			name: "update version zero",
-			request: &opensplunkv1.PreviewKnowledgeObjectRequest{
+			request: &opensplunk.PreviewKnowledgeObjectRequest{
 				RetainedSearchJobId: "job-version-zero",
 				Definition:          previewEnvelopeTestDefinition(),
 				KnowledgeObjectId:   &objectID,
@@ -120,7 +120,7 @@ func TestPreviewKnowledgeObjectEnvelopeMatchesActiveValidation(t *testing.T) {
 		},
 		{
 			name: "update version over MaxInt64",
-			request: &opensplunkv1.PreviewKnowledgeObjectRequest{
+			request: &opensplunk.PreviewKnowledgeObjectRequest{
 				RetainedSearchJobId: "job-version-over",
 				Definition:          previewEnvelopeTestDefinition(),
 				KnowledgeObjectId:   &objectID,
@@ -130,7 +130,7 @@ func TestPreviewKnowledgeObjectEnvelopeMatchesActiveValidation(t *testing.T) {
 		},
 		{
 			name: "update mask absent",
-			request: &opensplunkv1.PreviewKnowledgeObjectRequest{
+			request: &opensplunk.PreviewKnowledgeObjectRequest{
 				RetainedSearchJobId: "job-mask-absent",
 				Definition:          previewEnvelopeTestDefinition(),
 				KnowledgeObjectId:   &objectID,
@@ -139,7 +139,7 @@ func TestPreviewKnowledgeObjectEnvelopeMatchesActiveValidation(t *testing.T) {
 		},
 		{
 			name: "update mask empty",
-			request: &opensplunkv1.PreviewKnowledgeObjectRequest{
+			request: &opensplunk.PreviewKnowledgeObjectRequest{
 				RetainedSearchJobId: "job-mask-empty",
 				Definition:          previewEnvelopeTestDefinition(),
 				KnowledgeObjectId:   &objectID,
@@ -149,7 +149,7 @@ func TestPreviewKnowledgeObjectEnvelopeMatchesActiveValidation(t *testing.T) {
 		},
 		{
 			name: "update mask unsupported",
-			request: &opensplunkv1.PreviewKnowledgeObjectRequest{
+			request: &opensplunk.PreviewKnowledgeObjectRequest{
 				RetainedSearchJobId: "job-mask-unsupported",
 				Definition:          previewEnvelopeTestDefinition(),
 				KnowledgeObjectId:   &objectID,
@@ -178,7 +178,7 @@ func TestPreviewKnowledgeObjectEnvelopeMatchesActiveValidation(t *testing.T) {
 func TestPreviewKnowledgeObjectEnvelopeForcesActiveValidation(t *testing.T) {
 	objectID := "ko-preview-active"
 	version := uint64(9)
-	request := &opensplunkv1.PreviewKnowledgeObjectRequest{
+	request := &opensplunk.PreviewKnowledgeObjectRequest{
 		RetainedSearchJobId: "job-preview-active",
 		Definition:          previewEnvelopeTestDefinition(),
 		KnowledgeObjectId:   &objectID,
@@ -186,7 +186,7 @@ func TestPreviewKnowledgeObjectEnvelopeForcesActiveValidation(t *testing.T) {
 		UpdateMask:          &fieldmaskpb.FieldMask{Paths: []string{"field_alias"}},
 	}
 	view := previewKnowledgeObjectActiveValidationView(request)
-	if view.GetIntent() != opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION ||
+	if view.GetIntent() != opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION ||
 		view.Definition != request.Definition || view.KnowledgeObjectId != request.KnowledgeObjectId ||
 		view.ExpectedVersion != request.ExpectedVersion || view.UpdateMask != request.UpdateMask {
 		t.Fatalf("Preview active validation view = %+v", view)
@@ -214,7 +214,7 @@ func TestPreviewKnowledgeObjectEnvelopeRequiresCanonicalRetainedJobID(t *testing
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			request := &opensplunkv1.PreviewKnowledgeObjectRequest{
+			request := &opensplunk.PreviewKnowledgeObjectRequest{
 				RetainedSearchJobId: test.value,
 				Definition:          previewEnvelopeTestDefinition(),
 			}
@@ -238,7 +238,7 @@ func TestPreviewKnowledgeObjectEnvelopeUnknownAuthoritySplit(t *testing.T) {
 		1,
 	)
 
-	outer := &opensplunkv1.PreviewKnowledgeObjectRequest{
+	outer := &opensplunk.PreviewKnowledgeObjectRequest{
 		RetainedSearchJobId: "job-outer-unknown",
 		Definition:          previewEnvelopeTestDefinition(),
 	}
@@ -249,7 +249,7 @@ func TestPreviewKnowledgeObjectEnvelopeUnknownAuthoritySplit(t *testing.T) {
 
 	objectID := "ko-mask-unknown"
 	version := uint64(1)
-	maskUnknown := &opensplunkv1.PreviewKnowledgeObjectRequest{
+	maskUnknown := &opensplunk.PreviewKnowledgeObjectRequest{
 		RetainedSearchJobId: "job-mask-unknown",
 		Definition:          previewEnvelopeTestDefinition(),
 		KnowledgeObjectId:   &objectID,
@@ -261,12 +261,12 @@ func TestPreviewKnowledgeObjectEnvelopeUnknownAuthoritySplit(t *testing.T) {
 		t.Fatalf("mask unknown error = %v", err)
 	}
 
-	createCandidateUnknown := &opensplunkv1.PreviewKnowledgeObjectRequest{
+	createCandidateUnknown := &opensplunk.PreviewKnowledgeObjectRequest{
 		RetainedSearchJobId: "job-create-candidate-unknown",
 		Definition:          previewEnvelopeTestDefinition(),
 	}
 	createCandidateUnknown.Definition.ProtoReflect().SetUnknown(unknown)
-	createBefore := proto.Clone(createCandidateUnknown).(*opensplunkv1.PreviewKnowledgeObjectRequest)
+	createBefore := proto.Clone(createCandidateUnknown).(*opensplunk.PreviewKnowledgeObjectRequest)
 	if err := validatePreviewKnowledgeObjectRequestEnvelope(createCandidateUnknown); err != nil {
 		t.Fatalf("create candidate unknown was rejected by the envelope: %v", err)
 	}
@@ -274,7 +274,7 @@ func TestPreviewKnowledgeObjectEnvelopeUnknownAuthoritySplit(t *testing.T) {
 		t.Fatalf("create candidate unknown authority was mutated: %v", createCandidateUnknown)
 	}
 
-	updateCandidateUnknown := &opensplunkv1.PreviewKnowledgeObjectRequest{
+	updateCandidateUnknown := &opensplunk.PreviewKnowledgeObjectRequest{
 		RetainedSearchJobId: "job-update-candidate-unknown",
 		Definition:          previewEnvelopeTestDefinition(),
 		KnowledgeObjectId:   &objectID,
@@ -282,7 +282,7 @@ func TestPreviewKnowledgeObjectEnvelopeUnknownAuthoritySplit(t *testing.T) {
 		UpdateMask:          &fieldmaskpb.FieldMask{Paths: []string{"field_alias"}},
 	}
 	updateCandidateUnknown.Definition.GetFieldAlias().ProtoReflect().SetUnknown(unknown)
-	updateBefore := proto.Clone(updateCandidateUnknown).(*opensplunkv1.PreviewKnowledgeObjectRequest)
+	updateBefore := proto.Clone(updateCandidateUnknown).(*opensplunk.PreviewKnowledgeObjectRequest)
 	if err := validatePreviewKnowledgeObjectRequestEnvelope(updateCandidateUnknown); err != nil {
 		t.Fatalf("selected update candidate unknown was rejected by the envelope: %v", err)
 	}
@@ -307,12 +307,12 @@ func TestPreviewKnowledgeObjectEnvelopeLeavesMaximumRowsUntouched(t *testing.T) 
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			request := &opensplunkv1.PreviewKnowledgeObjectRequest{
+			request := &opensplunk.PreviewKnowledgeObjectRequest{
 				RetainedSearchJobId: "job-rows-" + strings.ReplaceAll(test.name, " ", "-"),
 				Definition:          previewEnvelopeTestDefinition(),
 				MaximumRows:         test.rows,
 			}
-			before, ok := proto.Clone(request).(*opensplunkv1.PreviewKnowledgeObjectRequest)
+			before, ok := proto.Clone(request).(*opensplunk.PreviewKnowledgeObjectRequest)
 			if !ok {
 				t.Fatal("clone Preview request failed")
 			}
@@ -330,7 +330,7 @@ func TestPreviewKnowledgeObjectEnvelopeLeavesMaximumRowsUntouched(t *testing.T) 
 }
 
 func TestPreviewKnowledgeObjectEnvelopeRejectsDecodedWrongWireKnownFields(t *testing.T) {
-	base, err := proto.Marshal(&opensplunkv1.PreviewKnowledgeObjectRequest{
+	base, err := proto.Marshal(&opensplunk.PreviewKnowledgeObjectRequest{
 		RetainedSearchJobId: "job-wrong-wire",
 		Definition:          previewEnvelopeTestDefinition(),
 	})
@@ -375,12 +375,12 @@ func TestPreviewKnowledgeObjectEnvelopeRejectsDecodedWrongWireKnownFields(t *tes
 	}
 }
 
-func previewEnvelopeTestDefinition() *opensplunkv1.KnowledgeObjectDefinition {
-	return &opensplunkv1.KnowledgeObjectDefinition{
+func previewEnvelopeTestDefinition() *opensplunk.KnowledgeObjectDefinition {
+	return &opensplunk.KnowledgeObjectDefinition{
 		AppId: "app-preview",
 		Name:  "preview-alias",
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{
-			FieldAlias: &opensplunkv1.FieldAliasDefinition{
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{
+			FieldAlias: &opensplunk.FieldAliasDefinition{
 				SourceField:      "source",
 				DestinationField: "destination",
 			},
@@ -389,13 +389,13 @@ func previewEnvelopeTestDefinition() *opensplunkv1.KnowledgeObjectDefinition {
 }
 
 func previewEnvelopeTestActiveValidationView(
-	request *opensplunkv1.PreviewKnowledgeObjectRequest,
-) *opensplunkv1.ValidateKnowledgeObjectRequest {
-	return &opensplunkv1.ValidateKnowledgeObjectRequest{
+	request *opensplunk.PreviewKnowledgeObjectRequest,
+) *opensplunk.ValidateKnowledgeObjectRequest {
+	return &opensplunk.ValidateKnowledgeObjectRequest{
 		Definition:        request.Definition,
 		KnowledgeObjectId: request.KnowledgeObjectId,
 		ExpectedVersion:   request.ExpectedVersion,
 		UpdateMask:        request.UpdateMask,
-		Intent:            opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION,
+		Intent:            opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION,
 	}
 }

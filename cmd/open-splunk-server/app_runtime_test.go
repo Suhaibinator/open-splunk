@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/server"
@@ -1002,14 +1002,14 @@ func TestRuntimeAppCatalogEndToEndHTTPAndCursorReopen(t *testing.T) {
 		t.Fatal("caller app-administration key was not cleared after handler construction")
 	}
 
-	created := make(map[string]*opensplunkv1.AppWorkspace, 3)
+	created := make(map[string]*opensplunk.AppWorkspace, 3)
 	for _, slug := range []string{"alpha", "beta", "gamma"} {
 		response := postRuntimeAppProto(
 			t,
 			firstHandler,
-			"/api/v1/apps/create",
-			&opensplunkv1.CreateAppRequest{
-				Definition: &opensplunkv1.AppDefinition{
+			"/api/apps/create",
+			&opensplunk.CreateAppRequest{
+				Definition: &opensplunk.AppDefinition{
 					Slug:        slug,
 					DisplayName: strings.ToUpper(slug[:1]) + slug[1:],
 				},
@@ -1025,7 +1025,7 @@ func TestRuntimeAppCatalogEndToEndHTTPAndCursorReopen(t *testing.T) {
 				response.Body.String(),
 			)
 		}
-		var decoded opensplunkv1.CreateAppResponse
+		var decoded opensplunk.CreateAppResponse
 		unmarshalRuntimeAppResponse(t, response, &decoded)
 		created[slug] = decoded.GetApp()
 	}
@@ -1042,15 +1042,15 @@ func TestRuntimeAppCatalogEndToEndHTTPAndCursorReopen(t *testing.T) {
 	archivedResponse := postRuntimeAppProto(
 		t,
 		firstHandler,
-		"/api/v1/apps/state/set",
-		&opensplunkv1.SetAppStateRequest{
-			Selector: &opensplunkv1.AppSelector{
-				Selector: &opensplunkv1.AppSelector_AppId{
+		"/api/apps/state/set",
+		&opensplunk.SetAppStateRequest{
+			Selector: &opensplunk.AppSelector{
+				Selector: &opensplunk.AppSelector_AppId{
 					AppId: created["alpha"].GetAppId(),
 				},
 			},
 			ExpectedVersion: created["alpha"].GetVersion(),
-			State:           opensplunkv1.AppState_APP_STATE_ARCHIVED,
+			State:           opensplunk.AppState_APP_STATE_ARCHIVED,
 		},
 		bearerToken,
 	)
@@ -1062,10 +1062,10 @@ func TestRuntimeAppCatalogEndToEndHTTPAndCursorReopen(t *testing.T) {
 			archivedResponse.Body.String(),
 		)
 	}
-	var archived opensplunkv1.SetAppStateResponse
+	var archived opensplunk.SetAppStateResponse
 	unmarshalRuntimeAppResponse(t, archivedResponse, &archived)
 	if archived.GetApp().GetState() !=
-		opensplunkv1.AppState_APP_STATE_ARCHIVED {
+		opensplunk.AppState_APP_STATE_ARCHIVED {
 		_ = firstDB.Close()
 		t.Fatalf("archived response = %#v", archived.GetApp())
 	}
@@ -1082,14 +1082,14 @@ func TestRuntimeAppCatalogEndToEndHTTPAndCursorReopen(t *testing.T) {
 	firstListResponse := postRuntimeAppProto(
 		t,
 		firstHandler,
-		"/api/v1/apps/list",
-		&opensplunkv1.ListAppsRequest{
-			Page: &opensplunkv1.PageRequest{PageSize: &one},
-			StateFilters: []opensplunkv1.AppState{
-				opensplunkv1.AppState_APP_STATE_ACTIVE,
+		"/api/apps/list",
+		&opensplunk.ListAppsRequest{
+			Page: &opensplunk.PageRequest{PageSize: &one},
+			StateFilters: []opensplunk.AppState{
+				opensplunk.AppState_APP_STATE_ACTIVE,
 			},
-			SortBy:        opensplunkv1.AppSortBy_APP_SORT_BY_DISPLAY_NAME,
-			SortDirection: opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING,
+			SortBy:        opensplunk.AppSortBy_APP_SORT_BY_DISPLAY_NAME,
+			SortDirection: opensplunk.SortDirection_SORT_DIRECTION_ASCENDING,
 		},
 		bearerToken,
 	)
@@ -1101,7 +1101,7 @@ func TestRuntimeAppCatalogEndToEndHTTPAndCursorReopen(t *testing.T) {
 			firstListResponse.Body.String(),
 		)
 	}
-	var firstPage opensplunkv1.ListAppsResponse
+	var firstPage opensplunk.ListAppsResponse
 	unmarshalRuntimeAppResponse(t, firstListResponse, &firstPage)
 	if len(firstPage.GetApps()) != 1 ||
 		firstPage.GetApps()[0].GetDefinition().GetSlug() != "beta" ||
@@ -1164,17 +1164,17 @@ func TestRuntimeAppCatalogEndToEndHTTPAndCursorReopen(t *testing.T) {
 	secondListResponse := postRuntimeAppProto(
 		t,
 		secondHandler,
-		"/api/v1/apps/list",
-		&opensplunkv1.ListAppsRequest{
-			Page: &opensplunkv1.PageRequest{
+		"/api/apps/list",
+		&opensplunk.ListAppsRequest{
+			Page: &opensplunk.PageRequest{
 				PageSize:  &one,
 				PageToken: &outerPageToken,
 			},
-			StateFilters: []opensplunkv1.AppState{
-				opensplunkv1.AppState_APP_STATE_ACTIVE,
+			StateFilters: []opensplunk.AppState{
+				opensplunk.AppState_APP_STATE_ACTIVE,
 			},
-			SortBy:        opensplunkv1.AppSortBy_APP_SORT_BY_DISPLAY_NAME,
-			SortDirection: opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING,
+			SortBy:        opensplunk.AppSortBy_APP_SORT_BY_DISPLAY_NAME,
+			SortDirection: opensplunk.SortDirection_SORT_DIRECTION_ASCENDING,
 		},
 		bearerToken,
 	)
@@ -1185,7 +1185,7 @@ func TestRuntimeAppCatalogEndToEndHTTPAndCursorReopen(t *testing.T) {
 			secondListResponse.Body.String(),
 		)
 	}
-	var secondPage opensplunkv1.ListAppsResponse
+	var secondPage opensplunk.ListAppsResponse
 	unmarshalRuntimeAppResponse(t, secondListResponse, &secondPage)
 	if len(secondPage.GetApps()) != 1 ||
 		secondPage.GetApps()[0].GetDefinition().GetSlug() != "gamma" ||
@@ -1276,13 +1276,13 @@ func postRuntimeProtoOK(
 func getRuntimeAppBootstrap(
 	t *testing.T,
 	handler http.Handler,
-) *opensplunkv1.GetSystemBootstrapResponse {
+) *opensplunk.GetSystemBootstrapResponse {
 	t.Helper()
 	response := postRuntimeAppProto(
 		t,
 		handler,
-		"/api/v1/system/bootstrap",
-		&opensplunkv1.GetSystemBootstrapRequest{},
+		"/api/system/bootstrap",
+		&opensplunk.GetSystemBootstrapRequest{},
 		nil,
 	)
 	if response.Code != http.StatusOK {
@@ -1292,7 +1292,7 @@ func getRuntimeAppBootstrap(
 			response.Body.String(),
 		)
 	}
-	var decoded opensplunkv1.GetSystemBootstrapResponse
+	var decoded opensplunk.GetSystemBootstrapResponse
 	unmarshalRuntimeAppResponse(t, response, &decoded)
 	return &decoded
 }
@@ -1309,7 +1309,7 @@ func unmarshalRuntimeAppResponse(
 }
 
 func runtimeBootstrapSlugs(
-	response *opensplunkv1.GetSystemBootstrapResponse,
+	response *opensplunk.GetSystemBootstrapResponse,
 ) []string {
 	result := make([]string, len(response.GetApps()))
 	for index, app := range response.GetApps() {

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
@@ -129,12 +129,12 @@ func assertKnowledgeProjection(
 	assertStringsEqual(t, projected.Stages[4].OutputFields, []string{"calculated_out"})
 	assertStringsEqual(t, projected.Stages[5].InputFields, []string{"status"})
 
-	extractionType := opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION
-	extractionStage := opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION
-	aliasType := opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS
-	aliasStage := opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS
-	calculatedType := opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD
-	calculatedStage := opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD
+	extractionType := opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION
+	extractionStage := opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION
+	aliasType := opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS
+	aliasStage := opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS
+	calculatedType := opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD
+	calculatedStage := opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD
 	wantObjects := [][]RedactedObjectProvenance{
 		nil,
 		{{Ordinal: 0, ObjectType: extractionType, Stage: extractionStage}},
@@ -227,21 +227,21 @@ func assertKnowledgeProjection(
 func knowledgeProjectionProgram(t *testing.T) knowledgeprogram.Program {
 	t.Helper()
 
-	definitions := []*opensplunkv1.KnowledgeObjectDefinition{
+	definitions := []*opensplunk.KnowledgeObjectDefinition{
 		{
 			AppId:        "secret-app-id",
 			Name:         "json_extract",
-			SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
+			SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
 			Selector: knowledgeProjectionSelector(
 				"source",
 				"secret-json-source",
 			),
-			Body: &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
-				FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
+			Body: &opensplunk.KnowledgeObjectDefinition_FieldExtraction{
+				FieldExtraction: &opensplunk.FieldExtractionDefinition{
 					InputField:        "_raw",
-					OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
-					Extraction: &opensplunkv1.FieldExtractionDefinition_Json{
-						Json: &opensplunkv1.JsonFieldExtractionDefinition{
+					OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+					Extraction: &opensplunk.FieldExtractionDefinition_Json{
+						Json: &opensplunk.JsonFieldExtractionDefinition{
 							Path:        "secret-json-path.token",
 							OutputField: "json_value",
 						},
@@ -252,17 +252,17 @@ func knowledgeProjectionProgram(t *testing.T) knowledgeprogram.Program {
 		{
 			AppId:        "secret-app-id",
 			Name:         "regex_extract",
-			SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
+			SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
 			Selector: knowledgeProjectionSelector(
 				"index+sourcetype",
 				"main",
 			),
-			Body: &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
-				FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
+			Body: &opensplunk.KnowledgeObjectDefinition_FieldExtraction{
+				FieldExtraction: &opensplunk.FieldExtractionDefinition{
 					InputField:        "_raw",
-					OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
-					Extraction: &opensplunkv1.FieldExtractionDefinition_Regex{
-						Regex: &opensplunkv1.RegexFieldExtractionDefinition{
+					OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+					Extraction: &opensplunk.FieldExtractionDefinition_Regex{
+						Regex: &opensplunk.RegexFieldExtractionDefinition{
 							Pattern: `secret-regex-literal-(?P<regex_second>[0-9]+)-(?P<regex_first>[a-z]+)`,
 							OutputFields: []string{
 								"regex_second",
@@ -286,30 +286,30 @@ func knowledgeProjectionProgram(t *testing.T) knowledgeprogram.Program {
 		{
 			AppId:        "secret-app-id",
 			Name:         "calculated_value",
-			SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
+			SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
 			Selector: knowledgeProjectionSelector(
 				"source",
 				"secret-calculated-source",
 			),
-			Body: &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{
-				CalculatedField: &opensplunkv1.CalculatedFieldDefinition{
+			Body: &opensplunk.KnowledgeObjectDefinition_CalculatedField{
+				CalculatedField: &opensplunk.CalculatedFieldDefinition{
 					DestinationField:  "calculated_out",
 					Expression:        `if(service="secret-calculated-literal", 1, 0)`,
-					OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+					OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 				},
 			},
 		},
 	}
 
-	objects := make([]*opensplunkv1.KnowledgeSnapshotObject, len(definitions))
-	stageOrdinals := make(map[opensplunkv1.KnowledgeSearchStage]uint32)
+	objects := make([]*opensplunk.KnowledgeSnapshotObject, len(definitions))
+	stageOrdinals := make(map[opensplunk.KnowledgeSearchStage]uint32)
 	for index, definition := range definitions {
 		normalized, err := knowledgedefinition.Normalize(definition)
 		if err != nil {
 			t.Fatalf("Normalize(%q): %v", definition.GetName(), err)
 		}
 		stage := knowledgeProjectionStage(normalized.ObjectType)
-		objects[index] = &opensplunkv1.KnowledgeSnapshotObject{
+		objects[index] = &opensplunk.KnowledgeSnapshotObject{
 			ResolutionOrdinal: uint32(index),
 			Stage:             stage,
 			StageOrdinal:      stageOrdinals[stage],
@@ -345,17 +345,17 @@ func knowledgeProjectionAliasDefinition(
 	name string,
 	source string,
 	host string,
-) *opensplunkv1.KnowledgeObjectDefinition {
-	return &opensplunkv1.KnowledgeObjectDefinition{
+) *opensplunk.KnowledgeObjectDefinition {
+	return &opensplunk.KnowledgeObjectDefinition{
 		AppId:        "secret-app-id",
 		Name:         name,
-		SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
+		SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
 		Selector:     knowledgeProjectionSelector("host", host),
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{
-			FieldAlias: &opensplunkv1.FieldAliasDefinition{
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{
+			FieldAlias: &opensplunk.FieldAliasDefinition{
 				SourceField:       source,
 				DestinationField:  "shared_alias",
-				OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+				OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
 			},
 		},
 	}
@@ -364,13 +364,13 @@ func knowledgeProjectionAliasDefinition(
 func knowledgeProjectionSelector(
 	dimension string,
 	value string,
-) *opensplunkv1.KnowledgeSelector {
-	pattern := []*opensplunkv1.KnowledgeSelectorPattern{{Value: value}}
-	selector := &opensplunkv1.KnowledgeSelector{}
+) *opensplunk.KnowledgeSelector {
+	pattern := []*opensplunk.KnowledgeSelectorPattern{{Value: value}}
+	selector := &opensplunk.KnowledgeSelector{}
 	switch dimension {
 	case "index+sourcetype":
 		selector.IndexPatterns = pattern
-		selector.SourcetypePatterns = []*opensplunkv1.KnowledgeSelectorPattern{{
+		selector.SourcetypePatterns = []*opensplunk.KnowledgeSelectorPattern{{
 			Value: "secret-regex-sourcetype",
 		}}
 	case "host":
@@ -384,15 +384,15 @@ func knowledgeProjectionSelector(
 }
 
 func knowledgeProjectionStage(
-	objectType opensplunkv1.KnowledgeObjectType,
-) opensplunkv1.KnowledgeSearchStage {
+	objectType opensplunk.KnowledgeObjectType,
+) opensplunk.KnowledgeSearchStage {
 	switch objectType {
-	case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION:
-		return opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION
-	case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS:
-		return opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS
-	case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD:
-		return opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD
+	case opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION:
+		return opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION
+	case opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS:
+		return opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS
+	case opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD:
+		return opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD
 	default:
 		panic("unsupported knowledge projection object type")
 	}

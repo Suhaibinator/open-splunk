@@ -15,7 +15,10 @@ import (
 	"time"
 )
 
-const migrationLockRetryWindow = 30 * time.Second
+const (
+	migrationLockRetryWindow = 30 * time.Second
+	firstMigrationVersion    = uint32(1)
+)
 
 var migrationFilename = regexp.MustCompile(`^([0-9]{4})_([a-z0-9][a-z0-9_]*)\.sql$`)
 
@@ -65,11 +68,15 @@ func (db *DB) VerifyCurrentMigrations(
 	if err != nil {
 		return MigrationIdentity{}, err
 	}
-	if appliedCount != loaded[len(loaded)-1].version {
+	if appliedCount != uint32(len(loaded)) {
+		appliedVersion := uint32(0)
+		if appliedCount > 0 {
+			appliedVersion = loaded[appliedCount-1].version
+		}
 		return MigrationIdentity{}, fmt.Errorf(
 			"%w: database version %d, required version %d",
 			ErrDatabaseNotCurrent,
-			appliedCount,
+			appliedVersion,
 			loaded[len(loaded)-1].version,
 		)
 	}
@@ -79,7 +86,7 @@ func (db *DB) VerifyCurrentMigrations(
 
 func migrationSetIdentity(loaded []migration) MigrationIdentity {
 	hasher := sha256.New()
-	_, _ = hasher.Write([]byte("open-splunk/sqlite-migrations/v1\x00"))
+	_, _ = hasher.Write([]byte("open-splunk/sqlite-migrations/format-1\x00"))
 	for _, item := range loaded {
 		_, _ = hasher.Write([]byte(strconv.FormatUint(uint64(item.version), 10)))
 		_, _ = hasher.Write([]byte{0})
@@ -148,7 +155,7 @@ func ApplyMigrations(ctx context.Context, db *sql.DB, migrations fs.FS) (err err
 		return err
 	}
 
-	for _, next := range loaded[appliedCount:] {
+	for _, next := range loaded[int(appliedCount):] {
 		if err := applyPendingMigration(ctx, conn, next); err != nil {
 			return err
 		}
@@ -175,7 +182,7 @@ func verifyMigrationHistory(
 	}
 	defer rows.Close()
 
-	expectedVersion := uint32(1)
+	expectedVersion := firstMigrationVersion
 	for rows.Next() {
 		var version uint32
 		var name string
@@ -189,7 +196,7 @@ func verifyMigrationHistory(
 		if version != expectedVersion {
 			return 0, fmt.Errorf("%w: migration history skips version %04d", ErrMigrationDrift, expectedVersion)
 		}
-		embedded := loaded[version-1]
+		embedded := loaded[version-firstMigrationVersion]
 		if name != embedded.name || !bytes.Equal(checksum, embedded.checksum[:]) {
 			return 0, fmt.Errorf("%w: version %04d", ErrMigrationDrift, version)
 		}
@@ -198,7 +205,7 @@ func verifyMigrationHistory(
 	if err := rows.Err(); err != nil {
 		return 0, fmt.Errorf("iterate SQLite migration history: %w", err)
 	}
-	return expectedVersion - 1, nil
+	return expectedVersion - firstMigrationVersion, nil
 }
 
 func applyPendingMigration(
@@ -207,7 +214,11 @@ func applyPendingMigration(
 	next migration,
 ) error {
 	if _, err := conn.ExecContext(ctx, string(next.contents)); err != nil {
-		return fmt.Errorf("apply SQLite migration %s: %w", next.name, err)
+		return fmt.Errorf(
+			"apply SQLite migration %s (existing pre-baseline state is unsupported; provision a fresh state database): %w",
+			next.name,
+			err,
+		)
 	}
 	if _, err := conn.ExecContext(ctx, `
 		INSERT INTO schema_migrations (version, name, checksum, applied_at_unix_micro)
@@ -252,7 +263,7 @@ func loadMigrations(migrations fs.FS) ([]migration, error) {
 		return nil, fmt.Errorf("%w: no SQLite migrations found", ErrInvalidArgument)
 	}
 	sort.Slice(loaded, func(i, j int) bool { return loaded[i].version < loaded[j].version })
-	wantVersion := uint32(1)
+	wantVersion := firstMigrationVersion
 	for _, item := range loaded {
 		if item.version != wantVersion {
 			return nil, fmt.Errorf("%w: migration %q has version %04d, want %04d", ErrInvalidArgument, item.name, item.version, wantVersion)

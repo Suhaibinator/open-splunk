@@ -2,7 +2,7 @@ package hec
 
 import "net/http"
 
-// Endpoint is one exact route in the bounded HEC v0.1 surface.
+// Endpoint is one exact route in the bounded HEC surface.
 type Endpoint uint8
 
 const (
@@ -31,13 +31,13 @@ type Route struct {
 func ClassifyRoute(method, path string) Route {
 	route := Route{Endpoint: EndpointOutside, Method: method}
 	switch path {
-	case "/services/collector", "/services/collector/event", "/services/collector/event/1.0":
+	case "/services/collector", "/services/collector/event":
 		route.Endpoint, route.KnownPath = EndpointEvent, true
-	case "/services/collector/raw", "/services/collector/raw/1.0":
+	case "/services/collector/raw":
 		route.Endpoint, route.KnownPath = EndpointRaw, true
 	case "/services/collector/ack":
 		route.Endpoint, route.KnownPath = EndpointAcknowledgment, true
-	case "/services/collector/health", "/services/collector/health/1.0":
+	case "/services/collector/health":
 		route.Endpoint, route.KnownPath = EndpointHealth, true
 	default:
 		if path == "/services/collector/" || len(path) > len("/services/collector/") && path[:len("/services/collector/")] == "/services/collector/" {

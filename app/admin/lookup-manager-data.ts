@@ -1,10 +1,10 @@
-import { SortDirection } from "@/gen/ts/open_splunk/v1/common";
+import { SortDirection } from "@/gen/ts/open_splunk/common";
 import {
   Lookup,
   LookupState,
   type Lookup as LookupMessage,
   type LookupDefinition,
-} from "@/gen/ts/open_splunk/v1/lookup";
+} from "@/gen/ts/open_splunk/lookup";
 import {
   CreateLookupRequest,
   DeleteLookupRequest,
@@ -21,7 +21,7 @@ import {
   type PreviewLookupResponse,
   type ReplaceLookupResponse,
   type SetLookupStateResponse,
-} from "@/gen/ts/open_splunk/v1/lookup_api";
+} from "@/gen/ts/open_splunk/lookup_api";
 import {
   ProtobufTransport,
   type ProtobufRequestOptions,

@@ -6,15 +6,15 @@ import (
 	"slices"
 	"strings"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobproto"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 )
 
 func (handler *apiHandler) validateSearch(
 	request *http.Request,
-	input *opensplunkv1.ValidateSearchRequest,
-) (*opensplunkv1.ValidateSearchResponse, error) {
+	input *opensplunk.ValidateSearchRequest,
+) (*opensplunk.ValidateSearchResponse, error) {
 	resolved, err := handler.resolveSearchDefinition(
 		input.GetDefinition(),
 		rejectUnsupportedSearchDefinitionFields,
@@ -50,8 +50,8 @@ func (handler *apiHandler) validateSearch(
 	return response, nil
 }
 
-func validationResultToProto(result searchjobs.ValidationResult) (*opensplunkv1.ValidateSearchResponse, error) {
-	response := &opensplunkv1.ValidateSearchResponse{Valid: result.Valid}
+func validationResultToProto(result searchjobs.ValidationResult) (*opensplunk.ValidateSearchResponse, error) {
+	response := &opensplunk.ValidateSearchResponse{Valid: result.Valid}
 	if result.Valid {
 		if strings.TrimSpace(result.NormalizedSPL) == "" || len(result.Diagnostics) != 0 {
 			return nil, errors.New("valid search analysis is inconsistent")
@@ -77,15 +77,15 @@ func validationResultToProto(result searchjobs.ValidationResult) (*opensplunkv1.
 	return response, nil
 }
 
-func validationResultKindToProto(kind searchjobs.ValidationResultKind) (opensplunkv1.ResultSetKind, bool) {
+func validationResultKindToProto(kind searchjobs.ValidationResultKind) (opensplunk.ResultSetKind, bool) {
 	switch kind {
 	case searchjobs.ValidationResultKindEvents:
-		return opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS, true
+		return opensplunk.ResultSetKind_RESULT_SET_KIND_EVENTS, true
 	case searchjobs.ValidationResultKindStatistics:
-		return opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS, true
+		return opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS, true
 	case searchjobs.ValidationResultKindTimeSeries:
-		return opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES, true
+		return opensplunk.ResultSetKind_RESULT_SET_KIND_TIME_SERIES, true
 	default:
-		return opensplunkv1.ResultSetKind_RESULT_SET_KIND_UNSPECIFIED, false
+		return opensplunk.ResultSetKind_RESULT_SET_KIND_UNSPECIFIED, false
 	}
 }

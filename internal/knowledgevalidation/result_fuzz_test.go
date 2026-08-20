@@ -6,7 +6,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"google.golang.org/protobuf/proto"
 )
@@ -66,7 +66,7 @@ func FuzzIssueCanonicalizationDeterministic(f *testing.F) {
 
 		diagnosticInput := []diagnosticIssue{{
 			path: path, code: code, message: message,
-			severity:    opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR,
+			severity:    opensplunk.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR,
 			suggestions: []string{suggestion, suggestion},
 		}}
 		firstDiagnostics, _, firstTruncated, firstErr := canonicalDiagnosticsWithSources(context.Background(), diagnosticInput)

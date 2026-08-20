@@ -9,7 +9,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
@@ -34,13 +34,13 @@ const (
 // Normalized is detached publication authority. Definition and Selector do
 // not alias the submitted protobuf.
 type Normalized struct {
-	Definition *opensplunkv1.LookupDefinition
+	Definition *opensplunk.LookupDefinition
 	Selector   *knowledge.Selector
 }
 
 // Normalize validates definition against the exact immutable asset header and
 // returns one canonical detached representation.
-func Normalize(input *opensplunkv1.LookupDefinition, columns []string) (Normalized, error) {
+func Normalize(input *opensplunk.LookupDefinition, columns []string) (Normalized, error) {
 	if input == nil {
 		return Normalized{}, invalid("definition", "is required")
 	}
@@ -58,8 +58,8 @@ func Normalize(input *opensplunkv1.LookupDefinition, columns []string) (Normaliz
 	if !validSharingScope(input.GetSharingScope()) {
 		return Normalized{}, invalid("sharing_scope", "is unspecified or unknown")
 	}
-	if input.GetOverwriteBehavior() != opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING &&
-		input.GetOverwriteBehavior() != opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING {
+	if input.GetOverwriteBehavior() != opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING &&
+		input.GetOverwriteBehavior() != opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING {
 		return Normalized{}, invalid("overwrite_behavior", "is unspecified or unknown")
 	}
 	columnSet, err := exactColumns(columns)
@@ -87,7 +87,7 @@ func Normalize(input *opensplunkv1.LookupDefinition, columns []string) (Normaliz
 		description = &value
 	}
 	return Normalized{
-		Definition: &opensplunkv1.LookupDefinition{
+		Definition: &opensplunk.LookupDefinition{
 			AppId:             strings.Clone(input.GetAppId()),
 			Name:              strings.Clone(input.GetName()),
 			Description:       description,
@@ -103,7 +103,7 @@ func Normalize(input *opensplunkv1.LookupDefinition, columns []string) (Normaliz
 }
 
 // KeyColumns projects the ordered lookup-side key field names.
-func KeyColumns(definition *opensplunkv1.LookupDefinition) []string {
+func KeyColumns(definition *opensplunk.LookupDefinition) []string {
 	columns := make([]string, len(definition.GetKeyMappings()))
 	for index, mapping := range definition.GetKeyMappings() {
 		columns[index] = mapping.GetLookupField()
@@ -111,7 +111,7 @@ func KeyColumns(definition *opensplunkv1.LookupDefinition) []string {
 	return columns
 }
 
-func normalizeMappings(kind mappingKind, path string, input []*opensplunkv1.LookupFieldMapping, columns map[string]struct{}, minimum, maximum int) ([]*opensplunkv1.LookupFieldMapping, error) {
+func normalizeMappings(kind mappingKind, path string, input []*opensplunk.LookupFieldMapping, columns map[string]struct{}, minimum, maximum int) ([]*opensplunk.LookupFieldMapping, error) {
 	if kind != mappingKindKey && kind != mappingKindOutput {
 		return nil, invalid(path, "has an unknown mapping kind")
 	}
@@ -120,7 +120,7 @@ func normalizeMappings(kind mappingKind, path string, input []*opensplunkv1.Look
 	}
 	lookupFields := make(map[string]struct{}, len(input))
 	eventFields := make(map[string]struct{}, len(input))
-	result := make([]*opensplunkv1.LookupFieldMapping, 0, len(input))
+	result := make([]*opensplunk.LookupFieldMapping, 0, len(input))
 	keyMapping := kind == mappingKindKey
 	for index, mapping := range input {
 		itemPath := fmt.Sprintf("%s[%d]", path, index)
@@ -152,7 +152,7 @@ func normalizeMappings(kind mappingKind, path string, input []*opensplunkv1.Look
 		}
 		lookupFields[mapping.GetLookupField()] = struct{}{}
 		eventFields[mapping.GetEventField()] = struct{}{}
-		result = append(result, &opensplunkv1.LookupFieldMapping{
+		result = append(result, &opensplunk.LookupFieldMapping{
 			LookupField: strings.Clone(mapping.GetLookupField()),
 			EventField:  strings.Clone(mapping.GetEventField()),
 		})
@@ -166,8 +166,8 @@ func normalizeMappings(kind mappingKind, path string, input []*opensplunkv1.Look
 // after the explicit mode marker.
 func canonicalAuthoredLookupSource(
 	name string,
-	keys, outputs []*opensplunkv1.LookupFieldMapping,
-	overwrite opensplunkv1.KnowledgeOverwriteBehavior,
+	keys, outputs []*opensplunk.LookupFieldMapping,
+	overwrite opensplunk.KnowledgeOverwriteBehavior,
 ) string {
 	var source strings.Builder
 	source.WriteString("* | lookup ")
@@ -178,7 +178,7 @@ func canonicalAuthoredLookupSource(
 		source.WriteString(" AS ")
 		source.WriteString(mapping.GetEventField())
 	}
-	if overwrite == opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING {
+	if overwrite == opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING {
 		source.WriteString(" OUTPUTNEW")
 	} else {
 		source.WriteString(" OUTPUT")
@@ -194,8 +194,8 @@ func canonicalAuthoredLookupSource(
 
 func validateCanonicallyAuthorable(
 	name string,
-	keys, outputs []*opensplunkv1.LookupFieldMapping,
-	overwrite opensplunkv1.KnowledgeOverwriteBehavior,
+	keys, outputs []*opensplunk.LookupFieldMapping,
+	overwrite opensplunk.KnowledgeOverwriteBehavior,
 ) error {
 	source := canonicalAuthoredLookupSource(name, keys, outputs, overwrite)
 	if len(source) > spl.MaximumSearchSourceBytes {
@@ -268,8 +268,8 @@ func ValidIdentity(value string, maximum int) bool {
 	return true
 }
 
-func validSharingScope(value opensplunkv1.SharingScope) bool {
-	return value == opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE || value == opensplunkv1.SharingScope_SHARING_SCOPE_APP || value == opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL
+func validSharingScope(value opensplunk.SharingScope) bool {
+	return value == opensplunk.SharingScope_SHARING_SCOPE_PRIVATE || value == opensplunk.SharingScope_SHARING_SCOPE_APP || value == opensplunk.SharingScope_SHARING_SCOPE_GLOBAL
 }
 
 func hasPinnedControl(value string) bool {
@@ -281,10 +281,10 @@ func hasPinnedControl(value string) bool {
 	return false
 }
 
-func normalizeSelector(input *opensplunkv1.KnowledgeSelector) (*knowledge.Selector, *opensplunkv1.KnowledgeSelector, error) {
+func normalizeSelector(input *opensplunk.KnowledgeSelector) (*knowledge.Selector, *opensplunk.KnowledgeSelector, error) {
 	dimensions := []struct {
 		dimension knowledge.Dimension
-		patterns  []*opensplunkv1.KnowledgeSelectorPattern
+		patterns  []*opensplunk.KnowledgeSelectorPattern
 	}{
 		{knowledge.DimensionIndex, nil},
 		{knowledge.DimensionHost, nil},
@@ -314,11 +314,11 @@ func normalizeSelector(input *opensplunkv1.KnowledgeSelector) (*knowledge.Select
 					"is invalid",
 				)
 			}
-			expectedKind := opensplunkv1.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_WILDCARD
+			expectedKind := opensplunk.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_WILDCARD
 			if normalized.IsLiteral() {
-				expectedKind = opensplunkv1.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT
+				expectedKind = opensplunk.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT
 			}
-			if pattern.GetMatchKind() != opensplunkv1.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_UNSPECIFIED &&
+			if pattern.GetMatchKind() != opensplunk.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_UNSPECIFIED &&
 				pattern.GetMatchKind() != expectedKind {
 				return nil, nil, invalid(
 					fmt.Sprintf("selector.patterns[%d].match_kind", patternIndex),
@@ -333,20 +333,20 @@ func normalizeSelector(input *opensplunkv1.KnowledgeSelector) (*knowledge.Select
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: selector: %w", ErrInvalid, err)
 	}
-	canonical := &opensplunkv1.KnowledgeSelector{}
+	canonical := &opensplunk.KnowledgeSelector{}
 	for _, dimension := range dimensions {
 		values := compiled.Patterns(dimension.dimension)
-		patterns := make([]*opensplunkv1.KnowledgeSelectorPattern, 0, len(values))
+		patterns := make([]*opensplunk.KnowledgeSelectorPattern, 0, len(values))
 		for _, value := range values {
 			normalized, normalizeErr := knowledge.NormalizePattern(value)
 			if normalizeErr != nil {
 				return nil, nil, fmt.Errorf("%w: selector canonicalization", ErrInvalid)
 			}
-			kind := opensplunkv1.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_WILDCARD
+			kind := opensplunk.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_WILDCARD
 			if normalized.IsLiteral() {
-				kind = opensplunkv1.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT
+				kind = opensplunk.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT
 			}
-			patterns = append(patterns, &opensplunkv1.KnowledgeSelectorPattern{MatchKind: kind, Value: value})
+			patterns = append(patterns, &opensplunk.KnowledgeSelectorPattern{MatchKind: kind, Value: value})
 		}
 		switch dimension.dimension {
 		case knowledge.DimensionIndex:

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/collectoradmission"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
@@ -156,7 +156,6 @@ func TestRuntimePrunedRevokedCollectorTokenRemainsUnauthorized(t *testing.T) {
 	config.Clock = func() time.Time { return acceptedAt }
 	config.NewStreamID = func() string { return "stream-pruned-token" }
 	config.ServerInstanceID = "server-pruned-token"
-	config.ServerVersion = "pruned-token-test"
 	config.SessionManager = collectorSessionManager{
 		admission: admissions,
 		fleet:     fleet,
@@ -217,7 +216,7 @@ func TestRuntimePrunedRevokedCollectorTokenRemainsUnauthorized(t *testing.T) {
 
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
-	opensplunkv1.RegisterCollectorIngestServiceServer(grpcServer, service)
+	opensplunk.RegisterCollectorIngestServiceServer(grpcServer, service)
 	serveDone := make(chan error, 1)
 	go func() {
 		serveDone <- grpcServer.Serve(listener)
@@ -263,59 +262,55 @@ func TestRuntimePrunedRevokedCollectorTokenRemainsUnauthorized(t *testing.T) {
 		5*time.Second,
 	)
 	t.Cleanup(cancelStream)
-	stream, err := opensplunkv1.NewCollectorIngestServiceClient(connection).
+	stream, err := opensplunk.NewCollectorIngestServiceClient(connection).
 		Collect(streamContext)
 	if err != nil {
 		t.Fatal(err)
 	}
 	message := "physically pruned credentials must not store this event"
-	event := &opensplunkv1.LogEvent{
+	event := &opensplunk.LogEvent{
 		EventId:     "event-pruned-token",
 		IndexName:   "main",
 		EventTime:   timestamppb.New(acceptedAt.Add(-time.Second)),
 		CollectedAt: timestamppb.New(acceptedAt),
-		EventTimeSource: opensplunkv1.
+		EventTimeSource: opensplunk.
 			EventTimeSource_EVENT_TIME_SOURCE_PARSED,
 		Host:        "runtime-pruned-token-host",
 		Source:      "/var/log/runtime-pruned-token.log",
 		Sourcetype:  "runtime:pruned-token",
-		Severity:    opensplunkv1.LogSeverity_LOG_SEVERITY_INFO,
+		Severity:    opensplunk.LogSeverity_LOG_SEVERITY_INFO,
 		Message:     &message,
 		Raw:         []byte(message),
-		RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+		RawEncoding: opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 	}
-	batch := &opensplunkv1.EventBatch{
+	batch := &opensplunk.EventBatch{
 		CollectorId:   prunedCollectorID,
 		BatchId:       "batch-pruned-token",
 		BatchSequence: 1,
 		CreatedAt:     timestamppb.New(acceptedAt),
-		Events:        []*opensplunkv1.LogEvent{event},
+		Events:        []*opensplunk.LogEvent{event},
 		UncompressedSizeBytes: ingest.UncompressedEventBytes(
-			[]*opensplunkv1.LogEvent{event},
+			[]*opensplunk.LogEvent{event},
 		),
 		EventIdsSha256: ingest.EventIDDigest(
-			[]*opensplunkv1.LogEvent{event},
+			[]*opensplunk.LogEvent{event},
 		),
-		ProtocolMajor: 1,
-		ProtocolMinor: 0,
 	}
-	if err := stream.Send(&opensplunkv1.CollectRequest{
+	if err := stream.Send(&opensplunk.CollectRequest{
 		StreamSequence: 1,
 		SentAt:         timestamppb.New(acceptedAt),
-		Payload: &opensplunkv1.CollectRequest_Hello{
-			Hello: &opensplunkv1.CollectorHello{
-				CollectorId:      prunedCollectorID,
-				InstanceId:       "instance-pruned-token",
-				ProtocolMajor:    1,
-				ProtocolMinor:    0,
-				CollectorVersion: "pruned-token-test",
-				Hostname:         "runtime-pruned-token-host",
-				OperatingSystem:  "linux",
-				Architecture:     "amd64",
-				StartedAt:        timestamppb.New(acceptedAt.Add(-time.Minute)),
-				Inputs: []*opensplunkv1.CollectorInputRegistration{{
+		Payload: &opensplunk.CollectRequest_Hello{
+			Hello: &opensplunk.CollectorHello{
+				CollectorId:     prunedCollectorID,
+				InstanceId:      "instance-pruned-token",
+				SourceRevision:  "development",
+				Hostname:        "runtime-pruned-token-host",
+				OperatingSystem: "linux",
+				Architecture:    "amd64",
+				StartedAt:       timestamppb.New(acceptedAt.Add(-time.Minute)),
+				Inputs: []*opensplunk.CollectorInputRegistration{{
 					InputId: "input-pruned-token",
-					InputType: opensplunkv1.
+					InputType: opensplunk.
 						CollectorInputType_COLLECTOR_INPUT_TYPE_FILE,
 					IndexName: "main",
 				}},
@@ -324,10 +319,10 @@ func TestRuntimePrunedRevokedCollectorTokenRemainsUnauthorized(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := stream.Send(&opensplunkv1.CollectRequest{
+	if err := stream.Send(&opensplunk.CollectRequest{
 		StreamSequence: 2,
 		SentAt:         timestamppb.New(acceptedAt),
-		Payload: &opensplunkv1.CollectRequest_Batch{
+		Payload: &opensplunk.CollectRequest_Batch{
 			Batch: batch,
 		},
 	}); err != nil {

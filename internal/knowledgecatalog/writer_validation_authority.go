@@ -8,7 +8,7 @@ import (
 	"slices"
 	"strings"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgevalidation"
@@ -50,7 +50,7 @@ func (writer *Writer) validateFixedSnapshot(
 	}
 
 	switch request.intent {
-	case opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE:
+	case opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE:
 		result, err := knowledgevalidation.BuildInactive(ctx, definition)
 		if err != nil {
 			return knowledgevalidation.Result{}, 0, err
@@ -80,7 +80,7 @@ func (writer *Writer) validateFixedSnapshot(
 		}
 		return result, revision, nil
 
-	case opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION:
+	case opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION:
 		preparation, err := knowledgevalidation.PrepareActive(ctx, definition)
 		if err != nil {
 			return knowledgevalidation.Result{}, 0, err
@@ -137,7 +137,7 @@ func (writer *Writer) readValidationUpdateCurrent(
 		return validationCurrentCandidate{}, control.ErrVersionConflict
 	}
 	if current.State == StateQuarantined ||
-		request.intent == opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION &&
+		request.intent == opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION &&
 			current.State == StateDeleted {
 		return validationCurrentCandidate{}, control.ErrVersionConflict
 	}
@@ -152,7 +152,7 @@ func (writer *Writer) readValidationUpdateCurrent(
 		)
 	}
 	var dependencies []publicationDependency
-	if request.intent == opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION {
+	if request.intent == opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION {
 		dependencies, err = dependenciesFromCurrent(tx, version)
 		if err != nil {
 			return validationCurrentCandidate{}, err
@@ -453,9 +453,9 @@ func projectAuthorizedValidationDependencies(
 	tx *gorm.DB,
 	scope normalizedScope,
 	dependencies []publicationDependency,
-) ([]*opensplunkv1.KnowledgeValidationDependency, bool, error) {
+) ([]*opensplunk.KnowledgeValidationDependency, bool, error) {
 	if len(dependencies) == 0 {
-		return []*opensplunkv1.KnowledgeValidationDependency{}, true, nil
+		return []*opensplunk.KnowledgeValidationDependency{}, true, nil
 	}
 	if len(dependencies) > maximumDependenciesPerVersion {
 		return nil, false, ErrCorrupt
@@ -488,23 +488,23 @@ func projectAuthorizedValidationDependencies(
 	if len(records) != len(dependencies) {
 		return nil, false, nil
 	}
-	result := make([]*opensplunkv1.KnowledgeValidationDependency, len(records))
+	result := make([]*opensplunk.KnowledgeValidationDependency, len(records))
 	for index, record := range records {
 		expected := dependencies[index]
 		if record.KnowledgeObjectID != expected.targetObjectID ||
 			record.CurrentVersion != expected.targetVersion || record.State != StateActive {
 			return nil, false, ErrCorrupt
 		}
-		result[index] = &opensplunkv1.KnowledgeValidationDependency{
-			Target: &opensplunkv1.KnowledgeManagementObjectVersionIdentity{
+		result[index] = &opensplunk.KnowledgeValidationDependency{
+			Target: &opensplunk.KnowledgeManagementObjectVersionIdentity{
 				KnowledgeObjectId: strings.Clone(record.KnowledgeObjectID),
 				// #nosec G115 -- current dependency records are validated as positive above.
 				Version: uint64(record.CurrentVersion),
 			},
-			Role: opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
+			Role: opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
 		}
 	}
-	if !slices.IsSortedFunc(result, func(left, right *opensplunkv1.KnowledgeValidationDependency) int {
+	if !slices.IsSortedFunc(result, func(left, right *opensplunk.KnowledgeValidationDependency) int {
 		return strings.Compare(left.GetTarget().GetKnowledgeObjectId(), right.GetTarget().GetKnowledgeObjectId())
 	}) || len(result) != len(dependencies) {
 		return nil, false, ErrCorrupt

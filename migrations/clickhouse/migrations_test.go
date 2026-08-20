@@ -56,20 +56,25 @@ func TestMigrationFilesAreContiguous(t *testing.T) {
 	}
 }
 
-func TestInitialEventsSchemaContract(t *testing.T) {
-	sql := readFile(t, "0001_create_events.sql")
+func TestBaselineSchemaContract(t *testing.T) {
+	sql := readFile(t, "0001_baseline.sql")
 
 	for _, column := range []string{
 		"event_id", "tenant_id", "index_name", "event_time", "index_time",
 		"host", "source", "sourcetype", "service", "level", "body", "raw",
-		"trace_id", "span_id", "fields", "field_names", "collector_id", "batch_id",
+		"trace_id", "span_id", "fields", "field_names", "field_types",
+		"field_metadata_version", "collector_id", "ingest_source_kind",
+		"ingest_source_id", "batch_id", "visibility_seq",
 	} {
 		if !strings.Contains(sql, "`"+column+"`") {
-			t.Errorf("initial events migration is missing canonical column %q", column)
+			t.Errorf("baseline is missing canonical events column %q", column)
 		}
 	}
 
 	for _, fragment := range []string{
+		"CREATE DATABASE IF NOT EXISTS open_splunk",
+		"CREATE TABLE IF NOT EXISTS open_splunk.schema_migrations",
+		"CREATE TABLE IF NOT EXISTS open_splunk.events",
 		"`fields` JSON(",
 		"max_dynamic_paths = 256",
 		"max_dynamic_types = 16",
@@ -79,56 +84,17 @@ func TestInitialEventsSchemaContract(t *testing.T) {
 		"TTL `expires_at` DELETE",
 		"non_replicated_deduplication_window = 10000",
 		"INDEX idx_raw_text arrayMap(token -> lower(token), extractAll(translateUTF8(`raw`, 'ſK', 'sk'), '[A-Za-z0-9_]+')) TYPE text(tokenizer = 'array')",
-	} {
-		if !strings.Contains(sql, fragment) {
-			t.Errorf("initial events migration is missing schema contract fragment %q", fragment)
-		}
-	}
-}
-
-func TestVisibilitySequenceMigrationContract(t *testing.T) {
-	t.Parallel()
-	sql := readFile(t, "0002_add_visibility_sequence.sql")
-	for _, fragment := range []string{
-		"ADD COLUMN IF NOT EXISTS `visibility_seq` UInt64 DEFAULT 0",
-		"ADD CONSTRAINT IF NOT EXISTS visibility_seq_is_positive",
+		"INDEX idx_visibility_seq `visibility_seq` TYPE minmax GRANULARITY 1",
+		"CONSTRAINT visibility_seq_is_positive",
 		"CHECK `visibility_seq` > 0",
-		"ADD INDEX IF NOT EXISTS idx_visibility_seq `visibility_seq` TYPE minmax GRANULARITY 1",
-		"SELECT 2, 'add_visibility_sequence'",
-		"WHERE `version` = 2",
-	} {
-		if !strings.Contains(sql, fragment) {
-			t.Errorf("visibility migration is missing contract fragment %q", fragment)
-		}
-	}
-}
-
-func TestFieldMetadataMigrationContract(t *testing.T) {
-	t.Parallel()
-	sql := readFile(t, "0003_add_field_metadata.sql")
-	for _, fragment := range []string{
-		"ADD COLUMN IF NOT EXISTS `field_types` Array(UInt8) DEFAULT []",
-		"AFTER `field_names`",
-		"ADD COLUMN IF NOT EXISTS `field_metadata_version` UInt8 DEFAULT 0",
-		"AFTER `field_types`",
-		"ADD CONSTRAINT IF NOT EXISTS field_metadata_version_is_supported",
-		"CHECK `field_metadata_version` IN (0, 1)",
-		"ADD CONSTRAINT IF NOT EXISTS field_metadata_is_aligned",
+		"CONSTRAINT field_metadata_version_is_supported CHECK `field_metadata_version` = 1",
+		"CONSTRAINT field_metadata_is_aligned",
 		"length(`field_names`) = length(`field_types`)",
 		"arrayAll(code -> code BETWEEN 1 AND 12, `field_types`)",
-		"SELECT 3, 'add_field_metadata'",
-		"WHERE `version` = 3",
-	} {
-		if !strings.Contains(sql, fragment) {
-			t.Errorf("field metadata migration is missing contract fragment %q", fragment)
-		}
-	}
-}
-
-func TestRecoverySetsMigrationContract(t *testing.T) {
-	t.Parallel()
-	sql := readFile(t, "0004_create_recovery_sets.sql")
-	for _, fragment := range []string{
+		"CONSTRAINT ingest_source_kind_is_supported CHECK `ingest_source_kind` IN (1, 2)",
+		"CONSTRAINT ingest_source_shape_is_valid",
+		"`ingest_source_id` = `collector_id`",
+		"empty(`collector_id`)",
 		"CREATE TABLE IF NOT EXISTS open_splunk.recovery_sets",
 		"`slot` UInt8",
 		"`recovery_set_id` FixedString(32)",
@@ -144,33 +110,11 @@ func TestRecoverySetsMigrationContract(t *testing.T) {
 		"CONSTRAINT slot_is_singleton CHECK `slot` = 1",
 		"ENGINE = MergeTree",
 		"ORDER BY (`slot`)",
-		"SELECT 4, 'create_recovery_sets'",
-		"WHERE `version` = 4",
+		"SELECT 1, 'baseline', now64(3)",
+		"WHERE `version` = 1",
 	} {
 		if !strings.Contains(sql, fragment) {
-			t.Errorf("recovery sets migration is missing contract fragment %q", fragment)
-		}
-	}
-}
-
-func TestIngestSourceMigrationContract(t *testing.T) {
-	t.Parallel()
-	sql := readFile(t, "0005_add_ingest_source.sql")
-	for _, fragment := range []string{
-		"ADD COLUMN IF NOT EXISTS `ingest_source_kind` UInt8",
-		"DEFAULT if(empty(`collector_id`), 0, 1)",
-		"ADD COLUMN IF NOT EXISTS `ingest_source_id` String",
-		"DEFAULT if(`ingest_source_kind` = 1, `collector_id`, '')",
-		"ADD CONSTRAINT IF NOT EXISTS ingest_source_kind_is_supported",
-		"CHECK `ingest_source_kind` IN (1, 2)",
-		"ADD CONSTRAINT IF NOT EXISTS ingest_source_shape_is_valid",
-		"`ingest_source_id` = `collector_id`",
-		"empty(`collector_id`)",
-		"SELECT 5, 'add_ingest_source'",
-		"WHERE `version` = 5",
-	} {
-		if !strings.Contains(sql, fragment) {
-			t.Errorf("ingest source migration is missing contract fragment %q", fragment)
+			t.Errorf("baseline is missing schema contract fragment %q", fragment)
 		}
 	}
 }
@@ -565,12 +509,12 @@ func TestGenerateEnvCreatesVerifiedClickHouseTLSIdentity(t *testing.T) {
 			values["OPEN_SPLUNK_SERVER_TLS_SERVER_NAME"],
 		)
 	}
-	if version := values["OPEN_SPLUNK_APPLICATION_VERSION"]; version != "0.4.0" {
-		t.Fatalf("generated application version = %q, want 0.4.0", version)
-	}
 	if revision := values["OPEN_SPLUNK_SOURCE_REVISION"]; len(revision) != 40 && len(revision) != 64 ||
 		strings.Trim(revision, "0123456789abcdef") != "" {
 		t.Fatalf("generated source revision is not a full lowercase Git object ID: %q", revision)
+	}
+	if got, want := values["OPEN_SPLUNK_SERVER_IMAGE"], "open-splunk-server:"+values["OPEN_SPLUNK_SOURCE_REVISION"]; got != want {
+		t.Fatalf("generated server image = %q, want %q", got, want)
 	}
 	if _, err := time.Parse(time.RFC3339, values["OPEN_SPLUNK_IMAGE_CREATED"]); err != nil {
 		t.Fatalf("generated OCI creation time is invalid: %v", err)
@@ -1232,20 +1176,7 @@ func TestMigrationsAgainstClickHouse(t *testing.T) {
 	waitForClickHouse(ctx, t, container, password)
 	files := migrationFiles(t)
 	runClickHouse(ctx, t, container, password, readFile(t, files[0]))
-	legacyInsert := `
-		INSERT INTO open_splunk.events
-		(
-			event_id, tenant_id, index_name, event_time, index_time, expires_at
-		)
-		VALUES
-		(
-			'legacy-event', 'tenant-1', 'main', now64(9), now64(3), now64(3) + INTERVAL 1 DAY
-		)`
-	runClickHouse(ctx, t, container, password, legacyInsert)
-	for _, path := range files[1:] {
-		runClickHouse(ctx, t, container, password, readFile(t, path))
-	}
-	// Every migration must remain idempotent after the populated upgrade path.
+	// The complete baseline must remain idempotent after fresh initialization.
 	for _, path := range files {
 		runClickHouse(ctx, t, container, password, readFile(t, path))
 	}
@@ -1258,7 +1189,8 @@ func TestMigrationsAgainstClickHouse(t *testing.T) {
 		FORMAT TSVRaw`)
 	for _, name := range []string{
 		"event_id", "tenant_id", "index_name", "event_time", "index_time", "raw",
-		"fields", "field_names", "field_types", "field_metadata_version", "collector_id", "batch_id",
+		"fields", "field_names", "field_types", "field_metadata_version", "collector_id",
+		"ingest_source_kind", "ingest_source_id", "batch_id",
 		"visibility_seq", "expires_at",
 	} {
 		if !strings.Contains(columns, name) {
@@ -1272,7 +1204,8 @@ func TestMigrationsAgainstClickHouse(t *testing.T) {
 			event_id, tenant_id, index_name, event_time, index_time,
 			host, source, sourcetype, severity, raw, raw_encoding,
 			fields, field_names, field_types, field_metadata_version,
-			collector_id, batch_id, batch_sequence, expires_at, visibility_seq
+			collector_id, ingest_source_kind, ingest_source_id,
+			batch_id, batch_sequence, expires_at, visibility_seq
 		)
 		SETTINGS
 			insert_deduplication_token = 'migration-smoke-batch',
@@ -1283,43 +1216,24 @@ func TestMigrationsAgainstClickHouse(t *testing.T) {
 			input_format_try_infer_dates = 0,
 			input_format_try_infer_datetimes = 0
 		FORMAT JSONEachRow
-		{"event_id":"event-1","tenant_id":"tenant-1","index_name":"main","event_time":"2026-07-21 03:04:05.123456789","index_time":"2026-07-21 03:04:06.123","host":"host-1","source":"app.log","sourcetype":"go:zap:json","severity":3,"raw":"{\"message\":\"hello\"}","raw_encoding":1,"fields":{"big":9007199254740993,"unsigned":18446744073709551615,"negative":-9223372036854775808,"ratio":1.25,"ok":true,"nothing":null,"mixed":[1,"two",true],"nested":{"label":"kept"}},"field_names":["big","mixed","negative","nested.label","nothing","ok","ratio","unsigned"],"field_types":[3,10,3,2,1,6,5,4],"field_metadata_version":1,"collector_id":"collector-1","batch_id":"batch-1","batch_sequence":1,"expires_at":"2099-02-01 03:04:06.123","visibility_seq":1}`
+		{"event_id":"event-1","tenant_id":"tenant-1","index_name":"main","event_time":"2026-07-21 03:04:05.123456789","index_time":"2026-07-21 03:04:06.123","host":"host-1","source":"app.log","sourcetype":"go:zap:json","severity":3,"raw":"{\"message\":\"hello\"}","raw_encoding":1,"fields":{"big":9007199254740993,"unsigned":18446744073709551615,"negative":-9223372036854775808,"ratio":1.25,"ok":true,"nothing":null,"mixed":[1,"two",true],"nested":{"label":"kept"}},"field_names":["big","mixed","negative","nested.label","nothing","ok","ratio","unsigned"],"field_types":[3,10,3,2,1,6,5,4],"field_metadata_version":1,"collector_id":"collector-1","ingest_source_kind":1,"ingest_source_id":"collector-1","batch_id":"batch-1","batch_sequence":1,"expires_at":"2099-02-01 03:04:06.123","visibility_seq":1}`
 
 	// A retry must contain the exact same accepted rows in the same order and
 	// reuse the exact token. The non-replicated MergeTree window then drops it.
 	runClickHouse(ctx, t, container, password, insert)
 	runClickHouse(ctx, t, container, password, insert)
 
-	legacyVisibility := clickHouseQuery(ctx, t, container, password, `
-		SELECT visibility_seq
-		FROM open_splunk.events
-		WHERE event_id = 'legacy-event'
-		FORMAT TSVRaw`)
-	if legacyVisibility != "0" {
-		t.Fatalf("pre-migration row visibility = %q, want migration default 0", legacyVisibility)
-	}
-	legacyMetadata := clickHouseQuery(ctx, t, container, password, `
-		SELECT concat(toString(field_metadata_version), ':', toJSONString(field_types))
-		FROM open_splunk.events
-		WHERE event_id = 'legacy-event'
-		FORMAT TSVRaw`)
-	if legacyMetadata != "0:[]" {
-		t.Fatalf("pre-migration row field metadata = %q, want version-zero empty types", legacyMetadata)
-	}
-	legacyError := clickHouseQueryError(ctx, t, container, password, strings.Replace(legacyInsert, "legacy-event", "post-upgrade-legacy-event", 1))
-	if !strings.Contains(legacyError, "visibility_seq_is_positive") {
-		t.Fatalf("legacy writer omission did not fail the visibility constraint: %s", legacyError)
-	}
 	invalidMetadataPrefix := `
 		INSERT INTO open_splunk.events
 		(event_id, tenant_id, index_name, event_time, index_time, expires_at, visibility_seq,
+		 collector_id, ingest_source_kind, ingest_source_id,
 		 field_names, field_types, field_metadata_version)
 		VALUES `
 	for name, values := range map[string]string{
-		"unsupported-version": "('unsupported-version', 'tenant-1', 'main', now64(9), now64(3), now64(3) + INTERVAL 1 DAY, 1, ['x'], [2], 2)",
-		"misaligned":          "('misaligned', 'tenant-1', 'main', now64(9), now64(3), now64(3) + INTERVAL 1 DAY, 1, ['x'], [], 1)",
-		"invalid-type":        "('invalid-type', 'tenant-1', 'main', now64(9), now64(3), now64(3) + INTERVAL 1 DAY, 1, ['x'], [13], 1)",
-		"typed-legacy":        "('typed-legacy', 'tenant-1', 'main', now64(9), now64(3), now64(3) + INTERVAL 1 DAY, 1, ['x'], [2], 0)",
+		"unsupported-version": "('unsupported-version', 'tenant-1', 'main', now64(9), now64(3), now64(3) + INTERVAL 1 DAY, 1, '', 2, 'metadata-test', ['x'], [2], 2)",
+		"misaligned":          "('misaligned', 'tenant-1', 'main', now64(9), now64(3), now64(3) + INTERVAL 1 DAY, 1, '', 2, 'metadata-test', ['x'], [], 1)",
+		"invalid-type":        "('invalid-type', 'tenant-1', 'main', now64(9), now64(3), now64(3) + INTERVAL 1 DAY, 1, '', 2, 'metadata-test', ['x'], [13], 1)",
+		"typed-legacy":        "('typed-legacy', 'tenant-1', 'main', now64(9), now64(3), now64(3) + INTERVAL 1 DAY, 1, '', 2, 'metadata-test', ['x'], [2], 0)",
 	} {
 		errorText := clickHouseQueryError(ctx, t, container, password, invalidMetadataPrefix+values)
 		if !strings.Contains(errorText, "field_metadata_") {

@@ -15,18 +15,20 @@ import (
 
 var (
 	// ErrClickHouseMigrationDrift means the migration ledger is not an exact
-	// prefix of the migrations embedded in this server binary.
-	ErrClickHouseMigrationDrift = errors.New("server: ClickHouse migration history differs from embedded migrations")
-	// ErrClickHouseDatabaseTooNew means ClickHouse was migrated by a newer
-	// server binary. Starting an older binary could otherwise corrupt data.
-	ErrClickHouseDatabaseTooNew = errors.New("server: ClickHouse schema is newer than this binary")
+	// prefix of the migrations embedded in this server binary. In-place
+	// conversion is intentionally unsupported.
+	ErrClickHouseMigrationDrift = errors.New("server: ClickHouse migration history is unsupported; provision a fresh database")
+	// ErrClickHouseDatabaseTooNew means ClickHouse contains a migration beyond
+	// the embedded sequence. In-place downgrade is intentionally unsupported.
+	ErrClickHouseDatabaseTooNew = errors.New("server: ClickHouse migration history is unsupported; provision a fresh database")
 )
 
 var clickHouseMigrationFilename = regexp.MustCompile(`^([0-9]{4})_([a-z0-9][a-z0-9_]*)\.sql$`)
 
 const (
 	maximumClickHouseMigrationCount             = 9_999
-	clickHouseMigrationTableResultLimit         = clickHouseReleaseOwnedTableSentinel
+	firstClickHouseMigrationVersion             = uint32(1)
+	clickHouseMigrationTableResultLimit         = clickHouseManagedTableSentinel
 	clickHouseMigrationTableReadByteLimit       = 1 << 20
 	clickHouseMigrationLedgerReadByteLimit      = 16 << 20
 	clickHouseMigrationLedgerMaximumMemoryBytes = 64 << 20
@@ -207,7 +209,7 @@ func loadClickHouseMigrations(migrationFiles fs.FS) ([]clickHouseMigration, erro
 	}
 	for index, migration := range loaded {
 		// #nosec G115 -- the migration count is capped at the four-digit filename version space.
-		wantVersion := uint32(index + 1)
+		wantVersion := firstClickHouseMigrationVersion + uint32(index) // #nosec G115 -- migration count is bounded above.
 		if migration.version != wantVersion {
 			return nil, fmt.Errorf(
 				"ClickHouse migration %q has version %04d, want %04d",
@@ -276,7 +278,7 @@ type clickHouseMigrationHistoryConnection interface {
 // reader for both the canonical migrator and recovery aliases. A caller may
 // skip the preliminary table enumeration only after the exact physical-schema
 // inspector has already proved that the database contains precisely the
-// release-owned table set, including schema_migrations.
+// managed table set, including schema_migrations.
 func readClickHouseMigrationHistoryForDatabase(
 	ctx context.Context,
 	connection clickHouseMigrationHistoryConnection,
@@ -319,10 +321,10 @@ func readClickHouseMigrationHistoryWithTableProbe(
 	}
 	if len(tables) >= clickHouseMigrationTableResultLimit {
 		return nil, fmt.Errorf(
-			"%w: %s contains more than the supported maximum of %d release-owned tables",
+			"%w: %s contains more than the supported maximum of %d managed tables",
 			ErrClickHouseMigrationDrift,
 			databaseName,
-			clickHouseReleaseOwnedTableCount,
+			clickHouseManagedTableCount,
 		)
 	}
 	ledgerExists := false
@@ -409,7 +411,7 @@ func verifyClickHouseMigrationHistory(history []clickHouseMigrationLedgerRow, mi
 		return fmt.Errorf("%w: embedded migration count exceeds the supported version space", ErrClickHouseMigrationDrift)
 	}
 	// #nosec G115 -- the migration count is capped at the four-digit filename version space.
-	latestVersion := uint32(len(migrations))
+	latestVersion := firstClickHouseMigrationVersion + uint32(len(migrations)) - 1 // #nosec G115 -- migration count is bounded above.
 	for _, row := range history {
 		if row.Version > latestVersion {
 			return fmt.Errorf(
@@ -423,7 +425,7 @@ func verifyClickHouseMigrationHistory(history []clickHouseMigrationLedgerRow, mi
 
 	for index, row := range history {
 		// #nosec G115 -- a matching history cannot exceed the bounded embedded migration prefix.
-		wantVersion := uint32(index + 1)
+		wantVersion := firstClickHouseMigrationVersion + uint32(index) // #nosec G115 -- migration count is bounded above.
 		if row.Version != wantVersion {
 			return fmt.Errorf(
 				"%w: row %d has version %04d, want %04d",

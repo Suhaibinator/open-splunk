@@ -7,7 +7,7 @@ import (
 	"slices"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
@@ -738,15 +738,15 @@ func testKnowledgeCompilationEvidenceFixture(
 
 func testKnowledgeEvidenceProgram(t *testing.T, identity string) knowledgeprogram.Program {
 	t.Helper()
-	definitions := []*opensplunkv1.KnowledgeObjectDefinition{
+	definitions := []*opensplunk.KnowledgeObjectDefinition{
 		{
-			AppId: "app-a", Name: "a-regex", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-			Body: &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
-				FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
+			AppId: "app-a", Name: "a-regex", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+			Body: &opensplunk.KnowledgeObjectDefinition_FieldExtraction{
+				FieldExtraction: &opensplunk.FieldExtractionDefinition{
 					InputField:        "_raw",
-					OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
-					Extraction: &opensplunkv1.FieldExtractionDefinition_Regex{
-						Regex: &opensplunkv1.RegexFieldExtractionDefinition{
+					OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+					Extraction: &opensplunk.FieldExtractionDefinition_Regex{
+						Regex: &opensplunk.RegexFieldExtractionDefinition{
 							Pattern: `(?P<knowledge_word>[a-z]+)`, OutputFields: []string{"knowledge_word"},
 						},
 					},
@@ -754,13 +754,13 @@ func testKnowledgeEvidenceProgram(t *testing.T, identity string) knowledgeprogra
 			},
 		},
 		{
-			AppId: "app-a", Name: "b-json", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-			Body: &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
-				FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
+			AppId: "app-a", Name: "b-json", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+			Body: &opensplunk.KnowledgeObjectDefinition_FieldExtraction{
+				FieldExtraction: &opensplunk.FieldExtractionDefinition{
 					InputField:        "_raw",
-					OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
-					Extraction: &opensplunkv1.FieldExtractionDefinition_Json{
-						Json: &opensplunkv1.JsonFieldExtractionDefinition{
+					OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+					Extraction: &opensplunk.FieldExtractionDefinition_Json{
+						Json: &opensplunk.JsonFieldExtractionDefinition{
 							Path: "payload.value", OutputField: "knowledge_json",
 						},
 					},
@@ -768,33 +768,33 @@ func testKnowledgeEvidenceProgram(t *testing.T, identity string) knowledgeprogra
 			},
 		},
 		{
-			AppId: "app-a", Name: "c-calculated", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-			Body: &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{
-				CalculatedField: &opensplunkv1.CalculatedFieldDefinition{
+			AppId: "app-a", Name: "c-calculated", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+			Body: &opensplunk.KnowledgeObjectDefinition_CalculatedField{
+				CalculatedField: &opensplunk.CalculatedFieldDefinition{
 					DestinationField:  "knowledge_calculated",
 					Expression:        `if(isnull(_raw), "missing", "present")`,
-					OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+					OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 				},
 			},
 		},
 	}
-	objects := make([]*opensplunkv1.KnowledgeSnapshotObject, len(definitions))
-	stageOrdinals := make(map[opensplunkv1.KnowledgeSearchStage]uint32)
+	objects := make([]*opensplunk.KnowledgeSnapshotObject, len(definitions))
+	stageOrdinals := make(map[opensplunk.KnowledgeSearchStage]uint32)
 	for index, definition := range definitions {
 		normalized, err := knowledgedefinition.Normalize(definition)
 		if err != nil {
 			t.Fatalf("Normalize(test definition %d): %v", index, err)
 		}
-		var stage opensplunkv1.KnowledgeSearchStage
+		var stage opensplunk.KnowledgeSearchStage
 		switch normalized.ObjectType {
-		case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION:
-			stage = opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION
-		case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD:
-			stage = opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD
+		case opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION:
+			stage = opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION
+		case opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD:
+			stage = opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD
 		default:
 			t.Fatalf("unexpected test object type %v", normalized.ObjectType)
 		}
-		objects[index] = &opensplunkv1.KnowledgeSnapshotObject{
+		objects[index] = &opensplunk.KnowledgeSnapshotObject{
 			ResolutionOrdinal: uint32(index),
 			Stage:             stage,
 			StageOrdinal:      stageOrdinals[stage],

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 )
@@ -19,7 +19,7 @@ import (
 type supplementalRedactionCase struct {
 	name     string
 	policies []RedactionPolicy
-	event    func(t *testing.T) *opensplunkv1.LogEvent
+	event    func(t *testing.T) *opensplunk.LogEvent
 }
 
 func TestSequentialSupplementalRedactionGolden(t *testing.T) {
@@ -61,9 +61,9 @@ func TestCompositeSupplementalRedactorMatchesSequentialPolicies(t *testing.T) {
 			want := applySequentialSupplementalRedaction(
 				t,
 				test.policies,
-				proto.Clone(input).(*opensplunkv1.LogEvent),
+				proto.Clone(input).(*opensplunk.LogEvent),
 			)
-			got := composite.RedactEventInPlace(proto.Clone(input).(*opensplunkv1.LogEvent))
+			got := composite.RedactEventInPlace(proto.Clone(input).(*opensplunk.LogEvent))
 			wantBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(want)
 			if err != nil {
 				t.Fatalf("marshal sequential result: %v", err)
@@ -188,7 +188,7 @@ func TestCompositeSupplementalRedactorDoesNotHideEarlierFailClosedBoundary(t *te
 			input.Raw = []byte(test.raw)
 			input.Message = nil
 			input.Fields = nil
-			got := composite.RedactEventInPlace(proto.Clone(input).(*opensplunkv1.LogEvent))
+			got := composite.RedactEventInPlace(proto.Clone(input).(*opensplunk.LogEvent))
 			want := applySequentialSupplementalRedaction(t, policies, input)
 			if string(got.GetRaw()) != "<FIRST>" {
 				t.Fatalf("composite raw = %q, want earlier fail-closed marker", got.GetRaw())
@@ -219,7 +219,7 @@ func TestCompositeSupplementalRedactorPreservesPEMExtentMarkerInteraction(t *tes
 	input.Raw = []byte(raw)
 	input.Message = nil
 	input.Fields = nil
-	got := composite.RedactEventInPlace(proto.Clone(input).(*opensplunkv1.LogEvent))
+	got := composite.RedactEventInPlace(proto.Clone(input).(*opensplunk.LogEvent))
 	want := applySequentialSupplementalRedaction(t, policies, input)
 	if !proto.Equal(got, want) {
 		t.Fatalf("composite PEM result differs from sequential result:\n got: %+v\nwant: %+v", got, want)
@@ -244,12 +244,12 @@ func TestCompositeSupplementalRedactorReplaysEarlierMatchThatCanExposeLaterKey(t
 	for _, test := range []struct {
 		name     string
 		raw      []byte
-		encoding opensplunkv1.RawEncoding
+		encoding opensplunk.RawEncoding
 	}{
 		{
 			name:     "UTF8 text",
 			raw:      []byte(`beta={"x":"y"}gamma"=]SECRET333Z}`),
-			encoding: opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+			encoding: opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 		},
 		{
 			name: "binary text",
@@ -257,7 +257,7 @@ func TestCompositeSupplementalRedactorReplaysEarlierMatchThatCanExposeLaterKey(t
 				[]byte{0xff, ' '},
 				[]byte(`beta={"x":"y"}gamma"=]SECRET333Z}`)...,
 			),
-			encoding: opensplunkv1.RawEncoding_RAW_ENCODING_BINARY,
+			encoding: opensplunk.RawEncoding_RAW_ENCODING_BINARY,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -268,7 +268,7 @@ func TestCompositeSupplementalRedactorReplaysEarlierMatchThatCanExposeLaterKey(t
 			input.RawEncoding = test.encoding
 			input.Message = nil
 			input.Fields = nil
-			got := composite.RedactEventInPlace(proto.Clone(input).(*opensplunkv1.LogEvent))
+			got := composite.RedactEventInPlace(proto.Clone(input).(*opensplunk.LogEvent))
 			want := applySequentialSupplementalRedaction(t, policies, input)
 			if !proto.Equal(got, want) {
 				t.Fatalf("composite result differs from sequential result:\n got: %+v\nwant: %+v", got, want)
@@ -303,7 +303,7 @@ func TestCompositeSupplementalRedactorHonorsLaterDepthPolicyAfterDirectKeyMatch(
 	input.Raw = []byte(deep)
 	input.Message = &deep
 	input.Fields = object(stringField("deep", deep))
-	got := composite.RedactEventInPlace(proto.Clone(input).(*opensplunkv1.LogEvent))
+	got := composite.RedactEventInPlace(proto.Clone(input).(*opensplunk.LogEvent))
 	want := applySequentialSupplementalRedaction(t, policies, input)
 	if !proto.Equal(got, want) {
 		t.Fatalf("composite depth result differs from sequential result:\n got: %+v\nwant: %+v", got, want)
@@ -445,9 +445,9 @@ func TestCompositeSupplementalRedactorDefersSyntaxFallbackUntilAnEventMatches(t 
 
 	safe := compositeSafeMissPayload()
 	message := string(safe)
-	event := &opensplunkv1.LogEvent{
+	event := &opensplunk.LogEvent{
 		Raw:         bytes.Clone(safe),
-		RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+		RawEncoding: opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 		Message:     &message,
 	}
 	got := composite.RedactEventInPlace(event)
@@ -481,8 +481,8 @@ func TestCompositeSupplementalRedactorSyntaxSafeMissAllocationParity(t *testing.
 		t.Fatal(err)
 	}
 	allocations := func(redactor *Validator) float64 {
-		event := &opensplunkv1.LogEvent{
-			RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+		event := &opensplunk.LogEvent{
+			RawEncoding: opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 		}
 		return testing.AllocsPerRun(20, func() {
 			messageCopy := string(safe)
@@ -568,18 +568,18 @@ func TestCompositeSupplementalRedactorOrderedReplayMatchesSequentialAcrossSurfac
 	messageOnly := "alpha=message-secret-must-not-survive"
 	for _, test := range []struct {
 		name        string
-		event       *opensplunkv1.LogEvent
+		event       *opensplunk.LogEvent
 		checkGolden bool
 		wantRaw     string
 		wantMessage string
 	}{
 		{
 			name: "safe UTF8 raw and message",
-			event: func() *opensplunkv1.LogEvent {
+			event: func() *opensplunk.LogEvent {
 				message := "safe=value"
-				return &opensplunkv1.LogEvent{
+				return &opensplunk.LogEvent{
 					Raw:         []byte("safe=value"),
-					RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+					RawEncoding: opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 					Message:     &message,
 					Fields:      object(stringField("safe", "kept")),
 				}
@@ -587,21 +587,21 @@ func TestCompositeSupplementalRedactorOrderedReplayMatchesSequentialAcrossSurfac
 		},
 		{
 			name: "safe invalid binary",
-			event: &opensplunkv1.LogEvent{
+			event: &opensplunk.LogEvent{
 				Raw:         []byte{0xff, 0x00, ' ', 's', 'a', 'f', 'e'},
-				RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_BINARY,
+				RawEncoding: opensplunk.RawEncoding_RAW_ENCODING_BINARY,
 				Fields:      object(stringField("safe", "kept")),
 			},
 		},
 		{
 			name: "direct typed field already equals first marker",
-			event: &opensplunkv1.LogEvent{
+			event: &opensplunk.LogEvent{
 				Fields: object(stringField("alpha", "beta=generated")),
 			},
 		},
 		{
 			name: "nested typed string",
-			event: &opensplunkv1.LogEvent{
+			event: &opensplunk.LogEvent{
 				Fields: object(objectField(
 					"nested",
 					object(stringField("note", "alpha=typed-secret-must-not-survive")),
@@ -610,36 +610,36 @@ func TestCompositeSupplementalRedactorOrderedReplayMatchesSequentialAcrossSurfac
 		},
 		{
 			name: "valid JSON direct field",
-			event: &opensplunkv1.LogEvent{
+			event: &opensplunk.LogEvent{
 				Raw:         []byte(`{"alpha":"raw-secret-must-not-survive","safe":"kept"}`),
-				RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+				RawEncoding: opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 			},
 		},
 		{
 			name: "message-only assignment",
-			event: &opensplunkv1.LogEvent{
+			event: &opensplunk.LogEvent{
 				Raw:         []byte("safe=value"),
-				RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+				RawEncoding: opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 				Message:     &messageOnly,
 			},
 		},
 		{
 			name: "invalid binary assignment",
-			event: &opensplunkv1.LogEvent{
+			event: &opensplunk.LogEvent{
 				Raw: append(
 					[]byte{0xff, 0x00, ' '},
 					[]byte("alpha=binary-secret-must-not-survive")...,
 				),
-				RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_BINARY,
+				RawEncoding: opensplunk.RawEncoding_RAW_ENCODING_BINARY,
 			},
 		},
 		{
 			name: "safe duplicate JSON still canonicalizes",
-			event: func() *opensplunkv1.LogEvent {
+			event: func() *opensplunk.LogEvent {
 				raw := `{"safe":"first","safe":"last"}`
-				return &opensplunkv1.LogEvent{
+				return &opensplunk.LogEvent{
 					Raw:         []byte(raw),
-					RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+					RawEncoding: opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 					Message:     &raw,
 				}
 			}(),
@@ -649,11 +649,11 @@ func TestCompositeSupplementalRedactorOrderedReplayMatchesSequentialAcrossSurfac
 		},
 		{
 			name: "safe duplicate JSON nested in a JSON string canonicalizes",
-			event: func() *opensplunkv1.LogEvent {
+			event: func() *opensplunk.LogEvent {
 				raw := `{"note":"{\"safe\":\"first\",\"safe\":\"last\"}"}`
-				return &opensplunkv1.LogEvent{
+				return &opensplunk.LogEvent{
 					Raw:         []byte(raw),
-					RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+					RawEncoding: opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 					Message:     &raw,
 				}
 			}(),
@@ -663,11 +663,11 @@ func TestCompositeSupplementalRedactorOrderedReplayMatchesSequentialAcrossSurfac
 		},
 		{
 			name: "safe duplicate JSON inside malformed prose fails closed",
-			event: func() *opensplunkv1.LogEvent {
+			event: func() *opensplunk.LogEvent {
 				raw := `failed payload="{\"safe\":\"first\",\"safe\":\"last\"}"`
-				return &opensplunkv1.LogEvent{
+				return &opensplunk.LogEvent{
 					Raw:         []byte(raw),
-					RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+					RawEncoding: opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 					Message:     &raw,
 				}
 			}(),
@@ -677,11 +677,11 @@ func TestCompositeSupplementalRedactorOrderedReplayMatchesSequentialAcrossSurfac
 		},
 		{
 			name: "duplicate JSON plus sensitive field still replays policies",
-			event: func() *opensplunkv1.LogEvent {
+			event: func() *opensplunk.LogEvent {
 				raw := `{"safe":"first","safe":"last","alpha":"raw-secret-must-not-survive"}`
-				return &opensplunkv1.LogEvent{
+				return &opensplunk.LogEvent{
 					Raw:         []byte(raw),
-					RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+					RawEncoding: opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 					Message:     &raw,
 				}
 			}(),
@@ -691,9 +691,9 @@ func TestCompositeSupplementalRedactorOrderedReplayMatchesSequentialAcrossSurfac
 		},
 		{
 			name: "depth fail-close without a named field",
-			event: &opensplunkv1.LogEvent{
+			event: &opensplunk.LogEvent{
 				Raw:         []byte(deep),
-				RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+				RawEncoding: opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 			},
 		},
 	} {
@@ -701,10 +701,10 @@ func TestCompositeSupplementalRedactorOrderedReplayMatchesSequentialAcrossSurfac
 			want := applySequentialSupplementalRedaction(
 				t,
 				policies,
-				proto.Clone(test.event).(*opensplunkv1.LogEvent),
+				proto.Clone(test.event).(*opensplunk.LogEvent),
 			)
 			got := composite.RedactEventInPlace(
-				proto.Clone(test.event).(*opensplunkv1.LogEvent),
+				proto.Clone(test.event).(*opensplunk.LogEvent),
 			)
 			if !proto.Equal(got, want) {
 				t.Fatalf("composite result differs from sequential result:\n got: %+v\nwant: %+v", got, want)
@@ -745,15 +745,15 @@ func TestCompositeSupplementalRedactorDirectFieldReplaysFromMiddleMatch(t *testi
 	if !composite.orderedOnChange {
 		t.Fatal("middle-policy fixture did not select ordered-on-change redaction")
 	}
-	input := &opensplunkv1.LogEvent{
+	input := &opensplunk.LogEvent{
 		Fields: object(stringField("alpha", "original-secret")),
 	}
 	want := applySequentialSupplementalRedaction(
 		t,
 		policies,
-		proto.Clone(input).(*opensplunkv1.LogEvent),
+		proto.Clone(input).(*opensplunk.LogEvent),
 	)
-	got := composite.RedactEventInPlace(proto.Clone(input).(*opensplunkv1.LogEvent))
+	got := composite.RedactEventInPlace(proto.Clone(input).(*opensplunk.LogEvent))
 	if !proto.Equal(got, want) {
 		t.Fatalf("middle-policy direct result differs:\n got: %+v\nwant: %+v", got, want)
 	}
@@ -809,22 +809,22 @@ func TestCompositeSupplementalRedactorDirectFieldDropsUnknownBytesLikeSequential
 				)
 			}
 			unknown := plantedUnknownSecretBytes()
-			value := &opensplunkv1.TypedValue{
-				Kind: &opensplunkv1.TypedValue_StringValue{StringValue: "FINAL"},
+			value := &opensplunk.TypedValue{
+				Kind: &opensplunk.TypedValue_StringValue{StringValue: "FINAL"},
 			}
 			value.ProtoReflect().SetUnknown(unknown)
-			field := &opensplunkv1.TypedObjectField{
+			field := &opensplunk.TypedObjectField{
 				Name:  "alpha",
 				Value: value,
 			}
 			field.ProtoReflect().SetUnknown(unknown)
-			input := &opensplunkv1.LogEvent{Fields: object(field)}
+			input := &opensplunk.LogEvent{Fields: object(field)}
 			want := applySequentialSupplementalRedaction(
 				t,
 				test.policies,
-				proto.Clone(input).(*opensplunkv1.LogEvent),
+				proto.Clone(input).(*opensplunk.LogEvent),
 			)
-			got := composite.RedactEventInPlace(proto.Clone(input).(*opensplunkv1.LogEvent))
+			got := composite.RedactEventInPlace(proto.Clone(input).(*opensplunk.LogEvent))
 			if !proto.Equal(got, want) {
 				t.Fatalf("direct-field unknown-byte result differs:\n got: %+v\nwant: %+v", got, want)
 			}
@@ -928,12 +928,12 @@ func TestCompositeSupplementalRedactorReevaluatesBinaryUTF8BetweenPolicies(t *te
 		t.Fatal(err)
 	}
 	input := validTestEvent("composite-binary-becomes-utf8", "main")
-	input.RawEncoding = opensplunkv1.RawEncoding_RAW_ENCODING_BINARY
+	input.RawEncoding = opensplunk.RawEncoding_RAW_ENCODING_BINARY
 	input.Raw = []byte{'a', 'l', 'p', 'h', 'a', '=', 0x95, ' ', 'b', 'e', 't', 'a', '=', '0', '"'}
 	input.Message = nil
 	input.Fields = nil
 
-	got := composite.RedactEventInPlace(proto.Clone(input).(*opensplunkv1.LogEvent))
+	got := composite.RedactEventInPlace(proto.Clone(input).(*opensplunk.LogEvent))
 	if string(got.GetRaw()) != "[SECOND]" {
 		t.Fatalf("composite raw = %q, want policy-ordered [SECOND]", got.GetRaw())
 	}
@@ -969,7 +969,7 @@ func TestCompositeSupplementalRedactorIsSafeForConcurrentUse(t *testing.T) {
 	want := applySequentialSupplementalRedaction(
 		t,
 		policies,
-		proto.Clone(input).(*opensplunkv1.LogEvent),
+		proto.Clone(input).(*opensplunk.LogEvent),
 	)
 	wantBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(want)
 	if err != nil {
@@ -986,7 +986,7 @@ func TestCompositeSupplementalRedactorIsSafeForConcurrentUse(t *testing.T) {
 			defer workers.Done()
 			<-start
 			for range 20 {
-				got := composite.RedactEventInPlace(proto.Clone(input).(*opensplunkv1.LogEvent))
+				got := composite.RedactEventInPlace(proto.Clone(input).(*opensplunk.LogEvent))
 				gotBytes, marshalErr := proto.MarshalOptions{Deterministic: true}.Marshal(got)
 				if marshalErr != nil {
 					errs <- marshalErr
@@ -1036,10 +1036,10 @@ func TestTopLevelAliasCompositeMatchesSequentialTextGroups(t *testing.T) {
 			t.Parallel()
 
 			message := `alpha=message-alpha beta='message-beta' constant=message-safe safe=value`
-			input := &opensplunkv1.LogEvent{
+			input := &opensplunk.LogEvent{
 				Message:     &message,
 				Raw:         []byte(test.raw),
-				RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+				RawEncoding: opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 				Fields: object(
 					stringField("alpha", "typed-alpha"),
 					stringField("beta", "typed-beta"),
@@ -1049,11 +1049,11 @@ func TestTopLevelAliasCompositeMatchesSequentialTextGroups(t *testing.T) {
 			}
 			want := legacyTopLevelAliasRedaction(
 				t,
-				proto.Clone(input).(*opensplunkv1.LogEvent),
+				proto.Clone(input).(*opensplunk.LogEvent),
 				policies,
 			)
 			got := RedactTopLevelAliasesInPlace(
-				proto.Clone(input).(*opensplunkv1.LogEvent),
+				proto.Clone(input).(*opensplunk.LogEvent),
 				policies,
 			)
 			wantBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(want)
@@ -1119,10 +1119,10 @@ func TestTopLevelAliasCompatibilityFallbackMatchesSequentialTextGroups(t *testin
 			t.Parallel()
 
 			message := test.raw
-			input := &opensplunkv1.LogEvent{
+			input := &opensplunk.LogEvent{
 				Message:     &message,
 				Raw:         []byte(test.raw),
-				RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+				RawEncoding: opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 				Fields: object(
 					stringField("alpha", "typed-alpha"),
 					stringField("beta", "typed-beta"),
@@ -1130,11 +1130,11 @@ func TestTopLevelAliasCompatibilityFallbackMatchesSequentialTextGroups(t *testin
 			}
 			want := legacyTopLevelAliasRedaction(
 				t,
-				proto.Clone(input).(*opensplunkv1.LogEvent),
+				proto.Clone(input).(*opensplunk.LogEvent),
 				test.policies,
 			)
 			got := RedactTopLevelAliasesInPlace(
-				proto.Clone(input).(*opensplunkv1.LogEvent),
+				proto.Clone(input).(*opensplunk.LogEvent),
 				test.policies,
 			)
 			wantBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(want)
@@ -1162,17 +1162,17 @@ func TestTopLevelAliasRedactionDropsUnknownBytesFromSensitiveTypedField(t *testi
 	t.Parallel()
 
 	unknown := plantedUnknownSecretBytes()
-	value := &opensplunkv1.TypedValue{
-		Kind: &opensplunkv1.TypedValue_StringValue{StringValue: "FINAL"},
+	value := &opensplunk.TypedValue{
+		Kind: &opensplunk.TypedValue_StringValue{StringValue: "FINAL"},
 	}
 	value.ProtoReflect().SetUnknown(unknown)
-	field := &opensplunkv1.TypedObjectField{
+	field := &opensplunk.TypedObjectField{
 		Name:  "alpha",
 		Value: value,
 	}
 	field.ProtoReflect().SetUnknown(unknown)
 	got := RedactTopLevelAliasesInPlace(
-		&opensplunkv1.LogEvent{Fields: object(field)},
+		&opensplunk.LogEvent{Fields: object(field)},
 		[]TopLevelAliasRedaction{{Field: "alpha", Replacement: "FINAL"}},
 	)
 	wire, err := proto.MarshalOptions{Deterministic: true}.Marshal(got)
@@ -1186,9 +1186,9 @@ func TestTopLevelAliasRedactionDropsUnknownBytesFromSensitiveTypedField(t *testi
 
 func legacyTopLevelAliasRedaction(
 	t testing.TB,
-	event *opensplunkv1.LogEvent,
+	event *opensplunk.LogEvent,
 	policies []TopLevelAliasRedaction,
-) *opensplunkv1.LogEvent {
+) *opensplunk.LogEvent {
 	t.Helper()
 	structured := make(map[string]string, len(policies))
 	raw := make(map[string]string, len(policies))
@@ -1233,7 +1233,7 @@ func legacyTopLevelAliasRedaction(
 	if len(raw) == 0 {
 		return event
 	}
-	if event.GetRawEncoding() == opensplunkv1.RawEncoding_RAW_ENCODING_UTF8 ||
+	if event.GetRawEncoding() == opensplunk.RawEncoding_RAW_ENCODING_UTF8 ||
 		utf8.Valid(event.GetRaw()) {
 		if redacted, parsed := redactTopLevelJSONWithReplacements(event.GetRaw(), raw); parsed {
 			event.Raw = redacted
@@ -1261,8 +1261,8 @@ func legacyTopLevelAliasRedaction(
 func applySequentialSupplementalRedaction(
 	t *testing.T,
 	policies []RedactionPolicy,
-	event *opensplunkv1.LogEvent,
-) *opensplunkv1.LogEvent {
+	event *opensplunk.LogEvent,
+) *opensplunk.LogEvent {
 	t.Helper()
 	for index, policy := range policies {
 		redactor, err := NewSupplementalRedactor(DefaultLimits(), policy)
@@ -1293,7 +1293,7 @@ func supplementalRedactionCases() []supplementalRedactionCase {
 		{
 			name:     "safe JSON remains byte exact",
 			policies: ordinary,
-			event: func(t *testing.T) *opensplunkv1.LogEvent {
+			event: func(t *testing.T) *opensplunk.LogEvent {
 				t.Helper()
 				event := validTestEvent("composite-safe-json", "main")
 				event.Raw = []byte("{ \n  \"message\": \"safe\", \"status\": 200\n}\n")
@@ -1306,7 +1306,7 @@ func supplementalRedactionCases() []supplementalRedactionCase {
 		{
 			name:     "valid JSON nested typed fields and exact lookalikes",
 			policies: ordinary,
-			event: func(t *testing.T) *opensplunkv1.LogEvent {
+			event: func(t *testing.T) *opensplunk.LogEvent {
 				t.Helper()
 				event := validTestEvent("composite-valid-json", "main")
 				event.Raw = []byte(
@@ -1332,7 +1332,7 @@ func supplementalRedactionCases() []supplementalRedactionCase {
 		{
 			name:     "duplicate JSON keys canonicalize with last member semantics",
 			policies: ordinary,
-			event: func(t *testing.T) *opensplunkv1.LogEvent {
+			event: func(t *testing.T) *opensplunk.LogEvent {
 				t.Helper()
 				event := validTestEvent("composite-duplicate-json", "main")
 				event.Raw = []byte(
@@ -1349,7 +1349,7 @@ func supplementalRedactionCases() []supplementalRedactionCase {
 		{
 			name:     "plain key value text uses each exact marker",
 			policies: ordinary,
-			event: func(t *testing.T) *opensplunkv1.LogEvent {
+			event: func(t *testing.T) *opensplunk.LogEvent {
 				t.Helper()
 				event := validTestEvent("composite-plain-text", "main")
 				event.Raw = []byte(`alpha=plain-alpha beta='plain-beta' api key=plain-space safe=value`)
@@ -1364,7 +1364,7 @@ func supplementalRedactionCases() []supplementalRedactionCase {
 		{
 			name:     "later assignment text inside earlier quoted value stays consumed",
 			policies: ordinary,
-			event: func(t *testing.T) *opensplunkv1.LogEvent {
+			event: func(t *testing.T) *opensplunk.LogEvent {
 				t.Helper()
 				raw := `alpha=" beta=0"`
 				event := validTestEvent("composite-quoted-contained-assignment", "main")
@@ -1377,7 +1377,7 @@ func supplementalRedactionCases() []supplementalRedactionCase {
 		{
 			name:     "policy order beats text order for embedded JSON",
 			policies: ordinary,
-			event: func(t *testing.T) *opensplunkv1.LogEvent {
+			event: func(t *testing.T) *opensplunk.LogEvent {
 				t.Helper()
 				raw := `first="{\"beta\":\"b\"}" second="{\"alpha\":\"a\"}"`
 				event := validTestEvent("composite-embedded-policy-order", "main")
@@ -1390,7 +1390,7 @@ func supplementalRedactionCases() []supplementalRedactionCase {
 		{
 			name:     "policy order beats text order for ambiguous encoded values",
 			policies: ordinary,
-			event: func(t *testing.T) *opensplunkv1.LogEvent {
+			event: func(t *testing.T) *opensplunk.LogEvent {
 				t.Helper()
 				raw := `beta=\"b\" alpha=\"a\"`
 				event := validTestEvent("composite-ambiguous-policy-order", "main")
@@ -1403,7 +1403,7 @@ func supplementalRedactionCases() []supplementalRedactionCase {
 		{
 			name:     "prose wrapped embedded JSON keeps the outer safe sibling",
 			policies: ordinary,
-			event: func(t *testing.T) *opensplunkv1.LogEvent {
+			event: func(t *testing.T) *opensplunk.LogEvent {
 				t.Helper()
 				note := `failed payload="{\"customer_credential\":\"embedded-snake\"}"`
 				raw, err := json.Marshal(map[string]string{"note": note, "safe": "yes"})
@@ -1420,7 +1420,7 @@ func supplementalRedactionCases() []supplementalRedactionCase {
 		{
 			name:     "ambiguous encoded value fails closed with matching marker",
 			policies: ordinary,
-			event: func(t *testing.T) *opensplunkv1.LogEvent {
+			event: func(t *testing.T) *opensplunk.LogEvent {
 				t.Helper()
 				raw := `customer_credential=\"ambiguous-snake\" safe=value`
 				event := validTestEvent("composite-ambiguous-value", "main")
@@ -1433,7 +1433,7 @@ func supplementalRedactionCases() []supplementalRedactionCase {
 		{
 			name:     "encoded JSON depth bound preserves ordered fallback",
 			policies: ordinary,
-			event: func(t *testing.T) *opensplunkv1.LogEvent {
+			event: func(t *testing.T) *opensplunk.LogEvent {
 				t.Helper()
 				deep := `{"alpha":"depth-secret"}`
 				for range maxEmbeddedJSONRedactionDepth + 1 {
@@ -1453,10 +1453,10 @@ func supplementalRedactionCases() []supplementalRedactionCase {
 		{
 			name:     "invalid UTF8 raw retains unrelated binary bytes",
 			policies: ordinary,
-			event: func(t *testing.T) *opensplunkv1.LogEvent {
+			event: func(t *testing.T) *opensplunk.LogEvent {
 				t.Helper()
 				event := validTestEvent("composite-binary", "main")
-				event.RawEncoding = opensplunkv1.RawEncoding_RAW_ENCODING_BINARY
+				event.RawEncoding = opensplunk.RawEncoding_RAW_ENCODING_BINARY
 				event.Raw = append([]byte{0xff, 0x00, ' '}, []byte(`a:b=binary-secret safe=value`)...)
 				event.Message = nil
 				event.Fields = object(stringField("safe", "kept"))
@@ -1466,10 +1466,10 @@ func supplementalRedactionCases() []supplementalRedactionCase {
 		{
 			name:     "binary payload becomes UTF8 between ordered policies",
 			policies: ordinary,
-			event: func(t *testing.T) *opensplunkv1.LogEvent {
+			event: func(t *testing.T) *opensplunk.LogEvent {
 				t.Helper()
 				event := validTestEvent("composite-binary-becomes-utf8", "main")
-				event.RawEncoding = opensplunkv1.RawEncoding_RAW_ENCODING_BINARY
+				event.RawEncoding = opensplunk.RawEncoding_RAW_ENCODING_BINARY
 				event.Raw = []byte{
 					'a', 'l', 'p', 'h', 'a', '=', 0x95, ' ',
 					'b', 'e', 't', 'a', '=', '0', '"',
@@ -1482,7 +1482,7 @@ func supplementalRedactionCases() []supplementalRedactionCase {
 		{
 			name:     "typed lists and duplicate fields redact recursively",
 			policies: ordinary,
-			event: func(t *testing.T) *opensplunkv1.LogEvent {
+			event: func(t *testing.T) *opensplunk.LogEvent {
 				t.Helper()
 				event := validTestEvent("composite-typed-list", "main")
 				event.Raw = []byte(`{"safe":"kept"}`)
@@ -1491,18 +1491,18 @@ func supplementalRedactionCases() []supplementalRedactionCase {
 				event.Fields = object(
 					stringField("alpha", "first-duplicate"),
 					stringField("alpha", "second-duplicate"),
-					&opensplunkv1.TypedObjectField{
+					&opensplunk.TypedObjectField{
 						Name: "items",
-						Value: &opensplunkv1.TypedValue{
-							Kind: &opensplunkv1.TypedValue_ListValue{
-								ListValue: &opensplunkv1.TypedValueList{Values: []*opensplunkv1.TypedValue{
+						Value: &opensplunk.TypedValue{
+							Kind: &opensplunk.TypedValue_ListValue{
+								ListValue: &opensplunk.TypedValueList{Values: []*opensplunk.TypedValue{
 									{
-										Kind: &opensplunkv1.TypedValue_ObjectValue{
+										Kind: &opensplunk.TypedValue_ObjectValue{
 											ObjectValue: object(stringField("customer_credential", "list-snake")),
 										},
 									},
 									{
-										Kind: &opensplunkv1.TypedValue_StringValue{
+										Kind: &opensplunk.TypedValue_StringValue{
 											StringValue: `beta=list-string-secret safe=value`,
 										},
 									},
@@ -1520,7 +1520,7 @@ func supplementalRedactionCases() []supplementalRedactionCase {
 				{AdditionalSensitiveFields: []string{"alpha"}, Replacement: "beta=generated-secret"},
 				{AdditionalSensitiveFields: []string{"beta"}, Replacement: "FINAL"},
 			},
-			event: func(t *testing.T) *opensplunkv1.LogEvent {
+			event: func(t *testing.T) *opensplunk.LogEvent {
 				t.Helper()
 				event := validTestEvent("composite-marker-cascade", "main")
 				event.Raw = []byte(`{"alpha":"raw-alpha","safe":"kept"}`)
@@ -1539,7 +1539,7 @@ func supplementalRedactionCases() []supplementalRedactionCase {
 				{AdditionalSensitiveFields: []string{"alpha"}, Replacement: "beta"},
 				{AdditionalSensitiveFields: []string{"beta"}, Replacement: "FINAL"},
 			},
-			event: func(t *testing.T) *opensplunkv1.LogEvent {
+			event: func(t *testing.T) *opensplunk.LogEvent {
 				t.Helper()
 				raw := `alpha="old"=original-secret`
 				event := validTestEvent("composite-contextual-marker-cascade", "main")
@@ -1555,7 +1555,7 @@ func supplementalRedactionCases() []supplementalRedactionCase {
 				{AdditionalSensitiveFields: []string{"repeat"}, Replacement: "OLD"},
 				{AdditionalSensitiveFields: []string{"repeat"}, Replacement: "NEW"},
 			},
-			event: func(t *testing.T) *opensplunkv1.LogEvent {
+			event: func(t *testing.T) *opensplunk.LogEvent {
 				t.Helper()
 				event := validTestEvent("composite-repeated-field", "main")
 				event.Raw = []byte(`{"repeat":"raw-repeat","safe":"kept"}`)
@@ -1571,7 +1571,7 @@ func supplementalRedactionCases() []supplementalRedactionCase {
 				{AdditionalSensitiveFields: []string{"alpha"}, Replacement: "FIRST"},
 				{AdditionalSensitiveFields: []string{"beta"}, Replacement: "SECOND"},
 			},
-			event: func(t *testing.T) *opensplunkv1.LogEvent {
+			event: func(t *testing.T) *opensplunk.LogEvent {
 				t.Helper()
 				ambiguous := fmt.Sprintf(
 					`prefix {\"%s\":\"ambiguous-key-secret\"} safe=value`,
@@ -1589,18 +1589,18 @@ func supplementalRedactionCases() []supplementalRedactionCase {
 
 func requireTopLevelAliasMatchesSequential(
 	t testing.TB,
-	input *opensplunkv1.LogEvent,
+	input *opensplunk.LogEvent,
 	policies []TopLevelAliasRedaction,
 	context string,
 ) {
 	t.Helper()
 	want := legacyTopLevelAliasRedaction(
 		t,
-		proto.Clone(input).(*opensplunkv1.LogEvent),
+		proto.Clone(input).(*opensplunk.LogEvent),
 		policies,
 	)
 	got := RedactTopLevelAliasesInPlace(
-		proto.Clone(input).(*opensplunkv1.LogEvent),
+		proto.Clone(input).(*opensplunk.LogEvent),
 		policies,
 	)
 	if !proto.Equal(got, want) {
@@ -1633,9 +1633,9 @@ func FuzzTopLevelAliasCompositeMatchesSequentialTextGroups(f *testing.F) {
 		if len(raw) > 1<<20 {
 			t.Skip()
 		}
-		input := &opensplunkv1.LogEvent{
+		input := &opensplunk.LogEvent{
 			Raw:         bytes.Clone(raw),
-			RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_BINARY,
+			RawEncoding: opensplunk.RawEncoding_RAW_ENCODING_BINARY,
 			Fields: object(
 				stringField("alpha", "typed-alpha"),
 				stringField("beta", "typed-beta"),
@@ -1676,9 +1676,9 @@ func FuzzTopLevelAliasOrderedOnChangeMatchesSequentialTextGroups(f *testing.F) {
 		if len(raw) > 64<<10 {
 			t.Skip()
 		}
-		input := &opensplunkv1.LogEvent{
+		input := &opensplunk.LogEvent{
 			Raw:         bytes.Clone(raw),
-			RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_BINARY,
+			RawEncoding: opensplunk.RawEncoding_RAW_ENCODING_BINARY,
 			Fields:      object(stringField("safe", "kept")),
 		}
 		if utf8.Valid(raw) {
@@ -1696,17 +1696,17 @@ func FuzzTopLevelAliasOrderedOnChangeMatchesSequentialTextGroups(f *testing.F) {
 
 func requireCompositeSupplementalMatchesSequential(
 	t testing.TB,
-	input *opensplunkv1.LogEvent,
+	input *opensplunk.LogEvent,
 	composite *Validator,
 	sequential []*Validator,
 	context string,
 ) {
 	t.Helper()
-	want := proto.Clone(input).(*opensplunkv1.LogEvent)
+	want := proto.Clone(input).(*opensplunk.LogEvent)
 	for _, redactor := range sequential {
 		want = redactor.RedactEventInPlace(want)
 	}
-	got := composite.RedactEventInPlace(proto.Clone(input).(*opensplunkv1.LogEvent))
+	got := composite.RedactEventInPlace(proto.Clone(input).(*opensplunk.LogEvent))
 	if !proto.Equal(got, want) {
 		t.Fatalf("%s composite differs from sequential oracle", context)
 	}
@@ -1745,9 +1745,9 @@ func FuzzCompositeSupplementalRedactorMatchesSequentialPolicies(f *testing.F) {
 		if len(raw) > 1<<20 {
 			t.Skip()
 		}
-		input := &opensplunkv1.LogEvent{
+		input := &opensplunk.LogEvent{
 			Raw:         bytes.Clone(raw),
-			RawEncoding: opensplunkv1.RawEncoding_RAW_ENCODING_BINARY,
+			RawEncoding: opensplunk.RawEncoding_RAW_ENCODING_BINARY,
 			Fields:      object(stringField("alpha", "typed-alpha"), stringField("beta", "typed-beta")),
 		}
 		if utf8.Valid(raw) {
@@ -1866,11 +1866,11 @@ func FuzzCompositeSupplementalRedactorOrderedOnChangeMatchesSequentialPolicies(f
 			t.Skip()
 		}
 		fixture := fixtures[int(mode&fixtureMask)]
-		encoding := opensplunkv1.RawEncoding_RAW_ENCODING_BINARY
+		encoding := opensplunk.RawEncoding_RAW_ENCODING_BINARY
 		if mode&declaredUTF8Flag != 0 {
-			encoding = opensplunkv1.RawEncoding_RAW_ENCODING_UTF8
+			encoding = opensplunk.RawEncoding_RAW_ENCODING_UTF8
 		}
-		input := &opensplunkv1.LogEvent{
+		input := &opensplunk.LogEvent{
 			Raw:         bytes.Clone(raw),
 			RawEncoding: encoding,
 			Fields:      object(stringField("safe", "kept")),

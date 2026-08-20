@@ -11,7 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
@@ -154,17 +154,16 @@ func (source *ReexecutionSource) AcquireResultsFor(ctx context.Context, access s
 	}
 
 	lease := &reexecutionLease{
-		parent:                ctx,
-		executor:              source.executor,
-		compiled:              compiled,
-		schema:                cloneResultSchema(schema),
-		pin:                   pin,
-		sourceCompilerVersion: strings.Clone(execution.CompilerVersion),
-		knowledgeSnapshot:     summary,
-		generation:            generation,
-		maxRuntime:            source.maxRuntime,
-		rows:                  make(chan searchjobs.ResultRow, source.rowBuffer),
-		finished:              make(chan struct{}),
+		parent:            ctx,
+		executor:          source.executor,
+		compiled:          compiled,
+		schema:            cloneResultSchema(schema),
+		pin:               pin,
+		knowledgeSnapshot: summary,
+		generation:        generation,
+		maxRuntime:        source.maxRuntime,
+		rows:              make(chan searchjobs.ResultRow, source.rowBuffer),
+		finished:          make(chan struct{}),
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -187,7 +186,7 @@ func (source *ReexecutionSource) nextGeneration() (uint64, bool) {
 
 func (source *ReexecutionSource) executionAuthority(
 	execution searchjobs.ExecutionSnapshot,
-) (clickhouse.CompiledQuery, *opensplunkv1.KnowledgeSnapshotSummary, error) {
+) (clickhouse.CompiledQuery, *opensplunk.KnowledgeSnapshotSummary, error) {
 	retained, err := execution.OpenRetainedKnowledgeExecution()
 	if err != nil {
 		return clickhouse.CompiledQuery{}, nil, err
@@ -204,17 +203,16 @@ func (source *ReexecutionSource) executionAuthority(
 }
 
 type reexecutionLease struct {
-	parent                context.Context
-	executor              searchjobs.Executor
-	compiled              clickhouse.CompiledQuery
-	schema                searchjobs.Schema
-	pin                   searchjobs.ResultLease
-	sourceCompilerVersion string
-	knowledgeSnapshot     *opensplunkv1.KnowledgeSnapshotSummary
-	generation            uint64
-	maxRuntime            time.Duration
-	rows                  chan searchjobs.ResultRow
-	finished              chan struct{}
+	parent            context.Context
+	executor          searchjobs.Executor
+	compiled          clickhouse.CompiledQuery
+	schema            searchjobs.Schema
+	pin               searchjobs.ResultLease
+	knowledgeSnapshot *opensplunk.KnowledgeSnapshotSummary
+	generation        uint64
+	maxRuntime        time.Duration
+	rows              chan searchjobs.ResultRow
+	finished          chan struct{}
 
 	startOnce sync.Once
 	closeOnce sync.Once
@@ -237,20 +235,11 @@ func (lease *reexecutionLease) Schema() searchjobs.Schema {
 
 // knowledgeSnapshotSummary is intentionally package-private so only the
 // trusted re-execution source can supply admission provenance to Manager.
-func (lease *reexecutionLease) knowledgeSnapshotSummary() (*opensplunkv1.KnowledgeSnapshotSummary, error) {
+func (lease *reexecutionLease) knowledgeSnapshotSummary() (*opensplunk.KnowledgeSnapshotSummary, error) {
 	if lease == nil || lease.knowledgeSnapshot == nil {
 		return nil, nil
 	}
 	return knowledgesnapshot.CloneSummary(lease.knowledgeSnapshot)
-}
-
-// compilerVersion is intentionally package-private so only the trusted
-// re-execution source can attach source compatibility provenance to exports.
-func (lease *reexecutionLease) compilerVersion() string {
-	if lease == nil {
-		return ""
-	}
-	return strings.Clone(lease.sourceCompilerVersion)
 }
 
 // RowCount returns zero because re-execution intentionally does not run a

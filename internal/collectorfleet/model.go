@@ -1,6 +1,6 @@
 package collectorfleet
 
-// These explicit GORM models mirror migrations/sqlite/0013_collector_fleet.sql.
+// These explicit GORM models mirror the collector tables in the SQLite baseline.
 // STRICT tables, composite foreign keys, WITHOUT ROWID storage, and triggers
 // remain migration-owned and cannot be represented fully by GORM. Never call
 // AutoMigrate for these models.
@@ -27,10 +27,8 @@ type runtimeRecord struct {
 	BootEpoch                     *string `gorm:"column:boot_epoch;type:text;check:collector_runtime_boot_epoch_canonical,boot_epoch IS NULL OR (length(boot_epoch) BETWEEN 1 AND 128 AND instr(boot_epoch, char(0)) = 0 AND substr(boot_epoch, 1, 1) GLOB '[A-Za-z0-9]' AND boot_epoch NOT GLOB '*[^A-Za-z0-9._:-]*')"`
 	StreamID                      *string `gorm:"column:stream_id;type:text;check:collector_runtime_stream_id_canonical,stream_id IS NULL OR (length(stream_id) BETWEEN 1 AND 128 AND instr(stream_id, char(0)) = 0 AND substr(stream_id, 1, 1) GLOB '[A-Za-z0-9]' AND stream_id NOT GLOB '*[^A-Za-z0-9._:-]*')"`
 	ActiveInstanceID              *string `gorm:"column:active_instance_id;type:text;check:collector_runtime_instance_id_canonical,active_instance_id IS NULL OR (length(active_instance_id) BETWEEN 1 AND 128 AND instr(active_instance_id, char(0)) = 0 AND substr(active_instance_id, 1, 1) GLOB '[A-Za-z0-9]' AND active_instance_id NOT GLOB '*[^A-Za-z0-9._:-]*')"`
-	ProtocolMajor                 int64   `gorm:"column:protocol_major;type:integer;not null;check:collector_runtime_protocol_major_valid,protocol_major BETWEEN 0 AND 4294967295"`
-	ProtocolMinor                 int64   `gorm:"column:protocol_minor;type:integer;not null;check:collector_runtime_protocol_minor_valid,protocol_minor BETWEEN 0 AND 4294967295"`
-	CollectorVersion              string  `gorm:"column:collector_version;type:text;not null;check:collector_runtime_metadata_bounded,length(CAST(collector_version AS BLOB)) <= 128 AND instr(collector_version, char(0)) = 0 AND length(CAST(hostname AS BLOB)) <= 255 AND instr(hostname, char(0)) = 0 AND length(CAST(operating_system AS BLOB)) <= 128 AND instr(operating_system, char(0)) = 0 AND length(CAST(architecture AS BLOB)) <= 128 AND instr(architecture, char(0)) = 0"`
-	Hostname                      string  `gorm:"column:hostname;type:text;not null;index:collector_runtime_tenant_hostname_id_idx,priority:2"`
+	SourceRevision                string  `gorm:"column:source_revision;type:text;not null;check:collector_runtime_metadata_bounded,length(CAST(source_revision AS BLOB)) <= 128 AND instr(source_revision, char(0)) = 0 AND length(CAST(hostname AS BLOB)) <= 255 AND instr(hostname, char(0)) = 0 AND length(CAST(operating_system AS BLOB)) <= 128 AND instr(operating_system, char(0)) = 0 AND length(CAST(architecture AS BLOB)) <= 128 AND instr(architecture, char(0)) = 0"`
+	Hostname                      string  `gorm:"column:hostname;type:text;not null;index:collector_runtime_tenant_hostname_id_idx,priority:2;check:collector_runtime_source_revision_valid,source_revision = 'development' OR (length(CAST(source_revision AS BLOB)) IN (40, 64) AND source_revision NOT GLOB '*[^0-9a-f]*')"`
 	OperatingSystem               string  `gorm:"column:operating_system;type:text;not null"`
 	Architecture                  string  `gorm:"column:architecture;type:text;not null;check:collector_runtime_active_lease_consistent,(boot_epoch IS NOT NULL AND stream_id IS NOT NULL AND active_instance_id IS NOT NULL AND disconnected_at_unix_micro IS NULL) OR (boot_epoch IS NULL AND stream_id IS NULL AND active_instance_id IS NULL AND disconnected_at_unix_micro IS NOT NULL)"`
 	StartedAtUnixMicro            int64   `gorm:"column:started_at_unix_micro;type:integer;not null;check:collector_runtime_started_at_positive,started_at_unix_micro BETWEEN 1 AND 253402300799999999"`

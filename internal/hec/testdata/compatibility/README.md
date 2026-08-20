@@ -1,8 +1,12 @@
-# HEC v0.1 compatibility fixtures
+# HEC protocol fixtures
 
 These files are the machine-consumable examples for
-`docs/hec-compatibility-v0.1.md`. `fixture.schema.json` validates each corpus
+[`docs/hec.md`](../../../../docs/hec.md). `fixture.schema.json` validates each corpus
 document; the other JSON files are corpus documents.
+
+Fixture format discriminators are private test mechanics, not public HEC or
+release versions. The corpus covers only the exact unversioned routes described
+by the current source contract; versioned aliases are unsupported.
 
 Each case is isolated. A harness creates exactly the declared token, indexes,
 channel sequence, acknowledgment rows, and injected conditions, captures the

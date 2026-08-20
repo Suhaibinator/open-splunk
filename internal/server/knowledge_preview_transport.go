@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgepreview"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"google.golang.org/protobuf/encoding/protowire"
@@ -38,13 +38,13 @@ func newPreviewKnowledgeObjectRequestCodec() *previewKnowledgeObjectRequestCodec
 	return &previewKnowledgeObjectRequestCodec{}
 }
 
-func (*previewKnowledgeObjectRequestCodec) NewRequest() *opensplunkv1.PreviewKnowledgeObjectRequest {
-	return &opensplunkv1.PreviewKnowledgeObjectRequest{}
+func (*previewKnowledgeObjectRequestCodec) NewRequest() *opensplunk.PreviewKnowledgeObjectRequest {
+	return &opensplunk.PreviewKnowledgeObjectRequest{}
 }
 
 func (codec *previewKnowledgeObjectRequestCodec) Decode(
 	request *http.Request,
-) (*opensplunkv1.PreviewKnowledgeObjectRequest, error) {
+) (*opensplunk.PreviewKnowledgeObjectRequest, error) {
 	if request == nil || request.Body == nil {
 		return nil, errors.New("knowledge preview request body is unavailable")
 	}
@@ -61,7 +61,7 @@ func (codec *previewKnowledgeObjectRequestCodec) Decode(
 
 func (*previewKnowledgeObjectRequestCodec) DecodeBytes(
 	data []byte,
-) (*opensplunkv1.PreviewKnowledgeObjectRequest, error) {
+) (*opensplunk.PreviewKnowledgeObjectRequest, error) {
 	if int64(len(data)) > maximumKnowledgeMutationRequestBytes {
 		return nil, &http.MaxBytesError{Limit: maximumKnowledgeMutationRequestBytes}
 	}
@@ -74,7 +74,7 @@ func (*previewKnowledgeObjectRequestCodec) DecodeBytes(
 	if err != nil {
 		return nil, err
 	}
-	result := &opensplunkv1.PreviewKnowledgeObjectRequest{
+	result := &opensplunk.PreviewKnowledgeObjectRequest{
 		RetainedSearchJobId: envelope.retainedSearchJobID(),
 		Definition:          candidate.candidateDefinition,
 		KnowledgeObjectId:   candidate.objectID,
@@ -135,7 +135,7 @@ type sealedPreviewKnowledgeObjectResponse[Message proto.Message] struct {
 	release func()
 }
 
-type serializedPreviewKnowledgeObjectResponse = sealedPreviewKnowledgeObjectResponse[*opensplunkv1.PreviewKnowledgeObjectResponse]
+type serializedPreviewKnowledgeObjectResponse = sealedPreviewKnowledgeObjectResponse[*opensplunk.PreviewKnowledgeObjectResponse]
 
 func newSerializedPreviewKnowledgeObjectResponse(
 	ctx context.Context,

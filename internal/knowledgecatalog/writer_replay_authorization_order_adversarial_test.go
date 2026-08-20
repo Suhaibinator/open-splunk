@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -138,10 +138,10 @@ func commitWriterReplayRouteSequence(
 	}
 	objectID := created.GetKnowledgeObject().GetKnowledgeObjectId()
 
-	definition := proto.Clone(created.GetKnowledgeObject().GetDefinition()).(*opensplunkv1.KnowledgeObjectDefinition)
+	definition := proto.Clone(created.GetKnowledgeObject().GetDefinition()).(*opensplunk.KnowledgeObjectDefinition)
 	description := "authorization-ordered replay update"
 	definition.Description = &description
-	updateRequest := &opensplunkv1.UpdateKnowledgeObjectRequest{
+	updateRequest := &opensplunk.UpdateKnowledgeObjectRequest{
 		KnowledgeObjectId: objectID,
 		ExpectedVersion:   1,
 		Definition:        definition,
@@ -151,16 +151,16 @@ func commitWriterReplayRouteSequence(
 	if _, err := harness.writer.Update(harness.actorContext, harness.scope, updateRequest); err != nil {
 		t.Fatalf("commit replay Update baseline: %v", err)
 	}
-	stateRequest := &opensplunkv1.SetKnowledgeObjectStateRequest{
+	stateRequest := &opensplunk.SetKnowledgeObjectStateRequest{
 		KnowledgeObjectId: objectID,
 		ExpectedVersion:   2,
-		State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+		State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 		ClientRequestId:   slug + "-state-request-0001",
 	}
 	if _, err := harness.writer.SetState(harness.actorContext, harness.scope, stateRequest); err != nil {
 		t.Fatalf("commit replay SetState baseline: %v", err)
 	}
-	deleteRequest := &opensplunkv1.DeleteKnowledgeObjectRequest{
+	deleteRequest := &opensplunk.DeleteKnowledgeObjectRequest{
 		KnowledgeObjectId: objectID,
 		ExpectedVersion:   3,
 		ClientRequestId:   slug + "-delete-request-0001",
@@ -176,7 +176,7 @@ func commitWriterReplayRouteSequence(
 				response, err := harness.writer.Create(
 					harness.actorContext,
 					scope,
-					proto.Clone(createRequest).(*opensplunkv1.CreateKnowledgeObjectRequest),
+					proto.Clone(createRequest).(*opensplunk.CreateKnowledgeObjectRequest),
 				)
 				return response != nil, err
 			},
@@ -187,7 +187,7 @@ func commitWriterReplayRouteSequence(
 				response, err := harness.writer.Update(
 					harness.actorContext,
 					scope,
-					proto.Clone(updateRequest).(*opensplunkv1.UpdateKnowledgeObjectRequest),
+					proto.Clone(updateRequest).(*opensplunk.UpdateKnowledgeObjectRequest),
 				)
 				return response != nil, err
 			},
@@ -198,7 +198,7 @@ func commitWriterReplayRouteSequence(
 				response, err := harness.writer.SetState(
 					harness.actorContext,
 					scope,
-					proto.Clone(stateRequest).(*opensplunkv1.SetKnowledgeObjectStateRequest),
+					proto.Clone(stateRequest).(*opensplunk.SetKnowledgeObjectStateRequest),
 				)
 				return response != nil, err
 			},
@@ -209,7 +209,7 @@ func commitWriterReplayRouteSequence(
 				response, err := harness.writer.Delete(
 					harness.actorContext,
 					scope,
-					proto.Clone(deleteRequest).(*opensplunkv1.DeleteKnowledgeObjectRequest),
+					proto.Clone(deleteRequest).(*opensplunk.DeleteKnowledgeObjectRequest),
 				)
 				return response != nil, err
 			},

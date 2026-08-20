@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -48,15 +48,15 @@ type ListRequest struct {
 	IncludeTotal        bool
 	AppIDFilter         *string
 	TextFilter          *string
-	SharingScopeFilters []opensplunkv1.SharingScope
-	SortBy              opensplunkv1.SavedSearchSortBy
-	SortDirection       opensplunkv1.SortDirection
+	SharingScopeFilters []opensplunk.SharingScope
+	SortBy              opensplunk.SavedSearchSortBy
+	SortDirection       opensplunk.SortDirection
 }
 
 // ListResult is a detached list page. TotalSize is non-nil only when requested
 // and is always exact for the filter used to produce the page.
 type ListResult struct {
-	SavedSearches  []*opensplunkv1.SavedSearch
+	SavedSearches  []*opensplunk.SavedSearch
 	NextPageToken  *string
 	TotalSize      *uint64
 	TotalSizeExact bool
@@ -100,17 +100,17 @@ func New(db *control.DB, options Options) (*Store, error) {
 func (store *Store) Create(
 	ctx context.Context,
 	scope AccessScope,
-	definition *opensplunkv1.SavedSearchDefinition,
-) (*opensplunkv1.SavedSearch, error) {
+	definition *opensplunk.SavedSearchDefinition,
+) (*opensplunk.SavedSearch, error) {
 	return store.create(ctx, scope, definition, nil)
 }
 
 func (store *Store) create(
 	ctx context.Context,
 	scope AccessScope,
-	definition *opensplunkv1.SavedSearchDefinition,
+	definition *opensplunk.SavedSearchDefinition,
 	publisher savedSearchMutationAuditPublisher,
-) (*opensplunkv1.SavedSearch, error) {
+) (*opensplunk.SavedSearch, error) {
 	if err := validateContext(ctx); err != nil {
 		return nil, err
 	}
@@ -202,7 +202,7 @@ func (store *Store) create(
 }
 
 // Get returns a detached saved search owned by scope.
-func (store *Store) Get(ctx context.Context, scope AccessScope, id string) (*opensplunkv1.SavedSearch, error) {
+func (store *Store) Get(ctx context.Context, scope AccessScope, id string) (*opensplunk.SavedSearch, error) {
 	if err := validateContext(ctx); err != nil {
 		return nil, err
 	}
@@ -242,9 +242,9 @@ func (store *Store) Update(
 	scope AccessScope,
 	id string,
 	expectedVersion uint64,
-	definition *opensplunkv1.SavedSearchDefinition,
+	definition *opensplunk.SavedSearchDefinition,
 	updateMask *fieldmaskpb.FieldMask,
-) (*opensplunkv1.SavedSearch, error) {
+) (*opensplunk.SavedSearch, error) {
 	return store.update(
 		ctx,
 		scope,
@@ -261,10 +261,10 @@ func (store *Store) update(
 	scope AccessScope,
 	id string,
 	expectedVersion uint64,
-	definition *opensplunkv1.SavedSearchDefinition,
+	definition *opensplunk.SavedSearchDefinition,
 	updateMask *fieldmaskpb.FieldMask,
 	publisher savedSearchMutationAuditPublisher,
-) (result *opensplunkv1.SavedSearch, returnedErr error) {
+) (result *opensplunk.SavedSearch, returnedErr error) {
 	if err := validateContext(ctx); err != nil {
 		return nil, err
 	}
@@ -390,7 +390,7 @@ func (store *Store) Duplicate(
 	sourceID string,
 	newName string,
 	destinationAppID *string,
-) (*opensplunkv1.SavedSearch, error) {
+) (*opensplunk.SavedSearch, error) {
 	return store.duplicate(
 		ctx,
 		scope,
@@ -408,7 +408,7 @@ func (store *Store) duplicate(
 	newName string,
 	destinationAppID *string,
 	publisher savedSearchMutationAuditPublisher,
-) (result *opensplunkv1.SavedSearch, returnedErr error) {
+) (result *opensplunk.SavedSearch, returnedErr error) {
 	if err := validateContext(ctx); err != nil {
 		return nil, err
 	}
@@ -441,11 +441,11 @@ func (store *Store) duplicate(
 	if err != nil {
 		return nil, fmt.Errorf("read saved search for duplicate: %w", err)
 	}
-	definition := proto.Clone(source.Definition).(*opensplunkv1.SavedSearchDefinition)
+	definition := proto.Clone(source.Definition).(*opensplunk.SavedSearchDefinition)
 	definition.Name = newName
 	if destinationAppID != nil {
 		if definition.Search == nil {
-			definition.Search = &opensplunkv1.SearchDefinition{}
+			definition.Search = &opensplunk.SearchDefinition{}
 		}
 		definition.Search.AppId = stringPointer(*destinationAppID)
 	}
@@ -613,7 +613,7 @@ func (store *Store) delete(
 	return nil
 }
 
-func savedSearchFromRecord(record savedSearchRecord) (*opensplunkv1.SavedSearch, error) {
+func savedSearchFromRecord(record savedSearchRecord) (*opensplunk.SavedSearch, error) {
 	if validateObjectID(record.SavedSearchID) != nil ||
 		record.Version < 1 ||
 		record.SharingScope < 1 ||
@@ -621,7 +621,7 @@ func savedSearchFromRecord(record savedSearchRecord) (*opensplunkv1.SavedSearch,
 		record.UpdatedAtUnixMicro < record.CreatedAtUnixMicro {
 		return nil, errors.New("invalid saved-search record in control-plane database")
 	}
-	definition := new(opensplunkv1.SavedSearchDefinition)
+	definition := new(opensplunk.SavedSearchDefinition)
 	if err := (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(record.DefinitionProto, definition); err != nil {
 		return nil, fmt.Errorf("decode saved-search definition: %w", err)
 	}
@@ -646,11 +646,11 @@ func savedSearchFromRecord(record savedSearchRecord) (*opensplunkv1.SavedSearch,
 	return buildSavedSearch(record.SavedSearchID, uint64(record.Version), normalized, created, updated), nil
 }
 
-func buildSavedSearch(id string, version uint64, definition *opensplunkv1.SavedSearchDefinition, created, updated time.Time) *opensplunkv1.SavedSearch {
-	return &opensplunkv1.SavedSearch{
+func buildSavedSearch(id string, version uint64, definition *opensplunk.SavedSearchDefinition, created, updated time.Time) *opensplunk.SavedSearch {
+	return &opensplunk.SavedSearch{
 		SavedSearchId: strings.Clone(id),
 		Version:       version,
-		Definition:    proto.Clone(definition).(*opensplunkv1.SavedSearchDefinition),
+		Definition:    proto.Clone(definition).(*opensplunk.SavedSearchDefinition),
 		CreatedAt:     timestamppb.New(created),
 		UpdatedAt:     timestamppb.New(updated),
 	}

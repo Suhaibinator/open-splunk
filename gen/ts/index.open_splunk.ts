@@ -5,4 +5,35 @@
 
 /* eslint-disable */
 
-export * as v1 from "./index.open_splunk.v1";
+export * from "./open_splunk/common";
+export * from "./open_splunk/app";
+export * from "./open_splunk/app_api";
+export * from "./open_splunk/knowledge";
+export * from "./open_splunk/audit";
+export * from "./open_splunk/audit_api";
+export * from "./open_splunk/value";
+export * from "./open_splunk/event";
+export * from "./open_splunk/collector";
+export * from "./open_splunk/ingestion_policy";
+export * from "./open_splunk/collector_admin";
+export * from "./open_splunk/collector_admin_api";
+export * from "./open_splunk/export";
+export * from "./open_splunk/export_api";
+export * from "./open_splunk/hec_admin_api";
+export * from "./open_splunk/result";
+export * from "./open_splunk/search";
+export * from "./open_splunk/history";
+export * from "./open_splunk/history_api";
+export * from "./open_splunk/index";
+export * from "./open_splunk/index_api";
+export * from "./open_splunk/knowledge_api";
+export * from "./open_splunk/lookup";
+export * from "./open_splunk/lookup_api";
+export * from "./open_splunk/saved_search";
+export * from "./open_splunk/saved_search_api";
+export * from "./open_splunk/search_api";
+export * from "./open_splunk/search_attempt_audit";
+export * from "./open_splunk/search_attempt_audit_api";
+export * from "./open_splunk/search_inspection_api";
+export * from "./open_splunk/search_ws";
+export * from "./open_splunk/system_api";

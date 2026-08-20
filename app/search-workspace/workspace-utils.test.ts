@@ -381,7 +381,7 @@ test("nested stats eval highlights as a function without relabeling the eval com
   assert.equal(tokens.map((token) => token.text).join(""), query);
 });
 
-test("v0.2 field quotes and expression operators highlight only in scalar stages", () => {
+test("field quotes and expression operators highlight only in scalar stages", () => {
   const query = `index=main source=/var/log/app-1.log O'Reilly | eval 'request-bytes'=duration_ms+1 | where 'HTTP Status' IN (200, 204) | search literal=1+2`;
   const tokens = classifiedTokens(query);
 
@@ -402,7 +402,7 @@ test("v0.2 field quotes and expression operators highlight only in scalar stages
   );
 });
 
-test("v0.2 count eval predicates highlight nested fields and operators", () => {
+test("count eval predicates highlight nested fields and operators", () => {
   const query = `index=main | stats count(eval('HTTP Status' IN (500, 503))) AS errors | eventstats count(eval('request-bytes'/2>100)) AS large | streamstats count(eval(status==503)) AS unavailable`;
   const tokens = classifiedTokens(query);
 

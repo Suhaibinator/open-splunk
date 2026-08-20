@@ -8,7 +8,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"google.golang.org/protobuf/proto"
 )
@@ -17,7 +17,7 @@ func TestNDJSONDecoderExtractsCanonicalFieldsAndPreservesTypes(t *testing.T) {
 	t.Parallel()
 
 	decoder := newTestDecoder(t, DecodeConfig{Format: InputFormatNDJSON})
-	raw := []byte(`{"level":"INFO","timestamp":"2026-06-29T19:09:12.496713446Z","message":"Request summary statistics","method":"POST","path":"/api/v1/search/jobs/create","status":200,"duration":"645.046µs","bytes":20,"ok":true,"ratio":0.5,"tax":0.1,"nothing":null,"trace_id":"019f13e47d16735a9b5a2b6307ccb0e9","nested":{"attempt":2},"tags":["api",3]}`)
+	raw := []byte(`{"level":"INFO","timestamp":"2026-06-29T19:09:12.496713446Z","message":"Request summary statistics","method":"POST","path":"/api/search/jobs/create","status":200,"duration":"645.046µs","bytes":20,"ok":true,"ratio":0.5,"tax":0.1,"nothing":null,"trace_id":"019f13e47d16735a9b5a2b6307ccb0e9","nested":{"attempt":2},"tags":["api",3]}`)
 	collectedAt := time.Date(2026, time.June, 29, 19, 10, 0, 0, time.UTC)
 
 	event, err := decoder.Decode(raw, SourcePosition{
@@ -32,10 +32,10 @@ func TestNDJSONDecoderExtractsCanonicalFieldsAndPreservesTypes(t *testing.T) {
 	if got, want := event.GetEventTime().AsTime(), time.Date(2026, time.June, 29, 19, 9, 12, 496_713_446, time.UTC); !got.Equal(want) {
 		t.Fatalf("event time = %s, want %s", got, want)
 	}
-	if got := event.GetEventTimeSource(); got != opensplunkv1.EventTimeSource_EVENT_TIME_SOURCE_PARSED {
+	if got := event.GetEventTimeSource(); got != opensplunk.EventTimeSource_EVENT_TIME_SOURCE_PARSED {
 		t.Fatalf("event time source = %v", got)
 	}
-	if got := event.GetSeverity(); got != opensplunkv1.LogSeverity_LOG_SEVERITY_INFO {
+	if got := event.GetSeverity(); got != opensplunk.LogSeverity_LOG_SEVERITY_INFO {
 		t.Fatalf("severity = %v", got)
 	}
 	if got := event.GetLevel(); got != "INFO" {
@@ -50,7 +50,7 @@ func TestNDJSONDecoderExtractsCanonicalFieldsAndPreservesTypes(t *testing.T) {
 	if !bytes.Equal(event.GetRaw(), raw) {
 		t.Fatal("raw payload was not preserved byte-for-byte")
 	}
-	if event.GetRawEncoding() != opensplunkv1.RawEncoding_RAW_ENCODING_UTF8 {
+	if event.GetRawEncoding() != opensplunk.RawEncoding_RAW_ENCODING_UTF8 {
 		t.Fatalf("raw encoding = %v", event.GetRawEncoding())
 	}
 	if event.GetIndexName() != "gradethis" || event.GetHost() != "fixture-host" || event.GetSource() != "app.log" {
@@ -173,7 +173,7 @@ func TestDecoderUsesFallbackTimeAndStableContentAddressedEventID(t *testing.T) {
 	if first.GetEventId() == changedBody.GetEventId() || first.GetEventId() == changedPosition.GetEventId() {
 		t.Fatal("event ID did not bind both source position and raw content")
 	}
-	if !first.GetEventTime().AsTime().Equal(collectedAt) || first.GetEventTimeSource() != opensplunkv1.EventTimeSource_EVENT_TIME_SOURCE_COLLECTED_AT_FALLBACK {
+	if !first.GetEventTime().AsTime().Equal(collectedAt) || first.GetEventTimeSource() != opensplunk.EventTimeSource_EVENT_TIME_SOURCE_COLLECTED_AT_FALLBACK {
 		t.Fatalf("fallback timestamp = %s (%v)", first.GetEventTime().AsTime(), first.GetEventTimeSource())
 	}
 }
@@ -181,7 +181,7 @@ func TestDecoderUsesFallbackTimeAndStableContentAddressedEventID(t *testing.T) {
 func TestDecoderPreventsPayloadMetadataOverrideAndConstantsWin(t *testing.T) {
 	t.Parallel()
 
-	constant := &opensplunkv1.TypedObject{Fields: []*opensplunkv1.TypedObjectField{
+	constant := &opensplunk.TypedObject{Fields: []*opensplunk.TypedObjectField{
 		{Name: "environment", Value: stringValue("production")},
 		{Name: "region", Value: stringValue("us-west-2")},
 	}}
@@ -223,7 +223,7 @@ func TestCollectorRejectsSharedReservedRootsAndSourceAliases(t *testing.T) {
 				if len(dynamic) != 0 {
 					t.Fatalf("reserved field escaped into dynamic output: %#v", dynamic)
 				}
-				_, err = cloneAndValidateConstants(&opensplunkv1.TypedObject{Fields: []*opensplunkv1.TypedObjectField{{
+				_, err = cloneAndValidateConstants(&opensplunk.TypedObject{Fields: []*opensplunk.TypedObjectField{{
 					Name: name, Value: stringValue("forged"),
 				}}})
 				if err == nil || !strings.Contains(err.Error(), "reserved canonical metadata") {
@@ -249,7 +249,7 @@ func TestDecoderPreservesCollectorAliasExtraction(t *testing.T) {
 	if got := event.GetEventTime().AsTime(); !got.Equal(time.Date(2026, time.January, 2, 3, 4, 5, 6, time.UTC)) {
 		t.Fatalf("event time = %s", got)
 	}
-	if event.GetLevel() != "WARN" || event.GetSeverity() != opensplunkv1.LogSeverity_LOG_SEVERITY_WARN ||
+	if event.GetLevel() != "WARN" || event.GetSeverity() != opensplunk.LogSeverity_LOG_SEVERITY_WARN ||
 		event.GetMessage() != "aliased" || event.GetTraceId() != "trace" || event.GetSpanId() != "span" {
 		t.Fatalf("alias extraction = %#v", event)
 	}
@@ -287,7 +287,7 @@ func TestRawDecoderPreservesBinaryWithoutInventingTextMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
-	if event.GetRawEncoding() != opensplunkv1.RawEncoding_RAW_ENCODING_BINARY {
+	if event.GetRawEncoding() != opensplunk.RawEncoding_RAW_ENCODING_BINARY {
 		t.Fatalf("raw encoding = %v", event.GetRawEncoding())
 	}
 	if event.Message != nil {
@@ -397,56 +397,56 @@ func newTestDecoder(t *testing.T, override DecodeConfig) *Decoder {
 	return decoder
 }
 
-func objectFields(object *opensplunkv1.TypedObject) map[string]*opensplunkv1.TypedValue {
-	result := make(map[string]*opensplunkv1.TypedValue, len(object.GetFields()))
+func objectFields(object *opensplunk.TypedObject) map[string]*opensplunk.TypedValue {
+	result := make(map[string]*opensplunk.TypedValue, len(object.GetFields()))
 	for _, field := range object.GetFields() {
 		result[field.GetName()] = field.GetValue()
 	}
 	return result
 }
 
-func stringValue(value string) *opensplunkv1.TypedValue {
-	return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_StringValue{StringValue: value}}
+func stringValue(value string) *opensplunk.TypedValue {
+	return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_StringValue{StringValue: value}}
 }
 
-func assertStringValue(t *testing.T, value *opensplunkv1.TypedValue, want string) {
+func assertStringValue(t *testing.T, value *opensplunk.TypedValue, want string) {
 	t.Helper()
 	if value == nil || value.GetStringValue() != want {
 		t.Fatalf("string value = %#v, want %q", value, want)
 	}
 }
 
-func assertSignedValue(t *testing.T, value *opensplunkv1.TypedValue, want int64) {
+func assertSignedValue(t *testing.T, value *opensplunk.TypedValue, want int64) {
 	t.Helper()
 	if value == nil || value.GetSint64Value() != want {
 		t.Fatalf("signed value = %#v, want %d", value, want)
 	}
 }
 
-func assertBoolValue(t *testing.T, value *opensplunkv1.TypedValue, want bool) {
+func assertBoolValue(t *testing.T, value *opensplunk.TypedValue, want bool) {
 	t.Helper()
 	if value == nil || value.GetBoolValue() != want {
 		t.Fatalf("bool value = %#v, want %t", value, want)
 	}
 }
 
-func assertDoubleValue(t *testing.T, value *opensplunkv1.TypedValue, want float64) {
+func assertDoubleValue(t *testing.T, value *opensplunk.TypedValue, want float64) {
 	t.Helper()
 	if value == nil || value.GetDoubleValue() != want {
 		t.Fatalf("double value = %#v, want %v", value, want)
 	}
 }
 
-func assertDecimalValue(t *testing.T, value *opensplunkv1.TypedValue, want string) {
+func assertDecimalValue(t *testing.T, value *opensplunk.TypedValue, want string) {
 	t.Helper()
 	if value == nil || value.GetDecimalValue().GetValue() != want {
 		t.Fatalf("decimal value = %#v, want %q", value, want)
 	}
 }
 
-func assertNullValue(t *testing.T, value *opensplunkv1.TypedValue) {
+func assertNullValue(t *testing.T, value *opensplunk.TypedValue) {
 	t.Helper()
-	if value == nil || value.GetNullValue() != opensplunkv1.NullValue_NULL_VALUE_NULL {
+	if value == nil || value.GetNullValue() != opensplunk.NullValue_NULL_VALUE_NULL {
 		t.Fatalf("null value = %#v", value)
 	}
 }

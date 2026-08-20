@@ -27,13 +27,14 @@ var (
 	// ErrPageInvalidated means a catalog mutation occurred after a list cursor
 	// was issued, so continuing it could omit or duplicate records.
 	ErrPageInvalidated = errors.New("control: list page invalidated")
-	// ErrMigrationDrift means an applied migration's name or contents no
-	// longer match the version embedded in this binary.
-	ErrMigrationDrift = errors.New("control: applied migration differs from embedded migration")
-	// ErrDatabaseTooNew means the database was migrated by a newer binary.
-	ErrDatabaseTooNew = errors.New("control: database schema is newer than this binary")
+	// ErrMigrationDrift means the stored ledger is not the exact embedded
+	// sequence. In-place conversion is intentionally unsupported.
+	ErrMigrationDrift = errors.New("control: migration history is unsupported; provision a fresh state database")
+	// ErrDatabaseTooNew means the database contains a migration beyond the
+	// embedded sequence. In-place downgrade is intentionally unsupported.
+	ErrDatabaseTooNew = errors.New("control: database migration history is unsupported; provision a fresh state database")
 	// ErrDatabaseNotCurrent means the database is missing one or more migrations
 	// from the exact migration set supplied by the caller. Read-only backup
 	// tooling must not silently upgrade its source while verifying it.
-	ErrDatabaseNotCurrent = errors.New("control: database schema is not current")
+	ErrDatabaseNotCurrent = errors.New("control: database migration history is not current")
 )

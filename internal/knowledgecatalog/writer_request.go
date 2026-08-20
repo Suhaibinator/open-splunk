@@ -8,7 +8,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
@@ -39,10 +39,10 @@ type preparedMutation struct {
 	requestDigest   [sha256.Size]byte
 	requestBytes    []byte
 	updatePaths     []string
-	createRequest   *opensplunkv1.CreateKnowledgeObjectRequest
-	updateRequest   *opensplunkv1.UpdateKnowledgeObjectRequest
-	setStateRequest *opensplunkv1.SetKnowledgeObjectStateRequest
-	deleteRequest   *opensplunkv1.DeleteKnowledgeObjectRequest
+	createRequest   *opensplunk.CreateKnowledgeObjectRequest
+	updateRequest   *opensplunk.UpdateKnowledgeObjectRequest
+	setStateRequest *opensplunk.SetKnowledgeObjectStateRequest
+	deleteRequest   *opensplunk.DeleteKnowledgeObjectRequest
 }
 
 type validatedMutationRequest struct {
@@ -56,20 +56,20 @@ type validatedMutationRequest struct {
 // Definition semantics and app authorization deliberately remain later Writer
 // concerns, preserving exact-retry and ACTIVE-publication precedence.
 func ValidateCreateKnowledgeObjectRequest(
-	request *opensplunkv1.CreateKnowledgeObjectRequest,
+	request *opensplunk.CreateKnowledgeObjectRequest,
 ) error {
 	return validateCreateKnowledgeObjectRequestShape(request)
 }
 
 func validateCreateKnowledgeObjectRequestShape(
-	request *opensplunkv1.CreateKnowledgeObjectRequest,
+	request *opensplunk.CreateKnowledgeObjectRequest,
 ) error {
 	if request == nil || request.GetDefinition() == nil {
 		return invalidMutation("create request and definition are required")
 	}
 	switch request.GetInitialState() {
-	case opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
-		opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE:
+	case opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+		opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE:
 	default:
 		return invalidMutation("initial state must be draft or active")
 	}
@@ -111,7 +111,7 @@ func prepareTypedMutation[T clientRequestMessage](
 func prepareCreateMutation(
 	ctxScope normalizedWriteScope,
 	actor audit.Actor,
-	request *opensplunkv1.CreateKnowledgeObjectRequest,
+	request *opensplunk.CreateKnowledgeObjectRequest,
 ) (preparedMutation, error) {
 	if err := validateCreateKnowledgeObjectRequestShape(request); err != nil {
 		return preparedMutation{}, err
@@ -121,7 +121,7 @@ func prepareCreateMutation(
 		actor,
 		mutationRouteCreate,
 		request,
-		func(cloned *opensplunkv1.CreateKnowledgeObjectRequest) { cloned.ClientRequestId = "" },
+		func(cloned *opensplunk.CreateKnowledgeObjectRequest) { cloned.ClientRequestId = "" },
 		nil,
 	)
 }
@@ -129,14 +129,14 @@ func prepareCreateMutation(
 // ValidateUpdateKnowledgeObjectRequest validates the complete detached wire
 // shape that Writer requires before it consults idempotency or catalog state.
 func ValidateUpdateKnowledgeObjectRequest(
-	request *opensplunkv1.UpdateKnowledgeObjectRequest,
+	request *opensplunk.UpdateKnowledgeObjectRequest,
 ) error {
 	_, err := validateUpdateKnowledgeObjectRequestShape(request)
 	return err
 }
 
 func validateUpdateKnowledgeObjectRequestShape(
-	request *opensplunkv1.UpdateKnowledgeObjectRequest,
+	request *opensplunk.UpdateKnowledgeObjectRequest,
 ) ([]string, error) {
 	if request == nil || request.GetDefinition() == nil ||
 		!validIdentity(request.GetKnowledgeObjectId(), maximumObjectIDBytes) ||
@@ -157,7 +157,7 @@ func validateUpdateKnowledgeObjectRequestShape(
 func prepareUpdateMutation(
 	ctxScope normalizedWriteScope,
 	actor audit.Actor,
-	request *opensplunkv1.UpdateKnowledgeObjectRequest,
+	request *opensplunk.UpdateKnowledgeObjectRequest,
 ) (preparedMutation, error) {
 	paths, err := validateUpdateKnowledgeObjectRequestShape(request)
 	if err != nil {
@@ -168,7 +168,7 @@ func prepareUpdateMutation(
 		actor,
 		mutationRouteUpdate,
 		request,
-		func(cloned *opensplunkv1.UpdateKnowledgeObjectRequest) { cloned.ClientRequestId = "" },
+		func(cloned *opensplunk.UpdateKnowledgeObjectRequest) { cloned.ClientRequestId = "" },
 		paths,
 	)
 }
@@ -176,21 +176,21 @@ func prepareUpdateMutation(
 // ValidateSetKnowledgeObjectStateRequest validates the complete detached wire
 // shape that Writer requires before it consults idempotency or catalog state.
 func ValidateSetKnowledgeObjectStateRequest(
-	request *opensplunkv1.SetKnowledgeObjectStateRequest,
+	request *opensplunk.SetKnowledgeObjectStateRequest,
 ) error {
 	return validateSetKnowledgeObjectStateRequestShape(request)
 }
 
 func validateSetKnowledgeObjectStateRequestShape(
-	request *opensplunkv1.SetKnowledgeObjectStateRequest,
+	request *opensplunk.SetKnowledgeObjectStateRequest,
 ) error {
 	if request == nil || !validIdentity(request.GetKnowledgeObjectId(), maximumObjectIDBytes) ||
 		request.GetExpectedVersion() == 0 || request.GetExpectedVersion() > math.MaxInt64 {
 		return invalidMutation("state request identity and version are required")
 	}
 	switch request.GetState() {
-	case opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
-		opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED:
+	case opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
+		opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED:
 	default:
 		return invalidMutation("state must be active or disabled")
 	}
@@ -203,7 +203,7 @@ func validateSetKnowledgeObjectStateRequestShape(
 func prepareSetStateMutation(
 	ctxScope normalizedWriteScope,
 	actor audit.Actor,
-	request *opensplunkv1.SetKnowledgeObjectStateRequest,
+	request *opensplunk.SetKnowledgeObjectStateRequest,
 ) (preparedMutation, error) {
 	if err := validateSetKnowledgeObjectStateRequestShape(request); err != nil {
 		return preparedMutation{}, err
@@ -213,7 +213,7 @@ func prepareSetStateMutation(
 		actor,
 		mutationRouteSetState,
 		request,
-		func(cloned *opensplunkv1.SetKnowledgeObjectStateRequest) { cloned.ClientRequestId = "" },
+		func(cloned *opensplunk.SetKnowledgeObjectStateRequest) { cloned.ClientRequestId = "" },
 		nil,
 	)
 }
@@ -221,13 +221,13 @@ func prepareSetStateMutation(
 // ValidateDeleteKnowledgeObjectRequest validates the complete detached wire
 // shape that Writer requires before it consults idempotency or catalog state.
 func ValidateDeleteKnowledgeObjectRequest(
-	request *opensplunkv1.DeleteKnowledgeObjectRequest,
+	request *opensplunk.DeleteKnowledgeObjectRequest,
 ) error {
 	return validateDeleteKnowledgeObjectRequestShape(request)
 }
 
 func validateDeleteKnowledgeObjectRequestShape(
-	request *opensplunkv1.DeleteKnowledgeObjectRequest,
+	request *opensplunk.DeleteKnowledgeObjectRequest,
 ) error {
 	if request == nil || !validIdentity(request.GetKnowledgeObjectId(), maximumObjectIDBytes) ||
 		request.GetExpectedVersion() == 0 || request.GetExpectedVersion() > math.MaxInt64 {
@@ -242,7 +242,7 @@ func validateDeleteKnowledgeObjectRequestShape(
 func prepareDeleteMutation(
 	ctxScope normalizedWriteScope,
 	actor audit.Actor,
-	request *opensplunkv1.DeleteKnowledgeObjectRequest,
+	request *opensplunk.DeleteKnowledgeObjectRequest,
 ) (preparedMutation, error) {
 	if err := validateDeleteKnowledgeObjectRequestShape(request); err != nil {
 		return preparedMutation{}, err
@@ -252,7 +252,7 @@ func prepareDeleteMutation(
 		actor,
 		mutationRouteDelete,
 		request,
-		func(cloned *opensplunkv1.DeleteKnowledgeObjectRequest) { cloned.ClientRequestId = "" },
+		func(cloned *opensplunk.DeleteKnowledgeObjectRequest) { cloned.ClientRequestId = "" },
 		nil,
 	)
 }
@@ -320,25 +320,25 @@ func prepareMutationRequest(
 	switch route {
 	case mutationRouteCreate:
 		var ok bool
-		prepared.createRequest, ok = validated.request.(*opensplunkv1.CreateKnowledgeObjectRequest)
+		prepared.createRequest, ok = validated.request.(*opensplunk.CreateKnowledgeObjectRequest)
 		if !ok {
 			return preparedMutation{}, invalidMutation("create request type is invalid")
 		}
 	case mutationRouteUpdate:
 		var ok bool
-		prepared.updateRequest, ok = validated.request.(*opensplunkv1.UpdateKnowledgeObjectRequest)
+		prepared.updateRequest, ok = validated.request.(*opensplunk.UpdateKnowledgeObjectRequest)
 		if !ok {
 			return preparedMutation{}, invalidMutation("update request type is invalid")
 		}
 	case mutationRouteSetState:
 		var ok bool
-		prepared.setStateRequest, ok = validated.request.(*opensplunkv1.SetKnowledgeObjectStateRequest)
+		prepared.setStateRequest, ok = validated.request.(*opensplunk.SetKnowledgeObjectStateRequest)
 		if !ok {
 			return preparedMutation{}, invalidMutation("state request type is invalid")
 		}
 	case mutationRouteDelete:
 		var ok bool
-		prepared.deleteRequest, ok = validated.request.(*opensplunkv1.DeleteKnowledgeObjectRequest)
+		prepared.deleteRequest, ok = validated.request.(*opensplunk.DeleteKnowledgeObjectRequest)
 		if !ok {
 			return preparedMutation{}, invalidMutation("delete request type is invalid")
 		}
@@ -374,11 +374,11 @@ func preflightMutationMessage(message proto.Message) error {
 	if message == nil {
 		return invalidMutation("request is required")
 	}
-	var definition *opensplunkv1.KnowledgeObjectDefinition
+	var definition *opensplunk.KnowledgeObjectDefinition
 	switch request := message.(type) {
-	case *opensplunkv1.CreateKnowledgeObjectRequest:
+	case *opensplunk.CreateKnowledgeObjectRequest:
 		definition = request.GetDefinition()
-	case *opensplunkv1.UpdateKnowledgeObjectRequest:
+	case *opensplunk.UpdateKnowledgeObjectRequest:
 		definition = request.GetDefinition()
 	}
 	if definition != nil {

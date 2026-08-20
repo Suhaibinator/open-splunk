@@ -8,7 +8,7 @@ import (
 	"math"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
 	"google.golang.org/protobuf/proto"
 )
@@ -116,7 +116,7 @@ func TestTruncationFlagsRequireRetainedOmissionProof(t *testing.T) {
 		t.Fatalf("invalid diagnostic truncation tamper error = %v", err)
 	}
 
-	definitionInvalid, err := BuildInactive(context.Background(), &opensplunkv1.KnowledgeObjectDefinition{})
+	definitionInvalid, err := BuildInactive(context.Background(), &opensplunk.KnowledgeObjectDefinition{})
 	if err != nil {
 		t.Fatal(err)
 	}

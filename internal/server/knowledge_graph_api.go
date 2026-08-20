@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/Suhaibinator/SRouter/pkg/router"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeattemptaudit"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
@@ -22,15 +22,15 @@ const (
 )
 
 type knowledgeGraphProtoPage struct {
-	edges          []*opensplunkv1.KnowledgeManagementDependencyEdge
-	page           *opensplunkv1.PageResponse
-	resolvedObject *opensplunkv1.KnowledgeManagementObjectVersionIdentity
+	edges          []*opensplunk.KnowledgeManagementDependencyEdge
+	page           *opensplunk.PageResponse
+	resolvedObject *opensplunk.KnowledgeManagementObjectVersionIdentity
 	revision       uint64
 }
 
 func (handler *apiHandler) listKnowledgeObjectDependencies(
 	request *http.Request,
-	input *opensplunkv1.ListKnowledgeObjectDependenciesRequest,
+	input *opensplunk.ListKnowledgeObjectDependenciesRequest,
 ) (*serializedListKnowledgeObjectDependenciesResponse, error) {
 	return serveKnowledgeGraph(
 		handler,
@@ -38,15 +38,15 @@ func (handler *apiHandler) listKnowledgeObjectDependencies(
 		input,
 		knowledgeGraphDependencies,
 		"dependencies",
-		func(value *opensplunkv1.ListKnowledgeObjectDependenciesRequest) (
+		func(value *opensplunk.ListKnowledgeObjectDependenciesRequest) (
 			string,
 			*uint64,
-			*opensplunkv1.PageRequest,
+			*opensplunk.PageRequest,
 		) {
 			return value.GetKnowledgeObjectId(), value.Version, value.GetPage()
 		},
-		func(page knowledgeGraphProtoPage) *opensplunkv1.ListKnowledgeObjectDependenciesResponse {
-			return &opensplunkv1.ListKnowledgeObjectDependenciesResponse{
+		func(page knowledgeGraphProtoPage) *opensplunk.ListKnowledgeObjectDependenciesResponse {
+			return &opensplunk.ListKnowledgeObjectDependenciesResponse{
 				Dependencies:          page.edges,
 				Page:                  page.page,
 				TenantCatalogRevision: page.revision,
@@ -58,7 +58,7 @@ func (handler *apiHandler) listKnowledgeObjectDependencies(
 
 func (handler *apiHandler) listKnowledgeObjectDependents(
 	request *http.Request,
-	input *opensplunkv1.ListKnowledgeObjectDependentsRequest,
+	input *opensplunk.ListKnowledgeObjectDependentsRequest,
 ) (*serializedListKnowledgeObjectDependentsResponse, error) {
 	return serveKnowledgeGraph(
 		handler,
@@ -66,15 +66,15 @@ func (handler *apiHandler) listKnowledgeObjectDependents(
 		input,
 		knowledgeGraphDependents,
 		"dependents",
-		func(value *opensplunkv1.ListKnowledgeObjectDependentsRequest) (
+		func(value *opensplunk.ListKnowledgeObjectDependentsRequest) (
 			string,
 			*uint64,
-			*opensplunkv1.PageRequest,
+			*opensplunk.PageRequest,
 		) {
 			return value.GetKnowledgeObjectId(), value.Version, value.GetPage()
 		},
-		func(page knowledgeGraphProtoPage) *opensplunkv1.ListKnowledgeObjectDependentsResponse {
-			return &opensplunkv1.ListKnowledgeObjectDependentsResponse{
+		func(page knowledgeGraphProtoPage) *opensplunk.ListKnowledgeObjectDependentsResponse {
+			return &opensplunk.ListKnowledgeObjectDependentsResponse{
 				Dependents:            page.edges,
 				Page:                  page.page,
 				TenantCatalogRevision: page.revision,
@@ -90,7 +90,7 @@ func serveKnowledgeGraph[Request proto.Message, Response proto.Message](
 	input Request,
 	direction knowledgeGraphDirection,
 	operation string,
-	fields func(Request) (string, *uint64, *opensplunkv1.PageRequest),
+	fields func(Request) (string, *uint64, *opensplunk.PageRequest),
 	build func(knowledgeGraphProtoPage) Response,
 ) (*boundedProtoResponse[Response], error) {
 	invalidRequest := func() error {
@@ -166,7 +166,7 @@ func serveKnowledgeGraph[Request proto.Message, Response proto.Message](
 
 func knowledgeGraphRequestPreflight[Request proto.Message](
 	input Request,
-	fields func(Request) (string, *uint64, *opensplunkv1.PageRequest),
+	fields func(Request) (string, *uint64, *opensplunk.PageRequest),
 ) bool {
 	if isNilDependency(input) || fields == nil {
 		return false
@@ -190,7 +190,7 @@ func knowledgeGraphRequestPreflight[Request proto.Message](
 func knowledgeGraphListRequest(
 	objectID string,
 	version *uint64,
-	page *opensplunkv1.PageRequest,
+	page *opensplunk.PageRequest,
 ) (knowledgecatalog.DependencyListRequest, error) {
 	if !validKnowledgeIdentity(objectID, maximumKnowledgeObjectIDBytes) ||
 		version != nil && (*version == 0 || *version > math.MaxInt64) {
@@ -367,7 +367,7 @@ func knowledgeGraphPageToProto(
 		return knowledgeGraphProtoPage{}, authorized, err
 	}
 	edges := make(
-		[]*opensplunkv1.KnowledgeManagementDependencyEdge,
+		[]*opensplunk.KnowledgeManagementDependencyEdge,
 		len(page.Edges),
 	)
 	var previous knowledgecatalog.DependencyEdge
@@ -385,7 +385,7 @@ func knowledgeGraphPageToProto(
 			return knowledgeGraphProtoPage{}, authorized,
 				errors.New("knowledge catalog returned an invalid graph edge")
 		}
-		edges[index] = &opensplunkv1.KnowledgeManagementDependencyEdge{
+		edges[index] = &opensplunk.KnowledgeManagementDependencyEdge{
 			Source: knowledgeGraphIdentityToProto(edge.Source),
 			Target: knowledgeGraphIdentityToProto(edge.Target),
 			Role:   edge.Role,
@@ -543,7 +543,7 @@ func knowledgeGraphPageMetadata(
 	request knowledgecatalog.DependencyListRequest,
 	page knowledgecatalog.DependencyPage,
 	direction knowledgeGraphDirection,
-) (*opensplunkv1.PageResponse, error) {
+) (*opensplunk.PageResponse, error) {
 	if page.NextPageToken != "" &&
 		(len(page.Edges) == 0 ||
 			direction == knowledgeGraphDependencies &&
@@ -577,7 +577,7 @@ func knowledgeGraphPageMetadata(
 				*page.TotalSize != uint64(len(page.Edges))) {
 		return nil, errors.New("knowledge catalog returned an invalid graph total")
 	}
-	metadata := &opensplunkv1.PageResponse{TotalSizeExact: page.TotalSizeExact}
+	metadata := &opensplunk.PageResponse{TotalSizeExact: page.TotalSizeExact}
 	if page.NextPageToken != "" {
 		metadata.NextPageToken = new(strings.Clone(page.NextPageToken))
 	}
@@ -589,8 +589,8 @@ func knowledgeGraphPageMetadata(
 
 func knowledgeGraphIdentityToProto(
 	identity knowledgecatalog.ObjectVersionIdentity,
-) *opensplunkv1.KnowledgeManagementObjectVersionIdentity {
-	return &opensplunkv1.KnowledgeManagementObjectVersionIdentity{
+) *opensplunk.KnowledgeManagementObjectVersionIdentity {
+	return &opensplunk.KnowledgeManagementObjectVersionIdentity{
 		KnowledgeObjectId: strings.Clone(identity.KnowledgeObjectID),
 		Version:           identity.Version,
 	}

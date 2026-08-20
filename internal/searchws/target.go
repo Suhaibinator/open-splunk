@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
@@ -32,18 +32,18 @@ type targetKey struct {
 	id   string
 }
 
-func (key targetKey) protobuf() *opensplunkv1.JobTarget {
+func (key targetKey) protobuf() *opensplunk.JobTarget {
 	if key.kind == targetKindSearch {
-		return &opensplunkv1.JobTarget{Target: &opensplunkv1.JobTarget_SearchJobId{SearchJobId: key.id}}
+		return &opensplunk.JobTarget{Target: &opensplunk.JobTarget_SearchJobId{SearchJobId: key.id}}
 	}
-	return &opensplunkv1.JobTarget{Target: &opensplunkv1.JobTarget_ExportJobId{ExportJobId: key.id}}
+	return &opensplunk.JobTarget{Target: &opensplunk.JobTarget_ExportJobId{ExportJobId: key.id}}
 }
 
 func (key targetKey) recoveryPath() string {
 	if key.kind == targetKindSearch {
-		return "/api/v1/search/jobs/get"
+		return "/api/search/jobs/get"
 	}
-	return "/api/v1/search/exports/get"
+	return "/api/search/exports/get"
 }
 
 type eventCategory uint8
@@ -72,7 +72,7 @@ type storedEvent struct {
 type targetState struct {
 	service *Service
 	key     targetKey
-	target  *opensplunkv1.JobTarget
+	target  *opensplunk.JobTarget
 	ctx     context.Context
 	cancel  context.CancelFunc
 
@@ -528,7 +528,7 @@ func (target *targetState) notifyPollingFailure() {
 	for _, subscription := range subscribers {
 		if !subscription.deliverControl(resynchronizationEvent(
 			subscription.id, target.key,
-			opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_STATE_DIVERGED,
+			opensplunk.ResynchronizationReason_RESYNCHRONIZATION_REASON_STATE_DIVERGED,
 			earliest, latest, target.service.config.now(),
 		)) {
 			subscription.connection.hardClose()
@@ -821,7 +821,7 @@ func (target *targetState) applyProjection(projection targetProjection, initial 
 	type candidate struct {
 		category    eventCategory
 		fingerprint [sha256.Size]byte
-		event       *opensplunkv1.SearchWebSocketEvent
+		event       *opensplunk.SearchWebSocketEvent
 	}
 	all := make([]candidate, 0, len(projection.events))
 	expected := make(map[eventCategory]struct{}, len(projection.events))
@@ -881,9 +881,9 @@ func (target *targetState) applyProjection(projection targetProjection, initial 
 		target.mu.Unlock()
 		item.event.Sequence = sequence
 		item.event.OccurredAt = now
-		item.event.Target = proto.Clone(target.target).(*opensplunkv1.JobTarget)
+		item.event.Target = proto.Clone(target.target).(*opensplunk.JobTarget)
 		if warning := item.event.GetWarning(); warning != nil {
-			warning.Target = proto.Clone(target.target).(*opensplunkv1.JobTarget)
+			warning.Target = proto.Clone(target.target).(*opensplunk.JobTarget)
 		}
 		data, marshalErr := proto.MarshalOptions{Deterministic: true}.Marshal(item.event)
 		if marshalErr != nil {
@@ -966,9 +966,9 @@ func (target *targetState) applyProjection(projection targetProjection, initial 
 
 	if diverged || retentionFailed {
 		if diverged || !wasIncomplete {
-			reason := opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED
+			reason := opensplunk.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED
 			if diverged {
-				reason = opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_STATE_DIVERGED
+				reason = opensplunk.ResynchronizationReason_RESYNCHRONIZATION_REASON_STATE_DIVERGED
 			}
 			for _, subscription := range subscribers {
 				if !subscription.deliverControl(resynchronizationEvent(
@@ -1028,7 +1028,7 @@ func previewHasVisibleState(data []byte) (bool, error) {
 	if len(data) == 0 {
 		return false, nil
 	}
-	var event opensplunkv1.SearchWebSocketEvent
+	var event opensplunk.SearchWebSocketEvent
 	if err := proto.Unmarshal(data, &event); err != nil {
 		return false, errors.New("search websocket retained preview is invalid")
 	}
@@ -1040,18 +1040,18 @@ func previewHasVisibleState(data []byte) (bool, error) {
 }
 
 func previewInvalidationEvents(
-	events []*opensplunkv1.SearchWebSocketEvent,
+	events []*opensplunk.SearchWebSocketEvent,
 	priorSchemaData, priorPreviewData []byte,
 	version uint64,
 	jobID string,
-) ([]*opensplunkv1.SearchWebSocketEvent, error) {
+) ([]*opensplunk.SearchWebSocketEvent, error) {
 	if len(priorPreviewData) == 0 {
 		return events, nil
 	}
 	if len(priorSchemaData) == 0 {
 		return nil, errors.New("search websocket preview invalidation lacks its prior schema")
 	}
-	priorSchema := new(opensplunkv1.SearchWebSocketEvent)
+	priorSchema := new(opensplunk.SearchWebSocketEvent)
 	if err := proto.Unmarshal(priorSchemaData, priorSchema); err != nil || priorSchema.GetResultSchemaAvailable() == nil {
 		return nil, errors.New("search websocket preview invalidation lacks its prior schema")
 	}
@@ -1060,7 +1060,7 @@ func previewInvalidationEvents(
 	priorSchema.SubscriptionId = nil
 	priorSchema.Target = nil
 
-	priorPreview := new(opensplunkv1.SearchWebSocketEvent)
+	priorPreview := new(opensplunk.SearchWebSocketEvent)
 	if err := proto.Unmarshal(priorPreviewData, priorPreview); err != nil || priorPreview.GetResultPreview() == nil {
 		return nil, errors.New("search websocket preview invalidation lacks its prior preview")
 	}
@@ -1072,14 +1072,14 @@ func previewInvalidationEvents(
 			revision++
 		}
 	}
-	reset := &opensplunkv1.SearchWebSocketEvent{Payload: &opensplunkv1.SearchWebSocketEvent_ResultPreview{
-		ResultPreview: &opensplunkv1.ResultPreview{
+	reset := &opensplunk.SearchWebSocketEvent{Payload: &opensplunk.SearchWebSocketEvent_ResultPreview{
+		ResultPreview: &opensplunk.ResultPreview{
 			SearchJobId: jobID, SchemaId: schemaID, PreviewRevision: revision,
-			UpdateMode: opensplunkv1.PreviewUpdateMode_PREVIEW_UPDATE_MODE_RESET,
+			UpdateMode: opensplunk.PreviewUpdateMode_PREVIEW_UPDATE_MODE_RESET,
 		},
 	}}
 
-	result := make([]*opensplunkv1.SearchWebSocketEvent, 0, len(events)+2)
+	result := make([]*opensplunk.SearchWebSocketEvent, 0, len(events)+2)
 	inserted := false
 	for _, event := range events {
 		if !inserted && event.GetSearchTerminal() != nil {
@@ -1095,7 +1095,7 @@ func previewInvalidationEvents(
 }
 
 func (target *targetState) previewEventByteLimit(
-	events []*opensplunkv1.SearchWebSocketEvent,
+	events []*opensplunk.SearchWebSocketEvent,
 	now *timestamppb.Timestamp,
 ) (uint64, error) {
 	var nonPreviewBytes uint64
@@ -1103,13 +1103,13 @@ func (target *targetState) previewEventByteLimit(
 		if event.GetResultPreview() != nil {
 			continue
 		}
-		cloned := proto.Clone(event).(*opensplunkv1.SearchWebSocketEvent)
+		cloned := proto.Clone(event).(*opensplunk.SearchWebSocketEvent)
 		cloned.Sequence = ^uint64(0)
 		cloned.OccurredAt = now
 		cloned.SubscriptionId = nil
-		cloned.Target = proto.Clone(target.target).(*opensplunkv1.JobTarget)
+		cloned.Target = proto.Clone(target.target).(*opensplunk.JobTarget)
 		if warning := cloned.GetWarning(); warning != nil {
-			warning.Target = proto.Clone(target.target).(*opensplunkv1.JobTarget)
+			warning.Target = proto.Clone(target.target).(*opensplunk.JobTarget)
 		}
 		sizeInt := proto.Size(cloned)
 		if sizeInt < 0 {
@@ -1136,8 +1136,8 @@ func (target *targetState) previewEventByteLimit(
 // Envelope fields are installed temporarily so size checks include their exact
 // protobuf overhead; only the bounded rows and truncation bit remain changed.
 func boundPreviewEvent(
-	event *opensplunkv1.SearchWebSocketEvent,
-	target *opensplunkv1.JobTarget,
+	event *opensplunk.SearchWebSocketEvent,
+	target *opensplunk.JobTarget,
 	now *timestamppb.Timestamp,
 	maximumFrameBytes uint64,
 ) error {
@@ -1150,7 +1150,7 @@ func boundPreviewEvent(
 	sequence, occurredAt, eventTarget, subscriptionID := event.Sequence, event.OccurredAt, event.Target, event.SubscriptionId
 	event.Sequence = ^uint64(0)
 	event.OccurredAt = now
-	event.Target = proto.Clone(target).(*opensplunkv1.JobTarget)
+	event.Target = proto.Clone(target).(*opensplunk.JobTarget)
 	event.SubscriptionId = nil
 	defer func() {
 		event.Sequence = sequence
@@ -1370,33 +1370,33 @@ func (target *targetState) retire() {
 	}
 }
 
-func categoryForEvent(event *opensplunkv1.SearchWebSocketEvent) (eventCategory, error) {
+func categoryForEvent(event *opensplunk.SearchWebSocketEvent) (eventCategory, error) {
 	switch event.GetPayload().(type) {
-	case *opensplunkv1.SearchWebSocketEvent_SearchStateChanged:
+	case *opensplunk.SearchWebSocketEvent_SearchStateChanged:
 		return eventCategorySearchState, nil
-	case *opensplunkv1.SearchWebSocketEvent_SearchProgress:
+	case *opensplunk.SearchWebSocketEvent_SearchProgress:
 		return eventCategorySearchProgress, nil
-	case *opensplunkv1.SearchWebSocketEvent_ResultSchemaAvailable:
+	case *opensplunk.SearchWebSocketEvent_ResultSchemaAvailable:
 		return eventCategorySchema, nil
-	case *opensplunkv1.SearchWebSocketEvent_ResultPreview:
+	case *opensplunk.SearchWebSocketEvent_ResultPreview:
 		return eventCategoryPreview, nil
-	case *opensplunkv1.SearchWebSocketEvent_Warning:
+	case *opensplunk.SearchWebSocketEvent_Warning:
 		return eventCategoryWarning, nil
-	case *opensplunkv1.SearchWebSocketEvent_SearchTerminal:
+	case *opensplunk.SearchWebSocketEvent_SearchTerminal:
 		return eventCategorySearchTerminal, nil
-	case *opensplunkv1.SearchWebSocketEvent_ExportStateChanged:
+	case *opensplunk.SearchWebSocketEvent_ExportStateChanged:
 		return eventCategoryExportState, nil
-	case *opensplunkv1.SearchWebSocketEvent_ExportProgress:
+	case *opensplunk.SearchWebSocketEvent_ExportProgress:
 		return eventCategoryExportProgress, nil
-	case *opensplunkv1.SearchWebSocketEvent_ExportTerminal:
+	case *opensplunk.SearchWebSocketEvent_ExportTerminal:
 		return eventCategoryExportTerminal, nil
 	default:
 		return 0, fmt.Errorf("search websocket projection: unsupported event payload %T", event.GetPayload())
 	}
 }
 
-func fingerprintEvent(event *opensplunkv1.SearchWebSocketEvent, category eventCategory) ([sha256.Size]byte, error) {
-	cloned := proto.Clone(event).(*opensplunkv1.SearchWebSocketEvent)
+func fingerprintEvent(event *opensplunk.SearchWebSocketEvent, category eventCategory) ([sha256.Size]byte, error) {
+	cloned := proto.Clone(event).(*opensplunk.SearchWebSocketEvent)
 	cloned.Sequence = 0
 	cloned.OccurredAt = nil
 	cloned.SubscriptionId = nil
@@ -1426,15 +1426,15 @@ func fingerprintEvent(event *opensplunkv1.SearchWebSocketEvent, category eventCa
 func resynchronizationEvent(
 	subscriptionID string,
 	key targetKey,
-	reason opensplunkv1.ResynchronizationReason,
+	reason opensplunk.ResynchronizationReason,
 	earliest, latest uint64,
 	now time.Time,
-) *opensplunkv1.SearchWebSocketEvent {
+) *opensplunk.SearchWebSocketEvent {
 	timestamp, _ := timestampToProto(now)
 	target := key.protobuf()
-	return &opensplunkv1.SearchWebSocketEvent{
-		OccurredAt: timestamp, SubscriptionId: &subscriptionID, Target: proto.Clone(target).(*opensplunkv1.JobTarget),
-		Payload: &opensplunkv1.SearchWebSocketEvent_ResynchronizationRequired{ResynchronizationRequired: &opensplunkv1.ResynchronizationRequired{
+	return &opensplunk.SearchWebSocketEvent{
+		OccurredAt: timestamp, SubscriptionId: &subscriptionID, Target: proto.Clone(target).(*opensplunk.JobTarget),
+		Payload: &opensplunk.SearchWebSocketEvent_ResynchronizationRequired{ResynchronizationRequired: &opensplunk.ResynchronizationRequired{
 			SubscriptionId: subscriptionID, Target: target, Reason: reason,
 			EarliestAvailableSequence: earliest, LatestSequence: latest, RecoveryPath: key.recoveryPath(),
 		}},
@@ -1466,7 +1466,7 @@ func (subscription *subscription) deliverCanonical(data []byte, preview bool) bo
 	return subscription.connection.enqueue(stamped)
 }
 
-func (subscription *subscription) deliverControl(event *opensplunkv1.SearchWebSocketEvent) bool {
+func (subscription *subscription) deliverControl(event *opensplunk.SearchWebSocketEvent) bool {
 	data, err := marshalEvent(event, subscription.connection.service.config.maximumFrameBytes)
 	if err != nil {
 		return false
@@ -1477,7 +1477,7 @@ func (subscription *subscription) deliverControl(event *opensplunkv1.SearchWebSo
 }
 
 func tailorPreviewEvent(data []byte, previewRows uint32) ([]byte, error) {
-	var event opensplunkv1.SearchWebSocketEvent
+	var event opensplunk.SearchWebSocketEvent
 	if err := proto.Unmarshal(data, &event); err != nil {
 		return nil, err
 	}

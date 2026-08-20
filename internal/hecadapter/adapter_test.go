@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/hec"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
@@ -61,7 +61,7 @@ func TestJSONConvertsConcatenatedEnvelopeEventKindsExactly(t *testing.T) {
 		if got, want := string(event.GetRaw()), raw[ordinal]; got != want {
 			t.Errorf("Events[%d].Raw = %q, want %q", ordinal, got, want)
 		}
-		if event.GetRawEncoding() != opensplunkv1.RawEncoding_RAW_ENCODING_UTF8 {
+		if event.GetRawEncoding() != opensplunk.RawEncoding_RAW_ENCODING_UTF8 {
 			t.Errorf("Events[%d].RawEncoding = %v", ordinal, event.GetRawEncoding())
 		}
 		if event.GetIndexName() != "main" || event.GetHost() != "token-host" ||
@@ -73,10 +73,10 @@ func TestJSONConvertsConcatenatedEnvelopeEventKindsExactly(t *testing.T) {
 			t.Errorf("Events[%d].CollectedAt = %s, want %s", ordinal, got, receivedAt)
 		}
 		wantTime := receivedAt.UTC()
-		wantSource := opensplunkv1.EventTimeSource_EVENT_TIME_SOURCE_RECEIVED_AT_FALLBACK
+		wantSource := opensplunk.EventTimeSource_EVENT_TIME_SOURCE_RECEIVED_AT_FALLBACK
 		if ordinal == 0 {
 			wantTime = explicitTime
-			wantSource = opensplunkv1.EventTimeSource_EVENT_TIME_SOURCE_PARSED
+			wantSource = opensplunk.EventTimeSource_EVENT_TIME_SOURCE_PARSED
 		}
 		if got := event.GetEventTime().AsTime(); !got.Equal(wantTime) {
 			t.Errorf("Events[%d].EventTime = %s, want %s", ordinal, got, wantTime)
@@ -202,7 +202,7 @@ func TestJSONConvertsIndexedFieldsWithoutNumericPrecisionLoss(t *testing.T) {
 		t.Fatalf("JSON() error = %v", err)
 	}
 	fields := request.Events[0].Event.GetFields()
-	want := &opensplunkv1.TypedObject{Fields: []*opensplunkv1.TypedObjectField{
+	want := &opensplunk.TypedObject{Fields: []*opensplunk.TypedObjectField{
 		{Name: "nil", Value: adapterNullValue()},
 		{Name: "text", Value: adapterStringValue("exact")},
 		{Name: "negative", Value: adapterSint64Value(math.MinInt64)},
@@ -382,7 +382,7 @@ func TestRawConvertsExactMessagesMetadataAndTime(t *testing.T) {
 		if got := event.GetEventTime().AsTime(); !got.Equal(wantTime) {
 			t.Errorf("Events[%d].EventTime = %s, want %s", ordinal, got, wantTime)
 		}
-		if event.GetEventTimeSource() != opensplunkv1.EventTimeSource_EVENT_TIME_SOURCE_PARSED {
+		if event.GetEventTimeSource() != opensplunk.EventTimeSource_EVENT_TIME_SOURCE_PARSED {
 			t.Errorf("Events[%d].EventTimeSource = %v", ordinal, event.GetEventTimeSource())
 		}
 		if got, want := event.GetEventId(), context.RequestID+"-"+strconv.Itoa(ordinal); got != want {
@@ -407,7 +407,7 @@ func TestRawConvertsExactMessagesMetadataAndTime(t *testing.T) {
 	}
 	event := defaults.Events[0].Event
 	if got := event.GetEventTime().AsTime(); !got.Equal(receivedAt) ||
-		event.GetEventTimeSource() != opensplunkv1.EventTimeSource_EVENT_TIME_SOURCE_RECEIVED_AT_FALLBACK {
+		event.GetEventTimeSource() != opensplunk.EventTimeSource_EVENT_TIME_SOURCE_RECEIVED_AT_FALLBACK {
 		t.Errorf("raw fallback time = %s/%v, want %s/received fallback",
 			got, event.GetEventTimeSource(), receivedAt)
 	}
@@ -629,36 +629,36 @@ func adapterWriteDigestPart(destination io.Writer, value []byte) {
 	_, _ = destination.Write(value)
 }
 
-func adapterNullValue() *opensplunkv1.TypedValue {
-	return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_NullValue{
-		NullValue: opensplunkv1.NullValue_NULL_VALUE_NULL,
+func adapterNullValue() *opensplunk.TypedValue {
+	return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_NullValue{
+		NullValue: opensplunk.NullValue_NULL_VALUE_NULL,
 	}}
 }
 
-func adapterStringValue(value string) *opensplunkv1.TypedValue {
-	return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_StringValue{StringValue: value}}
+func adapterStringValue(value string) *opensplunk.TypedValue {
+	return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_StringValue{StringValue: value}}
 }
 
-func adapterSint64Value(value int64) *opensplunkv1.TypedValue {
-	return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_Sint64Value{Sint64Value: value}}
+func adapterSint64Value(value int64) *opensplunk.TypedValue {
+	return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_Sint64Value{Sint64Value: value}}
 }
 
-func adapterUint64Value(value uint64) *opensplunkv1.TypedValue {
-	return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_Uint64Value{Uint64Value: value}}
+func adapterUint64Value(value uint64) *opensplunk.TypedValue {
+	return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_Uint64Value{Uint64Value: value}}
 }
 
-func adapterDecimalValue(value string) *opensplunkv1.TypedValue {
-	return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_DecimalValue{
-		DecimalValue: &opensplunkv1.DecimalValue{Value: value},
+func adapterDecimalValue(value string) *opensplunk.TypedValue {
+	return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_DecimalValue{
+		DecimalValue: &opensplunk.DecimalValue{Value: value},
 	}}
 }
 
-func adapterBoolValue(value bool) *opensplunkv1.TypedValue {
-	return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_BoolValue{BoolValue: value}}
+func adapterBoolValue(value bool) *opensplunk.TypedValue {
+	return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_BoolValue{BoolValue: value}}
 }
 
-func adapterListValue(values ...*opensplunkv1.TypedValue) *opensplunkv1.TypedValue {
-	return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_ListValue{
-		ListValue: &opensplunkv1.TypedValueList{Values: values},
+func adapterListValue(values ...*opensplunk.TypedValue) *opensplunk.TypedValue {
+	return &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_ListValue{
+		ListValue: &opensplunk.TypedValueList{Values: values},
 	}}
 }

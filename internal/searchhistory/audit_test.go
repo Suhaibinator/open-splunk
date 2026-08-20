@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"google.golang.org/protobuf/proto"
 	"gorm.io/gorm"
@@ -125,16 +125,15 @@ func TestSearchAttemptAuditAppendsOnceAfterPendingInsertInSameTransaction(t *tes
 	scope := AccessScope{TenantID: " tenant-a ", OwnerID: " owner-a "}
 	created := time.Date(2026, time.August, 4, 12, 34, 56, 987_654_321, time.FixedZone("test", -7*60*60))
 	input := pendingHistoryEntry(" job-a ", "index=main", created)
-	input.KnowledgeSnapshot = &opensplunkv1.KnowledgeSnapshotSummary{
-		Ref: &opensplunkv1.KnowledgeSnapshotRef{
-			SnapshotSha256:               bytes.Repeat([]byte{0x42}, 32),
-			TenantCatalogRevision:        7,
-			TenantCatalogStateToken:      bytes.Repeat([]byte{0x73}, 32),
-			ObjectCount:                  0,
-			CompilerCompatibilityVersion: "0.1",
+	input.KnowledgeSnapshot = &opensplunk.KnowledgeSnapshotSummary{
+		Ref: &opensplunk.KnowledgeSnapshotRef{
+			SnapshotSha256:          bytes.Repeat([]byte{0x42}, 32),
+			TenantCatalogRevision:   7,
+			TenantCatalogStateToken: bytes.Repeat([]byte{0x73}, 32),
+			ObjectCount:             0,
 		},
 	}
-	original := proto.Clone(input).(*opensplunkv1.SearchHistoryEntry)
+	original := proto.Clone(input).(*opensplunk.SearchHistoryEntry)
 
 	admitted, err := store.BeginAttempt(ctx, scope, input)
 	if err != nil {
@@ -169,7 +168,7 @@ func TestSearchAttemptAuditAppendsOnceAfterPendingInsertInSameTransaction(t *tes
 	if _, err := store.BeginAttempt(ctx, scope, original); err != nil {
 		t.Fatalf("idempotent BeginAttempt() error = %v", err)
 	}
-	changed := proto.Clone(original).(*opensplunkv1.SearchHistoryEntry)
+	changed := proto.Clone(original).(*opensplunk.SearchHistoryEntry)
 	changed.Definition.Spl = "index=other"
 	if _, err := store.BeginAttempt(ctx, scope, changed); !errors.Is(err, control.ErrVersionConflict) {
 		t.Fatalf("changed BeginAttempt() error = %v, want ErrVersionConflict", err)
@@ -227,7 +226,7 @@ func TestSearchAttemptAuditTerminalJobIDReuseAppendsNothing(t *testing.T) {
 		pending.SearchJobId,
 		pending.Definition.Spl,
 		"search",
-		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
+		opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
 		created,
 	)
 	if _, err := store.CompleteAttempt(ctx, scope, terminal); err != nil {
@@ -340,13 +339,13 @@ func TestSearchAttemptAuditConcurrentConflictingAdmissionsAppendOnce(t *testing.
 	store := newSearchAttemptAuditStore(t, database, appender)
 	scope := AccessScope{TenantID: "tenant-conflict", OwnerID: "owner-conflict"}
 	created := time.Date(2026, time.August, 5, 13, 14, 15, 456_789_000, time.UTC)
-	entries := []*opensplunkv1.SearchHistoryEntry{
+	entries := []*opensplunk.SearchHistoryEntry{
 		pendingHistoryEntry("job-concurrent-conflict", "index=main", created),
 		pendingHistoryEntry("job-concurrent-conflict", "index=other", created),
 	}
 
 	type admissionResult struct {
-		entry *opensplunkv1.SearchHistoryEntry
+		entry *opensplunk.SearchHistoryEntry
 		err   error
 	}
 	start := make(chan struct{})
@@ -368,7 +367,7 @@ func TestSearchAttemptAuditConcurrentConflictingAdmissionsAppendOnce(t *testing.
 	close(results)
 
 	var admitted, conflicted int
-	var winner *opensplunkv1.SearchHistoryEntry
+	var winner *opensplunk.SearchHistoryEntry
 	for result := range results {
 		switch {
 		case result.err == nil:

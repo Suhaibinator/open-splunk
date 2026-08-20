@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
@@ -18,21 +18,21 @@ func TestNormalizeProducesDetachedDeterministicCanonicalAuthorities(t *testing.T
 	t.Parallel()
 
 	emptyDescription := " \t\r\n "
-	input := &opensplunkv1.KnowledgeObjectDefinition{
+	input := &opensplunk.KnowledgeObjectDefinition{
 		AppId:        "\tapp_AAAAAAAAAAAAAAAAAAAAAA ",
 		Name:         " Revenue ",
 		Description:  &emptyDescription,
-		SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-		Selector: &opensplunkv1.KnowledgeSelector{
-			IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{
+		SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+		Selector: &opensplunk.KnowledgeSelector{
+			IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{
 				{Value: " prod** "},
-				{Value: "alpha", MatchKind: opensplunkv1.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT},
-				{Value: "prod*", MatchKind: opensplunkv1.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_WILDCARD},
+				{Value: "alpha", MatchKind: opensplunk.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT},
+				{Value: "prod*", MatchKind: opensplunk.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_WILDCARD},
 			},
-			HostPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{Value: `api\*literal`}},
+			HostPatterns: []*opensplunk.KnowledgeSelectorPattern{{Value: `api\*literal`}},
 		},
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{
-			FieldAlias: &opensplunkv1.FieldAliasDefinition{
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{
+			FieldAlias: &opensplunk.FieldAliasDefinition{
 				SourceField:      " source.value ",
 				DestinationField: " derived.value ",
 			},
@@ -49,22 +49,22 @@ func TestNormalizeProducesDetachedDeterministicCanonicalAuthorities(t *testing.T
 	if normalized.Description != nil || normalized.Definition.Description != nil {
 		t.Fatalf("normalized empty description = (%v, %v), want absent", normalized.Description, normalized.Definition.Description)
 	}
-	if normalized.ObjectType != opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS ||
-		normalized.SharingScope != opensplunkv1.SharingScope_SHARING_SCOPE_APP {
+	if normalized.ObjectType != opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS ||
+		normalized.SharingScope != opensplunk.SharingScope_SHARING_SCOPE_APP {
 		t.Fatalf("derived type/scope = (%v, %v)", normalized.ObjectType, normalized.SharingScope)
 	}
 	alias := normalized.Definition.GetFieldAlias()
 	if alias.GetSourceField() != "source.value" || alias.GetDestinationField() != "derived.value" ||
-		alias.GetOverwriteBehavior() != opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING {
+		alias.GetOverwriteBehavior() != opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING {
 		t.Fatalf("canonical alias = %#v", alias)
 	}
 
 	indexPatterns := normalized.Definition.GetSelector().GetIndexPatterns()
 	if len(indexPatterns) != 2 ||
 		indexPatterns[0].GetValue() != "alpha" ||
-		indexPatterns[0].GetMatchKind() != opensplunkv1.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT ||
+		indexPatterns[0].GetMatchKind() != opensplunk.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT ||
 		indexPatterns[1].GetValue() != "prod*" ||
-		indexPatterns[1].GetMatchKind() != opensplunkv1.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_WILDCARD {
+		indexPatterns[1].GetMatchKind() != opensplunk.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_WILDCARD {
 		t.Fatalf("canonical index patterns = %#v", indexPatterns)
 	}
 	if got := normalized.Selector.Patterns(knowledge.DimensionHost); len(got) != 1 || got[0] != `api\*literal` {
@@ -87,7 +87,7 @@ func TestNormalizeProducesDetachedDeterministicCanonicalAuthorities(t *testing.T
 
 	// The caller's entire tree remains untouched and cannot mutate the result.
 	if input.GetAppId() != "\tapp_AAAAAAAAAAAAAAAAAAAAAA " ||
-		input.GetFieldAlias().GetOverwriteBehavior() != opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_UNSPECIFIED ||
+		input.GetFieldAlias().GetOverwriteBehavior() != opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_UNSPECIFIED ||
 		len(input.GetSelector().GetIndexPatterns()) != 3 {
 		t.Fatal("Normalize mutated its input")
 	}
@@ -127,18 +127,18 @@ func TestNormalizeRejectsUnknownFieldsRecursively(t *testing.T) {
 
 	tests := []struct {
 		name   string
-		mutate func(*opensplunkv1.KnowledgeObjectDefinition)
+		mutate func(*opensplunk.KnowledgeObjectDefinition)
 	}{
-		{name: "root", mutate: func(definition *opensplunkv1.KnowledgeObjectDefinition) {
+		{name: "root", mutate: func(definition *opensplunk.KnowledgeObjectDefinition) {
 			definition.ProtoReflect().SetUnknown(testUnknownField())
 		}},
-		{name: "selector", mutate: func(definition *opensplunkv1.KnowledgeObjectDefinition) {
+		{name: "selector", mutate: func(definition *opensplunk.KnowledgeObjectDefinition) {
 			definition.Selector.ProtoReflect().SetUnknown(testUnknownField())
 		}},
-		{name: "repeated pattern", mutate: func(definition *opensplunkv1.KnowledgeObjectDefinition) {
+		{name: "repeated pattern", mutate: func(definition *opensplunk.KnowledgeObjectDefinition) {
 			definition.Selector.IndexPatterns[0].ProtoReflect().SetUnknown(testUnknownField())
 		}},
-		{name: "oneof body", mutate: func(definition *opensplunkv1.KnowledgeObjectDefinition) {
+		{name: "oneof body", mutate: func(definition *opensplunk.KnowledgeObjectDefinition) {
 			definition.GetFieldAlias().ProtoReflect().SetUnknown(testUnknownField())
 		}},
 	}
@@ -155,17 +155,17 @@ func TestNormalizeRejectsUnknownFieldsRecursively(t *testing.T) {
 
 	nestedBodies := []struct {
 		name       string
-		definition func() *opensplunkv1.KnowledgeObjectDefinition
-		message    func(*opensplunkv1.KnowledgeObjectDefinition) proto.Message
+		definition func() *opensplunk.KnowledgeObjectDefinition
+		message    func(*opensplunk.KnowledgeObjectDefinition) proto.Message
 	}{
 		{
 			name: "field extraction",
-			definition: func() *opensplunkv1.KnowledgeObjectDefinition {
+			definition: func() *opensplunk.KnowledgeObjectDefinition {
 				definition := validBaseDefinition()
-				definition.Body = &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
-					FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
-						Extraction: &opensplunkv1.FieldExtractionDefinition_Regex{
-							Regex: &opensplunkv1.RegexFieldExtractionDefinition{
+				definition.Body = &opensplunk.KnowledgeObjectDefinition_FieldExtraction{
+					FieldExtraction: &opensplunk.FieldExtractionDefinition{
+						Extraction: &opensplunk.FieldExtractionDefinition_Regex{
+							Regex: &opensplunk.RegexFieldExtractionDefinition{
 								Pattern: "(?<value>x)", OutputFields: []string{"value"},
 							},
 						},
@@ -173,18 +173,18 @@ func TestNormalizeRejectsUnknownFieldsRecursively(t *testing.T) {
 				}
 				return definition
 			},
-			message: func(definition *opensplunkv1.KnowledgeObjectDefinition) proto.Message {
+			message: func(definition *opensplunk.KnowledgeObjectDefinition) proto.Message {
 				return definition.GetFieldExtraction()
 			},
 		},
 		{
 			name: "regex extraction leaf",
-			definition: func() *opensplunkv1.KnowledgeObjectDefinition {
+			definition: func() *opensplunk.KnowledgeObjectDefinition {
 				definition := validBaseDefinition()
-				definition.Body = &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
-					FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
-						Extraction: &opensplunkv1.FieldExtractionDefinition_Regex{
-							Regex: &opensplunkv1.RegexFieldExtractionDefinition{
+				definition.Body = &opensplunk.KnowledgeObjectDefinition_FieldExtraction{
+					FieldExtraction: &opensplunk.FieldExtractionDefinition{
+						Extraction: &opensplunk.FieldExtractionDefinition_Regex{
+							Regex: &opensplunk.RegexFieldExtractionDefinition{
 								Pattern: "(?<value>x)", OutputFields: []string{"value"},
 							},
 						},
@@ -192,39 +192,39 @@ func TestNormalizeRejectsUnknownFieldsRecursively(t *testing.T) {
 				}
 				return definition
 			},
-			message: func(definition *opensplunkv1.KnowledgeObjectDefinition) proto.Message {
+			message: func(definition *opensplunk.KnowledgeObjectDefinition) proto.Message {
 				return definition.GetFieldExtraction().GetRegex()
 			},
 		},
 		{
 			name: "JSON extraction leaf",
-			definition: func() *opensplunkv1.KnowledgeObjectDefinition {
+			definition: func() *opensplunk.KnowledgeObjectDefinition {
 				definition := validBaseDefinition()
-				definition.Body = &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
-					FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
-						Extraction: &opensplunkv1.FieldExtractionDefinition_Json{
-							Json: &opensplunkv1.JsonFieldExtractionDefinition{Path: "value", OutputField: "value"},
+				definition.Body = &opensplunk.KnowledgeObjectDefinition_FieldExtraction{
+					FieldExtraction: &opensplunk.FieldExtractionDefinition{
+						Extraction: &opensplunk.FieldExtractionDefinition_Json{
+							Json: &opensplunk.JsonFieldExtractionDefinition{Path: "value", OutputField: "value"},
 						},
 					},
 				}
 				return definition
 			},
-			message: func(definition *opensplunkv1.KnowledgeObjectDefinition) proto.Message {
+			message: func(definition *opensplunk.KnowledgeObjectDefinition) proto.Message {
 				return definition.GetFieldExtraction().GetJson()
 			},
 		},
 		{
 			name: "calculated field leaf",
-			definition: func() *opensplunkv1.KnowledgeObjectDefinition {
+			definition: func() *opensplunk.KnowledgeObjectDefinition {
 				definition := validBaseDefinition()
-				definition.Body = &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{
-					CalculatedField: &opensplunkv1.CalculatedFieldDefinition{
+				definition.Body = &opensplunk.KnowledgeObjectDefinition_CalculatedField{
+					CalculatedField: &opensplunk.CalculatedFieldDefinition{
 						DestinationField: "value", Expression: "1",
 					},
 				}
 				return definition
 			},
-			message: func(definition *opensplunkv1.KnowledgeObjectDefinition) proto.Message {
+			message: func(definition *opensplunk.KnowledgeObjectDefinition) proto.Message {
 				return definition.GetCalculatedField()
 			},
 		},
@@ -246,36 +246,36 @@ func TestNormalizeRejectsUnknownEnumsSelectorDisagreementAndBodies(t *testing.T)
 
 	tests := []struct {
 		name   string
-		mutate func(*opensplunkv1.KnowledgeObjectDefinition)
+		mutate func(*opensplunk.KnowledgeObjectDefinition)
 	}{
-		{name: "unspecified scope", mutate: func(definition *opensplunkv1.KnowledgeObjectDefinition) {
-			definition.SharingScope = opensplunkv1.SharingScope_SHARING_SCOPE_UNSPECIFIED
+		{name: "unspecified scope", mutate: func(definition *opensplunk.KnowledgeObjectDefinition) {
+			definition.SharingScope = opensplunk.SharingScope_SHARING_SCOPE_UNSPECIFIED
 		}},
-		{name: "future scope", mutate: func(definition *opensplunkv1.KnowledgeObjectDefinition) {
-			definition.SharingScope = opensplunkv1.SharingScope(99)
+		{name: "future scope", mutate: func(definition *opensplunk.KnowledgeObjectDefinition) {
+			definition.SharingScope = opensplunk.SharingScope(99)
 		}},
-		{name: "exact marked wildcard", mutate: func(definition *opensplunkv1.KnowledgeObjectDefinition) {
+		{name: "exact marked wildcard", mutate: func(definition *opensplunk.KnowledgeObjectDefinition) {
 			definition.Selector.IndexPatterns[0].Value = "prod*"
-			definition.Selector.IndexPatterns[0].MatchKind = opensplunkv1.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT
+			definition.Selector.IndexPatterns[0].MatchKind = opensplunk.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT
 		}},
-		{name: "wildcard marked exact", mutate: func(definition *opensplunkv1.KnowledgeObjectDefinition) {
+		{name: "wildcard marked exact", mutate: func(definition *opensplunk.KnowledgeObjectDefinition) {
 			definition.Selector.IndexPatterns[0].Value = "prod"
-			definition.Selector.IndexPatterns[0].MatchKind = opensplunkv1.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_WILDCARD
+			definition.Selector.IndexPatterns[0].MatchKind = opensplunk.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_WILDCARD
 		}},
-		{name: "future selector kind", mutate: func(definition *opensplunkv1.KnowledgeObjectDefinition) {
-			definition.Selector.IndexPatterns[0].MatchKind = opensplunkv1.KnowledgeSelectorMatchKind(99)
+		{name: "future selector kind", mutate: func(definition *opensplunk.KnowledgeObjectDefinition) {
+			definition.Selector.IndexPatterns[0].MatchKind = opensplunk.KnowledgeSelectorMatchKind(99)
 		}},
-		{name: "nil selector entry", mutate: func(definition *opensplunkv1.KnowledgeObjectDefinition) {
+		{name: "nil selector entry", mutate: func(definition *opensplunk.KnowledgeObjectDefinition) {
 			definition.Selector.IndexPatterns[0] = nil
 		}},
-		{name: "missing body", mutate: func(definition *opensplunkv1.KnowledgeObjectDefinition) {
+		{name: "missing body", mutate: func(definition *opensplunk.KnowledgeObjectDefinition) {
 			definition.Body = nil
 		}},
-		{name: "typed nil body", mutate: func(definition *opensplunkv1.KnowledgeObjectDefinition) {
-			definition.Body = &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{}
+		{name: "typed nil body", mutate: func(definition *opensplunk.KnowledgeObjectDefinition) {
+			definition.Body = &opensplunk.KnowledgeObjectDefinition_FieldAlias{}
 		}},
-		{name: "future overwrite", mutate: func(definition *opensplunkv1.KnowledgeObjectDefinition) {
-			definition.GetFieldAlias().OverwriteBehavior = opensplunkv1.KnowledgeOverwriteBehavior(99)
+		{name: "future overwrite", mutate: func(definition *opensplunk.KnowledgeObjectDefinition) {
+			definition.GetFieldAlias().OverwriteBehavior = opensplunk.KnowledgeOverwriteBehavior(99)
 		}},
 	}
 	for _, test := range tests {
@@ -294,10 +294,10 @@ func TestNormalizeBodyFamiliesAndStructuralBounds(t *testing.T) {
 	t.Parallel()
 
 	regex := validBaseDefinition()
-	regex.Body = &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
-		FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
-			Extraction: &opensplunkv1.FieldExtractionDefinition_Regex{
-				Regex: &opensplunkv1.RegexFieldExtractionDefinition{
+	regex.Body = &opensplunk.KnowledgeObjectDefinition_FieldExtraction{
+		FieldExtraction: &opensplunk.FieldExtractionDefinition{
+			Extraction: &opensplunk.FieldExtractionDefinition_Regex{
+				Regex: &opensplunk.RegexFieldExtractionDefinition{
 					Pattern:      `status=(?<status>[0-9]+)`,
 					OutputFields: []string{" status ", "nested.code"},
 				},
@@ -308,21 +308,21 @@ func TestNormalizeBodyFamiliesAndStructuralBounds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Normalize(regex): %v", err)
 	}
-	if normalizedRegex.ObjectType != opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION ||
+	if normalizedRegex.ObjectType != opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION ||
 		normalizedRegex.Definition.GetFieldExtraction().GetInputField() != "_raw" ||
-		normalizedRegex.Definition.GetFieldExtraction().GetOverwriteBehavior() != opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING ||
+		normalizedRegex.Definition.GetFieldExtraction().GetOverwriteBehavior() != opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING ||
 		normalizedRegex.Definition.GetFieldExtraction().GetRegex().GetOutputFields()[0] != "status" {
 		t.Fatalf("canonical regex extraction = %#v", normalizedRegex.Definition.GetFieldExtraction())
 	}
 
 	json := validBaseDefinition()
-	json.Body = &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
-		FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
+	json.Body = &opensplunk.KnowledgeObjectDefinition_FieldExtraction{
+		FieldExtraction: &opensplunk.FieldExtractionDefinition{
 			InputField: " _raw ",
-			Extraction: &opensplunkv1.FieldExtractionDefinition_Json{
-				Json: &opensplunkv1.JsonFieldExtractionDefinition{Path: " items{0}.name ", OutputField: " item.name "},
+			Extraction: &opensplunk.FieldExtractionDefinition_Json{
+				Json: &opensplunk.JsonFieldExtractionDefinition{Path: " items{0}.name ", OutputField: " item.name "},
 			},
-			OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+			OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 		},
 	}
 	normalizedJSON, err := Normalize(json)
@@ -335,8 +335,8 @@ func TestNormalizeBodyFamiliesAndStructuralBounds(t *testing.T) {
 	}
 
 	calculated := validBaseDefinition()
-	calculated.Body = &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{
-		CalculatedField: &opensplunkv1.CalculatedFieldDefinition{
+	calculated.Body = &opensplunk.KnowledgeObjectDefinition_CalculatedField{
+		CalculatedField: &opensplunk.CalculatedFieldDefinition{
 			DestinationField: " latency.class ",
 			Expression:       "\t if(latency > 100, \"slow\", \"fast\") \r\n",
 		},
@@ -345,20 +345,20 @@ func TestNormalizeBodyFamiliesAndStructuralBounds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Normalize(calculated): %v", err)
 	}
-	if normalizedCalculated.ObjectType != opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD ||
+	if normalizedCalculated.ObjectType != opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD ||
 		normalizedCalculated.Definition.GetCalculatedField().GetExpression() != `if(latency > 100, "slow", "fast")` {
 		t.Fatalf("canonical calculated field = %#v", normalizedCalculated.Definition.GetCalculatedField())
 	}
 
-	badInput := proto.Clone(regex).(*opensplunkv1.KnowledgeObjectDefinition)
+	badInput := proto.Clone(regex).(*opensplunk.KnowledgeObjectDefinition)
 	badInput.GetFieldExtraction().InputField = "message"
 	assertInvalidDefinition(t, badInput)
 
-	duplicateOutput := proto.Clone(regex).(*opensplunkv1.KnowledgeObjectDefinition)
+	duplicateOutput := proto.Clone(regex).(*opensplunk.KnowledgeObjectDefinition)
 	duplicateOutput.GetFieldExtraction().GetRegex().OutputFields = []string{"status", " status "}
 	assertInvalidDefinition(t, duplicateOutput)
 
-	tooManyOutputs := proto.Clone(regex).(*opensplunkv1.KnowledgeObjectDefinition)
+	tooManyOutputs := proto.Clone(regex).(*opensplunk.KnowledgeObjectDefinition)
 	tooManyOutputs.GetFieldExtraction().GetRegex().OutputFields = make([]string, MaximumFieldExtractionOutputs+1)
 	for index := range tooManyOutputs.GetFieldExtraction().GetRegex().OutputFields {
 		tooManyOutputs.GetFieldExtraction().GetRegex().OutputFields[index] = strings.Repeat("f", index+1)
@@ -367,7 +367,7 @@ func TestNormalizeBodyFamiliesAndStructuralBounds(t *testing.T) {
 		t.Fatalf("too many regex outputs error = %v, want ErrDefinitionTooLarge", err)
 	}
 
-	missingExtraction := proto.Clone(regex).(*opensplunkv1.KnowledgeObjectDefinition)
+	missingExtraction := proto.Clone(regex).(*opensplunk.KnowledgeObjectDefinition)
 	missingExtraction.GetFieldExtraction().Extraction = nil
 	assertInvalidDefinition(t, missingExtraction)
 
@@ -379,15 +379,15 @@ func TestNormalizeBodyFamiliesAndStructuralBounds(t *testing.T) {
 	reservedDestination.GetFieldAlias().DestinationField = "INDEX.child"
 	assertInvalidDefinition(t, reservedDestination)
 
-	emptyExpression := proto.Clone(calculated).(*opensplunkv1.KnowledgeObjectDefinition)
+	emptyExpression := proto.Clone(calculated).(*opensplunk.KnowledgeObjectDefinition)
 	emptyExpression.GetCalculatedField().Expression = " \t\n "
 	assertInvalidDefinition(t, emptyExpression)
 
-	oversizedExpression := proto.Clone(calculated).(*opensplunkv1.KnowledgeObjectDefinition)
+	oversizedExpression := proto.Clone(calculated).(*opensplunk.KnowledgeObjectDefinition)
 	oversizedExpression.GetCalculatedField().Expression = strings.Repeat("x", MaximumExpressionBytes+1)
 	assertInvalidDefinition(t, oversizedExpression)
 
-	oversizedPaddedExpression := proto.Clone(calculated).(*opensplunkv1.KnowledgeObjectDefinition)
+	oversizedPaddedExpression := proto.Clone(calculated).(*opensplunk.KnowledgeObjectDefinition)
 	oversizedPaddedExpression.GetCalculatedField().Expression = "1" + strings.Repeat(" ", MaximumExpressionBytes)
 	assertInvalidDefinition(t, oversizedPaddedExpression)
 
@@ -476,14 +476,14 @@ func TestDecodeCanonicalFutureBodyPreservesCanonicalInactiveDefinition(t *testin
 	decoded, err := DecodeCanonicalInactiveFutureBody(
 		canonical,
 		digest[:],
-		opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+		opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 	)
 	if err != nil {
 		t.Fatalf("DecodeCanonicalInactiveFutureBody: %v", err)
 	}
 	if decoded.Digest != digest || !bytes.Equal(decoded.Bytes, canonical) ||
 		decoded.AppID != validBaseDefinition().GetAppId() || decoded.Name != "revenue" ||
-		decoded.SharingScope != opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE ||
+		decoded.SharingScope != opensplunk.SharingScope_SHARING_SCOPE_PRIVATE ||
 		decoded.Description != nil || decoded.Selector == nil || decoded.Selector.Stats().Patterns != 1 {
 		t.Fatalf("decoded future authorities = %#v", decoded)
 	}
@@ -506,7 +506,7 @@ func TestDecodeCanonicalFutureBodyPreservesCanonicalInactiveDefinition(t *testin
 	again, err := DecodeCanonicalInactiveFutureBody(
 		original,
 		digest[:],
-		opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+		opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 	)
 	if err != nil {
 		t.Fatalf("DecodeCanonicalInactiveFutureBody(second): %v", err)
@@ -568,8 +568,8 @@ func TestDecodeCanonicalFutureBodyRejectsAmbiguousOrNoncanonicalShapes(t *testin
 	for len(tooManyPatterns.Selector.IndexPatterns) <= knowledge.MaximumSelectorPatternsPerDimension {
 		tooManyPatterns.Selector.IndexPatterns = append(
 			tooManyPatterns.Selector.IndexPatterns,
-			&opensplunkv1.KnowledgeSelectorPattern{
-				MatchKind: opensplunkv1.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT,
+			&opensplunk.KnowledgeSelectorPattern{
+				MatchKind: opensplunk.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT,
 				Value:     "bounded",
 			},
 		)
@@ -612,7 +612,7 @@ func TestDecodeCanonicalFutureBodyRejectsAmbiguousOrNoncanonicalShapes(t *testin
 			if _, err := DecodeCanonicalInactiveFutureBody(
 				test.data,
 				digest[:],
-				opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+				opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 			); !errors.Is(err, test.err) {
 				t.Fatalf("error = %v, want %v", err, test.err)
 			}
@@ -626,14 +626,14 @@ func TestDecodeCanonicalFutureBodyRejectsAmbiguousOrNoncanonicalShapes(t *testin
 	if _, err := DecodeCanonicalInactiveFutureBody(
 		valid,
 		wrong[:],
-		opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+		opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 	); !errors.Is(err, ErrDigestMismatch) {
 		t.Fatalf("wrong digest error = %v", err)
 	}
 	if _, err := DecodeCanonicalInactiveFutureBody(
 		valid,
 		digest[:sha256.Size-1],
-		opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+		opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 	); !errors.Is(err, ErrDigestMismatch) {
 		t.Fatalf("short digest error = %v", err)
 	}
@@ -642,7 +642,7 @@ func TestDecodeCanonicalFutureBodyRejectsAmbiguousOrNoncanonicalShapes(t *testin
 	if _, err := DecodeCanonicalInactiveFutureBody(
 		oversized,
 		oversizedDigest[:],
-		opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+		opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 	); !errors.Is(err, ErrDefinitionTooLarge) {
 		t.Fatalf("oversized error = %v", err)
 	}
@@ -653,20 +653,20 @@ func TestDecodeCanonicalInactiveFutureBodyEnforcesTrustedLifecycleState(t *testi
 
 	data := futureDefinitionBytes(t, validBaseDefinition(), []byte{1})
 	digest := sha256.Sum256(data)
-	for _, state := range []opensplunkv1.KnowledgeObjectState{
-		opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
-		opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
-		opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DELETED,
+	for _, state := range []opensplunk.KnowledgeObjectState{
+		opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+		opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+		opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DELETED,
 	} {
 		if _, err := DecodeCanonicalInactiveFutureBody(data, digest[:], state); err != nil {
 			t.Errorf("state %v: %v", state, err)
 		}
 	}
-	for _, state := range []opensplunkv1.KnowledgeObjectState{
-		opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_UNSPECIFIED,
-		opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
-		opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_QUARANTINED,
-		opensplunkv1.KnowledgeObjectState(99),
+	for _, state := range []opensplunk.KnowledgeObjectState{
+		opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_UNSPECIFIED,
+		opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
+		opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_QUARANTINED,
+		opensplunk.KnowledgeObjectState(99),
 	} {
 		// The state gate deliberately runs before size, digest, or wire parsing.
 		if _, err := DecodeCanonicalInactiveFutureBody(nil, nil, state); !errors.Is(err, ErrUnknownFutureBody) {
@@ -678,7 +678,7 @@ func TestDecodeCanonicalInactiveFutureBodyEnforcesTrustedLifecycleState(t *testi
 func TestKnowledgeDefinitionDescriptorPinsFutureBodyNumberNamespace(t *testing.T) {
 	t.Parallel()
 
-	descriptor := (&opensplunkv1.KnowledgeObjectDefinition{}).ProtoReflect().Descriptor()
+	descriptor := (&opensplunk.KnowledgeObjectDefinition{}).ProtoReflect().Descriptor()
 	body := descriptor.Oneofs().ByName("body")
 	if body == nil || body.IsSynthetic() {
 		t.Fatal("KnowledgeObjectDefinition.body oneof is missing or synthetic")
@@ -726,7 +726,7 @@ func TestNormalizeCollapsesEmptySelectorAndDescriptionPresence(t *testing.T) {
 	empty := ""
 	definition := validAliasDefinition()
 	definition.Description = &empty
-	definition.Selector = &opensplunkv1.KnowledgeSelector{}
+	definition.Selector = &opensplunk.KnowledgeSelector{}
 	normalized, err := Normalize(definition)
 	if err != nil {
 		t.Fatal(err)
@@ -744,11 +744,11 @@ func TestNormalizePreflightsUntrustedRepeatedShapesAndWireBytes(t *testing.T) {
 
 	tooManyPatterns := validAliasDefinition()
 	tooManyPatterns.Selector.IndexPatterns = make(
-		[]*opensplunkv1.KnowledgeSelectorPattern,
+		[]*opensplunk.KnowledgeSelectorPattern,
 		knowledge.MaximumSelectorPatternsPerDimension+1,
 	)
 	for index := range tooManyPatterns.Selector.IndexPatterns {
-		tooManyPatterns.Selector.IndexPatterns[index] = &opensplunkv1.KnowledgeSelectorPattern{Value: "x"}
+		tooManyPatterns.Selector.IndexPatterns[index] = &opensplunk.KnowledgeSelectorPattern{Value: "x"}
 	}
 	if _, err := Normalize(tooManyPatterns); !errors.Is(err, ErrDefinitionTooLarge) {
 		t.Fatalf("too many submitted patterns error = %v, want ErrDefinitionTooLarge", err)
@@ -761,33 +761,33 @@ func TestNormalizePreflightsUntrustedRepeatedShapesAndWireBytes(t *testing.T) {
 	}
 }
 
-func validAliasDefinition() *opensplunkv1.KnowledgeObjectDefinition {
+func validAliasDefinition() *opensplunk.KnowledgeObjectDefinition {
 	definition := validBaseDefinition()
-	definition.Body = &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{
-		FieldAlias: &opensplunkv1.FieldAliasDefinition{
+	definition.Body = &opensplunk.KnowledgeObjectDefinition_FieldAlias{
+		FieldAlias: &opensplunk.FieldAliasDefinition{
 			SourceField:       "source.value",
 			DestinationField:  "derived.value",
-			OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+			OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
 		},
 	}
 	return definition
 }
 
-func validBaseDefinition() *opensplunkv1.KnowledgeObjectDefinition {
-	return &opensplunkv1.KnowledgeObjectDefinition{
+func validBaseDefinition() *opensplunk.KnowledgeObjectDefinition {
+	return &opensplunk.KnowledgeObjectDefinition{
 		AppId:        "app_AAAAAAAAAAAAAAAAAAAAAA",
 		Name:         "revenue",
-		SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
-		Selector: &opensplunkv1.KnowledgeSelector{
-			IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{
-				MatchKind: opensplunkv1.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT,
+		SharingScope: opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
+		Selector: &opensplunk.KnowledgeSelector{
+			IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{{
+				MatchKind: opensplunk.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT,
 				Value:     "main",
 			}},
 		},
 	}
 }
 
-func assertInvalidDefinition(t *testing.T, definition *opensplunkv1.KnowledgeObjectDefinition) {
+func assertInvalidDefinition(t *testing.T, definition *opensplunk.KnowledgeObjectDefinition) {
 	t.Helper()
 	if _, err := Normalize(definition); !errors.Is(err, ErrInvalidDefinition) {
 		t.Fatalf("Normalize error = %v, want ErrInvalidDefinition", err)
@@ -803,7 +803,7 @@ func testUnknownField() []byte {
 
 func futureDefinitionBytes(
 	t *testing.T,
-	definition *opensplunkv1.KnowledgeObjectDefinition,
+	definition *opensplunk.KnowledgeObjectDefinition,
 	payload []byte,
 ) []byte {
 	t.Helper()
@@ -812,7 +812,7 @@ func futureDefinitionBytes(
 
 func futureDefinitionBytesWithMetadata(
 	t *testing.T,
-	definition *opensplunkv1.KnowledgeObjectDefinition,
+	definition *opensplunk.KnowledgeObjectDefinition,
 	futureMetadata []byte,
 	field protowire.Number,
 	payload []byte,

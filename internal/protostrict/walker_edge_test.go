@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/protostrict"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
@@ -119,8 +119,8 @@ func TestContainsUnknownFindsUnknownOnlyInDeeplyNestedMapValue(t *testing.T) {
 
 func TestContainsUnknownRejectsNilElementsInsideCollections(t *testing.T) {
 	t.Parallel()
-	response := &opensplunkv1.ListSearchHistoryResponse{
-		HistoryEntries: []*opensplunkv1.SearchHistoryEntry{{SearchJobId: "job-0"}, nil},
+	response := &opensplunk.ListSearchHistoryResponse{
+		HistoryEntries: []*opensplunk.SearchHistoryEntry{{SearchJobId: "job-0"}, nil},
 	}
 	if !protostrict.ContainsUnknown(response.ProtoReflect()) {
 		t.Fatalf("nil element inside a repeated message field was accepted")
@@ -138,14 +138,14 @@ func TestContainsUnknownTreatsUnsetTypedNilSingularFieldAsAbsent(t *testing.T) {
 	t.Parallel()
 	// A typed-nil singular field is simply unset on the wire, so the walker
 	// accepts it; the consuming validator is what must reject the entry.
-	entry := &opensplunkv1.SearchHistoryEntry{
+	entry := &opensplunk.SearchHistoryEntry{
 		SearchJobId: "job-1",
-		Definition:  (*opensplunkv1.SearchDefinition)(nil),
+		Definition:  (*opensplunk.SearchDefinition)(nil),
 	}
 	if protostrict.ContainsUnknown(entry.ProtoReflect()) {
 		t.Fatalf("typed-nil singular field reported as unknown")
 	}
-	var top *opensplunkv1.SearchHistoryEntry
+	var top *opensplunk.SearchHistoryEntry
 	if !protostrict.ContainsUnknown(top.ProtoReflect()) {
 		t.Fatalf("typed-nil top-level message accepted")
 	}
@@ -155,8 +155,8 @@ func TestContainsUnknownDetectsUnknownInsideOneofsAndWellKnownTypes(t *testing.T
 	t.Parallel()
 	duration := durationpb.New(0)
 	duration.ProtoReflect().SetUnknown(futureField())
-	oneof := &opensplunkv1.TypedValue{
-		Kind: &opensplunkv1.TypedValue_DurationValue{DurationValue: duration},
+	oneof := &opensplunk.TypedValue{
+		Kind: &opensplunk.TypedValue_DurationValue{DurationValue: duration},
 	}
 	if !protostrict.ContainsUnknown(oneof.ProtoReflect()) {
 		t.Fatalf("unknown field inside a oneof message member was not detected")
@@ -164,7 +164,7 @@ func TestContainsUnknownDetectsUnknownInsideOneofsAndWellKnownTypes(t *testing.T
 
 	stamp := timestamppb.New(time.Unix(0, 0).UTC())
 	stamp.ProtoReflect().SetUnknown(futureField())
-	entry := &opensplunkv1.SearchHistoryEntry{SearchJobId: "job-1", CreatedAt: stamp}
+	entry := &opensplunk.SearchHistoryEntry{SearchJobId: "job-1", CreatedAt: stamp}
 	if err := protostrict.RejectUnknownFields(entry.ProtoReflect(), "entry"); err == nil {
 		t.Fatalf("unknown field inside google.protobuf.Timestamp was accepted")
 	}
@@ -172,11 +172,11 @@ func TestContainsUnknownDetectsUnknownInsideOneofsAndWellKnownTypes(t *testing.T
 
 func TestContainsUnknownIsSafeForConcurrentReaders(t *testing.T) {
 	t.Parallel()
-	clean := &opensplunkv1.SearchHistoryEntry{
+	clean := &opensplunk.SearchHistoryEntry{
 		SearchJobId: "job-1",
-		Definition:  &opensplunkv1.SearchDefinition{Spl: "search index=main"},
+		Definition:  &opensplunk.SearchDefinition{Spl: "search index=main"},
 	}
-	dirty := proto.Clone(clean).(*opensplunkv1.SearchHistoryEntry)
+	dirty := proto.Clone(clean).(*opensplunk.SearchHistoryEntry)
 	dirty.Definition.ProtoReflect().SetUnknown(futureField())
 	var waiter sync.WaitGroup
 	for range 16 {

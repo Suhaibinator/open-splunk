@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"google.golang.org/protobuf/proto"
@@ -330,44 +330,44 @@ func writerRecoveryScope() WriteScope {
 	}
 }
 
-func writerRecoveryCreateRequest() *opensplunkv1.CreateKnowledgeObjectRequest {
+func writerRecoveryCreateRequest() *opensplunk.CreateKnowledgeObjectRequest {
 	description := "definition committed across a process crash boundary"
-	return &opensplunkv1.CreateKnowledgeObjectRequest{
-		Definition: &opensplunkv1.KnowledgeObjectDefinition{
+	return &opensplunk.CreateKnowledgeObjectRequest{
+		Definition: &opensplunk.KnowledgeObjectDefinition{
 			AppId:        writerRecoveryAppID,
 			Name:         "writer-subprocess-recovery",
 			Description:  &description,
-			SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
-			Selector: &opensplunkv1.KnowledgeSelector{
-				HostPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{
-					MatchKind: opensplunkv1.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT,
+			SharingScope: opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
+			Selector: &opensplunk.KnowledgeSelector{
+				HostPatterns: []*opensplunk.KnowledgeSelectorPattern{{
+					MatchKind: opensplunk.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT,
 					Value:     "writer-recovery-host",
 				}},
 			},
-			Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{
-				FieldAlias: &opensplunkv1.FieldAliasDefinition{
+			Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{
+				FieldAlias: &opensplunk.FieldAliasDefinition{
 					SourceField:       "source_field",
 					DestinationField:  "destination_field",
-					OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+					OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
 				},
 			},
 		},
-		InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+		InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 		ClientRequestId: writerRecoveryClientRequestID,
 	}
 }
 
-func writerRecoveryBaselineCreateRequest() *opensplunkv1.CreateKnowledgeObjectRequest {
-	request := proto.Clone(writerRecoveryCreateRequest()).(*opensplunkv1.CreateKnowledgeObjectRequest)
+func writerRecoveryBaselineCreateRequest() *opensplunk.CreateKnowledgeObjectRequest {
+	request := proto.Clone(writerRecoveryCreateRequest()).(*opensplunk.CreateKnowledgeObjectRequest)
 	request.ClientRequestId = writerRecoveryBaselineRequest
 	return request
 }
 
-func writerRecoveryUpdateRequestValue() *opensplunkv1.UpdateKnowledgeObjectRequest {
-	definition := proto.Clone(writerRecoveryCreateRequest().GetDefinition()).(*opensplunkv1.KnowledgeObjectDefinition)
+func writerRecoveryUpdateRequestValue() *opensplunk.UpdateKnowledgeObjectRequest {
+	definition := proto.Clone(writerRecoveryCreateRequest().GetDefinition()).(*opensplunk.KnowledgeObjectDefinition)
 	description := "definition updated after a process crash boundary"
 	definition.Description = &description
-	return &opensplunkv1.UpdateKnowledgeObjectRequest{
+	return &opensplunk.UpdateKnowledgeObjectRequest{
 		KnowledgeObjectId: writerRecoveryObjectID,
 		ExpectedVersion:   1,
 		Definition:        definition,
@@ -387,14 +387,14 @@ func invokeWriterRecoveryRoute(
 	case mutationRouteUpdate:
 		return writer.Update(actorContext, writerRecoveryScope(), writerRecoveryUpdateRequestValue())
 	case mutationRouteSetState:
-		return writer.SetState(actorContext, writerRecoveryScope(), &opensplunkv1.SetKnowledgeObjectStateRequest{
+		return writer.SetState(actorContext, writerRecoveryScope(), &opensplunk.SetKnowledgeObjectStateRequest{
 			KnowledgeObjectId: writerRecoveryObjectID,
 			ExpectedVersion:   1,
-			State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+			State:             opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
 			ClientRequestId:   writerRecoveryStateRequest,
 		})
 	case mutationRouteDelete:
-		return writer.Delete(actorContext, writerRecoveryScope(), &opensplunkv1.DeleteKnowledgeObjectRequest{
+		return writer.Delete(actorContext, writerRecoveryScope(), &opensplunk.DeleteKnowledgeObjectRequest{
 			KnowledgeObjectId: writerRecoveryObjectID,
 			ExpectedVersion:   1,
 			ClientRequestId:   writerRecoveryDeleteRequest,
@@ -743,10 +743,10 @@ func assertWriterRecoveryRouteCommitted(
 ) {
 	t.Helper()
 	if route == mutationRouteCreate {
-		var createResponse *opensplunkv1.CreateKnowledgeObjectResponse
+		var createResponse *opensplunk.CreateKnowledgeObjectResponse
 		if response != nil {
 			var ok bool
-			createResponse, ok = response.(*opensplunkv1.CreateKnowledgeObjectResponse)
+			createResponse, ok = response.(*opensplunk.CreateKnowledgeObjectResponse)
 			if !ok {
 				t.Fatalf("create recovery response has type %T", response)
 			}
@@ -1077,27 +1077,27 @@ func assertWriterRecoveryExistingResponse(
 	expectedToken []byte,
 ) {
 	t.Helper()
-	var object *opensplunkv1.KnowledgeObject
+	var object *opensplunk.KnowledgeObject
 	var objectID string
 	var version uint64
 	var revision uint64
 	var token []byte
 	switch typed := response.(type) {
-	case *opensplunkv1.UpdateKnowledgeObjectResponse:
+	case *opensplunk.UpdateKnowledgeObjectResponse:
 		if route != mutationRouteUpdate {
 			t.Fatalf("%s recovery response has type %T", route, response)
 		}
 		object = typed.GetKnowledgeObject()
 		revision = typed.GetTenantCatalogRevision()
 		token = typed.GetTenantCatalogStateToken()
-	case *opensplunkv1.SetKnowledgeObjectStateResponse:
+	case *opensplunk.SetKnowledgeObjectStateResponse:
 		if route != mutationRouteSetState {
 			t.Fatalf("%s recovery response has type %T", route, response)
 		}
 		object = typed.GetKnowledgeObject()
 		revision = typed.GetTenantCatalogRevision()
 		token = typed.GetTenantCatalogStateToken()
-	case *opensplunkv1.DeleteKnowledgeObjectResponse:
+	case *opensplunk.DeleteKnowledgeObjectResponse:
 		if route != mutationRouteDelete {
 			t.Fatalf("%s recovery response has type %T", route, response)
 		}
@@ -1128,8 +1128,8 @@ func assertWriterRecoveryExistingResponse(
 func assertWriterRecoveryCommitted(
 	t *testing.T,
 	database *control.DB,
-	request *opensplunkv1.CreateKnowledgeObjectRequest,
-	response *opensplunkv1.CreateKnowledgeObjectResponse,
+	request *opensplunk.CreateKnowledgeObjectRequest,
+	response *opensplunk.CreateKnowledgeObjectResponse,
 ) {
 	t.Helper()
 	expectedCounts := map[string]int64{
@@ -1335,10 +1335,10 @@ func assertWriterRecoveryCommitted(
 	if object == nil || object.GetKnowledgeObjectId() != writerRecoveryObjectID ||
 		object.GetTenantId() != writerRecoveryTenantID || object.GetAppId() != writerRecoveryAppID ||
 		object.GetOwnerId() != writerRecoveryOwnerID ||
-		object.GetObjectType() != opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS ||
+		object.GetObjectType() != opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS ||
 		object.GetName() != request.GetDefinition().GetName() || object.GetVersion() != 1 ||
-		object.GetSharingScope() != opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE ||
-		object.GetState() != opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT ||
+		object.GetSharingScope() != opensplunk.SharingScope_SHARING_SCOPE_PRIVATE ||
+		object.GetState() != opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT ||
 		!proto.Equal(object.GetDefinition(), request.GetDefinition()) ||
 		!bytes.Equal(object.GetDefinitionSha256(), version.DefinitionDigest) ||
 		object.GetCreatedAt() == nil || object.GetUpdatedAt() == nil ||

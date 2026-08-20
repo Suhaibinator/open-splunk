@@ -24,12 +24,11 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/collector/input"
 	"github.com/Suhaibinator/open-splunk/internal/collector/wal"
 	"github.com/Suhaibinator/open-splunk/internal/loggen"
 	"github.com/Suhaibinator/open-splunk/internal/protocolid"
-	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport/gradethiscorpus"
 	"github.com/gorilla/websocket"
@@ -42,7 +41,7 @@ const (
 	verticalIndexName              = "vertical"
 	verticalTenantID               = "vertical-tenant"
 	verticalLookupName             = "vertical_service_owners"
-	verticalLookupOwner            = "platform-v04-owner"
+	verticalLookupOwner            = "platform-owner"
 	verticalEventCount             = uint64(4)
 	verticalTimelineMaximumBuckets = uint32(1_000)
 	bulkIndexName                  = "vertical-bulk"
@@ -59,10 +58,10 @@ const (
 	verticalSearchSPL              = " \nindex=vertical | lookup vertical_service_owners service_id AS service OUTPUTNEW owner AS service_owner | eval adjusted_duration=duration_ms+1 | where status IN (status) | dedup event_id | table _time message status duration_ms adjusted_duration service_owner api_key customer_credential customer_pin _raw\t"
 	browserVerticalSearchSPL       = "index=vertical | lookup vertical_service_owners service_id AS service OUTPUTNEW owner AS service_owner | eval adjusted_duration=duration_ms+1 | where status IN (status) | dedup event_id"
 	bulkSearchSPL                  = "index=vertical-bulk | table event_id"
-	splCompatibilityVersionForTest = spl.CompatibilityVersion
 	clickHouseEventInsertSQL       = "INSERT INTO open_splunk.events (event_id, tenant_id, index_name, event_time, index_time, " +
 		"collected_at, event_time_source, host, source, sourcetype, service, severity, level, body, raw, " +
-		"raw_encoding, trace_id, span_id, fields, field_names, collector_id, batch_id, batch_sequence, " +
+		"raw_encoding, trace_id, span_id, fields, field_names, field_types, field_metadata_version, collector_id, " +
+		"ingest_source_kind, ingest_source_id, batch_id, batch_sequence, " +
 		"expires_at, visibility_seq)"
 )
 
@@ -171,20 +170,20 @@ func TestBackendVertical(t *testing.T) {
 	assertPlaintextCannotReachHTTPSHealth(t, ctx, httpAddress)
 	assertStandaloneServerSurface(t, ctx, httpClient, baseURL)
 
-	var createdIndex opensplunkv1.CreateIndexResponse
+	var createdIndex opensplunk.CreateIndexResponse
 	postAdministratorProto(
 		t,
 		ctx,
 		httpClient,
-		baseURL+"/api/v1/indexes/create",
+		baseURL+"/api/indexes/create",
 		administratorToken,
-		&opensplunkv1.CreateIndexRequest{
-			Definition: &opensplunkv1.IndexDefinition{
+		&opensplunk.CreateIndexRequest{
+			Definition: &opensplunk.IndexDefinition{
 				Name:            verticalIndexName,
 				DisplayName:     "Backend vertical integration",
 				RetentionPeriod: durationpb.New(24 * time.Hour),
-				IngestionAccess: opensplunkv1.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
-				SearchAccess:    opensplunkv1.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
+				IngestionAccess: opensplunk.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
+				SearchAccess:    opensplunk.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
 			},
 		},
 		&createdIndex,
@@ -500,9 +499,9 @@ type verticalLookupFixture struct {
 	lookupID              string
 	lookupVersion         uint64
 	savedSearchID         string
-	appDefinition         *opensplunkv1.AppDefinition
-	lookupDefinition      *opensplunkv1.LookupDefinition
-	savedSearchDefinition *opensplunkv1.SavedSearchDefinition
+	appDefinition         *opensplunk.AppDefinition
+	lookupDefinition      *opensplunk.LookupDefinition
+	savedSearchDefinition *opensplunk.SavedSearchDefinition
 }
 
 func provisionVerticalLookupFixture(
@@ -513,50 +512,50 @@ func provisionVerticalLookupFixture(
 	fixtureStart time.Time,
 ) verticalLookupFixture {
 	t.Helper()
-	appDefinition := &opensplunkv1.AppDefinition{
-		Slug:              "v04-backend-vertical",
-		DisplayName:       "SPL v0.4 backend vertical",
+	appDefinition := &opensplunk.AppDefinition{
+		Slug:              "lookup-backend-vertical",
+		DisplayName:       "SPL lookup backend vertical",
 		DefaultIndexNames: []string{verticalIndexName},
 	}
-	var createdApp opensplunkv1.CreateAppResponse
+	var createdApp opensplunk.CreateAppResponse
 	postAdministratorProto(
 		t,
 		ctx,
 		client,
-		baseURL+"/api/v1/apps/create",
+		baseURL+"/api/apps/create",
 		administratorToken,
-		&opensplunkv1.CreateAppRequest{Definition: appDefinition},
+		&opensplunk.CreateAppRequest{Definition: appDefinition},
 		&createdApp,
 	)
 	app := createdApp.GetApp()
 	if app.GetAppId() == "" || app.GetVersion() != 1 ||
-		app.GetState() != opensplunkv1.AppState_APP_STATE_ACTIVE ||
+		app.GetState() != opensplunk.AppState_APP_STATE_ACTIVE ||
 		!proto.Equal(app.GetDefinition(), appDefinition) {
-		t.Fatalf("created v0.4 lookup app = %+v", app)
+		t.Fatalf("created lookup app = %+v", app)
 	}
 
-	lookupDefinition := &opensplunkv1.LookupDefinition{
+	lookupDefinition := &opensplunk.LookupDefinition{
 		AppId:        app.GetAppId(),
 		Name:         verticalLookupName,
-		SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-		KeyMappings: []*opensplunkv1.LookupFieldMapping{{
+		SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+		KeyMappings: []*opensplunk.LookupFieldMapping{{
 			LookupField: "service_id",
 			EventField:  "service",
 		}},
-		OutputMappings: []*opensplunkv1.LookupFieldMapping{{
+		OutputMappings: []*opensplunk.LookupFieldMapping{{
 			LookupField: "owner",
 			EventField:  "service_owner",
 		}},
-		OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+		OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
 	}
-	var createdLookup opensplunkv1.CreateLookupResponse
+	var createdLookup opensplunk.CreateLookupResponse
 	postAdministratorProto(
 		t,
 		ctx,
 		client,
-		baseURL+"/api/v1/knowledge/lookups/create",
+		baseURL+"/api/knowledge/lookups/create",
 		administratorToken,
-		&opensplunkv1.CreateLookupRequest{
+		&opensplunk.CreateLookupRequest{
 			Definition: lookupDefinition,
 			CsvData: []byte(
 				"service_id,owner\nvertical-service," + verticalLookupOwner + "\n",
@@ -566,38 +565,38 @@ func provisionVerticalLookupFixture(
 	)
 	lookup := createdLookup.GetLookup()
 	if lookup.GetLookupId() == "" || lookup.GetVersion() != 1 ||
-		lookup.GetState() != opensplunkv1.LookupState_LOOKUP_STATE_ACTIVE ||
+		lookup.GetState() != opensplunk.LookupState_LOOKUP_STATE_ACTIVE ||
 		!proto.Equal(lookup.GetDefinition(), lookupDefinition) ||
 		!slices.Equal(lookup.GetColumns(), []string{"service_id", "owner"}) ||
 		lookup.GetRowCount() != 1 || lookup.GetCanonicalSizeBytes() == 0 ||
 		len(lookup.GetSourceSha256()) != 32 || len(lookup.GetContentSha256()) != 32 {
-		t.Fatalf("created v0.4 lookup = %+v", lookup)
+		t.Fatalf("created lookup = %+v", lookup)
 	}
 
-	savedSearchDefinition := &opensplunkv1.SavedSearchDefinition{
-		Name: "SPL v0.4 persisted lookup vertical",
+	savedSearchDefinition := &opensplunk.SavedSearchDefinition{
+		Name: "SPL persisted lookup vertical",
 		Search: verticalLookupSearchDefinition(
 			fixtureStart,
 			app.GetAppId(),
 		),
-		SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
+		SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
 	}
-	var createdSavedSearch opensplunkv1.CreateSavedSearchResponse
+	var createdSavedSearch opensplunk.CreateSavedSearchResponse
 	postProto(
 		t,
 		ctx,
 		client,
-		baseURL+"/api/v1/saved-searches/create",
-		&opensplunkv1.CreateSavedSearchRequest{Definition: savedSearchDefinition},
+		baseURL+"/api/saved-searches/create",
+		&opensplunk.CreateSavedSearchRequest{Definition: savedSearchDefinition},
 		&createdSavedSearch,
 	)
 	savedSearch := createdSavedSearch.GetSavedSearch()
-	normalizedSavedSearchDefinition := proto.Clone(savedSearchDefinition).(*opensplunkv1.SavedSearchDefinition)
+	normalizedSavedSearchDefinition := proto.Clone(savedSearchDefinition).(*opensplunk.SavedSearchDefinition)
 	normalizedSavedSearchDefinition.OwnerId = new(savedSearch.GetDefinition().GetOwnerId())
 	if savedSearch.GetSavedSearchId() == "" || savedSearch.GetVersion() != 1 ||
 		savedSearch.GetDefinition().GetOwnerId() == "" ||
 		!proto.Equal(savedSearch.GetDefinition(), normalizedSavedSearchDefinition) {
-		t.Fatalf("created v0.4 saved lookup search = %+v", savedSearch)
+		t.Fatalf("created saved lookup search = %+v", savedSearch)
 	}
 
 	return verticalLookupFixture{
@@ -605,29 +604,29 @@ func provisionVerticalLookupFixture(
 		lookupID:              lookup.GetLookupId(),
 		lookupVersion:         lookup.GetVersion(),
 		savedSearchID:         savedSearch.GetSavedSearchId(),
-		appDefinition:         proto.Clone(appDefinition).(*opensplunkv1.AppDefinition),
-		lookupDefinition:      proto.Clone(lookupDefinition).(*opensplunkv1.LookupDefinition),
-		savedSearchDefinition: proto.Clone(savedSearch.GetDefinition()).(*opensplunkv1.SavedSearchDefinition),
+		appDefinition:         proto.Clone(appDefinition).(*opensplunk.AppDefinition),
+		lookupDefinition:      proto.Clone(lookupDefinition).(*opensplunk.LookupDefinition),
+		savedSearchDefinition: proto.Clone(savedSearch.GetDefinition()).(*opensplunk.SavedSearchDefinition),
 	}
 }
 
 func verticalLookupSearchDefinition(
 	fixtureStart time.Time,
 	appID string,
-) *opensplunkv1.SearchDefinition {
+) *opensplunk.SearchDefinition {
 	earliest := fixtureStart.Format(time.RFC3339Nano)
 	latest := fixtureStart.Add(5500 * time.Millisecond).Format(time.RFC3339Nano)
 	timezone := "UTC"
-	return &opensplunkv1.SearchDefinition{
+	return &opensplunk.SearchDefinition{
 		Spl: verticalSearchSPL,
-		TimeRange: &opensplunkv1.TimeRangeSpec{
+		TimeRange: &opensplunk.TimeRangeSpec{
 			Earliest: &earliest,
 			Latest:   &latest,
 			Timezone: &timezone,
 		},
 		AppId:              &appID,
 		IndexScope:         []string{verticalIndexName},
-		PreferredResultTab: opensplunkv1.SearchResultTab_SEARCH_RESULT_TAB_EVENTS,
+		PreferredResultTab: opensplunk.SearchResultTab_SEARCH_RESULT_TAB_EVENTS,
 	}
 }
 
@@ -637,36 +636,36 @@ func assertVerticalLookupFixtureAfterRestart(
 	client *http.Client,
 	baseURL, administratorToken string,
 	fixture verticalLookupFixture,
-) *opensplunkv1.SavedSearch {
+) *opensplunk.SavedSearch {
 	t.Helper()
-	var gotApp opensplunkv1.GetAppResponse
+	var gotApp opensplunk.GetAppResponse
 	postAdministratorProto(
 		t,
 		ctx,
 		client,
-		baseURL+"/api/v1/apps/get",
+		baseURL+"/api/apps/get",
 		administratorToken,
-		&opensplunkv1.GetAppRequest{Selector: &opensplunkv1.AppSelector{
-			Selector: &opensplunkv1.AppSelector_AppId{AppId: fixture.appID},
+		&opensplunk.GetAppRequest{Selector: &opensplunk.AppSelector{
+			Selector: &opensplunk.AppSelector_AppId{AppId: fixture.appID},
 		}},
 		&gotApp,
 	)
 	if gotApp.GetApp().GetAppId() != fixture.appID ||
 		gotApp.GetApp().GetVersion() != 1 ||
-		gotApp.GetApp().GetState() != opensplunkv1.AppState_APP_STATE_ACTIVE ||
+		gotApp.GetApp().GetState() != opensplunk.AppState_APP_STATE_ACTIVE ||
 		!proto.Equal(gotApp.GetApp().GetDefinition(), fixture.appDefinition) {
-		t.Fatalf("restarted v0.4 lookup app = %+v", gotApp.GetApp())
+		t.Fatalf("restarted lookup app = %+v", gotApp.GetApp())
 	}
 
 	lookupVersion := fixture.lookupVersion
-	var gotLookup opensplunkv1.GetLookupResponse
+	var gotLookup opensplunk.GetLookupResponse
 	postAdministratorProto(
 		t,
 		ctx,
 		client,
-		baseURL+"/api/v1/knowledge/lookups/get",
+		baseURL+"/api/knowledge/lookups/get",
 		administratorToken,
-		&opensplunkv1.GetLookupRequest{
+		&opensplunk.GetLookupRequest{
 			LookupId: fixture.lookupID,
 			Version:  &lookupVersion,
 		},
@@ -675,29 +674,29 @@ func assertVerticalLookupFixtureAfterRestart(
 	lookup := gotLookup.GetLookup()
 	if lookup.GetLookupId() != fixture.lookupID ||
 		lookup.GetVersion() != fixture.lookupVersion ||
-		lookup.GetState() != opensplunkv1.LookupState_LOOKUP_STATE_ACTIVE ||
+		lookup.GetState() != opensplunk.LookupState_LOOKUP_STATE_ACTIVE ||
 		!proto.Equal(lookup.GetDefinition(), fixture.lookupDefinition) ||
 		lookup.GetRowCount() != 1 ||
 		!slices.Equal(lookup.GetColumns(), []string{"service_id", "owner"}) {
-		t.Fatalf("restarted v0.4 lookup = %+v", lookup)
+		t.Fatalf("restarted lookup = %+v", lookup)
 	}
 
-	var gotSavedSearch opensplunkv1.GetSavedSearchResponse
+	var gotSavedSearch opensplunk.GetSavedSearchResponse
 	postProto(
 		t,
 		ctx,
 		client,
-		baseURL+"/api/v1/saved-searches/get",
-		&opensplunkv1.GetSavedSearchRequest{SavedSearchId: fixture.savedSearchID},
+		baseURL+"/api/saved-searches/get",
+		&opensplunk.GetSavedSearchRequest{SavedSearchId: fixture.savedSearchID},
 		&gotSavedSearch,
 	)
 	savedSearch := gotSavedSearch.GetSavedSearch()
 	if savedSearch.GetSavedSearchId() != fixture.savedSearchID ||
 		savedSearch.GetVersion() != 1 ||
 		!proto.Equal(savedSearch.GetDefinition(), fixture.savedSearchDefinition) {
-		t.Fatalf("restarted v0.4 saved lookup search = %+v", savedSearch)
+		t.Fatalf("restarted saved lookup search = %+v", savedSearch)
 	}
-	return proto.Clone(savedSearch).(*opensplunkv1.SavedSearch)
+	return proto.Clone(savedSearch).(*opensplunk.SavedSearch)
 }
 
 func waitForDistinctStoredEventCount(
@@ -775,8 +774,8 @@ type completedSearch struct {
 }
 
 type collectedVerticalSearchResults struct {
-	schema       *opensplunkv1.ResultSchema
-	rows         []*opensplunkv1.ResultRow
+	schema       *opensplunk.ResultSchema
+	rows         []*opensplunk.ResultRow
 	responseWire [][]byte
 }
 
@@ -890,8 +889,8 @@ func assertStandaloneServerSurface(t *testing.T, ctx context.Context, client *ht
 		t.Fatal("embedded release UI is not configured for backend data")
 	}
 
-	var bootstrap opensplunkv1.GetSystemBootstrapResponse
-	postProto(t, ctx, client, baseURL+"/api/v1/system/bootstrap", &opensplunkv1.GetSystemBootstrapRequest{}, &bootstrap)
+	var bootstrap opensplunk.GetSystemBootstrapResponse
+	postProto(t, ctx, client, baseURL+"/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{}, &bootstrap)
 	limits := bootstrap.GetLimits()
 	timelineFeatures := 0
 	previewFeatures := 0
@@ -900,30 +899,25 @@ func assertStandaloneServerSurface(t *testing.T, ctx context.Context, client *ht
 	lookupManagementFeatures := 0
 	for _, feature := range bootstrap.GetFeatures() {
 		switch feature {
-		case opensplunkv1.ServerFeature_SERVER_FEATURE_TIMELINE:
+		case opensplunk.ServerFeature_SERVER_FEATURE_TIMELINE:
 			timelineFeatures++
-		case opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_PREVIEW:
+		case opensplunk.ServerFeature_SERVER_FEATURE_SEARCH_PREVIEW:
 			previewFeatures++
-		case opensplunkv1.ServerFeature_SERVER_FEATURE_INDEX_ADMIN:
+		case opensplunk.ServerFeature_SERVER_FEATURE_INDEX_ADMIN:
 			indexAdministrationFeatures++
-		case opensplunkv1.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS:
+		case opensplunk.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS:
 			knowledgeFeatures++
-		case opensplunkv1.ServerFeature_SERVER_FEATURE_LOOKUP_MANAGEMENT:
+		case opensplunk.ServerFeature_SERVER_FEATURE_LOOKUP_MANAGEMENT:
 			lookupManagementFeatures++
 		}
 	}
 	build := bootstrap.GetBuild()
-	if bootstrap.GetServerVersion() != integrationApplicationVersion+" ("+integrationSourceRevision+")" ||
-		bootstrap.GetApiVersion() != "v1" ||
-		bootstrap.GetSplCompatibilityVersion() != splCompatibilityVersionForTest ||
-		bootstrap.GetSearchWebsocketPath() != "/api/v1/search/ws" ||
-		build.GetApplicationVersion() != integrationApplicationVersion ||
+	if bootstrap.GetSearchWebsocketPath() != "/api/search/ws" ||
 		build.GetSourceRevision() != integrationSourceRevision ||
 		build.GetUiBuildId() != integrationUIBuildID ||
 		build.GetUiSha256() == "" || build.GetProtobufSchemaSha256() == "" ||
-		build.GetSqliteMigrationsSha256() == "" || build.GetSqliteMigrationVersion() == 0 ||
-		build.GetClickhouseMigrationsSha256() == "" || build.GetClickhouseMigrationVersion() == 0 ||
-		build.GetAssetManifestFormatVersion() != 1 ||
+		build.GetSqliteMigrationsSha256() == "" ||
+		build.GetClickhouseMigrationsSha256() == "" ||
 		limits.GetMaximumPreviewRows() == 0 || limits.GetMaximumWebsocketSubscriptions() == 0 ||
 		limits.GetMaximumWebsocketFrameBytes() < 1<<10 || limits.GetMaximumWebsocketFrameBytes() > 1<<20 ||
 		timelineFeatures != 1 || previewFeatures != 1 || indexAdministrationFeatures != 1 ||
@@ -1003,17 +997,17 @@ func createIndexScopedIngestionToken(
 	allowedSourceRegexes []string,
 ) string {
 	t.Helper()
-	var created opensplunkv1.CreateIngestionTokenResponse
+	var created opensplunk.CreateIngestionTokenResponse
 	postAdministratorProto(
 		t,
 		ctx,
 		client,
-		baseURL+"/api/v1/ingestion-tokens/create",
+		baseURL+"/api/ingestion-tokens/create",
 		administratorToken,
-		&opensplunkv1.CreateIngestionTokenRequest{
-			Definition: &opensplunkv1.IngestionTokenDefinition{
+		&opensplunk.CreateIngestionTokenRequest{
+			Definition: &opensplunk.IngestionTokenDefinition{
 				Name: name,
-				Constraints: &opensplunkv1.IngestionTokenConstraints{
+				Constraints: &opensplunk.IngestionTokenConstraints{
 					AllowedIndexNames:    []string{indexName},
 					AllowedHostRegexes:   slices.Clone(allowedHostRegexes),
 					AllowedSourceRegexes: slices.Clone(allowedSourceRegexes),
@@ -1347,11 +1341,11 @@ func runCurrentGradeThisSearch(
 	latestTime := baseTime.Add(12 * time.Minute)
 	latest := latestTime.Format(time.RFC3339Nano)
 	timezone := "UTC"
-	var created opensplunkv1.CreateSearchJobResponse
-	postProto(t, ctx, client, baseURL+"/api/v1/search/jobs/create", &opensplunkv1.CreateSearchJobRequest{
-		Definition: &opensplunkv1.SearchDefinition{
+	var created opensplunk.CreateSearchJobResponse
+	postProto(t, ctx, client, baseURL+"/api/search/jobs/create", &opensplunk.CreateSearchJobRequest{
+		Definition: &opensplunk.SearchDefinition{
 			Spl: source,
-			TimeRange: &opensplunkv1.TimeRangeSpec{
+			TimeRange: &opensplunk.TimeRangeSpec{
 				Earliest: &earliest,
 				Latest:   &latest,
 				Timezone: &timezone,
@@ -1388,18 +1382,18 @@ func exportAndDownloadJSONLines(
 	baseURL, searchJobID string,
 	columns []string,
 	expectedRows uint64,
-) (*opensplunkv1.ExportJob, []byte, string) {
+) (*opensplunk.ExportJob, []byte, string) {
 	t.Helper()
 	completed := createCompletedJSONLinesExport(t, ctx, client, baseURL, searchJobID, columns, expectedRows)
 
-	var granted opensplunkv1.GetExportJobResponse
-	postProto(t, ctx, client, baseURL+"/api/v1/search/exports/get", &opensplunkv1.GetExportJobRequest{
+	var granted opensplunk.GetExportJobResponse
+	postProto(t, ctx, client, baseURL+"/api/search/exports/get", &opensplunk.GetExportJobRequest{
 		ExportJobId:        completed.GetExportJobId(),
 		IssueDownloadGrant: true,
 	}, &granted)
 	grant := granted.GetDownloadGrant()
-	if granted.GetExportJob().GetState() != opensplunkv1.ExportJobState_EXPORT_JOB_STATE_COMPLETED ||
-		grant.GetDownloadPath() != "/api/v1/search/exports/download" || grant.GetDownloadToken() == "" ||
+	if granted.GetExportJob().GetState() != opensplunk.ExportJobState_EXPORT_JOB_STATE_COMPLETED ||
+		grant.GetDownloadPath() != "/api/search/exports/download" || grant.GetDownloadToken() == "" ||
 		grant.GetExpiresAt() == nil || !grant.GetExpiresAt().AsTime().After(time.Now().UTC()) {
 		t.Fatalf("granted completed export = %+v", granted.GetExportJob())
 	}
@@ -1414,35 +1408,33 @@ func createCompletedJSONLinesExport(
 	baseURL, searchJobID string,
 	columns []string,
 	expectedRows uint64,
-) *opensplunkv1.ExportJob {
+) *opensplunk.ExportJob {
 	t.Helper()
 	// Leave headroom so a broken snapshot predicate cannot hide extra rows
 	// behind a limit equal to the expected cardinality.
 	rowLimit := expectedRows + 32
 	byteLimit := uint64(16 << 20)
-	var created opensplunkv1.CreateExportJobResponse
-	postProto(t, ctx, client, baseURL+"/api/v1/search/exports/create", &opensplunkv1.CreateExportJobRequest{
-		Definition: &opensplunkv1.ExportDefinition{
+	var created opensplunk.CreateExportJobResponse
+	postProto(t, ctx, client, baseURL+"/api/search/exports/create", &opensplunk.CreateExportJobRequest{
+		Definition: &opensplunk.ExportDefinition{
 			SearchJobId: searchJobID,
 			Columns:     append([]string(nil), columns...),
 			RowLimit:    &rowLimit,
 			ByteLimit:   &byteLimit,
-			FormatOptions: &opensplunkv1.ExportDefinition_JsonLines{JsonLines: &opensplunkv1.JsonLinesExportOptions{
-				IntegerEncoding: opensplunkv1.JsonIntegerEncoding_JSON_INTEGER_ENCODING_NUMBER_WHEN_SAFE,
+			FormatOptions: &opensplunk.ExportDefinition_JsonLines{JsonLines: &opensplunk.JsonLinesExportOptions{
+				IntegerEncoding: opensplunk.JsonIntegerEncoding_JSON_INTEGER_ENCODING_NUMBER_WHEN_SAFE,
 			}},
 		},
 	}, &created)
 	exportID := created.GetExportJob().GetExportJobId()
 	if exportID == "" || created.GetExportJob().GetDefinition().GetSearchJobId() != searchJobID ||
-		created.GetExportJob().GetFormat() != opensplunkv1.ExportFormat_EXPORT_FORMAT_JSON_LINES ||
-		created.GetExportJob().GetCompilerVersion() != splCompatibilityVersionForTest {
+		created.GetExportJob().GetFormat() != opensplunk.ExportFormat_EXPORT_FORMAT_JSON_LINES {
 		t.Fatalf("created export job = %+v", created.GetExportJob())
 	}
 
 	completed := waitForCompletedExport(t, ctx, client, baseURL, exportID)
 	if completed.GetArtifact().GetRowCount() != expectedRows || completed.GetProgress().GetRowsWritten() != expectedRows ||
-		completed.GetArtifact().GetSizeBytes() == 0 || completed.GetProgress().GetBytesWritten() != completed.GetArtifact().GetSizeBytes() ||
-		completed.GetCompilerVersion() != splCompatibilityVersionForTest {
+		completed.GetArtifact().GetSizeBytes() == 0 || completed.GetProgress().GetBytesWritten() != completed.GetArtifact().GetSizeBytes() {
 		t.Fatalf("completed export job = %+v", completed)
 	}
 	return completed
@@ -1453,7 +1445,7 @@ func assertBackendExportJobList(
 	ctx context.Context,
 	client *http.Client,
 	baseURL string,
-	first *opensplunkv1.ExportJob,
+	first *opensplunk.ExportJob,
 	forbiddenDownloadToken string,
 	expectedRows uint64,
 ) {
@@ -1481,27 +1473,27 @@ func assertBackendExportJobList(
 
 	pageSize := uint32(1)
 	searchJobIDFilter := searchJobID
-	request := &opensplunkv1.ListExportJobsRequest{
-		Page: &opensplunkv1.PageRequest{
+	request := &opensplunk.ListExportJobsRequest{
+		Page: &opensplunk.PageRequest{
 			PageSize:         &pageSize,
 			IncludeTotalSize: true,
 		},
-		StateFilters: []opensplunkv1.ExportJobState{
-			opensplunkv1.ExportJobState_EXPORT_JOB_STATE_COMPLETED,
+		StateFilters: []opensplunk.ExportJobState{
+			opensplunk.ExportJobState_EXPORT_JOB_STATE_COMPLETED,
 		},
 		SearchJobIdFilter: &searchJobIDFilter,
 	}
-	var firstPage opensplunkv1.ListExportJobsResponse
+	var firstPage opensplunk.ListExportJobsResponse
 	assertNoDownloadToken(postProto(
 		t,
 		ctx,
 		client,
-		baseURL+"/api/v1/search/exports/list",
+		baseURL+"/api/search/exports/list",
 		request,
 		&firstPage,
 	))
 	if len(firstPage.GetExportJobs()) != 1 ||
-		firstPage.GetExportJobs()[0].GetState() != opensplunkv1.ExportJobState_EXPORT_JOB_STATE_COMPLETED ||
+		firstPage.GetExportJobs()[0].GetState() != opensplunk.ExportJobState_EXPORT_JOB_STATE_COMPLETED ||
 		firstPage.GetExportJobs()[0].GetDefinition().GetSearchJobId() != searchJobID ||
 		firstPage.GetPage().GetNextPageToken() == "" ||
 		firstPage.GetPage().TotalSize == nil ||
@@ -1534,16 +1526,16 @@ func assertBackendExportJobList(
 	)
 	token := firstPage.GetPage().GetNextPageToken()
 	continuationPageSize := uint32(2)
-	request.Page = &opensplunkv1.PageRequest{
+	request.Page = &opensplunk.PageRequest{
 		PageSize:  &continuationPageSize,
 		PageToken: &token,
 	}
-	var continuation opensplunkv1.ListExportJobsResponse
+	var continuation opensplunk.ListExportJobsResponse
 	assertNoDownloadToken(postProto(
 		t,
 		ctx,
 		client,
-		baseURL+"/api/v1/search/exports/list",
+		baseURL+"/api/search/exports/list",
 		request,
 		&continuation,
 	))
@@ -1557,16 +1549,16 @@ func assertBackendExportJobList(
 	}
 
 	freshPageSize := uint32(3)
-	request.Page = &opensplunkv1.PageRequest{
+	request.Page = &opensplunk.PageRequest{
 		PageSize:         &freshPageSize,
 		IncludeTotalSize: true,
 	}
-	var fresh opensplunkv1.ListExportJobsResponse
+	var fresh opensplunk.ListExportJobsResponse
 	assertNoDownloadToken(postProto(
 		t,
 		ctx,
 		client,
-		baseURL+"/api/v1/search/exports/list",
+		baseURL+"/api/search/exports/list",
 		request,
 		&fresh,
 	))
@@ -1579,7 +1571,7 @@ func assertBackendExportJobList(
 	}
 	freshIDs := make(map[string]struct{}, len(fresh.GetExportJobs()))
 	for index, job := range fresh.GetExportJobs() {
-		if job.GetState() != opensplunkv1.ExportJobState_EXPORT_JOB_STATE_COMPLETED ||
+		if job.GetState() != opensplunk.ExportJobState_EXPORT_JOB_STATE_COMPLETED ||
 			job.GetDefinition().GetSearchJobId() != searchJobID ||
 			job.GetCreatedAt() == nil {
 			t.Fatalf("fresh backend export-list job %d = %+v", index, job)
@@ -1606,22 +1598,22 @@ func assertBackendExportJobList(
 	}
 }
 
-func waitForCompletedExport(t *testing.T, ctx context.Context, client *http.Client, baseURL, exportID string) *opensplunkv1.ExportJob {
+func waitForCompletedExport(t *testing.T, ctx context.Context, client *http.Client, baseURL, exportID string) *opensplunk.ExportJob {
 	t.Helper()
 	deadline := time.NewTimer(90 * time.Second)
 	defer deadline.Stop()
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		var got opensplunkv1.GetExportJobResponse
-		postProto(t, ctx, client, baseURL+"/api/v1/search/exports/get", &opensplunkv1.GetExportJobRequest{ExportJobId: exportID}, &got)
+		var got opensplunk.GetExportJobResponse
+		postProto(t, ctx, client, baseURL+"/api/search/exports/get", &opensplunk.GetExportJobRequest{ExportJobId: exportID}, &got)
 		job := got.GetExportJob()
 		switch job.GetState() {
-		case opensplunkv1.ExportJobState_EXPORT_JOB_STATE_COMPLETED:
+		case opensplunk.ExportJobState_EXPORT_JOB_STATE_COMPLETED:
 			return job
-		case opensplunkv1.ExportJobState_EXPORT_JOB_STATE_FAILED,
-			opensplunkv1.ExportJobState_EXPORT_JOB_STATE_CANCELED,
-			opensplunkv1.ExportJobState_EXPORT_JOB_STATE_EXPIRED:
+		case opensplunk.ExportJobState_EXPORT_JOB_STATE_FAILED,
+			opensplunk.ExportJobState_EXPORT_JOB_STATE_CANCELED,
+			opensplunk.ExportJobState_EXPORT_JOB_STATE_EXPIRED:
 			t.Fatalf("export job terminated in %s: %+v", job.GetState(), job.GetFailure())
 		}
 		select {
@@ -1639,8 +1631,8 @@ func downloadGrantedArtifact(
 	ctx context.Context,
 	client *http.Client,
 	baseURL string,
-	artifact *opensplunkv1.ExportArtifact,
-	grant *opensplunkv1.ExportDownloadGrant,
+	artifact *opensplunk.ExportArtifact,
+	grant *opensplunk.ExportDownloadGrant,
 ) []byte {
 	t.Helper()
 	if artifact == nil || grant == nil || artifact.GetSizeBytes() > 16<<20 {
@@ -1710,7 +1702,7 @@ func downloadGrantedArtifact(
 	return body
 }
 
-func assertDownloadedRedactedResults(t *testing.T, completed *opensplunkv1.ExportJob, artifact []byte) {
+func assertDownloadedRedactedResults(t *testing.T, completed *opensplunk.ExportJob, artifact []byte) {
 	t.Helper()
 	if completed.GetArtifact().GetRowCount() != verticalEventCount {
 		t.Fatalf("downloaded export metadata = %+v", completed.GetArtifact())
@@ -2318,11 +2310,9 @@ func assertCrashSafeAcknowledgedCollectorState(
 	assertCollectorCheckpoint(t, stateDir, wantOffset, 1)
 
 	queue, err := wal.Open(wal.Options{
-		Dir:           filepath.Join(stateDir, "wal"),
-		Sync:          wal.SyncAlways,
-		CollectorID:   readCollectorIdentity(t, stateDir),
-		ProtocolMajor: 1,
-		ProtocolMinor: 0,
+		Dir:         filepath.Join(stateDir, "wal"),
+		Sync:        wal.SyncAlways,
+		CollectorID: readCollectorIdentity(t, stateDir),
 	})
 	if err != nil {
 		t.Fatalf("reopen crash-safe collector WAL: %v", err)
@@ -2424,11 +2414,9 @@ func assertDurableCollectorState(t *testing.T, stateDir string, wantOffset, want
 	assertCollectorCheckpoint(t, stateDir, wantOffset, wantLine)
 
 	queue, err := wal.Open(wal.Options{
-		Dir:           filepath.Join(stateDir, "wal"),
-		Sync:          wal.SyncAlways,
-		CollectorID:   readCollectorIdentity(t, stateDir),
-		ProtocolMajor: 1,
-		ProtocolMinor: 0,
+		Dir:         filepath.Join(stateDir, "wal"),
+		Sync:        wal.SyncAlways,
+		CollectorID: readCollectorIdentity(t, stateDir),
 	})
 	if err != nil {
 		t.Fatalf("reopen collector WAL: %v", err)
@@ -2494,11 +2482,9 @@ func assertPendingCollectorState(t *testing.T, stateDir, logPath string, wantOff
 	}
 
 	queue, err := wal.Open(wal.Options{
-		Dir:           filepath.Join(stateDir, "wal"),
-		Sync:          wal.SyncAlways,
-		CollectorID:   readCollectorIdentity(t, stateDir),
-		ProtocolMajor: 1,
-		ProtocolMinor: 0,
+		Dir:         filepath.Join(stateDir, "wal"),
+		Sync:        wal.SyncAlways,
+		CollectorID: readCollectorIdentity(t, stateDir),
 	})
 	if err != nil {
 		t.Fatalf("reopen pending collector WAL: %v", err)
@@ -2628,8 +2614,9 @@ func insertTimelineExclusiveBoundaryEvent(
 	if err := batch.Append(
 		eventID, verticalTenantID, verticalIndexName, eventTime, eventTime,
 		nil, uint8(1), "vertical-host", "timeline-boundary.log", "integration", nil, uint8(1), nil,
-		&message, []byte(message), uint8(1), nil, nil, document, []string(nil), "integration-direct",
-		"vertical-timeline-boundary", uint64(1), eventTime.Add(24*time.Hour), visibilityCutoff,
+		&message, []byte(message), uint8(1), nil, nil, document, []string(nil), []uint8(nil), uint8(1),
+		"integration-direct", uint8(1), "integration-direct", "vertical-timeline-boundary", uint64(1),
+		eventTime.Add(24*time.Hour), visibilityCutoff,
 	); err != nil {
 		t.Fatalf("append timeline boundary event: %v", err)
 	}
@@ -2666,16 +2653,16 @@ func assertBackendIndexStatistics(
 			visibilityCutoff,
 		)
 	}
-	var response opensplunkv1.GetIndexStatsResponse
+	var response opensplunk.GetIndexStatsResponse
 	postAdministratorProto(
 		t,
 		ctx,
 		client,
-		baseURL+"/api/v1/indexes/stats/get",
+		baseURL+"/api/indexes/stats/get",
 		administratorToken,
-		&opensplunkv1.GetIndexStatsRequest{
-			Selector: &opensplunkv1.IndexSelector{
-				Selector: &opensplunkv1.IndexSelector_IndexId{
+		&opensplunk.GetIndexStatsRequest{
+			Selector: &opensplunk.IndexSelector{
+				Selector: &opensplunk.IndexSelector_IndexId{
 					IndexId: indexID,
 				},
 			},
@@ -2728,27 +2715,27 @@ func assertBackendIndexFields(
 	nameFilter := "customer_"
 	pageSize := uint32(1)
 	includeTotal := true
-	request := &opensplunkv1.ListIndexFieldsRequest{
-		Selector: &opensplunkv1.IndexSelector{
-			Selector: &opensplunkv1.IndexSelector_IndexId{IndexId: indexID},
+	request := &opensplunk.ListIndexFieldsRequest{
+		Selector: &opensplunk.IndexSelector{
+			Selector: &opensplunk.IndexSelector_IndexId{IndexId: indexID},
 		},
-		TimeRange: &opensplunkv1.TimeRangeSpec{
+		TimeRange: &opensplunk.TimeRangeSpec{
 			Earliest: &earliest,
 			Latest:   &latest,
 			Timezone: &timezone,
 		},
-		Page: &opensplunkv1.PageRequest{
+		Page: &opensplunk.PageRequest{
 			PageSize:         &pageSize,
 			IncludeTotalSize: includeTotal,
 		},
 		NameFilter: &nameFilter,
 	}
-	var first opensplunkv1.ListIndexFieldsResponse
+	var first opensplunk.ListIndexFieldsResponse
 	postAdministratorProto(
 		t,
 		ctx,
 		client,
-		baseURL+"/api/v1/indexes/fields/list",
+		baseURL+"/api/indexes/fields/list",
 		administratorToken,
 		request,
 		&first,
@@ -2764,21 +2751,21 @@ func assertBackendIndexFields(
 
 	token := first.GetPage().GetNextPageToken()
 	secondPageSize := uint32(2)
-	request.Selector = &opensplunkv1.IndexSelector{
-		Selector: &opensplunkv1.IndexSelector_IndexName{
+	request.Selector = &opensplunk.IndexSelector{
+		Selector: &opensplunk.IndexSelector_IndexName{
 			IndexName: strings.ToUpper(verticalIndexName),
 		},
 	}
-	request.Page = &opensplunkv1.PageRequest{
+	request.Page = &opensplunk.PageRequest{
 		PageSize:  &secondPageSize,
 		PageToken: &token,
 	}
-	var second opensplunkv1.ListIndexFieldsResponse
+	var second opensplunk.ListIndexFieldsResponse
 	postAdministratorProto(
 		t,
 		ctx,
 		client,
-		baseURL+"/api/v1/indexes/fields/list",
+		baseURL+"/api/indexes/fields/list",
 		administratorToken,
 		request,
 		&second,
@@ -2834,7 +2821,7 @@ func assertBackendIndexFields(
 
 func assertBackendIndexFieldProfile(
 	t *testing.T,
-	profile *opensplunkv1.FieldProfile,
+	profile *opensplunk.FieldProfile,
 	name string,
 	totalEvents, eventCount uint64,
 ) {
@@ -2846,9 +2833,9 @@ func assertBackendIndexFieldProfile(
 	if profile == nil ||
 		profile.GetFieldName() != name ||
 		profile.GetDisplayName() != name ||
-		profile.GetValueType() != opensplunkv1.ValueType_VALUE_TYPE_STRING ||
+		profile.GetValueType() != opensplunk.ValueType_VALUE_TYPE_STRING ||
 		len(profile.GetObservedValueTypes()) != 1 ||
-		profile.GetObservedValueTypes()[0] != opensplunkv1.ValueType_VALUE_TYPE_STRING ||
+		profile.GetObservedValueTypes()[0] != opensplunk.ValueType_VALUE_TYPE_STRING ||
 		profile.GetEventCount() != eventCount ||
 		profile.GetNullCount() != 0 ||
 		profile.GetMissingCount() != totalEvents-eventCount ||
@@ -2879,22 +2866,22 @@ func assertBackendIndexListStatistics(
 	t.Helper()
 	pageSize := uint32(64)
 	textFilter := verticalIndexName
-	var response opensplunkv1.ListIndexesResponse
+	var response opensplunk.ListIndexesResponse
 	postAdministratorProto(
 		t,
 		ctx,
 		client,
-		baseURL+"/api/v1/indexes/list",
+		baseURL+"/api/indexes/list",
 		administratorToken,
-		&opensplunkv1.ListIndexesRequest{
-			Page:         &opensplunkv1.PageRequest{PageSize: &pageSize},
+		&opensplunk.ListIndexesRequest{
+			Page:         &opensplunk.PageRequest{PageSize: &pageSize},
 			TextFilter:   &textFilter,
 			IncludeStats: true,
 		},
 		&response,
 	)
 
-	var matchingItem *opensplunkv1.IndexListItem
+	var matchingItem *opensplunk.IndexListItem
 	for _, item := range response.GetIndexes() {
 		if item.GetIndex().GetIndexId() != indexID {
 			continue
@@ -2929,7 +2916,7 @@ func assertBackendIndexStatisticsValue(
 	ctx context.Context,
 	connection clickhousedriver.Conn,
 	source string,
-	statistics *opensplunkv1.IndexStats,
+	statistics *opensplunk.IndexStats,
 	indexID string,
 	visibilityCutoff uint64,
 ) {
@@ -3023,8 +3010,8 @@ func insertBulkEvents(t *testing.T, ctx context.Context, connection clickhousedr
 		if err := batch.Append(
 			eventID, verticalTenantID, bulkIndexName, start.Add(time.Duration(index)*time.Microsecond), indexTime,
 			nil, uint8(1), "vertical-host", "bulk.log", "integration", nil, uint8(1), nil, &message, []byte(message),
-			uint8(1), nil, nil, document, []string(nil), "integration-direct", "vertical-bulk-batch", uint64(1),
-			expiresAt, visibilityCutoff,
+			uint8(1), nil, nil, document, []string(nil), []uint8(nil), uint8(1), "integration-direct",
+			uint8(1), "integration-direct", "vertical-bulk-batch", uint64(1), expiresAt, visibilityCutoff,
 		); err != nil {
 			t.Fatalf("append bulk integration event %d: %v", index, err)
 		}
@@ -3091,8 +3078,9 @@ func insertBulkSnapshotDecoys(
 		if err := batch.Append(
 			decoy.id, decoy.tenant, decoy.index, decoy.eventTime, decoy.indexTime,
 			nil, uint8(1), "vertical-host", "snapshot-decoys.log", "integration", nil, uint8(1), nil,
-			&message, []byte(message), uint8(1), nil, nil, document, []string(nil), "integration-direct",
-			"vertical-decoy-batch", uint64(index+1), expiresAt, decoy.visibilitySeq,
+			&message, []byte(message), uint8(1), nil, nil, document, []string(nil), []uint8(nil), uint8(1),
+			"integration-direct", uint8(1), "integration-direct", "vertical-decoy-batch", uint64(index+1),
+			expiresAt, decoy.visibilitySeq,
 		); err != nil {
 			t.Fatalf("append snapshot decoy %q: %v", decoy.id, err)
 		}
@@ -3124,11 +3112,11 @@ func assertTruncatedPreviewExportsAllRows(
 	earliest := fixtureStart.Add(-time.Minute).Format(time.RFC3339Nano)
 	latest := fixtureStart.Add(2 * time.Minute).Format(time.RFC3339Nano)
 	timezone := "UTC"
-	var created opensplunkv1.CreateSearchJobResponse
-	postProto(t, ctx, client, baseURL+"/api/v1/search/jobs/create", &opensplunkv1.CreateSearchJobRequest{
-		Definition: &opensplunkv1.SearchDefinition{
+	var created opensplunk.CreateSearchJobResponse
+	postProto(t, ctx, client, baseURL+"/api/search/jobs/create", &opensplunk.CreateSearchJobRequest{
+		Definition: &opensplunk.SearchDefinition{
 			Spl: bulkSearchSPL,
-			TimeRange: &opensplunkv1.TimeRangeSpec{
+			TimeRange: &opensplunk.TimeRangeSpec{
 				Earliest: &earliest,
 				Latest:   &latest,
 				Timezone: &timezone,
@@ -3137,7 +3125,7 @@ func assertTruncatedPreviewExportsAllRows(
 		},
 	}, &created)
 	jobID := created.GetSearchJob().GetSearchJobId()
-	if jobID == "" || created.GetSearchJob().GetCompilerVersion() != splCompatibilityVersionForTest {
+	if jobID == "" {
 		t.Fatalf("created bulk search job = %+v", created.GetSearchJob())
 	}
 	completed := waitForCompletedSearch(t, ctx, client, baseURL, jobID, 60*time.Second)
@@ -3159,10 +3147,10 @@ func assertTruncatedPreviewExportsAllRows(
 	}
 
 	pageSize := uint32(128)
-	var preview opensplunkv1.GetSearchResultsResponse
-	postProto(t, ctx, client, baseURL+"/api/v1/search/jobs/results", &opensplunkv1.GetSearchResultsRequest{
+	var preview opensplunk.GetSearchResultsResponse
+	postProto(t, ctx, client, baseURL+"/api/search/jobs/results", &opensplunk.GetSearchResultsRequest{
 		SearchJobId: jobID,
-		Page:        &opensplunkv1.PageRequest{PageSize: &pageSize, IncludeTotalSize: true},
+		Page:        &opensplunk.PageRequest{PageSize: &pageSize, IncludeTotalSize: true},
 	}, &preview)
 	page := preview.GetResultPage()
 	if page.GetSnapshotComplete() || page.GetPage().GetTotalSizeExact() || page.GetPage().GetTotalSize() != 10_000 ||
@@ -3187,22 +3175,22 @@ func waitForCompletedSearch(
 	client *http.Client,
 	baseURL, jobID string,
 	timeout time.Duration,
-) *opensplunkv1.SearchJob {
+) *opensplunk.SearchJob {
 	t.Helper()
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		var got opensplunkv1.GetSearchJobResponse
-		postProto(t, ctx, client, baseURL+"/api/v1/search/jobs/get", &opensplunkv1.GetSearchJobRequest{SearchJobId: jobID}, &got)
+		var got opensplunk.GetSearchJobResponse
+		postProto(t, ctx, client, baseURL+"/api/search/jobs/get", &opensplunk.GetSearchJobRequest{SearchJobId: jobID}, &got)
 		job := got.GetSearchJob()
 		switch job.GetState() {
-		case opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED:
+		case opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED:
 			return job
-		case opensplunkv1.SearchJobState_SEARCH_JOB_STATE_FAILED,
-			opensplunkv1.SearchJobState_SEARCH_JOB_STATE_CANCELED,
-			opensplunkv1.SearchJobState_SEARCH_JOB_STATE_EXPIRED:
+		case opensplunk.SearchJobState_SEARCH_JOB_STATE_FAILED,
+			opensplunk.SearchJobState_SEARCH_JOB_STATE_CANCELED,
+			opensplunk.SearchJobState_SEARCH_JOB_STATE_EXPIRED:
 			t.Fatalf("search job terminated in %s: %+v", job.GetState(), job.GetFailure())
 		}
 		select {
@@ -3277,7 +3265,7 @@ func runSearch(
 	baseURL string,
 	fixtureStart time.Time,
 	fixture verticalLookupFixture,
-	savedSearch *opensplunkv1.SavedSearch,
+	savedSearch *opensplunk.SavedSearch,
 ) completedSearch {
 	t.Helper()
 	if savedSearch == nil ||
@@ -3286,15 +3274,15 @@ func runSearch(
 			savedSearch.GetDefinition().GetSearch(),
 			verticalLookupSearchDefinition(fixtureStart, fixture.appID),
 		) {
-		t.Fatalf("invalid persisted v0.4 saved lookup search = %+v", savedSearch)
+		t.Fatalf("invalid persisted saved lookup search = %+v", savedSearch)
 	}
-	launchDefinition := proto.Clone(savedSearch.GetDefinition().GetSearch()).(*opensplunkv1.SearchDefinition)
-	launchDefinition.PreferredResultTab = opensplunkv1.SearchResultTab_SEARCH_RESULT_TAB_UNSPECIFIED
-	var created opensplunkv1.CreateSearchJobResponse
-	postProto(t, ctx, client, baseURL+"/api/v1/search/jobs/create", &opensplunkv1.CreateSearchJobRequest{
+	launchDefinition := proto.Clone(savedSearch.GetDefinition().GetSearch()).(*opensplunk.SearchDefinition)
+	launchDefinition.PreferredResultTab = opensplunk.SearchResultTab_SEARCH_RESULT_TAB_UNSPECIFIED
+	var created opensplunk.CreateSearchJobResponse
+	postProto(t, ctx, client, baseURL+"/api/search/jobs/create", &opensplunk.CreateSearchJobRequest{
 		Definition: launchDefinition,
-		Source: &opensplunkv1.SearchJobSource{
-			Origin:        opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH,
+		Source: &opensplunk.SearchJobSource{
+			Origin:        opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH,
 			SavedSearchId: new(fixture.savedSearchID),
 		},
 	}, &created)
@@ -3312,17 +3300,16 @@ func runSearch(
 
 	// WebSocket events are sequenced notifications, not the source of truth.
 	// Read the authoritative terminal snapshot and full results over HTTP.
-	var got opensplunkv1.GetSearchJobResponse
-	postProto(t, ctx, client, baseURL+"/api/v1/search/jobs/get", &opensplunkv1.GetSearchJobRequest{SearchJobId: jobID}, &got)
+	var got opensplunk.GetSearchJobResponse
+	postProto(t, ctx, client, baseURL+"/api/search/jobs/get", &opensplunk.GetSearchJobRequest{SearchJobId: jobID}, &got)
 	job := got.GetSearchJob()
-	if job.GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED ||
+	if job.GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED ||
 		job.GetStateVersion() != terminal.GetStateVersion() ||
 		job.GetProgress().GetStateVersion() != job.GetStateVersion() ||
 		terminal.GetFinalProgress().GetStateVersion() != terminal.GetStateVersion() ||
 		job.GetProgress().GetProducedRows() != terminal.GetFinalProgress().GetProducedRows() ||
-		job.GetCompilerVersion() != splCompatibilityVersionForTest ||
 		job.GetDefinition().GetAppId() != fixture.appID ||
-		job.GetSource().GetOrigin() != opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH ||
+		job.GetSource().GetOrigin() != opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH ||
 		job.GetSource().GetSavedSearchId() != fixture.savedSearchID {
 		t.Fatalf("authoritative search job = %+v, websocket terminal = %+v", job, terminal)
 	}
@@ -3337,16 +3324,15 @@ func runSearch(
 
 func assertVerticalLookupKnowledgeProjection(
 	t *testing.T,
-	summary *opensplunkv1.KnowledgeSnapshotSummary,
+	summary *opensplunk.KnowledgeSnapshotSummary,
 ) {
 	t.Helper()
 	if summary == nil || summary.GetRef() == nil ||
 		len(summary.GetRef().GetSnapshotSha256()) != 32 ||
 		len(summary.GetRef().GetTenantCatalogStateToken()) != 32 ||
 		summary.GetRef().GetLookupAssetCount() != 1 ||
-		summary.GetRef().GetLookupAssetCountUnknown() ||
 		len(summary.GetLookupAssets()) != 0 {
-		t.Fatalf("v0.4 redacted lookup knowledge projection = %+v", summary)
+		t.Fatalf("redacted lookup knowledge projection = %+v", summary)
 	}
 }
 
@@ -3359,17 +3345,17 @@ func assertVerticalLookupInspection(
 	serverSecrets []string,
 ) {
 	t.Helper()
-	var inspected opensplunkv1.InspectSearchJobResponse
+	var inspected opensplunk.InspectSearchJobResponse
 	if _, err := postProtoRequestWithBearer(
 		ctx,
 		client,
-		baseURL+"/api/v1/search/jobs/inspect",
+		baseURL+"/api/search/jobs/inspect",
 		administratorToken,
-		&opensplunkv1.InspectSearchJobRequest{SearchJobId: jobID},
+		&opensplunk.InspectSearchJobRequest{SearchJobId: jobID},
 		&inspected,
 	); err != nil {
 		t.Fatalf(
-			"inspect v0.4 lookup search: %v\nserver logs:\n%s",
+			"inspect lookup search: %v\nserver logs:\n%s",
 			err,
 			redactForFailure(serverProcess.Logs(), serverSecrets...),
 		)
@@ -3380,17 +3366,17 @@ func assertVerticalLookupInspection(
 		inspected.GetGeneratedSql() == "" ||
 		inspected.GetExplainText() == "" ||
 		inspected.GetDiagnosticQueryId() == "" {
-		t.Fatalf("v0.4 lookup search inspection = %+v", &inspected)
+		t.Fatalf("lookup search inspection = %+v", &inspected)
 	}
 	if !slices.ContainsFunc(
 		inspected.GetLogicalPlan().GetStages(),
-		func(stage *opensplunkv1.SearchInspectionLogicalStage) bool {
+		func(stage *opensplunk.SearchInspectionLogicalStage) bool {
 			return stage.GetOperator() == "Lookup" &&
 				slices.Contains(stage.GetInputFields(), "service") &&
 				slices.Contains(stage.GetOutputFields(), "service_owner")
 		},
 	) {
-		t.Fatalf("v0.4 lookup inspection omitted the lookup stage: %+v", inspected.GetLogicalPlan())
+		t.Fatalf("lookup inspection omitted the lookup stage: %+v", inspected.GetLogicalPlan())
 	}
 	assertVerticalLookupKnowledgeProjection(t, inspected.GetKnowledgeSnapshot())
 }
@@ -3483,15 +3469,15 @@ func assertBackendHistoryRerun(
 	timezone := "UTC"
 	source := "index=" + historyRerunIndexName +
 		` source="history-rerun.log" | eval message_length=len(message)+1 | where message_length IN (message_length) | table message`
-	var originalCreate opensplunkv1.CreateSearchJobResponse
+	var originalCreate opensplunk.CreateSearchJobResponse
 	postProto(
 		t,
 		ctx,
 		client,
-		baseURL+"/api/v1/search/jobs/create",
-		&opensplunkv1.CreateSearchJobRequest{Definition: &opensplunkv1.SearchDefinition{
+		baseURL+"/api/search/jobs/create",
+		&opensplunk.CreateSearchJobRequest{Definition: &opensplunk.SearchDefinition{
 			Spl: source,
-			TimeRange: &opensplunkv1.TimeRangeSpec{
+			TimeRange: &opensplunk.TimeRangeSpec{
 				Earliest: &earliest,
 				Latest:   &latest,
 				Timezone: &timezone,
@@ -3501,17 +3487,14 @@ func assertBackendHistoryRerun(
 		&originalCreate,
 	)
 	originalID := originalCreate.GetSearchJob().GetSearchJobId()
-	if originalID == "" ||
-		originalCreate.GetSearchJob().GetCompilerVersion() != splCompatibilityVersionForTest {
+	if originalID == "" {
 		t.Fatalf("created history-rerun source job = %+v", originalCreate.GetSearchJob())
 	}
 	original := waitForCompletedSearch(t, ctx, client, baseURL, originalID, 30*time.Second)
 	originalHistory := waitForSearchHistoryEntry(t, ctx, client, baseURL, originalID)
 	if original.GetProgress().GetProducedRows() != 1 ||
 		originalHistory.GetProducedRows() != 1 ||
-		original.GetCompilerVersion() != splCompatibilityVersionForTest ||
-		originalHistory.GetCompilerVersion() != splCompatibilityVersionForTest ||
-		originalHistory.GetSource().GetOrigin() != opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_AD_HOC {
+		originalHistory.GetSource().GetOrigin() != opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_AD_HOC {
 		t.Fatalf("history-rerun source search = job %+v history %+v", original, originalHistory)
 	}
 	originalResults := fetchAllCompletedSearchResults(
@@ -3579,30 +3562,29 @@ func assertBackendHistoryRerun(
 	assertDurableCollectorState(t, stateDir, uint64(mustFileSize(t, logPath)), 2)
 	assertProcessLogsDoNotLeak(t, process.Logs(), plaintextToken)
 
-	var rerunCreate opensplunkv1.CreateSearchJobResponse
+	var rerunCreate opensplunk.CreateSearchJobResponse
 	postProto(
 		t,
 		ctx,
 		client,
-		baseURL+"/api/v1/search/jobs/create",
-		&opensplunkv1.CreateSearchJobRequest{Source: &opensplunkv1.SearchJobSource{
-			Origin:          opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN,
+		baseURL+"/api/search/jobs/create",
+		&opensplunk.CreateSearchJobRequest{Source: &opensplunk.SearchJobSource{
+			Origin:          opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN,
 			HistorySearchId: &originalID,
 		}},
 		&rerunCreate,
 	)
 	rerunID := rerunCreate.GetSearchJob().GetSearchJobId()
-	if rerunID == "" || rerunID == originalID ||
-		rerunCreate.GetSearchJob().GetCompilerVersion() != splCompatibilityVersionForTest {
+	if rerunID == "" || rerunID == originalID {
 		t.Fatalf("created history rerun = %+v", rerunCreate.GetSearchJob())
 	}
-	var deleted opensplunkv1.DeleteSearchHistoryEntryResponse
+	var deleted opensplunk.DeleteSearchHistoryEntryResponse
 	postProto(
 		t,
 		ctx,
 		client,
-		baseURL+"/api/v1/search/history/delete",
-		&opensplunkv1.DeleteSearchHistoryEntryRequest{SearchJobId: originalID},
+		baseURL+"/api/search/history/delete",
+		&opensplunk.DeleteSearchHistoryEntryRequest{SearchJobId: originalID},
 		&deleted,
 	)
 	if deleted.GetSearchJobId() != originalID {
@@ -3616,9 +3598,8 @@ func assertBackendHistoryRerun(
 		rerun.GetDefinition().GetTimeRange().GetLatest() != latest ||
 		rerun.GetDefinition().GetTimeRange().GetTimezone() != timezone ||
 		!slices.Equal(rerun.GetEffectiveIndexScope(), []string{historyRerunIndexName}) ||
-		rerun.GetSource().GetOrigin() != opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN ||
+		rerun.GetSource().GetOrigin() != opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN ||
 		rerun.GetSource().GetHistorySearchId() != originalID ||
-		rerun.GetCompilerVersion() != splCompatibilityVersionForTest ||
 		rerun.GetProgress().GetProducedRows() != 2 ||
 		rerun.GetResolvedTimeRange().GetLatest() == nil ||
 		!rerun.GetResolvedTimeRange().GetLatest().AsTime().After(
@@ -3631,10 +3612,9 @@ func assertBackendHistoryRerun(
 		t.Fatalf("completed history rerun = original %+v rerun %+v", original, rerun)
 	}
 	if rerunHistory.GetDefinition().GetSpl() != source ||
-		rerunHistory.GetSource().GetOrigin() != opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN ||
+		rerunHistory.GetSource().GetOrigin() != opensplunk.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN ||
 		rerunHistory.GetSource().GetHistorySearchId() != originalID ||
 		rerunHistory.GetProducedRows() != 2 ||
-		rerunHistory.GetCompilerVersion() != splCompatibilityVersionForTest ||
 		!slices.Equal(rerunHistory.GetEffectiveIndexScope(), []string{historyRerunIndexName}) ||
 		rerunHistory.GetResolvedTimeRange().GetLatest() == nil ||
 		!rerunHistory.GetResolvedTimeRange().GetLatest().AsTime().Equal(
@@ -3710,13 +3690,13 @@ func backendServerTime(
 	baseURL string,
 ) time.Time {
 	t.Helper()
-	var bootstrap opensplunkv1.GetSystemBootstrapResponse
+	var bootstrap opensplunk.GetSystemBootstrapResponse
 	postProto(
 		t,
 		ctx,
 		client,
-		baseURL+"/api/v1/system/bootstrap",
-		&opensplunkv1.GetSystemBootstrapRequest{},
+		baseURL+"/api/system/bootstrap",
+		&opensplunk.GetSystemBootstrapRequest{},
 		&bootstrap,
 	)
 	serverTime := bootstrap.GetServerTime()
@@ -3774,7 +3754,7 @@ func resultStringCell(
 		t.Fatalf("result cell [%d,0] is unavailable: %+v", rowIndex, results)
 	}
 	cell := results.rows[rowIndex].GetCells()[0]
-	_, ok := cell.GetKind().(*opensplunkv1.TypedValue_StringValue)
+	_, ok := cell.GetKind().(*opensplunk.TypedValue_StringValue)
 	if !ok {
 		t.Fatalf("result cell [%d,0] = %+v, want string", rowIndex, cell)
 	}
@@ -3805,8 +3785,8 @@ func fetchAllCompletedSearchResults(
 	}
 	expectedPages := (expectedRows + uint64(pageSize) - 1) / uint64(pageSize)
 	var (
-		schema     *opensplunkv1.ResultSchema
-		rows       []*opensplunkv1.ResultRow
+		schema     *opensplunk.ResultSchema
+		rows       []*opensplunk.ResultRow
 		nextToken  string
 		pageCount  int
 		seenTokens = make(map[string]struct{})
@@ -3814,15 +3794,15 @@ func fetchAllCompletedSearchResults(
 		pageWire   [][]byte
 	)
 	for {
-		requestPage := &opensplunkv1.PageRequest{
+		requestPage := &opensplunk.PageRequest{
 			PageSize:         &pageSize,
 			IncludeTotalSize: true,
 		}
 		if nextToken != "" {
 			requestPage.PageToken = &nextToken
 		}
-		var current opensplunkv1.GetSearchResultsResponse
-		wire := postProto(t, ctx, client, baseURL+"/api/v1/search/jobs/results", &opensplunkv1.GetSearchResultsRequest{
+		var current opensplunk.GetSearchResultsResponse
+		wire := postProto(t, ctx, client, baseURL+"/api/search/jobs/results", &opensplunk.GetSearchResultsRequest{
 			SearchJobId: jobID,
 			Page:        requestPage,
 		}, &current)
@@ -3838,7 +3818,7 @@ func fetchAllCompletedSearchResults(
 			t.Fatalf("search result page %d metadata = %+v", pageCount, page)
 		}
 		if schema == nil {
-			schema = proto.Clone(page.GetSchema()).(*opensplunkv1.ResultSchema)
+			schema = proto.Clone(page.GetSchema()).(*opensplunk.ResultSchema)
 		} else if !proto.Equal(schema, page.GetSchema()) {
 			t.Fatalf("search result schema changed on page %d: first=%+v current=%+v", pageCount, schema, page.GetSchema())
 		}
@@ -3853,7 +3833,7 @@ func fetchAllCompletedSearchResults(
 				t.Fatalf("search result row %q ordinal = %d, want %d", row.GetRowId(), row.GetOrdinal(), len(rows))
 			}
 			seenRowIDs[row.GetRowId()] = struct{}{}
-			rows = append(rows, proto.Clone(row).(*opensplunkv1.ResultRow))
+			rows = append(rows, proto.Clone(row).(*opensplunk.ResultRow))
 		}
 
 		returnedToken := page.GetPage().GetNextPageToken()
@@ -3892,12 +3872,12 @@ func assertCurrentGradeThisSearchResults(
 	case gradethiscorpus.MigrationSearchFollowTrace:
 		assertCurrentGradeThisColumns(t, results,
 			[]string{"_time", "level", "layer", "logger", "message"},
-			[]opensplunkv1.ValueType{
-				opensplunkv1.ValueType_VALUE_TYPE_TIMESTAMP,
-				opensplunkv1.ValueType_VALUE_TYPE_STRING,
-				opensplunkv1.ValueType_VALUE_TYPE_MIXED,
-				opensplunkv1.ValueType_VALUE_TYPE_MIXED,
-				opensplunkv1.ValueType_VALUE_TYPE_STRING,
+			[]opensplunk.ValueType{
+				opensplunk.ValueType_VALUE_TYPE_TIMESTAMP,
+				opensplunk.ValueType_VALUE_TYPE_STRING,
+				opensplunk.ValueType_VALUE_TYPE_MIXED,
+				opensplunk.ValueType_VALUE_TYPE_MIXED,
+				opensplunk.ValueType_VALUE_TYPE_STRING,
 			},
 		)
 		for rowIndex, eventID := range []string{"trace-api", "trace-service", "trace-database"} {
@@ -3913,9 +3893,9 @@ func assertCurrentGradeThisSearchResults(
 	case gradethiscorpus.MigrationSearchSeverityCounts:
 		assertCurrentGradeThisColumns(t, results,
 			[]string{"level", "count"},
-			[]opensplunkv1.ValueType{
-				opensplunkv1.ValueType_VALUE_TYPE_STRING,
-				opensplunkv1.ValueType_VALUE_TYPE_UINT64,
+			[]opensplunk.ValueType{
+				opensplunk.ValueType_VALUE_TYPE_STRING,
+				opensplunk.ValueType_VALUE_TYPE_UINT64,
 			},
 		)
 		for rowIndex, expected := range []struct {
@@ -3934,13 +3914,13 @@ func assertCurrentGradeThisSearchResults(
 	case gradethiscorpus.MigrationSearchFailedRequests:
 		assertCurrentGradeThisColumns(t, results,
 			[]string{"_time", "level", "path", "status", "duration", "trace_id"},
-			[]opensplunkv1.ValueType{
-				opensplunkv1.ValueType_VALUE_TYPE_TIMESTAMP,
-				opensplunkv1.ValueType_VALUE_TYPE_STRING,
-				opensplunkv1.ValueType_VALUE_TYPE_MIXED,
-				opensplunkv1.ValueType_VALUE_TYPE_MIXED,
-				opensplunkv1.ValueType_VALUE_TYPE_MIXED,
-				opensplunkv1.ValueType_VALUE_TYPE_STRING,
+			[]opensplunk.ValueType{
+				opensplunk.ValueType_VALUE_TYPE_TIMESTAMP,
+				opensplunk.ValueType_VALUE_TYPE_STRING,
+				opensplunk.ValueType_VALUE_TYPE_MIXED,
+				opensplunk.ValueType_VALUE_TYPE_MIXED,
+				opensplunk.ValueType_VALUE_TYPE_MIXED,
+				opensplunk.ValueType_VALUE_TYPE_STRING,
 			},
 		)
 		for rowIndex, eventID := range []string{"assessments-server-error", "submissions-server-error"} {
@@ -3957,10 +3937,10 @@ func assertCurrentGradeThisSearchResults(
 	case gradethiscorpus.MigrationSearchPathStatus:
 		assertCurrentGradeThisColumns(t, results,
 			[]string{"path", "status", "count"},
-			[]opensplunkv1.ValueType{
-				opensplunkv1.ValueType_VALUE_TYPE_STRING,
-				opensplunkv1.ValueType_VALUE_TYPE_STRING,
-				opensplunkv1.ValueType_VALUE_TYPE_UINT64,
+			[]opensplunk.ValueType{
+				opensplunk.ValueType_VALUE_TYPE_STRING,
+				opensplunk.ValueType_VALUE_TYPE_STRING,
+				opensplunk.ValueType_VALUE_TYPE_UINT64,
 			},
 		)
 		for rowIndex, expected := range []struct {
@@ -3968,14 +3948,14 @@ func assertCurrentGradeThisSearchResults(
 			status string
 			count  uint64
 		}{
-			{path: "/api/v1/assessments", status: "200", count: 2},
-			{path: "/api/v1/submissions", status: "200", count: 2},
-			{path: "/api/v1/assessments", status: "429", count: 1},
-			{path: "/api/v1/assessments", status: "503", count: 1},
-			{path: "/api/v1/reports", status: "200", count: 1},
-			{path: "/api/v1/reports", status: "204", count: 1},
-			{path: "/api/v1/reports", status: "404", count: 1},
-			{path: "/api/v1/submissions", status: "500", count: 1},
+			{path: "/api/assessments", status: "200", count: 2},
+			{path: "/api/submissions", status: "200", count: 2},
+			{path: "/api/assessments", status: "429", count: 1},
+			{path: "/api/assessments", status: "503", count: 1},
+			{path: "/api/reports", status: "200", count: 1},
+			{path: "/api/reports", status: "204", count: 1},
+			{path: "/api/reports", status: "404", count: 1},
+			{path: "/api/submissions", status: "500", count: 1},
 		} {
 			cells := results.rows[rowIndex].GetCells()
 			requireCurrentGradeThisString(t, cells[0], expected.path)
@@ -3986,9 +3966,9 @@ func assertCurrentGradeThisSearchResults(
 	case gradethiscorpus.MigrationSearchDurationUnits:
 		assertCurrentGradeThisColumns(t, results,
 			[]string{"duration_unit", "count"},
-			[]opensplunkv1.ValueType{
-				opensplunkv1.ValueType_VALUE_TYPE_STRING,
-				opensplunkv1.ValueType_VALUE_TYPE_UINT64,
+			[]opensplunk.ValueType{
+				opensplunk.ValueType_VALUE_TYPE_STRING,
+				opensplunk.ValueType_VALUE_TYPE_UINT64,
 			},
 		)
 		for rowIndex, expected := range []struct {
@@ -4007,10 +3987,10 @@ func assertCurrentGradeThisSearchResults(
 	case gradethiscorpus.MigrationSearchTopMessages:
 		assertCurrentGradeThisColumns(t, results,
 			[]string{"message", "count", "percent"},
-			[]opensplunkv1.ValueType{
-				opensplunkv1.ValueType_VALUE_TYPE_STRING,
-				opensplunkv1.ValueType_VALUE_TYPE_UINT64,
-				opensplunkv1.ValueType_VALUE_TYPE_DOUBLE,
+			[]opensplunk.ValueType{
+				opensplunk.ValueType_VALUE_TYPE_STRING,
+				opensplunk.ValueType_VALUE_TYPE_UINT64,
+				opensplunk.ValueType_VALUE_TYPE_DOUBLE,
 			},
 		)
 		for rowIndex, expected := range []struct {
@@ -4037,7 +4017,7 @@ func assertCurrentGradeThisColumns(
 	t *testing.T,
 	results *collectedVerticalSearchResults,
 	names []string,
-	types []opensplunkv1.ValueType,
+	types []opensplunk.ValueType,
 ) {
 	t.Helper()
 	if results == nil || results.schema == nil || len(names) != len(types) ||
@@ -4082,42 +4062,42 @@ func currentGradeThisEvent(
 	return gradethiscorpus.MigrationEvent{}
 }
 
-func requireCurrentGradeThisString(t *testing.T, value *opensplunkv1.TypedValue, want string) {
+func requireCurrentGradeThisString(t *testing.T, value *opensplunk.TypedValue, want string) {
 	t.Helper()
-	if _, ok := value.GetKind().(*opensplunkv1.TypedValue_StringValue); !ok ||
+	if _, ok := value.GetKind().(*opensplunk.TypedValue_StringValue); !ok ||
 		value.GetStringValue() != want {
 		t.Fatalf("current GradeThis cell = %+v, want string(%q)", value, want)
 	}
 }
 
-func requireCurrentGradeThisSigned(t *testing.T, value *opensplunkv1.TypedValue, want int64) {
+func requireCurrentGradeThisSigned(t *testing.T, value *opensplunk.TypedValue, want int64) {
 	t.Helper()
-	if _, ok := value.GetKind().(*opensplunkv1.TypedValue_Sint64Value); !ok ||
+	if _, ok := value.GetKind().(*opensplunk.TypedValue_Sint64Value); !ok ||
 		value.GetSint64Value() != want {
 		t.Fatalf("current GradeThis cell = %+v, want sint64(%d)", value, want)
 	}
 }
 
-func requireCurrentGradeThisUnsigned(t *testing.T, value *opensplunkv1.TypedValue, want uint64) {
+func requireCurrentGradeThisUnsigned(t *testing.T, value *opensplunk.TypedValue, want uint64) {
 	t.Helper()
-	if _, ok := value.GetKind().(*opensplunkv1.TypedValue_Uint64Value); !ok ||
+	if _, ok := value.GetKind().(*opensplunk.TypedValue_Uint64Value); !ok ||
 		value.GetUint64Value() != want {
 		t.Fatalf("current GradeThis cell = %+v, want uint64(%d)", value, want)
 	}
 }
 
-func requireCurrentGradeThisDouble(t *testing.T, value *opensplunkv1.TypedValue, want float64) {
+func requireCurrentGradeThisDouble(t *testing.T, value *opensplunk.TypedValue, want float64) {
 	t.Helper()
-	if _, ok := value.GetKind().(*opensplunkv1.TypedValue_DoubleValue); !ok ||
+	if _, ok := value.GetKind().(*opensplunk.TypedValue_DoubleValue); !ok ||
 		value.GetDoubleValue() != want {
 		t.Fatalf("current GradeThis cell = %+v, want double(%v)", value, want)
 	}
 }
 
-func requireCurrentGradeThisTime(t *testing.T, value *opensplunkv1.TypedValue, want time.Time) {
+func requireCurrentGradeThisTime(t *testing.T, value *opensplunk.TypedValue, want time.Time) {
 	t.Helper()
 	timestamp := value.GetTimestampValue()
-	if _, ok := value.GetKind().(*opensplunkv1.TypedValue_TimestampValue); !ok ||
+	if _, ok := value.GetKind().(*opensplunk.TypedValue_TimestampValue); !ok ||
 		timestamp == nil ||
 		timestamp.CheckValid() != nil ||
 		!timestamp.AsTime().Equal(want) {
@@ -4134,8 +4114,8 @@ func assertCompletedTimeline(
 ) {
 	t.Helper()
 	maximumBuckets := uint32(10)
-	var timeline opensplunkv1.GetSearchTimelineResponse
-	postProto(t, ctx, client, baseURL+"/api/v1/search/jobs/timeline", &opensplunkv1.GetSearchTimelineRequest{
+	var timeline opensplunk.GetSearchTimelineResponse
+	postProto(t, ctx, client, baseURL+"/api/search/jobs/timeline", &opensplunk.GetSearchTimelineRequest{
 		SearchJobId:          searchJobID,
 		MaxBuckets:           &maximumBuckets,
 		PreferredBucketWidth: durationpb.New(time.Second),
@@ -4191,7 +4171,7 @@ func observeCompletedSearchWebSocket(
 	ctx context.Context,
 	client *http.Client,
 	baseURL, jobID string,
-) *opensplunkv1.SearchJobTerminal {
+) *opensplunk.SearchJobTerminal {
 	t.Helper()
 	watchContext, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
@@ -4208,7 +4188,7 @@ func observeCompletedSearchWebSocket(
 	default:
 		t.Fatalf("unsupported backend URL scheme %q", endpoint.Scheme)
 	}
-	endpoint.Path = "/api/v1/search/ws"
+	endpoint.Path = "/api/search/ws"
 	endpoint.RawPath = ""
 	endpoint.RawQuery = ""
 	endpoint.Fragment = ""
@@ -4259,12 +4239,12 @@ func observeCompletedSearchWebSocket(
 		t.Fatalf("set search websocket write deadline: %v", err)
 	}
 	previewRowLimit := uint32(2)
-	command := &opensplunkv1.SearchWebSocketCommand{
+	command := &opensplunk.SearchWebSocketCommand{
 		RequestId: "backend-vertical-subscribe",
-		Payload: &opensplunkv1.SearchWebSocketCommand_Subscribe{Subscribe: &opensplunkv1.SubscribeSearchJobsCommand{
-			Subscriptions: []*opensplunkv1.SearchSubscription{{
+		Payload: &opensplunk.SearchWebSocketCommand_Subscribe{Subscribe: &opensplunk.SubscribeSearchJobsCommand{
+			Subscriptions: []*opensplunk.SearchSubscription{{
 				SubscriptionId: "backend-vertical-search",
-				Target: &opensplunkv1.JobTarget{Target: &opensplunkv1.JobTarget_SearchJobId{
+				Target: &opensplunk.JobTarget{Target: &opensplunk.JobTarget_SearchJobId{
 					SearchJobId: jobID,
 				}},
 				// Zero deliberately accepts the current terminal snapshot when this
@@ -4338,7 +4318,7 @@ func observeCompletedSearchWebSocket(
 			preview := event.GetResultPreview()
 			if !sawSchema || preview.GetSearchJobId() != jobID || preview.GetSchemaId() != schemaID ||
 				preview.GetPreviewRevision() == 0 || preview.GetPreviewRevision() < lastPreview ||
-				preview.GetUpdateMode() != opensplunkv1.PreviewUpdateMode_PREVIEW_UPDATE_MODE_RESET ||
+				preview.GetUpdateMode() != opensplunk.PreviewUpdateMode_PREVIEW_UPDATE_MODE_RESET ||
 				len(preview.GetRows()) == 0 || len(preview.GetRows()) > int(previewRowLimit) ||
 				!preview.GetTruncated() {
 				t.Fatalf("search websocket preview = %+v (schema=%q columns=%d revision=%d)",
@@ -4369,21 +4349,21 @@ func observeCompletedSearchWebSocket(
 			sawPreview = true
 		case event.GetSearchStateChanged() != nil:
 			state := event.GetSearchStateChanged()
-			if state.GetSearchJobId() != jobID || state.GetState() == opensplunkv1.SearchJobState_SEARCH_JOB_STATE_UNSPECIFIED ||
+			if state.GetSearchJobId() != jobID || state.GetState() == opensplunk.SearchJobState_SEARCH_JOB_STATE_UNSPECIFIED ||
 				state.GetStateVersion() == 0 || state.GetStateVersion() < lastStateVersion {
 				t.Fatalf("search websocket state event = %+v after version %d", state, lastStateVersion)
 			}
 			switch state.GetState() {
-			case opensplunkv1.SearchJobState_SEARCH_JOB_STATE_FAILED,
-				opensplunkv1.SearchJobState_SEARCH_JOB_STATE_CANCELED,
-				opensplunkv1.SearchJobState_SEARCH_JOB_STATE_EXPIRED:
+			case opensplunk.SearchJobState_SEARCH_JOB_STATE_FAILED,
+				opensplunk.SearchJobState_SEARCH_JOB_STATE_CANCELED,
+				opensplunk.SearchJobState_SEARCH_JOB_STATE_EXPIRED:
 				t.Fatalf("search websocket reported terminal state %s before successful completion", state.GetState())
 			}
 			lastStateVersion = state.GetStateVersion()
 			sawState = true
 		case event.GetSearchProgress() != nil:
 			progress := event.GetSearchProgress()
-			if progress.GetPhase() == opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_UNSPECIFIED ||
+			if progress.GetPhase() == opensplunk.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_UNSPECIFIED ||
 				progress.GetUpdatedAt() == nil || progress.GetUpdatedAt().CheckValid() != nil ||
 				progress.GetStateVersion() == 0 ||
 				progress.GetStateVersion() < lastProgressVersion ||
@@ -4399,9 +4379,9 @@ func observeCompletedSearchWebSocket(
 		case event.GetSearchTerminal() != nil:
 			terminal := event.GetSearchTerminal()
 			if !sawState || !sawProgress || !sawSchema || !sawPreview || terminal.GetSearchJobId() != jobID ||
-				terminal.GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED ||
+				terminal.GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED ||
 				terminal.GetStateVersion() == 0 || terminal.GetStateVersion() != lastStateVersion ||
-				terminal.GetFinalProgress().GetPhase() != opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_COMPLETE ||
+				terminal.GetFinalProgress().GetPhase() != opensplunk.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_COMPLETE ||
 				terminal.GetFinalProgress().GetStateVersion() != terminal.GetStateVersion() ||
 				terminal.GetFinalProgress().GetStateVersion() != lastProgressVersion ||
 				terminal.GetFinalProgress().GetProducedRows() != verticalEventCount ||
@@ -4450,7 +4430,7 @@ func webSocketTLSConfig(client *http.Client) (*tls.Config, error) {
 	return config, nil
 }
 
-func readBackendSearchWebSocketEvent(t *testing.T, connection *websocket.Conn) *opensplunkv1.SearchWebSocketEvent {
+func readBackendSearchWebSocketEvent(t *testing.T, connection *websocket.Conn) *opensplunk.SearchWebSocketEvent {
 	t.Helper()
 	messageType, wire, err := connection.ReadMessage()
 	if err != nil {
@@ -4459,7 +4439,7 @@ func readBackendSearchWebSocketEvent(t *testing.T, connection *websocket.Conn) *
 	if messageType != websocket.BinaryMessage {
 		t.Fatalf("search websocket message type = %d, want binary", messageType)
 	}
-	event := new(opensplunkv1.SearchWebSocketEvent)
+	event := new(opensplunk.SearchWebSocketEvent)
 	if err := proto.Unmarshal(wire, event); err != nil {
 		t.Fatalf("decode search websocket event: %v", err)
 	}
@@ -4470,8 +4450,8 @@ func waitForTerminalHistory(t *testing.T, ctx context.Context, client *http.Clie
 	t.Helper()
 	entry := waitForSearchHistoryEntry(t, ctx, client, baseURL, jobID)
 	if entry.GetSearchJobId() != jobID || entry.GetDefinition().GetSpl() != verticalSearchSPL ||
-		entry.GetFinalState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED ||
-		entry.GetProducedRows() != verticalEventCount || entry.GetCompilerVersion() != splCompatibilityVersionForTest ||
+		entry.GetFinalState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED ||
+		entry.GetProducedRows() != verticalEventCount ||
 		len(entry.GetEffectiveIndexScope()) != 1 || entry.GetEffectiveIndexScope()[0] != verticalIndexName {
 		t.Fatalf("terminal search history = %+v", entry)
 	}
@@ -4482,9 +4462,9 @@ func waitForSearchHistoryEntry(
 	ctx context.Context,
 	client *http.Client,
 	baseURL, jobID string,
-) *opensplunkv1.SearchHistoryEntry {
+) *opensplunk.SearchHistoryEntry {
 	t.Helper()
-	payload, err := proto.Marshal(&opensplunkv1.GetSearchHistoryEntryRequest{SearchJobId: jobID})
+	payload, err := proto.Marshal(&opensplunk.GetSearchHistoryEntryRequest{SearchJobId: jobID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4493,7 +4473,7 @@ func waitForSearchHistoryEntry(
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		request, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/api/v1/search/history/get", bytes.NewReader(payload))
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/api/search/history/get", bytes.NewReader(payload))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -4508,13 +4488,13 @@ func waitForSearchHistoryEntry(
 			t.Fatalf("read search history: %v", readErr)
 		}
 		if response.StatusCode == http.StatusOK {
-			var got opensplunkv1.GetSearchHistoryEntryResponse
+			var got opensplunk.GetSearchHistoryEntryResponse
 			if err := proto.Unmarshal(body, &got); err != nil {
 				t.Fatalf("decode search history: %v", err)
 			}
 			entry := got.GetHistoryEntry()
 			if entry.GetSearchJobId() != jobID ||
-				entry.GetFinalState() == opensplunkv1.SearchJobState_SEARCH_JOB_STATE_UNSPECIFIED {
+				entry.GetFinalState() == opensplunk.SearchJobState_SEARCH_JOB_STATE_UNSPECIFIED {
 				t.Fatalf("search history entry = %+v", entry)
 			}
 			return entry
@@ -4558,18 +4538,18 @@ func assertTypedRedactedResults(t *testing.T, results *collectedVerticalSearchRe
 	}
 	// OUTPUTNEW may retain an existing dynamically typed event value, so its
 	// public column remains MIXED even though every enrichment below is a string.
-	if results.schema.GetColumns()[columns["status"]].GetValueType() != opensplunkv1.ValueType_VALUE_TYPE_MIXED ||
-		results.schema.GetColumns()[columns["duration_ms"]].GetValueType() != opensplunkv1.ValueType_VALUE_TYPE_MIXED ||
-		results.schema.GetColumns()[columns["adjusted_duration"]].GetValueType() != opensplunkv1.ValueType_VALUE_TYPE_DOUBLE ||
+	if results.schema.GetColumns()[columns["status"]].GetValueType() != opensplunk.ValueType_VALUE_TYPE_MIXED ||
+		results.schema.GetColumns()[columns["duration_ms"]].GetValueType() != opensplunk.ValueType_VALUE_TYPE_MIXED ||
+		results.schema.GetColumns()[columns["adjusted_duration"]].GetValueType() != opensplunk.ValueType_VALUE_TYPE_DOUBLE ||
 		!results.schema.GetColumns()[columns["adjusted_duration"]].GetNullable() ||
-		results.schema.GetColumns()[columns["service_owner"]].GetValueType() != opensplunkv1.ValueType_VALUE_TYPE_MIXED ||
+		results.schema.GetColumns()[columns["service_owner"]].GetValueType() != opensplunk.ValueType_VALUE_TYPE_MIXED ||
 		!results.schema.GetColumns()[columns["service_owner"]].GetNullable() {
 		t.Fatalf("dynamic numeric schema did not retain mixed typing: %+v", results.schema)
 	}
-	var sentinel *opensplunkv1.ResultRow
+	var sentinel *opensplunk.ResultRow
 	for _, row := range results.rows {
 		owner := row.GetCells()[columns["service_owner"]]
-		if _, ok := owner.GetKind().(*opensplunkv1.TypedValue_StringValue); !ok ||
+		if _, ok := owner.GetKind().(*opensplunk.TypedValue_StringValue); !ok ||
 			owner.GetStringValue() != verticalLookupOwner {
 			t.Fatalf(
 				"service_owner cell = %+v, want lookup enrichment %q",
@@ -4585,29 +4565,29 @@ func assertTypedRedactedResults(t *testing.T, results *collectedVerticalSearchRe
 		t.Fatalf("%q row was not returned", verticalSentinelMessage)
 	}
 	status := sentinel.GetCells()[columns["status"]]
-	if _, ok := status.GetKind().(*opensplunkv1.TypedValue_Sint64Value); !ok || status.GetSint64Value() != 201 {
+	if _, ok := status.GetKind().(*opensplunk.TypedValue_Sint64Value); !ok || status.GetSint64Value() != 201 {
 		t.Fatalf("status cell = %+v, want typed sint64(201)", status)
 	}
 	duration := sentinel.GetCells()[columns["duration_ms"]]
-	if _, ok := duration.GetKind().(*opensplunkv1.TypedValue_DoubleValue); !ok || duration.GetDoubleValue() != 12.5 {
+	if _, ok := duration.GetKind().(*opensplunk.TypedValue_DoubleValue); !ok || duration.GetDoubleValue() != 12.5 {
 		t.Fatalf("duration_ms cell = %+v, want typed double(12.5)", duration)
 	}
 	adjustedDuration := sentinel.GetCells()[columns["adjusted_duration"]]
-	if _, ok := adjustedDuration.GetKind().(*opensplunkv1.TypedValue_DoubleValue); !ok ||
+	if _, ok := adjustedDuration.GetKind().(*opensplunk.TypedValue_DoubleValue); !ok ||
 		adjustedDuration.GetDoubleValue() != 13.5 {
 		t.Fatalf("adjusted_duration cell = %+v, want typed double(13.5)", adjustedDuration)
 	}
 	redacted := sentinel.GetCells()[columns["api_key"]]
-	if _, ok := redacted.GetKind().(*opensplunkv1.TypedValue_StringValue); !ok || redacted.GetStringValue() != "[REDACTED]" {
+	if _, ok := redacted.GetKind().(*opensplunk.TypedValue_StringValue); !ok || redacted.GetStringValue() != "[REDACTED]" {
 		t.Fatalf("api_key cell = %+v, want redacted string", redacted)
 	}
 	credential := sentinel.GetCells()[columns["customer_credential"]]
-	if _, ok := credential.GetKind().(*opensplunkv1.TypedValue_StringValue); !ok ||
+	if _, ok := credential.GetKind().(*opensplunk.TypedValue_StringValue); !ok ||
 		credential.GetStringValue() != redactionCredentialMarker {
 		t.Fatalf("customer_credential cell = %+v, want %q", credential, redactionCredentialMarker)
 	}
 	pin := sentinel.GetCells()[columns["customer_pin"]]
-	if _, ok := pin.GetKind().(*opensplunkv1.TypedValue_StringValue); !ok ||
+	if _, ok := pin.GetKind().(*opensplunk.TypedValue_StringValue); !ok ||
 		pin.GetStringValue() != redactionPINMarker {
 		t.Fatalf("customer_pin cell = %+v, want %q", pin, redactionPINMarker)
 	}

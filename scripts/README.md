@@ -1,18 +1,17 @@
 # Build scripts
 
-Protobuf generation, release builds, migration checks, and packaging automation belong here. Release automation must build the Next.js static export before compiling `open-splunk-server`.
+Protobuf generation, reproducible artifact builds, migration checks, and
+packaging automation belong here. Artifact automation must build the Next.js
+static export before compiling `open-splunk-server`.
 
 `compile-protos.sh` implements `make proto`. Invoke the Make target so the public developer workflow remains stable.
 
-`check-buf-breaking.mjs` runs the repository-pinned Buf `FILE` compatibility
-policy. Five exact pre-activation migrations in `knowledge_api.proto` are
-waived only when the comparison branch resolves to
-`c5440b96248c68a9b58d10ebaf08eaef5345b61a`; another base commit or any other
-diagnostic still fails. After synchronizing the local base branch, run:
-
-```sh
-node scripts/check-buf-breaking.mjs --against-ref main
-```
+`check-docs.mjs` implements `make docs-check`. It validates local Markdown
+targets and heading anchors across the owned documentation set and rejects
+retired pre-release version tokens, versioned protobuf/API/HEC identifiers,
+release-era SPL rule IDs, versioned document names, and public version-floor
+language. Negative-support fixtures outside the owned Markdown files remain
+available to protocol tests without weakening the documentation contract.
 
 The scalar-String `stats min`/`max` ClickHouse microbenchmark is an opt-in Go
 benchmark because it starts a disposable container. It compares the production

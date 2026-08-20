@@ -11,7 +11,7 @@ import (
 	"github.com/Suhaibinator/SRouter/pkg/codec"
 	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 	"github.com/Suhaibinator/open-splunk/internal/searchinspection"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -26,9 +26,9 @@ func (handler *apiHandler) searchInspectionRoutes(
 ) []protobufRouteDefinition {
 	return []protobufRouteDefinition{
 		newForwardCompatibleProtoRoute[
-			*opensplunkv1.InspectSearchJobRequest,
+			*opensplunk.InspectSearchJobRequest,
 			*serializedSearchInspectionResponse](router.RouteConfig[
-			*opensplunkv1.InspectSearchJobRequest,
+			*opensplunk.InspectSearchJobRequest,
 			*serializedSearchInspectionResponse,
 		]{
 			Path:       searchInspectionRoute,
@@ -46,7 +46,7 @@ func (handler *apiHandler) searchInspectionRoutes(
 
 func (handler *apiHandler) inspectSearchJob(
 	request *http.Request,
-	input *opensplunkv1.InspectSearchJobRequest,
+	input *opensplunk.InspectSearchJobRequest,
 ) (*serializedSearchInspectionResponse, error) {
 	access, err := handler.searchInspectionAccess(request)
 	if err != nil {
@@ -135,7 +135,7 @@ func validSearchInspectionJobID(value string) bool {
 func searchInspectionResultToProto(
 	jobID string,
 	result searchinspection.Result,
-) (*opensplunkv1.InspectSearchJobResponse, error) {
+) (*opensplunk.InspectSearchJobResponse, error) {
 	outputKind, err := searchInspectionOutputKindToProto(result.Plan.Output.Kind)
 	if err != nil {
 		return nil, err
@@ -148,13 +148,13 @@ func searchInspectionResultToProto(
 	}
 
 	stages := make(
-		[]*opensplunkv1.SearchInspectionLogicalStage,
+		[]*opensplunk.SearchInspectionLogicalStage,
 		len(result.Plan.Stages),
 	)
 	for index, stage := range result.Plan.Stages {
-		var sourceRange *opensplunkv1.SourceRange
+		var sourceRange *opensplunk.SourceRange
 		if stage.SourceRange != nil {
-			sourceRange = &opensplunkv1.SourceRange{
+			sourceRange = &opensplunk.SourceRange{
 				Start: searchInspectionSourcePositionToProto(
 					stage.SourceRange.Start,
 				),
@@ -164,7 +164,7 @@ func searchInspectionResultToProto(
 			}
 		}
 		operatorProvenance := make(
-			[]*opensplunkv1.KnowledgeProvenance,
+			[]*opensplunk.KnowledgeProvenance,
 			len(stage.KnowledgeObjects),
 		)
 		for provenanceIndex, provenance := range stage.KnowledgeObjects {
@@ -172,7 +172,7 @@ func searchInspectionResultToProto(
 				searchInspectionRedactedProvenanceToProto(provenance)
 		}
 		outputProvenance := make(
-			[]*opensplunkv1.SearchInspectionOutputProvenance,
+			[]*opensplunk.SearchInspectionOutputProvenance,
 			len(stage.OutputProvenance),
 		)
 		for provenanceIndex, provenance := range stage.OutputProvenance {
@@ -186,14 +186,14 @@ func searchInspectionResultToProto(
 				)
 			}
 			outputProvenance[provenanceIndex] =
-				&opensplunkv1.SearchInspectionOutputProvenance{
+				&opensplunk.SearchInspectionOutputProvenance{
 					OutputField: strings.Clone(provenance.Field),
 					Provenance: searchInspectionRedactedProvenanceToProto(
 						object,
 					),
 				}
 		}
-		stages[index] = &opensplunkv1.SearchInspectionLogicalStage{
+		stages[index] = &opensplunk.SearchInspectionLogicalStage{
 			StageIndex:         stage.Index,
 			Operator:           strings.Clone(stage.Operator),
 			InputFields:        slices.Clone(stage.InputFields),
@@ -204,12 +204,12 @@ func searchInspectionResultToProto(
 		}
 	}
 	reads := make(
-		[]*opensplunkv1.SearchInspectionPhysicalRead,
+		[]*opensplunk.SearchInspectionPhysicalRead,
 		len(result.PhysicalPlan.Reads),
 	)
 	for readIndex, read := range result.PhysicalPlan.Reads {
 		indexes := make(
-			[]*opensplunkv1.SearchInspectionPhysicalIndex,
+			[]*opensplunk.SearchInspectionPhysicalIndex,
 			len(read.Indexes),
 		)
 		for index, physicalIndex := range read.Indexes {
@@ -217,24 +217,24 @@ func searchInspectionResultToProto(
 				physicalIndex,
 			)
 		}
-		reads[readIndex] = &opensplunkv1.SearchInspectionPhysicalRead{
+		reads[readIndex] = &opensplunk.SearchInspectionPhysicalRead{
 			Columns: slices.Clone(read.Columns),
 			Indexes: indexes,
 		}
 	}
 
-	return &opensplunkv1.InspectSearchJobResponse{
+	return &opensplunk.InspectSearchJobResponse{
 		SearchJobId: strings.Clone(jobID),
-		LogicalPlan: &opensplunkv1.SearchInspectionLogicalPlan{
+		LogicalPlan: &opensplunk.SearchInspectionLogicalPlan{
 			Stages:           stages,
 			ReferencedFields: slices.Clone(result.Plan.ReferencedFields),
-			Output: &opensplunkv1.SearchInspectionOutputShape{
+			Output: &opensplunk.SearchInspectionOutputShape{
 				Kind:             outputKind,
 				Fields:           slices.Clone(result.Plan.Output.Fields),
 				MaxDynamicFields: uint32(result.Plan.Output.MaxDynamicFields),
 			},
 		},
-		PhysicalPlan: &opensplunkv1.SearchInspectionPhysicalPlan{
+		PhysicalPlan: &opensplunk.SearchInspectionPhysicalPlan{
 			NodeTypes: slices.Clone(result.PhysicalPlan.NodeTypes),
 			Reads:     reads,
 		},
@@ -247,10 +247,10 @@ func searchInspectionResultToProto(
 
 func searchInspectionRedactedProvenanceToProto(
 	value searchinspection.RedactedObjectProvenance,
-) *opensplunkv1.KnowledgeProvenance {
-	return &opensplunkv1.KnowledgeProvenance{
-		Source: &opensplunkv1.KnowledgeProvenance_RedactedObject{
-			RedactedObject: &opensplunkv1.KnowledgeRedactedObjectProvenance{
+) *opensplunk.KnowledgeProvenance {
+	return &opensplunk.KnowledgeProvenance{
+		Source: &opensplunk.KnowledgeProvenance_RedactedObject{
+			RedactedObject: &opensplunk.KnowledgeRedactedObjectProvenance{
 				RedactedObjectOrdinal: value.Ordinal,
 				ObjectType:            value.ObjectType,
 				Stage:                 value.Stage,
@@ -290,8 +290,8 @@ func searchInspectionRedactedProvenanceByOrdinal(
 
 func searchInspectionSourcePositionToProto(
 	position searchinspection.SourcePosition,
-) *opensplunkv1.SourcePosition {
-	return &opensplunkv1.SourcePosition{
+) *opensplunk.SourcePosition {
+	return &opensplunk.SourcePosition{
 		ByteOffset: position.ByteOffset,
 		Line:       position.Line,
 		Column:     position.Column,
@@ -300,8 +300,8 @@ func searchInspectionSourcePositionToProto(
 
 func searchInspectionPhysicalIndexToProto(
 	index queryexec.ExplainIndex,
-) *opensplunkv1.SearchInspectionPhysicalIndex {
-	return &opensplunkv1.SearchInspectionPhysicalIndex{
+) *opensplunk.SearchInspectionPhysicalIndex {
+	return &opensplunk.SearchInspectionPhysicalIndex{
 		Type:             strings.Clone(index.Type),
 		Name:             strings.Clone(index.Name),
 		Keys:             slices.Clone(index.Keys),
@@ -314,16 +314,16 @@ func searchInspectionPhysicalIndexToProto(
 
 func searchInspectionOutputKindToProto(
 	kind searchinspection.OutputKind,
-) (opensplunkv1.SearchInspectionOutputKind, error) {
+) (opensplunk.SearchInspectionOutputKind, error) {
 	switch kind {
 	case searchinspection.OutputKindOpen:
-		return opensplunkv1.SearchInspectionOutputKind_SEARCH_INSPECTION_OUTPUT_KIND_OPEN, nil
+		return opensplunk.SearchInspectionOutputKind_SEARCH_INSPECTION_OUTPUT_KIND_OPEN, nil
 	case searchinspection.OutputKindStatic:
-		return opensplunkv1.SearchInspectionOutputKind_SEARCH_INSPECTION_OUTPUT_KIND_STATIC, nil
+		return opensplunk.SearchInspectionOutputKind_SEARCH_INSPECTION_OUTPUT_KIND_STATIC, nil
 	case searchinspection.OutputKindDynamic:
-		return opensplunkv1.SearchInspectionOutputKind_SEARCH_INSPECTION_OUTPUT_KIND_DYNAMIC, nil
+		return opensplunk.SearchInspectionOutputKind_SEARCH_INSPECTION_OUTPUT_KIND_DYNAMIC, nil
 	default:
-		return opensplunkv1.SearchInspectionOutputKind_SEARCH_INSPECTION_OUTPUT_KIND_UNSPECIFIED,
+		return opensplunk.SearchInspectionOutputKind_SEARCH_INSPECTION_OUTPUT_KIND_UNSPECIFIED,
 			errors.New("invalid search inspection output kind")
 	}
 }
@@ -384,18 +384,18 @@ func searchInspectionRequestContextError(ctx context.Context) error {
 	return canceledRequestError(ctx, "search inspection request was canceled")
 }
 
-type serializedSearchInspectionResponse = boundedProtoResponse[*opensplunkv1.InspectSearchJobResponse]
+type serializedSearchInspectionResponse = boundedProtoResponse[*opensplunk.InspectSearchJobResponse]
 
 type serializedSearchInspectionCodec = boundedProtoCodec[
-	*opensplunkv1.InspectSearchJobRequest,
-	*opensplunkv1.InspectSearchJobResponse,
+	*opensplunk.InspectSearchJobRequest,
+	*opensplunk.InspectSearchJobResponse,
 ]
 
 func newSerializedSearchInspectionCodec() *serializedSearchInspectionCodec {
 	return newBoundedProtoCodec(
 		codec.NewProtoCodec[
-			*opensplunkv1.InspectSearchJobRequest,
-			*opensplunkv1.InspectSearchJobResponse,
+			*opensplunk.InspectSearchJobRequest,
+			*opensplunk.InspectSearchJobResponse,
 		](),
 		boundedProtoCodecOptions{
 			stateError:   "search inspection serialization state is invalid",

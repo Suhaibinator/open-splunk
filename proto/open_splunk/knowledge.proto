@@ -1,0 +1,439 @@
+syntax = "proto3";
+
+package open_splunk;
+
+import "google/protobuf/timestamp.proto";
+import "open_splunk/common.proto";
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk;opensplunk";
+
+// KnowledgeObjectType is closed for mutation. Servers reject unspecified,
+// unknown, and unsupported values rather than treating a future type as a
+// Tier-1 object.
+enum KnowledgeObjectType {
+  KNOWLEDGE_OBJECT_TYPE_UNSPECIFIED = 0;
+  KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION = 1;
+  KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS = 2;
+  KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD = 3;
+}
+
+// KnowledgeObjectState is closed for mutation. DELETED is a retained terminal
+// tombstone created only by the delete operation and is never executable. Its
+// current registry identity remains the authorization authority for an
+// administrator inspecting the tombstone or any retained historical version.
+enum KnowledgeObjectState {
+  KNOWLEDGE_OBJECT_STATE_UNSPECIFIED = 0;
+  KNOWLEDGE_OBJECT_STATE_DRAFT = 1;
+  KNOWLEDGE_OBJECT_STATE_ACTIVE = 2;
+  KNOWLEDGE_OBJECT_STATE_DISABLED = 3;
+  KNOWLEDGE_OBJECT_STATE_QUARANTINED = 4;
+  KNOWLEDGE_OBJECT_STATE_DELETED = 5;
+}
+
+// KnowledgeSearchStage fixes the initial search-time execution sequence.
+// Numeric order is not an execution authority; planners switch on the enum and
+// reject unsupported values.
+enum KnowledgeSearchStage {
+  KNOWLEDGE_SEARCH_STAGE_UNSPECIFIED = 0;
+  KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION = 1;
+  KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS = 2;
+  KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD = 3;
+}
+
+enum KnowledgeSelectorMatchKind {
+  KNOWLEDGE_SELECTOR_MATCH_KIND_UNSPECIFIED = 0;
+  KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT = 1;
+  KNOWLEDGE_SELECTOR_MATCH_KIND_WILDCARD = 2;
+}
+
+message KnowledgeSelectorPattern {
+  // match_kind is derived from normalized value. A submitted disagreement is
+  // invalid rather than alternate matching authority.
+  KnowledgeSelectorMatchKind match_kind = 1;
+  string value = 2;
+}
+
+// Dimensions are ANDed and patterns within one dimension are ORed. An empty
+// dimension is unrestricted. Normalized definitions collapse canonically
+// duplicate globs and order every pattern list by value UTF-8 bytes.
+message KnowledgeSelector {
+  repeated KnowledgeSelectorPattern index_patterns = 1;
+  repeated KnowledgeSelectorPattern host_patterns = 2;
+  repeated KnowledgeSelectorPattern source_patterns = 3;
+  repeated KnowledgeSelectorPattern sourcetype_patterns = 4;
+}
+
+enum KnowledgeOverwriteBehavior {
+  KNOWLEDGE_OVERWRITE_BEHAVIOR_UNSPECIFIED = 0;
+  KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING = 1;
+  KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING = 2;
+}
+
+message RegexFieldExtractionDefinition {
+  string pattern = 1;
+  repeated string output_fields = 2;
+}
+
+message JsonFieldExtractionDefinition {
+  string path = 1;
+  string output_field = 2;
+}
+
+message FieldExtractionDefinition {
+  string input_field = 1;
+  KnowledgeOverwriteBehavior overwrite_behavior = 4;
+  oneof extraction {
+    RegexFieldExtractionDefinition regex = 2;
+    JsonFieldExtractionDefinition json = 3;
+  }
+}
+
+message FieldAliasDefinition {
+  string source_field = 1;
+  string destination_field = 2;
+  KnowledgeOverwriteBehavior overwrite_behavior = 3;
+}
+
+message CalculatedFieldDefinition {
+  string destination_field = 1;
+  string expression = 2;
+  KnowledgeOverwriteBehavior overwrite_behavior = 3;
+}
+
+// KnowledgeObjectDefinition is the normalized, digestible definition body.
+// app_id, name, and sharing_scope deliberately repeat indexed registry fields;
+// disagreement after decoding is corruption. Executable objects are ordered by
+// stage, normalized binary name, and stable object ID; clients cannot author an
+// execution-order override. Field numbers 13 through 31 are allocated
+// exclusively to future length-delimited body oneof alternatives. Future
+// ordinary top-level metadata fields must use numbers 32 or greater, must not
+// use the protobuf compiler-reserved range 19000 through 19999, and must be
+// declared in ascending field-number order before the body oneof. This source
+// declaration order is part of the cross-language deterministic wire contract:
+// future metadata is encoded before exactly one future body. This allocation
+// lets an older server distinguish one unreadable inactive body from future
+// metadata while preserving the complete canonical stored message. For such an
+// inactive opaque body only, an older reader may display the sealed registry
+// object type but cannot infer or execute semantic type authority from this
+// message.
+message KnowledgeObjectDefinition {
+  string app_id = 1;
+  string name = 2;
+  optional string description = 3;
+  SharingScope sharing_scope = 4;
+  KnowledgeSelector selector = 5;
+  oneof body {
+    FieldExtractionDefinition field_extraction = 10;
+    FieldAliasDefinition field_alias = 11;
+    CalculatedFieldDefinition calculated_field = 12;
+  }
+}
+
+// KnowledgeObject is the safe control-plane projection. definition_sha256 is
+// exactly 32 bytes. version is an optimistic token and increases on every
+// successful definition or state mutation. A quarantined projection has no
+// definition because its suspect bytes remain forensic storage only. Lifecycle
+// timestamps are exact immutable transition markers. quarantine_reason is a
+// bounded closed server reason code, never free-form diagnostic text.
+message KnowledgeObject {
+  string knowledge_object_id = 1;
+  string tenant_id = 2;
+  string app_id = 3;
+  string owner_id = 4;
+  KnowledgeObjectType object_type = 5;
+  string name = 6;
+  uint64 version = 7;
+  SharingScope sharing_scope = 8;
+  KnowledgeObjectState state = 9;
+  KnowledgeObjectDefinition definition = 10;
+  bytes definition_sha256 = 11;
+  google.protobuf.Timestamp created_at = 12;
+  google.protobuf.Timestamp updated_at = 13;
+  optional google.protobuf.Timestamp disabled_at = 14;
+  optional google.protobuf.Timestamp quarantined_at = 15;
+  optional google.protobuf.Timestamp deleted_at = 16;
+  optional string quarantine_reason = 17;
+}
+
+message KnowledgeObjectVersionReference {
+  string knowledge_object_id = 1;
+  uint64 version = 2;
+  bytes definition_sha256 = 3;
+}
+
+// Lookup assets are referenced here so snapshots and dependency messages are
+// forward-compatible with KO-2. Upload, publication, and row contracts are not
+// part of the unadvertised KO-0 surface.
+message KnowledgeLookupAssetVersionReference {
+  string lookup_asset_id = 1;
+  uint64 version = 2;
+  uint64 size_bytes = 3;
+  bytes content_sha256 = 4;
+}
+
+enum KnowledgeDependencyRole {
+  KNOWLEDGE_DEPENDENCY_ROLE_UNSPECIFIED = 0;
+  KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT = 1;
+  KNOWLEDGE_DEPENDENCY_ROLE_LOOKUP_ASSET = 2;
+  KNOWLEDGE_DEPENDENCY_ROLE_MACRO_REFERENCE = 3;
+  KNOWLEDGE_DEPENDENCY_ROLE_EVENT_TYPE_REFERENCE = 4;
+}
+
+message KnowledgeDependencyTarget {
+  oneof target {
+    KnowledgeObjectVersionReference object = 1;
+    KnowledgeLookupAssetVersionReference lookup_asset = 2;
+  }
+}
+
+// topological_depth is the bounded longest outgoing-path depth of the source
+// object in edges; a leaf has depth zero. Snapshot dependencies sort by source
+// depth, explicit source stage rank, source ID/version, target kind, target
+// ID/version, then role. canonical_ordinal is the zero-based position in that
+// order and the repeated list is encoded in ascending ordinal.
+message KnowledgeObjectDependency {
+  KnowledgeObjectVersionReference source = 1;
+  KnowledgeDependencyTarget target = 2;
+  KnowledgeDependencyRole role = 3;
+  KnowledgeSearchStage source_stage = 4;
+  KnowledgeSearchStage target_stage = 5;
+  uint32 topological_depth = 6;
+  uint32 canonical_ordinal = 7;
+}
+
+message KnowledgeAuthoredProvenance {
+  SourceRange source_range = 1;
+}
+
+// definition_location is a stable field path within the normalized object,
+// never the definition text itself. This projection is emitted only after a
+// response-time current-policy authorization check.
+message KnowledgeAuthorizedObjectProvenance {
+  string knowledge_object_id = 1;
+  uint64 knowledge_object_version = 2;
+  KnowledgeObjectType object_type = 3;
+  string object_name = 4;
+  string definition_location = 5;
+  KnowledgeSearchStage stage = 6;
+}
+
+// A currently unauthorized historical reference retains only its bounded
+// transformation kind/stage and a response-local fixed redacted ordinal. It
+// cannot carry an object identity, name, version, or definition location.
+message KnowledgeRedactedObjectProvenance {
+  uint32 redacted_object_ordinal = 1;
+  KnowledgeObjectType object_type = 2;
+  KnowledgeSearchStage stage = 3;
+}
+
+message KnowledgeProvenance {
+  oneof source {
+    KnowledgeAuthoredProvenance authored = 1;
+    KnowledgeAuthorizedObjectProvenance authorized_object = 2;
+    KnowledgeRedactedObjectProvenance redacted_object = 3;
+  }
+}
+
+// KnowledgeSnapshotObject contains detached immutable definition bytes in
+// typed form. resolution_ordinal is unique and contiguous across objects;
+// stage_ordinal is unique and contiguous within one stage. The repeated object
+// list is ordered by resolution_ordinal.
+message KnowledgeSnapshotObject {
+  uint32 resolution_ordinal = 1;
+  KnowledgeSearchStage stage = 2;
+  uint32 stage_ordinal = 3;
+  string knowledge_object_id = 4;
+  uint64 version = 5;
+  KnowledgeObjectType object_type = 6;
+  string name = 7;
+  string app_id = 8;
+  string owner_id = 9;
+  SharingScope sharing_scope = 10;
+  KnowledgeObjectDefinition definition = 11;
+  bytes definition_sha256 = 12;
+}
+
+// KnowledgeSnapshotLookupAsset binds one immutable logical lookup definition
+// revision to the exact immutable physical CSV asset it authorized. Entries
+// sort by lookup_id, lookup_version, then the complete asset reference, and
+// asset_ordinal is the contiguous position in that order.
+message KnowledgeSnapshotLookupAsset {
+  uint32 asset_ordinal = 1;
+  KnowledgeLookupAssetVersionReference asset = 2;
+  // The logical catalog identity and immutable definition version which
+  // authorized this physical asset. Metadata-only replacements intentionally
+  // retain the same asset reference while advancing lookup_version.
+  string lookup_id = 3;
+  uint64 lookup_version = 4;
+}
+
+// KnowledgeSnapshotShadow records a visible lower-precedence object that lost
+// whole-object resolution. Entries sort by winner resolution ordinal, losing
+// precedence nearest-first (private, app, global), then loser object ID;
+// shadow_ordinal is the zero-based position in that order.
+message KnowledgeSnapshotShadow {
+  uint32 shadow_ordinal = 1;
+  uint32 winner_resolution_ordinal = 2;
+  string knowledge_object_id = 3;
+  uint64 version = 4;
+  KnowledgeObjectType object_type = 5;
+  string name = 6;
+  string app_id = 7;
+  string owner_id = 8;
+  SharingScope sharing_scope = 9;
+  bytes definition_sha256 = 10;
+}
+
+enum KnowledgeSnapshotWarningKind {
+  KNOWLEDGE_SNAPSHOT_WARNING_KIND_UNSPECIFIED = 0;
+  KNOWLEDGE_SNAPSHOT_WARNING_KIND_SHADOWED_OBJECT = 1;
+  KNOWLEDGE_SNAPSHOT_WARNING_KIND_EXPENSIVE_GLOBAL_OBJECT = 2;
+}
+
+// Warnings use closed codes and ordinal references rather than free-form text
+// or definition contents. Entries are ordered by contiguous warning_ordinal.
+message KnowledgeSnapshotWarning {
+  uint32 warning_ordinal = 1;
+  KnowledgeSnapshotWarningKind kind = 2;
+  optional uint32 object_resolution_ordinal = 3;
+  optional uint32 shadow_ordinal = 4;
+}
+
+// KnowledgeSnapshotBudgetCharges contains canonical snapshot structure, exact
+// knowledge-only semantic contributions, and the explicitly identified
+// authored-plus-knowledge compiler charges. Shared budgets which have no wire
+// field (including extraction outputs, JSON evaluation work, and predicate
+// leaves) are still enforced by the sealed compiler evidence before a snapshot
+// can be finalized.
+message KnowledgeSnapshotBudgetCharges {
+  uint32 executable_objects = 1;
+  uint32 selector_patterns = 2;
+  uint64 selector_wildcard_work_units = 3;
+  // The byte charge is the length of deterministic KnowledgeSnapshot protobuf
+  // bytes after both snapshot_sha256 and this field are cleared. The charge is
+  // then set before the final digest serialization, avoiding a self-reference.
+  uint64 canonical_snapshot_bytes = 4;
+  // Every executable object is one node, including isolated objects.
+  uint32 dependency_nodes = 5;
+  uint32 dependency_edges = 6;
+  // Maximum longest outgoing-path depth in edges; isolated objects and leaves
+  // have depth zero.
+  uint32 dependency_depth = 7;
+
+  // Exact knowledge-origin logical-operator occurrences in the canonical
+  // pre-optimization knowledge prelude. A fused parallel operator counts once;
+  // authored operators, scans, and SQL-only helpers do not count.
+  uint32 generated_operators = 8;
+
+  // Exact knowledge output occurrences. Every regex named capture and every
+  // JSON, alias, or calculated destination counts, even when selectors are
+  // disjoint. Authored outputs and compiler-private columns do not count.
+  uint32 generated_fields = 9;
+
+  // Extraction/rex program occurrences from knowledge regex definitions plus
+  // authored rex. Calculated-field match() programs are a separate budget.
+  uint32 regex_programs = 10;
+
+  // Exact sum of bounded RE2 program work for precisely regex_programs.
+  uint64 regex_work_units = 11;
+
+  // The admitted cumulative per-row capture-byte guard: zero when
+  // regex_programs is zero, otherwise exactly the compatibility 4 MiB guard.
+  uint64 regex_capture_bytes = 12;
+
+  // Exact winning knowledge calculated-field root-expression occurrences.
+  // Authored eval assignments do not count in this field.
+  uint32 scalar_expressions = 13;
+
+  // Exact scalar and Boolean/predicate AST node occurrences in the field-13
+  // roots before optimization. Repeated occurrences count repeatedly.
+  uint32 scalar_expression_nodes = 14;
+
+  // Exact Go byte length of the final sealed parameterized SQL. Bind argument
+  // rendering, executor wrapper text, and ClickHouse settings are excluded.
+  uint64 generated_sql_bytes = 15;
+}
+
+// KnowledgeSnapshot is the complete immutable knowledge authority admitted for
+// one search. It contains no maps or floating-point values. objects are ordered
+// by resolution_ordinal, dependencies by canonical_ordinal, and lookup_assets
+// by contiguous asset_ordinal. effective_authorized_indexes are normalized and
+// binary sorted; shadows and warnings use their contiguous ordinals. Unknown
+// fields at any depth are invalid and must be rejected and cleared before
+// hashing. snapshot_sha256 is calculated over deterministic canonical protobuf
+// bytes with that field absent and is exactly 32 bytes. Wall-clock admission
+// time and every other timestamp are deliberately outside this digest message.
+// tenant_catalog_state_token is the exact 32-byte restore-fork-safe commitment
+// paired with tenant_catalog_revision and is included in the digest.
+message KnowledgeSnapshot {
+  reserved 7;
+  reserved "compiler_compatibility_version";
+  uint32 format_version = 1;
+  string tenant_id = 2;
+  string principal_id = 3;
+  string app_id = 4;
+  uint64 tenant_catalog_revision = 5;
+  optional uint64 app_catalog_revision = 6;
+  repeated KnowledgeSnapshotObject objects = 8;
+  repeated KnowledgeObjectDependency dependencies = 9;
+  repeated KnowledgeSnapshotLookupAsset lookup_assets = 10;
+  bytes snapshot_sha256 = 11;
+  repeated string effective_authorized_indexes = 12;
+  repeated KnowledgeSnapshotShadow shadows = 13;
+  repeated KnowledgeSnapshotWarning warnings = 14;
+  KnowledgeSnapshotBudgetCharges budget_charges = 15;
+  bytes tenant_catalog_state_token = 16;
+}
+
+// KnowledgeSnapshotRef is the bounded, definition-free identity retained by
+// generic search lifecycle records. Absence means knowledge resolution was
+// disabled for the attempt; a present reference with object_count zero is an
+// enabled, canonically empty knowledge snapshot.
+message KnowledgeSnapshotRef {
+  reserved 5, 7;
+  reserved "compiler_compatibility_version", "lookup_asset_count_unknown";
+  bytes snapshot_sha256 = 1;
+  uint64 tenant_catalog_revision = 2;
+  bytes tenant_catalog_state_token = 3;
+  uint32 object_count = 4;
+  // Exact lookup identities are retained on KnowledgeSnapshotSummary; this
+  // count lets compact lifecycle references prove whether that inventory is
+  // expected without carrying definition or row payloads.
+  uint32 lookup_asset_count = 6;
+}
+
+// KnowledgeSnapshotAuthorizedObjectSummary is current-policy-authorized
+// diagnostic identity only. It never carries a definition body, selector,
+// dependency, digest, or compiler output.
+message KnowledgeSnapshotAuthorizedObjectSummary {
+  string knowledge_object_id = 1;
+  uint64 version = 2;
+  string name = 3;
+}
+
+// KnowledgeSnapshotObjectSummary preserves canonical position and execution
+// type while allowing response projections to remove stale object identity.
+message KnowledgeSnapshotObjectSummary {
+  uint32 resolution_ordinal = 1;
+  KnowledgeObjectType object_type = 2;
+  KnowledgeSearchStage stage = 3;
+
+  oneof disclosure {
+    KnowledgeSnapshotAuthorizedObjectSummary authorized_object = 4;
+    // Must be true. Identity, name, and version are structurally absent.
+    bool redacted = 5;
+  }
+}
+
+// KnowledgeSnapshotSummary carries at most the canonical first 64 object
+// summaries. object_count in ref is always the exact total; objects_truncated
+// is true exactly when the retained prefix is shorter than that total.
+message KnowledgeSnapshotSummary {
+  KnowledgeSnapshotRef ref = 1;
+  repeated KnowledgeSnapshotObjectSummary objects = 2;
+  bool objects_truncated = 3;
+  // The complete canonical unique lookup-version inventory. Unlike objects,
+  // this list is never truncated because the compiler admits at most sixteen
+  // lookup stages and repeated use of one version is deduplicated.
+  repeated KnowledgeSnapshotLookupAsset lookup_assets = 4;
+}

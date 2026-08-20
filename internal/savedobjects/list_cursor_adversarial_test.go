@@ -12,21 +12,21 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 )
 
 const adversarialOwner = "cursor-owner"
 
 var (
-	adversarialSorts = []opensplunkv1.SavedSearchSortBy{
-		opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_NAME,
-		opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_CREATED_AT,
-		opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_UPDATED_AT,
+	adversarialSorts = []opensplunk.SavedSearchSortBy{
+		opensplunk.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_NAME,
+		opensplunk.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_CREATED_AT,
+		opensplunk.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_UPDATED_AT,
 	}
-	adversarialDirections = []opensplunkv1.SortDirection{
-		opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING,
-		opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING,
+	adversarialDirections = []opensplunk.SortDirection{
+		opensplunk.SortDirection_SORT_DIRECTION_ASCENDING,
+		opensplunk.SortDirection_SORT_DIRECTION_DESCENDING,
 	}
 	adversarialNames = []string{"dup", "dup", "zeta", "dup", "alpha", "mid"}
 	adversarialApps  = []string{"app_a", "app_b", "app_a", "app_c", "app_b", "app_c"}
@@ -111,7 +111,7 @@ func TestListRejectsMismatchedCursorKeyShapes(t *testing.T) {
 	}
 	for _, sortBy := range adversarialSorts {
 		for _, direction := range adversarialDirections {
-			stringSort := sortBy == opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_NAME
+			stringSort := sortBy == opensplunk.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_NAME
 			for shape, cursor := range shapes {
 				request := ListRequest{PageSize: 2, SortBy: sortBy, SortDirection: direction}
 				request.PageToken = adversarialToken(t, request, cursor)
@@ -134,12 +134,12 @@ func TestListRejectsMismatchedCursorKeyShapes(t *testing.T) {
 // operator with int64 saturation values no clock can produce.
 func TestListAcceptsExtremeCursorIntegerKeys(t *testing.T) {
 	store, ids := openTiedStore(t)
-	ascending := opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING
-	descending := opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING
+	ascending := opensplunk.SortDirection_SORT_DIRECTION_ASCENDING
+	descending := opensplunk.SortDirection_SORT_DIRECTION_DESCENDING
 	for _, sortBy := range adversarialSorts[1:] {
 		for _, test := range []struct {
 			key       int64
-			direction opensplunkv1.SortDirection
+			direction opensplunk.SortDirection
 			want      int
 		}{
 			{math.MinInt64, ascending, len(ids)}, {math.MinInt64, descending, 0},
@@ -165,8 +165,8 @@ func TestListAcceptsExtremeCursorIntegerKeys(t *testing.T) {
 // openTiedStore fixture: sort key first, saved_search_id as the only tiebreak.
 func tiedOrder(
 	ids []string,
-	sortBy opensplunkv1.SavedSearchSortBy,
-	direction opensplunkv1.SortDirection,
+	sortBy opensplunk.SavedSearchSortBy,
+	direction opensplunk.SortDirection,
 ) []string {
 	names := make(map[string]string, len(ids))
 	for position, id := range ids {
@@ -174,13 +174,13 @@ func tiedOrder(
 	}
 	want := slices.Clone(ids)
 	slices.SortFunc(want, func(left, right string) int {
-		if sortBy == opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_NAME &&
+		if sortBy == opensplunk.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_NAME &&
 			names[left] != names[right] {
 			return strings.Compare(names[left], names[right])
 		}
 		return strings.Compare(left, right)
 	})
-	if direction == opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING {
+	if direction == opensplunk.SortDirection_SORT_DIRECTION_DESCENDING {
 		slices.Reverse(want)
 	}
 	return want

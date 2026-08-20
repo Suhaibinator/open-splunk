@@ -17,7 +17,7 @@ import (
 	"unicode/utf8"
 	"unsafe"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
@@ -818,10 +818,6 @@ func (manager *Manager) Create(ctx context.Context, access searchjobs.AccessScop
 		}
 		return Job{}, abort(ErrInvalidColumns)
 	}
-	compilerVersion, err := admittedCompilerVersion(lease)
-	if err != nil {
-		return Job{}, abort(ErrSourceUnavailable)
-	}
 	knowledgeSnapshot, err := admittedKnowledgeSnapshot(lease)
 	if err != nil {
 		return Job{}, abort(ErrSourceUnavailable)
@@ -842,10 +838,6 @@ func (manager *Manager) Create(ctx context.Context, access searchjobs.AccessScop
 		return Job{}, abort(ErrSourceUnavailable)
 	}
 	resolvedMetadata, ok := checkedAddUint64(resolvedMetadata, knowledgeMetadata)
-	if !ok {
-		return Job{}, abort(ErrCapacity)
-	}
-	resolvedMetadata, ok = checkedAddUint64(resolvedMetadata, uint64(len(compilerVersion)))
 	if !ok {
 		return Job{}, abort(ErrCapacity)
 	}
@@ -877,7 +869,6 @@ func (manager *Manager) Create(ctx context.Context, access searchjobs.AccessScop
 			ID:                id,
 			Version:           1,
 			SearchJobID:       strings.Clone(normalized.SearchJobID),
-			CompilerVersion:   compilerVersion,
 			Format:            normalized.Format,
 			Columns:           append([]string(nil), normalized.Columns...),
 			RowLimit:          normalized.RowLimit,
@@ -1012,7 +1003,7 @@ func requestedMetadataBytes(artifactDir string, access searchjobs.AccessScope, s
 	return total, nil
 }
 
-func knowledgeSnapshotMetadataBytes(summary *opensplunkv1.KnowledgeSnapshotSummary) (uint64, error) {
+func knowledgeSnapshotMetadataBytes(summary *opensplunk.KnowledgeSnapshotSummary) (uint64, error) {
 	if summary == nil {
 		return 0, nil
 	}

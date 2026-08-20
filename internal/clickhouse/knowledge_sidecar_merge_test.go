@@ -5,18 +5,18 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 )
 
 func TestCompileKnowledgeSidecarMergeLazilyBindsOneDestination(t *testing.T) {
-	program := knowledgeFusedFieldProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{
+	program := knowledgeFusedFieldProgram(t, []*opensplunk.KnowledgeObjectDefinition{
 		knowledgeAliasSidecarDefinition(
 			"copy-payload",
 			"payload",
 			"copied_payload",
 			"east",
-			opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+			opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
 		),
 	})
 	input := knowledgeExtractionStageState()
@@ -70,20 +70,20 @@ func TestCompileKnowledgeSidecarMergeLazilyBindsOneDestination(t *testing.T) {
 }
 
 func TestCompileKnowledgeSidecarMergeGroupsDisjointWritersAtomically(t *testing.T) {
-	program := knowledgeFusedFieldProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{
+	program := knowledgeFusedFieldProgram(t, []*opensplunk.KnowledgeObjectDefinition{
 		knowledgeAliasSidecarDefinition(
 			"a-east",
 			"payload",
 			"shared_copy",
 			"east",
-			opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+			opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
 		),
 		knowledgeAliasSidecarDefinition(
 			"b-west",
 			"alternate",
 			"shared_copy",
 			"west",
-			opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+			opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 		),
 	})
 	compiled, err := compileKnowledgeAliasStage(
@@ -121,13 +121,13 @@ func TestCompileKnowledgeSidecarMergeGroupsDisjointWritersAtomically(t *testing.
 }
 
 func TestCompileKnowledgeCalculatedSidecarsRetainOnlyDirectFieldsAndRejectForgery(t *testing.T) {
-	aliasProgram := knowledgeFusedFieldProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{
+	aliasProgram := knowledgeFusedFieldProgram(t, []*opensplunk.KnowledgeObjectDefinition{
 		knowledgeAliasSidecarDefinition(
 			"alias",
 			"payload",
 			"aliased_payload",
 			"east",
-			opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+			opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 		),
 	})
 	aliasStage, err := compileKnowledgeAliasStage(
@@ -139,7 +139,7 @@ func TestCompileKnowledgeCalculatedSidecarsRetainOnlyDirectFieldsAndRejectForger
 	if err != nil {
 		t.Fatalf("compile alias stage: %v", err)
 	}
-	calculatedProgram := knowledgeFusedFieldProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{
+	calculatedProgram := knowledgeFusedFieldProgram(t, []*opensplunk.KnowledgeObjectDefinition{
 		knowledgeCalculatedSidecarDefinition("a-direct", "direct_copy", "aliased_payload"),
 		knowledgeCalculatedSidecarDefinition("b-lower", "lower_copy", "lower(aliased_payload)"),
 	})
@@ -224,13 +224,13 @@ func TestCompileKnowledgeCalculatedSidecarsRetainOnlyDirectFieldsAndRejectForger
 }
 
 func TestCompileKnowledgeSidecarMergeRejectsReferencedStateReplay(t *testing.T) {
-	program := knowledgeFusedFieldProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{
+	program := knowledgeFusedFieldProgram(t, []*opensplunk.KnowledgeObjectDefinition{
 		knowledgeAliasSidecarDefinition(
 			"copy-host",
 			"host",
 			"copied_host",
 			"east",
-			opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+			opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 		),
 	})
 	operation := program.Aliases()[0]
@@ -275,7 +275,7 @@ func TestCompileKnowledgeSidecarMergeRejectsReferencedStateReplay(t *testing.T) 
 }
 
 func TestCompileKnowledgeExtractionSidecarsKeepRawPriorLazy(t *testing.T) {
-	program := knowledgePreparationProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{
+	program := knowledgePreparationProgram(t, []*opensplunk.KnowledgeObjectDefinition{
 		knowledgeRegexStageDefinition(
 			"replace-payload",
 			`(?P<payload>[a-z]+)`,
@@ -321,7 +321,7 @@ func TestCompileKnowledgeExtractionSidecarsKeepRawPriorLazy(t *testing.T) {
 }
 
 func TestCompileKnowledgeExtractionSidecarsPreservePriorAndClearScalarWrites(t *testing.T) {
-	program := knowledgePreparationProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{
+	program := knowledgePreparationProgram(t, []*opensplunk.KnowledgeObjectDefinition{
 		knowledgeJSONStageDefinition("json", "payload", "payload.value", "east"),
 	})
 	state := knowledgeExtractionStageState()
@@ -387,13 +387,13 @@ func TestCompileKnowledgeExtractionSidecarsPreservePriorAndClearScalarWrites(t *
 }
 
 func TestCompileKnowledgeContainerSidecarPathReachesCompilerBoundary(t *testing.T) {
-	program := knowledgeFusedFieldProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{
+	program := knowledgeFusedFieldProgram(t, []*opensplunk.KnowledgeObjectDefinition{
 		knowledgeAliasSidecarDefinition(
 			"container-alias",
 			"payload",
 			"copied_payload",
 			"east",
-			opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+			opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 		),
 	})
 	logical, err := plan.InjectKnowledgePrelude(buildPlan(t, `index=gradethis`), program)
@@ -413,16 +413,16 @@ func knowledgeAliasSidecarDefinition(
 	source string,
 	destination string,
 	index string,
-	overwrite opensplunkv1.KnowledgeOverwriteBehavior,
-) *opensplunkv1.KnowledgeObjectDefinition {
-	return &opensplunkv1.KnowledgeObjectDefinition{
+	overwrite opensplunk.KnowledgeOverwriteBehavior,
+) *opensplunk.KnowledgeObjectDefinition {
+	return &opensplunk.KnowledgeObjectDefinition{
 		AppId: "app", Name: name,
-		SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-		Selector: &opensplunkv1.KnowledgeSelector{
-			IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{Value: index}},
+		SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+		Selector: &opensplunk.KnowledgeSelector{
+			IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{{Value: index}},
 		},
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{
-			FieldAlias: &opensplunkv1.FieldAliasDefinition{
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{
+			FieldAlias: &opensplunk.FieldAliasDefinition{
 				SourceField:       source,
 				DestinationField:  destination,
 				OverwriteBehavior: overwrite,
@@ -435,15 +435,15 @@ func knowledgeCalculatedSidecarDefinition(
 	name string,
 	destination string,
 	expression string,
-) *opensplunkv1.KnowledgeObjectDefinition {
-	return &opensplunkv1.KnowledgeObjectDefinition{
+) *opensplunk.KnowledgeObjectDefinition {
+	return &opensplunk.KnowledgeObjectDefinition{
 		AppId: "app", Name: name,
-		SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-		Body: &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{
-			CalculatedField: &opensplunkv1.CalculatedFieldDefinition{
+		SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+		Body: &opensplunk.KnowledgeObjectDefinition_CalculatedField{
+			CalculatedField: &opensplunk.CalculatedFieldDefinition{
 				DestinationField:  destination,
 				Expression:        expression,
-				OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+				OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 			},
 		},
 	}

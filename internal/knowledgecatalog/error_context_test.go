@@ -7,7 +7,7 @@ import (
 	"slices"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -330,15 +330,15 @@ func TestWriterErrorContextUsesCurrentAuthorityAndCancellationBoundary(t *testin
 			t.Fatalf("Update baseline = (%d, %v), want 2/nil", version, err)
 		}
 
-		staleDefinition := proto.Clone(created.GetKnowledgeObject().GetDefinition()).(*opensplunkv1.KnowledgeObjectDefinition)
+		staleDefinition := proto.Clone(created.GetKnowledgeObject().GetDefinition()).(*opensplunk.KnowledgeObjectDefinition)
 		staleDescription := "stale request body"
 		staleDefinition.Description = &staleDescription
 		staleDefinition.AppId = testAppTwo
-		staleDefinition.SharingScope = opensplunkv1.SharingScope_SHARING_SCOPE_APP
+		staleDefinition.SharingScope = opensplunk.SharingScope_SHARING_SCOPE_APP
 		_, err = harness.writer.Update(
 			harness.actorContext,
 			harness.scope,
-			&opensplunkv1.UpdateKnowledgeObjectRequest{
+			&opensplunk.UpdateKnowledgeObjectRequest{
 				KnowledgeObjectId: created.GetKnowledgeObject().GetKnowledgeObjectId(),
 				ExpectedVersion:   1,
 				Definition:        staleDefinition,
@@ -366,7 +366,7 @@ func TestWriterErrorContextUsesCurrentAuthorityAndCancellationBoundary(t *testin
 		_, err = harness.writer.Update(
 			harness.actorContext,
 			unauthorizedScope,
-			&opensplunkv1.UpdateKnowledgeObjectRequest{
+			&opensplunk.UpdateKnowledgeObjectRequest{
 				KnowledgeObjectId: created.GetKnowledgeObject().GetKnowledgeObjectId(),
 				ExpectedVersion:   2,
 				Definition:        staleDefinition,
@@ -438,7 +438,7 @@ func TestWriterReplayErrorContextAndDisposition(t *testing.T) {
 	}
 	harness.writer.hook = nil
 
-	alteredCreate := proto.Clone(createRequest).(*opensplunkv1.CreateKnowledgeObjectRequest)
+	alteredCreate := proto.Clone(createRequest).(*opensplunk.CreateKnowledgeObjectRequest)
 	alteredCreate.Definition.Name = "context-replay-altered"
 	_, err = harness.writer.Create(harness.actorContext, harness.scope, alteredCreate)
 	if !errors.Is(err, ErrIdempotencyConflict) {
@@ -467,10 +467,10 @@ func TestWriterReplayErrorContextAndDisposition(t *testing.T) {
 	}
 
 	harness.writer.hook = nil
-	updatedDefinition := proto.Clone(created.GetKnowledgeObject().GetDefinition()).(*opensplunkv1.KnowledgeObjectDefinition)
+	updatedDefinition := proto.Clone(created.GetKnowledgeObject().GetDefinition()).(*opensplunk.KnowledgeObjectDefinition)
 	updatedDescription := "committed replay update"
 	updatedDefinition.Description = &updatedDescription
-	updateRequest := &opensplunkv1.UpdateKnowledgeObjectRequest{
+	updateRequest := &opensplunk.UpdateKnowledgeObjectRequest{
 		KnowledgeObjectId: created.GetKnowledgeObject().GetKnowledgeObjectId(),
 		ExpectedVersion:   1,
 		Definition:        updatedDefinition,
@@ -513,7 +513,7 @@ func TestWriterReplayErrorContextAndDisposition(t *testing.T) {
 		mutationRouteCreate,
 		createRequest.GetClientRequestId(),
 	)
-	corruptConflict := proto.Clone(createRequest).(*opensplunkv1.CreateKnowledgeObjectRequest)
+	corruptConflict := proto.Clone(createRequest).(*opensplunk.CreateKnowledgeObjectRequest)
 	corruptConflict.Definition.Name = "context-replay-corrupt-conflict"
 	_, err = harness.writer.Create(harness.actorContext, harness.scope, corruptConflict)
 	if !errors.Is(err, ErrIdempotencyConflict) {

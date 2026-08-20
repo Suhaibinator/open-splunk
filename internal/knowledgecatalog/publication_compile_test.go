@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
@@ -25,7 +25,7 @@ func TestCompilePublicationWinnerCohortDerivesPinnedDetachedAuthority(t *testing
 		t.Fatalf("compilePublicationWinnerCohort(chain): %v", err)
 	}
 	if authority.IsZero() || authority.candidateAuthority() != candidate ||
-		authority.sourceStage() != opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS {
+		authority.sourceStage() != opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS {
 		t.Fatalf("candidate authority = %#v, stage %v", authority.candidateAuthority(), authority.sourceStage())
 	}
 	targets := authority.derivedTargets()
@@ -35,8 +35,8 @@ func TestCompilePublicationWinnerCohortDerivesPinnedDetachedAuthority(t *testing
 		targets[0].objectID != "ko-extraction" || targets[0].version != 3 ||
 		targets[0].definitionDigest != publicationTestDigest(extraction.DefinitionSHA256) ||
 		targets[0].ownerID != extraction.OwnerID ||
-		targets[0].role != opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT ||
-		targets[0].targetStage != opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION ||
+		targets[0].role != opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT ||
+		targets[0].targetStage != opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION ||
 		projection[0] != (publicationDependency{targetObjectID: "ko-extraction", targetVersion: 3}) {
 		t.Fatalf("derived authority = targets:%#v projection:%#v", targets, projection)
 	}
@@ -572,7 +572,7 @@ func TestCompilePublicationWinnerCohortRejectsMalformedAuthority(t *testing.T) {
 			mutate: func(cohort *publicationWinnerCohort, _ *publicationCandidateAuthority) {
 				calculated := publicationTestWinnerIndex(cohort, "ko-calculated")
 				cohort.winners[calculated].existingDependencies[0].role =
-					opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_UNSPECIFIED
+					opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_UNSPECIFIED
 			},
 			wantErr: ErrCorrupt,
 		},
@@ -597,7 +597,7 @@ func TestCompilePublicationWinnerCohortRejectsMalformedAuthority(t *testing.T) {
 }
 
 func TestCompilePublicationWinnerCohortRejectsNonExecutableBooleanCalculatedFields(t *testing.T) {
-	booleanDefinition := func(name, destination string) *opensplunkv1.KnowledgeObjectDefinition {
+	booleanDefinition := func(name, destination string) *opensplunk.KnowledgeObjectDefinition {
 		return dependencyCalculatedDefinition(
 			"app-a", name, SharingScopeApp, nil, "", "isnull(stored_field)", destination,
 		)
@@ -635,8 +635,8 @@ func TestCompilePublicationWinnerCohortRejectsOversizedRepeatedShapeBeforeTraver
 	object := publicationTestObject(t, "ko-shape-candidate", 1, dependencyExtractionDefinition(
 		"app-a", "shape-candidate", SharingScopeApp, nil, "", "output",
 	))
-	object.Definition.GetFieldExtraction().Extraction = &opensplunkv1.FieldExtractionDefinition_Regex{
-		Regex: &opensplunkv1.RegexFieldExtractionDefinition{
+	object.Definition.GetFieldExtraction().Extraction = &opensplunk.FieldExtractionDefinition_Regex{
+		Regex: &opensplunk.RegexFieldExtractionDefinition{
 			Pattern:      "(?<output>.*)",
 			OutputFields: make([]string, 1<<18),
 		},
@@ -822,10 +822,10 @@ func TestCompilePublicationWinnerCohortEnforcesAggregateDefinitionBytes(t *testi
 }
 
 func TestCompilePublicationWinnerCohortSelectorWorkBoundary(t *testing.T) {
-	patterns := make([]*opensplunkv1.KnowledgeSelectorPattern, knowledge.MaximumSelectorPatternsPerDimension)
+	patterns := make([]*opensplunk.KnowledgeSelectorPattern, knowledge.MaximumSelectorPatternsPerDimension)
 	for index := range patterns {
 		prefix := fmt.Sprintf("%02d", index)
-		patterns[index] = &opensplunkv1.KnowledgeSelectorPattern{
+		patterns[index] = &opensplunk.KnowledgeSelectorPattern{
 			Value: prefix + strings.Repeat("x", 64-len(prefix)),
 		}
 	}
@@ -835,7 +835,7 @@ func TestCompilePublicationWinnerCohortSelectorWorkBoundary(t *testing.T) {
 	candidateDefinition := dependencyAliasDefinition(
 		"app-a", "selector-candidate", SharingScopeApp, nil, "", "selector_input", "selector_output",
 	)
-	candidateDefinition.Selector = &opensplunkv1.KnowledgeSelector{HostPatterns: patterns}
+	candidateDefinition.Selector = &opensplunk.KnowledgeSelector{HostPatterns: patterns}
 	candidateObject := publicationTestObject(t, "ko-selector-candidate", 1, candidateDefinition)
 	cohort := publicationWinnerCohort{
 		expectedWinnerCount: 2,
@@ -853,8 +853,8 @@ func TestCompilePublicationWinnerCohortSelectorWorkBoundary(t *testing.T) {
 
 	over := publicationCloneCohort(cohort)
 	overTarget := publicationTestWinnerIndex(&over, "ko-selector-target")
-	over.winners[overTarget].object.Definition.Selector = &opensplunkv1.KnowledgeSelector{
-		HostPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{Value: "extra"}},
+	over.winners[overTarget].object.Definition.Selector = &opensplunk.KnowledgeSelector{
+		HostPatterns: []*opensplunk.KnowledgeSelectorPattern{{Value: "extra"}},
 	}
 	normalized, err := knowledgedefinition.Normalize(over.winners[overTarget].object.Definition)
 	if err != nil {
@@ -1029,7 +1029,7 @@ func publicationTestChain(t *testing.T) (publicationWinnerCohort, publicationCan
 		"app-a", "calculated-a", SharingScopeApp, nil, "",
 		"coalesce(alias_value, extracted_value)", "calculated_value",
 	))
-	role := opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT
+	role := opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT
 	return publicationWinnerCohort{
 		expectedWinnerCount: 3,
 		winners: []publicationWinner{
@@ -1056,7 +1056,7 @@ func publicationTestExistingChain(t *testing.T) publicationWinnerCohort {
 		ordinal:        0,
 		targetObjectID: "ko-extraction",
 		targetVersion:  3,
-		role:           opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
+		role:           opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
 	}}
 	return cohort
 }
@@ -1084,7 +1084,7 @@ func publicationDependencyBoundaryCohort(
 ) (publicationWinnerCohort, publicationCandidateAuthority) {
 	t.Helper()
 	const targets = 33
-	role := opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT
+	role := opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT
 	winners := make([]publicationWinner, 0, targets+knowledgeprogram.MaximumScalarExpressions)
 	fields := make([]string, targets)
 	rows := make([]publicationPersistedDependency, targets)
@@ -1094,11 +1094,11 @@ func publicationDependencyBoundaryCohort(
 		definition := aliasDefinition(
 			"app-a", fmt.Sprintf("target-%02d", index), SharingScopeApp, nil, "",
 		)
-		definition.Body = &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
-			FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
+		definition.Body = &opensplunk.KnowledgeObjectDefinition_FieldExtraction{
+			FieldExtraction: &opensplunk.FieldExtractionDefinition{
 				InputField: "_raw",
-				Extraction: &opensplunkv1.FieldExtractionDefinition_Regex{
-					Regex: &opensplunkv1.RegexFieldExtractionDefinition{
+				Extraction: &opensplunk.FieldExtractionDefinition_Regex{
+					Regex: &opensplunk.RegexFieldExtractionDefinition{
 						Pattern:      fmt.Sprintf("(?<%s>.*)", fields[index]),
 						OutputFields: []string{fields[index]},
 					},
@@ -1197,7 +1197,7 @@ func publicationTestObject(
 	t *testing.T,
 	objectID string,
 	version uint64,
-	definition *opensplunkv1.KnowledgeObjectDefinition,
+	definition *opensplunk.KnowledgeObjectDefinition,
 ) knowledgesnapshot.Object {
 	t.Helper()
 	normalized, err := knowledgedefinition.Normalize(definition)
@@ -1245,7 +1245,7 @@ func publicationCloneCohort(input publicationWinnerCohort) publicationWinnerCoho
 
 func publicationCloneWinner(input publicationWinner) publicationWinner {
 	result := input
-	result.object.Definition, _ = proto.Clone(input.object.Definition).(*opensplunkv1.KnowledgeObjectDefinition)
+	result.object.Definition, _ = proto.Clone(input.object.Definition).(*opensplunk.KnowledgeObjectDefinition)
 	result.object.DefinitionSHA256 = bytes.Clone(input.object.DefinitionSHA256)
 	if input.existingDependencies != nil {
 		result.existingDependencies = append([]publicationPersistedDependency(nil), input.existingDependencies...)

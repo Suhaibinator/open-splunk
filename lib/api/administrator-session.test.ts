@@ -18,11 +18,11 @@ import {
   ProtobufTransport,
   defineProtobufRoute,
 } from "./protobuf-transport";
-import { ListIndexesRequest, ListIndexesResponse } from "@/gen/ts/open_splunk/v1/index_api";
+import { ListIndexesRequest, ListIndexesResponse } from "@/gen/ts/open_splunk/index_api";
 import {
   SetIngestionTokenEnabledRequest,
   SetIngestionTokenEnabledResponse,
-} from "@/gen/ts/open_splunk/v1/collector_admin_api";
+} from "@/gen/ts/open_splunk/collector_admin_api";
 import {
   CreateKnowledgeObjectRequest,
   CreateKnowledgeObjectResponse,
@@ -40,8 +40,8 @@ import {
   UpdateKnowledgeObjectResponse,
   ValidateKnowledgeObjectRequest,
   ValidateKnowledgeObjectResponse,
-} from "@/gen/ts/open_splunk/v1/knowledge_api";
-import { ValidateSearchRequest, ValidateSearchResponse } from "@/gen/ts/open_splunk/v1/search_api";
+} from "@/gen/ts/open_splunk/knowledge_api";
+import { ValidateSearchRequest, ValidateSearchResponse } from "@/gen/ts/open_splunk/search_api";
 import { ingestionTokenRoutes, knowledgeRoutes, lookupRoutes, searchRoutes } from "./routes";
 
 const administratorToken = "admin-token-0123456789-abcdefghijkl";
@@ -63,35 +63,35 @@ test("administrator bearer tokens match backend admission and remain memory-only
 });
 
 test("administrator route allowlist excludes ordinary search and WebSocket paths", () => {
-  assert.equal(isAdministratorRoutePath("/api/v1/indexes/list"), true);
-  assert.equal(isAdministratorRoutePath("/api/v1/audit/events/list"), true);
-  assert.equal(isAdministratorRoutePath("/api/v1/ingestion-tokens/state/set"), true);
-  assert.equal(isAdministratorRoutePath("/api/v1/hec/operations/get"), true);
-  assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/get"), true);
-  assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/list"), true);
-  assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/dependencies"), true);
-  assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/dependents"), true);
-  assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/create"), true);
-  assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/validate"), true);
-  assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/update"), true);
-  assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/set-state"), true);
-  assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/delete"), true);
-  assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/state/set"), false);
-  assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/preview"), true);
-  assert.equal(isAdministratorRoutePath("/api/v1/knowledge/lookups/create"), true);
-  assert.equal(isAdministratorRoutePath("/api/v1/knowledge/lookups/delete"), true);
-  assert.equal(isAdministratorRoutePath("/api/v1/knowledge/lookups/get"), true);
-  assert.equal(isAdministratorRoutePath("/api/v1/knowledge/lookups/list"), true);
-  assert.equal(isAdministratorRoutePath("/api/v1/knowledge/lookups/preview"), true);
-  assert.equal(isAdministratorRoutePath("/api/v1/knowledge/lookups/replace"), true);
-  assert.equal(isAdministratorRoutePath("/api/v1/knowledge/lookups/state/set"), true);
-  assert.equal(isAdministratorRoutePath("/api/v1/search/jobs/inspect"), true);
-  assert.equal(isAdministratorRoutePath("/api/v1/search/jobs/create"), false);
-  assert.equal(isAdministratorRoutePath("/api/v1/search/suggestions"), false);
-  assert.equal(isAdministratorRoutePath("/api/v1/search/ws"), false);
-  assert.equal(knowledgeRoutes.validate.path, "/api/v1/knowledge/objects/validate");
+  assert.equal(isAdministratorRoutePath("/api/indexes/list"), true);
+  assert.equal(isAdministratorRoutePath("/api/audit/events/list"), true);
+  assert.equal(isAdministratorRoutePath("/api/ingestion-tokens/state/set"), true);
+  assert.equal(isAdministratorRoutePath("/api/hec/operations/get"), true);
+  assert.equal(isAdministratorRoutePath("/api/knowledge/objects/get"), true);
+  assert.equal(isAdministratorRoutePath("/api/knowledge/objects/list"), true);
+  assert.equal(isAdministratorRoutePath("/api/knowledge/objects/dependencies"), true);
+  assert.equal(isAdministratorRoutePath("/api/knowledge/objects/dependents"), true);
+  assert.equal(isAdministratorRoutePath("/api/knowledge/objects/create"), true);
+  assert.equal(isAdministratorRoutePath("/api/knowledge/objects/validate"), true);
+  assert.equal(isAdministratorRoutePath("/api/knowledge/objects/update"), true);
+  assert.equal(isAdministratorRoutePath("/api/knowledge/objects/set-state"), true);
+  assert.equal(isAdministratorRoutePath("/api/knowledge/objects/delete"), true);
+  assert.equal(isAdministratorRoutePath("/api/knowledge/objects/state/set"), false);
+  assert.equal(isAdministratorRoutePath("/api/knowledge/objects/preview"), true);
+  assert.equal(isAdministratorRoutePath("/api/knowledge/lookups/create"), true);
+  assert.equal(isAdministratorRoutePath("/api/knowledge/lookups/delete"), true);
+  assert.equal(isAdministratorRoutePath("/api/knowledge/lookups/get"), true);
+  assert.equal(isAdministratorRoutePath("/api/knowledge/lookups/list"), true);
+  assert.equal(isAdministratorRoutePath("/api/knowledge/lookups/preview"), true);
+  assert.equal(isAdministratorRoutePath("/api/knowledge/lookups/replace"), true);
+  assert.equal(isAdministratorRoutePath("/api/knowledge/lookups/state/set"), true);
+  assert.equal(isAdministratorRoutePath("/api/search/jobs/inspect"), true);
+  assert.equal(isAdministratorRoutePath("/api/search/jobs/create"), false);
+  assert.equal(isAdministratorRoutePath("/api/search/suggestions"), false);
+  assert.equal(isAdministratorRoutePath("/api/search/ws"), false);
+  assert.equal(knowledgeRoutes.validate.path, "/api/knowledge/objects/validate");
   assert.equal(knowledgeRoutes.validate.maximumResponseBytes, 8 << 20);
-  assert.equal(knowledgeRoutes.preview.path, "/api/v1/knowledge/objects/preview");
+  assert.equal(knowledgeRoutes.preview.path, "/api/knowledge/objects/preview");
   assert.equal(knowledgeRoutes.preview.maximumResponseBytes, 8 << 20);
   for (const route of Object.values(lookupRoutes)) {
     assert.equal(route.maximumResponseBytes, 9 << 20);
@@ -129,7 +129,7 @@ test("token state route is administrator-authenticated and protobuf-bound", asyn
     }),
   );
 
-  assert.equal(requestPath, "/api/v1/ingestion-tokens/state/set");
+  assert.equal(requestPath, "/api/ingestion-tokens/state/set");
   assert.equal(authorization, `Bearer ${administratorToken}`);
   assert.deepEqual(decoded, {
     ingestionTokenId: "token-1",
@@ -159,17 +159,17 @@ test("transport attaches the memory-only token only to protected protobuf calls"
     headers: { "X-Test": "present" },
   });
   const protectedRoute = defineProtobufRoute(
-    "/api/v1/indexes/list",
+    "/api/indexes/list",
     ListIndexesRequest,
     ListIndexesResponse,
   );
   const searchRoute = defineProtobufRoute(
-    "/api/v1/search/validate",
+    "/api/search/validate",
     ValidateSearchRequest,
     ValidateSearchResponse,
   );
   const knowledgeRoute = defineProtobufRoute(
-    "/api/v1/knowledge/objects/list",
+    "/api/knowledge/objects/list",
     ListKnowledgeObjectsRequest,
     ListKnowledgeObjectsResponse,
   );
@@ -208,7 +208,7 @@ test("protected protobuf routes discard injected authorization with or without a
     },
   });
   const protectedRoute = defineProtobufRoute(
-    "/api/v1/indexes/list",
+    "/api/indexes/list",
     ListIndexesRequest,
     ListIndexesResponse,
   );
@@ -240,7 +240,7 @@ test("transport rejects forged route authorization before protected-path traffic
     },
   });
   const protectedRoute = defineProtobufRoute(
-    "/api/v1/indexes/list",
+    "/api/indexes/list",
     ListIndexesRequest,
     ListIndexesResponse,
   );
@@ -266,7 +266,7 @@ test("unprotected protobuf routes preserve caller authorization headers", async 
     },
   });
   const searchRoute = defineProtobufRoute(
-    "/api/v1/search/validate",
+    "/api/search/validate",
     ValidateSearchRequest,
     ValidateSearchResponse,
   );
@@ -325,16 +325,16 @@ test("all shipped knowledge mutations and Preview receive administrator bearer a
   await transport.post(knowledgeRoutes.delete, DeleteKnowledgeObjectRequest.fromPartial({}));
 
   assert.deepEqual(requests.map(({ path }) => path), [
-    "/api/v1/knowledge/objects/create",
-    "/api/v1/knowledge/objects/validate",
-    "/api/v1/knowledge/objects/preview",
-    "/api/v1/knowledge/objects/update",
-    "/api/v1/knowledge/objects/set-state",
-    "/api/v1/knowledge/objects/delete",
+    "/api/knowledge/objects/create",
+    "/api/knowledge/objects/validate",
+    "/api/knowledge/objects/preview",
+    "/api/knowledge/objects/update",
+    "/api/knowledge/objects/set-state",
+    "/api/knowledge/objects/delete",
   ]);
   assert.ok(requests.every(({ authorization }) =>
     authorization === `Bearer ${administratorToken}`));
-  assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/preview"), true);
+  assert.equal(isAdministratorRoutePath("/api/knowledge/objects/preview"), true);
 });
 
 test("declared oversized unknown protobuf fields are rejected before decode", async () => {
@@ -367,7 +367,7 @@ test("declared oversized unknown protobuf fields are rejected before decode", as
     },
   }, { highWaterMark: 0 });
   const route = defineProtobufRoute(
-    "/api/v1/knowledge/objects/list",
+    "/api/knowledge/objects/list",
     ListKnowledgeObjectsRequest,
     countedResponseCodec,
     { maximumResponseBytes },
@@ -416,7 +416,7 @@ test("many tiny oversized chunks reject before decode without awaiting cancellat
     },
   };
   const route = defineProtobufRoute(
-    "/api/v1/knowledge/objects/list",
+    "/api/knowledge/objects/list",
     ListKnowledgeObjectsRequest,
     countedResponseCodec,
     { maximumResponseBytes },
@@ -447,7 +447,7 @@ test("error response bodies use a fixed global streaming cap", async () => {
     },
   }, { highWaterMark: 0 });
   const route = defineProtobufRoute(
-    "/api/v1/search/validate",
+    "/api/search/validate",
     ValidateSearchRequest,
     ValidateSearchResponse,
   );

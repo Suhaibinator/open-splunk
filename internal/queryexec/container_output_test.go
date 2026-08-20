@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/chcol"
@@ -122,24 +123,17 @@ func TestConvertContainerOutputReconstructsDynamicJSON(t *testing.T) {
 	}
 }
 
-func TestConvertContainerOutputSupportsLegacyV0Names(t *testing.T) {
+func TestConvertContainerOutputRejectsUnsupportedMetadataVersion(t *testing.T) {
 	t.Parallel()
 
-	got, err := convertContainerOutput(
+	_, err := convertContainerOutput(
 		map[string]any{"legacy": "value"},
 		[]string{"legacy", "nothing"},
 		[]uint8{},
 		0,
 	)
-	if err != nil {
-		t.Fatalf("convertContainerOutput(v0): %v", err)
-	}
-	root := containerOutputObject(t, got)
-	if value, ok := root["legacy"].String(); !ok || value != "value" {
-		t.Fatalf("legacy field = %#v", root["legacy"])
-	}
-	if !root["nothing"].IsNull() {
-		t.Fatalf("legacy absent native member = %#v, want explicit null", root["nothing"])
+	if err == nil || !strings.Contains(err.Error(), "provision fresh event storage") {
+		t.Fatalf("unsupported metadata version error = %v", err)
 	}
 }
 
@@ -193,7 +187,7 @@ func TestConvertContainerOutputRejectsInvalidMetadataAndValues(t *testing.T) {
 			names: []string{"a"}, version: eventfields.CurrentFieldMetadataVersion,
 		},
 		{
-			name: "legacy carries types", value: map[string]any{"a": "value"},
+			name: "unsupported metadata version", value: map[string]any{"a": "value"},
 			names: []string{"a"}, types: []uint8{stringType}, version: 0,
 		},
 		{

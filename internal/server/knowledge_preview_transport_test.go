@@ -9,7 +9,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"google.golang.org/protobuf/encoding/protowire"
@@ -19,23 +19,23 @@ import (
 
 func TestPreviewKnowledgeObjectRequestCodecDifferentialMergeAndProjection(t *testing.T) {
 	codec := newPreviewKnowledgeObjectRequestCodec()
-	definitionA := &opensplunkv1.KnowledgeObjectDefinition{
+	definitionA := &opensplunk.KnowledgeObjectDefinition{
 		AppId: "app-a",
 		Name:  "first",
-		Selector: &opensplunkv1.KnowledgeSelector{
-			IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{Value: "index-a"}},
+		Selector: &opensplunk.KnowledgeSelector{
+			IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{{Value: "index-a"}},
 		},
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{
-			FieldAlias: &opensplunkv1.FieldAliasDefinition{SourceField: "source-a"},
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{
+			FieldAlias: &opensplunk.FieldAliasDefinition{SourceField: "source-a"},
 		},
 	}
-	definitionB := &opensplunkv1.KnowledgeObjectDefinition{
+	definitionB := &opensplunk.KnowledgeObjectDefinition{
 		Name: "last",
-		Selector: &opensplunkv1.KnowledgeSelector{
-			HostPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{Value: "host-b"}},
+		Selector: &opensplunk.KnowledgeSelector{
+			HostPatterns: []*opensplunk.KnowledgeSelectorPattern{{Value: "host-b"}},
 		},
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{
-			FieldAlias: &opensplunkv1.FieldAliasDefinition{DestinationField: "destination-b"},
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{
+			FieldAlias: &opensplunk.FieldAliasDefinition{DestinationField: "destination-b"},
 		},
 	}
 
@@ -46,7 +46,7 @@ func TestPreviewKnowledgeObjectRequestCodecDifferentialMergeAndProjection(t *tes
 	createWire = append(createWire, validateTestVarintField(6, 3)...)
 	createWire = append(createWire, validateTestVarintField(6, uint64(1<<32+7))...)
 	createWire = append(createWire, validateTestVarintField(99, 8)...)
-	var ordinaryCreate opensplunkv1.PreviewKnowledgeObjectRequest
+	var ordinaryCreate opensplunk.PreviewKnowledgeObjectRequest
 	if err := proto.Unmarshal(createWire, &ordinaryCreate); err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestPreviewKnowledgeObjectRequestCodecDifferentialMergeAndProjection(t *tes
 		t.Fatalf("create differential mismatch\n got: %v\nwant: %v\nerr: %v", decodedCreate, &ordinaryCreate, err)
 	}
 
-	definitionUnknown := proto.Clone(definitionB).(*opensplunkv1.KnowledgeObjectDefinition)
+	definitionUnknown := proto.Clone(definitionB).(*opensplunk.KnowledgeObjectDefinition)
 	definitionUnknown.ProtoReflect().SetUnknown(validateTestVarintField(100, 1))
 	definitionUnknown.GetSelector().ProtoReflect().SetUnknown(validateTestVarintField(101, 2))
 	maskA := &fieldmaskpb.FieldMask{Paths: []string{"name"}}
@@ -70,14 +70,14 @@ func TestPreviewKnowledgeObjectRequestCodecDifferentialMergeAndProjection(t *tes
 	updateWire = append(updateWire, validateTestBytesField(5, validateTestMarshal(t, maskB))...)
 	updateWire = append(updateWire, validateTestVarintField(6, 0)...)
 	updateWire = append(updateWire, validateTestVarintField(99, 9)...)
-	var ordinaryUpdate opensplunkv1.PreviewKnowledgeObjectRequest
+	var ordinaryUpdate opensplunk.PreviewKnowledgeObjectRequest
 	if err := proto.Unmarshal(updateWire, &ordinaryUpdate); err != nil {
 		t.Fatal(err)
 	}
-	expectedUpdate := proto.Clone(&ordinaryUpdate).(*opensplunkv1.PreviewKnowledgeObjectRequest)
-	expectedUpdate.Definition = &opensplunkv1.KnowledgeObjectDefinition{
+	expectedUpdate := proto.Clone(&ordinaryUpdate).(*opensplunk.PreviewKnowledgeObjectRequest)
+	expectedUpdate.Definition = &opensplunk.KnowledgeObjectDefinition{
 		Name:     ordinaryUpdate.GetDefinition().GetName(),
-		Selector: proto.Clone(ordinaryUpdate.GetDefinition().GetSelector()).(*opensplunkv1.KnowledgeSelector),
+		Selector: proto.Clone(ordinaryUpdate.GetDefinition().GetSelector()).(*opensplunk.KnowledgeSelector),
 	}
 	decodedUpdate, err := codec.DecodeBytes(updateWire)
 	if err != nil || !proto.Equal(decodedUpdate, expectedUpdate) || decodedUpdate.MaximumRows == nil {
@@ -186,7 +186,7 @@ func TestPreviewKnowledgeObjectRequestCodecRawLimitBodyCloseAndDetachment(t *tes
 		t.Fatal("NewRequest returned nil")
 	}
 
-	input := &opensplunkv1.PreviewKnowledgeObjectRequest{
+	input := &opensplunk.PreviewKnowledgeObjectRequest{
 		RetainedSearchJobId: "job-detached",
 		Definition:          validateTestDefinition("detached"),
 	}
@@ -206,7 +206,7 @@ func TestPreviewKnowledgeObjectRequestCodecRawLimitBodyCloseAndDetachment(t *tes
 }
 
 func TestPreviewKnowledgeObjectRequestSanitizerPreservesUnknownAuthorities(t *testing.T) {
-	request := &opensplunkv1.PreviewKnowledgeObjectRequest{
+	request := &opensplunk.PreviewKnowledgeObjectRequest{
 		Definition: validateTestDefinition("unknowns"),
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"field_alias"}},
 	}
@@ -380,7 +380,7 @@ func TestPreviewKnowledgeObjectRequestCodecUnknownAuthorityAndWrongWire(t *testi
 	createWire = append(createWire, validateTestVarintField(5, 10)...)
 	createWire = append(createWire, validateTestBytesField(6, nil)...)
 	createWire = append(createWire, validateTestVarintField(99, 11)...)
-	var ordinary opensplunkv1.PreviewKnowledgeObjectRequest
+	var ordinary opensplunk.PreviewKnowledgeObjectRequest
 	if err := proto.Unmarshal(createWire, &ordinary); err != nil {
 		t.Fatal(err)
 	}
@@ -392,8 +392,8 @@ func TestPreviewKnowledgeObjectRequestCodecUnknownAuthorityAndWrongWire(t *testi
 		t.Fatalf("create unknown/wrong-wire semantics = %v / ordinary %v / %v", create, &ordinary, err)
 	}
 
-	selector := &opensplunkv1.KnowledgeSelector{
-		IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{Value: "main"}},
+	selector := &opensplunk.KnowledgeSelector{
+		IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{{Value: "main"}},
 	}
 	selector.ProtoReflect().SetUnknown(validateTestVarintField(102, 3))
 	updateDefinition := validateTestDefinition("unselected")
@@ -470,7 +470,7 @@ func TestPreviewKnowledgeObjectRequestCodecRemainsUnregistered(t *testing.T) {
 	request := httptest.NewRequestWithContext(
 		t.Context(),
 		http.MethodPost,
-		"/api/v1/knowledge/objects/preview",
+		"/api/knowledge/objects/preview",
 		body,
 	)
 	request.Host = "example.com"
@@ -491,12 +491,12 @@ func FuzzPreviewKnowledgeObjectRequestCodec(f *testing.F) {
 	objectID := "ko-fuzz"
 	version := uint64(7)
 	rows := uint32(9)
-	create := &opensplunkv1.PreviewKnowledgeObjectRequest{
+	create := &opensplunk.PreviewKnowledgeObjectRequest{
 		RetainedSearchJobId: "job-create",
 		Definition:          validateTestDefinition("fuzz-create"),
 		MaximumRows:         &rows,
 	}
-	update := &opensplunkv1.PreviewKnowledgeObjectRequest{
+	update := &opensplunk.PreviewKnowledgeObjectRequest{
 		RetainedSearchJobId: "job-update",
 		Definition:          validateTestDefinition("fuzz-update"),
 		KnowledgeObjectId:   &objectID,
@@ -521,7 +521,7 @@ func FuzzPreviewKnowledgeObjectRequestCodec(f *testing.F) {
 			return
 		}
 		owned := append([]byte(nil), data...)
-		var ordinary opensplunkv1.PreviewKnowledgeObjectRequest
+		var ordinary opensplunk.PreviewKnowledgeObjectRequest
 		ordinaryErr := proto.Unmarshal(owned, &ordinary)
 		codec := newPreviewKnowledgeObjectRequestCodec()
 		decoded, err := codec.DecodeBytes(owned)
@@ -544,11 +544,11 @@ func FuzzPreviewKnowledgeObjectRequestCodec(f *testing.F) {
 		if err != nil {
 			t.Fatalf("decoded request cannot marshal: %v", err)
 		}
-		var roundTrip opensplunkv1.PreviewKnowledgeObjectRequest
+		var roundTrip opensplunk.PreviewKnowledgeObjectRequest
 		if err := proto.Unmarshal(wire, &roundTrip); err != nil || !proto.Equal(decoded, &roundTrip) {
 			t.Fatalf("decoded request cannot round trip: %v / %v", &roundTrip, err)
 		}
-		beforeMutation := proto.Clone(decoded).(*opensplunkv1.PreviewKnowledgeObjectRequest)
+		beforeMutation := proto.Clone(decoded).(*opensplunk.PreviewKnowledgeObjectRequest)
 		for index := range owned {
 			owned[index] ^= 0xff
 		}
@@ -568,7 +568,7 @@ func FuzzPreviewKnowledgeObjectRequestCodec(f *testing.F) {
 	})
 }
 
-func previewFuzzCardinalityBounded(request *opensplunkv1.PreviewKnowledgeObjectRequest) bool {
+func previewFuzzCardinalityBounded(request *opensplunk.PreviewKnowledgeObjectRequest) bool {
 	if request == nil || len(request.GetRetainedSearchJobId()) > maximumPreviewRetainedSearchJobIDBytes ||
 		len(request.GetUpdateMask().GetPaths()) > maximumValidateRetainedMaskPaths {
 		return false
@@ -590,16 +590,16 @@ func previewFuzzCardinalityBounded(request *opensplunkv1.PreviewKnowledgeObjectR
 }
 
 func previewFuzzExpected(
-	request *opensplunkv1.PreviewKnowledgeObjectRequest,
-) *opensplunkv1.PreviewKnowledgeObjectRequest {
-	result := proto.Clone(request).(*opensplunkv1.PreviewKnowledgeObjectRequest)
+	request *opensplunk.PreviewKnowledgeObjectRequest,
+) *opensplunk.PreviewKnowledgeObjectRequest {
+	result := proto.Clone(request).(*opensplunk.PreviewKnowledgeObjectRequest)
 	if len(result.GetRetainedSearchJobId()) > searchjobs.MaximumJobIDBytes {
 		result.RetainedSearchJobId = previewOversizedSearchJobIDWitness
 	}
 	if request.KnowledgeObjectId == nil || request.GetDefinition() == nil {
 		return result
 	}
-	selected := &opensplunkv1.KnowledgeObjectDefinition{}
+	selected := &opensplunk.KnowledgeObjectDefinition{}
 	for _, path := range request.GetUpdateMask().GetPaths() {
 		switch path {
 		case "app_id":
@@ -615,19 +615,19 @@ func previewFuzzExpected(
 			selected.SharingScope = request.GetDefinition().GetSharingScope()
 		case "selector":
 			if request.GetDefinition().GetSelector() != nil {
-				selected.Selector = proto.Clone(request.GetDefinition().GetSelector()).(*opensplunkv1.KnowledgeSelector)
+				selected.Selector = proto.Clone(request.GetDefinition().GetSelector()).(*opensplunk.KnowledgeSelector)
 			}
 		case "field_extraction":
 			if body := request.GetDefinition().GetFieldExtraction(); body != nil {
-				selected.Body = &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{FieldExtraction: proto.Clone(body).(*opensplunkv1.FieldExtractionDefinition)}
+				selected.Body = &opensplunk.KnowledgeObjectDefinition_FieldExtraction{FieldExtraction: proto.Clone(body).(*opensplunk.FieldExtractionDefinition)}
 			}
 		case "field_alias":
 			if body := request.GetDefinition().GetFieldAlias(); body != nil {
-				selected.Body = &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{FieldAlias: proto.Clone(body).(*opensplunkv1.FieldAliasDefinition)}
+				selected.Body = &opensplunk.KnowledgeObjectDefinition_FieldAlias{FieldAlias: proto.Clone(body).(*opensplunk.FieldAliasDefinition)}
 			}
 		case "calculated_field":
 			if body := request.GetDefinition().GetCalculatedField(); body != nil {
-				selected.Body = &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{CalculatedField: proto.Clone(body).(*opensplunkv1.CalculatedFieldDefinition)}
+				selected.Body = &opensplunk.KnowledgeObjectDefinition_CalculatedField{CalculatedField: proto.Clone(body).(*opensplunk.CalculatedFieldDefinition)}
 			}
 		}
 	}

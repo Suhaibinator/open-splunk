@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
@@ -141,11 +141,11 @@ func TestSearchJobListRealManagerBoundsLongParseFailure(t *testing.T) {
 		TenantID:   tenantID,
 		Now:        clock.Now,
 	})
-	response := postProto(t, handler, searchJobsListPath, &opensplunkv1.ListSearchJobsRequest{})
+	response := postProto(t, handler, searchJobsListPath, &opensplunk.ListSearchJobsRequest{})
 	if response.Code != http.StatusOK {
 		t.Fatalf("list status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var decoded opensplunkv1.ListSearchJobsResponse
+	var decoded opensplunk.ListSearchJobsResponse
 	unmarshalResponse(t, response, &decoded)
 	if len(decoded.GetSearchJobs()) != 1 {
 		t.Fatalf("listed jobs = %d, want 1", len(decoded.GetSearchJobs()))
@@ -236,14 +236,14 @@ func TestSearchJobListRealManagerHTTPIntegration(t *testing.T) {
 	})
 
 	firstPageSize := uint32(1)
-	firstPage := searchJobListIntegrationList(t, handler, &opensplunkv1.ListSearchJobsRequest{
-		Page: &opensplunkv1.PageRequest{
+	firstPage := searchJobListIntegrationList(t, handler, &opensplunk.ListSearchJobsRequest{
+		Page: &opensplunk.PageRequest{
 			PageSize:         &firstPageSize,
 			IncludeTotalSize: true,
 		},
 	})
 	searchJobListIntegrationAssertPage(t, firstPage, []string{newer.ID}, 2)
-	if firstPage.GetSearchJobs()[0].GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_QUEUED {
+	if firstPage.GetSearchJobs()[0].GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_QUEUED {
 		t.Fatalf("newest job state = %v, want queued", firstPage.GetSearchJobs()[0].GetState())
 	}
 	firstPageToken := firstPage.GetPage().GetNextPageToken()
@@ -251,51 +251,51 @@ func TestSearchJobListRealManagerHTTPIntegration(t *testing.T) {
 		t.Fatal("first page did not return a continuation token")
 	}
 
-	runningPage := searchJobListIntegrationList(t, handler, &opensplunkv1.ListSearchJobsRequest{
-		Page: &opensplunkv1.PageRequest{IncludeTotalSize: true},
-		StateFilters: []opensplunkv1.SearchJobState{
-			opensplunkv1.SearchJobState_SEARCH_JOB_STATE_RUNNING,
+	runningPage := searchJobListIntegrationList(t, handler, &opensplunk.ListSearchJobsRequest{
+		Page: &opensplunk.PageRequest{IncludeTotalSize: true},
+		StateFilters: []opensplunk.SearchJobState{
+			opensplunk.SearchJobState_SEARCH_JOB_STATE_RUNNING,
 		},
 	})
 	searchJobListIntegrationAssertPage(t, runningPage, []string{older.ID}, 1)
 
-	queuedPage := searchJobListIntegrationList(t, handler, &opensplunkv1.ListSearchJobsRequest{
-		Page: &opensplunkv1.PageRequest{IncludeTotalSize: true},
-		StateFilters: []opensplunkv1.SearchJobState{
-			opensplunkv1.SearchJobState_SEARCH_JOB_STATE_QUEUED,
+	queuedPage := searchJobListIntegrationList(t, handler, &opensplunk.ListSearchJobsRequest{
+		Page: &opensplunk.PageRequest{IncludeTotalSize: true},
+		StateFilters: []opensplunk.SearchJobState{
+			opensplunk.SearchJobState_SEARCH_JOB_STATE_QUEUED,
 		},
 	})
 	searchJobListIntegrationAssertPage(t, queuedPage, []string{newer.ID}, 1)
 
 	appID := "app-operations"
-	appPage := searchJobListIntegrationList(t, handler, &opensplunkv1.ListSearchJobsRequest{
-		Page:        &opensplunkv1.PageRequest{IncludeTotalSize: true},
+	appPage := searchJobListIntegrationList(t, handler, &opensplunk.ListSearchJobsRequest{
+		Page:        &opensplunk.PageRequest{IncludeTotalSize: true},
 		AppIdFilter: &appID,
 	})
 	searchJobListIntegrationAssertPage(t, appPage, []string{newer.ID}, 1)
 
 	text := "error"
-	textPage := searchJobListIntegrationList(t, handler, &opensplunkv1.ListSearchJobsRequest{
-		Page:       &opensplunkv1.PageRequest{IncludeTotalSize: true},
+	textPage := searchJobListIntegrationList(t, handler, &opensplunk.ListSearchJobsRequest{
+		Page:       &opensplunk.PageRequest{IncludeTotalSize: true},
 		TextFilter: &text,
 	})
 	searchJobListIntegrationAssertPage(t, textPage, []string{older.ID}, 1)
 
 	getQueued := searchJobListIntegrationGet(t, handler, newer.ID)
-	if getQueued.GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_QUEUED {
+	if getQueued.GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_QUEUED {
 		t.Fatalf("GET newest state = %v, want queued", getQueued.GetState())
 	}
 
 	clock.Set(anchor.Add(3 * time.Second))
-	cancelResponse := postProto(t, handler, "/api/v1/search/jobs/cancel", &opensplunkv1.CancelSearchJobRequest{
+	cancelResponse := postProto(t, handler, "/api/search/jobs/cancel", &opensplunk.CancelSearchJobRequest{
 		SearchJobId: newer.ID,
 	})
 	if cancelResponse.Code != http.StatusOK {
 		t.Fatalf("cancel status = %d, body = %s", cancelResponse.Code, cancelResponse.Body.String())
 	}
-	var canceled opensplunkv1.CancelSearchJobResponse
+	var canceled opensplunk.CancelSearchJobResponse
 	unmarshalResponse(t, cancelResponse, &canceled)
-	if canceled.GetSearchJob().GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_CANCELED {
+	if canceled.GetSearchJob().GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_CANCELED {
 		t.Fatalf("canceled state = %v", canceled.GetSearchJob().GetState())
 	}
 
@@ -304,21 +304,21 @@ func TestSearchJobListRealManagerHTTPIntegration(t *testing.T) {
 		t,
 		handler,
 		older.ID,
-		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
+		opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
 	)
 	if completed.GetSearchJobId() != older.ID {
 		t.Fatalf("completed GET ID = %q, want %q", completed.GetSearchJobId(), older.ID)
 	}
 
-	secondPage := searchJobListIntegrationList(t, handler, &opensplunkv1.ListSearchJobsRequest{
-		Page: &opensplunkv1.PageRequest{
+	secondPage := searchJobListIntegrationList(t, handler, &opensplunk.ListSearchJobsRequest{
+		Page: &opensplunk.PageRequest{
 			PageSize:         &firstPageSize,
 			PageToken:        &firstPageToken,
 			IncludeTotalSize: true,
 		},
 	})
 	searchJobListIntegrationAssertPage(t, secondPage, []string{older.ID}, 2)
-	if secondPage.GetSearchJobs()[0].GetState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED {
+	if secondPage.GetSearchJobs()[0].GetState() != opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED {
 		t.Fatalf("second-page live state = %v, want completed", secondPage.GetSearchJobs()[0].GetState())
 	}
 	if secondPage.GetPage().GetNextPageToken() != "" {
@@ -326,16 +326,16 @@ func TestSearchJobListRealManagerHTTPIntegration(t *testing.T) {
 	}
 
 	allPageSize := uint32(10)
-	refreshed := searchJobListIntegrationList(t, handler, &opensplunkv1.ListSearchJobsRequest{
-		Page: &opensplunkv1.PageRequest{
+	refreshed := searchJobListIntegrationList(t, handler, &opensplunk.ListSearchJobsRequest{
+		Page: &opensplunk.PageRequest{
 			PageSize:         &allPageSize,
 			IncludeTotalSize: true,
 		},
 	})
 	searchJobListIntegrationAssertPage(t, refreshed, []string{newer.ID, older.ID}, 2)
-	wantStates := []opensplunkv1.SearchJobState{
-		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_CANCELED,
-		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
+	wantStates := []opensplunk.SearchJobState{
+		opensplunk.SearchJobState_SEARCH_JOB_STATE_CANCELED,
+		opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
 	}
 	for index, listed := range refreshed.GetSearchJobs() {
 		if listed.GetState() != wantStates[index] {
@@ -347,23 +347,23 @@ func TestSearchJobListRealManagerHTTPIntegration(t *testing.T) {
 		}
 	}
 
-	canceledPage := searchJobListIntegrationList(t, handler, &opensplunkv1.ListSearchJobsRequest{
-		Page: &opensplunkv1.PageRequest{IncludeTotalSize: true},
-		StateFilters: []opensplunkv1.SearchJobState{
-			opensplunkv1.SearchJobState_SEARCH_JOB_STATE_CANCELED,
+	canceledPage := searchJobListIntegrationList(t, handler, &opensplunk.ListSearchJobsRequest{
+		Page: &opensplunk.PageRequest{IncludeTotalSize: true},
+		StateFilters: []opensplunk.SearchJobState{
+			opensplunk.SearchJobState_SEARCH_JOB_STATE_CANCELED,
 		},
 	})
 	searchJobListIntegrationAssertPage(t, canceledPage, []string{newer.ID}, 1)
 
-	completedPage := searchJobListIntegrationList(t, handler, &opensplunkv1.ListSearchJobsRequest{
-		Page: &opensplunkv1.PageRequest{IncludeTotalSize: true},
-		StateFilters: []opensplunkv1.SearchJobState{
-			opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
+	completedPage := searchJobListIntegrationList(t, handler, &opensplunk.ListSearchJobsRequest{
+		Page: &opensplunk.PageRequest{IncludeTotalSize: true},
+		StateFilters: []opensplunk.SearchJobState{
+			opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
 		},
 	})
 	searchJobListIntegrationAssertPage(t, completedPage, []string{older.ID}, 1)
 
-	hiddenResponse := postProto(t, handler, "/api/v1/search/jobs/get", &opensplunkv1.GetSearchJobRequest{
+	hiddenResponse := postProto(t, handler, "/api/search/jobs/get", &opensplunk.GetSearchJobRequest{
 		SearchJobId: hidden.ID,
 	})
 	if hiddenResponse.Code != http.StatusNotFound {
@@ -374,21 +374,21 @@ func TestSearchJobListRealManagerHTTPIntegration(t *testing.T) {
 func searchJobListIntegrationList(
 	t *testing.T,
 	handler http.Handler,
-	request *opensplunkv1.ListSearchJobsRequest,
-) *opensplunkv1.ListSearchJobsResponse {
+	request *opensplunk.ListSearchJobsRequest,
+) *opensplunk.ListSearchJobsResponse {
 	t.Helper()
 	response := postProto(t, handler, searchJobsListPath, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("list status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var decoded opensplunkv1.ListSearchJobsResponse
+	var decoded opensplunk.ListSearchJobsResponse
 	unmarshalResponse(t, response, &decoded)
 	return &decoded
 }
 
 func searchJobListIntegrationAssertPage(
 	t *testing.T,
-	response *opensplunkv1.ListSearchJobsResponse,
+	response *opensplunk.ListSearchJobsResponse,
 	wantIDs []string,
 	wantTotal uint64,
 ) {
@@ -406,15 +406,15 @@ func searchJobListIntegrationAssertPage(
 	}
 }
 
-func searchJobListIntegrationGet(t *testing.T, handler http.Handler, id string) *opensplunkv1.SearchJob {
+func searchJobListIntegrationGet(t *testing.T, handler http.Handler, id string) *opensplunk.SearchJob {
 	t.Helper()
-	response := postProto(t, handler, "/api/v1/search/jobs/get", &opensplunkv1.GetSearchJobRequest{
+	response := postProto(t, handler, "/api/search/jobs/get", &opensplunk.GetSearchJobRequest{
 		SearchJobId: id,
 	})
 	if response.Code != http.StatusOK {
 		t.Fatalf("GET %q status = %d, body = %s", id, response.Code, response.Body.String())
 	}
-	var decoded opensplunkv1.GetSearchJobResponse
+	var decoded opensplunk.GetSearchJobResponse
 	unmarshalResponse(t, response, &decoded)
 	if decoded.GetSearchJob() == nil {
 		t.Fatalf("GET %q returned no job", id)
@@ -426,8 +426,8 @@ func searchJobListIntegrationWaitForState(
 	t *testing.T,
 	handler http.Handler,
 	id string,
-	want opensplunkv1.SearchJobState,
-) *opensplunkv1.SearchJob {
+	want opensplunk.SearchJobState,
+) *opensplunk.SearchJob {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for {
@@ -435,9 +435,9 @@ func searchJobListIntegrationWaitForState(
 		if job.GetState() == want {
 			return job
 		}
-		if job.GetState() == opensplunkv1.SearchJobState_SEARCH_JOB_STATE_FAILED ||
-			job.GetState() == opensplunkv1.SearchJobState_SEARCH_JOB_STATE_CANCELED ||
-			job.GetState() == opensplunkv1.SearchJobState_SEARCH_JOB_STATE_EXPIRED {
+		if job.GetState() == opensplunk.SearchJobState_SEARCH_JOB_STATE_FAILED ||
+			job.GetState() == opensplunk.SearchJobState_SEARCH_JOB_STATE_CANCELED ||
+			job.GetState() == opensplunk.SearchJobState_SEARCH_JOB_STATE_EXPIRED {
 			t.Fatalf("GET %q reached state %v while waiting for %v", id, job.GetState(), want)
 		}
 		if time.Now().After(deadline) {

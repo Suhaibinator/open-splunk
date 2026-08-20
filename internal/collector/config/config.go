@@ -510,7 +510,7 @@ func maximumConfigInputRegistrationBytes() int {
 	// Reserve the server-side maximum for runtime metadata, capabilities, and
 	// the credential-derived authorized-index snapshot so a locally accepted
 	// configuration cannot be rejected only after it connects.
-	reserved := collectorlimits.MaximumCollectorVersionBytes +
+	reserved := collectorlimits.MaximumSourceRevisionBytes +
 		collectorlimits.MaximumHostnameBytes +
 		collectorlimits.MaximumOperatingSystemBytes +
 		collectorlimits.MaximumArchitectureBytes +

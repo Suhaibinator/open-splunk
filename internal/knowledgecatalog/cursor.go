@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	cursorVersion          = 2
+	cursorVersion          = 1
 	cursorPurpose          = "knowledge-catalog-list"
 	catalogStateTokenBytes = sha256.Size
 )

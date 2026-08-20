@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	collectorTokenPrefix               = "ost_v1_"
+	collectorTokenPrefix               = "ost_"
 	tokenRandomBytes                   = 32
 	tokenIDRandomBytes                 = 16
 	minimumDigestKeyBytes              = 32

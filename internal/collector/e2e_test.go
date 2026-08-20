@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/collector/config"
 	"github.com/Suhaibinator/open-splunk/internal/collector/input"
 	"github.com/Suhaibinator/open-splunk/internal/collector/wal"
@@ -55,7 +55,7 @@ const (
 type recordingStore struct {
 	mu        sync.Mutex
 	seen      map[string]struct{}
-	committed []*opensplunkv1.LogEvent
+	committed []*opensplunk.LogEvent
 	batches   int
 	duplicate int
 }
@@ -122,7 +122,7 @@ func (s *recordingStore) Store(_ context.Context, batch ingest.StoreBatch) (inge
 			continue
 		}
 		s.seen[id] = struct{}{}
-		s.committed = append(s.committed, proto.Clone(se.Event).(*opensplunkv1.LogEvent))
+		s.committed = append(s.committed, proto.Clone(se.Event).(*opensplunk.LogEvent))
 		accepted++
 	}
 	// Accepted + Duplicate must exactly equal the supplied event count, or the
@@ -131,12 +131,12 @@ func (s *recordingStore) Store(_ context.Context, batch ingest.StoreBatch) (inge
 }
 
 // snapshot returns a copy of the committed events (independent clones).
-func (s *recordingStore) snapshot() []*opensplunkv1.LogEvent {
+func (s *recordingStore) snapshot() []*opensplunk.LogEvent {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]*opensplunkv1.LogEvent, len(s.committed))
+	out := make([]*opensplunk.LogEvent, len(s.committed))
 	for i, ev := range s.committed {
-		out[i] = proto.Clone(ev).(*opensplunkv1.LogEvent)
+		out[i] = proto.Clone(ev).(*opensplunk.LogEvent)
 	}
 	return out
 }
@@ -198,7 +198,7 @@ func startIngestServerForIndexes(t *testing.T, store ingest.EventStore, indexes 
 		t.Fatalf("listen: %v", err)
 	}
 	server := grpc.NewServer()
-	opensplunkv1.RegisterCollectorIngestServiceServer(server, svc)
+	opensplunk.RegisterCollectorIngestServiceServer(server, svc)
 	go func() { _ = server.Serve(lis) }()
 	t.Cleanup(server.Stop)
 	return lis.Addr().String()
@@ -397,7 +397,7 @@ func appendFile(t *testing.T, path, data string) {
 
 // eventByMessage returns the first committed event whose canonical message
 // equals msg, or nil.
-func eventByMessage(events []*opensplunkv1.LogEvent, msg string) *opensplunkv1.LogEvent {
+func eventByMessage(events []*opensplunk.LogEvent, msg string) *opensplunk.LogEvent {
 	for _, ev := range events {
 		if ev.GetMessage() == msg {
 			return ev
@@ -407,7 +407,7 @@ func eventByMessage(events []*opensplunkv1.LogEvent, msg string) *opensplunkv1.L
 }
 
 // fieldValue returns the dynamic field named name, or nil.
-func fieldValue(ev *opensplunkv1.LogEvent, name string) *opensplunkv1.TypedValue {
+func fieldValue(ev *opensplunk.LogEvent, name string) *opensplunk.TypedValue {
 	for _, f := range ev.GetFields().GetFields() {
 		if f.GetName() == name {
 			return f.GetValue()
@@ -418,7 +418,7 @@ func fieldValue(ev *opensplunkv1.LogEvent, name string) *opensplunkv1.TypedValue
 
 // assertNoSecret fails the test if secret appears anywhere in any committed
 // event: its wire encoding, its text form, its raw body, or any field.
-func assertNoSecret(t *testing.T, events []*opensplunkv1.LogEvent, secret string) {
+func assertNoSecret(t *testing.T, events []*opensplunk.LogEvent, secret string) {
 	t.Helper()
 	for _, ev := range events {
 		wire, err := proto.Marshal(ev)
@@ -439,7 +439,7 @@ func assertNoSecret(t *testing.T, events []*opensplunkv1.LogEvent, secret string
 
 // assertNoDuplicateEventIDs fails if any event_id appears more than once among
 // the committed events.
-func assertNoDuplicateEventIDs(t *testing.T, events []*opensplunkv1.LogEvent) {
+func assertNoDuplicateEventIDs(t *testing.T, events []*opensplunk.LogEvent) {
 	t.Helper()
 	seen := make(map[string]struct{}, len(events))
 	for _, ev := range events {
@@ -606,7 +606,7 @@ func TestE2ECollectorFixtureToIngest(t *testing.T) {
 	}
 	q, err := wal.Open(wal.Options{
 		Dir: filepath.Join(stateDir, walSubdir), Sync: wal.SyncAlways,
-		CollectorID: d.collectorID, ProtocolMajor: protocolMajor, ProtocolMinor: protocolMinor,
+		CollectorID: d.collectorID,
 	})
 	if err != nil {
 		t.Fatalf("reopen WAL: %v", err)

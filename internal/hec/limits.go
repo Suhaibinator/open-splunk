@@ -27,7 +27,7 @@ const (
 
 // Limits contains the independently enforced resource ceilings for the HEC
 // wire layer. A caller may tighten DefaultLimits, but Validate rejects values
-// above the durable v0.1 contract.
+// above the durable contract.
 type Limits struct {
 	MaximumCompressedBodyBytes     int64
 	MaximumDecompressedBodyBytes   int64
@@ -45,7 +45,7 @@ type Limits struct {
 	MaximumResponseBytes           int64
 }
 
-// DefaultLimits returns the HEC v0.1 ceilings. JSON depth counts composite
+// DefaultLimits returns the HEC ceilings. JSON depth counts composite
 // values below, but not including, the event envelope.
 func DefaultLimits() Limits {
 	return Limits{

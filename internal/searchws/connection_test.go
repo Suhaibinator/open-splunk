@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/gorilla/websocket"
@@ -217,7 +217,7 @@ func scopedSearchJob(id string) searchjobs.Job {
 	}
 }
 
-func writeCommand(t *testing.T, client *websocket.Conn, command *opensplunkv1.SearchWebSocketCommand) {
+func writeCommand(t *testing.T, client *websocket.Conn, command *opensplunk.SearchWebSocketCommand) {
 	t.Helper()
 	data, err := proto.MarshalOptions{Deterministic: true}.Marshal(command)
 	if err != nil {
@@ -228,33 +228,33 @@ func writeCommand(t *testing.T, client *websocket.Conn, command *opensplunkv1.Se
 	}
 }
 
-func subscribeCommand(requestID, subscriptionID, jobID string, after uint64) *opensplunkv1.SearchWebSocketCommand {
-	return &opensplunkv1.SearchWebSocketCommand{
+func subscribeCommand(requestID, subscriptionID, jobID string, after uint64) *opensplunk.SearchWebSocketCommand {
+	return &opensplunk.SearchWebSocketCommand{
 		RequestId: requestID,
-		Payload: &opensplunkv1.SearchWebSocketCommand_Subscribe{Subscribe: &opensplunkv1.SubscribeSearchJobsCommand{
-			Subscriptions: []*opensplunkv1.SearchSubscription{{
+		Payload: &opensplunk.SearchWebSocketCommand_Subscribe{Subscribe: &opensplunk.SubscribeSearchJobsCommand{
+			Subscriptions: []*opensplunk.SearchSubscription{{
 				SubscriptionId: subscriptionID,
-				Target:         &opensplunkv1.JobTarget{Target: &opensplunkv1.JobTarget_SearchJobId{SearchJobId: jobID}},
+				Target:         &opensplunk.JobTarget{Target: &opensplunk.JobTarget_SearchJobId{SearchJobId: jobID}},
 				AfterSequence:  after,
 			}},
 		}},
 	}
 }
 
-func subscribeExportCommand(requestID, subscriptionID, jobID string, after uint64) *opensplunkv1.SearchWebSocketCommand {
-	return &opensplunkv1.SearchWebSocketCommand{
+func subscribeExportCommand(requestID, subscriptionID, jobID string, after uint64) *opensplunk.SearchWebSocketCommand {
+	return &opensplunk.SearchWebSocketCommand{
 		RequestId: requestID,
-		Payload: &opensplunkv1.SearchWebSocketCommand_Subscribe{Subscribe: &opensplunkv1.SubscribeSearchJobsCommand{
-			Subscriptions: []*opensplunkv1.SearchSubscription{{
+		Payload: &opensplunk.SearchWebSocketCommand_Subscribe{Subscribe: &opensplunk.SubscribeSearchJobsCommand{
+			Subscriptions: []*opensplunk.SearchSubscription{{
 				SubscriptionId: subscriptionID,
-				Target:         &opensplunkv1.JobTarget{Target: &opensplunkv1.JobTarget_ExportJobId{ExportJobId: jobID}},
+				Target:         &opensplunk.JobTarget{Target: &opensplunk.JobTarget_ExportJobId{ExportJobId: jobID}},
 				AfterSequence:  after,
 			}},
 		}},
 	}
 }
 
-func readEvent(t *testing.T, client *websocket.Conn) *opensplunkv1.SearchWebSocketEvent {
+func readEvent(t *testing.T, client *websocket.Conn) *opensplunk.SearchWebSocketEvent {
 	t.Helper()
 	if err := client.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
 		t.Fatal(err)
@@ -266,7 +266,7 @@ func readEvent(t *testing.T, client *websocket.Conn) *opensplunkv1.SearchWebSock
 	if messageType != websocket.BinaryMessage {
 		t.Fatalf("message type = %d, want binary", messageType)
 	}
-	var event opensplunkv1.SearchWebSocketEvent
+	var event opensplunk.SearchWebSocketEvent
 	if err := proto.Unmarshal(data, &event); err != nil {
 		t.Fatalf("Unmarshal() = %v", err)
 	}
@@ -276,13 +276,13 @@ func readEvent(t *testing.T, client *websocket.Conn) *opensplunkv1.SearchWebSock
 	return &event
 }
 
-func readInitialSearchState(t *testing.T, client *websocket.Conn, subscriptionID string) (*opensplunkv1.SearchWebSocketEvent, []*opensplunkv1.SearchWebSocketEvent) {
+func readInitialSearchState(t *testing.T, client *websocket.Conn, subscriptionID string) (*opensplunk.SearchWebSocketEvent, []*opensplunk.SearchWebSocketEvent) {
 	t.Helper()
 	ack := readEvent(t, client)
 	if acknowledged := ack.GetSubscriptionAcknowledged(); acknowledged == nil || acknowledged.GetSubscriptionId() != subscriptionID {
 		t.Fatalf("acknowledgment = %+v", ack)
 	}
-	events := []*opensplunkv1.SearchWebSocketEvent{readEvent(t, client), readEvent(t, client)}
+	events := []*opensplunk.SearchWebSocketEvent{readEvent(t, client), readEvent(t, client)}
 	if events[0].GetSearchStateChanged() == nil || events[1].GetSearchProgress() == nil {
 		t.Fatalf("initial events = (%+v, %+v)", events[0], events[1])
 	}
@@ -446,7 +446,7 @@ func TestWebSocketReplayRestartExpirationAndDivergence(t *testing.T) {
 		t.Fatal("fresh acknowledgment is missing")
 	}
 	freshResynchronization := readEvent(t, fresh).GetResynchronizationRequired()
-	if freshResynchronization == nil || freshResynchronization.GetReason() != opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_SERVER_RESTARTED {
+	if freshResynchronization == nil || freshResynchronization.GetReason() != opensplunk.ResynchronizationReason_RESYNCHRONIZATION_REASON_SERVER_RESTARTED {
 		t.Fatalf("fresh resynchronization = %+v", freshResynchronization)
 	}
 
@@ -475,9 +475,9 @@ func TestWebSocketReplayRestartExpirationAndDivergence(t *testing.T) {
 		replayedFreshUpdate.GetSearchProgress() == nil {
 		t.Fatalf("recovered fresh epoch replay = %+v", replayedFreshUpdate)
 	}
-	writeCommand(t, recovered, &opensplunkv1.SearchWebSocketCommand{
+	writeCommand(t, recovered, &opensplunk.SearchWebSocketCommand{
 		RequestId: "recovered-ping",
-		Payload: &opensplunkv1.SearchWebSocketCommand_Ping{Ping: &opensplunkv1.SearchWebSocketPing{
+		Payload: &opensplunk.SearchWebSocketCommand_Ping{Ping: &opensplunk.SearchWebSocketPing{
 			Nonce: "recovered",
 		}},
 	})
@@ -508,7 +508,7 @@ func TestWebSocketReplayRestartExpirationAndDivergence(t *testing.T) {
 	expired := fixture.dial()
 	writeCommand(t, expired, subscribeCommand("expired", "expired", job.ID, freshResynchronization.GetLatestSequence()-1))
 	_ = readEvent(t, expired)
-	if got := readEvent(t, expired).GetResynchronizationRequired(); got == nil || got.GetReason() != opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED {
+	if got := readEvent(t, expired).GetResynchronizationRequired(); got == nil || got.GetReason() != opensplunk.ResynchronizationReason_RESYNCHRONIZATION_REASON_SEQUENCE_EXPIRED {
 		t.Fatalf("expired resynchronization = %+v", got)
 	}
 
@@ -518,13 +518,13 @@ func TestWebSocketReplayRestartExpirationAndDivergence(t *testing.T) {
 	job.Version = 1
 	job.RowCount = 0
 	reader.set(job)
-	if got := readEvent(t, established).GetResynchronizationRequired(); got == nil || got.GetReason() != opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_STATE_DIVERGED {
+	if got := readEvent(t, established).GetResynchronizationRequired(); got == nil || got.GetReason() != opensplunk.ResynchronizationReason_RESYNCHRONIZATION_REASON_STATE_DIVERGED {
 		t.Fatalf("live divergence = %+v", got)
 	}
 	diverged := fixture.dial()
 	writeCommand(t, diverged, subscribeCommand("diverged", "diverged", job.ID, oldLatest))
 	_ = readEvent(t, diverged)
-	if got := readEvent(t, diverged).GetResynchronizationRequired(); got == nil || got.GetReason() != opensplunkv1.ResynchronizationReason_RESYNCHRONIZATION_REASON_STATE_DIVERGED {
+	if got := readEvent(t, diverged).GetResynchronizationRequired(); got == nil || got.GetReason() != opensplunk.ResynchronizationReason_RESYNCHRONIZATION_REASON_STATE_DIVERGED {
 		t.Fatalf("resume divergence = %+v", got)
 	}
 }
@@ -600,10 +600,10 @@ func TestWebSocketSubscriptionIdentityLimitRequiresReconnect(t *testing.T) {
 		id := fmt.Sprintf("identity-%d", index)
 		writeCommand(t, client, subscribeCommand("subscribe-"+id, id, job.ID, 0))
 		_, _ = readInitialSearchState(t, client, id)
-		writeCommand(t, client, &opensplunkv1.SearchWebSocketCommand{
+		writeCommand(t, client, &opensplunk.SearchWebSocketCommand{
 			RequestId: "unsubscribe-" + id,
-			Payload: &opensplunkv1.SearchWebSocketCommand_Unsubscribe{
-				Unsubscribe: &opensplunkv1.UnsubscribeSearchJobsCommand{SubscriptionIds: []string{id}},
+			Payload: &opensplunk.SearchWebSocketCommand_Unsubscribe{
+				Unsubscribe: &opensplunk.UnsubscribeSearchJobsCommand{SubscriptionIds: []string{id}},
 			},
 		})
 		if removed := readEvent(t, client).GetSubscriptionRemoved(); removed == nil || removed.GetSubscriptionId() != id {
@@ -615,7 +615,7 @@ func TestWebSocketSubscriptionIdentityLimitRequiresReconnect(t *testing.T) {
 	writeCommand(t, client, subscribeCommand("exhausted", exhaustedID, job.ID, 0))
 	exhausted := readEvent(t, client).GetProtocolError()
 	if exhausted == nil ||
-		exhausted.GetCode() != opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_TOO_MANY_SUBSCRIPTIONS ||
+		exhausted.GetCode() != opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_TOO_MANY_SUBSCRIPTIONS ||
 		!exhausted.GetConnectionWillClose() {
 		t.Fatalf("exhausted subscription identities = %+v", exhausted)
 	}
@@ -639,35 +639,35 @@ func TestWebSocketCommandsAreAtomic(t *testing.T) {
 	})
 	client := fixture.dial()
 
-	missingBatch := &opensplunkv1.SearchWebSocketCommand{
+	missingBatch := &opensplunk.SearchWebSocketCommand{
 		RequestId: "batch",
-		Payload: &opensplunkv1.SearchWebSocketCommand_Subscribe{Subscribe: &opensplunkv1.SubscribeSearchJobsCommand{Subscriptions: []*opensplunkv1.SearchSubscription{
-			{SubscriptionId: "valid", Target: &opensplunkv1.JobTarget{Target: &opensplunkv1.JobTarget_SearchJobId{SearchJobId: job.ID}}},
-			{SubscriptionId: "missing", Target: &opensplunkv1.JobTarget{Target: &opensplunkv1.JobTarget_SearchJobId{SearchJobId: "not-visible"}}},
+		Payload: &opensplunk.SearchWebSocketCommand_Subscribe{Subscribe: &opensplunk.SubscribeSearchJobsCommand{Subscriptions: []*opensplunk.SearchSubscription{
+			{SubscriptionId: "valid", Target: &opensplunk.JobTarget{Target: &opensplunk.JobTarget_SearchJobId{SearchJobId: job.ID}}},
+			{SubscriptionId: "missing", Target: &opensplunk.JobTarget{Target: &opensplunk.JobTarget_SearchJobId{SearchJobId: "not-visible"}}},
 		}}},
 	}
 	writeCommand(t, client, missingBatch)
-	if got := readEvent(t, client).GetProtocolError(); got == nil || got.GetCode() != opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_JOB_NOT_FOUND {
+	if got := readEvent(t, client).GetProtocolError(); got == nil || got.GetCode() != opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_JOB_NOT_FOUND {
 		t.Fatalf("batch error = %+v", got)
 	}
 
 	writeCommand(t, client, subscribeCommand("valid", "valid", job.ID, 0))
 	_, _ = readInitialSearchState(t, client, "valid")
-	overCap := &opensplunkv1.SearchWebSocketCommand{
+	overCap := &opensplunk.SearchWebSocketCommand{
 		RequestId: "over-cap",
-		Payload: &opensplunkv1.SearchWebSocketCommand_Subscribe{Subscribe: &opensplunkv1.SubscribeSearchJobsCommand{Subscriptions: []*opensplunkv1.SearchSubscription{
-			{SubscriptionId: "second", Target: &opensplunkv1.JobTarget{Target: &opensplunkv1.JobTarget_SearchJobId{SearchJobId: job.ID}}},
-			{SubscriptionId: "third", Target: &opensplunkv1.JobTarget{Target: &opensplunkv1.JobTarget_SearchJobId{SearchJobId: job.ID}}},
+		Payload: &opensplunk.SearchWebSocketCommand_Subscribe{Subscribe: &opensplunk.SubscribeSearchJobsCommand{Subscriptions: []*opensplunk.SearchSubscription{
+			{SubscriptionId: "second", Target: &opensplunk.JobTarget{Target: &opensplunk.JobTarget_SearchJobId{SearchJobId: job.ID}}},
+			{SubscriptionId: "third", Target: &opensplunk.JobTarget{Target: &opensplunk.JobTarget_SearchJobId{SearchJobId: job.ID}}},
 		}}},
 	}
 	writeCommand(t, client, overCap)
-	if got := readEvent(t, client).GetProtocolError(); got == nil || got.GetCode() != opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_TOO_MANY_SUBSCRIPTIONS {
+	if got := readEvent(t, client).GetProtocolError(); got == nil || got.GetCode() != opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_TOO_MANY_SUBSCRIPTIONS {
 		t.Fatalf("capacity error = %+v", got)
 	}
 
-	unsubscribe := &opensplunkv1.SearchWebSocketCommand{
+	unsubscribe := &opensplunk.SearchWebSocketCommand{
 		RequestId: "remove",
-		Payload: &opensplunkv1.SearchWebSocketCommand_Unsubscribe{Unsubscribe: &opensplunkv1.UnsubscribeSearchJobsCommand{
+		Payload: &opensplunk.SearchWebSocketCommand_Unsubscribe{Unsubscribe: &opensplunk.UnsubscribeSearchJobsCommand{
 			SubscriptionIds: []string{"valid", "unknown"},
 		}},
 	}
@@ -691,7 +691,7 @@ func TestWebSocketCommandsAreAtomic(t *testing.T) {
 	writeCommand(t, client, subscribeCommand("reuse", "valid", job.ID, 0))
 	reused := readEvent(t, client).GetProtocolError()
 	if reused == nil ||
-		reused.GetCode() != opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND ||
+		reused.GetCode() != opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND ||
 		len(reused.GetViolations()) != 1 ||
 		reused.GetViolations()[0].GetCode() != "ALREADY_EXISTS" {
 		t.Fatalf("reused subscription ID error = %+v", reused)
@@ -708,19 +708,19 @@ func TestWebSocketMalformedBinaryIsRecoverableAndApplicationPingResponds(t *test
 	if err := client.WriteMessage(websocket.BinaryMessage, []byte{0xff, 0xff}); err != nil {
 		t.Fatal(err)
 	}
-	if got := readEvent(t, client).GetProtocolError(); got == nil || got.GetCode() != opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND || got.GetConnectionWillClose() {
+	if got := readEvent(t, client).GetProtocolError(); got == nil || got.GetCode() != opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND || got.GetConnectionWillClose() {
 		t.Fatalf("malformed-frame error = %+v", got)
 	}
-	writeCommand(t, client, &opensplunkv1.SearchWebSocketCommand{
+	writeCommand(t, client, &opensplunk.SearchWebSocketCommand{
 		RequestId: "ping-request",
-		Payload:   &opensplunkv1.SearchWebSocketCommand_Ping{Ping: &opensplunkv1.SearchWebSocketPing{Nonce: "nonce-1"}},
+		Payload:   &opensplunk.SearchWebSocketCommand_Ping{Ping: &opensplunk.SearchWebSocketPing{Nonce: "nonce-1"}},
 	})
 	if got := readEvent(t, client).GetPong(); got == nil || got.GetNonce() != "nonce-1" || got.GetServerTime().CheckValid() != nil {
 		t.Fatalf("application pong = %+v", got)
 	}
-	knownWithUnknown := &opensplunkv1.SearchWebSocketCommand{
+	knownWithUnknown := &opensplunk.SearchWebSocketCommand{
 		RequestId: "forward-compatible",
-		Payload:   &opensplunkv1.SearchWebSocketCommand_Ping{Ping: &opensplunkv1.SearchWebSocketPing{Nonce: "unknown-field"}},
+		Payload:   &opensplunk.SearchWebSocketCommand_Ping{Ping: &opensplunk.SearchWebSocketPing{Nonce: "unknown-field"}},
 	}
 	data, err := proto.MarshalOptions{Deterministic: true}.Marshal(knownWithUnknown)
 	if err != nil {
@@ -741,10 +741,10 @@ func TestWebSocketRejectsTextAndOversizedFrames(t *testing.T) {
 		name        string
 		messageType int
 		payload     []byte
-		wantCode    opensplunkv1.SearchWebSocketProtocolErrorCode
+		wantCode    opensplunk.SearchWebSocketProtocolErrorCode
 	}{
-		{name: "text", messageType: websocket.TextMessage, payload: []byte("not protobuf"), wantCode: opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND},
-		{name: "oversized", messageType: websocket.BinaryMessage, payload: make([]byte, minimumFrameBytes+1), wantCode: opensplunkv1.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_FRAME_TOO_LARGE},
+		{name: "text", messageType: websocket.TextMessage, payload: []byte("not protobuf"), wantCode: opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_INVALID_COMMAND},
+		{name: "oversized", messageType: websocket.BinaryMessage, payload: make([]byte, minimumFrameBytes+1), wantCode: opensplunk.SearchWebSocketProtocolErrorCode_SEARCH_WEB_SOCKET_PROTOCOL_ERROR_CODE_FRAME_TOO_LARGE},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newWebSocketFixture(t, newMutableSearchSnapshots(), func(config *Config) {
@@ -1165,9 +1165,9 @@ func TestControlEventsRejectInvalidInjectedClock(t *testing.T) {
 		config.Now = func() time.Time { return time.Date(10_000, 1, 1, 0, 0, 0, 0, time.UTC) }
 	})
 	client := fixture.dial()
-	writeCommand(t, client, &opensplunkv1.SearchWebSocketCommand{
+	writeCommand(t, client, &opensplunk.SearchWebSocketCommand{
 		RequestId: "ping",
-		Payload:   &opensplunkv1.SearchWebSocketCommand_Ping{Ping: &opensplunkv1.SearchWebSocketPing{Nonce: "invalid-clock"}},
+		Payload:   &opensplunk.SearchWebSocketCommand_Ping{Ping: &opensplunk.SearchWebSocketPing{Nonce: "invalid-clock"}},
 	})
 	_ = client.SetReadDeadline(time.Now().Add(time.Second))
 	if _, _, err := client.ReadMessage(); err == nil {

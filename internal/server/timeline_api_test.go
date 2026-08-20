@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/SRouter/pkg/router"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/searchanalysis"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -81,7 +81,7 @@ func TestSearchTimelineRoundTripScopeAndClippedBuckets(t *testing.T) {
 		WebUI: testUI(), TenantID: "tenant-timeline", OwnerID: "owner-timeline",
 	})
 	maximum := uint32(2)
-	response := postProto(t, handler, searchTimelinePath, &opensplunkv1.GetSearchTimelineRequest{
+	response := postProto(t, handler, searchTimelinePath, &opensplunk.GetSearchTimelineRequest{
 		SearchJobId: "  job-1  ", MaxBuckets: &maximum, PreferredBucketWidth: &durationpb.Duration{Seconds: 60},
 	})
 	if response.Code != http.StatusOK {
@@ -91,7 +91,7 @@ func TestSearchTimelineRoundTripScopeAndClippedBuckets(t *testing.T) {
 		response.Header().Get("Cache-Control") != "no-store" || response.Header().Get("Pragma") != "no-cache" {
 		t.Fatalf("timeline headers = %v", response.Header())
 	}
-	var decoded opensplunkv1.GetSearchTimelineResponse
+	var decoded opensplunk.GetSearchTimelineResponse
 	unmarshalResponse(t, response, &decoded)
 	if !decoded.GetComplete() || decoded.GetBucketWidth().GetSeconds() != 60 || decoded.GetBucketWidth().GetNanos() != 0 || len(decoded.GetBuckets()) != 2 {
 		t.Fatalf("timeline response = %+v", &decoded)
@@ -116,7 +116,7 @@ func TestSearchTimelinePreservesOmittedOptionsAndLargeValidSeconds(t *testing.T)
 		return validTimelineResult(start), nil
 	}
 	handler := timelineTestHandler(t, service)
-	response := postProto(t, handler, searchTimelinePath, &opensplunkv1.GetSearchTimelineRequest{SearchJobId: "job-1"})
+	response := postProto(t, handler, searchTimelinePath, &opensplunk.GetSearchTimelineRequest{SearchJobId: "job-1"})
 	if response.Code != http.StatusOK {
 		t.Fatalf("omitted options status = %d, body = %s", response.Code, response.Body.String())
 	}
@@ -127,7 +127,7 @@ func TestSearchTimelinePreservesOmittedOptionsAndLargeValidSeconds(t *testing.T)
 		}
 		return searchanalysis.Result{}, searchanalysis.ErrTimelineUnsupported
 	}
-	response = postProto(t, handler, searchTimelinePath, &opensplunkv1.GetSearchTimelineRequest{
+	response = postProto(t, handler, searchTimelinePath, &opensplunk.GetSearchTimelineRequest{
 		SearchJobId: "job-1", PreferredBucketWidth: &durationpb.Duration{Seconds: 315_576_000_000},
 	})
 	if response.Code != http.StatusUnprocessableEntity {
@@ -142,19 +142,19 @@ func TestSearchTimelineRouteAndFeatureAreExactAndConditional(t *testing.T) {
 	}}
 	handler := newTestHandler(t, Config{
 		SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, SearchTimelines: service, WebUI: testUI(),
-		Bootstrap: BootstrapConfig{Features: []opensplunkv1.ServerFeature{
-			opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH,
-			opensplunkv1.ServerFeature_SERVER_FEATURE_TIMELINE,
-			opensplunkv1.ServerFeature_SERVER_FEATURE_TIMELINE,
+		Bootstrap: BootstrapConfig{Features: []opensplunk.ServerFeature{
+			opensplunk.ServerFeature_SERVER_FEATURE_SEARCH,
+			opensplunk.ServerFeature_SERVER_FEATURE_TIMELINE,
+			opensplunk.ServerFeature_SERVER_FEATURE_TIMELINE,
 		}},
 	})
 
-	bootstrapResponse := postProto(t, handler, "/api/v1/system/bootstrap", &opensplunkv1.GetSystemBootstrapRequest{})
-	var bootstrap opensplunkv1.GetSystemBootstrapResponse
+	bootstrapResponse := postProto(t, handler, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{})
+	var bootstrap opensplunk.GetSystemBootstrapResponse
 	unmarshalResponse(t, bootstrapResponse, &bootstrap)
 	count := 0
 	for _, feature := range bootstrap.GetFeatures() {
-		if feature == opensplunkv1.ServerFeature_SERVER_FEATURE_TIMELINE {
+		if feature == opensplunk.ServerFeature_SERVER_FEATURE_TIMELINE {
 			count++
 		}
 	}
@@ -166,17 +166,17 @@ func TestSearchTimelineRouteAndFeatureAreExactAndConditional(t *testing.T) {
 	}
 	configuredWithoutFeature := newTestHandler(t, Config{
 		SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, SearchTimelines: service, WebUI: testUI(),
-		Bootstrap: BootstrapConfig{Features: []opensplunkv1.ServerFeature{
-			opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH,
+		Bootstrap: BootstrapConfig{Features: []opensplunk.ServerFeature{
+			opensplunk.ServerFeature_SERVER_FEATURE_SEARCH,
 		}},
 	})
-	bootstrapResponse = postProto(t, configuredWithoutFeature, "/api/v1/system/bootstrap", &opensplunkv1.GetSystemBootstrapRequest{})
+	bootstrapResponse = postProto(t, configuredWithoutFeature, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{})
 	unmarshalResponse(t, bootstrapResponse, &bootstrap)
-	if !slices.Contains(bootstrap.GetFeatures(), opensplunkv1.ServerFeature_SERVER_FEATURE_TIMELINE) {
+	if !slices.Contains(bootstrap.GetFeatures(), opensplunk.ServerFeature_SERVER_FEATURE_TIMELINE) {
 		t.Fatalf("enabled timeline was not advertised in %v", bootstrap.GetFeatures())
 	}
 
-	response := postProto(t, handler, searchTimelinePath+"/extra", &opensplunkv1.GetSearchTimelineRequest{SearchJobId: "job-1"})
+	response := postProto(t, handler, searchTimelinePath+"/extra", &opensplunk.GetSearchTimelineRequest{SearchJobId: "job-1"})
 	if response.Code != http.StatusNotFound || service.callCount() != 0 {
 		t.Fatalf("suffix status/calls = %d/%d", response.Code, service.callCount())
 	}
@@ -196,18 +196,18 @@ func TestSearchTimelineRouteAndFeatureAreExactAndConditional(t *testing.T) {
 
 	disabled := newTestHandler(t, Config{
 		SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, WebUI: testUI(),
-		Bootstrap: BootstrapConfig{Features: []opensplunkv1.ServerFeature{
-			opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH,
-			opensplunkv1.ServerFeature_SERVER_FEATURE_TIMELINE,
+		Bootstrap: BootstrapConfig{Features: []opensplunk.ServerFeature{
+			opensplunk.ServerFeature_SERVER_FEATURE_SEARCH,
+			opensplunk.ServerFeature_SERVER_FEATURE_TIMELINE,
 		}},
 	})
-	response = postProto(t, disabled, searchTimelinePath, &opensplunkv1.GetSearchTimelineRequest{SearchJobId: "job-1"})
+	response = postProto(t, disabled, searchTimelinePath, &opensplunk.GetSearchTimelineRequest{SearchJobId: "job-1"})
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("disabled route status = %d, body = %s", response.Code, response.Body.String())
 	}
-	bootstrapResponse = postProto(t, disabled, "/api/v1/system/bootstrap", &opensplunkv1.GetSystemBootstrapRequest{})
+	bootstrapResponse = postProto(t, disabled, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{})
 	unmarshalResponse(t, bootstrapResponse, &bootstrap)
-	if slices.Contains(bootstrap.GetFeatures(), opensplunkv1.ServerFeature_SERVER_FEATURE_TIMELINE) {
+	if slices.Contains(bootstrap.GetFeatures(), opensplunk.ServerFeature_SERVER_FEATURE_TIMELINE) {
 		t.Fatalf("disabled timeline advertised in %v", bootstrap.GetFeatures())
 	}
 	if bootstrap.GetLimits().GetMaximumTimelineBuckets() != 0 {
@@ -220,7 +220,7 @@ func TestSearchTimelineInheritsBrowserTrustBoundary(t *testing.T) {
 		return validTimelineResult(testNow), nil
 	}}
 	handler := timelineTestHandler(t, service)
-	payload, err := proto.Marshal(&opensplunkv1.GetSearchTimelineRequest{SearchJobId: "job-1"})
+	payload, err := proto.Marshal(&opensplunk.GetSearchTimelineRequest{SearchJobId: "job-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,8 +262,8 @@ func TestTimelineServiceDoesNotEnableCreateTimelineOption(t *testing.T) {
 		SearchTimelines: service, WebUI: testUI(),
 	})
 	request := createRequest("2026-07-22T12:00:00Z", "2026-07-22T13:00:00Z", "main")
-	request.Options = &opensplunkv1.SearchJobOptions{EnableTimeline: true}
-	response := postProto(t, handler, "/api/v1/search/jobs/create", request)
+	request.Options = &opensplunk.SearchJobOptions{EnableTimeline: true}
+	response := postProto(t, handler, "/api/search/jobs/create", request)
 	if response.Code != http.StatusBadRequest || jobs.createCalls != 0 {
 		t.Fatalf("create timeline option status/calls = %d/%d, body = %s", response.Code, jobs.createCalls, response.Body.String())
 	}
@@ -274,20 +274,20 @@ func TestSearchTimelineInputValidation(t *testing.T) {
 	tooMany := uint32(11)
 	tests := []struct {
 		name       string
-		request    *opensplunkv1.GetSearchTimelineRequest
+		request    *opensplunk.GetSearchTimelineRequest
 		wantStatus int
 		wantCalls  int
 	}{
-		{name: "missing ID", request: &opensplunkv1.GetSearchTimelineRequest{}, wantStatus: http.StatusBadRequest},
-		{name: "blank ID", request: &opensplunkv1.GetSearchTimelineRequest{SearchJobId: " \t\n "}, wantStatus: http.StatusBadRequest},
-		{name: "zero max", request: &opensplunkv1.GetSearchTimelineRequest{SearchJobId: "job", MaxBuckets: &zero}, wantStatus: http.StatusBadRequest},
-		{name: "max above service", request: &opensplunkv1.GetSearchTimelineRequest{SearchJobId: "job", MaxBuckets: &tooMany}, wantStatus: http.StatusBadRequest},
-		{name: "invalid protobuf duration", request: &opensplunkv1.GetSearchTimelineRequest{SearchJobId: "job", PreferredBucketWidth: &durationpb.Duration{Seconds: 315_576_000_001}}, wantStatus: http.StatusBadRequest},
-		{name: "int64 duration rejected safely", request: &opensplunkv1.GetSearchTimelineRequest{SearchJobId: "job", PreferredBucketWidth: &durationpb.Duration{Seconds: math.MaxInt64}}, wantStatus: http.StatusBadRequest},
-		{name: "zero duration", request: &opensplunkv1.GetSearchTimelineRequest{SearchJobId: "job", PreferredBucketWidth: &durationpb.Duration{}}, wantStatus: http.StatusBadRequest},
-		{name: "negative duration", request: &opensplunkv1.GetSearchTimelineRequest{SearchJobId: "job", PreferredBucketWidth: &durationpb.Duration{Seconds: -1}}, wantStatus: http.StatusBadRequest},
-		{name: "fractional duration", request: &opensplunkv1.GetSearchTimelineRequest{SearchJobId: "job", PreferredBucketWidth: &durationpb.Duration{Seconds: 1, Nanos: 1}}, wantStatus: http.StatusBadRequest},
-		{name: "valid exact maximum", request: &opensplunkv1.GetSearchTimelineRequest{SearchJobId: "job", MaxBuckets: new(uint32(10))}, wantStatus: http.StatusUnprocessableEntity, wantCalls: 1},
+		{name: "missing ID", request: &opensplunk.GetSearchTimelineRequest{}, wantStatus: http.StatusBadRequest},
+		{name: "blank ID", request: &opensplunk.GetSearchTimelineRequest{SearchJobId: " \t\n "}, wantStatus: http.StatusBadRequest},
+		{name: "zero max", request: &opensplunk.GetSearchTimelineRequest{SearchJobId: "job", MaxBuckets: &zero}, wantStatus: http.StatusBadRequest},
+		{name: "max above service", request: &opensplunk.GetSearchTimelineRequest{SearchJobId: "job", MaxBuckets: &tooMany}, wantStatus: http.StatusBadRequest},
+		{name: "invalid protobuf duration", request: &opensplunk.GetSearchTimelineRequest{SearchJobId: "job", PreferredBucketWidth: &durationpb.Duration{Seconds: 315_576_000_001}}, wantStatus: http.StatusBadRequest},
+		{name: "int64 duration rejected safely", request: &opensplunk.GetSearchTimelineRequest{SearchJobId: "job", PreferredBucketWidth: &durationpb.Duration{Seconds: math.MaxInt64}}, wantStatus: http.StatusBadRequest},
+		{name: "zero duration", request: &opensplunk.GetSearchTimelineRequest{SearchJobId: "job", PreferredBucketWidth: &durationpb.Duration{}}, wantStatus: http.StatusBadRequest},
+		{name: "negative duration", request: &opensplunk.GetSearchTimelineRequest{SearchJobId: "job", PreferredBucketWidth: &durationpb.Duration{Seconds: -1}}, wantStatus: http.StatusBadRequest},
+		{name: "fractional duration", request: &opensplunk.GetSearchTimelineRequest{SearchJobId: "job", PreferredBucketWidth: &durationpb.Duration{Seconds: 1, Nanos: 1}}, wantStatus: http.StatusBadRequest},
+		{name: "valid exact maximum", request: &opensplunk.GetSearchTimelineRequest{SearchJobId: "job", MaxBuckets: new(uint32(10))}, wantStatus: http.StatusUnprocessableEntity, wantCalls: 1},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -332,7 +332,7 @@ func TestSearchTimelineErrorMapping(t *testing.T) {
 			service := &fakeSearchTimelines{maximum: 10, getFn: func(context.Context, searchjobs.AccessScope, searchanalysis.Request) (searchanalysis.Result, error) {
 				return searchanalysis.Result{}, fmt.Errorf("secret storage detail: %w", test.err)
 			}}
-			response := postProto(t, timelineTestHandler(t, service), searchTimelinePath, &opensplunkv1.GetSearchTimelineRequest{SearchJobId: "job"})
+			response := postProto(t, timelineTestHandler(t, service), searchTimelinePath, &opensplunk.GetSearchTimelineRequest{SearchJobId: "job"})
 			if response.Code != test.want {
 				t.Fatalf("status = %d, want %d; body = %s", response.Code, test.want, response.Body.String())
 			}
@@ -350,7 +350,7 @@ func TestSearchTimelineCancellationAfterSuccessfulReadReturnsRequestTimeout(t *t
 		return validTimelineResult(testNow), nil
 	}}
 	handler := timelineTestHandler(t, service)
-	payload, err := proto.Marshal(&opensplunkv1.GetSearchTimelineRequest{SearchJobId: "job"})
+	payload, err := proto.Marshal(&opensplunk.GetSearchTimelineRequest{SearchJobId: "job"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -412,7 +412,7 @@ func TestSearchTimelineRejectsInvalidServiceResults(t *testing.T) {
 			service := &fakeSearchTimelines{maximum: maximum, getFn: func(context.Context, searchjobs.AccessScope, searchanalysis.Request) (searchanalysis.Result, error) {
 				return test.result, nil
 			}}
-			response := postProto(t, timelineTestHandler(t, service), searchTimelinePath, &opensplunkv1.GetSearchTimelineRequest{SearchJobId: "job"})
+			response := postProto(t, timelineTestHandler(t, service), searchTimelinePath, &opensplunk.GetSearchTimelineRequest{SearchJobId: "job"})
 			if response.Code != http.StatusInternalServerError {
 				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 			}
@@ -425,7 +425,7 @@ func TestSearchTimelineCodecRetainsPermitAndChecksContext(t *testing.T) {
 	writer := &timelineObservingWriter{header: make(http.Header), released: &released}
 	codec := newSerializedSearchTimelineCodec()
 	err := codec.Encode(writer, &serializedSearchTimelineResponse{
-		message: &opensplunkv1.GetSearchTimelineResponse{Complete: true},
+		message: &opensplunk.GetSearchTimelineResponse{Complete: true},
 		ctx:     context.Background(),
 		release: func() { released++ },
 	})
@@ -438,7 +438,7 @@ func TestSearchTimelineCodecRetainsPermitAndChecksContext(t *testing.T) {
 	released = 0
 	response := httptest.NewRecorder()
 	err = codec.Encode(response, &serializedSearchTimelineResponse{
-		message: &opensplunkv1.GetSearchTimelineResponse{Complete: true},
+		message: &opensplunk.GetSearchTimelineResponse{Complete: true},
 		ctx:     ctx,
 		release: func() { released++ },
 	})
@@ -456,11 +456,11 @@ func TestSearchTimelineRetainsSharedSerializationPermitUntilEncode(t *testing.T)
 		ownerID: "owner", tenantID: "tenant", serializationGate: make(chan struct{}, 1),
 	}
 	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, searchTimelinePath, nil)
-	first, err := handler.getSearchTimeline(request, &opensplunkv1.GetSearchTimelineRequest{SearchJobId: "job"})
+	first, err := handler.getSearchTimeline(request, &opensplunk.GetSearchTimelineRequest{SearchJobId: "job"})
 	if err != nil || first == nil || len(handler.serializationGate) != 1 {
 		t.Fatalf("first response/error/gate = %+v/%v/%d", first, err, len(handler.serializationGate))
 	}
-	_, err = handler.getSearchTimeline(request, &opensplunkv1.GetSearchTimelineRequest{SearchJobId: "job"})
+	_, err = handler.getSearchTimeline(request, &opensplunk.GetSearchTimelineRequest{SearchJobId: "job"})
 	var httpErr *router.HTTPError
 	if !errors.As(err, &httpErr) || httpErr.StatusCode != http.StatusServiceUnavailable ||
 		len(handler.serializationGate) != 1 || service.callCount() != 1 {
@@ -491,7 +491,7 @@ func TestSearchTimelineServiceMaximumAndTypedNilAreValidated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("typed-nil timeline service: %v", err)
 	}
-	response := postProto(t, handler, searchTimelinePath, &opensplunkv1.GetSearchTimelineRequest{SearchJobId: "job"})
+	response := postProto(t, handler, searchTimelinePath, &opensplunk.GetSearchTimelineRequest{SearchJobId: "job"})
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("typed-nil route status = %d, body = %s", response.Code, response.Body.String())
 	}

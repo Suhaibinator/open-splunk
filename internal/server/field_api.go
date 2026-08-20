@@ -11,7 +11,7 @@ import (
 	"github.com/Suhaibinator/SRouter/pkg/codec"
 	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/searchanalysis"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobproto"
@@ -25,12 +25,12 @@ const (
 
 func (handler *apiHandler) searchFieldRoutes(noAuth router.AuthLevel, smallRequestBytes int64) []protobufRouteDefinition {
 	return []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute[*opensplunkv1.ListSearchFieldsRequest, *serializedSearchFieldsResponse](router.RouteConfig[*opensplunkv1.ListSearchFieldsRequest, *serializedSearchFieldsResponse]{
+		newForwardCompatibleProtoRoute[*opensplunk.ListSearchFieldsRequest, *serializedSearchFieldsResponse](router.RouteConfig[*opensplunk.ListSearchFieldsRequest, *serializedSearchFieldsResponse]{
 			Path: searchFieldsListRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedSearchFieldsCodec(), Handler: handler.listSearchFields,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunkv1.GetSearchFieldSummaryRequest, *serializedSearchFieldSummaryResponse](router.RouteConfig[*opensplunkv1.GetSearchFieldSummaryRequest, *serializedSearchFieldSummaryResponse]{
+		newForwardCompatibleProtoRoute[*opensplunk.GetSearchFieldSummaryRequest, *serializedSearchFieldSummaryResponse](router.RouteConfig[*opensplunk.GetSearchFieldSummaryRequest, *serializedSearchFieldSummaryResponse]{
 			Path: searchFieldSummaryRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedSearchFieldSummaryCodec(), Handler: handler.getSearchFieldSummary,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
@@ -38,7 +38,7 @@ func (handler *apiHandler) searchFieldRoutes(noAuth router.AuthLevel, smallReque
 	}
 }
 
-func (handler *apiHandler) listSearchFields(request *http.Request, input *opensplunkv1.ListSearchFieldsRequest) (*serializedSearchFieldsResponse, error) {
+func (handler *apiHandler) listSearchFields(request *http.Request, input *opensplunk.ListSearchFieldsRequest) (*serializedSearchFieldsResponse, error) {
 	if input == nil {
 		return nil, badRequestError("search field request is required")
 	}
@@ -115,7 +115,7 @@ func searchFieldPageToProto(
 	includeTotal bool,
 	maximumPageSize uint32,
 	maximumCatalogFields uint32,
-) (*opensplunkv1.ListSearchFieldsResponse, error) {
+) (*opensplunk.ListSearchFieldsResponse, error) {
 	fields, page, err := fieldPageToProto(
 		ctx,
 		result,
@@ -132,7 +132,7 @@ func searchFieldPageToProto(
 	if err != nil {
 		return nil, err
 	}
-	return &opensplunkv1.ListSearchFieldsResponse{
+	return &opensplunk.ListSearchFieldsResponse{
 		Fields: fields,
 		Page:   page,
 	}, nil
@@ -153,7 +153,7 @@ func fieldPageToProto(
 	includeTotal bool,
 	maximumPageSize uint32,
 	maximumCatalogFields uint32,
-) ([]*opensplunkv1.FieldProfile, *opensplunkv1.PageResponse, error) {
+) ([]*opensplunk.FieldProfile, *opensplunk.PageResponse, error) {
 	if ctx == nil {
 		return nil, nil, errors.New("field conversion context is required")
 	}
@@ -185,7 +185,7 @@ func fieldPageToProto(
 		return nil, nil, errors.New("short field page has a continuation")
 	}
 
-	fields := make([]*opensplunkv1.FieldProfile, len(result.Fields))
+	fields := make([]*opensplunk.FieldProfile, len(result.Fields))
 	var previousName string
 	var totalEvents uint64
 	for index := range result.Fields {
@@ -224,7 +224,7 @@ func fieldPageToProto(
 		totalEvents = profileTotalEvents
 	}
 
-	page := &opensplunkv1.PageResponse{}
+	page := &opensplunk.PageResponse{}
 	if result.NextPageToken != "" {
 		page.NextPageToken = new(result.NextPageToken)
 	}
@@ -235,7 +235,7 @@ func fieldPageToProto(
 	return fields, page, nil
 }
 
-func searchFieldProfileToProto(profile searchanalysis.FieldProfile) (*opensplunkv1.FieldProfile, error) {
+func searchFieldProfileToProto(profile searchanalysis.FieldProfile) (*opensplunk.FieldProfile, error) {
 	if profile.NullCount > profile.EventCount ||
 		profile.MissingCount > math.MaxUint64-profile.EventCount {
 		return nil, errors.New("invalid search field profile counts")
@@ -250,7 +250,7 @@ func searchFieldProfileToProto(profile searchanalysis.FieldProfile) (*opensplunk
 		return nil, err
 	}
 
-	observed := make([]opensplunkv1.ValueType, len(profile.ObservedValueKinds))
+	observed := make([]opensplunk.ValueType, len(profile.ObservedValueKinds))
 	nullObserved := false
 	nonNullKinds := 0
 	var concreteKind searchjobs.ValueKind
@@ -277,7 +277,7 @@ func searchFieldProfileToProto(profile searchanalysis.FieldProfile) (*opensplunk
 		return nil, errors.New("inconsistent search field types")
 	}
 
-	result := &opensplunkv1.FieldProfile{
+	result := &opensplunk.FieldProfile{
 		FieldName:                  profile.FieldName,
 		DisplayName:                profile.DisplayName,
 		ValueType:                  valueType,
@@ -314,13 +314,13 @@ func validSearchFieldTypeSummary(profile searchanalysis.FieldProfile, nullObserv
 // A bounded field page can still retain and marshal tens of MiB when normalized
 // paths approach their hard maximum, so it participates in the shared response
 // serialization gate.
-type serializedSearchFieldsResponse = boundedProtoResponse[*opensplunkv1.ListSearchFieldsResponse]
+type serializedSearchFieldsResponse = boundedProtoResponse[*opensplunk.ListSearchFieldsResponse]
 
-type serializedSearchFieldsCodec = boundedProtoCodec[*opensplunkv1.ListSearchFieldsRequest, *opensplunkv1.ListSearchFieldsResponse]
+type serializedSearchFieldsCodec = boundedProtoCodec[*opensplunk.ListSearchFieldsRequest, *opensplunk.ListSearchFieldsResponse]
 
 func newSerializedSearchFieldsCodec() *serializedSearchFieldsCodec {
 	return newBoundedProtoCodec(
-		codec.NewProtoCodec[*opensplunkv1.ListSearchFieldsRequest, *opensplunkv1.ListSearchFieldsResponse](),
+		codec.NewProtoCodec[*opensplunk.ListSearchFieldsRequest, *opensplunk.ListSearchFieldsResponse](),
 		boundedProtoCodecOptions{
 			stateError:   "search field serialization state is invalid",
 			messageError: "search field response is missing",

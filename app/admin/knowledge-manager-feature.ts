@@ -1,6 +1,6 @@
 import type { ComponentType } from "react";
 
-import { ServerFeature } from "@/gen/ts/open_splunk/v1/system_api";
+import { ServerFeature } from "@/gen/ts/open_splunk/system_api";
 
 export type BackendAdminSection =
   | "overview"

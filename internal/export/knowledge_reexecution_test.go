@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
@@ -586,14 +586,14 @@ func TestKnowledgeSummaryMetadataChargeUsesValidatedDetachedBounds(t *testing.T)
 
 	maximum := validExportKnowledgeSummary()
 	maximum.Ref.ObjectCount = knowledgesnapshot.MaximumSummaryObjects
-	maximum.Objects = make([]*opensplunkv1.KnowledgeSnapshotObjectSummary, knowledgesnapshot.MaximumSummaryObjects)
+	maximum.Objects = make([]*opensplunk.KnowledgeSnapshotObjectSummary, knowledgesnapshot.MaximumSummaryObjects)
 	for ordinal := range maximum.Objects {
-		maximum.Objects[ordinal] = &opensplunkv1.KnowledgeSnapshotObjectSummary{
+		maximum.Objects[ordinal] = &opensplunk.KnowledgeSnapshotObjectSummary{
 			ResolutionOrdinal: uint32(ordinal),
-			ObjectType:        opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
-			Stage:             opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
-			Disclosure: &opensplunkv1.KnowledgeSnapshotObjectSummary_AuthorizedObject{
-				AuthorizedObject: &opensplunkv1.KnowledgeSnapshotAuthorizedObjectSummary{
+			ObjectType:        opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
+			Stage:             opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
+			Disclosure: &opensplunk.KnowledgeSnapshotObjectSummary_AuthorizedObject{
+				AuthorizedObject: &opensplunk.KnowledgeSnapshotAuthorizedObjectSummary{
 					KnowledgeObjectId: fmt.Sprintf("object-%d", ordinal),
 					Version:           uint64(ordinal + 1),
 					Name:              fmt.Sprintf("extract-%d", ordinal),
@@ -605,9 +605,9 @@ func TestKnowledgeSummaryMetadataChargeUsesValidatedDetachedBounds(t *testing.T)
 	if err != nil || maximumCharge == 0 || maximumCharge > metadataKnowledgeSummaryMaximum {
 		t.Fatalf("maximum summary charge = (%d, %v), envelope=%d", maximumCharge, err, metadataKnowledgeSummaryMaximum)
 	}
-	tooMany := proto.Clone(maximum).(*opensplunkv1.KnowledgeSnapshotSummary)
+	tooMany := proto.Clone(maximum).(*opensplunk.KnowledgeSnapshotSummary)
 	tooMany.Ref.ObjectCount++
-	tooMany.Objects = append(tooMany.Objects, proto.Clone(tooMany.Objects[0]).(*opensplunkv1.KnowledgeSnapshotObjectSummary))
+	tooMany.Objects = append(tooMany.Objects, proto.Clone(tooMany.Objects[0]).(*opensplunk.KnowledgeSnapshotObjectSummary))
 	if charge, err := knowledgeSnapshotMetadataBytes(tooMany); err == nil || charge != 0 {
 		t.Fatalf("oversized repeated summary charge = (%d, %v)", charge, err)
 	}
@@ -615,7 +615,7 @@ func TestKnowledgeSummaryMetadataChargeUsesValidatedDetachedBounds(t *testing.T)
 
 type knowledgeSummaryTestSource struct {
 	ResultSource
-	summary *opensplunkv1.KnowledgeSnapshotSummary
+	summary *opensplunk.KnowledgeSnapshotSummary
 }
 
 func (source *knowledgeSummaryTestSource) AcquireResultsFor(
@@ -632,12 +632,12 @@ func (source *knowledgeSummaryTestSource) AcquireResultsFor(
 
 type knowledgeSummaryTestLease struct {
 	searchjobs.ResultLease
-	summary *opensplunkv1.KnowledgeSnapshotSummary
+	summary *opensplunk.KnowledgeSnapshotSummary
 }
 
 //nolint:unparam // Both results are required by knowledgeSnapshotSummaryProvider.
-func (lease *knowledgeSummaryTestLease) knowledgeSnapshotSummary() (*opensplunkv1.KnowledgeSnapshotSummary, error) {
-	cloned, _ := proto.Clone(lease.summary).(*opensplunkv1.KnowledgeSnapshotSummary)
+func (lease *knowledgeSummaryTestLease) knowledgeSnapshotSummary() (*opensplunk.KnowledgeSnapshotSummary, error) {
+	cloned, _ := proto.Clone(lease.summary).(*opensplunk.KnowledgeSnapshotSummary)
 	return cloned, nil
 }
 
@@ -704,33 +704,32 @@ func newKnowledgeReexecutionFixture(
 	return searches, schema, access, execution, compiled
 }
 
-func validExportKnowledgeSummary() *opensplunkv1.KnowledgeSnapshotSummary {
-	return &opensplunkv1.KnowledgeSnapshotSummary{
-		Ref: &opensplunkv1.KnowledgeSnapshotRef{
-			SnapshotSha256:               bytes.Repeat([]byte{0x11}, sha256.Size),
-			TenantCatalogRevision:        7,
-			TenantCatalogStateToken:      bytes.Repeat([]byte{0x22}, sha256.Size),
-			ObjectCount:                  1,
-			CompilerCompatibilityVersion: knowledgesnapshot.CompilerCompatibilityVersion,
-			LookupAssetCount:             1,
+func validExportKnowledgeSummary() *opensplunk.KnowledgeSnapshotSummary {
+	return &opensplunk.KnowledgeSnapshotSummary{
+		Ref: &opensplunk.KnowledgeSnapshotRef{
+			SnapshotSha256:          bytes.Repeat([]byte{0x11}, sha256.Size),
+			TenantCatalogRevision:   7,
+			TenantCatalogStateToken: bytes.Repeat([]byte{0x22}, sha256.Size),
+			ObjectCount:             1,
+			LookupAssetCount:        1,
 		},
-		Objects: []*opensplunkv1.KnowledgeSnapshotObjectSummary{{
+		Objects: []*opensplunk.KnowledgeSnapshotObjectSummary{{
 			ResolutionOrdinal: 0,
-			ObjectType:        opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
-			Stage:             opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
-			Disclosure: &opensplunkv1.KnowledgeSnapshotObjectSummary_AuthorizedObject{
-				AuthorizedObject: &opensplunkv1.KnowledgeSnapshotAuthorizedObjectSummary{
+			ObjectType:        opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
+			Stage:             opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
+			Disclosure: &opensplunk.KnowledgeSnapshotObjectSummary_AuthorizedObject{
+				AuthorizedObject: &opensplunk.KnowledgeSnapshotAuthorizedObjectSummary{
 					KnowledgeObjectId: "object-1",
 					Version:           3,
 					Name:              "extract-one",
 				},
 			},
 		}},
-		LookupAssets: []*opensplunkv1.KnowledgeSnapshotLookupAsset{{
+		LookupAssets: []*opensplunk.KnowledgeSnapshotLookupAsset{{
 			AssetOrdinal:  0,
 			LookupId:      "lookup-export",
 			LookupVersion: 12,
-			Asset: &opensplunkv1.KnowledgeLookupAssetVersionReference{
+			Asset: &opensplunk.KnowledgeLookupAssetVersionReference{
 				LookupAssetId: "asset-export",
 				Version:       9,
 				SizeBytes:     256,
@@ -740,7 +739,7 @@ func validExportKnowledgeSummary() *opensplunkv1.KnowledgeSnapshotSummary {
 	}
 }
 
-func assertExportKnowledgeSummary(t *testing.T, summary *opensplunkv1.KnowledgeSnapshotSummary) {
+func assertExportKnowledgeSummary(t *testing.T, summary *opensplunk.KnowledgeSnapshotSummary) {
 	t.Helper()
 	if err := knowledgesnapshot.ValidateSummary(summary); err != nil {
 		t.Fatalf("knowledge summary invalid: %v", err)

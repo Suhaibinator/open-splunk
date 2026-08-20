@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -21,12 +21,12 @@ func (writer *Writer) replayCreate(
 	tx *gorm.DB,
 	prepared preparedMutation,
 	record idempotencyRecord,
-) (*opensplunkv1.CreateKnowledgeObjectResponse, error) {
+) (*opensplunk.CreateKnowledgeObjectResponse, error) {
 	authority, err := writer.replayProjectedObject(ctx, tx, prepared, record, mutationRouteCreate)
 	if err != nil {
 		return nil, err
 	}
-	return &opensplunkv1.CreateKnowledgeObjectResponse{
+	return &opensplunk.CreateKnowledgeObjectResponse{
 		KnowledgeObject:         authority.object,
 		TenantCatalogRevision:   authority.revision,
 		TenantCatalogStateToken: authority.stateToken,
@@ -38,12 +38,12 @@ func (writer *Writer) replayUpdate(
 	tx *gorm.DB,
 	prepared preparedMutation,
 	record idempotencyRecord,
-) (*opensplunkv1.UpdateKnowledgeObjectResponse, error) {
+) (*opensplunk.UpdateKnowledgeObjectResponse, error) {
 	authority, err := writer.replayProjectedObject(ctx, tx, prepared, record, mutationRouteUpdate)
 	if err != nil {
 		return nil, err
 	}
-	return &opensplunkv1.UpdateKnowledgeObjectResponse{
+	return &opensplunk.UpdateKnowledgeObjectResponse{
 		KnowledgeObject:         authority.object,
 		TenantCatalogRevision:   authority.revision,
 		TenantCatalogStateToken: authority.stateToken,
@@ -55,12 +55,12 @@ func (writer *Writer) replaySetState(
 	tx *gorm.DB,
 	prepared preparedMutation,
 	record idempotencyRecord,
-) (*opensplunkv1.SetKnowledgeObjectStateResponse, error) {
+) (*opensplunk.SetKnowledgeObjectStateResponse, error) {
 	authority, err := writer.replayProjectedObject(ctx, tx, prepared, record, mutationRouteSetState)
 	if err != nil {
 		return nil, err
 	}
-	return &opensplunkv1.SetKnowledgeObjectStateResponse{
+	return &opensplunk.SetKnowledgeObjectStateResponse{
 		KnowledgeObject:         authority.object,
 		TenantCatalogRevision:   authority.revision,
 		TenantCatalogStateToken: authority.stateToken,
@@ -68,7 +68,7 @@ func (writer *Writer) replaySetState(
 }
 
 type replayObjectResponseAuthority struct {
-	object     *opensplunkv1.KnowledgeObject
+	object     *opensplunk.KnowledgeObject
 	revision   uint64
 	stateToken []byte
 }
@@ -101,7 +101,7 @@ func (writer *Writer) replayDelete(
 	tx *gorm.DB,
 	prepared preparedMutation,
 	record idempotencyRecord,
-) (*opensplunkv1.DeleteKnowledgeObjectResponse, error) {
+) (*opensplunk.DeleteKnowledgeObjectResponse, error) {
 	authority, err := writer.readReplayAuthority(ctx, tx, prepared, record, mutationRouteDelete)
 	if err != nil {
 		return nil, err
@@ -111,7 +111,7 @@ func (writer *Writer) replayDelete(
 		authority.current.CurrentVersion != authority.version.ObjectVersion {
 		return nil, fmt.Errorf("%w: delete replay is not the current terminal version", ErrCorrupt)
 	}
-	return &opensplunkv1.DeleteKnowledgeObjectResponse{
+	return &opensplunk.DeleteKnowledgeObjectResponse{
 		KnowledgeObjectId: strings.Clone(authority.reference.GetKnowledgeObjectId()),
 		DeletedVersion:    authority.reference.GetVersion(),
 		// #nosec G115 -- replay authority validates a positive committed catalog revision.
@@ -157,7 +157,7 @@ func (writer *Writer) replayObject(
 // ObjectToProto validates and converts a detached catalog Object into a fresh
 // protobuf projection. Definition, digest, timestamps, and optional strings in
 // the result never alias caller-owned mutable storage.
-func ObjectToProto(object Object) (*opensplunkv1.KnowledgeObject, error) {
+func ObjectToProto(object Object) (*opensplunk.KnowledgeObject, error) {
 	objectType, typeOK := objectTypeToProto(object.ObjectType)
 	sharingScope, scopeOK := knowledgeSharingScopeToProto(object.SharingScope)
 	state, stateOK := stateToProto(object.State)
@@ -210,15 +210,15 @@ func ObjectToProto(object Object) (*opensplunkv1.KnowledgeObject, error) {
 		return nil, fmt.Errorf("%w: knowledge response definition is absent", ErrCorrupt)
 	}
 
-	var definition *opensplunkv1.KnowledgeObjectDefinition
+	var definition *opensplunk.KnowledgeObjectDefinition
 	if object.Definition != nil {
-		cloned, ok := proto.Clone(object.Definition).(*opensplunkv1.KnowledgeObjectDefinition)
+		cloned, ok := proto.Clone(object.Definition).(*opensplunk.KnowledgeObjectDefinition)
 		if !ok || cloned == nil {
 			return nil, fmt.Errorf("%w: knowledge response definition cannot be detached", ErrCorrupt)
 		}
 		definition = cloned
 	}
-	return &opensplunkv1.KnowledgeObject{
+	return &opensplunk.KnowledgeObject{
 		KnowledgeObjectId: strings.Clone(object.KnowledgeObjectID),
 		TenantId:          strings.Clone(object.TenantID),
 		AppId:             strings.Clone(object.AppID),
@@ -239,29 +239,29 @@ func ObjectToProto(object Object) (*opensplunkv1.KnowledgeObject, error) {
 	}, nil
 }
 
-func objectTypeToProto(value ObjectType) (opensplunkv1.KnowledgeObjectType, bool) {
+func objectTypeToProto(value ObjectType) (opensplunk.KnowledgeObjectType, bool) {
 	switch value {
 	case ObjectTypeFieldExtraction:
-		return opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION, true
+		return opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION, true
 	case ObjectTypeFieldAlias:
-		return opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS, true
+		return opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS, true
 	case ObjectTypeCalculatedField:
-		return opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD, true
+		return opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD, true
 	default:
-		return opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_UNSPECIFIED, false
+		return opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_UNSPECIFIED, false
 	}
 }
 
-func knowledgeSharingScopeToProto(value SharingScope) (opensplunkv1.SharingScope, bool) {
+func knowledgeSharingScopeToProto(value SharingScope) (opensplunk.SharingScope, bool) {
 	switch value {
 	case SharingScopePrivate:
-		return opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE, true
+		return opensplunk.SharingScope_SHARING_SCOPE_PRIVATE, true
 	case SharingScopeApp:
-		return opensplunkv1.SharingScope_SHARING_SCOPE_APP, true
+		return opensplunk.SharingScope_SHARING_SCOPE_APP, true
 	case SharingScopeGlobal:
-		return opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL, true
+		return opensplunk.SharingScope_SHARING_SCOPE_GLOBAL, true
 	default:
-		return opensplunkv1.SharingScope_SHARING_SCOPE_UNSPECIFIED, false
+		return opensplunk.SharingScope_SHARING_SCOPE_UNSPECIFIED, false
 	}
 }
 

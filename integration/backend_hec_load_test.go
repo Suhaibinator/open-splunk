@@ -24,7 +24,7 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 )
 
@@ -1011,26 +1011,26 @@ func backendHECLoadCreatePressureToken(
 	client *http.Client,
 	baseURL string,
 	administratorToken string,
-) (string, *opensplunkv1.IngestionToken) {
+) (string, *opensplunk.IngestionToken) {
 	t.Helper()
 	defaultIndex := backendHECIndexName
 	defaultHost := "hec-load-control-host"
 	defaultSource := "hec-load-control-source"
 	defaultSourcetype := "hec-load-control-type"
-	var response opensplunkv1.CreateIngestionTokenResponse
+	var response opensplunk.CreateIngestionTokenResponse
 	postAdministratorProto(
 		t,
 		ctx,
 		client,
-		baseURL+"/api/v1/ingestion-tokens/create",
+		baseURL+"/api/ingestion-tokens/create",
 		administratorToken,
-		&opensplunkv1.CreateIngestionTokenRequest{Definition: &opensplunkv1.IngestionTokenDefinition{
+		&opensplunk.CreateIngestionTokenRequest{Definition: &opensplunk.IngestionTokenDefinition{
 			Name:    "HEC load control-plane pressure",
-			Purpose: opensplunkv1.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_HEC,
-			Constraints: &opensplunkv1.IngestionTokenConstraints{
+			Purpose: opensplunk.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_HEC,
+			Constraints: &opensplunk.IngestionTokenConstraints{
 				AllowedIndexNames: []string{backendHECIndexName},
 			},
-			HecProfile: &opensplunkv1.IngestionTokenHecProfile{
+			HecProfile: &opensplunk.IngestionTokenHecProfile{
 				DefaultIndexName:  &defaultIndex,
 				DefaultHost:       &defaultHost,
 				DefaultSource:     &defaultSource,
@@ -1042,7 +1042,7 @@ func backendHECLoadCreatePressureToken(
 	secret := response.GetPlaintextToken()
 	metadata := response.GetIngestionToken()
 	if secret == "" || metadata.GetIngestionTokenId() == "" || metadata.GetVersion() != 1 ||
-		metadata.GetPurpose() != opensplunkv1.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_HEC {
+		metadata.GetPurpose() != opensplunk.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_HEC {
 		t.Fatalf("created HEC load pressure token metadata is invalid (secret length %d)", len(secret))
 	}
 	return secret, metadata
@@ -1529,13 +1529,13 @@ func runBackendHECLoadControlPressure(
 		case <-ticker.C:
 		}
 		enabled = !enabled
-		var response opensplunkv1.SetIngestionTokenEnabledResponse
+		var response opensplunk.SetIngestionTokenEnabledResponse
 		_, err := postProtoRequestWithBearer(
 			ctx,
 			client,
-			baseURL+"/api/v1/ingestion-tokens/state/set",
+			baseURL+"/api/ingestion-tokens/state/set",
 			administratorToken,
-			&opensplunkv1.SetIngestionTokenEnabledRequest{
+			&opensplunk.SetIngestionTokenEnabledRequest{
 				IngestionTokenId: tokenID,
 				ExpectedVersion:  result.version,
 				Enabled:          enabled,
@@ -1550,9 +1550,9 @@ func runBackendHECLoadControlPressure(
 			return result
 		}
 		metadata := response.GetIngestionToken()
-		wantState := opensplunkv1.IngestionTokenState_INGESTION_TOKEN_STATE_DISABLED
+		wantState := opensplunk.IngestionTokenState_INGESTION_TOKEN_STATE_DISABLED
 		if enabled {
-			wantState = opensplunkv1.IngestionTokenState_INGESTION_TOKEN_STATE_ACTIVE
+			wantState = opensplunk.IngestionTokenState_INGESTION_TOKEN_STATE_ACTIVE
 		}
 		if metadata.GetIngestionTokenId() != tokenID ||
 			metadata.GetVersion() != result.version+1 || metadata.GetState() != wantState {
@@ -1626,7 +1626,7 @@ func monitorBackendHECLoadOperations(
 }
 
 func (observation *backendHECLoadOperationalObservation) observe(
-	snapshot *opensplunkv1.GetHECOperationalSnapshotResponse,
+	snapshot *opensplunk.GetHECOperationalSnapshotResponse,
 ) {
 	if snapshot == nil {
 		return
@@ -1730,14 +1730,14 @@ func readBackendHECLoadOperations(
 	client *http.Client,
 	baseURL string,
 	administratorToken string,
-) (*opensplunkv1.GetHECOperationalSnapshotResponse, error) {
-	var response opensplunkv1.GetHECOperationalSnapshotResponse
+) (*opensplunk.GetHECOperationalSnapshotResponse, error) {
+	var response opensplunk.GetHECOperationalSnapshotResponse
 	_, err := postProtoRequestWithBearer(
 		ctx,
 		client,
-		baseURL+"/api/v1/hec/operations/get",
+		baseURL+"/api/hec/operations/get",
 		administratorToken,
-		&opensplunkv1.GetHECOperationalSnapshotRequest{},
+		&opensplunk.GetHECOperationalSnapshotRequest{},
 		&response,
 	)
 	if err != nil {
@@ -1748,7 +1748,7 @@ func readBackendHECLoadOperations(
 
 func backendHECLoadRequireBoundedBacklog(
 	t *testing.T,
-	snapshot *opensplunkv1.GetHECOperationalSnapshotResponse,
+	snapshot *opensplunk.GetHECOperationalSnapshotResponse,
 ) {
 	t.Helper()
 	durable := snapshot.GetDurable()
@@ -1806,13 +1806,13 @@ func waitForBackendHECLoadDrain(
 	administratorToken string,
 	server *managedProcess,
 	protectedValues ...string,
-) *opensplunkv1.GetHECOperationalSnapshotResponse {
+) *opensplunk.GetHECOperationalSnapshotResponse {
 	t.Helper()
 	waitContext, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
-	var last *opensplunkv1.GetHECOperationalSnapshotResponse
+	var last *opensplunk.GetHECOperationalSnapshotResponse
 	var lastErr error
 	for {
 		last, lastErr = readBackendHECLoadOperations(

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -15,19 +15,19 @@ import (
 func TestDurableBatchRejectResponseFitsMetadataAndDoesNotMutateSource(t *testing.T) {
 	t.Parallel()
 
-	violations := make([]*opensplunkv1.FieldViolation, HardMaxBatchEvents)
+	violations := make([]*opensplunk.FieldViolation, HardMaxBatchEvents)
 	for index := range violations {
-		violations[index] = &opensplunkv1.FieldViolation{
+		violations[index] = &opensplunk.FieldViolation{
 			FieldPath: strings.Repeat("nested.", int(HardMaxNestingDepth)) +
 				strings.Repeat("x", 4<<10),
 			Code:    "invalid_field",
 			Message: "field is invalid",
 		}
 	}
-	rejection := &opensplunkv1.BatchReject{
+	rejection := &opensplunk.BatchReject{
 		BatchId:       "durable-large-terminal-rejection",
 		BatchSequence: 17,
-		Code:          opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS,
+		Code:          opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS,
 		Message:       "batch contains no valid events",
 		Violations:    violations,
 	}
@@ -61,12 +61,12 @@ func TestDurableBatchRejectResponseFitsMetadataAndDoesNotMutateSource(t *testing
 func TestValidateDurableBatchRejectionRejectsNonCanonicalState(t *testing.T) {
 	t.Parallel()
 
-	valid := &opensplunkv1.BatchReject{
+	valid := &opensplunk.BatchReject{
 		BatchId:       "batch-durable-validation",
 		BatchSequence: 23,
-		Code:          opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS,
+		Code:          opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS,
 		Message:       "batch contains no authorized valid events",
-		Violations: []*opensplunkv1.FieldViolation{{
+		Violations: []*opensplunk.FieldViolation{{
 			FieldPath: "events[0].index_name",
 			Code:      "unauthorized_index",
 			Message:   "token is not authorized for the requested index",
@@ -80,62 +80,62 @@ func TestValidateDurableBatchRejectionRejectsNonCanonicalState(t *testing.T) {
 	unknownField := []byte{0xa0, 0x06, 0x01}
 	tests := []struct {
 		name   string
-		mutate func(*opensplunkv1.BatchReject)
+		mutate func(*opensplunk.BatchReject)
 	}{
-		{name: "invalid batch ID", mutate: func(rejection *opensplunkv1.BatchReject) {
+		{name: "invalid batch ID", mutate: func(rejection *opensplunk.BatchReject) {
 			rejection.BatchId = "bad batch id"
 		}},
-		{name: "zero batch sequence", mutate: func(rejection *opensplunkv1.BatchReject) {
+		{name: "zero batch sequence", mutate: func(rejection *opensplunk.BatchReject) {
 			rejection.BatchSequence = 0
 		}},
-		{name: "unspecified code", mutate: func(rejection *opensplunkv1.BatchReject) {
-			rejection.Code = opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_UNSPECIFIED
+		{name: "unspecified code", mutate: func(rejection *opensplunk.BatchReject) {
+			rejection.Code = opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_UNSPECIFIED
 		}},
-		{name: "unknown code", mutate: func(rejection *opensplunkv1.BatchReject) {
-			rejection.Code = opensplunkv1.BatchRejectionCode(255)
+		{name: "unknown code", mutate: func(rejection *opensplunk.BatchReject) {
+			rejection.Code = opensplunk.BatchRejectionCode(255)
 		}},
-		{name: "empty message", mutate: func(rejection *opensplunkv1.BatchReject) {
+		{name: "empty message", mutate: func(rejection *opensplunk.BatchReject) {
 			rejection.Message = ""
 		}},
-		{name: "invalid UTF-8 message", mutate: func(rejection *opensplunkv1.BatchReject) {
+		{name: "invalid UTF-8 message", mutate: func(rejection *opensplunk.BatchReject) {
 			rejection.Message = string([]byte{0xff})
 		}},
-		{name: "oversized violation field", mutate: func(rejection *opensplunkv1.BatchReject) {
+		{name: "oversized violation field", mutate: func(rejection *opensplunk.BatchReject) {
 			rejection.Violations[0].FieldPath = strings.Repeat(
 				"p",
 				maximumBatchRejectViolationFieldPathBytes+1,
 			)
 		}},
-		{name: "nil violation", mutate: func(rejection *opensplunkv1.BatchReject) {
+		{name: "nil violation", mutate: func(rejection *opensplunk.BatchReject) {
 			rejection.Violations[0] = nil
 		}},
-		{name: "invalid UTF-8 violation", mutate: func(rejection *opensplunkv1.BatchReject) {
+		{name: "invalid UTF-8 violation", mutate: func(rejection *opensplunk.BatchReject) {
 			rejection.Violations[0].Message = string([]byte{0xff})
 		}},
-		{name: "unknown rejection fields", mutate: func(rejection *opensplunkv1.BatchReject) {
+		{name: "unknown rejection fields", mutate: func(rejection *opensplunk.BatchReject) {
 			rejection.ProtoReflect().SetUnknown(unknownField)
 		}},
-		{name: "unknown violation fields", mutate: func(rejection *opensplunkv1.BatchReject) {
+		{name: "unknown violation fields", mutate: func(rejection *opensplunk.BatchReject) {
 			rejection.Violations[0].ProtoReflect().SetUnknown(unknownField)
 		}},
-		{name: "too many violations", mutate: func(rejection *opensplunkv1.BatchReject) {
+		{name: "too many violations", mutate: func(rejection *opensplunk.BatchReject) {
 			rejection.Violations = make(
-				[]*opensplunkv1.FieldViolation,
+				[]*opensplunk.FieldViolation,
 				int(HardMaxBatchEvents)+2,
 			)
 			for index := range rejection.Violations {
-				rejection.Violations[index] = &opensplunkv1.FieldViolation{
+				rejection.Violations[index] = &opensplunk.FieldViolation{
 					FieldPath: "events", Code: "invalid", Message: "invalid event",
 				}
 			}
 		}},
-		{name: "aggregate response too large", mutate: func(rejection *opensplunkv1.BatchReject) {
+		{name: "aggregate response too large", mutate: func(rejection *opensplunk.BatchReject) {
 			rejection.Violations = make(
-				[]*opensplunkv1.FieldViolation,
+				[]*opensplunk.FieldViolation,
 				aggregateViolationCount,
 			)
 			for index := range rejection.Violations {
-				rejection.Violations[index] = &opensplunkv1.FieldViolation{
+				rejection.Violations[index] = &opensplunk.FieldViolation{
 					FieldPath: "events",
 					Code:      "invalid",
 					Message: strings.Repeat(
@@ -148,7 +148,7 @@ func TestValidateDurableBatchRejectionRejectsNonCanonicalState(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rejection := proto.Clone(valid).(*opensplunkv1.BatchReject)
+			rejection := proto.Clone(valid).(*opensplunk.BatchReject)
 			test.mutate(rejection)
 			if err := ValidateDurableBatchRejection(rejection); err == nil {
 				t.Fatalf("ValidateDurableBatchRejection accepted %#v", rejection)
@@ -173,7 +173,7 @@ func TestResponseForStoredBatchClonesStrictRejectionOnlyResult(t *testing.T) {
 	)
 	rejection := batchRejection(
 		batch,
-		opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS,
+		opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS,
 		"batch contains no authorized valid events",
 		"events",
 		"no_authorized_events",
@@ -215,7 +215,7 @@ func TestResponseForStoredBatchRejectsMalformedRejectionOnlyResult(t *testing.T)
 	)
 	validRejection := batchRejection(
 		batch,
-		opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS,
+		opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS,
 		"batch contains no authorized valid events",
 		"events",
 		"no_authorized_events",
@@ -237,7 +237,7 @@ func TestResponseForStoredBatchRejectsMalformedRejectionOnlyResult(t *testing.T)
 			result.OriginalEventCount = 1
 		}},
 		{name: "event rejections", mutate: func(result *StoreResult) {
-			result.RejectedEvents = []*opensplunkv1.EventRejection{}
+			result.RejectedEvents = []*opensplunk.EventRejection{}
 		}},
 		{name: "wrong batch ID", mutate: func(result *StoreResult) {
 			result.BatchRejection.BatchId = "other-batch"
@@ -246,18 +246,18 @@ func TestResponseForStoredBatchRejectsMalformedRejectionOnlyResult(t *testing.T)
 			result.BatchRejection.BatchSequence++
 		}},
 		{name: "unspecified code", mutate: func(result *StoreResult) {
-			result.BatchRejection.Code = opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_UNSPECIFIED
+			result.BatchRejection.Code = opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_UNSPECIFIED
 		}},
 		{name: "unknown code", mutate: func(result *StoreResult) {
-			result.BatchRejection.Code = opensplunkv1.BatchRejectionCode(255)
+			result.BatchRejection.Code = opensplunk.BatchRejectionCode(255)
 		}},
 		{name: "too many violations", mutate: func(result *StoreResult) {
 			result.BatchRejection.Violations = make(
-				[]*opensplunkv1.FieldViolation,
+				[]*opensplunk.FieldViolation,
 				int(HardMaxBatchEvents)+2,
 			)
 			for index := range result.BatchRejection.Violations {
-				result.BatchRejection.Violations[index] = &opensplunkv1.FieldViolation{
+				result.BatchRejection.Violations[index] = &opensplunk.FieldViolation{
 					FieldPath: "events", Code: "invalid", Message: "invalid event",
 				}
 			}
@@ -270,7 +270,7 @@ func TestResponseForStoredBatchRejectsMalformedRejectionOnlyResult(t *testing.T)
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			rejection := proto.Clone(validRejection).(*opensplunkv1.BatchReject)
+			rejection := proto.Clone(validRejection).(*opensplunk.BatchReject)
 			result := StoreResult{BatchRejection: rejection}
 			test.mutate(&result)
 			response, responseErr := service.responseForStoredBatch(batch, result, nil)
@@ -283,21 +283,21 @@ func TestResponseForStoredBatchRejectsMalformedRejectionOnlyResult(t *testing.T)
 
 func TestBatchRejectTruncatesDiagnosticsWithinTransportLimit(t *testing.T) {
 	t.Parallel()
-	violations := make([]*opensplunkv1.FieldViolation, HardMaxBatchEvents)
+	violations := make([]*opensplunk.FieldViolation, HardMaxBatchEvents)
 	for index := range violations {
-		violations[index] = &opensplunkv1.FieldViolation{
+		violations[index] = &opensplunk.FieldViolation{
 			FieldPath: strings.Repeat("nested.", int(HardMaxNestingDepth)) + strings.Repeat("x", 4<<10),
 			Code:      "invalid_field",
 			Message:   "field is invalid",
 		}
 	}
-	rejection := &opensplunkv1.BatchReject{
+	rejection := &opensplunk.BatchReject{
 		BatchId: "large-terminal-rejection", BatchSequence: 1,
-		Code:    opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS,
+		Code:    opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS,
 		Message: "batch contains no valid events", Violations: violations,
 	}
-	if uint64(proto.Size(&opensplunkv1.CollectResponse{
-		Payload: &opensplunkv1.CollectResponse_BatchReject{BatchReject: rejection},
+	if uint64(proto.Size(&opensplunk.CollectResponse{
+		Payload: &opensplunk.CollectResponse_BatchReject{BatchReject: rejection},
 	})) <= HardMaxCollectResponseBytes {
 		t.Fatal("test rejection does not exceed the hard response limit")
 	}
@@ -322,12 +322,12 @@ func TestBatchRejectTruncatesDiagnosticsWithinTransportLimit(t *testing.T) {
 
 func TestBatchRejectNeverReflectsOversizedUnvalidatedScalars(t *testing.T) {
 	t.Parallel()
-	rejection := &opensplunkv1.BatchReject{
+	rejection := &opensplunk.BatchReject{
 		BatchId:       strings.Repeat("b", 3<<20),
 		BatchSequence: math.MaxUint64,
-		Code:          opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_COLLECTOR_ID_MISMATCH,
+		Code:          opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_COLLECTOR_ID_MISMATCH,
 		Message:       strings.Repeat("m", 3<<20),
-		Violations: []*opensplunkv1.FieldViolation{{
+		Violations: []*opensplunk.FieldViolation{{
 			FieldPath: strings.Repeat("p", 3<<20),
 			Code:      strings.Repeat("c", 3<<20),
 			Message:   strings.Repeat("v", 3<<20),
@@ -369,7 +369,7 @@ func TestCollectorMismatchBeforeBatchIDValidationStillReturnsBoundedRejection(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.GetBatchReject().GetCode() != opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_COLLECTOR_ID_MISMATCH {
+	if response.GetBatchReject().GetCode() != opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_COLLECTOR_ID_MISMATCH {
 		t.Fatalf("rejection = %#v", response.GetBatchReject())
 	}
 	if response.GetBatchReject().GetBatchId() != "" {

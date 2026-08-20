@@ -199,7 +199,6 @@ for expected_typescript_output in \
   "google/protobuf/timestamp.ts" \
   "index.google.protobuf.ts" \
   "index.google.ts" \
-  "index.open_splunk.v1.ts" \
   "index.open_splunk.ts" \
   "index.ts"; do
   if [[ ! -f "$STAGED_TS/$expected_typescript_output" ]]; then

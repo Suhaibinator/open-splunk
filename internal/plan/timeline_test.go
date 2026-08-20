@@ -45,7 +45,7 @@ func TestValidateTimelineEligibilityAcceptsEventPipelines(t *testing.T) {
 	}
 }
 
-func TestValidateTimelineEligibilityLocatesV03TimeReplacementExactly(t *testing.T) {
+func TestValidateTimelineEligibilityLocatesPipelineTimeReplacementExactly(t *testing.T) {
 	tests := []struct {
 		name        string
 		source      string

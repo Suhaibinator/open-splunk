@@ -5,9 +5,9 @@ import { useEffect, useRef, useState } from "react";
 import type {
   KnowledgeObject,
   KnowledgeObjectDefinition,
-} from "@/gen/ts/open_splunk/v1/knowledge";
-import { PreviewKnowledgeObjectRequest } from "@/gen/ts/open_splunk/v1/knowledge_api";
-import type { ResultColumn } from "@/gen/ts/open_splunk/v1/result";
+} from "@/gen/ts/open_splunk/knowledge";
+import { PreviewKnowledgeObjectRequest } from "@/gen/ts/open_splunk/knowledge_api";
+import type { ResultColumn } from "@/gen/ts/open_splunk/result";
 
 import {
   KNOWLEDGE_PREVIEW_DEFAULT_MAXIMUM_ROWS,

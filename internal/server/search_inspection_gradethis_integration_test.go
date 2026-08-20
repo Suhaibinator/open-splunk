@@ -17,7 +17,7 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -37,7 +37,7 @@ const gradeThisInspectionRouteBearerToken = "open-splunk-gradethis-inspection-ro
 
 // TestSearchInspectionRouteGradeThisAgainstClickHouse proves that the
 // administrator-only HTTP projection preserves every field returned by the
-// real inspection service for all ten canonical GradeThis searches.
+// real inspection service for pipeline commands canonical GradeThis searches.
 func TestSearchInspectionRouteGradeThisAgainstClickHouse(t *testing.T) {
 	if os.Getenv("OPEN_SPLUNK_CLICKHOUSE_INTEGRATION") != "1" {
 		t.Skip(
@@ -226,7 +226,7 @@ func TestSearchInspectionRouteGradeThisAgainstClickHouse(t *testing.T) {
 		CursorKey: []byte(
 			"0123456789abcdef0123456789abcdef",
 		),
-		CursorScope: "gradethis-inspection-route-corpus-v0.1",
+		CursorScope: "gradethis-inspection-route-corpus",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -359,7 +359,7 @@ func TestSearchInspectionRouteGradeThisAgainstClickHouse(t *testing.T) {
 				response.Body.String(),
 			)
 		}
-		var decoded opensplunkv1.InspectSearchJobResponse
+		var decoded opensplunk.InspectSearchJobResponse
 		if err := proto.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
 			t.Fatalf(
 				"decode GradeThis inspection route %q response: %v",
@@ -504,8 +504,8 @@ func TestGradeThisInspectionRouteResultCloneIsIndependent(t *testing.T) {
 					KnowledgeObjects: []searchinspection.RedactedObjectProvenance{
 						{
 							Ordinal:    7,
-							ObjectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
-							Stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
+							ObjectType: opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
+							Stage:      opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
 						},
 					},
 					OutputProvenance: []searchinspection.OutputProvenance{
@@ -545,8 +545,8 @@ func TestGradeThisInspectionRouteResultCloneIsIndependent(t *testing.T) {
 		GeneratedSQL:      "SELECT body",
 		ExplainText:       `{"Plan":{"Node Type":"ReadFromMergeTree"}}`,
 		DiagnosticQueryID: "open-splunk-explain-clone",
-		KnowledgeSnapshot: &opensplunkv1.KnowledgeSnapshotSummary{
-			Ref: &opensplunkv1.KnowledgeSnapshotRef{
+		KnowledgeSnapshot: &opensplunk.KnowledgeSnapshotSummary{
+			Ref: &opensplunk.KnowledgeSnapshotRef{
 				SnapshotSha256:        []byte{0x42},
 				TenantCatalogRevision: 7,
 			},
@@ -682,7 +682,7 @@ func cloneGradeThisInspectionRouteResult(
 	if result.KnowledgeSnapshot != nil {
 		cloned.KnowledgeSnapshot = proto.Clone(
 			result.KnowledgeSnapshot,
-		).(*opensplunkv1.KnowledgeSnapshotSummary)
+		).(*opensplunk.KnowledgeSnapshotSummary)
 	}
 	return cloned
 }
@@ -790,7 +790,7 @@ func postGradeThisInspectionRoute(
 	jobID string,
 ) *httptest.ResponseRecorder {
 	t.Helper()
-	payload, err := proto.Marshal(&opensplunkv1.InspectSearchJobRequest{
+	payload, err := proto.Marshal(&opensplunk.InspectSearchJobRequest{
 		SearchJobId: jobID,
 	})
 	if err != nil {
@@ -799,7 +799,7 @@ func postGradeThisInspectionRoute(
 	request := httptest.NewRequestWithContext(
 		ctx,
 		http.MethodPost,
-		"/api/v1/search/jobs/inspect",
+		"/api/search/jobs/inspect",
 		bytes.NewReader(payload),
 	)
 	request.Header.Set("Content-Type", "application/x-protobuf")
@@ -814,12 +814,12 @@ func postGradeThisInspectionRoute(
 
 func assertGradeThisInspectionRouteResponse(
 	t *testing.T,
-	actual *opensplunkv1.InspectSearchJobResponse,
+	actual *opensplunk.InspectSearchJobResponse,
 	jobID string,
 	expected searchinspection.Result,
 ) {
 	t.Helper()
-	want := &opensplunkv1.InspectSearchJobResponse{
+	want := &opensplunk.InspectSearchJobResponse{
 		SearchJobId:       jobID,
 		LogicalPlan:       gradeThisInspectionRouteLogicalPlan(expected.Plan),
 		PhysicalPlan:      gradeThisInspectionRoutePhysicalPlan(expected.PhysicalPlan),
@@ -838,24 +838,24 @@ func assertGradeThisInspectionRouteResponse(
 
 func gradeThisInspectionRouteLogicalPlan(
 	logical searchinspection.LogicalPlan,
-) *opensplunkv1.SearchInspectionLogicalPlan {
+) *opensplunk.SearchInspectionLogicalPlan {
 	stages := make(
-		[]*opensplunkv1.SearchInspectionLogicalStage,
+		[]*opensplunk.SearchInspectionLogicalStage,
 		len(logical.Stages),
 	)
 	for index, stage := range logical.Stages {
-		stages[index] = &opensplunkv1.SearchInspectionLogicalStage{
+		stages[index] = &opensplunk.SearchInspectionLogicalStage{
 			StageIndex:   stage.Index,
 			Operator:     stage.Operator,
 			InputFields:  slices.Clone(stage.InputFields),
 			OutputFields: slices.Clone(stage.OutputFields),
-			SourceRange: &opensplunkv1.SourceRange{
-				Start: &opensplunkv1.SourcePosition{
+			SourceRange: &opensplunk.SourceRange{
+				Start: &opensplunk.SourcePosition{
 					ByteOffset: stage.SourceRange.Start.ByteOffset,
 					Line:       stage.SourceRange.Start.Line,
 					Column:     stage.SourceRange.Start.Column,
 				},
-				End: &opensplunkv1.SourcePosition{
+				End: &opensplunk.SourcePosition{
 					ByteOffset: stage.SourceRange.End.ByteOffset,
 					Line:       stage.SourceRange.End.Line,
 					Column:     stage.SourceRange.End.Column,
@@ -863,10 +863,10 @@ func gradeThisInspectionRouteLogicalPlan(
 			},
 		}
 	}
-	return &opensplunkv1.SearchInspectionLogicalPlan{
+	return &opensplunk.SearchInspectionLogicalPlan{
 		Stages:           stages,
 		ReferencedFields: slices.Clone(logical.ReferencedFields),
-		Output: &opensplunkv1.SearchInspectionOutputShape{
+		Output: &opensplunk.SearchInspectionOutputShape{
 			Kind:   gradeThisInspectionRouteOutputKind(logical.Output.Kind),
 			Fields: slices.Clone(logical.Output.Fields),
 			MaxDynamicFields: uint32(
@@ -878,33 +878,33 @@ func gradeThisInspectionRouteLogicalPlan(
 
 func gradeThisInspectionRouteOutputKind(
 	kind searchinspection.OutputKind,
-) opensplunkv1.SearchInspectionOutputKind {
+) opensplunk.SearchInspectionOutputKind {
 	switch kind {
 	case searchinspection.OutputKindOpen:
-		return opensplunkv1.SearchInspectionOutputKind_SEARCH_INSPECTION_OUTPUT_KIND_OPEN
+		return opensplunk.SearchInspectionOutputKind_SEARCH_INSPECTION_OUTPUT_KIND_OPEN
 	case searchinspection.OutputKindStatic:
-		return opensplunkv1.SearchInspectionOutputKind_SEARCH_INSPECTION_OUTPUT_KIND_STATIC
+		return opensplunk.SearchInspectionOutputKind_SEARCH_INSPECTION_OUTPUT_KIND_STATIC
 	case searchinspection.OutputKindDynamic:
-		return opensplunkv1.SearchInspectionOutputKind_SEARCH_INSPECTION_OUTPUT_KIND_DYNAMIC
+		return opensplunk.SearchInspectionOutputKind_SEARCH_INSPECTION_OUTPUT_KIND_DYNAMIC
 	default:
-		return opensplunkv1.SearchInspectionOutputKind_SEARCH_INSPECTION_OUTPUT_KIND_UNSPECIFIED
+		return opensplunk.SearchInspectionOutputKind_SEARCH_INSPECTION_OUTPUT_KIND_UNSPECIFIED
 	}
 }
 
 func gradeThisInspectionRoutePhysicalPlan(
 	physical queryexec.ExplainPlan,
-) *opensplunkv1.SearchInspectionPhysicalPlan {
+) *opensplunk.SearchInspectionPhysicalPlan {
 	reads := make(
-		[]*opensplunkv1.SearchInspectionPhysicalRead,
+		[]*opensplunk.SearchInspectionPhysicalRead,
 		len(physical.Reads),
 	)
 	for readIndex, read := range physical.Reads {
 		indexes := make(
-			[]*opensplunkv1.SearchInspectionPhysicalIndex,
+			[]*opensplunk.SearchInspectionPhysicalIndex,
 			len(read.Indexes),
 		)
 		for index, physicalIndex := range read.Indexes {
-			indexes[index] = &opensplunkv1.SearchInspectionPhysicalIndex{
+			indexes[index] = &opensplunk.SearchInspectionPhysicalIndex{
 				Type:             physicalIndex.Type,
 				Name:             physicalIndex.Name,
 				Keys:             slices.Clone(physicalIndex.Keys),
@@ -914,12 +914,12 @@ func gradeThisInspectionRoutePhysicalPlan(
 				SelectedGranules: physicalIndex.SelectedGranules,
 			}
 		}
-		reads[readIndex] = &opensplunkv1.SearchInspectionPhysicalRead{
+		reads[readIndex] = &opensplunk.SearchInspectionPhysicalRead{
 			Columns: slices.Clone(read.Columns),
 			Indexes: indexes,
 		}
 	}
-	return &opensplunkv1.SearchInspectionPhysicalPlan{
+	return &opensplunk.SearchInspectionPhysicalPlan{
 		NodeTypes: slices.Clone(physical.NodeTypes),
 		Reads:     reads,
 	}

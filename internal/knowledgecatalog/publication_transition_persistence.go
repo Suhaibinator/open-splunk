@@ -7,7 +7,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"gorm.io/gorm"
 )
@@ -21,7 +21,7 @@ func validatePublicationTransitionPersistenceTargets(
 	tx *gorm.DB,
 	tenantID string,
 	expectedCandidate publicationCandidateAuthority,
-	expectedSourceStage opensplunkv1.KnowledgeSearchStage,
+	expectedSourceStage opensplunk.KnowledgeSearchStage,
 	authority candidateDependencyAuthority,
 ) ([]publicationDependency, error) {
 	if ctx == nil || tx == nil || tx.Statement == nil ||
@@ -68,7 +68,7 @@ func validatePublicationTransitionPersistenceTargets(
 			target.version < 1 ||
 			target.definitionDigest == ([sha256.Size]byte{}) ||
 			!validIdentity(target.ownerID, maximumOwnerIDBytes) ||
-			target.role != opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT ||
+			target.role != opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT ||
 			!targetStageValid || sourceRank <= targetRank ||
 			(target.objectID == expectedCandidate.objectID && target.version == expectedCandidate.version) ||
 			state.projection[index].targetObjectID != target.objectID ||
@@ -142,14 +142,14 @@ func validPublicationTransitionPersistenceCandidate(candidate publicationCandida
 }
 
 func publicationTransitionPersistenceStageRank(
-	stage opensplunkv1.KnowledgeSearchStage,
+	stage opensplunk.KnowledgeSearchStage,
 ) (uint8, bool) {
 	switch stage {
-	case opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION:
+	case opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION:
 		return 1, true
-	case opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS:
+	case opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS:
 		return 2, true
-	case opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD:
+	case opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD:
 		return 3, true
 	default:
 		return 0, false

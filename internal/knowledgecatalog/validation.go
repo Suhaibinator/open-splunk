@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
@@ -165,7 +165,7 @@ func objectFromHistoricalVersion(
 		Version:          uint64(version.ObjectVersion),
 		SharingScope:     version.SharingScope,
 		State:            version.State,
-		Definition:       proto.Clone(normalized.Definition).(*opensplunkv1.KnowledgeObjectDefinition),
+		Definition:       proto.Clone(normalized.Definition).(*opensplunk.KnowledgeObjectDefinition),
 		DefinitionSHA256: bytes.Clone(normalized.Digest),
 		CreatedAt:        createdAt,
 		UpdatedAt:        updatedAt,
@@ -187,9 +187,9 @@ func objectFromHistoricalVersion(
 }
 
 type decodedDefinition struct {
-	Definition *opensplunkv1.KnowledgeObjectDefinition
+	Definition *opensplunk.KnowledgeObjectDefinition
 	Digest     []byte
-	ObjectType opensplunkv1.KnowledgeObjectType
+	ObjectType opensplunk.KnowledgeObjectType
 	// ObjectTypeKnown is false only for an inactive opaque future body. In that
 	// case the sealed registry/version ObjectType may be returned as safe
 	// administrative display metadata, but this decoder provides no executable
@@ -197,7 +197,7 @@ type decodedDefinition struct {
 	ObjectTypeKnown bool
 	AppID           string
 	Name            string
-	SharingScope    opensplunkv1.SharingScope
+	SharingScope    opensplunk.SharingScope
 	Description     *string
 	Selector        *knowledge.Selector
 }
@@ -511,7 +511,7 @@ func validateProjectionDefinition(
 
 func objectFromCurrentScalars(
 	record registryRecord,
-	definition *opensplunkv1.KnowledgeObjectDefinition,
+	definition *opensplunk.KnowledgeObjectDefinition,
 	digest []byte,
 ) (Object, error) {
 	createdAt, err := canonicalTime(record.CreatedAtUnixMicro)
@@ -539,7 +539,7 @@ func objectFromCurrentScalars(
 		QuarantineReason: cloneString(record.QuarantineReason),
 	}
 	if definition != nil {
-		object.Definition = proto.Clone(definition).(*opensplunkv1.KnowledgeObjectDefinition)
+		object.Definition = proto.Clone(definition).(*opensplunk.KnowledgeObjectDefinition)
 	}
 	object.DisabledAt, err = optionalCanonicalTime(record.DisabledAtUnixMicro)
 	if err != nil {
@@ -614,46 +614,46 @@ func optionalCanonicalTime(value *int64) (*time.Time, error) {
 	return &converted, nil
 }
 
-func objectTypeFromProto(value opensplunkv1.KnowledgeObjectType) (ObjectType, bool) {
+func objectTypeFromProto(value opensplunk.KnowledgeObjectType) (ObjectType, bool) {
 	switch value {
-	case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION:
+	case opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION:
 		return ObjectTypeFieldExtraction, true
-	case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS:
+	case opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS:
 		return ObjectTypeFieldAlias, true
-	case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD:
+	case opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD:
 		return ObjectTypeCalculatedField, true
 	default:
 		return "", false
 	}
 }
 
-func sharingScopeFromProto(value opensplunkv1.SharingScope) (SharingScope, bool) {
+func sharingScopeFromProto(value opensplunk.SharingScope) (SharingScope, bool) {
 	switch value {
-	case opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE:
+	case opensplunk.SharingScope_SHARING_SCOPE_PRIVATE:
 		return SharingScopePrivate, true
-	case opensplunkv1.SharingScope_SHARING_SCOPE_APP:
+	case opensplunk.SharingScope_SHARING_SCOPE_APP:
 		return SharingScopeApp, true
-	case opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL:
+	case opensplunk.SharingScope_SHARING_SCOPE_GLOBAL:
 		return SharingScopeGlobal, true
 	default:
 		return "", false
 	}
 }
 
-func stateToProto(value State) (opensplunkv1.KnowledgeObjectState, bool) {
+func stateToProto(value State) (opensplunk.KnowledgeObjectState, bool) {
 	switch value {
 	case StateDraft:
-		return opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT, true
+		return opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT, true
 	case StateActive:
-		return opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE, true
+		return opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE, true
 	case StateDisabled:
-		return opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED, true
+		return opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED, true
 	case StateQuarantined:
-		return opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_QUARANTINED, true
+		return opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_QUARANTINED, true
 	case StateDeleted:
-		return opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DELETED, true
+		return opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DELETED, true
 	default:
-		return opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_UNSPECIFIED, false
+		return opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_UNSPECIFIED, false
 	}
 }
 

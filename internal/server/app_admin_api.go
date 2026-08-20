@@ -19,7 +19,7 @@ import (
 	"github.com/Suhaibinator/SRouter/pkg/codec"
 	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/protostrict"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
@@ -161,9 +161,9 @@ func (handler *apiHandler) appAdministrationRoutes(
 ) []protobufRouteDefinition {
 	return []protobufRouteDefinition{
 		newForwardCompatibleProtoRoute[
-			*opensplunkv1.CreateAppRequest,
+			*opensplunk.CreateAppRequest,
 			*serializedCreateAppResponse](router.RouteConfig[
-			*opensplunkv1.CreateAppRequest,
+			*opensplunk.CreateAppRequest,
 			*serializedCreateAppResponse,
 		]{
 			Path:       "/apps/create",
@@ -175,9 +175,9 @@ func (handler *apiHandler) appAdministrationRoutes(
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: requestBytes},
 		}),
 		newForwardCompatibleProtoRoute[
-			*opensplunkv1.GetAppRequest,
+			*opensplunk.GetAppRequest,
 			*serializedGetAppResponse](router.RouteConfig[
-			*opensplunkv1.GetAppRequest,
+			*opensplunk.GetAppRequest,
 			*serializedGetAppResponse,
 		]{
 			Path:       "/apps/get",
@@ -189,9 +189,9 @@ func (handler *apiHandler) appAdministrationRoutes(
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
 		newForwardCompatibleProtoRoute[
-			*opensplunkv1.ListAppsRequest,
+			*opensplunk.ListAppsRequest,
 			*serializedListAppsResponse](router.RouteConfig[
-			*opensplunkv1.ListAppsRequest,
+			*opensplunk.ListAppsRequest,
 			*serializedListAppsResponse,
 		]{
 			Path:       "/apps/list",
@@ -203,9 +203,9 @@ func (handler *apiHandler) appAdministrationRoutes(
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
 		newForwardCompatibleProtoRoute[
-			*opensplunkv1.UpdateAppRequest,
+			*opensplunk.UpdateAppRequest,
 			*serializedUpdateAppResponse](router.RouteConfig[
-			*opensplunkv1.UpdateAppRequest,
+			*opensplunk.UpdateAppRequest,
 			*serializedUpdateAppResponse,
 		]{
 			Path:       "/apps/update",
@@ -217,9 +217,9 @@ func (handler *apiHandler) appAdministrationRoutes(
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: requestBytes},
 		}),
 		newForwardCompatibleProtoRoute[
-			*opensplunkv1.SetAppStateRequest,
+			*opensplunk.SetAppStateRequest,
 			*serializedSetAppStateResponse](router.RouteConfig[
-			*opensplunkv1.SetAppStateRequest,
+			*opensplunk.SetAppStateRequest,
 			*serializedSetAppStateResponse,
 		]{
 			Path:       "/apps/state/set",
@@ -231,9 +231,9 @@ func (handler *apiHandler) appAdministrationRoutes(
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
 		newForwardCompatibleProtoRoute[
-			*opensplunkv1.DeleteAppRequest,
+			*opensplunk.DeleteAppRequest,
 			*serializedDeleteAppResponse](router.RouteConfig[
-			*opensplunkv1.DeleteAppRequest,
+			*opensplunk.DeleteAppRequest,
 			*serializedDeleteAppResponse,
 		]{
 			Path:       "/apps/delete",
@@ -249,7 +249,7 @@ func (handler *apiHandler) appAdministrationRoutes(
 
 func (handler *apiHandler) createApp(
 	request *http.Request,
-	input *opensplunkv1.CreateAppRequest,
+	input *opensplunk.CreateAppRequest,
 ) (*serializedCreateAppResponse, error) {
 	scope, err := handler.appAdministrationAccess(request)
 	if err != nil {
@@ -305,7 +305,7 @@ func (handler *apiHandler) createApp(
 		!record.CreatedAt.Equal(record.UpdatedAt) {
 		return nil, internalError()
 	}
-	message := &opensplunkv1.CreateAppResponse{App: converted}
+	message := &opensplunk.CreateAppResponse{App: converted}
 	if proto.Size(message) > maximumAppAdministrationResponse {
 		return nil, internalError()
 	}
@@ -321,7 +321,7 @@ func (handler *apiHandler) createApp(
 
 func (handler *apiHandler) getApp(
 	request *http.Request,
-	input *opensplunkv1.GetAppRequest,
+	input *opensplunk.GetAppRequest,
 ) (*serializedGetAppResponse, error) {
 	scope, err := handler.appAdministrationAccess(request)
 	if err != nil {
@@ -369,7 +369,7 @@ func (handler *apiHandler) getApp(
 	if err != nil {
 		return nil, internalError()
 	}
-	message := &opensplunkv1.GetAppResponse{App: converted}
+	message := &opensplunk.GetAppResponse{App: converted}
 	if proto.Size(message) > maximumAppAdministrationResponse {
 		return nil, internalError()
 	}
@@ -383,7 +383,7 @@ func (handler *apiHandler) getApp(
 
 func (handler *apiHandler) listApps(
 	request *http.Request,
-	input *opensplunkv1.ListAppsRequest,
+	input *opensplunk.ListAppsRequest,
 ) (*serializedListAppsResponse, error) {
 	scope, err := handler.appAdministrationAccess(request)
 	if err != nil {
@@ -444,7 +444,7 @@ func (handler *apiHandler) listApps(
 
 func (handler *apiHandler) updateApp(
 	request *http.Request,
-	input *opensplunkv1.UpdateAppRequest,
+	input *opensplunk.UpdateAppRequest,
 ) (*serializedUpdateAppResponse, error) {
 	scope, err := handler.appAdministrationAccess(request)
 	if err != nil {
@@ -524,7 +524,7 @@ func (handler *apiHandler) updateApp(
 		record.UpdatedAt.Before(current.UpdatedAt) {
 		return nil, internalError()
 	}
-	message := &opensplunkv1.UpdateAppResponse{App: converted}
+	message := &opensplunk.UpdateAppResponse{App: converted}
 	if proto.Size(message) > maximumAppAdministrationResponse {
 		return nil, internalError()
 	}
@@ -538,7 +538,7 @@ func (handler *apiHandler) updateApp(
 
 func (handler *apiHandler) setAppState(
 	request *http.Request,
-	input *opensplunkv1.SetAppStateRequest,
+	input *opensplunk.SetAppStateRequest,
 ) (*serializedSetAppStateResponse, error) {
 	scope, err := handler.appAdministrationAccess(request)
 	if err != nil {
@@ -609,7 +609,7 @@ func (handler *apiHandler) setAppState(
 	if err != nil {
 		return nil, internalError()
 	}
-	message := &opensplunkv1.SetAppStateResponse{App: converted}
+	message := &opensplunk.SetAppStateResponse{App: converted}
 	if proto.Size(message) > maximumAppAdministrationResponse {
 		return nil, internalError()
 	}
@@ -623,7 +623,7 @@ func (handler *apiHandler) setAppState(
 
 func (handler *apiHandler) deleteApp(
 	request *http.Request,
-	input *opensplunkv1.DeleteAppRequest,
+	input *opensplunk.DeleteAppRequest,
 ) (*serializedDeleteAppResponse, error) {
 	scope, err := handler.appAdministrationAccess(request)
 	if err != nil {
@@ -691,7 +691,7 @@ func (handler *apiHandler) deleteApp(
 	if deletedID != current.AppID {
 		return nil, internalError()
 	}
-	message := &opensplunkv1.DeleteAppResponse{AppId: strings.Clone(deletedID)}
+	message := &opensplunk.DeleteAppResponse{AppId: strings.Clone(deletedID)}
 	if proto.Size(message) > maximumAppAdministrationResponse {
 		return nil, internalError()
 	}
@@ -763,13 +763,13 @@ func invalidAppAdministrationRequest(message proto.Message) bool {
 }
 
 func appAdministrationSelector(
-	input *opensplunkv1.AppSelector,
+	input *opensplunk.AppSelector,
 ) (AppAdministrationSelector, error) {
 	if input == nil {
 		return AppAdministrationSelector{}, errors.New("selector is required")
 	}
 	switch selected := input.GetSelector().(type) {
-	case *opensplunkv1.AppSelector_AppId:
+	case *opensplunk.AppSelector_AppId:
 		appID := strings.TrimSpace(selected.AppId)
 		if appID != selected.AppId ||
 			validateBoundedIdentifier(
@@ -780,7 +780,7 @@ func appAdministrationSelector(
 			return AppAdministrationSelector{}, errors.New("app ID is invalid")
 		}
 		return AppAdministrationSelector{AppID: strings.Clone(appID)}, nil
-	case *opensplunkv1.AppSelector_Slug:
+	case *opensplunk.AppSelector_Slug:
 		slug, err := normalizeAppAdministrationSlug(selected.Slug)
 		if err != nil || slug != selected.Slug {
 			return AppAdministrationSelector{}, errors.New("app slug is invalid")
@@ -810,7 +810,7 @@ func normalizeAppAdministrationSlug(input string) (string, error) {
 }
 
 func (handler *apiHandler) appAdministrationDefinition(
-	input *opensplunkv1.AppDefinition,
+	input *opensplunk.AppDefinition,
 ) (AppAdministrationDefinition, error) {
 	if input == nil {
 		return AppAdministrationDefinition{}, errors.New("definition is required")
@@ -908,7 +908,7 @@ func normalizeAppAdministrationIndexes(input []string) ([]string, error) {
 }
 
 func (handler *apiHandler) normalizeAppAdministrationTimeRange(
-	input *opensplunkv1.TimeRangeSpec,
+	input *opensplunk.TimeRangeSpec,
 ) (*AppAdministrationTimeRange, error) {
 	if input == nil {
 		return nil, nil
@@ -961,7 +961,7 @@ var errAppAdministrationImmutableSlug = errors.New("app slug is immutable")
 
 func (handler *apiHandler) applyAppAdministrationUpdate(
 	current AppAdministrationDefinition,
-	input *opensplunkv1.AppDefinition,
+	input *opensplunk.AppDefinition,
 	mask *fieldmaskpb.FieldMask,
 ) (AppAdministrationDefinition, error) {
 	if input == nil {
@@ -984,7 +984,7 @@ func (handler *apiHandler) applyAppAdministrationUpdate(
 		return AppAdministrationDefinition{}, err
 	}
 	if full {
-		cloned := proto.Clone(input).(*opensplunkv1.AppDefinition)
+		cloned := proto.Clone(input).(*opensplunk.AppDefinition)
 		cloned.Slug = strings.Clone(current.Slug)
 		return handler.appAdministrationDefinition(cloned)
 	}
@@ -1051,7 +1051,7 @@ func cloneAppAdministrationListRequest(
 }
 
 func (handler *apiHandler) appAdministrationListRequest(
-	input *opensplunkv1.ListAppsRequest,
+	input *opensplunk.ListAppsRequest,
 ) (AppAdministrationListRequest, error) {
 	if page := input.GetPage(); page != nil && page.PageToken != nil {
 		rawToken := page.GetPageToken()
@@ -1152,11 +1152,11 @@ func appAdministrationListFingerprint(
 	descending bool,
 ) string {
 	direction := int32(
-		opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING,
+		opensplunk.SortDirection_SORT_DIRECTION_ASCENDING,
 	)
 	if descending {
 		direction = int32(
-			opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING,
+			opensplunk.SortDirection_SORT_DIRECTION_DESCENDING,
 		)
 	}
 	base := adminFilterFingerprint(
@@ -1268,7 +1268,7 @@ func signAppAdministrationCursor(key, payload []byte) []byte {
 }
 
 func normalizeAppAdministrationStateFilters(
-	input []opensplunkv1.AppState,
+	input []opensplunk.AppState,
 ) ([]AppAdministrationState, error) {
 	if len(input) > 2 {
 		return nil, errors.New("too many app state filters")
@@ -1302,17 +1302,17 @@ func normalizeAppAdministrationTextFilter(input *string) (string, error) {
 }
 
 func normalizeAppAdministrationSort(
-	sortBy opensplunkv1.AppSortBy,
-	direction opensplunkv1.SortDirection,
+	sortBy opensplunk.AppSortBy,
+	direction opensplunk.SortDirection,
 ) (AppAdministrationSort, bool, error) {
 	var result AppAdministrationSort
 	switch sortBy {
-	case opensplunkv1.AppSortBy_APP_SORT_BY_UNSPECIFIED,
-		opensplunkv1.AppSortBy_APP_SORT_BY_DISPLAY_NAME:
+	case opensplunk.AppSortBy_APP_SORT_BY_UNSPECIFIED,
+		opensplunk.AppSortBy_APP_SORT_BY_DISPLAY_NAME:
 		result = AppAdministrationSortDisplayName
-	case opensplunkv1.AppSortBy_APP_SORT_BY_CREATED_AT:
+	case opensplunk.AppSortBy_APP_SORT_BY_CREATED_AT:
 		result = AppAdministrationSortCreatedAt
-	case opensplunkv1.AppSortBy_APP_SORT_BY_UPDATED_AT:
+	case opensplunk.AppSortBy_APP_SORT_BY_UPDATED_AT:
 		result = AppAdministrationSortUpdatedAt
 	default:
 		return 0, false, errors.New("app sort is invalid")
@@ -1323,17 +1323,17 @@ func normalizeAppAdministrationSort(
 	}
 	return result,
 		normalizedDirection ==
-			opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING,
+			opensplunk.SortDirection_SORT_DIRECTION_DESCENDING,
 		nil
 }
 
 func appAdministrationStateFromProto(
-	input opensplunkv1.AppState,
+	input opensplunk.AppState,
 ) (AppAdministrationState, error) {
 	switch input {
-	case opensplunkv1.AppState_APP_STATE_ACTIVE:
+	case opensplunk.AppState_APP_STATE_ACTIVE:
 		return AppAdministrationStateActive, nil
-	case opensplunkv1.AppState_APP_STATE_ARCHIVED:
+	case opensplunk.AppState_APP_STATE_ARCHIVED:
 		return AppAdministrationStateArchived, nil
 	default:
 		return "", errors.New("app state is invalid")
@@ -1342,14 +1342,14 @@ func appAdministrationStateFromProto(
 
 func appAdministrationStateToProto(
 	input AppAdministrationState,
-) (opensplunkv1.AppState, error) {
+) (opensplunk.AppState, error) {
 	switch input {
 	case AppAdministrationStateActive:
-		return opensplunkv1.AppState_APP_STATE_ACTIVE, nil
+		return opensplunk.AppState_APP_STATE_ACTIVE, nil
 	case AppAdministrationStateArchived:
-		return opensplunkv1.AppState_APP_STATE_ARCHIVED, nil
+		return opensplunk.AppState_APP_STATE_ARCHIVED, nil
 	default:
-		return opensplunkv1.AppState_APP_STATE_UNSPECIFIED,
+		return opensplunk.AppState_APP_STATE_UNSPECIFIED,
 			errors.New("app state is invalid")
 	}
 }
@@ -1366,7 +1366,7 @@ func appAdministrationSelectorMatches(
 
 func (handler *apiHandler) appAdministrationWorkspaceToProto(
 	record AppAdministrationWorkspace,
-) (*opensplunkv1.AppWorkspace, error) {
+) (*opensplunk.AppWorkspace, error) {
 	if validateBoundedIdentifier(
 		record.AppID,
 		maximumAppAdministrationIDBytes,
@@ -1395,7 +1395,7 @@ func (handler *apiHandler) appAdministrationWorkspaceToProto(
 		updatedAt.AsTime().Before(createdAt.AsTime()) {
 		return nil, errors.New("app timestamps are invalid")
 	}
-	return &opensplunkv1.AppWorkspace{
+	return &opensplunk.AppWorkspace{
 		AppId:      strings.Clone(record.AppID),
 		Version:    record.Version,
 		Definition: definition,
@@ -1407,7 +1407,7 @@ func (handler *apiHandler) appAdministrationWorkspaceToProto(
 
 func (handler *apiHandler) appAdministrationDefinitionToProto(
 	input AppAdministrationDefinition,
-) (*opensplunkv1.AppDefinition, error) {
+) (*opensplunk.AppDefinition, error) {
 	slug, err := normalizeAppAdministrationSlug(input.Slug)
 	if err != nil || slug != input.Slug {
 		return nil, errors.New("app slug is invalid")
@@ -1441,7 +1441,7 @@ func (handler *apiHandler) appAdministrationDefinitionToProto(
 		) {
 		return nil, errors.New("app default time range is invalid")
 	}
-	return &opensplunkv1.AppDefinition{
+	return &opensplunk.AppDefinition{
 		Slug:              strings.Clone(input.Slug),
 		DisplayName:       strings.Clone(input.DisplayName),
 		Description:       cloneOptionalString(input.Description),
@@ -1452,11 +1452,11 @@ func (handler *apiHandler) appAdministrationDefinitionToProto(
 
 func appAdministrationTimeRangeToProto(
 	input *AppAdministrationTimeRange,
-) *opensplunkv1.TimeRangeSpec {
+) *opensplunk.TimeRangeSpec {
 	if input == nil {
 		return nil
 	}
-	return &opensplunkv1.TimeRangeSpec{
+	return &opensplunk.TimeRangeSpec{
 		Earliest: cloneOptionalString(input.Earliest),
 		Latest:   cloneOptionalString(input.Latest),
 		Timezone: cloneOptionalString(input.Timezone),
@@ -1495,7 +1495,7 @@ func equalAppAdministrationDefinition(
 func (handler *apiHandler) appAdministrationListToProto(
 	request AppAdministrationListRequest,
 	result AppAdministrationListResult,
-) (*opensplunkv1.ListAppsResponse, error) {
+) (*opensplunk.ListAppsResponse, error) {
 	if len(result.Apps) > int(request.PageSize) ||
 		len(result.Apps) > maximumAppAdministrationRows {
 		return nil, errors.New("app page exceeds its bound")
@@ -1524,7 +1524,7 @@ func (handler *apiHandler) appAdministrationListToProto(
 		return nil, errors.New("app total is invalid")
 	}
 	apps := make(
-		[]*opensplunkv1.AppWorkspace,
+		[]*opensplunk.AppWorkspace,
 		0,
 		len(result.Apps),
 	)
@@ -1545,7 +1545,7 @@ func (handler *apiHandler) appAdministrationListToProto(
 		seenSlugs[record.Definition.Slug] = struct{}{}
 		apps = append(apps, converted)
 	}
-	page := &opensplunkv1.PageResponse{
+	page := &opensplunk.PageResponse{
 		TotalSizeExact: result.TotalSizeExact,
 	}
 	if result.NextPageCursor != "" {
@@ -1577,7 +1577,7 @@ func (handler *apiHandler) appAdministrationListToProto(
 		total := *result.TotalSize
 		page.TotalSize = &total
 	}
-	return &opensplunkv1.ListAppsResponse{
+	return &opensplunk.ListAppsResponse{
 		Apps: apps,
 		Page: page,
 	}, nil
@@ -1640,116 +1640,116 @@ func appAdministrationConflictError() error {
 	)
 }
 
-type serializedCreateAppResponse = boundedProtoResponse[*opensplunkv1.CreateAppResponse]
+type serializedCreateAppResponse = boundedProtoResponse[*opensplunk.CreateAppResponse]
 
 type serializedCreateAppCodec = boundedProtoCodec[
-	*opensplunkv1.CreateAppRequest,
-	*opensplunkv1.CreateAppResponse,
+	*opensplunk.CreateAppRequest,
+	*opensplunk.CreateAppResponse,
 ]
 
 func newSerializedCreateAppCodec() *serializedCreateAppCodec {
 	return newAppAdministrationCodec[
-		*opensplunkv1.CreateAppRequest,
-		*opensplunkv1.CreateAppResponse,
+		*opensplunk.CreateAppRequest,
+		*opensplunk.CreateAppResponse,
 	](
 		codec.NewProtoCodec[
-			*opensplunkv1.CreateAppRequest,
-			*opensplunkv1.CreateAppResponse,
+			*opensplunk.CreateAppRequest,
+			*opensplunk.CreateAppResponse,
 		](),
 	)
 }
 
-type serializedGetAppResponse = boundedProtoResponse[*opensplunkv1.GetAppResponse]
+type serializedGetAppResponse = boundedProtoResponse[*opensplunk.GetAppResponse]
 
 type serializedGetAppCodec = boundedProtoCodec[
-	*opensplunkv1.GetAppRequest,
-	*opensplunkv1.GetAppResponse,
+	*opensplunk.GetAppRequest,
+	*opensplunk.GetAppResponse,
 ]
 
 func newSerializedGetAppCodec() *serializedGetAppCodec {
 	return newAppAdministrationCodec[
-		*opensplunkv1.GetAppRequest,
-		*opensplunkv1.GetAppResponse,
+		*opensplunk.GetAppRequest,
+		*opensplunk.GetAppResponse,
 	](
 		codec.NewProtoCodec[
-			*opensplunkv1.GetAppRequest,
-			*opensplunkv1.GetAppResponse,
+			*opensplunk.GetAppRequest,
+			*opensplunk.GetAppResponse,
 		](),
 	)
 }
 
-type serializedListAppsResponse = boundedProtoResponse[*opensplunkv1.ListAppsResponse]
+type serializedListAppsResponse = boundedProtoResponse[*opensplunk.ListAppsResponse]
 
 type serializedListAppsCodec = boundedProtoCodec[
-	*opensplunkv1.ListAppsRequest,
-	*opensplunkv1.ListAppsResponse,
+	*opensplunk.ListAppsRequest,
+	*opensplunk.ListAppsResponse,
 ]
 
 func newSerializedListAppsCodec() *serializedListAppsCodec {
 	return newAppAdministrationCodec[
-		*opensplunkv1.ListAppsRequest,
-		*opensplunkv1.ListAppsResponse,
+		*opensplunk.ListAppsRequest,
+		*opensplunk.ListAppsResponse,
 	](
 		codec.NewProtoCodec[
-			*opensplunkv1.ListAppsRequest,
-			*opensplunkv1.ListAppsResponse,
+			*opensplunk.ListAppsRequest,
+			*opensplunk.ListAppsResponse,
 		](),
 	)
 }
 
-type serializedUpdateAppResponse = boundedProtoResponse[*opensplunkv1.UpdateAppResponse]
+type serializedUpdateAppResponse = boundedProtoResponse[*opensplunk.UpdateAppResponse]
 
 type serializedUpdateAppCodec = boundedProtoCodec[
-	*opensplunkv1.UpdateAppRequest,
-	*opensplunkv1.UpdateAppResponse,
+	*opensplunk.UpdateAppRequest,
+	*opensplunk.UpdateAppResponse,
 ]
 
 func newSerializedUpdateAppCodec() *serializedUpdateAppCodec {
 	return newAppAdministrationCodec[
-		*opensplunkv1.UpdateAppRequest,
-		*opensplunkv1.UpdateAppResponse,
+		*opensplunk.UpdateAppRequest,
+		*opensplunk.UpdateAppResponse,
 	](
 		codec.NewProtoCodec[
-			*opensplunkv1.UpdateAppRequest,
-			*opensplunkv1.UpdateAppResponse,
+			*opensplunk.UpdateAppRequest,
+			*opensplunk.UpdateAppResponse,
 		](),
 	)
 }
 
-type serializedSetAppStateResponse = boundedProtoResponse[*opensplunkv1.SetAppStateResponse]
+type serializedSetAppStateResponse = boundedProtoResponse[*opensplunk.SetAppStateResponse]
 
 type serializedSetAppStateCodec = boundedProtoCodec[
-	*opensplunkv1.SetAppStateRequest,
-	*opensplunkv1.SetAppStateResponse,
+	*opensplunk.SetAppStateRequest,
+	*opensplunk.SetAppStateResponse,
 ]
 
 func newSerializedSetAppStateCodec() *serializedSetAppStateCodec {
 	return newAppAdministrationCodec[
-		*opensplunkv1.SetAppStateRequest,
-		*opensplunkv1.SetAppStateResponse,
+		*opensplunk.SetAppStateRequest,
+		*opensplunk.SetAppStateResponse,
 	](
 		codec.NewProtoCodec[
-			*opensplunkv1.SetAppStateRequest,
-			*opensplunkv1.SetAppStateResponse,
+			*opensplunk.SetAppStateRequest,
+			*opensplunk.SetAppStateResponse,
 		](),
 	)
 }
 
-type serializedDeleteAppResponse = boundedProtoResponse[*opensplunkv1.DeleteAppResponse]
+type serializedDeleteAppResponse = boundedProtoResponse[*opensplunk.DeleteAppResponse]
 
 type serializedDeleteAppCodec = boundedProtoCodec[
-	*opensplunkv1.DeleteAppRequest,
-	*opensplunkv1.DeleteAppResponse,
+	*opensplunk.DeleteAppRequest,
+	*opensplunk.DeleteAppResponse,
 ]
 
 func newSerializedDeleteAppCodec() *serializedDeleteAppCodec {
 	return newAppAdministrationCodec[
-		*opensplunkv1.DeleteAppRequest,
-		*opensplunkv1.DeleteAppResponse,
+		*opensplunk.DeleteAppRequest,
+		*opensplunk.DeleteAppResponse,
 	](
 		codec.NewProtoCodec[
-			*opensplunkv1.DeleteAppRequest,
-			*opensplunkv1.DeleteAppResponse,
+			*opensplunk.DeleteAppRequest,
+			*opensplunk.DeleteAppResponse,
 		](),
 	)
 }

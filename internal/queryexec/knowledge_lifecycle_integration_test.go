@@ -14,7 +14,7 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -462,14 +462,14 @@ func newKnowledgeLifecycleCatalog(
 	}
 }
 
-func (catalog *knowledgeLifecycleCatalog) publishV1(t *testing.T) *opensplunkv1.KnowledgeObject {
+func (catalog *knowledgeLifecycleCatalog) publishV1(t *testing.T) *opensplunk.KnowledgeObject {
 	t.Helper()
 	result, err := catalog.writer.Create(
 		catalog.actor,
 		catalog.writeScope,
-		&opensplunkv1.CreateKnowledgeObjectRequest{
+		&opensplunk.CreateKnowledgeObjectRequest{
 			Definition:      knowledgeLifecycleDefinition(catalog.indexName, knowledgeLifecycleV1Value),
-			InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
+			InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
 			ClientRequestId: "knowledge-lifecycle-create-v1",
 		},
 	)
@@ -478,7 +478,7 @@ func (catalog *knowledgeLifecycleCatalog) publishV1(t *testing.T) *opensplunkv1.
 	}
 	object := result.GetKnowledgeObject()
 	if object.GetKnowledgeObjectId() != knowledgeLifecycleObjectID || object.GetVersion() != 1 ||
-		object.GetState() != opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE {
+		object.GetState() != opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE {
 		t.Fatalf("published lifecycle ACTIVE v1 = %v", object)
 	}
 	return object
@@ -486,15 +486,15 @@ func (catalog *knowledgeLifecycleCatalog) publishV1(t *testing.T) *opensplunkv1.
 
 func (catalog *knowledgeLifecycleCatalog) publishV2(
 	t *testing.T,
-	objectV1 *opensplunkv1.KnowledgeObject,
-) *opensplunkv1.KnowledgeObject {
+	objectV1 *opensplunk.KnowledgeObject,
+) *opensplunk.KnowledgeObject {
 	t.Helper()
-	definition := proto.Clone(objectV1.GetDefinition()).(*opensplunkv1.KnowledgeObjectDefinition)
+	definition := proto.Clone(objectV1.GetDefinition()).(*opensplunk.KnowledgeObjectDefinition)
 	definition.GetFieldExtraction().GetRegex().Pattern = knowledgeLifecyclePattern(knowledgeLifecycleV2Value)
 	result, err := catalog.writer.Update(
 		catalog.actor,
 		catalog.writeScope,
-		&opensplunkv1.UpdateKnowledgeObjectRequest{
+		&opensplunk.UpdateKnowledgeObjectRequest{
 			KnowledgeObjectId: objectV1.GetKnowledgeObjectId(),
 			ExpectedVersion:   1,
 			Definition:        definition,
@@ -507,7 +507,7 @@ func (catalog *knowledgeLifecycleCatalog) publishV2(
 	}
 	object := result.GetKnowledgeObject()
 	if object.GetKnowledgeObjectId() != objectV1.GetKnowledgeObjectId() || object.GetVersion() != 2 ||
-		object.GetState() != opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE ||
+		object.GetState() != opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE ||
 		object.GetDefinition().GetFieldExtraction().GetRegex().GetPattern() !=
 			knowledgeLifecyclePattern(knowledgeLifecycleV2Value) {
 		t.Fatalf("published lifecycle ACTIVE v2 = %v", object)
@@ -529,21 +529,21 @@ func (catalog *knowledgeLifecycleCatalog) resolve(t *testing.T) knowledgecatalog
 	return resolution
 }
 
-func knowledgeLifecycleDefinition(indexName string, value string) *opensplunkv1.KnowledgeObjectDefinition {
-	return &opensplunkv1.KnowledgeObjectDefinition{
+func knowledgeLifecycleDefinition(indexName string, value string) *opensplunk.KnowledgeObjectDefinition {
+	return &opensplunk.KnowledgeObjectDefinition{
 		AppId:        knowledgeLifecycleAppID,
 		Name:         "lifecycle-extract-kind",
-		SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
-		Selector: &opensplunkv1.KnowledgeSelector{IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{
-			MatchKind: opensplunkv1.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT,
+		SharingScope: opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
+		Selector: &opensplunk.KnowledgeSelector{IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{{
+			MatchKind: opensplunk.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT,
 			Value:     indexName,
 		}}},
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
-			FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldExtraction{
+			FieldExtraction: &opensplunk.FieldExtractionDefinition{
 				InputField:        "_raw",
-				OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
-				Extraction: &opensplunkv1.FieldExtractionDefinition_Regex{
-					Regex: &opensplunkv1.RegexFieldExtractionDefinition{
+				OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+				Extraction: &opensplunk.FieldExtractionDefinition_Regex{
+					Regex: &opensplunk.RegexFieldExtractionDefinition{
 						Pattern:      knowledgeLifecyclePattern(value),
 						OutputFields: []string{knowledgeLifecycleField},
 					},
@@ -729,7 +729,7 @@ func requireKnowledgeLifecycleProgram(
 
 func requireKnowledgeLifecycleSummary(
 	t *testing.T,
-	summary *opensplunkv1.KnowledgeSnapshotSummary,
+	summary *opensplunk.KnowledgeSnapshotSummary,
 	objectID string,
 	version uint64,
 ) {
@@ -737,9 +737,9 @@ func requireKnowledgeLifecycleSummary(
 	if summary == nil || summary.GetRef() == nil || summary.GetRef().GetObjectCount() != 1 ||
 		len(summary.GetObjects()) != 1 || summary.GetObjects()[0] == nil ||
 		summary.GetObjects()[0].GetObjectType() !=
-			opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION ||
+			opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION ||
 		summary.GetObjects()[0].GetStage() !=
-			opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION ||
+			opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION ||
 		summary.GetObjects()[0].GetAuthorizedObject().GetKnowledgeObjectId() != objectID ||
 		summary.GetObjects()[0].GetAuthorizedObject().GetVersion() != version ||
 		len(summary.GetRef().GetSnapshotSha256()) == 0 {

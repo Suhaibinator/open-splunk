@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sort"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
@@ -466,24 +466,24 @@ func dependencyScopeAllows(source, target versionRecord) bool {
 }
 
 func dependencySemanticsFromDefinition(
-	definition *opensplunkv1.KnowledgeObjectDefinition,
+	definition *opensplunk.KnowledgeObjectDefinition,
 ) (dependencyDefinitionSemantics, error) {
 	if definition == nil {
 		return dependencyDefinitionSemantics{}, fmt.Errorf("definition is nil")
 	}
 	switch body := definition.GetBody().(type) {
-	case *opensplunkv1.KnowledgeObjectDefinition_FieldExtraction:
+	case *opensplunk.KnowledgeObjectDefinition_FieldExtraction:
 		if body == nil || body.FieldExtraction == nil || body.FieldExtraction.GetInputField() != "_raw" {
 			return dependencyDefinitionSemantics{}, fmt.Errorf("field extraction input is not _raw")
 		}
 		outputs := make([]string, 0, 1)
 		switch extraction := body.FieldExtraction.GetExtraction().(type) {
-		case *opensplunkv1.FieldExtractionDefinition_Regex:
+		case *opensplunk.FieldExtractionDefinition_Regex:
 			if extraction == nil || extraction.Regex == nil {
 				return dependencyDefinitionSemantics{}, fmt.Errorf("regex extraction is nil")
 			}
 			outputs = append(outputs, extraction.Regex.GetOutputFields()...)
-		case *opensplunkv1.FieldExtractionDefinition_Json:
+		case *opensplunk.FieldExtractionDefinition_Json:
 			if extraction == nil || extraction.Json == nil {
 				return dependencyDefinitionSemantics{}, fmt.Errorf("JSON extraction is nil")
 			}
@@ -498,7 +498,7 @@ func dependencySemanticsFromDefinition(
 		return dependencyDefinitionSemantics{
 			stage: dependencyStageExtraction, outputFields: outputs,
 		}, nil
-	case *opensplunkv1.KnowledgeObjectDefinition_FieldAlias:
+	case *opensplunk.KnowledgeObjectDefinition_FieldAlias:
 		if body == nil || body.FieldAlias == nil {
 			return dependencyDefinitionSemantics{}, fmt.Errorf("field alias is nil")
 		}
@@ -507,7 +507,7 @@ func dependencySemanticsFromDefinition(
 			inputFields:  normalizedDependencyFields([]string{body.FieldAlias.GetSourceField()}),
 			outputFields: normalizedDependencyFields([]string{body.FieldAlias.GetDestinationField()}),
 		}, nil
-	case *opensplunkv1.KnowledgeObjectDefinition_CalculatedField:
+	case *opensplunk.KnowledgeObjectDefinition_CalculatedField:
 		if body == nil || body.CalculatedField == nil {
 			return dependencyDefinitionSemantics{}, fmt.Errorf("calculated field is nil")
 		}

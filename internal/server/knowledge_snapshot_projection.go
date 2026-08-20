@@ -3,7 +3,7 @@ package server
 import (
 	"errors"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 )
 
@@ -13,8 +13,8 @@ import (
 // commitments are safe to expose but an authorized object or exact logical or
 // physical lookup identity is not.
 func projectKnowledgeSnapshotSummary(
-	input *opensplunkv1.KnowledgeSnapshotSummary,
-) (*opensplunkv1.KnowledgeSnapshotSummary, error) {
+	input *opensplunk.KnowledgeSnapshotSummary,
+) (*opensplunk.KnowledgeSnapshotSummary, error) {
 	if input == nil {
 		return nil, nil
 	}
@@ -23,7 +23,7 @@ func projectKnowledgeSnapshotSummary(
 		return nil, errors.New("dependency returned an invalid knowledge snapshot summary")
 	}
 	for _, object := range summary.GetObjects() {
-		object.Disclosure = &opensplunkv1.KnowledgeSnapshotObjectSummary_Redacted{Redacted: true}
+		object.Disclosure = &opensplunk.KnowledgeSnapshotObjectSummary_Redacted{Redacted: true}
 	}
 	summary.LookupAssets = nil
 	return summary, nil

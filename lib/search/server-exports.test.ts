@@ -6,13 +6,13 @@ import {
   ExportJobState,
   type ExportJob,
   type ExportProgress,
-} from "../../gen/ts/open_splunk/v1/export";
+} from "../../gen/ts/open_splunk/export";
 import {
   SearchWebSocketCommand,
   type SearchWebSocketEvent,
   SearchWebSocketEvent as SearchWebSocketEventCodec,
-} from "../../gen/ts/open_splunk/v1/search_ws";
-import { ServerFeature } from "../../gen/ts/open_splunk/v1/system_api";
+} from "../../gen/ts/open_splunk/search_ws";
+import { ServerFeature } from "../../gen/ts/open_splunk/system_api";
 import type { OpenSplunkApiClient } from "../api/open-splunk-client";
 import { exportJobTarget } from "../api/search-websocket";
 import type { SystemBootstrapModel } from "../api/system-bootstrap";
@@ -154,15 +154,11 @@ function exportJob(
     startedAt: new Date("2026-07-26T00:00:00.000Z"),
     finishedAt: undefined,
     expiresAt: undefined,
-    compilerVersion: "0.2",
   };
 }
 
 function bootstrapModel(searchWebsocketPath: string | null): SystemBootstrapModel {
   return {
-    serverVersion: "test",
-    apiVersion: "v1",
-    splCompatibilityVersion: "v0.1",
     build: null,
     features: new Set([ServerFeature.SERVER_FEATURE_EXPORT_CSV]),
     searchWebsocketPath,
@@ -352,57 +348,6 @@ test("applied export progress is isolated from decoded-object mutation", () => {
   assert.equal(state.progress.updatedAt?.toISOString(), "2026-07-26T00:00:10.000Z");
 });
 
-test("authoritative export compiler compatibility is canonical and legacy-empty aware", async () => {
-  const client = {
-    exports: {
-      get: () => {
-        throw new Error("a terminal initial snapshot must not poll");
-      },
-    },
-  } as unknown as OpenSplunkApiClient;
-  const terminalProgress = progress("2026-07-26T00:00:01.000Z", {
-    percentComplete: 100,
-  });
-
-  await Promise.all(["0.2", "", "\ufeff0.2"].map(async (compilerVersion) => {
-    const initial = exportJob(
-      1n,
-      ExportJobState.EXPORT_JOB_STATE_COMPLETED,
-      terminalProgress,
-    );
-    initial.compilerVersion = compilerVersion;
-    const result = await waitForServerExport(client, bootstrapModel(null), initial);
-    assert.equal(result.status, "available");
-    if (result.status === "available") {
-      assert.equal(result.value.compilerVersion, compilerVersion);
-    }
-  }));
-
-  await Promise.all([
-    " 0.2",
-    "0.2 ",
-    "0.2\u00a0",
-    "\u16800.2",
-    "0.2\u3000",
-    "0.2\nforged",
-    "0.2\u0085forged",
-    "v".repeat(129),
-    "\ud800",
-  ].map(async (compilerVersion) => {
-    const initial = exportJob(
-      1n,
-      ExportJobState.EXPORT_JOB_STATE_COMPLETED,
-      terminalProgress,
-    );
-    initial.compilerVersion = compilerVersion;
-    await assert.rejects(
-      waitForServerExport(client, bootstrapModel(null), initial),
-      /invalid compiler compatibility identity/,
-      JSON.stringify(compilerVersion),
-    );
-  }));
-});
-
 test("an already-aborted WebSocket export wait rejects before opening a socket", async () => {
   const controller = new AbortController();
   controller.abort(new DOMException("Canceled before monitoring.", "AbortError"));
@@ -417,7 +362,7 @@ test("an already-aborted WebSocket export wait rejects before opening a socket",
   await assert.rejects(
     waitForServerExport(
       client,
-      bootstrapModel("/api/v1/search/ws"),
+      bootstrapModel("/api/search/ws"),
       exportJob(
         1n,
         ExportJobState.EXPORT_JOB_STATE_RUNNING,
@@ -482,23 +427,6 @@ test("REST-only export monitoring rejects foreign and regressing snapshots", asy
       ),
       message: /progress is inconsistent/,
     },
-    {
-      name: "compiler compatibility drift",
-      candidate: {
-        ...exportJob(
-          4n,
-          ExportJobState.EXPORT_JOB_STATE_COMPLETED,
-          progress("2026-07-26T00:00:04.000Z", {
-            rowsWritten: 31n,
-            bytesWritten: 310n,
-            percentComplete: 100,
-            elapsed: { seconds: 4n, nanos: 0 },
-          }),
-        ),
-        compilerVersion: "0.3",
-      },
-      message: /changed its compiler compatibility identity/,
-    },
   ];
 
   await Promise.all(cases.map(async (testCase) => {
@@ -520,58 +448,6 @@ test("REST-only export monitoring rejects foreign and regressing snapshots", asy
     );
     assert.equal(updates, 0, `${testCase.name} must not publish a rejected snapshot`);
   }));
-});
-
-test("export callbacks cannot rewrite the retained compiler compatibility authority", async () => {
-  const initial = exportJob(
-    1n,
-    ExportJobState.EXPORT_JOB_STATE_RUNNING,
-    progress("2026-07-26T00:00:01.000Z", {
-      rowsWritten: 1n,
-      bytesWritten: 10n,
-      elapsed: { seconds: 1n, nanos: 0 },
-    }),
-  );
-  initial.compilerVersion = "0.2";
-  const first = exportJob(
-    2n,
-    ExportJobState.EXPORT_JOB_STATE_RUNNING,
-    progress("2026-07-26T00:00:02.000Z", {
-      rowsWritten: 2n,
-      bytesWritten: 20n,
-      elapsed: { seconds: 2n, nanos: 0 },
-    }),
-  );
-  first.compilerVersion = "0.2";
-  const forged = exportJob(
-    3n,
-    ExportJobState.EXPORT_JOB_STATE_COMPLETED,
-    progress("2026-07-26T00:00:03.000Z", {
-      rowsWritten: 3n,
-      bytesWritten: 30n,
-      percentComplete: 100,
-      elapsed: { seconds: 3n, nanos: 0 },
-    }),
-  );
-  forged.compilerVersion = "0.3";
-  const responses = [first, forged];
-  let calls = 0;
-  const client = {
-    exports: {
-      get: async () => ({ exportJob: responses[calls++] }),
-    },
-  } as unknown as OpenSplunkApiClient;
-
-  await assert.rejects(
-    waitForServerExport(client, bootstrapModel(null), initial, {
-      pollIntervalMs: 100,
-      onUpdate: (job) => {
-        job.compilerVersion = "0.3";
-      },
-    }),
-    /changed its compiler compatibility identity/,
-  );
-  assert.equal(calls, 2);
 });
 
 test("one recovery cycle owns a shared REST response and retries after a live epoch advance", async (t) => {
@@ -606,7 +482,7 @@ test("one recovery cycle owns a shared REST response and retries after a live ep
       },
     },
   } as unknown as OpenSplunkApiClient;
-  const bootstrap = bootstrapModel("/api/v1/search/ws");
+  const bootstrap = bootstrapModel("/api/search/ws");
   const initial = exportJob(
     1n,
     ExportJobState.EXPORT_JOB_STATE_QUEUED,
@@ -757,7 +633,7 @@ test("a conflicting terminal progress frame cannot publish its terminal artifact
   t.after(() => controller.abort());
   const completion = waitForServerExport(
     client,
-    bootstrapModel("/api/v1/search/ws"),
+    bootstrapModel("/api/search/ws"),
     initial,
     {
       signal: controller.signal,

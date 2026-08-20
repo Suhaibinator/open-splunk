@@ -13,8 +13,8 @@ import {
   AuditTargetKind,
   type AuditAction,
   type AuditEvent,
-} from "@/gen/ts/open_splunk/v1/audit";
-import type { SearchAttemptAuditEvent } from "@/gen/ts/open_splunk/v1/search_attempt_audit";
+} from "@/gen/ts/open_splunk/audit";
+import type { SearchAttemptAuditEvent } from "@/gen/ts/open_splunk/search_attempt_audit";
 import {
   createOpenSplunkApiClient,
   recordNextPageToken,

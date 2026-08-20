@@ -9,7 +9,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
@@ -73,8 +73,8 @@ type SourceRange struct {
 // version, name, owner, app, digest, selector, or definition location.
 type RedactedObjectProvenance struct {
 	Ordinal    uint32
-	ObjectType opensplunkv1.KnowledgeObjectType
-	Stage      opensplunkv1.KnowledgeSearchStage
+	ObjectType opensplunk.KnowledgeObjectType
+	Stage      opensplunk.KnowledgeSearchStage
 }
 
 // OutputProvenance associates one generated output occurrence with its
@@ -146,8 +146,8 @@ const (
 )
 
 type knowledgeOperatorContract struct {
-	objectType opensplunkv1.KnowledgeObjectType
-	stage      opensplunkv1.KnowledgeSearchStage
+	objectType opensplunk.KnowledgeObjectType
+	stage      opensplunk.KnowledgeSearchStage
 	shape      knowledgeOperatorShape
 	rank       knowledgeOperatorRank
 	repeatable bool
@@ -159,31 +159,31 @@ func inspectionKnowledgeOperator(
 	switch value {
 	case "ConditionalExtract":
 		return knowledgeOperatorContract{
-			objectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
-			stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
+			objectType: opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
+			stage:      opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
 			shape:      knowledgeOperatorShapeOneToMany,
 			rank:       knowledgeOperatorRankExtraction,
 			repeatable: true,
 		}, true
 	case "ConditionalExtractJSON":
 		return knowledgeOperatorContract{
-			objectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
-			stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
+			objectType: opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
+			stage:      opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
 			shape:      knowledgeOperatorShapeOneToOne,
 			rank:       knowledgeOperatorRankExtraction,
 			repeatable: true,
 		}, true
 	case "CopyFieldAlias":
 		return knowledgeOperatorContract{
-			objectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
-			stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
+			objectType: opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+			stage:      opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
 			shape:      knowledgeOperatorShapeFusedOneToOne,
 			rank:       knowledgeOperatorRankAlias,
 		}, true
 	case "ParallelExtend":
 		return knowledgeOperatorContract{
-			objectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD,
-			stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD,
+			objectType: opensplunk.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD,
+			stage:      opensplunk.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD,
 			shape:      knowledgeOperatorShapeFusedOneToOne,
 			rank:       knowledgeOperatorRankCalculated,
 		}, true

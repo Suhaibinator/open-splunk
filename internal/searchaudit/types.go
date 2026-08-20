@@ -12,7 +12,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
@@ -27,21 +27,20 @@ const (
 	// MaximumListPageSize bounds one list result before serialization.
 	MaximumListPageSize = 200
 
-	defaultListPageSize                      = 50
-	maximumTenantIDBytes                     = 255
-	maximumOwnerIDBytes                      = 255
-	maximumSearchJobIDBytes                  = 256
-	maximumKnowledgeObjects                  = knowledgesnapshot.MaximumExecutableObjects
-	maximumKnowledgeLookupAssets             = knowledgesnapshot.MaximumLookupAssets
-	maximumCompilerCompatibilityVersionBytes = knowledgesnapshot.MaximumCompilerCompatibilityVersionBytes
-	minimumCursorKeyBytes                    = 32
-	maximumCursorKeyBytes                    = 4 << 10
-	maximumListCursorBytes                   = 2 << 10
-	maximumIntegrityBatch                    = 512
-	maximumPersistedSequence                 = int64(math.MaxInt64 - 1)
-	defaultSystemActorID                     = "open-splunk-server"
-	searchAuditCursorVersion                 = 1
-	searchAuditCursorPurpose                 = "search-attempt-audit-list-cursor"
+	defaultListPageSize          = 50
+	maximumTenantIDBytes         = 255
+	maximumOwnerIDBytes          = 255
+	maximumSearchJobIDBytes      = 256
+	maximumKnowledgeObjects      = knowledgesnapshot.MaximumExecutableObjects
+	maximumKnowledgeLookupAssets = knowledgesnapshot.MaximumLookupAssets
+	minimumCursorKeyBytes        = 32
+	maximumCursorKeyBytes        = 4 << 10
+	maximumListCursorBytes       = 2 << 10
+	maximumIntegrityBatch        = 512
+	maximumPersistedSequence     = int64(math.MaxInt64 - 1)
+	defaultSystemActorID         = "open-splunk-server"
+	searchAuditCursorVersion     = 1
+	searchAuditCursorPurpose     = "search-attempt-audit-list-cursor"
 )
 
 var (
@@ -69,7 +68,7 @@ type Event struct {
 	Actor             audit.Actor
 	OwnerID           string
 	SearchJobID       string
-	KnowledgeSnapshot *opensplunkv1.KnowledgeSnapshotRef
+	KnowledgeSnapshot *opensplunk.KnowledgeSnapshotRef
 }
 
 // ValidateForTenant verifies the complete public event contract for tenantID.
@@ -111,8 +110,8 @@ func (event Event) detached() Event {
 }
 
 func normalizeKnowledgeSnapshotRef(
-	input *opensplunkv1.KnowledgeSnapshotRef,
-) (*opensplunkv1.KnowledgeSnapshotRef, error) {
+	input *opensplunk.KnowledgeSnapshotRef,
+) (*opensplunk.KnowledgeSnapshotRef, error) {
 	if input == nil {
 		return nil, nil
 	}
@@ -123,7 +122,7 @@ func normalizeKnowledgeSnapshotRef(
 	return detached, nil
 }
 
-func validateKnowledgeSnapshotRef(input *opensplunkv1.KnowledgeSnapshotRef) error {
+func validateKnowledgeSnapshotRef(input *opensplunk.KnowledgeSnapshotRef) error {
 	if input == nil {
 		return nil
 	}

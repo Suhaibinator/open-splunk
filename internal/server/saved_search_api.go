@@ -11,7 +11,7 @@ import (
 
 	"github.com/Suhaibinator/SRouter/pkg/codec"
 	"github.com/Suhaibinator/SRouter/pkg/router"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
 	"google.golang.org/protobuf/proto"
@@ -47,7 +47,7 @@ var savedSearchUpdatePaths = map[string]struct{}{
 	"definition.owner_id":      {},
 }
 
-func (handler *apiHandler) createSavedSearch(request *http.Request, input *opensplunkv1.CreateSavedSearchRequest) (*opensplunkv1.CreateSavedSearchResponse, error) {
+func (handler *apiHandler) createSavedSearch(request *http.Request, input *opensplunk.CreateSavedSearchRequest) (*opensplunk.CreateSavedSearchResponse, error) {
 	if input.ClientRequestId != nil {
 		return nil, badRequestError("client request idempotency is not supported")
 	}
@@ -66,10 +66,10 @@ func (handler *apiHandler) createSavedSearch(request *http.Request, input *opens
 	if converted.GetVersion() != 1 {
 		return nil, internalError()
 	}
-	return &opensplunkv1.CreateSavedSearchResponse{SavedSearch: converted}, nil
+	return &opensplunk.CreateSavedSearchResponse{SavedSearch: converted}, nil
 }
 
-func (handler *apiHandler) getSavedSearch(request *http.Request, input *opensplunkv1.GetSavedSearchRequest) (*opensplunkv1.GetSavedSearchResponse, error) {
+func (handler *apiHandler) getSavedSearch(request *http.Request, input *opensplunk.GetSavedSearchRequest) (*opensplunk.GetSavedSearchResponse, error) {
 	id, err := savedSearchID(input.GetSavedSearchId())
 	if err != nil {
 		return nil, badRequestError(err.Error())
@@ -88,10 +88,10 @@ func (handler *apiHandler) getSavedSearch(request *http.Request, input *opensplu
 	if err := savedSearchRequestContextError(request.Context()); err != nil {
 		return nil, err
 	}
-	return &opensplunkv1.GetSavedSearchResponse{SavedSearch: converted}, nil
+	return &opensplunk.GetSavedSearchResponse{SavedSearch: converted}, nil
 }
 
-func (handler *apiHandler) listSavedSearches(request *http.Request, input *opensplunkv1.ListSavedSearchesRequest) (*serializedSavedSearchListResponse, error) {
+func (handler *apiHandler) listSavedSearches(request *http.Request, input *opensplunk.ListSavedSearchesRequest) (*serializedSavedSearchListResponse, error) {
 	pageSize, pageToken, includeTotal, err := handler.savedSearchPageRequest(input.GetPage())
 	if err != nil {
 		return nil, badRequestError(err.Error())
@@ -139,8 +139,8 @@ func (handler *apiHandler) listSavedSearches(request *http.Request, input *opens
 	if uint64(len(result.SavedSearches)) > uint64(effectiveSavedSearchPageSize(pageSize, handler.maximumPageSize)) {
 		return nil, internalError()
 	}
-	converted := make([]*opensplunkv1.SavedSearch, len(result.SavedSearches))
-	sharingFilterSet := make(map[opensplunkv1.SharingScope]struct{}, len(sharingScopes))
+	converted := make([]*opensplunk.SavedSearch, len(result.SavedSearches))
+	sharingFilterSet := make(map[opensplunk.SharingScope]struct{}, len(sharingScopes))
 	for _, scope := range sharingScopes {
 		sharingFilterSet[scope] = struct{}{}
 	}
@@ -164,7 +164,7 @@ func (handler *apiHandler) listSavedSearches(request *http.Request, input *opens
 			}
 		}
 	}
-	page := &opensplunkv1.PageResponse{}
+	page := &opensplunk.PageResponse{}
 	if result.NextPageToken != nil {
 		if len(*result.NextPageToken) == 0 || len(*result.NextPageToken) > maximumPageTokenBytes || !utf8.ValidString(*result.NextPageToken) {
 			return nil, internalError()
@@ -189,7 +189,7 @@ func (handler *apiHandler) listSavedSearches(request *http.Request, input *opens
 	if err := savedSearchRequestContextError(request.Context()); err != nil {
 		return nil, err
 	}
-	message := &opensplunkv1.ListSavedSearchesResponse{SavedSearches: converted, Page: page}
+	message := &opensplunk.ListSavedSearchesResponse{SavedSearches: converted, Page: page}
 	if proto.Size(message) > maximumSavedSearchListBytes {
 		return nil, internalError()
 	}
@@ -201,7 +201,7 @@ func (handler *apiHandler) listSavedSearches(request *http.Request, input *opens
 	}, nil
 }
 
-func (handler *apiHandler) updateSavedSearch(request *http.Request, input *opensplunkv1.UpdateSavedSearchRequest) (*opensplunkv1.UpdateSavedSearchResponse, error) {
+func (handler *apiHandler) updateSavedSearch(request *http.Request, input *opensplunk.UpdateSavedSearchRequest) (*opensplunk.UpdateSavedSearchResponse, error) {
 	id, err := savedSearchID(input.GetSavedSearchId())
 	if err != nil {
 		return nil, badRequestError(err.Error())
@@ -228,10 +228,10 @@ func (handler *apiHandler) updateSavedSearch(request *http.Request, input *opens
 	if converted.GetSavedSearchId() != id || converted.GetVersion() != input.GetExpectedVersion()+1 {
 		return nil, internalError()
 	}
-	return &opensplunkv1.UpdateSavedSearchResponse{SavedSearch: converted}, nil
+	return &opensplunk.UpdateSavedSearchResponse{SavedSearch: converted}, nil
 }
 
-func (handler *apiHandler) duplicateSavedSearch(request *http.Request, input *opensplunkv1.DuplicateSavedSearchRequest) (*opensplunkv1.DuplicateSavedSearchResponse, error) {
+func (handler *apiHandler) duplicateSavedSearch(request *http.Request, input *opensplunk.DuplicateSavedSearchRequest) (*opensplunk.DuplicateSavedSearchResponse, error) {
 	if input.ClientRequestId != nil {
 		return nil, badRequestError("client request idempotency is not supported")
 	}
@@ -264,10 +264,10 @@ func (handler *apiHandler) duplicateSavedSearch(request *http.Request, input *op
 	if destinationAppID != nil && savedSearchAppID(converted) != *destinationAppID {
 		return nil, internalError()
 	}
-	return &opensplunkv1.DuplicateSavedSearchResponse{SavedSearch: converted}, nil
+	return &opensplunk.DuplicateSavedSearchResponse{SavedSearch: converted}, nil
 }
 
-func (handler *apiHandler) deleteSavedSearch(request *http.Request, input *opensplunkv1.DeleteSavedSearchRequest) (*opensplunkv1.DeleteSavedSearchResponse, error) {
+func (handler *apiHandler) deleteSavedSearch(request *http.Request, input *opensplunk.DeleteSavedSearchRequest) (*opensplunk.DeleteSavedSearchResponse, error) {
 	id, err := savedSearchID(input.GetSavedSearchId())
 	if err != nil {
 		return nil, badRequestError(err.Error())
@@ -279,24 +279,24 @@ func (handler *apiHandler) deleteSavedSearch(request *http.Request, input *opens
 	if err := mapSavedSearchCallError(request.Context(), err); err != nil {
 		return nil, err
 	}
-	return &opensplunkv1.DeleteSavedSearchResponse{SavedSearchId: id}, nil
+	return &opensplunk.DeleteSavedSearchResponse{SavedSearchId: id}, nil
 }
 
 func (handler *apiHandler) savedSearchScope() savedobjects.AccessScope {
 	return savedobjects.AccessScope{OwnerID: handler.ownerID}
 }
 
-func (handler *apiHandler) savedSearchDefinition(input *opensplunkv1.SavedSearchDefinition) (*opensplunkv1.SavedSearchDefinition, error) {
+func (handler *apiHandler) savedSearchDefinition(input *opensplunk.SavedSearchDefinition) (*opensplunk.SavedSearchDefinition, error) {
 	if input == nil {
 		return nil, errors.New("saved search definition is required")
 	}
 	if input.OwnerId != nil && input.GetOwnerId() != handler.ownerID {
 		return nil, errors.New("saved search owner must match the authenticated owner")
 	}
-	return proto.Clone(input).(*opensplunkv1.SavedSearchDefinition), nil
+	return proto.Clone(input).(*opensplunk.SavedSearchDefinition), nil
 }
 
-func (handler *apiHandler) cloneSavedSearch(input *opensplunkv1.SavedSearch) (*opensplunkv1.SavedSearch, error) {
+func (handler *apiHandler) cloneSavedSearch(input *opensplunk.SavedSearch) (*opensplunk.SavedSearch, error) {
 	if input == nil || input.GetVersion() == 0 || input.GetDefinition() == nil {
 		return nil, errors.New("saved search service returned an invalid record")
 	}
@@ -316,9 +316,9 @@ func (handler *apiHandler) cloneSavedSearch(input *opensplunkv1.SavedSearch) (*o
 		return nil, errors.New("saved search service returned an invalid definition")
 	}
 	switch definition.GetSharingScope() {
-	case opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
-		opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL:
-	case opensplunkv1.SharingScope_SHARING_SCOPE_APP:
+	case opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
+		opensplunk.SharingScope_SHARING_SCOPE_GLOBAL:
+	case opensplunk.SharingScope_SHARING_SCOPE_APP:
 		if definition.GetSearch().GetAppId() == "" {
 			return nil, errors.New("saved search service returned an app-scoped record without an app ID")
 		}
@@ -328,10 +328,10 @@ func (handler *apiHandler) cloneSavedSearch(input *opensplunkv1.SavedSearch) (*o
 	if input.GetCreatedAt() == nil || input.GetCreatedAt().CheckValid() != nil || input.GetUpdatedAt() == nil || input.GetUpdatedAt().CheckValid() != nil || input.GetUpdatedAt().AsTime().Before(input.GetCreatedAt().AsTime()) {
 		return nil, errors.New("saved search service returned invalid timestamps")
 	}
-	return proto.Clone(input).(*opensplunkv1.SavedSearch), nil
+	return proto.Clone(input).(*opensplunk.SavedSearch), nil
 }
 
-func (handler *apiHandler) savedSearchPageRequest(page *opensplunkv1.PageRequest) (uint32, string, bool, error) {
+func (handler *apiHandler) savedSearchPageRequest(page *opensplunk.PageRequest) (uint32, string, bool, error) {
 	pageSize, pageToken, includeTotal, err := handler.pageRequest(page)
 	if err != nil {
 		return 0, "", false, err
@@ -389,17 +389,17 @@ func validateBoundedIdentifier(value string, maximumBytes int, allowEmpty bool) 
 	return nil
 }
 
-func savedSearchSharingScopes(input []opensplunkv1.SharingScope) ([]opensplunkv1.SharingScope, error) {
+func savedSearchSharingScopes(input []opensplunk.SharingScope) ([]opensplunk.SharingScope, error) {
 	if len(input) > 3 {
 		return nil, errors.New("sharing scope filters contain too many values")
 	}
-	result := make([]opensplunkv1.SharingScope, 0, len(input))
-	seen := make(map[opensplunkv1.SharingScope]struct{}, len(input))
+	result := make([]opensplunk.SharingScope, 0, len(input))
+	seen := make(map[opensplunk.SharingScope]struct{}, len(input))
 	for _, scope := range input {
 		switch scope {
-		case opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
-			opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-			opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL:
+		case opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
+			opensplunk.SharingScope_SHARING_SCOPE_APP,
+			opensplunk.SharingScope_SHARING_SCOPE_GLOBAL:
 		default:
 			return nil, errors.New("sharing scope filter is invalid")
 		}
@@ -412,19 +412,19 @@ func savedSearchSharingScopes(input []opensplunkv1.SharingScope) ([]opensplunkv1
 	return result, nil
 }
 
-func validateSavedSearchSort(sortBy opensplunkv1.SavedSearchSortBy, direction opensplunkv1.SortDirection) error {
+func validateSavedSearchSort(sortBy opensplunk.SavedSearchSortBy, direction opensplunk.SortDirection) error {
 	switch sortBy {
-	case opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_UNSPECIFIED,
-		opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_NAME,
-		opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_CREATED_AT,
-		opensplunkv1.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_UPDATED_AT:
+	case opensplunk.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_UNSPECIFIED,
+		opensplunk.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_NAME,
+		opensplunk.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_CREATED_AT,
+		opensplunk.SavedSearchSortBy_SAVED_SEARCH_SORT_BY_UPDATED_AT:
 	default:
 		return errors.New("saved search sort is invalid")
 	}
 	switch direction {
-	case opensplunkv1.SortDirection_SORT_DIRECTION_UNSPECIFIED,
-		opensplunkv1.SortDirection_SORT_DIRECTION_ASCENDING,
-		opensplunkv1.SortDirection_SORT_DIRECTION_DESCENDING:
+	case opensplunk.SortDirection_SORT_DIRECTION_UNSPECIFIED,
+		opensplunk.SortDirection_SORT_DIRECTION_ASCENDING,
+		opensplunk.SortDirection_SORT_DIRECTION_DESCENDING:
 		return nil
 	default:
 		return errors.New("sort direction is invalid")
@@ -450,7 +450,7 @@ func cloneSavedSearchUpdateMask(input *fieldmaskpb.FieldMask) (*fieldmaskpb.Fiel
 	return result, nil
 }
 
-func savedSearchAppID(record *opensplunkv1.SavedSearch) string {
+func savedSearchAppID(record *opensplunk.SavedSearch) string {
 	if record == nil || record.GetDefinition() == nil || record.GetDefinition().GetSearch() == nil {
 		return ""
 	}
@@ -492,13 +492,13 @@ func savedSearchRequestContextError(ctx context.Context) error {
 // Saved-search definitions are user-authored and individually bounded, but a
 // page can still be large enough that unconstrained concurrent marshaling would
 // create avoidable memory pressure.
-type serializedSavedSearchListResponse = boundedProtoResponse[*opensplunkv1.ListSavedSearchesResponse]
+type serializedSavedSearchListResponse = boundedProtoResponse[*opensplunk.ListSavedSearchesResponse]
 
-type serializedSavedSearchListCodec = boundedProtoCodec[*opensplunkv1.ListSavedSearchesRequest, *opensplunkv1.ListSavedSearchesResponse]
+type serializedSavedSearchListCodec = boundedProtoCodec[*opensplunk.ListSavedSearchesRequest, *opensplunk.ListSavedSearchesResponse]
 
 func newSerializedSavedSearchListCodec() *serializedSavedSearchListCodec {
 	return newBoundedProtoCodec(
-		codec.NewProtoCodec[*opensplunkv1.ListSavedSearchesRequest, *opensplunkv1.ListSavedSearchesResponse](),
+		codec.NewProtoCodec[*opensplunk.ListSavedSearchesRequest, *opensplunk.ListSavedSearchesResponse](),
 		boundedProtoCodecOptions{
 			stateError:   "saved search serialization permit is missing",
 			messageError: "saved search list response is missing",

@@ -13,14 +13,14 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchsuggestions"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
-const testSearchSuggestionsPath = "/api/v1/search/suggestions"
+const testSearchSuggestionsPath = "/api/search/suggestions"
 
 type fakeSearchSuggestions struct {
 	mu sync.Mutex
@@ -162,17 +162,17 @@ func TestSearchSuggestionsReturnsDetachedEditorCompletionsWithoutCreatingJob(t *
 		t.Fatalf("service mutated protobuf request: maximum=%d scope=%v", maximum, request.GetIndexScope())
 	}
 
-	decoded := &opensplunkv1.GetSearchSuggestionsResponse{}
+	decoded := &opensplunk.GetSearchSuggestionsResponse{}
 	unmarshalResponse(t, response, decoded)
 	if len(decoded.GetSuggestions()) != len(result.Suggestions) {
 		t.Fatalf("suggestions = %+v", decoded.GetSuggestions())
 	}
-	wantKinds := []opensplunkv1.SearchSuggestionKind{
-		opensplunkv1.SearchSuggestionKind_SEARCH_SUGGESTION_KIND_COMMAND,
-		opensplunkv1.SearchSuggestionKind_SEARCH_SUGGESTION_KIND_FUNCTION,
-		opensplunkv1.SearchSuggestionKind_SEARCH_SUGGESTION_KIND_FIELD,
-		opensplunkv1.SearchSuggestionKind_SEARCH_SUGGESTION_KIND_KEYWORD,
-		opensplunkv1.SearchSuggestionKind_SEARCH_SUGGESTION_KIND_INDEX,
+	wantKinds := []opensplunk.SearchSuggestionKind{
+		opensplunk.SearchSuggestionKind_SEARCH_SUGGESTION_KIND_COMMAND,
+		opensplunk.SearchSuggestionKind_SEARCH_SUGGESTION_KIND_FUNCTION,
+		opensplunk.SearchSuggestionKind_SEARCH_SUGGESTION_KIND_FIELD,
+		opensplunk.SearchSuggestionKind_SEARCH_SUGGESTION_KIND_KEYWORD,
+		opensplunk.SearchSuggestionKind_SEARCH_SUGGESTION_KIND_INDEX,
 	}
 	for index, suggestion := range decoded.GetSuggestions() {
 		want := result.Suggestions[index]
@@ -200,7 +200,7 @@ func TestSearchSuggestionsReturnsDetachedEditorCompletionsWithoutCreatingJob(t *
 	diagnostic := decoded.GetDiagnostics()[0]
 	if diagnostic.GetCode() != "SPL_INCOMPLETE" ||
 		diagnostic.GetMessage() != "search is incomplete" ||
-		diagnostic.GetSeverity() != opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR ||
+		diagnostic.GetSeverity() != opensplunk.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR ||
 		!slices.Equal(diagnostic.GetSuggestions(), []string{"complete the expression"}) {
 		t.Fatalf("diagnostic = %+v", diagnostic)
 	}
@@ -250,50 +250,50 @@ func TestSearchSuggestionsRejectsInvalidCursorSourceAndMetadata(t *testing.T) {
 
 	tests := []struct {
 		name   string
-		mutate func(*opensplunkv1.GetSearchSuggestionsRequest)
+		mutate func(*opensplunk.GetSearchSuggestionsRequest)
 	}{
-		{name: "source NUL", mutate: func(request *opensplunkv1.GetSearchSuggestionsRequest) {
+		{name: "source NUL", mutate: func(request *opensplunk.GetSearchSuggestionsRequest) {
 			request.Spl = "index=main\x00"
 			request.CursorByteOffset = uint64(len(request.Spl))
 		}},
-		{name: "cursor after source", mutate: func(request *opensplunkv1.GetSearchSuggestionsRequest) {
+		{name: "cursor after source", mutate: func(request *opensplunk.GetSearchSuggestionsRequest) {
 			request.CursorByteOffset++
 		}},
-		{name: "cursor integer overflow", mutate: func(request *opensplunkv1.GetSearchSuggestionsRequest) {
+		{name: "cursor integer overflow", mutate: func(request *opensplunk.GetSearchSuggestionsRequest) {
 			request.CursorByteOffset = math.MaxUint64
 		}},
-		{name: "cursor inside UTF-8 rune", mutate: func(request *opensplunkv1.GetSearchSuggestionsRequest) {
+		{name: "cursor inside UTF-8 rune", mutate: func(request *opensplunk.GetSearchSuggestionsRequest) {
 			request.Spl = "😀"
 			request.CursorByteOffset = 1
 		}},
-		{name: "missing time range", mutate: func(request *opensplunkv1.GetSearchSuggestionsRequest) {
+		{name: "missing time range", mutate: func(request *opensplunk.GetSearchSuggestionsRequest) {
 			request.TimeRange = nil
 		}},
-		{name: "inverted time range", mutate: func(request *opensplunkv1.GetSearchSuggestionsRequest) {
+		{name: "inverted time range", mutate: func(request *opensplunk.GetSearchSuggestionsRequest) {
 			request.TimeRange = suggestionTimeRange("2026-07-22T13:00:00Z", "2026-07-22T12:00:00Z")
 		}},
-		{name: "invalid app ID", mutate: func(request *opensplunkv1.GetSearchSuggestionsRequest) {
+		{name: "invalid app ID", mutate: func(request *opensplunk.GetSearchSuggestionsRequest) {
 			request.AppId = new("app\x00main")
 		}},
-		{name: "oversized app ID", mutate: func(request *opensplunkv1.GetSearchSuggestionsRequest) {
+		{name: "oversized app ID", mutate: func(request *opensplunk.GetSearchSuggestionsRequest) {
 			request.AppId = new(strings.Repeat("a", maximumSavedSearchAppIDBytes+1))
 		}},
-		{name: "missing index scope", mutate: func(request *opensplunkv1.GetSearchSuggestionsRequest) {
+		{name: "missing index scope", mutate: func(request *opensplunk.GetSearchSuggestionsRequest) {
 			request.IndexScope = nil
 		}},
-		{name: "invalid index", mutate: func(request *opensplunkv1.GetSearchSuggestionsRequest) {
+		{name: "invalid index", mutate: func(request *opensplunk.GetSearchSuggestionsRequest) {
 			request.IndexScope = []string{"not an index"}
 		}},
-		{name: "too many indexes", mutate: func(request *opensplunkv1.GetSearchSuggestionsRequest) {
+		{name: "too many indexes", mutate: func(request *opensplunk.GetSearchSuggestionsRequest) {
 			request.IndexScope = make([]string, maximumRequestedIndexes+1)
 			for index := range request.IndexScope {
 				request.IndexScope[index] = "main"
 			}
 		}},
-		{name: "explicit zero maximum", mutate: func(request *opensplunkv1.GetSearchSuggestionsRequest) {
+		{name: "explicit zero maximum", mutate: func(request *opensplunk.GetSearchSuggestionsRequest) {
 			request.MaxSuggestions = new(uint32(0))
 		}},
-		{name: "maximum above service bound", mutate: func(request *opensplunkv1.GetSearchSuggestionsRequest) {
+		{name: "maximum above service bound", mutate: func(request *opensplunk.GetSearchSuggestionsRequest) {
 			request.MaxSuggestions = new(uint32(11))
 		}},
 	}
@@ -744,7 +744,7 @@ func TestSearchSuggestionsAcceptsPositionlessDiagnostic(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
-	decoded := &opensplunkv1.GetSearchSuggestionsResponse{}
+	decoded := &opensplunk.GetSearchSuggestionsResponse{}
 	unmarshalResponse(t, response, decoded)
 	if len(decoded.GetDiagnostics()) != 1 || decoded.GetDiagnostics()[0].GetSourceRange() != nil {
 		t.Fatalf("diagnostics = %+v", decoded.GetDiagnostics())
@@ -893,8 +893,8 @@ func newSuggestionAPIRequest(
 	source string,
 	cursor uint64,
 	indexes ...string,
-) *opensplunkv1.GetSearchSuggestionsRequest {
-	return &opensplunkv1.GetSearchSuggestionsRequest{
+) *opensplunk.GetSearchSuggestionsRequest {
+	return &opensplunk.GetSearchSuggestionsRequest{
 		Spl:              source,
 		CursorByteOffset: cursor,
 		TimeRange:        suggestionTimeRange("-24h", "now"),
@@ -902,9 +902,9 @@ func newSuggestionAPIRequest(
 	}
 }
 
-func suggestionTimeRange(earliest, latest string) *opensplunkv1.TimeRangeSpec {
+func suggestionTimeRange(earliest, latest string) *opensplunk.TimeRangeSpec {
 	timezone := "UTC"
-	return &opensplunkv1.TimeRangeSpec{
+	return &opensplunk.TimeRangeSpec{
 		Earliest: &earliest,
 		Latest:   &latest,
 		Timezone: &timezone,
@@ -932,7 +932,7 @@ func testSuggestion(
 
 func assertSuggestionProtoRange(
 	t *testing.T,
-	got *opensplunkv1.SourceRange,
+	got *opensplunk.SourceRange,
 	want spl.Range,
 ) {
 	t.Helper()

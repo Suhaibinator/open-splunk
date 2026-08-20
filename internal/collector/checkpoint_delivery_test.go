@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/collector/input"
 	"github.com/Suhaibinator/open-splunk/internal/collector/wal"
 )
@@ -366,12 +366,12 @@ func checkpointSourceMarkForInput(
 	}
 }
 
-func checkpointBatch(sequence uint64, identity input.FileIdentity, path string, start, end, line uint64) *opensplunkv1.EventBatch {
-	return &opensplunkv1.EventBatch{
+func checkpointBatch(sequence uint64, identity input.FileIdentity, path string, start, end, line uint64) *opensplunk.EventBatch {
+	return &opensplunk.EventBatch{
 		BatchSequence: sequence,
-		Events: []*opensplunkv1.LogEvent{{
+		Events: []*opensplunk.LogEvent{{
 			EventId: "event",
-			Origin: &opensplunkv1.EventOrigin{
+			Origin: &opensplunk.EventOrigin{
 				InputId:               "input",
 				FileIdentity:          new(identity.String()),
 				StartOffset:           new(start),

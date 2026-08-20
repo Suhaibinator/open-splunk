@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -246,21 +246,21 @@ func TestRuntimeLookupManagementAndSearchResolutionShareOneCatalog(t *testing.T)
 			TenantID: runtimeKnowledgeTestTenant,
 			OwnerID:  runtimeKnowledgeTestOwner,
 		},
-		&opensplunkv1.CreateLookupRequest{
-			Definition: &opensplunkv1.LookupDefinition{
+		&opensplunk.CreateLookupRequest{
+			Definition: &opensplunk.LookupDefinition{
 				AppId:        runtimeKnowledgeTestApp,
 				Name:         "service_owners",
-				SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
+				SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
 				Automatic:    true,
-				KeyMappings: []*opensplunkv1.LookupFieldMapping{{
+				KeyMappings: []*opensplunk.LookupFieldMapping{{
 					LookupField: "service_id",
 					EventField:  "service_id",
 				}},
-				OutputMappings: []*opensplunkv1.LookupFieldMapping{{
+				OutputMappings: []*opensplunk.LookupFieldMapping{{
 					LookupField: "owner",
 					EventField:  "service_owner",
 				}},
-				OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+				OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
 			},
 			CsvData: []byte("service_id,owner\napi,platform\n"),
 		},
@@ -345,23 +345,23 @@ func TestRuntimeLookupManagementAndSearchResolutionShareOneCatalog(t *testing.T)
 			TenantID: runtimeKnowledgeTestTenant,
 			OwnerID:  runtimeKnowledgeTestOwner,
 		},
-		&opensplunkv1.ReplaceLookupRequest{
+		&opensplunk.ReplaceLookupRequest{
 			LookupId:        created.GetLookup().GetLookupId(),
 			ExpectedVersion: 1,
-			Definition: &opensplunkv1.LookupDefinition{
+			Definition: &opensplunk.LookupDefinition{
 				AppId:        runtimeKnowledgeTestApp,
 				Name:         "service_owners",
-				SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
+				SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
 				Automatic:    true,
-				KeyMappings: []*opensplunkv1.LookupFieldMapping{{
+				KeyMappings: []*opensplunk.LookupFieldMapping{{
 					LookupField: "service_id",
 					EventField:  "service_id",
 				}},
-				OutputMappings: []*opensplunkv1.LookupFieldMapping{{
+				OutputMappings: []*opensplunk.LookupFieldMapping{{
 					LookupField: "owner",
 					EventField:  "team_owner",
 				}},
-				OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+				OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
 			},
 		},
 	)
@@ -451,8 +451,8 @@ func TestConfigureRuntimeKnowledgeManagementIsAtomicAndNarrow(t *testing.T) {
 	preview := newRuntimeKnowledgePreviewForTest(t, runtime)
 	var typedNilAppBackend *control.AppCatalog
 	config := server.Config{Bootstrap: server.BootstrapConfig{
-		Features: []opensplunkv1.ServerFeature{
-			opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH,
+		Features: []opensplunk.ServerFeature{
+			opensplunk.ServerFeature_SERVER_FEATURE_SEARCH,
 		},
 		SelectedAppID: "unchanged-app",
 	}}
@@ -467,8 +467,8 @@ func TestConfigureRuntimeKnowledgeManagementIsAtomicAndNarrow(t *testing.T) {
 		config.LookupManagement != runtime.lookupManagement {
 		t.Fatalf("configured knowledge dependencies = %#v", config)
 	}
-	if !slices.Equal(config.Bootstrap.Features, []opensplunkv1.ServerFeature{
-		opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH,
+	if !slices.Equal(config.Bootstrap.Features, []opensplunk.ServerFeature{
+		opensplunk.ServerFeature_SERVER_FEATURE_SEARCH,
 	}) || config.Bootstrap.SelectedAppID != "unchanged-app" {
 		t.Fatalf("knowledge composition changed bootstrap capability = %#v", config.Bootstrap)
 	}
@@ -567,14 +567,14 @@ func TestRuntimeKnowledgeCompositionDoesNotAdvertiseWithoutSearchAdmission(
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload, err := proto.Marshal(&opensplunkv1.GetSystemBootstrapRequest{})
+	payload, err := proto.Marshal(&opensplunk.GetSystemBootstrapRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	request := httptest.NewRequestWithContext(
 		t.Context(),
 		http.MethodPost,
-		"http://127.0.0.1/api/v1/system/bootstrap",
+		"http://127.0.0.1/api/system/bootstrap",
 		bytes.NewReader(payload),
 	)
 	request.Header.Set("Content-Type", "application/x-protobuf")
@@ -583,13 +583,13 @@ func TestRuntimeKnowledgeCompositionDoesNotAdvertiseWithoutSearchAdmission(
 	if response.Code != http.StatusOK {
 		t.Fatalf("bootstrap status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var decoded opensplunkv1.GetSystemBootstrapResponse
+	var decoded opensplunk.GetSystemBootstrapResponse
 	if err := proto.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
 		t.Fatal(err)
 	}
-	for _, feature := range []opensplunkv1.ServerFeature{
-		opensplunkv1.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS,
-		opensplunkv1.ServerFeature_SERVER_FEATURE_LOOKUP_MANAGEMENT,
+	for _, feature := range []opensplunk.ServerFeature{
+		opensplunk.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS,
+		opensplunk.ServerFeature_SERVER_FEATURE_LOOKUP_MANAGEMENT,
 	} {
 		if slices.Contains(decoded.GetFeatures(), feature) {
 			t.Fatalf("management-only runtime advertised %s: %v", feature, decoded.GetFeatures())
@@ -763,21 +763,21 @@ func createRuntimeKnowledgeTestIndex(t *testing.T, database *control.DB) {
 func runtimeKnowledgeTestCreateRequest(
 	name string,
 	requestID string,
-) *opensplunkv1.CreateKnowledgeObjectRequest {
-	return &opensplunkv1.CreateKnowledgeObjectRequest{
-		Definition: &opensplunkv1.KnowledgeObjectDefinition{
+) *opensplunk.CreateKnowledgeObjectRequest {
+	return &opensplunk.CreateKnowledgeObjectRequest{
+		Definition: &opensplunk.KnowledgeObjectDefinition{
 			AppId:        runtimeKnowledgeTestApp,
 			Name:         name,
-			SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
-			Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{
-				FieldAlias: &opensplunkv1.FieldAliasDefinition{
+			SharingScope: opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
+			Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{
+				FieldAlias: &opensplunk.FieldAliasDefinition{
 					SourceField:       "source_field",
 					DestinationField:  "destination_" + name,
-					OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+					OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
 				},
 			},
 		},
-		InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+		InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 		ClientRequestId: requestID,
 	}
 }

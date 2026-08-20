@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
@@ -30,8 +30,8 @@ type embeddingKnowledgeWriterOverride struct {
 func (*embeddingKnowledgeWriterOverride) Create(
 	context.Context,
 	knowledgecatalog.WriteScope,
-	*opensplunkv1.CreateKnowledgeObjectRequest,
-) (*opensplunkv1.CreateKnowledgeObjectResponse, error) {
+	*opensplunk.CreateKnowledgeObjectRequest,
+) (*opensplunk.CreateKnowledgeObjectResponse, error) {
 	return nil, nil
 }
 
@@ -280,14 +280,14 @@ func TestKnowledgeManagementRoutesFollowCompleteConfigurationAndRemainUnadvertis
 			t.Fatalf("auth=%d apps=%d attempts=%+v", authenticator.callCount(), apps.callCount(), appender.snapshot())
 		}
 
-		bootstrap := postProto(t, handler, "/api/v1/system/bootstrap", &opensplunkv1.GetSystemBootstrapRequest{})
+		bootstrap := postProto(t, handler, "/api/system/bootstrap", &opensplunk.GetSystemBootstrapRequest{})
 		if bootstrap.Code != http.StatusOK {
 			t.Fatalf("bootstrap status=%d body=%q", bootstrap.Code, bootstrap.Body.String())
 		}
-		decoded := &opensplunkv1.GetSystemBootstrapResponse{}
+		decoded := &opensplunk.GetSystemBootstrapResponse{}
 		unmarshalResponse(t, bootstrap, decoded)
 		for _, feature := range decoded.GetFeatures() {
-			if feature == opensplunkv1.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS {
+			if feature == opensplunk.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS {
 				t.Fatalf("knowledge feature advertised in %v", decoded.GetFeatures())
 			}
 		}
@@ -477,7 +477,7 @@ func TestKnowledgeFeatureRequiresCompleteRuntimeFamily(t *testing.T) {
 		config.SearchSuggestions = &fakeSearchSuggestions{maximum: 10}
 		return config
 	}
-	advertised := func(t *testing.T, config Config) []opensplunkv1.ServerFeature {
+	advertised := func(t *testing.T, config Config) []opensplunk.ServerFeature {
 		t.Helper()
 		handler, err := NewHandler(config)
 		if err != nil {
@@ -486,13 +486,13 @@ func TestKnowledgeFeatureRequiresCompleteRuntimeFamily(t *testing.T) {
 		response := postProto(
 			t,
 			handler,
-			"/api/v1/system/bootstrap",
-			&opensplunkv1.GetSystemBootstrapRequest{},
+			"/api/system/bootstrap",
+			&opensplunk.GetSystemBootstrapRequest{},
 		)
 		if response.Code != http.StatusOK {
 			t.Fatalf("bootstrap status=%d body=%q", response.Code, response.Body.String())
 		}
-		decoded := &opensplunkv1.GetSystemBootstrapResponse{}
+		decoded := &opensplunk.GetSystemBootstrapResponse{}
 		unmarshalResponse(t, response, decoded)
 		return decoded.GetFeatures()
 	}
@@ -500,10 +500,10 @@ func TestKnowledgeFeatureRequiresCompleteRuntimeFamily(t *testing.T) {
 	completeFeatures := advertised(t, complete(t))
 	if !slices.Contains(
 		completeFeatures,
-		opensplunkv1.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS,
+		opensplunk.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS,
 	) || !slices.Contains(
 		completeFeatures,
-		opensplunkv1.ServerFeature_SERVER_FEATURE_LOOKUP_MANAGEMENT,
+		opensplunk.ServerFeature_SERVER_FEATURE_LOOKUP_MANAGEMENT,
 	) {
 		t.Fatalf("complete knowledge and lookup runtime family was not advertised: %v", completeFeatures)
 	}
@@ -541,17 +541,17 @@ func TestKnowledgeFeatureRequiresCompleteRuntimeFamily(t *testing.T) {
 			response := postProto(
 				t,
 				handler,
-				"/api/v1/system/bootstrap",
-				&opensplunkv1.GetSystemBootstrapRequest{},
+				"/api/system/bootstrap",
+				&opensplunk.GetSystemBootstrapRequest{},
 			)
-			decoded := &opensplunkv1.GetSystemBootstrapResponse{}
+			decoded := &opensplunk.GetSystemBootstrapResponse{}
 			unmarshalResponse(t, response, decoded)
 			if slices.Contains(
 				decoded.GetFeatures(),
-				opensplunkv1.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS,
+				opensplunk.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS,
 			) || slices.Contains(
 				decoded.GetFeatures(),
-				opensplunkv1.ServerFeature_SERVER_FEATURE_LOOKUP_MANAGEMENT,
+				opensplunk.ServerFeature_SERVER_FEATURE_LOOKUP_MANAGEMENT,
 			) {
 				t.Fatalf("partial Tier-1 family advertised knowledge or lookups: %v", decoded.GetFeatures())
 			}
@@ -573,13 +573,13 @@ func TestKnowledgeFeatureRequiresCompleteRuntimeFamily(t *testing.T) {
 			features := advertised(t, config)
 			if !slices.Contains(
 				features,
-				opensplunkv1.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS,
+				opensplunk.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS,
 			) {
 				t.Fatalf("complete Tier-1 family was not advertised: %v", features)
 			}
 			if slices.Contains(
 				features,
-				opensplunkv1.ServerFeature_SERVER_FEATURE_LOOKUP_MANAGEMENT,
+				opensplunk.ServerFeature_SERVER_FEATURE_LOOKUP_MANAGEMENT,
 			) {
 				t.Fatalf("partial lookup family was advertised: %v", features)
 			}
@@ -649,16 +649,16 @@ func TestKnowledgeManagementProductionRejectsNestedDefinitionUnknowns(
 		t.Fatalf("NewHandler: %v", err)
 	}
 
-	create := &opensplunkv1.CreateKnowledgeObjectRequest{
-		Definition:      knowledgeHTTPDefinition(opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE),
-		InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+	create := &opensplunk.CreateKnowledgeObjectRequest{
+		Definition:      knowledgeHTTPDefinition(opensplunk.SharingScope_SHARING_SCOPE_PRIVATE),
+		InitialState:    opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
 		ClientRequestId: "production-create-unknown-0001",
 	}
 	addKnowledgeHTTPUnknown(create.GetDefinition().GetFieldAlias())
-	update := &opensplunkv1.UpdateKnowledgeObjectRequest{
+	update := &opensplunk.UpdateKnowledgeObjectRequest{
 		KnowledgeObjectId: "ko-production-unknown",
 		ExpectedVersion:   1,
-		Definition:        knowledgeHTTPDefinition(opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE),
+		Definition:        knowledgeHTTPDefinition(opensplunk.SharingScope_SHARING_SCOPE_PRIVATE),
 		ClientRequestId:   "production-update-unknown-0001",
 	}
 	addKnowledgeHTTPUnknown(update.GetDefinition().GetFieldAlias())

@@ -9,7 +9,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgevalidation"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
@@ -36,13 +36,13 @@ func validateTestMarshal(t testing.TB, message proto.Message) []byte {
 	return result
 }
 
-func validateTestDefinition(name string) *opensplunkv1.KnowledgeObjectDefinition {
-	return &opensplunkv1.KnowledgeObjectDefinition{
+func validateTestDefinition(name string) *opensplunk.KnowledgeObjectDefinition {
+	return &opensplunk.KnowledgeObjectDefinition{
 		AppId:        "app-a",
 		Name:         name,
-		SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{
-			FieldAlias: &opensplunkv1.FieldAliasDefinition{
+		SharingScope: opensplunk.SharingScope_SHARING_SCOPE_PRIVATE,
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{
+			FieldAlias: &opensplunk.FieldAliasDefinition{
 				SourceField:      "source_value",
 				DestinationField: "derived_value",
 			},
@@ -53,30 +53,30 @@ func validateTestDefinition(name string) *opensplunkv1.KnowledgeObjectDefinition
 func TestValidateKnowledgeObjectCodecDifferentialMergeAndProjection(t *testing.T) {
 	codec := newValidateKnowledgeObjectCodec()
 
-	selectorA := &opensplunkv1.KnowledgeSelector{IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{Value: "index-a"}}}
-	selectorB := &opensplunkv1.KnowledgeSelector{HostPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{Value: "host-b"}}}
-	definitionA := &opensplunkv1.KnowledgeObjectDefinition{
+	selectorA := &opensplunk.KnowledgeSelector{IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{{Value: "index-a"}}}
+	selectorB := &opensplunk.KnowledgeSelector{HostPatterns: []*opensplunk.KnowledgeSelectorPattern{{Value: "host-b"}}}
+	definitionA := &opensplunk.KnowledgeObjectDefinition{
 		AppId: "app-a", Name: "first", Selector: selectorA,
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunkv1.FieldAliasDefinition{SourceField: "source-a"}},
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunk.FieldAliasDefinition{SourceField: "source-a"}},
 	}
-	definitionB := &opensplunkv1.KnowledgeObjectDefinition{
+	definitionB := &opensplunk.KnowledgeObjectDefinition{
 		Name: "last", Selector: selectorB,
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunkv1.FieldAliasDefinition{DestinationField: "destination-b"}},
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunk.FieldAliasDefinition{DestinationField: "destination-b"}},
 	}
-	definitionC := &opensplunkv1.KnowledgeObjectDefinition{
-		Body: &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{CalculatedField: &opensplunkv1.CalculatedFieldDefinition{Expression: "host"}},
+	definitionC := &opensplunk.KnowledgeObjectDefinition{
+		Body: &opensplunk.KnowledgeObjectDefinition_CalculatedField{CalculatedField: &opensplunk.CalculatedFieldDefinition{Expression: "host"}},
 	}
-	definitionD := &opensplunkv1.KnowledgeObjectDefinition{
-		Body: &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{CalculatedField: &opensplunkv1.CalculatedFieldDefinition{DestinationField: "calculated"}},
+	definitionD := &opensplunk.KnowledgeObjectDefinition{
+		Body: &opensplunk.KnowledgeObjectDefinition_CalculatedField{CalculatedField: &opensplunk.CalculatedFieldDefinition{DestinationField: "calculated"}},
 	}
 
 	var createWire []byte
-	for _, definition := range []*opensplunkv1.KnowledgeObjectDefinition{definitionA, definitionB, definitionC, definitionD} {
+	for _, definition := range []*opensplunk.KnowledgeObjectDefinition{definitionA, definitionB, definitionC, definitionD} {
 		createWire = append(createWire, validateTestBytesField(1, validateTestMarshal(t, definition))...)
 	}
-	createWire = append(createWire, validateTestVarintField(5, uint64(opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE))...)
+	createWire = append(createWire, validateTestVarintField(5, uint64(opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE))...)
 	createWire = append(createWire, validateTestVarintField(99, 7)...)
-	var ordinaryCreate opensplunkv1.ValidateKnowledgeObjectRequest
+	var ordinaryCreate opensplunk.ValidateKnowledgeObjectRequest
 	if err := proto.Unmarshal(createWire, &ordinaryCreate); err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestValidateKnowledgeObjectCodecDifferentialMergeAndProjection(t *testing.T
 		t.Fatalf("create differential mismatch\n got: %v\nwant: %v\nerr: %v", decodedCreate, &ordinaryCreate, err)
 	}
 
-	definitionUnknown := proto.Clone(definitionB).(*opensplunkv1.KnowledgeObjectDefinition)
+	definitionUnknown := proto.Clone(definitionB).(*opensplunk.KnowledgeObjectDefinition)
 	definitionUnknown.ProtoReflect().SetUnknown(validateTestVarintField(100, 1))
 	definitionUnknown.GetSelector().ProtoReflect().SetUnknown(validateTestVarintField(101, 2))
 	maskA := &fieldmaskpb.FieldMask{Paths: []string{"name"}}
@@ -98,16 +98,16 @@ func TestValidateKnowledgeObjectCodecDifferentialMergeAndProjection(t *testing.T
 	updateWire = append(updateWire, validateTestVarintField(3, 9)...)
 	updateWire = append(updateWire, validateTestBytesField(4, validateTestMarshal(t, maskA))...)
 	updateWire = append(updateWire, validateTestBytesField(4, validateTestMarshal(t, maskB))...)
-	updateWire = append(updateWire, validateTestVarintField(5, uint64(opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION))...)
+	updateWire = append(updateWire, validateTestVarintField(5, uint64(opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION))...)
 	updateWire = append(updateWire, validateTestVarintField(99, 8)...)
-	var ordinaryUpdate opensplunkv1.ValidateKnowledgeObjectRequest
+	var ordinaryUpdate opensplunk.ValidateKnowledgeObjectRequest
 	if err := proto.Unmarshal(updateWire, &ordinaryUpdate); err != nil {
 		t.Fatal(err)
 	}
-	expectedUpdate := proto.Clone(&ordinaryUpdate).(*opensplunkv1.ValidateKnowledgeObjectRequest)
-	expectedUpdate.Definition = &opensplunkv1.KnowledgeObjectDefinition{
+	expectedUpdate := proto.Clone(&ordinaryUpdate).(*opensplunk.ValidateKnowledgeObjectRequest)
+	expectedUpdate.Definition = &opensplunk.KnowledgeObjectDefinition{
 		Name:     ordinaryUpdate.GetDefinition().GetName(),
-		Selector: proto.Clone(ordinaryUpdate.GetDefinition().GetSelector()).(*opensplunkv1.KnowledgeSelector),
+		Selector: proto.Clone(ordinaryUpdate.GetDefinition().GetSelector()).(*opensplunk.KnowledgeSelector),
 	}
 	decodedUpdate, err := codec.DecodeBytes(updateWire)
 	if err != nil || !proto.Equal(decodedUpdate, expectedUpdate) {
@@ -265,7 +265,7 @@ func TestValidateKnowledgeObjectCodecWrongWireUnknownProjection(t *testing.T) {
 	)
 	definitionPayload := append(validateTestBytesField(11, aliasPayload), validateTestVarintField(10, 1)...)
 	createWire := validateTestBytesField(1, definitionPayload)
-	var ordinary opensplunkv1.ValidateKnowledgeObjectRequest
+	var ordinary opensplunk.ValidateKnowledgeObjectRequest
 	if err := proto.Unmarshal(createWire, &ordinary); err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +318,7 @@ func TestValidateKnowledgeObjectCodecBoundsMalformedGroupsAndDetaches(t *testing
 		t.Fatal("mismatched group was accepted")
 	}
 
-	request := &opensplunkv1.ValidateKnowledgeObjectRequest{Definition: validateTestDefinition("detached"), Intent: 1}
+	request := &opensplunk.ValidateKnowledgeObjectRequest{Definition: validateTestDefinition("detached"), Intent: 1}
 	request.ProtoReflect().SetUnknown(validateTestVarintField(100, 9))
 	wire := validateTestMarshal(t, request)
 	decoded, err := codec.DecodeBytes(wire)
@@ -388,7 +388,7 @@ func TestValidateKnowledgeObjectCodecClosesRequestBody(t *testing.T) {
 }
 
 func TestValidateKnowledgeObjectSanitizerPreservesUnknownAuthorities(t *testing.T) {
-	request := &opensplunkv1.ValidateKnowledgeObjectRequest{
+	request := &opensplunk.ValidateKnowledgeObjectRequest{
 		Definition: validateTestDefinition("unknowns"),
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"name"}},
 	}
@@ -493,18 +493,18 @@ func TestValidateKnowledgeObjectCodecReleasesPermitOnWriteFailure(t *testing.T) 
 }
 
 func FuzzValidateKnowledgeObjectCodec(f *testing.F) {
-	create := &opensplunkv1.ValidateKnowledgeObjectRequest{
+	create := &opensplunk.ValidateKnowledgeObjectRequest{
 		Definition: validateTestDefinition("fuzz-create"),
-		Intent:     opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+		Intent:     opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
 	}
 	objectID := "ko-fuzz"
 	version := uint64(7)
-	update := &opensplunkv1.ValidateKnowledgeObjectRequest{
+	update := &opensplunk.ValidateKnowledgeObjectRequest{
 		Definition:        validateTestDefinition("fuzz-update"),
 		KnowledgeObjectId: &objectID,
 		ExpectedVersion:   &version,
 		UpdateMask:        &fieldmaskpb.FieldMask{Paths: []string{"name", "selector"}},
-		Intent:            opensplunkv1.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION,
+		Intent:            opensplunk.KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION,
 	}
 	for _, seed := range [][]byte{
 		validateTestMarshal(f, create),
@@ -523,7 +523,7 @@ func FuzzValidateKnowledgeObjectCodec(f *testing.F) {
 			return
 		}
 		owned := append([]byte(nil), data...)
-		var ordinary opensplunkv1.ValidateKnowledgeObjectRequest
+		var ordinary opensplunk.ValidateKnowledgeObjectRequest
 		ordinaryErr := proto.Unmarshal(owned, &ordinary)
 		codec := newValidateKnowledgeObjectCodec()
 		decoded, err := codec.DecodeBytes(owned)
@@ -546,11 +546,11 @@ func FuzzValidateKnowledgeObjectCodec(f *testing.F) {
 		if err != nil {
 			t.Fatalf("decoded request cannot marshal: %v", err)
 		}
-		var roundTrip opensplunkv1.ValidateKnowledgeObjectRequest
+		var roundTrip opensplunk.ValidateKnowledgeObjectRequest
 		if err := proto.Unmarshal(wire, &roundTrip); err != nil || !proto.Equal(decoded, &roundTrip) {
 			t.Fatalf("decoded request cannot round trip: %v / %v", &roundTrip, err)
 		}
-		beforeMutation := proto.Clone(decoded).(*opensplunkv1.ValidateKnowledgeObjectRequest)
+		beforeMutation := proto.Clone(decoded).(*opensplunk.ValidateKnowledgeObjectRequest)
 		for index := range owned {
 			owned[index] ^= 0xff
 		}
@@ -574,7 +574,7 @@ func FuzzValidateKnowledgeObjectCodec(f *testing.F) {
 	})
 }
 
-func validateFuzzCardinalityBounded(request *opensplunkv1.ValidateKnowledgeObjectRequest) bool {
+func validateFuzzCardinalityBounded(request *opensplunk.ValidateKnowledgeObjectRequest) bool {
 	if request == nil || len(request.GetUpdateMask().GetPaths()) > maximumValidateRetainedMaskPaths {
 		return false
 	}
@@ -595,13 +595,13 @@ func validateFuzzCardinalityBounded(request *opensplunkv1.ValidateKnowledgeObjec
 }
 
 func validateFuzzSelectedUpdate(
-	request *opensplunkv1.ValidateKnowledgeObjectRequest,
-) *opensplunkv1.ValidateKnowledgeObjectRequest {
-	result := proto.Clone(request).(*opensplunkv1.ValidateKnowledgeObjectRequest)
+	request *opensplunk.ValidateKnowledgeObjectRequest,
+) *opensplunk.ValidateKnowledgeObjectRequest {
+	result := proto.Clone(request).(*opensplunk.ValidateKnowledgeObjectRequest)
 	if request.GetDefinition() == nil {
 		return result
 	}
-	selected := &opensplunkv1.KnowledgeObjectDefinition{}
+	selected := &opensplunk.KnowledgeObjectDefinition{}
 	for _, path := range request.GetUpdateMask().GetPaths() {
 		switch path {
 		case "app_id":
@@ -617,19 +617,19 @@ func validateFuzzSelectedUpdate(
 			selected.SharingScope = request.GetDefinition().GetSharingScope()
 		case "selector":
 			if request.GetDefinition().GetSelector() != nil {
-				selected.Selector = proto.Clone(request.GetDefinition().GetSelector()).(*opensplunkv1.KnowledgeSelector)
+				selected.Selector = proto.Clone(request.GetDefinition().GetSelector()).(*opensplunk.KnowledgeSelector)
 			}
 		case "field_extraction":
 			if body := request.GetDefinition().GetFieldExtraction(); body != nil {
-				selected.Body = &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{FieldExtraction: proto.Clone(body).(*opensplunkv1.FieldExtractionDefinition)}
+				selected.Body = &opensplunk.KnowledgeObjectDefinition_FieldExtraction{FieldExtraction: proto.Clone(body).(*opensplunk.FieldExtractionDefinition)}
 			}
 		case "field_alias":
 			if body := request.GetDefinition().GetFieldAlias(); body != nil {
-				selected.Body = &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{FieldAlias: proto.Clone(body).(*opensplunkv1.FieldAliasDefinition)}
+				selected.Body = &opensplunk.KnowledgeObjectDefinition_FieldAlias{FieldAlias: proto.Clone(body).(*opensplunk.FieldAliasDefinition)}
 			}
 		case "calculated_field":
 			if body := request.GetDefinition().GetCalculatedField(); body != nil {
-				selected.Body = &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{CalculatedField: proto.Clone(body).(*opensplunkv1.CalculatedFieldDefinition)}
+				selected.Body = &opensplunk.KnowledgeObjectDefinition_CalculatedField{CalculatedField: proto.Clone(body).(*opensplunk.CalculatedFieldDefinition)}
 			}
 		}
 	}

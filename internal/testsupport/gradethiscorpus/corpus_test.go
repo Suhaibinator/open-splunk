@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/collector"
 )
 
@@ -25,7 +25,7 @@ func TestFixtureIsDeterministicSanitizedAndPinned(t *testing.T) {
 		t.Fatal("Fixture() did not return byte-identical NDJSON")
 	}
 	sum := sha256.Sum256(first.NDJSON)
-	const wantSHA256 = "db1d6c6424633ff53623cade411ef4adc387537dbc5291ae1616be09d10d1dc2"
+	const wantSHA256 = "8ed38ecb866342a19a924e8635619bbfb067623b2dc1eea602e54c81b68e65f9"
 	if got := hex.EncodeToString(sum[:]); got != wantSHA256 {
 		t.Fatalf("fixture SHA-256 = %s, want %s", got, wantSHA256)
 	}
@@ -154,7 +154,7 @@ func TestFixtureDecodesThroughCollectorWithTypedRequestFields(t *testing.T) {
 	for index, expected := range fixture.Events {
 		end := offset + uint64(len(expected.RawLine))
 		event, decodeErr := decoder.Decode(expected.RawLine, collector.SourcePosition{
-			FileIdentity: "gradethis-corpus-v0.1", SourcePath: Source,
+			FileIdentity: "gradethis-corpus-file", SourcePath: Source,
 			FileFingerprintLength: 4096, StartOffset: offset, EndOffset: end,
 			LineNumber: uint64(index + 1),
 		}, fixture.IndexTime)
@@ -333,7 +333,7 @@ func TestFixtureScannerRejectsSensitiveAndNonSyntheticData(t *testing.T) {
 		}
 	}
 	if err := ScanNDJSON([]byte(
-		"{\"ip\":\"198.51.100.7\",\"ip6\":\"2001:db8::7\",\"remote\":\"[2001:db8::7]:443\",\"path\":\"/api/v1/assessments\",\"user_agent\":\"synthetic-client/1.0\"," +
+		"{\"ip\":\"198.51.100.7\",\"ip6\":\"2001:db8::7\",\"remote\":\"[2001:db8::7]:443\",\"path\":\"/api/assessments\",\"user_agent\":\"synthetic-client/1.0\"," +
 			"\"message\":\"see https://logs.example.test/events\",\"duration\":\"800ms\"}\n",
 	)); err != nil {
 		t.Fatalf("ScanNDJSON(documentation data): %v", err)
@@ -358,23 +358,23 @@ func TestFixtureScannerRejectsSensitiveAndNonSyntheticData(t *testing.T) {
 	}
 }
 
-func decodedFixtureScalar(t *testing.T, value *opensplunkv1.TypedValue) any {
+func decodedFixtureScalar(t *testing.T, value *opensplunk.TypedValue) any {
 	t.Helper()
 	if value == nil {
 		t.Fatal("decoded fixture value is nil")
 	}
 	switch kind := value.GetKind().(type) {
-	case *opensplunkv1.TypedValue_NullValue:
+	case *opensplunk.TypedValue_NullValue:
 		return nil
-	case *opensplunkv1.TypedValue_StringValue:
+	case *opensplunk.TypedValue_StringValue:
 		return kind.StringValue
-	case *opensplunkv1.TypedValue_Sint64Value:
+	case *opensplunk.TypedValue_Sint64Value:
 		return kind.Sint64Value
-	case *opensplunkv1.TypedValue_Uint64Value:
+	case *opensplunk.TypedValue_Uint64Value:
 		return kind.Uint64Value
-	case *opensplunkv1.TypedValue_DoubleValue:
+	case *opensplunk.TypedValue_DoubleValue:
 		return kind.DoubleValue
-	case *opensplunkv1.TypedValue_BoolValue:
+	case *opensplunk.TypedValue_BoolValue:
 		return kind.BoolValue
 	default:
 		t.Fatalf("decoded fixture value has unsupported kind %T", value.GetKind())

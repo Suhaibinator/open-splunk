@@ -6,12 +6,12 @@ import (
 	"strings"
 	"testing"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 )
 
 func TestCompileKnowledgeExtractionStagePreservesOrderFrozenBindingsAndCharges(t *testing.T) {
-	program := knowledgePreparationProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{
+	program := knowledgePreparationProgram(t, []*opensplunk.KnowledgeObjectDefinition{
 		knowledgeJSONStageDefinition("a-json", "json_a", "payload.a", "east"),
 		knowledgeRegexStageDefinition("b-regex", `(?P<first>[a-z]+)-(?P<second>[0-9]+)`, []string{"first", "second"}, "west"),
 		knowledgeJSONStageDefinition("c-json", "json_c", "payload.c", "north"),
@@ -115,7 +115,7 @@ func TestCompileKnowledgeExtractionStagePreservesOrderFrozenBindingsAndCharges(t
 }
 
 func TestCompileKnowledgeExtractionStageGroupsDisjointDestinations(t *testing.T) {
-	program := knowledgePreparationProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{
+	program := knowledgePreparationProgram(t, []*opensplunk.KnowledgeObjectDefinition{
 		knowledgeJSONStageDefinition("a-east", "shared", "payload.value", "east"),
 		knowledgeRegexStageDefinition("b-west", `(?P<shared>[a-z]+)`, []string{"shared"}, "west"),
 	})
@@ -143,7 +143,7 @@ func TestCompileKnowledgeExtractionStageGroupsDisjointDestinations(t *testing.T)
 }
 
 func TestCompileKnowledgeExtractionStageCarriesPriorCaptureAndRebasesFrozenFields(t *testing.T) {
-	program := knowledgePreparationProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{
+	program := knowledgePreparationProgram(t, []*opensplunk.KnowledgeObjectDefinition{
 		knowledgeJSONStageDefinition("json-only", "json_value", "payload.value", "east"),
 	})
 	state := knowledgeExtractionStageState()
@@ -179,7 +179,7 @@ func TestCompileKnowledgeExtractionStageCarriesPriorCaptureAndRebasesFrozenField
 }
 
 func TestCompileKnowledgeExtractionStageRejectsNonEventInput(t *testing.T) {
-	program := knowledgePreparationProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{
+	program := knowledgePreparationProgram(t, []*opensplunk.KnowledgeObjectDefinition{
 		knowledgeJSONStageDefinition("json", "value", "payload.value", "east"),
 	})
 	for _, test := range []struct {
@@ -213,24 +213,24 @@ func knowledgeExtractionStageState() compileState {
 	return state
 }
 
-func knowledgeJSONStageDefinition(name, output, path, index string) *opensplunkv1.KnowledgeObjectDefinition {
-	return &opensplunkv1.KnowledgeObjectDefinition{
-		AppId: "app", Name: name, SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-		Selector: &opensplunkv1.KnowledgeSelector{IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{Value: index}}},
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
-			InputField: "_raw", OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
-			Extraction: &opensplunkv1.FieldExtractionDefinition_Json{Json: &opensplunkv1.JsonFieldExtractionDefinition{Path: path, OutputField: output}},
+func knowledgeJSONStageDefinition(name, output, path, index string) *opensplunk.KnowledgeObjectDefinition {
+	return &opensplunk.KnowledgeObjectDefinition{
+		AppId: "app", Name: name, SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+		Selector: &opensplunk.KnowledgeSelector{IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{{Value: index}}},
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldExtraction{FieldExtraction: &opensplunk.FieldExtractionDefinition{
+			InputField: "_raw", OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+			Extraction: &opensplunk.FieldExtractionDefinition_Json{Json: &opensplunk.JsonFieldExtractionDefinition{Path: path, OutputField: output}},
 		}},
 	}
 }
 
-func knowledgeRegexStageDefinition(name, pattern string, outputs []string, index string) *opensplunkv1.KnowledgeObjectDefinition {
-	return &opensplunkv1.KnowledgeObjectDefinition{
-		AppId: "app", Name: name, SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
-		Selector: &opensplunkv1.KnowledgeSelector{IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{Value: index}}},
-		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
-			InputField: "_raw", OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
-			Extraction: &opensplunkv1.FieldExtractionDefinition_Regex{Regex: &opensplunkv1.RegexFieldExtractionDefinition{Pattern: pattern, OutputFields: outputs}},
+func knowledgeRegexStageDefinition(name, pattern string, outputs []string, index string) *opensplunk.KnowledgeObjectDefinition {
+	return &opensplunk.KnowledgeObjectDefinition{
+		AppId: "app", Name: name, SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+		Selector: &opensplunk.KnowledgeSelector{IndexPatterns: []*opensplunk.KnowledgeSelectorPattern{{Value: index}}},
+		Body: &opensplunk.KnowledgeObjectDefinition_FieldExtraction{FieldExtraction: &opensplunk.FieldExtractionDefinition{
+			InputField: "_raw", OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+			Extraction: &opensplunk.FieldExtractionDefinition_Regex{Regex: &opensplunk.RegexFieldExtractionDefinition{Pattern: pattern, OutputFields: outputs}},
 		}},
 	}
 }

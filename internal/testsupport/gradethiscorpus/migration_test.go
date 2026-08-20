@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/collector"
 )
 
@@ -25,7 +25,7 @@ func TestMigrationFixtureIsDeterministicSanitizedAndPinned(t *testing.T) {
 		t.Fatal("MigrationFixture() did not return byte-identical NDJSON")
 	}
 	sum := sha256.Sum256(first.NDJSON)
-	const wantSHA256 = "41f8f92f9170192810bdb741ed79fcf7f9f28c7966bb7e5dd9c54925c0f38f88"
+	const wantSHA256 = "a2aa07d18a75b2a2624ee057a1dc9f7f2c207c895235346541600eab541b505a"
 	if got := hex.EncodeToString(sum[:]); got != wantSHA256 {
 		t.Fatalf("migration fixture SHA-256 = %s, want %s", got, wantSHA256)
 	}
@@ -153,7 +153,7 @@ func TestMigrationFixtureDecodesAsCurrentGradeThisSource(t *testing.T) {
 			t.Fatalf("%q decoded canonical event = %+v", expected.ID, event)
 		}
 
-		fields := make(map[string]*opensplunkv1.TypedValue, len(event.GetFields().GetFields()))
+		fields := make(map[string]*opensplunk.TypedValue, len(event.GetFields().GetFields()))
 		for _, field := range event.GetFields().GetFields() {
 			fields[field.GetName()] = field.GetValue()
 		}
@@ -182,7 +182,7 @@ func TestMigrationFixtureDecodesAsCurrentGradeThisSource(t *testing.T) {
 				t.Fatalf("%q sparse root unexpectedly has layer", expected.ID)
 			}
 			if !fields["healthy"].GetBoolValue() ||
-				fields["optional_note"].GetNullValue() != opensplunkv1.NullValue_NULL_VALUE_NULL ||
+				fields["optional_note"].GetNullValue() != opensplunk.NullValue_NULL_VALUE_NULL ||
 				fields["details"].GetObjectValue() == nil {
 				t.Fatalf("%q sparse root typed fields = %+v", expected.ID, fields)
 			}

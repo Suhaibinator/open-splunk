@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"google.golang.org/protobuf/proto"
@@ -16,18 +16,18 @@ func TestProjectSearchMapsEveryLifecycleState(t *testing.T) {
 	tests := []struct {
 		name     string
 		state    searchjobs.State
-		want     opensplunkv1.SearchJobState
-		phase    opensplunkv1.SearchExecutionPhase
+		want     opensplunk.SearchJobState
+		phase    opensplunk.SearchExecutionPhase
 		terminal bool
 	}{
-		{name: "queued", state: searchjobs.StateQueued, want: opensplunkv1.SearchJobState_SEARCH_JOB_STATE_QUEUED, phase: opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_WAITING_FOR_SLOT},
-		{name: "parsing", state: searchjobs.StateParsing, want: opensplunkv1.SearchJobState_SEARCH_JOB_STATE_PARSING, phase: opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_PARSING},
-		{name: "planning", state: searchjobs.StatePlanning, want: opensplunkv1.SearchJobState_SEARCH_JOB_STATE_PLANNING, phase: opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_OPTIMIZING},
-		{name: "running", state: searchjobs.StateRunning, want: opensplunkv1.SearchJobState_SEARCH_JOB_STATE_RUNNING, phase: opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_EXECUTING},
-		{name: "completed", state: searchjobs.StateCompleted, want: opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED, phase: opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_COMPLETE, terminal: true},
-		{name: "failed", state: searchjobs.StateFailed, want: opensplunkv1.SearchJobState_SEARCH_JOB_STATE_FAILED, phase: opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_COMPLETE, terminal: true},
-		{name: "canceled", state: searchjobs.StateCanceled, want: opensplunkv1.SearchJobState_SEARCH_JOB_STATE_CANCELED, phase: opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_COMPLETE, terminal: true},
-		{name: "expired", state: searchjobs.StateExpired, want: opensplunkv1.SearchJobState_SEARCH_JOB_STATE_EXPIRED, phase: opensplunkv1.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_COMPLETE, terminal: true},
+		{name: "queued", state: searchjobs.StateQueued, want: opensplunk.SearchJobState_SEARCH_JOB_STATE_QUEUED, phase: opensplunk.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_WAITING_FOR_SLOT},
+		{name: "parsing", state: searchjobs.StateParsing, want: opensplunk.SearchJobState_SEARCH_JOB_STATE_PARSING, phase: opensplunk.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_PARSING},
+		{name: "planning", state: searchjobs.StatePlanning, want: opensplunk.SearchJobState_SEARCH_JOB_STATE_PLANNING, phase: opensplunk.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_OPTIMIZING},
+		{name: "running", state: searchjobs.StateRunning, want: opensplunk.SearchJobState_SEARCH_JOB_STATE_RUNNING, phase: opensplunk.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_EXECUTING},
+		{name: "completed", state: searchjobs.StateCompleted, want: opensplunk.SearchJobState_SEARCH_JOB_STATE_COMPLETED, phase: opensplunk.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_COMPLETE, terminal: true},
+		{name: "failed", state: searchjobs.StateFailed, want: opensplunk.SearchJobState_SEARCH_JOB_STATE_FAILED, phase: opensplunk.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_COMPLETE, terminal: true},
+		{name: "canceled", state: searchjobs.StateCanceled, want: opensplunk.SearchJobState_SEARCH_JOB_STATE_CANCELED, phase: opensplunk.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_COMPLETE, terminal: true},
+		{name: "expired", state: searchjobs.StateExpired, want: opensplunk.SearchJobState_SEARCH_JOB_STATE_EXPIRED, phase: opensplunk.SearchExecutionPhase_SEARCH_EXECUTION_PHASE_COMPLETE, terminal: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -188,15 +188,15 @@ func TestProjectExportMapsEveryLifecycleState(t *testing.T) {
 	tests := []struct {
 		name     string
 		state    exportjobs.State
-		want     opensplunkv1.ExportJobState
+		want     opensplunk.ExportJobState
 		terminal bool
 	}{
-		{name: "queued", state: exportjobs.StateQueued, want: opensplunkv1.ExportJobState_EXPORT_JOB_STATE_QUEUED},
-		{name: "running", state: exportjobs.StateRunning, want: opensplunkv1.ExportJobState_EXPORT_JOB_STATE_RUNNING},
-		{name: "completed", state: exportjobs.StateCompleted, want: opensplunkv1.ExportJobState_EXPORT_JOB_STATE_COMPLETED, terminal: true},
-		{name: "failed", state: exportjobs.StateFailed, want: opensplunkv1.ExportJobState_EXPORT_JOB_STATE_FAILED, terminal: true},
-		{name: "canceled", state: exportjobs.StateCanceled, want: opensplunkv1.ExportJobState_EXPORT_JOB_STATE_CANCELED, terminal: true},
-		{name: "expired", state: exportjobs.StateExpired, want: opensplunkv1.ExportJobState_EXPORT_JOB_STATE_EXPIRED, terminal: true},
+		{name: "queued", state: exportjobs.StateQueued, want: opensplunk.ExportJobState_EXPORT_JOB_STATE_QUEUED},
+		{name: "running", state: exportjobs.StateRunning, want: opensplunk.ExportJobState_EXPORT_JOB_STATE_RUNNING},
+		{name: "completed", state: exportjobs.StateCompleted, want: opensplunk.ExportJobState_EXPORT_JOB_STATE_COMPLETED, terminal: true},
+		{name: "failed", state: exportjobs.StateFailed, want: opensplunk.ExportJobState_EXPORT_JOB_STATE_FAILED, terminal: true},
+		{name: "canceled", state: exportjobs.StateCanceled, want: opensplunk.ExportJobState_EXPORT_JOB_STATE_CANCELED, terminal: true},
+		{name: "expired", state: exportjobs.StateExpired, want: opensplunk.ExportJobState_EXPORT_JOB_STATE_EXPIRED, terminal: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -335,26 +335,26 @@ func TestProjectSearchSchemaMatchesHTTPResultClassification(t *testing.T) {
 	tests := []struct {
 		name string
 		spl  string
-		want opensplunkv1.ResultSetKind
+		want opensplunk.ResultSetKind
 		// runtimeNamed marks the wide relations whose columns after the first
 		// are named from data, so those columns are published as metrics
 		// rather than as the event metadata their names may resemble.
 		runtimeNamed bool
 	}{
-		{name: "events", spl: "index=main", want: opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS},
-		{name: "rex events", spl: `index=main | rex "(?<request_id>request_id=\w+)"`, want: opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS},
-		{name: "table", spl: "index=main | table level count", want: opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS},
-		{name: "stats", spl: "index=main | stats count by level", want: opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS},
-		{name: "top", spl: "index=main | top limit=20 message", want: opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS},
-		{name: "rare", spl: "index=main | rare limit=20 message", want: opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS},
-		{name: "static timechart", spl: "index=main | timechart span=5m count", want: opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES},
-		{name: "timechart wins after table", spl: "index=main | table _time level | timechart span=5m count by level", want: opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES, runtimeNamed: true},
+		{name: "events", spl: "index=main", want: opensplunk.ResultSetKind_RESULT_SET_KIND_EVENTS},
+		{name: "rex events", spl: `index=main | rex "(?<request_id>request_id=\w+)"`, want: opensplunk.ResultSetKind_RESULT_SET_KIND_EVENTS},
+		{name: "table", spl: "index=main | table level count", want: opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS},
+		{name: "stats", spl: "index=main | stats count by level", want: opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS},
+		{name: "top", spl: "index=main | top limit=20 message", want: opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS},
+		{name: "rare", spl: "index=main | rare limit=20 message", want: opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS},
+		{name: "static timechart", spl: "index=main | timechart span=5m count", want: opensplunk.ResultSetKind_RESULT_SET_KIND_TIME_SERIES},
+		{name: "timechart wins after table", spl: "index=main | table _time level | timechart span=5m count by level", want: opensplunk.ResultSetKind_RESULT_SET_KIND_TIME_SERIES, runtimeNamed: true},
 		// A chart is a categorical pivot: its first column is a runtime row
 		// value, so it is statistics rather than a time series. Its remaining
 		// columns are still named from runtime split values.
-		{name: "chart pivot", spl: "index=main | chart count OVER path BY level", want: opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS, runtimeNamed: true},
-		{name: "chart over binned time", spl: "index=main | bin _time span=5m AS bucket_time | chart count OVER bucket_time BY level", want: opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS, runtimeNamed: true},
-		{name: "invalid SPL", spl: "index=main | unsupported", want: opensplunkv1.ResultSetKind_RESULT_SET_KIND_UNSPECIFIED},
+		{name: "chart pivot", spl: "index=main | chart count OVER path BY level", want: opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS, runtimeNamed: true},
+		{name: "chart over binned time", spl: "index=main | bin _time span=5m AS bucket_time | chart count OVER bucket_time BY level", want: opensplunk.ResultSetKind_RESULT_SET_KIND_STATISTICS, runtimeNamed: true},
+		{name: "invalid SPL", spl: "index=main | unsupported", want: opensplunk.ResultSetKind_RESULT_SET_KIND_UNSPECIFIED},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -378,16 +378,16 @@ func TestProjectSearchSchemaMatchesHTTPResultClassification(t *testing.T) {
 			if schema.GetSchemaId() != job.ID || schema.GetRevision() != 1 || schema.GetResultKind() != test.want || len(schema.GetColumns()) != 2 {
 				t.Fatalf("schema = %+v, want result kind %v", schema, test.want)
 			}
-			if schema.Columns[0].GetSemanticType() != opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_EVENT_TIME {
+			if schema.Columns[0].GetSemanticType() != opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_EVENT_TIME {
 				t.Fatalf("_time semantic = %v", schema.Columns[0].GetSemanticType())
 			}
-			wantSecondSemantic := opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_UNSPECIFIED
+			wantSecondSemantic := opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_UNSPECIFIED
 			if test.runtimeNamed ||
-				test.want == opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES {
-				wantSecondSemantic = opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_METRIC
+				test.want == opensplunk.ResultSetKind_RESULT_SET_KIND_TIME_SERIES {
+				wantSecondSemantic = opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_METRIC
 			}
 			second := schema.Columns[1]
-			if second.GetValueType() != opensplunkv1.ValueType_VALUE_TYPE_UINT64 || second.GetSemanticType() != wantSecondSemantic || !second.GetNullable() || !second.GetMultivalue() {
+			if second.GetValueType() != opensplunk.ValueType_VALUE_TYPE_UINT64 || second.GetSemanticType() != wantSecondSemantic || !second.GetNullable() || !second.GetMultivalue() {
 				t.Fatalf("second column = %+v", second)
 			}
 		})
@@ -400,21 +400,21 @@ func TestProjectSearchSchemaMapsEveryValueKind(t *testing.T) {
 	tests := []struct {
 		name string
 		kind searchjobs.ValueKind
-		want opensplunkv1.ValueType
+		want opensplunk.ValueType
 	}{
-		{name: "null", kind: searchjobs.ValueKindNull, want: opensplunkv1.ValueType_VALUE_TYPE_NULL},
-		{name: "string", kind: searchjobs.ValueKindString, want: opensplunkv1.ValueType_VALUE_TYPE_STRING},
-		{name: "signed", kind: searchjobs.ValueKindSigned, want: opensplunkv1.ValueType_VALUE_TYPE_SINT64},
-		{name: "unsigned", kind: searchjobs.ValueKindUnsigned, want: opensplunkv1.ValueType_VALUE_TYPE_UINT64},
-		{name: "double", kind: searchjobs.ValueKindDouble, want: opensplunkv1.ValueType_VALUE_TYPE_DOUBLE},
-		{name: "bool", kind: searchjobs.ValueKindBool, want: opensplunkv1.ValueType_VALUE_TYPE_BOOL},
-		{name: "bytes", kind: searchjobs.ValueKindBytes, want: opensplunkv1.ValueType_VALUE_TYPE_BYTES},
-		{name: "time", kind: searchjobs.ValueKindTime, want: opensplunkv1.ValueType_VALUE_TYPE_TIMESTAMP},
-		{name: "duration", kind: searchjobs.ValueKindDuration, want: opensplunkv1.ValueType_VALUE_TYPE_DURATION},
-		{name: "list", kind: searchjobs.ValueKindList, want: opensplunkv1.ValueType_VALUE_TYPE_LIST},
-		{name: "object", kind: searchjobs.ValueKindObject, want: opensplunkv1.ValueType_VALUE_TYPE_OBJECT},
-		{name: "decimal", kind: searchjobs.ValueKindDecimal, want: opensplunkv1.ValueType_VALUE_TYPE_DECIMAL},
-		{name: "mixed", kind: searchjobs.ValueKindMixed, want: opensplunkv1.ValueType_VALUE_TYPE_MIXED},
+		{name: "null", kind: searchjobs.ValueKindNull, want: opensplunk.ValueType_VALUE_TYPE_NULL},
+		{name: "string", kind: searchjobs.ValueKindString, want: opensplunk.ValueType_VALUE_TYPE_STRING},
+		{name: "signed", kind: searchjobs.ValueKindSigned, want: opensplunk.ValueType_VALUE_TYPE_SINT64},
+		{name: "unsigned", kind: searchjobs.ValueKindUnsigned, want: opensplunk.ValueType_VALUE_TYPE_UINT64},
+		{name: "double", kind: searchjobs.ValueKindDouble, want: opensplunk.ValueType_VALUE_TYPE_DOUBLE},
+		{name: "bool", kind: searchjobs.ValueKindBool, want: opensplunk.ValueType_VALUE_TYPE_BOOL},
+		{name: "bytes", kind: searchjobs.ValueKindBytes, want: opensplunk.ValueType_VALUE_TYPE_BYTES},
+		{name: "time", kind: searchjobs.ValueKindTime, want: opensplunk.ValueType_VALUE_TYPE_TIMESTAMP},
+		{name: "duration", kind: searchjobs.ValueKindDuration, want: opensplunk.ValueType_VALUE_TYPE_DURATION},
+		{name: "list", kind: searchjobs.ValueKindList, want: opensplunk.ValueType_VALUE_TYPE_LIST},
+		{name: "object", kind: searchjobs.ValueKindObject, want: opensplunk.ValueType_VALUE_TYPE_OBJECT},
+		{name: "decimal", kind: searchjobs.ValueKindDecimal, want: opensplunk.ValueType_VALUE_TYPE_DECIMAL},
+		{name: "mixed", kind: searchjobs.ValueKindMixed, want: opensplunk.ValueType_VALUE_TYPE_MIXED},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -438,21 +438,21 @@ func TestProjectSearchSchemaMapsPublicFieldSemantics(t *testing.T) {
 
 	tests := []struct {
 		field string
-		want  opensplunkv1.ColumnSemanticType
+		want  opensplunk.ColumnSemanticType
 	}{
-		{field: "_time", want: opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_EVENT_TIME},
-		{field: "_indextime", want: opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_INDEX_TIME},
-		{field: "_raw", want: opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_RAW},
-		{field: "index", want: opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_INDEX},
-		{field: "host", want: opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_HOST},
-		{field: "source", want: opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_SOURCE},
-		{field: "sourcetype", want: opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_SOURCETYPE},
-		{field: "level", want: opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_LEVEL},
-		{field: "message", want: opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_MESSAGE},
-		{field: "body", want: opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_MESSAGE},
-		{field: "trace_id", want: opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_TRACE_ID},
-		{field: "span_id", want: opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_SPAN_ID},
-		{field: "custom", want: opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_UNSPECIFIED},
+		{field: "_time", want: opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_EVENT_TIME},
+		{field: "_indextime", want: opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_INDEX_TIME},
+		{field: "_raw", want: opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_RAW},
+		{field: "index", want: opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_INDEX},
+		{field: "host", want: opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_HOST},
+		{field: "source", want: opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_SOURCE},
+		{field: "sourcetype", want: opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_SOURCETYPE},
+		{field: "level", want: opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_LEVEL},
+		{field: "message", want: opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_MESSAGE},
+		{field: "body", want: opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_MESSAGE},
+		{field: "trace_id", want: opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_TRACE_ID},
+		{field: "span_id", want: opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_SPAN_ID},
+		{field: "custom", want: opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_UNSPECIFIED},
 	}
 	columns := make([]searchjobs.Column, len(tests))
 	for index, test := range tests {
@@ -503,17 +503,17 @@ func TestProjectSearchMapsEveryFailureCode(t *testing.T) {
 	tests := []struct {
 		name string
 		code searchjobs.FailureCode
-		want opensplunkv1.SearchFailureCode
+		want opensplunk.SearchFailureCode
 	}{
-		{name: "invalid SPL", code: searchjobs.FailureInvalidSPL, want: opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_INVALID_SPL},
-		{name: "unsupported SPL", code: searchjobs.FailureUnsupportedSPL, want: opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_UNSUPPORTED_SPL},
-		{name: "invalid time range", code: searchjobs.FailureInvalidTimeRange, want: opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_INVALID_TIME_RANGE},
-		{name: "index forbidden", code: searchjobs.FailureIndexForbidden, want: opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_INDEX_FORBIDDEN},
-		{name: "resource limit", code: searchjobs.FailureResourceLimit, want: opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_RESOURCE_LIMIT},
-		{name: "timeout", code: searchjobs.FailureTimeout, want: opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_TIMEOUT},
-		{name: "storage unavailable", code: searchjobs.FailureStorageUnavailable, want: opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_STORAGE_UNAVAILABLE},
-		{name: "execution", code: searchjobs.FailureExecution, want: opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_EXECUTION},
-		{name: "internal", code: searchjobs.FailureInternal, want: opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_INTERNAL},
+		{name: "invalid SPL", code: searchjobs.FailureInvalidSPL, want: opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_INVALID_SPL},
+		{name: "unsupported SPL", code: searchjobs.FailureUnsupportedSPL, want: opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_UNSUPPORTED_SPL},
+		{name: "invalid time range", code: searchjobs.FailureInvalidTimeRange, want: opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_INVALID_TIME_RANGE},
+		{name: "index forbidden", code: searchjobs.FailureIndexForbidden, want: opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_INDEX_FORBIDDEN},
+		{name: "resource limit", code: searchjobs.FailureResourceLimit, want: opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_RESOURCE_LIMIT},
+		{name: "timeout", code: searchjobs.FailureTimeout, want: opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_TIMEOUT},
+		{name: "storage unavailable", code: searchjobs.FailureStorageUnavailable, want: opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_STORAGE_UNAVAILABLE},
+		{name: "execution", code: searchjobs.FailureExecution, want: opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_EXECUTION},
+		{name: "internal", code: searchjobs.FailureInternal, want: opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_INTERNAL},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -565,7 +565,7 @@ func TestProjectSearchMapsDiagnosticsAndDetachesSuggestions(t *testing.T) {
 		t.Fatalf("diagnostic count = %d", len(diagnostics))
 	}
 	first := diagnostics[0]
-	if first.GetCode() != "SPL001" || first.GetSeverity() != opensplunkv1.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR || first.GetMessage() != "unexpected token" {
+	if first.GetCode() != "SPL001" || first.GetSeverity() != opensplunk.DiagnosticSeverity_DIAGNOSTIC_SEVERITY_ERROR || first.GetMessage() != "unexpected token" {
 		t.Fatalf("first diagnostic = %+v", first)
 	}
 	if first.GetSourceRange().GetStart().GetByteOffset() != 10 ||
@@ -640,7 +640,7 @@ func TestProjectSearchDetachesSchemaFromSnapshot(t *testing.T) {
 	}
 	columns[0] = searchjobs.Column{Name: "mutated", Kind: searchjobs.ValueKindInvalid}
 	converted := projection.events[2].GetResultSchemaAvailable().GetSchema().GetColumns()[0]
-	if converted.GetFieldName() != "level" || converted.GetValueType() != opensplunkv1.ValueType_VALUE_TYPE_STRING || !converted.GetNullable() {
+	if converted.GetFieldName() != "level" || converted.GetValueType() != opensplunk.ValueType_VALUE_TYPE_STRING || !converted.GetNullable() {
 		t.Fatalf("projected schema aliased source: %+v", converted)
 	}
 }
@@ -651,13 +651,13 @@ func TestProjectExportMapsEveryFailureCode(t *testing.T) {
 	tests := []struct {
 		name string
 		code exportjobs.FailureCode
-		want opensplunkv1.ExportFailureCode
+		want opensplunk.ExportFailureCode
 	}{
-		{name: "row limit", code: exportjobs.FailureRowLimit, want: opensplunkv1.ExportFailureCode_EXPORT_FAILURE_CODE_ROW_LIMIT},
-		{name: "byte limit", code: exportjobs.FailureByteLimit, want: opensplunkv1.ExportFailureCode_EXPORT_FAILURE_CODE_BYTE_LIMIT},
-		{name: "source unavailable", code: exportjobs.FailureSourceUnavailable, want: opensplunkv1.ExportFailureCode_EXPORT_FAILURE_CODE_SEARCH_UNAVAILABLE},
-		{name: "storage unavailable", code: exportjobs.FailureStorageUnavailable, want: opensplunkv1.ExportFailureCode_EXPORT_FAILURE_CODE_STORAGE_UNAVAILABLE},
-		{name: "internal", code: exportjobs.FailureInternal, want: opensplunkv1.ExportFailureCode_EXPORT_FAILURE_CODE_INTERNAL},
+		{name: "row limit", code: exportjobs.FailureRowLimit, want: opensplunk.ExportFailureCode_EXPORT_FAILURE_CODE_ROW_LIMIT},
+		{name: "byte limit", code: exportjobs.FailureByteLimit, want: opensplunk.ExportFailureCode_EXPORT_FAILURE_CODE_BYTE_LIMIT},
+		{name: "source unavailable", code: exportjobs.FailureSourceUnavailable, want: opensplunk.ExportFailureCode_EXPORT_FAILURE_CODE_SEARCH_UNAVAILABLE},
+		{name: "storage unavailable", code: exportjobs.FailureStorageUnavailable, want: opensplunk.ExportFailureCode_EXPORT_FAILURE_CODE_STORAGE_UNAVAILABLE},
+		{name: "internal", code: exportjobs.FailureInternal, want: opensplunk.ExportFailureCode_EXPORT_FAILURE_CODE_INTERNAL},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

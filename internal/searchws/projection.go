@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/exportjobproto"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobproto"
@@ -24,7 +24,7 @@ type targetProjection struct {
 	terminal               bool
 	refreshAt              time.Time
 	revalidateUntilRemoved bool
-	events                 []*opensplunkv1.SearchWebSocketEvent
+	events                 []*opensplunk.SearchWebSocketEvent
 }
 
 func projectSearch(job searchjobs.Job, now time.Time) (targetProjection, error) {
@@ -42,26 +42,26 @@ func projectSearchWithPreview(ctx context.Context, job searchjobs.Job, preview *
 		return targetProjection{}, err
 	}
 	state := searchjobproto.State(job.State)
-	if state == opensplunkv1.SearchJobState_SEARCH_JOB_STATE_UNSPECIFIED {
+	if state == opensplunk.SearchJobState_SEARCH_JOB_STATE_UNSPECIFIED {
 		return targetProjection{}, errors.New("search websocket projection: search state is invalid")
 	}
 	progress, err := searchjobproto.Progress(job, now)
 	if err != nil {
 		return targetProjection{}, err
 	}
-	events := []*opensplunkv1.SearchWebSocketEvent{
-		{Payload: &opensplunkv1.SearchWebSocketEvent_SearchStateChanged{SearchStateChanged: &opensplunkv1.SearchJobStateChanged{
+	events := []*opensplunk.SearchWebSocketEvent{
+		{Payload: &opensplunk.SearchWebSocketEvent_SearchStateChanged{SearchStateChanged: &opensplunk.SearchJobStateChanged{
 			SearchJobId: job.ID, State: state, StateVersion: job.Version,
 		}}},
-		{Payload: &opensplunkv1.SearchWebSocketEvent_SearchProgress{SearchProgress: progress}},
+		{Payload: &opensplunk.SearchWebSocketEvent_SearchProgress{SearchProgress: progress}},
 	}
 	if job.Schema != nil {
 		schema, schemaErr := schemaToProto(job.ID, *job.Schema, searchjobproto.ResultShapeForSPL(job.SPL))
 		if schemaErr != nil {
 			return targetProjection{}, schemaErr
 		}
-		events = append(events, &opensplunkv1.SearchWebSocketEvent{Payload: &opensplunkv1.SearchWebSocketEvent_ResultSchemaAvailable{
-			ResultSchemaAvailable: &opensplunkv1.ResultSchemaAvailable{SearchJobId: job.ID, Schema: schema},
+		events = append(events, &opensplunk.SearchWebSocketEvent{Payload: &opensplunk.SearchWebSocketEvent_ResultSchemaAvailable{
+			ResultSchemaAvailable: &opensplunk.ResultSchemaAvailable{SearchJobId: job.ID, Schema: schema},
 		}})
 	}
 	if preview != nil {
@@ -72,10 +72,10 @@ func projectSearchWithPreview(ctx context.Context, job searchjobs.Job, preview *
 		if rowsErr != nil {
 			return targetProjection{}, rowsErr
 		}
-		events = append(events, &opensplunkv1.SearchWebSocketEvent{Payload: &opensplunkv1.SearchWebSocketEvent_ResultPreview{
-			ResultPreview: &opensplunkv1.ResultPreview{
+		events = append(events, &opensplunk.SearchWebSocketEvent{Payload: &opensplunk.SearchWebSocketEvent_ResultPreview{
+			ResultPreview: &opensplunk.ResultPreview{
 				SearchJobId: job.ID, SchemaId: job.ID, PreviewRevision: preview.Revision,
-				UpdateMode: opensplunkv1.PreviewUpdateMode_PREVIEW_UPDATE_MODE_RESET,
+				UpdateMode: opensplunk.PreviewUpdateMode_PREVIEW_UPDATE_MODE_RESET,
 				Rows:       rows, Truncated: preview.Truncated,
 			},
 		}})
@@ -89,8 +89,8 @@ func projectSearchWithPreview(ctx context.Context, job searchjobs.Job, preview *
 		if timestampErr != nil {
 			return targetProjection{}, timestampErr
 		}
-		events = append(events, &opensplunkv1.SearchWebSocketEvent{Payload: &opensplunkv1.SearchWebSocketEvent_Warning{
-			Warning: &opensplunkv1.SearchWebSocketWarning{Target: &opensplunkv1.JobTarget{Target: &opensplunkv1.JobTarget_SearchJobId{SearchJobId: job.ID}}, Warning: &opensplunkv1.ApiWarning{
+		events = append(events, &opensplunk.SearchWebSocketEvent{Payload: &opensplunk.SearchWebSocketEvent_Warning{
+			Warning: &opensplunk.SearchWebSocketWarning{Target: &opensplunk.JobTarget{Target: &opensplunk.JobTarget_SearchJobId{SearchJobId: job.ID}}, Warning: &opensplunk.ApiWarning{
 				Code:       "RESULTS_TRUNCATED",
 				Message:    "Retained search results reached the server row boundary; a bounded export can re-execute the same scoped query.",
 				OccurredAt: warningTime,
@@ -99,13 +99,13 @@ func projectSearchWithPreview(ctx context.Context, job searchjobs.Job, preview *
 	}
 	terminal := job.State.Terminal()
 	if terminal {
-		terminalEvent := &opensplunkv1.SearchJobTerminal{
+		terminalEvent := &opensplunk.SearchJobTerminal{
 			SearchJobId: job.ID, State: state, StateVersion: job.Version,
-			FinalProgress: proto.Clone(progress).(*opensplunkv1.SearchProgress),
+			FinalProgress: proto.Clone(progress).(*opensplunk.SearchProgress),
 		}
 		if job.Failure != nil {
 			terminalEvent.Failure = searchjobproto.Failure(*job.Failure)
-			if terminalEvent.Failure.GetCode() == opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_UNSPECIFIED {
+			if terminalEvent.Failure.GetCode() == opensplunk.SearchFailureCode_SEARCH_FAILURE_CODE_UNSPECIFIED {
 				return targetProjection{}, errors.New("search websocket projection: search failure code is invalid")
 			}
 		}
@@ -115,7 +115,7 @@ func projectSearchWithPreview(ctx context.Context, job searchjobs.Job, preview *
 				return targetProjection{}, err
 			}
 		}
-		events = append(events, &opensplunkv1.SearchWebSocketEvent{Payload: &opensplunkv1.SearchWebSocketEvent_SearchTerminal{
+		events = append(events, &opensplunk.SearchWebSocketEvent{Payload: &opensplunk.SearchWebSocketEvent_SearchTerminal{
 			SearchTerminal: terminalEvent,
 		}})
 	}
@@ -137,32 +137,32 @@ func projectExport(job exportjobs.Job, now time.Time) (targetProjection, error) 
 		return targetProjection{}, err
 	}
 	state := exportjobproto.State(job.State)
-	if state == opensplunkv1.ExportJobState_EXPORT_JOB_STATE_UNSPECIFIED {
+	if state == opensplunk.ExportJobState_EXPORT_JOB_STATE_UNSPECIFIED {
 		return targetProjection{}, errors.New("search websocket projection: export state is invalid")
 	}
 	progress, err := exportProgressToProto(job, now)
 	if err != nil {
 		return targetProjection{}, err
 	}
-	events := []*opensplunkv1.SearchWebSocketEvent{
-		{Payload: &opensplunkv1.SearchWebSocketEvent_ExportStateChanged{ExportStateChanged: &opensplunkv1.ExportJobStateChanged{
+	events := []*opensplunk.SearchWebSocketEvent{
+		{Payload: &opensplunk.SearchWebSocketEvent_ExportStateChanged{ExportStateChanged: &opensplunk.ExportJobStateChanged{
 			ExportJobId: job.ID, State: state, StateVersion: job.Version,
 		}}},
-		{Payload: &opensplunkv1.SearchWebSocketEvent_ExportProgress{ExportProgress: progress}},
+		{Payload: &opensplunk.SearchWebSocketEvent_ExportProgress{ExportProgress: progress}},
 	}
 	terminal := job.State == exportjobs.StateCompleted || job.State == exportjobs.StateFailed ||
 		job.State == exportjobs.StateCanceled || job.State == exportjobs.StateExpired
 	if terminal {
-		terminalEvent := &opensplunkv1.ExportJobTerminal{
+		terminalEvent := &opensplunk.ExportJobTerminal{
 			ExportJobId: job.ID, State: state, StateVersion: job.Version,
-			FinalProgress: proto.Clone(progress).(*opensplunkv1.ExportProgress),
+			FinalProgress: proto.Clone(progress).(*opensplunk.ExportProgress),
 		}
 		if job.Failure != nil {
 			failureCode := exportjobproto.FailureCode(job.Failure.Code)
-			if failureCode == opensplunkv1.ExportFailureCode_EXPORT_FAILURE_CODE_UNSPECIFIED {
+			if failureCode == opensplunk.ExportFailureCode_EXPORT_FAILURE_CODE_UNSPECIFIED {
 				return targetProjection{}, errors.New("search websocket projection: export failure code is invalid")
 			}
-			terminalEvent.Failure = &opensplunkv1.ExportFailure{
+			terminalEvent.Failure = &opensplunk.ExportFailure{
 				Code: failureCode, Message: job.Failure.Message, Retryable: job.Failure.Retryable,
 			}
 		}
@@ -174,12 +174,12 @@ func projectExport(job exportjobs.Job, now time.Time) (targetProjection, error) 
 			if timestampErr != nil {
 				return targetProjection{}, timestampErr
 			}
-			terminalEvent.Artifact = &opensplunkv1.ExportArtifact{
+			terminalEvent.Artifact = &opensplunk.ExportArtifact{
 				FileName: job.Artifact.FileName, MediaType: job.Artifact.MediaType, SizeBytes: job.Artifact.SizeBytes,
 				RowCount: job.Artifact.RowCount, ExpiresAt: expiresAt,
 			}
 		}
-		events = append(events, &opensplunkv1.SearchWebSocketEvent{Payload: &opensplunkv1.SearchWebSocketEvent_ExportTerminal{
+		events = append(events, &opensplunk.SearchWebSocketEvent{Payload: &opensplunk.SearchWebSocketEvent_ExportTerminal{
 			ExportTerminal: terminalEvent,
 		}})
 	}
@@ -201,7 +201,7 @@ func terminalRefreshSchedule(terminal bool, expiresAt, now time.Time) (time.Time
 	return time.Time{}, true
 }
 
-func exportProgressToProto(job exportjobs.Job, now time.Time) (*opensplunkv1.ExportProgress, error) {
+func exportProgressToProto(job exportjobs.Job, now time.Time) (*opensplunk.ExportProgress, error) {
 	updatedAt := job.Progress.UpdatedAt
 	if updatedAt.IsZero() {
 		updatedAt = job.CreatedAt
@@ -218,13 +218,13 @@ func exportProgressToProto(job exportjobs.Job, now time.Time) (*opensplunkv1.Exp
 	if !job.StartedAt.IsZero() && end.After(job.StartedAt) {
 		elapsed = end.Sub(job.StartedAt)
 	}
-	return &opensplunkv1.ExportProgress{
+	return &opensplunk.ExportProgress{
 		RowsWritten: job.Progress.RowsWritten, BytesWritten: job.Progress.BytesWritten,
 		Elapsed: durationpb.New(elapsed), UpdatedAt: updated,
 	}, nil
 }
 
-func schemaToProto(id string, schema searchjobs.Schema, shape searchjobproto.ResultShape) (*opensplunkv1.ResultSchema, error) {
+func schemaToProto(id string, schema searchjobs.Schema, shape searchjobproto.ResultShape) (*opensplunk.ResultSchema, error) {
 	return searchjobproto.Schema(id, schema, shape)
 }
 

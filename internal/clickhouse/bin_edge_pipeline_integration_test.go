@@ -10,7 +10,7 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
@@ -539,14 +539,14 @@ func TestBinEdgePipelineAgainstClickHouse(t *testing.T) {
 func binEdgeStoreFixture(t *testing.T, ctx context.Context, store *Store, indexTime time.Time) uint64 {
 	t.Helper()
 	events := []*ingest.StoredEvent{
-		binEdgeEvent("b-int", "latency=137 status=503", 0, opensplunkv1.LogSeverity_LOG_SEVERITY_ERROR,
+		binEdgeEvent("b-int", "latency=137 status=503", 0, opensplunk.LogSeverity_LOG_SEVERITY_ERROR,
 			typedField("metric", typedSint(-11)),
 			typedField("sev_probe", typedUint(5)),
 			typedField("text_metric", typedString("25")),
 			typedField("prior_band", typedString("prior")),
 			typedField("label", typedString("alpha")),
 		),
-		binEdgeEvent("b-uint", "latency=245 status=200", 1, opensplunkv1.LogSeverity_LOG_SEVERITY_WARN,
+		binEdgeEvent("b-uint", "latency=245 status=200", 1, opensplunk.LogSeverity_LOG_SEVERITY_WARN,
 			typedField("metric", typedUint(25)),
 			typedField("sev_probe", typedUint(4)),
 			typedField("text_metric", typedString("-11")),
@@ -554,23 +554,23 @@ func binEdgeStoreFixture(t *testing.T, ctx context.Context, store *Store, indexT
 		),
 		// This event carries no status= capture so a later rex stage cannot
 		// match, which proves a published numeric bucket survives a no match.
-		binEdgeEvent("b-float", "latency=99", 2, opensplunkv1.LogSeverity_LOG_SEVERITY_INFO,
+		binEdgeEvent("b-float", "latency=99", 2, opensplunk.LogSeverity_LOG_SEVERITY_INFO,
 			typedField("metric", typedDouble(-11.5)),
 			typedField("sev_probe", typedUint(3)),
 			typedField("text_metric", typedString("21.5")),
 			typedField("label", typedString("beta")),
 		),
-		binEdgeEvent("b-text", "no numbers here", 3, opensplunkv1.LogSeverity_LOG_SEVERITY_INFO,
+		binEdgeEvent("b-text", "no numbers here", 3, opensplunk.LogSeverity_LOG_SEVERITY_INFO,
 			typedField("metric", typedString("not-a-number")),
 			typedField("sev_probe", typedUint(3)),
 			typedField("label", typedString("beta")),
 		),
-		binEdgeEvent("b-missing", "latency=7 status=500", 4, opensplunkv1.LogSeverity_LOG_SEVERITY_DEBUG,
+		binEdgeEvent("b-missing", "latency=7 status=500", 4, opensplunk.LogSeverity_LOG_SEVERITY_DEBUG,
 			typedField("sev_probe", typedUint(2)),
 			typedField("prior_band", typedString("prior")),
 			typedField("label", typedString("gamma")),
 		),
-		binEdgeEvent("b-null", "latency=61 status=204", 5, opensplunkv1.LogSeverity_LOG_SEVERITY_TRACE,
+		binEdgeEvent("b-null", "latency=61 status=204", 5, opensplunk.LogSeverity_LOG_SEVERITY_TRACE,
 			typedField("metric", typedNull()),
 			typedField("sev_probe", typedUint(1)),
 			typedField("label", typedString("gamma")),
@@ -594,8 +594,8 @@ func binEdgeStoreFixture(t *testing.T, ctx context.Context, store *Store, indexT
 func binEdgeEvent(
 	id, raw string,
 	minute int,
-	severity opensplunkv1.LogSeverity,
-	fields ...*opensplunkv1.TypedObjectField,
+	severity opensplunk.LogSeverity,
+	fields ...*opensplunk.TypedObjectField,
 ) *ingest.StoredEvent {
 	eventTime := binEdgeEventTime(minute)
 	return &ingest.StoredEvent{
@@ -603,18 +603,18 @@ func binEdgeEvent(
 		CollectorID: "collector",
 		BatchID:     "bin-edge-batch",
 		IndexTime:   time.Date(2026, time.July, 21, 4, 0, 0, 0, time.UTC),
-		Event: &opensplunkv1.LogEvent{
+		Event: &opensplunk.LogEvent{
 			EventId:         id,
 			IndexName:       binEdgeIndex,
 			EventTime:       timestamppb.New(eventTime),
 			CollectedAt:     timestamppb.New(eventTime),
-			EventTimeSource: opensplunkv1.EventTimeSource_EVENT_TIME_SOURCE_PARSED,
+			EventTimeSource: opensplunk.EventTimeSource_EVENT_TIME_SOURCE_PARSED,
 			Host:            "api",
 			Source:          "app.log",
 			Sourcetype:      "go:zap:json",
 			Severity:        severity,
 			Raw:             []byte(raw),
-			RawEncoding:     opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+			RawEncoding:     opensplunk.RawEncoding_RAW_ENCODING_UTF8,
 			Message:         new("Request metrics"),
 			Fields:          typedObjectValue(fields...),
 		},

@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/SRouter/pkg/router"
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobproto"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -15,10 +15,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func searchJobToProto(job searchjobs.Job, now time.Time) (*opensplunkv1.SearchJob, error) {
-	if !searchjobs.ValidCompilerVersion(job.CompilerVersion) {
-		return nil, errors.New("search job contains an invalid compiler version")
-	}
+func searchJobToProto(job searchjobs.Job, now time.Time) (*opensplunk.SearchJob, error) {
 	knowledgeSnapshot, err := projectKnowledgeSnapshotSummary(job.KnowledgeSnapshot)
 	if err != nil {
 		return nil, err
@@ -55,7 +52,7 @@ func searchJobToProto(job searchjobs.Job, now time.Time) (*opensplunkv1.SearchJo
 	if err := validateBoundedIdentifier(job.AppID, maximumSavedSearchAppIDBytes, true); err != nil {
 		return nil, errors.New("search job contains an invalid app ID")
 	}
-	definition := &opensplunkv1.SearchDefinition{
+	definition := &opensplunk.SearchDefinition{
 		Spl:        job.SPL,
 		TimeRange:  timeRange,
 		IndexScope: slices.Clone(job.RequestedIndexes),
@@ -63,15 +60,14 @@ func searchJobToProto(job searchjobs.Job, now time.Time) (*opensplunkv1.SearchJo
 	if job.AppID != "" {
 		definition.AppId = new(job.AppID)
 	}
-	result := &opensplunkv1.SearchJob{
+	result := &opensplunk.SearchJob{
 		SearchJobId:         job.ID,
 		StateVersion:        job.Version,
 		Definition:          definition,
 		Source:              source,
 		NormalizedSpl:       optionalString(job.NormalizedSPL),
-		CompilerVersion:     job.CompilerVersion,
 		EffectiveIndexScope: slices.Clone(job.EffectiveIndexes),
-		ResolvedTimeRange: &opensplunkv1.ResolvedTimeRange{
+		ResolvedTimeRange: &opensplunk.ResolvedTimeRange{
 			Earliest: earliest,
 			Latest:   latest,
 			Timezone: timezone,
@@ -103,7 +99,7 @@ func searchJobToProto(job searchjobs.Job, now time.Time) (*opensplunkv1.SearchJo
 		if timestampErr != nil {
 			return nil, timestampErr
 		}
-		result.Warnings = append(result.Warnings, &opensplunkv1.ApiWarning{
+		result.Warnings = append(result.Warnings, &opensplunk.ApiWarning{
 			Code:       "RESULTS_TRUNCATED",
 			Message:    "Retained search results reached the server row boundary; a bounded export can re-execute the same scoped query.",
 			OccurredAt: warningTime,
@@ -130,8 +126,8 @@ func searchJobToProto(job searchjobs.Job, now time.Time) (*opensplunkv1.SearchJo
 	return result, nil
 }
 
-func indexSummaryToProto(index control.Index) *opensplunkv1.IndexSummary {
-	return &opensplunkv1.IndexSummary{
+func indexSummaryToProto(index control.Index) *opensplunk.IndexSummary {
+	return &opensplunk.IndexSummary{
 		IndexId:         index.ID,
 		Name:            index.Definition.Name,
 		DisplayName:     index.Definition.DisplayName,
@@ -141,24 +137,24 @@ func indexSummaryToProto(index control.Index) *opensplunkv1.IndexSummary {
 	}
 }
 
-func indexStateToProto(state control.IndexState) opensplunkv1.IndexState {
+func indexStateToProto(state control.IndexState) opensplunk.IndexState {
 	switch state {
 	case control.IndexStateActive:
-		return opensplunkv1.IndexState_INDEX_STATE_ACTIVE
+		return opensplunk.IndexState_INDEX_STATE_ACTIVE
 	case control.IndexStateArchived:
-		return opensplunkv1.IndexState_INDEX_STATE_ARCHIVED
+		return opensplunk.IndexState_INDEX_STATE_ARCHIVED
 	case control.IndexStateDeleting:
-		return opensplunkv1.IndexState_INDEX_STATE_DELETING
+		return opensplunk.IndexState_INDEX_STATE_DELETING
 	default:
-		return opensplunkv1.IndexState_INDEX_STATE_UNSPECIFIED
+		return opensplunk.IndexState_INDEX_STATE_UNSPECIFIED
 	}
 }
 
-func accessState(enabled bool) opensplunkv1.IndexAccessState {
+func accessState(enabled bool) opensplunk.IndexAccessState {
 	if enabled {
-		return opensplunkv1.IndexAccessState_INDEX_ACCESS_STATE_ENABLED
+		return opensplunk.IndexAccessState_INDEX_ACCESS_STATE_ENABLED
 	}
-	return opensplunkv1.IndexAccessState_INDEX_ACCESS_STATE_DISABLED
+	return opensplunk.IndexAccessState_INDEX_ACCESS_STATE_DISABLED
 }
 
 func validTimestamp(input time.Time) (*timestamppb.Timestamp, error) {
@@ -179,15 +175,15 @@ func timestampToProto(input time.Time) (*timestamppb.Timestamp, error) {
 	return result, nil
 }
 
-func cloneApps(input []*opensplunkv1.AppSummary) []*opensplunkv1.AppSummary {
-	result := make([]*opensplunkv1.AppSummary, len(input))
+func cloneApps(input []*opensplunk.AppSummary) []*opensplunk.AppSummary {
+	result := make([]*opensplunk.AppSummary, len(input))
 	for index, app := range input {
-		result[index] = proto.Clone(app).(*opensplunkv1.AppSummary)
+		result[index] = proto.Clone(app).(*opensplunk.AppSummary)
 	}
 	return result
 }
 
-func appExists(apps []*opensplunkv1.AppSummary, id string) bool {
+func appExists(apps []*opensplunk.AppSummary, id string) bool {
 	for _, app := range apps {
 		if app.GetAppId() == id {
 			return true
@@ -238,34 +234,34 @@ func forwardCompatibleProtoSanitizer[T proto.Message](request T) (T, error) {
 		return request, nil
 	}
 	switch knowledgeRequest := any(request).(type) {
-	case *opensplunkv1.CreateKnowledgeObjectRequest:
+	case *opensplunk.CreateKnowledgeObjectRequest:
 		if err := rejectUnknownKnowledgeDefinition(knowledgeRequest.GetDefinition()); err != nil {
 			return request, err
 		}
-	case *opensplunkv1.UpdateKnowledgeObjectRequest:
+	case *opensplunk.UpdateKnowledgeObjectRequest:
 		if err := rejectUnknownKnowledgeDefinition(knowledgeRequest.GetDefinition()); err != nil {
 			return request, err
 		}
-	case *opensplunkv1.ValidateKnowledgeObjectRequest:
+	case *opensplunk.ValidateKnowledgeObjectRequest:
 		// Validate distinguishes unknown request and mask fields (envelope
 		// errors) from unknown applied-definition fields (in-band candidate
 		// invalidity). Its dedicated decoder has already projected updates and
 		// bounded dangerous repetitions, so no generic clearing is safe here.
 		return request, nil
-	case *opensplunkv1.PreviewKnowledgeObjectRequest:
+	case *opensplunk.PreviewKnowledgeObjectRequest:
 		// Preview shares Validate's candidate-envelope unknown authority. Its
 		// request-only decoder applies the same bounded update projection before
 		// this sanitizer can ever be used by a future route.
 		return request, nil
-	case *opensplunkv1.CreateLookupRequest:
+	case *opensplunk.CreateLookupRequest:
 		if err := rejectUnknownLookupDefinition(knowledgeRequest.GetDefinition()); err != nil {
 			return request, err
 		}
-	case *opensplunkv1.ReplaceLookupRequest:
+	case *opensplunk.ReplaceLookupRequest:
 		if err := rejectUnknownLookupDefinition(knowledgeRequest.GetDefinition()); err != nil {
 			return request, err
 		}
-	case *opensplunkv1.PreviewLookupRequest:
+	case *opensplunk.PreviewLookupRequest:
 		if err := rejectUnknownLookupDefinition(knowledgeRequest.GetDefinition()); err != nil {
 			return request, err
 		}

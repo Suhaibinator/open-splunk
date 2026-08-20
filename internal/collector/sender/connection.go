@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/collectorlimits"
 	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
 	"google.golang.org/grpc/codes"
@@ -29,8 +29,8 @@ func withBearer(ctx context.Context, token string) context.Context {
 // by one for every request sent on this stream.
 type conn struct {
 	s      *Sender
-	stream opensplunkv1.CollectorIngestService_CollectClient
-	ready  *opensplunkv1.CollectorReady
+	stream opensplunk.CollectorIngestService_CollectClient
+	ready  *opensplunk.CollectorReady
 	// ctx governs the pump, heartbeat, and retry goroutines; it is derived from
 	// the parent Run context. streamCancel tears down the underlying gRPC stream
 	// and is kept separate so Goodbye can still be sent after ctx is canceled.
@@ -55,7 +55,7 @@ type conn struct {
 	// inflight holds sent-but-not-terminally-acked batches keyed by batch
 	// sequence, so a RetryBatch resends the exact retained bytes and a partial
 	// ack can map event indices back to events.
-	inflight  map[uint64]*opensplunkv1.EventBatch
+	inflight  map[uint64]*opensplunk.EventBatch
 	inflightN int
 	// highestSentBatchSequence bounds cumulative acknowledgments to data this
 	// connection has actually dispatched. The WAL may already contain newer
@@ -95,14 +95,14 @@ type scheduledRetry struct {
 	done   chan struct{}
 }
 
-func (s *Sender) newConn(ctx context.Context, cancel, streamCancel context.CancelFunc, stream opensplunkv1.CollectorIngestService_CollectClient) *conn {
+func (s *Sender) newConn(ctx context.Context, cancel, streamCancel context.CancelFunc, stream opensplunk.CollectorIngestService_CollectClient) *conn {
 	c := &conn{
 		s:            s,
 		stream:       stream,
 		ctx:          ctx,
 		cancel:       cancel,
 		streamCancel: streamCancel,
-		inflight:     make(map[uint64]*opensplunkv1.EventBatch),
+		inflight:     make(map[uint64]*opensplunk.EventBatch),
 		pendingRetry: make(map[uint64]*scheduledRetry),
 	}
 	c.cond = sync.NewCond(&c.mu)
@@ -238,25 +238,23 @@ func classifyPreReadyError(err error) error {
 
 func (c *conn) sendHello() error {
 	stats := c.s.queue.Stats()
-	hello := &opensplunkv1.CollectorHello{
-		CollectorId:      c.s.opts.CollectorID,
-		InstanceId:       c.s.opts.InstanceID,
-		ProtocolMajor:    c.s.opts.ProtocolMajor,
-		ProtocolMinor:    c.s.opts.ProtocolMinor,
-		CollectorVersion: c.s.opts.Hello.CollectorVersion,
-		Hostname:         c.s.opts.Hello.Hostname,
-		OperatingSystem:  c.s.opts.Hello.OperatingSystem,
-		Architecture:     c.s.opts.Hello.Architecture,
-		StartedAt:        timestamppb.New(c.s.opts.Hello.StartedAt.UTC()),
-		Capabilities:     c.s.opts.Hello.Capabilities,
-		Inputs:           c.s.opts.Hello.Inputs,
+	hello := &opensplunk.CollectorHello{
+		CollectorId:     c.s.opts.CollectorID,
+		InstanceId:      c.s.opts.InstanceID,
+		SourceRevision:  c.s.opts.Hello.SourceRevision,
+		Hostname:        c.s.opts.Hello.Hostname,
+		OperatingSystem: c.s.opts.Hello.OperatingSystem,
+		Architecture:    c.s.opts.Hello.Architecture,
+		StartedAt:       timestamppb.New(c.s.opts.Hello.StartedAt.UTC()),
+		Capabilities:    c.s.opts.Hello.Capabilities,
+		Inputs:          c.s.opts.Hello.Inputs,
 	}
 	if stats.LastAckedBatchSequence > 0 {
 		v := collectorlimits.ClampFleetCounter(stats.LastAckedBatchSequence)
 		hello.LastAcknowledgedBatchSequence = &v
 	}
-	return c.send(&opensplunkv1.CollectRequest{
-		Payload: &opensplunkv1.CollectRequest_Hello{Hello: hello},
+	return c.send(&opensplunk.CollectRequest{
+		Payload: &opensplunk.CollectRequest_Hello{Hello: hello},
 	})
 }
 
@@ -272,12 +270,7 @@ func (c *conn) receiveReady() error {
 	if ready == nil {
 		return fmt.Errorf("collector/sender: expected CollectorReady, got %T", resp.GetPayload())
 	}
-	if ready.GetProtocolMajor() != c.s.opts.ProtocolMajor {
-		return &fatalError{err: fmt.Errorf(
-			"collector/sender: server protocol major %d is incompatible with %d",
-			ready.GetProtocolMajor(), c.s.opts.ProtocolMajor)}
-	}
-	if ready.GetAcknowledgmentDurability() != opensplunkv1.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED {
+	if ready.GetAcknowledgmentDurability() != opensplunk.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED {
 		return &fatalError{err: fmt.Errorf(
 			"collector/sender: server acknowledgment durability %s cannot safely advance source checkpoints",
 			ready.GetAcknowledgmentDurability().String(),
@@ -324,14 +317,14 @@ func (c *conn) observeReadyResume() {
 
 // send stamps the next connection-local stream sequence and sent_at, then
 // transmits the request. All senders must go through send under sendMu.
-func (c *conn) send(req *opensplunkv1.CollectRequest) error {
+func (c *conn) send(req *opensplunk.CollectRequest) error {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
 	return c.sendLocked(req)
 }
 
 // sendLocked stamps and transmits req while the caller holds sendMu.
-func (c *conn) sendLocked(req *opensplunkv1.CollectRequest) error {
+func (c *conn) sendLocked(req *opensplunk.CollectRequest) error {
 	c.streamSeq++
 	req.StreamSequence = c.streamSeq
 	req.SentAt = timestamppb.New(c.s.now().UTC())
@@ -343,7 +336,7 @@ func (c *conn) sendLocked(req *opensplunkv1.CollectRequest) error {
 func (c *conn) pumpLoop() {
 	// pending retains a batch already dequeued by NextBatch but held back because a
 	// temporary throttle forbids it right now; it must not be re-appended.
-	var pending *opensplunkv1.EventBatch
+	var pending *opensplunk.EventBatch
 	for {
 		if !c.waitForInFlightCapacity(c.ctx) {
 			return
@@ -438,7 +431,7 @@ const (
 // a single ordered decision: a throttle that wins the lock is observed here;
 // otherwise this send was already in progress before that throttle applied.
 func (c *conn) trySendBatch(
-	batch *opensplunkv1.EventBatch,
+	batch *opensplunk.EventBatch,
 ) (batchSendResult, time.Duration, uint64, error) {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
@@ -477,8 +470,8 @@ func (c *conn) trySendBatch(
 	c.recordBatchSendLocked(now)
 	c.mu.Unlock()
 
-	err := c.sendLocked(&opensplunkv1.CollectRequest{
-		Payload: &opensplunkv1.CollectRequest_Batch{Batch: batch},
+	err := c.sendLocked(&opensplunk.CollectRequest{
+		Payload: &opensplunk.CollectRequest_Batch{Batch: batch},
 	})
 	return batchSent, 0, throttleGeneration, err
 }
@@ -600,7 +593,7 @@ func (c *conn) throttleActiveLocked() bool {
 // limits (fixed for the life of the stream). The caller can terminally
 // dead-letter a single-event batch; a multi-event batch is retained because it
 // requires lossless repacking to preserve its otherwise-valid events.
-func (c *conn) batchExceedsReadyLimits(batch *opensplunkv1.EventBatch) (string, bool) {
+func (c *conn) batchExceedsReadyLimits(batch *opensplunk.EventBatch) (string, bool) {
 	c.mu.Lock()
 	maxEvents := c.maxBatchEvents
 	maxBytes := c.maxBatchBytes
@@ -610,21 +603,21 @@ func (c *conn) batchExceedsReadyLimits(batch *opensplunkv1.EventBatch) (string, 
 	for _, event := range batch.GetEvents() {
 		eventSize := proto.Size(event)
 		if eventSize >= 0 && uint64(eventSize) > maxEventBytes {
-			return opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_EVENT_TOO_LARGE.String(), true
+			return opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_EVENT_TOO_LARGE.String(), true
 		}
 	}
 	// #nosec G115 -- len is non-negative and every supported Go int value is
 	// exactly representable as uint64.
 	if maxEvents > 0 && uint64(len(batch.GetEvents())) > uint64(maxEvents) {
-		return opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_TOO_MANY_EVENTS.String(), true
+		return opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_TOO_MANY_EVENTS.String(), true
 	}
 	if maxBytes > 0 && batch.GetUncompressedSizeBytes() > maxBytes {
-		return opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE.String(), true
+		return opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE.String(), true
 	}
 	return "", false
 }
 
-func (c *conn) batchExceedsThrottleLimitsLocked(batch *opensplunkv1.EventBatch) bool {
+func (c *conn) batchExceedsThrottleLimitsLocked(batch *opensplunk.EventBatch) bool {
 	// #nosec G115 -- len is non-negative and every supported Go int value is
 	// exactly representable as uint64.
 	if c.throttleMaxEvents > 0 && uint64(len(batch.GetEvents())) > uint64(c.throttleMaxEvents) {
@@ -681,8 +674,8 @@ func (c *conn) heartbeatLoop() {
 				continue
 			}
 			hb := c.s.buildHeartbeat()
-			if err := c.sendHeartbeat(&opensplunkv1.CollectRequest{
-				Payload: &opensplunkv1.CollectRequest_Heartbeat{Heartbeat: hb},
+			if err := c.sendHeartbeat(&opensplunk.CollectRequest{
+				Payload: &opensplunk.CollectRequest_Heartbeat{Heartbeat: hb},
 			}); err != nil {
 				c.fail(err)
 				return
@@ -691,7 +684,7 @@ func (c *conn) heartbeatLoop() {
 	}
 }
 
-func (c *conn) sendHeartbeat(req *opensplunkv1.CollectRequest) error {
+func (c *conn) sendHeartbeat(req *opensplunk.CollectRequest) error {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
 	c.mu.Lock()
@@ -743,7 +736,7 @@ func (c *conn) receiveLoop() error {
 	}
 }
 
-func (c *conn) validateResponse(resp *opensplunkv1.CollectResponse) error {
+func (c *conn) validateResponse(resp *opensplunk.CollectResponse) error {
 	if resp == nil {
 		return errors.New("collector/sender: nil response")
 	}
@@ -761,9 +754,9 @@ func (c *conn) validateResponse(resp *opensplunkv1.CollectResponse) error {
 // handleAck is terminal for the batch. Accepted and duplicate events are acked
 // off the durable queue; rejected events are dead-lettered but the batch is
 // still acked (the ack is terminal).
-func (c *conn) handleAck(ack *opensplunkv1.BatchAck) error {
+func (c *conn) handleAck(ack *opensplunk.BatchAck) error {
 	seq := ack.GetBatchSequence()
-	if ack.GetDurability() != opensplunkv1.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED {
+	if ack.GetDurability() != opensplunk.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED {
 		return fmt.Errorf(
 			"collector/sender: ack for batch sequence %d has unsafe durability %s",
 			seq, ack.GetDurability().String(),
@@ -872,7 +865,7 @@ func (c *conn) handleAck(ack *opensplunkv1.BatchAck) error {
 
 // handleReject permanently dead-letters the entire batch, then acks it off the
 // durable queue. BatchReject is terminal (documented in doc.go).
-func (c *conn) handleReject(reject *opensplunkv1.BatchReject) error {
+func (c *conn) handleReject(reject *opensplunk.BatchReject) error {
 	seq := reject.GetBatchSequence()
 	batch := c.lookupInflight(seq)
 	if batch == nil {
@@ -897,7 +890,7 @@ func (c *conn) handleReject(reject *opensplunkv1.BatchReject) error {
 
 // handleRetry is non-terminal: the exact same durable batch is retained and
 // resent after retry_after. The in-flight slot is kept the whole time.
-func (c *conn) handleRetry(retry *opensplunkv1.RetryBatch) error {
+func (c *conn) handleRetry(retry *opensplunk.RetryBatch) error {
 	seq := retry.GetBatchSequence()
 	retryDelay := time.Duration(0)
 	if retryAfter := retry.GetRetryAfter(); retryAfter != nil {
@@ -957,8 +950,8 @@ func (c *conn) handleRetry(retry *opensplunkv1.RetryBatch) error {
 			if retryCtx.Err() != nil {
 				return
 			}
-			sent, wait, throttleGeneration, throttleLimited, err := c.sendRetryIfCurrent(seq, batch, state, &opensplunkv1.CollectRequest{
-				Payload: &opensplunkv1.CollectRequest_Batch{Batch: batch},
+			sent, wait, throttleGeneration, throttleLimited, err := c.sendRetryIfCurrent(seq, batch, state, &opensplunk.CollectRequest{
+				Payload: &opensplunk.CollectRequest_Batch{Batch: batch},
 			})
 			if sent {
 				if err != nil {
@@ -991,9 +984,9 @@ func (c *conn) handleRetry(retry *opensplunkv1.RetryBatch) error {
 // duplicate. mu is released before the potentially blocking send.
 func (c *conn) sendRetryIfCurrent(
 	seq uint64,
-	batch *opensplunkv1.EventBatch,
+	batch *opensplunk.EventBatch,
 	state *scheduledRetry,
-	req *opensplunkv1.CollectRequest,
+	req *opensplunk.CollectRequest,
 ) (sent bool, wait time.Duration, throttleGeneration uint64, throttleLimited bool, err error) {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
@@ -1033,7 +1026,7 @@ func (c *conn) sendRetryIfCurrent(
 // duration is applied from local receipt time. All server-requested delays are
 // bounded by the ingestion quota contract so a buggy peer cannot suspend
 // delivery indefinitely.
-func (c *conn) handleThrottle(resp *opensplunkv1.CollectResponse) error {
+func (c *conn) handleThrottle(resp *opensplunk.CollectResponse) error {
 	throttle := resp.GetThrottle()
 	if throttle == nil {
 		return nil
@@ -1107,8 +1100,8 @@ func localThrottleUntil(
 
 // handleNotice reacts to server notices. A shutting-down notice drains the
 // current in-flight work and asks Run to reconnect after reconnect_after.
-func (c *conn) handleNotice(notice *opensplunkv1.ServerNotice) error {
-	if notice.GetType() != opensplunkv1.ServerNoticeType_SERVER_NOTICE_TYPE_SHUTTING_DOWN {
+func (c *conn) handleNotice(notice *opensplunk.ServerNotice) error {
+	if notice.GetType() != opensplunk.ServerNoticeType_SERVER_NOTICE_TYPE_SHUTTING_DOWN {
 		c.s.logger.Info("server notice", "type", notice.GetType().String(), "code", notice.GetCode())
 		return nil
 	}
@@ -1144,7 +1137,7 @@ func (c *conn) handleNotice(notice *opensplunkv1.ServerNotice) error {
 
 // --- in-flight bookkeeping --------------------------------------------------
 
-func (c *conn) lookupInflight(seq uint64) *opensplunkv1.EventBatch {
+func (c *conn) lookupInflight(seq uint64) *opensplunk.EventBatch {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.inflight[seq]
@@ -1210,7 +1203,7 @@ func (c *conn) releaseInflightThrough(seq uint64) {
 	c.sendMu.Unlock()
 }
 
-func (c *conn) deadLetterWholeBatch(batch *opensplunkv1.EventBatch, code, reason string) error {
+func (c *conn) deadLetterWholeBatch(batch *opensplunk.EventBatch, code, reason string) error {
 	records := make([]DeadLetterRecord, 0, len(batch.GetEvents()))
 	now := c.s.now()
 	for _, event := range batch.GetEvents() {
@@ -1329,9 +1322,9 @@ func (c *conn) beginDraining() {
 func (c *conn) sendGoodbyeAndClose() {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
-	_ = c.sendLocked(&opensplunkv1.CollectRequest{
-		Payload: &opensplunkv1.CollectRequest_Goodbye{Goodbye: &opensplunkv1.CollectorGoodbye{
-			Reason: opensplunkv1.CollectorGoodbyeReason_COLLECTOR_GOODBYE_REASON_SHUTDOWN,
+	_ = c.sendLocked(&opensplunk.CollectRequest{
+		Payload: &opensplunk.CollectRequest_Goodbye{Goodbye: &opensplunk.CollectorGoodbye{
+			Reason: opensplunk.CollectorGoodbyeReason_COLLECTOR_GOODBYE_REASON_SHUTDOWN,
 		}},
 	})
 	_ = c.stream.CloseSend()
