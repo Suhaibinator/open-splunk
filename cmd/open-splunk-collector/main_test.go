@@ -202,6 +202,17 @@ func TestWriteBuildIdentityReportsCompiledReleaseFields(t *testing.T) {
 	}
 }
 
+func TestUsageAdvertisesImplementedVersionCommand(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	usage(&output)
+	if got := output.String(); !strings.Contains(got, "open-splunk-collector version") ||
+		strings.Contains(got, "open-splunk-source") {
+		t.Fatalf("usage build identity command is invalid:\n%s", got)
+	}
+}
+
 func TestRunDispatch(t *testing.T) {
 	t.Parallel()
 	valid := writeValidConfig(t)

@@ -140,6 +140,27 @@ func ApplyMigrations(ctx context.Context, db *sql.DB, migrations fs.FS) (err err
 		}
 	}()
 
+	var ledgerExists, schemaExists bool
+	if err := conn.QueryRowContext(ctx, `
+		SELECT
+			EXISTS (
+				SELECT 1
+				FROM sqlite_schema
+				WHERE type = 'table' AND name = 'schema_migrations'
+			),
+			EXISTS (
+				SELECT 1
+				FROM sqlite_schema
+			)`).Scan(&ledgerExists, &schemaExists); err != nil {
+		return fmt.Errorf("inspect SQLite migration state: %w", err)
+	}
+	if !ledgerExists && schemaExists {
+		return fmt.Errorf(
+			"%w: ledgerless database contains existing schema",
+			ErrMigrationDrift,
+		)
+	}
+
 	if _, err := conn.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version INTEGER PRIMARY KEY NOT NULL CHECK (version >= 1),

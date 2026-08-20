@@ -76,7 +76,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) (returned
 	environment := flags.String("environment", defaults.Environment, "environment field")
 	host := flags.String("host", defaults.Host, "host field")
 	cardinality := flags.Uint64("cardinality", defaults.Cardinality, "number of distinct bounded user IDs")
-	version := flags.Bool("version", false, "print the compiled application version and source revision")
+	version := flags.Bool("version", false, "print the compiled source revision")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}

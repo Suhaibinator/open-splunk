@@ -258,7 +258,7 @@ func countMatches(include, exclude []string) int {
 }
 
 // usage prints the command summary.
-func usage(w *os.File) {
+func usage(w io.Writer) {
 	fmt.Fprint(w, `open-splunk-collector: tail local logs and forward them to the Open Splunk server.
 
 usage:
@@ -266,7 +266,7 @@ usage:
                                                    start the collector (default)
   open-splunk-collector validate [-config PATH]    validate configuration and exit
   open-splunk-collector identity [-config PATH]    initialize and print stable ID
-  open-splunk-source revision                    print the compiled build identity
+  open-splunk-collector version                    print the compiled build identity
 
 flags:
   -config PATH       configuration file (default `+defaultConfigPath+`)

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -29,6 +30,25 @@ func TestRunReportsCompiledBuildIdentity(t *testing.T) {
 	want := "source_revision=" + identity.SourceRevision + "\n"
 	if got := output.String(); got != want {
 		t.Fatalf("version output = %q, want %q", got, want)
+	}
+}
+
+func TestVersionHelpDescribesSourceRevisionOutput(t *testing.T) {
+	t.Parallel()
+
+	var stderr bytes.Buffer
+	err := run(
+		context.Background(),
+		[]string{"-h"},
+		&bytes.Buffer{},
+		&stderr,
+	)
+	if !errors.Is(err, flag.ErrHelp) {
+		t.Fatalf("run(-h) error = %v, want flag.ErrHelp", err)
+	}
+	if got := stderr.String(); !strings.Contains(got, "print the compiled source revision") ||
+		strings.Contains(got, "application version") {
+		t.Fatalf("version help is invalid:\n%s", got)
 	}
 }
 

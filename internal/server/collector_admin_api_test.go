@@ -852,6 +852,29 @@ func TestCollectorAdministrationRejectsMalformedNestedOutput(t *testing.T) {
 	}
 }
 
+func TestCollectorAdministrationRejectsInvalidCollectorVersion(t *testing.T) {
+	t.Parallel()
+
+	const tenantID = "tenant-invalid-collector-version"
+	entry := validCollectorCatalogEntry(
+		tenantID,
+		"collector-invalid-version",
+	)
+	entry.Collector.Version = 0
+	converted, err := collectorCatalogEntryToProto(
+		collectorfleet.Scope{TenantID: tenantID},
+		entry,
+	)
+	if converted != nil || err == nil ||
+		err.Error() != "collector version is invalid" {
+		t.Fatalf(
+			"collectorCatalogEntryToProto() = %#v, %v, want collector version error",
+			converted,
+			err,
+		)
+	}
+}
+
 func TestCollectorAdministrationActiveInstanceRequiresLiveOverlay(
 	t *testing.T,
 ) {
@@ -1172,10 +1195,10 @@ func TestCollectorAdministrationErrorMappingIsSanitized(t *testing.T) {
 			message: "collector not found",
 		},
 		{
-			name:    "source revision conflict",
+			name:    "collector version conflict",
 			err:     control.ErrVersionConflict,
 			status:  http.StatusConflict,
-			message: "source revision conflict",
+			message: "collector version conflict",
 		},
 		{
 			name:    "capacity",

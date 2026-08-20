@@ -779,7 +779,7 @@ func collectorCatalogEntryToProto(
 		return nil, err
 	}
 	if collector.Version == 0 || collector.Version > math.MaxInt64 {
-		return nil, errors.New("source revision is invalid")
+		return nil, errors.New("collector version is invalid")
 	}
 	displayName, err := normalizeCollectorDisplayName(collector.DisplayName)
 	if err != nil ||
@@ -1195,7 +1195,7 @@ func mapCollectorAdministrationCallError(
 	case errors.Is(operationErr, control.ErrVersionConflict):
 		return router.NewHTTPError(
 			http.StatusConflict,
-			"source revision conflict",
+			"collector version conflict",
 		)
 	case errors.Is(operationErr, control.ErrCapacityExceeded):
 		return router.NewHTTPError(

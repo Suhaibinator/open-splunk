@@ -480,6 +480,61 @@ func TestApplyMigrationsIsVersionedAndDetectsDrift(t *testing.T) {
 	}
 }
 
+func TestApplyMigrationsRejectsLedgerlessExistingSchema(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	raw, err := sql.Open(
+		"sqlite",
+		filepath.Join(t.TempDir(), "ledgerless.sqlite")+"?_txlock=immediate",
+	)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	defer raw.Close()
+	if _, err := raw.ExecContext(
+		ctx,
+		`CREATE TABLE rogue (value TEXT NOT NULL) STRICT`,
+	); err != nil {
+		t.Fatalf("create unrecognized schema: %v", err)
+	}
+
+	migrationFS := fstest.MapFS{
+		"0001_first.sql": &fstest.MapFile{
+			Data: []byte(`CREATE TABLE example (value TEXT NOT NULL) STRICT;`),
+		},
+	}
+	if err := ApplyMigrations(ctx, raw, migrationFS); !errors.Is(
+		err,
+		ErrMigrationDrift,
+	) {
+		t.Fatalf(
+			"ApplyMigrations(ledgerless schema) error = %v, want ErrMigrationDrift",
+			err,
+		)
+	}
+
+	var ledgerCount, rogueCount int
+	if err := raw.QueryRowContext(ctx, `
+		SELECT
+			COUNT(*) FILTER (
+				WHERE type = 'table' AND name = 'schema_migrations'
+			),
+			COUNT(*) FILTER (
+				WHERE type = 'table' AND name = 'rogue'
+			)
+		FROM sqlite_schema`).Scan(&ledgerCount, &rogueCount); err != nil {
+		t.Fatalf("inspect rejected ledgerless schema: %v", err)
+	}
+	if ledgerCount != 0 || rogueCount != 1 {
+		t.Fatalf(
+			"rejected schema ledger/rogue counts = %d/%d, want 0/1",
+			ledgerCount,
+			rogueCount,
+		)
+	}
+}
+
 func TestApplyMigrationsRetriesBusyStartupLock(t *testing.T) {
 	t.Parallel()
 
