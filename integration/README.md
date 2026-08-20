@@ -6,7 +6,8 @@
 2. start pinned, ephemeral ClickHouse on a random loopback port;
 3. build and start `open-splunk-server` from an empty working directory with
    temporary SQLite/key files and no executable runtime on `PATH`;
-4. provision an index and one-time ingestion token over protobuf HTTP;
+4. provision an index, app-scoped immutable lookup, saved lookup search, and
+   one-time ingestion token over protobuf HTTP;
 5. build and start `open-splunk-collector` against an empty `app.log`, append
    and durably acknowledge one primer event, then hard-kill the collector;
 6. inspect the valid checkpoint/WAL crash boundary, restart the collector with
@@ -16,23 +17,26 @@
    wait for and explicitly sync the real WAL segment append, then hard-kill the
    collector;
 8. reopen the WAL and require the exact pending sentinel origin, restart both
-   processes with their original durable state, and prove four distinct stable
-   event IDs with no loss. One physical sentinel replay is allowed by the
-   at-least-once contract, and search uses `dedup event_id` to return the four
-   logical events;
+   processes with their original durable state, reload the exact app, lookup,
+   and saved-search versions, and prove four distinct stable event IDs with no
+   loss. One physical sentinel replay is allowed by the at-least-once contract,
+   and search uses `dedup event_id` to return the four logical events;
 9. require the final exact line/byte checkpoint and a drained collector WAL
    with a positive acknowledged sequence;
-10. create an SPL job through protobuf
-   HTTP, and subscribe to its binary protobuf WebSocket stream;
+10. execute the persisted lookup search through protobuf HTTP with saved-search
+    provenance, and subscribe to its binary protobuf WebSocket stream;
 11. require an explicit subscription acknowledgment followed by monotonically
    sequenced search state/progress events and a completed terminal event, then
-   fetch the authoritative typed/redacted results over two opaque cursor pages;
+   fetch the authoritative typed/redacted lookup-enriched results over two
+   opaque cursor pages, and verify the pinned lookup identity through
+   administrator inspection;
 12. launch Chromium against the UI embedded in that compiled server, run an SPL
-   search, observe its same-origin protobuf HTTP and binary WebSocket traffic,
-   and verify the final non-preview event rows contain the ingested fixture;
+   lookup search, observe its same-origin protobuf HTTP and binary WebSocket
+   traffic, and verify the expanded final event rows contain the typed lookup
+   enrichment;
 13. create and poll a JSON Lines export, redeem its one-time bearer grant over
-   the raw download route, validate artifact headers/content, and reject grant
-   replay;
+   the raw download route, validate lookup-enriched artifact headers/content,
+   and reject grant replay;
 14. provision a separate `gradethis` index and index-scoped token, run the
    shipped `configs/examples/collector.yaml` through `collector validate`, and
    start that exact configuration against an empty synthetic GradeThis log;
@@ -174,8 +178,7 @@ labels, then removes the original and restored volumes as well as every
 test-owned container, network, and image.
 
 ```sh
-OPEN_SPLUNK_APPLICATION_VERSION=0.1.0 \
-OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION=0.2 \
+OPEN_SPLUNK_APPLICATION_VERSION=0.4.0 \
 OPEN_SPLUNK_OCI_INTEGRATION=1 \
 OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.7.3.19@sha256:f90a77560f72b10802106ee49e9870e41668cbc496e280c3911f6e3b216657f3 \
   go test ./integration -run '^TestReleaseOCIComposeContract$' \

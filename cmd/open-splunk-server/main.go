@@ -47,7 +47,6 @@ const (
 	shutdownTimeout                    = 35 * time.Second
 	defaultIndexRetention              = ingest.DefaultIndexRetention
 	defaultOwnerID                     = "single-user"
-	splCompatibility                   = spl.CompatibilityVersion
 	auditCursorKeyPurpose              = "audit-event-cursors"
 	searchAttemptAuditCursorKeyPurpose = "search-attempt-audit-cursors"
 	collectorHeartbeatFlushInterval    = time.Second
@@ -150,11 +149,7 @@ func runWithOptions(config options) error {
 		return fmt.Errorf("open embedded release: %w", err)
 	}
 	if config.verifyEmbeddedRelease {
-		return writeEmbeddedReleaseVerification(
-			os.Stdout,
-			release,
-			splCompatibility,
-		)
+		return writeEmbeddedReleaseVerification(os.Stdout, release)
 	}
 	httpTLSConfig, err := loadHTTPServerTLSConfig(
 		config.httpTLSCert,
@@ -573,7 +568,7 @@ func runWithOptions(config options) error {
 		Database: "open_splunk",
 		Table:    "events",
 	}
-	jobJournal, err := searchhistory.NewJobJournal(searchHistory, splCompatibility)
+	jobJournal, err := searchhistory.NewJobJournal(searchHistory)
 	if err != nil {
 		return fmt.Errorf("create search-history job journal: %w", err)
 	}
@@ -601,8 +596,7 @@ func runWithOptions(config options) error {
 		OnExecutionError: func(jobID string, code searchjobs.FailureCode, cause error) {
 			log.Print(formatSearchExecutionFailure(jobID, code, cause))
 		},
-		Compiler:        compiler,
-		CompilerVersion: splCompatibility,
+		Compiler: compiler,
 	})
 	if err != nil {
 		return fmt.Errorf("create search job manager: %w", err)
@@ -759,11 +753,10 @@ func runWithOptions(config options) error {
 		AdministrativeAllowedHosts: config.httpAllowedHosts,
 		BrowserAuthenticator:       browserAuthenticator,
 		Bootstrap: server.BootstrapConfig{
-			APIVersion:              "v1",
-			SPLCompatibilityVersion: splCompatibility,
-			Build:                   buildMetadata,
-			MaximumExportRows:       exportSettings.maximumRowLimit,
-			MaximumExportBytes:      exportSettings.maximumByteLimit,
+			APIVersion:         "v1",
+			Build:              buildMetadata,
+			MaximumExportRows:  exportSettings.maximumRowLimit,
+			MaximumExportBytes: exportSettings.maximumByteLimit,
 		},
 	}
 	var hecMetrics *hechttp.Metrics
@@ -897,13 +890,9 @@ func runWithOptions(config options) error {
 func writeEmbeddedReleaseVerification(
 	output io.Writer,
 	release opensplunk.Release,
-	compatibilityVersion string,
 ) error {
 	if output == nil {
 		return errors.New("write embedded release verification: output is nil")
-	}
-	if !searchjobs.ValidCompilerVersion(compatibilityVersion) {
-		return errors.New("write embedded release verification: SPL compatibility version is invalid")
 	}
 	if err := buildinfo.WriteIdentity(output, buildinfo.Identity{
 		ApplicationVersion: release.Metadata.ApplicationVersion,
@@ -914,7 +903,7 @@ func writeEmbeddedReleaseVerification(
 	_, err := fmt.Fprintf(
 		output,
 		"spl_compatibility_version=%s\nui_build_id=%s\nui_sha256=%s\n",
-		compatibilityVersion,
+		spl.CompatibilityVersion,
 		release.Metadata.UIBuildID,
 		release.Metadata.UI.SHA256,
 	)

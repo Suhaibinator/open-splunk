@@ -3,6 +3,7 @@ package knowledgesnapshot
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"math"
@@ -127,6 +128,8 @@ func TestSnapshotReferenceSummaryForEnabledEmptyAuthority(t *testing.T) {
 	}
 	summary := snapshot.Summary()
 	if summary == nil || summary.GetRef() == nil || summary.GetRef().GetObjectCount() != 0 ||
+		summary.GetRef().GetLookupAssetCountUnknown() ||
+		summary.GetRef().GetLookupAssetCount() != 0 ||
 		len(summary.GetObjects()) != 0 || summary.GetObjectsTruncated() {
 		t.Fatalf("enabled empty summary = %+v", summary)
 	}
@@ -151,6 +154,15 @@ func TestValidateKnowledgeSnapshotReferenceRejectsNoncanonicalAuthority(t *testi
 		}, want: ErrInvalidInput},
 		{name: "revision", mutate: func(value *opensplunkv1.KnowledgeSnapshotRef) { value.TenantCatalogRevision = math.MaxInt64 }, want: ErrInvalidInput},
 		{name: "object count", mutate: func(value *opensplunkv1.KnowledgeSnapshotRef) { value.ObjectCount = MaximumExecutableObjects + 1 }, want: ErrResourceLimit},
+		{name: "current lookup count unknown", mutate: func(value *opensplunkv1.KnowledgeSnapshotRef) { value.LookupAssetCountUnknown = true }, want: ErrInvalidInput},
+		{name: "legacy unknown count nonzero", mutate: func(value *opensplunkv1.KnowledgeSnapshotRef) {
+			value.CompilerCompatibilityVersion = "0.1"
+			value.LookupAssetCount = 1
+			value.LookupAssetCountUnknown = true
+		}, want: ErrInvalidInput},
+		{name: "lookup count", mutate: func(value *opensplunkv1.KnowledgeSnapshotRef) {
+			value.LookupAssetCount = MaximumLookupAssets + 1
+		}, want: ErrResourceLimit},
 		{name: "compatibility empty", mutate: func(value *opensplunkv1.KnowledgeSnapshotRef) { value.CompilerCompatibilityVersion = "" }, want: ErrInvalidInput},
 		{name: "compatibility too long", mutate: func(value *opensplunkv1.KnowledgeSnapshotRef) {
 			value.CompilerCompatibilityVersion = strings.Repeat("v", MaximumCompilerCompatibilityVersionBytes+1)
@@ -179,6 +191,41 @@ func TestValidateKnowledgeSnapshotReferenceRejectsNoncanonicalAuthority(t *testi
 	}
 	if err := ValidateReference(nil); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("ValidateReference(nil) error = %v", err)
+	}
+	legacy := proto.Clone(valid).(*opensplunkv1.KnowledgeSnapshotRef)
+	legacy.CompilerCompatibilityVersion = "0.1"
+	legacy.LookupAssetCount = 0
+	legacy.LookupAssetCountUnknown = true
+	if err := ValidateReference(legacy); err != nil {
+		t.Fatalf("ValidateReference(released v0.1 unknown lookup count): %v", err)
+	}
+	legacySummary := &opensplunkv1.KnowledgeSnapshotSummary{Ref: legacy}
+	legacySummary.Ref.ObjectCount = 0
+	legacySummary.Ref.LookupAssetCountUnknown = false
+	if err := ValidateSummary(legacySummary); err != nil {
+		t.Fatalf("ValidateSummary(released v0.1 zero-lookup wire): %v", err)
+	}
+}
+
+func TestReleasedV01EnabledEmptySummaryWireRemainsReadable(t *testing.T) {
+	t.Parallel()
+	encoded, err := base64.StdEncoding.DecodeString(
+		"ClIKIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fEIGAgICAgIAQGiAgISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+PyoDMC4x",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var summary opensplunkv1.KnowledgeSnapshotSummary
+	if err := proto.Unmarshal(encoded, &summary); err != nil {
+		t.Fatalf("unmarshal released v0.1 summary: %v", err)
+	}
+	if summary.GetRef() == nil || summary.GetRef().GetLookupAssetCountUnknown() ||
+		summary.GetRef().GetCompilerCompatibilityVersion() != "0.1" ||
+		len(summary.GetLookupAssets()) != 0 {
+		t.Fatalf("released v0.1 summary = %#v", &summary)
+	}
+	if err := ValidateSummary(&summary); err != nil {
+		t.Fatalf("ValidateSummary(released v0.1 wire): %v", err)
 	}
 }
 
@@ -214,6 +261,10 @@ func TestValidateKnowledgeSnapshotSummaryBoundariesAndDisclosure(t *testing.T) {
 		{name: "reference absent", mutate: func(value *opensplunkv1.KnowledgeSnapshotSummary) { value.Ref = nil }, want: ErrInvalidInput},
 		{name: "reference unknown", mutate: func(value *opensplunkv1.KnowledgeSnapshotSummary) {
 			value.Ref.ProtoReflect().SetUnknown(smallUnknownField())
+		}, want: ErrInvalidInput},
+		{name: "reference lookup count unknown", mutate: func(value *opensplunkv1.KnowledgeSnapshotSummary) {
+			value.Ref.CompilerCompatibilityVersion = "0.1"
+			value.Ref.LookupAssetCountUnknown = true
 		}, want: ErrInvalidInput},
 		{name: "prefix short", mutate: func(value *opensplunkv1.KnowledgeSnapshotSummary) { value.Objects = nil }, want: ErrInvalidInput},
 		{name: "prefix long", mutate: func(value *opensplunkv1.KnowledgeSnapshotSummary) {
@@ -291,6 +342,7 @@ func validSnapshotReference() *opensplunkv1.KnowledgeSnapshotRef {
 		TenantCatalogStateToken:      bytes.Repeat([]byte{0x22}, sha256.Size),
 		ObjectCount:                  1,
 		CompilerCompatibilityVersion: CompilerCompatibilityVersion,
+		LookupAssetCount:             0,
 	}
 }
 

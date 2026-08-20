@@ -16,7 +16,7 @@ import (
 
 const (
 	DevelopmentRevision        = "development"
-	DefaultApplicationVersion  = "0.1.0"
+	DefaultApplicationVersion  = "0.4.0"
 	AssetManifestFormatVersion = uint32(1)
 )
 

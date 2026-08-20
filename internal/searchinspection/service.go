@@ -82,6 +82,14 @@ type queryCompiler interface {
 	Compile(*plan.Query) (clickhouse.CompiledQuery, error)
 }
 
+type retainedLookupAuthorityCompiler interface {
+	WithRetainedLookupAuthorityContext(
+		context.Context,
+		clickhouse.CompiledQuery,
+		*plan.Query,
+	) (*plan.Query, clickhouse.Compiler, error)
+}
+
 type queryExplainer interface {
 	Explain(
 		context.Context,
@@ -276,6 +284,36 @@ func (service *Service) Inspect(
 	logical, err := searchsnapshot.BuildExecutionPlan(snapshot)
 	if err != nil {
 		return Result{}, classifyPlanningError(err)
+	}
+	if err := operationContext.Err(); err != nil {
+		return Result{}, err
+	}
+	if retainedKnowledge != nil {
+		hasLookups, lookupErr := retainedKnowledge.CompiledQuery.
+			HasLookupAuthorityContext(operationContext)
+		if lookupErr != nil {
+			if contextErr := operationContext.Err(); contextErr != nil {
+				return Result{}, contextErr
+			}
+			return Result{}, ErrInspectionFailed
+		}
+		if hasLookups {
+			restorer, ok := service.compiler.(retainedLookupAuthorityCompiler)
+			if !ok {
+				return Result{}, ErrInspectionFailed
+			}
+			logical, _, err = restorer.WithRetainedLookupAuthorityContext(
+				operationContext,
+				retainedKnowledge.CompiledQuery,
+				logical,
+			)
+			if err != nil {
+				if contextErr := operationContext.Err(); contextErr != nil {
+					return Result{}, contextErr
+				}
+				return Result{}, ErrInspectionFailed
+			}
+		}
 	}
 	if err := operationContext.Err(); err != nil {
 		return Result{}, err

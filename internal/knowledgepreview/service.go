@@ -95,7 +95,23 @@ func (adapter ProductionCompilerAdapter) CompilePreview(
 	if err := ctx.Err(); err != nil {
 		return clickhouse.CompiledQuery{}, err
 	}
-	return adapter.Compiler.Compile(logical)
+	retained, err := execution.OpenRetainedKnowledgeExecution()
+	if err != nil || retained == nil {
+		// BuildExecutionPlanWithKnowledgePrelude already requires and validates
+		// this same retained authority. Reaching this branch would mean the
+		// immutable execution changed between two reads, so it is an invariant
+		// failure rather than a legacy/no-knowledge preview path.
+		return clickhouse.CompiledQuery{}, ErrInvariant
+	}
+	logical, compiler, err := adapter.Compiler.WithRetainedLookupAuthorityContext(
+		ctx,
+		retained.CompiledQuery,
+		logical,
+	)
+	if err != nil {
+		return clickhouse.CompiledQuery{}, err
+	}
+	return compiler.CompileContext(ctx, logical)
 }
 
 // Config supplies every authority required by Preview. No dependency can be

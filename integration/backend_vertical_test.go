@@ -41,6 +41,8 @@ const (
 	backendIntegrationFlag         = "OPEN_SPLUNK_BACKEND_INTEGRATION"
 	verticalIndexName              = "vertical"
 	verticalTenantID               = "vertical-tenant"
+	verticalLookupName             = "vertical_service_owners"
+	verticalLookupOwner            = "platform-v04-owner"
 	verticalEventCount             = uint64(4)
 	verticalTimelineMaximumBuckets = uint32(1_000)
 	bulkIndexName                  = "vertical-bulk"
@@ -54,8 +56,8 @@ const (
 	redactionCredentialMarker      = "[CREDENTIAL-MASKED]"
 	redactionPINMarker             = "[PIN-MASKED]"
 	verticalSentinelMessage        = "typed redaction sentinel"
-	verticalSearchSPL              = " \nindex=vertical | eval adjusted_duration=duration_ms+1 | where status IN (status) | dedup event_id | table _time message status duration_ms adjusted_duration api_key customer_credential customer_pin _raw\t"
-	browserVerticalSearchSPL       = "index=vertical | eval adjusted_duration=duration_ms+1 | where status IN (status) | dedup event_id"
+	verticalSearchSPL              = " \nindex=vertical | lookup vertical_service_owners service_id AS service OUTPUTNEW owner AS service_owner | eval adjusted_duration=duration_ms+1 | where status IN (status) | dedup event_id | table _time message status duration_ms adjusted_duration service_owner api_key customer_credential customer_pin _raw\t"
+	browserVerticalSearchSPL       = "index=vertical | lookup vertical_service_owners service_id AS service OUTPUTNEW owner AS service_owner | eval adjusted_duration=duration_ms+1 | where status IN (status) | dedup event_id"
 	bulkSearchSPL                  = "index=vertical-bulk | table event_id"
 	splCompatibilityVersionForTest = spl.CompatibilityVersion
 	clickHouseEventInsertSQL       = "INSERT INTO open_splunk.events (event_id, tenant_id, index_name, event_time, index_time, " +
@@ -190,9 +192,17 @@ func TestBackendVertical(t *testing.T) {
 	if createdIndex.GetIndex().GetVersion() != 1 || createdIndex.GetIndex().GetDefinition().GetName() != verticalIndexName {
 		t.Fatalf("created index = %+v", createdIndex.GetIndex())
 	}
+	fixtureStart := time.Now().UTC().Add(-2 * time.Minute).Truncate(time.Second)
+	lookupFixture := provisionVerticalLookupFixture(
+		t,
+		ctx,
+		httpClient,
+		baseURL,
+		administratorToken,
+		fixtureStart,
+	)
 
 	collectorStateDir := filepath.Join(work, "collector-state")
-	fixtureStart := time.Now().UTC().Add(-2 * time.Minute).Truncate(time.Second)
 	logPath := filepath.Join(work, "app.log")
 	createEmptyFixture(t, logPath)
 	tokenPath := filepath.Join(work, "collector.token")
@@ -303,6 +313,14 @@ func TestBackendVertical(t *testing.T) {
 	serverProcesses = append(serverProcesses, serverProcess)
 	waitForHealth(t, ctx, httpClient, baseURL, serverProcess)
 	assertStandaloneServerSurface(t, ctx, httpClient, baseURL)
+	persistedSavedSearch := assertVerticalLookupFixtureAfterRestart(
+		t,
+		ctx,
+		httpClient,
+		baseURL,
+		administratorToken,
+		lookupFixture,
+	)
 
 	collectorProcess = startProcess(t, repository, collectorArguments, os.Environ())
 	collectorProcesses = append(collectorProcesses, collectorProcess)
@@ -360,9 +378,27 @@ func TestBackendVertical(t *testing.T) {
 	}
 	insertTimelineExclusiveBoundaryEvent(t, ctx, storage, fixtureStart.Add(5500*time.Millisecond), visibilityCutoff)
 
-	search := runSearch(t, ctx, httpClient, baseURL, fixtureStart)
+	search := runSearch(
+		t,
+		ctx,
+		httpClient,
+		baseURL,
+		fixtureStart,
+		lookupFixture,
+		persistedSavedSearch,
+	)
 	assertCompletedTimeline(t, ctx, httpClient, baseURL, search.jobID, fixtureStart)
 	assertTypedRedactedResults(t, search.results)
+	assertVerticalLookupInspection(
+		t,
+		ctx,
+		httpClient,
+		baseURL,
+		administratorToken,
+		search.jobID,
+		serverProcess,
+		serverSecrets,
+	)
 	assertBrowserVisibleResults(
 		t,
 		ctx,
@@ -386,7 +422,7 @@ func TestBackendVertical(t *testing.T) {
 	}
 	completedExport, artifact, downloadToken := exportAndDownloadJSONLines(t, ctx, httpClient, baseURL, search.jobID,
 		[]string{
-			"message", "status", "duration_ms", "adjusted_duration", "api_key",
+			"message", "status", "duration_ms", "adjusted_duration", "service_owner", "api_key",
 			"customer_credential", "customer_pin", "_raw",
 		},
 		verticalEventCount,
@@ -457,6 +493,211 @@ func TestBackendVertical(t *testing.T) {
 	for _, process := range serverProcesses {
 		assertProcessLogsDoNotLeak(t, process.Logs(), serverSecrets...)
 	}
+}
+
+type verticalLookupFixture struct {
+	appID                 string
+	lookupID              string
+	lookupVersion         uint64
+	savedSearchID         string
+	appDefinition         *opensplunkv1.AppDefinition
+	lookupDefinition      *opensplunkv1.LookupDefinition
+	savedSearchDefinition *opensplunkv1.SavedSearchDefinition
+}
+
+func provisionVerticalLookupFixture(
+	t *testing.T,
+	ctx context.Context,
+	client *http.Client,
+	baseURL, administratorToken string,
+	fixtureStart time.Time,
+) verticalLookupFixture {
+	t.Helper()
+	appDefinition := &opensplunkv1.AppDefinition{
+		Slug:              "v04-backend-vertical",
+		DisplayName:       "SPL v0.4 backend vertical",
+		DefaultIndexNames: []string{verticalIndexName},
+	}
+	var createdApp opensplunkv1.CreateAppResponse
+	postAdministratorProto(
+		t,
+		ctx,
+		client,
+		baseURL+"/api/v1/apps/create",
+		administratorToken,
+		&opensplunkv1.CreateAppRequest{Definition: appDefinition},
+		&createdApp,
+	)
+	app := createdApp.GetApp()
+	if app.GetAppId() == "" || app.GetVersion() != 1 ||
+		app.GetState() != opensplunkv1.AppState_APP_STATE_ACTIVE ||
+		!proto.Equal(app.GetDefinition(), appDefinition) {
+		t.Fatalf("created v0.4 lookup app = %+v", app)
+	}
+
+	lookupDefinition := &opensplunkv1.LookupDefinition{
+		AppId:        app.GetAppId(),
+		Name:         verticalLookupName,
+		SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
+		KeyMappings: []*opensplunkv1.LookupFieldMapping{{
+			LookupField: "service_id",
+			EventField:  "service",
+		}},
+		OutputMappings: []*opensplunkv1.LookupFieldMapping{{
+			LookupField: "owner",
+			EventField:  "service_owner",
+		}},
+		OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+	}
+	var createdLookup opensplunkv1.CreateLookupResponse
+	postAdministratorProto(
+		t,
+		ctx,
+		client,
+		baseURL+"/api/v1/knowledge/lookups/create",
+		administratorToken,
+		&opensplunkv1.CreateLookupRequest{
+			Definition: lookupDefinition,
+			CsvData: []byte(
+				"service_id,owner\nvertical-service," + verticalLookupOwner + "\n",
+			),
+		},
+		&createdLookup,
+	)
+	lookup := createdLookup.GetLookup()
+	if lookup.GetLookupId() == "" || lookup.GetVersion() != 1 ||
+		lookup.GetState() != opensplunkv1.LookupState_LOOKUP_STATE_ACTIVE ||
+		!proto.Equal(lookup.GetDefinition(), lookupDefinition) ||
+		!slices.Equal(lookup.GetColumns(), []string{"service_id", "owner"}) ||
+		lookup.GetRowCount() != 1 || lookup.GetCanonicalSizeBytes() == 0 ||
+		len(lookup.GetSourceSha256()) != 32 || len(lookup.GetContentSha256()) != 32 {
+		t.Fatalf("created v0.4 lookup = %+v", lookup)
+	}
+
+	savedSearchDefinition := &opensplunkv1.SavedSearchDefinition{
+		Name: "SPL v0.4 persisted lookup vertical",
+		Search: verticalLookupSearchDefinition(
+			fixtureStart,
+			app.GetAppId(),
+		),
+		SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
+	}
+	var createdSavedSearch opensplunkv1.CreateSavedSearchResponse
+	postProto(
+		t,
+		ctx,
+		client,
+		baseURL+"/api/v1/saved-searches/create",
+		&opensplunkv1.CreateSavedSearchRequest{Definition: savedSearchDefinition},
+		&createdSavedSearch,
+	)
+	savedSearch := createdSavedSearch.GetSavedSearch()
+	normalizedSavedSearchDefinition := proto.Clone(savedSearchDefinition).(*opensplunkv1.SavedSearchDefinition)
+	normalizedSavedSearchDefinition.OwnerId = new(savedSearch.GetDefinition().GetOwnerId())
+	if savedSearch.GetSavedSearchId() == "" || savedSearch.GetVersion() != 1 ||
+		savedSearch.GetDefinition().GetOwnerId() == "" ||
+		!proto.Equal(savedSearch.GetDefinition(), normalizedSavedSearchDefinition) {
+		t.Fatalf("created v0.4 saved lookup search = %+v", savedSearch)
+	}
+
+	return verticalLookupFixture{
+		appID:                 app.GetAppId(),
+		lookupID:              lookup.GetLookupId(),
+		lookupVersion:         lookup.GetVersion(),
+		savedSearchID:         savedSearch.GetSavedSearchId(),
+		appDefinition:         proto.Clone(appDefinition).(*opensplunkv1.AppDefinition),
+		lookupDefinition:      proto.Clone(lookupDefinition).(*opensplunkv1.LookupDefinition),
+		savedSearchDefinition: proto.Clone(savedSearch.GetDefinition()).(*opensplunkv1.SavedSearchDefinition),
+	}
+}
+
+func verticalLookupSearchDefinition(
+	fixtureStart time.Time,
+	appID string,
+) *opensplunkv1.SearchDefinition {
+	earliest := fixtureStart.Format(time.RFC3339Nano)
+	latest := fixtureStart.Add(5500 * time.Millisecond).Format(time.RFC3339Nano)
+	timezone := "UTC"
+	return &opensplunkv1.SearchDefinition{
+		Spl: verticalSearchSPL,
+		TimeRange: &opensplunkv1.TimeRangeSpec{
+			Earliest: &earliest,
+			Latest:   &latest,
+			Timezone: &timezone,
+		},
+		AppId:              &appID,
+		IndexScope:         []string{verticalIndexName},
+		PreferredResultTab: opensplunkv1.SearchResultTab_SEARCH_RESULT_TAB_EVENTS,
+	}
+}
+
+func assertVerticalLookupFixtureAfterRestart(
+	t *testing.T,
+	ctx context.Context,
+	client *http.Client,
+	baseURL, administratorToken string,
+	fixture verticalLookupFixture,
+) *opensplunkv1.SavedSearch {
+	t.Helper()
+	var gotApp opensplunkv1.GetAppResponse
+	postAdministratorProto(
+		t,
+		ctx,
+		client,
+		baseURL+"/api/v1/apps/get",
+		administratorToken,
+		&opensplunkv1.GetAppRequest{Selector: &opensplunkv1.AppSelector{
+			Selector: &opensplunkv1.AppSelector_AppId{AppId: fixture.appID},
+		}},
+		&gotApp,
+	)
+	if gotApp.GetApp().GetAppId() != fixture.appID ||
+		gotApp.GetApp().GetVersion() != 1 ||
+		gotApp.GetApp().GetState() != opensplunkv1.AppState_APP_STATE_ACTIVE ||
+		!proto.Equal(gotApp.GetApp().GetDefinition(), fixture.appDefinition) {
+		t.Fatalf("restarted v0.4 lookup app = %+v", gotApp.GetApp())
+	}
+
+	lookupVersion := fixture.lookupVersion
+	var gotLookup opensplunkv1.GetLookupResponse
+	postAdministratorProto(
+		t,
+		ctx,
+		client,
+		baseURL+"/api/v1/knowledge/lookups/get",
+		administratorToken,
+		&opensplunkv1.GetLookupRequest{
+			LookupId: fixture.lookupID,
+			Version:  &lookupVersion,
+		},
+		&gotLookup,
+	)
+	lookup := gotLookup.GetLookup()
+	if lookup.GetLookupId() != fixture.lookupID ||
+		lookup.GetVersion() != fixture.lookupVersion ||
+		lookup.GetState() != opensplunkv1.LookupState_LOOKUP_STATE_ACTIVE ||
+		!proto.Equal(lookup.GetDefinition(), fixture.lookupDefinition) ||
+		lookup.GetRowCount() != 1 ||
+		!slices.Equal(lookup.GetColumns(), []string{"service_id", "owner"}) {
+		t.Fatalf("restarted v0.4 lookup = %+v", lookup)
+	}
+
+	var gotSavedSearch opensplunkv1.GetSavedSearchResponse
+	postProto(
+		t,
+		ctx,
+		client,
+		baseURL+"/api/v1/saved-searches/get",
+		&opensplunkv1.GetSavedSearchRequest{SavedSearchId: fixture.savedSearchID},
+		&gotSavedSearch,
+	)
+	savedSearch := gotSavedSearch.GetSavedSearch()
+	if savedSearch.GetSavedSearchId() != fixture.savedSearchID ||
+		savedSearch.GetVersion() != 1 ||
+		!proto.Equal(savedSearch.GetDefinition(), fixture.savedSearchDefinition) {
+		t.Fatalf("restarted v0.4 saved lookup search = %+v", savedSearch)
+	}
+	return proto.Clone(savedSearch).(*opensplunkv1.SavedSearch)
 }
 
 func waitForDistinctStoredEventCount(
@@ -564,7 +805,7 @@ func assertBrowserVisibleResults(
 	t.Helper()
 	runBrowserVerticalSpec(t, ctx, repository, browserVerticalSpecConfig{
 		grepPattern: "collector event is visible through the compiled backend UI|" +
-			"backend v0.2 diagnostics remain authoritative and prevent browser dispatch|" +
+			"backend diagnostics remain authoritative and prevent browser dispatch|" +
 			"history Run again delegates persisted intent with source-only rerun provenance|" +
 			"failed search terminal rejects without waiting for results",
 		outputDirectory:    "backend-vertical",
@@ -575,7 +816,7 @@ func assertBrowserVisibleResults(
 			"OPEN_SPLUNK_E2E_SPL":                 browserVerticalSearchSPL,
 			"OPEN_SPLUNK_E2E_EARLIEST":            fixtureStart.Format(time.RFC3339Nano),
 			"OPEN_SPLUNK_E2E_LATEST":              fixtureStart.Add(4 * time.Second).Format(time.RFC3339Nano),
-			"OPEN_SPLUNK_E2E_EXPECTED_TEXT":       verticalSentinelMessage,
+			"OPEN_SPLUNK_E2E_EXPECTED_TEXT":       verticalLookupOwner,
 			"OPEN_SPLUNK_E2E_EXPECTED_ROWS":       strconv.FormatUint(verticalEventCount, 10),
 		},
 		failureDiagnostics: func() string {
@@ -655,6 +896,8 @@ func assertStandaloneServerSurface(t *testing.T, ctx context.Context, client *ht
 	timelineFeatures := 0
 	previewFeatures := 0
 	indexAdministrationFeatures := 0
+	knowledgeFeatures := 0
+	lookupManagementFeatures := 0
 	for _, feature := range bootstrap.GetFeatures() {
 		switch feature {
 		case opensplunkv1.ServerFeature_SERVER_FEATURE_TIMELINE:
@@ -663,6 +906,10 @@ func assertStandaloneServerSurface(t *testing.T, ctx context.Context, client *ht
 			previewFeatures++
 		case opensplunkv1.ServerFeature_SERVER_FEATURE_INDEX_ADMIN:
 			indexAdministrationFeatures++
+		case opensplunkv1.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS:
+			knowledgeFeatures++
+		case opensplunkv1.ServerFeature_SERVER_FEATURE_LOOKUP_MANAGEMENT:
+			lookupManagementFeatures++
 		}
 	}
 	build := bootstrap.GetBuild()
@@ -680,6 +927,7 @@ func assertStandaloneServerSurface(t *testing.T, ctx context.Context, client *ht
 		limits.GetMaximumPreviewRows() == 0 || limits.GetMaximumWebsocketSubscriptions() == 0 ||
 		limits.GetMaximumWebsocketFrameBytes() < 1<<10 || limits.GetMaximumWebsocketFrameBytes() > 1<<20 ||
 		timelineFeatures != 1 || previewFeatures != 1 || indexAdministrationFeatures != 1 ||
+		knowledgeFeatures != 1 || lookupManagementFeatures != 1 ||
 		limits.GetMaximumTimelineBuckets() != verticalTimelineMaximumBuckets {
 		t.Fatalf("standalone bootstrap response = %+v", &bootstrap)
 	}
@@ -1487,6 +1735,7 @@ func assertDownloadedRedactedResults(t *testing.T, completed *opensplunkv1.Expor
 		"status",
 		"duration_ms",
 		"adjusted_duration",
+		"service_owner",
 		"api_key",
 		"customer_credential",
 		"customer_pin",
@@ -1502,6 +1751,14 @@ func assertDownloadedRedactedResults(t *testing.T, completed *opensplunkv1.Expor
 			}
 		}
 		rowCount++
+		if row["service_owner"] != verticalLookupOwner {
+			t.Fatalf(
+				"JSON Lines row %d service_owner = %#v, want %q",
+				line,
+				row["service_owner"],
+				verticalLookupOwner,
+			)
+		}
 		if row["message"] != verticalSentinelMessage {
 			return
 		}
@@ -3019,21 +3276,26 @@ func runSearch(
 	client *http.Client,
 	baseURL string,
 	fixtureStart time.Time,
+	fixture verticalLookupFixture,
+	savedSearch *opensplunkv1.SavedSearch,
 ) completedSearch {
 	t.Helper()
-	earliest := fixtureStart.Format(time.RFC3339Nano)
-	latest := fixtureStart.Add(5500 * time.Millisecond).Format(time.RFC3339Nano)
-	timezone := "UTC"
+	if savedSearch == nil ||
+		savedSearch.GetSavedSearchId() != fixture.savedSearchID ||
+		!proto.Equal(
+			savedSearch.GetDefinition().GetSearch(),
+			verticalLookupSearchDefinition(fixtureStart, fixture.appID),
+		) {
+		t.Fatalf("invalid persisted v0.4 saved lookup search = %+v", savedSearch)
+	}
+	launchDefinition := proto.Clone(savedSearch.GetDefinition().GetSearch()).(*opensplunkv1.SearchDefinition)
+	launchDefinition.PreferredResultTab = opensplunkv1.SearchResultTab_SEARCH_RESULT_TAB_UNSPECIFIED
 	var created opensplunkv1.CreateSearchJobResponse
 	postProto(t, ctx, client, baseURL+"/api/v1/search/jobs/create", &opensplunkv1.CreateSearchJobRequest{
-		Definition: &opensplunkv1.SearchDefinition{
-			Spl: verticalSearchSPL,
-			TimeRange: &opensplunkv1.TimeRangeSpec{
-				Earliest: &earliest,
-				Latest:   &latest,
-				Timezone: &timezone,
-			},
-			IndexScope: []string{verticalIndexName},
+		Definition: launchDefinition,
+		Source: &opensplunkv1.SearchJobSource{
+			Origin:        opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH,
+			SavedSearchId: new(fixture.savedSearchID),
 		},
 	}, &created)
 	jobID := created.GetSearchJob().GetSearchJobId()
@@ -3058,15 +3320,79 @@ func runSearch(
 		job.GetProgress().GetStateVersion() != job.GetStateVersion() ||
 		terminal.GetFinalProgress().GetStateVersion() != terminal.GetStateVersion() ||
 		job.GetProgress().GetProducedRows() != terminal.GetFinalProgress().GetProducedRows() ||
-		job.GetCompilerVersion() != splCompatibilityVersionForTest {
+		job.GetCompilerVersion() != splCompatibilityVersionForTest ||
+		job.GetDefinition().GetAppId() != fixture.appID ||
+		job.GetSource().GetOrigin() != opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH ||
+		job.GetSource().GetSavedSearchId() != fixture.savedSearchID {
 		t.Fatalf("authoritative search job = %+v, websocket terminal = %+v", job, terminal)
 	}
+	assertVerticalLookupKnowledgeProjection(t, job.GetKnowledgeSnapshot())
 	t.Logf("completed search scope: indexes=%v range=%v cutoff=%v rows=%d",
 		job.GetEffectiveIndexScope(), job.GetResolvedTimeRange(), job.GetIndexTimeCutoff(), job.GetProgress().GetProducedRows())
 
 	results := fetchAllVerticalSearchResults(t, ctx, client, baseURL, jobID)
 	waitForTerminalHistory(t, ctx, client, baseURL, jobID)
 	return completedSearch{jobID: jobID, results: results}
+}
+
+func assertVerticalLookupKnowledgeProjection(
+	t *testing.T,
+	summary *opensplunkv1.KnowledgeSnapshotSummary,
+) {
+	t.Helper()
+	if summary == nil || summary.GetRef() == nil ||
+		len(summary.GetRef().GetSnapshotSha256()) != 32 ||
+		len(summary.GetRef().GetTenantCatalogStateToken()) != 32 ||
+		summary.GetRef().GetLookupAssetCount() != 1 ||
+		summary.GetRef().GetLookupAssetCountUnknown() ||
+		len(summary.GetLookupAssets()) != 0 {
+		t.Fatalf("v0.4 redacted lookup knowledge projection = %+v", summary)
+	}
+}
+
+func assertVerticalLookupInspection(
+	t *testing.T,
+	ctx context.Context,
+	client *http.Client,
+	baseURL, administratorToken, jobID string,
+	serverProcess *managedProcess,
+	serverSecrets []string,
+) {
+	t.Helper()
+	var inspected opensplunkv1.InspectSearchJobResponse
+	if _, err := postProtoRequestWithBearer(
+		ctx,
+		client,
+		baseURL+"/api/v1/search/jobs/inspect",
+		administratorToken,
+		&opensplunkv1.InspectSearchJobRequest{SearchJobId: jobID},
+		&inspected,
+	); err != nil {
+		t.Fatalf(
+			"inspect v0.4 lookup search: %v\nserver logs:\n%s",
+			err,
+			redactForFailure(serverProcess.Logs(), serverSecrets...),
+		)
+	}
+	if inspected.GetSearchJobId() != jobID ||
+		inspected.GetLogicalPlan() == nil ||
+		inspected.GetPhysicalPlan() == nil ||
+		inspected.GetGeneratedSql() == "" ||
+		inspected.GetExplainText() == "" ||
+		inspected.GetDiagnosticQueryId() == "" {
+		t.Fatalf("v0.4 lookup search inspection = %+v", &inspected)
+	}
+	if !slices.ContainsFunc(
+		inspected.GetLogicalPlan().GetStages(),
+		func(stage *opensplunkv1.SearchInspectionLogicalStage) bool {
+			return stage.GetOperator() == "Lookup" &&
+				slices.Contains(stage.GetInputFields(), "service") &&
+				slices.Contains(stage.GetOutputFields(), "service_owner")
+		},
+	) {
+		t.Fatalf("v0.4 lookup inspection omitted the lookup stage: %+v", inspected.GetLogicalPlan())
+	}
+	assertVerticalLookupKnowledgeProjection(t, inspected.GetKnowledgeSnapshot())
 }
 
 func assertBackendHistoryRerun(
@@ -4220,6 +4546,7 @@ func assertTypedRedactedResults(t *testing.T, results *collectedVerticalSearchRe
 		"status",
 		"duration_ms",
 		"adjusted_duration",
+		"service_owner",
 		"api_key",
 		"customer_credential",
 		"customer_pin",
@@ -4229,17 +4556,29 @@ func assertTypedRedactedResults(t *testing.T, results *collectedVerticalSearchRe
 			t.Fatalf("result schema is missing %q: %+v", name, results.schema)
 		}
 	}
+	// OUTPUTNEW may retain an existing dynamically typed event value, so its
+	// public column remains MIXED even though every enrichment below is a string.
 	if results.schema.GetColumns()[columns["status"]].GetValueType() != opensplunkv1.ValueType_VALUE_TYPE_MIXED ||
 		results.schema.GetColumns()[columns["duration_ms"]].GetValueType() != opensplunkv1.ValueType_VALUE_TYPE_MIXED ||
 		results.schema.GetColumns()[columns["adjusted_duration"]].GetValueType() != opensplunkv1.ValueType_VALUE_TYPE_DOUBLE ||
-		!results.schema.GetColumns()[columns["adjusted_duration"]].GetNullable() {
+		!results.schema.GetColumns()[columns["adjusted_duration"]].GetNullable() ||
+		results.schema.GetColumns()[columns["service_owner"]].GetValueType() != opensplunkv1.ValueType_VALUE_TYPE_MIXED ||
+		!results.schema.GetColumns()[columns["service_owner"]].GetNullable() {
 		t.Fatalf("dynamic numeric schema did not retain mixed typing: %+v", results.schema)
 	}
 	var sentinel *opensplunkv1.ResultRow
 	for _, row := range results.rows {
+		owner := row.GetCells()[columns["service_owner"]]
+		if _, ok := owner.GetKind().(*opensplunkv1.TypedValue_StringValue); !ok ||
+			owner.GetStringValue() != verticalLookupOwner {
+			t.Fatalf(
+				"service_owner cell = %+v, want lookup enrichment %q",
+				owner,
+				verticalLookupOwner,
+			)
+		}
 		if row.GetCells()[columns["message"]].GetStringValue() == verticalSentinelMessage {
 			sentinel = row
-			break
 		}
 	}
 	if sentinel == nil {

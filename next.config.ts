@@ -12,7 +12,7 @@ if (
   );
 }
 
-const applicationVersion = (process.env.OPEN_SPLUNK_APPLICATION_VERSION ?? "0.1.0").trim();
+const applicationVersion = (process.env.OPEN_SPLUNK_APPLICATION_VERSION ?? "0.4.0").trim();
 if (
   applicationVersion.length > 64
   || !/^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(

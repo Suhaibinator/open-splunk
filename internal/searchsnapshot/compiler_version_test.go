@@ -37,14 +37,15 @@ func (compilerVersionSnapshotter) VisibilityCutoff(context.Context) (uint64, err
 	return 73, nil
 }
 
-func TestExecutionPlanRebuildRequiresExactManagerAttestedCompilerVersion(t *testing.T) {
-	current := mintCompilerVersionSnapshot(t, spl.CompatibilityVersion)
+func TestExecutionPlanRebuildRequiresCurrentCompilerVersion(t *testing.T) {
+	current := mintCompilerVersionSnapshot(t)
 	logical, err := BuildExecutionPlan(current)
 	if err != nil || logical == nil {
 		t.Fatalf("BuildExecutionPlan(current) = (%#v, %v), want success", logical, err)
 	}
 
-	incompatible := mintCompilerVersionSnapshot(t, "0.1")
+	incompatible := current
+	incompatible.CompilerVersion = "0.1"
 	builders := []struct {
 		name  string
 		build func(searchjobs.ExecutionSnapshot) (*plan.Query, error)
@@ -65,7 +66,7 @@ func TestExecutionPlanRebuildRequiresExactManagerAttestedCompilerVersion(t *test
 			logical, err := builder.build(incompatible)
 			if logical != nil || !errors.Is(err, ErrCompilerVersionMismatch) {
 				t.Fatalf(
-					"rebuild incompatible signed snapshot = (%#v, %v), want ErrCompilerVersionMismatch",
+					"rebuild incompatible snapshot = (%#v, %v), want ErrCompilerVersionMismatch",
 					logical,
 					err,
 				)
@@ -76,7 +77,6 @@ func TestExecutionPlanRebuildRequiresExactManagerAttestedCompilerVersion(t *test
 
 func mintCompilerVersionSnapshot(
 	t *testing.T,
-	compilerVersion string,
 ) searchjobs.ExecutionSnapshot {
 	t.Helper()
 	ctx := context.Background()
@@ -84,7 +84,6 @@ func mintCompilerVersionSnapshot(
 	manager, err := searchjobs.New(searchjobs.Config{
 		Executor:        compilerVersionSnapshotExecutor{},
 		Snapshotter:     compilerVersionSnapshotter{},
-		CompilerVersion: compilerVersion,
 		CleanupInterval: -1,
 		RetentionTTL:    time.Hour,
 		Now:             func() time.Time { return now },
@@ -92,7 +91,7 @@ func mintCompilerVersionSnapshot(
 		CursorKey:       []byte("compiler-version-snapshot-cursor-key-0001"),
 	})
 	if err != nil {
-		t.Fatalf("searchjobs.New(CompilerVersion=%q): %v", compilerVersion, err)
+		t.Fatalf("searchjobs.New(): %v", err)
 	}
 	t.Cleanup(func() { _ = manager.Close() })
 	timeRange, err := searchtime.NewAbsoluteRange(now.Add(-time.Hour), now)
@@ -108,7 +107,7 @@ func mintCompilerVersionSnapshot(
 		TimeRange:         timeRange,
 	})
 	if err != nil {
-		t.Fatalf("Manager.Create(CompilerVersion=%q): %v", compilerVersion, err)
+		t.Fatalf("Manager.Create(): %v", err)
 	}
 	access := searchjobs.AccessScope{
 		TenantID: "compiler-version-tenant",
@@ -135,12 +134,12 @@ func mintCompilerVersionSnapshot(
 	if err != nil {
 		t.Fatalf("CompletedExecutionSnapshotFor(): %v", err)
 	}
-	if snapshot.CompilerVersion != compilerVersion || !snapshot.ValidKnowledgeAuthority() {
+	if snapshot.CompilerVersion != spl.CompatibilityVersion || !snapshot.ValidKnowledgeAuthority() {
 		t.Fatalf(
 			"minted snapshot version/authority = %q/%t, want %q/true",
 			snapshot.CompilerVersion,
 			snapshot.ValidKnowledgeAuthority(),
-			compilerVersion,
+			spl.CompatibilityVersion,
 		)
 	}
 	return snapshot

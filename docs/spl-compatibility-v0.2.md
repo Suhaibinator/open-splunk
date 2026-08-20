@@ -1,6 +1,7 @@
 # Open Splunk SPL compatibility contract v0.2
 
-**Status:** executable implementation contract
+**Status:** historical executable delta; incorporated into cumulative runtime
+identity `0.4`
 
 **Compatibility version:** `0.2`
 
@@ -15,8 +16,8 @@ command transition below. It does not widen the Tier-1
 knowledge-object compiler, whose calculated-field profile remains v0.1.
 Operators upgrading stored searches should use the
 [`v0.2 migration and read-only audit guide`](spl-compatibility-v0.2-migration.md).
-Qualification and acceptance evidence is recorded in the
-[`v0.2 acceptance report`](spl-compatibility-v0.2-acceptance.md).
+The accepted v0.2 runtime is retained in repository history. Current release
+qualification follows [`releasing.md`](releasing.md).
 
 Accepted source is parsed, planned, and compiled as one complete query. An
 error never publishes or executes a supported prefix. Tenant, index, event-time,
@@ -43,22 +44,12 @@ retain their compiler version and digest.
 
 ### `SPL-V02-ACTIVATION-001` — atomic advertisement
 
-The clean runtime/release qualification revision `R` embeds and reports `0.2`
-so every parser, planner, compiler, executor, job, export, inspection, history,
-saved-search, field-analysis, browser, audit, integration, and release gate can
-validate the exact final identity. That candidate identity is not permission
-to publish or distribute `R`. Stable advertisement is authorized only after
-the exact reachable `R` passes every gate and one direct-child,
-documentation-only evidence revision `E` records terminal-success CI, remote
-readback, release identity, artifact hashes, and checksummed receipts. The
-strict accepted verifier must prove the `R`/`E` relationship before returning
-`R` to a publication workflow.
-
-Any earlier reachable binary that reported `0.2` without this accepted
-evidence lineage is historical development output, not a qualifying stable
-publication. A failed, cancelled, skipped, incomplete, dirty, mismatched, or
-non-direct-child gate keeps distribution blocked even though a candidate
-binary necessarily reports the identity under qualification.
+The accepted v0.2 runtime is application `0.1.0`, retained by immutable release
+tag and repository history. All parser, planner, compiler, executor, job,
+export, inspection, history, saved-search, field-analysis, browser, audit,
+integration, and release surfaces report the same identity. The former
+two-revision evidence workflow has been retired; current publication uses the
+exact-tag and successful-CI gate in [`releasing.md`](releasing.md).
 
 ## Grammar
 

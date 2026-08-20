@@ -183,40 +183,6 @@ func TestInspectBuildsProjectsCompilesOnceAndExplainsExactQuery(t *testing.T) {
 	}
 }
 
-func TestInspectRejectsManagerAttestedSnapshotFromAnotherCompilerVersion(t *testing.T) {
-	t.Parallel()
-	snapshot := validInspectionSnapshotForSource(
-		`index=sensitive-index-7f2c | table _raw`,
-		"0.1",
-	)
-	compiler := &inspectionCompiler{}
-	explainer := &inspectionExplainer{
-		result: inspectionExplainResult("incompatible-version-must-not-explain"),
-	}
-	service := newInspectionTestService(t, inspectionTestConfig{
-		Searches:  &inspectionSearches{snapshots: []searchjobs.ExecutionSnapshot{snapshot}},
-		Compiler:  compiler,
-		Explainer: explainer,
-	})
-
-	result, err := service.Inspect(
-		context.Background(),
-		searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID},
-		Request{SearchJobID: snapshot.ID},
-	)
-	if !errors.Is(err, ErrInspectionFailed) {
-		t.Fatalf("Inspect(incompatible compiler version) error = %v, want ErrInspectionFailed", err)
-	}
-	assertZeroInspection(t, result)
-	if compiler.callCount() != 0 || explainer.callCount() != 0 {
-		t.Fatalf(
-			"compile/explain calls = %d/%d, want 0/0",
-			compiler.callCount(),
-			explainer.callCount(),
-		)
-	}
-}
-
 func TestInspectExpressionV02BuildsCompilesProjectsAndRedacts(t *testing.T) {
 	const source = `index=sensitive-index-7f2c | eval adjusted='request-bytes'/314159 | where adjusted>0 AND service IN ("private-member-alpha", "private-member-beta") | table adjusted`
 	snapshot := validInspectionSnapshotForSource(source)
@@ -1526,11 +1492,7 @@ func validInspectionSnapshot() searchjobs.ExecutionSnapshot {
 
 func validInspectionSnapshotForSource(
 	source string,
-	compilerVersions ...string,
 ) searchjobs.ExecutionSnapshot {
-	if len(compilerVersions) > 1 {
-		panic(fmt.Sprintf("inspection fixture received %d compiler versions", len(compilerVersions)))
-	}
 	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
 	const (
 		jobID    = "019fa490-d629-7203-899e-3fcd0fa18cd1"
@@ -1539,10 +1501,6 @@ func validInspectionSnapshotForSource(
 		index    = "sensitive-index-7f2c"
 	)
 	managerNow := now.Add(-30 * time.Minute)
-	compilerVersion := ""
-	if len(compilerVersions) == 1 {
-		compilerVersion = compilerVersions[0]
-	}
 	manager, err := searchjobs.New(searchjobs.Config{
 		Executor: inspectionManagerExecutorFunc(func(
 			_ context.Context,
@@ -1556,7 +1514,6 @@ func validInspectionSnapshotForSource(
 			return sink.SetSchema(searchjobs.Schema{Columns: columns})
 		}),
 		Snapshotter:     inspectionSnapshotterFunc(func(context.Context) (uint64, error) { return 42, nil }),
-		CompilerVersion: compilerVersion,
 		RetentionTTL:    90 * time.Minute,
 		CleanupInterval: -1,
 		Now:             func() time.Time { return managerNow },

@@ -168,6 +168,43 @@ func TestParseExplainPlanOmitsLiteralBearingHeaderAndKeyMetadata(
 	}
 }
 
+func TestParseExplainPlanAdmitsBoundedDroppedLookupExpressionHeader(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	// Real lookup plans can render a MergeTree expression header above the
+	// former 16 KiB ceiling. It remains private: only fixed physical names are
+	// projected, while the raw value stays bounded by the EXPLAIN line limit.
+	privateExpression := strings.Repeat("x", (16<<10)+1)
+	result := ExplainResult{
+		Text: "[\n" +
+			`{"Plan":{"Node Type":"ReadFromMergeTree","Header":[` + "\n" +
+			`{"Name":"` + privateExpression + `","Type":"UInt8"}` + "\n" +
+			`],"Indexes":[]}}` + "\n]",
+		QueryID: "open-splunk-explain-wide-lookup-header",
+	}
+	got, err := ParseExplainPlan(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := ExplainPlan{
+		NodeTypes: []string{"ReadFromMergeTree"},
+		Reads: []ExplainRead{{
+			Columns: []string{},
+			Indexes: []ExplainIndex{},
+		}},
+	}
+	if !reflect.DeepEqual(got, want) ||
+		strings.Contains(fmt.Sprintf("%#v", got), privateExpression) {
+		t.Fatalf("wide private header projection = %#v, want %#v", got, want)
+	}
+	if !validExplainMetadata(strings.Repeat("x", maximumExplainPlanMetadataLen)) ||
+		validExplainMetadata(strings.Repeat("x", maximumExplainPlanMetadataLen+1)) {
+		t.Fatal("raw EXPLAIN metadata boundary is not exact")
+	}
+}
+
 func TestParseExplainPlanProjectsOnlyKnownIndexMetadata(t *testing.T) {
 	t.Parallel()
 

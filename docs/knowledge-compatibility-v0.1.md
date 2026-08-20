@@ -1,6 +1,7 @@
 # Open Splunk knowledge compatibility contract v0.1
 
-**Status:** normative implementation contract; Tier-1 runtime and executable corpus active
+**Status:** historical normative baseline retained as executable regression
+authority; not a runtime-selectable product profile
 **Compatibility version:** `0.1`
 **Last updated:** August 10, 2026
 
@@ -10,7 +11,7 @@ not described here is unsupported and must fail before publication or search
 execution; the server never applies a supported prefix of an invalid knowledge
 snapshot.
 
-The advertised `0.1` runtime surface contains regular-expression and
+The historical `0.1` surface contains regular-expression and
 JSON field extractions, field aliases, and calculated fields. Catalog APIs and
 snapshot metadata may ship before enrichment, but the server must not advertise
 `SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS` until the complete CRUD, resolution,
@@ -1997,7 +1998,7 @@ output-provenance records.
 Physical plans allow 4,096 nodes, 256 reads, 4,096 cumulative headers and
 indexes, 64 keys per index, 16 KiB per metadata value, and 1 MiB total. Generated
 SQL is at most 256 KiB; EXPLAIN is at most 1 MiB with at most 4,096 nonempty
-16-KiB lines; diagnostic query ID is at most 128 bytes. Each bounded string is
+32-KiB lines; diagnostic query ID is at most 128 bytes. Each bounded string is
 encoded once, canonical comparison is an allocation-free scalar walk preserving
 Go raw UTF-8 order, and EXPLAIN is validated in one pass over the encoded bytes.
 

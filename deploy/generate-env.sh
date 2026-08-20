@@ -48,7 +48,7 @@ clear_inherited_acl() {
     fi
 }
 
-application_version=${OPEN_SPLUNK_APPLICATION_VERSION:-0.1.0}
+application_version=${OPEN_SPLUNK_APPLICATION_VERSION:-0.4.0}
 case "$application_version" in
     ""|*[!0-9A-Za-z.+-]* )
         echo "OPEN_SPLUNK_APPLICATION_VERSION contains unsupported characters" >&2

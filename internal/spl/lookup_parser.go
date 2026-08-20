@@ -36,7 +36,7 @@ func (p *parser) parseLookupCommand(name token) (Command, error) {
 			Range: definition.sourceRange,
 		}
 	}
-	if err := rejectV03CompilerPrivateField("lookup", definition); err != nil {
+	if err := rejectCompilerPrivateField("lookup", definition); err != nil {
 		return nil, err
 	}
 	command := &LookupCommand{
@@ -53,7 +53,7 @@ func (p *parser) parseLookupCommand(name token) (Command, error) {
 			!IsExactUnquotedFieldName(lookupField.text) {
 			return unsupported(lookupField, "lookup key columns must be exact and unquoted")
 		}
-		if err := rejectV03CompilerPrivateField("lookup", lookupField); err != nil {
+		if err := rejectCompilerPrivateField("lookup", lookupField); err != nil {
 			return nil, err
 		}
 		if len(command.Keys) >= MaximumLookupKeys {
@@ -92,7 +92,7 @@ func (p *parser) parseLookupCommand(name token) (Command, error) {
 			!IsExactUnquotedFieldName(eventField.text) {
 			return unsupported(eventField, "lookup key event fields must be exact and unquoted")
 		}
-		if err := rejectV03CompilerPrivateField("lookup", eventField); err != nil {
+		if err := rejectCompilerPrivateField("lookup", eventField); err != nil {
 			return nil, err
 		}
 		if _, duplicate := seenEventKeys[eventField.text]; duplicate {
@@ -147,7 +147,7 @@ func (p *parser) parseLookupCommand(name token) (Command, error) {
 			!IsExactUnquotedFieldName(lookupField.text) {
 			return unsupported(lookupField, "lookup output columns must be exact and unquoted")
 		}
-		if err := rejectV03CompilerPrivateField("lookup", lookupField); err != nil {
+		if err := rejectCompilerPrivateField("lookup", lookupField); err != nil {
 			return nil, err
 		}
 		if len(command.Outputs) >= MaximumLookupOutputs {
@@ -189,7 +189,7 @@ func (p *parser) parseLookupCommand(name token) (Command, error) {
 			mapping.Range.End = eventField.sourceRange.End
 			p.advance()
 		}
-		if err := rejectV03CompilerPrivateField("lookup", token{
+		if err := rejectCompilerPrivateField("lookup", token{
 			kind:        tokenWord,
 			text:        mapping.EventField,
 			sourceRange: mapping.EventFieldRange,

@@ -64,7 +64,7 @@ func TestExplainerBuffersExactPlanAndPreservesParameters(t *testing.T) {
 			uint64(maximumExplainExecutionTime/time.Second),
 			10,
 		) + explainQuerySettingsSuffix
-	const wantStructuredPrefix = "EXPLAIN PLAN json = 1, description = 1, indexes = 1, actions = 0, header = 1 SELECT * FROM ("
+	const wantStructuredPrefix = "EXPLAIN PLAN json = 1, description = 0, indexes = 1, actions = 0, header = 1 SELECT * FROM ("
 	const wantStructuredSettings = ") AS __os_explain_input SETTINGS max_execution_time = 10, use_query_condition_cache = 0, use_skip_indexes_on_data_read = 0, enable_full_text_index = 1"
 	if explainQueryPrefix != wantStructuredPrefix ||
 		explainQuerySettingsPrefix+"10"+explainQuerySettingsSuffix != wantStructuredSettings {
@@ -134,7 +134,10 @@ func TestValidateExplainResult(t *testing.T) {
 	t.Parallel()
 
 	const validQueryID = "open-splunk-explain-validator"
-	exactAggregateLines := make([]string, 64)
+	exactAggregateLines := make(
+		[]string,
+		int(maximumExplainResultBytes/maximumExplainLineBytes),
+	)
 	exactAggregateLines[0] = strings.Repeat("x", int(maximumExplainLineBytes))
 	for index := 1; index < len(exactAggregateLines); index++ {
 		exactAggregateLines[index] = strings.Repeat(
@@ -397,6 +400,43 @@ func TestExplainerAcceptsExactCompilerArgumentInventory(t *testing.T) {
 	}
 }
 
+func TestExplainerAcceptsBoundedCompilerArrayArguments(t *testing.T) {
+	t.Parallel()
+
+	for _, argument := range []any{
+		[]string(nil),
+		[]string{},
+		[]string{"audit", "main"},
+		[]uint8(nil),
+		[]uint8{},
+		[]uint8{0, 1, 255},
+	} {
+		query := sealedExplainQuery(t)
+		query.Args[0] = argument
+		connection := &fakeQueryConnection{rows: explainStructuredRows()}
+		if _, err := mustExplainer(t, connection).Explain(
+			context.Background(),
+			query,
+		); err != nil {
+			t.Fatalf("Explain() rejected compiler argument %T: %v", argument, err)
+		}
+		if !reflect.DeepEqual(connection.args[0], argument) {
+			t.Fatalf("detached %T = %#v, want %#v", argument, connection.args[0], argument)
+		}
+	}
+
+	over := sealedExplainQuery(t)
+	over.Args[0] = make([]string, maximumExplainArrayElements+1)
+	connection := &fakeQueryConnection{rows: explainStructuredRows()}
+	if result, err := mustExplainer(t, connection).Explain(
+		context.Background(),
+		over,
+	); !errors.Is(err, searchjobs.ErrExecutionLimit) ||
+		result != (ExplainResult{}) || connection.query != "" {
+		t.Fatalf("Explain(over-array) = (%#v, %v), query=%q", result, err, connection.query)
+	}
+}
+
 func TestExplainerRejectsDriverUnsafeArgumentsBeforeQuery(t *testing.T) {
 	t.Parallel()
 
@@ -410,7 +450,7 @@ func TestExplainerRejectsDriverUnsafeArgumentsBeforeQuery(t *testing.T) {
 		{name: "typed nil", argument: typedNil},
 		{name: "pointer", argument: &value},
 		{name: "map", argument: map[string]string{"secret": "value"}},
-		{name: "slice", argument: []byte("secret")},
+		{name: "other slice", argument: []int64{7}},
 		{name: "named scalar", argument: explainNamedString("secret")},
 		{name: "panic formatter", argument: panicExplainFormatter{}},
 		{name: "panic stringer", argument: panicExplainStringer{}},
@@ -511,8 +551,10 @@ func TestExplainerBoundsRenderedArgumentsBeforeDriverBinding(t *testing.T) {
 
 func TestExplainerDetachesArgumentsBeforeQueryAdmission(t *testing.T) {
 	query := sealedExplainQuery(t)
-	query.Args[0] = "before-admission"
+	arrayArgument := []string{"before-admission"}
+	query.Args[0] = arrayArgument
 	wantArgs := slices.Clone(query.Args)
+	wantArgs[0] = slices.Clone(arrayArgument)
 	connection := &fakeQueryConnection{rows: explainStructuredRows()}
 	explainer := mustExplainer(t, connection)
 	detached := make(chan struct{})
@@ -538,7 +580,8 @@ func TestExplainerDetachesArgumentsBeforeQueryAdmission(t *testing.T) {
 		t.Fatal("Explain() did not reach post-detachment admission")
 	}
 	// The query-ID hook is after detachment and before Query. Mutating the
-	// caller-owned slice here is synchronized and therefore race-detector safe.
+	// caller-owned slices here is synchronized and therefore race-detector safe.
+	arrayArgument[0] = "mutated-after-admission"
 	query.Args[0] = strings.Repeat("after-admission", 64<<10)
 	close(release)
 
@@ -1081,10 +1124,13 @@ func TestExplainerEnforcesTextRowsLineAndByteContracts(t *testing.T) {
 	for index := range tooManyRows {
 		tooManyRows[index] = "x"
 	}
-	exactBytes := make([]string, 64)
-	exactBytes[0] = strings.Repeat("x", 16<<10)
+	exactBytes := make(
+		[]string,
+		int(maximumExplainResultBytes/maximumExplainLineBytes),
+	)
+	exactBytes[0] = strings.Repeat("x", int(maximumExplainLineBytes))
 	for index := 1; index < len(exactBytes); index++ {
-		exactBytes[index] = strings.Repeat("x", 16<<10-1)
+		exactBytes[index] = strings.Repeat("x", int(maximumExplainLineBytes)-1)
 	}
 	oneByteOver := slices.Clone(exactBytes)
 	oneByteOver[1] += "x"
@@ -1108,7 +1154,9 @@ func TestExplainerEnforcesTextRowsLineAndByteContracts(t *testing.T) {
 			wantErr: searchjobs.ErrInvalidResult,
 		},
 		{
-			name: "oversized line", lines: []string{strings.Repeat("x", 16<<10+1)},
+			name: "oversized line", lines: []string{
+				strings.Repeat("x", int(maximumExplainLineBytes)+1),
+			},
 			wantErr: searchjobs.ErrExecutionLimit,
 		},
 		{name: "too many rows", lines: tooManyRows, wantErr: searchjobs.ErrExecutionLimit},
@@ -1173,7 +1221,7 @@ func TestExplainerEnforcesTextRowsLineAndByteContracts(t *testing.T) {
 	})
 
 	t.Run("maximum normalized line is accepted", func(t *testing.T) {
-		line := strings.Repeat("x", 16<<10)
+		line := strings.Repeat("x", int(maximumExplainLineBytes))
 		var text strings.Builder
 		var lineCount, resultBytes uint64
 		err := appendExplainRow(

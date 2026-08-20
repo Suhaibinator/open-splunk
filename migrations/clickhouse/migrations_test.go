@@ -565,8 +565,8 @@ func TestGenerateEnvCreatesVerifiedClickHouseTLSIdentity(t *testing.T) {
 			values["OPEN_SPLUNK_SERVER_TLS_SERVER_NAME"],
 		)
 	}
-	if version := values["OPEN_SPLUNK_APPLICATION_VERSION"]; version != "0.1.0" {
-		t.Fatalf("generated application version = %q, want 0.1.0", version)
+	if version := values["OPEN_SPLUNK_APPLICATION_VERSION"]; version != "0.4.0" {
+		t.Fatalf("generated application version = %q, want 0.4.0", version)
 	}
 	if revision := values["OPEN_SPLUNK_SOURCE_REVISION"]; len(revision) != 40 && len(revision) != 64 ||
 		strings.Trim(revision, "0123456789abcdef") != "" {

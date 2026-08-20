@@ -593,7 +593,7 @@ func TestV03AdversarialAgainstClickHouse(t *testing.T) {
 			},
 		)
 
-		maximumFields := make([]string, spl.MaximumV03ProjectionFields)
+		maximumFields := make([]string, spl.MaximumExplicitProjectionFields)
 		for index := range maximumFields {
 			maximumFields[index] = fmt.Sprintf("v03_limit_%02d", index)
 		}

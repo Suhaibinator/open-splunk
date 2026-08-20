@@ -110,6 +110,8 @@ interface KnowledgeSnapshotReferenceContract {
   tenantCatalogStateToken: string;
   objectCount: number;
   compilerCompatibilityVersion: string;
+  lookupAssetCount?: number;
+  lookupAssetCountUnknown?: boolean;
 }
 
 interface KnowledgeSnapshotAuthorizedObjectContract {
@@ -257,6 +259,8 @@ function knowledgeSnapshotSummaryFromContract(
       ),
       objectCount: contract.ref.objectCount,
       compilerCompatibilityVersion: contract.ref.compilerCompatibilityVersion,
+      lookupAssetCount: contract.ref.lookupAssetCount,
+      lookupAssetCountUnknown: contract.ref.lookupAssetCountUnknown,
     }),
     objects,
     objectsTruncated: contract.objectsTruncated ?? false,
@@ -380,14 +384,14 @@ test("generated protobuf response decoders retain known fields from future serve
   const response = GetSystemBootstrapResponse.encode(
     GetSystemBootstrapResponse.fromPartial({
       apiVersion: "v1",
-      splCompatibilityVersion: "open-splunk-v0.1",
+      splCompatibilityVersion: "0.4",
     }),
   );
   response.uint32(futureFieldTag).string("future-response-field");
 
   const decoded = GetSystemBootstrapResponse.decode(response.finish());
   assert.equal(decoded.apiVersion, "v1");
-  assert.equal(decoded.splCompatibilityVersion, "open-splunk-v0.1");
+  assert.equal(decoded.splCompatibilityVersion, "0.4");
 });
 
 test("generated field extraction definitions match shared Go wire goldens", () => {
@@ -478,7 +482,7 @@ test("generated knowledge snapshots match the shared Go deterministic wire and d
 
 test("generated knowledge snapshot references and summaries match the shared Go wire golden", () => {
   const fixture = knowledgeSnapshotSummaryWireFixture;
-  assert.equal(fixture.version, 1);
+  assert.equal(fixture.version, 2);
   assert.equal(fixture.cases.length, 3);
   assert.deepEqual(
     fixture.cases.map((contract) => contract.name),
@@ -509,6 +513,8 @@ test("generated knowledge snapshot references and summaries match the shared Go 
       );
       assert.deepEqual(KnowledgeSnapshotRef.decode(refWire), summary.ref);
       assert.deepEqual(KnowledgeSnapshotRef.encode(summary.ref!).finish(), refWire);
+      assert.equal(summary.ref!.lookupAssetCount, 0);
+      assert.equal(summary.ref!.lookupAssetCountUnknown, false);
 
       const summaryWire = KnowledgeSnapshotSummary.encode(summary).finish();
       assertKnowledgeSnapshotSummaryWire(
@@ -563,6 +569,17 @@ test("generated knowledge snapshot references and summaries match the shared Go 
       }
     }
   }
+
+  const legacyExact = knowledgeSnapshotSummaryFromContract(fixture.cases[1]!)!.ref!;
+  const legacyUnknown = KnowledgeSnapshotRef.fromPartial({
+    ...legacyExact,
+    lookupAssetCountUnknown: true,
+  });
+  const legacyUnknownWire = KnowledgeSnapshotRef.encode(legacyUnknown).finish();
+  assert.notDeepEqual(legacyUnknownWire, KnowledgeSnapshotRef.encode(legacyExact).finish());
+  const decodedLegacyUnknown = KnowledgeSnapshotRef.decode(legacyUnknownWire);
+  assert.equal(decodedLegacyUnknown.lookupAssetCount, 0);
+  assert.equal(decodedLegacyUnknown.lookupAssetCountUnknown, true);
 
   assert.notEqual(absentWire, undefined);
   assert.notEqual(enabledEmptyWire, undefined);

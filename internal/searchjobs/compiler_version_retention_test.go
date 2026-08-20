@@ -14,7 +14,7 @@ import (
 func TestManagerRetainsImmutableCompilerVersionAcrossEveryProjection(t *testing.T) {
 	t.Parallel()
 
-	const version = "SPLExpressionV02-build.2026-08-11"
+	version := spl.CompatibilityVersion
 	admitted := make(chan Job, 1)
 	finalized := make(chan Job, 1)
 	manager := newTestManager(t, Config{
@@ -33,7 +33,6 @@ func TestManagerRetainsImmutableCompilerVersionAcrossEveryProjection(t *testing.
 				return nil
 			},
 		},
-		CompilerVersion: version,
 		CleanupInterval: -1,
 		NewID:           sequenceIDs("compiler-version"),
 	})
@@ -109,7 +108,7 @@ func TestManagerRetainsImmutableCompilerVersionAcrossEveryProjection(t *testing.
 	}
 }
 
-func TestManagerCompilerVersionDefaultAndValidation(t *testing.T) {
+func TestManagerUsesCurrentCompilerVersion(t *testing.T) {
 	t.Parallel()
 
 	executor := executorFunc(func(context.Context, clickhouse.CompiledQuery, ResultSink) error { return nil })
@@ -121,42 +120,8 @@ func TestManagerCompilerVersionDefaultAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create(default compiler version) error = %v", err)
 	}
-	if defaultCompilerVersion != spl.CompatibilityVersion {
-		t.Fatalf(
-			"defaultCompilerVersion = %q, want current SPL identity %q",
-			defaultCompilerVersion,
-			spl.CompatibilityVersion,
-		)
-	}
-	if created.CompilerVersion != defaultCompilerVersion {
-		t.Fatalf("default compiler version = %q, want %q", created.CompilerVersion, defaultCompilerVersion)
-	}
-
-	for _, test := range []struct {
-		name    string
-		version string
-	}{
-		{name: "leading whitespace", version: " v0.2"},
-		{name: "trailing whitespace", version: "v0.2 "},
-		{name: "control", version: "v0.2\nforged"},
-		{name: "C1 control", version: "v0.2\u0080forged"},
-		{name: "invalid UTF-8", version: string([]byte{0xff})},
-		{name: "oversized", version: strings.Repeat("v", MaximumCompilerVersionBytes+1)},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			invalid, err := New(Config{
-				Executor:        executor,
-				Snapshotter:     snapshotterFunc(func(context.Context) (uint64, error) { return 0, nil }),
-				CompilerVersion: test.version,
-				CleanupInterval: -1,
-				CursorKey:       testCursorKey,
-			})
-			if err == nil {
-				_ = invalid.Close()
-				t.Fatalf("New(CompilerVersion=%q) unexpectedly succeeded", test.version)
-			}
-		})
+	if created.CompilerVersion != spl.CompatibilityVersion {
+		t.Fatalf("compiler version = %q, want %q", created.CompilerVersion, spl.CompatibilityVersion)
 	}
 }
 
@@ -169,13 +134,13 @@ func TestValidCompilerVersionCanonicalContract(t *testing.T) {
 		value string
 		want  bool
 	}{
-		{name: "plain", value: "0.2", want: true},
+		{name: "plain", value: spl.CompatibilityVersion, want: true},
 		{name: "maximum bytes", value: maximum, want: true},
 		{name: "empty"},
-		{name: "leading Unicode whitespace", value: "\u00a00.2"},
-		{name: "trailing Unicode whitespace", value: "0.2\u3000"},
-		{name: "ASCII control", value: "0.2\nforged"},
-		{name: "C1 control", value: "0.2\u0080forged"},
+		{name: "leading Unicode whitespace", value: "\u00a0" + spl.CompatibilityVersion},
+		{name: "trailing Unicode whitespace", value: spl.CompatibilityVersion + "\u3000"},
+		{name: "ASCII control", value: spl.CompatibilityVersion + "\nforged"},
+		{name: "C1 control", value: spl.CompatibilityVersion + "\u0080forged"},
 		{name: "invalid UTF-8", value: string([]byte{0xff})},
 		{name: "oversized", value: maximum + "v"},
 	} {

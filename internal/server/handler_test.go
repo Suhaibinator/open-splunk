@@ -381,7 +381,8 @@ func TestBootstrapUsesProtobufAndLiveIndexes(t *testing.T) {
 	var decoded opensplunkv1.GetSystemBootstrapResponse
 	unmarshalResponse(t, response, &decoded)
 	if decoded.GetServerVersion() != "1.2.3 ("+strings.Repeat("a", 40)+")" ||
-		decoded.GetLimits().GetMaximumPageSize() != defaultMaximumPageSize {
+		decoded.GetLimits().GetMaximumPageSize() != defaultMaximumPageSize ||
+		decoded.GetSplCompatibilityVersion() != spl.CompatibilityVersion {
 		t.Fatalf("bootstrap = %+v", &decoded)
 	}
 	if decoded.GetBuild().GetApplicationVersion() != "1.2.3" ||
@@ -432,36 +433,6 @@ func TestNormalizeBootstrapRejectsContradictoryOrMalformedBuildMetadata(t *testi
 	}
 }
 
-func TestNormalizeBootstrapRejectsNoncanonicalCompatibilityIdentity(t *testing.T) {
-	t.Parallel()
-	defaulted, err := normalizeBootstrap(BootstrapConfig{})
-	if err != nil || defaulted.SPLCompatibilityVersion != spl.CompatibilityVersion {
-		t.Fatalf(
-			"normalizeBootstrap(default) = (%q, %v), want %q",
-			defaulted.SPLCompatibilityVersion,
-			err,
-			spl.CompatibilityVersion,
-		)
-	}
-
-	for _, version := range []string{
-		" 0.2",
-		"0.2 ",
-		"0.2\nforged",
-		strings.Repeat("v", searchjobs.MaximumCompilerVersionBytes+1),
-	} {
-		if _, err := normalizeBootstrap(BootstrapConfig{
-			SPLCompatibilityVersion: version,
-		}); err == nil || !strings.Contains(err.Error(), "compatibility version is invalid") {
-			t.Fatalf("normalizeBootstrap(%q) error = %v", version, err)
-		}
-	}
-	got, err := normalizeBootstrap(BootstrapConfig{SPLCompatibilityVersion: spl.CompatibilityVersion})
-	if err != nil || got.SPLCompatibilityVersion != spl.CompatibilityVersion {
-		t.Fatalf("normalizeBootstrap(canonical) = (%q, %v)", got.SPLCompatibilityVersion, err)
-	}
-}
-
 func validServerBuildMetadata(t *testing.T) *opensplunkv1.BuildMetadata {
 	t.Helper()
 	identity, err := buildinfo.Parse("1.2.3", strings.Repeat("a", 40))
@@ -500,6 +471,7 @@ func TestSearchWebSocketRouteAndBootstrapUseServiceLimits(t *testing.T) {
 			opensplunkv1.ServerFeature_SERVER_FEATURE_TIMELINE,
 			opensplunkv1.ServerFeature_SERVER_FEATURE_PLAN_INSPECTION,
 			opensplunkv1.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS,
+			opensplunkv1.ServerFeature_SERVER_FEATURE_LOOKUP_MANAGEMENT,
 		}},
 	})
 
@@ -525,6 +497,7 @@ func TestSearchWebSocketRouteAndBootstrapUseServiceLimits(t *testing.T) {
 		opensplunkv1.ServerFeature_SERVER_FEATURE_TIMELINE,
 		opensplunkv1.ServerFeature_SERVER_FEATURE_PLAN_INSPECTION,
 		opensplunkv1.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS,
+		opensplunkv1.ServerFeature_SERVER_FEATURE_LOOKUP_MANAGEMENT,
 	} {
 		if slices.Contains(bootstrap.GetFeatures(), unsupported) {
 			t.Fatalf("unsupported feature %s was advertised", unsupported)
@@ -1616,7 +1589,7 @@ func completeJob(id string) searchjobs.Job {
 		TenantID:         "tenant-1",
 		SPL:              "index=main | head 10",
 		NormalizedSPL:    "index=main | head 10",
-		CompilerVersion:  "0.2",
+		CompilerVersion:  spl.CompatibilityVersion,
 		RequestedIndexes: []string{"main"},
 		EffectiveIndexes: []string{"main"},
 		Earliest:         testNow.Add(-time.Hour),

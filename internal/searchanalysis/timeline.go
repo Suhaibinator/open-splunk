@@ -193,6 +193,22 @@ func (service *Service) Get(ctx context.Context, access searchjobs.AccessScope, 
 	if err != nil {
 		return Result{}, fmt.Errorf("rebuild completed search for timeline: %w", err)
 	}
+	timelineCompiler := service.compiler
+	logical, configured, changed, err := restoreCompletedSearchLookupAuthority(
+		executionContext,
+		snapshot,
+		logical,
+		service.compiler,
+	)
+	if err != nil {
+		return Result{}, fmt.Errorf(
+			"restore completed search lookups for timeline: %w",
+			err,
+		)
+	}
+	if changed {
+		timelineCompiler = configured
+	}
 	if err := plan.ValidateTimelineEligibility(logical); err != nil {
 		return Result{}, fmt.Errorf("%w: %w", ErrTimelineUnsupported, err)
 	}
@@ -203,7 +219,7 @@ func (service *Service) Get(ctx context.Context, access searchjobs.AccessScope, 
 		Earliest:    snapshot.Earliest,
 		Latest:      snapshot.Latest,
 	}
-	compiled, err := service.compiler.CompileTimelineContext(executionContext, logical, spec)
+	compiled, err := timelineCompiler.CompileTimelineContext(executionContext, logical, spec)
 	if err != nil {
 		var diagnostic *plan.Diagnostic
 		if errors.As(err, &diagnostic) {

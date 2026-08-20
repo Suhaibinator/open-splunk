@@ -83,9 +83,9 @@ func TestV03PinnedClickHouseRetainedTupleHasCanonicalBytes(t *testing.T) {
 			},
 		},
 	}
-	retainedTuple := v03PublicRetainedTupleSQL(state, "slash", "'a/b'")
+	retainedTuple := publicRetainedTupleSQL(state, "slash", "'a/b'")
 	query := "SELECT toJSONString(" + retainedTuple + ")" +
-		v03MaterializedValidationSettingsSQL
+		materializedValidationSettingsSQL
 	var encoded string
 	if err := connection.QueryRow(ctx, query).Scan(&encoded); err != nil {
 		t.Fatalf("execute retained-byte canonicalization: %v\nSQL: %s", err, query)

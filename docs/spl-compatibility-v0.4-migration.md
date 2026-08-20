@@ -2,12 +2,12 @@
 
 **Authored-search target:** `0.4`
 
-**Knowledge target:** `0.2`
+**Product target:** `0.4.0`
 
-Version 0.4 adds exact immutable CSV lookup enrichment. Before activation,
-close the accepted v0.3 release, validate retained searches against the v0.4
-candidate, publish lookup assets privately, and verify automatic selectors on
-production-shaped data.
+Version 0.4 adds exact immutable CSV lookup enrichment and cumulatively
+activates the v0.3 command surface. Before upgrading a deployment, validate
+retained searches against a v0.4 binary, publish lookup assets privately, and
+verify automatic selectors on production-shaped data.
 
 Use explicit conversion when an event key is not already a String:
 

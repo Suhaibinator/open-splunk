@@ -18,7 +18,7 @@ import (
 const (
 	maximumInspectionExplainTextBytes         = 1 << 20
 	maximumInspectionExplainLines             = 4_096
-	maximumInspectionExplainLineBytes         = 16 << 10
+	maximumInspectionExplainLineBytes         = 32 << 10
 	maximumInspectionDiagnosticQueryIDBytes   = 128
 	maximumInspectionPhysicalNodes            = 4_096
 	maximumInspectionPhysicalReads            = 256
@@ -134,6 +134,7 @@ func validInspectionLogicalPlan(
 	budget := projectionBudget{}
 	knowledgeObjects := make([]RedactedObjectProvenance, 0)
 	knowledgePrefixEnded := false
+	automaticLookupSeen := false
 	var knowledgeRank knowledgeOperatorRank
 	authoredStages := 0
 	for index, stage := range logical.Stages {
@@ -155,6 +156,17 @@ func validInspectionLogicalPlan(
 			}
 			knowledgeRank = contract.rank
 			knowledgeObjects = append(knowledgeObjects, stage.KnowledgeObjects...)
+		} else if stage.Operator == "AutomaticLookupGroup" {
+			if index == 0 || knowledgePrefixEnded || automaticLookupSeen ||
+				stage.SourceRange != nil || len(stage.OutputFields) == 0 ||
+				len(stage.OutputFields) >
+					plan.MaximumAutomaticLookupStages*spl.MaximumLookupOutputs ||
+				len(stage.KnowledgeObjects) != 0 ||
+				len(stage.OutputProvenance) != 0 {
+				return nil, false
+			}
+			automaticLookupSeen = true
+			knowledgePrefixEnded = true
 		} else {
 			authoredStages++
 			if authoredStages > int(maximumAuthoredPlanStages) {
@@ -217,13 +229,23 @@ func supportedInspectionOperator(value string) bool {
 	switch value {
 	case "Scan",
 		"Filter",
+		"RegexFilter",
+		"Reverse",
 		"Project",
 		"Extend",
+		"Strcat",
+		"FillNull",
+		"RowTotal",
+		"OrderedDelta",
+		"MakeMultivalue",
+		"ExpandMultivalue",
 		"TimeBucket",
 		"NumericBucket",
 		"Extract",
 		"ExtractJSON",
 		"Rename",
+		"Lookup",
+		"AutomaticLookupGroup",
 		"Aggregate",
 		"EventAggregate",
 		"StreamAggregate",

@@ -454,9 +454,9 @@ func TestKnowledgeFeatureRequiresCompleteRuntimeFamily(t *testing.T) {
 		writer := newReadyKnowledgeWriter(t)
 		config := knowledgeConfigBase(t)
 		config.SearchJobs = &knowledgeAdmissionSearchJobs{
-			fakeSearchJobs:   &fakeSearchJobs{},
-			enabled:          true,
-			executionEnabled: true,
+			fakeSearchJobs: &fakeSearchJobs{},
+			enabled:        true,
+			lookupEnabled:  true,
 		}
 		config.AppCatalog = activeHistoryRerunAppCatalog()
 		config.KnowledgeCatalog = &knowledgeHTTPCatalog{}
@@ -464,6 +464,7 @@ func TestKnowledgeFeatureRequiresCompleteRuntimeFamily(t *testing.T) {
 		config.KnowledgeApps = knowledgeHTTPApps()
 		config.KnowledgeAttempts = &knowledgeBoundaryAppender{}
 		config.KnowledgePreview = newReadyKnowledgePreview(t, writer)
+		config.LookupManagement = &lookupHTTPService{ready: true}
 		config.SearchInspections = &fakeSearchInspections{}
 		config.SearchHistory = &fakeSearchHistory{}
 		config.Exports = &fakeExports{}
@@ -476,7 +477,7 @@ func TestKnowledgeFeatureRequiresCompleteRuntimeFamily(t *testing.T) {
 		config.SearchSuggestions = &fakeSearchSuggestions{maximum: 10}
 		return config
 	}
-	advertised := func(t *testing.T, config Config) bool {
+	advertised := func(t *testing.T, config Config) []opensplunkv1.ServerFeature {
 		t.Helper()
 		handler, err := NewHandler(config)
 		if err != nil {
@@ -493,16 +494,19 @@ func TestKnowledgeFeatureRequiresCompleteRuntimeFamily(t *testing.T) {
 		}
 		decoded := &opensplunkv1.GetSystemBootstrapResponse{}
 		unmarshalResponse(t, response, decoded)
-		return slices.Contains(
-			decoded.GetFeatures(),
-			opensplunkv1.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS,
-		)
+		return decoded.GetFeatures()
 	}
 
-	if !advertised(t, complete(t)) {
-		t.Fatal("complete knowledge runtime family was not advertised")
+	completeFeatures := advertised(t, complete(t))
+	if !slices.Contains(
+		completeFeatures,
+		opensplunkv1.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS,
+	) || !slices.Contains(
+		completeFeatures,
+		opensplunkv1.ServerFeature_SERVER_FEATURE_LOOKUP_MANAGEMENT,
+	) {
+		t.Fatalf("complete knowledge and lookup runtime family was not advertised: %v", completeFeatures)
 	}
-
 	for _, test := range []struct {
 		name   string
 		mutate func(*Config)
@@ -514,9 +518,6 @@ func TestKnowledgeFeatureRequiresCompleteRuntimeFamily(t *testing.T) {
 		{name: "preview", mutate: func(config *Config) { config.KnowledgePreview = nil }},
 		{name: "admission", mutate: func(config *Config) {
 			config.SearchJobs.(*knowledgeAdmissionSearchJobs).enabled = false
-		}},
-		{name: "execution", mutate: func(config *Config) {
-			config.SearchJobs.(*knowledgeAdmissionSearchJobs).executionEnabled = false
 		}},
 		{name: "inspection", mutate: func(config *Config) { config.SearchInspections = nil }},
 		{name: "history", mutate: func(config *Config) { config.SearchHistory = nil }},
@@ -548,8 +549,39 @@ func TestKnowledgeFeatureRequiresCompleteRuntimeFamily(t *testing.T) {
 			if slices.Contains(
 				decoded.GetFeatures(),
 				opensplunkv1.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS,
+			) || slices.Contains(
+				decoded.GetFeatures(),
+				opensplunkv1.ServerFeature_SERVER_FEATURE_LOOKUP_MANAGEMENT,
 			) {
-				t.Fatalf("partial family advertised knowledge: %v", decoded.GetFeatures())
+				t.Fatalf("partial Tier-1 family advertised knowledge or lookups: %v", decoded.GetFeatures())
+			}
+		})
+	}
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{name: "lookup management", mutate: func(config *Config) { config.LookupManagement = nil }},
+		{name: "lookup admission", mutate: func(config *Config) {
+			config.SearchJobs.(*knowledgeAdmissionSearchJobs).lookupEnabled = false
+		}},
+	} {
+		t.Run("missing "+test.name, func(t *testing.T) {
+			config := complete(t)
+			test.mutate(&config)
+			features := advertised(t, config)
+			if !slices.Contains(
+				features,
+				opensplunkv1.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS,
+			) {
+				t.Fatalf("complete Tier-1 family was not advertised: %v", features)
+			}
+			if slices.Contains(
+				features,
+				opensplunkv1.ServerFeature_SERVER_FEATURE_LOOKUP_MANAGEMENT,
+			) {
+				t.Fatalf("partial lookup family was advertised: %v", features)
 			}
 		})
 	}

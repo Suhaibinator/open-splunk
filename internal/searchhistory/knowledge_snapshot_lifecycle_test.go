@@ -18,13 +18,13 @@ import (
 
 func TestJobJournalPersistsExactDetachedKnowledgeSnapshotSummary(t *testing.T) {
 	_, store := openTestStore(t, Options{})
-	journal, err := NewJobJournal(store, "snapshot-journal")
+	journal, err := NewJobJournal(store)
 	if err != nil {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, time.August, 8, 12, 0, 0, 123_456_789, time.UTC)
 	want := historyKnowledgeSnapshotSummary(2)
-	queued := journalJob("journal-knowledge", searchjobs.StateQueued, "snapshot-journal", now)
+	queued := journalJob("journal-knowledge", searchjobs.StateQueued, now)
 	queued.KnowledgeSnapshot = proto.Clone(want).(*opensplunkv1.KnowledgeSnapshotSummary)
 	if err := journal.Admit(context.Background(), queued); err != nil {
 		t.Fatalf("Admit() error = %v", err)
@@ -33,7 +33,7 @@ func TestJobJournalPersistsExactDetachedKnowledgeSnapshotSummary(t *testing.T) {
 	queued.KnowledgeSnapshot.Objects[0].GetAuthorizedObject().KnowledgeObjectId = "mutated"
 	queued.KnowledgeSnapshot.LookupAssets[0].Asset.ContentSha256[0] ^= 0xff
 
-	terminal := journalJob("journal-knowledge", searchjobs.StateCompleted, "snapshot-journal", now)
+	terminal := journalJob("journal-knowledge", searchjobs.StateCompleted, now)
 	terminal.KnowledgeSnapshot = proto.Clone(want).(*opensplunkv1.KnowledgeSnapshotSummary)
 	terminal.EffectiveIndexes = []string{"main"}
 	terminal.StartedAt = now.Add(-30 * time.Second)
@@ -182,7 +182,7 @@ func historyKnowledgeSnapshotSummary(objectCount int) *opensplunkv1.KnowledgeSna
 		TenantCatalogRevision:        7,
 		TenantCatalogStateToken:      bytes.Repeat([]byte{0x73}, sha256.Size),
 		ObjectCount:                  uint32(objectCount),
-		CompilerCompatibilityVersion: "0.1",
+		CompilerCompatibilityVersion: knowledgesnapshot.CompilerCompatibilityVersion,
 		LookupAssetCount:             1,
 	}
 	objects := make([]*opensplunkv1.KnowledgeSnapshotObjectSummary, objectCount)

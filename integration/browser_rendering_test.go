@@ -176,9 +176,8 @@ func TestBrowserFixedResultRendering(t *testing.T) {
 		MaximumPageSize: browserRenderingRowCount,
 		Now:             func() time.Time { return anchor },
 		Bootstrap: server.BootstrapConfig{
-			ServerVersion:           "browser-rendering-test",
-			APIVersion:              "v1",
-			SPLCompatibilityVersion: splCompatibilityVersionForTest,
+			ServerVersion: "browser-rendering-test",
+			APIVersion:    "v1",
 			Features: []opensplunkv1.ServerFeature{
 				opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH,
 			},

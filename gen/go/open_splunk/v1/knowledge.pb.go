@@ -2553,8 +2553,13 @@ type KnowledgeSnapshotRef struct {
 	// count lets compact lifecycle references prove whether that inventory is
 	// expected without carrying definition or row payloads.
 	LookupAssetCount uint32 `protobuf:"varint,6,opt,name=lookup_asset_count,json=lookupAssetCount,proto3" json:"lookup_asset_count,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// True only on legacy five-field search-attempt audit references whose
+	// lookup count was not persisted and cannot be reconstructed honestly. When
+	// true, lookup_asset_count must be zero and means unknown rather than exact
+	// zero. New references never set this migration marker.
+	LookupAssetCountUnknown bool `protobuf:"varint,7,opt,name=lookup_asset_count_unknown,json=lookupAssetCountUnknown,proto3" json:"lookup_asset_count_unknown,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *KnowledgeSnapshotRef) Reset() {
@@ -2627,6 +2632,13 @@ func (x *KnowledgeSnapshotRef) GetLookupAssetCount() uint32 {
 		return x.LookupAssetCount
 	}
 	return 0
+}
+
+func (x *KnowledgeSnapshotRef) GetLookupAssetCountUnknown() bool {
+	if x != nil {
+		return x.LookupAssetCountUnknown
+	}
+	return false
 }
 
 // KnowledgeSnapshotAuthorizedObjectSummary is current-policy-authorized
@@ -3077,14 +3089,15 @@ const file_open_splunk_v1_knowledge_proto_rawDesc = "" +
 	"\bwarnings\x18\x0e \x03(\v2(.open_splunk.v1.KnowledgeSnapshotWarningR\bwarnings\x12U\n" +
 	"\x0ebudget_charges\x18\x0f \x01(\v2..open_splunk.v1.KnowledgeSnapshotBudgetChargesR\rbudgetCharges\x12;\n" +
 	"\x1atenant_catalog_state_token\x18\x10 \x01(\fR\x17tenantCatalogStateTokenB\x17\n" +
-	"\x15_app_catalog_revision\"\xcb\x02\n" +
+	"\x15_app_catalog_revision\"\x88\x03\n" +
 	"\x14KnowledgeSnapshotRef\x12'\n" +
 	"\x0fsnapshot_sha256\x18\x01 \x01(\fR\x0esnapshotSha256\x126\n" +
 	"\x17tenant_catalog_revision\x18\x02 \x01(\x04R\x15tenantCatalogRevision\x12;\n" +
 	"\x1atenant_catalog_state_token\x18\x03 \x01(\fR\x17tenantCatalogStateToken\x12!\n" +
 	"\fobject_count\x18\x04 \x01(\rR\vobjectCount\x12D\n" +
 	"\x1ecompiler_compatibility_version\x18\x05 \x01(\tR\x1ccompilerCompatibilityVersion\x12,\n" +
-	"\x12lookup_asset_count\x18\x06 \x01(\rR\x10lookupAssetCount\"\x88\x01\n" +
+	"\x12lookup_asset_count\x18\x06 \x01(\rR\x10lookupAssetCount\x12;\n" +
+	"\x1alookup_asset_count_unknown\x18\a \x01(\bR\x17lookupAssetCountUnknown\"\x88\x01\n" +
 	"(KnowledgeSnapshotAuthorizedObjectSummary\x12.\n" +
 	"\x13knowledge_object_id\x18\x01 \x01(\tR\x11knowledgeObjectId\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\x04R\aversion\x12\x12\n" +

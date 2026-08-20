@@ -76,7 +76,7 @@ func TestV03RetainedTupleUsesLogicalPresenceForPriorOptionalMultivalue(t *testin
 			"message": {valueSQL: `"message"`, kind: fieldKindString},
 		},
 	}
-	retained := v03PublicRetainedTupleSQL(state, "message", `"next_message"`)
+	retained := publicRetainedTupleSQL(state, "message", `"next_message"`)
 	if !strings.Contains(retained, `"__os_tags_present"`) ||
 		!strings.Contains(retained, `CAST(NULL AS Dynamic)`) ||
 		!strings.Contains(retained, `CAST("tags" AS Dynamic)`) {

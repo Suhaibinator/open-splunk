@@ -23,8 +23,12 @@ func TestCompatibilityV0_1FixtureContract(t *testing.T) {
 		t.Fatalf("fixture SHA-256 = %s, want %s; intentional corpus changes must update the reviewed digest", digest, compatibilityFixtureSHA256)
 	}
 	fixture := knowledgecompat.Load(t)
-	if fixture.CompatibilityVersion != CompatibilityVersion {
-		t.Fatalf("compatibility version = %q, want %q", fixture.CompatibilityVersion, CompatibilityVersion)
+	if fixture.CompatibilityVersion != knowledgecompat.CompatibilityVersion {
+		t.Fatalf(
+			"historical compatibility version = %q, want %q",
+			fixture.CompatibilityVersion,
+			knowledgecompat.CompatibilityVersion,
+		)
 	}
 	if len(fixture.Cases) != 55 {
 		t.Fatalf("fixture cases = %d, want 55", len(fixture.Cases))

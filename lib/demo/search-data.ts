@@ -6,7 +6,7 @@ export interface DemoEvent {
   timeLabel: string;
   raw: string;
   fields: Record<string, DemoScalar>;
-  /** False when a backend typed value cannot be represented losslessly in v0.1 SPL. */
+  /** False when a backend typed value cannot be represented losslessly in the supported SPL value grammar. */
   pivotableFields?: Record<string, boolean>;
 }
 

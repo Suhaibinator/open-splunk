@@ -11,9 +11,10 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
+	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
-func journalJob(id string, state searchjobs.State, compilerVersion string, now time.Time) searchjobs.Job {
+func journalJob(id string, state searchjobs.State, now time.Time) searchjobs.Job {
 	return searchjobs.Job{
 		ID: id, OwnerID: "owner", TenantID: "tenant",
 		SPL:              " \nindex=main | head 1\t",
@@ -24,18 +25,18 @@ func journalJob(id string, state searchjobs.State, compilerVersion string, now t
 		AppID:    "search-app",
 		Source:   searchjobs.JobSource{Origin: searchjobs.JobOriginSavedSearch, ObjectID: "saved-1"},
 		Earliest: now.Add(-time.Hour), Latest: now,
-		State: state, CompilerVersion: compilerVersion, CreatedAt: now.Add(-time.Minute),
+		State: state, CompilerVersion: spl.CompatibilityVersion, CreatedAt: now.Add(-time.Minute),
 	}
 }
 
 func TestJobJournalAdmitsAndFinalizesDetachedSearchMetadata(t *testing.T) {
 	database, store := openTestStore(t, Options{})
-	journal, err := NewJobJournal(store, "tier-1-test")
+	journal, err := NewJobJournal(store)
 	if err != nil {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, time.July, 22, 12, 0, 0, 123_456_789, time.UTC)
-	job := journalJob("journal-complete", searchjobs.StateQueued, "tier-1-test", now)
+	job := journalJob("journal-complete", searchjobs.StateQueued, now)
 	if err := journal.Admit(context.Background(), job); err != nil {
 		t.Fatalf("Admit() error = %v", err)
 	}
@@ -49,7 +50,7 @@ func TestJobJournalAdmitsAndFinalizesDetachedSearchMetadata(t *testing.T) {
 		t.Fatalf("pending rows = %d, want 1", pendingRows)
 	}
 
-	terminal := journalJob("journal-complete", searchjobs.StateCompleted, "tier-1-test", now)
+	terminal := journalJob("journal-complete", searchjobs.StateCompleted, now)
 	terminal.EffectiveIndexes = []string{"main"}
 	terminal.StartedAt = now.Add(-30 * time.Second)
 	terminal.FinishedAt = now.Add(-10 * time.Second)
@@ -71,7 +72,7 @@ func TestJobJournalAdmitsAndFinalizesDetachedSearchMetadata(t *testing.T) {
 		!got.ResolvedTimeRange.GetLatest().AsTime().Equal(terminal.Latest) || got.ResolvedTimeRange.GetTimezone() != "America/Los_Angeles" ||
 		got.FinalState != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED || got.ScannedRows != 70 ||
 		got.ScannedBytes != 7_000 || got.ProducedRows != 7 ||
-		got.Duration.AsDuration() != 20*time.Second || got.CompilerVersion != "tier-1-test" || len(got.EffectiveIndexScope) != 1 {
+		got.Duration.AsDuration() != 20*time.Second || got.CompilerVersion != spl.CompatibilityVersion || len(got.EffectiveIndexScope) != 1 {
 		t.Fatalf("terminal history = %+v", got)
 	}
 	if got.MatchedEvents != 0 {
@@ -88,16 +89,16 @@ func TestJobJournalAdmitsAndFinalizesDetachedSearchMetadata(t *testing.T) {
 
 func TestJobJournalMapsAndBoundsSafeFailure(t *testing.T) {
 	_, store := openTestStore(t, Options{})
-	journal, err := NewJobJournal(store, "test")
+	journal, err := NewJobJournal(store)
 	if err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	queued := journalJob("journal-failed", searchjobs.StateQueued, "test", now)
+	queued := journalJob("journal-failed", searchjobs.StateQueued, now)
 	if err := journal.Admit(context.Background(), queued); err != nil {
 		t.Fatal(err)
 	}
-	failed := journalJob("journal-failed", searchjobs.StateFailed, "test", now)
+	failed := journalJob("journal-failed", searchjobs.StateFailed, now)
 	failed.StartedAt = now.Add(-30 * time.Second)
 	failed.FinishedAt = now
 	failed.Failure = &searchjobs.Failure{
@@ -127,32 +128,27 @@ func TestJobJournalMapsAndBoundsSafeFailure(t *testing.T) {
 
 func TestJobJournalRejectsInvalidConstructionAndTransitions(t *testing.T) {
 	_, store := openTestStore(t, Options{})
-	if _, err := NewJobJournal(nil, "test"); !errors.Is(err, control.ErrInvalidArgument) {
+	if _, err := NewJobJournal(nil); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("NewJobJournal(nil) error = %v", err)
 	}
-	if _, err := NewJobJournal(store, " "); !errors.Is(err, control.ErrInvalidArgument) {
-		t.Fatalf("NewJobJournal(empty version) error = %v", err)
-	}
-	if _, err := NewJobJournal(store, " test "); !errors.Is(err, control.ErrInvalidArgument) {
-		t.Fatalf("NewJobJournal(noncanonical version) error = %v", err)
-	}
-	journal, err := NewJobJournal(store, "test")
+	journal, err := NewJobJournal(store)
 	if err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	if err := journal.Admit(context.Background(), journalJob("running", searchjobs.StateRunning, "test", now)); !errors.Is(err, control.ErrInvalidArgument) {
+	if err := journal.Admit(context.Background(), journalJob("running", searchjobs.StateRunning, now)); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("Admit(running) error = %v", err)
 	}
-	if err := journal.Finalize(context.Background(), journalJob("queued", searchjobs.StateQueued, "test", now)); !errors.Is(err, control.ErrInvalidArgument) {
+	if err := journal.Finalize(context.Background(), journalJob("queued", searchjobs.StateQueued, now)); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("Finalize(queued) error = %v", err)
 	}
-	malformedIntent := journalJob("malformed-intent", searchjobs.StateQueued, "test", now)
+	malformedIntent := journalJob("malformed-intent", searchjobs.StateQueued, now)
 	malformedIntent.TimeRange = searchtime.Intent{TimezoneSpecified: true}
 	if err := journal.Admit(context.Background(), malformedIntent); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("Admit(malformed timezone presence) error = %v", err)
 	}
-	mismatch := journalJob("version-mismatch", searchjobs.StateQueued, "0.1", now)
+	mismatch := journalJob("version-mismatch", searchjobs.StateQueued, now)
+	mismatch.CompilerVersion = "0.1"
 	if err := journal.Admit(context.Background(), mismatch); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("Admit(compiler-version mismatch) error = %v", err)
 	}

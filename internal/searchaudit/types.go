@@ -32,6 +32,7 @@ const (
 	maximumOwnerIDBytes                      = 255
 	maximumSearchJobIDBytes                  = 256
 	maximumKnowledgeObjects                  = knowledgesnapshot.MaximumExecutableObjects
+	maximumKnowledgeLookupAssets             = knowledgesnapshot.MaximumLookupAssets
 	maximumCompilerCompatibilityVersionBytes = knowledgesnapshot.MaximumCompilerCompatibilityVersionBytes
 	minimumCursorKeyBytes                    = 32
 	maximumCursorKeyBytes                    = 4 << 10

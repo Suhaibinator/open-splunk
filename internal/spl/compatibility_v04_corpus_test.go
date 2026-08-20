@@ -40,12 +40,14 @@ type compatibilityV04TestCase struct {
 }
 
 type compatibilityV04ExpectedValue struct {
-	Parse      string `json:"parse"`
-	Diagnostic string `json:"diagnostic,omitempty"`
-	Command    string `json:"command,omitempty"`
-	Mode       string `json:"mode,omitempty"`
-	Keys       int    `json:"keys,omitempty"`
-	Outputs    int    `json:"outputs,omitempty"`
+	Parse         string `json:"parse"`
+	Diagnostic    string `json:"diagnostic,omitempty"`
+	Command       string `json:"command,omitempty"`
+	Mode          string `json:"mode,omitempty"`
+	Keys          int    `json:"keys,omitempty"`
+	Outputs       int    `json:"outputs,omitempty"`
+	Compatibility string `json:"compatibility,omitempty"`
+	Commands      int    `json:"commands,omitempty"`
 }
 
 func TestCompatibilityV04CorpusInventoryAndParserExpectations(t *testing.T) {
@@ -92,6 +94,23 @@ func TestCompatibilityV04CorpusInventoryAndParserExpectations(t *testing.T) {
 				if err != nil {
 					t.Fatalf("Parse: %v", err)
 				}
+				if testCase.Expect.Compatibility != "" {
+					if spl.CompatibilityVersion != testCase.Expect.Compatibility {
+						t.Fatalf(
+							"authored compatibility = %q, want %q",
+							spl.CompatibilityVersion,
+							testCase.Expect.Compatibility,
+						)
+					}
+					if len(query.Commands) != testCase.Expect.Commands {
+						t.Fatalf(
+							"cumulative command count = %d, want %d",
+							len(query.Commands),
+							testCase.Expect.Commands,
+						)
+					}
+					return
+				}
 				if len(query.Commands) != 1 {
 					t.Fatalf("command count = %d, want 1", len(query.Commands))
 				}
@@ -112,8 +131,8 @@ func TestCompatibilityV04CorpusInventoryAndParserExpectations(t *testing.T) {
 			})
 		}
 	}
-	if caseCount != 6 {
-		t.Fatalf("v0.4 corpus case count = %d, want 6", caseCount)
+	if caseCount != 7 {
+		t.Fatalf("v0.4 corpus case count = %d, want 7", caseCount)
 	}
 	if got := sortedV04Set(modeInventory); !slices.Equal(got, []string{"OUTPUT", "OUTPUTNEW"}) {
 		t.Fatalf("mode inventory = %v", got)
@@ -189,16 +208,26 @@ func validateCompatibilityV04Corpus(corpus compatibilityV04Corpus) error {
 			seenCases[testCase.Name] = struct{}{}
 			switch testCase.Expect.Parse {
 			case "accept":
+				if testCase.Expect.Compatibility != "" {
+					if testCase.Expect.Compatibility != compatibilityV04Version ||
+						testCase.Expect.Commands < 1 || testCase.Expect.Command != "" ||
+						testCase.Expect.Mode != "" || testCase.Expect.Keys != 0 ||
+						testCase.Expect.Outputs != 0 || testCase.Expect.Diagnostic != "" {
+						return fmt.Errorf("%s has invalid profile expectations", casePath)
+					}
+					continue
+				}
 				if testCase.Expect.Command != "lookup" ||
 					(testCase.Expect.Mode != "OUTPUT" && testCase.Expect.Mode != "OUTPUTNEW") ||
 					testCase.Expect.Keys < 1 || testCase.Expect.Outputs < 1 ||
-					testCase.Expect.Diagnostic != "" {
+					testCase.Expect.Diagnostic != "" || testCase.Expect.Commands != 0 {
 					return fmt.Errorf("%s has invalid acceptance expectations", casePath)
 				}
 			case "reject":
 				if testCase.Expect.Diagnostic == "" || testCase.Expect.Command != "" ||
 					testCase.Expect.Mode != "" || testCase.Expect.Keys != 0 ||
-					testCase.Expect.Outputs != 0 {
+					testCase.Expect.Outputs != 0 || testCase.Expect.Compatibility != "" ||
+					testCase.Expect.Commands != 0 {
 					return fmt.Errorf("%s has invalid rejection expectations", casePath)
 				}
 			default:

@@ -3,6 +3,21 @@
   "compatibility_version": "0.4",
   "rules": [
     {
+      "id": "SPL-V04-PROFILE-001",
+      "summary": "The public v0.4 identity activates the complete cumulative authored-search surface.",
+      "cases": [
+        {
+          "name": "cumulative v0.3 commands and v0.4 lookup",
+          "source": "index=main | regex message=\"ok\" | reverse | accum n AS running | strcat host \"/\" source route | addinfo | fillnull value=\"0\" optional | addtotals fieldname=total n running | delta running AS step p=2 | makemv delim=\",\" tags | mvexpand tags limit=2 | lookup service_catalog service_id AS service_id OUTPUTNEW owner",
+          "expect": {
+            "parse": "accept",
+            "compatibility": "0.4",
+            "commands": 11
+          }
+        }
+      ]
+    },
+    {
       "id": "SPL-V04-LOOKUP-SYNTAX-001",
       "summary": "Explicit lookup syntax preserves ordered exact key and output mappings.",
       "cases": [

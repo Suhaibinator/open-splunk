@@ -2,6 +2,13 @@
 
 This directory is the source of truth shared by the Go server, Go collector, and TypeScript browser application. The package name is `open_splunk.v1`; generated Go code uses package `opensplunkv1` and generated TypeScript follows the source directory hierarchy.
 
+API `v1` remains the append-only transport contract. The active product
+compatibility profile is `0.4`; it describes cumulative semantics, not a
+protobuf API major. New lookup messages, routes, enum values, and snapshot
+fields are additive v1 surface. Older peers may ignore fields and feature
+values they do not know, but they cannot treat an omitted lookup inventory as
+authority to execute a current snapshot.
+
 ## Contract boundaries
 
 - `value.proto`, `common.proto`, `event.proto`, and `result.proto` define shared wire primitives, exact dynamic values, canonical collected events, dynamic result schemas, field summaries, timelines, and visualization settings.
@@ -17,7 +24,10 @@ This directory is the source of truth shared by the Go server, Go collector, and
 - `audit*` defines the fixed, administrator-only immutable mutation-audit
   projection and bounded list operation. `search_attempt_audit*` defines the
   separately bounded, payload-free search-admission projection and list
-  operation and carries only the optional compact `KnowledgeSnapshotRef`.
+  operation and carries only the optional compact `KnowledgeSnapshotRef`,
+  including exact object and lookup-asset counts, but no object or asset
+  inventory. A legacy five-field audit row may mark the lookup count unknown
+  because the old journal did not persist it.
 - `knowledge.proto` defines the common registry projection, authorized selectors,
   Tier-1 typed definitions, versioned dependencies, provenance, and immutable
   search snapshot. `knowledge_api.proto` defines the protobuf CRUD,
@@ -27,10 +37,19 @@ This directory is the source of truth shared by the Go server, Go collector, and
   family. Validate uses a dedicated bounded decoder and rollback-only catalog
   service. Preview reacquires an owner-scoped retained execution, validates one
   ACTIVE-publication candidate, and returns paired bounded projections. The
-  server advertises Tier 1 only when this entire family, the Resolver-backed
-  search runtime, inspection/history/export, and field-analysis services are
+  server advertises the field-knowledge capability only when this object
+  family, the Resolver-backed search runtime, inspection/history/export, and
+  field-analysis services are ready. Lookup management is advertised through
+  its separate additive capability only when that complete family is also
   ready. Quarantine remains unregistered.
-- `system_api.proto` gives the static frontend one bootstrap call for server capabilities and initial app/index choices.
+- `lookup.proto` defines the bounded logical lookup definition, lifecycle, safe
+  catalog projection, and version reference. `lookup_api.proto` defines the
+  seven administrator-only create/get/list/replace/set-state/delete/preview
+  operations. CSV bytes are accepted only by create, asset replacement, and
+  preview; no catalog response echoes them.
+- `system_api.proto` gives the static frontend one bootstrap call for server
+  capabilities, the active compatibility identity, and initial app/index
+  choices.
 
 Persistent database rows and ClickHouse table definitions are deliberately not protobuf contracts. Converters at the service boundary keep storage migrations from becoming accidental wire changes.
 
@@ -136,14 +155,37 @@ emulates Splunk management-port token APIs. External protocol behavior is
 normative in the [HEC compatibility contract](hec-compatibility-v0.1.md), and
 deployment behavior is in the [HEC operator runbook](hec-deployment.md).
 
-### Knowledge-object contracts
+### Field-knowledge and lookup capabilities
 
-The `SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS` enum value is reserved for the
-complete Tier-1 field-knowledge family. A server must not include it in
-`GetSystemBootstrapResponse.features` until CRUD, validation, authorized
-resolution, immutable snapshot admission, field enrichment, inspection, and
-the browser workflow are all configured. Merely generating the messages does
-not create a route or advertise a capability.
+`SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS` retains its shipped meaning: the
+complete Tier-1 extraction, alias, calculated-field, selector, catalog,
+validation, resolution, snapshot, execution, and browser family is available.
+The additive `SERVER_FEATURE_LOOKUP_MANAGEMENT` advertises the complete
+immutable lookup family: asset and logical-definition management, explicit and
+automatic resolution, bounded execution, retained analysis, inspection,
+history, export, preview, cancellation, recovery, and browser management.
+Lookup capability is emitted only alongside field-knowledge capability. Merely
+generating either message family or registering a management route does not
+advertise either capability.
+
+The fully composed production bootstrap reports
+`spl_compatibility_version = "0.4"` and includes
+both `SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS` and
+`SERVER_FEATURE_LOOKUP_MANAGEMENT`. The compatibility value identifies the one
+current product profile; the capabilities independently prove that this
+particular runtime has each complete family ready. None is a request to select
+behavior.
+
+A ready lookup-management dependency may register its exact seven-route
+administrator-authenticated family in a management-only or otherwise partial
+server composition. Such a composition must omit both capabilities. It
+therefore exposes bounded control
+operations only: it does not claim lookup-aware search admission, automatic
+resolution, execution, retained products, or browser compatibility. The
+feature is capability discovery, not caller authorization; every lookup route
+still derives tenant and owner scope from the authenticated administrator.
+
+### Knowledge-object contracts
 
 Knowledge definitions deliberately repeat their indexed app, name, sharing,
 and type identity in the registry projection. The catalog storage boundary
@@ -170,7 +212,7 @@ lifecycle metadata outside the digest message.
 publication charge over canonical literal/`?`/`*` tokens with weights one, two,
 and four. It is not a runtime matcher-transition counter. Runtime execution uses
 the deterministic conservative per-dimension assessment defined by the
-knowledge compatibility contract, so Go and generated ClickHouse SQL do not
+current knowledge contract, so Go and generated ClickHouse SQL do not
 need to expose or reproduce one engine's internal NFA transitions.
 `canonical_snapshot_bytes` is computed first as the length of deterministic
 `KnowledgeSnapshot` protobuf bytes with both `snapshot_sha256` and
@@ -194,15 +236,43 @@ the snapshot after authentication, app and index authorization, and server-side
 catalog resolution. Legacy, resolver-disabled, and app-less admission leaves it
 absent.
 
-`KnowledgeSnapshotRef` has explicit presence semantics: absence means disabled
-or legacy resolution, while a present reference with `object_count` zero means
-enabled-empty resolution. `KnowledgeSnapshotSummary` is limited to 32 KiB and
-contains exactly the canonical first `min(ref.object_count, 64)` object
-summaries; `objects_truncated` is true exactly when `ref.object_count` exceeds
-64. The reference always carries the exact total. Retained internal summaries
-may carry authorized object identity, but current browser search-job, history,
-export, and inspection projections replace every such disclosure with
-`redacted = true`, preserving only ordinal, type, and stage.
+`KnowledgeSnapshotRef` itself has explicit presence semantics: an absent
+reference means disabled or legacy resolution. In a present reference,
+`object_count` is exact. `lookup_asset_count` remains the original implicit
+`uint32` field and is exact for summaries and every reference minted by
+the current product, including zero. The additive
+`lookup_asset_count_unknown = true` marker is valid only on a migrated
+legacy five-field search-attempt audit reference with count zero; it means the
+old journal did not retain the count and zero must not be inferred. Historical
+summaries retain exact inventory and leave that marker false. The compact
+reference carries no object, definition, logical-lookup, physical-asset, or
+row identity.
+
+The lookup provenance additions retain their append-only v1 field numbers:
+`KnowledgeSnapshot.lookup_assets` is field 10;
+`KnowledgeSnapshotRef.lookup_asset_count` and
+`lookup_asset_count_unknown` are fields 6 and 7; and
+`KnowledgeSnapshotSummary.lookup_assets` is field 4. The compiler compatibility
+identity, exact counts, and canonical inventory prevent a legacy snapshot from
+being reinterpreted as current executable authority without changing the
+snapshot format version or the protobuf API major.
+
+`KnowledgeSnapshotSummary` is limited to 32 KiB and contains exactly the
+canonical first `min(ref.object_count, 64)` object summaries;
+`objects_truncated` is true exactly when `ref.object_count` exceeds 64. Its
+internal `lookup_assets` field instead carries the complete canonical unique
+lookup-version inventory, never a prefix: its length must equal
+`ref.lookup_asset_count` and cannot exceed sixteen. Every entry's contiguous
+`asset_ordinal` binds a logical `lookup_id` and `lookup_version` to the exact
+physical `lookup_asset_id`, physical version, canonical size, and content
+SHA-256. It carries neither CSV rows nor source bytes.
+
+Retained internal summaries may carry authorized object and lookup identity,
+but current browser search-job, history, export, and inspection projections
+replace every object disclosure with `redacted = true` and omit the
+`lookup_assets` inventory. They preserve object ordinal/type/stage and the
+compact reference's exact `lookup_asset_count`, so lookup use remains visible
+without disclosing logical or physical asset identity.
 
 These wire fields are provenance, not client-authored execution authority. The
 search manager privately seals every completed execution snapshot, legacy or
@@ -215,7 +285,9 @@ manager-owned result pin.
 `SearchHistoryEntry` durably preserves the exact admitted summary from queued
 admission through the first terminal publication. Production commits the
 pending history row and its `SearchAttemptAuditEvent` in one SQLite transaction;
-the audit event retains only the summary's compact reference. Terminal history
+the audit event retains only the summary's compact reference. Legacy
+five-field audit references may therefore expose an unknown lookup count even
+when their history summary still carries exact inventory. Terminal history
 publication must reproduce the same summary and cannot add, remove, or replace
 that admission authority.
 
@@ -254,10 +326,42 @@ management dependency unit, including a constructor-ready concrete Writer, is
 present. A ready Preview service over that same unit conditionally registers
 Preview as the tenth route; production supplies that complete composition.
 Core registration is all-or-none and remains independent of bootstrap feature
-advertisement. Quarantine has no route. All ten Knowledge routes are in the
-browser administrator-bearer policy, while their inner knowledge-attempt
+advertisement. Quarantine has no route. All ten object-management routes are in
+the browser administrator-bearer policy, while their inner knowledge-attempt
 boundaries authenticate and authorize before the dedicated Validate or Preview
 decoder, or another route's generic decoder, can retain request authority.
+
+#### Lookup-management contracts
+
+`lookup_api.proto` defines one all-or-none seven-route management family. The
+logical `Lookup` projection contains normalized definition metadata, immutable
+version and lifecycle state, canonical columns and row count, byte size, source
+and canonical-content SHA-256 digests, and transition timestamps. It never
+contains CSV bytes or a physical storage path, table, database, or credential.
+All requests use the authenticated tenant and owner scope; none may select
+either value on the wire.
+
+- Create publishes a normalized nonempty CSV and definition atomically as an
+  ACTIVE logical version 1.
+- Get resolves one logical ID and either its current version or an explicitly
+  requested immutable historical version.
+- List uses bounded authenticated pagination and bounded app, state, text, sort,
+  and direction inputs.
+- Replace requires the exact optimistic version. Present nonempty `csv_data`
+  publishes a new immutable physical asset; absent `csv_data` is a metadata-only
+  replacement that retains the existing physical asset. Either operation
+  advances the logical version.
+- Set-state requires the exact optimistic version and accepts only ACTIVE or
+  DISABLED. Delete is a separate confirmed transition from DISABLED to the
+  retained terminal DELETED state.
+- Preview validates and canonicalizes an uncommitted definition and CSV without
+  publication, returning at most 100 requested rows, exact totals and digests,
+  truncation, or bounded field violations.
+
+The seven paths are additive v1 endpoints and all use POST with protobuf
+request/success bodies. A ready management service registers all seven or none;
+route registration remains independent of the cumulative knowledge capability.
+
 List and graph continuations use bounded
 `PageRequest`/`PageResponse`
 contracts. The implemented List cursor binds all normalized filters, ordering,
@@ -604,19 +708,24 @@ closure. Opaque future definitions cannot be updated or enabled as ACTIVE. An
 exact retained ACTIVE result remains replayable after downgrade only when the
 retained outcome is still recognized and canonical.
 
-**Tier-1 activation checkpoint (August 10, 2026).** Production now attaches the
+**Current product activation checkpoint.** Production attaches the
 ready Resolver to `searchjobs.Manager`, admits and finalizes nonempty knowledge
-programs in ordinary builds, registers Preview with the complete management
-family, forwards the memory-only administrator bearer on all ten Knowledge
-routes, and advertises `SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS` only when the
-Resolver-backed runtime, Preview, inspection/history/export, field catalog,
-field summary, suggestions, and timeline services are all ready. The feature-
-gated manager provides Tier-1 create/validate/update/state/delete and retained-
-search Preview while feature-off bootstrap still imports nothing and emits
-zero Knowledge traffic. The pinned ClickHouse 26.7.3.19 matrix exercises
+programs in ordinary builds, registers Preview with the complete object
+management family, forwards the memory-only administrator bearer on all ten
+object-management routes and all seven lookup-management routes, and
+advertises `SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS` only when the
+Resolver-backed Tier-1 runtime, object-management family, Preview,
+inspection/history/export, field catalog, field summary, suggestions, and
+timeline services are all ready. It advertises
+`SERVER_FEATURE_LOOKUP_MANAGEMENT` only when that Tier-1 family plus lookup
+management and lookup admission are ready. The production bootstrap reports
+the single compatibility identity `0.4`. Each capability gates only its
+corresponding browser destination; a feature-off bootstrap imports no code or
+emits no traffic for that destination.
+The pinned ClickHouse 26.7.3.19 matrix exercises
 ordinary search, selectors, all 16 executable compatibility runtime-edge IDs,
 chart/timechart/stats/chronology, pruning, empty runtime, field services, exact
-maximum-field concurrency, atomic overflow, and retained v1/v2 history/export
+maximum-field concurrency, atomic overflow, and retained version-transition history/export
 lifecycle. The dated implementation milestones below are preserved as
 historical evidence; their earlier closed, dormant, unregistered, or hard-false
 readiness claims are superseded by this checkpoint.
@@ -959,7 +1068,7 @@ and 256 generated, 1,024 fields per stage, 16,384 field occurrences, 1 MiB of
 strings, 256 operator-provenance entries, and 512 output-provenance entries.
 Physical projection allows 4,096 nodes, 256 reads, 4,096 cumulative headers and
 indexes, 64 index keys, 16 KiB per metadata string, and 1 MiB total. Generated
-SQL is bounded at 256 KiB, EXPLAIN at 1 MiB/4,096 nonempty lines/16 KiB per
+SQL is bounded at 256 KiB, EXPLAIN at 1 MiB/4,096 nonempty lines/32 KiB per
 line, and diagnostic query ID at most 128 bytes. Browser comparison uses an
 allocation-free scalar walk equivalent to Go's raw UTF-8 ordering; each bounded
 string is encoded once, and EXPLAIN validation uses one pass over those bytes.
@@ -1055,6 +1164,13 @@ projection.
 | `/knowledge/objects/update` | `UpdateKnowledgeObjectRequest` | `UpdateKnowledgeObjectResponse` |
 | `/knowledge/objects/set-state` | `SetKnowledgeObjectStateRequest` | `SetKnowledgeObjectStateResponse` |
 | `/knowledge/objects/delete` | `DeleteKnowledgeObjectRequest` | `DeleteKnowledgeObjectResponse` |
+| `/knowledge/lookups/create` | `CreateLookupRequest` | `CreateLookupResponse` |
+| `/knowledge/lookups/get` | `GetLookupRequest` | `GetLookupResponse` |
+| `/knowledge/lookups/list` | `ListLookupsRequest` | `ListLookupsResponse` |
+| `/knowledge/lookups/replace` | `ReplaceLookupRequest` | `ReplaceLookupResponse` |
+| `/knowledge/lookups/state/set` | `SetLookupStateRequest` | `SetLookupStateResponse` |
+| `/knowledge/lookups/delete` | `DeleteLookupRequest` | `DeleteLookupResponse` |
+| `/knowledge/lookups/preview` | `PreviewLookupRequest` | `PreviewLookupResponse` |
 | `/search/jobs/create` | `CreateSearchJobRequest` | `CreateSearchJobResponse` |
 | `/search/jobs/get` | `GetSearchJobRequest` | `GetSearchJobResponse` |
 | `/search/jobs/list` | `ListSearchJobsRequest` | `ListSearchJobsResponse` |
@@ -1168,7 +1284,8 @@ comes from the authenticated browser principal and cannot be supplied on the
 wire. Its immutable projection contains tenant-local sequence, occurrence
 time, fixed actor identity, owner ID, search-job ID, and an optional compact
 `KnowledgeSnapshotRef`. That reference contains only digest, catalog/compiler
-identity, and exact object count; no object inventory or definition is stored.
+identity, and exact object and lookup-asset counts; no object inventory, lookup
+identity, definition, or asset row is stored.
 The projection never exposes SPL, index or app scope, generated SQL, results,
 warnings, failures, headers, credentials, or arbitrary metadata.
 

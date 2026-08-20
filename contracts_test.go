@@ -76,7 +76,7 @@ func TestGeneratedGoMessagesRetainKnownFieldsFromFuturePeers(t *testing.T) {
 
 	wire, err := proto.Marshal(&opensplunkv1.GetSystemBootstrapResponse{
 		ApiVersion:              "v1",
-		SplCompatibilityVersion: "open-splunk-v0.1",
+		SplCompatibilityVersion: "0.4",
 	})
 	if err != nil {
 		t.Fatalf("marshal current response: %v", err)
@@ -91,7 +91,7 @@ func TestGeneratedGoMessagesRetainKnownFieldsFromFuturePeers(t *testing.T) {
 		t.Fatalf("unmarshal future response: %v", err)
 	}
 	if decoded.GetApiVersion() != "v1" ||
-		decoded.GetSplCompatibilityVersion() != "open-splunk-v0.1" {
+		decoded.GetSplCompatibilityVersion() != "0.4" {
 		t.Fatalf("known response fields = %+v", &decoded)
 	}
 	if len(decoded.ProtoReflect().GetUnknown()) == 0 {
@@ -313,6 +313,7 @@ func TestKnowledgeSnapshotReferenceAndSummaryKeepExactWireContracts(t *testing.T
 				{name: "object_count", number: 4, kind: protoreflect.Uint32Kind, cardinality: protoreflect.Optional},
 				{name: "compiler_compatibility_version", number: 5, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
 				{name: "lookup_asset_count", number: 6, kind: protoreflect.Uint32Kind, cardinality: protoreflect.Optional},
+				{name: "lookup_asset_count_unknown", number: 7, kind: protoreflect.BoolKind, cardinality: protoreflect.Optional},
 			},
 		},
 		{

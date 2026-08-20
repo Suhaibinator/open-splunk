@@ -21,7 +21,7 @@ func TestCompileRowTotalPublishesNullableFloat64WithZeroForAllIneligible(t *test
 		strings.Count(compiled.SQL, `ifNull(CAST(NULL AS Nullable(Float64)), toFloat64(0))`) < 2 {
 		t.Fatalf("addtotals SQL does not pin nullable Float64/all-ineligible zero:\n%s", compiled.SQL)
 	}
-	if got := strings.Count(compiled.SQL, v03MaterializedValidationSettingsSQL); got != 1 ||
+	if got := strings.Count(compiled.SQL, materializedValidationSettingsSQL); got != 1 ||
 		!compiled.RequiresAtomicResult() {
 		t.Fatalf("addtotals validation contract = settings:%d atomic:%t", got, compiled.RequiresAtomicResult())
 	}
@@ -302,7 +302,7 @@ func TestCompileMVExpandValidationDisablesPredicatePushdown(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Compile(mvexpand): %v", err)
 			}
-			if got := strings.Count(compiled.SQL, v03MaterializedValidationSettingsSQL); got != test.wantSettings {
+			if got := strings.Count(compiled.SQL, materializedValidationSettingsSQL); got != test.wantSettings {
 				t.Fatalf(
 					"v0.3 validation settings count = %d, want %d:\n%s",
 					got,
@@ -334,7 +334,7 @@ func TestCompileDeltaValidationDisablesPlanRewrites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compile(delta): %v", err)
 	}
-	if got := strings.Count(compiled.SQL, v03MaterializedValidationSettingsSQL); got != 1 {
+	if got := strings.Count(compiled.SQL, materializedValidationSettingsSQL); got != 1 {
 		t.Fatalf("delta validation settings count = %d, want 1:\n%s", got, compiled.SQL)
 	}
 	if !compiled.RequiresAtomicResult() {

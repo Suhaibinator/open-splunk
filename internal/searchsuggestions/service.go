@@ -729,7 +729,7 @@ func validateFieldResult(
 
 func fieldSuggestionInsertion(name string, allowQuoted bool) (string, bool) {
 	if representableFieldName(name) &&
-		(!allowQuoted || !requiresQuotedV02ScalarField(name)) {
+		(!allowQuoted || !requiresQuotedScalarField(name)) {
 		return strings.Clone(name), true
 	}
 	if !allowQuoted || !validSuggestionFieldName(name) {
@@ -748,7 +748,7 @@ func fieldSuggestionInsertion(name string, allowQuoted bool) (string, bool) {
 	return builder.String(), true
 }
 
-func requiresQuotedV02ScalarField(name string) bool {
+func requiresQuotedScalarField(name string) bool {
 	if strings.ContainsAny(name, "+-*/%'") {
 		return true
 	}

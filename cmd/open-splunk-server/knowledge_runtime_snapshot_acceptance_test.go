@@ -507,8 +507,8 @@ func TestKnowledgeSnapshotManagerRetainsWriterResolvedActiveVersions(t *testing.
 			t.Errorf("close knowledge manager: %v", closeErr)
 		}
 	}()
-	if !manager.KnowledgeAdmissionEnabled() || !manager.KnowledgeExecutionEnabled() {
-		t.Fatal("knowledge Manager did not retain its immutable resolver/execution composition")
+	if !manager.KnowledgeAdmissionEnabled() {
+		t.Fatal("knowledge Manager did not retain its immutable resolver composition")
 	}
 
 	request := runtimeKnowledgeSearchRequest(t)

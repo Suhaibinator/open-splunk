@@ -139,6 +139,7 @@ function addKnowledge(
       objectCount: count,
       compilerCompatibilityVersion: "open-splunk-v0.1",
       lookupAssetCount: 0,
+      lookupAssetCountUnknown: false,
     },
     objects: Array.from(
       { length: Math.min(count, 64) },
@@ -172,6 +173,7 @@ function addExtraction(response: InspectSearchJobResponse): InspectSearchJobResp
       objectCount: 1,
       compilerCompatibilityVersion: "compiler-v1",
       lookupAssetCount: 0,
+      lookupAssetCountUnknown: false,
     },
     objects: [redactedSummary(0, extractionType, extractionStage)],
     objectsTruncated: false,
@@ -199,8 +201,39 @@ function addJsonExtraction(response: InspectSearchJobResponse): InspectSearchJob
       objectCount: 1,
       compilerCompatibilityVersion: "compiler-json-v1",
       lookupAssetCount: 0,
+      lookupAssetCountUnknown: false,
     },
     objects: [redactedSummary(0, extractionType, extractionStage)],
+    objectsTruncated: false,
+    lookupAssets: [],
+  };
+  return response;
+}
+
+function addLookup(
+  response: InspectSearchJobResponse,
+  automatic = false,
+): InspectSearchJobResponse {
+  response.logicalPlan!.stages.push({
+    stageIndex: 1,
+    operator: automatic ? "AutomaticLookupGroup" : "Lookup",
+    inputFields: ["service_key"],
+    outputFields: ["service_owner"],
+    sourceRange: automatic ? undefined : sourceRange(),
+    operatorProvenance: [],
+    outputProvenance: [],
+  });
+  response.knowledgeSnapshot = {
+    ref: {
+      snapshotSha256: new Uint8Array(32).fill(0xee),
+      tenantCatalogRevision: 3n,
+      tenantCatalogStateToken: new Uint8Array(32).fill(0xff),
+      objectCount: 0,
+      compilerCompatibilityVersion: "open-splunk-v0.4",
+      lookupAssetCount: 1,
+      lookupAssetCountUnknown: false,
+    },
+    objects: [],
     objectsTruncated: false,
     lookupAssets: [],
   };
@@ -300,6 +333,7 @@ test("absent and enabled-empty Knowledge authority stay distinct", () => {
       objectCount: 0,
       compilerCompatibilityVersion: "x".repeat(128),
       lookupAssetCount: 0,
+      lookupAssetCountUnknown: false,
     },
     objects: [],
     objectsTruncated: false,
@@ -309,6 +343,7 @@ test("absent and enabled-empty Knowledge authority stay distinct", () => {
   assert.equal(enabled.knowledge?.state, "enabled");
   if (enabled.knowledge?.state !== "enabled") assert.fail("enabled Knowledge was omitted");
   assert.equal(enabled.knowledge.objectCount, 0);
+  assert.equal(enabled.knowledge.lookupAssetCount, 0);
   assert.equal(enabled.knowledge.tenantCatalogRevision, maximumCatalogRevision);
   assert.equal(enabled.knowledge.digestSha256, "12".repeat(32));
   assert.deepEqual(enabled.knowledge.objects, []);
@@ -328,6 +363,85 @@ test("Knowledge summary boundaries 1, 64, 65, and 256 preserve only the exact pr
       Array.from({ length: Math.min(count, 64) }, (_, ordinal) => ordinal),
     );
   }
+});
+
+test("explicit and automatic lookup stages retain only logical fields", () => {
+  for (const automatic of [false, true]) {
+    const view = adaptSearchJobInspection(addLookup(baseResponse(), automatic), jobId, true);
+    assert.equal(
+      view.logicalPlan.stages[1]!.operator,
+      automatic ? "AutomaticLookupGroup" : "Lookup",
+    );
+    assert.deepEqual(view.logicalPlan.stages[1]!.inputFields, ["service_key"]);
+    assert.deepEqual(view.logicalPlan.stages[1]!.outputFields, ["service_owner"]);
+    assert.equal(view.logicalPlan.stages[1]!.sourceRange === undefined, automatic);
+    assert.deepEqual(view.logicalPlan.stages[1]!.operatorProvenance, []);
+    assert.deepEqual(view.logicalPlan.stages[1]!.outputProvenance, []);
+    if (view.knowledge?.state !== "enabled") assert.fail("lookup Knowledge was omitted");
+    assert.equal(view.knowledge.lookupAssetCount, 1);
+  }
+});
+
+test("all v0.3 authored operators remain inspectable", () => {
+  for (const operator of [
+    "RegexFilter",
+    "Reverse",
+    "Strcat",
+    "FillNull",
+    "RowTotal",
+    "OrderedDelta",
+    "MakeMultivalue",
+    "ExpandMultivalue",
+  ]) {
+    const response = baseResponse();
+    response.logicalPlan!.stages.push({
+      stageIndex: 1,
+      operator,
+      inputFields: [],
+      outputFields: [],
+      sourceRange: sourceRange(),
+      operatorProvenance: [],
+      outputProvenance: [],
+    });
+    const view = adaptSearchJobInspection(response, jobId, true);
+    assert.equal(view.logicalPlan.stages[1]!.operator, operator);
+  }
+});
+
+test("automatic lookup stage is unique at the generated prefix boundary", () => {
+  const afterAuthored = addLookup(baseResponse(), true);
+  afterAuthored.logicalPlan!.stages.splice(1, 0, {
+    stageIndex: 1,
+    operator: "Filter",
+    inputFields: ["status"],
+    outputFields: [],
+    sourceRange: sourceRange(),
+    operatorProvenance: [],
+    outputProvenance: [],
+  });
+  afterAuthored.logicalPlan!.stages[2]!.stageIndex = 2;
+  assertInvalid(afterAuthored);
+
+  const duplicated = addLookup(baseResponse(), true);
+  duplicated.logicalPlan!.stages.push({
+    ...duplicated.logicalPlan!.stages[1]!,
+    stageIndex: 2,
+  });
+  assertInvalid(duplicated);
+});
+
+test("lookup summary count is exact, bounded, and identity-redacted", () => {
+  const unknown = addLookup(baseResponse());
+  unknown.knowledgeSnapshot!.ref!.lookupAssetCountUnknown = true;
+  assertInvalid(unknown);
+
+  const overflow = addLookup(baseResponse());
+  overflow.knowledgeSnapshot!.ref!.lookupAssetCount = 17;
+  assertInvalid(overflow);
+
+  const disclosed = addLookup(baseResponse());
+  disclosed.knowledgeSnapshot!.lookupAssets.push({} as never);
+  assertInvalid(disclosed);
 });
 
 test("ConditionalExtract preserves one-to-many output provenance", () => {
@@ -493,7 +607,7 @@ test("summary truncation is exact at the retained-prefix boundary", () => {
 
 test("raw repeated bounds reject before traversing malformed entries", () => {
   const stageOverflow = baseResponse();
-  const stages = Array.from({ length: 513 }, () => null);
+  const stages = Array.from({ length: 514 }, () => null);
   Object.defineProperty(stages, 0, {
     get() { throw new Error("stage traversal occurred"); },
   });
@@ -717,6 +831,7 @@ test("malicious display primitives remain inert data and no Knowledge identity i
   assert.deepEqual(keys, [
     "compilerCompatibilityVersion",
     "digestSha256",
+    "lookupAssetCount",
     "objectCount",
     "objects",
     "objectsTruncated",
@@ -798,7 +913,7 @@ test("output-shape, physical, SQL, and EXPLAIN representative bounds fail closed
   invalidResponses.push(sqlOverflow);
 
   const explainLineOverflow = baseResponse();
-  explainLineOverflow.explainText = "x".repeat((16 << 10) + 1);
+  explainLineOverflow.explainText = "x".repeat((32 << 10) + 1);
   invalidResponses.push(explainLineOverflow);
 
   const explainCountOverflow = baseResponse();

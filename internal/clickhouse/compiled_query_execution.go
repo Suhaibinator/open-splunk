@@ -19,11 +19,11 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
-// v11 binds the authenticated immutable backing commitment for every exact
-// lookup external table. Lookup blocks can therefore cross the driver boundary
-// only as part of the same immutable executable authority as their SQL without
-// rescanning every private cell at each executor handoff.
-const compiledExecutionSealDomain = "open-splunk-compiled-query-execution-v11"
+// v12 additionally binds the minimum automatic-lookup replay descriptor.
+// Lookup blocks can therefore cross the driver boundary only as part of the
+// same immutable executable authority as their SQL, and derived compilation
+// can restore exact automatic placement without consulting mutable state.
+const compiledExecutionSealDomain = "open-splunk-compiled-query-execution-v12"
 
 var timeType = reflect.TypeFor[time.Time]()
 
@@ -266,6 +266,9 @@ func sealFinalCompiledQueryContext(
 	if evidence != nil {
 		sealed.knowledgeEvidence = evidence
 	}
+	sealed.automaticLookupReplay = retainedAutomaticLookupsFromPreparation(
+		lookupPreparation,
+	)
 	return sealCompiledQueryExecutionContext(ctx, sealed)
 }
 
@@ -657,6 +660,13 @@ func compiledExecutionDigestContext(
 	if !written {
 		return compiledExecutionSeal{}, false, nil
 	}
+	if !writeRetainedAutomaticLookups(
+		digest,
+		compiled.automaticLookupReplay,
+		compiled.lookupTables,
+	) {
+		return compiledExecutionSeal{}, false, nil
+	}
 	if compiled.Timechart == nil {
 		writeBool(digest, false)
 	} else {
@@ -859,6 +869,9 @@ func (compiled CompiledQuery) CloneForExecutionContext(
 	cloned.OptionalMultivalueOutputs = slices.Clone(compiled.OptionalMultivalueOutputs)
 	cloned.StringOrBytesOutputs = slices.Clone(compiled.StringOrBytesOutputs)
 	cloned.lookupTables = cloneCompiledLookupExternalTables(compiled.lookupTables)
+	cloned.automaticLookupReplay = cloneRetainedAutomaticLookups(
+		compiled.automaticLookupReplay,
+	)
 	if compiled.Args == nil {
 		cloned.Args = nil
 	} else {
@@ -1055,6 +1068,14 @@ func (compiled CompiledQuery) RetainedBytesContext(
 	if err != nil {
 		return 0, false, err
 	}
+	if !ok {
+		return 0, false, nil
+	}
+	total, ok = retainedAutomaticLookupsBytes(
+		total,
+		compiled.automaticLookupReplay,
+		compiled.lookupTables,
+	)
 	if !ok {
 		return 0, false, nil
 	}

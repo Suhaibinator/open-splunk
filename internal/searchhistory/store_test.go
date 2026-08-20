@@ -13,6 +13,7 @@ import (
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -198,7 +199,7 @@ func TestRecordValidationRejectsUnsafeOrIncompleteEntries(t *testing.T) {
 			entry.EffectiveIndexScope = make([]string, maximumIndexScope+1)
 		}},
 		{name: "noncanonical compiler version", mutate: func(entry *opensplunkv1.SearchHistoryEntry) {
-			entry.CompilerVersion = " 0.2 "
+			entry.CompilerVersion = " " + spl.CompatibilityVersion + " "
 		}},
 		{name: "failure secret-sized", mutate: func(entry *opensplunkv1.SearchHistoryEntry) {
 			entry.Failure = &opensplunkv1.SearchFailure{

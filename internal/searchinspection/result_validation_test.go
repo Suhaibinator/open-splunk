@@ -844,6 +844,13 @@ func TestValidateResultGeneratedProvenanceExactBounds(t *testing.T) {
 		}
 		result := resultValidationKnowledgeResult(t, generated...)
 		authoredRange := *result.Plan.Stages[len(result.Plan.Stages)-1].SourceRange
+		authoredSuffix := result.Plan.Stages[len(result.Plan.Stages)-1]
+		result.Plan.Stages[len(result.Plan.Stages)-1] = PlanStage{
+			Operator:     "AutomaticLookupGroup",
+			InputFields:  []string{"service_key"},
+			OutputFields: []string{"service_owner"},
+		}
+		result.Plan.Stages = append(result.Plan.Stages, authoredSuffix)
 		for len(result.Plan.Stages) < int(maximumPlanStages) {
 			result.Plan.Stages = append(result.Plan.Stages, PlanStage{
 				Operator:    "Limit",
@@ -1387,6 +1394,7 @@ func resultValidationKnowledgeSummary(
 			TenantCatalogStateToken:      bytes.Repeat([]byte{0x22}, sha256.Size),
 			ObjectCount:                  uint32(len(objects)),
 			CompilerCompatibilityVersion: knowledgesnapshot.CompilerCompatibilityVersion,
+			LookupAssetCount:             0,
 		},
 		Objects:          prefix,
 		ObjectsTruncated: len(objects) > knowledgesnapshot.MaximumSummaryObjects,

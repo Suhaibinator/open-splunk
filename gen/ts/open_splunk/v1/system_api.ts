@@ -34,8 +34,9 @@ export enum ServerFeature {
   SERVER_FEATURE_AUDIT_SEARCH = 13,
   SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT = 14,
   /**
-   * SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS - The server emits this value only when the complete Tier-1 knowledge CRUD,
-   * validation, resolution, snapshot, execution, and browser family exists.
+   * SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS - The server emits this value only when the complete Tier-1 field-knowledge
+   * CRUD, validation, resolution, snapshot, execution, and browser family
+   * exists. Lookup management has its own additive capability below.
    * Declaring the wire value alone does not advertise the feature.
    */
   SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS = 15,
@@ -44,6 +45,12 @@ export enum ServerFeature {
    * acknowledgment, health, purpose isolation, and durable staging.
    */
   SERVER_FEATURE_HEC_INGESTION = 16,
+  /**
+   * SERVER_FEATURE_LOOKUP_MANAGEMENT - The complete immutable lookup family is available: asset and definition
+   * CRUD, admission resolution, snapshot retention, derived execution, and
+   * browser management. Field knowledge capability 15 is also required.
+   */
+  SERVER_FEATURE_LOOKUP_MANAGEMENT = 17,
   UNRECOGNIZED = -1,
 }
 
@@ -100,6 +107,9 @@ export function serverFeatureFromJSON(object: any): ServerFeature {
     case 16:
     case "SERVER_FEATURE_HEC_INGESTION":
       return ServerFeature.SERVER_FEATURE_HEC_INGESTION;
+    case 17:
+    case "SERVER_FEATURE_LOOKUP_MANAGEMENT":
+      return ServerFeature.SERVER_FEATURE_LOOKUP_MANAGEMENT;
     case -1:
     case "UNRECOGNIZED":
     default:
@@ -143,6 +153,8 @@ export function serverFeatureToJSON(object: ServerFeature): string {
       return "SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS";
     case ServerFeature.SERVER_FEATURE_HEC_INGESTION:
       return "SERVER_FEATURE_HEC_INGESTION";
+    case ServerFeature.SERVER_FEATURE_LOOKUP_MANAGEMENT:
+      return "SERVER_FEATURE_LOOKUP_MANAGEMENT";
     case ServerFeature.UNRECOGNIZED:
     default:
       return "UNRECOGNIZED";

@@ -2,6 +2,7 @@ package searchinspection
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"path/filepath"
 	"slices"
@@ -10,11 +11,14 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
+	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchsnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
+	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -135,6 +139,204 @@ func TestInspectKnowledgeExecutionUsesExactRetainedCompilerAuthority(t *testing.
 	if err != nil || !proto.Equal(again.KnowledgeSnapshot, wantSummary) {
 		t.Fatalf("second inspection summary = (%#v, %v)", again.KnowledgeSnapshot, err)
 	}
+}
+
+func TestInspectRestoresRetainedExplicitAndAutomaticLookupPlans(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		source     string
+		automatic  bool
+		want       string
+		wantSource bool
+	}{
+		{
+			name: "explicit",
+			source: "index=main | lookup service_catalog service_id AS service" +
+				" OUTPUT owner AS service_owner | table message",
+			want:       "Lookup",
+			wantSource: true,
+		},
+		{
+			name:       "automatic",
+			source:     "index=main | table message",
+			automatic:  true,
+			want:       "AutomaticLookupGroup",
+			wantSource: false,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resolver := inspectionLookupResolverFunc(func(
+				_ context.Context,
+				scope searchjobs.LookupAdmissionResolutionScope,
+			) (searchjobs.LookupAdmissionResolution, error) {
+				resolution, contract := inspectionLookupResolution(
+					t,
+					scope.TenantID,
+				)
+				if test.automatic {
+					selector, err := knowledge.CompileSelector(knowledge.SelectorSpec{})
+					if err != nil {
+						t.Fatalf("CompileSelector: %v", err)
+					}
+					return searchjobs.LookupAdmissionResolution{
+						Automatic: []clickhouse.AutomaticLookupBinding{{
+							StableID:   "lookup-service-catalog",
+							Lookup:     contract,
+							Selector:   selector,
+							Resolution: resolution,
+						}},
+					}, nil
+				}
+				return searchjobs.LookupAdmissionResolution{
+					Explicit: []clickhouse.LookupResolution{resolution},
+				}, nil
+			})
+			snapshot := retainedKnowledgeInspectionSnapshotFor(
+				t,
+				test.source,
+				resolver,
+			)
+			if snapshot.CompiledQuery == nil ||
+				!snapshot.CompiledQuery.HasLookupAuthority() {
+				t.Fatal("fixture omitted retained lookup authority")
+			}
+
+			explainer := &inspectionExplainer{result: inspectionExplainResult(
+				"open-splunk-explain-retained-" + test.name + "-lookup",
+			)}
+			service := newInspectionTestService(t, inspectionTestConfig{
+				Searches: &inspectionSearches{snapshots: []searchjobs.ExecutionSnapshot{
+					snapshot,
+					snapshot,
+				}},
+				Compiler:  clickhouse.Compiler{},
+				Explainer: explainer,
+			})
+			result, err := service.Inspect(
+				context.Background(),
+				searchjobs.AccessScope{
+					TenantID: snapshot.TenantID,
+					OwnerID:  snapshot.OwnerID,
+				},
+				Request{SearchJobID: snapshot.ID},
+			)
+			if err != nil {
+				t.Fatalf("Inspect(retained %s lookup): %v", test.name, err)
+			}
+			var stage *PlanStage
+			for index := range result.Plan.Stages {
+				if result.Plan.Stages[index].Operator == test.want {
+					stage = &result.Plan.Stages[index]
+					break
+				}
+			}
+			if stage == nil || (stage.SourceRange != nil) != test.wantSource ||
+				!slices.Equal(stage.InputFields, []string{"service"}) ||
+				!slices.Equal(stage.OutputFields, []string{"service_owner"}) ||
+				len(stage.KnowledgeObjects) != 0 || len(stage.OutputProvenance) != 0 {
+				t.Fatalf("retained %s lookup stage = %#v", test.name, stage)
+			}
+			if result.KnowledgeSnapshot == nil ||
+				result.KnowledgeSnapshot.GetRef().GetLookupAssetCount() != 1 ||
+				result.KnowledgeSnapshot.GetRef().GetLookupAssetCountUnknown() {
+				t.Fatalf("retained lookup summary = %#v", result.KnowledgeSnapshot)
+			}
+			if err := ValidateResult(result); err != nil {
+				t.Fatalf("ValidateResult(retained %s lookup): %v", test.name, err)
+			}
+		})
+	}
+}
+
+func TestInspectRetainedLookupFailsClosedWithoutConcreteRestorer(t *testing.T) {
+	resolver := inspectionLookupResolverFunc(func(
+		_ context.Context,
+		scope searchjobs.LookupAdmissionResolutionScope,
+	) (searchjobs.LookupAdmissionResolution, error) {
+		resolution, _ := inspectionLookupResolution(t, scope.TenantID)
+		return searchjobs.LookupAdmissionResolution{
+			Explicit: []clickhouse.LookupResolution{resolution},
+		}, nil
+	})
+	snapshot := retainedKnowledgeInspectionSnapshotFor(
+		t,
+		"index=main | lookup service_catalog service_id AS service"+
+			" OUTPUT owner AS service_owner | table message",
+		resolver,
+	)
+	explainer := &inspectionExplainer{}
+	service := newInspectionTestService(t, inspectionTestConfig{
+		Searches:  &inspectionSearches{snapshots: []searchjobs.ExecutionSnapshot{snapshot}},
+		Compiler:  &inspectionCompiler{},
+		Explainer: explainer,
+	})
+	result, err := service.Inspect(
+		context.Background(),
+		searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID},
+		Request{SearchJobID: snapshot.ID},
+	)
+	if !errors.Is(err, ErrInspectionFailed) {
+		t.Fatalf("Inspect() error = %v, want ErrInspectionFailed", err)
+	}
+	assertZeroInspection(t, result)
+	if explainer.callCount() != 0 {
+		t.Fatal("unrestored lookup authority reached Explainer")
+	}
+}
+
+type inspectionLookupResolverFunc func(
+	context.Context,
+	searchjobs.LookupAdmissionResolutionScope,
+) (searchjobs.LookupAdmissionResolution, error)
+
+func (resolver inspectionLookupResolverFunc) ResolveLookupAdmission(
+	ctx context.Context,
+	scope searchjobs.LookupAdmissionResolutionScope,
+) (searchjobs.LookupAdmissionResolution, error) {
+	return resolver(ctx, scope)
+}
+
+func inspectionLookupResolution(
+	t *testing.T,
+	tenantID string,
+) (clickhouse.LookupResolution, plan.Lookup) {
+	t.Helper()
+	key, err := plan.ResolveField("service", spl.Range{})
+	if err != nil {
+		t.Fatalf("ResolveField(service): %v", err)
+	}
+	output, err := plan.ResolveField("service_owner", spl.Range{})
+	if err != nil {
+		t.Fatalf("ResolveField(service_owner): %v", err)
+	}
+	contract := plan.Lookup{
+		DefinitionName: "service_catalog",
+		Keys: []plan.LookupKey{{
+			LookupField: "service_id",
+			EventField:  key,
+		}},
+		Outputs: []plan.LookupOutput{{
+			LookupField: "owner",
+			EventField:  output,
+		}},
+		WriteMode: plan.LookupWriteModeOverwrite,
+	}
+	resolution, err := clickhouse.NewLookupResolutionWithContract(
+		contract,
+		"lookup-service-catalog",
+		1,
+		tenantID,
+		"asset-service-catalog",
+		1,
+		32,
+		sha256.Sum256([]byte("inspection-retained-lookup-asset")),
+		[]string{"service_id", "owner"},
+		[][]string{{"api", "alice"}},
+	)
+	if err != nil {
+		t.Fatalf("NewLookupResolutionWithContract: %v", err)
+	}
+	return resolution, contract
 }
 
 func TestInspectKnowledgeExecutionRejectsIncompleteOrTamperedAuthority(t *testing.T) {
@@ -259,6 +461,19 @@ func TestInspectKnowledgePostflightMismatchSuppressesOutput(t *testing.T) {
 
 func retainedKnowledgeInspectionSnapshot(t *testing.T) searchjobs.ExecutionSnapshot {
 	t.Helper()
+	return retainedKnowledgeInspectionSnapshotFor(
+		t,
+		"index=main | table message",
+		nil,
+	)
+}
+
+func retainedKnowledgeInspectionSnapshotFor(
+	t *testing.T,
+	source string,
+	lookupResolver searchjobs.LookupResolver,
+) searchjobs.ExecutionSnapshot {
+	t.Helper()
 	const (
 		tenantID = "inspection-knowledge-tenant"
 		ownerID  = "inspection-knowledge-owner"
@@ -327,6 +542,7 @@ func retainedKnowledgeInspectionSnapshot(t *testing.T) searchjobs.ExecutionSnaps
 			return 91, nil
 		}),
 		KnowledgeResolver: resolver,
+		LookupResolver:    lookupResolver,
 		RetentionTTL:      time.Hour,
 		CleanupInterval:   -1,
 		Now:               func() time.Time { return now },
@@ -348,7 +564,7 @@ func retainedKnowledgeInspectionSnapshot(t *testing.T) searchjobs.ExecutionSnaps
 		t.Fatalf("searchtime.NewAbsoluteRange(): %v", err)
 	}
 	created, err := manager.Create(context.Background(), searchjobs.CreateRequest{
-		SPL:               "index=main | table message",
+		SPL:               source,
 		OwnerID:           ownerID,
 		TenantID:          tenantID,
 		AppID:             appID,

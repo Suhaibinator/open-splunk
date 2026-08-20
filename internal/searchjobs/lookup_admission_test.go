@@ -60,6 +60,9 @@ func TestLookupAdmissionResolvesAndSealsBeforeExecution(t *testing.T) {
 		CleanupInterval:   -1,
 		NewID:             sequenceIDs("lookup-admission"),
 	})
+	if !manager.LookupAdmissionEnabled() {
+		t.Fatal("lookup-capable manager did not report lookup admission")
+	}
 
 	created, err := manager.Create(t.Context(), request)
 	if err != nil {
@@ -336,6 +339,9 @@ func TestMissingLookupAuthorityDoesNotChangeLegacyNonLookupCreate(t *testing.T) 
 		},
 		CleanupInterval: -1,
 	})
+	if manager.LookupAdmissionEnabled() {
+		t.Fatal("manager without a lookup resolver reported lookup admission")
+	}
 	request := validRequest()
 	request.SPL = "index=main | head 1"
 	created, err := manager.Create(t.Context(), request)

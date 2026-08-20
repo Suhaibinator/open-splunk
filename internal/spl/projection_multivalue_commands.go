@@ -8,10 +8,10 @@ import (
 )
 
 const (
-	// MaximumV03ProjectionFields bounds the explicit field lists accepted by
+	// MaximumExplicitProjectionFields bounds the explicit field lists accepted by
 	// fillnull and addtotals. Both commands lower to one bounded projection and
-	// never perform schema-wide discovery in the v0.3 compatibility profile.
-	MaximumV03ProjectionFields = 64
+	// never perform schema-wide discovery.
+	MaximumExplicitProjectionFields = 64
 
 	// MaximumMakeMVDelimiterBytes bounds the decoded UTF-8 delimiter before it
 	// reaches either logical planning or generated SQL.
@@ -24,8 +24,8 @@ const (
 )
 
 // ExactCommandField is one source-located, exact, unquoted command field.
-// Version 0.3 deliberately does not extend single-quoted scalar field syntax
-// into command grammars.
+// Command grammars deliberately do not inherit single-quoted scalar field
+// syntax.
 type ExactCommandField struct {
 	Name  string
 	Range Range
@@ -45,7 +45,7 @@ func (*FillNullCommand) Name() string         { return "fillnull" }
 func (c *FillNullCommand) SourceRange() Range { return c.Range }
 
 // AddTotalsCommand adds one nullable numeric row total over explicit inputs.
-// The bounded v0.3 slice always has row=true and col=false, so those effective
+// The supported form always has row=true and col=false, so those effective
 // values do not need parallel flags in the AST.
 type AddTotalsCommand struct {
 	Fields      []ExactCommandField
@@ -117,20 +117,20 @@ func (p *parser) parseFillNullCommand(name token) (Command, error) {
 		current := p.current()
 		if current.kind == tokenWord && strings.EqualFold(current.text, "value") && p.nextIs(tokenEqual) {
 			if fieldsStarted {
-				return nil, p.unsupportedV03CommandSyntax("fillnull", current, "fillnull value must precede the explicit field list")
+				return nil, p.unsupportedCommandSyntax("fillnull", current, "fillnull value must precede the explicit field list")
 			}
 			if valueSeen {
-				return nil, p.unsupportedV03CommandSyntax("fillnull", current, "fillnull value may be specified only once")
+				return nil, p.unsupportedCommandSyntax("fillnull", current, "fillnull value may be specified only once")
 			}
 			valueSeen = true
 			p.advance()
 			p.advance() // '=' established by lookahead.
 			value := p.current()
 			if value.kind != tokenString || !value.quoted {
-				return nil, p.unsupportedV03CommandSyntax("fillnull", value, "fillnull value requires one quoted String literal")
+				return nil, p.unsupportedCommandSyntax("fillnull", value, "fillnull value requires one quoted String literal")
 			}
 			if !utf8.ValidString(value.text) {
-				return nil, p.unsupportedV03CommandSyntax("fillnull", value, "fillnull value must contain valid UTF-8")
+				return nil, p.unsupportedCommandSyntax("fillnull", value, "fillnull value must contain valid UTF-8")
 			}
 			command.Value = value.text
 			command.ValueRange = value.sourceRange
@@ -138,14 +138,14 @@ func (p *parser) parseFillNullCommand(name token) (Command, error) {
 			p.advance()
 			continue
 		}
-		if err := p.appendExactV03ProjectionField("fillnull", current, &command.Fields, seenFields); err != nil {
+		if err := p.appendExactProjectionField("fillnull", current, &command.Fields, seenFields); err != nil {
 			return nil, err
 		}
 		fieldsStarted = true
 		end = current.sourceRange.End
 		p.advance()
 	}
-	if err := p.requireV03ProjectionFields("fillnull", command.Fields); err != nil {
+	if err := p.requireProjectionFields("fillnull", command.Fields); err != nil {
 		return nil, err
 	}
 	command.Range = Range{Start: name.sourceRange.Start, End: end}
@@ -164,10 +164,10 @@ func (p *parser) parseAddTotalsCommand(name token) (Command, error) {
 		if current.kind == tokenWord && p.nextIs(tokenEqual) {
 			option := strings.ToLower(current.text)
 			if fieldsStarted {
-				return nil, p.unsupportedV03CommandSyntax("addtotals", current, "addtotals options must precede the explicit field list")
+				return nil, p.unsupportedCommandSyntax("addtotals", current, "addtotals options must precede the explicit field list")
 			}
 			if _, duplicate := seenOptions[option]; duplicate {
-				return nil, p.unsupportedV03CommandSyntax("addtotals", current, fmt.Sprintf("addtotals option %q is repeated", current.text))
+				return nil, p.unsupportedCommandSyntax("addtotals", current, fmt.Sprintf("addtotals option %q is repeated", current.text))
 			}
 			seenOptions[option] = struct{}{}
 			p.advance()
@@ -176,38 +176,38 @@ func (p *parser) parseAddTotalsCommand(name token) (Command, error) {
 			switch option {
 			case "row", "col":
 				if value.kind != tokenWord {
-					return nil, p.unsupportedV03CommandSyntax("addtotals", value, fmt.Sprintf("addtotals %s requires a Boolean literal", option))
+					return nil, p.unsupportedCommandSyntax("addtotals", value, fmt.Sprintf("addtotals %s requires a Boolean literal", option))
 				}
-				parsed, ok := parseV03Bool(value.text)
+				parsed, ok := parseStrictBool(value.text)
 				if !ok || option == "row" && !parsed || option == "col" && parsed {
 					required := "true"
 					if option == "col" {
 						required = "false"
 					}
-					return nil, p.unsupportedV03CommandSyntax("addtotals", value, fmt.Sprintf("addtotals v0.3 supports only %s=%s", option, required))
+					return nil, p.unsupportedCommandSyntax("addtotals", value, fmt.Sprintf("addtotals supports only %s=%s", option, required))
 				}
 			case "fieldname":
-				field, fieldErr := exactV03CommandField("addtotals", value)
+				field, fieldErr := exactCommandField("addtotals", value)
 				if fieldErr != nil {
 					return nil, fieldErr
 				}
 				command.Output = field.Name
 				command.OutputRange = field.Range
 			default:
-				return nil, p.unsupportedV03CommandSyntax("addtotals", current, fmt.Sprintf("addtotals option %q is not supported", current.text))
+				return nil, p.unsupportedCommandSyntax("addtotals", current, fmt.Sprintf("addtotals option %q is not supported", current.text))
 			}
 			end = value.sourceRange.End
 			p.advance()
 			continue
 		}
-		if err := p.appendExactV03ProjectionField("addtotals", current, &command.Fields, seenFields); err != nil {
+		if err := p.appendExactProjectionField("addtotals", current, &command.Fields, seenFields); err != nil {
 			return nil, err
 		}
 		fieldsStarted = true
 		end = current.sourceRange.End
 		p.advance()
 	}
-	if err := p.requireV03ProjectionFields("addtotals", command.Fields); err != nil {
+	if err := p.requireProjectionFields("addtotals", command.Fields); err != nil {
 		return nil, err
 	}
 	command.Range = Range{Start: name.sourceRange.Start, End: end}
@@ -231,7 +231,7 @@ func (p *parser) parseDeltaCommand(name token) (Command, error) {
 		}
 	}
 	sourceToken := p.current()
-	source, err := exactV03CommandField("delta", sourceToken)
+	source, err := exactCommandField("delta", sourceToken)
 	if err != nil {
 		return nil, err
 	}
@@ -252,7 +252,7 @@ func (p *parser) parseDeltaCommand(name token) (Command, error) {
 		current := p.current()
 		if p.isKeyword("AS") {
 			if seenAS {
-				return nil, p.unsupportedV03CommandSyntax("delta", current, "delta AS may be specified only once")
+				return nil, p.unsupportedCommandSyntax("delta", current, "delta AS may be specified only once")
 			}
 			seenAS = true
 			as := current
@@ -265,7 +265,7 @@ func (p *parser) parseDeltaCommand(name token) (Command, error) {
 				}
 			}
 			destinationToken := p.current()
-			destination, destinationErr := exactV03CommandField("delta", destinationToken)
+			destination, destinationErr := exactCommandField("delta", destinationToken)
 			if destinationErr != nil {
 				return nil, destinationErr
 			}
@@ -278,18 +278,18 @@ func (p *parser) parseDeltaCommand(name token) (Command, error) {
 		}
 		if current.kind == tokenWord && strings.EqualFold(current.text, "p") && p.nextIs(tokenEqual) {
 			if seenP {
-				return nil, p.unsupportedV03CommandSyntax("delta", current, "delta p may be specified only once")
+				return nil, p.unsupportedCommandSyntax("delta", current, "delta p may be specified only once")
 			}
 			seenP = true
 			p.advance()
 			p.advance()
 			value := p.current()
 			if value.kind != tokenWord || !unsignedIntegerSyntax(value.text) {
-				return nil, p.unsupportedV03CommandSyntax("delta", v03IntegerDiagnosticToken(value), fmt.Sprintf("delta p must be a positive integer from 1 through %d", MaximumStreamStatsWindow))
+				return nil, p.unsupportedCommandSyntax("delta", integerDiagnosticToken(value), fmt.Sprintf("delta p must be a positive integer from 1 through %d", MaximumStreamStatsWindow))
 			}
 			previous, parseErr := strconv.ParseUint(value.text, 10, 64)
 			if parseErr != nil || previous == 0 {
-				return nil, p.unsupportedV03CommandSyntax("delta", value, fmt.Sprintf("delta p must be a positive integer from 1 through %d", MaximumStreamStatsWindow))
+				return nil, p.unsupportedCommandSyntax("delta", value, fmt.Sprintf("delta p must be a positive integer from 1 through %d", MaximumStreamStatsWindow))
 			}
 			if previous > MaximumStreamStatsWindow {
 				return nil, &Diagnostic{
@@ -304,7 +304,7 @@ func (p *parser) parseDeltaCommand(name token) (Command, error) {
 			p.advance()
 			continue
 		}
-		return nil, p.unsupportedV03CommandSyntax("delta", current, fmt.Sprintf("unsupported delta option or syntax at %q", current.text))
+		return nil, p.unsupportedCommandSyntax("delta", current, fmt.Sprintf("unsupported delta option or syntax at %q", current.text))
 	}
 	command.Range = Range{Start: name.sourceRange.Start, End: end}
 	if countErr := p.countArithmeticOperator(command.Range); countErr != nil {
@@ -328,7 +328,7 @@ func (p *parser) parseMakeMVCommand(name token) (Command, error) {
 		current := p.current()
 		if current.kind == tokenWord && p.nextIs(tokenEqual) {
 			if fieldSeen {
-				return nil, p.unsupportedV03CommandSyntax("makemv", current, "makemv options must precede the field")
+				return nil, p.unsupportedCommandSyntax("makemv", current, "makemv options must precede the field")
 			}
 			option := strings.ToLower(current.text)
 			p.advance()
@@ -337,14 +337,14 @@ func (p *parser) parseMakeMVCommand(name token) (Command, error) {
 			switch option {
 			case "delim":
 				if seenDelimiter {
-					return nil, p.unsupportedV03CommandSyntax("makemv", current, "makemv delim may be specified only once")
+					return nil, p.unsupportedCommandSyntax("makemv", current, "makemv delim may be specified only once")
 				}
 				seenDelimiter = true
 				if value.kind != tokenString || !value.quoted || value.text == "" {
-					return nil, p.unsupportedV03CommandSyntax("makemv", value, "makemv delim requires one nonempty quoted String literal")
+					return nil, p.unsupportedCommandSyntax("makemv", value, "makemv delim requires one nonempty quoted String literal")
 				}
 				if !utf8.ValidString(value.text) {
-					return nil, p.unsupportedV03CommandSyntax("makemv", value, "makemv delimiter must contain valid UTF-8")
+					return nil, p.unsupportedCommandSyntax("makemv", value, "makemv delimiter must contain valid UTF-8")
 				}
 				if len(value.text) > MaximumMakeMVDelimiterBytes {
 					return nil, &Diagnostic{
@@ -357,36 +357,36 @@ func (p *parser) parseMakeMVCommand(name token) (Command, error) {
 				command.DelimiterRange = value.sourceRange
 			case "allowempty":
 				if seenAllowEmpty {
-					return nil, p.unsupportedV03CommandSyntax("makemv", current, "makemv allowempty may be specified only once")
+					return nil, p.unsupportedCommandSyntax("makemv", current, "makemv allowempty may be specified only once")
 				}
 				seenAllowEmpty = true
 				if value.kind != tokenWord {
-					return nil, p.unsupportedV03CommandSyntax("makemv", value, "makemv allowempty requires a Boolean literal")
+					return nil, p.unsupportedCommandSyntax("makemv", value, "makemv allowempty requires a Boolean literal")
 				}
-				allowEmpty, ok := parseV03Bool(value.text)
+				allowEmpty, ok := parseStrictBool(value.text)
 				if !ok {
-					return nil, p.unsupportedV03CommandSyntax("makemv", value, "makemv allowempty must be true or false")
+					return nil, p.unsupportedCommandSyntax("makemv", value, "makemv allowempty must be true or false")
 				}
 				command.AllowEmpty = allowEmpty
 				command.AllowEmptyRange = value.sourceRange
 			case "tokenizer", "setsv":
-				return nil, p.unsupportedV03CommandSyntax("makemv", current, fmt.Sprintf("makemv option %q is deferred", current.text))
+				return nil, p.unsupportedCommandSyntax("makemv", current, fmt.Sprintf("makemv option %q is deferred", current.text))
 			default:
-				return nil, p.unsupportedV03CommandSyntax("makemv", current, fmt.Sprintf("makemv option %q is not supported", current.text))
+				return nil, p.unsupportedCommandSyntax("makemv", current, fmt.Sprintf("makemv option %q is not supported", current.text))
 			}
 			end = value.sourceRange.End
 			p.advance()
 			continue
 		}
 		if fieldSeen {
-			return nil, p.unsupportedV03CommandSyntax("makemv", current, "makemv supports exactly one field")
+			return nil, p.unsupportedCommandSyntax("makemv", current, "makemv supports exactly one field")
 		}
-		field, fieldErr := exactV03CommandField("makemv", current)
+		field, fieldErr := exactCommandField("makemv", current)
 		if fieldErr != nil {
 			return nil, fieldErr
 		}
-		if isInternalV03MultivalueField(field.Name) {
-			return nil, p.unsupportedV03CommandSyntax("makemv", current, "makemv does not support internal fields")
+		if isInternalMultivalueField(field.Name) {
+			return nil, p.unsupportedCommandSyntax("makemv", current, "makemv does not support internal fields")
 		}
 		fieldSeen = true
 		command.Field = field.Name
@@ -414,12 +414,12 @@ func (p *parser) parseMVExpandCommand(name token) (Command, error) {
 		}
 	}
 	fieldToken := p.current()
-	field, err := exactV03CommandField("mvexpand", fieldToken)
+	field, err := exactCommandField("mvexpand", fieldToken)
 	if err != nil {
 		return nil, err
 	}
-	if isInternalV03MultivalueField(field.Name) {
-		return nil, p.unsupportedV03CommandSyntax("mvexpand", fieldToken, "mvexpand does not support internal fields")
+	if isInternalMultivalueField(field.Name) {
+		return nil, p.unsupportedCommandSyntax("mvexpand", fieldToken, "mvexpand does not support internal fields")
 	}
 	command := &MVExpandCommand{Field: field.Name, FieldRange: field.Range}
 	end := field.Range.End
@@ -427,13 +427,13 @@ func (p *parser) parseMVExpandCommand(name token) (Command, error) {
 	if !p.atCommandEnd() {
 		option := p.current()
 		if option.kind != tokenWord || !strings.EqualFold(option.text, "limit") || !p.nextIs(tokenEqual) {
-			return nil, p.unsupportedV03CommandSyntax("mvexpand", option, fmt.Sprintf("unsupported mvexpand option or syntax at %q", option.text))
+			return nil, p.unsupportedCommandSyntax("mvexpand", option, fmt.Sprintf("unsupported mvexpand option or syntax at %q", option.text))
 		}
 		p.advance()
 		p.advance()
 		value := p.current()
 		if value.kind != tokenWord || !unsignedIntegerSyntax(value.text) {
-			return nil, p.unsupportedV03CommandSyntax("mvexpand", v03IntegerDiagnosticToken(value), fmt.Sprintf("mvexpand limit must be an integer from 0 through %d", MaximumMVExpandLimit))
+			return nil, p.unsupportedCommandSyntax("mvexpand", integerDiagnosticToken(value), fmt.Sprintf("mvexpand limit must be an integer from 0 through %d", MaximumMVExpandLimit))
 		}
 		limit, parseErr := strconv.ParseUint(value.text, 10, 64)
 		if parseErr != nil || limit > MaximumMVExpandLimit {
@@ -450,35 +450,35 @@ func (p *parser) parseMVExpandCommand(name token) (Command, error) {
 		p.advance()
 	}
 	if !p.atCommandEnd() {
-		return nil, p.unsupportedV03CommandSyntax("mvexpand", p.current(), "mvexpand limit may be specified only once and must be final")
+		return nil, p.unsupportedCommandSyntax("mvexpand", p.current(), "mvexpand limit may be specified only once and must be final")
 	}
 	command.Range = Range{Start: name.sourceRange.Start, End: end}
 	return command, nil
 }
 
-// appendExactV03ProjectionField validates one whitespace-separated exact field
+// appendExactProjectionField validates one whitespace-separated exact field
 // token for the fillnull/addtotals projection lists and appends it, rejecting
 // comma separators, duplicates, and lists beyond the bounded field ceiling.
-func (p *parser) appendExactV03ProjectionField(
+func (p *parser) appendExactProjectionField(
 	commandName string,
 	current token,
 	fields *[]ExactCommandField,
 	seen map[string]struct{},
 ) error {
 	if current.kind == tokenComma {
-		return p.unsupportedV03CommandSyntax(commandName, current, commandName+" fields are separated by spaces, not commas")
+		return p.unsupportedCommandSyntax(commandName, current, commandName+" fields are separated by spaces, not commas")
 	}
-	field, err := exactV03CommandField(commandName, current)
+	field, err := exactCommandField(commandName, current)
 	if err != nil {
 		return err
 	}
 	if _, duplicate := seen[field.Name]; duplicate {
-		return p.unsupportedV03CommandSyntax(commandName, current, fmt.Sprintf("%s field %q is repeated", commandName, field.Name))
+		return p.unsupportedCommandSyntax(commandName, current, fmt.Sprintf("%s field %q is repeated", commandName, field.Name))
 	}
-	if len(*fields) >= MaximumV03ProjectionFields {
+	if len(*fields) >= MaximumExplicitProjectionFields {
 		return &Diagnostic{
 			Code:    "SPL_QUERY_TOO_COMPLEX",
-			Message: fmt.Sprintf("%s contains more than %d fields", commandName, MaximumV03ProjectionFields),
+			Message: fmt.Sprintf("%s contains more than %d fields", commandName, MaximumExplicitProjectionFields),
 			Range:   current.sourceRange,
 		}
 	}
@@ -487,7 +487,7 @@ func (p *parser) appendExactV03ProjectionField(
 	return nil
 }
 
-func (p *parser) requireV03ProjectionFields(commandName string, fields []ExactCommandField) error {
+func (p *parser) requireProjectionFields(commandName string, fields []ExactCommandField) error {
 	if len(fields) == 0 {
 		return &Diagnostic{
 			Code:    "SPL_EXPECTED_FIELD",
@@ -498,7 +498,7 @@ func (p *parser) requireV03ProjectionFields(commandName string, fields []ExactCo
 	return nil
 }
 
-func exactV03CommandField(command string, tok token) (ExactCommandField, error) {
+func exactCommandField(command string, tok token) (ExactCommandField, error) {
 	if tok.kind != tokenWord || !IsExactUnquotedFieldName(tok.text) {
 		return ExactCommandField{}, &Diagnostic{
 			Code:    "SPL_EXPECTED_FIELD",
@@ -516,15 +516,15 @@ func exactV03CommandField(command string, tok token) (ExactCommandField, error) 
 	return ExactCommandField{Name: tok.text, Range: tok.sourceRange}, nil
 }
 
-func isInternalV03MultivalueField(name string) bool {
+func isInternalMultivalueField(name string) bool {
 	return strings.HasPrefix(name, "_")
 }
 
-// v03IntegerDiagnosticToken keeps a leading sign source-located independently
+// integerDiagnosticToken keeps a leading sign source-located independently
 // from the following digits. The lexer deliberately retains signed scalar
 // spellings as one legacy word, while these command options admit only
 // unsigned literals and should point at the first offending sign.
-func v03IntegerDiagnosticToken(tok token) token {
+func integerDiagnosticToken(tok token) token {
 	if tok.kind == tokenWord && (strings.HasPrefix(tok.text, "-") || strings.HasPrefix(tok.text, "+")) {
 		diagnosticToken := tok
 		diagnosticToken.sourceRange.End = advancePositionByRune(tok.sourceRange.Start, rune(tok.text[0]), 1)
@@ -533,7 +533,7 @@ func v03IntegerDiagnosticToken(tok token) token {
 	return tok
 }
 
-func (p *parser) unsupportedV03CommandSyntax(command string, tok token, message string) *Diagnostic {
+func (p *parser) unsupportedCommandSyntax(command string, tok token, message string) *Diagnostic {
 	return &Diagnostic{
 		Code:    "SPL_UNSUPPORTED_" + strings.ToUpper(command) + "_SYNTAX",
 		Message: message,

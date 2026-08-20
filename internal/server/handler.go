@@ -103,8 +103,8 @@ type knowledgeSearchAdmission interface {
 	KnowledgeAdmissionEnabled() bool
 }
 
-type knowledgeSearchExecution interface {
-	KnowledgeExecutionEnabled() bool
+type lookupSearchAdmission interface {
+	LookupAdmissionEnabled() bool
 }
 
 func knowledgeSearchAdmissionEnabled(jobs SearchJobs) bool {
@@ -115,12 +115,12 @@ func knowledgeSearchAdmissionEnabled(jobs SearchJobs) bool {
 	return ok && !isNilDependency(admission) && admission.KnowledgeAdmissionEnabled()
 }
 
-func knowledgeSearchExecutionEnabled(jobs SearchJobs) bool {
+func lookupSearchAdmissionEnabled(jobs SearchJobs) bool {
 	if isNilDependency(jobs) {
 		return false
 	}
-	execution, ok := jobs.(knowledgeSearchExecution)
-	return ok && !isNilDependency(execution) && execution.KnowledgeExecutionEnabled()
+	admission, ok := jobs.(lookupSearchAdmission)
+	return ok && !isNilDependency(admission) && admission.LookupAdmissionEnabled()
 }
 
 // IndexCatalog supplies the live index authorization and bootstrap view.
@@ -466,21 +466,20 @@ func (handler *Handler) Close(ctx context.Context) error {
 // are always loaded from IndexCatalog so authorization and UI bootstrap cannot
 // drift apart.
 type BootstrapConfig struct {
-	ServerVersion           string
-	APIVersion              string
-	SPLCompatibilityVersion string
-	Build                   *opensplunkv1.BuildMetadata
-	SearchWebSocketPath     string
-	Features                []opensplunkv1.ServerFeature
-	Apps                    []*opensplunkv1.AppSummary
-	SelectedAppID           string
-	MaximumPreviewRows      uint32
-	MaximumSubscriptions    uint32
-	MaximumWebSocketBytes   uint64
-	MaximumExportRows       uint64
-	MaximumExportBytes      uint64
-	DefaultSearchTimeout    time.Duration
-	SearchResultRetention   time.Duration
+	ServerVersion         string
+	APIVersion            string
+	Build                 *opensplunkv1.BuildMetadata
+	SearchWebSocketPath   string
+	Features              []opensplunkv1.ServerFeature
+	Apps                  []*opensplunkv1.AppSummary
+	SelectedAppID         string
+	MaximumPreviewRows    uint32
+	MaximumSubscriptions  uint32
+	MaximumWebSocketBytes uint64
+	MaximumExportRows     uint64
+	MaximumExportBytes    uint64
+	DefaultSearchTimeout  time.Duration
+	SearchResultRetention time.Duration
 }
 
 // Config composes the trusted-network browser API and embedded static UI.
@@ -693,7 +692,7 @@ func NewHandler(config Config) (*Handler, error) {
 		appAdmin = nil
 	}
 	knowledgeAdmission := knowledgeSearchAdmissionEnabled(config.SearchJobs)
-	knowledgeExecution := knowledgeSearchExecutionEnabled(config.SearchJobs)
+	lookupAdmission := lookupSearchAdmissionEnabled(config.SearchJobs)
 	appCatalog := config.AppCatalog
 	if isNilDependency(appCatalog) {
 		appCatalog = nil
@@ -946,6 +945,15 @@ func NewHandler(config Config) (*Handler, error) {
 	if validateBoundedIdentifier(ownerID, maximumSavedSearchOwnerBytes, false) != nil || validateBoundedIdentifier(tenantID, maximumIdentityBytes, false) != nil {
 		return nil, errors.New("create server handler: owner or tenant identity is invalid")
 	}
+	completeKnowledgeFamily :=
+		configuredKnowledgeDependencies == len(knowledgeDependenciesConfigured) &&
+			knowledgePreview != nil && knowledgePreview.Ready() &&
+			knowledgeAdmission &&
+			inspectionService != nil && searchHistoryService != nil &&
+			exportService != nil && timelineService != nil &&
+			fieldService != nil && suggestionService != nil
+	completeLookupFamily := completeKnowledgeFamily &&
+		lookupManagement != nil && lookupAdmission
 	bootstrap, err := normalizeBootstrap(config.Bootstrap)
 	if err != nil {
 		return nil, err
@@ -989,12 +997,8 @@ func NewHandler(config Config) (*Handler, error) {
 		searchAttemptAudit: searchAttemptAuditEvents != nil,
 		fieldDiscovery:     fieldService != nil,
 		previews:           searchWebSocket != nil,
-		knowledge: configuredKnowledgeDependencies == len(knowledgeDependenciesConfigured) &&
-			knowledgePreview != nil && knowledgePreview.Ready() &&
-			knowledgeAdmission && knowledgeExecution &&
-			inspectionService != nil && searchHistoryService != nil &&
-			exportService != nil && timelineService != nil &&
-			fieldService != nil && suggestionService != nil,
+		knowledge:          completeKnowledgeFamily,
+		lookups:            completeLookupFamily,
 	})
 	browserAllowedHosts, err := normalizeBrowserAllowedHosts(config.AdministrativeAllowedHosts)
 	if err != nil {
@@ -1306,14 +1310,6 @@ func normalizeBootstrap(config BootstrapConfig) (BootstrapConfig, error) {
 	if result.APIVersion == "" {
 		result.APIVersion = "v1"
 	}
-	if result.SPLCompatibilityVersion == "" {
-		result.SPLCompatibilityVersion = spl.CompatibilityVersion
-	}
-	if !searchjobs.ValidCompilerVersion(result.SPLCompatibilityVersion) {
-		return BootstrapConfig{}, errors.New(
-			"create server handler: SPL compatibility version is invalid",
-		)
-	}
 	if result.Build != nil {
 		clonedBuild, serverVersion, err := buildmetadata.Normalize(result.Build, result.ServerVersion)
 		if err != nil {
@@ -1371,6 +1367,7 @@ type serviceCapabilities struct {
 	fieldDiscovery     bool
 	previews           bool
 	knowledge          bool
+	lookups            bool
 }
 
 func featuresForServices(features []opensplunkv1.ServerFeature, capabilities serviceCapabilities) []opensplunkv1.ServerFeature {
@@ -1394,6 +1391,7 @@ func featuresForServices(features []opensplunkv1.ServerFeature, capabilities ser
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY, capabilities.fieldDiscovery},
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_PREVIEW, capabilities.previews},
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS, capabilities.knowledge},
+		{opensplunkv1.ServerFeature_SERVER_FEATURE_LOOKUP_MANAGEMENT, capabilities.lookups},
 	}
 	enabled := make(map[opensplunkv1.ServerFeature]bool, len(managed))
 	for _, item := range managed {

@@ -120,9 +120,9 @@ func convertKnowledgeCalculatedExpression(
 	if err != nil {
 		return nil, fmt.Errorf("convert knowledge calculated expression: parse: %w", err)
 	}
-	if knowledgeExpressionUsesAuthoredV02Syntax(parsed) {
+	if knowledgeExpressionUsesAuthoredOnlySyntax(parsed) {
 		return nil, errors.New(
-			"convert knowledge calculated expression: arithmetic and membership require the authored v0.2 profile",
+			"convert knowledge calculated expression: arithmetic and membership are not supported in reusable knowledge expressions",
 		)
 	}
 	if spl.ScalarExpressionMayReturnBooleanFunction(parsed) {
@@ -156,7 +156,7 @@ func convertKnowledgeCalculatedExpression(
 	return expression, nil
 }
 
-func knowledgeExpressionUsesAuthoredV02Syntax(expression spl.ScalarExpr) bool {
+func knowledgeExpressionUsesAuthoredOnlySyntax(expression spl.ScalarExpr) bool {
 	if nilcheck.IsNil(expression) {
 		return true
 	}
@@ -166,15 +166,15 @@ func knowledgeExpressionUsesAuthoredV02Syntax(expression spl.ScalarExpr) bool {
 	case *spl.ScalarUnaryExpr, *spl.ScalarBinaryExpr:
 		return true
 	case *spl.ScalarCallExpr:
-		return slices.ContainsFunc(expression.Arguments, knowledgeExpressionUsesAuthoredV02Syntax)
+		return slices.ContainsFunc(expression.Arguments, knowledgeExpressionUsesAuthoredOnlySyntax)
 	case *spl.ScalarIfExpr:
-		return knowledgeWhereUsesAuthoredV02Syntax(expression.Condition) ||
-			knowledgeExpressionUsesAuthoredV02Syntax(expression.True) ||
-			knowledgeExpressionUsesAuthoredV02Syntax(expression.False)
+		return knowledgeWhereUsesAuthoredOnlySyntax(expression.Condition) ||
+			knowledgeExpressionUsesAuthoredOnlySyntax(expression.True) ||
+			knowledgeExpressionUsesAuthoredOnlySyntax(expression.False)
 	case *spl.ScalarCaseExpr:
 		for _, branch := range expression.Branches {
-			if knowledgeWhereUsesAuthoredV02Syntax(branch.Condition) ||
-				knowledgeExpressionUsesAuthoredV02Syntax(branch.Value) {
+			if knowledgeWhereUsesAuthoredOnlySyntax(branch.Condition) ||
+				knowledgeExpressionUsesAuthoredOnlySyntax(branch.Value) {
 				return true
 			}
 		}
@@ -184,23 +184,23 @@ func knowledgeExpressionUsesAuthoredV02Syntax(expression spl.ScalarExpr) bool {
 	}
 }
 
-func knowledgeWhereUsesAuthoredV02Syntax(expression spl.WhereExpr) bool {
+func knowledgeWhereUsesAuthoredOnlySyntax(expression spl.WhereExpr) bool {
 	if nilcheck.IsNil(expression) {
 		return true
 	}
 	switch expression := expression.(type) {
 	case *spl.WhereBoolExpr:
-		return knowledgeWhereUsesAuthoredV02Syntax(expression.Left) ||
-			knowledgeWhereUsesAuthoredV02Syntax(expression.Right)
+		return knowledgeWhereUsesAuthoredOnlySyntax(expression.Left) ||
+			knowledgeWhereUsesAuthoredOnlySyntax(expression.Right)
 	case *spl.WhereNotExpr:
-		return knowledgeWhereUsesAuthoredV02Syntax(expression.Operand)
+		return knowledgeWhereUsesAuthoredOnlySyntax(expression.Operand)
 	case *spl.WhereComparisonExpr:
-		return knowledgeExpressionUsesAuthoredV02Syntax(expression.Left) ||
-			knowledgeExpressionUsesAuthoredV02Syntax(expression.Right)
+		return knowledgeExpressionUsesAuthoredOnlySyntax(expression.Left) ||
+			knowledgeExpressionUsesAuthoredOnlySyntax(expression.Right)
 	case *spl.WhereMembershipExpr:
 		return true
 	case *spl.WhereScalarPredicateExpr:
-		return knowledgeExpressionUsesAuthoredV02Syntax(expression.Value)
+		return knowledgeExpressionUsesAuthoredOnlySyntax(expression.Value)
 	default:
 		return true
 	}

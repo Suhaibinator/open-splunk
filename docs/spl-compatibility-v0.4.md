@@ -1,16 +1,44 @@
 # Open Splunk SPL compatibility v0.4
 
-**Status:** normative implementation contract; activation pending
+**Status:** normative executable contract; active
 
 **Authored-search compatibility:** `0.4`
 
-**Knowledge compatibility:** `0.2`
+**Product release:** `0.4.0`
+
+**Rule inventory:** `internal/spl/testdata/compatibility-v0.4.json`
 
 This contract incorporates unchanged v0.1 through v0.3 authored-search
 behavior and the unchanged Tier-1 knowledge behavior. It adds exact immutable
 CSV lookup enrichment. Parser acceptance alone is not compatibility: a lookup
 must resolve to a visible, versioned server authority and compile to a bounded,
 row-preserving operation before a job can be admitted.
+
+## Compatibility identity
+
+### `SPL-V04-PROFILE-001` — Cumulative authored profile
+
+Production-authored searches use the cumulative `0.4` profile. It includes
+every unchanged v0.1 through v0.3 authored-search rule and the lookup rules in
+this contract; callers cannot select individual feature versions. Every
+admitted job, bootstrap response, history record, and export surface reports
+the same authored compiler identity. Inspection and analysis retain and
+validate that identity and fail closed if a rebuild would cross it.
+
+Tier-1 calculated fields remain on their smaller closed reusable-expression
+grammar; activating authored compatibility `0.4` does not enable the broader
+authored syntax inside stored calculated fields. Knowledge snapshots retain
+internal compiler and immutable lookup evidence for exact reconstruction, not
+a second public compatibility profile.
+
+The production bootstrap reports authored SPL `0.4` independently from two
+runtime capabilities. `SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS` advertises the
+complete Tier-1 field-knowledge family. The additive
+`SERVER_FEATURE_LOOKUP_MANAGEMENT` advertises the complete lookup management,
+admission, snapshot, execution, retained-product, and browser family and is
+emitted only alongside the field-knowledge capability. A partial server
+composition omits the capability for the incomplete family instead of
+overstating what it can execute through every retained product.
 
 ## `lookup`
 

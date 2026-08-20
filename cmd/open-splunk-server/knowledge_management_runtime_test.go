@@ -587,11 +587,13 @@ func TestRuntimeKnowledgeCompositionDoesNotAdvertiseWithoutSearchAdmission(
 	if err := proto.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if slices.Contains(
-		decoded.GetFeatures(),
+	for _, feature := range []opensplunkv1.ServerFeature{
 		opensplunkv1.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS,
-	) {
-		t.Fatalf("management-only runtime advertised knowledge execution: %v", decoded.GetFeatures())
+		opensplunkv1.ServerFeature_SERVER_FEATURE_LOOKUP_MANAGEMENT,
+	} {
+		if slices.Contains(decoded.GetFeatures(), feature) {
+			t.Fatalf("management-only runtime advertised %s: %v", feature, decoded.GetFeatures())
+		}
 	}
 }
 

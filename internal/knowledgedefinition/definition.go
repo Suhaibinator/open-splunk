@@ -518,7 +518,7 @@ func normalizeFieldExtraction(body *opensplunkv1.FieldExtractionDefinition) erro
 		return invalid("field_extraction.input_field", err)
 	}
 	if normalizedInput != "_raw" {
-		return invalid("field_extraction.input_field", errors.New("must be _raw in compatibility version 0.1"))
+		return invalid("field_extraction.input_field", errors.New("must be _raw for field extraction"))
 	}
 	body.InputField = normalizedInput
 

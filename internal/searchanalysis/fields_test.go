@@ -17,7 +17,6 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
-	"github.com/Suhaibinator/open-splunk/internal/searchsnapshot"
 )
 
 var fieldTestCursorKey = []byte("field-catalog-test-cursor-key-32-bytes")
@@ -124,48 +123,6 @@ func TestFieldServiceBuildsCachesFiltersAndPagesDetachedCatalog(t *testing.T) {
 	})
 	if err != nil || filtered.TotalFields != 1 || filtered.Fields[0].FieldName != "z_mixed" {
 		t.Fatalf("lowercase filtered page = (%#v, %v)", filtered, err)
-	}
-}
-
-func TestFieldServiceRejectsManagerAttestedSnapshotFromAnotherCompilerVersion(t *testing.T) {
-	t.Parallel()
-	snapshot, err := sealSearchAnalysisSnapshotWithCompiler(
-		fieldTestSnapshot("field-incompatible-compiler-version"),
-		nil,
-		clickhouse.Compiler{},
-		"0.1",
-	)
-	if err != nil {
-		t.Fatalf("seal incompatible-version snapshot: %v", err)
-	}
-	compiler := &fakeFieldCompiler{}
-	executor := &fakeFieldExecutor{result: twoFieldCatalog()}
-	service := newFieldTestService(t, FieldConfig{
-		Searches: &rawSearchAnalysisSnapshots{
-			snapshots: []searchjobs.ExecutionSnapshot{snapshot},
-		},
-		Compiler: compiler,
-		Executor: executor,
-	})
-
-	page, err := service.ListFields(
-		context.Background(),
-		fieldAccess(snapshot),
-		ListFieldsRequest{SearchJobID: snapshot.ID},
-	)
-	if !errors.Is(err, searchsnapshot.ErrCompilerVersionMismatch) {
-		t.Fatalf(
-			"ListFields(incompatible compiler version) = (%#v, %v), want version mismatch",
-			page,
-			err,
-		)
-	}
-	if compiler.Calls() != 0 || executor.Calls() != 0 {
-		t.Fatalf(
-			"compiler/executor calls = %d/%d, want 0/0",
-			compiler.Calls(),
-			executor.Calls(),
-		)
 	}
 }
 

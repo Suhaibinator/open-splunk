@@ -24,7 +24,7 @@ const (
 	// query may now contain the complete 256-operator generated prefix in
 	// addition to every formerly admitted authored stage.
 	maximumPlanStages = maximumAuthoredPlanStages +
-		uint32(knowledgeprogram.MaximumObjects)
+		uint32(knowledgeprogram.MaximumObjects) + 1 // one generated automatic-lookup group
 	maximumStageFields = uint32(1_024)
 	// A static schema may accumulate fields across otherwise bounded stages.
 	// Every planner-built final field is represented by one of plan.Analyze's
@@ -214,7 +214,8 @@ func projectLogicalPlan(
 		if operator == nil {
 			return LogicalPlan{}, invalidProjection("logical operator is nil")
 		}
-		if _, knowledge := inspectionKnowledgeOperator(operator.LogicalName()); !knowledge {
+		_, knowledge := inspectionKnowledgeOperator(operator.LogicalName())
+		if !knowledge && operator.LogicalName() != "AutomaticLookupGroup" {
 			authoredStages++
 			if authoredStages > int(maximumAuthoredPlanStages) {
 				return LogicalPlan{}, invalidProjection(
@@ -407,6 +408,42 @@ func describeOperator(operator plan.Operator) (operatorDescription, error) {
 			}
 		}
 		return description, nil
+	case *plan.AutomaticLookupGroup:
+		if concrete == nil {
+			return operatorDescription{}, invalidProjection("logical operator is nil")
+		}
+		if _, valid := concrete.AuthorityDigest(); !valid {
+			return operatorDescription{}, invalidProjection(
+				"logical AutomaticLookupGroup authority is invalid",
+			)
+		}
+		lookups := concrete.Lookups()
+		if len(lookups) == 0 || len(lookups) > plan.MaximumAutomaticLookupStages {
+			return operatorDescription{}, invalidProjection(
+				"logical AutomaticLookupGroup has an invalid lookup inventory",
+			)
+		}
+		for _, retained := range lookups {
+			lookup := retained.LogicalLookup()
+			if len(lookup.Outputs) == 0 ||
+				len(lookup.Outputs) > spl.MaximumLookupOutputs {
+				return operatorDescription{}, invalidProjection(
+					"logical AutomaticLookupGroup has an invalid output inventory",
+				)
+			}
+			for _, output := range lookup.Outputs {
+				description.outputs = append(
+					description.outputs,
+					output.EventField.Name,
+				)
+			}
+		}
+		if len(description.outputs) > int(maximumStageFields) {
+			return operatorDescription{}, invalidProjection(
+				"logical AutomaticLookupGroup has too many outputs",
+			)
+		}
+		return description, nil
 	default:
 		name, outputs, sourceRange, err := describeAuthoredOperator(operator)
 		if err != nil {
@@ -573,6 +610,17 @@ func describeAuthoredOperator(
 		outputs = make([]string, len(concrete.Assignments))
 		for index, assignment := range concrete.Assignments {
 			outputs[index] = assignment.Destination.Name
+		}
+	case *plan.Lookup:
+		if concrete == nil || len(concrete.Outputs) == 0 ||
+			len(concrete.Outputs) > spl.MaximumLookupOutputs {
+			return "", nil, spl.Range{}, invalidProjection(
+				"logical Lookup has an invalid output inventory",
+			)
+		}
+		outputs = make([]string, len(concrete.Outputs))
+		for index, output := range concrete.Outputs {
+			outputs[index] = output.EventField.Name
 		}
 	case *plan.Aggregate:
 		if concrete == nil {

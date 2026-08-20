@@ -1,5 +1,7 @@
 import type { ComponentType } from "react";
 
+import { ServerFeature } from "@/gen/ts/open_splunk/v1/system_api";
+
 export type BackendAdminSection =
   | "overview"
   | "apps"
@@ -42,15 +44,36 @@ const LOOKUP_NAVIGATION: BackendAdminNavigationItem = {
   icon: "⊞",
 };
 
-/** Returns the existing array untouched unless trusted bootstrap advertises knowledge. */
+export interface BackendKnowledgeCapabilities {
+  knowledge: boolean;
+  lookupManagement: boolean;
+}
+
+/** Resolves the two additive bootstrap capabilities without a version axis. */
+export function backendKnowledgeCapabilities(
+  features: ReadonlySet<ServerFeature> | null,
+): BackendKnowledgeCapabilities {
+  const knowledge = features?.has(
+    ServerFeature.SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS,
+  ) ?? false;
+  return {
+    knowledge,
+    lookupManagement: knowledge && (features?.has(
+      ServerFeature.SERVER_FEATURE_LOOKUP_MANAGEMENT,
+    ) ?? false),
+  };
+}
+
+/** Inserts only the independently advertised knowledge-management surfaces. */
 export function backendAdminNavigation(
   knowledgeAdvertised: boolean,
+  lookupManagementAdvertised: boolean,
 ): readonly BackendAdminNavigationItem[] {
   if (!knowledgeAdvertised) return BASE_NAVIGATION;
   return [
     ...BASE_NAVIGATION.slice(0, 5),
     KNOWLEDGE_NAVIGATION,
-    LOOKUP_NAVIGATION,
+    ...(lookupManagementAdvertised ? [LOOKUP_NAVIGATION] : []),
     ...BASE_NAVIGATION.slice(5),
   ];
 }

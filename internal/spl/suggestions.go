@@ -52,7 +52,7 @@ type SuggestionContext struct {
 	FunctionNames []string
 	Keywords      []string
 	Exclusions    []SuggestionExclusion
-	// AllowsQuotedScalarFields is true only where the v0.2 scalar grammar
+	// AllowsQuotedScalarFields is true only where the authored scalar grammar
 	// accepts exact single-quoted field references.
 	AllowsQuotedScalarFields bool
 	Prefix                   string
@@ -418,7 +418,7 @@ func appendScalarSuggestionToken(
 }
 
 func appendScalarSuggestionWord(tokens []token, tok token) []token {
-	prepared, split := appendV02ScalarWord(tokens, tok)
+	prepared, split := appendScalarWord(tokens, tok)
 	if !split {
 		return append(tokens, tok)
 	}
@@ -596,7 +596,7 @@ func classifySuggestionContext(tokens []token, prefix string, replacement Range)
 	}
 }
 
-func v03FieldKeywordSuggestion(
+func fieldKeywordSuggestion(
 	context SuggestionContext,
 	field bool,
 	keywords ...string,
@@ -613,13 +613,13 @@ func v03FieldKeywordSuggestion(
 
 func classifyAccumSuggestion(context SuggestionContext, tokens []token) SuggestionContext {
 	if len(tokens) == 0 {
-		return v03FieldKeywordSuggestion(context, true)
+		return fieldKeywordSuggestion(context, true)
 	}
 	if tokenWordEqual(tokens[len(tokens)-1], "AS") {
-		return v03FieldKeywordSuggestion(context, true)
+		return fieldKeywordSuggestion(context, true)
 	}
 	if len(tokens) == 1 {
-		return v03FieldKeywordSuggestion(context, false, "AS")
+		return fieldKeywordSuggestion(context, false, "AS")
 	}
 	return context
 }
@@ -629,7 +629,7 @@ func classifyRegexSuggestion(context SuggestionContext, tokens []token) Suggesti
 	// After that field, its comparison operator, or a complete quoted pattern,
 	// the grammar expects punctuation/a literal or is already complete.
 	if len(tokens) == 0 {
-		return v03FieldKeywordSuggestion(context, true)
+		return fieldKeywordSuggestion(context, true)
 	}
 	return context
 }
@@ -638,32 +638,32 @@ func classifyStrcatSuggestion(context SuggestionContext, tokens []token) Suggest
 	if endsOptionEqual(tokens, "allrequired") {
 		return context
 	}
-	body, _, valid := consumeV03LeadingOptions(tokens, map[string]func(token) bool{
-		"allrequired": v03BooleanSuggestionValue,
+	body, _, valid := consumeCommandLeadingOptions(tokens, map[string]func(token) bool{
+		"allrequired": strictBooleanSuggestionValue,
 	})
 	if !valid {
 		return context
 	}
 	if len(body) == 0 && len(tokens) == 0 {
-		return v03FieldKeywordSuggestion(context, true, "allrequired=")
+		return fieldKeywordSuggestion(context, true, "allrequired=")
 	}
-	return v03FieldKeywordSuggestion(context, true)
+	return fieldKeywordSuggestion(context, true)
 }
 
 func classifyFillNullSuggestion(context SuggestionContext, tokens []token) SuggestionContext {
 	if endsOptionEqual(tokens, "value") {
 		return context
 	}
-	body, _, valid := consumeV03LeadingOptions(tokens, map[string]func(token) bool{
+	body, _, valid := consumeCommandLeadingOptions(tokens, map[string]func(token) bool{
 		"value": func(value token) bool { return value.kind == tokenString },
 	})
 	if !valid {
 		return context
 	}
 	if len(body) == 0 && len(tokens) == 0 {
-		return v03FieldKeywordSuggestion(context, true, "value=")
+		return fieldKeywordSuggestion(context, true, "value=")
 	}
-	return v03FieldKeywordSuggestion(context, true)
+	return fieldKeywordSuggestion(context, true)
 }
 
 func classifyAddTotalsSuggestion(context SuggestionContext, tokens []token) SuggestionContext {
@@ -673,20 +673,20 @@ func classifyAddTotalsSuggestion(context SuggestionContext, tokens []token) Sugg
 	if endsOptionEqual(tokens, "row") || endsOptionEqual(tokens, "col") {
 		return context
 	}
-	body, used, valid := consumeV03LeadingOptions(tokens, map[string]func(token) bool{
+	body, used, valid := consumeCommandLeadingOptions(tokens, map[string]func(token) bool{
 		"row": func(value token) bool {
 			return value.kind == tokenWord && (tokenWordEqual(value, "t") || tokenWordEqual(value, "true"))
 		},
 		"col": func(value token) bool {
 			return value.kind == tokenWord && (tokenWordEqual(value, "f") || tokenWordEqual(value, "false"))
 		},
-		"fieldname": v03ExactFieldSuggestionValue,
+		"fieldname": exactFieldSuggestionValue,
 	})
 	if !valid {
 		return context
 	}
 	if len(body) != 0 {
-		return v03FieldKeywordSuggestion(context, true)
+		return fieldKeywordSuggestion(context, true)
 	}
 	keywords := make([]string, 0, 3-len(used))
 	for _, option := range []string{"col", "fieldname", "row"} {
@@ -694,16 +694,16 @@ func classifyAddTotalsSuggestion(context SuggestionContext, tokens []token) Sugg
 			keywords = append(keywords, option+"=")
 		}
 	}
-	return v03FieldKeywordSuggestion(context, true, keywords...)
+	return fieldKeywordSuggestion(context, true, keywords...)
 }
 
 func classifyDeltaSuggestion(context SuggestionContext, tokens []token) SuggestionContext {
 	if len(tokens) == 0 {
-		return v03FieldKeywordSuggestion(context, true)
+		return fieldKeywordSuggestion(context, true)
 	}
 	last := tokens[len(tokens)-1]
 	if tokenWordEqual(last, "AS") {
-		return v03FieldKeywordSuggestion(context, true)
+		return fieldKeywordSuggestion(context, true)
 	}
 	if endsOptionEqual(tokens, "p") {
 		return context
@@ -716,22 +716,22 @@ func classifyDeltaSuggestion(context SuggestionContext, tokens []token) Suggesti
 			return context
 		}
 		if asIndex < 0 {
-			return v03FieldKeywordSuggestion(context, false, "AS")
+			return fieldKeywordSuggestion(context, false, "AS")
 		}
 		return context
 	}
 	if asIndex >= 0 {
-		return v03FieldKeywordSuggestion(context, false, "p=")
+		return fieldKeywordSuggestion(context, false, "p=")
 	}
-	return v03FieldKeywordSuggestion(context, false, "AS", "p=")
+	return fieldKeywordSuggestion(context, false, "AS", "p=")
 }
 
 func classifyMakeMVSuggestion(context SuggestionContext, tokens []token) SuggestionContext {
 	if endsOptionEqual(tokens, "allowempty") || endsOptionEqual(tokens, "delim") {
 		return context
 	}
-	body, used, valid := consumeV03LeadingOptions(tokens, map[string]func(token) bool{
-		"allowempty": v03BooleanSuggestionValue,
+	body, used, valid := consumeCommandLeadingOptions(tokens, map[string]func(token) bool{
+		"allowempty": strictBooleanSuggestionValue,
 		"delim": func(value token) bool {
 			return value.kind == tokenString && value.text != ""
 		},
@@ -747,24 +747,24 @@ func classifyMakeMVSuggestion(context SuggestionContext, tokens []token) Suggest
 			keywords = append(keywords, option+"=")
 		}
 	}
-	return v03FieldKeywordSuggestion(context, true, keywords...)
+	return fieldKeywordSuggestion(context, true, keywords...)
 }
 
 func classifyMVExpandSuggestion(context SuggestionContext, tokens []token) SuggestionContext {
 	if len(tokens) == 0 {
-		return v03FieldKeywordSuggestion(context, true)
+		return fieldKeywordSuggestion(context, true)
 	}
 	if topLevelOptionAssignmentIndex(tokens, "limit") < 0 {
-		return v03FieldKeywordSuggestion(context, false, "limit=")
+		return fieldKeywordSuggestion(context, false, "limit=")
 	}
 	return context
 }
 
-// consumeV03LeadingOptions recognizes complete name=value triples at the
+// consumeCommandLeadingOptions recognizes complete name=value triples at the
 // beginning of a command suggestion body. It is intentionally stricter than
 // generic option discovery: duplicate, malformed, or late options stop all
 // completion so the editor never encourages an already-invalid command.
-func consumeV03LeadingOptions(
+func consumeCommandLeadingOptions(
 	tokens []token,
 	validators map[string]func(token) bool,
 ) (body []token, used map[string]struct{}, valid bool) {
@@ -790,7 +790,7 @@ func consumeV03LeadingOptions(
 	return tokens[index:], used, true
 }
 
-func v03BooleanSuggestionValue(value token) bool {
+func strictBooleanSuggestionValue(value token) bool {
 	if value.kind != tokenWord {
 		return false
 	}
@@ -798,7 +798,7 @@ func v03BooleanSuggestionValue(value token) bool {
 	return ok
 }
 
-func v03ExactFieldSuggestionValue(value token) bool {
+func exactFieldSuggestionValue(value token) bool {
 	return value.kind == tokenWord && IsExactUnquotedFieldName(value.text) &&
 		!strings.HasPrefix(strings.ToLower(value.text), "__os_")
 }
@@ -2132,7 +2132,7 @@ func isComparisonToken(kind tokenKind) bool {
 }
 
 func isScalarOperandBoundaryToken(kind tokenKind) bool {
-	if _, comparison := evalComparisonOperator(kind, expressionProfileV02); comparison {
+	if _, comparison := evalComparisonOperator(kind, expressionProfileAuthored); comparison {
 		return true
 	}
 	return kind == tokenComma ||

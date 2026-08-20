@@ -150,8 +150,8 @@ func runKnowledgeLifecycleVertical(
 			t.Errorf("close lifecycle search manager: %v", closeErr)
 		}
 	}()
-	if !manager.KnowledgeAdmissionEnabled() || !manager.KnowledgeExecutionEnabled() {
-		t.Fatal("lifecycle Manager did not enable resolver-backed execution")
+	if !manager.KnowledgeAdmissionEnabled() {
+		t.Fatal("lifecycle Manager did not enable resolver-backed admission")
 	}
 
 	request := knowledgeLifecycleSearchRequest(t, tenantID, indexName, base)

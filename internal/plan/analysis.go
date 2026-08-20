@@ -500,14 +500,14 @@ func (analyzer *queryAnalyzer) visitOperator(operator Operator, depth int) error
 		return nil
 	case *FillNull:
 		if operator == nil || len(operator.Fields) < 1 ||
-			len(operator.Fields) > spl.MaximumV03ProjectionFields ||
+			len(operator.Fields) > spl.MaximumExplicitProjectionFields ||
 			!utf8.ValidString(operator.Value) {
 			return errors.New("analyze logical query: fillnull is invalid")
 		}
 		return analyzer.addFields(operator.Fields, depth+1)
 	case *RowTotal:
 		if operator == nil || len(operator.Inputs) < 1 ||
-			len(operator.Inputs) > spl.MaximumV03ProjectionFields {
+			len(operator.Inputs) > spl.MaximumExplicitProjectionFields {
 			return errors.New("analyze logical query: row total is invalid")
 		}
 		if err := analyzer.validateOutputName(operator.Output, depth+1); err != nil {

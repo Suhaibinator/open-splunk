@@ -3,6 +3,7 @@ package searchaudit
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"math"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -21,8 +23,17 @@ func searchAuditTestKnowledgeSnapshotRef() *opensplunkv1.KnowledgeSnapshotRef {
 		TenantCatalogRevision:        7,
 		TenantCatalogStateToken:      bytes.Repeat([]byte{0x73}, 32),
 		ObjectCount:                  2,
-		CompilerCompatibilityVersion: "0.1",
+		CompilerCompatibilityVersion: knowledgesnapshot.CompilerCompatibilityVersion,
+		LookupAssetCount:             1,
 	}
+}
+
+func searchAuditTestLegacyKnowledgeSnapshotRef() *opensplunkv1.KnowledgeSnapshotRef {
+	ref := searchAuditTestKnowledgeSnapshotRef()
+	ref.CompilerCompatibilityVersion = knowledgesnapshot.LegacySnapshotCompilerVersion
+	ref.LookupAssetCount = 0
+	ref.LookupAssetCountUnknown = true
+	return ref
 }
 
 func TestKnowledgeSnapshotReferenceRoundTripsAndDetaches(t *testing.T) {
@@ -63,6 +74,68 @@ func TestKnowledgeSnapshotReferenceRoundTripsAndDetaches(t *testing.T) {
 	}
 }
 
+func TestReleasedV01UnknownLookupCountRoundTripsForHistoricalDisplay(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	database := openSearchAuditTestDatabase(t)
+	store := newSearchAuditTestStore(t, database, searchAuditTestCursorKey(), 5)
+	want := searchAuditTestLegacyKnowledgeSnapshotRef()
+	definition := searchAuditTestDefinition("owner", "job-v0.1-legacy", 0)
+	definition.KnowledgeSnapshot = proto.Clone(want).(*opensplunkv1.KnowledgeSnapshotRef)
+	appendSearchAuditTestEvent(t, store, database, ctx, "tenant-v0.1-legacy", definition)
+
+	var count sql.NullInt64
+	if err := database.GORMDB().Raw(`
+		SELECT knowledge_snapshot_lookup_asset_count
+		FROM search_attempt_audit_events
+		WHERE tenant_id = ? AND sequence = 1
+	`, "tenant-v0.1-legacy").Scan(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count.Valid {
+		t.Fatalf("persisted released-v0.1 lookup count = %d, want unknown", count.Int64)
+	}
+	page, err := store.List(ctx, "tenant-v0.1-legacy", ListRequest{})
+	if err != nil || len(page.Events) != 1 ||
+		!proto.Equal(page.Events[0].KnowledgeSnapshot, want) ||
+		!page.Events[0].KnowledgeSnapshot.GetLookupAssetCountUnknown() {
+		t.Fatalf("legacy page = (%+v, %v)", page, err)
+	}
+	if err := page.Events[0].ValidateForTenant("tenant-v0.1-legacy"); err != nil {
+		t.Fatalf("historical event validation: %v", err)
+	}
+}
+
+func TestCurrentExactZeroLookupCountRoundTripsWithoutUnknownMarker(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	database := openSearchAuditTestDatabase(t)
+	store := newSearchAuditTestStore(t, database, searchAuditTestCursorKey(), 5)
+	want := searchAuditTestKnowledgeSnapshotRef()
+	want.LookupAssetCount = 0
+	definition := searchAuditTestDefinition("owner", "job-v0.2-zero", 0)
+	definition.KnowledgeSnapshot = proto.Clone(want).(*opensplunkv1.KnowledgeSnapshotRef)
+	appendSearchAuditTestEvent(t, store, database, ctx, "tenant-v0.2-zero", definition)
+
+	var count sql.NullInt64
+	if err := database.GORMDB().Raw(`
+		SELECT knowledge_snapshot_lookup_asset_count
+		FROM search_attempt_audit_events
+		WHERE tenant_id = ? AND sequence = 1
+	`, "tenant-v0.2-zero").Scan(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !count.Valid || count.Int64 != 0 {
+		t.Fatalf("persisted v0.2 lookup count = %+v, want exact zero", count)
+	}
+	page, err := store.List(ctx, "tenant-v0.2-zero", ListRequest{})
+	if err != nil || len(page.Events) != 1 ||
+		!proto.Equal(page.Events[0].KnowledgeSnapshot, want) ||
+		page.Events[0].KnowledgeSnapshot.GetLookupAssetCountUnknown() {
+		t.Fatalf("v0.2 exact-zero page = (%+v, %v)", page, err)
+	}
+}
+
 func TestAppendRejectsMalformedKnowledgeSnapshotReferenceBeforeMutation(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -78,11 +151,30 @@ func TestAppendRejectsMalformedKnowledgeSnapshotReferenceBeforeMutation(t *testi
 			ref.TenantCatalogStateToken = ref.TenantCatalogStateToken[:31]
 		}},
 		{name: "object count", mutate: func(ref *opensplunkv1.KnowledgeSnapshotRef) { ref.ObjectCount = maximumKnowledgeObjects + 1 }},
+		{name: "lookup asset count", mutate: func(ref *opensplunkv1.KnowledgeSnapshotRef) {
+			ref.LookupAssetCount = maximumKnowledgeLookupAssets + 1
+		}},
+		{name: "current lookup asset count unknown", mutate: func(ref *opensplunkv1.KnowledgeSnapshotRef) {
+			ref.LookupAssetCount = 0
+			ref.LookupAssetCountUnknown = true
+		}},
+		{name: "legacy unknown lookup asset count nonzero", mutate: func(ref *opensplunkv1.KnowledgeSnapshotRef) {
+			ref.CompilerCompatibilityVersion = knowledgesnapshot.LegacySnapshotCompilerVersion
+			ref.LookupAssetCountUnknown = true
+		}},
 		{name: "empty compatibility", mutate: func(ref *opensplunkv1.KnowledgeSnapshotRef) { ref.CompilerCompatibilityVersion = "" }},
-		{name: "padded compatibility", mutate: func(ref *opensplunkv1.KnowledgeSnapshotRef) { ref.CompilerCompatibilityVersion = " 0.1" }},
-		{name: "leading tab compatibility", mutate: func(ref *opensplunkv1.KnowledgeSnapshotRef) { ref.CompilerCompatibilityVersion = "\t0.1" }},
-		{name: "trailing tab compatibility", mutate: func(ref *opensplunkv1.KnowledgeSnapshotRef) { ref.CompilerCompatibilityVersion = "0.1\t" }},
-		{name: "control compatibility", mutate: func(ref *opensplunkv1.KnowledgeSnapshotRef) { ref.CompilerCompatibilityVersion = "0.1\n" }},
+		{name: "padded compatibility", mutate: func(ref *opensplunkv1.KnowledgeSnapshotRef) {
+			ref.CompilerCompatibilityVersion = " " + knowledgesnapshot.LegacySnapshotCompilerVersion
+		}},
+		{name: "leading tab compatibility", mutate: func(ref *opensplunkv1.KnowledgeSnapshotRef) {
+			ref.CompilerCompatibilityVersion = "\t" + knowledgesnapshot.LegacySnapshotCompilerVersion
+		}},
+		{name: "trailing tab compatibility", mutate: func(ref *opensplunkv1.KnowledgeSnapshotRef) {
+			ref.CompilerCompatibilityVersion = knowledgesnapshot.LegacySnapshotCompilerVersion + "\t"
+		}},
+		{name: "control compatibility", mutate: func(ref *opensplunkv1.KnowledgeSnapshotRef) {
+			ref.CompilerCompatibilityVersion = knowledgesnapshot.LegacySnapshotCompilerVersion + "\n"
+		}},
 		{name: "oversized compatibility", mutate: func(ref *opensplunkv1.KnowledgeSnapshotRef) {
 			ref.CompilerCompatibilityVersion = strings.Repeat("v", maximumCompilerCompatibilityVersionBytes+1)
 		}},
@@ -141,8 +233,26 @@ func TestEventDigestPreservesLegacyIdentityAndBindsKnowledgeSnapshot(t *testing.
 	if legacyDigest != wantLegacyDigest {
 		t.Fatalf("legacy digest = %q, want %q", legacyDigest, wantLegacyDigest)
 	}
+	legacySnapshotRecord := record
+	setRecordKnowledgeSnapshot(
+		&legacySnapshotRecord,
+		searchAuditTestLegacyKnowledgeSnapshotRef(),
+	)
+	legacySnapshotDigest, err := eventDigest(legacySnapshotRecord)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const wantLegacySnapshotDigest = "ci9OhKs3dkF1nyfTDJh7jORz8-nfixhnwz53YNK99vU"
+	if legacySnapshotDigest != wantLegacySnapshotDigest {
+		t.Fatalf(
+			"released v0.1 snapshot digest = %q, want %q",
+			legacySnapshotDigest,
+			wantLegacySnapshotDigest,
+		)
+	}
 
 	variants := []*opensplunkv1.KnowledgeSnapshotRef{
+		searchAuditTestKnowledgeSnapshotRef(),
 		searchAuditTestKnowledgeSnapshotRef(),
 		searchAuditTestKnowledgeSnapshotRef(),
 		searchAuditTestKnowledgeSnapshotRef(),
@@ -154,8 +264,12 @@ func TestEventDigestPreservesLegacyIdentityAndBindsKnowledgeSnapshot(t *testing.
 	variants[3].TenantCatalogStateToken[0] ^= 0xff
 	variants[4].ObjectCount++
 	variants = append(variants, searchAuditTestKnowledgeSnapshotRef())
-	variants[5].CompilerCompatibilityVersion = "0.2"
-	seen := map[string]struct{}{legacyDigest: {}}
+	variants[5].CompilerCompatibilityVersion = "9.9"
+	variants[6].LookupAssetCount = variants[6].GetLookupAssetCount() + 1
+	exactZero := searchAuditTestLegacyKnowledgeSnapshotRef()
+	exactZero.LookupAssetCountUnknown = false
+	variants = append(variants, exactZero)
+	seen := map[string]struct{}{legacyDigest: {}, legacySnapshotDigest: {}}
 	for index, ref := range variants {
 		candidate := record
 		setRecordKnowledgeSnapshot(&candidate, ref)
@@ -234,7 +348,8 @@ func TestStartupIntegrityRejectsPartialKnowledgeSnapshotTuple(t *testing.T) {
 		SET knowledge_snapshot_tenant_catalog_revision = NULL,
 		    knowledge_snapshot_tenant_catalog_state_token = NULL,
 		    knowledge_snapshot_object_count = NULL,
-		    knowledge_snapshot_compiler_compatibility_version = NULL
+		    knowledge_snapshot_compiler_compatibility_version = NULL,
+		    knowledge_snapshot_lookup_asset_count = NULL
 		WHERE tenant_id = 'tenant-corrupt-snapshot'
 	`); err != nil {
 		t.Fatal(err)

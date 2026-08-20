@@ -13,21 +13,21 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
-// v03MaterializedValidationSettingsSQL keeps data-dependent multivalue
+// materializedValidationSettingsSQL keeps data-dependent multivalue
 // validation ahead of every later relational consumer. ClickHouse 26.3's
 // query-plan optimizer otherwise repeatedly rewrites a downstream WHERE across
 // ARRAY JOIN and the nested validation graph until its own 10,000-pass ceiling
-// preempts the stable v0.3 code-395 resource marker. The settings are appended
+// preempts the stable code-395 resource marker. The settings are appended
 // once to the complete outer query: materialization remains enabled, while
 // plan and predicate rewrites cannot move a consumer ahead of the atomic guard.
-const v03MaterializedValidationSettingsSQL = " SETTINGS enable_materialized_cte = 1, query_plan_enable_optimizations = 0, enable_optimize_predicate_expression = 0, splitby_max_substrings_includes_remaining_string = 0, enable_named_columns_in_function_tuple = 1, output_format_json_named_tuples_as_objects = 1, output_format_json_skip_null_value_in_named_tuples = 0, output_format_json_map_as_array_of_tuples = 0, output_format_json_escape_forward_slashes = 0, output_format_json_quote_64bit_integers = 0, output_format_json_quote_64bit_floats = 0, output_format_json_quote_decimals = 0, output_format_json_quote_denormals = 0"
+const materializedValidationSettingsSQL = " SETTINGS enable_materialized_cte = 1, query_plan_enable_optimizations = 0, enable_optimize_predicate_expression = 0, splitby_max_substrings_includes_remaining_string = 0, enable_named_columns_in_function_tuple = 1, output_format_json_named_tuples_as_objects = 1, output_format_json_skip_null_value_in_named_tuples = 0, output_format_json_map_as_array_of_tuples = 0, output_format_json_escape_forward_slashes = 0, output_format_json_quote_64bit_integers = 0, output_format_json_quote_64bit_floats = 0, output_format_json_quote_decimals = 0, output_format_json_quote_denormals = 0"
 
-func applyV03MaterializedValidationSettings(sql string) string {
-	if strings.HasSuffix(sql, v03MaterializedValidationSettingsSQL) {
+func applyMaterializedValidationSettings(sql string) string {
+	if strings.HasSuffix(sql, materializedValidationSettingsSQL) {
 		return sql
 	}
 	sql = strings.TrimSuffix(sql, materializedCTESettingsSQL)
-	return sql + v03MaterializedValidationSettingsSQL
+	return sql + materializedValidationSettingsSQL
 }
 
 // Stable runtime markers are deliberately short, public-secret-free strings.
@@ -47,12 +47,12 @@ const (
 	MVExpandRetainedBytesLimitMarker = "open-splunk: mvexpand retained bytes exceed the limit"
 )
 
-func v03PrivateField(name string) bool {
+func isCompilerPrivateField(name string) bool {
 	return strings.HasPrefix(strings.ToLower(name), "__os_")
 }
 
-func validateV03Field(operation string, field plan.FieldRef) error {
-	if field.Name == "" || v03PrivateField(field.Name) {
+func validateCommandField(operation string, field plan.FieldRef) error {
+	if field.Name == "" || isCompilerPrivateField(field.Name) {
 		return errors.New("compile ClickHouse " + operation + ": input field is invalid")
 	}
 	return validateCanonicalFieldRef(operation, "input", field)
@@ -70,10 +70,10 @@ func compileFillNull(
 			"compile ClickHouse fillnull: operator is invalid",
 		)
 	}
-	if len(operator.Fields) > spl.MaximumV03ProjectionFields {
+	if len(operator.Fields) > spl.MaximumExplicitProjectionFields {
 		return compiledRelation{}, compileState{}, nil, &plan.Diagnostic{
 			Code: "SPL_QUERY_TOO_COMPLEX", Message: fmt.Sprintf(
-				"fillnull contains more than %d fields", spl.MaximumV03ProjectionFields,
+				"fillnull contains more than %d fields", spl.MaximumExplicitProjectionFields,
 			), Range: operator.Range,
 		}
 	}
@@ -82,7 +82,7 @@ func compileFillNull(
 	args := make([]any, 0, len(operator.Fields))
 	seen := make(map[string]struct{}, len(operator.Fields))
 	for index, ref := range operator.Fields {
-		if err := validateV03Field("fillnull", ref); err != nil {
+		if err := validateCommandField("fillnull", ref); err != nil {
 			return compiledRelation{}, compileState{}, nil, err
 		}
 		if _, duplicate := seen[ref.Name]; duplicate {
@@ -165,7 +165,7 @@ func compileFillNull(
 				valueSQL = "if(" + preserve + ", " + field.valueSQL + ", " + fill + ")"
 				value.kind = fieldKindString
 				value.textEligibleSQL = "if(" + preserve + ", " +
-					v03SemanticStringEligibleSQL(field, field.valueSQL) + ", 1)"
+					semanticStringEligibleSQL(field, field.valueSQL) + ", 1)"
 			case fieldKindDynamic:
 				typeSQL := dynamicTypeExpression(field)
 				presentSQL := "((" + existsSQL + ") AND " + typeSQL + " != 'None')"
@@ -173,8 +173,8 @@ func compileFillNull(
 				if field.descendantSQL != "" {
 					// A flattened object is present even when the exact parent has no
 					// scalar leaf. Preserve the parent and its sealed descendant
-					// sidecar; filling it would perform the container rewrite that the
-					// v0.3 surface deliberately defers.
+					// sidecar; filling it would perform a container rewrite that the
+					// supported surface deliberately defers.
 					presentSQL = "(" + presentSQL + " OR (" + field.descendantSQL + "))"
 					valueArgs = append(valueArgs, field.descendantArgs...)
 					value.descendantSQL = field.descendantSQL
@@ -294,7 +294,7 @@ func compileFillNull(
 					boundValueSQL + "))"
 				bindingSQL := "tuple(" + sourceValueSQL + ", toUInt8(ifNull(" +
 					sourceField.existsSQL + ", 0)), toUInt8(ifNull(" +
-					v03SemanticStringEligibleSQL(sourceField, sourceValueSQL) + ", 0)))"
+					semanticStringEligibleSQL(sourceField, sourceValueSQL) + ", 0)))"
 				replacementSQL := "if(" + preserveSQL + ", " + boundValueSQL +
 					", " + fill + ")"
 				proofSQL := "toUInt8(if(" + preserveSQL + ", " + boundTextSQL + ", 1))"
@@ -326,8 +326,8 @@ func compileFillNull(
 					") AS " + alias
 				if mayCarryBytes {
 					storedTypeSQL := "toUInt8(if(" + preserveSQL + " AND NOT " +
-						boundTextSQL + ", " + v03StoredValueTypeSQL(eventfields.StoredValueTypeBytes) +
-						", " + v03StoredValueTypeSQL(eventfields.StoredValueTypeString) + "))"
+						boundTextSQL + ", " + storedValueTypeSQL(eventfields.StoredValueTypeBytes) +
+						", " + storedValueTypeSQL(eventfields.StoredValueTypeString) + "))"
 					projection = "WITH arrayJoin([" + bindingSQL + "]) AS " + bindingAlias +
 						" SELECT " + publicProjection + ", " +
 						proofSQL + " AS " + textEligibleAlias + ", " + storedTypeSQL +
@@ -386,15 +386,15 @@ func compileRowTotal(
 	stage int,
 ) (compiledRelation, compileState, []any, *pendingChronologicalBarrier, error) {
 	if operator == nil || len(operator.Inputs) < 1 ||
-		operator.Output == "" || v03PrivateField(operator.Output) {
+		operator.Output == "" || isCompilerPrivateField(operator.Output) {
 		return compiledRelation{}, compileState{}, nil, nil, errors.New(
 			"compile ClickHouse addtotals: operator is invalid",
 		)
 	}
-	if len(operator.Inputs) > spl.MaximumV03ProjectionFields {
+	if len(operator.Inputs) > spl.MaximumExplicitProjectionFields {
 		return compiledRelation{}, compileState{}, nil, nil, &plan.Diagnostic{
 			Code: "SPL_QUERY_TOO_COMPLEX", Message: fmt.Sprintf(
-				"addtotals contains more than %d fields", spl.MaximumV03ProjectionFields,
+				"addtotals contains more than %d fields", spl.MaximumExplicitProjectionFields,
 			), Range: operator.Range,
 		}
 	}
@@ -406,7 +406,7 @@ func compileRowTotal(
 	// Dynamic numeric normalization can throw a sanitized malformed-value
 	// marker even when a single input means there is no authored addition.
 	state.context.atomicResult = true
-	state.context.v03MaterializedValidation = true
+	state.context.requiresMaterializedValidationSettings = true
 	if _, err := plan.ResolveField(operator.Output, operator.Range); err != nil {
 		return compiledRelation{}, compileState{}, nil, nil, err
 	}
@@ -424,7 +424,7 @@ func compileRowTotal(
 		stage,
 	))
 	for _, ref := range operator.Inputs {
-		if err := validateV03Field("addtotals", ref); err != nil {
+		if err := validateCommandField("addtotals", ref); err != nil {
 			return compiledRelation{}, compileState{}, nil, nil, err
 		}
 		if _, duplicate := seen[ref.Name]; duplicate {
@@ -476,7 +476,7 @@ func compileRowTotal(
 			return compiledRelation{}, compileState{}, nil, nil, err
 		}
 	}
-	// The v0.3 contract publishes a nullable numeric column even though the
+	// The contract publishes a nullable numeric column even though the
 	// explicit all-ineligible rule yields the non-null value zero. Preserve that
 	// schema promise instead of letting ClickHouse narrow this expression to a
 	// non-null Float64 from the current data path.
@@ -565,7 +565,7 @@ func compileRowTotal(
 	return result.selectFrom(publishedSQL, operator.Range), next, prefixArgs, barrier, nil
 }
 
-func materializeV03Order(
+func materializeEstablishedOrder(
 	relation compiledRelation,
 	state compileState,
 	stage int,
@@ -614,7 +614,7 @@ func compileOrderedDelta(
 	stage int,
 ) (compiledRelation, compileState, []any, *pendingChronologicalBarrier, error) {
 	if operator == nil || operator.Previous < 1 ||
-		operator.Output == "" || v03PrivateField(operator.Output) {
+		operator.Output == "" || isCompilerPrivateField(operator.Output) {
 		return compiledRelation{}, compileState{}, nil, nil, errors.New(
 			"compile ClickHouse delta: operator is invalid",
 		)
@@ -626,7 +626,7 @@ func compileOrderedDelta(
 			), Range: operator.Range,
 		}
 	}
-	if err := validateV03Field("delta", operator.Input); err != nil {
+	if err := validateCommandField("delta", operator.Input); err != nil {
 		return compiledRelation{}, compileState{}, nil, nil, err
 	}
 	if _, explicitErr := plan.ResolveField(operator.Output, operator.Range); explicitErr != nil &&
@@ -635,7 +635,7 @@ func compileOrderedDelta(
 			"compile ClickHouse delta: output field is invalid",
 		)
 	}
-	ordered, next, orderSQL, err := materializeV03Order(
+	ordered, next, orderSQL, err := materializeEstablishedOrder(
 		relation, state, stage, "delta", operator.Range,
 	)
 	if err != nil {
@@ -667,7 +667,7 @@ func compileOrderedDelta(
 	// The row ceiling and malformed-value marker are relation-wide validation,
 	// not output-row predicates. Keep later filters and projections behind this
 	// guard on the pinned ClickHouse optimizer just like mvexpand validation.
-	state.context.v03MaterializedValidation = true
+	state.context.requiresMaterializedValidationSettings = true
 	valueAlias := quoteIdentifier(fmt.Sprintf("__os_delta_value_%d", stage))
 	countAlias := quoteIdentifier(fmt.Sprintf("__os_delta_input_count_%d", stage))
 	validationColumn := quoteIdentifier(fmt.Sprintf("__os_delta_validation_%d", stage))
@@ -795,17 +795,17 @@ func compileOrderedDelta(
 	return result.selectFrom(publishedSQL, operator.Range), next, prefixArgs, barrier, nil
 }
 
-func v03PublicRetainedTupleSQL(
+func publicRetainedTupleSQL(
 	state compileState,
 	replacementName, replacementSQL string,
 	replacementPresentSQL ...string,
 ) string {
 	if len(replacementPresentSQL) > 1 {
-		panic("v0.3 retained tuple: replacement presence has multiple expressions")
+		panic("retained tuple: replacement presence has multiple expressions")
 	}
 	logicalReplacementSQL := replacementSQL
 	if len(replacementPresentSQL) == 1 && replacementPresentSQL[0] != "" {
-		logicalReplacementSQL = v03OptionalMultivaluePublicJSONSQL(
+		logicalReplacementSQL = optionalMultivaluePublicJSONSQL(
 			replacementSQL,
 			replacementPresentSQL[0],
 		)
@@ -845,7 +845,7 @@ func v03PublicRetainedTupleSQL(
 		if field, visible := state.visible[name]; visible {
 			valueSQL := field.valueSQL
 			if field.optionalMultivaluePresentSQL != "" {
-				valueSQL = v03OptionalMultivaluePublicJSONSQL(
+				valueSQL = optionalMultivaluePublicJSONSQL(
 					field.valueSQL,
 					field.optionalMultivaluePresentSQL,
 				)
@@ -869,7 +869,7 @@ func v03PublicRetainedTupleSQL(
 	expressions := make([]string, len(values))
 	tupleValues := make([]string, len(values))
 	for index, value := range values {
-		parameters[index] = fmt.Sprintf("__os_v03_retained_value_%d", index)
+		parameters[index] = fmt.Sprintf("__os_retained_value_%d", index)
 		expressions[index] = value.sql
 		tupleValues[index] = parameters[index] + " AS " + quoteIdentifier(value.name)
 	}
@@ -880,26 +880,26 @@ func v03PublicRetainedTupleSQL(
 	)
 }
 
-// v03OptionalMultivaluePublicJSONSQL reconstructs the logical public cell used
+// optionalMultivaluePublicJSONSQL reconstructs the logical public cell used
 // by retained-byte accounting. Nullable(Array(String)) is not a legal
 // ClickHouse type, so optional lists are physically an Array(String) plus a
 // sealed presence bit. Dynamic can represent both branches without confusing
 // public null with the physically empty array used for an absent value.
-func v03OptionalMultivaluePublicJSONSQL(valueSQL, presentSQL string) string {
+func optionalMultivaluePublicJSONSQL(valueSQL, presentSQL string) string {
 	return "if(toUInt8(ifNull(" + presentSQL + ", 0)) = 0, " +
 		"CAST(NULL AS Dynamic), CAST(" + valueSQL + " AS Dynamic))"
 }
 
-func v03StoredValueTypeSQL(valueType eventfields.StoredValueType) string {
+func storedValueTypeSQL(valueType eventfields.StoredValueType) string {
 	return "toUInt8(" + strconv.Itoa(int(valueType)) + ")"
 }
 
-// v03SemanticSourceTypeEligibleSQL keeps physical ClickHouse String values
+// semanticSourceTypeEligibleSQL keeps physical ClickHouse String values
 // subordinate to their semantic provenance. In particular, _raw is physically
 // String even when it carries bytes, and stored Dynamic leaves can likewise
 // have String representation with Bytes metadata. Fixed String arrays use the
 // same hook for producers that retain an aggregate/member text proof.
-func v03SemanticSourceTypeEligibleSQL(
+func semanticSourceTypeEligibleSQL(
 	field fieldState,
 	want eventfields.StoredValueType,
 	includeTextEligibility bool,
@@ -912,7 +912,7 @@ func v03SemanticSourceTypeEligibleSQL(
 		conditions = append(
 			conditions,
 			"toUInt8(ifNull("+field.storedTypeSQL+", 0)) = "+
-				v03StoredValueTypeSQL(want),
+				storedValueTypeSQL(want),
 		)
 	}
 	if len(conditions) == 0 {
@@ -921,8 +921,8 @@ func v03SemanticSourceTypeEligibleSQL(
 	return "(" + strings.Join(conditions, " AND ") + ")"
 }
 
-func v03SemanticStringEligibleSQL(field fieldState, valueSQL string) string {
-	return "(" + v03SemanticSourceTypeEligibleSQL(
+func semanticStringEligibleSQL(field fieldState, valueSQL string) string {
+	return "(" + semanticSourceTypeEligibleSQL(
 		field,
 		eventfields.StoredValueTypeString,
 		true,
@@ -943,7 +943,7 @@ func compileMakeMultivalue(
 			"compile ClickHouse makemv: operator is invalid",
 		)
 	}
-	if err := validateV03Field("makemv", operator.Input); err != nil {
+	if err := validateCommandField("makemv", operator.Input); err != nil {
 		return compiledRelation{}, compileState{}, nil, err
 	}
 	if state.context == nil {
@@ -1011,10 +1011,10 @@ func compileMakeMultivalue(
 		valuePresentSQL = "(" + sourcePresentAlias + " != 0 AND " + typeSQL + " = 'String')"
 		invalidSQL = "(" + descendantAlias + " != 0 OR (" + sourcePresentAlias +
 			" != 0 AND " + typeSQL + " != 'None' AND (" + typeSQL +
-			" != 'String' OR NOT " + v03SemanticStringEligibleSQL(field, stringSQL) + ")))"
+			" != 'String' OR NOT " + semanticStringEligibleSQL(field, stringSQL) + ")))"
 	case fieldKindString:
 		invalidSQL = "(" + descendantAlias + " != 0 OR (" + valuePresentSQL +
-			" AND NOT " + v03SemanticStringEligibleSQL(field, stringSQL) + "))"
+			" AND NOT " + semanticStringEligibleSQL(field, stringSQL) + "))"
 	}
 	// Dynamic extraction and nullable stored strings can have a nullable static
 	// type even though valuePresentSQL protects the split semantically.
@@ -1028,7 +1028,7 @@ func compileMakeMultivalue(
 	// of hundreds of thousands of empty array elements. Two sentinels preserve
 	// room for the possible leading empty substring and still expose 1,001
 	// nonempty members. splitby_max_substrings_includes_remaining_string=0 is
-	// sealed onto every v0.3 validation query, so an oversized unsplit remainder
+	// sealed onto every multivalue validation query, so an oversized unsplit remainder
 	// is never copied into the last sentinel element.
 	maximumSubstrings := plan.MaximumMakeMVMembersPerRow + 1
 	splitFunction := "splitByString(?, ifNull(" + stringSQL +
@@ -1054,7 +1054,7 @@ func compileMakeMultivalue(
 	prefixArgs = prependArguments([]any{operator.Delimiter}, prefixArgs)
 
 	memberBytes := "arraySum(arrayMap(member -> toUInt64(length(member)), " + resultAlias + "))"
-	retainedTuple := v03PublicRetainedTupleSQL(
+	retainedTuple := publicRetainedTupleSQL(
 		state,
 		operator.Input.Name,
 		resultAlias,
@@ -1129,7 +1129,7 @@ func compileMakeMultivalue(
 	outputField.caseSensitive = field.caseSensitive
 	next.visible[operator.Input.Name] = outputField
 	state.context.atomicResult = true
-	state.context.v03MaterializedValidation = true
+	state.context.requiresMaterializedValidationSettings = true
 	return result, next, prefixArgs, nil
 }
 
@@ -1153,7 +1153,7 @@ func compileExpandMultivalue(
 			), Range: operator.Range,
 		}
 	}
-	if err := validateV03Field("mvexpand", operator.Input); err != nil {
+	if err := validateCommandField("mvexpand", operator.Input); err != nil {
 		return compiledRelation{}, compileState{}, nil, err
 	}
 	if state.context == nil {
@@ -1166,7 +1166,7 @@ func compileExpandMultivalue(
 			"compile ClickHouse mvexpand: query ordinal is not contiguous",
 		)
 	}
-	ordered, next, _, err := materializeV03Order(
+	ordered, next, _, err := materializeEstablishedOrder(
 		relation, state, stage, "mvexpand", operator.Range,
 	)
 	if err != nil {
@@ -1234,7 +1234,7 @@ func compileExpandMultivalue(
 		// makemv array still expands to zero rows.
 		valuesSQL = "if(" + sourcePresentAlias + " = 0, [CAST(NULL AS Nullable(String))], " +
 			arrayValues + ")"
-		arrayEligible := v03SemanticSourceTypeEligibleSQL(
+		arrayEligible := semanticSourceTypeEligibleSQL(
 			field,
 			eventfields.StoredValueTypeList,
 			true,
@@ -1259,12 +1259,12 @@ func compileExpandMultivalue(
 			"isValidUTF8(dynamicElement(member, 'String'))))"
 		arrayUnsupported := "arrayExists(member -> NOT (" + memberSupported + "), " +
 			dynamicMembers + ")"
-		listEligible := v03SemanticSourceTypeEligibleSQL(
+		listEligible := semanticSourceTypeEligibleSQL(
 			field,
 			eventfields.StoredValueTypeList,
 			false,
 		)
-		stringEligible := v03SemanticStringEligibleSQL(field, "dynamicElement("+inputAlias+", 'String')")
+		stringEligible := semanticStringEligibleSQL(field, "dynamicElement("+inputAlias+", 'String')")
 		semanticScalar := "(" + dynamicTaggedScalarEnvelopeCondition(dynamicInput) +
 			" AND " + dynamicTaggedEnvelopeCondition(
 			dynamicInput,
@@ -1297,7 +1297,7 @@ func compileExpandMultivalue(
 			valuePresent := "(" + sourcePresentAlias + " != 0 AND isNotNull(" +
 				inputAlias + "))"
 			invalidSQL = "(" + descendantAlias + " != 0 OR (" + valuePresent +
-				" AND NOT " + v03SemanticStringEligibleSQL(field, inputAlias) + "))"
+				" AND NOT " + semanticStringEligibleSQL(field, inputAlias) + "))"
 		}
 		output = compiledScalar{
 			valueSQL:        outputName,
@@ -1332,7 +1332,7 @@ func compileExpandMultivalue(
 	selected := prepared.selectFrom(selectedSQLLayer, operator.Range)
 
 	retainedMember := "__os_mvexpand_retained_member"
-	retainedTuple := v03PublicRetainedTupleSQL(next, operator.Input.Name, retainedMember)
+	retainedTuple := publicRetainedTupleSQL(next, operator.Input.Name, retainedMember)
 	rowRetainedBytes := "arraySum(arrayMap(" + retainedMember +
 		" -> toUInt64(length(toJSONString(" + retainedTuple + "))), " + selectedAlias + "))"
 	previousQueryRows := "toUInt64(0)"
@@ -1399,6 +1399,6 @@ func compileExpandMultivalue(
 	next.tieBreakers = append(next.tieBreakers, compiledSortKey{valueSQL: memberOrdinalAlias})
 	state.context.mvExpandStages = operator.QueryOrdinal
 	state.context.atomicResult = true
-	state.context.v03MaterializedValidation = true
+	state.context.requiresMaterializedValidationSettings = true
 	return result, next, prefixArgs, nil
 }

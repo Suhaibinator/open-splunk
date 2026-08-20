@@ -1,7 +1,7 @@
 # Open Splunk SPL compatibility contract v0.3
 
-**Status:** executable implementation contract; public execution requires
-runtime identity `0.3`
+**Status:** historical executable delta; incorporated into cumulative runtime
+identity `0.4`
 
 **Compatibility version:** `0.3`
 
@@ -25,14 +25,11 @@ inspection literal inventory, or error text.
 
 ### `SPL-V03-PROFILE-001` — closed authored and knowledge profiles
 
-The implementation may parse and exercise the cumulative v0.3 profile behind
-preactivation development/test surfaces while the public identity remains
-`0.2`; that behavior is not a compatibility advertisement and must not reach a
-stable published runtime. Public authored searches use the cumulative v0.3
-profile only when the running binary advertises `0.3`. Tier-1 calculated fields
-remain on `SPLExpressionV01`. Retained knowledge authorities keep their sealed
-knowledge compiler identity, and an authored v0.3 suffix may consume their
-published outputs without enabling v0.3 syntax inside the knowledge object.
+Public authored searches use this complete command surface when the running
+binary advertises `0.3` or a later cumulative identity. Runtime `0.4`
+incorporates it unchanged. Tier-1 calculated fields remain on
+`SPLExpressionV01`; an authored v0.3 suffix may consume their published outputs
+without enabling v0.3 syntax inside the knowledge object.
 
 Every admitted search snapshot records the exact authored compiler version.
 Rebuild-based export, inspection, and search analysis fail closed when that
@@ -41,25 +38,12 @@ authority may be replayed only through its existing versioned execution path.
 
 ### `SPL-V03-ACTIVATION-001` — atomic advertisement
 
-Development and partial builds advertise `0.2`. After the v0.2 prerequisite
-closes, one immutable runtime/release revision `R` may embed `0.3` solely as a
-distribution-blocked qualification candidate for the complete ten-command
-surface. That exact identity is required so tests and release readback qualify
-the artifact that would ship; `R` is not an acceptance or publication claim.
-The independent application release identity is exactly `0.2.0`; the accepted
-v0.2 prerequisite remains application `0.1.0`. These values are intentionally
-not inferred from the SPL compatibility number, and qualification does not use
-a SemVer prerelease suffix.
-
-The public compatibility identity changes from `0.2` to `0.3` only when a
-direct-child documentation-only evidence revision `E` records terminal-success
-CI, remote readback, release readback, and checksummed receipts for `R`, and the
-strict accepted-phase verifier proves the `R`/`E` transition. The contract,
-inventory, migration guide, pinned ClickHouse vertical, product verticals, and
-acceptance provenance must all bind to `R`. A candidate artifact must not enter
-a stable tag, package, or deployment channel before accepted `E` is reachable.
-Any non-evidence change in `E` invalidates `R` and requires a new qualification
-revision.
+The cumulative v0.4 activation qualifies this complete ten-command surface
+together with lookup support. The contract, inventory, migration guide, pinned
+ClickHouse verticals, product verticals, and release readback bind to the exact
+tagged revision under [`releasing.md`](releasing.md). The v0.3 names in this
+historical regression contract identify when the behavior was introduced; the
+current runtime exposes only product profile `0.4`.
 
 Validation has no public search-job identifier. It may prove `addinfo` shape
 with an explicit null SID placeholder, but only admitted execution may publish

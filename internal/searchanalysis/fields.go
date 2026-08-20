@@ -803,11 +803,30 @@ func (service *FieldService) buildFieldCatalog(
 			searchjobs.ErrInvalidResult,
 		)
 	}
+	fieldCompiler := service.compiler
+	if source.completedExecution {
+		restored, configured, changed, err := restoreCompletedSearchLookupAuthority(
+			ctx,
+			source.execution,
+			logical,
+			service.compiler,
+		)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"restore completed search lookups for field analysis: %w",
+				err,
+			)
+		}
+		logical = restored
+		if changed {
+			fieldCompiler = configured
+		}
+	}
 	if err := plan.ValidateFieldAnalysisEligibility(logical); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrFieldAnalysisUnsupported, err)
 	}
 	spec := clickhouse.FieldCatalogSpec{MaximumFields: service.maximumFields}
-	compiled, err := service.compiler.CompileFieldCatalogContext(ctx, logical, spec)
+	compiled, err := fieldCompiler.CompileFieldCatalogContext(ctx, logical, spec)
 	if err != nil {
 		return nil, classifyFieldCompileError(err)
 	}

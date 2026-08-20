@@ -1,18 +1,22 @@
 # Open Splunk Knowledge Objects Plan
 
-**Status:** Tier 1 implemented and acceptance-verified; later tiers remain planned
+**Status:** Tier 1 and bounded CSV lookups implemented and acceptance-verified;
+later tiers remain planned
 **Date:** August 10, 2026
 **Compatibility target:** A bounded, documented subset of Splunk search-time
 knowledge behavior for the single-node Open Splunk product
 
-> **Current checkpoint:** Tier-1 field extraction, field alias, and calculated
-> field Knowledge Objects are production-active. The dated implementation
+> **Current checkpoint:** Tier-1 field extraction, field alias, calculated
+> field, bounded CSV lookup, and automatic lookup Knowledge Objects are
+> production-active under product compatibility profile 0.4. The dated implementation
 > inventories below are preserved as history; any earlier claim that the
 > capability is hard-false, Preview is unregistered, the browser is read-only,
 > the Resolver is unattached, Docker is pending, or nonempty execution gates are
 > closed is superseded by the
 > [August 10 activation and acceptance evidence](#tier-1-activation-and-acceptance-evidence-august-10-2026).
-> Lookup and later object families remain future phases.
+> Statements below that describe lookups as a future phase are historical plan
+> sequencing; event types, tags, macros, and later object families remain
+> planned.
 
 ## Executive summary
 
@@ -1282,12 +1286,19 @@ change is intentionally not described as schema-nonbreaking. Validate's later
 registration and Preview's activation do not retroactively change that
 historical classification.
 
-System bootstrap advertises knowledge features only when their complete API and
-runtime family is configured:
+System bootstrap advertises each knowledge feature only when its complete API
+and runtime family is configured. The current field-object and lookup wire
+capabilities are:
 
 ```text
 SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS
-SERVER_FEATURE_KNOWLEDGE_LOOKUPS
+SERVER_FEATURE_LOOKUP_MANAGEMENT
+```
+
+Classification, macro, and workflow-action capabilities remain future planned
+enum names and are not present in the current protobuf:
+
+```text
 SERVER_FEATURE_KNOWLEDGE_CLASSIFICATION
 SERVER_FEATURE_KNOWLEDGE_MACROS
 SERVER_FEATURE_KNOWLEDGE_WORKFLOW_ACTIONS
@@ -2019,7 +2030,7 @@ spelling and UTF-8/control rules with an 8,720-byte name, 17 path segments, and
 of strings, 256 operator-provenance entries, and 512 output-provenance entries.
 Physical projections allow 4,096 nodes, 256 reads, 4,096 cumulative headers and
 indexes, 64 index keys, 16 KiB per metadata string, and 1 MiB total. SQL is
-bounded at 256 KiB; EXPLAIN at 1 MiB, 4,096 nonempty lines, and 16 KiB per line;
+bounded at 256 KiB; EXPLAIN at 1 MiB, 4,096 nonempty lines, and 32 KiB per line;
 the diagnostic ID is at most 128 bytes. Each bounded string is UTF-8 encoded
 once, canonical comparison walks scalars without allocation while preserving Go
 byte order, and EXPLAIN validation is one byte pass.

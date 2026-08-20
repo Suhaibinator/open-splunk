@@ -43,6 +43,7 @@ import { AppsAdminPanel, CollectorFleetPanel } from "./admin-resource-panels";
 import { KnowledgeManagerGate } from "./knowledge-manager-gate";
 import { LookupManagerGate } from "./lookup-manager-gate";
 import {
+  backendKnowledgeCapabilities,
   backendAdminNavigation,
   knowledgeManagerAppOptionsFromBootstrap,
   type BackendAdminSection as AdminSection,
@@ -3434,20 +3435,24 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
           ?? issuedToken.constraints?.allowedIndexNames[0]
           ?? null,
       );
-  const knowledgeFeatureAdvertised = bootstrap !== null && supportsServerFeature(
-    bootstrap,
-    ServerFeature.SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS,
-  );
+  const {
+    knowledge: knowledgeFeatureAdvertised,
+    lookupManagement: lookupFeatureAdvertised,
+  } = backendKnowledgeCapabilities(bootstrap?.features ?? null);
   const knowledgeApps = knowledgeFeatureAdvertised && bootstrap !== null
     ? knowledgeManagerAppOptionsFromBootstrap(bootstrap.apps)
     : null;
   const knowledgeAdvertised = knowledgeFeatureAdvertised && knowledgeApps !== null;
-  const navigationItems = backendAdminNavigation(knowledgeAdvertised);
+  const lookupAdvertised = lookupFeatureAdvertised && knowledgeApps !== null;
+  const navigationItems = backendAdminNavigation(knowledgeAdvertised, lookupAdvertised);
   useEffect(() => {
-    if ((section === "knowledge" || section === "lookups") && !knowledgeAdvertised) {
+    if (
+      (section === "knowledge" && !knowledgeAdvertised)
+      || (section === "lookups" && !lookupAdvertised)
+    ) {
       setSection("overview");
     }
-  }, [knowledgeAdvertised, section]);
+  }, [knowledgeAdvertised, lookupAdvertised, section]);
   const hasAvailableAdminRoute = indexState === "available" || tokenState === "available";
   const adminRoutesLoading = indexState === "loading" || tokenState === "loading";
   const connectionStatus = bootstrap !== null
@@ -3576,7 +3581,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
               maximumPageSize={bootstrap.limits.maximumPageSize}
             />
           ) : null}
-          {section === "lookups" && knowledgeAdvertised && bootstrap !== null && knowledgeApps !== null ? (
+          {section === "lookups" && lookupAdvertised && bootstrap !== null && knowledgeApps !== null ? (
             <LookupManagerGate
               apiBaseUrl={apiBaseUrl}
               apps={knowledgeApps}

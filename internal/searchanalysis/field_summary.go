@@ -57,7 +57,7 @@ type FieldValueCount struct {
 }
 
 // FieldSummary is one atomically computed profile and deterministic top-value
-// prefix. DistinctCount and all approximation flags are exact in version 0.1.
+// prefix. DistinctCount and all approximation flags report exact values.
 type FieldSummary struct {
 	Profile                 FieldProfile
 	TopValues               []FieldValueCount
@@ -370,6 +370,22 @@ func (service *FieldService) buildFieldSummary(
 	if err != nil {
 		return nil, fmt.Errorf("rebuild completed search for field summary: %w", err)
 	}
+	fieldCompiler := service.compiler
+	logical, configured, changed, err := restoreCompletedSearchLookupAuthority(
+		ctx,
+		snapshot,
+		logical,
+		service.compiler,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"restore completed search lookups for field summary: %w",
+			err,
+		)
+	}
+	if changed {
+		fieldCompiler = configured
+	}
 	if err := plan.ValidateFieldAnalysisEligibility(logical); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrFieldAnalysisUnsupported, err)
 	}
@@ -379,7 +395,7 @@ func (service *FieldService) buildFieldSummary(
 		MaximumDistinctValues: clickhouse.MaximumFieldSummaryDistinctValues,
 		MaximumValueBytes:     clickhouse.MaximumFieldSummaryValueBytes,
 	}
-	compiled, err := service.compiler.CompileFieldSummaryContext(ctx, logical, spec)
+	compiled, err := fieldCompiler.CompileFieldSummaryContext(ctx, logical, spec)
 	if err != nil {
 		return nil, classifyFieldSummaryCompileError(err)
 	}

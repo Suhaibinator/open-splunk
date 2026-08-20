@@ -13,13 +13,17 @@ import (
 )
 
 const (
-	maximumExplainPlanNodes       = 4_096
-	maximumExplainPlanReads       = 256
-	maximumExplainPlanHeaders     = 4_096
-	maximumExplainPlanIndexes     = 4_096
-	maximumExplainPlanChildren    = 1_024
-	maximumExplainPlanIndexKeys   = 64
-	maximumExplainPlanMetadataLen = 16 << 10
+	maximumExplainPlanNodes     = 4_096
+	maximumExplainPlanReads     = 256
+	maximumExplainPlanHeaders   = 4_096
+	maximumExplainPlanIndexes   = 4_096
+	maximumExplainPlanChildren  = 1_024
+	maximumExplainPlanIndexKeys = 64
+	// ClickHouse can use one rendered lookup expression as an otherwise-safe
+	// MergeTree header name. Keep its raw admission aligned with the separately
+	// enforced 32 KiB line ceiling; the projection below still publishes only
+	// the small fixed physical-column and index allowlists.
+	maximumExplainPlanMetadataLen = int(maximumExplainLineBytes)
 )
 
 // ExplainPlan is the safe, detached structural projection of one fixed

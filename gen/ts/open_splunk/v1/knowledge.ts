@@ -718,6 +718,13 @@ export interface KnowledgeSnapshotRef {
    * expected without carrying definition or row payloads.
    */
   lookupAssetCount: number;
+  /**
+   * True only on legacy five-field search-attempt audit references whose
+   * lookup count was not persisted and cannot be reconstructed honestly. When
+   * true, lookup_asset_count must be zero and means unknown rather than exact
+   * zero. New references never set this migration marker.
+   */
+  lookupAssetCountUnknown: boolean;
 }
 
 /**
@@ -4637,6 +4644,7 @@ function createBaseKnowledgeSnapshotRef(): KnowledgeSnapshotRef {
     objectCount: 0,
     compilerCompatibilityVersion: "",
     lookupAssetCount: 0,
+    lookupAssetCountUnknown: false,
   };
 }
 
@@ -4662,6 +4670,9 @@ export const KnowledgeSnapshotRef: MessageFns<KnowledgeSnapshotRef> = {
     }
     if (message.lookupAssetCount !== 0) {
       writer.uint32(48).uint32(message.lookupAssetCount);
+    }
+    if (message.lookupAssetCountUnknown !== false) {
+      writer.uint32(56).bool(message.lookupAssetCountUnknown);
     }
     return writer;
   },
@@ -4721,6 +4732,14 @@ export const KnowledgeSnapshotRef: MessageFns<KnowledgeSnapshotRef> = {
           message.lookupAssetCount = reader.uint32();
           continue;
         }
+        case 7: {
+          if (tag !== 56) {
+            break;
+          }
+
+          message.lookupAssetCountUnknown = reader.bool();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -4762,6 +4781,11 @@ export const KnowledgeSnapshotRef: MessageFns<KnowledgeSnapshotRef> = {
         : isSet(object.lookup_asset_count)
         ? globalThis.Number(object.lookup_asset_count)
         : 0,
+      lookupAssetCountUnknown: isSet(object.lookupAssetCountUnknown)
+        ? globalThis.Boolean(object.lookupAssetCountUnknown)
+        : isSet(object.lookup_asset_count_unknown)
+        ? globalThis.Boolean(object.lookup_asset_count_unknown)
+        : false,
     };
   },
 
@@ -4785,6 +4809,9 @@ export const KnowledgeSnapshotRef: MessageFns<KnowledgeSnapshotRef> = {
     if (message.lookupAssetCount !== 0) {
       obj.lookupAssetCount = Math.round(message.lookupAssetCount);
     }
+    if (message.lookupAssetCountUnknown !== false) {
+      obj.lookupAssetCountUnknown = message.lookupAssetCountUnknown;
+    }
     return obj;
   },
 
@@ -4802,6 +4829,7 @@ export const KnowledgeSnapshotRef: MessageFns<KnowledgeSnapshotRef> = {
     message.objectCount = object.objectCount ?? 0;
     message.compilerCompatibilityVersion = object.compilerCompatibilityVersion ?? "";
     message.lookupAssetCount = object.lookupAssetCount ?? 0;
+    message.lookupAssetCountUnknown = object.lookupAssetCountUnknown ?? false;
     return message;
   },
 };

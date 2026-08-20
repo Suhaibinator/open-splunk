@@ -308,7 +308,7 @@ func TestStatsWildcardExpansionPrivateAuthorityParticipatesInMetadataCapacity(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	baseBytes, err = checkedAdd(baseBytes, uint64(len(probe.compilerVersion)))
+	baseBytes, err = checkedAdd(baseBytes, uint64(len(spl.CompatibilityVersion)))
 	if err != nil || prepared.metadataBytes < wildcardBytes {
 		t.Fatalf("base/prepared metadata = %d/%d: %v", baseBytes, prepared.metadataBytes, err)
 	}

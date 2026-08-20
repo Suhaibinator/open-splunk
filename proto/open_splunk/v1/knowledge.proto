@@ -398,6 +398,11 @@ message KnowledgeSnapshotRef {
   // count lets compact lifecycle references prove whether that inventory is
   // expected without carrying definition or row payloads.
   uint32 lookup_asset_count = 6;
+  // True only on legacy five-field search-attempt audit references whose
+  // lookup count was not persisted and cannot be reconstructed honestly. When
+  // true, lookup_asset_count must be zero and means unknown rather than exact
+  // zero. New references never set this migration marker.
+  bool lookup_asset_count_unknown = 7;
 }
 
 // KnowledgeSnapshotAuthorizedObjectSummary is current-policy-authorized

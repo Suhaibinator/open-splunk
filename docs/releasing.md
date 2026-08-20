@@ -1,7 +1,8 @@
 # Releasing
 
-Releases are cut from `main` by pushing a `vX.Y.Z` tag. There is no separate
-release branch and no manual publication step.
+Release preparation may use an ordinary development branch, but publication is
+always cut from `main` by pushing a `vX.Y.Z` tag. There is no long-lived
+publication branch and no manual publication step.
 
 ## Procedure
 
@@ -11,8 +12,8 @@ release branch and no manual publication step.
 
    ```sh
    git fetch origin main
-   git tag v0.2.0 <merge-commit>
-   git push origin v0.2.0
+   git tag v0.4.0 <merge-commit>
+   git push origin v0.4.0
    ```
 
    The tag must match `vMAJOR.MINOR.PATCH`; prerelease and build-metadata
@@ -30,11 +31,16 @@ publication on three conditions:
 - At least one completed `CI` workflow run for that exact commit concluded
   `success`.
 
-The application version is the tag without its leading `v`. The expected SPL
-compatibility identity comes from `scripts/read-spl-compatibility-version.mjs`
-and is compiled into the server, which verifies it at startup. Image creation
-time and `SOURCE_DATE_EPOCH` are taken from the tagged commit, so the build is
+The application version is the tag without its leading `v`. The current SPL
+compatibility identity comes from
+`scripts/read-spl-compatibility-version.mjs`; it is compiled into the server
+and verified before publication. There is no caller-selectable compatibility
+profile. Image creation time and
+`SOURCE_DATE_EPOCH` are taken from the tagged commit, so the build is
 reproducible from the tag alone.
+
+Application `0.4.0` uses cumulative compatibility profile `0.4`, as summarized
+in [`versioning.md`](versioning.md).
 
 ## What it publishes
 

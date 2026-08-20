@@ -77,14 +77,21 @@ func sealSearchAnalysisSnapshotWithCompiler(
 	template searchjobs.ExecutionSnapshot,
 	resolver searchjobs.KnowledgeResolver,
 	compiler clickhouse.Compiler,
-	compilerVersions ...string,
 ) (searchjobs.ExecutionSnapshot, error) {
-	if len(compilerVersions) > 1 {
-		return searchjobs.ExecutionSnapshot{}, fmt.Errorf(
-			"seal search-analysis snapshot: received %d compiler versions",
-			len(compilerVersions),
-		)
-	}
+	return sealSearchAnalysisSnapshotWithAuthorities(
+		template,
+		resolver,
+		nil,
+		compiler,
+	)
+}
+
+func sealSearchAnalysisSnapshotWithAuthorities(
+	template searchjobs.ExecutionSnapshot,
+	resolver searchjobs.KnowledgeResolver,
+	lookupResolver searchjobs.LookupResolver,
+	compiler clickhouse.Compiler,
+) (searchjobs.ExecutionSnapshot, error) {
 	timezone := template.SearchTimezone
 	if timezone == "" {
 		timezone = "UTC"
@@ -109,8 +116,8 @@ func sealSearchAnalysisSnapshotWithCompiler(
 		Executor:          searchAnalysisSnapshotExecutor{},
 		Snapshotter:       searchAnalysisSnapshotter(template.VisibilityCutoff),
 		Compiler:          compiler,
-		CompilerVersion:   firstSearchAnalysisCompilerVersion(compilerVersions),
 		KnowledgeResolver: resolver,
+		LookupResolver:    lookupResolver,
 		RetentionTTL:      retention,
 		CleanupInterval:   -1,
 		Now:               func() time.Time { return template.SearchStart },
@@ -179,13 +186,6 @@ func sealSearchAnalysisSnapshotWithCompiler(
 		}
 		time.Sleep(time.Millisecond)
 	}
-}
-
-func firstSearchAnalysisCompilerVersion(versions []string) string {
-	if len(versions) == 1 {
-		return versions[0]
-	}
-	return ""
 }
 
 type searchAnalysisKnowledgeFixture struct {

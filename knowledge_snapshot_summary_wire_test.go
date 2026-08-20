@@ -29,6 +29,8 @@ type knowledgeSnapshotReferenceContract struct {
 	TenantCatalogStateToken      string `json:"tenantCatalogStateToken"`
 	ObjectCount                  uint32 `json:"objectCount"`
 	CompilerCompatibilityVersion string `json:"compilerCompatibilityVersion"`
+	LookupAssetCount             uint32 `json:"lookupAssetCount"`
+	LookupAssetCountUnknown      bool   `json:"lookupAssetCountUnknown"`
 }
 
 type knowledgeSnapshotAuthorizedObjectContract struct {
@@ -71,8 +73,8 @@ func TestKnowledgeSnapshotReferenceAndSummarySharedGoTypeScriptWireGolden(t *tes
 	if err := json.Unmarshal(encodedFixture, &fixture); err != nil {
 		t.Fatalf("decode shared knowledge snapshot summary fixture: %v", err)
 	}
-	if fixture.Version != 1 || len(fixture.Cases) != 3 {
-		t.Fatalf("fixture = version %d with %d cases, want version 1 with 3 cases", fixture.Version, len(fixture.Cases))
+	if fixture.Version != 2 || len(fixture.Cases) != 3 {
+		t.Fatalf("fixture = version %d with %d cases, want version 2 with 3 cases", fixture.Version, len(fixture.Cases))
 	}
 
 	seen := make(map[string]bool, len(fixture.Cases))
@@ -170,6 +172,8 @@ func knowledgeSnapshotSummaryFromContract(
 			TenantCatalogStateToken:      stateToken,
 			ObjectCount:                  contract.Ref.ObjectCount,
 			CompilerCompatibilityVersion: contract.Ref.CompilerCompatibilityVersion,
+			LookupAssetCount:             contract.Ref.LookupAssetCount,
+			LookupAssetCountUnknown:      contract.Ref.LookupAssetCountUnknown,
 		},
 		ObjectsTruncated: contract.ObjectsTruncated,
 	}

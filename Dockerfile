@@ -1,5 +1,4 @@
 ARG OPEN_SPLUNK_APPLICATION_VERSION
-ARG OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION
 ARG OPEN_SPLUNK_SOURCE_REVISION
 ARG OPEN_SPLUNK_IMAGE_CREATED
 ARG OPEN_SPLUNK_SOURCE_DATE_EPOCH
@@ -12,6 +11,7 @@ ARG OPEN_SPLUNK_SOURCE_DATE_EPOCH
 ARG SOURCE_DATE_EPOCH
 WORKDIR /workspace
 COPY package.json package-lock.json ./
+RUN node -e 'const actual = require("./package.json").version; if (actual !== process.argv[1]) { throw new Error(`OPEN_SPLUNK_APPLICATION_VERSION ${process.argv[1]} does not match package.json ${actual}`); }' "${OPEN_SPLUNK_APPLICATION_VERSION}"
 RUN npm ci --include=dev
 COPY app ./app
 COPY gen/ts ./gen/ts
@@ -41,7 +41,6 @@ ARG TARGETARCH
 ARG OPEN_SPLUNK_EXPECTED_TARGETOS
 ARG OPEN_SPLUNK_EXPECTED_TARGETARCH
 ARG OPEN_SPLUNK_APPLICATION_VERSION
-ARG OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION
 ARG OPEN_SPLUNK_SOURCE_REVISION
 ARG OPEN_SPLUNK_IMAGE_CREATED
 ARG OPEN_SPLUNK_SOURCE_DATE_EPOCH
@@ -77,27 +76,21 @@ RUN set -eu; \
     test "${TARGETARCH}" = "${OPEN_SPLUNK_EXPECTED_TARGETARCH}"; \
     test "${TARGETOS}" = linux; \
     test "${TARGETARCH}" = amd64 || test "${TARGETARCH}" = arm64; \
-    if [ -n "${OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION}" ]; then \
-      case "${OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION}" in \
-        *[!0-9.]*|*.*.*|.*|*.) exit 1 ;; \
-      esac; \
-      actual_spl_compatibility_version="$( \
-        awk ' \
-          /^const CompatibilityVersion = "[0-9]+\.[0-9]+"$/ { \
-            value = $0; \
-            sub(/^const CompatibilityVersion = "/, "", value); \
-            sub(/"$/, "", value); \
-            count++ \
-          } \
-          END { \
-            if (count != 1) exit 1; \
-            print value \
-          } \
-        ' internal/spl/doc.go \
-      )"; \
-      test "${actual_spl_compatibility_version}" = \
-        "${OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION}"; \
-    fi
+    actual_spl_compatibility_version="$( \
+      awk ' \
+        /^const CompatibilityVersion = "[0-9]+\.[0-9]+"$/ { \
+          value = $0; \
+          sub(/^const CompatibilityVersion = "/, "", value); \
+          sub(/"$/, "", value); \
+          count++ \
+        } \
+        END { \
+          if (count != 1) exit 1; \
+          print value \
+        } \
+      ' internal/spl/doc.go \
+    )"; \
+    printf '%s\n' "${actual_spl_compatibility_version}" > .spl-compatibility-version
 RUN go run ./cmd/open-splunk-manifest \
       -application-version "${OPEN_SPLUNK_APPLICATION_VERSION}" \
       -source-revision "${OPEN_SPLUNK_SOURCE_REVISION}"
@@ -123,15 +116,10 @@ RUN set -eu; \
       expected_base="$(printf 'application_version=%s\nsource_revision=%s' \
         "${OPEN_SPLUNK_APPLICATION_VERSION}" \
         "${OPEN_SPLUNK_SOURCE_REVISION}")"; \
-      if [ -n "${OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION}" ]; then \
-        expected_server="$(printf '%s\nspl_compatibility_version=%s' \
-          "${expected_base}" \
-          "${OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION}")"; \
-        server_identity="$(/artifacts/open-splunk-server -verify-embedded-release | sed -n '1,3p')"; \
-      else \
-        expected_server="${expected_base}"; \
-        server_identity="$(/artifacts/open-splunk-server -verify-embedded-release | sed -n '1,2p')"; \
-      fi; \
+      expected_server="$(printf '%s\nspl_compatibility_version=%s' \
+        "${expected_base}" \
+        "$(cat .spl-compatibility-version)")"; \
+      server_identity="$(/artifacts/open-splunk-server -verify-embedded-release | sed -n '1,3p')"; \
       collector_identity="$(/artifacts/open-splunk-collector version)"; \
       test "${server_identity}" = "${expected_server}"; \
       test "${collector_identity}" = "${expected_base}"; \
