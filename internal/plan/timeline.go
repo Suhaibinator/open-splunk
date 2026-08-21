@@ -92,6 +92,10 @@ func ValidateTimelineEligibility(query *Query) error {
 			if operator.Input.Name == "_time" {
 				return timelineTimeDiagnostic(preferTimelineRange(operator.Input.Range, operator.Range))
 			}
+		case *NoMultivalue:
+			if operator.Input.Name == "_time" {
+				return timelineTimeDiagnostic(preferTimelineRange(operator.Input.Range, operator.Range))
+			}
 		case *Extract:
 			for _, capture := range operator.Captures {
 				if capture.Output.Name == "_time" {

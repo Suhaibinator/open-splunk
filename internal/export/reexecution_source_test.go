@@ -1389,6 +1389,7 @@ func TestReexecutionLeaseRejectsCellsThatContradictPinnedSchema(t *testing.T) {
 	}{
 		{name: "wrong kind", value: searchjobs.StringValue("200")},
 		{name: "null in nonnullable column", value: searchjobs.NullValue()},
+		{name: "missing in nonnullable column", value: searchjobs.MissingValue()},
 		{name: "invalid value", value: searchjobs.Value{}},
 	} {
 		t.Run(test.name, func(t *testing.T) {

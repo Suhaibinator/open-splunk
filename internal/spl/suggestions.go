@@ -567,6 +567,8 @@ func classifySuggestionContext(tokens []token, prefix string, replacement Range)
 		return classifyMakeMVSuggestion(base, body)
 	case "mvexpand":
 		return classifyMVExpandSuggestion(base, body)
+	case "nomv":
+		return classifyNoMVSuggestion(base, body)
 	case "rename":
 		return classifyRenameSuggestion(base, body)
 	case "stats":
@@ -756,6 +758,13 @@ func classifyMVExpandSuggestion(context SuggestionContext, tokens []token) Sugge
 	}
 	if topLevelOptionAssignmentIndex(tokens, "limit") < 0 {
 		return fieldKeywordSuggestion(context, false, "limit=")
+	}
+	return context
+}
+
+func classifyNoMVSuggestion(context SuggestionContext, tokens []token) SuggestionContext {
+	if len(tokens) == 0 {
+		return fieldKeywordSuggestion(context, true)
 	}
 	return context
 }

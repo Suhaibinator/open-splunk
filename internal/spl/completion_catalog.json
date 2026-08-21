@@ -126,6 +126,11 @@
       "detail": "Expand one multivalue into bounded ordered result rows."
     },
     {
+      "name": "nomv",
+      "insertion": "nomv tags",
+      "detail": "Display one native multivalue field as newline-separated canonical text without changing its typed value."
+    },
+    {
       "name": "stats",
       "insertion": "stats partitions=1 allnum=false delim=\",\" count AS events sparkline(avg(latency),5m) AS latency_trend values(user) AS users rate(bytes) AS byte_rate BY level dedup_splitvals=false",
       "detail": "Aggregate with bounded row, predicate, field, distinct-count, percentile, distribution, value-selection, chronological, rate, and time-binned sparkline measures. Leading unsigned partitions (0 selects the default; values above 100 clamp to 100), allnum, and delim options plus terminal dedup_splitvals are preserved in the plan; delimiter-display and parallel-order details remain oracle-governed."
@@ -565,6 +570,55 @@
       "name": "mvsort",
       "insertion": "mvsort(",
       "detail": "Sort homogeneous String multivalue members in ascending UTF-8 byte order.",
+      "class": "scalar",
+      "highlight_requires_call": true
+    },
+    {
+      "name": "split",
+      "insertion": "split(",
+      "detail": "Split canonical text with an exact bounded literal delimiter.",
+      "class": "scalar",
+      "highlight_requires_call": true
+    },
+    {
+      "name": "mvappend",
+      "insertion": "mvappend(",
+      "detail": "Flatten one through 32 scalar or multivalue arguments in source order.",
+      "class": "scalar",
+      "highlight_requires_call": true
+    },
+    {
+      "name": "mvdedup",
+      "insertion": "mvdedup(",
+      "detail": "Remove later type-sensitive duplicates from a multivalue field.",
+      "class": "scalar",
+      "highlight_requires_call": true
+    },
+    {
+      "name": "mvindex",
+      "insertion": "mvindex(",
+      "detail": "Select one member or an inclusive range with literal signed indexes.",
+      "class": "scalar",
+      "highlight_requires_call": true
+    },
+    {
+      "name": "mvjoin",
+      "insertion": "mvjoin(",
+      "detail": "Join canonical multivalue member text with a bounded literal delimiter.",
+      "class": "scalar",
+      "highlight_requires_call": true
+    },
+    {
+      "name": "mvzip",
+      "insertion": "mvzip(",
+      "detail": "Zip two multivalue fields with an optional bounded literal delimiter.",
+      "class": "scalar",
+      "highlight_requires_call": true
+    },
+    {
+      "name": "mvfind",
+      "insertion": "mvfind(",
+      "detail": "Return the first member index matching a bounded literal RE2 pattern.",
       "class": "scalar",
       "highlight_requires_call": true
     },

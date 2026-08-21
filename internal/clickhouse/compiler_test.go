@@ -432,8 +432,11 @@ func TestCompileEvalFieldCopiesPreserveFlattenedObjectProvenance(t *testing.T) {
 			t.Fatalf("direct eval copy lost flattened-object provenance %q:\n%s", required, direct.SQL)
 		}
 	}
-	if got := direct.Args[0]; got != "object_parent." {
-		t.Fatalf("direct eval descendant argument = %#v, want object_parent.; args=%#v", got, direct.Args)
+	if got := countArgument(direct.Args, "object_parent."); got != 1 {
+		t.Fatalf("direct eval descendant argument count = %d, want 1; args=%#v", got, direct.Args)
+	}
+	if got := countArgument(direct.Args, "object_parent"); got != 1 {
+		t.Fatalf("direct eval exact argument count = %d, want 1; args=%#v", got, direct.Args)
 	}
 	if got, want := strings.Count(direct.SQL, "?"), len(direct.Args); got != want {
 		t.Fatalf("direct eval placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, direct.SQL, direct.Args)
@@ -452,11 +455,11 @@ func TestCompileEvalFieldCopiesPreserveFlattenedObjectProvenance(t *testing.T) {
 			t.Fatalf("chained eval copy lost flattened-object provenance %q:\n%s", required, chained.SQL)
 		}
 	}
-	if got := chained.Args[len(chained.Args)-1]; got != "object_parent." {
-		t.Fatalf("chained eval descendant argument = %#v, want object_parent.; args=%#v", got, chained.Args)
+	if got := countArgument(chained.Args, "object_parent."); got != 2 {
+		t.Fatalf("chained eval descendant argument count = %d, want 2; args=%#v", got, chained.Args)
 	}
-	if got := chained.Args[0]; got != "object_parent." {
-		t.Fatalf("chained eval validation argument = %#v, want object_parent.; args=%#v", got, chained.Args)
+	if got := countArgument(chained.Args, "object_parent"); got != 3 {
+		t.Fatalf("chained eval exact argument count = %d, want 3; args=%#v", got, chained.Args)
 	}
 	if got, want := strings.Count(chained.SQL, "?"), len(chained.Args); got != want {
 		t.Fatalf("chained eval placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, chained.SQL, chained.Args)

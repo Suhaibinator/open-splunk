@@ -9,7 +9,11 @@ import { installModalSurface } from "../../_components/modal-surface";
 import { COMPACT_NUMBER_FORMAT, NUMBER_FORMAT } from "../constants";
 import { formatExactInteger, formatExactNumericText } from "../formatters";
 import type { EventDisplay, MenuName, TimelineDisplay } from "../model";
-import { formatFieldValue, highlightedRaw } from "../workspace-utils";
+import {
+  eventFieldValueWhiteSpace,
+  formatFieldValue,
+  highlightedRaw,
+} from "../workspace-utils";
 
 interface EventsPanelProps {
   activeField: string | null;
@@ -603,7 +607,7 @@ export function EventsPanel({
                         {["host", "source", "sourcetype"]
                           .filter((fieldName) => Object.hasOwn(event.fields, fieldName))
                           .map((fieldName) => (
-                          <button type="button" aria-disabled={isPreview} title={isPreview ? "Authoritative field summaries load after completion." : undefined} key={fieldName} onClick={() => { if (!isPreview) openFieldInspector(fieldName); }}><span>{fieldName}</span> = {formatFieldValue(event.fields[fieldName] ?? null)}</button>
+                          <button type="button" aria-disabled={isPreview} title={isPreview ? "Authoritative field summaries load after completion." : undefined} key={fieldName} style={{ whiteSpace: eventFieldValueWhiteSpace(event.fields[fieldName] ?? null) }} onClick={() => { if (!isPreview) openFieldInspector(fieldName); }}><span>{fieldName}</span> = {formatFieldValue(event.fields[fieldName] ?? null)}</button>
                         ))}
                       </div>
                       {expanded ? (
@@ -614,7 +618,7 @@ export function EventsPanel({
                               <div className="event-field" key={fieldName}>
                                 <button className="event-field-name" type="button" onClick={() => openFieldInspector(fieldName)}>{fieldName}</button>
                                 <span className={`value-type value-${fieldValue === null ? "null" : typeof fieldValue}`}>{fieldValue === null ? "null" : typeof fieldValue}</span>
-                                <code>{formatFieldValue(fieldValue)}</code>
+                                <code style={{ whiteSpace: eventFieldValueWhiteSpace(fieldValue) }}>{formatFieldValue(fieldValue)}</code>
                                 <div className="event-field-actions">
                                   <button type="button" disabled={event.pivotableFields?.[fieldName] === false} title={event.pivotableFields?.[fieldName] === false ? "This typed value cannot be represented losslessly in SPL" : "Include in current search"} aria-label={`Include ${fieldName}`} onClick={() => applyPivot(fieldName, fieldValue, "include")}>＋</button>
                                   <button type="button" disabled={event.pivotableFields?.[fieldName] === false} title={event.pivotableFields?.[fieldName] === false ? "This typed value cannot be represented losslessly in SPL" : "Exclude from current search"} aria-label={`Exclude ${fieldName}`} onClick={() => applyPivot(fieldName, fieldValue, "exclude")}>−</button>

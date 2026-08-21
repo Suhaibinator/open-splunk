@@ -504,6 +504,20 @@ func authoredFuzzCanonicalFunctionName(function ScalarFunction) (string, bool) {
 		return "strptime", true
 	case ScalarFunctionRelativeTime:
 		return "relative_time", true
+	case ScalarFunctionSplit:
+		return "split", true
+	case ScalarFunctionMVAppend:
+		return "mvappend", true
+	case ScalarFunctionMVDedup:
+		return "mvdedup", true
+	case ScalarFunctionMVIndex:
+		return "mvindex", true
+	case ScalarFunctionMVJoin:
+		return "mvjoin", true
+	case ScalarFunctionMVZip:
+		return "mvzip", true
+	case ScalarFunctionMVFind:
+		return "mvfind", true
 	default:
 		return "", false
 	}

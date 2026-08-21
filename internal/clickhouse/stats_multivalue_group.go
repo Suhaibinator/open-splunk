@@ -47,6 +47,32 @@ func compileStatsMultivalueGroup(
 			valuesSQL:  valuesSQL,
 			valuesArgs: valuesArgs,
 		}, true, nil
+	case fieldKindDynamicArray:
+		existsSQL := field.existsSQL
+		if existsSQL == "" {
+			existsSQL = "1"
+		}
+		members := field.valueSQL
+		memberSupported := nativeMVElementSupportedSQL("element")
+		valuesSQL := "arrayMap(element -> " + nativeMVCanonicalTextSQL("element") +
+			", arrayFilter(element -> dynamicType(element) != 'None' AND (" +
+			memberSupported + "), " + members + "))"
+		valuesSQL = "if(" + existsSQL + ", " + valuesSQL + ", " + emptyStrings + ")"
+		if deduplicate {
+			valuesSQL = "arrayDistinct(" + valuesSQL + ")"
+		}
+		unsupportedSQL := "(" + existsSQL + ") AND arrayExists(element -> NOT (" +
+			memberSupported + "), " + members + ")"
+		if field.descendantSQL != "" {
+			unsupportedSQL = "(" + field.descendantSQL + ") OR (" + unsupportedSQL + ")"
+		}
+		return compiledStatsMultivalueGroup{
+			field:           field,
+			valuesSQL:       valuesSQL,
+			valuesArgs:      append([]any(nil), field.existsArgs...),
+			unsupportedSQL:  unsupportedSQL,
+			unsupportedArgs: append(append([]any(nil), field.descendantArgs...), field.existsArgs...),
+		}, true, nil
 	case fieldKindDynamic:
 		typeSQL := dynamicTypeExpression(field)
 		scalarSupported, scalarLexical := statsByScalarExpressionsFor(

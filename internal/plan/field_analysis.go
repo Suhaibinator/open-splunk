@@ -38,7 +38,7 @@ func ValidateFieldAnalysisEligibility(query *Query) error {
 				return fieldAnalysisPipelineDiagnostic(operator.Range)
 			}
 		case *Filter, *RegexFilter, *Extend, *Strcat, *FillNull, *RowTotal,
-			*OrderedDelta, *MakeMultivalue, *Extract, *ExtractJSON, *Rename,
+			*OrderedDelta, *MakeMultivalue, *NoMultivalue, *Extract, *ExtractJSON, *Rename,
 			*Lookup, *AutomaticLookupGroup, *TimeBucket, *NumericBucket, *Sort, *Deduplicate, *Limit, *Reverse,
 			*ConditionalExtract, *ConditionalExtractJSON, *CopyFieldAlias, *ParallelExtend:
 			// These preserve source-event identity while changing the final

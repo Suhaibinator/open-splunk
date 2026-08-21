@@ -423,7 +423,7 @@ func normalizeArithmeticOperand(
 		), nil
 	case fieldKindDynamic:
 		return normalizeDynamicArithmeticOperand(input), nil
-	case fieldKindStringArray:
+	case fieldKindStringArray, fieldKindDynamicArray:
 		return compiledScalar{}, &plan.Diagnostic{
 			Code:    "SPL_UNSUPPORTED_ARITHMETIC_VALUE_TYPE",
 			Message: "arithmetic requires a scalar numeric value; multivalue arithmetic is not supported",
@@ -707,7 +707,7 @@ func compileMembershipOperand(
 	if err != nil {
 		return compiledScalar{}, err
 	}
-	if value.kind == fieldKindStringArray {
+	if isNativeMultivalueKind(value.kind) {
 		return compiledScalar{}, &plan.Diagnostic{
 			Code:    "SPL_UNSUPPORTED_MEMBERSHIP_VALUE_TYPE",
 			Message: "membership requires scalar values; multivalue membership is not supported",

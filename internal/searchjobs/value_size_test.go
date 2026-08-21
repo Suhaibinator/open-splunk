@@ -27,6 +27,7 @@ func TestValueProtoSizeLowerBoundNeverExceedsConvertedSize(t *testing.T) {
 	}
 	values := []searchjobs.Value{
 		searchjobs.NullValue(),
+		searchjobs.MissingValue(),
 		searchjobs.StringValue("hello"),
 		searchjobs.SignedValue(-42),
 		searchjobs.UnsignedValue(42),

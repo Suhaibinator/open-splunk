@@ -4,12 +4,19 @@ import { isValidElement, type ReactNode } from "react";
 
 import { SPL_PIPELINE_COMMANDS } from "@/lib/search/spl-syntax";
 
-import { syntaxTokens } from "./workspace-utils";
+import { eventFieldValueWhiteSpace, syntaxTokens } from "./workspace-utils";
 
 interface SyntaxTokenProps {
   children?: ReactNode;
   className?: string;
 }
+
+test("event field presentation preserves adapted nomv newlines", () => {
+  assert.equal(eventFieldValueWhiteSpace("alpha"), "nowrap");
+  assert.equal(eventFieldValueWhiteSpace(7), "nowrap");
+  assert.equal(eventFieldValueWhiteSpace("alpha\nbeta"), "pre-wrap");
+  assert.equal(eventFieldValueWhiteSpace("alpha\rbeta"), "pre-wrap");
+});
 
 function classifiedTokens(query: string): Array<{ className: string; text: string }> {
   return syntaxTokens(query).map((node) => {

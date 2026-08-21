@@ -7,11 +7,10 @@ import (
 	"slices"
 )
 
-// ResultOptionalMultivalueOutput binds a public Array(String) ordinal to one
-// compiler-owned value-presence bit. ClickHouse cannot represent
-// Nullable(Array(String)); the sealed sidecar lets the executor publish a
-// typed nullable List while preserving the difference between null/missing
-// and a present empty multivalue.
+// ResultOptionalMultivalueOutput binds a public Array(String) or
+// Array(Dynamic) ordinal to one compiler-owned tri-state byte. ClickHouse
+// cannot represent nullable arrays; the sealed sidecar uses 0 for missing, 1
+// for a present list, and 2 for explicit null, preserving present-empty too.
 type ResultOptionalMultivalueOutput struct {
 	OutputIndex uint16
 }
@@ -20,7 +19,8 @@ func canonicalResultOptionalMultivalueOutput(index uint16) ResultOptionalMultiva
 	return ResultOptionalMultivalueOutput{OutputIndex: index}
 }
 
-// PresentColumn returns the private non-null UInt8 column for this output.
+// PresentColumn returns the legacy-named private non-null UInt8 state column
+// for this output. Its domain is the sealed tri-state described above.
 func (output ResultOptionalMultivalueOutput) PresentColumn() string {
 	return fmt.Sprintf("__os_result_multivalue_present_%d", output.OutputIndex)
 }
@@ -97,16 +97,21 @@ func compileResultOptionalMultivalueOutputs(
 		if !visible || field.optionalMultivaluePresentSQL == "" {
 			continue
 		}
-		if field.kind != fieldKindStringArray || index > math.MaxUint16 {
+		if !isNativeMultivalueKind(field.kind) || index > math.MaxUint16 {
 			return nil, nil, errors.New(
 				"compile ClickHouse query: optional multivalue result transport is invalid",
 			)
 		}
 		descriptor := canonicalResultOptionalMultivalueOutput(uint16(index))
 		outputs = append(outputs, descriptor)
+		existsSQL := field.existsSQL
+		if existsSQL == "" {
+			existsSQL = "1"
+		}
 		projection = append(
 			projection,
-			"toUInt8("+field.optionalMultivaluePresentSQL+") AS "+
+			"multiIf(toUInt8("+field.optionalMultivaluePresentSQL+") != 0, "+
+				"toUInt8(1), toUInt8("+existsSQL+") != 0, toUInt8(2), toUInt8(0)) AS "+
 				quoteIdentifier(descriptor.PresentColumn()),
 		)
 	}

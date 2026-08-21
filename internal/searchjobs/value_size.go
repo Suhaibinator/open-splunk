@@ -63,8 +63,8 @@ func (preflight *valueSizePreflight) value(value Value, depth int) error {
 	}
 
 	switch value.kind {
-	case ValueKindNull:
-		// oneof tag plus the nonzero NULL_VALUE_NULL enum.
+	case ValueKindNull, ValueKindMissing:
+		// Oneof tag plus the corresponding nonzero enum value.
 		preflight.add(2)
 	case ValueKindString:
 		if !utf8.ValidString(value.stringValue) {

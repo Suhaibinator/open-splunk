@@ -407,6 +407,20 @@ test("enforces schema types, UINT64 bounds, and nullable MIXED values", () => {
     assert.match(nonNullableNull.message, /null in a non-nullable column/);
   }
 
+  const nonNullableMissing = applyTypedPreview(
+    schema({ columns: [column({ valueType: ValueType.VALUE_TYPE_MIXED })] }),
+    [{
+      kind: {
+        $case: "missingValue",
+        value: MissingValue.MISSING_VALUE_MISSING,
+      },
+    }],
+  );
+  assert.equal(nonNullableMissing.status, "invalid");
+  if (nonNullableMissing.status === "invalid") {
+    assert.match(nonNullableMissing.message, /missing in a non-nullable column/);
+  }
+
   const uint64Overflow = applyTypedPreview(
     schema({ columns: [column({ valueType: ValueType.VALUE_TYPE_UINT64 })] }),
     [{ kind: { $case: "uint64Value", value: MAXIMUM_UINT64 + 1n } }],

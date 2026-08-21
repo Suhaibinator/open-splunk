@@ -9,6 +9,7 @@ import (
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
+	"github.com/Suhaibinator/open-splunk/internal/splpath"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -364,6 +365,51 @@ func TestPreparePreservesJSONBeforeRegexOperatorOrder(t *testing.T) {
 	kinds := program.OperatorKinds()
 	if len(kinds) != 2 || kinds[0] != OperatorConditionalExtractJSON || kinds[1] != OperatorConditionalExtract {
 		t.Fatalf("operator kinds = %v, want JSON then regex", kinds)
+	}
+}
+
+func TestPreparePreservesWildcardJSONPathSelectors(t *testing.T) {
+	definition := func(path string) *opensplunk.KnowledgeObjectDefinition {
+		return &opensplunk.KnowledgeObjectDefinition{
+			AppId: "app-a", Name: "wildcard-json", SharingScope: opensplunk.SharingScope_SHARING_SCOPE_APP,
+			Body: &opensplunk.KnowledgeObjectDefinition_FieldExtraction{FieldExtraction: &opensplunk.FieldExtractionDefinition{
+				InputField: "_raw",
+				Extraction: &opensplunk.FieldExtractionDefinition_Json{Json: &opensplunk.JsonFieldExtractionDefinition{
+					Path: path, OutputField: "names",
+				}},
+			}},
+		}
+	}
+
+	wildcard, err := Prepare(inputFromDefinitions(t, []*opensplunk.KnowledgeObjectDefinition{
+		definition("groups{}.users{}.name"),
+	}))
+	if err != nil {
+		t.Fatalf("Prepare(wildcard JSON): %v", err)
+	}
+	extractions := wildcard.JSONExtractions()
+	if len(extractions) != 1 {
+		t.Fatalf("JSON extractions = %d, want 1", len(extractions))
+	}
+	steps := extractions[0].Steps()
+	if len(steps) != 3 ||
+		steps[0].Selector != splpath.ArraySelectorWildcard ||
+		steps[1].Selector != splpath.ArraySelectorWildcard ||
+		steps[2].Selector != splpath.ArraySelectorNone ||
+		extractions[0].EvaluationWorkUnits() != 5 {
+		t.Fatalf("wildcard extraction = steps:%#v work:%d", steps, extractions[0].EvaluationWorkUnits())
+	}
+
+	fixed, err := Prepare(inputFromDefinitions(t, []*opensplunk.KnowledgeObjectDefinition{
+		definition("groups{0}.users{}.name"),
+	}))
+	if err != nil {
+		t.Fatalf("Prepare(mixed JSON): %v", err)
+	}
+	wildcardCommitment, _ := wildcard.Commitment()
+	fixedCommitment, _ := fixed.Commitment()
+	if wildcardCommitment == fixedCommitment || wildcard.Equal(fixed) {
+		t.Fatal("fixed and wildcard JSON selectors share one program commitment")
 	}
 }
 

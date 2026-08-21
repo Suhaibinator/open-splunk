@@ -653,6 +653,27 @@ func TestSealResponseRejectsUnknownSchemaAndEnforcesExactResponseCap(t *testing.
 	}
 }
 
+func TestPreviewResponseValidationAcceptsCanonicalMissingValues(t *testing.T) {
+	t.Parallel()
+
+	missing := &opensplunk.TypedValue{
+		Kind: &opensplunk.TypedValue_MissingValue{
+			MissingValue: opensplunk.MissingValue_MISSING_VALUE_MISSING,
+		},
+	}
+	if err := validateTypedValue(missing, 0); err != nil {
+		t.Fatalf("validateTypedValue(missing): %v", err)
+	}
+	if !validColumnValueType(opensplunk.ValueType_VALUE_TYPE_MISSING) {
+		t.Fatal("missing schema value type was rejected")
+	}
+	missing.GetKind().(*opensplunk.TypedValue_MissingValue).MissingValue =
+		opensplunk.MissingValue_MISSING_VALUE_UNSPECIFIED
+	if err := validateTypedValue(missing, 0); !errors.Is(err, ErrInvariant) {
+		t.Fatalf("validateTypedValue(unspecified missing) = %v, want ErrInvariant", err)
+	}
+}
+
 func TestProjectionSinkPreflightRejectsOversizedValuesBeforeConversion(t *testing.T) {
 	deepEmpty := searchjobs.ListValue()
 	for range 32 {

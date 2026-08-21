@@ -110,6 +110,28 @@ func TestVisitDetachedByteTokenCannotMutateValue(t *testing.T) {
 	}
 }
 
+func TestVisitDetachedDistinguishesMissingFromNull(t *testing.T) {
+	t.Parallel()
+
+	value := ListValue(MissingValue(), NullValue())
+	var got []ValueVisitTokenKind
+	if err := value.VisitDetached(func(token ValueVisitToken) error {
+		got = append(got, token.Kind)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := []ValueVisitTokenKind{
+		ValueVisitListBegin,
+		ValueVisitMissing,
+		ValueVisitNull,
+		ValueVisitListEnd,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("missing/null visit tokens = %v, want %v", got, want)
+	}
+}
+
 func TestVisitDetachedStopsAtCallbackError(t *testing.T) {
 	t.Parallel()
 

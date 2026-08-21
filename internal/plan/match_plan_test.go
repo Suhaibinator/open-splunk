@@ -213,6 +213,13 @@ func TestScalarFunctionBooleanTraitsRemainInParity(t *testing.T) {
 		{spl.ScalarFunctionStrptime, ScalarFunctionStrptime, false},
 		{spl.ScalarFunctionRelativeTime, ScalarFunctionRelativeTime, false},
 		{spl.ScalarFunctionConcat, ScalarFunctionConcat, false},
+		{spl.ScalarFunctionSplit, ScalarFunctionSplit, false},
+		{spl.ScalarFunctionMVAppend, ScalarFunctionMVAppend, false},
+		{spl.ScalarFunctionMVDedup, ScalarFunctionMVDedup, false},
+		{spl.ScalarFunctionMVIndex, ScalarFunctionMVIndex, false},
+		{spl.ScalarFunctionMVJoin, ScalarFunctionMVJoin, false},
+		{spl.ScalarFunctionMVZip, ScalarFunctionMVZip, false},
+		{spl.ScalarFunctionMVFind, ScalarFunctionMVFind, false},
 	}
 	if len(functions) != int(spl.ScalarFunctionCount) {
 		t.Fatalf(

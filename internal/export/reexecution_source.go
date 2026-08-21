@@ -525,9 +525,10 @@ func (sink *reexecutionSink) AddRow(values []searchjobs.Value) error {
 	for index, value := range values {
 		column := sink.expected.Columns[index]
 		kind := value.Kind()
+		absent := kind == searchjobs.ValueKindNull || kind == searchjobs.ValueKindMissing
 		if kind == searchjobs.ValueKindInvalid || kind == searchjobs.ValueKindMixed ||
-			(column.Kind != searchjobs.ValueKindMixed && kind != column.Kind && kind != searchjobs.ValueKindNull) ||
-			(kind == searchjobs.ValueKindNull && !column.Nullable && column.Kind != searchjobs.ValueKindNull) {
+			(column.Kind != searchjobs.ValueKindMixed && kind != column.Kind && !absent) ||
+			(absent && !column.Nullable && column.Kind != kind) {
 			err := sink.rememberLocked(fmt.Errorf("%w: re-executed cell %d does not match schema", searchjobs.ErrInvalidResult, index))
 			sink.mu.Unlock()
 			return err

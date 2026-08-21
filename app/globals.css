@@ -2788,6 +2788,15 @@ pre {
   white-space: nowrap;
 }
 
+.statistics-multivalue-lines {
+  display: block;
+  line-height: 1.25;
+  max-height: calc(var(--statistics-row-height, 42px) - 8px);
+  max-width: 100%;
+  overflow: hidden;
+  white-space: pre-wrap;
+}
+
 .statistics-scroll-hint {
   display: none;
 }

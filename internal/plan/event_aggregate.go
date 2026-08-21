@@ -3,8 +3,10 @@ package plan
 import (
 	"reflect"
 	"slices"
+	"unicode/utf8"
 
 	"github.com/Suhaibinator/open-splunk/internal/spl"
+	"github.com/Suhaibinator/open-splunk/internal/splregex"
 )
 
 // validEventAggregateContract recognizes the deliberately narrow,
@@ -229,7 +231,8 @@ func (validator *eventAggregatePredicateValidator) validScalarWithUnaryChain(
 			validEventAggregateLiteralKind(expression.Value.Kind)
 	case *ScalarCallExpression:
 		if expression == nil ||
-			!validEventAggregateScalarFunction(expression.Function) {
+			!validEventAggregateScalarFunction(expression.Function) ||
+			!validEventAggregateNativeMVCall(expression) {
 			return false
 		}
 		for _, argument := range expression.Arguments {
@@ -259,6 +262,68 @@ func (validator *eventAggregatePredicateValidator) validScalarWithUnaryChain(
 	}
 }
 
+func validEventAggregateNativeMVCall(expression *ScalarCallExpression) bool {
+	if expression == nil {
+		return false
+	}
+	quoted := func(argument ScalarExpression) (string, bool) {
+		literal, ok := argument.(*ScalarLiteralExpression)
+		if !ok || literal == nil || literal.Value.Kind != ValueKindString ||
+			!literal.Value.Quoted || !utf8.ValidString(literal.Value.String) {
+			return "", false
+		}
+		return literal.Value.String, true
+	}
+	boundedDelimiter := func(argument ScalarExpression) bool {
+		value, ok := quoted(argument)
+		return ok && len(value) <= spl.MaximumMVDelimiterBytes
+	}
+	validIndex := func(argument ScalarExpression) bool {
+		literal, ok := argument.(*ScalarLiteralExpression)
+		if !ok || literal == nil {
+			return false
+		}
+		switch literal.Value.Kind {
+		case ValueKindInt64:
+			return literal.Value.Int64 >= -1<<31 && literal.Value.Int64 <= 1<<31-1
+		case ValueKindUint64:
+			return literal.Value.Uint64 <= 1<<31-1
+		default:
+			return false
+		}
+	}
+	switch expression.Function {
+	case ScalarFunctionSplit, ScalarFunctionMVJoin:
+		return len(expression.Arguments) == 2 && boundedDelimiter(expression.Arguments[1])
+	case ScalarFunctionMVAppend:
+		return len(expression.Arguments) >= 1 &&
+			len(expression.Arguments) <= spl.MaximumMVAppendArguments
+	case ScalarFunctionMVDedup:
+		return len(expression.Arguments) == 1
+	case ScalarFunctionMVIndex:
+		if len(expression.Arguments) < 2 || len(expression.Arguments) > 3 ||
+			!validIndex(expression.Arguments[1]) {
+			return false
+		}
+		return len(expression.Arguments) == 2 || validIndex(expression.Arguments[2])
+	case ScalarFunctionMVZip:
+		return (len(expression.Arguments) == 2 || len(expression.Arguments) == 3) &&
+			(len(expression.Arguments) == 2 || boundedDelimiter(expression.Arguments[2]))
+	case ScalarFunctionMVFind:
+		if len(expression.Arguments) != 2 {
+			return false
+		}
+		pattern, ok := quoted(expression.Arguments[1])
+		if !ok {
+			return false
+		}
+		_, err := splregex.CompileMatchPattern(pattern)
+		return err == nil
+	default:
+		return true
+	}
+}
+
 func validEventAggregateScalarFunction(function ScalarFunction) bool {
 	switch function {
 	case ScalarFunctionToNumber,
@@ -282,7 +347,14 @@ func validEventAggregateScalarFunction(function ScalarFunction) bool {
 		ScalarFunctionStrftime,
 		ScalarFunctionStrptime,
 		ScalarFunctionRelativeTime,
-		ScalarFunctionConcat:
+		ScalarFunctionConcat,
+		ScalarFunctionSplit,
+		ScalarFunctionMVAppend,
+		ScalarFunctionMVDedup,
+		ScalarFunctionMVIndex,
+		ScalarFunctionMVJoin,
+		ScalarFunctionMVZip,
+		ScalarFunctionMVFind:
 		return true
 	default:
 		return false

@@ -401,8 +401,10 @@ func (journalErr *JournalError) Unwrap() error {
 }
 
 // ValueKind distinguishes every result value the search job layer preserves.
-// Null is an explicit value, not an absent cell. Mixed is schema-only: it
-// describes a dynamic column whose individual cells retain concrete kinds.
+// Missing is an explicit absent-cell value and remains distinct from Null,
+// which represents a present cell containing an explicit null. Mixed is
+// schema-only: it describes a dynamic column whose individual cells retain
+// concrete kinds.
 type ValueKind uint8
 
 const (
@@ -420,6 +422,7 @@ const (
 	ValueKindObject
 	ValueKindDecimal
 	ValueKindMixed
+	ValueKindMissing
 )
 
 // Column is one ordered result column.
@@ -488,6 +491,10 @@ type Value struct {
 
 // NullValue constructs an explicit null.
 func NullValue() Value { return Value{kind: ValueKindNull} }
+
+// MissingValue constructs an explicit missing cell. It is distinct from an
+// explicitly present null and from ValueKindInvalid.
+func MissingValue() Value { return Value{kind: ValueKindMissing} }
 
 // StringValue constructs a UTF-8 string value. Arbitrary Go strings are
 // retained byte-for-byte; transport adapters may impose stricter UTF-8 rules.
@@ -578,6 +585,9 @@ func (value Value) Kind() ValueKind { return value.kind }
 
 // IsNull reports whether value is an explicit null.
 func (value Value) IsNull() bool { return value.kind == ValueKindNull }
+
+// IsMissing reports whether value represents an absent field or cell.
+func (value Value) IsMissing() bool { return value.kind == ValueKindMissing }
 
 // String returns the string payload and whether the kind matches.
 func (value Value) String() (string, bool) {
@@ -891,7 +901,7 @@ func measureValue(value Value, depth int) (uint64, uint64, error) {
 	}
 	retained := retainedValueBase
 	switch value.kind {
-	case ValueKindNull:
+	case ValueKindNull, ValueKindMissing:
 		return 0, retained, nil
 	case ValueKindString:
 		retained, _ = checkedAdd(retained, uint64(len(value.stringValue)))

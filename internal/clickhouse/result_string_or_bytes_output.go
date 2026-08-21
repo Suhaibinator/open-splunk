@@ -101,10 +101,10 @@ func compileResultStringOrBytesOutputs(
 		if !visible || !field.stringOrBytes {
 			continue
 		}
-		// Array(String) already publishes as a typed List whose children retain
-		// String or Bytes independently. Keep the provenance for a later stats
-		// BY expansion, but do not replace the list's public schema here.
-		if field.kind == fieldKindStringArray {
+		// Native multivalues already publish as a typed List. Keep any String
+		// provenance for later relational consumers, but do not replace the
+		// list's public schema here.
+		if isNativeMultivalueKind(field.kind) {
 			continue
 		}
 		if field.kind != fieldKindString || index > math.MaxUint16 {

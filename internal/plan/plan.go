@@ -191,7 +191,8 @@ func (*Extract) LogicalName() string       { return "Extract" }
 func (op *Extract) SourceRange() spl.Range { return op.Range }
 
 // ExtractJSON reads one explicit, constant JSON path from Input and
-// conditionally replaces Output with the typed scalar leaf. It preserves row
+// conditionally replaces Output with its typed scalar leaf or ordered native
+// multivalue when the path contains a wildcard selector. It preserves row
 // cardinality, event identity, and established ordering.
 type ExtractJSON struct {
 	Input  FieldRef
@@ -761,6 +762,13 @@ const (
 	ScalarFunctionStrptime
 	ScalarFunctionRelativeTime
 	ScalarFunctionConcat
+	ScalarFunctionSplit
+	ScalarFunctionMVAppend
+	ScalarFunctionMVDedup
+	ScalarFunctionMVIndex
+	ScalarFunctionMVJoin
+	ScalarFunctionMVZip
+	ScalarFunctionMVFind
 	ScalarFunctionCount
 )
 

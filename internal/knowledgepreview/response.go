@@ -251,6 +251,10 @@ func validateTypedValue(value *opensplunk.TypedValue, depth int) error {
 		if selected.NullValue != opensplunk.NullValue_NULL_VALUE_NULL {
 			return ErrInvariant
 		}
+	case *opensplunk.TypedValue_MissingValue:
+		if selected.MissingValue != opensplunk.MissingValue_MISSING_VALUE_MISSING {
+			return ErrInvariant
+		}
 	case *opensplunk.TypedValue_StringValue:
 		if !utf8.ValidString(selected.StringValue) {
 			return ErrInvariant
@@ -329,7 +333,7 @@ func validResultKind(value opensplunk.ResultSetKind) bool {
 
 func validColumnValueType(value opensplunk.ValueType) bool {
 	return value >= opensplunk.ValueType_VALUE_TYPE_NULL &&
-		value <= opensplunk.ValueType_VALUE_TYPE_MIXED
+		value <= opensplunk.ValueType_VALUE_TYPE_MISSING
 }
 
 func validSemanticType(value opensplunk.ColumnSemanticType) bool {

@@ -69,10 +69,10 @@ var pipelineEvidenceRegistry = map[string][]pipelineEvidenceTarget{
 	"pipeline-public-paging": {
 		{Path: "internal/export/pipeline_multivalue_vertical_adversarial_external_test.go", Identity: "TestPipelinePinnedClickHousePublishesNullableListsThroughPagingAndExport"},
 	},
-	"queryexec-optional-multivalue-two-row-transport": {
+	"queryexec-optional-multivalue-four-state-transport": {
 		{Path: "internal/queryexec/pipeline_optional_multivalue_transport_adversarial_test.go", Identity: "TestPipelineOptionalMultivalueTransportDistinguishesNullEmptyAndMembers"},
 	},
-	"optional-multivalue-presence-bit-2": {
+	"optional-multivalue-tri-state-3": {
 		{Path: "internal/queryexec/pipeline_optional_multivalue_transport_adversarial_test.go", Identity: "TestPipelineOptionalMultivalueTransportRejectsForgedNativeValues"},
 		{Path: "internal/queryexec/pipeline_optional_multivalue_transport_adversarial_test.go", Identity: "TestPipelineOptionalMultivalueTransportRejectsLateForgedRowAtomically"},
 	},
@@ -625,7 +625,8 @@ func isPipelineCorpusRuleID(id string) bool {
 	switch id {
 	case "SPL-FIELDS-001", "SPL-REGEX-001", "SPL-REVERSE-001", "SPL-ACCUM-001",
 		"SPL-STRCAT-001", "SPL-ADDINFO-001", "SPL-FILLNULL-001", "SPL-ADDTOTALS-001",
-		"SPL-DELTA-001", "SPL-MAKEMV-001", "SPL-MVEXPAND-001", "SPL-MULTIVALUE-TYPE-001",
+		"SPL-DELTA-001", "SPL-MULTIVALUE-EVAL-001", "SPL-SPATH-MULTIVALUE-001",
+		"SPL-MAKEMV-001", "SPL-MVEXPAND-001", "SPL-NOMV-001", "SPL-MULTIVALUE-TYPE-001",
 		"SPL-ORDER-001", "SPL-PIPELINE-LIMITS-001", "SPL-ATOMIC-001",
 		"SPL-PIPELINE-DIAGNOSTICS-001":
 		return true
@@ -667,7 +668,7 @@ func requirePipelineCommandCoverage(t *testing.T, corpus pipelineCorpus) {
 	t.Helper()
 	for _, command := range []string{
 		"regex", "reverse", "accum", "strcat", "addinfo",
-		"fillnull", "addtotals", "delta", "makemv", "mvexpand",
+		"fillnull", "addtotals", "delta", "spath", "makemv", "mvexpand", "nomv",
 	} {
 		found := false
 		for _, rule := range corpus.Rules {

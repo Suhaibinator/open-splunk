@@ -130,28 +130,25 @@ func TestBinEdgeMetadataAfterRexClassifiesFromRexPrivateMetadata(t *testing.T) {
 
 // TestBinEdgeMetadataAfterEvalCopyResolvesSourcePathMetadata proves that an
 // eval copy is always materialized, so bin must classify it from the copied
-// leaf's stored semantic type rather than from a presence probe that eval
-// deliberately rewrote to a constant.
+// leaf's stored semantic type and exact source-path presence rather than from
+// the eval output name in the immutable document.
 func TestBinEdgeMetadataAfterEvalCopyResolvesSourcePathMetadata(t *testing.T) {
 	t.Parallel()
 
 	compiled := compileSPL(t, `index=gradethis | eval copy=metric | bin copy span=10 | table copy`)
 	binEdgeMetadataRequire(t, compiled.SQL, "bin after eval copy",
-		`toUInt8(ifNull(1, 0)) AS "__os_numeric_bin_exists_3"`,
-		`indexOf("__os_field_names", ?)`,
+		`arrayFirstIndex(name -> name = "__os_numeric_bin_path_3" OR startsWith(name, concat("__os_numeric_bin_path_3", '.')), "__os_field_names")`,
+		`toUInt8("__os_numeric_bin_position_3" != 0 AND "__os_numeric_bin_matched_3" = "__os_numeric_bin_path_3") AS "__os_numeric_bin_exists_3"`,
 		`dynamicType("copy") AS "__os_numeric_bin_physical_type_3"`,
 	)
-	if strings.Contains(compiled.SQL, "arrayFirstIndex(") {
-		t.Fatalf("bin after eval used the direct stored-path probe:\n%s", compiled.SQL)
-	}
 	binEdgeMetadataRequireBindable(t, compiled.SQL, compiled.Args, "bin after eval copy")
 	// The copied leaf's own path resolves the type; the eval output name must
 	// never be looked up in the immutable document.
-	if got := countArgument(compiled.Args, "metric"); got != 2 {
-		t.Fatalf("copied leaf path argument count = %d, want 2: %#v", got, compiled.Args)
+	if got := countArgument(compiled.Args, "metric"); got != 1 {
+		t.Fatalf("copied leaf path argument count = %d, want 1: %#v", got, compiled.Args)
 	}
-	if got := countArgument(compiled.Args, "metric."); got != 1 {
-		t.Fatalf("copied leaf descendant argument count = %d, want 1: %#v", got, compiled.Args)
+	if got := countArgument(compiled.Args, "metric."); got != 0 {
+		t.Fatalf("copied leaf descendant path was separately rebound: %#v", compiled.Args)
 	}
 	if got := countArgument(compiled.Args, "copy"); got != 0 {
 		t.Fatalf("eval output name leaked into stored metadata lookups: %#v", compiled.Args)

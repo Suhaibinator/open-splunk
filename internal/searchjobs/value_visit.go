@@ -27,6 +27,7 @@ const (
 	ValueVisitObjectBegin
 	ValueVisitObjectField
 	ValueVisitObjectEnd
+	ValueVisitMissing
 )
 
 // ValueVisitToken is one scalar, container boundary, or object-field event.
@@ -71,6 +72,8 @@ func visitDetachedValue(value Value, depth int, visit func(ValueVisitToken) erro
 	switch value.kind {
 	case ValueKindNull:
 		return visit(ValueVisitToken{Kind: ValueVisitNull})
+	case ValueKindMissing:
+		return visit(ValueVisitToken{Kind: ValueVisitMissing})
 	case ValueKindString:
 		return visit(ValueVisitToken{Kind: ValueVisitString, StringValue: value.stringValue})
 	case ValueKindSigned:

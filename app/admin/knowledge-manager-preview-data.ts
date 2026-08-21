@@ -15,6 +15,7 @@ import {
   type ResultSchema,
 } from "@/gen/ts/open_splunk/result";
 import {
+  MissingValue,
   NullValue,
   ValueType,
   type TypedValue,
@@ -240,7 +241,7 @@ function validColumn(column: ResultColumn): boolean {
   return validText(column.fieldName)
     && column.displayName === column.fieldName
     && column.valueType >= ValueType.VALUE_TYPE_NULL
-    && column.valueType <= ValueType.VALUE_TYPE_MIXED
+    && column.valueType <= ValueType.VALUE_TYPE_MISSING
     && column.semanticType >= ColumnSemanticType.COLUMN_SEMANTIC_TYPE_UNSPECIFIED
     && column.semanticType <= ColumnSemanticType.COLUMN_SEMANTIC_TYPE_DIMENSION
     && !column.hiddenByDefault
@@ -279,11 +280,14 @@ function validPreviewRows(
 function validPreviewCell(value: TypedValue, column: ResultColumn): boolean {
   const kind = previewValueType(value, 0);
   if (kind === null) return false;
-  if (column.valueType === ValueType.VALUE_TYPE_MIXED) return true;
-  if (kind === ValueType.VALUE_TYPE_NULL) {
-    return column.nullable || column.valueType === ValueType.VALUE_TYPE_NULL;
+  if (
+    kind === ValueType.VALUE_TYPE_NULL
+    || kind === ValueType.VALUE_TYPE_MISSING
+  ) {
+    return column.nullable || column.valueType === kind;
   }
-  return kind === column.valueType;
+  return column.valueType === ValueType.VALUE_TYPE_MIXED
+    || kind === column.valueType;
 }
 
 function previewValueType(value: TypedValue, depth: number): ValueType | null {
@@ -346,7 +350,9 @@ function previewValueType(value: TypedValue, depth: number): ValueType | null {
       return ValueType.VALUE_TYPE_OBJECT;
     }
     case "missingValue":
-      return null;
+      return value.kind.value === MissingValue.MISSING_VALUE_MISSING
+        ? ValueType.VALUE_TYPE_MISSING
+        : null;
   }
 }
 
@@ -376,7 +382,7 @@ export function knowledgePreviewValueText(value: TypedValue): string {
         knowledgePreviewValueText(field.value!),
       )}`)
       .join(",")}}`;
-    case "missingValue": throw new TypeError("Knowledge Preview value is missing.");
+    case "missingValue": return "";
   }
 }
 

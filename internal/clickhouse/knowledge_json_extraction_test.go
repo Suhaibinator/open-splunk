@@ -268,7 +268,7 @@ func maximalKnowledgeJSONPath(t *testing.T) string {
 	}
 	arraySelectors := 0
 	for _, step := range parsed {
-		if step.HasIndex {
+		if step.Selector == splpath.ArraySelectorFixed {
 			arraySelectors++
 		}
 	}

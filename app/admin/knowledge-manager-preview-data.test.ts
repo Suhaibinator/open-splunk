@@ -20,7 +20,11 @@ import {
   ResultSchema,
   ResultSetKind,
 } from "@/gen/ts/open_splunk/result";
-import { TypedValue, ValueType } from "@/gen/ts/open_splunk/value";
+import {
+  MissingValue,
+  TypedValue,
+  ValueType,
+} from "@/gen/ts/open_splunk/value";
 import {
   PROTOBUF_CONTENT_TYPE,
   ProtobufResponseTooLargeError,
@@ -31,6 +35,7 @@ import {
   KNOWLEDGE_PREVIEW_MAXIMUM_RESPONSE_BYTES,
   adaptKnowledgePreviewResponse,
   createKnowledgePreviewClient,
+  knowledgePreviewValueText,
   knowledgePreviewRequest,
 } from "./knowledge-manager-preview-data";
 import {
@@ -233,6 +238,25 @@ test("Preview response accepts exact paired rows and detaches before asynchronou
   assert.equal(receipt.before?.rows[0]?.cells[0]?.kind?.$case, "stringValue");
   assert.equal(receipt.before?.rows[0]?.cells[0]?.kind?.value, "before");
   assert.notEqual(receipt.before?.schema.columns[0]?.fieldName, "caller-mutated-field");
+});
+
+test("Preview response preserves explicit missing cells separately from null", async () => {
+  const response = await validPreviewResponse();
+  for (const schema of [response.beforeSchema, response.afterSchema]) {
+    schema!.columns[0]!.valueType = ValueType.VALUE_TYPE_MISSING;
+    schema!.columns[0]!.nullable = true;
+  }
+  for (const row of [...response.beforeRows, ...response.afterRows]) {
+    row.cells[0]!.kind = {
+      $case: "missingValue",
+      value: MissingValue.MISSING_VALUE_MISSING,
+    };
+  }
+
+  const receipt = await adaptKnowledgePreviewResponse(response, previewRequest());
+  const missing = receipt.before?.rows[0]?.cells[0];
+  assert.equal(missing?.kind?.$case, "missingValue");
+  assert.equal(knowledgePreviewValueText(missing!), "");
 });
 
 test("Preview response fails closed on unpaired, mismatched, over-row, and invalid-output bodies", async () => {

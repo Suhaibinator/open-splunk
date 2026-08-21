@@ -457,7 +457,7 @@ func knowledgeScalarStoredTypeSQL(
 		return knowledgeNullableStoredTypeSQL(boundValueSQL, eventfields.StoredValueTypeBool), nil, nil
 	case fieldKindTime:
 		return knowledgeNullableStoredTypeSQL(boundValueSQL, eventfields.StoredValueTypeTimestamp), nil, nil
-	case fieldKindStringArray:
+	case fieldKindStringArray, fieldKindDynamicArray:
 		return knowledgeNullableStoredTypeSQL(boundValueSQL, eventfields.StoredValueTypeList), nil, nil
 	case fieldKindNumber:
 		code := eventfields.StoredValueTypeSint64

@@ -1472,6 +1472,20 @@ func knownFieldStoredTypeSQL(field fieldState) (string, []any, error) {
 	if field.kind == fieldKindInvalid {
 		return "CAST(? AS UInt8)", []any{uint8(eventfields.StoredValueTypeNull)}, nil
 	}
+	if isNativeMultivalueKind(field.kind) &&
+		field.optionalMultivaluePresentSQL != "" {
+		// Array(Dynamic) and Array(String) are physically non-null even when the
+		// public value is an explicit null. Classify from the authoritative list
+		// sidecar so a present-empty list stays List while explicit null stays
+		// Null. knownFieldPresenceSQL independently retains the existence bit for
+		// field-catalog and exact-summary missing/null counts.
+		presentSQL, presentArgs := logicalFieldPresenceSQL(field)
+		return "if(" + presentSQL + ", CAST(? AS UInt8), CAST(? AS UInt8))",
+			append(presentArgs,
+				uint8(eventfields.StoredValueTypeList),
+				uint8(eventfields.StoredValueTypeNull),
+			), nil
+	}
 	if field.kind == fieldKindString {
 		stringEligible := "isValidUTF8(" + field.valueSQL + ")"
 		if field.textEligibleSQL != "" {
@@ -1479,11 +1493,11 @@ func knownFieldStoredTypeSQL(field fieldState) (string, []any, error) {
 				field.valueSQL + ")"
 		}
 		return "multiIf(isNull(" + field.valueSQL + "), CAST(? AS UInt8), " + stringEligible +
-				", CAST(? AS UInt8), CAST(? AS UInt8))", []any{
-				uint8(eventfields.StoredValueTypeNull),
-				uint8(eventfields.StoredValueTypeString),
-				uint8(eventfields.StoredValueTypeBytes),
-			}, nil
+			", CAST(? AS UInt8), CAST(? AS UInt8))", []any{
+			uint8(eventfields.StoredValueTypeNull),
+			uint8(eventfields.StoredValueTypeString),
+			uint8(eventfields.StoredValueTypeBytes),
+		}, nil
 	}
 	return "if(isNull(" + field.valueSQL + "), CAST(? AS UInt8), CAST(? AS UInt8))", []any{
 		uint8(eventfields.StoredValueTypeNull),
@@ -1520,7 +1534,7 @@ func fixedFieldStoredType(field fieldState) (eventfields.StoredValueType, error)
 		return eventfields.StoredValueTypeBool, nil
 	case fieldKindTime:
 		return eventfields.StoredValueTypeTimestamp, nil
-	case fieldKindStringArray:
+	case fieldKindStringArray, fieldKindDynamicArray:
 		return eventfields.StoredValueTypeList, nil
 	case fieldKindNumber:
 		if strings.HasPrefix(field.numberType, "UInt") {

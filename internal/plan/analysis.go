@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
@@ -546,6 +547,12 @@ func (analyzer *queryAnalyzer) visitOperator(operator Operator, depth int) error
 			return errors.New("analyze logical query: mvexpand is invalid")
 		}
 		return analyzer.addField(operator.Input, depth+1)
+	case *NoMultivalue:
+		if operator == nil || !spl.IsExactUnquotedFieldName(operator.Input.Name) ||
+			strings.HasPrefix(operator.Input.Name, "_") {
+			return errors.New("analyze logical query: nomv is invalid")
+		}
+		return analyzer.addField(operator.Input, depth+1)
 	case *TimeBucket:
 		if err := analyzer.validateField(operator.Output, depth+1); err != nil {
 			return err
@@ -935,8 +942,9 @@ func (analyzer *queryAnalyzer) visitScalarExpressionWithContext(
 		if expression == nil {
 			return errors.New("analyze logical query: scalar call expression is nil")
 		}
-		if strict && !validEventAggregateScalarFunction(expression.Function) {
-			return errors.New("analyze logical query: scalar function is invalid")
+		if strict && (!validEventAggregateScalarFunction(expression.Function) ||
+			!validEventAggregateNativeMVCall(expression)) {
+			return errors.New("analyze logical query: scalar function metadata is invalid")
 		}
 		for _, argument := range expression.Arguments {
 			if err := analyzer.visitScalarExpressionWithContext(

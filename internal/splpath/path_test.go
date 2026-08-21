@@ -26,15 +26,38 @@ func TestParseJSONPath(t *testing.T) {
 			name: "zero based array indexes",
 			path: "outer{0}.items{9}.value",
 			want: []Step{
-				{Key: "outer", HasIndex: true, Index: 0},
-				{Key: "items", HasIndex: true, Index: 9},
+				{Key: "outer", Selector: ArraySelectorFixed, Index: 0},
+				{Key: "items", Selector: ArraySelectorFixed, Index: 9},
 				{Key: "value"},
 			},
 		},
 		{
 			name: "maximum array index",
 			path: "items{2147483646}",
-			want: []Step{{Key: "items", HasIndex: true, Index: math.MaxInt32 - 1}},
+			want: []Step{{Key: "items", Selector: ArraySelectorFixed, Index: math.MaxInt32 - 1}},
+		},
+		{
+			name: "wildcard array",
+			path: "users{}.name",
+			want: []Step{
+				{Key: "users", Selector: ArraySelectorWildcard},
+				{Key: "name"},
+			},
+		},
+		{
+			name: "terminal wildcard array",
+			path: "users{}",
+			want: []Step{{Key: "users", Selector: ArraySelectorWildcard}},
+		},
+		{
+			name: "nested and mixed array selectors",
+			path: "groups{}.users{}.aliases{0}.name",
+			want: []Step{
+				{Key: "groups", Selector: ArraySelectorWildcard},
+				{Key: "users", Selector: ArraySelectorWildcard},
+				{Key: "aliases", Selector: ArraySelectorFixed, Index: 0},
+				{Key: "name"},
+			},
 		},
 		{
 			name: "unicode and spaces",
@@ -74,7 +97,6 @@ func TestParseJSONPathRejectsUnsupportedOrMalformedPaths(t *testing.T) {
 		{name: "leading separator", path: ".value", kind: ErrorKindInvalid},
 		{name: "trailing separator", path: "value.", kind: ErrorKindInvalid},
 		{name: "empty step", path: "one..two", kind: ErrorKindInvalid},
-		{name: "array wildcard", path: "items{}.value", kind: ErrorKindUnsupported},
 		{name: "star wildcard", path: "items{*}.value", kind: ErrorKindUnsupported},
 		{name: "key wildcard", path: "wild*.value", kind: ErrorKindUnsupported},
 		{name: "XML attribute", path: "item{@id}", kind: ErrorKindUnsupported},
@@ -100,7 +122,7 @@ func TestParseJSONPathRejectsUnsupportedOrMalformedPaths(t *testing.T) {
 		},
 		{
 			name: "array selector ceiling",
-			path: strings.TrimSuffix(strings.Repeat("items{0}.", MaximumArraySelectors+1), "."),
+			path: strings.TrimSuffix(strings.Repeat("items{}.", MaximumArraySelectors+1), "."),
 			kind: ErrorKindTooComplex,
 		},
 	}
@@ -120,6 +142,32 @@ func TestParseJSONPathRejectsUnsupportedOrMalformedPaths(t *testing.T) {
 				t.Fatalf("ParseJSON(%q) offset = %d, want inside source", test.path, pathErr.Offset)
 			}
 		})
+	}
+}
+
+func TestJSONPathSelectorWorkAndWildcardDetection(t *testing.T) {
+	t.Parallel()
+
+	plain, err := ParseJSON("payload.value")
+	if err != nil {
+		t.Fatalf("ParseJSON(plain): %v", err)
+	}
+	if got := EvaluationWorkUnits(plain); got != 3 {
+		t.Fatalf("plain evaluation work = %d, want 3", got)
+	}
+	if HasWildcard(plain) {
+		t.Fatal("plain path unexpectedly has a wildcard")
+	}
+
+	mixed, err := ParseJSON("groups{}.users{0}.name")
+	if err != nil {
+		t.Fatalf("ParseJSON(mixed): %v", err)
+	}
+	if got := EvaluationWorkUnits(mixed); got != 5 {
+		t.Fatalf("mixed evaluation work = %d, want 5", got)
+	}
+	if !HasWildcard(mixed) {
+		t.Fatal("mixed path did not report its wildcard")
 	}
 }
 
@@ -147,6 +195,7 @@ func FuzzParseJSONPath(f *testing.F) {
 	for _, seed := range []string{
 		"payload.value",
 		"outer{0}.items{9}.value",
+		"groups{}.users{}.name",
 		"résumé.display name",
 		"",
 		".",
@@ -182,7 +231,12 @@ func FuzzParseJSONPath(f *testing.F) {
 				t.Fatalf("ParseJSON(%q) returned invalid step %#v", path, step)
 			}
 			canonical.WriteString(step.Key)
-			if step.HasIndex {
+			switch step.Selector {
+			case ArraySelectorNone:
+				if step.Index != 0 {
+					t.Fatalf("ParseJSON(%q) returned an index without a selector in step %#v", path, step)
+				}
+			case ArraySelectorFixed:
 				arraySelectors++
 				if step.Index > MaximumArrayIndex {
 					t.Fatalf("ParseJSON(%q) returned out-of-range step %#v", path, step)
@@ -190,6 +244,14 @@ func FuzzParseJSONPath(f *testing.F) {
 				canonical.WriteByte('{')
 				canonical.WriteString(strconv.FormatUint(step.Index, 10))
 				canonical.WriteByte('}')
+			case ArraySelectorWildcard:
+				arraySelectors++
+				if step.Index != 0 {
+					t.Fatalf("ParseJSON(%q) returned an index for wildcard step %#v", path, step)
+				}
+				canonical.WriteString("{}")
+			default:
+				t.Fatalf("ParseJSON(%q) returned invalid selector in step %#v", path, step)
 			}
 		}
 		if arraySelectors > MaximumArraySelectors {

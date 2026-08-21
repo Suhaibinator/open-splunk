@@ -420,6 +420,19 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			}
 			result.Operators = append(result.Operators, operator)
 			publishOutputField(command.Field)
+		case *spl.NoMVCommand:
+			if !outputSchemaKnown && command.Field == "fields" {
+				return nil, &Diagnostic{
+					Code:    "SPL_AMBIGUOUS_NOMV_FIELD",
+					Message: "nomv cannot present the event result's reserved fields payload without an exact upstream schema",
+					Range:   command.FieldRange,
+				}
+			}
+			operator, buildErr := buildNoMultivalue(command)
+			if buildErr != nil {
+				return nil, buildErr
+			}
+			result.Operators = append(result.Operators, operator)
 		case *spl.SpathCommand:
 			if command == nil {
 				return nil, &Diagnostic{Code: "SPL_INVALID_QUERY", Message: "spath command is nil"}
@@ -2835,6 +2848,40 @@ func splQuotedStringLiteral(
 	return literal, sourceRange, true
 }
 
+func validateSPLMVDelimiter(
+	function string,
+	expression spl.ScalarExpr,
+	fallbackRange spl.Range,
+) error {
+	literal, sourceRange, ok := splQuotedStringLiteral(expression, fallbackRange)
+	if !ok {
+		return &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+			Message: function + " delimiter must be a quoted string literal",
+			Range:   sourceRange,
+		}
+	}
+	if !utf8.ValidString(literal.Value.Text) {
+		return &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+			Message: function + " delimiter must be valid UTF-8",
+			Range:   literal.Range,
+		}
+	}
+	if len(literal.Value.Text) > spl.MaximumMVDelimiterBytes {
+		return &Diagnostic{
+			Code: "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf(
+				"%s delimiter exceeds the %d-byte limit",
+				function,
+				spl.MaximumMVDelimiterBytes,
+			),
+			Range: literal.Range,
+		}
+	}
+	return nil
+}
+
 type splExpressionComplexityValidator struct {
 	nodes  int
 	active map[any]struct{}
@@ -3017,6 +3064,16 @@ func (v *splExpressionComplexityValidator) validateScalar(
 				fmt.Sprintf(
 					"coalesce contains more than %d arguments",
 					spl.MaximumCoalesceArguments,
+				),
+				expression.Range,
+			)
+		}
+		if expression.Function == spl.ScalarFunctionMVAppend &&
+			len(expression.Arguments) > spl.MaximumMVAppendArguments {
+			return splExpressionComplexityError(
+				fmt.Sprintf(
+					"mvappend contains more than %d arguments",
+					spl.MaximumMVAppendArguments,
 				),
 				expression.Range,
 			)
@@ -3821,6 +3878,13 @@ var scalarFunctionSpecs = map[spl.ScalarFunction]scalarFunctionSpec{
 	spl.ScalarFunctionUpper:        {name: "upper", plan: ScalarFunctionUpper, arguments: 1, exactArity: true},
 	spl.ScalarFunctionLength:       {name: "len", plan: ScalarFunctionLength, arguments: 1, exactArity: true},
 	spl.ScalarFunctionSubstring:    {name: "substr", plan: ScalarFunctionSubstring},
+	spl.ScalarFunctionSplit:        {name: "split", plan: ScalarFunctionSplit, arguments: 2, exactArity: true},
+	spl.ScalarFunctionMVAppend:     {name: "mvappend", plan: ScalarFunctionMVAppend},
+	spl.ScalarFunctionMVDedup:      {name: "mvdedup", plan: ScalarFunctionMVDedup, arguments: 1, exactArity: true},
+	spl.ScalarFunctionMVIndex:      {name: "mvindex", plan: ScalarFunctionMVIndex},
+	spl.ScalarFunctionMVJoin:       {name: "mvjoin", plan: ScalarFunctionMVJoin, arguments: 2, exactArity: true},
+	spl.ScalarFunctionMVZip:        {name: "mvzip", plan: ScalarFunctionMVZip},
+	spl.ScalarFunctionMVFind:       {name: "mvfind", plan: ScalarFunctionMVFind, arguments: 2, exactArity: true},
 }
 
 func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpression, error) {
@@ -4010,6 +4074,40 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 					Range:   expression.Range,
 				}
 			}
+		case spl.ScalarFunctionMVAppend:
+			if len(expression.Arguments) == 0 {
+				return nil, &Diagnostic{
+					Code:    "SPL_INVALID_EVAL_ARITY",
+					Message: "mvappend requires at least one argument",
+					Range:   expression.Range,
+				}
+			}
+			if len(expression.Arguments) > spl.MaximumMVAppendArguments {
+				return nil, &Diagnostic{
+					Code: "SPL_QUERY_TOO_COMPLEX",
+					Message: fmt.Sprintf(
+						"mvappend contains more than %d arguments",
+						spl.MaximumMVAppendArguments,
+					),
+					Range: expression.Range,
+				}
+			}
+		case spl.ScalarFunctionMVIndex:
+			if len(expression.Arguments) < 2 || len(expression.Arguments) > 3 {
+				return nil, &Diagnostic{
+					Code:    "SPL_INVALID_EVAL_ARITY",
+					Message: "mvindex requires two or three arguments",
+					Range:   expression.Range,
+				}
+			}
+		case spl.ScalarFunctionMVZip:
+			if len(expression.Arguments) < 2 || len(expression.Arguments) > 3 {
+				return nil, &Diagnostic{
+					Code:    "SPL_INVALID_EVAL_ARITY",
+					Message: "mvzip requires two or three arguments",
+					Range:   expression.Range,
+				}
+			}
 		}
 		if hasExactArity && len(expression.Arguments) != expectedArguments {
 			argumentNoun := "arguments"
@@ -4126,6 +4224,85 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 						Message: "substr start and length must be literal integers",
 						Range:   expression.Arguments[index].SourceRange(),
 					}
+				}
+			}
+		}
+		switch expression.Function {
+		case spl.ScalarFunctionSplit, spl.ScalarFunctionMVJoin:
+			if err := validateSPLMVDelimiter(
+				functionName,
+				expression.Arguments[1],
+				expression.Range,
+			); err != nil {
+				return nil, err
+			}
+		case spl.ScalarFunctionMVZip:
+			if len(expression.Arguments) == 3 {
+				if err := validateSPLMVDelimiter(
+					functionName,
+					expression.Arguments[2],
+					expression.Range,
+				); err != nil {
+					return nil, err
+				}
+			}
+		}
+		if expression.Function == spl.ScalarFunctionMVIndex {
+			for index := 1; index < len(expression.Arguments); index++ {
+				argument := expression.Arguments[index]
+				if nilcheck.IsNil(argument) {
+					return nil, &Diagnostic{
+						Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+						Message: "scalar expression is missing",
+						Range:   expression.Range,
+					}
+				}
+				literal, ok := argument.(*spl.ScalarLiteralExpr)
+				if !ok || literal == nil ||
+					literal.Value.Kind != spl.LiteralKindInteger {
+					return nil, &Diagnostic{
+						Code:    "SPL_UNSUPPORTED_MV_INDEX",
+						Message: "mvindex start and end must be literal signed 32-bit integers",
+						Range:   argument.SourceRange(),
+					}
+				}
+				if !spl.SupportedMVIndexLiteral(argument) {
+					return nil, &Diagnostic{
+						Code:    "SPL_NUMBER_OUT_OF_RANGE",
+						Message: "mvindex start and end must fit a signed 32-bit integer",
+						Range:   literal.Range,
+					}
+				}
+			}
+		}
+		if expression.Function == spl.ScalarFunctionMVFind {
+			pattern, patternRange, ok := splQuotedStringLiteral(
+				expression.Arguments[1],
+				expression.Range,
+			)
+			if !ok {
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+					Message: "mvfind regular expression must be a quoted string literal",
+					Range:   patternRange,
+				}
+			}
+			if _, err := splregex.CompileMatchPattern(pattern.Value.Text); err != nil {
+				if splregex.IsMatchComplexityError(err) {
+					return nil, &Diagnostic{
+						Code: "SPL_QUERY_TOO_COMPLEX",
+						Message: fmt.Sprintf(
+							"mvfind regular expression exceeds the %d-byte or %d-work-unit limit",
+							splregex.MaximumMatchPatternBytes,
+							splregex.MaximumMatchProgramWorkUnits,
+						),
+						Range: pattern.Range,
+					}
+				}
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_REGEX",
+					Message: "mvfind regular expression is outside the supported RE2-compatible subset",
+					Range:   pattern.Range,
 				}
 			}
 		}
@@ -4497,11 +4674,18 @@ func splScalarHasStaticallyUnsupportedArithmeticType(
 			spl.ScalarFunctionLower,
 			spl.ScalarFunctionUpper,
 			spl.ScalarFunctionMVSort,
+			spl.ScalarFunctionSplit,
+			spl.ScalarFunctionMVAppend,
+			spl.ScalarFunctionMVDedup,
+			spl.ScalarFunctionMVJoin,
+			spl.ScalarFunctionMVZip,
 			spl.ScalarFunctionSubstring,
 			spl.ScalarFunctionToString,
 			spl.ScalarFunctionStrftime,
 			spl.ScalarFunctionConcat:
 			return true
+		case spl.ScalarFunctionMVIndex:
+			return len(expression.Arguments) == 3
 		case spl.ScalarFunctionCoalesce:
 			foundValue := false
 			for _, argument := range expression.Arguments {

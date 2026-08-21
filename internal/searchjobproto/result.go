@@ -205,6 +205,8 @@ func Value(ctx context.Context, value searchjobs.Value) (*opensplunk.TypedValue,
 		switch token.Kind {
 		case searchjobs.ValueVisitNull:
 			converted = &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_NullValue{NullValue: opensplunk.NullValue_NULL_VALUE_NULL}}
+		case searchjobs.ValueVisitMissing:
+			converted = &opensplunk.TypedValue{Kind: &opensplunk.TypedValue_MissingValue{MissingValue: opensplunk.MissingValue_MISSING_VALUE_MISSING}}
 		case searchjobs.ValueVisitString:
 			if !utf8.ValidString(token.StringValue) {
 				return errors.New("search result string is not valid UTF-8")
@@ -302,6 +304,8 @@ func ValueKind(kind searchjobs.ValueKind) (opensplunk.ValueType, error) {
 	switch kind {
 	case searchjobs.ValueKindNull:
 		return opensplunk.ValueType_VALUE_TYPE_NULL, nil
+	case searchjobs.ValueKindMissing:
+		return opensplunk.ValueType_VALUE_TYPE_MISSING, nil
 	case searchjobs.ValueKindString:
 		return opensplunk.ValueType_VALUE_TYPE_STRING, nil
 	case searchjobs.ValueKindSigned:

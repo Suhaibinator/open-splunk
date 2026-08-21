@@ -26,7 +26,10 @@ import {
 import { NUMBER_FORMAT } from "../constants";
 import { formatGroupedNumericText } from "../formatters";
 import type { MenuName, StatsDensity } from "../model";
-import { statsFlatMultivalueDisplay } from "../statistics-multivalue";
+import {
+  StatsFlatMultivalueValue,
+  statsFlatMultivalueDisplay,
+} from "../statistics-multivalue";
 import {
   statsSparklineSegments,
   statsSparklineValues,
@@ -609,6 +612,12 @@ export function StatisticsPanel({
                         {genericStatisticsTable.columns.map((column) => {
                           const value = row.values[column.key] ?? null;
                           const formatted = renderGenericValue(value, column);
+                          const rendered = (
+                            <StatsFlatMultivalueValue
+                              delimiter={column.flatMultivalueDelimiter}
+                              value={formatted}
+                            />
+                          );
                           const pivotValue = row.pivotValues[column.key];
                           return (
                             <td
@@ -629,9 +638,9 @@ export function StatisticsPanel({
                                   title={`Add ${column.fieldName}=${serializedGenericValue(value)} to the draft search`}
                                   onClick={() => onApplyPivot(column.fieldName, pivotValue)}
                                 >
-                                  {formatted}
+                                  {rendered}
                                 </button>
-                              ) : formatted}
+                              ) : rendered}
                             </td>
                           );
                         })}

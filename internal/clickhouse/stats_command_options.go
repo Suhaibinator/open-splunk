@@ -89,6 +89,11 @@ func statsAllNumericInvalidSQL(field fieldState) (string, []any) {
 	case fieldKindStringArray:
 		return "toUInt8((" + existsSQL + ") AND arrayExists(element -> isNull(" +
 			finiteFloatOrNullSQL("element") + "), " + field.valueSQL + "))", args
+	case fieldKindDynamicArray:
+		return "toUInt8((" + existsSQL + ") AND arrayExists(element -> " +
+			"dynamicType(element) != 'None' AND isNull(" +
+			dynamicFiniteFloatOrNullSQL("element", "dynamicType(element)") + "), " +
+			field.valueSQL + "))", args
 	case fieldKindDynamic:
 		typeSQL := dynamicTypeExpression(field)
 		scalarInvalid := "(" + typeSQL + " != 'None' AND isNull(" +

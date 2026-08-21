@@ -545,6 +545,7 @@ func TestMixedSchemaPreservesConcreteCellsAndEnforcesNullability(t *testing.T) {
 			{DoubleValue(2.5)},
 			{StringValue("dynamic")},
 			{NullValue()},
+			{MissingValue()},
 		}
 		manager := newTestManager(t, Config{
 			Executor: executorFunc(func(_ context.Context, _ clickhouse.CompiledQuery, sink ResultSink) error {
@@ -574,7 +575,7 @@ func TestMixedSchemaPreservesConcreteCellsAndEnforcesNullability(t *testing.T) {
 		for index, row := range page.Rows {
 			gotKinds[index] = row.Values[0].Kind()
 		}
-		wantKinds := []ValueKind{ValueKindSigned, ValueKindDouble, ValueKindString, ValueKindNull}
+		wantKinds := []ValueKind{ValueKindSigned, ValueKindDouble, ValueKindString, ValueKindNull, ValueKindMissing}
 		if !reflect.DeepEqual(gotKinds, wantKinds) {
 			t.Fatalf("mixed concrete kinds = %v, want %v", gotKinds, wantKinds)
 		}
@@ -585,6 +586,7 @@ func TestMixedSchemaPreservesConcreteCellsAndEnforcesNullability(t *testing.T) {
 		value Value
 	}{
 		{name: "null in non-nullable mixed column", value: NullValue()},
+		{name: "missing in non-nullable mixed column", value: MissingValue()},
 		{name: "mixed schema kind used as a cell", value: Value{kind: ValueKindMixed}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -1022,6 +1024,7 @@ func TestValueKindWireNumbersMatchProto(t *testing.T) {
 		{ValueKindObject, opensplunk.ValueType_VALUE_TYPE_OBJECT},
 		{ValueKindDecimal, opensplunk.ValueType_VALUE_TYPE_DECIMAL},
 		{ValueKindMixed, opensplunk.ValueType_VALUE_TYPE_MIXED},
+		{ValueKindMissing, opensplunk.ValueType_VALUE_TYPE_MISSING},
 	}
 	for _, pair := range pairs {
 		if int32(pair.internal) != int32(pair.wire) {

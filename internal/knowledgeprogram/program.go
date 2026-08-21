@@ -100,9 +100,9 @@ func (origin Origin) Version() uint64           { return origin.version }
 func (origin Origin) ObjectType() opensplunk.KnowledgeObjectType {
 	return origin.objectType
 }
-func (origin Origin) Name() string                            { return strings.Clone(origin.name) }
-func (origin Origin) AppID() string                           { return strings.Clone(origin.appID) }
-func (origin Origin) OwnerID() string                         { return strings.Clone(origin.ownerID) }
+func (origin Origin) Name() string                          { return strings.Clone(origin.name) }
+func (origin Origin) AppID() string                         { return strings.Clone(origin.appID) }
+func (origin Origin) OwnerID() string                       { return strings.Clone(origin.ownerID) }
 func (origin Origin) SharingScope() opensplunk.SharingScope { return origin.sharingScope }
 func (origin Origin) Stage() opensplunk.KnowledgeSearchStage {
 	return origin.stage
@@ -777,8 +777,16 @@ func canonicalProgram(state *programState) []byte {
 			writeUint64(&buffer, uint64(len(operation.steps)))
 			for _, step := range operation.steps {
 				writeString(&buffer, step.Key)
-				writeBool(&buffer, step.HasIndex)
-				writeUint64(&buffer, step.Index)
+				// Preserve the format-1 encoding for existing no-selector and
+				// fixed-index paths. Wildcards use an index value outside the
+				// bounded fixed-index domain, making the new selector distinct
+				// without invalidating retained commitments for old paths.
+				writeBool(&buffer, step.Selector != splpath.ArraySelectorNone)
+				index := step.Index
+				if step.Selector == splpath.ArraySelectorWildcard {
+					index = math.MaxUint64
+				}
+				writeUint64(&buffer, index)
 			}
 		case OperatorCopyFieldAlias:
 			writeUint64(&buffer, uint64(len(state.aliases)))

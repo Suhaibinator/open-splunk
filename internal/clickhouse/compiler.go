@@ -103,6 +103,11 @@ const (
 	// a variadic expression. Without it, 32 individually bounded arguments can
 	// allocate a multi-megabyte intermediate before the whole-query guard runs.
 	maxCompiledCoalesceScalarSQLBytes = 64 << 10
+	// maxCompiledNativeMVScalarSQLBytes is enforced after every native-MV call.
+	// Without an incremental ceiling, nested list normalization can duplicate a
+	// child's value and state SQL exponentially before the final query-size
+	// check gets a chance to run.
+	maxCompiledNativeMVScalarSQLBytes = 64 << 10
 	// maxCompiledCaseScalarSQLBytes independently bounds the alternating
 	// predicate/value expansion of a case expression.
 	maxCompiledCaseScalarSQLBytes = 64 << 10
@@ -357,6 +362,17 @@ const (
 	// SpathJSONTokenLimitMarker classifies a structurally adversarial JSON
 	// source before its two bounded lexical projections are constructed.
 	SpathJSONTokenLimitMarker = "open-splunk: spath JSON token count exceeds the per-row limit" // #nosec G101 -- stable error classifier, not a credential
+	// NativeMVMembersLimitMarker classifies a split, append, zip, wildcard
+	// spath, or runtime normalization whose complete per-row list exceeds the
+	// shared member ceiling.
+	NativeMVMembersLimitMarker = "open-splunk: native multivalue members exceed the per-row limit"
+	// NativeMVPayloadLimitMarker classifies a native list whose canonical
+	// member-text payload exceeds the shared per-row byte ceiling.
+	NativeMVPayloadLimitMarker = "open-splunk: native multivalue payload exceeds the per-row limit"
+	// UnsupportedNativeMVValueMarker is deliberately separate from resource
+	// markers so the executor can return an unsupported-value result for Bytes,
+	// temporal values, objects, nested lists, and non-finite numbers.
+	UnsupportedNativeMVValueMarker = "open-splunk: native multivalue contains an unsupported value"
 	// UnsupportedSpathValueMarker is emitted when an explicitly selected JSON
 	// leaf is a container that the bounded result contract cannot publish.
 	UnsupportedSpathValueMarker = "open-splunk: spath selected value is outside the supported scalar domain"
@@ -439,17 +455,18 @@ type CompiledQuery struct {
 	OutputFields []string
 	// OutputPresentations, when nonempty, is aligned exactly by ordinal with
 	// OutputFields. Zero entries carry no presentation metadata. The compiler
-	// currently attaches a flat multivalue delimiter to stats list/values and a
-	// sparkline semantic bit to stats sparkline outputs; typed cells and export
-	// behavior remain unchanged.
+	// attaches a display-only flat multivalue delimiter to stats list/values and
+	// nomv outputs, and a sparkline semantic bit to stats sparkline outputs. The
+	// authoritative typed cells and export behavior remain unchanged.
 	OutputPresentations []ResultFieldPresentation
 	// ContainerOutputs maps selected public Dynamic ordinals to deterministic
 	// trailing metadata columns. The executor consumes those columns without
 	// exposing them in the public schema.
 	ContainerOutputs []ResultContainerOutput
-	// OptionalMultivalueOutputs maps selected Array(String) ordinals to a
-	// trailing value-presence bit. It is the sealed nullable-list transport for
-	// makemv results, including present empty arrays.
+	// OptionalMultivalueOutputs maps selected Array(String) or Array(Dynamic)
+	// ordinals to a trailing tri-state sidecar. It is the sealed native-list
+	// transport that distinguishes missing, explicit null, and present lists,
+	// including present-empty arrays.
 	OptionalMultivalueOutputs []ResultOptionalMultivalueOutput
 	// StringOrBytesOutputs identifies selected physical String ordinals whose
 	// byte-preserving SPL lineage admits either a UTF-8 String cell or a Bytes
@@ -991,8 +1008,16 @@ func (c Compiler) compileWithFinalizerContext(
 				if compileErr != nil {
 					return CompiledQuery{}, compileErr
 				}
+				// A native-MV guard can be nested under arithmetic, conditionals, or
+				// another scalar wrapper that changes the result kind. Keep the
+				// assignment's validation fence based on the authored expression tree,
+				// not only on the outer compiled scalar's traits.
+				if scalarExpressionRequiresNativeMVValidation(assignment.Expression, state) {
+					value.requiresRuntimeValidation = true
+				}
 				prefixArgs := append([]any(nil), value.valueArgs...)
 				semanticAlias := ""
+				multivalueStateAlias := ""
 				nextSQL := ""
 				if value.kind == fieldKindString && value.stringOrBytes {
 					if value.semanticBytesSQL == "" {
@@ -1016,6 +1041,31 @@ func (c Compiler) compileWithFinalizerContext(
 					prefixArgs = append(prefixArgs, value.semanticBytesArgs...)
 					value.semanticBytesSQL = semanticAlias
 					value.semanticBytesArgs = nil
+				} else if value.optionalMultivaluePresentSQL != "" {
+					// Native eval functions can produce a present-empty list, so
+					// presence cannot be reconstructed from notEmpty(output). Seal
+					// the authored-input predicate beside the calculated array in the
+					// same projection, before an assignment that overwrites its input
+					// field could make the predicate self-referential.
+					multivalueStateAlias = quoteIdentifier(fmt.Sprintf(
+						"__os_eval_mv_state_%d_%d",
+						aliasSequence,
+						index,
+					))
+					nextSQL = upsertFieldProjectionWithPrivateSQL(
+						relation.sql,
+						state,
+						assignment.Output.Name,
+						value.valueSQL,
+						"tuple(toUInt8(ifNull("+value.existsSQL+", 0)), "+
+							"toUInt8(ifNull("+value.optionalMultivaluePresentSQL+", 0))) AS "+multivalueStateAlias,
+						alias,
+					)
+					prefixArgs = append(prefixArgs, value.existsArgs...)
+					prefixArgs = append(prefixArgs, value.existsArgs...)
+					value.existsSQL = "tupleElement(" + multivalueStateAlias + ", 1) != 0"
+					value.optionalMultivaluePresentSQL = "tupleElement(" + multivalueStateAlias + ", 2) != 0"
+					value.existsArgs = nil
 				} else {
 					nextSQL = upsertFieldProjectionSQL(
 						relation.sql,
@@ -1024,6 +1074,26 @@ func (c Compiler) compileWithFinalizerContext(
 						value.valueSQL,
 						alias,
 					)
+				}
+				if value.requiresRuntimeValidation {
+					validationInput := quoteIdentifier(fmt.Sprintf(
+						"__os_eval_mv_validation_%d_%d",
+						aliasSequence,
+						index,
+					))
+					validationAlias := quoteIdentifier(fmt.Sprintf(
+						"_stage_%d_eval_mv_validation_%d",
+						aliasSequence,
+						index,
+					))
+					nextSQL = "WITH " + validationInput + " AS MATERIALIZED (" +
+						nextSQL + ") SELECT * FROM " + validationInput + " AS " +
+						validationAlias + " WHERE ignore(" +
+						quoteIdentifier(assignment.Output.Name) + ") = 0"
+					if state.context != nil {
+						state.context.atomicResult = true
+						state.context.requiresMaterializedValidationSettings = true
+					}
 				}
 				relation = relation.selectFrom(nextSQL, operator.Range)
 				if err := validateRelationalDepth(relation.depth, relation.ownerRange); err != nil {
@@ -1035,8 +1105,15 @@ func (c Compiler) compileWithFinalizerContext(
 				// prepend in reverse nesting order as well.
 				args = prependArguments(prefixArgs, args)
 				_, directField := assignment.Expression.(*plan.ScalarFieldExpression)
+				extendState := state
+				if multivalueStateAlias != "" {
+					extendState.privateColumns = append(
+						append([]string(nil), state.privateColumns...),
+						multivalueStateAlias,
+					)
+				}
 				nextState, stateErr := extendCompileState(
-					state,
+					extendState,
 					assignment.Output,
 					value,
 					directField,
@@ -1129,6 +1206,19 @@ func (c Compiler) compileWithFinalizerContext(
 				return CompiledQuery{}, compileErr
 			}
 			relation = enriched
+			args = prependArguments(prefixArgs, args)
+			state = nextState
+		case *plan.NoMultivalue:
+			presented, nextState, prefixArgs, compileErr := compileNoMultivalue(
+				relation,
+				operator,
+				state,
+				aliasSequence,
+			)
+			if compileErr != nil {
+				return CompiledQuery{}, compileErr
+			}
+			relation = presented
 			args = prependArguments(prefixArgs, args)
 			state = nextState
 		case *plan.TimeBucket:
@@ -1985,6 +2075,8 @@ func ordinaryChronologicalDummyValue(field fieldState) (string, bool) {
 			return "CAST(NULL AS Nullable(Bool))", true
 		case fieldKindStringArray:
 			return "CAST(NULL AS Nullable(Array(String)))", true
+		case fieldKindDynamicArray:
+			return "CAST(NULL AS Nullable(Array(Dynamic)))", true
 		case fieldKindDynamic:
 			return "CAST(NULL AS Dynamic)", true
 		default:
@@ -2006,6 +2098,8 @@ func ordinaryChronologicalDummyValue(field fieldState) (string, bool) {
 		return "CAST(false AS Bool)", true
 	case fieldKindStringArray:
 		return "CAST([], 'Array(String)')", true
+	case fieldKindDynamicArray:
+		return "CAST([], 'Array(Dynamic)')", true
 	case fieldKindInvalid:
 		return "CAST(NULL AS Nullable(String))", true
 	default:
@@ -5921,7 +6015,7 @@ func resolveChartAxes(
 			kind:      fieldKindString,
 		}
 	}
-	if rowField.kind == fieldKindStringArray {
+	if isNativeMultivalueKind(rowField.kind) {
 		return fieldState{}, "", 0, fieldState{}, unsupportedMultivalueUsage("chart row field", operator.Over.Range)
 	}
 	rowDatabaseType, rowKind, err := chartRowColumnType(rowName, rowField)
@@ -5947,7 +6041,7 @@ func resolveChartAxes(
 			kind:      fieldKindString,
 		}
 	}
-	if splitField.kind == fieldKindStringArray {
+	if isNativeMultivalueKind(splitField.kind) {
 		return fieldState{}, "", 0, fieldState{}, unsupportedMultivalueUsage("chart column field", operator.SplitBy.Range)
 	}
 	if splitField.kind == fieldKindInvalid {
@@ -8370,7 +8464,16 @@ const (
 	fieldKindBool
 	fieldKindTime
 	fieldKindStringArray
+	// fieldKindDynamicArray is the native, bounded multivalue representation
+	// used when members may have different admitted JSON scalar types.  Unlike a
+	// fieldKindDynamic whose runtime value may happen to contain an array, its
+	// physical ClickHouse type is always Array(Dynamic).
+	fieldKindDynamicArray
 )
+
+func isNativeMultivalueKind(kind fieldKind) bool {
+	return kind == fieldKindStringArray || kind == fieldKindDynamicArray
+}
 
 type dynamicScalarDomain uint8
 
@@ -9295,6 +9398,11 @@ type compiledScalar struct {
 	// instead of inheriting ClickHouse's ordered-NaN behavior.
 	ieeeComparison          bool
 	materializeForPredicate bool
+	// requiresRuntimeValidation keeps a deliberate unsupported/resource guard
+	// alive even when a later projection no longer publishes this assignment.
+	// Extend seals the calculated column behind a materialized CTE and an
+	// explicit ignore() consumer before continuing the pipeline.
+	requiresRuntimeValidation bool
 }
 
 // bindCompiledScalarForComparison replaces the authored value and presence
@@ -9495,6 +9603,20 @@ func compileScalarValue(expression plan.ScalarExpression, state compileState) (c
 			return compileToStringScalar(expression, state)
 		case plan.ScalarFunctionConcat:
 			return compileConcatenationScalar(expression, state)
+		case plan.ScalarFunctionSplit:
+			return compileBoundedNativeMVScalar(expression, state, compileSplitScalar)
+		case plan.ScalarFunctionMVAppend:
+			return compileBoundedNativeMVScalar(expression, state, compileMVAppendScalar)
+		case plan.ScalarFunctionMVDedup:
+			return compileBoundedNativeMVScalar(expression, state, compileMVDedupScalar)
+		case plan.ScalarFunctionMVIndex:
+			return compileBoundedNativeMVScalar(expression, state, compileMVIndexScalar)
+		case plan.ScalarFunctionMVJoin:
+			return compileBoundedNativeMVScalar(expression, state, compileMVJoinScalar)
+		case plan.ScalarFunctionMVZip:
+			return compileBoundedNativeMVScalar(expression, state, compileMVZipScalar)
+		case plan.ScalarFunctionMVFind:
+			return compileBoundedNativeMVScalar(expression, state, compileMVFindScalar)
 		case plan.ScalarFunctionRound:
 			return compileRoundScalar(expression, state)
 		case plan.ScalarFunctionCeil:
@@ -9628,7 +9750,7 @@ func compileStrftimeScalar(
 	if err != nil {
 		return compiledScalar{}, err
 	}
-	if input.kind == fieldKindStringArray {
+	if isNativeMultivalueKind(input.kind) {
 		return compiledScalar{}, unsupportedMultivalueUsage(
 			"strftime",
 			expression.Range,
@@ -9813,7 +9935,7 @@ func compileStrptimeScalar(
 	if err != nil {
 		return compiledScalar{}, err
 	}
-	if input.kind == fieldKindStringArray {
+	if isNativeMultivalueKind(input.kind) {
 		return compiledScalar{}, unsupportedMultivalueUsage(
 			"strptime",
 			expression.Range,
@@ -10007,7 +10129,7 @@ func compileRelativeTimeScalar(
 	if err != nil {
 		return compiledScalar{}, err
 	}
-	if input.kind == fieldKindStringArray {
+	if isNativeMultivalueKind(input.kind) {
 		return compiledScalar{}, unsupportedMultivalueUsage(
 			"relative_time",
 			expression.Range,
@@ -11984,6 +12106,70 @@ func validatePredicateScalarStructure(expression plan.ScalarExpression) error {
 			plan.ScalarFunctionMVSort:
 			expectedArguments = 1
 			hasExactArity = true
+		case plan.ScalarFunctionMVDedup:
+			expectedArguments = 1
+			hasExactArity = true
+		case plan.ScalarFunctionSplit, plan.ScalarFunctionMVJoin:
+			if len(expression.Arguments) != 2 {
+				return fmt.Errorf(
+					"compile ClickHouse predicate: scalar function %d requires exactly two arguments",
+					expression.Function,
+				)
+			}
+			delimiter, ok := scalarQuotedStringLiteral(expression.Arguments[1])
+			if !ok || !utf8.ValidString(delimiter) ||
+				len(delimiter) > spl.MaximumMVDelimiterBytes {
+				return errors.New(
+					"compile ClickHouse predicate: multivalue delimiter must be a bounded quoted UTF-8 string literal",
+				)
+			}
+		case plan.ScalarFunctionMVAppend:
+			if len(expression.Arguments) == 0 ||
+				len(expression.Arguments) > spl.MaximumMVAppendArguments {
+				return fmt.Errorf(
+					"compile ClickHouse predicate: mvappend requires one through %d arguments",
+					spl.MaximumMVAppendArguments,
+				)
+			}
+		case plan.ScalarFunctionMVIndex:
+			if len(expression.Arguments) < 2 || len(expression.Arguments) > 3 {
+				return errors.New(
+					"compile ClickHouse predicate: mvindex requires two or three arguments",
+				)
+			}
+			for index := 1; index < len(expression.Arguments); index++ {
+				if _, ok := signedMVIndexLiteral(expression.Arguments[index]); !ok {
+					return errors.New(
+						"compile ClickHouse predicate: mvindex indexes must be signed 32-bit integer literals",
+					)
+				}
+			}
+		case plan.ScalarFunctionMVZip:
+			if len(expression.Arguments) < 2 || len(expression.Arguments) > 3 {
+				return errors.New(
+					"compile ClickHouse predicate: mvzip requires two or three arguments",
+				)
+			}
+			if len(expression.Arguments) == 3 {
+				delimiter, ok := scalarQuotedStringLiteral(expression.Arguments[2])
+				if !ok || !utf8.ValidString(delimiter) ||
+					len(delimiter) > spl.MaximumMVDelimiterBytes {
+					return errors.New(
+						"compile ClickHouse predicate: mvzip delimiter must be a bounded quoted UTF-8 string literal",
+					)
+				}
+			}
+		case plan.ScalarFunctionMVFind:
+			if len(expression.Arguments) != 2 {
+				return errors.New(
+					"compile ClickHouse predicate: mvfind requires exactly two arguments",
+				)
+			}
+			if _, ok := scalarQuotedStringLiteral(expression.Arguments[1]); !ok {
+				return errors.New(
+					"compile ClickHouse predicate: mvfind regular expression must be a quoted string literal",
+				)
+			}
 		case plan.ScalarFunctionMatch:
 			if len(expression.Arguments) != 2 {
 				return errors.New(
@@ -12431,6 +12617,8 @@ func describeIfBranchType(value compiledScalar) string {
 		return "Time"
 	case fieldKindStringArray:
 		return "StringArray"
+	case fieldKindDynamicArray:
+		return "DynamicArray"
 	default:
 		return "Invalid"
 	}
@@ -12470,7 +12658,31 @@ func compiledScalarPresenceSQL(value compiledScalar) (string, []any) {
 	if existsSQL == "" {
 		existsSQL = "1"
 	}
-	if value.kind == fieldKindStringArray {
+	if isNativeMultivalueKind(value.kind) {
+		// Native eval/spath/nomv values carry an authoritative list-presence
+		// sidecar independent of physical cardinality. It is false for both a
+		// missing field and an explicit null, and true for every list, including
+		// a present-empty list. The sidecar reuses existsArgs by contract.
+		if value.optionalMultivaluePresentSQL != "" {
+			presentSQL := value.optionalMultivaluePresentSQL
+			presentArgs := append([]any(nil), value.existsArgs...)
+			if value.requiresRuntimeValidation {
+				// A wrapper such as isnull() consumes only logical presence. Force
+				// the guarded list expression through ignore() as well, otherwise
+				// ClickHouse could prune unsupported-member or resource checks whose
+				// output cardinality does not affect the sidecar.
+				presentSQL = bindSQLExpressions(
+					[]string{"validated_mv", "mv_present"},
+					[]string{value.valueSQL, presentSQL},
+					"toUInt8(ifNull(mv_present, 0)) + ignore(validated_mv) != 0",
+				)
+				presentArgs = append(
+					append([]any(nil), value.valueArgs...),
+					presentArgs...,
+				)
+			}
+			return presentSQL, presentArgs
+		}
 		// Fixed multivalue results are physically non-null Array(String), but
 		// their canonical empty representation is logically absent in SPL.
 		// Calculated arrays without a separate existence predicate must test
@@ -12496,6 +12708,14 @@ func compiledScalarPresenceSQL(value compiledScalar) (string, []any) {
 	return presenceSQL, args
 }
 
+// logicalFieldPresenceSQL is the shared non-null SPL presence contract for a
+// resolved field. In particular, native multivalue fields must consult their
+// sealed list-presence sidecar rather than physical Array nullability or
+// cardinality so missing, explicit null, and present-empty remain distinct.
+func logicalFieldPresenceSQL(field fieldState) (string, []any) {
+	return compiledScalarPresenceSQL(compiledScalarFromField(field))
+}
+
 func compileReplaceScalar(expression *plan.ScalarCallExpression, state compileState) (compiledScalar, error) {
 	if len(expression.Arguments) != 3 {
 		return compiledScalar{}, errors.New("compile ClickHouse replace: expected three arguments")
@@ -12507,7 +12727,7 @@ func compileReplaceScalar(expression *plan.ScalarCallExpression, state compileSt
 	if err != nil {
 		return compiledScalar{}, err
 	}
-	if input.kind == fieldKindStringArray {
+	if isNativeMultivalueKind(input.kind) {
 		return compiledScalar{}, unsupportedMultivalueUsage("replace", expression.Range)
 	}
 	pattern, ok := scalarStringLiteral(expression.Arguments[1])
@@ -12562,7 +12782,7 @@ func compileBinaryTextPredicateOperands(
 	if err != nil {
 		return compiledScalar{}, "", err
 	}
-	if input.kind == fieldKindStringArray {
+	if isNativeMultivalueKind(input.kind) {
 		return compiledScalar{}, "", unsupportedMultivalueUsage(
 			functionName,
 			expression.Range,
@@ -12762,8 +12982,12 @@ func compileTextCaseScalar(
 
 	valueSQL := ""
 	valueArgs := append([]any(nil), input.valueArgs...)
+	existsSQL := "1"
+	var existsArgs []any
+	presentSQL := ""
 	resultKind := fieldKindString
 	dynamicDomain := dynamicScalarDomainAny
+	requiresRuntimeValidation := input.requiresRuntimeValidation
 	switch input.kind {
 	case fieldKindDynamic:
 		// Dynamic event fields can be either scalar String or Splunk
@@ -12790,12 +13014,67 @@ func compileTextCaseScalar(
 		// A fixed Array(String) can originate from an aggregate over _raw.
 		// Bind it once and validate every member before calling the UTF-8
 		// function; invalid arrays become the canonical empty/absent MV value.
-		valueSQL = "arrayElement(arrayMap(values -> if(" +
-			"arrayAll(element -> isValidUTF8(element), values), " +
-			"arrayMap(element -> " + clickHouseFunction +
-			"(element), values), CAST([], 'Array(String)')), [" +
+		mapped := "arrayMap(element -> " + clickHouseFunction +
+			"(element), values)"
+		body := "if(arrayAll(element -> isValidUTF8(element), values), " +
+			mapped + ", CAST([], 'Array(String)'))"
+		if input.optionalMultivaluePresentSQL != "" {
+			// New native String arrays are sealed and share the 1,000-member /
+			// 1-MiB contract. Unicode case conversion can expand UTF-8 bytes,
+			// so validate the mapped payload before publishing it as sealed.
+			body = bindSQLExpressions(
+				[]string{"mapped"},
+				[]string{mapped},
+				stringMVLimitsGuardSQL(
+					"mapped",
+					"arrayExists(element -> NOT isValidUTF8(element), values)",
+				),
+			)
+			existsSQL, existsArgs = scalarExistsSQL(input)
+			presentSQL = input.optionalMultivaluePresentSQL
+			requiresRuntimeValidation = true
+			markNativeMVRuntimeValidation(state)
+		}
+		valueSQL = "arrayElement(arrayMap(values -> " + body + ", [" +
 			input.valueSQL + "]), 1)"
 		resultKind = fieldKindStringArray
+	case fieldKindDynamicArray:
+		normalized, normalizeErr := compileNativeMVState(input, false)
+		if normalizeErr != nil {
+			return compiledScalar{}, normalizeErr
+		}
+		stateAlias := "__os_text_case_mv_state"
+		valuesAlias := "__os_text_case_mv_values"
+		mappedAlias := "__os_text_case_mv_mapped"
+		values := "tupleElement(" + stateAlias + ", 1)"
+		mapped := "arrayMap(element -> CAST(" + clickHouseFunction +
+			"(assumeNotNull(dynamicElement(element, 'String'))) AS Dynamic), " +
+			valuesAlias + ")"
+		invalid := "tupleElement(" + stateAlias + ", 4) != 0 OR " +
+			"arrayExists(element -> dynamicType(element) != 'String', " + valuesAlias + ")"
+		body := bindSQLExpressions(
+			[]string{mappedAlias},
+			[]string{mapped},
+			nativeMVPreflightSQL(
+				mappedAlias,
+				invalid,
+				"length("+mappedAlias+")",
+				nativeMVArrayPayloadBytesSQL(mappedAlias),
+				emptyNativeMVSQL(),
+			),
+		)
+		body = bindSQLExpressions([]string{valuesAlias}, []string{values}, body)
+		valueSQL = bindSQLExpressions(
+			[]string{stateAlias},
+			[]string{normalized.sql},
+			body,
+		)
+		valueArgs = append([]any(nil), normalized.args...)
+		existsSQL, presentSQL, existsArgs = nativeMVPreservedStateSQL(input, normalized)
+		resultKind = fieldKindDynamicArray
+		dynamicDomain = dynamicScalarDomainText
+		requiresRuntimeValidation = true
+		markNativeMVRuntimeValidation(state)
 	case fieldKindString, fieldKindInvalid:
 		inputSQL, inputArgs := compiledTextEligibleStringScalar(input)
 		valueArgs = inputArgs
@@ -12821,15 +13100,22 @@ func compileTextCaseScalar(
 			Range: expression.Range,
 		}
 	}
+	maxStringBytes := saturatingStringByteProduct(compiledScalarStringByteBound(input), 4)
+	if isNativeMultivalueKind(resultKind) && presentSQL != "" {
+		maxStringBytes = min(maxStringBytes, uint64(spl.MaximumNativeMVPayloadBytes))
+	}
 	return compiledScalar{
-		valueSQL:                valueSQL,
-		valueArgs:               valueArgs,
-		maxStringBytes:          saturatingStringByteProduct(compiledScalarStringByteBound(input), 4),
-		existsSQL:               "1",
-		dynamicDomain:           dynamicDomain,
-		kind:                    resultKind,
-		alwaysNull:              input.alwaysNull,
-		materializeForPredicate: input.materializeForPredicate,
+		valueSQL:                     valueSQL,
+		valueArgs:                    valueArgs,
+		maxStringBytes:               maxStringBytes,
+		existsSQL:                    existsSQL,
+		existsArgs:                   existsArgs,
+		optionalMultivaluePresentSQL: presentSQL,
+		dynamicDomain:                dynamicDomain,
+		kind:                         resultKind,
+		alwaysNull:                   input.alwaysNull,
+		materializeForPredicate:      input.materializeForPredicate,
+		requiresRuntimeValidation:    requiresRuntimeValidation,
 	}, nil
 }
 
@@ -12850,7 +13136,7 @@ func compileTextLengthScalar(
 		// runtime type. It therefore preserves len's scalar-only boundary while
 		// referencing the open event field exactly once.
 		valueSQL = "lengthUTF8(dynamicElement(" + input.valueSQL + ", 'String'))"
-	case fieldKindStringArray:
+	case fieldKindStringArray, fieldKindDynamicArray:
 		return compiledScalar{}, unsupportedMultivalueUsage("len", expression.Range)
 	case fieldKindString, fieldKindInvalid:
 		inputSQL, inputArgs := compiledTextEligibleStringScalar(input)
@@ -12914,7 +13200,7 @@ func compileSubstringScalar(
 		// numbers, Booleans, arrays, and objects fail closed without generic
 		// Dynamic conversion branches.
 		inputSQL = "dynamicElement(" + input.valueSQL + ", 'String')"
-	case fieldKindStringArray:
+	case fieldKindStringArray, fieldKindDynamicArray:
 		return compiledScalar{}, unsupportedMultivalueUsage(
 			"substr",
 			expression.Range,
@@ -13378,7 +13664,7 @@ func compileLexicalStringScalar(
 			"['True', 'False'], CAST(NULL AS Nullable(String)))"
 	case fieldKindInvalid:
 		valueSQL = "CAST(NULL AS Nullable(String))"
-	case fieldKindStringArray:
+	case fieldKindStringArray, fieldKindDynamicArray:
 		return compiledScalar{}, unsupportedMultivalueUsage(
 			conversion.operation,
 			sourceRange,
@@ -13897,7 +14183,7 @@ func compileNumericRoundingInput(
 		valueSQL = "CAST(NULL AS Nullable(Float64))"
 		numberType = "Float64"
 		alwaysNull = true
-	case fieldKindStringArray:
+	case fieldKindStringArray, fieldKindDynamicArray:
 		return compiledScalar{}, unsupportedMultivalueUsage(
 			operation.functionName,
 			sourceRange,
@@ -13959,8 +14245,12 @@ func compileMVSortScalar(
 
 	valueSQL := ""
 	valueArgs := append([]any(nil), input.valueArgs...)
+	existsSQL := "1"
+	var existsArgs []any
+	presentSQL := ""
 	resultKind := fieldKindStringArray
 	dynamicDomain := dynamicScalarDomainAny
+	requiresRuntimeValidation := input.requiresRuntimeValidation
 	switch input.kind {
 	case fieldKindStringArray:
 		valueSQL = "arrayElement(arrayMap(values -> " +
@@ -13971,6 +14261,47 @@ func compileMVSortScalar(
 				false,
 			) +
 			", [" + input.valueSQL + "]), 1)"
+		if input.optionalMultivaluePresentSQL != "" {
+			existsSQL, existsArgs = scalarExistsSQL(input)
+			presentSQL = input.optionalMultivaluePresentSQL
+		}
+	case fieldKindDynamicArray:
+		normalized, normalizeErr := compileNativeMVState(input, false)
+		if normalizeErr != nil {
+			return compiledScalar{}, normalizeErr
+		}
+		stateAlias := "__os_mvsort_native_state"
+		valuesAlias := "__os_mvsort_native_values"
+		sortedAlias := "__os_mvsort_native_sorted"
+		values := "tupleElement(" + stateAlias + ", 1)"
+		stringsSQL := "arrayMap(element -> assumeNotNull(dynamicElement(element, 'String')), " +
+			valuesAlias + ")"
+		sorted := "arrayMap(element -> CAST(element AS Dynamic), arraySort(" + stringsSQL + "))"
+		invalid := "tupleElement(" + stateAlias + ", 4) != 0 OR " +
+			"arrayExists(element -> dynamicType(element) != 'String', " + valuesAlias + ")"
+		body := bindSQLExpressions(
+			[]string{sortedAlias},
+			[]string{sorted},
+			nativeMVPreflightSQL(
+				sortedAlias,
+				invalid,
+				"length("+sortedAlias+")",
+				nativeMVArrayPayloadBytesSQL(sortedAlias),
+				emptyNativeMVSQL(),
+			),
+		)
+		body = bindSQLExpressions([]string{valuesAlias}, []string{values}, body)
+		valueSQL = bindSQLExpressions(
+			[]string{stateAlias},
+			[]string{normalized.sql},
+			body,
+		)
+		valueArgs = append([]any(nil), normalized.args...)
+		existsSQL, presentSQL, existsArgs = nativeMVPreservedStateSQL(input, normalized)
+		resultKind = fieldKindDynamicArray
+		dynamicDomain = dynamicScalarDomainText
+		requiresRuntimeValidation = true
+		markNativeMVRuntimeValidation(state)
 	case fieldKindDynamic:
 		nullDynamic := "CAST(NULL AS Dynamic)"
 		stringArray := "arrayElement(arrayMap(values -> " +
@@ -14026,14 +14357,17 @@ func compileMVSortScalar(
 		}
 	}
 	return compiledScalar{
-		valueSQL:                valueSQL,
-		valueArgs:               valueArgs,
-		maxStringBytes:          input.maxStringBytes,
-		existsSQL:               "1",
-		dynamicDomain:           dynamicDomain,
-		kind:                    resultKind,
-		mvSortedLexicographic:   true,
-		materializeForPredicate: input.materializeForPredicate,
+		valueSQL:                     valueSQL,
+		valueArgs:                    valueArgs,
+		maxStringBytes:               input.maxStringBytes,
+		existsSQL:                    existsSQL,
+		existsArgs:                   existsArgs,
+		optionalMultivaluePresentSQL: presentSQL,
+		dynamicDomain:                dynamicDomain,
+		kind:                         resultKind,
+		mvSortedLexicographic:        true,
+		materializeForPredicate:      input.materializeForPredicate,
+		requiresRuntimeValidation:    requiresRuntimeValidation,
 	}, nil
 }
 
@@ -14110,6 +14444,12 @@ func compileMVCountScalar(
 	case fieldKindStringArray:
 		valueSQL = "nullIf(toUInt64(length(" + input.valueSQL +
 			")), toUInt64(0))"
+	case fieldKindDynamicArray:
+		// Explicit native null members are retained in the typed list but do
+		// not contribute to mvcount, matching the open Dynamic Array(Dynamic)
+		// path below and stats count(field).
+		valueSQL = "nullIf(toUInt64(arrayCount(element -> dynamicType(element) != 'None', " +
+			input.valueSQL + ")), toUInt64(0))"
 	case fieldKindDynamic:
 		existsSQL := input.existsSQL
 		if existsSQL == "" {
@@ -14248,7 +14588,7 @@ func compileToNumberScalar(expression *plan.ScalarCallExpression, state compileS
 	if err != nil {
 		return compiledScalar{}, err
 	}
-	if input.kind == fieldKindStringArray {
+	if isNativeMultivalueKind(input.kind) {
 		return compiledScalar{}, unsupportedMultivalueUsage("tonumber", expression.Range)
 	}
 	inputSQL, inputArgs := compiledStringScalar(input)
@@ -14338,6 +14678,108 @@ func scalarExpressionMayReturnBooleanFunction(expression plan.ScalarExpression) 
 	}
 }
 
+func scalarExpressionRequiresNativeMVValidation(
+	expression plan.ScalarExpression,
+	state compileState,
+) bool {
+	if nilScalarExpression(expression) {
+		return false
+	}
+	switch expression := expression.(type) {
+	case *plan.ScalarUnaryExpression:
+		return scalarExpressionRequiresNativeMVValidation(expression.Operand, state)
+	case *plan.ScalarBinaryExpression:
+		return scalarExpressionRequiresNativeMVValidation(expression.Left, state) ||
+			scalarExpressionRequiresNativeMVValidation(expression.Right, state)
+	case *plan.ScalarCallExpression:
+		switch expression.Function {
+		case plan.ScalarFunctionSplit,
+			plan.ScalarFunctionMVAppend,
+			plan.ScalarFunctionMVDedup,
+			plan.ScalarFunctionMVIndex,
+			plan.ScalarFunctionMVJoin,
+			plan.ScalarFunctionMVZip,
+			plan.ScalarFunctionMVFind:
+			return true
+		case plan.ScalarFunctionLower,
+			plan.ScalarFunctionUpper,
+			plan.ScalarFunctionMVSort:
+			// These established transforms gain a runtime guard only for a
+			// compiler-sealed native-list input. Detect that direct field form
+			// precisely instead of forcing every ordinary scalar lower/upper or
+			// open-Dynamic mvsort through a materialized validation fence. Nested
+			// native producers are found by the recursive argument walk below.
+			if len(expression.Arguments) == 1 &&
+				sealedNativeMVFieldExpression(expression.Arguments[0], state) {
+				return true
+			}
+		}
+		for _, argument := range expression.Arguments {
+			if scalarExpressionRequiresNativeMVValidation(argument, state) {
+				return true
+			}
+		}
+		return false
+	case *plan.ScalarIfExpression:
+		return expressionRequiresNativeMVValidation(expression.Condition, state) ||
+			scalarExpressionRequiresNativeMVValidation(expression.True, state) ||
+			scalarExpressionRequiresNativeMVValidation(expression.False, state)
+	case *plan.ScalarCaseExpression:
+		for _, branch := range expression.Branches {
+			if expressionRequiresNativeMVValidation(branch.Condition, state) ||
+				scalarExpressionRequiresNativeMVValidation(branch.Value, state) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func sealedNativeMVFieldExpression(
+	expression plan.ScalarExpression,
+	state compileState,
+) bool {
+	fieldExpression, ok := expression.(*plan.ScalarFieldExpression)
+	if !ok || fieldExpression == nil {
+		return false
+	}
+	field, resolved, err := resolveCompiledField(fieldExpression.Field, state)
+	return err == nil && resolved && isNativeMultivalueKind(field.kind) &&
+		(field.kind == fieldKindDynamicArray ||
+			field.optionalMultivaluePresentSQL != "")
+}
+
+func expressionRequiresNativeMVValidation(
+	expression plan.Expression,
+	state compileState,
+) bool {
+	if nilPlanExpression(expression) {
+		return false
+	}
+	switch expression := expression.(type) {
+	case *plan.BooleanExpression:
+		return expressionRequiresNativeMVValidation(expression.Left, state) ||
+			expressionRequiresNativeMVValidation(expression.Right, state)
+	case *plan.NotExpression:
+		return expressionRequiresNativeMVValidation(expression.Operand, state)
+	case *plan.EvalComparisonExpression:
+		return scalarExpressionRequiresNativeMVValidation(expression.Left, state) ||
+			scalarExpressionRequiresNativeMVValidation(expression.Right, state)
+	case *plan.MembershipExpression:
+		if scalarExpressionRequiresNativeMVValidation(expression.Value, state) {
+			return true
+		}
+		for _, candidate := range expression.Candidates {
+			if scalarExpressionRequiresNativeMVValidation(candidate, state) {
+				return true
+			}
+		}
+	case *plan.ScalarPredicateExpression:
+		return scalarExpressionRequiresNativeMVValidation(expression.Value, state)
+	}
+	return false
+}
+
 func extendCompileState(
 	state compileState,
 	output plan.FieldRef,
@@ -14380,15 +14822,23 @@ func extendCompileState(
 	if !slices.Contains(next.publicOrder, output.Name) {
 		next.publicOrder = append(next.publicOrder, output.Name)
 	}
-	existsSQL := "1"
-	if value.optionalMultivaluePresentSQL != "" {
-		existsSQL = value.optionalMultivaluePresentSQL
-	} else if value.kind == fieldKindStringArray {
-		// A values() result is physically a non-null array, but SPL treats an
-		// empty multivalue result as absent. Rebind that logical presence check
-		// to the eval output because the source expression lives in the nested
-		// SELECT and is no longer visible at this stage.
+	existsSQL := value.existsSQL
+	if existsSQL == "" {
+		if isNativeMultivalueKind(value.kind) {
+			// A legacy values() result has no explicit state sidecar. Its empty
+			// physical array remains the only available absence proof.
+			existsSQL = "notEmpty(" + quoteIdentifier(output.Name) + ")"
+		} else {
+			existsSQL = "1"
+		}
+	} else if retainDirectSidecars && value.optionalMultivaluePresentSQL == "" &&
+		isNativeMultivalueKind(value.kind) && strings.HasPrefix(existsSQL, "notEmpty(") {
+		// Legacy values()/list() arrays have no independent state sidecar. A
+		// direct eval copy makes the new public array authoritative, so rebind
+		// the only available presence proof to that output instead of retaining
+		// a dependency on the source column.
 		existsSQL = "notEmpty(" + quoteIdentifier(output.Name) + ")"
+		value.existsArgs = nil
 	}
 	textEligibleSQL := value.textEligibleSQL
 	semanticBytesSQL := value.semanticBytesSQL
@@ -14411,6 +14861,7 @@ func extendCompileState(
 		mvCountOneOrNull:             value.mvCountOneOrNull,
 		mvSortedLexicographic:        value.mvSortedLexicographic,
 		existsSQL:                    existsSQL,
+		existsArgs:                   append([]any(nil), value.existsArgs...),
 		descendantSQL:                value.descendantSQL,
 		descendantArgs:               append([]any(nil), value.descendantArgs...),
 		storedTypeSQL:                value.storedTypeSQL,
@@ -14907,7 +15358,7 @@ func compileExtractInput(input plan.FieldRef, state compileState) (valueSQL, eli
 				" AND isNotNull(" + field.valueSQL + ") AND isValidUTF8(" + value + "))",
 			append([]any(nil), field.existsArgs...),
 			nil
-	case fieldKindStringArray:
+	case fieldKindStringArray, fieldKindDynamicArray:
 		return "", "", nil, unsupportedMultivalueUsage("field extraction", input.Range)
 	default:
 		// Field extraction does not stringify numeric, Boolean, time,
@@ -15238,6 +15689,9 @@ func compileExtractJSON(
 	steps, err := validateExtractJSONOperator(operator)
 	if err != nil {
 		return compiledRelation{}, compileState{}, nil, 0, err
+	}
+	if splpath.HasWildcard(steps) {
+		return compileExtractJSONWildcard(relation, operator, steps, state, stage)
 	}
 	openEventSchema := state.eventRows && state.allowDynamic
 	if openEventSchema && (operator.Input.Name == "fields" || operator.Output.Name == "fields") {
@@ -15635,7 +16089,7 @@ func spathPathSQL(steps []splpath.Step) (string, []any) {
 	for _, step := range steps {
 		placeholders = append(placeholders, "?")
 		args = append(args, step.Key)
-		if step.HasIndex {
+		if step.Selector == splpath.ArraySelectorFixed {
 			placeholders = append(placeholders, "?")
 			// #nosec G115 -- splpath parsing caps array indices at 2^31-2.
 			args = append(args, int64(step.Index)+1)
@@ -15652,7 +16106,7 @@ func spathArrayGuardSQL(inputSQL string, steps []splpath.Step) (string, []any) {
 	for _, step := range steps {
 		pathSQL = append(pathSQL, "?")
 		pathArgs = append(pathArgs, step.Key)
-		if step.HasIndex {
+		if step.Selector == splpath.ArraySelectorFixed {
 			guards = append(guards, "toString(JSONType("+inputSQL+", "+
 				strings.Join(pathSQL, ", ")+")) = 'Array'")
 			args = append(args, pathArgs...)
@@ -15955,19 +16409,36 @@ func livePrivateColumns(columns []string, visible map[string]fieldState) []strin
 			continue
 		}
 		for _, field := range visible {
-			if field.existsSQL == column || field.storedTypeSQL == column ||
-				field.textEligibleSQL == column || field.semanticBytesSQL == column ||
-				field.descendantSQL == column ||
-				field.relativeFieldNamesSQL == column ||
-				field.relativeFieldTypesSQL == column ||
-				field.fieldMetadataVersionSQL == column ||
-				field.optionalMultivaluePresentSQL == column {
+			if fieldStateReferencesPrivateColumn(field, column) {
 				live = append(live, column)
 				break
 			}
 		}
 	}
 	return live
+}
+
+// fieldStateReferencesPrivateColumn recognizes both a direct sidecar alias and
+// compiler-authored expressions such as tupleElement(sidecar, 1). Private
+// identifiers are always quoted, so a complete quoted name cannot collide
+// with a longer identifier by prefix.
+func fieldStateReferencesPrivateColumn(field fieldState, column string) bool {
+	for _, expression := range []string{
+		field.existsSQL,
+		field.storedTypeSQL,
+		field.textEligibleSQL,
+		field.semanticBytesSQL,
+		field.descendantSQL,
+		field.relativeFieldNamesSQL,
+		field.relativeFieldTypesSQL,
+		field.fieldMetadataVersionSQL,
+		field.optionalMultivaluePresentSQL,
+	} {
+		if expression == column || strings.Contains(expression, column) {
+			return true
+		}
+	}
+	return false
 }
 
 // appendPrivateEventProjection keeps the immutable source document, its
@@ -16030,7 +16501,7 @@ func compileEvalComparison(expression *plan.EvalComparisonExpression, state comp
 	if err != nil {
 		return "", nil, err
 	}
-	if left.kind == fieldKindStringArray || right.kind == fieldKindStringArray {
+	if isNativeMultivalueKind(left.kind) || isNativeMultivalueKind(right.kind) {
 		return "", nil, unsupportedMultivalueUsage("where comparison", expression.Range)
 	}
 	operator, err := comparisonSQL(expression.Op)
@@ -16821,7 +17292,7 @@ func stringScalarSQL(value compiledScalar) string {
 func compileComparison(expression *plan.ComparisonExpression, field fieldState) (string, []any, error) {
 	exists := field.existsSQL
 	args := append([]any(nil), field.existsArgs...)
-	if field.kind == fieldKindStringArray && expression.Value.Kind == plan.ValueKindNull {
+	if isNativeMultivalueKind(field.kind) && expression.Value.Kind == plan.ValueKindNull {
 		return "", nil, unsupportedMultivalueUsage("search null comparison", expression.Range)
 	}
 	if expression.Value.Kind == plan.ValueKindNull {
@@ -16843,17 +17314,10 @@ func compileComparison(expression *plan.ComparisonExpression, field fieldState) 
 			// including explicit null, so it cannot match an event.
 			return "0", nil, nil
 		}
-		if field.kind == fieldKindDynamic {
-			presence := "((" + exists + ") AND isNotNull(" + field.valueSQL + "))"
-			if field.descendantSQL != "" {
-				presence = "(" + presence + " OR (" + field.descendantSQL + "))"
-				args = append(args, field.descendantArgs...)
-			}
-			return presence, args, nil
-		}
-		return "(" + exists + " AND isNotNull(" + field.valueSQL + "))", args, nil
+		presence, presenceArgs := logicalFieldPresenceSQL(field)
+		return presence, presenceArgs, nil
 	}
-	if field.kind == fieldKindStringArray &&
+	if isNativeMultivalueKind(field.kind) &&
 		expression.Op != plan.ComparisonOpEqual && expression.Op != plan.ComparisonOpNotEqual {
 		return "", nil, unsupportedMultivalueUsage("ordered search comparison", expression.Range)
 	}
@@ -16907,6 +17371,14 @@ func equalityPredicate(expression *plan.ComparisonExpression, field fieldState, 
 			return "arrayExists(element -> isValidUTF8(element) AND match(element, ?), " + valueSQL + ")", 1
 		}
 		return "arrayExists(element -> isValidUTF8(element) AND lowerUTF8(element) = lowerUTF8(?), " + valueSQL + ")", 1
+	}
+	if field.kind == fieldKindDynamicArray {
+		// Search equality remains textual for compatibility, but every native
+		// member is rendered by the same canonical contract as mvjoin/nomv.
+		if expression.Value.Kind == plan.ValueKindString && strings.Contains(text, "*") {
+			return "arrayExists(element -> match(" + nativeMVCanonicalTextSQL("element") + ", ?), " + valueSQL + ")", 1
+		}
+		return "arrayExists(element -> lowerUTF8(" + nativeMVCanonicalTextSQL("element") + ") = lowerUTF8(?), " + valueSQL + ")", 1
 	}
 	if expression.Value.Kind == plan.ValueKindString && strings.Contains(text, "*") {
 		return "match(toString(" + valueSQL + "), ?)", 1
@@ -17318,13 +17790,10 @@ func compileProjection(operator *plan.Project, state compileState) ([]string, co
 }
 
 func rewriteExistenceForProjection(field fieldState, name string) string {
-	if field.optionalMultivaluePresentSQL != "" {
-		return field.optionalMultivaluePresentSQL
-	}
 	if field.existsSQL == "1" {
 		return "1"
 	}
-	if field.kind == fieldKindStringArray && strings.HasPrefix(field.existsSQL, "notEmpty(") {
+	if isNativeMultivalueKind(field.kind) && strings.HasPrefix(field.existsSQL, "notEmpty(") {
 		return "notEmpty(" + quoteIdentifier(name) + ")"
 	}
 	if strings.HasPrefix(field.existsSQL, "isNotNull(") {
@@ -17365,7 +17834,7 @@ func compileExactScalarGroup(
 			alwaysNull: true,
 		}
 	}
-	if field.kind == fieldKindStringArray {
+	if isNativeMultivalueKind(field.kind) {
 		return compiledExactScalarGroup{}, unsupportedMultivalueUsage(
 			multivalueOperation,
 			group.Range,
@@ -18871,7 +19340,7 @@ func compileStreamAggregate(
 					rowEligibleSQL,
 				)
 				measureValidationSQL = "toUInt8(tupleElement(" + measureAlias + ", 6))"
-			case fieldKindStringArray:
+			case fieldKindStringArray, fieldKindDynamicArray:
 				valuesSQL, valuesArgs := stringArrayInputSQL(input)
 				measureSQL = streamStatsStringArrayExtremaMeasureSQL(
 					operator.Measure.Function,
@@ -20753,7 +21222,7 @@ func eventAggregateCompileState(
 		next.publicOrder = append(next.publicOrder, output.Name)
 	}
 	existsSQL := "1"
-	hasLogicalPresence := grouped || outputState.kind == fieldKindStringArray
+	hasLogicalPresence := grouped || isNativeMultivalueKind(outputState.kind)
 	if hasLogicalPresence {
 		existsSQL = quoteIdentifier(fmt.Sprintf("__os_eventstats_exists_%d", stage))
 	}
@@ -21855,7 +22324,7 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 			ordinal,
 		))
 		compiled.multiple = exists &&
-			(input.kind == fieldKindDynamic || input.kind == fieldKindStringArray)
+			(input.kind == fieldKindDynamic || isNativeMultivalueKind(input.kind))
 		next.preAggregateColumns = append(
 			next.preAggregateColumns,
 			candidatesSQL+" AS "+compiled.candidatesAlias,
@@ -21915,7 +22384,7 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 		if resolveErr != nil {
 			return "", false, resolveErr
 		}
-		if ok && (input.kind == fieldKindDynamic || input.kind == fieldKindStringArray) {
+		if ok && (input.kind == fieldKindDynamic || isNativeMultivalueKind(input.kind)) {
 			return numericInputForResolved(ref, input, true), true, nil
 		}
 		inputSQL := "CAST(NULL AS Nullable(Float64))"
@@ -23141,6 +23610,15 @@ func countValueInputSQL(field fieldState) (string, []any) {
 		// has cardinality zero, so its logical presence predicate is unnecessary.
 		return "toUInt64(length(" + field.valueSQL + "))", nil
 	}
+	if field.kind == fieldKindDynamicArray {
+		cardinality := "toUInt64(arrayCount(element -> dynamicType(element) != 'None', " +
+			field.valueSQL + "))"
+		if field.existsSQL != "" && field.existsSQL != "1" {
+			return "if(" + field.existsSQL + ", " + cardinality +
+				", toUInt64(0))", append([]any(nil), field.existsArgs...)
+		}
+		return cardinality, nil
+	}
 
 	existsSQL := field.existsSQL
 	if existsSQL == "" {
@@ -23230,6 +23708,18 @@ func numericArrayInputSQL(field fieldState) (string, []any) {
 		return "if(" + field.existsSQL + ", " + value + ", " + empty + ")",
 			append([]any(nil), field.existsArgs...)
 	}
+	if field.kind == fieldKindDynamicArray {
+		value := compactNullableArraySQL(
+			"arrayMap(element -> " + dynamicFiniteFloatOrNullSQL(
+				"element", "dynamicType(element)",
+			) + ", " + field.valueSQL + ")",
+		)
+		if field.existsSQL == "" || field.existsSQL == "1" {
+			return value, nil
+		}
+		return "if(" + field.existsSQL + ", " + value + ", " + empty + ")",
+			append([]any(nil), field.existsArgs...)
+	}
 	scalar := percentileInputSQL(field)
 	scalarArray := compactNullableArraySQL("[" + scalar + "]")
 	value := scalarArray
@@ -23253,6 +23743,16 @@ func stringArrayInputSQL(field fieldState) (string, []any) {
 			return field.valueSQL, nil
 		}
 		return "if(" + field.existsSQL + ", " + field.valueSQL + ", " + empty + ")",
+			append([]any(nil), field.existsArgs...)
+	}
+	if field.kind == fieldKindDynamicArray {
+		value := "arrayMap(element -> " + nativeMVCanonicalTextSQL("element") +
+			", arrayFilter(element -> dynamicType(element) != 'None', " +
+			field.valueSQL + "))"
+		if field.existsSQL == "" || field.existsSQL == "1" {
+			return value, nil
+		}
+		return "if(" + field.existsSQL + ", " + value + ", " + empty + ")",
 			append([]any(nil), field.existsArgs...)
 	}
 	if field.kind == fieldKindDynamic {
@@ -23388,6 +23888,13 @@ func singleChronologicalCandidateSQL(
 	empty := emptySingleChronologicalCandidateSQL()
 	if !exists {
 		return empty, nil, false, nil
+	}
+	if field.kind == fieldKindDynamicArray {
+		field.valueSQL = "arrayMap(element -> " + nativeMVCanonicalTextSQL("element") +
+			", arrayFilter(element -> dynamicType(element) != 'None', " +
+			field.valueSQL + "))"
+		field.kind = fieldKindStringArray
+		return singleChronologicalCandidateSQL(function, field, true)
 	}
 
 	if field.kind == fieldKindStringArray {
@@ -23611,6 +24118,13 @@ func chronologicalCandidatesSQL(
 	empty := emptyChronologicalCandidatesSQL()
 	if !exists {
 		return empty, nil, false
+	}
+	if field.kind == fieldKindDynamicArray {
+		field.valueSQL = "arrayMap(element -> " + nativeMVCanonicalTextSQL("element") +
+			", arrayFilter(element -> dynamicType(element) != 'None', " +
+			field.valueSQL + "))"
+		field.kind = fieldKindStringArray
+		return chronologicalCandidatesSQL(field, true, directions)
 	}
 
 	if field.kind == fieldKindStringArray {
@@ -25174,7 +25688,7 @@ func compileDeduplicate(
 				kind:      fieldKindString,
 			}
 		}
-		if field.kind == fieldKindStringArray {
+		if isNativeMultivalueKind(field.kind) {
 			return compiledRelation{}, nil, nil, 0, unsupportedMultivalueUsage(
 				"dedup",
 				key.Range,
@@ -25319,7 +25833,7 @@ func compileSort(keys []plan.SortKey, state compileState, stage int) ([]string, 
 				kind:      fieldKindString,
 			}
 		}
-		if field.kind == fieldKindStringArray {
+		if isNativeMultivalueKind(field.kind) {
 			return nil, nil, "", unsupportedMultivalueUsage("sort", key.Field.Range)
 		}
 		explicitValues[field.valueSQL] = struct{}{}

@@ -2484,11 +2484,15 @@ func (sink *resultSink) measureRowCellsLocked(columns []Column, values []Value) 
 	var retainedBytes uint64
 	for index, value := range values {
 		column := columns[index]
-		if column.Kind != ValueKindMixed && value.kind != column.Kind && value.kind != ValueKindNull {
+		absent := value.kind == ValueKindNull || value.kind == ValueKindMissing
+		if column.Kind != ValueKindMixed && value.kind != column.Kind && !absent {
 			return 0, 0, fmt.Errorf("%w: cell %d kind does not match schema", ErrInvalidResult, index)
 		}
-		if value.kind == ValueKindNull && !column.Nullable && column.Kind != ValueKindNull {
-			return 0, 0, fmt.Errorf("%w: cell %d is null in a non-nullable column", ErrInvalidResult, index)
+		if absent && !column.Nullable && column.Kind != value.kind {
+			if value.kind == ValueKindNull {
+				return 0, 0, fmt.Errorf("%w: cell %d is null in a non-nullable column", ErrInvalidResult, index)
+			}
+			return 0, 0, fmt.Errorf("%w: cell %d is missing in a non-nullable column", ErrInvalidResult, index)
 		}
 		payloadSize, retainedSize, err := measureValue(value, 0)
 		if err != nil {
@@ -2829,7 +2833,7 @@ func validateSchema(schema Schema, expected []string) error {
 		if !column.ValidFlatMultivaluePresentation() {
 			return fmt.Errorf("%w: schema column %d has invalid multivalue presentation metadata", ErrInvalidResult, index)
 		}
-		if column.Kind < ValueKindNull || column.Kind > ValueKindMixed {
+		if column.Kind < ValueKindNull || column.Kind > ValueKindMissing {
 			return fmt.Errorf("%w: schema column %d has invalid kind", ErrInvalidResult, index)
 		}
 		if _, exists := seen[column.Name]; exists {

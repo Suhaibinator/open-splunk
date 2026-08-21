@@ -110,6 +110,18 @@ func (*ExpandMultivalue) operator()                 {}
 func (*ExpandMultivalue) LogicalName() string       { return "ExpandMultivalue" }
 func (op *ExpandMultivalue) SourceRange() spl.Range { return op.Range }
 
+// NoMultivalue applies flat newline presentation metadata to one native
+// multivalue field. The underlying typed value and row cardinality remain
+// unchanged for downstream planning and execution.
+type NoMultivalue struct {
+	Input FieldRef
+	Range spl.Range
+}
+
+func (*NoMultivalue) operator()                 {}
+func (*NoMultivalue) LogicalName() string       { return "NoMultivalue" }
+func (op *NoMultivalue) SourceRange() spl.Range { return op.Range }
+
 func buildFillNull(command *spl.FillNullCommand) (*FillNull, error) {
 	if command == nil || len(command.Fields) < 1 ||
 		len(command.Fields) > spl.MaximumExplicitProjectionFields ||
@@ -279,4 +291,20 @@ func buildExpandMultivalue(
 		QueryOrdinal: uint8(queryOrdinal), // #nosec G115 -- checked against a two-stage ceiling.
 		Range:        command.Range,
 	}, nil
+}
+
+func buildNoMultivalue(command *spl.NoMVCommand) (*NoMultivalue, error) {
+	if command == nil || !spl.IsExactUnquotedFieldName(command.Field) ||
+		strings.HasPrefix(command.Field, "_") {
+		return nil, &Diagnostic{
+			Code:    "SPL_INVALID_QUERY",
+			Message: "nomv command metadata is invalid",
+			Range:   safeSPLNodeRange(command),
+		}
+	}
+	input, err := ResolveField(command.Field, command.FieldRange)
+	if err != nil {
+		return nil, err
+	}
+	return &NoMultivalue{Input: input, Range: command.Range}, nil
 }

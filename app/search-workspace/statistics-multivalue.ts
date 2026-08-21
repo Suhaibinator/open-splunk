@@ -1,12 +1,36 @@
-// statsFlatMultivalueDisplay applies optional display metadata without
-// changing the authoritative typed cell retained by the statistics model.
-// The compiler attaches the metadata only to list()/values() Array(String)
-// outputs, so fail closed for any other runtime member type.
-export function statsFlatMultivalueDisplay(
-  value: unknown,
+import { createElement, type ReactNode } from "react";
+
+// Preserve the statistics-specific API while sharing canonical presentation
+// with event-row rendering.
+export { flatMultivalueDisplay as statsFlatMultivalueDisplay } from "../../lib/search/multivalue-presentation";
+
+/** Preserve display-only multivalue separators that contain a line break. */
+export function statsFlatMultivalueWhiteSpace(
   delimiter: string | undefined,
-): string | undefined {
-  if (delimiter === undefined || !Array.isArray(value)) return undefined;
-  if (!value.every((member) => typeof member === "string")) return undefined;
-  return value.join(delimiter);
+): "nowrap" | "pre-wrap" {
+  return delimiter !== undefined && /[\r\n]/u.test(delimiter)
+    ? "pre-wrap"
+    : "nowrap";
+}
+
+/**
+ * Keep newline-delimited presentation inside the fixed-height box required by
+ * statistics virtualization. The complete text remains in the DOM while CSS
+ * clips only the visual wrapper.
+ */
+export function StatsFlatMultivalueValue({
+  delimiter,
+  value,
+}: {
+  delimiter: string | undefined;
+  value: ReactNode;
+}): ReactNode {
+  if (typeof value !== "string" || statsFlatMultivalueWhiteSpace(delimiter) === "nowrap") {
+    return value;
+  }
+  return createElement(
+    "span",
+    { className: "statistics-multivalue-lines" },
+    value,
+  );
 }

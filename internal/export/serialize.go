@@ -167,7 +167,7 @@ func needsSpreadsheetProtection(value string) bool {
 
 func csvValue(value searchjobs.Value, limit uint64) (string, bool, error) {
 	switch value.Kind() {
-	case searchjobs.ValueKindNull:
+	case searchjobs.ValueKindNull, searchjobs.ValueKindMissing:
 		return "", false, nil
 	case searchjobs.ValueKindString:
 		result, _ := value.String()
@@ -376,6 +376,8 @@ func (encoder *jsonValueEncoder) visit(token searchjobs.ValueVisitToken) error {
 	switch token.Kind {
 	case searchjobs.ValueVisitNull:
 		return encoder.writeTypedScalar("null", "null")
+	case searchjobs.ValueVisitMissing:
+		return encoder.writeTypedScalar("missing", "null")
 	case searchjobs.ValueVisitString:
 		return encoder.writeStringScalar("string", token.StringValue)
 	case searchjobs.ValueVisitSigned:

@@ -297,6 +297,20 @@ const (
 	// limit, not a restriction imposed by SPL.
 	MaximumCoalesceArguments = 32
 
+	// MaximumMVAppendArguments bounds one multivalue concatenation before any
+	// per-row member and payload limits are applied by the backend.
+	MaximumMVAppendArguments = 32
+
+	// MaximumMVDelimiterBytes bounds the decoded UTF-8 delimiter accepted by
+	// split, mvjoin, and mvzip. Source-size limits remain independently
+	// enforced for the surrounding SPL query.
+	MaximumMVDelimiterBytes = 1 << 10
+
+	// MaximumNativeMVValues and MaximumNativeMVPayloadBytes are the shared
+	// per-row construction limits for native multivalue results.
+	MaximumNativeMVValues       = 1000
+	MaximumNativeMVPayloadBytes = 1 << 20
+
 	// MaximumCaseBranches bounds predicate work and generated backend
 	// expressions for one case call. This is an Open Splunk resource limit,
 	// not a restriction imposed by SPL.
@@ -400,6 +414,13 @@ const (
 	ScalarFunctionStrptime
 	ScalarFunctionRelativeTime
 	ScalarFunctionConcat
+	ScalarFunctionSplit
+	ScalarFunctionMVAppend
+	ScalarFunctionMVDedup
+	ScalarFunctionMVIndex
+	ScalarFunctionMVJoin
+	ScalarFunctionMVZip
+	ScalarFunctionMVFind
 	ScalarFunctionCount
 )
 
@@ -641,9 +662,10 @@ func (*AddInfoCommand) command()             {}
 func (*AddInfoCommand) Name() string         { return "addinfo" }
 func (c *AddInfoCommand) SourceRange() Range { return c.Range }
 
-// SpathCommand extracts one explicitly addressed JSON value from a current
-// pipeline String field. Steps are the validated, constant location path;
-// Input defaults to _raw and Output defaults to the decoded Path spelling.
+// SpathCommand extracts explicitly addressed JSON scalar values from a current
+// pipeline String field. Wildcard array selectors can produce a multivalue;
+// Steps are the validated, constant location path. Input defaults to _raw and
+// Output defaults to the decoded Path spelling.
 type SpathCommand struct {
 	Input       string
 	InputRange  Range

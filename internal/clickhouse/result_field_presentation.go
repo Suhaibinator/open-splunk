@@ -20,8 +20,8 @@ var errInvalidResultFieldPresentation = errors.New(
 
 // ResultFieldPresentation is presentation metadata for the public result
 // field at the same ordinal in CompiledQuery.OutputFields. It never changes
-// the typed result value. In particular, list/values and stats sparklines
-// remain Array(String) for search-job storage and exports.
+// the typed result value. In particular, flat native multivalues and stats
+// sparklines remain typed Lists for search-job storage and exports.
 //
 // HasFlatMultivalueDelimiter distinguishes an effective delimiter (including
 // an authored empty delimiter) from a field with no delimiter metadata.
@@ -96,7 +96,8 @@ func resultFieldPresentations(
 		if !visible || (!field.hasFlatMultivalueDelimiter && !field.statsSparkline) {
 			continue
 		}
-		if field.kind != fieldKindStringArray ||
+		if !isNativeMultivalueKind(field.kind) ||
+			(field.statsSparkline && field.kind != fieldKindStringArray) ||
 			(field.hasFlatMultivalueDelimiter && field.statsSparkline) ||
 			(field.hasFlatMultivalueDelimiter &&
 				(len(field.flatMultivalueDelimiter) > MaximumResultFieldFlatDelimiterBytes ||

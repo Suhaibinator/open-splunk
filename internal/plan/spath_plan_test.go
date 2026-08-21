@@ -31,7 +31,7 @@ func TestBuildSpathProducesRowPreservingJSONExtraction(t *testing.T) {
 	}
 	wantSteps := []splpath.Step{
 		{Key: "vendor"},
-		{Key: "products", HasIndex: true, Index: 0},
+		{Key: "products", Selector: splpath.ArraySelectorFixed, Index: 0},
 		{Key: "price"},
 	}
 	if !slices.Equal(extract.Steps, wantSteps) {
@@ -39,6 +39,30 @@ func TestBuildSpathProducesRowPreservingJSONExtraction(t *testing.T) {
 	}
 	if !slices.Equal(logical.OutputFields, []string{"first_price"}) {
 		t.Fatalf("output fields = %v, want [first_price]", logical.OutputFields)
+	}
+}
+
+func TestBuildSpathPreservesNestedWildcardSelectors(t *testing.T) {
+	t.Parallel()
+
+	logical, err := Build(
+		mustParse(t, `index=gradethis | spath input=payload output=names path=groups{}.users{}.name`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	extract, ok := logical.Operators[2].(*ExtractJSON)
+	if !ok {
+		t.Fatalf("operator 2 = %T, want *ExtractJSON", logical.Operators[2])
+	}
+	wantSteps := []splpath.Step{
+		{Key: "groups", Selector: splpath.ArraySelectorWildcard},
+		{Key: "users", Selector: splpath.ArraySelectorWildcard},
+		{Key: "name"},
+	}
+	if !slices.Equal(extract.Steps, wantSteps) {
+		t.Fatalf("steps = %#v, want %#v", extract.Steps, wantSteps)
 	}
 }
 
@@ -131,6 +155,12 @@ func TestBuildSpathRevalidatesForgedPathMetadata(t *testing.T) {
 	command.Path = strings.Repeat("x", splpath.MaximumPathBytes+1)
 	_, err = Build(query, testScope([]string{"gradethis"}, nil))
 	assertDiagnosticCode(t, err, "SPL_QUERY_TOO_COMPLEX")
+
+	query = mustParse(t, `index=gradethis | spath output=value path=payload.value`)
+	command = query.Commands[0].(*spl.SpathCommand)
+	command.Steps[0].Selector = splpath.ArraySelector(255)
+	_, err = Build(query, testScope([]string{"gradethis"}, nil))
+	assertDiagnosticCode(t, err, "SPL_INVALID_QUERY")
 }
 
 func TestBuildSpathSharesCalculatedOutputCeilingWithRex(t *testing.T) {
@@ -184,6 +214,32 @@ func TestBuildSpathBoundsCumulativeJSONEvaluationWork(t *testing.T) {
 
 	source.WriteString(` | spath output=overflow path=value`)
 	_, err := Build(mustParse(t, source.String()), testScope([]string{"gradethis"}, nil))
+	assertDiagnosticCode(t, err, "SPL_QUERY_TOO_COMPLEX")
+}
+
+func TestBuildSpathChargesWildcardSelectorsAsJSONEvaluationWork(t *testing.T) {
+	t.Parallel()
+
+	steps, err := splpath.ParseJSON("values{}")
+	if err != nil {
+		t.Fatalf("ParseJSON(wildcard): %v", err)
+	}
+	workPerStage := splpath.EvaluationWorkUnits(steps)
+	acceptedStages := splpath.MaximumEvaluationWorkUnits / workPerStage
+
+	var source strings.Builder
+	source.WriteString(`index=gradethis`)
+	for index := range acceptedStages {
+		source.WriteString(` | spath output=value_`)
+		source.WriteString(strconv.Itoa(index))
+		source.WriteString(` path=values{}`)
+	}
+	if _, err := Build(mustParse(t, source.String()), testScope([]string{"gradethis"}, nil)); err != nil {
+		t.Fatalf("Build(maximum bounded wildcard spath work): %v", err)
+	}
+
+	source.WriteString(` | spath output=overflow path=values{}`)
+	_, err = Build(mustParse(t, source.String()), testScope([]string{"gradethis"}, nil))
 	assertDiagnosticCode(t, err, "SPL_QUERY_TOO_COMPLEX")
 }
 

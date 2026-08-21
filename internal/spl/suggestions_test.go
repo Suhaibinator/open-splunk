@@ -1094,7 +1094,7 @@ func TestCompletionCatalogCoversSupportedFixedCommandsAndFunctions(t *testing.T)
 		"search", "where", "eval", "rename", "fields", "table", "sort",
 		"dedup", "rex", "spath", "lookup", "bin", "bucket", "head", "tail", "regex",
 		"reverse", "accum", "strcat", "addinfo", "fillnull", "addtotals", "delta",
-		"makemv", "mvexpand", "stats", "eventstats", "streamstats", "top", "rare",
+		"makemv", "mvexpand", "nomv", "stats", "eventstats", "streamstats", "top", "rare",
 		"timechart", "chart",
 	}
 	gotCommands := make([]string, 0, len(completionCatalog.Commands))
@@ -1157,7 +1157,8 @@ func TestCompletionCatalogCoversSupportedFixedCommandsAndFunctions(t *testing.T)
 		"stdevp", "var", "varp", "if", "case", "in", "now", "strftime",
 		"strptime", "relative_time", "tonumber", "tostring", "replace", "isnull",
 		"isnotnull", "coalesce", "lower", "upper", "len", "length", "round",
-		"ceil", "ceiling", "floor", "mvcount", "mvsort", "match", "like", "substr",
+		"ceil", "ceiling", "floor", "mvcount", "mvsort", "split", "mvappend",
+		"mvdedup", "mvindex", "mvjoin", "mvzip", "mvfind", "match", "like", "substr",
 	}
 	gotFunctions := make([]string, 0, len(completionCatalog.Functions))
 	for _, function := range completionCatalog.Functions {

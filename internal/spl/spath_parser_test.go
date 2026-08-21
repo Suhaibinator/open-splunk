@@ -43,8 +43,20 @@ func TestParseSpathExplicitJSONPath(t *testing.T) {
 			path:   "vendor.products{0}.price",
 			wantSteps: []splpath.Step{
 				{Key: "vendor"},
-				{Key: "products", HasIndex: true, Index: 0},
+				{Key: "products", Selector: splpath.ArraySelectorFixed, Index: 0},
 				{Key: "price"},
+			},
+		},
+		{
+			name:   "nested wildcard arrays",
+			source: `* | spath input=payload output=names path=groups{}.users{}.name`,
+			input:  "payload",
+			output: "names",
+			path:   "groups{}.users{}.name",
+			wantSteps: []splpath.Step{
+				{Key: "groups", Selector: splpath.ArraySelectorWildcard},
+				{Key: "users", Selector: splpath.ArraySelectorWildcard},
+				{Key: "name"},
 			},
 		},
 		{
@@ -110,7 +122,7 @@ func TestParseSpathRejectsUnsupportedOrAmbiguousSyntax(t *testing.T) {
 		{`* | spath output=a output=b path=x`, "SPL_UNSUPPORTED_SPATH_SYNTAX"},
 		{`* | spath path=a extra`, "SPL_UNSUPPORTED_SPATH_SYNTAX"},
 		{`* | spath mode=json path=a`, "SPL_UNSUPPORTED_SPATH_SYNTAX"},
-		{`* | spath path=items{}.value`, "SPL_UNSUPPORTED_SPATH_PATH"},
+		{`* | spath path=items{*}.value`, "SPL_UNSUPPORTED_SPATH_PATH"},
 		{`* | spath path=item{@id}`, "SPL_UNSUPPORTED_SPATH_PATH"},
 		{`* | spath path=one..two`, "SPL_INVALID_SPATH_PATH"},
 		{`* | spath path=a,output=b`, "SPL_UNSUPPORTED_SPATH_SYNTAX"},
@@ -139,6 +151,12 @@ func TestParseSpathBoundsPathComplexity(t *testing.T) {
 	var diagnostic *Diagnostic
 	if !errors.As(err, &diagnostic) || diagnostic.Code != "SPL_QUERY_TOO_COMPLEX" {
 		t.Fatalf("Parse over-depth spath error = %v, want SPL_QUERY_TOO_COMPLEX", err)
+	}
+
+	selectors := strings.TrimSuffix(strings.Repeat("items{}.", splpath.MaximumArraySelectors+1), ".")
+	_, err = Parse(`* | spath output=value path="` + selectors + `"`)
+	if !errors.As(err, &diagnostic) || diagnostic.Code != "SPL_QUERY_TOO_COMPLEX" {
+		t.Fatalf("Parse over-selector spath error = %v, want SPL_QUERY_TOO_COMPLEX", err)
 	}
 }
 

@@ -35,6 +35,11 @@ func TestValuePreservesEverySupportedKindAndNestedShape(t *testing.T) {
 		check    func(*testing.T, *opensplunk.TypedValue)
 	}{
 		{name: "null", value: searchjobs.NullValue(), kindType: (*opensplunk.TypedValue_NullValue)(nil)},
+		{name: "missing", value: searchjobs.MissingValue(), kindType: (*opensplunk.TypedValue_MissingValue)(nil), check: func(t *testing.T, value *opensplunk.TypedValue) {
+			if value.GetMissingValue() != opensplunk.MissingValue_MISSING_VALUE_MISSING {
+				t.Fatalf("missing = %v", value.GetMissingValue())
+			}
+		}},
 		{name: "string", value: searchjobs.StringValue("hello"), kindType: (*opensplunk.TypedValue_StringValue)(nil), check: func(t *testing.T, value *opensplunk.TypedValue) {
 			if value.GetStringValue() != "hello" {
 				t.Fatalf("string = %q", value.GetStringValue())
@@ -172,6 +177,22 @@ func TestSchemaMarksStaticTimeSeriesCountAsMetric(t *testing.T) {
 	if got := converted.GetColumns()[1].GetSemanticType(); got !=
 		opensplunk.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_METRIC {
 		t.Fatalf("count semantic = %v, want METRIC", got)
+	}
+}
+
+func TestSchemaMapsExplicitMissingKind(t *testing.T) {
+	t.Parallel()
+
+	converted, err := Schema("schema-missing", searchjobs.Schema{Columns: []searchjobs.Column{
+		{Name: "optional", Kind: searchjobs.ValueKindMissing, Nullable: true},
+	}}, ResultShape{Kind: opensplunk.ResultSetKind_RESULT_SET_KIND_EVENTS})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(converted.GetColumns()) != 1 ||
+		converted.GetColumns()[0].GetValueType() != opensplunk.ValueType_VALUE_TYPE_MISSING ||
+		!converted.GetColumns()[0].GetNullable() {
+		t.Fatalf("missing schema column = %+v", converted.GetColumns())
 	}
 }
 

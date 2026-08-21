@@ -3,8 +3,10 @@ package queryexec
 import (
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -13,6 +15,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
 type resultContainerTransport struct {
@@ -25,7 +28,16 @@ type resultContainerTransport struct {
 type resultOptionalMultivalueTransport struct {
 	valid         bool
 	presentColumn int
+	dynamic       bool
 }
+
+const (
+	// The executor repeats the shared SPL construction bounds at the sealed
+	// transport boundary so a forged or incompatible backend cannot publish an
+	// oversized cell.
+	maximumOptionalMultivalueMembers      = spl.MaximumNativeMVValues
+	maximumOptionalMultivaluePayloadBytes = spl.MaximumNativeMVPayloadBytes
+)
 
 type resultStringOrBytesTransport struct {
 	valid               bool
@@ -142,9 +154,13 @@ func validateOrdinaryResultColumns(
 		if !transport.valid {
 			continue
 		}
-		if strings.TrimSpace(columnTypes[outputIndex].DatabaseTypeName()) != "Array(String)" ||
-			columnTypes[outputIndex].Nullable() ||
-			columnTypes[outputIndex].ScanType() != reflect.TypeFor[[]string]() ||
+		valueType := columnTypes[outputIndex]
+		databaseType := strings.TrimSpace(valueType.DatabaseTypeName())
+		dynamic := databaseType == "Array(Dynamic)" &&
+			valueType.ScanType() == reflect.TypeFor[[]chcol.Dynamic]()
+		stringsOnly := databaseType == "Array(String)" &&
+			valueType.ScanType() == reflect.TypeFor[[]string]()
+		if valueType.Nullable() || (!stringsOnly && !dynamic) ||
 			!exactContainerHiddenColumnType(
 				columnTypes[transport.presentColumn],
 				"UInt8",
@@ -155,6 +171,7 @@ func validateOrdinaryResultColumns(
 				searchjobs.ErrInvalidResult,
 			)
 		}
+		optionalTransports[outputIndex].dynamic = dynamic
 	}
 	return transports, optionalTransports, nil
 }
@@ -278,34 +295,149 @@ func convertOptionalMultivalueOutput(
 	valueColumn int,
 	transport resultOptionalMultivalueTransport,
 ) (searchjobs.Value, error) {
-	present, ok := scannedValue(destinations[transport.presentColumn]).(uint8)
-	if !ok || present > 1 {
+	state, ok := scannedValue(destinations[transport.presentColumn]).(uint8)
+	if !ok || state > 2 {
 		return searchjobs.Value{}, errors.New(
-			"optional multivalue presence has an invalid native value",
+			"optional multivalue state has an invalid native value",
 		)
 	}
-	raw, ok := scannedValue(destinations[valueColumn]).([]string)
-	if !ok {
-		return searchjobs.Value{}, errors.New(
-			"optional multivalue has an invalid native value",
-		)
-	}
-	if present == 0 {
-		if len(raw) != 0 {
+	raw := scannedValue(destinations[valueColumn])
+	var (
+		members        []string
+		dynamicMembers []chcol.Dynamic
+		nativeLength   int
+	)
+	if transport.dynamic {
+		var ok bool
+		dynamicMembers, ok = raw.([]chcol.Dynamic)
+		if !ok {
 			return searchjobs.Value{}, errors.New(
-				"absent optional multivalue retained a public payload",
+				"optional multivalue has an invalid native value",
 			)
 		}
-		return searchjobs.NullValue(), nil
+		nativeLength = len(dynamicMembers)
+	} else {
+		var ok bool
+		members, ok = raw.([]string)
+		if !ok {
+			return searchjobs.Value{}, errors.New(
+				"optional multivalue has an invalid native value",
+			)
+		}
+		nativeLength = len(members)
 	}
-	for _, member := range raw {
+	if state != 1 {
+		if nativeLength != 0 {
+			return searchjobs.Value{}, errors.New(
+				"non-list optional multivalue retained a public payload",
+			)
+		}
+		if state == 2 {
+			return searchjobs.NullValue(), nil
+		}
+		return searchjobs.MissingValue(), nil
+	}
+	if transport.dynamic {
+		return convertOptionalDynamicMultivalue(dynamicMembers)
+	}
+	if len(members) > maximumOptionalMultivalueMembers {
+		return searchjobs.Value{}, errors.New(
+			"optional multivalue exceeds the member limit",
+		)
+	}
+	payloadBytes := 0
+	for _, member := range members {
 		if !utf8.ValidString(member) {
 			return searchjobs.Value{}, errors.New(
 				"optional multivalue contains an invalid UTF-8 String member",
 			)
 		}
+		if len(member) > maximumOptionalMultivaluePayloadBytes-payloadBytes {
+			return searchjobs.Value{}, errors.New(
+				"optional multivalue exceeds the payload limit",
+			)
+		}
+		payloadBytes += len(member)
 	}
-	return convertValue(raw)
+	return convertValue(members)
+}
+
+func convertOptionalDynamicMultivalue(raw []chcol.Dynamic) (searchjobs.Value, error) {
+	if len(raw) > maximumOptionalMultivalueMembers {
+		return searchjobs.Value{}, errors.New(
+			"optional multivalue exceeds the member limit",
+		)
+	}
+	members := make([]searchjobs.Value, len(raw))
+	payloadBytes := 0
+	for index, native := range raw {
+		member, err := convertValue(native)
+		if err != nil {
+			return searchjobs.Value{}, fmt.Errorf(
+				"optional multivalue member %d: %w",
+				index,
+				err,
+			)
+		}
+		memberBytes, ok := canonicalOptionalMultivalueMemberBytes(member)
+		if !ok {
+			return searchjobs.Value{}, fmt.Errorf(
+				"optional multivalue member %d has an unsupported type",
+				index,
+			)
+		}
+		if memberBytes > maximumOptionalMultivaluePayloadBytes-payloadBytes {
+			return searchjobs.Value{}, errors.New(
+				"optional multivalue exceeds the payload limit",
+			)
+		}
+		payloadBytes += memberBytes
+		members[index] = member
+	}
+	result := searchjobs.ListValue(members...)
+	if result.Kind() != searchjobs.ValueKindList {
+		return searchjobs.Value{}, errors.New(
+			"optional multivalue exceeds result value limits",
+		)
+	}
+	return result, nil
+}
+
+func canonicalOptionalMultivalueMemberBytes(member searchjobs.Value) (int, bool) {
+	switch member.Kind() {
+	case searchjobs.ValueKindNull:
+		return len("null"), true
+	case searchjobs.ValueKindString:
+		value, _ := member.String()
+		if !utf8.ValidString(value) {
+			return 0, false
+		}
+		return len(value), true
+	case searchjobs.ValueKindSigned:
+		value, _ := member.Signed()
+		return len(strconv.FormatInt(value, 10)), true
+	case searchjobs.ValueKindUnsigned:
+		value, _ := member.Unsigned()
+		return len(strconv.FormatUint(value, 10)), true
+	case searchjobs.ValueKindDouble:
+		value, _ := member.Double()
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			return 0, false
+		}
+		return len(strconv.FormatFloat(value, 'g', -1, 64)), true
+	case searchjobs.ValueKindBool:
+		value, _ := member.Bool()
+		return len(strconv.FormatBool(value)), true
+	case searchjobs.ValueKindDecimal:
+		value, _ := member.Decimal()
+		canonical, err := searchjobs.CanonicalDecimal(value)
+		if err != nil {
+			return 0, false
+		}
+		return len(canonical), true
+	default:
+		return 0, false
+	}
 }
 
 func exactContainerPublicColumnType(databaseType string) bool {

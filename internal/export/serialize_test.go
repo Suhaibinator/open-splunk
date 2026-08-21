@@ -50,6 +50,68 @@ func TestCSVExactQuotingAndMandatoryFormulaDefense(t *testing.T) {
 	}
 }
 
+func TestMissingValueFlatAndTypedExportRepresentations(t *testing.T) {
+	t.Parallel()
+
+	selection, err := selectColumns(searchjobs.Schema{Columns: []searchjobs.Column{
+		{Name: "missing", Kind: searchjobs.ValueKindMissing},
+		{Name: "null", Kind: searchjobs.ValueKindNull, Nullable: true},
+	}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := searchjobs.ResultRow{Values: []searchjobs.Value{
+		searchjobs.MissingValue(),
+		searchjobs.NullValue(),
+	}}
+
+	var csvOutput bytes.Buffer
+	csvSerializer, err := newCSVSerializer(&csvOutput, selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := csvSerializer.WriteRow(row); err != nil {
+		t.Fatal(err)
+	}
+	if err := csvSerializer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if want := "missing,null\n,\n"; csvOutput.String() != want {
+		t.Fatalf("missing CSV = %q, want %q", csvOutput.String(), want)
+	}
+
+	for _, test := range []struct {
+		name    string
+		options JSONLinesOptions
+		want    string
+	}{
+		{name: "untyped", want: `{"missing":null,"null":null}` + "\n"},
+		{
+			name:    "typed",
+			options: JSONLinesOptions{IncludeTypeMetadata: true},
+			want: `{"missing":{"$type":"missing","$value":null},` +
+				`"null":{"$type":"null","$value":null}}` + "\n",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			serializer, serializeErr := newJSONLinesSerializer(&output, selection, test.options)
+			if serializeErr != nil {
+				t.Fatal(serializeErr)
+			}
+			if serializeErr = serializer.WriteRow(row); serializeErr != nil {
+				t.Fatal(serializeErr)
+			}
+			if serializeErr = serializer.Close(); serializeErr != nil {
+				t.Fatal(serializeErr)
+			}
+			if output.String() != test.want {
+				t.Fatalf("missing JSONL = %q, want %q", output.String(), test.want)
+			}
+		})
+	}
+}
+
 func TestJSONLinesAllValueKindsAreDeterministicAndLossless(t *testing.T) {
 	t.Parallel()
 	decimalValue, err := searchjobs.DecimalValue("-1234567890.0001")

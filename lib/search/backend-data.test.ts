@@ -9,6 +9,7 @@ import {
   type ResultSchema,
 } from "../../gen/ts/open_splunk/result";
 import {
+  NullValue,
   ValueType,
   type TypedValue,
 } from "../../gen/ts/open_splunk/value";
@@ -146,6 +147,37 @@ test("result adaptation rejects forged flat multivalue presentation metadata", (
     () => adaptSearchResults(schema, []),
     /invalid multivalue presentation metadata/,
   );
+});
+
+test("event adaptation renders native nomv lists with canonical newlines", () => {
+  const schema: ResultSchema = {
+    schemaId: "events-nomv-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_EVENTS,
+    columns: [{
+      ...column("users", ValueType.VALUE_TYPE_LIST),
+      multivalue: true,
+      flatMultivalueDelimiter: "\n",
+    }],
+  };
+  const adapted = adaptSearchResults(schema, [
+    row("native", 0n, [{
+      kind: {
+        $case: "listValue",
+        value: {
+          values: [
+            stringValue("alice"),
+            { kind: { $case: "sint64Value", value: -7n } },
+            { kind: { $case: "doubleValue", value: -0 } },
+            { kind: { $case: "boolValue", value: true } },
+            { kind: { $case: "nullValue", value: NullValue.NULL_VALUE_NULL } },
+          ],
+        },
+      },
+    }]),
+  ]);
+
+  assert.equal(adapted.events[0]?.fields.users, "alice\n-7\n-0\ntrue\nnull");
 });
 
 test("top message results retain count and percent as categorical series", () => {

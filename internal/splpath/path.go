@@ -21,13 +21,12 @@ const (
 	// field segment.
 	MaximumKeyBytes = 256
 	// MaximumArraySelectors bounds the extra full-document container checks
-	// required because ClickHouse integer path arguments also index objects by
-	// member position.
+	// and traversal fan-out introduced by fixed and wildcard array selectors.
 	MaximumArraySelectors = 4
 	// MaximumEvaluationWorkUnits bounds cumulative structural JSON parser work
 	// per row. One stage reserves raw extraction, conditional numeric-marker
 	// lookup, and ordinary typed-leaf decode, plus one container-type check for
-	// each fixed array selector.
+	// each fixed or wildcard array selector.
 	MaximumEvaluationWorkUnits = 32
 	// MaximumArrayIndex leaves room to translate Splunk's zero-based index to
 	// a positive signed-32-bit ClickHouse index. The pinned server wraps larger
@@ -35,11 +34,21 @@ const (
 	MaximumArrayIndex = uint64(math.MaxInt32 - 1)
 )
 
-// Step is one case-sensitive JSON object key and an optional zero-based array
-// index applied to that key's value.
+// ArraySelector is the closed kind of array selection applied after resolving
+// one JSON object key.
+type ArraySelector uint8
+
+const (
+	ArraySelectorNone ArraySelector = iota
+	ArraySelectorFixed
+	ArraySelectorWildcard
+)
+
+// Step is one case-sensitive JSON object key and its optional array selector.
+// Index is meaningful only for ArraySelectorFixed.
 type Step struct {
 	Key      string
-	HasIndex bool
+	Selector ArraySelector
 	Index    uint64
 }
 
@@ -48,11 +57,22 @@ type Step struct {
 func EvaluationWorkUnits(steps []Step) int {
 	units := 3
 	for _, step := range steps {
-		if step.HasIndex {
+		if step.Selector != ArraySelectorNone {
 			units++
 		}
 	}
 	return units
+}
+
+// HasWildcard reports whether a validated path contains at least one wildcard
+// array selector.
+func HasWildcard(steps []Step) bool {
+	for _, step := range steps {
+		if step.Selector == ArraySelectorWildcard {
+			return true
+		}
+	}
+	return false
 }
 
 // ErrorKind distinguishes malformed input, deliberately unsupported SPL
@@ -78,8 +98,9 @@ func (e *Error) Error() string {
 }
 
 // ParseJSON parses one explicit SPL JSON datapath. Auto-extraction, XML
-// attributes, array wildcards, escaped key separators, and multiple indexes
-// per location step are intentionally outside this slice.
+// attributes, escaped key separators, and multiple selectors per location
+// step are intentionally outside this slice. An empty {} suffix selects every
+// member of the addressed array in source order.
 func ParseJSON(path string) ([]Step, error) {
 	if path == "" {
 		return nil, invalid(0, "path is empty")
@@ -111,12 +132,12 @@ func ParseJSON(path string) ([]Step, error) {
 		if err != nil {
 			return nil, err
 		}
-		if step.HasIndex {
+		if step.Selector != ArraySelectorNone {
 			arraySelectors++
 			if arraySelectors > MaximumArraySelectors {
 				return nil, tooComplex(
 					start,
-					fmt.Sprintf("path contains more than %d fixed array selectors", MaximumArraySelectors),
+					fmt.Sprintf("path contains more than %d array selectors", MaximumArraySelectors),
 				)
 			}
 		}
@@ -162,8 +183,8 @@ func parseStep(source string, offset int) (Step, error) {
 		return Step{}, tooComplex(offset, fmt.Sprintf("location-step key exceeds %d UTF-8 bytes", MaximumKeyBytes))
 	}
 	indexText := source[open+1 : closeIndex]
-	if indexText == "" || indexText == "*" {
-		return Step{}, unsupported(offset+open, "array wildcard extraction is not supported")
+	if indexText == "" {
+		return Step{Key: key, Selector: ArraySelectorWildcard}, nil
 	}
 	if strings.HasPrefix(indexText, "@") {
 		return Step{}, unsupported(offset+open, "XML attribute extraction is not supported")
@@ -183,7 +204,7 @@ func parseStep(source string, offset int) (Step, error) {
 	if err != nil || value > MaximumArrayIndex {
 		return Step{}, tooComplex(offset+open+1, fmt.Sprintf("array index exceeds %d", MaximumArrayIndex))
 	}
-	return Step{Key: key, HasIndex: true, Index: value}, nil
+	return Step{Key: key, Selector: ArraySelectorFixed, Index: value}, nil
 }
 
 func firstInvalidUTF8(value string) int {

@@ -35,6 +35,9 @@ func TestPipelineRuntimeMarkersAreCompletelyClassifiedAndRedacted(t *testing.T) 
 		{name: "mvexpand stage rows", marker: clickhouse.MVExpandStageRowsLimitMarker, want: searchjobs.ErrExecutionLimit},
 		{name: "mvexpand query rows", marker: clickhouse.MVExpandQueryRowsLimitMarker, want: searchjobs.ErrExecutionLimit},
 		{name: "mvexpand retained bytes", marker: clickhouse.MVExpandRetainedBytesLimitMarker, want: searchjobs.ErrExecutionLimit},
+		{name: "native multivalue incompatible member", marker: clickhouse.UnsupportedNativeMVValueMarker, want: searchjobs.ErrUnsupportedValue},
+		{name: "native multivalue per-row members", marker: clickhouse.NativeMVMembersLimitMarker, want: searchjobs.ErrExecutionLimit},
+		{name: "native multivalue per-row payload", marker: clickhouse.NativeMVPayloadLimitMarker, want: searchjobs.ErrExecutionLimit},
 	}
 
 	seen := make(map[string]string, len(tests))

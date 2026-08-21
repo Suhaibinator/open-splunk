@@ -106,6 +106,19 @@ func (*MVExpandCommand) command()             {}
 func (*MVExpandCommand) Name() string         { return "mvexpand" }
 func (c *MVExpandCommand) SourceRange() Range { return c.Range }
 
+// NoMVCommand requests flat presentation for one native multivalue field.
+// The typed value remains authoritative for every later command and result
+// transport; nomv changes only its display serialization.
+type NoMVCommand struct {
+	Field      string
+	FieldRange Range
+	Range      Range
+}
+
+func (*NoMVCommand) command()             {}
+func (*NoMVCommand) Name() string         { return "nomv" }
+func (c *NoMVCommand) SourceRange() Range { return c.Range }
+
 func (p *parser) parseFillNullCommand(name token) (Command, error) {
 	command := &FillNullCommand{Value: "0", ValueRange: name.sourceRange}
 	end := name.sourceRange.End
@@ -454,6 +467,33 @@ func (p *parser) parseMVExpandCommand(name token) (Command, error) {
 	}
 	command.Range = Range{Start: name.sourceRange.Start, End: end}
 	return command, nil
+}
+
+func (p *parser) parseNoMVCommand(name token) (Command, error) {
+	if p.atCommandEnd() {
+		return nil, &Diagnostic{
+			Code:    "SPL_EXPECTED_FIELD",
+			Message: "nomv requires exactly one field",
+			Range:   p.current().sourceRange,
+		}
+	}
+	fieldToken := p.current()
+	field, err := exactCommandField("nomv", fieldToken)
+	if err != nil {
+		return nil, err
+	}
+	if isInternalMultivalueField(field.Name) {
+		return nil, p.unsupportedCommandSyntax("nomv", fieldToken, "nomv does not support internal fields")
+	}
+	p.advance()
+	if !p.atCommandEnd() {
+		return nil, p.unsupportedCommandSyntax("nomv", p.current(), "nomv supports exactly one field")
+	}
+	return &NoMVCommand{
+		Field:      field.Name,
+		FieldRange: field.Range,
+		Range:      Range{Start: name.sourceRange.Start, End: field.Range.End},
+	}, nil
 }
 
 // appendExactProjectionField validates one whitespace-separated exact field

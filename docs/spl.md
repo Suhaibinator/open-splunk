@@ -60,10 +60,13 @@ The semantic rule inventory is:
 | `SPL-FILLNULL-001` | explicit String fill projection |
 | `SPL-ADDTOTALS-001` | row-only explicit numeric total |
 | `SPL-DELTA-001` | bounded ordered subtraction |
+| `SPL-MULTIVALUE-EVAL-001` | bounded native multivalue eval functions |
+| `SPL-SPATH-MULTIVALUE-001` | ordered wildcard-array JSON extraction |
 | `SPL-MAKEMV-001` | typed String multivalue construction |
 | `SPL-MVEXPAND-001` | controlled ordered row expansion |
+| `SPL-NOMV-001` | presentation-only flat multivalue display |
 | `SPL-FIELDS-001` | exact public command fields and private namespace |
-| `SPL-MULTIVALUE-TYPE-001` | nullable typed-list transport |
+| `SPL-MULTIVALUE-TYPE-001` | nullable native typed-list transport |
 | `SPL-ORDER-001` | durable private relation lineage |
 | `SPL-PIPELINE-LIMITS-001` | pipeline source and runtime accounting |
 | `SPL-ATOMIC-001` | no observable result prefix on hard failure |
@@ -100,7 +103,8 @@ precedence `NOT`, `AND`, then `OR`. Quoted text is a literal and bare names are
 fields. Supported scalar functions include `isnull`, `isnotnull`, `replace`,
 `tonumber`, `if`, `coalesce`, `case`, period concatenation, `lower`, `upper`,
 `len`/`length`, `substr`, default `tostring`, `round`, `ceil`/`ceiling`,
-`floor`, `mvcount`, `mvsort`, `match`, `like`, `now`, `relative_time`,
+`floor`, `mvcount`, `mvsort`, `split`, `mvappend`, `mvdedup`, `mvindex`,
+`mvjoin`, `mvzip`, `mvfind`, `match`, `like`, `now`, `relative_time`,
 `strftime`, and `strptime`.
 
 Authored `eval` additionally supports bounded arithmetic `+`, `-`, `*`, `/`,
@@ -116,6 +120,40 @@ earlier output. A fixed output replaces the existing occurrence instead of
 creating a duplicate. Missing and explicit null remain distinct from empty
 String, zero, false, and present empty multivalue values.
 
+### Native multivalue expressions
+
+Native multivalue fields preserve member order and the scalar JSON types
+String, finite Number/Decimal, Boolean, and explicit null. Missing fields,
+explicit null fields, and present empty lists are distinct. Bytes, time,
+duration, non-finite numbers, objects, and nested lists are not valid native
+multivalue members. Operations that consume member text use raw Strings,
+canonical numeric text, lowercase `true` and `false`, and literal `null`.
+Native equality is type-sensitive, so integer `1` and floating `1.0` are
+different members.
+
+Each constructed list is limited to 1,000 members and 1 MiB of member payload.
+Construction is preflighted and an overflow fails the query atomically. A
+delimiter is a quoted UTF-8 literal of at most 1 KiB. The eval functions have
+these exact contracts:
+
+- `split(string, delimiter)` splits on the exact literal delimiter and returns
+  a String multivalue. An empty delimiter splits into Unicode characters.
+- `mvappend(value, ...)` accepts one through 32 scalar or multivalue arguments,
+  flattens one list level in argument order, skips missing arguments, and keeps
+  explicit null members.
+- `mvdedup(mv)` retains the first occurrence of each type-sensitive native
+  value.
+- `mvindex(mv, start)` returns one scalar. `mvindex(mv, start, end)` returns an
+  inclusive multivalue range. Indexes are signed 32-bit integer literals;
+  negative indexes count from the end, and invalid or out-of-range selections
+  return null.
+- `mvjoin(mv, delimiter)` returns one String by joining canonical member text.
+- `mvzip(left, right)` uses `","`; the three-argument form uses its supplied
+  literal delimiter. Both truncate to the shorter list and return String
+  pairs in a multivalue.
+- `mvfind(mv, regex)` accepts a quoted bounded RE2 pattern and returns the first
+  zero-based matching member index, or null.
+
 ## Commands
 
 The cumulative command surface is:
@@ -126,7 +164,7 @@ The cumulative command surface is:
 | `where` | bounded eval-predicate filtering |
 | `eval` | left-to-right fixed scalar assignments |
 | `rex` | first-match RE2 extraction with bounded named captures |
-| `spath` | row-preserving typed JSON scalar extraction |
+| `spath` | row-preserving typed JSON scalar and wildcard-array extraction (`SPL-SPATH-MULTIVALUE-001`) |
 | `fields`, `table` | exact projection |
 | `rename` | exact source/destination pairs |
 | `sort` | bounded exact keys, with `sort 0` selecting all scoped rows |
@@ -147,7 +185,8 @@ The cumulative command surface is:
 | `addtotals` | row-only total over explicit fields (`SPL-ADDTOTALS-001`) |
 | `delta` | difference from 1 through 10,000 established rows earlier (`SPL-DELTA-001`) |
 | `makemv` | literal-delimiter String splitting (`SPL-MAKEMV-001`) |
-| `mvexpand` | bounded ordered String-list expansion (`SPL-MVEXPAND-001`) |
+| `mvexpand` | bounded ordered native-list expansion (`SPL-MVEXPAND-001`) |
+| `nomv` | newline-separated display without changing the typed list (`SPL-NOMV-001`) |
 | `lookup` | immutable exact CSV enrichment (`SPL-LOOKUP-SYNTAX-001`) |
 
 Command fields are exact and case-sensitive. The `__os_` namespace is private;
@@ -159,6 +198,38 @@ Order-sensitive commands consume an established total order. Sort, projection,
 rename, aggregation, expansion, and limit operations either preserve or
 deliberately replace private lineage. Hard failures in regex, multivalue,
 lookup, arithmetic, or resource validation publish no schema or partial rows.
+
+### `spath` multivalue extraction
+
+An `spath` step may select no array, one fixed zero-based array index, or every
+member with `{}`. Wildcards are valid at any step, including
+`groups{}.users{}.name`; at most four total fixed or wildcard array selectors
+may appear in one path. Multiple wildcards flatten depth-first in source array
+order. Missing keys and non-array wildcard branches are skipped, while
+explicit null leaves are retained. A matched empty terminal array produces a
+present empty multivalue. Terminal objects, terminal nested arrays, and other
+unsupported members fail the row atomically instead of publishing a partial
+list.
+
+Wildcard extraction preserves each supported JSON scalar's native type and
+uses the same exact JSON-number classification as scalar `spath`. The existing
+1 MiB input and 16,384-token guards remain, and one extraction may publish at
+most 1,000 members. If no wildcard branch matches, an existing multivalue
+output is preserved. An existing scalar or container output is an atomic
+unsupported-type failure; a previously absent output remains absent.
+
+### `nomv`
+
+`nomv field` marks one exact public field for newline-separated flat display.
+It is row-preserving and does not replace the authoritative typed multivalue:
+downstream SPL, grouping, paging, APIs, and exports continue to use the list.
+Mixed native members are displayed with the canonical text rules above.
+
+For a runtime-typed field, `nomv` validates and normalizes an actual supported
+list into sealed multivalue transport. Missing and null remain distinct;
+present non-list scalars, objects, and nested containers fail atomically. The
+presentation mark survives projection and follows rename, is cleared when the
+field is overwritten, and can be reapplied by a later `nomv`.
 
 ### Statistical surface
 

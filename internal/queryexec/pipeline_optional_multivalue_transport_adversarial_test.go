@@ -42,7 +42,7 @@ func TestPipelineRealMakeMVCompilerTransportPublishesNullEmptyAndOrderedMembers(
 		!sink.schema.Columns[1].Nullable || !sink.schema.Columns[1].Multivalue {
 		t.Fatalf("public makemv schema = %#v", sink.schema)
 	}
-	if len(sink.rows) != 3 || !sink.rows[0][1].IsNull() {
+	if len(sink.rows) != 3 || !sink.rows[0][1].IsMissing() {
 		t.Fatalf("public makemv rows = %#v", sink.rows)
 	}
 	empty, emptyOK := sink.rows[1][1].List()
@@ -81,21 +81,23 @@ func TestPipelineOptionalMultivalueTransportDistinguishesNullEmptyAndMembers(t *
 	tests := []struct {
 		name    string
 		raw     []string
-		present uint8
+		state   uint8
 		want    []string
+		missing bool
 		null    bool
 	}{
-		{name: "missing or explicit null", raw: []string{}, present: 0, null: true},
-		{name: "present typed empty", raw: []string{}, present: 1, want: []string{}},
-		{name: "ordered Unicode and empty members", raw: []string{"a", "", "界", "a"}, present: 1, want: []string{"a", "", "界", "a"}},
+		{name: "missing", raw: []string{}, state: 0, missing: true},
+		{name: "explicit null", raw: []string{}, state: 2, null: true},
+		{name: "present typed empty", raw: []string{}, state: 1, want: []string{}},
+		{name: "ordered Unicode and empty members", raw: []string{"a", "", "界", "a"}, state: 1, want: []string{"a", "", "界", "a"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			raw := slices.Clone(test.raw)
-			present := test.present
+			state := test.state
 			value, convertErr := convertOptionalMultivalueOutput(
-				[]any{new(string), &raw, &present},
+				[]any{new(string), &raw, &state},
 				1,
 				optional[1],
 			)
@@ -105,6 +107,12 @@ func TestPipelineOptionalMultivalueTransportDistinguishesNullEmptyAndMembers(t *
 			if test.null {
 				if !value.IsNull() {
 					t.Fatalf("absent value = %#v, want explicit public null", value)
+				}
+				return
+			}
+			if test.missing {
+				if !value.IsMissing() {
+					t.Fatalf("absent value = %#v, want public missing", value)
 				}
 				return
 			}
@@ -135,7 +143,7 @@ func TestPipelineOptionalMultivalueTransportRejectsForgedNativeValues(t *testing
 	payload := []string{"secret-prefix"}
 	zero := uint8(0)
 	one := uint8(1)
-	two := uint8(2)
+	three := uint8(3)
 	wrongPresence := uint16(1)
 	wrongValue := []uint8{1}
 	invalidUTF8 := []string{string([]byte{0xff})}
@@ -144,7 +152,7 @@ func TestPipelineOptionalMultivalueTransportRejectsForgedNativeValues(t *testing
 		destinations []any
 	}{
 		{name: "absent retains payload", destinations: []any{&payload, &zero}},
-		{name: "presence outside Boolean domain", destinations: []any{&empty, &two}},
+		{name: "state outside tri-state domain", destinations: []any{&empty, &three}},
 		{name: "presence native type", destinations: []any{&empty, &wrongPresence}},
 		{name: "value native type", destinations: []any{&wrongValue, &one}},
 		{name: "invalid UTF-8 member", destinations: []any{&invalidUTF8, &one}},
@@ -175,7 +183,7 @@ func TestPipelineOptionalMultivalueTransportRejectsLateForgedRowAtomically(t *te
 		types:   pipelineOptionalMultivalueColumnTypes(descriptor),
 		data: [][]any{
 			{"would-leak-without-barrier", []string{"visible-prefix"}, uint8(1)},
-			{"malformed-late-row", []string{}, uint8(2)},
+			{"malformed-late-row", []string{}, uint8(3)},
 		},
 	}
 	sink := &fakeSink{}

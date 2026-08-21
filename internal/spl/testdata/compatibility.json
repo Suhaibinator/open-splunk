@@ -2262,7 +2262,7 @@
     },
     "evidence.optional-multivalue": {
       "runner": "evidence",
-      "evidence": "queryexec-optional-multivalue-two-row-transport",
+      "evidence": "queryexec-optional-multivalue-four-state-transport",
       "targets": [
         {
           "path": "internal/queryexec/pipeline_optional_multivalue_transport_adversarial_test.go",
@@ -2270,6 +2270,7 @@
         }
       ],
       "assertions": [
+        "missing",
         "present typed empty",
         "ordered Unicode and empty members"
       ],
@@ -2283,6 +2284,11 @@
           }
         ],
         "rows": [
+          [
+            {
+              "missing": true
+            }
+          ],
           [
             {
               "null": true
@@ -2316,7 +2322,7 @@
     },
     "evidence.invalid-presence": {
       "runner": "evidence",
-      "evidence": "optional-multivalue-presence-bit-2",
+      "evidence": "optional-multivalue-tri-state-3",
       "targets": [
         {
           "path": "internal/queryexec/pipeline_optional_multivalue_transport_adversarial_test.go",
@@ -2328,7 +2334,7 @@
         }
       ],
       "assertions": [
-        "presence outside Boolean domain",
+        "state outside tri-state domain",
         "malformed-late-row"
       ],
       "failure": {
@@ -4292,6 +4298,81 @@
       ]
     },
     {
+      "id": "SPL-MULTIVALUE-EVAL-001",
+      "summary": "Seven bounded eval functions construct and consume ordered type-sensitive native multivalues.",
+      "cases": [
+        {
+          "name": "empty delimiter splits Unicode characters",
+          "source": "index=main | eval characters=split(message, \"\")",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "append flattens once and dedup preserves first native occurrence",
+          "source": "index=main | eval values=mvdedup(mvappend(split(message, \",\"), 1, 1.0, true, null))",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "signed scalar and inclusive range indexing",
+          "source": "index=main | eval values=split(message, \",\"), last=mvindex(values, -1), span=mvindex(values, -3, -1)",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "canonical join and shortest zip",
+          "source": "index=main | eval left=mvappend(1, true, null), right=split(message, \",\"), joined=mvjoin(left, \"|\"), default_pairs=mvzip(left, right), named_pairs=mvzip(left, right, \"::\")",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "literal RE2 returns first matching index",
+          "source": "index=main | eval values=split(message, \",\"), found=mvfind(values, \"(?i)^api\")",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "wildcard extraction eval expansion and grouping compose",
+          "source": "index=main | spath path=users{} output=users | eval users=mvdedup(users), first_user=mvindex(users, 0), user_list=mvjoin(users, \",\") | mvexpand users | stats count BY users",
+          "expect": {
+            "parse": "accept"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-SPATH-MULTIVALUE-001",
+      "summary": "Spath wildcard selectors flatten bounded native JSON scalar matches in depth-first source order.",
+      "cases": [
+        {
+          "name": "terminal wildcard array",
+          "source": "index=main | spath path=users{} output=users",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "multiple nested wildcards",
+          "source": "index=main | spath input=payload path=groups{}.users{}.name output=names",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "fixed and wildcard selectors compose",
+          "source": "index=main | spath input=payload path=groups{0}.users{}.name output=names",
+          "expect": {
+            "parse": "accept"
+          }
+        }
+      ]
+    },
+    {
       "id": "SPL-MAKEMV-001",
       "summary": "Makemv constructs a bounded optional typed String List with literal delimiter semantics.",
       "cases": [
@@ -4329,6 +4410,33 @@
           "source": "index=main | makemv delim=\"\" tags",
           "expect": {
             "diagnostic": "SPL_UNSUPPORTED_MAKEMV_SYNTAX"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-NOMV-001",
+      "summary": "Nomv applies newline flat display metadata while preserving the authoritative native multivalue.",
+      "cases": [
+        {
+          "name": "downstream grouping still consumes the typed list",
+          "source": "index=main | eval values=mvappend(\"a\", 1, true, null) | nomv values | stats count BY values",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "presentation follows projection and rename",
+          "source": "index=main | eval values=split(message, \",\") | nomv values | fields values | rename values AS labels | stats count BY labels",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "overwrite clears and later nomv reapplies presentation",
+          "source": "index=main | eval values=split(message, \",\") | nomv values | eval values=mvappend(values, false) | nomv values",
+          "expect": {
+            "parse": "accept"
           }
         }
       ]
@@ -4393,11 +4501,18 @@
     },
     {
       "id": "SPL-MULTIVALUE-TYPE-001",
-      "summary": "A sealed presence sidecar distinguishes null from present empty typed String Lists.",
+      "summary": "Sealed optional Array(String) and Array(Dynamic) transport preserves native members and distinguishes missing, null, and present empty lists.",
       "cases": [
         {
-          "name": "null versus empty",
-          "evidence": "queryexec-optional-multivalue-two-row-transport",
+          "name": "mixed native scalar list",
+          "source": "index=main | eval values=mvappend(\"raw\", 1, 1.0, true, null)",
+          "expect": {
+            "parse": "accept"
+          }
+        },
+        {
+          "name": "missing versus null versus empty",
+          "evidence": "queryexec-optional-multivalue-four-state-transport",
           "fixture": "evidence.optional-multivalue",
           "expect": {
             "type": "nullable-list-string",
@@ -4409,7 +4524,7 @@
         },
         {
           "name": "invalid presence fails",
-          "evidence": "optional-multivalue-presence-bit-2",
+          "evidence": "optional-multivalue-tri-state-3",
           "fixture": "evidence.invalid-presence",
           "expect": {
             "atomic": true,

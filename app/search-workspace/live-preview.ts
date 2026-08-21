@@ -300,7 +300,6 @@ function validateRows(
         if (
           !column.nullable
           && column.valueType !== ValueType.VALUE_TYPE_MISSING
-          && column.valueType !== ValueType.VALUE_TYPE_MIXED
         ) {
           return `Preview row ${rowIndex + 1}, column ${cellIndex + 1} is missing in a non-nullable column.`;
         }

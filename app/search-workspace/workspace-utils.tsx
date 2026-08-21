@@ -262,6 +262,15 @@ export function formatFieldValue(value: DemoScalar): string {
   return typeof value === "boolean" ? (value ? "true" : "false") : String(value);
 }
 
+/** Preserve adapted nomv newlines without changing ordinary compact fields. */
+export function eventFieldValueWhiteSpace(
+  value: DemoScalar,
+): "nowrap" | "pre-wrap" {
+  return typeof value === "string" && /[\r\n]/u.test(value)
+    ? "pre-wrap"
+    : "nowrap";
+}
+
 export function phaseLabel(phase: JobPhase): string {
   switch (phase) {
     case "queued": return "Queued";

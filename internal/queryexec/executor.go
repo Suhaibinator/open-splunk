@@ -2881,6 +2881,8 @@ var executionLimitMarkers = [...]struct {
 	{clickhouse.RexCaptureLimitMarker, "rex capture bytes exceeded the per-row limit"},
 	{clickhouse.SpathInputLimitMarker, "spath input bytes exceeded the per-row limit"},
 	{clickhouse.SpathJSONTokenLimitMarker, "spath JSON tokens exceeded the per-row limit"},
+	{clickhouse.NativeMVMembersLimitMarker, "native multivalue members exceeded the per-row limit"},
+	{clickhouse.NativeMVPayloadLimitMarker, "native multivalue payload exceeded the per-row limit"},
 	{clickhouse.ChartRowLimitMarker, "chart row values exceeded the supported limit"},
 	{clickhouse.EventStatsInputLimitMarker, "eventstats input rows exceeded the supported limit"},
 	{clickhouse.StreamStatsInputLimitMarker, "streamstats input rows exceeded the supported limit"},
@@ -2938,6 +2940,7 @@ func classifyQueryError(ctx context.Context, err error) error {
 			strings.Contains(exception.Message, clickhouse.UnsupportedDedupValueMarker) ||
 			strings.Contains(exception.Message, clickhouse.UnsupportedNumericBinValueMarker) ||
 			strings.Contains(exception.Message, clickhouse.UnsupportedSpathValueMarker) ||
+			strings.Contains(exception.Message, clickhouse.UnsupportedNativeMVValueMarker) ||
 			strings.Contains(exception.Message, clickhouse.KnowledgeSelectorInvalidUTF8Marker) ||
 			strings.Contains(exception.Message, clickhouse.UnsupportedMakeMVValueMarker) ||
 			strings.Contains(exception.Message, clickhouse.UnsupportedMVExpandValueMarker)) {

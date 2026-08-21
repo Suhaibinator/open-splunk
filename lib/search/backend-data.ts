@@ -13,6 +13,7 @@ import type {
 } from "@/lib/demo/search-data";
 import { assertBrowserResultColumnCount } from "@/lib/api/pagination";
 import { validFlatMultivalueColumnPresentation } from "@/lib/api/result-column-presentation";
+import { flatMultivalueDisplay } from "@/lib/search/multivalue-presentation";
 
 export type SearchDataMode = "backend" | "demo";
 
@@ -228,7 +229,18 @@ function rowFields(
       });
       return;
     }
-    fields[column.fieldName] = jsonToScalar(typedValueToJSON(value));
+    const decoded = typedValueToJSON(value);
+    if (column.flatMultivalueDelimiter !== undefined && decoded !== null) {
+      const flat = flatMultivalueDisplay(decoded, column.flatMultivalueDelimiter);
+      if (flat === undefined) {
+        throw new RangeError(
+          `Search result column “${column.fieldName}” has an unsupported flat multivalue cell.`,
+        );
+      }
+      fields[column.fieldName] = flat;
+    } else {
+      fields[column.fieldName] = jsonToScalar(decoded);
+    }
     pivotableFields[column.fieldName] = typedValueIsPivotable(value);
   });
   return { fields, pivotableFields };

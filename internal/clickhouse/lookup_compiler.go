@@ -1000,7 +1000,7 @@ func compileLookupKey(
 				strconv.Itoa(int(eventfields.StoredValueTypeString)) + ")"
 		}
 		return valueSQL, eligible, append([]any(nil), field.existsArgs...), nil
-	case fieldKindStringArray:
+	case fieldKindStringArray, fieldKindDynamicArray:
 		// Multivalue keys have the documented no-match behavior. They neither
 		// fan out nor raise a runtime error.
 		return "CAST(NULL AS Nullable(String))", "0", nil, nil

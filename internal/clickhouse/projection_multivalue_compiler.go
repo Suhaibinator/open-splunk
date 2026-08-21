@@ -189,16 +189,25 @@ func compileFillNull(
 				value.kind = fieldKindDynamic
 				value.dynamicDomain = dynamicScalarDomainAny
 				value.valueArgs = append(valueArgs, operator.Value)
-			case fieldKindNumber, fieldKindBool, fieldKindTime, fieldKindStringArray:
+			case fieldKindNumber, fieldKindBool, fieldKindTime:
 				valueSQL = "if((" + existsSQL + ") AND isNotNull(" +
 					field.valueSQL + "), CAST(" + field.valueSQL + " AS Dynamic), " +
 					"CAST(" + fill + " AS Dynamic))"
 				value.kind = fieldKindDynamic
+			case fieldKindStringArray, fieldKindDynamicArray:
+				// Physical arrays cannot distinguish an explicit null from a
+				// present-empty list. Preserve the latter and fill the former by
+				// consulting the sealed logical-presence sidecar.
+				presentSQL, presentArgs := logicalFieldPresenceSQL(field)
+				valueSQL = "if(" + presentSQL + ", CAST(" + field.valueSQL +
+					" AS Dynamic), CAST(" + fill + " AS Dynamic))"
+				value.kind = fieldKindDynamic
+				value.valueArgs = append(presentArgs, operator.Value)
 			default:
 				valueSQL = fill
 			}
 			value.valueSQL = valueSQL
-			if field.kind != fieldKindDynamic {
+			if field.kind != fieldKindDynamic && !isNativeMultivalueKind(field.kind) {
 				value.valueArgs = append(append([]any(nil), field.existsArgs...), operator.Value)
 			}
 			value.maxStringBytes = max(value.maxStringBytes, field.maxStringBytes)
@@ -1178,6 +1187,7 @@ func compileExpandMultivalue(
 	}
 
 	inputAlias := quoteIdentifier(fmt.Sprintf("__os_mvexpand_input_%d", stage))
+	sourceExistsAlias := quoteIdentifier(fmt.Sprintf("__os_mvexpand_source_exists_%d", stage))
 	sourcePresentAlias := quoteIdentifier(fmt.Sprintf("__os_mvexpand_source_present_%d", stage))
 	descendantAlias := quoteIdentifier(fmt.Sprintf("__os_mvexpand_descendant_%d", stage))
 	valuesAlias := quoteIdentifier(fmt.Sprintf("__os_mvexpand_values_%d", stage))
@@ -1190,9 +1200,11 @@ func compileExpandMultivalue(
 	anyInvalidAlias := quoteIdentifier(fmt.Sprintf("__os_mvexpand_any_invalid_%d", stage))
 	memberOrdinalAlias := quoteIdentifier(fmt.Sprintf("__os_mvexpand_member_ordinal_%d", stage))
 	expandedPairAlias := quoteIdentifier(fmt.Sprintf("__os_mvexpand_pair_%d", stage))
+	expandedExistsAlias := quoteIdentifier(fmt.Sprintf("__os_mvexpand_exists_%d", stage))
 
 	inputSQL := "CAST(NULL AS Nullable(String))"
 	existsSQL := "0"
+	presentSQL := "0"
 	descendantSQL := "0"
 	prefixArgs := make([]any, 0)
 	kind := fieldKindInvalid
@@ -1202,17 +1214,25 @@ func compileExpandMultivalue(
 		if existsSQL == "" {
 			existsSQL = "1"
 		}
+		presentSQL = existsSQL
+		if isNativeMultivalueKind(field.kind) && field.optionalMultivaluePresentSQL != "" {
+			presentSQL = field.optionalMultivaluePresentSQL
+		}
 		descendantSQL = field.descendantSQL
 		if descendantSQL == "" {
 			descendantSQL = "0"
 		}
 		prefixArgs = append(prefixArgs, field.existsArgs...)
+		if presentSQL == existsSQL {
+			prefixArgs = append(prefixArgs, field.existsArgs...)
+		}
 		prefixArgs = append(prefixArgs, field.descendantArgs...)
 		kind = field.kind
 	}
 	boundAlias := quoteIdentifier(fmt.Sprintf("_stage_%d_mvexpand_bound", stage))
 	boundSQL := "SELECT *, " + inputSQL + " AS " + inputAlias + ", " +
-		"toUInt8(ifNull(" + existsSQL + ", 0)) AS " + sourcePresentAlias + ", " +
+		"toUInt8(ifNull(" + existsSQL + ", 0)) AS " + sourceExistsAlias + ", " +
+		"toUInt8(ifNull(" + presentSQL + ", 0)) AS " + sourcePresentAlias + ", " +
 		"toUInt8(ifNull(" + descendantSQL + ", 0)) AS " + descendantAlias +
 		" FROM (" + ordered.sql + ") AS " + boundAlias
 	bound := ordered.selectFrom(boundSQL, operator.Range)
@@ -1221,7 +1241,7 @@ func compileExpandMultivalue(
 	var valuesSQL string
 	invalidSQL := descendantAlias + " != 0"
 	output := compiledScalar{
-		valueSQL: outputName, existsSQL: "1", kind: fieldKindDynamic,
+		valueSQL: outputName, existsSQL: expandedExistsAlias, kind: fieldKindDynamic,
 		dynamicDomain: dynamicScalarDomainAny,
 	}
 	switch kind {
@@ -1243,10 +1263,26 @@ func compileExpandMultivalue(
 			" != 0 AND (NOT " + arrayEligible + " OR arrayExists(value -> " +
 			"NOT isValidUTF8(value), " + inputAlias + "))))"
 		output = compiledScalar{
-			valueSQL: outputName, existsSQL: "1", kind: fieldKindString,
+			valueSQL: outputName, existsSQL: expandedExistsAlias, kind: fieldKindString,
 			maxStringBytes: field.maxStringBytes,
 			textEligibleSQL: "isValidUTF8(ifNull(" + outputName +
 				", CAST('' AS String)))",
+		}
+	case fieldKindDynamicArray:
+		// A sealed native mixed list is already Array(Dynamic). Preserve every
+		// admitted scalar member (including explicit None) as the expanded
+		// Dynamic value, while an absent list still contributes the command's
+		// single null-preservation row and a present-empty list contributes none.
+		valuesSQL = "if(" + sourcePresentAlias +
+			" = 0, [CAST(NULL AS Dynamic)], " + inputAlias + ")"
+		memberUnsupported := "arrayExists(member -> NOT (" +
+			nativeMVElementSupportedSQL("member") + "), " + inputAlias + ")"
+		invalidSQL = "(" + descendantAlias + " != 0 OR (" + sourcePresentAlias +
+			" != 0 AND " + memberUnsupported + "))"
+		output = compiledScalar{
+			valueSQL: outputName, existsSQL: expandedExistsAlias, kind: fieldKindDynamic,
+			dynamicDomain:  dynamicScalarDomainAny,
+			maxStringBytes: field.maxStringBytes,
 		}
 	case fieldKindDynamic:
 		typeSQL := "dynamicType(" + inputAlias + ")"
@@ -1255,8 +1291,7 @@ func compileExpandMultivalue(
 		}
 		dynamicMembers := "dynamicElement(" + inputAlias + ", 'Array(Dynamic)')"
 		stringMembers := "dynamicElement(" + inputAlias + ", 'Array(String)')"
-		memberSupported := "(dynamicType(member) = 'None' OR (dynamicType(member) = 'String' AND " +
-			"isValidUTF8(dynamicElement(member, 'String'))))"
+		memberSupported := nativeMVElementSupportedSQL("member")
 		arrayUnsupported := "arrayExists(member -> NOT (" + memberSupported + "), " +
 			dynamicMembers + ")"
 		listEligible := semanticSourceTypeEligibleSQL(
@@ -1301,7 +1336,7 @@ func compileExpandMultivalue(
 		}
 		output = compiledScalar{
 			valueSQL:        outputName,
-			existsSQL:       "1",
+			existsSQL:       expandedExistsAlias,
 			kind:            kind,
 			textEligibleSQL: field.textEligibleSQL,
 			storedTypeSQL:   field.storedTypeSQL,
@@ -1366,7 +1401,7 @@ func compileExpandMultivalue(
 
 	expandAlias := quoteIdentifier(fmt.Sprintf("_stage_%d_mvexpand_rows", stage))
 	helpers := []string{
-		inputAlias, sourcePresentAlias, descendantAlias, valuesAlias, selectedAlias,
+		inputAlias, sourceExistsAlias, sourcePresentAlias, descendantAlias, valuesAlias, selectedAlias,
 		invalidAlias, rowMembersAlias, stageRowsAlias, retainedBytesAlias,
 		anyInvalidAlias,
 	}
@@ -1381,6 +1416,7 @@ func compileExpandMultivalue(
 		authoredFieldPhysicallyPublic(next, operator.Input.Name),
 	)
 	expandedSQL := "SELECT " + projection + ", " + memberOrdinalSQL + " AS " + memberOrdinalAlias +
+		", " + sourceExistsAlias + " AS " + expandedExistsAlias +
 		" FROM (" + guarded.sql + ") AS " + expandAlias + " ARRAY JOIN " +
 		"arrayZip(" + selectedAlias + ", arrayEnumerate(" + selectedAlias +
 		")) AS " + expandedPairAlias
@@ -1394,7 +1430,7 @@ func compileExpandMultivalue(
 	outputField.caseSensitive = field.caseSensitive
 	next.visible[operator.Input.Name] = outputField
 	next.mvExpandQueryRowsSQL = queryRowsAlias
-	next.privateColumns = append(next.privateColumns, queryRowsAlias, memberOrdinalAlias)
+	next.privateColumns = append(next.privateColumns, queryRowsAlias, memberOrdinalAlias, expandedExistsAlias)
 	next.order = append(next.order, compiledSortKey{valueSQL: memberOrdinalAlias})
 	next.tieBreakers = append(next.tieBreakers, compiledSortKey{valueSQL: memberOrdinalAlias})
 	state.context.mvExpandStages = operator.QueryOrdinal
