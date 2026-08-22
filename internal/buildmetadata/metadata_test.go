@@ -41,6 +41,26 @@ func TestValidateAcceptsCompleteConsistentBuild(t *testing.T) {
 	}
 }
 
+func TestValidateAcceptsCanonicalReleaseVersion(t *testing.T) {
+	t.Parallel()
+
+	metadata := validMetadata(t)
+	version := "0.3.4"
+	metadata.ProductVersion = &version
+	identity, err := Validate(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.ProductVersion != version {
+		t.Fatalf("identity = %+v", identity)
+	}
+	invalid := "1.0.0"
+	metadata.ProductVersion = &invalid
+	if _, err := Validate(metadata); err == nil {
+		t.Fatal("Validate accepted a non-v0 product version")
+	}
+}
+
 func TestNormalizeClonesMetadata(t *testing.T) {
 	t.Parallel()
 

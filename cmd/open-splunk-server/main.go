@@ -181,6 +181,9 @@ func runWithOptions(config options) error {
 		SqliteMigrationsSha256:     release.Metadata.SQLiteMigrations.SHA256,
 		ClickhouseMigrationsSha256: release.Metadata.ClickHouseMigrations.SHA256,
 	}
+	if release.Metadata.ProductVersion != "" {
+		buildMetadata.ProductVersion = &release.Metadata.ProductVersion
+	}
 	exportSettings := defaultExportRuntimeSettings()
 	if err := exportSettings.validate(); err != nil {
 		return fmt.Errorf("validate export runtime: %w", err)
@@ -861,7 +864,7 @@ func runWithOptions(config options) error {
 		httpServer,
 		requests,
 		browserHandler,
-		collectorServer,
+		optionalRuntimeGRPCServer(collectorServer),
 		collectorListener,
 		shutdownTimeout,
 		collectorShutdownGraceTimeout,
@@ -890,6 +893,7 @@ func writeEmbeddedReleaseVerification(
 	}
 	if err := buildinfo.WriteIdentity(output, buildinfo.Identity{
 		SourceRevision: release.Metadata.SourceRevision,
+		ProductVersion: release.Metadata.ProductVersion,
 	}); err != nil {
 		return err
 	}

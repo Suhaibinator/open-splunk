@@ -51,6 +51,7 @@ type MigrationMetadata struct {
 type ReleaseMetadata struct {
 	FormatVersion        uint32
 	SourceRevision       string
+	ProductVersion       string
 	UIBuildID            string
 	UI                   ComponentMetadata
 	ProtobufSchema       ComponentMetadata
@@ -86,7 +87,10 @@ func loadRelease(filesystem fs.FS, expectedIdentity buildinfo.Identity) (Release
 	if filesystem == nil {
 		return Release{}, errors.New("load embedded release: filesystem is required")
 	}
-	expectedIdentity, err := buildinfo.Parse(expectedIdentity.SourceRevision)
+	expectedIdentity, err := buildinfo.ParseRelease(
+		expectedIdentity.SourceRevision,
+		expectedIdentity.ProductVersion,
+	)
 	if err != nil {
 		return Release{}, fmt.Errorf("load embedded release: invalid compiled identity: %w", err)
 	}
@@ -98,15 +102,20 @@ func loadRelease(filesystem fs.FS, expectedIdentity buildinfo.Identity) (Release
 	if err != nil {
 		return Release{}, fmt.Errorf("load embedded release: %w", err)
 	}
-	manifestIdentity, err := buildinfo.Parse(manifest.SourceRevision)
+	manifestIdentity, err := buildinfo.ParseRelease(
+		manifest.SourceRevision,
+		manifest.ProductVersion,
+	)
 	if err != nil {
 		return Release{}, fmt.Errorf("load embedded release: invalid manifest identity: %w", err)
 	}
 	if !manifestIdentity.Equal(expectedIdentity) {
 		return Release{}, fmt.Errorf(
-			"load embedded release: manifest source revision %s does not match compiled source revision %s",
+			"load embedded release: manifest source revision %s product version %q does not match compiled source revision %s product version %q",
 			manifestIdentity.SourceRevision,
+			manifestIdentity.ProductVersion,
 			expectedIdentity.SourceRevision,
+			expectedIdentity.ProductVersion,
 		)
 	}
 	if err := buildassets.Validate(filesystem, manifest); err != nil {
@@ -121,6 +130,7 @@ func loadRelease(filesystem fs.FS, expectedIdentity buildinfo.Identity) (Release
 		Metadata: ReleaseMetadata{
 			FormatVersion:  manifest.FormatVersion,
 			SourceRevision: manifest.SourceRevision,
+			ProductVersion: manifest.ProductVersion,
 			UIBuildID:      manifest.UIBuildID,
 			UI: ComponentMetadata{
 				SHA256: manifest.UI.SHA256, FileCount: manifest.UI.FileCount, ByteCount: manifest.UI.ByteCount,

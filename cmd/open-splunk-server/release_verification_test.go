@@ -13,6 +13,7 @@ func TestEmbeddedReleaseVerificationIncludesSourceIdentity(t *testing.T) {
 
 	release := opensplunk.Release{Metadata: opensplunk.ReleaseMetadata{
 		SourceRevision: strings.Repeat("a", 40),
+		ProductVersion: "0.4.5",
 		UIBuildID:      "ui-build",
 		UI: opensplunk.ComponentMetadata{
 			SHA256: strings.Repeat("b", 64),
@@ -23,6 +24,7 @@ func TestEmbeddedReleaseVerificationIncludesSourceIdentity(t *testing.T) {
 		t.Fatalf("writeEmbeddedReleaseVerification() error = %v", err)
 	}
 	want := "source_revision=" + strings.Repeat("a", 40) + "\n" +
+		"product_version=0.4.5\n" +
 		"ui_build_id=ui-build\n" +
 		"ui_sha256=" + strings.Repeat("b", 64) + "\n"
 	if output.String() != want {

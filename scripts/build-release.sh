@@ -15,6 +15,12 @@ if [[ $# -ne 0 ]]; then
 fi
 
 : "${OPEN_SPLUNK_SOURCE_REVISION:?OPEN_SPLUNK_SOURCE_REVISION is required}"
+OPEN_SPLUNK_PRODUCT_VERSION=${OPEN_SPLUNK_PRODUCT_VERSION:-}
+if [[ -n "$OPEN_SPLUNK_PRODUCT_VERSION" &&
+      ! "$OPEN_SPLUNK_PRODUCT_VERSION" =~ ^0\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+  echo "error: OPEN_SPLUNK_PRODUCT_VERSION must be empty or canonical 0.MINOR.PATCH" >&2
+  exit 1
+fi
 
 git_repo() {
   env \
@@ -275,6 +281,7 @@ RELEASE_ENVIRONMENT=(
 
 "${RELEASE_ENVIRONMENT[@]}" make -C "$SOURCE_ROOT" build build-loggen \
     OPEN_SPLUNK_DATA_MODE=backend \
+    OPEN_SPLUNK_PRODUCT_VERSION="$OPEN_SPLUNK_PRODUCT_VERSION" \
     OPEN_SPLUNK_SOURCE_REVISION="$HEAD_REVISION"
 
 for artifact in open-splunk-server open-splunk-collector open-splunk-loggen; do
@@ -323,9 +330,15 @@ install -m 0755 "$SOURCE_ROOT/build/open-splunk-loggen" "$PUBLISH_ROOT/open-splu
 install -m 0644 "$SOURCE_ROOT/out/asset-manifest.json" "$PUBLISH_ROOT/asset-manifest.json"
 
 EXPECTED_IDENTITY="$WORK_ROOT/expected-identity.txt"
-printf 'source_revision=%s\n' "$HEAD_REVISION" >"$EXPECTED_IDENTITY"
+{
+  printf 'source_revision=%s\n' "$HEAD_REVISION"
+  if [[ -n "$OPEN_SPLUNK_PRODUCT_VERSION" ]]; then
+    printf 'product_version=%s\n' "$OPEN_SPLUNK_PRODUCT_VERSION"
+  fi
+} >"$EXPECTED_IDENTITY"
 "$PUBLISH_ROOT/open-splunk-server" -verify-embedded-release >"$PUBLISH_ROOT/release-verification.txt"
-sed -n '1p' "$PUBLISH_ROOT/release-verification.txt" >"$WORK_ROOT/server-identity.txt"
+sed -n "/^source_revision=/p; /^product_version=/p" \
+  "$PUBLISH_ROOT/release-verification.txt" >"$WORK_ROOT/server-identity.txt"
 cmp "$EXPECTED_IDENTITY" "$WORK_ROOT/server-identity.txt"
 "$PUBLISH_ROOT/open-splunk-collector" version >"$WORK_ROOT/collector-identity.txt"
 cmp "$EXPECTED_IDENTITY" "$WORK_ROOT/collector-identity.txt"

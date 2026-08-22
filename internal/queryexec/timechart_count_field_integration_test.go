@@ -11,6 +11,7 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
+	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 )
 
@@ -429,7 +430,8 @@ func queryIntegrationInsertTimechartCountFieldEvents(
 	t.Helper()
 	query := "INSERT INTO open_splunk.events (event_id, tenant_id, index_name, event_time, index_time, " +
 		"collected_at, event_time_source, host, source, sourcetype, service, severity, level, body, raw, " +
-		"raw_encoding, trace_id, span_id, fields, field_names, collector_id, batch_id, batch_sequence, " +
+		"raw_encoding, trace_id, span_id, fields, field_names, field_types, field_metadata_version, " +
+		"collector_id, ingest_source_kind, ingest_source_id, batch_id, batch_sequence, " +
 		"expires_at, visibility_seq)"
 	batch, err := connection.PrepareBatch(ctx, query)
 	if err != nil {
@@ -539,6 +541,22 @@ func queryIntegrationInsertTimechartCountFieldEvents(
 			fieldNames = append(fieldNames, "occurrence")
 		}
 		slices.Sort(fieldNames)
+		fieldTypes := make([]uint8, len(fieldNames))
+		for fieldIndex, fieldName := range fieldNames {
+			switch fieldName {
+			case "occurrence":
+				fieldTypes[fieldIndex] = queryIntegrationStoredType(t, event.occurrence)
+			case "occurrence.child":
+				fieldTypes[fieldIndex] = uint8(eventfields.StoredValueTypeString)
+			case "segment":
+				fieldTypes[fieldIndex] = queryIntegrationStoredType(
+					t,
+					queryIntegrationCountFieldDynamic(event.segment),
+				)
+			default:
+				t.Fatalf("unsupported timechart count(field) fixture field %q", fieldName)
+			}
+		}
 		tenant := event.tenant
 		if tenant == "" {
 			tenant = "tenant"
@@ -573,6 +591,10 @@ func queryIntegrationInsertTimechartCountFieldEvents(
 			nil,
 			document,
 			fieldNames,
+			fieldTypes,
+			eventfields.CurrentFieldMetadataVersion,
+			"collector",
+			uint8(1),
 			"collector",
 			"timechart-count-field-batch",
 			uint64(index+1),

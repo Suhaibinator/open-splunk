@@ -1,4 +1,4 @@
-.PHONY: build release oci build-ui build-server build-collector build-loggen docs-check lint proto proto-lint proto-tools release-go-deps test clean
+.PHONY: build release oci build-ui build-server build-collector build-loggen dev-tools dev-build-server dev-clickhouse dev-down run docs-check lint proto proto-lint proto-tools release-go-deps test clean
 
 override PROTOC_GEN_GO_VERSION := v1.36.12
 override PROTOC_GEN_GO_GRPC_VERSION := v1.6.2
@@ -20,7 +20,7 @@ override RELEASE_GIT_ENV := env \
 	GIT_CONFIG_NOSYSTEM=1 \
 	GIT_NO_REPLACE_OBJECTS=1 \
 	GIT_OPTIONAL_LOCKS=0
-override GO_TOOL_ENV := env \
+override BASE_GO_TOOL_ENV := env \
 	-u GO386 \
 	-u GOARCH \
 	-u GOARM \
@@ -45,18 +45,23 @@ override GO_TOOL_ENV := env \
 	GOFLAGS= \
 	GOTOOLCHAIN=local \
 	GOWORK=off
+override GO_TOOL_ENV := $(BASE_GO_TOOL_ENV)
 # SQLite-backed tests use go-sqlite3, while release binaries remain pure-Go.
 # Override only the test invocation so build and publication tooling stays
 # reproducibly CGO-disabled.
 override GO_TEST_ENV := $(GO_TOOL_ENV) CGO_ENABLED=1
+override DEVELOPMENT_ENV_FILE := $(CURDIR)/deploy/.env.development
+override DEVELOPMENT_COMPOSE := docker compose --project-name open-splunk-development --env-file $(DEVELOPMENT_ENV_FILE) -f $(CURDIR)/deploy/docker-compose.yaml -f $(CURDIR)/deploy/docker-compose.development.yaml
 OPEN_SPLUNK_DATA_MODE ?= backend
 OPEN_SPLUNK_SOURCE_REVISION ?= development
+OPEN_SPLUNK_PRODUCT_VERSION ?=
 override BUILDINFO_PACKAGE := github.com/Suhaibinator/open-splunk/internal/buildinfo
-override GO_BUILD_LDFLAGS = -X $(BUILDINFO_PACKAGE).sourceRevision=$(OPEN_SPLUNK_SOURCE_REVISION)
+override GO_BUILD_LDFLAGS = -X $(BUILDINFO_PACKAGE).sourceRevision=$(OPEN_SPLUNK_SOURCE_REVISION) -X $(BUILDINFO_PACKAGE).productVersion=$(OPEN_SPLUNK_PRODUCT_VERSION)
 
 build: build-server build-collector
 
 release: export OPEN_SPLUNK_SOURCE_REVISION := $(value OPEN_SPLUNK_SOURCE_REVISION)
+release: export OPEN_SPLUNK_PRODUCT_VERSION := $(value OPEN_SPLUNK_PRODUCT_VERSION)
 release:
 	test "$$($(GO_TOOL_ENV) go env GOVERSION)" = "go$(RELEASE_GO_VERSION)"
 	test "$$(env NODE_OPTIONS="" node --version)" = "v$(RELEASE_NODE_VERSION)"
@@ -90,6 +95,7 @@ release:
 			bash "$$launcher"
 
 oci: export OPEN_SPLUNK_SOURCE_REVISION := $(value OPEN_SPLUNK_SOURCE_REVISION)
+oci: export OPEN_SPLUNK_PRODUCT_VERSION := $(value OPEN_SPLUNK_PRODUCT_VERSION)
 oci: export OPEN_SPLUNK_SERVER_IMAGE := $(value OPEN_SPLUNK_SERVER_IMAGE)
 oci: export OPEN_SPLUNK_COLLECTOR_IMAGE := $(value OPEN_SPLUNK_COLLECTOR_IMAGE)
 oci: export OPEN_SPLUNK_OCI_PLATFORM := $(value OPEN_SPLUNK_OCI_PLATFORM)
@@ -131,13 +137,15 @@ build-ui: proto
 		NODE_OPTIONS="" \
 		OPEN_SPLUNK_API_BASE_URL="" \
 		OPEN_SPLUNK_DATA_MODE="$(OPEN_SPLUNK_DATA_MODE)" \
+		OPEN_SPLUNK_PRODUCT_VERSION="$(OPEN_SPLUNK_PRODUCT_VERSION)" \
 		OPEN_SPLUNK_SOURCE_REVISION="$(OPEN_SPLUNK_SOURCE_REVISION)" \
 		TZ=UTC \
 		npm run build
 	test -f out/index.html
 	grep -Fq 'data-open-splunk-revision="$(OPEN_SPLUNK_SOURCE_REVISION)"' out/index.html
 	$(GO_TOOL_ENV) go run ./cmd/open-splunk-manifest \
-		-source-revision "$(OPEN_SPLUNK_SOURCE_REVISION)"
+		-source-revision "$(OPEN_SPLUNK_SOURCE_REVISION)" \
+		-product-version "$(OPEN_SPLUNK_PRODUCT_VERSION)"
 	test -f out/asset-manifest.json
 
 build-server: build-ui
@@ -154,6 +162,32 @@ build-loggen: proto
 	mkdir -p build
 	$(GO_TOOL_ENV) go build -buildvcs=false -trimpath -ldflags "$(GO_BUILD_LDFLAGS)" -o build/open-splunk-loggen ./cmd/open-splunk-loggen
 	chmod 0755 build/open-splunk-loggen
+
+dev-tools:
+	@test -x node_modules/.bin/buf && \
+		test -x node_modules/.bin/protoc-gen-ts_proto && \
+		test -x .cache/proto-tools/protoc-gen-go && \
+		test -x .cache/proto-tools/protoc-gen-go-grpc || { \
+			echo "development tools are missing; run 'make proto-tools' first" >&2; \
+			exit 1; \
+		}
+
+dev-clickhouse:
+	@command -v docker >/dev/null 2>&1 || { echo "Docker is required for development ClickHouse" >&2; exit 1; }
+	@docker compose version >/dev/null 2>&1 || { echo "Docker Compose v2 is required for development ClickHouse" >&2; exit 1; }
+	@test -f "$(DEVELOPMENT_ENV_FILE)" || ./deploy/generate-env.sh --development "$(DEVELOPMENT_ENV_FILE)"
+	$(DEVELOPMENT_COMPOSE) up --detach --wait clickhouse
+
+dev-down:
+	@test -f "$(DEVELOPMENT_ENV_FILE)" || { echo "development environment is not initialized; run 'make dev-clickhouse' first" >&2; exit 1; }
+	$(DEVELOPMENT_COMPOSE) down
+
+dev-build-server: override GO_TOOL_ENV := $(BASE_GO_TOOL_ENV) GOROOT="$(shell go env GOROOT)"
+dev-build-server: build-server
+
+run: dev-tools dev-build-server
+	@test -f "$(DEVELOPMENT_ENV_FILE)" || { echo "development ClickHouse is not initialized; run 'make dev-clickhouse' first" >&2; exit 1; }
+	./scripts/run-development.sh "$(DEVELOPMENT_ENV_FILE)"
 
 proto: proto-lint
 	bash scripts/compile-protos.sh

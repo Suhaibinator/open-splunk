@@ -6,8 +6,9 @@ import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk;opensplunk";
 
-// BuildMetadata reports one immutable server source identity and the exact
-// embedded UI, contracts, and migrations produced from it.
+// BuildMetadata reports one server source identity and the exact embedded UI,
+// contracts, and migrations produced from it. product_version is absent for
+// development builds and canonical 0.MINOR.PATCH for official releases.
 message BuildMetadata {
   reserved 1, 7, 9, 10;
   reserved "application_version", "sqlite_migration_version", "clickhouse_migration_version", "asset_manifest_format_version";
@@ -17,6 +18,7 @@ message BuildMetadata {
   string protobuf_schema_sha256 = 5;
   string sqlite_migrations_sha256 = 6;
   string clickhouse_migrations_sha256 = 8;
+  optional string product_version = 11;
 }
 
 // PageRequest uses an opaque server cursor. page_token must only be replayed

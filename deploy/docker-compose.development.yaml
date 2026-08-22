@@ -1,0 +1,28 @@
+# Development-only exposure for a host-native Open Splunk server. Production
+# keeps ClickHouse private and uses the Open Splunk image for this bootstrap.
+services:
+  clickhouse-recovery-volume-bootstrap:
+    image: clickhouse/clickhouse-server:26.7.5.10-alpine@sha256:0a45b864c73322d4360dea1973ee9b77f29c51af1242ad2d47409908071fa56e
+    pull_policy: missing
+    user: "0:65532"
+    entrypoint:
+      - /bin/sh
+    command:
+      - -ec
+      - >-
+        chown 101:101 /var/lib/clickhouse /var/log/clickhouse-server &&
+        chmod 0700 /var/lib/clickhouse /var/log/clickhouse-server &&
+        chown 101:65532 /var/lib/open-splunk/clickhouse-backups &&
+        chmod 2750 /var/lib/open-splunk/clickhouse-backups
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - clickhouse-logs:/var/log/clickhouse-server
+      - clickhouse-recovery:/var/lib/open-splunk/clickhouse-backups
+
+  clickhouse:
+    ports:
+      - "127.0.0.1:${OPEN_SPLUNK_CLICKHOUSE_SECURE_NATIVE_PORT:-9440}:9440"
+
+networks:
+  backend:
+    internal: false

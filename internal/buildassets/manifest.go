@@ -82,6 +82,7 @@ type MigrationDigest struct {
 type Manifest struct {
 	FormatVersion        uint32            `json:"format_version"`
 	SourceRevision       string            `json:"source_revision"`
+	ProductVersion       string            `json:"product_version,omitempty"`
 	UIBuildID            string            `json:"ui_build_id"`
 	UI                   UIComponentDigest `json:"ui"`
 	ProtobufSchema       ComponentDigest   `json:"protobuf_schema"`
@@ -103,10 +104,16 @@ type treeInventory struct {
 // build ID must already match the source identity, binding every HTML/RSC
 // reference to the same revision before hashes are computed.
 func Generate(filesystem fs.FS, sourceRevision string) (Manifest, error) {
+	return GenerateRelease(filesystem, sourceRevision, "")
+}
+
+// GenerateRelease computes a manifest with an optional canonical product
+// version. Development manifests deliberately omit it.
+func GenerateRelease(filesystem fs.FS, sourceRevision, productVersion string) (Manifest, error) {
 	if filesystem == nil {
 		return Manifest{}, errors.New("generate build manifest: filesystem is required")
 	}
-	identity, err := buildinfo.Parse(sourceRevision)
+	identity, err := buildinfo.ParseRelease(sourceRevision, productVersion)
 	if err != nil {
 		return Manifest{}, fmt.Errorf("generate build manifest: %w", err)
 	}
@@ -184,6 +191,7 @@ func computeManifest(
 	return Manifest{
 		FormatVersion:  ManifestFormatVersion,
 		SourceRevision: identity.SourceRevision,
+		ProductVersion: identity.ProductVersion,
 		UIBuildID:      uiBuildID,
 		UI: UIComponentDigest{
 			SHA256:    ui.component.SHA256,
@@ -578,7 +586,7 @@ func validateManifestShape(manifest Manifest) (buildinfo.Identity, error) {
 			ManifestFormatVersion,
 		)
 	}
-	identity, err := buildinfo.Parse(manifest.SourceRevision)
+	identity, err := buildinfo.ParseRelease(manifest.SourceRevision, manifest.ProductVersion)
 	if err != nil {
 		return buildinfo.Identity{}, err
 	}

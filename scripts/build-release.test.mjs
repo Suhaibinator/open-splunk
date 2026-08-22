@@ -570,7 +570,7 @@ test("supported binary recipes disable ambient VCS stamping", async () => {
   }
 });
 
-test("build publication identity is the exact source revision only", async () => {
+test("build publication identity retains source revision and optional product version", async () => {
   const [makefile, releaseScript] = await Promise.all([
     readFile(path.join(workspace, "Makefile"), "utf8"),
     readFile(path.join(workspace, "scripts", "build-release.sh"), "utf8"),
@@ -582,7 +582,9 @@ test("build publication identity is the exact source revision only", async () =>
     makefile,
     /GO_BUILD_LDFLAGS = -X \$\(BUILDINFO_PACKAGE\)\.sourceRevision=\$\(OPEN_SPLUNK_SOURCE_REVISION\)/,
   );
+  assert.match(makefile, /productVersion=\$\(OPEN_SPLUNK_PRODUCT_VERSION\)/);
   assert.match(releaseScript, /printf 'source_revision=%s\\n'/);
+  assert.match(releaseScript, /printf 'product_version=%s\\n'/);
 });
 
 test("release launcher pins match the canonical tool-version files", async () => {

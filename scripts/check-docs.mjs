@@ -40,14 +40,6 @@ const canonicalDocumentationNames = Object.freeze([
 
 const stalePatterns = Object.freeze([
   {
-    label: "pre-release version token",
-    expression: /\bv0\.\d+(?:\.\d+)?\b/giu,
-  },
-  {
-    label: "retired bare pre-release version",
-    expression: /(?<![\d.])0\.(?:1|2|3|4)(?:\.0)?(?![\d.])/gu,
-  },
-  {
     label: "versioned identifier suffix",
     expression: /\bv0\d+\b/giu,
   },

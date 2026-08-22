@@ -243,7 +243,8 @@ func queryIntegrationInsertRetentionEvents(
 
 	query := "INSERT INTO open_splunk.events (" +
 		"event_id, tenant_id, index_name, event_time, index_time, body, raw, raw_encoding, " +
-		"fields, field_names, field_types, field_metadata_version, collector_id, batch_id, " +
+		"fields, field_names, field_types, field_metadata_version, collector_id, " +
+		"ingest_source_kind, ingest_source_id, batch_id, " +
 		"batch_sequence, expires_at, visibility_seq)"
 	batch, err := connection.PrepareBatch(ctx, query)
 	if err != nil {
@@ -285,6 +286,8 @@ func queryIntegrationInsertRetentionEvents(
 			fieldNames,
 			fieldTypes,
 			eventfields.CurrentFieldMetadataVersion,
+			"collector",
+			uint8(1),
 			"collector",
 			"logical-retention-batch",
 			uint64(index+1),

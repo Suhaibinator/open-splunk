@@ -36,7 +36,10 @@ func Validate(metadata *opensplunk.BuildMetadata) (buildinfo.Identity, error) {
 	if len(metadata.ProtoReflect().GetUnknown()) != 0 {
 		return buildinfo.Identity{}, errors.New("build metadata contains unknown fields")
 	}
-	identity, err := buildinfo.Parse(metadata.GetSourceRevision())
+	identity, err := buildinfo.ParseRelease(
+		metadata.GetSourceRevision(),
+		metadata.GetProductVersion(),
+	)
 	if err != nil {
 		return buildinfo.Identity{}, fmt.Errorf("invalid build identity: %w", err)
 	}

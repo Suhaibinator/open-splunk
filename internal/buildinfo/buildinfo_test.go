@@ -39,6 +39,27 @@ func TestParseRejectsNoncanonicalIdentity(t *testing.T) {
 	}
 }
 
+func TestParseReleaseValidatesOptionalV0ProductVersion(t *testing.T) {
+	t.Parallel()
+
+	revision := strings.Repeat("a", 40)
+	identity, err := ParseRelease(revision, "0.12.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.ProductVersion != "0.12.3" {
+		t.Fatalf("product version = %q", identity.ProductVersion)
+	}
+	for _, version := range []string{"v0.1.0", "1.0.0", "0.01.0", "0.1", "0.1.0-rc.1"} {
+		if _, err := ParseRelease(revision, version); err == nil {
+			t.Fatalf("ParseRelease accepted %q", version)
+		}
+	}
+	if _, err := ParseRelease(DevelopmentRevision, "0.1.0"); err == nil {
+		t.Fatal("development identity accepted a product version")
+	}
+}
+
 func TestUIBuildIDIsDomainSeparatedRevisionSensitiveAndAdBlockerSafe(t *testing.T) {
 	t.Parallel()
 
@@ -100,6 +121,17 @@ func TestWriteIdentityAndDigestValidation(t *testing.T) {
 	want := "source_revision=" + strings.Repeat("a", 40) + "\n"
 	if output.String() != want {
 		t.Fatalf("WriteIdentity output = %q, want %q", output.String(), want)
+	}
+	releaseIdentity, err := ParseRelease(strings.Repeat("b", 40), "0.2.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	output.Reset()
+	if err := WriteIdentity(&output, releaseIdentity); err != nil {
+		t.Fatal(err)
+	}
+	if want := "source_revision=" + strings.Repeat("b", 40) + "\nproduct_version=0.2.0\n"; output.String() != want {
+		t.Fatalf("release identity = %q, want %q", output.String(), want)
 	}
 	if err := WriteIdentity(nil, identity); err == nil {
 		t.Fatal("WriteIdentity(nil) error = nil")

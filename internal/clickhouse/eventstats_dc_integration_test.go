@@ -72,7 +72,8 @@ func testEventStatsDistinctCountAgainstClickHouse(
 			event_id, tenant_id, index_name, event_time, index_time,
 			host, source, sourcetype, severity, raw, raw_encoding,
 			fields, field_names, field_types, field_metadata_version,
-			collector_id, batch_id, batch_sequence, expires_at,
+			collector_id, ingest_source_kind, ingest_source_id,
+			batch_id, batch_sequence, expires_at,
 			visibility_seq
 		)`)
 	if prepareErr != nil {
@@ -107,6 +108,8 @@ func testEventStatsDistinctCountAgainstClickHouse(
 			[]string{"eventstats_dc_boundary"},
 			[]uint8{uint8(eventfields.StoredValueTypeList)},
 			eventfields.CurrentFieldMetadataVersion,
+			"eventstats-dc-boundary",
+			uint8(1),
 			"eventstats-dc-boundary",
 			id,
 			uint64(len(boundaryMembers)),

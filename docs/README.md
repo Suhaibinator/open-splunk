@@ -1,9 +1,10 @@
 # Open Splunk documentation
 
-Open Splunk is under pre-release development. These documents describe the
-current source tree, not a released compatibility surface or the sequence in
-which features were built. Persistent data and clients are expected to track
-the same source revision unless a document explicitly says otherwise.
+Open Splunk is under major-version-zero development. These documents describe
+the current source tree and v0 fresh-state contract, not a stable compatibility
+surface or the sequence in which features were built. Persistent data and
+clients are expected to track the same exact release or source revision unless
+a document explicitly says otherwise.
 
 ## Reference
 
@@ -21,7 +22,7 @@ the same source revision unless a document explicitly says otherwise.
 - [Auditing](auditing.md) covers mutation and search-attempt journals.
 - [Roadmap](roadmap.md) lists only work that is not implemented.
 - [Build and publication status](releasing.md) defines current development
-  artifacts and the work required before the first supported release.
+  artifacts, official v0 publication, and the work required before v1.
 
 Database bootstrap and recovery rules live in
 [`migrations/README.md`](../migrations/README.md). Deployment and executable

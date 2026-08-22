@@ -138,8 +138,9 @@ export function sharingScopeToJSON(object: SharingScope): string {
 }
 
 /**
- * BuildMetadata reports one immutable server source identity and the exact
- * embedded UI, contracts, and migrations produced from it.
+ * BuildMetadata reports one server source identity and the exact embedded UI,
+ * contracts, and migrations produced from it. product_version is absent for
+ * development builds and canonical 0.MINOR.PATCH for official releases.
  */
 export interface BuildMetadata {
   sourceRevision: string;
@@ -148,6 +149,7 @@ export interface BuildMetadata {
   protobufSchemaSha256: string;
   sqliteMigrationsSha256: string;
   clickhouseMigrationsSha256: string;
+  productVersion?: string | undefined;
 }
 
 /**
@@ -238,6 +240,7 @@ function createBaseBuildMetadata(): BuildMetadata {
     protobufSchemaSha256: "",
     sqliteMigrationsSha256: "",
     clickhouseMigrationsSha256: "",
+    productVersion: undefined,
   };
 }
 
@@ -260,6 +263,9 @@ export const BuildMetadata: MessageFns<BuildMetadata> = {
     }
     if (message.clickhouseMigrationsSha256 !== "") {
       writer.uint32(66).string(message.clickhouseMigrationsSha256);
+    }
+    if (message.productVersion !== undefined) {
+      writer.uint32(90).string(message.productVersion);
     }
     return writer;
   },
@@ -319,6 +325,14 @@ export const BuildMetadata: MessageFns<BuildMetadata> = {
           message.clickhouseMigrationsSha256 = reader.string();
           continue;
         }
+        case 11: {
+          if (tag !== 90) {
+            break;
+          }
+
+          message.productVersion = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -360,6 +374,11 @@ export const BuildMetadata: MessageFns<BuildMetadata> = {
         : isSet(object.clickhouse_migrations_sha256)
         ? globalThis.String(object.clickhouse_migrations_sha256)
         : "",
+      productVersion: isSet(object.productVersion)
+        ? globalThis.String(object.productVersion)
+        : isSet(object.product_version)
+        ? globalThis.String(object.product_version)
+        : undefined,
     };
   },
 
@@ -383,6 +402,9 @@ export const BuildMetadata: MessageFns<BuildMetadata> = {
     if (message.clickhouseMigrationsSha256 !== "") {
       obj.clickhouseMigrationsSha256 = message.clickhouseMigrationsSha256;
     }
+    if (message.productVersion !== undefined) {
+      obj.productVersion = message.productVersion;
+    }
     return obj;
   },
 
@@ -397,6 +419,7 @@ export const BuildMetadata: MessageFns<BuildMetadata> = {
     message.protobufSchemaSha256 = object.protobufSchemaSha256 ?? "";
     message.sqliteMigrationsSha256 = object.sqliteMigrationsSha256 ?? "";
     message.clickhouseMigrationsSha256 = object.clickhouseMigrationsSha256 ?? "";
+    message.productVersion = object.productVersion ?? undefined;
     return message;
   },
 };

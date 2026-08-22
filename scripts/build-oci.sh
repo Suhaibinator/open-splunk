@@ -18,6 +18,12 @@ if [[ $# -ne 0 ]]; then
 fi
 
 : "${OPEN_SPLUNK_SOURCE_REVISION:?OPEN_SPLUNK_SOURCE_REVISION is required}"
+OPEN_SPLUNK_PRODUCT_VERSION=${OPEN_SPLUNK_PRODUCT_VERSION:-}
+if [[ -n "$OPEN_SPLUNK_PRODUCT_VERSION" &&
+      ! "$OPEN_SPLUNK_PRODUCT_VERSION" =~ ^0\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+  echo "error: OPEN_SPLUNK_PRODUCT_VERSION must be empty or canonical 0.MINOR.PATCH" >&2
+  exit 1
+fi
 
 if [[ ! "$OPEN_SPLUNK_SOURCE_REVISION" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
   echo "error: OPEN_SPLUNK_SOURCE_REVISION must be a full lowercase Git hash" >&2
@@ -576,6 +582,7 @@ build_target() {
     --platform "$OCI_PLATFORM"
     --target "$target"
     --tag "$temporary_image"
+    --build-arg "OPEN_SPLUNK_PRODUCT_VERSION=$OPEN_SPLUNK_PRODUCT_VERSION"
     --build-arg "OPEN_SPLUNK_SOURCE_REVISION=$OPEN_SPLUNK_SOURCE_REVISION"
     --build-arg "OPEN_SPLUNK_IMAGE_CREATED=$IMAGE_CREATED"
     --build-arg "OPEN_SPLUNK_SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH"

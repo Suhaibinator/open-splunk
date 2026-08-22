@@ -1,9 +1,9 @@
 # Open Splunk
 
-Open Splunk is a pre-release single-node log search and analytics application
-with a bounded SPL-like query layer over ClickHouse. Its source contracts are
-under active development; no public release or backward-compatibility policy
-has been declared.
+Open Splunk is a major-version-zero single-node log search and analytics
+application with a bounded SPL-like query layer over ClickHouse. Its source
+contracts remain under active development, and v0 releases intentionally make
+no persisted-state compatibility promise.
 
 The Go server embeds a statically exported Next.js browser application. A
 separate Go collector tails application logs and delivers durable protobuf
@@ -34,26 +34,83 @@ scripts/                  build and validation automation
 The root TypeScript workspace builds the static browser export under `out/`.
 The root Go package embeds that export in the server executable.
 
-## Develop and build
+## Run from source
 
 Use the exact Go, Node.js, and npm versions pinned by `go.mod`, `.node-version`,
-and `package.json`:
+and `package.json`. Docker with Compose v2 and OpenSSL are also required.
+Install the pinned frontend and protobuf tools once after cloning:
 
 ```sh
 make proto-tools
+```
+
+Start the pinned ClickHouse dependency, then build and run the current source
+tree as a native development server:
+
+```sh
+make dev-clickhouse
+make run
+```
+
+Neither command requires a clean worktree, Git commit, source hash, or product
+version. `make dev-clickhouse` generates reusable local credentials and starts
+only ClickHouse in an isolated `open-splunk-development` Compose project.
+`make run` builds the embedded browser UI and server with the explicit
+`development` identity, applies ClickHouse migrations, and runs in the
+foreground. Open `http://127.0.0.1:8080/signin/`; the administrator token is
+stored at `deploy/.env.development.tls/administrator.token` and is never
+printed.
+
+Stop the server with Ctrl-C. ClickHouse and all development data remain for the
+next run. Stop its containers without deleting state with:
+
+```sh
+make dev-down
+```
+
+To choose other loopback ports, set `OPEN_SPLUNK_SERVER_HTTP_PORT` or
+`OPEN_SPLUNK_CLICKHOUSE_SECURE_NATIVE_PORT` on the first `make dev-clickhouse`,
+or edit those values in `deploy/.env.development` while the processes are
+stopped.
+
+**Destructive development reset:** first run `make dev-down`, then remove the
+`open-splunk-development` Compose volumes and the ignored
+`data/development`, `exports/development`, `deploy/.env.development`, and
+`deploy/.env.development.tls` paths. This permanently deletes the local
+database, ClickHouse data, exports, credentials, and administrator token; the
+next `make dev-clickhouse` creates an empty environment:
+
+```sh
+docker volume rm \
+  open-splunk-development_clickhouse-data \
+  open-splunk-development_clickhouse-logs \
+  open-splunk-development_clickhouse-recovery
+rm -rf -- \
+  data/development \
+  exports/development \
+  deploy/.env.development \
+  deploy/.env.development.tls
+```
+
+## Build and test
+
+```sh
 make proto
 make test
 make build
 ```
 
 `make proto` lints and compiles every schema under `proto/` into
-`gen/go/open_splunk` and `gen/ts/open_splunk`. Generation uses pinned
-Buf and plugin versions; generated files are never edited manually.
+`gen/go/open_splunk` and `gen/ts/open_splunk`. Generation uses pinned Buf and
+plugin versions; generated files are never edited manually.
 
 `make build` exports the backend-mode UI, generates/verifies the embedded asset
 manifest, and links one build identity into server, collector, and log
-generator. Direct `go build` is only a compile check. For deterministic UI-only
-demo work:
+generator. The resulting development binary still requires an existing
+ClickHouse with the distinct principals described in
+[`deploy/README.md`](deploy/README.md). Its relevant flags are shown by
+`./build/open-splunk-server -help`. Direct `go build` is only a compile check.
+For deterministic UI-only demo work:
 
 ```sh
 OPEN_SPLUNK_DATA_MODE=demo npm run build
@@ -63,26 +120,29 @@ Production browser traffic is same-origin. The API is rooted at `/api`, the
 search WebSocket at `/api/search/ws`, and the native gRPC service is
 `open_splunk.CollectorIngestService/Collect`. See [API contracts](docs/api.md).
 
-## Development build
+## Reproducible artifacts and releases
 
-Build identity is the full source revision. Until the first supported release
-is defined, do not publish semantically versioned artifacts:
+Local artifact checks retain the full source revision as their identity:
 
 ```sh
 OPEN_SPLUNK_SOURCE_REVISION="$(git rev-parse HEAD)" \
 make release
 ```
 
-The artifact launcher requires a clean committed revision, materializes only
+This is an artifact-verification path, not the local run workflow and not a
+publication command. The launcher
+requires a clean committed revision, materializes only
 committed inputs into a disposable tree, installs pinned tools into fresh
 caches, scrubs ambient workspace/build controls, verifies the embedded payload
 and linked binary identities, and publishes atomically under `build/`.
 Server and collector images must come from the same source revision. See
 [Build and publication status](docs/releasing.md).
 
-For the non-root server/collector images and digest-pinned ClickHouse Compose
-stack, follow [Deployment](deploy/README.md). The Compose stack consumes a
-prebuilt image and cannot silently rebuild a dirty checkout.
+Official `v0.x.y` releases are published only by CI from a published GitHub
+Release. CI attaches Linux AMD64/ARM64 binary archives and checksums and
+publishes multi-architecture server and collector images to GHCR. For the
+non-root images and digest-pinned ClickHouse Compose stack, follow
+[Deployment](deploy/README.md).
 
 ## Product boundaries
 

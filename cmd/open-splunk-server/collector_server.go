@@ -68,6 +68,15 @@ func openCollectorServer(
 	return server, listener, nil
 }
 
+// optionalRuntimeGRPCServer prevents a nil *grpc.Server from becoming a
+// non-nil interface when collector ingestion is disabled.
+func optionalRuntimeGRPCServer(server *grpc.Server) runtimeGRPCServer {
+	if server == nil {
+		return nil
+	}
+	return server
+}
+
 // validateCollectorServerConfig is pure so run can reject an invalid disabled
 // or configured transport before opening or mutating either persistence plane.
 func validateCollectorServerConfig(config collectorServerConfig) error {

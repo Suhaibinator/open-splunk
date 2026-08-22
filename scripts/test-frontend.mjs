@@ -13,6 +13,7 @@ const scriptTests = [
   "compile-protos.test.mjs",
   "materialize-git-snapshot.test.mjs",
   "run-go-race-shard.test.mjs",
+  "run-development.test.mjs",
   "build-release.test.mjs",
   "build-oci.test.mjs",
 ];

@@ -25,6 +25,8 @@ var (
 	sourceRevision = DevelopmentRevision
 
 	sourceRevisionPattern   = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
+	productVersionPattern   = regexp.MustCompile(`^0\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$`)
+	productVersion          string
 	revisionBuildIDReplacer = strings.NewReplacer(
 		"a", "g",
 		"b", "h",
@@ -35,14 +37,21 @@ var (
 	)
 )
 
-// Identity names one exact source tree without claiming a product version.
+// Identity names one exact source tree and its optional v0 product release.
 type Identity struct {
 	SourceRevision string
+	ProductVersion string
 }
 
 // Parse validates an identity without normalizing it. Build inputs must already
 // be canonical so the same bytes cross language and process boundaries.
 func Parse(revision string) (Identity, error) {
+	return ParseRelease(revision, "")
+}
+
+// ParseRelease validates the source identity and optional canonical v0
+// product version embedded only by release builds.
+func ParseRelease(revision, version string) (Identity, error) {
 	if revision != DevelopmentRevision && !sourceRevisionPattern.MatchString(revision) {
 		return Identity{}, fmt.Errorf(
 			"source revision %q must be %s or a full lowercase Git hash",
@@ -50,24 +59,34 @@ func Parse(revision string) (Identity, error) {
 			DevelopmentRevision,
 		)
 	}
-	return Identity{SourceRevision: revision}, nil
+	if version != "" && !productVersionPattern.MatchString(version) {
+		return Identity{}, fmt.Errorf(
+			"product version %q must be empty or canonical 0.MINOR.PATCH",
+			version,
+		)
+	}
+	if revision == DevelopmentRevision && version != "" {
+		return Identity{}, errors.New("development builds must not carry a product version")
+	}
+	return Identity{SourceRevision: revision, ProductVersion: version}, nil
 }
 
 // Current returns the identity compiled into the calling binary.
 func Current() (Identity, error) {
-	identity, err := Parse(sourceRevision)
+	identity, err := ParseRelease(sourceRevision, productVersion)
 	if err != nil {
 		return Identity{}, fmt.Errorf("load compiled build identity: %w", err)
 	}
 	return identity, nil
 }
 
-// UIBuildID derives a collision-resistant Next.js build ID from the complete
-// application identity. Hex letters are translated to an alphabet that cannot
+// UIBuildID derives a collision-resistant Next.js build ID from the exact
+// source identity. Product releases of identical source intentionally retain
+// identical UI bytes. Hex letters are translated to an alphabet that cannot
 // contain "ad", which Next itself avoids because ad blockers can reject
 // matching static paths.
 func (identity Identity) UIBuildID() (string, error) {
-	validated, err := Parse(identity.SourceRevision)
+	validated, err := ParseRelease(identity.SourceRevision, identity.ProductVersion)
 	if err != nil {
 		return "", err
 	}
@@ -80,17 +99,17 @@ func (identity Identity) UIBuildID() (string, error) {
 // Publishable reports whether the identity is suitable for an immutable
 // development artifact.
 func (identity Identity) Publishable() bool {
-	_, err := Parse(identity.SourceRevision)
+	_, err := ParseRelease(identity.SourceRevision, identity.ProductVersion)
 	return err == nil && identity.SourceRevision != DevelopmentRevision
 }
 
-// WriteIdentity emits the machine-readable identity shared by development
-// binaries built from the same source tree.
+// WriteIdentity emits the machine-readable identity shared by binaries built
+// from the same source tree.
 func WriteIdentity(output io.Writer, identity Identity) error {
 	if output == nil {
 		return errors.New("build identity output is required")
 	}
-	validated, err := Parse(identity.SourceRevision)
+	validated, err := ParseRelease(identity.SourceRevision, identity.ProductVersion)
 	if err != nil {
 		return err
 	}
@@ -99,6 +118,10 @@ func WriteIdentity(output io.Writer, identity Identity) error {
 		"source_revision=%s\n",
 		validated.SourceRevision,
 	)
+	if err != nil || validated.ProductVersion == "" {
+		return err
+	}
+	_, err = fmt.Fprintf(output, "product_version=%s\n", validated.ProductVersion)
 	return err
 }
 
@@ -110,12 +133,13 @@ func ValidSHA256(value string) bool {
 
 // Equal reports exact cross-component identity equality.
 func (identity Identity) Equal(other Identity) bool {
-	return identity.SourceRevision == other.SourceRevision
+	return identity.SourceRevision == other.SourceRevision &&
+		identity.ProductVersion == other.ProductVersion
 }
 
 // ValidatePublishable refuses the development sentinel.
 func (identity Identity) ValidatePublishable() error {
-	if _, err := Parse(identity.SourceRevision); err != nil {
+	if _, err := ParseRelease(identity.SourceRevision, identity.ProductVersion); err != nil {
 		return err
 	}
 	if !identity.Publishable() {

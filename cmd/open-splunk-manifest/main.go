@@ -25,6 +25,7 @@ func run(args []string, stdout io.Writer) error {
 	flags.SetOutput(io.Discard)
 	rootFlag := flags.String("root", ".", "repository root")
 	revision := flags.String("source-revision", "", "full lowercase Git source revision")
+	productVersion := flags.String("product-version", "", "optional canonical 0.MINOR.PATCH product version")
 	if err := flags.Parse(args); err != nil {
 		return fmt.Errorf("parse manifest flags: %w", err)
 	}
@@ -47,7 +48,7 @@ func run(args []string, stdout io.Writer) error {
 		return fmt.Errorf("repository root %q is not a directory", root)
 	}
 	repository := os.DirFS(root)
-	manifest, err := buildassets.Generate(repository, *revision)
+	manifest, err := buildassets.GenerateRelease(repository, *revision, *productVersion)
 	if err != nil {
 		return err
 	}

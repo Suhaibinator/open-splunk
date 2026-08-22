@@ -1493,11 +1493,11 @@ func knownFieldStoredTypeSQL(field fieldState) (string, []any, error) {
 				field.valueSQL + ")"
 		}
 		return "multiIf(isNull(" + field.valueSQL + "), CAST(? AS UInt8), " + stringEligible +
-				", CAST(? AS UInt8), CAST(? AS UInt8))", []any{
-				uint8(eventfields.StoredValueTypeNull),
-				uint8(eventfields.StoredValueTypeString),
-				uint8(eventfields.StoredValueTypeBytes),
-			}, nil
+			", CAST(? AS UInt8), CAST(? AS UInt8))", []any{
+			uint8(eventfields.StoredValueTypeNull),
+			uint8(eventfields.StoredValueTypeString),
+			uint8(eventfields.StoredValueTypeBytes),
+		}, nil
 	}
 	return "if(isNull(" + field.valueSQL + "), CAST(? AS UInt8), CAST(? AS UInt8))", []any{
 		uint8(eventfields.StoredValueTypeNull),

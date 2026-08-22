@@ -134,7 +134,7 @@ func queryIntegrationTestFieldCatalog(
 			}
 		})
 
-		t.Run("dynamic eval preserves types and materializes missing as null", func(t *testing.T) {
+		t.Run("dynamic eval preserves types and missing presence", func(t *testing.T) {
 			compiled := queryIntegrationCompileFieldCatalog(
 				t, "field-catalog-v1", indexTime,
 				`index=field-catalog-v1 | eval copied=status,parent_copy=parent | table copied,parent_copy,typed_bytes`,
@@ -145,10 +145,9 @@ func queryIntegrationTestFieldCatalog(
 			}
 			assertFieldCatalogProfile(t, catalog, FieldProfileRow{
 				FieldName: "copied", ObservedTypes: []eventfields.StoredValueType{
-					eventfields.StoredValueTypeNull,
 					eventfields.StoredValueTypeString,
 					eventfields.StoredValueTypeSint64,
-				}, EventCount: 3, NullCount: 1,
+				}, EventCount: 2, MissingCount: 1,
 			})
 			assertFieldCatalogProfile(t, catalog, FieldProfileRow{
 				FieldName: "typed_bytes", ObservedTypes: []eventfields.StoredValueType{
@@ -157,9 +156,8 @@ func queryIntegrationTestFieldCatalog(
 			})
 			assertFieldCatalogProfile(t, catalog, FieldProfileRow{
 				FieldName: "parent_copy", ObservedTypes: []eventfields.StoredValueType{
-					eventfields.StoredValueTypeNull,
 					eventfields.StoredValueTypeObject,
-				}, EventCount: 3, NullCount: 2,
+				}, EventCount: 1, MissingCount: 2,
 			})
 		})
 
@@ -638,7 +636,7 @@ func queryIntegrationTestFieldCatalog(
 			if err != nil {
 				t.Fatal(err)
 			}
-			if summary.EventCount != 3 || summary.NullCount != 1 || summary.MissingCount != 0 ||
+			if summary.EventCount != 2 || summary.NullCount != 0 || summary.MissingCount != 1 ||
 				summary.DistinctCount != 2 || len(summary.TopValues) != 2 {
 				t.Fatalf("projected summary = %#v", summary)
 			}
@@ -683,9 +681,35 @@ func queryIntegrationTestFieldCatalog(
 
 func queryIntegrationInsertFieldCatalogEvents(t *testing.T, ctx context.Context, connection clickhousedriver.Conn) time.Time {
 	t.Helper()
+	// This adversarial corpus intentionally includes legacy and misaligned field
+	// metadata that the current ingestion schema rejects. Temporarily remove only
+	// those two write constraints, then restore them after the hostile rows are
+	// sealed so the read path can prove it still fails closed on old storage.
+	for _, name := range []string{
+		"field_metadata_version_is_supported",
+		"field_metadata_is_aligned",
+	} {
+		if err := connection.Exec(ctx, "ALTER TABLE open_splunk.events DROP CONSTRAINT "+name); err != nil {
+			t.Fatalf("drop adversarial field metadata constraint %q: %v", name, err)
+		}
+	}
+	defer func() {
+		constraints := []string{
+			"ADD CONSTRAINT field_metadata_version_is_supported CHECK field_metadata_version = 1",
+			"ADD CONSTRAINT field_metadata_is_aligned CHECK " +
+				"(length(field_names) = length(field_types)) AND " +
+				"arrayAll(code -> ((code >= 1) AND (code <= 12)), field_types)",
+		}
+		for _, constraint := range constraints {
+			if err := connection.Exec(ctx, "ALTER TABLE open_splunk.events "+constraint); err != nil {
+				t.Errorf("restore adversarial field metadata constraint: %v", err)
+			}
+		}
+	}()
 	query := "INSERT INTO open_splunk.events (event_id, tenant_id, index_name, event_time, index_time, " +
 		"collected_at, event_time_source, host, source, sourcetype, service, severity, level, body, raw, " +
-		"raw_encoding, trace_id, span_id, fields, field_names, field_types, field_metadata_version, collector_id, batch_id, batch_sequence, " +
+		"raw_encoding, trace_id, span_id, fields, field_names, field_types, field_metadata_version, " +
+		"collector_id, ingest_source_kind, ingest_source_id, batch_id, batch_sequence, " +
 		"expires_at, visibility_seq)"
 	batch, err := connection.PrepareBatch(ctx, query)
 	if err != nil {
@@ -1057,7 +1081,8 @@ func queryIntegrationInsertFieldCatalogEvents(t *testing.T, ctx context.Context,
 		if err := batch.Append(
 			"queryexec-field-catalog-"+event.id, tenant, event.index, eventTime, storedAt,
 			nil, uint8(1), "catalog-host", "catalog.log", "test", event.service, uint8(1), nil, &message, raw,
-			encoding, nil, nil, event.fields, event.names, event.types, event.version, "collector", "field-catalog-batch", uint64(sequence+1),
+			encoding, nil, nil, event.fields, event.names, event.types, event.version,
+			"collector", uint8(1), "collector", "field-catalog-batch", uint64(sequence+1),
 			expiresAt, visibility,
 		); err != nil {
 			t.Fatal(err)

@@ -5,6 +5,9 @@ on:
     branches:
       - main
   pull_request:
+  release:
+    types:
+      - published
   workflow_dispatch:
 
 permissions:
@@ -124,9 +127,16 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
+          # The published v2.12.2 binaries were built with Go 1.26 and reject
+          # Go 1.27 modules. Build the exact release with the configured Go
+          # toolchain until upstream publishes a Go 1.27-built binary.
+          install-mode: goinstall
           # The inherited inventory is clean; enforce the complete Go tree on
           # every push rather than retaining a historical diff-only baseline.
-          args: --timeout=5m
+          # Staticcheck's current IR builder panics on Go 1.27 generic-method
+          # syntax in dependencies. Retain every other configured analyzer;
+          # remove this exclusion when golangci-lint ships Go 1.27 support.
+          args: --timeout=5m --disable=staticcheck
 
   go-test:
     name: Go tests (${{ matrix.label }})
@@ -1119,3 +1129,46 @@ jobs:
           cmp release-proof/linux/asset-manifest.json release-proof/macos/asset-manifest.json
           cmp release-proof/linux/binary-identities.txt release-proof/macos/binary-identities.txt
           cmp release-proof/linux/verification.txt release-proof/macos/verification.txt
+
+  publish-release:
+    name: Publish GitHub Release
+    if: github.event_name == 'release' && github.event.action == 'published'
+    needs:
+      - release-assets-consistency
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+
+      - name: Sign in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: scripts/publish-release.sh
+
+      - name: Make GHCR packages public
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api --method PATCH /user/packages/container/open-splunk-server -f visibility=public
+          gh api --method PATCH /user/packages/container/open-splunk-collector -f visibility=public

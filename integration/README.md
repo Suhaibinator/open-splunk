@@ -1,5 +1,21 @@
 # Backend vertical integration
 
+## Development workflow smoke test
+
+The opt-in development workflow gate generates a Git-independent development
+environment on random loopback ports, starts only the pinned ClickHouse
+container, builds the current tree as `development`, reaches readiness with the
+host-native server, and proves its private control state survives a graceful
+restart:
+
+```sh
+OPEN_SPLUNK_DEVELOPMENT_INTEGRATION=1 \
+  go test ./integration -run '^TestDevelopmentWorkflow$' -count=1 -timeout=10m -v
+```
+
+It uses a unique Compose project and deletes only its own temporary volumes and
+host files during cleanup.
+
 `backend_vertical_test.go` exercises the real deployable path:
 
 1. build the static UI in backend mode;

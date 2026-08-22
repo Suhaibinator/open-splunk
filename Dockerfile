@@ -1,10 +1,12 @@
 ARG OPEN_SPLUNK_SOURCE_REVISION
+ARG OPEN_SPLUNK_PRODUCT_VERSION
 ARG OPEN_SPLUNK_IMAGE_CREATED
 ARG OPEN_SPLUNK_SOURCE_DATE_EPOCH
 ARG SOURCE_DATE_EPOCH=${OPEN_SPLUNK_SOURCE_DATE_EPOCH}
 
 FROM --platform=${BUILDPLATFORM} node:26.7.0-alpine3.23@sha256:ce3cc39fe3b8b2602d3b1c4d63d301e46b48c550ecb627869853ddcdda418b63 AS ui
 ARG OPEN_SPLUNK_SOURCE_REVISION
+ARG OPEN_SPLUNK_PRODUCT_VERSION
 ARG OPEN_SPLUNK_SOURCE_DATE_EPOCH
 ARG SOURCE_DATE_EPOCH
 WORKDIR /workspace
@@ -26,6 +28,7 @@ RUN env \
       NODE_OPTIONS= \
       OPEN_SPLUNK_API_BASE_URL= \
       OPEN_SPLUNK_DATA_MODE=backend \
+      OPEN_SPLUNK_PRODUCT_VERSION="${OPEN_SPLUNK_PRODUCT_VERSION}" \
       OPEN_SPLUNK_SOURCE_REVISION="${OPEN_SPLUNK_SOURCE_REVISION}" \
       SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
       TZ=UTC \
@@ -37,6 +40,7 @@ ARG TARGETARCH
 ARG OPEN_SPLUNK_EXPECTED_TARGETOS
 ARG OPEN_SPLUNK_EXPECTED_TARGETARCH
 ARG OPEN_SPLUNK_SOURCE_REVISION
+ARG OPEN_SPLUNK_PRODUCT_VERSION
 ARG OPEN_SPLUNK_IMAGE_CREATED
 ARG OPEN_SPLUNK_SOURCE_DATE_EPOCH
 ARG SOURCE_DATE_EPOCH
@@ -66,36 +70,45 @@ RUN set -eu; \
     case "${OPEN_SPLUNK_SOURCE_DATE_EPOCH}" in ''|*[!0-9]*) exit 1 ;; esac; \
     case "${SOURCE_DATE_EPOCH}" in ''|*[!0-9]*) exit 1 ;; esac; \
     test "${SOURCE_DATE_EPOCH}" = "${OPEN_SPLUNK_SOURCE_DATE_EPOCH}"; \
-    test "${TARGETOS}" = "${OPEN_SPLUNK_EXPECTED_TARGETOS}"; \
-    test "${TARGETARCH}" = "${OPEN_SPLUNK_EXPECTED_TARGETARCH}"; \
+    if [ -n "${OPEN_SPLUNK_EXPECTED_TARGETOS}" ]; then test "${TARGETOS}" = "${OPEN_SPLUNK_EXPECTED_TARGETOS}"; fi; \
+    if [ -n "${OPEN_SPLUNK_EXPECTED_TARGETARCH}" ]; then test "${TARGETARCH}" = "${OPEN_SPLUNK_EXPECTED_TARGETARCH}"; fi; \
     test "${TARGETOS}" = linux; \
     test "${TARGETARCH}" = amd64 || test "${TARGETARCH}" = arm64
 RUN go run ./cmd/open-splunk-manifest \
-      -source-revision "${OPEN_SPLUNK_SOURCE_REVISION}"
+      -source-revision "${OPEN_SPLUNK_SOURCE_REVISION}" \
+      -product-version "${OPEN_SPLUNK_PRODUCT_VERSION}"
 RUN set -eu; \
     mkdir -p /artifacts; \
     build_information_package=github.com/Suhaibinator/open-splunk/internal/buildinfo; \
     GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build \
       -buildvcs=false \
       -trimpath \
-      -ldflags "-X ${build_information_package}.sourceRevision=${OPEN_SPLUNK_SOURCE_REVISION}" \
+      -ldflags "-X ${build_information_package}.sourceRevision=${OPEN_SPLUNK_SOURCE_REVISION} -X ${build_information_package}.productVersion=${OPEN_SPLUNK_PRODUCT_VERSION}" \
       -o /artifacts/open-splunk-server \
       ./cmd/open-splunk-server; \
     GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build \
       -buildvcs=false \
       -trimpath \
-      -ldflags "-X ${build_information_package}.sourceRevision=${OPEN_SPLUNK_SOURCE_REVISION}" \
+      -ldflags "-X ${build_information_package}.sourceRevision=${OPEN_SPLUNK_SOURCE_REVISION} -X ${build_information_package}.productVersion=${OPEN_SPLUNK_PRODUCT_VERSION}" \
       -o /artifacts/open-splunk-collector \
       ./cmd/open-splunk-collector; \
-    chmod 0555 /artifacts/open-splunk-server /artifacts/open-splunk-collector
+    GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build \
+      -buildvcs=false \
+      -trimpath \
+      -ldflags "-X ${build_information_package}.sourceRevision=${OPEN_SPLUNK_SOURCE_REVISION} -X ${build_information_package}.productVersion=${OPEN_SPLUNK_PRODUCT_VERSION}" \
+      -o /artifacts/open-splunk-loggen \
+      ./cmd/open-splunk-loggen; \
+    chmod 0555 /artifacts/open-splunk-server /artifacts/open-splunk-collector /artifacts/open-splunk-loggen
 RUN set -eu; \
     if [ "${TARGETOS}" = "$(go env GOHOSTOS)" ] && \
        [ "${TARGETARCH}" = "$(go env GOHOSTARCH)" ]; then \
-      expected_identity="$(printf 'source_revision=%s' "${OPEN_SPLUNK_SOURCE_REVISION}")"; \
-      server_identity="$(/artifacts/open-splunk-server -verify-embedded-release | sed -n '1p')"; \
+      expected_identity="$(printf 'source_revision=%s' "${OPEN_SPLUNK_SOURCE_REVISION}"; if [ -n "${OPEN_SPLUNK_PRODUCT_VERSION}" ]; then printf '\nproduct_version=%s' "${OPEN_SPLUNK_PRODUCT_VERSION}"; fi)"; \
+      server_identity="$(/artifacts/open-splunk-server -verify-embedded-release | sed -n '/^source_revision=/p; /^product_version=/p')"; \
       collector_identity="$(/artifacts/open-splunk-collector version)"; \
+      loggen_identity="$(/artifacts/open-splunk-loggen -version)"; \
       test "${server_identity}" = "${expected_identity}"; \
       test "${collector_identity}" = "${expected_identity}"; \
+      test "${loggen_identity}" = "${expected_identity}"; \
     fi
 # Materialize every scratch-root entry before COPY so BuildKit never synthesizes
 # parent directories with wall-clock timestamps in the published layers.
@@ -141,13 +154,18 @@ RUN set -eu; \
       /image-rootfs/collector/usr/local/bin/open-splunk-collector; \
     find /image-rootfs -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
 
+FROM scratch AS artifacts
+COPY --from=binaries /artifacts/ /
+
 FROM scratch AS server
 ARG OPEN_SPLUNK_SOURCE_REVISION
+ARG OPEN_SPLUNK_PRODUCT_VERSION
 ARG OPEN_SPLUNK_IMAGE_CREATED
 LABEL org.opencontainers.image.title="Open Splunk Server"
 LABEL org.opencontainers.image.description="Open Splunk API, search, and ingestion server"
 LABEL org.opencontainers.image.source="https://github.com/Suhaibinator/open-splunk"
 LABEL org.opencontainers.image.revision="${OPEN_SPLUNK_SOURCE_REVISION}"
+LABEL org.opencontainers.image.version="${OPEN_SPLUNK_PRODUCT_VERSION}"
 LABEL org.opencontainers.image.created="${OPEN_SPLUNK_IMAGE_CREATED}"
 LABEL org.opencontainers.image.licenses="MIT"
 COPY --from=binaries /image-rootfs/server/ /
@@ -161,11 +179,13 @@ ENTRYPOINT ["/usr/local/bin/open-splunk-server"]
 
 FROM scratch AS collector
 ARG OPEN_SPLUNK_SOURCE_REVISION
+ARG OPEN_SPLUNK_PRODUCT_VERSION
 ARG OPEN_SPLUNK_IMAGE_CREATED
 LABEL org.opencontainers.image.title="Open Splunk Collector"
 LABEL org.opencontainers.image.description="Durable Open Splunk file collector"
 LABEL org.opencontainers.image.source="https://github.com/Suhaibinator/open-splunk"
 LABEL org.opencontainers.image.revision="${OPEN_SPLUNK_SOURCE_REVISION}"
+LABEL org.opencontainers.image.version="${OPEN_SPLUNK_PRODUCT_VERSION}"
 LABEL org.opencontainers.image.created="${OPEN_SPLUNK_IMAGE_CREATED}"
 LABEL org.opencontainers.image.licenses="MIT"
 COPY --from=binaries /image-rootfs/collector/ /

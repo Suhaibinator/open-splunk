@@ -22,6 +22,18 @@ func TestOpenCollectorServerAllowsUnconfiguredListener(t *testing.T) {
 	}
 }
 
+func TestOptionalRuntimeGRPCServerPreservesDisabledNil(t *testing.T) {
+	t.Parallel()
+	if optionalRuntimeGRPCServer(nil) != nil {
+		t.Fatal("nil collector server became a non-nil runtime interface")
+	}
+	server := grpc.NewServer()
+	defer server.Stop()
+	if optionalRuntimeGRPCServer(server) == nil {
+		t.Fatal("configured collector server became nil")
+	}
+}
+
 func TestCollectorGRPCServerOptionsRequireExplicitSafeTransport(t *testing.T) {
 	t.Parallel()
 	for name, config := range map[string]collectorServerConfig{

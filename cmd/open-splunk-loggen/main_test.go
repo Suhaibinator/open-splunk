@@ -33,7 +33,7 @@ func TestRunReportsCompiledBuildIdentity(t *testing.T) {
 	}
 }
 
-func TestVersionHelpDescribesSourceRevisionOutput(t *testing.T) {
+func TestVersionHelpDescribesBuildIdentityOutput(t *testing.T) {
 	t.Parallel()
 
 	var stderr bytes.Buffer
@@ -46,7 +46,7 @@ func TestVersionHelpDescribesSourceRevisionOutput(t *testing.T) {
 	if !errors.Is(err, flag.ErrHelp) {
 		t.Fatalf("run(-h) error = %v, want flag.ErrHelp", err)
 	}
-	if got := stderr.String(); !strings.Contains(got, "print the compiled source revision") ||
+	if got := stderr.String(); !strings.Contains(got, "print the compiled build identity") ||
 		strings.Contains(got, "application version") {
 		t.Fatalf("version help is invalid:\n%s", got)
 	}

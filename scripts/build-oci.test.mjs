@@ -415,7 +415,7 @@ test("OCI targets are pinned scratch runtimes with a minimal non-root contract",
   assert.equal(
     (dockerfile.match(/GOOS="\$\{TARGETOS\}" GOARCH="\$\{TARGETARCH\}" go build/g) ?? [])
       .length,
-    2,
+    3,
   );
   assert.doesNotMatch(
     dockerfile,
@@ -430,10 +430,7 @@ test("OCI targets are pinned scratch runtimes with a minimal non-root contract",
     dockerfile,
     /test "\$\{TARGETARCH\}" = "\$\{OPEN_SPLUNK_EXPECTED_TARGETARCH\}"/,
   );
-  assert.match(
-    dockerfile,
-    /server_identity=.*sed -n '1p'/,
-  );
+  assert.match(dockerfile, /server_identity=.*product_version/);
   assert.doesNotMatch(dockerfile, removedProductIdentityPattern);
   assert.doesNotMatch(dockerfile, /package\.json.*version|version.*package\.json/);
   assert.doesNotMatch(
@@ -480,13 +477,13 @@ test("OCI targets are pinned scratch runtimes with a minimal non-root contract",
       1,
       "scratch targets must copy a complete, timestamp-normalized rootfs",
     );
-    assert.doesNotMatch(target, /org\.opencontainers\.image\.version/);
+    assert.match(target, /org\.opencontainers\.image\.version/);
     assert.match(target, /org\.opencontainers\.image\.revision/);
     assert.match(target, /org\.opencontainers\.image\.created/);
   }
 });
 
-test("publication configuration has no tag-driven product release", async () => {
+test("official product publication is guarded by the GitHub Release workflow", async () => {
   const workflowDirectory = path.join(workspace, ".github", "workflows");
   const buildScript = await readFile(
     path.join(workspace, "scripts", "build-oci.sh"),
@@ -505,6 +502,50 @@ test("publication configuration has no tag-driven product release", async () => 
   );
   assert.doesNotMatch(ciWorkflow, removedProductIdentityPattern);
   assert.match(ciWorkflow, /OPEN_SPLUNK_SOURCE_REVISION: \$\{\{ github\.sha \}\}/);
+  assert.match(ciWorkflow, /release:\n\s+types:\n\s+- published/);
+  assert.match(ciWorkflow, /run: scripts\/publish-release\.sh/);
+  const publishScript = await readFile(
+    path.join(workspace, "scripts", "publish-release.sh"),
+    "utf8",
+  );
+  assert.match(publishScript, /GITHUB_ACTIONS.*true/);
+  assert.match(publishScript, /GITHUB_EVENT_NAME.*release/);
+  assert.match(publishScript, /v0\\\./);
+  assert.match(publishScript, /release\?\.draft/);
+  assert.match(publishScript, /release\?\.prerelease/);
+  assert.match(publishScript, /git merge-base --is-ancestor/);
+  assert.match(publishScript, /server_repository="ghcr\.io\/\$owner\/open-splunk-server"/);
+  assert.match(publishScript, /collector_repository="ghcr\.io\/\$owner\/open-splunk-collector"/);
+  assert.match(publishScript, /server_image="\$server_repository:\$product_version"/);
+  assert.match(publishScript, /collector_image="\$collector_repository:\$product_version"/);
+  assert.match(publishScript, /--platform linux\/amd64,linux\/arm64/);
+  assert.match(publishScript, /for architecture in amd64 arm64/);
+  assert.match(publishScript, /open-splunk_\$\{product_version\}_linux_\$\{architecture\}\.tar\.gz/);
+  assert.match(publishScript, /open-splunk_\$\{product_version\}_SHA256SUMS/);
+  assert.match(publishScript, /open-splunk-server open-splunk-collector open-splunk-loggen/);
+  assert.match(publishScript, /go version -m/);
+  assert.match(publishScript, /shasum -a 256 -c/);
+  assert.ok(
+    publishScript.indexOf('verify_multiarch_image "$collector_image"')
+      < publishScript.indexOf('imagetools create --tag "$server_repository:latest"'),
+    "latest must advance only after both exact images pass multi-architecture verification",
+  );
+  const guarded = spawnSync("bash", [path.join(workspace, "scripts", "publish-release.sh")], {
+    encoding: "utf8",
+    env: { ...process.env, GITHUB_ACTIONS: "false", GITHUB_EVENT_NAME: "push" },
+  });
+  assert.equal(guarded.status, 1);
+  assert.match(guarded.stderr, /only by a GitHub release workflow/);
+
+  const dockerfile = await readFile(path.join(workspace, "Dockerfile"), "utf8");
+  assert.equal(
+    (dockerfile.match(/LABEL org\.opencontainers\.image\.version="\$\{OPEN_SPLUNK_PRODUCT_VERSION\}"/g) ?? []).length,
+    2,
+  );
+  assert.equal(
+    (dockerfile.match(/LABEL org\.opencontainers\.image\.revision="\$\{OPEN_SPLUNK_SOURCE_REVISION\}"/g) ?? []).length,
+    2,
+  );
 });
 
 test("images seed secure writable paths in their normalized rootfs trees", async () => {

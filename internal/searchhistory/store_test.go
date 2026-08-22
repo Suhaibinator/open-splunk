@@ -21,6 +21,10 @@ import (
 
 var testCursorKey = []byte("search-history-test-cursor-key-32-bytes-minimum")
 
+var testStoreClock = func() time.Time {
+	return time.Date(2026, time.August, 20, 12, 0, 0, 0, time.UTC)
+}
+
 func openTestStore(t *testing.T, options Options) (*control.DB, *Store) {
 	t.Helper()
 	database, err := control.Open(context.Background(), filepath.Join(t.TempDir(), "control.sqlite"))
@@ -29,6 +33,9 @@ func openTestStore(t *testing.T, options Options) (*control.DB, *Store) {
 	}
 	if options.CursorKey == nil {
 		options.CursorKey = testCursorKey
+	}
+	if options.Clock == nil {
+		options.Clock = testStoreClock
 	}
 	store, err := New(database, options)
 	if err != nil {

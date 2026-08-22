@@ -5,10 +5,28 @@ LC_ALL=C
 export LC_ALL
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+generation_mode=source
+published_server_image=
+case "${1:-}" in
+    --development)
+        generation_mode=development
+        shift
+        ;;
+    --server-image)
+        generation_mode=published
+        shift
+        if [ "$#" -eq 0 ]; then
+            echo "usage: $0 [--development | --server-image IMAGE] [output-file]" >&2
+            exit 2
+        fi
+        published_server_image=$1
+        shift
+        ;;
+esac
 env_file=${1:-"$script_dir/.env"}
 
 if [ "$#" -gt 1 ]; then
-    echo "usage: $0 [output-file]" >&2
+    echo "usage: $0 [--development | --server-image IMAGE] [output-file]" >&2
     exit 2
 fi
 
@@ -32,7 +50,7 @@ if ! command -v openssl >/dev/null 2>&1; then
     echo "openssl is required to generate credentials and the TLS identity" >&2
     exit 1
 fi
-if ! command -v git >/dev/null 2>&1; then
+if [ "$generation_mode" = source ] && ! command -v git >/dev/null 2>&1; then
     echo "git is required to record the release source revision" >&2
     exit 1
 fi
@@ -48,34 +66,73 @@ clear_inherited_acl() {
     fi
 }
 
-source_revision=$(git -C "$script_dir/.." rev-parse --verify HEAD)
-case "${#source_revision}:$source_revision" in
-    40:*|64:*) ;;
-    *)
-        echo "repository HEAD is not a full Git object ID" >&2
+source_revision=
+image_created=
+source_date_epoch=
+server_image=
+development_clickhouse_port=${OPEN_SPLUNK_CLICKHOUSE_SECURE_NATIVE_PORT:-9440}
+development_http_port=${OPEN_SPLUNK_SERVER_HTTP_PORT:-8080}
+if [ "$generation_mode" = source ]; then
+    source_revision=$(git -C "$script_dir/.." rev-parse --verify HEAD)
+    case "${#source_revision}:$source_revision" in
+        40:*|64:*) ;;
+        *)
+            echo "repository HEAD is not a full Git object ID" >&2
+            exit 1
+            ;;
+    esac
+    case "$source_revision" in
+        *[!0-9a-f]*)
+            echo "repository HEAD is not a lowercase Git object ID" >&2
+            exit 1
+            ;;
+    esac
+    image_created=$(git -C "$script_dir/.." show -s --format=%cI "$source_revision")
+    source_date_epoch=$(git -C "$script_dir/.." show -s --format=%ct "$source_revision")
+    case "$source_date_epoch" in
+        ""|*[!0-9]*)
+            echo "repository HEAD has an invalid commit timestamp" >&2
+            exit 1
+            ;;
+    esac
+    case "$image_created" in
+        ""|*[!0-9TZ:+-]*)
+            echo "repository HEAD has an invalid RFC 3339 commit timestamp" >&2
+            exit 1
+            ;;
+    esac
+    server_image="open-splunk-server:$source_revision"
+elif [ "$generation_mode" = development ]; then
+    for development_port in "$development_clickhouse_port" "$development_http_port"; do
+        case "$development_port" in
+            ""|*[!0-9]*)
+                echo "development ports must be decimal integers from 1 through 65535" >&2
+                exit 1
+                ;;
+        esac
+        if [ "$development_port" -lt 1 ] || [ "$development_port" -gt 65535 ]; then
+            echo "development ports must be decimal integers from 1 through 65535" >&2
+            exit 1
+        fi
+    done
+    server_image=open-splunk-server:development
+else
+    case "$published_server_image" in
+        ""|/*|*//*|*..*|*[!A-Za-z0-9_./:-]*)
+            echo "published server image is not a safe tagged image reference" >&2
+            exit 1
+            ;;
+    esac
+    image_name=${published_server_image%:*}
+    image_tag=${published_server_image##*:}
+    if [ "$image_name" = "$published_server_image" ] ||
+        [ -z "$image_name" ] || [ -z "$image_tag" ] ||
+        [ "$image_name" = "$image_tag" ]; then
+        echo "published server image must include an explicit nonempty tag" >&2
         exit 1
-        ;;
-esac
-case "$source_revision" in
-    *[!0-9a-f]*)
-        echo "repository HEAD is not a lowercase Git object ID" >&2
-        exit 1
-        ;;
-esac
-image_created=$(git -C "$script_dir/.." show -s --format=%cI "$source_revision")
-source_date_epoch=$(git -C "$script_dir/.." show -s --format=%ct "$source_revision")
-case "$source_date_epoch" in
-    ""|*[!0-9]*)
-        echo "repository HEAD has an invalid commit timestamp" >&2
-        exit 1
-        ;;
-esac
-case "$image_created" in
-    ""|*[!0-9TZ:+-]*)
-        echo "repository HEAD has an invalid RFC 3339 commit timestamp" >&2
-        exit 1
-        ;;
-esac
+    fi
+    server_image=$published_server_image
+fi
 
 umask 077
 tmp_file=
@@ -210,12 +267,16 @@ rm -f -- \
     "$tls_directory/server.conf" \
     "$tls_directory/server.csr"
 chmod 0644 \
-	"$tls_directory/administrator.token" \
     "$tls_directory/ca.crt" \
 	"$tls_directory/open-splunk-server.crt" \
 	"$tls_directory/open-splunk-server.key" \
     "$tls_directory/server.crt" \
     "$tls_directory/server.key"
+if [ "$generation_mode" = development ]; then
+    chmod 0600 "$tls_directory/administrator.token"
+else
+    chmod 0644 "$tls_directory/administrator.token"
+fi
 
 bootstrap_password=$(openssl rand -hex 32)
 migration_password=$(openssl rand -hex 32)
@@ -228,18 +289,23 @@ printf '%s' "$runtime_password" >"$tls_directory/clickhouse-runtime.password"
 printf '%s' "$deletion_password" >"$tls_directory/clickhouse-deletion.password"
 printf '%s' "$backup_password" >"$tls_directory/clickhouse-backup.password"
 printf '%s' "$restore_password" >"$tls_directory/clickhouse-restore.password"
-chmod 0644 \
-	"$tls_directory/clickhouse-backup.password" \
-	"$tls_directory/clickhouse-migration.password" \
-	"$tls_directory/clickhouse-restore.password" \
-	"$tls_directory/clickhouse-runtime.password" \
-	"$tls_directory/clickhouse-deletion.password"
+if [ "$generation_mode" = development ]; then
+    chmod 0600 "$tls_directory"/clickhouse-*.password
+else
+    chmod 0644 "$tls_directory"/clickhouse-*.password
+fi
 {
     echo "# Generated by deploy/generate-env.sh; do not commit this file."
-	echo "OPEN_SPLUNK_SOURCE_REVISION=$source_revision"
-	echo "OPEN_SPLUNK_IMAGE_CREATED=$image_created"
-	echo "OPEN_SPLUNK_SOURCE_DATE_EPOCH=$source_date_epoch"
-	echo "OPEN_SPLUNK_SERVER_IMAGE=open-splunk-server:$source_revision"
+	if [ "$generation_mode" = source ]; then
+		echo "OPEN_SPLUNK_SOURCE_REVISION=$source_revision"
+		echo "OPEN_SPLUNK_IMAGE_CREATED=$image_created"
+		echo "OPEN_SPLUNK_SOURCE_DATE_EPOCH=$source_date_epoch"
+	fi
+	echo "OPEN_SPLUNK_SERVER_IMAGE=$server_image"
+	if [ "$generation_mode" = development ]; then
+		echo "OPEN_SPLUNK_CLICKHOUSE_SECURE_NATIVE_PORT=$development_clickhouse_port"
+		echo "OPEN_SPLUNK_SERVER_HTTP_PORT=$development_http_port"
+	fi
     echo "OPEN_SPLUNK_CLICKHOUSE_BOOTSTRAP_PASSWORD=$bootstrap_password"
     echo "OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD=$migration_password"
     echo "OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD=$runtime_password"

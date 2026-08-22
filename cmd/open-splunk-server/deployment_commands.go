@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/auth"
+	"github.com/Suhaibinator/open-splunk/internal/buildinfo"
 	"github.com/Suhaibinator/open-splunk/internal/privatefs"
 	"golang.org/x/sys/unix"
 )
@@ -59,6 +60,8 @@ func runDeploymentSubcommand(arguments []string) (bool, error) {
 		return false, nil
 	}
 	switch arguments[0] {
+	case "version":
+		return true, runVersionSubcommand(arguments[1:], os.Stdout)
 	case "healthcheck":
 		return true, runDeploymentHealthcheckSubcommand(arguments[1:])
 	case "migrate-clickhouse":
@@ -86,6 +89,17 @@ func runDeploymentSubcommand(arguments []string) (bool, error) {
 	default:
 		return false, nil
 	}
+}
+
+func runVersionSubcommand(arguments []string, output io.Writer) error {
+	if len(arguments) != 0 {
+		return errors.New("version does not accept arguments")
+	}
+	identity, err := buildinfo.Current()
+	if err != nil {
+		return err
+	}
+	return buildinfo.WriteIdentity(output, identity)
 }
 
 func runDeploymentHealthcheckSubcommand(arguments []string) error {

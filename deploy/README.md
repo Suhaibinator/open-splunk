@@ -16,20 +16,46 @@ The default stack intentionally does not run a collector. Collectors belong on
 log-producing hosts, and the GradeThis collector cutover is a separate
 deployment unit.
 
-## Development images
+For the shortest source-development workflow, return to the repository root
+and run `make dev-clickhouse` followed by `make run`. That path runs the server
+natively and uses this directory only for its pinned ClickHouse dependency.
 
-No official image version has been published. Build both local images from the
-same clean source revision. The default tag is that full revision:
+## Published releases
+
+Official releases use canonical `v0.MINOR.PATCH` GitHub Release tags. From the
+matching source tag or GitHub source archive, generate credentials for the
+exact published server image and start the stack:
+
+```sh
+cd deploy
+./generate-env.sh --server-image ghcr.io/suhaibinator/open-splunk-server:0.MINOR.PATCH
+docker compose up --detach --wait
+```
+
+Replace `0.MINOR.PATCH` with the release number, without the leading `v`.
+Install collectors on log-producing hosts from the matching
+`ghcr.io/suhaibinator/open-splunk-collector:0.MINOR.PATCH` image; never mix
+server and collector versions.
+The `latest` tag is also published for convenience but is mutable; persistent
+deployments should use an exact version. Published `v0.x` releases retain the
+fresh-state-only policy: databases, volumes, backups, cursors, and collector
+state are not supported across product versions.
+
+## Reproducible local images
+
+Build both non-publishing local-check images from the same clean source
+revision. The default tag is that full revision:
 
 ```text
 open-splunk-server:<full-source-revision>
 open-splunk-collector:<full-source-revision>
 ```
 
-Treat source revision as the identity. Do not push these under a semantic
-release tag or floating `latest`, and do not mix server and collector images
-from different revisions. The first supported publication policy is future
-work described in [`docs/releasing.md`](../docs/releasing.md).
+Treat source revision as the identity of these local checks. Do not push them
+under a semantic release tag or floating `latest`, and do not mix server and
+collector images from different revisions. Official version tags are created
+only by the GitHub Release workflow described in
+[`docs/releasing.md`](../docs/releasing.md).
 
 ## Build and start
 
@@ -50,8 +76,8 @@ export OPEN_SPLUNK_SOURCE_REVISION="$(git rev-parse HEAD)"
 make oci
 ```
 
-The current runtime is a development build. Its full source revision is the
-authoritative identity, not a compatibility profile.
+These locally checked images are unreleased artifacts. Their full source
+revision is the authoritative identity, not a compatibility profile.
 
 `git status --short` must be empty. `make oci` refuses a dirty worktree, a
 short or mismatched revision, unsafe image names,

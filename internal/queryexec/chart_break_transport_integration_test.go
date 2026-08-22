@@ -12,6 +12,7 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
+	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 )
@@ -176,7 +177,8 @@ func chartBreakTransportInsertWideRowAxis(
 	t.Helper()
 	query := "INSERT INTO open_splunk.events (event_id, tenant_id, index_name, event_time, index_time, " +
 		"collected_at, event_time_source, host, source, sourcetype, service, severity, level, body, raw, " +
-		"raw_encoding, trace_id, span_id, fields, field_names, collector_id, batch_id, batch_sequence, " +
+		"raw_encoding, trace_id, span_id, fields, field_names, field_types, field_metadata_version, " +
+		"collector_id, ingest_source_kind, ingest_source_id, batch_id, batch_sequence, " +
 		"expires_at, visibility_seq)"
 	batch, err := connection.PrepareBatch(ctx, query)
 	if err != nil {
@@ -194,7 +196,9 @@ func chartBreakTransportInsertWideRowAxis(
 			fmt.Sprintf("chart-row-ceiling-%06d", index), "tenant", "main",
 			base.Add(time.Duration(index)*time.Second), indexTime,
 			nil, uint8(1), "host", "chart-row-ceiling", "test", nil, uint8(1), &level, &message, []byte(message),
-			uint8(1), nil, nil, document, []string{"path"}, "collector", "chart-ceiling-batch", uint64(index+1),
+			uint8(1), nil, nil, document, []string{"path"},
+			[]uint8{uint8(eventfields.StoredValueTypeString)}, eventfields.CurrentFieldMetadataVersion,
+			"collector", uint8(1), "collector", "chart-ceiling-batch", uint64(index+1),
 			indexTime.Add(24*time.Hour), uint64(1),
 		); err != nil {
 			t.Fatal(err)
@@ -398,7 +402,8 @@ func chartBreakTransportInsertLabeledRowAxis(
 	t.Helper()
 	query := "INSERT INTO open_splunk.events (event_id, tenant_id, index_name, event_time, index_time, " +
 		"collected_at, event_time_source, host, source, sourcetype, service, severity, level, body, raw, " +
-		"raw_encoding, trace_id, span_id, fields, field_names, collector_id, batch_id, batch_sequence, " +
+		"raw_encoding, trace_id, span_id, fields, field_names, field_types, field_metadata_version, " +
+		"collector_id, ingest_source_kind, ingest_source_id, batch_id, batch_sequence, " +
 		"expires_at, visibility_seq)"
 	batch, err := connection.PrepareBatch(ctx, query)
 	if err != nil {
@@ -418,7 +423,9 @@ func chartBreakTransportInsertLabeledRowAxis(
 			fmt.Sprintf("chart-ceiling-domain-%08d", sequence), "tenant", "main",
 			base.Add(time.Duration(index)*time.Second), indexTime,
 			nil, uint8(1), "host", "chart-ceiling-domain", "test", nil, uint8(1), level, &message, []byte(message),
-			uint8(1), nil, nil, document, []string{"path"}, "collector", "chart-domain-batch", sequence,
+			uint8(1), nil, nil, document, []string{"path"},
+			[]uint8{uint8(eventfields.StoredValueTypeString)}, eventfields.CurrentFieldMetadataVersion,
+			"collector", uint8(1), "collector", "chart-domain-batch", sequence,
 			indexTime.Add(24*time.Hour), uint64(1),
 		); err != nil {
 			t.Fatal(err)

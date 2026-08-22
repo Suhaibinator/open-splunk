@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -43,6 +44,20 @@ func TestRunDeploymentSubcommandDispatchesBeforeRuntime(t *testing.T) {
 	handled, err = runDeploymentSubcommand([]string{"migrate-clickhouse", "-unknown"})
 	if err == nil || !handled {
 		t.Fatalf("migration dispatch = (%v, %v), want (true, error)", handled, err)
+	}
+}
+
+func TestVersionSubcommandReportsDevelopmentIdentity(t *testing.T) {
+	t.Parallel()
+	var output bytes.Buffer
+	if err := runVersionSubcommand(nil, &output); err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != "source_revision=development\n" {
+		t.Fatalf("version output = %q", output.String())
+	}
+	if err := runVersionSubcommand([]string{"unexpected"}, &output); err == nil {
+		t.Fatal("version accepted arguments")
 	}
 }
 

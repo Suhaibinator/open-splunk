@@ -69,10 +69,8 @@ test("documentation checker accepts unversioned local links and duplicate anchor
   assert.match(result.stdout, /^documentation check passed/u);
 });
 
-test("documentation checker rejects stale pre-release identifiers", async (t) => {
+test("documentation checker rejects stale versioned contract identifiers", async (t) => {
   const staleValues = [
-    "v0.9",
-    "0.4",
     "open_splunk.v1",
     "proto/open_splunk/v04",
     "/api/v1/search/jobs",

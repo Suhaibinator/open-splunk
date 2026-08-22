@@ -2,8 +2,8 @@
 
 The current development wire package is `open_splunk`. Protobuf sources live
 under `proto/open_splunk`; generated Go uses package `opensplunk`, and generated
-TypeScript follows `gen/ts/open_splunk`. This namespace is not a released
-compatibility commitment and may change before the first supported release.
+TypeScript follows `gen/ts/open_splunk`. Major-version-zero releases do not
+stabilize this namespace; it may change between v0 releases.
 
 The `.proto` files are the field-level source of truth. This document records
 the public transports and invariants. Persistent SQLite rows and ClickHouse
@@ -93,8 +93,9 @@ HEC is bounded JSON rather than protobuf and is documented in [HEC](hec.md).
 
 ## Development rules
 
-The API is pre-release. Source changes may be breaking until the project
-defines its first supported release policy. Within one current source tree:
+The API is major-version-zero. Source and v0 release changes may be breaking
+until the project defines its v1 compatibility policy. Within one current
+source tree:
 
 - Never renumber or reuse protobuf fields or enum numbers; reserve removed
   names and numbers. Every enum starts with `UNSPECIFIED = 0`.

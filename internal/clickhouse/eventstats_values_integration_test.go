@@ -55,7 +55,8 @@ func testEventStatsValuesAgainstClickHouse(
 			event_id, tenant_id, index_name, event_time, index_time,
 			host, source, sourcetype, severity, raw, raw_encoding,
 			fields, field_names, field_types, field_metadata_version,
-			collector_id, batch_id, batch_sequence, expires_at,
+			collector_id, ingest_source_kind, ingest_source_id,
+			batch_id, batch_sequence, expires_at,
 			visibility_seq
 		)`)
 	if prepareErr != nil {
@@ -99,6 +100,8 @@ func testEventStatsValuesAgainstClickHouse(
 			names,
 			types,
 			eventfields.CurrentFieldMetadataVersion,
+			"eventstats-values-boundaries",
+			uint8(1),
 			"eventstats-values-boundaries",
 			id,
 			sequence,

@@ -443,6 +443,73 @@ func TestGenerateEnvAcceptsUTCCommitTimestamp(t *testing.T) {
 	}
 }
 
+func TestGenerateEnvDevelopmentAndPublishedModesDoNotRequireGitMetadata(t *testing.T) {
+	if _, err := exec.LookPath("openssl"); err != nil {
+		t.Skipf("openssl is unavailable: %v", err)
+	}
+	fixture := t.TempDir()
+	generatorPath := filepath.Join(fixture, "generate-env.sh")
+	generator, err := os.ReadFile(filepath.Join(deploymentDirectory(t), "generate-env.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(generatorPath, generator, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 45*time.Second)
+	defer cancel()
+	developmentEnv := filepath.Join(fixture, "development.env")
+	command := exec.CommandContext(ctx, "sh", generatorPath, "--development", developmentEnv)
+	command.Env = append(os.Environ(),
+		"OPEN_SPLUNK_CLICKHOUSE_SECURE_NATIVE_PORT=19440",
+		"OPEN_SPLUNK_SERVER_HTTP_PORT=18080",
+	)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("generate development environment: %v: %s", err, output)
+	}
+	development := parseDeploymentEnvironment(t, readFile(t, developmentEnv))
+	if development["OPEN_SPLUNK_SERVER_IMAGE"] != "open-splunk-server:development" ||
+		development["OPEN_SPLUNK_CLICKHOUSE_SECURE_NATIVE_PORT"] != "19440" ||
+		development["OPEN_SPLUNK_SERVER_HTTP_PORT"] != "18080" ||
+		development["OPEN_SPLUNK_SOURCE_REVISION"] != "" {
+		t.Fatalf("development environment = %#v", development)
+	}
+	for _, variable := range []string{
+		"OPEN_SPLUNK_ADMINISTRATOR_TOKEN_FILE",
+		"OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD_FILE",
+		"OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD_FILE",
+		"OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD_FILE",
+	} {
+		info, err := os.Stat(development[variable])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Fatalf("%s permissions = %#o, want 0600", variable, info.Mode().Perm())
+		}
+	}
+
+	publishedEnv := filepath.Join(fixture, "published.env")
+	publishedImage := "ghcr.io/suhaibinator/open-splunk-server:0.7.8"
+	command = exec.CommandContext(
+		ctx,
+		"sh",
+		generatorPath,
+		"--server-image",
+		publishedImage,
+		publishedEnv,
+	)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("generate published environment: %v: %s", err, output)
+	}
+	published := parseDeploymentEnvironment(t, readFile(t, publishedEnv))
+	if published["OPEN_SPLUNK_SERVER_IMAGE"] != publishedImage ||
+		published["OPEN_SPLUNK_SOURCE_REVISION"] != "" {
+		t.Fatalf("published environment = %#v", published)
+	}
+}
+
 func TestGenerateEnvCreatesVerifiedClickHouseTLSIdentity(t *testing.T) {
 	if _, err := exec.LookPath("openssl"); err != nil {
 		t.Skipf("openssl is unavailable: %v", err)

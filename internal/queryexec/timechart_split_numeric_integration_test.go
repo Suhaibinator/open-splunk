@@ -11,6 +11,7 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
+	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 )
 
@@ -338,7 +339,8 @@ func queryIntegrationInsertSplitNumericTimechartEvents(
 	t.Helper()
 	query := "INSERT INTO open_splunk.events (event_id, tenant_id, index_name, event_time, index_time, " +
 		"collected_at, event_time_source, host, source, sourcetype, service, severity, level, body, raw, " +
-		"raw_encoding, trace_id, span_id, fields, field_names, collector_id, batch_id, batch_sequence, " +
+		"raw_encoding, trace_id, span_id, fields, field_names, field_types, field_metadata_version, " +
+		"collector_id, ingest_source_kind, ingest_source_id, batch_id, batch_sequence, " +
 		"expires_at, visibility_seq)"
 	batch, err := connection.PrepareBatch(ctx, query)
 	if err != nil {
@@ -445,6 +447,17 @@ func queryIntegrationInsertSplitNumericTimechartEvents(
 			fieldNames = append(fieldNames, "metric")
 		}
 		slices.Sort(fieldNames)
+		fieldTypes := make([]uint8, len(fieldNames))
+		for fieldIndex, fieldName := range fieldNames {
+			switch fieldName {
+			case "metric":
+				fieldTypes[fieldIndex] = queryIntegrationStoredType(t, event.metric)
+			case "path":
+				fieldTypes[fieldIndex] = queryIntegrationStoredType(t, event.path)
+			default:
+				t.Fatalf("unsupported split numeric timechart fixture field %q", fieldName)
+			}
+		}
 		tenant := event.tenant
 		if tenant == "" {
 			tenant = "tenant"
@@ -482,6 +495,10 @@ func queryIntegrationInsertSplitNumericTimechartEvents(
 			nil,
 			document,
 			fieldNames,
+			fieldTypes,
+			eventfields.CurrentFieldMetadataVersion,
+			"collector",
+			uint8(1),
 			"collector",
 			"timechart-numeric-split-batch",
 			uint64(index+1),
