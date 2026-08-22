@@ -527,7 +527,6 @@ async function extractGitBlobs(repositoryRoot, entries, destination) {
     const processError = await completion;
     if (processError !== null && processError !== error) {
       // AggregateError retains both the stream failure and process failure.
-      // eslint-disable-next-line preserve-caught-error
       throw new AggregateError(
         [error, processError],
         `${error.message}; ${processError.message}`,

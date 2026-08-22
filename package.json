@@ -20,7 +20,7 @@
   },
   "dependencies": {
     "@bufbuild/protobuf": "^2.14.0",
-    "next": "^16.3.1",
+    "next": "^16.3.2",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },
@@ -30,8 +30,8 @@
     "@types/node": "^26.2.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
-    "oxlint": "^1.78.0",
-    "ts-proto": "^2.12.0",
+    "oxlint": "^1.79.0",
+    "ts-proto": "^2.12.1",
     "typescript": "^7.0.2"
   }
 }

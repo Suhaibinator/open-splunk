@@ -43,7 +43,6 @@ export async function cleanUIOutput(output) {
         } catch (restoreError) {
           preserveTombstone = true;
           // AggregateError retains both the rejection and the failed recovery.
-          // eslint-disable-next-line preserve-caught-error
           throw new AggregateError(
             [rejection, restoreError],
             `${rejection.message}; recovery data preserved at ${tombstoneRoot}`,
