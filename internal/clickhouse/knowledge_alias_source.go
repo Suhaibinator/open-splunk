@@ -357,17 +357,31 @@ func compileKnowledgeFieldSourceFromScalar(
 		[]string{presenceSQL, typeSQL},
 		source,
 	)
+	sourceValueSQL := "CAST(" + value.valueSQL + " AS Dynamic)"
+	sourceValueArgs := append([]any(nil), value.valueArgs...)
+	if isNativeMultivalueKind(value.kind) &&
+		value.optionalMultivaluePresentSQL != "" {
+		// Native arrays are physically non-null even when the logical value is
+		// null. Preserve the independent field-occurrence bit above, but lower a
+		// logically null list to Dynamic null before freezing the source tuple.
+		// Otherwise a failed conditional assignment can resurrect the physical
+		// [] sentinel as a present-empty list.
+		logicalPresenceSQL, logicalPresenceArgs := compiledScalarPresenceSQL(value)
+		sourceValueSQL = "if(ifNull(" + logicalPresenceSQL + ", 0), " +
+			sourceValueSQL + ", CAST(NULL AS Dynamic))"
+		sourceValueArgs = append(logicalPresenceArgs, sourceValueArgs...)
+	}
 	source = bindSQLExpressions(
 		[]string{valueVariable},
-		[]string{"CAST(" + value.valueSQL + " AS Dynamic)"},
+		[]string{sourceValueSQL},
 		source,
 	)
 	args := make([]any, 0,
-		len(presenceArgs)+len(typeArgs)+len(value.valueArgs),
+		len(presenceArgs)+len(typeArgs)+len(sourceValueArgs),
 	)
 	args = append(args, presenceArgs...)
 	args = append(args, typeArgs...)
-	args = append(args, value.valueArgs...)
+	args = append(args, sourceValueArgs...)
 	return newCompiledKnowledgeFieldSource(source, args, presenceSQL, presenceArgs)
 }
 

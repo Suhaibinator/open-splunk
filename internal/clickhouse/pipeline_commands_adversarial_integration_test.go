@@ -867,16 +867,16 @@ func TestPipelineAdversarialAgainstClickHouse(t *testing.T) {
 		}
 		presentColumn := descriptors[0].PresentColumn()
 		// ClickHouse cannot represent Nullable(Array(String)). The physical
-		// transport therefore carries a non-null array plus a private presence
-		// bit. Missing/null are raw [] with bit 0; a present typed-empty value is
-		// raw [] with bit 1. The queryexec adversarial test separately verifies
-		// that this becomes public null versus a present empty list.
+		// transport therefore carries a non-null array plus a private tri-state:
+		// 0 is missing, 1 is a present list (including empty), and 2 is explicit
+		// null. The queryexec adversarial test separately verifies the public
+		// values produced from all three states.
 		pipelineAssertJSONRows(t, queryContext, connection, withoutEmpty,
 			[]string{"event_id", "tags_csv", presentColumn},
 			[][]string{
 				{"v03-01", "[a,β]", "1"}, {"v03-02", "[x]", "1"},
 				{"v03-03", "[]", "1"}, {"v03-04", "[]", "0"},
-				{"v03-05", "[]", "0"}, {"v03-06", "[dup,dup,界]", "1"},
+				{"v03-05", "[]", "2"}, {"v03-06", "[dup,dup,界]", "1"},
 			},
 		)
 		withEmpty := compile(base + ` event_id="v03-01"` +

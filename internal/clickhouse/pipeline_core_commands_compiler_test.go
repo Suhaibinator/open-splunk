@@ -144,6 +144,8 @@ func TestPipelineStrcatAllRequiredPreservesOptionalMultivalueNullness(t *testing
 	for _, required := range []string{
 		`"__os_makemv_value_present_`,
 		`if(ifNull(__os_ko_source_present, 0), __os_ko_source_value, CAST(NULL AS Dynamic))`,
+		`if(ifNull("__os_makemv_value_present_`,
+		`CAST(NULL AS Dynamic)`,
 		`AS "__os_strcat_exists_`,
 		`toUInt8(ifNull("__os_makemv_value_present_`,
 	} {

@@ -66,6 +66,8 @@ func TestDeploymentComposeRecoveryBootstrapOverrideContract(t *testing.T) {
 		"- /bin/sh",
 		"chown 101:65532 /var/lib/open-splunk/clickhouse-backups",
 		"chmod 2750 /var/lib/open-splunk/clickhouse-backups",
+		"chown 101:101 /var/log/clickhouse-server",
+		"chmod 0700 /var/log/clickhouse-server",
 	} {
 		if !strings.Contains(override, fragment) {
 			t.Errorf("Compose integration recovery bootstrap is missing %q", fragment)
