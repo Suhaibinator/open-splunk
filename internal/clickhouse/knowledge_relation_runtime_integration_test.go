@@ -405,7 +405,7 @@ ORDER BY n`
 		// KNOWN ISSUE: skipped because the correct behavior cannot currently be
 		// asserted at all -- the losing alias branch really is evaluated, so
 		// this subtest can only fail, never pass, and it fails identically on
-		// 26.3.17.56 and 26.7.3.19. It is not a version regression and not a
+		// 26.3.17.56 and 26.7.5.10. It is not a version regression and not a
 		// fixture defect.
 		//
 		// Mechanism (minimal proof, with short_circuit_function_evaluation

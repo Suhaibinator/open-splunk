@@ -184,7 +184,7 @@ async function installReleaseToolShims(fixture) {
       "set -euo pipefail\n" +
       "test \"${1:-}\" = env\n" +
       "test \"${2:-}\" = GOVERSION\n" +
-      "printf 'go1.26.6\\n'\n",
+      "printf 'go1.27.0\\n'\n",
   );
   await writeFile(
     path.join(binaryDirectory, "npm"),
@@ -603,7 +603,11 @@ test("release launcher pins match the canonical tool-version files", async () =>
   const goVersion = /^go ([^\s]+)$/m.exec(goModule)?.[1];
 
   assert.ok(goVersion, "go.mod must pin a Go version");
-  assert.equal(makeVersion("RELEASE_GO_VERSION"), goVersion);
+  const releaseGoVersion = makeVersion("RELEASE_GO_VERSION");
+  assert.ok(
+    releaseGoVersion === goVersion || releaseGoVersion === `${goVersion}.0`,
+    `RELEASE_GO_VERSION ${releaseGoVersion} must match go.mod ${goVersion}`,
+  );
   assert.equal(makeVersion("RELEASE_NODE_VERSION"), nodeVersion.trim());
   assert.equal(makeVersion("RELEASE_NODE_VERSION"), packageJSON.engines.node);
   assert.equal(makeVersion("RELEASE_NPM_VERSION"), packageJSON.engines.npm);

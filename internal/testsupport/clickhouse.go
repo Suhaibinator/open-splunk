@@ -17,7 +17,7 @@ import (
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 )
 
-const DefaultClickHouseImage = "clickhouse/clickhouse-server:26.7.3.19@sha256:f90a77560f72b10802106ee49e9870e41668cbc496e280c3911f6e3b216657f3"
+const DefaultClickHouseImage = "clickhouse/clickhouse-server:26.7.5.10-alpine@sha256:0a45b864c73322d4360dea1973ee9b77f29c51af1242ad2d47409908071fa56e"
 
 // ResolvePinnedClickHouseImage selects the repository default for an empty
 // override and otherwise requires a canonical sha256 digest suffix. High-value

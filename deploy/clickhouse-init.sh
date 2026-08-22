@@ -62,7 +62,7 @@ require_distinct_secrets \
 # provisioning work and fail closed if either mount is not owned by that UID.
 chmod 0700 /var/lib/clickhouse /var/log/clickhouse-server
 
-expected_server_version=26.7.3.19
+expected_server_version=26.7.5.10
 server_version=$(
     clickhouse-client \
         --host 127.0.0.1 \

@@ -375,11 +375,11 @@ test("OCI targets are pinned scratch runtimes with a minimal non-root contract",
 
   assert.match(
     dockerfile,
-    /node:26\.7\.0-bookworm-slim@sha256:cd565714d4da3e84bfd341e31448f81d47c6362198f152345297c9c1154e6341/,
+    /node:26\.7\.0-alpine3\.23@sha256:ce3cc39fe3b8b2602d3b1c4d63d301e46b48c550ecb627869853ddcdda418b63/,
   );
   assert.match(
     dockerfile,
-    /golang:1\.26\.6-bookworm@sha256:116d58cbd88c1297624acc6e967a060012422bacf9930927e23fb719189c6f36/,
+    /golang:1\.27\.0-alpine3\.23@sha256:3747dcba41c8b0db3211fda4db61638b980e17ac5bb3c94460a975a9cfe19395/,
   );
   assert.match(dockerfile, /^FROM scratch AS server$/m);
   assert.match(dockerfile, /^FROM scratch AS collector$/m);

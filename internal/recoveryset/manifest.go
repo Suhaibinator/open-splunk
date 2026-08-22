@@ -25,7 +25,7 @@ const (
 	manifestFilename                = "manifest.json"
 	controlPlaneDirectory           = "control-plane"
 	controlPlaneManifestName        = "control-plane/manifest.json"
-	clickHouseServerVersion         = "26.7.3.19"
+	clickHouseServerVersion         = "26.7.5.10"
 	clickHouseRecoveryDisk          = recoverycontract.Disk
 	clickHouseDatabase              = recoverycontract.CanonicalDatabase
 	clickHouseArchiveDatabasePrefix = recoverycontract.ArchiveDatabasePrefix

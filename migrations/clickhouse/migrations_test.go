@@ -1004,7 +1004,7 @@ func TestDeploymentClickHouseBootstrapSeparatesServicePrincipals(t *testing.T) {
 		"GRANT ALTER DELETE, SELECT(tenant_id, index_name) ON open_splunk.events TO open_splunk_deletion",
 		"GRANT SELECT ON system.tables TO open_splunk_deletion",
 		"GRANT SELECT ON system.mutations TO open_splunk_deletion",
-		"expected_server_version=26.7.3.19",
+		"expected_server_version=26.7.5.10",
 		"SELECT version()",
 		"chmod 0700 /var/lib/clickhouse /var/log/clickhouse-server",
 	} {
