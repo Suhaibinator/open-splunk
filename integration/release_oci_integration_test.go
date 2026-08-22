@@ -1425,7 +1425,6 @@ func (fixture *releaseOCIRecoveryFixture) restoreIntoFreshVolumes() {
 		"--wait-timeout",
 		"240",
 		"--no-build",
-		"--no-deps",
 		"--force-recreate",
 		"clickhouse",
 	)
