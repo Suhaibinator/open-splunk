@@ -157,6 +157,8 @@ func TestDeploymentClickHouseNativeRecoveryContract(t *testing.T) {
 		"prepare-clickhouse-recovery-volume",
 		"-path",
 		"/var/lib/open-splunk/clickhouse-backups",
+		"-log-path",
+		"/var/log/clickhouse-server",
 	})
 	if volumeBootstrap.User != "0:65532" || volumeBootstrap.NetworkMode != "none" {
 		t.Errorf(
@@ -169,6 +171,7 @@ func TestDeploymentClickHouseNativeRecoveryContract(t *testing.T) {
 	requireExactComposeSequence(t, "recovery volume bootstrap capabilities", volumeBootstrap.CapAdd, []string{"CHOWN", "FOWNER"})
 	requireExactComposeSequence(t, "recovery volume bootstrap mounts", volumeBootstrap.Volumes, []string{
 		"clickhouse-recovery:/var/lib/open-splunk/clickhouse-backups",
+		"clickhouse-logs:/var/log/clickhouse-server",
 	})
 
 	clickhouse := requireDeploymentComposeService(t, compose, "clickhouse")

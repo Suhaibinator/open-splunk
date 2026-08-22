@@ -3160,6 +3160,8 @@ func releaseOCIAssertRecoveryVolumeBootstrap(
 		"prepare-clickhouse-recovery-volume",
 		"-path",
 		"/var/lib/open-splunk/clickhouse-backups",
+		"-log-path",
+		"/var/log/clickhouse-server",
 	}
 	if container.Config.User != "0:65532" || !container.HostConfig.ReadonlyRootfs ||
 		!slices.Contains(container.HostConfig.CapDrop, "ALL") ||
@@ -3232,19 +3234,24 @@ func releaseOCIAssertRecoveryVolumeBootstrap(
 			}
 		}
 	}
-	if len(container.Mounts) != 1 {
+	if len(container.Mounts) != 2 {
 		t.Fatalf(
-			"ClickHouse recovery volume bootstrap mounts = %+v, want one recovery volume",
+			"ClickHouse recovery volume bootstrap mounts = %+v, want recovery and log volumes",
 			container.Mounts,
 		)
 	}
-	mount := container.Mounts[0]
-	if mount.Type != "volume" || mount.Name != stack.project+"_clickhouse-recovery" ||
-		mount.Destination != "/var/lib/open-splunk/clickhouse-backups" || !mount.RW {
-		t.Fatalf(
-			"ClickHouse recovery volume bootstrap mount = %+v, want writable project recovery volume",
-			mount,
-		)
+	wantMounts := map[string]string{
+		stack.project + "_clickhouse-recovery": "/var/lib/open-splunk/clickhouse-backups",
+		stack.project + "_clickhouse-logs":     "/var/log/clickhouse-server",
+	}
+	for _, mount := range container.Mounts {
+		if mount.Type != "volume" || !mount.RW || wantMounts[mount.Name] != mount.Destination {
+			t.Fatalf("ClickHouse recovery volume bootstrap mount = %+v, want writable project volume", mount)
+		}
+		delete(wantMounts, mount.Name)
+	}
+	if len(wantMounts) != 0 {
+		t.Fatalf("ClickHouse recovery volume bootstrap is missing mounts: %+v", wantMounts)
 	}
 }
 

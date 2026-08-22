@@ -87,6 +87,78 @@ func TestPrepareClickHouseRecoveryVolumeRequiresRootBeforeInspection(t *testing.
 	}
 }
 
+func TestPrepareClickHouseLogVolumeInitializesDockerFreshRoot(t *testing.T) {
+	t.Parallel()
+
+	harness := newFakeClickHouseRecoveryVolumeHarness(fakeClickHouseRecoveryVolumeMetadata{
+		mode:  os.ModeDir | 0o777,
+		uid:   0,
+		gid:   clickHouseLogVolumeGID,
+		inode: 91,
+	})
+	if err := prepareClickHouseLogVolumeWithDependencies(
+		"/clickhouse-logs",
+		harness.dependencies(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if harness.descriptor.uid != clickHouseLogVolumeUID ||
+		harness.descriptor.gid != clickHouseLogVolumeGID ||
+		harness.descriptor.mode.Perm() != clickHouseLogVolumeReadyMode {
+		t.Fatalf("prepared log metadata = %+v", *harness.descriptor)
+	}
+	if harness.directory.chownCalls != 1 || harness.directory.chmodCalls != 1 {
+		t.Fatalf(
+			"log preparation mutations = chown %d chmod %d, want one each",
+			harness.directory.chownCalls,
+			harness.directory.chmodCalls,
+		)
+	}
+}
+
+func TestPrepareClickHouseLogVolumeReadyRootIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	harness := newFakeClickHouseRecoveryVolumeHarness(fakeClickHouseRecoveryVolumeMetadata{
+		mode:  os.ModeDir | clickHouseLogVolumeReadyMode,
+		uid:   clickHouseLogVolumeUID,
+		gid:   clickHouseLogVolumeGID,
+		inode: 92,
+	})
+	harness.directory.entries = []string{"clickhouse-server.log"}
+	if err := prepareClickHouseLogVolumeWithDependencies(
+		"/clickhouse-logs",
+		harness.dependencies(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if harness.directory.chownCalls != 0 || harness.directory.chmodCalls != 0 {
+		t.Fatalf("ready log volume was mutated: %#v", harness.calls)
+	}
+}
+
+func TestPrepareClickHouseLogVolumeRejectsNonemptyFreshRoot(t *testing.T) {
+	t.Parallel()
+
+	harness := newFakeClickHouseRecoveryVolumeHarness(fakeClickHouseRecoveryVolumeMetadata{
+		mode:  os.ModeDir | 0o777,
+		uid:   0,
+		gid:   clickHouseLogVolumeGID,
+		inode: 93,
+	})
+	harness.directory.entries = []string{"unexpected"}
+	err := prepareClickHouseLogVolumeWithDependencies(
+		"/clickhouse-logs",
+		harness.dependencies(),
+	)
+	if err == nil || !strings.Contains(err.Error(), "must be empty") {
+		t.Fatalf("nonempty fresh log error = %v", err)
+	}
+	if harness.directory.chownCalls != 0 || harness.directory.chmodCalls != 0 {
+		t.Fatalf("nonempty fresh log volume was mutated: %#v", harness.calls)
+	}
+}
+
 func TestPrepareClickHouseRecoveryVolumeInitializesFreshEmptyRoot(t *testing.T) {
 	t.Parallel()
 

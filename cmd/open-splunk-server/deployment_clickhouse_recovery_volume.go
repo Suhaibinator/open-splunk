@@ -66,10 +66,18 @@ func runPrepareClickHouseRecoveryVolumeSubcommandWithDependencies(
 	pathFlag := exactOnceStringFlag{
 		duplicateError: "-path may be specified exactly once",
 	}
+	logPathFlag := exactOnceStringFlag{
+		duplicateError: "-log-path may be specified at most once",
+	}
 	flags.Var(
 		&pathFlag,
 		"path",
 		"absolute ClickHouse recovery archive volume root",
+	)
+	flags.Var(
+		&logPathFlag,
+		"log-path",
+		"absolute ClickHouse log volume root",
 	)
 	if err := flags.Parse(arguments); err != nil {
 		return fmt.Errorf(
@@ -88,11 +96,20 @@ func runPrepareClickHouseRecoveryVolumeSubcommandWithDependencies(
 	if err := controlbackup.ValidateExactAbsolutePath("-path", pathFlag.value); err != nil {
 		return fmt.Errorf("prepare ClickHouse recovery volume: %w", err)
 	}
-	return prepareClickHouseRecoveryVolumeWithDependencies(
+	if err := prepareClickHouseRecoveryVolumeWithDependencies(
 		pathFlag.value,
 		dependencies,
 		hooks,
-	)
+	); err != nil {
+		return err
+	}
+	if !logPathFlag.set {
+		return nil
+	}
+	if err := controlbackup.ValidateExactAbsolutePath("-log-path", logPathFlag.value); err != nil {
+		return fmt.Errorf("prepare ClickHouse log volume: %w", err)
+	}
+	return prepareClickHouseLogVolumeWithDependencies(logPathFlag.value, dependencies)
 }
 
 func defaultPrepareClickHouseRecoveryVolumeDependencies() prepareClickHouseRecoveryVolumeDependencies {

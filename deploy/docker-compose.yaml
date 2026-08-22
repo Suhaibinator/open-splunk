@@ -35,8 +35,11 @@ services:
       - prepare-clickhouse-recovery-volume
       - -path
       - /var/lib/open-splunk/clickhouse-backups
+      - -log-path
+      - /var/log/clickhouse-server
     volumes:
       - clickhouse-recovery:/var/lib/open-splunk/clickhouse-backups
+      - clickhouse-logs:/var/log/clickhouse-server
     pids_limit: 32
 
   clickhouse:
