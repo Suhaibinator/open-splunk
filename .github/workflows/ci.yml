@@ -126,17 +126,10 @@ jobs:
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.12.2
-          # The published v2.12.2 binaries were built with Go 1.26 and reject
-          # Go 1.27 modules. Build the exact release with the configured Go
-          # toolchain until upstream publishes a Go 1.27-built binary.
-          install-mode: goinstall
+          version: v2.13.1
           # The inherited inventory is clean; enforce the complete Go tree on
           # every push rather than retaining a historical diff-only baseline.
-          # Staticcheck's current IR builder panics on Go 1.27 generic-method
-          # syntax in dependencies. Retain every other configured analyzer;
-          # remove this exclusion when golangci-lint ships Go 1.27 support.
-          args: --timeout=5m --disable=staticcheck
+          args: --timeout=5m
 
   go-test:
     name: Go tests (${{ matrix.label }})
