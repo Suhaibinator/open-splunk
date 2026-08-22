@@ -449,7 +449,7 @@ func insertKnowledgeCompatibilityRuntimeFixtures(
 	query := "INSERT INTO open_splunk.events (event_id, tenant_id, index_name, event_time, index_time, " +
 		"collected_at, event_time_source, host, source, sourcetype, service, severity, level, body, raw, " +
 		"raw_encoding, trace_id, span_id, fields, field_names, field_types, field_metadata_version, " +
-		"collector_id, batch_id, batch_sequence, expires_at, visibility_seq)"
+		"collector_id, ingest_source_kind, ingest_source_id, batch_id, batch_sequence, expires_at, visibility_seq)"
 	batch, err := connection.PrepareBatch(ctx, query)
 	if err != nil {
 		t.Fatalf("prepare compatibility runtime fixture: %v", err)
@@ -494,6 +494,8 @@ func insertKnowledgeCompatibilityRuntimeFixtures(
 			fieldNames,
 			fieldTypes,
 			eventfields.CurrentFieldMetadataVersion,
+			"knowledge-compatibility-collector",
+			uint8(1),
 			"knowledge-compatibility-collector",
 			"knowledge-compatibility-batch",
 			uint64(1_000+index),

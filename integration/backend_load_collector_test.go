@@ -115,9 +115,9 @@ func assertBackendLoadPendingWAL(
 ) wal.Stats {
 	t.Helper()
 	queue, err := wal.Open(wal.Options{
-		Dir:           filepath.Join(stateDir, "wal"),
-		Sync:          wal.SyncAlways,
-		CollectorID:   readCollectorIdentity(t, stateDir),
+		Dir:         filepath.Join(stateDir, "wal"),
+		Sync:        wal.SyncAlways,
+		CollectorID: readCollectorIdentity(t, stateDir),
 	})
 	if err != nil {
 		t.Fatalf("reopen pending backend load WAL: %v", err)

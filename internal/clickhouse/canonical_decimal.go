@@ -200,17 +200,17 @@ func canonicalDecimalAdjustedExponentSQL(signSQL, magnitudeSQL, adjustmentSQL st
 
 	added := canonicalDecimalMagnitudeAddSmallSQL(
 		magnitude,
-		"toUInt64OrZero("+adjustmentMagnitude+")",
+		"toInt128OrZero("+adjustmentMagnitude+")",
 	)
 	subtracted := canonicalDecimalMagnitudeSubtractSmallSQL(
 		magnitude,
-		"toUInt64OrZero("+adjustmentMagnitude+")",
+		"toInt128OrZero("+adjustmentMagnitude+")",
 	)
-	reverseMagnitude := "toUInt64OrZero(if(length(" + magnitude + ") <= " +
+	reverseMagnitude := "toInt128OrZero(if(length(" + magnitude + ") <= " +
 		strconv.Itoa(canonicalDecimalMagnitudeChunkDigits) + ", " + magnitude +
 		", CAST('0' AS String)))"
-	reverseSubtracted := "toString(if(" + comparison + " < 0, toUInt64OrZero(" +
-		adjustmentMagnitude + ") - " + reverseMagnitude + ", toUInt64(0)))"
+	reverseSubtracted := "toString(if(" + comparison + " < 0, toInt128OrZero(" +
+		adjustmentMagnitude + ") - " + reverseMagnitude + ", toInt128(0)))"
 	result := "multiIf(" +
 		adjustmentSign + " = 0, tuple(" + sign + ", " + magnitude + "), " +
 		sign + " = 0, tuple(" + adjustmentSign + ", " + adjustmentMagnitude + "), " +
@@ -246,7 +246,7 @@ func canonicalDecimalMagnitudeComparisonSQL(left, right string) string {
 		", toInt8(1), toInt8(0))"
 }
 
-// canonicalDecimalMagnitudeAddSmallSQL adds one UInt64-sized adjustment to an
+// canonicalDecimalMagnitudeAddSmallSQL adds one bounded Int128 adjustment to an
 // arbitrary-precision normalized magnitude. Only the final 18 digits are
 // converted; carry into the prefix is handled lexically.
 func canonicalDecimalMagnitudeAddSmallSQL(magnitudeSQL, adjustmentSQL string) string {
@@ -258,23 +258,27 @@ func canonicalDecimalMagnitudeAddSmallSQL(magnitudeSQL, adjustmentSQL string) st
 	suffixValue := "__os_canonical_decimal_magnitude_add_suffix_value"
 	total := "__os_canonical_decimal_magnitude_add_total"
 
-	base := "toUInt64('" + canonicalDecimalMagnitudeChunkBase + "')"
+	// Keep the addition in an explicitly unsigned wide domain. When this
+	// helper is nested under Dynamic lambdas, ClickHouse may otherwise infer
+	// incompatible signed and unsigned widths even though both operands are
+	// bounded and non-negative.
+	base := "toInt128('" + canonicalDecimalMagnitudeChunkBase + "')"
 	paddedTotal := "leftPad(toString(" + total + "), " +
 		strconv.Itoa(canonicalDecimalMagnitudeChunkDigits) + ", '0')"
 	paddedCarry := "leftPad(toString(if(" + total + " >= " + base + ", " +
-		total + " - " + base + ", toUInt64(0))), " +
+		total + " - " + base + ", toInt128(0))), " +
 		strconv.Itoa(canonicalDecimalMagnitudeChunkDigits) + ", '0')"
 	result := "if(" + short + " != 0, toString(" + total + "), if(" + total +
 		" >= " + base + ", concat(" + canonicalDecimalMagnitudeIncrementSQL(prefix) +
 		", " + paddedCarry + "), concat(" + prefix + ", " + paddedTotal + ")))"
 	result = bindSQLExpressions(
 		[]string{total},
-		[]string{suffixValue + " + " + adjustment},
+		[]string{"toInt128(" + suffixValue + ") + toInt128(" + adjustment + ")"},
 		result,
 	)
 	result = bindSQLExpressions(
 		[]string{suffixValue},
-		[]string{"toUInt64OrZero(" + suffix + ")"},
+		[]string{"toInt128OrZero(" + suffix + ")"},
 		result,
 	)
 	result = bindSQLExpressions(
@@ -324,7 +328,7 @@ func canonicalDecimalMagnitudeIncrementSQL(magnitudeSQL string) string {
 	return bindSQLExpressions([]string{magnitude}, []string{magnitudeSQL}, result)
 }
 
-// canonicalDecimalMagnitudeSubtractSmallSQL subtracts one UInt64-sized
+// canonicalDecimalMagnitudeSubtractSmallSQL subtracts one bounded Int128
 // adjustment from a normalized magnitude known by the caller to be at least as
 // large. Borrow from an arbitrary-sized prefix is handled lexically.
 func canonicalDecimalMagnitudeSubtractSmallSQL(magnitudeSQL, adjustmentSQL string) string {
@@ -337,11 +341,13 @@ func canonicalDecimalMagnitudeSubtractSmallSQL(magnitudeSQL, adjustmentSQL strin
 	borrow := "__os_canonical_decimal_magnitude_subtract_borrow"
 	candidate := "__os_canonical_decimal_magnitude_subtract_candidate"
 
-	base := "toUInt64('" + canonicalDecimalMagnitudeChunkBase + "')"
-	difference := "if(" + suffixValue + " >= " + adjustment + ", " + suffixValue +
-		" - " + adjustment + ", toUInt64(0))"
-	borrowedDifference := "if(" + suffixValue + " < " + adjustment + ", " + base +
-		" + " + suffixValue + " - " + adjustment + ", toUInt64(0))"
+	base := "toInt128('" + canonicalDecimalMagnitudeChunkBase + "')"
+	wideSuffix := "toInt128(" + suffixValue + ")"
+	wideAdjustment := "toInt128(" + adjustment + ")"
+	difference := "if(" + wideSuffix + " >= " + wideAdjustment + ", " + wideSuffix +
+		" - " + wideAdjustment + ", toInt128(0))"
+	borrowedDifference := "if(" + wideSuffix + " < " + wideAdjustment + ", " + base +
+		" + " + wideSuffix + " - " + wideAdjustment + ", toInt128(0))"
 	longResult := "if(" + borrow + " = 0, concat(" + prefix +
 		", leftPad(toString(" + difference + "), " +
 		strconv.Itoa(canonicalDecimalMagnitudeChunkDigits) + ", '0')), concat(" +
@@ -357,12 +363,12 @@ func canonicalDecimalMagnitudeSubtractSmallSQL(magnitudeSQL, adjustmentSQL strin
 	)
 	result = bindSQLExpressions(
 		[]string{borrow},
-		[]string{"toUInt8(" + suffixValue + " < " + adjustment + ")"},
+		[]string{"toUInt8(" + wideSuffix + " < " + wideAdjustment + ")"},
 		result,
 	)
 	result = bindSQLExpressions(
 		[]string{suffixValue},
-		[]string{"toUInt64OrZero(" + suffix + ")"},
+		[]string{"toInt128OrZero(" + suffix + ")"},
 		result,
 	)
 	result = bindSQLExpressions(

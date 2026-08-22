@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -133,5 +134,21 @@ func TestCanonicalDecimalPayloadTextSQLAgainstClickHouse(t *testing.T) {
 		if got != "" {
 			t.Fatalf("rejected canonical decimal for input length %d = %q, want empty", len(source), got)
 		}
+	}
+
+	// Native multivalue consumers invoke the canonicalizer inside a Dynamic
+	// lambda even for non-Decimal members. Pin that type-inference context: it
+	// must remain valid on the release engine, not merely as a String scalar.
+	dynamicValues := "arrayConcat([CAST('text' AS Dynamic)], [CAST(1 AS Dynamic)], " +
+		"[CAST(1.0 AS Dynamic)], [CAST(true AS Dynamic)], " + nullNativeMVSQL() + ")"
+	dynamicQuery := "SELECT arrayMap(member -> " +
+		nativeMVCanonicalTextSQL("member") + ", " + dynamicValues + ")"
+	var dynamicText []string
+	if queryErr := connection.QueryRow(queryContext, dynamicQuery).Scan(&dynamicText); queryErr != nil {
+		t.Fatalf("execute canonical text in Dynamic lambda: %v", queryErr)
+	}
+	wantDynamic := []string{"text", "1", "1", "true", "null"}
+	if !slices.Equal(dynamicText, wantDynamic) {
+		t.Fatalf("canonical mixed Dynamic values = %q, want %q", dynamicText, wantDynamic)
 	}
 }

@@ -2099,7 +2099,7 @@ func ordinaryChronologicalDummyValue(field fieldState) (string, bool) {
 	case fieldKindStringArray:
 		return "CAST([], 'Array(String)')", true
 	case fieldKindDynamicArray:
-		return "CAST([], 'Array(Dynamic)')", true
+		return emptyNativeMVSQL(), true
 	case fieldKindInvalid:
 		return "CAST(NULL AS Nullable(String))", true
 	default:
@@ -14321,14 +14321,14 @@ func compileMVSortScalar(
 			nullDynamic + ")"
 		bound := "arrayElement(arrayMap(value -> " + body +
 			", [" + input.valueSQL + "]), 1)"
-		existsSQL := input.existsSQL
-		if existsSQL == "" {
-			existsSQL = "1"
+		dynamicExistsSQL := input.existsSQL
+		if dynamicExistsSQL == "" {
+			dynamicExistsSQL = "1"
 		}
-		if existsSQL == "1" {
+		if dynamicExistsSQL == "1" {
 			valueSQL = bound
 		} else {
-			valueSQL = "if(" + existsSQL + ", " + bound + ", " + nullDynamic + ")"
+			valueSQL = "if(" + dynamicExistsSQL + ", " + bound + ", " + nullDynamic + ")"
 			valueArgs = append(
 				append([]any(nil), input.existsArgs...),
 				input.valueArgs...,

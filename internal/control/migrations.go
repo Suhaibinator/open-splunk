@@ -68,7 +68,7 @@ func (db *DB) VerifyCurrentMigrations(
 	if err != nil {
 		return MigrationIdentity{}, err
 	}
-	if appliedCount != uint32(len(loaded)) {
+	if uint64(appliedCount) != uint64(len(loaded)) {
 		appliedVersion := uint32(0)
 		if appliedCount > 0 {
 			appliedVersion = loaded[appliedCount-1].version

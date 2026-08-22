@@ -486,6 +486,13 @@ func convertContainerOutput(
 	types []uint8,
 	metadataVersion uint8,
 ) (searchjobs.Value, error) {
+	// Container-capable outputs can be overwritten by a scalar on an individual
+	// row. The compiler seals that case as version zero with both relative
+	// metadata arrays empty; no container reconstruction is required. A version
+	// zero row carrying either sidecar remains invalid and is rejected below.
+	if metadataVersion == 0 && len(names) == 0 && len(types) == 0 {
+		return convertValue(value)
+	}
 	metadata, err := eventfields.ParseStoredContainerMetadata(
 		names,
 		types,

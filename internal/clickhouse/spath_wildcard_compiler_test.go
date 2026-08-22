@@ -17,7 +17,7 @@ func TestCompileWildcardSpathPublishesBoundedNativeDynamicArray(t *testing.T) {
 		`JSONExtractArrayRaw(`,
 		`arrayFlatten(`,
 		`JSONExtract(raw, 'Dynamic')`,
-		`CAST([], 'Array(Dynamic)')`,
+		emptyNativeMVSQL(),
 		`"__os_spath_mv_output_state_`,
 		`AS "__os_result_multivalue_present_0"`,
 		SpathInputLimitMarker,
@@ -159,7 +159,7 @@ func TestCompileWildcardSpathPreservesOnlyPriorMultivalueOnNoMatch(t *testing.T)
 			`tupleElement(prior_state, 1)`,
 			`tupleElement(prior_state, 2) != 0`,
 			`tupleElement(prior_state, 3) != 0`,
-			`CAST([], 'Array(Dynamic)')`,
+			emptyNativeMVSQL(),
 		} {
 			if !strings.Contains(multivalue.SQL, required) {
 				t.Fatalf("no-match prior-MV %s SQL is missing %q:\n%s", producer, required, multivalue.SQL)

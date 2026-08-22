@@ -2454,17 +2454,20 @@ func testCompiledQueriesAgainstClickHouse(
 	if err := connection.Exec(ctx, `
 		INSERT INTO open_splunk.events
 			(event_id, tenant_id, index_name, event_time, index_time,
+			 field_metadata_version,
 			 collector_id, ingest_source_kind, ingest_source_id,
 			 expires_at, visibility_seq)
 		SELECT ?, ?, ?,
 			parseDateTime64BestEffort(?, 9, 'UTC'),
 			parseDateTime64BestEffort(?, 3, 'UTC'),
+			?,
 			?, ?, ?,
 			parseDateTime64BestEffort(?, 3, 'UTC'),
 			toUInt64(?)`,
 		"bin-pre-epoch", "tenant", "compiler",
 		"1969-12-31 23:59:59.999999999",
 		indexTime.UTC().Format("2006-01-02 15:04:05.000"),
+		eventfields.CurrentFieldMetadataVersion,
 		preEpochSource.CollectorID,
 		uint8(preEpochSource.Kind),
 		preEpochSource.ID,

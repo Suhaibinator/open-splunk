@@ -369,7 +369,8 @@ func insertLookupEvents(
 			collected_at, event_time_source, host, source, sourcetype,
 			service, severity, level, body, raw, raw_encoding, trace_id,
 			span_id, fields, field_names, field_types, field_metadata_version,
-			collector_id, batch_id, batch_sequence, expires_at, visibility_seq
+			collector_id, ingest_source_kind, ingest_source_id, batch_id,
+			batch_sequence, expires_at, visibility_seq
 		)`)
 	if err != nil {
 		t.Fatalf("prepare lookup events: %v", err)
@@ -411,6 +412,8 @@ func insertLookupEvents(
 			fieldNames,
 			fieldTypes,
 			eventfields.CurrentFieldMetadataVersion,
+			"lookup-runtime",
+			uint8(1),
 			"lookup-runtime",
 			"lookup-runtime-batch",
 			uint64(index+1),
@@ -456,9 +459,9 @@ func requireLookupResults(t *testing.T, page searchjobs.ResultPage) {
 		t.Fatalf("lookup result page = %#v", page)
 	}
 	want := map[string]*string{
-		"lookup-01-exact":         stringPointer("platform"),
-		"lookup-02-empty-key":     stringPointer("empty-match"),
-		"lookup-03-present-empty": stringPointer(""),
+		"lookup-01-exact":         new("platform"),
+		"lookup-02-empty-key":     new("empty-match"),
+		"lookup-03-present-empty": new(""),
 		"lookup-04-number":        nil,
 		"lookup-05-case-mismatch": nil,
 	}
@@ -500,9 +503,9 @@ func requireLookupAutomaticResults(t *testing.T, page searchjobs.ResultPage) {
 		t.Fatalf("automatic lookup result page = %#v", page)
 	}
 	want := map[string]*string{
-		"lookup-01-exact":         stringPointer("automatic-platform"),
-		"lookup-02-empty-key":     stringPointer("automatic-empty"),
-		"lookup-03-present-empty": stringPointer("automatic-platform"),
+		"lookup-01-exact":         new("automatic-platform"),
+		"lookup-02-empty-key":     new("automatic-empty"),
+		"lookup-03-present-empty": new("automatic-platform"),
 		"lookup-04-number":        nil,
 		"lookup-05-case-mismatch": nil,
 	}
@@ -539,5 +542,3 @@ func requireLookupAutomaticResults(t *testing.T, page searchjobs.ResultPage) {
 		t.Fatalf("missing automatic lookup results: %#v", want)
 	}
 }
-
-func stringPointer(value string) *string { return &value }

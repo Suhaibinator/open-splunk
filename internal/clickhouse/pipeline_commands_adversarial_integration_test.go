@@ -1082,8 +1082,6 @@ func TestPipelineAdversarialAgainstClickHouse(t *testing.T) {
 			{source: `index=spl-v03 source="v03-mvexpand-retained" | table event_id _raw retained_tags | mvexpand retained_tags | head 1`, marker: MVExpandRetainedBytesLimitMarker},
 			{source: `index=spl-v03 source="v03-mvexpand-object" | mvexpand bad_mv | head 1 | table event_id`, marker: UnsupportedMVExpandValueMarker},
 			{source: `index=spl-v03 source="v03-mvexpand-nested" | mvexpand bad_mv | head 1 | table event_id`, marker: UnsupportedMVExpandValueMarker},
-			{source: `index=spl-v03 source="v03-mvexpand-mixed-number" | mvexpand bad_mv | head 1 | table event_id`, marker: UnsupportedMVExpandValueMarker},
-			{source: `index=spl-v03 source="v03-mvexpand-mixed-bool" | mvexpand bad_mv | head 1 | table event_id`, marker: UnsupportedMVExpandValueMarker},
 			{source: `index=spl-v03 source="v03-mvexpand-bytes" | mvexpand mv_scalar | head 1 | table event_id`, marker: UnsupportedMVExpandValueMarker},
 			{source: `index=spl-v03 source="v03-mvexpand-duration" | mvexpand mv_scalar | head 1 | table event_id`, marker: UnsupportedMVExpandValueMarker},
 			{source: `index=spl-v03 event_id="v03-mvexpand-malformed-envelope" | mvexpand mv_scalar | head 1 | table event_id`, marker: UnsupportedMVExpandValueMarker},
@@ -1091,6 +1089,37 @@ func TestPipelineAdversarialAgainstClickHouse(t *testing.T) {
 			t.Run(test.source, func(t *testing.T) {
 				pipelineAssertAtomicExecutionFailure(t, queryContext, connection, compile(test.source), test.marker)
 			})
+		}
+
+		for _, test := range []struct {
+			source string
+			want   [][]string
+		}{
+			{
+				source: `v03-mvexpand-mixed-number`,
+				want: [][]string{
+					{"v03-mvexpand-mixed-number", "x"},
+					{"v03-mvexpand-mixed-number", "7"},
+				},
+			},
+			{
+				source: `v03-mvexpand-mixed-bool`,
+				want: [][]string{
+					{"v03-mvexpand-mixed-bool", "x"},
+					{"v03-mvexpand-mixed-bool", "true"},
+				},
+			},
+		} {
+			nativeMixed := compile(`index=spl-v03 source="` + test.source +
+				`" | mvexpand bad_mv | table event_id bad_mv`)
+			pipelineAssertJSONRows(
+				t,
+				queryContext,
+				connection,
+				nativeMixed,
+				[]string{"event_id", "bad_mv"},
+				test.want,
+			)
 		}
 
 		limited := compile(`index=spl-v03 source="v03-mvexpand-boundary"` +

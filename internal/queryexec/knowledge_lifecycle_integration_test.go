@@ -611,7 +611,8 @@ func insertKnowledgeLifecycleEvents(
 	const eventCount = 2
 	query := "INSERT INTO open_splunk.events (event_id, tenant_id, index_name, event_time, index_time, " +
 		"event_time_source, host, source, sourcetype, service, severity, raw, raw_encoding, fields, " +
-		"field_names, field_types, field_metadata_version, collector_id, batch_id, batch_sequence, " +
+		"field_names, field_types, field_metadata_version, collector_id, ingest_source_kind, " +
+		"ingest_source_id, batch_id, batch_sequence, " +
 		"expires_at, visibility_seq)"
 	batch, err := connection.PrepareBatch(ctx, query)
 	if err != nil {
@@ -638,6 +639,8 @@ func insertKnowledgeLifecycleEvents(
 			[]string{},
 			[]uint8{},
 			eventfields.CurrentFieldMetadataVersion,
+			"knowledge-lifecycle-collector",
+			uint8(1),
 			"knowledge-lifecycle-collector",
 			knowledgeLifecycleBatchID,
 			uint64(index+1),

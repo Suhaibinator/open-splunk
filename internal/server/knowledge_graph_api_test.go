@@ -69,14 +69,14 @@ func knowledgeGraphConverterFixture(
 		edge.TargetCurrent = rootCurrent
 	}
 	return knowledgecatalog.DependencyListRequest{
-		KnowledgeObjectID: rootID,
-		PageSize:          2,
-	}, knowledgecatalog.DependencyPage{
-		Edges:           []knowledgecatalog.DependencyEdge{edge},
-		ResolvedObject:  knowledgecatalog.ObjectVersionIdentity{KnowledgeObjectID: rootID, Version: 3},
-		ResolvedCurrent: rootCurrent,
-		CatalogRevision: 10,
-	}
+			KnowledgeObjectID: rootID,
+			PageSize:          2,
+		}, knowledgecatalog.DependencyPage{
+			Edges:           []knowledgecatalog.DependencyEdge{edge},
+			ResolvedObject:  knowledgecatalog.ObjectVersionIdentity{KnowledgeObjectID: rootID, Version: 3},
+			ResolvedCurrent: rootCurrent,
+			CatalogRevision: 10,
+		}
 }
 
 func TestKnowledgeGraphHTTPServesHistoricalDependenciesAndCurrentDependents(

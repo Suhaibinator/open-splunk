@@ -4171,18 +4171,18 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 			spl.ScalarFunctionCeil,
 			spl.ScalarFunctionFloor:
 			if splScalarMayReturnBooleanFunction(expression.Arguments[0]) {
-				functionName := ""
+				numericFunctionName := ""
 				switch expression.Function {
 				case spl.ScalarFunctionRound:
-					functionName = "round"
+					numericFunctionName = "round"
 				case spl.ScalarFunctionCeil:
-					functionName = "ceil"
+					numericFunctionName = "ceil"
 				case spl.ScalarFunctionFloor:
-					functionName = "floor"
+					numericFunctionName = "floor"
 				}
 				return nil, &Diagnostic{
 					Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
-					Message: functionName + " cannot consume a Boolean result",
+					Message: numericFunctionName + " cannot consume a Boolean result",
 					Range:   expression.Arguments[0].SourceRange(),
 				}
 			}

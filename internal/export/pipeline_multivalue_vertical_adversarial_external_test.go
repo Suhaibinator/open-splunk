@@ -571,7 +571,7 @@ func pipelineAssertNullableListRows(t *testing.T, rows []searchjobs.ResultRow) {
 	if !ok || len(empty) != 0 {
 		t.Fatalf("present empty list = %#v", rows[1].Values[1])
 	}
-	if !rows[2].Values[1].IsNull() || !rows[3].Values[1].IsNull() {
+	if !rows[2].Values[1].IsMissing() || !rows[3].Values[1].IsNull() {
 		t.Fatalf("missing/null list rows = %#v / %#v", rows[2].Values[1], rows[3].Values[1])
 	}
 }

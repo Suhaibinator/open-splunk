@@ -2531,7 +2531,7 @@ func insertKnowledgeRuntimeEvents(
 	query := "INSERT INTO open_splunk.events (event_id, tenant_id, index_name, event_time, index_time, " +
 		"collected_at, event_time_source, host, source, sourcetype, service, severity, level, body, raw, " +
 		"raw_encoding, trace_id, span_id, fields, field_names, field_types, field_metadata_version, " +
-		"collector_id, batch_id, batch_sequence, expires_at, visibility_seq)"
+		"collector_id, ingest_source_kind, ingest_source_id, batch_id, batch_sequence, expires_at, visibility_seq)"
 	batch, err := connection.PrepareBatch(ctx, query)
 	if err != nil {
 		t.Fatalf("prepare knowledge runtime fixture: %v", err)
@@ -2616,6 +2616,8 @@ func insertKnowledgeRuntimeEvents(
 			fieldTypes,
 			eventfields.CurrentFieldMetadataVersion,
 			"knowledge-collector",
+			uint8(1),
+			"knowledge-collector",
 			"knowledge-batch",
 			uint64(index+1),
 			knowledgeRuntimeFixtureExpiresAt(),
@@ -2642,7 +2644,8 @@ func insertKnowledgeRuntimeOverflowEvent(
 	overflowSource := strings.Repeat("x", knowledgeRuntimeOverflowSourceBytes(t))
 	query := "INSERT INTO open_splunk.events (event_id, tenant_id, index_name, event_time, index_time, " +
 		"event_time_source, host, source, sourcetype, severity, raw, raw_encoding, fields, field_names, " +
-		"field_types, field_metadata_version, collector_id, batch_id, batch_sequence, expires_at, visibility_seq)"
+		"field_types, field_metadata_version, collector_id, ingest_source_kind, ingest_source_id, " +
+		"batch_id, batch_sequence, expires_at, visibility_seq)"
 	batch, err := connection.PrepareBatch(ctx, query)
 	if err != nil {
 		t.Fatalf("prepare knowledge runtime overflow fixture: %v", err)
@@ -2664,6 +2667,8 @@ func insertKnowledgeRuntimeOverflowEvent(
 		[]string{},
 		[]uint8{},
 		eventfields.CurrentFieldMetadataVersion,
+		"knowledge-collector",
+		uint8(1),
 		"knowledge-collector",
 		"knowledge-overflow-batch",
 		uint64(1),

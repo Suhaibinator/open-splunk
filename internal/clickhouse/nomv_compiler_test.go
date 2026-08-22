@@ -85,7 +85,7 @@ func TestCompileNoMVNormalizesRuntimeDynamicListsAtomically(t *testing.T) {
 		`dynamicType(value) = 'Array(String)'`,
 		`dynamicType(value) = 'Array(Dynamic)'`,
 		`arrayMap(member -> CAST(member AS Dynamic)`,
-		`CAST([], 'Array(Dynamic)')`,
+		emptyNativeMVSQL(),
 		UnsupportedNativeMVValueMarker,
 		NativeMVMembersLimitMarker,
 		NativeMVPayloadLimitMarker,

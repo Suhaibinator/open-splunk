@@ -10,6 +10,8 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/eventfields"
+	"github.com/Suhaibinator/open-splunk/internal/ingest"
 )
 
 const (
@@ -293,10 +295,12 @@ func insertRawTextIndexFixtures(
 
 	batch, err := connection.PrepareBatch(ctx, `INSERT INTO open_splunk.events
 		(event_id, tenant_id, index_name, event_time, index_time, raw, raw_encoding,
-		 collector_id, batch_id, batch_sequence, visibility_seq, expires_at)`)
+		 field_metadata_version, collector_id, ingest_source_kind, ingest_source_id,
+		 batch_id, batch_sequence, visibility_seq, expires_at)`)
 	if err != nil {
 		t.Fatalf("prepare raw text index fixtures: %v", err)
 	}
+	source := ingest.NativeCollectorSource("raw-text-index-collector")
 	for row := range rawTextIndexFixtureRows {
 		raw := []byte("quiet filler")
 		encoding := uint8(opensplunk.RawEncoding_RAW_ENCODING_UTF8)
@@ -349,7 +353,10 @@ func insertRawTextIndexFixtures(
 			indexTime,
 			raw,
 			encoding,
-			"raw-text-index-collector",
+			eventfields.CurrentFieldMetadataVersion,
+			source.CollectorID,
+			uint8(source.Kind),
+			source.ID,
 			"raw-text-index-batch",
 			uint64(1),
 			uint64(1),

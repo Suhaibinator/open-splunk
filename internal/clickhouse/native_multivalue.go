@@ -61,7 +61,18 @@ func compileBoundedNativeMVScalar(
 	return result, nil
 }
 
-func emptyNativeMVSQL() string { return "CAST([], 'Array(Dynamic)')" }
+func emptyNativeMVSQL() string {
+	// ClickHouse rejects a standalone Array(Dynamic) with no nested variants.
+	// Seed a String variant, then slice it away so the authoritative value is
+	// still an empty native multivalue array.
+	return "arraySlice(CAST([CAST('' AS Nullable(String))], 'Array(Dynamic)'), 1, 0)"
+}
+
+func nullNativeMVSQL() string {
+	// The nullable String source gives Dynamic a concrete nested variant while
+	// preserving the member itself as explicit None.
+	return "CAST([CAST(NULL AS Nullable(String))], 'Array(Dynamic)')"
+}
 
 func nativeMVPreflightSQL(
 	resultSQL, invalidSQL, membersSQL, payloadSQL, emptySQL string,
@@ -142,8 +153,8 @@ func nativeMVCanonicalTextSQL(valueSQL string) string {
 	)
 	physicalDecimal := "startsWith(" + typeSQL + ", 'Decimal')"
 	canonicalDecimalPayload := canonicalDecimalPayloadTextSQLWithLimit(
-		"multiIf("+decimalCondition+", "+decimalPayload+", "+physicalDecimal+
-			", toString("+valueSQL+"), CAST('0' AS String))",
+		"CAST(multiIf("+decimalCondition+", "+decimalPayload+", "+physicalDecimal+
+			", toString("+valueSQL+"), CAST('0' AS String)) AS String)",
 		spl.MaximumNativeMVPayloadBytes,
 	)
 	return "multiIf(" +
@@ -281,7 +292,7 @@ func compileNativeMVState(input compiledScalar, allowScalar bool) (nativeMVState
 		present := "list_present != 0"
 		if allowScalar {
 			values = "multiIf(list_present != 0, value, field_exists != 0, " +
-				"[CAST(NULL AS Dynamic)], " + empty + ")"
+				nullNativeMVSQL() + ", " + empty + ")"
 			present = "field_exists != 0"
 		}
 		body := "tuple(" + values + ", " +
@@ -295,7 +306,7 @@ func compileNativeMVState(input compiledScalar, allowScalar bool) (nativeMVState
 		present := "list_present != 0"
 		if allowScalar {
 			selected = "multiIf(list_present != 0, " + values +
-				", field_exists != 0, [CAST(NULL AS Dynamic)], " + empty + ")"
+				", field_exists != 0, " + nullNativeMVSQL() + ", " + empty + ")"
 			present = "field_exists != 0"
 		}
 		body := "tuple(" + selected + ", " +
@@ -348,7 +359,8 @@ func compileNativeMVState(input compiledScalar, allowScalar bool) (nativeMVState
 		extraParameters := []string(nil)
 		extraValues := []string(nil)
 		extraArgs := []any(nil)
-		if input.kind == fieldKindString {
+		switch input.kind {
+		case fieldKindString:
 			eligible += " AND isValidUTF8(assumeNotNull(value))"
 			if input.textEligibleSQL != "" {
 				extraParameters = append(extraParameters, "text_eligible")
@@ -356,7 +368,7 @@ func compileNativeMVState(input compiledScalar, allowScalar bool) (nativeMVState
 				extraArgs = append(extraArgs, input.semanticBytesArgs...)
 				eligible += " AND text_eligible != 0"
 			}
-		} else if input.kind == fieldKindNumber {
+		case fieldKindNumber:
 			eligible += " AND isFinite(toFloat64(value))"
 		}
 		// A present SQL NULL is an explicit native null member.  Only the
@@ -373,7 +385,7 @@ func compileNativeMVState(input compiledScalar, allowScalar bool) (nativeMVState
 			values := empty
 			present := "toUInt8(0)"
 			if allowScalar {
-				values = "if(field_exists != 0, [CAST(NULL AS Dynamic)], " + empty + ")"
+				values = "if(field_exists != 0, " + nullNativeMVSQL() + ", " + empty + ")"
 				present = "toUInt8(field_exists != 0)"
 			}
 			body := "tuple(" + values + ", toUInt8(field_exists != 0), " + present +
@@ -487,32 +499,28 @@ func compileSplitScalar(expression *plan.ScalarCallExpression, state compileStat
 	}
 	stateAlias := "__os_split_scalar_state"
 	values := ""
-	parameters := []string{stateAlias}
-	bindings := []string{canonical.sql}
-	args := append([]any(nil), canonical.args...)
 	if delimiter == "" {
 		values = "arrayMap(position -> substringUTF8(tupleElement(" + stateAlias +
 			", 1), toInt64(position), 1), range(toUInt64(1), lengthUTF8(tupleElement(" +
 			stateAlias + ", 1)) + toUInt64(1)))"
 	} else {
-		parameters = append(parameters, "delimiter")
-		bindings = append(bindings, "CAST(? AS String)")
-		args = append(args, delimiter)
-		values = "splitByString(delimiter, tupleElement(" + stateAlias + ", 1))"
+		delimiterSQL := "CAST(? AS String)"
+		values = "splitByString(" + delimiterSQL + ", tupleElement(" + stateAlias + ", 1))"
 	}
 	present := "tupleElement(" + stateAlias + ", 3) != 0"
-	memberCount := "toUInt64(0)"
-	payloadBytes := "toUInt128(0)"
+	var memberCount string
+	var payloadBytes string
 	if delimiter == "" {
 		memberCount = "if(" + present + ", toUInt64(lengthUTF8(tupleElement(" +
 			stateAlias + ", 1))), toUInt64(0))"
 		payloadBytes = "if(" + present + ", toUInt128(length(tupleElement(" +
 			stateAlias + ", 1))), toUInt128(0))"
 	} else {
-		separatorCount := "countSubstrings(tupleElement(" + stateAlias + ", 1), delimiter)"
+		delimiterSQL := "CAST(? AS String)"
+		separatorCount := "countSubstrings(tupleElement(" + stateAlias + ", 1), " + delimiterSQL + ")"
 		memberCount = "if(" + present + ", toUInt64(" + separatorCount + ") + 1, toUInt64(0))"
 		payloadBytes = "if(" + present + ", toUInt128(length(tupleElement(" + stateAlias +
-			", 1))) - toUInt128(" + separatorCount + ") * toUInt128(length(delimiter)), toUInt128(0))"
+			", 1))) - toUInt128(" + separatorCount + ") * toUInt128(length(" + delimiterSQL + ")), toUInt128(0))"
 	}
 	values = "if(" + present + ", " + values + ", CAST([], 'Array(String)'))"
 	body := nativeMVPreflightSQL(
@@ -522,11 +530,18 @@ func compileSplitScalar(expression *plan.ScalarCallExpression, state compileStat
 		payloadBytes,
 		"CAST([], 'Array(String)')",
 	)
-	valueSQL := bindSQLExpressions(parameters, bindings, body)
+	valueSQL := bindSQLExpressions([]string{stateAlias}, []string{canonical.sql}, body)
+	valueArgs := append([]any(nil), canonical.args...)
+	if delimiter != "" {
+		// bindSQLExpressions emits the lambda body before its bound state.
+		// Preserve placeholder order for member count, payload count, payload
+		// delimiter length, constructed values, and finally canonical state.
+		valueArgs = append([]any{delimiter, delimiter, delimiter, delimiter}, valueArgs...)
+	}
 	markNativeMVRuntimeValidation(state)
 	return compiledScalar{
 		valueSQL:                     valueSQL,
-		valueArgs:                    args,
+		valueArgs:                    valueArgs,
 		existsSQL:                    "tupleElement(" + canonical.sql + ", 2) != 0",
 		existsArgs:                   append([]any(nil), canonical.args...),
 		optionalMultivaluePresentSQL: "tupleElement(" + canonical.sql + ", 3) != 0",
@@ -751,8 +766,9 @@ func compileMVIndexScalar(expression *plan.ScalarCallExpression, state compileSt
 	endPosition := position(end)
 	valid := present + " AND " + validStart + " AND " + endPosition + " >= 1 AND " +
 		endPosition + " <= " + length + " AND " + startPosition + " <= " + endPosition
+	rangeLength := "(" + endPosition + ") - (" + startPosition + ") + 1"
 	body := "if(" + valid + ", arraySlice(" + values + ", " + startPosition + ", " +
-		endPosition + " - " + startPosition + " + 1), " + emptyNativeMVSQL() + ")"
+		rangeLength + "), " + emptyNativeMVSQL() + ")"
 	body = nativeMVPreflightSQL(
 		body,
 		"tupleElement("+stateAlias+", 4) != 0",
@@ -797,7 +813,7 @@ func compileMVJoinScalar(expression *plan.ScalarCallExpression, state compileSta
 	canonical := "arrayMap(member -> " + nativeMVCanonicalTextSQL("member") +
 		", " + values + ")"
 	result := "if(tupleElement(" + stateAlias + ", 3) != 0, arrayStringConcat(" + canonicalAlias +
-		", delimiter), CAST(NULL AS Nullable(String)))"
+		", CAST(? AS String)), CAST(NULL AS Nullable(String)))"
 	inner := bindSQLExpressions(
 		[]string{canonicalAlias},
 		[]string{canonical},
@@ -817,16 +833,14 @@ func compileMVJoinScalar(expression *plan.ScalarCallExpression, state compileSta
 		"toUInt128(0)",
 		"CAST(NULL AS Nullable(String))",
 	)
-	valueSQL := bindSQLExpressions(
-		[]string{stateAlias, "delimiter"},
-		[]string{normalized.sql, "CAST(? AS String)"},
-		body,
-	)
+	valueSQL := bindSQLExpressions([]string{stateAlias}, []string{normalized.sql}, body)
 	markNativeMVRuntimeValidation(state)
 	existsSQL, existsArgs := scalarExistsSQL(input)
 	return compiledScalar{
-		valueSQL:                  valueSQL,
-		valueArgs:                 append(append([]any(nil), normalized.args...), delimiter),
+		valueSQL: valueSQL,
+		// The delimiter placeholder is in the lambda body, which precedes the
+		// normalized state binding in bindSQLExpressions.
+		valueArgs:                 append([]any{delimiter}, normalized.args...),
 		existsSQL:                 existsSQL,
 		existsArgs:                existsArgs,
 		kind:                      fieldKindString,

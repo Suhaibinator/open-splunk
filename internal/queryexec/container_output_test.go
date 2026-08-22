@@ -137,6 +137,23 @@ func TestConvertContainerOutputRejectsUnsupportedMetadataVersion(t *testing.T) {
 	}
 }
 
+func TestConvertContainerOutputAcceptsScalarSentinelMetadata(t *testing.T) {
+	t.Parallel()
+
+	got, err := convertContainerOutput(
+		chcol.NewDynamic("scalar"),
+		[]string{},
+		[]uint8{},
+		0,
+	)
+	if err != nil {
+		t.Fatalf("convertContainerOutput(scalar sentinel): %v", err)
+	}
+	if value, ok := got.String(); !ok || value != "scalar" {
+		t.Fatalf("scalar sentinel value = %#v", got)
+	}
+}
+
 func TestConvertContainerOutputIgnoresSharedNullOnlyPaths(t *testing.T) {
 	t.Parallel()
 	nullJSON := chcol.NewJSON()

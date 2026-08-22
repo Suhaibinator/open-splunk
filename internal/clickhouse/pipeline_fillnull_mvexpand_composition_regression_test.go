@@ -52,8 +52,8 @@ func TestCompilePipelineFillNullDynamicThenMVExpandMaterializesThePublicField(t 
 
 // TestPipelineFillNullDynamicThenMVExpandAgainstClickHouse is the authoritative
 // pinned-engine regression for missing, null, supported list, scalar String,
-// numeric, Boolean, and unsupported heterogeneous-list Dynamic cells. It also
-// keeps fields/table projection barriers in the matrix.
+// numeric, Boolean, native heterogeneous-list, and unsupported nested/container
+// Dynamic cells. It also keeps fields/table projection barriers in the matrix.
 func TestPipelineFillNullDynamicThenMVExpandAgainstClickHouse(t *testing.T) {
 	if os.Getenv("OPEN_SPLUNK_CLICKHOUSE_INTEGRATION") != "1" {
 		t.Skip("set OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 to run the Docker integration test")
@@ -103,7 +103,7 @@ func TestPipelineFillNullDynamicThenMVExpandAgainstClickHouse(t *testing.T) {
 		" | table event_id optional_mv",
 	} {
 		source := `index=spl-v03-fillnull-mvexpand source="` + pipelineFillNullMVExpandSource + `"` +
-			` event_id!="mixed-list" event_id!="nested-list" event_id!="object" | sort 0 +event_id` +
+			` event_id!="nested-list" event_id!="object" | sort 0 +event_id` +
 			` | fillnull value="fallback" optional_mv` + barrier +
 			` | mvexpand optional_mv | table event_id optional_mv`
 		compiled := compile(source)
@@ -133,14 +133,14 @@ func TestPipelineFillNullDynamicThenMVExpandAgainstClickHouse(t *testing.T) {
 		}
 		want := []string{
 			"bool=true", "list=a", "list=<null>", "list=β", "missing=fallback",
-			"null=fallback", "number=7", "string=scalar",
+			"mixed-list=x", "mixed-list=9", "null=fallback", "number=7", "string=scalar",
 		}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("fillnull -> %q -> mvexpand rows = %v, want %v", barrier, got, want)
 		}
 	}
 
-	for _, id := range []string{"mixed-list", "nested-list", "object"} {
+	for _, id := range []string{"nested-list", "object"} {
 		unsupported := compile(`index=spl-v03-fillnull-mvexpand source="` +
 			pipelineFillNullMVExpandSource + `" event_id="` + id + `"` +
 			` | fillnull value="fallback" optional_mv` +

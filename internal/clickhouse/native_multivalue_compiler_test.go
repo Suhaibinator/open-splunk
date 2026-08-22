@@ -36,7 +36,7 @@ func TestCompileNativeMultivalueEvalFunctionsUseBoundedTypedTransport(t *testing
 		`arrayStringConcat(`,
 		`least(length(`,
 		`arrayFirstIndex(canonical -> match(`,
-		`CAST([], 'Array(Dynamic)')`,
+		emptyNativeMVSQL(),
 		UnsupportedNativeMVValueMarker,
 		NativeMVMembersLimitMarker,
 		NativeMVPayloadLimitMarker,
@@ -89,7 +89,7 @@ func TestCompileNativeMultivalueCompositionPreservesTypesAndPresentationIndepend
 		`dynamicType(`,
 		`startsWith(`,
 		`'Decimal'`,
-		`CAST(NULL AS Dynamic)`,
+		nullNativeMVSQL(),
 		`toInt64(-3)`,
 		`toInt64(-1)`,
 		`toInt64(`,
@@ -119,9 +119,9 @@ func TestCompileNativeDynamicArrayFlowsThroughMVExpandAndStatsBy(t *testing.T) {
 	)
 
 	for _, required := range []string{
-		`CAST([], 'Array(Dynamic)')`,
+		emptyNativeMVSQL(),
 		`__os_mvexpand_values_`,
-		`[CAST(NULL AS Dynamic)]`,
+		nullNativeMVSQL(),
 		`arrayExists(member -> NOT (`,
 		`ARRAY JOIN`,
 		`GROUP BY`,
@@ -376,7 +376,7 @@ func TestCompileMVAppendRetainsPresentNullableScalarAsExplicitNull(t *testing.T)
 		t.Fatalf("compileNativeMVState: %v", err)
 	}
 	if !strings.Contains(normalized.sql,
-		`if(field_exists != 0, [CAST(value AS Dynamic)], CAST([], 'Array(Dynamic)'))`) {
+		`if(field_exists != 0, [CAST(value AS Dynamic)], `+emptyNativeMVSQL()+`)`) {
 		t.Fatalf("nullable scalar normalization drops an explicit null:\n%s", normalized.sql)
 	}
 	if strings.Contains(normalized.sql,
@@ -398,7 +398,7 @@ func TestCompileMVAppendRetainsExplicitNullNativeMVAndListConsumersPropagateMiss
 		t.Fatalf("compileNativeMVState nullable MV: %v", err)
 	}
 	for _, required := range []string{
-		`field_exists != 0, [CAST(NULL AS Dynamic)]`,
+		`field_exists != 0, ` + nullNativeMVSQL(),
 		`toUInt8(field_exists != 0)`,
 	} {
 		if !strings.Contains(nullableMV.sql, required) {
@@ -411,7 +411,7 @@ func TestCompileMVAppendRetainsExplicitNullNativeMVAndListConsumersPropagateMiss
 			`| eval ranged=mvindex(split("a", ","), 1, 2), appended=mvappend(ranged) `+
 			`| table appended`,
 	)
-	if !strings.Contains(retained.SQL, `[CAST(NULL AS Dynamic)]`) {
+	if !strings.Contains(retained.SQL, nullNativeMVSQL()) {
 		t.Fatalf("mvappend dropped an explicit-null MV argument:\n%s", retained.SQL)
 	}
 
@@ -423,7 +423,7 @@ func TestCompileMVAppendRetainsExplicitNullNativeMVAndListConsumersPropagateMiss
 			`| table deduped indexed joined found zipped`,
 	)
 	if !strings.Contains(missing.SQL,
-		`tuple(CAST([], 'Array(Dynamic)'), toUInt8(0), toUInt8(0), toUInt8(0))`) {
+		`tuple(`+emptyNativeMVSQL()+`, toUInt8(0), toUInt8(0), toUInt8(0))`) {
 		t.Fatalf("list consumers did not propagate a statically missing input:\n%s", missing.SQL)
 	}
 }

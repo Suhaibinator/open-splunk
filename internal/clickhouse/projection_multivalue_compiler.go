@@ -1092,7 +1092,7 @@ func compileMakeMultivalue(
 		retainedBytesAlias + " > toUInt64(" + strconv.FormatUint(plan.MaximumMakeMVRetainedBytesPerResult, 10) +
 		"), throwIf(toUInt8(1), '" + MakeMVRetainedBytesLimitMarker + "'), toUInt8(0)) = 0"
 	helpers := []string{
-		inputAlias, sourcePresentAlias, descendantAlias, invalidAlias, resultAlias,
+		inputAlias, descendantAlias, invalidAlias, resultAlias,
 		rowMembersAlias, rowBytesAlias, totalMembersAlias, totalBytesAlias,
 		retainedBytesAlias, anyInvalidAlias,
 	}
@@ -1117,13 +1117,14 @@ func compileMakeMultivalue(
 	transportState := cloneCompileState(state)
 	transportState.privateColumns = append(
 		transportState.privateColumns,
+		sourcePresentAlias,
 		valuePresentAlias,
 	)
 	next, err := extendCompileState(
 		transportState,
 		operator.Input,
 		compiledScalar{
-			valueSQL: outputName, existsSQL: valuePresentAlias,
+			valueSQL: outputName, existsSQL: sourcePresentAlias,
 			optionalMultivaluePresentSQL: valuePresentAlias,
 			textEligibleSQL: "arrayAll(member -> isValidUTF8(member), " +
 				outputName + ")",
@@ -1274,7 +1275,7 @@ func compileExpandMultivalue(
 		// Dynamic value, while an absent list still contributes the command's
 		// single null-preservation row and a present-empty list contributes none.
 		valuesSQL = "if(" + sourcePresentAlias +
-			" = 0, [CAST(NULL AS Dynamic)], " + inputAlias + ")"
+			" = 0, " + nullNativeMVSQL() + ", " + inputAlias + ")"
 		memberUnsupported := "arrayExists(member -> NOT (" +
 			nativeMVElementSupportedSQL("member") + "), " + inputAlias + ")"
 		invalidSQL = "(" + descendantAlias + " != 0 OR (" + sourcePresentAlias +
@@ -1307,11 +1308,11 @@ func compileExpandMultivalue(
 			"decimal/v1",
 		) + ")"
 		valuesSQL = "multiIf(" + sourcePresentAlias + " = 0 OR " + typeSQL +
-			" = 'None', [CAST(NULL AS Dynamic)], " + typeSQL +
+			" = 'None', " + nullNativeMVSQL() + ", " + typeSQL +
 			" = 'Array(String)', arrayMap(value -> CAST(value AS Dynamic), " +
 			stringMembers + "), " + typeSQL + " = 'Array(Dynamic)', " +
 			dynamicMembers + ", startsWith(" + typeSQL + ", 'Array('), " +
-			"[CAST(NULL AS Dynamic)], [" + inputAlias + "])"
+			nullNativeMVSQL() + ", [" + inputAlias + "])"
 		invalidSQL = "(" + descendantAlias + " != 0 OR (" + sourcePresentAlias +
 			" != 0 AND (startsWith(" + typeSQL + ", 'Array(') AND " + typeSQL +
 			" NOT IN ('Array(String)', 'Array(Dynamic)') OR (" + typeSQL +
@@ -1347,7 +1348,7 @@ func compileExpandMultivalue(
 			ieeeComparison:  field.ieeeComparison,
 		}
 	default:
-		valuesSQL = "[CAST(NULL AS Dynamic)]"
+		valuesSQL = nullNativeMVSQL()
 	}
 	limit := spl.MaximumMVExpandLimit
 	if operator.Limit > 0 {

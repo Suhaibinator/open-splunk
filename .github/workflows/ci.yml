@@ -554,6 +554,8 @@ jobs:
           ./internal/clickhouse TestPipelineAdversarialAgainstClickHouse
           ./internal/clickhouse TestPipelineFillNullDynamicThenMVExpandAgainstClickHouse
           ./internal/clickhouse TestPipelineFillNullAfterPrivatePhysicalProducersAgainstClickHouse
+          ./internal/clickhouse TestNativeMultivalueAgainstClickHouse
+          ./internal/clickhouse TestCanonicalDecimalPayloadTextSQLAgainstClickHouse
           ./internal/export TestPipelinePinnedClickHousePublishesNullableListsThroughPagingAndExport
           ./internal/clickhouse TestPipelinePinnedClickHouseRetainedTupleHasCanonicalBytes
           ./internal/queryexec TestSemanticBytesLineageManagerAgainstClickHouse
@@ -604,6 +606,17 @@ jobs:
         run: >-
           go test ./internal/clickhouse
           -run '^(TestPipelineFillNullDynamicThenMVExpandAgainstClickHouse|TestPipelineFillNullAfterPrivatePhysicalProducersAgainstClickHouse)$'
+          -count=1
+          -timeout=15m
+          -p=1
+          -v
+
+      - name: Execute native multivalue and canonical Decimal runtime contracts
+        env:
+          OPEN_SPLUNK_CLICKHOUSE_INTEGRATION: "1"
+        run: >-
+          go test ./internal/clickhouse
+          -run '^(TestNativeMultivalueAgainstClickHouse|TestCanonicalDecimalPayloadTextSQLAgainstClickHouse)$'
           -count=1
           -timeout=15m
           -p=1

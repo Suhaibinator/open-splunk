@@ -2391,7 +2391,7 @@ func queryIntegrationInsertEvent(t *testing.T, ctx context.Context, connection c
 	query := "INSERT INTO open_splunk.events (event_id, tenant_id, index_name, event_time, index_time, " +
 		"collected_at, event_time_source, host, source, sourcetype, service, severity, level, body, raw, " +
 		"raw_encoding, trace_id, span_id, fields, field_names, field_types, field_metadata_version, " +
-		"collector_id, batch_id, batch_sequence, " +
+		"collector_id, ingest_source_kind, ingest_source_id, batch_id, batch_sequence, " +
 		"expires_at, visibility_seq)"
 	batch, err := connection.PrepareBatch(ctx, query)
 	if err != nil {
@@ -2430,7 +2430,7 @@ func queryIntegrationInsertEvent(t *testing.T, ctx context.Context, connection c
 		fieldNames,
 		fieldTypes,
 		eventfields.CurrentFieldMetadataVersion,
-		"collector", "batch", uint64(1),
+		"collector", uint8(1), "collector", "batch", uint64(1),
 		now.Add(24*time.Hour), uint64(1),
 	); err != nil {
 		t.Fatal(err)
@@ -2445,7 +2445,8 @@ func queryIntegrationInsertBinaryEvent(t *testing.T, ctx context.Context, connec
 	t.Helper()
 	query := "INSERT INTO open_splunk.events (event_id, tenant_id, index_name, event_time, index_time, " +
 		"collected_at, event_time_source, host, source, sourcetype, service, severity, level, body, raw, " +
-		"raw_encoding, trace_id, span_id, fields, field_names, collector_id, batch_id, batch_sequence, " +
+		"raw_encoding, trace_id, span_id, fields, field_names, field_types, field_metadata_version, " +
+		"collector_id, ingest_source_kind, ingest_source_id, batch_id, batch_sequence, " +
 		"expires_at, visibility_seq)"
 	batch, err := connection.PrepareBatch(ctx, query)
 	if err != nil {
@@ -2455,8 +2456,9 @@ func queryIntegrationInsertBinaryEvent(t *testing.T, ctx context.Context, connec
 	if err := batch.Append(
 		"queryexec-binary-event", "tenant", "binary", now, now,
 		nil, uint8(1), "host", "binary", "test", nil, uint8(1), nil, nil, []byte{0xff, 0x00},
-		uint8(2), nil, nil, clickhousedriver.NewJSON(), []string{},
-		"collector", "binary-batch", uint64(1),
+		uint8(2), nil, nil, clickhousedriver.NewJSON(), []string{}, []uint8{},
+		eventfields.CurrentFieldMetadataVersion,
+		"collector", uint8(1), "collector", "binary-batch", uint64(1),
 		now.Add(24*time.Hour), uint64(1),
 	); err != nil {
 		t.Fatal(err)
@@ -2476,7 +2478,8 @@ func queryIntegrationInsertGradeThisEvents(
 	traceID := gradethiscorpus.Fixture().TraceID
 	query := "INSERT INTO open_splunk.events (event_id, tenant_id, index_name, event_time, index_time, " +
 		"collected_at, event_time_source, host, source, sourcetype, service, severity, level, body, raw, " +
-		"raw_encoding, trace_id, span_id, fields, field_names, collector_id, batch_id, batch_sequence, " +
+		"raw_encoding, trace_id, span_id, fields, field_names, field_types, field_metadata_version, " +
+		"collector_id, ingest_source_kind, ingest_source_id, batch_id, batch_sequence, " +
 		"expires_at, visibility_seq)"
 	batch, err := connection.PrepareBatch(ctx, query)
 	if err != nil {
@@ -2539,11 +2542,22 @@ func queryIntegrationInsertGradeThisEvents(
 		document.SetValueAtPath("layer", clickhousedriver.NewDynamic(event.layer))
 		document.SetValueAtPath("logger", clickhousedriver.NewDynamic(event.logger))
 		fieldNames := []string{"layer", "logger"}
+		fieldTypes := []uint8{
+			uint8(eventfields.StoredValueTypeString),
+			uint8(eventfields.StoredValueTypeString),
+		}
 		if event.path != "" {
 			document.SetValueAtPath("duration", clickhousedriver.NewDynamic(event.duration))
 			document.SetValueAtPath("path", clickhousedriver.NewDynamic(event.path))
 			document.SetValueAtPath("status", clickhousedriver.NewDynamic(event.status))
 			fieldNames = []string{"duration", "layer", "logger", "path", "status"}
+			fieldTypes = []uint8{
+				uint8(eventfields.StoredValueTypeString),
+				uint8(eventfields.StoredValueTypeString),
+				uint8(eventfields.StoredValueTypeString),
+				uint8(eventfields.StoredValueTypeString),
+				uint8(eventfields.StoredValueTypeSint64),
+			}
 		}
 		var eventTraceID *string
 		if event.traceID != "" {
@@ -2565,7 +2579,9 @@ func queryIntegrationInsertGradeThisEvents(
 		if err := batch.Append(
 			"queryexec-gradethis-"+event.id, "tenant", "gradethis", eventTime, indexTime,
 			nil, uint8(1), "gradethis-host", "app.log", "zap:json", service, uint8(1), &level, &message, []byte(raw),
-			uint8(1), eventTraceID, nil, document, fieldNames, "collector", "gradethis-batch", uint64(index+1),
+			uint8(1), eventTraceID, nil, document, fieldNames, fieldTypes,
+			eventfields.CurrentFieldMetadataVersion,
+			"collector", uint8(1), "collector", "gradethis-batch", uint64(index+1),
 			indexTime.Add(24*time.Hour), uint64(1),
 		); err != nil {
 			t.Fatal(err)
@@ -3112,7 +3128,8 @@ func queryIntegrationInsertTimechartEvents(t *testing.T, ctx context.Context, co
 	t.Helper()
 	query := "INSERT INTO open_splunk.events (event_id, tenant_id, index_name, event_time, index_time, " +
 		"collected_at, event_time_source, host, source, sourcetype, service, severity, level, body, raw, " +
-		"raw_encoding, trace_id, span_id, fields, field_names, collector_id, batch_id, batch_sequence, " +
+		"raw_encoding, trace_id, span_id, fields, field_names, field_types, field_metadata_version, " +
+		"collector_id, ingest_source_kind, ingest_source_id, batch_id, batch_sequence, " +
 		"expires_at, visibility_seq)"
 	batch, err := connection.PrepareBatch(ctx, query)
 	if err != nil {
@@ -3263,6 +3280,14 @@ func queryIntegrationInsertTimechartEvents(t *testing.T, ctx context.Context, co
 			fieldNames = append(fieldNames, "metric")
 			slices.Sort(fieldNames)
 		}
+		fieldTypes := make([]uint8, len(fieldNames))
+		for fieldIndex, name := range fieldNames {
+			if name == "metric" {
+				fieldTypes[fieldIndex] = queryIntegrationStoredType(t, event.metric)
+			} else {
+				fieldTypes[fieldIndex] = queryIntegrationStoredType(t, event.path)
+			}
+		}
 		tenant := event.tenant
 		if tenant == "" {
 			tenant = "tenant"
@@ -3278,7 +3303,9 @@ func queryIntegrationInsertTimechartEvents(t *testing.T, ctx context.Context, co
 		if err := batch.Append(
 			"queryexec-timechart-"+event.id, tenant, indexName, event.at, indexTime,
 			nil, uint8(1), "host", event.source, "test", nil, uint8(1), event.level, &message, []byte(message),
-			uint8(1), nil, nil, document, fieldNames, "collector", "timechart-batch", uint64(index+1),
+			uint8(1), nil, nil, document, fieldNames, fieldTypes,
+			eventfields.CurrentFieldMetadataVersion,
+			"collector", uint8(1), "collector", "timechart-batch", uint64(index+1),
 			indexTime.Add(24*time.Hour), visibility,
 		); err != nil {
 			t.Fatal(err)
@@ -3309,7 +3336,8 @@ func queryIntegrationInsertChartEvents(t *testing.T, ctx context.Context, connec
 	t.Helper()
 	query := "INSERT INTO open_splunk.events (event_id, tenant_id, index_name, event_time, index_time, " +
 		"collected_at, event_time_source, host, source, sourcetype, service, severity, level, body, raw, " +
-		"raw_encoding, trace_id, span_id, fields, field_names, collector_id, batch_id, batch_sequence, " +
+		"raw_encoding, trace_id, span_id, fields, field_names, field_types, field_metadata_version, " +
+		"collector_id, ingest_source_kind, ingest_source_id, batch_id, batch_sequence, " +
 		"expires_at, visibility_seq)"
 	batch, err := connection.PrepareBatch(ctx, query)
 	if err != nil {
@@ -3438,9 +3466,11 @@ func queryIntegrationInsertChartEvents(t *testing.T, ctx context.Context, connec
 		message := "chart " + event.id
 		document := clickhousedriver.NewJSON()
 		fieldNames := make([]string, 0, len(event.fields))
+		fieldTypes := make([]uint8, 0, len(event.fields))
 		for _, name := range slices.Sorted(maps.Keys(event.fields)) {
 			document.SetValueAtPath(name, clickhousedriver.NewDynamic(event.fields[name]))
 			fieldNames = append(fieldNames, name)
+			fieldTypes = append(fieldTypes, queryIntegrationStoredType(t, event.fields[name]))
 		}
 		host := event.host
 		if host == "" {
@@ -3453,7 +3483,9 @@ func queryIntegrationInsertChartEvents(t *testing.T, ctx context.Context, connec
 		if err := batch.Append(
 			"queryexec-chart-"+event.id, "tenant", "main", event.at, indexTime,
 			nil, uint8(1), host, event.source, "test", nil, severity, event.level, &message, []byte(message),
-			uint8(1), nil, nil, document, fieldNames, "collector", "chart-batch", uint64(index+1),
+			uint8(1), nil, nil, document, fieldNames, fieldTypes,
+			eventfields.CurrentFieldMetadataVersion,
+			"collector", uint8(1), "collector", "chart-batch", uint64(index+1),
 			indexTime.Add(24*time.Hour), uint64(1),
 		); err != nil {
 			t.Fatal(err)
@@ -3507,6 +3539,49 @@ func queryIntegrationExtendedValue(kind, value string) clickhousedriver.Dynamic 
 		extendedTypeKey:  kind,
 		extendedValueKey: value,
 	}, "Map(String, String)")
+}
+
+func queryIntegrationStoredType(t *testing.T, value any) uint8 {
+	t.Helper()
+	if dynamic, ok := value.(clickhousedriver.Dynamic); ok {
+		if dynamic.Nil() {
+			return uint8(eventfields.StoredValueTypeNull)
+		}
+		return queryIntegrationStoredType(t, dynamic.Any())
+	}
+	var storedType eventfields.StoredValueType
+	switch value := value.(type) {
+	case nil:
+		storedType = eventfields.StoredValueTypeNull
+	case string:
+		storedType = eventfields.StoredValueTypeString
+	case int, int8, int16, int32, int64:
+		storedType = eventfields.StoredValueTypeSint64
+	case uint, uint8, uint16, uint32, uint64:
+		storedType = eventfields.StoredValueTypeUint64
+	case float32, float64:
+		storedType = eventfields.StoredValueTypeDouble
+	case bool:
+		storedType = eventfields.StoredValueTypeBool
+	case []string, []clickhousedriver.Dynamic:
+		storedType = eventfields.StoredValueTypeList
+	case map[string]string:
+		switch value[extendedTypeKey] {
+		case "bytes/v1":
+			storedType = eventfields.StoredValueTypeBytes
+		case "timestamp/v1":
+			storedType = eventfields.StoredValueTypeTimestamp
+		case "duration/v1":
+			storedType = eventfields.StoredValueTypeDuration
+		case "decimal/v1":
+			storedType = eventfields.StoredValueTypeDecimal
+		default:
+			storedType = eventfields.StoredValueTypeObject
+		}
+	default:
+		t.Fatalf("unsupported query integration fixture type %T", value)
+	}
+	return uint8(storedType)
 }
 
 func queryIntegrationRunSearch(
