@@ -31,7 +31,7 @@ func addArchiveTestACL(t *testing.T, path string, ownerPermissions byte) {
 		16, 0, 0, 0, 0xff, 0xff, 0xff, 0xff, // ACL_MASK
 		32, 0, 0, 0, 0xff, 0xff, 0xff, 0xff, // ACL_OTHER
 	}
-	// #nosec G115 -- os.File descriptors are native int descriptors on Linux.
+
 	err = unix.Fsetxattr(int(file.Fd()), "system.posix_acl_access", posixACL, 0)
 	if errors.Is(err, unix.ENOTSUP) {
 		t.Skipf("filesystem does not permit a POSIX ACL fixture: %v", err)
@@ -39,7 +39,7 @@ func addArchiveTestACL(t *testing.T, path string, ownerPermissions byte) {
 	if err != nil {
 		t.Fatalf("install POSIX ACL fixture: %v", err)
 	}
-	// #nosec G115 -- os.File descriptors are native int descriptors on Linux.
+
 	if size, err := unix.Fgetxattr(
 		int(file.Fd()),
 		"system.posix_acl_access",

@@ -98,9 +98,9 @@ func TestValuePreservesEverySupportedKindAndNestedShape(t *testing.T) {
 
 func TestValueRejectsInvalidUTF8AndHonorsContext(t *testing.T) {
 	t.Parallel()
+	var nilContext context.Context
 
-	//nolint:staticcheck // This case explicitly verifies the nil-context guard.
-	if _, err := Value(nil, searchjobs.NullValue()); err == nil {
+	if _, err := Value(nilContext, searchjobs.NullValue()); err == nil {
 		t.Fatal("nil context was accepted")
 	}
 	ctx, cancel := context.WithCancel(context.Background())

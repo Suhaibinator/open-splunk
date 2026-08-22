@@ -312,9 +312,10 @@ function startBuildRelease(fixture, revision, options = {}) {
 }
 
 async function waitForPath(target) {
-  // Poll serially so the timeout and filesystem observation remain ordered.
-  /* eslint-disable no-await-in-loop */
-  for (let attempt = 0; attempt < 1000; attempt += 1) {
+  async function poll(attempt) {
+    if (attempt >= 1000) {
+      throw new Error(`timed out waiting for ${target}`);
+    }
     try {
       await access(target, constants.F_OK);
       return;
@@ -322,9 +323,9 @@ async function waitForPath(target) {
       if (error?.code !== "ENOENT") throw error;
     }
     await delay(10);
+    return poll(attempt + 1);
   }
-  /* eslint-enable no-await-in-loop */
-  throw new Error(`timed out waiting for ${target}`);
+  await poll(0);
 }
 
 async function waitForPathOrProcess(target, completed) {

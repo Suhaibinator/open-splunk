@@ -15,6 +15,8 @@ import (
 	"slices"
 	"strings"
 
+	"fortio.org/safecast"
+
 	"github.com/Suhaibinator/open-splunk/internal/privatefs"
 )
 
@@ -202,9 +204,8 @@ func copyMemberWithHooks(
 	if err != nil {
 		return fmt.Errorf("copy control-plane backup member %q: %w", sourceName, err)
 	}
-	// #nosec G115 -- every accepted manifest size is capped at 1 TiB before
-	// policy construction, well below MaxInt64.
-	wantSize := int64(want.SizeBytes)
+
+	wantSize := safecast.MustConv[int64](want.SizeBytes)
 	if written != wantSize ||
 		hex.EncodeToString(hash.Sum(nil)) != want.SHA256 {
 		return fmt.Errorf("control-plane backup member %q changed while restoring", sourceName)

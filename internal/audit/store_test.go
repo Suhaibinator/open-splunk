@@ -13,9 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Suhaibinator/open-splunk/internal/control"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
+
+	"github.com/Suhaibinator/open-splunk/internal/control"
 )
 
 var auditTestTime = time.Date(2026, 8, 3, 12, 34, 56, 789_123_456, time.FixedZone("fixture", -7*60*60))
@@ -226,13 +227,14 @@ func TestStoreAppendUsesSystemDefaultAndBrowserOverride(t *testing.T) {
 func TestStoreAppendOnlyConstructionAndConfigurationValidation(t *testing.T) {
 	t.Parallel()
 	database := openAuditTestDatabase(t)
+	var nilContext context.Context
 
 	if store, err := NewStore(nil, StoreOptions{}); store != nil ||
 		!errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("NewStore(nil) = (%v, %v)", store, err)
 	}
-	//nolint:staticcheck // Explicitly verifies the exported nil-context guard.
-	if store, err := NewStoreWithContext(nil, database, StoreOptions{}); store != nil ||
+
+	if store, err := NewStoreWithContext(nilContext, database, StoreOptions{}); store != nil ||
 		!errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("NewStoreWithContext(nil) = (%v, %v)", store, err)
 	}
@@ -638,8 +640,9 @@ func TestAppendValidationFailsBeforeWriting(t *testing.T) {
 			}
 		})
 	}
-	//nolint:staticcheck // Explicitly verifies the exported nil-context guard.
-	if event, err := store.Append(nil, "tenant", auditTestDefinition(ActionIngestionTokenCreate, "token", 1)); event != (Event{}) || !errors.Is(err, control.ErrInvalidArgument) {
+
+	var nilContext context.Context
+	if event, err := store.Append(nilContext, "tenant", auditTestDefinition(ActionIngestionTokenCreate, "token", 1)); event != (Event{}) || !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("Append(nil context) = (%+v, %v)", event, err)
 	}
 	canceled, cancel := context.WithCancel(ctx)

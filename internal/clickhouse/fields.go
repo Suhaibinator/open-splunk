@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 
+	"fortio.org/safecast"
+
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
@@ -790,7 +792,9 @@ func writePrerequisiteFieldCatalogPackedSidecarCandidates(
 	}
 	perSidecarLimit := uint64(eventfields.MaximumStoredFieldsPerEvent) + 1
 	// finalizePrerequisiteFieldCatalog rejects counts above the fixed generated-field limit.
-	sidecarCount := uint64(prerequisiteFieldCatalogSidecarCount(knownFields)) // #nosec G115 -- bounded by knowledgeprogram.MaximumGeneratedFields.
+	sidecarCount := safecast.MustConv[uint64](
+		prerequisiteFieldCatalogSidecarCount(knownFields),
+	)
 	packedLimit := sidecarCount * perSidecarLimit
 	sql.WriteString("arraySlice(arrayFlatten(arrayMap((field_name, relative_names, relative_types) -> arrayMap(field_metadata -> tuple(concat(field_name, '.', tupleElement(field_metadata, 1)), toUInt8(tupleElement(field_metadata, 2))), arrayZip(arraySlice(relative_names, 1, least(length(relative_names), length(relative_types), toUInt64(")
 	fmt.Fprint(sql, perSidecarLimit)

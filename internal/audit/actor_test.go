@@ -49,13 +49,14 @@ func TestActorContextValidationAndDetachment(t *testing.T) {
 			t.Fatalf("WithActor(%+v) = (%v, %v), want nil/invalid", actor, ctx, err)
 		}
 	}
-	//nolint:staticcheck // Explicitly verifies the exported nil-context guard.
-	if ctx, err := WithActor(nil, valid[0]); ctx != nil ||
+	var nilContext context.Context
+
+	if ctx, err := WithActor(nilContext, valid[0]); ctx != nil ||
 		!errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("WithActor(nil) = (%v, %v), want nil/invalid", ctx, err)
 	}
-	//nolint:staticcheck // Explicitly verifies the exported nil-context guard.
-	if actor, ok := ActorFromContext(nil); ok || actor != (Actor{}) {
+
+	if actor, ok := ActorFromContext(nilContext); ok || actor != (Actor{}) {
 		t.Fatalf("ActorFromContext(nil) = (%+v, %t)", actor, ok)
 	}
 	if actor, ok := ActorFromContext(context.Background()); ok || actor != (Actor{}) {

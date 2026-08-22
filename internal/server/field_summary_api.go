@@ -10,7 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"fortio.org/safecast"
 	"github.com/Suhaibinator/SRouter/pkg/codec"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/searchanalysis"
@@ -94,8 +96,8 @@ func searchFieldSummaryToProto(
 	if ctx == nil {
 		return nil, errors.New("search field summary conversion context is required")
 	}
-	// #nosec G115 -- a slice length is non-negative and exactly representable as uint64.
-	topValueCount := uint64(len(summary.TopValues))
+
+	topValueCount := safecast.MustConv[uint64](len(summary.TopValues))
 	if maximumValues == 0 || summary.Profile.FieldName != request.FieldName || summary.Profile.DistinctCount == nil ||
 		topValueCount > uint64(maximumValues) {
 		return nil, errors.New("invalid search field summary")

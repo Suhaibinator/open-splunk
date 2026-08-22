@@ -23,9 +23,14 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"fortio.org/safecast"
 	"github.com/Suhaibinator/SRouter/pkg/codec"
 	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/asciifold"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
@@ -35,9 +40,6 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
 	"github.com/Suhaibinator/open-splunk/internal/protocolid"
 	"github.com/Suhaibinator/open-splunk/internal/tokenconstraint"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/durationpb"
-	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
 const (
@@ -568,8 +570,8 @@ func (handler *apiHandler) listIndexes(request *http.Request, input *opensplunk.
 		}
 	}
 	listRequest := control.IndexListRequest{
-		// #nosec G115 -- adminPageRequest bounds this value by 64.
-		PageSize:     uint32(pageSize),
+
+		PageSize:     safecast.MustConv[uint32](pageSize),
 		Cursor:       cloneIndexListCursor(cursor),
 		IncludeTotal: includeTotal,
 		StateFilters: controlIndexStateFilters(states),
@@ -2872,8 +2874,8 @@ func (handler *apiHandler) adminPageResponse(endpoint, fingerprint, snapshot str
 		result.NextPageToken = new(token)
 	}
 	if includeTotal {
-		// #nosec G115 -- callers pass the length of an in-memory filtered slice.
-		value := uint64(total)
+
+		value := safecast.MustConv[uint64](total)
 		result.TotalSize = &value
 		result.TotalSizeExact = true
 	}

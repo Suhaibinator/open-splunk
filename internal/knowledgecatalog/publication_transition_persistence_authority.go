@@ -9,9 +9,11 @@ import (
 	"slices"
 	"strings"
 
+	"fortio.org/safecast"
+	"gorm.io/gorm"
+
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
-	"gorm.io/gorm"
 )
 
 // publicationTransitionPersistenceAuthority is an opaque, transaction-bound
@@ -298,7 +300,7 @@ func validatePublicationTransitionAuthorityProjection(
 			targetVersion:  dependency.targetVersion,
 		}
 	}
-	return projection[:len(projection):len(projection)], nil
+	return slices.Clip(projection), nil
 }
 
 func publicationTransitionPersistenceFactsFromRead(
@@ -366,11 +368,10 @@ func readPublicationTransitionPersistenceFacts(
 		return publicationTransitionPersistenceFacts{}, err
 	}
 	return publicationTransitionPersistenceFacts{
-		catalog:              catalog,
-		appCatalogRevision:   appRevision,
-		indexCatalogRevision: indexStates[0].Revision,
-		// #nosec G115 -- PhysicalCount was bounded by maximumPublicationIndexAtoms above.
-		indexCatalogPhysicalCount: uint16(indexStates[0].PhysicalCount),
+		catalog:                   catalog,
+		appCatalogRevision:        appRevision,
+		indexCatalogRevision:      indexStates[0].Revision,
+		indexCatalogPhysicalCount: safecast.MustConv[uint16](indexStates[0].PhysicalCount),
 	}, nil
 }
 
@@ -533,7 +534,7 @@ func clonePublicationTransitionProjection(
 			targetVersion:  dependency.targetVersion,
 		}
 	}
-	return result[:len(result):len(result)]
+	return slices.Clip(result)
 }
 
 func publicationTransitionSQLTransaction(tx *gorm.DB) (*sql.Tx, error) {

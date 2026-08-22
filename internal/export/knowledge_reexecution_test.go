@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -22,7 +24,6 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchsnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
-	"google.golang.org/protobuf/proto"
 )
 
 func TestReexecutionSourceUsesExactRetainedKnowledgeExecutionAndPinsItsLifetime(t *testing.T) {
@@ -635,10 +636,8 @@ type knowledgeSummaryTestLease struct {
 	summary *opensplunk.KnowledgeSnapshotSummary
 }
 
-//nolint:unparam // Both results are required by knowledgeSnapshotSummaryProvider.
 func (lease *knowledgeSummaryTestLease) knowledgeSnapshotSummary() (*opensplunk.KnowledgeSnapshotSummary, error) {
-	cloned, _ := proto.Clone(lease.summary).(*opensplunk.KnowledgeSnapshotSummary)
-	return cloned, nil
+	return knowledgesnapshot.CloneSummary(lease.summary)
 }
 
 func newKnowledgeReexecutionFixture(

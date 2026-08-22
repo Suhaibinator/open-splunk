@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"slices"
 	"time"
+
+	"fortio.org/safecast"
 )
 
 const (
@@ -161,8 +163,8 @@ func (asset *Asset) ColumnCount() uint32 {
 		return 0
 	}
 	// Parsed assets are capped at MaximumColumns.
-	// #nosec G115 -- the validated cap fits in uint32.
-	return uint32(len(asset.headers))
+
+	return safecast.MustConv[uint32](len(asset.headers))
 }
 
 func (asset *Asset) CanonicalCSV() []byte {

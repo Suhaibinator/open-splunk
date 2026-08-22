@@ -358,7 +358,7 @@ func TestAuthoredExpressionReferenceArithmeticRandomized(t *testing.T) {
 		seed       = int64(0x502a11)
 		iterations = 20_000
 	)
-	random := rand.New(rand.NewSource(seed)) // #nosec G404 -- deterministic test data, not security randomness.
+	random := rand.New(rand.NewSource(seed))
 	operations := []referenceBinaryOperation{
 		referenceAdd, referenceSubtract, referenceMultiply, referenceDivide, referenceRemainder,
 	}
@@ -426,7 +426,7 @@ func TestAuthoredExpressionReferenceMembershipRandomized(t *testing.T) {
 		seed       = int64(0x5021a5)
 		iterations = 20_000
 	)
-	random := rand.New(rand.NewSource(seed)) // #nosec G404 -- deterministic test data, not security randomness.
+	random := rand.New(rand.NewSource(seed))
 	for iteration := range iterations {
 		target := int64(random.Intn(2_001) - 1_000)
 		candidateCount := random.Intn(32) + 1

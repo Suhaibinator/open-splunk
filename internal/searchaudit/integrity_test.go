@@ -215,8 +215,9 @@ func TestAppendRejectsNilAndCanceledContexts(t *testing.T) {
 	if tx.Error != nil {
 		t.Fatal(tx.Error)
 	}
-	//nolint:staticcheck // Explicitly verifies the exported nil-context guard.
-	if err := store.AppendSearchAttemptInTransaction(nil, tx, "tenant", searchAuditTestDefinition("owner", "job", 0)); !errors.Is(err, control.ErrInvalidArgument) {
+	var nilContext context.Context
+
+	if err := store.AppendSearchAttemptInTransaction(nilContext, tx, "tenant", searchAuditTestDefinition("owner", "job", 0)); !errors.Is(err, control.ErrInvalidArgument) {
 		_ = tx.Rollback().Error
 		t.Fatalf("nil context error = %v", err)
 	}

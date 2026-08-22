@@ -82,18 +82,17 @@ test("documentation checker rejects stale versioned contract identifiers", async
     "OPEN_SPLUNK_APPLICATION_VERSION",
   ];
 
-  // Run each hostile value against an isolated complete inventory so the
-  // reported path/line remains exact and one failure cannot mask another.
-  /* eslint-disable no-await-in-loop */
-  for (const stale of staleValues) {
+  const results = await Promise.all(staleValues.map(async (stale) => {
     const root = await fixture(t);
     await writeFile(path.join(root, "docs", "api.md"), `# API\n\n${stale}\n`);
-    const result = check(root);
+    return { result: check(root), stale };
+  }));
+
+  for (const { result, stale } of results) {
     assert.equal(result.status, 1, stale);
     assert.match(result.stderr, /documentation check failed/u, stale);
     assert.match(result.stderr, /docs\/api\.md:3/u, stale);
   }
-  /* eslint-enable no-await-in-loop */
 });
 
 test("documentation checker rejects missing files and anchors", async (t) => {

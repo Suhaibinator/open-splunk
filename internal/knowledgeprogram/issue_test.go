@@ -172,8 +172,7 @@ func TestCandidateJSONPathIssuesHaveCanonicalUTF8ByteRanges(t *testing.T) {
 				!errors.Is(err, ErrInvalidProgram) {
 				t.Fatalf("Compile error = %v", err)
 			}
-			var pathErr *splpath.Error
-			if errors.As(err, &pathErr) {
+			if pathErr, ok := errors.AsType[*splpath.Error](err); ok {
 				t.Fatalf("Compile error newly exposes path error: %#v", pathErr)
 			}
 			issue, ok := CandidateIssueFromError(err, 0)
@@ -205,8 +204,7 @@ func TestCandidateCalculatedIssueRetainsSPLDiagnosticAndCanonicalTrimBasis(t *te
 		!errors.Is(err, ErrInvalidProgram) || errors.Is(err, ErrResourceLimit) {
 		t.Fatalf("Compile error = %v", err)
 	}
-	var diagnostic *spl.Diagnostic
-	if errors.As(err, &diagnostic) {
+	if diagnostic, ok := errors.AsType[*spl.Diagnostic](err); ok {
 		t.Fatalf("Compile error newly exposes SPL diagnostic: %#v", diagnostic)
 	}
 	issue, ok := CandidateIssueFromError(err, 0)

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	"fortio.org/safecast"
+
 	"github.com/Suhaibinator/open-splunk/internal/control"
 )
 
@@ -196,9 +198,8 @@ func authorizedObjectContext(current registryRecord) AuthorizedContext {
 		Object: &AuthorizedObject{
 			KnowledgeObjectID: strings.Clone(current.KnowledgeObjectID),
 			ObjectType:        current.ObjectType,
-			// #nosec G115 -- callers validate registry records, whose current version is positive.
-			Version:      uint64(current.CurrentVersion),
-			SharingScope: current.SharingScope,
+			Version:           safecast.MustConv[uint64](current.CurrentVersion),
+			SharingScope:      current.SharingScope,
 		},
 	}
 }

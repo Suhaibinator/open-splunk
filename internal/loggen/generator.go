@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"fortio.org/safecast"
 )
 
 // Format selects the shape of each generated line.
@@ -423,9 +425,11 @@ func deterministicID(seed int64, ordinal, stream uint64, size int) string {
 }
 
 func seedBits(seed int64) uint64 {
-	// #nosec G115 -- deterministic generation intentionally preserves the
-	// signed seed's two's-complement bit pattern.
-	return uint64(seed)
+	if seed >= 0 {
+		return safecast.MustConv[uint64](seed)
+	}
+	magnitude := safecast.MustConv[uint64](-(seed + 1)) + 1
+	return ^(magnitude - 1)
 }
 
 func mix(seed, ordinal, stream uint64) uint64 {

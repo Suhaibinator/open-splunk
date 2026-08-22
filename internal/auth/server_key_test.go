@@ -12,8 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Suhaibinator/open-splunk/internal/control"
 	"gorm.io/gorm"
+
+	"github.com/Suhaibinator/open-splunk/internal/control"
 )
 
 func TestServerKeyStateGORMModelMatchesMigratedSQLiteSchema(t *testing.T) {
@@ -234,10 +235,10 @@ func TestServerMasterKeyIdentityRejectsInvalidDependenciesAndCancellation(t *tes
 	ctx := context.Background()
 	database := openControlDB(t)
 	validFingerprint := bytes.Repeat([]byte{1}, sha256.Size)
+	var nilContext context.Context
 	for name, operation := range map[string]func() error{
 		"nil context read": func() error {
-			//nolint:staticcheck // This case explicitly verifies the nil-context guard.
-			_, _, err := ReadServerMasterKeyIdentity(nil, database)
+			_, _, err := ReadServerMasterKeyIdentity(nilContext, database)
 			return err
 		},
 		"nil database read": func() error {
@@ -245,8 +246,7 @@ func TestServerMasterKeyIdentityRejectsInvalidDependenciesAndCancellation(t *tes
 			return err
 		},
 		"nil context validation": func() error {
-			//nolint:staticcheck // This case explicitly verifies the nil-context guard.
-			return ValidateServerMasterKeyInitialization(nil, database)
+			return ValidateServerMasterKeyInitialization(nilContext, database)
 		},
 		"nil database registration": func() error {
 			return RegisterServerMasterKeyIdentity(ctx, nil, validFingerprint)

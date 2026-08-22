@@ -221,7 +221,7 @@ func TestCollectorSessionManagerAdmitsAndDetachesFreshAuthority(t *testing.T) {
 	hosts := []string{`^host$`}
 	sources := []string{`^/var/log/app\.log$`}
 	lease := collectorfleet.Lease{
-		Scope:       collectorfleet.Scope{TenantID: "tenant-a"},
+		TenantID:    "tenant-a",
 		CollectorID: "collector-a",
 		BootEpoch:   "boot-a",
 		StreamID:    "stream-a",
@@ -283,7 +283,7 @@ func TestCollectorSessionManagerPreservesInvalidEventAuthorityForDurableReplay(t
 	t.Parallel()
 
 	lease := collectorfleet.Lease{
-		Scope:       collectorfleet.Scope{TenantID: "tenant-a"},
+		TenantID:    "tenant-a",
 		CollectorID: "collector-a",
 		BootEpoch:   "boot-a",
 		StreamID:    "stream-a",
@@ -403,7 +403,7 @@ func TestCollectorSessionManagerMapsOnlyKnownBoundaryErrors(t *testing.T) {
 func TestCollectorSessionManagerDelegatesHeartbeatLifecycle(t *testing.T) {
 	t.Parallel()
 	lease := collectorfleet.Lease{
-		Scope:       collectorfleet.Scope{TenantID: "tenant-a"},
+		TenantID:    "tenant-a",
 		CollectorID: "collector-a",
 		BootEpoch:   "boot-a",
 		StreamID:    "stream-a",
@@ -439,7 +439,7 @@ func TestCollectorSessionManagerAlwaysDurablyDisconnectsAfterReleaseFailure(
 	releaseErr := errors.New("release failed")
 	disconnectErr := errors.New("durable disconnect failed")
 	lease := collectorfleet.Lease{
-		Scope:       collectorfleet.Scope{TenantID: "tenant-a"},
+		TenantID:    "tenant-a",
 		CollectorID: "collector-a",
 		BootEpoch:   "boot-a",
 		StreamID:    "stream-a",
@@ -498,7 +498,7 @@ func TestCollectorSessionManagerMissingHeartbeatRuntimeStillDisconnectsDurably(
 	applied, err := manager.Disconnect(
 		context.Background(),
 		collectorfleet.Lease{
-			Scope:       collectorfleet.Scope{TenantID: "tenant-a"},
+			TenantID:    "tenant-a",
 			CollectorID: "collector-a",
 			BootEpoch:   "boot-a",
 			StreamID:    "stream-a",
@@ -542,7 +542,7 @@ func TestCollectorSessionManagerReservesParentContextForDurableDisconnect(
 	applied, err := manager.Disconnect(
 		parentContext,
 		collectorfleet.Lease{
-			Scope:       collectorfleet.Scope{TenantID: "tenant-a"},
+			TenantID:    "tenant-a",
 			CollectorID: "collector-a",
 			BootEpoch:   "boot-a",
 			StreamID:    "stream-a",

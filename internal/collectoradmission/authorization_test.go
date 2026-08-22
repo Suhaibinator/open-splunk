@@ -307,7 +307,7 @@ func TestAuthorizeLeaseFailsClosedAtCredentialAndDurableFences(t *testing.T) {
 		_, otherLease, err := fixture.fleet.Claim(
 			ctx,
 			collectorfleet.ClaimRequest{
-				Scope:       collectorfleet.Scope{TenantID: "tenant-b"},
+				TenantID:    "tenant-b",
 				CollectorID: request.CollectorID,
 				BootEpoch:   request.BootEpoch,
 				StreamID:    request.StreamID,

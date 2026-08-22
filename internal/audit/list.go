@@ -7,8 +7,10 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/Suhaibinator/open-splunk/internal/control"
+	"fortio.org/safecast"
 	"gorm.io/gorm"
+
+	"github.com/Suhaibinator/open-splunk/internal/control"
 )
 
 type normalizedListRequest struct {
@@ -234,8 +236,8 @@ func (store *Store) List(
 			total = *cursor.TotalSize
 		} else if len(normalized.actionFilters) == 0 &&
 			normalized.actorID == nil && normalized.targetKind == nil {
-			// #nosec G115 -- validated tenant state is between zero and 100,000.
-			total = uint64(state.EventCount)
+
+			total = safecast.MustConv[uint64](state.EventCount)
 		} else {
 			total, err = countFilteredEvents(tx, normalized)
 			if err != nil {
@@ -249,8 +251,8 @@ func (store *Store) List(
 		last := page.Events[len(page.Events)-1]
 		next := listCursor{
 			FilterHash: filterHash,
-			// #nosec G115 -- Event validation bounds sequence to 100,000.
-			Sequence:        int64(last.Sequence),
+
+			Sequence:        safecast.MustConv[int64](last.Sequence),
 			HighWater:       highWater,
 			HighWaterDigest: highWaterDigest,
 		}

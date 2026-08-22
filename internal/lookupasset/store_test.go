@@ -690,8 +690,9 @@ func TestNewStoreAndRequestsRejectInvalidInput(t *testing.T) {
 		t.Fatalf("oversized TTL = %v", err)
 	}
 	store := mustLookupStore(t, database, StoreOptions{})
-	//nolint:staticcheck // The nil context is the invalid input under test.
-	if _, err := store.StageCSV(nil, StageRequest{}); !errors.Is(err, ErrInvalidArgument) {
+	var nilContext context.Context
+
+	if _, err := store.StageCSV(nilContext, StageRequest{}); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("nil context = %v", err)
 	}
 	if _, err := store.StageCSV(t.Context(), StageRequest{}); !errors.Is(err, ErrInvalidArgument) {

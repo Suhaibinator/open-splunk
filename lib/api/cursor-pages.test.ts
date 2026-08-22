@@ -100,9 +100,8 @@ test("an empty first-page token is a resumed chain that suppresses the total req
 });
 
 test("blank, whitespace, and absent server cursors all terminate the walk", async () => {
-  for (const nextPageToken of [undefined, "", "   ", "\t\n"]) {
+  await Promise.all([undefined, "", "   ", "\t\n"].map(async (nextPageToken) => {
     const server = scriptedServer([{ items: ["end"], page: { nextPageToken } }]);
-    // eslint-disable-next-line no-await-in-loop
     const collected = await collectCursorPages<string>({
       maximumPages: 4,
       label: "Saved searches",
@@ -111,7 +110,7 @@ test("blank, whitespace, and absent server cursors all terminate the walk", asyn
     assert.equal(collected.complete, true, JSON.stringify(nextPageToken));
     assert.equal(collected.nextPageToken, null, JSON.stringify(nextPageToken));
     assert.equal(server.requests.length, 1, JSON.stringify(nextPageToken));
-  }
+  }));
 });
 
 test("a repeated server cursor aborts the walk even when only whitespace differs", async () => {

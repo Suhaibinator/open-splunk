@@ -10,11 +10,12 @@ import (
 	"testing"
 	"time"
 
-	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
-	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 )
 
 func TestNewServiceRequiresCollectorSessionManager(t *testing.T) {
@@ -405,7 +406,7 @@ func TestCollectCleansCommittedLeaseWhenAdmissionResultIsInvalid(t *testing.T) {
 	})
 	manager := newTestCollectorSessionManager(authorizer)
 	committed := collectorfleet.Lease{
-		Scope:       collectorfleet.Scope{TenantID: "tenant-a"},
+		TenantID:    "tenant-a",
 		CollectorID: "collector-a",
 		BootEpoch:   "server-test",
 		StreamID:    "wrong-stream",
@@ -461,7 +462,7 @@ func TestDisconnectCollectorSessionRetriesTransientFailure(t *testing.T) {
 	})
 	manager := newTestCollectorSessionManager(authorizer)
 	lease := collectorfleet.Lease{
-		Scope:       collectorfleet.Scope{TenantID: "tenant-a"},
+		TenantID:    "tenant-a",
 		CollectorID: "collector-a",
 		BootEpoch:   "server-test",
 		StreamID:    "stream-a",
@@ -524,7 +525,7 @@ func TestDisconnectCollectorSessionUsesConfiguredTimeout(t *testing.T) {
 	})
 	manager := newTestCollectorSessionManager(authorizer)
 	lease := collectorfleet.Lease{
-		Scope:       collectorfleet.Scope{TenantID: "tenant-a"},
+		TenantID:    "tenant-a",
 		CollectorID: "collector-a",
 		BootEpoch:   "server-test",
 		StreamID:    "stream-a",

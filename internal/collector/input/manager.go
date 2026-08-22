@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"fortio.org/safecast"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/collector/framing"
 	"github.com/Suhaibinator/open-splunk/internal/collectorlimits"
@@ -202,8 +204,8 @@ func (m *manager) Health() Health {
 	// is rejected by the fleet heartbeat validator. Lift discovery to the active
 	// snapshot and saturate every wire-facing counter at MaxInt64 so downstream
 	// int64 storage/validation remains representable.
-	// #nosec G115 -- max64 clamps the atomic counter to a non-negative int64.
-	active := collectorlimits.ClampFleetCounter(uint64(max64(m.active.Load(), 0)))
+
+	active := collectorlimits.ClampFleetCounter(safecast.MustConv[uint64](max64(m.active.Load(), 0)))
 	discovered := max(collectorlimits.ClampFleetCounter(m.discovered.Load()), active)
 	return Health{
 		InputID:           m.cfg.InputID,
@@ -320,9 +322,8 @@ func (m *manager) pollOnce(ctx context.Context, initial bool) {
 			return
 		}
 
-		// #nosec G115 -- the negative-size case is rejected above.
 		start, err := m.resolveStart(
-			id, p, uint64(fi2.Size()), initial, f,
+			id, p, safecast.MustConv[uint64](fi2.Size()), initial, f,
 		)
 		if err != nil {
 			_ = f.Close()
@@ -630,8 +631,8 @@ func captureCheckpointGuard(
 	maximum int,
 ) (fingerprint string, length uint32, err error) {
 	guardLength := end
-	// #nosec G115 -- maximum is validated against maximumFingerprintBytes.
-	if limit := uint64(maximum); guardLength > limit {
+
+	if limit := safecast.MustConv[uint64](maximum); guardLength > limit {
 		guardLength = limit
 	}
 	if guardLength == 0 {
@@ -641,8 +642,8 @@ func captureCheckpointGuard(
 	if err != nil {
 		return "", 0, err
 	}
-	// #nosec G115 -- maximum is validated against maximumFingerprintBytes.
-	length = uint32(guardLength)
+
+	length = safecast.MustConv[uint32](guardLength)
 	fingerprint, err = computeFingerprintRange(f, offset, length)
 	if err != nil {
 		return "", 0, classifyExactReadError(err)
@@ -1247,8 +1248,8 @@ func (t *tailer) trackGrowthAndTruncate() (size uint64, trackable bool) {
 		t.setReadError(errors.New("file has a negative size"))
 		return 0, false
 	}
-	// #nosec G115 -- the negative-size case is rejected above.
-	size = uint64(fi.Size())
+
+	size = safecast.MustConv[uint64](fi.Size())
 	changed := t.rewritePending || size < t.offset
 	if !changed {
 		guardMatches, guardErr := t.installedGuardMatches()
@@ -1375,8 +1376,8 @@ func (t *tailer) resetCurrentGeneration() bool {
 		t.setReadError(err)
 		return false
 	}
-	// #nosec G115 -- the negative-size case is rejected above.
-	t.lastSize = uint64(fi.Size())
+
+	t.lastSize = safecast.MustConv[uint64](fi.Size())
 	t.lastSizeChange = time.Now()
 	return true
 }
@@ -1414,8 +1415,8 @@ func (t *tailer) refreshGuard() error {
 func (t *tailer) captureGuard(end uint64) (tailerRewriteGuard, error) {
 	length := end
 	// validatedFingerprintBytes guarantees a positive bounded int at construction.
-	// #nosec G115 -- positive int values are exactly representable as uint64.
-	if maximum := uint64(t.m.fpBytes); length > maximum {
+
+	if maximum := safecast.MustConv[uint64](t.m.fpBytes); length > maximum {
 		length = maximum
 	}
 	guard := tailerRewriteGuard{offset: end - length, length: length}
@@ -1465,14 +1466,14 @@ func (t *tailer) readFingerprintRange(
 			maximumFingerprintBytes,
 		)
 	}
-	// #nosec G115 -- lengthUint64 is bounded by maximumFingerprintBytes above.
+
 	length := int(lengthUint64)
 	t.guardScratch = slices.Grow(t.guardScratch[:0], length)[:length]
 	guardOffset, err := checkedFileOffset(offset)
 	if err != nil {
 		return fingerprintDigest{}, err
 	}
-	// #nosec G115 -- lengthUint64 is bounded by maximumFingerprintBytes above.
+
 	lengthUint32 := uint32(lengthUint64)
 	digest, err := computeFingerprintRangeDigest(
 		t.f,
@@ -1490,7 +1491,7 @@ func checkedFileOffset(offset uint64) (int64, error) {
 	if offset > math.MaxInt64 {
 		return 0, fmt.Errorf("file offset %d exceeds int64", offset)
 	}
-	// #nosec G115 -- offset is explicitly bounded by math.MaxInt64 above.
+
 	return int64(offset), nil
 }
 

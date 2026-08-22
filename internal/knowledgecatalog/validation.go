@@ -3,15 +3,18 @@ package knowledgecatalog
 import (
 	"bytes"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
+
+	"fortio.org/safecast"
+	"google.golang.org/protobuf/proto"
+	"gorm.io/gorm"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
-	"google.golang.org/protobuf/proto"
-	"gorm.io/gorm"
 )
 
 func (store *Store) objectFromCurrentRegistry(database *gorm.DB, registry registryRecord) (Object, error) {
@@ -161,15 +164,14 @@ func objectFromHistoricalVersion(
 		OwnerID:           strings.Clone(version.OwnerID),
 		ObjectType:        version.ObjectType,
 		Name:              strings.Clone(version.Name),
-		// #nosec G115 -- immutable version validation requires a positive persisted version.
-		Version:          uint64(version.ObjectVersion),
-		SharingScope:     version.SharingScope,
-		State:            version.State,
-		Definition:       proto.Clone(normalized.Definition).(*opensplunk.KnowledgeObjectDefinition),
-		DefinitionSHA256: bytes.Clone(normalized.Digest),
-		CreatedAt:        createdAt,
-		UpdatedAt:        updatedAt,
-		QuarantineReason: cloneString(version.QuarantineReason),
+		Version:           safecast.MustConv[uint64](version.ObjectVersion),
+		SharingScope:      version.SharingScope,
+		State:             version.State,
+		Definition:        proto.Clone(normalized.Definition).(*opensplunk.KnowledgeObjectDefinition),
+		DefinitionSHA256:  bytes.Clone(normalized.Digest),
+		CreatedAt:         createdAt,
+		UpdatedAt:         updatedAt,
+		QuarantineReason:  cloneString(version.QuarantineReason),
 	}
 	object.DisabledAt, err = optionalCanonicalTime(lifecycle.DisabledAtUnixMicro)
 	if err != nil {
@@ -287,7 +289,7 @@ func readValidatedVersionDependencies(
 	if err := validateDependencyRecords(version, records); err != nil {
 		return nil, err
 	}
-	return records[:len(records):len(records)], nil
+	return slices.Clip(records), nil
 }
 
 func validateDependencyRecords(version versionRecord, records []dependencyRecord) error {
@@ -529,14 +531,13 @@ func objectFromCurrentScalars(
 		OwnerID:           strings.Clone(record.OwnerID),
 		ObjectType:        record.ObjectType,
 		Name:              strings.Clone(record.Name),
-		// #nosec G115 -- registry validation requires a positive current version.
-		Version:          uint64(record.CurrentVersion),
-		SharingScope:     record.SharingScope,
-		State:            record.State,
-		DefinitionSHA256: bytes.Clone(digest),
-		CreatedAt:        createdAt,
-		UpdatedAt:        updatedAt,
-		QuarantineReason: cloneString(record.QuarantineReason),
+		Version:           safecast.MustConv[uint64](record.CurrentVersion),
+		SharingScope:      record.SharingScope,
+		State:             record.State,
+		DefinitionSHA256:  bytes.Clone(digest),
+		CreatedAt:         createdAt,
+		UpdatedAt:         updatedAt,
+		QuarantineReason:  cloneString(record.QuarantineReason),
 	}
 	if definition != nil {
 		object.Definition = proto.Clone(definition).(*opensplunk.KnowledgeObjectDefinition)

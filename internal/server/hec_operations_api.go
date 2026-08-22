@@ -3,12 +3,14 @@ package server
 import (
 	"net/http"
 
+	"fortio.org/safecast"
 	"github.com/Suhaibinator/SRouter/pkg/codec"
 	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
-	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 )
 
 const (
@@ -47,7 +49,7 @@ func hecOperationalSnapshotToProto(
 	protocolFailures := make([]*opensplunk.HECProtocolFailureMetric, 0, len(snapshot.ProtocolFailures)-1)
 	for code := 1; code < len(snapshot.ProtocolFailures); code++ {
 		protocolFailures = append(protocolFailures, &opensplunk.HECProtocolFailureMetric{
-			Code:  uint32(code), // #nosec G115 -- fixed array index is at most 31.
+			Code:  safecast.MustConv[uint32](code),
 			Count: snapshot.ProtocolFailures[code],
 		})
 	}

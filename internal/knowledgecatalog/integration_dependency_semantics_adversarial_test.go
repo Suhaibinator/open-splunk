@@ -519,7 +519,7 @@ func rewriteSemanticDependencySet(t *testing.T, database *control.DB, sourceID, 
 		"knowledge_object_version_update_is_forbidden",
 		"knowledge_dependency_seal_delete_is_forbidden",
 	} {
-		dropTriggerIfPresent(t, database, trigger)
+		dropTrigger(t, database, trigger)
 	}
 	connection, err := database.SQLDB().Conn(context.Background())
 	if err != nil {
@@ -566,13 +566,5 @@ func rewriteSemanticDependencySet(t *testing.T, database *control.DB, sourceID, 
 		if _, err := connection.ExecContext(context.Background(), statement.query, statement.args...); err != nil {
 			t.Fatalf("rewrite semantic dependency set: %v", err)
 		}
-	}
-}
-
-func dropTriggerIfPresent(t *testing.T, database *control.DB, name string) {
-	t.Helper()
-	// #nosec G202 -- name is supplied only by fixed test fixture identifiers.
-	if _, err := database.SQLDB().ExecContext(t.Context(), `DROP TRIGGER IF EXISTS `+name); err != nil {
-		t.Fatalf("drop trigger %s: %v", name, err)
 	}
 }

@@ -8,6 +8,8 @@ import (
 	"math"
 	"time"
 
+	"fortio.org/safecast"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 )
 
@@ -241,13 +243,13 @@ func ComputeEventIDsDigest(events []*opensplunk.LogEvent) []byte {
 		if event != nil {
 			id = event.GetEventId()
 		}
-		// #nosec G115 -- len is non-negative and every supported Go int value
+
 		// is exactly representable as uint64.
 		if uint64(len(id)) > math.MaxUint32 {
 			return nil
 		}
-		// #nosec G115 -- the explicit math.MaxUint32 check above proves this safe.
-		binary.BigEndian.PutUint32(length[:], uint32(len(id)))
+
+		binary.BigEndian.PutUint32(length[:], safecast.MustConv[uint32](len(id)))
 		_, _ = h.Write(length[:])
 		_, _ = h.Write([]byte(id))
 	}

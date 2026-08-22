@@ -7,9 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
-	"google.golang.org/protobuf/proto"
 )
 
 func TestWriterReplayRejectsTamperedCompactOutcomeAuthorities(t *testing.T) {
@@ -287,10 +288,8 @@ func TestWriterReplayRejectsWholeReceiptRebindingAcrossEquivalentCreates(t *test
 		winner.ObjectID, winner.Version, winner.SuccessfulAuditSequence,
 		winner.CreatedAt, winner.RetentionAnchor, winner.RetainUntil,
 	}
-	if _, err := harness.database.SQLDB().ExecContext(t.Context(), `
-		UPDATE knowledge_mutation_idempotency SET `+assignment+`
-		WHERE tenant_id = ? AND actor_kind = ? AND actor_id = ?
-		  AND route = ? AND client_request_id = ?`, append(values,
+	statement := writerOutcomeReceiptUpdateStatement(t, assignment)
+	if _, err := harness.database.SQLDB().ExecContext(t.Context(), statement, append(values,
 		writerFaultTenant, audit.ActorKindBrowser, "writer-fault-administrator",
 		mutationRouteCreate, first.GetClientRequestId())...); err == nil {
 		t.Fatal("whole receipt rebinding succeeded with composite foreign key enabled")
@@ -389,10 +388,9 @@ func updateWriterOutcomeReceipt(
 		mutationRouteCreate,
 		requestID,
 	)
-	result, err := harness.database.SQLDB().ExecContext(t.Context(), `UPDATE knowledge_mutation_idempotency
-		SET `+assignment+`
-		WHERE tenant_id = ? AND actor_kind = ? AND actor_id = ?
-		  AND route = ? AND client_request_id = ?`, arguments...)
+	result, err := harness.database.SQLDB().ExecContext(
+		t.Context(), writerOutcomeReceiptUpdateStatement(t, assignment), arguments...,
+	)
 	if err != nil {
 		t.Fatalf("tamper compact outcome: %v", err)
 	}
@@ -424,11 +422,9 @@ func updateWriterOutcomeReceiptWithoutForeignKeys(
 		mutationRouteCreate,
 		requestID,
 	)
-	// #nosec G202 -- assignment is selected from a fixed test-case corruption matrix.
-	result, updateErr := connection.ExecContext(t.Context(), `UPDATE knowledge_mutation_idempotency
-		SET `+assignment+`
-		WHERE tenant_id = ? AND actor_kind = ? AND actor_id = ?
-		  AND route = ? AND client_request_id = ?`, arguments...)
+	result, updateErr := connection.ExecContext(
+		t.Context(), writerOutcomeReceiptUpdateStatement(t, assignment), arguments...,
+	)
 	if _, err := connection.ExecContext(t.Context(), `PRAGMA foreign_keys = ON`); err != nil {
 		t.Fatalf("restore receipt foreign keys: %v", err)
 	}
@@ -437,5 +433,39 @@ func updateWriterOutcomeReceiptWithoutForeignKeys(
 	}
 	if affected, err := result.RowsAffected(); err != nil || affected != 1 {
 		t.Fatalf("tamper compact outcome rows = %d, %v; want 1", affected, err)
+	}
+}
+
+func writerOutcomeReceiptUpdateStatement(t *testing.T, assignment string) string {
+	t.Helper()
+	switch assignment {
+	case `outcome_proto = ?`:
+		return `UPDATE knowledge_mutation_idempotency SET outcome_proto = ?
+			WHERE tenant_id = ? AND actor_kind = ? AND actor_id = ?
+			  AND route = ? AND client_request_id = ?`
+	case `committed_catalog_revision = ?, committed_catalog_state_token = ?, outcome_proto = ?`:
+		return `UPDATE knowledge_mutation_idempotency
+			SET committed_catalog_revision = ?, committed_catalog_state_token = ?, outcome_proto = ?
+			WHERE tenant_id = ? AND actor_kind = ? AND actor_id = ?
+			  AND route = ? AND client_request_id = ?`
+	case `successful_audit_sequence = ?, outcome_proto = ?`:
+		return `UPDATE knowledge_mutation_idempotency
+			SET successful_audit_sequence = ?, outcome_proto = ?
+			WHERE tenant_id = ? AND actor_kind = ? AND actor_id = ?
+			  AND route = ? AND client_request_id = ?`
+	case `mutation_kind = ?, outcome_proto = ?, committed_catalog_revision = ?,
+		committed_catalog_state_token = ?, knowledge_object_id = ?, object_version = ?,
+		successful_audit_sequence = ?, created_at_unix_micro = ?,
+		retention_anchor_unix_micro = ?, retain_until_unix_micro = ?`:
+		return `UPDATE knowledge_mutation_idempotency SET
+			mutation_kind = ?, outcome_proto = ?, committed_catalog_revision = ?,
+			committed_catalog_state_token = ?, knowledge_object_id = ?, object_version = ?,
+			successful_audit_sequence = ?, created_at_unix_micro = ?,
+			retention_anchor_unix_micro = ?, retain_until_unix_micro = ?
+			WHERE tenant_id = ? AND actor_kind = ? AND actor_id = ?
+			  AND route = ? AND client_request_id = ?`
+	default:
+		t.Fatalf("unknown outcome receipt assignment %q", assignment)
+		return ""
 	}
 }

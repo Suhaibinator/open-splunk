@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
@@ -91,10 +92,8 @@ func TestExecutorExecuteStatsWildcardInventoryRejectsRowsAtomically(t *testing.T
 			if !got.IsZero() {
 				t.Fatalf("result is nonzero on error: %#v", got)
 			}
-			var diagnosticSentinel planDiagnosticSentinel
-			if errors.As(test.wantErr, &diagnosticSentinel) {
-				var planErr *plan.Diagnostic
-				if !errors.As(err, &planErr) {
+			if _, ok := errors.AsType[planDiagnosticSentinel](test.wantErr); ok {
+				if _, ok := errors.AsType[*plan.Diagnostic](err); !ok {
 					t.Fatalf("error = %v, want plan diagnostic", err)
 				}
 			} else if !errors.Is(err, test.wantErr) {

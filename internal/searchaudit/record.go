@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"strings"
 
+	"fortio.org/safecast"
+	"gorm.io/gorm"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
-	"gorm.io/gorm"
 )
 
 const (
@@ -144,9 +146,9 @@ func setRecordKnowledgeSnapshot(
 		return
 	}
 	record.KnowledgeSnapshotSHA256 = bytes.Clone(knowledgeSnapshot.GetSnapshotSha256())
-	// #nosec G115 -- normalizeKnowledgeSnapshotRef capped this at MaxInt64-1.
+
 	record.KnowledgeSnapshotTenantCatalogRevision = sql.NullInt64{
-		Int64: int64(knowledgeSnapshot.GetTenantCatalogRevision()),
+		Int64: safecast.MustConv[int64](knowledgeSnapshot.GetTenantCatalogRevision()),
 		Valid: true,
 	}
 	record.KnowledgeSnapshotTenantCatalogStateToken = bytes.Clone(
@@ -198,17 +200,17 @@ func knowledgeSnapshotFromRecord(
 			ErrCorrupt,
 		)
 	}
-	// #nosec G115 -- negative values are rejected immediately above.
+
 	knowledgeSnapshot := &opensplunk.KnowledgeSnapshotRef{
 		SnapshotSha256: bytes.Clone(record.KnowledgeSnapshotSHA256),
-		TenantCatalogRevision: uint64(
+		TenantCatalogRevision: safecast.MustConv[uint64](
 			record.KnowledgeSnapshotTenantCatalogRevision.Int64,
 		),
 		TenantCatalogStateToken: bytes.Clone(
 			record.KnowledgeSnapshotTenantCatalogStateToken,
 		),
-		ObjectCount:      uint32(record.KnowledgeSnapshotObjectCount.Int64),
-		LookupAssetCount: uint32(record.KnowledgeSnapshotLookupAssetCount.Int64),
+		ObjectCount:      safecast.MustConv[uint32](record.KnowledgeSnapshotObjectCount.Int64),
+		LookupAssetCount: safecast.MustConv[uint32](record.KnowledgeSnapshotLookupAssetCount.Int64),
 	}
 	if err := validateKnowledgeSnapshotRef(knowledgeSnapshot); err != nil {
 		return nil, fmt.Errorf(

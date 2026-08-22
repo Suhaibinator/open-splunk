@@ -17,12 +17,14 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"fortio.org/safecast"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/lookupasset"
 	"github.com/Suhaibinator/open-splunk/internal/lookupdefinition"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -1584,7 +1586,7 @@ func encodeColumns(columns []string) ([]byte, error) {
 		return nil, fmt.Errorf("%w: lookup column inventory is invalid", ErrInvalid)
 	}
 	result := make([]byte, 4)
-	binary.BigEndian.PutUint32(result, uint32(len(columns))) // #nosec G115 -- columns are bounded above.
+	binary.BigEndian.PutUint32(result, safecast.MustConv[uint32](len(columns)))
 	seen := make(map[string]struct{}, len(columns))
 	for _, column := range columns {
 		if !validPersistedColumn(column) {
@@ -1595,7 +1597,7 @@ func encodeColumns(columns []string) ([]byte, error) {
 		}
 		seen[column] = struct{}{}
 		length := make([]byte, 4)
-		binary.BigEndian.PutUint32(length, uint32(len(column))) // #nosec G115 -- header bytes are bounded above.
+		binary.BigEndian.PutUint32(length, safecast.MustConv[uint32](len(column)))
 		result = append(result, length...)
 		result = append(result, column...)
 	}

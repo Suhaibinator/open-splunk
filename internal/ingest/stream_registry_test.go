@@ -476,7 +476,7 @@ func durableStreamLease(
 	generation uint64,
 ) collectorfleet.Lease {
 	return collectorfleet.Lease{
-		Scope:       collectorfleet.Scope{TenantID: key.TenantID},
+		TenantID:    key.TenantID,
 		CollectorID: key.CollectorID,
 		BootEpoch:   bootEpoch,
 		StreamID:    streamID,

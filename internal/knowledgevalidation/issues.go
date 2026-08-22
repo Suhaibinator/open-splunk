@@ -7,8 +7,10 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"fortio.org/safecast"
 	"google.golang.org/protobuf/proto"
+
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 )
 
 const (
@@ -224,7 +226,7 @@ func sourcePosition(ctx context.Context, source string, offset uint64) (*openspl
 	if offset > uint64(len(source)) || !utf8.ValidString(source[:offset]) {
 		return nil, ErrInvariant
 	}
-	end := int(offset) // #nosec G115 -- offset was bounded by len(source) above.
+	end := safecast.MustConv[int](offset)
 	line, column := uint32(1), uint32(1)
 	for index := 0; index < end; {
 		if index&4095 == 0 {

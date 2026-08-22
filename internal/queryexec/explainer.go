@@ -202,10 +202,8 @@ func validateExplainerTLS(config *tls.Config) error {
 			"create ClickHouse EXPLAIN: TLS certificate verification is required",
 		)
 	}
-	if config.Rand != nil ||
-		config.Time != nil ||
+	if config.Time != nil ||
 		len(config.Certificates) != 0 ||
-		len(config.NameToCertificate) != 0 || //nolint:staticcheck // reject the deprecated certificate map
 		config.GetCertificate != nil ||
 		config.GetClientCertificate != nil ||
 		config.GetConfigForClient != nil ||
@@ -219,7 +217,7 @@ func validateExplainerTLS(config *tls.Config) error {
 		config.GetEncryptedClientHelloKeys != nil {
 		return errors.New(
 			"create ClickHouse EXPLAIN: TLS callbacks, client certificates, " +
-				"custom entropy, sessions, and key logging are not allowed",
+				"sessions, and key logging are not allowed",
 		)
 	}
 	if config.Renegotiation != tls.RenegotiateNever {

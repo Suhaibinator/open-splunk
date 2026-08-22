@@ -16,8 +16,10 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/Suhaibinator/open-splunk/internal/privatefs"
+	"fortio.org/safecast"
 	"golang.org/x/sys/unix"
+
+	"github.com/Suhaibinator/open-splunk/internal/privatefs"
 )
 
 var privateFileModes = []fs.FileMode{0o600}
@@ -162,7 +164,7 @@ func (directory *archiveDirectory) descriptor() (int, error) {
 	if directory == nil || directory.file == nil {
 		return -1, errors.New("deployment recovery-set archive root is closed")
 	}
-	// #nosec G115 -- os.File descriptors are native int descriptors here.
+
 	return int(directory.file.Fd()), nil
 }
 
@@ -282,10 +284,10 @@ func (directory *archiveDirectory) inspectArchiveWithRetention(
 	if minimum > maximum || maximum > math.MaxInt64 {
 		return FileIdentity{}, errors.New("inspect ClickHouse recovery archive: invalid size policy")
 	}
-	// #nosec G115 -- both unsigned bounds were checked against MaxInt64 above.
-	minimumSize := int64(minimum)
-	// #nosec G115 -- both unsigned bounds were checked against MaxInt64 above.
-	maximumSize := int64(maximum)
+
+	minimumSize := safecast.MustConv[int64](minimum)
+
+	maximumSize := safecast.MustConv[int64](maximum)
 	if err := directory.revalidate(); err != nil {
 		return FileIdentity{}, err
 	}
@@ -302,7 +304,7 @@ func (directory *archiveDirectory) inspectArchiveWithRetention(
 	if err != nil {
 		return FileIdentity{}, fmt.Errorf("open ClickHouse recovery archive %q: %w", name, err)
 	}
-	// #nosec G115 -- unix.Openat returned a non-negative native descriptor.
+
 	file := os.NewFile(uintptr(fd), name)
 	if file == nil {
 		_ = unix.Close(fd)
@@ -375,7 +377,7 @@ func (directory *archiveDirectory) inspectArchiveWithRetention(
 	if err != nil {
 		return FileIdentity{}, fmt.Errorf("reopen ClickHouse recovery archive %q: %w", name, err)
 	}
-	// #nosec G115 -- unix.Openat returned a non-negative native descriptor.
+
 	reopened := os.NewFile(uintptr(reopenedFD), name)
 	if reopened == nil {
 		_ = unix.Close(reopenedFD)
@@ -416,7 +418,7 @@ func (directory *archiveDirectory) inspectArchiveWithRetention(
 	}
 	identity := FileIdentity{
 		Name:      name,
-		SizeBytes: uint64(read), // #nosec G115 -- bounded above and nonnegative.
+		SizeBytes: safecast.MustConv[uint64](read),
 		SHA256:    hex.EncodeToString(hash.Sum(nil)),
 	}
 	if retain != nil {
@@ -503,7 +505,7 @@ func (directory *archiveDirectory) pinArchiveForRemoval(
 			err,
 		)
 	}
-	// #nosec G115 -- unix.Openat returned a non-negative native descriptor.
+
 	file := os.NewFile(uintptr(fd), name)
 	if file == nil {
 		_ = unix.Close(fd)
@@ -636,7 +638,7 @@ func (directory *archiveDirectory) requirePinnedArchive(
 	if !privatefs.SameFileState(archive.info, current) {
 		return -1, fmt.Errorf("pinned ClickHouse recovery archive %q changed", name)
 	}
-	// #nosec G115 -- os.File descriptors are native int descriptors on the
+
 	// supported Unix targets.
 	archiveFD := int(archive.file.Fd())
 	if err := sameArchiveOpenPath(directoryFD, name, archiveFD); err != nil {
@@ -670,7 +672,7 @@ func (directory *archiveDirectory) removePinnedArchive(
 	// The path-identity proof is deliberately the last potentially blocking
 	// operation before unlink. Production additionally requires ClickHouse to
 	// be stopped because POSIX has no unlink-by-file-descriptor primitive.
-	// #nosec G115 -- os.File descriptors are native int descriptors on the
+
 	// supported Unix targets.
 	if err := sameArchiveOpenPath(directoryFD, name, int(archive.file.Fd())); err != nil {
 		return false, fmt.Errorf(

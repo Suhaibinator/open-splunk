@@ -7,8 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Suhaibinator/open-splunk/internal/protocolid"
+	"fortio.org/safecast"
 	"gorm.io/gorm"
+
+	"github.com/Suhaibinator/open-splunk/internal/protocolid"
 )
 
 // IndexDataDeletionCompletion is the immutable terminal audit for one
@@ -137,10 +139,10 @@ func (db *DB) CompleteIndexDataDeletion(
 		CorrelationID:       attempt.CorrelationID,
 		IndexID:             operation.IndexID,
 		IndexName:           operation.IndexName,
-		// #nosec G115 -- operation decoding bounds both versions to SQLite int64.
-		ArchivedIndexVersion: int64(operation.ArchivedVersion),
-		// #nosec G115 -- operation decoding bounds both versions to SQLite int64.
-		DeletingIndexVersion:        int64(operation.DeletingVersion),
+
+		ArchivedIndexVersion: safecast.MustConv[int64](operation.ArchivedVersion),
+
+		DeletingIndexVersion:        safecast.MustConv[int64](operation.DeletingVersion),
 		TenantID:                    attempt.Target.TenantID,
 		ClickHouseDatabase:          attempt.Target.Database,
 		ClickHouseTable:             attempt.Target.Table,

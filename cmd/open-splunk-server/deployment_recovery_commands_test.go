@@ -629,7 +629,7 @@ func (fixture deploymentRecoveryCommandFixture) restoreOptions() deploymentRecov
 func deploymentRecoveryPasswordEnvironmentNamesForTest() []string {
 	return []string{
 		"CLICKHOUSE_PASSWORD",
-		clickHouseMigrationPasswordEnvironment,
+		clickHouseMigrationEnvironmentVariable,
 		"OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD",
 		"OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD",
 		"OPEN_SPLUNK_CLICKHOUSE_BACKUP_PASSWORD",

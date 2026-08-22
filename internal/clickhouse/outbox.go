@@ -11,10 +11,12 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"fortio.org/safecast"
+	"google.golang.org/protobuf/proto"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
-	"google.golang.org/protobuf/proto"
 )
 
 const maxDurableBatchEvents = 1000
@@ -42,9 +44,8 @@ func encodeStoreOutbox(batch ingest.StoreBatch) ([]byte, error) {
 	_, _ = body.Write(batch.SourceBatchSHA256[:])
 	writeOutboxUint64(&body, uint64(batch.ReceivedAt.UTC().UnixMilli()))
 	writeOutboxUint32(&body, batch.OriginalEventCount)
-	// #nosec G115 -- validateOutboxBatch bounds accepted events to
-	// maxDurableBatchEvents before this conversion.
-	writeOutboxUint32(&body, uint32(len(batch.Events)))
+
+	writeOutboxUint32(&body, safecast.MustConv[uint32](len(batch.Events)))
 	marshal := proto.MarshalOptions{Deterministic: true}
 	for index, stored := range batch.Events {
 		encoded, err := marshal.Marshal(stored.Event)
@@ -144,8 +145,7 @@ func decodeStoreOutbox(encoded []byte) (ingest.StoreBatch, error) {
 	}
 	eventCount, err := readOutboxUint32(reader)
 	if err != nil || eventCount == 0 || eventCount > originalEventCount ||
-		// #nosec G115 -- bytes.Reader.Len is always non-negative.
-		uint64(eventCount) > uint64(reader.Len())/9 {
+		uint64(eventCount) > safecast.MustConv[uint64](reader.Len())/9 {
 		return ingest.StoreBatch{}, errors.New("ClickHouse outbox has an invalid accepted event count")
 	}
 	receivedAt := time.UnixMilli(int64(receivedMillis)).UTC()
@@ -263,11 +263,13 @@ func readOutboxOptionalString(reader *bytes.Reader, maximum uint64) (string, err
 
 func readOutboxBytes(reader *bytes.Reader, maximum uint64) ([]byte, error) {
 	length, err := readOutboxUint64(reader)
-	// #nosec G115 -- bytes.Reader.Len is always non-negative.
-	if err != nil || length > maximum || length > uint64(reader.Len()) || length > uint64(math.MaxInt) {
+
+	if err != nil || length > maximum ||
+		length > safecast.MustConv[uint64](reader.Len()) ||
+		length > safecast.MustConv[uint64](math.MaxInt) {
 		return nil, errors.New("invalid length")
 	}
-	value := make([]byte, int(length))
+	value := make([]byte, safecast.MustConv[int](length))
 	if _, err := io.ReadFull(reader, value); err != nil {
 		return nil, err
 	}

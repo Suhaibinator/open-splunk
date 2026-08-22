@@ -685,10 +685,96 @@ func names(objects []Object) []string {
 	return result
 }
 
+var knowledgeCatalogTriggerDropStatements = map[string]string{
+	"app_catalog_revision_delete_is_forbidden":                          `DROP TRIGGER IF EXISTS app_catalog_revision_delete_is_forbidden`,
+	"audit_event_update_is_forbidden":                                   `DROP TRIGGER IF EXISTS audit_event_update_is_forbidden`,
+	"index_catalog_state_transition_is_valid":                           `DROP TRIGGER IF EXISTS index_catalog_state_transition_is_valid`,
+	"knowledge_active_app_workspace_cannot_be_archived":                 `DROP TRIGGER IF EXISTS knowledge_active_app_workspace_cannot_be_archived`,
+	"knowledge_active_dependency_target_transition_is_blocked":          `DROP TRIGGER IF EXISTS knowledge_active_dependency_target_transition_is_blocked`,
+	"knowledge_active_dependency_target_version_advance_is_blocked":     `DROP TRIGGER IF EXISTS knowledge_active_dependency_target_version_advance_is_blocked`,
+	"knowledge_app_active_counter_identity_collision_is_forbidden":      `DROP TRIGGER IF EXISTS knowledge_app_active_counter_identity_collision_is_forbidden`,
+	"knowledge_app_active_counter_identity_is_immutable":                `DROP TRIGGER IF EXISTS knowledge_app_active_counter_identity_is_immutable`,
+	"knowledge_catalog_revision_head_delete_is_forbidden":               `DROP TRIGGER IF EXISTS knowledge_catalog_revision_head_delete_is_forbidden`,
+	"knowledge_catalog_revision_head_transition_is_exact":               `DROP TRIGGER IF EXISTS knowledge_catalog_revision_head_transition_is_exact`,
+	"knowledge_catalog_revision_rotates_state_token":                    `DROP TRIGGER IF EXISTS knowledge_catalog_revision_rotates_state_token`,
+	"knowledge_catalog_revision_transition_is_valid":                    `DROP TRIGGER IF EXISTS knowledge_catalog_revision_transition_is_valid`,
+	"knowledge_app_active_counter_delete_is_forbidden":                  `DROP TRIGGER IF EXISTS knowledge_app_active_counter_delete_is_forbidden`,
+	"knowledge_app_type_active_counter_identity_collision_is_forbidden": `DROP TRIGGER IF EXISTS knowledge_app_type_active_counter_identity_collision_is_forbidden`,
+	"knowledge_app_type_active_counter_identity_is_immutable":           `DROP TRIGGER IF EXISTS knowledge_app_type_active_counter_identity_is_immutable`,
+	"knowledge_app_type_active_counter_delete_is_forbidden":             `DROP TRIGGER IF EXISTS knowledge_app_type_active_counter_delete_is_forbidden`,
+	"knowledge_definition_blob_after_insert":                            `DROP TRIGGER IF EXISTS knowledge_definition_blob_after_insert`,
+	"knowledge_definition_blob_capacity_is_available":                   `DROP TRIGGER IF EXISTS knowledge_definition_blob_capacity_is_available`,
+	"knowledge_definition_blob_delete_is_forbidden":                     `DROP TRIGGER IF EXISTS knowledge_definition_blob_delete_is_forbidden`,
+	"knowledge_definition_blob_identity_collision_is_forbidden":         `DROP TRIGGER IF EXISTS knowledge_definition_blob_identity_collision_is_forbidden`,
+	"knowledge_definition_blob_update_is_forbidden":                     `DROP TRIGGER IF EXISTS knowledge_definition_blob_update_is_forbidden`,
+	"knowledge_dependency_delete_is_forbidden":                          `DROP TRIGGER IF EXISTS knowledge_dependency_delete_is_forbidden`,
+	"knowledge_dependency_identity_collision_is_forbidden":              `DROP TRIGGER IF EXISTS knowledge_dependency_identity_collision_is_forbidden`,
+	"knowledge_dependency_ordinal_is_declared":                          `DROP TRIGGER IF EXISTS knowledge_dependency_ordinal_is_declared`,
+	"knowledge_dependency_seal_delete_is_forbidden":                     `DROP TRIGGER IF EXISTS knowledge_dependency_seal_delete_is_forbidden`,
+	"knowledge_dependency_seal_update_is_forbidden":                     `DROP TRIGGER IF EXISTS knowledge_dependency_seal_update_is_forbidden`,
+	"knowledge_dependency_sealed_version_is_immutable":                  `DROP TRIGGER IF EXISTS knowledge_dependency_sealed_version_is_immutable`,
+	"knowledge_dependency_update_is_forbidden":                          `DROP TRIGGER IF EXISTS knowledge_dependency_update_is_forbidden`,
+	"knowledge_list_projection_after_delete":                            `DROP TRIGGER IF EXISTS knowledge_list_projection_after_delete`,
+	"knowledge_list_projection_after_insert":                            `DROP TRIGGER IF EXISTS knowledge_list_projection_after_insert`,
+	"knowledge_list_projection_capacity_is_available":                   `DROP TRIGGER IF EXISTS knowledge_list_projection_capacity_is_available`,
+	"knowledge_list_projection_creates_order_key":                       `DROP TRIGGER IF EXISTS knowledge_list_projection_creates_order_key`,
+	"knowledge_list_projection_current_seal_delete_is_forbidden":        `DROP TRIGGER IF EXISTS knowledge_list_projection_current_seal_delete_is_forbidden`,
+	"knowledge_list_projection_delete_requires_unsealed_empty_row":      `DROP TRIGGER IF EXISTS knowledge_list_projection_delete_requires_unsealed_empty_row`,
+	"knowledge_list_projection_identity_collision_is_forbidden":         `DROP TRIGGER IF EXISTS knowledge_list_projection_identity_collision_is_forbidden`,
+	"knowledge_list_projection_update_is_forbidden":                     `DROP TRIGGER IF EXISTS knowledge_list_projection_update_is_forbidden`,
+	"knowledge_list_selector_identity_collision_is_forbidden":           `DROP TRIGGER IF EXISTS knowledge_list_selector_identity_collision_is_forbidden`,
+	"knowledge_list_selector_ordinal_is_declared":                       `DROP TRIGGER IF EXISTS knowledge_list_selector_ordinal_is_declared`,
+	"knowledge_list_selector_sealed_projection_is_immutable_insert":     `DROP TRIGGER IF EXISTS knowledge_list_selector_sealed_projection_is_immutable_insert`,
+	"knowledge_list_selector_update_is_forbidden":                       `DROP TRIGGER IF EXISTS knowledge_list_selector_update_is_forbidden`,
+	"knowledge_mutation_idempotency_after_insert":                       `DROP TRIGGER IF EXISTS knowledge_mutation_idempotency_after_insert`,
+	"knowledge_mutation_idempotency_capacity_is_available":              `DROP TRIGGER IF EXISTS knowledge_mutation_idempotency_capacity_is_available`,
+	"knowledge_mutation_idempotency_identity_collision_is_forbidden":    `DROP TRIGGER IF EXISTS knowledge_mutation_idempotency_identity_collision_is_forbidden`,
+	"knowledge_mutation_idempotency_matches_audit_authority":            `DROP TRIGGER IF EXISTS knowledge_mutation_idempotency_matches_audit_authority`,
+	"knowledge_mutation_idempotency_matches_commit_authority":           `DROP TRIGGER IF EXISTS knowledge_mutation_idempotency_matches_commit_authority`,
+	"knowledge_mutation_idempotency_update_is_forbidden":                `DROP TRIGGER IF EXISTS knowledge_mutation_idempotency_update_is_forbidden`,
+	"knowledge_owner_active_counter_delete_is_forbidden":                `DROP TRIGGER IF EXISTS knowledge_owner_active_counter_delete_is_forbidden`,
+	"knowledge_owner_active_counter_identity_collision_is_forbidden":    `DROP TRIGGER IF EXISTS knowledge_owner_active_counter_identity_collision_is_forbidden`,
+	"knowledge_owner_active_counter_identity_is_immutable":              `DROP TRIGGER IF EXISTS knowledge_owner_active_counter_identity_is_immutable`,
+	"knowledge_object_active_app_is_required_insert":                    `DROP TRIGGER IF EXISTS knowledge_object_active_app_is_required_insert`,
+	"knowledge_object_active_app_is_required_update":                    `DROP TRIGGER IF EXISTS knowledge_object_active_app_is_required_update`,
+	"knowledge_object_active_capacity_insert":                           `DROP TRIGGER IF EXISTS knowledge_object_active_capacity_insert`,
+	"knowledge_object_active_capacity_update":                           `DROP TRIGGER IF EXISTS knowledge_object_active_capacity_update`,
+	"knowledge_object_active_counters_after_insert":                     `DROP TRIGGER IF EXISTS knowledge_object_active_counters_after_insert`,
+	"knowledge_object_active_counters_after_update":                     `DROP TRIGGER IF EXISTS knowledge_object_active_counters_after_update`,
+	"knowledge_object_active_counters_before_update":                    `DROP TRIGGER IF EXISTS knowledge_object_active_counters_before_update`,
+	"knowledge_object_active_name_collision_is_forbidden":               `DROP TRIGGER IF EXISTS knowledge_object_active_name_collision_is_forbidden`,
+	"knowledge_object_active_name_update_collision_is_forbidden":        `DROP TRIGGER IF EXISTS knowledge_object_active_name_update_collision_is_forbidden`,
+	"knowledge_object_after_insert_count_identity":                      `DROP TRIGGER IF EXISTS knowledge_object_after_insert_count_identity`,
+	"knowledge_object_delete_is_forbidden":                              `DROP TRIGGER IF EXISTS knowledge_object_delete_is_forbidden`,
+	"knowledge_object_identity_capacity_is_available":                   `DROP TRIGGER IF EXISTS knowledge_object_identity_capacity_is_available`,
+	"knowledge_object_identity_collision_is_forbidden":                  `DROP TRIGGER IF EXISTS knowledge_object_identity_collision_is_forbidden`,
+	"knowledge_object_insert_requires_sealed_list_projection":           `DROP TRIGGER IF EXISTS knowledge_object_insert_requires_sealed_list_projection`,
+	"knowledge_object_registry_transition_is_valid":                     `DROP TRIGGER IF EXISTS knowledge_object_registry_transition_is_valid`,
+	"knowledge_object_update_removes_old_list_projection":               `DROP TRIGGER IF EXISTS knowledge_object_update_removes_old_list_projection`,
+	"knowledge_object_update_requires_sealed_list_projection":           `DROP TRIGGER IF EXISTS knowledge_object_update_requires_sealed_list_projection`,
+	"knowledge_object_version_delete_is_forbidden":                      `DROP TRIGGER IF EXISTS knowledge_object_version_delete_is_forbidden`,
+	"knowledge_object_version_after_insert":                             `DROP TRIGGER IF EXISTS knowledge_object_version_after_insert`,
+	"knowledge_object_version_capacity_is_available":                    `DROP TRIGGER IF EXISTS knowledge_object_version_capacity_is_available`,
+	"knowledge_object_version_creates_lifecycle":                        `DROP TRIGGER IF EXISTS knowledge_object_version_creates_lifecycle`,
+	"knowledge_object_version_creates_staged_order_key":                 `DROP TRIGGER IF EXISTS knowledge_object_version_creates_staged_order_key`,
+	"knowledge_object_version_identity_collision_is_forbidden":          `DROP TRIGGER IF EXISTS knowledge_object_version_identity_collision_is_forbidden`,
+	"knowledge_object_version_is_contiguous":                            `DROP TRIGGER IF EXISTS knowledge_object_version_is_contiguous`,
+	"knowledge_object_version_lifecycle_update_is_forbidden":            `DROP TRIGGER IF EXISTS knowledge_object_version_lifecycle_update_is_forbidden`,
+	"knowledge_object_version_transition_is_exact":                      `DROP TRIGGER IF EXISTS knowledge_object_version_transition_is_exact`,
+	"knowledge_object_version_update_is_forbidden":                      `DROP TRIGGER IF EXISTS knowledge_object_version_update_is_forbidden`,
+	"knowledge_object_version_writer_semantics_are_exact":               `DROP TRIGGER IF EXISTS knowledge_object_version_writer_semantics_are_exact`,
+	"knowledge_type_active_counter_delete_is_forbidden":                 `DROP TRIGGER IF EXISTS knowledge_type_active_counter_delete_is_forbidden`,
+	"knowledge_type_active_counter_identity_collision_is_forbidden":     `DROP TRIGGER IF EXISTS knowledge_type_active_counter_identity_collision_is_forbidden`,
+	"knowledge_type_active_counter_identity_is_immutable":               `DROP TRIGGER IF EXISTS knowledge_type_active_counter_identity_is_immutable`,
+}
+
 func dropTrigger(t *testing.T, database *control.DB, name string) {
 	t.Helper()
-	// #nosec G202 -- name is supplied only by fixed test fixture identifiers.
-	if _, err := database.SQLDB().ExecContext(t.Context(), `DROP TRIGGER `+name); err != nil {
+	statement, ok := knowledgeCatalogTriggerDropStatements[name]
+	if !ok {
+		t.Fatalf("unknown knowledge catalog trigger %q", name)
+	}
+	if _, err := database.SQLDB().ExecContext(t.Context(), statement); err != nil {
 		t.Fatalf("drop trigger %s: %v", name, err)
 	}
 }

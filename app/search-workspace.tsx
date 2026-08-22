@@ -10,6 +10,7 @@ import {
   type SetStateAction,
   type UIEvent,
   useEffect,
+  useEffectEvent,
   useMemo,
   useRef,
   useState,
@@ -459,6 +460,14 @@ function currentBackendServerTime(bootstrap: BackendBootstrapState): Date {
   return new Date(bootstrap.response.serverTime.getTime() + Math.max(0, Date.now() - bootstrap.receivedAt));
 }
 
+function receivedBackendBootstrap(response: SystemBootstrapModel): BackendBootstrapState {
+  return { response, receivedAt: Date.now() };
+}
+
+function newDemoObjectId(prefix: string): string {
+  return `${prefix}-${Date.now()}`;
+}
+
 function backendIndexScope(spl: string, bootstrap: BackendBootstrapState): string[] {
   const analysis = analyzeSPLIndexScope(spl);
   const { selectors } = analysis;
@@ -509,6 +518,45 @@ function backendIndexScope(spl: string, bootstrap: BackendBootstrapState): strin
         ? appDefaults
         : searchableIndexes,
   });
+}
+
+function backendDispatchIndexScope(
+  searchText: string,
+  bootstrap: BackendBootstrapState,
+  savedSearchId: string | null,
+  savedSearches: ReadonlyMap<string, ServerSavedSearch>,
+): string[] {
+  const saved = savedSearchId === null ? undefined : savedSearches.get(savedSearchId);
+  if ((saved?.search.indexScope.length ?? 0) > 0) {
+    return resolveExactIndexScope({
+      spl: searchText,
+      bootstrap: bootstrap.response,
+      requestedIndexes: saved?.search.indexScope,
+    });
+  }
+  if (saved !== undefined) {
+    const searchableIndexes = bootstrap.response.indexes
+      .filter((index) => index.searchable)
+      .map((index) => index.name);
+    const searchableIndexNames = new Set(searchableIndexes);
+    const persistedAppDefaults = saved.search.appId === undefined
+      ? []
+      : bootstrap.response.apps
+        .find((app) => app.appId === saved.search.appId)
+        ?.defaultIndexNames
+        .filter((indexName) => searchableIndexNames.has(indexName)) ?? [];
+    const analysis = analyzeSPLIndexScope(searchText);
+    const { selectors } = analysis;
+    const baseline = persistedAppDefaults.length > 0 ? persistedAppDefaults : searchableIndexes;
+    return resolveExactIndexScope({
+      spl: searchText,
+      bootstrap: bootstrap.response,
+      requestedIndexes: selectors.length > 0 && analysis.exhaustivelyConstrained
+        ? selectors
+        : [...new Set([...baseline, ...selectors])],
+    });
+  }
+  return backendIndexScope(searchText, bootstrap);
 }
 
 function backendMaximumPageSize(bootstrap: BackendBootstrapState): number {
@@ -593,6 +641,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const [menu, setMenu] = useState<MenuName | null>(null);
   const [mobileProductNavOpen, setMobileProductNavOpen] = useState(false);
   const [toast, setToast] = useState<ToastState | null>(null);
+  const [dialogCurrentTimeMs, setDialogCurrentTimeMs] = useState(Date.now);
   const [fields, setFields] = useState<DemoField[]>(backendEnabled ? [] : DEMO_FIELDS);
   const [backendEvents, setBackendEvents] = useState<DemoEvent[]>([]);
   const [backendStatistics, setBackendStatistics] = useState<WorkspaceStatistic[]>([]);
@@ -826,6 +875,12 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const urlLaunchAppliedRef = useRef(false);
   const persistedLaunchEpochRef = useRef(0);
   const persistedLaunchPendingRef = useRef(false);
+  const openSavedSearchRef = useRef<(saved: DemoSavedSearch, fallbackRange?: TimeRange) => void>(() => undefined);
+  const openHistoryEntryRef = useRef<(
+    entry: DemoHistoryEntry,
+    rerun: boolean,
+    focusSearchEditor?: boolean,
+  ) => boolean>(() => false);
   const searchRunnerRef = useRef<(queryText: string, range: TimeRange) => void>(() => undefined);
   const timelineZoomParentRef = useRef<TimeRange | null>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
@@ -906,7 +961,12 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     const timer = window.setTimeout(() => {
       let indexScope: string[];
       try {
-        indexScope = backendDispatchIndexScope(query, bootstrap, activeSavedSearchIdRef.current);
+        indexScope = backendDispatchIndexScope(
+          query,
+          bootstrap,
+          activeSavedSearchIdRef.current,
+          backendSavedSearchesRef.current,
+        );
       } catch {
         setBackendCompletions(null);
         return;
@@ -1111,6 +1171,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     fields,
     isTimechartResult,
     legendPosition,
+    pendingSavedSelectedFieldsRef,
     query,
     showDataLabels,
     timeRange.earliest,
@@ -1465,6 +1526,10 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     });
   }, [mobileProductNavOpen]);
 
+  function showToast(message: string, tone: ToastState["tone"] = "info") {
+    setToast({ message, tone });
+  }
+
   async function ensureBackendBootstrap(): Promise<BackendBootstrapState> {
     const existing = backendBootstrapRef.current;
     if (existing !== null) return existing;
@@ -1478,7 +1543,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         if (!supportsServerFeature(response, ServerFeature.SERVER_FEATURE_SEARCH)) {
           throw new Error("This server does not advertise browser search support.");
         }
-        const bootstrap = { response, receivedAt: Date.now() };
+        const bootstrap = receivedBackendBootstrap(response);
         backendBootstrapRef.current = bootstrap;
         setBackendBootstrapModel(response);
         setBackendConnectionState("ready");
@@ -1555,7 +1620,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     if (response.selectedAppId !== requestedAppId) {
       throw new Error("The persisted search belongs to an app that is not available in this backend session.");
     }
-    const bootstrap = { response, receivedAt: Date.now() };
+    const bootstrap = receivedBackendBootstrap(response);
     backendBootstrapRef.current = bootstrap;
     backendBootstrapPromiseRef.current = null;
     setBackendBootstrapModel(response);
@@ -1747,11 +1812,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     await loadMoreBackendLibrary(historyLibrary);
   }
 
-  useEffect(() => {
-    if (!backendEnabled) return;
-    backendObjectAbortRef.current?.abort();
-    const controller = new AbortController();
-    backendObjectAbortRef.current = controller;
+  const initializeBackendLibraries = useEffectEvent((controller: AbortController) => {
     void ensureBackendBootstrap()
       .then(async (bootstrap) => {
         if (controller.signal.aborted) return;
@@ -1768,13 +1829,18 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         setHistoryAvailable(false);
         showToast(error instanceof Error ? error.message : "Unable to initialize backend libraries.", "warning");
       });
+  });
+
+  useEffect(() => {
+    if (!backendEnabled) return;
+    backendObjectAbortRef.current?.abort();
+    const controller = new AbortController();
+    backendObjectAbortRef.current = controller;
+    initializeBackendLibraries(controller);
     return () => {
       controller.abort();
       if (backendObjectAbortRef.current === controller) backendObjectAbortRef.current = null;
     };
-    // Refreshes after mutations and terminal searches are explicit; rerunning
-    // this initializer for newly-created function identities would race them.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiClient, backendEnabled]);
 
   function replaceBackendNotices(job: SearchJob) {
@@ -1891,10 +1957,6 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   function schedule(callback: () => void, delay: number) {
     const timer = window.setTimeout(callback, delay);
     timersRef.current.push(timer);
-  }
-
-  function showToast(message: string, tone: ToastState["tone"] = "info") {
-    setToast({ message, tone });
   }
 
   function focusEditor(offset: number) {
@@ -2161,6 +2223,15 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   }, [toast]);
 
   useEffect(() => {
+    const bootstrap = backendBootstrapRef.current;
+    setDialogCurrentTimeMs(
+      backendEnabled && bootstrap !== null
+        ? currentBackendServerTime(bootstrap).valueOf()
+        : Date.now(),
+    );
+  }, [backendBootstrapModel, backendEnabled, exportClockTick, modal]);
+
+  const applyInitialUrlLaunch = useEffectEvent(() => {
     if (urlLaunchAppliedRef.current) return;
     urlLaunchAppliedRef.current = true;
     const url = new URL(window.location.href);
@@ -2247,7 +2318,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
               : initialRange;
             persistedLaunchPendingRef.current = false;
             setPersistedLaunchPending(false);
-            openSavedSearch(displaySearch, initialRange);
+            openSavedSearchRef.current(displaySearch, initialRange);
             if (shouldRunPersistedSearch) {
               launchTimer = window.setTimeout(
                 () => {
@@ -2285,7 +2356,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           ]);
           persistedLaunchPendingRef.current = false;
           setPersistedLaunchPending(false);
-          openHistoryEntry(displayEntry, shouldRunPersistedSearch);
+          openHistoryEntryRef.current(displayEntry, shouldRunPersistedSearch);
         })
         .catch((error: unknown) => {
           if (controller.signal.aborted || persistedLaunchEpochRef.current !== launchEpoch) return;
@@ -2349,9 +2420,12 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     } else if (shouldRunContextualQuery) {
       window.setTimeout(() => searchRunnerRef.current(initialQuery, initialRange), 0);
     }
-    // URL launch is intentionally applied once for this mounted workspace.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [backendEnabled]);
+  });
+
+  useEffect(
+    () => applyInitialUrlLaunch(),
+    [backendEnabled],
+  );
 
   useEffect(() => {
     setCompletionIndex((current) => Math.max(0, Math.min(current, filteredCompletions.length - 1)));
@@ -3785,6 +3859,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
               nextQuery,
               bootstrap,
               launchSavedSearchId,
+              backendSavedSearchesRef.current,
             ),
             preferredResultTab: 0,
             selectedFields: [],
@@ -4417,7 +4492,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     void openBackendEventPage(1);
   };
 
-  function startTimelineDrag(event: PointerEvent<HTMLDivElement>) {
+  function startTimelineDrag(event: PointerEvent<HTMLInputElement>) {
     const index = timelineIndexFromPointer(event, timelinePoints.length);
     if (index === null) return;
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -4426,13 +4501,13 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     setTimelineEnd(index);
   }
 
-  function moveTimelineDrag(event: PointerEvent<HTMLDivElement>) {
+  function moveTimelineDrag(event: PointerEvent<HTMLInputElement>) {
     if (!draggingTimeline) return;
     const index = timelineIndexFromPointer(event, timelinePoints.length);
     if (index !== null) setTimelineEnd(index);
   }
 
-  function endTimelineDrag(event: PointerEvent<HTMLDivElement>) {
+  function endTimelineDrag(event: PointerEvent<HTMLInputElement>) {
     if (draggingTimeline && event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
@@ -4535,48 +4610,6 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         spl: searchText,
         bootstrap: bootstrap.response,
         requestedIndexes,
-      });
-    }
-    return backendIndexScope(searchText, bootstrap);
-  }
-
-  function backendDispatchIndexScope(
-    searchText: string,
-    bootstrap: BackendBootstrapState,
-    savedSearchId: string | null,
-  ): string[] {
-    const saved = savedSearchId === null
-      ? undefined
-      : backendSavedSearchesRef.current.get(savedSearchId);
-    if ((saved?.search.indexScope.length ?? 0) > 0) {
-      return resolveExactIndexScope({
-        spl: searchText,
-        bootstrap: bootstrap.response,
-        requestedIndexes: saved?.search.indexScope,
-      });
-    }
-    if (saved !== undefined) {
-      const searchableIndexes = bootstrap.response.indexes
-        .filter((index) => index.searchable)
-        .map((index) => index.name);
-      const searchableIndexNames = new Set(searchableIndexes);
-      const persistedAppDefaults = saved.search.appId === undefined
-        ? []
-        : bootstrap.response.apps
-          .find((app) => app.appId === saved.search.appId)
-          ?.defaultIndexNames
-          .filter((indexName) => searchableIndexNames.has(indexName)) ?? [];
-      const analysis = analyzeSPLIndexScope(searchText);
-      const { selectors } = analysis;
-      const baseline = persistedAppDefaults.length > 0
-        ? persistedAppDefaults
-        : searchableIndexes;
-      return resolveExactIndexScope({
-        spl: searchText,
-        bootstrap: bootstrap.response,
-        requestedIndexes: selectors.length > 0 && analysis.exhaustivelyConstrained
-          ? selectors
-          : [...new Set([...baseline, ...selectors])],
       });
     }
     return backendIndexScope(searchText, bootstrap);
@@ -4723,7 +4756,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       void saveBackendSearch(saveAsNew || activeSavedSearchId === null);
       return;
     }
-    const id = saveAsNew || activeSavedSearchId === null ? `saved-${Date.now()}` : activeSavedSearchId;
+    const id = saveAsNew || activeSavedSearchId === null ? newDemoObjectId("saved") : activeSavedSearchId;
     const saved: DemoSavedSearch = {
       id,
       name: trimmedName,
@@ -4905,6 +4938,9 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     return true;
   }
 
+  openSavedSearchRef.current = openSavedSearch;
+  openHistoryEntryRef.current = openHistoryEntry;
+
   function saveHistoryEntry(entry: DemoHistoryEntry) {
     if (backendWorkspaceTransitionBlocked()) return;
     saveDialogReturnFocusRef.current = document.activeElement instanceof HTMLElement
@@ -4942,7 +4978,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     if (!backendEnabled) {
       const duplicate: DemoSavedSearch = {
         ...displaySearch,
-        id: `saved-${Date.now()}`,
+        id: newDemoObjectId("saved"),
         name: initialName,
         updatedAt: "Just now",
       };
@@ -4962,6 +4998,9 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     backendObjectMutationRef.current = true;
     setSavedSearchDuplicateError(null);
     setObjectMutation({ kind: "duplicateSaved", targetId: id });
+    const sourceName = displaySearch.name;
+    const bootstrapResponse = bootstrap.response;
+    const savedAppId = savedSearch.search.appId;
     try {
       const attemptedNames = new Set<string>();
       // Name uniqueness is authoritative on the server. Retry a bounded sequence
@@ -4971,33 +5010,34 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       // one click into unbounded API traffic.
       const duplicateNameAttempts =
         MAXIMUM_READABLE_DUPLICATE_NAME_ATTEMPTS + MAXIMUM_RANDOM_DUPLICATE_NAME_ATTEMPTS;
-      let result: Awaited<ReturnType<typeof duplicateServerSavedSearch>> | null = null;
-      for (let attempt = 0; result === null && attempt < duplicateNameAttempts; attempt += 1) {
+      async function attemptDuplicate(
+        attempt: number,
+      ): Promise<Awaited<ReturnType<typeof duplicateServerSavedSearch>> | null> {
+        if (attempt >= duplicateNameAttempts) return null;
         let candidate: string;
         if (attempt < MAXIMUM_READABLE_DUPLICATE_NAME_ATTEMPTS) {
-          candidate = nextDuplicateSavedSearchName(displaySearch.name, attemptedNames);
+          candidate = nextDuplicateSavedSearchName(sourceName, attemptedNames);
         } else {
-          candidate = randomDuplicateSavedSearchName(displaySearch.name);
+          candidate = randomDuplicateSavedSearchName(sourceName);
           while (attemptedNames.has(candidate)) {
-            candidate = randomDuplicateSavedSearchName(displaySearch.name);
+            candidate = randomDuplicateSavedSearchName(sourceName);
           }
         }
         attemptedNames.add(candidate);
         try {
-          // Duplicate has no optimistic-version input; the backend contract's
-          // only conflict response for this route is a destination-name clash.
-          // eslint-disable-next-line no-await-in-loop
-          result = await duplicateServerSavedSearch(
+          return await duplicateServerSavedSearch(
             apiClient,
-            bootstrap.response,
+            bootstrapResponse,
             id,
             candidate,
-            savedSearch.search.appId,
+            savedAppId,
           );
         } catch (error) {
           if (!isHttpStatus(error, 409)) throw error;
+          return attemptDuplicate(attempt + 1);
         }
       }
+      const result = await attemptDuplicate(0);
       if (result === null) {
         throw new Error("Unable to reserve a unique copy name after multiple server conflicts. Try again.");
       }
@@ -5710,7 +5750,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       backendSocketRef.current?.dispose();
       backendSocketRef.current = null;
       resetExport();
-      const bootstrap = { response, receivedAt: Date.now() };
+      const bootstrap = receivedBackendBootstrap(response);
       backendBootstrapRef.current = bootstrap;
       backendBootstrapPromiseRef.current = null;
       setBackendBootstrapModel(response);
@@ -6460,9 +6500,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         activeSavedSearchId={activeSavedSearchId}
         activeTab={activeTab}
         appName={workspaceAppName}
-        currentTimeMs={backendEnabled && backendBootstrapRef.current !== null
-          ? currentBackendServerTime(backendBootstrapRef.current).valueOf()
-          : Date.now()}
+        currentTimeMs={dialogCurrentTimeMs}
         dataMetricLabel={backendEnabled ? "Result data" : "Scanned data"}
         displayedExportRows={displayedRowsForTab(exportSourceTab)}
         elapsed={elapsed}

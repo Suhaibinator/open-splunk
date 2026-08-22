@@ -38,6 +38,17 @@ const canonicalDocumentationNames = Object.freeze([
   "releasing.md",
 ]);
 
+async function forEachSequential(values, visit) {
+  const iterator = values[Symbol.iterator]();
+  async function visitNext() {
+    const next = iterator.next();
+    if (next.done) return;
+    await visit(next.value);
+    await visitNext();
+  }
+  await visitNext();
+}
+
 const stalePatterns = Object.freeze([
   {
     label: "versioned identifier suffix",
@@ -252,10 +263,7 @@ async function checkDocumentation(root) {
     }
   }
 
-  // Keep diagnostics stable by checking the declared documentation inventory
-  // and each file's links in source order.
-  /* eslint-disable no-await-in-loop */
-  for (const relativePath of ownedMarkdownPaths) {
+  await forEachSequential(ownedMarkdownPaths, async (relativePath) => {
     const filename = path.join(root, relativePath);
     let source;
     try {
@@ -263,7 +271,7 @@ async function checkDocumentation(root) {
     } catch (error) {
       if (error?.code === "ENOENT") {
         failures.push(`${relativePath}: required documentation file is missing`);
-        continue;
+        return;
       }
       throw error;
     }
@@ -278,11 +286,10 @@ async function checkDocumentation(root) {
       }
     }
 
-    for (const link of markdownDestinations(source)) {
+    await forEachSequential(markdownDestinations(source), async (link) => {
       await validateLink(root, filename, link, fileCache, failures);
-    }
-  }
-  /* eslint-enable no-await-in-loop */
+    });
+  });
   return failures;
 }
 

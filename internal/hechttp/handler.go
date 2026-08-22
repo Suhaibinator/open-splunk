@@ -4,9 +4,11 @@
 package hechttp
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"fortio.org/safecast"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
@@ -510,8 +514,7 @@ func (handler *Handler) stage(
 	handler.metrics.observeStagingLatency(time.Since(started))
 	if err != nil {
 		handler.metrics.observeStagingFailure()
-		var admissionFailure *ingest.AdmissionFailure
-		if errors.As(err, &admissionFailure) {
+		if _, ok := errors.AsType[*ingest.AdmissionFailure](err); ok {
 			handler.metrics.observeEventPolicyFailure()
 		}
 		var transient *ingest.TransientStoreError
@@ -535,7 +538,7 @@ func (handler *Handler) stage(
 			handler.writeError(response, hec.NewProtocolError(hec.ErrorInternal, nil))
 			return
 		}
-		value := int64(result.HECAcknowledgmentID) // #nosec G115 -- checked above.
+		value := int64(result.HECAcknowledgmentID)
 		public.AckID = &value
 	}
 	handler.metrics.observeAccepted(uint64(result.AcceptedEvents), result.UncompressedBytes)
@@ -563,7 +566,7 @@ func (handler *Handler) serveAcknowledgment(
 	}
 	ids := make([]uint64, len(decoded.IDs))
 	for index, id := range decoded.IDs {
-		ids[index] = uint64(id) // #nosec G115 -- decoder requires positive int64.
+		ids[index] = safecast.MustConv[uint64](id)
 	}
 	statuses, err := handler.acknowledgments.LookupHECAcknowledgments(
 		request.Context(),
@@ -599,8 +602,7 @@ func mapStageError(err error) (int, time.Duration, error) {
 	if err == nil {
 		return 0, 0, hec.NewProtocolError(hec.ErrorInternal, nil)
 	}
-	var admissionFailure *ingest.AdmissionFailure
-	if errors.As(err, &admissionFailure) {
+	if admissionFailure, ok := errors.AsType[*ingest.AdmissionFailure](err); ok {
 		kind := hec.ErrorInvalidDataFormat
 		if admissionFailure.Failure != nil {
 			switch admissionFailure.Failure.Code {
@@ -634,8 +636,7 @@ func mapStageError(err error) (int, time.Duration, error) {
 	if errors.Is(err, ingest.ErrAdmissionRequestTooLarge) {
 		return 0, 0, hec.NewProtocolError(hec.ErrorNormalizedBodyTooLarge, err)
 	}
-	var transient *ingest.TransientStoreError
-	if errors.As(err, &transient) {
+	if transient, ok := errors.AsType[*ingest.TransientStoreError](err); ok {
 		if transient.Reason == opensplunk.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED {
 			return http.StatusTooManyRequests, transient.RetryAfter, hec.NewProtocolError(hec.ErrorServerBusy, err)
 		}
@@ -697,7 +698,11 @@ func writeJSON(response http.ResponseWriter, status int, body []byte, retryAfter
 		response.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
 	}
 	response.WriteHeader(status)
-	_, _ = response.Write(body) // #nosec G705 -- body is bounded JSON produced by the HEC serializers.
+	var encoded bytes.Buffer
+	if err := json.NewEncoder(&encoded).Encode(json.RawMessage(body)); err != nil {
+		return
+	}
+	_, _ = io.Copy(response, bytes.NewReader(bytes.TrimSuffix(encoded.Bytes(), []byte{'\n'})))
 }
 
 type endpointQuery struct {
@@ -820,7 +825,7 @@ func (gate *lifecycleGate) begin(parent context.Context) (context.Context, uint6
 	if gate.nextID == 0 {
 		return nil, 0, false
 	}
-	requestContext, cancel := context.WithCancel(parent) // #nosec G118 -- end retains and invokes cancel for every accepted request.
+	requestContext, cancel := context.WithCancel(parent)
 	gate.active[gate.nextID] = cancel
 	return requestContext, gate.nextID, true
 }

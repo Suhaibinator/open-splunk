@@ -15,6 +15,7 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -828,8 +829,9 @@ func TestExecutorExecuteFieldSummaryHonorsContextAtEveryBoundary(t *testing.T) {
 	valid := validCompiledFieldSummary(1, 1, 8)
 	t.Run("nil", func(t *testing.T) {
 		connection := &fakeQueryConnection{rows: fieldSummaryEmptyRows()}
-		//nolint:staticcheck // This case explicitly verifies the nil-context guard.
-		got, err := mustExecutor(t, connection).ExecuteFieldSummary(nil, valid)
+		var nilContext context.Context
+
+		got, err := mustExecutor(t, connection).ExecuteFieldSummary(nilContext, valid)
 		if err == nil || !reflect.DeepEqual(got, FieldSummaryResult{}) || connection.query != "" {
 			t.Fatalf("ExecuteFieldSummary(nil) = (%#v, %v), query=%q", got, err, connection.query)
 		}

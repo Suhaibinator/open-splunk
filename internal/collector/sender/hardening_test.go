@@ -7,9 +7,10 @@ import (
 	"testing"
 	"time"
 
-	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 )
 
 // TestSenderThrottleReducedLimitsDoesNotDeadLetter verifies that a batch which
@@ -106,8 +107,7 @@ func TestSenderRetainsMultiEventBatchThatRequiresLosslessRepacking(t *testing.T)
 	go func() { done <- s.Run(context.Background()) }()
 	select {
 	case err := <-done:
-		var fatal *fatalError
-		if !errors.As(err, &fatal) {
+		if _, ok := errors.AsType[*fatalError](err); !ok {
 			t.Fatalf("Run error = %v, want fatal repacking requirement", err)
 		}
 	case <-time.After(time.Second):

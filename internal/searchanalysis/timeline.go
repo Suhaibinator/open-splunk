@@ -221,8 +221,7 @@ func (service *Service) Get(ctx context.Context, access searchjobs.AccessScope, 
 	}
 	compiled, err := timelineCompiler.CompileTimelineContext(executionContext, logical, spec)
 	if err != nil {
-		var diagnostic *plan.Diagnostic
-		if errors.As(err, &diagnostic) {
+		if diagnostic, ok := errors.AsType[*plan.Diagnostic](err); ok {
 			switch {
 			case diagnostic.Code == "SPL_QUERY_TOO_COMPLEX":
 				return Result{}, fmt.Errorf("%w: compile completed search timeline: %w", searchjobs.ErrExecutionLimit, err)

@@ -16,15 +16,17 @@ import (
 )
 
 func TestStartClickHouseRejectsNilContextWithoutCallingDocker(t *testing.T) {
-	//nolint:staticcheck // This case explicitly verifies the nil-context guard.
-	if _, err := StartClickHouse(nil, ""); err == nil || !strings.Contains(err.Error(), "context is required") {
+	var nilContext context.Context
+
+	if _, err := StartClickHouse(nilContext, ""); err == nil || !strings.Contains(err.Error(), "context is required") {
 		t.Fatalf("StartClickHouse(nil) error = %v", err)
 	}
 }
 
 func TestStartClickHouseWithServicePrincipalsRejectsNilContextWithoutCallingDocker(t *testing.T) {
-	//nolint:staticcheck // This case explicitly verifies the nil-context guard.
-	if _, err := StartClickHouseWithServicePrincipals(nil, ""); err == nil ||
+	var nilContext context.Context
+
+	if _, err := StartClickHouseWithServicePrincipals(nilContext, ""); err == nil ||
 		!strings.Contains(err.Error(), "context is required") {
 		t.Fatalf("StartClickHouseWithServicePrincipals(nil) error = %v", err)
 	}
@@ -33,8 +35,9 @@ func TestStartClickHouseWithServicePrincipalsRejectsNilContextWithoutCallingDock
 func TestStartSecureClickHouseWithServicePrincipalsRejectsInvalidInputsWithoutCallingDocker(
 	t *testing.T,
 ) {
-	//nolint:staticcheck // This case explicitly verifies the nil-context guard.
-	if _, err := StartSecureClickHouseWithServicePrincipals(nil, ""); err == nil ||
+	var nilContext context.Context
+
+	if _, err := StartSecureClickHouseWithServicePrincipals(nilContext, ""); err == nil ||
 		!strings.Contains(err.Error(), "context is required") {
 		t.Fatalf("StartSecureClickHouseWithServicePrincipals(nil) error = %v", err)
 	}

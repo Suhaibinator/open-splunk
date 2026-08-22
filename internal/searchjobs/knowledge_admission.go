@@ -8,6 +8,8 @@ import (
 	"slices"
 	"time"
 
+	"fortio.org/safecast"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -184,8 +186,7 @@ func (manager *Manager) prepareKnowledgeAdmissionForJob(
 		)
 		cancelDiscovery()
 		if err != nil {
-			var diagnostic *plan.Diagnostic
-			if errors.As(err, &diagnostic) {
+			if _, ok := errors.AsType[*plan.Diagnostic](err); ok {
 				return preparedKnowledgeAdmission{}, manager.safeSPLAdmissionError(ctx, err, false)
 			}
 			return preparedKnowledgeAdmission{}, manager.safeKnowledgeAdmissionError(ctx, err)
@@ -347,9 +348,9 @@ func exactKnowledgeResolution(
 		summary.PrincipalID != scope.PrincipalID ||
 		summary.AppID != scope.AppID ||
 		!slices.Equal(summary.EffectiveAuthorizedIndexes, scope.EffectiveAuthorizedIndexes) ||
-		summary.ExecutableObjects != uint32(len(objects)) || // #nosec G115 -- resolver authority collections are resource-bounded.
-		summary.Dependencies != uint32(len(dependencies)) || // #nosec G115 -- resolver authority collections are resource-bounded.
-		summary.Shadows != uint32(len(shadows)) || // #nosec G115 -- resolver authority collections are resource-bounded.
+		summary.ExecutableObjects != safecast.MustConv[uint32](len(objects)) ||
+		summary.Dependencies != safecast.MustConv[uint32](len(dependencies)) ||
+		summary.Shadows != safecast.MustConv[uint32](len(shadows)) ||
 		len(summary.TenantCatalogStateToken) != sha256.Size || prelude.IsZero() ||
 		prelude.ObjectCount() != summary.ExecutableObjects ||
 		prelude.IsEmpty() != (summary.ExecutableObjects == 0) ||

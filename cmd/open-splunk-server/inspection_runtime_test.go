@@ -79,7 +79,7 @@ func TestNewClickHouseConnectionOptionsSeparatePrincipals(t *testing.T) {
 func TestNewClickHouseConnectionOptionsSkipsMigrations(t *testing.T) {
 	t.Setenv("OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD", "runtime-password")
 	t.Setenv("OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD", "deletion-password")
-	t.Setenv(clickHouseMigrationPasswordEnvironment, "")
+	t.Setenv(clickHouseMigrationEnvironmentVariable, "")
 
 	results, err := newClickHouseConnectionOptions(options{
 		clickhouseAddress:           "127.0.0.1:9000",
@@ -153,7 +153,7 @@ func TestNewClickHouseConnectionOptionsRejectsMigrationFileWhenSkipping(
 ) {
 	t.Setenv("OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD", "runtime-password")
 	t.Setenv("OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD", "deletion-password")
-	t.Setenv(clickHouseMigrationPasswordEnvironment, "")
+	t.Setenv(clickHouseMigrationEnvironmentVariable, "")
 
 	result, err := newClickHouseConnectionOptions(options{
 		clickhouseAddress:               "127.0.0.1:9000",
@@ -180,7 +180,7 @@ func TestConfigureClickHouseConnectionOptionsRejectsAndUnsetsMigrationEnvironmen
 	const secret = "migration-secret-must-not-leak"
 	t.Setenv("OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD", "runtime-password")
 	t.Setenv("OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD", "deletion-password")
-	t.Setenv(clickHouseMigrationPasswordEnvironment, secret)
+	t.Setenv(clickHouseMigrationEnvironmentVariable, secret)
 
 	result, err := configureClickHouseConnectionOptions(options{
 		clickhouseAddress:          "127.0.0.1:9000",
@@ -191,7 +191,7 @@ func TestConfigureClickHouseConnectionOptionsRejectsAndUnsetsMigrationEnvironmen
 	}, nil)
 	if err == nil || result.runtime != nil || result.deletion != nil ||
 		result.migration != nil ||
-		!strings.Contains(err.Error(), clickHouseMigrationPasswordEnvironment) {
+		!strings.Contains(err.Error(), clickHouseMigrationEnvironmentVariable) {
 		t.Fatalf(
 			"configureClickHouseConnectionOptions(skip with migration environment) = (%#v, %v)",
 			result,
@@ -201,7 +201,7 @@ func TestConfigureClickHouseConnectionOptionsRejectsAndUnsetsMigrationEnvironmen
 	if strings.Contains(err.Error(), secret) {
 		t.Fatal("migration environment rejection disclosed the secret")
 	}
-	if _, exists := os.LookupEnv(clickHouseMigrationPasswordEnvironment); exists {
+	if _, exists := os.LookupEnv(clickHouseMigrationEnvironmentVariable); exists {
 		t.Fatal("migration password remained in the process environment")
 	}
 }

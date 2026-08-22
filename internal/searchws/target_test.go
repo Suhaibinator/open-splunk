@@ -8,9 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
-	"google.golang.org/protobuf/proto"
 )
 
 func TestIncompleteRetentionHasTruthfulBoundsAndNeverPublishesUnreplayableEvents(t *testing.T) {
@@ -78,7 +79,7 @@ func TestIncompleteRetentionHasTruthfulBoundsAndNeverPublishesUnreplayableEvents
 		t.Fatalf("incomplete reconnect events = %+v", resumeEvents)
 	}
 	resume.removeAllSubscriptions()
-	resume.cancel()
+	resume.cancel(context.Canceled)
 
 	fakeConnection := &connection{
 		service: service, wake: make(chan struct{}, 1), subscriptions: make(map[string]*subscription),

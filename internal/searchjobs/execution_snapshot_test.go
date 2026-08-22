@@ -91,8 +91,8 @@ func TestCompletedExecutionSnapshotForReturnsDetachedExecutionMetadata(t *testin
 		VisibilityCutoff: 91,
 		FinishedAt:       now.UTC(),
 		ExpiresAt:        now.UTC().Add(time.Hour),
-	}
-	want.knowledgeAuthoritySeal = snapshot.knowledgeAuthoritySeal
+
+		knowledgeAuthoritySeal: snapshot.knowledgeAuthoritySeal}
 	if !reflect.DeepEqual(snapshot, want) {
 		t.Fatalf("CompletedExecutionSnapshotFor() = %#v, want %#v", snapshot, want)
 	}
@@ -528,9 +528,9 @@ func TestCompletedExecutionSnapshotForContextScopeAndLifecycleErrors(t *testing.
 	}
 	waitForState(t, manager, job.ID, StateRunning)
 	access := AccessScope{TenantID: "tenant", OwnerID: "owner"}
+	var nilContext context.Context
 
-	//nolint:staticcheck // This case explicitly verifies the nil-context guard.
-	if _, err := manager.CompletedExecutionSnapshotFor(nil, access, job.ID); err == nil {
+	if _, err := manager.CompletedExecutionSnapshotFor(nilContext, access, job.ID); err == nil {
 		t.Fatal("CompletedExecutionSnapshotFor(nil context) error = nil")
 	}
 	canceled, cancel := context.WithCancel(context.Background())

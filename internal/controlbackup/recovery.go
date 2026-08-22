@@ -16,11 +16,13 @@ import (
 	"slices"
 	"time"
 
+	"fortio.org/safecast"
+	"golang.org/x/sys/unix"
+
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/privatefs"
 	"github.com/Suhaibinator/open-splunk/migrations"
-	"golang.org/x/sys/unix"
 )
 
 var bundleMemberNames = []string{
@@ -218,8 +220,7 @@ func createWithHooks(
 		if !publicationMayHaveOccurred || returnedErr == nil {
 			return
 		}
-		var publicationErr *PublicationStatusError
-		if errors.As(returnedErr, &publicationErr) {
+		if _, ok := errors.AsType[*PublicationStatusError](returnedErr); ok {
 			return
 		}
 		returnedErr = &PublicationStatusError{
@@ -1417,9 +1418,12 @@ func retainRestoreDatabaseLock(databaseLock *os.File) error {
 	if databaseLock == nil {
 		return errors.New("restore control-plane backup: control database lock descriptor is missing")
 	}
-	// #nosec G115 -- os.File descriptors are native int descriptors on the
-	// supported Unix targets.
-	if err := unix.Flock(int(databaseLock.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+
+	descriptor, err := safecast.Conv[int](databaseLock.Fd())
+	if err != nil {
+		return fmt.Errorf("restore control-plane backup: convert control database lock descriptor: %w", err)
+	}
+	if err := unix.Flock(descriptor, unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		return fmt.Errorf("restore control-plane backup: retain exclusive control database lock: %w", err)
 	}
 	return nil

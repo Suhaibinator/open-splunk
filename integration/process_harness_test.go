@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	pathpkg "path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -23,9 +24,10 @@ import (
 	"testing"
 	"time"
 
-	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
+
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 )
 
 func TestMain(m *testing.M) {
@@ -375,7 +377,7 @@ func TestLockedBufferReportsTruncation(t *testing.T) {
 func TestRunCommandWithBoundedOutputCapsCombinedStreams(t *testing.T) {
 	t.Parallel()
 
-	command := exec.CommandContext(context.Background(), os.Args[0], "-test.run=^TestHarnessOutputEmitter$")
+	command := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestHarnessOutputEmitter$")
 	command.Env = environmentWithValue(
 		os.Environ(),
 		"OPEN_SPLUNK_TEST_HARNESS_OUTPUT_EMITTER",
@@ -414,7 +416,7 @@ func TestRunCommandWithBoundedOutputBoundaries(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			command := exec.CommandContext(context.Background(), os.Args[0], "-test.run=^TestHarnessOutputEmitter$")
+			command := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestHarnessOutputEmitter$")
 			command.Env = environmentWithValue(
 				os.Environ(),
 				"OPEN_SPLUNK_TEST_HARNESS_OUTPUT_EMITTER",
@@ -449,7 +451,7 @@ func TestRunCommandWithBoundedOutputBoundaries(t *testing.T) {
 
 	t.Run("start failure", func(t *testing.T) {
 		t.Parallel()
-		command := exec.CommandContext(context.Background(), filepath.Join(t.TempDir(), "missing-command"))
+		command := exec.CommandContext(t.Context(), filepath.Join(t.TempDir(), "missing-command"))
 		output, truncated, err := runCommandWithBoundedOutput(command, maximum)
 		if err == nil {
 			t.Fatal("runCommandWithBoundedOutput() error = nil, want start failure")
@@ -808,55 +810,99 @@ func copyStageFile(ctx context.Context, sourcePath, destinationPath string) erro
 }
 
 func materializeStageDependencies(ctx context.Context, sourceRoot, destinationRoot string) error {
-	return filepath.WalkDir(sourceRoot, func(sourcePath string, entry fs.DirEntry, walkErr error) error {
+	rootPath := filepath.Dir(filepath.Clean(sourceRoot))
+	sourceRelative := filepath.ToSlash(filepath.Base(filepath.Clean(sourceRoot)))
+	destinationRelative, err := filepath.Rel(rootPath, destinationRoot)
+	if err != nil {
+		return err
+	}
+	destinationRelative = filepath.ToSlash(destinationRelative)
+	if destinationRelative == ".." || strings.HasPrefix(destinationRelative, "../") {
+		return fmt.Errorf("dependency destination %q escapes source parent %q", destinationRoot, rootPath)
+	}
+	root, err := os.OpenRoot(rootPath)
+	if err != nil {
+		return err
+	}
+	if err := root.Mkdir(destinationRelative, 0o755); err != nil {
+		return errors.Join(err, root.Close())
+	}
+	walkErr := fs.WalkDir(root.FS(), sourceRelative, func(sourcePath string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		relativePath, err := filepath.Rel(sourceRoot, sourcePath)
-		if err != nil {
-			return err
+		relativePath := strings.TrimPrefix(sourcePath, sourceRelative)
+		relativePath = strings.TrimPrefix(relativePath, "/")
+		if relativePath == "" {
+			return nil
 		}
-		if relativePath == "." {
-			return os.Mkdir(destinationRoot, 0o755)
-		}
-		destinationPath := filepath.Join(destinationRoot, relativePath)
+		destinationPath := pathpkg.Join(destinationRelative, relativePath)
 		if entry.IsDir() {
-			return os.Mkdir(destinationPath, 0o755)
+			return root.Mkdir(destinationPath, 0o755)
 		}
 		if entry.Type()&os.ModeSymlink != 0 {
-			target, err := os.Readlink(sourcePath)
+			target, err := root.Readlink(sourcePath)
 			if err != nil {
 				return err
 			}
-			if filepath.IsAbs(target) {
+			if pathpkg.IsAbs(target) {
 				return fmt.Errorf("dependency symlink %q has an absolute target", sourcePath)
 			}
-			resolvedTarget := filepath.Clean(filepath.Join(filepath.Dir(sourcePath), target))
-			relativeTarget, err := filepath.Rel(sourceRoot, resolvedTarget)
-			if err != nil {
-				return err
-			}
-			if relativeTarget == ".." ||
-				strings.HasPrefix(relativeTarget, ".."+string(filepath.Separator)) {
+			resolvedTarget := pathpkg.Clean(pathpkg.Join(pathpkg.Dir(relativePath), target))
+			if resolvedTarget == ".." || strings.HasPrefix(resolvedTarget, "../") {
 				return fmt.Errorf("dependency symlink %q escapes its source tree", sourcePath)
 			}
-			// #nosec G122 -- sourceRoot is a validated, immutable toolchain tree
-			// and the relative target is checked above before staging the test fixture.
-			return os.Symlink(target, destinationPath)
+			return root.Symlink(target, destinationPath)
 		}
 		if !entry.Type().IsRegular() {
 			return fmt.Errorf("dependency %q is not a regular file", sourcePath)
 		}
-		// #nosec G122 -- sourceRoot is a validated, immutable toolchain tree used
-		// only to materialize an isolated test-stage dependency.
-		if err := os.Link(sourcePath, destinationPath); err == nil {
+		if err := root.Link(sourcePath, destinationPath); err == nil {
 			return nil
 		}
-		return copyStageFile(ctx, sourcePath, destinationPath)
+		return copyStageFileWithinRoot(ctx, root, sourcePath, destinationPath)
 	})
+	return errors.Join(walkErr, root.Close())
+}
+
+func copyStageFileWithinRoot(ctx context.Context, root *os.Root, sourcePath, destinationPath string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	source, err := root.Open(sourcePath)
+	if err != nil {
+		return err
+	}
+	sourceInfo, err := source.Stat()
+	if err != nil {
+		_ = source.Close()
+		return err
+	}
+	if !sourceInfo.Mode().IsRegular() {
+		_ = source.Close()
+		return fmt.Errorf("source is not a regular file")
+	}
+	destination, err := root.OpenFile(
+		destinationPath,
+		os.O_CREATE|os.O_EXCL|os.O_WRONLY,
+		sourceInfo.Mode().Perm(),
+	)
+	if err != nil {
+		_ = source.Close()
+		return err
+	}
+	reader := &contextReader{ctx: ctx, reader: source}
+	_, copyErr := io.CopyBuffer(destination, reader, make([]byte, 128<<10))
+	closeDestinationErr := destination.Close()
+	closeSourceErr := source.Close()
+	if err := errors.Join(copyErr, closeDestinationErr, closeSourceErr); err != nil {
+		_ = root.Remove(destinationPath)
+		return err
+	}
+	return nil
 }
 
 func TestMaterializeStageDependenciesKeepsTheTreeInsideTheProjectRoot(t *testing.T) {
@@ -878,7 +924,7 @@ func TestMaterializeStageDependenciesKeepsTheTreeInsideTheProjectRoot(t *testing
 		t.Fatal(err)
 	}
 
-	if err := materializeStageDependencies(context.Background(), source, destination); err != nil {
+	if err := materializeStageDependencies(t.Context(), source, destination); err != nil {
 		t.Fatalf("materializeStageDependencies: %v", err)
 	}
 	info, err := os.Lstat(destination)
@@ -917,7 +963,7 @@ func TestMaterializeStageDependenciesRejectsEscapingSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := materializeStageDependencies(context.Background(), source, destination)
+	err := materializeStageDependencies(t.Context(), source, destination)
 	if err == nil || !strings.Contains(err.Error(), "escapes") {
 		t.Fatalf("escaping dependency symlink error = %v", err)
 	}
@@ -1163,7 +1209,7 @@ func startProcess(t *testing.T, directory string, arguments []string, environmen
 		t.Fatal("process command is required")
 	}
 	logs := &lockedBuffer{maximum: maximumHarnessOutputBytes}
-	command := exec.CommandContext(context.Background(), arguments[0], arguments[1:]...)
+	command := exec.CommandContext(t.Context(), arguments[0], arguments[1:]...)
 	command.Dir = directory
 	command.Env = environment
 	command.Stdout = logs

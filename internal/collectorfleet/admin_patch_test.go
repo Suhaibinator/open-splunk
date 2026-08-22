@@ -193,6 +193,7 @@ func TestAdministrativePatchAPIsValidateInputsAndHideTenantExistence(t *testing.
 		t.Fatal(err)
 	}
 	validDisplayName := "valid"
+	var nilContext context.Context
 
 	assertInvalid := func(operation string, err error) {
 		t.Helper()
@@ -201,17 +202,15 @@ func TestAdministrativePatchAPIsValidateInputsAndHideTenantExistence(t *testing.
 		}
 	}
 
-	//nolint:staticcheck // This public boundary must reject a nil context without panicking.
-	_, err = store.GetAdministration(nil, lease.Scope, lease.CollectorID)
+	_, err = store.GetAdministration(nilContext, lease.Scope, lease.CollectorID)
 	assertInvalid("GetAdministration(nil context)", err)
 	_, err = store.GetAdministration(ctx, Scope{TenantID: " tenant-a"}, lease.CollectorID)
 	assertInvalid("GetAdministration(padded tenant)", err)
 	_, err = store.GetAdministration(ctx, lease.Scope, "-invalid")
 	assertInvalid("GetAdministration(invalid collector ID)", err)
 
-	//nolint:staticcheck // This public boundary must reject a nil context without panicking.
 	_, err = store.UpdateDisplayName(
-		nil,
+		nilContext,
 		lease.Scope,
 		lease.CollectorID,
 		collector.Version,

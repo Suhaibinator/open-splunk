@@ -210,12 +210,10 @@ func invalidValidationResult(err error) (ValidationResult, error) {
 }
 
 func searchDiagnostic(err error) (Diagnostic, bool) {
-	var parseDiagnostic *spl.Diagnostic
-	if errors.As(err, &parseDiagnostic) {
+	if parseDiagnostic, ok := errors.AsType[*spl.Diagnostic](err); ok {
 		return diagnosticFromSPL(parseDiagnostic), true
 	}
-	var planningDiagnostic *plan.Diagnostic
-	if errors.As(err, &planningDiagnostic) {
+	if planningDiagnostic, ok := errors.AsType[*plan.Diagnostic](err); ok {
 		return diagnosticFromPlan(planningDiagnostic), true
 	}
 	return Diagnostic{}, false

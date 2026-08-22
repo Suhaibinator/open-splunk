@@ -16,6 +16,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"fortio.org/safecast"
+
 	"github.com/Suhaibinator/open-splunk/internal/control"
 )
 
@@ -197,8 +199,8 @@ func stagedProjection(tenantID, ownerID, stageID string, asset *Asset, created, 
 		SizeBytes:     uint64(len(asset.canonicalCSV)),
 		RowCount:      uint64(len(asset.rows)),
 		// Parsed assets are capped at MaximumColumns.
-		// #nosec G115 -- the validated cap fits in uint32.
-		ColumnCount: uint32(len(asset.headers)),
+
+		ColumnCount: safecast.MustConv[uint32](len(asset.headers)),
 		CreatedAt:   created,
 		ExpiresAt:   expires,
 	}
@@ -310,7 +312,7 @@ func (store *Store) PublishAtomic(
 		}
 		// SQLite INTEGER values are signed; the positivity check makes this
 		// conversion lossless.
-		// #nosec G115 -- current is positive.
+
 		currentVersion := uint64(current)
 		if currentVersion != request.ExpectedCurrentVersion {
 			return Version{}, ErrConflict
@@ -492,8 +494,8 @@ func (store *Store) PruneExpiredStages(ctx context.Context, before time.Time, li
 		return 0, fmt.Errorf("%w: lookup stage prune count is invalid", ErrCorrupt)
 	}
 	// RowsAffected is checked against the uint32 limit above.
-	// #nosec G115 -- changed is in [0, limit].
-	return uint32(changed), nil
+
+	return safecast.MustConv[uint32](changed), nil
 }
 
 type stagedRecord struct {
@@ -551,12 +553,12 @@ func readStagedAsset(ctx context.Context, query interface {
 	result := stagedRecord{
 		canonicalCSV: canonical,
 		// All persisted counts are validated against the package maxima above.
-		// #nosec G115 -- validated bounded nonnegative SQLite INTEGER values.
-		sourceBytes: uint64(sourceBytes),
-		// #nosec G115 -- validated bounded nonnegative SQLite INTEGER values.
-		rowCount: uint64(rowCount),
-		// #nosec G115 -- validated bounded nonnegative SQLite INTEGER values.
-		columnCount: uint32(columnCount),
+
+		sourceBytes: safecast.MustConv[uint64](sourceBytes),
+
+		rowCount: safecast.MustConv[uint64](rowCount),
+
+		columnCount: safecast.MustConv[uint32](columnCount),
 		expiresAt:   time.UnixMicro(expires).UTC(),
 	}
 	copy(result.sourceSHA256[:], sourceDigest)
@@ -583,8 +585,8 @@ func (record stagedRecord) asset(ctx context.Context) (*Asset, error) {
 		uint64(len(asset.canonicalCSV)) != uint64(len(record.canonicalCSV)) ||
 		uint64(len(asset.rows)) != record.rowCount ||
 		// Parsed assets are capped at MaximumColumns.
-		// #nosec G115 -- the validated cap fits in uint32.
-		uint32(len(asset.headers)) != record.columnCount ||
+
+		safecast.MustConv[uint32](len(asset.headers)) != record.columnCount ||
 		!canonicalMatches {
 		return nil, fmt.Errorf("%w: persisted canonical CSV metadata disagrees", ErrCorrupt)
 	}
@@ -625,12 +627,12 @@ func readVersion(ctx context.Context, query interface {
 	}
 	record := stagedRecord{
 		canonicalCSV: canonical,
-		// #nosec G115 -- validated bounded nonnegative SQLite INTEGER values.
-		sourceBytes: uint64(sourceBytes),
-		// #nosec G115 -- validated bounded nonnegative SQLite INTEGER values.
-		rowCount: uint64(rowCount),
-		// #nosec G115 -- validated bounded nonnegative SQLite INTEGER values.
-		columnCount: uint32(columnCount),
+
+		sourceBytes: safecast.MustConv[uint64](sourceBytes),
+
+		rowCount: safecast.MustConv[uint64](rowCount),
+
+		columnCount: safecast.MustConv[uint32](columnCount),
 	}
 	copy(record.sourceSHA256[:], sourceDigest)
 	copy(record.contentSHA256[:], contentDigest)

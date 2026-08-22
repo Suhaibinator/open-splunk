@@ -7,9 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
-	"google.golang.org/protobuf/proto"
 )
 
 func TestStoreOutboxRoundTripPreservesExactNormalizedBlock(t *testing.T) {
@@ -203,7 +204,7 @@ func encodeLegacyStoreOutboxForTest(batch ingest.StoreBatch) ([]byte, error) {
 	_, _ = body.Write(batch.SourceBatchSHA256[:])
 	writeOutboxUint64(&body, uint64(batch.ReceivedAt.UTC().UnixMilli()))
 	writeOutboxUint32(&body, batch.OriginalEventCount)
-	writeOutboxUint32(&body, uint32(len(batch.Events))) // #nosec G115 -- bounded test fixture.
+	writeOutboxUint32(&body, uint32(len(batch.Events)))
 	marshal := proto.MarshalOptions{Deterministic: true}
 	for _, stored := range batch.Events {
 		encoded, err := marshal.Marshal(stored.Event)

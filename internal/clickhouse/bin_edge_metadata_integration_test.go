@@ -16,6 +16,7 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
@@ -720,20 +721,12 @@ func TestBinEdgeMetadataAgainstClickHouse(t *testing.T) {
 			build(t, `index=mixed | bin edge_num span=10`), "edge_num")
 		wantProfile := binEdgeMetadataProfile{
 			rows: 1, total: 6, events: 6, nulls: 0, missing: 0,
+			// groupUniqArray collapses duplicates, so compare the distinct set.
 			types: []uint8{
 				uint8(eventfields.StoredValueTypeSint64),
-				uint8(eventfields.StoredValueTypeSint64),
 				uint8(eventfields.StoredValueTypeUint64),
-				uint8(eventfields.StoredValueTypeUint64),
-				uint8(eventfields.StoredValueTypeDouble),
 				uint8(eventfields.StoredValueTypeDouble),
 			},
-		}
-		// groupUniqArray collapses duplicates, so compare the distinct set.
-		wantProfile.types = []uint8{
-			uint8(eventfields.StoredValueTypeSint64),
-			uint8(eventfields.StoredValueTypeUint64),
-			uint8(eventfields.StoredValueTypeDouble),
 		}
 		if !reflect.DeepEqual(profile, wantProfile) {
 			t.Fatalf("runtime scalar mix catalog profile = %#v, want %#v", profile, wantProfile)

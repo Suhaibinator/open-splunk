@@ -17,12 +17,13 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
+	"google.golang.org/protobuf/proto"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
-	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -1333,7 +1334,7 @@ func backendIndexDeletionAssertControlCounts(
 		var got int
 		if err := db.SQLDB().QueryRowContext(
 			ctx,
-			"SELECT count(*) FROM "+table.name, // #nosec G202 -- table names are fixed above.
+			"SELECT count(*) FROM "+table.name,
 		).Scan(&got); err != nil {
 			t.Fatalf("count %s: %v", table.name, err)
 		}

@@ -1,5 +1,3 @@
-/* oxlint-disable jsx-a11y/prefer-tag-over-role */
-
 import { type Dispatch, type KeyboardEvent, type PointerEvent, type SetStateAction, useEffect, useMemo, useRef, useState } from "react";
 
 import type { DemoEvent, DemoField, DemoScalar, TimelinePoint } from "@/lib/demo/search-data";
@@ -52,8 +50,8 @@ interface EventsPanelProps {
   wrapEvents: boolean;
   applyPivot: (field: string, value: DemoScalar, mode: PivotMode, runImmediately?: boolean) => void;
   copyText: (text: string, message: string) => Promise<void> | void;
-  endTimelineDrag: (event: PointerEvent<HTMLDivElement>) => void;
-  moveTimelineDrag: (event: PointerEvent<HTMLDivElement>) => void;
+  endTimelineDrag: (event: PointerEvent<HTMLInputElement>) => void;
+  moveTimelineDrag: (event: PointerEvent<HTMLInputElement>) => void;
   onLoadMoreFields: () => void;
   setActiveField: Dispatch<SetStateAction<string | null>>;
   setEventDisplay: Dispatch<SetStateAction<EventDisplay>>;
@@ -70,7 +68,7 @@ interface EventsPanelProps {
   setTimelineStart: Dispatch<SetStateAction<number | null>>;
   setWrapEvents: Dispatch<SetStateAction<boolean>>;
   showToast: (message: string, tone?: "success" | "info" | "warning") => void;
-  startTimelineDrag: (event: PointerEvent<HTMLDivElement>) => void;
+  startTimelineDrag: (event: PointerEvent<HTMLInputElement>) => void;
   toggleEvent: (eventId: string) => void;
   toggleField: (fieldName: string) => void;
   zoomTimeline: () => void;
@@ -249,7 +247,7 @@ export function EventsPanel({
     });
   }, [fieldsCollapsed, setFieldsCollapsed]);
 
-  function handleTimelineKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+  function handleTimelineKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     if (timelinePoints.length === 0) return;
     let nextIndex = timelineKeyboardIndex;
     if (event.key === "ArrowLeft") nextIndex = Math.max(0, timelineKeyboardIndex - 1);
@@ -332,21 +330,29 @@ export function EventsPanel({
           </div>
           <div
             className={`timeline-chart timeline-${timelineDisplay.toLowerCase()}${draggingTimeline ? " dragging" : ""}`}
-            role="slider"
-            tabIndex={0}
-            aria-label="Event timeline. Use Left and Right arrows to inspect a bucket, then Enter to zoom."
-            aria-valuemin={0}
-            aria-valuemax={Math.max(0, timelinePoints.length - 1)}
-            aria-valuenow={Math.min(timelineKeyboardIndex, Math.max(0, timelinePoints.length - 1))}
-            aria-valuetext={timelinePoints[timelineKeyboardIndex] === undefined
-              ? "No timeline data"
-              : `${timelinePoints[timelineKeyboardIndex].label}, ${formatTimelineCount(timelinePoints[timelineKeyboardIndex])} events${timelinePoints[timelineKeyboardIndex].coordinateApproximate ? ", chart position approximate" : ""}`}
-            onPointerDown={startTimelineDrag}
-            onPointerMove={moveTimelineDrag}
-            onPointerUp={endTimelineDrag}
-            onPointerCancel={endTimelineDrag}
-            onKeyDown={handleTimelineKeyDown}
           >
+            <input
+              className="timeline-keyboard-control"
+              type="range"
+              min={0}
+              max={Math.max(0, timelinePoints.length - 1)}
+              value={Math.min(timelineKeyboardIndex, Math.max(0, timelinePoints.length - 1))}
+              aria-label="Event timeline. Use Left and Right arrows to inspect a bucket, then Enter to zoom."
+              aria-valuetext={timelinePoints[timelineKeyboardIndex] === undefined
+                ? "No timeline data"
+                : `${timelinePoints[timelineKeyboardIndex].label}, ${formatTimelineCount(timelinePoints[timelineKeyboardIndex])} events${timelinePoints[timelineKeyboardIndex].coordinateApproximate ? ", chart position approximate" : ""}`}
+              onChange={(event) => {
+                const nextIndex = Number(event.currentTarget.value);
+                setTimelineKeyboardIndex(nextIndex);
+                setTimelineStart(nextIndex);
+                setTimelineEnd(nextIndex);
+              }}
+              onKeyDown={handleTimelineKeyDown}
+              onPointerDown={startTimelineDrag}
+              onPointerMove={moveTimelineDrag}
+              onPointerUp={endTimelineDrag}
+              onPointerCancel={endTimelineDrag}
+            />
             <div className="timeline-grid-lines" aria-hidden="true"><span /><span /><span /></div>
             <div className="timeline-bars" aria-hidden="true">
               {timelinePoints.map((point, index) => {
@@ -398,7 +404,7 @@ export function EventsPanel({
                   <span aria-hidden="true">⌕</span>
                   <input aria-label="Filter fields" placeholder="Filter fields" value={fieldFilter} onChange={(event) => setFieldFilter(event.target.value)} />
                 </label>
-                {fieldsLoading ? <p className="field-loading" role="status">Loading server fields…</p> : null}
+                {fieldsLoading ? <output className="field-loading">Loading server fields…</output> : null}
                 {!fieldsLoading && fields.length === 0
                   ? <p className="field-loading">No authoritative fields were returned.</p>
                   : null}
@@ -464,7 +470,7 @@ export function EventsPanel({
                 <label className="select-field-checkbox"><input type="checkbox" checked={activeFieldData.selected} onChange={() => toggleField(activeFieldData.name)} /> Selected field</label>
                 <h3>Top values</h3>
                 <div className="top-values">
-                  {fieldSummaryLoading ? <p className="field-loading" role="status">Loading top values…</p> : null}
+                  {fieldSummaryLoading ? <output className="field-loading">Loading top values…</output> : null}
                   {fieldSummaryError === null ? null : <p className="field-loading" role="alert">{fieldSummaryError}</p>}
                   {activeFieldData.values.map((item) => {
                     const percent = activeFieldData.eventCount <= 0

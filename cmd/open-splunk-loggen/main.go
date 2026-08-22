@@ -37,8 +37,11 @@ func isOnlyCancellation(err error) bool {
 		return false
 	}
 
-	var joined interface{ Unwrap() []error }
-	if errors.As(err, &joined) {
+	type joinedError interface {
+		error
+		Unwrap() []error
+	}
+	if joined, ok := errors.AsType[joinedError](err); ok {
 		causes := joined.Unwrap()
 		if len(causes) == 0 {
 			return false
@@ -51,8 +54,11 @@ func isOnlyCancellation(err error) bool {
 		return true
 	}
 
-	var wrapped interface{ Unwrap() error }
-	if errors.As(err, &wrapped) {
+	type wrappedError interface {
+		error
+		Unwrap() error
+	}
+	if wrapped, ok := errors.AsType[wrappedError](err); ok {
 		cause := wrapped.Unwrap()
 		return cause != nil && isOnlyCancellation(cause)
 	}

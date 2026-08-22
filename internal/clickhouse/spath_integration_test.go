@@ -12,6 +12,8 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
@@ -21,7 +23,6 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport/jsonnumbercorpus"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -418,7 +419,7 @@ func TestSpathAgainstClickHouse(t *testing.T) {
 			err = spathQueryError(ctx, connection,
 				`SELECT toString(selected) FROM (`+tokenOver.SQL+`)`,
 				tokenOver.Args)
-			if err == nil || !strings.Contains(err.Error(), SpathJSONTokenLimitMarker) {
+			if err == nil || !strings.Contains(err.Error(), SpathJSONLexemeLimitMarker) {
 				t.Fatalf("spath token-limit error for %s = %v, want stable token marker", eventID, err)
 			}
 		}
@@ -446,7 +447,7 @@ func TestSpathAgainstClickHouse(t *testing.T) {
 | table selected`)
 		err = spathQueryError(ctx, connection,
 			`SELECT toString(selected) FROM (`+validOver.SQL+`)`, validOver.Args)
-		if err == nil || !strings.Contains(err.Error(), SpathJSONTokenLimitMarker) {
+		if err == nil || !strings.Contains(err.Error(), SpathJSONLexemeLimitMarker) {
 			t.Fatalf("smallest valid token document above limit error = %v, want stable marker", err)
 		}
 
@@ -478,7 +479,7 @@ func TestSpathAgainstClickHouse(t *testing.T) {
 				value:       strings.Repeat("x", 512),
 				replacement: strings.Repeat("0,", 512),
 				suffix:      `| eval amplified="{\"values\":[" . amplified . "0]}"`,
-				marker:      SpathJSONTokenLimitMarker,
+				marker:      SpathJSONLexemeLimitMarker,
 			},
 		} {
 			t.Run(test.name+" is guarded before constant folding", func(t *testing.T) {

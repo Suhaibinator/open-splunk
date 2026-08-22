@@ -27,7 +27,7 @@ func validateNoExtendedACL(file *os.File) error {
 	if file == nil {
 		return errors.New("private filesystem ACL is unavailable")
 	}
-	// #nosec G115 -- os.File descriptors are native int descriptors on Linux.
+
 	fd := int(file.Fd())
 	bytes, err := unix.Flistxattr(fd, nil)
 	if errors.Is(err, unix.ENOTSUP) {

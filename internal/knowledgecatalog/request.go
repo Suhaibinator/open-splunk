@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 
+	"fortio.org/safecast"
+
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 )
@@ -252,8 +254,7 @@ func NormalizeDependencyListRequest(
 		IncludeTotal:      normalized.includeTotal,
 	}
 	if normalized.requestedVersionPresent {
-		// #nosec G115 -- normalizeDependencyListRequest requires a positive requested version.
-		value := uint64(normalized.requestedVersion)
+		value := safecast.MustConv[uint64](normalized.requestedVersion)
 		result.Version = &value
 	}
 	return result, nil

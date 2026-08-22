@@ -11,14 +11,15 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/SRouter/pkg/router"
+	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/buildmetadata"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobproto"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
-	"google.golang.org/protobuf/types/known/durationpb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const maximumRequestedIndexes = 128
@@ -817,10 +818,6 @@ func rejectUnsupportedCreateFields(input *opensplunk.CreateSearchJobRequest, def
 		return errors.New("client request idempotency is not supported")
 	}
 	if options := input.GetOptions(); options != nil {
-		//nolint:staticcheck // Deprecated wire fields must remain rejected while old clients can still send them.
-		if options.EnablePreview || options.PreviewRowLimit != nil {
-			return errors.New("job-level preview options are not supported; request bounded previews on the WebSocket search subscription")
-		}
 		if options.GetEnableFieldDiscovery() || options.GetEnableTimeline() {
 			return errors.New("eager field discovery and timeline options are not supported; request those analyses through their dedicated APIs")
 		}

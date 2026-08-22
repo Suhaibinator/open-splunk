@@ -10,12 +10,13 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
-	"google.golang.org/protobuf/types/known/durationpb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type historyRerunIndexCatalog struct {
@@ -510,7 +511,7 @@ func TestCreateSearchHistoryRerunReauthorizesAppAndIndexes(t *testing.T) {
 		{
 			name: "index is no longer searchable",
 			apps: activeHistoryRerunAppCatalog(),
-			indexes: &historyRerunIndexCatalog{fakeIndexCatalog: fakeIndexCatalog{indexes: []control.Index{
+			indexes: &historyRerunIndexCatalog{indexes: []control.Index{
 				{
 					ID: "index-main",
 					Definition: control.IndexDefinition{
@@ -520,12 +521,12 @@ func TestCreateSearchHistoryRerunReauthorizesAppAndIndexes(t *testing.T) {
 					},
 					State: control.IndexStateActive,
 				},
-			}}},
+			}},
 		},
 		{
 			name: "index was archived",
 			apps: activeHistoryRerunAppCatalog(),
-			indexes: &historyRerunIndexCatalog{fakeIndexCatalog: fakeIndexCatalog{indexes: []control.Index{
+			indexes: &historyRerunIndexCatalog{indexes: []control.Index{
 				{
 					ID: "index-main",
 					Definition: control.IndexDefinition{
@@ -535,7 +536,7 @@ func TestCreateSearchHistoryRerunReauthorizesAppAndIndexes(t *testing.T) {
 					},
 					State: control.IndexStateArchived,
 				},
-			}}},
+			}},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -644,7 +645,7 @@ func activeHistoryRerunIndexCatalog(names ...string) *historyRerunIndexCatalog {
 	for _, name := range names {
 		indexes = append(indexes, validationTestIndex(name))
 	}
-	return &historyRerunIndexCatalog{fakeIndexCatalog: fakeIndexCatalog{indexes: indexes}}
+	return &historyRerunIndexCatalog{indexes: indexes}
 }
 
 func assertHistoryRerunCreatedNoJobs(t *testing.T, jobs *fakeSearchJobs) {

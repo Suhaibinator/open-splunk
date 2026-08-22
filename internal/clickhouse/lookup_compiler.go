@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 
+	"fortio.org/safecast"
+
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/lookupasset"
@@ -345,11 +347,8 @@ func lookupExternalTableCellCount(rowCount, selectedColumns int) (uint64, bool) 
 	if rowCount < 0 || selectedColumns < 0 {
 		return 0, false
 	}
-	// Both inputs are nonnegative ints, so widening them to uint64 is lossless.
-	// #nosec G115 -- guarded immediately above.
-	columns := uint64(selectedColumns)
-	// #nosec G115 -- guarded immediately above.
-	rows := uint64(rowCount)
+	columns := safecast.MustConv[uint64](selectedColumns)
+	rows := safecast.MustConv[uint64](rowCount)
 	if columns == ^uint64(0) {
 		return 0, false
 	}

@@ -10,8 +10,10 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/Suhaibinator/open-splunk/internal/protocolid"
 	"github.com/google/uuid"
+
+	"github.com/Suhaibinator/open-splunk/internal/privatefs"
+	"github.com/Suhaibinator/open-splunk/internal/protocolid"
 )
 
 const maximumCollectorIdentityFileBytes = int(protocolid.MaximumBytes) + 1
@@ -146,8 +148,8 @@ func secureCollectorStateDirectory(stateDir string) error {
 	if err := validateCollectorFileOwner(before); err != nil {
 		return fmt.Errorf("collector: unsafe state directory %q: %w", stateDir, err)
 	}
-	// #nosec G302 -- directories require execute permission; 0700 is owner-only.
-	if err := os.Chmod(stateDir, 0o700); err != nil {
+
+	if err := privatefs.SecureDirectory(stateDir); err != nil {
 		return fmt.Errorf("collector: secure state directory %q: %w", stateDir, err)
 	}
 	after, err := os.Lstat(stateDir)

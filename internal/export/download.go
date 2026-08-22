@@ -13,6 +13,8 @@ import (
 	"time"
 	"unsafe"
 
+	"fortio.org/safecast"
+
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 )
 
@@ -323,9 +325,9 @@ func (manager *Manager) openArtifact(artifact Artifact, artifactPath string, ide
 		return nil, ErrArtifactUnavailable
 	}
 	pathInfo, err := manager.artifactRoot.Lstat(name)
-	// #nosec G115 -- each conversion is guarded by its adjacent negative-size check.
+
 	if err != nil || pathInfo.Mode()&os.ModeSymlink != 0 || !pathInfo.Mode().IsRegular() ||
-		pathInfo.Size() < 0 || uint64(pathInfo.Size()) != artifact.SizeBytes || !os.SameFile(identity, pathInfo) {
+		pathInfo.Size() < 0 || safecast.MustConv[uint64](pathInfo.Size()) != artifact.SizeBytes || !os.SameFile(identity, pathInfo) {
 		return nil, ErrArtifactUnavailable
 	}
 	file, err := manager.artifactRoot.Open(name)
@@ -333,9 +335,9 @@ func (manager *Manager) openArtifact(artifact Artifact, artifactPath string, ide
 		return nil, ErrArtifactUnavailable
 	}
 	openedInfo, statErr := file.Stat()
-	// #nosec G115 -- each conversion is guarded by its adjacent negative-size check.
+
 	if statErr != nil || !openedInfo.Mode().IsRegular() || openedInfo.Size() < 0 ||
-		uint64(openedInfo.Size()) != artifact.SizeBytes || !os.SameFile(pathInfo, openedInfo) || !os.SameFile(identity, openedInfo) {
+		safecast.MustConv[uint64](openedInfo.Size()) != artifact.SizeBytes || !os.SameFile(pathInfo, openedInfo) || !os.SameFile(identity, openedInfo) {
 		_ = file.Close()
 		return nil, ErrArtifactUnavailable
 	}

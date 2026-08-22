@@ -21,10 +21,11 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/buildinfo"
 	"github.com/Suhaibinator/open-splunk/internal/privatefs"
-	"golang.org/x/sys/unix"
 )
 
 const (
@@ -315,7 +316,7 @@ func provisionAdministratorTokenWithHooks(
 	if err := validateProvisioningDestinationDirectory(before, os.Geteuid()); err != nil {
 		return err
 	}
-	// #nosec G304,G703 -- the operator-supplied destination parent is opened
+
 	// read-only, without following its final path component, then pinned by fd.
 	directoryFD, err := unix.Open(
 		destinationDirectory,
@@ -325,7 +326,7 @@ func provisionAdministratorTokenWithHooks(
 	if err != nil {
 		return fmt.Errorf("provision administrator token: open destination parent: %w", err)
 	}
-	// #nosec G115 -- unix.Open succeeded, so directoryFD is a non-negative
+
 	// native file descriptor.
 	directory := os.NewFile(uintptr(directoryFD), destinationDirectory)
 	if directory == nil {
@@ -668,7 +669,7 @@ func createProvisioningTemporaryFile(directoryFD int) (string, *os.File, error) 
 		if err != nil {
 			return "", nil, fmt.Errorf("provision administrator token: create temporary destination: %w", err)
 		}
-		// #nosec G115 -- unix.Openat succeeded, so fd is a non-negative native
+
 		// file descriptor.
 		file := os.NewFile(uintptr(fd), name)
 		if file == nil {
@@ -710,7 +711,7 @@ func readProvisionedAdministratorToken(
 	if err != nil {
 		return nil, fmt.Errorf("provision administrator token: open existing destination: %w", err)
 	}
-	// #nosec G115 -- unix.Openat succeeded, so fd is a non-negative native
+
 	// file descriptor.
 	file := os.NewFile(uintptr(fd), destinationName)
 	if file == nil {

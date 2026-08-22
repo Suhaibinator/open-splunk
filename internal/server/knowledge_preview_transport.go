@@ -4,14 +4,17 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"strings"
+
+	"fortio.org/safecast"
+	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/proto"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgepreview"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
-	"google.golang.org/protobuf/encoding/protowire"
-	"google.golang.org/protobuf/proto"
 )
 
 const maximumPreviewRetainedSearchJobIDBytes = searchjobs.MaximumJobIDBytes + 1
@@ -82,7 +85,7 @@ func (*previewKnowledgeObjectRequestCodec) DecodeBytes(
 		UpdateMask:          candidate.updateMask,
 	}
 	if envelope.maximumRowsPresent {
-		value := uint32(envelope.maximumRows) // #nosec G115 -- protobuf varints intentionally retain generated unmarshal truncation semantics.
+		value := safecast.MustConv[uint32](envelope.maximumRows & math.MaxUint32)
 		result.MaximumRows = &value
 	}
 	setValidateUnknown(result, candidate.unknown)

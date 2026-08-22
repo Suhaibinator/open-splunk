@@ -1182,16 +1182,17 @@ func TestSuggestPreservesCallerCancellationAndCloseContract(t *testing.T) {
 	); !errors.Is(err, context.Canceled) || !reflect.DeepEqual(result, Result{}) {
 		t.Fatalf("Suggest(canceled) = (%#v, %v)", result, err)
 	}
-	//nolint:staticcheck // SA1012: this explicitly verifies the nil-context guard.
+	var nilContext context.Context
+
 	nilResult, nilErr := service.Suggest(
-		nil,
+		nilContext,
 		validSuggestionRequest("index=main | he"),
 	)
 	if nilErr == nil || !reflect.DeepEqual(nilResult, Result{}) {
 		t.Fatalf("Suggest(nil) = (%#v, %v)", nilResult, nilErr)
 	}
-	//nolint:staticcheck // SA1012: this explicitly verifies the nil-context guard.
-	nilCloseErr := service.Close(nil)
+
+	nilCloseErr := service.Close(nilContext)
 	if nilCloseErr == nil {
 		t.Fatal("Close(nil) unexpectedly succeeded")
 	}

@@ -13,6 +13,7 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
 )
 
@@ -615,8 +616,9 @@ func TestIndexStatisticsRejectsInvalidRequestsBeforeQuery(t *testing.T) {
 		connection,
 		IndexStatisticsConfig{},
 	)
-	//nolint:staticcheck // This case explicitly verifies the nil-context guard.
-	if result, err := reader.GetIndexStatistics(nil, base); err == nil {
+	var nilContext context.Context
+
+	if result, err := reader.GetIndexStatistics(nilContext, base); err == nil {
 		t.Fatalf(
 			"GetIndexStatistics(nil) = %#v, nil; want nil-context error",
 			result,

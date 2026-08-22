@@ -415,8 +415,7 @@ func (decoder *EnvelopeDecoder) failDecode(err error, eventNumber int) error {
 }
 
 func (decoder *EnvelopeDecoder) eventDecodeError(err error, eventNumber int) error {
-	var failure *ProtocolError
-	if errors.As(err, &failure) {
+	if failure, ok := errors.AsType[*ProtocolError](err); ok {
 		if failure.InvalidEventNumber == nil &&
 			failure.Kind != ErrorCompressedBodyTooLarge && failure.Kind != ErrorDecompressedBodyTooLarge &&
 			failure.Kind != ErrorNormalizedBodyTooLarge && failure.Kind != ErrorInvalidCompressedBody &&

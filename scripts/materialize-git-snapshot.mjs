@@ -42,6 +42,17 @@ function fail(message) {
   throw new Error(message);
 }
 
+async function forEachSequential(values, visit) {
+  const iterator = values[Symbol.iterator]();
+  async function visitNext() {
+    const next = iterator.next();
+    if (next.done) return;
+    await visit(next.value);
+    await visitNext();
+  }
+  await visitNext();
+}
+
 function sanitizedGitEnvironment() {
   const environment = { ...process.env };
   for (const name of [
@@ -282,9 +293,7 @@ async function physicalFiles(root) {
   const files = [];
   async function walk(directory, relativeDirectory) {
     const children = await readdir(directory, { withFileTypes: true });
-    // Keep traversal sequential to bound open descriptors for adversarial trees.
-    /* eslint-disable no-await-in-loop */
-    for (const child of children) {
+    await forEachSequential(children, async (child) => {
       const relativePath =
         relativeDirectory === ""
           ? child.name
@@ -301,8 +310,7 @@ async function physicalFiles(root) {
       } else {
         fail(`snapshot contains an irregular file: ${JSON.stringify(relativePath)}`);
       }
-    }
-    /* eslint-enable no-await-in-loop */
+    });
   }
   await walk(root, "");
   return files;
@@ -317,30 +325,27 @@ class BufferedStreamReader {
   }
 
   async ensureChunk() {
-    // The stream is inherently ordered; parallel reads would corrupt framing.
-    /* eslint-disable no-await-in-loop */
-    while (this.offset >= this.chunk.length) {
-      if (this.ended) return false;
-      const next = await this.iterator.next();
-      if (next.done) {
-        this.ended = true;
-        this.chunk = Buffer.alloc(0);
-        this.offset = 0;
-        return false;
-      }
-      this.chunk = Buffer.from(next.value);
+    if (this.offset < this.chunk.length) return true;
+    if (this.ended) return false;
+    const next = await this.iterator.next();
+    if (next.done) {
+      this.ended = true;
+      this.chunk = Buffer.alloc(0);
       this.offset = 0;
+      return false;
     }
-    /* eslint-enable no-await-in-loop */
-    return true;
+    this.chunk = Buffer.from(next.value);
+    this.offset = 0;
+    return this.ensureChunk();
   }
 
   async readLine(maximumBytes) {
     const parts = [];
     let length = 0;
-    // A batch header can span chunks and must be consumed in stream order.
-    /* eslint-disable no-await-in-loop */
-    while (await this.ensureChunk()) {
+    const readNextPart = async () => {
+      if (!(await this.ensureChunk())) {
+        fail("Git batch output ended before its header");
+      }
       const newline = this.chunk.indexOf(0x0a, this.offset);
       const end = newline < 0 ? this.chunk.length : newline;
       const part = this.chunk.subarray(this.offset, end);
@@ -353,16 +358,15 @@ class BufferedStreamReader {
       if (newline >= 0) {
         return Buffer.concat(parts, length);
       }
-    }
-    /* eslint-enable no-await-in-loop */
-    fail("Git batch output ended before its header");
+      return readNextPart();
+    };
+    return readNextPart();
   }
 
   async readExactly(length, consume) {
     let remaining = length;
-    // Sequential consumption preserves blob boundaries and bounds memory.
-    /* eslint-disable no-await-in-loop */
-    while (remaining > 0) {
+    const readNextPart = async () => {
+      if (remaining <= 0) return;
       if (!(await this.ensureChunk())) {
         fail(`Git batch output ended with ${remaining} bytes still expected`);
       }
@@ -371,8 +375,9 @@ class BufferedStreamReader {
       await consume(part);
       this.offset += count;
       remaining -= count;
-    }
-    /* eslint-enable no-await-in-loop */
+      await readNextPart();
+    };
+    await readNextPart();
   }
 
   async expectEOF() {
@@ -384,9 +389,8 @@ class BufferedStreamReader {
 
 async function writeAll(file, contents) {
   let offset = 0;
-  // FileHandle.write may be partial; each write depends on the prior offset.
-  /* eslint-disable no-await-in-loop */
-  while (offset < contents.length) {
+  const writeRemaining = async () => {
+    if (offset >= contents.length) return;
     const { bytesWritten } = await file.write(
       contents,
       offset,
@@ -397,8 +401,9 @@ async function writeAll(file, contents) {
       fail("snapshot file write made no progress");
     }
     offset += bytesWritten;
-  }
-  /* eslint-enable no-await-in-loop */
+    await writeRemaining();
+  };
+  await writeRemaining();
 }
 
 function gitBatchFailure(code, signal, stderr, truncated) {
@@ -453,8 +458,7 @@ async function extractGitBlobs(repositoryRoot, entries, destination) {
 
   let totalBytes = 0;
   try {
-    /* eslint-disable no-await-in-loop */
-    for (const entry of entries) {
+    await forEachSequential(entries, async (entry) => {
       const header = (await reader.readLine(maximumGitHeaderBytes)).toString(
         "ascii",
       );
@@ -515,8 +519,7 @@ async function extractGitBlobs(repositoryRoot, entries, destination) {
         );
       }
       entry.size = size;
-    }
-    /* eslint-enable no-await-in-loop */
+    });
     await reader.expectEOF();
     const processError = await completion;
     if (processError !== null) throw processError;
@@ -630,10 +633,7 @@ async function main() {
       expectedPaths,
       "snapshot physical path set does not exactly match the Git tree",
     );
-    // Verification is intentionally sequential to keep read-back memory
-    // bounded even near the per-file source-tree size limit.
-    /* eslint-disable no-await-in-loop */
-    for (const entry of entries) {
+    await forEachSequential(entries, async (entry) => {
       const destinationPath = path.join(destination, ...entry.path.split("/"));
       const information = await stat(destinationPath);
       if ((information.mode & 0o777) !== entry.mode) {
@@ -647,8 +647,7 @@ async function main() {
           `snapshot bytes do not match Git object ${entry.object}: ${JSON.stringify(entry.path)}`,
         );
       }
-    }
-    /* eslint-enable no-await-in-loop */
+    });
   } catch (error) {
     if (createdDestination) {
       await rm(destination, { force: true, recursive: true });

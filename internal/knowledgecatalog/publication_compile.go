@@ -11,13 +11,15 @@ import (
 	"sort"
 	"strings"
 
+	"fortio.org/safecast"
+	"google.golang.org/protobuf/proto"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
-	"google.golang.org/protobuf/proto"
 )
 
 // publicationWinnerCohort is one already-enumerated, complete visibility
@@ -654,8 +656,7 @@ func publicationWinnerMatchesCandidate(
 	object knowledgesnapshot.Object,
 	candidate publicationCandidateAuthority,
 ) bool {
-	// #nosec G115 -- publication candidate authority validation requires a positive version.
-	candidateVersion := uint64(candidate.version)
+	candidateVersion := safecast.MustConv[uint64](candidate.version)
 	return object.KnowledgeObjectID == candidate.objectID &&
 		object.Version == candidateVersion &&
 		bytes.Equal(object.DefinitionSHA256, candidate.definitionDigest[:]) &&
@@ -873,10 +874,8 @@ func publicationDependenciesFromProgram(
 		}
 		sourceReference := dependency.GetSource()
 		targetReference := dependency.GetTarget().GetObject()
-		// #nosec G115 -- validated compiler references are bounded to signed persisted versions.
-		sourceVersion := int64(sourceReference.GetVersion())
-		// #nosec G115 -- validated compiler references are bounded to signed persisted versions.
-		targetVersion := int64(targetReference.GetVersion())
+		sourceVersion := safecast.MustConv[int64](sourceReference.GetVersion())
+		targetVersion := safecast.MustConv[int64](targetReference.GetVersion())
 		sourceKey := dependencyVersionKey{
 			objectID: sourceReference.GetKnowledgeObjectId(),
 			version:  sourceVersion,

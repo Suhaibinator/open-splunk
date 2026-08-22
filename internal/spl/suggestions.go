@@ -228,8 +228,7 @@ func scanSuggestionCursor(source string, cursor int) (suggestionCursorScan, *Dia
 
 		tok, err := l.next()
 		if err != nil {
-			var diagnostic *Diagnostic
-			if errors.As(err, &diagnostic) {
+			if diagnostic, ok := errors.AsType[*Diagnostic](err); ok {
 				return suggestionCursorScan{}, diagnostic
 			}
 			return suggestionCursorScan{}, &Diagnostic{

@@ -129,9 +129,10 @@ export async function collectCursorPages<TItem>(options: {
   let pageToken = initialPageToken;
   let totalSize: bigint | null = null;
   let totalSizeExact = false;
-  for (let pageIndex = 0; pageIndex < options.maximumPages; pageIndex += 1) {
-    // Cursor pages are causally ordered and cannot be requested in parallel.
-    // eslint-disable-next-line no-await-in-loop
+  const collectPage = async (pageIndex: number): Promise<CursorPageCollection<TItem>> => {
+    if (pageIndex >= options.maximumPages) {
+      return { items, nextPageToken: pageToken ?? null, totalSize, totalSizeExact, complete: false };
+    }
     const response = await options.fetchPage({
       pageToken,
       includeTotalSize: pageIndex === 0 && initialPageToken === undefined,
@@ -146,6 +147,7 @@ export async function collectCursorPages<TItem>(options: {
       return { items, nextPageToken: null, totalSize, totalSizeExact, complete: true };
     }
     pageToken = nextToken;
-  }
-  return { items, nextPageToken: pageToken ?? null, totalSize, totalSizeExact, complete: false };
+    return collectPage(pageIndex + 1);
+  };
+  return collectPage(0);
 }

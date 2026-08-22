@@ -10,15 +10,20 @@ import (
 	"runtime"
 	"unsafe"
 
+	"github.com/ebitengine/purego"
 	"golang.org/x/sys/unix"
 )
 
 const (
-	darwinACLBufferBytes      = 4096
-	darwinAttributeReference  = 8
-	darwinFileSecurityHeader  = 44
-	darwinFileSecurityMagic   = 0x012cc16d
-	darwinFgetattrlistSyscall = unix.SYS_FGETATTRLIST //nolint:staticcheck
+	darwinACLBufferBytes     = 4096
+	darwinAttributeReference = 8
+	darwinFileSecurityHeader = 44
+	darwinFileSecurityMagic  = 0x012cc16d
+)
+
+var darwinFgetattrlist, darwinFgetattrlistErr = purego.Dlsym(
+	purego.RTLD_DEFAULT,
+	"fgetattrlist",
 )
 
 // validateNoExtendedACL is descriptor-based so an ACL-bearing replacement
@@ -32,8 +37,11 @@ func validateNoExtendedACL(file *os.File) error {
 		Commonattr:  unix.ATTR_CMN_EXTENDED_SECURITY,
 	}
 	buffer := make([]byte, darwinACLBufferBytes)
-	_, _, errno := unix.Syscall6(
-		darwinFgetattrlistSyscall,
+	if darwinFgetattrlistErr != nil {
+		return errors.New("private filesystem ACL is unavailable")
+	}
+	result, _, _ := purego.SyscallN(
+		darwinFgetattrlist,
 		file.Fd(),
 		uintptr(unsafe.Pointer(&attributes)),
 		uintptr(unsafe.Pointer(&buffer[0])),
@@ -44,7 +52,7 @@ func validateNoExtendedACL(file *os.File) error {
 	runtime.KeepAlive(file)
 	runtime.KeepAlive(&attributes)
 	runtime.KeepAlive(buffer)
-	if errno != 0 {
+	if result != 0 {
 		return errors.New("inspect private filesystem extended ACL")
 	}
 

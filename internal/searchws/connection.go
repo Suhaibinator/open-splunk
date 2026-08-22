@@ -12,16 +12,18 @@ import (
 	"time"
 	"unicode/utf8"
 
-	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"fortio.org/safecast"
 	"github.com/gorilla/websocket"
 	"google.golang.org/protobuf/proto"
+
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 )
 
 type connection struct {
 	service *Service
 	socket  *websocket.Conn
 	ctx     context.Context
-	cancel  context.CancelFunc
+	cancel  context.CancelCauseFunc
 
 	queueMu         sync.Mutex
 	queue           [][]byte
@@ -182,8 +184,7 @@ func (service *Service) ServeHTTP(response http.ResponseWriter, request *http.Re
 }
 
 func newConnection(service *Service, socket *websocket.Conn) *connection {
-	// #nosec G118 -- cancel is retained on connection and invoked by hardClose.
-	ctx, cancel := context.WithCancel(service.ctx)
+	ctx, cancel := context.WithCancelCause(service.ctx)
 	return &connection{
 		service: service, socket: socket, ctx: ctx, cancel: cancel,
 		wake: make(chan struct{}, 1), writerDone: make(chan struct{}),
@@ -193,8 +194,10 @@ func newConnection(service *Service, socket *websocket.Conn) *connection {
 }
 
 func (connection *connection) run() {
-	// #nosec G115 -- normalized frame bytes cannot exceed the 1 MiB hard ceiling.
-	connection.socket.SetReadLimit(int64(connection.service.config.maximumFrameBytes) + 1)
+
+	connection.socket.SetReadLimit(
+		safecast.MustConv[int64](connection.service.config.maximumFrameBytes) + 1,
+	)
 	_ = connection.socket.SetReadDeadline(time.Now().Add(connection.service.config.pongTimeout))
 	connection.socket.SetPongHandler(func(string) error {
 		return connection.socket.SetReadDeadline(time.Now().Add(connection.service.config.pongTimeout))
@@ -1010,7 +1013,7 @@ func (connection *connection) initiateClose(code int, reason string) {
 
 func (connection *connection) hardClose() {
 	connection.hardCloseOnce.Do(func() {
-		connection.cancel()
+		connection.cancel(context.Canceled)
 		connection.queueMu.Lock()
 		connection.hardClosed = true
 		queuedBytes := connection.queuedBytes

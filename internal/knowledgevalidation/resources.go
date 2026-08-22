@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 
+	"fortio.org/safecast"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
@@ -59,7 +61,7 @@ func (candidate ActiveCandidate) BuildValid(ctx context.Context, publication Act
 		SelectorPatterns:          candidate.state.patterns,
 		NormalizedDefinitionBytes: candidate.state.normalizedBytes,
 		DependencyNodes:           nodes,
-		DependencyEdges:           uint32(len(dependencies)), // #nosec G115 -- dependencies are bounded by MaximumDependencies.
+		DependencyEdges:           safecast.MustConv[uint32](len(dependencies)),
 		GeneratedOperators:        charges.generatedOperators,
 		GeneratedFields:           charges.generatedFields,
 		RegexPrograms:             charges.regexPrograms,
@@ -101,7 +103,7 @@ func canonicalDependencies(ctx context.Context, publication ActivePublication) (
 		}
 		key := dependency.GetTarget().GetKnowledgeObjectId() + "\x00" +
 			stringUint64(dependency.GetTarget().GetVersion()) + "\x00" +
-			stringUint64(uint64(dependency.GetRole())) // #nosec G115 -- role is checked against the closed nonnegative value above.
+			stringUint64(safecast.MustConv[uint64](dependency.GetRole()))
 		if _, duplicate := seen[key]; duplicate {
 			return nil, 0, ErrInvariant
 		}
@@ -128,7 +130,7 @@ func canonicalDependencies(ctx context.Context, publication ActivePublication) (
 		}
 		return cmp.Compare(left.GetRole(), right.GetRole())
 	})
-	return values, uint32(len(nodes)), nil // #nosec G115 -- dependency nodes cannot exceed MaximumDependencies.
+	return values, safecast.MustConv[uint32](len(nodes)), nil
 }
 
 func validIdentity(value string, maximum int) bool {

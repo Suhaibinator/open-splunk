@@ -12,10 +12,11 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
-	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -1605,20 +1606,19 @@ func seedCapacityReceiptCopies(t *testing.T, database *control.DB, seed capacity
 			outcome:   copyOutcome,
 		})
 	}
-	const capacitySeedBatch = 256
-	for offset := 0; offset < len(staged); offset += capacitySeedBatch {
-		end := min(offset+capacitySeedBatch, len(staged))
-		placeholders := strings.TrimSuffix(strings.Repeat("(?, ?, ?, ?),", end-offset), ",")
-		arguments := make([]any, 0, (end-offset)*4)
-		for _, record := range staged[offset:end] {
-			arguments = append(arguments, record.requestID, record.revision, record.token, record.outcome)
-		}
-		// #nosec G202 -- placeholders is generated only from a bounded batch size and contains no data.
-		if _, err := tx.ExecContext(t.Context(), `
-			INSERT INTO writer_capacity_receipt_seed (
-				request_id, catalog_revision, catalog_state_token, outcome_proto
-			) VALUES `+placeholders, arguments...); err != nil {
-			t.Fatalf("stage synthetic capacity receipts %d..%d: %v", offset, end, err)
+	insertReceipt, err := tx.PrepareContext(t.Context(), `
+		INSERT INTO writer_capacity_receipt_seed (
+			request_id, catalog_revision, catalog_state_token, outcome_proto
+		) VALUES (?, ?, ?, ?)`)
+	if err != nil {
+		t.Fatalf("prepare synthetic capacity receipt insert: %v", err)
+	}
+	defer insertReceipt.Close()
+	for index, record := range staged {
+		if _, err := insertReceipt.ExecContext(
+			t.Context(), record.requestID, record.revision, record.token, record.outcome,
+		); err != nil {
+			t.Fatalf("stage synthetic capacity receipt %d: %v", index, err)
 		}
 	}
 	commitResult, err := tx.ExecContext(t.Context(), `

@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 
+	"fortio.org/safecast"
+
 	"github.com/Suhaibinator/open-splunk/internal/recoverycontract"
 )
 
@@ -208,8 +210,8 @@ func loadClickHouseMigrations(migrationFiles fs.FS) ([]clickHouseMigration, erro
 		return nil, errors.New("too many ClickHouse migrations")
 	}
 	for index, migration := range loaded {
-		// #nosec G115 -- the migration count is capped at the four-digit filename version space.
-		wantVersion := firstClickHouseMigrationVersion + uint32(index) // #nosec G115 -- migration count is bounded above.
+
+		wantVersion := firstClickHouseMigrationVersion + safecast.MustConv[uint32](index)
 		if migration.version != wantVersion {
 			return nil, fmt.Errorf(
 				"ClickHouse migration %q has version %04d, want %04d",
@@ -410,8 +412,8 @@ func verifyClickHouseMigrationHistory(history []clickHouseMigrationLedgerRow, mi
 	if len(migrations) > maximumClickHouseMigrationCount {
 		return fmt.Errorf("%w: embedded migration count exceeds the supported version space", ErrClickHouseMigrationDrift)
 	}
-	// #nosec G115 -- the migration count is capped at the four-digit filename version space.
-	latestVersion := firstClickHouseMigrationVersion + uint32(len(migrations)) - 1 // #nosec G115 -- migration count is bounded above.
+
+	latestVersion := firstClickHouseMigrationVersion + safecast.MustConv[uint32](len(migrations)) - 1
 	for _, row := range history {
 		if row.Version > latestVersion {
 			return fmt.Errorf(
@@ -424,8 +426,8 @@ func verifyClickHouseMigrationHistory(history []clickHouseMigrationLedgerRow, mi
 	}
 
 	for index, row := range history {
-		// #nosec G115 -- a matching history cannot exceed the bounded embedded migration prefix.
-		wantVersion := firstClickHouseMigrationVersion + uint32(index) // #nosec G115 -- migration count is bounded above.
+
+		wantVersion := firstClickHouseMigrationVersion + safecast.MustConv[uint32](index)
 		if row.Version != wantVersion {
 			return fmt.Errorf(
 				"%w: row %d has version %04d, want %04d",

@@ -5,6 +5,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"fortio.org/safecast"
+
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
@@ -288,7 +290,7 @@ func buildExpandMultivalue(
 	return &ExpandMultivalue{
 		Input:        input,
 		Limit:        command.Limit,
-		QueryOrdinal: uint8(queryOrdinal), // #nosec G115 -- checked against a two-stage ceiling.
+		QueryOrdinal: safecast.MustConv[uint8](queryOrdinal),
 		Range:        command.Range,
 	}, nil
 }

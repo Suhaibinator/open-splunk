@@ -9,13 +9,15 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"fortio.org/safecast"
 	"github.com/Suhaibinator/SRouter/pkg/codec"
 	"github.com/Suhaibinator/SRouter/pkg/router"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
 const (
@@ -135,8 +137,8 @@ func (handler *apiHandler) listSavedSearches(request *http.Request, input *opens
 	if err := mapSavedSearchCallError(request.Context(), err); err != nil {
 		return nil, err
 	}
-	// #nosec G115 -- a slice length is non-negative and exactly representable as uint64.
-	if uint64(len(result.SavedSearches)) > uint64(effectiveSavedSearchPageSize(pageSize, handler.maximumPageSize)) {
+
+	if safecast.MustConv[uint64](len(result.SavedSearches)) > uint64(effectiveSavedSearchPageSize(pageSize, handler.maximumPageSize)) {
 		return nil, internalError()
 	}
 	converted := make([]*opensplunk.SavedSearch, len(result.SavedSearches))
@@ -340,8 +342,8 @@ func (handler *apiHandler) savedSearchPageRequest(page *opensplunk.PageRequest) 
 		pageSize = int(min(defaultSavedSearchPageSize, handler.maximumPageSize))
 	}
 	pageSize = min(pageSize, maximumSavedSearchRowsPerResponse)
-	// #nosec G115 -- pageSize is non-negative and capped at 24 immediately above.
-	return uint32(pageSize), pageToken, includeTotal, nil
+
+	return safecast.MustConv[uint32](pageSize), pageToken, includeTotal, nil
 }
 
 func effectiveSavedSearchPageSize(requested, maximum uint32) uint32 {

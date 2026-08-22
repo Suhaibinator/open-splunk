@@ -11,11 +11,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
-	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"fortio.org/safecast"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 )
 
 type targetKind uint8
@@ -254,8 +256,8 @@ func (service *Service) performTargetLoad(key targetKey, load *targetLoad) {
 	}
 	if err == nil {
 		service.targets[key] = target
-		// #nosec G115 -- one waiter consumes a bounded connection slot (hard ceiling 4,096).
-		target.resolverCount.Add(int32(load.waiters))
+
+		target.resolverCount.Add(safecast.MustConv[int32](load.waiters))
 		service.touchTargetLocked(target)
 	}
 	if err == nil {
@@ -736,8 +738,9 @@ func (target *targetState) currentEventsContinuousLocked() bool {
 			maximum = event.sequence
 		}
 	}
-	// #nosec G115 -- len(target.current) is positive because the empty map returned above.
-	return maximum == target.latest && maximum-minimum == uint64(len(target.current)-1)
+
+	return maximum == target.latest &&
+		maximum-minimum == safecast.MustConv[uint64](len(target.current)-1)
 }
 
 func (target *targetState) applyProjection(projection targetProjection, initial bool) (bool, error) {
@@ -1115,8 +1118,8 @@ func (target *targetState) previewEventByteLimit(
 		if sizeInt < 0 {
 			return 0, errors.New("search websocket current projection size is invalid")
 		}
-		// #nosec G115 -- protobuf sizes are non-negative.
-		size := uint64(sizeInt)
+
+		size := safecast.MustConv[uint64](sizeInt)
 		if size > ^uint64(0)-nonPreviewBytes {
 			return 0, errors.New("search websocket current projection size overflow")
 		}
@@ -1520,10 +1523,10 @@ func stampedFrameSizeForIDBytes(dataBytes, subscriptionIDBytes int) (uint64, err
 		return 0, errors.New("search websocket event size is invalid")
 	}
 	fieldBytes := protowire.SizeTag(3) + protowire.SizeBytes(subscriptionIDBytes)
-	// #nosec G115 -- both byte counts were proven non-negative above.
-	dataBytes64 := uint64(dataBytes)
-	// #nosec G115 -- protowire size helpers return non-negative lengths.
-	fieldBytes64 := uint64(fieldBytes)
+
+	dataBytes64 := safecast.MustConv[uint64](dataBytes)
+
+	fieldBytes64 := safecast.MustConv[uint64](fieldBytes)
 	if dataBytes64 > ^uint64(0)-fieldBytes64 {
 		return 0, errors.New("search websocket event size overflow")
 	}

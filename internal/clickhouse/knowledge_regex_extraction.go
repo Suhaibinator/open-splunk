@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 
+	"fortio.org/safecast"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
@@ -205,7 +207,7 @@ func compileKnowledgeRegexExtractionAuthority(
 		args:             args,
 		operation:        authority.operation,
 		captures:         resultCaptures,
-		programWorkUnits: uint64(validated.ProgramWorkUnits), // #nosec G115 -- the regex compiler returns a positive bounded work estimate.
+		programWorkUnits: safecast.MustConv[uint64](validated.ProgramWorkUnits),
 	}, nil
 }
 
@@ -294,7 +296,7 @@ func validateKnowledgeRegexExtractionAuthority(
 	if err != nil || validated.Pattern != authority.pattern ||
 		validated.GroupCount != len(validated.Captures) ||
 		len(validated.Captures) != len(authority.captures) ||
-		uint64(validated.ProgramWorkUnits) != authority.workUnits { // #nosec G115 -- successful compilation bounds this by MaximumExtractionProgramWorkUnits.
+		safecast.MustConv[uint64](validated.ProgramWorkUnits) != authority.workUnits {
 		if err == nil {
 			err = errors.New("retained regex inventory disagrees with a fresh compilation")
 		}

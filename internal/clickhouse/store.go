@@ -28,15 +28,17 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"fortio.org/safecast"
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"google.golang.org/protobuf/proto"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
-	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -248,11 +250,11 @@ type Store struct {
 	reconcileSlot             chan struct{}
 	lifecycleMu               sync.Mutex
 	lifecycleContext          context.Context
-	lifecycleCancel           context.CancelFunc
+	lifecycleCancel           context.CancelCauseFunc
 	operations                sync.WaitGroup
 	reconcileWake             chan struct{}
 	reconcileDone             chan struct{}
-	reconcileCancel           context.CancelFunc
+	reconcileCancel           context.CancelCauseFunc
 	reconcileErr              error
 	closed                    bool
 	closeOnce                 sync.Once
@@ -359,8 +361,7 @@ func newStoreWithConnections(
 	}
 	reconcileSlot := make(chan struct{}, 1)
 	reconcileSlot <- struct{}{}
-	// #nosec G118 -- lifecycleCancel is retained on Store and invoked by Close.
-	lifecycleContext, lifecycleCancel := context.WithCancel(context.Background())
+	lifecycleContext, lifecycleCancel := context.WithCancelCause(context.Background())
 	return &Store{
 		connection:         connection,
 		deletionConnection: deletionConnection,
@@ -517,8 +518,7 @@ func (s *Store) stageAdmitted(ctx context.Context, batch ingest.StoreBatch) (ing
 		HECAdmission:     visibilityHECAdmission(batch),
 	})
 	if err != nil {
-		var quotaExceeded *ingestquota.ExceededError
-		if !errors.As(err, &quotaExceeded) {
+		if _, ok := errors.AsType[*ingestquota.ExceededError](err); !ok {
 			s.wakeReconciler()
 		}
 		return ingest.StageResult{}, s.visibilityFailure("stage ClickHouse visibility reservation", err)
@@ -649,9 +649,7 @@ func (s *Store) rejectBatchAdmitted(
 		return ingest.StoreResult{}, s.visibilityFailure("commit terminal batch rejection", err)
 	}
 	if reservation.NewlyRejected {
-		// #nosec G115 -- len is non-negative and every supported Go int value
-		// is exactly representable as uint64.
-		s.noteTerminalRejection(uint64(len(metadata)))
+		s.noteTerminalRejection(safecast.MustConv[uint64](len(metadata)))
 	}
 	if reservation.Rejected || reservation.AlreadyCommitted {
 		return resultForReservation(reservation, true)
@@ -756,8 +754,7 @@ func (s *Store) storeAdmitted(
 		// A failed SQLite commit can be outcome-ambiguous. Wake the server-owned
 		// reconciler so any reservation that did persist is not dependent on a
 		// collector retry or process restart.
-		var quotaExceeded *ingestquota.ExceededError
-		if !errors.As(err, &quotaExceeded) {
+		if _, ok := errors.AsType[*ingestquota.ExceededError](err); !ok {
 			s.wakeReconciler()
 		}
 		if !resumeOnly && errors.Is(err, visibility.ErrReservationGone) {
@@ -780,13 +777,12 @@ func (s *Store) freshReservationPayload(
 	batch ingest.StoreBatch,
 ) ([]byte, []byte, time.Time, error) {
 	if batch.OriginalEventCount == 0 && len(batch.RejectedEvents) == 0 && len(batch.Events) > 0 {
-		// #nosec G115 -- len is non-negative and every supported Go int value
-		// is exactly representable as uint64.
-		if uint64(len(batch.Events)) > math.MaxUint32 {
+
+		eventCount, conversionErr := safecast.Conv[uint32](len(batch.Events))
+		if conversionErr != nil {
 			return nil, nil, time.Time{}, errors.New("store ClickHouse batch: source event count exceeds uint32")
 		}
-		// #nosec G115 -- the explicit math.MaxUint32 check above proves the conversion safe.
-		batch.OriginalEventCount = uint32(len(batch.Events))
+		batch.OriginalEventCount = eventCount
 	}
 	rows, err := s.rowsForBatch(ctx, batch, nil)
 	if err != nil {
@@ -1011,8 +1007,7 @@ func (s *Store) startReconciler() {
 	if s.closed || s.reconcileCancel != nil {
 		return
 	}
-	// #nosec G118 -- cancel is retained in reconcileCancel and invoked by Close.
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancelCause(context.Background())
 	s.reconcileCancel = cancel
 	s.reconcileWake = make(chan struct{}, 1)
 	s.reconcileDone = make(chan struct{})
@@ -1091,9 +1086,9 @@ func resultForReservation(reservation visibility.Reservation, duplicate bool) (i
 	if err != nil {
 		return ingest.StoreResult{}, fmt.Errorf("decode durable ClickHouse batch outcome: %w", err)
 	}
-	// #nosec G115 -- decodeReservationMetadata bounds rejection count by the
-	// uint32 source-event count before constructing metadata.
-	storedCount := metadata.OriginalEventCount - uint32(len(metadata.RejectedEvents))
+
+	storedCount := metadata.OriginalEventCount -
+		safecast.MustConv[uint32](len(metadata.RejectedEvents))
 	result := ingest.StoreResult{
 		CommittedAt:        reservation.CommittedAt,
 		OriginalEventCount: metadata.OriginalEventCount,
@@ -1243,8 +1238,7 @@ func (s *Store) visibilityFailure(operation string, err error) error {
 	if errors.Is(err, visibility.ErrConflict) {
 		return &ingest.DurableIdentityConflictError{Err: fmt.Errorf("%s: %w", operation, err)}
 	}
-	var quotaExceeded *ingestquota.ExceededError
-	if errors.As(err, &quotaExceeded) {
+	if quotaExceeded, ok := errors.AsType[*ingestquota.ExceededError](err); ok {
 		var throttleReason opensplunk.ThrottleReason
 		switch quotaExceeded.Scope.Kind {
 		case ingestquota.ScopeKindToken:
@@ -1363,10 +1357,10 @@ func (s *Store) Close() error {
 		done := s.reconcileDone
 		s.lifecycleMu.Unlock()
 		if lifecycleCancel != nil {
-			lifecycleCancel()
+			lifecycleCancel(context.Canceled)
 		}
 		if cancel != nil {
-			cancel()
+			cancel(context.Canceled)
 			<-done
 		}
 		s.operations.Wait()
@@ -1522,22 +1516,19 @@ func (s *Store) rowsForBatch(ctx context.Context, batch ingest.StoreBatch, prior
 			event.GetEventTime().AsTime().UTC(),
 			indexTime,
 			collectedAt,
-			// #nosec G115 -- event_time_source is range-checked above against
-			// the generated enum values, all of which fit in uint8.
-			uint8(event.GetEventTimeSource()),
+
+			safecast.MustConv[uint8](event.GetEventTimeSource()),
 			event.GetHost(),
 			event.GetSource(),
 			event.GetSourcetype(),
 			cloneOptionalString(event.Service),
-			// #nosec G115 -- severity is range-checked above against the
-			// generated enum values, all of which fit in uint8.
-			uint8(event.GetSeverity()),
+
+			safecast.MustConv[uint8](event.GetSeverity()),
 			cloneOptionalString(event.Level),
 			cloneOptionalString(event.Message),
 			slices.Clone(event.GetRaw()),
-			// #nosec G115 -- raw_encoding is checked above against its two
-			// generated enum values, both of which fit in uint8.
-			uint8(event.GetRawEncoding()),
+
+			safecast.MustConv[uint8](event.GetRawEncoding()),
 			cloneOptionalString(event.TraceId),
 			cloneOptionalString(event.SpanId),
 			fields,
@@ -2057,9 +2048,11 @@ func encodeReservationMetadata(rows [][]any, batch ingest.StoreBatch) ([]byte, e
 		binary.BigEndian.PutUint64(number[:], uint64(len(index)))
 		_, _ = metadata.Write(number[:])
 		_, _ = metadata.WriteString(index)
-		// #nosec G115 -- eventExpiration canonicalizes and rejects non-positive
-		// or unrepresentable retention durations before they enter this map.
-		binary.BigEndian.PutUint64(number[:], uint64(retentionByIndex[index]))
+
+		binary.BigEndian.PutUint64(
+			number[:],
+			safecast.MustConv[uint64](retentionByIndex[index]),
+		)
 		_, _ = metadata.Write(number[:])
 	}
 	binary.BigEndian.PutUint64(number[:], batch.BatchSequence)
@@ -2067,9 +2060,11 @@ func encodeReservationMetadata(rows [][]any, batch ingest.StoreBatch) ([]byte, e
 	var short [4]byte
 	binary.BigEndian.PutUint32(short[:], batch.OriginalEventCount)
 	_, _ = metadata.Write(short[:])
-	// #nosec G115 -- disposition validation above proves rejection count is no
-	// larger than the uint32 source-event count.
-	binary.BigEndian.PutUint32(short[:], uint32(len(batch.RejectedEvents)))
+
+	binary.BigEndian.PutUint32(
+		short[:],
+		safecast.MustConv[uint32](len(batch.RejectedEvents)),
+	)
 	_, _ = metadata.Write(short[:])
 	marshal := proto.MarshalOptions{Deterministic: true}
 	for index, rejection := range batch.RejectedEvents {
@@ -2123,17 +2118,18 @@ func decodeReservationMetadata(metadata []byte) (reservationMetadata, error) {
 	retentionByIndex := make(map[string]time.Duration, count)
 	for range count {
 		length, err := readUint64()
-		// #nosec G115 -- bytes.Reader.Len is always non-negative.
-		if err != nil || length == 0 || length > 255 || length > uint64(reader.Len()) {
+
+		if err != nil || length == 0 || length > 255 ||
+			length > safecast.MustConv[uint64](reader.Len()) {
 			return reservationMetadata{}, errors.New("visibility reservation metadata has an invalid index name")
 		}
-		name := make([]byte, int(length))
+		name := make([]byte, safecast.MustConv[int](length))
 		if _, err := io.ReadFull(reader, name); err != nil {
 			return reservationMetadata{}, errors.New("visibility reservation metadata is truncated")
 		}
 		duration, err := readUint64()
 		if err != nil || duration == 0 || duration > math.MaxInt64 ||
-			time.Duration(duration)%time.Millisecond != 0 {
+			time.Duration(safecast.MustConv[int64](duration))%time.Millisecond != 0 {
 			return reservationMetadata{}, errors.New("visibility reservation metadata has an invalid retention duration")
 		}
 		index := string(name)
@@ -2143,7 +2139,7 @@ func decodeReservationMetadata(metadata []byte) (reservationMetadata, error) {
 		if _, duplicate := retentionByIndex[index]; duplicate {
 			return reservationMetadata{}, errors.New("visibility reservation metadata contains a duplicate index")
 		}
-		retentionByIndex[index] = time.Duration(duration)
+		retentionByIndex[index] = time.Duration(safecast.MustConv[int64](duration))
 	}
 	batchSequence, err := readUint64()
 	if err != nil || batchSequence == 0 {
@@ -2161,19 +2157,22 @@ func decodeReservationMetadata(metadata []byte) (reservationMetadata, error) {
 		return reservationMetadata{}, errors.New("visibility reservation metadata has no rejection count")
 	}
 	rejectionCount := binary.BigEndian.Uint32(short[:])
-	// #nosec G115 -- bytes.Reader.Len is always non-negative.
-	if rejectionCount > originalEventCount || uint64(rejectionCount) > uint64(reader.Len())/9 {
+
+	if rejectionCount > originalEventCount ||
+		uint64(rejectionCount) > safecast.MustConv[uint64](reader.Len())/9 {
 		return reservationMetadata{}, errors.New("visibility reservation metadata has an invalid rejection count")
 	}
 	rejections := make([]*opensplunk.EventRejection, 0, rejectionCount)
 	seenRejections := make(map[uint32]struct{}, rejectionCount)
 	for index := range rejectionCount {
 		length, err := readUint64()
-		// #nosec G115 -- bytes.Reader.Len is always non-negative.
-		if err != nil || length == 0 || length > uint64(reader.Len()) || length > uint64(math.MaxInt) {
+
+		if err != nil || length == 0 ||
+			length > safecast.MustConv[uint64](reader.Len()) ||
+			length > safecast.MustConv[uint64](math.MaxInt) {
 			return reservationMetadata{}, errors.New("visibility reservation metadata has an invalid rejection payload")
 		}
-		encoded := make([]byte, int(length))
+		encoded := make([]byte, safecast.MustConv[int](length))
 		if _, err := io.ReadFull(reader, encoded); err != nil {
 			return reservationMetadata{}, errors.New("visibility reservation metadata is truncated")
 		}
@@ -2233,8 +2232,7 @@ func (s *Store) classifyError(err error) error {
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
-	var existing *ingest.TransientStoreError
-	if errors.As(err, &existing) {
+	if _, ok := errors.AsType[*ingest.TransientStoreError](err); ok {
 		return err
 	}
 	reason, transient := transientStoreReason(err)
@@ -2255,8 +2253,7 @@ func transientStoreReason(err error) (opensplunk.RetryBatchReason, bool) {
 		errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ETIMEDOUT) {
 		return opensplunk.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE, true
 	}
-	var networkError net.Error
-	if errors.As(err, &networkError) {
+	if _, ok := errors.AsType[net.Error](err); ok {
 		return opensplunk.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE, true
 	}
 	var operationError *clickhousedriver.OpError

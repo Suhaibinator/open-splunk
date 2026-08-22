@@ -3,6 +3,7 @@ package visibility
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -12,10 +13,12 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"fortio.org/safecast"
+	"modernc.org/sqlite"
+
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/indexname"
 	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
-	"modernc.org/sqlite"
 )
 
 const (
@@ -1320,20 +1323,22 @@ func readQuotaStates(
 		return nil, errors.New("read ingestion quota buckets: scope count is outside bounds")
 	}
 
-	var statement strings.Builder
-	statement.Grow(512 + len(charges)*8)
-	statement.WriteString(`
-		WITH requested(scope_kind, scope_id) AS (
-			VALUES `)
-	arguments := make([]any, 0, len(charges)*2+1)
+	requested := make([]struct {
+		Kind string `json:"kind"`
+		ID   string `json:"id"`
+	}, len(charges))
 	for index, charge := range charges {
-		if index != 0 {
-			statement.WriteString(", ")
-		}
-		statement.WriteString("(?, ?)")
-		arguments = append(arguments, string(charge.Scope.Kind), charge.Scope.Identity)
+		requested[index].Kind = string(charge.Scope.Kind)
+		requested[index].ID = charge.Scope.Identity
 	}
-	statement.WriteString(`
+	encodedRequested, err := json.Marshal(requested)
+	if err != nil {
+		return nil, fmt.Errorf("encode ingestion quota bucket request: %w", err)
+	}
+	rows, err := tx.QueryContext(ctx, `
+		WITH requested(scope_kind, scope_id) AS (
+			SELECT json_extract(value, '$.kind'), json_extract(value, '$.id')
+			FROM json_each(?)
 		)
 		SELECT bucket.scope_kind,
 		       bucket.scope_id,
@@ -1346,12 +1351,10 @@ func readQuotaStates(
 		JOIN ingest_quota_buckets AS bucket
 		  ON bucket.tenant_id = ?
 		 AND bucket.scope_kind = requested.scope_kind
-		 AND bucket.scope_id = requested.scope_id`)
-	arguments = append(arguments, charges[0].Scope.TenantID)
-
-	// #nosec G201 -- the dynamic portion contains only a bounded number of fixed
-	// placeholder tuples; every scope value remains a bound argument.
-	rows, err := tx.QueryContext(ctx, statement.String(), arguments...)
+		 AND bucket.scope_id = requested.scope_id`,
+		encodedRequested,
+		charges[0].Scope.TenantID,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("read ingestion quota buckets: %w", err)
 	}
@@ -1383,8 +1386,8 @@ func readQuotaStates(
 		}
 		states[key] = &ingestquota.State{
 			Limits: ingestquota.Limits{
-				MaxEventsPerSecond:            uint64(eventRate),
-				MaxUncompressedBytesPerSecond: uint64(byteRate),
+				MaxEventsPerSecond:            safecast.MustConv[uint64](eventRate),
+				MaxUncompressedBytesPerSecond: safecast.MustConv[uint64](byteRate),
 			},
 			NextEventAdmissionUnixNano: nextEvent,
 			NextByteAdmissionUnixNano:  nextByte,
@@ -1406,10 +1409,10 @@ func persistQuotaReservation(
 	if err := persistQuotaUpdates(ctx, tx, plan.updates); err != nil {
 		return err
 	}
-	// #nosec G115 -- Evaluate bounds admission events far below math.MaxInt64.
-	eventCount := int64(plan.eventCount)
-	// #nosec G115 -- Evaluate bounds admission bytes far below math.MaxInt64.
-	uncompressedByteCount := int64(plan.uncompressedByteCount)
+
+	eventCount := safecast.MustConv[int64](plan.eventCount)
+
+	uncompressedByteCount := safecast.MustConv[int64](plan.uncompressedByteCount)
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO ingest_quota_admissions (
 			batch_key, admitted_at_unix_micro, event_count, uncompressed_bytes
@@ -1436,9 +1439,7 @@ func persistQuotaUpdates(
 		return errors.New("persist ingestion quota buckets: update count is outside bounds")
 	}
 
-	var statement strings.Builder
-	statement.Grow(768 + len(updates)*30)
-	statement.WriteString(`
+	statement, err := tx.PrepareContext(ctx, `
 		INSERT INTO ingest_quota_buckets (
 			tenant_id, scope_kind, scope_id,
 			max_ingest_events_per_second,
@@ -1447,25 +1448,29 @@ func persistQuotaUpdates(
 			next_byte_admission_unix_nano,
 			updated_at_unix_micro,
 			token_owner_id
-		) VALUES `)
-	arguments := make([]any, 0, len(updates)*9)
-	for index, update := range updates {
-		if index != 0 {
-			statement.WriteString(", ")
-		}
-		statement.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?)")
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (tenant_id, scope_kind, scope_id) DO UPDATE SET
+			max_ingest_events_per_second = excluded.max_ingest_events_per_second,
+			max_ingest_uncompressed_bytes_per_second = excluded.max_ingest_uncompressed_bytes_per_second,
+			next_event_admission_unix_nano = excluded.next_event_admission_unix_nano,
+			next_byte_admission_unix_nano = excluded.next_byte_admission_unix_nano,
+			updated_at_unix_micro = excluded.updated_at_unix_micro,
+			token_owner_id = excluded.token_owner_id`)
+	if err != nil {
+		return fmt.Errorf("prepare ingestion quota bucket persistence: %w", err)
+	}
+	defer statement.Close()
+
+	for _, update := range updates {
 		var tokenOwnerID any
 		if update.Scope.Kind == ingestquota.ScopeKindToken {
 			tokenOwnerID = update.Scope.Identity
 		}
-		// #nosec G115 -- Evaluate rejects quota limits above the protocol hard
-		// maximum, which is far below math.MaxInt64.
-		maxEventsPerSecond := int64(update.State.Limits.MaxEventsPerSecond)
-		// #nosec G115 -- Evaluate rejects quota limits above the protocol hard
-		// maximum, which is far below math.MaxInt64.
-		maxBytesPerSecond := int64(update.State.Limits.MaxUncompressedBytesPerSecond)
-		arguments = append(
-			arguments,
+
+		maxEventsPerSecond := safecast.MustConv[int64](update.State.Limits.MaxEventsPerSecond)
+		maxBytesPerSecond := safecast.MustConv[int64](update.State.Limits.MaxUncompressedBytesPerSecond)
+		if _, err := statement.ExecContext(
+			ctx,
 			update.Scope.TenantID,
 			string(update.Scope.Kind),
 			update.Scope.Identity,
@@ -1475,20 +1480,9 @@ func persistQuotaUpdates(
 			update.State.NextByteAdmissionUnixNano,
 			update.State.UpdatedAtUnixMicro,
 			tokenOwnerID,
-		)
-	}
-	statement.WriteString(`
-		ON CONFLICT (tenant_id, scope_kind, scope_id) DO UPDATE SET
-			max_ingest_events_per_second = excluded.max_ingest_events_per_second,
-			max_ingest_uncompressed_bytes_per_second = excluded.max_ingest_uncompressed_bytes_per_second,
-			next_event_admission_unix_nano = excluded.next_event_admission_unix_nano,
-			next_byte_admission_unix_nano = excluded.next_byte_admission_unix_nano,
-			updated_at_unix_micro = excluded.updated_at_unix_micro,
-			token_owner_id = excluded.token_owner_id`)
-	// #nosec G201 -- the dynamic portion contains only a bounded number of fixed
-	// placeholder tuples; every bucket value remains a bound argument.
-	if _, err := tx.ExecContext(ctx, statement.String(), arguments...); err != nil {
-		return fmt.Errorf("persist ingestion quota buckets: %w", err)
+		); err != nil {
+			return fmt.Errorf("persist ingestion quota bucket: %w", err)
+		}
 	}
 	return nil
 }
@@ -1498,9 +1492,8 @@ func ensurePendingCapacity(ctx context.Context, tx *sql.Tx, additionalBytes int)
 	if err != nil {
 		return fmt.Errorf("read pending visibility capacity: %w", err)
 	}
-	// #nosec G115 -- readPendingUsage bounds the unsigned value by the
-	// 256 MiB pending-outbox limit before returning it.
-	totalBytes := int64(usage.OutboxBytes)
+
+	totalBytes := safecast.MustConv[int64](usage.OutboxBytes)
 	if pendingCapacityExceeded(
 		int64(usage.Reservations),
 		totalBytes,

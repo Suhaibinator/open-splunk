@@ -5,16 +5,16 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
-	"fmt"
 	"reflect"
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/proto"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
-	"google.golang.org/protobuf/encoding/protowire"
-	"google.golang.org/protobuf/proto"
 )
 
 func TestWriterDisablesActiveOpaqueFuturePublicationWithoutReinterpretingIt(t *testing.T) {
@@ -645,22 +645,37 @@ func assertWriterOpaqueOnlyCurrentProjection(
 	currentVersion int64,
 ) {
 	t.Helper()
-	for _, table := range []string{
-		"knowledge_object_list_projections",
-		"knowledge_object_list_projection_seals",
-		"knowledge_object_list_order_keys",
+	for _, authority := range []struct {
+		name      string
+		statement string
+	}{
+		{
+			name: "knowledge_object_list_projections",
+			statement: `SELECT count(*), coalesce(sum(CASE WHEN object_version = ? THEN 1 ELSE 0 END), 0)
+				FROM knowledge_object_list_projections WHERE tenant_id = ? AND knowledge_object_id = ?`,
+		},
+		{
+			name: "knowledge_object_list_projection_seals",
+			statement: `SELECT count(*), coalesce(sum(CASE WHEN object_version = ? THEN 1 ELSE 0 END), 0)
+				FROM knowledge_object_list_projection_seals WHERE tenant_id = ? AND knowledge_object_id = ?`,
+		},
+		{
+			name: "knowledge_object_list_order_keys",
+			statement: `SELECT count(*), coalesce(sum(CASE WHEN object_version = ? THEN 1 ELSE 0 END), 0)
+				FROM knowledge_object_list_order_keys WHERE tenant_id = ? AND knowledge_object_id = ?`,
+		},
 	} {
 		var count, current int64
-		query := fmt.Sprintf(`SELECT count(*), coalesce(sum(CASE WHEN object_version = ? THEN 1 ELSE 0 END), 0)
-			FROM %s WHERE tenant_id = ? AND knowledge_object_id = ?`, table) // #nosec G201 -- fixed test constants.
-		if err := database.SQLDB().QueryRowContext(t.Context(), query, currentVersion, testTenant, objectID).Scan(
+		if err := database.SQLDB().QueryRowContext(
+			t.Context(), authority.statement, currentVersion, testTenant, objectID,
+		).Scan(
 			&count,
 			&current,
 		); err != nil {
-			t.Fatalf("read opaque current authority %s: %v", table, err)
+			t.Fatalf("read opaque current authority %s: %v", authority.name, err)
 		}
 		if count != 1 || current != 1 {
-			t.Fatalf("opaque current authority %s = %d/%d, want exactly v%d", table, count, current, currentVersion)
+			t.Fatalf("opaque current authority %s = %d/%d, want exactly v%d", authority.name, count, current, currentVersion)
 		}
 	}
 	var selectors, currentSelectors int64

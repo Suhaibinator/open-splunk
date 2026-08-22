@@ -75,7 +75,7 @@ func (fake *fakeAdmissionStager) Stage(
 	result := ingest.StageResult{
 		VisibilitySequence: 11,
 		State:              ingest.StoredBatchPending,
-		AcceptedEvents:     uint32(len(request.Events)), // #nosec G115 -- HEC event count is bounded.
+		AcceptedEvents:     uint32(len(request.Events)),
 		UncompressedBytes:  testAdmissionBytes(request.Events),
 		HECRequestSequence: 7,
 	}
@@ -165,11 +165,10 @@ type handlerHarness struct {
 }
 
 type recordingHandler struct {
-	mu       sync.Mutex
-	calls    int
-	method   string
-	path     string
-	response string
+	mu     sync.Mutex
+	calls  int
+	method string
+	path   string
 }
 
 func (handler *recordingHandler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
@@ -177,11 +176,10 @@ func (handler *recordingHandler) ServeHTTP(response http.ResponseWriter, request
 	handler.calls++
 	handler.method = request.Method
 	handler.path = request.URL.Path
-	body := handler.response
 	handler.mu.Unlock()
 	response.Header().Set("X-Next-Handler", "true")
 	response.WriteHeader(299)
-	_, _ = io.WriteString(response, body) // #nosec G705 -- test handler deliberately echoes configured fixture data.
+	_, _ = io.WriteString(response, "delegated")
 }
 
 func (handler *recordingHandler) snapshot() (int, string, string) {
@@ -198,7 +196,7 @@ func newHandlerHarness(t *testing.T, configure func(*Config, *handlerHarness)) *
 		acks:    &fakeAcknowledgmentReader{},
 		health:  &fakeHealthChecker{snapshot: HealthSnapshot{QueueAvailable: true, AcknowledgmentAvailable: true}},
 		metrics: NewMetrics(),
-		next:    &recordingHandler{response: "delegated"},
+		next:    &recordingHandler{},
 	}
 	config := Config{
 		Next:                              harness.next,
@@ -1159,7 +1157,7 @@ func TestHandlerMetricsAreBoundedAggregateAndContainNoRequestIdentity(t *testing
 			return ingest.StageResult{
 				VisibilitySequence: 1,
 				State:              ingest.StoredBatchPending,
-				AcceptedEvents:     uint32(len(request.Events)), // #nosec G115 -- HEC events are bounded.
+				AcceptedEvents:     uint32(len(request.Events)),
 				UncompressedBytes:  testAdmissionBytes(request.Events),
 				HECRequestSequence: 1,
 			}, nil

@@ -9,8 +9,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/Suhaibinator/open-splunk/internal/control"
 	"gorm.io/gorm"
+
+	"github.com/Suhaibinator/open-splunk/internal/control"
 )
 
 func TestWriterActiveCounterPreflightsUseBoundedTenantPrefixes(t *testing.T) {
@@ -475,23 +476,45 @@ func insertWriterActiveCounterRange(
 	if start < 0 || end <= start {
 		t.Fatalf("invalid active counter range [%d,%d)", start, end)
 	}
-	spec := activeCounterSpec(kind)
-	columns := "tenant_id, " + spec.firstKeyColumn
-	values := "?, " + writerHealthCounterKeyExpression(kind, false)
-	if spec.secondKeyColumn != "" {
-		columns += ", " + spec.secondKeyColumn
-		values += ", " + writerHealthCounterKeyExpression(kind, true)
-	}
-	columns += ", " + spec.countColumn
-	values += ", 0"
-	withWriterHealthCorruptionConnection(t, database, func(connection *sql.Conn) {
-		// #nosec G202 -- table, columns, and expressions come only from the closed activeCounterPreflightKind mapping.
-		if _, err := connection.ExecContext(context.Background(), `WITH RECURSIVE identities(n) AS (
-			SELECT ?
-			UNION ALL SELECT n + 1 FROM identities WHERE n + 1 < ?
+	var statement string
+	switch kind {
+	case activeAppCounterPreflight:
+		statement = `WITH RECURSIVE identities(n) AS (
+			SELECT ? UNION ALL SELECT n + 1 FROM identities WHERE n + 1 < ?
 		)
-		INSERT INTO `+spec.table+` (`+columns+`)
-		SELECT `+values+` FROM identities`, start, end, testTenant); err != nil {
+		INSERT INTO knowledge_app_active_counters (tenant_id, app_id, active_object_count)
+		SELECT ?, printf('app_%021dA', n), 0 FROM identities`
+	case activeOwnerCounterPreflight:
+		statement = `WITH RECURSIVE identities(n) AS (
+			SELECT ? UNION ALL SELECT n + 1 FROM identities WHERE n + 1 < ?
+		)
+		INSERT INTO knowledge_owner_active_counters (tenant_id, owner_id, active_private_object_count)
+		SELECT ?, printf('owner-health-%05d', n), 0 FROM identities`
+	case activeTypeCounterPreflight:
+		statement = `WITH RECURSIVE identities(n) AS (
+			SELECT ? UNION ALL SELECT n + 1 FROM identities WHERE n + 1 < ?
+		)
+		INSERT INTO knowledge_type_active_counters (tenant_id, object_type, active_object_count)
+		SELECT ?, CASE n
+			WHEN 0 THEN 'field_extraction'
+			WHEN 1 THEN 'field_alias'
+			WHEN 2 THEN 'calculated_field'
+			ELSE 'future_type' END, 0 FROM identities`
+	case activeAppTypeCounterPreflight:
+		statement = `WITH RECURSIVE identities(n) AS (
+			SELECT ? UNION ALL SELECT n + 1 FROM identities WHERE n + 1 < ?
+		)
+		INSERT INTO knowledge_app_type_active_counters
+			(tenant_id, app_id, object_type, active_object_count)
+		SELECT ?, printf('app_%021dA', n / 3), CASE n % 3
+			WHEN 0 THEN 'field_extraction'
+			WHEN 1 THEN 'field_alias'
+			ELSE 'calculated_field' END, 0 FROM identities`
+	default:
+		t.Fatalf("unknown active counter kind %d", kind)
+	}
+	withWriterHealthCorruptionConnection(t, database, func(connection *sql.Conn) {
+		if _, err := connection.ExecContext(t.Context(), statement, start, end, testTenant); err != nil {
 			t.Fatalf("insert active %d counter range [%d,%d): %v", kind, start, end, err)
 		}
 	})
@@ -505,53 +528,34 @@ func insertWriterActiveCounterRecord(
 	counter int64,
 ) {
 	t.Helper()
-	spec := activeCounterSpec(kind)
-	columns := "tenant_id, " + spec.firstKeyColumn
-	arguments := []any{testTenant, firstKey}
-	placeholders := "?, ?"
-	if spec.secondKeyColumn != "" {
-		columns += ", " + spec.secondKeyColumn
-		arguments = append(arguments, secondKey)
-		placeholders += ", ?"
+	var statement string
+	arguments := []any{testTenant, firstKey, counter}
+	switch kind {
+	case activeAppCounterPreflight:
+		statement = `INSERT INTO knowledge_app_active_counters
+			(tenant_id, app_id, active_object_count) VALUES (?, ?, ?)`
+	case activeOwnerCounterPreflight:
+		statement = `INSERT INTO knowledge_owner_active_counters
+			(tenant_id, owner_id, active_private_object_count) VALUES (?, ?, ?)`
+	case activeTypeCounterPreflight:
+		statement = `INSERT INTO knowledge_type_active_counters
+			(tenant_id, object_type, active_object_count) VALUES (?, ?, ?)`
+	case activeAppTypeCounterPreflight:
+		statement = `INSERT INTO knowledge_app_type_active_counters
+			(tenant_id, app_id, object_type, active_object_count) VALUES (?, ?, ?, ?)`
+		arguments = []any{testTenant, firstKey, secondKey, counter}
+	default:
+		t.Fatalf("unknown active counter kind %d", kind)
 	}
-	columns += ", " + spec.countColumn
-	arguments = append(arguments, counter)
-	placeholders += ", ?"
 	withWriterHealthCorruptionConnection(t, database, func(connection *sql.Conn) {
-		// #nosec G202 -- table and column names come only from the closed activeCounterPreflightKind mapping.
 		if _, err := connection.ExecContext(
-			context.Background(),
-			"INSERT INTO "+spec.table+" ("+columns+") VALUES ("+placeholders+")",
+			t.Context(),
+			statement,
 			arguments...,
 		); err != nil {
 			t.Fatalf("insert invalid active %d counter: %v", kind, err)
 		}
 	})
-}
-
-func writerHealthCounterKeyExpression(kind activeCounterPreflightKind, second bool) string {
-	if second {
-		return `CASE n % 3
-			WHEN 0 THEN 'field_extraction'
-			WHEN 1 THEN 'field_alias'
-			ELSE 'calculated_field' END`
-	}
-	switch kind {
-	case activeAppCounterPreflight:
-		return `printf('app_%021dA', n)`
-	case activeOwnerCounterPreflight:
-		return `printf('owner-health-%05d', n)`
-	case activeTypeCounterPreflight:
-		return `CASE n
-			WHEN 0 THEN 'field_extraction'
-			WHEN 1 THEN 'field_alias'
-			WHEN 2 THEN 'calculated_field'
-			ELSE 'future_type' END`
-	case activeAppTypeCounterPreflight:
-		return `printf('app_%021dA', n / 3)`
-	default:
-		panic("unknown writer health counter kind")
-	}
 }
 
 func writerHealthCanonicalAppID() string {

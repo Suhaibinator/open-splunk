@@ -919,12 +919,10 @@ func testSuggestion(
 	replacement spl.Range,
 ) spl.Suggestion {
 	return spl.Suggestion{
-		SuggestionCandidate: spl.SuggestionCandidate{
-			Kind:      kind,
-			Label:     label,
-			Insertion: insertion,
-			Detail:    detail,
-		},
+		Kind:        kind,
+		Label:       label,
+		Insertion:   insertion,
+		Detail:      detail,
 		Replacement: replacement,
 		Relevance:   0.75,
 	}

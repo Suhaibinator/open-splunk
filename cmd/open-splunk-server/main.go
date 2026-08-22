@@ -16,7 +16,9 @@ import (
 	"syscall"
 	"time"
 
+	"fortio.org/safecast"
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
+
 	opensplunkroot "github.com/Suhaibinator/open-splunk"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
@@ -250,8 +252,8 @@ func runWithOptions(config options) error {
 		controlDB,
 		config.masterKeyPath,
 		config.tenantID,
-		// #nosec G115 -- normalizeRuntimeOptions bounds this value to [1, 100000].
-		uint32(config.searchAttemptAuditMaximumRetainedAttempts),
+
+		safecast.MustConv[uint32](config.searchAttemptAuditMaximumRetainedAttempts),
 	)
 	if err != nil {
 		return err
@@ -1216,8 +1218,7 @@ type clickHouseConnectionOptions struct {
 	deletion  *clickhousedriver.Options
 }
 
-// #nosec G101 -- this is an environment-variable name, not a credential.
-const clickHouseMigrationPasswordEnvironment = "OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD"
+const clickHouseMigrationEnvironmentVariable = "OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD"
 
 func registerClickHouseSkipMigrationsFlag(
 	flags *flag.FlagSet,
@@ -1276,7 +1277,7 @@ func configureClickHouseConnectionOptions(
 	tlsProfile *clickHouseClientTLSProfile,
 ) (clickHouseConnectionOptions, error) {
 	result, configureErr := newClickHouseConnectionOptions(config, tlsProfile)
-	unsetErr := os.Unsetenv(clickHouseMigrationPasswordEnvironment)
+	unsetErr := os.Unsetenv(clickHouseMigrationEnvironmentVariable)
 	if unsetErr != nil {
 		unsetErr = fmt.Errorf(
 			"discard ClickHouse migration password from process environment: %w",
@@ -1328,10 +1329,10 @@ func newClickHouseConnectionOptions(
 				"configure ClickHouse: -clickhouse-migration-password-file must not be set with -clickhouse-skip-migrations",
 			)
 		}
-		if os.Getenv(clickHouseMigrationPasswordEnvironment) != "" {
+		if os.Getenv(clickHouseMigrationEnvironmentVariable) != "" {
 			return clickHouseConnectionOptions{}, fmt.Errorf(
 				"configure ClickHouse: %s must not be set with -clickhouse-skip-migrations",
-				clickHouseMigrationPasswordEnvironment,
+				clickHouseMigrationEnvironmentVariable,
 			)
 		}
 		if runtimeUsername == "" || deletionUsername == "" {
@@ -1388,7 +1389,7 @@ func newClickHouseConnectionOptions(
 	if !config.clickhouseSkipMigrations {
 		migrationPassword, err = loadClickHouseCredential(
 			config.clickhouseMigrationPasswordFile,
-			clickHouseMigrationPasswordEnvironment,
+			clickHouseMigrationEnvironmentVariable,
 			"migration",
 		)
 		if err != nil {

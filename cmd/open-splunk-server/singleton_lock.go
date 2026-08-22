@@ -8,8 +8,9 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/Suhaibinator/open-splunk/internal/privatefs"
 	"golang.org/x/sys/unix"
+
+	"github.com/Suhaibinator/open-splunk/internal/privatefs"
 )
 
 const (
@@ -128,7 +129,7 @@ func acquireFileLock(path string) (*os.File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open server lock %s: %w", path, err)
 	}
-	// #nosec G115 -- unix.Open succeeded, so fd is a non-negative native file descriptor.
+
 	file := os.NewFile(uintptr(fd), path)
 	if file == nil {
 		_ = unix.Close(fd)
@@ -181,7 +182,7 @@ func (lock *serverLock) Close() error {
 	}
 	var result error
 	for _, file := range slices.Backward(lock.files) {
-		// #nosec G115 -- os.File descriptors originate as native int descriptors on Unix.
+
 		unlockErr := unix.Flock(int(file.Fd()), unix.LOCK_UN)
 		closeErr := file.Close()
 		if unlockErr != nil {

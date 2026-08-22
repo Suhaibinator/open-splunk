@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -14,6 +15,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"fortio.org/safecast"
 
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
@@ -347,7 +350,7 @@ type Manager struct {
 	validationGate           chan struct{}
 
 	ctx               context.Context
-	cancel            context.CancelFunc
+	cancel            context.CancelCauseFunc
 	queueHead         *jobEntry
 	queueTail         *jobEntry
 	queueCount        int
@@ -573,8 +576,7 @@ func New(config Config) (*Manager, error) {
 		listCursorEpoch,
 	)
 
-	// #nosec G118 -- cancel is retained on Manager and invoked by Close.
-	managerContext, cancel := context.WithCancel(context.Background())
+	managerContext, cancel := context.WithCancelCause(context.Background())
 	manager := &Manager{
 		jobs:                     make(map[string]*jobEntry),
 		jobsByScope:              make(map[AccessScope]*jobListIndexNode),
@@ -1422,13 +1424,13 @@ func (manager *Manager) resultsEntry(id string, entry *jobEntry, limit int, curs
 		}
 		offset = cursor.Offset
 	}
-	// #nosec G115 -- a slice length is non-negative and exactly representable as uint64.
-	total := uint64(len(entry.rows))
+
+	total := safecast.MustConv[uint64](len(entry.rows))
 	if offset > total {
 		return ResultPage{}, ErrInvalidCursor
 	}
-	// #nosec G115 -- offset was just proven no larger than total, which came from len(entry.rows).
-	start := int(offset)
+
+	start := safecast.MustConv[int](offset)
 	end := boundedResultRowEnd(entry.rows, start, limit, entry.schemaBytes, manager.maxPageBytes)
 	if end == start && end < len(entry.rows) {
 		return ResultPage{}, ErrByteLimit
@@ -1440,8 +1442,8 @@ func (manager *Manager) resultsEntry(id string, entry *jobEntry, limit int, curs
 		Complete:  end == len(entry.rows),
 	}
 	if end < len(entry.rows) {
-		// #nosec G115 -- end is a non-negative index into entry.rows.
-		nextOffset := uint64(end)
+
+		nextOffset := safecast.MustConv[uint64](end)
 		cursor, err := encodeCursor(manager.cursorKey, manager.cursorScope, id, entry.resultGeneration, nextOffset)
 		if err != nil {
 			return ResultPage{}, errors.New("encode search result cursor")
@@ -1588,7 +1590,7 @@ func (manager *Manager) Close() error {
 		manager.queueCond.Broadcast()
 		manager.mu.Unlock()
 
-		manager.cancel()
+		manager.cancel(ErrClosed)
 		manager.operationWG.Wait()
 		now := manager.nowUTC()
 		journalContext, cancelJournal := context.WithTimeout(context.Background(), manager.journalTimeout)
@@ -1797,8 +1799,7 @@ func (manager *Manager) run(entry *jobEntry) {
 		scope,
 	)
 	if err != nil {
-		var diagnostic *plan.Diagnostic
-		if errors.As(err, &diagnostic) {
+		if _, ok := errors.AsType[*plan.Diagnostic](err); ok {
 			manager.failOrCancel(entry, planningFailure(err), manager.nowUTC())
 		} else {
 			manager.executionFailed(entry, err)
@@ -2525,16 +2526,16 @@ func (sink *resultSink) planRowGrowthLocked(
 	if len(rows) == cap(rows) {
 		newCapacity64 := uint64(1)
 		if cap(rows) > 0 {
-			// #nosec G115 -- a slice capacity is non-negative and exactly representable as uint64.
-			newCapacity64 = uint64(cap(rows)) * 2
+
+			newCapacity64 = safecast.MustConv[uint64](cap(rows)) * 2
 		}
 		if newCapacity64 > sink.manager.maxRows {
 			newCapacity64 = sink.manager.maxRows
 		}
-		// #nosec G115 -- manager construction rejects maxRows values greater than MaxInt.
-		newCapacity = int(newCapacity64)
-		// #nosec G115 -- newCapacity is never smaller than the current slice capacity.
-		capacityGrowth := uint64(newCapacity - cap(rows))
+
+		newCapacity = safecast.MustConv[int](newCapacity64)
+
+		capacityGrowth := safecast.MustConv[uint64](newCapacity - cap(rows))
 		capacityBytes, multiplyErr := checkedMultiply(capacityGrowth, retainedResultRowBase)
 		if multiplyErr != nil {
 			return 0, 0, 0, ErrByteLimit
@@ -2574,8 +2575,8 @@ func (sink *resultSink) AddRow(values []Value) error {
 	// Validate an overflow row before recording truncation. A malformed row is
 	// not evidence that another valid result existed and must remain a failed
 	// executor result, even though its values will not be retained.
-	// #nosec G115 -- a slice length is non-negative and exactly representable as uint64.
-	if uint64(len(entry.rows)) >= sink.manager.maxRows {
+
+	if safecast.MustConv[uint64](len(entry.rows)) >= sink.manager.maxRows {
 		limitErr := &retainedRowLimitError{}
 		sink.truncationErr = limitErr
 		return sink.rememberLocked(limitErr)
@@ -2597,8 +2598,8 @@ func (sink *resultSink) AddRow(values []Value) error {
 		entry.rows = grown
 	}
 	cloned := cloneValues(values)
-	// #nosec G115 -- a slice length is non-negative and exactly representable as uint64.
-	ordinal := uint64(len(entry.rows))
+
+	ordinal := safecast.MustConv[uint64](len(entry.rows))
 	entry.rows = append(entry.rows, ResultRow{Ordinal: ordinal, Values: cloned, retainedBytes: rowPageBytes})
 	entry.job.RowCount++
 	entry.job.ResultBytes = nextBytes
@@ -2793,9 +2794,10 @@ func errorWrapsOnlyDepth(err, target error, depth int) bool {
 	}
 	// Compare the current node exactly: recursively inspecting each unwrap branch
 	// is what prevents a joined non-target failure from being mistaken for a
-	// pure propagated sink boundary.
-	//nolint:errorlint
-	if err == target {
+	// pure propagated sink boundary. Reflection preserves interface equality for
+	// comparable error values without treating wrapped errors as equivalent, and
+	// safely rejects unusual non-comparable error implementations.
+	if exactErrorMatch(err, target) {
 		return true
 	}
 	if joined, ok := err.(interface{ Unwrap() []error }); ok {
@@ -2817,6 +2819,16 @@ func errorWrapsOnlyDepth(err, target error, depth int) bool {
 		}
 	}
 	return false
+}
+
+func exactErrorMatch(left, right error) bool {
+	leftValue := reflect.ValueOf(left)
+	rightValue := reflect.ValueOf(right)
+	return leftValue.IsValid() &&
+		rightValue.IsValid() &&
+		leftValue.Type() == rightValue.Type() &&
+		leftValue.Comparable() &&
+		leftValue.Equal(rightValue)
 }
 
 func validateSchema(schema Schema, expected []string) error {

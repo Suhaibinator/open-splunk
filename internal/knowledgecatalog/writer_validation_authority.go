@@ -8,11 +8,13 @@ import (
 	"slices"
 	"strings"
 
+	"fortio.org/safecast"
+	"gorm.io/gorm"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgevalidation"
-	"gorm.io/gorm"
 )
 
 func (writer *Writer) validateFixedSnapshot(
@@ -249,8 +251,7 @@ func (writer *Writer) validateActiveCandidate(
 	if err != nil {
 		return knowledgevalidation.Result{}, 0, err
 	}
-	// #nosec G115 -- the publication inventory validates its catalog revision as nonnegative.
-	catalogRevision := uint64(read.catalog.revision)
+	catalogRevision := safecast.MustConv[uint64](read.catalog.revision)
 	decision, err := validatePublicationActiveCandidate(ctx, read.inventory)
 	if err != nil {
 		return knowledgevalidation.Result{}, 0, err
@@ -498,8 +499,7 @@ func projectAuthorizedValidationDependencies(
 		result[index] = &opensplunk.KnowledgeValidationDependency{
 			Target: &opensplunk.KnowledgeManagementObjectVersionIdentity{
 				KnowledgeObjectId: strings.Clone(record.KnowledgeObjectID),
-				// #nosec G115 -- current dependency records are validated as positive above.
-				Version: uint64(record.CurrentVersion),
+				Version:           safecast.MustConv[uint64](record.CurrentVersion),
 			},
 			Role: opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
 		}
@@ -509,5 +509,5 @@ func projectAuthorizedValidationDependencies(
 	}) || len(result) != len(dependencies) {
 		return nil, false, ErrCorrupt
 	}
-	return result[:len(result):len(result)], true, nil
+	return slices.Clip(result), true, nil
 }

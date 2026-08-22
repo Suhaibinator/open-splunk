@@ -9,6 +9,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"fortio.org/safecast"
+
 	"github.com/Suhaibinator/open-splunk/internal/lookupasset"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
@@ -488,7 +490,7 @@ func (resolution LookupResolution) RowCount() uint64 {
 }
 
 func (resolution LookupResolution) ColumnCount() uint32 {
-	return uint32(len(resolution.headers)) // #nosec G115 -- validated at 64 columns.
+	return safecast.MustConv[uint32](len(resolution.headers))
 }
 
 func (resolution LookupResolution) clone() LookupResolution {
@@ -894,8 +896,8 @@ func lookupResolutionEqual(left, right LookupResolution) bool {
 func lookupResolutionRowCount(resolution LookupResolution) int {
 	if resolution.asset != nil {
 		// Immutable lookup assets are capped at lookupasset.MaximumRows.
-		// #nosec G115 -- the validated cap fits in int on every supported target.
-		return int(resolution.asset.RowCount())
+
+		return safecast.MustConv[int](resolution.asset.RowCount())
 	}
 	if resolution.columns != nil {
 		if len(resolution.columns) == 0 {

@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 
+	"fortio.org/safecast"
+
 	"github.com/Suhaibinator/open-splunk/internal/collectorlimits"
 	"github.com/Suhaibinator/open-splunk/internal/sha256hex"
 )
@@ -71,8 +73,8 @@ func computeFingerprintWithLength(f *os.File, fingerprintBytes int) (string, uin
 		return "", 0, err
 	}
 	sum := sha256.Sum256(buf[:n])
-	// #nosec G115 -- n cannot exceed the 1 MiB absolute buffer limit.
-	return hex.EncodeToString(sum[:]), uint32(n), nil
+
+	return hex.EncodeToString(sum[:]), safecast.MustConv[uint32](n), nil
 }
 
 // computeFingerprintRange hashes exactly length bytes beginning at offset. A

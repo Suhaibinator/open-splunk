@@ -169,9 +169,8 @@ export async function listServerSearchJobs(
   let totalSizeExact = false;
 
   try {
-    for (let pageIndex = 0; pageIndex < maximumPages; pageIndex += 1) {
-      // Opaque cursors make each request depend on the preceding response.
-      // oxlint-disable-next-line no-await-in-loop
+    const collectPage = async (pageIndex: number): Promise<void> => {
+      if (pageIndex >= maximumPages) return;
       const response = await client.search.list({
         page: {
           pageSize,
@@ -210,8 +209,9 @@ export async function listServerSearchJobs(
         previousJob = job;
       }
       pageToken = recordNextPageToken(seenTokens, response.page.nextPageToken, "Search jobs") ?? undefined;
-      if (pageToken === undefined) break;
-    }
+      if (pageToken !== undefined) await collectPage(pageIndex + 1);
+    };
+    await collectPage(0);
     return {
       status: "available",
       value: {

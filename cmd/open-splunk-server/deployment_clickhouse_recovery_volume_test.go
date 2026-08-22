@@ -696,8 +696,8 @@ func (directory *fakeClickHouseRecoveryVolumeDirectory) Chown(uid, gid int) erro
 	if directory.chownErr != nil {
 		return directory.chownErr
 	}
-	directory.metadata.uid = uint32(uid) //nolint:gosec // Fixed production IDs are bounded.
-	directory.metadata.gid = uint32(gid) //nolint:gosec // Fixed production IDs are bounded.
+	directory.metadata.uid = uint32(uid)
+	directory.metadata.gid = uint32(gid)
 	return nil
 }
 

@@ -151,21 +151,6 @@ func TestCreateSearchHistoryRerunRejectsRequestOptionsBeforeLookup(t *testing.T)
 			wantMessage: "client request idempotency is not supported",
 		},
 		{
-			name: "job preview",
-			mutate: func(request *opensplunk.CreateSearchJobRequest) {
-				request.Options = &opensplunk.SearchJobOptions{EnablePreview: true}
-			},
-			wantMessage: "job-level preview options are not supported",
-		},
-		{
-			name: "job preview row limit",
-			mutate: func(request *opensplunk.CreateSearchJobRequest) {
-				limit := uint32(1)
-				request.Options = &opensplunk.SearchJobOptions{PreviewRowLimit: &limit}
-			},
-			wantMessage: "job-level preview options are not supported",
-		},
-		{
 			name: "eager field discovery",
 			mutate: func(request *opensplunk.CreateSearchJobRequest) {
 				request.Options = &opensplunk.SearchJobOptions{EnableFieldDiscovery: true}
@@ -651,12 +636,10 @@ func TestCreateSearchHistoryRerunMapsIndexCatalogFailures(t *testing.T) {
 				), nil
 			}}
 			indexes := &historyRerunIndexCatalog{
-				fakeIndexCatalog: fakeIndexCatalog{
-					indexes: slices.Clone(
-						activeHistoryRerunIndexCatalog("main").indexes,
-					),
-					err: test.err,
-				},
+				indexes: slices.Clone(
+					activeHistoryRerunIndexCatalog("main").indexes,
+				),
+				err: test.err,
 			}
 			jobs := &fakeSearchJobs{createJob: completeJob("must-not-create")}
 			handler := newTestHandler(t, Config{

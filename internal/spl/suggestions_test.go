@@ -1263,8 +1263,8 @@ func BenchmarkAnalyzeSuggestionContextAuthoredMaximumScalarShape(b *testing.B) {
 	source, cursor := maximumScalarSuggestionFixture()
 	b.ReportAllocs()
 	b.SetBytes(int64(len(source)))
-	b.ResetTimer()
-	for range b.N {
+
+	for b.Loop() {
 		context, diagnostic := AnalyzeSuggestionContext(source, cursor)
 		if diagnostic != nil {
 			b.Fatalf("AnalyzeSuggestionContext(): %v", diagnostic)

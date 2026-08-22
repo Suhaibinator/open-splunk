@@ -58,6 +58,8 @@ interface ProtobufRouteContractFixture {
   routes: ProtobufRouteContractRecord[];
 }
 
+const runtimeMessageCodecs: Readonly<Record<string, unknown>> = { ...openSplunk };
+
 interface RuntimeMessageCodec {
   encode(message: unknown, writer?: BinaryWriter): BinaryWriter;
   decode(input: Uint8Array): unknown;
@@ -276,8 +278,7 @@ function registeredRoutePaths(value: unknown): string[] {
 }
 
 function runtimeMessageCodec(typeName: string): RuntimeMessageCodec {
-  // oxlint-disable-next-line import/namespace -- the shared route manifest names generated codecs dynamically.
-  const candidate = openSplunk[typeName as keyof typeof openSplunk] as unknown;
+  const candidate = runtimeMessageCodecs[typeName];
   assert.ok(candidate !== null && typeof candidate === "object", `${typeName} codec is missing`);
   const codec = candidate as Partial<RuntimeMessageCodec>;
   assert.equal(typeof codec.encode, "function", `${typeName}.encode is missing`);

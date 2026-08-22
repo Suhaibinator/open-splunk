@@ -12,14 +12,16 @@ import (
 	"strings"
 	"time"
 
+	"fortio.org/safecast"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
+	"gorm.io/gorm"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
-	"gorm.io/gorm"
 )
 
 type definitionAuthority struct {
@@ -358,9 +360,8 @@ func (writer *Writer) create(
 		return nil, err
 	}
 	result = &opensplunk.CreateKnowledgeObjectResponse{
-		KnowledgeObject: projected,
-		// #nosec G115 -- publishMutation returns a validated positive catalog revision.
-		TenantCatalogRevision:   uint64(revision),
+		KnowledgeObject:         projected,
+		TenantCatalogRevision:   safecast.MustConv[uint64](revision),
 		TenantCatalogStateToken: bytes.Clone(token),
 	}
 	reconciled, err := writer.commitMutation(ctx, tx, prepared, plan)
@@ -464,8 +465,7 @@ func (writer *Writer) update(
 	}
 	authorizedValue := authorizedObjectContext(current)
 	authorized = &authorizedValue
-	// #nosec G115 -- readAuthorizedMutationRegistry validates a positive current version.
-	if uint64(current.CurrentVersion) != request.GetExpectedVersion() {
+	if safecast.MustConv[uint64](current.CurrentVersion) != request.GetExpectedVersion() {
 		return nil, control.ErrVersionConflict
 	}
 	if current.State == StateQuarantined || current.State == StateDeleted {
@@ -597,8 +597,7 @@ func (writer *Writer) update(
 			return nil, writerError(ctx, "validate update publication transition", err)
 		}
 	}
-	// #nosec G115 -- the validated current version is positive and below its capacity ceiling.
-	if err := writer.callHook(ctx, writerHookEvent{Boundary: writerHookCapacityChecked, Route: mutationRouteUpdate, KnowledgeObjectID: current.KnowledgeObjectID, Version: uint64(current.CurrentVersion + 1)}); err != nil {
+	if err := writer.callHook(ctx, writerHookEvent{Boundary: writerHookCapacityChecked, Route: mutationRouteUpdate, KnowledgeObjectID: current.KnowledgeObjectID, Version: safecast.MustConv[uint64](current.CurrentVersion + 1)}); err != nil {
 		return nil, err
 	}
 	now, err := nextWriterTime(writer.clock(), current.UpdatedAtUnixMicro)
@@ -640,9 +639,8 @@ func (writer *Writer) update(
 		return nil, err
 	}
 	result = &opensplunk.UpdateKnowledgeObjectResponse{
-		KnowledgeObject: projected,
-		// #nosec G115 -- publishMutation returns a validated positive catalog revision.
-		TenantCatalogRevision:   uint64(revision),
+		KnowledgeObject:         projected,
+		TenantCatalogRevision:   safecast.MustConv[uint64](revision),
 		TenantCatalogStateToken: bytes.Clone(token),
 	}
 	reconciled, err := writer.commitMutation(ctx, tx, prepared, plan)
@@ -746,8 +744,7 @@ func (writer *Writer) setState(
 	}
 	authorizedValue := authorizedObjectContext(current)
 	authorized = &authorizedValue
-	// #nosec G115 -- readAuthorizedMutationRegistry validates a positive current version.
-	if uint64(current.CurrentVersion) != request.GetExpectedVersion() {
+	if safecast.MustConv[uint64](current.CurrentVersion) != request.GetExpectedVersion() {
 		return nil, control.ErrVersionConflict
 	}
 	enabling := request.GetState() == opensplunk.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE
@@ -856,8 +853,7 @@ func (writer *Writer) setState(
 			return nil, writerError(ctx, "validate disable publication transition", err)
 		}
 	}
-	// #nosec G115 -- the validated current version is positive and below its capacity ceiling.
-	if err := writer.callHook(ctx, writerHookEvent{Boundary: writerHookCapacityChecked, Route: mutationRouteSetState, KnowledgeObjectID: current.KnowledgeObjectID, Version: uint64(current.CurrentVersion + 1)}); err != nil {
+	if err := writer.callHook(ctx, writerHookEvent{Boundary: writerHookCapacityChecked, Route: mutationRouteSetState, KnowledgeObjectID: current.KnowledgeObjectID, Version: safecast.MustConv[uint64](current.CurrentVersion + 1)}); err != nil {
 		return nil, err
 	}
 	now, err := nextWriterTime(writer.clock(), current.UpdatedAtUnixMicro)
@@ -903,9 +899,8 @@ func (writer *Writer) setState(
 		return nil, err
 	}
 	result = &opensplunk.SetKnowledgeObjectStateResponse{
-		KnowledgeObject: projected,
-		// #nosec G115 -- publishMutation returns a validated positive catalog revision.
-		TenantCatalogRevision:   uint64(revision),
+		KnowledgeObject:         projected,
+		TenantCatalogRevision:   safecast.MustConv[uint64](revision),
 		TenantCatalogStateToken: bytes.Clone(token),
 	}
 	reconciled, err := writer.commitMutation(ctx, tx, prepared, plan)
@@ -1009,8 +1004,7 @@ func (writer *Writer) delete(
 	}
 	authorizedValue := authorizedObjectContext(current)
 	authorized = &authorizedValue
-	// #nosec G115 -- readAuthorizedMutationRegistry validates a positive current version.
-	if uint64(current.CurrentVersion) != request.GetExpectedVersion() {
+	if safecast.MustConv[uint64](current.CurrentVersion) != request.GetExpectedVersion() {
 		return nil, control.ErrVersionConflict
 	}
 	if current.State == StateQuarantined || current.State == StateDeleted {
@@ -1037,8 +1031,7 @@ func (writer *Writer) delete(
 	if err != nil {
 		return nil, err
 	}
-	// #nosec G115 -- the validated current version is positive and below its capacity ceiling.
-	if err := writer.callHook(ctx, writerHookEvent{Boundary: writerHookCapacityChecked, Route: mutationRouteDelete, KnowledgeObjectID: current.KnowledgeObjectID, Version: uint64(current.CurrentVersion + 1)}); err != nil {
+	if err := writer.callHook(ctx, writerHookEvent{Boundary: writerHookCapacityChecked, Route: mutationRouteDelete, KnowledgeObjectID: current.KnowledgeObjectID, Version: safecast.MustConv[uint64](current.CurrentVersion + 1)}); err != nil {
 		return nil, err
 	}
 	now, err := nextWriterTime(writer.clock(), current.UpdatedAtUnixMicro)
@@ -1081,11 +1074,9 @@ func (writer *Writer) delete(
 		return nil, err
 	}
 	result = &opensplunk.DeleteKnowledgeObjectResponse{
-		KnowledgeObjectId: strings.Clone(plan.objectID),
-		// #nosec G115 -- the publication plan validates a positive deleted version.
-		DeletedVersion: uint64(plan.version),
-		// #nosec G115 -- publishMutation returns a validated positive catalog revision.
-		TenantCatalogRevision:   uint64(revision),
+		KnowledgeObjectId:       strings.Clone(plan.objectID),
+		DeletedVersion:          safecast.MustConv[uint64](plan.version),
+		TenantCatalogRevision:   safecast.MustConv[uint64](revision),
 		TenantCatalogStateToken: bytes.Clone(token),
 	}
 	reconciled, err := writer.commitMutation(ctx, tx, prepared, plan)

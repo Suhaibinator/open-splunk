@@ -1335,7 +1335,7 @@ func seedOrdinaryVersionCapacity(
 		if version%2 == 0 {
 			asset = secondAsset
 		}
-		createdMicro := baseMicro + int64(version-1) // #nosec G115 -- test bound is 4,096.
+		createdMicro := baseMicro + int64(version-1)
 		result, updateErr := tx.ExecContext(t.Context(), `
 			UPDATE knowledge_lookup_definitions
 			SET current_version = ?, updated_at_unix_micro = ?

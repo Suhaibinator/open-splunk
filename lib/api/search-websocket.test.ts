@@ -887,19 +887,21 @@ test("a bounded inbound backlog waits for stale listener completion before repla
   sockets[1].open();
   await waitFor(() => sockets[1].sent.length === 1, "bounded-backlog replay subscription");
   assert.equal(subscribeCommand(sockets[1]).afterSequence, 0n);
-  for (let sequence = 1n; sequence <= 4n; sequence += 1n) {
+  const replayThrough = async (sequence: bigint): Promise<void> => {
+    if (sequence > 4n) return;
     sockets[1].receive(stateEvent(
       "slow-listener-subscription",
       "search-slow-listener",
       sequence,
     ));
     // Feed replay one frame at a time so this assertion is independent of the configured backlog bound.
-    // oxlint-disable-next-line no-await-in-loop
     await waitFor(
       () => client.getLastSequence(target) === sequence,
       `bounded-backlog replay sequence ${sequence.toString()}`,
     );
-  }
+    await replayThrough(sequence + 1n);
+  };
+  await replayThrough(1n);
   assert.equal(client.getLastSequence(target), 4n);
   assert.deepEqual(deliveryOrder, [
     "start:1",
@@ -1052,17 +1054,19 @@ test("the inbound queue periodically compacts a sustained nonempty backlog", asy
   sockets[0].receive(stateEvent(subscriptionId, searchJobId, 2n));
   sockets[0].receive(stateEvent(subscriptionId, searchJobId, 3n));
 
-  for (let sequence = 4n; sequence <= 96n; sequence += 1n) {
+  const feedThrough = async (sequence: bigint): Promise<void> => {
+    if (sequence > 96n) return;
     releaseListener();
     const expectedInvocations = Number(sequence - 2n);
     // Keep two queued frames behind the active listener throughout the run.
-    // oxlint-disable-next-line no-await-in-loop
     await waitFor(
       () => invocations === expectedInvocations,
       `compacted-backlog listener ${expectedInvocations.toString()}`,
     );
     sockets[0].receive(stateEvent(subscriptionId, searchJobId, sequence));
-  }
+    await feedThrough(sequence + 1n);
+  };
+  await feedThrough(4n);
 
   const internal = client as unknown as {
     inboundGeneration?: { readonly frames: unknown[]; readonly frameHead: number };

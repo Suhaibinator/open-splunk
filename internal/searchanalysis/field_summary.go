@@ -440,8 +440,7 @@ func classifyFieldSummaryCompileError(err error) error {
 	if errors.Is(err, clickhouse.ErrFieldSummaryNotFound) {
 		return ErrFieldNotFound
 	}
-	var diagnostic *plan.Diagnostic
-	if errors.As(err, &diagnostic) {
+	if diagnostic, ok := errors.AsType[*plan.Diagnostic](err); ok {
 		switch {
 		case diagnostic.Code == "SPL_QUERY_TOO_COMPLEX":
 			return fmt.Errorf(

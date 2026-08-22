@@ -1,5 +1,3 @@
-/* oxlint-disable jsx-a11y/prefer-tag-over-role */
-
 import {
   type CSSProperties,
   type Dispatch,
@@ -133,7 +131,6 @@ function StatsSparklineCell({ value }: { value: WorkspaceStatisticsValue }) {
     <svg
       className="statistics-sparkline"
       viewBox={`0 0 ${STATS_SPARKLINE_WIDTH} ${STATS_SPARKLINE_HEIGHT}`}
-      role="img"
       aria-label={`Sparkline values: ${description}`}
     >
       {segments.map((segment) => segment.length === 1 ? (
@@ -200,8 +197,7 @@ function VirtualTableSpacer({
   return (
     <tr className="virtual-table-spacer" aria-hidden="true">
       {/* The hidden cell exists only to preserve native table geometry. */}
-      {/* oxlint-disable-next-line jsx-a11y/control-has-associated-label */}
-      <td colSpan={Math.max(1, columnCount)}>
+      <td aria-label="Virtual table spacing" colSpan={Math.max(1, columnCount)}>
         <span style={{ height }}> </span>
       </td>
     </tr>
@@ -413,14 +409,10 @@ export function StatisticsPanel({
         </div>
       </header>
       <div className={`statistics-table-frame${hasScrolled ? " has-scrolled" : ""}`}>
-        <div
+        <section
           className={`statistics-table-shell${virtualWindow.virtualized ? " statistics-table-shell--virtualized" : ""}`}
-          role="region"
           aria-label="Scrollable statistics table"
           ref={tableShellRef}
-          // A focusable named region lets keyboard users scroll a virtualized table.
-          // oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex
-          tabIndex={virtualWindow.virtualized ? 0 : undefined}
           data-virtualized={virtualWindow.virtualized ? "true" : "false"}
           data-density={statsDensity}
           style={tableShellStyle}
@@ -696,7 +688,7 @@ export function StatisticsPanel({
               </tbody>
             </table>
           )}
-        </div>
+        </section>
         <span className="statistics-scroll-hint" aria-hidden="true">More columns <b>→</b></span>
       </div>
       <footer className={`statistics-footer${isPreview ? " statistics-footer--preview" : ""}`}>{isPreview

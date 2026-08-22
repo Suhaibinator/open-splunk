@@ -12,13 +12,15 @@ import (
 	"strings"
 	"time"
 
+	"fortio.org/safecast"
+	"google.golang.org/protobuf/proto"
+	"gorm.io/gorm"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
-	"google.golang.org/protobuf/proto"
-	"gorm.io/gorm"
 )
 
 type persistedSelectorPattern struct {
@@ -134,9 +136,8 @@ func (writer *Writer) publishMutation(
 			Boundary:          boundary,
 			Route:             plan.route,
 			KnowledgeObjectID: plan.objectID,
-			// #nosec G115 -- publication plan validation above requires a positive version.
-			Version:   uint64(plan.version),
-			IDAttempt: plan.idAttempt,
+			Version:           safecast.MustConv[uint64](plan.version),
+			IDAttempt:         plan.idAttempt,
 		}
 	}
 
@@ -361,12 +362,11 @@ func (writer *Writer) publishMutation(
 		return Object{}, 0, nil, err
 	}
 	auditEvent, err := writer.auditAppender.AppendInTransaction(ctx, tx, prepared.scope.tenantID, audit.SuccessfulEvent{
-		OccurredAt: plan.updatedAt,
-		Action:     plan.auditAction,
-		TargetKind: audit.TargetKindKnowledgeObject,
-		TargetID:   plan.objectID,
-		// #nosec G115 -- publication plan validation requires a positive version.
-		TargetVersion: uint64(plan.version),
+		OccurredAt:    plan.updatedAt,
+		Action:        plan.auditAction,
+		TargetKind:    audit.TargetKindKnowledgeObject,
+		TargetID:      plan.objectID,
+		TargetVersion: safecast.MustConv[uint64](plan.version),
 		KnowledgeObject: audit.KnowledgeObjectMetadata{
 			AppID:        plan.definition.appID,
 			ObjectType:   plan.definition.objectType,
@@ -396,8 +396,7 @@ func (writer *Writer) publishMutation(
 	}
 
 	mutationMicros := plan.updatedAt.UnixMicro()
-	// #nosec G115 -- the successful audit event validation bounds its sequence to math.MaxInt64.
-	auditSequence := int64(auditEvent.Sequence)
+	auditSequence := safecast.MustConv[int64](auditEvent.Sequence)
 	retentionMicros := int64(writer.idempotencyRetention / time.Microsecond)
 	retentionAnchor, err := writerRetentionAnchor(tx, mutationMicros)
 	if err != nil {
@@ -433,17 +432,14 @@ func (writer *Writer) publishMutation(
 	}
 
 	outcome, err := encodeOutcomeReference(mutationOutcomeAuthority{
-		route:        plan.route,
-		mutationKind: plan.mutationKind,
-		objectID:     plan.objectID,
-		// #nosec G115 -- publication plan validation requires a positive version.
-		version: uint64(plan.version),
-		digest:  plan.definition.digest,
-		// #nosec G115 -- the advanced catalog state has a validated nonnegative revision.
-		catalogRevision:   uint64(advanced.revision),
-		catalogStateToken: advancedToken,
-		// #nosec G115 -- auditSequence was converted from a bounded successful event sequence.
-		successfulAuditSequence:  uint64(auditSequence),
+		route:                    plan.route,
+		mutationKind:             plan.mutationKind,
+		objectID:                 plan.objectID,
+		version:                  safecast.MustConv[uint64](plan.version),
+		digest:                   plan.definition.digest,
+		catalogRevision:          safecast.MustConv[uint64](advanced.revision),
+		catalogStateToken:        advancedToken,
+		successfulAuditSequence:  safecast.MustConv[uint64](auditSequence),
 		occurredAtUnixMicro:      mutationMicros,
 		retentionAnchorUnixMicro: retentionAnchor,
 		retainUntilUnixMicro:     retainUntil,
@@ -519,11 +515,10 @@ func (writer *Writer) commitMutation(
 	event := writerHookEvent{
 		Route:             plan.route,
 		KnowledgeObjectID: plan.objectID,
-		// #nosec G115 -- publication plan validation requires a positive version.
-		Version:   uint64(plan.version),
-		IDAttempt: plan.idAttempt,
-	}
-	event.Boundary = writerHookBeforeCommit
+		Version:           safecast.MustConv[uint64](plan.version),
+		IDAttempt:         plan.idAttempt,
+
+		Boundary: writerHookBeforeCommit}
 	if err := writer.callHook(ctx, event); err != nil {
 		return reconciledMutationOutcome{}, withErrorDisposition(
 			err,
@@ -1133,8 +1128,7 @@ func validatePublicationAudit(
 	plan publicationPlan,
 	event audit.Event,
 ) error {
-	// #nosec G115 -- callers validate the publication plan version before audit comparison.
-	planVersion := uint64(plan.version)
+	planVersion := safecast.MustConv[uint64](plan.version)
 	if err := event.ValidateForTenant(prepared.scope.tenantID); err != nil ||
 		event.Sequence < 1 || event.Sequence > math.MaxInt64 ||
 		event.OccurredAt != plan.updatedAt ||

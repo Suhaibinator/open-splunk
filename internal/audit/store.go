@@ -9,8 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Suhaibinator/open-splunk/internal/control"
+	"fortio.org/safecast"
 	"gorm.io/gorm"
+
+	"github.com/Suhaibinator/open-splunk/internal/control"
 )
 
 // StoreOptions configures audit persistence. An empty CursorKey constructs an
@@ -216,7 +218,7 @@ func (store *Store) AppendInTransaction(
 		TargetKind:          definition.TargetKind,
 		TargetID:            definition.TargetID,
 		// TargetVersion was validated against math.MaxInt64.
-		TargetVersion: int64(definition.TargetVersion), // #nosec G115
+		TargetVersion: safecast.MustConv[int64](definition.TargetVersion),
 	}
 	if definition.TargetKind == TargetKindKnowledgeObject {
 		appID := strings.Clone(definition.KnowledgeObject.AppID)

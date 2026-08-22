@@ -4,14 +4,17 @@ import (
 	"bytes"
 	"database/sql"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
+
+	"fortio.org/safecast"
+	"gorm.io/gorm"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
-	"gorm.io/gorm"
 )
 
 // publicationActiveTransitionInventoryRead carries an inventory alongside the
@@ -159,12 +162,9 @@ func (store *Store) readPublicationActiveTransitionInventory(
 	if err != nil {
 		return publicationActiveTransitionInventoryRead{}, err
 	}
-	// #nosec G115 -- the app inventory is bounded by maximumReadableApps.
-	expectedActiveAppCount := uint16(len(activeAppIDs))
-	// #nosec G115 -- the index inventory is bounded by maximumPublicationIndexAtoms.
-	expectedPotentiallySearchableIndexCount := uint16(len(indexNames))
-	// #nosec G115 -- hydrated winners are bounded by MaximumResolutionCandidates.
-	expectedCurrentActiveCount := uint32(len(winners))
+	expectedActiveAppCount := safecast.MustConv[uint16](len(activeAppIDs))
+	expectedPotentiallySearchableIndexCount := safecast.MustConv[uint16](len(indexNames))
+	expectedCurrentActiveCount := safecast.MustConv[uint32](len(winners))
 
 	inventory := publicationActiveTransitionInventory{
 		tenantID:                                strings.Clone(tenantID),
@@ -388,18 +388,12 @@ func readPublicationTransitionProjectionScalars(
 				ErrCorrupt,
 			)
 		}
-		// #nosec G115 -- the scalar preflight above validates all values as nonnegative and bounded.
-		definitionBytes := uint64(record.DefinitionBytes)
-		// #nosec G115 -- the scalar preflight above validates all values as nonnegative and bounded.
-		projectionBytes := uint64(record.ProjectionBytes)
-		// #nosec G115 -- selector pattern counts above are nonnegative and bounded.
-		selectorPatternCount := uint64(selectorPatterns)
-		// #nosec G115 -- the scalar preflight above validates all values as nonnegative and bounded.
-		selectorValueBytes := uint64(record.SelectorValueBytes)
-		// #nosec G115 -- the scalar preflight above validates all values as nonnegative and bounded.
-		canonicalSelectorBytes := uint64(record.CanonicalSelectorBytes)
-		// #nosec G115 -- the scalar preflight above validates all values as nonnegative and bounded.
-		dependencyCount := uint64(record.DependencyCount)
+		definitionBytes := safecast.MustConv[uint64](record.DefinitionBytes)
+		projectionBytes := safecast.MustConv[uint64](record.ProjectionBytes)
+		selectorPatternCount := safecast.MustConv[uint64](selectorPatterns)
+		selectorValueBytes := safecast.MustConv[uint64](record.SelectorValueBytes)
+		canonicalSelectorBytes := safecast.MustConv[uint64](record.CanonicalSelectorBytes)
+		dependencyCount := safecast.MustConv[uint64](record.DependencyCount)
 		if !addPublicationResource(&aggregate.definitionBytes, definitionBytes, maximumPublicationTransitionDefinitionBytes) ||
 			!addPublicationResource(&aggregate.projectionBytes, projectionBytes, maximumPublicationTransitionProjectionBytes) ||
 			!addPublicationResource(&aggregate.selectorPatterns, selectorPatternCount, maximumPublicationTransitionSelectorPatterns) ||
@@ -439,18 +433,12 @@ func matchPublicationTransitionProjectionPreflight(
 			projection.DependencyCount < 0 {
 			return fmt.Errorf("%w: publication transition projection payload changed after preflight", ErrCorrupt)
 		}
-		// #nosec G115 -- the nonnegative checks above make these conversions lossless.
-		definitionBytes := uint64(projection.DefinitionBytes)
-		// #nosec G115 -- the nonnegative checks above make these conversions lossless.
-		projectionBytes := uint64(projection.ProjectionBytes)
-		// #nosec G115 -- the nonnegative checks above make these conversions lossless.
-		selectorPatternCount := uint64(selectorPatterns)
-		// #nosec G115 -- the nonnegative checks above make these conversions lossless.
-		selectorValueBytes := uint64(projection.SelectorValueBytes)
-		// #nosec G115 -- the nonnegative checks above make these conversions lossless.
-		canonicalSelectorBytes := uint64(projection.CanonicalSelectorBytes)
-		// #nosec G115 -- the nonnegative checks above make these conversions lossless.
-		dependencyCount := uint64(projection.DependencyCount)
+		definitionBytes := safecast.MustConv[uint64](projection.DefinitionBytes)
+		projectionBytes := safecast.MustConv[uint64](projection.ProjectionBytes)
+		selectorPatternCount := safecast.MustConv[uint64](selectorPatterns)
+		selectorValueBytes := safecast.MustConv[uint64](projection.SelectorValueBytes)
+		canonicalSelectorBytes := safecast.MustConv[uint64](projection.CanonicalSelectorBytes)
+		dependencyCount := safecast.MustConv[uint64](projection.DependencyCount)
 		if projection.KnowledgeObjectID != scalar.knowledgeObjectID ||
 			definitionBytes != scalar.definitionBytes || projectionBytes != scalar.projectionBytes ||
 			selectorPatternCount != scalar.selectorPatterns || selectorValueBytes != scalar.selectorValueBytes ||
@@ -544,7 +532,7 @@ func readPublicationApps(tx *gorm.DB, tenantID string) (
 			ErrCorrupt,
 		)
 	}
-	return records[:len(records):len(records)], active[:len(active):len(active)], revision, nil
+	return slices.Clip(records), slices.Clip(active), revision, nil
 }
 
 func publicationTransitionAppPreflightQuery(tx *gorm.DB, tenantID string) *gorm.DB {
@@ -649,9 +637,8 @@ func readPublicationTransitionPotentialIndexes(
 			return nil, 0, 0, fmt.Errorf("%w: publication transition index tombstone marker is invalid", ErrCorrupt)
 		}
 	}
-	// #nosec G115 -- PhysicalCount was checked against maximumPublicationIndexAtoms above.
-	physicalCount := uint16(states[0].PhysicalCount)
-	return names[:len(names):len(names)], states[0].Revision, physicalCount, nil
+	physicalCount := safecast.MustConv[uint16](states[0].PhysicalCount)
+	return slices.Clip(names), states[0].Revision, physicalCount, nil
 }
 
 func publicationTransitionPhysicalIndexQuery(tx *gorm.DB) *gorm.DB {
@@ -754,5 +741,5 @@ func publicationTransitionWinnersFromHydration(
 			existingDependencies:        persisted,
 		}
 	}
-	return winners[:len(winners):len(winners)], selectorWork, nil
+	return slices.Clip(winners), selectorWork, nil
 }

@@ -14,6 +14,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"fortio.org/safecast"
+
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 )
 
@@ -107,10 +109,10 @@ func (handler *apiHandler) downloadExport(response http.ResponseWriter, request 
 			return
 		}
 		readBytes := len(buffer)
-		// #nosec G115 -- a slice length is non-negative and exactly representable as uint64.
-		if remaining < uint64(readBytes) {
-			// #nosec G115 -- this branch proves remaining is smaller than the 32 KiB buffer length.
-			readBytes = int(remaining)
+
+		if remaining < safecast.MustConv[uint64](readBytes) {
+
+			readBytes = safecast.MustConv[int](remaining)
 		}
 		read, readErr := download.Read(buffer[:readBytes])
 		if read < 0 || read > readBytes {
@@ -120,8 +122,8 @@ func (handler *apiHandler) downloadExport(response http.ResponseWriter, request 
 			if writeErr := writeDownloadBytes(request.Context(), response, buffer[:read]); writeErr != nil {
 				return
 			}
-			// #nosec G115 -- io.Reader returned a non-negative count no larger than readBytes.
-			remaining -= uint64(read)
+
+			remaining -= safecast.MustConv[uint64](read)
 		}
 		if remaining == 0 {
 			break

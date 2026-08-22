@@ -6,14 +6,17 @@ package server
 import (
 	"errors"
 	"fmt"
+	"math"
 	"unicode/utf8"
+
+	"fortio.org/safecast"
+	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
-	"google.golang.org/protobuf/encoding/protowire"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
 const (
@@ -22,6 +25,16 @@ const (
 	maximumValidateRetainedExtractionOutputs = knowledgedefinition.MaximumFieldExtractionOutputs + 1
 	maximumValidateUnknownGroupDepth         = 32
 )
+
+// protobufInt32 preserves protobuf's specified low-32-bit interpretation of
+// enum varints without relying on an unchecked narrowing conversion.
+func protobufInt32(value uint64) int32 {
+	lowBits := safecast.MustConv[int64](value & math.MaxUint32)
+	if lowBits > math.MaxInt32 {
+		lowBits -= 1 << 32
+	}
+	return safecast.MustConv[int32](lowBits)
+}
 
 var validateDefinitionProjectionFields = [...]struct {
 	path   string
@@ -446,7 +459,7 @@ func (builder *validateDefinitionWireBuilder) finish() *opensplunk.KnowledgeObje
 	result := &opensplunk.KnowledgeObjectDefinition{
 		AppId:        validateWireStringValue(builder.appID),
 		Name:         validateWireStringValue(builder.name),
-		SharingScope: opensplunk.SharingScope(int32(builder.sharingScope)), // #nosec G115 -- protobuf varints intentionally retain generated unmarshal truncation semantics.
+		SharingScope: opensplunk.SharingScope(protobufInt32(builder.sharingScope)),
 	}
 	if builder.descriptionPresent {
 		value := validateWireStringValue(builder.description)
@@ -544,7 +557,7 @@ func (builder *validateSelectorPatternWireBuilder) consume(data []byte) error {
 
 func (builder *validateSelectorPatternWireBuilder) finish() *opensplunk.KnowledgeSelectorPattern {
 	result := &opensplunk.KnowledgeSelectorPattern{
-		MatchKind: opensplunk.KnowledgeSelectorMatchKind(int32(builder.matchKind)), // #nosec G115 -- protobuf varints intentionally retain generated unmarshal truncation semantics.
+		MatchKind: opensplunk.KnowledgeSelectorMatchKind(protobufInt32(builder.matchKind)),
 		Value:     validateWireStringValue(builder.value),
 	}
 	setValidateUnknown(result, builder.unknown)
@@ -615,7 +628,7 @@ func (builder *validateFieldExtractionWireBuilder) consume(data []byte) error {
 func (builder *validateFieldExtractionWireBuilder) finish() *opensplunk.FieldExtractionDefinition {
 	result := &opensplunk.FieldExtractionDefinition{
 		InputField:        validateWireStringValue(builder.inputField),
-		OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior(int32(builder.overwrite)), // #nosec G115 -- protobuf varints intentionally retain generated unmarshal truncation semantics.
+		OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior(protobufInt32(builder.overwrite)),
 	}
 	switch builder.extractionNumber {
 	case 2:
@@ -768,7 +781,7 @@ func (builder *validateStringPairOverwriteWireBuilder) finishFieldAlias() *opens
 	result := &opensplunk.FieldAliasDefinition{
 		SourceField:       validateWireStringValue(builder.first),
 		DestinationField:  validateWireStringValue(builder.second),
-		OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior(int32(builder.overwrite)), // #nosec G115 -- protobuf varints intentionally retain generated unmarshal truncation semantics.
+		OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior(protobufInt32(builder.overwrite)),
 	}
 	setValidateUnknown(result, builder.unknown)
 	return result
@@ -778,7 +791,7 @@ func (builder *validateStringPairOverwriteWireBuilder) finishCalculatedField() *
 	result := &opensplunk.CalculatedFieldDefinition{
 		DestinationField:  validateWireStringValue(builder.first),
 		Expression:        validateWireStringValue(builder.second),
-		OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior(int32(builder.overwrite)), // #nosec G115 -- protobuf varints intentionally retain generated unmarshal truncation semantics.
+		OverwriteBehavior: opensplunk.KnowledgeOverwriteBehavior(protobufInt32(builder.overwrite)),
 	}
 	setValidateUnknown(result, builder.unknown)
 	return result

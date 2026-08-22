@@ -9,9 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"gorm.io/gorm"
+
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
-	"gorm.io/gorm"
 )
 
 func TestListPaginationFiltersTotalsAndCursorAuthentication(t *testing.T) {
@@ -244,8 +245,9 @@ func TestListRejectsInvalidAndCanceledRequests(t *testing.T) {
 	if page, err := store.List(ctx, "tenant", ListRequest{PageToken: "bad"}); len(page.Events) != 0 || !errors.Is(err, ErrInvalidCursor) {
 		t.Fatalf("List(bad cursor) = (%+v, %v)", page, err)
 	}
-	//nolint:staticcheck // Explicitly tests the exported nil-context boundary.
-	if _, err := store.List(nil, "tenant", ListRequest{}); !errors.Is(err, control.ErrInvalidArgument) {
+	var nilContext context.Context
+
+	if _, err := store.List(nilContext, "tenant", ListRequest{}); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("List(nil) error = %v", err)
 	}
 	canceled, cancel := context.WithCancel(ctx)

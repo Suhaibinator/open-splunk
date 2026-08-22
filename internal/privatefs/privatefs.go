@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"unicode/utf8"
 
+	"fortio.org/safecast"
 	"golang.org/x/sys/unix"
 )
 
@@ -133,7 +134,6 @@ func OpenValidatedDirectory(
 		return nil, nil, fmt.Errorf("open %s: %w", subject, err)
 	}
 
-	// #nosec G304,G703 -- the explicit absolute operator path is opened
 	// read-only, and O_NOFOLLOW rejects a redirected final component.
 	fd, err := unix.Open(
 		path,
@@ -143,7 +143,7 @@ func OpenValidatedDirectory(
 	if err != nil {
 		return nil, nil, fmt.Errorf("open %s: open path: %w", subject, err)
 	}
-	// #nosec G115 -- unix.Open returned a non-negative native descriptor.
+
 	file := os.NewFile(uintptr(fd), path)
 	if file == nil {
 		_ = unix.Close(fd)
@@ -194,6 +194,56 @@ func OpenDirectory(path string) (*Directory, error) {
 	return directory, nil
 }
 
+// SecureDirectory atomically tightens an existing, effective-user-owned
+// directory to mode 0700 through a pinned descriptor. The final path component
+// may not be a symlink, and the name must still resolve to the same inode after
+// the mode change.
+func SecureDirectory(path string) error {
+	if strings.IndexByte(path, 0) >= 0 {
+		return errors.New("secure private directory: path contains a NUL byte")
+	}
+	if !filepath.IsAbs(path) {
+		return errors.New("secure private directory: path must be absolute")
+	}
+	path = filepath.Clean(path)
+	validateOwner := func(info os.FileInfo) error {
+		if info == nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("path must be a real directory")
+		}
+		if hasSpecialMode(info.Mode()) {
+			return errors.New("directory must not have special permission bits")
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || stat == nil || int64(stat.Uid) != int64(os.Geteuid()) {
+			return errors.New("directory must be owned by the effective user")
+		}
+		return nil
+	}
+	file, _, err := OpenValidatedDirectory(path, "private directory", validateOwner)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = file.Close() }()
+	if err := unix.Fchmod(safecast.MustConv[int](file.Fd()), 0o700); err != nil {
+		return fmt.Errorf("secure private directory: change mode: %w", err)
+	}
+	opened, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("secure private directory: inspect descriptor: %w", err)
+	}
+	if err := validateOwnedDirectory(opened, os.Geteuid()); err != nil {
+		return fmt.Errorf("secure private directory: %w", err)
+	}
+	current, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("secure private directory: re-inspect path: %w", err)
+	}
+	if !os.SameFile(opened, current) {
+		return errors.New("secure private directory: path changed while securing")
+	}
+	return nil
+}
+
 func validateOwnedDirectory(info os.FileInfo, effectiveUID int) error {
 	if info == nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return errors.New("path must be a real directory")
@@ -222,7 +272,7 @@ func (directory *Directory) descriptor() (int, error) {
 	if directory == nil || directory.file == nil {
 		return -1, ErrClosed
 	}
-	// #nosec G115 -- os.File descriptors are native int descriptors on the
+
 	// supported Unix targets.
 	return int(directory.file.Fd()), nil
 }
@@ -390,7 +440,7 @@ func (directory *Directory) OpenRegular(
 	if err != nil {
 		return nil, fmt.Errorf("open private file %q: %w", name, err)
 	}
-	// #nosec G115 -- unix.Openat returned a non-negative native descriptor.
+
 	file := os.NewFile(uintptr(fd), name)
 	if file == nil {
 		_ = unix.Close(fd)
@@ -496,7 +546,7 @@ func (directory *Directory) CreateTemporaryFile(
 		if openErr != nil {
 			return "", nil, fmt.Errorf("create private temporary file %q: %w", name, openErr)
 		}
-		// #nosec G115 -- unix.Openat returned a non-negative native descriptor.
+
 		file := os.NewFile(uintptr(fd), name)
 		if file == nil {
 			_ = unix.Close(fd)
@@ -655,7 +705,7 @@ func (directory *Directory) openChildDirectory(
 	if err != nil {
 		return nil, fmt.Errorf("open private child directory %q: %w", name, err)
 	}
-	// #nosec G115 -- unix.Openat returned a non-negative native descriptor.
+
 	file := os.NewFile(uintptr(fd), name)
 	if file == nil {
 		_ = unix.Close(fd)
@@ -720,7 +770,7 @@ func (directory *Directory) List(maximum int) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list private directory: open stream: %w", err)
 	}
-	// #nosec G115 -- unix.Openat returned a non-negative native descriptor.
+
 	stream := os.NewFile(uintptr(fd), directory.path)
 	if stream == nil {
 		_ = unix.Close(fd)
@@ -813,9 +863,9 @@ func (directory *Directory) RequirePinnedRegular(name string, file *os.File) err
 	if err != nil {
 		return err
 	}
-	// #nosec G115 -- os.File descriptors are native int descriptors on the
+
 	// supported Unix targets.
-	fileFD := int(file.Fd())
+	fileFD := safecast.MustConv[int](file.Fd())
 	if err := sameOpenPath(directoryFD, name, fileFD); err != nil {
 		return fmt.Errorf("require pinned private regular file %q: %w", name, err)
 	}
@@ -842,9 +892,9 @@ func (directory *Directory) UnlinkPinnedRegular(name string, file *os.File) erro
 	// Keep the pathname comparison immediately adjacent to unlink. POSIX has no
 	// unlink-by-file-descriptor primitive; owner-private parents and the
 	// deployment singleton lock exclude supported concurrent writers.
-	// #nosec G115 -- os.File descriptors are native int descriptors on the
+
 	// supported Unix targets.
-	if err := sameOpenPath(directoryFD, name, int(file.Fd())); err != nil {
+	if err := sameOpenPath(directoryFD, name, safecast.MustConv[int](file.Fd())); err != nil {
 		return fmt.Errorf("unlink pinned private regular file %q: %w", name, err)
 	}
 	if err := unix.Unlinkat(directoryFD, name, 0); err != nil {

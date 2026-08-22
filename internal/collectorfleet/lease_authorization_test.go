@@ -96,7 +96,7 @@ func TestIsCurrentLeaseInTransactionRejectsInvalidBoundary(t *testing.T) {
 	database, store := openTestStore(t)
 	ctx := context.Background()
 	lease := Lease{
-		Scope:       Scope{TenantID: "tenant-a"},
+		TenantID:    "tenant-a",
 		CollectorID: "123e4567-e89b-12d3-a456-426614174000",
 		BootEpoch:   "server-boot-1",
 		StreamID:    "stream-1",

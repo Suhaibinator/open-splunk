@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strconv"
 
+	"fortio.org/safecast"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
@@ -249,7 +251,7 @@ func validateKnowledgeJSONExtractionAuthority(
 			err,
 		)
 	}
-	workUnits := uint32(splpath.EvaluationWorkUnits(steps)) // #nosec G115 -- parsed paths are bounded by splpath.MaximumPathSteps.
+	workUnits := safecast.MustConv[uint32](splpath.EvaluationWorkUnits(steps))
 	if !slices.Equal(steps, authority.steps) || workUnits != authority.workUnits {
 		return nil, errors.New(
 			"compile ClickHouse knowledge JSON extraction: path authority is inconsistent",
@@ -360,7 +362,7 @@ func knowledgeJSONScalarCandidateSQL(
 
 	overTokenLimit := lexemeCountVariable + " > " + strconv.Itoa(MaximumSpathJSONTokens)
 	result = "if(" + overTokenLimit + ", " +
-		knowledgeJSONThrowCandidateTuple(overTokenLimit, SpathJSONTokenLimitMarker) +
+		knowledgeJSONThrowCandidateTuple(overTokenLimit, SpathJSONLexemeLimitMarker) +
 		", " + result + ")"
 	preflightInput := "if(" + preflightVariable + " != 0, " + inputVariable +
 		", CAST('' AS String))"

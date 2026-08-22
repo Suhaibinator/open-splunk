@@ -8,13 +8,15 @@ import (
 	"time"
 	"unicode/utf8"
 
-	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
-	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
+	"fortio.org/safecast"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
 )
 
 func (s *Service) processBatch(
@@ -882,8 +884,8 @@ func boundedBatchEventCount(batch *opensplunk.EventBatch) (uint32, bool) {
 	if !ok || length > uint64(HardMaxBatchEvents) {
 		return 0, false
 	}
-	// #nosec G115 -- HardMaxBatchEvents is a uint32 ceiling.
-	return uint32(len(batch.GetEvents())), true
+
+	return safecast.MustConv[uint32](len(batch.GetEvents())), true
 }
 
 // validateBatchPolicy enforces deployment-configurable limits only after an
@@ -1068,8 +1070,7 @@ func retryDetails(err error, defaultAfter time.Duration) (retryInfo, bool) {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return retryInfo{}, false
 	}
-	var storeError *TransientStoreError
-	if errors.As(err, &storeError) {
+	if storeError, ok := errors.AsType[*TransientStoreError](err); ok {
 		reason := storeError.Reason
 		if reason == opensplunk.RetryBatchReason_RETRY_BATCH_REASON_UNSPECIFIED {
 			reason = opensplunk.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE

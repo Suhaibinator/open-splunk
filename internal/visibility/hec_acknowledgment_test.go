@@ -422,7 +422,7 @@ func TestHECChannelCapacityPrecedesQuotaAndRollsBackAdmission(t *testing.T) {
 		var count int
 		if err := db.SQLDB().QueryRowContext(
 			ctx,
-			"SELECT count(*) FROM "+table, // #nosec G201 -- fixed test table names.
+			"SELECT count(*) FROM "+table,
 		).Scan(&count); err != nil {
 			t.Fatalf("count %s: %v", table, err)
 		}
@@ -497,7 +497,7 @@ func TestHECSequenceExhaustionIsAtomic(t *testing.T) {
 			}
 			for _, table := range []string{"ingest_batch_identities", "ingest_visibility_reservations", "hec_requests", "hec_acknowledgments"} {
 				var count int
-				if err := db.SQLDB().QueryRowContext(ctx, "SELECT count(*) FROM "+table).Scan(&count); err != nil { // #nosec G201 -- fixed test table names.
+				if err := db.SQLDB().QueryRowContext(ctx, "SELECT count(*) FROM "+table).Scan(&count); err != nil {
 					t.Fatal(err)
 				}
 				if count != 0 {
@@ -537,7 +537,7 @@ func TestHECAdmissionStaleSnapshotRollsBackEveryAllocation(t *testing.T) {
 		var count int
 		if err := db.SQLDB().QueryRowContext(
 			context.Background(),
-			"SELECT count(*) FROM "+table, // #nosec G201 -- table names are fixed test constants.
+			"SELECT count(*) FROM "+table,
 		).Scan(&count); err != nil {
 			t.Fatalf("count %s: %v", table, err)
 		}
@@ -583,7 +583,7 @@ func TestHECAdmissionRechecksExpiryAtReserveTransactionBoundary(t *testing.T) {
 		var count int
 		if err := db.SQLDB().QueryRowContext(
 			context.Background(),
-			"SELECT count(*) FROM "+table, // #nosec G201 -- fixed test table names.
+			"SELECT count(*) FROM "+table,
 		).Scan(&count); err != nil {
 			t.Fatalf("count %s: %v", table, err)
 		}

@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
+
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 )
 
@@ -51,8 +52,7 @@ func formatSearchExecutionFailure(
 }
 
 func classifySearchExecutionCause(cause error) (string, int32, bool) {
-	var exception *clickhousedriver.Exception
-	if errors.As(cause, &exception) {
+	if exception, ok := errors.AsType[*clickhousedriver.Exception](cause); ok {
 		return searchCauseClickHouseException, exception.Code, true
 	}
 	switch {
@@ -83,8 +83,7 @@ func classifySearchExecutionCause(cause error) (string, int32, bool) {
 	case errors.Is(cause, searchjobs.ErrInvalidResult), errors.Is(cause, searchjobs.ErrStreamClosed):
 		return searchCauseInvalidResult, 0, false
 	}
-	var networkError net.Error
-	if errors.As(cause, &networkError) {
+	if networkError, ok := errors.AsType[net.Error](cause); ok {
 		if networkError.Timeout() {
 			return searchCauseNetworkTimeout, 0, false
 		}

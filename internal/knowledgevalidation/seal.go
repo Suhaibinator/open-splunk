@@ -7,10 +7,12 @@ import (
 	"math"
 	"slices"
 
-	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
-	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
+	"fortio.org/safecast"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
 )
 
 // SealValidateResponse checks the entire result boundary and retains its exact
@@ -265,7 +267,7 @@ func equalSourceRange(left, right *opensplunk.SourceRange) bool {
 
 func validateDependencyProjection(ctx context.Context, values []*opensplunk.KnowledgeValidationDependency, resources *opensplunk.KnowledgeResourceEstimate) error {
 	if len(values) > MaximumDependencies || resources == nil ||
-		resources.GetDependencyEdges() != uint32(len(values)) { // #nosec G115 -- len(values) is bounded by MaximumDependencies first.
+		resources.GetDependencyEdges() != safecast.MustConv[uint32](len(values)) {
 		return ErrInvariant
 	}
 	nodes := make(map[string]struct{}, len(values))
@@ -290,7 +292,7 @@ func validateDependencyProjection(ctx context.Context, values []*opensplunk.Know
 		}
 		nodes[value.GetTarget().GetKnowledgeObjectId()+"\x00"+stringUint64(value.GetTarget().GetVersion())] = struct{}{}
 	}
-	if resources.GetDependencyNodes() != uint32(len(nodes)) { // #nosec G115 -- nodes cannot exceed the bounded dependency count.
+	if resources.GetDependencyNodes() != safecast.MustConv[uint32](len(nodes)) {
 		return ErrInvariant
 	}
 	return nil

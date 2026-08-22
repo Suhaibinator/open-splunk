@@ -2206,7 +2206,7 @@ func heartbeatRuntimeConfig(clock *heartbeatRuntimeClock) HeartbeatRuntimeConfig
 
 func heartbeatRuntimeLease(tenantID, collectorID string, generation uint64) Lease {
 	return Lease{
-		Scope:       Scope{TenantID: tenantID},
+		TenantID:    tenantID,
 		CollectorID: collectorID,
 		BootEpoch:   "server-boot",
 		StreamID:    fmt.Sprintf("stream-%d", generation),

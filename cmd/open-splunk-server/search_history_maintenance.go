@@ -126,7 +126,7 @@ func newSearchHistoryMaintenance(
 	if err := config.normalize(); err != nil {
 		return nil, err
 	}
-	workerContext, cancelWorker := context.WithCancel(context.Background()) //nolint:gosec // Close owns cancellation.
+	workerContext, cancelWorker := newMaintenanceWorkerContext()
 	maintenance := &searchHistoryMaintenance{
 		pruner:         pruner,
 		pruneTimeout:   config.pruneTimeout,

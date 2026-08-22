@@ -9,11 +9,13 @@ import (
 	"strings"
 	"time"
 
-	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
-	"github.com/Suhaibinator/open-splunk/internal/audit"
+	"fortio.org/safecast"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"gorm.io/gorm"
+
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/audit"
 )
 
 func (writer *Writer) replayCreate(
@@ -89,9 +91,8 @@ func (writer *Writer) replayProjectedObject(
 		return replayObjectResponseAuthority{}, err
 	}
 	return replayObjectResponseAuthority{
-		object: projection,
-		// #nosec G115 -- replay authority validates a positive committed catalog revision.
-		revision:   uint64(record.CommittedCatalogRevision),
+		object:     projection,
+		revision:   safecast.MustConv[uint64](record.CommittedCatalogRevision),
 		stateToken: bytes.Clone(record.CommittedCatalogStateToken),
 	}, nil
 }
@@ -112,10 +113,9 @@ func (writer *Writer) replayDelete(
 		return nil, fmt.Errorf("%w: delete replay is not the current terminal version", ErrCorrupt)
 	}
 	return &opensplunk.DeleteKnowledgeObjectResponse{
-		KnowledgeObjectId: strings.Clone(authority.reference.GetKnowledgeObjectId()),
-		DeletedVersion:    authority.reference.GetVersion(),
-		// #nosec G115 -- replay authority validates a positive committed catalog revision.
-		TenantCatalogRevision:   uint64(record.CommittedCatalogRevision),
+		KnowledgeObjectId:       strings.Clone(authority.reference.GetKnowledgeObjectId()),
+		DeletedVersion:          authority.reference.GetVersion(),
+		TenantCatalogRevision:   safecast.MustConv[uint64](record.CommittedCatalogRevision),
 		TenantCatalogStateToken: bytes.Clone(record.CommittedCatalogStateToken),
 	}, nil
 }

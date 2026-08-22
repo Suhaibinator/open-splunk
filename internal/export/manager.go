@@ -17,13 +17,16 @@ import (
 	"unicode/utf8"
 	"unsafe"
 
+	"fortio.org/safecast"
+	"golang.org/x/sys/unix"
+	"google.golang.org/protobuf/proto"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
+	"github.com/Suhaibinator/open-splunk/internal/privatefs"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
-	"golang.org/x/sys/unix"
-	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -417,7 +420,6 @@ func New(config Config) (*Manager, error) {
 	if newID == nil {
 		newID = randomID
 	}
-	// #nosec G118 -- cancel is retained on Manager and invoked by Close.
 	managerContext, cancel := context.WithCancel(context.Background())
 	manager := &Manager{
 		jobs:                 make(map[string]*jobEntry),
@@ -504,8 +506,8 @@ func prepareArtifactDirectory(configured string) (*preparedArtifactDirectory, er
 		if err != nil {
 			return nil, fmt.Errorf("create export artifact directory: %w", err)
 		}
-		// #nosec G302 -- path is an artifact directory and is deliberately owner-only.
-		if err := os.Chmod(path, 0o700); err != nil {
+
+		if err := privatefs.SecureDirectory(path); err != nil {
 			_ = os.RemoveAll(path)
 			return nil, fmt.Errorf("secure export artifact directory: %w", err)
 		}
@@ -550,8 +552,8 @@ func prepareArtifactDirectory(configured string) (*preparedArtifactDirectory, er
 		return nil, errors.Join(fmt.Errorf("create export artifact session: %w", err), prepared.Close())
 	}
 	prepared.session = session
-	// #nosec G302 -- session is an artifact directory and is deliberately owner-only.
-	if err := os.Chmod(session, 0o700); err != nil {
+
+	if err := privatefs.SecureDirectory(session); err != nil {
 		return nil, errors.Join(fmt.Errorf("secure export artifact session: %w", err), prepared.Close())
 	}
 	return prepared, nil
@@ -562,8 +564,8 @@ func validateArtifactBasePath(base string) error {
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return errors.New("export artifact directory is not a regular directory")
 	}
-	// #nosec G115 -- Unix effective user IDs are non-negative uid_t values.
-	effectiveUID := uint32(os.Geteuid())
+
+	effectiveUID := safecast.MustConv[uint32](os.Geteuid())
 	baseOwner, err := artifactPathOwner(base)
 	if err != nil || baseOwner != effectiveUID {
 		return errors.New("export artifact directory must be owned by the server user")
@@ -605,7 +607,7 @@ func acquireArtifactDirectoryLock(base string) (*artifactDirectoryLock, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open export artifact directory lock: %w", err)
 	}
-	// #nosec G115 -- unix.Open succeeded, so fd is a non-negative native file descriptor.
+
 	file := os.NewFile(uintptr(fd), path)
 	if file == nil {
 		_ = unix.Close(fd)
@@ -613,8 +615,8 @@ func acquireArtifactDirectoryLock(base string) (*artifactDirectoryLock, error) {
 	}
 	var identity unix.Stat_t
 	if err := unix.Fstat(fd, &identity); err != nil || identity.Mode&unix.S_IFMT != unix.S_IFREG ||
-		// #nosec G115 -- Unix effective user IDs are non-negative uid_t values.
-		identity.Nlink != 1 || identity.Uid != uint32(os.Geteuid()) {
+
+		identity.Nlink != 1 || identity.Uid != safecast.MustConv[uint32](os.Geteuid()) {
 		closeErr := file.Close()
 		return nil, errors.Join(errors.New("export artifact directory lock is not a private regular file"), closeErr)
 	}
@@ -686,7 +688,7 @@ func (lock *artifactDirectoryLock) Close() error {
 	}
 	file := lock.file
 	lock.file = nil
-	// #nosec G115 -- os.File descriptors originate as native int descriptors on Unix.
+
 	unlockErr := unix.Flock(int(file.Fd()), unix.LOCK_UN)
 	closeErr := file.Close()
 	if unlockErr != nil {
@@ -1011,7 +1013,7 @@ func knowledgeSnapshotMetadataBytes(summary *opensplunk.KnowledgeSnapshotSummary
 		return 0, err
 	}
 	// ValidateSummary bounds the encoded representation by MaximumSummaryBytes.
-	encodedBytes := uint64(proto.Size(summary)) // #nosec G115 -- validated above as a small, non-negative protobuf size.
+	encodedBytes := safecast.MustConv[uint64](proto.Size(summary))
 	encodedCharge, ok := checkedAddUint64(encodedBytes, encodedBytes)
 	if !ok {
 		return 0, errors.New("knowledge snapshot metadata charge overflow")
@@ -1523,8 +1525,8 @@ func (manager *Manager) run(entry *jobEntry) {
 		return
 	}
 	artifactIdentity, err := tempFile.Stat()
-	// #nosec G115 -- the negative-size case is rejected before the conversion.
-	if err != nil || !artifactIdentity.Mode().IsRegular() || artifactIdentity.Size() < 0 || uint64(artifactIdentity.Size()) != limited.written {
+
+	if err != nil || !artifactIdentity.Mode().IsRegular() || artifactIdentity.Size() < 0 || safecast.MustConv[uint64](artifactIdentity.Size()) != limited.written {
 		if err == nil {
 			err = errArtifactStorage
 		}
@@ -1575,12 +1577,12 @@ type exactLimitWriter struct {
 }
 
 func (writer *exactLimitWriter) Write(payload []byte) (int, error) {
-	if writer.written > writer.limit || uint64(len(payload)) > writer.limit-writer.written {
+	if writer.written > writer.limit || safecast.MustConv[uint64](len(payload)) > writer.limit-writer.written {
 		return 0, ErrByteLimit
 	}
 	written, err := writer.output.Write(payload)
-	// #nosec G115 -- io.Writer must return a non-negative count no larger than len(payload).
-	writer.written += uint64(written)
+
+	writer.written += safecast.MustConv[uint64](written)
 	if err == nil && written != len(payload) {
 		err = io.ErrShortWrite
 	}
@@ -1721,8 +1723,7 @@ func safeFailure(cause error) Failure {
 	default:
 		// Filesystem errors are intentionally not retained; callers receive only
 		// this stable summary.
-		var pathErr *os.PathError
-		if errors.As(cause, &pathErr) {
+		if _, ok := errors.AsType[*os.PathError](cause); ok {
 			code = FailureStorageUnavailable
 		}
 	}

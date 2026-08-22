@@ -21,7 +21,7 @@ func TestCompileWildcardSpathPublishesBoundedNativeDynamicArray(t *testing.T) {
 		`"__os_spath_mv_output_state_`,
 		`AS "__os_result_multivalue_present_0"`,
 		SpathInputLimitMarker,
-		SpathJSONTokenLimitMarker,
+		SpathJSONLexemeLimitMarker,
 		UnsupportedNativeMVValueMarker,
 		NativeMVMembersLimitMarker,
 		NativeMVPayloadLimitMarker,

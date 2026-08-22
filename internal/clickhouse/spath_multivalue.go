@@ -163,7 +163,7 @@ func compileExtractJSONWildcard(
 	overTokens := eligibleAlias + " != 0 AND " + tokenCountAlias + " > " +
 		strconv.Itoa(MaximumSpathJSONTokens)
 	guardSQL := "toUInt8(if(" + overTokens + ", throwIf(toUInt8(" + overTokens +
-		"), '" + SpathJSONTokenLimitMarker + "') = 0, " + eligibleAlias +
+		"), '" + SpathJSONLexemeLimitMarker + "') = 0, " + eligibleAlias +
 		" != 0 AND isValidJSON(" + inputAlias + "))) AS " + guardAlias
 	initialSQL := "tuple(if(" + guardAlias + " != 0, [" + inputAlias +
 		"], CAST([], 'Array(String)')), toUInt8(0)) AS " + initialStateAlias

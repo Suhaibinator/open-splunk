@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 
+	"fortio.org/safecast"
+
 	"github.com/Suhaibinator/open-splunk/internal/control"
 )
 
@@ -593,8 +595,7 @@ func validatePublicationIndexNameAdmissionCohorts(
 			if err := work.chargeChangedCohort(afterWinners); err != nil {
 				return err
 			}
-			// #nosec G115 -- changed cohorts are bounded by knowledgeprogram.MaximumObjects.
-			expectedWinnerCount := uint32(len(afterWinners))
+			expectedWinnerCount := safecast.MustConv[uint32](len(afterWinners))
 			cohort := publicationWinnerCohort{
 				expectedWinnerCount: expectedWinnerCount,
 				winners:             make([]publicationWinner, len(afterWinners)),
@@ -607,8 +608,7 @@ func validatePublicationIndexNameAdmissionCohorts(
 				cohort,
 			)
 			if err != nil {
-				var absentTarget *publicationCohortDependencyTargetAbsentError
-				if errors.As(err, &absentTarget) {
+				if _, ok := errors.AsType[*publicationCohortDependencyTargetAbsentError](err); ok {
 					return fmt.Errorf(
 						"%w: newly reachable index topology excludes a persisted dependency target",
 						control.ErrDependencyConflict,

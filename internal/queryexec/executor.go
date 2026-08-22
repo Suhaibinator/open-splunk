@@ -25,9 +25,13 @@ import (
 	"unicode/utf8"
 	"unsafe"
 
+	"fortio.org/safecast"
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/chcol"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
+
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
@@ -35,8 +39,6 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
-	"github.com/google/uuid"
-	"github.com/shopspring/decimal"
 )
 
 const (
@@ -1104,8 +1106,7 @@ func readFixedTimechartRows(
 		return bufferedFixedTimechart{}, err
 	}
 
-	// #nosec G115 -- validateTimechartOutput caps BucketCount at 10,000.
-	bucketCapacity := int(output.BucketCount)
+	bucketCapacity := safecast.MustConv[int](output.BucketCount)
 	buffered := bufferedFixedTimechart{
 		first:      output.FirstBucket,
 		span:       output.Span,
@@ -1243,8 +1244,7 @@ func readFixedValueTimechartRows(
 		return bufferedFixedValueTimechart{}, err
 	}
 
-	// #nosec G115 -- validateTimechartOutput caps BucketCount at 10,000.
-	bucketCapacity := int(output.BucketCount)
+	bucketCapacity := safecast.MustConv[int](output.BucketCount)
 	buffered := bufferedFixedValueTimechart{
 		first:      output.FirstBucket,
 		span:       output.Span,
@@ -1343,8 +1343,7 @@ func readTimechartRows(ctx context.Context, rows driver.Rows, columns []string, 
 		return bufferedTimechart{}, err
 	}
 
-	// #nosec G115 -- validateTimechartOutput caps BucketCount at 10,000.
-	bucketCapacity := int(output.BucketCount)
+	bucketCapacity := safecast.MustConv[int](output.BucketCount)
 	buffered := bufferedTimechart{rows: make([]timechartRow, 0, bucketCapacity)}
 	var encodedNames []string
 	destinations, err := scanDestinations(columnTypes)
@@ -1449,8 +1448,7 @@ func readValueTimechartRows(
 		return bufferedValueTimechart{}, err
 	}
 
-	// #nosec G115 -- validateTimechartOutput caps BucketCount at 10,000.
-	bucketCapacity := int(output.BucketCount)
+	bucketCapacity := safecast.MustConv[int](output.BucketCount)
 	buffered := bufferedValueTimechart{rows: make([]timechartValueRow, 0, bucketCapacity)}
 	var encodedNames []string
 	destinations, err := scanDestinations(columnTypes)
@@ -1672,11 +1670,11 @@ func publishFixedGrid[T any](
 	}
 	spanSeconds := int64(span / time.Second)
 	if len(cells) > 0 {
-		// #nosec G115 -- the complete fixed grid was validated before schema publication.
+
 		if _, ok := checkedBucketBoundary(
 			first.Unix(),
 			spanSeconds,
-			uint64(len(cells)-1),
+			safecast.MustConv[uint64](len(cells)-1),
 		); !ok {
 			return fmt.Errorf(
 				"%w: compiled timechart bucket arithmetic overflowed",
@@ -1695,8 +1693,8 @@ func publishFixedGrid[T any](
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		// #nosec G115 -- the complete fixed grid was validated before schema publication.
-		bucketUnix := first.Unix() + int64(ordinal)*spanSeconds
+
+		bucketUnix := first.Unix() + safecast.MustConv[int64](ordinal)*spanSeconds
 		if err := sink.AddRow([]searchjobs.Value{
 			searchjobs.TimeValue(time.Unix(bucketUnix, 0).UTC()),
 			cell(value),
@@ -2086,8 +2084,8 @@ func chartRowRetainedBytes(scanned any, seriesCount int, valueKind clickhouse.Ch
 		cellBytes = chartValueCellBytes
 		rowBytes = chartValueRowOverheadBytes
 	}
-	// #nosec G115 -- seriesCount comes from a slice length and is capped by maximumChartSeries.
-	return payload + uint64(seriesCount)*cellBytes + rowBytes
+
+	return payload + safecast.MustConv[uint64](seriesCount)*cellBytes + rowBytes
 }
 
 // chartDomainRetainedBytes reserves both domain slice backings with up to 2x
@@ -2095,16 +2093,16 @@ func chartRowRetainedBytes(scanned any, seriesCount int, valueKind clickhouse.Ch
 // substrings of their encoded names, so charging both is deliberately
 // conservative; normalized leading-underscore names really do allocate both.
 func chartDomainRetainedBytes(encoded, public []string) uint64 {
-	// #nosec G115 -- both lengths are capped by maximumChartSeries.
-	stringSlots := 2 * uint64(len(encoded)+len(public)) * chartStringHeaderBytes
+
+	stringSlots := 2 * safecast.MustConv[uint64](len(encoded)+len(public)) * chartStringHeaderBytes
 	payload := uint64(0)
 	for _, value := range encoded {
-		// #nosec G115 -- labels are capped by maximumChartLabel.
-		payload += uint64(len(value))
+
+		payload += safecast.MustConv[uint64](len(value))
 	}
 	for _, value := range public {
-		// #nosec G115 -- labels are capped by maximumChartLabel plus normalization.
-		payload += uint64(len(value))
+
+		payload += safecast.MustConv[uint64](len(value))
 	}
 	return stringSlots + payload
 }
@@ -2880,7 +2878,7 @@ var executionLimitMarkers = [...]struct {
 }{
 	{clickhouse.RexCaptureLimitMarker, "rex capture bytes exceeded the per-row limit"},
 	{clickhouse.SpathInputLimitMarker, "spath input bytes exceeded the per-row limit"},
-	{clickhouse.SpathJSONTokenLimitMarker, "spath JSON tokens exceeded the per-row limit"},
+	{clickhouse.SpathJSONLexemeLimitMarker, "spath JSON tokens exceeded the per-row limit"},
 	{clickhouse.NativeMVMembersLimitMarker, "native multivalue members exceeded the per-row limit"},
 	{clickhouse.NativeMVPayloadLimitMarker, "native multivalue payload exceeded the per-row limit"},
 	{clickhouse.ChartRowLimitMarker, "chart row values exceeded the supported limit"},
@@ -2925,8 +2923,7 @@ func classifyQueryError(ctx context.Context, err error) error {
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
-	var exception *clickhousedriver.Exception
-	if errors.As(err, &exception) {
+	if exception, ok := errors.AsType[*clickhousedriver.Exception](err); ok {
 		if exception.Code == 395 {
 			for _, classified := range executionLimitMarkers {
 				if strings.Contains(exception.Message, classified.marker) {
@@ -2967,8 +2964,7 @@ func classifyQueryError(ctx context.Context, err error) error {
 		errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ETIMEDOUT) {
 		return fmt.Errorf("%w: %w", searchjobs.ErrStorageUnavailable, err)
 	}
-	var networkError net.Error
-	if errors.As(err, &networkError) {
+	if _, ok := errors.AsType[net.Error](err); ok {
 		return fmt.Errorf("%w: %w", searchjobs.ErrStorageUnavailable, err)
 	}
 	return err

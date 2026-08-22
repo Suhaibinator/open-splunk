@@ -14,11 +14,12 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/server"
-	"google.golang.org/protobuf/proto"
 )
 
 type stubControlAppCatalog struct {
@@ -759,15 +760,22 @@ func TestMapRuntimeAppCatalogErrorIsStableAndSanitized(t *testing.T) {
 			// input error, so interface identity is the precise contract;
 			// structural comparison would wrongly equate distinct errors
 			// that happen to share a message.
-			//nolint:errorlint // Identity is the contract under test: the
-			// mapping must return a package sentinel or the exact input
-			// error, never a wrapped one, so errors.Is would mask exactly
-			// the regression this test exists to catch.
-			if got := mapRuntimeAppCatalogError(test.err); got != test.want {
+			if got := mapRuntimeAppCatalogError(test.err); !sameRuntimeAppError(got, test.want) {
 				t.Fatalf("mapped error = %v, want exact %v", got, test.want)
 			}
 		})
 	}
+}
+
+func sameRuntimeAppError(left, right error) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	leftValue := reflect.ValueOf(left)
+	rightValue := reflect.ValueOf(right)
+	return leftValue.Type() == rightValue.Type() &&
+		leftValue.Comparable() &&
+		leftValue.Equal(rightValue)
 }
 
 func TestDeriveAppCursorKeysIsStableAndPurposeSeparated(t *testing.T) {

@@ -4291,15 +4291,6 @@ async function beginFixedResultRenderingObservation(
       processLongTaskEntries: () => undefined,
       processLayoutShiftEntries: () => undefined,
     };
-    // This helper must be defined inside the evaluated browser realm.
-    // oxlint-disable-next-line unicorn/consistent-function-scoping
-    const matchingElements = (node: Node, selector: string): Element[] => {
-      if (!(node instanceof Element)) return [];
-      return [
-        ...(node.matches(selector) ? [node] : []),
-        ...node.querySelectorAll(selector),
-      ];
-    };
     const addMaterializedRow = (row: Element): void => {
       observation.materializedRows.add(row);
       observation.maximumMaterializedRows = Math.max(
@@ -4316,12 +4307,22 @@ async function beginFixedResultRenderingObservation(
       if (row.matches(materializedRowSelector)) addMaterializedRow(row);
     };
     const addRows = (node: Node): void => {
-      for (const row of matchingElements(node, tableBodyRowSelector)) {
+      if (!(node instanceof Element)) return;
+      const rows = [
+        ...(node.matches(tableBodyRowSelector) ? [node] : []),
+        ...node.querySelectorAll(tableBodyRowSelector),
+      ];
+      for (const row of rows) {
         addTableBodyRow(row);
       }
     };
     const removeRows = (node: Node): void => {
-      for (const row of matchingElements(node, tableBodyRowSelector)) {
+      if (!(node instanceof Element)) return;
+      const rows = [
+        ...(node.matches(tableBodyRowSelector) ? [node] : []),
+        ...node.querySelectorAll(tableBodyRowSelector),
+      ];
+      for (const row of rows) {
         observation.tableBodyRows.delete(row);
         observation.materializedRows.delete(row);
       }
@@ -4381,7 +4382,13 @@ async function beginFixedResultRenderingObservation(
           }
         }
         for (const addedNode of record.addedNodes) {
-          for (const table of matchingElements(addedNode, statisticsTableSelector)) {
+          const tables = addedNode instanceof Element
+            ? [
+              ...(addedNode.matches(statisticsTableSelector) ? [addedNode] : []),
+              ...addedNode.querySelectorAll(statisticsTableSelector),
+            ]
+            : [];
+          for (const table of tables) {
             observation.materializedTables.add(table);
             for (const body of table.querySelectorAll("tbody")) {
               observation.materializedTableBodies.add(body);
@@ -4389,7 +4396,13 @@ async function beginFixedResultRenderingObservation(
             }
           }
           if (targetWasInTrackedTable) {
-            for (const body of matchingElements(addedNode, "tbody")) {
+            const bodies = addedNode instanceof Element
+              ? [
+                ...(addedNode.matches("tbody") ? [addedNode] : []),
+                ...addedNode.querySelectorAll("tbody"),
+              ]
+              : [];
+            for (const body of bodies) {
               observation.materializedTableBodies.add(body);
               addRows(body);
             }
@@ -4682,15 +4695,15 @@ async function waitForStableDOM(
     });
     try {
       const deadline = performance.now() + timeoutMilliseconds;
-      for (let retry = 0; performance.now() <= deadline; retry += 1) {
+      const observeStableTurn = async (retry: number): Promise<StableDOMResult> => {
+        if (performance.now() > deadline) {
+          throw new Error(`DOM did not become stable across two animation frames: ${targetSelector}`);
+        }
         const readyBefore = requiredSelectors.every(
           (requiredSelector) => document.querySelector(requiredSelector) !== null,
         );
         const before = generation;
-        // Stability retries intentionally observe consecutive event-loop turns.
-        // oxlint-disable-next-line eslint/no-await-in-loop
         await new Promise<void>((resolve) => setTimeout(resolve, 0));
-        // oxlint-disable-next-line eslint/no-await-in-loop
         await new Promise<void>((resolve) => {
           requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
         });
@@ -4706,8 +4719,9 @@ async function waitForStableDOM(
           }
           return { retries: retry, stableAt };
         }
-      }
-      throw new Error(`DOM did not become stable across two animation frames: ${targetSelector}`);
+        return observeStableTurn(retry + 1);
+      };
+      return await observeStableTurn(0);
     } finally {
       observer.disconnect();
     }
@@ -5452,19 +5466,15 @@ async function verifyBrowserRecorderBounds(page: Page): Promise<void> {
       status.hidden = true;
       status.dataset.testid = "backend-preview-status";
       document.body.prepend(status);
-      // This helper must be defined inside the evaluated browser realm.
-      // oxlint-disable-next-line unicorn/consistent-function-scoping
-      const settle = async (): Promise<void> => {
-        await new Promise<void>((resolve) => queueMicrotask(resolve));
-      };
-      for (let index = 0; index <= maximumRecordedDiagnostics; index += 1) {
+      const recordStatus = async (index: number): Promise<void> => {
+        if (index > maximumRecordedDiagnostics) return;
         status.dataset.status = `harness-overflow-${index}`;
-        // Each distinct value must reach the production MutationObserver.
-        // oxlint-disable-next-line eslint/no-await-in-loop
-        await settle();
-      }
+        await new Promise<void>((resolve) => queueMicrotask(resolve));
+        await recordStatus(index + 1);
+      };
+      await recordStatus(0);
       status.dataset.status = "finalization-error";
-      await settle();
+      await new Promise<void>((resolve) => queueMicrotask(resolve));
     }, {
       maximumRecordedDiagnostics: MAXIMUM_RECORDED_DIAGNOSTICS,
       statusFixtureID: fixtureIDs.status,
@@ -5505,19 +5515,15 @@ async function verifyBrowserRecorderBounds(page: Page): Promise<void> {
     }) => {
       const strong = document.querySelector<HTMLElement>(`#${fixtureID} strong`);
       if (strong === null) throw new Error("job-metric self-test fixture is missing");
-      // This helper must be defined inside the evaluated browser realm.
-      // oxlint-disable-next-line unicorn/consistent-function-scoping
-      const settle = async (): Promise<void> => {
-        await new Promise<void>((resolve) => queueMicrotask(resolve));
-      };
-      for (let index = 0; index <= maximumRecordedDiagnostics; index += 1) {
+      const recordMetric = async (index: number): Promise<void> => {
+        if (index > maximumRecordedDiagnostics) return;
         strong.textContent = `${index + 2} rows`;
-        // Each distinct value must reach the production MutationObserver.
-        // oxlint-disable-next-line eslint/no-await-in-loop
-        await settle();
-      }
+        await new Promise<void>((resolve) => queueMicrotask(resolve));
+        await recordMetric(index + 1);
+      };
+      await recordMetric(0);
       strong.textContent = "1 rows";
-      await settle();
+      await new Promise<void>((resolve) => queueMicrotask(resolve));
     }, {
       fixtureID: fixtureIDs.metrics,
       maximumRecordedDiagnostics: MAXIMUM_RECORDED_DIAGNOSTICS,
@@ -5581,17 +5587,13 @@ async function verifyBrowserRecorderBounds(page: Page): Promise<void> {
       if (root === null || count == null || phase == null || status == null) {
         throw new Error("stale-DOM self-test fixture is incomplete");
       }
-      // This helper must be defined inside the evaluated browser realm.
-      // oxlint-disable-next-line unicorn/consistent-function-scoping
-      const settle = async (): Promise<void> => {
-        await new Promise<void>((resolve) => queueMicrotask(resolve));
-      };
-      for (let index = 0; index <= maximumRecordedDiagnostics; index += 1) {
+      const recordCount = async (index: number): Promise<void> => {
+        if (index > maximumRecordedDiagnostics) return;
         count.textContent = `${index + 1} events`;
-        // Each distinct value must reach the production MutationObserver.
-        // oxlint-disable-next-line eslint/no-await-in-loop
-        await settle();
-      }
+        await new Promise<void>((resolve) => queueMicrotask(resolve));
+        await recordCount(index + 1);
+      };
+      await recordCount(0);
       phase.textContent = "Queued";
       status.dataset.status = "harness-unexpected";
       const preview = document.createElement("article");
@@ -5601,7 +5603,7 @@ async function verifyBrowserRecorderBounds(page: Page): Promise<void> {
       const previewTable = document.createElement("table");
       previewTable.setAttribute("aria-label", "Live preview search statistics");
       root.append(previewTable);
-      await settle();
+      await new Promise<void>((resolve) => queueMicrotask(resolve));
     }, {
       fixtureID: fixtureIDs.stale,
       maximumRecordedDiagnostics: MAXIMUM_RECORDED_DIAGNOSTICS,

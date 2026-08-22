@@ -195,8 +195,9 @@ func TestParseCSVRejectsInvalidLimitsAndReaderFailure(t *testing.T) {
 }
 
 func TestParseCSVContextRejectsNilAndPreCanceledContexts(t *testing.T) {
-	//nolint:staticcheck // The nil context is the invalid input under test.
-	if _, err := ParseCSVContext(nil, strings.NewReader("key\na\n"), Limits{}); !errors.Is(err, ErrInvalidArgument) {
+	var nilContext context.Context
+
+	if _, err := ParseCSVContext(nilContext, strings.NewReader("key\na\n"), Limits{}); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("nil context error = %v, want invalid argument", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())

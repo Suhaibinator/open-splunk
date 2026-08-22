@@ -4,10 +4,11 @@ import (
 	"errors"
 	"testing"
 
-	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
-	"github.com/Suhaibinator/open-splunk/internal/control"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/control"
 )
 
 const writerReplayRevokedApp = "app_000000000300000000002A"
@@ -251,8 +252,18 @@ func tamperAllWriterReplayReceipts(
 			}
 		}()
 	}
-	// #nosec G202 -- assignment is selected from a fixed test-case corruption matrix.
-	result, err := connection.ExecContext(t.Context(), `UPDATE knowledge_mutation_idempotency SET `+assignment+` WHERE tenant_id = ?`, writerFaultTenant)
+	var statement string
+	switch assignment {
+	case `outcome_proto = x'00'`:
+		statement = `UPDATE knowledge_mutation_idempotency SET outcome_proto = x'00' WHERE tenant_id = ?`
+	case `outcome_proto = zeroblob(1025)`:
+		statement = `UPDATE knowledge_mutation_idempotency SET outcome_proto = zeroblob(1025) WHERE tenant_id = ?`
+	case `request_digest = zeroblob(32)`:
+		statement = `UPDATE knowledge_mutation_idempotency SET request_digest = zeroblob(32) WHERE tenant_id = ?`
+	default:
+		t.Fatalf("unknown replay receipt assignment %q", assignment)
+	}
+	result, err := connection.ExecContext(t.Context(), statement, writerFaultTenant)
 	if err != nil {
 		t.Fatalf("tamper replay receipts: %v", err)
 	}

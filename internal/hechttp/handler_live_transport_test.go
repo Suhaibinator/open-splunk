@@ -612,7 +612,7 @@ func (stager *liveAdmissionStager) Stage(
 	result := ingest.StageResult{
 		VisibilitySequence: sequence,
 		State:              ingest.StoredBatchPending,
-		AcceptedEvents:     uint32(events), // #nosec G115 -- HEC request count is bounded at 1,000.
+		AcceptedEvents:     uint32(events),
 		UncompressedBytes:  admissionSourceBytes(request.Events),
 		HECRequestSequence: sequence,
 	}
@@ -720,7 +720,7 @@ func doLiveRequest(
 		}))
 	}
 	// Every caller supplies a request targeting the loopback httptest server created by this test.
-	response, err := client.Do(request) // #nosec G704 -- controlled local transport fixture, not an application URL fetch.
+	response, err := client.Do(request)
 	if err != nil {
 		return liveHTTPResult{err: err}
 	}

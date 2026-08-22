@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 
+	"fortio.org/safecast"
+
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
@@ -189,7 +191,7 @@ func (node *arithmeticSQLNode) appendRPN(tokens []int16) []int16 {
 	}
 	switch node.kind {
 	case arithmeticSQLLeaf:
-		return append(tokens, int16(node.operand)) // #nosec G115 -- at most 257 operands.
+		return append(tokens, safecast.MustConv[int16](node.operand))
 	case arithmeticSQLUnary:
 		tokens = node.left.appendRPN(tokens)
 		return append(tokens, arithmeticRPNUnaryNegative)

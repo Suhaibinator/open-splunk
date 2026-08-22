@@ -148,8 +148,7 @@ func createWithHooks(
 		if !publicationMayHaveOccurred || returnedErr == nil {
 			return
 		}
-		var publicationErr *PublicationStatusError
-		if errors.As(returnedErr, &publicationErr) {
+		if _, ok := errors.AsType[*PublicationStatusError](returnedErr); ok {
 			return
 		}
 		returnedErr = &PublicationStatusError{
@@ -263,8 +262,7 @@ func createWithHooks(
 		Release:                options.Release,
 	})
 	if err != nil {
-		var publicationErr *controlbackup.PublicationStatusError
-		if errors.As(err, &publicationErr) {
+		if _, ok := errors.AsType[*controlbackup.PublicationStatusError](err); ok {
 			preserveStage = true
 			return Verification{}, fmt.Errorf(
 				"create deployment recovery set control-plane member: child publication completed or may have occurred inside outer staging directory %q; preserve the entire outer stage and independently reconcile every child candidate: %w",

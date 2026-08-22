@@ -14,6 +14,7 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -224,8 +225,9 @@ func TestExecutorExecuteFieldCatalogPrefersMetadataUnavailableThroughOverflowSen
 func TestExecutorExecuteFieldCatalogHonorsContextAtEveryBoundary(t *testing.T) {
 	t.Run("nil", func(t *testing.T) {
 		connection := &fakeQueryConnection{rows: fieldCatalogFakeRows(0)}
-		//nolint:staticcheck // This case explicitly verifies the nil-context guard.
-		got, err := mustExecutor(t, connection).ExecuteFieldCatalog(nil, validCompiledFieldCatalog(1))
+		var nilContext context.Context
+
+		got, err := mustExecutor(t, connection).ExecuteFieldCatalog(nilContext, validCompiledFieldCatalog(1))
 		if err == nil || !reflect.DeepEqual(got, FieldCatalogResult{}) || connection.query != "" {
 			t.Fatalf("ExecuteFieldCatalog(nil) = (%#v, %v), query=%q", got, err, connection.query)
 		}

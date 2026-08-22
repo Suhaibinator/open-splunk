@@ -604,8 +604,9 @@ func TestManagerListValidatesContextScopeFiltersAndBounds(t *testing.T) {
 			}
 		})
 	}
-	//nolint:staticcheck // Explicitly verifies the public nil-context guard.
-	if _, err := manager.List(nil, testAccess, ListRequest{}); err == nil {
+	var nilContext context.Context
+
+	if _, err := manager.List(nilContext, testAccess, ListRequest{}); err == nil {
 		t.Fatal("nil context succeeded")
 	}
 	canceled, cancel := context.WithCancel(context.Background())

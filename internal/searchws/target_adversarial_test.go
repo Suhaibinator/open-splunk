@@ -11,10 +11,11 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
-	"google.golang.org/protobuf/proto"
 )
 
 var adversarialNow = time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)
@@ -213,7 +214,7 @@ func TestAdversarialSearchProgressStateVersionPreventsTerminalFingerprintCollaps
 	service := adversarialNewService(t, nil)
 	target := adversarialNewTarget(service, "terminal-progress-version")
 	connection := newConnection(service, nil)
-	defer connection.cancel()
+	defer connection.cancel(context.Canceled)
 	subscription := adversarialAttach(target, connection, "terminal-progress-version")
 	defer adversarialDetach(subscription)
 
@@ -339,7 +340,7 @@ func TestAdversarialIncompleteRetentionNeverPublishesUnretainedFramesAndRepairs(
 	service := adversarialNewService(t, func(config *Config) { config.MaximumReplayEvents = 1 })
 	target := adversarialNewTarget(service, "retention-retry")
 	connection := newConnection(service, nil)
-	defer connection.cancel()
+	defer connection.cancel(context.Canceled)
 	subscription := adversarialAttach(target, connection, "retry")
 	defer adversarialDetach(subscription)
 	base := adversarialSequenceBase
@@ -526,7 +527,7 @@ func TestAdversarialDivergenceBoundaryRequiresResynchronization(t *testing.T) {
 	), false)
 
 	connection := newConnection(service, nil)
-	defer connection.cancel()
+	defer connection.cancel(context.Canceled)
 	failure := connection.subscribe("request", &opensplunk.SubscribeSearchJobsCommand{Subscriptions: []*opensplunk.SearchSubscription{{
 		SubscriptionId: "diverged",
 		Target:         target.key.protobuf(),
@@ -551,7 +552,7 @@ func TestAdversarialUnsubscribeMakesLateDeliveryNoOpSuccess(t *testing.T) {
 	service := adversarialNewService(t, nil)
 	target := adversarialNewTarget(service, "unsubscribe")
 	connection := newConnection(service, nil)
-	defer connection.cancel()
+	defer connection.cancel(context.Canceled)
 	subscription := adversarialAttach(target, connection, "removed")
 	if failure := connection.unsubscribe("request", &opensplunk.UnsubscribeSearchJobsCommand{
 		SubscriptionIds: []string{"removed"},
@@ -619,7 +620,7 @@ func TestPreviewQueuePressureSkipsSubscriptionSpecificCopy(t *testing.T) {
 		config.MaximumTotalQueuedBytes = minimumFrameBytes
 	})
 	connection := newConnection(service, nil)
-	defer connection.cancel()
+	defer connection.cancel(context.Canceled)
 	if !connection.enqueue(make([]byte, minimumFrameBytes-32)) {
 		t.Fatal("failed to seed the bounded connection queue")
 	}
@@ -646,12 +647,12 @@ func TestDisposablePreviewPressureClosesAndRetainsReplay(t *testing.T) {
 	target.mu.Unlock()
 
 	slow := newConnection(service, nil)
-	defer slow.cancel()
+	defer slow.cancel(context.Canceled)
 	slowSubscription := adversarialAttach(target, slow, "slow-preview")
 	slowSubscription.previewRows = 1
 	defer adversarialDetach(slowSubscription)
 	healthy := newConnection(service, nil)
-	defer healthy.cancel()
+	defer healthy.cancel(context.Canceled)
 	healthySubscription := adversarialAttach(target, healthy, "healthy-preview")
 	healthySubscription.previewRows = 1
 	defer adversarialDetach(healthySubscription)
@@ -693,7 +694,7 @@ func TestDisposablePreviewPressureClosesAndRetainsReplay(t *testing.T) {
 		t.Fatalf("preview replay after %d = continuous:%t frames:%d", checkpoint, continuous, len(replay))
 	}
 	recovered := newConnection(service, nil)
-	defer recovered.cancel()
+	defer recovered.cancel(context.Canceled)
 	recoveredSubscription := adversarialAttach(target, recovered, "recovered-preview")
 	recoveredSubscription.previewRows = 1
 	defer adversarialDetach(recoveredSubscription)
@@ -736,7 +737,7 @@ func TestPreviewTailoringWorkDoesNotConsumeConnectionQueueBudget(t *testing.T) {
 	adversarialApply(t, target, initial, true)
 
 	healthy := newConnection(service, nil)
-	defer healthy.cancel()
+	defer healthy.cancel(context.Canceled)
 	healthySubscription := adversarialAttach(target, healthy, "healthy-tailored-preview")
 	healthySubscription.previewRows = 1
 	defer adversarialDetach(healthySubscription)
@@ -780,7 +781,7 @@ func TestPreviewTailoringWorkDoesNotConsumeConnectionQueueBudget(t *testing.T) {
 	}
 
 	unrelated := newConnection(service, nil)
-	defer unrelated.cancel()
+	defer unrelated.cancel(context.Canceled)
 	unrelatedBytes := minimumFrameBytes - healthyFrameBytes
 	if !unrelated.enqueue(make([]byte, int(unrelatedBytes))) {
 		t.Fatal("failed to fill the unrelated connection to the tailored-frame boundary")
@@ -1139,7 +1140,7 @@ func TestAdversarialRestartSequenceEpochRejectsOldNumericSequenceAfterEstablishm
 		t.Fatalf("establish response event count = %d, want 3", len(events))
 	}
 	establisher.removeAllSubscriptions()
-	establisher.cancel()
+	establisher.cancel(context.Canceled)
 	secondTarget.mu.Lock()
 	established := secondTarget.epochEstablished
 	secondTarget.mu.Unlock()
@@ -1154,7 +1155,7 @@ func TestAdversarialRestartSequenceEpochRejectsOldNumericSequenceAfterEstablishm
 	}
 
 	stale := newConnection(secondService, nil)
-	defer stale.cancel()
+	defer stale.cancel(context.Canceled)
 	if failure := stale.subscribe("stale", &opensplunk.SubscribeSearchJobsCommand{Subscriptions: []*opensplunk.SearchSubscription{{
 		SubscriptionId: "stale", Target: secondTarget.key.protobuf(), AfterSequence: oldSequence,
 	}}}); failure != nil {
@@ -1176,7 +1177,7 @@ func TestAdversarialPermanentNotFoundPollBacksOffAndNotifiesOnce(t *testing.T) {
 	})
 	target := adversarialNewTarget(service, "gone")
 	connection := newConnection(service, nil)
-	defer connection.cancel()
+	defer connection.cancel(context.Canceled)
 	subscription := adversarialAttach(target, connection, "gone")
 	defer adversarialDetach(subscription)
 	target.mu.Lock()

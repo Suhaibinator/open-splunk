@@ -208,8 +208,7 @@ func FuzzParseJSONPath(f *testing.F) {
 	f.Fuzz(func(t *testing.T, path string) {
 		steps, err := ParseJSON(path)
 		if err != nil {
-			var pathErr *Error
-			if !errors.As(err, &pathErr) {
+			if _, ok := errors.AsType[*Error](err); !ok {
 				t.Fatalf("ParseJSON(%q) returned unexpected error type %T", path, err)
 			}
 			return

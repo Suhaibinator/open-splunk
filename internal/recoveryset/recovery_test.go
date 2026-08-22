@@ -337,8 +337,7 @@ func TestCreatePreservesWholeOuterStageAfterNestedChildPublicationFailure(t *tes
 	if err == nil || !errors.Is(err, injected) {
 		t.Fatalf("nested publication failure = %v, want injected cause", err)
 	}
-	var publicationErr *controlbackup.PublicationStatusError
-	if !errors.As(err, &publicationErr) {
+	if _, ok := errors.AsType[*controlbackup.PublicationStatusError](err); !ok {
 		t.Fatalf("nested publication failure = %v, want controlbackup status", err)
 	}
 	if !strings.Contains(err.Error(), "preserve the entire outer stage") {

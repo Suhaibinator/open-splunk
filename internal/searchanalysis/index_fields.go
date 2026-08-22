@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -275,17 +276,11 @@ func validIndexFieldSnapshot(
 }
 
 func canonicalIndexFieldTime(value time.Time) bool {
-	// time.Time == is intentional: Equal would admit a hidden monotonic
-	// component, making an ostensibly immutable snapshot representation differ.
-	//nolint:staticcheck
-	return value.Location() == time.UTC && value == value.Round(0)
+	return value.Location() == time.UTC && reflect.DeepEqual(value, value.Round(0))
 }
 
 func exactIndexFieldTime(left, right time.Time) bool {
-	// time.Time == is intentional: snapshot anchors must be representation-
-	// identical, including the absence of monotonic clock metadata.
-	//nolint:staticcheck
-	return left == right
+	return reflect.DeepEqual(left, right)
 }
 
 func buildIndexFieldPlan(

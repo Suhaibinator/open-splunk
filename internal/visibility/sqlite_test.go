@@ -624,9 +624,9 @@ func TestSQLiteSequencerPendingUsageCountsLeasedAndUnleasedReservations(t *testi
 func TestSQLiteSequencerPendingUsageValidatesContextAndLifecycle(t *testing.T) {
 	t.Parallel()
 	sequencer, _ := openTestSequencer(t)
+	var nilContext context.Context
 
-	//nolint:staticcheck // Deliberately verify that the package rejects a nil context.
-	if _, err := sequencer.PendingUsage(nil); !errors.Is(err, ErrInvalidArgument) {
+	if _, err := sequencer.PendingUsage(nilContext); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("nil-context PendingUsage() error = %v, want ErrInvalidArgument", err)
 	}
 	canceled, cancel := context.WithCancel(context.Background())
@@ -2337,12 +2337,13 @@ func TestSQLiteSequencerRejectsInvalidInputsAndExhaustion(t *testing.T) {
 	if _, err := sequencer.Reject(ctx, oversizedRejectMetadata); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("oversized rejected metadata error = %v", err)
 	}
-	//nolint:staticcheck // Deliberately verify that the package rejects a nil context.
-	if _, err := sequencer.Reserve(nil, reserveRequest("batch", "attempt")); !errors.Is(err, ErrInvalidArgument) {
+	var nilContext context.Context
+
+	if _, err := sequencer.Reserve(nilContext, reserveRequest("batch", "attempt")); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("nil context error = %v", err)
 	}
-	//nolint:staticcheck // Deliberately verify that the package rejects a nil context.
-	if _, err := sequencer.Reject(nil, rejectRequest("batch")); !errors.Is(err, ErrInvalidArgument) {
+
+	if _, err := sequencer.Reject(nilContext, rejectRequest("batch")); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("nil Reject context error = %v", err)
 	}
 	if _, _, err := sequencer.AcquirePending(ctx, ""); !errors.Is(err, ErrInvalidArgument) {

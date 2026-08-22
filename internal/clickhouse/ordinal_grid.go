@@ -3,6 +3,8 @@ package clickhouse
 import (
 	"math"
 	"strings"
+
+	"fortio.org/safecast"
 )
 
 // epochFloorBucketNumberSQL returns a signed epoch-bucket expression for a
@@ -26,8 +28,10 @@ func ordinalGridFirstBucketNumber(firstUnix, spanSeconds int64, bucketCount uint
 	if bucketCount > uint64(math.MaxInt64)/uint64(spanSeconds) {
 		return 0, false
 	}
-	// #nosec G115 -- the product is proven no larger than math.MaxInt64 above.
-	coveredSeconds := int64(bucketCount * uint64(spanSeconds))
+
+	coveredSeconds := safecast.MustConv[int64](
+		bucketCount * safecast.MustConv[uint64](spanSeconds),
+	)
 	if firstUnix > math.MaxInt64-coveredSeconds {
 		return 0, false
 	}

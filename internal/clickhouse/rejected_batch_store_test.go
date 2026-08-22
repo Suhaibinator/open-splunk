@@ -11,12 +11,13 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/proto"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
-	"google.golang.org/protobuf/encoding/protowire"
-	"google.golang.org/protobuf/proto"
 )
 
 func TestRejectBatchPersistsOnlyTerminalMetadata(t *testing.T) {
@@ -389,8 +390,7 @@ func TestResumeBatchAfterObservedPendingAbandonmentReturnsGoneWithoutRecreation(
 	}
 
 	_, err = store.ResumeBatch(ctx, identity)
-	var gone *ingest.StoredBatchGoneError
-	if !errors.As(err, &gone) {
+	if _, ok := errors.AsType[*ingest.StoredBatchGoneError](err); !ok {
 		t.Fatalf("ResumeBatch() error = %v, want StoredBatchGoneError", err)
 	}
 	if isTransient(err) {
@@ -433,7 +433,7 @@ func TestRejectBatchCountsOnlyNewTerminalRejection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// #nosec G115 -- len is non-negative and exactly representable as uint64.
+
 	encodedBytes := uint64(len(encoded))
 	for _, test := range []struct {
 		name              string
@@ -510,8 +510,7 @@ func TestRejectBatchConflictsAcrossBothStableIdentities(t *testing.T) {
 			input := validStoreBatchRejection()
 			test.edit(&input)
 			_, err := store.RejectBatch(ctx, input)
-			var conflict *ingest.DurableIdentityConflictError
-			if !errors.As(err, &conflict) {
+			if _, ok := errors.AsType[*ingest.DurableIdentityConflictError](err); !ok {
 				t.Fatalf("RejectBatch error = %v, want durable identity conflict", err)
 			}
 		})
@@ -646,7 +645,7 @@ func TestBatchRejectionMetadataRejectsCorruptionAndInvalidMessages(t *testing.T)
 		metadata := make([]byte, headerBytes, headerBytes+len(payload)+sha256.Size)
 		copy(metadata, batchRejectionMetadataMagic[:])
 		metadata[len(batchRejectionMetadataMagic)] = batchRejectionMetadataVersion
-		// #nosec G115 -- payload is bounded by the 1 MiB test fixture metadata.
+
 		binary.BigEndian.PutUint64(metadata[len(batchRejectionMetadataMagic)+1:], uint64(len(payload)))
 		metadata = append(metadata, payload...)
 		checksum := sha256.Sum256(metadata)

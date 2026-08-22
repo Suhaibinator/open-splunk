@@ -2,27 +2,29 @@ package sender
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"math"
-	"math/rand"
 	"os"
 	"sync"
 	"time"
 
-	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
-	"github.com/Suhaibinator/open-splunk/internal/collector/wal"
-	"github.com/Suhaibinator/open-splunk/internal/collectorlimits"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/encoding/gzip" // registers and names the gzip compressor
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/collector/wal"
+	"github.com/Suhaibinator/open-splunk/internal/collectorlimits"
 )
 
 // TLSConfig configures transport security for the gRPC dial.
@@ -258,12 +260,20 @@ func New(opts Options, queue wal.Queue, deadLetter DeadLetterSink, reporter Stat
 			"bytes", queueStats.QuarantinedBytes,
 			"recovery_warning", queueStats.RecoveryWarning)
 	}
-	// #nosec G404 -- this PRNG only jitters reconnect timing; it never generates
-	// tokens, identifiers, or other security-sensitive values.
-	seeded := rand.New(rand.NewSource(time.Now().UnixNano()))
-	s.rand = seeded.Float64
+
+	// Backoff jitter uses CSPRNG output without shared mutable PRNG state.
+	s.rand = secureRandomFloat64
 	s.dial = s.grpcDial
 	return s, nil
+}
+
+func secureRandomFloat64() float64 {
+	var random [8]byte
+	if _, err := cryptorand.Read(random[:]); err != nil {
+		return 0.5
+	}
+	const mantissaMask = 1<<53 - 1
+	return float64(binary.LittleEndian.Uint64(random[:])&mantissaMask) / (1 << 53)
 }
 
 // Run maintains the delivery stream until ctx is canceled, reconnecting with
@@ -285,8 +295,7 @@ func (s *Sender) Run(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		var fe *fatalError
-		if errors.As(err, &fe) {
+		if _, ok := errors.AsType[*fatalError](err); ok {
 			s.setLastError(err)
 			return err
 		}

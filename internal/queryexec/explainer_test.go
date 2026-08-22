@@ -321,12 +321,6 @@ func TestValidateExplainerTLSRejectsUnboundedOrUnsafeFacilities(t *testing.T) {
 			},
 		},
 		{
-			name: "custom entropy",
-			mutate: func(config *tls.Config) {
-				config.Rand = strings.NewReader("entropy")
-			},
-		},
-		{
 			name: "custom clock",
 			mutate: func(config *tls.Config) {
 				config.Time = time.Now

@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"time"
 
+	"fortio.org/safecast"
+
 	"github.com/Suhaibinator/open-splunk/internal/ianatimezone"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
@@ -193,12 +195,12 @@ func statsSparklineExplicitBucketSpec(
 				"compile ClickHouse stats sparkline: day span is outside the supported range",
 			)
 		}
-		magnitude := int64(span.Magnitude) // #nosec G115 -- checked above.
+		magnitude := safecast.MustConv[int64](span.Magnitude)
 		firstDay := statsSparklineCivilDayIndex(earliest, location)
 		lastDay := statsSparklineCivilDayIndex(lastIncluded, location)
 		base.FirstBucket = firstDay / magnitude
 		lastBucket := lastDay / magnitude
-		count := uint64(lastBucket-base.FirstBucket) + 1 // #nosec G115 -- positive civil indices.
+		count := safecast.MustConv[uint64](lastBucket-base.FirstBucket) + 1
 		localDate := "toDate32(toTimeZone(" + timeSQL + ", ?))"
 		base.BucketSQL = "intDiv(toInt64(toDaysSinceYearZero(" + localDate + ")), ?)"
 		base.BucketArgs = []any{searchTimezone, magnitude}
@@ -206,7 +208,7 @@ func statsSparklineExplicitBucketSpec(
 		// which civil day anchors a multi-day grid.
 		base.AlignmentOracleRequired = magnitude > 1
 		if count <= math.MaxUint16 {
-			base.BucketCount = uint16(count) // #nosec G115 -- checked above.
+			base.BucketCount = safecast.MustConv[uint16](count)
 		}
 		return base, count, nil
 	}
@@ -216,12 +218,12 @@ func statsSparklineExplicitBucketSpec(
 				"compile ClickHouse stats sparkline: month span is outside the supported range",
 			)
 		}
-		magnitude := int64(span.Magnitude) // #nosec G115 -- checked above.
+		magnitude := safecast.MustConv[int64](span.Magnitude)
 		firstMonth := statsSparklineMonthIndex(earliest, location)
 		lastMonth := statsSparklineMonthIndex(lastIncluded, location)
 		base.FirstBucket = firstMonth / magnitude
 		lastBucket := lastMonth / magnitude
-		count := uint64(lastBucket-base.FirstBucket) + 1 // #nosec G115 -- ordered supported timestamps.
+		count := safecast.MustConv[uint64](lastBucket-base.FirstBucket) + 1
 		localizedYear := "toYear(toTimeZone(" + timeSQL + ", ?))"
 		localizedMonth := "toMonth(toTimeZone(" + timeSQL + ", ?))"
 		monthIndexSQL := "(toInt64(" + localizedYear + ") * 12 + " +
@@ -232,7 +234,7 @@ func statsSparklineExplicitBucketSpec(
 		// multiple months is not.
 		base.AlignmentOracleRequired = magnitude > 1
 		if count <= math.MaxUint16 {
-			base.BucketCount = uint16(count) // #nosec G115 -- checked above.
+			base.BucketCount = safecast.MustConv[uint16](count)
 		}
 		return base, count, nil
 	}
@@ -243,21 +245,21 @@ func statsSparklineExplicitBucketSpec(
 			"compile ClickHouse stats sparkline: fixed span is outside the supported range",
 		)
 	}
-	maximumMagnitude := uint64(math.MaxInt64 / unitNanoseconds) // #nosec G115 -- supported fixed units are positive.
+	maximumMagnitude := safecast.MustConv[uint64](math.MaxInt64 / unitNanoseconds)
 	if span.Magnitude > maximumMagnitude {
 		return statsSparklineBucketSpec{}, 0, errors.New(
 			"compile ClickHouse stats sparkline: fixed span is outside the supported range",
 		)
 	}
-	spanNanoseconds := int64(span.Magnitude) * unitNanoseconds // #nosec G115 -- product checked above.
+	spanNanoseconds := safecast.MustConv[int64](span.Magnitude) * unitNanoseconds
 	base.FirstBucket = statsSparklineFloorQuotient(earliest.UnixNano(), spanNanoseconds)
 	lastBucket := statsSparklineFloorQuotient(lastIncluded.UnixNano(), spanNanoseconds)
-	count := uint64(lastBucket-base.FirstBucket) + 1 // #nosec G115 -- ordered supported timestamps.
+	count := safecast.MustConv[uint64](lastBucket-base.FirstBucket) + 1
 	ticks := "reinterpretAsInt64(" + timeSQL + ")"
 	base.BucketSQL = epochFloorBucketNumberSQL(ticks)
 	base.BucketArgs = []any{spanNanoseconds, spanNanoseconds}
 	if count <= math.MaxUint16 {
-		base.BucketCount = uint16(count) // #nosec G115 -- checked above.
+		base.BucketCount = safecast.MustConv[uint16](count)
 	}
 	return base, count, nil
 }

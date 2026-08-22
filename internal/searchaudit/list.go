@@ -6,8 +6,10 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/Suhaibinator/open-splunk/internal/control"
+	"fortio.org/safecast"
 	"gorm.io/gorm"
+
+	"github.com/Suhaibinator/open-splunk/internal/control"
 )
 
 type normalizedListRequest struct {
@@ -140,8 +142,8 @@ func (store *Store) List(
 			total = *cursor.TotalSize
 		} else if normalized.actorID == nil && normalized.ownerID == nil {
 			if exists {
-				// #nosec G115 -- validTenantState bounds retained_count to [0, 100000].
-				total = uint64(state.RetainedCount)
+
+				total = safecast.MustConv[uint64](state.RetainedCount)
 			}
 		} else {
 			total, err = countFilteredEvents(tx, normalized, highWater)
@@ -163,8 +165,8 @@ func (store *Store) List(
 		last := page.Events[len(page.Events)-1]
 		next := listCursor{
 			FilterHash: filterHash,
-			// #nosec G115 -- eventFromRecord rejects sequences above MaxInt64-1.
-			Sequence:        int64(last.Sequence),
+
+			Sequence:        safecast.MustConv[int64](last.Sequence),
 			FirstSequence:   firstSequence,
 			HighWater:       highWater,
 			HighWaterDigest: highWaterDigest,

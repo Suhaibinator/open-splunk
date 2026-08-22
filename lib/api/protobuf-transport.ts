@@ -237,11 +237,9 @@ async function readBoundedResponseBytes(
   let bytes = new Uint8Array(initialCapacity);
   let length = 0;
   try {
-    while (true) {
-      // Stream chunks must be consumed in wire order and cannot be read concurrently.
-      // eslint-disable-next-line no-await-in-loop
+    const readNextChunk = async (): Promise<void> => {
       const result = await reader.read();
-      if (result.done) break;
+      if (result.done) return;
       const chunk = result.value;
       if (chunk.byteLength > maximumBytes - length) {
         const error = new ProtobufResponseTooLargeError(url, maximumBytes, declaredBytes);
@@ -264,7 +262,9 @@ async function readBoundedResponseBytes(
         bytes.set(chunk, length);
         length += chunk.byteLength;
       }
-    }
+      await readNextChunk();
+    };
+    await readNextChunk();
   } finally {
     reader.releaseLock();
   }

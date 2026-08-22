@@ -111,15 +111,19 @@ func compiledReadScopeDigest(
 	binary.BigEndian.PutUint64(count[:], uint64(len(argumentPositions)))
 	_, _ = digest.Write(count[:])
 	for _, position := range argumentPositions {
-		// Every digest caller first proves that positions are nonnegative and
-		// strictly increasing; a nonnegative int is representable as uint64.
-		//nolint:gosec // The checked compiler position cannot overflow uint64.
-		binary.BigEndian.PutUint64(count[:], uint64(position))
+		binary.BigEndian.PutUint64(count[:], compiledArgumentPosition(position))
 		_, _ = digest.Write(count[:])
 	}
 	var result compiledSQLSeal
 	digest.Sum(result[:0])
 	return result
+}
+
+func compiledArgumentPosition(position int) uint64 {
+	if position < 0 {
+		return 0
+	}
+	return uint64(position)
 }
 
 func sealCompiledQuerySQL(compiled CompiledQuery) CompiledQuery {

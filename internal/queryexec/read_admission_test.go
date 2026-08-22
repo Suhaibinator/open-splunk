@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
@@ -544,9 +545,9 @@ func TestQueuedSearchFailsExplicitlyWhenIndexRetiresBeforeExecution(t *testing.T
 		AuthorizedIndexes: []string{"other", "target"},
 		TimeRange:         resolvedRange,
 		Source:            searchjobs.JobSource{Origin: searchjobs.JobOriginAdHoc},
-	}
-	request.SPL = `index=other | stats count`
-	request.RequestedIndexes = []string{"other"}
+
+		SPL:              `index=other | stats count`,
+		RequestedIndexes: []string{"other"}}
 	jobA, err := manager.Create(context.Background(), request)
 	if err != nil {
 		t.Fatalf("Create job A: %v", err)

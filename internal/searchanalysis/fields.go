@@ -16,6 +16,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"fortio.org/safecast"
+
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/cursorcodec"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
@@ -165,7 +167,7 @@ type FieldService struct {
 	compiler         fieldCompiler
 	executor         fieldExecutor
 	lifecycleContext context.Context
-	lifecycleCancel  context.CancelFunc
+	lifecycleCancel  context.CancelCauseFunc
 
 	cursorKey          []byte
 	serviceFingerprint string
@@ -386,8 +388,7 @@ func NewFieldService(config FieldConfig) (*FieldService, error) {
 		scopeSnapshotter = nil
 	}
 
-	// #nosec G118 -- lifecycleCancel is retained on FieldService and invoked by Close.
-	lifecycleContext, lifecycleCancel := context.WithCancel(context.Background())
+	lifecycleContext, lifecycleCancel := context.WithCancelCause(context.Background())
 	return &FieldService{
 		searches: config.Searches, scopeSnapshotter: scopeSnapshotter,
 		compiler: config.Compiler, executor: config.Executor,
@@ -456,7 +457,7 @@ func (service *FieldService) Close(ctx context.Context) error {
 	service.mu.Lock()
 	if !service.closed {
 		service.closed = true
-		service.lifecycleCancel()
+		service.lifecycleCancel(searchjobs.ErrClosed)
 		for _, flight := range service.flights {
 			flight.cancel()
 		}
@@ -851,8 +852,7 @@ func (service *FieldService) buildFieldCatalog(
 }
 
 func classifyFieldCompileError(err error) error {
-	var diagnostic *plan.Diagnostic
-	if errors.As(err, &diagnostic) {
+	if diagnostic, ok := errors.AsType[*plan.Diagnostic](err); ok {
 		switch {
 		case diagnostic.Code == "SPL_QUERY_TOO_COMPLEX":
 			return fmt.Errorf("%w: compile completed search field catalog: %w", searchjobs.ErrExecutionLimit, err)
@@ -1060,8 +1060,8 @@ func (service *FieldService) buildFieldPage(
 	}
 
 	if cursor == nil {
-		// #nosec G115 -- normalized page sizes cannot exceed the 10,000-field service ceiling.
-		pageLimit := int(request.pageSize)
+
+		pageLimit := safecast.MustConv[int](request.pageSize)
 		page := make([]FieldProfile, 0, min(pageLimit, len(entry.value)))
 		totalFields := uint64(0)
 		nextScanIndex := uint64(0)
@@ -1086,13 +1086,12 @@ func (service *FieldService) buildFieldPage(
 		if err := ctx.Err(); err != nil {
 			return FieldPage{}, err
 		}
-		// #nosec G115 -- a slice length is non-negative and exactly representable as uint64.
-		pageLength := uint64(len(page))
+
+		pageLength := safecast.MustConv[uint64](len(page))
 		return service.finishFieldPage(key, request, entry, page, pageLength, nextScanIndex, totalFields)
 	}
 
-	// #nosec G115 -- the catalog is capped at 10,000 profiles during normalization.
-	profileCount := uint64(len(entry.value))
+	profileCount := safecast.MustConv[uint64](len(entry.value))
 	if cursor.TotalFields > profileCount || cursor.Offset >= cursor.TotalFields ||
 		cursor.ScanIndex < cursor.Offset || cursor.ScanIndex >= profileCount {
 		return FieldPage{}, ErrInvalidFieldCursor
@@ -1102,20 +1101,20 @@ func (service *FieldService) buildFieldPage(
 	// continuation pages together O(catalog size), rather than rescanning each
 	// filtered prefix on every request.
 	want := min(uint64(request.pageSize), cursor.TotalFields-cursor.Offset)
-	// #nosec G115 -- want cannot exceed the normalized 10,000-row page-size ceiling.
-	pageCapacity := int(want)
+
+	pageCapacity := safecast.MustConv[int](want)
 	page := make([]FieldProfile, 0, pageCapacity)
 	nextScanIndex := cursor.ScanIndex
-	// #nosec G115 -- ScanIndex was just proven smaller than the bounded catalog length.
-	scanIndex := int(cursor.ScanIndex)
+
+	scanIndex := safecast.MustConv[int](cursor.ScanIndex)
 	for index := scanIndex; index < len(entry.value) && len(page) < pageCapacity; index++ {
 		if index&255 == 0 {
 			if err := ctx.Err(); err != nil {
 				return FieldPage{}, err
 			}
 		}
-		// #nosec G115 -- index is a non-negative position within the bounded catalog.
-		nextScanIndex = uint64(index + 1)
+
+		nextScanIndex = safecast.MustConv[uint64](index + 1)
 		profile := entry.value[index]
 		if fieldProfileMatches(profile, request) {
 			page = append(page, cloneFieldProfile(profile))
@@ -1139,8 +1138,8 @@ func (service *FieldService) buildUnfilteredFieldPage(
 	entry *fieldCacheEntry,
 	cursor *fieldCursorPayload,
 ) (FieldPage, error) {
-	// #nosec G115 -- the catalog is capped at 10,000 profiles during normalization.
-	totalFields := uint64(len(entry.value))
+
+	totalFields := safecast.MustConv[uint64](len(entry.value))
 	offset := uint64(0)
 	if cursor != nil {
 		if cursor.TotalFields != totalFields || cursor.Offset >= totalFields || cursor.ScanIndex != cursor.Offset {
@@ -1149,8 +1148,8 @@ func (service *FieldService) buildUnfilteredFieldPage(
 		offset = cursor.Offset
 	}
 	end := min(totalFields, offset+uint64(request.pageSize))
-	// #nosec G115 -- end and offset are positions within the bounded catalog.
-	pageCapacity := int(end - offset)
+
+	pageCapacity := safecast.MustConv[int](end - offset)
 	page := make([]FieldProfile, 0, pageCapacity)
 	for index := offset; index < end; index++ {
 		if index&255 == 0 {

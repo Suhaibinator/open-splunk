@@ -7,8 +7,10 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/Suhaibinator/open-splunk/internal/control"
+	"fortio.org/safecast"
 	"gorm.io/gorm"
+
+	"github.com/Suhaibinator/open-splunk/internal/control"
 )
 
 // ListDependencies returns the disclosed direct outgoing edges of one exact
@@ -107,8 +109,7 @@ func (store *Store) listGraph(
 	}
 	resolved := ObjectVersionIdentity{
 		KnowledgeObjectID: strings.Clone(selected.KnowledgeObjectID),
-		// #nosec G115 -- readGraphRootVersion validates the persisted version as positive.
-		Version: uint64(selected.ObjectVersion),
+		Version:           safecast.MustConv[uint64](selected.ObjectVersion),
 	}
 	if cursor.CatalogRevision != 0 {
 		if cursor.ResolvedObjectID != selected.KnowledgeObjectID ||
@@ -173,11 +174,9 @@ func (store *Store) listGraph(
 			ResolvedObjectID:   selected.KnowledgeObjectID,
 			ResolvedVersion:    selected.ObjectVersion,
 			LastSourceObjectID: last.Source.KnowledgeObjectID,
-			// #nosec G115 -- dependency page validation bounds versions to math.MaxInt64.
-			LastSourceVersion:  int64(last.Source.Version),
+			LastSourceVersion:  safecast.MustConv[int64](last.Source.Version),
 			LastTargetObjectID: last.Target.KnowledgeObjectID,
-			// #nosec G115 -- dependency page validation bounds versions to math.MaxInt64.
-			LastTargetVersion:  int64(last.Target.Version),
+			LastTargetVersion:  safecast.MustConv[int64](last.Target.Version),
 			LastDependencyRole: int32(last.Role),
 		})
 		if err != nil {
@@ -297,7 +296,7 @@ func (store *Store) listOutgoingGraphEdges(
 	if hasMore {
 		visible = visible[:pageSize:pageSize]
 	} else {
-		visible = visible[:len(visible):len(visible)]
+		visible = slices.Clip(visible)
 	}
 	return visible, hasMore, total, nil
 }
@@ -310,13 +309,11 @@ func dependencyEdgeFromRecord(
 	return DependencyEdge{
 		Source: ObjectVersionIdentity{
 			KnowledgeObjectID: strings.Clone(record.SourceObjectID),
-			// #nosec G115 -- dependency records are validated before projection.
-			Version: uint64(record.SourceObjectVersion),
+			Version:           safecast.MustConv[uint64](record.SourceObjectVersion),
 		},
 		Target: ObjectVersionIdentity{
 			KnowledgeObjectID: strings.Clone(record.TargetObjectID),
-			// #nosec G115 -- dependency records are validated before projection.
-			Version: uint64(record.TargetObjectVersion),
+			Version:           safecast.MustConv[uint64](record.TargetObjectVersion),
 		},
 		Role:          DependencyRoleFieldInput,
 		SourceCurrent: sourceCurrent,
@@ -328,13 +325,12 @@ func currentRegistryAuthorityFromRegistry(registry registryRecord) CurrentRegist
 	return CurrentRegistryAuthority{
 		TenantID:          strings.Clone(registry.TenantID),
 		KnowledgeObjectID: strings.Clone(registry.KnowledgeObjectID),
-		// #nosec G115 -- registry records are validated before projection.
-		CurrentVersion: uint64(registry.CurrentVersion),
-		AppID:          strings.Clone(registry.AppID),
-		OwnerID:        strings.Clone(registry.OwnerID),
-		ObjectType:     registry.ObjectType,
-		SharingScope:   registry.SharingScope,
-		State:          registry.State,
+		CurrentVersion:    safecast.MustConv[uint64](registry.CurrentVersion),
+		AppID:             strings.Clone(registry.AppID),
+		OwnerID:           strings.Clone(registry.OwnerID),
+		ObjectType:        registry.ObjectType,
+		SharingScope:      registry.SharingScope,
+		State:             registry.State,
 	}
 }
 
@@ -401,10 +397,8 @@ func validDetachedCurrentAuthority(authority CurrentRegistryAuthority) bool {
 }
 
 func graphEdgeAfterCursor(edge DependencyEdge, cursor graphCursor) bool {
-	// #nosec G115 -- validated graph cursors contain positive persisted versions.
-	cursorSourceVersion := uint64(cursor.LastSourceVersion)
-	// #nosec G115 -- validated graph cursors contain positive persisted versions.
-	cursorTargetVersion := uint64(cursor.LastTargetVersion)
+	cursorSourceVersion := safecast.MustConv[uint64](cursor.LastSourceVersion)
+	cursorTargetVersion := safecast.MustConv[uint64](cursor.LastTargetVersion)
 	if edge.Source.KnowledgeObjectID != cursor.LastSourceObjectID {
 		return edge.Source.KnowledgeObjectID > cursor.LastSourceObjectID
 	}
@@ -540,8 +534,7 @@ func (store *Store) listIncomingGraphEdges(
 		if err != nil {
 			return nil, false, nil, err
 		}
-		// #nosec G115 -- countIncomingGraphCandidates returns a bounded nonnegative count.
-		value := uint64(count)
+		value := safecast.MustConv[uint64](count)
 		total = &value
 	}
 	pageCandidateCount := min(len(candidates), int(request.pageSize))

@@ -20,13 +20,14 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/column"
+	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
-	"google.golang.org/protobuf/types/known/durationpb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestStoreNativeBatchContractAndEventOrder(t *testing.T) {
@@ -529,8 +530,7 @@ func TestStoreBoundsRepeatedReservationGoneAsServerBusy(t *testing.T) {
 		err,
 		opensplunk.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
 	)
-	var gone *ingest.StoredBatchGoneError
-	if errors.As(err, &gone) {
+	if _, ok := errors.AsType[*ingest.StoredBatchGoneError](err); ok {
 		t.Fatalf("ordinary Store leaked StoredBatchGoneError: %v", err)
 	}
 	if !errors.Is(err, visibility.ErrReservationGone) {

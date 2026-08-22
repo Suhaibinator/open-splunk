@@ -8,10 +8,11 @@ import (
 	"testing"
 	"time"
 
-	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
-	"github.com/Suhaibinator/open-splunk/internal/control"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/control"
 )
 
 const writerReplayLatestHiddenApp = "app_000000000300000000003A"
@@ -299,10 +300,11 @@ func rewriteWriterReplayQuarantineRegistry(
 	)
 	defer restore()
 
-	var assignment string
+	var statement string
 	switch rewrite {
 	case "rollback":
-		assignment = `
+		statement = `
+			UPDATE knowledge_objects SET
 			current_version = 1,
 			state = 'draft',
 			definition_digest = (
@@ -315,9 +317,11 @@ func rewriteWriterReplayQuarantineRegistry(
 			disabled_at_unix_micro = NULL,
 			quarantined_at_unix_micro = NULL,
 			deleted_at_unix_micro = NULL,
-			quarantine_reason = NULL`
+			quarantine_reason = NULL
+			WHERE tenant_id = ? AND knowledge_object_id = ?`
 	case "state":
-		assignment = `
+		statement = `
+			UPDATE knowledge_objects SET
 			state = 'draft',
 			definition_digest = (
 				SELECT definition_digest FROM knowledge_object_versions
@@ -328,14 +332,12 @@ func rewriteWriterReplayQuarantineRegistry(
 			disabled_at_unix_micro = NULL,
 			quarantined_at_unix_micro = NULL,
 			deleted_at_unix_micro = NULL,
-			quarantine_reason = NULL`
+			quarantine_reason = NULL
+			WHERE tenant_id = ? AND knowledge_object_id = ?`
 	default:
 		t.Fatalf("unknown quarantine registry rewrite %q", rewrite)
 	}
-	// #nosec G202 -- assignment is selected from the fixed rewrite cases above.
-	result, err := connection.ExecContext(t.Context(), `
-		UPDATE knowledge_objects SET `+assignment+`
-		WHERE tenant_id = ? AND knowledge_object_id = ?`, writerFaultTenant, objectID)
+	result, err := connection.ExecContext(t.Context(), statement, writerFaultTenant, objectID)
 	if err != nil {
 		t.Fatalf("rewrite quarantine registry: %v", err)
 	}

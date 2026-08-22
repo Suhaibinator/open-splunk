@@ -1,7 +1,7 @@
 "use client";
 
 import type { FormEvent } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState, type RefObject } from "react";
 import Link from "next/link";
 
 import { SortDirection, type PageResponse } from "@/gen/ts/open_splunk/common";
@@ -1121,11 +1121,9 @@ async function listTokensForCreateSafety(
   const tokenIds = new Set<string>();
   const seenCursors = new Set<string>();
   let expectedTotal: bigint | null = null;
-  let pageToken: string | undefined;
-  for (;;) {
+  async function loadPage(pageToken: string | undefined): Promise<void> {
     // This complete, name-filtered snapshot is a safety prerequisite for a
     // non-idempotent secret-issuing request, not the Admin table loading path.
-    // eslint-disable-next-line no-await-in-loop
     const response = await client.ingestionTokens.list({
       page: { pageSize: undefined, pageToken, includeTotalSize: true },
       stateFilters: [],
@@ -1150,13 +1148,14 @@ async function listTokensForCreateSafety(
       tokens.push(token);
     }
     const next = normalizedPageToken(response.page.nextPageToken);
-    if (next === null) break;
+    if (next === null) return;
     if (seenCursors.has(next)) {
       throw new Error("The token snapshot returned a repeated page cursor.");
     }
     seenCursors.add(next);
-    pageToken = next;
+    await loadPage(next);
   }
+  await loadPage(undefined);
   if (expectedTotal === null || BigInt(tokens.length) !== expectedTotal) {
     throw new Error("The token snapshot ended before its exact total was loaded.");
   }
@@ -3112,7 +3111,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     }
   }
 
-  useEffect(() => {
+  const reconcilePersistedTokenCreate = useEffectEvent(() => {
     if (normalizedApiBaseUrl === null) return;
     let current = true;
     const controller = new AbortController();
@@ -3284,10 +3283,12 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       setTokenCreateGuardStorageError(`Cross-tab recovery lock failed: ${errorMessage(error)}`);
     });
     return stop;
-    // Recovery is intentionally keyed only to the API client. The helper
-    // closures are safe for this one mount-time reconciliation pass.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [client, normalizedApiBaseUrl]);
+  });
+
+  useEffect(
+    () => reconcilePersistedTokenCreate(),
+    [client, normalizedApiBaseUrl],
+  );
 
   const loadedIndexScopeOptions: TokenIndexScopeOption[] = indexes.flatMap((index) => {
     const definition = index.definition;

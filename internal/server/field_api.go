@@ -8,9 +8,11 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"fortio.org/safecast"
 	"github.com/Suhaibinator/SRouter/pkg/codec"
 	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/searchanalysis"
@@ -157,8 +159,8 @@ func fieldPageToProto(
 	if ctx == nil {
 		return nil, nil, errors.New("field conversion context is required")
 	}
-	// #nosec G115 -- a slice length is non-negative and exactly representable as uint64.
-	fieldCount := uint64(len(result.Fields))
+
+	fieldCount := safecast.MustConv[uint64](len(result.Fields))
 	if maximumPageSize == 0 || maximumCatalogFields == 0 ||
 		fieldCount > uint64(maximumPageSize) ||
 		result.TotalFields > uint64(maximumCatalogFields) ||

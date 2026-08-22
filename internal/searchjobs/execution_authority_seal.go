@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"fortio.org/safecast"
+
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 )
@@ -411,7 +413,7 @@ func writeKnowledgeSealTime(writer hash.Hash, value time.Time) bool {
 	}
 	zoneName, zoneOffset := value.Zone()
 	writeKnowledgeSealString(writer, zoneName)
-	writeKnowledgeSealUint64(writer, uint64(int64(zoneOffset))) // #nosec G115 -- two's-complement encoding preserves the signed zone offset in the stable seal.
+	writeKnowledgeSealInt64(writer, safecast.MustConv[int64](zoneOffset))
 	return true
 }
 
@@ -444,4 +446,8 @@ func writeKnowledgeSealUint64(writer hash.Hash, value uint64) {
 	var encoded [8]byte
 	binary.BigEndian.PutUint64(encoded[:], value)
 	_, _ = writer.Write(encoded[:])
+}
+
+func writeKnowledgeSealInt64(writer hash.Hash, value int64) {
+	_ = binary.Write(writer, binary.BigEndian, value)
 }

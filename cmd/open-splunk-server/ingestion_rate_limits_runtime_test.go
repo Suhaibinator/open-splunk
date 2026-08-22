@@ -58,7 +58,7 @@ func TestCollectorRuntimePropagatesTrustedIngestionRateLimits(t *testing.T) {
 
 	t.Run("durable stream admission", func(t *testing.T) {
 		lease := collectorfleet.Lease{
-			Scope:       collectorfleet.Scope{TenantID: "tenant-rate-limits"},
+			TenantID:    "tenant-rate-limits",
 			CollectorID: "collector-rate-limits",
 			BootEpoch:   "boot-rate-limits",
 			StreamID:    "stream-rate-limits",

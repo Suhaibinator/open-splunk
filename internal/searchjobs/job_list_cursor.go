@@ -8,6 +8,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"fortio.org/safecast"
+
 	"github.com/Suhaibinator/open-splunk/internal/cursorcodec"
 )
 
@@ -61,8 +63,8 @@ func encodeJobListCursor(key []byte, epoch, filterHash string, highWater uint64,
 		FilterHash:      filterHash,
 		HighWater:       highWater,
 		LastCreatedUnix: last.CreatedAt.Unix(),
-		// #nosec G115 -- time.Time.Nanosecond returns a value in [0, 999999999].
-		LastCreatedNanos: int32(last.CreatedAt.Nanosecond()),
+
+		LastCreatedNanos: safecast.MustConv[int32](last.CreatedAt.Nanosecond()),
 		LastID:           last.ID,
 	})
 	if err != nil {

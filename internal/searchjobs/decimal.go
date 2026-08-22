@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+
+	"fortio.org/safecast"
 )
 
 // CanonicalDecimal returns the deterministic transport and comparison spelling
@@ -184,8 +186,8 @@ func subtractDecimalMagnitudes(left, right string) string {
 		} else {
 			borrow = 0
 		}
-		// #nosec G115 -- decimal subtraction normalizes digit into the inclusive range 0..9.
-		result[leftIndex] = byte(digit) + '0'
+
+		result[leftIndex] = safecast.MustConv[byte](digit) + '0'
 		leftIndex--
 	}
 	trimmed := strings.TrimLeft(string(result), "0")

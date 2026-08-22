@@ -12,8 +12,9 @@ import (
 	"testing"
 	"time"
 
-	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"google.golang.org/protobuf/proto"
+
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 )
 
 // makeEvents builds a slice of minimal LogEvents from the given event IDs.
@@ -271,7 +272,7 @@ func TestRecoveryRejectsMismatchedSuccessorBeforeCorruptionQuarantine(t *testing
 		t.Fatalf("read first segment: %v", err)
 	}
 	contents[first.records[0].payloadOff] ^= 0xff
-	// #nosec G703 -- firstPath comes from listSegments in this private test directory.
+
 	if err := os.WriteFile(firstPath, contents, 0o600); err != nil {
 		t.Fatalf("corrupt first segment: %v", err)
 	}
@@ -487,7 +488,7 @@ func TestRecoveryQuarantinesEverySegmentAfterCorruptGap(t *testing.T) {
 		t.Fatalf("read second segment: %v", err)
 	}
 	data[second.records[0].payloadOff] ^= 0xff
-	// #nosec G703 -- secondPath is a segment name returned by listSegments for
+
 	// this test's private temporary directory, not a user-controlled path.
 	if err := os.WriteFile(secondPath, data, 0o600); err != nil {
 		t.Fatalf("corrupt second segment: %v", err)
@@ -564,7 +565,7 @@ func TestRecoveryCrashCannotForgetCorruptGap(t *testing.T) {
 		t.Fatalf("read second segment: %v", err)
 	}
 	data[second.records[0].payloadOff] ^= 0xff
-	// #nosec G703 -- secondPath is a segment name returned by listSegments for
+
 	// this test's private temporary directory, not a user-controlled path.
 	if err := os.WriteFile(secondPath, data, 0o600); err != nil {
 		t.Fatalf("corrupt second segment: %v", err)

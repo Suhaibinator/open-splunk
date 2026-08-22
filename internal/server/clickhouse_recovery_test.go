@@ -12,6 +12,7 @@ import (
 	"time"
 
 	clickhouserow "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+
 	"github.com/Suhaibinator/open-splunk/internal/recoverycontract"
 )
 
@@ -107,9 +108,9 @@ func TestValidateClickHouseRecoveryDiskReadOnlyRequiresExactAttestation(t *testi
 
 func TestValidateClickHouseRecoveryDiskReadOnlyRejectsInvalidInputs(t *testing.T) {
 	t.Parallel()
+	var nilContext context.Context
 
-	//nolint:staticcheck // The exported boundary must reject a nil context without panicking.
-	if err := ValidateClickHouseRecoveryDiskReadOnly(nil, &fakeClickHouseRecoveryDiskConnection{}); err == nil {
+	if err := ValidateClickHouseRecoveryDiskReadOnly(nilContext, &fakeClickHouseRecoveryDiskConnection{}); err == nil {
 		t.Fatal("nil recovery disk context succeeded")
 	}
 	if err := ValidateClickHouseRecoveryDiskReadOnly(t.Context(), nil); err == nil {

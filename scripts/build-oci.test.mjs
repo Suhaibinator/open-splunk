@@ -375,7 +375,7 @@ test("OCI targets are pinned scratch runtimes with a minimal non-root contract",
 
   assert.match(
     dockerfile,
-    /node:26\.7\.0-alpine3\.23@sha256:ce3cc39fe3b8b2602d3b1c4d63d301e46b48c550ecb627869853ddcdda418b63/,
+    /node:26\.7\.0-alpine3\.24@sha256:aadf416b2cdce311a8811ba3f0608a61b77dbf997500e2eafe781b51f6a0b019/,
   );
   assert.match(
     dockerfile,

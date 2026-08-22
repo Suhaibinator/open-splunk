@@ -7,6 +7,8 @@ import (
 	"slices"
 	"sync"
 	"time"
+
+	"fortio.org/safecast"
 )
 
 var (
@@ -261,8 +263,8 @@ func (lease *resultLease) Next(ctx context.Context) (row ResultRow, ok bool, err
 		lease.entry.mu.RUnlock()
 		return ResultRow{}, false, ErrResultsUnavailable
 	}
-	// #nosec G115 -- lease.next was just proven representable as int.
-	rowIndex := int(lease.next)
+
+	rowIndex := safecast.MustConv[int](lease.next)
 	if rowIndex >= len(lease.entry.rows) {
 		lease.entry.mu.RUnlock()
 		return ResultRow{}, false, ErrResultsUnavailable

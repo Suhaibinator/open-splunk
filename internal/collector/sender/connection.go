@@ -7,14 +7,15 @@ import (
 	"sync"
 	"time"
 
-	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
-	"github.com/Suhaibinator/open-splunk/internal/collectorlimits"
-	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/collectorlimits"
+	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
 )
 
 // withBearer attaches the bearer token to the outgoing gRPC metadata exactly as
@@ -224,8 +225,7 @@ func classifyPreReadyError(err error) error {
 	if err == nil {
 		return nil
 	}
-	var fatal *fatalError
-	if errors.As(err, &fatal) {
+	if _, ok := errors.AsType[*fatalError](err); ok {
 		return err
 	}
 	switch status.Code(err) {
@@ -606,7 +606,7 @@ func (c *conn) batchExceedsReadyLimits(batch *opensplunk.EventBatch) (string, bo
 			return opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_EVENT_TOO_LARGE.String(), true
 		}
 	}
-	// #nosec G115 -- len is non-negative and every supported Go int value is
+
 	// exactly representable as uint64.
 	if maxEvents > 0 && uint64(len(batch.GetEvents())) > uint64(maxEvents) {
 		return opensplunk.BatchRejectionCode_BATCH_REJECTION_CODE_TOO_MANY_EVENTS.String(), true
@@ -618,7 +618,7 @@ func (c *conn) batchExceedsReadyLimits(batch *opensplunk.EventBatch) (string, bo
 }
 
 func (c *conn) batchExceedsThrottleLimitsLocked(batch *opensplunk.EventBatch) bool {
-	// #nosec G115 -- len is non-negative and every supported Go int value is
+
 	// exactly representable as uint64.
 	if c.throttleMaxEvents > 0 && uint64(len(batch.GetEvents())) > uint64(c.throttleMaxEvents) {
 		return true
@@ -921,8 +921,6 @@ func (c *conn) handleRetry(retry *opensplunk.RetryBatch) error {
 		c.mu.Unlock()
 		return nil
 	}
-	// #nosec G118 -- cancelRetry is retained in pendingRetry and invoked on
-	// acknowledgement, connection shutdown, or superseding retry state.
 	retryCtx, cancelRetry := context.WithCancel(c.ctx)
 	scheduled := &scheduledRetry{cancel: cancelRetry, done: make(chan struct{})}
 	c.pendingRetry[seq] = scheduled

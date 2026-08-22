@@ -18,6 +18,7 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
+
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/server"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
@@ -812,7 +813,7 @@ func verifyComposeTLSBoundary(
 		t.Fatalf("close verified ClickHouse TLS connection: %v", err)
 	}
 	legacyTLS := stack.clientTLSConfig()
-	legacyTLS.MinVersion = tls.VersionTLS10 // #nosec G402 -- rejection probe.
+	legacyTLS.MinVersion = tls.VersionTLS10
 	legacyTLS.MaxVersion = tls.VersionTLS11
 	legacyDialer := &tls.Dialer{
 		NetDialer: dialer,
@@ -1241,8 +1242,7 @@ func closeDeploymentComposeConnection(
 }
 
 func isClickHouseAuthenticationError(err error) bool {
-	var exception *clickhousedriver.Exception
-	if errors.As(err, &exception) {
+	if exception, ok := errors.AsType[*clickhousedriver.Exception](err); ok {
 		return exception.Code == 516
 	}
 	return isClickHouseAuthenticationFailure(err.Error())

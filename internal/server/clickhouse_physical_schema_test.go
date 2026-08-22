@@ -467,9 +467,9 @@ func TestValidateClickHousePhysicalSchemaRejectsInvalidDependencies(
 	t *testing.T,
 ) {
 	t.Parallel()
+	var nilContext context.Context
 
-	//nolint:staticcheck // This case explicitly verifies the nil-context guard.
-	if err := ValidateClickHousePhysicalSchema(nil, validFakeClickHousePhysicalSchemaConnection()); err == nil {
+	if err := ValidateClickHousePhysicalSchema(nilContext, validFakeClickHousePhysicalSchemaConnection()); err == nil {
 		t.Fatal("ValidateClickHousePhysicalSchema(nil context) succeeded")
 	}
 	if err := ValidateClickHousePhysicalSchema(context.Background(), nil); err == nil {

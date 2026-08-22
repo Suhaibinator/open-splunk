@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 
+	"fortio.org/safecast"
+
 	"github.com/Suhaibinator/open-splunk/internal/control"
 )
 
@@ -133,9 +135,8 @@ func (store *Store) List(
 		return ListPage{}, err
 	}
 	page = ListPage{
-		Objects: objects,
-		// #nosec G115 -- readCatalogState validates the persisted catalog revision.
-		CatalogRevision: uint64(catalog.revision),
+		Objects:         objects,
+		CatalogRevision: safecast.MustConv[uint64](catalog.revision),
 	}
 	if hasMore {
 		last := returnedRecords[len(returnedRecords)-1]

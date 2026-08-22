@@ -7,10 +7,12 @@ import (
 	"math"
 	"strings"
 
+	"fortio.org/safecast"
+	"google.golang.org/protobuf/proto"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/lookupasset"
-	"google.golang.org/protobuf/proto"
 )
 
 const MaximumLookupAssets = clickhouse.MaximumLookupStagesPerQuery
@@ -49,7 +51,7 @@ func canonicalSnapshotLookupAssets(
 			)
 		}
 		assets[index] = &opensplunk.KnowledgeSnapshotLookupAsset{
-			AssetOrdinal:  uint32(index), // #nosec G115 -- compiler lookup stages are bounded by sixteen.
+			AssetOrdinal:  safecast.MustConv[uint32](index),
 			LookupId:      strings.Clone(item.lookupID),
 			LookupVersion: item.lookupVersion,
 			Asset: &opensplunk.KnowledgeLookupAssetVersionReference{
@@ -93,7 +95,7 @@ func validateSnapshotLookupAssets(
 				index,
 			)
 		}
-		if entry.GetAssetOrdinal() != uint32(index) { // #nosec G115 -- inventory is bounded by sixteen.
+		if entry.GetAssetOrdinal() != safecast.MustConv[uint32](index) {
 			return fmt.Errorf(
 				"%w: lookup asset inventory entry %d has a noncanonical ordinal",
 				ErrInvalidInput,

@@ -13,6 +13,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"fortio.org/safecast"
+
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/ianatimezone"
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
@@ -270,8 +272,8 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				}
 				captures = append(captures, ExtractCapture{
 					Output: output,
-					// #nosec G115 -- validated rex patterns contain at most 16 capture groups.
-					Group: uint16(capture.Group),
+
+					Group: safecast.MustConv[uint16](capture.Group),
 				})
 				publishOutputFieldAndTrackTime(capture.Name)
 			}
@@ -2203,8 +2205,9 @@ func fixedDurationSpan(span spl.TimeSpan, syntaxCode, commandName string) (time.
 			Range:   span.Range,
 		}
 	}
-	// #nosec G115 -- unit is one of the positive time.Second, time.Minute, or time.Hour constants.
-	maximumMagnitude := uint64(math.MaxInt64) / uint64(unit)
+
+	maximumMagnitude := safecast.MustConv[uint64](math.MaxInt64) /
+		safecast.MustConv[uint64](unit)
 	if span.Magnitude == 0 || span.Magnitude > maximumMagnitude {
 		return 0, &Diagnostic{
 			Code:    "SPL_NUMBER_OUT_OF_RANGE",
@@ -2212,8 +2215,8 @@ func fixedDurationSpan(span spl.TimeSpan, syntaxCode, commandName string) (time.
 			Range:   span.Range,
 		}
 	}
-	// #nosec G115 -- the maximumMagnitude check above proves the conversion and multiplication fit in int64.
-	return time.Duration(int64(span.Magnitude)) * unit, nil
+
+	return time.Duration(safecast.MustConv[int64](span.Magnitude)) * unit, nil
 }
 
 func fixedTimechartBuckets(earliest, latest time.Time, span time.Duration, sourceRange spl.Range) (time.Time, uint64, error) {
@@ -2234,8 +2237,8 @@ func fixedTimechartBuckets(earliest, latest time.Time, span time.Duration, sourc
 			Range:   sourceRange,
 		}
 	}
-	// #nosec G115 -- deltaSeconds is nonnegative and spanSeconds is positive above.
-	bucketCount := uint64(deltaSeconds / spanSeconds)
+
+	bucketCount := safecast.MustConv[uint64](deltaSeconds / spanSeconds)
 	if deltaSeconds%spanSeconds != 0 || latest.Nanosecond() != 0 {
 		bucketCount++
 	}

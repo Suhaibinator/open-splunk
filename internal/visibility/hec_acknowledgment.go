@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash"
@@ -14,6 +15,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"fortio.org/safecast"
 
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 )
@@ -410,7 +413,7 @@ func (source *keyedHECAcknowledgmentIDSource) ID(
 func writeHECAcknowledgmentIDScope(hash hash.Hash, scope hecAcknowledgmentScope) {
 	var length [4]byte
 	for _, value := range []string{scope.tenantID, scope.tokenID, scope.channel} {
-		binary.BigEndian.PutUint32(length[:], uint32(len(value))) // #nosec G115 -- scope components are admission-bounded far below MaxUint32.
+		binary.BigEndian.PutUint32(length[:], safecast.MustConv[uint32](len(value)))
 		_, _ = hash.Write(length[:])
 		_, _ = hash.Write([]byte(value))
 	}
@@ -494,9 +497,11 @@ func (sequencer *SQLiteSequencer) LookupHECAcknowledgments(
 		return nil, err
 	}
 	result = make(map[uint64]bool, len(acknowledgmentIDs))
-	var statement strings.Builder
-	statement.Grow(512 + len(acknowledgmentIDs)*3)
-	statement.WriteString(`
+	encodedAcknowledgmentIDs, err := json.Marshal(acknowledgmentIDs)
+	if err != nil {
+		return nil, fmt.Errorf("encode HEC acknowledgment IDs: %w", err)
+	}
+	rows, err := sequencer.db.QueryContext(ctx, `
 		SELECT acknowledgment.acknowledgment_id, request.state
 		FROM hec_acknowledgments AS acknowledgment
 		JOIN hec_requests AS request
@@ -506,21 +511,17 @@ func (sequencer *SQLiteSequencer) LookupHECAcknowledgments(
 		WHERE acknowledgment.tenant_id = ?
 		  AND acknowledgment.ingestion_token_id = ?
 		  AND acknowledgment.channel_id = ?
-		  AND acknowledgment.acknowledgment_id IN (`)
-	arguments := make([]any, 0, len(acknowledgmentIDs)+3)
-	arguments = append(arguments, tenantID, tokenID, channel)
-	for index, acknowledgmentID := range acknowledgmentIDs {
-		if index > 0 {
-			statement.WriteString(", ")
-		}
-		statement.WriteByte('?')
-		arguments = append(arguments, acknowledgmentID)
+		  AND acknowledgment.acknowledgment_id IN (
+			SELECT CAST(value AS INTEGER) FROM json_each(?)
+		  )`,
+		tenantID,
+		tokenID,
+		channel,
+		encodedAcknowledgmentIDs,
+	)
+	for _, acknowledgmentID := range acknowledgmentIDs {
 		result[acknowledgmentID] = false
 	}
-	statement.WriteByte(')')
-	// #nosec G201 -- the dynamic portion contains only one placeholder per
-	// already bounded acknowledgment ID; all values remain bound arguments.
-	rows, err := sequencer.db.QueryContext(ctx, statement.String(), arguments...)
 	if err != nil {
 		return nil, fmt.Errorf("query HEC acknowledgments: %w", err)
 	}
@@ -617,7 +618,7 @@ func (sequencer *SQLiteSequencer) PruneHECTerminalRequests(
 	if err != nil || count < 0 || count > int64(limit) {
 		return 0, errors.New("prune terminal HEC requests returned an invalid row count")
 	}
-	return uint32(count), nil // #nosec G115 -- count is nonnegative and bounded by the uint32 limit above.
+	return safecast.MustConv[uint32](count), nil
 }
 
 var _ HECAcknowledgmentReader = (*SQLiteSequencer)(nil)

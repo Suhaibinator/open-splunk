@@ -271,12 +271,11 @@ func TestKnowledgeAuditMetadataCorruptionFailsStartupListAndContinuation(t *test
 	t.Parallel()
 
 	for _, testCase := range []struct {
-		name       string
-		assignment string
+		name string
 	}{
-		{"app ID", "app_id = replace(hex(zeroblob(129)), '00', 'a')"},
-		{"object type", "object_type = replace(hex(zeroblob(17)), '00', 'a')"},
-		{"sharing scope", "sharing_scope = replace(hex(zeroblob(8)), '00', 'a')"},
+		{"app ID"},
+		{"object type"},
+		{"sharing scope"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -317,13 +316,27 @@ func TestKnowledgeAuditMetadataCorruptionFailsStartupListAndContinuation(t *test
 				_ = connection.Close()
 				t.Fatalf("ignore fixture constraints: %v", err)
 			}
-			// #nosec G202 -- assignment is selected from the fixed corruption-test table above.
-			if _, err := connection.ExecContext(ctx, `
-				UPDATE audit_events
-				SET `+testCase.assignment+`
-				WHERE tenant_id = 'tenant-metadata-corrupt' AND sequence = 2`); err != nil {
+
+			var corruptErr error
+			switch testCase.name {
+			case "app ID":
+				_, corruptErr = connection.ExecContext(ctx, `UPDATE audit_events
+					SET app_id = replace(hex(zeroblob(129)), '00', 'a')
+					WHERE tenant_id = 'tenant-metadata-corrupt' AND sequence = 2`)
+			case "object type":
+				_, corruptErr = connection.ExecContext(ctx, `UPDATE audit_events
+					SET object_type = replace(hex(zeroblob(17)), '00', 'a')
+					WHERE tenant_id = 'tenant-metadata-corrupt' AND sequence = 2`)
+			case "sharing scope":
+				_, corruptErr = connection.ExecContext(ctx, `UPDATE audit_events
+					SET sharing_scope = replace(hex(zeroblob(8)), '00', 'a')
+					WHERE tenant_id = 'tenant-metadata-corrupt' AND sequence = 2`)
+			default:
+				t.Fatalf("unknown corruption case %q", testCase.name)
+			}
+			if corruptErr != nil {
 				_ = connection.Close()
-				t.Fatalf("corrupt knowledge metadata: %v", err)
+				t.Fatalf("corrupt knowledge metadata: %v", corruptErr)
 			}
 			if _, err := connection.ExecContext(ctx, "PRAGMA ignore_check_constraints = OFF"); err != nil {
 				_ = connection.Close()

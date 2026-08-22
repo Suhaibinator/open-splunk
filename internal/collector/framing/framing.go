@@ -6,6 +6,8 @@ import (
 	"io"
 	"math"
 	"regexp"
+
+	"fortio.org/safecast"
 )
 
 // Sentinel errors returned by a Framer. Callers use errors.Is to classify them.
@@ -163,7 +165,7 @@ func NewLineFramer(r io.Reader, startOffset uint64, opts Options) (Framer, error
 		maxBytes = DefaultMaxEventBytes
 	}
 	return &lineFramer{
-		source:   source{r: r, off: startOffset},
+		r: r, off: startOffset,
 		line:     normalizedStartLine(opts.StartLineNumber),
 		maxBytes: maxBytes,
 	}, nil
@@ -193,7 +195,7 @@ func NewMultilineFramer(r io.Reader, startOffset uint64, opts Options) (Framer, 
 		maxBytes = DefaultMaxEventBytes
 	}
 	return &multilineFramer{
-		source:     source{r: r, off: startOffset},
+		r: r, off: startOffset,
 		pattern:    opts.LineStartPattern,
 		maxLines:   opts.MaxLines,
 		maxBytes:   maxBytes,
@@ -580,8 +582,8 @@ func (m *multilineFramer) discardUntilStart() error {
 
 func (m *multilineFramer) discardLine(n int) {
 	m.buf = m.buf[n:]
-	// #nosec G115 -- n is a delimiter index plus one, so it is always positive.
-	m.off += uint64(n)
+
+	m.off += safecast.MustConv[uint64](n)
 	m.nextLineNo++
 }
 

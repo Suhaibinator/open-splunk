@@ -19,13 +19,15 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"fortio.org/safecast"
+	"gorm.io/gorm"
+
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
 	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/tokenconstraint"
-	"gorm.io/gorm"
 )
 
 const (
@@ -469,10 +471,10 @@ func (store *Store) CreateCollectorToken(ctx context.Context, request CreateColl
 		expirationUnixMicro := expiresAt.UnixMicro()
 		expiration = &expirationUnixMicro
 	}
-	// #nosec G115 -- validated ingestion rate ceilings fit in signed SQLite integers.
-	maxIngestEventsPerSecond := int64(request.IngestionRateLimits.MaxEventsPerSecond)
-	// #nosec G115 -- validated ingestion rate ceilings fit in signed SQLite integers.
-	maxIngestUncompressedBytesPerSecond := int64(
+
+	maxIngestEventsPerSecond := safecast.MustConv[int64](request.IngestionRateLimits.MaxEventsPerSecond)
+
+	maxIngestUncompressedBytesPerSecond := safecast.MustConv[int64](
 		request.IngestionRateLimits.MaxUncompressedBytesPerSecond,
 	)
 	var boundCollectorID *string
@@ -689,17 +691,16 @@ func (store *Store) UpdateCollectorToken(ctx context.Context, tokenID string, ex
 		}
 	}
 
-	// #nosec G115 -- expectedVersion is bounded above by math.MaxInt64.
-	expectedVersionDB := int64(expectedVersion)
+	expectedVersionDB := safecast.MustConv[int64](expectedVersion)
 	var expiration *int64
 	if !expiresAt.IsZero() {
 		expirationUnixMicro := expiresAt.UnixMicro()
 		expiration = &expirationUnixMicro
 	}
-	// #nosec G115 -- validated ingestion rate ceilings fit in signed SQLite integers.
-	maxIngestEventsPerSecond := int64(request.IngestionRateLimits.MaxEventsPerSecond)
-	// #nosec G115 -- validated ingestion rate ceilings fit in signed SQLite integers.
-	maxIngestUncompressedBytesPerSecond := int64(
+
+	maxIngestEventsPerSecond := safecast.MustConv[int64](request.IngestionRateLimits.MaxEventsPerSecond)
+
+	maxIngestUncompressedBytesPerSecond := safecast.MustConv[int64](
 		request.IngestionRateLimits.MaxUncompressedBytesPerSecond,
 	)
 	updateValues := map[string]any{
@@ -2080,8 +2081,8 @@ func (store *Store) SetCollectorTokenEnabled(
 	if enabled {
 		targetState = CollectorTokenStateActive
 	}
-	// #nosec G115 -- expectedVersion is bounded above by math.MaxInt64.
-	expectedVersionDB := int64(expectedVersion)
+
+	expectedVersionDB := safecast.MustConv[int64](expectedVersion)
 	update := tx.Model(&collectorTokenRecord{}).
 		Where(
 			`ingestion_token_id = ?
@@ -2178,8 +2179,8 @@ func (store *Store) RevokeCollectorToken(ctx context.Context, tokenID string, ex
 	if current.Version < 1 {
 		return CollectorToken{}, errors.New("invalid collector token version in control-plane database")
 	}
-	// #nosec G115 -- expectedVersion is bounded above by math.MaxInt64.
-	expectedVersionDB := int64(expectedVersion)
+
+	expectedVersionDB := safecast.MustConv[int64](expectedVersion)
 	if current.Version != expectedVersionDB {
 		return CollectorToken{}, control.ErrVersionConflict
 	}

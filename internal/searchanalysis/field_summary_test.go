@@ -273,8 +273,9 @@ func TestFieldServiceSummaryValidatesRequestBeforeLookupAndPreservesExactFieldNa
 	if summary.Profile.FieldName != exactName || compiler.Spec().FieldName != exactName {
 		t.Fatalf("exact field spelling was changed: profile %q spec %q", summary.Profile.FieldName, compiler.Spec().FieldName)
 	}
-	//nolint:staticcheck // This case explicitly verifies the nil-context guard.
-	if _, err := service.GetFieldSummary(nil, access, GetFieldSummaryRequest{
+	var nilContext context.Context
+
+	if _, err := service.GetFieldSummary(nilContext, access, GetFieldSummaryRequest{
 		SearchJobID: snapshot.ID, FieldName: "host",
 	}); err == nil {
 		t.Fatal("GetFieldSummary(nil context) error = nil")
@@ -1204,10 +1205,8 @@ func fieldSummaryTestSpec(fieldName string, maximumValues uint32) clickhouse.Fie
 
 func fieldSummaryTestKey(fieldName string) fieldSummaryCacheKey {
 	return fieldSummaryCacheKey{
-		fieldCacheKey: fieldCacheKey{
-			domain: fieldCatalogCompletedSearch, tenantID: "tenant",
-			ownerID: "owner", jobID: "job",
-		},
+		domain: fieldCatalogCompletedSearch, tenantID: "tenant",
+		ownerID: "owner", jobID: "job",
 		fieldName: fieldName,
 	}
 }

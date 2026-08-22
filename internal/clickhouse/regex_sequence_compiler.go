@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 
+	"fortio.org/safecast"
+
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
@@ -32,7 +34,7 @@ func (budget *authoredRegexProgramBudget) chargeShared(
 	if budget == nil || budget.evidence == nil || programWorkUnits <= 0 {
 		return errors.New("compile ClickHouse regex budget: invalid program charge")
 	}
-	work := uint64(programWorkUnits) // #nosec G115 -- every regex compiler returns a positive bounded int.
+	work := safecast.MustConv[uint64](programWorkUnits)
 	budget.evidence.regexPrograms++
 	budget.evidence.regexWorkUnits += work
 	return nil
@@ -45,7 +47,7 @@ func (budget *authoredRegexProgramBudget) chargeMatchStyle(
 	if programWorkUnits <= 0 {
 		return errors.New("compile ClickHouse match budget: invalid program charge")
 	}
-	work := uint64(programWorkUnits) // #nosec G115 -- the match compiler returns a positive bounded int.
+	work := safecast.MustConv[uint64](programWorkUnits)
 	maximum := uint64(splregex.MaximumMatchQueryProgramWorkUnits)
 	if budget == nil || budget.matchStyleWorkUnits > maximum ||
 		work > maximum-budget.matchStyleWorkUnits {

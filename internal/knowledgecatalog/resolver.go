@@ -14,6 +14,11 @@ import (
 	"strings"
 	"time"
 
+	"fortio.org/safecast"
+	"google.golang.org/protobuf/proto"
+	"gorm.io/gorm"
+	"modernc.org/sqlite"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -24,9 +29,6 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/splpath"
 	"github.com/Suhaibinator/open-splunk/internal/splregex"
-	"google.golang.org/protobuf/proto"
-	"gorm.io/gorm"
-	"modernc.org/sqlite"
 )
 
 const (
@@ -626,11 +628,10 @@ func resolveCandidatePrecedence(
 	}
 
 	input := knowledgesnapshot.Input{
-		TenantID:    strings.Clone(scope.tenantID),
-		PrincipalID: strings.Clone(scope.principalID),
-		AppID:       strings.Clone(scope.appID),
-		// #nosec G115 -- the resolution catalog state is validated before snapshot construction.
-		TenantCatalogRevision:      uint64(catalog.revision),
+		TenantID:                   strings.Clone(scope.tenantID),
+		PrincipalID:                strings.Clone(scope.principalID),
+		AppID:                      strings.Clone(scope.appID),
+		TenantCatalogRevision:      safecast.MustConv[uint64](catalog.revision),
 		EffectiveAuthorizedIndexes: slices.Clone(scope.indexes),
 		Objects:                    make([]knowledgesnapshot.Object, 0, len(winners)),
 		Dependencies:               make([]knowledgesnapshot.Dependency, 0),
@@ -648,8 +649,7 @@ func resolveCandidatePrecedence(
 
 	winnerKeys := make(map[dependencyVersionKey]resolutionCandidate, len(winners))
 	for _, winner := range winners {
-		// #nosec G115 -- candidate hydration validates public versions against math.MaxInt64.
-		winnerVersion := int64(winner.object.Version)
+		winnerVersion := safecast.MustConv[int64](winner.object.Version)
 		version, found := versions[winner.object.KnowledgeObjectID]
 		if !found || version.TenantID != scope.tenantID ||
 			version.KnowledgeObjectID != winner.object.KnowledgeObjectID ||
@@ -701,9 +701,8 @@ func resolveCandidatePrecedence(
 				SourceObjectID: winner.object.KnowledgeObjectID,
 				SourceVersion:  winner.object.Version,
 				TargetObjectID: dependency.TargetObjectID,
-				// #nosec G115 -- hydrated dependency target versions are validated as positive.
-				TargetVersion: uint64(dependency.TargetObjectVersion),
-				Role:          opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
+				TargetVersion:  safecast.MustConv[uint64](dependency.TargetObjectVersion),
+				Role:           opensplunk.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
 			})
 		}
 	}
@@ -851,13 +850,10 @@ func compileResolutionDefinition(
 					return resolutionDefinitionSemantics{}, errors.New("regex capture order disagrees with declared outputs")
 				}
 			}
-			// #nosec G115 -- output cardinality is bounded by the compiled capture limit.
-			semantics.charges.GeneratedFields = uint32(len(outputs))
+			semantics.charges.GeneratedFields = safecast.MustConv[uint32](len(outputs))
 			semantics.charges.ExtractionRegexPrograms = 1
-			// #nosec G115 -- successful compilation returns nonnegative bounded work units.
-			semantics.charges.ExtractionRegexWorkUnits = uint64(compiled.ProgramWorkUnits)
-			// #nosec G115 -- output cardinality is bounded by the compiled capture limit.
-			semantics.charges.ExtractionOutputs = uint32(len(outputs))
+			semantics.charges.ExtractionRegexWorkUnits = safecast.MustConv[uint64](compiled.ProgramWorkUnits)
+			semantics.charges.ExtractionOutputs = safecast.MustConv[uint32](len(outputs))
 		case *opensplunk.FieldExtractionDefinition_Json:
 			if extraction == nil || extraction.Json == nil {
 				return resolutionDefinitionSemantics{}, errors.New("JSON extraction is nil")
@@ -958,8 +954,7 @@ func validateWinningResolutionDependency(
 
 func resolutionVersionMatchesCandidate(version versionRecord, candidate resolutionCandidate) bool {
 	object := candidate.object
-	// #nosec G115 -- resolution candidates validate public versions against math.MaxInt64.
-	objectVersion := int64(object.Version)
+	objectVersion := safecast.MustConv[int64](object.Version)
 	return version.TenantID == object.TenantID &&
 		version.KnowledgeObjectID == object.KnowledgeObjectID &&
 		version.ObjectVersion == objectVersion &&

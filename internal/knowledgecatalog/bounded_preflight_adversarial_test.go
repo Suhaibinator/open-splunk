@@ -10,9 +10,10 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/Suhaibinator/open-splunk/internal/control"
 	"gorm.io/gorm"
 	"modernc.org/sqlite"
+
+	"github.com/Suhaibinator/open-splunk/internal/control"
 )
 
 const boundedPreflightVisitFunction = "ko_test_bounded_preflight_visit_v1"
@@ -281,13 +282,11 @@ func TestIntegrationDependencyPhysicalPreflightBoundsRowsBeforeGroupedValidation
 	}
 	assertWideLiteralRejected := func(column, restore string) {
 		t.Helper()
-		// #nosec G202 -- column is selected only from the three fixed identifiers below.
-		if _, err := connection.ExecContext(context.Background(), `
-			UPDATE knowledge_object_dependencies
-			SET `+column+` = ? || CAST(zeroblob(?) AS TEXT)
-			WHERE tenant_id = ? AND source_object_id = ?
-			  AND source_object_version = 1 AND ordinal = 0
-		`, "SECRET-DEPENDENCY-LITERAL", 1<<20, testTenant, "ko-bounded-dependency-source"); err != nil {
+		oversizedStatement, restoreStatement := dependencyLiteralUpdateStatements(t, column)
+		if _, err := connection.ExecContext(
+			context.Background(), oversizedStatement,
+			"SECRET-DEPENDENCY-LITERAL", 1<<20, testTenant, "ko-bounded-dependency-source",
+		); err != nil {
 			t.Fatalf("inject oversized dependency %s: %v", column, err)
 		}
 		groupedQueries.Store(0)
@@ -311,12 +310,10 @@ func TestIntegrationDependencyPhysicalPreflightBoundsRowsBeforeGroupedValidation
 		if got := groupedQueries.Load(); got != 0 {
 			t.Fatalf("grouped queries after oversized dependency %s = %d, want 0", column, got)
 		}
-		// #nosec G202 -- column is selected only from the three fixed identifiers below.
-		if _, err := connection.ExecContext(context.Background(), `
-			UPDATE knowledge_object_dependencies SET `+column+` = ?
-			WHERE tenant_id = ? AND source_object_id = ?
-			  AND source_object_version = 1 AND ordinal = 0
-		`, restore, testTenant, "ko-bounded-dependency-source"); err != nil {
+		if _, err := connection.ExecContext(
+			context.Background(), restoreStatement,
+			restore, testTenant, "ko-bounded-dependency-source",
+		); err != nil {
 			t.Fatalf("restore dependency %s: %v", column, err)
 		}
 	}
@@ -333,6 +330,39 @@ func TestIntegrationDependencyPhysicalPreflightBoundsRowsBeforeGroupedValidation
 		t.Fatalf("close wide-dependency connection: %v", err)
 	}
 	assertCatalogConnectionReusable(t, database)
+}
+
+func dependencyLiteralUpdateStatements(t *testing.T, column string) (string, string) {
+	t.Helper()
+	switch column {
+	case "target_kind":
+		return `UPDATE knowledge_object_dependencies
+				SET target_kind = ? || CAST(zeroblob(?) AS TEXT)
+				WHERE tenant_id = ? AND source_object_id = ?
+				  AND source_object_version = 1 AND ordinal = 0`,
+			`UPDATE knowledge_object_dependencies SET target_kind = ?
+				WHERE tenant_id = ? AND source_object_id = ?
+				  AND source_object_version = 1 AND ordinal = 0`
+	case "target_object_id":
+		return `UPDATE knowledge_object_dependencies
+				SET target_object_id = ? || CAST(zeroblob(?) AS TEXT)
+				WHERE tenant_id = ? AND source_object_id = ?
+				  AND source_object_version = 1 AND ordinal = 0`,
+			`UPDATE knowledge_object_dependencies SET target_object_id = ?
+				WHERE tenant_id = ? AND source_object_id = ?
+				  AND source_object_version = 1 AND ordinal = 0`
+	case "dependency_role":
+		return `UPDATE knowledge_object_dependencies
+				SET dependency_role = ? || CAST(zeroblob(?) AS TEXT)
+				WHERE tenant_id = ? AND source_object_id = ?
+				  AND source_object_version = 1 AND ordinal = 0`,
+			`UPDATE knowledge_object_dependencies SET dependency_role = ?
+				WHERE tenant_id = ? AND source_object_id = ?
+				  AND source_object_version = 1 AND ordinal = 0`
+	default:
+		t.Fatalf("unknown dependency literal column %q", column)
+		return "", ""
+	}
 }
 
 func assertBoundedSelectorPreflightProgress(

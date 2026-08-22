@@ -11,6 +11,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"fortio.org/safecast"
 	"gorm.io/gorm"
 )
 
@@ -120,8 +121,8 @@ func (db *DB) ListIndexPage(
 	if err != nil {
 		return IndexListResult{}, fmt.Errorf("read index catalog state: %w", err)
 	}
-	// #nosec G115 -- readIndexCatalogState requires a positive int64 revision.
-	catalogRevision := uint64(state.Revision)
+
+	catalogRevision := safecast.MustConv[uint64](state.Revision)
 	if normalized.cursor != nil &&
 		normalized.cursor.CatalogRevision != catalogRevision {
 		return IndexListResult{}, ErrPageInvalidated

@@ -15,13 +15,6 @@ import (
 	"testing"
 	"time"
 
-	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
-	"github.com/Suhaibinator/open-splunk/internal/auth"
-	"github.com/Suhaibinator/open-splunk/internal/collectoradmission"
-	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
-	"github.com/Suhaibinator/open-splunk/internal/control"
-	"github.com/Suhaibinator/open-splunk/internal/ingest"
-	"github.com/Suhaibinator/open-splunk/internal/server"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
@@ -30,6 +23,14 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/auth"
+	"github.com/Suhaibinator/open-splunk/internal/collectoradmission"
+	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
+	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/ingest"
+	"github.com/Suhaibinator/open-splunk/internal/server"
 )
 
 func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
@@ -340,7 +341,7 @@ func TestRuntimeCollectorAdministrationHTTPGRPCSQLiteReopen(t *testing.T) {
 	}
 
 	offlineClaim := collectorfleet.ClaimRequest{
-		Scope:       collectorfleet.Scope{TenantID: tenantID},
+		TenantID:    tenantID,
 		CollectorID: offlineCollectorID,
 		BootEpoch:   "boot-admin-offline",
 		StreamID:    "stream-admin-offline",

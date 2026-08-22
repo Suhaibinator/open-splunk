@@ -6,10 +6,11 @@ import (
 	"io"
 	"net/http"
 
-	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
-	"github.com/Suhaibinator/open-splunk/internal/knowledgevalidation"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
+
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgevalidation"
 )
 
 var validateKnowledgeCandidateRequestWireLayout = knowledgeCandidateRequestWireLayout{
@@ -75,7 +76,7 @@ func (*validateKnowledgeObjectCodec) DecodeBytes(
 		KnowledgeObjectId: candidate.objectID,
 		ExpectedVersion:   candidate.expectedVersion,
 		UpdateMask:        candidate.updateMask,
-		Intent:            opensplunk.KnowledgeValidationIntent(int32(intent)), // #nosec G115 -- protobuf varints intentionally retain generated unmarshal truncation semantics.
+		Intent:            opensplunk.KnowledgeValidationIntent(protobufInt32(intent)),
 	}
 	setValidateUnknown(result, candidate.unknown)
 	return result, nil

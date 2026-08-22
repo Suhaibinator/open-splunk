@@ -19,6 +19,7 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
+
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
@@ -2244,7 +2245,7 @@ ORDER BY grid.number`,
 		for _, marker := range []string{
 			clickhouse.RexCaptureLimitMarker,
 			clickhouse.SpathInputLimitMarker,
-			clickhouse.SpathJSONTokenLimitMarker,
+			clickhouse.SpathJSONLexemeLimitMarker,
 			clickhouse.EventStatsInputLimitMarker,
 			clickhouse.StreamStatsInputLimitMarker,
 			clickhouse.ExactDistinctLimitMarker,

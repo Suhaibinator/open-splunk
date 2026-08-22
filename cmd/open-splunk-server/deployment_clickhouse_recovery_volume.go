@@ -8,9 +8,10 @@ import (
 	"os"
 	"syscall"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/Suhaibinator/open-splunk/internal/controlbackup"
 	"github.com/Suhaibinator/open-splunk/internal/privatefs"
-	"golang.org/x/sys/unix"
 )
 
 const (
@@ -125,7 +126,7 @@ func defaultPrepareClickHouseRecoveryVolumeDependencies() prepareClickHouseRecov
 func openClickHouseRecoveryVolumeDirectory(
 	path string,
 ) (clickHouseRecoveryVolumeDirectory, error) {
-	// #nosec G304,G703 -- -path is an exact absolute operator path. O_NOFOLLOW
+
 	// rejects a symlink in the mount-root path component, and all mutations use
 	// the returned descriptor rather than resolving the pathname again.
 	fd, err := unix.Open(
@@ -136,7 +137,7 @@ func openClickHouseRecoveryVolumeDirectory(
 	if err != nil {
 		return nil, fmt.Errorf("open recovery volume root: %w", err)
 	}
-	// #nosec G115 -- unix.Open returned a non-negative native descriptor.
+
 	file := os.NewFile(uintptr(fd), path)
 	if file == nil {
 		_ = unix.Close(fd)

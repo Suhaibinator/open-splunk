@@ -15,13 +15,14 @@ import (
 	"testing/fstest"
 	"time"
 
+	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/proto"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/buildinfo"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
-	"google.golang.org/protobuf/encoding/protowire"
-	"google.golang.org/protobuf/proto"
 )
 
 var testNow = time.Date(2026, 7, 22, 12, 0, 0, 123_000_000, time.UTC)
@@ -962,18 +963,11 @@ func TestCreateSearchRejectsUnsupportedSemanticsBeforeCreatingJob(t *testing.T) 
 		{name: "dashboard source", mutate: func(request *opensplunk.CreateSearchJobRequest) {
 			request.Source = &opensplunk.SearchJobSource{DashboardId: new("")}
 		}},
-		{name: "preview", mutate: func(request *opensplunk.CreateSearchJobRequest) {
-			request.Options = &opensplunk.SearchJobOptions{EnablePreview: true}
-		}},
 		{name: "field discovery", mutate: func(request *opensplunk.CreateSearchJobRequest) {
 			request.Options = &opensplunk.SearchJobOptions{EnableFieldDiscovery: true}
 		}},
 		{name: "timeline", mutate: func(request *opensplunk.CreateSearchJobRequest) {
 			request.Options = &opensplunk.SearchJobOptions{EnableTimeline: true}
-		}},
-		{name: "preview row limit", mutate: func(request *opensplunk.CreateSearchJobRequest) {
-			limit := uint32(0)
-			request.Options = &opensplunk.SearchJobOptions{PreviewRowLimit: &limit}
 		}},
 		{name: "preferred result tab", mutate: func(request *opensplunk.CreateSearchJobRequest) {
 			request.Definition.PreferredResultTab = opensplunk.SearchResultTab_SEARCH_RESULT_TAB_EVENTS

@@ -301,9 +301,9 @@ func TestManagerValidateRejectsNilCanceledAndClosedContextsWithoutPlanning(t *te
 		},
 	})
 	request := validValidationRequest("index=main")
+	var nilContext context.Context
 
-	//nolint:staticcheck // The public boundary must reject a nil context without panicking.
-	result, err := manager.Validate(nil, request)
+	result, err := manager.Validate(nilContext, request)
 	if err == nil || !strings.Contains(err.Error(), "context is nil") {
 		t.Fatalf("Validate(nil context) error = %v", err)
 	}

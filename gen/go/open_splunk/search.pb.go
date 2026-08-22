@@ -856,23 +856,13 @@ func (x *SearchPlanSummary) GetClickhouseQueryId() string {
 
 type SearchJobOptions struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Deprecated policy hint. Live preview selection and row limits belong to
-	// SearchSubscription so reconnects and concurrent consumers remain
-	// independently bounded; servers reject this field when true.
-	//
-	// Deprecated: Marked as deprecated in open_splunk/search.proto.
-	EnablePreview bool `protobuf:"varint,1,opt,name=enable_preview,json=enablePreview,proto3" json:"enable_preview,omitempty"`
 	// Reserved for future eager or in-progress analysis. This contract exposes
 	// on-demand completed-job field analysis when the server advertises it and
 	// rejects this option when set.
 	EnableFieldDiscovery bool `protobuf:"varint,2,opt,name=enable_field_discovery,json=enableFieldDiscovery,proto3" json:"enable_field_discovery,omitempty"`
 	EnableTimeline       bool `protobuf:"varint,3,opt,name=enable_timeline,json=enableTimeline,proto3" json:"enable_timeline,omitempty"`
-	// Deprecated with enable_preview; use SearchSubscription.preview_row_limit.
-	//
-	// Deprecated: Marked as deprecated in open_splunk/search.proto.
-	PreviewRowLimit *uint32 `protobuf:"varint,4,opt,name=preview_row_limit,json=previewRowLimit,proto3,oneof" json:"preview_row_limit,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *SearchJobOptions) Reset() {
@@ -905,14 +895,6 @@ func (*SearchJobOptions) Descriptor() ([]byte, []int) {
 	return file_open_splunk_search_proto_rawDescGZIP(), []int{6}
 }
 
-// Deprecated: Marked as deprecated in open_splunk/search.proto.
-func (x *SearchJobOptions) GetEnablePreview() bool {
-	if x != nil {
-		return x.EnablePreview
-	}
-	return false
-}
-
 func (x *SearchJobOptions) GetEnableFieldDiscovery() bool {
 	if x != nil {
 		return x.EnableFieldDiscovery
@@ -925,14 +907,6 @@ func (x *SearchJobOptions) GetEnableTimeline() bool {
 		return x.EnableTimeline
 	}
 	return false
-}
-
-// Deprecated: Marked as deprecated in open_splunk/search.proto.
-func (x *SearchJobOptions) GetPreviewRowLimit() uint32 {
-	if x != nil && x.PreviewRowLimit != nil {
-		return *x.PreviewRowLimit
-	}
-	return 0
 }
 
 // SearchJob is a transient, immutable-snapshot execution record. state_version
@@ -1214,13 +1188,10 @@ const file_open_splunk_search_proto_rawDesc = "" +
 	"\rgenerated_sql\x18\x03 \x01(\tH\x00R\fgeneratedSql\x88\x01\x01\x123\n" +
 	"\x13clickhouse_query_id\x18\x04 \x01(\tH\x01R\x11clickhouseQueryId\x88\x01\x01B\x10\n" +
 	"\x0e_generated_sqlB\x16\n" +
-	"\x14_clickhouse_query_id\"\xe7\x01\n" +
-	"\x10SearchJobOptions\x12)\n" +
-	"\x0eenable_preview\x18\x01 \x01(\bB\x02\x18\x01R\renablePreview\x124\n" +
+	"\x14_clickhouse_query_id\"\xa0\x01\n" +
+	"\x10SearchJobOptions\x124\n" +
 	"\x16enable_field_discovery\x18\x02 \x01(\bR\x14enableFieldDiscovery\x12'\n" +
-	"\x0fenable_timeline\x18\x03 \x01(\bR\x0eenableTimeline\x123\n" +
-	"\x11preview_row_limit\x18\x04 \x01(\rB\x02\x18\x01H\x00R\x0fpreviewRowLimit\x88\x01\x01B\x14\n" +
-	"\x12_preview_row_limit\"\x8f\v\n" +
+	"\x0fenable_timeline\x18\x03 \x01(\bR\x0eenableTimelineJ\x04\b\x01\x10\x02J\x04\b\x04\x10\x05R\x0eenable_previewR\x11preview_row_limit\"\x8f\v\n" +
 	"\tSearchJob\x12\"\n" +
 	"\rsearch_job_id\x18\x01 \x01(\tR\vsearchJobId\x12#\n" +
 	"\rstate_version\x18\x02 \x01(\x04R\fstateVersion\x12=\n" +
@@ -1396,7 +1367,6 @@ func file_open_splunk_search_proto_init() {
 	file_open_splunk_search_proto_msgTypes[2].OneofWrappers = []any{}
 	file_open_splunk_search_proto_msgTypes[4].OneofWrappers = []any{}
 	file_open_splunk_search_proto_msgTypes[5].OneofWrappers = []any{}
-	file_open_splunk_search_proto_msgTypes[6].OneofWrappers = []any{}
 	file_open_splunk_search_proto_msgTypes[7].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

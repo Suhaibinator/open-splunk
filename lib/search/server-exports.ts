@@ -424,11 +424,9 @@ export async function waitForServerExport(
   }
   let snapshot = initialSnapshot;
   try {
-    while (!exportIsTerminal(snapshot.job)) {
-      // Export state is sequential; each response determines whether another poll is needed.
-      // eslint-disable-next-line no-await-in-loop
+    const pollUntilTerminal = async (): Promise<void> => {
+      if (exportIsTerminal(snapshot.job)) return;
       await wait(pollIntervalMs, options.signal);
-      // eslint-disable-next-line no-await-in-loop
       const response = await client.exports.get({
         exportJobId: initialSnapshot.job.exportJobId,
         issueDownloadGrant: false,
@@ -442,7 +440,9 @@ export async function waitForServerExport(
         initialSnapshot.job.exportJobId,
       );
       options.onUpdate?.(snapshot.job);
-    }
+      await pollUntilTerminal();
+    };
+    await pollUntilTerminal();
     return { status: "available", value: snapshot.job };
   } catch (error) {
     if (isAdvertisedFeatureRouteUnavailable(error)) return optionalRouteUnavailable;

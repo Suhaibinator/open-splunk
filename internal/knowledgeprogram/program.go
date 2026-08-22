@@ -13,14 +13,16 @@ import (
 	"slices"
 	"strings"
 
+	"fortio.org/safecast"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"github.com/Suhaibinator/open-splunk/internal/splpath"
 	"github.com/Suhaibinator/open-splunk/internal/splregex"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 const (
@@ -431,7 +433,7 @@ func compileObjects(
 		return nil, nil, fmt.Errorf("%w: more than %d objects", ErrResourceLimit, MaximumObjects)
 	}
 	state := &programState{}
-	state.objectCount = uint32(len(input)) // #nosec G115 -- input is bounded by MaximumObjects above.
+	state.objectCount = safecast.MustConv[uint32](len(input))
 	stageOrdinals := map[opensplunk.KnowledgeSearchStage]uint32{}
 	var previous *opensplunk.KnowledgeSnapshotObject
 	objects := make(map[string]*opensplunk.KnowledgeSnapshotObject, len(input))
@@ -600,14 +602,14 @@ func appendObject(state *programState, normalized knowledgedefinition.Normalized
 			}
 			origin.location = "field_extraction.regex.pattern"
 			// The regex compiler returns a positive value bounded by MaximumExtractionProgramWorkUnits.
-			programWorkUnits := uint64(compiled.ProgramWorkUnits) // #nosec G115 -- the compiler-enforced bound is far below MaxUint64.
+			programWorkUnits := safecast.MustConv[uint64](compiled.ProgramWorkUnits)
 			state.regex = append(state.regex, RegexExtraction{origin: origin, selector: selector, overwrite: overwrite, input: body.FieldExtraction.GetInputField(), pattern: compiled.Pattern, captures: captures, workUnits: programWorkUnits})
 			state.operatorKinds = append(state.operatorKinds, OperatorConditionalExtract)
 			state.charges.GeneratedOperators++
-			state.charges.GeneratedFields += uint32(len(captures)) // #nosec G115 -- captures are bounded by MaximumExtractionOutputs.
+			state.charges.GeneratedFields += safecast.MustConv[uint32](len(captures))
 			state.charges.RegexPrograms++
 			state.charges.RegexWorkUnits += programWorkUnits
-			state.charges.ExtractionOutputs += uint32(len(captures)) // #nosec G115 -- captures are bounded by MaximumExtractionOutputs.
+			state.charges.ExtractionOutputs += safecast.MustConv[uint32](len(captures))
 		case *opensplunk.FieldExtractionDefinition_Json:
 			steps, err := splpath.ParseJSON(extraction.Json.GetPath())
 			if err != nil {
@@ -617,7 +619,7 @@ func appendObject(state *programState, normalized knowledgedefinition.Normalized
 				return errors.New("JSON extraction is not executable")
 			}
 			origin.location = "field_extraction.json.path"
-			workUnits := uint32(splpath.EvaluationWorkUnits(steps)) // #nosec G115 -- parsed JSON paths have a bounded evaluation cost.
+			workUnits := safecast.MustConv[uint32](splpath.EvaluationWorkUnits(steps))
 			state.json = append(state.json, JSONExtraction{
 				origin:         origin,
 				selector:       selector,
@@ -665,7 +667,7 @@ func appendObject(state *programState, normalized knowledgedefinition.Normalized
 					Code:      IssueCodeCalculatedBoolean,
 					Message:   "calculated expression cannot directly assign a Boolean function result",
 					Range: &ScalarRange{
-						EndByteOffset: uint32(len(body.CalculatedField.GetExpression())), // #nosec G115 -- authored expressions are bounded far below MaxUint32.
+						EndByteOffset: safecast.MustConv[uint32](len(body.CalculatedField.GetExpression())),
 					},
 				},
 			)
@@ -824,12 +826,12 @@ func writeOrigin(buffer *bytes.Buffer, origin Origin) {
 	writeUint64(buffer, uint64(origin.stageOrdinal))
 	writeString(buffer, origin.objectID)
 	writeUint64(buffer, origin.version)
-	writeUint64(buffer, uint64(origin.objectType)) // #nosec G115 -- accepted origins contain validated nonnegative protobuf enums.
+	writeUint64(buffer, safecast.MustConv[uint64](origin.objectType))
 	writeString(buffer, origin.name)
 	writeString(buffer, origin.appID)
 	writeString(buffer, origin.ownerID)
-	writeUint64(buffer, uint64(origin.sharingScope)) // #nosec G115 -- accepted origins contain validated nonnegative protobuf enums.
-	writeUint64(buffer, uint64(origin.stage))        // #nosec G115 -- accepted origins contain validated nonnegative protobuf enums.
+	writeUint64(buffer, safecast.MustConv[uint64](origin.sharingScope))
+	writeUint64(buffer, safecast.MustConv[uint64](origin.stage))
 	writeBytes(buffer, origin.definitionDigest[:])
 	writeString(buffer, origin.location)
 }
@@ -853,9 +855,9 @@ func writeSelector(buffer *bytes.Buffer, selector Selector) {
 func writeDependency(buffer *bytes.Buffer, dependency *opensplunk.KnowledgeObjectDependency) {
 	writeVersionReference(buffer, dependency.GetSource())
 	writeVersionReference(buffer, dependency.GetTarget().GetObject())
-	writeUint64(buffer, uint64(dependency.GetRole()))        // #nosec G115 -- validated dependencies contain closed nonnegative enums.
-	writeUint64(buffer, uint64(dependency.GetSourceStage())) // #nosec G115 -- validated dependencies contain closed nonnegative enums.
-	writeUint64(buffer, uint64(dependency.GetTargetStage())) // #nosec G115 -- validated dependencies contain closed nonnegative enums.
+	writeUint64(buffer, safecast.MustConv[uint64](dependency.GetRole()))
+	writeUint64(buffer, safecast.MustConv[uint64](dependency.GetSourceStage()))
+	writeUint64(buffer, safecast.MustConv[uint64](dependency.GetTargetStage()))
 	writeUint64(buffer, uint64(dependency.GetTopologicalDepth()))
 	writeUint64(buffer, uint64(dependency.GetCanonicalOrdinal()))
 }

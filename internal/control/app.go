@@ -14,9 +14,11 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"fortio.org/safecast"
+	"gorm.io/gorm"
+
 	"github.com/Suhaibinator/open-splunk/internal/ianatimezone"
 	"github.com/Suhaibinator/open-splunk/internal/searchtimebounds"
-	"gorm.io/gorm"
 )
 
 const (
@@ -426,7 +428,7 @@ func (catalog *AppCatalog) updateApp(
 			"tenant_id = ? AND app_id = ? AND version = ?",
 			tenantID,
 			current.AppID,
-			int64(expectedVersion), // #nosec G115 -- validateExpectedVersion bounds this value.
+			safecast.MustConv[int64](expectedVersion),
 		).
 		Updates(updates)
 	if update.Error != nil {
@@ -556,7 +558,7 @@ func (catalog *AppCatalog) setAppState(
 			"tenant_id = ? AND app_id = ? AND version = ?",
 			tenantID,
 			current.AppID,
-			int64(expectedVersion), // #nosec G115 -- validateExpectedVersion bounds this value.
+			safecast.MustConv[int64](expectedVersion),
 		).
 		Updates(map[string]any{
 			"archived_at_unix_micro": archivedAt,
@@ -687,7 +689,7 @@ func (catalog *AppCatalog) deleteApp(
 		"tenant_id = ? AND app_id = ? AND version = ? AND state = ?",
 		tenantID,
 		current.AppID,
-		int64(expectedVersion), // #nosec G115 -- validateExpectedVersion bounds this value.
+		safecast.MustConv[int64](expectedVersion),
 		AppStateArchived,
 	).Delete(&appRecord{})
 	if deleted.Error != nil {

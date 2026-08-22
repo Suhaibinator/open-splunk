@@ -28,7 +28,7 @@ func TestDeploymentClickHouseMigrationUsesOneVerifiedPrivilegedSession(
 	passwordFile := writeClickHouseCredentialFixture(t, password+"\n", 0o600)
 	passwordEnvironments := []string{
 		"CLICKHOUSE_PASSWORD",
-		clickHouseMigrationPasswordEnvironment,
+		clickHouseMigrationEnvironmentVariable,
 		"OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD",
 		"OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD",
 	}

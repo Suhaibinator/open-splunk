@@ -207,7 +207,7 @@ func NewIndexDataDeletionCoordinator(
 
 	// The coordinator owns this cancellation function and invokes it exactly
 	// once when shutdown starts.
-	workerContext, cancelWorker := context.WithCancel(context.Background()) //nolint:gosec
+	workerContext, cancelWorker := context.WithCancel(context.Background())
 	coordinator := &IndexDataDeletionCoordinator{
 		control:          controlPlane,
 		store:            store,

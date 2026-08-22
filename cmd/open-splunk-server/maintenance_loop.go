@@ -5,6 +5,10 @@ import (
 	"time"
 )
 
+func newMaintenanceWorkerContext() (context.Context, context.CancelFunc) {
+	return context.WithCancel(context.Background())
+}
+
 // runBacklogMaintenanceLoop drives one bounded prune worker: it prunes on
 // every tick and re-arms a short backlog timer while prune reports more work.
 func runBacklogMaintenanceLoop(

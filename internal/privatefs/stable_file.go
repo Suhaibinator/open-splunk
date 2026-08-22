@@ -12,6 +12,8 @@ import (
 	"io/fs"
 	"math"
 	"os"
+
+	"fortio.org/safecast"
 )
 
 const stableRegularFileBufferBytes = 64 << 10
@@ -149,7 +151,7 @@ func InspectStableRegularFile(
 	var digest [sha256.Size]byte
 	copy(digest[:], hash.Sum(nil))
 	return StableRegularFileInspection{
-		SizeBytes: uint64(read), // #nosec G115 -- policy bounds are nonnegative.
+		SizeBytes: safecast.MustConv[uint64](read),
 		SHA256:    digest,
 		Contents:  retained.Bytes(),
 	}, nil

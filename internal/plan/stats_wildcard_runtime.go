@@ -14,6 +14,8 @@ import (
 	"time"
 	"unsafe"
 
+	"fortio.org/safecast"
+
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
@@ -590,7 +592,7 @@ func newStatsWildcardRequest(
 			}
 		}
 		patterns = append(patterns, StatsWildcardPattern{
-			Ordinal: uint8(ordinal), // #nosec G115 -- stats measures are bounded to 16.
+			Ordinal: safecast.MustConv[uint8](ordinal),
 			Pattern: strings.Clone(glob.Pattern),
 		})
 	}
@@ -609,8 +611,8 @@ func newStatsWildcardRequest(
 	request := StatsWildcardRequest{
 		sourceDigest:   sourceDigest,
 		scopeDigest:    scopeDigest,
-		commandIndex:   uint16(commandIndex), // #nosec G115 -- parser commands are bounded well below uint16.
-		maximumPairs:   uint8(remaining + 1), // #nosec G115 -- maximum is 17.
+		commandIndex:   safecast.MustConv[uint16](commandIndex),
+		maximumPairs:   safecast.MustConv[uint8](remaining + 1),
 		patterns:       patterns,
 		authoredSource: strings.Clone(authoredSource),
 		scope:          statsWildcardScopeFromPlan(prefix),
@@ -907,8 +909,8 @@ func writeStatsWildcardSemanticValue(writer hash.Hash, value reflect.Value, dept
 		if value.Type() == reflect.TypeFor[time.Time]() {
 			return writeStatsWildcardTime(writer, value.Interface().(time.Time))
 		}
-		// #nosec G115 -- reflection field counts are non-negative native-sized values.
-		writeStatsWildcardUint64(writer, uint64(value.NumField()))
+
+		writeStatsWildcardUint64(writer, safecast.MustConv[uint64](value.NumField()))
 		for _, field := range value.Fields() {
 			if !writeStatsWildcardSemanticValue(writer, field, depth+1) {
 				return false
@@ -916,8 +918,8 @@ func writeStatsWildcardSemanticValue(writer hash.Hash, value reflect.Value, dept
 		}
 		return true
 	case reflect.Slice, reflect.Array:
-		// #nosec G115 -- reflection collection lengths are non-negative native-sized values.
-		writeStatsWildcardUint64(writer, uint64(value.Len()))
+
+		writeStatsWildcardUint64(writer, safecast.MustConv[uint64](value.Len()))
 		for index := 0; index < value.Len(); index++ {
 			if !writeStatsWildcardSemanticValue(writer, value.Index(index), depth+1) {
 				return false
@@ -935,9 +937,9 @@ func writeStatsWildcardSemanticValue(writer hash.Hash, value reflect.Value, dept
 		}
 		return true
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		// #nosec G115 -- the seal deliberately encodes signed values by their stable
+
 		// two's-complement bit pattern.
-		writeStatsWildcardUint64(writer, uint64(value.Int()))
+		writeStatsWildcardInt64(writer, value.Int())
 		return true
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		writeStatsWildcardUint64(writer, value.Uint())
@@ -966,6 +968,10 @@ func writeStatsWildcardUint64(writer hash.Hash, value uint64) {
 	var encoded [8]byte
 	binary.BigEndian.PutUint64(encoded[:], value)
 	_, _ = writer.Write(encoded[:])
+}
+
+func writeStatsWildcardInt64(writer hash.Hash, value int64) {
+	_ = binary.Write(writer, binary.BigEndian, value)
 }
 
 func writeStatsWildcardTime(writer hash.Hash, value time.Time) bool {

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"math"
 
+	"fortio.org/safecast"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/collector"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
@@ -46,8 +48,8 @@ func StoreCanonical(
 			"GradeThis corpus event count exceeds the storage contract",
 		)
 	}
-	// #nosec G115 -- the explicit math.MaxUint32 guard above proves this safe.
-	eventCount := uint32(len(profile.Events))
+
+	eventCount := safecast.MustConv[uint32](len(profile.Events))
 	decoder, err := collector.NewDecoder(collector.DecodeConfig{
 		Format:     collector.InputFormatNDJSON,
 		InputID:    "gradethis-corpus-input",

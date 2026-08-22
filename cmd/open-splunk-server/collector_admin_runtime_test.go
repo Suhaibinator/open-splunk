@@ -930,7 +930,7 @@ func claimRuntimeCollector(
 	collector, lease, err := store.Claim(
 		context.Background(),
 		collectorfleet.ClaimRequest{
-			Scope:       collectorfleet.Scope{TenantID: tenantID},
+			TenantID:    tenantID,
 			CollectorID: collectorID,
 			BootEpoch:   "boot-" + collectorID,
 			StreamID:    "stream-" + collectorID,

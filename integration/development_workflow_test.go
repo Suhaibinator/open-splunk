@@ -2,6 +2,7 @@ package integration
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -35,7 +36,7 @@ func TestDevelopmentWorkflow(t *testing.T) {
 	temporaryRoot := t.TempDir()
 	environmentFile := filepath.Join(temporaryRoot, ".env.development")
 
-	runDevelopmentCommand(t, repositoryRoot, nil,
+	runDevelopmentCommand(t, repositoryRoot,
 		filepath.Join(repositoryRoot, "deploy", "generate-env.sh"),
 		"--development", environmentFile,
 	)
@@ -51,19 +52,21 @@ func TestDevelopmentWorkflow(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		arguments := append(append([]string{}, composeArguments...), "down", "--volumes", "--remove-orphans")
-		command := exec.Command("docker", arguments...)
+		cleanupContext, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		command := exec.CommandContext(cleanupContext, "docker", arguments...)
 		command.Dir = repositoryRoot
 		if output, err := command.CombinedOutput(); err != nil {
 			t.Logf("development Compose cleanup: %v\n%s", err, output)
 		}
 	})
-	runDevelopmentCommand(t, repositoryRoot, nil, "docker",
+	runDevelopmentCommand(t, repositoryRoot, "docker",
 		append(composeArguments, "up", "--detach", "--wait", "clickhouse")...,
 	)
-	runDevelopmentCommand(t, repositoryRoot, nil, "make", "build-server")
+	runDevelopmentCommand(t, repositoryRoot, "make", "build-server")
 
 	serverBinary := filepath.Join(repositoryRoot, "build", "open-splunk-server")
-	identity := runDevelopmentCommand(t, repositoryRoot, nil, serverBinary, "version")
+	identity := runDevelopmentCommand(t, repositoryRoot, serverBinary, "version")
 	if identity != "source_revision=development\n" {
 		t.Fatalf("development identity = %q", identity)
 	}
@@ -113,7 +116,8 @@ func requireCommand(t *testing.T, name string) {
 
 func reserveLoopbackPort(t *testing.T) int {
 	t.Helper()
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	var listenConfig net.ListenConfig
+	listener, err := listenConfig.Listen(t.Context(), "tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("reserve loopback port: %v", err)
 	}
@@ -144,11 +148,10 @@ func replaceDevelopmentPort(t *testing.T, path, name string, port int) {
 	}
 }
 
-func runDevelopmentCommand(t *testing.T, directory string, environment []string, name string, arguments ...string) string {
+func runDevelopmentCommand(t *testing.T, directory string, name string, arguments ...string) string {
 	t.Helper()
-	command := exec.Command(name, arguments...)
+	command := exec.CommandContext(t.Context(), name, arguments...)
 	command.Dir = directory
-	command.Env = append(os.Environ(), environment...)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("run %s: %v\n%s", name, err, output)
@@ -162,7 +165,11 @@ func startDevelopmentServer(t *testing.T, repositoryRoot, environmentFile string
 	if err != nil {
 		t.Fatalf("open development server log: %v", err)
 	}
-	command := exec.Command(filepath.Join(repositoryRoot, "scripts", "run-development.sh"), environmentFile)
+	command := exec.CommandContext(
+		t.Context(),
+		filepath.Join(repositoryRoot, "scripts", "run-development.sh"),
+		environmentFile,
+	)
 	command.Dir = repositoryRoot
 	command.Env = append(os.Environ(), environment...)
 	command.Stdout = logFile
@@ -187,7 +194,11 @@ func waitForDevelopmentReadiness(t *testing.T, port int, logPath string) {
 	url := fmt.Sprintf("http://127.0.0.1:%d/readyz", port)
 	deadline := time.Now().Add(2 * time.Minute)
 	for time.Now().Before(deadline) {
-		response, err := client.Get(url)
+		request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
+		if err != nil {
+			t.Fatalf("create development readiness request: %v", err)
+		}
+		response, err := client.Do(request)
 		if err == nil {
 			_, _ = io.Copy(io.Discard, response.Body)
 			_ = response.Body.Close()

@@ -64,8 +64,9 @@ func TestExactKeyOrdinalsRejectKeyDefinitionAndDuplicateRows(t *testing.T) {
 
 func TestValidateUniqueKeysContextRejectsNilAndCanceledContexts(t *testing.T) {
 	asset := mustParseAsset(t, "key\na\n")
-	//nolint:staticcheck // The nil context is the invalid input under test.
-	if err := ValidateUniqueKeysContext(nil, asset, []string{"key"}); !errors.Is(err, ErrInvalidArgument) {
+	var nilContext context.Context
+
+	if err := ValidateUniqueKeysContext(nilContext, asset, []string{"key"}); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("nil context error = %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())

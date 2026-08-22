@@ -8,10 +8,12 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"fortio.org/safecast"
+	"google.golang.org/protobuf/proto"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
-	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -268,7 +270,7 @@ func allowedProgramIssue(issue knowledgeprogram.Issue, normalized *opensplunk.Kn
 			return false
 		}
 		return issue.Range.StartByteOffset == 0 &&
-			issue.Range.EndByteOffset == uint32(len(normalized.GetCalculatedField().GetExpression())) // #nosec G115 -- normalized expressions are bounded far below MaxUint32.
+			issue.Range.EndByteOffset == safecast.MustConv[uint32](len(normalized.GetCalculatedField().GetExpression()))
 	default:
 		return normalized != nil && normalized.GetCalculatedField() != nil &&
 			issue.FieldPath == "calculated_field.expression" && issue.Range != nil &&
@@ -335,7 +337,7 @@ func rebaseProgramRange(
 		if start == end && end == uint64(len(canonical)) {
 			start, end = uint64(len(raw)), uint64(len(raw))
 		} else {
-			trimmedPrefixBytes := uint64(left) // #nosec G115 -- left is a nonnegative index into raw.
+			trimmedPrefixBytes := safecast.MustConv[uint64](left)
 			start += trimmedPrefixBytes
 			end += trimmedPrefixBytes
 		}

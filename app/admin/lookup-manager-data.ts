@@ -107,15 +107,11 @@ export function createLookupManagerClient(
       const result: LookupMessage[] = [];
       const seenIDs = new Set<string>();
       const seenTokens = new Set<string>();
-      let pageToken: string | undefined;
-      let pageCount = 0;
       let authority: { readonly tenantId: string; readonly ownerId: string } | undefined;
-      for (;;) {
-        pageCount += 1;
+      async function loadPage(pageToken: string | undefined, pageCount: number): Promise<LookupMessage[]> {
         if (pageCount > LOOKUP_MANAGER_CONTRACT.maximumListPages) {
           throw new RangeError("Lookup list exceeds its bounded page count.");
         }
-        // eslint-disable-next-line no-await-in-loop -- each opaque cursor is authority for the following page.
         const response: ListLookupsResponse = await transport.post(
           lookupRoutes.list,
           ListLookupsRequest.fromPartial({
@@ -161,8 +157,9 @@ export function createLookupManagerClient(
           throw new TypeError("Lookup list returned an invalid or repeated page cursor.");
         }
         seenTokens.add(next);
-        pageToken = next;
+        return loadPage(next, pageCount + 1);
       }
+      return loadPage(undefined, 1);
     },
     replace: async (
       lookupId,

@@ -17,13 +17,15 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"fortio.org/safecast"
+	"google.golang.org/protobuf/proto"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/cursorcodec"
 	"github.com/Suhaibinator/open-splunk/internal/lookupasset"
 	"github.com/Suhaibinator/open-splunk/internal/lookupcatalog"
 	"github.com/Suhaibinator/open-splunk/internal/lookupdefinition"
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
-	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -582,17 +584,17 @@ func (request normalizedListRequest) fingerprint(scope Scope) [sha256.Size]byte 
 	buffer := make([]byte, 8)
 	binary.BigEndian.PutUint32(buffer[:4], request.pageSize)
 	// Normalization validates all enum values before this fingerprint is built.
-	// #nosec G115 -- the accepted protobuf enum values fit in one byte.
-	buffer[4] = byte(request.sortBy)
-	// #nosec G115 -- the accepted protobuf enum values fit in one byte.
-	buffer[5] = byte(request.direction)
+
+	buffer[4] = safecast.MustConv[byte](request.sortBy)
+
+	buffer[5] = safecast.MustConv[byte](request.direction)
 	if request.includeTotal {
 		buffer[6] = 1
 	}
 	_, _ = hash.Write(buffer)
 	for _, state := range request.states {
-		// #nosec G115 -- normalization accepts only the bounded state enum values.
-		_, _ = hash.Write([]byte{byte(state)})
+
+		_, _ = hash.Write([]byte{safecast.MustConv[byte](state)})
 	}
 	var result [sha256.Size]byte
 	copy(result[:], hash.Sum(nil))
@@ -604,8 +606,8 @@ type stringWriter interface{ Write([]byte) (int, error) }
 func writeFingerprintString(writer stringWriter, value string) {
 	length := make([]byte, 4)
 	// Request validation caps every fingerprint component well below MaxUint32.
-	// #nosec G115 -- validated string lengths fit in uint32.
-	binary.BigEndian.PutUint32(length, uint32(len(value)))
+
+	binary.BigEndian.PutUint32(length, safecast.MustConv[uint32](len(value)))
 	_, _ = writer.Write(length)
 	_, _ = writer.Write([]byte(value))
 }

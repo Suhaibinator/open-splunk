@@ -8,8 +8,10 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/Suhaibinator/open-splunk/internal/control"
+	"fortio.org/safecast"
 	"gorm.io/gorm"
+
+	"github.com/Suhaibinator/open-splunk/internal/control"
 )
 
 const (
@@ -134,8 +136,7 @@ func (validator *IndexNameAdmissionValidator) ValidateIndexNameAdmissionInTransa
 	if err != nil {
 		return err
 	}
-	// #nosec G115 -- readPublicationIndexAdmissionIndexFacts validates a positive revision.
-	if uint64(indexFacts.revision) != request.IndexCatalogRevision ||
+	if safecast.MustConv[uint64](indexFacts.revision) != request.IndexCatalogRevision ||
 		indexFacts.physicalCount != request.IndexCatalogPhysicalCount {
 		return fmt.Errorf(
 			"%w: index-name admission request facts are stale",
@@ -291,12 +292,9 @@ func (validator *IndexNameAdmissionValidator) ValidateIndexNameAdmissionInTransa
 		}
 		facts := &tenantFacts[index]
 		// Counts are bounded by the app/index inventory limits before this batch is assembled.
-		// #nosec G115 -- both lengths fit in uint16 by those validated limits.
-		expectedActiveAppCount := uint16(len(facts.apps.active))
-		// #nosec G115 -- the physical-index inventory is bounded below uint16 capacity.
-		expectedPotentiallySearchableIndexCount := uint16(len(indexFacts.names))
-		// #nosec G115 -- winner hydration is bounded by MaximumResolutionCandidates.
-		expectedCurrentActiveCount := uint32(len(facts.winners))
+		expectedActiveAppCount := safecast.MustConv[uint16](len(facts.apps.active))
+		expectedPotentiallySearchableIndexCount := safecast.MustConv[uint16](len(indexFacts.names))
+		expectedCurrentActiveCount := safecast.MustConv[uint32](len(facts.winners))
 		authority, err := validatePublicationIndexNameAdmissionWithBudget(
 			ctx,
 			publicationIndexNameAdmissionInventory{

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"fortio.org/safecast"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/lookupdefinition"
 )
@@ -341,8 +343,8 @@ func readLookupListSnapshot(
 		return ListSnapshot{}, ErrCorrupt
 	}
 	// The query result is validated as nonnegative and capped above.
-	// #nosec G115 -- revision is in [0, MaximumVersions].
-	snapshot := ListSnapshot{Revision: uint64(revision)}
+
+	snapshot := ListSnapshot{Revision: safecast.MustConv[uint64](revision)}
 	if count == 0 && len(state) == 0 {
 		snapshot.State = emptyLookupCatalogState()
 	} else if len(state) != len(snapshot.State) {

@@ -263,12 +263,12 @@ func TestValidatePublicationIndexNameAdmissionSharesBatchBudget(t *testing.T) {
 	})
 
 	t.Run("class states exact across two tenants and plus one", func(t *testing.T) {
-		budget := publicationIndexNameAdmissionBatchBudget{}
-		budget.classStates = publicationIndexAdmissionBatchStart(
-			t,
-			maximumPublicationTransitionClassStates,
-			exactCharge.classStates,
-		)
+		budget := publicationIndexNameAdmissionBatchBudget{
+			classStates: publicationIndexAdmissionBatchStart(
+				t,
+				maximumPublicationTransitionClassStates,
+				exactCharge.classStates,
+			)}
 		publicationIndexAdmissionValidateBatchTenants(t, exactInputs[:2], &budget)
 		if budget.classStates != maximumPublicationTransitionClassStates {
 			t.Fatalf("exact shared class states = %d, want %d", budget.classStates, maximumPublicationTransitionClassStates)

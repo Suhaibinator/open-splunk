@@ -12,6 +12,8 @@ import (
 	"slices"
 	"time"
 
+	"fortio.org/safecast"
+
 	"github.com/Suhaibinator/open-splunk/internal/collector/framing"
 )
 
@@ -118,8 +120,8 @@ func (batch *stagedBatch) consumedLength() (int, error) {
 			len(batch.raw),
 		)
 	}
-	// #nosec G115 -- length is bounded above by len(batch.raw) above.
-	return int(length), nil
+
+	return safecast.MustConv[int](length), nil
 }
 
 func (batch *stagedBatch) reachedObservedEnd() bool {
@@ -203,8 +205,8 @@ func (t *tailer) stageRead(
 					return nil, classifyExactReadError(err)
 				}
 				position += chunkLength
-				// #nosec G115 -- position is a non-negative slice index.
-				positionOffset := uint64(position)
+
+				positionOffset := safecast.MustConv[uint64](position)
 				observer(tailerPollObservation{
 					path:       t.pathStr(),
 					offset:     dependencyStart + positionOffset,
@@ -536,8 +538,8 @@ func (t *tailer) guardForEvent(
 		return "", 0, errors.New("collector/input: event guard exceeds staged dependency")
 	}
 	guardLength := end
-	// #nosec G115 -- fpBytes is validated against maximumFingerprintBytes.
-	if maximum := uint64(t.m.fpBytes); guardLength > maximum {
+
+	if maximum := safecast.MustConv[uint64](t.m.fpBytes); guardLength > maximum {
 		guardLength = maximum
 	}
 	if guardLength == 0 {
@@ -551,11 +553,11 @@ func (t *tailer) guardForEvent(
 	if start+guardLength > uint64(len(batch.dependency)) {
 		return "", 0, errors.New("collector/input: event guard range exceeds staged dependency")
 	}
-	// #nosec G115 -- both indices are bounded by len(batch.dependency) above.
-	guardBytes := batch.dependency[int(start):int(start+guardLength)]
+
+	guardBytes := batch.dependency[safecast.MustConv[int](start):safecast.MustConv[int](start+guardLength)]
 	digest := sha256.Sum256(guardBytes)
-	// #nosec G115 -- fpBytes is validated against maximumFingerprintBytes.
-	return hex.EncodeToString(digest[:]), uint32(guardLength), nil
+
+	return hex.EncodeToString(digest[:]), safecast.MustConv[uint32](guardLength), nil
 }
 
 func (t *tailer) snapshotDependenciesMatch(batch *stagedBatch) (bool, error) {
@@ -625,14 +627,14 @@ func (t *tailer) guardFromBatch(batch *stagedBatch) (tailerRewriteGuard, error) 
 	}
 	guardLength := available
 	// validatedFingerprintBytes guarantees a positive bounded int at construction.
-	// #nosec G115 -- positive int values are exactly representable as uint64.
-	if maximum := uint64(t.m.fpBytes); guardLength > maximum {
+
+	if maximum := safecast.MustConv[uint64](t.m.fpBytes); guardLength > maximum {
 		guardLength = maximum
 	}
-	// #nosec G115 -- available is bounded by len(batch.dependency) above.
-	guardEnd := int(available)
-	// #nosec G115 -- guardLength is bounded by both available and len(dependency).
-	guardStart := guardEnd - int(guardLength)
+
+	guardEnd := safecast.MustConv[int](available)
+
+	guardStart := guardEnd - safecast.MustConv[int](guardLength)
 	return tailerRewriteGuard{
 		offset:      batch.cursor.offset - guardLength,
 		length:      guardLength,
@@ -731,8 +733,8 @@ func (t *tailer) finalizeRetirement(
 		t.setReadError(err)
 		return false, false
 	}
-	// #nosec G115 -- the negative-size case is rejected above.
-	finalSize := uint64(info.Size())
+
+	finalSize := safecast.MustConv[uint64](info.Size())
 	if finalSize != expectedSize {
 		t.retireStable = 0
 		return false, true
@@ -784,8 +786,8 @@ func (t *tailer) finalizeRetirement(
 		t.setReadError(err)
 		return false, false
 	}
-	// #nosec G115 -- the negative-size case is rejected above.
-	finalObservedSize := uint64(info.Size())
+
+	finalObservedSize := safecast.MustConv[uint64](info.Size())
 	if finalObservedSize != finalSize {
 		// Growth is an ordinary append, not a generation change. The normal
 		// transaction loop will stage the suffix and begin quiescence again.

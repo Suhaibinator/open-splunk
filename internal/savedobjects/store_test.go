@@ -12,11 +12,12 @@ import (
 	"testing"
 	"time"
 
-	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
-	"github.com/Suhaibinator/open-splunk/internal/control"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"gorm.io/gorm"
+
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/control"
 )
 
 var testCursorKey = []byte("saved-search-test-cursor-key-32-bytes-minimum")
@@ -1045,8 +1046,9 @@ func TestCancellationAndBoundedInputs(t *testing.T) {
 	if _, err := store.Create(ctx, AccessScope{OwnerID: "owner"}, savedSearchDefinition("test", "app")); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Create(canceled) error = %v, want context.Canceled", err)
 	}
-	//nolint:staticcheck // This case explicitly verifies the nil-context guard.
-	if _, err := store.Get(nil, AccessScope{OwnerID: "owner"}, "id"); !errors.Is(err, control.ErrInvalidArgument) {
+	var nilContext context.Context
+
+	if _, err := store.Get(nilContext, AccessScope{OwnerID: "owner"}, "id"); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("Get(nil context) error = %v, want ErrInvalidArgument", err)
 	}
 	if _, err := store.List(context.Background(), AccessScope{OwnerID: "owner"}, ListRequest{PageSize: maximumListPageSize + 1}); !errors.Is(err, control.ErrInvalidArgument) {

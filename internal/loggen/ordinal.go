@@ -3,6 +3,8 @@ package loggen
 import (
 	"math"
 	"time"
+
+	"fortio.org/safecast"
 )
 
 type ordinalSchedule struct {
@@ -17,7 +19,7 @@ func newOrdinalSchedule(interval time.Duration) (ordinalSchedule, bool) {
 	if interval == 0 {
 		return ordinalSchedule{maximumOrdinal: math.MaxUint64}, true
 	}
-	// #nosec G115 -- the negative interval case is rejected above.
+
 	intervalNanos := uint64(interval)
 	return ordinalSchedule{
 		intervalNanos:  intervalNanos,
@@ -32,6 +34,6 @@ func (schedule ordinalSchedule) offset(ordinal uint64) (time.Duration, bool) {
 	if schedule.intervalNanos == 0 {
 		return 0, true
 	}
-	// #nosec G115 -- maximumOrdinal proves the product does not exceed math.MaxInt64.
-	return time.Duration(ordinal * schedule.intervalNanos), true
+
+	return time.Duration(safecast.MustConv[int64](ordinal * schedule.intervalNanos)), true
 }

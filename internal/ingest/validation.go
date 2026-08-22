@@ -12,15 +12,17 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"fortio.org/safecast"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/collectorlimits"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
 	"github.com/Suhaibinator/open-splunk/internal/protocolid"
 	"github.com/Suhaibinator/open-splunk/internal/sha256hex"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/durationpb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var decimalPattern = regexp.MustCompile(`^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?(?:0|[1-9][0-9]*))?$`)
@@ -804,8 +806,8 @@ func EventIDDigest(events []*opensplunk.LogEvent) []byte {
 		if !ok || length64 > math.MaxUint32 {
 			return nil
 		}
-		// #nosec G115 -- the explicit math.MaxUint32 check above proves this safe.
-		binary.BigEndian.PutUint32(length[:], uint32(len(id)))
+
+		binary.BigEndian.PutUint32(length[:], safecast.MustConv[uint32](len(id)))
 		_, _ = h.Write(length[:])
 		_, _ = h.Write([]byte(id))
 	}
@@ -838,6 +840,6 @@ func nonNegativeIntUint64(value int) (uint64, bool) {
 	if value < 0 {
 		return 0, false
 	}
-	// #nosec G115 -- a non-negative Go int is exactly representable as uint64.
+
 	return uint64(value), true
 }

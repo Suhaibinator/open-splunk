@@ -15,6 +15,7 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
+	"golang.org/x/sys/unix"
 )
 
 const DefaultClickHouseImage = "clickhouse/clickhouse-server:26.7.5.10-alpine@sha256:0a45b864c73322d4360dea1973ee9b77f29c51af1242ad2d47409908071fa56e"
@@ -238,11 +239,15 @@ func startClickHouseWithServicePrincipals(
 		return nil, fmt.Errorf("start ClickHouse service-principal test container: create config directory: %w", err)
 	}
 	configPath := filepath.Join(configDirectory, "access.xml")
-	// #nosec G306 -- the nonsecret config must be readable by the
+
 	// unprivileged clickhouse user inside rootful Linux Docker.
-	if err := os.WriteFile(configPath, []byte(servicePrincipalAccessConfig), 0o644); err != nil {
+	if err := os.WriteFile(configPath, []byte(servicePrincipalAccessConfig), 0o600); err != nil {
 		_ = os.RemoveAll(configDirectory)
 		return nil, fmt.Errorf("start ClickHouse service-principal test container: write access config: %w", err)
+	}
+	if err := makeContainerReadable(configPath); err != nil {
+		_ = os.RemoveAll(configDirectory)
+		return nil, fmt.Errorf("start ClickHouse service-principal test container: expose access config: %w", err)
 	}
 	var tlsIdentity *ServerTLSIdentity
 	tlsConfigPath := ""
@@ -266,11 +271,18 @@ func startClickHouseWithServicePrincipals(
 			)
 		}
 		tlsConfigPath = filepath.Join(configDirectory, "tls.xml")
-		// #nosec G306 -- this nonsecret server config must be container-readable.
-		if err := os.WriteFile(tlsConfigPath, []byte(secureClickHouseTLSConfig), 0o644); err != nil {
+
+		if err := os.WriteFile(tlsConfigPath, []byte(secureClickHouseTLSConfig), 0o600); err != nil {
 			_ = os.RemoveAll(configDirectory)
 			return nil, fmt.Errorf(
 				"start secure ClickHouse service-principal test container: write TLS config: %w",
+				err,
+			)
+		}
+		if err := makeContainerReadable(tlsConfigPath); err != nil {
+			_ = os.RemoveAll(configDirectory)
+			return nil, fmt.Errorf(
+				"start secure ClickHouse service-principal test container: expose TLS config: %w",
 				err,
 			)
 		}
@@ -380,14 +392,21 @@ func prepareSecureClickHouseIdentityFiles(identity *ServerTLSIdentity) error {
 		if strings.TrimSpace(file.path) == "" {
 			return fmt.Errorf("secure ClickHouse TLS %s file is required", file.name)
 		}
-		// #nosec G302 -- both short-lived fixture files remain below an
-		// owner-only directory but must be readable after ClickHouse drops from
-		// the rootful Linux entrypoint user to its unprivileged service user.
-		if err := os.Chmod(file.path, 0o644); err != nil {
-			return fmt.Errorf("make secure ClickHouse TLS %s container-readable: %w", file.name, err)
+
+		if err := makeContainerReadable(file.path); err != nil {
+			return fmt.Errorf("secure ClickHouse TLS %s permissions: %w", file.name, err)
 		}
 	}
 	return nil
+}
+
+func makeContainerReadable(path string) error {
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = unix.Close(fd) }()
+	return unix.Fchmod(fd, 0o644)
 }
 
 func servicePrincipalDockerArguments(

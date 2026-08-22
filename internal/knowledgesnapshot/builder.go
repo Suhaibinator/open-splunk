@@ -14,6 +14,9 @@ import (
 	"sort"
 	"strings"
 
+	"fortio.org/safecast"
+	"google.golang.org/protobuf/proto"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
@@ -23,7 +26,6 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"github.com/Suhaibinator/open-splunk/internal/splpath"
 	"github.com/Suhaibinator/open-splunk/internal/splregex"
-	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -198,9 +200,9 @@ func (authority Authority) Summary() AuthoritySummary {
 		TenantCatalogStateToken:    bytes.Clone(authority.base.TenantCatalogStateToken),
 		AppCatalogRevision:         cloneUint64(authority.base.AppCatalogRevision),
 		EffectiveAuthorizedIndexes: slices.Clone(authority.base.EffectiveAuthorizedIndexes),
-		ExecutableObjects:          uint32(len(authority.objects)),      // #nosec G115 -- prepared authority collections are resource-bounded.
-		Dependencies:               uint32(len(authority.dependencies)), // #nosec G115 -- prepared authority collections are resource-bounded.
-		Shadows:                    uint32(len(authority.shadows)),      // #nosec G115 -- prepared authority collections are resource-bounded.
+		ExecutableObjects:          safecast.MustConv[uint32](len(authority.objects)),
+		Dependencies:               safecast.MustConv[uint32](len(authority.dependencies)),
+		Shadows:                    safecast.MustConv[uint32](len(authority.shadows)),
 	}
 }
 
@@ -471,7 +473,7 @@ func Prepare(input Input) (Authority, error) {
 		}
 		return Authority{}, fmt.Errorf("%w: prepare knowledge prelude: %w", ErrInvalidInput, err)
 	}
-	if err := validatePreludeAuthority(prelude, static, uint32(len(objects))); err != nil { // #nosec G115 -- objects are bounded by MaximumObjects.
+	if err := validatePreludeAuthority(prelude, static, safecast.MustConv[uint32](len(objects))); err != nil {
 		return Authority{}, err
 	}
 
@@ -489,11 +491,11 @@ func Prepare(input Input) (Authority, error) {
 		Shadows:                    snapshotShadows,
 		Warnings:                   snapshotWarnings,
 		BudgetCharges: &opensplunk.KnowledgeSnapshotBudgetCharges{
-			ExecutableObjects:         uint32(len(objects)), // #nosec G115 -- objects are bounded by MaximumObjects.
+			ExecutableObjects:         safecast.MustConv[uint32](len(objects)),
 			SelectorPatterns:          selectorPatterns,
 			SelectorWildcardWorkUnits: selectorWork,
 			DependencyNodes:           dependencyNodes,
-			DependencyEdges:           uint32(len(dependencies)), // #nosec G115 -- dependencies are bounded by MaximumDependencies.
+			DependencyEdges:           safecast.MustConv[uint32](len(dependencies)),
 			DependencyDepth:           dependencyDepth,
 		},
 		TenantCatalogStateToken: bytes.Clone(input.TenantCatalogStateToken),
@@ -694,11 +696,11 @@ func compileDefinitionSemantics(normalized knowledgedefinition.Normalized) (defi
 				}
 			}
 			semantics.outputFields = knowledge.CanonicalFields(outputs)
-			semantics.charges.GeneratedFields = uint32(len(outputs)) // #nosec G115 -- regex outputs are bounded by the extraction limit.
+			semantics.charges.GeneratedFields = safecast.MustConv[uint32](len(outputs))
 			semantics.charges.ExtractionRegexPrograms = 1
 			// The regex compiler returns a positive value bounded by MaximumExtractionProgramWorkUnits.
-			semantics.charges.ExtractionRegexWorkUnits = uint64(compiled.ProgramWorkUnits) // #nosec G115 -- the compiler-enforced bound is far below MaxUint64.
-			semantics.charges.ExtractionOutputs = uint32(len(outputs))                     // #nosec G115 -- regex outputs are bounded by the extraction limit.
+			semantics.charges.ExtractionRegexWorkUnits = safecast.MustConv[uint64](compiled.ProgramWorkUnits)
+			semantics.charges.ExtractionOutputs = safecast.MustConv[uint32](len(outputs))
 		case *opensplunk.FieldExtractionDefinition_Json:
 			if extraction == nil || extraction.Json == nil {
 				return definitionSemantics{}, errors.New("JSON extraction is nil")
@@ -975,7 +977,7 @@ func canonicalizeDependencies(
 		}
 		return l.input.Role < r.input.Role
 	})
-	return dependencies, uint32(len(nodes)), maximumDepth, nil // #nosec G115 -- dependency nodes are bounded by MaximumDependencies.
+	return dependencies, safecast.MustConv[uint32](len(nodes)), maximumDepth, nil
 }
 
 func canonicalizeShadows(
@@ -1215,7 +1217,7 @@ func validateTrustedCompilerEvidence(
 	if authority.base == nil || authority.base.BudgetCharges == nil {
 		return invalid("prepared authority is absent")
 	}
-	objects := uint32(len(authority.objects)) // #nosec G115 -- prepared authority objects are bounded by MaximumObjects.
+	objects := safecast.MustConv[uint32](len(authority.objects))
 	if err := validatePreludeAuthority(authority.prelude, authority.static, objects); err != nil {
 		return trustedCompilerTotals{}, err
 	}

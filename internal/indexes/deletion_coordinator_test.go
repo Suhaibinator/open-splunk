@@ -646,9 +646,7 @@ func TestIndexDataDeletionCoordinatorResolvesCanceledCommitWithFreshContext(
 	store := &coordinatorTestStore{
 		recorder: recorder,
 		freezeContext: func(ctx context.Context) context.Context {
-			// #nosec G118 -- Complete invokes the retained cancellation to
-			// model a lost response after a callback-scoped commit.
-			callbackContext, cancel := context.WithCancel(ctx)
+			callbackContext, cancel := newCancelableCoordinatorContext(ctx)
 			cancelCallback = cancel
 			return context.WithValue(
 				callbackContext,
@@ -724,6 +722,10 @@ func TestIndexDataDeletionCoordinatorResolvesCanceledCommitWithFreshContext(
 	if !completionLookupOutsideCallback.Load() {
 		t.Fatal("terminal audit lookup reused callback-scoped context")
 	}
+}
+
+func newCancelableCoordinatorContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithCancel(ctx)
 }
 
 func TestIndexDataDeletionCoordinatorResolvesConcurrentEnsureCompletion(

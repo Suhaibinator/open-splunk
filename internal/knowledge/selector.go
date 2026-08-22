@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"fortio.org/safecast"
 )
 
 const (
@@ -560,13 +562,13 @@ func marshalCanonicalSelector(dimensions [MaximumSelectorDimensions]compiledDime
 		canonical = append(canonical, byte(index+1))
 		var count [2]byte
 		// A compiled dimension is bounded by MaximumSelectorPatternsPerDimension.
-		patternCount := uint16(len(dimension.patterns)) // #nosec G115 -- compile-time bound is far below MaxUint16.
+		patternCount := safecast.MustConv[uint16](len(dimension.patterns))
 		binary.BigEndian.PutUint16(count[:], patternCount)
 		canonical = append(canonical, count[:]...)
 		for _, pattern := range dimension.patterns {
 			var size [4]byte
 			// A normalized pattern is bounded by MaximumSelectorPatternBytes.
-			patternSize := uint32(len(pattern)) // #nosec G115 -- compile-time bound is far below MaxUint32.
+			patternSize := safecast.MustConv[uint32](len(pattern))
 			binary.BigEndian.PutUint32(size[:], patternSize)
 			canonical = append(canonical, size[:]...)
 			canonical = append(canonical, pattern...)

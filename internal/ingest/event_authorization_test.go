@@ -9,11 +9,12 @@ import (
 	"time"
 	"unicode/utf8"
 
-	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
-	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 )
 
 func TestCompileEventAuthorizationMatchesFullValues(t *testing.T) {
@@ -723,7 +724,7 @@ func TestRefreshEventAuthorizationCorruptionKeepsLastValidSnapshot(t *testing.T)
 	deferred, fatal := service.refreshLeaseAuthorization(
 		context.Background(),
 		"good-token",
-		collectorfleet.Lease{Scope: collectorfleet.Scope{TenantID: initial.TenantID}},
+		collectorfleet.Lease{TenantID: initial.TenantID},
 		validationTestNow,
 		&state,
 	)
@@ -777,7 +778,7 @@ func TestRefreshEventAuthorizationRecompilesOnlyChangedDimensions(t *testing.T) 
 	deferred, fatal := service.refreshLeaseAuthorization(
 		context.Background(),
 		"good-token",
-		collectorfleet.Lease{Scope: collectorfleet.Scope{TenantID: initial.TenantID}},
+		collectorfleet.Lease{TenantID: initial.TenantID},
 		validationTestNow,
 		&state,
 	)

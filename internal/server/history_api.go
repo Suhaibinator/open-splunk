@@ -11,15 +11,17 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"fortio.org/safecast"
 	"github.com/Suhaibinator/SRouter/pkg/codec"
 	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/protostrict"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -132,8 +134,8 @@ func (handler *apiHandler) listSearchHistory(request *http.Request, input *opens
 	if err := mapSearchHistoryCallError(request.Context(), err); err != nil {
 		return nil, err
 	}
-	// #nosec G115 -- a slice length is non-negative and exactly representable as uint64.
-	if uint64(len(result.Entries)) > uint64(effectiveHistoryPageSize(pageSize, handler.maximumPageSize)) {
+
+	if safecast.MustConv[uint64](len(result.Entries)) > uint64(effectiveHistoryPageSize(pageSize, handler.maximumPageSize)) {
 		return nil, internalError()
 	}
 
@@ -211,8 +213,8 @@ func (handler *apiHandler) historyPageRequest(page *opensplunk.PageRequest) (uin
 		pageSize = int(min(maximumHistoryRowsPerResponse, handler.maximumPageSize))
 	}
 	pageSize = min(pageSize, int(maximumHistoryRowsPerResponse))
-	// #nosec G115 -- pageSize is non-negative and capped at 15 immediately above.
-	return uint32(pageSize), pageToken, includeTotal, nil
+
+	return safecast.MustConv[uint32](pageSize), pageToken, includeTotal, nil
 }
 
 func effectiveHistoryPageSize(requested, configuredMaximum uint32) uint32 {
@@ -446,8 +448,8 @@ func historyEntrySortKey(entry *opensplunk.SearchHistoryEntry, sortBy opensplunk
 	case opensplunk.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_DURATION:
 		return int64(entry.GetDuration().AsDuration())
 	case opensplunk.SearchHistorySortBy_SEARCH_HISTORY_SORT_BY_MATCHED_EVENTS:
-		// #nosec G115 -- cloneSearchHistoryEntry rejects matched-event counts above MaxInt64.
-		return int64(entry.GetMatchedEvents())
+
+		return safecast.MustConv[int64](entry.GetMatchedEvents())
 	default:
 		return entry.GetCreatedAt().AsTime().UnixMicro()
 	}

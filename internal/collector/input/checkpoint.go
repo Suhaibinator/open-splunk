@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/privatefs"
 	"github.com/Suhaibinator/open-splunk/internal/protocolid"
 	"github.com/Suhaibinator/open-splunk/internal/sha256hex"
 )
@@ -76,8 +77,8 @@ func newCheckpointStoreWithDirectorySync(
 	if err := mkdirCheckpointDirDurable(dir, 0o700, syncDirectory); err != nil {
 		return nil, fmt.Errorf("collector/input: create checkpoint dir %s: %w", dir, err)
 	}
-	// #nosec G302 -- dir is a directory and is deliberately owner-only.
-	if err := os.Chmod(dir, 0o700); err != nil {
+
+	if err := privatefs.SecureDirectory(dir); err != nil {
 		return nil, fmt.Errorf("collector/input: secure checkpoint dir %s: %w", dir, err)
 	}
 	if err := syncDirectory(dir); err != nil {

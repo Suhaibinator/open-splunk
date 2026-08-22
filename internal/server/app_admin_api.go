@@ -16,15 +16,17 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"fortio.org/safecast"
 	"github.com/Suhaibinator/SRouter/pkg/codec"
 	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/protostrict"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
 const (
@@ -1127,9 +1129,8 @@ func (handler *apiHandler) appAdministrationListRequest(
 		revision := cursor.CatalogRevision
 		requiredRevision = &revision
 	}
-	// #nosec G115 -- pageRequest bounds this positive value by both the
-	// configured transport maximum and maximumAppAdministrationRows.
-	pageSizeUint32 := uint32(pageSize)
+
+	pageSizeUint32 := safecast.MustConv[uint32](pageSize)
 	return AppAdministrationListRequest{
 		PageSize:                pageSizeUint32,
 		PageCursor:              pageCursor,

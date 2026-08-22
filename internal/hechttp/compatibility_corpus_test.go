@@ -26,11 +26,12 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -603,7 +604,7 @@ func (fake *compatibilityAdmission) Stage(_ context.Context, request ingest.Admi
 		}
 		if _, ok := authorized[admitted.Event.GetIndexName()]; !ok {
 			return ingest.StageResult{}, &ingest.AdmissionFailure{
-				EventIndex: uint32(ordinal), // #nosec G115 -- bounded above.
+				EventIndex: uint32(ordinal),
 				Failure: &ingest.EventError{
 					Code: opensplunk.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_INDEX,
 				},
@@ -664,7 +665,7 @@ func (fake *compatibilityAdmission) Stage(_ context.Context, request ingest.Admi
 	return ingest.StageResult{
 		VisibilitySequence:  1,
 		State:               ingest.StoredBatchPending,
-		AcceptedEvents:      uint32(len(request.Events)), // #nosec G115 -- bounded above.
+		AcceptedEvents:      uint32(len(request.Events)),
 		UncompressedBytes:   uncompressed,
 		HECRequestSequence:  1,
 		HECAcknowledgmentID: acknowledgmentID,

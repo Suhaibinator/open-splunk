@@ -29,7 +29,7 @@ func TestValidateNoExtendedACLRejectsLinuxPOSIXACL(t *testing.T) {
 		16, 0, 0, 0, 0xff, 0xff, 0xff, 0xff, // ACL_MASK: ---
 		32, 0, 0, 0, 0xff, 0xff, 0xff, 0xff, // ACL_OTHER: ---
 	}
-	// #nosec G115 -- os.File descriptors are native int descriptors on Linux.
+
 	err = unix.Fsetxattr(
 		int(file.Fd()),
 		"system.posix_acl_access",

@@ -288,8 +288,9 @@ func TestListRejectsInvalidRequestsSeparatelyFromInvalidCursors(t *testing.T) {
 	if page, err := store.List(ctx, "tenant", ListRequest{PageToken: "malformed"}); len(page.Events) != 0 || !errors.Is(err, ErrInvalidCursor) {
 		t.Fatalf("List(malformed cursor) = (%+v, %v)", page, err)
 	}
-	//nolint:staticcheck // Explicitly verifies the exported nil-context guard.
-	if page, err := store.List(nil, "tenant", ListRequest{}); len(page.Events) != 0 ||
+	var nilContext context.Context
+
+	if page, err := store.List(nilContext, "tenant", ListRequest{}); len(page.Events) != 0 ||
 		!errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("List(nil context) = (%+v, %v)", page, err)
 	}

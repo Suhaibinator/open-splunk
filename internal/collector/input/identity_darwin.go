@@ -5,6 +5,8 @@ package input
 import (
 	"os"
 	"syscall"
+
+	"fortio.org/safecast"
 )
 
 // statDevIno extracts Darwin device and inode numbers from fi. Darwin exposes
@@ -15,7 +17,15 @@ func statDevIno(fi os.FileInfo) (dev, ino uint64, ok bool) {
 	if !ok {
 		return 0, 0, false
 	}
-	// #nosec G115 -- this signed-to-unsigned widening is the established on-disk
+
 	// identity encoding; changing it would orphan persisted checkpoints.
-	return uint64(st.Dev), st.Ino, true
+	return signedDeviceBits(st.Dev), st.Ino, true
+}
+
+func signedDeviceBits(device int32) uint64 {
+	if device >= 0 {
+		return safecast.MustConv[uint64](device)
+	}
+	magnitude := safecast.MustConv[uint64](-(int64(device) + 1)) + 1
+	return ^(magnitude - 1)
 }

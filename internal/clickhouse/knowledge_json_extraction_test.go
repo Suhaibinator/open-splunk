@@ -52,7 +52,7 @@ func TestCompileKnowledgeJSONExtractionPinsGatingScalarDomainAndArguments(t *tes
 		"toUInt128(tupleElement(__os_ko_json_selector, 3))",
 		"notEmpty(__os_ko_json_raw) AND (__os_ko_json_number_selected != 0 OR __os_ko_json_raw IN ('null', 'true', 'false') OR startsWith(__os_ko_json_raw, char(34)))",
 		SpathInputLimitMarker,
-		SpathJSONTokenLimitMarker,
+		SpathJSONLexemeLimitMarker,
 	} {
 		if !strings.Contains(compiled.sql, required) {
 			t.Fatalf("knowledge JSON SQL omits %q:\n%s", required, compiled.sql)

@@ -42,7 +42,7 @@ func testClaim(receivedAt time.Time) ClaimRequest {
 	source := "/var/log/app.json"
 	sourcetype := "app:json"
 	return ClaimRequest{
-		Scope:       Scope{TenantID: "tenant-a"},
+		TenantID:    "tenant-a",
 		CollectorID: "123e4567-e89b-12d3-a456-426614174000",
 		BootEpoch:   "server-boot-1",
 		StreamID:    "stream-1",

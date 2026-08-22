@@ -2,7 +2,10 @@ package spl
 
 import (
 	"fmt"
+	"slices"
 	"sort"
+
+	"fortio.org/safecast"
 )
 
 const (
@@ -82,9 +85,9 @@ func AnalyzeScalarExpression(expression ScalarExpr) (ScalarExpressionAnalysis, e
 	}
 	sort.Strings(fields)
 	return ScalarExpressionAnalysis{
-		InputFields: fields[:len(fields):len(fields)],
-		Nodes:       uint32(analyzer.nodes),      // #nosec G115 -- enter bounds nodes to 4 * maxSPLTokens.
-		Predicates:  uint32(analyzer.predicates), // #nosec G115 -- predicates cannot exceed the bounded node count.
+		InputFields: slices.Clip(fields),
+		Nodes:       safecast.MustConv[uint32](analyzer.nodes),
+		Predicates:  safecast.MustConv[uint32](analyzer.predicates),
 	}, nil
 }
 

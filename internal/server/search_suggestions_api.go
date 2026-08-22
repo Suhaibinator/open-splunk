@@ -9,9 +9,11 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"fortio.org/safecast"
 	"github.com/Suhaibinator/SRouter/pkg/codec"
 	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobproto"
@@ -81,9 +83,8 @@ func (handler *apiHandler) getSearchSuggestions(
 	if cursor > uint64(len(source)) {
 		return nil, badRequestError("cursor byte offset is outside the search source")
 	}
-	// #nosec G115 -- cursor is bounded above by len(source), and source is
-	// independently capped at spl.MaximumSuggestionSourceBytes.
-	cursorOffset := int(cursor)
+
+	cursorOffset := safecast.MustConv[int](cursor)
 	if cursorOffset < len(source) && !utf8.RuneStart(source[cursorOffset]) {
 		return nil, badRequestError("cursor byte offset must be on a UTF-8 boundary")
 	}
@@ -398,19 +399,17 @@ func searchSuggestionPositionAt(source string, offset int) spl.Position {
 }
 
 func searchSuggestionRangeToProto(sourceRange spl.Range) *opensplunk.SourceRange {
-	// #nosec G115 -- validSearchSuggestionRange proves offsets non-negative and
-	// exact positions necessarily fit in the bounded source's uint32 line and
-	// column representation.
+
 	return &opensplunk.SourceRange{
 		Start: &opensplunk.SourcePosition{
-			ByteOffset: uint64(sourceRange.Start.Offset),
-			Line:       uint32(sourceRange.Start.Line),
-			Column:     uint32(sourceRange.Start.Column),
+			ByteOffset: safecast.MustConv[uint64](sourceRange.Start.Offset),
+			Line:       safecast.MustConv[uint32](sourceRange.Start.Line),
+			Column:     safecast.MustConv[uint32](sourceRange.Start.Column),
 		},
 		End: &opensplunk.SourcePosition{
-			ByteOffset: uint64(sourceRange.End.Offset),
-			Line:       uint32(sourceRange.End.Line),
-			Column:     uint32(sourceRange.End.Column),
+			ByteOffset: safecast.MustConv[uint64](sourceRange.End.Offset),
+			Line:       safecast.MustConv[uint32](sourceRange.End.Line),
+			Column:     safecast.MustConv[uint32](sourceRange.End.Column),
 		},
 	}
 }

@@ -1,15 +1,13 @@
-/* eslint-disable unicorn/consistent-function-scoping */
-// Parser-local predicates keep the closed JSON grammar next to its single state machine.
 // JSON.parse deliberately accepts duplicate object keys. Evidence manifests
 // need a stricter contract because a reviewer and a runtime must never bind
 // different values to the same apparent field.
+function isWhitespace(character) {
+  return character === "\t" || character === "\n" ||
+    character === "\r" || character === " ";
+}
+
 export function parseStrictJSON(text, label = "JSON") {
   let offset = 0;
-
-  function isWhitespace(character) {
-    return character === "\t" || character === "\n" ||
-      character === "\r" || character === " ";
-  }
 
   function isPrimitiveDelimiter(character) {
     return isWhitespace(character) || character === "," ||

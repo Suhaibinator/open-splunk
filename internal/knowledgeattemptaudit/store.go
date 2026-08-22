@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"time"
 
+	"fortio.org/safecast"
+	"gorm.io/gorm"
+
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
-	"gorm.io/gorm"
 )
 
 // Appender is the fail-closed dependency intended for future authenticated
@@ -217,8 +219,7 @@ func (store *Store) appendRejectedPrepared(
 			record.KnowledgeObjectID = &object.KnowledgeObjectID
 			objectType := object.ObjectType
 			record.ObjectType = &objectType
-			// #nosec G115 -- prepareAppendInputs rejects versions greater than math.MaxInt64.
-			version := int64(object.Version)
+			version := safecast.MustConv[int64](object.Version)
 			record.ObjectVersion = &version
 			scope := object.SharingScope
 			record.SharingScope = &scope

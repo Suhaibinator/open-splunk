@@ -8,8 +8,10 @@ import (
 	"math"
 	"time"
 
-	"github.com/Suhaibinator/open-splunk/internal/control"
+	"fortio.org/safecast"
 	"gorm.io/gorm"
+
+	"github.com/Suhaibinator/open-splunk/internal/control"
 )
 
 // New constructs a fleet store without changing the migrated SQL schema.
@@ -1736,11 +1738,9 @@ func unixMicroPointerToTime(input *int64) *time.Time {
 }
 
 func boundedUint64ToInt64(value uint64) int64 {
-	// #nosec G115 -- every caller first bounds the value by math.MaxInt64.
-	return int64(value)
+	return safecast.MustConv[int64](value)
 }
 
 func nonnegativeInt64ToUint64(value int64) uint64 {
-	// #nosec G115 -- persisted values are checked nonnegative before conversion.
-	return uint64(value)
+	return safecast.MustConv[uint64](value)
 }

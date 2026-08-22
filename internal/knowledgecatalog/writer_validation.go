@@ -8,13 +8,15 @@ import (
 	"slices"
 	"strings"
 
+	"fortio.org/safecast"
+	"google.golang.org/protobuf/proto"
+	"gorm.io/gorm"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgevalidation"
-	"google.golang.org/protobuf/proto"
-	"gorm.io/gorm"
 )
 
 const (
@@ -198,8 +200,7 @@ func normalizeValidationRequest(
 	}
 	prepared.update = true
 	prepared.objectID = strings.Clone(request.GetKnowledgeObjectId())
-	// #nosec G115 -- validation envelope checks reject expected versions above math.MaxInt64.
-	prepared.expectedVersion = int64(request.GetExpectedVersion())
+	prepared.expectedVersion = safecast.MustConv[int64](request.GetExpectedVersion())
 	prepared.updatePaths = slices.Clone(paths)
 	return prepared, nil
 }

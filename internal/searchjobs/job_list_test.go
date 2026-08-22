@@ -488,8 +488,9 @@ func TestListPageForValidatesInputAndCancellation(t *testing.T) {
 			}
 		})
 	}
-	//nolint:staticcheck // This case explicitly verifies the nil-context guard.
-	if _, err := manager.ListPageFor(nil, validAccess, JobListRequest{}); err == nil {
+	var nilContext context.Context
+
+	if _, err := manager.ListPageFor(nilContext, validAccess, JobListRequest{}); err == nil {
 		t.Fatal("nil context succeeded")
 	}
 	canceled, cancel := context.WithCancel(context.Background())

@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	"fortio.org/safecast"
 )
 
 // HECReadinessSnapshot is the constant-shape projection used by the public
@@ -209,14 +211,14 @@ func (sequencer *SQLiteSequencer) HECOperationalHealth(
 		expired < 0 || failed < 0 || activeChannels > channels {
 		return HECOperationalSnapshot{}, fmt.Errorf("invalid HEC operational aggregate")
 	}
-	snapshot.RetainedRequests = uint64(retainedRequests) // #nosec G115 -- nonnegative int64.
+	snapshot.RetainedRequests = safecast.MustConv[uint64](retainedRequests)
 	snapshot.RequestCapacityAvailable = requestCapacityAvailable == 1
-	snapshot.ActiveChannels = uint64(activeChannels)  // #nosec G115 -- nonnegative int64.
-	snapshot.RetainedChannels = uint64(channels)      // #nosec G115 -- nonnegative int64.
-	snapshot.PendingAcknowledgments = uint64(pending) // #nosec G115 -- nonnegative int64.
-	snapshot.IndexedAcknowledgments = uint64(indexed) // #nosec G115 -- nonnegative int64.
-	snapshot.ExpiredAcknowledgments = uint64(expired) // #nosec G115 -- nonnegative int64.
-	snapshot.TerminalFailedRequests = uint64(failed)  // #nosec G115 -- nonnegative int64.
+	snapshot.ActiveChannels = safecast.MustConv[uint64](activeChannels)
+	snapshot.RetainedChannels = safecast.MustConv[uint64](channels)
+	snapshot.PendingAcknowledgments = safecast.MustConv[uint64](pending)
+	snapshot.IndexedAcknowledgments = safecast.MustConv[uint64](indexed)
+	snapshot.ExpiredAcknowledgments = safecast.MustConv[uint64](expired)
+	snapshot.TerminalFailedRequests = safecast.MustConv[uint64](failed)
 	snapshot.AcknowledgmentAvailable = acknowledgmentAvailable
 	if err := tx.Commit(); err != nil {
 		return HECOperationalSnapshot{}, fmt.Errorf("commit HEC operational health read: %w", err)

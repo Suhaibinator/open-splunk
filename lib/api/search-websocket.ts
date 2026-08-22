@@ -746,7 +746,8 @@ export class SearchWebSocketClient {
 
   private async drainInboundFrames(generation: InboundGeneration): Promise<void> {
     try {
-      while (!generation.invalidated) {
+      const drainNextFrame = async (): Promise<void> => {
+        if (generation.invalidated) return;
         const frame = generation.frames[generation.frameHead];
         if (frame === undefined) {
           return;
@@ -766,8 +767,6 @@ export class SearchWebSocketClient {
           generation.frameHead = 0;
         }
         try {
-          // Inbound checkpoints require strict wire order; parallel listeners could commit a later frame first.
-          // oxlint-disable-next-line no-await-in-loop
           await this.handleMessage(frame.data, generation.socket);
         } catch (error) {
           this.emitError(normalizeError(error, "Unable to process a Search WebSocket frame"));
@@ -776,7 +775,9 @@ export class SearchWebSocketClient {
           this.retainedInboundFrames -= 1;
           this.retainedInboundBytes -= frame.bytes;
         }
-      }
+        await drainNextFrame();
+      };
+      await drainNextFrame();
     } finally {
       if (this.activeInboundGeneration === generation) {
         this.activeInboundGeneration = undefined;

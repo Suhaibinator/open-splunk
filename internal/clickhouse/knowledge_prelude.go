@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 
+	"fortio.org/safecast"
+
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 )
 
@@ -248,7 +250,7 @@ func validateKnowledgePreludePreparation(preparation preparedKnowledgeCompilatio
 		!slices.Equal(programKinds, preparation.operatorKinds) ||
 		programCharges != preparation.programCharges ||
 		preparation.prefixLength != len(programKinds) ||
-		uint32(preparation.prefixLength) != programCharges.GeneratedOperators { // #nosec G115 -- physical charge validation bounds this by knowledgeprogram.MaximumObjects.
+		safecast.MustConv[uint32](preparation.prefixLength) != programCharges.GeneratedOperators {
 		return errors.New(
 			"compile ClickHouse knowledge prelude: prepared authority disagrees with program",
 		)

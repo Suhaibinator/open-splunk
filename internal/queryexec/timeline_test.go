@@ -12,6 +12,7 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 )
@@ -214,8 +215,9 @@ func TestExecutorExecuteTimelineHonorsContextAtEveryBoundary(t *testing.T) {
 	first := time.Unix(0, 0).UTC()
 	t.Run("nil", func(t *testing.T) {
 		connection := &fakeQueryConnection{rows: timelineFakeRows(first, time.Minute, []uint64{1})}
-		//nolint:staticcheck // This case explicitly verifies the nil-context guard.
-		got, err := mustExecutor(t, connection).ExecuteTimeline(nil, validCompiledTimeline(first, 1))
+		var nilContext context.Context
+
+		got, err := mustExecutor(t, connection).ExecuteTimeline(nilContext, validCompiledTimeline(first, 1))
 		if err == nil || got != nil || connection.query != "" {
 			t.Fatalf("ExecuteTimeline(nil) = (%#v, %v), query=%q", got, err, connection.query)
 		}

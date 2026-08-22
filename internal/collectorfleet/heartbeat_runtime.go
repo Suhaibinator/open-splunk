@@ -152,7 +152,7 @@ func NewHeartbeatRuntime(
 	}
 	// The returned runtime owns cancelWorker and calls it exactly once from
 	// idempotent Close after rejecting new work.
-	workerContext, cancelWorker := context.WithCancel(context.Background()) //nolint:gosec
+	workerContext, cancelWorker := context.WithCancel(context.Background())
 	runtime := &HeartbeatRuntime{
 		writer:        writer,
 		maxCollectors: config.MaxCollectors,

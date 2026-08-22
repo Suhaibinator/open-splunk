@@ -497,7 +497,7 @@ func runtimeIndexAdmissionRowCount(
 ) int64 {
 	t.Helper()
 	var count int64
-	query := "SELECT COUNT(*) FROM " + table // #nosec G202 -- table is a fixed test constant.
+	query := "SELECT COUNT(*) FROM " + table
 	if err := database.SQLDB().QueryRowContext(t.Context(), query).Scan(&count); err != nil {
 		t.Fatalf("count %s: %v", table, err)
 	}

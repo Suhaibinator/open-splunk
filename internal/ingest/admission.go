@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"fortio.org/safecast"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
 	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
@@ -162,8 +164,8 @@ func (preparer *AdmissionPreparer) Prepare(request AdmissionRequest) (StoreBatch
 			eventID = candidate.Event.GetEventId()
 		}
 		failure := func(eventErr *EventError) (StoreBatch, error) {
-			// #nosec G115 -- request event count is bounded by uint32 limits above.
-			return StoreBatch{}, &AdmissionFailure{EventIndex: uint32(index), EventID: eventID, Failure: eventErr}
+
+			return StoreBatch{}, &AdmissionFailure{EventIndex: safecast.MustConv[uint32](index), EventID: eventID, Failure: eventErr}
 		}
 		if candidate.Event == nil {
 			return failure(eventFailure(
@@ -304,7 +306,7 @@ func (preparer *AdmissionPreparer) Prepare(request AdmissionRequest) (StoreBatch
 		CollectorID:        request.CollectorID,
 		BatchID:            request.BatchID,
 		BatchSequence:      request.BatchSequence,
-		OriginalEventCount: uint32(len(storedEvents)), // #nosec G115 -- bounded above.
+		OriginalEventCount: safecast.MustConv[uint32](len(storedEvents)),
 		SourceBatchSHA256:  request.SourceBatchSHA256,
 		ReceivedAt:         request.ReceivedAt,
 		Events:             storedEvents,

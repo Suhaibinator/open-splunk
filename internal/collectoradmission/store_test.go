@@ -214,7 +214,7 @@ func TestAdmitCapacityRollsBackTokenUseAndNewCollectorIdentity(
 			"",
 		)
 		_, _, err := fixture.fleet.Claim(ctx, collectorfleet.ClaimRequest{
-			Scope:       collectorfleet.Scope{TenantID: "tenant-a"},
+			TenantID:    "tenant-a",
 			CollectorID: request.CollectorID,
 			BootEpoch:   request.BootEpoch,
 			StreamID:    request.StreamID,
@@ -1082,7 +1082,7 @@ func TestTransactionScopedAdmissionHelpersRejectRootDatabaseHandle(t *testing.T)
 	)
 	prepared, err := collectorfleet.PrepareClaim(
 		collectorfleet.ClaimRequest{
-			Scope:       collectorfleet.Scope{TenantID: "tenant-a"},
+			TenantID:    "tenant-a",
 			CollectorID: request.CollectorID,
 			BootEpoch:   request.BootEpoch,
 			StreamID:    request.StreamID,

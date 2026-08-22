@@ -87,7 +87,7 @@ func TestCompileSpathClassifiesNumbersFromOneBoundedLexicalTokenization(t *testi
 		"arrayStringConcat(",
 		"accurateCastOrNull(",
 		"'decimal/v1'",
-		SpathJSONTokenLimitMarker,
+		SpathJSONLexemeLimitMarker,
 	} {
 		if !strings.Contains(compiled.SQL, required) {
 			t.Fatalf("numeric spath SQL is missing %q:\n%s", required, compiled.SQL)

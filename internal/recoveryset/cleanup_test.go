@@ -54,8 +54,9 @@ func TestDeleteAttestedArchiveRequiresLiveContext(t *testing.T) {
 		ConfirmedArchiveName: testAttestedArchiveName,
 		ArchiveOwnership:     policy,
 	}
-	//nolint:staticcheck // The exported boundary must reject a nil context without panicking.
-	if err := DeleteAttestedArchive(nil, options); err == nil ||
+	var nilContext context.Context
+
+	if err := DeleteAttestedArchive(nilContext, options); err == nil ||
 		!strings.Contains(err.Error(), "context is required") {
 		t.Fatalf("nil-context error = %v", err)
 	}

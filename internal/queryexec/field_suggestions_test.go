@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -366,9 +367,10 @@ func TestExecutorExecuteFieldSuggestionsMetadataWinsAtCandidateBoundary(t *testi
 func TestExecutorExecuteFieldSuggestionsHonorsContextAtEveryBoundary(t *testing.T) {
 	t.Run("nil", func(t *testing.T) {
 		connection := &fakeQueryConnection{rows: fieldSuggestionFakeRows(0)}
-		//nolint:staticcheck // This case explicitly verifies the nil-context guard.
+		var nilContext context.Context
+
 		got, err := mustExecutor(t, connection).ExecuteFieldSuggestions(
-			nil,
+			nilContext,
 			validCompiledFieldSuggestions("", 1),
 		)
 		if err == nil || !reflect.DeepEqual(got, FieldSuggestionResult{}) || connection.query != "" {

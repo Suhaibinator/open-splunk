@@ -66,8 +66,7 @@ func (decoder *RawDecoder) Next() ([]byte, error) {
 		case errors.Is(err, bufio.ErrBufferFull):
 			continue
 		case err != nil && !errors.Is(err, io.EOF):
-			var failure *ProtocolError
-			if errors.As(err, &failure) {
+			if failure, ok := errors.AsType[*ProtocolError](err); ok {
 				return nil, decoder.fail(failure)
 			}
 			return nil, decoder.fail(NewEventError(ErrorInvalidDataFormat, decoder.nextNumber, err))

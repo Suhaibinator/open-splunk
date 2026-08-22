@@ -209,8 +209,7 @@ func validateHeaderContext(ctx context.Context, headers []string, limits Limits)
 }
 
 func csvReadError(operation string, err error) error {
-	var parseError *csv.ParseError
-	if errors.As(err, &parseError) {
+	if parseError, ok := errors.AsType[*csv.ParseError](err); ok {
 		return fmt.Errorf("%w: %s at line %d, column %d", ErrMalformedCSV, operation, parseError.Line, parseError.Column)
 	}
 	return fmt.Errorf("%w: %s", ErrMalformedCSV, operation)

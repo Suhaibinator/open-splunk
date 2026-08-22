@@ -14,6 +14,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"fortio.org/safecast"
+
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/ianatimezone"
 	"github.com/Suhaibinator/open-splunk/internal/jsonnumber"
@@ -359,9 +361,9 @@ const (
 	// SpathInputLimitMarker classifies an oversized calculated JSON source as a
 	// resource limit without retaining source bytes or generated SQL.
 	SpathInputLimitMarker = "open-splunk: spath input bytes exceed the per-row limit"
-	// SpathJSONTokenLimitMarker classifies a structurally adversarial JSON
+	// SpathJSONLexemeLimitMarker classifies a structurally adversarial JSON
 	// source before its two bounded lexical projections are constructed.
-	SpathJSONTokenLimitMarker = "open-splunk: spath JSON token count exceeds the per-row limit" // #nosec G101 -- stable error classifier, not a credential
+	SpathJSONLexemeLimitMarker = "open-splunk: spath JSON token count exceeds the per-row limit"
 	// NativeMVMembersLimitMarker classifies a split, append, zip, wildcard
 	// spath, or runtime normalization whose complete per-row list exceeds the
 	// shared member ceiling.
@@ -13430,8 +13432,8 @@ func nonnegativeSubstringInteger(value plan.Value) uint64 {
 	if value.Int64 < 0 {
 		return 0
 	}
-	// #nosec G115 -- the explicit sign guard proves the Int64 is representable.
-	return uint64(value.Int64)
+
+	return safecast.MustConv[uint64](value.Int64)
 }
 
 func negativeSubstringIntegerMagnitude(value plan.Value) uint64 {
@@ -13441,8 +13443,8 @@ func negativeSubstringIntegerMagnitude(value plan.Value) uint64 {
 	// Subtract before negating so MinInt64 stays representable in its signed
 	// domain. The result is non-negative and therefore fits UInt64.
 	magnitudeMinusOne := -(value.Int64 + 1)
-	// #nosec G115 -- magnitudeMinusOne is non-negative by the guard above.
-	return uint64(magnitudeMinusOne) + 1
+
+	return safecast.MustConv[uint64](magnitudeMinusOne) + 1
 }
 
 func compileGenericSQLiteSubstringUTF8SQL(
@@ -14559,8 +14561,8 @@ func roundPrecisionLiteral(
 				spl.MaximumRoundPrecision,
 			)
 		}
-		// #nosec G115 -- the preceding range check caps the value at 18.
-		return uint8(value.Int64), nil
+
+		return safecast.MustConv[uint8](value.Int64), nil
 	case plan.ValueKindUint64:
 		if value.Uint64 > spl.MaximumRoundPrecision {
 			return 0, fmt.Errorf(
@@ -14568,8 +14570,8 @@ func roundPrecisionLiteral(
 				spl.MaximumRoundPrecision,
 			)
 		}
-		// #nosec G115 -- the preceding range check caps the value at 18.
-		return uint8(value.Uint64), nil
+
+		return safecast.MustConv[uint8](value.Uint64), nil
 	default:
 		return 0, errors.New(
 			"compile ClickHouse round: precision must be a literal integer",
@@ -15755,7 +15757,7 @@ func compileExtractJSON(
 	overTokenLimit := eligibleAlias + " != 0 AND " + tokenCountAlias + " > " +
 		strconv.Itoa(MaximumSpathJSONTokens)
 	tokenGuardExpression := "toUInt8(if(" + overTokenLimit + ", throwIf(toUInt8(" +
-		overTokenLimit + "), '" + SpathJSONTokenLimitMarker + "') = 0, " +
+		overTokenLimit + "), '" + SpathJSONLexemeLimitMarker + "') = 0, " +
 		eligibleAlias + " != 0)) AS " + tokenGuardAlias
 	guardedTokenInput := "if(" + tokenGuardAlias + " != 0, " + inputAlias +
 		", CAST('' AS String))"
@@ -16091,8 +16093,8 @@ func spathPathSQL(steps []splpath.Step) (string, []any) {
 		args = append(args, step.Key)
 		if step.Selector == splpath.ArraySelectorFixed {
 			placeholders = append(placeholders, "?")
-			// #nosec G115 -- splpath parsing caps array indices at 2^31-2.
-			args = append(args, int64(step.Index)+1)
+
+			args = append(args, safecast.MustConv[int64](step.Index)+1)
 		}
 	}
 	return strings.Join(placeholders, ", "), args
@@ -16111,8 +16113,8 @@ func spathArrayGuardSQL(inputSQL string, steps []splpath.Step) (string, []any) {
 				strings.Join(pathSQL, ", ")+")) = 'Array'")
 			args = append(args, pathArgs...)
 			pathSQL = append(pathSQL, "?")
-			// #nosec G115 -- splpath parsing caps array indices at 2^31-2.
-			pathArgs = append(pathArgs, int64(step.Index)+1)
+
+			pathArgs = append(pathArgs, safecast.MustConv[int64](step.Index)+1)
 		}
 	}
 	return strings.Join(guards, " AND "), args

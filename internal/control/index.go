@@ -13,10 +13,12 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"fortio.org/safecast"
+	"gorm.io/gorm"
+
 	"github.com/Suhaibinator/open-splunk/internal/indexname"
 	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
 	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
-	"gorm.io/gorm"
 )
 
 const (
@@ -200,8 +202,8 @@ func (db *DB) createIndexOnce(
 	}
 	request := IndexNameAdmissionRequest{
 		CanonicalName:             strings.Clone(definition.Name),
-		IndexCatalogRevision:      uint64(before.Revision),      // #nosec G115 -- integrity validation requires a positive int64 revision.
-		IndexCatalogPhysicalCount: uint16(before.PhysicalCount), // #nosec G115 -- integrity validation bounds the count to 1024.
+		IndexCatalogRevision:      safecast.MustConv[uint64](before.Revision),
+		IndexCatalogPhysicalCount: safecast.MustConv[uint16](before.PhysicalCount),
 	}
 	if err := ctx.Err(); err != nil {
 		return Index{}, err
@@ -539,8 +541,7 @@ func (db *DB) updateIndex(
 		}
 	}
 
-	// #nosec G115 -- validateExpectedVersion bounds expectedVersion by math.MaxInt64.
-	expectedVersionDB := int64(expectedVersion)
+	expectedVersionDB := safecast.MustConv[int64](expectedVersion)
 	update := tx.Model(&indexRecord{}).
 		Where("index_id = ? AND version = ?", id, expectedVersionDB).
 		Updates(indexDefinitionUpdates(definition, now))
@@ -632,8 +633,8 @@ func (db *DB) setIndexState(
 	}
 
 	now := databaseTime(time.Now())
-	// #nosec G115 -- validateExpectedVersion bounds expectedVersion by math.MaxInt64.
-	expectedVersionDB := int64(expectedVersion)
+
+	expectedVersionDB := safecast.MustConv[int64](expectedVersion)
 	update := tx.Model(&indexRecord{}).
 		Where("index_id = ? AND version = ?", id, expectedVersionDB).
 		Updates(map[string]any{
@@ -818,7 +819,7 @@ func newIndexRecord(id string, definition IndexDefinition, now time.Time) indexR
 		IngestionEnabled:                    boolInteger(definition.IngestionEnabled),
 		SearchEnabled:                       boolInteger(definition.SearchEnabled),
 		DefaultSourcetype:                   definition.DefaultSourcetype,
-		MaxEventBytes:                       int64(definition.Limits.MaxEventBytes), // #nosec G115 -- validation bounds this value.
+		MaxEventBytes:                       safecast.MustConv[int64](definition.Limits.MaxEventBytes),
 		MaxFieldCount:                       int64(definition.Limits.MaxFieldCount),
 		MaxNestingDepth:                     int64(definition.Limits.MaxNestingDepth),
 		MaximumFutureSkewNanoseconds:        int64(definition.Limits.MaximumFutureSkew),
@@ -826,8 +827,8 @@ func newIndexRecord(id string, definition IndexDefinition, now time.Time) indexR
 		State:                               IndexStateActive,
 		CreatedAtUnixMicro:                  now.UnixMicro(),
 		UpdatedAtUnixMicro:                  now.UnixMicro(),
-		MaxIngestEventsPerSecond:            int64(definition.IngestionRateLimits.MaxEventsPerSecond),            // #nosec G115 -- validation bounds this value.
-		MaxIngestUncompressedBytesPerSecond: int64(definition.IngestionRateLimits.MaxUncompressedBytesPerSecond), // #nosec G115 -- validation bounds this value.
+		MaxIngestEventsPerSecond:            safecast.MustConv[int64](definition.IngestionRateLimits.MaxEventsPerSecond),
+		MaxIngestUncompressedBytesPerSecond: safecast.MustConv[int64](definition.IngestionRateLimits.MaxUncompressedBytesPerSecond),
 	}
 }
 
@@ -837,13 +838,13 @@ func indexDefinitionUpdates(definition IndexDefinition, now time.Time) map[strin
 		"description":                              definition.Description,
 		"display_name":                             definition.DisplayName,
 		"ingestion_enabled":                        boolInteger(definition.IngestionEnabled),
-		"max_event_bytes":                          int64(definition.Limits.MaxEventBytes), // #nosec G115 -- validation bounds this value.
+		"max_event_bytes":                          safecast.MustConv[int64](definition.Limits.MaxEventBytes),
 		"max_field_count":                          int64(definition.Limits.MaxFieldCount),
 		"max_nesting_depth":                        int64(definition.Limits.MaxNestingDepth),
 		"maximum_event_age_nanoseconds":            int64(definition.Limits.MaximumEventAge),
 		"maximum_future_skew_nanoseconds":          int64(definition.Limits.MaximumFutureSkew),
-		"max_ingest_events_per_second":             int64(definition.IngestionRateLimits.MaxEventsPerSecond),            // #nosec G115 -- validation bounds this value.
-		"max_ingest_uncompressed_bytes_per_second": int64(definition.IngestionRateLimits.MaxUncompressedBytesPerSecond), // #nosec G115 -- validation bounds this value.
+		"max_ingest_events_per_second":             safecast.MustConv[int64](definition.IngestionRateLimits.MaxEventsPerSecond),
+		"max_ingest_uncompressed_bytes_per_second": safecast.MustConv[int64](definition.IngestionRateLimits.MaxUncompressedBytesPerSecond),
 		"retention_nanoseconds":                    int64(definition.RetentionPeriod),
 		"search_enabled":                           boolInteger(definition.SearchEnabled),
 		"updated_at_unix_micro":                    now.UnixMicro(),
@@ -892,12 +893,12 @@ func indexFromRecord(record indexRecord) (Index, error) {
 		return Index{}, errors.New("invalid index record in control-plane database")
 	}
 	limits := IndexLimits{
-		// #nosec G115 -- the signed database scalar is checked nonnegative above.
-		MaxEventBytes: uint64(record.MaxEventBytes),
-		// #nosec G115 -- the scalar is checked in [0, MaxUint32] above.
-		MaxFieldCount: uint32(record.MaxFieldCount),
-		// #nosec G115 -- the scalar is checked in [0, MaxUint32] above.
-		MaxNestingDepth:   uint32(record.MaxNestingDepth),
+
+		MaxEventBytes: safecast.MustConv[uint64](record.MaxEventBytes),
+
+		MaxFieldCount: safecast.MustConv[uint32](record.MaxFieldCount),
+
+		MaxNestingDepth:   safecast.MustConv[uint32](record.MaxNestingDepth),
 		MaximumFutureSkew: time.Duration(record.MaximumFutureSkewNanoseconds),
 		MaximumEventAge:   time.Duration(record.MaximumEventAgeNanoseconds),
 	}
@@ -905,9 +906,9 @@ func indexFromRecord(record indexRecord) (Index, error) {
 		return Index{}, errors.New("invalid index record in control-plane database")
 	}
 	ingestionRateLimits := ingestquota.Limits{
-		// #nosec G115 -- the signed database scalars are checked nonnegative above.
-		MaxEventsPerSecond:            uint64(record.MaxIngestEventsPerSecond),
-		MaxUncompressedBytesPerSecond: uint64(record.MaxIngestUncompressedBytesPerSecond),
+
+		MaxEventsPerSecond:            safecast.MustConv[uint64](record.MaxIngestEventsPerSecond),
+		MaxUncompressedBytesPerSecond: safecast.MustConv[uint64](record.MaxIngestUncompressedBytesPerSecond),
 	}
 	if err := ingestionRateLimits.Validate(); err != nil {
 		return Index{}, errors.New("invalid index record in control-plane database")

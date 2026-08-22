@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/Suhaibinator/open-splunk/internal/control"
+	"fortio.org/safecast"
 	"gorm.io/gorm"
+
+	"github.com/Suhaibinator/open-splunk/internal/control"
 )
 
 // ListResult is one detached, revision-stable collector catalog page.
@@ -191,8 +193,8 @@ func (catalog *Catalog) List(
 	}
 	result = ListResult{
 		Entries: make([]CatalogEntry, len(collectors)),
-		// #nosec G115 -- readCollectorCatalogRevision returns only zero or positive values.
-		CatalogRevision: uint64(revision),
+
+		CatalogRevision: safecast.MustConv[uint64](revision),
 	}
 	for index, collector := range collectors {
 		if collector.CollectorID != pageRecords[index].CollectorID {

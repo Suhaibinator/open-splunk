@@ -7,9 +7,11 @@ import (
 	"math"
 	"strings"
 
-	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"fortio.org/safecast"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 )
 
 const (
@@ -193,8 +195,8 @@ func (snapshot Snapshot) Reference() *opensplunk.KnowledgeSnapshotRef {
 		SnapshotSha256:          bytes.Clone(snapshot.message.GetSnapshotSha256()),
 		TenantCatalogRevision:   snapshot.message.GetTenantCatalogRevision(),
 		TenantCatalogStateToken: bytes.Clone(snapshot.message.GetTenantCatalogStateToken()),
-		ObjectCount:             uint32(len(snapshot.message.GetObjects())),      // #nosec G115 -- finalized snapshots are bounded by MaximumObjects.
-		LookupAssetCount:        uint32(len(snapshot.message.GetLookupAssets())), // #nosec G115 -- finalized lookup assets are bounded by sixteen.
+		ObjectCount:             safecast.MustConv[uint32](len(snapshot.message.GetObjects())),
+		LookupAssetCount:        safecast.MustConv[uint32](len(snapshot.message.GetLookupAssets())),
 	}
 }
 
@@ -262,7 +264,7 @@ func retainedMessageBytes(message protoreflect.Message) uint64 {
 		switch {
 		case field.IsMap():
 			mapping := value.Map()
-			mappingLength := uint64(mapping.Len()) // #nosec G115 -- protobuf container lengths are nonnegative.
+			mappingLength := safecast.MustConv[uint64](mapping.Len())
 			total += retainedRepeatedSlotCharge * 2 * mappingLength
 			mapping.Range(func(key protoreflect.MapKey, element protoreflect.Value) bool {
 				total += retainedValueBytes(field.MapKey().Kind(), key.Value())
@@ -271,7 +273,7 @@ func retainedMessageBytes(message protoreflect.Message) uint64 {
 			})
 		case field.IsList():
 			list := value.List()
-			listLength := uint64(list.Len()) // #nosec G115 -- protobuf container lengths are nonnegative.
+			listLength := safecast.MustConv[uint64](list.Len())
 			total += retainedRepeatedSlotCharge * listLength
 			for index := 0; index < list.Len(); index++ {
 				total += retainedValueBytes(field.Kind(), list.Get(index))

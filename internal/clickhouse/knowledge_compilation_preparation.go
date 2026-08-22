@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"slices"
 
+	"fortio.org/safecast"
+
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 )
@@ -78,7 +80,8 @@ func prepareKnowledgeCompilation(query *plan.Query) (preparedKnowledgeCompilatio
 		}
 		preparation.programCommitment = commitment
 		// validateClickHouseKnowledgePhysicalCharges bounds the generated operator count.
-		if uint32(preparation.prefixLength) != preparation.programCharges.GeneratedOperators { // #nosec G115 -- bounded by knowledgeprogram.MaximumObjects.
+		if safecast.MustConv[uint32](preparation.prefixLength) !=
+			preparation.programCharges.GeneratedOperators {
 			return preparedKnowledgeCompilation{}, errors.New(
 				"prepare ClickHouse knowledge compilation: program operator charge disagrees with prefix",
 			)

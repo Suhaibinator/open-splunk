@@ -6,6 +6,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"fortio.org/safecast"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 )
 
@@ -29,9 +31,8 @@ func boundedListPageResponse(
 			serviceName + " service returned an invalid item count",
 		)
 	}
-	// #nosec G115 -- the non-negative item count always comes from len() on an
-	// in-memory, transport-bounded response slice.
-	itemCount := uint64(result.itemCount)
+
+	itemCount := safecast.MustConv[uint64](result.itemCount)
 	page := &opensplunk.PageResponse{}
 	if result.nextPageToken != "" {
 		if !validBoundedListPageToken(

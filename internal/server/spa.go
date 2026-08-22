@@ -1,12 +1,14 @@
 package server
 
 import (
+	"bytes"
 	"errors"
 	"io/fs"
 	"net/http"
 	"path"
 	"regexp"
 	"strings"
+	"time"
 )
 
 var nextHexContentHash = regexp.MustCompile(`(?:^|[._-])[0-9a-fA-F]{8,}(?:[._-]|$)`)
@@ -85,12 +87,7 @@ func (handler *spaHandler) serveIndex(response http.ResponseWriter, request *htt
 	response.Header().Set("Content-Type", "text/html; charset=utf-8")
 	response.Header().Set("Cache-Control", "no-cache")
 	response.Header().Set("X-Content-Type-Options", "nosniff")
-	response.WriteHeader(http.StatusOK)
-	if request.Method == http.MethodGet {
-		// #nosec G705 -- index is a trusted embedded build artifact; no request
-		// data is interpolated into the response body.
-		_, _ = response.Write(handler.index)
-	}
+	http.ServeContent(response, request, "index.html", time.Time{}, bytes.NewReader(handler.index))
 }
 
 func setStaticCacheHeaders(response http.ResponseWriter, relativePath string) {

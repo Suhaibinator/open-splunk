@@ -207,6 +207,26 @@ for expected_typescript_output in \
   fi
 done
 
+strip_typescript_lint_headers() {
+  local generated_file filtered_file lint_header
+  lint_header='/* eslint-''disable */'
+
+  while IFS= read -r -d '' generated_file; do
+    filtered_file="$TRANSACTION_ROOT/typescript-without-lint-header"
+    if ! awk -v lint_header="$lint_header" '$0 != lint_header' "$generated_file" >"$filtered_file"; then
+      echo "error: could not remove generated TypeScript lint header from $generated_file" >&2
+      return 1
+    fi
+    if ! cp "$filtered_file" "$generated_file"; then
+      echo "error: could not publish sanitized generated TypeScript file $generated_file" >&2
+      return 1
+    fi
+    rm -f "$filtered_file"
+  done < <(find "$STAGED_TS" -type f -name '*.ts' -print0)
+}
+
+strip_typescript_lint_headers
+
 copy_preserved_files() {
   local source_root=$1
   local destination_root=$2

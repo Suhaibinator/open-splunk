@@ -229,6 +229,7 @@ func TestDeleteDeploymentRecoveryArchiveRejectsContextAndDependencyFailures(
 	t *testing.T,
 ) {
 	t.Parallel()
+	var nilContext context.Context
 
 	validDependencies := deploymentRecoveryArchiveDeleteDependencies{
 		effectiveUID: func() int { return deploymentRecoveryArchiveUID },
@@ -240,9 +241,9 @@ func TestDeleteDeploymentRecoveryArchiveRejectsContextAndDependencyFailures(
 			return nil
 		},
 	}
-	//nolint:staticcheck // The injected command boundary must reject a nil context.
+
 	if err := runDeleteDeploymentRecoveryArchiveSubcommandWithDependencies(
-		nil,
+		nilContext,
 		validDeploymentRecoveryArchiveDeleteArguments(),
 		validDependencies,
 	); err == nil || !strings.Contains(err.Error(), "context is required") {

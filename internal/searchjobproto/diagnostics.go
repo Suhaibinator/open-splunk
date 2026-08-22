@@ -3,6 +3,8 @@ package searchjobproto
 import (
 	"slices"
 
+	"fortio.org/safecast"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 )
@@ -32,19 +34,15 @@ func SourceRange(diagnostic searchjobs.Diagnostic) *opensplunk.SourceRange {
 		return nil
 	}
 	return &opensplunk.SourceRange{
-		// #nosec G115 -- ValidSourceRange proves offsets non-negative
-		// and protobuf-representable line and column values.
 		Start: &opensplunk.SourcePosition{
-			ByteOffset: uint64(diagnostic.ByteOffset),
-			Line:       uint32(diagnostic.Line),
-			Column:     uint32(diagnostic.Column),
+			ByteOffset: safecast.MustConv[uint64](diagnostic.ByteOffset),
+			Line:       safecast.MustConv[uint32](diagnostic.Line),
+			Column:     safecast.MustConv[uint32](diagnostic.Column),
 		},
-		// #nosec G115 -- ValidSourceRange proves offsets non-negative
-		// and protobuf-representable line and column values.
 		End: &opensplunk.SourcePosition{
-			ByteOffset: uint64(diagnostic.EndByteOffset),
-			Line:       uint32(diagnostic.EndLine),
-			Column:     uint32(diagnostic.EndColumn),
+			ByteOffset: safecast.MustConv[uint64](diagnostic.EndByteOffset),
+			Line:       safecast.MustConv[uint32](diagnostic.EndLine),
+			Column:     safecast.MustConv[uint32](diagnostic.EndColumn),
 		},
 	}
 }

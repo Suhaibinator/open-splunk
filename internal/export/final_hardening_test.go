@@ -84,12 +84,13 @@ func TestSchemaCardinalityPreflightRejectsOversizedSourceBeforeInspection(t *tes
 type hardeningSummaryLease struct {
 	*exportTestLease
 	summaryCalls atomic.Int32
+	summary      *opensplunk.KnowledgeSnapshotSummary
+	summaryErr   error
 }
 
-//nolint:unparam // Both results are required by knowledgeSnapshotSummaryProvider.
 func (lease *hardeningSummaryLease) knowledgeSnapshotSummary() (*opensplunk.KnowledgeSnapshotSummary, error) {
 	lease.summaryCalls.Add(1)
-	return nil, nil
+	return lease.summary, lease.summaryErr
 }
 
 type hardeningStaticSource struct {

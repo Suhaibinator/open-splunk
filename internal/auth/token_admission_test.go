@@ -88,6 +88,7 @@ func TestRevalidateCollectorInTransactionRequiresActiveTransaction(t *testing.T)
 	t.Parallel()
 
 	ctx := context.Background()
+	var nilContext context.Context
 	database := openControlDB(t)
 	store, err := NewStore(
 		database,
@@ -104,9 +105,9 @@ func TestRevalidateCollectorInTransactionRequiresActiveTransaction(t *testing.T)
 	); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("root-handle error = %v, want ErrInvalidArgument", err)
 	}
-	//nolint:staticcheck // The transaction boundary must reject a nil context.
+
 	if _, err := store.RevalidateCollectorInTransaction(
-		nil,
+		nilContext,
 		nil,
 		"opaque",
 		time.Now().UTC(),

@@ -12,6 +12,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"fortio.org/safecast"
+
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/ianatimezone"
 	"github.com/Suhaibinator/open-splunk/internal/searchtimebounds"
@@ -380,8 +382,8 @@ func parseRelativeOffset(expression string) (relativeOffset, bool, error) {
 			)
 		}
 		return relativeOffset{
-			// #nosec G115 -- MaximumSpanDays is much smaller than MaxInt.
-			calendarDays: int(amount),
+
+			calendarDays: safecast.MustConv[int](amount),
 			snapToDay:    true,
 		}, true, nil
 	}
@@ -422,6 +424,6 @@ func parseRelativeOffset(expression string) (relativeOffset, bool, error) {
 	if amount > uint64(math.MaxInt64)/unitSeconds {
 		return relativeOffset{}, true, errors.New("relative offset is outside the supported range")
 	}
-	// #nosec G115 -- the guard above proves the product does not exceed MaxInt64.
-	return relativeOffset{elapsedSeconds: int64(amount * unitSeconds)}, true, nil
+
+	return relativeOffset{elapsedSeconds: safecast.MustConv[int64](amount * unitSeconds)}, true, nil
 }

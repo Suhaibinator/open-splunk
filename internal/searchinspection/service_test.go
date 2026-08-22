@@ -1189,9 +1189,10 @@ func TestInspectNilReceiverAndContext(t *testing.T) {
 		Compiler:  &inspectionCompiler{},
 		Explainer: &inspectionExplainer{},
 	})
-	//nolint:staticcheck // This case explicitly verifies the nil-context guard.
+	var nilContext context.Context
+
 	result, err = service.Inspect(
-		nil,
+		nilContext,
 		searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID},
 		Request{SearchJobID: snapshot.ID},
 	)
@@ -1199,8 +1200,8 @@ func TestInspectNilReceiverAndContext(t *testing.T) {
 		t.Fatal("nil context succeeded")
 	}
 	assertZeroInspection(t, result)
-	//nolint:staticcheck // This case explicitly verifies the nil-context guard.
-	if err := service.Close(nil); err == nil {
+
+	if err := service.Close(nilContext); err == nil {
 		t.Fatal("Close(nil) succeeded")
 	}
 }

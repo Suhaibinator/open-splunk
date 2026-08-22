@@ -15,13 +15,14 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/google/uuid"
+
 	"github.com/Suhaibinator/open-splunk/internal/controlbackup"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/recoveryset"
 	"github.com/Suhaibinator/open-splunk/internal/server"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 	"github.com/Suhaibinator/open-splunk/migrations"
-	"github.com/google/uuid"
 )
 
 const nativeRecoveryIntegrationArchiveRoot = "/var/lib/open-splunk-clickhouse-backups"
@@ -846,7 +847,7 @@ func startNativeRecoveryIntegrationClickHouse(
     </users>
 </clickhouse>
 `
-	// #nosec G306 -- this generated nonsecret server config must be readable by
+
 	// the unprivileged ClickHouse process in a rootful Linux container.
 	if err := os.WriteFile(fixture.bootstrapConfig, []byte(bootstrapXML), 0o644); err != nil {
 		t.Fatalf("write recovery integration bootstrap config: %v", err)

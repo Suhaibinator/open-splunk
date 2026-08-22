@@ -10,6 +10,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"fortio.org/safecast"
+
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/searchtimebounds"
 	"github.com/Suhaibinator/open-splunk/internal/splpath"
@@ -132,7 +134,7 @@ func (p *parser) parseQuery() (*Query, error) {
 	}
 	query.parsedEvalPredicatePrefixes = append(
 		query.parsedEvalPredicatePrefixes,
-		uint32(p.evalPredicates), // #nosec G115 -- parser predicate count is bounded.
+		safecast.MustConv[uint32](p.evalPredicates),
 	)
 
 	stage := 0
@@ -152,7 +154,7 @@ func (p *parser) parseQuery() (*Query, error) {
 		query.Commands = append(query.Commands, command)
 		query.parsedEvalPredicatePrefixes = append(
 			query.parsedEvalPredicatePrefixes,
-			uint32(p.evalPredicates), // #nosec G115 -- parser predicate count is bounded.
+			safecast.MustConv[uint32](p.evalPredicates),
 		)
 	}
 	if p.current().kind != tokenEOF {
@@ -162,8 +164,8 @@ func (p *parser) parseQuery() (*Query, error) {
 		return nil, p.errorAtCurrent("SPL_EMPTY_QUERY", "search query is empty")
 	}
 	query.Range = Range{Start: start, End: p.current().sourceRange.End}
-	// #nosec G115 -- countEvalPredicate admits at most MaximumEvalPredicates.
-	query.parsedEvalPredicates = uint32(p.evalPredicates)
+
+	query.parsedEvalPredicates = safecast.MustConv[uint32](p.evalPredicates)
 	query.sourceDigest = sha256.Sum256([]byte(p.source))
 	query.parsedSource = strings.Clone(p.source)
 	query.parsed = true

@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"slices"
+
+	"gorm.io/gorm"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
-	"gorm.io/gorm"
 )
 
 const listHydrationChunkSize = 512
@@ -281,7 +283,7 @@ func objectsFromProjectionsInternal(
 		authorities.versions = versions
 		authorities.dependencies = dependencyRecords
 	}
-	return objects[:len(objects):len(objects)], len(objects), nil
+	return slices.Clip(objects), len(objects), nil
 }
 
 func validateListHydrationBudget(projections []projectionRecord, budget listHydrationBudget) error {

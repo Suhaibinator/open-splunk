@@ -111,7 +111,7 @@ func runDeploymentClickHouseMigrationWithDependencies(
 	if err := discardClickHousePasswordEnvironment(
 		"deployment ClickHouse migration",
 		"CLICKHOUSE_PASSWORD",
-		clickHouseMigrationPasswordEnvironment,
+		clickHouseMigrationEnvironmentVariable,
 		"OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD",
 		"OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD",
 	); err != nil {

@@ -12,12 +12,14 @@ import (
 	"strings"
 	"time"
 
+	"fortio.org/safecast"
+	"google.golang.org/protobuf/proto"
+	"gorm.io/gorm"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
-	"google.golang.org/protobuf/proto"
-	"gorm.io/gorm"
 )
 
 const (
@@ -581,8 +583,7 @@ func decodeOutcomeReference(record idempotencyRecord) (*opensplunk.KnowledgeObje
 	}
 	reference := outcome.GetObject()
 	quarantine := record.MutationKind == "quarantine"
-	// #nosec G115 -- the condition below rejects reference versions above math.MaxInt64.
-	referenceVersion := int64(reference.GetVersion())
+	referenceVersion := safecast.MustConv[int64](reference.GetVersion())
 	if len(outcome.ProtoReflect().GetUnknown()) != 0 || reference == nil ||
 		len(reference.ProtoReflect().GetUnknown()) != 0 ||
 		outcome.GetRoute() != record.Route || outcome.GetMutationKind() != record.MutationKind ||

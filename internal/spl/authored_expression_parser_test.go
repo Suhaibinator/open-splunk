@@ -336,11 +336,10 @@ func equalDifferentialErrors(got, want error) bool {
 	if got == nil {
 		return true
 	}
-	//nolint:errorlint // Differential comparison of two lexer/parser surfaces:
-	// the outer error shape must agree exactly, so unwrapping via errors.As
+	// The outer error shape must agree exactly, so unwrapping via errors.As
 	// would wrongly equate a wrapped diagnostic with a bare one.
-	gotDiagnostic, gotOK := got.(*Diagnostic)
-	wantDiagnostic, wantOK := want.(*Diagnostic) //nolint:errorlint // See above.
+	gotDiagnostic, gotOK := reflect.TypeAssert[*Diagnostic](reflect.ValueOf(got))
+	wantDiagnostic, wantOK := reflect.TypeAssert[*Diagnostic](reflect.ValueOf(want))
 	if gotOK != wantOK {
 		return false
 	}

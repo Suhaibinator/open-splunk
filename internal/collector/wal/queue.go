@@ -14,10 +14,13 @@ import (
 	"sync"
 	"time"
 
-	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"fortio.org/safecast"
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/privatefs"
 )
 
 // errSimulatedCrash is returned from Append when the crashAfterMetaWrite test
@@ -154,8 +157,8 @@ func openQueue(opts Options) (*queue, error) {
 	// Tighten an existing directory too: MkdirAll leaves a pre-existing dir's mode
 	// untouched, and the queue holds raw event payloads that must not be
 	// world/group readable.
-	// #nosec G302 -- opts.Dir is a directory and is deliberately owner-only.
-	if err := os.Chmod(opts.Dir, 0o700); err != nil {
+
+	if err := privatefs.SecureDirectory(opts.Dir); err != nil {
 		return nil, fmt.Errorf("collector/wal: secure dir: %w", err)
 	}
 	if err := recoverInterruptedQuarantines(opts.Dir); err != nil {
@@ -291,8 +294,8 @@ func (q *queue) recover() error {
 		if info.Size() < 0 {
 			return fmt.Errorf("collector/wal: segment %s has a negative size", name)
 		}
-		// #nosec G115 -- the negative-size case is rejected above.
-		size := uint64(info.Size())
+
+		size := safecast.MustConv[uint64](info.Size())
 		seg := &segInfo{
 			name: name, firstSeq: firstSeq, lastSeq: scan.lastSequence,
 			sealed: true, size: size,
@@ -462,8 +465,8 @@ func observeAllocatedSequenceFloor(
 		// append. Over-burning is safe, while undercounting could reuse a sequence
 		// previously observed by the server.
 		const minimumRecordBytes = uint64(recordHeaderSize + 1)
-		// #nosec G115 -- the bounds check above proves fileSize > badOffset >= 0.
-		tailBytes := uint64(result.fileSize - result.badOffset)
+
+		tailBytes := safecast.MustConv[uint64](result.fileSize - result.badOffset)
 		tailAllocations := tailBytes / minimumRecordBytes
 		if tailBytes%minimumRecordBytes != 0 {
 			tailAllocations++
@@ -505,8 +508,8 @@ func (q *queue) refreshStorageStatsLocked() error {
 		if info.Size() < 0 {
 			return fmt.Errorf("collector/wal: %s has a negative size", entry.Name())
 		}
-		// #nosec G115 -- the negative-size case is rejected above.
-		size := uint64(info.Size())
+
+		size := safecast.MustConv[uint64](info.Size())
 		if _, live := parseSegmentName(entry.Name()); live {
 			physicalBytes += size
 			continue
@@ -647,7 +650,7 @@ func (q *queue) Append(events []*opensplunk.LogEvent) (*opensplunk.EventBatch, e
 	// could successfully publish a record which this process would quarantine on
 	// its next restart. Size the message before marshaling so repeated QueueFull
 	// retries do not allocate and copy the entire event batch on every attempt.
-	// #nosec G115 -- proto.Size returned a non-negative int.
+
 	payloadSizeBytes := uint64(payloadSize)
 	if payloadSizeBytes > maximumRecordPayloadBytes {
 		return nil, ErrBatchTooLarge
@@ -666,7 +669,7 @@ func (q *queue) Append(events []*opensplunk.LogEvent) (*opensplunk.EventBatch, e
 		// Defensively re-check the exact representation if a custom protobuf value
 		// or racy caller made proto.Size stale. Normal generated messages never take
 		// this path.
-		// #nosec G115 -- len is non-negative and exactly representable as uint64.
+
 		payloadSizeBytes = uint64(len(payload))
 		if payloadSizeBytes > maximumRecordPayloadBytes {
 			return nil, ErrBatchTooLarge
@@ -715,8 +718,8 @@ func (q *queue) Append(events []*opensplunk.LogEvent) (*opensplunk.EventBatch, e
 		seq:        seq,
 		segName:    segName,
 		payloadOff: payloadOff,
-		// #nosec G115 -- encodeRecord rejects payload lengths above math.MaxUint32.
-		payloadLen:  uint32(len(payload)),
+
+		payloadLen:  safecast.MustConv[uint32](len(payload)),
 		crc:         crc32c(payload),
 		eventCount:  uint64(len(events)),
 		sizeOnDisk:  recordSize,
@@ -795,7 +798,7 @@ func (q *queue) reclaimAckedActiveForCapacityLocked() error {
 // record, returning the live segment name and the payload offset of the record.
 func (q *queue) writeRecordLocked(seq uint64, record []byte) (string, int64, error) {
 	recordSize := int64(len(record))
-	// #nosec G115 -- SegmentMaxBytes is bounded by math.MaxInt64 before either conversion.
+
 	rotateAtLimit := q.opts.SegmentMaxBytes > 0 &&
 		q.opts.SegmentMaxBytes <= math.MaxInt64 &&
 		(recordSize > int64(q.opts.SegmentMaxBytes) ||
@@ -1550,7 +1553,7 @@ func uncompressedEventBytes(events []*opensplunk.LogEvent) uint64 {
 		if protoBytes < 0 {
 			return math.MaxUint64
 		}
-		// #nosec G115 -- proto.Size returned a non-negative int.
+
 		size := uint64(protoBytes)
 		if ^uint64(0)-total < size {
 			return ^uint64(0)

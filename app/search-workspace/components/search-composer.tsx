@@ -1,5 +1,3 @@
-/* oxlint-disable jsx-a11y/prefer-tag-over-role */
-
 import type {
   ChangeEvent,
   Dispatch,
@@ -177,14 +175,8 @@ export function SearchComposer({
           <textarea
             ref={editorRef}
             data-testid="search-input"
-            role="combobox"
             aria-label="Search with SPL"
-            aria-expanded={completionOpen}
-            aria-haspopup="listbox"
             aria-describedby={`${diagnostic === null ? "editor-help" : "editor-diagnostic"} spl-completion-status`}
-            aria-autocomplete="list"
-            aria-controls={completionOpen ? "spl-completion-list" : undefined}
-            aria-activedescendant={completionOpen && filteredCompletions.length > 0 ? `spl-completion-${completionIndex}` : undefined}
             value={query}
             disabled={launchPending}
             rows={2}
@@ -209,17 +201,15 @@ export function SearchComposer({
             {completionOpen
               ? filteredCompletions.length === 0
                 ? "No matching SPL commands."
-                : `${filteredCompletions.length} suggestions available. Use Up and Down arrows, then Enter or Tab to insert.`
+                : `${filteredCompletions.length} suggestions available. ${filteredCompletions[completionIndex]?.label ?? "First suggestion"} selected. Use Up and Down arrows, then Enter or Tab to insert.`
               : "Suggestions closed."}
           </span>
           {completionOpen ? (
-            <div className="completion-menu" id="spl-completion-list" data-testid="completion-menu" role="listbox" aria-label="SPL suggestions">
+            <div className="completion-menu" id="spl-completion-list" data-testid="completion-menu">
               <div className="completion-title"><span>Commands</span><small>Enter a pipeline stage</small></div>
               {filteredCompletions.map((completion, index) => (
                 <button
                   id={`spl-completion-${index}`}
-                  role="option"
-                  aria-selected={index === completionIndex}
                   data-highlighted={index === completionIndex}
                   type="button"
                   key={completion.label}
@@ -262,7 +252,7 @@ export function SearchComposer({
           {modal === "time" ? (
             <>
             <button className="time-picker-mobile-backdrop" type="button" aria-label="Close time range" onClick={onCloseTimePicker} />
-            <section className="time-popover" id="time-range-popover" data-testid="time-picker-dialog" role="dialog" aria-modal={mobileTimePicker} aria-labelledby="time-popover-title">
+            <dialog open className="time-popover" id="time-range-popover" data-testid="time-picker-dialog" aria-modal={mobileTimePicker} aria-labelledby="time-popover-title">
               <header className="time-popover-header">
                 <div><strong id="time-popover-title">Select time range</strong><small>{localTimeZone}</small></div>
                 <button type="button" aria-label="Close time range" onClick={onCloseTimePicker}>×</button>
@@ -337,7 +327,7 @@ export function SearchComposer({
                   onClick={() => { onTimeRangeChange(draftTimeRange); onCloseTimePicker(); }}
                 >Apply</button>
               </footer>
-            </section>
+            </dialog>
             </>
           ) : null}
         </div>

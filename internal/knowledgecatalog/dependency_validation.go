@@ -2,13 +2,15 @@ package knowledgecatalog
 
 import (
 	"fmt"
+	"slices"
 	"sort"
+
+	"gorm.io/gorm"
 
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
-	"gorm.io/gorm"
 )
 
 const (
@@ -531,7 +533,7 @@ func normalizedDependencyFields(fields []string) []string {
 	normalized := append([]string(nil), fields...)
 	sort.Strings(normalized)
 	normalized = compactNonemptyStrings(normalized)
-	return normalized[:len(normalized):len(normalized)]
+	return slices.Clip(normalized)
 }
 
 func compactNonemptyStrings(values []string) []string {

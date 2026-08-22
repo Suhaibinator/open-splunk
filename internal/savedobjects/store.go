@@ -12,12 +12,14 @@ import (
 	"strings"
 	"time"
 
-	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
-	"github.com/Suhaibinator/open-splunk/internal/control"
+	"fortio.org/safecast"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"gorm.io/gorm"
+
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/control"
 )
 
 const (
@@ -330,8 +332,8 @@ func (store *Store) update(
 	if err != nil {
 		return nil, err
 	}
-	// #nosec G115 -- validateExpectedVersion bounds expectedVersion by math.MaxInt64.
-	expectedVersionDB := int64(expectedVersion)
+
+	expectedVersionDB := safecast.MustConv[int64](expectedVersion)
 	update := tx.Model(&savedSearchRecord{}).
 		Where(
 			"saved_search_id = ? AND owner_id = ? AND version = ?",
@@ -566,8 +568,8 @@ func (store *Store) delete(
 	if err != nil {
 		return mapContextError(ctx, "read saved search for delete", err)
 	}
-	// #nosec G115 -- validateExpectedVersion bounds expectedVersion by math.MaxInt64.
-	expectedVersionDB := int64(expectedVersion)
+
+	expectedVersionDB := safecast.MustConv[int64](expectedVersion)
 	if current.Version != expectedVersionDB {
 		return control.ErrVersionConflict
 	}

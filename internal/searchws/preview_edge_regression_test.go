@@ -12,10 +12,11 @@ import (
 	"testing"
 	"time"
 
-	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
-	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/gorilla/websocket"
 	"google.golang.org/protobuf/proto"
+
+	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
+	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 )
 
 type previewEdgeDemandSnapshots struct {
@@ -287,7 +288,7 @@ func TestCurrentBootstrapDoesNotRebroadcastDiscontinuousStateToExistingSubscribe
 	target.mu.Unlock()
 
 	connection := newConnection(service, nil)
-	defer connection.cancel()
+	defer connection.cancel(context.Canceled)
 	subscription := adversarialAttach(target, connection, "existing")
 	defer adversarialDetach(subscription)
 
@@ -341,7 +342,7 @@ func TestCurrentBootstrapRevalidatesExclusivityAfterSnapshotLoad(t *testing.T) {
 	}
 
 	connection := newConnection(service, nil)
-	defer connection.cancel()
+	defer connection.cancel(context.Canceled)
 	target.publishMu.Lock()
 	subscription := adversarialAttach(target, connection, "installed-during-load")
 	target.publishMu.Unlock()
@@ -599,7 +600,7 @@ func TestCurrentSubscriptionRechecksContinuityAfterRefreshBarrier(t *testing.T) 
 	})
 
 	connection := newConnection(service, nil)
-	defer connection.cancel()
+	defer connection.cancel(context.Canceled)
 	result := make(chan *commandFailure, 1)
 	go func() {
 		result <- connection.subscribe("barrier", &opensplunk.SubscribeSearchJobsCommand{
@@ -802,7 +803,7 @@ func TestBoundedInitialFrameStagingOwnsGlobalQueueReservation(t *testing.T) {
 	t.Run("transfer", func(t *testing.T) {
 		service := adversarialNewService(t, nil)
 		connection := newConnection(service, nil)
-		defer connection.cancel()
+		defer connection.cancel(context.Canceled)
 		batch := newBoundedFrameBatch(service, 2)
 		frames := [][]byte{make([]byte, 40), make([]byte, 60)}
 		for index, frame := range frames {

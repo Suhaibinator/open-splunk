@@ -177,7 +177,7 @@ func New(config Config) (*Service, error) {
 	}
 	// Close owns lifecycleCancel and invokes it exactly once when admission
 	// stops; retaining the function is the service's shutdown mechanism.
-	lifecycleContext, lifecycleCancel := context.WithCancel(context.Background()) //nolint:gosec // G118: lifecycle cancellation is owned by Service.Close.
+	lifecycleContext, lifecycleCancel := context.WithCancel(context.Background())
 	return &Service{
 		validator:        config.Validator,
 		scopes:           config.Scopes,
@@ -900,8 +900,7 @@ func validIdentity(value string) bool {
 }
 
 func sourceDiagnostic(err error) bool {
-	var splDiagnostic *spl.Diagnostic
-	if errors.As(err, &splDiagnostic) {
+	if _, ok := errors.AsType[*spl.Diagnostic](err); ok {
 		return true
 	}
 	var planDiagnostic *plan.Diagnostic

@@ -10,11 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
+
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 )
 
 var searchAuditTestTime = time.Date(
@@ -530,12 +531,13 @@ func TestAppendRejectsInvalidAndForeignTransactionInputs(t *testing.T) {
 func TestConstructionValidatesConfigurationAndDetachesCursorKey(t *testing.T) {
 	t.Parallel()
 	database := openSearchAuditTestDatabase(t)
+	var nilContext context.Context
 
 	if store, err := New(nil, Options{}); store != nil || !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("New(nil) = (%v, %v)", store, err)
 	}
-	//nolint:staticcheck // Explicitly verifies the exported nil-context guard.
-	if store, err := NewWithContext(nil, database, Options{}); store != nil ||
+
+	if store, err := NewWithContext(nilContext, database, Options{}); store != nil ||
 		!errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("NewWithContext(nil) = (%v, %v)", store, err)
 	}

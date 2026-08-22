@@ -181,6 +181,7 @@ func TestRecoveryCommandRunnersRejectMissingLockDependencies(t *testing.T) {
 	t.Parallel()
 
 	release := testRecoveryReleaseIdentity()
+	var nilContext context.Context
 	if err := runBackupControlPlane(
 		context.Background(),
 		controlbackup.CreateOptions{},
@@ -214,7 +215,7 @@ func TestRecoveryCommandRunnersRejectMissingLockDependencies(t *testing.T) {
 		t.Fatal("restore with nil acquired lock succeeded")
 	}
 	if err := runBackupControlPlane(
-		nil, //nolint:staticcheck // Deliberately exercises defensive nil-context validation.
+		nilContext,
 		controlbackup.CreateOptions{},
 		release,
 		func(string) (*serverLock, error) { return &serverLock{}, nil },
@@ -222,7 +223,7 @@ func TestRecoveryCommandRunnersRejectMissingLockDependencies(t *testing.T) {
 		t.Fatal("backup with nil context succeeded")
 	}
 	if err := runRestoreControlPlane(
-		nil, //nolint:staticcheck // Deliberately exercises defensive nil-context validation.
+		nilContext,
 		controlbackup.RestoreOptions{},
 		release,
 		func() (*serverLock, error) { return &serverLock{}, nil },

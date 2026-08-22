@@ -24,7 +24,7 @@ func acquireStateDirectoryLock(dir string) (*stateDirectoryLock, error) {
 	if err != nil {
 		return nil, fmt.Errorf("collector: open state lock %q: %w", path, err)
 	}
-	// #nosec G115 -- os.File descriptors originate as native int descriptors on Unix.
+
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		_ = f.Close()
 		if errors.Is(err, syscall.EWOULDBLOCK) {
@@ -41,7 +41,7 @@ func (l *stateDirectoryLock) Close() error {
 	}
 	f := l.file
 	l.file = nil
-	// #nosec G115 -- os.File descriptors originate as native int descriptors on Unix.
+
 	unlockErr := syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 	closeErr := f.Close()
 	if unlockErr != nil {

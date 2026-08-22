@@ -14,15 +14,16 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"gorm.io/gorm"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeattemptaudit"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/fieldmaskpb"
-	"gorm.io/gorm"
 )
 
 var knowledgePersistenceCursorKey = bytes.Repeat([]byte{0x6b}, 32)
@@ -713,7 +714,7 @@ func TestKnowledgeHTTPSuccessAuditFailureRollsBackAndJournalsRejection(t *testin
 		"knowledge_mutation_idempotency",
 		"audit_events",
 	} {
-		query := "SELECT count(*) FROM " + table + " WHERE tenant_id = ?" // #nosec G202 -- fixed test table names.
+		query := "SELECT count(*) FROM " + table + " WHERE tenant_id = ?"
 		if count := knowledgePersistenceCount(t, harness.database, query, knowledgeBoundaryTenantID); count != 0 {
 			t.Fatalf("rolled-back %s rows=%d", table, count)
 		}

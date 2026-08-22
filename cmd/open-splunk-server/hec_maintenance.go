@@ -103,7 +103,7 @@ func newHECTerminalMaintenance(
 	if err := config.normalize(); err != nil {
 		return nil, err
 	}
-	workerContext, cancelWorker := context.WithCancel(context.Background()) //nolint:gosec // Close owns cancellation.
+	workerContext, cancelWorker := newMaintenanceWorkerContext()
 	maintenance := &hecTerminalMaintenance{
 		pruner:         pruner,
 		retention:      config.retention,

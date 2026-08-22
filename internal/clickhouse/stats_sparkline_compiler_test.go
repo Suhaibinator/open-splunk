@@ -201,8 +201,7 @@ func TestCompileStatsSparklineRejectsForgedBackendMetadata(t *testing.T) {
 	if err == nil {
 		t.Fatal("compiler accepted forged unsupported sparkline function")
 	}
-	var diagnostic *plan.Diagnostic
-	if errors.As(err, &diagnostic) {
+	if diagnostic, ok := errors.AsType[*plan.Diagnostic](err); ok {
 		t.Fatalf("forged backend metadata unexpectedly reached a user diagnostic: %#v", diagnostic)
 	}
 }

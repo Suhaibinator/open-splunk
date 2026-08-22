@@ -95,7 +95,6 @@ func readStablePathFile(config stablePathFileReadConfig) ([]byte, error) {
 		return nil, err
 	}
 
-	// #nosec G304,G703 -- callers supply read-only operator paths and retain
 	// domain-specific validation; O_NOFOLLOW and O_NONBLOCK prevent final-link
 	// redirection and blocking filesystem objects.
 	fd, err := unix.Open(
@@ -106,7 +105,7 @@ func readStablePathFile(config stablePathFileReadConfig) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", config.messages.openPath, err)
 	}
-	// #nosec G115 -- unix.Open succeeded, so fd is a non-negative native file
+
 	// descriptor.
 	file := os.NewFile(uintptr(fd), config.path)
 	if file == nil {

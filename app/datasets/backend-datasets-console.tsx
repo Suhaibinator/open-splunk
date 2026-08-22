@@ -78,11 +78,11 @@ async function loadAuthorizedIndexDefinitions(
   const definitions = new Map<string, Index>();
   const seenPageTokens = new Set<string>();
   const pageSize = Math.max(1, Math.min(bootstrap.limits.maximumPageSize || 100, 100));
-  let pageToken: string | undefined;
   try {
-    for (let page = 0; page < 256; page += 1) {
-      // Index cursors are causally ordered and must be traversed sequentially.
-      // eslint-disable-next-line no-await-in-loop
+    async function loadPage(pageToken: string | undefined, page: number): Promise<AuthorizedIndexDefinitions> {
+      if (page >= 256) {
+        throw new RangeError("The index catalog exceeded the 256-page browser safety limit.");
+      }
       const response = await client.indexes.list({
         page: { pageSize, pageToken, includeTotalSize: false },
         stateFilters: [],
@@ -114,9 +114,9 @@ async function loadAuthorizedIndexDefinitions(
         throw new TypeError("The index catalog repeated a page cursor.");
       }
       seenPageTokens.add(nextPageToken);
-      pageToken = nextPageToken;
+      return loadPage(nextPageToken, page + 1);
     }
-    throw new RangeError("The index catalog exceeded the 256-page browser safety limit.");
+    return await loadPage(undefined, 0);
   } catch (reason) {
     if (isOptionalRouteUnavailable(reason)) {
       return { state: "unavailable", definitions: new Map() };

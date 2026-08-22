@@ -17,6 +17,8 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -27,7 +29,6 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -401,7 +402,7 @@ func authoredExpressionStoreBenchmarkFixture(
 			CollectorID:        "expression-v02-benchmark-collector",
 			BatchID:            batchID,
 			BatchSequence:      batchNumber,
-			OriginalEventCount: uint32(len(events)), // #nosec G115 -- each batch is bounded at 1,000.
+			OriginalEventCount: uint32(len(events)),
 			SourceBatchSHA256:  digest,
 			ReceivedAt:         indexTime,
 			Events:             events,

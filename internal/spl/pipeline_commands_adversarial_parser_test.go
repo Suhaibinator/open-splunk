@@ -944,7 +944,7 @@ func assertPipelineRangeFieldText(t *testing.T, source string, command Command, 
 	if field.Type() != rangeType {
 		t.Fatalf("%T.%s has type %s, want %s", command, name, field.Type(), rangeType)
 	}
-	sourceRange, ok := field.Interface().(Range)
+	sourceRange, ok := reflect.TypeAssert[Range](field)
 	if !ok {
 		t.Fatalf("%T.%s cannot be read as Range", command, name)
 	}

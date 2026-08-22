@@ -19,6 +19,9 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/buildinfo"
 	"github.com/Suhaibinator/open-splunk/internal/collector/config"
@@ -28,8 +31,6 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/collector/wal"
 	"github.com/Suhaibinator/open-splunk/internal/collectorlimits"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
-	"github.com/google/uuid"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // Wire-protocol version the collector speaks; must match the server's expected
@@ -885,7 +886,7 @@ func buildInput(in *config.InputConfig, defaultHost string, checkpoints input.Ma
 			math.MaxInt,
 		)
 	}
-	// #nosec G115 -- the upper bound is checked immediately above.
+
 	maxEvent := int(in.MaxEventBytes)
 
 	fo := framing.Options{MaxEventBytes: maxEvent}

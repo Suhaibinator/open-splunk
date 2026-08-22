@@ -16,6 +16,7 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	clickhousedriverlib "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
@@ -772,8 +773,7 @@ func (connection knowledgeRuntimeDiagnosticConnection) Query(
 	args ...any,
 ) (clickhousedriverlib.Rows, error) {
 	rows, err := connection.connection.Query(ctx, query, args...)
-	var exception *clickhousedriver.Exception
-	if errors.As(err, &exception) {
+	if exception, ok := errors.AsType[*clickhousedriver.Exception](err); ok {
 		connection.t.Logf(
 			"knowledge runtime ClickHouse failure code=%d name=%s",
 			exception.Code,

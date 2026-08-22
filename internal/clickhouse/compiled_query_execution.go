@@ -14,6 +14,8 @@ import (
 	"time"
 	"unsafe"
 
+	"fortio.org/safecast"
+
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
@@ -763,8 +765,8 @@ func writeCompiledArgument(writer hash.Hash, argument any, depth int) bool {
 			return false
 		}
 		writeBool(writer, value.IsNil())
-		// #nosec G115 -- reflect slice lengths are nonnegative native ints.
-		writeUint64(writer, uint64(value.Len()))
+
+		writeUint64(writer, safecast.MustConv[uint64](value.Len()))
 		for index := 0; index < value.Len(); index++ {
 			if !writeCompiledArgument(writer, value.Index(index).Interface(), depth+1) {
 				return false
@@ -829,9 +831,7 @@ func writeBool(writer hash.Hash, value bool) {
 }
 
 func writeInt64(writer hash.Hash, value int64) {
-	// #nosec G115 -- the conversion deliberately preserves two's-complement
-	// bits in the canonical unsigned transport.
-	writeUint64(writer, uint64(value))
+	_ = binary.Write(writer, binary.BigEndian, value)
 }
 
 func writeUint64(writer hash.Hash, value uint64) {
@@ -1130,22 +1130,28 @@ func retainedCompiledArgument(argument any) (uint64, bool) {
 		reflect.Float32, reflect.Float64:
 		return total, true
 	case reflect.String:
-		// #nosec G115 -- reflect string lengths are nonnegative native ints.
-		return retainedAdd(total, uint64(value.Len()))
+
+		return retainedAdd(total, safecast.MustConv[uint64](value.Len()))
 	case reflect.Slice:
 		if !supportedCompiledSliceElement(valueType.Elem()) {
 			return 0, false
 		}
 		var ok bool
-		// #nosec G115 -- reflect slice capacities are nonnegative native ints.
-		total, ok = retainedAdd(total, uint64(value.Cap())*uint64(valueType.Elem().Size()))
+
+		total, ok = retainedAdd(
+			total,
+			safecast.MustConv[uint64](value.Cap())*uint64(valueType.Elem().Size()),
+		)
 		if !ok {
 			return 0, false
 		}
 		if valueType.Elem().Kind() == reflect.String {
 			for index := 0; index < value.Len(); index++ {
-				// #nosec G115 -- reflect string lengths are nonnegative native ints.
-				total, ok = retainedAdd(total, uint64(value.Index(index).Len()))
+
+				total, ok = retainedAdd(
+					total,
+					safecast.MustConv[uint64](value.Index(index).Len()),
+				)
 				if !ok {
 					return 0, false
 				}

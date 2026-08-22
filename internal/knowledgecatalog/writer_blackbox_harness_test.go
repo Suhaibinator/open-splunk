@@ -15,11 +15,12 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
-	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -220,20 +221,23 @@ type writerAuthoritySnapshot struct {
 	TableCounts       map[string]int64
 }
 
-var writerAuthorityTables = []string{
-	"knowledge_definition_blobs",
-	"knowledge_objects",
-	"knowledge_object_versions",
-	"knowledge_object_version_lifecycle",
-	"knowledge_object_dependencies",
-	"knowledge_object_dependency_seals",
-	"knowledge_object_list_projections",
-	"knowledge_object_list_selector_patterns",
-	"knowledge_object_list_projection_seals",
-	"knowledge_object_list_order_keys",
-	"knowledge_mutation_commit_authorities",
-	"knowledge_mutation_idempotency",
-	"audit_events",
+var writerAuthorityTableCounts = []struct {
+	name      string
+	statement string
+}{
+	{name: "knowledge_definition_blobs", statement: `SELECT count(*) FROM knowledge_definition_blobs WHERE tenant_id = ?`},
+	{name: "knowledge_objects", statement: `SELECT count(*) FROM knowledge_objects WHERE tenant_id = ?`},
+	{name: "knowledge_object_versions", statement: `SELECT count(*) FROM knowledge_object_versions WHERE tenant_id = ?`},
+	{name: "knowledge_object_version_lifecycle", statement: `SELECT count(*) FROM knowledge_object_version_lifecycle WHERE tenant_id = ?`},
+	{name: "knowledge_object_dependencies", statement: `SELECT count(*) FROM knowledge_object_dependencies WHERE tenant_id = ?`},
+	{name: "knowledge_object_dependency_seals", statement: `SELECT count(*) FROM knowledge_object_dependency_seals WHERE tenant_id = ?`},
+	{name: "knowledge_object_list_projections", statement: `SELECT count(*) FROM knowledge_object_list_projections WHERE tenant_id = ?`},
+	{name: "knowledge_object_list_selector_patterns", statement: `SELECT count(*) FROM knowledge_object_list_selector_patterns WHERE tenant_id = ?`},
+	{name: "knowledge_object_list_projection_seals", statement: `SELECT count(*) FROM knowledge_object_list_projection_seals WHERE tenant_id = ?`},
+	{name: "knowledge_object_list_order_keys", statement: `SELECT count(*) FROM knowledge_object_list_order_keys WHERE tenant_id = ?`},
+	{name: "knowledge_mutation_commit_authorities", statement: `SELECT count(*) FROM knowledge_mutation_commit_authorities WHERE tenant_id = ?`},
+	{name: "knowledge_mutation_idempotency", statement: `SELECT count(*) FROM knowledge_mutation_idempotency WHERE tenant_id = ?`},
+	{name: "audit_events", statement: `SELECT count(*) FROM audit_events WHERE tenant_id = ?`},
 }
 
 func readWriterAuthoritySnapshot(t *testing.T, database *control.DB) writerAuthoritySnapshot {
@@ -286,14 +290,13 @@ func readWriterAuthoritySnapshot(t *testing.T, database *control.DB) writerAutho
 		t.Fatalf("read writer audit ledger: %v", err)
 	}
 
-	snapshot.TableCounts = make(map[string]int64, len(writerAuthorityTables))
-	for _, table := range writerAuthorityTables {
+	snapshot.TableCounts = make(map[string]int64, len(writerAuthorityTableCounts))
+	for _, table := range writerAuthorityTableCounts {
 		var count int64
-		query := "SELECT count(*) FROM " + table + " WHERE tenant_id = ?" // #nosec G202 -- table is a fixed test constant.
-		if err := tx.QueryRowContext(t.Context(), query, writerTestTenant).Scan(&count); err != nil {
-			t.Fatalf("count %s: %v", table, err)
+		if err := tx.QueryRowContext(t.Context(), table.statement, writerTestTenant).Scan(&count); err != nil {
+			t.Fatalf("count %s: %v", table.name, err)
 		}
-		snapshot.TableCounts[table] = count
+		snapshot.TableCounts[table.name] = count
 	}
 	if err := tx.Commit(); err != nil {
 		t.Fatalf("commit writer authority snapshot: %v", err)

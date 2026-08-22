@@ -13,8 +13,10 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/Suhaibinator/open-splunk/internal/cursorcodec"
+	"fortio.org/safecast"
 	"gorm.io/gorm"
+
+	"github.com/Suhaibinator/open-splunk/internal/cursorcodec"
 )
 
 const (
@@ -255,8 +257,8 @@ func (catalog *AppCatalog) ListApps(
 	}
 	result = AppListResult{
 		Apps: make([]AppWorkspace, 0, len(records)),
-		// #nosec G115 -- readAppCatalogRevision accepts only zero or positive int64 values.
-		CatalogRevision: uint64(revision),
+
+		CatalogRevision: safecast.MustConv[uint64](revision),
 	}
 	for _, record := range records {
 		app, convertErr := appFromRecord(record, namesByApp[record.AppID])
@@ -344,8 +346,8 @@ func normalizeAppListRequest(
 		)
 	}
 	if request.RequiredCatalogRevision != nil {
-		// #nosec G115 -- the explicit bound above proves the value fits int64.
-		converted := int64(*request.RequiredCatalogRevision)
+
+		converted := safecast.MustConv[int64](*request.RequiredCatalogRevision)
 		requiredRevision = &converted
 	}
 	if len(request.StateFilters) > 2 {
