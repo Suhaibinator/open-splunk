@@ -611,7 +611,8 @@ func verifyComposeRecoveryVolumeOwnership(
 		"--no-TTY",
 		"clickhouse",
 		"stat",
-		"--format=%u:%g:%a",
+		"-c",
+		"%u:%g:%a",
 		recoveryPath,
 	)
 	if ownership != "101:65532:2750" {

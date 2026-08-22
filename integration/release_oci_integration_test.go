@@ -3269,7 +3269,8 @@ func releaseOCIAssertClickHouseRecoveryVolumeOwnership(
 		"--no-TTY",
 		"clickhouse",
 		"stat",
-		"--format=%u:%g:%a",
+		"-c",
+		"%u:%g:%a",
 		"/var/lib/open-splunk-clickhouse-backups",
 	)
 	if ownership != "101:65532:2750" {
