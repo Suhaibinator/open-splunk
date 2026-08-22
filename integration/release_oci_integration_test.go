@@ -3179,9 +3179,9 @@ func releaseOCIAssertRecoveryVolumeBootstrap(
 		capabilities = append(capabilities, strings.TrimPrefix(capability, "CAP_"))
 	}
 	slices.Sort(capabilities)
-	if !slices.Equal(capabilities, []string{"CHOWN", "FOWNER"}) {
+	if !slices.Equal(capabilities, []string{"CHOWN", "DAC_OVERRIDE", "FOWNER"}) {
 		t.Fatalf(
-			"ClickHouse recovery volume bootstrap capabilities = %v, want CHOWN and FOWNER",
+			"ClickHouse recovery volume bootstrap capabilities = %v, want CHOWN, DAC_OVERRIDE, and FOWNER",
 			container.HostConfig.CapAdd,
 		)
 	}

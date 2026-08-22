@@ -168,7 +168,7 @@ func TestDeploymentClickHouseNativeRecoveryContract(t *testing.T) {
 		)
 	}
 	requireComposeConfinement(t, "recovery volume bootstrap", volumeBootstrap, 32)
-	requireExactComposeSequence(t, "recovery volume bootstrap capabilities", volumeBootstrap.CapAdd, []string{"CHOWN", "FOWNER"})
+	requireExactComposeSequence(t, "recovery volume bootstrap capabilities", volumeBootstrap.CapAdd, []string{"CHOWN", "DAC_OVERRIDE", "FOWNER"})
 	requireExactComposeSequence(t, "recovery volume bootstrap mounts", volumeBootstrap.Volumes, []string{
 		"clickhouse-recovery:/var/lib/open-splunk/clickhouse-backups",
 		"clickhouse-logs:/var/log/clickhouse-server",
