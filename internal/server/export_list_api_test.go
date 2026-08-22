@@ -833,7 +833,7 @@ func TestExportListRejectsCorruptServicePages(t *testing.T) {
 			if response.Code != http.StatusInternalServerError {
 				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 			}
-			if response.Body.String() != "{\"error\":{\"message\":\"internal server error\"}}\n" {
+			if response.Body.String() != "{\"error\":{\"message\":\"internal server error\"}}" {
 				t.Fatalf("error body = %q", response.Body.String())
 			}
 		})

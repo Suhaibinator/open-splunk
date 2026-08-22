@@ -21,8 +21,8 @@ const (
 )
 
 const (
-	knowledgeManagementUnavailableBody = "{\"error\":{\"message\":\"knowledge management is unavailable\"}}\n"
-	knowledgeAdministratorRequiredBody = "{\"error\":{\"message\":\"administrator access is required\"}}\n"
+	knowledgeManagementUnavailableBody = "{\"error\":{\"message\":\"knowledge management is unavailable\"}}"
+	knowledgeAdministratorRequiredBody = "{\"error\":{\"message\":\"administrator access is required\"}}"
 )
 
 var errKnowledgeAttemptBoundaryUnavailable = errors.New(

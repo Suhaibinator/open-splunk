@@ -497,7 +497,7 @@ func TestKnowledgeHTTPRealStaleVersionJournalsCurrentAuthorizedContext(t *testin
 		UpdateMask:        &fieldmaskpb.FieldMask{Paths: []string{"description"}},
 		ClientRequestId:   "stale-context-update-0001",
 	})
-	if response.Code != http.StatusConflict || response.Body.String() != "{\"error\":{\"message\":\"knowledge request conflicts with current state\"}}\n" {
+	if response.Code != http.StatusConflict || response.Body.String() != "{\"error\":{\"message\":\"knowledge request conflicts with current state\"}}" {
 		t.Fatalf("stale update status=%d body=%q", response.Code, response.Body.String())
 	}
 

@@ -5,7 +5,7 @@ go 1.27
 require (
 	github.com/ClickHouse/ch-go v0.74.0
 	github.com/ClickHouse/clickhouse-go/v2 v2.48.0
-	github.com/Suhaibinator/SRouter v1.5.1
+	github.com/Suhaibinator/SRouter v1.6.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/shopspring/decimal v1.4.0

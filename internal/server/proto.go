@@ -212,7 +212,7 @@ func newForwardCompatibleProtoRoute[Request proto.Message, Response any](
 ) protobufRouteDefinition {
 	config.Sanitizer = forwardCompatibleProtoSanitizer[Request]
 	return protobufRouteDefinition{
-		definition: router.NewGenericRouteDefinition[Request, Response, string, struct{}](config),
+		definition: config,
 	}
 }
 

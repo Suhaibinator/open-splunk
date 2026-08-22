@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
@@ -273,18 +272,16 @@ func newKnowledgeHTTPRouter(handler *apiHandler) http.Handler {
 		ServiceName:       "open-splunk-knowledge-http-test",
 		GlobalTimeout:     0,
 		GlobalMaxBodySize: maximumKnowledgeMutationRequestBytes,
-		SubRouters: []router.SubRouterConfig{{
-			PathPrefix: "/api",
-			AuthLevel:  &noAuth,
-			Middlewares: []sroutercommon.Middleware{
-				disableAPICaching,
-				requireProtobufContentType,
-				handler.boundRequests,
-				withSynchronousDeadline(handler.routeTimeout),
-			},
-			Routes: routes,
-		}},
 	}, nil, nil)
+	inner.Group("/api").
+		Auth(noAuth).
+		Use(
+			disableAPICaching,
+			requireProtobufContentType,
+			handler.boundRequests,
+			withSynchronousDeadline(handler.routeTimeout),
+		).
+		Route(routes...)
 	trusted := handler.protectBrowserAPIRoutes(
 		handler.protectKnowledgeManagementRoutes(inner),
 	)
@@ -785,7 +782,7 @@ func TestKnowledgeHTTPDefinitiveErrorMappingAndConflictBodyUniformity(
 		{name: "canceled", operationErr: context.Canceled, authorized: &authorizedApp, wantStatus: http.StatusRequestTimeout, wantReason: knowledgeattemptaudit.ReasonServiceUnavailable, wantContext: true},
 		{name: "unknown", operationErr: errors.New("private dependency detail"), authorized: &authorizedApp, wantStatus: http.StatusServiceUnavailable, wantReason: knowledgeattemptaudit.ReasonServiceUnavailable, wantContext: true},
 	}
-	const uniformConflictBody = "{\"error\":{\"message\":\"knowledge request conflicts with current state\"}}\n"
+	const uniformConflictBody = "{\"error\":{\"message\":\"knowledge request conflicts with current state\"}}"
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()

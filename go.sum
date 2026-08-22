@@ -2,8 +2,8 @@ github.com/ClickHouse/ch-go v0.74.0 h1:uYs2m4wIt0ZHSM1E72rg0maCfzhR2V3xWb/vZEgpe
 github.com/ClickHouse/ch-go v0.74.0/go.mod h1:sZ/r+8ttZMjyrP9PuFbgoVbth1ywIu2LIQNA2vgko6M=
 github.com/ClickHouse/clickhouse-go/v2 v2.48.0 h1:auzd4VkapQYhQF8F2Gog7s3x78Bi1JZmByxGbrw3C+4=
 github.com/ClickHouse/clickhouse-go/v2 v2.48.0/go.mod h1:lBjUCPRG6RpRQdMbkXq+JV8rY0/O5lw+Z7jShgReFjM=
-github.com/Suhaibinator/SRouter v1.5.1 h1:8B87T7D4CfVHS/tFyNmh+pkzC9iW31ywnbNLZ2gojtY=
-github.com/Suhaibinator/SRouter v1.5.1/go.mod h1:Fo270VMpKPlQY0xdvjkorMmu0VN+Wg7Xj5lUUBHh0QQ=
+github.com/Suhaibinator/SRouter v1.6.0 h1:/QQ8w8aH89LLjvCPKFHXuTGeqZZjepVzVGHHTtucupo=
+github.com/Suhaibinator/SRouter v1.6.0/go.mod h1:7EkNYJ2LLlqAoEic7bzvwRl+dL5Auh/aGDH4jMd6SAk=
 github.com/andybalholm/brotli v1.2.2 h1:HzTuoo2ErYQqf5qvcJInB8uvqSVxRttzkFexPWtnceM=
 github.com/andybalholm/brotli v1.2.2/go.mod h1:rzTDkvFWvIrjDXZHkuS16NPggd91W3kUSvPlQ1pLaKY=
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=

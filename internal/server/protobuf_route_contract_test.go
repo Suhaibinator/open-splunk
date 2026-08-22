@@ -135,7 +135,6 @@ func bypasses() {
 	wrapped.definition = helperRoute()
 	_ = unwrapProtobufRoutes(nil)
 }
-func mutatesRoutes(subrouter router.SubRouterConfig) { subrouter.Routes = nil }
 `
 	fileSet := token.NewFileSet()
 	file, err := parser.ParseFile(fileSet, "inventory_guard.go", source, 0)
@@ -157,9 +156,6 @@ func mutatesRoutes(subrouter router.SubRouterConfig) { subrouter.Routes = nil }
 	}
 	if _, found := protobufRouteDefinitionConversionPosition(file); !found {
 		t.Fatal("protobuf route definition conversion was not rejected")
-	}
-	if _, found := protobufSubRouterRoutesSelectorPosition(file); !found {
-		t.Fatal("protobuf subrouter Routes mutation was not rejected")
 	}
 	if _, found := invalidProtobufRouteUnwrapPosition([]*ast.File{file}); !found {
 		t.Fatal("indirect protobuf route unwrap was not rejected")
@@ -340,30 +336,6 @@ func collectProtobufRouteDeclarations(
 	}
 }
 
-func protobufRouterImportAliases(file *ast.File) (map[string]struct{}, bool) {
-	const routerImportPath = "github.com/Suhaibinator/SRouter/pkg/router"
-	aliases := make(map[string]struct{})
-	dotImported := false
-	for _, specification := range file.Imports {
-		importPath, err := strconv.Unquote(specification.Path.Value)
-		if err != nil || importPath != routerImportPath {
-			continue
-		}
-		if specification.Name == nil {
-			aliases["router"] = struct{}{}
-			continue
-		}
-		switch specification.Name.Name {
-		case ".":
-			dotImported = true
-		case "_":
-		default:
-			aliases[specification.Name.Name] = struct{}{}
-		}
-	}
-	return aliases, dotImported
-}
-
 func assertProtobufRouteConstructionBoundary(
 	t *testing.T,
 	fileSet *token.FileSet,
@@ -389,12 +361,6 @@ func assertProtobufRouteConstructionBoundary(
 				fileSet.Position(position),
 			)
 		}
-		if position, found := protobufSubRouterRoutesSelectorPosition(file); found {
-			t.Fatalf(
-				"protobuf subrouter Routes escapes its inline construction at %s",
-				fileSet.Position(position),
-			)
-		}
 	}
 	if position, found := invalidProtobufRouteUnwrapPosition(files); found {
 		t.Fatalf(
@@ -407,10 +373,8 @@ func assertProtobufRouteConstructionBoundary(
 			"protobuf routes must be unwrapped directly into SRouter exactly once",
 		)
 	}
-	allowedSRouter := make(map[token.Pos]struct{})
 	allowedWrappers := make(map[token.Pos]struct{})
 	for _, file := range files {
-		routerAliases, dotImported := protobufRouterImportAliases(file)
 		for _, declaration := range file.Decls {
 			function, ok := declaration.(*ast.FuncDecl)
 			if !ok || function.Name.Name != "newForwardCompatibleProtoRoute" || function.Body == nil {
@@ -441,68 +405,38 @@ func assertProtobufRouteConstructionBoundary(
 					sanitizerInstallations,
 				)
 			}
-			directSRouter := make(map[token.Pos]struct{})
+			directDefinitions := 0
 			ast.Inspect(function.Body, func(node ast.Node) bool {
-				call, callOK := node.(*ast.CallExpr)
-				if !callOK {
-					return true
-				}
-				if isSrouterGenericRouteConstructor(
-					call.Fun,
-					routerAliases,
-					dotImported,
-				) {
-					directSRouter[call.Fun.Pos()] = struct{}{}
-				}
-				return true
-			})
-			ast.Inspect(function.Body, func(node ast.Node) bool {
-				expression, expressionOK := node.(ast.Expr)
-				if expressionOK {
-					if isSrouterGenericRouteConstructor(
-						expression,
-						routerAliases,
-						dotImported,
-					) {
-						if _, direct := directSRouter[expression.Pos()]; !direct {
-							t.Fatalf(
-								"SRouter constructor is indirect inside the local boundary at %s",
-								fileSet.Position(expression.Pos()),
-							)
-						}
-						allowedSRouter[expression.Pos()] = struct{}{}
-					}
-				}
 				literal, literalOK := node.(*ast.CompositeLit)
 				if literalOK && protobufRouteDefinitionLiteral(literal) {
 					allowedWrappers[literal.Pos()] = struct{}{}
+					for _, element := range literal.Elts {
+						keyed, keyedOK := element.(*ast.KeyValueExpr)
+						if !keyedOK {
+							continue
+						}
+						key, keyOK := keyed.Key.(*ast.Ident)
+						value, valueOK := keyed.Value.(*ast.Ident)
+						if keyOK && valueOK &&
+							key.Name == "definition" && value.Name == "config" {
+							directDefinitions++
+						}
+					}
 				}
 				return true
 			})
+			if directDefinitions != 1 {
+				t.Fatalf(
+					"protobuf route constructor assigns its SRouter definition %d times, want 1",
+					directDefinitions,
+				)
+			}
 		}
 	}
 
-	seenSRouter := 0
 	seenWrappers := 0
 	for _, file := range files {
-		routerAliases, dotImported := protobufRouterImportAliases(file)
 		ast.Inspect(file, func(node ast.Node) bool {
-			expression, expressionOK := node.(ast.Expr)
-			if expressionOK {
-				if isSrouterGenericRouteConstructor(
-					expression,
-					routerAliases,
-					dotImported,
-				) {
-					if _, allowed := allowedSRouter[expression.Pos()]; !allowed {
-						t.Fatalf(
-							"SRouter protobuf constructor bypasses the local boundary at %s",
-							fileSet.Position(expression.Pos()),
-						)
-					}
-					seenSRouter++
-				}
-			}
 			literal, literalOK := node.(*ast.CompositeLit)
 			if literalOK && protobufRouteDefinitionLiteral(literal) {
 				if _, allowed := allowedWrappers[literal.Pos()]; !allowed {
@@ -516,10 +450,9 @@ func assertProtobufRouteConstructionBoundary(
 			return true
 		})
 	}
-	if seenSRouter != 1 || seenWrappers != 1 {
+	if seenWrappers != 1 {
 		t.Fatalf(
-			"protobuf construction boundary count = SRouter %d/wrapper %d, want 1/1",
-			seenSRouter,
+			"protobuf construction boundary wrapper count = %d, want 1",
 			seenWrappers,
 		)
 	}
@@ -591,22 +524,6 @@ func protobufRouteDefinitionConversionPosition(file *ast.File) (token.Pos, bool)
 	return conversion, conversion.IsValid()
 }
 
-func protobufSubRouterRoutesSelectorPosition(file *ast.File) (token.Pos, bool) {
-	var selectorPosition token.Pos
-	ast.Inspect(file, func(node ast.Node) bool {
-		if selectorPosition.IsValid() {
-			return false
-		}
-		selector, ok := node.(*ast.SelectorExpr)
-		if ok && selector.Sel.Name == "Routes" {
-			selectorPosition = selector.Pos()
-			return false
-		}
-		return true
-	})
-	return selectorPosition, selectorPosition.IsValid()
-}
-
 func invalidProtobufRouteUnwrapPosition(files []*ast.File) (token.Pos, bool) {
 	allowed, _ := directProtobufRouteUnwrapPositions(files)
 	for _, file := range files {
@@ -648,51 +565,29 @@ func directProtobufRouteUnwrapPositions(files []*ast.File) (map[token.Pos]struct
 			}
 		}
 		ast.Inspect(file, func(node ast.Node) bool {
-			keyed, ok := node.(*ast.KeyValueExpr)
+			call, ok := node.(*ast.CallExpr)
 			if !ok {
 				return true
 			}
-			key, keyOK := keyed.Key.(*ast.Ident)
-			call, callOK := keyed.Value.(*ast.CallExpr)
-			if !keyOK || key.Name != "Routes" || !callOK {
+			selector, selectorOK := call.Fun.(*ast.SelectorExpr)
+			if !selectorOK || selector.Sel.Name != "Route" {
 				return true
 			}
-			function, functionOK := call.Fun.(*ast.Ident)
-			if functionOK && function.Name == "unwrapProtobufRoutes" {
-				allowed[function.Pos()] = struct{}{}
-				count++
+			for _, argument := range call.Args {
+				unwrap, unwrapOK := argument.(*ast.CallExpr)
+				if !unwrapOK {
+					continue
+				}
+				function, functionOK := unwrap.Fun.(*ast.Ident)
+				if functionOK && function.Name == "unwrapProtobufRoutes" {
+					allowed[function.Pos()] = struct{}{}
+					count++
+				}
 			}
 			return true
 		})
 	}
 	return allowed, count
-}
-
-func isSrouterGenericRouteConstructor(
-	expression ast.Expr,
-	routerAliases map[string]struct{},
-	dotImported bool,
-) bool {
-	var base ast.Expr
-	switch indexed := expression.(type) {
-	case *ast.IndexListExpr:
-		base = indexed.X
-	case *ast.IndexExpr:
-		base = indexed.X
-	default:
-		return false
-	}
-	selector, ok := base.(*ast.SelectorExpr)
-	if ok {
-		packageName, packageOK := selector.X.(*ast.Ident)
-		if !packageOK {
-			return false
-		}
-		_, routerPackage := routerAliases[packageName.Name]
-		return routerPackage && selector.Sel.Name == "NewGenericRouteDefinition"
-	}
-	identifier, ok := base.(*ast.Ident)
-	return ok && dotImported && identifier.Name == "NewGenericRouteDefinition"
 }
 
 func protobufDirectRouteRegistrationPositions(

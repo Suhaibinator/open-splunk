@@ -1571,50 +1571,43 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 			}),
 		)
 	}
-	subRouters := []router.SubRouterConfig{{
-		PathPrefix:  apiPathPrefix,
-		AuthLevel:   &noAuth,
-		Middlewares: []sroutercommon.Middleware{disableAPICaching, protobufMiddleware, requestMiddleware, deadlineMiddleware},
-		Routes:      unwrapProtobufRoutes(routes),
-	}}
-	if handler.exports != nil {
-		subRouters = append(subRouters, router.SubRouterConfig{
-			PathPrefix:  "/api",
-			AuthLevel:   &noAuth,
-			Middlewares: []sroutercommon.Middleware{disableAPICaching, handler.boundDownloads},
-			Routes: []router.RouteDefinition{router.RouteConfigBase{
-				Path:           "/search/exports/download",
-				Methods:        []router.HttpMethod{router.MethodGet},
-				AuthLevel:      &noAuth,
-				DisableTimeout: true,
-				Handler:        handler.downloadExport,
-			}},
-		})
-	}
-	if handler.searchWebSocket != nil {
-		subRouters = append(subRouters, router.SubRouterConfig{
-			PathPrefix:  "/api",
-			AuthLevel:   &noAuth,
-			Middlewares: []sroutercommon.Middleware{disableAPICaching},
-			Routes: []router.RouteDefinition{router.RouteConfigBase{
-				Path:           "/search/ws",
-				Methods:        []router.HttpMethod{router.MethodGet},
-				AuthLevel:      &noAuth,
-				DisableTimeout: true,
-				Handler:        handler.searchWebSocket.ServeHTTP,
-			}},
-		})
-	}
-
-	return router.NewRouter[string, struct{}](router.RouterConfig{
+	apiRouter := router.NewRouter[string, struct{}](router.RouterConfig{
 		ServiceName: "open-splunk-server",
 		// SRouter's built-in timeout returns while its handler goroutine may
 		// continue using services. Keep it disabled and apply a synchronous
 		// context deadline so http.Server.Shutdown owns every handler lifetime.
 		GlobalTimeout:     0,
 		GlobalMaxBodySize: maximumRequestBytes,
-		SubRouters:        subRouters,
 	}, nil, nil)
+	apiRouter.Group(apiPathPrefix).
+		Auth(noAuth).
+		Use(disableAPICaching, protobufMiddleware, requestMiddleware, deadlineMiddleware).
+		Route(unwrapProtobufRoutes(routes)...)
+	if handler.exports != nil {
+		apiRouter.Group("/api").
+			Auth(noAuth).
+			Use(disableAPICaching, handler.boundDownloads).
+			Route(router.RouteConfigBase{
+				Path:           "/search/exports/download",
+				Methods:        []router.HttpMethod{router.MethodGet},
+				AuthLevel:      &noAuth,
+				DisableTimeout: true,
+				Handler:        handler.downloadExport,
+			})
+	}
+	if handler.searchWebSocket != nil {
+		apiRouter.Group("/api").
+			Auth(noAuth).
+			Use(disableAPICaching).
+			Route(router.RouteConfigBase{
+				Path:           "/search/ws",
+				Methods:        []router.HttpMethod{router.MethodGet},
+				AuthLevel:      &noAuth,
+				DisableTimeout: true,
+				Handler:        handler.searchWebSocket.ServeHTTP,
+			})
+	}
+	return apiRouter
 }
 
 func disableAPICaching(next http.Handler) http.Handler {
