@@ -424,11 +424,13 @@ test("OCI targets are pinned scratch runtimes with a minimal non-root contract",
   );
   assert.match(
     dockerfile,
-    /test "\$\{TARGETOS\}" = "\$\{OPEN_SPLUNK_EXPECTED_TARGETOS\}"/,
+    /if \[ -n "\$\{OPEN_SPLUNK_EXPECTED_TARGETOS:-\}" \]; then test "\$\{TARGETOS\}" = "\$\{OPEN_SPLUNK_EXPECTED_TARGETOS\}"/,
+    "the optional expected target OS must be safe when set -u is active",
   );
   assert.match(
     dockerfile,
-    /test "\$\{TARGETARCH\}" = "\$\{OPEN_SPLUNK_EXPECTED_TARGETARCH\}"/,
+    /if \[ -n "\$\{OPEN_SPLUNK_EXPECTED_TARGETARCH:-\}" \]; then test "\$\{TARGETARCH\}" = "\$\{OPEN_SPLUNK_EXPECTED_TARGETARCH\}"/,
+    "the optional expected target architecture must be safe when set -u is active",
   );
   assert.match(dockerfile, /server_identity=.*product_version/);
   assert.doesNotMatch(dockerfile, removedProductIdentityPattern);

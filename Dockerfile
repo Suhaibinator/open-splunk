@@ -70,8 +70,8 @@ RUN set -eu; \
     case "${OPEN_SPLUNK_SOURCE_DATE_EPOCH}" in ''|*[!0-9]*) exit 1 ;; esac; \
     case "${SOURCE_DATE_EPOCH}" in ''|*[!0-9]*) exit 1 ;; esac; \
     test "${SOURCE_DATE_EPOCH}" = "${OPEN_SPLUNK_SOURCE_DATE_EPOCH}"; \
-    if [ -n "${OPEN_SPLUNK_EXPECTED_TARGETOS}" ]; then test "${TARGETOS}" = "${OPEN_SPLUNK_EXPECTED_TARGETOS}"; fi; \
-    if [ -n "${OPEN_SPLUNK_EXPECTED_TARGETARCH}" ]; then test "${TARGETARCH}" = "${OPEN_SPLUNK_EXPECTED_TARGETARCH}"; fi; \
+    if [ -n "${OPEN_SPLUNK_EXPECTED_TARGETOS:-}" ]; then test "${TARGETOS}" = "${OPEN_SPLUNK_EXPECTED_TARGETOS}"; fi; \
+    if [ -n "${OPEN_SPLUNK_EXPECTED_TARGETARCH:-}" ]; then test "${TARGETARCH}" = "${OPEN_SPLUNK_EXPECTED_TARGETARCH}"; fi; \
     test "${TARGETOS}" = linux; \
     test "${TARGETARCH}" = amd64 || test "${TARGETARCH}" = arm64
 RUN go run ./cmd/open-splunk-manifest \
