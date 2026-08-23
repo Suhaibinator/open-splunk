@@ -418,7 +418,7 @@ func inventoryTree(filesystem fs.FS, root string, options inventoryOptions) (tre
 	}, nil
 }
 
-// validateGoEmbedPath mirrors the filename exclusions applied by Go 1.26's
+// validateGoEmbedPath mirrors the filename exclusions applied by Go 1.27's
 // embed resolver. Rejecting these paths is safer than letting the manifest
 // inventory bytes that //go:embed will silently omit at a VCS, nested-module,
 // or invalid-directory boundary.
