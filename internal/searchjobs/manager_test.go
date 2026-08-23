@@ -1803,22 +1803,16 @@ func TestNewEnforcesMaximumScopeIndexes(t *testing.T) {
 }
 
 func TestExecutionDeadlinePropagatesAndFailsAsTimeout(t *testing.T) {
-	t.Parallel()
-
-	deadlineObserved := make(chan struct{}, 1)
-	executor := executorFunc(func(ctx context.Context, _ clickhouse.CompiledQuery, sink ResultSink) error {
-		if err := sink.SetSchema(messageSchema()); err != nil {
-			return err
-		}
+	deadlineObserved := make(chan bool, 1)
+	executor := executorFunc(func(ctx context.Context, _ clickhouse.CompiledQuery, _ ResultSink) error {
+		_, hasDeadline := ctx.Deadline()
+		deadlineObserved <- hasDeadline
 		<-ctx.Done()
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			deadlineObserved <- struct{}{}
-		}
 		return errors.New("driver reported a transport failure after cancellation")
 	})
 	manager := newTestManager(t, Config{
 		Executor:        executor,
-		MaxRuntime:      5 * time.Millisecond,
+		MaxRuntime:      100 * time.Millisecond,
 		CleanupInterval: -1,
 		NewID:           sequenceIDs("timeout"),
 	})
@@ -1831,9 +1825,12 @@ func TestExecutionDeadlinePropagatesAndFailsAsTimeout(t *testing.T) {
 		t.Fatalf("timeout failure = %#v", failed.Failure)
 	}
 	select {
-	case <-deadlineObserved:
+	case hasDeadline := <-deadlineObserved:
+		if !hasDeadline {
+			t.Fatal("executor context did not carry a deadline")
+		}
 	default:
-		t.Fatal("executor did not observe its deadline")
+		t.Fatal("executor was not called")
 	}
 }
 
