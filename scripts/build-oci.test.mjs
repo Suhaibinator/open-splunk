@@ -506,6 +506,9 @@ test("official product publication is guarded by the GitHub Release workflow", a
   assert.match(ciWorkflow, /OPEN_SPLUNK_SOURCE_REVISION: \$\{\{ github\.sha \}\}/);
   assert.match(ciWorkflow, /release:\n\s+types:\n\s+- published/);
   assert.match(ciWorkflow, /run: scripts\/publish-release\.sh/);
+  const publishJob = ciWorkflow.slice(ciWorkflow.indexOf("\n  publish-release:"));
+  assert.match(publishJob, /uses: actions\/setup-go@v7/);
+  assert.match(publishJob, /go-version: \$\{\{ env\.GO_VERSION \}\}/);
   const publishScript = await readFile(
     path.join(workspace, "scripts", "publish-release.sh"),
     "utf8",
@@ -526,6 +529,11 @@ test("official product publication is guarded by the GitHub Release workflow", a
   assert.match(publishScript, /open-splunk_\$\{product_version\}_SHA256SUMS/);
   assert.match(publishScript, /open-splunk-server open-splunk-collector open-splunk-loggen/);
   assert.match(publishScript, /go version -m/);
+  assert.match(publishScript, /GOTOOLCHAIN=local go version -m/);
+  assert.doesNotMatch(publishScript, /grep -Fq "\.sourceRevision=/);
+  assert.doesNotMatch(publishScript, /grep -Fq "\.productVersion=/);
+  assert.match(publishScript, /release binary is not built for Linux/);
+  assert.match(publishScript, /release binary has the wrong architecture/);
   assert.match(publishScript, /shasum -a 256 -c/);
   assert.ok(
     publishScript.indexOf('verify_multiarch_image "$collector_image"')

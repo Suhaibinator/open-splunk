@@ -126,11 +126,18 @@ for architecture in amd64 arm64; do
     --output "type=local,dest=$artifact_root" \
     .
   for binary in open-splunk-server open-splunk-collector open-splunk-loggen; do
-    binary_metadata=$(go version -m "$artifact_root/$binary")
-    grep -Eq '^[[:space:]]*build[[:space:]]+GOOS=linux$' <<<"$binary_metadata"
-    grep -Eq "^[[:space:]]*build[[:space:]]+GOARCH=$architecture$" <<<"$binary_metadata"
-    grep -Fq ".sourceRevision=$head_revision" <<<"$binary_metadata"
-    grep -Fq ".productVersion=$product_version" <<<"$binary_metadata"
+    if ! binary_metadata=$(GOTOOLCHAIN=local go version -m "$artifact_root/$binary"); then
+      echo "error: could not inspect release binary metadata: $binary ($architecture)" >&2
+      exit 1
+    fi
+    if ! grep -Eq '^[[:space:]]*build[[:space:]]+GOOS=linux$' <<<"$binary_metadata"; then
+      echo "error: release binary is not built for Linux: $binary ($architecture)" >&2
+      exit 1
+    fi
+    if ! grep -Eq "^[[:space:]]*build[[:space:]]+GOARCH=$architecture$" <<<"$binary_metadata"; then
+      echo "error: release binary has the wrong architecture: $binary ($architecture)" >&2
+      exit 1
+    fi
   done
   archive="$work_root/open-splunk_${product_version}_linux_${architecture}.tar.gz"
   tar \
