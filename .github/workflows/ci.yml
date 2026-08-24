@@ -1166,10 +1166,3 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: scripts/publish-release.sh
-
-      - name: Make GHCR packages public
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh api --method PATCH /user/packages/container/open-splunk-server -f visibility=public
-          gh api --method PATCH /user/packages/container/open-splunk-collector -f visibility=public
