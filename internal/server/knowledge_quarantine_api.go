@@ -172,10 +172,12 @@ func validKnowledgeRecoveryToken(value string) bool {
 	}
 	for index := range len(value) {
 		character := value[index]
-		if !(character >= 'A' && character <= 'Z') &&
-			!(character >= 'a' && character <= 'z') &&
-			!(character >= '0' && character <= '9') &&
-			character != '-' && character != '_' {
+		switch {
+		case character >= 'A' && character <= 'Z':
+		case character >= 'a' && character <= 'z':
+		case character >= '0' && character <= '9':
+		case character == '-' || character == '_':
+		default:
 			return false
 		}
 	}

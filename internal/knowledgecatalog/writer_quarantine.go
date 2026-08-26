@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"hash"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -138,7 +139,7 @@ func (writer *Writer) PrepareQuarantine(
 		RootKnowledgeObjectId: strings.Clone(authority.rootID),
 		RecoveryToken:         token,
 		ExpiresAt:             timestamppb.New(expiresAt),
-		DependentCount:        uint32(len(authority.ordered) - 1),
+		DependentCount:        safecast.MustConv[uint32](len(authority.ordered) - 1),
 		TenantCatalogRevision: safecast.MustConv[uint64](authority.catalog.revision),
 	}, nil
 }
@@ -569,7 +570,7 @@ func quarantineDigestString(hasher hash.Hash, value string) {
 
 func quarantineDigestInt64(hasher hash.Hash, value int64) {
 	var encoded [8]byte
-	binary.BigEndian.PutUint64(encoded[:], uint64(value))
+	binary.BigEndian.PutUint64(encoded[:], safecast.MustConv[uint64](value))
 	writeDigestFrame(hasher, encoded[:])
 }
 
@@ -580,7 +581,7 @@ func quarantineDigestOptionalInt64(hasher hash.Hash, value *int64) {
 	}
 	var encoded [9]byte
 	encoded[0] = 1
-	binary.BigEndian.PutUint64(encoded[1:], uint64(*value))
+	binary.BigEndian.PutUint64(encoded[1:], safecast.MustConv[uint64](*value))
 	writeDigestFrame(hasher, encoded[:])
 }
 
@@ -687,13 +688,13 @@ func validQuarantineActorKind(kind audit.ActorKind) bool {
 
 func appendTokenInt64(output []byte, value int64) []byte {
 	var encoded [8]byte
-	binary.BigEndian.PutUint64(encoded[:], uint64(value))
+	binary.BigEndian.PutUint64(encoded[:], safecast.MustConv[uint64](value))
 	return append(output, encoded[:]...)
 }
 
 func appendTokenString(output []byte, value string) []byte {
 	var encoded [2]byte
-	binary.BigEndian.PutUint16(encoded[:], uint16(len(value)))
+	binary.BigEndian.PutUint16(encoded[:], safecast.MustConv[uint16](len(value)))
 	output = append(output, encoded[:]...)
 	return append(output, value...)
 }
@@ -715,7 +716,11 @@ func (reader *tokenReader) int64() (int64, bool) {
 	if len(reader.remaining) < 8 {
 		return 0, false
 	}
-	value := int64(binary.BigEndian.Uint64(reader.remaining[:8]))
+	encoded := binary.BigEndian.Uint64(reader.remaining[:8])
+	if encoded > math.MaxInt64 {
+		return 0, false
+	}
+	value := int64(encoded)
 	reader.remaining = reader.remaining[8:]
 	return value, true
 }

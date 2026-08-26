@@ -166,19 +166,19 @@ func validText(value string) bool {
 	return true
 }
 
-func validateID(field, value string) error {
+func validateDashboardID(value string) error {
 	if strings.TrimSpace(value) != value {
-		return fmt.Errorf("%w: %s is not canonical", control.ErrInvalidArgument, field)
+		return fmt.Errorf("%w: dashboard ID is not canonical", control.ErrInvalidArgument)
 	}
-	_, err := canonicalRequiredText(field, value, maximumDashboardIDBytes)
+	_, err := canonicalRequiredText("dashboard ID", value, maximumDashboardIDBytes)
 	return err
 }
 
-func validateVersion(version uint64) error {
+func validateVersion(version uint64) (int64, error) {
 	if version == 0 || version > math.MaxInt64 {
-		return fmt.Errorf("%w: expected dashboard version is invalid", control.ErrInvalidArgument)
+		return 0, fmt.Errorf("%w: expected dashboard version is invalid", control.ErrInvalidArgument)
 	}
-	return nil
+	return int64(version), nil
 }
 
 func normalizeTime(value time.Time) (time.Time, error) {
@@ -204,6 +204,6 @@ func nextTime(value, previous time.Time) (time.Time, error) {
 }
 
 func pointer(value string) *string {
-	copy := strings.Clone(value)
-	return &copy
+	cloned := strings.Clone(value)
+	return &cloned
 }

@@ -142,13 +142,13 @@ func TestStoreEnforcesOwnerCapacityAcrossConcurrentCreates(t *testing.T) {
 		t.Fatal(err)
 	}
 	scope := AccessScope{OwnerID: "owner-a"}
-	for index := 0; index < maximumDashboardsPerOwner-1; index++ {
+	for index := range maximumDashboardsPerOwner - 1 {
 		if _, err := store.Create(ctx, scope, testDefinition(fmt.Sprintf("Dashboard %d", index))); err != nil {
 			t.Fatal(err)
 		}
 	}
 	results := make(chan error, 2)
-	for index := 0; index < 2; index++ {
+	for index := range 2 {
 		go func(index int) {
 			_, createErr := store.Create(ctx, scope, testDefinition(fmt.Sprintf("Concurrent %d", index)))
 			results <- createErr

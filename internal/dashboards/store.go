@@ -81,7 +81,7 @@ func (store *Store) Create(ctx context.Context, scope AccessScope, input *opensp
 	}
 	for range maximumIDAttempts {
 		id, generationErr := store.idGenerator()
-		if generationErr != nil || validateID("dashboard ID", id) != nil {
+		if generationErr != nil || validateDashboardID(id) != nil {
 			return nil, errors.New("generate dashboard ID: invalid generator result")
 		}
 		record := dashboardRecord{
@@ -119,7 +119,7 @@ func (store *Store) Get(ctx context.Context, scope AccessScope, id string) (*ope
 	if err != nil {
 		return nil, err
 	}
-	if err := validateID("dashboard ID", id); err != nil {
+	if err := validateDashboardID(id); err != nil {
 		return nil, err
 	}
 	var record dashboardRecord
@@ -168,10 +168,11 @@ func (store *Store) Update(ctx context.Context, scope AccessScope, id string, ex
 	if err != nil {
 		return nil, err
 	}
-	if err := validateID("dashboard ID", id); err != nil {
+	if err := validateDashboardID(id); err != nil {
 		return nil, err
 	}
-	if err := validateVersion(expectedVersion); err != nil {
+	storedExpectedVersion, err := validateVersion(expectedVersion)
+	if err != nil {
 		return nil, err
 	}
 	definition, indexed, encoded, err := normalizeDefinition(input, ownerID)
@@ -197,7 +198,7 @@ func (store *Store) Update(ctx context.Context, scope AccessScope, id string, ex
 		return nil, err
 	}
 	updated := store.orm.WithContext(ctx).Model(&dashboardRecord{}).
-		Where("dashboard_id = ? AND tenant_id = ? AND owner_id = ? AND version = ?", id, store.tenantID, ownerID, int64(expectedVersion)).
+		Where("dashboard_id = ? AND tenant_id = ? AND owner_id = ? AND version = ?", id, store.tenantID, ownerID, storedExpectedVersion).
 		Updates(map[string]any{
 			"version": gorm.Expr("version + 1"), "name": indexed.name, "app_id": indexed.appID,
 			"sharing_scope": int64(indexed.sharingScope), "definition_proto": encoded,
@@ -217,10 +218,11 @@ func (store *Store) Delete(ctx context.Context, scope AccessScope, id string, ex
 	if err != nil {
 		return err
 	}
-	if err := validateID("dashboard ID", id); err != nil {
+	if err := validateDashboardID(id); err != nil {
 		return err
 	}
-	if err := validateVersion(expectedVersion); err != nil {
+	storedExpectedVersion, err := validateVersion(expectedVersion)
+	if err != nil {
 		return err
 	}
 	var current dashboardRecord
@@ -231,10 +233,10 @@ func (store *Store) Delete(ctx context.Context, scope AccessScope, id string, ex
 	if err != nil {
 		return mapContext(ctx, "read dashboard for delete", err)
 	}
-	if current.Version != int64(expectedVersion) {
+	if current.Version != storedExpectedVersion {
 		return control.ErrVersionConflict
 	}
-	deleted := store.orm.WithContext(ctx).Where("dashboard_id = ? AND tenant_id = ? AND owner_id = ? AND version = ?", id, store.tenantID, ownerID, int64(expectedVersion)).Delete(&dashboardRecord{})
+	deleted := store.orm.WithContext(ctx).Where("dashboard_id = ? AND tenant_id = ? AND owner_id = ? AND version = ?", id, store.tenantID, ownerID, storedExpectedVersion).Delete(&dashboardRecord{})
 	if deleted.Error != nil {
 		return mapContext(ctx, "delete dashboard", deleted.Error)
 	}
@@ -257,7 +259,7 @@ func (store *Store) nameConflict(ctx context.Context, ownerID, appID, name, exce
 }
 
 func fromRecord(record dashboardRecord, tenantID string) (*opensplunk.Dashboard, error) {
-	if validateID("dashboard ID", record.DashboardID) != nil || record.TenantID != tenantID || record.Version < 1 || record.UpdatedAtUnixMicro < record.CreatedAtUnixMicro {
+	if validateDashboardID(record.DashboardID) != nil || record.TenantID != tenantID || record.Version < 1 || record.UpdatedAtUnixMicro < record.CreatedAtUnixMicro {
 		return nil, errors.New("invalid dashboard record")
 	}
 	definition := new(opensplunk.DashboardDefinition)
