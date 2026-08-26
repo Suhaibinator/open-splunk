@@ -5,6 +5,7 @@ import * as IndexApi from "@/gen/ts/open_splunk/index_api";
 import * as AppApi from "@/gen/ts/open_splunk/app_api";
 import * as AuditApi from "@/gen/ts/open_splunk/audit_api";
 import * as CollectorAdminApi from "@/gen/ts/open_splunk/collector_admin_api";
+import * as DashboardApi from "@/gen/ts/open_splunk/dashboard_api";
 import * as KnowledgeApi from "@/gen/ts/open_splunk/knowledge_api";
 import * as LookupApi from "@/gen/ts/open_splunk/lookup_api";
 import * as SavedSearchApi from "@/gen/ts/open_splunk/saved_search_api";
@@ -19,6 +20,7 @@ export const MAXIMUM_KNOWLEDGE_MANAGEMENT_RESPONSE_BYTES = 8 << 20;
 export const MAXIMUM_LOOKUP_MANAGEMENT_RESPONSE_BYTES = 9 << 20;
 export const MAXIMUM_KNOWLEDGE_GRAPH_RESPONSE_BYTES = 128 << 10;
 export const MAXIMUM_SEARCH_INSPECTION_RESPONSE_BYTES = 8 << 20;
+export const MAXIMUM_DASHBOARD_LIST_RESPONSE_BYTES = 8 << 20;
 
 function readPreviewVarint(
   bytes: Uint8Array,
@@ -237,6 +239,16 @@ export const knowledgeRoutes = {
     "/api/knowledge/objects/delete",
     KnowledgeApi.DeleteKnowledgeObjectRequest,
     KnowledgeApi.DeleteKnowledgeObjectResponse,
+  ),
+  prepareQuarantine: defineProtobufRoute(
+    "/api/knowledge/objects/quarantine/prepare",
+    KnowledgeApi.PrepareKnowledgeObjectQuarantineRequest,
+    KnowledgeApi.PrepareKnowledgeObjectQuarantineResponse,
+  ),
+  quarantine: defineProtobufRoute(
+    "/api/knowledge/objects/quarantine",
+    KnowledgeApi.QuarantineKnowledgeObjectRequest,
+    KnowledgeApi.QuarantineKnowledgeObjectResponse,
   ),
 } as const;
 
@@ -457,6 +469,40 @@ export const savedSearchRoutes = {
   ),
 } as const;
 
+export const dashboardRoutes = {
+  create: defineProtobufRoute(
+    "/api/dashboards/create",
+    DashboardApi.CreateDashboardRequest,
+    DashboardApi.CreateDashboardResponse,
+  ),
+  get: defineProtobufRoute(
+    "/api/dashboards/get",
+    DashboardApi.GetDashboardRequest,
+    DashboardApi.GetDashboardResponse,
+  ),
+  list: defineProtobufRoute(
+    "/api/dashboards/list",
+    DashboardApi.ListDashboardsRequest,
+    DashboardApi.ListDashboardsResponse,
+    { maximumResponseBytes: MAXIMUM_DASHBOARD_LIST_RESPONSE_BYTES },
+  ),
+  update: defineProtobufRoute(
+    "/api/dashboards/update",
+    DashboardApi.UpdateDashboardRequest,
+    DashboardApi.UpdateDashboardResponse,
+  ),
+  delete: defineProtobufRoute(
+    "/api/dashboards/delete",
+    DashboardApi.DeleteDashboardRequest,
+    DashboardApi.DeleteDashboardResponse,
+  ),
+  runPanel: defineProtobufRoute(
+    "/api/dashboards/panels/run",
+    DashboardApi.RunDashboardPanelRequest,
+    DashboardApi.RunDashboardPanelResponse,
+  ),
+} as const;
+
 export const historyRoutes = {
   get: defineProtobufRoute(
     "/api/search/history/get",
@@ -516,6 +562,7 @@ export const openSplunkRoutes = {
   hec: hecOperationsRoutes,
   search: searchRoutes,
   savedSearches: savedSearchRoutes,
+  dashboards: dashboardRoutes,
   history: historyRoutes,
   exports: exportRoutes,
 } as const;

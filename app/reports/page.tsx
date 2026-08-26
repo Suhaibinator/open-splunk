@@ -11,7 +11,7 @@ export default function ReportsPage() {
   const { apiBaseUrl, dataMode } = getFrontendRuntimeConfig();
 
   return (
-    <ProductShell activeSection="reports" appName="Search & Reporting" dataMode={dataMode}>
+    <ProductShell activeSection="reports" apiBaseUrl={apiBaseUrl} appName="Search & Reporting" dataMode={dataMode}>
       <ReportsConsole dataMode={dataMode} apiBaseUrl={apiBaseUrl} />
     </ProductShell>
   );

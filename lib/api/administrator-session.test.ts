@@ -32,8 +32,12 @@ import {
   ListKnowledgeObjectDependenciesResponse,
   ListKnowledgeObjectsRequest,
   ListKnowledgeObjectsResponse,
+  PrepareKnowledgeObjectQuarantineRequest,
+  PrepareKnowledgeObjectQuarantineResponse,
   PreviewKnowledgeObjectRequest,
   PreviewKnowledgeObjectResponse,
+  QuarantineKnowledgeObjectRequest,
+  QuarantineKnowledgeObjectResponse,
   SetKnowledgeObjectStateRequest,
   SetKnowledgeObjectStateResponse,
   UpdateKnowledgeObjectRequest,
@@ -76,6 +80,8 @@ test("administrator route allowlist excludes ordinary search and WebSocket paths
   assert.equal(isAdministratorRoutePath("/api/knowledge/objects/update"), true);
   assert.equal(isAdministratorRoutePath("/api/knowledge/objects/set-state"), true);
   assert.equal(isAdministratorRoutePath("/api/knowledge/objects/delete"), true);
+  assert.equal(isAdministratorRoutePath("/api/knowledge/objects/quarantine/prepare"), true);
+  assert.equal(isAdministratorRoutePath("/api/knowledge/objects/quarantine"), true);
   assert.equal(isAdministratorRoutePath("/api/knowledge/objects/state/set"), false);
   assert.equal(isAdministratorRoutePath("/api/knowledge/objects/preview"), true);
   assert.equal(isAdministratorRoutePath("/api/knowledge/lookups/create"), true);
@@ -299,6 +305,12 @@ test("all shipped knowledge mutations and Preview receive administrator bearer a
     [knowledgeRoutes.delete.path, DeleteKnowledgeObjectResponse.encode(
       DeleteKnowledgeObjectResponse.fromPartial({}),
     ).finish()],
+    [knowledgeRoutes.prepareQuarantine.path, PrepareKnowledgeObjectQuarantineResponse.encode(
+      PrepareKnowledgeObjectQuarantineResponse.fromPartial({}),
+    ).finish()],
+    [knowledgeRoutes.quarantine.path, QuarantineKnowledgeObjectResponse.encode(
+      QuarantineKnowledgeObjectResponse.fromPartial({}),
+    ).finish()],
   ]);
   const transport = new ProtobufTransport({
     fetch: async (input, init) => {
@@ -323,6 +335,14 @@ test("all shipped knowledge mutations and Preview receive administrator bearer a
   await transport.post(knowledgeRoutes.update, UpdateKnowledgeObjectRequest.fromPartial({}));
   await transport.post(knowledgeRoutes.setState, SetKnowledgeObjectStateRequest.fromPartial({}));
   await transport.post(knowledgeRoutes.delete, DeleteKnowledgeObjectRequest.fromPartial({}));
+  await transport.post(
+    knowledgeRoutes.prepareQuarantine,
+    PrepareKnowledgeObjectQuarantineRequest.fromPartial({}),
+  );
+  await transport.post(
+    knowledgeRoutes.quarantine,
+    QuarantineKnowledgeObjectRequest.fromPartial({}),
+  );
 
   assert.deepEqual(requests.map(({ path }) => path), [
     "/api/knowledge/objects/create",
@@ -331,6 +351,8 @@ test("all shipped knowledge mutations and Preview receive administrator bearer a
     "/api/knowledge/objects/update",
     "/api/knowledge/objects/set-state",
     "/api/knowledge/objects/delete",
+    "/api/knowledge/objects/quarantine/prepare",
+    "/api/knowledge/objects/quarantine",
   ]);
   assert.ok(requests.every(({ authorization }) =>
     authorization === `Bearer ${administratorToken}`));

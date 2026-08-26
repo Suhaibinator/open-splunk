@@ -25,6 +25,8 @@ type serializedListKnowledgeObjectDependentsResponse = boundedProtoResponse[*ope
 type serializedUpdateKnowledgeObjectResponse = boundedProtoResponse[*opensplunk.UpdateKnowledgeObjectResponse]
 type serializedSetKnowledgeObjectStateResponse = boundedProtoResponse[*opensplunk.SetKnowledgeObjectStateResponse]
 type serializedDeleteKnowledgeObjectResponse = boundedProtoResponse[*opensplunk.DeleteKnowledgeObjectResponse]
+type serializedPrepareKnowledgeObjectQuarantineResponse = boundedProtoResponse[*opensplunk.PrepareKnowledgeObjectQuarantineResponse]
+type serializedQuarantineKnowledgeObjectResponse = boundedProtoResponse[*opensplunk.QuarantineKnowledgeObjectResponse]
 
 type serializedCreateKnowledgeObjectCodec = boundedProtoCodec[
 	*opensplunk.CreateKnowledgeObjectRequest,
@@ -57,6 +59,14 @@ type serializedSetKnowledgeObjectStateCodec = boundedProtoCodec[
 type serializedDeleteKnowledgeObjectCodec = boundedProtoCodec[
 	*opensplunk.DeleteKnowledgeObjectRequest,
 	*opensplunk.DeleteKnowledgeObjectResponse,
+]
+type serializedPrepareKnowledgeObjectQuarantineCodec = boundedProtoCodec[
+	*opensplunk.PrepareKnowledgeObjectQuarantineRequest,
+	*opensplunk.PrepareKnowledgeObjectQuarantineResponse,
+]
+type serializedQuarantineKnowledgeObjectCodec = boundedProtoCodec[
+	*opensplunk.QuarantineKnowledgeObjectRequest,
+	*opensplunk.QuarantineKnowledgeObjectResponse,
 ]
 
 func newSerializedCreateKnowledgeObjectCodec() *serializedCreateKnowledgeObjectCodec {
@@ -144,6 +154,28 @@ func newSerializedDeleteKnowledgeObjectCodec() *serializedDeleteKnowledgeObjectC
 		](),
 		maximumKnowledgeObjectResponseBytes,
 		"delete",
+	)
+}
+
+func newSerializedPrepareKnowledgeObjectQuarantineCodec() *serializedPrepareKnowledgeObjectQuarantineCodec {
+	return newKnowledgeBoundedProtoCodec(
+		codec.NewProtoCodec[
+			*opensplunk.PrepareKnowledgeObjectQuarantineRequest,
+			*opensplunk.PrepareKnowledgeObjectQuarantineResponse,
+		](),
+		maximumKnowledgeObjectResponseBytes,
+		"quarantine-prepare",
+	)
+}
+
+func newSerializedQuarantineKnowledgeObjectCodec() *serializedQuarantineKnowledgeObjectCodec {
+	return newKnowledgeBoundedProtoCodec(
+		codec.NewProtoCodec[
+			*opensplunk.QuarantineKnowledgeObjectRequest,
+			*opensplunk.QuarantineKnowledgeObjectResponse,
+		](),
+		maximumKnowledgeObjectResponseBytes,
+		"quarantine",
 	)
 }
 

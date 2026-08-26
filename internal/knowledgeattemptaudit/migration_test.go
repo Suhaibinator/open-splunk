@@ -13,11 +13,11 @@ func TestBaselineSchemaIsExactBoundedAndRetrySafe(t *testing.T) {
 	database := openTestDatabase(t)
 	ctx := t.Context()
 
-	var version, ledgerRows int
+	var ledgerRows int
 	var name string
 	if err := database.SQLDB().QueryRowContext(ctx, `
-		SELECT version, name FROM schema_migrations
-	`).Scan(&version, &name); err != nil {
+		SELECT name FROM schema_migrations WHERE version = 1
+	`).Scan(&name); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.SQLDB().QueryRowContext(ctx, `
@@ -25,8 +25,8 @@ func TestBaselineSchemaIsExactBoundedAndRetrySafe(t *testing.T) {
 	`).Scan(&ledgerRows); err != nil {
 		t.Fatal(err)
 	}
-	if version != 1 || name != "0001_baseline.sql" || ledgerRows != 1 {
-		t.Fatalf("migration ledger = version %d name %q rows %d", version, name, ledgerRows)
+	if name != "0001_baseline.sql" || ledgerRows != 2 {
+		t.Fatalf("migration ledger = baseline name %q rows %d", name, ledgerRows)
 	}
 
 	rows, err := database.SQLDB().QueryContext(ctx, `
@@ -100,14 +100,14 @@ func TestBaselineSchemaIsExactBoundedAndRetrySafe(t *testing.T) {
 	}
 
 	if err := control.ApplyMigrations(ctx, database.SQLDB(), migrations.SQLite()); err != nil {
-		t.Fatalf("reapply baseline: %v", err)
+		t.Fatalf("reapply migrations: %v", err)
 	}
 	if err := database.SQLDB().QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM schema_migrations
 	`).Scan(&ledgerRows); err != nil {
 		t.Fatal(err)
 	}
-	if ledgerRows != 1 {
+	if ledgerRows != 2 {
 		t.Fatalf("migration retry changed ledger row count to %d", ledgerRows)
 	}
 }

@@ -8,9 +8,12 @@ invalid snapshot.
 
 `SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS` advertises the complete extraction,
 alias, calculated-field, catalog, snapshot, execution, retained-product, and
-browser family. `SERVER_FEATURE_LOOKUP_MANAGEMENT` advertises the complete
-lookup family and is emitted only alongside field knowledge. Capabilities are
-runtime readiness signals, not authorization or caller-selectable profiles.
+browser family. `SERVER_FEATURE_KNOWLEDGE_QUARANTINE` independently advertises
+the recovery-keyed quarantine preparation and execution routes and is emitted
+only alongside field knowledge. `SERVER_FEATURE_LOOKUP_MANAGEMENT` advertises
+the complete lookup family and is likewise emitted only alongside field
+knowledge. Capabilities are runtime readiness signals, not authorization or
+caller-selectable profiles.
 
 ## Security and identity
 

@@ -18,8 +18,9 @@ import (
 )
 
 const (
-	knowledgeCatalogCursorKeyPurpose = "knowledge-catalog-cursors"
-	lookupManagementCursorKeyPurpose = "lookup-management-cursors"
+	knowledgeCatalogCursorKeyPurpose   = "knowledge-catalog-cursors"
+	knowledgeQuarantineTokenKeyPurpose = "knowledge-quarantine-recovery-tokens"
+	lookupManagementCursorKeyPurpose   = "lookup-management-cursors"
 )
 
 // runtimeKnowledgeManagement groups the same-control-database catalog,
@@ -62,6 +63,11 @@ func newRuntimeKnowledgeManagement(
 		return runtimeKnowledgeManagement{}, err
 	}
 	defer clear(cursorKey)
+	quarantineTokenKey, err := deriveKnowledgeQuarantineTokenKey(masterKey)
+	if err != nil {
+		return runtimeKnowledgeManagement{}, err
+	}
+	defer clear(quarantineTokenKey)
 	lookupCursorKey, err := deriveLookupManagementCursorKey(masterKey)
 	if err != nil {
 		return runtimeKnowledgeManagement{}, err
@@ -95,7 +101,7 @@ func newRuntimeKnowledgeManagement(
 	writer, err := knowledgecatalog.NewWriter(
 		database,
 		auditAppender,
-		knowledgecatalog.WriterOptions{},
+		knowledgecatalog.WriterOptions{RecoveryTokenKey: quarantineTokenKey},
 	)
 	if err != nil {
 		return runtimeKnowledgeManagement{}, fmt.Errorf(
@@ -155,6 +161,14 @@ func deriveKnowledgeCatalogCursorKey(masterKey []byte) ([]byte, error) {
 	return key, nil
 }
 
+func deriveKnowledgeQuarantineTokenKey(masterKey []byte) ([]byte, error) {
+	key, err := deriveServerKey(masterKey, knowledgeQuarantineTokenKeyPurpose)
+	if err != nil {
+		return nil, fmt.Errorf("derive knowledge-quarantine token key: %w", err)
+	}
+	return key, nil
+}
+
 func deriveLookupManagementCursorKey(masterKey []byte) ([]byte, error) {
 	key, err := deriveServerKey(masterKey, lookupManagementCursorKeyPurpose)
 	if err != nil {
@@ -171,7 +185,8 @@ func configureRuntimeKnowledgeManagement(
 ) error {
 	if config == nil || runtime.catalog == nil || runtime.resolver == nil ||
 		runtime.writer == nil ||
-		!runtime.writer.ReadyForManagement() || runtime.attempts == nil ||
+		!runtime.writer.ReadyForManagement() || !runtime.writer.ReadyForQuarantine() ||
+		runtime.attempts == nil ||
 		runtime.lookupCatalog == nil ||
 		runtime.lookupManagement == nil || !runtime.lookupManagement.Ready() ||
 		runtime.lookupResolver == nil || runtime.lookupResolver.catalog == nil ||

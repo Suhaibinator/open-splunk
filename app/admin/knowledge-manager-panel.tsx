@@ -39,6 +39,7 @@ import {
 import {
   KnowledgeCreateControl,
   KnowledgeObjectMutationControls,
+  KnowledgeQuarantineControl,
 } from "./knowledge-manager-mutations";
 import { KnowledgeManagerPreview } from "./knowledge-manager-preview";
 import { createKnowledgePreviewClient } from "./knowledge-manager-preview-data";
@@ -196,6 +197,7 @@ export function KnowledgeManagerPanel({
   apps,
   initialAppId,
   maximumPageSize,
+  quarantineAvailable,
 }: KnowledgeManagerPanelProps) {
   const client = useMemo(
     () => createKnowledgeReadClient({ baseUrl: apiBaseUrl }),
@@ -228,6 +230,7 @@ export function KnowledgeManagerPanel({
   const [continuationStale, setContinuationStale] = useState(false);
   const [reloadGeneration, setReloadGeneration] = useState(0);
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
+  const [selectedObject, setSelectedObject] = useState<KnowledgeObjectDisplay | null>(null);
   const [detailState, setDetailState] = useState<DetailState>("closed");
   const [detail, setDetail] = useState<KnowledgeObjectDisplay | null>(null);
   const [detailAuthority, setDetailAuthority] = useState<KnowledgeObject | null>(null);
@@ -258,6 +261,7 @@ export function KnowledgeManagerPanel({
       },
       () => {
         setSelectedObjectId(null);
+        setSelectedObject(null);
         setDetailState("closed");
         setDetail(null);
         setDetailAuthority(null);
@@ -277,6 +281,7 @@ export function KnowledgeManagerPanel({
     detailRequestRef.current?.abort();
     detailRequestRef.current = null;
     setSelectedObjectId(null);
+    setSelectedObject(null);
     setDetailState("closed");
     setDetail(null);
     setDetailAuthority(null);
@@ -351,6 +356,7 @@ export function KnowledgeManagerPanel({
     const controller = new AbortController();
     detailRequestRef.current = controller;
     setSelectedObjectId(object.knowledgeObjectId);
+    setSelectedObject(object);
     setDetailState("loading");
     setDetail(null);
     setDetailAuthority(null);
@@ -614,6 +620,19 @@ export function KnowledgeManagerPanel({
           detailState={detailState}
           detail={detail}
           detailRef={detailRef}
+          unavailableDetailExtension={!quarantineAvailable || selectedObject === null ? null : (
+            <KnowledgeQuarantineControl
+              key={`quarantine:${selectedObject.knowledgeObjectId}:${selectedObject.version.toString()}`}
+              client={mutationClient}
+              knowledgeObjectId={selectedObject.knowledgeObjectId}
+              name={selectedObject.name}
+              state={selectedObject.state}
+              onCommitted={() => {
+                closeDetail(false);
+                setReloadGeneration((value) => value + 1);
+              }}
+            />
+          )}
           detailExtension={detailState === "available"
             && detail !== null
             && detailAuthority !== null ? (
@@ -628,6 +647,19 @@ export function KnowledgeManagerPanel({
                   setReloadGeneration((value) => value + 1);
                 }}
               />
+              {quarantineAvailable ? (
+                <KnowledgeQuarantineControl
+                  key={`quarantine:${detail.knowledgeObjectId}:${detail.version.toString()}`}
+                  client={mutationClient}
+                  knowledgeObjectId={detail.knowledgeObjectId}
+                  name={detail.name}
+                  state={detail.state}
+                  onCommitted={() => {
+                    closeDetail(false);
+                    setReloadGeneration((value) => value + 1);
+                  }}
+                />
+              ) : null}
               <KnowledgeManagerPreview
                 client={previewClient}
                 currentKnowledgeObject={detailAuthority}
@@ -848,6 +880,7 @@ interface KnowledgeManagerWorkspaceProps {
   detail: KnowledgeObjectDisplay | null;
   detailRef?: React.Ref<HTMLElement>;
   detailExtension?: React.ReactNode;
+  unavailableDetailExtension?: React.ReactNode;
   onOpen: (object: KnowledgeObjectDisplay) => void;
   onRowKeyDown: (event: React.KeyboardEvent<HTMLButtonElement>, objectId: string) => void;
   registerRow: (objectId: string, element: HTMLButtonElement | null) => void;
@@ -866,6 +899,7 @@ export function KnowledgeManagerWorkspace({
   detail,
   detailRef,
   detailExtension,
+  unavailableDetailExtension,
   onOpen,
   onRowKeyDown,
   registerRow,
@@ -943,11 +977,14 @@ export function KnowledgeManagerWorkspace({
             />
           ) : null}
           {detailState === "unavailable" ? (
-            <KnowledgeStatus
-              kind="unavailable"
-              title="Knowledge object unavailable"
-              message="This object cannot be inspected. Missing, forbidden, corrupt, and unavailable outcomes reveal no additional detail."
-            />
+            <>
+              <KnowledgeStatus
+                kind="unavailable"
+                title="Knowledge object unavailable"
+                message="This object cannot be inspected. Missing, forbidden, corrupt, and unavailable outcomes reveal no additional detail."
+              />
+              {unavailableDetailExtension}
+            </>
           ) : null}
           {detailState === "available" && detail !== null ? (
             <KnowledgeDetail object={detail}>{detailExtension}</KnowledgeDetail>

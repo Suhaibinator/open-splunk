@@ -3447,6 +3447,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
   const {
     knowledge: knowledgeFeatureAdvertised,
     lookupManagement: lookupFeatureAdvertised,
+    quarantine: quarantineFeatureAdvertised,
   } = backendKnowledgeCapabilities(bootstrap?.features ?? null);
   const knowledgeApps = knowledgeFeatureAdvertised && bootstrap !== null
     ? knowledgeManagerAppOptionsFromBootstrap(bootstrap.apps)
@@ -3618,6 +3619,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
               apps={knowledgeApps}
               initialAppId={bootstrap.selectedAppId}
               maximumPageSize={bootstrap.limits.maximumPageSize}
+              quarantineAvailable={quarantineFeatureAdvertised}
             />
           ) : null}
           {section === "lookups" && lookupAdvertised && bootstrap !== null && knowledgeApps !== null ? (

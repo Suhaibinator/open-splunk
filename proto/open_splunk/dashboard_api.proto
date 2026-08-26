@@ -1,0 +1,68 @@
+syntax = "proto3";
+
+package open_splunk;
+
+import "open_splunk/dashboard.proto";
+import "open_splunk/search.proto";
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk;opensplunk";
+
+// POST /api/dashboards/create
+message CreateDashboardRequest {
+  DashboardDefinition definition = 1;
+}
+
+message CreateDashboardResponse {
+  Dashboard dashboard = 1;
+}
+
+// POST /api/dashboards/get
+message GetDashboardRequest {
+  string dashboard_id = 1;
+}
+
+message GetDashboardResponse {
+  Dashboard dashboard = 1;
+}
+
+// POST /api/dashboards/list
+message ListDashboardsRequest {
+  optional string app_id_filter = 1;
+}
+
+message ListDashboardsResponse {
+  repeated Dashboard dashboards = 1;
+}
+
+// POST /api/dashboards/update
+message UpdateDashboardRequest {
+  string dashboard_id = 1;
+  uint64 expected_version = 2;
+  DashboardDefinition definition = 3;
+}
+
+message UpdateDashboardResponse {
+  Dashboard dashboard = 1;
+}
+
+// POST /api/dashboards/delete
+message DeleteDashboardRequest {
+  string dashboard_id = 1;
+  uint64 expected_version = 2;
+}
+
+message DeleteDashboardResponse {
+  string dashboard_id = 1;
+}
+
+// POST /api/dashboards/panels/run
+// The server loads the referenced panel and treats its stored search as the
+// sole execution authority. No caller-supplied SPL or source metadata exists.
+message RunDashboardPanelRequest {
+  string dashboard_id = 1;
+  string panel_id = 2;
+}
+
+message RunDashboardPanelResponse {
+  SearchJob search_job = 1;
+}

@@ -10,7 +10,7 @@ export const metadata: Metadata = { title: "Datasets" };
 export default function DatasetsPage() {
   const { apiBaseUrl, dataMode } = getFrontendRuntimeConfig();
   return (
-    <ProductShell activeSection="datasets" appName="Data Manager" dataMode={dataMode}>
+    <ProductShell activeSection="datasets" apiBaseUrl={apiBaseUrl} appName="Data Manager" dataMode={dataMode}>
       <DatasetsConsole dataMode={dataMode} apiBaseUrl={apiBaseUrl} />
     </ProductShell>
   );

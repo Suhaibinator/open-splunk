@@ -14,6 +14,7 @@ import {
   appRoutes,
   auditEventRoutes,
   collectorRoutes,
+  dashboardRoutes,
   exportRoutes,
   hecOperationsRoutes,
   historyRoutes,
@@ -25,7 +26,7 @@ import {
   systemRoutes,
 } from "./routes";
 
-const EXPECTED_METHOD_COUNT = 53;
+const EXPECTED_METHOD_COUNT = 59;
 
 /**
  * The binder's failure mode is a transposition — a method wired to a sibling
@@ -43,6 +44,7 @@ const expectedRoutes: Readonly<Record<string, Readonly<Record<string, object>>>>
   hec: { getOperationalSnapshot: hecOperationsRoutes.get },
   search: searchRoutes,
   savedSearches: savedSearchRoutes,
+  dashboards: dashboardRoutes,
   history: historyRoutes,
   exports: exportRoutes,
 };

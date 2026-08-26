@@ -367,7 +367,8 @@ func validPreparedReplayIdentity(prepared *preparedMutation, route string) bool 
 
 func validMutationRoute(route string) bool {
 	switch route {
-	case mutationRouteCreate, mutationRouteUpdate, mutationRouteSetState, mutationRouteDelete:
+	case mutationRouteCreate, mutationRouteUpdate, mutationRouteSetState,
+		mutationRouteDelete, mutationRouteQuarantine:
 		return true
 	default:
 		return false
@@ -472,6 +473,8 @@ func routeForMutationKind(mutationKind string) string {
 		return mutationRouteSetState
 	case "delete":
 		return mutationRouteDelete
+	case "quarantine":
+		return mutationRouteQuarantine
 	default:
 		return ""
 	}

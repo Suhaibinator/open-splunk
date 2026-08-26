@@ -24,11 +24,12 @@ paths are API 404s and never fall through to the static application.
 | History | `/search/history/get`, `/list`, `/delete`, `/clear` |
 | Exports | `/search/exports/create`, `/get`, `/list`, `/cancel` |
 | Saved searches | `/saved-searches/create`, `/get`, `/list`, `/update`, `/duplicate`, `/delete` |
+| Dashboards | `/dashboards/create`, `/get`, `/list`, `/update`, `/delete`, `/panels/run` |
 | Indexes | `/indexes/create`, `/get`, `/list`, `/update`, `/state/set`, `/delete`, `/stats/get`, `/fields/list` |
 | Apps | `/apps/create`, `/get`, `/list`, `/update`, `/state/set`, `/delete` |
 | Collectors | `/collectors/list`, `/get`, `/update`, `/state/set` |
 | Ingestion tokens | `/ingestion-tokens/create`, `/get`, `/list`, `/update`, `/state/set`, `/revoke` |
-| Knowledge objects | `/knowledge/objects/create`, `/get`, `/list`, `/dependencies`, `/dependents`, `/validate`, `/preview`, `/update`, `/set-state`, `/delete` |
+| Knowledge objects | `/knowledge/objects/create`, `/get`, `/list`, `/dependencies`, `/dependents`, `/validate`, `/preview`, `/update`, `/set-state`, `/delete`, `/quarantine/prepare`, `/quarantine` |
 | Lookups | `/knowledge/lookups/create`, `/get`, `/list`, `/replace`, `/state/set`, `/delete`, `/preview` |
 | Audit | `/audit/events/list`, `/audit/search-attempts/list` |
 | HEC administration | `/hec/operations/get` |

@@ -11,11 +11,11 @@ export const metadata: Metadata = {
 };
 
 export default function AnalyticsPage() {
-  const { dataMode } = getFrontendRuntimeConfig();
+  const { apiBaseUrl, dataMode } = getFrontendRuntimeConfig();
 
   return (
-    <ProductShell activeSection="analytics" appName="Analytics" dataMode={dataMode}>
-      <AnalyticsConsole dataMode={dataMode} />
+    <ProductShell activeSection="analytics" apiBaseUrl={apiBaseUrl} appName="Analytics" dataMode={dataMode}>
+      <AnalyticsConsole apiBaseUrl={apiBaseUrl} dataMode={dataMode} />
     </ProductShell>
   );
 }

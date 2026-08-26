@@ -19,6 +19,8 @@ import {
   CreateKnowledgeObjectRequest,
   DeleteKnowledgeObjectRequest,
   KnowledgeValidationIntent,
+  PrepareKnowledgeObjectQuarantineRequest,
+  QuarantineKnowledgeObjectRequest,
   SetKnowledgeObjectStateRequest,
   UpdateKnowledgeObjectRequest,
   ValidateKnowledgeObjectRequest,
@@ -29,10 +31,13 @@ import type { KnowledgeManagerAppOption } from "./knowledge-manager-feature";
 import {
   createKnowledgeObject,
   deleteKnowledgeObject,
+  prepareKnowledgeObjectQuarantine,
+  quarantineKnowledgeObject,
   setKnowledgeObjectState,
   updateKnowledgeObject,
   validateKnowledgeObject,
   type KnowledgeMutationClient,
+  type KnowledgeQuarantinePreparation,
   type KnowledgeValidationReceipt,
 } from "./knowledge-manager-data";
 
@@ -948,6 +953,199 @@ export function KnowledgeObjectMutationControls({
     </div>
     {actionState === "unavailable" ? (
       <div role="alert">The state change was not accepted. Reload the object before retrying.</div>
+    ) : null}
+  </section>;
+}
+
+type KnowledgeQuarantineControlState =
+  | "idle"
+  | "preparing"
+  | "prepared"
+  | "quarantining"
+  | "unavailable";
+
+/**
+ * Definition-free emergency recovery control. It deliberately needs only the
+ * already-disclosed list identity, so a corrupt definition cannot prevent an
+ * administrator from preparing a quarantine plan.
+ */
+export function KnowledgeQuarantineControl({
+  client,
+  knowledgeObjectId,
+  name,
+  state,
+  onCommitted,
+}: {
+  client: KnowledgeMutationClient;
+  knowledgeObjectId: string;
+  name: string;
+  state: KnowledgeObjectState;
+  onCommitted: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [confirmation, setConfirmation] = useState("");
+  const [controlState, setControlState] = useState<KnowledgeQuarantineControlState>("idle");
+  const [preparation, setPreparation] = useState<KnowledgeQuarantinePreparation | null>(null);
+  const requestRef = useRef<AbortController | null>(null);
+  useEffect(() => () => requestRef.current?.abort(), []);
+  useEffect(() => {
+    if (preparation === null) return;
+    const remainingMilliseconds = preparation.expiresAt.valueOf() - Date.now();
+    if (remainingMilliseconds <= 0) {
+      setControlState("unavailable");
+      return;
+    }
+    const timeout = window.setTimeout(
+      () => setControlState("unavailable"),
+      Math.min(remainingMilliseconds, 2_147_483_647),
+    );
+    return () => window.clearTimeout(timeout);
+  }, [preparation]);
+
+  const eligible = state === KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_DRAFT
+    || state === KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_ACTIVE
+    || state === KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_DISABLED;
+  if (!eligible) return null;
+
+  function close(): void {
+    requestRef.current?.abort();
+    requestRef.current = null;
+    setOpen(false);
+    setConfirmation("");
+    setPreparation(null);
+    setControlState("idle");
+  }
+
+  async function prepare(): Promise<void> {
+    if (controlState === "preparing" || controlState === "quarantining") return;
+    requestRef.current?.abort();
+    const controller = new AbortController();
+    requestRef.current = controller;
+    setConfirmation("");
+    setPreparation(null);
+    setControlState("preparing");
+    try {
+      const result = await prepareKnowledgeObjectQuarantine(
+        client,
+        PrepareKnowledgeObjectQuarantineRequest.fromPartial({ knowledgeObjectId }),
+        { signal: controller.signal },
+      );
+      if (controller.signal.aborted || requestRef.current !== controller) return;
+      requestRef.current = null;
+      if (result.expiresAt.valueOf() <= Date.now()) {
+        setControlState("unavailable");
+        return;
+      }
+      setPreparation(result);
+      setControlState("prepared");
+    } catch {
+      if (controller.signal.aborted || requestRef.current !== controller) return;
+      requestRef.current = null;
+      setControlState("unavailable");
+    }
+  }
+
+  async function quarantine(): Promise<void> {
+    if (
+      preparation === null
+      || confirmation !== name
+      || controlState !== "prepared"
+    ) return;
+    if (preparation.expiresAt.valueOf() <= Date.now()) {
+      setControlState("unavailable");
+      return;
+    }
+    requestRef.current?.abort();
+    const controller = new AbortController();
+    requestRef.current = controller;
+    setControlState("quarantining");
+    try {
+      await quarantineKnowledgeObject(
+        client,
+        QuarantineKnowledgeObjectRequest.fromPartial({
+          recoveryToken: preparation.recoveryToken,
+          clientRequestId: knowledgeBrowserClientRequestId(),
+        }),
+        { signal: controller.signal, preparation },
+      );
+      if (controller.signal.aborted || requestRef.current !== controller) return;
+      requestRef.current = null;
+      onCommitted();
+    } catch {
+      if (controller.signal.aborted || requestRef.current !== controller) return;
+      requestRef.current = null;
+      setPreparation(null);
+      setConfirmation("");
+      setControlState("unavailable");
+    }
+  }
+
+  if (!open) {
+    return <section className="knowledge-manager__object-actions" aria-label="Knowledge recovery actions">
+      <div>
+        <button className="button danger" type="button" onClick={() => setOpen(true)}>
+          Quarantine
+        </button>
+      </div>
+    </section>;
+  }
+
+  const expired = preparation !== null && controlState === "unavailable";
+  return <section
+    className="knowledge-manager__delete-confirmation"
+    aria-labelledby="knowledge-quarantine-confirmation-title"
+  >
+    <h4 id="knowledge-quarantine-confirmation-title">Emergency quarantine</h4>
+    <p>
+      Quarantine is terminal and removes the current definition from normal access.
+      The integrity scan also identifies active objects that must be quarantined first.
+    </p>
+    {preparation === null ? (
+      <div className="knowledge-manager__mutation-actions">
+        <button type="button" onClick={close} disabled={controlState === "preparing"}>Cancel</button>
+        <button
+          type="button"
+          onClick={() => void prepare()}
+          disabled={controlState === "preparing"}
+        >{controlState === "preparing" ? "Scanning impact…" : "Scan quarantine impact"}</button>
+      </div>
+    ) : (
+      <>
+        <dl className="knowledge-manager__metadata">
+          <div><dt>Active dependents</dt><dd>{preparation.dependentCount.toLocaleString()}</dd></div>
+          <div><dt>Catalog revision</dt><dd>{preparation.tenantCatalogRevision.toLocaleString()}</dd></div>
+          <div><dt>Plan expires</dt><dd>{preparation.expiresAt.toLocaleTimeString()}</dd></div>
+        </dl>
+        <p>
+          Type <strong>{name}</strong> to quarantine this object
+          {preparation.dependentCount === 0
+            ? "."
+            : ` and ${preparation.dependentCount.toLocaleString()} active dependent${preparation.dependentCount === 1 ? "" : "s"}.`}
+        </p>
+        <label htmlFor="knowledge-quarantine-confirmation"><span>Object name</span>
+          <input
+            id="knowledge-quarantine-confirmation"
+            value={confirmation}
+            onChange={(event) => setConfirmation(event.currentTarget.value)}
+            autoComplete="off"
+            disabled={controlState === "quarantining" || expired}
+          />
+        </label>
+        {expired ? <div role="alert">This recovery plan expired. Scan again before continuing.</div> : null}
+        <div className="knowledge-manager__mutation-actions">
+          <button type="button" onClick={close} disabled={controlState === "quarantining"}>Cancel</button>
+          <button type="button" onClick={() => void prepare()} disabled={controlState === "quarantining"}>Scan again</button>
+          <button
+            className="button danger"
+            type="button"
+            onClick={() => void quarantine()}
+            disabled={confirmation !== name || controlState === "quarantining" || expired}
+          >{controlState === "quarantining" ? "Quarantining…" : "Quarantine object and dependents"}</button>
+        </div>
+      </>
+    )}
+    {controlState === "unavailable" ? (
+      <div role="alert">The recovery plan was not accepted. Reload the catalog and scan again.</div>
     ) : null}
   </section>;
 }

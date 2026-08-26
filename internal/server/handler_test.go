@@ -457,6 +457,7 @@ func TestSearchWebSocketRouteAndBootstrapUseServiceLimits(t *testing.T) {
 			opensplunk.ServerFeature_SERVER_FEATURE_PLAN_INSPECTION,
 			opensplunk.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS,
 			opensplunk.ServerFeature_SERVER_FEATURE_LOOKUP_MANAGEMENT,
+			opensplunk.ServerFeature_SERVER_FEATURE_KNOWLEDGE_QUARANTINE,
 		}},
 	})
 
@@ -483,6 +484,7 @@ func TestSearchWebSocketRouteAndBootstrapUseServiceLimits(t *testing.T) {
 		opensplunk.ServerFeature_SERVER_FEATURE_PLAN_INSPECTION,
 		opensplunk.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS,
 		opensplunk.ServerFeature_SERVER_FEATURE_LOOKUP_MANAGEMENT,
+		opensplunk.ServerFeature_SERVER_FEATURE_KNOWLEDGE_QUARANTINE,
 	} {
 		if slices.Contains(bootstrap.GetFeatures(), unsupported) {
 			t.Fatalf("unsupported feature %s was advertised", unsupported)

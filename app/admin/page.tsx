@@ -10,7 +10,7 @@ export const metadata: Metadata = { title: "Administration" };
 export default function AdminPage() {
   const { apiBaseUrl, dataMode } = getFrontendRuntimeConfig();
   return (
-    <ProductShell activeSection="admin" appName="Settings" dataMode={dataMode}>
+    <ProductShell activeSection="admin" apiBaseUrl={apiBaseUrl} appName="Settings" dataMode={dataMode}>
       <AdminConsole dataMode={dataMode} apiBaseUrl={apiBaseUrl} />
     </ProductShell>
   );

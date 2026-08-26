@@ -4555,6 +4555,8 @@ pre {
 
 .suite-app-popover {
   left: 0;
+  max-height: min(70dvh, 540px);
+  overflow-y: auto;
   width: 310px;
 }
 
@@ -4584,13 +4586,33 @@ pre {
   background: #eef4f7;
 }
 
-.suite-popover > a > span {
+.suite-popover > a > span,
+.suite-popover > button > span,
+.suite-app-catalog-state > span {
   display: flex;
   flex: 1;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
 }
+
+.suite-app-popover > a.selected {
+  background: #eef6ea;
+  box-shadow: inset 3px 0 #5a9635;
+}
+
+.suite-app-catalog-state {
+  align-items: center;
+  color: var(--text);
+  display: flex;
+  font-size: 11px;
+  gap: 9px;
+  min-height: 48px;
+  padding: 7px 12px;
+}
+
+.suite-app-popover strong,
+.suite-app-popover small { overflow-wrap: anywhere; }
 
 .suite-popover small {
   color: var(--muted);
@@ -5070,6 +5092,7 @@ pre {
 .recent-searches-table--drafts { table-layout: fixed; }
 .recent-searches-table--drafts th:first-child,
 .recent-searches-table--drafts td:first-child { max-width: none; width: auto; }
+.recent-searches-card--backend > .backend-resource-state { margin: 12px; }
 
 /* Sign in */
 .signin-page {
@@ -7178,8 +7201,13 @@ button.knowledge-manager__row:hover { background: #f5f8f9; }
   .suite-mobile-drawer > a { align-items: center; border-left: 3px solid transparent; display: flex; font-size: 11px; gap: 12px; min-height: 47px; padding: 0 16px; text-decoration: none; }
   .suite-mobile-drawer > a:hover { background: #eef2f3; }
   .suite-mobile-drawer > a.active { background: #e8f1e3; border-left-color: #5b9634; font-weight: 700; }
+  .suite-mobile-drawer > a.selected-app { background: #f1f6ee; border-left-color: #7da768; }
   .suite-mobile-drawer > a > span { align-items: center; color: #607079; display: flex; font-size: 15px; justify-content: center; width: 22px; }
   .suite-mobile-drawer > a > b { margin-left: auto; }
+  .suite-mobile-app-state,
+  .suite-mobile-app-retry { color: #64727a; display: block; font-size: 10px; margin: 4px 16px 8px; padding: 10px; }
+  .suite-mobile-app-state { background: #eef2f3; }
+  .suite-mobile-app-retry { background: #fff; border: 1px solid #aeb8bd; text-align: left; }
   .suite-mobile-rule { border-top: 1px solid #dce1e3; margin: 9px 16px; }
 
   .suite-page { padding: 15px 10px calc(30px + env(safe-area-inset-bottom)); }

@@ -162,6 +162,9 @@ func knowledgeAttemptFallbackAction(
 		return knowledgeattemptaudit.ActionUpdate, true
 	case knowledgeObjectsDeletePath:
 		return knowledgeattemptaudit.ActionDelete, true
+	case knowledgeObjectsQuarantinePreparePath,
+		knowledgeObjectsQuarantinePath:
+		return knowledgeattemptaudit.ActionQuarantine, true
 	default:
 		return "", false
 	}

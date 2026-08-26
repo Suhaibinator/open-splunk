@@ -9,12 +9,12 @@ import { HomeDashboard } from "./home-dashboard";
 export const metadata: Metadata = { title: { absolute: "Home | Open Splunk" } };
 
 export default function HomePage() {
-  const { dataMode } = getFrontendRuntimeConfig();
+  const { apiBaseUrl, dataMode } = getFrontendRuntimeConfig();
   return (
     <>
       <LegacyHashRedirect />
-      <ProductShell activeSection="home" appName="Launcher" dataMode={dataMode}>
-        <HomeDashboard dataMode={dataMode} />
+      <ProductShell activeSection="home" apiBaseUrl={apiBaseUrl} appName="Launcher" dataMode={dataMode}>
+        <HomeDashboard apiBaseUrl={apiBaseUrl} dataMode={dataMode} />
       </ProductShell>
     </>
   );

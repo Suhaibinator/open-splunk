@@ -1,11 +1,34 @@
+"use client";
+
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 
-import { backendDraftWithoutIndexSelector } from "@/lib/search/example-drafts";
-import { searchLaunchHref } from "@/lib/search/launch-url";
+import {
+  createOpenSplunkApiClient,
+  getSystemBootstrap,
+} from "@/lib/api";
+import { createErrorMessage } from "@/lib/error-message";
+import {
+  backendAppHref,
+  currentBackendAppId,
+  subscribeToBackendAppId,
+} from "@/lib/search/app-navigation";
+import { historySearchLaunchHref, searchLaunchHref } from "@/lib/search/launch-url";
+import {
+  listServerSearchHistory,
+  type ServerSearchHistoryEntry,
+} from "@/lib/search/server-objects";
+
+import { BackendResourceState } from "./_components/backend-resource-state";
+import { formatMediumDateTime } from "./_components/date-format";
+import { homeSearchFinishedAt, homeSearchStatus } from "./home-dashboard-data";
 
 interface HomeDashboardProps {
+  apiBaseUrl?: string;
   dataMode: "backend" | "demo";
 }
+
+type RecentHistoryState = "loading" | "available" | "unavailable" | "error";
 
 const RECENT_SEARCHES = [
   { title: "Production errors by service", query: "index=gradethis level=ERROR | stats count by service", events: "1,432", ago: "7 min ago", tone: "complete" },
@@ -14,17 +37,116 @@ const RECENT_SEARCHES = [
   { title: "Checkout trace investigation", query: "index=payments trace_id=\"8e1c…\"", events: "—", ago: "Yesterday", tone: "failed" },
 ];
 
-function backendSafeExampleQuery(query: string): string {
-  return backendDraftWithoutIndexSelector(query)
-    .replace(/trace_id="[^"]*…[^"]*"/, "trace_id=*");
+const recentHistoryErrorMessage = createErrorMessage("The server did not return usable recent search history.");
+
+function fixtureSearchHref(query: string): string {
+  return searchLaunchHref(query);
 }
 
-export function HomeDashboard({ dataMode }: HomeDashboardProps) {
-  const fixtureSearchHref = (query: string) => searchLaunchHref(query, {
-    label: dataMode === "backend" ? "Example search draft" : undefined,
-    run: dataMode !== "backend",
-  });
+function BackendRecentSearches({
+  apiBaseUrl,
+  preferredAppId,
+}: {
+  apiBaseUrl: string;
+  preferredAppId: string | undefined;
+}) {
+  const client = useMemo(() => createOpenSplunkApiClient({ baseUrl: apiBaseUrl }), [apiBaseUrl]);
+  const [state, setState] = useState<RecentHistoryState>("loading");
+  const [entries, setEntries] = useState<ServerSearchHistoryEntry[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [generation, setGeneration] = useState(0);
+  const [selectedAppId, setSelectedAppId] = useState<string | null>(null);
+  const navigationAppId = selectedAppId ?? preferredAppId;
+  const contextualHref = (href: string) => navigationAppId === undefined
+    ? href
+    : backendAppHref(href, navigationAppId);
 
+  useEffect(() => {
+    const controller = new AbortController();
+    let current = true;
+    setState("loading");
+    setError(null);
+    setSelectedAppId(null);
+    void (async () => {
+      try {
+        const bootstrap = await getSystemBootstrap(client, preferredAppId, { signal: controller.signal });
+        if (!current) return;
+        setSelectedAppId(bootstrap.selectedAppId);
+        const result = await listServerSearchHistory(client, bootstrap, {
+          appId: bootstrap.selectedAppId ?? undefined,
+          maximumPages: 1,
+          pageSize: Math.max(1, Math.min(4, bootstrap.limits.maximumPageSize || 4)),
+          signal: controller.signal,
+        });
+        if (!current) return;
+        if (result.status === "unavailable") {
+          setEntries([]);
+          setState("unavailable");
+          return;
+        }
+        setEntries(result.value.items.slice(0, 4));
+        setState("available");
+      } catch (reason) {
+        if (!current || controller.signal.aborted) return;
+        setEntries([]);
+        setError(recentHistoryErrorMessage(reason));
+        setState("error");
+      }
+    })();
+    return () => {
+      current = false;
+      controller.abort();
+    };
+  }, [client, generation, preferredAppId]);
+
+  let content;
+  if (state === "loading") {
+    content = <BackendResourceState kind="loading" title="Loading recent searches" message="Reading the latest persisted terminal searches from the backend." />;
+  } else if (state === "error") {
+    content = <BackendResourceState kind="error" title="Recent searches unavailable" message={error ?? "The recent search request failed."} action={<button type="button" onClick={() => setGeneration((current) => current + 1)}>Retry</button>} />;
+  } else if (state === "unavailable") {
+    content = <BackendResourceState kind="unavailable" title="Search history is not enabled" message="This server does not advertise the persisted search-history feature." action={<Link href={contextualHref("/search/")}>Open Search</Link>} />;
+  } else if (entries.length === 0) {
+    content = <BackendResourceState kind="empty" title="No persisted search history" message="Completed, failed, or canceled searches for this app will appear here after the backend retains them." action={<Link href={contextualHref("/search/")}>Run a search</Link>} />;
+  } else {
+    content = (
+      <div className="responsive-table-wrap">
+        <table className="product-table recent-searches-table backend-home-history-table">
+          <caption className="sr-only">Recent persisted backend searches</caption>
+          <thead><tr><th scope="col">Search</th><th scope="col">Results</th><th scope="col">Status</th><th scope="col">Last run</th></tr></thead>
+          <tbody>{entries.map((entry) => {
+            const status = homeSearchStatus(entry.finalState);
+            return (
+              <tr key={entry.id}>
+                <td><Link href={contextualHref(historySearchLaunchHref(entry.id))} aria-label={`Rerun search ${entry.id}`}><strong>{entry.search.spl}</strong><code>{entry.id}</code>{entry.failureMessage === null ? null : <small className="table-error-detail">{entry.failureMessage}</small>}</Link></td>
+                <td className="numeric-data">{entry.producedRows.toLocaleString()}</td>
+                <td><span className={`status-label status-label--${status.tone}`}><i />{status.label}</span></td>
+                <td>{formatMediumDateTime(homeSearchFinishedAt(entry), "Not recorded")}</td>
+              </tr>
+            );
+          })}</tbody>
+        </table>
+      </div>
+    );
+  }
+
+  return (
+    <section className="suite-card recent-searches-card recent-searches-card--backend">
+      <header className="suite-card-header"><div><h2>Recent searches</h2><p>Rerun terminal searches retained for the selected backend app.</p></div><Link href={contextualHref("/activity/")}>View all activity</Link></header>
+      {content}
+    </section>
+  );
+}
+
+export function HomeDashboard({ apiBaseUrl = "", dataMode }: HomeDashboardProps) {
+  const preferredAppId = useSyncExternalStore(
+    subscribeToBackendAppId,
+    currentBackendAppId,
+    () => undefined,
+  );
+  const productHref = (href: string) => dataMode === "backend" && preferredAppId !== undefined
+    ? backendAppHref(href, preferredAppId)
+    : href;
   return (
     <div className="suite-page home-page">
       <header className="home-hero">
@@ -36,8 +158,8 @@ export function HomeDashboard({ dataMode }: HomeDashboardProps) {
             : "Explore the deterministic search, administration, and operations preview."}</p>
         </div>
         <div className="home-hero-actions">
-          <Link className="suite-button suite-button--primary" href="/search/">New search</Link>
-          <Link className="suite-button" href="/admin/">{dataMode === "backend" ? "Administration" : "Administration preview"}</Link>
+          <Link className="suite-button suite-button--primary" href={productHref("/search/")}>New search</Link>
+          <Link className="suite-button" href={productHref("/admin/")}>{dataMode === "backend" ? "Administration" : "Administration preview"}</Link>
         </div>
       </header>
 
@@ -45,10 +167,10 @@ export function HomeDashboard({ dataMode }: HomeDashboardProps) {
         <span className="system-notice__icon" aria-hidden="true">{dataMode === "backend" ? "↔" : "✓"}</span>
         <div>
           <strong>{dataMode === "backend" ? "Backend mode selected" : "Demo workspace ready"}</strong>
-          <small>{dataMode === "backend" ? "Administration reports connection health; fixture-only pages remain visibly marked." : "Explore the interface with deterministic sample data."}</small>
+          <small>{dataMode === "backend" ? "Connected surfaces report their own backend availability and errors." : "Explore the interface with deterministic sample data."}</small>
         </div>
         <span className={`mode-pill mode-pill--${dataMode}`}>{dataMode === "backend" ? "Backend mode" : "Demo data"}</span>
-        <Link href="/admin/">{dataMode === "backend" ? "Check connection" : "Open settings"} <span aria-hidden="true">›</span></Link>
+        <Link href={productHref("/admin/")}>{dataMode === "backend" ? "Check connection" : "Open settings"} <span aria-hidden="true">›</span></Link>
       </section>
 
       <section className="home-metrics" aria-label={dataMode === "backend" ? "Backend-supported surfaces" : "Preview deployment summary"}>
@@ -71,19 +193,19 @@ export function HomeDashboard({ dataMode }: HomeDashboardProps) {
 
       <div className="home-content-grid">
         <section className="suite-card home-apps-card">
-          <header className="suite-card-header"><div><h2>Apps</h2><p>Choose a workspace for your next task.</p></div><Link href="/admin/">Administration</Link></header>
+          <header className="suite-card-header"><div><h2>Apps</h2><p>Choose a workspace for your next task.</p></div><Link href={productHref("/admin/")}>Administration</Link></header>
           <div className="app-launcher-grid">
-            <Link className="app-launch-card" href="/search/">
+            <Link className="app-launch-card" href={productHref("/search/")}>
               <span className="app-launch-icon" aria-hidden="true">⌕</span>
               <div><strong>Search &amp; Reporting</strong><p>Explore events, build searches, and create visualizations.</p><small>Recently used</small></div>
               <b aria-hidden="true">›</b>
             </Link>
-            <Link className="app-launch-card" href="/dashboards/">
+            <Link className="app-launch-card" href={productHref("/dashboards/")}>
               <span className="app-launch-icon app-launch-icon--grade" aria-hidden="true">G</span>
-              <div><strong>GradeThis Operations</strong><p>Illustrative service-health and latency layout.</p><small>Static preview</small></div>
+              <div><strong>GradeThis Operations</strong><p>{dataMode === "backend" ? "Open persisted dashboards and execute their panel searches." : "Illustrative service-health and latency layout."}</p><small>{dataMode === "backend" ? "Backend dashboards" : "Static preview"}</small></div>
               <b aria-hidden="true">›</b>
             </Link>
-            <Link className="app-launch-card" href="/datasets/">
+            <Link className="app-launch-card" href={productHref("/datasets/")}>
               <span className="app-launch-icon app-launch-icon--data" aria-hidden="true">▦</span>
               <div><strong>Data Manager</strong><p>{dataMode === "backend" ? "Browse authorized index summaries from system bootstrap." : "Explore the deterministic index catalog preview."}</p><small>{dataMode === "backend" ? "Backend catalog" : "3 preview indexes"}</small></div>
               <b aria-hidden="true">›</b>
@@ -95,10 +217,10 @@ export function HomeDashboard({ dataMode }: HomeDashboardProps) {
           <header className="suite-card-header"><div><h2>{dataMode === "backend" ? "Connected workflow" : "Explore the preview"}</h2><p>{dataMode === "backend" ? "Open backend-supported surfaces." : "Try each deterministic workspace."}</p></div></header>
           {dataMode === "backend" ? (
             <ol className="setup-checklist">
-              <li><span aria-hidden="true">1</span><div><strong>Run an SPL search</strong><small>Query authorized indexes</small></div><Link href="/search/">Open</Link></li>
-              <li><span aria-hidden="true">2</span><div><strong>Browse index summaries</strong><small>Read the bootstrap catalog</small></div><Link href="/datasets/">Open</Link></li>
-              <li><span aria-hidden="true">3</span><div><strong>Review saved definitions</strong><small>When registered by the server</small></div><Link href="/reports/">Open</Link></li>
-              <li><span aria-hidden="true">4</span><div><strong>Inspect search activity</strong><small>Jobs and history remain separate</small></div><Link href="/activity/">Open</Link></li>
+              <li><span aria-hidden="true">1</span><div><strong>Run an SPL search</strong><small>Query authorized indexes</small></div><Link href={productHref("/search/")}>Open</Link></li>
+              <li><span aria-hidden="true">2</span><div><strong>Browse index summaries</strong><small>Read the bootstrap catalog</small></div><Link href={productHref("/datasets/")}>Open</Link></li>
+              <li><span aria-hidden="true">3</span><div><strong>Review saved definitions</strong><small>When registered by the server</small></div><Link href={productHref("/reports/")}>Open</Link></li>
+              <li><span aria-hidden="true">4</span><div><strong>Inspect search activity</strong><small>Jobs and history remain separate</small></div><Link href={productHref("/activity/")}>Open</Link></li>
             </ol>
           ) : (
             <ol className="setup-checklist">
@@ -111,27 +233,22 @@ export function HomeDashboard({ dataMode }: HomeDashboardProps) {
         </aside>
       </div>
 
-      <section className="suite-card recent-searches-card">
-        <header className="suite-card-header"><div><h2>{dataMode === "backend" ? "Example search drafts" : "Preview recent searches"}</h2><p>{dataMode === "backend" ? "These illustrative queries open without submitting a backend job." : "Resume a deterministic sample investigation."}</p></div><Link href={dataMode === "backend" ? "/search/" : "/activity/"}>{dataMode === "backend" ? "Open Search" : "View preview activity"}</Link></header>
-        <div className="responsive-table-wrap">
-          <table className={`product-table recent-searches-table${dataMode === "backend" ? " recent-searches-table--drafts" : ""}`}>
-            <thead><tr><th scope="col">{dataMode === "backend" ? "Example search" : "Search"}</th>{dataMode === "backend" ? null : <><th scope="col">Results</th><th scope="col">Status</th><th scope="col">Last run</th></>}</tr></thead>
-            <tbody>
-              {RECENT_SEARCHES.map((search) => {
-                const exampleQuery = dataMode === "backend"
-                  ? backendSafeExampleQuery(search.query)
-                  : search.query;
-                return (
-                  <tr key={search.title}>
-                    <td><Link href={fixtureSearchHref(exampleQuery)} aria-label={`${dataMode === "backend" ? "Open example draft" : "Open preview search"}: ${search.title}`}><strong>{search.title}</strong><code>{exampleQuery}</code></Link></td>
-                    {dataMode === "backend" ? null : <><td className="numeric-data">{search.events}</td><td><span className={`status-label status-label--${search.tone}`}><i />{search.tone === "complete" ? "Completed" : "Failed"}</span></td><td>{search.ago}</td></>}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </section>
+      {dataMode === "backend" ? <BackendRecentSearches apiBaseUrl={apiBaseUrl} preferredAppId={preferredAppId} /> : (
+        <section className="suite-card recent-searches-card">
+          <header className="suite-card-header"><div><h2>Preview recent searches</h2><p>Resume a deterministic sample investigation.</p></div><Link href="/activity/">View preview activity</Link></header>
+          <div className="responsive-table-wrap">
+            <table className="product-table recent-searches-table">
+              <thead><tr><th scope="col">Search</th><th scope="col">Results</th><th scope="col">Status</th><th scope="col">Last run</th></tr></thead>
+              <tbody>{RECENT_SEARCHES.map((search) => (
+                <tr key={search.title}>
+                  <td><Link href={fixtureSearchHref(search.query)} aria-label={`Open preview search: ${search.title}`}><strong>{search.title}</strong><code>{search.query}</code></Link></td>
+                  <td className="numeric-data">{search.events}</td><td><span className={`status-label status-label--${search.tone}`}><i />{search.tone === "complete" ? "Completed" : "Failed"}</span></td><td>{search.ago}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        </section>
+      )}
     </div>
   );
 }

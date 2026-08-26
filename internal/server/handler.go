@@ -22,6 +22,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/dashboards"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgepreview"
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
@@ -351,6 +352,17 @@ type SavedSearches interface {
 	Delete(context.Context, savedobjects.AccessScope, string, uint64) error
 }
 
+// Dashboards is the bounded, owner-scoped persisted dashboard surface. Panel
+// execution remains in the HTTP service so the stored search definition is
+// resolved and admitted through the same path as every other search job.
+type Dashboards interface {
+	Create(context.Context, dashboards.AccessScope, *opensplunk.DashboardDefinition) (*opensplunk.Dashboard, error)
+	Get(context.Context, dashboards.AccessScope, string) (*opensplunk.Dashboard, error)
+	List(context.Context, dashboards.AccessScope, *string) ([]*opensplunk.Dashboard, error)
+	Update(context.Context, dashboards.AccessScope, string, uint64, *opensplunk.DashboardDefinition) (*opensplunk.Dashboard, error)
+	Delete(context.Context, dashboards.AccessScope, string, uint64) error
+}
+
 // SearchHistory is the immutable, owner-scoped terminal-search metadata
 // surface exposed to the browser API. searchhistory.Store satisfies this
 // interface directly; recording and retention maintenance remain runtime
@@ -512,6 +524,7 @@ type Config struct {
 	// of the lookup routes are registered.
 	LookupManagement           LookupManagement
 	SavedSearches              SavedSearches
+	Dashboards                 Dashboards
 	SearchHistory              SearchHistory
 	Exports                    Exports
 	SearchTimelines            SearchTimelines
@@ -565,6 +578,7 @@ type apiHandler struct {
 	lookupManagement           LookupManagement
 	knowledgeSearchAdmission   bool
 	savedSearches              SavedSearches
+	dashboards                 Dashboards
 	searchHistory              SearchHistory
 	exports                    Exports
 	searchTimelines            SearchTimelines
@@ -798,6 +812,10 @@ func NewHandler(config Config) (*Handler, error) {
 	if isNilDependency(config.SavedSearches) {
 		return nil, errors.New("create server handler: saved search service is required")
 	}
+	dashboardService := config.Dashboards
+	if isNilDependency(dashboardService) {
+		dashboardService = nil
+	}
 	searchHistoryService := config.SearchHistory
 	if isNilDependency(searchHistoryService) {
 		searchHistoryService = nil
@@ -952,6 +970,7 @@ func NewHandler(config Config) (*Handler, error) {
 			fieldService != nil && suggestionService != nil
 	completeLookupFamily := completeKnowledgeFamily &&
 		lookupManagement != nil && lookupAdmission
+	_, knowledgeQuarantineReady := readyKnowledgeQuarantine(knowledgeWriter)
 	bootstrap, err := normalizeBootstrap(config.Bootstrap)
 	if err != nil {
 		return nil, err
@@ -997,6 +1016,8 @@ func NewHandler(config Config) (*Handler, error) {
 		previews:           searchWebSocket != nil,
 		knowledge:          completeKnowledgeFamily,
 		lookups:            completeLookupFamily,
+		dashboards:         dashboardService != nil,
+		quarantine:         completeKnowledgeFamily && knowledgeQuarantineReady,
 	})
 	browserAllowedHosts, err := normalizeBrowserAllowedHosts(config.AdministrativeAllowedHosts)
 	if err != nil {
@@ -1036,6 +1057,7 @@ func NewHandler(config Config) (*Handler, error) {
 		lookupManagement:           lookupManagement,
 		knowledgeSearchAdmission:   knowledgeAdmission,
 		savedSearches:              config.SavedSearches,
+		dashboards:                 dashboardService,
 		searchHistory:              searchHistoryService,
 		exports:                    exportService,
 		searchTimelines:            timelineService,
@@ -1089,6 +1111,18 @@ func NewHandler(config Config) (*Handler, error) {
 			"/api/search/history/list",
 			"/api/search/history/delete",
 			"/api/search/history/clear",
+		} {
+			apiRoutes[path] = http.MethodPost
+		}
+	}
+	if api.dashboards != nil {
+		for _, path := range []string{
+			"/api/dashboards/create",
+			"/api/dashboards/get",
+			"/api/dashboards/list",
+			"/api/dashboards/update",
+			"/api/dashboards/delete",
+			"/api/dashboards/panels/run",
 		} {
 			apiRoutes[path] = http.MethodPost
 		}
@@ -1174,6 +1208,14 @@ func NewHandler(config Config) (*Handler, error) {
 			knowledgeObjectsUpdatePath,
 			knowledgeObjectsSetStatePath,
 			knowledgeObjectsDeletePath,
+		} {
+			apiRoutes[path] = http.MethodPost
+		}
+	}
+	if _, ready := readyKnowledgeQuarantine(api.knowledgeWriter); ready {
+		for _, path := range []string{
+			knowledgeObjectsQuarantinePreparePath,
+			knowledgeObjectsQuarantinePath,
 		} {
 			apiRoutes[path] = http.MethodPost
 		}
@@ -1355,6 +1397,8 @@ type serviceCapabilities struct {
 	previews           bool
 	knowledge          bool
 	lookups            bool
+	dashboards         bool
+	quarantine         bool
 }
 
 func featuresForServices(features []opensplunk.ServerFeature, capabilities serviceCapabilities) []opensplunk.ServerFeature {
@@ -1379,6 +1423,8 @@ func featuresForServices(features []opensplunk.ServerFeature, capabilities servi
 		{opensplunk.ServerFeature_SERVER_FEATURE_SEARCH_PREVIEW, capabilities.previews},
 		{opensplunk.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS, capabilities.knowledge},
 		{opensplunk.ServerFeature_SERVER_FEATURE_LOOKUP_MANAGEMENT, capabilities.lookups},
+		{opensplunk.ServerFeature_SERVER_FEATURE_DASHBOARDS, capabilities.dashboards},
+		{opensplunk.ServerFeature_SERVER_FEATURE_KNOWLEDGE_QUARANTINE, capabilities.quarantine},
 	}
 	enabled := make(map[opensplunk.ServerFeature]bool, len(managed))
 	for _, item := range managed {
@@ -1479,6 +1525,9 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 			Codec: codec.NewProtoCodec[*opensplunk.DeleteSavedSearchRequest, *opensplunk.DeleteSavedSearchResponse](), Handler: handler.deleteSavedSearch,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
+	}
+	if handler.dashboards != nil {
+		routes = append(routes, handler.dashboardRoutes(noAuth, smallRequestBytes)...)
 	}
 	if handler.indexAdmin != nil {
 		routes = append(routes, handler.indexAdministrationRoutes(noAuth, smallRequestBytes)...)

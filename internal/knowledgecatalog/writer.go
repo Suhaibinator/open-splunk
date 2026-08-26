@@ -66,6 +66,11 @@ type WriterOptions struct {
 	Clock                func() time.Time
 	IDGenerator          func() (string, error)
 	IdempotencyRetention time.Duration
+	// RecoveryTokenKey signs short-lived quarantine plans. It is optional for
+	// read/write management callers that do not expose recovery routes, but a
+	// production quarantine surface requires between 32 and 1024 bytes of
+	// stable, persisted key material.
+	RecoveryTokenKey []byte
 }
 
 // Writer publishes immutable catalog versions. It is separate from Store so
@@ -78,6 +83,7 @@ type Writer struct {
 	clock                func() time.Time
 	idGenerator          func() (string, error)
 	idempotencyRetention time.Duration
+	recoveryTokenKey     []byte
 	hook                 writerHook
 	commit               writerCommit
 }
@@ -97,6 +103,15 @@ func (writer *Writer) ReadyForManagement() bool {
 		writer.idempotencyRetention >= minimumIdempotencyRetention &&
 		writer.idempotencyRetention <= maximumIdempotencyRetention &&
 		writer.idempotencyRetention%time.Microsecond == 0
+}
+
+// ReadyForQuarantine reports whether Writer has the stable signing authority
+// required to mint restart-safe, short-lived recovery tokens. Ordinary
+// management readiness deliberately remains independent so tests and
+// read/write-only embeddings cannot accidentally expose recovery routes.
+func (writer *Writer) ReadyForQuarantine() bool {
+	return writer.ReadyForManagement() &&
+		len(writer.recoveryTokenKey) >= 32 && len(writer.recoveryTokenKey) <= 1<<10
 }
 
 // NewWriter constructs a mutation writer without changing schema. Successful
@@ -143,6 +158,13 @@ func NewWriter(
 	// persisted replay fence is never shorter than a caller's configured retry
 	// window; the validated maximum is itself microsecond-aligned.
 	retention = ((retention + time.Microsecond - 1) / time.Microsecond) * time.Microsecond
+	if len(options.RecoveryTokenKey) != 0 &&
+		(len(options.RecoveryTokenKey) < 32 || len(options.RecoveryTokenKey) > 1<<10) {
+		return nil, fmt.Errorf(
+			"%w: knowledge recovery token key must contain between 32 and 1024 bytes",
+			control.ErrInvalidArgument,
+		)
+	}
 	validationGate, err := database.SharedAdmissionGate(
 		"knowledge-catalog-validation",
 		MaximumConcurrentValidations,
@@ -158,6 +180,7 @@ func NewWriter(
 		clock:                clock,
 		idGenerator:          idGenerator,
 		idempotencyRetention: retention,
+		recoveryTokenKey:     slices.Clone(options.RecoveryTokenKey),
 	}, nil
 }
 

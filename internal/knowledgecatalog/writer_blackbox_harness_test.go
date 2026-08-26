@@ -31,6 +31,7 @@ const (
 )
 
 var writerTestCursorKey = []byte("knowledge-writer-blackbox-cursor-key-at-least-32-bytes")
+var writerTestRecoveryTokenKey = []byte("knowledge-writer-blackbox-recovery-token-key-at-least-32-bytes")
 
 type writerBlackboxHarness struct {
 	database    *control.DB
@@ -135,6 +136,7 @@ func newWriterBlackboxHarness(t *testing.T) *writerBlackboxHarness {
 			return fmt.Sprintf("ko_%022d", call), nil
 		},
 		IdempotencyRetention: 8 * 24 * time.Hour,
+		RecoveryTokenKey:     writerTestRecoveryTokenKey,
 	})
 	if err != nil {
 		t.Fatalf("knowledgecatalog.NewWriter(): %v", err)

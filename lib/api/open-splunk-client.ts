@@ -8,6 +8,7 @@ import {
   appRoutes,
   auditEventRoutes,
   collectorRoutes,
+  dashboardRoutes,
   exportRoutes,
   hecOperationsRoutes,
   historyRoutes,
@@ -94,6 +95,15 @@ export class OpenSplunkApiClient {
     update: this.route(savedSearchRoutes.update),
     duplicate: this.route(savedSearchRoutes.duplicate),
     delete: this.route(savedSearchRoutes.delete),
+  };
+
+  public readonly dashboards = {
+    create: this.route(dashboardRoutes.create),
+    get: this.route(dashboardRoutes.get),
+    list: this.route(dashboardRoutes.list),
+    update: this.route(dashboardRoutes.update),
+    delete: this.route(dashboardRoutes.delete),
+    runPanel: this.route(dashboardRoutes.runPanel),
   };
 
   public readonly history = {

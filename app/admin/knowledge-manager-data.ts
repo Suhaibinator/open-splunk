@@ -21,10 +21,15 @@ import {
   DeleteKnowledgeObjectResponse,
   GetKnowledgeObjectRequest,
   KnowledgeValidationIntent,
+  KnowledgeQuarantineReason,
   KnowledgeObjectSortBy,
   ListKnowledgeObjectDependenciesRequest,
   ListKnowledgeObjectDependentsRequest,
   ListKnowledgeObjectsRequest,
+  PrepareKnowledgeObjectQuarantineRequest,
+  PrepareKnowledgeObjectQuarantineResponse,
+  QuarantineKnowledgeObjectRequest,
+  QuarantineKnowledgeObjectResponse,
   SetKnowledgeObjectStateRequest,
   SetKnowledgeObjectStateResponse,
   UpdateKnowledgeObjectRequest,
@@ -44,6 +49,10 @@ import {
   type ListKnowledgeObjectDependenciesResponse as ListKnowledgeObjectDependenciesResponseMessage,
   type ListKnowledgeObjectDependentsResponse as ListKnowledgeObjectDependentsResponseMessage,
   type ListKnowledgeObjectsResponse as ListKnowledgeObjectsResponseMessage,
+  type PrepareKnowledgeObjectQuarantineRequest as PrepareKnowledgeObjectQuarantineRequestMessage,
+  type PrepareKnowledgeObjectQuarantineResponse as PrepareKnowledgeObjectQuarantineResponseMessage,
+  type QuarantineKnowledgeObjectRequest as QuarantineKnowledgeObjectRequestMessage,
+  type QuarantineKnowledgeObjectResponse as QuarantineKnowledgeObjectResponseMessage,
   type SetKnowledgeObjectStateRequest as SetKnowledgeObjectStateRequestMessage,
   type SetKnowledgeObjectStateResponse as SetKnowledgeObjectStateResponseMessage,
   type UpdateKnowledgeObjectRequest as UpdateKnowledgeObjectRequestMessage,
@@ -87,6 +96,8 @@ const MAXIMUM_DISPLAY_DESCRIPTION_CODE_POINTS = 480;
 const MAXIMUM_SIGNED_REVISION = 9_223_372_036_854_775_807n;
 const MINIMUM_CLIENT_REQUEST_ID_BYTES = 16;
 const MAXIMUM_CLIENT_REQUEST_ID_BYTES = 128;
+const MINIMUM_RECOVERY_TOKEN_BYTES = 64;
+const MAXIMUM_RECOVERY_TOKEN_BYTES = 1 << 10;
 const MAXIMUM_UPDATE_MASK_PATHS = 8;
 const MAXIMUM_VALIDATION_ISSUES = 256;
 const MAXIMUM_VALIDATION_DEPENDENCIES = 1_024;
@@ -192,6 +203,14 @@ export interface KnowledgeMutationClient {
     request: DeleteKnowledgeObjectRequestMessage,
     options?: ProtobufRequestOptions,
   ): Promise<KnowledgeDeleteReceipt>;
+  prepareQuarantine(
+    request: PrepareKnowledgeObjectQuarantineRequestMessage,
+    options?: ProtobufRequestOptions,
+  ): Promise<KnowledgeQuarantinePreparation>;
+  quarantine(
+    request: QuarantineKnowledgeObjectRequestMessage,
+    options: KnowledgeQuarantineMutationOptions,
+  ): Promise<KnowledgeQuarantineReceipt>;
 }
 
 /**
@@ -207,6 +226,10 @@ export interface KnowledgeValidationRequestOptions extends ProtobufRequestOption
 
 export interface KnowledgeCurrentObjectMutationOptions extends ProtobufRequestOptions {
   readonly currentKnowledgeObject: KnowledgeObject;
+}
+
+export interface KnowledgeQuarantineMutationOptions extends ProtobufRequestOptions {
+  readonly preparation: KnowledgeQuarantinePreparation;
 }
 
 /**
@@ -233,6 +256,14 @@ const boundedKnowledgeMutationRoutes = {
   },
   delete: {
     ...knowledgeRoutes.delete,
+    maximumResponseBytes: KNOWLEDGE_MANAGER_MAXIMUM_RESPONSE_BYTES,
+  },
+  prepareQuarantine: {
+    ...knowledgeRoutes.prepareQuarantine,
+    maximumResponseBytes: KNOWLEDGE_MANAGER_MAXIMUM_RESPONSE_BYTES,
+  },
+  quarantine: {
+    ...knowledgeRoutes.quarantine,
     maximumResponseBytes: KNOWLEDGE_MANAGER_MAXIMUM_RESPONSE_BYTES,
   },
 } as const;
@@ -322,6 +353,32 @@ export function createKnowledgeMutationClient(
       );
       return adaptKnowledgeDeleteResponse(response, request);
     },
+    prepareQuarantine: async (submitted, requestOptions) => {
+      const request = knowledgePrepareQuarantineRequest(submitted);
+      const response = await transport.post(
+        boundedKnowledgeMutationRoutes.prepareQuarantine,
+        request,
+        requestOptions,
+      );
+      return adaptKnowledgePrepareQuarantineResponse(response, request);
+    },
+    quarantine: async (submitted, requestOptions) => {
+      const request = knowledgeQuarantineRequest(submitted);
+      const {
+        preparation,
+        ...transportOptions
+      } = requestOptions;
+      const response = await transport.post(
+        boundedKnowledgeMutationRoutes.quarantine,
+        request,
+        transportOptions,
+      );
+      return adaptKnowledgeQuarantineResponse(
+        response,
+        request,
+        preparation,
+      );
+    },
   };
 }
 
@@ -340,6 +397,28 @@ export interface KnowledgeDeleteReceipt {
 
 export interface KnowledgeValidationReceipt {
   result: KnowledgeValidationResult;
+  tenantCatalogRevision: bigint;
+}
+
+export interface KnowledgeQuarantinePreparation {
+  rootKnowledgeObjectId: string;
+  recoveryToken: string;
+  expiresAt: Date;
+  dependentCount: number;
+  tenantCatalogRevision: bigint;
+}
+
+export interface KnowledgeQuarantineTransitionReceipt {
+  cascadeOrdinal: number;
+  knowledgeObjectId: string;
+  previousVersion: bigint;
+  quarantinedVersion: bigint;
+  reason: KnowledgeQuarantineReason;
+}
+
+export interface KnowledgeQuarantineReceipt {
+  rootKnowledgeObjectId: string;
+  transitions: KnowledgeQuarantineTransitionReceipt[];
   tenantCatalogRevision: bigint;
 }
 
@@ -434,6 +513,27 @@ export function knowledgeDeleteRequest(
   return cloneBoundedMutationRequest(DeleteKnowledgeObjectRequest, request);
 }
 
+export function knowledgePrepareQuarantineRequest(
+  request: PrepareKnowledgeObjectQuarantineRequestMessage,
+): PrepareKnowledgeObjectQuarantineRequestMessage {
+  if (!validIdentity(request.knowledgeObjectId, MAXIMUM_OBJECT_ID_BYTES)) {
+    throw new TypeError("Knowledge quarantine preparation is outside the browser contract.");
+  }
+  return cloneBoundedMutationRequest(PrepareKnowledgeObjectQuarantineRequest, request);
+}
+
+export function knowledgeQuarantineRequest(
+  request: QuarantineKnowledgeObjectRequestMessage,
+): QuarantineKnowledgeObjectRequestMessage {
+  if (
+    !validRecoveryToken(request.recoveryToken)
+    || !validClientRequestID(request.clientRequestId)
+  ) {
+    throw new TypeError("Knowledge quarantine request is outside the browser contract.");
+  }
+  return cloneBoundedMutationRequest(QuarantineKnowledgeObjectRequest, request);
+}
+
 export async function createKnowledgeObject(
   client: KnowledgeMutationClient,
   submitted: CreateKnowledgeObjectRequestMessage,
@@ -472,6 +572,22 @@ export async function deleteKnowledgeObject(
   options?: ProtobufRequestOptions,
 ): Promise<KnowledgeDeleteReceipt> {
   return client.delete(submitted, options);
+}
+
+export async function prepareKnowledgeObjectQuarantine(
+  client: KnowledgeMutationClient,
+  submitted: PrepareKnowledgeObjectQuarantineRequestMessage,
+  options?: ProtobufRequestOptions,
+): Promise<KnowledgeQuarantinePreparation> {
+  return client.prepareQuarantine(submitted, options);
+}
+
+export async function quarantineKnowledgeObject(
+  client: KnowledgeMutationClient,
+  submitted: QuarantineKnowledgeObjectRequestMessage,
+  options: KnowledgeQuarantineMutationOptions,
+): Promise<KnowledgeQuarantineReceipt> {
+  return client.quarantine(submitted, options);
 }
 
 export async function adaptKnowledgeCreateResponse(
@@ -625,6 +741,98 @@ export function adaptKnowledgeDeleteResponse(
     deletedVersion: detachedResponse.deletedVersion,
     tenantCatalogRevision: detachedResponse.tenantCatalogRevision,
     tenantCatalogStateToken: Uint8Array.from(detachedResponse.tenantCatalogStateToken),
+  };
+}
+
+export function adaptKnowledgePrepareQuarantineResponse(
+  response: PrepareKnowledgeObjectQuarantineResponseMessage,
+  request: PrepareKnowledgeObjectQuarantineRequestMessage,
+): KnowledgeQuarantinePreparation {
+  const detachedRequest = knowledgePrepareQuarantineRequest(request);
+  const detached = cloneBoundedMutationResponse(
+    PrepareKnowledgeObjectQuarantineResponse,
+    response,
+  );
+  if (
+    detached.rootKnowledgeObjectId !== detachedRequest.knowledgeObjectId
+    || !validRecoveryToken(detached.recoveryToken)
+    || !validDate(detached.expiresAt)
+    || !Number.isSafeInteger(detached.dependentCount)
+    || detached.dependentCount < 0
+    || detached.dependentCount >= Number(KNOWLEDGE_MANAGER_MAXIMUM_OBJECTS)
+    || typeof detached.tenantCatalogRevision !== "bigint"
+    || detached.tenantCatalogRevision < 1n
+    || detached.tenantCatalogRevision > MAXIMUM_SIGNED_REVISION
+  ) {
+    throw new TypeError("Knowledge quarantine preparation is outside the browser contract.");
+  }
+  return {
+    rootKnowledgeObjectId: `${detached.rootKnowledgeObjectId}`,
+    recoveryToken: `${detached.recoveryToken}`,
+    expiresAt: new Date((detached.expiresAt as Date).valueOf()),
+    dependentCount: detached.dependentCount,
+    tenantCatalogRevision: detached.tenantCatalogRevision,
+  };
+}
+
+export async function adaptKnowledgeQuarantineResponse(
+  response: QuarantineKnowledgeObjectResponseMessage,
+  request: QuarantineKnowledgeObjectRequestMessage,
+  preparation: KnowledgeQuarantinePreparation,
+): Promise<KnowledgeQuarantineReceipt> {
+  const detachedRequest = knowledgeQuarantineRequest(request);
+  const prepared = cloneKnowledgeQuarantinePreparation(preparation);
+  if (detachedRequest.recoveryToken !== prepared.recoveryToken) {
+    throw new TypeError("Knowledge quarantine token disagrees with its preparation.");
+  }
+  const detached = cloneBoundedMutationResponse(QuarantineKnowledgeObjectResponse, response);
+  if (
+    detached.rootKnowledgeObjectId !== prepared.rootKnowledgeObjectId
+    || detached.tenantCatalogRevision !== prepared.tenantCatalogRevision + 1n
+    || !Array.isArray(detached.transitions)
+    || detached.transitions.length !== prepared.dependentCount + 1
+  ) {
+    throw new TypeError("Knowledge quarantine response disagrees with its preparation.");
+  }
+  const seen = new Set<string>();
+  const transitions: KnowledgeQuarantineTransitionReceipt[] = [];
+  for (let index = 0; index < detached.transitions.length; index += 1) {
+    const transition = detached.transitions[index];
+    const root = index === detached.transitions.length - 1;
+    if (
+      transition === undefined
+      || transition.cascadeOrdinal !== index
+      || !validIdentity(transition.knowledgeObjectId, MAXIMUM_OBJECT_ID_BYTES)
+      || seen.has(transition.knowledgeObjectId)
+      || !validExpectedVersion(transition.previousVersion)
+      || transition.previousVersion >= MAXIMUM_SIGNED_REVISION
+      || transition.quarantinedVersion !== transition.previousVersion + 1n
+      || (root && (
+        transition.knowledgeObjectId !== prepared.rootKnowledgeObjectId
+        || transition.reason
+          !== KnowledgeQuarantineReason.KNOWLEDGE_QUARANTINE_REASON_ROOT_CORRUPTION
+      ))
+      || (!root && (
+        transition.knowledgeObjectId === prepared.rootKnowledgeObjectId
+        || transition.reason
+          !== KnowledgeQuarantineReason.KNOWLEDGE_QUARANTINE_REASON_DEPENDENCY_RECOVERY
+      ))
+    ) {
+      throw new TypeError("Knowledge quarantine transition authority is malformed.");
+    }
+    seen.add(transition.knowledgeObjectId);
+    transitions.push({
+      cascadeOrdinal: transition.cascadeOrdinal,
+      knowledgeObjectId: `${transition.knowledgeObjectId}`,
+      previousVersion: transition.previousVersion,
+      quarantinedVersion: transition.quarantinedVersion,
+      reason: transition.reason,
+    });
+  }
+  return {
+    rootKnowledgeObjectId: `${detached.rootKnowledgeObjectId}`,
+    transitions,
+    tenantCatalogRevision: detached.tenantCatalogRevision,
   };
 }
 
@@ -2039,6 +2247,49 @@ function validClientRequestID(value: string): boolean {
     if (code < 0x21 || code > 0x7e) return false;
   }
   return true;
+}
+
+function validRecoveryToken(value: string): boolean {
+  if (
+    typeof value !== "string"
+    || value.length < MINIMUM_RECOVERY_TOKEN_BYTES
+    || value.length > MAXIMUM_RECOVERY_TOKEN_BYTES
+  ) return false;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    const alphaNumeric = (code >= 0x30 && code <= 0x39)
+      || (code >= 0x41 && code <= 0x5a)
+      || (code >= 0x61 && code <= 0x7a);
+    if (!alphaNumeric && code !== 0x2d && code !== 0x5f) return false;
+  }
+  return true;
+}
+
+function cloneKnowledgeQuarantinePreparation(
+  preparation: KnowledgeQuarantinePreparation,
+): KnowledgeQuarantinePreparation {
+  if (
+    preparation === null
+    || typeof preparation !== "object"
+    || !validIdentity(preparation.rootKnowledgeObjectId, MAXIMUM_OBJECT_ID_BYTES)
+    || !validRecoveryToken(preparation.recoveryToken)
+    || !validDate(preparation.expiresAt)
+    || !Number.isSafeInteger(preparation.dependentCount)
+    || preparation.dependentCount < 0
+    || preparation.dependentCount >= Number(KNOWLEDGE_MANAGER_MAXIMUM_OBJECTS)
+    || typeof preparation.tenantCatalogRevision !== "bigint"
+    || preparation.tenantCatalogRevision < 1n
+    || preparation.tenantCatalogRevision > MAXIMUM_SIGNED_REVISION
+  ) {
+    throw new TypeError("Knowledge quarantine preparation is outside the browser contract.");
+  }
+  return {
+    rootKnowledgeObjectId: `${preparation.rootKnowledgeObjectId}`,
+    recoveryToken: `${preparation.recoveryToken}`,
+    expiresAt: new Date(preparation.expiresAt.valueOf()),
+    dependentCount: preparation.dependentCount,
+    tenantCatalogRevision: preparation.tenantCatalogRevision,
+  };
 }
 
 function validKnowledgeUpdateMask(paths: string[] | undefined): paths is string[] {

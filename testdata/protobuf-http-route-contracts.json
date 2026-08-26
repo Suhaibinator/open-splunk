@@ -631,6 +631,78 @@
       "requestFutureWire": "CiQvYXBpL2luZ2VzdGlvbi10b2tlbnMvcmV2b2tlOnJlcXVlc3T6fytmdXR1cmU6L2FwaS9pbmdlc3Rpb24tdG9rZW5zL3Jldm9rZTpyZXF1ZXN0",
       "responseKnownWire": "CicKJS9hcGkvaW5nZXN0aW9uLXRva2Vucy9yZXZva2U6cmVzcG9uc2U=",
       "responseFutureWire": "CicKJS9hcGkvaW5nZXN0aW9uLXRva2Vucy9yZXZva2U6cmVzcG9uc2X6fyxmdXR1cmU6L2FwaS9pbmdlc3Rpb24tdG9rZW5zL3Jldm9rZTpyZXNwb25zZQ=="
+    },
+    {
+      "path": "/api/dashboards/create",
+      "requestType": "CreateDashboardRequest",
+      "responseType": "CreateDashboardResponse",
+      "requestKnownWire": "CiAKHi9hcGkvZGFzaGJvYXJkcy9jcmVhdGU6cmVxdWVzdA==",
+      "requestFutureWire": "CiAKHi9hcGkvZGFzaGJvYXJkcy9jcmVhdGU6cmVxdWVzdPp/JWZ1dHVyZTovYXBpL2Rhc2hib2FyZHMvY3JlYXRlOnJlcXVlc3Q=",
+      "responseKnownWire": "CiEKHy9hcGkvZGFzaGJvYXJkcy9jcmVhdGU6cmVzcG9uc2U=",
+      "responseFutureWire": "CiEKHy9hcGkvZGFzaGJvYXJkcy9jcmVhdGU6cmVzcG9uc2X6fyZmdXR1cmU6L2FwaS9kYXNoYm9hcmRzL2NyZWF0ZTpyZXNwb25zZQ=="
+    },
+    {
+      "path": "/api/dashboards/get",
+      "requestType": "GetDashboardRequest",
+      "responseType": "GetDashboardResponse",
+      "requestKnownWire": "ChsvYXBpL2Rhc2hib2FyZHMvZ2V0OnJlcXVlc3Q=",
+      "requestFutureWire": "ChsvYXBpL2Rhc2hib2FyZHMvZ2V0OnJlcXVlc3T6fyJmdXR1cmU6L2FwaS9kYXNoYm9hcmRzL2dldDpyZXF1ZXN0",
+      "responseKnownWire": "Ch4KHC9hcGkvZGFzaGJvYXJkcy9nZXQ6cmVzcG9uc2U=",
+      "responseFutureWire": "Ch4KHC9hcGkvZGFzaGJvYXJkcy9nZXQ6cmVzcG9uc2X6fyNmdXR1cmU6L2FwaS9kYXNoYm9hcmRzL2dldDpyZXNwb25zZQ=="
+    },
+    {
+      "path": "/api/dashboards/list",
+      "requestType": "ListDashboardsRequest",
+      "responseType": "ListDashboardsResponse",
+      "requestKnownWire": "ChwvYXBpL2Rhc2hib2FyZHMvbGlzdDpyZXF1ZXN0",
+      "requestFutureWire": "ChwvYXBpL2Rhc2hib2FyZHMvbGlzdDpyZXF1ZXN0+n8jZnV0dXJlOi9hcGkvZGFzaGJvYXJkcy9saXN0OnJlcXVlc3Q=",
+      "responseKnownWire": "Ch8KHS9hcGkvZGFzaGJvYXJkcy9saXN0OnJlc3BvbnNl",
+      "responseFutureWire": "Ch8KHS9hcGkvZGFzaGJvYXJkcy9saXN0OnJlc3BvbnNl+n8kZnV0dXJlOi9hcGkvZGFzaGJvYXJkcy9saXN0OnJlc3BvbnNl"
+    },
+    {
+      "path": "/api/dashboards/update",
+      "requestType": "UpdateDashboardRequest",
+      "responseType": "UpdateDashboardResponse",
+      "requestKnownWire": "Ch4vYXBpL2Rhc2hib2FyZHMvdXBkYXRlOnJlcXVlc3Q=",
+      "requestFutureWire": "Ch4vYXBpL2Rhc2hib2FyZHMvdXBkYXRlOnJlcXVlc3T6fyVmdXR1cmU6L2FwaS9kYXNoYm9hcmRzL3VwZGF0ZTpyZXF1ZXN0",
+      "responseKnownWire": "CiEKHy9hcGkvZGFzaGJvYXJkcy91cGRhdGU6cmVzcG9uc2U=",
+      "responseFutureWire": "CiEKHy9hcGkvZGFzaGJvYXJkcy91cGRhdGU6cmVzcG9uc2X6fyZmdXR1cmU6L2FwaS9kYXNoYm9hcmRzL3VwZGF0ZTpyZXNwb25zZQ=="
+    },
+    {
+      "path": "/api/dashboards/delete",
+      "requestType": "DeleteDashboardRequest",
+      "responseType": "DeleteDashboardResponse",
+      "requestKnownWire": "Ch4vYXBpL2Rhc2hib2FyZHMvZGVsZXRlOnJlcXVlc3Q=",
+      "requestFutureWire": "Ch4vYXBpL2Rhc2hib2FyZHMvZGVsZXRlOnJlcXVlc3T6fyVmdXR1cmU6L2FwaS9kYXNoYm9hcmRzL2RlbGV0ZTpyZXF1ZXN0",
+      "responseKnownWire": "Ch8vYXBpL2Rhc2hib2FyZHMvZGVsZXRlOnJlc3BvbnNl",
+      "responseFutureWire": "Ch8vYXBpL2Rhc2hib2FyZHMvZGVsZXRlOnJlc3BvbnNl+n8mZnV0dXJlOi9hcGkvZGFzaGJvYXJkcy9kZWxldGU6cmVzcG9uc2U="
+    },
+    {
+      "path": "/api/dashboards/panels/run",
+      "requestType": "RunDashboardPanelRequest",
+      "responseType": "RunDashboardPanelResponse",
+      "requestKnownWire": "CiIvYXBpL2Rhc2hib2FyZHMvcGFuZWxzL3J1bjpyZXF1ZXN0",
+      "requestFutureWire": "CiIvYXBpL2Rhc2hib2FyZHMvcGFuZWxzL3J1bjpyZXF1ZXN0+n8pZnV0dXJlOi9hcGkvZGFzaGJvYXJkcy9wYW5lbHMvcnVuOnJlcXVlc3Q=",
+      "responseKnownWire": "CiUKIy9hcGkvZGFzaGJvYXJkcy9wYW5lbHMvcnVuOnJlc3BvbnNl",
+      "responseFutureWire": "CiUKIy9hcGkvZGFzaGJvYXJkcy9wYW5lbHMvcnVuOnJlc3BvbnNl+n8qZnV0dXJlOi9hcGkvZGFzaGJvYXJkcy9wYW5lbHMvcnVuOnJlc3BvbnNl"
+    },
+    {
+      "path": "/api/knowledge/objects/quarantine/prepare",
+      "requestType": "PrepareKnowledgeObjectQuarantineRequest",
+      "responseType": "PrepareKnowledgeObjectQuarantineResponse",
+      "requestKnownWire": "CjEvYXBpL2tub3dsZWRnZS9vYmplY3RzL3F1YXJhbnRpbmUvcHJlcGFyZTpyZXF1ZXN0",
+      "requestFutureWire": "CjEvYXBpL2tub3dsZWRnZS9vYmplY3RzL3F1YXJhbnRpbmUvcHJlcGFyZTpyZXF1ZXN0+n84ZnV0dXJlOi9hcGkva25vd2xlZGdlL29iamVjdHMvcXVhcmFudGluZS9wcmVwYXJlOnJlcXVlc3Q=",
+      "responseKnownWire": "CjIvYXBpL2tub3dsZWRnZS9vYmplY3RzL3F1YXJhbnRpbmUvcHJlcGFyZTpyZXNwb25zZQ==",
+      "responseFutureWire": "CjIvYXBpL2tub3dsZWRnZS9vYmplY3RzL3F1YXJhbnRpbmUvcHJlcGFyZTpyZXNwb25zZfp/OWZ1dHVyZTovYXBpL2tub3dsZWRnZS9vYmplY3RzL3F1YXJhbnRpbmUvcHJlcGFyZTpyZXNwb25zZQ=="
+    },
+    {
+      "path": "/api/knowledge/objects/quarantine",
+      "requestType": "QuarantineKnowledgeObjectRequest",
+      "responseType": "QuarantineKnowledgeObjectResponse",
+      "requestKnownWire": "CikvYXBpL2tub3dsZWRnZS9vYmplY3RzL3F1YXJhbnRpbmU6cmVxdWVzdA==",
+      "requestFutureWire": "CikvYXBpL2tub3dsZWRnZS9vYmplY3RzL3F1YXJhbnRpbmU6cmVxdWVzdPp/MGZ1dHVyZTovYXBpL2tub3dsZWRnZS9vYmplY3RzL3F1YXJhbnRpbmU6cmVxdWVzdA==",
+      "responseKnownWire": "CiovYXBpL2tub3dsZWRnZS9vYmplY3RzL3F1YXJhbnRpbmU6cmVzcG9uc2U=",
+      "responseFutureWire": "CiovYXBpL2tub3dsZWRnZS9vYmplY3RzL3F1YXJhbnRpbmU6cmVzcG9uc2X6fzFmdXR1cmU6L2FwaS9rbm93bGVkZ2Uvb2JqZWN0cy9xdWFyYW50aW5lOnJlc3BvbnNl"
     }
   ]
 }

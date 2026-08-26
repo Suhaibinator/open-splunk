@@ -33,16 +33,17 @@ const (
 )
 
 type preparedMutation struct {
-	scope           normalizedWriteScope
-	actor           audit.Actor
-	clientRequestID string
-	requestDigest   [sha256.Size]byte
-	requestBytes    []byte
-	updatePaths     []string
-	createRequest   *opensplunk.CreateKnowledgeObjectRequest
-	updateRequest   *opensplunk.UpdateKnowledgeObjectRequest
-	setStateRequest *opensplunk.SetKnowledgeObjectStateRequest
-	deleteRequest   *opensplunk.DeleteKnowledgeObjectRequest
+	scope             normalizedWriteScope
+	actor             audit.Actor
+	clientRequestID   string
+	requestDigest     [sha256.Size]byte
+	requestBytes      []byte
+	updatePaths       []string
+	createRequest     *opensplunk.CreateKnowledgeObjectRequest
+	updateRequest     *opensplunk.UpdateKnowledgeObjectRequest
+	setStateRequest   *opensplunk.SetKnowledgeObjectStateRequest
+	deleteRequest     *opensplunk.DeleteKnowledgeObjectRequest
+	quarantineRequest *opensplunk.QuarantineKnowledgeObjectRequest
 }
 
 type validatedMutationRequest struct {
@@ -257,6 +258,59 @@ func prepareDeleteMutation(
 	)
 }
 
+// ValidateQuarantineKnowledgeObjectRequest validates the complete detached
+// execute envelope before token parsing or receipt lookup. Recovery tokens are
+// deliberately opaque here; signature, expiry, actor, tenant, revision, and
+// catalog bindings are verified by Writer inside the transaction.
+func ValidateQuarantineKnowledgeObjectRequest(
+	request *opensplunk.QuarantineKnowledgeObjectRequest,
+) error {
+	return validateQuarantineKnowledgeObjectRequestShape(request)
+}
+
+func validateQuarantineKnowledgeObjectRequestShape(
+	request *opensplunk.QuarantineKnowledgeObjectRequest,
+) error {
+	if request == nil || !validOpaqueRecoveryToken(request.GetRecoveryToken()) {
+		return invalidMutation("quarantine recovery token is invalid")
+	}
+	return validateMutationRequestShape(request.GetClientRequestId(), request)
+}
+
+func prepareQuarantineMutation(
+	ctxScope normalizedWriteScope,
+	actor audit.Actor,
+	request *opensplunk.QuarantineKnowledgeObjectRequest,
+) (preparedMutation, error) {
+	if err := validateQuarantineKnowledgeObjectRequestShape(request); err != nil {
+		return preparedMutation{}, err
+	}
+	return prepareTypedMutation(
+		ctxScope,
+		actor,
+		mutationRouteQuarantine,
+		request,
+		func(cloned *opensplunk.QuarantineKnowledgeObjectRequest) { cloned.ClientRequestId = "" },
+		nil,
+	)
+}
+
+func validOpaqueRecoveryToken(value string) bool {
+	if len(value) < 64 || len(value) > 1<<10 {
+		return false
+	}
+	for index := range len(value) {
+		character := value[index]
+		if !(character >= 'A' && character <= 'Z') &&
+			!(character >= 'a' && character <= 'z') &&
+			!(character >= '0' && character <= '9') &&
+			character != '-' && character != '_' {
+			return false
+		}
+	}
+	return true
+}
+
 func validateMutationRequestShape(
 	clientRequestID string,
 	request proto.Message,
@@ -341,6 +395,12 @@ func prepareMutationRequest(
 		prepared.deleteRequest, ok = validated.request.(*opensplunk.DeleteKnowledgeObjectRequest)
 		if !ok {
 			return preparedMutation{}, invalidMutation("delete request type is invalid")
+		}
+	case mutationRouteQuarantine:
+		var ok bool
+		prepared.quarantineRequest, ok = validated.request.(*opensplunk.QuarantineKnowledgeObjectRequest)
+		if !ok {
+			return preparedMutation{}, invalidMutation("quarantine request type is invalid")
 		}
 	default:
 		return preparedMutation{}, invalidMutation("mutation route is invalid")

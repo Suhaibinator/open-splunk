@@ -22,27 +22,31 @@ import (
 )
 
 const (
-	knowledgeObjectsCreateRoute       = "/knowledge/objects/create"
-	knowledgeObjectsGetRoute          = "/knowledge/objects/get"
-	knowledgeObjectsListRoute         = "/knowledge/objects/list"
-	knowledgeObjectsDependenciesRoute = "/knowledge/objects/dependencies"
-	knowledgeObjectsDependentsRoute   = "/knowledge/objects/dependents"
-	knowledgeObjectsValidateRoute     = "/knowledge/objects/validate"
-	knowledgeObjectsPreviewRoute      = "/knowledge/objects/preview"
-	knowledgeObjectsUpdateRoute       = "/knowledge/objects/update"
-	knowledgeObjectsSetStateRoute     = "/knowledge/objects/set-state"
-	knowledgeObjectsDeleteRoute       = "/knowledge/objects/delete"
+	knowledgeObjectsCreateRoute            = "/knowledge/objects/create"
+	knowledgeObjectsGetRoute               = "/knowledge/objects/get"
+	knowledgeObjectsListRoute              = "/knowledge/objects/list"
+	knowledgeObjectsDependenciesRoute      = "/knowledge/objects/dependencies"
+	knowledgeObjectsDependentsRoute        = "/knowledge/objects/dependents"
+	knowledgeObjectsValidateRoute          = "/knowledge/objects/validate"
+	knowledgeObjectsPreviewRoute           = "/knowledge/objects/preview"
+	knowledgeObjectsUpdateRoute            = "/knowledge/objects/update"
+	knowledgeObjectsSetStateRoute          = "/knowledge/objects/set-state"
+	knowledgeObjectsDeleteRoute            = "/knowledge/objects/delete"
+	knowledgeObjectsQuarantinePrepareRoute = "/knowledge/objects/quarantine/prepare"
+	knowledgeObjectsQuarantineRoute        = "/knowledge/objects/quarantine"
 
-	knowledgeObjectsCreatePath       = apiPathPrefix + knowledgeObjectsCreateRoute
-	knowledgeObjectsGetPath          = apiPathPrefix + knowledgeObjectsGetRoute
-	knowledgeObjectsListPath         = apiPathPrefix + knowledgeObjectsListRoute
-	knowledgeObjectsDependenciesPath = apiPathPrefix + knowledgeObjectsDependenciesRoute
-	knowledgeObjectsDependentsPath   = apiPathPrefix + knowledgeObjectsDependentsRoute
-	knowledgeObjectsValidatePath     = apiPathPrefix + knowledgeObjectsValidateRoute
-	knowledgeObjectsPreviewPath      = apiPathPrefix + knowledgeObjectsPreviewRoute
-	knowledgeObjectsUpdatePath       = apiPathPrefix + knowledgeObjectsUpdateRoute
-	knowledgeObjectsSetStatePath     = apiPathPrefix + knowledgeObjectsSetStateRoute
-	knowledgeObjectsDeletePath       = apiPathPrefix + knowledgeObjectsDeleteRoute
+	knowledgeObjectsCreatePath            = apiPathPrefix + knowledgeObjectsCreateRoute
+	knowledgeObjectsGetPath               = apiPathPrefix + knowledgeObjectsGetRoute
+	knowledgeObjectsListPath              = apiPathPrefix + knowledgeObjectsListRoute
+	knowledgeObjectsDependenciesPath      = apiPathPrefix + knowledgeObjectsDependenciesRoute
+	knowledgeObjectsDependentsPath        = apiPathPrefix + knowledgeObjectsDependentsRoute
+	knowledgeObjectsValidatePath          = apiPathPrefix + knowledgeObjectsValidateRoute
+	knowledgeObjectsPreviewPath           = apiPathPrefix + knowledgeObjectsPreviewRoute
+	knowledgeObjectsUpdatePath            = apiPathPrefix + knowledgeObjectsUpdateRoute
+	knowledgeObjectsSetStatePath          = apiPathPrefix + knowledgeObjectsSetStateRoute
+	knowledgeObjectsDeletePath            = apiPathPrefix + knowledgeObjectsDeleteRoute
+	knowledgeObjectsQuarantinePreparePath = apiPathPrefix + knowledgeObjectsQuarantinePrepareRoute
+	knowledgeObjectsQuarantinePath        = apiPathPrefix + knowledgeObjectsQuarantineRoute
 
 	maximumKnowledgeApps                 = control.MaximumAppsPerTenant
 	maximumKnowledgeSmallRequestBytes    = int64(16 << 10)
@@ -115,6 +119,29 @@ type KnowledgeWriter interface {
 }
 
 var _ KnowledgeWriter = (*knowledgecatalog.Writer)(nil)
+
+// KnowledgeQuarantine is the separately keyed protective-recovery surface.
+// Production's concrete Writer satisfies it only when its stable token key is
+// configured; ordinary management writers do not cause these routes to exist.
+type KnowledgeQuarantine interface {
+	PrepareQuarantine(
+		context.Context,
+		knowledgecatalog.WriteScope,
+		*opensplunk.PrepareKnowledgeObjectQuarantineRequest,
+	) (*opensplunk.PrepareKnowledgeObjectQuarantineResponse, error)
+	Quarantine(
+		context.Context,
+		knowledgecatalog.WriteScope,
+		*opensplunk.QuarantineKnowledgeObjectRequest,
+	) (*opensplunk.QuarantineKnowledgeObjectResponse, error)
+}
+
+var _ KnowledgeQuarantine = (*knowledgecatalog.Writer)(nil)
+
+func readyKnowledgeQuarantine(writer KnowledgeWriter) (KnowledgeQuarantine, bool) {
+	concrete, ok := writer.(*knowledgecatalog.Writer)
+	return concrete, ok && concrete.ReadyForQuarantine()
+}
 
 func (handler *apiHandler) knowledgeManagementConfigured() bool {
 	return handler != nil &&
@@ -207,6 +234,23 @@ func (handler *apiHandler) knowledgeManagementRoutes(
 				Codec: newPreviewKnowledgeObjectRequestCodec(), Handler: handler.previewKnowledgeObject,
 				SourceType: router.Body,
 				Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeMutationRequestBytes},
+			}),
+		)
+	}
+	if _, ready := readyKnowledgeQuarantine(handler.knowledgeWriter); ready {
+		routes = append(
+			routes,
+			newForwardCompatibleProtoRoute[*opensplunk.PrepareKnowledgeObjectQuarantineRequest, *serializedPrepareKnowledgeObjectQuarantineResponse](router.RouteConfig[*opensplunk.PrepareKnowledgeObjectQuarantineRequest, *serializedPrepareKnowledgeObjectQuarantineResponse]{
+				Path: knowledgeObjectsQuarantinePrepareRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
+				Codec: newSerializedPrepareKnowledgeObjectQuarantineCodec(), Handler: handler.prepareKnowledgeObjectQuarantine,
+				SourceType: router.Body,
+				Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
+			}),
+			newForwardCompatibleProtoRoute[*opensplunk.QuarantineKnowledgeObjectRequest, *serializedQuarantineKnowledgeObjectResponse](router.RouteConfig[*opensplunk.QuarantineKnowledgeObjectRequest, *serializedQuarantineKnowledgeObjectResponse]{
+				Path: knowledgeObjectsQuarantineRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
+				Codec: newSerializedQuarantineKnowledgeObjectCodec(), Handler: handler.quarantineKnowledgeObject,
+				SourceType: router.Body,
+				Overrides:  sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
 			}),
 		)
 	}

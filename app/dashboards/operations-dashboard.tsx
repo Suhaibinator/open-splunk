@@ -10,9 +10,9 @@ import {
 import { useRovingChartFocus } from "@/app/_components/use-roving-chart-focus";
 import { TimeSeriesLineChart } from "@/app/search-workspace/charts/time-series-line-chart";
 import type { TimelinePoint } from "@/lib/demo/search-data";
-import { backendDraftWithoutIndexSelector } from "@/lib/search/example-drafts";
 import { searchLaunchHref } from "@/lib/search/launch-url";
 
+import { BackendDashboardManager } from "./backend-dashboard-manager";
 import styles from "./operations-dashboard.module.css";
 
 const LATENCY_VALUES = [
@@ -181,10 +181,18 @@ function VolumeBarChart({ points }: VolumeBarChartProps) {
 }
 
 interface OperationsDashboardProps {
+  apiBaseUrl: string;
   dataMode: "backend" | "demo";
 }
 
-export function OperationsDashboard({ dataMode }: OperationsDashboardProps) {
+export function OperationsDashboard({ apiBaseUrl, dataMode }: OperationsDashboardProps) {
+  if (dataMode === "backend") {
+    return <BackendDashboardManager apiBaseUrl={apiBaseUrl} />;
+  }
+  return <DemoOperationsDashboard />;
+}
+
+function DemoOperationsDashboard() {
   const [rangeValue, setRangeValue] = useState<RangeValue>("24h");
   const range = RANGE_OPTIONS.find((option) => option.value === rangeValue) ?? RANGE_OPTIONS[0];
   const latency = useMemo(() => timelinePoints(range), [range]);
@@ -197,15 +205,10 @@ export function OperationsDashboard({ dataMode }: OperationsDashboardProps) {
   const searchOptions = {
     earliest: range.earliest,
     latest: "now",
-    label: dataMode === "backend" ? `${range.label} example draft` : range.label,
-    run: dataMode !== "backend",
+    label: range.label,
+    run: true,
   };
-  const fixtureSearchHref = (spl: string) => searchLaunchHref(
-    dataMode === "backend"
-      ? backendDraftWithoutIndexSelector(spl)
-      : spl,
-    searchOptions,
-  );
+  const fixtureSearchHref = (spl: string) => searchLaunchHref(spl, searchOptions);
 
   return (
     <div className="suite-page dashboard-page">
@@ -238,7 +241,7 @@ export function OperationsDashboard({ dataMode }: OperationsDashboardProps) {
         <section className="suite-card dashboard-panel dashboard-panel--wide">
           <header className="suite-card-header">
             <div><h2>API latency</h2><p>p95 response duration over time</p></div>
-            <Link href={fixtureSearchHref("index=gradethis duration_ms=* | stats p95(duration_ms) AS p95_ms BY path | sort -p95_ms")}>{dataMode === "backend" ? "Open example draft" : "Open in Search"}</Link>
+            <Link href={fixtureSearchHref("index=gradethis duration_ms=* | stats p95(duration_ms) AS p95_ms BY path | sort -p95_ms")}>Open in Search</Link>
           </header>
           <div className={styles.lineChart}>
             <span className={styles.chartUnit}>milliseconds</span>
@@ -250,7 +253,7 @@ export function OperationsDashboard({ dataMode }: OperationsDashboardProps) {
         <section className="suite-card dashboard-panel">
           <header className="suite-card-header">
             <div><h2>Event volume</h2><p>{range.bucketDescription}</p></div>
-            <Link href={fixtureSearchHref(`index=gradethis | timechart span=${range.searchSpan} count BY level`)}>{dataMode === "backend" ? "Inspect draft" : "Inspect"}</Link>
+            <Link href={fixtureSearchHref(`index=gradethis | timechart span=${range.searchSpan} count BY level`)}>Inspect</Link>
           </header>
           <VolumeBarChart points={volume} />
         </section>
@@ -258,7 +261,7 @@ export function OperationsDashboard({ dataMode }: OperationsDashboardProps) {
         <section className="suite-card dashboard-panel">
           <header className="suite-card-header">
             <div><h2>Errors by service</h2><p>Share of {NUMBER_FORMAT.format(errorEvents)} errors</p></div>
-            <Link href={fixtureSearchHref("index=gradethis level=ERROR | stats count by service")}>{dataMode === "backend" ? "Open example draft" : "View events"}</Link>
+            <Link href={fixtureSearchHref("index=gradethis level=ERROR | stats count by service")}>View events</Link>
           </header>
           <div className="service-breakdown">
             <figure className={`donut-chart ${styles.donutFigure}`}><figcaption className="sr-only">Errors by service: gradethis-api 48.2%, notification-worker 27.4%, realtime-hub 16.1%, other 8.3%</figcaption><span><strong>{NUMBER_FORMAT.format(errorEvents)}</strong><small>errors</small></span></figure>
@@ -288,7 +291,7 @@ export function OperationsDashboard({ dataMode }: OperationsDashboardProps) {
         <section className="suite-card dashboard-panel">
           <header className="suite-card-header">
             <div><h2>Recent notable events</h2><p>Errors and elevated warnings</p></div>
-            <Link href={fixtureSearchHref("index=gradethis (level=ERROR OR level=WARN) | sort -_time")}>{dataMode === "backend" ? "Open example draft" : "All events"}</Link>
+            <Link href={fixtureSearchHref("index=gradethis (level=ERROR OR level=WARN) | sort -_time")}>All events</Link>
           </header>
           <ol className={`notable-events ${styles.notableList}`}>
             {NOTABLE_EVENTS.map((event) => (

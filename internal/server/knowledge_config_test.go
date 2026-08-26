@@ -47,6 +47,13 @@ func (readyKnowledgeWriterAuditAppender) AppendInTransaction(
 }
 
 func newReadyKnowledgeWriter(t *testing.T) *knowledgecatalog.Writer {
+	return newReadyKnowledgeWriterWithOptions(t, knowledgecatalog.WriterOptions{})
+}
+
+func newReadyKnowledgeWriterWithOptions(
+	t *testing.T,
+	options knowledgecatalog.WriterOptions,
+) *knowledgecatalog.Writer {
 	t.Helper()
 	database, err := control.Open(
 		t.Context(),
@@ -63,7 +70,7 @@ func newReadyKnowledgeWriter(t *testing.T) *knowledgecatalog.Writer {
 	writer, err := knowledgecatalog.NewWriter(
 		database,
 		readyKnowledgeWriterAuditAppender{},
-		knowledgecatalog.WriterOptions{},
+		options,
 	)
 	if err != nil {
 		t.Fatalf("knowledgecatalog.NewWriter(): %v", err)
@@ -507,6 +514,28 @@ func TestKnowledgeFeatureRequiresCompleteRuntimeFamily(t *testing.T) {
 	) {
 		t.Fatalf("complete knowledge and lookup runtime family was not advertised: %v", completeFeatures)
 	}
+	if slices.Contains(
+		completeFeatures,
+		opensplunk.ServerFeature_SERVER_FEATURE_KNOWLEDGE_QUARANTINE,
+	) {
+		t.Fatalf("unkeyed knowledge writer advertised quarantine: %v", completeFeatures)
+	}
+	quarantineConfig := complete(t)
+	quarantineWriter := newReadyKnowledgeWriterWithOptions(
+		t,
+		knowledgecatalog.WriterOptions{
+			RecoveryTokenKey: []byte("knowledge-quarantine-capability-test-key"),
+		},
+	)
+	quarantineConfig.KnowledgeWriter = quarantineWriter
+	quarantineConfig.KnowledgePreview = newReadyKnowledgePreview(t, quarantineWriter)
+	quarantineFeatures := advertised(t, quarantineConfig)
+	if !slices.Contains(
+		quarantineFeatures,
+		opensplunk.ServerFeature_SERVER_FEATURE_KNOWLEDGE_QUARANTINE,
+	) {
+		t.Fatalf("ready quarantine family was not advertised: %v", quarantineFeatures)
+	}
 	for _, test := range []struct {
 		name   string
 		mutate func(*Config)
@@ -552,8 +581,11 @@ func TestKnowledgeFeatureRequiresCompleteRuntimeFamily(t *testing.T) {
 			) || slices.Contains(
 				decoded.GetFeatures(),
 				opensplunk.ServerFeature_SERVER_FEATURE_LOOKUP_MANAGEMENT,
+			) || slices.Contains(
+				decoded.GetFeatures(),
+				opensplunk.ServerFeature_SERVER_FEATURE_KNOWLEDGE_QUARANTINE,
 			) {
-				t.Fatalf("partial Tier-1 family advertised knowledge or lookups: %v", decoded.GetFeatures())
+				t.Fatalf("partial Tier-1 family advertised knowledge, lookups, or quarantine: %v", decoded.GetFeatures())
 			}
 		})
 	}

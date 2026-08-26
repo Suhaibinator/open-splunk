@@ -50,6 +50,17 @@ export enum ServerFeature {
    * browser management. Field knowledge capability 15 is also required.
    */
   SERVER_FEATURE_LOOKUP_MANAGEMENT = 17,
+  /**
+   * SERVER_FEATURE_DASHBOARDS - Persisted dashboard CRUD and server-authoritative panel execution are
+   * available as one complete family.
+   */
+  SERVER_FEATURE_DASHBOARDS = 18,
+  /**
+   * SERVER_FEATURE_KNOWLEDGE_QUARANTINE - Definition-free Knowledge quarantine preparation and execution are
+   * registered, recovery-keyed, and available to the browser administrator.
+   * Field knowledge capability 15 is also required.
+   */
+  SERVER_FEATURE_KNOWLEDGE_QUARANTINE = 19,
   UNRECOGNIZED = -1,
 }
 
@@ -109,6 +120,12 @@ export function serverFeatureFromJSON(object: any): ServerFeature {
     case 17:
     case "SERVER_FEATURE_LOOKUP_MANAGEMENT":
       return ServerFeature.SERVER_FEATURE_LOOKUP_MANAGEMENT;
+    case 18:
+    case "SERVER_FEATURE_DASHBOARDS":
+      return ServerFeature.SERVER_FEATURE_DASHBOARDS;
+    case 19:
+    case "SERVER_FEATURE_KNOWLEDGE_QUARANTINE":
+      return ServerFeature.SERVER_FEATURE_KNOWLEDGE_QUARANTINE;
     case -1:
     case "UNRECOGNIZED":
     default:
@@ -154,6 +171,10 @@ export function serverFeatureToJSON(object: ServerFeature): string {
       return "SERVER_FEATURE_HEC_INGESTION";
     case ServerFeature.SERVER_FEATURE_LOOKUP_MANAGEMENT:
       return "SERVER_FEATURE_LOOKUP_MANAGEMENT";
+    case ServerFeature.SERVER_FEATURE_DASHBOARDS:
+      return "SERVER_FEATURE_DASHBOARDS";
+    case ServerFeature.SERVER_FEATURE_KNOWLEDGE_QUARANTINE:
+      return "SERVER_FEATURE_KNOWLEDGE_QUARANTINE";
     case ServerFeature.UNRECOGNIZED:
     default:
       return "UNRECOGNIZED";

@@ -49,6 +49,14 @@ func TestDeriveKnowledgeCatalogCursorKeyIsStableAndPurposeSeparated(
 	if err != nil {
 		t.Fatal(err)
 	}
+	quarantineFirst, err := deriveKnowledgeQuarantineTokenKey(master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quarantineSecond, err := deriveKnowledgeQuarantineTokenKey(master)
+	if err != nil {
+		t.Fatal(err)
+	}
 	appCatalogKey, appAdministrationKey, err := deriveAppCursorKeys(master)
 	if err != nil {
 		t.Fatal(err)
@@ -63,8 +71,12 @@ func TestDeriveKnowledgeCatalogCursorKeyIsStableAndPurposeSeparated(
 		searchAttemptAuditCursorKeyPurpose,
 	}
 	if len(first) != 32 || !bytes.Equal(first, second) ||
+		len(quarantineFirst) != 32 || !bytes.Equal(quarantineFirst, quarantineSecond) ||
+		bytes.Equal(first, quarantineFirst) ||
 		bytes.Equal(first, appCatalogKey) ||
-		bytes.Equal(first, appAdministrationKey) {
+		bytes.Equal(first, appAdministrationKey) ||
+		bytes.Equal(quarantineFirst, appCatalogKey) ||
+		bytes.Equal(quarantineFirst, appAdministrationKey) {
 		t.Fatal("knowledge cursor key is not stable and app-purpose-separated")
 	}
 	for _, purpose := range otherPurposes {
@@ -75,9 +87,15 @@ func TestDeriveKnowledgeCatalogCursorKeyIsStableAndPurposeSeparated(
 		if bytes.Equal(first, key) {
 			t.Fatalf("knowledge cursor key collides with purpose %q", purpose)
 		}
+		if bytes.Equal(quarantineFirst, key) {
+			t.Fatalf("knowledge quarantine token key collides with purpose %q", purpose)
+		}
 	}
 	if _, err := deriveKnowledgeCatalogCursorKey(master[:len(master)-1]); err == nil {
 		t.Fatal("knowledge cursor key accepted an invalid master key")
+	}
+	if _, err := deriveKnowledgeQuarantineTokenKey(master[:len(master)-1]); err == nil {
+		t.Fatal("knowledge quarantine token key accepted an invalid master key")
 	}
 }
 

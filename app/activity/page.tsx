@@ -10,7 +10,7 @@ export const metadata: Metadata = { title: "Activity" };
 export default function ActivityPage() {
   const { apiBaseUrl, dataMode } = getFrontendRuntimeConfig();
   return (
-    <ProductShell activeSection="activity" appName="Activity" dataMode={dataMode}>
+    <ProductShell activeSection="activity" apiBaseUrl={apiBaseUrl} appName="Activity" dataMode={dataMode}>
       <ActivityConsole dataMode={dataMode} apiBaseUrl={apiBaseUrl} />
     </ProductShell>
   );

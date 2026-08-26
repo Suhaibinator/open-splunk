@@ -228,6 +228,217 @@
   text-decoration: underline;
 }
 
+.stateMessage {
+  color: #66747b;
+  margin: 0;
+  padding: 22px;
+}
+
+.createForm {
+  align-items: end;
+  display: flex;
+  gap: 8px;
+}
+
+.createForm label,
+.settingsGrid label,
+.panelFields label {
+  display: grid;
+  gap: 4px;
+}
+
+.createForm label > span,
+.settingsGrid label > span,
+.panelFields label > span {
+  color: #65737a;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.createForm input,
+.createForm select,
+.settingsGrid input,
+.panelFields input,
+.panelFields textarea {
+  background: #fff;
+  border: 1px solid #aeb8bd;
+  border-radius: 2px;
+  color: #263940;
+  font: 12px/1.4 system-ui, sans-serif;
+  min-height: 32px;
+  padding: 6px 8px;
+}
+
+.panelFields textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  resize: vertical;
+}
+
+.createForm button,
+.editorActions button,
+.panelToolbar button,
+.errorBanner button {
+  background: #2d789d;
+  border: 1px solid #226687;
+  border-radius: 2px;
+  color: #fff;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+  min-height: 32px;
+  padding: 5px 12px;
+}
+
+.createForm button:disabled,
+.editorActions button:disabled,
+.panelToolbar button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.managerLayout {
+  align-items: start;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
+}
+
+.dashboardList {
+  overflow: hidden;
+  position: sticky;
+  top: 12px;
+}
+
+.dashboardList h2 {
+  border-bottom: 1px solid #dce2e5;
+  font-size: 13px;
+  margin: 0;
+  padding: 12px;
+}
+
+.dashboardList p {
+  color: #718087;
+  font-size: 11px;
+  padding: 0 12px 12px;
+}
+
+.dashboardList ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.dashboardList li + li {
+  border-top: 1px solid #e3e7e9;
+}
+
+.dashboardList li button {
+  background: #fff;
+  border: 0;
+  color: #304149;
+  cursor: pointer;
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  text-align: left;
+  width: 100%;
+}
+
+.dashboardList li button:hover,
+.dashboardList .selectedDashboard {
+  background: #edf5f8;
+}
+
+.dashboardList li button span {
+  color: #758188;
+  font-size: 10px;
+}
+
+.dashboardEditor {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.definitionEditor {
+  padding-bottom: 12px;
+}
+
+.settingsGrid,
+.panelFields {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 12px;
+}
+
+.editorActions {
+  display: flex;
+  gap: 6px;
+}
+
+.editorActions .dangerButton {
+  background: #fff;
+  border-color: #b55252;
+  color: #9c3535;
+}
+
+.panelToolbar {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.panelToolbar h2 {
+  font-size: 14px;
+  margin: 0;
+}
+
+.livePanel {
+  min-width: 0;
+}
+
+.splField {
+  grid-column: 1 / -1;
+}
+
+.panelResult {
+  border-top: 1px solid #dce2e5;
+  padding: 12px;
+}
+
+.resultStatus,
+.resultError {
+  color: #4e626b;
+  font-size: 11px;
+  margin: 0 0 10px;
+}
+
+.resultError,
+.errorBanner {
+  color: #8e2f2f;
+}
+
+.errorBanner,
+.noticeBanner {
+  align-items: center;
+  border: 1px solid #dfb8b8;
+  background: #fff4f4;
+  display: flex;
+  font-size: 11px;
+  justify-content: space-between;
+  margin: 0 0 12px;
+  padding: 8px 10px;
+}
+
+.noticeBanner {
+  background: #eff8ed;
+  border-color: #b9d6b2;
+  color: #3d6835;
+}
+
 @media (max-width: 760px) {
   .volumeChart {
     overflow: visible;
@@ -295,6 +506,29 @@
   .notableList a {
     overflow: visible;
     white-space: normal;
+  }
+
+  .managerLayout {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboardList {
+    position: static;
+  }
+
+  .settingsGrid,
+  .panelFields {
+    grid-template-columns: 1fr;
+  }
+
+  .splField {
+    grid-column: auto;
+  }
+
+  .createForm {
+    align-items: stretch;
+    flex-direction: column;
+    width: 100%;
   }
 }
 

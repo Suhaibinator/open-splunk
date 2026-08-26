@@ -1,12 +1,23 @@
 "use client";
 
 import type { FormEvent, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 
+import type { AppSummary } from "@/gen/ts/open_splunk/app";
+import { createOpenSplunkApiClient, getSystemBootstrap } from "@/lib/api";
 import type { SearchDataMode } from "@/lib/search/backend-data";
+import {
+  backendAppHref,
+  backendAppSearchHref,
+  canonicalBackendAppId,
+  currentBackendAppId,
+  replaceBackendAppId,
+  subscribeToBackendAppId,
+} from "@/lib/search/app-navigation";
 import { searchLaunchHref, splFromFindInput } from "@/lib/search/launch-url";
 import { OPEN_SPLUNK_BUILD_LABEL } from "@/lib/build-identity";
+import { createErrorMessage } from "@/lib/error-message";
 
 import { installModalSurface } from "./modal-surface";
 
@@ -15,9 +26,12 @@ type ProductSection = "home" | "search" | "analytics" | "datasets" | "reports" |
 interface ProductShellProps {
   activeSection: ProductSection;
   appName: string;
+  apiBaseUrl?: string;
   children: ReactNode;
   dataMode: SearchDataMode;
 }
+
+type BackendAppCatalogState = "idle" | "loading" | "available" | "error";
 
 const PRIMARY_NAV: Array<{ key: ProductSection; label: string; href: string }> = [
   { key: "search", label: "Search", href: "/search/" },
@@ -28,11 +42,18 @@ const PRIMARY_NAV: Array<{ key: ProductSection; label: string; href: string }> =
   { key: "dashboards", label: "Dashboards", href: "/dashboards/" },
 ];
 
-function submitProductFind(event: FormEvent<HTMLFormElement>, dataMode: "backend" | "demo") {
+function submitProductFind(
+  event: FormEvent<HTMLFormElement>,
+  dataMode: "backend" | "demo",
+  backendAppId: string | undefined,
+) {
   event.preventDefault();
   const value = String(new FormData(event.currentTarget).get("find") ?? "").trim();
   if (value.length === 0) return;
-  window.location.assign(searchLaunchHref(splFromFindInput(value, dataMode === "backend" ? "" : "gradethis")));
+  const href = searchLaunchHref(splFromFindInput(value, dataMode === "backend" ? "" : "gradethis"));
+  window.location.assign(dataMode === "backend" && backendAppId !== undefined
+    ? backendAppHref(href, backendAppId)
+    : href);
 }
 
 function focusFirstMenuItem(nextMenu: "apps" | "help" | "user") {
@@ -41,9 +62,38 @@ function focusFirstMenuItem(nextMenu: "apps" | "help" | "user") {
   });
 }
 
-export function ProductShell({ activeSection, appName, children, dataMode }: ProductShellProps) {
+const appCatalogErrorMessage = createErrorMessage("The backend app catalog could not be loaded.");
+
+function appLabel(app: AppSummary): string {
+  return app.displayName.trim() || app.slug.trim() || app.appId;
+}
+
+function appDetail(app: AppSummary, selected: boolean): string {
+  if (selected) return "Selected backend app";
+  if (app.defaultIndexNames.length === 0) return "No default indexes advertised";
+  const count = app.defaultIndexNames.length;
+  return `${count.toLocaleString()} default ${count === 1 ? "index" : "indexes"}`;
+}
+
+export function ProductShell({ activeSection, apiBaseUrl = "", appName, children, dataMode }: ProductShellProps) {
   const [menu, setMenu] = useState<"apps" | "help" | "user" | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [backendApps, setBackendApps] = useState<AppSummary[]>([]);
+  const [selectedBackendAppId, setSelectedBackendAppId] = useState<string | null>(null);
+  const [backendAppCatalogState, setBackendAppCatalogState] = useState<BackendAppCatalogState>(
+    dataMode === "backend" ? "loading" : "idle",
+  );
+  const [backendAppCatalogError, setBackendAppCatalogError] = useState<string | null>(null);
+  const [backendAppCatalogGeneration, setBackendAppCatalogGeneration] = useState(0);
+  const apiClient = useMemo(
+    () => createOpenSplunkApiClient({ baseUrl: apiBaseUrl }),
+    [apiBaseUrl],
+  );
+  const preferredAppId = useSyncExternalStore(
+    subscribeToBackendAppId,
+    currentBackendAppId,
+    () => undefined,
+  );
   const findRef = useRef<HTMLInputElement>(null);
   const mobileTriggerRef = useRef<HTMLButtonElement>(null);
   const mobileDrawerRef = useRef<HTMLDialogElement>(null);
@@ -52,6 +102,11 @@ export function ProductShell({ activeSection, appName, children, dataMode }: Pro
   const sessionInitial = localSession ? "L" : "A";
   const sessionLabel = localSession ? "Local session" : "Administrator";
   const sessionDetail = localSession ? "Single-user backend mode" : "admin@localhost";
+  const selectedBackendApp = backendApps.find((app) => app.appId === selectedBackendAppId);
+  const navigationBackendAppId = selectedBackendAppId ?? preferredAppId;
+  const switcherAppName = dataMode === "backend" && selectedBackendApp !== undefined
+    ? appLabel(selectedBackendApp)
+    : appName;
   const backendDisclosure = activeSection === "search"
     ? "Searches and supported search objects use the configured backend."
     : activeSection === "admin"
@@ -62,7 +117,13 @@ export function ProductShell({ activeSection, appName, children, dataMode }: Pro
           ? "Activity shows retained jobs and search history, plus capability-gated mutation and search-attempt audit journals for administrator sessions."
           : activeSection === "reports"
             ? "This page shows persisted backend saved searches; scheduling is not inferred."
-            : "This page remains sample preview content; use Search, Datasets, Reports, Activity, or Administration for connected data.";
+            : activeSection === "home"
+              ? "Recent searches come from persisted backend search history when the server advertises it."
+              : activeSection === "analytics"
+                ? "Search-performance summaries use retained backend history when the server advertises it."
+                : activeSection === "dashboards"
+                  ? "Dashboard definitions and panel searches use registered backend routes when available."
+                  : "This page uses the configured backend where the server advertises support.";
 
   function toggleMenu(nextMenu: "apps" | "help" | "user", trigger: HTMLButtonElement) {
     menuTriggerRef.current = trigger;
@@ -86,6 +147,12 @@ export function ProductShell({ activeSection, appName, children, dataMode }: Pro
     });
   }
 
+  function productHref(href: string): string {
+    return dataMode === "backend" && navigationBackendAppId !== undefined
+      ? backendAppHref(href, navigationBackendAppId)
+      : href;
+  }
+
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
@@ -96,6 +163,41 @@ export function ProductShell({ activeSection, appName, children, dataMode }: Pro
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
   }, []);
+
+  useEffect(() => {
+    if (dataMode !== "backend") {
+      setBackendApps([]);
+      setSelectedBackendAppId(null);
+      setBackendAppCatalogError(null);
+      setBackendAppCatalogState("idle");
+      return;
+    }
+    const controller = new AbortController();
+    let current = true;
+    setSelectedBackendAppId(null);
+    setBackendAppCatalogState("loading");
+    setBackendAppCatalogError(null);
+    void getSystemBootstrap(apiClient, preferredAppId, { signal: controller.signal })
+      .then((bootstrap) => {
+        if (!current) return;
+        const canonicalAppId = canonicalBackendAppId(preferredAppId, bootstrap.selectedAppId);
+        if (canonicalAppId !== undefined) replaceBackendAppId(canonicalAppId);
+        setBackendApps(bootstrap.apps);
+        setSelectedBackendAppId(bootstrap.selectedAppId);
+        setBackendAppCatalogState("available");
+      })
+      .catch((error: unknown) => {
+        if (!current || controller.signal.aborted) return;
+        setBackendApps([]);
+        setSelectedBackendAppId(null);
+        setBackendAppCatalogError(appCatalogErrorMessage(error));
+        setBackendAppCatalogState("error");
+      });
+    return () => {
+      current = false;
+      controller.abort();
+    };
+  }, [apiClient, backendAppCatalogGeneration, dataMode, preferredAppId]);
 
   useEffect(() => {
     if (menu === null) return;
@@ -169,7 +271,7 @@ export function ProductShell({ activeSection, appName, children, dataMode }: Pro
         >
           <span /><span /><span />
         </button>
-        <Link className="wordmark suite-wordmark" href="/" aria-label="Open Splunk home">
+        <Link className="wordmark suite-wordmark" href={productHref("/")} aria-label="Open Splunk home">
           <span>open</span><b>&gt;</b><span>splunk</span>
         </Link>
         <div className="suite-menu-anchor">
@@ -186,23 +288,44 @@ export function ProductShell({ activeSection, appName, children, dataMode }: Pro
             }}
             onKeyDown={(event) => openMenuFromKeyboard(event, "apps")}
           >
-            App: <strong>{appName}</strong> <span aria-hidden="true">▾</span>
+            App: <strong>{switcherAppName}</strong> <span aria-hidden="true">▾</span>
           </button>
           {menu === "apps" ? (
             <div className="suite-popover suite-app-popover" id="suite-app-popover" role="menu" data-suite-menu="apps">
-              <span className="suite-menu-label">Your apps</span>
-              <Link role="menuitem" href="/search/"><i className="suite-app-icon" aria-hidden="true">⌕</i><span><strong>Search &amp; Reporting</strong><small>{dataMode === "backend" ? "Search backend-authorized indexes" : "Explore deterministic sample data"}</small></span></Link>
-              <Link role="menuitem" href="/dashboards/"><i className="suite-app-icon suite-app-icon--grade" aria-hidden="true">G</i><span><strong>GradeThis Operations</strong><small>{dataMode === "backend" ? "Illustrative operations preview" : "Preview service-health workspace"}</small></span></Link>
+              <span className="suite-menu-label">{dataMode === "backend" ? "Server apps" : "Your apps"}</span>
+              {dataMode === "backend" ? (
+                backendAppCatalogState === "loading" ? (
+                  <output className="suite-app-catalog-state"><i className="suite-app-icon suite-app-icon--muted" aria-hidden="true">…</i><span><strong>Loading apps</strong><small>Reading system bootstrap</small></span></output>
+                ) : backendAppCatalogState === "error" ? (
+                  <button role="menuitem" type="button" onClick={() => setBackendAppCatalogGeneration((current) => current + 1)}><i className="suite-app-icon suite-app-icon--muted" aria-hidden="true">!</i><span><strong>Retry app catalog</strong><small>{backendAppCatalogError}</small></span></button>
+                ) : backendApps.length === 0 ? (
+                  <output className="suite-app-catalog-state"><i className="suite-app-icon suite-app-icon--muted" aria-hidden="true">—</i><span><strong>No authorized apps</strong><small>The backend returned an empty app catalog</small></span></output>
+                ) : backendApps.map((app) => {
+                  const selected = app.appId === selectedBackendAppId;
+                  const label = appLabel(app);
+                  return (
+                    <Link className={selected ? "selected" : undefined} role="menuitem" href={backendAppSearchHref(app.appId)} key={app.appId} onClick={() => closeMenu()} aria-label={`Open ${label} in Search`}>
+                      <i className="suite-app-icon" aria-hidden="true">{label.charAt(0).toUpperCase() || "⌕"}</i>
+                      <span><strong>{label}</strong><small>{appDetail(app, selected)}</small></span>
+                    </Link>
+                  );
+                })
+              ) : (
+                <>
+                  <Link role="menuitem" href="/search/"><i className="suite-app-icon" aria-hidden="true">⌕</i><span><strong>Search &amp; Reporting</strong><small>Explore deterministic sample data</small></span></Link>
+                  <Link role="menuitem" href="/dashboards/"><i className="suite-app-icon suite-app-icon--grade" aria-hidden="true">G</i><span><strong>GradeThis Operations</strong><small>Preview service-health workspace</small></span></Link>
+                </>
+              )}
               <span className="suite-menu-rule" />
-              <Link role="menuitem" href="/admin/"><i className="suite-app-icon suite-app-icon--muted" aria-hidden="true">⚙</i><span><strong>Administration</strong><small>{dataMode === "backend" ? "Indexes and ingestion tokens" : "Preview system settings"}</small></span></Link>
+              <Link role="menuitem" href={productHref("/admin/")}><i className="suite-app-icon suite-app-icon--muted" aria-hidden="true">⚙</i><span><strong>Administration</strong><small>{dataMode === "backend" ? "Indexes and ingestion tokens" : "Preview system settings"}</small></span></Link>
             </div>
           ) : null}
         </div>
 
         <nav className="suite-utilities" aria-label="Product utilities">
           <span className="suite-context">{dataMode === "backend" ? "Backend workspace" : "Demo workspace"}</span>
-          <Link href="/admin/">Settings</Link>
-          <Link href="/activity/">Activity {dataMode === "demo" ? <span className="activity-count">1</span> : null}</Link>
+          <Link href={productHref("/admin/")}>Settings</Link>
+          <Link href={productHref("/activity/")}>Activity {dataMode === "demo" ? <span className="activity-count">1</span> : null}</Link>
           <div className="suite-menu-anchor">
             <button type="button" aria-controls="suite-help-popover" aria-haspopup="menu" aria-expanded={menu === "help"} onClick={(event) => { const opening = menu !== "help"; toggleMenu("help", event.currentTarget); if (opening && event.detail === 0) focusFirstMenuItem("help"); }} onKeyDown={(event) => openMenuFromKeyboard(event, "help")}>Help <span aria-hidden="true">▾</span></button>
             {menu === "help" ? (
@@ -213,7 +336,7 @@ export function ProductShell({ activeSection, appName, children, dataMode }: Pro
               </div>
             ) : null}
           </div>
-          <form className="suite-find" onSubmit={(event) => submitProductFind(event, dataMode)}>
+          <form className="suite-find" onSubmit={(event) => submitProductFind(event, dataMode, navigationBackendAppId)}>
             <label className="sr-only" htmlFor="suite-find-input">Find</label>
             <input id="suite-find-input" ref={findRef} name="find" placeholder="Find" autoComplete="off" />
             <kbd aria-label="Control or Command K">Ctrl/⌘K</kbd>
@@ -226,7 +349,7 @@ export function ProductShell({ activeSection, appName, children, dataMode }: Pro
             {menu === "user" ? (
               <div className="suite-popover suite-utility-popover suite-user-popover" id="suite-user-popover" role="menu" data-suite-menu="user">
                 <div className="suite-user-summary"><span aria-hidden="true">{sessionInitial}</span><div><strong>{sessionLabel}</strong><small>{sessionDetail}</small></div></div>
-                <Link role="menuitem" href="/admin/">{localSession ? "Server administration" : "Account settings"}</Link>
+                <Link role="menuitem" href={productHref("/admin/")}>{localSession ? "Server administration" : "Account settings"}</Link>
                 <Link role="menuitem" href="/signin/">{localSession ? "About local access" : "Sign out"}</Link>
               </div>
             ) : null}
@@ -239,7 +362,7 @@ export function ProductShell({ activeSection, appName, children, dataMode }: Pro
           {PRIMARY_NAV.map((item) => (
             <Link
               className={activeSection === item.key ? "active" : undefined}
-              href={item.href}
+              href={productHref(item.href)}
               key={`${item.label}-${item.href}`}
               aria-current={activeSection === item.key ? "page" : undefined}
             >
@@ -256,15 +379,29 @@ export function ProductShell({ activeSection, appName, children, dataMode }: Pro
         <dialog ref={mobileDrawerRef} className="suite-mobile-drawer is-open" open aria-modal="true" aria-label="Mobile product navigation">
           <header><div><span className="suite-user-avatar" aria-hidden="true">{sessionInitial}</span><span><strong>{sessionLabel}</strong><small>{sessionDetail}</small></span></div><button type="button" aria-label="Close navigation" onClick={() => setMobileOpen(false)}>×</button></header>
           <span className="suite-mobile-label">APPLICATION</span>
-          <Link className={activeSection === "home" ? "active" : undefined} aria-current={activeSection === "home" ? "page" : undefined} href="/"><span aria-hidden="true">⌂</span>Home</Link>
-          <Link className={activeSection === "search" ? "active" : undefined} aria-current={activeSection === "search" ? "page" : undefined} href="/search/"><span aria-hidden="true">⌕</span>Search &amp; Reporting</Link>
-          <Link className={activeSection === "analytics" ? "active" : undefined} aria-current={activeSection === "analytics" ? "page" : undefined} href="/analytics/"><span aria-hidden="true">⌁</span>Analytics</Link>
-          <Link className={activeSection === "datasets" ? "active" : undefined} aria-current={activeSection === "datasets" ? "page" : undefined} href="/datasets/"><span aria-hidden="true">▦</span>Datasets</Link>
-          <Link className={activeSection === "reports" ? "active" : undefined} aria-current={activeSection === "reports" ? "page" : undefined} href="/reports/"><span aria-hidden="true">▤</span>Reports</Link>
-          <Link className={activeSection === "dashboards" ? "active" : undefined} aria-current={activeSection === "dashboards" ? "page" : undefined} href="/dashboards/"><span aria-hidden="true">▥</span>Dashboards</Link>
+          <Link className={activeSection === "home" ? "active" : undefined} aria-current={activeSection === "home" ? "page" : undefined} href={productHref("/")}><span aria-hidden="true">⌂</span>Home</Link>
+          {dataMode === "backend" ? (
+            backendAppCatalogState === "loading" ? (
+              <output className="suite-mobile-app-state">Loading server apps…</output>
+            ) : backendAppCatalogState === "error" ? (
+              <button className="suite-mobile-app-retry" type="button" onClick={() => setBackendAppCatalogGeneration((current) => current + 1)}>Retry server apps</button>
+            ) : backendApps.length === 0 ? (
+              <output className="suite-mobile-app-state">No authorized server apps</output>
+            ) : backendApps.map((app) => {
+              const label = appLabel(app);
+              const selected = app.appId === selectedBackendAppId;
+              return <Link className={selected ? "selected-app" : undefined} href={backendAppSearchHref(app.appId)} key={`mobile-${app.appId}`}><span aria-hidden="true">{label.charAt(0).toUpperCase() || "⌕"}</span>{label}{selected ? <b>Selected</b> : null}</Link>;
+            })
+          ) : (
+            <Link className={activeSection === "search" ? "active" : undefined} aria-current={activeSection === "search" ? "page" : undefined} href={productHref("/search/")}><span aria-hidden="true">⌕</span>Search &amp; Reporting</Link>
+          )}
+          <Link className={activeSection === "analytics" ? "active" : undefined} aria-current={activeSection === "analytics" ? "page" : undefined} href={productHref("/analytics/")}><span aria-hidden="true">⌁</span>Analytics</Link>
+          <Link className={activeSection === "datasets" ? "active" : undefined} aria-current={activeSection === "datasets" ? "page" : undefined} href={productHref("/datasets/")}><span aria-hidden="true">▦</span>Datasets</Link>
+          <Link className={activeSection === "reports" ? "active" : undefined} aria-current={activeSection === "reports" ? "page" : undefined} href={productHref("/reports/")}><span aria-hidden="true">▤</span>Reports</Link>
+          <Link className={activeSection === "dashboards" ? "active" : undefined} aria-current={activeSection === "dashboards" ? "page" : undefined} href={productHref("/dashboards/")}><span aria-hidden="true">▥</span>Dashboards</Link>
           <span className="suite-mobile-label">SYSTEM</span>
-          <Link className={activeSection === "activity" ? "active" : undefined} aria-current={activeSection === "activity" ? "page" : undefined} href="/activity/"><span aria-hidden="true">↻</span>Activity {dataMode === "demo" ? <b className="activity-count">1</b> : null}</Link>
-          <Link className={activeSection === "admin" ? "active" : undefined} aria-current={activeSection === "admin" ? "page" : undefined} href="/admin/"><span aria-hidden="true">⚙</span>Administration</Link>
+          <Link className={activeSection === "activity" ? "active" : undefined} aria-current={activeSection === "activity" ? "page" : undefined} href={productHref("/activity/")}><span aria-hidden="true">↻</span>Activity {dataMode === "demo" ? <b className="activity-count">1</b> : null}</Link>
+          <Link className={activeSection === "admin" ? "active" : undefined} aria-current={activeSection === "admin" ? "page" : undefined} href={productHref("/admin/")}><span aria-hidden="true">⚙</span>Administration</Link>
           <span className="suite-mobile-label">HELP DOCUMENTATION IS NOT INCLUDED IN THIS PREVIEW</span>
           <span className="suite-mobile-rule" />
           <Link href="/signin/"><span aria-hidden="true">{localSession ? "i" : "⇥"}</span>{localSession ? "About local access" : "Sign out"}</Link>

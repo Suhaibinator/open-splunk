@@ -8,10 +8,10 @@ import { OperationsDashboard } from "./operations-dashboard";
 export const metadata: Metadata = { title: "GradeThis Operations" };
 
 export default function DashboardsPage() {
-  const { dataMode } = getFrontendRuntimeConfig();
+  const { apiBaseUrl, dataMode } = getFrontendRuntimeConfig();
   return (
-    <ProductShell activeSection="dashboards" appName="GradeThis Operations" dataMode={dataMode}>
-      <OperationsDashboard dataMode={dataMode} />
+    <ProductShell activeSection="dashboards" apiBaseUrl={apiBaseUrl} appName="GradeThis Operations" dataMode={dataMode}>
+      <OperationsDashboard apiBaseUrl={apiBaseUrl} dataMode={dataMode} />
     </ProductShell>
   );
 }

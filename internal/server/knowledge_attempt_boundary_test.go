@@ -254,6 +254,8 @@ func TestKnowledgeAttemptBoundaryRecognizesOnlyExactPostRoutes(t *testing.T) {
 		{path: "/api/knowledge/objects/update", action: knowledgeattemptaudit.ActionUpdate},
 		{path: "/api/knowledge/objects/set-state", action: knowledgeattemptaudit.ActionUpdate},
 		{path: "/api/knowledge/objects/delete", action: knowledgeattemptaudit.ActionDelete},
+		{path: "/api/knowledge/objects/quarantine/prepare", action: knowledgeattemptaudit.ActionQuarantine},
+		{path: "/api/knowledge/objects/quarantine", action: knowledgeattemptaudit.ActionQuarantine},
 	}
 	for _, test := range tests {
 		t.Run(test.path, func(t *testing.T) {

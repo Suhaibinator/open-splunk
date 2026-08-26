@@ -47,9 +47,10 @@ const LOOKUP_NAVIGATION: BackendAdminNavigationItem = {
 export interface BackendKnowledgeCapabilities {
   knowledge: boolean;
   lookupManagement: boolean;
+  quarantine: boolean;
 }
 
-/** Resolves the two additive bootstrap capabilities without a version axis. */
+/** Resolves the additive bootstrap capabilities without a version axis. */
 export function backendKnowledgeCapabilities(
   features: ReadonlySet<ServerFeature> | null,
 ): BackendKnowledgeCapabilities {
@@ -60,6 +61,9 @@ export function backendKnowledgeCapabilities(
     knowledge,
     lookupManagement: knowledge && (features?.has(
       ServerFeature.SERVER_FEATURE_LOOKUP_MANAGEMENT,
+    ) ?? false),
+    quarantine: knowledge && (features?.has(
+      ServerFeature.SERVER_FEATURE_KNOWLEDGE_QUARANTINE,
     ) ?? false),
   };
 }
@@ -189,6 +193,7 @@ export interface KnowledgeManagerPanelProps {
   apps: readonly KnowledgeManagerAppOption[];
   initialAppId: string | null;
   maximumPageSize: number;
+  quarantineAvailable: boolean;
 }
 
 export interface KnowledgeManagerPanelModule {

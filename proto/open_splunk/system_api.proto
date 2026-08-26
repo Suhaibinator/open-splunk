@@ -41,6 +41,13 @@ enum ServerFeature {
   // CRUD, admission resolution, snapshot retention, derived execution, and
   // browser management. Field knowledge capability 15 is also required.
   SERVER_FEATURE_LOOKUP_MANAGEMENT = 17;
+  // Persisted dashboard CRUD and server-authoritative panel execution are
+  // available as one complete family.
+  SERVER_FEATURE_DASHBOARDS = 18;
+  // Definition-free Knowledge quarantine preparation and execution are
+  // registered, recovery-keyed, and available to the browser administrator.
+  // Field knowledge capability 15 is also required.
+  SERVER_FEATURE_KNOWLEDGE_QUARANTINE = 19;
 }
 
 message BrowserApiLimits {

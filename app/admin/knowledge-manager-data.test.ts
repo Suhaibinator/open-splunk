@@ -25,11 +25,16 @@ import {
   CreateKnowledgeObjectResponse,
   DeleteKnowledgeObjectRequest,
   DeleteKnowledgeObjectResponse,
+  KnowledgeQuarantineReason,
   KnowledgeValidationIntent,
   ListKnowledgeObjectDependenciesResponse,
   ListKnowledgeObjectDependentsResponse,
   KnowledgeObjectSortBy,
   ListKnowledgeObjectsResponse,
+  PrepareKnowledgeObjectQuarantineRequest,
+  PrepareKnowledgeObjectQuarantineResponse,
+  QuarantineKnowledgeObjectRequest,
+  QuarantineKnowledgeObjectResponse,
   SetKnowledgeObjectStateRequest,
   SetKnowledgeObjectStateResponse,
   UpdateKnowledgeObjectRequest,
@@ -63,6 +68,8 @@ import {
   KNOWLEDGE_MANAGER_MAXIMUM_PAGE_TOKEN_BYTES,
   KNOWLEDGE_MANAGER_MAXIMUM_RESPONSE_BYTES,
   adaptKnowledgeCreateResponse,
+  adaptKnowledgePrepareQuarantineResponse,
+  adaptKnowledgeQuarantineResponse,
   adaptKnowledgeObject,
   adaptKnowledgePage,
   adaptKnowledgeRelationshipPage,
@@ -78,6 +85,8 @@ import {
   knowledgeLifecycleStateFilterFromControlValue,
   knowledgeListRequest,
   knowledgeObjectTypeFilterFromControlValue,
+  knowledgePrepareQuarantineRequest,
+  knowledgeQuarantineRequest,
   knowledgeSharingScopeFilterFromControlValue,
   knowledgeRelationshipRequest,
   knowledgeSortChoiceFromControlValue,
@@ -88,6 +97,8 @@ import {
   loadKnowledgeRelationshipPage,
   mergeKnowledgeContinuation,
   mergeKnowledgeRelationshipContinuation,
+  prepareKnowledgeObjectQuarantine,
+  quarantineKnowledgeObject,
   setKnowledgeObjectState,
   updateKnowledgeObject,
   validateKnowledgeObject,
@@ -122,6 +133,7 @@ import {
 import {
   KnowledgeMutationEditor,
   KnowledgeObjectMutationControls,
+  KnowledgeQuarantineControl,
   createKnowledgeMutationDraft,
   knowledgeBrowserClientRequestId,
   knowledgeDefinitionFromMutationDraft,
@@ -147,6 +159,8 @@ const unavailableMutations: KnowledgeMutationClient = {
   async update() { throw new Error("update must not be called"); },
   async setState() { throw new Error("setState must not be called"); },
   async delete() { throw new Error("delete must not be called"); },
+  async prepareQuarantine() { throw new Error("prepareQuarantine must not be called"); },
+  async quarantine() { throw new Error("quarantine must not be called"); },
 };
 
 function fieldAliasObject(options: {
@@ -640,6 +654,148 @@ test("knowledge mutation adapters reject request mismatches and malformed succes
     currentKnowledgeObject: current.setState,
   }), TypeError);
   await assert.rejects(deleteKnowledgeObject(client, fixtures.delete), TypeError);
+});
+
+test("quarantine preparation and execution bind the signed plan and ordered cascade", async () => {
+  const recoveryToken = "A".repeat(96);
+  const prepareRequest = PrepareKnowledgeObjectQuarantineRequest.fromPartial({
+    knowledgeObjectId: "ko-quarantine-root",
+  });
+  const preparation = adaptKnowledgePrepareQuarantineResponse(
+    PrepareKnowledgeObjectQuarantineResponse.fromPartial({
+      rootKnowledgeObjectId: "ko-quarantine-root",
+      recoveryToken,
+      expiresAt: new Date("2035-08-01T10:10:00.000Z"),
+      dependentCount: 1,
+      tenantCatalogRevision: 12n,
+    }),
+    prepareRequest,
+  );
+  assert.equal(preparation.dependentCount, 1);
+  assert.notEqual(preparation.expiresAt, undefined);
+
+  const request = QuarantineKnowledgeObjectRequest.fromPartial({
+    recoveryToken,
+    clientRequestId: "browser-quarantine-request-0001",
+  });
+  const response = QuarantineKnowledgeObjectResponse.fromPartial({
+    rootKnowledgeObjectId: "ko-quarantine-root",
+    transitions: [{
+      cascadeOrdinal: 0,
+      knowledgeObjectId: "ko-active-dependent",
+      previousVersion: 4n,
+      quarantinedVersion: 5n,
+      reason: KnowledgeQuarantineReason
+        .KNOWLEDGE_QUARANTINE_REASON_DEPENDENCY_RECOVERY,
+    }, {
+      cascadeOrdinal: 1,
+      knowledgeObjectId: "ko-quarantine-root",
+      previousVersion: 7n,
+      quarantinedVersion: 8n,
+      reason: KnowledgeQuarantineReason.KNOWLEDGE_QUARANTINE_REASON_ROOT_CORRUPTION,
+    }],
+    tenantCatalogRevision: 13n,
+  });
+  const receipt = await adaptKnowledgeQuarantineResponse(
+    response,
+    request,
+    preparation,
+  );
+  assert.equal(receipt.rootKnowledgeObjectId, "ko-quarantine-root");
+  assert.deepEqual(receipt.transitions.map((transition) => transition.knowledgeObjectId), [
+    "ko-active-dependent",
+    "ko-quarantine-root",
+  ]);
+
+  const malformed = QuarantineKnowledgeObjectResponse.fromPartial(response);
+  malformed.transitions[0]!.reason = KnowledgeQuarantineReason
+    .KNOWLEDGE_QUARANTINE_REASON_ROOT_CORRUPTION;
+  await assert.rejects(
+    adaptKnowledgeQuarantineResponse(malformed, request, preparation),
+    TypeError,
+  );
+  const wrongRevision = QuarantineKnowledgeObjectResponse.fromPartial({
+    ...response,
+    tenantCatalogRevision: preparation.tenantCatalogRevision + 2n,
+  });
+  await assert.rejects(
+    adaptKnowledgeQuarantineResponse(wrongRevision, request, preparation),
+    TypeError,
+  );
+  assert.throws(() => knowledgePrepareQuarantineRequest(
+    PrepareKnowledgeObjectQuarantineRequest.fromPartial({ knowledgeObjectId: " bad " }),
+  ), TypeError);
+  assert.throws(() => knowledgeQuarantineRequest(
+    QuarantineKnowledgeObjectRequest.fromPartial({
+      recoveryToken: `${recoveryToken}=`,
+      clientRequestId: "browser-quarantine-request-0001",
+    }),
+  ), TypeError);
+});
+
+test("quarantine client uses both protected routes without exposing its token in a URL", async () => {
+  const recoveryToken = "B".repeat(96);
+  const paths: string[] = [];
+  const client = createKnowledgeMutationClient({
+    baseUrl: "https://example.test",
+    fetch: async (input, init) => {
+      const url = new URL(String(input));
+      paths.push(url.pathname);
+      assert.equal(url.search, "");
+      assert.doesNotMatch(String(input), new RegExp(recoveryToken));
+      const bytes = init?.body;
+      assert.ok(bytes instanceof Uint8Array);
+      if (url.pathname.endsWith("/prepare")) {
+        assert.equal(
+          PrepareKnowledgeObjectQuarantineRequest.decode(bytes).knowledgeObjectId,
+          "ko-quarantine-root",
+        );
+        return new Response(PrepareKnowledgeObjectQuarantineResponse.encode(
+          PrepareKnowledgeObjectQuarantineResponse.fromPartial({
+            rootKnowledgeObjectId: "ko-quarantine-root",
+            recoveryToken,
+            expiresAt: new Date("2035-08-01T10:10:00.000Z"),
+            dependentCount: 0,
+            tenantCatalogRevision: 20n,
+          }),
+        ).finish(), { status: 200, headers: { "Content-Type": PROTOBUF_CONTENT_TYPE } });
+      }
+      const decoded = QuarantineKnowledgeObjectRequest.decode(bytes);
+      assert.equal(decoded.recoveryToken, recoveryToken);
+      return new Response(QuarantineKnowledgeObjectResponse.encode(
+        QuarantineKnowledgeObjectResponse.fromPartial({
+          rootKnowledgeObjectId: "ko-quarantine-root",
+          transitions: [{
+            cascadeOrdinal: 0,
+            knowledgeObjectId: "ko-quarantine-root",
+            previousVersion: 2n,
+            quarantinedVersion: 3n,
+            reason: KnowledgeQuarantineReason.KNOWLEDGE_QUARANTINE_REASON_ROOT_CORRUPTION,
+          }],
+          tenantCatalogRevision: 21n,
+        }),
+      ).finish(), { status: 200, headers: { "Content-Type": PROTOBUF_CONTENT_TYPE } });
+    },
+  });
+  const preparation = await prepareKnowledgeObjectQuarantine(
+    client,
+    PrepareKnowledgeObjectQuarantineRequest.fromPartial({
+      knowledgeObjectId: "ko-quarantine-root",
+    }),
+  );
+  const receipt = await quarantineKnowledgeObject(
+    client,
+    QuarantineKnowledgeObjectRequest.fromPartial({
+      recoveryToken,
+      clientRequestId: "browser-quarantine-request-0002",
+    }),
+    { preparation },
+  );
+  assert.equal(receipt.transitions.length, 1);
+  assert.deepEqual(paths, [
+    "/api/knowledge/objects/quarantine/prepare",
+    "/api/knowledge/objects/quarantine",
+  ]);
 });
 
 test("knowledge mutation authority verifies digests and detaches before asynchronous hashing", async () => {
@@ -1155,6 +1311,33 @@ test("every knowledge mutation client response is streaming-bounded before decod
     deleteKnowledgeObject(client, fixtures.delete),
     ProtobufResponseTooLargeError,
   );
+  const quarantinePreparation = {
+    rootKnowledgeObjectId: "ko-quarantine-root",
+    recoveryToken: "C".repeat(96),
+    expiresAt: new Date("2035-08-01T10:10:00.000Z"),
+    dependentCount: 0,
+    tenantCatalogRevision: 1n,
+  };
+  await assert.rejects(
+    prepareKnowledgeObjectQuarantine(
+      client,
+      PrepareKnowledgeObjectQuarantineRequest.fromPartial({
+        knowledgeObjectId: quarantinePreparation.rootKnowledgeObjectId,
+      }),
+    ),
+    ProtobufResponseTooLargeError,
+  );
+  await assert.rejects(
+    quarantineKnowledgeObject(
+      client,
+      QuarantineKnowledgeObjectRequest.fromPartial({
+        recoveryToken: quarantinePreparation.recoveryToken,
+        clientRequestId: "browser-quarantine-bounded-0001",
+      }),
+      { preparation: quarantinePreparation },
+    ),
+    ProtobufResponseTooLargeError,
+  );
 });
 
 function jsonWithoutBigInt(value: unknown): string {
@@ -1204,7 +1387,7 @@ test("an older field-knowledge-only server does not expose lookup management", (
   const capabilities = backendKnowledgeCapabilities(new Set([
     ServerFeature.SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS,
   ]));
-  assert.deepEqual(capabilities, { knowledge: true, lookupManagement: false });
+  assert.deepEqual(capabilities, { knowledge: true, lookupManagement: false, quarantine: false });
   const navigation = backendAdminNavigation(
     capabilities.knowledge,
     capabilities.lookupManagement,
@@ -1219,7 +1402,7 @@ test("independently advertised lookup management adds its navigation destination
     ServerFeature.SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS,
     ServerFeature.SERVER_FEATURE_LOOKUP_MANAGEMENT,
   ]));
-  assert.deepEqual(capabilities, { knowledge: true, lookupManagement: true });
+  assert.deepEqual(capabilities, { knowledge: true, lookupManagement: true, quarantine: false });
   const navigation = backendAdminNavigation(
     capabilities.knowledge,
     capabilities.lookupManagement,
@@ -1233,13 +1416,34 @@ test("lookup capability without field knowledge fails closed", () => {
   const capabilities = backendKnowledgeCapabilities(new Set([
     ServerFeature.SERVER_FEATURE_LOOKUP_MANAGEMENT,
   ]));
-  assert.deepEqual(capabilities, { knowledge: false, lookupManagement: false });
+  assert.deepEqual(capabilities, { knowledge: false, lookupManagement: false, quarantine: false });
   const navigation = backendAdminNavigation(
     capabilities.knowledge,
     capabilities.lookupManagement,
   );
   assert.equal(navigation.filter((item) => item.key === "knowledge").length, 0);
   assert.equal(navigation.filter((item) => item.key === "lookups").length, 0);
+});
+
+test("quarantine capability is independently gated by field knowledge", () => {
+  const available = backendKnowledgeCapabilities(new Set([
+    ServerFeature.SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS,
+    ServerFeature.SERVER_FEATURE_KNOWLEDGE_QUARANTINE,
+  ]));
+  assert.deepEqual(available, {
+    knowledge: true,
+    lookupManagement: false,
+    quarantine: true,
+  });
+
+  const orphaned = backendKnowledgeCapabilities(new Set([
+    ServerFeature.SERVER_FEATURE_KNOWLEDGE_QUARANTINE,
+  ]));
+  assert.deepEqual(orphaned, {
+    knowledge: false,
+    lookupManagement: false,
+    quarantine: false,
+  });
 });
 
 test("oversized and spoofed app fixtures fail closed before entries are scanned", () => {
@@ -2497,6 +2701,20 @@ test("the mutation editor renders each Tier-1 body without a Preview authority",
   assert.match(activeMarkup, />Disable</);
   assert.match(activeMarkup, />Delete</);
   assert.doesNotMatch(activeMarkup, /Preview/);
+
+  const quarantineMarkup = renderToStaticMarkup(createElement(
+    KnowledgeQuarantineControl,
+    {
+      client: unavailableMutations,
+      knowledgeObjectId: "ko-corrupt-visible-identity",
+      name: "corrupt_visible_identity",
+      state: KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_ACTIVE,
+      onCommitted: () => undefined,
+    },
+  ));
+  assert.match(quarantineMarkup, /aria-label="Knowledge recovery actions"/);
+  assert.match(quarantineMarkup, />Quarantine</);
+  assert.doesNotMatch(quarantineMarkup, /recoveryToken|AAAA|definition/);
 });
 
 test("the panel loading shell labels every closed filter and exposes gated creation", () => {
@@ -2505,6 +2723,7 @@ test("the panel loading shell labels every closed filter and exposes gated creat
     apps: [{ appId: "app-observability", label: "Observability" }],
     initialAppId: "app-observability",
     maximumPageSize: 50,
+    quarantineAvailable: false,
   }));
   assert.match(markup, /id="knowledge-manager-title"/);
   assert.match(markup, /Tier 1/);

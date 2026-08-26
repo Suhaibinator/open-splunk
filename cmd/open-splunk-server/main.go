@@ -28,6 +28,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/collectoradmission"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/dashboards"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/hechttp"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
@@ -267,6 +268,10 @@ func runWithOptions(config options) error {
 		return err
 	}
 	savedSearches := securityStores.savedSearches
+	dashboardStore, err := dashboards.New(controlDB, dashboards.Options{TenantID: config.tenantID})
+	if err != nil {
+		return fmt.Errorf("open dashboard store: %w", err)
+	}
 	tokenStore := securityStores.ingestionTokens
 	collectorAdmissions, err := collectoradmission.New(
 		controlDB,
@@ -746,6 +751,7 @@ func runWithOptions(config options) error {
 		AppCatalog:                 appCatalog,
 		AppCursorKey:               appCursorKey,
 		SavedSearches:              savedSearches,
+		Dashboards:                 dashboardStore,
 		SearchHistory:              searchHistory,
 		WebUI:                      release.WebUI,
 		OwnerID:                    defaultOwnerID,

@@ -44,6 +44,8 @@ const ADMINISTRATOR_ROUTE_PATHS: ReadonlySet<string> = new Set([
   "/api/knowledge/objects/get",
   "/api/knowledge/objects/list",
   "/api/knowledge/objects/preview",
+  "/api/knowledge/objects/quarantine",
+  "/api/knowledge/objects/quarantine/prepare",
   "/api/knowledge/objects/set-state",
   "/api/knowledge/objects/update",
   "/api/knowledge/objects/validate",

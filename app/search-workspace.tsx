@@ -14,6 +14,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import Link from "next/link";
 
@@ -94,6 +95,15 @@ import {
   type WorkspaceStatisticsSort,
   type WorkspaceStatisticsTable,
 } from "@/lib/search/backend-data";
+import {
+  backendAppHref,
+  backendAppPreferenceNeedsSync,
+  canonicalBackendAppId,
+  currentBackendAppId,
+  replaceBackendAppId,
+  requestCurrentBackendApp,
+  subscribeToBackendAppId,
+} from "@/lib/search/app-navigation";
 import {
   adaptSearchJobInspection,
   type ServerSearchJobInspectionState,
@@ -612,6 +622,11 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const backendEnabled = dataMode === "backend";
   const initialWorkspaceQuery = backendEnabled ? "" : DEFAULT_QUERY;
   const apiClient = useMemo(() => createOpenSplunkApiClient({ baseUrl: apiBaseUrl }), [apiBaseUrl]);
+  const preferredAppId = useSyncExternalStore(
+    subscribeToBackendAppId,
+    currentBackendAppId,
+    () => undefined,
+  );
   const [query, setQuery] = useState(initialWorkspaceQuery);
   const [submittedQuery, setSubmittedQuery] = useState(initialWorkspaceQuery);
   const [defaultSearchQuery, setDefaultSearchQuery] = useState(initialWorkspaceQuery);
@@ -782,6 +797,8 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const backendCancelRequestedRef = useRef(false);
   const backendBootstrapRef = useRef<BackendBootstrapState | null>(null);
   const backendBootstrapPromiseRef = useRef<Promise<BackendBootstrapState> | null>(null);
+  const observedBackendAppPreferenceRef = useRef<string | undefined>(undefined);
+  const observedBackendAppPreferenceInitializedRef = useRef(false);
   const appSwitchAbortRef = useRef<AbortController | null>(null);
   const appSwitchEpochRef = useRef(0);
   const backendObjectMutationRef = useRef(false);
@@ -1538,10 +1555,19 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
 
     setBackendConnectionState("loading");
     setBackendConnectionError(null);
-    const request = getSystemBootstrap(apiClient)
-      .then((response) => {
+    const request = requestCurrentBackendApp((requestedAppId, signal) => {
+      observedBackendAppPreferenceRef.current = requestedAppId;
+      observedBackendAppPreferenceInitializedRef.current = true;
+      return getSystemBootstrap(apiClient, requestedAppId, { signal });
+    })
+      .then(({ preferredAppId: requestedAppId, value: response }) => {
         if (!supportsServerFeature(response, ServerFeature.SERVER_FEATURE_SEARCH)) {
           throw new Error("This server does not advertise browser search support.");
+        }
+        const canonicalAppId = canonicalBackendAppId(requestedAppId, response.selectedAppId);
+        if (canonicalAppId !== undefined) {
+          observedBackendAppPreferenceRef.current = canonicalAppId;
+          replaceBackendAppId(canonicalAppId);
         }
         const bootstrap = receivedBackendBootstrap(response);
         backendBootstrapRef.current = bootstrap;
@@ -1621,6 +1647,9 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       throw new Error("The persisted search belongs to an app that is not available in this backend session.");
     }
     const bootstrap = receivedBackendBootstrap(response);
+    observedBackendAppPreferenceRef.current = requestedAppId;
+    observedBackendAppPreferenceInitializedRef.current = true;
+    replaceBackendAppId(requestedAppId);
     backendBootstrapRef.current = bootstrap;
     backendBootstrapPromiseRef.current = null;
     setBackendBootstrapModel(response);
@@ -5731,7 +5760,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     runSearch(nextQuery, timeRange);
   }
 
-  async function switchBackendApp(appId: string) {
+  async function switchBackendApp(appId: string | undefined, commitLocation = true) {
     if (!backendEnabled || isRunning) {
       if (isRunning) showToast("Cancel the active search before switching apps.", "warning");
       return;
@@ -5744,17 +5773,32 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       showToast("Wait for or cancel the active export before switching apps.", "warning");
       return;
     }
+    if (!commitLocation) {
+      observedBackendAppPreferenceRef.current = appId;
+      observedBackendAppPreferenceInitializedRef.current = true;
+    }
     const switchEpoch = ++appSwitchEpochRef.current;
     appSwitchAbortRef.current?.abort();
     const controller = new AbortController();
     appSwitchAbortRef.current = controller;
-    setAppSwitchingId(appId);
+    setAppSwitchingId(appId ?? "");
     setMenu(null);
     try {
       const response = await getSystemBootstrap(apiClient, appId, { signal: controller.signal });
       if (controller.signal.aborted || appSwitchEpochRef.current !== switchEpoch) return;
       if (!supportsServerFeature(response, ServerFeature.SERVER_FEATURE_SEARCH)) {
         throw new Error("The selected app does not expose browser search.");
+      }
+      const canonicalAppId = canonicalBackendAppId(appId, response.selectedAppId);
+      if (!commitLocation && canonicalAppId !== undefined) {
+        observedBackendAppPreferenceRef.current = canonicalAppId;
+        replaceBackendAppId(canonicalAppId);
+      }
+      const resolvedAppId = response.selectedAppId ?? appId;
+      if (commitLocation && resolvedAppId !== undefined) {
+        observedBackendAppPreferenceRef.current = resolvedAppId;
+        observedBackendAppPreferenceInitializedRef.current = true;
+        replaceBackendAppId(resolvedAppId);
       }
       generationRef.current += 1;
       backendAbortRef.current?.abort();
@@ -5802,6 +5846,14 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       focusEditor(nextQuery.length);
     } catch (error) {
       if (controller.signal.aborted || appSwitchEpochRef.current !== switchEpoch) return;
+      if (!commitLocation) {
+        const selectedAppId = backendBootstrapRef.current?.response.selectedAppId;
+        if (selectedAppId !== null && selectedAppId !== undefined) {
+          observedBackendAppPreferenceRef.current = selectedAppId;
+          observedBackendAppPreferenceInitializedRef.current = true;
+          replaceBackendAppId(selectedAppId);
+        }
+      }
       showToast(error instanceof Error ? error.message : "Unable to switch apps.", "warning");
     } finally {
       if (appSwitchEpochRef.current === switchEpoch) {
@@ -5810,6 +5862,33 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       }
     }
   }
+
+  const followBackendAppLocation = useEffectEvent((appId: string | undefined) => {
+    void switchBackendApp(appId, false);
+  });
+
+  useEffect(() => {
+    if (
+      !backendEnabled
+      || backendConnectionState !== "ready"
+      || appSwitchingId !== null
+      || !observedBackendAppPreferenceInitializedRef.current
+      || !backendAppPreferenceNeedsSync(preferredAppId, observedBackendAppPreferenceRef.current)
+    ) {
+      return;
+    }
+    followBackendAppLocation(preferredAppId);
+  }, [
+    backendConnectionState,
+    backendEnabled,
+    exportDownloadState.status,
+    exportStage,
+    historyClearBusy,
+    isRunning,
+    objectMutation,
+    appSwitchingId,
+    preferredAppId,
+  ]);
 
   function handleManualTimeRangeChange(nextRange: TimeRange) {
     timelineZoomParentRef.current = null;
@@ -5952,6 +6031,10 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const selectedBackendApp = backendBootstrapModel?.apps.find(
     (app) => app.appId === backendBootstrapModel.selectedAppId,
   );
+  const navigationBackendAppId = backendBootstrapModel?.selectedAppId ?? preferredAppId;
+  const productHref = (href: string) => backendEnabled && navigationBackendAppId !== undefined
+    ? backendAppHref(href, navigationBackendAppId)
+    : href;
   const workspaceAppName = backendEnabled
     ? selectedBackendApp?.displayName
       || (backendConnectionState === "loading" ? "Connecting…" : "Backend unavailable")
@@ -5963,7 +6046,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       <header className="product-bar">
         <div className="product-left">
           <button ref={mobileProductTriggerRef} className="search-mobile-trigger" type="button" aria-label="Open product navigation" aria-expanded={mobileProductNavOpen} onClick={() => setMobileProductNavOpen(true)}><span /><span /><span /></button>
-          <Link className="wordmark" href="/" aria-label="Open Splunk home"><span>open</span><b>&gt;</b><span>splunk</span></Link>
+          <Link className="wordmark" href={productHref("/")} aria-label="Open Splunk home"><span>open</span><b>&gt;</b><span>splunk</span></Link>
           <div className="header-menu-wrap">
             <button className="product-menu-button" type="button" aria-haspopup="menu" aria-expanded={menu === "app"} aria-busy={appSwitchingId !== null || (backendEnabled && backendConnectionState === "loading")} onClick={() => setMenu(menu === "app" ? null : "app")} onKeyDown={(event) => openMenuFromKeyboard(event, "app")}>
               App: <strong>{workspaceAppName}</strong> <span aria-hidden="true">▾</span>
@@ -6010,22 +6093,22 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
                       <Link role="menuitem" href="/dashboards/"><span className="app-glyph">G</span><span><strong>GradeThis Operations</strong><small>Default index: gradethis</small></span></Link>
                     </>}
                 <div className="menu-separator" />
-                <Link role="menuitem" href="/admin/"><span className="app-glyph">＋</span><span><strong>Manage apps</strong></span></Link>
+                <Link role="menuitem" href={productHref("/admin/")}><span className="app-glyph">＋</span><span><strong>Manage apps</strong></span></Link>
               </div>
             ) : null}
           </div>
         </div>
         <nav className="product-utilities" aria-label="Product utilities">
-          <Link className="health-indicator" href="/admin/" title="Open system administration">{backendEnabled ? "Backend mode" : "Demo workspace"}</Link>
+          <Link className="health-indicator" href={productHref("/admin/")} title="Open system administration">{backendEnabled ? "Backend mode" : "Demo workspace"}</Link>
           <button type="button" onClick={() => showToast("No new messages.")}>Messages</button>
-          <Link href="/admin/">Settings</Link>
+          <Link href={productHref("/admin/")}>Settings</Link>
           <div className="header-menu-wrap">
             <button type="button" aria-haspopup="menu" aria-expanded={menu === "activity"} onClick={() => setMenu(menu === "activity" ? null : "activity")} onKeyDown={(event) => openMenuFromKeyboard(event, "activity")}>Activity <span className="activity-count">1</span> <span aria-hidden="true">▾</span></button>
             {menu === "activity" ? (
               <div className="floating-menu utility-menu" role="menu">
                 <span className="menu-label">Activity</span>
                 <button aria-label={`Open active search job: ${phaseLabel(phase)}`} role="menuitem" type="button" onClick={() => { setModal("jobs"); setMenu(null); }}><span className={`mini-status ${stateClass(phase)}`} /> <span><strong>{phaseLabel(phase)}</strong><small>{visibleCountPrefix}{NUMBER_FORMAT.format(visibleEventCount)} results · {elapsed}</small></span></button>
-                <Link role="menuitem" href="/activity/">View all activity</Link>
+                <Link role="menuitem" href={productHref("/activity/")}>View all activity</Link>
               </div>
             ) : null}
           </div>
@@ -6050,7 +6133,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
             {menu === "user" ? (
               <div className="floating-menu utility-menu user-menu" role="menu">
                 <div className="user-summary"><span>A</span><strong>Administrator</strong><small>admin@localhost</small></div>
-                <Link role="menuitem" href="/admin/">Account settings</Link>
+                <Link role="menuitem" href={productHref("/admin/")}>Account settings</Link>
                 <button role="menuitem" type="button" onClick={() => showToast("Open Splunk is running in trusted-network mode.")}>Session details</button>
                 <Link role="menuitem" tabIndex={0} href="/signin/" onClick={clearAdministratorBearerToken}>Sign out</Link>
               </div>
@@ -6061,12 +6144,12 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
 
       <nav className="app-bar" aria-label="Search and Reporting navigation">
         <div className="app-tabs">
-          <Link className="active" aria-current="page" href="/search/">Search</Link>
-          <Link href="/analytics/">Analytics</Link>
-          <Link href="/datasets/">Datasets</Link>
-          <Link href="/reports/">Reports</Link>
-          <Link href="/activity/">Activity</Link>
-          <Link href="/dashboards/">Dashboards</Link>
+          <Link className="active" aria-current="page" href={productHref("/search/")}>Search</Link>
+          <Link href={productHref("/analytics/")}>Analytics</Link>
+          <Link href={productHref("/datasets/")}>Datasets</Link>
+          <Link href={productHref("/reports/")}>Reports</Link>
+          <Link href={productHref("/activity/")}>Activity</Link>
+          <Link href={productHref("/dashboards/")}>Dashboards</Link>
         </div>
         <div className="app-identity"><span aria-hidden="true">⌕</span><strong>{workspaceAppName}</strong></div>
       </nav>
@@ -6077,9 +6160,9 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           <dialog ref={mobileProductDrawerRef} className="search-mobile-drawer" open aria-modal="true" aria-label="Product navigation">
             <header><div><span>A</span><div><strong>Administrator</strong><small>admin@localhost</small></div></div><button type="button" aria-label="Close product navigation" onClick={() => setMobileProductNavOpen(false)}>×</button></header>
             <span className="search-mobile-label">APPLICATION</span>
-            <Link href="/"><i>⌂</i>Home</Link><Link className="active" href="/search/"><i>⌕</i>{workspaceAppName}</Link><Link href="/analytics/"><i>⌁</i>Analytics</Link><Link href="/datasets/"><i>▦</i>Datasets</Link><Link href="/reports/"><i>▤</i>Reports</Link><Link href="/dashboards/"><i>▥</i>Dashboards</Link>
+            <Link href={productHref("/")}><i>⌂</i>Home</Link><Link className="active" href={productHref("/search/")}><i>⌕</i>{workspaceAppName}</Link><Link href={productHref("/analytics/")}><i>⌁</i>Analytics</Link><Link href={productHref("/datasets/")}><i>▦</i>Datasets</Link><Link href={productHref("/reports/")}><i>▤</i>Reports</Link><Link href={productHref("/dashboards/")}><i>▥</i>Dashboards</Link>
             <span className="search-mobile-label">SYSTEM</span>
-            <Link href="/activity/"><i>↻</i>Activity <b className="activity-count">1</b></Link><Link href="/admin/"><i>⚙</i>Administration</Link><Link href="/signin/" onClick={clearAdministratorBearerToken}><i>⇥</i>Sign out</Link>
+            <Link href={productHref("/activity/")}><i>↻</i>Activity <b className="activity-count">1</b></Link><Link href={productHref("/admin/")}><i>⚙</i>Administration</Link><Link href="/signin/" onClick={clearAdministratorBearerToken}><i>⇥</i>Sign out</Link>
           </dialog>
         </>
       ) : null}
@@ -6129,7 +6212,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
             <button className="close-search" type="button" onClick={closeSearchWorkspace}>Close</button>
             <div className="header-menu-wrap mobile-search-actions">
               <button type="button" aria-haspopup="menu" aria-expanded={menu === "search-actions"} onClick={() => setMenu(menu === "search-actions" ? null : "search-actions")}>More <span aria-hidden="true">▾</span></button>
-              {menu === "search-actions" ? <div className="floating-menu mobile-search-menu" role="menu"><button role="menuitem" type="button" onClick={() => { setModal("open"); setMenu(null); }}>⌕ <span>Open saved search</span></button><button role="menuitem" type="button" onClick={() => openSaveDialog(null, true)}>＋ <span>Save as new</span></button><button role="menuitem" type="button" onClick={() => { setModal("history"); setMenu(null); }}>↶ <span>Search history</span></button><button role="menuitem" type="button" disabled={backendEnabled && !backendAuthoritativeResultsReady} title={backendEnabled && !backendAuthoritativeResultsReady ? "Authoritative results are required before export" : undefined} onClick={() => { openExportDialog(); setMenu(null); }}>⇩ <span>Export results</span></button><Link role="menuitem" href="/activity/">ⓘ <span>View activity</span></Link><button role="menuitem" type="button" onClick={closeSearchWorkspace}>× <span>Close search</span></button></div> : null}
+              {menu === "search-actions" ? <div className="floating-menu mobile-search-menu" role="menu"><button role="menuitem" type="button" onClick={() => { setModal("open"); setMenu(null); }}>⌕ <span>Open saved search</span></button><button role="menuitem" type="button" onClick={() => openSaveDialog(null, true)}>＋ <span>Save as new</span></button><button role="menuitem" type="button" onClick={() => { setModal("history"); setMenu(null); }}>↶ <span>Search history</span></button><button role="menuitem" type="button" disabled={backendEnabled && !backendAuthoritativeResultsReady} title={backendEnabled && !backendAuthoritativeResultsReady ? "Authoritative results are required before export" : undefined} onClick={() => { openExportDialog(); setMenu(null); }}>⇩ <span>Export results</span></button><Link role="menuitem" href={productHref("/activity/")}>ⓘ <span>View activity</span></Link><button role="menuitem" type="button" onClick={closeSearchWorkspace}>× <span>Close search</span></button></div> : null}
             </div>
           </div>
         </header>
@@ -6362,7 +6445,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
             {backendEnabled && backendConnectionState === "error"
               ? <button className="button secondary compact" type="button" onClick={() => void retryBackendConnection()}>Retry backend connection</button>
               : backendHasNoSearchableIndexes
-                ? <Link className="button secondary compact" href="/admin/">Review index access</Link>
+                ? <Link className="button secondary compact" href={productHref("/admin/")}>Review index access</Link>
                 : emptyStateCanRun
                   ? <button className="button secondary compact" type="button" onClick={() => {
                       if (backendWorkspaceTransitionBlocked()) return;
