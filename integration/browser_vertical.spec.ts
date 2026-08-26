@@ -2564,7 +2564,7 @@ test("history Run again delegates persisted intent with source-only rerun proven
     hasText: deletedHistorySPL,
   });
   await expect(deletedHistoryRow).toHaveCount(1, { timeout });
-  await deletedHistoryRow.getByRole("button", { name: "Open", exact: true }).click();
+  await deletedHistoryRow.getByRole("button", { name: /^Open history search from / }).click();
   await page.getByRole("button", { name: "History", exact: true }).click();
   const deleteResponse = page.waitForResponse((response) => {
     const responseURL = new URL(response.url());
@@ -2574,7 +2574,7 @@ test("history Run again delegates persisted intent with source-only rerun proven
   });
   await page.getByTestId("history-list").getByRole("row").filter({
     hasText: deletedHistorySPL,
-  }).getByRole("button", { name: "Delete history entry", exact: true }).click();
+  }).getByRole("button", { name: /^Delete history search from / }).click();
   await deleteResponse;
   await expect(page.getByTestId("history-list").getByRole("row").filter({
     hasText: deletedHistorySPL,
@@ -2621,7 +2621,7 @@ test("history Run again delegates persisted intent with source-only rerun proven
       && requestURL.origin === origin
       && requestURL.pathname === "/api/search/jobs/create";
   });
-  await historyRow.getByRole("button", { name: "Run again", exact: true }).click();
+  await historyRow.getByRole("button", { name: /^Run history search from .* again$/ }).click();
   await rerunRequestPromise;
 
   expect(historyRerunCreateRequests).toHaveLength(1);
@@ -2658,7 +2658,7 @@ test("history Run again delegates persisted intent with source-only rerun proven
       && responseURL.pathname === "/api/search/jobs/create"
       && response.status() === 404;
   });
-  await refreshedHistoryRow.getByRole("button", { name: "Run again", exact: true }).click();
+  await refreshedHistoryRow.getByRole("button", { name: /^Run history search from .* again$/ }).click();
   await missingRerunResponse;
   await expect.poll(() => historyRerunCreateRequests.length, { timeout }).toBe(2);
   expect(historyRerunCreateRequests[1]).toEqual(historyRerunCreateRequests[0]);
