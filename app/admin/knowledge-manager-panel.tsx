@@ -976,10 +976,10 @@ function KnowledgeListRow({
   if (object.disclosure === "redacted") {
     return (
       <li className="knowledge-manager__row knowledge-manager__row--redacted" aria-label="Unavailable knowledge object">
-        <span><strong>{object.name}</strong><small>Response details were safely redacted.</small></span>
-        <span>{object.objectTypeLabel}</span>
-        <span>{object.stateLabel}</span>
-        <span>{object.sharingScopeLabel}</span>
+        <span data-label="Object"><strong>{object.name}</strong><small>Response details were safely redacted.</small></span>
+        <span data-label="Type">{object.objectTypeLabel}</span>
+        <span data-label="State">{object.stateLabel}</span>
+        <span data-label="Scope">{object.sharingScopeLabel}</span>
       </li>
     );
   }
@@ -994,10 +994,10 @@ function KnowledgeListRow({
         onKeyDown={(event) => onKeyDown(event, object.knowledgeObjectId)}
         ref={(element) => registerRow(object.knowledgeObjectId, element)}
       >
-        <span><strong>{object.name}</strong><small>{object.appId} · v{object.version.toLocaleString()}</small></span>
-        <span>{object.objectTypeLabel}</span>
-        <span><i className={`knowledge-state knowledge-state--${object.stateLabel.toLowerCase()}`} />{object.stateLabel}</span>
-        <span>{object.sharingScopeLabel}</span>
+        <span data-label="Object"><strong>{object.name}</strong><small>{object.appId} · v{object.version.toLocaleString()}</small></span>
+        <span data-label="Type">{object.objectTypeLabel}</span>
+        <span data-label="State"><i className={`knowledge-state knowledge-state--${object.stateLabel.toLowerCase()}`} />{object.stateLabel}</span>
+        <span data-label="Scope">{object.sharingScopeLabel}</span>
       </button>
     </li>
   );

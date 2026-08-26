@@ -168,12 +168,12 @@ export function KnowledgeManagerPreview({
   return (
     <section className="knowledge-preview" aria-labelledby="knowledge-preview-title">
       <h4 id="knowledge-preview-title">Preview on retained search</h4>
-      <p>
+      <p className="knowledge-preview__intro">
         Compare this exact object version against an immutable retained search result scope.
         Preview does not publish or reserve the candidate.
       </p>
-      <form onSubmit={(event) => void submit(event)} autoComplete="off" noValidate>
-        <label htmlFor="knowledge-preview-job-id">
+      <form className="knowledge-preview__form" onSubmit={(event) => void submit(event)} autoComplete="off" noValidate>
+        <label className="knowledge-preview__field" htmlFor="knowledge-preview-job-id">
           <span>Retained search job ID</span>
           <input
             id="knowledge-preview-job-id"
@@ -184,7 +184,7 @@ export function KnowledgeManagerPreview({
             onChange={(event) => setRetainedJobID(event.currentTarget.value)}
           />
         </label>
-        <label htmlFor="knowledge-preview-maximum-rows">
+        <label className="knowledge-preview__field" htmlFor="knowledge-preview-maximum-rows">
           <span>Maximum rows per side</span>
           <input
             id="knowledge-preview-maximum-rows"
@@ -196,11 +196,11 @@ export function KnowledgeManagerPreview({
             onChange={(event) => setMaximumRows(event.currentTarget.value)}
           />
         </label>
-        <button type="submit" disabled={state === "loading"}>
+        <button className="knowledge-preview__submit" type="submit" disabled={state === "loading"}>
           {state === "loading" ? "Comparing…" : "Compare before and after"}
         </button>
       </form>
-      <div aria-live="polite">
+      <div className="knowledge-preview__status" aria-live="polite">
         {state === "idle" ? <p>No Preview request has been sent.</p> : null}
         {state === "loading" ? <p>Executing both bounded projections…</p> : null}
         {state === "unavailable" ? (
@@ -305,15 +305,16 @@ function KnowledgePreviewTable({
 }) {
   const visibleRows = projection.rows.slice(rowWindow.start, rowWindow.end);
   return (
-    <section aria-label={`${label} projection`}>
+    <section className="knowledge-preview__projection" aria-label={`${label} projection`}>
       <h5>{label}</h5>
       <p>
         Schema {projection.schema.schemaId} · revision {projection.schema.revision.toString()}
         {" · "}{projection.schema.columns.length.toLocaleString()} columns
         {" · "}{projection.rows.length.toLocaleString()} rows
       </p>
-      <div className="knowledge-preview__table-scroll">
-        <table>
+      <section className="knowledge-preview__table-scroll" aria-label={`${label} projection table`}>
+        <table className="product-table knowledge-preview__table">
+          <caption className="sr-only">{label} retained-search projection</caption>
           <thead>
             <tr>
               {projection.schema.columns.map((column) => (
@@ -338,7 +339,7 @@ function KnowledgePreviewTable({
             ))}
           </tbody>
         </table>
-      </div>
+      </section>
     </section>
   );
 }

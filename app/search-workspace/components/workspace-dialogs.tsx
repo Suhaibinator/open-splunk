@@ -350,7 +350,7 @@ export function WorkspaceDialogs({
                 <div className="saved-row-meta">
                   <span>{saved.updatedAt}</span>
                   <button
-                    className="icon-button"
+                    className={`icon-button ${styles.savedRowIconButton}`}
                     aria-label={duplicatingThisSearch ? `Duplicating ${saved.name}` : `Duplicate ${saved.name}`}
                     type="button"
                     disabled={savedSearchActionPending}
@@ -359,7 +359,7 @@ export function WorkspaceDialogs({
                     {duplicatingThisSearch ? "…" : "⧉"}
                   </button>
                   <button
-                    className="icon-button"
+                    className={`icon-button ${styles.savedRowIconButton}`}
                     aria-label={`Rename ${saved.name}`}
                     type="button"
                     disabled={savedSearchActionPending}
@@ -368,7 +368,7 @@ export function WorkspaceDialogs({
                     ✎
                   </button>
                   <button
-                    className="icon-button"
+                    className={`icon-button ${styles.savedRowIconButton}`}
                     aria-label={deletingThisSearch ? `Deleting ${saved.name}` : `Delete ${saved.name}`}
                     type="button"
                     disabled={savedSearchActionPending}
@@ -522,7 +522,7 @@ export function WorkspaceDialogs({
                 const deletingThisEntry = deletingHistoryEntryId === entry.id;
                 return (
                   <tr aria-busy={deletingThisEntry} key={entry.id}>
-                    <td>
+                    <td data-label="Search">
                       <code title={entry.query}>{entry.query}</code>
                       {entry.sourceLabel || entry.appId || entry.resolvedTimeRange ? (
                         <small className={styles.historyMeta} title={entry.resolvedTimeRange}>
@@ -530,16 +530,16 @@ export function WorkspaceDialogs({
                         </small>
                       ) : null}
                     </td>
-                    <td><span className={`history-state history-${entry.state.toLowerCase()}`}>{entry.state}</span></td>
-                    <td className={styles.numericCell}>{formatHistoryResultCount(entry)}</td>
-                    <td>{entry.duration}</td>
-                    <td>{entry.ranAt}</td>
-                    <td>
-                      <div className="row-actions">
-                        <button type="button" disabled={clearingHistory || deletingThisEntry} onClick={() => onHistoryEntryOpen(entry, false)}>Open</button>
-                        <button type="button" disabled={clearingHistory || deletingThisEntry} onClick={() => onHistoryEntryOpen(entry, true)}>Run again</button>
-                        <button type="button" disabled={clearingHistory || deletingThisEntry} onClick={() => onHistoryEntrySave(entry)}>Save</button>
-                        <button aria-label={deletingThisEntry ? "Deleting history entry" : "Delete history entry"} type="button" disabled={clearingHistory || deletingHistory} onClick={() => onDeleteHistoryEntry(entry.id)}>{deletingThisEntry ? "…" : "Delete"}</button>
+                    <td data-label="Status"><span className={`history-state history-${entry.state.toLowerCase()}`}>{entry.state}</span></td>
+                    <td className={styles.numericCell} data-label="Results">{formatHistoryResultCount(entry)}</td>
+                    <td data-label="Duration">{entry.duration}</td>
+                    <td data-label="Ran">{entry.ranAt}</td>
+                    <td data-label="Actions">
+                      <div className={`row-actions ${styles.historyRowActions}`}>
+                        <button aria-label={`Open history search from ${entry.ranAt}`} type="button" disabled={clearingHistory || deletingThisEntry} onClick={() => onHistoryEntryOpen(entry, false)}>Open</button>
+                        <button aria-label={`Run history search from ${entry.ranAt} again`} type="button" disabled={clearingHistory || deletingThisEntry} onClick={() => onHistoryEntryOpen(entry, true)}>Run again</button>
+                        <button aria-label={`Save history search from ${entry.ranAt}`} type="button" disabled={clearingHistory || deletingThisEntry} onClick={() => onHistoryEntrySave(entry)}>Save</button>
+                        <button aria-label={deletingThisEntry ? `Deleting history search from ${entry.ranAt}` : `Delete history search from ${entry.ranAt}`} type="button" disabled={clearingHistory || deletingHistory} onClick={() => onDeleteHistoryEntry(entry.id)}>{deletingThisEntry ? "…" : "Delete"}</button>
                       </div>
                     </td>
                   </tr>

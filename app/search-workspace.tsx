@@ -2455,7 +2455,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       const popover = Array.from(document.querySelectorAll<HTMLElement>('.floating-menu[role="menu"]'))
         .find((candidate) => candidate.offsetParent !== null);
       if (popover === undefined) return;
-      const items = Array.from(popover.querySelectorAll<HTMLElement>('[role="menuitem"], [role="menuitemradio"]'));
+      const items = Array.from(popover.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled), [role="menuitemradio"]:not(:disabled)'));
       if (items.length === 0) return;
       const current = items.indexOf(document.activeElement as HTMLElement);
       let next = current;
@@ -2475,6 +2475,20 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     document.addEventListener("keydown", navigateOpenMenu);
     return () => document.removeEventListener("keydown", navigateOpenMenu);
   }, [menu]);
+
+  function openMenuFromKeyboard(event: KeyboardEvent<HTMLButtonElement>, nextMenu: MenuName) {
+    if (event.key !== "Enter" && event.key !== " " && event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    event.preventDefault();
+    menuReturnFocusRef.current = event.currentTarget;
+    setMenu(nextMenu);
+    window.requestAnimationFrame(() => {
+      const popover = Array.from(document.querySelectorAll<HTMLElement>('.floating-menu[role="menu"]'))
+        .find((candidate) => candidate.offsetParent !== null);
+      if (popover === undefined) return;
+      const items = Array.from(popover.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled), [role="menuitemradio"]:not(:disabled)'));
+      (event.key === "ArrowUp" ? items.at(-1) : items[0])?.focus();
+    });
+  }
 
   useEffect(() => {
     if (modal !== "time") return;
@@ -5857,13 +5871,15 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
 
   const emptyResultPresentation = backendEnabled && backendConnectionState === "loading"
     ? {
-        icon: "…",
+        icon: "↻",
+        tone: "loading",
         title: "Connecting to the backend",
         detail: "Loading your authorized apps and index scope before search is enabled.",
       }
     : backendEnabled && backendConnectionState === "error"
       ? {
           icon: "!",
+          tone: "error",
           title: "Backend connection unavailable",
           detail: backendConnectionError
             ?? "The system bootstrap request failed before an authorized search scope could be loaded.",
@@ -5871,47 +5887,55 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     : searchIsClosed && backendHasNoSearchableIndexes
     ? {
         icon: "!",
+        tone: "warning",
         title: "No searchable indexes are available",
         detail: "This app has no searchable index in your current backend scope. Review index access or switch apps.",
       }
     : searchIsClosed
     ? {
         icon: "⌕",
+        tone: "info",
         title: "Start a new search",
         detail: "Enter SPL, choose a time range, and run the search to inspect events and statistics.",
       }
     : backendEnabled && backendPreviewStatus === "limited"
       ? {
           icon: "…",
+          tone: "warning",
           title: "Live preview is bounded",
           detail: "A complete row did not fit the preview limit. The authoritative result snapshot will appear when the search completes.",
         }
     : backendEnabled && backendPreviewStatus === "resyncing"
       ? {
           icon: "↻",
+          tone: "loading",
           title: "Resynchronizing live results",
           detail: "Provisional rows were cleared after an update discontinuity. A fresh preview or the authoritative result snapshot will replace them.",
         }
     : isRunning
     ? {
-        icon: "…",
+        icon: "↻",
+        tone: "loading",
         title: "Search is running",
         detail: "Results will appear here as soon as the backend produces them.",
       }
     : backendEnabled && backendResultsExpired
       ? {
           icon: "⌛",
+          tone: "warning",
           title: "Search results expired",
           detail: "The server retention window ended. Run the search again to create a fresh result snapshot.",
         }
     : phase === "failed"
       ? {
           icon: "!",
+          tone: "error",
           title: "Search failed before results were produced",
           detail: "Review the search error, adjust the SPL or time range, and run it again.",
         }
       : {
           icon: "×",
+          tone: "warning",
           title: "Search was canceled",
           detail: "The timeline, fields, and result views were cleared so they cannot be mistaken for this job's output.",
         };
@@ -5941,7 +5965,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           <button ref={mobileProductTriggerRef} className="search-mobile-trigger" type="button" aria-label="Open product navigation" aria-expanded={mobileProductNavOpen} onClick={() => setMobileProductNavOpen(true)}><span /><span /><span /></button>
           <Link className="wordmark" href="/" aria-label="Open Splunk home"><span>open</span><b>&gt;</b><span>splunk</span></Link>
           <div className="header-menu-wrap">
-            <button className="product-menu-button" type="button" aria-haspopup="menu" aria-expanded={menu === "app"} aria-busy={appSwitchingId !== null || (backendEnabled && backendConnectionState === "loading")} onClick={() => setMenu(menu === "app" ? null : "app")}>
+            <button className="product-menu-button" type="button" aria-haspopup="menu" aria-expanded={menu === "app"} aria-busy={appSwitchingId !== null || (backendEnabled && backendConnectionState === "loading")} onClick={() => setMenu(menu === "app" ? null : "app")} onKeyDown={(event) => openMenuFromKeyboard(event, "app")}>
               App: <strong>{workspaceAppName}</strong> <span aria-hidden="true">▾</span>
             </button>
             {menu === "app" ? (
@@ -5992,11 +6016,11 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           </div>
         </div>
         <nav className="product-utilities" aria-label="Product utilities">
-          <Link className="health-indicator" href="/admin/" title="Open system health"><span /> Healthy</Link>
-          <button type="button" onClick={() => showToast("No new messages.")}>Messages <span aria-hidden="true">▾</span></button>
-          <Link href="/admin/">Settings <span aria-hidden="true">▾</span></Link>
+          <Link className="health-indicator" href="/admin/" title="Open system administration">{backendEnabled ? "Backend mode" : "Demo workspace"}</Link>
+          <button type="button" onClick={() => showToast("No new messages.")}>Messages</button>
+          <Link href="/admin/">Settings</Link>
           <div className="header-menu-wrap">
-            <button type="button" aria-haspopup="menu" aria-expanded={menu === "activity"} onClick={() => setMenu(menu === "activity" ? null : "activity")}>Activity <span className="activity-count">1</span> <span aria-hidden="true">▾</span></button>
+            <button type="button" aria-haspopup="menu" aria-expanded={menu === "activity"} onClick={() => setMenu(menu === "activity" ? null : "activity")} onKeyDown={(event) => openMenuFromKeyboard(event, "activity")}>Activity <span className="activity-count">1</span> <span aria-hidden="true">▾</span></button>
             {menu === "activity" ? (
               <div className="floating-menu utility-menu" role="menu">
                 <span className="menu-label">Activity</span>
@@ -6006,7 +6030,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
             ) : null}
           </div>
           <div className="header-menu-wrap">
-            <button type="button" aria-haspopup="menu" aria-expanded={menu === "help"} onClick={() => setMenu(menu === "help" ? null : "help")}>Help <span aria-hidden="true">▾</span></button>
+            <button type="button" aria-haspopup="menu" aria-expanded={menu === "help"} onClick={() => setMenu(menu === "help" ? null : "help")} onKeyDown={(event) => openMenuFromKeyboard(event, "help")}>Help <span aria-hidden="true">▾</span></button>
             {menu === "help" ? (
               <div className="floating-menu utility-menu help-menu" role="menu">
                 <span className="menu-label">Search help</span>
@@ -6022,7 +6046,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
             <button type="submit" aria-label="Run Find">⌕</button>
           </form>
           <div className="header-menu-wrap">
-            <button className="user-button" type="button" aria-label="User menu" aria-haspopup="menu" aria-expanded={menu === "user"} onClick={() => setMenu(menu === "user" ? null : "user")}><span>A</span> Administrator <b>▾</b></button>
+            <button className="user-button" type="button" aria-label="User menu" aria-haspopup="menu" aria-expanded={menu === "user"} onClick={() => setMenu(menu === "user" ? null : "user")} onKeyDown={(event) => openMenuFromKeyboard(event, "user")}><span>A</span> Administrator <b>▾</b></button>
             {menu === "user" ? (
               <div className="floating-menu utility-menu user-menu" role="menu">
                 <div className="user-summary"><span>A</span><strong>Administrator</strong><small>admin@localhost</small></div>
@@ -6037,7 +6061,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
 
       <nav className="app-bar" aria-label="Search and Reporting navigation">
         <div className="app-tabs">
-          <Link className="active" href="/search/">Search</Link>
+          <Link className="active" aria-current="page" href="/search/">Search</Link>
           <Link href="/analytics/">Analytics</Link>
           <Link href="/datasets/">Datasets</Link>
           <Link href="/reports/">Reports</Link>
@@ -6326,8 +6350,10 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
             id={`panel-${activeTab}`}
             role="tabpanel"
             aria-labelledby={`tab-${activeTab}`}
-            className="job-empty-results"
+            className={`job-empty-results job-empty-results--${emptyResultPresentation.tone}`}
             data-testid="job-empty-results"
+            data-tone={emptyResultPresentation.tone}
+            aria-busy={emptyResultPresentation.tone === "loading"}
             aria-live="polite"
           >
             <span aria-hidden="true">{emptyResultPresentation.icon}</span>

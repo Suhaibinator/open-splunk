@@ -1,0 +1,89 @@
+@media (max-width: 760px) {
+  .mobileCardTableWrap {
+    overflow: visible;
+  }
+
+  .mobileCardTable.mobileCardTable {
+    border-collapse: separate;
+    border-spacing: 0 10px;
+    display: table;
+    min-width: 0;
+    table-layout: auto;
+    width: 100%;
+  }
+
+  .mobileCardTable thead {
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    height: 1px;
+    overflow: hidden;
+    position: absolute;
+    white-space: nowrap;
+    width: 1px;
+  }
+
+  .mobileCardTable tbody,
+  .mobileCardTable tr {
+    display: block;
+  }
+
+  .mobileCardTable tbody {
+    display: grid;
+    gap: 10px;
+  }
+
+  .mobileCardTable tr {
+    background: #fff;
+    border: 1px solid #ccd3d6;
+    padding: 9px 10px;
+  }
+
+  .mobileCardTable.mobileCardTable.mobileCardTable td,
+  .mobileCardTable.mobileCardTable.mobileCardTable td:nth-child(n + 3) {
+    align-items: center;
+    border: 0;
+    display: grid;
+    gap: 12px;
+    grid-template-columns: 72px minmax(0, 1fr);
+    height: auto;
+    min-height: 38px;
+    padding: 6px 0;
+    text-align: left;
+    width: 100%;
+  }
+
+  .mobileCardTable td::before {
+    color: #68767e;
+    content: attr(data-label);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .mobileCardTable.mobileCardTable td:first-child {
+    align-items: start;
+    border-bottom: 1px solid #e1e5e7;
+    grid-template-columns: 1fr;
+    padding-bottom: 10px;
+  }
+
+  .mobileCardTable td:first-child::before {
+    display: none;
+  }
+
+  .mobileCardTable.mobileCardTable td:last-child {
+    border-top: 1px solid #e1e5e7;
+    grid-template-columns: 72px minmax(0, 1fr);
+    margin-top: 4px;
+    padding-top: 10px;
+  }
+
+  .mobileCardTable td:last-child a {
+    align-items: center;
+    display: inline-flex;
+    justify-content: center;
+    min-height: 44px;
+    width: 100%;
+  }
+}

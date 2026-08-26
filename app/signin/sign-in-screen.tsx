@@ -60,9 +60,9 @@ export function SignInScreen({ dataMode }: SignInScreenProps) {
             ? "This installation uses a trusted local single-user session. Browser authentication is not configured."
             : "Review the SPL workflow, operational pages, and responsive interface with deterministic sample data."}</p>
           <div className="signin-capabilities">
-            <span><i>⌕</i><b>Event-first search</b><small>Investigate raw events and pivot instantly.</small></span>
-            <span><i>⌁</i><b>Search analytics</b><small>Transform searches into tables and charts.</small></span>
-            <span><i>▣</i><b>Self-hosted control</b><small>Keep collection and retention in your environment.</small></span>
+            <span><i aria-hidden="true">⌕</i><b>Event-first search</b><small>Investigate raw events and pivot instantly.</small></span>
+            <span><i aria-hidden="true">⌁</i><b>Search analytics</b><small>Transform searches into tables and charts.</small></span>
+            <span><i aria-hidden="true">▣</i><b>Self-hosted control</b><small>Keep collection and retention in your environment.</small></span>
           </div>
         </div>
         <div className="signin-signal" aria-hidden="true">
@@ -77,24 +77,24 @@ export function SignInScreen({ dataMode }: SignInScreenProps) {
           <span style={{ "--signal-height": "48%" } as React.CSSProperties} />
           <span style={{ "--signal-height": "82%" } as React.CSSProperties} />
         </div>
-        <footer><span className="signin-status-dot" /> {localSession ? "Local single-user mode · check backend health in Administration" : "Preview fixture · backend health is not checked here"}</footer>
+        <footer>{localSession ? "Local access · check backend health in Administration" : "Preview workspace · backend health is not checked here"}</footer>
       </section>
 
       <section className="signin-panel">
         <div className="signin-card">
-          <div className="signin-mobile-brand"><span>open</span><b>&gt;</b><span>splunk</span></div>
-          <header><span className="signin-lock">↳</span><h1>{localSession ? "Administrator session" : "Frontend preview"}</h1><p>{localSession ? "Use the bearer token configured for this local server." : "Authentication is not connected in this build."}</p></header>
+          <Link className="signin-mobile-brand" href="/" aria-label="Open Splunk home"><span>open</span><b>&gt;</b><span>splunk</span></Link>
+          <header><span className="signin-lock" aria-hidden="true">↳</span><h1>{localSession ? "Administrator session" : "Frontend preview"}</h1><p>{localSession ? "Use the bearer token configured for this local server." : "Authentication is not connected in this build."}</p></header>
           {localSession ? (
             administratorSessionActive ? (
               <>
-                <div className="signin-help-notice" role="note"><span>✓</span>The administrator credential is available to protected API calls in this tab.</div>
+                <div className="signin-help-notice" role="note"><span aria-hidden="true">✓</span>The administrator credential is available to protected API calls in this tab.</div>
                 <button className="signin-submit" type="button" onClick={() => router.push("/admin/")}>Open Administration</button>
                 <button className="signin-preview-link" type="button" onClick={clearAdministratorSession}>Clear administrator session</button>
               </>
             ) : (
               <form onSubmit={openAdministratorSession}>
                 <label htmlFor="administrator-token">Administrator bearer token</label>
-                <div className="signin-password-field">
+                <div className="signin-password-field" data-invalid={tokenError !== null}>
                   <input
                     id="administrator-token"
                     name="administrator-token"
@@ -105,18 +105,18 @@ export function SignInScreen({ dataMode }: SignInScreenProps) {
                     autoCapitalize="none"
                     spellCheck={false}
                     aria-invalid={tokenError !== null}
-                    aria-describedby="administrator-token-lifetime"
+                    aria-describedby={tokenError === null ? "administrator-token-lifetime" : "administrator-token-error administrator-token-lifetime"}
                   />
                   <button type="button" onClick={() => setShowAdministratorToken((current) => !current)}>{showAdministratorToken ? "Hide" : "Show"}</button>
                 </div>
-                {tokenError === null ? null : <div className="signin-error" role="alert"><span>!</span>{tokenError}</div>}
-                <div id="administrator-token-lifetime" className="signin-help-notice" role="note"><span>i</span>The token stays in memory only. Reloading, closing this tab, or opening a new tab clears it; the server verifies it on the next protected request.</div>
+                {tokenError === null ? null : <div id="administrator-token-error" className="signin-error" role="alert"><span aria-hidden="true">!</span>{tokenError}</div>}
+                <div id="administrator-token-lifetime" className="signin-help-notice" role="note"><span aria-hidden="true">i</span>The token stays in memory only. Reloading, closing this tab, or opening a new tab clears it; the server verifies it on the next protected request.</div>
                 <button className="signin-submit" type="submit">Open administrator session</button>
               </form>
             )
           ) : (
             <>
-              <div className="signin-help-notice" role="note"><span>i</span>Do not enter credentials. This preview does not check or store passwords.</div>
+              <div className="signin-help-notice" role="note"><span aria-hidden="true">i</span>Do not enter credentials. This preview does not check or store passwords.</div>
               <Link className="signin-submit" href="/" style={{ textDecoration: "none" }}>Continue to preview</Link>
             </>
           )}

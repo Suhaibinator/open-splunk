@@ -8,6 +8,32 @@ export interface IndexFieldSnapshot {
   totalSizeExact: boolean;
 }
 
+export interface IndexObservationQuery {
+  earliest: string;
+  latest: string;
+  nameFilter: string;
+}
+
+export function nextObservedIndexId(current: string | null, requested: string): string | null {
+  return current === requested ? null : requested;
+}
+
+export function retainVisibleObservedIndexId(
+  current: string | null,
+  visibleIndexIds: readonly string[],
+): string | null {
+  return current !== null && visibleIndexIds.includes(current) ? current : null;
+}
+
+export function normalizeIndexObservationQuery(
+  value: IndexObservationQuery,
+): IndexObservationQuery | null {
+  const earliest = value.earliest.trim();
+  const latest = value.latest.trim();
+  if (!earliest || !latest) return null;
+  return { earliest, latest, nameFilter: value.nameFilter.trim() };
+}
+
 function normalizedToken(value: string | undefined): string | null {
   const token = value?.trim();
   return token ? token : null;

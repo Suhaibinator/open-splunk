@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { IndexStats } from "@/gen/ts/open_splunk/index";
 import type { FieldProfile } from "@/gen/ts/open_splunk/result";
@@ -18,6 +18,7 @@ import {
   fieldCountLabel,
   formatStorageBytes,
   mergeIndexFieldPage,
+  normalizeIndexObservationQuery,
   type IndexFieldSnapshot,
 } from "./index-observability-data";
 
@@ -58,6 +59,7 @@ export function IndexObservabilityPanel({ client, index }: IndexObservabilityPan
   const [fieldSnapshot, setFieldSnapshot] = useState<IndexFieldSnapshot | null>(null);
   const [fieldsError, setFieldsError] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [validationError, setValidationError] = useState<string | null>(null);
   const [generation, setGeneration] = useState(0);
   const snapshotRef = useRef<IndexFieldSnapshot | null>(null);
   const moreControllerRef = useRef<AbortController | null>(null);
@@ -66,17 +68,20 @@ export function IndexObservabilityPanel({ client, index }: IndexObservabilityPan
     selector: { $case: "indexId" as const, value: index.id },
   }), [index.id]);
 
-  const load = useCallback(() => {
-    const nextEarliest = earliest.trim();
-    const nextLatest = latest.trim();
-    if (!nextEarliest || !nextLatest) {
-      setFieldsState("error");
-      setFieldsError("Both earliest and latest are required for a bounded field snapshot.");
+  function applyDraft() {
+    const next = normalizeIndexObservationQuery({ earliest, latest, nameFilter });
+    if (next === null) {
+      setValidationError("Both earliest and latest are required for a bounded field snapshot.");
       return;
     }
-    setSubmitted({ earliest: nextEarliest, latest: nextLatest, nameFilter: nameFilter.trim() });
+    setValidationError(null);
+    setSubmitted(next);
+  }
+
+  function refreshSubmitted() {
+    setValidationError(null);
     setGeneration((current) => current + 1);
-  }, [earliest, latest, nameFilter]);
+  }
 
   useEffect(() => {
     const controller = new AbortController();
@@ -180,15 +185,16 @@ export function IndexObservabilityPanel({ client, index }: IndexObservabilityPan
           <h2 id="index-observability-title">Statistics and field catalog</h2>
           <p>Connected analysis for <code>index={index.name}</code>.</p>
         </div>
-        <button type="button" onClick={load}>Refresh</button>
+        <button type="button" onClick={refreshSubmitted}>Refresh applied query</button>
       </header>
 
-      <form className="index-observability-controls" onSubmit={(event) => { event.preventDefault(); load(); }}>
-        <label><span>Earliest</span><input value={earliest} onChange={(event) => setEarliest(event.target.value)} placeholder="-24h" /></label>
-        <label><span>Latest</span><input value={latest} onChange={(event) => setLatest(event.target.value)} placeholder="now" /></label>
+      <form className="index-observability-controls" onSubmit={(event) => { event.preventDefault(); applyDraft(); }}>
+        <label><span>Earliest</span><input value={earliest} aria-invalid={validationError !== null || undefined} aria-describedby="index-observability-range-error" onChange={(event) => { setEarliest(event.target.value); setValidationError(null); }} placeholder="-24h" /></label>
+        <label><span>Latest</span><input value={latest} aria-invalid={validationError !== null || undefined} aria-describedby="index-observability-range-error" onChange={(event) => { setLatest(event.target.value); setValidationError(null); }} placeholder="now" /></label>
         <label><span>Field name contains</span><input value={nameFilter} onChange={(event) => setNameFilter(event.target.value)} placeholder="Optional, case-sensitive" /></label>
         <button className="suite-button suite-button--primary" type="submit">Apply</button>
       </form>
+      {validationError === null ? null : <div id="index-observability-range-error" className="backend-inline-error" role="alert">{validationError}</div>}
 
       {statsState === "loading" ? <BackendResourceState kind="loading" title="Loading index statistics" message="Reading the current index snapshot…" /> : null}
       {statsState === "unavailable" ? <BackendResourceState kind="unavailable" title="Statistics route unavailable" message={statsError ?? "The connected server did not register index statistics."} /> : null}
@@ -217,6 +223,7 @@ export function IndexObservabilityPanel({ client, index }: IndexObservabilityPan
       {fieldsState === "available" && fieldSnapshot !== null && fieldSnapshot.fields.length > 0 ? (
         <div className="responsive-table-wrap">
           <table className="product-table index-field-table">
+            <caption className="sr-only">Observed fields for index {index.name}</caption>
             <thead><tr><th scope="col">Field</th><th scope="col">Type</th><th scope="col">Events</th><th scope="col">Null</th><th scope="col">Missing</th><th scope="col">Profile</th></tr></thead>
             <tbody>{fieldSnapshot.fields.map((field) => (
               <tr key={field.fieldName}>

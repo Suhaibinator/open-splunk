@@ -222,10 +222,7 @@ export function OperationsDashboard({ dataMode }: OperationsDashboardProps) {
               {RANGE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           </label>
-          <button className="suite-button" disabled title="Dashboard metrics use a static preview snapshot." type="button">Static preview</button>
-          <button className={`suite-button ${styles.disabledAction}`} disabled title="Dashboard editing is not available in this preview." type="button">
-            Edit dashboard
-          </button>
+          <span className={styles.previewBadge}>Preview data</span>
           <span className={styles.updateStatus}>Fixture timestamp: Jul 21, 4:00 PM · Range scopes request and latency metrics; service health is the current fixture.</span>
         </div>
       </header>

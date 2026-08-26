@@ -7,6 +7,9 @@ import {
   fieldCountLabel,
   formatStorageBytes,
   mergeIndexFieldPage,
+  nextObservedIndexId,
+  normalizeIndexObservationQuery,
+  retainVisibleObservedIndexId,
 } from "./index-observability-data";
 
 const field = (fieldName: string) => ({
@@ -57,4 +60,31 @@ test("formatStorageBytes uses binary storage units", () => {
   assert.equal(formatStorageBytes(0n), "0 B");
   assert.equal(formatStorageBytes(1_536n), "1.5 KiB");
   assert.equal(formatStorageBytes(1_073_741_824n), "1 GiB");
+});
+
+test("normalizeIndexObservationQuery trims applied values and rejects unbounded ranges", () => {
+  assert.deepEqual(normalizeIndexObservationQuery({
+    earliest: "  -24h ",
+    latest: " now ",
+    nameFilter: " host ",
+  }), { earliest: "-24h", latest: "now", nameFilter: "host" });
+  assert.equal(normalizeIndexObservationQuery({
+    earliest: "",
+    latest: "now",
+    nameFilter: "",
+  }), null);
+  assert.equal(normalizeIndexObservationQuery({
+    earliest: "-24h",
+    latest: "   ",
+    nameFilter: "",
+  }), null);
+});
+
+test("dataset profile selection toggles and clears when filtered from view", () => {
+  assert.equal(nextObservedIndexId(null, "main"), "main");
+  assert.equal(nextObservedIndexId("main", "main"), null);
+  assert.equal(nextObservedIndexId("main", "audit"), "audit");
+  assert.equal(retainVisibleObservedIndexId("main", ["main", "audit"]), "main");
+  assert.equal(retainVisibleObservedIndexId("main", ["audit"]), null);
+  assert.equal(retainVisibleObservedIndexId(null, ["main"]), null);
 });

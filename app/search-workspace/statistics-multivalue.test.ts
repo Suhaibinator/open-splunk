@@ -71,5 +71,6 @@ test("multiline stats presentation stays inside the fixed virtual row", () => {
     "utf8",
   );
   assert.match(panel, /<StatsFlatMultivalueValue/u);
+  assert.match(panel, /tabIndex=\{virtualWindow\.virtualized \? 0 : undefined\}/u);
   assert.doesNotMatch(panel, /whiteSpace:\s*statsFlatMultivalueWhiteSpace/u);
 });

@@ -171,7 +171,7 @@ export function BackendActivityConsole({ apiBaseUrl }: BackendActivityConsolePro
         title="Activity"
         description="Inspect retained search and export jobs, search history, and the audit journals advertised by this backend."
       />
-      <div className="activity-view-tabs" role="tablist" aria-label="Activity data view">
+      <div className="activity-view-tabs" data-tab-count={availableViews.length} role="tablist" aria-label="Activity data view">
         <button
           ref={jobTabRef}
           id="activity-jobs-tab"

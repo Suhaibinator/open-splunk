@@ -319,8 +319,7 @@ export function AnalyticsConsole({ dataMode }: AnalyticsConsoleProps) {
         description="Explore preview search-performance fixtures, query cost, and field coverage."
         actions={(
           <>
-            <output className={styles.updateStatus} data-testid="analytics-updated">Static preview snapshot</output>
-            <button className="suite-button" data-testid="analytics-refresh" disabled title="Analytics uses a static preview snapshot." type="button">Static preview</button>
+            <span className={styles.previewBadge} data-testid="analytics-updated">Preview data</span>
             <Link className="suite-button suite-button--primary" href={fixtureSearchHref(`index=gradethis${environmentSPL}`)}>{dataMode === "backend" ? "Open example draft" : "Open Search"}</Link>
           </>
         )}

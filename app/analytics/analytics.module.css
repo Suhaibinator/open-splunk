@@ -2,9 +2,15 @@
   max-width: 1540px;
 }
 
-.updateStatus {
-  color: #718087;
+.previewBadge {
+  background: #eef1f2;
+  border: 1px solid #d1d7da;
+  border-radius: 10px;
+  color: #66747b;
   font-size: 10px;
+  font-weight: 700;
+  padding: 3px 8px;
+  text-transform: uppercase;
   white-space: nowrap;
 }
 
@@ -793,11 +799,6 @@
 }
 
 @media (max-width: 650px) {
-  .updateStatus {
-    flex-basis: 100%;
-    order: 3;
-  }
-
   .contextBar {
     grid-template-columns: 1fr 1fr;
     padding: 10px;
@@ -824,15 +825,13 @@
   }
 
   .trendFigure {
-    overflow-x: auto;
-    overscroll-behavior-x: contain;
+    overflow: visible;
     padding-inline: 8px;
-    scrollbar-width: thin;
   }
 
   .trendPlot {
     height: 194px;
-    min-width: 840px;
+    min-width: 0;
   }
 
   .trendPlot svg,
@@ -841,15 +840,14 @@
   }
 
   .trendPoint {
-    height: 36px;
-    width: 36px;
+    height: 44px;
+    width: 44px;
   }
 
   .trendFigure figcaption {
-    left: 0;
     line-height: 1.4;
-    position: sticky;
-    width: calc(100vw - 52px);
+    position: static;
+    width: auto;
   }
 
   .performanceFooter {
@@ -927,7 +925,7 @@
     align-self: center;
     grid-column: 2;
     grid-row: 2;
-    min-height: 34px;
+    min-height: 44px;
     padding-top: 10px;
   }
 }

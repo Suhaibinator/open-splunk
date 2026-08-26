@@ -925,7 +925,7 @@ export function KnowledgeObjectMutationControls({
       ) : null}
       <div className="knowledge-manager__mutation-actions">
         <button type="button" onClick={() => { setMode("actions"); setConfirmation(""); setActionState("idle"); }} disabled={actionState === "working"}>Cancel</button>
-        <button className="suite-button suite-button--danger" type="button" onClick={() => void remove()} disabled={confirmation !== currentKnowledgeObject.name || actionState === "working"}>
+        <button className="button danger" type="button" onClick={() => void remove()} disabled={confirmation !== currentKnowledgeObject.name || actionState === "working"}>
           {actionState === "working" ? "Deleting…" : "Delete knowledge object"}
         </button>
       </div>

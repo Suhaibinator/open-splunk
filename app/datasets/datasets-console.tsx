@@ -50,25 +50,27 @@ function DemoDatasetsConsole() {
         eyebrow="DATA"
         title="Datasets"
         description="Understand available indexes, source types, and field coverage."
-        actions={<><Link className="suite-button" href="/admin/">Manage indexes</Link><Link className="suite-button suite-button--primary" href="/search/">Search data</Link></>}
+        actions={<><Link className="suite-button" href="/admin/?section=indexes">Manage indexes</Link><Link className="suite-button suite-button--primary" href="/search/">Search data</Link></>}
       />
 
       <div className="dataset-toolbar">
         <label><span className="sr-only">Filter datasets</span><i aria-hidden="true">⌕</i><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Find an index or description" /></label>
         <fieldset className="dataset-view-toggle">
           <legend className="sr-only">Dataset view</legend>
-          <button className={view === "cards" ? "active" : undefined} type="button" aria-pressed={view === "cards"} onClick={() => setView("cards")}>▥ Cards</button>
-          <button className={view === "table" ? "active" : undefined} type="button" aria-pressed={view === "table"} onClick={() => setView("table")}>☷ Table</button>
+          <button className={view === "cards" ? "active" : undefined} type="button" aria-pressed={view === "cards"} onClick={() => setView("cards")}><span aria-hidden="true">▥</span> Cards</button>
+          <button className={view === "table" ? "active" : undefined} type="button" aria-pressed={view === "table"} onClick={() => setView("table")}><span aria-hidden="true">☷</span> Table</button>
         </fieldset>
       </div>
 
-      {view === "cards" ? (
+      {visible.length === 0 ? (
+        <div className="product-empty-state"><span aria-hidden="true">⌕</span><strong>No matching datasets</strong><p>Try another index name or description.</p><button type="button" onClick={() => setFilter("")}>Clear filter</button></div>
+      ) : view === "cards" ? (
         <div className="dataset-grid">
           {visible.map((item) => (
             <article className="dataset-card" key={item.name}>
               <header>
                 <span className={`dataset-icon dataset-icon--${item.color}`} aria-hidden="true">▦</span>
-                <div><h2>{item.name}</h2><p>{item.description}</p></div>
+                <div className="dataset-card__identity"><h2>{item.name}</h2><p>{item.description}</p></div>
                 <span className={`status-label status-label--${item.status === "Active" ? "complete" : "neutral"}`}><i />{item.status}</span>
               </header>
               <dl>
@@ -82,9 +84,9 @@ function DemoDatasetsConsole() {
                 <small>{item.retention} retention · {item.status === "Paused" ? "ingestion paused" : item.name === "gradethis" ? "11 days remaining in current partition" : "healthy"}</small>
               </div>
               <footer>
-                <Link href={searchLaunchHref(`index=${item.name} | sort -_time`)}>Search index</Link>
-                <Link href={searchLaunchHref(`index=${item.name} | stats count by sourcetype | sort -count`)}>Explore sources</Link>
-                <button className="row-overflow" type="button" aria-label={`Actions for ${item.name}`} disabled title="Dataset actions are managed from Administration">•••</button>
+                <Link href={searchLaunchHref(`index=${item.name} | sort -_time`)} aria-label={`Search index ${item.name}`}>Search index</Link>
+                <Link href={searchLaunchHref(`index=${item.name} | stats count by sourcetype | sort -count`)} aria-label={`Explore sources in index ${item.name}`}>Explore sources</Link>
+                <Link href="/admin/?section=indexes" aria-label={`Manage index ${item.name} in Administration`}>Manage</Link>
               </footer>
             </article>
           ))}
@@ -93,6 +95,7 @@ function DemoDatasetsConsole() {
         <section className="suite-card">
           <div className="responsive-table-wrap">
             <table className="product-table">
+              <caption className="sr-only">Datasets</caption>
               <thead><tr><th scope="col">Name</th><th scope="col">Events today</th><th scope="col">Source types</th><th scope="col">Fields</th><th scope="col">Storage</th><th scope="col">Retention</th><th scope="col"><span className="sr-only">Action</span></th></tr></thead>
               <tbody>{visible.map((item) => <tr key={item.name}><td><strong>{item.name}</strong><small className="table-secondary">{item.description}</small></td><td>{item.events}</td><td>{item.sources}</td><td>{item.fields}</td><td>{item.size}</td><td>{item.retention}</td><td><Link className="table-action" href={searchLaunchHref(`index=${item.name} | sort -_time`)} aria-label={`Search ${item.name}`}>Search ›</Link></td></tr>)}</tbody>
             </table>
@@ -100,9 +103,7 @@ function DemoDatasetsConsole() {
         </section>
       )}
 
-      {visible.length === 0 ? <div className="product-empty-state"><span aria-hidden="true">⌕</span><strong>No matching datasets</strong><p>Try another index or source-type name.</p><button type="button" onClick={() => setFilter("")}>Clear filter</button></div> : null}
-
-      <section className="suite-card field-catalog">
+      {visible.length === 0 ? null : <section className="suite-card field-catalog">
         <header className="suite-card-header"><div><h2>Common fields</h2><p>High-coverage fields discovered across active indexes.</p></div><Link href={searchLaunchHref("index=gradethis | stats count by sourcetype | sort -count")}>Profile source types</Link></header>
         <div className="field-catalog-grid">
           {COMMON_FIELDS.map(([name, coverage, values]) => (
@@ -111,7 +112,7 @@ function DemoDatasetsConsole() {
             </Link>
           ))}
         </div>
-      </section>
+      </section>}
     </div>
   );
 }

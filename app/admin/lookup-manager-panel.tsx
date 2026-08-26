@@ -2,6 +2,7 @@
 
 import type { FormEvent } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 
 import {
   SharingScope,
@@ -561,6 +562,7 @@ export function LookupManagerPanel({
           className="suite-button suite-button--primary"
           type="button"
           disabled={state !== "available" || apps.length === 0 || busy}
+          aria-describedby={state === "available" && apps.length === 0 ? "lookup-create-unavailable-reason" : undefined}
           onClick={() => {
             setTarget(null);
             setNotice(null);
@@ -568,6 +570,10 @@ export function LookupManagerPanel({
           }}
         >＋ Create lookup</button>
       </header>
+
+      {state === "available" && apps.length === 0 ? (
+        <p id="lookup-create-unavailable-reason" className="lookup-manager__create-reason" role="note">Create an app workspace before publishing a lookup table.</p>
+      ) : null}
 
       {notice === null ? null : (
         <output
@@ -620,7 +626,7 @@ export function LookupManagerPanel({
         <BackendResourceState kind="error" title="Lookup tables could not be loaded" message={loadError ?? "The lookup catalog request failed."} action={<button type="button" onClick={reload}>Retry</button>} />
       ) : null}
       {state === "available" && visibleLookups.length === 0 ? (
-        <BackendResourceState kind="empty" title="No matching lookup tables" message={lookups.length === 0 ? "Create a lookup or select a different app scope." : "Clear the local name filter to show loaded lookups."} />
+        <BackendResourceState kind="empty" title={lookups.length === 0 ? "No lookup tables" : "No matching lookup tables"} message={lookups.length === 0 ? apps.length === 0 ? "An app workspace is required before the first lookup can be published." : "Create a lookup or select a different app scope." : "Clear the local name filter to show loaded lookups."} action={apps.length === 0 ? <Link href="/admin/?section=apps">Manage apps</Link> : filter.length > 0 ? <button type="button" onClick={() => setFilter("")}>Clear filter</button> : undefined} />
       ) : null}
       {state === "available" && visibleLookups.length > 0 ? (
         <LookupManagerTable
@@ -695,7 +701,7 @@ export function LookupManagerPanel({
             <>
               <button className="button secondary" type="button" disabled={busy} onClick={closeModal}>Cancel</button>
               <button
-                className="button primary"
+                className="button danger"
                 type="submit"
                 form="delete-lookup-form"
                 disabled={busy || confirmation !== target.definition.name}
@@ -736,14 +742,16 @@ export function LookupManagerTable({
     <div className="suite-card resource-table-card lookup-manager__table-card">
       <div className="responsive-table-wrap">
         <table className="product-table admin-resource-table lookup-manager__table">
-          <thead><tr><th>Lookup</th><th>Shape</th><th>Matching</th><th>State</th><th>Updated</th><th><span className="sr-only">Actions</span></th></tr></thead>
+          <caption className="sr-only">Lookup tables</caption>
+          <thead><tr><th scope="col">Lookup</th><th scope="col">Shape</th><th scope="col">Matching</th><th scope="col">State</th><th scope="col">Updated</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
           <tbody>{lookups.map((lookup) => {
             const definition = lookup.definition;
             const stateLabel = lookupStateLabel(lookup.state);
+            const lookupName = definition?.name ?? lookup.lookupId;
             return (
               <tr key={lookup.lookupId}>
-                <td>
-                  <strong>{definition?.name ?? lookup.lookupId}</strong>
+                <td className="table-long-value">
+                  <strong>{lookupName}</strong>
                   <small className="table-secondary">{definition?.appId ?? "Unknown app"} · v{lookup.version.toLocaleString()} · {sharingScopeLabel(definition?.sharingScope ?? SharingScope.SHARING_SCOPE_UNSPECIFIED)}</small>
                   {definition?.description ? <small className="table-secondary">{definition.description}</small> : null}
                 </td>
@@ -752,9 +760,9 @@ export function LookupManagerTable({
                 <td><span className={`status-label status-label--${stateLabel === "Active" ? "complete" : "neutral"}`}><i />{stateLabel}</span></td>
                 <td>{formatDate(lookup.updatedAt)}</td>
                 <td><div className="row-actions">
-                  <button className="table-action" type="button" disabled={busy || lookup.state === LookupState.LOOKUP_STATE_DELETED} onClick={() => onReplace(lookup)}>Replace</button>
-                  <button className="table-action" type="button" disabled={busy || (lookup.state !== LookupState.LOOKUP_STATE_ACTIVE && lookup.state !== LookupState.LOOKUP_STATE_DISABLED)} onClick={() => onChangeState(lookup)}>{lookup.state === LookupState.LOOKUP_STATE_ACTIVE ? "Disable" : "Enable"}</button>
-                  {lookup.state === LookupState.LOOKUP_STATE_DISABLED ? <button className="table-action" type="button" disabled={busy} onClick={() => onDelete(lookup)}>Delete</button> : null}
+                  <button className="table-action" type="button" aria-label={`Replace lookup ${lookupName}`} disabled={busy || lookup.state === LookupState.LOOKUP_STATE_DELETED} onClick={() => onReplace(lookup)}>Replace</button>
+                  <button className="table-action" type="button" aria-label={`${lookup.state === LookupState.LOOKUP_STATE_ACTIVE ? "Disable" : "Enable"} lookup ${lookupName}`} disabled={busy || (lookup.state !== LookupState.LOOKUP_STATE_ACTIVE && lookup.state !== LookupState.LOOKUP_STATE_DISABLED)} onClick={() => onChangeState(lookup)}>{lookup.state === LookupState.LOOKUP_STATE_ACTIVE ? "Disable" : "Enable"}</button>
+                  {lookup.state === LookupState.LOOKUP_STATE_DISABLED ? <button className="table-action table-action--danger" type="button" aria-label={`Delete lookup ${lookupName}`} disabled={busy} onClick={() => onDelete(lookup)}>Delete</button> : null}
                 </div></td>
               </tr>
             );
@@ -919,7 +927,7 @@ export function LookupPreviewTable({ preview }: { preview: SafeLookupPreview }) 
       )}
       {preview.violations.length > 0 ? null : preview.rows.length === 0 ? <p className="lookup-manager__empty-preview">The CSV contains a header and no data rows.</p> : (
         <div className="responsive-table-wrap">
-          <table className="product-table"><thead><tr>{preview.columns.map((column) => <th key={column}>{column}</th>)}</tr></thead><tbody>{keyedRows.map(({ key, value: row }) => <tr key={key}>{row.map((value, columnIndex) => <td key={preview.columns[columnIndex]}>{value === "" ? <i aria-label="empty string">empty</i> : value}</td>)}</tr>)}</tbody></table>
+          <table className="product-table"><caption className="sr-only">Validated lookup CSV preview</caption><thead><tr>{preview.columns.map((column) => <th key={column} scope="col">{column}</th>)}</tr></thead><tbody>{keyedRows.map(({ key, value: row }) => <tr key={key}>{row.map((value, columnIndex) => <td key={preview.columns[columnIndex]}>{value === "" ? <i aria-label="empty string">empty</i> : value}</td>)}</tr>)}</tbody></table>
         </div>
       )}
     </section>

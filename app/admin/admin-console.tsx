@@ -10,6 +10,7 @@ import { searchLaunchHref } from "@/lib/search/launch-url";
 
 import { PageHeading } from "../_components/product-shell";
 import { Modal } from "../search-workspace/modal";
+import { ADMIN_SECTION_QUERY_PARAMETER, adminSectionPath, resolveAdminSection } from "./admin-navigation";
 import { BackendAdminConsole } from "./backend-admin-console";
 
 type AdminSection = "overview" | "indexes" | "collectors" | "access" | "server";
@@ -36,6 +37,7 @@ const NAV_ITEMS: Array<{ key: AdminSection; label: string; detail: string; icon:
   { key: "access", label: "Users & access", detail: "Roles and authentication", icon: "♙" },
   { key: "server", label: "Server settings", detail: "Limits and preferences", icon: "⚙" },
 ];
+const DEMO_ADMIN_SECTIONS = NAV_ITEMS.map((item) => item.key);
 
 interface AdminConsoleProps {
   dataMode: SearchDataMode;
@@ -60,6 +62,26 @@ function DemoAdminConsole() {
   const [saving, setSaving] = useState(false);
 
   const filteredIndexes = useMemo(() => indexes.filter((item) => item.name.includes(filter.trim().toLowerCase())), [filter, indexes]);
+
+  useEffect(() => {
+    function restoreSectionFromHistory() {
+      const next = resolveAdminSection(
+        new URL(window.location.href).searchParams.get(ADMIN_SECTION_QUERY_PARAMETER),
+        DEMO_ADMIN_SECTIONS,
+        "overview",
+      );
+      setSection(next);
+    }
+    restoreSectionFromHistory();
+    window.addEventListener("popstate", restoreSectionFromHistory);
+    return () => window.removeEventListener("popstate", restoreSectionFromHistory);
+  }, []);
+
+  function navigateSection(next: AdminSection) {
+    if (next === section) return;
+    setSection(next);
+    window.history.pushState(null, "", adminSectionPath(window.location.href, next));
+  }
 
   function openIndexDialog() {
     setIndexName("");
@@ -117,7 +139,7 @@ function DemoAdminConsole() {
 
       <div className="admin-mobile-section-picker">
         <label htmlFor="admin-section">Administration section</label>
-        <select id="admin-section" value={section} onChange={(event) => setSection(event.target.value as AdminSection)}>
+        <select id="admin-section" value={section} onChange={(event) => navigateSection(event.target.value as AdminSection)}>
           {NAV_ITEMS.map((item) => <option value={item.key} key={item.key}>{item.label}</option>)}
         </select>
       </div>
@@ -126,15 +148,15 @@ function DemoAdminConsole() {
         <aside className="admin-sidebar" aria-label="Administration navigation">
           <span className="admin-sidebar-label">SETTINGS</span>
           {NAV_ITEMS.map((item) => (
-            <button className={section === item.key ? "active" : undefined} type="button" onClick={() => setSection(item.key)} key={item.key}>
+            <button className={section === item.key ? "active" : undefined} type="button" aria-current={section === item.key ? "page" : undefined} onClick={() => navigateSection(item.key)} key={item.key}>
               <i aria-hidden="true">{item.icon}</i><span><strong>{item.label}</strong><small>{item.detail}</small></span><b aria-hidden="true">›</b>
             </button>
           ))}
-          <div className="admin-sidebar-meta"><span className="status-dot status-dot--healthy" /><div><strong>open-splunk.local</strong><small>{OPEN_SPLUNK_BUILD_LABEL} · Healthy</small></div></div>
+          <div className="admin-sidebar-meta"><span className="status-dot" aria-hidden="true" /><div><strong>open-splunk.local</strong><small>{OPEN_SPLUNK_BUILD_LABEL} · Preview data</small></div></div>
         </aside>
 
-        <section className="admin-content" aria-live="polite">
-          {section === "overview" ? <OverviewSection onNavigate={setSection} /> : null}
+        <section className="admin-content">
+          {section === "overview" ? <OverviewSection onNavigate={navigateSection} /> : null}
           {section === "indexes" ? (
             <IndexesSection
               filter={filter}
@@ -149,7 +171,7 @@ function DemoAdminConsole() {
               }}
             />
           ) : null}
-          {section === "collectors" ? <CollectorsSection onCreateToken={() => setModal("token")} /> : null}
+          {section === "collectors" ? <CollectorsSection /> : null}
           {section === "access" ? <AccessSection /> : null}
           {section === "server" ? <ServerSection saving={saving} onSave={saveServerSettings} /> : null}
         </section>
@@ -198,10 +220,10 @@ function OverviewSection({ onNavigate }: { onNavigate: (section: AdminSection) =
     <div className="admin-section-stack">
       <header className="admin-section-header"><div><h2>System overview</h2><p>Current health, storage, and administrative attention.</p></div><span className="status-label status-label--complete"><i />Operational</span></header>
       <div className="admin-summary-grid">
-        <article><span className="summary-icon summary-icon--green">▦</span><div><small>Indexes</small><strong>3</strong><p>2 active · 1 paused</p></div><button type="button" onClick={() => onNavigate("indexes")}>Manage</button></article>
-        <article><span className="summary-icon summary-icon--blue">⇣</span><div><small>Collectors</small><strong>2</strong><p>Both reporting normally</p></div><button type="button" onClick={() => onNavigate("collectors")}>Inspect</button></article>
-        <article><span className="summary-icon summary-icon--violet">♙</span><div><small>Administrators</small><strong>1</strong><p>Preview persona</p></div><button type="button" onClick={() => onNavigate("access")}>Review</button></article>
-        <article><span className="summary-icon summary-icon--orange">▰</span><div><small>Storage used</small><strong>387 GB</strong><p>38% of 1 TB</p></div><button type="button" onClick={() => onNavigate("server")}>Limits</button></article>
+        <article><span className="summary-icon summary-icon--green" aria-hidden="true">▦</span><div><small>Indexes</small><strong>3</strong><p>2 active · 1 paused</p></div><button type="button" onClick={() => onNavigate("indexes")}>Manage</button></article>
+        <article><span className="summary-icon summary-icon--blue" aria-hidden="true">⇣</span><div><small>Collectors</small><strong>2</strong><p>Both reporting normally</p></div><button type="button" onClick={() => onNavigate("collectors")}>Inspect</button></article>
+        <article><span className="summary-icon summary-icon--violet" aria-hidden="true">♙</span><div><small>Administrators</small><strong>1</strong><p>Preview persona</p></div><button type="button" onClick={() => onNavigate("access")}>Review</button></article>
+        <article><span className="summary-icon summary-icon--orange" aria-hidden="true">▰</span><div><small>Storage used</small><strong>387 GB</strong><p>38% of 1 TB</p></div><button type="button" onClick={() => onNavigate("server")}>Limits</button></article>
       </div>
       <div className="admin-overview-grid">
         <section className="suite-card"><header className="suite-card-header"><div><h3>Service health</h3><p>Core components and current latency.</p></div><button type="button">Refresh</button></header><ul className="health-service-list"><li><span className="status-dot status-dot--healthy" /><div><strong>Search API</strong><small>SRouter protobuf · p95 118 ms</small></div><b>Healthy</b></li><li><span className="status-dot status-dot--healthy" /><div><strong>ClickHouse</strong><small>1 node · 11 ms query ping</small></div><b>Healthy</b></li><li><span className="status-dot status-dot--healthy" /><div><strong>Control plane</strong><small>SQLite WAL · last checkpoint 2 min ago</small></div><b>Healthy</b></li><li><span className="status-dot status-dot--warning" /><div><strong>Export worker</strong><small>1 artifact awaiting cleanup</small></div><b className="warning-copy">Attention</b></li></ul></section>
@@ -275,26 +297,30 @@ function IndexesSection({ filter, indexes, onFilterChange, onToggle }: { filter:
   return (
     <div className="admin-section-stack">
       <header className="admin-section-header"><div><h2>Indexes</h2><p>Logical data boundaries, retention, and search availability.</p></div><span>{indexes.length} indexes</span></header>
-      <div className="resource-toolbar"><label><span className="sr-only">Filter indexes</span><i aria-hidden="true">⌕</i><input value={filter} onChange={(event) => onFilterChange(event.target.value)} placeholder="Filter indexes" /></label><button type="button" disabled title="Status filtering requires the management API">All statuses ▾</button><button type="button" disabled title="Column customization is not available in this preview">Columns ▾</button></div>
-      <div className="suite-card resource-table-card"><div className="responsive-table-wrap"><table className="product-table admin-resource-table"><thead><tr><th scope="col">Name</th><th scope="col">Status</th><th scope="col">Events today</th><th scope="col">Storage</th><th scope="col">Retention</th><th scope="col">Last event</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead><tbody>{indexes.map((item) => <tr key={item.name}><td><Link className="resource-name" href={searchLaunchHref(`index=${item.name} | sort -_time`)} aria-label={`Search index ${item.name}`}><span aria-hidden="true">▦</span><div><strong>{item.name}</strong><small>index={item.name}</small></div></Link></td><td><span className={`status-label status-label--${item.status === "Active" ? "complete" : "neutral"}`}><i />{item.status}</span></td><td className="numeric-data">{item.events}</td><td>{item.storage}</td><td>{item.retention}</td><td>{item.lastEvent}</td><td><div className="resource-action-wrap" ref={openActions === item.name ? openActionWrapRef : undefined}><button ref={(element) => { if (element === null) actionTriggerRefs.current.delete(item.name); else actionTriggerRefs.current.set(item.name, element); }} className="row-overflow" type="button" aria-label={`Actions for ${item.name}`} aria-haspopup="menu" aria-expanded={openActions === item.name} onClick={(event) => toggleActions(item.name, event.currentTarget)}>•••</button>{openActions === item.name ? <div className="resource-action-menu" role="menu" aria-label={`Actions for ${item.name}`}><Link role="menuitem" href={searchLaunchHref(`index=${item.name} | sort -_time`)}>Search this index</Link><button role="menuitem" type="button" onClick={() => runToggleAction(item.name)}>{item.status === "Active" ? "Simulate pausing ingestion" : "Simulate resuming ingestion"}</button></div> : null}</div></td></tr>)}</tbody></table></div></div>
-      <p className="resource-footnote">This preview shows logical index boundaries; server storage and access configuration are not changed here.</p>
+      <div className="resource-toolbar"><label><span className="sr-only">Filter indexes</span><i aria-hidden="true">⌕</i><input value={filter} onChange={(event) => onFilterChange(event.target.value)} placeholder="Filter indexes" /></label><button type="button" disabled aria-describedby="demo-index-toolbar-note">All statuses unavailable</button><button type="button" disabled aria-describedby="demo-index-toolbar-note">Columns unavailable</button></div>
+      {indexes.length === 0 ? (
+        <div className="product-empty-state"><span aria-hidden="true">⌕</span><strong>No matching indexes</strong><p>Try another index name.</p><button type="button" onClick={() => onFilterChange("")}>Clear filter</button></div>
+      ) : (
+        <div className="suite-card resource-table-card"><div className="responsive-table-wrap"><table className="product-table admin-resource-table"><caption className="sr-only">Preview indexes</caption><thead><tr><th scope="col">Name</th><th scope="col">Status</th><th scope="col">Events today</th><th scope="col">Storage</th><th scope="col">Retention</th><th scope="col">Last event</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead><tbody>{indexes.map((item) => <tr key={item.name}><td><Link className="resource-name" href={searchLaunchHref(`index=${item.name} | sort -_time`)} aria-label={`Search index ${item.name}`}><span aria-hidden="true">▦</span><div><strong>{item.name}</strong><small>index={item.name}</small></div></Link></td><td><span className={`status-label status-label--${item.status === "Active" ? "complete" : "neutral"}`}><i />{item.status}</span></td><td className="numeric-data">{item.events}</td><td>{item.storage}</td><td>{item.retention}</td><td>{item.lastEvent}</td><td><div className="resource-action-wrap" ref={openActions === item.name ? openActionWrapRef : undefined}><button ref={(element) => { if (element === null) actionTriggerRefs.current.delete(item.name); else actionTriggerRefs.current.set(item.name, element); }} className="row-overflow" type="button" aria-label={`Actions for ${item.name}`} aria-haspopup="menu" aria-expanded={openActions === item.name} onClick={(event) => toggleActions(item.name, event.currentTarget)}>•••</button>{openActions === item.name ? <div className="resource-action-menu" role="menu" aria-label={`Actions for ${item.name}`}><Link role="menuitem" href={searchLaunchHref(`index=${item.name} | sort -_time`)}>Search this index</Link><button role="menuitem" type="button" onClick={() => runToggleAction(item.name)}>{item.status === "Active" ? "Simulate pausing ingestion" : "Simulate resuming ingestion"}</button></div> : null}</div></td></tr>)}</tbody></table></div></div>
+      )}
+      <p id="demo-index-toolbar-note" className="resource-footnote">Status filtering and column customization require the management API. This preview shows logical index boundaries; server storage and access configuration are not changed here.</p>
     </div>
   );
 }
 
-function CollectorsSection({ onCreateToken }: { onCreateToken: () => void }) {
+function CollectorsSection() {
   return (
     <div className="admin-section-stack">
       <header className="admin-section-header"><div><h2>Data inputs</h2><p>Preview collector health, queue depth, and token workflows.</p></div><span className="status-label status-label--complete"><i />2 connected</span></header>
       <div className="collector-grid"><article className="collector-card"><header><span className="collector-host-icon">▣</span><div><strong>api-prod-03</strong><small>Linux · collector {OPEN_SPLUNK_BUILD_LABEL}</small></div><span className="status-label status-label--complete"><i />Live</span></header><dl><div><dt>Last seen</dt><dd>1 sec ago</dd></div><div><dt>Queue depth</dt><dd>0 events</dd></div><div><dt>Throughput</dt><dd>214 evt/s</dd></div><div><dt>Destination</dt><dd>gradethis</dd></div></dl><footer><span><i style={{ width: "72%" }} /></span><small>72% of configured peak</small><button type="button">Details</button></footer></article><article className="collector-card"><header><span className="collector-host-icon">▣</span><div><strong>worker-prod-02</strong><small>Linux · collector {OPEN_SPLUNK_BUILD_LABEL}</small></div><span className="status-label status-label--complete"><i />Live</span></header><dl><div><dt>Last seen</dt><dd>3 sec ago</dd></div><div><dt>Queue depth</dt><dd>42 events</dd></div><div><dt>Throughput</dt><dd>87 evt/s</dd></div><div><dt>Destination</dt><dd>platform</dd></div></dl><footer><span><i style={{ width: "36%" }} /></span><small>36% of configured peak</small><button type="button">Details</button></footer></article></div>
-      <section className="suite-card token-section"><header className="suite-card-header"><div><h3>Ingestion tokens</h3><p>Sample records illustrating index-scoped credentials.</p></div><button type="button" onClick={onCreateToken}>Generate demo token</button></header><div className="responsive-table-wrap"><table className="product-table"><thead><tr><th scope="col">Name</th><th scope="col">Prefix</th><th scope="col">Allowed indexes</th><th scope="col">Last used</th><th scope="col">Status</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead><tbody><tr><td><strong>prod-gradethis</strong></td><td><code>ospl_ing_a73…</code></td><td>gradethis</td><td>1 sec ago</td><td><span className="status-label status-label--complete"><i />Active</span></td><td><button className="row-overflow" type="button" aria-label="Actions for prod-gradethis">•••</button></td></tr><tr><td><strong>platform-workers</strong></td><td><code>ospl_ing_2f1…</code></td><td>platform</td><td>3 sec ago</td><td><span className="status-label status-label--complete"><i />Active</span></td><td><button className="row-overflow" type="button" aria-label="Actions for platform-workers">•••</button></td></tr></tbody></table></div></section>
+      <section className="suite-card token-section"><header className="suite-card-header"><div><h3>Issued credentials</h3><p>Sample records illustrating index-scoped ingestion tokens.</p></div></header><div className="responsive-table-wrap"><table className="product-table"><caption className="sr-only">Preview ingestion tokens</caption><thead><tr><th scope="col">Name</th><th scope="col">Prefix</th><th scope="col">Allowed indexes</th><th scope="col">Last used</th><th scope="col">Status</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead><tbody><tr><td><strong>prod-gradethis</strong></td><td><code>ospl_ing_a73…</code></td><td>gradethis</td><td>1 sec ago</td><td><span className="status-label status-label--complete"><i />Active</span></td><td><button className="row-overflow" type="button" aria-label="Actions for prod-gradethis">•••</button></td></tr><tr><td><strong>platform-workers</strong></td><td><code>ospl_ing_2f1…</code></td><td>platform</td><td>3 sec ago</td><td><span className="status-label status-label--complete"><i />Active</span></td><td><button className="row-overflow" type="button" aria-label="Actions for platform-workers">•••</button></td></tr></tbody></table></div></section>
     </div>
   );
 }
 
 function AccessSection() {
   return (
-    <div className="admin-section-stack"><header className="admin-section-header"><div><h2>Users &amp; access</h2><p>Preview accounts, roles, and index permissions.</p></div><button className="suite-button suite-button--primary" type="button" disabled>Invite user unavailable</button></header><div className="access-mode-notice"><span>i</span><div><strong>Authentication is not connected</strong><p>Administrator is a preview persona. The role model is illustrative and does not grant or enforce backend access.</p></div></div><section className="suite-card"><header className="suite-card-header"><div><h3>Administrators</h3><p>Sample users with full deployment access.</p></div><span>1 preview user</span></header><div className="user-row"><span className="user-avatar-large">A</span><div><strong>Administrator</strong><small>admin@localhost · Preview persona</small></div><span className="role-pill">admin</span><b>Fixture user</b><button className="row-overflow" type="button">•••</button></div></section><section className="suite-card"><header className="suite-card-header"><div><h3>Role permissions</h3><p>Illustrative permissions for the preview administrator.</p></div></header><div className="permission-grid"><span><i>✓</i><strong>Search all indexes</strong><small>Read and export indexed events</small></span><span><i>✓</i><strong>Manage data</strong><small>Indexes, collectors, and tokens</small></span><span><i>✓</i><strong>Manage knowledge</strong><small>Saved searches and dashboards</small></span><span><i>✓</i><strong>Administer system</strong><small>Limits, users, and diagnostics</small></span></div></section></div>
+    <div className="admin-section-stack"><header className="admin-section-header"><div><h2>Users &amp; access</h2><p>Preview accounts, roles, and index permissions.</p></div><button className="suite-button suite-button--primary" type="button" disabled aria-describedby="demo-authentication-unavailable">Invite user unavailable</button></header><div id="demo-authentication-unavailable" className="access-mode-notice"><span>i</span><div><strong>Authentication is not connected</strong><p>Administrator is a preview persona. The role model is illustrative and does not grant or enforce backend access.</p></div></div><section className="suite-card"><header className="suite-card-header"><div><h3>Administrators</h3><p>Sample users with full deployment access.</p></div><span>1 preview user</span></header><div className="user-row"><span className="user-avatar-large">A</span><div><strong>Administrator</strong><small>admin@localhost · Preview persona</small></div><span className="role-pill">admin</span><b>Fixture user</b><button className="row-overflow" type="button">•••</button></div></section><section className="suite-card"><header className="suite-card-header"><div><h3>Role permissions</h3><p>Illustrative permissions for the preview administrator.</p></div></header><div className="permission-grid"><span><i>✓</i><strong>Search all indexes</strong><small>Read and export indexed events</small></span><span><i>✓</i><strong>Manage data</strong><small>Indexes, collectors, and tokens</small></span><span><i>✓</i><strong>Manage knowledge</strong><small>Saved searches and dashboards</small></span><span><i>✓</i><strong>Administer system</strong><small>Limits, users, and diagnostics</small></span></div></section></div>
   );
 }
 

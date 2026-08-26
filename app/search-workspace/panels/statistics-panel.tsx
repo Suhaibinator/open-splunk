@@ -1,3 +1,4 @@
+/* oxlint-disable jsx-a11y/no-noninteractive-tabindex -- The virtualized overflow region must be focusable so keyboard users can scroll it. */
 import {
   type CSSProperties,
   type Dispatch,
@@ -412,6 +413,7 @@ export function StatisticsPanel({
         <section
           className={`statistics-table-shell${virtualWindow.virtualized ? " statistics-table-shell--virtualized" : ""}`}
           aria-label="Scrollable statistics table"
+          tabIndex={virtualWindow.virtualized ? 0 : undefined}
           ref={tableShellRef}
           data-virtualized={virtualWindow.virtualized ? "true" : "false"}
           data-density={statsDensity}

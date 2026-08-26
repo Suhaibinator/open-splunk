@@ -500,6 +500,28 @@ test("audit continuation validates a repeated cursor before committing page stat
   );
 });
 
+test("activity layouts preserve capability tabs and mobile job metadata", () => {
+  const backendSource = readFileSync(
+    path.join(process.cwd(), "app", "activity", "backend-activity-console.tsx"),
+    "utf8",
+  );
+  const demoSource = readFileSync(
+    path.join(process.cwd(), "app", "activity", "activity-console.tsx"),
+    "utf8",
+  );
+  const responsiveStyles = readFileSync(
+    path.join(process.cwd(), "app", "activity", "activity-console.module.css"),
+    "utf8",
+  );
+
+  assert.match(backendSource, /data-tab-count=\{availableViews\.length\}/u);
+  for (const label of ["Search", "Status", "Owner", "Runtime", "Events", "Started", "Actions"]) {
+    assert.match(demoSource, new RegExp(`data-label="${label}"`, "u"));
+  }
+  assert.match(responsiveStyles, /content:\s*attr\(data-label\)/u);
+  assert.match(responsiveStyles, /td:nth-child\(n \+ 3\)[^{]*\{[^}]*display:\s*grid/su);
+});
+
 test("search-attempt requests include only exact actor and owner filters", () => {
   assert.deepEqual(buildSearchAttemptAuditRequest({
     actorId: " browser-admin ",

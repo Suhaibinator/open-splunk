@@ -40,6 +40,7 @@ import { formatMediumDateTime } from "../_components/date-format";
 import { PageHeading } from "../_components/product-shell";
 import { Modal } from "../search-workspace/modal";
 import { AppsAdminPanel, CollectorFleetPanel } from "./admin-resource-panels";
+import { ADMIN_SECTION_QUERY_PARAMETER, adminSectionPath, resolveAdminSection } from "./admin-navigation";
 import { KnowledgeManagerGate } from "./knowledge-manager-gate";
 import { LookupManagerGate } from "./lookup-manager-gate";
 import {
@@ -55,6 +56,18 @@ type ResourceState = "loading" | "available" | "unavailable" | "error";
 interface BackendAdminConsoleProps {
   apiBaseUrl: string;
 }
+
+const BACKEND_ADMIN_SECTIONS: readonly AdminSection[] = [
+  "overview",
+  "apps",
+  "indexes",
+  "collector-fleet",
+  "collectors",
+  "knowledge",
+  "lookups",
+  "access",
+  "server",
+];
 
 interface PageLoadResult<T> {
   state: Exclude<ResourceState, "loading">;
@@ -3442,13 +3455,33 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
   const lookupAdvertised = lookupFeatureAdvertised && knowledgeApps !== null;
   const navigationItems = backendAdminNavigation(knowledgeAdvertised, lookupAdvertised);
   useEffect(() => {
+    function restoreSectionFromHistory() {
+      const next = resolveAdminSection(
+        new URL(window.location.href).searchParams.get(ADMIN_SECTION_QUERY_PARAMETER),
+        BACKEND_ADMIN_SECTIONS,
+        "overview",
+      );
+      setSection(next);
+    }
+    restoreSectionFromHistory();
+    window.addEventListener("popstate", restoreSectionFromHistory);
+    return () => window.removeEventListener("popstate", restoreSectionFromHistory);
+  }, []);
+  useEffect(() => {
+    if (bootstrap === null && bootstrapError === null) return;
     if (
       (section === "knowledge" && !knowledgeAdvertised)
       || (section === "lookups" && !lookupAdvertised)
     ) {
       setSection("overview");
+      window.history.replaceState(null, "", adminSectionPath(window.location.href, "overview"));
     }
-  }, [knowledgeAdvertised, lookupAdvertised, section]);
+  }, [bootstrap, bootstrapError, knowledgeAdvertised, lookupAdvertised, section]);
+  function navigateSection(next: AdminSection) {
+    if (next === section) return;
+    setSection(next);
+    window.history.pushState(null, "", adminSectionPath(window.location.href, next));
+  }
   const hasAvailableAdminRoute = indexState === "available" || tokenState === "available";
   const adminRoutesLoading = indexState === "loading" || tokenState === "loading";
   const connectionStatus = bootstrap !== null
@@ -3476,10 +3509,14 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
             detail: "System bootstrap is unavailable; administration route checks are still running",
           }
       : { tone: "error", title: "Admin API unavailable", detail: "No administration route is usable" };
+  const tokenCreateDisabledReason = tokenCreationBlockReason
+    ?? (ingestibleTokenScopes.length === 0
+      ? "No active, ingestion-enabled index is currently available for a new token."
+      : null);
   const primaryAction = section === "indexes" && indexState === "available"
     ? <button className="suite-button suite-button--primary" type="button" onClick={openIndexDialog}>＋ Create index</button>
     : section === "collectors" && tokenState === "available"
-      ? <button className="suite-button suite-button--primary" type="button" onClick={openTokenDialog} disabled={ingestibleTokenScopes.length === 0 || tokenCreationBlockReason !== null}>Generate token</button>
+      ? <button className="suite-button suite-button--primary" type="button" onClick={openTokenDialog} disabled={tokenCreateDisabledReason !== null} aria-describedby={tokenCreateDisabledReason === null ? undefined : "ingestion-token-create-disabled-reason"}>Generate token</button>
       : undefined;
 
   if (
@@ -3507,7 +3544,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
 
       <div className="admin-mobile-section-picker">
         <label htmlFor="admin-section">Administration section</label>
-        <select id="admin-section" value={section} onChange={(event) => setSection(event.target.value as AdminSection)}>
+        <select id="admin-section" value={section} onChange={(event) => navigateSection(event.target.value as AdminSection)}>
           {navigationItems.map((item) => <option value={item.key} key={item.key}>{item.label}</option>)}
         </select>
       </div>
@@ -3516,7 +3553,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
         <aside className="admin-sidebar" aria-label="Administration navigation">
           <span className="admin-sidebar-label">SETTINGS</span>
           {navigationItems.map((item) => (
-            <button className={section === item.key ? "active" : undefined} type="button" onClick={() => setSection(item.key)} key={item.key}>
+            <button className={section === item.key ? "active" : undefined} type="button" aria-current={section === item.key ? "page" : undefined} onClick={() => navigateSection(item.key)} key={item.key}>
               <i aria-hidden="true">{item.icon}</i><span><strong>{item.label}</strong><small>{item.detail}</small></span><b aria-hidden="true">›</b>
             </button>
           ))}
@@ -3529,7 +3566,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
           </div>
         </aside>
 
-        <section className="admin-content" aria-live="polite">
+        <section className="admin-content">
           {section === "overview" ? (
             <BackendOverview
               bootstrap={bootstrap}
@@ -3544,7 +3581,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
               tokenTotalSize={tokenTotalSize}
               tokenTotalSizeExact={tokenTotalSizeExact}
               activeTokens={activeTokens}
-              onNavigate={setSection}
+              onNavigate={navigateSection}
               onReload={load}
             />
           ) : null}
@@ -3601,14 +3638,13 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
               loadingMore={tokenLoadingMore}
               paginationError={tokenPaginationError}
               busy={busy}
-              onCreate={openTokenDialog}
               onEdit={(token) => void openTokenEditor(token)}
               onReload={load}
               onLoadMore={() => void loadMoreTokens()}
               onRevoke={setRevokeTarget}
               onSetEnabled={(token, enabled) => void setTokenEnabled(token, enabled)}
               canCreate={ingestibleTokenScopes.length > 0 && tokenCreationBlockReason === null}
-              createBlockReason={tokenCreationBlockReason}
+              createBlockReason={tokenCreateDisabledReason}
               indexState={indexState}
               indexError={indexError}
               scopeSource={tokenScopeSource}
@@ -4177,10 +4213,10 @@ function BackendOverview(props: BackendOverviewProps) {
     <div className="admin-section-stack">
       <header className="admin-section-header"><div><h2>System overview</h2><p>Capabilities reported by the available server routes.</p></div><button className="suite-button" type="button" onClick={props.onReload}>Refresh</button></header>
       <div className="admin-summary-grid">
-        <article><span className="summary-icon summary-icon--green">▦</span><div><small>Indexes</small><strong>{props.indexState === "available" ? indexCount : "—"}</strong><p>{indexDetail}</p></div><button type="button" onClick={() => props.onNavigate("indexes")}>Manage</button></article>
-        <article><span className="summary-icon summary-icon--blue">⇣</span><div><small>Ingestion tokens</small><strong>{props.tokenState === "available" ? tokenCount : "—"}</strong><p>{tokenDetail}</p></div><button type="button" onClick={() => props.onNavigate("collectors")}>Inspect</button></article>
-        <article><span className="summary-icon summary-icon--violet">⌕</span><div><small>Source revision</small><strong>{bootstrap?.build?.sourceRevision.slice(0, 12) || "—"}</strong><p>{bootstrap === null ? "Bootstrap unavailable" : bootstrap.build === null ? "Not reported" : "Build identity"}</p></div><Link href="/search/">Search</Link></article>
-        <article><span className="summary-icon summary-icon--orange">↻</span><div><small>Result retention</small><strong>{bootstrap !== null && bootstrap.limits.searchResultRetentionMs > 0 ? `${Math.round(bootstrap.limits.searchResultRetentionMs / 60_000)}m` : "—"}</strong><p>{bootstrap === null ? "Bootstrap unavailable" : "Read-only server limit"}</p></div><button type="button" onClick={() => props.onNavigate("server")}>Limits</button></article>
+        <article><span className="summary-icon summary-icon--green" aria-hidden="true">▦</span><div><small>Indexes</small><strong>{props.indexState === "available" ? indexCount : "—"}</strong><p>{indexDetail}</p></div><button type="button" onClick={() => props.onNavigate("indexes")}>Manage</button></article>
+        <article><span className="summary-icon summary-icon--blue" aria-hidden="true">⇣</span><div><small>Ingestion tokens</small><strong>{props.tokenState === "available" ? tokenCount : "—"}</strong><p>{tokenDetail}</p></div><button type="button" onClick={() => props.onNavigate("collectors")}>Inspect</button></article>
+        <article><span className="summary-icon summary-icon--violet" aria-hidden="true">⌕</span><div><small>Source revision</small><strong>{bootstrap?.build?.sourceRevision.slice(0, 12) || "—"}</strong><p>{bootstrap === null ? "Bootstrap unavailable" : bootstrap.build === null ? "Not reported" : "Build identity"}</p></div><Link href="/search/">Search</Link></article>
+        <article><span className="summary-icon summary-icon--orange" aria-hidden="true">↻</span><div><small>Result retention</small><strong>{bootstrap !== null && bootstrap.limits.searchResultRetentionMs > 0 ? `${Math.round(bootstrap.limits.searchResultRetentionMs / 60_000)}m` : "—"}</strong><p>{bootstrap === null ? "Bootstrap unavailable" : "Read-only server limit"}</p></div><button type="button" onClick={() => props.onNavigate("server")}>Limits</button></article>
       </div>
       {bootstrap === null ? (
         <BackendResourceState
@@ -4242,11 +4278,12 @@ function BackendIndexes(props: BackendIndexesProps) {
       <header className="admin-section-header"><div><h2>Indexes</h2><p>Authoritative index definitions from the connected server.</p></div><span>{loadedCount}</span></header>
       <div className="resource-toolbar"><label><span className="sr-only">Filter loaded indexes</span><i aria-hidden="true">⌕</i><input value={props.filter} onChange={(event) => props.onFilterChange(event.target.value)} placeholder="Filter loaded indexes" /></label><button type="button" onClick={props.onReload}>Refresh</button></div>
       {props.indexes.length === 0 ? (
-        <BackendResourceState kind="empty" title={props.totalIndexes === 0 ? "No indexes configured" : "No matching indexes"} message={props.totalIndexes === 0 ? "Create an index to begin accepting and searching data." : "Try another index name or description."} />
+        <BackendResourceState kind="empty" title={props.totalIndexes === 0 ? "No indexes configured" : "No matching indexes"} message={props.totalIndexes === 0 ? "Create an index to begin accepting and searching data." : "Try another index name or description."} action={props.totalIndexes > 0 && props.filter.trim().length > 0 ? <button type="button" onClick={() => props.onFilterChange("")}>Clear filter</button> : undefined} />
       ) : (
         <div className="suite-card resource-table-card">
           <div className="responsive-table-wrap">
             <table className="product-table admin-resource-table">
+              <caption className="sr-only">Configured indexes</caption>
               <thead><tr><th scope="col">Name</th><th scope="col">State</th><th scope="col">Ingestion</th><th scope="col">Search</th><th scope="col">Retention</th><th scope="col">Updated</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
               <tbody>{props.indexes.map((index) => {
                 const definition = index.definition;
@@ -4259,7 +4296,7 @@ function BackendIndexes(props: BackendIndexesProps) {
                 const nameContent = <><span aria-hidden="true">▦</span><div><strong>{definition?.displayName || name}</strong><small>index={name}{definition?.description ? ` · ${definition.description}` : ""}</small></div></>;
                 return (
                   <tr key={index.indexId}>
-                    <td>{canSearch
+                    <td className="table-long-value">{canSearch
                       ? <Link className="resource-name" href={searchLaunchHref(`index=${name} | sort -_time`)} aria-label={`Search index ${name}`}>{nameContent}</Link>
                       : <div className="resource-name" aria-label={`Index ${name} is not currently searchable`}>{nameContent}</div>}
                     </td>
@@ -4306,7 +4343,6 @@ interface BackendTokensProps {
   busy: string | null;
   canCreate: boolean;
   createBlockReason: string | null;
-  onCreate: () => void;
   onEdit: (token: IngestionToken) => void;
   onLoadMore: () => void;
   onReload: () => void;
@@ -4331,9 +4367,9 @@ function BackendTokens(props: BackendTokensProps) {
 
   return (
     <div className="admin-section-stack">
-      <header className="admin-section-header"><div><h2>Ingestion tokens</h2><p>Manage server-issued ingestion credentials and their index scopes.</p></div><button className="suite-button suite-button--primary" type="button" disabled={!props.canCreate} onClick={props.onCreate}>Generate token</button></header>
+      <header className="admin-section-header"><div><h2>Ingestion tokens</h2><p>Manage server-issued ingestion credentials and their index scopes.</p></div></header>
       {props.createBlockReason === null ? null : (
-        <div className="access-mode-notice" role="alert">
+        <div id="ingestion-token-create-disabled-reason" className="access-mode-notice token-create-disabled-reason" role="note">
           <span>!</span>
           <div><strong>Token generation is locked</strong><p>{props.createBlockReason}</p></div>
         </div>
@@ -4351,8 +4387,8 @@ function BackendTokens(props: BackendTokensProps) {
           </div>
         </div>
       )}
-      <section className="suite-card token-section">
-        <header className="suite-card-header"><div><h3>Ingestion tokens</h3><p>Token secrets are never returned after creation. {loadedCount}.</p></div><button type="button" onClick={props.onReload}>Refresh</button></header>
+      <section className="suite-card token-section token-section--credentials">
+        <header className="suite-card-header"><div><h3>Issued credentials</h3><p>Token secrets are never returned after creation. {loadedCount}.</p></div><button type="button" onClick={props.onReload}>Refresh</button></header>
         {props.tokens.length === 0 ? (
           <BackendResourceState
             kind="empty"
@@ -4364,7 +4400,7 @@ function BackendTokens(props: BackendTokensProps) {
                 : "The token route is available, but generation is disabled until an authoritative index summary loads."}
           />
         ) : (
-          <div className="responsive-table-wrap"><table className="product-table"><thead><tr><th scope="col">Name</th><th scope="col">Purpose</th><th scope="col">Prefix</th><th scope="col">Allowed indexes</th><th scope="col">Expires</th><th scope="col">Last used</th><th scope="col">State</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead><tbody>{props.tokens.map((token) => {
+          <div className="responsive-table-wrap"><table className="product-table"><caption className="sr-only">Issued ingestion credentials</caption><thead><tr><th scope="col">Name</th><th scope="col">Purpose</th><th scope="col">Prefix</th><th scope="col">Allowed indexes</th><th scope="col">Expires</th><th scope="col">Last used</th><th scope="col">State</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead><tbody>{props.tokens.map((token) => {
             const state = tokenStateLabel(token.state);
             const canRevoke = tokenCanBeRevoked(token);
             const canSetEnabled = tokenCanSetEnabled(token);
@@ -4372,10 +4408,10 @@ function BackendTokens(props: BackendTokensProps) {
             const hecToken = tokenUsesHEC(token.purpose);
             const nativeToken = token.purpose === IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR;
             const canEdit = canRevoke && (hecToken || nativeToken);
-            return <tr key={token.ingestionTokenId}><td><strong>{token.name}</strong>{token.description ? <small className="table-secondary">{token.description}</small> : null}</td><td><strong>{tokenPurposeLabel(token.purpose)}</strong><small className="table-secondary">{hecToken ? `Indexer ACK ${token.hecProfile?.indexerAcknowledgment ? "enabled" : "disabled"}` : nativeToken ? "gRPC ingestion" : "Transport unavailable"}</small>{hecToken ? <small className="table-secondary">{hecProfileSummary(token.hecProfile)}</small> : null}</td><td><code>{token.tokenPrefix}</code></td><td>{token.constraints?.allowedIndexNames.join(", ") || "None"}<small className="table-secondary">{hecToken ? token.hecProfile?.defaultIndexName ? `Default ${token.hecProfile.defaultIndexName}` : "No token default index" : nativeToken ? token.constraints?.boundCollectorId === undefined ? "Native collector binding required" : `Collector ${token.constraints.boundCollectorId}` : "Purpose unavailable"}</small></td><td>{formatDate(token.expiresAt)}</td><td>{formatDate(token.lastUsedAt)}</td><td><span className={`status-label status-label--${statusClass(state)}`}><i />{state}</span></td><td><div className="row-actions"><button className="table-action" type="button" aria-label={`Edit token ${token.name}`} disabled={!canEdit || props.busy !== null} onClick={() => props.onEdit(token)}>{props.busy === `read-token-${token.ingestionTokenId}` ? "Loading…" : "Edit"}</button><button className="table-action" type="button" aria-label={`${enable ? "Enable" : "Disable"} token ${token.name}`} disabled={!canSetEnabled || props.busy !== null} onClick={() => props.onSetEnabled(token, enable)}>{props.busy === `token-state-${token.ingestionTokenId}` ? enable ? "Enabling…" : "Disabling…" : canSetEnabled ? enable ? "Enable" : "Disable" : "—"}</button><button className="table-action" type="button" aria-label={`Revoke token ${token.name}`} disabled={!canRevoke || props.busy !== null} onClick={() => props.onRevoke(token)}>{props.busy === `token-${token.ingestionTokenId}` ? "Revoking…" : canRevoke ? "Revoke" : "—"}</button></div></td></tr>;
+            return <tr key={token.ingestionTokenId}><td><strong>{token.name}</strong>{token.description ? <small className="table-secondary">{token.description}</small> : null}</td><td><strong>{tokenPurposeLabel(token.purpose)}</strong><small className="table-secondary">{hecToken ? `Indexer ACK ${token.hecProfile?.indexerAcknowledgment ? "enabled" : "disabled"}` : nativeToken ? "gRPC ingestion" : "Transport unavailable"}</small>{hecToken ? <small className="table-secondary">{hecProfileSummary(token.hecProfile)}</small> : null}</td><td><code>{token.tokenPrefix}</code></td><td className="table-long-value">{token.constraints?.allowedIndexNames.join(", ") || "None"}<small className="table-secondary">{hecToken ? token.hecProfile?.defaultIndexName ? `Default ${token.hecProfile.defaultIndexName}` : "No token default index" : nativeToken ? token.constraints?.boundCollectorId === undefined ? "Native collector binding required" : `Collector ${token.constraints.boundCollectorId}` : "Purpose unavailable"}</small></td><td>{formatDate(token.expiresAt)}</td><td>{formatDate(token.lastUsedAt)}</td><td><span className={`status-label status-label--${statusClass(state)}`}><i />{state}</span></td><td><div className="row-actions"><button className="table-action" type="button" aria-label={`Edit token ${token.name}`} disabled={!canEdit || props.busy !== null} onClick={() => props.onEdit(token)}>{props.busy === `read-token-${token.ingestionTokenId}` ? "Loading…" : "Edit"}</button><button className="table-action" type="button" aria-label={`${enable ? "Enable" : "Disable"} token ${token.name}`} disabled={!canSetEnabled || props.busy !== null} onClick={() => props.onSetEnabled(token, enable)}>{props.busy === `token-state-${token.ingestionTokenId}` ? enable ? "Enabling…" : "Disabling…" : canSetEnabled ? enable ? "Enable" : "Disable" : "—"}</button><button className="table-action" type="button" aria-label={`Revoke token ${token.name}`} disabled={!canRevoke || props.busy !== null} onClick={() => props.onRevoke(token)}>{props.busy === `token-${token.ingestionTokenId}` ? "Revoking…" : canRevoke ? "Revoke" : "—"}</button></div></td></tr>;
           })}</tbody></table></div>
         )}
-        <div className="admin-pagination-footer" aria-live="polite">
+        <div className="admin-pagination-footer admin-pagination-footer--inset" aria-live="polite">
           <div>
             <strong>{loadedCount}</strong>
             {props.paginationError === null ? null : <small className="table-warning-detail">{props.paginationError}</small>}
@@ -4481,7 +4517,7 @@ function BackendServerSettings({
           </section>
           <section className="suite-card settings-group">
             <header><h3>HEC protocol failures</h3><p>Bounded non-success response codes reported by the HEC compatibility layer.</p></header>
-            {hecSnapshot.protocolFailures.length === 0 ? <p>No protocol failures have been observed.</p> : (
+            {hecSnapshot.protocolFailures.length === 0 ? <p className="settings-group__empty">No protocol failures have been observed.</p> : (
               <dl className="backend-definition-list">
                 {hecSnapshot.protocolFailures.map((metric) => <div key={metric.code}><dt>Response code {metric.code}</dt><dd>{metric.count.toLocaleString()}</dd></div>)}
               </dl>

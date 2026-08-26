@@ -35,6 +35,12 @@ function submitProductFind(event: FormEvent<HTMLFormElement>, dataMode: "backend
   window.location.assign(searchLaunchHref(splFromFindInput(value, dataMode === "backend" ? "" : "gradethis")));
 }
 
+function focusFirstMenuItem(nextMenu: "apps" | "help" | "user") {
+  window.requestAnimationFrame(() => {
+    document.querySelector<HTMLElement>(`[data-suite-menu="${nextMenu}"] [role="menuitem"]`)?.focus();
+  });
+}
+
 export function ProductShell({ activeSection, appName, children, dataMode }: ProductShellProps) {
   const [menu, setMenu] = useState<"apps" | "help" | "user" | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -73,9 +79,10 @@ export function ProductShell({ activeSection, appName, children, dataMode }: Pro
     event.preventDefault();
     menuTriggerRef.current = event.currentTarget;
     setMenu(nextMenu);
-    window.requestAnimationFrame(() => {
+    if (event.key === "ArrowDown") focusFirstMenuItem(nextMenu);
+    else window.requestAnimationFrame(() => {
       const items = document.querySelectorAll<HTMLElement>(`[data-suite-menu="${nextMenu}"] [role="menuitem"]`);
-      (event.key === "ArrowUp" ? items.item(items.length - 1) : items.item(0))?.focus();
+      items.item(items.length - 1)?.focus();
     });
   }
 
@@ -172,7 +179,11 @@ export function ProductShell({ activeSection, appName, children, dataMode }: Pro
             aria-controls="suite-app-popover"
             aria-haspopup="menu"
             aria-expanded={menu === "apps"}
-            onClick={(event) => toggleMenu("apps", event.currentTarget)}
+            onClick={(event) => {
+              const opening = menu !== "apps";
+              toggleMenu("apps", event.currentTarget);
+              if (opening && event.detail === 0) focusFirstMenuItem("apps");
+            }}
             onKeyDown={(event) => openMenuFromKeyboard(event, "apps")}
           >
             App: <strong>{appName}</strong> <span aria-hidden="true">▾</span>
@@ -180,21 +191,20 @@ export function ProductShell({ activeSection, appName, children, dataMode }: Pro
           {menu === "apps" ? (
             <div className="suite-popover suite-app-popover" id="suite-app-popover" role="menu" data-suite-menu="apps">
               <span className="suite-menu-label">Your apps</span>
-              <Link role="menuitem" href="/search/"><i className="suite-app-icon">⌕</i><span><strong>Search &amp; Reporting</strong><small>{dataMode === "backend" ? "Search backend-authorized indexes" : "Explore deterministic sample data"}</small></span></Link>
-              <Link role="menuitem" href="/dashboards/"><i className="suite-app-icon suite-app-icon--grade">G</i><span><strong>GradeThis Operations</strong><small>{dataMode === "backend" ? "Illustrative operations preview" : "Preview service-health workspace"}</small></span></Link>
+              <Link role="menuitem" href="/search/"><i className="suite-app-icon" aria-hidden="true">⌕</i><span><strong>Search &amp; Reporting</strong><small>{dataMode === "backend" ? "Search backend-authorized indexes" : "Explore deterministic sample data"}</small></span></Link>
+              <Link role="menuitem" href="/dashboards/"><i className="suite-app-icon suite-app-icon--grade" aria-hidden="true">G</i><span><strong>GradeThis Operations</strong><small>{dataMode === "backend" ? "Illustrative operations preview" : "Preview service-health workspace"}</small></span></Link>
               <span className="suite-menu-rule" />
-              <Link role="menuitem" href="/admin/"><i className="suite-app-icon suite-app-icon--muted">⚙</i><span><strong>Administration</strong><small>{dataMode === "backend" ? "Indexes and ingestion tokens" : "Preview system settings"}</small></span></Link>
+              <Link role="menuitem" href="/admin/"><i className="suite-app-icon suite-app-icon--muted" aria-hidden="true">⚙</i><span><strong>Administration</strong><small>{dataMode === "backend" ? "Indexes and ingestion tokens" : "Preview system settings"}</small></span></Link>
             </div>
           ) : null}
         </div>
 
         <nav className="suite-utilities" aria-label="Product utilities">
-          <Link className={`suite-health${dataMode === "backend" ? " suite-health--backend" : ""}`} href="/admin/"><span /> {dataMode === "backend" ? "Backend mode" : "Healthy"}</Link>
-          <Link href="/activity/">Messages <span aria-hidden="true">▾</span></Link>
-          <Link href="/admin/">Settings <span aria-hidden="true">▾</span></Link>
-          <Link href="/activity/">Activity {dataMode === "demo" ? <span className="activity-count">1</span> : null} <span aria-hidden="true">▾</span></Link>
+          <span className="suite-context">{dataMode === "backend" ? "Backend workspace" : "Demo workspace"}</span>
+          <Link href="/admin/">Settings</Link>
+          <Link href="/activity/">Activity {dataMode === "demo" ? <span className="activity-count">1</span> : null}</Link>
           <div className="suite-menu-anchor">
-            <button type="button" aria-controls="suite-help-popover" aria-haspopup="menu" aria-expanded={menu === "help"} onClick={(event) => toggleMenu("help", event.currentTarget)} onKeyDown={(event) => openMenuFromKeyboard(event, "help")}>Help <span aria-hidden="true">▾</span></button>
+            <button type="button" aria-controls="suite-help-popover" aria-haspopup="menu" aria-expanded={menu === "help"} onClick={(event) => { const opening = menu !== "help"; toggleMenu("help", event.currentTarget); if (opening && event.detail === 0) focusFirstMenuItem("help"); }} onKeyDown={(event) => openMenuFromKeyboard(event, "help")}>Help <span aria-hidden="true">▾</span></button>
             {menu === "help" ? (
               <div className="suite-popover suite-utility-popover" id="suite-help-popover" role="menu" data-suite-menu="help">
                 <span className="suite-menu-label">Documentation is not bundled in this frontend preview.</span>
@@ -206,16 +216,16 @@ export function ProductShell({ activeSection, appName, children, dataMode }: Pro
           <form className="suite-find" onSubmit={(event) => submitProductFind(event, dataMode)}>
             <label className="sr-only" htmlFor="suite-find-input">Find</label>
             <input id="suite-find-input" ref={findRef} name="find" placeholder="Find" autoComplete="off" />
-            <kbd>⌘K</kbd>
+            <kbd aria-label="Control or Command K">Ctrl/⌘K</kbd>
             <button type="submit" aria-label="Search">⌕</button>
           </form>
           <div className="suite-menu-anchor">
-            <button className="suite-user-button" type="button" aria-label={`${sessionLabel} menu`} aria-controls="suite-user-popover" aria-haspopup="menu" aria-expanded={menu === "user"} onClick={(event) => toggleMenu("user", event.currentTarget)} onKeyDown={(event) => openMenuFromKeyboard(event, "user")}>
+            <button className="suite-user-button" type="button" aria-label={`${sessionLabel} menu`} aria-controls="suite-user-popover" aria-haspopup="menu" aria-expanded={menu === "user"} onClick={(event) => { const opening = menu !== "user"; toggleMenu("user", event.currentTarget); if (opening && event.detail === 0) focusFirstMenuItem("user"); }} onKeyDown={(event) => openMenuFromKeyboard(event, "user")}>
               <span>{sessionInitial}</span><b>{sessionLabel}</b><i aria-hidden="true">▾</i>
             </button>
             {menu === "user" ? (
               <div className="suite-popover suite-utility-popover suite-user-popover" id="suite-user-popover" role="menu" data-suite-menu="user">
-                <div className="suite-user-summary"><span>{sessionInitial}</span><div><strong>{sessionLabel}</strong><small>{sessionDetail}</small></div></div>
+                <div className="suite-user-summary"><span aria-hidden="true">{sessionInitial}</span><div><strong>{sessionLabel}</strong><small>{sessionDetail}</small></div></div>
                 <Link role="menuitem" href="/admin/">{localSession ? "Server administration" : "Account settings"}</Link>
                 <Link role="menuitem" href="/signin/">{localSession ? "About local access" : "Sign out"}</Link>
               </div>
@@ -244,20 +254,20 @@ export function ProductShell({ activeSection, appName, children, dataMode }: Pro
 
       {mobileOpen ? (
         <dialog ref={mobileDrawerRef} className="suite-mobile-drawer is-open" open aria-modal="true" aria-label="Mobile product navigation">
-          <header><div><span className="suite-user-avatar">{sessionInitial}</span><span><strong>{sessionLabel}</strong><small>{sessionDetail}</small></span></div><button type="button" aria-label="Close navigation" onClick={() => setMobileOpen(false)}>×</button></header>
+          <header><div><span className="suite-user-avatar" aria-hidden="true">{sessionInitial}</span><span><strong>{sessionLabel}</strong><small>{sessionDetail}</small></span></div><button type="button" aria-label="Close navigation" onClick={() => setMobileOpen(false)}>×</button></header>
           <span className="suite-mobile-label">APPLICATION</span>
-          <Link className={activeSection === "home" ? "active" : undefined} aria-current={activeSection === "home" ? "page" : undefined} href="/"><span>⌂</span>Home</Link>
-          <Link className={activeSection === "search" ? "active" : undefined} aria-current={activeSection === "search" ? "page" : undefined} href="/search/"><span>⌕</span>Search &amp; Reporting</Link>
-          <Link className={activeSection === "analytics" ? "active" : undefined} aria-current={activeSection === "analytics" ? "page" : undefined} href="/analytics/"><span>⌁</span>Analytics</Link>
-          <Link className={activeSection === "datasets" ? "active" : undefined} aria-current={activeSection === "datasets" ? "page" : undefined} href="/datasets/"><span>▦</span>Datasets</Link>
-          <Link className={activeSection === "reports" ? "active" : undefined} aria-current={activeSection === "reports" ? "page" : undefined} href="/reports/"><span>▤</span>Reports</Link>
-          <Link className={activeSection === "dashboards" ? "active" : undefined} aria-current={activeSection === "dashboards" ? "page" : undefined} href="/dashboards/"><span>▥</span>Dashboards</Link>
+          <Link className={activeSection === "home" ? "active" : undefined} aria-current={activeSection === "home" ? "page" : undefined} href="/"><span aria-hidden="true">⌂</span>Home</Link>
+          <Link className={activeSection === "search" ? "active" : undefined} aria-current={activeSection === "search" ? "page" : undefined} href="/search/"><span aria-hidden="true">⌕</span>Search &amp; Reporting</Link>
+          <Link className={activeSection === "analytics" ? "active" : undefined} aria-current={activeSection === "analytics" ? "page" : undefined} href="/analytics/"><span aria-hidden="true">⌁</span>Analytics</Link>
+          <Link className={activeSection === "datasets" ? "active" : undefined} aria-current={activeSection === "datasets" ? "page" : undefined} href="/datasets/"><span aria-hidden="true">▦</span>Datasets</Link>
+          <Link className={activeSection === "reports" ? "active" : undefined} aria-current={activeSection === "reports" ? "page" : undefined} href="/reports/"><span aria-hidden="true">▤</span>Reports</Link>
+          <Link className={activeSection === "dashboards" ? "active" : undefined} aria-current={activeSection === "dashboards" ? "page" : undefined} href="/dashboards/"><span aria-hidden="true">▥</span>Dashboards</Link>
           <span className="suite-mobile-label">SYSTEM</span>
-          <Link className={activeSection === "activity" ? "active" : undefined} aria-current={activeSection === "activity" ? "page" : undefined} href="/activity/"><span>↻</span>Activity {dataMode === "demo" ? <b className="activity-count">1</b> : null}</Link>
-          <Link className={activeSection === "admin" ? "active" : undefined} aria-current={activeSection === "admin" ? "page" : undefined} href="/admin/"><span>⚙</span>Administration</Link>
+          <Link className={activeSection === "activity" ? "active" : undefined} aria-current={activeSection === "activity" ? "page" : undefined} href="/activity/"><span aria-hidden="true">↻</span>Activity {dataMode === "demo" ? <b className="activity-count">1</b> : null}</Link>
+          <Link className={activeSection === "admin" ? "active" : undefined} aria-current={activeSection === "admin" ? "page" : undefined} href="/admin/"><span aria-hidden="true">⚙</span>Administration</Link>
           <span className="suite-mobile-label">HELP DOCUMENTATION IS NOT INCLUDED IN THIS PREVIEW</span>
           <span className="suite-mobile-rule" />
-          <Link href="/signin/"><span>{localSession ? "i" : "⇥"}</span>{localSession ? "About local access" : "Sign out"}</Link>
+          <Link href="/signin/"><span aria-hidden="true">{localSession ? "i" : "⇥"}</span>{localSession ? "About local access" : "Sign out"}</Link>
         </dialog>
       ) : null}
       {mobileOpen ? <button className="suite-mobile-backdrop" type="button" aria-label="Close navigation" onClick={() => setMobileOpen(false)} /> : null}
