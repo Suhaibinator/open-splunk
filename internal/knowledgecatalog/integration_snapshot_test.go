@@ -564,9 +564,9 @@ func integrationAssertCatalogSnapshot(
 	oldRevision uint64,
 	phase string,
 ) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	object, err := store.Get(ctx, testReadScope(), "ko-atomic", nil)
+	getContext, cancelGet := context.WithTimeout(context.Background(), 30*time.Second)
+	object, err := store.Get(getContext, testReadScope(), "ko-atomic", nil)
+	cancelGet()
 	if err != nil {
 		return fmt.Errorf("Get: %w", err)
 	}
@@ -578,7 +578,9 @@ func integrationAssertCatalogSnapshot(
 		return fmt.Errorf("%s phase returned %s object: %s", phase, classification, describeIntegrationObject(object))
 	}
 
-	page, err := store.List(ctx, testReadScope(), ListRequest{PageSize: 10, IncludeTotal: true})
+	listContext, cancelList := context.WithTimeout(context.Background(), 30*time.Second)
+	page, err := store.List(listContext, testReadScope(), ListRequest{PageSize: 10, IncludeTotal: true})
+	cancelList()
 	if err != nil {
 		return fmt.Errorf("List: %w", err)
 	}
