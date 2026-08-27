@@ -16,18 +16,14 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 )
 
-func TestNewClickHouseConnectionOptionsSeparatePrincipals(t *testing.T) {
-	t.Setenv("OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD", "runtime-password")
-	t.Setenv("OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD", "deletion-password")
-	t.Setenv("OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD", "migration-password")
+func TestNewClickHouseConnectionOptionsUsesUnifiedPrincipal(t *testing.T) {
+	t.Setenv(clickHousePasswordEnvironmentVariable, "shared-password")
 
 	results, err := newClickHouseConnectionOptions(options{
-		clickhouseAddress:           "127.0.0.1:9000",
-		clickhouseDatabase:          "open_splunk",
-		clickhouseRuntimeUsername:   "runtime-user",
-		clickhouseDeletionUsername:  "deletion-user",
-		clickhouseMigrationUsername: "migration-user",
-		clickhouseSecure:            true,
+		clickhouseAddress:  "clickhouse.internal:9440",
+		clickhouseDatabase: "open_splunk",
+		clickhouseUsername: "shared-user",
+		clickhouseSecure:   true,
 	}, testClickHouseClientTLSProfile(t))
 	if err != nil {
 		t.Fatal(err)
@@ -42,10 +38,10 @@ func TestNewClickHouseConnectionOptionsSeparatePrincipals(t *testing.T) {
 		)
 	}
 	if len(result.Addr) != 1 ||
-		result.Addr[0] != "127.0.0.1:9000" ||
+		result.Addr[0] != "clickhouse.internal:9440" ||
 		result.Auth.Database != "open_splunk" ||
-		result.Auth.Username != "runtime-user" ||
-		result.Auth.Password != "runtime-password" {
+		result.Auth.Username != "shared-user" ||
+		result.Auth.Password != "shared-password" {
 		t.Fatalf("ClickHouse connection identity = %#v", result)
 	}
 	if result.TLS == nil ||
@@ -61,15 +57,15 @@ func TestNewClickHouseConnectionOptionsSeparatePrincipals(t *testing.T) {
 	}
 
 	if results.deletion.Auth.Database != "open_splunk" ||
-		results.deletion.Auth.Username != "deletion-user" ||
-		results.deletion.Auth.Password != "deletion-password" ||
+		results.deletion.Auth.Username != "shared-user" ||
+		results.deletion.Auth.Password != "shared-password" ||
 		results.deletion.MaxOpenConns != 1 ||
 		results.deletion.MaxIdleConns != 1 {
 		t.Fatalf("ClickHouse deletion options = %#v", results.deletion)
 	}
 	if results.migration.Auth.Database != "default" ||
-		results.migration.Auth.Username != "migration-user" ||
-		results.migration.Auth.Password != "migration-password" ||
+		results.migration.Auth.Username != "shared-user" ||
+		results.migration.Auth.Password != "shared-password" ||
 		results.migration.MaxOpenConns != 1 ||
 		results.migration.MaxIdleConns != 1 {
 		t.Fatalf("ClickHouse migration options = %#v", results.migration)
@@ -77,18 +73,14 @@ func TestNewClickHouseConnectionOptionsSeparatePrincipals(t *testing.T) {
 }
 
 func TestNewClickHouseConnectionOptionsSkipsMigrations(t *testing.T) {
-	t.Setenv("OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD", "runtime-password")
-	t.Setenv("OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD", "deletion-password")
-	t.Setenv(clickHouseMigrationEnvironmentVariable, "")
+	t.Setenv(clickHousePasswordEnvironmentVariable, "shared-password")
 
 	results, err := newClickHouseConnectionOptions(options{
-		clickhouseAddress:           "127.0.0.1:9000",
-		clickhouseDatabase:          "open_splunk",
-		clickhouseRuntimeUsername:   "runtime-user",
-		clickhouseDeletionUsername:  "deletion-user",
-		clickhouseMigrationUsername: "",
-		clickhouseSkipMigrations:    true,
-		clickhouseSecure:            true,
+		clickhouseAddress:        "127.0.0.1:9000",
+		clickhouseDatabase:       "open_splunk",
+		clickhouseUsername:       "shared-user",
+		clickhouseSkipMigrations: true,
+		clickhouseSecure:         true,
 	}, testClickHouseClientTLSProfile(t))
 	if err != nil {
 		t.Fatal(err)
@@ -103,10 +95,10 @@ func TestNewClickHouseConnectionOptionsSkipsMigrations(t *testing.T) {
 			results.deletion,
 		)
 	}
-	if results.runtime.Auth.Username != "runtime-user" ||
-		results.runtime.Auth.Password != "runtime-password" ||
-		results.deletion.Auth.Username != "deletion-user" ||
-		results.deletion.Auth.Password != "deletion-password" ||
+	if results.runtime.Auth.Username != "shared-user" ||
+		results.runtime.Auth.Password != "shared-password" ||
+		results.deletion.Auth.Username != "shared-user" ||
+		results.deletion.Auth.Password != "shared-password" ||
 		results.runtime.TLS == nil || results.deletion.TLS == nil {
 		t.Fatalf("skipped-migration ClickHouse options = %#v", results)
 	}
@@ -148,91 +140,47 @@ func TestDiscardClickHouseConnectionCredentialsClearsEveryPrincipal(
 	}
 }
 
-func TestNewClickHouseConnectionOptionsRejectsMigrationFileWhenSkipping(
+func TestConfigureClickHouseConnectionOptionsUnsetsPasswordEnvironment(
 	t *testing.T,
 ) {
-	t.Setenv("OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD", "runtime-password")
-	t.Setenv("OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD", "deletion-password")
-	t.Setenv(clickHouseMigrationEnvironmentVariable, "")
-
-	result, err := newClickHouseConnectionOptions(options{
-		clickhouseAddress:               "127.0.0.1:9000",
-		clickhouseDatabase:              "open_splunk",
-		clickhouseRuntimeUsername:       "runtime-user",
-		clickhouseDeletionUsername:      "deletion-user",
-		clickhouseSkipMigrations:        true,
-		clickhouseMigrationPasswordFile: "/must/not/be/read",
-	}, nil)
-	if err == nil || result.runtime != nil || result.deletion != nil ||
-		result.migration != nil ||
-		!strings.Contains(err.Error(), "-clickhouse-migration-password-file") {
-		t.Fatalf(
-			"newClickHouseConnectionOptions(skip with migration file) = (%#v, %v)",
-			result,
-			err,
-		)
-	}
-}
-
-func TestConfigureClickHouseConnectionOptionsRejectsAndUnsetsMigrationEnvironmentWhenSkipping(
-	t *testing.T,
-) {
-	const secret = "migration-secret-must-not-leak"
-	t.Setenv("OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD", "runtime-password")
-	t.Setenv("OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD", "deletion-password")
-	t.Setenv(clickHouseMigrationEnvironmentVariable, secret)
+	const secret = "clickhouse-secret-must-not-leak"
+	t.Setenv(clickHousePasswordEnvironmentVariable, secret)
 
 	result, err := configureClickHouseConnectionOptions(options{
-		clickhouseAddress:          "127.0.0.1:9000",
-		clickhouseDatabase:         "open_splunk",
-		clickhouseRuntimeUsername:  "runtime-user",
-		clickhouseDeletionUsername: "deletion-user",
-		clickhouseSkipMigrations:   true,
+		clickhouseAddress:  "per-clickhouse:9000",
+		clickhouseDatabase: "open_splunk",
+		clickhouseUsername: "clickhouse",
 	}, nil)
-	if err == nil || result.runtime != nil || result.deletion != nil ||
-		result.migration != nil ||
-		!strings.Contains(err.Error(), clickHouseMigrationEnvironmentVariable) {
+	if err != nil || result.runtime == nil || result.deletion == nil ||
+		result.migration == nil {
 		t.Fatalf(
-			"configureClickHouseConnectionOptions(skip with migration environment) = (%#v, %v)",
+			"configureClickHouseConnectionOptions() = (%#v, %v)",
 			result,
 			err,
 		)
 	}
-	if strings.Contains(err.Error(), secret) {
-		t.Fatal("migration environment rejection disclosed the secret")
-	}
-	if _, exists := os.LookupEnv(clickHouseMigrationEnvironmentVariable); exists {
-		t.Fatal("migration password remained in the process environment")
+	if _, exists := os.LookupEnv(clickHousePasswordEnvironmentVariable); exists {
+		t.Fatal("ClickHouse password remained in the process environment")
 	}
 }
 
 func TestNewClickHouseConnectionOptionsRejectsUnsafeConfiguration(t *testing.T) {
-	t.Setenv("OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD", "runtime-password")
-	t.Setenv("OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD", "deletion-password")
-	t.Setenv("OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD", "migration-password")
+	t.Setenv(clickHousePasswordEnvironmentVariable, "shared-password")
 
 	valid := options{
-		clickhouseAddress:           "127.0.0.1:9000",
-		clickhouseDatabase:          "open_splunk",
-		clickhouseRuntimeUsername:   "runtime-user",
-		clickhouseDeletionUsername:  "deletion-user",
-		clickhouseMigrationUsername: "migration-user",
+		clickhouseAddress:  "per-clickhouse:9000",
+		clickhouseDatabase: "open_splunk",
+		clickhouseUsername: "clickhouse",
 	}
 	for name, mutate := range map[string]func(*options){
-		"remote plaintext": func(config *options) {
-			config.clickhouseAddress = "192.0.2.10:9000"
+		"missing address": func(config *options) {
+			config.clickhouseAddress = ""
 		},
-		"duplicate principal": func(config *options) {
-			config.clickhouseDeletionUsername = config.clickhouseRuntimeUsername
+		"wrong database": func(config *options) {
+			config.clickhouseDatabase = "logs"
 		},
-		"missing runtime principal": func(config *options) {
-			config.clickhouseRuntimeUsername = ""
-		},
-		"missing deletion principal": func(config *options) {
-			config.clickhouseDeletionUsername = ""
-		},
-		"missing migration principal": func(config *options) {
-			config.clickhouseMigrationUsername = ""
+		"missing username": func(config *options) {
+			config.clickhouseUsername = ""
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -248,15 +196,11 @@ func TestNewClickHouseConnectionOptionsRejectsUnsafeConfiguration(t *testing.T) 
 					err,
 				)
 			}
-			if name == "remote plaintext" &&
-				!strings.Contains(err.Error(), "loopback") {
-				t.Fatalf("remote plaintext error = %v", err)
-			}
 		})
 	}
 
 	t.Run("missing password", func(t *testing.T) {
-		t.Setenv("OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD", "")
+		t.Setenv(clickHousePasswordEnvironmentVariable, "")
 		result, err := newClickHouseConnectionOptions(valid, nil)
 		if err == nil || result.deletion != nil {
 			t.Fatalf(
@@ -267,19 +211,11 @@ func TestNewClickHouseConnectionOptionsRejectsUnsafeConfiguration(t *testing.T) 
 		}
 	})
 
-	t.Run("duplicate password", func(t *testing.T) {
-		t.Setenv(
-			"OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD",
-			"runtime-password",
-		)
+	t.Run("remote plaintext", func(t *testing.T) {
+		t.Setenv(clickHousePasswordEnvironmentVariable, "shared-password")
 		result, err := newClickHouseConnectionOptions(valid, nil)
-		if err == nil || result.runtime != nil ||
-			result.deletion != nil || result.migration != nil {
-			t.Fatalf(
-				"newClickHouseConnectionOptions(duplicate password) = (%#v, %v)",
-				result,
-				err,
-			)
+		if err != nil || result.runtime == nil || result.runtime.TLS != nil {
+			t.Fatalf("remote plaintext options = (%#v, %v)", result, err)
 		}
 	})
 }

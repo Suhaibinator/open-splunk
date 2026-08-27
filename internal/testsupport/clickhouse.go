@@ -226,6 +226,10 @@ func startClickHouseWithServicePrincipals(
 	if err != nil {
 		return nil, fmt.Errorf("start ClickHouse service-principal test container: create deletion password: %w", err)
 	}
+	unifiedPassword, err := randomHex(32)
+	if err != nil {
+		return nil, fmt.Errorf("start ClickHouse service-principal test container: create unified password: %w", err)
+	}
 	provisioningSQL, err := servicePrincipalProvisioningSQL(
 		migrationPassword,
 		runtimePassword,
@@ -234,6 +238,7 @@ func startClickHouseWithServicePrincipals(
 	if err != nil {
 		return nil, fmt.Errorf("start ClickHouse service-principal test container: build provisioning SQL: %w", err)
 	}
+	provisioningSQL += unifiedPrincipalProvisioningSQL(unifiedPassword)
 	configDirectory, err := os.MkdirTemp("", "open-splunk-clickhouse-config-")
 	if err != nil {
 		return nil, fmt.Errorf("start ClickHouse service-principal test container: create config directory: %w", err)
@@ -292,6 +297,8 @@ func startClickHouseWithServicePrincipals(
 	container := &ClickHouseContainer{
 		Name:              "open-splunk-clickhouse-principals-" + nameSuffix,
 		Database:          "open_splunk",
+		Username:          "open_splunk",
+		Password:          unifiedPassword,
 		MigrationUsername: clickHouseMigrationUsername,
 		MigrationPassword: migrationPassword,
 		RuntimeUsername:   clickHouseRuntimeUsername,
@@ -705,6 +712,7 @@ func (container *ClickHouseContainer) secureReadinessDiagnostics(ctx context.Con
 	value := strings.Join(sections, "\n")
 	for _, secret := range []string{
 		container.bootstrapPassword,
+		container.Password,
 		container.MigrationPassword,
 		container.RuntimePassword,
 		container.DeletionPassword,
@@ -714,6 +722,19 @@ func (container *ClickHouseContainer) secureReadinessDiagnostics(ctx context.Con
 		}
 	}
 	return "; ClickHouse diagnostics: " + boundedOutput([]byte(value))
+}
+
+func unifiedPrincipalProvisioningSQL(password string) string {
+	return fmt.Sprintf(`
+CREATE USER IF NOT EXISTS open_splunk
+    IDENTIFIED WITH sha256_password BY '%s';
+ALTER USER open_splunk
+    IDENTIFIED WITH sha256_password BY '%s';
+GRANT ALL ON open_splunk.* TO open_splunk;
+GRANT SELECT ON system.tables TO open_splunk;
+GRANT SELECT ON system.parts TO open_splunk;
+GRANT SELECT ON system.mutations TO open_splunk;
+`, password, password)
 }
 
 func servicePrincipalProvisioningSQL(

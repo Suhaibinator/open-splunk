@@ -40,14 +40,19 @@ func TestDevelopmentWorkflow(t *testing.T) {
 		filepath.Join(repositoryRoot, "deploy", "generate-env.sh"),
 		"--development", environmentFile,
 	)
-	replaceDevelopmentPort(t, environmentFile, "OPEN_SPLUNK_CLICKHOUSE_SECURE_NATIVE_PORT", clickHousePort)
+	replaceDevelopmentPort(t, environmentFile, "OPEN_SPLUNK_CLICKHOUSE_NATIVE_PORT", clickHousePort)
+	replaceDevelopmentValue(
+		t,
+		environmentFile,
+		"OPEN_SPLUNK_CLICKHOUSE_ADDRESS",
+		"127.0.0.1:"+strconv.Itoa(clickHousePort),
+	)
 	replaceDevelopmentPort(t, environmentFile, "OPEN_SPLUNK_SERVER_HTTP_PORT", httpPort)
 
 	project := "open-splunk-development-test-" + strconv.FormatInt(time.Now().UnixNano(), 10)
 	composeArguments := []string{
 		"compose", "--project-name", project,
 		"--env-file", environmentFile,
-		"-f", filepath.Join(repositoryRoot, "deploy", "docker-compose.yaml"),
 		"-f", filepath.Join(repositoryRoot, "deploy", "docker-compose.development.yaml"),
 	}
 	t.Cleanup(func() {
@@ -127,6 +132,11 @@ func reserveLoopbackPort(t *testing.T) int {
 
 func replaceDevelopmentPort(t *testing.T, path, name string, port int) {
 	t.Helper()
+	replaceDevelopmentValue(t, path, name, strconv.Itoa(port))
+}
+
+func replaceDevelopmentValue(t *testing.T, path, name, value string) {
+	t.Helper()
 	contents, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read development environment: %v", err)
@@ -136,7 +146,7 @@ func replaceDevelopmentPort(t *testing.T, path, name string, port int) {
 	replaced := false
 	for index, line := range lines {
 		if strings.HasPrefix(line, prefix) {
-			lines[index] = prefix + strconv.Itoa(port)
+			lines[index] = prefix + value
 			replaced = true
 		}
 	}

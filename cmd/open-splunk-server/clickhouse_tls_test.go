@@ -182,18 +182,14 @@ func TestLoadClickHouseClientTLSProfileRejectsIncompleteOrUnsafeTrust(
 func TestNewClickHouseConnectionOptionsOwnsAuthenticatedTLSConfigs(
 	t *testing.T,
 ) {
-	t.Setenv("OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD", "runtime-password")
-	t.Setenv("OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD", "deletion-password")
-	t.Setenv("OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD", "migration-password")
+	t.Setenv(clickHousePasswordEnvironmentVariable, "shared-password")
 	tlsProfile := testClickHouseClientTLSProfile(t)
 
 	results, err := newClickHouseConnectionOptions(options{
-		clickhouseAddress:           "clickhouse:9440",
-		clickhouseDatabase:          "open_splunk",
-		clickhouseRuntimeUsername:   "runtime-user",
-		clickhouseDeletionUsername:  "deletion-user",
-		clickhouseMigrationUsername: "migration-user",
-		clickhouseSecure:            true,
+		clickhouseAddress:  "clickhouse:9440",
+		clickhouseDatabase: "open_splunk",
+		clickhouseUsername: "shared-user",
+		clickhouseSecure:   true,
 	}, tlsProfile)
 	if err != nil {
 		t.Fatal(err)
@@ -228,15 +224,11 @@ func TestNewClickHouseConnectionOptionsOwnsAuthenticatedTLSConfigs(
 }
 
 func TestNewClickHouseConnectionOptionsRejectsMismatchedTLSMode(t *testing.T) {
-	t.Setenv("OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD", "runtime-password")
-	t.Setenv("OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD", "deletion-password")
-	t.Setenv("OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD", "migration-password")
+	t.Setenv(clickHousePasswordEnvironmentVariable, "shared-password")
 	valid := options{
-		clickhouseAddress:           "127.0.0.1:9000",
-		clickhouseDatabase:          "open_splunk",
-		clickhouseRuntimeUsername:   "runtime-user",
-		clickhouseDeletionUsername:  "deletion-user",
-		clickhouseMigrationUsername: "migration-user",
+		clickhouseAddress:  "127.0.0.1:9000",
+		clickhouseDatabase: "open_splunk",
+		clickhouseUsername: "shared-user",
 	}
 	tlsProfile := testClickHouseClientTLSProfile(t)
 

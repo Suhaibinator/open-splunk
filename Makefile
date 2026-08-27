@@ -51,7 +51,7 @@ override GO_TOOL_ENV := $(BASE_GO_TOOL_ENV)
 # reproducibly CGO-disabled.
 override GO_TEST_ENV := $(GO_TOOL_ENV) CGO_ENABLED=1
 override DEVELOPMENT_ENV_FILE := $(CURDIR)/deploy/.env.development
-override DEVELOPMENT_COMPOSE := docker compose --project-name open-splunk-development --env-file $(DEVELOPMENT_ENV_FILE) -f $(CURDIR)/deploy/docker-compose.yaml -f $(CURDIR)/deploy/docker-compose.development.yaml
+override DEVELOPMENT_COMPOSE := docker compose --project-name open-splunk-development --env-file $(DEVELOPMENT_ENV_FILE) -f $(CURDIR)/deploy/docker-compose.development.yaml
 OPEN_SPLUNK_DATA_MODE ?= backend
 OPEN_SPLUNK_SOURCE_REVISION ?= development
 OPEN_SPLUNK_PRODUCT_VERSION ?=

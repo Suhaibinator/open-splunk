@@ -14,23 +14,18 @@ test("development runner passes the complete host-server contract", async (t) =>
   t.after(() => rm(fixture, { force: true, recursive: true }));
   const invocation = path.join(fixture, "invocation");
   const binary = path.join(fixture, "open-splunk-server");
-  await writeFile(binary, `#!/bin/sh\nprintf '%s\\n' "$@" >${JSON.stringify(invocation)}\nprintf 'lock=%s\\n' "$OPEN_SPLUNK_SERVER_SINGLETON_LOCK_PATH" >>${JSON.stringify(invocation)}\nprintf 'runtime_secret=%s\\n' "\${OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD:-}" >>${JSON.stringify(invocation)}\n`);
+  await writeFile(binary, `#!/bin/sh\nprintf '%s\\n' "$@" >${JSON.stringify(invocation)}\nprintf 'lock=%s\\n' "$OPEN_SPLUNK_SERVER_SINGLETON_LOCK_PATH" >>${JSON.stringify(invocation)}\nprintf 'clickhouse_secret=%s\\n' "\${OPEN_SPLUNK_CLICKHOUSE_PASSWORD:-}" >>${JSON.stringify(invocation)}\nprintf 'administrator_token=%s\\n' "\${OPEN_SPLUNK_ADMINISTRATOR_TOKEN:-}" >>${JSON.stringify(invocation)}\n`);
   await chmod(binary, 0o755);
 
-  const secret = (name) => path.join(fixture, name);
   const environment = path.join(fixture, "development.env");
   await writeFile(environment, [
     `OPEN_SPLUNK_DEVELOPMENT_SERVER_BINARY=${JSON.stringify(binary)}`,
     `OPEN_SPLUNK_DEVELOPMENT_STATE_ROOT=${JSON.stringify(path.join(fixture, "state"))}`,
     `OPEN_SPLUNK_DEVELOPMENT_EXPORT_ROOT=${JSON.stringify(path.join(fixture, "exports"))}`,
-    `OPEN_SPLUNK_ADMINISTRATOR_TOKEN_FILE=${JSON.stringify(secret("administrator.token"))}`,
-    `OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD_FILE=${JSON.stringify(secret("migration.password"))}`,
-    `OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD_FILE=${JSON.stringify(secret("runtime.password"))}`,
-    "OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD=must-not-reach-server",
-    `OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD_FILE=${JSON.stringify(secret("deletion.password"))}`,
-    `OPEN_SPLUNK_CLICKHOUSE_TLS_CA_FILE=${JSON.stringify(secret("ca.crt"))}`,
-    "OPEN_SPLUNK_CLICKHOUSE_TLS_SERVER_NAME=clickhouse",
-    "OPEN_SPLUNK_CLICKHOUSE_SECURE_NATIVE_PORT=19440",
+    "OPEN_SPLUNK_ADMINISTRATOR_TOKEN=administrator-secret",
+    "OPEN_SPLUNK_CLICKHOUSE_PASSWORD=clickhouse-secret",
+    "OPEN_SPLUNK_CLICKHOUSE_USERNAME=clickhouse",
+    "OPEN_SPLUNK_CLICKHOUSE_ADDRESS=127.0.0.1:19000",
     "OPEN_SPLUNK_SERVER_HTTP_PORT=18080",
     "",
   ].join("\n"), { mode: 0o600 });
@@ -46,26 +41,17 @@ test("development runner passes the complete host-server contract", async (t) =>
     "open-splunk.db",
     "-master-key",
     "master.key",
-    "-administrator-token-file",
-    "administrator.token",
     "-export-artifact-dir",
     "-clickhouse-address",
-    "127.0.0.1:19440",
-    "-clickhouse-secure",
-    "-clickhouse-ca-cert",
-    "ca.crt",
-    "-clickhouse-server-name",
-    "-clickhouse-migration-password-file",
-    "migration.password",
-    "-clickhouse-runtime-password-file",
-    "runtime.password",
-    "-clickhouse-deletion-password-file",
-    "deletion.password",
+    "127.0.0.1:19000",
+    "-clickhouse-username",
+    "clickhouse",
     "lock=",
   ]) {
     assert.match(argumentsText, new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
-  assert.match(argumentsText, /^runtime_secret=$/m);
+  assert.match(argumentsText, /^clickhouse_secret=clickhouse-secret$/m);
+  assert.match(argumentsText, /^administrator_token=administrator-secret$/m);
   const privateDirectories = [
     path.join(fixture, "state", "private"),
     path.join(fixture, "exports", "private"),

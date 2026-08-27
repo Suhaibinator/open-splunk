@@ -129,6 +129,7 @@ func TestBackendIndexDataDeletionLifecycle(t *testing.T) {
 	var serverProcesses []*managedProcess
 	protectedValues := []string{
 		administratorToken,
+		clickhouse.Password,
 		clickhouse.MigrationPassword,
 		clickhouse.RuntimePassword,
 		clickhouse.DeletionPassword,

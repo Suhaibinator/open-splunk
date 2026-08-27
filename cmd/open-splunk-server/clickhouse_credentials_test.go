@@ -13,7 +13,7 @@ func TestLoadClickHouseCredentialUsesFileOrEnvironment(t *testing.T) {
 	t.Run("file", func(t *testing.T) {
 		t.Setenv(environmentName, "")
 		path := writeClickHouseCredentialFixture(t, "file-secret\n", 0o600)
-		credential, err := loadClickHouseCredential(path, environmentName, "runtime")
+		credential, err := loadClickHouseCredential(path, environmentName)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -24,7 +24,7 @@ func TestLoadClickHouseCredentialUsesFileOrEnvironment(t *testing.T) {
 
 	t.Run("environment fallback", func(t *testing.T) {
 		t.Setenv(environmentName, "environment-secret")
-		credential, err := loadClickHouseCredential("", environmentName, "runtime")
+		credential, err := loadClickHouseCredential("", environmentName)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -43,7 +43,6 @@ func TestLoadClickHouseCredentialUsesFileOrEnvironment(t *testing.T) {
 		credential, err := loadClickHouseCredential(
 			path,
 			environmentName,
-			"runtime",
 		)
 		if err == nil || credential != "" {
 			t.Fatalf("ambiguous credential = (%q, %v), want failure", credential, err)
@@ -55,7 +54,7 @@ func TestLoadClickHouseCredentialUsesFileOrEnvironment(t *testing.T) {
 
 	t.Run("missing", func(t *testing.T) {
 		t.Setenv(environmentName, "")
-		credential, err := loadClickHouseCredential("", environmentName, "runtime")
+		credential, err := loadClickHouseCredential("", environmentName)
 		if err == nil || credential != "" {
 			t.Fatalf("missing credential = (%q, %v), want failure", credential, err)
 		}
@@ -163,26 +162,25 @@ func TestReadClickHouseCredentialFileRejectsReplacement(t *testing.T) {
 }
 
 func TestNewClickHouseConnectionOptionsLoadsCredentialFiles(t *testing.T) {
-	t.Setenv("OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD", "")
-	t.Setenv("OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD", "")
-	t.Setenv("OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD", "")
+	t.Setenv(clickHousePasswordEnvironmentVariable, "")
+	passwordFile := writeClickHouseCredentialFixture(
+		t,
+		"shared-file-secret",
+		0o600,
+	)
 
 	results, err := newClickHouseConnectionOptions(options{
-		clickhouseAddress:               "127.0.0.1:9000",
-		clickhouseDatabase:              "open_splunk",
-		clickhouseRuntimeUsername:       "runtime-user",
-		clickhouseDeletionUsername:      "deletion-user",
-		clickhouseMigrationUsername:     "migration-user",
-		clickhouseRuntimePasswordFile:   writeClickHouseCredentialFixture(t, "runtime-file-secret", 0o600),
-		clickhouseDeletionPasswordFile:  writeClickHouseCredentialFixture(t, "deletion-file-secret", 0o600),
-		clickhouseMigrationPasswordFile: writeClickHouseCredentialFixture(t, "migration-file-secret", 0o600),
+		clickhouseAddress:      "per-clickhouse:9000",
+		clickhouseDatabase:     "open_splunk",
+		clickhouseUsername:     "clickhouse",
+		clickhousePasswordFile: passwordFile,
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if results.runtime.Auth.Password != "runtime-file-secret" ||
-		results.deletion.Auth.Password != "deletion-file-secret" ||
-		results.migration.Auth.Password != "migration-file-secret" {
+	if results.runtime.Auth.Password != "shared-file-secret" ||
+		results.deletion.Auth.Password != "shared-file-secret" ||
+		results.migration.Auth.Password != "shared-file-secret" {
 		t.Fatal("ClickHouse connection options did not use file credentials")
 	}
 }

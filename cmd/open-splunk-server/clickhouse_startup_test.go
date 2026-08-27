@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"reflect"
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -332,7 +333,9 @@ func TestApplyStartupClickHouseMigrationsRejectsPrivilegeDriftBeforeDDL(
 ) {
 	t.Parallel()
 
-	connection := &startupMigrationConnection{grants: []string{}}
+	connection := &startupMigrationConnection{
+		deniedCheckGrant: "CHECK GRANT CREATE DATABASE, SHOW TABLES ON open_splunk.*",
+	}
 	applyCalls := 0
 	err := applyStartupClickHouseMigrations(
 		context.Background(),
@@ -411,13 +414,14 @@ func TestApplyStartupClickHouseMigrationsRejectsInvalidDependencies(t *testing.T
 
 type startupMigrationConnection struct {
 	clickhousedriver.Conn
-	ping         func(context.Context) error
-	close        func() error
-	version      string
-	versionErr   error
-	versionCheck func()
-	closeCalls   int
-	grants       []string
+	ping             func(context.Context) error
+	close            func() error
+	version          string
+	versionErr       error
+	versionCheck     func()
+	closeCalls       int
+	grants           []string
+	deniedCheckGrant string
 }
 
 func (connection *startupMigrationConnection) Ping(ctx context.Context) error {
@@ -461,6 +465,13 @@ func (connection *startupMigrationConnection) QueryRow(
 			},
 		}
 	default:
+		if strings.HasPrefix(query, "CHECK GRANT ") {
+			granted := uint8(1)
+			if query == connection.deniedCheckGrant {
+				granted = 0
+			}
+			return startupMigrationRow{value: granted}
+		}
 		return startupMigrationRow{
 			err: fmt.Errorf("unexpected startup migration query %q", query),
 		}
@@ -488,7 +499,7 @@ func (connection *startupMigrationConnection) Query(
 }
 
 type startupMigrationRow struct {
-	value string
+	value any
 	err   error
 }
 
@@ -503,11 +514,22 @@ func (row startupMigrationRow) Scan(destinations ...any) error {
 	if len(destinations) != 1 {
 		return errors.New("startup migration row requires one destination")
 	}
-	destination, ok := destinations[0].(*string)
-	if !ok {
-		return errors.New("startup migration row requires a string destination")
+	switch destination := destinations[0].(type) {
+	case *string:
+		value, ok := row.value.(string)
+		if !ok {
+			return errors.New("startup migration row has a non-string value")
+		}
+		*destination = value
+	case *uint8:
+		value, ok := row.value.(uint8)
+		if !ok {
+			return errors.New("startup migration row has a non-uint8 value")
+		}
+		*destination = value
+	default:
+		return errors.New("startup migration row requires a string or uint8 destination")
 	}
-	*destination = row.value
 	return nil
 }
 

@@ -113,6 +113,68 @@ var clickHouseDeletionWorkerGrantAllowlist = []clickHouseGrant{
 	},
 }
 
+// clickHouseApplicationRequiredGrants is the combined capability set used by
+// the normal single-account server. Unlike the dedicated recovery principals,
+// an operator-managed application account may have broader grants; CHECK
+// GRANT verifies that every required operation is available without imposing
+// an exact allowlist on that external account.
+var clickHouseApplicationRequiredGrants = []clickHouseGrant{
+	{
+		target:     "open_splunk.*",
+		privileges: []string{"CREATE DATABASE", "SHOW TABLES"},
+	},
+	{
+		target: "open_splunk.events",
+		privileges: []string{
+			"ALTER ADD COLUMN",
+			"ALTER ADD CONSTRAINT",
+			"ALTER ADD INDEX",
+			"CREATE TABLE",
+		},
+	},
+	{
+		target: "open_splunk.schema_migrations",
+		privileges: []string{
+			"CREATE TABLE",
+			"INSERT",
+			"SELECT",
+		},
+	},
+	{
+		target:     "open_splunk.recovery_sets",
+		privileges: []string{"CREATE TABLE"},
+	},
+	{
+		target:     "open_splunk.recovery_archive_markers",
+		privileges: []string{"CREATE TABLE"},
+	},
+	{
+		target:     "system.tables",
+		privileges: []string{"SELECT"},
+	},
+	{
+		target:     "open_splunk.events",
+		privileges: []string{"INSERT", "SELECT"},
+	},
+	{
+		target: "system.parts",
+		privileges: []string{
+			"SELECT(active, bytes_on_disk, database, rows, `table`)",
+		},
+	},
+	{
+		target: "open_splunk.events",
+		privileges: []string{
+			"ALTER DELETE",
+			"SELECT(index_name, tenant_id)",
+		},
+	},
+	{
+		target:     "system.mutations",
+		privileges: []string{"SELECT"},
+	},
+}
+
 var clickHouseBackupGrantAllowlist = []clickHouseGrant{
 	{
 		target:     "open_splunk.*",
@@ -300,6 +362,57 @@ func ValidateClickHouseDeletionWorkerPrivileges(
 		"deletion worker",
 		clickHouseDeletionWorkerGrantAllowlist,
 	)
+}
+
+// ValidateClickHouseApplicationPrivileges verifies the combined migration,
+// runtime, inspection, and deletion capabilities required by the normal
+// single-account server. Additional operator-managed grants are permitted.
+// Dedicated backup and restore commands continue to use their exact
+// least-privilege validators.
+func ValidateClickHouseApplicationPrivileges(
+	ctx context.Context,
+	connection ClickHousePrivilegeConnection,
+) error {
+	const principal = "application"
+	if ctx == nil || connection == nil {
+		return errors.New(
+			"validate ClickHouse application privileges: context and connection are required",
+		)
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("validate ClickHouse application privileges: %w", err)
+	}
+	if err := validateClickHousePrivilegeContractVersion(
+		ctx,
+		connection,
+		principal,
+	); err != nil {
+		return err
+	}
+	for _, grant := range clickHouseApplicationRequiredGrants {
+		query := clickHouseGrantCheckQuery(grant)
+		var granted uint8
+		if err := connection.QueryRow(ctx, query).Scan(&granted); err != nil {
+			return fmt.Errorf(
+				"check required ClickHouse application grant %s: %w",
+				formatClickHouseGrantKey(clickHouseGrantKey(grant.target, grant.privileges)),
+				err,
+			)
+		}
+		if granted != 1 {
+			return fmt.Errorf(
+				"%w: application principal is missing %s",
+				ErrClickHousePrivilegeMissing,
+				formatClickHouseGrantKey(clickHouseGrantKey(grant.target, grant.privileges)),
+			)
+		}
+	}
+	return nil
+}
+
+func clickHouseGrantCheckQuery(grant clickHouseGrant) string {
+	return "CHECK GRANT " + strings.Join(grant.privileges, ", ") +
+		" ON " + grant.target
 }
 
 // ValidateClickHouseBackupPrivileges verifies the stopped-server snapshot

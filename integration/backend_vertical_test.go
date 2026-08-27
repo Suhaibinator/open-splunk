@@ -231,6 +231,7 @@ func TestBackendVertical(t *testing.T) {
 	serverSecrets := []string{
 		administratorToken,
 		plaintextToken,
+		clickhouse.Password,
 		clickhouse.MigrationPassword,
 		clickhouse.RuntimePassword,
 		clickhouse.DeletionPassword,

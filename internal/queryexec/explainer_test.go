@@ -139,18 +139,6 @@ func TestNewExplainerRejectsUnsafeTransportOptionsWithoutDialing(t *testing.T) {
 			},
 		},
 		{
-			name: "plaintext remote IP",
-			mutate: func(options *clickhousedriver.Options) {
-				options.Addr = []string{"192.0.2.1:9000"}
-			},
-		},
-		{
-			name: "plaintext remote name",
-			mutate: func(options *clickhousedriver.Options) {
-				options.Addr = []string{"clickhouse.example:9000"}
-			},
-		},
-		{
 			name: "negative dial timeout",
 			mutate: func(options *clickhousedriver.Options) {
 				options.DialTimeout = -time.Second
@@ -235,6 +223,24 @@ func TestNewExplainerRejectsUnsafeTransportOptionsWithoutDialing(t *testing.T) {
 	if explainer, err := NewExplainer(&valid, invalidConfig); err == nil ||
 		explainer != nil {
 		t.Fatalf("NewExplainer(invalid config) = (%#v, %v)", explainer, err)
+	}
+}
+
+func TestNewExplainerAllowsPlaintextDockerHostname(t *testing.T) {
+	t.Parallel()
+
+	explainer, err := NewExplainer(
+		&clickhousedriver.Options{
+			Protocol: clickhousedriver.Native,
+			Addr:     []string{"per-clickhouse:9000"},
+		},
+		Config{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := explainer.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

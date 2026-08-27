@@ -10,19 +10,10 @@ func clickHouseServerEnvironment(
 ) []string {
 	environment = environmentWithValue(
 		environment,
-		"OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD",
-		clickHouse.MigrationPassword,
+		"OPEN_SPLUNK_CLICKHOUSE_PASSWORD",
+		clickHouse.Password,
 	)
-	environment = environmentWithValue(
-		environment,
-		"OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD",
-		clickHouse.RuntimePassword,
-	)
-	return environmentWithValue(
-		environment,
-		"OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD",
-		clickHouse.DeletionPassword,
-	)
+	return environment
 }
 
 func clickHouseServerArguments(
@@ -31,8 +22,6 @@ func clickHouseServerArguments(
 	return []string{
 		"-clickhouse-address=" + clickHouse.Address,
 		"-clickhouse-database=" + clickHouse.Database,
-		"-clickhouse-migration-username=" + clickHouse.MigrationUsername,
-		"-clickhouse-runtime-username=" + clickHouse.RuntimeUsername,
-		"-clickhouse-deletion-username=" + clickHouse.DeletionUsername,
+		"-clickhouse-username=" + clickHouse.Username,
 	}
 }

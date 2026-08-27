@@ -18,11 +18,11 @@ import (
 	"github.com/Suhaibinator/open-splunk/migrations"
 )
 
-// TestClickHouseTLSServicePrincipalStartupLifecycle is opt-in because it starts
+// TestClickHouseTLSUnifiedAccountStartupLifecycle is opt-in because it starts
 // a digest-pinned Docker container. It exercises the production TLS loader,
-// principal-specific options, short-lived startup migration session, and both
-// long-lived privilege validators against the real secure native protocol.
-func TestClickHouseTLSServicePrincipalStartupLifecycle(t *testing.T) {
+// one account across the short-lived startup migration session and both
+// long-lived application sessions against the real secure native protocol.
+func TestClickHouseTLSUnifiedAccountStartupLifecycle(t *testing.T) {
 	if os.Getenv("OPEN_SPLUNK_CLICKHOUSE_INTEGRATION") != "1" {
 		t.Skip("set OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 to run the Docker integration test")
 	}
@@ -56,9 +56,7 @@ func TestClickHouseTLSServicePrincipalStartupLifecycle(t *testing.T) {
 		}
 	})
 
-	t.Setenv("OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD", container.MigrationPassword)
-	t.Setenv("OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD", container.RuntimePassword)
-	t.Setenv("OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD", container.DeletionPassword)
+	t.Setenv(clickHousePasswordEnvironmentVariable, container.Password)
 	config := secureClickHouseFixtureOptions(container)
 	tlsProfile, err := loadClickHouseClientTLSProfile(
 		true,
@@ -120,16 +118,16 @@ func TestClickHouseTLSServicePrincipalStartupLifecycle(t *testing.T) {
 		}
 	})
 	if err := runtimeConnection.Ping(ctx); err != nil {
-		t.Fatalf("ping runtime principal over TLS: %v", err)
+		t.Fatalf("ping runtime session over TLS: %v", err)
 	}
-	if err := server.ValidateClickHouseRuntimePrivileges(ctx, runtimeConnection); err != nil {
-		t.Fatalf("validate runtime principal over TLS: %v", err)
+	if err := server.ValidateClickHouseApplicationPrivileges(ctx, runtimeConnection); err != nil {
+		t.Fatalf("validate runtime session over TLS: %v", err)
 	}
 	if err := deletionConnection.Ping(ctx); err != nil {
-		t.Fatalf("ping deletion principal over TLS: %v", err)
+		t.Fatalf("ping deletion session over TLS: %v", err)
 	}
-	if err := server.ValidateClickHouseDeletionWorkerPrivileges(ctx, deletionConnection); err != nil {
-		t.Fatalf("validate deletion principal over TLS: %v", err)
+	if err := server.ValidateClickHouseApplicationPrivileges(ctx, deletionConnection); err != nil {
+		t.Fatalf("validate deletion session over TLS: %v", err)
 	}
 	var eventRows uint64
 	if err := runtimeConnection.QueryRow(
@@ -296,12 +294,10 @@ func secureClickHouseFixtureOptions(
 	container *testsupport.ClickHouseContainer,
 ) options {
 	return options{
-		clickhouseAddress:           container.Address,
-		clickhouseDatabase:          container.Database,
-		clickhouseRuntimeUsername:   container.RuntimeUsername,
-		clickhouseDeletionUsername:  container.DeletionUsername,
-		clickhouseMigrationUsername: container.MigrationUsername,
-		clickhouseSecure:            true,
+		clickhouseAddress:  container.Address,
+		clickhouseDatabase: container.Database,
+		clickhouseUsername: container.Username,
+		clickhouseSecure:   true,
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 )
 
 const maximumAdministratorTokenFileBytes = auth.MaximumBrowserBearerTokenBytes + 2
+const administratorTokenEnvironmentVariable = "OPEN_SPLUNK_ADMINISTRATOR_TOKEN"
 
 type administratorTokenReadHooks = stablePathFileReadHooks
 
@@ -21,9 +22,20 @@ func newAdministratorBrowserAuthenticator(
 	tenantID string,
 	ownerID string,
 ) (auth.BrowserAuthenticator, error) {
-	token, err := readAdministratorToken(path)
-	if err != nil {
-		return nil, fmt.Errorf("load administrator token: %w", err)
+	token, loadErr := loadAdministratorToken(path)
+	unsetErr := os.Unsetenv(administratorTokenEnvironmentVariable)
+	if unsetErr != nil {
+		unsetErr = fmt.Errorf(
+			"discard administrator token from process environment: %w",
+			unsetErr,
+		)
+	}
+	if loadErr != nil || unsetErr != nil {
+		clear(token)
+		if loadErr != nil {
+			loadErr = fmt.Errorf("load administrator token: %w", loadErr)
+		}
+		return nil, errors.Join(loadErr, unsetErr)
 	}
 	defer clear(token)
 
@@ -37,6 +49,34 @@ func newAdministratorBrowserAuthenticator(
 		return nil, errors.New("configure administrator authentication: invalid token or identity")
 	}
 	return authenticator, nil
+}
+
+func loadAdministratorToken(path string) ([]byte, error) {
+	path = strings.TrimSpace(path)
+	environmentToken := os.Getenv(administratorTokenEnvironmentVariable)
+	if path != "" && environmentToken != "" {
+		return nil, fmt.Errorf(
+			"-administrator-token-file and %s are mutually exclusive",
+			administratorTokenEnvironmentVariable,
+		)
+	}
+	if path != "" {
+		return readAdministratorToken(path)
+	}
+	if environmentToken == "" {
+		return nil, fmt.Errorf(
+			"administrator token requires -administrator-token-file or %s",
+			administratorTokenEnvironmentVariable,
+		)
+	}
+	token := []byte(environmentToken)
+	if err := auth.ValidateBrowserBearerToken(token); err != nil {
+		clear(token)
+		return nil, errors.New(
+			"administrator token environment variable contains an invalid bearer token",
+		)
+	}
+	return token, nil
 }
 
 func readAdministratorToken(path string) ([]byte, error) {
@@ -115,7 +155,7 @@ func stripAdministratorTokenTerminator(contents []byte) []byte {
 func resolveAdministratorTokenPath(path string) (string, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
-		return "", errors.New("-administrator-token-file is required")
+		return "", errors.New("administrator token file path is required")
 	}
 	if strings.IndexByte(path, 0) >= 0 {
 		return "", errors.New("administrator token file path contains a NUL byte")

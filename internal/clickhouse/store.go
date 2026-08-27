@@ -2411,9 +2411,6 @@ func (config Config) clickHouseOptions() (*clickhousedriver.Options, Config, err
 		if err != nil || portNumber == 0 {
 			return nil, Config{}, fmt.Errorf("invalid ClickHouse address at position %d", i)
 		}
-		if config.TLS == nil && !isLoopbackHost(host) {
-			return nil, Config{}, fmt.Errorf("ClickHouse TLS is required for non-loopback address at position %d", i)
-		}
 	}
 	var tlsConfig *tls.Config
 	if config.TLS != nil {
@@ -2432,12 +2429,4 @@ func (config Config) clickHouseOptions() (*clickhousedriver.Options, Config, err
 		Compression:      &clickhousedriver.Compression{Method: clickhousedriver.CompressionLZ4},
 		ConnOpenStrategy: clickhousedriver.ConnOpenRoundRobin,
 	}, config, nil
-}
-
-func isLoopbackHost(host string) bool {
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	address := net.ParseIP(host)
-	return address != nil && address.IsLoopback()
 }

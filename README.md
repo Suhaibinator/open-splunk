@@ -54,13 +54,12 @@ make run
 
 Neither command requires a clean worktree, Git commit, source hash, or product
 version. `make dev-clickhouse` generates reusable local credentials and starts
-ClickHouse plus its one-shot recovery-volume bootstrap in an isolated
-`open-splunk-development` Compose project; it starts no Open Splunk server.
+one plaintext ClickHouse service in an isolated `open-splunk-development`
+Compose project; it starts no Open Splunk server.
 `make run` builds the embedded browser UI and server with the explicit
 `development` identity, applies ClickHouse migrations, and runs in the
 foreground. Open `http://127.0.0.1:8080/signin/`; the administrator token is
-stored at `deploy/.env.development.tls/administrator.token` and is never
-printed.
+stored in the owner-only `deploy/.env.development` file and is never printed.
 
 Stop the server with Ctrl-C. ClickHouse and all development data remain for the
 next run. Stop its containers without deleting state with:
@@ -70,27 +69,24 @@ make dev-down
 ```
 
 To choose other loopback ports, set `OPEN_SPLUNK_SERVER_HTTP_PORT` or
-`OPEN_SPLUNK_CLICKHOUSE_SECURE_NATIVE_PORT` on the first `make dev-clickhouse`,
+`OPEN_SPLUNK_CLICKHOUSE_NATIVE_PORT` on the first `make dev-clickhouse`,
 or edit those values in `deploy/.env.development` while the processes are
 stopped.
 
 **Destructive development reset:** first run `make dev-down`, then remove the
 `open-splunk-development` Compose volumes and the ignored
-`data/development`, `exports/development`, `deploy/.env.development`, and
-`deploy/.env.development.tls` paths. This permanently deletes the local
+`data/development`, `exports/development`, and `deploy/.env.development`
+paths. This permanently deletes the local
 database, ClickHouse data, exports, credentials, and administrator token; the
 next `make dev-clickhouse` creates an empty environment:
 
 ```sh
 docker volume rm \
-  open-splunk-development_clickhouse-data \
-  open-splunk-development_clickhouse-logs \
-  open-splunk-development_clickhouse-recovery
+  open-splunk-development_clickhouse-data
 rm -rf -- \
   data/development \
   exports/development \
-  deploy/.env.development \
-  deploy/.env.development.tls
+  deploy/.env.development
 ```
 
 ## Build and test
@@ -108,7 +104,7 @@ plugin versions; generated files are never edited manually.
 `make build` exports the backend-mode UI, generates/verifies the embedded asset
 manifest, and links one build identity into server, collector, and log
 generator. The resulting development binary still requires an existing
-ClickHouse with the distinct principals described in
+ClickHouse with the single account described in
 [`deploy/README.md`](deploy/README.md). Its relevant flags are shown by
 `./build/open-splunk-server -help`. Direct `go build` is only a compile check.
 For deterministic UI-only demo work:
@@ -145,8 +141,8 @@ the publication CI. A successful publication attaches Linux AMD64/ARM64 binary
 archives and checksums and publishes multi-architecture
 [server](https://github.com/Suhaibinator/open-splunk/pkgs/container/open-splunk-server)
 and [collector](https://github.com/Suhaibinator/open-splunk/pkgs/container/open-splunk-collector)
-images to GHCR. For the non-root images and digest-pinned ClickHouse Compose
-stack, follow [Deployment](deploy/README.md).
+images to GHCR. To connect the server image to an existing ClickHouse Compose
+service, follow [Deployment](deploy/README.md).
 
 ## Product boundaries
 
@@ -164,13 +160,13 @@ artifacts fail closed and are never silently deleted or rewritten. See
 [Architecture](docs/architecture.md) and [database mechanics](migrations/README.md).
 
 Native collectors are documented in [Ingestion](docs/ingestion.md). HEC is
-disabled by default, shares the existing HTTPS listener, and exposes only its
+disabled by default, shares the existing HTTP listener, and exposes only its
 exact unversioned routes; see [HEC](docs/hec.md).
 
 ## Integration gates
 
 The default Go/frontend suite is self-contained. ClickHouse, shipped-browser,
-HEC load/soak, recovery, and OCI tests are opt-in because they start containers
+and HEC load/soak tests are opt-in because they start containers
 or long-running workloads. Common entry points include:
 
 ```sh
@@ -182,14 +178,13 @@ npx --no-install playwright install chromium
 OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
 go test ./integration -run TestBackendVertical
 
-OPEN_SPLUNK_OCI_INTEGRATION=1 \
-go test ./integration -run '^TestReleaseOCIComposeContract$' \
-  -count=1 -timeout=25m -v
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+go test ./migrations/clickhouse -run TestMigrationsAgainstClickHouse -v
 ```
 
 Use the repository-pinned ClickHouse digest unless intentionally comparing a
 different pinned image. [Integration testing](integration/README.md) describes
-the backend, browser, load, recovery, and OCI gates; the
+the backend, browser, and load gates; the
 [HEC reference](docs/hec.md) documents its protocol-specific load, soak, and
 slow-client gates.
 

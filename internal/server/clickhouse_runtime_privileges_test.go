@@ -38,6 +38,53 @@ func TestValidateClickHousePrincipalPrivilegesAcceptsExactAllowlists(t *testing.
 	}
 }
 
+func TestValidateClickHouseApplicationPrivilegesAcceptsUnifiedAccount(t *testing.T) {
+	t.Parallel()
+
+	connection := validClickHouseApplicationPrivilegeConnection()
+	connection.grants = []string{
+		"GRANT ALL ON *.* TO application WITH GRANT OPTION",
+	}
+	if err := ValidateClickHouseApplicationPrivileges(
+		context.Background(),
+		connection,
+	); err != nil {
+		t.Fatalf("ValidateClickHouseApplicationPrivileges() error = %v", err)
+	}
+	wantQueries := []string{clickHouseVersionQuery}
+	for _, grant := range clickHouseApplicationRequiredGrants {
+		wantQueries = append(wantQueries, clickHouseGrantCheckQuery(grant))
+	}
+	if got := connection.queriesSnapshot(); !reflect.DeepEqual(got, wantQueries) {
+		t.Fatalf("queries = %#v, want %#v", got, wantQueries)
+	}
+}
+
+func TestValidateClickHouseApplicationPrivilegesRejectsEachMissingGrant(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	for missingIndex, grant := range clickHouseApplicationRequiredGrants {
+		t.Run(fmt.Sprintf("%d/%s", missingIndex, grant.target), func(t *testing.T) {
+			t.Parallel()
+
+			connection := validClickHouseApplicationPrivilegeConnection()
+			connection.checkGrants[clickHouseGrantCheckQuery(grant)] = 0
+			err := ValidateClickHouseApplicationPrivileges(
+				context.Background(),
+				connection,
+			)
+			if !errors.Is(err, ErrClickHousePrivilegeMissing) {
+				t.Fatalf(
+					"ValidateClickHouseApplicationPrivileges() error = %v, want missing grant",
+					err,
+				)
+			}
+		})
+	}
+}
+
 func TestValidateClickHousePrincipalPrivilegesRejectsUnsupportedServerVersion(
 	t *testing.T,
 ) {
@@ -651,8 +698,21 @@ type fakeClickHousePrivilegeConnection struct {
 	version      string
 	grants       []string
 	failures     map[string]error
+	checkGrants  map[string]uint8
 	queries      []string
 	nilGrantRows bool
+}
+
+func validClickHouseApplicationPrivilegeConnection() *fakeClickHousePrivilegeConnection {
+	connection := &fakeClickHousePrivilegeConnection{
+		version:     clickHousePrivilegeContractVersion,
+		failures:    make(map[string]error),
+		checkGrants: make(map[string]uint8, len(clickHouseApplicationRequiredGrants)),
+	}
+	for _, grant := range clickHouseApplicationRequiredGrants {
+		connection.checkGrants[clickHouseGrantCheckQuery(grant)] = 1
+	}
+	return connection
 }
 
 func validClickHousePrivilegeConnection(
@@ -717,6 +777,9 @@ func (connection *fakeClickHousePrivilegeConnection) QueryRow(
 	case clickHouseSystemGrantEnforcementCanary:
 		return fakeClickHousePrivilegeRow{value: "access_control_path"}
 	default:
+		if granted, found := connection.checkGrants[query]; found {
+			return fakeClickHousePrivilegeRow{value: granted}
+		}
 		return fakeClickHousePrivilegeRow{
 			err: fmt.Errorf("unexpected query %q", query),
 		}
@@ -724,7 +787,7 @@ func (connection *fakeClickHousePrivilegeConnection) QueryRow(
 }
 
 type fakeClickHousePrivilegeRow struct {
-	value string
+	value any
 	err   error
 }
 
@@ -742,15 +805,27 @@ func (row fakeClickHousePrivilegeRow) Scan(destinations ...any) error {
 			len(destinations),
 		)
 	}
-	destination, ok := destinations[0].(*string)
-	if !ok {
+	switch destination := destinations[0].(type) {
+	case *string:
+		value, ok := row.value.(string)
+		if !ok {
+			return fmt.Errorf("scan value = %T, want string", row.value)
+		}
+		*destination = value
+		return nil
+	case *uint8:
+		value, ok := row.value.(uint8)
+		if !ok {
+			return fmt.Errorf("scan value = %T, want uint8", row.value)
+		}
+		*destination = value
+		return nil
+	default:
 		return fmt.Errorf(
-			"scan destination = %T, want *string",
+			"scan destination = %T, want *string or *uint8",
 			destinations[0],
 		)
 	}
-	*destination = row.value
-	return nil
 }
 
 func (fakeClickHousePrivilegeRow) ScanStruct(any) error {

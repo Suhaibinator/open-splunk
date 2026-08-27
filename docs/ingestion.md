@@ -114,9 +114,10 @@ server and collector images from different revisions.
 The image runs as UID/GID `65532:65532`. Use a dedicated owner-only state
 directory below a trusted parent, a read-only config, a read-only CA, a
 read-only token file, and read-only log mounts. The server gRPC listener uses
-TLS by default. The production Compose stack publishes it on loopback; remote
-collectors require a deliberately selected private bind address and firewall
-rule. Never publish ClickHouse or copy the server private key.
+TLS by default. The default Compose service does not enable a collector
+listener; remote collectors require an explicitly configured listener, private
+bind address, and firewall rule. Never publish ClickHouse or copy the server
+private key.
 
 The example container config reads deployment values such as:
 

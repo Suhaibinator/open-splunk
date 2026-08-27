@@ -77,13 +77,9 @@ type options struct {
 	exportArtifactDir                         string
 	clickhouseAddress                         string
 	clickhouseDatabase                        string
-	clickhouseRuntimeUsername                 string
-	clickhouseDeletionUsername                string
-	clickhouseMigrationUsername               string
+	clickhouseUsername                        string
 	clickhouseSkipMigrations                  bool
-	clickhouseRuntimePasswordFile             string
-	clickhouseDeletionPasswordFile            string
-	clickhouseMigrationPasswordFile           string
+	clickhousePasswordFile                    string
 	clickhouseSecure                          bool
 	clickhouseCACertFile                      string
 	clickhouseServerName                      string
@@ -393,7 +389,7 @@ func runWithOptions(config options) error {
 	if err := connection.Ping(startupContext); err != nil {
 		return fmt.Errorf("ping ClickHouse runtime session: %w", err)
 	}
-	if err := server.ValidateClickHouseRuntimePrivileges(
+	if err := server.ValidateClickHouseApplicationPrivileges(
 		startupContext,
 		connection,
 	); err != nil {
@@ -406,7 +402,7 @@ func runWithOptions(config options) error {
 	if err := deletionConnection.Ping(startupContext); err != nil {
 		return fmt.Errorf("ping ClickHouse deletion session: %w", err)
 	}
-	if err := server.ValidateClickHouseDeletionWorkerPrivileges(
+	if err := server.ValidateClickHouseApplicationPrivileges(
 		startupContext,
 		deletionConnection,
 	); err != nil {
@@ -846,7 +842,7 @@ func runWithOptions(config options) error {
 			MaxHeaderBytes: 1 << 20,
 		},
 	}
-	httpTransport := "explicit loopback plaintext"
+	httpTransport := "plaintext"
 	if httpTLSConfig != nil {
 		httpTransport = "TLS"
 	}
@@ -941,7 +937,7 @@ func registerSearchAttemptAuditMaximumRetainedFlag(
 func parseFlags() options {
 	var result options
 	flag.BoolVar(&result.verifyEmbeddedRelease, "verify-embedded-release", false, "verify the embedded release payload and exit before opening runtime resources")
-	flag.StringVar(&result.httpAddress, "http-address", "127.0.0.1:8080", "browser/API listen address (plaintext is allowed only on loopback; use HTTP TLS for other addresses)")
+	flag.StringVar(&result.httpAddress, "http-address", "127.0.0.1:8080", "browser/API listen address")
 	flag.StringVar(&result.httpAllowedHostsCSV, "http-allowed-hosts", "", "comma-separated Host names allowed to use the browser API (defaults to the specific listen host)")
 	flag.StringVar(
 		&result.httpTLSCert,
@@ -961,47 +957,23 @@ func parseFlags() options {
 		&result.administratorTokenFile,
 		"administrator-token-file",
 		"",
-		"required owner-only administrator bearer-token file (provision first with a CSPRNG, for example: umask 077; openssl rand -base64 48 > FILE; required mode 0400 or 0600)",
+		"owner-only administrator bearer-token file (mutually exclusive with OPEN_SPLUNK_ADMINISTRATOR_TOKEN; required mode 0400 or 0600)",
 	)
 	flag.StringVar(&result.exportArtifactDir, "export-artifact-dir", "", "private export-artifact base directory (default: <control-db>.exports)")
 	flag.StringVar(&result.clickhouseAddress, "clickhouse-address", "127.0.0.1:9000", "ClickHouse native-protocol address")
 	flag.StringVar(&result.clickhouseDatabase, "clickhouse-database", "open_splunk", "ClickHouse database")
 	flag.StringVar(
-		&result.clickhouseRuntimeUsername,
-		"clickhouse-runtime-username",
-		"open_splunk_runtime",
-		"least-privilege ClickHouse username for ingestion, search, and inspection",
-	)
-	flag.StringVar(
-		&result.clickhouseDeletionUsername,
-		"clickhouse-deletion-username",
-		"open_splunk_deletion",
-		"ClickHouse username limited to physical index deletion",
-	)
-	flag.StringVar(
-		&result.clickhouseMigrationUsername,
-		"clickhouse-migration-username",
-		"open_splunk_migrator",
-		"short-lived ClickHouse schema-migration username",
+		&result.clickhouseUsername,
+		"clickhouse-username",
+		"default",
+		"ClickHouse username for migrations and application operations",
 	)
 	registerClickHouseSkipMigrationsFlag(flag.CommandLine, &result)
 	flag.StringVar(
-		&result.clickhouseRuntimePasswordFile,
-		"clickhouse-runtime-password-file",
+		&result.clickhousePasswordFile,
+		"clickhouse-password-file",
 		"",
-		"file containing the ClickHouse runtime password (mutually exclusive with OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD)",
-	)
-	flag.StringVar(
-		&result.clickhouseDeletionPasswordFile,
-		"clickhouse-deletion-password-file",
-		"",
-		"file containing the ClickHouse deletion password (mutually exclusive with OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD)",
-	)
-	flag.StringVar(
-		&result.clickhouseMigrationPasswordFile,
-		"clickhouse-migration-password-file",
-		"",
-		"file containing the ClickHouse migration password (mutually exclusive with OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD)",
+		"file containing the ClickHouse password (mutually exclusive with OPEN_SPLUNK_CLICKHOUSE_PASSWORD)",
 	)
 	flag.BoolVar(&result.clickhouseSecure, "clickhouse-secure", false, "use TLS for ClickHouse")
 	flag.StringVar(
@@ -1224,7 +1196,7 @@ type clickHouseConnectionOptions struct {
 	deletion  *clickhousedriver.Options
 }
 
-const clickHouseMigrationEnvironmentVariable = "OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD"
+const clickHousePasswordEnvironmentVariable = "OPEN_SPLUNK_CLICKHOUSE_PASSWORD"
 
 func registerClickHouseSkipMigrationsFlag(
 	flags *flag.FlagSet,
@@ -1283,10 +1255,10 @@ func configureClickHouseConnectionOptions(
 	tlsProfile *clickHouseClientTLSProfile,
 ) (clickHouseConnectionOptions, error) {
 	result, configureErr := newClickHouseConnectionOptions(config, tlsProfile)
-	unsetErr := os.Unsetenv(clickHouseMigrationEnvironmentVariable)
+	unsetErr := os.Unsetenv(clickHousePasswordEnvironmentVariable)
 	if unsetErr != nil {
 		unsetErr = fmt.Errorf(
-			"discard ClickHouse migration password from process environment: %w",
+			"discard ClickHouse password from process environment: %w",
 			unsetErr,
 		)
 	}
@@ -1313,12 +1285,6 @@ func newClickHouseConnectionOptions(
 			"configure ClickHouse: address is required",
 		)
 	}
-	if !config.clickhouseSecure && !loopbackAddress(address) {
-		return clickHouseConnectionOptions{}, errors.New(
-			"configure ClickHouse: plaintext is allowed only for a " +
-				"loopback address; enable -clickhouse-secure",
-		)
-	}
 	database := strings.TrimSpace(config.clickhouseDatabase)
 	if database != "open_splunk" {
 		return clickHouseConnectionOptions{}, errors.New(
@@ -1326,89 +1292,18 @@ func newClickHouseConnectionOptions(
 				"the embedded schema",
 		)
 	}
-	runtimeUsername := strings.TrimSpace(config.clickhouseRuntimeUsername)
-	deletionUsername := strings.TrimSpace(config.clickhouseDeletionUsername)
-	var migrationUsername string
-	if config.clickhouseSkipMigrations {
-		if strings.TrimSpace(config.clickhouseMigrationPasswordFile) != "" {
-			return clickHouseConnectionOptions{}, errors.New(
-				"configure ClickHouse: -clickhouse-migration-password-file must not be set with -clickhouse-skip-migrations",
-			)
-		}
-		if os.Getenv(clickHouseMigrationEnvironmentVariable) != "" {
-			return clickHouseConnectionOptions{}, fmt.Errorf(
-				"configure ClickHouse: %s must not be set with -clickhouse-skip-migrations",
-				clickHouseMigrationEnvironmentVariable,
-			)
-		}
-		if runtimeUsername == "" || deletionUsername == "" {
-			return clickHouseConnectionOptions{}, errors.New(
-				"configure ClickHouse: runtime and deletion usernames are required",
-			)
-		}
-		if runtimeUsername == deletionUsername {
-			return clickHouseConnectionOptions{}, errors.New(
-				"configure ClickHouse: runtime and deletion usernames must be distinct",
-			)
-		}
-	} else {
-		migrationUsername = strings.TrimSpace(
-			config.clickhouseMigrationUsername,
+	username := strings.TrimSpace(config.clickhouseUsername)
+	if username == "" {
+		return clickHouseConnectionOptions{}, errors.New(
+			"configure ClickHouse: username is required",
 		)
-		if runtimeUsername == "" || deletionUsername == "" ||
-			migrationUsername == "" {
-			return clickHouseConnectionOptions{}, errors.New(
-				"configure ClickHouse: runtime, deletion, and migration usernames are required",
-			)
-		}
-		if runtimeUsername == deletionUsername ||
-			runtimeUsername == migrationUsername ||
-			deletionUsername == migrationUsername {
-			return clickHouseConnectionOptions{}, errors.New(
-				"configure ClickHouse: runtime, deletion, and migration usernames must be distinct",
-			)
-		}
 	}
-	runtimePassword, err := loadClickHouseCredential(
-		config.clickhouseRuntimePasswordFile,
-		"OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD",
-		"runtime",
+	password, err := loadClickHouseCredential(
+		config.clickhousePasswordFile,
+		clickHousePasswordEnvironmentVariable,
 	)
 	if err != nil {
 		return clickHouseConnectionOptions{}, err
-	}
-	deletionPassword, err := loadClickHouseCredential(
-		config.clickhouseDeletionPasswordFile,
-		"OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD",
-		"deletion",
-	)
-	if err != nil {
-		return clickHouseConnectionOptions{}, err
-	}
-	if config.clickhouseSkipMigrations &&
-		runtimePassword == deletionPassword {
-		return clickHouseConnectionOptions{}, errors.New(
-			"configure ClickHouse: runtime and deletion passwords must be distinct",
-		)
-	}
-	var migrationPassword string
-	if !config.clickhouseSkipMigrations {
-		migrationPassword, err = loadClickHouseCredential(
-			config.clickhouseMigrationPasswordFile,
-			clickHouseMigrationEnvironmentVariable,
-			"migration",
-		)
-		if err != nil {
-			return clickHouseConnectionOptions{}, err
-		}
-	}
-	if !config.clickhouseSkipMigrations &&
-		(runtimePassword == deletionPassword ||
-			runtimePassword == migrationPassword ||
-			deletionPassword == migrationPassword) {
-		return clickHouseConnectionOptions{}, errors.New(
-			"configure ClickHouse: runtime, deletion, and migration passwords must be distinct",
-		)
 	}
 	base := clickhousedriver.Options{
 		Protocol:         clickhousedriver.Native,
@@ -1424,15 +1319,15 @@ func newClickHouseConnectionOptions(
 	runtimeOptions.TLS = tlsProfile.newConfig()
 	runtimeOptions.Auth = clickhousedriver.Auth{
 		Database: database,
-		Username: runtimeUsername,
-		Password: runtimePassword,
+		Username: username,
+		Password: password,
 	}
 	deletionOptions := base
 	deletionOptions.TLS = tlsProfile.newConfig()
 	deletionOptions.Auth = clickhousedriver.Auth{
 		Database: database,
-		Username: deletionUsername,
-		Password: deletionPassword,
+		Username: username,
+		Password: password,
 	}
 	// The deletion coordinator is serialized and the startup contract uses
 	// bounded sequential probes, so one privileged session is sufficient.
@@ -1450,8 +1345,8 @@ func newClickHouseConnectionOptions(
 	migrationOptions.Auth = clickhousedriver.Auth{
 		// The first migration owns creation of the embedded database.
 		Database: "default",
-		Username: migrationUsername,
-		Password: migrationPassword,
+		Username: username,
+		Password: password,
 	}
 	migrationOptions.MaxOpenConns = 1
 	migrationOptions.MaxIdleConns = 1

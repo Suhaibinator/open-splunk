@@ -281,9 +281,9 @@ process health remains `/healthz` and readiness `/readyz`.
 
 HEC has no standalone backup. Token profiles, channels, ACK rows, schedules,
 visibility reservations, and outbox live in SQLite; searchable rows live in
-ClickHouse. They are one coordinated recovery unit. Follow the
-[deployment recovery procedure](../deploy/README.md#coordinated-deployment-recovery)
-and never restore one side independently.
+ClickHouse. They are one coordinated recovery unit. The default Compose file
+does not install backup or restore jobs; configure infrastructure-level backups
+for both stores and never restore one side independently.
 
 HEC persistence carries private migration and format counters. They detect
 unrecognized state and are not public protocol or release versions. State from

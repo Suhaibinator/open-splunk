@@ -710,6 +710,7 @@ func runBackendSustainedLoad(t *testing.T, plan backendLoadPlan) {
 				serverProcess.Logs(),
 				administratorToken,
 				plaintextToken,
+				clickhouse.Password,
 			),
 		)
 	}
@@ -720,12 +721,14 @@ func runBackendSustainedLoad(t *testing.T, plan backendLoadPlan) {
 			process,
 			administratorToken,
 			plaintextToken,
+			clickhouse.Password,
 		)
 		assertProcessLogsDoNotLeak(
 			t,
 			process.Logs(),
 			administratorToken,
 			plaintextToken,
+			clickhouse.Password,
 		)
 	}
 

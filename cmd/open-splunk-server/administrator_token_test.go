@@ -14,6 +14,99 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func TestAdministratorTokenEnvironmentIsValidatedAndDiscarded(t *testing.T) {
+	valid := strings.Repeat("A", auth.MinimumBrowserBearerTokenBytes)
+
+	t.Run("valid", func(t *testing.T) {
+		t.Setenv(administratorTokenEnvironmentVariable, valid)
+		authenticator, err := newAdministratorBrowserAuthenticator(
+			"",
+			"tenant",
+			"owner",
+		)
+		if err != nil || authenticator == nil {
+			t.Fatalf("environment authenticator = (%#v, %v)", authenticator, err)
+		}
+		if _, exists := os.LookupEnv(administratorTokenEnvironmentVariable); exists {
+			t.Fatal("administrator token remained in the environment")
+		}
+	})
+
+	t.Run("mutually exclusive", func(t *testing.T) {
+		t.Setenv(administratorTokenEnvironmentVariable, valid)
+		path := writeAdministratorTokenFile(t, []byte(valid), 0o600)
+		authenticator, err := newAdministratorBrowserAuthenticator(
+			path,
+			"tenant",
+			"owner",
+		)
+		if err == nil || authenticator != nil ||
+			!strings.Contains(err.Error(), "mutually exclusive") {
+			t.Fatalf("ambiguous authenticator = (%#v, %v)", authenticator, err)
+		}
+		if strings.Contains(err.Error(), valid) {
+			t.Fatal("ambiguous-token error disclosed the token")
+		}
+		if _, exists := os.LookupEnv(administratorTokenEnvironmentVariable); exists {
+			t.Fatal("ambiguous administrator token remained in the environment")
+		}
+	})
+
+	t.Run("invalid", func(t *testing.T) {
+		const invalid = "too-short"
+		t.Setenv(administratorTokenEnvironmentVariable, invalid)
+		authenticator, err := newAdministratorBrowserAuthenticator(
+			"",
+			"tenant",
+			"owner",
+		)
+		if err == nil || authenticator != nil {
+			t.Fatalf("invalid authenticator = (%#v, %v)", authenticator, err)
+		}
+		if strings.Contains(err.Error(), invalid) {
+			t.Fatal("invalid-token error disclosed the token")
+		}
+		if _, exists := os.LookupEnv(administratorTokenEnvironmentVariable); exists {
+			t.Fatal("invalid administrator token remained in the environment")
+		}
+	})
+}
+
+func TestRunRejectsInvalidAdministratorEnvironmentBeforeDurableState(t *testing.T) {
+	directory := t.TempDir()
+	controlDBPath := filepath.Join(directory, "control.db")
+	t.Setenv(administratorTokenEnvironmentVariable, "invalid")
+	t.Setenv(clickHousePasswordEnvironmentVariable, "clickhouse-password")
+
+	err := runWithOptions(options{
+		httpAddress:             "127.0.0.1:0",
+		controlDBPath:           controlDBPath,
+		clickhouseAddress:       "per-clickhouse:9000",
+		clickhouseDatabase:      "open_splunk",
+		clickhouseUsername:      "clickhouse",
+		indexRetention:          time.Hour,
+		tenantID:                "tenant",
+		searchHistoryMaximumAge: 0,
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid bearer token") {
+		t.Fatalf("runWithOptions() error = %v, want invalid administrator token", err)
+	}
+	if _, exists := os.LookupEnv(administratorTokenEnvironmentVariable); exists {
+		t.Fatal("invalid administrator token remained in the environment")
+	}
+	for _, path := range []string{
+		controlDBPath,
+		controlDBPath + "-shm",
+		controlDBPath + "-wal",
+		controlDBPath + ".key",
+		controlDBPath + ".exports",
+	} {
+		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+			t.Fatalf("durable path %q exists after token preflight: %v", path, statErr)
+		}
+	}
+}
+
 func TestReadAdministratorTokenAcceptsOnlyOptionalLineTerminator(t *testing.T) {
 	t.Parallel()
 	token := strings.Repeat("A", auth.MinimumBrowserBearerTokenBytes)
@@ -57,7 +150,7 @@ func TestReadAdministratorTokenAcceptsMaximumTokenWithCRLF(t *testing.T) {
 func TestReadAdministratorTokenRequiresPreprovisionedPath(t *testing.T) {
 	t.Parallel()
 	if _, err := readAdministratorToken(""); err == nil ||
-		!strings.Contains(err.Error(), "-administrator-token-file is required") {
+		!strings.Contains(err.Error(), "file path is required") {
 		t.Fatalf("empty path error = %v", err)
 	}
 	if _, err := readAdministratorToken("administrator\x00token"); err == nil ||

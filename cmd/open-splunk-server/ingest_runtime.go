@@ -106,11 +106,6 @@ func normalizeRuntimeOptions(config *options) error {
 	if err != nil {
 		return errors.New("HTTP listen address must include a valid host and port")
 	}
-	if !loopbackAddress(config.httpAddress) && config.httpTLSCert == "" {
-		return errors.New(
-			"administrator browser routes require TLS outside a loopback HTTP listen address",
-		)
-	}
 	config.httpAllowedHosts = config.httpAllowedHosts[:0]
 	for candidate := range strings.SplitSeq(config.httpAllowedHostsCSV, ",") {
 		if candidate = strings.TrimSpace(candidate); candidate != "" {

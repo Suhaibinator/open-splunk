@@ -44,11 +44,14 @@ func TestNormalizeRuntimeOptionsCanonicalizesAndBoundsTenantIdentity(t *testing.
 	}
 }
 
-func TestNormalizeRuntimeOptionsRequiresTLSForNonLoopbackAdministratorRoutes(t *testing.T) {
+func TestNormalizeRuntimeOptionsAllowsPlaintextNonLoopbackAdministratorRoutes(t *testing.T) {
 	t.Parallel()
 	config := options{httpAddress: "192.0.2.10:8080", tenantID: "tenant", indexRetention: time.Hour}
-	if err := normalizeRuntimeOptions(&config); err == nil {
-		t.Fatal("non-loopback plaintext HTTP unexpectedly succeeded")
+	if err := normalizeRuntimeOptions(&config); err != nil {
+		t.Fatalf("non-loopback plaintext HTTP rejected: %v", err)
+	}
+	if len(config.httpAllowedHosts) != 1 || config.httpAllowedHosts[0] != "192.0.2.10" {
+		t.Fatalf("default plaintext allowed hosts = %v", config.httpAllowedHosts)
 	}
 
 	wildcard := options{
@@ -59,8 +62,8 @@ func TestNormalizeRuntimeOptionsRequiresTLSForNonLoopbackAdministratorRoutes(t *
 		t.Fatal("wildcard HTTP listener unexpectedly succeeded")
 	}
 	wildcard.httpAllowedHostsCSV = "logs.internal.example, 192.0.2.10"
-	if err := normalizeRuntimeOptions(&wildcard); err == nil {
-		t.Fatal("allowed hosts bypassed the administrator loopback boundary")
+	if err := normalizeRuntimeOptions(&wildcard); err != nil {
+		t.Fatalf("explicitly scoped wildcard plaintext listener rejected: %v", err)
 	}
 
 	secure := options{

@@ -395,7 +395,7 @@ test("OCI targets are pinned scratch runtimes with a minimal non-root contract",
   );
   assert.match(
     dockerfile,
-    /HEALTHCHECK[^\n]*\n\s*CMD \["\/usr\/local\/bin\/open-splunk-server", "healthcheck", "-url", "https:\/\/127\.0\.0\.1:8080\/readyz", "-ca-cert", "\/run\/open-splunk\/tls\/ca\.crt", "-server-name", "open-splunk-server"\]/,
+    /HEALTHCHECK[^\n]*\n\s*CMD \["\/usr\/local\/bin\/open-splunk-server", "healthcheck", "-url", "http:\/\/127\.0\.0\.1:8080\/readyz"\]/,
   );
   assert.match(dockerfile, /\/var\/lib\/open-splunk\/state/);
   assert.match(dockerfile, /\/var\/lib\/open-splunk\/exports/);

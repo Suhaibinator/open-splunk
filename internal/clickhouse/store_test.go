@@ -2034,6 +2034,16 @@ func TestConfigAndConnectionLifecycle(t *testing.T) {
 		options.Compression == nil || options.Compression.Method != clickhousedriver.CompressionLZ4 || normalized.RetryAfter <= 0 {
 		t.Fatalf("unsafe options/config: %+v / %+v", options, normalized)
 	}
+	plaintext := DefaultConfig()
+	plaintext.Addresses = []string{"per-clickhouse:9000"}
+	plaintextOptions, _, err := plaintext.clickHouseOptions()
+	if err != nil {
+		t.Fatalf("plaintext Docker hostname: %v", err)
+	}
+	if plaintextOptions.TLS != nil ||
+		!slices.Equal(plaintextOptions.Addr, plaintext.Addresses) {
+		t.Fatalf("plaintext Docker hostname options = %+v", plaintextOptions)
+	}
 	invalid := DefaultConfig()
 	invalid.Addresses = []string{"not-a-host-port"}
 	if _, _, err := invalid.clickHouseOptions(); err == nil {

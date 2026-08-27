@@ -3,8 +3,8 @@
 ## Development workflow smoke test
 
 The opt-in development workflow gate generates a Git-independent development
-environment on random loopback ports, starts the pinned ClickHouse container
-plus its one-shot recovery-volume bootstrap but no Open Splunk server, builds
+environment on random loopback ports, starts one pinned plaintext ClickHouse
+container but no Open Splunk server, builds
 the current tree as `development`, reaches readiness with the host-native
 server, and proves its private control state survives a graceful restart:
 
@@ -151,95 +151,17 @@ OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
   go test ./integration -run '^TestBackendHECVertical$' -count=1 -timeout=8m -v
 ```
 
-## OCI and full-stack Compose
+## ClickHouse migration integration
 
-`release_oci_integration_test.go` builds the development `server` and
-`collector` images for the host Linux architecture through the production
-`make oci` launcher. That launcher requires a clean worktree and materializes
-the exact committed `HEAD` snapshot before either Docker target is built. The
-test verifies both images' OCI identity and fixed non-root process contract,
-then starts the canonical five-service Compose graph: the networkless
-ClickHouse recovery-volume bootstrap, ClickHouse, the exact-image one-shot
-ClickHouse migrator, the network-disabled administrator bootstrap, and the
-long-running server. It does not add a collector to the default stack.
-
-The test requires verified HTTPS health and embedded build identity, exact
-container hardening, no published ClickHouse port, no ClickHouse or
-administrator secret in the server environment/arguments, no one-shot
-migration/backup/restore credential or recovery mount in the long-running
-server, an isolated successful migrator with only its CA/secret mounts,
-read-only runtime/deletion credential files, exact recovery-volume ownership,
-rejection of the passwordless base ClickHouse user, and a successful
-administrator API mutation. It reapplies the exact embedded source migrations
-to prove the current ledger is idempotent, stops ClickHouse to prove readiness
-becomes unavailable while HTTP liveness remains available, and requires
-sustained readiness after ClickHouse restarts. It then rotates all six
-ClickHouse credentials, atomically replaces all five service-principal
-credential files, and force-recreates the recovery bootstrap, ClickHouse,
-migrator, administrator bootstrap, and server. The recreated application must
-be healthy with the same state volume and expose both pre- and post-rotation
-SQLite records through the live protobuf API. The
-separate ClickHouse principal integration mutates and restores both physical
-table definitions and an unexpected third table while the ledger remains
-complete; every mutation must fail the current schema validator. The Compose
-integration rejects all previous principal credentials on the persistent
-volume. Cleanup removes every test-owned container, network, volume, and image.
-
-The same artifact test proves paired deployment disaster recovery rather than a
-control-plane-only snapshot. It creates a bounded index, ingestion credential,
-and ClickHouse event, stops the server, and uses the production recovery profile
-to create and independently verify the coordinated recovery set. The retained
-backup, marker-reconcile, verify, restore, and restore-retry one-offs are
-inspected after exit for
-their exact UID, read-only root filesystem, dropped capabilities,
-no-new-privileges, PID limit, process arguments, environment, mounts, tmpfs,
-network, disabled inherited healthcheck, and port contract before explicit
-removal. After the backup boundary, the test commits both SQLite and ClickHouse
-mutations, then runs the real restore helper while the original server remains
-healthy and requires the retained shared singleton lock to reject it before a
-ClickHouse connection or mutation. With the original deployment stopped, the
-drill also copies one test-owned orphan archive, deletes only that name
-through the production UID-`101` operator-attested one-shot, inspects the same
-effective confinement boundary, retries the already-absent deletion, and proves
-the published archive remains. Before post-backup mutations, the packaged drill
-also seeds a test-owned stale source marker, stops and restarts only ClickHouse,
-proves a mismatched confirmed identity cannot mutate it, clears the exact
-identity through the production `deployment-marker-reconcile` container, and
-retries the already-absent case. Those retained one-offs are inspected for the
-exact image command, singleton-lock and credential mounts, network, secret
-isolation, and hardening. It then rebinds fresh ClickHouse data/log,
-server-state, and server-export volumes while retaining the exact two recovery
-volumes and the deployment singleton-lock volume through the committed
-`docker-compose.recovery-target.yaml` contract that must remain applied for the
-restored deployment's lifetime. The test starts only fresh
-ClickHouse, requires the canonical database to be absent, restores directly
-into `open_splunk`, restores the same set again to prove exact receipt-gated
-retry, and applies the production restore overlay so the retained
-ClickHouse recovery volume is the same named volume but read-only in the fresh
-ClickHouse container. The restore principal attests that exact disk/path/mode,
-the command re-verifies the archive bytes after native restore, and the
-archive-embedded recovery marker must match before receipt publication. The
-receipt is then revalidated before exact marker consumption and proven absence;
-there is no staging database, rename, or promotion boundary. The drill also
-proves live and restored marker absence. Focused recovery tests
-separately prove complete recovery-database namespace rejection and
-outer-manifest binding of the control child.
-The test validates the result with the embedded migrator,
-and starts the server directly without recreating administrator bootstrap. The
-restored deployment must recover the pre-backup token, indexes, and event, exclude both
-post-backup mutations, and accept new authenticated ingestion, search, and
-control-plane writes. The drill exercises both the real descriptor-bound SQLite
-sidecar lock and the deployment-wide retained singleton lock, and rejects an
-unsafe control target before ClickHouse mutation.
-Cleanup inventories both the exact Compose-project and integration-project
-labels, then removes the original and restored volumes as well as every
-test-owned container, network, and image.
+The opt-in migration gate starts the pinned ClickHouse image, connects over
+its plaintext native listener with one account, applies the same embedded
+migrations used by normal server startup twice, and verifies the migration
+ledger remains idempotent:
 
 ```sh
-OPEN_SPLUNK_OCI_INTEGRATION=1 \
-OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.7.5.10-alpine@sha256:0a45b864c73322d4360dea1973ee9b77f29c51af1242ad2d47409908071fa56e \
-  go test ./integration -run '^TestReleaseOCIComposeContract$' \
-    -count=1 -timeout=25m -v
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+  go test ./migrations/clickhouse -run '^TestMigrationsAgainstClickHouse$' \
+    -count=1 -timeout=8m -v
 ```
 
 ## Physical index deletion API lifecycle

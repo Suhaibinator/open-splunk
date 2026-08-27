@@ -32,6 +32,11 @@ type clickHousePhysicalSchemaValidator func(
 	server.ClickHouseVersionConnection,
 ) error
 
+type clickHousePrivilegeValidator func(
+	context.Context,
+	server.ClickHousePrivilegeConnection,
+) error
+
 func applyConfiguredStartupClickHouseMigrations(
 	ctx context.Context,
 	skip bool,
@@ -53,9 +58,9 @@ func applyConfiguredStartupClickHouseMigrations(
 }
 
 // applyStartupClickHouseMigrations owns only the short-lived migration
-// session. It closes that privileged connection before returning, so the
-// long-lived Store, search, and deletion sessions can be opened afterward
-// under their narrower identities.
+// session. It closes that connection before returning, then the server opens
+// its long-lived runtime and deletion sessions with the same configured
+// application account.
 func applyStartupClickHouseMigrations(
 	ctx context.Context,
 	options *clickhousedriver.Options,
@@ -70,6 +75,7 @@ func applyStartupClickHouseMigrations(
 		open,
 		apply,
 		nil,
+		server.ValidateClickHouseApplicationPrivileges,
 	)
 }
 
@@ -97,6 +103,7 @@ func applyDeploymentClickHouseMigrations(
 		open,
 		apply,
 		validatePhysicalSchema,
+		server.ValidateClickHouseMigrationPrivileges,
 	)
 }
 
@@ -107,11 +114,12 @@ func applyStartupClickHouseMigrationsWithPhysicalSchemaValidation(
 	open clickHouseMigrationOpener,
 	apply clickHouseMigrationApplier,
 	validatePhysicalSchema clickHousePhysicalSchemaValidator,
+	validatePrivileges clickHousePrivilegeValidator,
 ) (resultErr error) {
 	if ctx == nil || options == nil || migrationFiles == nil ||
-		open == nil || apply == nil {
+		open == nil || apply == nil || validatePrivileges == nil {
 		return errors.New(
-			"apply startup ClickHouse migrations: context, options, filesystem, opener, and applier are required",
+			"apply startup ClickHouse migrations: context, options, filesystem, opener, applier, and privilege validator are required",
 		)
 	}
 	connection, err := open(options)
@@ -135,7 +143,7 @@ func applyStartupClickHouseMigrationsWithPhysicalSchemaValidation(
 	if err := connection.Ping(ctx); err != nil {
 		return fmt.Errorf("ping ClickHouse migration session: %w", err)
 	}
-	if err := server.ValidateClickHouseMigrationPrivileges(ctx, connection); err != nil {
+	if err := validatePrivileges(ctx, connection); err != nil {
 		return fmt.Errorf("validate ClickHouse migration session: %w", err)
 	}
 	if err := apply(ctx, connection, migrationFiles); err != nil {

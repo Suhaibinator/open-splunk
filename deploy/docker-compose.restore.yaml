@@ -1,7 +1,0 @@
-# Apply this file only for the deployment restore lifecycle. Compose merges
-# service volumes by container target, so this replaces ClickHouse's normal
-# writable recovery-disk mount while retaining the same named volume.
-services:
-  clickhouse:
-    volumes:
-      - clickhouse-recovery:/var/lib/open-splunk-clickhouse-backups:ro

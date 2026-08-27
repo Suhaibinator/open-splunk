@@ -25,7 +25,7 @@ func TestBaselineSchemaIsExactBoundedAndRetrySafe(t *testing.T) {
 	`).Scan(&ledgerRows); err != nil {
 		t.Fatal(err)
 	}
-	if name != "0001_baseline.sql" || ledgerRows != 2 {
+	if name != "0001_baseline.sql" || ledgerRows != 1 {
 		t.Fatalf("migration ledger = baseline name %q rows %d", name, ledgerRows)
 	}
 
@@ -107,7 +107,7 @@ func TestBaselineSchemaIsExactBoundedAndRetrySafe(t *testing.T) {
 	`).Scan(&ledgerRows); err != nil {
 		t.Fatal(err)
 	}
-	if ledgerRows != 2 {
+	if ledgerRows != 1 {
 		t.Fatalf("migration retry changed ledger row count to %d", ledgerRows)
 	}
 }

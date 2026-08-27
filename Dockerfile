@@ -174,7 +174,7 @@ WORKDIR /var/lib/open-splunk/state/private
 EXPOSE 8080 4317
 STOPSIGNAL SIGTERM
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=12 \
-  CMD ["/usr/local/bin/open-splunk-server", "healthcheck", "-url", "https://127.0.0.1:8080/readyz", "-ca-cert", "/run/open-splunk/tls/ca.crt", "-server-name", "open-splunk-server"]
+  CMD ["/usr/local/bin/open-splunk-server", "healthcheck", "-url", "http://127.0.0.1:8080/readyz"]
 ENTRYPOINT ["/usr/local/bin/open-splunk-server"]
 
 FROM scratch AS collector

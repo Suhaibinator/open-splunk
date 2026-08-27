@@ -1,8 +1,0 @@
-<clickhouse>
-    <access_control_improvements>
-        <!-- Runtime validation and the deletion worker's system.mutations
-             access depend on explicit grants, not ClickHouse's historical
-             implicit system-database visibility. -->
-        <select_from_system_db_requires_grant>true</select_from_system_db_requires_grant>
-    </access_control_improvements>
-</clickhouse>

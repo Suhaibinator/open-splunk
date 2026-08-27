@@ -1,10 +1,10 @@
 # Database schema mechanics
 
 Open Splunk is major-version-zero and supports fresh databases for one exact
-release or source revision. SQLite and ClickHouse apply their complete ordered,
-embedded migration sets to create the current schema. No cross-version or
-cross-revision upgrade, backfill, downgrade, or adoption path is currently
-promised.
+release or source revision. Until the first production deployment, SQLite and
+ClickHouse each ship one complete embedded `0001_baseline.sql` that creates the
+current schema. No cross-version or cross-revision upgrade, backfill,
+downgrade, or adoption path is currently promised.
 
 Migration sequence numbers, ledger digests, entity/catalog revisions, and
 private row-format counters are implementation mechanics. They detect drift,
@@ -13,11 +13,11 @@ public compatibility levels.
 
 ## Ledger contract
 
-Migration files are embedded into the server. The runner requires the exact
-contiguous sequence declared by the current source and records each version,
-filename, and SHA-256 digest. A fresh database applies the complete ordered set;
-a retry validates the same names/digests and is safe. Missing, reordered,
-renamed, modified, duplicated, or unexpected rows fail as drift.
+Migration files are embedded into the server. A fresh database applies its
+baseline; a retry validates the same name and SHA-256 digest and is safe.
+Missing, renamed, modified, duplicated, or unexpected rows fail as drift. The
+runners retain ordered multi-migration support for future post-deployment
+schema changes.
 
 An unrecognized ledger or unledgered legacy schema is not silently adopted,
 rewritten, or deleted. Provision a fresh database or volume and retain old state

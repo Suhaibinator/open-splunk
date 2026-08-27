@@ -122,13 +122,6 @@ func validateExplainerOptions(options *clickhousedriver.Options) error {
 				index,
 			)
 		}
-		if options.TLS == nil && !isExplainLoopbackHost(host) {
-			return fmt.Errorf(
-				"create ClickHouse EXPLAIN: TLS is required for "+
-					"non-loopback address at position %d",
-				index,
-			)
-		}
 	}
 	if options.DialTimeout < 0 {
 		return errors.New(
@@ -178,14 +171,6 @@ func validateExplainerOptions(options *clickhousedriver.Options) error {
 		return err
 	}
 	return nil
-}
-
-func isExplainLoopbackHost(host string) bool {
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }
 
 func validateExplainerTLS(config *tls.Config) error {
