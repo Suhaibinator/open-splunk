@@ -1,9 +1,10 @@
 # Database schema mechanics
 
-Open Splunk is pre-release and supports fresh development databases for the
-current source tree. SQLite and ClickHouse each have a consolidated baseline
-that creates the complete current schema directly. No cross-revision upgrade,
-backfill, downgrade, or adoption path is currently promised.
+Open Splunk is major-version-zero and supports fresh databases for one exact
+release or source revision. SQLite and ClickHouse apply their complete ordered,
+embedded migration sets to create the current schema. No cross-version or
+cross-revision upgrade, backfill, downgrade, or adoption path is currently
+promised.
 
 Migration sequence numbers, ledger digests, entity/catalog revisions, and
 private row-format counters are implementation mechanics. They detect drift,
@@ -14,13 +15,13 @@ public compatibility levels.
 
 Migration files are embedded into the server. The runner requires the exact
 contiguous sequence declared by the current source and records each version,
-filename, and SHA-256 digest. A fresh database applies the baseline; a retry
-validates the same name/digest and is safe. Missing, reordered, renamed,
-modified, duplicated, or unexpected rows fail as drift.
+filename, and SHA-256 digest. A fresh database applies the complete ordered set;
+a retry validates the same names/digests and is safe. Missing, reordered,
+renamed, modified, duplicated, or unexpected rows fail as drift.
 
 An unrecognized ledger or unledgered legacy schema is not silently adopted,
-rewritten, or deleted. Provision a fresh development database or volume and
-retain old state separately if forensic access is required.
+rewritten, or deleted. Provision a fresh database or volume and retain old state
+separately if forensic access is required.
 
 SQLite applies each migration transactionally. ClickHouse DDL is not
 transactional, so its baseline uses retry-safe DDL and writes the ledger row
@@ -30,10 +31,10 @@ last. GORM never runs `AutoMigrate`.
 
 SQLite is the authority for catalogs, optimistic-concurrency revisions,
 authentication/token metadata, collectors, jobs/history/export,
-knowledge/lookups, visibility, quota schedules, ingestion request/outbox state,
-audit journals, cursors, and recovery metadata.
+saved searches, dashboards, knowledge/lookups, visibility, quota schedules,
+ingestion request/outbox state, audit journals, cursors, and recovery metadata.
 
-Business mutations and their audit/receipt/catalog changes share one
+Audited business mutations and their audit/receipt/catalog changes share one
 caller-owned transaction. The schema uses explicit foreign keys, uniqueness,
 bounds, state transitions, and immutable-row triggers so malformed state fails
 at the storage boundary and again during hydration.

@@ -1,10 +1,10 @@
 # Knowledge and lookups
 
 Open Splunk currently supports search-time field knowledge and immutable CSV
-lookups. This is a pre-release source contract, not a cross-release
-compatibility promise. Anything not described here is unsupported and must fail before
-publication or execution; the server never applies a valid prefix of an
-invalid snapshot.
+lookups. This is a major-version-zero release/source contract, not a
+cross-release compatibility promise. Anything not described here is unsupported
+and must fail before publication or execution; the server never applies a valid
+prefix of an invalid snapshot.
 
 `SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS` advertises the complete extraction,
 alias, calculated-field, catalog, snapshot, execution, retained-product, and

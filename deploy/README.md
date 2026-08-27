@@ -22,13 +22,20 @@ natively and uses this directory only for its pinned ClickHouse dependency.
 
 ## Published releases
 
-Official releases use canonical `v0.MINOR.PATCH` GitHub Release tags. From the
-matching source tag or GitHub source archive, generate credentials for the
-exact published server image and start the stack:
+A successful publication starts from a canonical `v0.MINOR.PATCH` GitHub
+Release tag and publishes OCI tags without the leading `v`. From the matching
+source tag or GitHub source archive, choose an exact numeric version listed on
+both the
+[server package](https://github.com/Suhaibinator/open-splunk/pkgs/container/open-splunk-server)
+and [collector package](https://github.com/Suhaibinator/open-splunk/pkgs/container/open-splunk-collector)
+pages. Pull the server image, generate credentials for that exact reference,
+and start the stack:
 
 ```sh
 cd deploy
-./generate-env.sh --server-image ghcr.io/suhaibinator/open-splunk-server:0.MINOR.PATCH
+export SERVER_IMAGE=ghcr.io/suhaibinator/open-splunk-server:0.MINOR.PATCH
+docker pull "$SERVER_IMAGE"
+./generate-env.sh --server-image "$SERVER_IMAGE"
 docker compose up --detach --wait
 ```
 
@@ -40,6 +47,11 @@ The `latest` tag is also published for convenience but is mutable; persistent
 deployments should use an exact version. Published `v0.x` releases retain the
 fresh-state-only policy: databases, volumes, backups, cursors, and collector
 state are not supported across product versions.
+
+Both upstream images are public and support anonymous pulls. The explicit pull
+is required because the production Compose file uses `pull_policy: never` and
+will not contact a registry or build from source. Private forks may require
+registry authentication before the pull.
 
 ## Reproducible local images
 
@@ -737,11 +749,12 @@ by copying files manually.
 
 ## Collector image
 
-The same development artifact build that creates the backend creates the
-`open-splunk-collector:<label>` image for the selected Linux architecture.
-A local `make oci` build creates
-`open-splunk-collector:<label>` for its selected
-`OPEN_SPLUNK_OCI_PLATFORM`. The non-root scratch image defaults to:
+A successful release publishes
+`ghcr.io/suhaibinator/open-splunk-collector:0.MINOR.PATCH` for Linux AMD64 and
+ARM64. A local `make oci` build instead creates
+`open-splunk-collector:<full-source-revision>` for its one selected
+`OPEN_SPLUNK_OCI_PLATFORM`. Both paths produce a non-root scratch image whose
+default command is:
 
 ```text
 open-splunk-collector run -config /etc/open-splunk/collector.yaml
@@ -752,7 +765,7 @@ network exposure, index and token prerequisites, exact mounts, UID `65532`
 permissions, identity bootstrap, validation, startup, monitoring, source
 changes, token rotation, WAL recovery, disk pressure, and dead-letter handling:
 
-[`docs/ingestion.md`](../docs/ingestion.md#development-deployment)
+[`docs/ingestion.md`](../docs/ingestion.md#container-deployment)
 
 The default Compose file deliberately has no collector service. Its collector
 port remains bound to host loopback, so make a deliberate firewall-restricted

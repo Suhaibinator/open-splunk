@@ -3,10 +3,10 @@
 ## Development workflow smoke test
 
 The opt-in development workflow gate generates a Git-independent development
-environment on random loopback ports, starts only the pinned ClickHouse
-container, builds the current tree as `development`, reaches readiness with the
-host-native server, and proves its private control state survives a graceful
-restart:
+environment on random loopback ports, starts the pinned ClickHouse container
+plus its one-shot recovery-volume bootstrap but no Open Splunk server, builds
+the current tree as `development`, reaches readiness with the host-native
+server, and proves its private control state survives a graceful restart:
 
 ```sh
 OPEN_SPLUNK_DEVELOPMENT_INTEGRATION=1 \
@@ -92,6 +92,48 @@ The default image is
 `clickhouse/clickhouse-server:26.7.5.10-alpine@sha256:0a45b864c73322d4360dea1973ee9b77f29c51af1242ad2d47409908071fa56e`.
 Set `OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE` to exercise another digest-pinned image
 deliberately.
+
+## Sustained native ingestion and search load
+
+`backend_load_test.go` builds the browser/server, collector, and log generator,
+then admits a deterministic 30,000-event source at 1,000 events per second. It
+proves an acknowledged warm boundary, a durable WAL backlog while the server is
+down, collector crash/restart with that backlog, recovery while source
+generation continues, and concurrent bounded searches over monotonically
+advancing visibility snapshots. Final checks require exact source, raw-row,
+cardinality, checkpoint, WAL-drain, dead-letter, and secret-redaction results.
+Throughput, outage/recovery, storage, and search-latency measurements are logged
+as observational evidence rather than portable timing promises.
+
+Run this resource-intensive gate explicitly:
+
+```sh
+OPEN_SPLUNK_BACKEND_LOAD=1 \
+  go test ./integration -run '^TestBackendSustainedLoad$' \
+    -count=1 -timeout=12m -v
+```
+
+It starts the repository-pinned ClickHouse image unless
+`OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE` deliberately selects another digest-pinned
+image.
+
+## Browser stream recovery and cancellation
+
+Five deterministic shipped-browser gates exercise expired retained sequences,
+live sequence gaps, REST-terminal and REST-first recovery, and authoritative
+search cancellation without reconnect. They run the real compiled browser
+against a bounded test server and write failure diagnostics beneath the
+corresponding `test-results/browser-*` directory.
+
+After installing the pinned Chromium build described above, run the complete
+family with:
+
+```sh
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+  go test ./integration \
+    -run '^TestBrowser(SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery))$' \
+    -count=1 -timeout=20m -v
+```
 
 ## HEC ingestion-to-SPL vertical
 

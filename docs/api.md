@@ -34,11 +34,12 @@ paths are API 404s and never fall through to the static application.
 | Audit | `/audit/events/list`, `/audit/search-attempts/list` |
 | HEC administration | `/hec/operations/get` |
 
-Bootstrap is the capability authority. It reports development build identity,
-source revision, and the capabilities composed into that process. Optional
-families are usable only when their feature enum is advertised. A generated
-message or individually registered management route is not proof that the
-corresponding runtime, retained products, and browser family are complete.
+Bootstrap is the capability authority. It reports build identity, including the
+product version when present, the source revision, and the capabilities
+composed into that process. Optional families are usable only when their feature
+enum is advertised. A generated message or individually registered management
+route is not proof that the corresponding runtime, retained products, and
+browser family are complete.
 
 Requests are raw-body bounded before decode. Malformed protobuf and invalid
 known enum values fail. Ordinary operations ignore unknown fields according to

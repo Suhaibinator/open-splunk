@@ -8,8 +8,10 @@
 #   OPEN_SPLUNK_LOG_GLOB=/var/log/source/*.log
 #
 # The state directory contains the stable collector identity, WAL, checkpoints,
-# and rejected event payloads. Preserve it as one unit across every restart and
-# upgrade. Never share one state directory between collector instances.
+# and rejected event payloads. Preserve it as one unit across restarts of the
+# same exact build. Reuse it across a release or source-revision change only
+# when that transition is explicitly supported. Never share one state directory
+# between collector instances.
 
 server:
   address: "${OPEN_SPLUNK_SERVER_GRPC_ADDRESS}"

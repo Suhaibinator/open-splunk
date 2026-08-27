@@ -24,7 +24,8 @@ a document explicitly says otherwise.
 - [Build and publication status](releasing.md) defines current development
   artifacts, official v0 publication, and the work required before v1.
 
-Database bootstrap and recovery rules live in
-[`migrations/README.md`](../migrations/README.md). Deployment and executable
-integration instructions live in [`deploy/README.md`](../deploy/README.md) and
-[`integration/README.md`](../integration/README.md).
+Schema bootstrap, migration-ledger, and database recovery invariants live in
+[`migrations/README.md`](../migrations/README.md). Production-shaped deployment
+and coordinated recovery procedures live in
+[`deploy/README.md`](../deploy/README.md); executable integration instructions
+live in [`integration/README.md`](../integration/README.md).

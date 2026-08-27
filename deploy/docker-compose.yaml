@@ -171,7 +171,8 @@ services:
       - "${OPEN_SPLUNK_ADMINISTRATOR_TOKEN_FILE:?run ./generate-env.sh before docker compose up}:/run/open-splunk-bootstrap/administrator.token:ro"
 
   # Recovery helpers are opt-in and never join the normal application
-  # lifecycle. The server must be stopped before either command is run.
+  # lifecycle. Follow the per-command quiescence and attestation requirements
+  # in deploy/README.md.
   deployment-backup:
     profiles:
       - recovery

@@ -1,9 +1,9 @@
 # Auditing
 
-Open Splunk keeps successful control-plane mutations and high-volume search
-admissions in separate bounded SQLite journals. Neither journal stores request
-bodies, credentials, SPL, generated SQL, event payloads, definition bodies, or
-free-form backend errors.
+Open Splunk keeps successful mutations from explicitly enumerated control-plane
+families and high-volume search admissions in separate bounded SQLite journals.
+Neither journal stores request bodies, credentials, SPL, generated SQL, event
+payloads, definition bodies, or free-form backend errors.
 
 `SERVER_FEATURE_AUDIT_SEARCH` advertises the mutation journal list service.
 `SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT` advertises the search-attempt list
@@ -42,11 +42,12 @@ contract. These counters are not release or API versions, and deletion does not
 fabricate another generation merely for audit. Audit projections must equal the
 committed mutation revision.
 
-The target mutation and success append use the same caller-owned SQLite/GORM
-transaction and captured timestamp. If audit persistence fails, the complete
-mutation rolls back. Rejected or failed mutations do not become successful
-events. GORM is only the projection/transaction API and never runs
-`AutoMigrate`; ClickHouse is not part of this journal.
+For the mutation families listed above, the target mutation and success append
+use the same caller-owned SQLite/GORM transaction and captured timestamp. If
+audit persistence fails, the complete mutation rolls back. Rejected or failed
+mutations do not become successful events. GORM is only the
+projection/transaction API and never runs `AutoMigrate`; ClickHouse is not part
+of this journal.
 
 Sequences are dense, monotonic, and tenant local; their journal position is
 separate from the target object's revision counter. A tenant retains at most
@@ -136,4 +137,5 @@ page option changes, and distinguish invalid/expired/evicted traversal (400),
 authentication/authorization (401/403), mutation capacity (429), and
 unavailable/corrupt storage (503). CSV export, free-text search, live audit
 streaming, raw-query audit, terminal search-outcome events, authentication
-activity, and general RBAC audit remain outside the current baseline.
+activity, dashboard-definition mutation events, and general RBAC audit remain
+outside the current baseline.

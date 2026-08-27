@@ -80,15 +80,36 @@ visibility, and outbox work. Concurrent duplicates, ambiguous inserts,
 restart, and stream takeover therefore cannot double-charge inside the retained
 replay horizon.
 
-## Development deployment
+## Container deployment
 
-No official collector image version exists yet. Build server and collector
-from the same clean source revision and use a revision-bound local tag, for
-example:
+Successful `v0.MINOR.PATCH` publications produce a public,
+multi-architecture collector image for Linux AMD64 and ARM64 at
+[`ghcr.io/suhaibinator/open-splunk-collector`](https://github.com/Suhaibinator/open-splunk/pkgs/container/open-splunk-collector).
+Use the numeric release version without the leading `v`, and use the same
+version for the server and collector:
 
-```text
-open-splunk-collector:development
+```sh
+export COLLECTOR_IMAGE=ghcr.io/suhaibinator/open-splunk-collector:0.MINOR.PATCH
+docker pull "$COLLECTOR_IMAGE"
 ```
+
+Replace `0.MINOR.PATCH` with the selected release. The published `latest` tag
+is convenient for evaluation but is mutable; persistent deployments should use
+an exact version. See [build and publication status](releasing.md) for the
+release contract.
+
+To test unreleased source instead, build both local images from the same clean,
+committed revision. `make oci` gives each image that full revision as its
+default tag:
+
+```sh
+revision="$(git rev-parse HEAD)"
+OPEN_SPLUNK_SOURCE_REVISION="$revision" make oci
+export COLLECTOR_IMAGE="open-splunk-collector:$revision"
+```
+
+Do not mix a published collector with a different server version or mix local
+server and collector images from different revisions.
 
 The image runs as UID/GID `65532:65532`. Use a dedicated owner-only state
 directory below a trusted parent, a read-only config, a read-only CA, a
@@ -124,7 +145,7 @@ docker run --rm \
   --env-file /etc/open-splunk-collector/collector.env \
   --mount type=bind,src=/etc/open-splunk-collector/collector.yaml,dst=/etc/open-splunk/collector.yaml,readonly \
   --mount type=bind,src=/var/lib/open-splunk-collector/state,dst=/var/lib/open-splunk-collector/state \
-  open-splunk-collector:development \
+  "$COLLECTOR_IMAGE" \
   identity -config /etc/open-splunk/collector.yaml
 ```
 

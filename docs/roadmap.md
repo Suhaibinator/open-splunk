@@ -3,16 +3,16 @@
 This list contains only unfinished product work; completed phases, estimates,
 checkpoints, and migration history are not retained here.
 
-## First supported release
+## Stable v1 contract
 
-- Choose the first public product version, tag syntax, artifact naming, and
-  release qualification process.
 - Define protobuf/HTTP/gRPC, SPL, storage, cursor, backup, collector-state, and
   retained-job compatibility promises before declaring any client or data
   upgrade path supported.
-- Specify migration, deprecation, support-window, and rollback policy and add
-  executable conformance gates for it.
-- Publish release notes and operator upgrade guidance only after those
+- Specify migration, deprecation, support-window, rollback, and
+  security-response policy and add executable conformance gates for every
+  declared promise.
+- Define signing and attestation policy for the existing release artifacts.
+- Publish stable release notes and operator upgrade guidance only after those
   decisions are implemented and tested.
 
 ## Knowledge and reusable content

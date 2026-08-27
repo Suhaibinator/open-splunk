@@ -13,8 +13,8 @@ the server over an authenticated bidirectional gRPC stream.
 | --- | --- |
 | `open-splunk-server` | HTTPS/API serving, browser assets, authentication, catalogs, search jobs, native and HEC admission, audit, recovery, and reconciliation |
 | `open-splunk-collector` | file discovery and tailing, canonical event construction, WAL/checkpoints, retry, pacing, and dead letters |
-| Browser application | same-origin administration and search UI using generated protobuf codecs |
-| SQLite | indexes, apps, tokens, collectors, saved searches, jobs/history, knowledge, lookup metadata, audit journals, quotas, visibility reservations, outbox, and recovery authority |
+| Browser application | same-origin administration, search, analytics, and dashboard UI using generated protobuf codecs |
+| SQLite | indexes, apps, tokens, collectors, saved searches, dashboards, jobs/history, knowledge, lookup metadata, audit journals, quotas, visibility reservations, outbox, and recovery authority |
 | ClickHouse | immutable event rows, expiration metadata, field metadata, and bounded SPL query execution |
 
 The Next.js application is statically exported and embedded in the Go server.
@@ -86,8 +86,8 @@ backup to one generation so restore cannot mix branches.
 - Secrets are accepted only at their transport boundary, removed before normal
   handling, returned only when a token is created, and never written to audit,
   metrics, cursors, snapshots, or event provenance.
-- Control-plane mutations use optimistic concurrency and commit their success
-  audit record in the same SQLite transaction.
+- Audited control-plane mutation families use optimistic concurrency and commit
+  their success audit record in the same SQLite transaction.
 - Unknown or malformed persisted authority fails startup or the protected
   operation; the server does not continue with a partial policy or snapshot.
 - Parsers, protobuf handlers, catalogs, cursors, queues, journals, bodies,

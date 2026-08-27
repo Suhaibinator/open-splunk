@@ -25,7 +25,7 @@ gen/go/                   generated Go protobuf/gRPC code
 gen/ts/                   generated TypeScript protobuf code
 integration/              executable shipped-product gates
 internal/                 private Go packages
-migrations/               SQLite and ClickHouse schema baselines
+migrations/               ordered SQLite and ClickHouse schema migrations
 proto/open_splunk/        current protobuf source contracts
 public/                   static browser assets
 scripts/                  build and validation automation
@@ -54,7 +54,8 @@ make run
 
 Neither command requires a clean worktree, Git commit, source hash, or product
 version. `make dev-clickhouse` generates reusable local credentials and starts
-only ClickHouse in an isolated `open-splunk-development` Compose project.
+ClickHouse plus its one-shot recovery-volume bootstrap in an isolated
+`open-splunk-development` Compose project; it starts no Open Splunk server.
 `make run` builds the embedded browser UI and server with the explicit
 `development` identity, applies ClickHouse migrations, and runs in the
 foreground. Open `http://127.0.0.1:8080/signin/`; the administrator token is
@@ -138,25 +139,29 @@ and linked binary identities, and publishes atomically under `build/`.
 Server and collector images must come from the same source revision. See
 [Build and publication status](docs/releasing.md).
 
-Official `v0.x.y` releases are published only by CI from a published GitHub
-Release. CI attaches Linux AMD64/ARM64 binary archives and checksums and
-publishes multi-architecture server and collector images to GHCR. For the
-non-root images and digest-pinned ClickHouse Compose stack, follow
-[Deployment](deploy/README.md).
+A non-draft, non-prerelease `v0.x.y`
+[GitHub Release](https://github.com/Suhaibinator/open-splunk/releases) triggers
+the publication CI. A successful publication attaches Linux AMD64/ARM64 binary
+archives and checksums and publishes multi-architecture
+[server](https://github.com/Suhaibinator/open-splunk/pkgs/container/open-splunk-server)
+and [collector](https://github.com/Suhaibinator/open-splunk/pkgs/container/open-splunk-collector)
+images to GHCR. For the non-root images and digest-pinned ClickHouse Compose
+stack, follow [Deployment](deploy/README.md).
 
 ## Product boundaries
 
 The backend includes protobuf HTTP, authenticated native gRPC ingestion, the
 optional HEC facade, collector WAL/tailing, SQLite control plane, ClickHouse
-event storage, bounded jobs/exports, field knowledge, immutable CSV lookups,
-auditing, and the cumulative authored SPL profile documented in [SPL](docs/spl.md).
+event storage, bounded jobs/exports, saved searches and dashboards, field
+knowledge, immutable CSV lookups, auditing, and the cumulative authored SPL
+profile documented in [SPL](docs/spl.md).
 
-The project currently supports fresh development state only. Retaining data
-across arbitrary source revisions is not a compatibility promise. Unknown or
-inconsistent databases, state directories, backups, cursors, WAL/checkpoints,
-snapshots, and retained artifacts fail closed and are never silently deleted
-or rewritten. See [Architecture](docs/architecture.md) and
-[database mechanics](migrations/README.md).
+The v0 contract supports persisted state only with the same exact release or
+source revision. Retaining data across arbitrary versions or source revisions
+is not a compatibility promise. Unknown or inconsistent databases, state
+directories, backups, cursors, WAL/checkpoints, snapshots, and retained
+artifacts fail closed and are never silently deleted or rewritten. See
+[Architecture](docs/architecture.md) and [database mechanics](migrations/README.md).
 
 Native collectors are documented in [Ingestion](docs/ingestion.md). HEC is
 disabled by default, shares the existing HTTPS listener, and exposes only its
@@ -179,16 +184,32 @@ go test ./integration -run TestBackendVertical
 
 OPEN_SPLUNK_OCI_INTEGRATION=1 \
 go test ./integration -run '^TestReleaseOCIComposeContract$' \
-  -count=1 -timeout=20m -v
+  -count=1 -timeout=25m -v
 ```
 
 Use the repository-pinned ClickHouse digest unless intentionally comparing a
 different pinned image. [Integration testing](integration/README.md) describes
-the exact environment variables and evidence produced by each gate.
+the backend, browser, load, recovery, and OCI gates; the
+[HEC reference](docs/hec.md) documents its protocol-specific load, soak, and
+slow-client gates.
 
 ## Documentation
 
-The [documentation index](docs/README.md) links the current architecture, API,
-SPL, knowledge, ingestion, HEC, audit, roadmap, and release references. The
-repository intentionally does not retain release-by-release implementation
-plans or migration guides.
+Start with the [documentation index](docs/README.md). Topic-specific references
+are grouped below:
+
+- Core contracts: [Architecture](docs/architecture.md), [API](docs/api.md), and
+  [SPL](docs/spl.md).
+- Data and ingestion: [Knowledge and lookups](docs/knowledge.md),
+  [native ingestion](docs/ingestion.md), [HTTP Event Collector](docs/hec.md),
+  and [auditing](docs/auditing.md).
+- Operations and validation: [deployment](deploy/README.md),
+  [database mechanics](migrations/README.md),
+  [integration testing](integration/README.md), and
+  [build scripts](scripts/README.md).
+- Publication and future work:
+  [build and publication status](docs/releasing.md) and the
+  [roadmap](docs/roadmap.md).
+
+The repository intentionally does not retain release-by-release implementation
+plans or cross-revision upgrade guides.

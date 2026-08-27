@@ -7,6 +7,7 @@
 //	                                                 start the collector (default)
 //	open-splunk-collector validate [-config PATH]  check the config and exit
 //	open-splunk-collector identity [-config PATH]  initialize and print the stable ID
+//	open-splunk-collector version                  print the compiled build identity
 //
 // validate loads and validates the configuration, prints a redacted summary
 // (never the bearer token) and the number of files each input's globs currently

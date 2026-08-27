@@ -1,8 +1,10 @@
 # Development builds and v0 release publication
 
-Local source builds are deliberately versionless and use the `development`
-source identity. Official releases use canonical `v0.MINOR.PATCH` product
-versions alongside their immutable source revision.
+Ordinary local source builds are deliberately versionless and use the
+`development` source identity. Reproducible local artifact and OCI checks also
+remain product-versionless but use the complete clean source revision.
+Official releases use canonical `v0.MINOR.PATCH` product versions alongside
+their immutable source revision.
 
 Major version zero does not establish a persisted-state upgrade contract.
 Databases, state directories, backups, cursors, collector state, and retained
@@ -37,11 +39,31 @@ Publishing a non-draft, non-prerelease GitHub Release with a canonical
 commit reachable from `main`. Only that CI job receives registry and GitHub
 Release write permissions.
 
-After every required test succeeds, CI publishes exact multi-architecture
-server and collector images to GHCR, verifies both, then advances their mutable
-`latest` tags. It also attaches reproducible Linux AMD64 and ARM64 archives and
-one SHA-256 checksum manifest to the GitHub Release. Release binaries and OCI
-labels contain both the product version and complete source revision.
+A successful publication produces exact multi-architecture server and
+collector images on GHCR, verifies both, then advances their mutable `latest`
+tags. It also attaches reproducible Linux AMD64 and ARM64 archives, each
+containing the server, collector, and log generator, plus one SHA-256 checksum
+manifest to the GitHub Release. Release binaries and OCI labels contain both
+the product version and complete source revision.
+
+The public image repositories are:
+
+- [`ghcr.io/suhaibinator/open-splunk-server`](https://github.com/Suhaibinator/open-splunk/pkgs/container/open-splunk-server);
+- [`ghcr.io/suhaibinator/open-splunk-collector`](https://github.com/Suhaibinator/open-splunk/pkgs/container/open-splunk-collector).
+
+For a GitHub tag such as `v0.MINOR.PATCH`, both OCI tags omit the leading `v`:
+
+```text
+ghcr.io/suhaibinator/open-splunk-server:0.MINOR.PATCH
+ghcr.io/suhaibinator/open-splunk-collector:0.MINOR.PATCH
+```
+
+Use the same exact version for both images. The `latest` tags are evaluation
+conveniences rather than deployment pins. The upstream packages are public and
+support anonymous pulls. Select a version present in both package repositories;
+a GitHub Release object by itself is not evidence that a publication run
+completed. Release archives and their checksum manifest are available from the
+[GitHub Releases page](https://github.com/Suhaibinator/open-splunk/releases).
 
 ## Validation
 

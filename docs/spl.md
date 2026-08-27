@@ -1,11 +1,12 @@
 # SPL contract
 
 Open Splunk implements the authored-search behavior described here. The
-language is pre-release and may change with the source tree; this is not a
-claim of full Splunk parity or a backward-compatibility promise. Callers cannot
-select alternate grammars or individual feature sets. The strict executable
-corpus is `internal/spl/testdata/compatibility.json`; this document and that
-corpus must change together.
+language is major-version-zero and may change between v0 releases or with the
+source tree; this is not a claim of full Splunk parity or a
+backward-compatibility promise. Callers cannot select alternate grammars or
+individual feature sets. The strict executable corpus is
+`internal/spl/testdata/compatibility.json`; this document and that corpus must
+change together.
 
 Unsupported syntax fails with a source-located diagnostic before execution.
 The compiler never executes a valid prefix of an invalid search. Every search
@@ -162,7 +163,7 @@ The cumulative command surface is:
 | --- | --- |
 | `search` | base-search predicate grammar over the current relation |
 | `where` | bounded eval-predicate filtering |
-| `eval` | left-to-right fixed scalar assignments |
+| `eval` | left-to-right typed scalar or multivalue assignments |
 | `rex` | first-match RE2 extraction with bounded named captures |
 | `spath` | row-preserving typed JSON scalar and wildcard-array extraction (`SPL-SPATH-MULTIVALUE-001`) |
 | `fields`, `table` | exact projection |

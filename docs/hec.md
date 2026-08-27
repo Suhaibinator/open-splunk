@@ -1,8 +1,9 @@
 # HTTP Event Collector
 
-Open Splunk exposes a bounded pre-release HTTP Event Collector (HEC) adapter on
-the existing HTTPS/API listener. It does not open port 8088. This document
-defines current source behavior and does not promise cross-release compatibility.
+Open Splunk exposes a bounded major-version-zero HTTP Event Collector (HEC)
+adapter on the existing HTTPS/API listener. It does not open port 8088. This
+document defines exact current release/source behavior and does not promise
+cross-release compatibility.
 HEC is disabled by default and is registered only as a complete JSON, raw,
 acknowledgment, health, token-purpose, durable-staging, reconciliation,
 recovery, metrics, and shutdown family.
