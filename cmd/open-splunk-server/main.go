@@ -142,11 +142,11 @@ func runWithOptions(config options) error {
 			return err
 		}
 	}
-	release, err := opensplunkroot.EmbeddedRelease()
-	if err != nil {
-		return fmt.Errorf("open embedded release: %w", err)
-	}
 	if config.verifyEmbeddedRelease {
+		release, err := opensplunkroot.EmbeddedRelease()
+		if err != nil {
+			return fmt.Errorf("open embedded release: %w", err)
+		}
 		return writeEmbeddedReleaseVerification(os.Stdout, release)
 	}
 	httpTLSConfig, err := loadHTTPServerTLSConfig(
@@ -171,6 +171,10 @@ func runWithOptions(config options) error {
 	)
 	if err != nil {
 		return err
+	}
+	release, err := opensplunkroot.EmbeddedRelease()
+	if err != nil {
+		return fmt.Errorf("open embedded release: %w", err)
 	}
 	buildMetadata := &opensplunk.BuildMetadata{
 		SourceRevision:             release.Metadata.SourceRevision,
