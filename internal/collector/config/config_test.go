@@ -559,7 +559,7 @@ func TestGradeThisExampleConfiguration(t *testing.T) {
 	tokenPath := filepath.Join(directory, "collector.token")
 	stateDirectory := filepath.Join(directory, "collector-state")
 	logPath := filepath.Join(directory, "gradethis.log")
-	t.Setenv("OPEN_SPLUNK_SERVER_GRPC_ADDRESS", "127.0.0.1:8443")
+	t.Setenv("OPEN_SPLUNK_COLLECTOR_SERVER_ADDRESS", "127.0.0.1:8443")
 	t.Setenv("OPEN_SPLUNK_COLLECTOR_TOKEN_FILE", tokenPath)
 	t.Setenv("OPEN_SPLUNK_COLLECTOR_STATE_DIRECTORY", stateDirectory)
 	t.Setenv("GRADETHIS_LOG_PATH", logPath)

@@ -196,8 +196,9 @@ are grouped below:
 - Core contracts: [Architecture](docs/architecture.md), [API](docs/api.md), and
   [SPL](docs/spl.md).
 - Data and ingestion: [Knowledge and lookups](docs/knowledge.md),
-  [native ingestion](docs/ingestion.md), [HTTP Event Collector](docs/hec.md),
-  and [auditing](docs/auditing.md).
+  [native ingestion](docs/ingestion.md),
+  [collector configuration](docs/collector-configuration.md),
+  [HTTP Event Collector](docs/hec.md), and [auditing](docs/auditing.md).
 - Operations and validation: [deployment](deploy/README.md),
   [database mechanics](migrations/README.md),
   [integration testing](integration/README.md), and

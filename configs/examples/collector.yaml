@@ -22,7 +22,9 @@
 server:
   # Set this to the server's collector gRPC listener. The loopback example
   # intentionally uses plaintext; a remote deployment must enable TLS below.
-  address: "${OPEN_SPLUNK_SERVER_GRPC_ADDRESS}"
+  # Placeholder names are chosen by this YAML document; the collector does not
+  # automatically interpret an OPEN_SPLUNK_* environment namespace.
+  address: "${OPEN_SPLUNK_COLLECTOR_SERVER_ADDRESS}"
   transport: grpc
   token_file: "${OPEN_SPLUNK_COLLECTOR_TOKEN_FILE}"
   compression: gzip

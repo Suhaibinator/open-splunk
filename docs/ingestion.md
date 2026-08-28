@@ -7,7 +7,10 @@ deletes, truncates, rotates, or compacts source logs.
 
 The server admits native and HEC events through one transport-neutral policy,
 quota, visibility, outbox, redaction, and ClickHouse path. This document covers
-the native collector; HEC is documented separately in [HEC](hec.md).
+the native collector; its complete CLI, YAML, environment-template, default,
+processor, and TLS surface is documented in
+[Collector configuration](collector-configuration.md). HEC is documented
+separately in [HEC](hec.md).
 
 ## Token and collector authority
 
@@ -119,21 +122,25 @@ listener; remote collectors require an explicitly configured listener, private
 bind address, and firewall rule. Never publish ClickHouse or copy the server
 private key.
 
-The example container config reads deployment values such as:
+The example container config uses the following template variables. These
+names are referenced by that YAML file; they are not an implicit environment
+registry in the collector executable. See
+[environment substitution](collector-configuration.md#environment-substitution)
+for the complete behavior and field mapping.
 
 ```dotenv
-OPEN_SPLUNK_SERVER_GRPC_ADDRESS=splunk.example.internal:4317
-OPEN_SPLUNK_SERVER_TLS_SERVER_NAME=open-splunk-server
+OPEN_SPLUNK_COLLECTOR_SERVER_ADDRESS=splunk.example.internal:4317
+OPEN_SPLUNK_COLLECTOR_SERVER_TLS_SERVER_NAME=open-splunk-server
 OPEN_SPLUNK_COLLECTOR_TOKEN_FILE=/run/open-splunk/secrets/collector.token
-OPEN_SPLUNK_SERVER_TLS_CA_FILE=/run/open-splunk/tls/ca.crt
+OPEN_SPLUNK_COLLECTOR_SERVER_TLS_CA_CERTIFICATE_FILE=/run/open-splunk/tls/ca.crt
 OPEN_SPLUNK_COLLECTOR_STATE_DIRECTORY=/var/lib/open-splunk-collector/state
-OPEN_SPLUNK_LOG_GLOB=/var/log/source/*.log
-OPEN_SPLUNK_INDEX=application
-OPEN_SPLUNK_LOG_SOURCE=application
-OPEN_SPLUNK_LOG_SOURCETYPE=json
-OPEN_SPLUNK_LOG_HOST=app-01.example.internal
-OPEN_SPLUNK_SERVICE=application
-OPEN_SPLUNK_ENVIRONMENT=production
+OPEN_SPLUNK_COLLECTOR_INPUT_GLOB=/var/log/source/*.log
+OPEN_SPLUNK_COLLECTOR_INPUT_INDEX=application
+OPEN_SPLUNK_COLLECTOR_INPUT_SOURCE=application
+OPEN_SPLUNK_COLLECTOR_INPUT_SOURCETYPE=json
+OPEN_SPLUNK_COLLECTOR_INPUT_HOST=app-01.example.internal
+OPEN_SPLUNK_COLLECTOR_INPUT_SERVICE=application
+OPEN_SPLUNK_COLLECTOR_INPUT_ENVIRONMENT=production
 ```
 
 Initialize stable identity against the final state mount before creating the
@@ -156,8 +163,10 @@ collector ID and the configured index set. Install only the one-time token on
 the collector host as UID 65532 mode `0600`; never provide an administrator
 token or ClickHouse/server credentials.
 
-Run `validate` with the same mounts to prove configuration and glob matches;
-it does not contact the server. Then run the image with the same complete state
+Run `validate` with the same environment, user, configuration, state, and source
+mounts to prove YAML parsing, local configuration constraints, and current glob
+matches. It does not read the token or CA file, connect to the server, perform a
+TLS handshake, or authenticate. Then run the image with the same complete state
 mount, CA, token, config, and source mounts. A healthy connection logs
 `collector stream ready`; also monitor `/api/collectors/get` or `/list`,
 heartbeat age, restart count, state-disk utilization, and source-log retention

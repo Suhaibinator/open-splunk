@@ -1069,7 +1069,7 @@ func assertCurrentGradeThisMigration(
 	configPath := filepath.Join(repository, "configs", "examples", "collector.yaml")
 	environment := os.Environ()
 	for name, value := range map[string]string{
-		"OPEN_SPLUNK_SERVER_GRPC_ADDRESS":       collectorAddress,
+		"OPEN_SPLUNK_COLLECTOR_SERVER_ADDRESS":  collectorAddress,
 		"OPEN_SPLUNK_COLLECTOR_TOKEN_FILE":      tokenPath,
 		"OPEN_SPLUNK_COLLECTOR_STATE_DIRECTORY": stateDir,
 		"GRADETHIS_LOG_PATH":                    logPath,

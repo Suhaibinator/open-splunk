@@ -1,11 +1,21 @@
 # Production-oriented container configuration for the Open Splunk collector.
-# Set every environment placeholder below. The paths used by the
-# deployment guide are:
+# Set every environment placeholder below. Example deployment values are:
 #
+#   OPEN_SPLUNK_COLLECTOR_SERVER_ADDRESS=splunk.example.internal:4317
+#   OPEN_SPLUNK_COLLECTOR_SERVER_TLS_SERVER_NAME=open-splunk-server
 #   OPEN_SPLUNK_COLLECTOR_TOKEN_FILE=/run/open-splunk/secrets/collector.token
-#   OPEN_SPLUNK_SERVER_TLS_CA_FILE=/run/open-splunk/tls/ca.crt
+#   OPEN_SPLUNK_COLLECTOR_SERVER_TLS_CA_CERTIFICATE_FILE=/run/open-splunk/tls/ca.crt
 #   OPEN_SPLUNK_COLLECTOR_STATE_DIRECTORY=/var/lib/open-splunk-collector/state
-#   OPEN_SPLUNK_LOG_GLOB=/var/log/source/*.log
+#   OPEN_SPLUNK_COLLECTOR_INPUT_GLOB=/var/log/source/*.log
+#   OPEN_SPLUNK_COLLECTOR_INPUT_INDEX=application
+#   OPEN_SPLUNK_COLLECTOR_INPUT_SOURCE=application
+#   OPEN_SPLUNK_COLLECTOR_INPUT_SOURCETYPE=json
+#   OPEN_SPLUNK_COLLECTOR_INPUT_HOST=app-01.example.internal
+#   OPEN_SPLUNK_COLLECTOR_INPUT_SERVICE=application
+#   OPEN_SPLUNK_COLLECTOR_INPUT_ENVIRONMENT=production
+#
+# These variables are placeholders selected by this YAML document, not a
+# process-wide collector environment registry. See docs/collector-configuration.md.
 #
 # The state directory contains the stable collector identity, WAL, checkpoints,
 # and rejected event payloads. Preserve it as one unit across restarts of the
@@ -14,17 +24,17 @@
 # between collector instances.
 
 server:
-  address: "${OPEN_SPLUNK_SERVER_GRPC_ADDRESS}"
+  address: "${OPEN_SPLUNK_COLLECTOR_SERVER_ADDRESS}"
   transport: grpc
   token_file: "${OPEN_SPLUNK_COLLECTOR_TOKEN_FILE}"
   compression: gzip
   tls:
     enabled: true
-    ca_file: "${OPEN_SPLUNK_SERVER_TLS_CA_FILE}"
+    ca_file: "${OPEN_SPLUNK_COLLECTOR_SERVER_TLS_CA_CERTIFICATE_FILE}"
     # The production-shaped deploy Compose certificate is issued for this DNS
     # name. Keep this override when dialing that listener by another DNS name
     # or IP address.
-    server_name: "${OPEN_SPLUNK_SERVER_TLS_SERVER_NAME}"
+    server_name: "${OPEN_SPLUNK_COLLECTOR_SERVER_TLS_SERVER_NAME}"
 
 state:
   directory: "${OPEN_SPLUNK_COLLECTOR_STATE_DIRECTORY}"
@@ -36,7 +46,7 @@ inputs:
   - id: application-logs
     type: file
     include:
-      - "${OPEN_SPLUNK_LOG_GLOB}"
+      - "${OPEN_SPLUNK_COLLECTOR_INPUT_GLOB}"
     exclude:
       - "*.gz"
     format: ndjson
@@ -44,15 +54,15 @@ inputs:
     # starts a newly discovered existing file at EOF; later appended lines and
     # files discovered after startup are still collected.
     start_at: end
-    index: "${OPEN_SPLUNK_INDEX}"
-    source: "${OPEN_SPLUNK_LOG_SOURCE}"
-    sourcetype: "${OPEN_SPLUNK_LOG_SOURCETYPE}"
+    index: "${OPEN_SPLUNK_COLLECTOR_INPUT_INDEX}"
+    source: "${OPEN_SPLUNK_COLLECTOR_INPUT_SOURCE}"
+    sourcetype: "${OPEN_SPLUNK_COLLECTOR_INPUT_SOURCETYPE}"
     # Set the application/log host explicitly because the container hostname is
     # normally not the host whose files are mounted below /var/log/source.
-    host: "${OPEN_SPLUNK_LOG_HOST}"
+    host: "${OPEN_SPLUNK_COLLECTOR_INPUT_HOST}"
     fields:
-      service: "${OPEN_SPLUNK_SERVICE}"
-      environment: "${OPEN_SPLUNK_ENVIRONMENT}"
+      service: "${OPEN_SPLUNK_COLLECTOR_INPUT_SERVICE}"
+      environment: "${OPEN_SPLUNK_COLLECTOR_INPUT_ENVIRONMENT}"
 
 # Redaction happens before an event crosses the durable WAL boundary. Tailor
 # this list to the application's structured fields before the first run.

@@ -17,6 +17,9 @@ a document explicitly says otherwise.
   snapshots, lifecycle, and security.
 - [Ingestion](ingestion.md) covers native collectors, token constraints,
   quotas, and collector operations.
+- [Collector configuration](collector-configuration.md) enumerates the
+  collector CLI, YAML schema, defaults, environment templating, processors,
+  and TLS boundaries.
 - [HTTP Event Collector](hec.md) covers the HEC protocol and its deployment,
   recovery, load, soak, and slow-client gates.
 - [Auditing](auditing.md) covers mutation and search-attempt journals.
