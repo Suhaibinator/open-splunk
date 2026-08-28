@@ -25,7 +25,32 @@ import (
 	"github.com/Suhaibinator/open-splunk/migrations"
 )
 
-const nativeRecoveryIntegrationArchiveRoot = "/var/lib/open-splunk-clickhouse-backups"
+const (
+	nativeRecoveryIntegrationArchiveRoot = "/var/lib/open-splunk-clickhouse-backups"
+	nativeRecoveryIntegrationAccessXML   = `<clickhouse>
+    <access_control_improvements>
+        <select_from_system_db_requires_grant>true</select_from_system_db_requires_grant>
+    </access_control_improvements>
+</clickhouse>
+`
+	nativeRecoveryIntegrationRecoveryXML = `<clickhouse>
+    <storage_configuration>
+        <disks>
+            <open_splunk_recovery>
+                <type>local</type>
+                <path>/var/lib/open-splunk-clickhouse-backups/</path>
+            </open_splunk_recovery>
+        </disks>
+    </storage_configuration>
+    <backups>
+        <allowed_disk>open_splunk_recovery</allowed_disk>
+        <allow_concurrent_backups>false</allow_concurrent_backups>
+        <allow_concurrent_restores>false</allow_concurrent_restores>
+        <remove_backup_files_after_failure>true</remove_backup_files_after_failure>
+    </backups>
+</clickhouse>
+`
+)
 
 // TestDeploymentNativeRecoveryClickHouseLifecycle is opt-in because it owns a
 // digest-pinned Docker container and named volume. It covers the production
@@ -834,6 +859,8 @@ func startNativeRecoveryIntegrationClickHouse(
 
 	configDirectory := t.TempDir()
 	fixture.bootstrapConfig = filepath.Join(configDirectory, "bootstrap-user.xml")
+	fixture.recoveryConfig = filepath.Join(configDirectory, "recovery.xml")
+	fixture.accessConfig = filepath.Join(configDirectory, "access.xml")
 	const bootstrapXML = `<clickhouse>
     <users>
         <default remove="remove"/>
@@ -848,22 +875,15 @@ func startNativeRecoveryIntegrationClickHouse(
 </clickhouse>
 `
 
-	// the unprivileged ClickHouse process in a rootful Linux container.
-	if err := os.WriteFile(fixture.bootstrapConfig, []byte(bootstrapXML), 0o644); err != nil {
-		t.Fatalf("write recovery integration bootstrap config: %v", err)
-	}
-	var err error
-	fixture.recoveryConfig, err = filepath.Abs(filepath.Join("..", "..", "deploy", "clickhouse-config", "recovery.xml"))
-	if err != nil {
-		t.Fatalf("resolve recovery config: %v", err)
-	}
-	fixture.accessConfig, err = filepath.Abs(filepath.Join("..", "..", "deploy", "clickhouse-config", "access.xml"))
-	if err != nil {
-		t.Fatalf("resolve access config: %v", err)
-	}
-	for _, path := range []string{fixture.recoveryConfig, fixture.accessConfig} {
-		if info, statErr := os.Stat(path); statErr != nil || !info.Mode().IsRegular() {
-			t.Fatalf("required ClickHouse recovery config %q is not a regular file: %v", path, statErr)
+	// The unprivileged ClickHouse process must be able to read these bind-mounted
+	// files in both a rootful Linux container and Docker Desktop's Linux VM.
+	for path, contents := range map[string]string{
+		fixture.bootstrapConfig: bootstrapXML,
+		fixture.recoveryConfig:  nativeRecoveryIntegrationRecoveryXML,
+		fixture.accessConfig:    nativeRecoveryIntegrationAccessXML,
+	} {
+		if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+			t.Fatalf("write recovery integration config %q: %v", path, err)
 		}
 	}
 	fixture.startContainer(t, ctx, false)
