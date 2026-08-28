@@ -404,15 +404,6 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 // not be decoded. It is monotonic for the life of the process.
 func (d *Daemon) DecodeFailures() uint64 { return d.decodeFailures.Load() }
 
-// PipelineFailures returns the number of events skipped after an unexpected
-// processor error. Built-in processors surface configuration errors at startup,
-// so a nonzero value indicates a runtime implementation or extension fault.
-func (d *Daemon) PipelineFailures() uint64 { return d.pipelineFailures.Load() }
-
-// PolicyDrops returns the number of events intentionally filtered by the
-// configured processor chain.
-func (d *Daemon) PolicyDrops() uint64 { return d.policyDrops.Load() }
-
 // OversizedDrops returns the running count of single events dead-lettered
 // because their durable record exceeded max_queue_bytes. Monotonic per process.
 func (d *Daemon) OversizedDrops() uint64 { return d.oversizedDrops.Load() }
