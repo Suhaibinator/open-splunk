@@ -1196,6 +1196,7 @@ type clickHouseConnectionOptions struct {
 	deletion  *clickhousedriver.Options
 }
 
+// #nosec G101 -- This is the identifier of an environment variable, not a credential.
 const clickHousePasswordEnvironmentVariable = "OPEN_SPLUNK_CLICKHOUSE_PASSWORD"
 
 func registerClickHouseSkipMigrationsFlag(

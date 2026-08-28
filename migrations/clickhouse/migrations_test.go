@@ -131,7 +131,7 @@ func composeServiceNames(compose string) []string {
 func TestGenerateDevelopmentEnvironmentUsesSinglePlaintextCredential(t *testing.T) {
 	outputPath := filepath.Join(t.TempDir(), ".env.development")
 	generator := filepath.Join("..", "..", "deploy", "generate-env.sh")
-	command := exec.Command(generator, "--development", outputPath)
+	command := exec.CommandContext(t.Context(), generator, "--development", outputPath)
 	command.Env = append(
 		os.Environ(),
 		"OPEN_SPLUNK_CLICKHOUSE_NATIVE_PORT=19000",

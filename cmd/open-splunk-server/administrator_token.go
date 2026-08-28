@@ -13,6 +13,8 @@ import (
 )
 
 const maximumAdministratorTokenFileBytes = auth.MaximumBrowserBearerTokenBytes + 2
+
+// #nosec G101 -- This is the identifier of an environment variable, not a credential.
 const administratorTokenEnvironmentVariable = "OPEN_SPLUNK_ADMINISTRATOR_TOKEN"
 
 type administratorTokenReadHooks = stablePathFileReadHooks
