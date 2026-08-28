@@ -4,6 +4,7 @@ import (
 	"flag"
 	"io"
 	"maps"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -66,6 +67,35 @@ func TestRuntimeOptionRegistryIsCompleteAndUnique(t *testing.T) {
 		}
 		if binding.environmentName != want {
 			t.Errorf("-%s environment = %s, want %s", binding.flagName, binding.environmentName, want)
+		}
+	}
+}
+
+func TestRuntimeOptionDocumentationCoversRegistry(t *testing.T) {
+	documentation, err := os.ReadFile("../../deploy/README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := string(documentation)
+	if !strings.Contains(
+		contents,
+		"| Environment variable | CLI flag | Built-in default | Purpose | Accepted values and constraints |",
+	) {
+		t.Fatal("server configuration reference is missing its explanatory columns")
+	}
+	for _, binding := range runtimeOptionBindings {
+		rowPrefix := "| `" + binding.environmentName + "` | `-" + binding.flagName + "` |"
+		if count := strings.Count(contents, rowPrefix); count != 1 {
+			t.Errorf("documentation rows for %s = %d, want 1", binding.environmentName, count)
+		}
+	}
+	for _, name := range []string{
+		"OPEN_SPLUNK_DEPLOY_SERVER_IMAGE",
+		"OPEN_SPLUNK_DEPLOY_HTTP_PORT",
+		"OPEN_SPLUNK_DEPLOY_CLICKHOUSE_NATIVE_PORT",
+	} {
+		if rowPrefix := "| `" + name + "` |"; strings.Count(contents, rowPrefix) != 1 {
+			t.Errorf("deployment documentation row for %s is missing or duplicated", name)
 		}
 	}
 }
