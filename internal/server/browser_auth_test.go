@@ -535,6 +535,50 @@ func TestBrowserAuthenticationIsScopedAndOrderedAfterExactRouteAndOriginChecks(t
 	}
 }
 
+func TestMalformedForwardedProtoPrecedesAdministratorAuthenticationAndWork(t *testing.T) {
+	t.Parallel()
+
+	authenticator := &recordingBrowserAuthenticator{
+		fn: func(context.Context, []byte) (auth.BrowserPrincipal, error) {
+			return auth.BrowserPrincipal{}, errors.New("malformed forwarded protocol reached authentication")
+		},
+	}
+	handler, indexes, tokens := newBrowserGateHandlerWithForwardedProto(
+		t,
+		authenticator,
+		defaultRouteTimeout,
+		true,
+	)
+	body := &observedRequestBody{}
+	request := httptest.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		"/api/indexes/list",
+		nil,
+	)
+	request.Body = body
+	request.Host = "example.com"
+	request.Header.Set("Origin", "https://example.com")
+	request.Header.Set("X-Forwarded-Proto", "https,http")
+	request.Header.Set("Authorization", "Bearer "+adminIntegrationBearerToken)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if authenticator.callCount() != 0 || body.reads != 0 ||
+		indexes.callCount() != 0 || tokens.callCount() != 0 {
+		t.Fatalf(
+			"rejected work = authentication %d, body reads %d, indexes %d, tokens %d",
+			authenticator.callCount(),
+			body.reads,
+			indexes.callCount(),
+			tokens.callCount(),
+		)
+	}
+}
+
 func TestAdministratorAuthorizationHeaderParsingFailsClosedBeforeWork(t *testing.T) {
 	t.Parallel()
 
@@ -1389,6 +1433,20 @@ func newBrowserGateHandler(
 	authenticator auth.BrowserAuthenticator,
 	routeTimeout time.Duration,
 ) (*Handler, *browserGateIndexAdministration, *browserGateTokenAdministration) {
+	return newBrowserGateHandlerWithForwardedProto(
+		t,
+		authenticator,
+		routeTimeout,
+		false,
+	)
+}
+
+func newBrowserGateHandlerWithForwardedProto(
+	t *testing.T,
+	authenticator auth.BrowserAuthenticator,
+	routeTimeout time.Duration,
+	trustForwardedProto bool,
+) (*Handler, *browserGateIndexAdministration, *browserGateTokenAdministration) {
 	t.Helper()
 	indexes := &browserGateIndexAdministration{}
 	tokens := &browserGateTokenAdministration{}
@@ -1409,6 +1467,7 @@ func newBrowserGateHandler(
 		OwnerID:                    browserGateOwnerID,
 		RouteTimeout:               routeTimeout,
 		AdministrativeAllowedHosts: []string{"example.com"},
+		TrustForwardedProto:        trustForwardedProto,
 	})
 	if err != nil {
 		t.Fatalf("NewHandler: %v", err)

@@ -2,7 +2,7 @@ name: open-splunk
 
 services:
   server:
-    image: "${OPEN_SPLUNK_SERVER_IMAGE:?set OPEN_SPLUNK_SERVER_IMAGE to an exact Open Splunk server image}"
+    image: "${OPEN_SPLUNK_DEPLOY_SERVER_IMAGE:?set OPEN_SPLUNK_DEPLOY_SERVER_IMAGE to an exact Open Splunk server image}"
     restart: unless-stopped
     init: true
     user: "65532:65532"
@@ -13,27 +13,20 @@ services:
       - no-new-privileges:true
     environment:
       TMPDIR: /tmp
-      OPEN_SPLUNK_ADMINISTRATOR_TOKEN: "${OPEN_SPLUNK_ADMINISTRATOR_TOKEN:?set OPEN_SPLUNK_ADMINISTRATOR_TOKEN}"
-      OPEN_SPLUNK_CLICKHOUSE_PASSWORD: "${OPEN_SPLUNK_CLICKHOUSE_PASSWORD:?set OPEN_SPLUNK_CLICKHOUSE_PASSWORD}"
-      OPEN_SPLUNK_SERVER_SINGLETON_LOCK_PATH: /var/lib/open-splunk/lock/private/open-splunk-server-open_splunk.server.lock
-    command:
-      - -http-address
-      - 0.0.0.0:8080
-      - -http-allowed-hosts
-      - "${OPEN_SPLUNK_HTTP_ALLOWED_HOSTS:-localhost,127.0.0.1}"
-      - "-hec-enabled=${OPEN_SPLUNK_HEC_ENABLED:-false}"
-      - -control-db
-      - /var/lib/open-splunk/state/private/open-splunk.db
-      - -master-key
-      - /var/lib/open-splunk/state/private/master.key
-      - -export-artifact-dir
-      - /var/lib/open-splunk/exports/private
-      - -clickhouse-address
-      - "${OPEN_SPLUNK_CLICKHOUSE_ADDRESS:-per-clickhouse:9000}"
-      - -clickhouse-username
-      - "${OPEN_SPLUNK_CLICKHOUSE_USERNAME:-clickhouse}"
+      OPEN_SPLUNK_SERVER_HTTP_LISTEN_ADDRESS: 0.0.0.0:8080
+      OPEN_SPLUNK_SERVER_HTTP_ALLOWED_HOSTS: "${OPEN_SPLUNK_SERVER_HTTP_ALLOWED_HOSTS:-localhost,127.0.0.1}"
+      OPEN_SPLUNK_SERVER_HTTP_TRUST_X_FORWARDED_PROTO: "${OPEN_SPLUNK_SERVER_HTTP_TRUST_X_FORWARDED_PROTO:-false}"
+      OPEN_SPLUNK_SERVER_CONTROL_DATABASE_FILE: /var/lib/open-splunk/state/private/open-splunk.db
+      OPEN_SPLUNK_SERVER_MASTER_KEY_FILE: /var/lib/open-splunk/state/private/master.key
+      OPEN_SPLUNK_SERVER_LOCK_FILE: /var/lib/open-splunk/lock/private/open-splunk-server-open_splunk.server.lock
+      OPEN_SPLUNK_SERVER_EXPORT_ARTIFACT_DIRECTORY: /var/lib/open-splunk/exports/private
+      OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN: "${OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN:?set OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN}"
+      OPEN_SPLUNK_SERVER_CLICKHOUSE_ADDRESS: "${OPEN_SPLUNK_SERVER_CLICKHOUSE_ADDRESS:-per-clickhouse:9000}"
+      OPEN_SPLUNK_SERVER_CLICKHOUSE_USERNAME: "${OPEN_SPLUNK_SERVER_CLICKHOUSE_USERNAME:-clickhouse}"
+      OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD: "${OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD:?set OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD}"
+      OPEN_SPLUNK_SERVER_HEC_ENABLED: "${OPEN_SPLUNK_SERVER_HEC_ENABLED:-false}"
     ports:
-      - "${OPEN_SPLUNK_SERVER_HTTP_PORT:-8080}:8080"
+      - "${OPEN_SPLUNK_DEPLOY_HTTP_PORT:-8080}:8080"
     volumes:
       - server-state:/var/lib/open-splunk/state
       - server-lock:/var/lib/open-splunk/lock

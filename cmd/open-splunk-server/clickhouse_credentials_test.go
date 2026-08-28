@@ -7,13 +7,10 @@ import (
 	"testing"
 )
 
-func TestLoadClickHouseCredentialUsesFileOrEnvironment(t *testing.T) {
-	const environmentName = "OPEN_SPLUNK_TEST_CLICKHOUSE_PASSWORD"
-
+func TestLoadClickHouseCredentialUsesFileOrInlineValue(t *testing.T) {
 	t.Run("file", func(t *testing.T) {
-		t.Setenv(environmentName, "")
 		path := writeClickHouseCredentialFixture(t, "file-secret\n", 0o600)
-		credential, err := loadClickHouseCredential(path, environmentName)
+		credential, err := loadClickHouseCredential(path, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -22,15 +19,14 @@ func TestLoadClickHouseCredentialUsesFileOrEnvironment(t *testing.T) {
 		}
 	})
 
-	t.Run("environment fallback", func(t *testing.T) {
-		t.Setenv(environmentName, "environment-secret")
-		credential, err := loadClickHouseCredential("", environmentName)
+	t.Run("inline", func(t *testing.T) {
+		credential, err := loadClickHouseCredential("", "inline-secret")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if credential != "environment-secret" {
+		if credential != "inline-secret" {
 			t.Fatalf(
-				"loaded credential = %q, want environment-secret",
+				"loaded credential = %q, want inline-secret",
 				credential,
 			)
 		}
@@ -38,11 +34,10 @@ func TestLoadClickHouseCredentialUsesFileOrEnvironment(t *testing.T) {
 
 	t.Run("ambiguous", func(t *testing.T) {
 		const secret = "must-not-appear-in-errors"
-		t.Setenv(environmentName, secret)
 		path := writeClickHouseCredentialFixture(t, secret, 0o600)
 		credential, err := loadClickHouseCredential(
 			path,
-			environmentName,
+			secret,
 		)
 		if err == nil || credential != "" {
 			t.Fatalf("ambiguous credential = (%q, %v), want failure", credential, err)
@@ -53,8 +48,7 @@ func TestLoadClickHouseCredentialUsesFileOrEnvironment(t *testing.T) {
 	})
 
 	t.Run("missing", func(t *testing.T) {
-		t.Setenv(environmentName, "")
-		credential, err := loadClickHouseCredential("", environmentName)
+		credential, err := loadClickHouseCredential("", "")
 		if err == nil || credential != "" {
 			t.Fatalf("missing credential = (%q, %v), want failure", credential, err)
 		}
@@ -162,7 +156,6 @@ func TestReadClickHouseCredentialFileRejectsReplacement(t *testing.T) {
 }
 
 func TestNewClickHouseConnectionOptionsLoadsCredentialFiles(t *testing.T) {
-	t.Setenv(clickHousePasswordEnvironmentVariable, "")
 	passwordFile := writeClickHouseCredentialFixture(
 		t,
 		"shared-file-secret",

@@ -182,13 +182,13 @@ func TestLoadClickHouseClientTLSProfileRejectsIncompleteOrUnsafeTrust(
 func TestNewClickHouseConnectionOptionsOwnsAuthenticatedTLSConfigs(
 	t *testing.T,
 ) {
-	t.Setenv(clickHousePasswordEnvironmentVariable, "shared-password")
 	tlsProfile := testClickHouseClientTLSProfile(t)
 
 	results, err := newClickHouseConnectionOptions(options{
 		clickhouseAddress:  "clickhouse:9440",
 		clickhouseDatabase: "open_splunk",
 		clickhouseUsername: "shared-user",
+		clickhousePassword: "shared-password",
 		clickhouseSecure:   true,
 	}, tlsProfile)
 	if err != nil {
@@ -224,11 +224,11 @@ func TestNewClickHouseConnectionOptionsOwnsAuthenticatedTLSConfigs(
 }
 
 func TestNewClickHouseConnectionOptionsRejectsMismatchedTLSMode(t *testing.T) {
-	t.Setenv(clickHousePasswordEnvironmentVariable, "shared-password")
 	valid := options{
 		clickhouseAddress:  "127.0.0.1:9000",
 		clickhouseDatabase: "open_splunk",
 		clickhouseUsername: "shared-user",
+		clickhousePassword: "shared-password",
 	}
 	tlsProfile := testClickHouseClientTLSProfile(t)
 

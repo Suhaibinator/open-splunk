@@ -56,8 +56,8 @@ func TestClickHouseTLSUnifiedAccountStartupLifecycle(t *testing.T) {
 		}
 	})
 
-	t.Setenv(clickHousePasswordEnvironmentVariable, container.Password)
 	config := secureClickHouseFixtureOptions(container)
+	config.clickhousePassword = container.Password
 	tlsProfile, err := loadClickHouseClientTLSProfile(
 		true,
 		container.TLSCACertificateFile,

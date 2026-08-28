@@ -38,22 +38,27 @@ if [ ! -x "$server_binary" ]; then
     exit 1
 fi
 
-: "${OPEN_SPLUNK_ADMINISTRATOR_TOKEN:?development environment has no administrator token}"
-: "${OPEN_SPLUNK_CLICKHOUSE_PASSWORD:?development environment has no ClickHouse password}"
-: "${OPEN_SPLUNK_CLICKHOUSE_USERNAME:?development environment has no ClickHouse username}"
-export OPEN_SPLUNK_ADMINISTRATOR_TOKEN OPEN_SPLUNK_CLICKHOUSE_PASSWORD
+: "${OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN:?development environment has no administrator token}"
+: "${OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD:?development environment has no ClickHouse password}"
+: "${OPEN_SPLUNK_SERVER_CLICKHOUSE_USERNAME:?development environment has no ClickHouse username}"
 
-http_port=${OPEN_SPLUNK_SERVER_HTTP_PORT:-8080}
-clickhouse_address=${OPEN_SPLUNK_CLICKHOUSE_ADDRESS:-127.0.0.1:9000}
-export OPEN_SPLUNK_SERVER_SINGLETON_LOCK_PATH="$private_state/open-splunk-server-open_splunk.server.lock"
+http_port=${OPEN_SPLUNK_DEPLOY_HTTP_PORT:-8080}
+OPEN_SPLUNK_SERVER_HTTP_LISTEN_ADDRESS="127.0.0.1:$http_port"
+OPEN_SPLUNK_SERVER_CONTROL_DATABASE_FILE="$private_state/open-splunk.db"
+OPEN_SPLUNK_SERVER_MASTER_KEY_FILE="$private_state/master.key"
+OPEN_SPLUNK_SERVER_LOCK_FILE="$private_state/open-splunk-server-open_splunk.server.lock"
+OPEN_SPLUNK_SERVER_EXPORT_ARTIFACT_DIRECTORY="$private_exports"
+export OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN
+export OPEN_SPLUNK_SERVER_CLICKHOUSE_ADDRESS
+export OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD
+export OPEN_SPLUNK_SERVER_CLICKHOUSE_USERNAME
+export OPEN_SPLUNK_SERVER_HTTP_LISTEN_ADDRESS
+export OPEN_SPLUNK_SERVER_CONTROL_DATABASE_FILE
+export OPEN_SPLUNK_SERVER_MASTER_KEY_FILE
+export OPEN_SPLUNK_SERVER_LOCK_FILE
+export OPEN_SPLUNK_SERVER_EXPORT_ARTIFACT_DIRECTORY
 
 echo "Open Splunk development server: http://127.0.0.1:$http_port/signin/"
 echo "Administrator token is stored in $environment_file"
 
-exec "$server_binary" \
-    -http-address "127.0.0.1:$http_port" \
-    -control-db "$private_state/open-splunk.db" \
-    -master-key "$private_state/master.key" \
-    -export-artifact-dir "$private_exports" \
-    -clickhouse-address "$clickhouse_address" \
-    -clickhouse-username "$OPEN_SPLUNK_CLICKHOUSE_USERNAME"
+exec "$server_binary"

@@ -585,14 +585,14 @@ func TestBackendHECDurableLoad(t *testing.T) {
 	)
 	serverArguments := []string{
 		serverBinary,
-		"-http-address=" + httpAddress,
-		"-http-tls-cert=" + httpTLSIdentity.CertificateFile,
-		"-http-tls-key=" + httpTLSIdentity.PrivateKeyFile,
-		"-control-db=" + controlDBPath,
-		"-master-key=" + filepath.Join(work, "server.key"),
+		"-http-listen-address=" + httpAddress,
+		"-http-tls-certificate-file=" + httpTLSIdentity.CertificateFile,
+		"-http-tls-private-key-file=" + httpTLSIdentity.PrivateKeyFile,
+		"-control-database-file=" + controlDBPath,
+		"-master-key-file=" + filepath.Join(work, "server.key"),
 		"-administrator-token-file=" + administratorTokenPath,
-		"-collector-grpc-address=" + collectorAddress,
-		"-collector-grpc-insecure",
+		"-collector-grpc-listen-address=" + collectorAddress,
+		"-collector-grpc-plaintext-enabled",
 		"-tenant-id=" + backendHECTenantID,
 		"-hec-enabled=true",
 	}

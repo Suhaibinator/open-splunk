@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -17,12 +16,11 @@ import (
 )
 
 func TestNewClickHouseConnectionOptionsUsesUnifiedPrincipal(t *testing.T) {
-	t.Setenv(clickHousePasswordEnvironmentVariable, "shared-password")
-
 	results, err := newClickHouseConnectionOptions(options{
 		clickhouseAddress:  "clickhouse.internal:9440",
 		clickhouseDatabase: "open_splunk",
 		clickhouseUsername: "shared-user",
+		clickhousePassword: "shared-password",
 		clickhouseSecure:   true,
 	}, testClickHouseClientTLSProfile(t))
 	if err != nil {
@@ -73,12 +71,11 @@ func TestNewClickHouseConnectionOptionsUsesUnifiedPrincipal(t *testing.T) {
 }
 
 func TestNewClickHouseConnectionOptionsSkipsMigrations(t *testing.T) {
-	t.Setenv(clickHousePasswordEnvironmentVariable, "shared-password")
-
 	results, err := newClickHouseConnectionOptions(options{
 		clickhouseAddress:        "127.0.0.1:9000",
 		clickhouseDatabase:       "open_splunk",
 		clickhouseUsername:       "shared-user",
+		clickhousePassword:       "shared-password",
 		clickhouseSkipMigrations: true,
 		clickhouseSecure:         true,
 	}, testClickHouseClientTLSProfile(t))
@@ -140,16 +137,16 @@ func TestDiscardClickHouseConnectionCredentialsClearsEveryPrincipal(
 	}
 }
 
-func TestConfigureClickHouseConnectionOptionsUnsetsPasswordEnvironment(
+func TestConfigureClickHouseConnectionOptionsUsesMergedPassword(
 	t *testing.T,
 ) {
 	const secret = "clickhouse-secret-must-not-leak"
-	t.Setenv(clickHousePasswordEnvironmentVariable, secret)
 
 	result, err := configureClickHouseConnectionOptions(options{
 		clickhouseAddress:  "per-clickhouse:9000",
 		clickhouseDatabase: "open_splunk",
 		clickhouseUsername: "clickhouse",
+		clickhousePassword: secret,
 	}, nil)
 	if err != nil || result.runtime == nil || result.deletion == nil ||
 		result.migration == nil {
@@ -159,18 +156,17 @@ func TestConfigureClickHouseConnectionOptionsUnsetsPasswordEnvironment(
 			err,
 		)
 	}
-	if _, exists := os.LookupEnv(clickHousePasswordEnvironmentVariable); exists {
-		t.Fatal("ClickHouse password remained in the process environment")
+	if result.runtime.Auth.Password != secret {
+		t.Fatal("ClickHouse password was not propagated from merged configuration")
 	}
 }
 
 func TestNewClickHouseConnectionOptionsRejectsUnsafeConfiguration(t *testing.T) {
-	t.Setenv(clickHousePasswordEnvironmentVariable, "shared-password")
-
 	valid := options{
 		clickhouseAddress:  "per-clickhouse:9000",
 		clickhouseDatabase: "open_splunk",
 		clickhouseUsername: "clickhouse",
+		clickhousePassword: "shared-password",
 	}
 	for name, mutate := range map[string]func(*options){
 		"missing address": func(config *options) {
@@ -200,8 +196,9 @@ func TestNewClickHouseConnectionOptionsRejectsUnsafeConfiguration(t *testing.T) 
 	}
 
 	t.Run("missing password", func(t *testing.T) {
-		t.Setenv(clickHousePasswordEnvironmentVariable, "")
-		result, err := newClickHouseConnectionOptions(valid, nil)
+		config := valid
+		config.clickhousePassword = ""
+		result, err := newClickHouseConnectionOptions(config, nil)
 		if err == nil || result.deletion != nil {
 			t.Fatalf(
 				"newClickHouseConnectionOptions(missing password) = (%#v, %v)",
@@ -212,7 +209,6 @@ func TestNewClickHouseConnectionOptionsRejectsUnsafeConfiguration(t *testing.T) 
 	})
 
 	t.Run("remote plaintext", func(t *testing.T) {
-		t.Setenv(clickHousePasswordEnvironmentVariable, "shared-password")
 		result, err := newClickHouseConnectionOptions(valid, nil)
 		if err != nil || result.runtime == nil || result.runtime.TLS != nil {
 			t.Fatalf("remote plaintext options = (%#v, %v)", result, err)

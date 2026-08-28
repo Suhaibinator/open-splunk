@@ -291,12 +291,12 @@ func runBackendSustainedLoad(t *testing.T, plan backendLoadPlan) {
 	)
 	serverArguments := []string{
 		serverBinary,
-		"-http-address=" + httpAddress,
-		"-control-db=" + controlDBPath,
-		"-master-key=" + filepath.Join(work, "server.key"),
+		"-http-listen-address=" + httpAddress,
+		"-control-database-file=" + controlDBPath,
+		"-master-key-file=" + filepath.Join(work, "server.key"),
 		"-administrator-token-file=" + administratorTokenPath,
-		"-collector-grpc-address=" + collectorAddress,
-		"-collector-grpc-insecure",
+		"-collector-grpc-listen-address=" + collectorAddress,
+		"-collector-grpc-plaintext-enabled",
 		"-tenant-id=" + plan.TenantID,
 	}
 	serverArguments = append(

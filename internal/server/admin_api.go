@@ -189,6 +189,10 @@ func (handler *apiHandler) validateBrowserAPIRequest(request *http.Request) erro
 	if fetchSite := strings.TrimSpace(strings.ToLower(request.Header.Get("Sec-Fetch-Site"))); fetchSite == "cross-site" {
 		return errors.New("cross-site browser request is not allowed")
 	}
+	expectedScheme, err := handler.browserRequestScheme(request)
+	if err != nil {
+		return err
+	}
 	origins := request.Header.Values("Origin")
 	if len(origins) > 1 {
 		return errors.New("request origin is ambiguous")
@@ -205,10 +209,6 @@ func (handler *apiHandler) validateBrowserAPIRequest(request *http.Request) erro
 		return errors.New("request origin is invalid")
 	}
 	parsed, err := url.Parse(origin)
-	expectedScheme := "http"
-	if request.TLS != nil {
-		expectedScheme = "https"
-	}
 	if err != nil || parsed.Scheme != expectedScheme || parsed.User != nil || parsed.Path != "" || parsed.RawPath != "" ||
 		parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || parsed.Opaque != "" {
 		return errors.New("request origin is invalid")
@@ -218,6 +218,36 @@ func (handler *apiHandler) validateBrowserAPIRequest(request *http.Request) erro
 		return errors.New("request origin does not match its host")
 	}
 	return nil
+}
+
+func (handler *apiHandler) browserRequestScheme(request *http.Request) (string, error) {
+	if request.TLS != nil {
+		return "https", nil
+	}
+	if !handler.trustForwardedProto {
+		return "http", nil
+	}
+	var value string
+	configured := false
+	for name, values := range request.Header {
+		if !strings.EqualFold(name, "X-Forwarded-Proto") {
+			continue
+		}
+		if configured || len(values) != 1 {
+			return "", errors.New("forwarded protocol is ambiguous")
+		}
+		value = values[0]
+		configured = true
+	}
+	if !configured {
+		return "http", nil
+	}
+	switch value {
+	case "http", "https":
+		return value, nil
+	default:
+		return "", errors.New("forwarded protocol is invalid")
+	}
 }
 
 func canonicalHTTPAuthority(input string) (string, string, error) {

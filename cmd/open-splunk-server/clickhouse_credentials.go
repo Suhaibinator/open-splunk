@@ -15,22 +15,19 @@ const maximumClickHouseCredentialBytes = 4096
 
 type clickHouseCredentialReadHooks = stablePathFileReadHooks
 
-func loadClickHouseCredential(path, environmentName string) (string, error) {
+func loadClickHouseCredential(path, inlineValue string) (string, error) {
 	path = strings.TrimSpace(path)
-	environmentValue := os.Getenv(environmentName)
 	if path == "" {
-		if environmentValue == "" {
+		if inlineValue == "" {
 			return "", fmt.Errorf(
-				"configure ClickHouse: password requires -clickhouse-password-file or %s",
-				environmentName,
+				"configure ClickHouse: password or password file is required",
 			)
 		}
-		return environmentValue, nil
+		return inlineValue, nil
 	}
-	if environmentValue != "" {
+	if inlineValue != "" {
 		return "", fmt.Errorf(
-			"configure ClickHouse: -clickhouse-password-file and %s are mutually exclusive",
-			environmentName,
+			"configure ClickHouse: password and password file are mutually exclusive",
 		)
 	}
 	contents, err := readClickHouseCredentialFile(path)

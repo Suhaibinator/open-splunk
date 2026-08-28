@@ -109,7 +109,7 @@ func validateCollectorServerConfig(config collectorServerConfig) error {
 	}
 	if certFile == "" || keyFile == "" {
 		return errors.New(
-			"collector gRPC TLS certificate and key are required; use -collector-grpc-insecure only for loopback development",
+			"collector gRPC TLS certificate and key are required; use -collector-grpc-plaintext-enabled only for loopback development",
 		)
 	}
 	return nil

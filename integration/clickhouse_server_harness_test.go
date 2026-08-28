@@ -10,7 +10,7 @@ func clickHouseServerEnvironment(
 ) []string {
 	environment = environmentWithValue(
 		environment,
-		"OPEN_SPLUNK_CLICKHOUSE_PASSWORD",
+		"OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD",
 		clickHouse.Password,
 	)
 	return environment

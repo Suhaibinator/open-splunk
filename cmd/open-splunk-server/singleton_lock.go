@@ -30,6 +30,16 @@ type serverLock struct {
 	files []*os.File
 }
 
+func acquireConfiguredServerLock(databasePath, singletonPath string) (*serverLock, error) {
+	if singletonPath == "" {
+		singletonPath = hostSingletonLockPath
+	}
+	if err := validateServerSingletonLockDirectory(singletonPath); err != nil {
+		return nil, err
+	}
+	return acquireServerLockAt(databasePath, singletonPath)
+}
+
 func acquireServerLock(databasePath string) (*serverLock, error) {
 	singletonPath, err := configuredServerSingletonLockPath()
 	if err != nil {
@@ -71,6 +81,20 @@ func validateConfiguredServerSingletonLockDirectory(singletonPath string) (retur
 	if _, configured := os.LookupEnv(serverSingletonLockPathEnv); !configured {
 		return nil
 	}
+	return validatePrivateServerSingletonLockDirectory(singletonPath)
+}
+
+func validateServerSingletonLockDirectory(singletonPath string) (returnedErr error) {
+	if singletonPath == "" {
+		return errors.New("acquire server lock: server lock file is required")
+	}
+	if singletonPath == hostSingletonLockPath {
+		return nil
+	}
+	return validatePrivateServerSingletonLockDirectory(singletonPath)
+}
+
+func validatePrivateServerSingletonLockDirectory(singletonPath string) (returnedErr error) {
 	directory, err := privatefs.OpenDirectory(filepath.Dir(singletonPath))
 	if err != nil {
 		return fmt.Errorf("acquire server lock: validate configured private directory: %w", err)

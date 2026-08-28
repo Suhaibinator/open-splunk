@@ -553,6 +553,10 @@ type Config struct {
 	// the Host/Origin trust boundary for every browser API route. Values are
 	// host names or IP literals without paths. Empty defaults to loopback only.
 	AdministrativeAllowedHosts []string
+	// TrustForwardedProto allows a plaintext reverse proxy to assert the
+	// browser-facing scheme through one X-Forwarded-Proto header. Direct TLS is
+	// always authoritative and cannot be downgraded by the forwarded value.
+	TrustForwardedProto bool
 }
 
 type apiHandler struct {
@@ -609,6 +613,7 @@ type apiHandler struct {
 	adminCursorKey             [32]byte
 	appCursorKey               []byte
 	browserAllowedHosts        map[string]struct{}
+	trustForwardedProto        bool
 }
 
 // NewHandler constructs the complete HTTP handler. API paths are dispatched
@@ -1087,6 +1092,7 @@ func NewHandler(config Config) (*Handler, error) {
 		adminCursorKey:             adminCursorKey,
 		appCursorKey:               appCursorKey,
 		browserAllowedHosts:        browserAllowedHosts,
+		trustForwardedProto:        config.TrustForwardedProto,
 	}
 	apiRouter := api.newRouter(requestBytes, routeTimeout)
 	apiRoutes := postAPIRoutes(

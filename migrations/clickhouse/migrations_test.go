@@ -75,11 +75,11 @@ func TestSimpleExternalClickHouseComposeContract(t *testing.T) {
 		t.Fatalf("default Compose services = %v, want only server", services)
 	}
 	for _, fragment := range []string{
-		"OPEN_SPLUNK_ADMINISTRATOR_TOKEN:",
-		"OPEN_SPLUNK_CLICKHOUSE_PASSWORD:",
-		"${OPEN_SPLUNK_CLICKHOUSE_ADDRESS:-per-clickhouse:9000}",
-		"${OPEN_SPLUNK_CLICKHOUSE_USERNAME:-clickhouse}",
-		"-clickhouse-username",
+		"OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN:",
+		"OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD:",
+		"${OPEN_SPLUNK_SERVER_CLICKHOUSE_ADDRESS:-per-clickhouse:9000}",
+		"${OPEN_SPLUNK_SERVER_CLICKHOUSE_USERNAME:-clickhouse}",
+		"OPEN_SPLUNK_SERVER_HTTP_LISTEN_ADDRESS: 0.0.0.0:8080",
 		"http://127.0.0.1:8080/readyz",
 		"per-obs-network",
 	} {
@@ -92,7 +92,7 @@ func TestSimpleExternalClickHouseComposeContract(t *testing.T) {
 		"server-bootstrap:",
 		"deployment-backup:",
 		"deployment-restore:",
-		"-clickhouse-secure",
+		"-clickhouse-tls-enabled",
 		"-clickhouse-skip-migrations",
 		".password:ro",
 		".crt:ro",
@@ -134,8 +134,8 @@ func TestGenerateDevelopmentEnvironmentUsesSinglePlaintextCredential(t *testing.
 	command := exec.CommandContext(t.Context(), generator, "--development", outputPath)
 	command.Env = append(
 		os.Environ(),
-		"OPEN_SPLUNK_CLICKHOUSE_NATIVE_PORT=19000",
-		"OPEN_SPLUNK_SERVER_HTTP_PORT=18080",
+		"OPEN_SPLUNK_DEPLOY_CLICKHOUSE_NATIVE_PORT=19000",
+		"OPEN_SPLUNK_DEPLOY_HTTP_PORT=18080",
 	)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("generate development environment: %v: %s", err, output)
@@ -149,11 +149,11 @@ func TestGenerateDevelopmentEnvironmentUsesSinglePlaintextCredential(t *testing.
 	}
 	contents := readFile(t, outputPath)
 	for _, name := range []string{
-		"OPEN_SPLUNK_CLICKHOUSE_ADDRESS=127.0.0.1:19000",
-		"OPEN_SPLUNK_CLICKHOUSE_USERNAME=clickhouse",
-		"OPEN_SPLUNK_CLICKHOUSE_PASSWORD=",
-		"OPEN_SPLUNK_ADMINISTRATOR_TOKEN=",
-		"OPEN_SPLUNK_SERVER_HTTP_PORT=18080",
+		"OPEN_SPLUNK_SERVER_CLICKHOUSE_ADDRESS=127.0.0.1:19000",
+		"OPEN_SPLUNK_SERVER_CLICKHOUSE_USERNAME=clickhouse",
+		"OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD=",
+		"OPEN_SPLUNK_SERVER_ADMINISTRATOR_TOKEN=",
+		"OPEN_SPLUNK_DEPLOY_HTTP_PORT=18080",
 	} {
 		if !strings.Contains(contents, name) {
 			t.Errorf("development environment is missing %q", name)

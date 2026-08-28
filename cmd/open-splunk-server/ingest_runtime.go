@@ -99,6 +99,15 @@ func normalizeRuntimeOptions(config *options) error {
 	config.clickhouseServerName = strings.TrimSpace(
 		config.clickhouseServerName,
 	)
+	config.serverLockFile = strings.TrimSpace(config.serverLockFile)
+	if config.serverLockFile == "" {
+		config.serverLockFile = hostSingletonLockPath
+	}
+	if strings.IndexByte(config.serverLockFile, 0) >= 0 ||
+		!filepath.IsAbs(config.serverLockFile) ||
+		filepath.Clean(config.serverLockFile) != config.serverLockFile {
+		return errors.New("server lock file must be an exact absolute path")
+	}
 	if (config.httpTLSCert == "") != (config.httpTLSKey == "") {
 		return errors.New("HTTP TLS certificate and key must be configured together")
 	}

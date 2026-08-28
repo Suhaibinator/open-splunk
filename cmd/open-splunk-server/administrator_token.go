@@ -14,30 +14,18 @@ import (
 
 const maximumAdministratorTokenFileBytes = auth.MaximumBrowserBearerTokenBytes + 2
 
-// #nosec G101 -- This is the identifier of an environment variable, not a credential.
-const administratorTokenEnvironmentVariable = "OPEN_SPLUNK_ADMINISTRATOR_TOKEN"
-
 type administratorTokenReadHooks = stablePathFileReadHooks
 
 func newAdministratorBrowserAuthenticator(
+	inlineToken string,
 	path string,
 	tenantID string,
 	ownerID string,
 ) (auth.BrowserAuthenticator, error) {
-	token, loadErr := loadAdministratorToken(path)
-	unsetErr := os.Unsetenv(administratorTokenEnvironmentVariable)
-	if unsetErr != nil {
-		unsetErr = fmt.Errorf(
-			"discard administrator token from process environment: %w",
-			unsetErr,
-		)
-	}
-	if loadErr != nil || unsetErr != nil {
+	token, loadErr := loadAdministratorToken(inlineToken, path)
+	if loadErr != nil {
 		clear(token)
-		if loadErr != nil {
-			loadErr = fmt.Errorf("load administrator token: %w", loadErr)
-		}
-		return nil, errors.Join(loadErr, unsetErr)
+		return nil, fmt.Errorf("load administrator token: %w", loadErr)
 	}
 	defer clear(token)
 
@@ -53,29 +41,26 @@ func newAdministratorBrowserAuthenticator(
 	return authenticator, nil
 }
 
-func loadAdministratorToken(path string) ([]byte, error) {
+func loadAdministratorToken(inlineToken, path string) ([]byte, error) {
 	path = strings.TrimSpace(path)
-	environmentToken := os.Getenv(administratorTokenEnvironmentVariable)
-	if path != "" && environmentToken != "" {
+	if path != "" && inlineToken != "" {
 		return nil, fmt.Errorf(
-			"-administrator-token-file and %s are mutually exclusive",
-			administratorTokenEnvironmentVariable,
+			"administrator token and administrator token file are mutually exclusive",
 		)
 	}
 	if path != "" {
 		return readAdministratorToken(path)
 	}
-	if environmentToken == "" {
+	if inlineToken == "" {
 		return nil, fmt.Errorf(
-			"administrator token requires -administrator-token-file or %s",
-			administratorTokenEnvironmentVariable,
+			"administrator token or administrator token file is required",
 		)
 	}
-	token := []byte(environmentToken)
+	token := []byte(inlineToken)
 	if err := auth.ValidateBrowserBearerToken(token); err != nil {
 		clear(token)
 		return nil, errors.New(
-			"administrator token environment variable contains an invalid bearer token",
+			"administrator token contains an invalid bearer token",
 		)
 	}
 	return token, nil

@@ -245,7 +245,7 @@ Enable the complete family with `-hec-enabled`. In the checked-in Compose
 deployment, persist this before recreating the server:
 
 ```dotenv
-OPEN_SPLUNK_HEC_ENABLED=true
+OPEN_SPLUNK_SERVER_HEC_ENABLED=true
 ```
 
 Production must use HTTPS. Plain HTTP is accepted only by explicit loopback

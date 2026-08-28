@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -643,6 +644,157 @@ func TestBrowserAPIRoutesDefaultToLoopbackWithoutAdministration(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "browser allowed host is invalid") {
 		t.Fatalf("invalid allowed host error = %v", err)
+	}
+}
+
+func TestBrowserAPIRoutesHonorForwardedProtoOnlyWhenConfigured(t *testing.T) {
+	newHandler := func(t *testing.T, trust bool) *Handler {
+		t.Helper()
+		return newTestHandler(t, Config{
+			SearchJobs:                 &fakeSearchJobs{},
+			Indexes:                    fakeIndexCatalog{},
+			WebUI:                      testUI(),
+			TrustForwardedProto:        trust,
+			AdministrativeAllowedHosts: []string{"example.com"},
+		})
+	}
+	forwardedHTTPS := map[string]string{
+		"Host":              "example.com",
+		"Origin":            "https://example.com",
+		"Sec-Fetch-Site":    "same-origin",
+		"X-Forwarded-Proto": "https",
+	}
+
+	disabled := postProtoHeaders(
+		t,
+		newHandler(t, false),
+		"/api/system/bootstrap",
+		&opensplunk.GetSystemBootstrapRequest{},
+		forwardedHTTPS,
+	)
+	if disabled.Code != http.StatusForbidden {
+		t.Fatalf("disabled status = %d, body = %s", disabled.Code, disabled.Body.String())
+	}
+
+	enabledHandler := newHandler(t, true)
+	withoutHeader := postProtoHeaders(
+		t,
+		enabledHandler,
+		"/api/system/bootstrap",
+		&opensplunk.GetSystemBootstrapRequest{},
+		map[string]string{
+			"Host":           "example.com",
+			"Origin":         "http://example.com",
+			"Sec-Fetch-Site": "same-origin",
+		},
+	)
+	if withoutHeader.Code != http.StatusOK {
+		t.Fatalf("missing forwarded header status = %d, body = %s", withoutHeader.Code, withoutHeader.Body.String())
+	}
+	enabled := postProtoHeaders(
+		t,
+		enabledHandler,
+		"/api/system/bootstrap",
+		&opensplunk.GetSystemBootstrapRequest{},
+		forwardedHTTPS,
+	)
+	if enabled.Code != http.StatusOK {
+		t.Fatalf("enabled status = %d, body = %s", enabled.Code, enabled.Body.String())
+	}
+
+	caseVariant := maps.Clone(forwardedHTTPS)
+	caseVariant["X-Forwarded-Proto"] = "HTTPS"
+	rejectedCase := postProtoHeaders(
+		t,
+		enabledHandler,
+		"/api/system/bootstrap",
+		&opensplunk.GetSystemBootstrapRequest{},
+		caseVariant,
+	)
+	if rejectedCase.Code != http.StatusForbidden {
+		t.Fatalf("case-variant status = %d, body = %s", rejectedCase.Code, rejectedCase.Body.String())
+	}
+
+	mismatch := maps.Clone(forwardedHTTPS)
+	mismatch["X-Forwarded-Proto"] = "http"
+	rejectedMismatch := postProtoHeaders(
+		t,
+		enabledHandler,
+		"/api/system/bootstrap",
+		&opensplunk.GetSystemBootstrapRequest{},
+		mismatch,
+	)
+	if rejectedMismatch.Code != http.StatusForbidden {
+		t.Fatalf("mismatch status = %d, body = %s", rejectedMismatch.Code, rejectedMismatch.Body.String())
+	}
+
+	payload, err := proto.Marshal(&opensplunk.GetSystemBootstrapRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	directTLS := httptest.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		"https://example.com/api/system/bootstrap",
+		bytes.NewReader(payload),
+	)
+	directTLS.Header.Set("Content-Type", "application/x-protobuf")
+	directTLS.Header.Set("Origin", "https://example.com")
+	directTLS.Header.Set("Sec-Fetch-Site", "same-origin")
+	directTLS.Header.Set("X-Forwarded-Proto", "http")
+	directTLSResponse := httptest.NewRecorder()
+	enabledHandler.ServeHTTP(directTLSResponse, directTLS)
+	if directTLSResponse.Code != http.StatusOK {
+		t.Fatalf("direct TLS status = %d, body = %s", directTLSResponse.Code, directTLSResponse.Body.String())
+	}
+}
+
+func TestBrowserAPIRoutesRejectMalformedForwardedProtoWhenConfigured(t *testing.T) {
+	handler := newTestHandler(t, Config{
+		SearchJobs:                 &fakeSearchJobs{},
+		Indexes:                    fakeIndexCatalog{},
+		WebUI:                      testUI(),
+		TrustForwardedProto:        true,
+		AdministrativeAllowedHosts: []string{"example.com"},
+	})
+
+	for name, mutate := range map[string]func(http.Header){
+		"empty": func(header http.Header) {
+			header["X-Forwarded-Proto"] = []string{""}
+		},
+		"unsupported": func(header http.Header) {
+			header.Set("X-Forwarded-Proto", "ws")
+		},
+		"surrounding whitespace": func(header http.Header) {
+			header.Set("X-Forwarded-Proto", " https ")
+		},
+		"comma joined": func(header http.Header) {
+			header.Set("X-Forwarded-Proto", "https,http")
+		},
+		"duplicate values": func(header http.Header) {
+			header["X-Forwarded-Proto"] = []string{"https", "https"}
+		},
+		"case variant duplicate": func(header http.Header) {
+			header["X-Forwarded-Proto"] = []string{"https"}
+			header["x-forwarded-proto"] = []string{"https"}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			request := httptest.NewRequestWithContext(
+				context.Background(),
+				http.MethodPost,
+				"/api/system/bootstrap",
+				nil,
+			)
+			request.Host = "example.com"
+			request.Header.Set("Origin", "https://example.com")
+			mutate(request.Header)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+			}
+		})
 	}
 }
 

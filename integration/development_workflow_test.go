@@ -40,14 +40,14 @@ func TestDevelopmentWorkflow(t *testing.T) {
 		filepath.Join(repositoryRoot, "deploy", "generate-env.sh"),
 		"--development", environmentFile,
 	)
-	replaceDevelopmentPort(t, environmentFile, "OPEN_SPLUNK_CLICKHOUSE_NATIVE_PORT", clickHousePort)
+	replaceDevelopmentPort(t, environmentFile, "OPEN_SPLUNK_DEPLOY_CLICKHOUSE_NATIVE_PORT", clickHousePort)
 	replaceDevelopmentValue(
 		t,
 		environmentFile,
-		"OPEN_SPLUNK_CLICKHOUSE_ADDRESS",
+		"OPEN_SPLUNK_SERVER_CLICKHOUSE_ADDRESS",
 		"127.0.0.1:"+strconv.Itoa(clickHousePort),
 	)
-	replaceDevelopmentPort(t, environmentFile, "OPEN_SPLUNK_SERVER_HTTP_PORT", httpPort)
+	replaceDevelopmentPort(t, environmentFile, "OPEN_SPLUNK_DEPLOY_HTTP_PORT", httpPort)
 
 	project := "open-splunk-development-test-" + strconv.FormatInt(time.Now().UnixNano(), 10)
 	composeArguments := []string{

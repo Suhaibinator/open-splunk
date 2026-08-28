@@ -71,13 +71,17 @@ type options struct {
 	httpAllowedHostsCSV                       string
 	httpTLSCert                               string
 	httpTLSKey                                string
+	trustForwardedProto                       bool
 	controlDBPath                             string
 	masterKeyPath                             string
+	serverLockFile                            string
+	administratorToken                        string
 	administratorTokenFile                    string
 	exportArtifactDir                         string
 	clickhouseAddress                         string
 	clickhouseDatabase                        string
 	clickhouseUsername                        string
+	clickhousePassword                        string
 	clickhouseSkipMigrations                  bool
 	clickhousePasswordFile                    string
 	clickhouseSecure                          bool
@@ -113,7 +117,10 @@ func run() error {
 	if handled, err := runDeploymentSubcommand(os.Args[1:]); handled {
 		return err
 	}
-	config := parseFlags()
+	config, err := parseFlags()
+	if err != nil {
+		return err
+	}
 	return runWithOptions(config)
 }
 
@@ -165,6 +172,7 @@ func runWithOptions(config options) error {
 	}
 	defer discardClickHouseMigrationCredentials(&clickHouseOptions)
 	browserAuthenticator, err := newAdministratorBrowserAuthenticator(
+		config.administratorToken,
 		config.administratorTokenFile,
 		config.tenantID,
 		defaultOwnerID,
@@ -191,7 +199,7 @@ func runWithOptions(config options) error {
 	if err := exportSettings.validate(); err != nil {
 		return fmt.Errorf("validate export runtime: %w", err)
 	}
-	serverLock, err := acquireServerLock(config.controlDBPath)
+	serverLock, err := acquireConfiguredServerLock(config.controlDBPath, config.serverLockFile)
 	if err != nil {
 		return err
 	}
@@ -757,6 +765,7 @@ func runWithOptions(config options) error {
 		OwnerID:                    defaultOwnerID,
 		TenantID:                   config.tenantID,
 		AdministrativeAllowedHosts: config.httpAllowedHosts,
+		TrustForwardedProto:        config.trustForwardedProto,
 		BrowserAuthenticator:       browserAuthenticator,
 		Bootstrap: server.BootstrapConfig{
 			Build:              buildMetadata,
@@ -859,7 +868,7 @@ func runWithOptions(config options) error {
 		log.Printf("HEC enabled on the existing %s listener", httpTransport)
 	}
 	if collectorListener == nil {
-		log.Printf("collector gRPC listener disabled; configure -collector-grpc-address and TLS to enable ingestion")
+		log.Printf("collector gRPC listener disabled; configure -collector-grpc-listen-address and TLS to enable ingestion")
 	} else {
 		transport := "TLS"
 		if config.collectorInsecure {
@@ -936,87 +945,6 @@ func registerSearchAttemptAuditMaximumRetainedFlag(
 		int(searchaudit.DefaultMaximumRetainedAttempts),
 		"maximum search-attempt audit events retained per tenant",
 	)
-}
-
-func parseFlags() options {
-	var result options
-	flag.BoolVar(&result.verifyEmbeddedRelease, "verify-embedded-release", false, "verify the embedded release payload and exit before opening runtime resources")
-	flag.StringVar(&result.httpAddress, "http-address", "127.0.0.1:8080", "browser/API listen address")
-	flag.StringVar(&result.httpAllowedHostsCSV, "http-allowed-hosts", "", "comma-separated Host names allowed to use the browser API (defaults to the specific listen host)")
-	flag.StringVar(
-		&result.httpTLSCert,
-		"http-tls-cert",
-		"",
-		"PEM certificate chain for HTTPS browser/API traffic (requires -http-tls-key)",
-	)
-	flag.StringVar(
-		&result.httpTLSKey,
-		"http-tls-key",
-		"",
-		"PEM private key for HTTPS browser/API traffic (requires -http-tls-cert)",
-	)
-	flag.StringVar(&result.controlDBPath, "control-db", "open-splunk.db", "SQLite control-plane path")
-	flag.StringVar(&result.masterKeyPath, "master-key", "", "server master-key path (default: <control-db>.key)")
-	flag.StringVar(
-		&result.administratorTokenFile,
-		"administrator-token-file",
-		"",
-		"owner-only administrator bearer-token file (mutually exclusive with OPEN_SPLUNK_ADMINISTRATOR_TOKEN; required mode 0400 or 0600)",
-	)
-	flag.StringVar(&result.exportArtifactDir, "export-artifact-dir", "", "private export-artifact base directory (default: <control-db>.exports)")
-	flag.StringVar(&result.clickhouseAddress, "clickhouse-address", "127.0.0.1:9000", "ClickHouse native-protocol address")
-	flag.StringVar(&result.clickhouseDatabase, "clickhouse-database", "open_splunk", "ClickHouse database")
-	flag.StringVar(
-		&result.clickhouseUsername,
-		"clickhouse-username",
-		"default",
-		"ClickHouse username for migrations and application operations",
-	)
-	registerClickHouseSkipMigrationsFlag(flag.CommandLine, &result)
-	flag.StringVar(
-		&result.clickhousePasswordFile,
-		"clickhouse-password-file",
-		"",
-		"file containing the ClickHouse password (mutually exclusive with OPEN_SPLUNK_CLICKHOUSE_PASSWORD)",
-	)
-	flag.BoolVar(&result.clickhouseSecure, "clickhouse-secure", false, "use TLS for ClickHouse")
-	flag.StringVar(
-		&result.clickhouseCACertFile,
-		"clickhouse-ca-cert",
-		"",
-		"PEM trust bundle for verified ClickHouse TLS (requires -clickhouse-secure)",
-	)
-	flag.StringVar(
-		&result.clickhouseServerName,
-		"clickhouse-server-name",
-		"",
-		"explicit DNS name or IP SAN to verify for ClickHouse TLS (requires -clickhouse-secure)",
-	)
-	flag.StringVar(&result.collectorAddress, "collector-grpc-address", "", "collector gRPC listen address (disabled when empty)")
-	flag.BoolVar(&result.collectorInsecure, "collector-grpc-insecure", false, "explicitly allow plaintext collector gRPC on loopback only")
-	flag.StringVar(&result.collectorTLSCert, "collector-tls-cert", "", "PEM certificate for collector gRPC TLS")
-	flag.StringVar(&result.collectorTLSKey, "collector-tls-key", "", "PEM private key for collector gRPC TLS")
-	registerHECEnabledFlag(flag.CommandLine, &result)
-	flag.DurationVar(&result.indexRetention, "default-index-retention", defaultIndexRetention, "retention used when an index does not override it")
-	flag.DurationVar(
-		&result.searchHistoryMaximumAge,
-		"search-history-maximum-age",
-		searchhistory.DefaultMaximumAge,
-		"maximum age of terminal search-history entries",
-	)
-	flag.IntVar(
-		&result.searchHistoryMaximumEntriesPerOwner,
-		"search-history-maximum-entries-per-owner",
-		searchhistory.DefaultMaximumEntriesPerOwner,
-		"maximum terminal entries retained per owner (pending attempts are capped separately at the same value)",
-	)
-	registerSearchAttemptAuditMaximumRetainedFlag(flag.CommandLine, &result)
-	flag.StringVar(&result.tenantID, "tenant-id", "default", "single-node tenant identifier")
-	flag.Parse()
-	if strings.TrimSpace(result.masterKeyPath) == "" {
-		result.masterKeyPath = result.controlDBPath + ".key"
-	}
-	return result
 }
 
 func openSecurityStores(
@@ -1201,7 +1129,7 @@ type clickHouseConnectionOptions struct {
 }
 
 // #nosec G101 -- This is the identifier of an environment variable, not a credential.
-const clickHousePasswordEnvironmentVariable = "OPEN_SPLUNK_CLICKHOUSE_PASSWORD"
+const clickHousePasswordEnvironmentVariable = "OPEN_SPLUNK_SERVER_CLICKHOUSE_PASSWORD"
 
 func registerClickHouseSkipMigrationsFlag(
 	flags *flag.FlagSet,
@@ -1259,19 +1187,7 @@ func configureClickHouseConnectionOptions(
 	config options,
 	tlsProfile *clickHouseClientTLSProfile,
 ) (clickHouseConnectionOptions, error) {
-	result, configureErr := newClickHouseConnectionOptions(config, tlsProfile)
-	unsetErr := os.Unsetenv(clickHousePasswordEnvironmentVariable)
-	if unsetErr != nil {
-		unsetErr = fmt.Errorf(
-			"discard ClickHouse password from process environment: %w",
-			unsetErr,
-		)
-	}
-	if configureErr == nil && unsetErr == nil {
-		return result, nil
-	}
-	discardClickHouseConnectionCredentials(&result)
-	return clickHouseConnectionOptions{}, errors.Join(configureErr, unsetErr)
+	return newClickHouseConnectionOptions(config, tlsProfile)
 }
 
 func newClickHouseConnectionOptions(
@@ -1305,7 +1221,7 @@ func newClickHouseConnectionOptions(
 	}
 	password, err := loadClickHouseCredential(
 		config.clickhousePasswordFile,
-		clickHousePasswordEnvironmentVariable,
+		config.clickhousePassword,
 	)
 	if err != nil {
 		return clickHouseConnectionOptions{}, err

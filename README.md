@@ -68,8 +68,8 @@ next run. Stop its containers without deleting state with:
 make dev-down
 ```
 
-To choose other loopback ports, set `OPEN_SPLUNK_SERVER_HTTP_PORT` or
-`OPEN_SPLUNK_CLICKHOUSE_NATIVE_PORT` on the first `make dev-clickhouse`,
+To choose other loopback ports, set `OPEN_SPLUNK_DEPLOY_HTTP_PORT` or
+`OPEN_SPLUNK_DEPLOY_CLICKHOUSE_NATIVE_PORT` on the first `make dev-clickhouse`,
 or edit those values in `deploy/.env.development` while the processes are
 stopped.
 
