@@ -14,14 +14,15 @@ should look different.
 Only the first of those is meant to carry a literal. A retheme should be an
 edit to `app/styles`, not a search across 7,600 lines of rules.
 
-That is the target, not yet the state. The layer exists —
+That is most of the state now.
 [`app/styles/tokens-color.css`](../app/styles/tokens-color.css) declares every
-colour role the product has, and `tokens-scale.css` the non-colour scales
-described under [Scales](#scales) below — but no consumer reads it yet. The
-pre-refactor names still resolve through it, so the shipped render is
-unchanged, while `npm run lint:css` still reports 1,496 hex literals outside
-`app/styles`. Recolouring the product becomes a one-file edit when those call
-sites are rewritten, which is the phase after this one.
+colour role the product has, `tokens-scale.css` the non-colour scales described
+under [Scales](#scales) below, and the sweep that rewrote the call sites has
+landed: `npm run lint:css` reports 261 hex literals outside `app/styles`, down
+from 1,496. Recolouring the product is close to a one-file edit. What is left
+is not scattered misses but a short list of roles tier 2 does not name, which
+[Role gaps](#role-gaps) records; a literal was kept wherever the nearest token
+would have been the wrong role rather than merely a nearby colour.
 
 ## The two tiers
 
@@ -357,12 +358,11 @@ rest of tier 2 and not here; a theme has to be able to move it. It currently
 resolves to `--blue-450` (`#2f8ac1`), the literal the primary focus outline
 already uses, so nothing shifts today.
 
-The focus blues are not yet down to one. Beyond that outline, the stylesheets
-also carry `#317fa6`, `#3b88b5`, `#3b83a6` and `rgb(47 120 158)` on focus
-states, and the alpha outline `rgb(42 120 158 / 28%)` has no primitive of its
-own. Collapsing them onto `--focus-ring` — their midpoint `#3b83a6` moves no
-single state by more than 12 units on a channel — is migration work, listed
-under [Known debt](#known-debt-in-the-token-layer).
+The focus blues are down to one. `#317fa6`, `#3b88b5`, `#3b83a6` and
+`rgb(47 120 158)` no longer appear on any focus state; every one of them now
+reads `--focus-ring` or `--border-focus`. The alpha outline
+`rgb(42 120 158 / 28%)` is the exception and stays literal in two rules,
+because no token carries alpha — see [Known debt](#known-debt-in-the-token-layer).
 
 ### Motion
 
@@ -435,26 +435,38 @@ token's own role comment promises, so these are not test failures; moving them
 is a palette change with call sites behind it, which belongs to a migration
 phase rather than to this one.
 
-Four focus blues remain uncollapsed. `--focus-ring` resolves to the primary
-outline's own literal today; `#317fa6`, `#3b88b5`, `#3b83a6` and
-`rgb(47 120 158)` still appear on other focus states, and the alpha outline
-`rgb(42 120 158 / 28%)` has no primitive at all — it will need `color-mix()` or
-an alpha token. Folding them onto one ring is migration work.
+The four uncollapsed focus blues are gone; only the alpha outline
+`rgb(42 120 158 / 28%)` is still a literal, and it has no primitive at all — it
+will need `color-mix()` or an alpha token. That is the shape of the remaining
+colour debt generally: alpha. No tier-2 token carries any, so every
+`rgb(r g b / n%)` in the stylesheets — the two shadow stops, the mobile scrims,
+the white bar hovers, the selection wash — is still a literal.
 
-Eight legacy colour aliases have no call sites left anywhere in `app/`, `lib/`
-or `integration/` outside `app/styles` itself: `--orange`, `--yellow`,
-`--black`, `--blue-soft`, `--border-dark`, `--green-soft`, `--surface-raised`
-and `--surface-subtle`. The first three point at primitives rather than at
-semantic tokens because no semantic role fits them; the other five already
-point at their replacement. All eight can be deleted outright — the migration
-phase does not have to rewrite a single rule for them. The count is worth
-re-running rather than trusting: `grep -rn 'var(--NAME)' app lib integration |
-grep -v '^app/styles/'`.
+**Every legacy colour alias now has zero call sites.** All twenty-three are
+unread anywhere in `app/`, `lib/` or `integration/` outside `app/styles`
+itself, and `--shadow`'s last reader is a test that asserts it resolves
+identically to `--shadow-lg`. The block at the bottom of the light theme, and
+the `--shadow` declaration at the top of `app/globals.css`, can therefore be
+deleted outright without rewriting a single rule. Deleting them also means
+removing `LEGACY_COLOUR_TOKENS` from
+`integration/visual/css-contracts.spec.ts` and the `--shadow` row from
+`integration/visual/token-layer.visual.spec.ts` — those specs pin the aliases
+channel-by-channel, so they fail the moment the names stop resolving. That
+paired change is the next phase's first move, not a leftover from this one.
+The count is worth re-running rather than trusting:
+`grep -rn 'var(--NAME)' app lib integration | grep -v '^app/styles/'`.
 
-The fourteen that are still read are `--app-bar`, `--app-bar-hover`, `--blue`,
-`--canvas`, `--faint`, `--green`, `--green-strong`, `--muted`,
-`--product-bar`, `--red`, `--red-soft`, `--surface`, `--text` and
-`--text-strong`; `--muted` alone has thirty-three call sites.
+`npm run test:visual` is a weak check on colour and should not be read as one.
+`playwright.visual.config.ts` sets `maxDiffPixelRatio: 0.002` but no
+`threshold`, so Playwright's default per-pixel tolerance applies — generous
+enough in YIQ space that a token substitution can move a hue by tens of units
+on a channel and still pass. The suite proves that *no layout moved*, which is
+what it was built for; it does not prove that no colour moved. A colour change
+needs its own evidence, such as resolving both versions' tokens back to values
+and diffing them per declaration. Both Phase 2 slices did that separately and
+reported every substitution above a 24-unit threshold; that list, not the
+green suite, is why the deliberate changes below are known to be the only ones.
+
 
 ### Colour mappings that move a pixel
 
@@ -463,8 +475,12 @@ will deliberately change a rendered value. The colour half needs the same list,
 because six semantic tokens are pointed at the nearest palette step rather than
 at the exact literal they will replace. Each is a decision, not an accident —
 the palette is what makes a theme possible, and a step per one-off literal
-would defeat it — but each will move a baseline when Phase 2 substitutes it,
-and that churn should be read as expected rather than as a regression.
+would defeat it — but each was expected to move a baseline when Phase 2
+substituted it. In the event none did: the sweep landed all six and all 62
+visual tests passed with no baseline regenerated, because every distance below
+is smaller than the harness's per-pixel threshold. That is worth knowing before
+trusting the suite on a colour change — see the caveat under
+[Known debt](#known-debt-in-the-token-layer).
 
 | Token | Resolves to | Replaces | Distance |
 | --- | --- | --- | --- |
@@ -492,3 +508,29 @@ The categorical ramp has a second, older problem it inherits from
 A twelve-series legend therefore has two pairs that read as one colour.
 Widening the ramp is a design change rather than a refactor, so it is recorded
 here rather than made quietly.
+
+## Role gaps
+
+The sweep left 261 hex literals. They are not a residue to grind down one by
+one: they cluster into roles that tier 2 does not name, and the fix for each is
+a token, after which its call sites collapse together. Deciding these is the
+next phase's real work. The largest, by occurrences:
+
+| Missing role | Rough count | What is there today |
+| --- | --- | --- |
+| A secondary ink between `--fg-text` and `--fg-muted` | ~26 | gray-700/750 have no tier-2 name, so the main table body text keeps `#43525a` — an exact `--gray-700` |
+| `--status-*-edge` | ~30 | the wash and the solid exist, the mid border does not; tier 1 already names `--red-300`, `--amber-300`, `--blue-300`, `--green-300` for it |
+| `--status-*-strong` | ~40 | deep ink on a pale wash; `--status-error` is 58 units away and drops the contrast |
+| `--accent-bright` | ~25 | green-500/600 brand fills and success greens; `--accent` is green-700 and 30+ away |
+| Ink and surface for dark grounds | ~14 | `--fg-faint` and `--bg-inverse` are 27+ from the bar and sign-in inks |
+| `--border-subtle` | ~6 | tier 2 starts at gray-300; tier 1 has `--gray-200` "lightest usable divider" |
+| A `--syntax-*` family | 7 | the SPL inks are categorical, and the only categorical family is `--chart-series-*` |
+| Orange, purple, and a categorical neutral | ~16 | tier 1 has the hues; tier 2 names no role for them |
+| Alpha of any kind | 53 | needs `color-mix()` or an alpha token |
+
+Two literals cannot be reached by a token at all and need a different fix:
+`app/dashboards/operations-dashboard.module.css` carries `fill='%23526068'`
+inside a `data:` URI select arrow, where no `var()` resolves and no grep for
+`#` finds it — it wants a mask or an inline SVG; and `app/layout.tsx` keeps its
+`themeColor` literal deliberately, because the browser paints from it before
+any stylesheet loads.
