@@ -97,11 +97,10 @@ kebab-case class names.** There are no CSS modules, no `:global()`, no
 `styles.x` object, and no second way to scope a rule.
 
 A module's scoping came from a build-time hash, and the hash is precisely what
-made the rules invisible: `scripts/css-invariants.test.mjs` could not ask
-whether a module class was still reachable, `scripts/css-primitives.test.mjs`
-could not see a module's `.table` as a second implementation of the `.table`
-primitive, and `scripts/css-call-sites.test.mjs` could not tell a renamed class
-from a deleted one. The prefix does the same job in the open: `.reports-table`
+made the rules invisible: nothing could ask whether a module class was still
+reachable, nothing could see a module's `.table` as a second implementation of
+the `.table` primitive, and nothing could tell a renamed class from a deleted
+one. The prefix does the same job in the open: `.reports-table`
 cannot collide with `.table` for the same reason `.reports_table_a7f3` could
 not, and every check that reads the styling layer can now see it.
 
@@ -113,7 +112,8 @@ its base in the stylesheet and in the class attribute.
 `.stylelintrc.json` enforces both halves: `selector-class-pattern` rejects a
 camelCase class, and `selector-pseudo-class-no-unknown` no longer exempts
 `:global`/`:local`, so writing one is a lint error rather than a scoping tool.
-`scripts/css-invariants.test.mjs` fails if a `.module.css` file comes back.
+`scripts/style-invariants.test.mjs` fails if a `.module.css` file, a `:global()`
+selector or a `styles.x` read comes back.
 
 ### Responsive rules live beside their base rules
 
@@ -124,7 +124,7 @@ sections, so changing how one feature folded meant editing a file 2,000 lines
 away from the rules being folded. A feature and the way it folds are now one
 file.
 
-*Where inside that file* is not yet settled, and the layer ships two shapes:
+*Where inside that file* is not settled, and the layer ships two shapes:
 
 - **A `/* Responsive */` appendix at the file's foot**, holding every breakpoint
   that file uses, one block per step. Fourteen sheets do this — the `table`,
@@ -140,11 +140,11 @@ file.
 
 The appendix is easier to audit (one place per file lists every width that file
 reacts to); the per-section block is easier to read while editing one component.
-**Reconciling the two is Phase 5 work**, and it is a pure reorder within each
-file — the rule-parity check in `scripts/css-split-invariants.test.mjs` verifies
-exactly that, so whichever shape wins can be applied without a screenshot
-moving. Until then, follow the shape of the file you are editing rather than
-introducing a third.
+Neither has been chosen, and nothing enforces one over the other: **follow the
+shape of the file you are editing rather than introducing a third.** Reconciling
+them is a pure reorder within each file, and the rule-parity check in
+`scripts/style-invariants.test.mjs` verifies exactly that, so whichever shape is
+eventually picked can be applied without a screenshot moving.
 
 The order of the steps *within* a responsive section is load-bearing wherever
 they sit, and is always the same: base rules,
@@ -204,7 +204,7 @@ and the markup were in one namespace.
 * `visualization-panel--preview` was the opposite failure — markup asking for a
   class no rule matched, on every live preview. The class is removed from
   `visualization-panel.tsx`, and the new call-site invariant in
-  `scripts/css-call-sites.test.mjs` is what found it.
+  `scripts/style-invariants.test.mjs` is what found it.
 
 ## How to restyle X
 
@@ -244,7 +244,7 @@ routes disagree about the chrome's height. See
 chart reads, with `CATEGORY_COLORS` a slice of it rather than a second list.
 The four log levels are `--level-debug/-info/-warn/-error` and are not part of
 the ramp: a level describes the data, a status describes the outcome of a
-search. `scripts/css-token-sweep.test.mjs` holds both claims.
+search. `scripts/style-invariants.test.mjs` holds both claims.
 
 **A chart's size or stroke.** Not by selecting into it. `.time-series-chart`
 reads five custom properties with its shipped values as fallbacks —
@@ -319,7 +319,7 @@ that flips ends of the gray ramp with the theme; `--chrome-fg` is the ink on
 the two application bars, which are dark in both themes. A single token would
 have to be light and dark at once, and the first draft of the dark block —
 where one token carried both jobs — painted every bar label in the bar's own
-colour at a contrast ratio of 1.00:1. `scripts/token-grammar.test.mjs` now
+colour at a contrast ratio of 1.00:1. `scripts/style-invariants.test.mjs` now
 checks each foreground against every ground its role comment names, in both
 themes.
 
@@ -351,7 +351,7 @@ Two smaller rules follow from it:
 - Semantic tokens: `--<group>-<role>`, with the group prefix (`accent`, `bg`,
   `border`, `chart`, `chrome`, `fg`, `level`, `status`) shared by every token in
   it. Modifiers come last: `-hover`, `-bright`, `-strong`, `-soft`, `-subtle`,
-  `-alt`. `scripts/token-grammar.test.mjs` holds that list, so a new group is a
+  `-alt`. `scripts/style-invariants.test.mjs` holds that list, so a new group is a
   change to this document and to that test together.
 - No token name mentions a hue. `--status-error`, never `--status-red`.
 - One family, one kind of value. `var(--type-md)` is a length and
@@ -391,7 +391,7 @@ A theme restates tier 2 and leaves tier 1 alone.
 3. Point each token at a **primitive**, not at a literal. If the theme needs a
    shade the palette does not have, add the primitive first.
 4. Restate only what changes, and change everything the theme owes. Both halves
-   are checked by `scripts/token-grammar.test.mjs`: a restatement that resolves
+   are checked by `scripts/style-invariants.test.mjs`: a restatement that resolves
    to the light value is dead weight every future theme has to keep in step, and
    a themeable token the block forgets keeps its light primitive on a dark
    ground. A token the theme omits inherits the light default, which is right
@@ -443,7 +443,7 @@ one name per role.
 `--border` is not in the table: it survived the refactor as a tier-2 name
 rather than as an alias. The value each retired name carried is still pinned,
 channel by channel, against the role that carries it now — in
-`scripts/token-grammar.test.mjs`, `integration/visual/css-contracts.spec.ts`
+`scripts/style-invariants.test.mjs`, `integration/visual/css-contracts.spec.ts`
 and `integration/visual/token-layer.visual.spec.ts` — so the deletion cannot
 have moved a colour without a test saying so. A separate assertion holds that
 none of the names comes back.
@@ -849,7 +849,7 @@ migrated — including the four history cards in the Jobs dialog, whose call sit
 outlived its rules for one commit. `.history-state` is a ninth spelling and a
 tenth surface; it is recorded here so the contradiction is a known debt rather
 than a doc that does not match the tree.
-`scripts/css-call-sites.test.mjs` now fails when a class the consolidation
+`scripts/style-invariants.test.mjs` now fails when a class the consolidation
 retired is still built into a `className`, in an attribute or through an
 interpolation, so a rule cannot be deleted out from under a call site again.
 
@@ -1089,7 +1089,7 @@ identical rules photographs the same either way, and an unstyled element only
 shows up if a baseline happens to cover that state. Four checks stand in for
 the errors the language does not have.
 
-`scripts/css-primitives.test.mjs` asserts that each primitive — `.button`,
+`scripts/style-invariants.test.mjs` asserts that each primitive — `.button`,
 `.table`, `.table-wrap`, `.status`, `.badge`, `.wordmark`, `.drawer`,
 `.drawer-backdrop`, `.modal-card` — has exactly one unconditional base rule; a
 responsive or theme override under an at-rule is not a second base, because it
@@ -1108,8 +1108,8 @@ entries name the next consolidation: the knowledge- and lookup-manager form
 controls (four copies of one input rule), the uppercase field label (three),
 and muted body copy (four).
 
-`scripts/css-call-sites.test.mjs` walks the other direction — from every call
-site back to the styling layer, which is the direction a deletion gets wrong.
+The same file walks the other direction — from every call site back to the
+styling layer, which is the direction a deletion gets wrong.
 `scripts/css-retired-classes.json` lists the sixty-six global classes Phase 3
 deleted and the primitive that replaced each, and nothing in the repository may
 write one into a `className` or build one from an interpolation base. The same
@@ -1151,6 +1151,104 @@ viewport, on a page that owns the app catalog and on the one that does not.
 Merging two drawers into one moved an identity block, a label and two aria
 labels, and nothing in the suite had ever opened one.
 
+## Guardrails — what holds this in place
+
+Almost nothing on this page is visible to the toolchain by default. CSS reports
+no duplicate rule, no unmatched class, no dangling `var()` and no missing
+keyframe block; a screenshot renders one page at one width in one theme and is
+identical whether a rule won the cascade or was never needed; and a lint count
+falls when a rule is deleted exactly as it falls when a rule is migrated. Four
+gates stand in for the errors the language does not have.
+
+| Gate | Command | What it can see |
+| --- | --- | --- |
+| Structural invariants | `npm run test:frontend` | everything on this page that is a property of the source: token structure, naming, literals, cascade order, one-of-each-primitive, reachability |
+| Stylesheet lint | `npm run lint:css` | the per-declaration rules stylelint can express — the class-name pattern, the `:global`/`:local` ban, colour and media-feature policy. `.stylelintrc.json` is the policy, and [Known debt](#known-debt-in-the-token-layer) says what it exempts and why |
+| Computed-style contracts | `npm run test:contracts` | what a rule resolves to in a browser, at eight widths, without a committed baseline |
+| Screenshots | `npm run test:visual` | appearance, at two viewports |
+
+`make test` runs all four. CI runs the first and the third on every push;
+`npm run test:visual` is developer-local because only a `darwin` baseline set is
+committed, and the Makefile records where `npm run lint:css` currently sits.
+
+### The invariant suite
+
+`scripts/style-invariants.test.mjs` is the whole of the first gate: one file,
+one hundred tests, run by `npm run test:frontend`. It replaced seven files that
+asked overlapping questions through three parsing libraries — two of which
+exported a function of the same name meaning different things. All the reading
+and parsing now lives in `scripts/style-inventory.mjs`, so the test file never
+opens a stylesheet, which is the first thing it asserts about itself.
+
+The sections, in the order they appear in the file:
+
+1. **Reach.** One test asserts that every walk the rest of the file depends on
+   is populated — the stylesheets, the test files, the token layer, the import
+   list, the frozen rule set, the call sites. Every other assertion compares one
+   list against another and goes quiet when either side is empty, so this is the
+   test that stops the file passing by having nothing to look at.
+2. **The token layer.** One declaration site per name; every reference inside
+   the layer resolving inside it; no colour literal in a token that names
+   another token; a dark block that redefines only names the light block
+   declares; nothing outside `tokens-color.css` reading a tier-1 primitive; and
+   no stylesheet outside `app/styles/tokens-*.css` declaring a token of its own,
+   bar the seven component knobs listed in the test.
+3. **The naming grammar.** Every name parses under [Naming](#naming); no
+   semantic name mentions a hue; a step number really does say how light a
+   primitive is (measured in CIE L\*); a name family holds one kind of value; a
+   semantic token points at a primitive and a primitive holds a literal; two
+   roles in one group never resolve to the same colour; the dark theme restates
+   everything it must and nothing it need not; and every text pairing a token's
+   own role comment promises keeps WCAG AA in both themes.
+4. **The literal sweep.** The colour and scale literals outside the token layer
+   must equal `scripts/css-literal-debt.json` exactly — a new literal fails, and
+   so does a ledger row whose literal has been migrated. Separately: no literal
+   that a token already spells exactly, no colour hidden in a percent-encoded
+   `data:` URI beyond the one recorded site, no colour literal in TypeScript
+   beyond the browser theme colour, and every token TypeScript writes into the
+   DOM declared by the layer.
+5. **The stylesheet set.** `app/styles/index.css` imports every application
+   stylesheet exactly once; `app/layout.tsx` is the only file that pulls a
+   stylesheet in; the entry point declares no rule of its own; no `.module.css`,
+   `:global()`, `:local()`, `composes` or `styles.x` read comes back; no test
+   file reads a stylesheet's characters, however the path is composed; and the
+   load order is tokens, base, the six primitives, the features, then
+   `interaction.css` last.
+6. **Parity.** `scripts/css-phase3-monolith.json` freezes the rule set the
+   single application stylesheet stated at the commit before it was split. Every
+   rule is still stated once by the split set, unchanged, and every repeated
+   selector keeps the order that decides its value.
+7. **Where a responsive rule lives.** No `@media` block overrides base rules
+   that live in another file, `interaction.css` still earns its exemption from
+   that check, and every run of media queries follows the documented order.
+8. **One implementation of each primitive**, plus the shared animations and the
+   duplicate-declaration check described under
+   [What keeps one primitive from becoming two again](#what-keeps-one-primitive-from-becoming-two-again).
+9. **Reachability, in both directions.** Every rule still has a caller, and
+   every class the markup asks for still has a rule.
+10. **The parsers underneath**, pinned against the shapes that have already
+    fooled a simpler implementation — an escaped quote, a nested template, a
+    commented-out rule, a value carrying its own commas and colons, a path
+    composed inside a `readFile` call.
+
+### The ledgers
+
+Five JSON files record what the invariants deliberately allow. Each is compared
+against the tree in **both** directions, which is the property that makes them
+ratchets rather than exemption lists: an entry whose subject has been fixed
+fails the suite just as loudly as an unrecorded violation.
+
+| File | Records |
+| --- | --- |
+| `scripts/css-literal-debt.json` | every colour and scale literal left outside the token layer |
+| `scripts/css-retired-classes.json` | the sixty-six classes the consolidation deleted, each with its replacement |
+| `scripts/css-duplicate-blocks.json` | the restatements left in place, each with the primitive that would otherwise own it |
+| `scripts/css-dynamic-classes.json` | classes that only ever reach the DOM at runtime |
+| `scripts/css-phase3-monolith.json` | the frozen pre-split rule set, and the only edits the split did not make verbatim |
+
+Adding a row is therefore a deliberate act with a reviewer reading it, and
+paying one off is a deletion the suite demands rather than one nobody notices.
+
 ## Known debt in the token layer
 
 `.stylelintrc.json` carries an `overrides` entry exempting
@@ -1171,7 +1269,7 @@ colour changes every elevated surface.
 Three text pairings are short of WCAG AA (4.5:1) and are inherited rather than
 introduced: `--fg-faint` on `--bg-surface` is 3.10:1 in the light theme and
 3.90:1 in the dark, and `--fg-link` on `--bg-canvas` is 4.47:1 — three
-hundredths short. `scripts/token-grammar.test.mjs` checks only the pairings a
+hundredths short. `scripts/style-invariants.test.mjs` checks only the pairings a
 token's own role comment promises, so these are not test failures; moving them
 is a palette change with call sites behind it, which belongs to a migration
 phase rather than to this one.
@@ -1230,7 +1328,7 @@ loosened the budget to tighten a `threshold` the suite now sets itself, so it
 folds back into `expectRegionScreenshot`.
 
 Two checks carry the colour half that a screenshot still cannot:
-`scripts/css-token-sweep.test.mjs` compares the surviving literals against
+`scripts/style-invariants.test.mjs` compares the surviving literals against
 `scripts/css-literal-debt.json` by set equality in both directions and fails on
 any literal a token already spells exactly, and
 `integration/visual/token-sweep.visual.spec.ts` walks every element of every

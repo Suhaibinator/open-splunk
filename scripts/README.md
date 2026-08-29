@@ -42,40 +42,37 @@ compiler alias/state reuse and downstream key cleanup are covered separately
 by compiler assertions and pinned `EXPLAIN` tests. Benchmark output is
 evidence, not a timing gate.
 
-`css-inventory.mjs` parses the stylesheets and the code that names their
-classes. It is a library rather than a test so `css-invariants.test.mjs` can
-assert on stylesheet structure without reading a stylesheet itself, which is
-one of the invariants it enforces. `css-dynamic-classes.json` records the
-global classes that only ever exist at runtime.
+`style-invariants.test.mjs` is every structural invariant of the styling layer,
+in one file of ten sections: the token layer and its naming grammar, the literal
+ledger, one entry point and one cascade order, parity with the stylesheet the
+split replaced, where a responsive rule lives, one implementation of each
+primitive, class reachability in both directions, and pins on the parsers
+underneath. None of it is visible to a compiler, a lint count or a screenshot.
+[Theming](../docs/theming.md#guardrails-what-holds-this-in-place) describes each
+section and what it can see.
 
-`css-primitives.test.mjs` keeps the Phase 3 consolidation from growing back:
-each primitive has exactly one base rule, each shared animation exactly one
-`@keyframes` block, and no two rules state the same four or more declarations.
-`css-duplicate-blocks.json` records the restatements the phase deliberately
-left, each with the primitive that would otherwise own it; an entry goes stale
-the moment either side of the duplication changes.
+`style-inventory.mjs` does all the reading and parsing, and is a library rather
+than a test file so the suite can assert on stylesheet structure without opening
+a stylesheet itself — which is one of the invariants it enforces.
 
-`css-split-invariants.test.mjs` holds the Phase 4 split together: one entry
-point, every stylesheet imported exactly once, no CSS module or `:global()`
-left, and each `@media` block in the file that owns the base rules it
-overrides. It also restates the no-stylesheet-text rule for a path composed
-inside the read call, a shape `css-invariants.test.mjs` cannot see because it
-reads a call's first argument up to the first comma.
-`css-split-inventory.mjs` does its reading, for the same reason
-`css-inventory.mjs` does. `css-phase3-monolith.json` freezes the rule set
-`app/globals.css` stated at the commit before the split, so the move is checked
-rather than believed: a rule that was dropped, copied, or edited on its way out
-fails with its own text, and the four rules the phase deliberately rewrote are
-recorded with the reason. It is a one-phase provenance proof and should be
-deleted with the test that reads it once a later phase rewrites those rules on
-purpose.
+Five JSON ledgers record what the suite deliberately allows, each compared
+against the tree in both directions so that paying a row off fails as loudly as
+adding an unrecorded one:
 
-`css-call-sites.test.mjs` walks the other way, from every call site to the
-styling layer: no class attribute, helper or `styles.*` read may name something
-no rule matches, and every `Modal` import must resolve to `app/_components`.
-`css-retired-classes.json` lists the classes the consolidation deleted and the
-primitive that replaced each one. Nothing in the toolchain reports an unmatched
-class, so this is the only place a deletion that outran its markup shows up.
+- `css-literal-debt.json` — every colour and scale literal outside the token
+  layer.
+- `css-retired-classes.json` — the classes the consolidation deleted and the
+  primitive that replaced each. Nothing in the toolchain reports an unmatched
+  class, so this is the only place a deletion that outran its markup shows up.
+- `css-duplicate-blocks.json` — the restatements deliberately left, each with
+  the primitive that would otherwise own it; an entry goes stale the moment
+  either side of the duplication changes.
+- `css-dynamic-classes.json` — global classes that only ever exist at runtime.
+- `css-phase3-monolith.json` — the rule set the single application stylesheet
+  stated at the commit before it was split, so the move is checked rather than
+  believed: a rule dropped, copied or edited on its way out fails with its own
+  text. It is a one-phase provenance proof and should be deleted with the tests
+  that read it once a later phase rewrites those rules on purpose.
 
 `safety-net.test.mjs` checks that the Phase 0 safety net cannot stop running
 unnoticed: every unit test file is named in this directory's hardcoded runner
