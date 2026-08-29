@@ -229,11 +229,14 @@ test("collector event is visible through the compiled backend UI", async ({ page
   const eventList = page.getByTestId("event-list");
   const finalRows = eventList.locator('[data-testid^="event-row-"]:not(.event-row--preview)');
   await expect(finalRows).toHaveCount(expectedRows, { timeout });
+  // Final backend results land collapsed: a collapsed row shows the raw event
+  // and its host/source/sourcetype chips, while typed fields - including the
+  // lookup enrichment - render only once a row is expanded through the row
+  // expander or the Rows menu below.
   await expect.poll(
     () => finalRows.evaluateAll((rows) => rows.filter((row) => row.classList.contains("expanded")).length),
     { timeout },
   ).toBe(0);
-  await expect(eventList).toContainText(expectedText, { timeout });
   await expect(eventList.locator(".event-row--preview")).toHaveCount(0);
 
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin });
@@ -251,6 +254,9 @@ test("collector event is visible through the compiled backend UI", async ({ page
     () => finalRows.evaluateAll((rows) => rows.filter((row) => row.classList.contains("expanded")).length),
     { timeout },
   ).toBe(expectedRows);
+  // The expanded rows must carry the typed lookup enrichment the backend
+  // vertical joined at search time; it is not part of the raw event text.
+  await expect(eventList).toContainText(expectedText, { timeout });
 
   const rawPage = await finalRows.locator(".event-raw").allTextContents();
   await rowsMenuTrigger.click();

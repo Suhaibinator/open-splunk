@@ -48,7 +48,8 @@ host files during cleanup.
    administrator inspection;
 12. launch Chromium against the UI embedded in that compiled server, run an SPL
    lookup search, observe its same-origin protobuf HTTP and binary WebSocket
-   traffic, and verify the expanded final event rows contain the typed lookup
+   traffic, confirm the final event rows land collapsed, expand the page from
+   the Rows menu, and verify the expanded rows contain the typed lookup
    enrichment;
 13. create and poll a JSON Lines export, redeem its one-time bearer grant over
    the raw download route, validate lookup-enriched artifact headers/content,
