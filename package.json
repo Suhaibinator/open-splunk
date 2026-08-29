@@ -14,6 +14,7 @@
     "dev": "next dev --turbopack",
     "build": "node scripts/build-ui.mjs",
     "lint": "oxlint .",
+    "test:contracts": "playwright test --config=playwright.contracts.config.ts",
     "test:frontend": "node scripts/test-frontend.mjs",
     "test:visual": "playwright test --config=playwright.visual.config.ts",
     "check:docs": "node scripts/check-docs.mjs",
