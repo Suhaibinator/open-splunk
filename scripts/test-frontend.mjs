@@ -14,6 +14,7 @@ const scriptTests = [
   "css-call-sites.test.mjs",
   "css-invariants.test.mjs",
   "css-primitives.test.mjs",
+  "css-split-invariants.test.mjs",
   "css-token-sweep.test.mjs",
   "token-layer.test.mjs",
   "token-grammar.test.mjs",

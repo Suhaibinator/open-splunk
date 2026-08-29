@@ -55,6 +55,21 @@ each primitive has exactly one base rule, each shared animation exactly one
 left, each with the primitive that would otherwise own it; an entry goes stale
 the moment either side of the duplication changes.
 
+`css-split-invariants.test.mjs` holds the Phase 4 split together: one entry
+point, every stylesheet imported exactly once, no CSS module or `:global()`
+left, and each `@media` block in the file that owns the base rules it
+overrides. It also restates the no-stylesheet-text rule for a path composed
+inside the read call, a shape `css-invariants.test.mjs` cannot see because it
+reads a call's first argument up to the first comma.
+`css-split-inventory.mjs` does its reading, for the same reason
+`css-inventory.mjs` does. `css-phase3-monolith.json` freezes the rule set
+`app/globals.css` stated at the commit before the split, so the move is checked
+rather than believed: a rule that was dropped, copied, or edited on its way out
+fails with its own text, and the four rules the phase deliberately rewrote are
+recorded with the reason. It is a one-phase provenance proof and should be
+deleted with the test that reads it once a later phase rewrites those rules on
+purpose.
+
 `css-call-sites.test.mjs` walks the other way, from every call site to the
 styling layer: no class attribute, helper or `styles.*` read may name something
 no rule matches, and every `Modal` import must resolve to `app/_components`.
