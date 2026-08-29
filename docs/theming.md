@@ -708,6 +708,57 @@ across from `app/admin`, `app/activity` and `app/reports`. Its CSS family is
 unchanged apart from a duplicate set of mobile `.modal-card` overrides, which
 sat at the same 760px breakpoint as the full-screen ones that shadowed them.
 
+## What keeps one primitive from becoming two again
+
+Nothing in the toolchain reports the two failures a consolidation can have.
+CSS has no duplicate-rule error, so a second `.button` base compiles and one of
+the two silently wins on file order; and an unmatched class is not an error
+anywhere, so markup left behind by a deleted rule renders with no styling and
+raises nothing. A screenshot sees neither: a page that uses only one of two
+identical rules photographs the same either way, and an unstyled element only
+shows up if a baseline happens to cover that state. Four checks stand in for
+the errors the language does not have.
+
+`scripts/css-primitives.test.mjs` asserts that each primitive — `.button`,
+`.table`, `.table-wrap`, `.status`, `.badge`, `.wordmark`, `.drawer`,
+`.drawer-backdrop`, `.modal-card` — has exactly one unconditional base rule; a
+responsive or theme override under an at-rule is not a second base, because it
+can only apply where the base already does. The same file asserts that `spin`
+and `pulse-ring` are each declared once, that the six keyframe blocks they
+replaced stay gone, and that every `animation` names a block that exists — a
+dangling animation name renders as no animation at all, in silence.
+
+It also asserts that no two rules state the same four or more declarations.
+`scripts/css-duplicate-blocks.json` records the restatements this phase
+deliberately left, each with the primitive that would otherwise own it. An
+entry is keyed by both the declarations and the exact set of rules stating
+them, so it goes stale — and the test fails — the moment either side moves.
+That is what stops the record drifting into a blanket exemption. The largest
+entries name the next consolidation: the knowledge- and lookup-manager form
+controls (four copies of one input rule), the uppercase field label (three),
+and muted body copy (four).
+
+`scripts/css-call-sites.test.mjs` walks the other direction — from every call
+site back to the styling layer, which is the direction a deletion gets wrong.
+`scripts/css-retired-classes.json` lists the sixty-six global classes this
+phase deleted and the primitive that replaced each, and nothing in the
+repository may write one into a `className`, build one from an interpolation
+base, or read one off a CSS module. The same file pins the class-coupled
+selectors in `integration/browser_vertical.spec.ts`: that spec is driven by the
+Go end-to-end harness against a compiled build, so a class it can no longer
+find surfaces as a timeout minutes into a run, far from the rename that caused
+it.
+
+`integration/visual/chrome-invariants.visual.spec.ts` covers the two things
+about the chrome that are behavioural rather than visual. Every route that
+renders through `ProductShell` must put its content below the same chrome — one
+shell means one height, and a route measuring differently is rendering a bar of
+its own again. And the moved `Modal` must still trap focus, still mark the bars
+behind it inert, still lock the page scroll, and still return focus to whatever
+opened it when Escape closes it; a dialog whose surface stopped being installed
+photographs exactly like one whose surface works. The spec takes no
+screenshots, so it adds no baselines, and it runs under both viewport projects.
+
 ## Known debt in the token layer
 
 `.stylelintrc.json` carries an `overrides` entry exempting
