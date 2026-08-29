@@ -10,7 +10,7 @@ import { searchLaunchHref } from "@/lib/search/launch-url";
 
 import { AppIcon, type AppIconName } from "../_components/app-icon";
 import { PageHeading } from "../_components/product-shell";
-import { Modal } from "../search-workspace/modal";
+import { Modal } from "../_components/modal";
 import { ADMIN_SECTION_QUERY_PARAMETER, adminSectionPath, resolveAdminSection } from "./admin-navigation";
 import { BackendAdminConsole } from "./backend-admin-console";
 

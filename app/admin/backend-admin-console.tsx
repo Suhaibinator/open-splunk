@@ -39,7 +39,7 @@ import { BackendResourceState } from "../_components/backend-resource-state";
 import { AppIcon, type AppIconName } from "../_components/app-icon";
 import { formatMediumDateTime } from "../_components/date-format";
 import { PageHeading } from "../_components/product-shell";
-import { Modal } from "../search-workspace/modal";
+import { Modal } from "../_components/modal";
 import { AppsAdminPanel, CollectorFleetPanel } from "./admin-resource-panels";
 import { ADMIN_SECTION_QUERY_PARAMETER, adminSectionPath, resolveAdminSection } from "./admin-navigation";
 import { KnowledgeManagerGate } from "./knowledge-manager-gate";

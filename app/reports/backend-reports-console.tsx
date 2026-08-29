@@ -31,7 +31,7 @@ import { BackendResourceState } from "../_components/backend-resource-state";
 import { AppIcon } from "../_components/app-icon";
 import { formatMediumDateTime } from "../_components/date-format";
 import { PageHeading } from "../_components/product-shell";
-import { Modal } from "../search-workspace/modal";
+import { Modal } from "../_components/modal";
 import styles from "./reports.module.css";
 
 type SavedSearchScope = "all" | "private" | "app" | "global";

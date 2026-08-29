@@ -34,7 +34,7 @@ import {
 import { BackendResourceState } from "../_components/backend-resource-state";
 import { AppIcon } from "../_components/app-icon";
 import { PageHeading } from "../_components/product-shell";
-import { Modal } from "../search-workspace/modal";
+import { Modal } from "../_components/modal";
 import {
   formatActivityCount,
   formatActivityDate,

@@ -43,11 +43,21 @@
 .status-icon--neutral { background: var(--status-neutral); }
 
 .app-icon--spin {
-  animation: app-icon-spin 900ms linear infinite;
+  animation: spin 900ms linear infinite;
 }
 
-@keyframes app-icon-spin {
+/* Shared animations
+   One rotation and one attention ring for the whole product. `pulse-ring`
+   paints an optional inner ring through --pulse-ring-core so a dot that
+   already carries a solid outline keeps it while the halo breathes. */
+@keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+@keyframes pulse-ring {
+  0%,
+  100% { box-shadow: var(--pulse-ring-core, 0 0 #0000), 0 0 0 0 rgb(46 135 183 / 30%); }
+  50% { box-shadow: var(--pulse-ring-core, 0 0 #0000), 0 0 0 4px rgb(46 135 183 / 0%); }
 }
 
 html {
@@ -1233,13 +1243,8 @@ pre {
 
 .job-state-icon.state-running,
 .mini-status.state-running {
-  animation: pulse 1.25s infinite;
+  animation: pulse-ring 1.25s infinite;
   background: var(--status-info);
-}
-
-@keyframes pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgb(46 135 183 / 30%); }
-  50% { box-shadow: 0 0 0 4px rgb(46 135 183 / 0%); }
 }
 
 .job-result-copy {
@@ -1369,10 +1374,12 @@ pre {
 }
 
 .backend-preview-status__pulse {
+  --pulse-ring-core: 0 0 0 1px var(--status-info);
+
   background: var(--status-info);
   border: 2px solid #d4e9f3;
   border-radius: 50%;
-  box-shadow: 0 0 0 1px var(--status-info);
+  box-shadow: var(--pulse-ring-core);
   flex: 0 0 auto;
   height: 6px;
   width: 6px;
@@ -1406,7 +1413,7 @@ pre {
 .backend-preview-status[data-state="live"] .backend-preview-status__pulse,
 .backend-preview-status[data-status="waiting"] .backend-preview-status__pulse,
 .backend-preview-status[data-status="live"] .backend-preview-status__pulse {
-  animation: backend-preview-pulse 1.8s ease-in-out infinite;
+  animation: pulse-ring 1.8s ease-in-out infinite;
 }
 
 .backend-preview-status.is-paused,
@@ -1459,12 +1466,6 @@ pre {
   background: #bf8122;
   border-color: #f7e3bb;
   box-shadow: 0 0 0 1px #bf8122;
-}
-
-@keyframes backend-preview-pulse {
-  0%,
-  100% { box-shadow: 0 0 0 1px var(--status-info), 0 0 0 2px rgb(59 136 173 / 0%); }
-  50% { box-shadow: 0 0 0 1px var(--status-info), 0 0 0 5px rgb(59 136 173 / 15%); }
 }
 
 .result-tabs {
@@ -2534,7 +2535,7 @@ pre {
 
 .job-empty-results--loading > span,
 .job-empty-results--running > span {
-  animation: backend-state-spin 1.1s linear infinite;
+  animation: spin 1.1s linear infinite;
   background: var(--status-info-soft);
   border-color: var(--border);
   color: var(--fg-link);
@@ -4842,7 +4843,7 @@ pre {
 }
 
 .status-label--complete i { background: var(--status-success); }
-.status-label--running i { background: var(--status-info); animation: status-pulse 1.3s ease-in-out infinite; }
+.status-label--running i { background: var(--status-info); animation: pulse-ring 1.3s ease-in-out infinite; }
 .status-label--failed i,
 .status-label--error i { background: var(--status-error); }
 .status-label--warning i { background: var(--status-warning); }
@@ -4851,10 +4852,6 @@ pre {
 .status-dot--running { background: var(--status-info); }
 .status-dot--warning { background: var(--status-warning); }
 .status-dot--error { background: var(--status-error); }
-
-@keyframes status-pulse {
-  50% { box-shadow: 0 0 0 4px rgb(47 134 179 / 14%); }
-}
 
 /* Home */
 .home-hero { align-items: center; margin-bottom: var(--space-4); }
@@ -5064,10 +5061,9 @@ pre {
 .signin-help-notice span { align-items: center; background: var(--status-info); border-radius: 50%; color: var(--fg-inverse); display: flex; flex: 0 0 16px; height: 16px; justify-content: center; width: 16px; }
 .signin-submit { align-items: center; background: var(--accent); border: 1px solid var(--accent-hover); border-radius: var(--radius-sm); color: var(--fg-inverse); display: flex; font-weight: 600; gap: 7px; height: 41px; justify-content: center; width: 100%; }
 .signin-submit:hover { background: var(--accent-hover); }
-.signin-submit i { animation: spinner 700ms linear infinite; border: 2px solid rgb(255 255 255 / 35%); border-radius: 50%; border-top-color: var(--fg-inverse); height: 14px; width: 14px; }
+.signin-submit i { animation: spin 700ms linear infinite; border: 2px solid rgb(255 255 255 / 35%); border-radius: 50%; border-top-color: var(--fg-inverse); height: 14px; width: 14px; }
 .signin-card form .signin-submit { margin-top: 18px; }
 .signin-submit + .signin-preview-link { background: transparent; margin-top: 10px; width: 100%; }
-@keyframes spinner { to { transform: rotate(360deg); } }
 .signin-divider { border-top: 1px solid var(--border); margin: 23px 0; position: relative; }
 .signin-divider span { background: var(--bg-canvas); color: var(--fg-muted); font-size: var(--type-xs); left: 50%; padding: 0 9px; position: absolute; top: 0; transform: translate(-50%, -50%); }
 .signin-preview-link { align-items: center; border: 1px solid var(--border-strong); display: flex; font-size: var(--type-xs); font-weight: 600; height: 38px; justify-content: center; text-decoration: none; }
@@ -6137,8 +6133,7 @@ button.knowledge-manager__row:hover { background: var(--bg-canvas); }
 .backend-resource-state--empty > span { background: var(--status-neutral-soft); color: var(--fg-secondary); }
 .backend-resource-state--loading { border-left: 4px solid var(--status-info); }
 .backend-resource-state--loading > span { background: var(--status-info-soft); color: var(--status-info-strong); }
-.backend-resource-state--loading > span { animation: backend-state-spin 1.1s linear infinite; }
-@keyframes backend-state-spin { to { transform: rotate(360deg); } }
+.backend-resource-state--loading > span { animation: spin 1.1s linear infinite; }
 .backend-list-notice {
   background: var(--status-warning-soft);
   border: 1px solid #ead29d;
@@ -6864,18 +6859,6 @@ button.knowledge-manager__row:hover { background: var(--bg-canvas); }
 
   .visualization-panel .chart-toggle button {
     padding-inline: 5px;
-  }
-
-  .modal-layer {
-    padding: var(--space-5) 10px;
-  }
-
-  .modal-card {
-    width: 100%;
-  }
-
-  .modal-body {
-    max-height: calc(100vh - 155px);
   }
 
   .time-picker-layout {

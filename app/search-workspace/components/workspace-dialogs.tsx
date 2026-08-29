@@ -10,7 +10,7 @@ import {
   formatExactNumericText,
   formatNonNegativeIntegerQuantity,
 } from "../formatters";
-import { Modal } from "../modal";
+import { Modal } from "../../_components/modal";
 import type {
   DialogActionState,
   ExportArtifactDetails,

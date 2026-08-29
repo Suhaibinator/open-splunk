@@ -469,6 +469,30 @@ carry seven of them — 1120px, 800px, 650px, 520px, 430px, 420px and one
 `max-height: 650px` — and folding each onto the nearest step is part of the
 migration, not of this phase.
 
+## Consolidated primitives — tables, chrome and overlays
+
+A token layer only makes a theme editable if each primitive has one
+implementation to point it at. Where the stylesheet carried the same widget
+two or three times, the copies have been folded into one and the consumers
+migrated. Consolidation is not free: two copies that had drifted apart cannot
+both survive, so each fold below records the appearance that was chosen and
+the one that was given up. The visual baselines under
+`integration/visual/__screenshots__/` were re-recorded for exactly these
+changes and for nothing else.
+
+### Animations
+
+| One keyframe | Replaced | Deliberate change |
+| --- | --- | --- |
+| `spin` | `app-icon-spin`, `spinner`, `backend-state-spin` | none — all three were `to { transform: rotate(360deg); }` |
+| `pulse-ring` | `pulse`, `status-pulse`, `backend-preview-pulse` | the running status dot (`.status-label--running i`) used to hold a steady 4px glow at mid-cycle; it now emits the same expanding, fading halo as the other two. The backend-preview dot's halo grows to 4px instead of 5px and fades from 30% rather than 15% |
+
+`pulse-ring` paints an optional inner ring from `--pulse-ring-core`, which
+defaults to a fully transparent shadow. `.backend-preview-status__pulse`
+declares that property once and reads it both for its resting `box-shadow` and,
+through the keyframe, for its animated one — so the solid 1px ring that used to
+force a second copy of the keyframe is now a value rather than a rule.
+
 ## Known debt in the token layer
 
 `.stylelintrc.json` carries an `overrides` entry exempting

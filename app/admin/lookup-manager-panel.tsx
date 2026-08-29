@@ -26,7 +26,7 @@ import { createErrorMessage } from "@/lib/error-message";
 import { BackendResourceState } from "../_components/backend-resource-state";
 import { AppIcon } from "../_components/app-icon";
 import { formatMediumDateTime } from "../_components/date-format";
-import { Modal } from "../search-workspace/modal";
+import { Modal } from "../_components/modal";
 import { joinedPatterns, lines } from "./knowledge-lookup-text";
 import type { KnowledgeManagerAppOption } from "./knowledge-manager-feature";
 import {
