@@ -112,16 +112,33 @@ func New(config Config) (*zap.Logger, error) {
 	).Named(service), nil
 }
 
-// Sync flushes buffered logger output. Character devices commonly reject
-// fsync; those expected stderr errors do not make an otherwise clean process
-// shutdown fail.
+// Sync flushes buffered logger output. Console sinks - terminals, pipes,
+// /dev/null - cannot be flushed with fsync, and rejecting the call is the
+// normal answer rather than a lost-output failure, so those errors are
+// suppressed. Durability failures on a real file, such as EIO or ENOSPC, are
+// not in that set and still propagate.
 func Sync(logger *zap.Logger) error {
 	if logger == nil {
 		return nil
 	}
 	err := logger.Sync()
-	if errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.ENOTTY) {
+	if err == nil || isUnsyncableSink(err) {
 		return nil
 	}
 	return err
+}
+
+// isUnsyncableSink reports whether err means the sink does not support fsync
+// rather than that buffered output was lost. Operating systems disagree on the
+// errno: Linux reports EINVAL for pipes and for character devices with no
+// fsync operation, macOS reports EBADF for pipes and ENODEV for /dev/null, and
+// other platforms report ENOTTY or ENOTSUP. A sink whose descriptor is already
+// closed likewise has nothing left to flush.
+func isUnsyncableSink(err error) bool {
+	return errors.Is(err, syscall.EINVAL) ||
+		errors.Is(err, syscall.ENOTTY) ||
+		errors.Is(err, syscall.EBADF) ||
+		errors.Is(err, syscall.ENODEV) ||
+		errors.Is(err, syscall.ENOTSUP) ||
+		errors.Is(err, os.ErrClosed)
 }

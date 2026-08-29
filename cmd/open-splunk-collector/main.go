@@ -134,7 +134,7 @@ func writeBuildIdentity(output io.Writer) error {
 }
 
 // runCollector builds and runs the daemon until a termination signal arrives.
-func runCollector(args []string) (exitCode int) {
+func runCollector(args []string) int {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	path := fs.String("config", defaultConfigPath, "path to the collector configuration file")
 	if err := fs.Parse(args); err != nil {
@@ -169,12 +169,12 @@ func runCollector(args []string) (exitCode int) {
 		fmt.Fprintf(os.Stderr, "configure logging: %v\n", err)
 		return 1
 	}
+	// Flushing the process logger is best effort. A sink that refuses to
+	// flush is reported on stderr but must not turn a clean collector run
+	// into a failure.
 	defer func() {
 		if err := logging.Sync(logger); err != nil {
 			fmt.Fprintf(os.Stderr, "sync logger: %v\n", err)
-			if exitCode == 0 {
-				exitCode = 1
-			}
 		}
 	}()
 
