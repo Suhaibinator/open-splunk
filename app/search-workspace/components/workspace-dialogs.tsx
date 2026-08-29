@@ -199,6 +199,7 @@ interface WorkspaceDialogsProps {
   onRenameSavedSearch: () => void;
   onRequestRenameSavedSearch: (id: string) => void;
   onRequestDeleteSavedSearch: (id: string) => void;
+  onCopyExportPage: () => void;
   onDownloadExport: (artifact: ExportArtifactDetails) => void;
   onExportFieldToggle: (field: string) => void;
   onExportFormatChange: (format: "csv" | "jsonl") => void;
@@ -281,6 +282,7 @@ export function WorkspaceDialogs({
   onRenameSavedSearch,
   onRequestRenameSavedSearch,
   onRequestDeleteSavedSearch,
+  onCopyExportPage,
   onDownloadExport,
   onExportFieldToggle,
   onExportFormatChange,
@@ -635,10 +637,14 @@ export function WorkspaceDialogs({
     const exportAvailable = exportState.status === "configure" ? exportState.available : true;
     const exportRetryable = exportState.status === "error" ? exportState.retryable : true;
     const canChooseFormat = !exportPending && !exportReady;
-    const canConfigure = exportAvailable && canChooseFormat;
-    const canCreate = canConfigure
+    const canConfigure = canChooseFormat;
+    const canCreate = exportAvailable
+      && canConfigure
       && exportFields.length > 0
       && exportRetryable;
+    const canCopyPage = canChooseFormat
+      && exportFields.length > 0
+      && displayedExportRows > 0;
     const maximumRows = exportState.maximumRows === null || exportState.maximumRows === undefined
       ? "Not advertised"
       : formatNonNegativeIntegerQuantity(exportState.maximumRows);
@@ -669,6 +675,9 @@ export function WorkspaceDialogs({
         footer={exportReady
           ? <div className={styles.exportActions}>
               <button className="button secondary" type="button" disabled={downloadPending} onClick={onResetExport}>New export</button>
+              <button className="button secondary" type="button" aria-label="Copy page to clipboard" disabled={downloadPending || displayedExportRows === 0} onClick={onCopyExportPage}>
+                <AppIcon name="copy" size="sm" /> Copy page
+              </button>
               <button
                 className="button primary"
                 type="button"
@@ -693,12 +702,18 @@ export function WorkspaceDialogs({
                 </button>
                 <button className="button secondary" type="button" disabled={exportCancelPending} onClick={closeExport}>Continue in background</button>
               </div>
-            : <div className={styles.exportActions}><button className="button secondary" type="button" onClick={closeExport}>Cancel</button><button className="button primary" type="button" disabled={!canCreate} onClick={onPrepareExport}>{exportFailed ? exportRetryable ? "Retry export" : "Export unavailable" : "Create export"}</button></div>}
+            : <div className={styles.exportActions}>
+                <button className="button secondary" type="button" onClick={closeExport}>Cancel</button>
+                <button className="button secondary" type="button" aria-label="Copy page to clipboard" disabled={!canCopyPage} onClick={onCopyExportPage}>
+                  <AppIcon name="copy" size="sm" /> Copy page
+                </button>
+                <button className="button primary" type="button" disabled={!canCreate} onClick={onPrepareExport}>{exportFailed ? exportRetryable ? "Retry export" : "Export unavailable" : "Create export"}</button>
+              </div>}
       >
         <div className="form-stack" data-testid="export-dialog" aria-busy={exportPending || downloadPending || exportCancelPending}>
           {exportState.status === "configure" && !exportState.available ? (
             <aside className={styles.capabilityNotice}>
-              <strong>Export unavailable</strong>
+              <strong>File export unavailable</strong>
               <span>{exportState.unavailableReason || "This data source did not advertise an export capability for the selected format."}</span>
             </aside>
           ) : null}
@@ -755,6 +770,7 @@ export function WorkspaceDialogs({
                   {maximumBytes === null ? null : <> · {maximumBytes} byte limit</>}
                 </small>
               </div>
+              <p className={styles.clipboardHint}><AppIcon name="copy" size="sm" /> Copy page uses the displayed rows and selected columns, formatted as a tab-separated table.</p>
               {exportPending ? (
                 <div className={styles.exportProgress}>
                   <progress aria-label="Server export progress" max={100} value={percentComplete ?? undefined} />

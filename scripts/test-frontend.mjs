@@ -43,6 +43,7 @@ const testFiles = [
   path.join("app", "search-workspace", "live-preview.test.ts"),
   path.join("app", "search-workspace", "progress-revision.test.ts"),
   path.join("app", "search-workspace", "categorical-interaction.test.ts"),
+  path.join("app", "search-workspace", "clipboard-export.test.ts"),
   path.join("app", "search-workspace", "components", "export-presentation.test.tsx"),
   path.join("app", "search-workspace", "statistics-sparkline.test.ts"),
   path.join("app", "search-workspace", "statistics-multivalue.test.ts"),

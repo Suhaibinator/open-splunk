@@ -153,6 +153,7 @@ import { installModalSurface } from "./_components/modal-surface";
 import { AppIcon, type AppIconName } from "./_components/app-icon";
 import { SearchComposer } from "./search-workspace/components/search-composer";
 import { WorkspaceDialogs } from "./search-workspace/components/workspace-dialogs";
+import { serializeRowsForClipboard } from "./search-workspace/clipboard-export";
 import {
   COMPLETIONS,
   DEFAULT_QUERY,
@@ -1281,8 +1282,8 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       && resultMatchesSource;
     const common = {
       description: backendEnabled
-        ? "Artifacts are produced by the connected server from this completed job."
-        : "Creates a local file from the displayed demo rows.",
+        ? "Download artifacts use the completed server job; clipboard copy uses the rows displayed on this page."
+        : "Download all demo results to a local file or copy the rows displayed on this page.",
       sourceTab: exportSourceTab,
       format: exportFormat,
       maximumRows: backendEnabled
@@ -5338,6 +5339,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   }
 
   function exportFieldsForTab(tab: ResultTab): string[] {
+    if (tab === "patterns") return EXPORT_FIELDS_BY_TAB.patterns;
     if (backendEnabled) {
       return backendResultSchema?.columns
         .map((column) => column.fieldName) ?? [];
@@ -5356,6 +5358,10 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     if (tab === "patterns") return patternRows.length;
     if (isTimechartResult) return timelinePoints.length;
     return genericStatisticsTable?.rows.length ?? statisticsRows.length;
+  }
+
+  function displayedPageRowsForTab(tab: ResultTab): number {
+    return tab === "events" ? pagedResultEvents.length : displayedRowsForTab(tab);
   }
 
   function toggleExportField(fieldName: string) {
@@ -5392,10 +5398,9 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     setModal("export");
   }
 
-  function buildLocalExportArtifact(): { blob: Blob; filename: string } {
-    const filename = `open-splunk-${exportSourceTab}.${exportFormat}`;
-    const rows: Record<string, unknown>[] = exportSourceTab === "events"
-      ? resultEvents.map((event) => Object.fromEntries(exportFields.map((field) => [field, event.fields[field] ?? (field === "_raw" ? event.raw : null)])))
+  function buildExportRows(pageOnly = false): Record<string, unknown>[] {
+    return exportSourceTab === "events"
+      ? (pageOnly ? pagedResultEvents : resultEvents).map((event) => Object.fromEntries(exportFields.map((field) => [field, event.fields[field] ?? (field === "_raw" ? event.raw : null)])))
       : exportSourceTab === "patterns"
         ? patternRows.map((pattern) => ({ pattern: pattern.signature, count: pattern.count, percent: pattern.percent }))
         : isTimechartResult
@@ -5403,6 +5408,11 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           : genericStatisticsTable !== null
             ? sortedGenericStatisticsRows.map((row) => row.values)
             : sortedStatistics.map((row) => ({ level: row.level, count: row.count, percent: row.percent, avgDuration: row.avgDuration }));
+  }
+
+  function buildLocalExportArtifact(): { blob: Blob; filename: string } {
+    const filename = `open-splunk-${exportSourceTab}.${exportFormat}`;
+    const rows = buildExportRows();
     const selectedRows = rows.map((row) => Object.fromEntries(exportFields.map((field) => [field, row[field] ?? null])));
     const content = exportFormat === "jsonl"
       ? selectedRows.map((row) => JSON.stringify(row)).join("\n")
@@ -5418,6 +5428,18 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       filename,
       blob: new Blob([content], { type: exportFormat === "csv" ? "text/csv" : "application/x-ndjson" }),
     };
+  }
+
+  async function copyExportPage() {
+    const rows = buildExportRows(true);
+    if (rows.length === 0 || exportFields.length === 0) {
+      showToast("There are no displayed results to copy.", "warning");
+      return;
+    }
+    await copyText(
+      serializeRowsForClipboard(exportFields, exportFieldLabels, rows),
+      `Copied ${NUMBER_FORMAT.format(rows.length)} ${rows.length === 1 ? "row" : "rows"} from this page.`,
+    );
   }
 
   async function prepareExport() {
@@ -6612,7 +6634,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         appName={workspaceAppName}
         currentTimeMs={dialogCurrentTimeMs}
         dataMetricLabel={backendEnabled ? "Result data" : "Scanned data"}
-        displayedExportRows={displayedRowsForTab(exportSourceTab)}
+        displayedExportRows={displayedPageRowsForTab(exportSourceTab)}
         elapsed={elapsed}
         exportFieldOptions={backendEnabled
           ? exportFieldsForTab(exportSourceTab)
@@ -6719,6 +6741,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           setSavedSearchDeleteTargetId(id);
           setModal("delete-saved-search");
         }}
+        onCopyExportPage={() => void copyExportPage()}
         onDownloadExport={downloadExport}
         onExportFieldToggle={toggleExportField}
         onExportFormatChange={(format) => {

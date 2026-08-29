@@ -67,6 +67,15 @@
   white-space: nowrap;
 }
 
+.clipboardHint {
+  align-items: center;
+  color: var(--fg-muted);
+  display: flex;
+  font-size: var(--type-xs);
+  gap: var(--space-2);
+  margin: 0;
+}
+
 .exportSummary {
   background: var(--bg-canvas);
   border: 1px solid #b8c9ae;

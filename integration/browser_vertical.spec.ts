@@ -255,6 +255,7 @@ test("collector event is visible through the compiled backend UI", async ({ page
   await expect(exportDialog.getByRole("checkbox")).toHaveCount(0);
   const downloadButton = exportDialog.getByRole("button", { name: /^Download .+\.csv$/u });
   await expect(downloadButton).toHaveText("Download CSV");
+  await expect(exportDialog.getByRole("button", { name: "Copy page to clipboard" })).toBeVisible();
   expect(await exportDialog.evaluate((element) => {
     const summary = element.querySelector<HTMLElement>("[aria-labelledby='export-summary-title']");
     const footer = element.querySelector<HTMLElement>(".modal-footer");
@@ -283,7 +284,7 @@ test("collector event is visible through the compiled backend UI", async ({ page
   })).toEqual({
     dialogNoHorizontalOverflow: true,
     actionsStacked: true,
-    actionHeights: [44, 44],
+    actionHeights: [44, 44, 44],
   });
   await exportDialog.getByRole("button", { name: "Close dialog" }).click();
   await page.setViewportSize({ width: 1_280, height: 800 });
