@@ -513,6 +513,10 @@ test("activity layouts preserve capability tabs and mobile job metadata", () => 
     path.join(process.cwd(), "app", "activity", "activity-console.module.css"),
     "utf8",
   );
+  const globalStyles = readFileSync(
+    path.join(process.cwd(), "app", "globals.css"),
+    "utf8",
+  );
 
   assert.match(backendSource, /data-tab-count=\{availableViews\.length\}/u);
   for (const label of ["Search", "Status", "Owner", "Runtime", "Events", "Started", "Actions"]) {
@@ -520,6 +524,23 @@ test("activity layouts preserve capability tabs and mobile job metadata", () => 
   }
   assert.match(responsiveStyles, /content:\s*attr\(data-label\)/u);
   assert.match(responsiveStyles, /td:nth-child\(n \+ 3\)[^{]*\{[^}]*display:\s*grid/su);
+
+  const activityStylesStart = globalStyles.indexOf("/* Activity */");
+  const activityMobileStylesStart = globalStyles.indexOf(
+    ".live-jobs-table-wrap { background: none; overflow: visible; }",
+    activityStylesStart,
+  );
+  const desktopActivityStyles = globalStyles.slice(activityStylesStart, activityMobileStylesStart);
+  assert.doesNotMatch(
+    desktopActivityStyles,
+    /\.live-jobs-table td[^{}]*\{[^}]*display:\s*flex/su,
+    "desktop job cells must remain table cells so body columns align with their headers",
+  );
+  assert.match(
+    globalStyles.slice(activityMobileStylesStart),
+    /\.live-jobs-table\.live-jobs-table td:nth-child\(n\)[^{]*\{[^}]*width:\s*auto/su,
+    "mobile job cards must override the more-specific desktop column widths",
+  );
 });
 
 test("search-attempt requests include only exact actor and owner filters", () => {

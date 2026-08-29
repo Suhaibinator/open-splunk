@@ -5962,24 +5962,25 @@ button.knowledge-manager__row:hover { background: #f5f8f9; }
 .live-jobs-table td:nth-child(2) { width: 15%; }
 .live-jobs-table td { height: 61px; }
 .live-jobs-table td:not(:last-child) { white-space: normal; }
-.live-jobs-table td:first-child,
-.live-jobs-table td:nth-child(2),
-.live-jobs-table td:nth-child(3),
-.live-jobs-table td:nth-child(5) { flex-direction: column; gap: 3px; }
-.live-jobs-table td:first-child,
-.live-jobs-table td:nth-child(2),
-.live-jobs-table td:nth-child(5) { display: flex; justify-content: center; }
+.live-jobs-table td:first-child > code,
+.live-jobs-table td:first-child > small,
+.live-jobs-table td:nth-child(2) > strong,
+.live-jobs-table td:nth-child(2) > small,
+.live-jobs-table td:nth-child(2) > code,
+.live-jobs-table td:nth-child(5) > strong,
+.live-jobs-table td:nth-child(5) > small { display: block; }
+.live-jobs-table td:first-child > code,
+.live-jobs-table td:first-child > small,
+.live-jobs-table td:nth-child(2) > small,
+.live-jobs-table td:nth-child(2) > code { margin-top: 3px; }
 .live-jobs-table td:nth-child(3) small,
 .live-jobs-table td:nth-child(5) small { color: #748188; display: block; font-size: 9px; margin-top: 3px; }
 .export-jobs-table { min-width: 1120px; }
-.export-jobs-table td:first-child,
-.export-jobs-table td:nth-child(2),
-.export-jobs-table td:nth-child(3),
-.export-jobs-table td:nth-child(5) { flex-direction: column; gap: 3px; }
-.export-jobs-table td:first-child,
-.export-jobs-table td:nth-child(2),
-.export-jobs-table td:nth-child(3),
-.export-jobs-table td:nth-child(5) { display: flex; justify-content: center; }
+.export-jobs-table td:first-child > strong,
+.export-jobs-table td:first-child > code,
+.export-jobs-table td:nth-child(2) > code,
+.export-jobs-table td:nth-child(5) > strong { display: block; }
+.export-jobs-table td:first-child > code { margin-top: 3px; }
 .export-jobs-table td code { font-size: 9px; overflow-wrap: anywhere; }
 .export-jobs-table td small { color: #748188; display: block; font-size: 9px; margin-top: 3px; }
 .live-job-spl {
@@ -7443,7 +7444,7 @@ button.knowledge-manager__row:hover { background: #f5f8f9; }
   }
   .live-jobs-table td,
   .backend-history-table td,
-  .activity-table.live-jobs-table td:nth-child(n),
+  .live-jobs-table.live-jobs-table td:nth-child(n),
   .activity-table.backend-history-table td:nth-child(n) {
     border: 0;
     display: flex;
