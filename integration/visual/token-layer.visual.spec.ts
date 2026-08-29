@@ -26,42 +26,45 @@ import { gotoVisualRoute } from "./visual-harness";
  */
 
 /**
- * The names `app/globals.css` declared in its `:root` before the token layer
- * landed, against the literals they held at commit 7459a0cc.
+ * The literals `app/globals.css` declared in its `:root` at commit 7459a0cc,
+ * against the name that carries each one today.
  *
- * Phase 1 only moved these declarations and rewrote each as a chain of `var()`
- * references, so each has to render exactly what its literal renders. The
- * property each is checked through is the one it is used with: a colour through
- * `color`, the two stacks through `font-family`, the elevation through
- * `box-shadow`.
+ * Phase 1 moved those declarations into the token layer as chains of `var()`
+ * references; Phase 2 rewrote the call sites and deleted the pre-refactor
+ * aliases, so each row now names the role rather than the retired alias and the
+ * contract -- "this renders exactly what that literal renders" -- is unchanged.
+ * `--orange` and `--yellow` named no role, so the primitive each resolved to is
+ * checked directly. The property each is checked through is the one it is used
+ * with: a colour through `color`, the two stacks through `font-family`, the
+ * elevation through `box-shadow`.
  */
 const PRE_REFACTOR_RENDERING: readonly (readonly [string, string, string])[] = [
-  ["color", "--app-bar", "#3f464c"],
-  ["color", "--app-bar-hover", "#4b535a"],
-  ["color", "--black", "#161b1f"],
-  ["color", "--blue", "#2878a8"],
-  ["color", "--blue-soft", "#e8f3f9"],
+  ["color", "--accent", "#477f2b"],
+  ["color", "--accent-hover", "#376a20"],
+  ["color", "--accent-soft", "#e8f2e1"],
+  ["color", "--amber-500", "#d2a600"],
+  ["color", "--bg-canvas", "#f6f6f4"],
+  ["color", "--bg-inverse", "#161b1f"],
+  ["color", "--bg-raised", "#fbfbfa"],
+  ["color", "--bg-subtle", "#f2f3f3"],
+  ["color", "--bg-surface", "#ffffff"],
   ["color", "--border", "#cfd4d7"],
-  ["color", "--border-dark", "#aeb6bb"],
-  ["color", "--canvas", "#f6f6f4"],
-  ["color", "--faint", "#89949b"],
-  ["color", "--green", "#477f2b"],
-  ["color", "--green-soft", "#e8f2e1"],
-  ["color", "--green-strong", "#376a20"],
-  ["color", "--muted", "#64717a"],
-  ["color", "--orange", "#d97a23"],
-  ["color", "--product-bar", "#1e252b"],
-  ["color", "--red", "#c93c37"],
-  ["color", "--red-soft", "#fff0ee"],
-  ["color", "--surface", "#ffffff"],
-  ["color", "--surface-raised", "#fbfbfa"],
-  ["color", "--surface-subtle", "#f2f3f3"],
-  ["color", "--text", "#28343d"],
-  ["color", "--text-strong", "#19252d"],
-  ["color", "--yellow", "#d2a600"],
+  ["color", "--border-strong", "#aeb6bb"],
+  ["color", "--chrome-appbar", "#3f464c"],
+  ["color", "--chrome-bar", "#1e252b"],
+  ["color", "--chrome-hover", "#4b535a"],
+  ["color", "--fg-faint", "#89949b"],
+  ["color", "--fg-muted", "#64717a"],
+  ["color", "--fg-strong", "#19252d"],
+  ["color", "--fg-text", "#28343d"],
+  ["color", "--orange-400", "#d97a23"],
+  ["color", "--status-error", "#c93c37"],
+  ["color", "--status-error-soft", "#fff0ee"],
+  ["color", "--status-info", "#2878a8"],
+  ["color", "--status-info-soft", "#e8f3f9"],
   ["font-family", "--font-sans", "Arial, Helvetica, sans-serif"],
   ["font-family", "--font-mono", '"SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace'],
-  ["box-shadow", "--shadow", "0 10px 30px rgb(18 29 36 / 18%), 0 2px 7px rgb(18 29 36 / 12%)"],
+  ["box-shadow", "--shadow-lg", "0 10px 30px rgb(18 29 36 / 18%), 0 2px 7px rgb(18 29 36 / 12%)"],
 ];
 
 /**
@@ -186,7 +189,7 @@ test.describe("token layer wiring", () => {
     expect(unresolved, "tokens the shipped cascade leaves with no value").toEqual([]);
   });
 
-  test("the pre-refactor custom properties still render their original values", async ({ page }) => {
+  test("the roles that replaced the pre-refactor properties still render their values", async ({ page }) => {
     await gotoVisualRoute(page, "/");
     await expectRenderedAsLiteral(page, PRE_REFACTOR_RENDERING);
   });
@@ -194,13 +197,12 @@ test.describe("token layer wiring", () => {
   test("the scale tier reaches the browser through app/layout.tsx", async ({ page }) => {
     await gotoVisualRoute(page, "/");
     await expectRenderedAsLiteral(page, SCALE_SENTINELS);
-    // `--shadow` is the outgoing name for `--shadow-lg`. While both exist the
-    // duplication is only safe as long as it is exact.
-    const [outgoing, replacement] = await renderedValues(page, [
-      ["box-shadow", "var(--shadow)"],
-      ["box-shadow", "var(--shadow-lg)"],
-    ]);
-    expect(outgoing).toEqual(replacement);
+    // The outgoing `--shadow` is gone from app/globals.css, so the name has to
+    // resolve to nothing: a stylesheet that still declared it would keep the
+    // duplicate elevation alive where nothing checks the two agree.
+    const [retired] = await renderedValues(page, [["box-shadow", "var(--shadow, none)"]]);
+    expect(retired, "--shadow is declared again; --shadow-lg is the only elevation name")
+      .toEqual("none");
   });
 
   test("the dark theme is inert until data-theme is set", async ({ page }) => {

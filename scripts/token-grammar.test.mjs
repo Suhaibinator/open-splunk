@@ -32,73 +32,60 @@ import {
 const workspace = process.cwd();
 
 /**
- * The pre-refactor names, frozen at the values `app/globals.css` shipped at
- * 7459a0cc, the commit before the token layer landed.
+ * The values `app/globals.css` shipped at 7459a0cc, the commit before the token
+ * layer landed, each against the name that carries it today.
  *
  * Phase 1 moved these declarations into `app/styles` and rewrote each as a
- * chain of `var()` references. The move is only allowed to be a rename: if a
- * chain resolves anywhere but here, the refactor moved a pixel, and it moved it
- * in a place no screenshot may happen to cover.
+ * chain of `var()` references; Phase 2 rewrote the call sites and deleted the
+ * pre-refactor aliases, so the left-hand side is now the role rather than the
+ * retired name. The contract is unchanged and is the reason the table survives
+ * the deletion: if a chain resolves anywhere but here, the refactor moved a
+ * pixel, and it moved it in a place no screenshot may happen to cover.
+ * docs/theming.md tabulates which retired name each role replaced.
+ *
+ * `--orange` and `--yellow` named no role, so the primitive each resolved to is
+ * pinned directly; every other row is a tier-2 token.
  */
 const PRE_REFACTOR_VALUES = {
-  "--app-bar": "#3f464c",
-  "--app-bar-hover": "#4b535a",
-  "--black": "#161b1f",
-  "--blue": "#2878a8",
-  "--blue-soft": "#e8f3f9",
+  "--accent": "#477f2b",
+  "--accent-hover": "#376a20",
+  "--accent-soft": "#e8f2e1",
+  "--amber-500": "#d2a600",
+  "--bg-canvas": "#f6f6f4",
+  "--bg-inverse": "#161b1f",
+  "--bg-raised": "#fbfbfa",
+  "--bg-subtle": "#f2f3f3",
+  "--bg-surface": "#ffffff",
   "--border": "#cfd4d7",
-  "--border-dark": "#aeb6bb",
-  "--canvas": "#f6f6f4",
-  "--faint": "#89949b",
+  "--border-strong": "#aeb6bb",
+  "--chrome-appbar": "#3f464c",
+  "--chrome-bar": "#1e252b",
+  "--chrome-hover": "#4b535a",
+  "--fg-faint": "#89949b",
+  "--fg-muted": "#64717a",
+  "--fg-strong": "#19252d",
+  "--fg-text": "#28343d",
   "--font-mono": '"SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
   "--font-sans": "Arial, Helvetica, sans-serif",
-  "--green": "#477f2b",
-  "--green-soft": "#e8f2e1",
-  "--green-strong": "#376a20",
-  "--muted": "#64717a",
-  "--orange": "#d97a23",
-  "--product-bar": "#1e252b",
-  "--red": "#c93c37",
-  "--red-soft": "#fff0ee",
-  "--surface": "#ffffff",
-  "--surface-raised": "#fbfbfa",
-  "--surface-subtle": "#f2f3f3",
-  "--text": "#28343d",
-  "--text-strong": "#19252d",
-  "--yellow": "#d2a600",
+  "--orange-400": "#d97a23",
+  "--shadow-lg": "0 10px 30px rgb(18 29 36 / 18%), 0 2px 7px rgb(18 29 36 / 12%)",
+  "--status-error": "#c93c37",
+  "--status-error-soft": "#fff0ee",
+  "--status-info": "#2878a8",
+  "--status-info-soft": "#e8f3f9",
 };
 
 /**
- * The legacy alias block, frozen.
+ * The pre-refactor alias block, now empty.
  *
  * `docs/theming.md`: "nothing may be added to that block, and each one
- * disappears as its call sites are rewritten". `--border` is deliberately not
- * here: it survived the refactor as a tier-2 name rather than as an alias.
+ * disappears as its call sites are rewritten". Phase 2 rewrote the last call
+ * site, so the block is gone and the set below is the assertion that it stays
+ * gone. The test it feeds still earns its runtime for the other shape it
+ * catches: a tier-2 token the dark block forgot to restate looks exactly like a
+ * new alias from here.
  */
-const LEGACY_ALIASES = new Set([
-  "--app-bar",
-  "--app-bar-hover",
-  "--black",
-  "--blue",
-  "--blue-soft",
-  "--border-dark",
-  "--canvas",
-  "--faint",
-  "--green",
-  "--green-soft",
-  "--green-strong",
-  "--muted",
-  "--orange",
-  "--product-bar",
-  "--red",
-  "--red-soft",
-  "--surface",
-  "--surface-raised",
-  "--surface-subtle",
-  "--text",
-  "--text-strong",
-  "--yellow",
-]);
+const LEGACY_ALIASES = new Set([]);
 
 /** Group prefixes the semantic tier is allowed to use, from docs/theming.md. */
 const SEMANTIC_GROUPS = ["accent", "bg", "border", "chart", "chrome", "fg", "level", "status"];
@@ -306,14 +293,14 @@ test("the frozen legacy alias block gains no new members", async () => {
   assert.deepEqual(
     aliases.toSorted(),
     [...LEGACY_ALIASES].toSorted(),
-    "The set of pre-refactor aliases changed. The block is frozen: an alias may only be deleted,\n"
-      + "along with its call sites, and a new token needs a documented role name instead of a legacy\n"
-      + "one. A tier-2 token that the dark block forgot to restate also lands here -- give it a dark\n"
-      + "value and it leaves the list again.",
+    "The set of pre-refactor aliases changed. The block is empty and stays empty: a new token needs\n"
+      + "a documented role name, never a legacy one, and a deleted alias never comes back. A tier-2\n"
+      + "token that the dark block forgot to restate also lands here -- give it a dark value and it\n"
+      + "leaves the list again.",
   );
 });
 
-test("every custom property the pre-refactor stylesheet declared resolves to its original value", async () => {
+test("every role that replaced a pre-refactor custom property resolves to its original value", async () => {
   const { light } = await readTokenLayer();
   const drift = [];
   for (const [name, expected] of Object.entries(PRE_REFACTOR_VALUES)) {
@@ -323,8 +310,9 @@ test("every custom property the pre-refactor stylesheet declared resolves to its
   assert.deepEqual(
     drift,
     [],
-    "Phase 1 is a rename, not a recolour: every name app/globals.css declared before the token layer\n"
-      + "has to resolve to the byte it resolved to at 7459a0cc. A screenshot only covers the pixels a\n"
+    "The move off literals is a rename, not a recolour: the role that replaced each name\n"
+      + "app/globals.css declared before the token layer has to resolve to the byte that name\n"
+      + "resolved to at 7459a0cc. A screenshot only covers the pixels a\n"
       + `spec happens to visit, so the whole table is checked here:\n${describeList(drift)}`,
   );
 });

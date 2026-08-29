@@ -63,7 +63,7 @@
 
   .mobileCardTable.mobileCardTable td:first-child {
     align-items: start;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--border-subtle);
     grid-template-columns: 1fr;
     padding-bottom: 10px;
   }
@@ -73,7 +73,7 @@
   }
 
   .mobileCardTable.mobileCardTable td:last-child {
-    border-top: 1px solid var(--border);
+    border-top: 1px solid var(--border-subtle);
     grid-template-columns: 72px minmax(0, 1fr);
     margin-top: var(--space-1);
     padding-top: 10px;

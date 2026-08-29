@@ -213,7 +213,7 @@
   color: var(--fg-text);
   font-size: var(--type-xs);
   height: 32px;
-  padding: 0 25px 0 8px;
+  padding: 0 25px 0 var(--space-2);
   width: 100%;
 }
 
@@ -264,10 +264,10 @@
 .backendTable th:last-child { width: 252px; }
 
 .table td {
-  border-bottom: 1px solid var(--border);
-  color: #43525a;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--fg-secondary);
   height: 67px;
-  padding: 8px 9px;
+  padding: var(--space-2) 9px;
   vertical-align: middle;
 }
 
@@ -335,7 +335,7 @@
   color: var(--fg-muted);
   display: block;
   font-size: var(--type-xs);
-  margin: 3px 0 4px;
+  margin: 3px 0 var(--space-1);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -365,7 +365,7 @@
 }
 
 .reportIconStatistics { background: var(--accent-soft); color: var(--accent); }
-.reportIconEvents { background: #f0ebf5; color: #71538d; }
+.reportIconEvents { background: var(--accent-alt-soft); color: var(--accent-alt); }
 
 .owner {
   align-items: center;
@@ -484,15 +484,15 @@
 
 .actionNotice {
   align-items: center;
-  background: var(--bg-subtle);
+  background: var(--status-success-soft);
   border: 1px solid #bdd4ae;
-  color: #466239;
+  color: var(--status-success-strong);
   display: flex;
   font-size: var(--type-xs);
   justify-content: space-between;
   margin: 0 0 10px;
   min-height: 36px;
-  padding: 7px 8px 7px 11px;
+  padding: 7px var(--space-2) 7px 11px;
 }
 
 .actionNotice button {
@@ -507,7 +507,7 @@
 .actionError {
   background: var(--status-error-soft);
   border: 1px solid #dba39f;
-  color: #8f2f2b;
+  color: var(--status-error-strong);
   font-size: var(--type-xs);
   line-height: 1.5;
   margin: 0 0 var(--space-3);
@@ -526,7 +526,7 @@
   display: flex;
   flex-direction: column;
   min-height: 270px;
-  padding: 48px 20px;
+  padding: 48px var(--space-5);
   text-align: center;
 }
 
@@ -544,7 +544,7 @@
 .empty p {
   color: var(--fg-muted);
   font-size: var(--type-xs);
-  margin: 5px 0 12px;
+  margin: 5px 0 var(--space-3);
 }
 
 .empty button,
@@ -694,13 +694,13 @@
   }
 
   .reportColumn {
-    border-bottom: 1px solid var(--border) !important;
+    border-bottom: 1px solid var(--border-subtle) !important;
     grid-column: 1 / -1;
-    padding: 3px 48px 11px 4px !important;
+    padding: 3px 48px 11px var(--space-1) !important;
   }
 
   .backendTable .reportColumn {
-    padding-right: 4px !important;
+    padding-right: var(--space-1) !important;
   }
 
   .backendTable td code {
@@ -745,7 +745,7 @@
 
   .openCell {
     align-items: center;
-    border-top: 1px solid var(--border) !important;
+    border-top: 1px solid var(--border-subtle) !important;
     display: flex !important;
     grid-column: 1 / -1;
     justify-content: flex-end;

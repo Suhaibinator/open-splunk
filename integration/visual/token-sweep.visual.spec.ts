@@ -232,6 +232,7 @@ test.describe("token sweep rendering", () => {
       const grounds = new Set<string>();
       const inks = new Set<string>();
       let opaqueGrounds = 0;
+      let readableInks = 0;
       for (const element of light) {
         const themed = dark.get(element.stamp);
         if (themed === undefined) continue;
@@ -242,16 +243,25 @@ test.describe("token sweep rendering", () => {
           grounds.add(`${element.description} keeps the light ground ${element.background}`);
         }
         const ink = luminance(element.ink);
+        if (ink !== null) readableInks += 1;
         if (ink !== null && ink <= DARK_INK_LUMINANCE && !ramp.has(element.ink)
           && themed.ink === element.ink) {
           inks.add(`${element.description} keeps the dark ink ${element.ink}`);
         }
       }
-      // Without this the whole assertion would pass by parsing nothing: an
+      // Without these the whole assertion would pass by parsing nothing: an
       // unrecognised colour serialisation makes every element unjudgeable, and
-      // an empty offender list reads exactly like a clean one.
-      expect(opaqueGrounds, "no computed background parsed, so nothing on this page was judged")
-        .toBeGreaterThan(10);
+      // an empty offender list reads exactly like a clean one. The two halves
+      // carry their own floor rather than sharing one, because the ratio
+      // between them is a property of the page: /signin/ is a form on one
+      // canvas and paints six opaque grounds behind sixty-five inks, while
+      // /search/ paints a hundred and seventy-one behind nine hundred. A single
+      // count tuned to the dense pages calls the lean one unjudged when it is
+      // only small, and would hide every ink on it.
+      expect(opaqueGrounds, "no computed background parsed, so no ground here was judged")
+        .toBeGreaterThan(4);
+      expect(readableInks, "no computed ink parsed, so no text here was judged")
+        .toBeGreaterThan(40);
       expect(
         [...grounds].toSorted(),
         "Surfaces that stay light when the dark theme is applied. Every ground the token layer\n"

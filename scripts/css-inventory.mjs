@@ -433,7 +433,20 @@ export async function findTestStylesheetReads(root) {
   return perFile.flat();
 }
 
-/** Where every custom property is declared and read across the styling layer. */
+/**
+ * Where every custom property is declared and read across the styling layer.
+ *
+ * References come from the stylesheets *and* from the application's own source:
+ * a chart palette that writes `"var(--chart-series-7)"` into an inline style
+ * reads a token exactly as a rule does, and a rename that misses it renders as
+ * an unset property rather than as an error. Reading the source with the same
+ * `var()` pattern the stylesheets use keeps both halves under one invariant.
+ *
+ * Test files are excluded from that scan and only from it: a spec quotes token
+ * names it is asserting *about*, including partial ones and deliberately
+ * retired ones, so counting those as reads would make the invariant fail for
+ * naming a token rather than for using it.
+ */
 export async function collectCustomPropertyUsage(root) {
   const stylesheets = await Promise.all((await listStylesheets(root)).map(async (file) => ({
     css: await readFile(file, "utf8"),
@@ -451,12 +464,23 @@ export async function collectCustomPropertyUsage(root) {
   }
 
   const sources = (await listRepositoryFiles(root)).filter((file) => SOURCE_EXTENSIONS.has(path.extname(file)));
-  const perSource = await Promise.all(sources.map(async (file) => (
-    collectRuntimeCustomProperties(await readFile(file, "utf8"))
-  )));
+  const tests = new Set(await listTestFiles(root));
+  const perSource = await Promise.all(sources.map(async (file) => {
+    const source = await readFile(file, "utf8");
+    return {
+      name: relativePosix(root, file),
+      read: tests.has(file) ? new Set() : collectCustomPropertyReferences(source),
+      written: collectRuntimeCustomProperties(source),
+    };
+  }));
   const runtimeDeclared = new Set();
-  for (const names of perSource) {
-    for (const name of names) runtimeDeclared.add(name);
+  for (const { name: file, read, written } of perSource) {
+    for (const name of written) runtimeDeclared.add(name);
+    for (const name of read) {
+      const seen = references.get(name) ?? [];
+      seen.push(file);
+      references.set(name, seen);
+    }
   }
   return { declared, references, runtimeDeclared };
 }
