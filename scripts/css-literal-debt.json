@@ -1,7 +1,7 @@
 {
   "//": "Every literal the Phase 2 token sweep left behind, and nothing else.\n\nThis is a ratchet, not an exemption list. scripts/css-token-sweep.test.mjs\ncompares it against the tree with a set equality, so a literal that is not\nrecorded here fails the build and a recorded literal that has been migrated\nfails it too. Adding a row is therefore a deliberate act with a reviewer,\nwhich is the only property that makes a debt list shrink instead of drift.\n\nRows are grouped by file and property and hold the declaration value, not a\nline number: two rules that paint the same literal share one row, and\nediting anything above a rule does not churn the ledger.\n\nWhy each row is still here is answered by role, not one row at a time: the\n'Role gaps' table in docs/theming.md groups every colour below under the\ntier-2 role that would absorb it, and the 'Replaces' tables under 'Scales'\ncover the rest -- most scale rows are values whose nearest step would move a\npixel, which is a design decision rather than a substitution.\n\nA literal a token already spells exactly is a plain miss and not debt at\nall. The sweep test judges those separately and that list is empty: every\nexact match has been substituted, so nothing below can be removed without\nchoosing a different colour or moving a box.",
   "colour": {
-    "app/analytics/analytics.module.css": {
+    "app/analytics/analytics.css": {
       "background": [
         "#26333a"
       ],
@@ -25,7 +25,7 @@
         "#e1e5e7"
       ]
     },
-    "app/dashboards/operations-dashboard.module.css": {
+    "app/dashboards/operations-dashboard.css": {
       "border": [
         "1px solid #226687",
         "1px solid #dfb8b8"
@@ -251,7 +251,7 @@
         "3px solid rgb(42 120 158 / 28%)"
       ]
     },
-    "app/reports/reports.module.css": {
+    "app/reports/reports.css": {
       "border": [
         "1px solid #bdd4ae",
         "1px solid #dba39f"
@@ -266,7 +266,7 @@
         "#d28d1c"
       ]
     },
-    "app/search-workspace/components/workspace-dialogs.module.css": {
+    "app/search-workspace/components/workspace-dialogs.css": {
       "border": [
         "1px solid #b8c9ae",
         "1px solid #dba39f",
@@ -283,7 +283,7 @@
         "#9b3530 !important"
       ]
     },
-    "app/search-workspace/panels/visualization-panel.module.css": {
+    "app/search-workspace/panels/visualization-panel.css": {
       "background": [
         "#9ca9af",
         "rgb(255 255 255 / 88%)",
@@ -303,7 +303,7 @@
     }
   },
   "scale": {
-    "app/analytics/analytics.module.css": {
+    "app/analytics/analytics.css": {
       "border-radius": [
         "50%"
       ],
@@ -325,7 +325,7 @@
         "8"
       ]
     },
-    "app/dashboards/operations-dashboard.module.css": {
+    "app/dashboards/operations-dashboard.css": {
       "box-shadow": [
         "2px"
       ],
@@ -384,7 +384,7 @@
         "40"
       ]
     },
-    "app/reports/reports.module.css": {
+    "app/reports/reports.css": {
       "border-radius": [
         "50%",
         "9px"
@@ -397,19 +397,18 @@
         "15px",
         "17px",
         "18px",
-        "28px",
-        "8px"
+        "28px"
       ],
       "z-index": [
         "1"
       ]
     },
-    "app/search-workspace/components/workspace-dialogs.module.css": {
+    "app/search-workspace/components/workspace-dialogs.css": {
       "font-size": [
         "13px"
       ]
     },
-    "app/search-workspace/panels/visualization-panel.module.css": {
+    "app/search-workspace/panels/visualization-panel.css": {
       "border-radius": [
         "1px"
       ],

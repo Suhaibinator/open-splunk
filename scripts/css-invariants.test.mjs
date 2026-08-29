@@ -52,9 +52,26 @@ test("the stylesheet inventory reaches the whole styling layer", async () => {
     stylesheets.includes("app/globals.css"),
     "the walker no longer reaches app/globals.css, so every CSS invariant below is vacuous",
   );
+  // Phase 4 left one styling lane: a feature's rules are plain CSS colocated
+  // with the feature, not a CSS module. Both halves are asserted here. The
+  // walker has to reach those files, or every invariant below stops covering
+  // the majority of the product's rules; and no `.module.css` may come back,
+  // because a second lane restores exactly the invisibility this replaced --
+  // a module's classes are hashed, so they never enter the global namespace
+  // and the reachability and consolidation checks cannot see them at all.
+  const colocated = stylesheets.filter((file) => (
+    file.startsWith("app/") && file !== "app/globals.css" && !file.startsWith("app/styles/")
+  ));
   assert.ok(
-    stylesheets.some((file) => file.endsWith(".module.css")),
-    "the walker no longer reaches any CSS module, so module-scoped regressions are invisible",
+    colocated.length > 1,
+    `the walker reaches only ${colocated.length} colocated feature stylesheets, so feature regressions are invisible`,
+  );
+  assert.deepEqual(
+    stylesheets.filter((file) => file.endsWith(".module.css")),
+    [],
+    "a CSS module is back. Its classes are scoped to a generated hash, so no reachability,\n"
+      + "retired-class or one-primitive check can see them: rename the classes with the feature's\n"
+      + "prefix and import the plain stylesheet from app/styles/index.css instead.",
   );
   const tests = (await listTestFiles(workspace)).map((file) => relativePosix(workspace, file));
   assert.ok(tests.length > 20, `the walker found only ${tests.length} test files; it is missing the suite`);

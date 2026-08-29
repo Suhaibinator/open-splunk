@@ -352,22 +352,16 @@ export function collectMarkupClasses(markup) {
 /**
  * Reads every non-CSS source file and merges the class evidence it carries.
  *
- * CSS module files contribute only their `:global(...)` selectors: those name
- * global classes directly, while a module's own classes are reached through a
- * generated `styles` object and never enter the global namespace.
+ * A stylesheet contributes nothing here: it is the other side of the question.
+ * Until Phase 4 a CSS module was the exception -- its `:global(...)` selectors
+ * named global classes while its own classes were reached through a generated
+ * `styles` object -- and with the modules gone there is one namespace and one
+ * direction to read.
  */
 export async function collectClassEvidence(root) {
   const files = await listRepositoryFiles(root);
   const contributions = await Promise.all(files.map(async (file) => {
-    if (file.endsWith(".css")) {
-      if (!file.endsWith(".module.css")) return null;
-      const css = stripCssComments(await readFile(file, "utf8"));
-      const global = new Set();
-      for (const match of css.matchAll(/:global\(([^)]*)\)/gu)) {
-        for (const selector of match[1].matchAll(/\.(-?[_a-zA-Z][\w-]*)/gu)) global.add(selector[1]);
-      }
-      return { interpolationPrefixes: new Set(), tokens: global };
-    }
+    if (file.endsWith(".css")) return null;
     if (file.endsWith(".html")) {
       return { interpolationPrefixes: new Set(), tokens: collectMarkupClasses(await readFile(file, "utf8")) };
     }
@@ -786,22 +780,20 @@ export function describeRuleSite(block) {
  * `.name:hover`, not `.other .name`. That is the shape that *defines* a
  * primitive, and counting it is how "one implementation of each primitive"
  * becomes checkable: a second bare rule is a second base, wherever it lives.
- * CSS modules contribute only through `:global(.name)`, since a module's own
- * `.name` is scoped to a generated identifier and cannot collide.
+ * Every stylesheet is read the same way now that Phase 4 left one namespace;
+ * a CSS module used to count only through `:global(.name)`, since its own
+ * `.name` was scoped to a generated identifier and could not collide.
  */
 export async function collectBaseRuleSites(root, classNames) {
   const wanted = new Set(classNames);
   const perFile = await Promise.all((await listStylesheets(root)).map(async (file) => {
-    const scoped = file.endsWith(".module.css");
     const css = await readFile(file, "utf8");
     const found = [];
     for (const block of cssBlocks(css)) {
       if (block.prelude.startsWith("@")) continue;
       for (const selector of block.prelude.split(",")) {
         const text = selector.trim().replaceAll(/\s+/gu, " ");
-        const name = scoped
-          ? /^:global\(\s*\.([-\w]+)\s*\)$/u.exec(text)?.[1]
-          : /^\.([-\w]+)$/u.exec(text)?.[1];
+        const name = /^\.([-\w]+)$/u.exec(text)?.[1];
         if (name === undefined || !wanted.has(name)) continue;
         found.push([name, {
           ancestors: block.ancestors.map((prelude) => prelude.replaceAll(/\s+/gu, " ")),
@@ -953,17 +945,11 @@ export function collectSelectorClassTokens(source) {
   return new Map([...found].map(([name, lines]) => [name, [...lines].toSorted((left, right) => left - right)]));
 }
 
-/** Every class the styling layer can match, including a module's `:global()`. */
+/** Every class the styling layer can match, across every stylesheet it ships. */
 export async function collectStyledClasses(root) {
-  const perFile = await Promise.all((await listStylesheets(root)).map(async (file) => {
-    const css = await readFile(file, "utf8");
-    if (!file.endsWith(".module.css")) return Array.from(collectStylesheetClasses(css));
-    const global = [];
-    for (const match of stripCssComments(css).matchAll(/:global\(([^)]*)\)/gu)) {
-      for (const selector of match[1].matchAll(/\.(-?[_a-zA-Z][\w-]*)/gu)) global.push(selector[1]);
-    }
-    return global;
-  }));
+  const perFile = await Promise.all((await listStylesheets(root)).map(async (file) => (
+    Array.from(collectStylesheetClasses(await readFile(file, "utf8")))
+  )));
   return new Set(perFile.flat());
 }
 
