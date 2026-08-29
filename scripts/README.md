@@ -48,6 +48,20 @@ assert on stylesheet structure without reading a stylesheet itself, which is
 one of the invariants it enforces. `css-dynamic-classes.json` records the
 global classes that only ever exist at runtime.
 
+`css-primitives.test.mjs` keeps the Phase 3 consolidation from growing back:
+each primitive has exactly one base rule, each shared animation exactly one
+`@keyframes` block, and no two rules state the same four or more declarations.
+`css-duplicate-blocks.json` records the restatements the phase deliberately
+left, each with the primitive that would otherwise own it; an entry goes stale
+the moment either side of the duplication changes.
+
+`css-call-sites.test.mjs` walks the other way, from every call site to the
+styling layer: no class attribute, helper or `styles.*` read may name something
+no rule matches, and every `Modal` import must resolve to `app/_components`.
+`css-retired-classes.json` lists the classes the consolidation deleted and the
+primitive that replaced each one. Nothing in the toolchain reports an unmatched
+class, so this is the only place a deletion that outran its markup shows up.
+
 `safety-net.test.mjs` checks that the Phase 0 safety net cannot stop running
 unnoticed: every unit test file is named in this directory's hardcoded runner
 list, and every screenshot a visual spec pins has a committed baseline.
