@@ -474,6 +474,17 @@ func (analyzer *queryAnalyzer) visitOperator(operator Operator, depth int) error
 		}
 		return analyzer.addField(operator.Input, depth+1)
 	case *Project:
+		if len(operator.Fields)+len(operator.Patterns) == 0 {
+			return errors.New("analyze logical query: project selectors are invalid")
+		}
+		if operator.Mode == ProjectModeTable && len(operator.Patterns) != 0 {
+			return errors.New("analyze logical query: table project cannot contain wildcards")
+		}
+		for _, pattern := range operator.Patterns {
+			if !spl.IsFieldsFieldGlob(pattern.Pattern) {
+				return errors.New("analyze logical query: project wildcard is invalid")
+			}
+		}
 		return analyzer.addFields(operator.Fields, depth+1)
 	case *Extend:
 		for _, assignment := range operator.Assignments {

@@ -635,7 +635,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			}
 			result.Operators = append(result.Operators, &Rename{Assignments: assignments, Range: command.Range})
 		case *spl.FieldsCommand:
-			fields, fieldErr := convertFields(command.Fields, command.Range)
+			fields, patterns, fieldErr := convertFieldsCommand(command)
 			if fieldErr != nil {
 				return nil, fieldErr
 			}
@@ -643,9 +643,16 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			if command.Exclude {
 				mode = ProjectModeExclude
 			}
-			result.Operators = append(result.Operators, &Project{Mode: mode, Fields: fields, Range: command.Range})
+			result.Operators = append(result.Operators, &Project{
+				Mode: mode, Fields: fields, Patterns: patterns, Range: command.Range,
+			})
 			if outputSchemaKnown {
-				result.OutputFields = projectKnownOutputFields(result.OutputFields, command.Fields, command.Exclude)
+				result.OutputFields = projectKnownOutputFields(
+					result.OutputFields,
+					command.Fields,
+					command.WildcardFields,
+					command.Exclude,
+				)
 				if len(result.OutputFields) == 0 {
 					return nil, &Diagnostic{
 						Code:        "SPL_EMPTY_PROJECTION",
@@ -655,7 +662,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					}
 				}
 			}
-			if command.Exclude && slices.Contains(command.Fields, "_time") {
+			if command.Exclude && fieldsCommandSelectsName(command, "_time") {
 				canonicalTimeAvailable = false
 			}
 		case *spl.TableCommand:
@@ -2297,37 +2304,67 @@ func floorInt64(value, divisor int64) int64 {
 	return quotient
 }
 
-func projectKnownOutputFields(current, requested []string, exclude bool) []string {
-	requestedSet := make(map[string]struct{}, len(requested))
-	for _, name := range requested {
-		requestedSet[name] = struct{}{}
+func projectKnownOutputFields(current, requested []string, wildcards []bool, exclude bool) []string {
+	matches := func(name string) bool {
+		for index, selector := range requested {
+			wildcard := spl.IsFieldsFieldGlob(selector)
+			if len(wildcards) == len(requested) {
+				wildcard = wildcards[index]
+			}
+			if (!wildcard && selector == name) ||
+				(wildcard && spl.MatchFieldsFieldGlob(selector, name)) {
+				return true
+			}
+		}
+		return false
 	}
 	if exclude {
 		result := make([]string, 0, len(current))
 		for _, name := range current {
-			if _, remove := requestedSet[name]; !remove {
+			if !matches(name) {
 				result = append(result, name)
 			}
 		}
 		return result
 	}
 
-	available := make(map[string]struct{}, len(current))
-	for _, name := range current {
-		available[name] = struct{}{}
-	}
-	result := make([]string, 0, len(requested)+2)
-	for _, name := range requested {
-		if _, ok := available[name]; ok {
-			result = append(result, name)
+	result := make([]string, 0, len(current)+2)
+	for index, selector := range requested {
+		wildcard := spl.IsFieldsFieldGlob(selector)
+		if len(wildcards) == len(requested) {
+			wildcard = wildcards[index]
+		}
+		for _, name := range current {
+			selected := (!wildcard && selector == name) ||
+				(wildcard && spl.MatchFieldsFieldGlob(selector, name))
+			if selected && !slices.Contains(result, name) {
+				result = append(result, name)
+			}
 		}
 	}
 	for _, implicit := range []string{"_time", "_raw"} {
-		if _, ok := available[implicit]; ok && !slices.Contains(result, implicit) {
+		if slices.Contains(current, implicit) && !slices.Contains(result, implicit) {
 			result = append(result, implicit)
 		}
 	}
 	return result
+}
+
+func fieldsCommandSelectsName(command *spl.FieldsCommand, name string) bool {
+	if command == nil {
+		return false
+	}
+	for index, selector := range command.Fields {
+		wildcard := spl.IsFieldsFieldGlob(selector)
+		if len(command.WildcardFields) == len(command.Fields) {
+			wildcard = command.WildcardFields[index]
+		}
+		if (!wildcard && selector == name) ||
+			(wildcard && spl.MatchFieldsFieldGlob(selector, name)) {
+			return true
+		}
+	}
+	return false
 }
 
 func renameKnownOutputFields(current []string, assignments []spl.RenameAssignment) []string {
@@ -4939,6 +4976,71 @@ func convertFields(names []string, sourceRange spl.Range) ([]FieldRef, error) {
 		fields = append(fields, field)
 	}
 	return fields, nil
+}
+
+func convertFieldsCommand(command *spl.FieldsCommand) ([]FieldRef, []ProjectFieldPattern, error) {
+	if command == nil || len(command.Fields) == 0 ||
+		len(command.Fields) > spl.MaximumExplicitProjectionFields {
+		return nil, nil, &Diagnostic{
+			Code: "SPL_INVALID_QUERY", Message: "fields command metadata is invalid",
+		}
+	}
+	metadataPresent := len(command.QuotedFields) != 0 ||
+		len(command.WildcardFields) != 0 || len(command.FieldRanges) != 0
+	if metadataPresent && (len(command.QuotedFields) != len(command.Fields) ||
+		len(command.WildcardFields) != len(command.Fields) ||
+		len(command.FieldRanges) != len(command.Fields)) {
+		return nil, nil, &Diagnostic{
+			Code: "SPL_INVALID_FIELD", Message: "fields selector metadata is inconsistent", Range: command.Range,
+		}
+	}
+	fields := make([]FieldRef, 0, len(command.Fields))
+	patterns := make([]ProjectFieldPattern, 0, len(command.Fields))
+	seen := make(map[string]struct{}, len(command.Fields))
+	for index, name := range command.Fields {
+		sourceRange := command.Range
+		quoted := false
+		wildcard := spl.IsFieldsFieldGlob(name)
+		if metadataPresent {
+			sourceRange = command.FieldRanges[index]
+			quoted = command.QuotedFields[index]
+			wildcard = command.WildcardFields[index]
+		}
+		if _, duplicate := seen[name]; duplicate {
+			return nil, nil, &Diagnostic{
+				Code: "SPL_DUPLICATE_FIELD", Message: fmt.Sprintf("field selector %q is repeated", name), Range: sourceRange,
+			}
+		}
+		seen[name] = struct{}{}
+		if wildcard {
+			if !spl.IsFieldsFieldGlob(name) {
+				return nil, nil, &Diagnostic{
+					Code: "SPL_UNSUPPORTED_FIELD_PATTERN", Message: "fields wildcard selector is invalid", Range: sourceRange,
+				}
+			}
+			patterns = append(patterns, ProjectFieldPattern{Pattern: name, Range: sourceRange})
+			continue
+		}
+		if strings.Contains(name, "*") {
+			return nil, nil, &Diagnostic{
+				Code: "SPL_UNSUPPORTED_FIELD_PATTERN", Message: "fields selector has inconsistent wildcard metadata", Range: sourceRange,
+			}
+		}
+		var (
+			field FieldRef
+			err   error
+		)
+		if quoted {
+			field, err = ResolveQuotedField(name, sourceRange)
+		} else {
+			field, err = ResolveField(name, sourceRange)
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+		fields = append(fields, field)
+	}
+	return fields, patterns, nil
 }
 
 func convertTableFields(command *spl.TableCommand) ([]FieldRef, error) {

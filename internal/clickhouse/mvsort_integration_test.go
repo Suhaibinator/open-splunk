@@ -144,6 +144,46 @@ func testSortOrderingPrimitivesAgainstClickHouse(
 			[]string{"2b", "10a", "alpha"},
 		)
 	})
+	t.Run("automatic documented dotted alphanumeric is lexical", func(t *testing.T) {
+		assertClickHouseStringOrder(
+			t,
+			queryContext,
+			connection,
+			`['9.1.a', '10.1.a']`,
+			autoSortOrderingKeySQL("value", "value")+" DESC",
+			[]string{"9.1.a", "10.1.a"},
+		)
+	})
+	t.Run("automatic simple leading alphanumeric remains numeric", func(t *testing.T) {
+		assertClickHouseStringOrder(
+			t,
+			queryContext,
+			connection,
+			`['10alpha', '2alpha']`,
+			autoSortOrderingKeySQL("value", "value"),
+			[]string{"2alpha", "10alpha"},
+		)
+	})
+	t.Run("automatic exponent followed by punctuation remains numeric", func(t *testing.T) {
+		assertClickHouseStringOrder(
+			t,
+			queryContext,
+			connection,
+			`['10e2.foo', '9e2.foo']`,
+			autoSortOrderingKeySQL("value", "value"),
+			[]string{"9e2.foo", "10e2.foo"},
+		)
+	})
+	t.Run("automatic complete and leading numbers share a domain", func(t *testing.T) {
+		assertClickHouseStringOrder(
+			t,
+			queryContext,
+			connection,
+			`['10', '2b', '3']`,
+			autoSortOrderingKeySQL("value", "value"),
+			[]string{"2b", "3", "10"},
+		)
+	})
 	t.Run("automatic IP", func(t *testing.T) {
 		assertClickHouseStringOrder(
 			t,

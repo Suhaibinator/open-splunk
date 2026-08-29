@@ -116,6 +116,19 @@ func TestParseSortPreservesLegacyWhitespaceSeparatedKeys(t *testing.T) {
 	}
 }
 
+func TestParseSortAllowsAscAsTheFirstFieldName(t *testing.T) {
+	t.Parallel()
+
+	query, err := Parse(`* | sort asc`)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	fields := query.Commands[0].(*SortCommand).Fields
+	if len(fields) != 1 || fields[0].Field != "asc" || fields[0].Descending {
+		t.Fatalf("fields = %#v, want ascending field named asc", fields)
+	}
+}
+
 func TestParseSortTerminalDescendingReversesEveryKey(t *testing.T) {
 	t.Parallel()
 

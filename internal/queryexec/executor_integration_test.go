@@ -29,9 +29,25 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport/gradethiscorpus"
+	"github.com/Suhaibinator/open-splunk/internal/testsupport/officialspl"
 )
 
 const queryExecutorIntegrationImage = testsupport.DefaultClickHouseImage
+
+func queryIntegrationOfficialSPLFragment(t *testing.T, id string) string {
+	t.Helper()
+	corpus, err := officialspl.Load(filepath.Join("..", "spl", "testdata", "official_compatibility.json"))
+	if err != nil {
+		t.Fatalf("load official SPL corpus: %v", err)
+	}
+	for _, testCase := range corpus.Cases {
+		if testCase.ID == id {
+			return testCase.Source.Fragment
+		}
+	}
+	t.Fatalf("official SPL corpus has no case %q", id)
+	return ""
+}
 
 // TestExecutorAndManagerAgainstClickHouse is opt-in because it starts an
 // ephemeral Docker container and may pull the pinned ClickHouse image.
@@ -281,16 +297,18 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 		)
 	})
 	gradeThisBase, gradeThisIndexTime, gradeThisTraceID := queryIntegrationInsertGradeThisEvents(t, ctx, connection)
+	queryIntegrationTestFieldsWildcard(t, ctx, executor, gradeThisBase, gradeThisIndexTime)
 	chartBase, chartIndexTime := queryIntegrationInsertChartEvents(t, ctx, connection)
 	sortBase, sortIndexTime := queryIntegrationInsertSortEvents(t, ctx, connection)
 	t.Run("spaced ascending sort prefix selects oldest events", func(t *testing.T) {
-		const baseSearch = `index=main source=timechart-percentile* | sort 10 `
+		sortClause := queryIntegrationOfficialSPLFragment(t, "sort.bounded-spaced-ascending-time")
+		const baseSearch = `index=main source=timechart-percentile* | `
 		queries := []struct {
 			id     string
 			source string
 		}{
-			{id: "queryexec-sort-attached-ascending", source: baseSearch + `+_time | table event_id, _time`},
-			{id: "queryexec-sort-spaced-ascending", source: baseSearch + `+ _time | table event_id, _time`},
+			{id: "queryexec-sort-attached-ascending", source: baseSearch + strings.Replace(sortClause, "+ _time", "+_time", 1) + ` | table event_id, _time`},
+			{id: "queryexec-sort-spaced-ascending", source: baseSearch + sortClause + ` | table event_id, _time`},
 		}
 		pages := make([]searchjobs.ResultPage, len(queries))
 		for index, query := range queries {
@@ -372,6 +390,8 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 				"auto-two", "auto-ten", "auto-alpha")
 			assertEventIDs(t, "queryexec-sort-auto-ip", `index=main source="sort-ip" | sort 0 sort_value | table event_id`,
 				"ip-two", "ip-ten", "ip-private")
+			assertEventIDs(t, "queryexec-sort-auto-dotted-alphanumeric", `index=main source="sort-auto-dotted" | sort 0 - auto(sort_value) | table event_id`,
+				"auto-dotted-nine", "auto-dotted-ten")
 		})
 
 		t.Run("terminal desc aliases reverse every key", func(t *testing.T) {
@@ -3544,6 +3564,8 @@ func queryIntegrationInsertSortEvents(t *testing.T, ctx context.Context, connect
 		{id: "auto-ten", source: "sort-auto", valueSet: true, value: "10alpha"},
 		{id: "auto-two", source: "sort-auto", valueSet: true, value: "2alpha"},
 		{id: "auto-alpha", source: "sort-auto", valueSet: true, value: "alpha"},
+		{id: "auto-dotted-nine", source: "sort-auto-dotted", valueSet: true, value: "9.1.a"},
+		{id: "auto-dotted-ten", source: "sort-auto-dotted", valueSet: true, value: "10.1.a"},
 		{id: "value-a", source: "sort-null", valueSet: true, value: "a"},
 		{id: "value-z", source: "sort-null", valueSet: true, value: "z"},
 		{id: "value-null", source: "sort-null", valueSet: true, value: nil},

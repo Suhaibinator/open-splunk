@@ -113,9 +113,17 @@ const (
 // Project changes the visible result fields. Table also establishes exact
 // field order and discards fields not selected by the command.
 type Project struct {
-	Mode   ProjectMode
-	Fields []FieldRef
-	Range  spl.Range
+	Mode     ProjectMode
+	Fields   []FieldRef
+	Patterns []ProjectFieldPattern
+	Range    spl.Range
+}
+
+// ProjectFieldPattern is one source-located fields-command wildcard. Pattern
+// uses SPL's wc-field spelling, where '*' is the only metacharacter.
+type ProjectFieldPattern struct {
+	Pattern string
+	Range   spl.Range
 }
 
 func (*Project) operator()                 {}

@@ -513,13 +513,18 @@ func describeAuthoredOperator(
 		if concrete == nil {
 			return "", nil, spl.Range{}, invalidProjection("logical operator is nil")
 		}
-		if len(concrete.Fields) > int(maximumStageFields) {
+		if len(concrete.Fields)+len(concrete.Patterns) > int(maximumStageFields) {
 			return "", nil, spl.Range{}, invalidProjection(
 				"logical Project has too many fields",
 			)
 		}
 		switch concrete.Mode {
 		case plan.ProjectModeInclude, plan.ProjectModeTable:
+			if concrete.Mode == plan.ProjectModeTable && len(concrete.Patterns) != 0 {
+				return "", nil, spl.Range{}, invalidProjection(
+					"logical Table project cannot contain wildcard patterns",
+				)
+			}
 			outputs = fieldRefNames(concrete.Fields)
 		case plan.ProjectModeExclude:
 		default:

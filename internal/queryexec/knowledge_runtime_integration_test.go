@@ -2328,8 +2328,8 @@ func knowledgeRuntimeRequireStackedChronologicalCompilerCase(
 		}
 	}
 	for _, pattern := range []*regexp.Regexp{
-		regexp.MustCompile(`"event_id" AS "__os_order_[0-9]+_0"`),
-		regexp.MustCompile(`ORDER BY "__os_order_[0-9]+_0" ASC NULLS LAST`),
+		regexp.MustCompile(`tuple\(toUInt8\(NOT ifNull\(isNotNull\("event_id"\), 0\)\), .* AS "__os_order_[0-9]+_0"`),
+		regexp.MustCompile(`ORDER BY tupleElement\("__os_order_[0-9]+_0", 1\) ASC NULLS LAST, tupleElement\("__os_order_[0-9]+_0", 2\) ASC NULLS LAST`),
 	} {
 		if !pattern.MatchString(compiled.SQL) {
 			t.Fatalf("stacked chronological compiler SQL is missing %q", pattern)

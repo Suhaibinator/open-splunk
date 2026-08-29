@@ -763,6 +763,14 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 
 	schemaPublished := false
 	atomicResult := query.RequiresAtomicResult()
+	sparseTopLevelFields := make(map[string]struct{})
+	if query.SparseFieldsSubset {
+		for _, name := range query.OutputFields {
+			if name != "fields" {
+				sparseTopLevelFields[name] = struct{}{}
+			}
+		}
+	}
 	var atomicRows atomicResultBuffer
 	destinations, err := scanDestinations(columnTypes)
 	if err != nil {
@@ -783,6 +791,16 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 			fieldNames, ok = scannedValue(destinations[len(query.OutputFields)]).([]string)
 			if !ok {
 				return fmt.Errorf("%w: sparse event fields metadata has an invalid native type", searchjobs.ErrInvalidResult)
+			}
+			if query.SparseFieldsSubset && len(sparseTopLevelFields) != 0 {
+				fieldNames = slices.DeleteFunc(slices.Clone(fieldNames), func(name string) bool {
+					for topLevel := range sparseTopLevelFields {
+						if name == topLevel || strings.HasPrefix(name, topLevel+".") {
+							return true
+						}
+					}
+					return false
+				})
 			}
 		}
 		values := make([]searchjobs.Value, len(query.OutputFields))
@@ -814,7 +832,9 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 					version,
 				)
 			} else if index == sparseFieldIndex {
-				value, err = convertSparseEventFields(scannedValue(destination), fieldNames)
+				value, err = convertSparseEventFields(
+					scannedValue(destination), fieldNames, query.SparseFieldsSubset,
+				)
 			} else if stringOrBytesTransports[index].valid {
 				value, err = convertStringOrBytesOutput(
 					destinations,
@@ -958,6 +978,9 @@ func chargeAtomicResultRow(current, structural uint64, values []searchjobs.Value
 
 func validateSparseFieldsOutput(query clickhouse.CompiledQuery) (int, error) {
 	if !query.SparseFields {
+		if query.SparseFieldsSubset {
+			return -1, fmt.Errorf("%w: compiled sparse event fields subset contract is invalid", searchjobs.ErrInvalidResult)
+		}
 		return -1, nil
 	}
 	fieldIndex := slices.Index(query.OutputFields, "fields")
@@ -2865,7 +2888,7 @@ func convertJSON(document *chcol.JSON) (searchjobs.Value, error) {
 	return convertValue(root)
 }
 
-func convertSparseEventFields(value any, fieldNames []string) (searchjobs.Value, error) {
+func convertSparseEventFields(value any, fieldNames []string, allowSubset bool) (searchjobs.Value, error) {
 	var document *chcol.JSON
 	switch value := value.(type) {
 	case chcol.JSON:
@@ -2898,7 +2921,7 @@ func convertSparseEventFields(value any, fieldNames []string) (searchjobs.Value,
 		}
 	}
 	for _, stored := range physicalValues {
-		if !isNullJSONPathValue(stored) {
+		if !allowSubset && !isNullJSONPathValue(stored) {
 			return searchjobs.Value{}, errors.New("sparse event fields metadata does not match its JSON value")
 		}
 	}

@@ -668,7 +668,7 @@ func TestCompileFieldCatalogProjectionAndShadowSemantics(t *testing.T) {
 		},
 		{
 			name: "exclude blocks exact", source: `index=gradethis | fields - status`,
-			wantAbsentKnown: []string{"status"}, wantShadowed: []string{"status"}, wantDynamic: true,
+			wantShadowed: []string{"status"}, wantDynamic: true,
 		},
 		{
 			name: "table closes schema", source: `index=gradethis | table status`,

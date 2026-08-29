@@ -222,10 +222,14 @@ func ipSortOrderingKeySQL(lexicalTextSQL string) string {
 }
 
 // autoSortOrderingKeySQL implements a deterministic transitive approximation
-// of Splunk's documented pairwise automatic comparator. Complete numbers sort
-// numerically, valid IPs sort by address, number-leading alphanumeric strings
-// sort by their exact leading number, and all remaining values sort
-// lexicographically. The final lexical component breaks equal numeric/IP keys.
+// of Splunk's documented pairwise automatic comparator. A fixed SQL ORDER BY
+// key cannot select a different comparison mode for each pair, so mixed-domain
+// sets necessarily use stable domain ranks. Within those ranks, complete
+// numbers and simple number-leading alphanumeric strings sort by the same exact
+// numeric key, valid IPs sort by address, and remaining values sort
+// lexicographically. The dotted-alphanumeric guard preserves Splunk's explicit
+// `9.1.a, 10.1.a` descending example rather than treating `9.1`/`10.1` as
+// decimal prefixes. The final lexical component breaks equal numeric/IP keys.
 func autoSortOrderingKeySQL(numericTextSQL, lexicalTextSQL string) string {
 	numericTextVariable := "__os_sort_exact_text"
 	lexicalVariable := "__os_sort_lexical_text"
@@ -235,18 +239,23 @@ func autoSortOrderingKeySQL(numericTextSQL, lexicalTextSQL string) string {
 	ipKeyVariable := "__os_sort_ip_key"
 
 	numeric := exactNumericKeyEligibleSQL(numericKeyVariable)
+	dottedAlphanumeric := "position(" + leadingTextVariable + ", '.') != 0 AND " +
+		"startsWith(substring(" + lexicalVariable + ", length(" +
+		leadingTextVariable + ") + 1), '.')"
 	leading := "NOT (" + numeric + ") AND NOT (" +
 		"tupleElement(" + ipKeyVariable + ", 1) = toUInt8(0)) AND " +
-		exactNumericKeyEligibleSQL(leadingKeyVariable)
+		exactNumericKeyEligibleSQL(leadingKeyVariable) + " AND NOT (" +
+		dottedAlphanumeric + ")"
 	ip := "NOT (" + numeric + ") AND tupleElement(" + ipKeyVariable + ", 1) = toUInt8(0)"
 	chosenNumericKey := "if(" + numeric + ", " + numericKeyVariable + ", " + leadingKeyVariable + ")"
 	chosenNumericValue := exactNumericKeyValueSQL(chosenNumericKey)
-	category := "multiIf(" + numeric + ", toUInt8(0), " + ip +
-		", toUInt8(1), " + leading + ", toUInt8(2), toUInt8(3))"
+	numericLike := numeric + " OR " + leading
+	category := "multiIf(" + numericLike + ", toUInt8(0), " + ip +
+		", toUInt8(1), toUInt8(2))"
 	body := "tuple(" + category + ", " +
-		"if(" + numeric + " OR " + leading + ", tupleElement(" + chosenNumericValue + ", 1), toUInt8(1)), " +
-		"if(" + numeric + " OR " + leading + ", tupleElement(" + chosenNumericValue + ", 2), toInt64(0)), " +
-		"if(" + numeric + " OR " + leading + ", tupleElement(" + chosenNumericValue + ", 3), CAST('' AS String)), " +
+		"if(" + numericLike + ", tupleElement(" + chosenNumericValue + ", 1), toUInt8(1)), " +
+		"if(" + numericLike + ", tupleElement(" + chosenNumericValue + ", 2), toInt64(0)), " +
+		"if(" + numericLike + ", tupleElement(" + chosenNumericValue + ", 3), CAST('' AS String)), " +
 		"tupleElement(" + ipKeyVariable + ", 2), " + lexicalVariable + ")"
 	body = bindSQLExpressions(
 		[]string{numericKeyVariable, leadingKeyVariable, ipKeyVariable},

@@ -585,6 +585,7 @@ func TestCompiledQueryExecutionSealRejectsEveryPublicTamper(t *testing.T) {
 		}},
 		{name: "output", mutate: func(query *CompiledQuery) { query.OutputFields[0] = "tampered" }},
 		{name: "sparse contract", mutate: func(query *CompiledQuery) { query.SparseFields = !query.SparseFields }},
+		{name: "sparse subset contract", mutate: func(query *CompiledQuery) { query.SparseFieldsSubset = !query.SparseFieldsSubset }},
 		{name: "knowledge present", mutate: func(query *CompiledQuery) { query.knowledgeEvidence.prelude.present = false }},
 		{name: "knowledge commitment", mutate: func(query *CompiledQuery) { query.knowledgeEvidence.prelude.commitment[0] ^= 0xff }},
 		{name: "knowledge object count", mutate: func(query *CompiledQuery) { query.knowledgeEvidence.prelude.objectCount++ }},

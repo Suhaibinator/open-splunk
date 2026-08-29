@@ -8,6 +8,17 @@ individual feature sets. The strict executable corpus is
 `internal/spl/testdata/compatibility.json`; this document and that corpus must
 change together.
 
+Official SPL conformance is tested separately from that implementation-owned
+contract. `internal/spl/testdata/official_compatibility.json` pins each case to
+a versioned Splunk Help URL, named documentation section, exact command
+fragment, source classification, and verification date. Every command claimed
+in the command table below must have a source-backed parse case. Sort and
+fields cases additionally assert detailed AST semantics and source ranges, and
+their spaced-direction and wildcard fragments are reused by the ClickHouse
+execution regressions. These offline fixtures prevent the implementation from
+defining its own compatibility oracle; they do not turn the supported subset
+into a claim of complete Splunk parity.
+
 Unsupported syntax fails with a source-located diagnostic before execution.
 The compiler never executes a valid prefix of an invalid search. Every search
 is additionally restricted by the server-resolved tenant, indexes, half-open
@@ -66,7 +77,7 @@ The semantic rule inventory is:
 | `SPL-MAKEMV-001` | typed String multivalue construction |
 | `SPL-MVEXPAND-001` | controlled ordered row expansion |
 | `SPL-NOMV-001` | presentation-only flat multivalue display |
-| `SPL-FIELDS-001` | exact public command fields and private namespace |
+| `SPL-FIELDS-001` | bounded exact/wildcard projection and private namespace |
 | `SPL-SORT-001` | bounded Splunk-compatible field ordering |
 | `SPL-MULTIVALUE-TYPE-001` | nullable native typed-list transport |
 | `SPL-ORDER-001` | durable private relation lineage |
@@ -167,7 +178,7 @@ The cumulative command surface is:
 | `eval` | left-to-right typed scalar or multivalue assignments |
 | `rex` | first-match RE2 extraction with bounded named captures |
 | `spath` | row-preserving typed JSON scalar and wildcard-array extraction (`SPL-SPATH-MULTIVALUE-001`) |
-| `fields`, `table` | exact projection, including explicit `fields +` inclusion |
+| `fields`, `table` | exact table projection and exact/wildcard fields inclusion or exclusion |
 | `rename` | exact source/destination pairs |
 | `sort` | bounded exact typed keys, labeled or positional limits, and terminal reversal (`SPL-SORT-001`) |
 | `dedup` | global first-N retention by exact key tuple |
@@ -203,10 +214,23 @@ lookup, arithmetic, or resource validation publish no schema or partial rows.
 
 ### `fields` and `sort`
 
-`fields field...` and `fields + field...` are equivalent explicit inclusion
-forms; `fields - field...` excludes exact fields. The modifier is a standalone
-token, so an attached `+field` remains a field name rather than a modifier.
-Event-mode inclusion also retains the standard `_time` and `_raw` columns.
+`fields field...` and `fields + field...` are equivalent inclusion forms;
+`fields - field...` excludes selectors. Each selector may be exact or use `*`
+as its only wildcard metacharacter, including `error*` and `_*`. Matching is
+case-sensitive. The modifier is a standalone token, so an attached `+field`
+remains a field name rather than a modifier. Event-mode inclusion also retains
+the standard `_time` and `_raw` columns unless a later exclusion (for example
+`fields - _*`) removes them.
+
+Open event schemas evaluate wildcards against the stored, per-event field-name
+inventory, which is capped at 1,024 names by the ingestion contract. The
+compiler filters the aligned name/type metadata before any later command can
+resolve a dynamic field, and the executor reconstructs only those admitted
+paths from the immutable Dynamic payload. Exact selectors retain their prior
+top-level projection behavior when included; exact exclusion filters only the
+named dynamic field while retaining unrelated dynamic fields. Compiler-private
+`__os_` names and reserved storage roots cannot be selected by authored
+patterns.
 
 `sort` accepts a positional unsigned count or `limit=<count>`, followed by one
 or more exact keys. A key may have an attached or whitespace-separated `+` or
@@ -224,8 +248,12 @@ as specified by the [Splunk Enterprise `sort` reference](https://help.splunk.com
 valid IP addresses by address value. Invalid typed text has a deterministic
 lexical fallback. `auto` recognizes complete numbers, leading-number
 alphanumeric strings, and IP addresses, with lexical fallback for other
-values; this bounded category ordering approximates Splunk's documented
-pairwise automatic comparison.
+values. In particular, the documented dotted-alphanumeric pair `9.1.a` and
+`10.1.a` remains lexical, so descending order places `9.1.a` first. This
+bounded category ordering covers those pinned cases but only approximates
+Splunk's documented pairwise automatic comparison, which can select numeric
+or lexical comparison separately for different pairs and is not guaranteed to
+form a transitive SQL ordering over arbitrary mixed inputs.
 
 The authoritative Splunk documentation does not define how `sort` compares
 multivalue fields. Open Splunk therefore makes no parity claim for that case:

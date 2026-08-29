@@ -178,7 +178,8 @@ func ValidateTimelineEligibility(query *Query) error {
 			case ProjectModeInclude:
 				// The event compiler retains canonical _time implicitly.
 			case ProjectModeExclude:
-				if containsTimelineTime(operator.Fields) {
+				if containsTimelineTime(operator.Fields) ||
+					projectPatternsMatch(operator.Patterns, "_time") {
 					return timelineTimeDiagnostic(operator.Range)
 				}
 			case ProjectModeTable:
@@ -195,6 +196,12 @@ func ValidateTimelineEligibility(query *Query) error {
 		}
 	}
 	return nil
+}
+
+func projectPatternsMatch(patterns []ProjectFieldPattern, name string) bool {
+	return slices.ContainsFunc(patterns, func(pattern ProjectFieldPattern) bool {
+		return spl.MatchFieldsFieldGlob(pattern.Pattern, name)
+	})
 }
 
 func preferTimelineRange(preferred, fallback spl.Range) spl.Range {

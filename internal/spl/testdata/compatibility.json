@@ -4028,20 +4028,20 @@
     },
     {
       "id": "SPL-FIELDS-001",
-      "summary": "Command fields are exact, unquoted, source-located, and outside the private namespace.",
+      "summary": "Projection fields support bounded exact and '*' wildcard selectors while compiler-private names remain inaccessible.",
       "cases": [
         {
-          "name": "exact field accepted",
-          "source": "index=main | fillnull host",
+          "name": "fields wildcard inclusion",
+          "source": "index=main | fields + host, error*",
           "expect": {
             "parse": "accept"
           }
         },
         {
-          "name": "quoted command field rejected",
-          "source": "index=main | fillnull 'host name'",
+          "name": "fields wildcard internal exclusion",
+          "source": "index=main | fields - _*",
           "expect": {
-            "diagnostic": "SPL_EXPECTED_FIELD"
+            "parse": "accept"
           }
         },
         {
@@ -4069,16 +4069,14 @@
           "name": "labeled limit and typed keys",
           "source": "index=main | sort limit=12 +num(size), -str(source), ip(client_ip), auto(product)",
           "expect": {
-            "parse": "accept",
-            "mode": "typed"
+            "parse": "accept"
           }
         },
         {
           "name": "quoted transformed alias",
           "source": "index=main | stats count AS \"event count\" BY source | sort - num('event count'), + str(source)",
           "expect": {
-            "parse": "accept",
-            "mode": "typed"
+            "parse": "accept"
           }
         },
         {
@@ -4090,11 +4088,11 @@
           }
         },
         {
-          "name": "legacy whitespace separated keys",
-          "source": "index=main | sort host source",
+          "name": "legal first field named asc",
+          "source": "index=main | sort asc",
           "expect": {
             "parse": "accept",
-            "compatibility": "legacy-whitespace-fields"
+            "order": "pipeline"
           }
         },
         {
@@ -4106,11 +4104,19 @@
           }
         },
         {
+          "name": "automatic dotted alphanumeric lexical order",
+          "source": "index=main | sort 0 - auto(version)",
+          "expect": {
+            "parse": "accept",
+            "order": "pipeline"
+          }
+        },
+        {
           "name": "multivalue deterministic approximation",
           "source": "index=main | eval values=split(tags, \",\") | sort auto(values)",
           "expect": {
             "parse": "accept",
-            "compatibility": "open-splunk-memberwise-array-order"
+            "order": "member-order"
           }
         }
       ]

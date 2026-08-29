@@ -73,7 +73,11 @@ func TestCompileSortValueModesUseDistinctTotalOrderKeys(t *testing.T) {
 		},
 		{
 			name: "auto", source: `index=gradethis | sort 0 auto(value)`,
-			required: []string{`__os_sort_exact_key`, `__os_sort_ip_key`, `__os_sort_leading_text`, `extract(`},
+			required: []string{
+				`__os_sort_exact_key`, `__os_sort_ip_key`, `__os_sort_leading_text`,
+				`position(__os_sort_leading_text, '.') != 0 AND startsWith(substring(__os_sort_lexical_text, length(__os_sort_leading_text) + 1), '.')`,
+				`extract(`,
+			},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -153,5 +157,44 @@ func TestAutoSortKeyAvoidsDriverBindMetacharacters(t *testing.T) {
 	key := autoSortOrderingKeySQL("numeric_text", "lexical_text")
 	if strings.ContainsAny(key, "?{}") {
 		t.Fatalf("auto sort key contains driver bind metacharacters: %s", key)
+	}
+}
+
+func TestCompileSortReusesOnlyAdjacentEquivalentComparators(t *testing.T) {
+	t.Parallel()
+
+	var repeated strings.Builder
+	repeated.WriteString(`index=gradethis | table host`)
+	for range 21 {
+		repeated.WriteString(` | sort host`)
+	}
+	compiled := compileSPL(t, repeated.String())
+	if got := strings.Count(compiled.SQL, `tuple(toUInt8(NOT ifNull(`); got != 1 {
+		t.Fatalf("equivalent adjacent sorts materialized %d orders, want 1:\n%s", got, compiled.SQL)
+	}
+	if len(compiled.SQL) > maxCompiledQueryBytes {
+		t.Fatalf("equivalent adjacent sorts compiled to %d bytes, limit %d", len(compiled.SQL), maxCompiledQueryBytes)
+	}
+	if got := strings.Count(compiled.SQL, " ORDER BY "); got < 21 {
+		t.Fatalf("equivalent adjacent sorts retained %d order boundaries, want at least 21", got)
+	}
+
+	different := compileSPL(
+		t,
+		`index=gradethis | table host | sort host | sort - host`,
+	)
+	if got := strings.Count(different.SQL, `tuple(toUInt8(NOT ifNull(`); got != 2 {
+		t.Fatalf("distinct adjacent sorts materialized %d orders, want 2:\n%s", got, different.SQL)
+	}
+
+	differentLimits := compileSPL(
+		t,
+		`index=gradethis | table host | sort 11 host | sort 7 host`,
+	)
+	if got := strings.Count(differentLimits.SQL, `tuple(toUInt8(NOT ifNull(`); got != 1 {
+		t.Fatalf("same comparator with different limits materialized %d orders, want 1:\n%s", got, differentLimits.SQL)
+	}
+	if got := strings.Count(differentLimits.SQL, " LIMIT ?"); got != 2 {
+		t.Fatalf("same comparator with different limits retained %d limits, want 2:\n%s", got, differentLimits.SQL)
 	}
 }

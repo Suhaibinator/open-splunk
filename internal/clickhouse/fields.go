@@ -1450,7 +1450,7 @@ func knownFieldStoredTypeSQL(field fieldState) (string, []any, error) {
 		if !ok {
 			return "", nil, errors.New("dynamic field has an invalid stored metadata path")
 		}
-		if field.descendantSQL == "" || len(field.descendantArgs) == 0 {
+		if field.descendantSQL == "" {
 			return "", nil, errors.New("dynamic field has no exact descendant metadata proof")
 		}
 		firstIndex := "indexOf(" + quoteIdentifier(internalFieldNamesColumn) + ", ?)"
@@ -1510,6 +1510,9 @@ func knownFieldStoredTypeSQL(field fieldState) (string, []any, error) {
 }
 
 func exactStoredMetadataPath(field fieldState) (string, bool) {
+	if field.storedMetadataPath != "" {
+		return field.storedMetadataPath, true
+	}
 	if len(field.existsArgs) == 1 {
 		if path, ok := field.existsArgs[0].(string); ok && path != "" {
 			return path, true

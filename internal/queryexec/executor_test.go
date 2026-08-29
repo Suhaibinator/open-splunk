@@ -1153,10 +1153,26 @@ func TestConvertSparseEventFieldsRejectsInvalidPresenceMetadata(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			if _, err := convertSparseEventFields(test.document, test.fields); err == nil {
+			if _, err := convertSparseEventFields(test.document, test.fields, false); err == nil {
 				t.Fatal("invalid sparse metadata unexpectedly succeeded")
 			}
 		})
+	}
+}
+
+func TestConvertSparseEventFieldsAcceptsCompilerSealedSubset(t *testing.T) {
+	t.Parallel()
+
+	document := chcol.NewJSON()
+	document.SetValueAtPath("error_code", chcol.NewDynamicWithType("E42", "String"))
+	document.SetValueAtPath("secret", chcol.NewDynamicWithType("hidden", "String"))
+	value, err := convertSparseEventFields(document, []string{"error_code"}, true)
+	if err != nil {
+		t.Fatalf("convertSparseEventFields: %v", err)
+	}
+	fields, ok := value.Object()
+	if !ok || len(fields) != 1 || fields[0].Name != "error_code" {
+		t.Fatalf("subset fields = %#v", value)
 	}
 }
 
@@ -1165,6 +1181,7 @@ func TestValidateSparseFieldsOutputRejectsForgedContracts(t *testing.T) {
 
 	tests := []clickhouse.CompiledQuery{
 		{OutputFields: []string{"message"}, SparseFields: true},
+		{OutputFields: []string{"message"}, SparseFieldsSubset: true},
 		{OutputFields: []string{"fields", "fields"}, SparseFields: true},
 		{
 			OutputFields: []string{"fields", clickhouse.SparseEventFieldNamesColumn},

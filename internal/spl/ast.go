@@ -704,9 +704,12 @@ func (c *RenameCommand) SourceRange() Range { return c.Range }
 
 // FieldsCommand includes or excludes fields.
 type FieldsCommand struct {
-	Fields  []string
-	Exclude bool
-	Range   Range
+	Fields         []string
+	QuotedFields   []bool
+	WildcardFields []bool
+	FieldRanges    []Range
+	Exclude        bool
+	Range          Range
 }
 
 func (*FieldsCommand) command()             {}

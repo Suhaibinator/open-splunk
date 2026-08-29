@@ -605,6 +605,7 @@ func compiledExecutionDigestContext(
 		!validResultOptionalMultivalueOutputs(compiled) ||
 		!validResultStringOrBytesOutputs(compiled) ||
 		!validResultFieldPresentations(compiled) ||
+		(compiled.SparseFieldsSubset && !compiled.SparseFields) ||
 		compiled.statsPartitionsMaxThreadsHint > maximumStatsPartitionsMaxThreadsHint ||
 		!lookupTablesReferenced {
 		return compiledExecutionSeal{}, false, nil
@@ -637,6 +638,7 @@ func compiledExecutionDigestContext(
 		writeBool(digest, output.Nullable)
 	}
 	writeBool(digest, compiled.SparseFields)
+	writeBool(digest, compiled.SparseFieldsSubset)
 	writeBool(digest, compiled.atomicResult)
 	writeInt64(digest, int64(compiled.relationalDepth))
 	writeRange(digest, compiled.relationalDepthRange)

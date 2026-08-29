@@ -4213,11 +4213,76 @@ func (p *parser) parseFieldsCommand(name token) (Command, error) {
 		exclude = p.current().text == "-"
 		p.advance()
 	}
-	fields, end, err := p.parseFieldList()
+	fields, quoted, wildcards, ranges, end, err := p.parseFieldsFieldList()
 	if err != nil {
 		return nil, err
 	}
-	return &FieldsCommand{Fields: fields, Exclude: exclude, Range: Range{Start: name.sourceRange.Start, End: end}}, nil
+	return &FieldsCommand{
+		Fields:         fields,
+		QuotedFields:   quoted,
+		WildcardFields: wildcards,
+		FieldRanges:    ranges,
+		Exclude:        exclude,
+		Range:          Range{Start: name.sourceRange.Start, End: end},
+	}, nil
+}
+
+func (p *parser) parseFieldsFieldList() ([]string, []bool, []bool, []Range, Position, error) {
+	fields := make([]string, 0, 8)
+	quoted := make([]bool, 0, 8)
+	wildcards := make([]bool, 0, 8)
+	ranges := make([]Range, 0, 8)
+	end := p.current().sourceRange.Start
+	wantField := true
+	for !p.atCommandEnd() {
+		tok := p.current()
+		if tok.kind == tokenComma {
+			if wantField {
+				return nil, nil, nil, nil, end, p.errorAtCurrent("SPL_EXPECTED_FIELD", "expected a field name")
+			}
+			wantField = true
+			p.advance()
+			continue
+		}
+		isQuoted := tok.kind == tokenQuotedField
+		if tok.kind != tokenWord && !isQuoted {
+			return nil, nil, nil, nil, end, p.errorAtCurrent("SPL_EXPECTED_FIELD", "expected a field name")
+		}
+		if tok.scalarDiagnostic != nil {
+			return nil, nil, nil, nil, end, tok.scalarDiagnostic
+		}
+		wildcard := IsFieldsFieldGlob(tok.text)
+		if strings.Contains(tok.text, "*") && !wildcard {
+			return nil, nil, nil, nil, end, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_FIELD_PATTERN",
+				Message: "fields wildcard must be a valid field pattern using '*' as its only metacharacter",
+				Range:   tok.sourceRange,
+			}
+		}
+		if isQuoted && !wildcard {
+			if err := validateQuotedFieldReference(tok); err != nil {
+				return nil, nil, nil, nil, end, err
+			}
+		}
+		if len(fields) >= MaximumExplicitProjectionFields {
+			return nil, nil, nil, nil, end, &Diagnostic{
+				Code:    "SPL_QUERY_TOO_COMPLEX",
+				Message: fmt.Sprintf("fields contains more than %d selectors", MaximumExplicitProjectionFields),
+				Range:   tok.sourceRange,
+			}
+		}
+		fields = append(fields, tok.text)
+		quoted = append(quoted, isQuoted)
+		wildcards = append(wildcards, wildcard)
+		ranges = append(ranges, tok.sourceRange)
+		end = tok.sourceRange.End
+		wantField = false
+		p.advance()
+	}
+	if len(fields) == 0 || wantField {
+		return nil, nil, nil, nil, end, p.errorAtCurrent("SPL_EXPECTED_FIELD", "expected at least one field name")
+	}
+	return fields, quoted, wildcards, ranges, end, nil
 }
 
 func (p *parser) parseTableCommand(name token) (Command, error) {
@@ -4332,7 +4397,7 @@ func (p *parser) parseSortCommand(name token) (Command, error) {
 		}
 		p.advance()
 	}
-	if p.current().kind == tokenWord && (strings.EqualFold(p.current().text, "asc") || strings.EqualFold(p.current().text, "desc")) {
+	if p.current().kind == tokenWord && strings.EqualFold(p.current().text, "desc") {
 		return nil, p.errorAtCurrent("SPL_UNSUPPORTED_SORT_SYNTAX", "use a + or - prefix on each sort field")
 	}
 

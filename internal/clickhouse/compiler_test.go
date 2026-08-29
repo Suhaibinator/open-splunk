@@ -1787,7 +1787,8 @@ func TestCompileRenameKeepsCanonicalScanPredicatesAuthoritative(t *testing.T) {
 			t.Fatalf("calculated index rename lost scan predicate %q:\n%s", predicate, calculatedIndex.SQL)
 		}
 	}
-	if len(calculatedIndex.Args) < 2 || calculatedIndex.Args[0] != "tenant-1" || calculatedIndex.Args[1] != "gradethis" {
+	if !slices.Contains(calculatedIndex.Args, any("tenant-1")) ||
+		!slices.Contains(calculatedIndex.Args, any("gradethis")) {
 		t.Fatalf("calculated index changed physical scope args: %#v", calculatedIndex.Args)
 	}
 
@@ -4331,7 +4332,7 @@ func TestProjectionDoesNotExposeInternalColumns(t *testing.T) {
 
 	compiled := compileSPL(t, `index=gradethis | fields - trace_id`)
 	for _, output := range compiled.OutputFields {
-		if strings.HasPrefix(output, "__os_") || output == "fields" || output == "trace_id" {
+		if strings.HasPrefix(output, "__os_") || output == "trace_id" {
 			t.Fatalf("unexpected public output field %q in %v", output, compiled.OutputFields)
 		}
 	}
@@ -4369,7 +4370,7 @@ func TestEventPipelinesPreservePersistedFieldMetadataForAnalysis(t *testing.T) {
 		stageFragment string
 	}{
 		{name: "include", source: `index=gradethis | fields status`, stageFragment: explicitPrivateProjection},
-		{name: "exclude", source: `index=gradethis | fields - trace_id`, stageFragment: explicitPrivateProjection},
+		{name: "exclude", source: `index=gradethis | fields - trace_id`, stageFragment: `"__os_fields", arrayFilter((field_name, field_type) ->`},
 		{name: "table", source: `index=gradethis | table status`, stageFragment: explicitPrivateProjection},
 		{name: "rename", source: `index=gradethis | rename status AS code`, stageFragment: explicitPrivateProjection},
 		{name: "eval", source: `index=gradethis | eval code=status`, stageFragment: `SELECT *, "__os_fields"."status" AS "code"`},

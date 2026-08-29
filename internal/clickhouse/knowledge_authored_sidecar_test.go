@@ -144,7 +144,7 @@ func TestAuthoredSidecarConsumersRejectPartialAuthority(t *testing.T) {
 	if _, _, _, err := compileProjection(&plan.Project{
 		Mode:   plan.ProjectModeTable,
 		Fields: []plan.FieldRef{{Name: "broken", Canonical: true}},
-	}, state); err == nil {
+	}, state, quoteIdentifier("_source"), 1); err == nil {
 		t.Fatal("table accepted partial sidecar authority")
 	}
 	if _, _, _, err := compileRenameAssignment(plan.RenameAssignment{

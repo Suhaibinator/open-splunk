@@ -480,6 +480,11 @@ type CompiledQuery struct {
 	// SparseFields marks ordinary raw-event output whose public fields object
 	// must be reconstructed from the appended private presence column.
 	SparseFields bool
+	// SparseFieldsSubset permits the sealed sparse presence array to select a
+	// subset of paths from the immutable Dynamic payload. Only fields wildcard
+	// projections mint this contract; ordinary sparse output still requires an
+	// exact payload/metadata match.
+	SparseFieldsSubset bool
 	// atomicResult is compiler-owned evidence that the query may surface a
 	// sanitized runtime-value failure. The executor must consume and close the
 	// complete result before invoking the sink. The production manager supplies
@@ -976,7 +981,7 @@ func (c Compiler) compileWithFinalizerContext(
 			)
 			args = append(args, predicateArgs...)
 		case *plan.Project:
-			projection, nextState, projectionArgs, compileErr := compileProjection(operator, state)
+			projection, nextState, projectionArgs, compileErr := compileProjection(operator, state, alias, aliasSequence)
 			if compileErr != nil {
 				return CompiledQuery{}, compileErr
 			}
@@ -984,7 +989,9 @@ func (c Compiler) compileWithFinalizerContext(
 				"SELECT "+strings.Join(projection, ", ")+" FROM ("+relation.sql+") AS "+alias,
 				operator.Range,
 			)
-			args = append(args, projectionArgs...)
+			// Projection expressions precede their nested input relation in SQL,
+			// so their bind values precede every already-compiled input argument.
+			args = append(projectionArgs, args...)
 			state = nextState
 		case *plan.Extend:
 			if len(operator.Assignments) == 0 {
@@ -1741,6 +1748,28 @@ func (c Compiler) compileWithFinalizerContext(
 			)
 			state = nextState
 		case *plan.Sort:
+			if operatorIndex > 0 {
+				previous, ok := remainingOperators[operatorIndex-1].(*plan.Sort)
+				if ok && equivalentSortOperators(previous, operator) {
+					// Reuse the preceding command's durable comparator instead of
+					// expanding its exact Auto expression again. Retain the authored
+					// ORDER BY/LIMIT boundary: besides preserving source-range and
+					// relational-depth accounting, that boundary is observable to
+					// commands which follow this run of identical sorts.
+					order, orderErr := compileMaterializedOrder(state.order, false)
+					if orderErr != nil {
+						return CompiledQuery{}, orderErr
+					}
+					sortSQL := "SELECT * FROM (" + relation.sql + ") AS " + alias +
+						" ORDER BY " + order
+					if operator.Limit > 0 {
+						sortSQL += " LIMIT ?"
+						args = append(args, operator.Limit)
+					}
+					relation = relation.selectFrom(sortSQL, operator.Range)
+					break
+				}
+			}
 			materialized, sortKeys, order, prefixArgs, compileErr := compileSort(operator.Keys, state, aliasSequence)
 			if compileErr != nil {
 				return CompiledQuery{}, compileErr
@@ -2058,6 +2087,7 @@ func finalizeOrdinaryQuery(
 			OptionalMultivalueOutputs: optionalMultivalueOutputs,
 			StringOrBytesOutputs:      stringOrBytesOutputs,
 			SparseFields:              sparseFields,
+			SparseFieldsSubset:        state.sparseFieldsSubset,
 		},
 		relation.depth,
 		relation.ownerRange,
@@ -2232,6 +2262,7 @@ func finalizeChronologicallyValidatedQuery(
 			OptionalMultivalueOutputs: optionalMultivalueOutputs,
 			StringOrBytesOutputs:      stringOrBytesOutputs,
 			SparseFields:              sparseFields,
+			SparseFieldsSubset:        state.sparseFieldsSubset,
 			validationDummyProjection: dummyProjection,
 		},
 		aliasSequence,
@@ -8213,9 +8244,11 @@ type compileState struct {
 	privateColumns                   []string
 	rexCapturedBytesSQL              string
 	allowDynamic                     bool
+	sparseFieldsSubset               bool
 	eventRows                        bool
 	blocked                          map[string]struct{}
 	blockedPrefixes                  map[string]struct{}
+	dynamicFieldFilters              []compiledDynamicFieldFilter
 	order                            []compiledSortKey
 	tieBreakers                      []compiledSortKey
 	preAggregateValidationColumns    []string
@@ -8235,6 +8268,12 @@ type compileState struct {
 	deferredChronologicalValidation  []string
 	chronologicalBarriers            []compiledChronologicalBarrier
 	mvExpandQueryRowsSQL             string
+}
+
+type compiledDynamicFieldFilter struct {
+	include  bool
+	fields   []string
+	patterns []string
 }
 
 type compiledStatsSparklineMeasure struct {
@@ -8495,23 +8534,33 @@ func unsupportedMultivalueUsage(operation string, sourceRange spl.Range) error {
 }
 
 type fieldState struct {
-	valueSQL                     string
-	exactNumericKeySQL           string
-	dynamicNumericEligibleSQL    string
-	maxStringBytes               uint64
-	textEligibleSQL              string
-	rawTextIndexEligible         bool
-	dynamicDomain                dynamicScalarDomain
-	numericIntegral              bool
-	mvCountOneOrNull             bool
-	mvSortedLexicographic        bool
-	dynamicTypeSQL               string
-	storedTypeSQL                string
-	existsSQL                    string
-	existsArgs                   []any
-	descendantSQL                string
-	descendantArgs               []any
-	storedPath                   storedPathAuthority
+	valueSQL                  string
+	exactNumericKeySQL        string
+	dynamicNumericEligibleSQL string
+	maxStringBytes            uint64
+	textEligibleSQL           string
+	rawTextIndexEligible      bool
+	dynamicDomain             dynamicScalarDomain
+	numericIntegral           bool
+	mvCountOneOrNull          bool
+	mvSortedLexicographic     bool
+	dynamicTypeSQL            string
+	storedTypeSQL             string
+	existsSQL                 string
+	existsArgs                []any
+	descendantSQL             string
+	descendantArgs            []any
+	storedPath                storedPathAuthority
+	// storedMetadataPath retains the normalized source inventory path when a
+	// projection freezes presence into a private sidecar and clears the
+	// placeholder-bearing exists/descendant arguments. It is compiler-authored
+	// semantic type evidence only; it never authorizes a Dynamic value read.
+	storedMetadataPath string
+	// rawEventDynamic records that this field is an exact projection of the
+	// immutable event Dynamic payload and still uses the stored field-name
+	// inventory for row-local presence. A later wildcard projection must keep
+	// that inventory entry; calculated and renamed shadows deliberately do not.
+	rawEventDynamic              bool
 	relativeFieldNamesSQL        string
 	relativeFieldTypesSQL        string
 	fieldMetadataVersionSQL      string
@@ -9383,6 +9432,7 @@ type compiledScalar struct {
 	descendantSQL                string
 	descendantArgs               []any
 	storedPath                   storedPathAuthority
+	storedMetadataPath           string
 	relativeFieldNamesSQL        string
 	relativeFieldTypesSQL        string
 	fieldMetadataVersionSQL      string
@@ -14804,6 +14854,7 @@ func extendCompileState(
 	}
 	if !retainDirectSidecars {
 		value.storedPath = storedPathAuthority{}
+		value.storedMetadataPath = ""
 		value.relativeFieldNamesSQL = ""
 		value.relativeFieldTypesSQL = ""
 		value.fieldMetadataVersionSQL = ""
@@ -14817,6 +14868,7 @@ func extendCompileState(
 	next.publicOrder = append([]string(nil), state.publicOrder...)
 	next.blocked = cloneSet(state.blocked)
 	next.blockedPrefixes = cloneSet(state.blockedPrefixes)
+	next.dynamicFieldFilters = cloneCompiledDynamicFieldFilters(state.dynamicFieldFilters)
 	if exposesRawFieldsPayload(state) && !output.Canonical {
 		// A calculated dynamic-schema output can shadow an immutable member of
 		// the public convenience object. Keep private source metadata available
@@ -14870,6 +14922,7 @@ func extendCompileState(
 		descendantSQL:                value.descendantSQL,
 		descendantArgs:               append([]any(nil), value.descendantArgs...),
 		storedTypeSQL:                value.storedTypeSQL,
+		storedMetadataPath:           value.storedMetadataPath,
 		relativeFieldNamesSQL:        value.relativeFieldNamesSQL,
 		relativeFieldTypesSQL:        value.relativeFieldTypesSQL,
 		fieldMetadataVersionSQL:      value.fieldMetadataVersionSQL,
@@ -16266,6 +16319,18 @@ func cloneCompileState(state compileState) compileState {
 	return next
 }
 
+func cloneCompiledDynamicFieldFilters(filters []compiledDynamicFieldFilter) []compiledDynamicFieldFilter {
+	result := make([]compiledDynamicFieldFilter, len(filters))
+	for index, filter := range filters {
+		result[index] = compiledDynamicFieldFilter{
+			include:  filter.include,
+			fields:   slices.Clone(filter.fields),
+			patterns: slices.Clone(filter.patterns),
+		}
+	}
+	return result
+}
+
 func renamePublicOrder(current []string, source, destination string, sourceIsPublic bool) []string {
 	result := make([]string, 0, len(current)+1)
 	if sourceIsPublic && slices.Contains(current, source) {
@@ -16314,6 +16379,7 @@ func projectedRenameField(source fieldState, destination string) fieldState {
 		existsArgs:                   append([]any(nil), source.existsArgs...),
 		descendantSQL:                source.descendantSQL,
 		descendantArgs:               append([]any(nil), source.descendantArgs...),
+		storedMetadataPath:           source.storedMetadataPath,
 		relativeFieldNamesSQL:        source.relativeFieldNamesSQL,
 		relativeFieldTypesSQL:        source.relativeFieldTypesSQL,
 		fieldMetadataVersionSQL:      source.fieldMetadataVersionSQL,
@@ -16352,6 +16418,7 @@ func dropRawFieldsPayload(state *compileState) {
 		state.publicOrder,
 		func(name string) bool { return name == "fields" },
 	)
+	state.sparseFieldsSubset = false
 }
 
 func renameProjection(state, next compileState, destination string, source fieldState) []string {
@@ -17501,6 +17568,7 @@ func compiledScalarFromField(field fieldState) compiledScalar {
 		descendantSQL:                field.descendantSQL,
 		descendantArgs:               append([]any(nil), field.descendantArgs...),
 		storedPath:                   field.storedPath.clone(),
+		storedMetadataPath:           field.storedMetadataPath,
 		relativeFieldNamesSQL:        field.relativeFieldNamesSQL,
 		relativeFieldTypesSQL:        field.relativeFieldTypesSQL,
 		fieldMetadataVersionSQL:      field.fieldMetadataVersionSQL,
@@ -17612,6 +17680,9 @@ func resolveCompiledField(field plan.FieldRef, state compileState) (fieldState, 
 			return fieldState{}, false, nil
 		}
 	}
+	if !compiledDynamicFieldNameAllowed(state.dynamicFieldFilters, field.Name) {
+		return fieldState{}, false, nil
+	}
 	if len(field.Path) == 0 {
 		return fieldState{}, false, fmt.Errorf("compile ClickHouse field %q: dynamic path is empty", field.Name)
 	}
@@ -17633,22 +17704,47 @@ func resolveCompiledField(field plan.FieldRef, state compileState) (fieldState, 
 		existsArgs:     []any{storedPath.normalizedExactPath},
 		descendantSQL: "arrayExists(name -> startsWith(name, ?), " +
 			quoteIdentifier(internalFieldNamesColumn) + ")",
-		descendantArgs: []any{storedPath.normalizedDescendantPrefix},
-		storedPath:     storedPath,
-		kind:           fieldKindDynamic,
+		descendantArgs:     []any{storedPath.normalizedDescendantPrefix},
+		storedPath:         storedPath,
+		storedMetadataPath: storedPath.normalizedExactPath,
+		rawEventDynamic:    true,
+		kind:               fieldKindDynamic,
 	}, true, nil
 }
 
-func compileProjection(operator *plan.Project, state compileState) ([]string, compileState, []any, error) {
+func compiledDynamicFieldNameAllowed(filters []compiledDynamicFieldFilter, name string) bool {
+	for _, filter := range filters {
+		matched := slices.Contains(filter.fields, name)
+		if !matched && filter.include {
+			matched = slices.ContainsFunc(filter.fields, func(field string) bool {
+				return strings.HasPrefix(name, field+".")
+			})
+		}
+		if !matched {
+			matched = slices.ContainsFunc(filter.patterns, func(pattern string) bool {
+				return spl.MatchFieldsFieldGlob(pattern, name)
+			})
+		}
+		if (filter.include && !matched) || (!filter.include && matched) {
+			return false
+		}
+	}
+	return true
+}
+
+func compileProjection(operator *plan.Project, state compileState, relationAlias string, stage int) ([]string, compileState, []any, error) {
+	hasPatterns := len(operator.Patterns) > 0
 	next := compileState{
 		visible:              make(map[string]fieldState),
 		context:              state.context,
 		privateColumns:       append([]string(nil), state.privateColumns...),
 		rexCapturedBytesSQL:  state.rexCapturedBytesSQL,
-		allowDynamic:         operator.Mode == plan.ProjectModeExclude && state.allowDynamic,
+		allowDynamic:         state.allowDynamic && (operator.Mode == plan.ProjectModeExclude || hasPatterns),
+		sparseFieldsSubset:   false,
 		eventRows:            state.eventRows,
 		blocked:              cloneSet(state.blocked),
 		blockedPrefixes:      cloneSet(state.blockedPrefixes),
+		dynamicFieldFilters:  cloneCompiledDynamicFieldFilters(state.dynamicFieldFilters),
 		order:                append([]compiledSortKey(nil), state.order...),
 		tieBreakers:          append([]compiledSortKey(nil), state.tieBreakers...),
 		mvExpandQueryRowsSQL: state.mvExpandQueryRowsSQL,
@@ -17658,10 +17754,30 @@ func compileProjection(operator *plan.Project, state compileState) ([]string, co
 		),
 	}
 	var names []string
+	retainSparsePayload := false
+	hiddenNames := make(map[string]struct{})
 	switch operator.Mode {
 	case plan.ProjectModeInclude, plan.ProjectModeTable:
 		for _, field := range operator.Fields {
 			names = append(names, field.Name)
+		}
+		if hasPatterns {
+			for _, name := range state.publicOrder {
+				if name != "fields" && projectPatternsMatchName(operator.Patterns, name) &&
+					!slices.Contains(names, name) {
+					names = append(names, name)
+				}
+			}
+			remainingVisible := make([]string, 0, len(state.visible))
+			for name := range state.visible {
+				if name != "fields" && projectPatternsMatchName(operator.Patterns, name) &&
+					!slices.Contains(names, name) {
+					remainingVisible = append(remainingVisible, name)
+				}
+			}
+			sort.Strings(remainingVisible)
+			names = append(names, remainingVisible...)
+			retainSparsePayload = state.eventRows && state.allowDynamic
 		}
 		if operator.Mode == plan.ProjectModeInclude {
 			for _, implicit := range []string{"_time", "_raw"} {
@@ -17671,6 +17787,7 @@ func compileProjection(operator *plan.Project, state compileState) ([]string, co
 			}
 		}
 	case plan.ProjectModeExclude:
+		retainSparsePayload = state.eventRows && state.allowDynamic
 		excluded := make(map[string]struct{}, len(operator.Fields))
 		for _, field := range operator.Fields {
 			excluded[field.Name] = struct{}{}
@@ -17679,20 +17796,40 @@ func compileProjection(operator *plan.Project, state compileState) ([]string, co
 		for _, name := range state.publicOrder {
 			if name == "fields" && state.eventRows {
 				if _, visible := state.visible[name]; !visible {
-					continue // avoid leaking excluded dynamic members in the public object
+					retainSparsePayload = state.allowDynamic
+					continue
 				}
 			}
-			if _, remove := excluded[name]; !remove {
+			_, removeExact := excluded[name]
+			removePattern := projectPatternsMatchName(operator.Patterns, name)
+			if !removeExact && !removePattern {
 				names = append(names, name)
 			}
 		}
+		remainingHidden := make([]string, 0, len(state.visible))
+		for name := range state.visible {
+			if slices.Contains(state.publicOrder, name) {
+				continue
+			}
+			_, removeExact := excluded[name]
+			if removeExact || projectPatternsMatchName(operator.Patterns, name) {
+				continue
+			}
+			remainingHidden = append(remainingHidden, name)
+			hiddenNames[name] = struct{}{}
+		}
+		sort.Strings(remainingHidden)
+		names = append(names, remainingHidden...)
 	default:
 		return nil, compileState{}, nil, errors.New("compile ClickHouse projection: invalid mode")
 	}
 
 	projection := make([]string, 0, len(names)+6)
 	args := make([]any, 0)
-	for _, name := range names {
+	privateSidecarArgs := make([]any, 0)
+	privateSidecarProjections := make([]string, 0)
+	privateSidecarColumns := make([]string, 0)
+	for fieldIndex, name := range names {
 		var ref plan.FieldRef
 		for _, candidate := range operator.Fields {
 			if candidate.Name == name {
@@ -17750,6 +17887,54 @@ func compileProjection(operator *plan.Project, state compileState) ([]string, co
 				semanticBytesSQL,
 			)
 		}
+		projectedExistsSQL := rewriteExistenceForProjection(compiled, name)
+		projectedExistsArgs := append([]any(nil), compiled.existsArgs...)
+		projectedDescendantSQL := compiled.descendantSQL
+		projectedDescendantArgs := append([]any(nil), compiled.descendantArgs...)
+		storedMetadataPath := compiled.storedMetadataPath
+		if storedMetadataPath == "" {
+			storedMetadataPath, _ = exactStoredMetadataPath(compiled)
+		}
+		// Renamed and calculated fields can retain row-local presence authority
+		// from a raw Dynamic source. Freeze that authority before wildcard
+		// filtering removes tombstoned or shadowed raw names from the inventory.
+		// Direct raw projections keep using the filtered inventory itself.
+		if retainSparsePayload && !compiled.rawEventDynamic && strings.Contains(
+			projectedExistsSQL,
+			quoteIdentifier(internalFieldNamesColumn),
+		) {
+			existsColumn := quoteIdentifier(fmt.Sprintf(
+				"__os_fields_exists_%d_%d",
+				stage,
+				fieldIndex+1,
+			))
+			privateSidecarProjections = append(
+				privateSidecarProjections,
+				"toUInt8(ifNull("+qualifyEventFieldMetadataSQL(projectedExistsSQL, relationAlias)+", 0)) AS "+existsColumn,
+			)
+			privateSidecarColumns = append(privateSidecarColumns, existsColumn)
+			privateSidecarArgs = append(privateSidecarArgs, projectedExistsArgs...)
+			projectedExistsSQL = existsColumn
+			projectedExistsArgs = nil
+		}
+		if retainSparsePayload && !compiled.rawEventDynamic && strings.Contains(
+			projectedDescendantSQL,
+			quoteIdentifier(internalFieldNamesColumn),
+		) {
+			descendantColumn := quoteIdentifier(fmt.Sprintf(
+				"__os_fields_descendant_%d_%d",
+				stage,
+				fieldIndex+1,
+			))
+			privateSidecarProjections = append(
+				privateSidecarProjections,
+				"toUInt8(ifNull("+qualifyEventFieldMetadataSQL(projectedDescendantSQL, relationAlias)+", 0)) AS "+descendantColumn,
+			)
+			privateSidecarColumns = append(privateSidecarColumns, descendantColumn)
+			privateSidecarArgs = append(privateSidecarArgs, projectedDescendantArgs...)
+			projectedDescendantSQL = descendantColumn
+			projectedDescendantArgs = nil
+		}
 		next.visible[name] = fieldState{
 			valueSQL: publicName, maxStringBytes: compiled.maxStringBytes,
 			flatMultivalueDelimiter:      compiled.flatMultivalueDelimiter,
@@ -17763,14 +17948,16 @@ func compileProjection(operator *plan.Project, state compileState) ([]string, co
 			mvSortedLexicographic:        compiled.mvSortedLexicographic,
 			dynamicTypeSQL:               compiled.dynamicTypeSQL,
 			storedTypeSQL:                compiled.storedTypeSQL,
-			existsSQL:                    rewriteExistenceForProjection(compiled, name),
-			existsArgs:                   append([]any(nil), compiled.existsArgs...),
-			descendantSQL:                compiled.descendantSQL,
-			descendantArgs:               append([]any(nil), compiled.descendantArgs...),
+			existsSQL:                    projectedExistsSQL,
+			existsArgs:                   projectedExistsArgs,
+			descendantSQL:                projectedDescendantSQL,
+			descendantArgs:               projectedDescendantArgs,
 			relativeFieldNamesSQL:        compiled.relativeFieldNamesSQL,
 			relativeFieldTypesSQL:        compiled.relativeFieldTypesSQL,
 			fieldMetadataVersionSQL:      compiled.fieldMetadataVersionSQL,
 			optionalMultivaluePresentSQL: compiled.optionalMultivaluePresentSQL,
+			rawEventDynamic:              compiled.rawEventDynamic,
+			storedMetadataPath:           storedMetadataPath,
 			semanticBytesSQL:             semanticBytesSQL,
 			semanticBytesByUTF8Validity:  compiled.semanticBytesByUTF8Validity,
 			textEligibleBySemanticBytes:  compiled.textEligibleBySemanticBytes,
@@ -17784,14 +17971,160 @@ func compileProjection(operator *plan.Project, state compileState) ([]string, co
 			alwaysNull:                   compiled.alwaysNull,
 			materializeForPredicate:      compiled.materializeForPredicate,
 		}
-		next.publicOrder = append(next.publicOrder, name)
+		if _, hidden := hiddenNames[name]; !hidden {
+			next.publicOrder = append(next.publicOrder, name)
+		}
+	}
+	if retainSparsePayload {
+		next.publicOrder = append(next.publicOrder, "fields")
+		next.sparseFieldsSubset = true
+	}
+	if hasPatterns {
+		filter := compiledDynamicFieldFilter{include: operator.Mode == plan.ProjectModeInclude}
+		for _, field := range operator.Fields {
+			filter.fields = append(filter.fields, field.Name)
+		}
+		for _, pattern := range operator.Patterns {
+			filter.patterns = append(filter.patterns, pattern.Pattern)
+		}
+		next.dynamicFieldFilters = append(next.dynamicFieldFilters, filter)
 	}
 	next.privateColumns = livePrivateColumns(next.privateColumns, next.visible)
 	if next.mvExpandQueryRowsSQL != "" &&
 		!slices.Contains(next.privateColumns, next.mvExpandQueryRowsSQL) {
 		next.privateColumns = append(next.privateColumns, next.mvExpandQueryRowsSQL)
 	}
-	return appendPrivateEventProjection(projection, next), next, args, nil
+	projection = appendPrivateEventProjection(projection, next)
+	projection = append(projection, privateSidecarProjections...)
+	next.privateColumns = append(next.privateColumns, privateSidecarColumns...)
+	if retainSparsePayload {
+		filterFields := operator.Fields
+		predicate, predicateArgs, filterErr := compileProjectFieldNamePredicate(
+			operator.Mode, filterFields, operator.Patterns,
+			projectRawPayloadDeniedNames(state), sortedSetValues(state.blockedPrefixes),
+		)
+		if filterErr != nil {
+			return nil, compileState{}, nil, filterErr
+		}
+		projection = replacePrivateFieldMetadataProjection(
+			projection, predicate, relationAlias,
+		)
+		args = append(args, predicateArgs...)
+		args = append(args, predicateArgs...)
+	}
+	args = append(args, privateSidecarArgs...)
+	return projection, next, args, nil
+}
+
+func qualifyEventFieldMetadataSQL(expression, relationAlias string) string {
+	for _, column := range []string{internalFieldNamesColumn, internalFieldTypesColumn} {
+		identifier := quoteIdentifier(column)
+		expression = strings.ReplaceAll(expression, identifier, relationAlias+"."+identifier)
+	}
+	return expression
+}
+
+func projectPatternsMatchName(patterns []plan.ProjectFieldPattern, name string) bool {
+	return slices.ContainsFunc(patterns, func(pattern plan.ProjectFieldPattern) bool {
+		return spl.MatchFieldsFieldGlob(pattern.Pattern, name)
+	})
+}
+
+func compileProjectFieldNamePredicate(
+	mode plan.ProjectMode,
+	fields []plan.FieldRef,
+	patterns []plan.ProjectFieldPattern,
+	deniedNames []string,
+	deniedPrefixes []string,
+) (string, []any, error) {
+	terms := make([]string, 0, len(fields)+len(patterns))
+	args := make([]any, 0, len(fields)+len(patterns))
+	for _, field := range fields {
+		if field.Name == "" || strings.HasPrefix(strings.ToLower(field.Name), "__os_") {
+			return "", nil, errors.New("compile ClickHouse projection: invalid exact field selector")
+		}
+		if mode == plan.ProjectModeInclude {
+			terms = append(terms,
+				"(field_name = ? OR startsWith(field_name, concat(?, '.')))",
+			)
+			args = append(args, field.Name, field.Name)
+		} else {
+			terms = append(terms, "field_name = ?")
+			args = append(args, field.Name)
+		}
+	}
+	for _, pattern := range patterns {
+		if !spl.IsFieldsFieldGlob(pattern.Pattern) {
+			return "", nil, errors.New("compile ClickHouse projection: invalid field wildcard")
+		}
+		parts := strings.Split(pattern.Pattern, "*")
+		for index := range parts {
+			parts[index] = regexp.QuoteMeta(parts[index])
+		}
+		term := "match(field_name, ?)"
+		if !strings.HasPrefix(pattern.Pattern, "_") {
+			term = "(NOT startsWith(field_name, '_') AND " + term + ")"
+		}
+		terms = append(terms, term)
+		args = append(args, `(?s:\A(?:`+strings.Join(parts, `.*`)+`)\z)`)
+	}
+	if len(terms) == 0 {
+		return "", nil, errors.New("compile ClickHouse projection: empty wildcard filter")
+	}
+	predicate := "(" + strings.Join(terms, " OR ") + ")"
+	switch mode {
+	case plan.ProjectModeInclude:
+	case plan.ProjectModeExclude:
+		predicate = "NOT " + predicate
+	default:
+		return "", nil, errors.New("compile ClickHouse projection: wildcard filter has invalid mode")
+	}
+	deniedTerms := make([]string, 0, len(deniedNames)+len(deniedPrefixes))
+	for _, name := range deniedNames {
+		deniedTerms = append(deniedTerms, "field_name = ?")
+		args = append(args, name)
+	}
+	for _, prefix := range deniedPrefixes {
+		deniedTerms = append(deniedTerms,
+			"(field_name = ? OR startsWith(field_name, concat(?, '.')))",
+		)
+		args = append(args, prefix, prefix)
+	}
+	if len(deniedTerms) != 0 {
+		predicate = "(" + predicate + ") AND NOT (" + strings.Join(deniedTerms, " OR ") + ")"
+	}
+	return predicate, args, nil
+}
+
+func projectRawPayloadDeniedNames(state compileState) []string {
+	denied := make(map[string]struct{}, len(state.visible)+len(state.blocked))
+	for name, field := range state.visible {
+		if !field.rawEventDynamic {
+			denied[name] = struct{}{}
+		}
+	}
+	for name := range state.blocked {
+		denied[name] = struct{}{}
+	}
+	return sortedSetValues(denied)
+}
+
+func replacePrivateFieldMetadataProjection(projection []string, predicate, relationAlias string) []string {
+	names := quoteIdentifier(internalFieldNamesColumn)
+	types := quoteIdentifier(internalFieldTypesColumn)
+	sourceNames := relationAlias + "." + names
+	sourceTypes := relationAlias + "." + types
+	for index, term := range projection {
+		switch term {
+		case names:
+			projection[index] = "arrayFilter((field_name, field_type) -> " + predicate +
+				", " + sourceNames + ", " + sourceTypes + ") AS " + names
+		case types:
+			projection[index] = "arrayFilter((field_type, field_name) -> " + predicate +
+				", " + sourceTypes + ", " + sourceNames + ") AS " + types
+		}
+	}
+	return projection
 }
 
 func rewriteExistenceForProjection(field fieldState, name string) string {
@@ -25871,6 +26204,23 @@ func compileSort(keys []plan.SortKey, state compileState, stage int) ([]string, 
 		return nil, nil, "", nil, err
 	}
 	return materialized, compiled, order, prefixArgs, nil
+}
+
+func equivalentSortOperators(left, right *plan.Sort) bool {
+	if left == nil || right == nil || len(left.Keys) != len(right.Keys) {
+		return false
+	}
+	for index := range left.Keys {
+		leftKey := left.Keys[index]
+		rightKey := right.Keys[index]
+		if leftKey.Descending != rightKey.Descending || leftKey.Mode != rightKey.Mode ||
+			leftKey.Field.Name != rightKey.Field.Name ||
+			leftKey.Field.Canonical != rightKey.Field.Canonical ||
+			!slices.Equal(leftKey.Field.Path, rightKey.Field.Path) {
+			return false
+		}
+	}
+	return true
 }
 
 func compileMaterializedOrder(keys []compiledSortKey, reverse bool) (string, error) {

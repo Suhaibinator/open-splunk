@@ -1,0 +1,723 @@
+{
+  "format_version": 1,
+  "cases": [
+    {
+      "id": "search.pipeline-filter",
+      "command": "search",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/search",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "search status=200",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | search status=200",
+      "expect": { "commands": ["search"] }
+    },
+    {
+      "id": "where.comparison",
+      "command": "where",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/where",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "where status=200",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | where status=200",
+      "expect": { "commands": ["where"] }
+    },
+    {
+      "id": "eval.arithmetic-assignment",
+      "command": "eval",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/eval",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "eval total=price*quantity",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | eval total=price*quantity",
+      "expect": { "commands": ["eval"] }
+    },
+    {
+      "id": "rex.named-capture",
+      "command": "rex",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/rex",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "rex field=_raw \"(?<code>[0-9]+)\"",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | rex field=_raw \"(?<code>[0-9]+)\"",
+      "expect": { "commands": ["rex"] }
+    },
+    {
+      "id": "spath.explicit-path",
+      "command": "spath",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/spath",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "spath input=_raw output=user path=user.name",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | spath input=_raw output=user path=user.name",
+      "expect": { "commands": ["spath"] }
+    },
+    {
+      "id": "fields.exclude-list",
+      "command": "fields",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.4/search-commands/fields",
+        "release": "10.4",
+        "section": "Examples > Example 1",
+        "kind": "official-example",
+        "fragment": "fields - host, ip",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | fields - host, ip",
+      "expect": {
+        "commands": ["fields"],
+        "fields": {
+          "exclude": true,
+          "names": ["host", "ip"],
+          "wildcards": [false, false],
+          "range_texts": ["host", "ip"]
+        }
+      }
+    },
+    {
+      "id": "fields.wildcard-include",
+      "command": "fields",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.4/search-commands/fields",
+        "release": "10.4",
+        "section": "Examples > Example 4",
+        "kind": "official-example",
+        "fragment": "fields source, sourcetype, host, error*",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | fields source, sourcetype, host, error*",
+      "expect": {
+        "commands": ["fields"],
+        "fields": {
+          "exclude": false,
+          "names": ["source", "sourcetype", "host", "error*"],
+          "wildcards": [false, false, false, true],
+          "range_texts": ["source", "sourcetype", "host", "error*"]
+        }
+      }
+    },
+    {
+      "id": "fields.internal-wildcard-exclude",
+      "command": "fields",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.4/search-commands/fields",
+        "release": "10.4",
+        "section": "Usage > Internal fields and Splunk Web",
+        "kind": "official-example",
+        "fragment": "fields - _*",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | fields - _*",
+      "expect": {
+        "commands": ["fields"],
+        "fields": {
+          "exclude": true,
+          "names": ["_*"],
+          "wildcards": [true],
+          "range_texts": ["_*"]
+        }
+      }
+    },
+    {
+      "id": "fields.explicit-wildcard-include",
+      "command": "fields",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.4/search-commands/fields",
+        "release": "10.4",
+        "section": "Syntax; Required arguments > wc-field-list",
+        "kind": "grammar-derived",
+        "fragment": "fields + event_id, status*",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | fields + event_id, status*",
+      "expect": {
+        "commands": ["fields"],
+        "fields": {
+          "exclude": false,
+          "names": ["event_id", "status*"],
+          "wildcards": [false, true],
+          "range_texts": ["event_id", "status*"]
+        }
+      }
+    },
+    {
+      "id": "table.field-list",
+      "command": "table",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/table",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "table host source sourcetype",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | table host source sourcetype",
+      "expect": { "commands": ["table"] }
+    },
+    {
+      "id": "rename.field-alias",
+      "command": "rename",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/rename",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "rename host AS origin",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | rename host AS origin",
+      "expect": { "commands": ["rename"] }
+    },
+    {
+      "id": "sort.spaced-ascending-time",
+      "command": "sort",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/sort",
+        "release": "10.0",
+        "section": "Required arguments > sort-by-clause",
+        "kind": "grammar-derived",
+        "fragment": "sort 0 + _time",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | sort 0 + _time",
+      "expect": {
+        "commands": ["sort"],
+        "sort": {
+          "limit": 0,
+          "limit_specified": true,
+          "fields": [
+            {
+              "name": "_time",
+              "quoted": false,
+              "descending": false,
+              "mode": "auto",
+              "range_text": "+ _time",
+              "field_range_text": "_time"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "sort.spaced-descending-field",
+      "command": "sort",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/sort",
+        "release": "10.0",
+        "section": "Basic examples > 4. Changing the time format of events for sorting",
+        "kind": "official-example",
+        "fragment": "sort - Time",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | sort - Time",
+      "expect": {
+        "commands": ["sort"],
+        "sort": {
+          "limit": 0,
+          "limit_specified": false,
+          "fields": [
+            {
+              "name": "Time",
+              "quoted": false,
+              "descending": true,
+              "mode": "auto",
+              "range_text": "- Time",
+              "field_range_text": "Time"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "sort.bounded-spaced-ascending-time",
+      "command": "sort",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/sort",
+        "release": "10.0",
+        "section": "Required arguments > sort-by-clause; Optional arguments > count",
+        "kind": "grammar-derived",
+        "fragment": "sort 10 + _time",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | sort 10 + _time",
+      "expect": {
+        "commands": ["sort"],
+        "sort": {
+          "limit": 10,
+          "limit_specified": true,
+          "fields": [
+            {
+              "name": "_time",
+              "quoted": false,
+              "descending": false,
+              "mode": "auto",
+              "range_text": "+ _time",
+              "field_range_text": "_time"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "sort.typed-multiple-fields",
+      "command": "sort",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/sort",
+        "release": "10.0",
+        "section": "Basic examples > 2. Specifying the number of results to sort",
+        "kind": "official-example",
+        "fragment": "sort 100 -num(size), +str(source)",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | sort 100 -num(size), +str(source)",
+      "expect": {
+        "commands": ["sort"],
+        "sort": {
+          "limit": 100,
+          "limit_specified": true,
+          "fields": [
+            {
+              "name": "size",
+              "quoted": false,
+              "descending": true,
+              "mode": "number",
+              "range_text": "-num(size)",
+              "field_range_text": "size"
+            },
+            {
+              "name": "source",
+              "quoted": false,
+              "descending": false,
+              "mode": "string",
+              "range_text": "+str(source)",
+              "field_range_text": "source"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "sort.labeled-count",
+      "command": "sort",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/sort",
+        "release": "10.0",
+        "section": "Basic examples > 6. Use a label with the count",
+        "kind": "official-example",
+        "fragment": "sort limit=12 host",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | sort limit=12 host",
+      "expect": {
+        "commands": ["sort"],
+        "sort": {
+          "limit": 12,
+          "limit_specified": true,
+          "fields": [
+            {
+              "name": "host",
+              "quoted": false,
+              "descending": false,
+              "mode": "auto",
+              "range_text": "host",
+              "field_range_text": "host"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "sort.terminal-descending",
+      "command": "sort",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/sort",
+        "release": "10.0",
+        "section": "Optional arguments > desc",
+        "kind": "grammar-derived",
+        "fragment": "sort host, source desc",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | sort host, source desc",
+      "expect": {
+        "commands": ["sort"],
+        "sort": {
+          "limit": 0,
+          "limit_specified": false,
+          "fields": [
+            {
+              "name": "host",
+              "quoted": false,
+              "descending": true,
+              "mode": "auto",
+              "range_text": "host",
+              "field_range_text": "host"
+            },
+            {
+              "name": "source",
+              "quoted": false,
+              "descending": true,
+              "mode": "auto",
+              "range_text": "source",
+              "field_range_text": "source"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "dedup.single-field",
+      "command": "dedup",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/dedup",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "dedup source",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | dedup source",
+      "expect": { "commands": ["dedup"] }
+    },
+    {
+      "id": "head.count",
+      "command": "head",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/head",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "head 20",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | head 20",
+      "expect": { "commands": ["head"] }
+    },
+    {
+      "id": "tail.count",
+      "command": "tail",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/tail",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "tail 20",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | tail 20",
+      "expect": { "commands": ["tail"] }
+    },
+    {
+      "id": "stats.count-by-field",
+      "command": "stats",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/stats",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "stats count BY host",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | stats count BY host",
+      "expect": { "commands": ["stats"] }
+    },
+    {
+      "id": "eventstats.average-by-field",
+      "command": "eventstats",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/eventstats",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "eventstats avg(duration) AS average BY host",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | eventstats avg(duration) AS average BY host",
+      "expect": { "commands": ["eventstats"] }
+    },
+    {
+      "id": "streamstats.running-count",
+      "command": "streamstats",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/streamstats",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "streamstats count AS current_count BY host",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | streamstats count AS current_count BY host",
+      "expect": { "commands": ["streamstats"] }
+    },
+    {
+      "id": "top.single-field",
+      "command": "top",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/top",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "top host",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | top host",
+      "expect": { "commands": ["top"] }
+    },
+    {
+      "id": "rare.single-field",
+      "command": "rare",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/rare",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "rare host",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | rare host",
+      "expect": { "commands": ["rare"] }
+    },
+    {
+      "id": "bin.time-span",
+      "command": "bin",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/bin",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "bin _time span=5m",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | bin _time span=5m",
+      "expect": { "commands": ["bin"] }
+    },
+    {
+      "id": "bucket.time-span",
+      "command": "bucket",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/bucket",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "bucket _time span=5m",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | bucket _time span=5m",
+      "expect": { "commands": ["bucket"] }
+    },
+    {
+      "id": "timechart.hourly-count",
+      "command": "timechart",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/timechart",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "timechart span=1h count",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | timechart span=1h count",
+      "expect": { "commands": ["timechart"] }
+    },
+    {
+      "id": "chart.count-over-by-fields",
+      "command": "chart",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/chart",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "chart count OVER host BY sourcetype",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | chart count OVER host BY sourcetype",
+      "expect": { "commands": ["chart"] }
+    },
+    {
+      "id": "regex.raw-pattern",
+      "command": "regex",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/regex",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "regex \"error\"",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | regex \"error\"",
+      "expect": { "commands": ["regex"] }
+    },
+    {
+      "id": "reverse.no-arguments",
+      "command": "reverse",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/reverse",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "reverse",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | reverse",
+      "expect": { "commands": ["reverse"] }
+    },
+    {
+      "id": "accum.single-field",
+      "command": "accum",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/accum",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "accum count",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | accum count",
+      "expect": { "commands": ["accum"] }
+    },
+    {
+      "id": "strcat.fields-and-literal",
+      "command": "strcat",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/strcat",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "strcat source \":\" sourcetype newfield",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | strcat source \":\" sourcetype newfield",
+      "expect": { "commands": ["strcat"] }
+    },
+    {
+      "id": "addinfo.no-arguments",
+      "command": "addinfo",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/addinfo",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "addinfo",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | addinfo",
+      "expect": { "commands": ["addinfo"] }
+    },
+    {
+      "id": "fillnull.explicit-value",
+      "command": "fillnull",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/fillnull",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "fillnull value=\"NULL\" host",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | fillnull value=\"NULL\" host",
+      "expect": { "commands": ["fillnull"] }
+    },
+    {
+      "id": "addtotals.explicit-output",
+      "command": "addtotals",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/addtotals",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "addtotals fieldname=Total price tax",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | addtotals fieldname=Total price tax",
+      "expect": { "commands": ["addtotals"] }
+    },
+    {
+      "id": "delta.field-alias",
+      "command": "delta",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/delta",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "delta count AS change",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | delta count AS change",
+      "expect": { "commands": ["delta"] }
+    },
+    {
+      "id": "makemv.literal-delimiter",
+      "command": "makemv",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/makemv",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "makemv delim=\",\" recipients",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | makemv delim=\",\" recipients",
+      "expect": { "commands": ["makemv"] }
+    },
+    {
+      "id": "mvexpand.single-field",
+      "command": "mvexpand",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/mvexpand",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "mvexpand recipients",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | mvexpand recipients",
+      "expect": { "commands": ["mvexpand"] }
+    },
+    {
+      "id": "nomv.single-field",
+      "command": "nomv",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/nomv",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "nomv recipients",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | nomv recipients",
+      "expect": { "commands": ["nomv"] }
+    },
+    {
+      "id": "lookup.explicit-output",
+      "command": "lookup",
+      "source": {
+        "url": "https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/lookup",
+        "release": "10.0",
+        "section": "Syntax",
+        "kind": "grammar-derived",
+        "fragment": "lookup users user AS user OUTPUT department",
+        "verified_on": "2026-08-29"
+      },
+      "query": "index=main | lookup users user AS user OUTPUT department",
+      "expect": { "commands": ["lookup"] }
+    }
+  ]
+}
