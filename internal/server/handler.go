@@ -36,6 +36,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/searchsuggestions"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
@@ -1492,11 +1493,39 @@ func featuresForServices(features []opensplunk.ServerFeature, capabilities servi
 	return result
 }
 
+const (
+	// SRouter logs every HTTPError it renders at Error level, including client
+	// faults such as a 404 for an unknown search job, so an unauthenticated
+	// scanner can drive one ERROR line per request through the process
+	// logger's single output mutex. Sample that traffic: the first
+	// srouterLogSampleFirst records in each interval are always emitted, then
+	// one in every srouterLogSampleThereafter, per level and message.
+	srouterLogSampleInterval   = time.Second
+	srouterLogSampleFirst      = 100
+	srouterLogSampleThereafter = 100
+)
+
+// newSRouterLogger derives the child logger handed to SRouter. Sampling is
+// applied here rather than to the process logger so that server and collector
+// operational records - startup, shutdown, ingest and query failures, each of
+// which is emitted at most a handful of times - are never dropped. The child
+// is named so a sampled record is attributable to the HTTP layer. logger must
+// be non-nil; NewHandler substitutes a no-op logger for a nil Config.Logger.
+func newSRouterLogger(logger *zap.Logger) *zap.Logger {
+	return logger.Named("http").WithOptions(zap.WrapCore(func(core zapcore.Core) zapcore.Core {
+		return zapcore.NewSamplerWithOptions(
+			core,
+			srouterLogSampleInterval,
+			srouterLogSampleFirst,
+			srouterLogSampleThereafter,
+		)
+	}))
+}
+
 func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout time.Duration) http.Handler {
-	logger := handler.logger
-	if logger == nil {
-		logger = zap.NewNop()
-	}
+	// NewHandler substitutes a no-op logger for a nil Config.Logger, so this is
+	// always non-nil.
+	routerLogger := newSRouterLogger(handler.logger)
 	noAuth := router.NoAuth
 	protobufMiddleware := requireProtobufContentType
 	requestMiddleware := handler.boundRequests
@@ -1669,7 +1698,7 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 	}
 	apiRouter := router.NewRouter[string, struct{}](router.RouterConfig{
 		ServiceName: "open-splunk-server",
-		Logger:      logger,
+		Logger:      routerLogger,
 		// SRouter's built-in timeout returns while its handler goroutine may
 		// continue using services. Keep it disabled and apply a synchronous
 		// context deadline so http.Server.Shutdown owns every handler lifetime.
