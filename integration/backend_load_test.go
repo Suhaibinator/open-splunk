@@ -210,31 +210,31 @@ func TestBackendLoadDurableWALAppendedEvents(t *testing.T) {
 	t.Parallel()
 	logs := strings.Join([]string{
 		`{"level":"info","msg":"collector starting"}`,
-		`{"level":"debug","msg":"collector: batch appended","batch_sequence":11,"events":250,"bytes":1000}`,
-		`{"level":"debug","msg":"collector: batch appended","batch_sequence":12,"events":500,"bytes":2000}`,
+		`{"level":"debug","msg":"batch appended","batch_sequence":11,"events":250,"batch_bytes":1000}`,
+		`{"level":"debug","msg":"batch appended","batch_sequence":12,"events":500,"batch_bytes":2000}`,
 	}, "\n")
 	if got, err := backendLoadDurableWALAppendedEvents(logs); err != nil || got != 750 {
 		t.Fatalf("backendLoadDurableWALAppendedEvents() = %d, %v; want 750", got, err)
 	}
 	if _, err := backendLoadDurableWALAppendedEvents(
-		`{"level":"debug","msg":"collector: batch appended","batch_sequence":11,"bytes":1000}`,
+		`{"level":"debug","msg":"batch appended","batch_sequence":11,"batch_bytes":1000}`,
 	); err == nil {
 		t.Fatal("WAL append log without an event count unexpectedly parsed")
 	}
 	for _, invalid := range []string{
-		`{"msg":"collector: batch appended","events":"250"}`,
-		`{"msg":"collector: batch appended","events":-1}`,
-		`{"msg":"collector: batch appended","events":1.5}`,
-		`{"msg":"collector: batch appended","events":null}`,
-		`{"msg":"collector: batch appended","events":18446744073709551616}`,
+		`{"msg":"batch appended","events":"250"}`,
+		`{"msg":"batch appended","events":-1}`,
+		`{"msg":"batch appended","events":1.5}`,
+		`{"msg":"batch appended","events":null}`,
+		`{"msg":"batch appended","events":18446744073709551616}`,
 	} {
 		if _, err := backendLoadDurableWALAppendedEvents(invalid); err == nil {
 			t.Fatalf("WAL append log with invalid event count unexpectedly parsed: %s", invalid)
 		}
 	}
 	overflow := strings.Join([]string{
-		`{"msg":"collector: batch appended","events":18446744073709551615}`,
-		`{"msg":"collector: batch appended","events":1}`,
+		`{"msg":"batch appended","events":18446744073709551615}`,
+		`{"msg":"batch appended","events":1}`,
 	}, "\n")
 	if _, err := backendLoadDurableWALAppendedEvents(overflow); err == nil {
 		t.Fatal("overflowing WAL append event total unexpectedly parsed")
@@ -921,7 +921,7 @@ func waitForBackendLoadDurableWALQueuedEvents(
 }
 
 func backendLoadDurableWALAppendedEvents(logs string) (uint64, error) {
-	const message = "collector: batch appended"
+	const message = "batch appended"
 	type logRecord struct {
 		Message string          `json:"msg"`
 		Events  json.RawMessage `json:"events"`
