@@ -108,6 +108,18 @@ jobs:
       - name: Test frontend and build transactions
         run: npm run test:frontend
 
+      # The computed-style contracts read app/globals.css back through a real
+      # browser and need no export, no baseline, and no backend, so they are
+      # platform-independent and run here. `npm run test:visual` cannot: its
+      # baselines are rasterized per platform and only a darwin set is
+      # committed. Generating a linux set in this runner's image is the
+      # follow-up that puts the screenshot half of the net under CI too.
+      - name: Install Chromium for the stylesheet contracts
+        run: npx --no-install playwright install --with-deps chromium
+
+      - name: Test stylesheet contracts
+        run: npm run test:contracts
+
       - name: Build static UI
         run: npm run build
 

@@ -16,12 +16,14 @@ import path from "node:path";
 import process from "node:process";
 import test from "node:test";
 
+import { BACKEND_VISUAL_EXPORT, DEMO_VISUAL_EXPORT } from "./build-visual-exports.mjs";
 import { listRepositoryFiles, relativePosix } from "./css-inventory.mjs";
 import { countRecordedScreenshots, parseDeterminismArguments } from "./visual-determinism.mjs";
 
 const workspace = process.cwd();
 const runnerPath = path.join(workspace, "scripts", "test-frontend.mjs");
 const visualConfigPath = path.join(workspace, "playwright.visual.config.ts");
+const serversPath = path.join(workspace, "integration", "visual", "visual-servers.ts");
 const baselineRoot = path.join(workspace, "integration", "visual", "__screenshots__");
 
 /** Paths `scripts/test-frontend.mjs` names, in the two shapes it uses. */
@@ -116,6 +118,23 @@ test("every visual screenshot has a baseline in every project, and none is orpha
     "The committed baselines and the visual specs disagree. A missing baseline only fails on the\n"
       + "machine that runs the suite; an orphaned one is never compared against anything:\n"
       + describeList(problems),
+  );
+});
+
+test("the builder and the visual configuration name the same export directories", async () => {
+  const declared = Object.fromEntries(
+    [...(await readFile(serversPath, "utf8"))
+      .matchAll(/export const (\w+_EXPORT_ROOT) = "([^"]*)";/gu)]
+      .map((match) => [match[1], match[2]]),
+  );
+  assert.deepEqual(
+    declared,
+    {
+      BACKEND_EXPORT_ROOT: relativePosix(workspace, BACKEND_VISUAL_EXPORT),
+      DEMO_EXPORT_ROOT: relativePosix(workspace, DEMO_VISUAL_EXPORT),
+    },
+    "scripts/build-visual-exports.mjs writes the exports somewhere integration/visual/visual-servers.ts\n"
+      + "does not serve them from, so the visual suite would render a stale directory or none at all.",
   );
 });
 

@@ -43,10 +43,34 @@ async function revealFieldsRail(page: Page): Promise<void> {
   await settleVisualPage(page);
 }
 
+/**
+ * Opens the workspace and waits for the exact result state the baselines record.
+ *
+ * The event list appears before the job settles, so waiting only for it accepts
+ * more than one page shape. Two of them differ by roughly 370 pixels of height:
+ * above the phone breakpoint the first event is expanded over its EVENT FIELDS
+ * panel, and at or below it a mount effect collapses that event along with the
+ * fields rail. A run that hydrates with the phone layout in effect therefore
+ * screenshots a much shorter desktop page and fails on a surface nobody
+ * touched. Pinning the finished status and the expansion the viewport implies
+ * turns that race into a wait, and into an honest failure if it never resolves.
+ */
 async function openWorkspaceWithResults(page: Page): Promise<void> {
   await gotoVisualRoute(page, "/search/");
   await expect(page.getByTestId("search-workspace")).toBeVisible();
   await expect(page.getByTestId("event-list")).toBeVisible();
+
+  const strip = page.getByTestId("job-strip");
+  await expect(strip).toContainText("Completed");
+  await expect(strip).toContainText("100%");
+
+  // The same query the workspace itself uses to decide the phone layout.
+  const phoneLayout = await page.evaluate(() => globalThis.matchMedia("(max-width: 760px)").matches);
+  const firstEvent = page.locator(".event-row").first();
+  if (phoneLayout) await expect(firstEvent).not.toHaveClass(/\bexpanded\b/u);
+  else await expect(firstEvent).toHaveClass(/\bexpanded\b/u);
+
+  await settleVisualPage(page);
 }
 
 test.describe("search workspace", () => {

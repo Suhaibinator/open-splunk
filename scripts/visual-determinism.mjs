@@ -16,9 +16,9 @@
 // Usage:
 //   node scripts/visual-determinism.mjs [--skip-build] [--port <number>]
 //
-// `--skip-build` reuses the exports already in `out/` and `.cache/visual`,
-// which is what you want while iterating on a spec; the default rebuilds so a
-// stale export can never be measured.
+// `--skip-build` reuses the exports already in `.cache/visual`, which is what
+// you want while iterating on a spec; the default rebuilds so a stale export
+// can never be measured.
 import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -26,19 +26,15 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
+// `build-visual-exports.mjs` runs its builds only when it is executed, so its
+// export paths are imported rather than duplicated here. They must stay equal
+// to `DEMO_EXPORT_ROOT` and `BACKEND_EXPORT_ROOT` in
+// `integration/visual/visual-servers.ts`, which the visual configuration reads;
+// the readiness check below fails loudly if either directory is missing.
+import { BACKEND_VISUAL_EXPORT, DEMO_VISUAL_EXPORT } from "./build-visual-exports.mjs";
 import { createStaticServer } from "./serve-static.mjs";
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-
-/**
- * Directory holding the backend-mode export.
- *
- * Spelled out rather than imported: `build-visual-exports.mjs` runs the builds
- * at module scope, so importing its constant would start a build. It matches
- * `BACKEND_EXPORT_ROOT` in `integration/visual/visual-servers.ts`, and the
- * readiness check below fails loudly if the two ever drift apart.
- */
-const BACKEND_EXPORT_ROOT = path.join(repository, ".cache", "visual", "backend-export");
 
 /**
  * Default base port.
@@ -114,18 +110,17 @@ async function requireExport(directory) {
 
 async function main() {
   const options = parseDeterminismArguments(process.argv.slice(2));
-  const demoExport = path.join(repository, "out");
   if (!options.skipBuild) {
     const built = await run(process.execPath, [path.join(repository, "scripts", "build-visual-exports.mjs")]);
     if (built !== 0) throw new Error(`building the visual exports exited with ${built}`);
   }
-  await requireExport(demoExport);
-  await requireExport(BACKEND_EXPORT_ROOT);
+  await requireExport(DEMO_VISUAL_EXPORT);
+  await requireExport(BACKEND_VISUAL_EXPORT);
 
   const recorded = await mkdtemp(path.join(tmpdir(), "open-splunk-visual-determinism-"));
   const servers = [
-    await listen(demoExport, options.port),
-    await listen(BACKEND_EXPORT_ROOT, options.port + 1),
+    await listen(DEMO_VISUAL_EXPORT, options.port),
+    await listen(BACKEND_VISUAL_EXPORT, options.port + 1),
   ];
   const environment = {
     OPEN_SPLUNK_VISUAL_PORT: String(options.port),

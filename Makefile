@@ -214,12 +214,20 @@ lint:
 
 # `npm run lint:css` reports CSS-token debt as warnings only and is deliberately
 # not part of this target yet. Phase 5 of the CSS cleanup flips .stylelintrc.json
-# to errors and adds it here once app/globals.css no longer trips it.
+# to errors and adds it here once app/globals.css no longer trips it. The report
+# is 1,621 warnings: 1,590 of them are the token debt that phase exists to clear
+# (1,519 hex colors, 63 literal rgb()/font-family values, 8 off-scale media
+# features) and 31 are small correctness items. The stylistic rules from
+# stylelint-config-standard that this repository does not follow are turned off
+# in .stylelintrc.json, so the flip needs no disable comments.
 
 # test:contracts reads app/globals.css back through getComputedStyle and
 # test:visual renders the exported UI and compares committed baselines. Both
 # need the pinned browser, installed once with
-# `npx --no-install playwright install chromium`.
+# `npx --no-install playwright install chromium`. test:visual rebuilds the two
+# static exports into `.cache/visual` and resets `out/`, so run `make build-ui`
+# before building the server afterwards. Only test:contracts runs in CI; the
+# screenshot baselines are darwin-only.
 test: docs-check lint
 	$(GO_TEST_ENV) go test ./...
 	npm run test:frontend

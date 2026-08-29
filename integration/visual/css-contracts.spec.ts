@@ -152,11 +152,31 @@ test.describe("knowledge manager layout contracts", () => {
     expectEqualTracks(await gridTracks(page, ".knowledge-manager__advanced-filter-grid"), 4);
     expectEqualTracks(await gridTracks(page, ".knowledge-manager__mutation-grid--selectors"), 4);
 
-    await expect(page.locator(".knowledge-manager__filters label").first()).toHaveCSS("display", "grid");
-    const caption = page.locator(".knowledge-manager__filters label > span").first();
-    await expect(caption).toHaveCSS("text-transform", "uppercase");
-    await expect(caption).toHaveCSS("font-weight", "700");
-    await expect(page.locator(".knowledge-manager__filters select").first()).toHaveCSS("height", "34px");
+    // Both filter grids share one grouped rule for their labels, captions, and
+    // controls, so both halves of every group are asserted: dropping either
+    // selector from the group leaves the other passing on its own.
+    await Promise.all([
+      ".knowledge-manager__filters",
+      ".knowledge-manager__advanced-filter-grid",
+    ].map(async (grid) => {
+      const caption = page.locator(`${grid} label > span`).first();
+      await Promise.all([
+        expect(page.locator(`${grid} label`).first()).toHaveCSS("display", "grid"),
+        expect(caption).toHaveCSS("text-transform", "uppercase"),
+        expect(caption).toHaveCSS("font-weight", "700"),
+      ]);
+    }));
+    await Promise.all([
+      ".knowledge-manager__filters select",
+      ".knowledge-manager__advanced-filter-grid input",
+      ".knowledge-manager__advanced-filter-grid select",
+    ].map(async (control) => {
+      const field = page.locator(control).first();
+      await Promise.all([
+        expect(field).toHaveCSS("height", "34px"),
+        expect(field).toHaveCSS("border-top-width", "1px"),
+      ]);
+    }));
 
     // Detail mode keeps the list and the inspector side by side.
     expect(await gridTracks(page, ".knowledge-manager__workspace--detail")).toHaveLength(2);
@@ -175,8 +195,14 @@ test.describe("knowledge manager layout contracts", () => {
   test("mobile collapses rows, enlarges controls, and stacks relationship bars", async ({ page }) => {
     await mount(page, knowledgeManagerMarkup, MOBILE_WIDTH);
 
-    // The row keeps a content column plus a trailing auto column for the badge.
-    expect(await gridTracks(page, ".knowledge-manager__row")).toHaveLength(2);
+    // The row keeps a `minmax(0, 1fr)` content column plus a trailing `auto`
+    // column sized to the badge. Two equal halves would also have two tracks,
+    // so the trailing track is measured against the badge it must hug.
+    const rowTracks = await gridTracks(page, ".knowledge-manager__row");
+    expect(rowTracks).toHaveLength(2);
+    const badge = await contentWidth(page, ".knowledge-manager__row > span:nth-child(3)");
+    expect(rowTracks[1]).toBeCloseTo(badge, 0);
+    expect(rowTracks[1]).toBeLessThan((rowTracks[0] ?? 0) / 2);
     expect(await gridTracks(page, ".knowledge-manager__mutation-grid")).toHaveLength(1);
     expect(await gridTracks(page, ".knowledge-manager__related-object dl")).toHaveLength(1);
 
@@ -296,10 +322,16 @@ test.describe("statistics multivalue contracts", () => {
 test("the statistics sparkline paints with the palette accent", async ({ page }) => {
   await mount(page, '<svg class="statistics-sparkline"><polyline points="0,0" /></svg>', DESKTOP_WIDTH);
 
-  // --color-accent resolves through --blue; the polyline inherits it as
-  // currentColor, so an undefined token would silently paint the SVG black.
+  // The polyline inherits --blue as currentColor, so an undefined token would
+  // silently paint the SVG black. No page in either export renders a sparkline
+  // -- it needs a server-supplied multivalue column -- so this contract and the
+  // component baseline in `component-surfaces.visual.spec.ts` are the only
+  // gates on its appearance.
   await expect(page.locator(".statistics-sparkline")).toHaveCSS("color", "rgb(40, 120, 168)");
-  await expect(page.locator(".statistics-sparkline polyline")).toHaveCSS("stroke", "rgb(40, 120, 168)");
+  const polyline = page.locator(".statistics-sparkline polyline");
+  await expect(polyline).toHaveCSS("stroke", "rgb(40, 120, 168)");
+  await expect(polyline).toHaveCSS("fill", "none");
+  await expect(polyline).toHaveCSS("stroke-linecap", "round");
 });
 
 const liveJobsMarkup = `
