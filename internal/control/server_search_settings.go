@@ -36,6 +36,8 @@ type serverSearchSettingsRecord struct {
 
 func (serverSearchSettingsRecord) TableName() string { return "server_search_settings" }
 
+const maximumServerSettingsVersion = uint64(1<<63 - 1)
+
 type ServerSearchSettingsStore struct {
 	db       *DB
 	tenantID string
@@ -84,9 +86,9 @@ func (store *ServerSearchSettingsStore) Update(
 		return ServerSearchSettings{}, fmt.Errorf("%w: settings context is required", ErrInvalidArgument)
 	}
 	if err := searchlimits.Validate(limits); err != nil {
-		return ServerSearchSettings{}, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
+		return ServerSearchSettings{}, fmt.Errorf("%w: %w", ErrInvalidArgument, err)
 	}
-	if expectedVersion >= uint64(^uint64(0)>>1) {
+	if expectedVersion >= maximumServerSettingsVersion {
 		return ServerSearchSettings{}, ErrVersionConflict
 	}
 	now := store.now().Round(0).UTC().Truncate(time.Microsecond)
@@ -94,8 +96,11 @@ func (store *ServerSearchSettingsStore) Update(
 		return ServerSearchSettings{}, fmt.Errorf("%w: settings time is invalid", ErrInvalidArgument)
 	}
 	next := expectedVersion + 1
-	record := serverSearchSettingsRecordFrom(next, limits, now)
-	err := store.db.orm.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	record, err := serverSearchSettingsRecordFrom(next, limits, now)
+	if err != nil {
+		return ServerSearchSettings{}, err
+	}
+	err = store.db.orm.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var current serverSearchSettingsRecord
 		readErr := tx.First(&current, "singleton_id = ?", 1).Error
 		switch {
@@ -108,6 +113,8 @@ func (store *ServerSearchSettingsStore) Update(
 			}
 		case readErr != nil:
 			return readErr
+		case current.Version < 1:
+			return ErrVersionConflict
 		case uint64(current.Version) != expectedVersion:
 			return ErrVersionConflict
 		default:
@@ -141,13 +148,25 @@ func serverSearchSettingsRecordFrom(
 	version uint64,
 	limits searchlimits.Policy,
 	updatedAt time.Time,
-) serverSearchSettingsRecord {
+) (serverSearchSettingsRecord, error) {
+	signedVersion, err := signedServerSettingsValue(version)
+	if err != nil {
+		return serverSearchSettingsRecord{}, err
+	}
+	maximumMemoryBytes, err := signedServerSettingsValue(limits.MaxMemoryBytes)
+	if err != nil {
+		return serverSearchSettingsRecord{}, err
+	}
+	maximumRowsToRead, err := signedServerSettingsValue(limits.MaxRowsToRead)
+	if err != nil {
+		return serverSearchSettingsRecord{}, err
+	}
 	return serverSearchSettingsRecord{
 		SingletonID:                1,
-		Version:                    int64(version),
+		Version:                    signedVersion,
 		MaximumRuntimeNanoseconds:  int64(limits.MaxRuntime),
-		MaximumMemoryBytes:         int64(limits.MaxMemoryBytes),
-		MaximumRowsToRead:          int64(limits.MaxRowsToRead),
+		MaximumMemoryBytes:         maximumMemoryBytes,
+		MaximumRowsToRead:          maximumRowsToRead,
 		MaximumBytesToRead:         int64(limits.MaxBytesToRead),
 		MaximumGroupedRows:         int64(limits.MaxGroupedRows),
 		MaximumThreads:             int64(limits.MaxThreads),
@@ -157,7 +176,14 @@ func serverSearchSettingsRecordFrom(
 		MaximumConcurrentSearches:  int64(limits.MaxConcurrent),
 		ResultRetentionNanoseconds: int64(limits.ResultRetention),
 		UpdatedAtUnixMicro:         updatedAt.UnixMicro(),
+	}, nil
+}
+
+func signedServerSettingsValue(value uint64) (int64, error) {
+	if value > maximumServerSettingsVersion {
+		return 0, fmt.Errorf("%w: server setting value is too large", ErrInvalidArgument)
 	}
+	return int64(value), nil
 }
 
 func serverSearchSettingsFromRecord(record serverSearchSettingsRecord) (ServerSearchSettings, error) {

@@ -493,9 +493,9 @@ type BootstrapConfig struct {
 	SearchResultRetention time.Duration
 }
 
-// ServerSettings is the administrator mutation surface and live bootstrap
+// Settings is the administrator mutation surface and live bootstrap
 // view for node-wide search limits.
-type ServerSettings interface {
+type Settings interface {
 	Get(context.Context) (control.ServerSearchSettings, error)
 	Update(context.Context, uint64, searchlimits.Policy) (control.ServerSearchSettings, error)
 	Current() control.ServerSearchSettings
@@ -518,7 +518,7 @@ type Config struct {
 	HECOperations              HECOperationalSnapshotter
 	AuditEvents                AuditEvents
 	SearchAttemptAuditEvents   SearchAttemptAuditEvents
-	ServerSettings             ServerSettings
+	ServerSettings             Settings
 	CollectorAdmin             CollectorAdministration
 	AppAdmin                   AppAdministration
 	AppCatalog                 AppCatalog
@@ -581,7 +581,7 @@ type apiHandler struct {
 	hecOperations              HECOperationalSnapshotter
 	auditEvents                AuditEvents
 	searchAttemptAuditEvents   SearchAttemptAuditEvents
-	serverSettings             ServerSettings
+	serverSettings             Settings
 	collectorAdmin             CollectorAdministration
 	appAdmin                   AppAdministration
 	appCatalog                 AppCatalog

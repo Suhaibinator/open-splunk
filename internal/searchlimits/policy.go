@@ -160,7 +160,7 @@ func (source *Source) Store(policy Policy) error {
 	if err := Validate(policy); err != nil {
 		return err
 	}
-	copy := policy
-	source.current.Store(&copy)
+	snapshot := policy
+	source.current.Store(&snapshot)
 	return nil
 }

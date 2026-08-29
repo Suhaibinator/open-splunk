@@ -1015,11 +1015,6 @@ func (executor *Executor) settingsForContext(
 	return bounded, nil
 }
 
-func (executor *Executor) groupLimitSettingsFor(query clickhouse.CompiledQuery) clickhousedriver.Settings {
-	settings, expandTimechartGroupLimit := executor.settingsSnapshot()
-	return groupLimitSettingsFor(settings, expandTimechartGroupLimit, query)
-}
-
 func groupLimitSettingsFor(
 	settings *validatedExecutorSettings,
 	expandTimechartGroupLimit bool,

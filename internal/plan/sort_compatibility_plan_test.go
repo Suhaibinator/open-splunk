@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"errors"
 	"slices"
 	"testing"
 
@@ -95,7 +96,8 @@ func TestBuildSortUsesExactInnerFieldRangeForDiagnostics(t *testing.T) {
 
 	source := `* | sort num(\_time)`
 	_, err := Build(mustParse(t, source), testScope([]string{"gradethis"}, nil))
-	diagnostic, ok := err.(*Diagnostic)
+	var diagnostic *Diagnostic
+	ok := errors.As(err, &diagnostic)
 	if !ok || diagnostic.Code != "SPL_INVALID_FIELD" {
 		t.Fatalf("Build error = %v, want SPL_INVALID_FIELD", err)
 	}

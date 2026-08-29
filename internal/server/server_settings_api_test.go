@@ -59,7 +59,7 @@ func TestServerSettingsAPIEnvelopeUpdateConflictAndValidation(t *testing.T) {
 	t.Parallel()
 	settings := newFakeServerSettings()
 	handler := &apiHandler{serverSettings: settings}
-	request := httptest.NewRequest("POST", "/api/server/settings/get", nil)
+	request := httptest.NewRequestWithContext(context.Background(), "POST", "/api/server/settings/get", nil)
 	get, err := handler.getServerSettings(request, &opensplunk.GetServerSettingsRequest{})
 	if err != nil || get.GetCurrent().GetVersion() != 0 ||
 		get.GetCurrent().GetLimits().GetMaximumRuntime().AsDuration() != 2*time.Minute ||
@@ -104,7 +104,7 @@ func TestBootstrapUsesLiveServerSettingsTimeoutAndRetention(t *testing.T) {
 		maximumPageSize: 100, now: time.Now,
 	}
 	response, err := handler.getSystemBootstrap(
-		httptest.NewRequest("POST", "/api/system/bootstrap", nil),
+		httptest.NewRequestWithContext(context.Background(), "POST", "/api/system/bootstrap", nil),
 		&opensplunk.GetSystemBootstrapRequest{},
 	)
 	if err != nil {
