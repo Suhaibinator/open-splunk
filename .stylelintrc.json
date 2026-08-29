@@ -1,0 +1,31 @@
+{
+  "extends": "stylelint-config-standard",
+  "defaultSeverity": "warning",
+  "rules": {
+    "color-no-hex": true,
+    "declaration-property-value-disallowed-list": {
+      "/.*/": ["/\\b(?:rgba?|hsla?)\\(/"],
+      "font-family": ["/^(?!var\\(--font-[a-z-]+\\)$).+$/"]
+    },
+    "media-feature-name-allowed-list": [
+      "max-width",
+      "pointer",
+      "prefers-reduced-motion"
+    ],
+    "media-feature-name-value-allowed-list": {
+      "max-width": ["/^(?:1240|980|760|480)px$/"]
+    },
+    "selector-class-pattern": [
+      "^(?:[a-z][a-z0-9]*(?:(?:__|--|-)[a-z0-9]+)*|[a-z][a-zA-Z0-9]*)$",
+      {
+        "message": "Expected kebab-case or BEM in app/globals.css, camelCase in a CSS module"
+      }
+    ],
+    "selector-pseudo-class-no-unknown": [
+      true,
+      {
+        "ignorePseudoClasses": ["global", "local"]
+      }
+    ]
+  }
+}

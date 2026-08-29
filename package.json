@@ -15,8 +15,11 @@
     "build": "node scripts/build-ui.mjs",
     "lint": "oxlint .",
     "test:frontend": "node scripts/test-frontend.mjs",
+    "test:visual": "playwright test --config=playwright.visual.config.ts",
     "check:docs": "node scripts/check-docs.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "//lint:css": "Warning-only in Phase 0. Phase 5 flips .stylelintrc.json severities to errors and gates the build on this script.",
+    "lint:css": "stylelint \"app/**/*.css\""
   },
   "dependencies": {
     "@bufbuild/protobuf": "^2.14.0",
@@ -32,6 +35,8 @@
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "oxlint": "^1.79.0",
+    "stylelint": "^16.26.1",
+    "stylelint-config-standard": "^39.0.1",
     "ts-proto": "^2.12.1",
     "typescript": "^7.0.2"
   }

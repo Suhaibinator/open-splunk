@@ -212,9 +212,17 @@ docs-check:
 lint:
 	npm run lint
 
+# `npm run lint:css` reports CSS-token debt as warnings only and is deliberately
+# not part of this target yet. Phase 5 of the CSS cleanup flips .stylelintrc.json
+# to errors and adds it here once app/globals.css no longer trips it.
+
+# test:visual renders the exported UI in Chromium and compares committed
+# baselines; install the pinned browser once with
+# `npx --no-install playwright install chromium`.
 test: docs-check lint
 	$(GO_TEST_ENV) go test ./...
 	npm run test:frontend
+	npm run test:visual
 	npm run typecheck
 
 clean:

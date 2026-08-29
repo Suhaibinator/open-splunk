@@ -217,3 +217,38 @@ latency acceptance thresholds. Exact payload semantics and the maximum number
 of materialized rows remain correctness gates. Metrics and top/bottom
 screenshots are written beneath
 `test-results/browser-fixed-result-rendering/visual`.
+
+## Visual regression baselines
+
+`integration/visual` pins the appearance of the shipped CSS. It needs no Go
+server, ClickHouse, or Docker: `scripts/build-visual-exports.mjs` produces the
+static export twice, `scripts/serve-static.mjs` serves both from one
+dependency-free Node process, and `playwright.visual.config.ts` drives Chromium
+against them at 1440x900 and 760x1000.
+
+Nearly every surface renders from the demo data mode, whose fixtures are
+compiled into the bundle. Only the bootstrap-advertised Knowledge Manager needs
+the backend-mode export, and `knowledge-manager.visual.spec.ts` supplies its
+protobuf responses through request interception.
+
+```sh
+npm ci
+npx --no-install playwright install chromium
+npm run test:visual
+```
+
+Baselines live in `integration/visual/__screenshots__/<platform>/<project>/`
+and are committed. They are platform-specific because font rasterization is:
+a machine whose platform has no directory there must generate its own set.
+
+The suite fails on a layout change but tolerates
+`maxDiffPixelRatio: 0.002`, so normalizing a color by one or two RGB units
+still passes. Update baselines only when a visual change is intended, review
+the regenerated PNGs, and describe the change in the commit body:
+
+```sh
+npm run test:visual -- --update-snapshots
+```
+
+Failure artifacts (actual, expected, and diff images) are written beneath
+`test-results/visual`.
