@@ -38,3 +38,18 @@ comparison. This is deliberately a helper-level lowering microbenchmark;
 compiler alias/state reuse and downstream key cleanup are covered separately
 by compiler assertions and pinned `EXPLAIN` tests. Benchmark output is
 evidence, not a timing gate.
+
+`css-inventory.mjs` parses the stylesheets and the code that names their
+classes. It is a library rather than a test so `css-invariants.test.mjs` can
+assert on stylesheet structure without reading a stylesheet itself, which is
+one of the invariants it enforces. `css-dynamic-classes.json` records the
+global classes that only ever exist at runtime.
+
+`safety-net.test.mjs` checks that the Phase 0 safety net cannot stop running
+unnoticed: every unit test file is named in this directory's hardcoded runner
+list, and every screenshot a visual spec pins has a committed baseline.
+
+`visual-determinism.mjs` implements `npm run test:visual:determinism`. It
+builds the exports once, serves them itself, and runs the visual suite twice
+over that single build, comparing the two passes with no pixel budget. See
+[the integration guide](../integration/README.md#screenshot-determinism).

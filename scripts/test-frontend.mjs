@@ -11,6 +11,8 @@ const scriptTests = [
   "build-ui-output.test.mjs",
   "check-docs.test.mjs",
   "compile-protos.test.mjs",
+  "css-invariants.test.mjs",
+  "safety-net.test.mjs",
   "materialize-git-snapshot.test.mjs",
   "run-go-race-shard.test.mjs",
   "run-development.test.mjs",
