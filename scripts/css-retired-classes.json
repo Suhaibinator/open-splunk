@@ -1,5 +1,5 @@
 {
-  "//": "Class names the Phase 3 consolidation deleted from the global stylesheet, each with the primitive that replaced it. A name here is a name no rule matches any more, so markup that still asks for it renders unstyled -- silently, because an unmatched class is not an error anywhere in the toolchain. scripts/css-call-sites.test.mjs asserts nothing in the repository still writes one of these into a class attribute, and that none of them has quietly come back to the stylesheets under its old name.",
+  "//": "Class names the Phase 3 consolidation deleted from the global stylesheet, each with the primitive that replaced it. A name here is a name no rule matches any more, so markup that still asks for it renders unstyled -- silently, because an unmatched class is not an error anywhere in the toolchain. scripts/style-invariants.test.mjs asserts nothing in the repository still writes one of these into a class attribute, and that none of them has quietly come back to the stylesheets under its old name.",
   "classes": {
     "app-bar": ".suite-app-bar, rendered by ProductShell",
     "app-identity": ".suite-app-identity, rendered by ProductShell",
