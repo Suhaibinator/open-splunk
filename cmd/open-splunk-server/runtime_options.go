@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Suhaibinator/open-splunk/internal/logging"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
 )
 
@@ -26,6 +27,8 @@ type runtimeOptionBinding struct {
 }
 
 var runtimeOptionBindings = []runtimeOptionBinding{
+	{flagName: "log-level", environmentName: "OPEN_SPLUNK_SERVER_LOG_LEVEL"},
+	{flagName: "log-format", environmentName: "OPEN_SPLUNK_SERVER_LOG_FORMAT"},
 	{flagName: "verify-embedded-release", environmentName: "OPEN_SPLUNK_SERVER_VERIFY_EMBEDDED_RELEASE"},
 	{flagName: "tenant-id", environmentName: "OPEN_SPLUNK_SERVER_TENANT_ID"},
 	{flagName: "http-listen-address", environmentName: "OPEN_SPLUNK_SERVER_HTTP_LISTEN_ADDRESS"},
@@ -112,6 +115,12 @@ func parseRuntimeOptions(
 	if strings.TrimSpace(result.masterKeyPath) == "" {
 		result.masterKeyPath = result.controlDBPath + ".key"
 	}
+	if _, err := logging.ParseLevel(result.logLevel); err != nil {
+		return options{}, fmt.Errorf("configure -log-level: %w", err)
+	}
+	if _, err := logging.ParseFormat(result.logFormat); err != nil {
+		return options{}, fmt.Errorf("configure -log-format: %w", err)
+	}
 	return result, nil
 }
 
@@ -146,6 +155,8 @@ func discardSensitiveRuntimeEnvironment(environment runtimeEnvironment) error {
 }
 
 func registerRuntimeFlags(flags *flag.FlagSet, result *options) {
+	flags.StringVar(&result.logLevel, "log-level", logging.DefaultLevel, "minimum log level: debug, info, warn, or error")
+	flags.StringVar(&result.logFormat, "log-format", logging.DefaultFormat, "log encoding: json or console")
 	flags.BoolVar(&result.verifyEmbeddedRelease, "verify-embedded-release", false, "verify the embedded release payload and exit before opening runtime resources")
 	flags.StringVar(&result.tenantID, "tenant-id", "default", "single-node tenant identifier")
 	flags.StringVar(&result.httpAddress, "http-listen-address", "127.0.0.1:8080", "browser/API listen address")

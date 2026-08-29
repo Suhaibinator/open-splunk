@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -226,6 +225,8 @@ func TestRunDispatch(t *testing.T) {
 		{"validate missing file", []string{"validate", "-config", "/no/such/file.yaml"}, 1},
 		{"validate positional argument", []string{"validate", "unexpected"}, 2},
 		{"run positional argument", []string{"run", "unexpected"}, 2},
+		{"removed run log-level flag", []string{"run", "-log-level", "debug"}, 2},
+		{"removed run log-format flag", []string{"run", "-log-format", "console"}, 2},
 		{"unknown subcommand", []string{"bogus"}, 2},
 		{"help", []string{"help"}, 0},
 	}
@@ -236,29 +237,6 @@ func TestRunDispatch(t *testing.T) {
 				t.Fatalf("run(%v) = %d, want %d", tc.args, got, tc.want)
 			}
 		})
-	}
-}
-
-func TestParseLogLevel(t *testing.T) {
-	t.Parallel()
-	for _, test := range []struct {
-		value string
-		want  slog.Level
-	}{
-		{value: "debug", want: slog.LevelDebug},
-		{value: "INFO", want: slog.LevelInfo},
-		{value: "warn", want: slog.LevelWarn},
-		{value: "ERROR", want: slog.LevelError},
-	} {
-		if got, err := parseLogLevel(test.value); err != nil || got != test.want {
-			t.Fatalf("parseLogLevel(%q) = %s, %v; want %s", test.value, got, err, test.want)
-		}
-	}
-	if _, err := parseLogLevel("verbose"); err == nil {
-		t.Fatal("parseLogLevel accepted an unsupported level")
-	}
-	if _, err := parseLogLevel("INFO+1"); err == nil {
-		t.Fatal("parseLogLevel accepted an undocumented numeric offset")
 	}
 }
 

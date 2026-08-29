@@ -80,6 +80,9 @@ inputs:
 	if cfg.Server.Transport != "grpc" {
 		t.Errorf("transport default = %q", cfg.Server.Transport)
 	}
+	if cfg.Logging.Level != "info" || cfg.Logging.Format != "json" {
+		t.Errorf("logging defaults = %q/%q, want info/json", cfg.Logging.Level, cfg.Logging.Format)
+	}
 	if cfg.State.MaxQueueBytes != DefaultMaxQueueBytes {
 		t.Errorf("max queue default = %s, want %s", cfg.State.MaxQueueBytes, DefaultMaxQueueBytes)
 	}
@@ -92,6 +95,24 @@ inputs:
 	in := cfg.Inputs[0]
 	if in.Type != "file" || in.Format != "ndjson" || in.StartAt != "end" {
 		t.Errorf("input defaults = type:%q format:%q start_at:%q", in.Type, in.Format, in.StartAt)
+	}
+}
+
+func TestLoadLoggingConfiguration(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	y := "logging:\n  level: DEBUG\n  format: CONSOLE\n" + validYAML
+	cfg, err := Load(writeFile(t, dir, "c.yaml", y))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Logging.Level != "DEBUG" || cfg.Logging.Format != "CONSOLE" {
+		t.Fatalf("logging configuration = %+v", cfg.Logging)
+	}
+	for _, want := range []string{"logging:\n", "  level: DEBUG\n", "  format: CONSOLE\n"} {
+		if !strings.Contains(cfg.String(), want) {
+			t.Fatalf("configuration summary lacks %q:\n%s", want, cfg.String())
+		}
 	}
 }
 
@@ -234,6 +255,8 @@ func TestValidate(t *testing.T) {
 		wantSub string // "" means expect success
 	}{
 		{"valid", func(*Config) {}, ""},
+		{"bad logging level", func(c *Config) { c.Logging.Level = "trace" }, "logging.level"},
+		{"bad logging format", func(c *Config) { c.Logging.Format = "text" }, "logging.format"},
 		{"no address", func(c *Config) { c.Server.Address = "" }, "server.address"},
 		{"bad transport", func(c *Config) { c.Server.Transport = "http" }, "server.transport"},
 		{"bad compression", func(c *Config) { c.Server.Compression = "snappy" }, "server.compression"},

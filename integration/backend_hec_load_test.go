@@ -692,7 +692,7 @@ func TestBackendHECDurableLoad(t *testing.T) {
 	collectorProcess := startProcess(
 		t,
 		repository,
-		[]string{collectorBinary, "run", "-config", collectorConfig, "-log-level", "debug"},
+		[]string{collectorBinary, "run", "-config", collectorConfig},
 		collectorEnvironment,
 	)
 	waitForCollectorDiscovery(

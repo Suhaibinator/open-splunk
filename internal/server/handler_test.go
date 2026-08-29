@@ -24,9 +24,38 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 var testNow = time.Date(2026, 7, 22, 12, 0, 0, 123_000_000, time.UTC)
+
+func TestHandlerPassesConfiguredLoggerToSRouter(t *testing.T) {
+	t.Parallel()
+
+	core, observed := observer.New(zapcore.ErrorLevel)
+	handler := newTestHandler(t, Config{
+		Logger:     zap.New(core),
+		SearchJobs: &fakeSearchJobs{getErr: searchjobs.ErrNotFound},
+		Indexes:    fakeIndexCatalog{},
+		WebUI:      testUI(),
+	})
+	response := postProtoHeaders(
+		t,
+		handler,
+		"/api/search/jobs/get",
+		&opensplunk.GetSearchJobRequest{SearchJobId: "missing"},
+		map[string]string{"Host": "example.com"},
+	)
+
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("missing search status = %d, want %d", response.Code, http.StatusNotFound)
+	}
+	if observed.Len() == 0 {
+		t.Fatal("configured logger did not receive SRouter error")
+	}
+}
 
 func futureProtobufField(value string) []byte {
 	payload := protowire.AppendTag(nil, 2_047, protowire.BytesType)

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"log/slog"
 	"net"
 	"sort"
 	"strings"
@@ -19,6 +18,8 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/collectorlimits"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -1002,7 +1003,11 @@ func TestSenderNoTokenInLogs(t *testing.T) {
 	buf := &syncBuffer{}
 	opts := testOptions()
 	opts.Token = func() (string, error) { return secret, nil }
-	opts.Logger = slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	opts.Logger = zap.New(zapcore.NewCore(
+		zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig()),
+		zapcore.AddSync(buf),
+		zap.DebugLevel,
+	))
 	s := newTestSender(t, opts, q, &memSink{}, nil, conn)
 	cancel, done := runSender(t, s)
 

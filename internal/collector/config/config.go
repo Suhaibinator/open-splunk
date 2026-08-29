@@ -21,6 +21,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/indexname"
 	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
+	"github.com/Suhaibinator/open-splunk/internal/logging"
 	yaml "go.yaml.in/yaml/v3"
 )
 
@@ -52,10 +53,17 @@ const (
 // the daemon is constructed from. A Config never contains secret material; see
 // the package documentation for the token-handling contract.
 type Config struct {
+	Logging    LoggingConfig     `yaml:"logging"`
 	Server     ServerConfig      `yaml:"server"`
 	State      StateConfig       `yaml:"state"`
 	Inputs     []InputConfig     `yaml:"inputs"`
 	Processors []ProcessorConfig `yaml:"processors"`
+}
+
+// LoggingConfig controls collector process diagnostics written to stderr.
+type LoggingConfig struct {
+	Level  string `yaml:"level"`
+	Format string `yaml:"format"`
 }
 
 // ServerConfig describes how to reach and authenticate to the ingestion server.
@@ -267,6 +275,12 @@ func Load(path string) (*Config, error) {
 // applyDefaults fills in defaults that must be visible before validation and
 // before the configuration is handed to lower-level packages.
 func (c *Config) applyDefaults() {
+	if c.Logging.Level == "" {
+		c.Logging.Level = logging.DefaultLevel
+	}
+	if c.Logging.Format == "" {
+		c.Logging.Format = logging.DefaultFormat
+	}
 	if c.Server.Transport == "" {
 		c.Server.Transport = "grpc"
 	}
@@ -300,6 +314,16 @@ func (c *Config) applyDefaults() {
 // checked here), processor type/field requirements, and multiline pattern
 // compilation.
 func (c *Config) Validate() error {
+	if c.Logging.Level != "" {
+		if _, err := logging.ParseLevel(c.Logging.Level); err != nil {
+			return fmt.Errorf("logging.level: %w", err)
+		}
+	}
+	if c.Logging.Format != "" {
+		if _, err := logging.ParseFormat(c.Logging.Format); err != nil {
+			return fmt.Errorf("logging.format: %w", err)
+		}
+	}
 	if strings.TrimSpace(c.Server.Address) == "" {
 		return errors.New("server.address is required")
 	}
@@ -579,6 +603,17 @@ func LoadToken(path string) (string, error) {
 // output is safe to write to logs and diagnostics.
 func (c *Config) String() string {
 	var b strings.Builder
+	level := c.Logging.Level
+	if level == "" {
+		level = logging.DefaultLevel
+	}
+	format := c.Logging.Format
+	if format == "" {
+		format = logging.DefaultFormat
+	}
+	fmt.Fprintf(&b, "logging:\n")
+	fmt.Fprintf(&b, "  level: %s\n", level)
+	fmt.Fprintf(&b, "  format: %s\n", format)
 	fmt.Fprintf(&b, "server:\n")
 	fmt.Fprintf(&b, "  address: %s\n", c.Server.Address)
 	fmt.Fprintf(&b, "  transport: %s\n", c.Server.Transport)

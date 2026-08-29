@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -172,9 +173,9 @@ func (s *Sender) runConnection(parent context.Context) (connected bool, reconnec
 	s.queue.Rewind()
 
 	s.logger.Info("collector stream ready",
-		"address", s.opts.Address,
-		"stream_id", c.ready.GetStreamId(),
-		"max_in_flight", c.ready.GetMaxInFlightBatches())
+		zap.String("address", s.opts.Address),
+		zap.String("stream_id", c.ready.GetStreamId()),
+		zap.Uint32("max_in_flight", c.ready.GetMaxInFlightBatches()))
 	s.setConnected(true)
 	defer s.setConnected(false)
 
@@ -312,7 +313,7 @@ func (c *conn) observeReadyResume() {
 	// advisory and replay the exact WAL batch so ingest deduplication can return
 	// its original terminal outcome.
 	c.s.logger.Info("collector stream advertised resume point; replaying local WAL for explicit outcomes",
-		"resume_sequence", c.ready.GetResumeAfterBatchSequence())
+		zap.Uint64("resume_sequence", c.ready.GetResumeAfterBatchSequence()))
 }
 
 // send stamps the next connection-local stream sequence and sent_at, then
@@ -1100,7 +1101,9 @@ func localThrottleUntil(
 // current in-flight work and asks Run to reconnect after reconnect_after.
 func (c *conn) handleNotice(notice *opensplunk.ServerNotice) error {
 	if notice.GetType() != opensplunk.ServerNoticeType_SERVER_NOTICE_TYPE_SHUTTING_DOWN {
-		c.s.logger.Info("server notice", "type", notice.GetType().String(), "code", notice.GetCode())
+		c.s.logger.Info("server notice",
+			zap.String("type", notice.GetType().String()),
+			zap.String("code", notice.GetCode()))
 		return nil
 	}
 	reconnectAfter := time.Duration(0)

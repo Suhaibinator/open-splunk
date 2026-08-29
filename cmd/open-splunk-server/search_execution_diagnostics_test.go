@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	sqldriver "database/sql/driver"
 	"errors"
@@ -12,6 +13,8 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 type searchDiagnosticNetworkError struct{}
@@ -71,7 +74,7 @@ func TestClassifySearchExecutionCauseUsesStableSecretFreeClasses(t *testing.T) {
 	}
 }
 
-func TestFormatSearchExecutionFailureOmitsPrivateCauseDetails(t *testing.T) {
+func TestSearchExecutionFailureFieldsOmitPrivateCauseDetails(t *testing.T) {
 	t.Parallel()
 
 	cause := &clickhousedriver.Exception{
@@ -80,11 +83,21 @@ func TestFormatSearchExecutionFailureOmitsPrivateCauseDetails(t *testing.T) {
 		Message:    "private generated SQL and password",
 		StackTrace: "private stack trace",
 	}
-	got := formatSearchExecutionFailure(
-		"job\nidentifier",
-		searchjobs.FailureExecution,
-		fmt.Errorf("private wrapper: %w", cause),
+	var output bytes.Buffer
+	logger := zap.New(zapcore.NewCore(
+		zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig()),
+		zapcore.AddSync(&output),
+		zap.DebugLevel,
+	))
+	logger.Error(
+		"search execution failed",
+		searchExecutionFailureFields(
+			"job\nidentifier",
+			searchjobs.FailureExecution,
+			fmt.Errorf("private wrapper: %w", cause),
+		)...,
 	)
+	got := output.String()
 	for _, private := range []string{
 		"PRIVATE_NAME",
 		"generated SQL",
@@ -93,20 +106,20 @@ func TestFormatSearchExecutionFailureOmitsPrivateCauseDetails(t *testing.T) {
 		"private wrapper",
 	} {
 		if strings.Contains(got, private) {
-			t.Fatalf("diagnostic leaked %q: %q", private, got)
+			t.Fatalf("structured diagnostic leaked %q: %q", private, got)
 		}
 	}
-	if strings.Contains(got, "\n") {
-		t.Fatalf("diagnostic contains an unescaped newline: %q", got)
+	if strings.Count(got, "\n") != 1 {
+		t.Fatalf("structured diagnostic is not one record: %q", got)
 	}
 	for _, want := range []string{
-		`job_id="job\nidentifier"`,
-		`failure_code="execution"`,
-		`cause_class="clickhouse_exception"`,
-		"clickhouse_code=47",
+		`"job_id":"job\nidentifier"`,
+		`"failure_code":"execution"`,
+		`"cause_class":"clickhouse_exception"`,
+		`"clickhouse_code":47`,
 	} {
 		if !strings.Contains(got, want) {
-			t.Fatalf("diagnostic %q does not contain %q", got, want)
+			t.Fatalf("structured diagnostic %q does not contain %q", got, want)
 		}
 	}
 }

@@ -1,13 +1,13 @@
 // Package config defines the Open Splunk Collector configuration model and its
 // loading, environment substitution, secret handling, and validation contracts.
 //
-// The YAML shape mirrors configs/examples/collector.yaml: a server block (dial
-// address, transport, token_file, tls, compression), a state block (durable
-// queue directory, max_queue_bytes, and dead-letter retention), a list of
-// inputs, and an ordered list of processors. [Load] reads a file, performs
-// ${ENV} substitution, applies
-// defaults, and then calls [Config.Validate]; callers that already hold raw
-// bytes may unmarshal directly and call Validate themselves.
+// The YAML shape mirrors configs/examples/collector.yaml: a logging block, a
+// server block (dial address, transport, token_file, tls, compression), a state
+// block (durable queue directory, max_queue_bytes, and dead-letter retention),
+// a list of inputs, and an ordered list of processors. [Load] reads a file,
+// performs ${ENV} substitution, applies defaults, and then calls
+// [Config.Validate]; callers that already hold raw bytes may unmarshal directly
+// and call Validate themselves.
 //
 // # Secrets
 //
@@ -27,8 +27,9 @@
 //
 // # Dependency direction
 //
-// config depends on YAML plus dependency-neutral protocol/index/event validation
-// helpers (and input's canonical identifier grammar). The root collector daemon
-// translates a *Config into the option structs of framing, input, wal, and
-// sender; those runtime packages never import config, keeping the graph acyclic.
+// config depends on YAML, the shared logging value parsers, and protocol/index/
+// event validation helpers (including input's canonical identifier grammar).
+// The root collector daemon translates a *Config into the option structs of
+// framing, input, wal, and sender; those runtime packages never import config,
+// keeping the graph acyclic.
 package config

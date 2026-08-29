@@ -2,11 +2,11 @@ package main
 
 import (
 	"errors"
-	"log"
 	"time"
 
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
+	"go.uber.org/zap"
 )
 
 const (
@@ -111,10 +111,11 @@ func (settings exportRuntimeSettings) managerConfig(
 	}
 }
 
-func newExportCleanupErrorReporter(logger *log.Logger) func(error) {
+func newExportCleanupErrorReporter(logger *zap.Logger) func(error) {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	return func(error) {
-		logger.Print(exportCleanupFailureMessage)
+		logger.Warn(exportCleanupFailureMessage)
 	}
 }
-
-var reportExportCleanupError = newExportCleanupErrorReporter(log.Default())

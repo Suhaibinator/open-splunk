@@ -35,6 +35,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/searchlimits"
 	"github.com/Suhaibinator/open-splunk/internal/searchsuggestions"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
+	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
@@ -506,6 +507,7 @@ type Settings interface {
 // single-user release; authentication can replace them without changing the
 // search-job ownership boundary.
 type Config struct {
+	Logger                     *zap.Logger
 	SearchJobs                 SearchJobs
 	RuntimeReadiness           RuntimeReadiness
 	Indexes                    IndexCatalog
@@ -570,6 +572,7 @@ type Config struct {
 }
 
 type apiHandler struct {
+	logger                     *zap.Logger
 	jobs                       SearchJobs
 	indexes                    IndexCatalog
 	indexAdmin                 IndexAdministration
@@ -631,6 +634,10 @@ type apiHandler struct {
 // before the SPA handler, including unknown API paths, so frontend fallback can
 // never conceal an unavailable or misspelled backend route.
 func NewHandler(config Config) (*Handler, error) {
+	logger := config.Logger
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	if isNilDependency(config.SearchJobs) {
 		return nil, errors.New("create server handler: search job service is required")
 	}
@@ -1057,6 +1064,7 @@ func NewHandler(config Config) (*Handler, error) {
 	}
 
 	api := &apiHandler{
+		logger:                     logger,
 		jobs:                       config.SearchJobs,
 		indexes:                    config.Indexes,
 		indexAdmin:                 indexAdmin,
@@ -1485,6 +1493,10 @@ func featuresForServices(features []opensplunk.ServerFeature, capabilities servi
 }
 
 func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout time.Duration) http.Handler {
+	logger := handler.logger
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	noAuth := router.NoAuth
 	protobufMiddleware := requireProtobufContentType
 	requestMiddleware := handler.boundRequests
@@ -1657,6 +1669,7 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 	}
 	apiRouter := router.NewRouter[string, struct{}](router.RouterConfig{
 		ServiceName: "open-splunk-server",
+		Logger:      logger,
 		// SRouter's built-in timeout returns while its handler goroutine may
 		// continue using services. Keep it disabled and apply a synchronous
 		// context deadline so http.Server.Shutdown owns every handler lifetime.

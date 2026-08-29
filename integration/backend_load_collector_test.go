@@ -18,7 +18,10 @@ const backendLoadInputID = "backend-sustained-load"
 func backendLoadCollectorYAML(
 	address, tokenPath, statePath, logPath, indexName string,
 ) string {
-	return fmt.Sprintf(`server:
+	return fmt.Sprintf(`logging:
+  level: debug
+  format: json
+server:
   address: %q
   transport: grpc
   token_file: %q

@@ -4,7 +4,6 @@ import (
 	"context"
 	sqldriver "database/sql/driver"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"syscall"
@@ -12,6 +11,7 @@ import (
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"go.uber.org/zap"
 )
 
 const (
@@ -33,22 +33,21 @@ const (
 	searchCauseOther               = "other"
 )
 
-func formatSearchExecutionFailure(
+func searchExecutionFailureFields(
 	jobID string,
 	failureCode searchjobs.FailureCode,
 	cause error,
-) string {
+) []zap.Field {
 	causeClass, clickHouseCode, hasClickHouseCode := classifySearchExecutionCause(cause)
-	diagnostic := fmt.Sprintf(
-		"search execution failed: job_id=%q failure_code=%q cause_class=%q",
-		jobID,
-		failureCode,
-		causeClass,
-	)
-	if hasClickHouseCode {
-		diagnostic += fmt.Sprintf(" clickhouse_code=%d", clickHouseCode)
+	fields := []zap.Field{
+		zap.String("job_id", jobID),
+		zap.String("failure_code", string(failureCode)),
+		zap.String("cause_class", causeClass),
 	}
-	return diagnostic
+	if hasClickHouseCode {
+		fields = append(fields, zap.Int32("clickhouse_code", clickHouseCode))
+	}
+	return fields
 }
 
 func classifySearchExecutionCause(cause error) (string, int32, bool) {

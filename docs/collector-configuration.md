@@ -2,9 +2,8 @@
 
 `open-splunk-collector` is YAML-first. The YAML document describes the
 collector-to-server connection, durable local state, file inputs, framing, and
-the ordered processor chain. CLI flags select the document and process log
-level; environment variables affect configuration only when the YAML document
-explicitly references them.
+the ordered processor chain, including process logging. The CLI selects only
+the YAML document.
 
 Start with [`configs/examples/collector-container.yaml`](../configs/examples/collector-container.yaml)
 for a remote, TLS-protected collector or
@@ -18,7 +17,7 @@ The executable accepts these commands:
 
 | Command | Flags | Purpose |
 |---|---|---|
-| `run` (default) | `-config PATH`, `-log-level LEVEL` | Load the configuration and run until `SIGINT` or `SIGTERM`. The default configuration path is `/etc/open-splunk/collector.yaml`; log level is `debug`, `info`, `warn`, or `error`, defaulting to `info`. |
+| `run` (default) | `-config PATH` | Load the configuration and run until `SIGINT` or `SIGTERM`. The default configuration path is `/etc/open-splunk/collector.yaml`. |
 | `validate` | `-config PATH` | Parse, expand, default, and validate YAML, print a redacted summary, and count currently matched input files. It does not contact the server. |
 | `identity` | `-config PATH` | Create or read the stable collector ID in `state.directory` and print it. It does not read the ingestion token or start inputs. |
 | `version` | None | Print the compiled build identity. |
@@ -26,9 +25,27 @@ The executable accepts these commands:
 Successful commands exit 0. Configuration or runtime failures exit 1, and
 invalid command-line usage exits 2.
 
-There are no CLI flags for individual YAML fields and no CLI/YAML precedence
-model. `-config` chooses the YAML document; `-log-level` is process-only and is
-not a YAML field.
+There are no CLI flags or dedicated process environment variables for
+individual YAML fields. `-config` chooses the complete configuration document.
+
+### Process logging
+
+Configure process logging in YAML:
+
+```yaml
+logging:
+  level: info
+  format: json
+```
+
+Both fields are optional and default to `info` and `json`. `level` accepts
+case-insensitive `debug`, `info`, `warn`, or `error`; `format` accepts
+case-insensitive `json` or `console`. The collector writes logs to standard
+error. JSON emits one record per line with an ISO-8601 timestamp, level,
+`open-splunk-collector` logger name, caller, message, and typed context fields.
+Console format exposes the same information for interactive use. Unsupported
+values make the YAML configuration invalid. The output of `validate`,
+`identity`, and `version` remains ordinary command output.
 
 `validate` proves that the YAML and referenced environment values parse, local
 configuration constraints hold, and the input globs can be evaluated in the
@@ -57,11 +74,10 @@ value of environment variable `NAME`. Referencing an undefined variable is an
 error. A defined but empty value substitutes an empty string. Write `$$` for a
 literal dollar sign.
 
-Substitution is opt-in per YAML document. The collector does not scan for or
-automatically interpret `OPEN_SPLUNK_COLLECTOR_*`, and environment values do
-not override fields that lack a placeholder. The names used by the supplied
-examples are a documented template convention, not a runtime environment
-registry.
+Substitution is opt-in per YAML document. The collector does not automatically
+interpret `OPEN_SPLUNK_COLLECTOR_*`, and environment values do not override
+YAML fields that lack a placeholder. The names used by the supplied examples
+are a documented template convention, not a runtime registry for YAML settings.
 
 Substitution occurs before YAML parsing and does not add quoting or escaping:
 
@@ -100,7 +116,8 @@ deployment environment file must use those exact names.
 ## YAML parsing and scalar syntax
 
 The configuration must be one YAML document. Unknown fields and multiple YAML
-documents are rejected. Field names and enum values are case-sensitive.
+documents are rejected. Field names and enum values are case-sensitive except
+for the explicitly case-insensitive `logging.level` and `logging.format` values.
 
 Byte sizes accept a bare byte count, `B`, decimal `KB`/`MB`/`GB`/`TB`/`PB`, or
 binary `KiB`/`MiB`/`GiB`/`TiB`/`PiB`. Durations use Go duration syntax such as
