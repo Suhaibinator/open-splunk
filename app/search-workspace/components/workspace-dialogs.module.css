@@ -1,30 +1,30 @@
 .actionError {
-  background: #fff2f1;
+  background: var(--status-error-soft);
   border: 1px solid #dba39f;
   color: #8f2f2b;
-  font-size: 11px;
+  font-size: var(--type-sm);
   line-height: 1.45;
-  margin: 0 0 12px;
+  margin: 0 0 var(--space-3);
   padding: 9px 11px;
 }
 
 .capabilityNotice {
-  background: #f4f6f7;
-  border: 1px solid #cbd3d7;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
   padding: 11px 12px;
 }
 
 .capabilityNotice strong {
   color: #3e4d55;
-  font-size: 11px;
+  font-size: var(--type-sm);
 }
 
 .capabilityNotice span {
-  color: #68757c;
-  font-size: 10px;
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
   line-height: 1.45;
 }
 
@@ -35,26 +35,26 @@
 }
 
 .exportProgress progress {
-  accent-color: #4c872d;
+  accent-color: var(--accent);
   height: 7px;
   width: 100%;
 }
 
 .exportProgress span {
-  color: #5f6d75;
-  font-size: 11px;
+  color: var(--fg-muted);
+  font-size: var(--type-sm);
 }
 
 .exportProgress small {
-  color: #65737b;
-  font-size: 10px;
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
   line-height: 1.4;
 }
 
 .exportActions {
   align-items: center;
   display: flex;
-  gap: 8px;
+  gap: var(--space-2);
   justify-content: flex-end;
   width: 100%;
 }
@@ -68,32 +68,32 @@
 }
 
 .exportSummary {
-  background: #f6f8f5;
+  background: var(--bg-canvas);
   border: 1px solid #b8c9ae;
-  border-left: 4px solid var(--green);
+  border-left: 4px solid var(--accent);
 }
 
 .exportSummaryWarning {
-  background: #fffaeb;
+  background: var(--status-warning-soft);
   border-color: #dcc889;
-  border-left-color: #a87300;
+  border-left-color: var(--status-warning);
 }
 
 .exportSummaryError {
-  background: #fff3f2;
+  background: var(--status-error-soft);
   border-color: #d6aaa7;
-  border-left-color: var(--red);
+  border-left-color: var(--status-error);
 }
 
 .exportSummary > header {
   align-items: flex-start;
   display: flex;
   gap: 10px;
-  padding: 12px;
+  padding: var(--space-3);
 }
 
 .exportSummary h3 {
-  color: var(--green-strong);
+  color: var(--accent-hover);
   font-size: 13px;
   margin: 1px 0 3px;
 }
@@ -102,24 +102,24 @@
 .exportSummaryError h3 { color: #8f2f2b; }
 
 .exportSummary p {
-  color: #53616a;
-  font-size: 10px;
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
   line-height: 1.45;
   margin: 0;
 }
 
 .exportSummary dl {
-  border-top: 1px solid #d5ddd1;
+  border-top: 1px solid var(--border);
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   margin: 0;
 }
 
 .exportSummary dl > div {
-  border-right: 1px solid #d5ddd1;
+  border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
   min-width: 0;
   padding: 10px 12px;
 }
@@ -130,15 +130,15 @@
 }
 
 .exportSummary dt {
-  color: #68757c;
-  font-size: 9px;
+  color: var(--fg-muted);
+  font-size: var(--type-xxs);
   font-weight: 700;
   text-transform: uppercase;
 }
 
 .exportSummary dd {
-  color: #2b3b44;
-  font-size: 11px;
+  color: var(--fg-text);
+  font-size: var(--type-sm);
   font-weight: 600;
   margin: 0;
   min-width: 0;
@@ -152,7 +152,7 @@
 
 .exportFileRow code,
 .exportColumnsRow code {
-  font-size: 10px;
+  font-size: var(--type-xs);
   font-weight: 400;
   overflow-wrap: anywhere;
   white-space: normal;
@@ -174,7 +174,7 @@
 
 .capabilityControl small {
   border-radius: 10px;
-  font-size: 9px;
+  font-size: var(--type-xxs);
   font-weight: 700;
   line-height: 18px;
   margin: 0;
@@ -183,17 +183,17 @@
 }
 
 .availableBadge {
-  background: #e8f2e2;
-  color: #3d7024;
+  background: var(--accent-soft);
+  color: var(--accent-hover);
 }
 
 .unavailableBadge {
-  background: #eceff0;
-  color: #66747b;
+  background: var(--bg-subtle);
+  color: var(--fg-muted);
 }
 
 .unavailableSetting {
-  background: #fafbfb;
+  background: var(--bg-raised);
 }
 
 .unavailableSetting > span:first-child {
@@ -206,7 +206,7 @@
 }
 
 .historyTableScroll {
-  border: 1px solid #ccd3d6;
+  border: 1px solid var(--border);
   max-width: 100%;
   overflow-x: auto;
 }
@@ -219,9 +219,9 @@
 }
 
 .historyTable th {
-  background: #edf0f1;
-  color: #5a6871;
-  font-size: 9px;
+  background: var(--bg-subtle);
+  color: var(--fg-muted);
+  font-size: var(--type-xxs);
   height: 34px;
   padding: 0 10px;
   text-align: left;
@@ -236,21 +236,21 @@
 .historyTable th:nth-child(6) { width: 26%; }
 
 .historyTable td {
-  border-top: 1px solid #e0e4e6;
-  color: #5e6b73;
-  font-size: 10px;
+  border-top: 1px solid var(--border);
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
   height: 49px;
   padding: 6px 10px;
   vertical-align: middle;
 }
 
 .historyTable tbody tr:hover td {
-  background: #fbfcfc;
+  background: var(--bg-raised);
 }
 
 .historyTable td code {
   display: block;
-  font-size: 10px;
+  font-size: var(--type-xs);
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -258,9 +258,9 @@
 }
 
 .historyMeta {
-  color: #7b878e;
+  color: var(--fg-faint);
   display: block;
-  font-size: 9px;
+  font-size: var(--type-xxs);
   line-height: 1.35;
   margin-top: 3px;
   overflow: hidden;
@@ -313,8 +313,8 @@
   }
 
   .historyTable tr {
-    background: #fff;
-    border: 1px solid #ccd3d6;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     padding: 9px 10px;
@@ -324,7 +324,7 @@
     border: 0;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: var(--space-1);
     height: auto;
     min-width: 0;
     padding: 7px 5px;
@@ -332,9 +332,9 @@
   }
 
   .historyTable td::before {
-    color: #68767e;
+    color: var(--fg-muted);
     content: attr(data-label);
-    font-size: 9px;
+    font-size: var(--type-xxs);
     font-weight: 700;
     letter-spacing: 0.04em;
     text-transform: uppercase;
@@ -347,12 +347,12 @@
   }
 
   .historyTable td:first-child {
-    border-bottom: 1px solid #e1e5e7;
+    border-bottom: 1px solid var(--border);
     padding-bottom: 10px;
   }
 
   .historyTable td:last-child {
-    border-top: 1px solid #e1e5e7;
+    border-top: 1px solid var(--border);
     margin-top: 3px;
     padding-top: 10px;
   }
@@ -399,10 +399,10 @@
 }
 
 .inspectorNotices {
-  background: #fff8e8;
+  background: var(--status-warning-soft);
   border: 1px solid #dfc98b;
   color: #5d4a1d;
-  font-size: 10px;
+  font-size: var(--type-xs);
   padding: 10px 12px;
 }
 
@@ -441,40 +441,40 @@
 
 .inspectionAnnotations {
   display: grid;
-  font-size: 9px;
+  font-size: var(--type-xxs);
   gap: 2px;
   margin-top: 3px;
   overflow-wrap: anywhere;
 }
 
 .knowledgeInspection {
-  background: #f4f8fa;
-  border-bottom: 1px solid #d7e1e5;
+  background: var(--bg-canvas);
+  border-bottom: 1px solid var(--border);
   grid-column: 1 / -1;
   padding: 11px 12px;
 }
 
 .knowledgeInspection h3 {
-  font-size: 11px;
+  font-size: var(--type-sm);
   margin: 0 0 7px;
 }
 
 .knowledgeInspection p {
-  color: #52616a;
-  font-size: 10px;
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
   margin: 6px 0 0;
 }
 
 .knowledgeInspection dl {
   display: grid;
-  font-size: 10px;
+  font-size: var(--type-xs);
   gap: 4px 10px;
   grid-template-columns: max-content minmax(0, 1fr);
   margin: 0;
 }
 
 .knowledgeInspection dt {
-  color: #66747c;
+  color: var(--fg-muted);
   font-weight: 700;
 }
 
@@ -485,9 +485,9 @@
 }
 
 .knowledgeInspection ol {
-  font-size: 10px;
-  margin: 8px 0 0;
-  padding-left: 20px;
+  font-size: var(--type-xs);
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-5);
 }
 
 @media (max-width: 520px) {
