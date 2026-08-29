@@ -1,8 +1,10 @@
 {
+  "//": "stylelint-config-standard supplies the correctness rules (unknown properties, duplicate selectors, deprecated values). Four of its stylistic opinions are turned off below because this repository deliberately does not follow them, so `npm run lint:css` reports only debt Phase 5 intends to clear and the flip from warnings to errors needs no disable comments. declaration-block-single-line-max-declarations and rule-empty-line-before: app/globals.css writes short rules on one line and groups them without blank lines on purpose. no-descending-specificity: a cascade built on breakpoint overrides trips it by design, and reordering the file to satisfy it would move pixels for no benefit. media-feature-range-notation: it contradicts media-feature-name-allowed-list below, which permits only max-width, so satisfying either would fail the other.",
   "extends": "stylelint-config-standard",
   "defaultSeverity": "warning",
   "rules": {
     "color-no-hex": true,
+    "declaration-block-single-line-max-declarations": null,
     "declaration-property-value-disallowed-list": {
       "/.*/": ["/\\b(?:rgba?|hsla?)\\(/"],
       "font-family": ["/^(?!var\\(--font-[a-z-]+\\)$).+$/"]
@@ -15,6 +17,9 @@
     "media-feature-name-value-allowed-list": {
       "max-width": ["/^(?:1240|980|760|480)px$/"]
     },
+    "media-feature-range-notation": null,
+    "no-descending-specificity": null,
+    "rule-empty-line-before": null,
     "selector-class-pattern": [
       "^(?:[a-z][a-z0-9]*(?:(?:__|--|-)[a-z0-9]+)*|[a-z][a-zA-Z0-9]*)$",
       {

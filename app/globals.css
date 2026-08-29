@@ -19,7 +19,6 @@
   --green-soft: #e8f2e1;
   --blue: #2878a8;
   --blue-soft: #e8f3f9;
-  --color-accent: var(--blue);
   --orange: #d97a23;
   --red: #c93c37;
   --red-soft: #fff0ee;
@@ -2896,8 +2895,6 @@ pre {
 .statistics-col-count { width: 17%; }
 .statistics-col-percent { width: 19%; }
 .statistics-col-average { width: 26%; }
-.timechart-col-time { width: 72%; }
-.timechart-col-count { width: 28%; }
 
 .statistics-table.timechart-table {
   min-width: 520px;
@@ -2917,11 +2914,11 @@ pre {
 }
 
 .statistics-sparkline {
+  color: var(--blue);
   display: block;
-  width: 128px;
   height: 28px;
   overflow: visible;
-  color: var(--color-accent);
+  width: 128px;
 }
 
 .statistics-sparkline polyline {
@@ -4879,7 +4876,6 @@ pre {
 .status-dot--running { background: #2f86b3; }
 .status-dot--warning { background: #dfa024; }
 .status-dot--error { background: #c94a43; }
-.suite-health--backend span { background: #89969d; }
 
 @keyframes status-pulse {
   50% { box-shadow: 0 0 0 4px rgb(47 134 179 / 14%); }

@@ -4,6 +4,7 @@ import {
   BACKEND_EXPORT_PORT,
   BACKEND_EXPORT_ROOT,
   DEMO_EXPORT_PORT,
+  DEMO_EXPORT_ROOT,
   DEMO_EXPORT_URL,
 } from "./integration/visual/visual-servers";
 
@@ -62,7 +63,7 @@ export default defineConfig({
       "node scripts/build-visual-exports.mjs",
       "&&",
       "node scripts/serve-static.mjs",
-      `--root out --port ${DEMO_EXPORT_PORT}`,
+      `--root ${DEMO_EXPORT_ROOT} --port ${DEMO_EXPORT_PORT}`,
       `--root ${BACKEND_EXPORT_ROOT} --port ${BACKEND_EXPORT_PORT}`,
     ].join(" "),
     reuseExistingServer: false,

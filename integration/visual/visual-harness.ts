@@ -70,3 +70,18 @@ export async function expectViewportScreenshot(page: Page, name: string): Promis
 export async function expectRegionScreenshot(region: Locator, name: string): Promise<void> {
   await expect(region).toHaveScreenshot(`${name}.png`);
 }
+
+/**
+ * Pins a text-free component fixture, and pins its color as well as its shape.
+ *
+ * The suite-wide `threshold` is Playwright's default because page baselines are
+ * full of antialiased text, and that default is a per-pixel YIQ distance loose
+ * enough to call two different blues equal: `#2878a8` against `#4f7cff` clears
+ * it everywhere. A recolor is exactly what a token cleanup is most likely to
+ * get wrong, so fixtures that render only vector shapes ask for a much tighter
+ * match. The pixel budget stays, because the curve's antialiasing is not the
+ * thing being pinned.
+ */
+export async function expectComponentScreenshot(region: Locator, name: string): Promise<void> {
+  await expect(region).toHaveScreenshot(`${name}.png`, { maxDiffPixelRatio: 0.002, threshold: 0.02 });
+}

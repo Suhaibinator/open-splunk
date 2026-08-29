@@ -7,9 +7,12 @@ static export before compiling `open-splunk-server`.
 `compile-protos.sh` implements `make proto`. Invoke the Make target so the public developer workflow remains stable.
 
 `build-visual-exports.mjs` and `serve-static.mjs` support `npm run test:visual`.
-The first builds the static export in both the demo and backend data modes; the
-second serves those directories over loopback with no dependencies, so the
-visual-regression baselines need neither the Go server nor ClickHouse. See
+The first builds the static export in both the demo and backend data modes,
+moves each build into `.cache/visual`, and resets `out/` to the state Git
+tracks, because `out/` is the release payload `webui.go` embeds and a test
+target must not leave a manifest-less demo build in it. The second serves those
+directories over loopback with no dependencies, so the visual-regression
+baselines need neither the Go server nor ClickHouse. See
 [the integration guide](../integration/README.md#visual-regression-baselines).
 
 `check-docs.mjs` implements `make docs-check`. It validates local Markdown

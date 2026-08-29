@@ -226,10 +226,23 @@ static export twice, `scripts/serve-static.mjs` serves both from one
 dependency-free Node process, and `playwright.visual.config.ts` drives Chromium
 against them at 1440x900 and 760x1000.
 
+Both exports land in `.cache/visual/demo-export` and
+`.cache/visual/backend-export`, and `out/` is reset to the state Git tracks
+afterwards. Next always exports into `out/`, which is the release payload
+`webui.go` embeds, so leaving a demo-mode build there would let `go build` embed
+a UI with no `out/asset-manifest.json`. Run `make build-ui` before building the
+server after any visual run.
+
 Nearly every surface renders from the demo data mode, whose fixtures are
 compiled into the bundle. Only the bootstrap-advertised Knowledge Manager needs
 the backend-mode export, and `knowledge-manager.visual.spec.ts` supplies its
 protobuf responses through request interception.
+
+A rule whose element renders in neither export is invisible to every page
+baseline. `component-surfaces.visual.spec.ts` covers that gap by mounting the
+production markup against the real stylesheet and photographing the component
+alone; the statistics sparkline lives there because it needs a server-supplied
+multivalue column that no fixture produces.
 
 ```sh
 npm ci
@@ -240,6 +253,12 @@ npm run test:visual
 Baselines live in `integration/visual/__screenshots__/<platform>/<project>/`
 and are committed. They are platform-specific because font rasterization is:
 a machine whose platform has no directory there must generate its own set.
+
+Only a `darwin` set is committed today, so `npm run test:visual` is a
+developer-local gate: the `ubuntu-latest` CI runner has no baselines to compare
+against. Committing a `linux` set generated in the runner's own container is the
+work that puts this half of the net under CI. `npm run test:contracts` below has
+no such constraint and does run in CI.
 
 The suite fails on a layout change but tolerates
 `maxDiffPixelRatio: 0.002`, so normalizing a color by one or two RGB units
@@ -264,8 +283,9 @@ Chromium against fixture markup that mirrors the production DOM and reads
 resolved values through `getComputedStyle` at the 1280, 980, 760, and 480 pixel
 breakpoints.
 
-It needs no server, no container, and no backend fixtures, so it runs in the
-default loop once the pinned Chromium build is installed:
+It needs no server, no container, no backend fixtures, and no committed
+baselines, so it is platform-independent, runs in under a second, and is the one
+half of this phase's net that the CI `frontend` job enforces on every push:
 
 ```sh
 npx --no-install playwright install chromium
@@ -301,7 +321,7 @@ twice over that single build: the first pass records each screenshot into a
 temporary directory and the second compares against it with `maxDiffPixels: 0`.
 Because both passes render one build on one machine, a surface that moves has
 nowhere to hide behind a ratio. Add `--skip-build` to reuse the exports already
-in `out/` and `.cache/visual` while iterating on a spec.
+in `.cache/visual` while iterating on a spec.
 
 When it fails, pin whatever varies rather than widening a tolerance.
 
