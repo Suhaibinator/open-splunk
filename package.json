@@ -17,6 +17,8 @@
     "test:contracts": "playwright test --config=playwright.contracts.config.ts",
     "test:frontend": "node scripts/test-frontend.mjs",
     "test:visual": "playwright test --config=playwright.visual.config.ts",
+    "//test:visual:determinism": "Renders one build twice and compares exactly. Slow enough to stay out of `make test`; run it whenever a visual spec or a page's data fixtures change.",
+    "test:visual:determinism": "node scripts/visual-determinism.mjs",
     "check:docs": "node scripts/check-docs.mjs",
     "typecheck": "tsc --noEmit",
     "//lint:css": "Warning-only in Phase 0. Phase 5 flips .stylelintrc.json severities to errors and gates the build on this script.",

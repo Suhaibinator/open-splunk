@@ -273,3 +273,57 @@ npm run test:contracts
 ```
 
 Failure artifacts are written beneath `test-results/css-contracts`.
+
+## Screenshot determinism
+
+A committed baseline only pins appearance if the page paints the same thing
+every run. The tolerance that keeps antialiasing from turning the suite red
+also hides a surface that samples the wall clock, a random value, or an
+animation phase, and a baseline set that has quietly stopped describing a fixed
+rendering is a safety net with a hole in it.
+
+Two gates close that hole. `visual/screenshot-determinism.visual.spec.ts` runs
+with the rest of `npm run test:visual` and photographs a handful of
+representative surfaces twice — back to back, and again after a reload —
+comparing the two renderings instead of a committed file. It ignores
+per-channel differences of one or two units, because Chromium's text rasterizer
+is not bit-reproducible, and one of its cases deliberately changes the page to
+prove the comparison can still tell two renderings apart.
+
+The second gate covers the whole suite:
+
+```sh
+npm run test:visual:determinism
+```
+
+That builds the exports once, serves them once, and runs every visual spec
+twice over that single build: the first pass records each screenshot into a
+temporary directory and the second compares against it with `maxDiffPixels: 0`.
+Because both passes render one build on one machine, a surface that moves has
+nowhere to hide behind a ratio. Add `--skip-build` to reuse the exports already
+in `out/` and `.cache/visual` while iterating on a spec.
+
+When it fails, pin whatever varies rather than widening a tolerance.
+
+## Stylesheet structural invariants
+
+`scripts/css-invariants.test.mjs` runs inside `npm run test:frontend` and keeps
+the properties this phase established true:
+
+- no test file may read a stylesheet's characters, because appearance is pinned
+  by screenshots and behaviour by the computed-style contracts above;
+- every `var(--x)` in every stylesheet must resolve to a custom property some
+  stylesheet declares or some component sets at runtime;
+- every class `app/globals.css` writes rules for must be reachable from a
+  literal `className`, an interpolation base, or a `:global()` selector.
+
+The parsing lives in `scripts/css-inventory.mjs` so the test file itself never
+opens a stylesheet. A class that genuinely only exists at runtime belongs in
+`scripts/css-dynamic-classes.json`, with a comment naming the code that
+produces it; an entry there that stops being needed fails the suite, so the
+list cannot become a quiet home for dead CSS.
+
+`scripts/safety-net.test.mjs` guards the net itself: every unit test file must
+appear in the hardcoded list in `scripts/test-frontend.mjs`, and every
+screenshot a visual spec pins must have a committed baseline in every project,
+with no baseline left behind by a deleted test.
