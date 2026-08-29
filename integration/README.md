@@ -217,3 +217,24 @@ latency acceptance thresholds. Exact payload semantics and the maximum number
 of materialized rows remain correctness gates. Metrics and top/bottom
 screenshots are written beneath
 `test-results/browser-fixed-result-rendering/visual`.
+
+## Global stylesheet computed-style contracts
+
+`visual/css-contracts.spec.ts` pins the behaviour of `app/globals.css` that
+unit tests used to pin by matching the stylesheet's raw text. Text matching
+tied the suite to formatting — newline placement, single-line media-query
+bodies, declaration order — so any tokenising or reformatting pass broke it
+without changing a rendered pixel. The spec instead loads the stylesheet into
+Chromium against fixture markup that mirrors the production DOM and reads
+resolved values through `getComputedStyle` at the 1280, 980, 760, and 480 pixel
+breakpoints.
+
+It needs no server, no container, and no backend fixtures, so it runs in the
+default loop once the pinned Chromium build is installed:
+
+```sh
+npx --no-install playwright install chromium
+npm run test:contracts
+```
+
+Failure artifacts are written beneath `test-results/css-contracts`.
