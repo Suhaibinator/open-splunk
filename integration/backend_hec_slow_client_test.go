@@ -42,11 +42,11 @@ const (
 	backendHECSlowReadBudget    = 45 * time.Second
 	backendHECSlowCleanupBudget = 12 * time.Second
 
-	backendHECSlowMaximumHeapMB      = 256
-	backendHECSlowMaximumGoroutines  = 256
-	backendHECSlowMaximumThreads     = 128
-	backendHECSlowRetainedHeapMB     = 32
-	backendHECSlowRetainedGoroutines = 32
+	backendHECSlowMaximumHeapMB          = 256
+	backendHECSlowMaximumGoroutineGrowth = 32
+	backendHECSlowMaximumThreads         = 128
+	backendHECSlowRetainedHeapMB         = 32
+	backendHECSlowRetainedGoroutines     = 32
 
 	backendHECSlowRuntimeTraceInterval = 2 * time.Second
 	backendHECSlowPayloadCanary        = "hec-slow-compressed-payload-private"
@@ -401,7 +401,7 @@ func TestBackendHECSlowCompressedReadDeadline(t *testing.T) {
 	retainedHeapMB := backendHECSlowRetainedHeapGrowth(postGC, baselineGC)
 	if len(allGC) < 3 || len(allScheduler) < 3 ||
 		maximumHeapMB > backendHECSlowMaximumHeapMB ||
-		maximumGoroutines > backendHECSlowMaximumGoroutines ||
+		maximumGoroutines > baseline.goroutines+backendHECSlowMaximumGoroutineGrowth ||
 		maximumThreads > backendHECSlowMaximumThreads ||
 		post.goroutines > baseline.goroutines+backendHECSlowRetainedGoroutines ||
 		retainedHeapMB > backendHECSlowRetainedHeapMB {
