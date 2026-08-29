@@ -69,7 +69,7 @@
   /* Stacking. Nine layers, ordered base < sticky < bar < dropdown-scrim <
      dropdown < modal < drawer-scrim < drawer < toast, which is the order
      app/globals.css ships today everywhere but one pair (.menu-dismiss moves
-     above .product-bar). Every overlay that a dismiss scrim backs gets
+     above .suite-product-bar). Every overlay that a dismiss scrim backs gets
      the step above that scrim: sharing one step with it would leave the
      ordering to DOM order, and in four of the six pairs the scrim is the later
      sibling and would swallow its own surface. The gap of 100 leaves room for a
