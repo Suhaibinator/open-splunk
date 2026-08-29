@@ -578,3 +578,60 @@ export async function collectTokenLayer(root) {
     return { dark, file: relativePosix(root, file), light };
   }));
 }
+
+/**
+ * Pairs every custom-property declaration with the comment that trails it.
+ *
+ * `cssBlocks` strips comments before parsing, which is right for structure and
+ * useless for the rule that every token states its role in one line. This scan
+ * therefore runs over the raw characters: it finds a declaration, walks to the
+ * `;` that ends it, and reports whatever comment sits between that `;` and the
+ * end of the line. Declarations come back in source order, and a name declared
+ * once per theme appears once per declaration, so a caller can require the
+ * comment on every site rather than on whichever site it happened to see last.
+ */
+export function collectDeclarationComments(css) {
+  const found = [];
+  for (const match of css.matchAll(/(?:^|[;{\s])(--[\w-]+)\s*:/gu)) {
+    const valueStart = match.index + match[0].length;
+    const end = css.indexOf(";", valueStart);
+    if (end === -1) continue;
+    const lineEnd = css.indexOf("\n", end);
+    const trailer = css.slice(end + 1, lineEnd === -1 ? css.length : lineEnd);
+    const comment = /\/\*(.*?)\*\//su.exec(trailer);
+    found.push({ comment: comment === null ? null : comment[1].trim(), name: match[1] });
+  }
+  return found;
+}
+
+/** Every declaration comment in the token layer, keyed by file, in source order. */
+export async function collectTokenComments(root) {
+  const files = await listTokenStylesheets(root);
+  return Promise.all(files.map(async (file) => ({
+    declarations: collectDeclarationComments(await readFile(file, "utf8")),
+    file: relativePosix(root, file),
+  })));
+}
+
+/**
+ * The blocks the token layer opens, with every declaration they carry.
+ *
+ * `collectTokenLayer` drops anything that is not a custom property, which is
+ * exactly what hides a token file quietly growing real rules. This keeps the
+ * selector and the whole declaration list so a caller can insist the layer
+ * declares tokens and nothing else.
+ */
+export async function collectTokenBlocks(root) {
+  const files = await listTokenStylesheets(root);
+  return Promise.all(files.map(async (file) => {
+    const css = await readFile(file, "utf8");
+    return {
+      blocks: cssBlocks(css).map((block) => ({
+        ancestors: block.ancestors,
+        declarations: cssDeclarations(block.body),
+        prelude: block.prelude,
+      })),
+      file: relativePosix(root, file),
+    };
+  }));
+}
