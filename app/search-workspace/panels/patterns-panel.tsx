@@ -1,4 +1,5 @@
 import { NUMBER_FORMAT } from "../constants";
+import { AppIcon } from "../../_components/app-icon";
 import type { MenuName, PatternSensitivity, ResultTab } from "../model";
 
 interface PatternRow {
@@ -33,7 +34,7 @@ export function PatternsPanel({
       <header className="result-view-header">
         <div><h2>Event patterns</h2><p>Similar raw events grouped into recurring signatures.</p></div>
         <div className="header-menu-wrap result-menu-wrap">
-          <button className="button secondary compact" type="button" aria-haspopup="menu" aria-expanded={menu === "pattern-sensitivity"} onClick={() => onMenuChange(menu === "pattern-sensitivity" ? null : "pattern-sensitivity")}>Sensitivity: {patternSensitivity} <span aria-hidden="true">▾</span></button>
+          <button className="button secondary compact" type="button" aria-haspopup="menu" aria-expanded={menu === "pattern-sensitivity"} onClick={() => onMenuChange(menu === "pattern-sensitivity" ? null : "pattern-sensitivity")}>Sensitivity: {patternSensitivity} <AppIcon name="chevron-down" size="xs" /></button>
           {menu === "pattern-sensitivity" ? (
             <div className="floating-menu result-control-menu" role="menu" aria-label="Pattern sensitivity">
               {(["Precise", "Balanced", "Broad"] as const).map((sensitivity) => (
@@ -66,7 +67,7 @@ export function PatternsPanel({
               <code title={pattern.signature}>{pattern.signature}</code>
               <strong className="pattern-event-count">{NUMBER_FORMAT.format(pattern.count)}<span> events</span></strong>
               <div className="pattern-coverage"><span style={{ width: `${Math.max(0, Math.min(100, roundedPercent))}%` }} /><b>{roundedPercent.toFixed(1)}%</b></div>
-              <button className="pattern-action" type="button" onClick={() => { onTabChange("events"); onViewEvents(pattern.signature); }}>View events <span aria-hidden="true">›</span></button>
+              <button className="pattern-action" type="button" onClick={() => { onTabChange("events"); onViewEvents(pattern.signature); }}>View events <AppIcon name="chevron-right" size="xs" /></button>
             </article>
           );
         })}

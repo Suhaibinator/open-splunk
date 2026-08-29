@@ -32,6 +32,7 @@ import { isSplFieldRepresentable } from "@/lib/search/query-pivots";
 import { formatSplValue } from "@/lib/search/spl-syntax";
 
 import { BackendResourceState } from "../_components/backend-resource-state";
+import { AppIcon } from "../_components/app-icon";
 import { PageHeading } from "../_components/product-shell";
 import { useRovingChartFocus } from "../_components/use-roving-chart-focus";
 import {
@@ -421,7 +422,7 @@ function DemoAnalyticsConsole() {
             <div><span>Fastest</span><strong>{Math.min(...trendValues).toFixed(2)} s</strong></div>
             <div><span>Typical p95</span><strong>{(trendValues.reduce((sum, value) => sum + value, 0) / trendValues.length).toFixed(2)} s</strong></div>
             <div><span>Slowest</span><strong>{Math.max(...trendValues).toFixed(2)} s</strong></div>
-            <Link href={fixtureSearchHref(`index=gradethis${environmentSPL} duration_ms=* | stats p95(duration_ms) AS p95_ms BY service | sort -p95_ms`)}>Investigate latency →</Link>
+            <Link href={fixtureSearchHref(`index=gradethis${environmentSPL} duration_ms=* | stats p95(duration_ms) AS p95_ms BY service | sort -p95_ms`)}>Investigate latency <AppIcon name="chevron-right" size="xs" /></Link>
           </footer>
         </section>
 
@@ -439,7 +440,7 @@ function DemoAnalyticsConsole() {
                 </div>
                 <h3>{insight.title}</h3>
                 <p>{insight.detail}</p>
-                <footer><strong>{insight.impact}</strong><Link href={fixtureSearchHref(insight.query)}>Inspect SPL →</Link></footer>
+                <footer><strong>{insight.impact}</strong><Link href={fixtureSearchHref(insight.query)}>Inspect SPL <AppIcon name="chevron-right" size="xs" /></Link></footer>
               </li>
             ))}
           </ol>
@@ -454,7 +455,7 @@ function DemoAnalyticsConsole() {
           </header>
           <div className={styles.fieldToolbar}>
             <label className={styles.fieldSearch}>
-              <span className="sr-only">Filter fields</span><i aria-hidden="true">⌕</i>
+              <span className="sr-only">Filter fields</span><i aria-hidden="true"><AppIcon name="search" size="sm" /></i>
               <input data-testid="analytics-field-filter" type="search" placeholder="Filter fields or values" value={fieldQuery} onChange={(event) => setFieldQuery(event.target.value)} />
             </label>
             <label>
@@ -478,7 +479,7 @@ function DemoAnalyticsConsole() {
 
           {visibleFields.length === 0 ? (
             <div className={styles.emptyFields}>
-              <span aria-hidden="true">⌕</span><strong>No fields match these filters</strong><p>Clear the filters to return to the complete field profile.</p>
+              <span aria-hidden="true"><AppIcon name="search" size="lg" /></span><strong>No fields match these filters</strong><p>Clear the filters to return to the complete field profile.</p>
               <button className="suite-button" onClick={clearFieldFilters} type="button">Clear filters</button>
             </div>
           ) : (
@@ -493,7 +494,7 @@ function DemoAnalyticsConsole() {
                     </div>
                     <span className={styles.cardinality}>{formatCardinality(field.cardinality)}</span>
                     <code className={styles.example}>{field.example}</code>
-                    <Link aria-label={`Analyze ${field.name} in Search`} href={fixtureSearchHref(`index=gradethis${environmentSPL} ${field.name}=* | stats count by ${field.name} | sort -count`)}>Analyze →</Link>
+                    <Link aria-label={`Analyze ${field.name} in Search`} href={fixtureSearchHref(`index=gradethis${environmentSPL} ${field.name}=* | stats count by ${field.name} | sort -count`)}>Analyze <AppIcon name="chevron-right" size="xs" /></Link>
                   </li>
                 ))}
               </ul>
@@ -520,7 +521,7 @@ function DemoAnalyticsConsole() {
           </ol>
           <footer className={styles.slowestFooter}>
             <span>Ordered by average runtime</span>
-            <Link href={fixtureSearchHref(`index=gradethis${environmentSPL} duration_ms=* | stats p95(duration_ms) as p95_ms count by service | sort -p95_ms`)}>View complete workload →</Link>
+            <Link href={fixtureSearchHref(`index=gradethis${environmentSPL} duration_ms=* | stats p95(duration_ms) as p95_ms count by service | sort -p95_ms`)}>View complete workload <AppIcon name="chevron-right" size="xs" /></Link>
           </footer>
         </section>
       </div>
@@ -928,7 +929,7 @@ function BackendAnalyticsConsole({ apiBaseUrl }: { apiBaseUrl: string }) {
                 <div><span>Lowest bucket p95</span><strong>{observedTrendValues.length === 0 ? "Not reported" : `${Math.min(...observedTrendValues).toFixed(2)} s`}</strong></div>
                 <div><span>Median search</span><strong>{formatRuntime(workload.medianRuntimeMs)}</strong></div>
                 <div><span>Highest bucket p95</span><strong>{observedTrendValues.length === 0 ? "Not reported" : `${Math.max(...observedTrendValues).toFixed(2)} s`}</strong></div>
-                <Link href={contextualHref("/activity/")}>Inspect history →</Link>
+                <Link href={contextualHref("/activity/")}>Inspect history <AppIcon name="chevron-right" size="xs" /></Link>
               </footer>
             </section>
 
@@ -946,7 +947,7 @@ function BackendAnalyticsConsole({ apiBaseUrl }: { apiBaseUrl: string }) {
                       <div className={styles.insightTopline}><span className={`${styles.severity} ${styles.severityhigh}`}>Failed</span><small>{formatRuntime(entry.durationMs)}</small></div>
                       <h3>{historyTitle(entry)}</h3>
                       <p>{entry.failureMessage ?? "The backend retained no failure message for this search."}</p>
-                      <footer><strong>{formatCounter(entry.scannedRows)} rows scanned</strong><Link href={contextualHref(historySearchLaunchHref(entry.id, false), entry.appId)}>Open search →</Link></footer>
+                      <footer><strong>{formatCounter(entry.scannedRows)} rows scanned</strong><Link href={contextualHref(historySearchLaunchHref(entry.id, false), entry.appId)}>Open search <AppIcon name="chevron-right" size="xs" /></Link></footer>
                     </li>
                   ))}
                 </ol>
@@ -969,7 +970,7 @@ function BackendAnalyticsConsole({ apiBaseUrl }: { apiBaseUrl: string }) {
                   </select>
                 </label>
                 <label className={styles.fieldSearch}>
-                  <span className="sr-only">Filter fields</span><i aria-hidden="true">⌕</i>
+                  <span className="sr-only">Filter fields</span><i aria-hidden="true"><AppIcon name="search" size="sm" /></i>
                   <input data-testid="analytics-field-filter" type="search" placeholder="Filter field names or types" value={fieldQuery} onChange={(event) => setFieldQuery(event.target.value)} />
                 </label>
                 <label>
@@ -994,7 +995,7 @@ function BackendAnalyticsConsole({ apiBaseUrl }: { apiBaseUrl: string }) {
               ) : null}
               {fieldState === "available" && fieldSnapshot !== null && fieldSnapshot.fields.length === 0 ? <BackendResourceState kind="empty" title="No fields observed" message="This index had no field profiles in the selected range." /> : null}
               {fieldState === "available" && fieldSnapshot !== null && fieldSnapshot.fields.length > 0 && visibleFields.length === 0 ? (
-                <div className={styles.emptyFields}><span aria-hidden="true">⌕</span><strong>No fields match these filters</strong><p>Clear the filters to return to the loaded field profile.</p><button className="suite-button" onClick={clearFieldFilters} type="button">Clear filters</button></div>
+                <div className={styles.emptyFields}><span aria-hidden="true"><AppIcon name="search" size="lg" /></span><strong>No fields match these filters</strong><p>Clear the filters to return to the loaded field profile.</p><button className="suite-button" onClick={clearFieldFilters} type="button">Clear filters</button></div>
               ) : null}
               {fieldState === "available" && fieldSnapshot !== null && visibleFields.length > 0 ? (
                 <div className={styles.fieldList}>
@@ -1011,7 +1012,7 @@ function BackendAnalyticsConsole({ apiBaseUrl }: { apiBaseUrl: string }) {
                           <code className={styles.example}>{original === undefined ? "Not reported" : `${original.nullEvents.toLocaleString()} / ${original.missingEvents.toLocaleString()}`}</code>
                           {analysisHref === null
                             ? <span className={styles.unavailableAction} title="This field name cannot be represented by the current SPL grammar.">Unavailable</span>
-                            : <Link aria-label={`Analyze ${field.name} in Search`} href={contextualHref(analysisHref)}>Analyze →</Link>}
+                            : <Link aria-label={`Analyze ${field.name} in Search`} href={contextualHref(analysisHref)}>Analyze <AppIcon name="chevron-right" size="xs" /></Link>}
                         </li>
                       );
                     })}
@@ -1039,7 +1040,7 @@ function BackendAnalyticsConsole({ apiBaseUrl }: { apiBaseUrl: string }) {
                   ))}
                 </ol>
               )}
-              <footer className={styles.slowestFooter}><span>Ordered by retained runtime</span><Link href={contextualHref("/activity/")}>View search history →</Link></footer>
+              <footer className={styles.slowestFooter}><span>Ordered by retained runtime</span><Link href={contextualHref("/activity/")}>View search history <AppIcon name="chevron-right" size="xs" /></Link></footer>
             </section>
           </div>
         </>

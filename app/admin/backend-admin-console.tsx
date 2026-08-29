@@ -36,6 +36,7 @@ import { createErrorMessage } from "@/lib/error-message";
 import { searchLaunchHref } from "@/lib/search/launch-url";
 
 import { BackendResourceState } from "../_components/backend-resource-state";
+import { AppIcon, type AppIconName } from "../_components/app-icon";
 import { formatMediumDateTime } from "../_components/date-format";
 import { PageHeading } from "../_components/product-shell";
 import { Modal } from "../search-workspace/modal";
@@ -81,6 +82,16 @@ const BACKEND_ADMIN_SECTIONS: readonly AdminSection[] = [
   "access",
   "server",
 ];
+
+function adminSectionIcon(section: AdminSection): AppIconName {
+  if (section === "overview" || section === "apps") return "dashboard";
+  if (section === "indexes" || section === "lookups") return "database";
+  if (section === "collector-fleet") return "activity";
+  if (section === "collectors") return "download";
+  if (section === "knowledge") return "file";
+  if (section === "access") return "users";
+  return "settings";
+}
 
 interface PageLoadResult<T> {
   state: Exclude<ResourceState, "loading">;
@@ -4106,7 +4117,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     setTokenRecoveryAcquireGeneration((current) => current + 1);
   }
   const primaryAction = section === "indexes" && indexState === "available"
-    ? <button className="suite-button suite-button--primary" type="button" onClick={openIndexDialog}>＋ Create index</button>
+    ? <button className="suite-button suite-button--primary" type="button" onClick={openIndexDialog}><AppIcon name="plus" size="sm" /> Create index</button>
     : section === "collectors" && tokenState === "available"
       ? <button className="suite-button suite-button--primary" type="button" onClick={openTokenDialog} disabled={tokenCreateDisabledReason !== null} aria-describedby={tokenCreateDisabledReason === null ? undefined : "ingestion-token-create-disabled-reason"}>Generate token</button>
       : undefined;
@@ -4146,7 +4157,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
           <span className="admin-sidebar-label">SETTINGS</span>
           {navigationItems.map((item) => (
             <button className={section === item.key ? "active" : undefined} type="button" aria-current={section === item.key ? "page" : undefined} onClick={() => navigateSection(item.key)} key={item.key}>
-              <i aria-hidden="true">{item.icon}</i><span><strong>{item.label}</strong><small>{item.detail}</small></span><b aria-hidden="true">›</b>
+              <i aria-hidden="true"><AppIcon name={adminSectionIcon(item.key)} size="md" /></i><span><strong>{item.label}</strong><small>{item.detail}</small></span><b aria-hidden="true"><AppIcon name="chevron-right" size="xs" /></b>
             </button>
           ))}
           <div className="admin-sidebar-meta">
@@ -4635,7 +4646,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
         </Modal>
       ) : null}
 
-      {toast === null ? null : <output className={`toast toast-${toast.kind}`}><span aria-hidden="true">{toast.kind === "success" ? "✓" : "!"}</span><strong>{toast.message}</strong><button type="button" aria-label="Dismiss notification" onClick={() => setToast(null)}>×</button></output>}
+      {toast === null ? null : <output className={`toast toast-${toast.kind}`}><span aria-hidden="true"><AppIcon name={toast.kind === "success" ? "check" : "warning"} size="sm" /></span><strong>{toast.message}</strong><button type="button" aria-label="Dismiss notification" onClick={() => setToast(null)}><AppIcon name="close" size="md" /></button></output>}
     </div>
   );
 }
@@ -4923,7 +4934,7 @@ function BackendIndexes(props: BackendIndexesProps) {
   return (
     <div className="admin-section-stack">
       <header className="admin-section-header"><div><h2>Indexes</h2><p>Authoritative index definitions from the connected server.</p></div><span>{loadedCount}</span></header>
-      <div className="resource-toolbar"><label><span className="sr-only">Filter loaded indexes</span><i aria-hidden="true">⌕</i><input value={props.filter} onChange={(event) => props.onFilterChange(event.target.value)} placeholder="Filter loaded indexes" /></label><button type="button" onClick={props.onReload}>Refresh</button></div>
+      <div className="resource-toolbar"><label><span className="sr-only">Filter loaded indexes</span><i aria-hidden="true"><AppIcon name="search" size="sm" /></i><input value={props.filter} onChange={(event) => props.onFilterChange(event.target.value)} placeholder="Filter loaded indexes" /></label><button type="button" onClick={props.onReload}><AppIcon name="refresh" size="sm" /> Refresh</button></div>
       {props.indexes.length === 0 ? (
         <BackendResourceState kind="empty" title={props.totalIndexes === 0 ? "No indexes configured" : "No matching indexes"} message={props.totalIndexes === 0 ? "Create an index to begin accepting and searching data." : "Try another index name or description."} action={props.totalIndexes > 0 && props.filter.trim().length > 0 ? <button type="button" onClick={() => props.onFilterChange("")}>Clear filter</button> : undefined} />
       ) : (

@@ -26,6 +26,7 @@ import {
 import { createErrorMessage } from "@/lib/error-message";
 
 import { BackendResourceState } from "../_components/backend-resource-state";
+import { AppIcon } from "../_components/app-icon";
 import { formatMediumDateTime } from "../_components/date-format";
 import { Modal } from "../search-workspace/modal";
 import {
@@ -292,7 +293,7 @@ export function AppsAdminPanel({ apiBaseUrl, bootstrap }: PanelProps) {
 
   return (
     <div className="admin-section-stack">
-      <header className="admin-section-header"><div><h2>Apps</h2><p>Manage UI and knowledge-object scopes, default indexes, and time ranges.</p></div><button className="suite-button suite-button--primary" type="button" onClick={() => { setForm(blankAppForm()); setTarget(null); setNotice(null); setModal("create"); }}>＋ Create app</button></header>
+      <header className="admin-section-header"><div><h2>Apps</h2><p>Manage UI and knowledge-object scopes, default indexes, and time ranges.</p></div><button className="suite-button suite-button--primary" type="button" onClick={() => { setForm(blankAppForm()); setTarget(null); setNotice(null); setModal("create"); }}><AppIcon name="plus" size="sm" /> Create app</button></header>
       {notice === null ? null : <output className="access-mode-notice"><span>i</span><div><strong>App administration</strong><p>{notice}</p></div></output>}
       <form className="admin-toolbar" onSubmit={(event) => { event.preventDefault(); setAppliedQuery(query); }}>
         <label><span className="sr-only">Filter apps</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter apps by name or slug" /></label>

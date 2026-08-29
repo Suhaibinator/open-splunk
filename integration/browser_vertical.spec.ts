@@ -199,6 +199,7 @@ test.use({
 
 test("collector event is visible through the compiled backend UI", async ({ page }) => {
   test.setTimeout(60_000);
+  await page.setViewportSize({ width: 1_280, height: 800 });
   const safety = observeBrowserSafety(page);
   const runSearch = await openSearchWorkspace(page);
   const { createResponsePromise, resultsResponsePromise } = waitForSearchResponses(page);
@@ -234,6 +235,58 @@ test("collector event is visible through the compiled backend UI", async ({ page
   await expect(finalRows.first()).toHaveClass(/\bexpanded\b/u, { timeout });
   await expect(eventList).toContainText(expectedText, { timeout });
   await expect(eventList.locator(".event-row--preview")).toHaveCount(0);
+
+  const exportTrigger = page.getByRole("button", { name: "Export", exact: true });
+  const inspectTrigger = page.getByRole("button", { name: "Inspect search job" });
+  await expect(exportTrigger.locator("svg.app-icon--sm")).toHaveCount(1);
+  await expect(inspectTrigger.locator("svg.app-icon--md")).toHaveCount(1);
+  expect(await inspectTrigger.evaluate((element) => {
+    const button = element.getBoundingClientRect();
+    const icon = element.querySelector("svg")?.getBoundingClientRect();
+    return { button: [button.width, button.height], icon: icon === undefined ? null : [icon.width, icon.height] };
+  })).toEqual({ button: [32, 32], icon: [16, 16] });
+
+  await exportTrigger.click();
+  const exportDialog = page.getByRole("dialog", { name: "Export events" });
+  await expect(exportDialog).toBeVisible();
+  await exportDialog.getByRole("button", { name: "Create export" }).click();
+  await expect(exportDialog.getByRole("heading", { name: "Export ready" })).toBeVisible({ timeout });
+  await expect(exportDialog.getByRole("radio")).toHaveCount(0);
+  await expect(exportDialog.getByRole("checkbox")).toHaveCount(0);
+  const downloadButton = exportDialog.getByRole("button", { name: /^Download .+\.csv$/u });
+  await expect(downloadButton).toHaveText("Download CSV");
+  expect(await exportDialog.evaluate((element) => {
+    const summary = element.querySelector<HTMLElement>("[aria-labelledby='export-summary-title']");
+    const footer = element.querySelector<HTMLElement>(".modal-footer");
+    if (summary === null || footer === null) return null;
+    return {
+      dialogNoHorizontalOverflow: element.scrollWidth <= element.clientWidth,
+      summaryNoHorizontalOverflow: summary.scrollWidth <= summary.clientWidth,
+      footerNoHorizontalOverflow: footer.scrollWidth <= footer.clientWidth,
+    };
+  })).toEqual({
+    dialogNoHorizontalOverflow: true,
+    summaryNoHorizontalOverflow: true,
+    footerNoHorizontalOverflow: true,
+  });
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  expect(await exportDialog.evaluate((element) => {
+    const actions = Array.from(element.querySelectorAll<HTMLElement>(".modal-footer button"));
+    const first = actions[0]?.getBoundingClientRect();
+    const second = actions[1]?.getBoundingClientRect();
+    return {
+      dialogNoHorizontalOverflow: element.scrollWidth <= element.clientWidth,
+      actionsStacked: first !== undefined && second !== undefined && second.top > first.bottom,
+      actionHeights: actions.map((action) => action.getBoundingClientRect().height),
+    };
+  })).toEqual({
+    dialogNoHorizontalOverflow: true,
+    actionsStacked: true,
+    actionHeights: [44, 44],
+  });
+  await exportDialog.getByRole("button", { name: "Close dialog" }).click();
+  await page.setViewportSize({ width: 1_280, height: 800 });
 
   const previewStatuses = await collectPreviewStatuses(page);
   expect(

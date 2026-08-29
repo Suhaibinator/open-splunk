@@ -32,6 +32,49 @@
   box-sizing: border-box;
 }
 
+.app-icon {
+  display: block;
+  flex: 0 0 auto;
+  pointer-events: none;
+}
+
+.app-icon--xs { height: 12px; width: 12px; }
+.app-icon--sm { height: 14px; width: 14px; }
+.app-icon--md { height: 16px; width: 16px; }
+.app-icon--lg { height: 20px; width: 20px; }
+
+:where(button, a):has(> .app-icon) {
+  align-items: center;
+  display: inline-flex;
+  gap: 5px;
+}
+
+.status-icon {
+  align-items: center;
+  background: #718087;
+  border-radius: 50%;
+  color: #fff;
+  display: inline-flex;
+  flex: 0 0 20px;
+  height: 20px;
+  justify-content: center;
+  width: 20px;
+}
+
+.status-icon--success { background: var(--green-strong); }
+.status-icon--info { background: var(--blue); }
+.status-icon--warning { background: #a87300; }
+.status-icon--error { background: var(--red); }
+.status-icon--neutral { background: #718087; }
+
+.app-icon--spin {
+  animation: app-icon-spin 900ms linear infinite;
+}
+
+@keyframes app-icon-spin {
+  to { transform: rotate(360deg); }
+}
+
 html {
   min-width: 320px;
   min-height: 100%;
@@ -630,12 +673,15 @@ pre {
 
 .search-actions > button,
 .search-actions > .header-menu-wrap > button {
+  align-items: center;
   background: transparent;
   border: 0;
   border-radius: 2px;
   color: #3d4b54;
+  display: inline-flex;
   font-size: 11px;
-  height: 30px;
+  gap: 5px;
+  height: 32px;
   padding: 0 9px;
 }
 
@@ -1263,11 +1309,15 @@ pre {
 .sampling-button,
 .job-controls > button,
 .job-controls .header-menu-wrap > button {
+  align-items: center;
   background: transparent;
   border: 0;
   color: #52616a;
+  display: inline-flex;
   font-size: 10px;
-  height: 28px;
+  gap: 4px;
+  height: 32px;
+  justify-content: center;
 }
 
 .sampling-button {
@@ -1315,7 +1365,7 @@ pre {
 
 .job-controls > button,
 .job-controls .header-menu-wrap > button {
-  min-width: 28px;
+  min-width: 32px;
   padding: 0 7px;
 }
 
@@ -1964,9 +2014,9 @@ pre {
   background: transparent;
   border: 0;
   display: inline-flex;
-  height: 26px;
+  height: 32px;
   justify-content: center;
-  width: 26px;
+  width: 32px;
 }
 
 .icon-button:hover {
@@ -4182,12 +4232,6 @@ pre {
   top: 11px;
 }
 
-.export-ready-note {
-  color: #568236;
-  flex: 1;
-  font-size: 10px;
-}
-
 .settings-list label {
   align-items: center;
   border-bottom: 1px solid #e0e4e6;
@@ -5363,6 +5407,7 @@ pre {
 .admin-policy-grid > label { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .settings-form-grid label > small,
 .admin-form label > small { color: #64717a; font-size: 10px; }
+.settings-actions { align-items: center; display: flex; gap: 10px; justify-content: flex-end; }
 .input-with-unit { align-items: center; display: flex; }
 .input-with-unit input { min-width: 0; width: 100%; }
 .input-with-unit b { align-items: center; background: #eef0f1; border: 1px solid #aeb8bd; border-left: 0; display: flex; font-size: 10px; font-weight: 400; height: 34px; padding: 0 9px; }
@@ -7732,6 +7777,8 @@ button.knowledge-manager__row:hover { background: #f5f8f9; }
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .app-icon--spin { animation: none !important; }
+
   *,
   *::before,
   *::after {

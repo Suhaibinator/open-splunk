@@ -4,6 +4,8 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { KnowledgeObject } from "@/gen/ts/open_splunk/knowledge";
 
+import { AppIcon, StatusIcon } from "../_components/app-icon";
+
 import {
   KNOWLEDGE_LIFECYCLE_STATE_FILTER_OPTIONS,
   KNOWLEDGE_MANAGER_MAXIMUM_FILTER_BYTES,
@@ -968,7 +970,7 @@ export function KnowledgeManagerWorkspace({
             type="button"
             aria-label="Close knowledge object details"
             onClick={onCloseDetail}
-          >×</button>
+          ><AppIcon name="close" size="md" /></button>
           {detailState === "loading" ? (
             <KnowledgeStatus
               kind="loading"
@@ -1562,7 +1564,7 @@ function KnowledgeStatus({
 }) {
   return (
     <output className={`knowledge-manager__status knowledge-manager__status--${kind}`}>
-      <span aria-hidden="true">{kind === "loading" ? "…" : "!"}</span>
+      <StatusIcon tone={kind === "loading" ? "info" : "error"} icon={kind === "loading" ? "loading" : "warning"} spin={kind === "loading"} />
       <span className="knowledge-manager__status-copy"><strong>{title}</strong><span>{message}</span></span>
       {action}
     </output>

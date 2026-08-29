@@ -28,6 +28,7 @@ import {
 } from "@/lib/search/server-api";
 
 import { BackendResourceState } from "../_components/backend-resource-state";
+import { AppIcon } from "../_components/app-icon";
 import {
   formatActivityCount,
   formatActivityDate,
@@ -437,9 +438,9 @@ export function BackendLiveJobs({ apiBaseUrl }: BackendLiveJobsProps) {
           {countsError === null ? null : <div className="backend-inline-error" role="alert">Jobs loaded, but exact state counts could not be refreshed: {countsError}<button type="button" onClick={reload}>Retry</button></div>}
           {actionNotice === null ? null : (
             <output className={`backend-action-notice backend-action-notice--${actionNotice.kind}`}>
-              <span aria-hidden="true">{actionNotice.kind === "success" ? "✓" : "!"}</span>
+              <span aria-hidden="true"><AppIcon name={actionNotice.kind === "success" ? "check" : "warning"} size="sm" /></span>
               <strong>{actionNotice.message}</strong>
-              <button type="button" aria-label="Dismiss job action notification" onClick={() => setActionNotice(null)}>×</button>
+              <button type="button" aria-label="Dismiss job action notification" onClick={() => setActionNotice(null)}><AppIcon name="close" size="md" /></button>
             </output>
           )}
 
@@ -465,7 +466,7 @@ export function BackendLiveJobs({ apiBaseUrl }: BackendLiveJobsProps) {
               <div className="live-jobs-filter-row">
                 <label className="live-jobs-text-filter">
                   <span className="sr-only">Filter live jobs by source SPL</span>
-                  <i aria-hidden="true">⌕</i>
+                  <i aria-hidden="true"><AppIcon name="search" size="sm" /></i>
                   <input
                     value={query}
                     maxLength={256}

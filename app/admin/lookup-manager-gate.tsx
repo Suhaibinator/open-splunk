@@ -3,6 +3,8 @@
 import type { ComponentType } from "react";
 import { useEffect, useState } from "react";
 
+import { StatusIcon } from "../_components/app-icon";
+
 import type { KnowledgeManagerAppOption } from "./knowledge-manager-feature";
 
 export interface LookupManagerPanelProps {
@@ -39,7 +41,7 @@ export function LookupManagerGate(props: LookupManagerPanelProps) {
   if (failed) {
     return (
       <output className="backend-resource-state backend-resource-state--unavailable">
-        <span aria-hidden="true">!</span>
+        <StatusIcon tone="error" icon="warning" />
         <div><strong>Lookup Manager unavailable</strong><p>The advertised lookup management surface could not be loaded.</p></div>
       </output>
     );
@@ -47,7 +49,7 @@ export function LookupManagerGate(props: LookupManagerPanelProps) {
   if (Panel === null) {
     return (
       <output className="backend-resource-state backend-resource-state--loading">
-        <span aria-hidden="true">↻</span>
+        <StatusIcon tone="info" icon="loading" spin />
         <div><strong>Loading Lookup Manager</strong><p>Preparing the bounded CSV management surface…</p></div>
       </output>
     );

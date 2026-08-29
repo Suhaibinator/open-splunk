@@ -1,6 +1,7 @@
 import { type ReactNode, useEffect, useRef } from "react";
 
 import { installModalSurface } from "../_components/modal-surface";
+import { AppIcon } from "../_components/app-icon";
 
 interface ModalProps {
   title: string;
@@ -73,7 +74,7 @@ export function Modal({
             {subtitle === undefined ? null : <p>{subtitle}</p>}
           </div>
           {dismissible
-            ? <button className="icon-button close-button" aria-label="Close dialog" type="button" onClick={onClose}>×</button>
+            ? <button className="icon-button close-button" aria-label="Close dialog" type="button" onClick={onClose}><AppIcon name="close" size="lg" /></button>
             : null}
         </header>
         <div className="modal-body">{children}</div>

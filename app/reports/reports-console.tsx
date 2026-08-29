@@ -6,6 +6,7 @@ import { useMemo, useState } from "react";
 import type { SearchDataMode } from "@/lib/search/backend-data";
 import { searchLaunchHref } from "@/lib/search/launch-url";
 
+import { AppIcon } from "../_components/app-icon";
 import { PageHeading } from "../_components/product-shell";
 import { BackendReportsConsole } from "./backend-reports-console";
 import styles from "./reports.module.css";
@@ -222,7 +223,7 @@ function DemoReportsConsole() {
               href={searchLaunchHref("index=gradethis | stats count by service", { run: false })}
               title="Open a report-shaped SPL draft. Report creation is not connected in this preview."
             >
-              ＋ Draft in Search
+              <AppIcon name="plus" size="sm" /> Draft in Search
             </Link>
           </>
         )}
@@ -260,7 +261,7 @@ function DemoReportsConsole() {
         <div className={styles.toolbar}>
           <label className={styles.searchField}>
             <span className="sr-only">Filter reports</span>
-            <i aria-hidden="true">⌕</i>
+            <i aria-hidden="true"><AppIcon name="search" size="sm" /></i>
             <input
               type="search"
               value={query}
@@ -298,7 +299,7 @@ function DemoReportsConsole() {
 
         {visibleReports.length === 0 ? (
           <div className={styles.empty}>
-            <span aria-hidden="true">⌕</span>
+            <span aria-hidden="true"><AppIcon name="search" size="lg" /></span>
             <strong>No matching reports</strong>
             <p>Try another phrase or broaden the report filters.</p>
             <button type="button" onClick={resetFilters}>Clear all filters</button>
@@ -364,7 +365,7 @@ function DemoReportsConsole() {
                         <span className={styles.modified}>{report.updated}</span>
                       </td>
                       <td className={styles.openCell}>
-                        <Link href={searchLaunchHref(report.query)} aria-label={`Open ${report.name} in Search`}>Open in Search <span aria-hidden="true">›</span></Link>
+                        <Link href={searchLaunchHref(report.query)} aria-label={`Open ${report.name} in Search`}>Open in Search <AppIcon name="chevron-right" size="xs" /></Link>
                       </td>
                     </tr>
                   );

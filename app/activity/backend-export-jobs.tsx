@@ -24,6 +24,7 @@ import {
 } from "@/lib/search/server-exports";
 
 import { BackendResourceState } from "../_components/backend-resource-state";
+import { AppIcon } from "../_components/app-icon";
 import { formatDecimalBytes } from "../search-workspace/formatters";
 import {
   formatActivityCount,
@@ -282,7 +283,7 @@ export function BackendExportJobs({ apiBaseUrl, bootstrap }: BackendExportJobsPr
             <span><i aria-hidden="true" />{totalSizeExact && totalSize !== null ? <><strong>{formatActivityCount(totalSize)}</strong> exact matches; </> : null}last refreshed <strong>{formatActivityTime(refreshedAt)}</strong>. Lifecycle state and expiration can change between pages.</span>
             <button type="button" aria-busy={refreshing} aria-disabled={refreshing} onClick={() => { if (!refreshing) reload(); }}>{refreshing ? "Refreshing…" : "Refresh snapshot"}</button>
           </output>
-          {notice === null ? null : <output className={`backend-action-notice backend-action-notice--${notice.kind}`}><span aria-hidden="true">{notice.kind === "success" ? "✓" : "!"}</span><strong>{notice.message}</strong><button type="button" aria-label="Dismiss export action notification" onClick={() => setNotice(null)}>×</button></output>}
+          {notice === null ? null : <output className={`backend-action-notice backend-action-notice--${notice.kind}`}><span aria-hidden="true"><AppIcon name={notice.kind === "success" ? "check" : "warning"} size="sm" /></span><strong>{notice.message}</strong><button type="button" aria-label="Dismiss export action notification" onClick={() => setNotice(null)}><AppIcon name="close" size="md" /></button></output>}
           {error !== null && jobs.length > 0 ? <div className="backend-inline-error" role="alert">The latest refresh failed; the prior snapshot remains visible. {error}<button type="button" onClick={reload}>Retry</button></div> : null}
 
           <section className="suite-card live-jobs-card">
@@ -292,7 +293,7 @@ export function BackendExportJobs({ apiBaseUrl, bootstrap }: BackendExportJobsPr
                 {FILTERS.map((candidate) => <button className={`activity-filter-button${filter === candidate.key ? " active" : ""}`} aria-pressed={filter === candidate.key} type="button" onClick={() => setFilter(candidate.key)} key={candidate.key}>{candidate.label}</button>)}
               </fieldset>
               <form className="live-jobs-filter-row" onSubmit={(event) => { event.preventDefault(); setSearchJobIdFilter(searchJobIdInput.trim()); }}>
-                <label className="live-jobs-text-filter"><span className="sr-only">Exact search job ID filter</span><i aria-hidden="true">⌕</i><input value={searchJobIdInput} maxLength={256} onChange={(event) => setSearchJobIdInput(event.target.value)} placeholder="Exact search job ID" /></label>
+                <label className="live-jobs-text-filter"><span className="sr-only">Exact search job ID filter</span><i aria-hidden="true"><AppIcon name="search" size="sm" /></i><input value={searchJobIdInput} maxLength={256} onChange={(event) => setSearchJobIdInput(event.target.value)} placeholder="Exact search job ID" /></label>
                 <button className="suite-button" type="submit">Apply</button>
                 {filtered ? <button className="suite-button suite-button--secondary" type="button" onClick={clearFilters}>Clear</button> : null}
               </form>

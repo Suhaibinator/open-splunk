@@ -4,6 +4,7 @@ import type { DemoEvent, DemoField, DemoScalar, TimelinePoint } from "@/lib/demo
 import type { PivotMode } from "@/lib/search/query-pivots";
 
 import { installModalSurface } from "../../_components/modal-surface";
+import { AppIcon } from "../../_components/app-icon";
 import { COMPACT_NUMBER_FORMAT, NUMBER_FORMAT } from "../constants";
 import { formatExactInteger, formatExactNumericText } from "../formatters";
 import type { EventDisplay, MenuName, TimelineDisplay } from "../model";
@@ -305,7 +306,7 @@ export function EventsPanel({
               <div className="timeline-toolbar">
             <div>
               <div className="header-menu-wrap result-menu-wrap">
-                <button type="button" aria-haspopup="menu" aria-expanded={menu === "timeline-format"} onClick={() => setMenu(menu === "timeline-format" ? null : "timeline-format")}>Format Timeline <span aria-hidden="true">▾</span></button>
+                <button type="button" aria-haspopup="menu" aria-expanded={menu === "timeline-format"} onClick={() => setMenu(menu === "timeline-format" ? null : "timeline-format")}>Format Timeline <AppIcon name="chevron-down" size="xs" /></button>
                 {menu === "timeline-format" ? (
                   <div className="floating-menu result-control-menu" role="menu" aria-label="Timeline format">
                     {(["Columns", "Compact"] as const).map((display) => (
@@ -314,14 +315,14 @@ export function EventsPanel({
                   </div>
                 ) : null}
               </div>
-              <button type="button" disabled={!canZoomOut} onClick={zoomOutTimeline}>− Zoom Out</button>
+              <button type="button" disabled={!canZoomOut} onClick={zoomOutTimeline}><AppIcon name="minus" size="sm" /> Zoom Out</button>
               <button
                 type="button"
                 disabled={!timelineSelectionZoomable}
                 title={timelineSelection !== null && !timelineSelectionZoomable ? "This bucket does not include an authoritative end boundary." : undefined}
                 onClick={zoomTimeline}
-              >＋ Zoom to Selection</button>
-              <button type="button" disabled={timelineSelection === null} onClick={() => { setTimelineStart(null); setTimelineEnd(null); }}>× Deselect</button>
+              ><AppIcon name="plus" size="sm" /> Zoom to Selection</button>
+              <button type="button" disabled={timelineSelection === null} onClick={() => { setTimelineStart(null); setTimelineEnd(null); }}><AppIcon name="close" size="sm" /> Deselect</button>
             </div>
             <span>
               {timelineSelection === null ? (backendEnabled ? "Automatic time span" : "20 minutes per column") : `${timelinePoints[timelineSelection[0]]?.label ?? ""} – ${timelinePoints[timelineSelection[1]]?.label ?? ""}`}
@@ -387,8 +388,8 @@ export function EventsPanel({
         <div className={`events-layout${fieldsCollapsed ? " fields-collapsed" : ""}`}>
           <aside ref={fieldsRailRef} className="fields-rail" data-testid="fields-rail" role={mobileFieldsMode && !fieldsCollapsed ? "dialog" : undefined} aria-modal={mobileFieldsMode && !fieldsCollapsed ? "true" : undefined} aria-label="Search fields">
             <div className="fields-topbar">
-              <button type="button" onClick={() => setFieldsCollapsed(!fieldsCollapsed)}><span aria-hidden="true">{fieldsCollapsed ? "»" : "‹"}</span>{fieldsCollapsed ? null : "Hide Fields"}</button>
-              {fieldsCollapsed || isPreview ? null : <button type="button" onClick={() => setShowAllFields(true)}>▦ All Fields</button>}
+              <button type="button" aria-label={fieldsCollapsed ? "Show fields" : undefined} onClick={() => setFieldsCollapsed(!fieldsCollapsed)}><AppIcon name={fieldsCollapsed ? "chevron-right" : "chevron-left"} size="sm" />{fieldsCollapsed ? null : "Hide Fields"}</button>
+              {fieldsCollapsed || isPreview ? null : <button type="button" onClick={() => setShowAllFields(true)}><AppIcon name="list" size="sm" /> All Fields</button>}
             </div>
             {fieldsCollapsed ? (
               <button className="vertical-fields-label" type="button" onClick={() => setFieldsCollapsed(false)}>Fields</button>
@@ -401,7 +402,7 @@ export function EventsPanel({
             ) : (
               <>
                 <label className="field-filter">
-                  <span aria-hidden="true">⌕</span>
+                  <span aria-hidden="true"><AppIcon name="search" size="sm" /></span>
                   <input aria-label="Filter fields" placeholder="Filter fields" value={fieldFilter} onChange={(event) => setFieldFilter(event.target.value)} />
                 </label>
                 {fieldsLoading ? <output className="field-loading">Loading server fields…</output> : null}
@@ -457,7 +458,7 @@ export function EventsPanel({
               <section className="field-inspector" data-testid="field-inspector" aria-label={`${activeFieldData.displayName} field summary`}>
                 <header>
                   <div><span className={`field-type type-${activeFieldData.type}`}>{activeFieldData.type === "number" ? "#" : "a"}</span><strong>{activeFieldData.displayName}</strong></div>
-                  <button className="icon-button" type="button" aria-label="Close field summary" onClick={closeFieldInspector}>×</button>
+                  <button className="icon-button" type="button" aria-label="Close field summary" onClick={closeFieldInspector}><AppIcon name="close" size="md" /></button>
                 </header>
                 <div className="field-summary-meta">
                   <span title={projectedCountTitle("Events", activeFieldData.eventCount, activeFieldData.eventCountExact)}>
@@ -493,7 +494,7 @@ export function EventsPanel({
                               : undefined}
                           style={{ width: `${percent}%` }}
                         />
-                        <div><button type="button" disabled={!pivotable} onClick={() => applyPivot(activeFieldData.name, item.value, "include")} aria-label={`Include ${formattedValue} (${scalarTypeLabel(item.value)})`}>＋</button><button type="button" disabled={!pivotable} onClick={() => applyPivot(activeFieldData.name, item.value, "exclude")} aria-label={`Exclude ${formattedValue} (${scalarTypeLabel(item.value)})`}>−</button></div>
+                        <div><button type="button" disabled={!pivotable} onClick={() => applyPivot(activeFieldData.name, item.value, "include")} aria-label={`Include ${formattedValue} (${scalarTypeLabel(item.value)})`}><AppIcon name="plus" size="sm" /></button><button type="button" disabled={!pivotable} onClick={() => applyPivot(activeFieldData.name, item.value, "exclude")} aria-label={`Exclude ${formattedValue} (${scalarTypeLabel(item.value)})`}><AppIcon name="minus" size="sm" /></button></div>
                       </div>
                     );
                   })}
@@ -517,9 +518,9 @@ export function EventsPanel({
           <section className={`event-results display-${eventDisplay.toLowerCase()}${wrapEvents ? " wrap-events" : " nowrap-events"}`} aria-label="Events">
             <div className="event-toolbar">
               <div>
-                <button ref={mobileFieldsButtonRef} className="mobile-fields-button" type="button" onClick={() => { fieldsReturnFocusRef.current = mobileFieldsButtonRef.current; setFieldsCollapsed(false); }}>☰ Fields</button>
+                <button ref={mobileFieldsButtonRef} className="mobile-fields-button" type="button" onClick={() => { fieldsReturnFocusRef.current = mobileFieldsButtonRef.current; setFieldsCollapsed(false); }}><AppIcon name="menu" size="md" /> Fields</button>
                 <div className="header-menu-wrap result-menu-wrap">
-                  <button type="button" aria-haspopup="menu" aria-expanded={menu === "event-display"} onClick={() => setMenu(menu === "event-display" ? null : "event-display")}>{eventDisplay} <span aria-hidden="true">▾</span></button>
+                  <button type="button" aria-haspopup="menu" aria-expanded={menu === "event-display"} onClick={() => setMenu(menu === "event-display" ? null : "event-display")}>{eventDisplay} <AppIcon name="chevron-down" size="xs" /></button>
                   {menu === "event-display" ? (
                     <div className="floating-menu result-control-menu" role="menu" aria-label="Event display">
                       {(["List", "Raw"] as const).map((display) => (
@@ -528,9 +529,9 @@ export function EventsPanel({
                     </div>
                   ) : null}
                 </div>
-                <button type="button" aria-pressed={wrapEvents} title={wrapEvents ? "Turn event wrapping off" : "Wrap long event text"} onClick={() => setWrapEvents((current) => !current)}><span aria-hidden="true">✎</span> {wrapEvents ? "Wrap on" : "Wrap off"}</button>
+                <button type="button" aria-pressed={wrapEvents} title={wrapEvents ? "Turn event wrapping off" : "Wrap long event text"} onClick={() => setWrapEvents((current) => !current)}><AppIcon name="wrap" size="sm" /> {wrapEvents ? "Wrap on" : "Wrap off"}</button>
                 {isPreview ? null : <div className="header-menu-wrap result-menu-wrap">
-                  <button type="button" aria-haspopup="menu" aria-expanded={menu === "event-page-size"} onClick={() => setMenu(menu === "event-page-size" ? null : "event-page-size")}>{eventPageSize} Per Page <span aria-hidden="true">▾</span></button>
+                  <button type="button" aria-haspopup="menu" aria-expanded={menu === "event-page-size"} onClick={() => setMenu(menu === "event-page-size" ? null : "event-page-size")}>{eventPageSize} Per Page <AppIcon name="chevron-down" size="xs" /></button>
                   {menu === "event-page-size" ? (
                     <div className="floating-menu result-control-menu page-size-menu" role="menu" aria-label="Events per page">
                       {eventPageSizeOptions.map((size) => {
@@ -548,7 +549,7 @@ export function EventsPanel({
                               setMenu(null);
                             }}
                           >
-                            {eventPageSize === size ? "✓" : ""}
+                            {eventPageSize === size ? <AppIcon name="check" size="sm" /> : null}
                             <span>
                               <strong>{size} events</strong>
                               {unavailable ? <small>Above server limit</small> : null}
@@ -567,7 +568,7 @@ export function EventsPanel({
                   {previewTruncated ? <b>Preview limit reached</b> : null}
                 </span>
               ) : <nav aria-label="Event pages">
-                <button type="button" disabled={eventPage === 1} onClick={() => setEventPage((current) => Math.max(1, current - 1))}>‹ Prev</button>
+                <button type="button" disabled={eventPage === 1} onClick={() => setEventPage((current) => Math.max(1, current - 1))}><AppIcon name="chevron-left" size="xs" /> Prev</button>
                 {backendEnabled ? (
                   <span aria-current="page">
                     Page {NUMBER_FORMAT.format(eventPage)}
@@ -587,7 +588,7 @@ export function EventsPanel({
                   type="button"
                   disabled={backendEnabled ? !backendHasNextPage : eventPage === eventPageCount}
                   onClick={() => setEventPage((current) => backendEnabled ? current + 1 : Math.min(eventPageCount, current + 1))}
-                >Next ›</button>
+                >Next <AppIcon name="chevron-right" size="xs" /></button>
               </nav>}
             </div>
             <div className="event-head">
@@ -605,7 +606,7 @@ export function EventsPanel({
                 const level = String(event.fields.level ?? "INFO").toLowerCase();
                 return (
                   <article className={`event-row level-${level}${expanded ? " expanded" : ""}${isPreview ? " event-row--preview" : ""}`} data-testid={`event-row-${event.id}`} key={event.id}>
-                    <button className="event-expander" type="button" aria-disabled={isPreview} title={isPreview ? "Event details become available with final results." : undefined} aria-label={isPreview ? "Event details unavailable during live preview" : `${expanded ? "Collapse" : "Expand"} event`} aria-expanded={expanded} onClick={() => { if (!isPreview) toggleEvent(event.id); }}>{expanded ? "⌄" : "›"}</button>
+                    <button className="event-expander" type="button" aria-disabled={isPreview} title={isPreview ? "Event details become available with final results." : undefined} aria-label={isPreview ? "Event details unavailable during live preview" : `${expanded ? "Collapse" : "Expand"} event`} aria-expanded={expanded} onClick={() => { if (!isPreview) toggleEvent(event.id); }}><AppIcon name={expanded ? "chevron-down" : "chevron-right"} size="sm" /></button>
                     <button className="event-time" type="button" aria-disabled={isPreview} title={isPreview ? "Nearby-event navigation becomes available with final results." : "Find nearby events"} aria-label={isPreview ? `${event.timeLabel}; nearby-event navigation unavailable during live preview` : undefined} onClick={() => { if (!isPreview) showToast("Choose a nearby interval from the time range picker."); }}><span>{event.timeLabel.split(", ")[0]}</span><strong>{event.timeLabel.split(", ").slice(1).join(", ")}</strong></button>
                     <div className="event-content">
                       <button className="event-raw" type="button" aria-disabled={isPreview} title={isPreview ? "This row may change until the search completes." : undefined} aria-label={isPreview ? "Provisional event row; details unavailable until completion" : `${expanded ? "Collapse" : "Expand"} event details`} onClick={() => { if (!isPreview) toggleEvent(event.id); }}>{highlightedRaw(event.raw, submittedQuery)}</button>
@@ -626,9 +627,9 @@ export function EventsPanel({
                                 <span className={`value-type value-${fieldValue === null ? "null" : typeof fieldValue}`}>{fieldValue === null ? "null" : typeof fieldValue}</span>
                                 <code style={{ whiteSpace: eventFieldValueWhiteSpace(fieldValue) }}>{formatFieldValue(fieldValue)}</code>
                                 <div className="event-field-actions">
-                                  <button type="button" disabled={event.pivotableFields?.[fieldName] === false} title={event.pivotableFields?.[fieldName] === false ? "This typed value cannot be represented losslessly in SPL" : "Include in current search"} aria-label={`Include ${fieldName}`} onClick={() => applyPivot(fieldName, fieldValue, "include")}>＋</button>
-                                  <button type="button" disabled={event.pivotableFields?.[fieldName] === false} title={event.pivotableFields?.[fieldName] === false ? "This typed value cannot be represented losslessly in SPL" : "Exclude from current search"} aria-label={`Exclude ${fieldName}`} onClick={() => applyPivot(fieldName, fieldValue, "exclude")}>−</button>
-                                  <button type="button" disabled={event.pivotableFields?.[fieldName] === false} title={event.pivotableFields?.[fieldName] === false ? "This typed value cannot be represented losslessly in SPL" : "Open as new search"} aria-label={`New search for ${fieldName}`} onClick={() => applyPivot(fieldName, fieldValue, "new", true)}>⌕</button>
+                                  <button type="button" disabled={event.pivotableFields?.[fieldName] === false} title={event.pivotableFields?.[fieldName] === false ? "This typed value cannot be represented losslessly in SPL" : "Include in current search"} aria-label={`Include ${fieldName}`} onClick={() => applyPivot(fieldName, fieldValue, "include")}><AppIcon name="plus" size="sm" /></button>
+                                  <button type="button" disabled={event.pivotableFields?.[fieldName] === false} title={event.pivotableFields?.[fieldName] === false ? "This typed value cannot be represented losslessly in SPL" : "Exclude from current search"} aria-label={`Exclude ${fieldName}`} onClick={() => applyPivot(fieldName, fieldValue, "exclude")}><AppIcon name="minus" size="md" /></button>
+                                  <button type="button" disabled={event.pivotableFields?.[fieldName] === false} title={event.pivotableFields?.[fieldName] === false ? "This typed value cannot be represented losslessly in SPL" : "Open as new search"} aria-label={`New search for ${fieldName}`} onClick={() => applyPivot(fieldName, fieldValue, "new", true)}><AppIcon name="search" size="sm" /></button>
                                 </div>
                               </div>
                             ))}

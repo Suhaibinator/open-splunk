@@ -22,6 +22,7 @@ import { createErrorMessage } from "@/lib/error-message";
 import { searchLaunchHref } from "@/lib/search/launch-url";
 
 import { BackendResourceState } from "../_components/backend-resource-state";
+import { AppIcon } from "../_components/app-icon";
 import { PageHeading } from "../_components/product-shell";
 import { IndexObservabilityPanel } from "./index-observability-panel";
 import { nextObservedIndexId, retainVisibleObservedIndexId } from "./index-observability-data";
@@ -207,10 +208,10 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
       ) : bootstrap === null ? null : (
         <>
           <div className="dataset-toolbar">
-            <label><span className="sr-only">Filter datasets</span><i aria-hidden="true">⌕</i><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Find an index" /></label>
+            <label><span className="sr-only">Filter datasets</span><i aria-hidden="true"><AppIcon name="search" size="sm" /></i><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Find an index" /></label>
             <fieldset className="dataset-view-toggle">
               <legend className="sr-only">Dataset view</legend>
-              <button className={view === "cards" ? "active" : undefined} type="button" aria-pressed={view === "cards"} onClick={() => setView("cards")}><span aria-hidden="true">▥</span> Cards</button>
+              <button className={view === "cards" ? "active" : undefined} type="button" aria-pressed={view === "cards"} onClick={() => setView("cards")}><AppIcon name="dashboard" size="sm" /> Cards</button>
               <button className={view === "table" ? "active" : undefined} type="button" aria-pressed={view === "table"} onClick={() => setView("table")}><span aria-hidden="true">☷</span> Table</button>
             </fieldset>
           </div>
@@ -277,7 +278,7 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
                   <thead><tr><th scope="col">Index</th><th scope="col">State</th><th scope="col">Search access</th><th scope="col">Ingestion access</th><th scope="col">Retention</th><th scope="col">Default source type</th><th scope="col"><span className="sr-only">Action</span></th></tr></thead>
                   <tbody>{visible.map((index) => {
                     const detail = definitions.get(index.id);
-                    return <tr key={index.id}><td><strong>{index.displayName}</strong><small className="table-secondary">index={index.name}</small></td><td>{stateLabel(index)}</td><td>{accessLabel(index.searchAccess)}</td><td>{accessLabel(index.ingestionAccess)}</td><td>{detail === undefined ? "Not available" : retentionLabel(detail)}</td><td>{detail === undefined ? "Not available" : detail.definition?.defaultSourcetype || "Not set"}</td><td><div className="row-actions">{index.searchable ? <Link className="table-action" href={searchLaunchHref(`index=${index.name} | sort -_time`)} aria-label={`Search index ${index.name}`}>Search ›</Link> : "Unavailable"}<button className="table-action" type="button" aria-pressed={observedIndexId === index.id} aria-label={`${observedIndexId === index.id ? "Hide" : "Inspect"} profile for index ${index.name}`} onClick={() => toggleObservedIndex(index.id)}>{observedIndexId === index.id ? "Hide profile" : "Profile"}</button></div></td></tr>;
+                    return <tr key={index.id}><td><strong>{index.displayName}</strong><small className="table-secondary">index={index.name}</small></td><td>{stateLabel(index)}</td><td>{accessLabel(index.searchAccess)}</td><td>{accessLabel(index.ingestionAccess)}</td><td>{detail === undefined ? "Not available" : retentionLabel(detail)}</td><td>{detail === undefined ? "Not available" : detail.definition?.defaultSourcetype || "Not set"}</td><td><div className="row-actions">{index.searchable ? <Link className="table-action" href={searchLaunchHref(`index=${index.name} | sort -_time`)} aria-label={`Search index ${index.name}`}>Search <AppIcon name="chevron-right" size="xs" /></Link> : "Unavailable"}<button className="table-action" type="button" aria-pressed={observedIndexId === index.id} aria-label={`${observedIndexId === index.id ? "Hide" : "Inspect"} profile for index ${index.name}`} onClick={() => toggleObservedIndex(index.id)}>{observedIndexId === index.id ? "Hide profile" : "Profile"}</button></div></td></tr>;
                   })}</tbody>
                 </table>
               </div>
@@ -286,7 +287,7 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
 
           {visible.length === 0 ? null : observedIndex === null ? (
             <section className="suite-card index-observability-prompt">
-              <header className="suite-card-header"><div><h2>Statistics and field catalog</h2><p>Select an index to inspect its connected data profile.</p></div><span aria-hidden="true">⌕</span></header>
+              <header className="suite-card-header"><div><h2>Statistics and field catalog</h2><p>Select an index to inspect its connected data profile.</p></div><span aria-hidden="true"><AppIcon name="search" size="lg" /></span></header>
               <p>The backend can report event and storage statistics plus a paginated field snapshot over an explicit time range. Choose <strong>Inspect profile</strong> on any index above.</p>
             </section>
           ) : <IndexObservabilityPanel client={client} index={observedIndex} />}

@@ -15,6 +15,7 @@ import { installModalSurface } from "../../_components/modal-surface";
 import { TIME_PRESETS } from "../constants";
 import type { ModalName, TimePickerSection, TimeRange } from "../model";
 import { serverTimeRangeValidationError } from "../time-range";
+import { AppIcon, StatusIcon } from "../../_components/app-icon";
 import { syntaxTokens } from "../workspace-utils";
 
 interface CompletionItem {
@@ -245,9 +246,9 @@ export function SearchComposer({
               onModalChange("time");
             }}
           >
-            <span aria-hidden="true">◷</span>
+            <span aria-hidden="true"><AppIcon name="clock" size="lg" /></span>
             <span><small>Time range</small><strong>{timeRange.label}</strong></span>
-            <span aria-hidden="true">▾</span>
+            <span aria-hidden="true"><AppIcon name="chevron-down" size="xs" /></span>
           </button>
           {modal === "time" ? (
             <>
@@ -255,7 +256,7 @@ export function SearchComposer({
             <dialog open className="time-popover" id="time-range-popover" data-testid="time-picker-dialog" aria-modal={mobileTimePicker} aria-labelledby="time-popover-title">
               <header className="time-popover-header">
                 <div><strong id="time-popover-title">Select time range</strong><small>{localTimeZone}</small></div>
-                <button type="button" aria-label="Close time range" onClick={onCloseTimePicker}>×</button>
+                <button type="button" aria-label="Close time range" onClick={onCloseTimePicker}><AppIcon name="close" size="lg" /></button>
               </header>
               <div className="time-picker-layout">
                 <aside className="time-picker-nav" aria-label="Time range categories">
@@ -278,7 +279,7 @@ export function SearchComposer({
                 <div className="time-picker-content">
                   {timePickerSection === "presets" ? (
                     <><h3>Common time ranges</h3><div className="preset-grid">{availablePresets.map((preset) => (
-                      <button className={draftTimeRange.label === preset.label ? "selected" : ""} type="button" key={preset.label} onClick={() => onDraftTimeRangeChange(preset)}><span>{preset.label}</span>{draftTimeRange.label === preset.label ? <span aria-hidden="true">✓</span> : null}</button>
+                      <button className={draftTimeRange.label === preset.label ? "selected" : ""} type="button" key={preset.label} onClick={() => onDraftTimeRangeChange(preset)}><span>{preset.label}</span>{draftTimeRange.label === preset.label ? <AppIcon name="check" size="sm" /> : null}</button>
                     ))}</div></>
                   ) : null}
                   {timePickerSection === "relative" ? (
@@ -347,14 +348,14 @@ export function SearchComposer({
             }
           }}
         >
-          <span aria-hidden="true">{launchPending ? "…" : isRunning ? "■" : "⌕"}</span>
+          <span aria-hidden="true"><AppIcon name={launchPending ? "loading" : isRunning ? "stop" : "search"} size="lg" spin={launchPending} /></span>
           <strong>{launchPending ? "Opening" : isRunning ? "Cancel" : "Search"}</strong>
         </button>
       </section>
 
       {diagnostic === null ? null : (
         <div className="diagnostic-strip" id="editor-diagnostic" role="alert" data-testid="search-diagnostic">
-          <span className="diagnostic-icon">!</span>
+          <StatusIcon tone="error" icon="warning" />
           <span><strong>{diagnostic.message}</strong><small>Line {diagnostic.line}, column {diagnostic.column} · {diagnostic.suggestion}</small></span>
           {diagnostic.actionLabel === undefined ? null : <button type="button" onClick={() => onDiagnosticFix(diagnostic)}>{diagnostic.actionLabel}</button>}
         </div>

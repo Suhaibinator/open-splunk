@@ -23,6 +23,7 @@ import {
 } from "@/lib/search/backend-data";
 
 import { NUMBER_FORMAT } from "../constants";
+import { AppIcon } from "../../_components/app-icon";
 import { formatGroupedNumericText } from "../formatters";
 import type { MenuName, StatsDensity } from "../model";
 import {
@@ -396,9 +397,9 @@ export function StatisticsPanel({
             : `${totalDescription} · completed in ${elapsed}`}</p>
         </div>
         <div>
-          <button className="button secondary compact" type="button" disabled={isPreview} title={isPreview ? "Export becomes available after authoritative results load." : undefined} onClick={onExport}>⇩ Export</button>
+          <button className="button secondary compact" type="button" disabled={isPreview} title={isPreview ? "Export becomes available after authoritative results load." : undefined} onClick={onExport}><AppIcon name="download" size="sm" /> Export</button>
           <div className="header-menu-wrap result-menu-wrap">
-            <button className="button secondary compact" type="button" aria-haspopup="menu" aria-expanded={menu === "stats-format"} onClick={() => onMenuChange(menu === "stats-format" ? null : "stats-format")}>Format <span aria-hidden="true">▾</span></button>
+            <button className="button secondary compact" type="button" aria-haspopup="menu" aria-expanded={menu === "stats-format"} onClick={() => onMenuChange(menu === "stats-format" ? null : "stats-format")}>Format <AppIcon name="chevron-down" size="xs" /></button>
             {menu === "stats-format" ? (
               <div className="floating-menu result-control-menu" role="menu" aria-label="Statistics table format">
                 {(["compact", "standard"] as const).map((density) => (
@@ -691,7 +692,7 @@ export function StatisticsPanel({
             </table>
           )}
         </section>
-        <span className="statistics-scroll-hint" aria-hidden="true">More columns <b>→</b></span>
+        <span className="statistics-scroll-hint" aria-hidden="true">More columns <b><AppIcon name="chevron-right" size="sm" /></b></span>
       </div>
       <footer className={`statistics-footer${isPreview ? " statistics-footer--preview" : ""}`}>{isPreview
         ? <>

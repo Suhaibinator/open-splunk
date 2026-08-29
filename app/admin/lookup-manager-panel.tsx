@@ -24,6 +24,7 @@ import { isOptionalRouteUnavailable } from "@/lib/api";
 import { createErrorMessage } from "@/lib/error-message";
 
 import { BackendResourceState } from "../_components/backend-resource-state";
+import { AppIcon } from "../_components/app-icon";
 import { formatMediumDateTime } from "../_components/date-format";
 import { Modal } from "../search-workspace/modal";
 import { joinedPatterns, lines } from "./knowledge-lookup-text";
@@ -568,7 +569,7 @@ export function LookupManagerPanel({
             setNotice(null);
             setModal("create");
           }}
-        >＋ Create lookup</button>
+        ><AppIcon name="plus" size="sm" /> Create lookup</button>
       </header>
 
       {state === "available" && apps.length === 0 ? (

@@ -32,6 +32,7 @@ import {
 } from "@/lib/search/server-objects";
 
 import { BackendResourceState } from "../_components/backend-resource-state";
+import { AppIcon } from "../_components/app-icon";
 import { PageHeading } from "../_components/product-shell";
 import { Modal } from "../search-workspace/modal";
 import {
@@ -184,7 +185,7 @@ export function BackendActivityConsole({ apiBaseUrl }: BackendActivityConsolePro
           onClick={() => selectView("jobs")}
           onKeyDown={navigateTabs}
         >
-          <span aria-hidden="true">↻</span>
+          <span aria-hidden="true"><AppIcon name="activity" size="md" /></span>
           <span><strong>Current jobs</strong><small>Retained transient executions</small></span>
         </button>
         <button
@@ -199,7 +200,7 @@ export function BackendActivityConsole({ apiBaseUrl }: BackendActivityConsolePro
           onClick={() => selectView("history")}
           onKeyDown={navigateTabs}
         >
-          <span aria-hidden="true">▤</span>
+          <span aria-hidden="true"><AppIcon name="history" size="md" /></span>
           <span><strong>Search history</strong><small>Persisted terminal metadata</small></span>
         </button>
         {exportsAvailable ? (
@@ -215,7 +216,7 @@ export function BackendActivityConsole({ apiBaseUrl }: BackendActivityConsolePro
             onClick={() => selectView("exports")}
             onKeyDown={navigateTabs}
           >
-            <span aria-hidden="true">⇩</span>
+            <span aria-hidden="true"><AppIcon name="download" size="md" /></span>
             <span><strong>Export jobs</strong><small>Retained artifact generation</small></span>
           </button>
         ) : null}
@@ -232,7 +233,7 @@ export function BackendActivityConsole({ apiBaseUrl }: BackendActivityConsolePro
             onClick={() => selectView("mutations")}
             onKeyDown={navigateTabs}
           >
-            <span aria-hidden="true">⚙</span>
+            <span aria-hidden="true"><AppIcon name="settings" size="md" /></span>
             <span><strong>Mutation audit</strong><small>Successful configuration changes</small></span>
           </button>
         ) : null}
@@ -249,7 +250,7 @@ export function BackendActivityConsole({ apiBaseUrl }: BackendActivityConsolePro
             onClick={() => selectView("attempts")}
             onKeyDown={navigateTabs}
           >
-            <span aria-hidden="true">⌕</span>
+            <span aria-hidden="true"><AppIcon name="search" size="md" /></span>
             <span><strong>Search attempts</strong><small>Admitted-search journal</small></span>
           </button>
         ) : null}
@@ -543,7 +544,7 @@ function BackendSearchHistory({ apiBaseUrl }: BackendActivityConsoleProps) {
 
       {state === "available" ? (
         <>
-          {actionNotice === null ? null : <output className="history-action-notice"><span>{actionNotice}</span><button type="button" aria-label="Dismiss history action message" onClick={() => setActionNotice(null)}>×</button></output>}
+          {actionNotice === null ? null : <output className="history-action-notice"><span>{actionNotice}</span><button type="button" aria-label="Dismiss history action message" onClick={() => setActionNotice(null)}><AppIcon name="close" size="md" /></button></output>}
           <output className="live-jobs-snapshot history-snapshot">
             <span><i aria-hidden="true" />This view contains persisted terminal-search metadata, not the transient job list.</span>
             <div className="history-snapshot-actions">
@@ -585,7 +586,7 @@ function BackendSearchHistory({ apiBaseUrl }: BackendActivityConsoleProps) {
                 ))}
               </fieldset>
               <small className="activity-filter-scope">{filter === "warnings" ? "SPL filter runs on server; warning check applies to loaded matches" : "Final state and SPL filter run on server"}</small>
-              <label><span className="sr-only">Filter search history SPL on the server</span><i aria-hidden="true">⌕</i><input value={query} disabled={actionPending !== null} onChange={(event) => setQuery(event.target.value)} placeholder="Filter SPL on the server" /></label>
+              <label><span className="sr-only">Filter search history SPL on the server</span><i aria-hidden="true"><AppIcon name="search" size="sm" /></i><input value={query} disabled={actionPending !== null} onChange={(event) => setQuery(event.target.value)} placeholder="Filter SPL on the server" /></label>
             </header>
             {filtered.length === 0 ? (
               <BackendResourceState
@@ -624,7 +625,7 @@ function BackendSearchHistory({ apiBaseUrl }: BackendActivityConsoleProps) {
                         <td data-label="Finished">{display.ranAt}</td>
                         <td data-label="Actions">
                           <div className="history-row-actions">
-                            <Link className="table-action" href={launchHref(entry)} aria-label={`Rerun search ${entry.id}`}>Rerun ›</Link>
+                            <Link className="table-action" href={launchHref(entry)} aria-label={`Rerun search ${entry.id}`}>Rerun <AppIcon name="chevron-right" size="xs" /></Link>
                             <button type="button" disabled={actionPending !== null} aria-label={`Delete history entry ${entry.id}`} onClick={() => { setActionError(null); setModal({ action: "delete", target: entry }); }}>Delete</button>
                           </div>
                         </td>

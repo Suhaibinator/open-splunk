@@ -12,6 +12,8 @@ import {
   setAdministratorBearerToken,
 } from "@/lib/api";
 
+import { AppIcon } from "../_components/app-icon";
+
 interface SignInScreenProps {
   dataMode: "backend" | "demo";
 }
@@ -87,7 +89,7 @@ export function SignInScreen({ dataMode }: SignInScreenProps) {
           {localSession ? (
             administratorSessionActive ? (
               <>
-                <div className="signin-help-notice" role="note"><span aria-hidden="true">✓</span>The administrator credential is available to protected API calls in this tab.</div>
+                <div className="signin-help-notice" role="note"><span aria-hidden="true"><AppIcon name="check" size="sm" /></span>The administrator credential is available to protected API calls in this tab.</div>
                 <button className="signin-submit" type="button" onClick={() => router.push("/admin/")}>Open Administration</button>
                 <button className="signin-preview-link" type="button" onClick={clearAdministratorSession}>Clear administrator session</button>
               </>
@@ -109,19 +111,19 @@ export function SignInScreen({ dataMode }: SignInScreenProps) {
                   />
                   <button type="button" onClick={() => setShowAdministratorToken((current) => !current)}>{showAdministratorToken ? "Hide" : "Show"}</button>
                 </div>
-                {tokenError === null ? null : <div id="administrator-token-error" className="signin-error" role="alert"><span aria-hidden="true">!</span>{tokenError}</div>}
-                <div id="administrator-token-lifetime" className="signin-help-notice" role="note"><span aria-hidden="true">i</span>The token stays in memory only. Reloading, closing this tab, or opening a new tab clears it; the server verifies it on the next protected request.</div>
+                {tokenError === null ? null : <div id="administrator-token-error" className="signin-error" role="alert"><span aria-hidden="true"><AppIcon name="warning" size="sm" /></span>{tokenError}</div>}
+                <div id="administrator-token-lifetime" className="signin-help-notice" role="note"><span aria-hidden="true"><AppIcon name="info" size="sm" /></span>The token stays in memory only. Reloading, closing this tab, or opening a new tab clears it; the server verifies it on the next protected request.</div>
                 <button className="signin-submit" type="submit">Open administrator session</button>
               </form>
             )
           ) : (
             <>
-              <div className="signin-help-notice" role="note"><span aria-hidden="true">i</span>Do not enter credentials. This preview does not check or store passwords.</div>
+              <div className="signin-help-notice" role="note"><span aria-hidden="true"><AppIcon name="info" size="sm" /></span>Do not enter credentials. This preview does not check or store passwords.</div>
               <Link className="signin-submit" href="/" style={{ textDecoration: "none" }}>Continue to preview</Link>
             </>
           )}
           <div className="signin-divider"><span>or</span></div>
-          <Link className="signin-preview-link" href="/search/">Open Search &amp; Reporting <span aria-hidden="true">›</span></Link>
+          <Link className="signin-preview-link" href="/search/">Open Search &amp; Reporting <AppIcon name="chevron-right" size="xs" /></Link>
           <footer><span>Open Splunk {OPEN_SPLUNK_BUILD_LABEL} · {localSession ? "local server" : "preview"}</span><span>{localSession ? "Memory-only bearer session" : "Authentication unavailable"}</span></footer>
         </div>
       </section>

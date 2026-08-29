@@ -28,6 +28,7 @@ import {
 } from "@/lib/search/server-objects";
 
 import { BackendResourceState } from "../_components/backend-resource-state";
+import { AppIcon } from "../_components/app-icon";
 import { formatMediumDateTime } from "../_components/date-format";
 import { PageHeading } from "../_components/product-shell";
 import { Modal } from "../search-workspace/modal";
@@ -418,7 +419,7 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
         <>
           {refreshing ? <output className="backend-list-notice">Refreshing saved searches. Existing definitions remain visible until the request completes.</output> : null}
           {error === null ? null : <div className="backend-inline-error" role="alert">The latest refresh failed; the previous saved-search snapshot remains visible. {error}</div>}
-          {actionNotice === null ? null : <output className={styles.actionNotice}><span>{actionNotice}</span><button type="button" aria-label="Dismiss saved-search action message" onClick={() => setActionNotice(null)}>×</button></output>}
+          {actionNotice === null ? null : <output className={styles.actionNotice}><span>{actionNotice}</span><button type="button" aria-label="Dismiss saved-search action message" onClick={() => setActionNotice(null)}><AppIcon name="close" size="md" /></button></output>}
           <section className={styles.summary} aria-label="Saved search summary">
             <article><span className={styles.metricIcon} aria-hidden="true">▤</span><div><strong>{displayedTotal}</strong><small>{totalSizeExact ? "Matching saved searches" : "Matching definitions loaded"}</small></div></article>
             <article><span className={styles.metricIcon} aria-hidden="true">♙</span><div><strong>{savedSearches.length.toLocaleString()}</strong><small>Definitions loaded</small></div></article>
@@ -456,7 +457,7 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
 
             <div className={`${styles.toolbar} ${styles.backendToolbar}`}>
               <label className={styles.searchField}>
-                <span className="sr-only">Filter saved searches</span><i aria-hidden="true">⌕</i>
+                <span className="sr-only">Filter saved searches</span><i aria-hidden="true"><AppIcon name="search" size="sm" /></i>
                 <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find by name, SPL, app, or owner" />
               </label>
               <label className={styles.selectField}>
@@ -477,7 +478,7 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
 
             {visible.length === 0 ? (
               <div className={styles.empty}>
-                <span aria-hidden="true">⌕</span>
+                <span aria-hidden="true"><AppIcon name="search" size="lg" /></span>
                 <strong>{savedSearches.length === 0 ? "No saved searches" : "No matching saved searches"}</strong>
                 <p>{savedSearches.length === 0 && effectiveQuery.length === 0 && scope === "all" ? "Save a search from the Search workspace to add its reusable definition here." : "Try another phrase or sharing scope."}</p>
                 {savedSearches.length > 0 ? <button type="button" onClick={() => { setQuery(""); setScope("all"); }}>Clear filters</button> : <Link href="/search/">Open Search</Link>}
@@ -504,7 +505,7 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
                         <td data-label="Time range"><code>{savedSearch.search.timeRange?.earliest ?? "Server default"} → {savedSearch.search.timeRange?.latest ?? "Server default"}</code></td>
                         <td data-label="Modified">{display.updatedAt}</td>
                         <td className={`${styles.openCell} ${styles.actionCell}`}>
-                          <Link href={launchHref(savedSearch)} aria-label={`Open ${savedSearch.name} in Search`}>Open <span aria-hidden="true">›</span></Link>
+                          <Link href={launchHref(savedSearch)} aria-label={`Open ${savedSearch.name} in Search`}>Open <AppIcon name="chevron-right" size="xs" /></Link>
                           <button type="button" disabled={controlsPending} onClick={() => openAction("rename", savedSearch)} aria-label={`Rename ${savedSearch.name}`}>Rename</button>
                           <button type="button" disabled={controlsPending} onClick={() => openAction("duplicate", savedSearch)} aria-label={`Duplicate ${savedSearch.name}`}>Duplicate</button>
                           <button className={styles.deleteAction} type="button" disabled={controlsPending} onClick={() => openAction("delete", savedSearch)} aria-label={`Delete ${savedSearch.name}`}>Delete</button>

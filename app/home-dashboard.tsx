@@ -20,6 +20,7 @@ import {
 } from "@/lib/search/server-objects";
 
 import { BackendResourceState } from "./_components/backend-resource-state";
+import { AppIcon } from "./_components/app-icon";
 import { formatMediumDateTime } from "./_components/date-format";
 import { homeSearchFinishedAt, homeSearchStatus } from "./home-dashboard-data";
 
@@ -164,13 +165,13 @@ export function HomeDashboard({ apiBaseUrl = "", dataMode }: HomeDashboardProps)
       </header>
 
       <section className="system-notice" aria-label="System status">
-        <span className="system-notice__icon" aria-hidden="true">{dataMode === "backend" ? "↔" : "✓"}</span>
+        <span className="system-notice__icon" aria-hidden="true"><AppIcon name={dataMode === "backend" ? "info" : "check"} size="xs" /></span>
         <div>
           <strong>{dataMode === "backend" ? "Backend mode selected" : "Demo workspace ready"}</strong>
           <small>{dataMode === "backend" ? "Connected surfaces report their own backend availability and errors." : "Explore the interface with deterministic sample data."}</small>
         </div>
         <span className={`mode-pill mode-pill--${dataMode}`}>{dataMode === "backend" ? "Backend mode" : "Demo data"}</span>
-        <Link href={productHref("/admin/")}>{dataMode === "backend" ? "Check connection" : "Open settings"} <span aria-hidden="true">›</span></Link>
+        <Link href={productHref("/admin/")}>{dataMode === "backend" ? "Check connection" : "Open settings"} <AppIcon name="chevron-right" size="xs" /></Link>
       </section>
 
       <section className="home-metrics" aria-label={dataMode === "backend" ? "Backend-supported surfaces" : "Preview deployment summary"}>
@@ -198,17 +199,17 @@ export function HomeDashboard({ apiBaseUrl = "", dataMode }: HomeDashboardProps)
             <Link className="app-launch-card" href={productHref("/search/")}>
               <span className="app-launch-icon" aria-hidden="true">⌕</span>
               <div><strong>Search &amp; Reporting</strong><p>Explore events, build searches, and create visualizations.</p><small>Recently used</small></div>
-              <b aria-hidden="true">›</b>
+              <b aria-hidden="true"><AppIcon name="chevron-right" size="sm" /></b>
             </Link>
             <Link className="app-launch-card" href={productHref("/dashboards/")}>
               <span className="app-launch-icon app-launch-icon--grade" aria-hidden="true">G</span>
               <div><strong>GradeThis Operations</strong><p>{dataMode === "backend" ? "Open persisted dashboards and execute their panel searches." : "Illustrative service-health and latency layout."}</p><small>{dataMode === "backend" ? "Backend dashboards" : "Static preview"}</small></div>
-              <b aria-hidden="true">›</b>
+              <b aria-hidden="true"><AppIcon name="chevron-right" size="sm" /></b>
             </Link>
             <Link className="app-launch-card" href={productHref("/datasets/")}>
               <span className="app-launch-icon app-launch-icon--data" aria-hidden="true">▦</span>
               <div><strong>Data Manager</strong><p>{dataMode === "backend" ? "Browse authorized index summaries from system bootstrap." : "Explore the deterministic index catalog preview."}</p><small>{dataMode === "backend" ? "Backend catalog" : "3 preview indexes"}</small></div>
-              <b aria-hidden="true">›</b>
+              <b aria-hidden="true"><AppIcon name="chevron-right" size="sm" /></b>
             </Link>
           </div>
         </section>

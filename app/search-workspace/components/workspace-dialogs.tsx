@@ -26,7 +26,9 @@ import type {
   TimeRange,
 } from "../model";
 import { phaseLabel, stateClass } from "../workspace-utils";
+import { AppIcon } from "../../_components/app-icon";
 
+import { ExportArtifactStatus, ExportDownloadContent, getExportStatusTone } from "./export-presentation";
 import styles from "./workspace-dialogs.module.css";
 
 function formatExpiry(date: Date): string | null {
@@ -332,7 +334,7 @@ export function WorkspaceDialogs({
       || duplicatingSavedSearchId !== null;
     return (
       <Modal title="Open a saved search" subtitle="Searches currently available in this app." wide onClose={() => onModalChange(null)}>
-        <div className="library-toolbar"><label className="filter-input"><span aria-hidden="true">⌕</span><input aria-label="Filter saved searches" placeholder="Filter saved searches" disabled={savedSearchLibraryStatus !== "available"} value={savedSearchFilter} onChange={(event) => onSavedSearchFilterChange(event.target.value)} /></label></div>
+        <div className="library-toolbar"><label className="filter-input"><span aria-hidden="true"><AppIcon name="search" size="sm" /></span><input aria-label="Filter saved searches" placeholder="Filter saved searches" disabled={savedSearchLibraryStatus !== "available"} value={savedSearchFilter} onChange={(event) => onSavedSearchFilterChange(event.target.value)} /></label></div>
         {savedSearchDeleteState.status === "error" && savedSearchDeleteState.error
           ? <p className={styles.actionError} role="alert">{savedSearchDeleteState.error}</p>
           : savedSearchDuplicateState.status === "error" && savedSearchDuplicateState.error
@@ -346,7 +348,7 @@ export function WorkspaceDialogs({
             const duplicatingThisSearch = duplicatingSavedSearchId === saved.id;
             return (
               <article className="saved-row" aria-busy={deletingThisSearch || duplicatingThisSearch} key={saved.id}>
-                <button className="saved-row-main" type="button" disabled={savedSearchActionPending} onClick={() => onOpenSavedSearch(saved)}><span className="saved-icon" aria-hidden="true">⌕</span><span><strong>{saved.name}</strong><small>{saved.description}</small><code>{saved.query.replaceAll("\n", " ")}</code></span></button>
+                <button className="saved-row-main" type="button" disabled={savedSearchActionPending} onClick={() => onOpenSavedSearch(saved)}><span className="saved-icon" aria-hidden="true"><AppIcon name="search" size="lg" /></span><span><strong>{saved.name}</strong><small>{saved.description}</small><code>{saved.query.replaceAll("\n", " ")}</code></span></button>
                 <div className="saved-row-meta">
                   <span>{saved.updatedAt}</span>
                   <button
@@ -356,7 +358,7 @@ export function WorkspaceDialogs({
                     disabled={savedSearchActionPending}
                     onClick={() => onDuplicateSavedSearch(saved.id)}
                   >
-                    {duplicatingThisSearch ? "…" : "⧉"}
+                    <AppIcon name={duplicatingThisSearch ? "loading" : "copy"} size="md" spin={duplicatingThisSearch} />
                   </button>
                   <button
                     className={`icon-button ${styles.savedRowIconButton}`}
@@ -365,7 +367,7 @@ export function WorkspaceDialogs({
                     disabled={savedSearchActionPending}
                     onClick={() => onRequestRenameSavedSearch(saved.id)}
                   >
-                    ✎
+                    <AppIcon name="edit" size="md" />
                   </button>
                   <button
                     className={`icon-button ${styles.savedRowIconButton}`}
@@ -374,7 +376,7 @@ export function WorkspaceDialogs({
                     disabled={savedSearchActionPending}
                     onClick={() => onRequestDeleteSavedSearch(saved.id)}
                   >
-                    {deletingThisSearch ? "…" : "×"}
+                    <AppIcon name={deletingThisSearch ? "loading" : "trash"} size="md" spin={deletingThisSearch} />
                   </button>
                 </div>
               </article>
@@ -504,7 +506,7 @@ export function WorkspaceDialogs({
     const deletingHistory = deletingHistoryEntryId !== null;
     return (
       <Modal title="Search history" subtitle="Recent completed, canceled, and failed searches." wide onClose={() => onModalChange(null)}>
-        <div className="library-toolbar"><label className="filter-input"><span aria-hidden="true">⌕</span><input aria-label="Filter search history" placeholder="Filter by SPL" disabled={historyLibraryStatus !== "available"} value={historyFilter} onChange={(event) => onHistoryFilterChange(event.target.value)} /></label><button className="button secondary compact" type="button" disabled={historyLibraryStatus !== "available" || history.length === 0 || clearingHistory || deletingHistory || historyLoadingMore} onClick={() => onModalChange("clear-history")}>Clear history</button></div>
+        <div className="library-toolbar"><label className="filter-input"><span aria-hidden="true"><AppIcon name="search" size="sm" /></span><input aria-label="Filter search history" placeholder="Filter by SPL" disabled={historyLibraryStatus !== "available"} value={historyFilter} onChange={(event) => onHistoryFilterChange(event.target.value)} /></label><button className="button secondary compact" type="button" disabled={historyLibraryStatus !== "available" || history.length === 0 || clearingHistory || deletingHistory || historyLoadingMore} onClick={() => onModalChange("clear-history")}>Clear history</button></div>
         {historyClearState.status === "error" && historyClearState.error
           ? <p className={styles.actionError} role="alert">{historyClearState.error}</p>
           : historyDeleteState.status === "error" && historyDeleteState.error
@@ -643,6 +645,17 @@ export function WorkspaceDialogs({
     const maximumBytes = exportState.maximumBytes === null || exportState.maximumBytes === undefined
       ? null
       : formatDecimalBytes(exportState.maximumBytes);
+    const exportFormatLabel = exportState.format === "csv" ? "CSV" : "JSON Lines";
+    const readyStatusTone = getExportStatusTone({
+      expired: artifactExpired,
+      expiry,
+      metadataValid: artifactMetadataValid,
+    });
+    const readySummaryToneClass = readyStatusTone === "warning"
+      ? styles.exportSummaryWarning
+      : readyStatusTone === "error"
+        ? styles.exportSummaryError
+        : "";
     const closeExport = () => {
       if (exportState.status === "configure" || exportState.status === "error") onResetExport();
       onModalChange(null);
@@ -654,20 +667,21 @@ export function WorkspaceDialogs({
         subtitle={exportState.description}
         onClose={closeExport}
         footer={exportReady
-          ? <>
-              <output className="export-ready-note">
-                {!artifactMetadataValid
-                  ? "Export artifact metadata is invalid"
-                  : artifactExpired
-                    ? <>Export artifact expired · {expiry}</>
-                    : <>✓ Artifact ready · {formatNonNegativeIntegerQuantity(artifact.rowCount)} rows · {formatDecimalBytes(artifact.sizeBytes)}{expiry === null ? null : <> · expires {expiry}</>}</>}
-              </output>
+          ? <div className={styles.exportActions}>
               <button className="button secondary" type="button" disabled={downloadPending} onClick={onResetExport}>New export</button>
-              <button className="button primary" type="button" aria-busy={downloadPending} disabled={!artifactMetadataValid || artifactExpired || downloadPending} onClick={() => { if (artifact !== null) onDownloadExport(artifact); }}>{downloadPending ? "Downloading…" : artifact?.fileName ? `Download ${artifact.fileName}` : `Download .${exportState.format}`}</button>
-            </>
+              <button
+                className="button primary"
+                type="button"
+                aria-label={artifact?.fileName ? `Download ${artifact.fileName}` : `Download ${exportFormatLabel}`}
+                aria-busy={downloadPending}
+                disabled={!artifactMetadataValid || artifactExpired || downloadPending}
+                onClick={() => { if (artifact !== null) onDownloadExport(artifact); }}
+              >
+                <ExportDownloadContent format={exportFormatLabel} pending={downloadPending} />
+              </button>
+            </div>
           : exportPending
-            ? <>
-                <output className={styles.pendingFooter}>Preparation will continue if this dialog is closed.</output>
+            ? <div className={styles.exportActions}>
                 <button
                   className="button secondary"
                   type="button"
@@ -678,8 +692,8 @@ export function WorkspaceDialogs({
                   {exportCancelPending ? "Canceling…" : exportCancelState?.status === "error" ? "Retry cancellation" : "Cancel export"}
                 </button>
                 <button className="button secondary" type="button" disabled={exportCancelPending} onClick={closeExport}>Continue in background</button>
-              </>
-            : <><button className="button secondary" type="button" onClick={closeExport}>Cancel</button><button className="button primary" type="button" disabled={!canCreate} onClick={onPrepareExport}>{exportFailed ? exportRetryable ? "Retry export" : "Export unavailable" : "Create export"}</button></>}
+              </div>
+            : <div className={styles.exportActions}><button className="button secondary" type="button" onClick={closeExport}>Cancel</button><button className="button primary" type="button" disabled={!canCreate} onClick={onPrepareExport}>{exportFailed ? exportRetryable ? "Retry export" : "Export unavailable" : "Create export"}</button></div>}
       >
         <div className="form-stack" data-testid="export-dialog" aria-busy={exportPending || downloadPending || exportCancelPending}>
           {exportState.status === "configure" && !exportState.available ? (
@@ -693,37 +707,67 @@ export function WorkspaceDialogs({
           {downloadState?.status === "error"
             ? <p className={styles.actionError} role="alert">{downloadState.error}</p>
             : null}
-          <fieldset className="segmented-fieldset" disabled={!canChooseFormat}>
-            <legend>Format</legend>
-            <label className={exportState.format === "csv" ? "selected" : ""} htmlFor="export-format-csv"><input id="export-format-csv" aria-label="Export as CSV" type="radio" name="format" checked={exportState.format === "csv"} onChange={() => onExportFormatChange("csv")} /><span><strong>CSV</strong><small>Spreadsheet-compatible table</small></span></label>
-            <label className={exportState.format === "jsonl" ? "selected" : ""} htmlFor="export-format-jsonl"><input id="export-format-jsonl" aria-label="Export as JSON Lines" type="radio" name="format" checked={exportState.format === "jsonl"} onChange={() => onExportFormatChange("jsonl")} /><span><strong>JSON Lines</strong><small>Typed record per line</small></span></label>
-          </fieldset>
-          <fieldset className="export-fields" disabled={!canConfigure}>
-            <legend>Columns <small>{exportFields.length} selected</small></legend>
-            {exportFieldOptions.map((field, index) => {
-              const fieldLabel = exportFieldLabels[field] ?? field;
-              const inputId = `export-field-${index}`;
-              return <label key={field} htmlFor={inputId}><input id={inputId} aria-label={`Include ${fieldLabel} in export`} type="checkbox" checked={exportFields.includes(field)} onChange={() => onExportFieldToggle(field)} /><code>{fieldLabel}</code></label>;
-            })}
-          </fieldset>
-          <div className="export-limit">
-            <span>Maximum rows</span>
-            <strong>{maximumRows}</strong>
-            <small>
-              {NUMBER_FORMAT.format(displayedExportRows)} displayed {exportState.sourceTab === "events" ? "events" : "rows"}
-              {maximumBytes === null ? null : <> · {maximumBytes} byte limit</>}
-            </small>
-          </div>
-          {exportPending ? (
-            <div className={styles.exportProgress}>
-              <progress aria-label="Server export progress" max={100} value={percentComplete ?? undefined} />
-              <span>
-                {percentComplete === null ? "Materializing results…" : `${Math.round(percentComplete)}% complete`}
-                {pendingRowsWritten === null || pendingRowsWritten === undefined ? null : <> · {formatNonNegativeIntegerQuantity(pendingRowsWritten)} rows</>}
-                {pendingBytesWritten === null || pendingBytesWritten === undefined ? null : <> · {formatDecimalBytes(pendingBytesWritten)}</>}
-              </span>
-            </div>
-          ) : null}
+          {exportReady && artifact !== null ? (
+            <section className={`${styles.exportSummary} ${readySummaryToneClass}`} aria-labelledby="export-summary-title">
+              <ExportArtifactStatus
+                expired={artifactExpired}
+                expiry={expiry}
+                metadataValid={artifactMetadataValid}
+                titleId="export-summary-title"
+              />
+              <dl>
+                <div className={styles.exportFileRow}>
+                  <dt>File</dt>
+                  <dd><code title={artifact.fileName}>{artifact.fileName || "Unavailable"}</code></dd>
+                </div>
+                <div><dt>Format</dt><dd>{exportFormatLabel}</dd></div>
+                <div><dt>Rows</dt><dd>{formatNonNegativeIntegerQuantity(artifact.rowCount)}</dd></div>
+                <div><dt>Size</dt><dd>{formatDecimalBytes(artifact.sizeBytes)}</dd></div>
+                <div><dt>Expires</dt><dd>{expiry ?? "No expiry advertised"}</dd></div>
+                <div><dt>Maximum rows</dt><dd>{maximumRows}</dd></div>
+                <div><dt>Byte limit</dt><dd>{maximumBytes ?? "Not advertised"}</dd></div>
+                <div className={styles.exportColumnsRow}>
+                  <dt>Columns</dt>
+                  <dd><span>{exportFields.length} selected</span><code>{exportFields.map((field) => exportFieldLabels[field] ?? field).join(", ")}</code></dd>
+                </div>
+              </dl>
+            </section>
+          ) : (
+            <>
+              <fieldset className="segmented-fieldset" disabled={!canChooseFormat}>
+                <legend>Format</legend>
+                <label className={exportState.format === "csv" ? "selected" : ""} htmlFor="export-format-csv"><input id="export-format-csv" aria-label="Export as CSV" type="radio" name="format" checked={exportState.format === "csv"} onChange={() => onExportFormatChange("csv")} /><span><strong>CSV</strong><small>Spreadsheet-compatible table</small></span></label>
+                <label className={exportState.format === "jsonl" ? "selected" : ""} htmlFor="export-format-jsonl"><input id="export-format-jsonl" aria-label="Export as JSON Lines" type="radio" name="format" checked={exportState.format === "jsonl"} onChange={() => onExportFormatChange("jsonl")} /><span><strong>JSON Lines</strong><small>Typed record per line</small></span></label>
+              </fieldset>
+              <fieldset className="export-fields" disabled={!canConfigure}>
+                <legend>Columns <small>{exportFields.length} selected</small></legend>
+                {exportFieldOptions.map((field, index) => {
+                  const fieldLabel = exportFieldLabels[field] ?? field;
+                  const inputId = `export-field-${index}`;
+                  return <label key={field} htmlFor={inputId}><input id={inputId} aria-label={`Include ${fieldLabel} in export`} type="checkbox" checked={exportFields.includes(field)} onChange={() => onExportFieldToggle(field)} /><code>{fieldLabel}</code></label>;
+                })}
+              </fieldset>
+              <div className="export-limit">
+                <span>Maximum rows</span>
+                <strong>{maximumRows}</strong>
+                <small>
+                  {NUMBER_FORMAT.format(displayedExportRows)} displayed {exportState.sourceTab === "events" ? "events" : "rows"}
+                  {maximumBytes === null ? null : <> · {maximumBytes} byte limit</>}
+                </small>
+              </div>
+              {exportPending ? (
+                <div className={styles.exportProgress}>
+                  <progress aria-label="Server export progress" max={100} value={percentComplete ?? undefined} />
+                  <span>
+                    {percentComplete === null ? "Materializing results…" : `${Math.round(percentComplete)}% complete`}
+                    {pendingRowsWritten === null || pendingRowsWritten === undefined ? null : <> · {formatNonNegativeIntegerQuantity(pendingRowsWritten)} rows</>}
+                    {pendingBytesWritten === null || pendingBytesWritten === undefined ? null : <> · {formatDecimalBytes(pendingBytesWritten)}</>}
+                  </span>
+                  <small>Preparation will continue if this dialog is closed.</small>
+                </div>
+              ) : null}
+            </>
+          )}
         </div>
       </Modal>
     );

@@ -17,6 +17,8 @@ import type {
 } from "@/lib/search/backend-data";
 import type { PivotMode } from "@/lib/search/query-pivots";
 
+import { AppIcon } from "../../_components/app-icon";
+
 import {
   TIME_SERIES_COLORS,
   TimeSeriesLineChart,
@@ -227,7 +229,7 @@ function CategoricalTooltip({
           aria-label="Close chart value inspector"
           onClick={onClose}
         >
-          ×
+          <AppIcon name="close" size="md" />
         </button>
       </div>
       {series.map((definition, seriesIndex) => {
@@ -254,7 +256,7 @@ function CategoricalTooltip({
           type="button"
           onClick={() => onDrilldown(activeRow)}
         >
-          Add {dimension} value to search <span aria-hidden="true">›</span>
+          Add {dimension} value to search <AppIcon name="chevron-right" size="xs" />
         </button>
       )}
     </section>
@@ -655,9 +657,9 @@ export function VisualizationPanel({
         </div>
         <fieldset className="chart-toggle">
           <legend className="sr-only">Chart style</legend>
-          <button className={effectiveChartStyle === "column" ? "active" : ""} type="button" aria-pressed={effectiveChartStyle === "column"} disabled={!hasCategoricalChart || splitTimechart} title={splitTimechart ? "Split-series timecharts use Line so no server series is collapsed" : !hasCategoricalChart ? "Column charts require one dimension and at least one numeric measure" : undefined} onClick={() => selectChartStyle("column")}>▥ Column</button>
-          <button className={chartStyle === "horizontal" ? "active" : ""} type="button" aria-pressed={chartStyle === "horizontal"} disabled={isTimechartResult || !hasCategoricalChart} title={isTimechartResult ? "Bar charts require categorical results" : !hasCategoricalChart ? "Bar charts require one dimension and at least one numeric measure" : undefined} onClick={() => selectChartStyle("horizontal")}>☷ Bar</button>
-          <button className={isLineChart ? "active" : ""} type="button" aria-pressed={isLineChart} disabled={!isTimechartResult} title={!isTimechartResult ? "Line charts require time-series results" : undefined} onClick={() => selectChartStyle("line")}>⌁ Line</button>
+          <button className={effectiveChartStyle === "column" ? "active" : ""} type="button" aria-pressed={effectiveChartStyle === "column"} disabled={!hasCategoricalChart || splitTimechart} title={splitTimechart ? "Split-series timecharts use Line so no server series is collapsed" : !hasCategoricalChart ? "Column charts require one dimension and at least one numeric measure" : undefined} onClick={() => selectChartStyle("column")}><AppIcon name="column-chart" size="sm" /> Column</button>
+          <button className={chartStyle === "horizontal" ? "active" : ""} type="button" aria-pressed={chartStyle === "horizontal"} disabled={isTimechartResult || !hasCategoricalChart} title={isTimechartResult ? "Bar charts require categorical results" : !hasCategoricalChart ? "Bar charts require one dimension and at least one numeric measure" : undefined} onClick={() => selectChartStyle("horizontal")}><AppIcon name="bar-chart" size="sm" /> Bar</button>
+          <button className={isLineChart ? "active" : ""} type="button" aria-pressed={isLineChart} disabled={!isTimechartResult} title={!isTimechartResult ? "Line charts require time-series results" : undefined} onClick={() => selectChartStyle("line")}><AppIcon name="analytics" size="sm" /> Line</button>
           <button type="button" onClick={() => onShowToast("Area and scatter charts become available for compatible result shapes.")}>More…</button>
         </fieldset>
       </header>

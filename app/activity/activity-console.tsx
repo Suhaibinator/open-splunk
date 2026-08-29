@@ -6,6 +6,7 @@ import Link from "next/link";
 import type { SearchDataMode } from "@/lib/search/backend-data";
 import { searchLaunchHref } from "@/lib/search/launch-url";
 
+import { AppIcon } from "../_components/app-icon";
 import { PageHeading } from "../_components/product-shell";
 import { BackendActivityConsole } from "./backend-activity-console";
 import styles from "./activity-console.module.css";
@@ -59,7 +60,7 @@ function DemoActivityConsole() {
       <section className="suite-card activity-jobs-card">
         <header className="activity-tabs-row">
           <div className="activity-filter-group" aria-label="Job status filter">{(["all", "running", "completed", "failed"] as const).map((item) => <button className={`activity-filter-button${filter === item ? " active" : ""}`} aria-pressed={filter === item} type="button" onClick={() => setFilter(item)} key={item}>{item[0].toUpperCase() + item.slice(1)}{item === "running" ? <span>1</span> : null}</button>)}</div>
-          <label><span className="sr-only">Filter activity</span><i aria-hidden="true">⌕</i><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter SPL or job ID" /></label>
+          <label><span className="sr-only">Filter activity</span><i aria-hidden="true"><AppIcon name="search" size="sm" /></i><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter SPL or job ID" /></label>
         </header>
         <div className={`responsive-table-wrap ${styles.mobileCardTableWrap}`}>
           <table className={`product-table activity-table ${styles.mobileCardTable}`}>
@@ -73,16 +74,16 @@ function DemoActivityConsole() {
                   <td data-label="Runtime">{job.runtime}</td>
                   <td className="numeric-data" data-label="Events">{job.events}</td>
                   <td data-label="Started">{job.started}</td>
-                  <td data-label="Actions"><Link className="table-action" href={searchLaunchHref(job.spl)} aria-label={`Open search job ${job.id}`}>Open ›</Link></td>
+                  <td data-label="Actions"><Link className="table-action" href={searchLaunchHref(job.spl)} aria-label={`Open search job ${job.id}`}>Open <AppIcon name="chevron-right" size="xs" /></Link></td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-        {filtered.length === 0 ? <div className="product-empty-state"><span>⌕</span><strong>No matching activity</strong><p>Try another status or clear the filter.</p><button type="button" onClick={() => { setFilter("all"); setQuery(""); }}>Clear filters</button></div> : null}
+        {filtered.length === 0 ? <div className="product-empty-state"><span aria-hidden="true"><AppIcon name="search" size="lg" /></span><strong>No matching activity</strong><p>Try another status or clear the filter.</p><button type="button" onClick={() => { setFilter("all"); setQuery(""); }}>Clear filters</button></div> : null}
       </section>
       <section className="suite-card audit-preview"><header className="suite-card-header"><div><h2>Administrative events</h2><p>Configuration and access changes recorded by the control plane.</p></div><button type="button" onClick={exportAuditLog}>Export audit log</button></header><ol><li><span className="audit-time">12:42 PM</span><i className="audit-glyph">⚙</i><div><strong>Search limits updated</strong><p>Administrator changed maximum concurrent searches from 3 to 4.</p></div></li><li><span className="audit-time">12:29 PM</span><i className="audit-glyph">⇣</i><div><strong>Collector authenticated</strong><p>api-prod-03 connected with token prefix ospl_ing_a73…</p></div></li><li><span className="audit-time">11:58 AM</span><i className="audit-glyph">▦</i><div><strong>Index state changed</strong><p>internal was paused by Administrator.</p></div></li></ol></section>
-      {notice === null ? null : <output className="toast toast-success"><span>✓</span><strong>{notice}</strong><button type="button" aria-label="Dismiss notification" onClick={() => setNotice(null)}>×</button></output>}
+      {notice === null ? null : <output className="toast toast-success"><span><AppIcon name="check" size="sm" /></span><strong>{notice}</strong><button type="button" aria-label="Dismiss notification" onClick={() => setNotice(null)}><AppIcon name="close" size="md" /></button></output>}
     </div>
   );
 }

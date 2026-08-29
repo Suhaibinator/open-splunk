@@ -2,6 +2,8 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 
+import { AppIcon } from "../_components/app-icon";
+
 import { SharingScope } from "@/gen/ts/open_splunk/common";
 import {
   CalculatedFieldDefinition,
@@ -808,7 +810,7 @@ export function KnowledgeCreateControl({
       type="button"
       onClick={() => setOpen(true)}
       disabled={appId === ""}
-    >＋ Create knowledge object</button>;
+    ><AppIcon name="plus" size="sm" /> Create knowledge object</button>;
   }
   return <KnowledgeMutationEditor
     client={client}

@@ -6,6 +6,7 @@ import { useMemo, useState } from "react";
 import type { SearchDataMode } from "@/lib/search/backend-data";
 import { searchLaunchHref } from "@/lib/search/launch-url";
 
+import { AppIcon } from "../_components/app-icon";
 import { PageHeading } from "../_components/product-shell";
 import { BackendDatasetsConsole } from "./backend-datasets-console";
 
@@ -54,16 +55,16 @@ function DemoDatasetsConsole() {
       />
 
       <div className="dataset-toolbar">
-        <label><span className="sr-only">Filter datasets</span><i aria-hidden="true">⌕</i><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Find an index or description" /></label>
+        <label><span className="sr-only">Filter datasets</span><i aria-hidden="true"><AppIcon name="search" size="sm" /></i><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Find an index or description" /></label>
         <fieldset className="dataset-view-toggle">
           <legend className="sr-only">Dataset view</legend>
-          <button className={view === "cards" ? "active" : undefined} type="button" aria-pressed={view === "cards"} onClick={() => setView("cards")}><span aria-hidden="true">▥</span> Cards</button>
+          <button className={view === "cards" ? "active" : undefined} type="button" aria-pressed={view === "cards"} onClick={() => setView("cards")}><AppIcon name="dashboard" size="sm" /> Cards</button>
           <button className={view === "table" ? "active" : undefined} type="button" aria-pressed={view === "table"} onClick={() => setView("table")}><span aria-hidden="true">☷</span> Table</button>
         </fieldset>
       </div>
 
       {visible.length === 0 ? (
-        <div className="product-empty-state"><span aria-hidden="true">⌕</span><strong>No matching datasets</strong><p>Try another index name or description.</p><button type="button" onClick={() => setFilter("")}>Clear filter</button></div>
+        <div className="product-empty-state"><span aria-hidden="true"><AppIcon name="search" size="lg" /></span><strong>No matching datasets</strong><p>Try another index name or description.</p><button type="button" onClick={() => setFilter("")}>Clear filter</button></div>
       ) : view === "cards" ? (
         <div className="dataset-grid">
           {visible.map((item) => (
@@ -97,7 +98,7 @@ function DemoDatasetsConsole() {
             <table className="product-table">
               <caption className="sr-only">Datasets</caption>
               <thead><tr><th scope="col">Name</th><th scope="col">Events today</th><th scope="col">Source types</th><th scope="col">Fields</th><th scope="col">Storage</th><th scope="col">Retention</th><th scope="col"><span className="sr-only">Action</span></th></tr></thead>
-              <tbody>{visible.map((item) => <tr key={item.name}><td><strong>{item.name}</strong><small className="table-secondary">{item.description}</small></td><td>{item.events}</td><td>{item.sources}</td><td>{item.fields}</td><td>{item.size}</td><td>{item.retention}</td><td><Link className="table-action" href={searchLaunchHref(`index=${item.name} | sort -_time`)} aria-label={`Search ${item.name}`}>Search ›</Link></td></tr>)}</tbody>
+              <tbody>{visible.map((item) => <tr key={item.name}><td><strong>{item.name}</strong><small className="table-secondary">{item.description}</small></td><td>{item.events}</td><td>{item.sources}</td><td>{item.fields}</td><td>{item.size}</td><td>{item.retention}</td><td><Link className="table-action" href={searchLaunchHref(`index=${item.name} | sort -_time`)} aria-label={`Search ${item.name}`}>Search <AppIcon name="chevron-right" size="xs" /></Link></td></tr>)}</tbody>
             </table>
           </div>
         </section>

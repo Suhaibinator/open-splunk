@@ -150,6 +150,7 @@ import {
 } from "@/lib/search/spl-editor";
 
 import { installModalSurface } from "./_components/modal-surface";
+import { AppIcon, type AppIconName } from "./_components/app-icon";
 import { SearchComposer } from "./search-workspace/components/search-composer";
 import { WorkspaceDialogs } from "./search-workspace/components/workspace-dialogs";
 import {
@@ -5948,16 +5949,16 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     window.requestAnimationFrame(() => document.getElementById(`tab-${nextTab}`)?.focus());
   }
 
-  const emptyResultPresentation = backendEnabled && backendConnectionState === "loading"
+  const emptyResultPresentation: { icon: AppIconName; tone: string; title: string; detail: string } = backendEnabled && backendConnectionState === "loading"
     ? {
-        icon: "↻",
+        icon: "loading",
         tone: "loading",
         title: "Connecting to the backend",
         detail: "Loading your authorized apps and index scope before search is enabled.",
       }
     : backendEnabled && backendConnectionState === "error"
       ? {
-          icon: "!",
+          icon: "warning",
           tone: "error",
           title: "Backend connection unavailable",
           detail: backendConnectionError
@@ -5965,55 +5966,55 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         }
     : searchIsClosed && backendHasNoSearchableIndexes
     ? {
-        icon: "!",
+        icon: "warning",
         tone: "warning",
         title: "No searchable indexes are available",
         detail: "This app has no searchable index in your current backend scope. Review index access or switch apps.",
       }
     : searchIsClosed
     ? {
-        icon: "⌕",
+        icon: "search",
         tone: "info",
         title: "Start a new search",
         detail: "Enter SPL, choose a time range, and run the search to inspect events and statistics.",
       }
     : backendEnabled && backendPreviewStatus === "limited"
       ? {
-          icon: "…",
+          icon: "circle-alert",
           tone: "warning",
           title: "Live preview is bounded",
           detail: "A complete row did not fit the preview limit. The authoritative result snapshot will appear when the search completes.",
         }
     : backendEnabled && backendPreviewStatus === "resyncing"
       ? {
-          icon: "↻",
+          icon: "loading",
           tone: "loading",
           title: "Resynchronizing live results",
           detail: "Provisional rows were cleared after an update discontinuity. A fresh preview or the authoritative result snapshot will replace them.",
         }
     : isRunning
     ? {
-        icon: "↻",
+        icon: "loading",
         tone: "loading",
         title: "Search is running",
         detail: "Results will appear here as soon as the backend produces them.",
       }
     : backendEnabled && backendResultsExpired
       ? {
-          icon: "⌛",
+          icon: "hourglass",
           tone: "warning",
           title: "Search results expired",
           detail: "The server retention window ended. Run the search again to create a fresh result snapshot.",
         }
     : phase === "failed"
       ? {
-          icon: "!",
+          icon: "warning",
           tone: "error",
           title: "Search failed before results were produced",
           detail: "Review the search error, adjust the SPL or time range, and run it again.",
         }
       : {
-          icon: "×",
+          icon: "circle-x",
           tone: "warning",
           title: "Search was canceled",
           detail: "The timeline, fields, and result views were cleared so they cannot be mistaken for this job's output.",
@@ -6049,7 +6050,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           <Link className="wordmark" href={productHref("/")} aria-label="Open Splunk home"><span>open</span><b>&gt;</b><span>splunk</span></Link>
           <div className="header-menu-wrap">
             <button className="product-menu-button" type="button" aria-haspopup="menu" aria-expanded={menu === "app"} aria-busy={appSwitchingId !== null || (backendEnabled && backendConnectionState === "loading")} onClick={() => setMenu(menu === "app" ? null : "app")} onKeyDown={(event) => openMenuFromKeyboard(event, "app")}>
-              App: <strong>{workspaceAppName}</strong> <span aria-hidden="true">▾</span>
+              App: <strong>{workspaceAppName}</strong> <AppIcon name="chevron-down" size="xs" />
             </button>
             {menu === "app" ? (
               <div className="floating-menu app-menu" role="menu">
@@ -6057,7 +6058,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
                 {backendEnabled
                   ? backendBootstrapModel === null
                     ? backendConnectionState === "error"
-                      ? <button role="menuitem" type="button" onClick={() => { setMenu(null); void retryBackendConnection(); }}><span className="app-glyph">!</span><span><strong>Retry backend connection</strong><small>System bootstrap is unavailable</small></span></button>
+                      ? <button role="menuitem" type="button" onClick={() => { setMenu(null); void retryBackendConnection(); }}><span className="app-glyph"><AppIcon name="warning" size="md" /></span><span><strong>Retry backend connection</strong><small>System bootstrap is unavailable</small></span></button>
                       : <button role="menuitem" type="button" disabled><span className="app-glyph">…</span><span><strong>Loading apps</strong><small>Reading system bootstrap</small></span></button>
                     : backendBootstrapModel.apps.length === 0
                       ? <button role="menuitem" type="button" disabled><span className="app-glyph">—</span><span><strong>No authorized apps</strong><small>The backend returned an empty app catalog</small></span></button>
@@ -6079,21 +6080,21 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
                           type="button"
                           onClick={() => void switchBackendApp(app.appId)}
                         >
-                          <span className="app-glyph">⌕</span>
+                          <span className="app-glyph"><AppIcon name="search" size="md" /></span>
                           <span>
                             <strong>{appSwitchingId === app.appId ? "Switching…" : app.displayName || app.slug || app.appId}</strong>
                             <small>{app.defaultIndexNames.length > 0 ? `Default ${app.defaultIndexNames.join(", ")}` : "No default index"}</small>
                           </span>
-                          {selected ? <b>✓</b> : null}
+                          {selected ? <b><AppIcon name="check" size="sm" /></b> : null}
                         </button>
                       );
                     })
                   : <>
-                      <Link role="menuitem" href="/search/" className="selected"><span className="app-glyph">⌕</span><span><strong>Search &amp; Reporting</strong><small>Search all authorized indexes</small></span><b>✓</b></Link>
+                      <Link role="menuitem" href="/search/" className="selected"><span className="app-glyph"><AppIcon name="search" size="md" /></span><span><strong>Search &amp; Reporting</strong><small>Search all authorized indexes</small></span><b><AppIcon name="check" size="sm" /></b></Link>
                       <Link role="menuitem" href="/dashboards/"><span className="app-glyph">G</span><span><strong>GradeThis Operations</strong><small>Default index: gradethis</small></span></Link>
                     </>}
                 <div className="menu-separator" />
-                <Link role="menuitem" href={productHref("/admin/")}><span className="app-glyph">＋</span><span><strong>Manage apps</strong></span></Link>
+                <Link role="menuitem" href={productHref("/admin/")}><span className="app-glyph"><AppIcon name="plus" size="md" /></span><span><strong>Manage apps</strong></span></Link>
               </div>
             ) : null}
           </div>
@@ -6103,7 +6104,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           <button type="button" onClick={() => showToast("No new messages.")}>Messages</button>
           <Link href={productHref("/admin/")}>Settings</Link>
           <div className="header-menu-wrap">
-            <button type="button" aria-haspopup="menu" aria-expanded={menu === "activity"} onClick={() => setMenu(menu === "activity" ? null : "activity")} onKeyDown={(event) => openMenuFromKeyboard(event, "activity")}>Activity <span className="activity-count">1</span> <span aria-hidden="true">▾</span></button>
+            <button type="button" aria-haspopup="menu" aria-expanded={menu === "activity"} onClick={() => setMenu(menu === "activity" ? null : "activity")} onKeyDown={(event) => openMenuFromKeyboard(event, "activity")}>Activity <span className="activity-count">1</span> <AppIcon name="chevron-down" size="xs" /></button>
             {menu === "activity" ? (
               <div className="floating-menu utility-menu" role="menu">
                 <span className="menu-label">Activity</span>
@@ -6113,7 +6114,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
             ) : null}
           </div>
           <div className="header-menu-wrap">
-            <button type="button" aria-haspopup="menu" aria-expanded={menu === "help"} onClick={() => setMenu(menu === "help" ? null : "help")} onKeyDown={(event) => openMenuFromKeyboard(event, "help")}>Help <span aria-hidden="true">▾</span></button>
+            <button type="button" aria-haspopup="menu" aria-expanded={menu === "help"} onClick={() => setMenu(menu === "help" ? null : "help")} onKeyDown={(event) => openMenuFromKeyboard(event, "help")}>Help <AppIcon name="chevron-down" size="xs" /></button>
             {menu === "help" ? (
               <div className="floating-menu utility-menu help-menu" role="menu">
                 <span className="menu-label">Search help</span>
@@ -6126,10 +6127,10 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           <form className="global-search" aria-label="Find events" onSubmit={handleGlobalFind}>
             <label className="sr-only" htmlFor="search-workspace-find">Find events or enter SPL</label>
             <input id="search-workspace-find" placeholder="Find" value={globalFind} onChange={(event) => setGlobalFind(event.target.value)} />
-            <button type="submit" aria-label="Run Find">⌕</button>
+            <button type="submit" aria-label="Run Find"><AppIcon name="search" size="sm" /></button>
           </form>
           <div className="header-menu-wrap">
-            <button className="user-button" type="button" aria-label="User menu" aria-haspopup="menu" aria-expanded={menu === "user"} onClick={() => setMenu(menu === "user" ? null : "user")} onKeyDown={(event) => openMenuFromKeyboard(event, "user")}><span>A</span> Administrator <b>▾</b></button>
+            <button className="user-button" type="button" aria-label="User menu" aria-haspopup="menu" aria-expanded={menu === "user"} onClick={() => setMenu(menu === "user" ? null : "user")} onKeyDown={(event) => openMenuFromKeyboard(event, "user")}><span>A</span> Administrator <AppIcon name="chevron-down" size="xs" /></button>
             {menu === "user" ? (
               <div className="floating-menu utility-menu user-menu" role="menu">
                 <div className="user-summary"><span>A</span><strong>Administrator</strong><small>admin@localhost</small></div>
@@ -6151,18 +6152,18 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           <Link href={productHref("/activity/")}>Activity</Link>
           <Link href={productHref("/dashboards/")}>Dashboards</Link>
         </div>
-        <div className="app-identity"><span aria-hidden="true">⌕</span><strong>{workspaceAppName}</strong></div>
+        <div className="app-identity"><span aria-hidden="true"><AppIcon name="search" size="md" /></span><strong>{workspaceAppName}</strong></div>
       </nav>
 
       {mobileProductNavOpen ? (
         <>
           <button className="search-mobile-backdrop" type="button" aria-label="Close product navigation" onClick={() => setMobileProductNavOpen(false)} />
           <dialog ref={mobileProductDrawerRef} className="search-mobile-drawer" open aria-modal="true" aria-label="Product navigation">
-            <header><div><span>A</span><div><strong>Administrator</strong><small>admin@localhost</small></div></div><button type="button" aria-label="Close product navigation" onClick={() => setMobileProductNavOpen(false)}>×</button></header>
+            <header><div><span>A</span><div><strong>Administrator</strong><small>admin@localhost</small></div></div><button type="button" aria-label="Close product navigation" onClick={() => setMobileProductNavOpen(false)}><AppIcon name="close" size="lg" /></button></header>
             <span className="search-mobile-label">APPLICATION</span>
-            <Link href={productHref("/")}><i>⌂</i>Home</Link><Link className="active" href={productHref("/search/")}><i>⌕</i>{workspaceAppName}</Link><Link href={productHref("/analytics/")}><i>⌁</i>Analytics</Link><Link href={productHref("/datasets/")}><i>▦</i>Datasets</Link><Link href={productHref("/reports/")}><i>▤</i>Reports</Link><Link href={productHref("/dashboards/")}><i>▥</i>Dashboards</Link>
+            <Link href={productHref("/")}><i><AppIcon name="home" size="md" /></i>Home</Link><Link className="active" href={productHref("/search/")}><i><AppIcon name="search" size="md" /></i>{workspaceAppName}</Link><Link href={productHref("/analytics/")}><i><AppIcon name="analytics" size="md" /></i>Analytics</Link><Link href={productHref("/datasets/")}><i><AppIcon name="database" size="md" /></i>Datasets</Link><Link href={productHref("/reports/")}><i><AppIcon name="file" size="md" /></i>Reports</Link><Link href={productHref("/dashboards/")}><i><AppIcon name="dashboard" size="md" /></i>Dashboards</Link>
             <span className="search-mobile-label">SYSTEM</span>
-            <Link href={productHref("/activity/")}><i>↻</i>Activity <b className="activity-count">1</b></Link><Link href={productHref("/admin/")}><i>⚙</i>Administration</Link><Link href="/signin/" onClick={clearAdministratorBearerToken}><i>⇥</i>Sign out</Link>
+            <Link href={productHref("/activity/")}><i><AppIcon name="activity" size="md" /></i>Activity <b className="activity-count">1</b></Link><Link href={productHref("/admin/")}><i><AppIcon name="settings" size="md" /></i>Administration</Link><Link href="/signin/" onClick={clearAdministratorBearerToken}><i><AppIcon name="logout" size="md" /></i>Sign out</Link>
           </dialog>
         </>
       ) : null}
@@ -6188,19 +6189,19 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
             ><i /> {backendEnabled ? "Backend data" : "Demo data"}</span>
           </div>
           <div className="search-actions" aria-label="Search actions">
-            <button type="button" onClick={() => setModal("open")}><span aria-hidden="true">⌕</span> Open</button>
-            <button className="search-action-save" type="button" onClick={quickSave}><span aria-hidden="true">✓</span> Save</button>
+            <button type="button" onClick={() => setModal("open")}><AppIcon name="open" size="sm" /> Open</button>
+            <button className="search-action-save" type="button" onClick={quickSave}><AppIcon name="save" size="sm" /> Save</button>
             <div className="header-menu-wrap">
-              <button ref={saveAsButtonRef} type="button" aria-haspopup="menu" aria-expanded={menu === "save-as"} onClick={() => setMenu(menu === "save-as" ? null : "save-as")}>Save As <span aria-hidden="true">▾</span></button>
+              <button ref={saveAsButtonRef} type="button" aria-haspopup="menu" aria-expanded={menu === "save-as"} onClick={() => setMenu(menu === "save-as" ? null : "save-as")}>Save As <AppIcon name="chevron-down" size="xs" /></button>
               {menu === "save-as" ? (
                 <div className="floating-menu action-menu" role="menu">
-                  <button role="menuitem" type="button" onClick={() => openSaveDialog(saveAsButtonRef.current, true)}><span>⌕</span><span><strong>Saved search</strong><small>Preserve this SPL and time range</small></span></button>
-                  <button role="menuitem" type="button" onClick={() => showToast("Reports extend saved searches in a later phase.")}><span>▤</span><span><strong>Report</strong><small>Save table and visualization settings</small></span></button>
-                  <button role="menuitem" type="button" onClick={() => showToast("Alerts are planned after scheduled searches.")}><span>⚑</span><span><strong>Alert</strong><small>Schedule and notify</small></span></button>
+                  <button role="menuitem" type="button" onClick={() => openSaveDialog(saveAsButtonRef.current, true)}><span><AppIcon name="save" size="md" /></span><span><strong>Saved search</strong><small>Preserve this SPL and time range</small></span></button>
+                  <button role="menuitem" type="button" onClick={() => showToast("Reports extend saved searches in a later phase.")}><span><AppIcon name="file" size="md" /></span><span><strong>Report</strong><small>Save table and visualization settings</small></span></button>
+                  <button role="menuitem" type="button" onClick={() => showToast("Alerts are planned after scheduled searches.")}><span><AppIcon name="alert" size="md" /></span><span><strong>Alert</strong><small>Schedule and notify</small></span></button>
                 </div>
               ) : null}
             </div>
-            <button type="button" onClick={() => setModal("history")}><span aria-hidden="true">↶</span> History</button>
+            <button type="button" onClick={() => setModal("history")}><AppIcon name="history" size="sm" /> History</button>
             <button
               type="button"
               disabled={backendEnabled && !backendAuthoritativeResultsReady}
@@ -6208,11 +6209,11 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
                 ? "Authoritative results are required before export"
                 : undefined}
               onClick={() => openExportDialog()}
-            ><span aria-hidden="true">⇩</span> Export</button>
+            ><AppIcon name="download" size="sm" /> Export</button>
             <button className="close-search" type="button" onClick={closeSearchWorkspace}>Close</button>
             <div className="header-menu-wrap mobile-search-actions">
-              <button type="button" aria-haspopup="menu" aria-expanded={menu === "search-actions"} onClick={() => setMenu(menu === "search-actions" ? null : "search-actions")}>More <span aria-hidden="true">▾</span></button>
-              {menu === "search-actions" ? <div className="floating-menu mobile-search-menu" role="menu"><button role="menuitem" type="button" onClick={() => { setModal("open"); setMenu(null); }}>⌕ <span>Open saved search</span></button><button role="menuitem" type="button" onClick={() => openSaveDialog(null, true)}>＋ <span>Save as new</span></button><button role="menuitem" type="button" onClick={() => { setModal("history"); setMenu(null); }}>↶ <span>Search history</span></button><button role="menuitem" type="button" disabled={backendEnabled && !backendAuthoritativeResultsReady} title={backendEnabled && !backendAuthoritativeResultsReady ? "Authoritative results are required before export" : undefined} onClick={() => { openExportDialog(); setMenu(null); }}>⇩ <span>Export results</span></button><Link role="menuitem" href={productHref("/activity/")}>ⓘ <span>View activity</span></Link><button role="menuitem" type="button" onClick={closeSearchWorkspace}>× <span>Close search</span></button></div> : null}
+              <button type="button" aria-haspopup="menu" aria-expanded={menu === "search-actions"} onClick={() => setMenu(menu === "search-actions" ? null : "search-actions")}>More <AppIcon name="chevron-down" size="xs" /></button>
+              {menu === "search-actions" ? <div className="floating-menu mobile-search-menu" role="menu"><button role="menuitem" type="button" onClick={() => { setModal("open"); setMenu(null); }}><AppIcon name="open" size="md" /> <span>Open saved search</span></button><button role="menuitem" type="button" onClick={() => openSaveDialog(null, true)}><AppIcon name="plus" size="md" /> <span>Save as new</span></button><button role="menuitem" type="button" onClick={() => { setModal("history"); setMenu(null); }}><AppIcon name="history" size="md" /> <span>Search history</span></button><button role="menuitem" type="button" disabled={backendEnabled && !backendAuthoritativeResultsReady} title={backendEnabled && !backendAuthoritativeResultsReady ? "Authoritative results are required before export" : undefined} onClick={() => { openExportDialog(); setMenu(null); }}><AppIcon name="download" size="md" /> <span>Export results</span></button><Link role="menuitem" href={productHref("/activity/")}><AppIcon name="info" size="md" /> <span>View activity</span></Link><button role="menuitem" type="button" onClick={closeSearchWorkspace}><AppIcon name="close" size="md" /> <span>Close search</span></button></div> : null}
             </div>
           </div>
         </header>
@@ -6274,7 +6275,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
 
         <section className={`job-strip${searchIsClosed ? " is-closed" : ""}`} data-testid="job-strip" aria-label="Search job status" aria-busy={isRunning}>
           <div className="job-primary">
-            <span className={`job-state-icon ${stateClass(phase)}`} aria-hidden="true">{phase === "completed" ? "✓" : phase === "failed" ? "!" : phase === "canceled" ? "×" : phase === "expired" ? "⌛" : ""}</span>
+            <span className={`job-state-icon ${stateClass(phase)}`} aria-hidden="true"><AppIcon name={phase === "completed" ? "check" : phase === "failed" ? "warning" : phase === "canceled" ? "close" : phase === "expired" ? "hourglass" : "loading"} size="xs" spin={isRunning} /></span>
             <span className="job-result-copy">
               <output className="sr-only" aria-live="polite" aria-atomic="true">Search status: {persistedLaunchPending ? "Opening persisted search" : phaseLabel(phase)}</output>
               <strong aria-hidden="true">{persistedLaunchPending ? "Opening persisted search" : phaseLabel(phase)}</strong>
@@ -6286,8 +6287,8 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
               </small>
             </span>
             {backendEnabled
-              ? <button className="sampling-button" type="button" onClick={() => setModal("settings")}>Server result policy <span aria-hidden="true">ⓘ</span></button>
-              : <button className="sampling-button" type="button" onClick={() => showToast("The demo result set is fixed and is not sampled.")}>No Event Sampling <span aria-hidden="true">▾</span></button>}
+              ? <button className="sampling-button" type="button" onClick={() => setModal("settings")}>Server result policy <AppIcon name="info" size="xs" /></button>
+              : <button className="sampling-button" type="button" onClick={() => showToast("The demo result set is fixed and is not sampled.")}>No Event Sampling <AppIcon name="chevron-down" size="xs" /></button>}
           </div>
           <div className="job-metrics" aria-label="Job metrics">
             <span><small>Scanned</small><strong>{scannedRowsApproximate ? "≈ " : ""}{NUMBER_FORMAT.format(scannedRows)} rows</strong></span>
@@ -6296,8 +6297,8 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
             <span><small>Progress</small><strong aria-hidden="true">{progress}%</strong><progress className="sr-only" aria-label="Search progress" max={100} value={progress}>{progress}%</progress></span>
           </div>
           <div className="job-controls">
-            <button type="button" onClick={() => setModal("jobs")}>Job <span aria-hidden="true">▾</span></button>
-            <button type="button" aria-label="Inspect search job" title="Inspect job" onClick={openJobInspector}>ⓘ</button>
+            <button type="button" onClick={() => setModal("jobs")}>Job <AppIcon name="chevron-down" size="xs" /></button>
+            <button type="button" aria-label="Inspect search job" title="Inspect job" onClick={openJobInspector}><AppIcon name="info" size="md" /></button>
             <button
               type="button"
               aria-label="Refresh results"
@@ -6308,7 +6309,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
                   : "Refresh results"}
               disabled={submittedQuery.trim().length === 0 || (backendEnabled && backendConnectionState !== "ready")}
               onClick={() => runSearch(submittedQuery, submittedTimeRange)}
-            >↻</button>
+            ><AppIcon name="refresh" size="md" /></button>
             <button
               type="button"
               aria-label="Share search"
@@ -6329,11 +6330,11 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
                 url.hash = "search";
                 void copyText(url.toString(), "Search link copied to the clipboard.");
               }}
-            >⌁</button>
+            ><AppIcon name="share" size="md" /></button>
             <div className="header-menu-wrap search-mode-wrap">
               {backendEnabled
-                ? <button type="button" title="Execution options are controlled by the connected server" onClick={() => setModal("settings")}><span aria-hidden="true">⚡</span> Server Mode <span aria-hidden="true">ⓘ</span></button>
-                : <button type="button" aria-haspopup="menu" aria-expanded={menu === "search-mode"} onClick={() => setMenu(menu === "search-mode" ? null : "search-mode")}><span aria-hidden="true">⚡</span> {searchMode} Mode <span aria-hidden="true">▾</span></button>}
+                ? <button type="button" title="Execution options are controlled by the connected server" onClick={() => setModal("settings")}><AppIcon name="mode" size="sm" /> Server Mode <AppIcon name="info" size="xs" /></button>
+                : <button type="button" aria-haspopup="menu" aria-expanded={menu === "search-mode"} onClick={() => setMenu(menu === "search-mode" ? null : "search-mode")}><AppIcon name="mode" size="sm" /> {searchMode} Mode <AppIcon name="chevron-down" size="xs" /></button>}
               {!backendEnabled && menu === "search-mode" ? (
                 <div className="floating-menu mode-menu" role="menu">
                   {(["Fast", "Smart", "Verbose"] as const).map((modeName) => (
@@ -6350,7 +6351,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
 
         {backendRuntimeNotices.length === 0 || searchIsClosed ? null : (
           <output className="system-notice" aria-label="Backend result notices">
-            <span className="system-notice__icon" aria-hidden="true">!</span>
+            <span className="system-notice__icon" aria-hidden="true"><AppIcon name="circle-alert" size="xs" /></span>
             <div>
               <strong>{backendRuntimeNotices.length === 1 ? "Backend result notice" : "Backend result notices"}</strong>
               <small>{backendRuntimeNotices.join(" ")}</small>
@@ -6389,8 +6390,8 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
             </span>
             <small>Column sorting applies to the loaded page. Use SPL <code>sort</code> for global ordering.</small>
             <div>
-              <button className="button secondary compact" type="button" disabled={eventPage === 1} onClick={() => void openBackendEventPage(eventPage - 1)}>‹ Previous</button>
-              <button className="button secondary compact" type="button" disabled={!backendHasNextPage} onClick={() => void openBackendEventPage(eventPage + 1)}>Next ›</button>
+              <button className="button secondary compact" type="button" disabled={eventPage === 1} onClick={() => void openBackendEventPage(eventPage - 1)}><AppIcon name="chevron-left" size="xs" /> Previous</button>
+              <button className="button secondary compact" type="button" disabled={!backendHasNextPage} onClick={() => void openBackendEventPage(eventPage + 1)}>Next <AppIcon name="chevron-right" size="xs" /></button>
             </div>
           </nav>
         ) : null}
@@ -6439,7 +6440,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
             aria-busy={emptyResultPresentation.tone === "loading"}
             aria-live="polite"
           >
-            <span aria-hidden="true">{emptyResultPresentation.icon}</span>
+            <span aria-hidden="true"><AppIcon name={emptyResultPresentation.icon} size="lg" spin={emptyResultPresentation.icon === "loading"} /></span>
             <strong>{emptyResultPresentation.title}</strong>
             <p>{emptyResultPresentation.detail}</p>
             {backendEnabled && backendConnectionState === "error"
@@ -6755,9 +6756,9 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
 
       {toast === null ? null : (
         <output className={`toast toast-${toast.tone}`} data-testid="toast">
-          <span aria-hidden="true">{toast.tone === "success" ? "✓" : toast.tone === "warning" ? "!" : "i"}</span>
+          <span aria-hidden="true"><AppIcon name={toast.tone === "success" ? "check" : toast.tone === "warning" ? "warning" : "info"} size="sm" /></span>
           <strong>{toast.message}</strong>
-          <button type="button" aria-label="Dismiss notification" onClick={() => setToast(null)}>×</button>
+          <button type="button" aria-label="Dismiss notification" onClick={() => setToast(null)}><AppIcon name="close" size="md" /></button>
         </output>
       )}
     </div>
