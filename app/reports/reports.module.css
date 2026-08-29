@@ -387,30 +387,7 @@
   width: 21px;
 }
 
-.status,
-.runStatus {
-  align-items: center;
-  display: inline-flex;
-  font-size: var(--type-xs);
-  font-weight: 600;
-  gap: 5px;
-  white-space: nowrap;
-}
-
-.status i,
-.runStatus i {
-  background: var(--status-neutral);
-  border-radius: 50%;
-  height: 7px;
-  width: 7px;
-}
-
-.statusScheduled i,
-.runSucceeded i { background: var(--status-success); }
-.statusPaused i { background: var(--status-warning); }
-.statusManual i { background: var(--status-neutral); }
 .runFailed { color: var(--status-error); }
-.runFailed i { background: var(--status-error); }
 
 .cellSecondary {
   color: var(--fg-faint);

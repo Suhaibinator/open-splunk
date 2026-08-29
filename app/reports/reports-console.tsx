@@ -7,6 +7,7 @@ import type { SearchDataMode } from "@/lib/search/backend-data";
 import { searchLaunchHref } from "@/lib/search/launch-url";
 
 import { AppIcon } from "../_components/app-icon";
+import { StatusLabel } from "../_components/status";
 import { PageHeading } from "../_components/product-shell";
 import { BackendReportsConsole } from "./backend-reports-console";
 import styles from "./reports.module.css";
@@ -217,9 +218,9 @@ function DemoReportsConsole() {
         description="Curated searches for recurring operational questions and scheduled delivery."
         actions={(
           <>
-            <Link className="suite-button" href="/search/">Open Search</Link>
+            <Link className="button" href="/search/">Open Search</Link>
             <Link
-              className="suite-button suite-button--primary"
+              className="button button--primary"
               href={searchLaunchHref("index=gradethis | stats count by service", { run: false })}
               title="Open a report-shaped SPL draft. Report creation is not connected in this preview."
             >
@@ -353,13 +354,16 @@ function DemoReportsConsole() {
                         <span className={styles.owner}><i>{report.owner === "Administrator" ? "A" : report.owner[0]}</i>{report.owner}</span>
                       </td>
                       <td data-label="Schedule">
-                        <span className={`${styles.status} ${styles[`status${report.status}`]}`}><i />{report.status}</span>
+                        <StatusLabel tone={report.status === "Scheduled" ? "success" : report.status === "Paused" ? "warning" : "neutral"}>{report.status}</StatusLabel>
                         <small className={styles.cellSecondary}>{report.cadence}</small>
                       </td>
                       <td data-label="Last run">
-                        <span className={`${styles.runStatus} ${report.lastRun === "Failed" ? styles.runFailed : report.lastRun === "Succeeded" ? styles.runSucceeded : ""}`}>
-                          <i />{report.lastRun}
-                        </span>
+                        <StatusLabel
+                          className={report.lastRun === "Failed" ? styles.runFailed : undefined}
+                          tone={report.lastRun === "Failed" ? "error" : report.lastRun === "Succeeded" ? "success" : "neutral"}
+                        >
+                          {report.lastRun}
+                        </StatusLabel>
                       </td>
                       <td data-label="Modified">
                         <span className={styles.modified}>{report.updated}</span>

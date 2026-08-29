@@ -679,7 +679,7 @@ export function KnowledgeMutationEditor({
       <footer className="knowledge-manager__mutation-actions">
         <button type="submit" disabled={busy}>{editing ? "Validate changes" : "Validate draft"}</button>
         <button
-          className="suite-button suite-button--primary"
+          className="button button--primary"
           type="button"
           onClick={() => void save()}
           disabled={busy || editorState.state !== "valid"}
@@ -806,7 +806,7 @@ export function KnowledgeCreateControl({
     : apps[0]?.appId ?? "";
   if (!open) {
     return <button
-      className="suite-button suite-button--primary"
+      className="button button--primary"
       type="button"
       onClick={() => setOpen(true)}
       disabled={appId === ""}
@@ -932,7 +932,7 @@ export function KnowledgeObjectMutationControls({
       ) : null}
       <div className="knowledge-manager__mutation-actions">
         <button type="button" onClick={() => { setMode("actions"); setConfirmation(""); setActionState("idle"); }} disabled={actionState === "working"}>Cancel</button>
-        <button className="button danger" type="button" onClick={() => void remove()} disabled={confirmation !== currentKnowledgeObject.name || actionState === "working"}>
+        <button className="button button--danger" type="button" onClick={() => void remove()} disabled={confirmation !== currentKnowledgeObject.name || actionState === "working"}>
           {actionState === "working" ? "Deleting…" : "Delete knowledge object"}
         </button>
       </div>
@@ -1085,7 +1085,7 @@ export function KnowledgeQuarantineControl({
   if (!open) {
     return <section className="knowledge-manager__object-actions" aria-label="Knowledge recovery actions">
       <div>
-        <button className="button danger" type="button" onClick={() => setOpen(true)}>
+        <button className="button button--danger" type="button" onClick={() => setOpen(true)}>
           Quarantine
         </button>
       </div>
@@ -1138,7 +1138,7 @@ export function KnowledgeQuarantineControl({
           <button type="button" onClick={close} disabled={controlState === "quarantining"}>Cancel</button>
           <button type="button" onClick={() => void prepare()} disabled={controlState === "quarantining"}>Scan again</button>
           <button
-            className="button danger"
+            className="button button--danger"
             type="button"
             onClick={() => void quarantine()}
             disabled={confirmation !== name || controlState === "quarantining" || expired}

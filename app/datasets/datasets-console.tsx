@@ -7,6 +7,7 @@ import type { SearchDataMode } from "@/lib/search/backend-data";
 import { searchLaunchHref } from "@/lib/search/launch-url";
 
 import { AppIcon } from "../_components/app-icon";
+import { StatusLabel } from "../_components/status";
 import { PageHeading } from "../_components/product-shell";
 import { BackendDatasetsConsole } from "./backend-datasets-console";
 
@@ -51,7 +52,7 @@ function DemoDatasetsConsole() {
         eyebrow="DATA"
         title="Datasets"
         description="Understand available indexes, source types, and field coverage."
-        actions={<><Link className="suite-button" href="/admin/?section=indexes">Manage indexes</Link><Link className="suite-button suite-button--primary" href="/search/">Search data</Link></>}
+        actions={<><Link className="button" href="/admin/?section=indexes">Manage indexes</Link><Link className="button button--primary" href="/search/">Search data</Link></>}
       />
 
       <div className="dataset-toolbar">
@@ -72,7 +73,7 @@ function DemoDatasetsConsole() {
               <header>
                 <span className={`dataset-icon dataset-icon--${item.color}`} aria-hidden="true">▦</span>
                 <div className="dataset-card__identity"><h2>{item.name}</h2><p>{item.description}</p></div>
-                <span className={`status-label status-label--${item.status === "Active" ? "complete" : "neutral"}`}><i />{item.status}</span>
+                <StatusLabel tone={item.status === "Active" ? "success" : "neutral"}>{item.status}</StatusLabel>
               </header>
               <dl>
                 <div><dt>Events today</dt><dd>{item.events}</dd></div>

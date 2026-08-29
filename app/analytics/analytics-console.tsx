@@ -373,8 +373,8 @@ function DemoAnalyticsConsole() {
         description="Explore preview search-performance fixtures, query cost, and field coverage."
         actions={(
           <>
-            <span className={styles.previewBadge} data-testid="analytics-updated">Preview data</span>
-            <Link className="suite-button suite-button--primary" href={fixtureSearchHref(`index=gradethis${environmentSPL}`)}>Open Search</Link>
+            <span className="badge badge--outline" data-testid="analytics-updated">Preview data</span>
+            <Link className="button button--primary" href={fixtureSearchHref(`index=gradethis${environmentSPL}`)}>Open Search</Link>
           </>
         )}
       />
@@ -482,7 +482,7 @@ function DemoAnalyticsConsole() {
           {visibleFields.length === 0 ? (
             <div className={styles.emptyFields}>
               <span aria-hidden="true"><AppIcon name="search" size="lg" /></span><strong>No fields match these filters</strong><p>Clear the filters to return to the complete field profile.</p>
-              <button className="suite-button" onClick={clearFieldFilters} type="button">Clear filters</button>
+              <button className="button" onClick={clearFieldFilters} type="button">Clear filters</button>
             </div>
           ) : (
             <div className={styles.fieldList}>
@@ -857,16 +857,16 @@ function BackendAnalyticsConsole({ apiBaseUrl }: { apiBaseUrl: string }) {
         description="Inspect bounded search-history workload metrics and available index field snapshots from the connected backend."
         actions={(
           <>
-            {historySnapshot === null ? <span className={styles.liveBadge}>{bootstrapState === "loading" ? "Connecting backend" : bootstrapState === "error" ? "Backend unavailable" : "Connected backend"}</span> : (
+            {historySnapshot === null ? <span className="badge badge--success badge--outline">{bootstrapState === "loading" ? "Connecting backend" : bootstrapState === "error" ? "Backend unavailable" : "Connected backend"}</span> : (
               <AnalyticsSampleStatus
-                className={historySnapshot.complete ? styles.liveBadge : styles.partialBadge}
+                className={`badge badge--outline ${historySnapshot.complete ? "badge--success" : "badge--warning"}`}
                 complete={historySnapshot.complete}
                 loaded={historySnapshot.entries.length}
                 totalSize={historySnapshot.totalSize}
                 totalSizeExact={historySnapshot.totalSizeExact}
               />
             )}
-            <button className="suite-button suite-button--primary" disabled={bootstrapState === "loading"} onClick={refresh} type="button">
+            <button className="button button--primary" disabled={bootstrapState === "loading"} onClick={refresh} type="button">
               {bootstrapState === "loading" ? "Refreshing…" : "Refresh"}
             </button>
           </>
@@ -997,7 +997,7 @@ function BackendAnalyticsConsole({ apiBaseUrl }: { apiBaseUrl: string }) {
               ) : null}
               {fieldState === "available" && fieldSnapshot !== null && fieldSnapshot.fields.length === 0 ? <BackendResourceState kind="empty" title="No fields observed" message="This index had no field profiles in the selected range." /> : null}
               {fieldState === "available" && fieldSnapshot !== null && fieldSnapshot.fields.length > 0 && visibleFields.length === 0 ? (
-                <div className={styles.emptyFields}><span aria-hidden="true"><AppIcon name="search" size="lg" /></span><strong>No fields match these filters</strong><p>Clear the filters to return to the loaded field profile.</p><button className="suite-button" onClick={clearFieldFilters} type="button">Clear filters</button></div>
+                <div className={styles.emptyFields}><span aria-hidden="true"><AppIcon name="search" size="lg" /></span><strong>No fields match these filters</strong><p>Clear the filters to return to the loaded field profile.</p><button className="button" onClick={clearFieldFilters} type="button">Clear filters</button></div>
               ) : null}
               {fieldState === "available" && fieldSnapshot !== null && visibleFields.length > 0 ? (
                 <div className={styles.fieldList}>

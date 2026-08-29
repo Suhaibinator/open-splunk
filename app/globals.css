@@ -24,23 +24,59 @@
   gap: 5px;
 }
 
-.status-icon {
+/* Status
+   One family for every outcome indicator in the product. `.status` is the
+   shared inline box; a shape modifier says how big it is and whether it carries
+   a glyph; a tone modifier says which outcome it reports. Shape and tone are
+   separate so a tone is one declaration rather than one per shape, which is
+   what lets `.status--dot`, `.status--icon` and the dot inside `.status--label`
+   read the same six roles. The tone always sits on the element that paints, so
+   `.status--label` (a row of text) carries no tone of its own: its `.status
+   .status--dot` child carries it. `--running` is `--info` plus the pulse, so a
+   caller does not have to spell an in-flight state as two classes. */
+
+.status {
   align-items: center;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.status--dot,
+.status--icon {
   background: var(--status-neutral);
   border-radius: 50%;
+}
+
+.status--dot {
+  height: 7px;
+  width: 7px;
+}
+
+.status--icon {
   color: var(--fg-inverse);
-  display: inline-flex;
-  flex: 0 0 20px;
   height: 20px;
   justify-content: center;
   width: 20px;
 }
 
-.status-icon--success { background: var(--status-success); }
-.status-icon--info { background: var(--status-info); }
-.status-icon--warning { background: var(--status-warning); }
-.status-icon--error { background: var(--status-error); }
-.status-icon--neutral { background: var(--status-neutral); }
+.status--label {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  font-weight: 600;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.status--success { background: var(--status-success); }
+.status--info { background: var(--status-info); }
+.status--warning { background: var(--status-warning); }
+.status--error { background: var(--status-error); }
+.status--neutral { background: var(--status-neutral); }
+.status--running { animation: status-pulse 1.3s ease-in-out infinite; background: var(--status-info); }
+
+@keyframes status-pulse {
+  50% { box-shadow: 0 0 0 4px rgb(47 134 179 / 14%); }
+}
 
 .app-icon--spin {
   animation: app-icon-spin 900ms linear infinite;
@@ -97,6 +133,90 @@ a:focus-visible {
 
 a {
   color: inherit;
+}
+
+/* Buttons
+   The single button primitive. Everything that reads as "a control you press"
+   is `.button` plus modifiers; a feature class is only kept beside it when the
+   feature owns genuinely unique *layout* (`.run-button` is a 62px two-line
+   block, `.time-range-button` is a three-column grid), never to restate a
+   colour, a height or a weight.
+
+   Sizes come off the scale rather than off a literal, so one edit in
+   `app/styles/tokens-scale.css` moves every button: the row is `--space-7`
+   tall, `--compact` is one step shorter, and the label is `--type-xs`, the
+   default UI size the token layer documents. docs/theming.md lists the pixels
+   this unification deliberately moved. */
+
+.button {
+  align-items: center;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--fg-text);
+  display: inline-flex;
+  font-size: var(--type-xs);
+  font-weight: 700;
+  gap: var(--space-1);
+  justify-content: center;
+  min-height: var(--space-7);
+  padding: 0 var(--space-3);
+  text-decoration: none;
+}
+
+.button:hover:not(:disabled, [aria-disabled="true"]) {
+  background: var(--bg-subtle);
+}
+
+.button--primary {
+  background: var(--accent);
+  border-color: var(--accent-hover);
+  color: var(--fg-inverse);
+}
+
+.button--primary:hover:not(:disabled, [aria-disabled="true"]) {
+  background: var(--accent-hover);
+}
+
+.button--secondary {
+  background: var(--bg-canvas);
+  border-color: var(--border);
+  color: var(--fg-secondary);
+}
+
+.button--danger {
+  background: var(--status-error);
+  border-color: var(--status-error-strong);
+  color: var(--fg-inverse);
+}
+
+.button--danger:hover:not(:disabled, [aria-disabled="true"]) {
+  background: var(--status-error-strong);
+}
+
+.button--ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--fg-muted);
+}
+
+.button--icon {
+  padding: 0;
+  width: var(--space-7);
+}
+
+.button--compact {
+  min-height: calc(var(--space-7) - var(--space-1));
+  padding: 0 var(--space-2);
+}
+
+.button--block {
+  width: 100%;
+}
+
+.button[aria-disabled="true"] {
+  cursor: wait;
+  opacity: 0.68;
 }
 
 .skip-link {
@@ -448,13 +568,6 @@ pre {
 .menu-separator {
   border-top: 1px solid var(--border);
   margin: 5px 0;
-}
-
-.mini-status {
-  border-radius: 50%;
-  flex: 0 0 auto;
-  height: 10px;
-  width: 10px;
 }
 
 .user-summary {
@@ -913,8 +1026,7 @@ pre {
   padding: var(--space-3) 10px;
 }
 
-.time-range-button,
-.run-button {
+.time-range-button {
   border: 1px solid var(--border-strong);
   height: 62px;
 }
@@ -1119,31 +1231,22 @@ pre {
   white-space: nowrap;
 }
 
+/* The run button is a `.button` whose tone is computed -- accent while a search
+   can be started, destructive while one can be cancelled -- so the class list
+   comes from `app/_components/button.tsx`. What stays here is the layout no
+   other button has: a 62px block welded to the right edge of the SPL editor,
+   stacking a glyph over its label. */
 .run-button {
-  align-items: center;
-  background: var(--accent);
-  border-color: var(--accent-hover);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  color: var(--fg-inverse);
-  display: flex;
   flex-direction: column;
   font-size: var(--type-sm);
   gap: 3px;
-  justify-content: center;
-}
-
-.run-button:hover {
-  background: var(--accent-hover);
+  height: 62px;
 }
 
 .run-button > span {
   font-size: 19px;
   line-height: 18px;
-}
-
-.run-button.cancel {
-  background: var(--status-error);
-  border-color: #983832;
 }
 
 .diagnostic-strip {
@@ -1201,45 +1304,6 @@ pre {
 .job-primary {
   gap: var(--space-2);
   min-width: 0;
-}
-
-.job-state-icon {
-  align-items: center;
-  border-radius: 50%;
-  color: var(--fg-inverse);
-  display: inline-flex;
-  flex: 0 0 auto;
-  font-size: var(--type-xs);
-  font-weight: 700;
-  height: 18px;
-  justify-content: center;
-  width: 18px;
-}
-
-.job-state-icon.state-success,
-.mini-status.state-success {
-  background: #69a23e;
-}
-
-.job-state-icon.state-error,
-.mini-status.state-error {
-  background: var(--status-error);
-}
-
-.job-state-icon.state-muted,
-.mini-status.state-muted {
-  background: var(--status-neutral);
-}
-
-.job-state-icon.state-running,
-.mini-status.state-running {
-  animation: pulse 1.25s infinite;
-  background: var(--status-info);
-}
-
-@keyframes pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgb(46 135 183 / 30%); }
-  50% { box-shadow: 0 0 0 4px rgb(46 135 183 / 0%); }
 }
 
 .job-result-copy {
@@ -1971,20 +2035,6 @@ pre {
   gap: 7px;
 }
 
-.icon-button {
-  align-items: center;
-  background: transparent;
-  border: 0;
-  display: inline-flex;
-  height: 32px;
-  justify-content: center;
-  width: 32px;
-}
-
-.icon-button:hover {
-  background: var(--bg-subtle);
-}
-
 .field-summary-meta {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -2630,46 +2680,6 @@ pre {
 
 .page-size-menu {
   min-width: 150px;
-}
-
-.button {
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  font-weight: 700;
-  min-height: 34px;
-  padding: 0 15px;
-}
-
-.button.primary {
-  background: var(--accent);
-  border-color: var(--accent-hover);
-  color: var(--fg-inverse);
-}
-
-.button.primary:hover:not(:disabled) {
-  background: var(--accent-hover);
-}
-
-.button.secondary {
-  background: var(--bg-canvas);
-  border-color: var(--border);
-  color: #44535c;
-}
-
-.button.secondary:hover:not(:disabled) {
-  background: var(--bg-subtle);
-}
-
-.button.danger {
-  background: var(--status-error);
-  border-color: #a93e38;
-  color: var(--fg-inverse);
-}
-
-.button.compact {
-  font-size: var(--type-xs);
-  min-height: 29px;
-  padding: 0 10px;
 }
 
 .pattern-table {
@@ -3588,11 +3598,6 @@ pre {
   margin: var(--space-1) 0 0;
 }
 
-.close-button {
-  color: var(--fg-muted);
-  font-size: 22px;
-}
-
 .modal-body {
   max-height: calc(100vh - 235px);
   overflow: auto;
@@ -3943,8 +3948,7 @@ pre {
   font-size: var(--type-xxs);
 }
 
-.history-state,
-.job-card-state {
+.history-state {
   align-items: center;
   display: flex;
   font-size: var(--type-xxs);
@@ -4137,18 +4141,6 @@ pre {
   border-left: 3px solid var(--accent);
 }
 
-.job-card-state > span {
-  background: currentColor;
-  border-radius: 50%;
-  height: 7px;
-  width: 7px;
-}
-
-.job-card-state.state-success { color: var(--status-success); }
-.job-card-state.state-error { color: var(--status-error); }
-.job-card-state.state-muted { color: var(--status-neutral); }
-.job-card-state.state-running { color: var(--status-info); }
-
 .job-inspector {
   border: 1px solid var(--border);
   display: grid;
@@ -4188,23 +4180,9 @@ pre {
 }
 
 .inspector-state {
-  align-items: center;
-  background: transparent !important;
-  display: inline-flex;
+  font-size: var(--type-sm);
   gap: 6px;
 }
-
-.inspector-state i {
-  background: currentColor;
-  border-radius: 50%;
-  height: 8px;
-  width: 8px;
-}
-
-.inspector-state.state-success { color: var(--status-success); }
-.inspector-state.state-error { color: var(--status-error); }
-.inspector-state.state-muted { color: var(--status-neutral); }
-.inspector-state.state-running { color: var(--status-info); }
 
 .inspector-query {
   border-right: 0;
@@ -4362,15 +4340,6 @@ pre {
 
 .suite-utilities .suite-context {
   color: #c8d3d8;
-}
-
-.status-dot {
-  background: var(--status-success);
-  border-radius: 50%;
-  display: inline-block;
-  height: 8px;
-  margin-right: 5px;
-  width: 8px;
 }
 
 .suite-find {
@@ -4717,26 +4686,6 @@ pre {
   gap: 7px;
 }
 
-.suite-button {
-  align-items: center;
-  background: var(--bg-surface);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  color: var(--fg-text);
-  display: inline-flex;
-  font-size: var(--type-xs);
-  font-weight: 600;
-  height: 31px;
-  justify-content: center;
-  padding: 0 var(--space-3);
-  text-decoration: none;
-}
-
-.suite-button:hover { background: var(--bg-subtle); border-color: #8f9ca3; }
-.suite-button--primary { background: var(--accent); border-color: var(--accent-hover); color: var(--fg-inverse); }
-.suite-button--primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
-.suite-button[aria-disabled="true"] { cursor: wait; opacity: 0.68; }
-
 .suite-card {
   background: var(--bg-surface);
   border: 1px solid var(--border);
@@ -4824,38 +4773,6 @@ pre {
 .table-action { font-weight: 600; }
 .row-overflow { background: transparent; border: 0; color: var(--fg-muted); font-weight: 700; min-height: 28px; min-width: 30px; }
 
-.status-label {
-  align-items: center;
-  color: var(--fg-muted);
-  display: inline-flex;
-  font-size: var(--type-xs);
-  font-weight: 600;
-  gap: 5px;
-  white-space: nowrap;
-}
-
-.status-label i {
-  background: var(--status-neutral);
-  border-radius: 50%;
-  height: 7px;
-  width: 7px;
-}
-
-.status-label--complete i { background: var(--status-success); }
-.status-label--running i { background: var(--status-info); animation: status-pulse 1.3s ease-in-out infinite; }
-.status-label--failed i,
-.status-label--error i { background: var(--status-error); }
-.status-label--warning i { background: var(--status-warning); }
-.status-label--neutral i { background: var(--status-neutral); }
-.status-dot--healthy { background: var(--status-success); }
-.status-dot--running { background: var(--status-info); }
-.status-dot--warning { background: var(--status-warning); }
-.status-dot--error { background: var(--status-error); }
-
-@keyframes status-pulse {
-  50% { box-shadow: 0 0 0 4px rgb(47 134 179 / 14%); }
-}
-
 /* Home */
 .home-hero { align-items: center; margin-bottom: var(--space-4); }
 .home-hero h1 { font-size: 25px; }
@@ -4889,17 +4806,35 @@ pre {
 .system-notice small { color: var(--fg-muted); font-size: var(--type-xs); }
 .system-notice > a { color: var(--fg-link); font-size: var(--type-xs); font-weight: 600; text-decoration: none; }
 
-.mode-pill {
-  border-radius: 10px;
+/* Badges
+   One non-interactive label chip, replacing the seven near-copies the product
+   grew (a mode pill, two byte-identical `previewBadge` module rules, a
+   read-only pill, live/partial chips, a capability chip and a severity chip).
+   The shape is fixed -- a pill of uppercase `--type-xs` -- and only the tone
+   varies, so a chip's colour is the only decision a caller makes. `--outline`
+   is the one shape modifier, for a chip that has to read as a chip on a surface
+   its own ground already matches. */
+
+.badge {
+  background: var(--bg-subtle);
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  color: var(--fg-muted);
+  display: inline-flex;
   font-size: var(--type-xs);
   font-weight: 700;
   letter-spacing: 0.03em;
-  padding: var(--space-1) var(--space-2);
+  padding: 3px var(--space-2);
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
-.mode-pill--demo { background: var(--status-warning-soft); color: #865e00; }
-.mode-pill--backend { background: var(--accent-soft); color: var(--accent-hover); }
+.badge--outline { border-color: var(--border); }
+.badge--success { background: var(--accent-soft); color: var(--accent-hover); }
+.badge--info { background: var(--status-info-soft); color: var(--status-info); }
+.badge--warning { background: var(--status-warning-soft); color: var(--status-warning-strong); }
+.badge--error { background: var(--status-error-soft); color: var(--status-error); }
+.badge--neutral { background: var(--bg-subtle); color: var(--fg-muted); }
 
 .home-metrics {
   display: grid;
@@ -5089,7 +5024,7 @@ pre {
 .admin-sidebar > button strong { font-size: var(--type-xs); }
 .admin-sidebar > button small { color: var(--fg-muted); font-size: var(--type-xs); }
 .admin-sidebar > button > b { color: var(--fg-muted); font-size: 15px; font-weight: 400; }
-.admin-sidebar-meta { align-items: center; border-top: 1px solid var(--border-subtle); display: flex; margin-top: 9px; padding: var(--space-3); }
+.admin-sidebar-meta { align-items: center; border-top: 1px solid var(--border-subtle); display: flex; gap: 5px; margin-top: 9px; padding: var(--space-3); }
 .admin-sidebar-meta > div { display: flex; flex-direction: column; gap: 2px; }
 .admin-sidebar-meta strong { font-size: var(--type-xs); }
 .admin-sidebar-meta small { color: var(--fg-muted); font-size: var(--type-xs); }
@@ -5222,7 +5157,6 @@ pre {
 .user-row > div strong { font-size: var(--type-xs); }
 .user-row > div small { color: var(--fg-faint); font-size: var(--type-xs); }
 .user-row > b { color: var(--fg-muted); font-size: var(--type-xs); font-weight: 400; }
-.role-pill { background: var(--status-info-soft); border-radius: 9px; color: var(--status-info); font-size: var(--type-xs); font-weight: 700; padding: var(--space-1) 7px; }
 .permission-grid { display: grid; grid-template-columns: repeat(2, 1fr); padding: var(--space-2) 14px; }
 .permission-grid > span { align-items: start; border-bottom: 1px solid var(--border-subtle); display: grid; gap: 3px var(--space-2); grid-template-columns: auto 1fr; min-height: 55px; padding: 10px 0; }
 .permission-grid > span:nth-child(odd) { border-right: 1px solid var(--border-subtle); margin-right: 14px; padding-right: 14px; }
@@ -5326,7 +5260,7 @@ pre {
 .knowledge-manager__advanced-filter-actions > span { display: flex; flex: 0 0 auto; gap: 7px; }
 .knowledge-manager__advanced-filter-actions button { background: var(--bg-surface); border: 1px solid var(--border-strong); color: var(--fg-link); font-size: var(--type-xs); min-height: 32px; padding: 0 11px; }
 .knowledge-manager__advanced-filter-actions button[type="submit"] { background: var(--status-info); border-color: var(--status-info); color: var(--fg-inverse); }
-.knowledge-manager > .suite-button { justify-self: end; min-height: 34px; }
+.knowledge-manager > .button { justify-self: end; }
 .knowledge-manager__mutation-form { background: var(--bg-surface); border: 1px solid var(--border); display: grid; gap: var(--space-3); min-width: 0; padding: 14px; }
 .knowledge-manager__mutation-form > header { align-items: flex-start; border-bottom: 1px solid var(--border-subtle); display: flex; gap: var(--space-3); justify-content: space-between; padding-bottom: 11px; }
 .knowledge-manager__mutation-form h3 { color: var(--fg-text); font-size: var(--type-lg); font-weight: 500; margin: 2px 0 3px; }
@@ -5723,19 +5657,11 @@ button.knowledge-manager__row:hover { background: var(--bg-canvas); }
   height: 7px;
   width: 7px;
 }
-.live-jobs-snapshot button {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-strong);
-  color: var(--accent-hover);
-  font-size: var(--type-xs);
-  font-weight: 600;
-  min-height: 28px;
-  padding: 0 9px;
-}
-.live-jobs-snapshot button[aria-disabled="true"] { color: var(--fg-muted); cursor: wait; }
+.live-jobs-snapshot .button { color: var(--accent-hover); }
+.live-jobs-snapshot .button[aria-disabled="true"] { color: var(--fg-muted); }
 .history-snapshot { background: var(--bg-canvas); border-color: var(--border); color: var(--fg-muted); }
 .history-snapshot i { background: var(--status-info); box-shadow: 0 0 0 3px rgb(63 134 169 / 12%); }
-.history-snapshot button { color: var(--fg-link); }
+.history-snapshot .button { color: var(--fg-link); }
 .backend-action-notice {
   align-items: center;
   background: var(--status-success-soft);
@@ -5866,10 +5792,9 @@ button.knowledge-manager__row:hover { background: var(--bg-canvas); }
   gap: 6px;
 }
 .history-snapshot-actions .history-clear-button {
-  border-color: #caa6a3;
-  color: #9a3f39;
+  color: var(--status-error-strong);
 }
-.history-snapshot-actions button:disabled {
+.history-snapshot-actions .button:disabled {
   color: var(--fg-faint);
   cursor: not-allowed;
 }
@@ -6231,7 +6156,7 @@ button.knowledge-manager__row:hover { background: var(--bg-canvas); }
 .index-field-table td:first-child strong,
 .index-field-table td:first-child small { display: block; }
 .index-field-footer { border-top: 1px solid var(--border-subtle); display: flex; justify-content: flex-end; padding: 10px 14px; }
-.table-action--danger { color: #aa3f39; }
+.table-action--danger { color: var(--status-error-strong); }
 .table-error-detail { color: #aa3f39; display: block; font-size: var(--type-xs); overflow-wrap: anywhere; white-space: normal; }
 .table-warning-detail { color: var(--status-warning); font-size: var(--type-xs); }
 
@@ -6266,9 +6191,7 @@ button.knowledge-manager__row:hover { background: var(--bg-canvas); }
 .notable-events li > div { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .notable-events strong { font-size: var(--type-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .notable-events small { color: var(--fg-faint); font-size: var(--type-xs); }
-.severity-badge { border-radius: var(--radius-sm); flex: 0 0 auto; font-size: var(--type-xs); font-weight: 700; padding: var(--space-1) 5px; }
-.severity-badge--error { background: var(--status-error-soft); color: var(--status-error); }
-.severity-badge--warn { background: var(--status-warning-soft); color: var(--status-warning); }
+.notable-events .badge { flex: 0 0 auto; }
 
 /* Responsive behavior */
 @media (max-width: 1240px) {
@@ -7074,12 +6997,12 @@ button.knowledge-manager__row:hover { background: var(--bg-canvas); }
   .home-hero { align-items: stretch; flex-direction: column; gap: var(--space-3); }
   .suite-page-actions,
   .dashboard-title-row > div:last-child { flex-wrap: wrap; }
-  .suite-page-actions .suite-button,
-  .dashboard-title-row .suite-button { min-height: 38px; }
+  .suite-page-actions .button,
+  .dashboard-title-row .button { min-height: 38px; }
   .home-hero-actions { display: grid; grid-template-columns: 1fr 1fr; }
-  .home-hero-actions .suite-button { height: 40px; }
+  .home-hero-actions .button { min-height: 40px; }
   .system-notice { grid-template-columns: auto 1fr auto; }
-  .system-notice .mode-pill { display: none; }
+  .system-notice .badge { display: none; }
   .system-notice > a { grid-column: 2; }
   .home-metrics { gap: 7px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .home-metrics article { min-height: 76px; padding: 9px; }
@@ -7165,7 +7088,7 @@ button.knowledge-manager__row:hover { background: var(--bg-canvas); }
   .admin-summary-grid { grid-template-columns: 1fr; }
   .admin-summary-grid article { min-height: 74px; }
   .admin-section-header { align-items: flex-start; flex-direction: column; gap: 10px; }
-  .admin-section-header > .suite-button { align-self: stretch; height: 42px; }
+  .admin-section-header > .button { align-self: stretch; min-height: 42px; }
   .resource-toolbar { align-items: stretch; flex-wrap: wrap; }
   .resource-toolbar label { min-width: 100%; position: sticky; top: calc(45px + env(safe-area-inset-top)); z-index: var(--z-sticky); }
   .admin-toolbar { align-items: stretch; display: grid; grid-template-columns: 1fr; }
@@ -7219,7 +7142,7 @@ button.knowledge-manager__row:hover { background: var(--bg-canvas); }
   .live-jobs-snapshot { align-items: stretch; flex-direction: column; gap: 7px; padding: 9px; }
   .live-jobs-snapshot > span { align-items: flex-start; line-height: 1.45; }
   .live-jobs-snapshot i { flex: 0 0 auto; margin-top: var(--space-1); }
-  .live-jobs-snapshot button { min-height: 39px; width: 100%; }
+  .live-jobs-snapshot .button { min-height: 39px; width: 100%; }
   .history-snapshot-actions { align-self: stretch; display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
   .live-jobs-toolbar { flex-direction: column; gap: 7px; }
   .live-jobs-toolbar > .activity-filter-group { min-height: 40px; overflow-x: auto; }
@@ -7361,7 +7284,7 @@ button.knowledge-manager__row:hover { background: var(--bg-canvas); }
   .modal-card,
   .modal-card.modal-card-wide { border: 0; border-radius: 0; display: flex; flex-direction: column; height: 100dvh; max-height: none; width: 100%; }
   .modal-header { flex: 0 0 auto; min-height: 62px; padding-top: max(12px, env(safe-area-inset-top)); }
-  .modal-header .close-button { min-height: 44px; min-width: 44px; }
+  .modal-header .button--icon { min-height: 44px; min-width: 44px; }
   .modal-body { flex: 1; max-height: none; overflow-y: auto; }
   .modal-footer { flex: 0 0 auto; padding-bottom: max(12px, env(safe-area-inset-bottom)); }
 
@@ -7469,7 +7392,7 @@ button.knowledge-manager__row:hover { background: var(--bg-canvas); }
   .signin-panel { padding-inline: 17px; }
   .signin-mobile-brand { margin-bottom: 42px; }
   .collector-card header { grid-template-columns: auto 1fr; }
-  .collector-card header .status-label { grid-column: 2; }
+  .collector-card header .status--label { grid-column: 2; }
   .permission-grid { padding-inline: 10px; }
   .knowledge-manager__header { flex-direction: column; }
   .knowledge-manager__filters { grid-template-columns: 1fr; }
@@ -7521,7 +7444,6 @@ button.knowledge-manager__row:hover { background: var(--bg-canvas); }
 
 @media (pointer: coarse) {
   .button,
-  .suite-button,
   .suite-mobile-trigger,
   .search-mobile-trigger,
   .mobile-search-actions > button,

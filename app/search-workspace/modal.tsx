@@ -74,7 +74,7 @@ export function Modal({
             {subtitle === undefined ? null : <p>{subtitle}</p>}
           </div>
           {dismissible
-            ? <button className="icon-button close-button" aria-label="Close dialog" type="button" onClick={onClose}><AppIcon name="close" size="lg" /></button>
+            ? <button className="button button--ghost button--icon" aria-label="Close dialog" type="button" onClick={onClose}><AppIcon name="close" size="lg" /></button>
             : null}
         </header>
         <div className="modal-body">{children}</div>

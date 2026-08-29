@@ -28,13 +28,14 @@ import {
 } from "@/lib/search/server-api";
 
 import { BackendResourceState } from "../_components/backend-resource-state";
+import { StatusDot, StatusLabel } from "../_components/status";
 import { AppIcon } from "../_components/app-icon";
 import {
   formatActivityCount,
   formatActivityDate,
   formatActivityDuration,
   formatActivityTime,
-  searchJobStateClass,
+  searchJobStateTone,
   searchJobStateLabel,
 } from "./backend-activity-shared";
 import { formatDecimalBytes } from "../search-workspace/formatters";
@@ -415,16 +416,17 @@ export function BackendLiveJobs({ apiBaseUrl }: BackendLiveJobsProps) {
       {state === "available" ? (
         <>
           <section className="activity-summary" aria-label="Exact retained job counts">
-            <article><span className="status-dot status-dot--healthy" /><div><strong>{counts === null ? "…" : formatActivityCount(counts.all)}</strong><small>Retained jobs</small></div></article>
-            <article><span className="status-dot status-dot--running" /><div><strong>{counts === null ? "…" : formatActivityCount(counts.active)}</strong><small>Active now</small></div></article>
-            <article><span className="status-dot status-dot--healthy" /><div><strong>{counts === null ? "…" : formatActivityCount(counts.completed)}</strong><small>Completed</small></div></article>
-            <article><span className="status-dot status-dot--error" /><div><strong>{unsuccessfulCount === null ? "…" : formatActivityCount(unsuccessfulCount)}</strong><small>Failed, canceled, or expired</small></div></article>
+            <article><StatusDot tone="success" /><div><strong>{counts === null ? "…" : formatActivityCount(counts.all)}</strong><small>Retained jobs</small></div></article>
+            <article><StatusDot tone="running" /><div><strong>{counts === null ? "…" : formatActivityCount(counts.active)}</strong><small>Active now</small></div></article>
+            <article><StatusDot tone="success" /><div><strong>{counts === null ? "…" : formatActivityCount(counts.completed)}</strong><small>Completed</small></div></article>
+            <article><StatusDot tone="error" /><div><strong>{unsuccessfulCount === null ? "…" : formatActivityCount(unsuccessfulCount)}</strong><small>Failed, canceled, or expired</small></div></article>
           </section>
 
           <output className="live-jobs-snapshot">
             <span><i aria-hidden="true" />Each count is exact for its request; last refreshed <strong>{formatActivityTime(refreshedAt)}</strong>. Job states can change between requests.</span>
             <button
               ref={refreshButtonRef}
+              className="button button--compact"
               type="button"
               aria-busy={refreshing}
               aria-disabled={refreshing}
@@ -537,7 +539,7 @@ export function BackendLiveJobs({ apiBaseUrl }: BackendLiveJobsProps) {
                           <code title={job.definition.timeRange?.timezone}>{jobTimeRange(job)}</code>
                         </td>
                         <td data-label="State">
-                          <span className={`status-label status-label--${searchJobStateClass(job.state)}`}><i />{searchJobStateLabel(job.state)}</span>
+                          <StatusLabel tone={searchJobStateTone(job.state)}>{searchJobStateLabel(job.state)}</StatusLabel>
                           {job.failureRetryable ? <small>Retryable failure</small> : null}
                         </td>
                         <td data-label="Progress">

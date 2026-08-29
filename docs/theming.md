@@ -469,6 +469,113 @@ carry seven of them — 1120px, 800px, 650px, 520px, 430px, 420px and one
 `max-height: 650px` — and folding each onto the nearest step is part of the
 migration, not of this phase.
 
+## Primitives
+
+A token layer only makes a retheme a one-file edit if there is also one rule
+that reads each token. Three families in `app/globals.css` had grown a copy per
+feature instead, so a colour change had to be repeated by hand and the copies
+drifted apart in ways no token could reconcile. Phase 3 collapsed them.
+
+Each family below is the **only** implementation of its idea. A feature may add
+a class beside one of them, but only for layout the feature genuinely owns — a
+width, a grid, a `display` toggle. Restating a tone, a height or a weight in a
+feature class is the thing that produced the copies in the first place.
+
+### `.button`
+
+One class plus BEM modifiers, in `app/globals.css` under the `/* Buttons */`
+banner. `app/_components/button.tsx` composes the same classes from props and
+is worth using where the variant is *computed* — the search workspace's run
+button is accent while a search can be started and destructive while one can be
+cancelled, and it is the call site the component exists for. Where the variant
+is a constant, `className="button button--primary"` says the same thing with one
+fewer indirection, and both spellings are in the tree deliberately.
+
+| Modifier | Meaning |
+| --- | --- |
+| *(none)* | the quiet default: surface ground, `--border-strong` edge |
+| `--primary` | the accent action; one per surface |
+| `--secondary` | a filled control on a surface that is already white |
+| `--danger` | a destructive action |
+| `--ghost` | borderless; shows a ground only on hover |
+| `--icon` | square and padding-free, for a control whose label is one glyph |
+| `--compact` | one scale step shorter, for a control inside a dense row |
+| `--block` | stretches to its container, for a stacked mobile action |
+
+Sizes read `--space-7` and `--type-xs` rather than literals, so a button's
+height and label size move with the scale in `app/styles/tokens-scale.css`.
+
+**Replaces.** `.button` (with `.primary`/`.secondary`/`.danger`/`.compact`),
+`.suite-button` (with `--primary`, plus a `--secondary` that one call site used
+and no rule ever defined), `.icon-button` and `.close-button`. Kept beside it
+for layout only: `.run-button` (a 62px two-line block welded to the SPL editor,
+whose tone now comes from `--primary`/`--danger` rather than from its own
+`.cancel` class),
+`.time-range-button` (a 62px three-column grid), `.activity-filter-button` (a
+tab with an underline, not a button), `.product-menu-button`, `.user-button` and
+`.suite-user-button` (inverse ink on the two chrome bars), `.mobile-fields-button`
+(a `display` toggle with no paint of its own), `.sampling-button`, `.row-overflow`
+and `.table-action`.
+
+### `.status`
+
+One family for every outcome indicator, replacing eight parallel spellings of
+the same six ideas: `.status-icon`, `.status-dot`, `.status-label`,
+`.mini-status`, `.job-state-icon`, `.job-card-state`, `.inspector-state`, and
+the reports module's own `.status`/`.runStatus`.
+
+Shape and tone are separate modifiers, so a tone is one declaration rather than
+one per shape: `.status--dot` (a 7px disc), `.status--icon` (a 20px disc around
+a glyph) and `.status--label` (a row of text that contains a dot) all read the
+same `.status--success`, `--info`, `--warning`, `--error`, `--neutral` and
+`--running`. `--running` is `--info` plus the pulse, because an in-flight state
+is informational and spelling it as two classes invited half the call sites to
+forget the second one.
+
+The tone always sits on the element that paints. `.status--label` therefore
+carries no tone of its own — the swatch inside it does — which is why
+`StatusLabel` and `StatusDot` in `app/_components/status.tsx` exist: the pairing
+is easy to get wrong by hand, and the wrong version still renders.
+`StatusIcon` in `app/_components/app-icon.tsx` reads the same vocabulary.
+
+### `.badge`
+
+One non-interactive label chip: a pill of uppercase `--type-xs`, with tone the
+only thing a caller decides (`--success`, `--info`, `--warning`, `--error`,
+`--neutral`, and `--outline` for a chip that has to read as a chip on a ground
+its own colour already matches).
+
+**Replaces.** `.mode-pill`, `.role-pill`, `.severity-badge`, the two
+byte-identical `previewBadge` rules in `analytics.module.css` and
+`operations-dashboard.module.css`, `.readOnlyBadge`, `.liveBadge`/`.partialBadge`
+and `.availableBadge`/`.unavailableBadge`.
+
+### Pixels this deliberately moved
+
+Unifying three implementations means at most one of them keeps its pixels. Each
+row below is a decision, not a regression, and the visual baselines under
+`integration/visual/__screenshots__` were re-recorded for them together.
+
+| What | Was | Now | Why |
+| --- | --- | --- | --- |
+| Button height | 34px (`.button`), 31px (`.suite-button`), 29px (`.compact`) | `--space-7` (32px), `--space-7 - --space-1` (28px) | one row height, taken off the scale rather than from either copy |
+| Button label | 13px (`.button`), 10px (`.suite-button`) | `--type-xs` (10px) | `--type-xs` is the default UI size the token layer documents, and the size the rest of the chrome already used |
+| Button padding | `0 15px` (`.button`), `0 12px` (`.suite-button`) | `--space-3` (12px), `--space-2` (8px) compact | on the spacing scale |
+| Button weight | 700 (`.button`), 600 (`.suite-button`) | 700 | the heavier of the two; a button reads as an action |
+| `.suite-button:hover` edge | darkened to `#8f9ca3` | unchanged edge, ground moves only | one hover behaviour, and one fewer literal |
+| `.button--danger` edge | `#a93e38` | `--status-error-strong` | a role, not a nearby colour |
+| `.button--secondary` ink | `#44535c` | `--fg-secondary` | the role that literal was approximating |
+| Status dot | 8px (`.status-dot`, `+5px` right margin), 10px (`.mini-status`), 7px (`.status-label i`) | 7px, no margin | one disc; the gap now belongs to the row that lays the dot out |
+| Status icon | 20px (`.status-icon`), 18px (`.job-state-icon`) | 20px | one disc |
+| `.mini-status.state-success` | `#69a23e` | `--status-success` | the success role, not a second green |
+| Job-card and inspector state | tone painted the label text | tone paints the swatch, text is `--fg-muted` | matches every other status label in the product |
+| Badge radius | `10px` | `--radius-pill` | on the radius scale; indistinguishable at chip height |
+| `.liveBadge`, `.partialBadge`, `.severity-badge` | mixed case | uppercase | one chip shape |
+| `.mode-pill--demo` ink | `#865e00` | `--status-warning-strong` | a role, not a nearby colour |
+| `.history-clear-button` edge | `#caa6a3` | the standard control edge | the destructive intent stays in the label ink |
+| `.run-button.cancel` edge | `#983832` | `--status-error-strong`, via `.button--danger` | the run button's two states are now the primitive's two tones |
+| Snapshot-bar buttons | `.live-jobs-snapshot button`, a bare descendant rule restating the primitive | `.button.button--compact` | one implementation; the accent ink stays as a one-line feature override |
+
 ## Known debt in the token layer
 
 `.stylelintrc.json` carries an `overrides` entry exempting
