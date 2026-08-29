@@ -34,5 +34,17 @@
         "ignorePseudoClasses": ["global", "local"]
       }
     ]
-  }
+  },
+  "overrides": [
+    {
+      "//": "The primitive tier is the one place a colour is allowed to be written down: `color-no-hex` and the rgb()/hsl() disallow-list exist to push every literal into app/styles/tokens-*.css, so firing them there asks the palette to point at itself. Without this exemption the rule Phase 5 flips to errors could never be satisfied, and the token files would carry the only warnings nobody may fix. font-family stays disallowed: --font-sans and --font-mono are custom properties, not font-family declarations, so the token files do not trip it and a real font-family literal in one of them would still be caught.",
+      "files": ["app/styles/tokens-*.css"],
+      "rules": {
+        "color-no-hex": null,
+        "declaration-property-value-disallowed-list": {
+          "font-family": ["/^(?!var\\(--font-[a-z-]+\\)$).+$/"]
+        }
+      }
+    }
+  ]
 }

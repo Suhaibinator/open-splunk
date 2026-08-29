@@ -278,10 +278,20 @@ Failure artifacts (actual, expected, and diff images) are written beneath
 unit tests used to pin by matching the stylesheet's raw text. Text matching
 tied the suite to formatting — newline placement, single-line media-query
 bodies, declaration order — so any tokenising or reformatting pass broke it
-without changing a rendered pixel. The spec instead loads the stylesheet into
+without changing a rendered pixel. The spec instead loads the stylesheets into
 Chromium against fixture markup that mirrors the production DOM and reads
 resolved values through `getComputedStyle` at the 1280, 980, 760, and 480 pixel
 breakpoints.
+
+"The stylesheets", plural, since the token layer landed:
+`visual/application-stylesheets.ts` injects `app/styles/tokens-color.css` and
+`tokens-scale.css` ahead of `app/globals.css`, because `setContent` cannot
+resolve the `@import`s in `app/styles/index.css` and would otherwise render
+every `var()` as its fallback. That list is hand-maintained, so
+`scripts/token-layer.test.mjs` asserts it still matches the token files on
+disk. `visual/token-layer.visual.spec.ts` covers the other half — it navigates
+to the real export rather than injecting anything, so a token file that never
+reaches `app/layout.tsx` fails there even while every contract here is green.
 
 It needs no server, no container, no backend fixtures, and no committed
 baselines, so it is platform-independent, runs in under a second, and is the one

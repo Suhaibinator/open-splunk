@@ -74,11 +74,11 @@ const PRE_REFACTOR_RENDERING: readonly (readonly [string, string, string])[] = [
 const SCALE_SENTINELS: readonly (readonly [string, string, string])[] = [
   ["border-radius", "--radius-pill", "999px"],
   ["box-shadow", "--shadow-md", "0 3px 9px rgb(21 35 43 / 24%)"],
-  ["font-size", "--text-xs", "10px"],
+  ["font-size", "--type-xs", "10px"],
   ["transition-duration", "--dur-fast", "100ms"],
   ["transition-timing-function", "--ease", "ease-out"],
   ["width", "--space-4", "16px"],
-  ["z-index", "--z-toast", "500"],
+  ["z-index", "--z-toast", "800"],
 ];
 
 /**

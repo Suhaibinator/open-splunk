@@ -21,7 +21,7 @@
     "test:visual:determinism": "node scripts/visual-determinism.mjs",
     "check:docs": "node scripts/check-docs.mjs",
     "typecheck": "tsc --noEmit",
-    "//lint:css": "Warning-only in Phase 0: 1,621 warnings, of which 1,590 are the hex/rgb/font-family/media-feature token debt Phase 5 exists to clear. Phase 5 flips .stylelintrc.json severities to errors and gates the build on this script.",
+    "//lint:css": "Warning-only until Phase 5: 1,596 warnings, of which 1,566 are the hex/rgb/font-family/media-feature token debt that phase exists to clear. app/styles/tokens-*.css is exempt from color-no-hex and the rgb() disallow-list through an overrides entry in .stylelintrc.json, because the primitive tier is where a literal is supposed to live. Phase 5 flips the remaining severities to errors and gates the build on this script.",
     "lint:css": "stylelint \"app/**/*.css\""
   },
   "dependencies": {

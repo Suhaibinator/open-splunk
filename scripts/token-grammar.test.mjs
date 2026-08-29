@@ -107,7 +107,7 @@ const SEMANTIC_GROUPS = ["accent", "bg", "border", "chart", "chrome", "fg", "lev
 const INTERACTION_TOKENS = new Set(["--focus-ring", "--highlight", "--selection"]);
 
 /** Name families `app/styles/tokens-scale.css` is allowed to use. */
-const SCALE_FAMILIES = ["dur", "ease", "font", "radius", "shadow", "space", "text", "z"];
+const SCALE_FAMILIES = ["dur", "ease", "font", "radius", "shadow", "space", "type", "z"];
 
 /** The ladder a primitive step number may sit on: light at 0, darkest at 950. */
 const PRIMITIVE_STEPS = new Set([0, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 550, 600, 650, 700, 750, 800, 900, 950]);
@@ -116,8 +116,12 @@ const PRIMITIVE_STEPS = new Set([0, 50, 100, 150, 200, 250, 300, 350, 400, 450, 
  * Pairings the tokens' own role comments promise, as `[foreground, background]`.
  *
  * Only the pairings the layer commits to in writing are here: body and heading
- * text on each of the four surfaces, and `--fg-inverse`, whose comment reads
- * "Text on --bg-inverse and on the chrome bars". Secondary and tertiary text
+ * text on each of the four surfaces, `--fg-inverse`, whose comment reads "Text
+ * on --bg-inverse", and `--chrome-fg`, whose comment reads "Text and icons on
+ * either bar" and which is a separate role precisely because the inverse
+ * surface flips between themes and the two chrome bars do not. Every ground a
+ * foreground token's comment names is still checked, in both themes; what
+ * changed is which token owns the bars. Secondary and tertiary text
  * are left out on purpose -- `--fg-faint` is placeholder ink and its ratio is
  * inherited from the pre-refactor palette, so pinning it here would assert a
  * decision this layer did not make.
@@ -132,9 +136,9 @@ const MANDATED_TEXT_PAIRS = [
   ["--fg-strong", "--bg-subtle"],
   ["--fg-strong", "--bg-raised"],
   ["--fg-inverse", "--bg-inverse"],
-  ["--fg-inverse", "--chrome-bar"],
-  ["--fg-inverse", "--chrome-appbar"],
-  ["--fg-inverse", "--chrome-hover"],
+  ["--chrome-fg", "--chrome-bar"],
+  ["--chrome-fg", "--chrome-appbar"],
+  ["--chrome-fg", "--chrome-hover"],
 ];
 
 /** WCAG 2.2 AA for text below 18.66px, which is every size this product ships. */
@@ -611,7 +615,7 @@ test("collectDeclarationComments pairs a comment with the declaration it trails"
 
 test("collectDeclarationComments reports a name once per declaration site", () => {
   const found = collectDeclarationComments(
-    ':root { --focus-ring: var(--blue-550); /* Light. */ }\n'
+    ':root { --focus-ring: var(--blue-450); /* Light. */ }\n'
     + ':root[data-theme="dark"] { --focus-ring: var(--blue-300); /* Dark. */ }',
   );
   assert.deepEqual(found.map(({ comment }) => comment), ["Light.", "Dark."]);

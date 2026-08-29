@@ -66,8 +66,8 @@
   --blue-200: #cfe2ec; /* Informational wash border. */
   --blue-300: #b8ceda; /* Muted informational edge. */
   --blue-400: #5290b0; /* Light informational fill; the debug severity swatch. */
+  --blue-450: #2f8ac1; /* Saturated interaction blue: focus rings. */
   --blue-500: #3b88ad; /* Mid informational fill. */
-  --blue-550: #2f8ac1; /* Saturated interaction blue: focus rings. */
   --blue-600: #2878a8; /* Primary informational colour and link text. */
   --blue-700: #256e96; /* Pressed informational colour. */
   --blue-800: #175d81; /* Deepest informational colour. */
@@ -97,8 +97,8 @@
 
   /* Purple: categorical only; the product assigns it no state. */
   --purple-100: #efeaf6; /* Purple wash. */
-  --purple-400: #a14b96; /* Magenta-leaning purple. */
   --purple-500: #8b67a8; /* Mid purple. */
+  --purple-550: #a14b96; /* Magenta-leaning purple. */
   --purple-600: #6d4b9f; /* Deep purple. */
 
   /* Extended categorical hues: only the chart series ramp reaches these. */
@@ -124,13 +124,13 @@
   --fg-strong: var(--gray-900); /* Headings and emphasised text. */
   --fg-muted: var(--gray-600); /* Secondary text: captions, metadata, help. */
   --fg-faint: var(--gray-500); /* Tertiary text: placeholders, disabled labels. */
-  --fg-inverse: var(--gray-0); /* Text on --bg-inverse and on the chrome bars. */
+  --fg-inverse: var(--gray-0); /* Text on --bg-inverse. */
   --fg-link: var(--blue-600); /* Anchor text. */
 
   /* Borders. */
   --border: var(--gray-300); /* Default rule between and around surfaces. */
   --border-strong: var(--gray-400); /* Emphasised rule: active control edges, dividers under load. */
-  --border-focus: var(--blue-550); /* Edge of a control that holds keyboard focus. */
+  --border-focus: var(--blue-450); /* Edge of a control that holds keyboard focus. */
 
   /* Accent: the product's primary action colour. */
   --accent: var(--green-700); /* Primary buttons, active tabs, progress. */
@@ -173,11 +173,12 @@
   --chrome-bar: var(--slate-900); /* Product bar, the topmost strip. */
   --chrome-appbar: var(--slate-700); /* App bar, the navigation strip below it. */
   --chrome-hover: var(--slate-600); /* Hovered or open item in either bar. */
+  --chrome-fg: var(--gray-0); /* Text and icons on either bar. */
 
   /* Interaction. */
   --highlight: var(--amber-200); /* Matched search term inside a result. */
   --selection: var(--blue-100); /* Selected row or range. */
-  --focus-ring: var(--blue-550); /* Focus outline drawn outside a control. */
+  --focus-ring: var(--blue-450); /* Focus outline drawn outside a control. */
 
   /* Legacy aliases. Pre-refactor names kept pointing at their replacements so
    * no call site breaks mid-refactor; a later phase rewrites the call sites and
@@ -216,6 +217,12 @@
  * ground, and every "soft" wash becomes a dark tint rather than a pale one. The
  * categorical chart ramp is deliberately not restated: those twelve hues are
  * chosen to separate from each other, not from the background.
+ *
+ * `--fg-inverse` and `--chrome-fg` are two roles rather than one for the sake
+ * of this block: the inverse surface flips with the theme, while the two chrome
+ * bars stay dark in both. A single token would have to be light for the bars and
+ * dark for the inverse surface at the same time, and here that resolved to bar
+ * labels painted in the bar's own colour.
  */
 :root[data-theme="dark"] {
   color-scheme: dark;
@@ -238,7 +245,7 @@
   /* Borders. */
   --border: var(--gray-700); /* Default rule. */
   --border-strong: var(--gray-650); /* Emphasised rule. */
-  --border-focus: var(--blue-550); /* Focused control edge. */
+  --border-focus: var(--blue-200); /* Focused control edge. */
 
   /* Accent. */
   --accent: var(--green-500); /* Primary action colour. */
@@ -257,19 +264,22 @@
   --status-neutral: var(--gray-450); /* No outcome yet. */
   --status-neutral-soft: var(--gray-700); /* No outcome yet, as a background wash. */
 
-  /* Event severity. */
-  --level-info: var(--green-500); /* info events. */
-  --level-warn: var(--amber-400); /* warn events. */
-  --level-error: var(--red-400); /* error events. */
-  --level-debug: var(--blue-400); /* debug events. */
+  /* Event severity: the four swatches move up to the -300 tier together, so a
+     level reads as the same hue it does in the light theme without sinking
+     into the dark ground. */
+  --level-info: var(--green-300); /* info events. */
+  --level-warn: var(--amber-300); /* warn events. */
+  --level-error: var(--red-300); /* error events. */
+  --level-debug: var(--blue-300); /* debug events. */
 
   /* Application chrome. */
   --chrome-bar: var(--gray-950); /* Product bar. */
   --chrome-appbar: var(--gray-900); /* App bar. */
   --chrome-hover: var(--gray-800); /* Hovered or open bar item. */
+  --chrome-fg: var(--gray-200); /* Text and icons on either bar. */
 
   /* Interaction. */
   --highlight: var(--amber-600); /* Matched search term inside a result. */
   --selection: var(--blue-800); /* Selected row or range. */
-  --focus-ring: var(--blue-550); /* Focus outline. */
+  --focus-ring: var(--blue-200); /* Focus outline. */
 }

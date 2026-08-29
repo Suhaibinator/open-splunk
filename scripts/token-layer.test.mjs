@@ -15,10 +15,14 @@ import process from "node:process";
 import test from "node:test";
 
 import {
+  collectPrimitiveReferences,
   collectTokenLayer,
   cssBlocks,
   cssDeclarations,
   isDarkThemeContext,
+  listInjectedStylesheets,
+  listTokenStylesheets,
+  relativePosix,
 } from "./css-inventory.mjs";
 
 const workspace = process.cwd();
@@ -130,6 +134,34 @@ test("the dark theme redefines only names the light theme declares", async () =>
     [],
     "The dark block declares a token the light block does not, so that name is undefined for every\n"
       + `reader on the default theme:\n${describeList(introduced.toSorted())}`,
+  );
+});
+
+test("nothing outside the palette file reads a primitive", async () => {
+  const leaks = (await collectPrimitiveReferences(workspace))
+    .map(({ file, name }) => `${file} reads ${name}`)
+    .toSorted();
+  assert.deepEqual(
+    [...new Set(leaks)],
+    [],
+    "docs/theming.md: \"Nothing outside app/styles/tokens-color.css may reference a primitive.\" A rule\n"
+      + "that names a step has hard-coded a hue into a component: the theme block cannot move it, and\n"
+      + "no screenshot can tell it apart from the semantic token beside it. Point it at a tier-2 token,\n"
+      + `or add one if no role fits:\n${describeList([...new Set(leaks)])}`,
+  );
+});
+
+test("the fixture harness injects exactly the stylesheets the application loads", async () => {
+  const injected = await listInjectedStylesheets(workspace);
+  const layer = (await listTokenStylesheets(workspace)).map((file) => relativePosix(workspace, file));
+  assert.deepEqual(
+    injected,
+    [...layer, "app/globals.css"],
+    "integration/visual/application-stylesheets.ts lists the stylesheets the fixture suites inject by\n"
+      + "path, because an @import cannot resolve inside an injected <style>. A token file missing from\n"
+      + "that list leaves every fixture rendering var() fallbacks with the contracts and the baselines\n"
+      + "still green -- the exact failure the module's own header warns about. A new token file has to\n"
+      + "be added to app/styles/index.css and to APPLICATION_STYLESHEETS, in cascade order.",
   );
 });
 

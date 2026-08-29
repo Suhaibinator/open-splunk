@@ -55,23 +55,33 @@
   --space-8: 40px;
 
   /* Type scale. This product's body size is 10px, so the ramp is deliberately
-     bottom-heavy and --text-xs, not --text-md, is the default UI size. */
-  --text-lg: 14px;
-  --text-md: 12px;
-  --text-sm: 11px;
-  --text-xl: 16px;
-  --text-xs: 10px;
-  --text-xxl: 20px;
-  --text-xxs: 9px;
+     bottom-heavy and --type-xs, not --type-md, is the default UI size. The
+     family is --type-* rather than --text-* because --text and --text-strong
+     are colours: one prefix cannot mean both a length and an ink. */
+  --type-lg: 14px;
+  --type-md: 12px;
+  --type-sm: 11px;
+  --type-xl: 16px;
+  --type-xs: 10px;
+  --type-xxl: 20px;
+  --type-xxs: 9px;
 
-  /* Stacking. Six layers, ordered base < sticky < dropdown < modal < drawer <
-     toast, which is the order app/globals.css ships today. The gap of 100
-     leaves room for a component's own local stacking without borrowing the
-     next layer's number. */
+  /* Stacking. Nine layers, ordered base < sticky < bar < dropdown-scrim <
+     dropdown < modal < drawer-scrim < drawer < toast, which is the order
+     app/globals.css ships today everywhere but one pair (.menu-dismiss moves
+     above .product-bar). Every overlay that a dismiss scrim backs gets
+     the step above that scrim: sharing one step with it would leave the
+     ordering to DOM order, and in four of the six pairs the scrim is the later
+     sibling and would swallow its own surface. The gap of 100 leaves room for a
+     component's own local stacking without borrowing the next layer's number.
+     docs/theming.md maps every declaration in app/globals.css onto a step. */
+  --z-bar: 200;
   --z-base: 1;
-  --z-dropdown: 200;
-  --z-drawer: 400;
-  --z-modal: 300;
+  --z-drawer: 700;
+  --z-drawer-scrim: 600;
+  --z-dropdown: 400;
+  --z-dropdown-scrim: 300;
+  --z-modal: 500;
   --z-sticky: 100;
-  --z-toast: 500;
+  --z-toast: 800;
 }

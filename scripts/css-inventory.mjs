@@ -544,9 +544,19 @@ export function cssDeclarations(body) {
   return declarations;
 }
 
+/**
+ * The two shapes a dark theme is selected by, and only those: the root
+ * attribute the product sets, and the user's own preference. A bare search for
+ * the word "dark" would also claim a class named `.dark-row`, and every token
+ * inside it would be filed as a restatement -- which is how the
+ * one-declaration-per-name invariant built on this could pass while a name
+ * really was declared twice.
+ */
+const DARK_THEME_CONTEXT = /\[data-theme\s*=\s*["']?dark["']?\]|prefers-color-scheme\s*:\s*dark/u;
+
 /** True when a block, or any at-rule around it, targets the dark theme. */
 export function isDarkThemeContext(block) {
-  return [block.prelude, ...block.ancestors].some((prelude) => /\bdark\b/u.test(prelude));
+  return [block.prelude, ...block.ancestors].some((prelude) => DARK_THEME_CONTEXT.test(prelude));
 }
 
 /** The token files of the two-tier layer, sorted so reports read the same way. */
@@ -634,4 +644,69 @@ export async function collectTokenBlocks(root) {
       file: relativePosix(root, file),
     };
   }));
+}
+
+/**
+ * Every reference to a tier-1 primitive from outside the file that declares it.
+ *
+ * "Nothing outside `app/styles/tokens-color.css` may reference a primitive" is
+ * the rule the whole two-tier split rests on, and it is the one rule a
+ * screenshot can never see: a rule that reads `--green-700` through a `var()`
+ * renders exactly like the semantic token pointing at the same step, right up
+ * to the day a theme tries to move it. The primitives are read out of the
+ * palette file itself -- a name is a primitive because it holds a literal
+ * there, not because of how it is spelled -- so adding a hue family extends the
+ * check for free.
+ *
+ * Test and spec files are skipped: they quote token names inside fixture
+ * strings on purpose, and a fixture is not a call site.
+ */
+export async function collectPrimitiveReferences(root) {
+  const palette = (await listTokenStylesheets(root))
+    .find((file) => relativePosix(root, file) === "app/styles/tokens-color.css");
+  const primitives = new Set();
+  if (palette !== undefined) {
+    const css = stripCssComments(await readFile(palette, "utf8"));
+    for (const match of css.matchAll(/(--[a-z]+-\d+)\s*:\s*#[0-9a-f]{3,8}/giu)) primitives.add(match[1]);
+  }
+  const tests = new Set(await listTestFiles(root));
+  const candidates = (await listRepositoryFiles(root)).filter((file) => (
+    file !== palette
+    && !tests.has(file)
+    && (file.endsWith(".css") || SOURCE_EXTENSIONS.has(path.extname(file)))
+  ));
+  const perFile = await Promise.all(candidates.map(async (file) => {
+    const text = await readFile(file, "utf8");
+    const source = file.endsWith(".css") ? stripCssComments(text) : text;
+    return [...source.matchAll(/var\(\s*(--[\w-]+)/gu)]
+      .filter((match) => primitives.has(match[1]))
+      .map((match) => ({ file: relativePosix(root, file), name: match[1] }));
+  }));
+  return perFile.flat();
+}
+
+/** The double-quoted segments of a `path.join(…)` argument list. */
+function quoted(expression) {
+  return [...expression.matchAll(/"([^"]*)"/gu)].map((match) => match[1]);
+}
+
+/**
+ * The stylesheets `integration/visual/application-stylesheets.ts` injects.
+ *
+ * That list is written by hand because an `@import` cannot be resolved inside
+ * an injected `<style>`, so it drifts the moment the token layer gains a file:
+ * the fixtures would keep rendering unresolved `var()` fallbacks while every
+ * contract stayed green. Reading it here lets a test compare it against the
+ * layer on disk. The paths are rebuilt the way the module builds them, from
+ * its own location, so a moved file is a mismatch rather than a silent pass.
+ */
+export async function listInjectedStylesheets(root) {
+  const harness = path.join(root, "integration", "visual", "application-stylesheets.ts");
+  const source = await readFile(harness, "utf8");
+  const base = /const\s+applicationRoot\s*=\s*path\.join\(([^)]*)\)/u.exec(source);
+  const applicationRoot = path.resolve(path.dirname(harness), ...(base === null ? [] : quoted(base[1])));
+  const list = /APPLICATION_STYLESHEETS[^=]*=\s*\[(.*?)\]/su.exec(source);
+  if (list === null) return [];
+  return [...list[1].matchAll(/path\.join\(([^)]*)\)/gu)]
+    .map((entry) => relativePosix(root, path.join(applicationRoot, ...quoted(entry[1]))));
 }
