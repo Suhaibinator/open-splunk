@@ -382,6 +382,34 @@ not for skipping it. The `--z-dropdown` row ties five surfaces that are rarely
 open at once; the `--z-drawer-scrim` row ties backdrops that belong to
 different shells.
 
+**A bar's popover is not on `--z-dropdown` — the bar is.** "Every such popover
+is on `--z-dropdown`, above both" is true of the declaration and false of the
+render. `.suite-product-bar` is `position: sticky` with a `z-index`, which makes
+it a stacking context, so a `.suite-popover` or a `.floating-menu` inside it is
+painted at the bar's layer no matter what its own `z-index` says. Every dismiss
+scrim is a step above every bar by design, so the scrim covered every item of
+every open bar menu: the menus looked and read exactly as before, and no pointer
+could reach one. Keyboard navigation still worked, which is why nothing noticed.
+
+The fix is the move `.search-title-row:has(.floating-menu)` already makes one
+layer down — raise the ancestor, not the popover:
+
+```css
+.suite-product-bar:has(.floating-menu),
+.suite-product-bar:has(.suite-popover) {
+  z-index: var(--z-dropdown);
+}
+```
+
+The bar joins `--z-dropdown` only while it holds an open menu, so the ladder's
+"scrim above bar" ordering still holds at rest, and the raise covers the app bar
+overlapping the popover's top 34px as well. Both spellings are listed because
+the shell paints `.suite-popover` and the search workspace passes its own
+`.floating-menu` markup into the same bar slots.
+`integration/visual/chrome-invariants.visual.spec.ts` hit-tests every item of an
+open bar menu, on both spellings and at both viewports, so the next element that
+paints over a menu fails a test rather than shipping.
+
 ### Elevation
 
 | Token | Value | Replaces |
@@ -512,8 +540,8 @@ for layout only: `.run-button` (a 62px two-line block welded to the SPL editor,
 whose tone now comes from `--primary`/`--danger` rather than from its own
 `.cancel` class),
 `.time-range-button` (a 62px three-column grid), `.activity-filter-button` (a
-tab with an underline, not a button), `.product-menu-button`, `.user-button` and
-`.suite-user-button` (inverse ink on the two chrome bars), `.mobile-fields-button`
+tab with an underline, not a button),
+`.suite-user-button` (inverse ink on the product bar), `.mobile-fields-button`
 (a `display` toggle with no paint of its own), `.sampling-button`, `.row-overflow`
 and `.table-action`.
 
@@ -538,6 +566,18 @@ carries no tone of its own — the swatch inside it does — which is why
 is easy to get wrong by hand, and the wrong version still renders.
 `StatusIcon` in `app/_components/app-icon.tsx` reads the same vocabulary.
 
+**Not folded in: `.history-state`.** The search-history table still paints its
+outcome by tinting the label text (`.history-completed`, `.history-failed`,
+`.history-canceled`), which is the behaviour the "Job-card and inspector state"
+row below says was retired. The row is about the job cards, and those are
+migrated — including the four history cards in the Jobs dialog, whose call site
+outlived its rules for one commit. `.history-state` is a ninth spelling and a
+tenth surface; it is recorded here so the contradiction is a known debt rather
+than a doc that does not match the tree.
+`scripts/css-call-sites.test.mjs` now fails when a class the consolidation
+retired is still built into a `className`, in an attribute or through an
+interpolation, so a rule cannot be deleted out from under a call site again.
+
 ### `.badge`
 
 One non-interactive label chip: a pill of uppercase `--type-xs`, with tone the
@@ -548,7 +588,16 @@ its own colour already matches).
 **Replaces.** `.mode-pill`, `.role-pill`, `.severity-badge`, the two
 byte-identical `previewBadge` rules in `analytics.module.css` and
 `operations-dashboard.module.css`, `.readOnlyBadge`, `.liveBadge`/`.partialBadge`
-and `.availableBadge`/`.unavailableBadge`.
+and `.availableBadge`/`.unavailableBadge` — eight, which is the number the
+Badges banner in `app/globals.css` states.
+
+**Not folded in: `.demo-badge`.** It is a ninth chip and it is still its own
+implementation — a 21px pill with a `10px` radius rather than `--radius-pill`,
+its own border and padding, and an `i` swatch the primitive has no slot for. It
+shares its shell rule with `.unsaved-dot` and `.search-draft-hint`, which are
+not chips at all, so folding it needs those two untangled first. Recorded here
+rather than fixed because it is a fourth surface's worth of work, and an
+undocumented exception is how a primitive quietly acquires a tenth copy.
 
 ### Pixels this deliberately moved
 
@@ -575,6 +624,17 @@ row below is a decision, not a regression, and the visual baselines under
 | `.history-clear-button` edge | `#caa6a3` | the standard control edge | the destructive intent stays in the label ink |
 | `.run-button.cancel` edge | `#983832` | `--status-error-strong`, via `.button--danger` | the run button's two states are now the primitive's two tones |
 | Snapshot-bar buttons | `.live-jobs-snapshot button`, a bare descendant rule restating the primitive | `.button.button--compact` | one implementation; the accent ink stays as a one-line feature override |
+| Reports table status ink | `reports.module.css` `.status`/`.runStatus` set no colour and inherited the cell's `--fg-secondary` | `--fg-muted`, from `.status--label` | the status vocabulary owns the label ink; the outcome is carried by the swatch, not by the text being a shade darker than its neighbours |
+
+**Residual `button` debt.** 195 rules in `app/globals.css` still style a bare
+`button` as a descendant of a feature (`.search-actions > button`,
+`.pagination button`, and so on) rather than through `.button`. They are not
+copies of the primitive — most set only a height, a gap or an ink for a control
+that is already inside a laid-out row — but they are the surface a tenth button
+variant would grow from, and each one is a place a theme change has to be made
+twice. `.live-jobs-snapshot button` was the one that genuinely restated the
+primitive and is the row above; the rest are recorded here as debt rather than
+migrated, because reaching them means touching every feature block in the file.
 
 ## Consolidated primitives — tables, chrome and overlays
 
@@ -645,10 +705,25 @@ widths it has to beat (`.live-jobs-table td:first-child { width: 30% }`) and a
 module's own `min-width` are each one class, and a card that lost to either
 would keep a horizontal scroll bar or a 30%-wide first column.
 
-One card mode is deliberately left alone: `.mobileCardTable` in
-`app/activity/activity-console.module.css` lays its label out *beside* the value
-in a 72px column rather than above it, which is a different design and not a
-drifted copy of this one.
+The activity console's own card mode is gone with it. `.mobileCardTable` in
+`app/activity/activity-console.module.css` was a fifth complete card-table
+design — sixteen rules, one of them a byte-for-byte restatement of the
+seven-declaration visually-hidden `thead` rule above — laying its label *beside*
+the value in a 72px column rather than above it. It was briefly kept as "a
+different design rather than a drifted copy", but the same page renders
+`.table--cards` in backend mode from `backend-activity-console.tsx`, so the
+argument only established that one page had two answers to the question. The
+demo console now opts into `.table--cards` like its backend twin, and the module
+file is deleted. Its mobile baseline moved: labels sit above values in a
+two-column card, the search cell is the card's title and the action row spans
+the foot.
+
+The wrap around a card table is part of the same primitive:
+`.table-wrap:has(> .table--cards)` drops the scroll-hint gradient and the
+`overflow-x` clip, because a card table is exactly as wide as its wrap and has
+nothing to scroll to. That replaces `.live-jobs-table-wrap` and
+`.mobileCardTableWrap`, which each stated those two declarations for one page,
+and it reaches the two card tables that had neither.
 
 ### Product chrome
 
@@ -676,10 +751,28 @@ Deliberate visual changes on `/search/`:
   underline rather than a 3px green bar;
 * the app identity block is 190px wide with a 22px glyph rather than 222px with
   a 28px one;
-* below 760px the app switcher is hidden along with the app bar, as it already
-  was on every other page — the drawer names the app instead;
+* below 760px the app bar is hidden, as it already was on every other page. The
+  app switcher is **not**: hiding the shell's own switcher there is safe because
+  the drawer lists the same apps underneath it, and a page that supplies its own
+  switcher gets the drawer's single-app branch instead. Folding that page's
+  switcher away too would leave the one page that changes app in place with no
+  way to change app at all, which the shell's mobile rule reads as
+  `.suite-product-bar > .suite-catalog-anchor` so it names only the shell's own
+  anchor. The switcher keeps the pre-shell header's mobile width, `195px` and
+  `calc(100vw - 142px)` below 480px, with the app name ellipsised;
+* the drawer is the shell's, so its identity block reads `Local session` /
+  `Single-user backend mode` in backend mode where the page's own drawer always
+  read `Administrator` / `admin@localhost`; it gains the shell's help label and
+  rule above sign-out, and its two aria labels are the shell's
+  ("Mobile product navigation", "Close navigation"). `search-drawer.png` and
+  `product-drawer.png` pin the two drawers, because none of this is visible from
+  a screenshot of a page with the drawer closed;
 * the skip link reads "Skip to main content" rather than "Skip to search
-  workspace".
+  workspace";
+* Ctrl/⌘K focuses the page's own find input. The shell binds the shortcut and
+  the page replaces the shell's `utilities` slot, so the shell resolves the
+  field from the bar when its own slot is not rendered, rather than calling
+  `preventDefault()` and focusing nothing.
 
 ### Wordmark
 
@@ -756,8 +849,19 @@ shell means one height, and a route measuring differently is rendering a bar of
 its own again. And the moved `Modal` must still trap focus, still mark the bars
 behind it inert, still lock the page scroll, and still return focus to whatever
 opened it when Escape closes it; a dialog whose surface stopped being installed
-photographs exactly like one whose surface works. The spec takes no
-screenshots, so it adds no baselines, and it runs under both viewport projects.
+photographs exactly like one whose surface works. It also covers the two
+controls a screenshot of the bar cannot check: that a pointer reaches every item
+of an open bar menu — hit-tested rather than clicked, because a click that lands
+on a scrim closes the menu and would report a missing element instead of the
+covering one — and that `/search/` can still change app at the narrow viewport,
+where the shell folds its own switcher away. The spec takes no screenshots, so
+it adds no baselines, and it runs under both viewport projects.
+
+The drawers are the exception that needed a baseline rather than an invariant:
+`product-drawer.png` and `search-drawer.png` open the shell drawer at the narrow
+viewport, on a page that owns the app catalog and on the one that does not.
+Merging two drawers into one moved an identity block, a label and two aria
+labels, and nothing in the suite had ever opened one.
 
 ## Known debt in the token layer
 
@@ -818,8 +922,24 @@ on a channel and still pass, which is exactly what happened: the sweep changed
 colour on 41 of the 44 baselines and the suite stayed green. The config now sets
 `threshold: 0.02`, a tenth of the default, so a hue move of that size has to be
 recorded in the baselines instead of absorbed. `npm run test:visual:determinism`
-renders the export twice and reports all 44 screenshots byte-identical, which is
+renders the export twice and reports every screenshot byte-identical, which is
 what makes a tolerance that tight safe to run.
+
+**`maxDiffPixelRatio` is 0.** Tightening `threshold` fixed one half and left the
+other: 0.002 of a 1440x1583 page is a budget of 4,560 pixels, and Phase 3 spent
+it. Re-running the identical suite with only the pixel budget zeroed put
+seventeen baselines out of date — the reports table's whole status column
+(2,504 pixels), the home launcher's hero buttons and demo chip, the search empty
+state's compact action — all of them this phase's own deliberate restyles, on
+pages whose baselines still held one slice's pre-merge pixels. The suite was
+green, so "the baselines were updated intentionally" read as true. Nothing in
+the suite is sampled: the clock is fixed, animations are disabled, the device
+scale factor is 1, baselines are recorded per platform, and the determinism gate
+already asserts two captures of one build match exactly. A budget was therefore
+only ever a place for evidence to go missing, and no capture overrides the
+suite's terms any more: the sparkline fixture's `expectComponentScreenshot`
+loosened the budget to tighten a `threshold` the suite now sets itself, so it
+folds back into `expectRegionScreenshot`.
 
 Two checks carry the colour half that a screenshot still cannot:
 `scripts/css-token-sweep.test.mjs` compares the surviving literals against

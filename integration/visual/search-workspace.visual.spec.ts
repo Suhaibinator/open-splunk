@@ -1,6 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
 
 import {
+  awaitSettledSearchResults,
+  expectDocumentRegionScreenshot,
   expectPageScreenshot,
   expectRegionScreenshot,
   expectViewportScreenshot,
@@ -46,31 +48,13 @@ async function revealFieldsRail(page: Page): Promise<void> {
 /**
  * Opens the workspace and waits for the exact result state the baselines record.
  *
- * The event list appears before the job settles, so waiting only for it accepts
- * more than one page shape. Two of them differ by roughly 370 pixels of height:
- * above the phone breakpoint the first event is expanded over its EVENT FIELDS
- * panel, and at or below it a mount effect collapses that event along with the
- * fields rail. A run that hydrates with the phone layout in effect therefore
- * screenshots a much shorter desktop page and fails on a surface nobody
- * touched. Pinning the finished status and the expansion the viewport implies
- * turns that race into a wait, and into an honest failure if it never resolves.
+ * The wait itself lives in the harness because the determinism gate needs the
+ * same one: a capture taken before the workspace settles is a different page,
+ * not a different rendering.
  */
 async function openWorkspaceWithResults(page: Page): Promise<void> {
   await gotoVisualRoute(page, "/search/");
-  await expect(page.getByTestId("search-workspace")).toBeVisible();
-  await expect(page.getByTestId("event-list")).toBeVisible();
-
-  const strip = page.getByTestId("job-strip");
-  await expect(strip).toContainText("Completed");
-  await expect(strip).toContainText("100%");
-
-  // The same query the workspace itself uses to decide the phone layout.
-  const phoneLayout = await page.evaluate(() => globalThis.matchMedia("(max-width: 760px)").matches);
-  const firstEvent = page.locator(".event-row").first();
-  if (phoneLayout) await expect(firstEvent).not.toHaveClass(/\bexpanded\b/u);
-  else await expect(firstEvent).toHaveClass(/\bexpanded\b/u);
-
-  await settleVisualPage(page);
+  await awaitSettledSearchResults(page);
 }
 
 test.describe("search workspace", () => {
@@ -87,7 +71,7 @@ test.describe("search workspace", () => {
   test("fields sidebar", async ({ page }) => {
     await openWorkspaceWithResults(page);
     await revealFieldsRail(page);
-    await expectRegionScreenshot(page.getByTestId("fields-rail"), "search-fields-rail");
+    await expectDocumentRegionScreenshot(page.getByTestId("fields-rail"), "search-fields-rail");
   });
 
   test("statistics table", async ({ page }) => {
@@ -113,6 +97,19 @@ test.describe("search workspace", () => {
     await expect(page.getByTestId("export-dialog")).toBeVisible();
     await settleVisualPage(page);
     await expectViewportScreenshot(page, "search-export-dialog");
+  });
+
+  test("navigation drawer", async ({ page, viewport }) => {
+    // The workspace supplies its own app switcher, so it gets the shell
+    // drawer's single-app branch rather than the per-app list every other page
+    // offers. That is the one drawer in the product whose app section differs,
+    // and it is the surface the header merge was most likely to get wrong.
+    test.skip((viewport?.width ?? 0) > 760, "the drawer trigger only exists below the compact breakpoint");
+    await gotoVisualRoute(page, "/search/");
+    await page.locator("button.drawer-trigger").click();
+    await expect(page.locator("dialog.drawer")).toBeVisible();
+    await settleVisualPage(page);
+    await expectViewportScreenshot(page, "search-drawer");
   });
 
   test("empty state", async ({ page }) => {

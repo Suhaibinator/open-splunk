@@ -509,16 +509,20 @@ test("activity layouts preserve capability tabs and mobile job metadata", () => 
     path.join(process.cwd(), "app", "activity", "activity-console.tsx"),
     "utf8",
   );
-  const responsiveStyles = readFileSync(
-    path.join(process.cwd(), "app", "activity", "activity-console.module.css"),
-    "utf8",
-  );
+  const cardMode = readFileSync(path.join(process.cwd(), "app", "globals.css"), "utf8");
   assert.match(backendSource, /data-tab-count=\{availableViews\.length\}/u);
   for (const label of ["Search", "Status", "Owner", "Runtime", "Events", "Started", "Actions"]) {
     assert.match(demoSource, new RegExp(`data-label="${label}"`, "u"));
   }
-  assert.match(responsiveStyles, /content:\s*attr\(data-label\)/u);
-  assert.match(responsiveStyles, /td:nth-child\(n \+ 3\)[^{]*\{[^}]*display:\s*grid/su);
+  // The demo console used to carry a card mode of its own in
+  // `activity-console.module.css`; it now opts into the one `.table--cards`
+  // implementation the backend console beside it already used. The two details
+  // this table depends on are that a labelled cell prints its column name, and
+  // that the mode still outranks a per-column desktop width -- which it does by
+  // doubling its own class and matching `:nth-child(n)`.
+  assert.match(demoSource, /className="table table--cards activity-table"/u);
+  assert.match(cardMode, /\.table--cards td\[data-label\]::before,[\s\S]*?content:\s*attr\(data-label\)/u);
+  assert.match(cardMode, /\.table--cards\.table--cards td:nth-child\(n\)[^{]*\{[^}]*display:\s*flex/su);
   // The `.live-jobs-table` desktop-cell and mobile-card contracts in
   // app/globals.css are asserted against computed style in
   // integration/visual/css-contracts.spec.ts.

@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 import { statsSparklineSegments } from "../../app/search-workspace/statistics-sparkline";
 
 import { addApplicationStyles } from "./application-stylesheets";
-import { expectComponentScreenshot, settleVisualPage } from "./visual-harness";
+import { expectRegionScreenshot, settleVisualPage } from "./visual-harness";
 
 /**
  * Appearance of surfaces `app/globals.css` styles that no exported page reaches.
@@ -54,5 +54,11 @@ test("the statistics sparkline renders its stroke, caps, and gaps", async ({ pag
   const sparkline = page.locator(".statistics-sparkline");
   await expect(sparkline).toBeVisible();
   await settleVisualPage(page);
-  await expectComponentScreenshot(sparkline, "statistics-sparkline");
+  // A text-free fixture pins its colour as well as its shape. It used to need
+  // its own tolerances for that, against a suite running on Playwright's
+  // per-pixel default -- a YIQ distance loose enough to call two different
+  // blues equal, and a recolor is what a token cleanup is most likely to get
+  // wrong. The suite's own `threshold` and its zero pixel budget are both
+  // stricter than those overrides were, so the fixture takes the suite's terms.
+  await expectRegionScreenshot(sparkline, "statistics-sparkline");
 });

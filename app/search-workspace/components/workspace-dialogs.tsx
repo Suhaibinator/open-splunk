@@ -25,7 +25,7 @@ import type {
   TargetedDialogActionState,
   TimeRange,
 } from "../model";
-import { phaseLabel, stateTone } from "../workspace-utils";
+import { historyPhase, phaseLabel, stateTone } from "../workspace-utils";
 import { AppIcon } from "../../_components/app-icon";
 import { StatusLabel } from "../../_components/status";
 
@@ -836,7 +836,7 @@ export function WorkspaceDialogs({
         <div className="jobs-list" data-testid="jobs-dialog">
           {jobCancelState.status === "error" ? <p className={styles.actionError} role="alert">{jobCancelState.error}</p> : null}
           <article className="job-card active-job-card" aria-busy={cancelPending}><StatusLabel tone={stateTone(phase)}>{phaseLabel(phase)}</StatusLabel><code>{submittedQuery.replaceAll("\n", " ")}</code><div className="job-card-stats"><span>{resultCountPrefix}{NUMBER_FORMAT.format(visibleEventCount)} {resultCountLabel}</span><span>{scannedBytes} {dataMetricLabel.toLowerCase()}</span><span>{elapsed}</span></div>{isRunning ? <button className="button button--danger button--compact" type="button" aria-busy={cancelPending} disabled={cancelPending} onClick={onCancelSearch}>{cancelPending ? "Canceling…" : "Cancel"}</button> : null}</article>
-          {history.slice(0, 4).map((entry) => <article className="job-card" key={entry.id}><div className={`job-card-state history-${entry.state.toLowerCase()}`}><span />{entry.state}</div><code>{entry.query}</code><div className="job-card-stats"><span>{formatHistoryResultCount(entry)} results</span><span>{entry.duration}</span><span>{entry.ranAt}</span></div></article>)}
+          {history.slice(0, 4).map((entry) => <article className="job-card" key={entry.id}><StatusLabel tone={stateTone(historyPhase(entry.state))}>{entry.state}</StatusLabel><code>{entry.query}</code><div className="job-card-stats"><span>{formatHistoryResultCount(entry)} results</span><span>{entry.duration}</span><span>{entry.ranAt}</span></div></article>)}
         </div>
       </Modal>
     );

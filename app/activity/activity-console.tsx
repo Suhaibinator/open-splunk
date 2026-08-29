@@ -10,7 +10,6 @@ import { AppIcon } from "../_components/app-icon";
 import { StatusDot, StatusLabel } from "../_components/status";
 import { PageHeading } from "../_components/product-shell";
 import { BackendActivityConsole } from "./backend-activity-console";
-import styles from "./activity-console.module.css";
 
 type ActivityFilter = "all" | "running" | "completed" | "failed";
 
@@ -63,8 +62,8 @@ function DemoActivityConsole() {
           <div className="activity-filter-group" aria-label="Job status filter">{(["all", "running", "completed", "failed"] as const).map((item) => <button className={`activity-filter-button${filter === item ? " active" : ""}`} aria-pressed={filter === item} type="button" onClick={() => setFilter(item)} key={item}>{item[0].toUpperCase() + item.slice(1)}{item === "running" ? <span>1</span> : null}</button>)}</div>
           <label><span className="sr-only">Filter activity</span><i aria-hidden="true"><AppIcon name="search" size="sm" /></i><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter SPL or job ID" /></label>
         </header>
-        <div className={`table-wrap ${styles.mobileCardTableWrap}`}>
-          <table className={`table activity-table ${styles.mobileCardTable}`}>
+        <div className="table-wrap">
+          <table className="table table--cards activity-table">
             <thead><tr><th scope="col">Search</th><th scope="col">Status</th><th scope="col">Owner</th><th scope="col">Runtime</th><th scope="col">Events</th><th scope="col">Started</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
             <tbody>
               {filtered.map((job) => (

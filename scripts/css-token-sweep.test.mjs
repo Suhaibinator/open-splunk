@@ -19,7 +19,7 @@
 // written to stay failing. A test that documents a defect is worth more than a
 // test that has been shaped around it.
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import test from "node:test";
@@ -88,6 +88,24 @@ async function readLedger() {
   return JSON.parse(await readFile(ledgerPath, "utf8"));
 }
 
+/**
+ * Every CSS module under `app/`, found by walking the tree rather than by
+ * naming them.
+ *
+ * The point of the assertion below is that the sweep misses none of them, and a
+ * count would answer a different question: it stays green when a module is
+ * added and another deleted in the same change, and it goes red -- for no
+ * reason a reader can act on -- when a module is folded into a primitive, which
+ * is the direction this codebase is deliberately moving in.
+ */
+async function listCssModules() {
+  const entries = await readdir(path.join(workspace, "app"), { recursive: true, withFileTypes: true });
+  return entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".module.css"))
+    .map((entry) => relativePosix(workspace, path.join(entry.parentPath, entry.name)))
+    .toSorted();
+}
+
 test("the sweep reaches every stylesheet outside the token layer", async () => {
   const audited = (await listApplicationStylesheets(workspace))
     .map((file) => relativePosix(workspace, file))
@@ -96,10 +114,12 @@ test("the sweep reaches every stylesheet outside the token layer", async () => {
     audited.includes("app/globals.css"),
     "the sweep no longer reaches app/globals.css, so every invariant below is vacuous",
   );
-  assert.equal(
-    audited.filter((file) => file.endsWith(".module.css")).length,
-    6,
-    `the sweep found ${audited.length} stylesheets and should see all six CSS modules: ${audited.join(", ")}`,
+  const modules = await listCssModules();
+  assert.ok(modules.length > 0, "no CSS module was found under app/, so the comparison below is vacuous");
+  assert.deepEqual(
+    audited.filter((file) => file.endsWith(".module.css")),
+    modules,
+    `the sweep found ${audited.length} stylesheets and must see every CSS module under app/: ${audited.join(", ")}`,
   );
   assert.ok(
     !audited.some((file) => file.startsWith("app/styles/tokens-")),

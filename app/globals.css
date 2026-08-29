@@ -346,19 +346,6 @@ pre {
   padding: 0 var(--space-1);
 }
 
-.user-summary > span {
-  align-items: center;
-  background: var(--accent);
-  border-radius: 50%;
-  color: var(--chrome-fg);
-  display: inline-flex;
-  font-size: var(--type-xxs);
-  font-weight: 700;
-  height: 18px;
-  justify-content: center;
-  width: 18px;
-}
-
 .header-menu-wrap {
   height: 100%;
   position: relative;
@@ -481,8 +468,16 @@ pre {
 }
 
 .user-summary > span {
+  align-items: center;
+  background: var(--accent);
+  border-radius: 50%;
+  color: var(--chrome-fg);
+  display: inline-flex;
+  font-size: var(--type-xxs);
+  font-weight: 700;
   grid-row: 1 / 3;
   height: 28px;
+  justify-content: center;
   width: 28px;
 }
 
@@ -864,8 +859,16 @@ pre {
 }
 
 .time-range-button {
+  align-items: center;
+  background: var(--bg-raised);
   border: 1px solid var(--border-strong);
+  border-left: 0;
+  display: grid;
+  gap: var(--space-2);
+  grid-template-columns: 20px 1fr 12px;
   height: 62px;
+  padding: 0 var(--space-3);
+  text-align: left;
 }
 
 .time-picker-wrap {
@@ -875,17 +878,6 @@ pre {
 
 .time-picker-wrap > .time-range-button {
   width: 100%;
-}
-
-.time-range-button {
-  align-items: center;
-  background: var(--bg-raised);
-  border-left: 0;
-  display: grid;
-  gap: var(--space-2);
-  grid-template-columns: 20px 1fr 12px;
-  padding: 0 var(--space-3);
-  text-align: left;
 }
 
 .time-range-button:hover {
@@ -4120,6 +4112,21 @@ pre {
   z-index: var(--z-bar);
 }
 
+/*
+ * A sticky bar with a z-index is a stacking context, so a menu inside it is
+ * trapped at the bar's layer however high the menu's own z-index climbs -- and
+ * the dismiss scrim and the app bar, both painted later at or above --z-bar,
+ * then cover every item of an open menu while it still looks clickable. Raise
+ * the bar itself for as long as it holds a menu, which is the move
+ * `.search-title-row:has(.floating-menu)` already makes one layer down.
+ * `.suite-popover` is the shell's own menu; `.floating-menu` is the one the
+ * search workspace passes into the bar's slots.
+ */
+.suite-product-bar:has(.floating-menu),
+.suite-product-bar:has(.suite-popover) {
+  z-index: var(--z-dropdown);
+}
+
 .suite-menu-anchor {
   position: relative;
 }
@@ -4635,9 +4642,10 @@ pre {
 .system-notice > a { color: var(--fg-link); font-size: var(--type-xs); font-weight: 600; text-decoration: none; }
 
 /* Badges
-   One non-interactive label chip, replacing the seven near-copies the product
-   grew (a mode pill, two byte-identical `previewBadge` module rules, a
-   read-only pill, live/partial chips, a capability chip and a severity chip).
+   One non-interactive label chip, replacing the eight near-copies the product
+   grew (a mode pill, a role pill, a severity chip, two byte-identical
+   `previewBadge` module rules, a read-only pill, live/partial chips and
+   available/unavailable chips) -- the same eight docs/theming.md lists.
    The shape is fixed -- a pill of uppercase `--type-xs` -- and only the tone
    varies, so a chip's colour is the only decision a caller makes. `--outline`
    is the one shape modifier, for a chip that has to read as a chip on a surface
@@ -6727,6 +6735,13 @@ button.knowledge-manager__row:hover { background: var(--bg-canvas); }
   .table--cards.table--cards td[data-label]:first-child { border-bottom: 1px solid var(--border-subtle); padding-bottom: 10px; }
   .table--cards.table--cards td[data-label]:last-child { border-top: 1px solid var(--border-subtle); padding-top: 10px; }
 
+  /* A card table is as wide as its wrap, so the wrap drops the scroll-hint
+     gradient and the clip it hints at. Keying this off the table rather than
+     off a per-page wrapper class is what lets one rule cover every card table;
+     it replaces `.live-jobs-table-wrap` and `.mobileCardTableWrap`, which each
+     stated the same two declarations for one page. */
+  .table-wrap:has(> .table--cards) { background: none; overflow: visible; }
+
   .suite-product-bar {
     height: calc(45px + env(safe-area-inset-top));
     padding-top: env(safe-area-inset-top);
@@ -6745,10 +6760,23 @@ button.knowledge-manager__row:hover { background: var(--bg-canvas); }
     width: 44px;
   }
   .drawer-trigger span { background: var(--chrome-fg); display: block; height: 1px; width: 17px; }
-  .suite-product-bar > .suite-menu-anchor,
+  /*
+   * Only the shell's OWN catalog anchor folds away here, because the drawer
+   * lists the same apps underneath it. A page that supplies its own switcher
+   * switches apps in place and gets the drawer's one-app branch instead, so
+   * hiding its anchor too would leave that page unable to change app at all
+   * below 760px -- the control the pre-shell header kept visible.
+   */
+  .suite-product-bar > .suite-catalog-anchor,
   .suite-utilities > a,
   .suite-utilities > button,
   .suite-utilities > .suite-menu-anchor:not(:last-child) { display: none; }
+  .suite-product-bar > .suite-menu-anchor > .suite-app-switcher { max-width: 195px; }
+  .suite-product-bar > .suite-menu-anchor > .suite-app-switcher > strong {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   .suite-utilities { margin-left: auto; }
   .suite-user-button { height: 45px !important; padding: 0 13px !important; }
   .suite-user-button > span { height: 24px; width: 24px; }
@@ -6955,7 +6983,6 @@ button.knowledge-manager__row:hover { background: var(--bg-canvas); }
   .live-jobs-app-filter { height: 44px; min-width: 0; width: 100%; }
   .live-jobs-text-filter input,
   .live-jobs-app-filter select { font-size: var(--type-xl); height: 42px; width: 100%; }
-  .live-jobs-table-wrap { background: none; overflow: visible; }
   .live-jobs-table td:nth-child(2),
   .backend-history-table td:nth-child(2) { grid-column: 1 / -1; }
   .live-job-spl { max-width: 100%; white-space: normal; }
@@ -7097,6 +7124,7 @@ button.knowledge-manager__row:hover { background: var(--bg-canvas); }
 }
 
 @media (max-width: 480px) {
+  .suite-product-bar > .suite-menu-anchor > .suite-app-switcher { max-width: calc(100vw - 142px); }
   .suite-page-heading h1,
   .dashboard-title-row h1,
   .home-hero h1 { font-size: 21px; }

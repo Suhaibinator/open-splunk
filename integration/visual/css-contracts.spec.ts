@@ -333,7 +333,7 @@ test("the statistics sparkline paints with the palette accent", async ({ page })
 });
 
 const liveJobsMarkup = `
-<div class="table-wrap live-jobs-table-wrap">
+<div class="table-wrap">
   <table class="table table--cards live-jobs-table">
     <thead>
       <tr>
@@ -395,8 +395,10 @@ test.describe("activity job table contracts", () => {
     expect(third).toBeCloseTo(fourth, 0);
     expect(third / rowWidth).toBeLessThan(0.6);
 
-    // The wrapper stops scrolling horizontally once rows become cards.
-    await expect(page.locator(".live-jobs-table-wrap")).toHaveCSS("overflow-x", "visible");
+    // The wrapper stops scrolling horizontally once rows become cards. The rule
+    // is keyed off the table -- `.table-wrap:has(> .table--cards)` -- rather
+    // than off a per-page wrapper class, so it reaches every card table.
+    await expect(page.locator(".table-wrap")).toHaveCSS("overflow-x", "visible");
   });
 });
 

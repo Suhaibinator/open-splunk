@@ -20,9 +20,21 @@ import {
  * Phase 2 token sweep moved colour by up to 55 units on a channel across most
  * of every page and the suite stayed green, so "62 of 62 passed" was read as
  * evidence about colour when it was only evidence about layout. The threshold
- * below is tight enough that a hue move of that size fails, while
- * `maxDiffPixelRatio` still absorbs sub-pixel antialiasing on the fraction of
- * pixels where two machines disagree.
+ * below is tight enough that a hue move of that size fails.
+ *
+ * It also used to carry `maxDiffPixelRatio: 0.002`, described as absorbing
+ * sub-pixel antialiasing. On a 1440x1583 page that is a budget of 4,560 pixels,
+ * and Phase 3 spent it: seventeen baselines went stale for that phase's own
+ * deliberate restyles -- a 2,504-pixel repaint of a whole status column among
+ * them -- and the suite stayed green, so "84 of 84 passed" was again read as
+ * evidence the baselines were current. The budget is 0 now. Nothing here is
+ * sampled: the clock is fixed, animations are disabled, the device scale factor
+ * is 1 and the baselines are recorded per platform, and
+ * `npm run test:visual:determinism` already asserts two captures of one build
+ * match exactly. A baseline that no longer matches is therefore a change to
+ * record, not noise to absorb. No capture in the suite overrides these terms
+ * either: the sparkline fixture used to, against the looser suite this
+ * replaced, and its comment records why it no longer needs to.
  */
 
 export default defineConfig({
@@ -30,8 +42,8 @@ export default defineConfig({
     toHaveScreenshot: {
       animations: "disabled",
       caret: "hide",
-      // Small but nonzero: absorbs sub-pixel antialiasing, not layout movement.
-      maxDiffPixelRatio: 0.002,
+      // Zero: a baseline either matches this build or is out of date.
+      maxDiffPixelRatio: 0,
       scale: "css",
       // A tenth of Playwright's default, so a token substitution that moves a
       // hue has to be recorded in the baselines rather than absorbed here.

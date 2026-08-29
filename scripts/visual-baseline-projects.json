@@ -1,0 +1,7 @@
+{
+  "//": "Screenshots that only some of the visual suite's viewport projects record, and why. Every other screenshot must have a baseline under every project: one that is missing was never committed, and only fails on the machine that runs the suite. These are the exceptions -- a surface that does not exist at the other viewport at all, so a baseline there would either be a duplicate of this one or a picture of the surface not being there. scripts/safety-net.test.mjs reads this file, holds every unlisted screenshot to every project, and fails when an entry names a project that does not exist or a screenshot no spec pins any more.",
+  "projects": {
+    "product-drawer": ["mobile"],
+    "search-drawer": ["mobile"]
+  }
+}

@@ -31,6 +31,20 @@ const SHELL_ROUTES = [
   "/admin/",
 ];
 
+/**
+ * A route that paints menus into the product bar, and the selector the open one
+ * renders as.
+ *
+ * The shell's own menus are `.suite-popover`; the search workspace passes its
+ * `.floating-menu` markup into the same bar slots, so the two spellings share a
+ * stacking context and have to be checked separately -- a fix that clears one
+ * scrim does not necessarily clear the other.
+ */
+const BAR_MENU_ROUTES = [
+  { popoverSelector: ".suite-popover", route: "/reports/" },
+  { popoverSelector: ".suite-product-bar .floating-menu", route: "/search/" },
+];
+
 interface ChromeMeasurement {
   appBarHeight: number;
   mainTop: number;
@@ -145,25 +159,46 @@ test.describe("product chrome", () => {
     });
   }
 
-  test("every item of an open bar menu can be clicked", async ({ page }) => {
-    // The product bar is `position: sticky` with a z-index, so it is a stacking
-    // context and the popover inside it cannot rise above the bar's own layer,
-    // however high the popover's own z-index is. Anything painted later at a
-    // higher layer -- the dismiss scrim, the app bar -- then sits on top of an
-    // open menu, and every menu item stops responding to the pointer while
-    // still looking, and reading, exactly as before.
-    await gotoVisualRoute(page, "/reports/");
-    const trigger = page.locator(".suite-product-bar .suite-menu-anchor > button").filter({ visible: true }).first();
-    await trigger.click();
-    const popover = page.locator(".suite-popover");
+  for (const { popoverSelector, route } of BAR_MENU_ROUTES) {
+    test(`every item of an open bar menu can be clicked on ${route}`, async ({ page }) => {
+      // The product bar is `position: sticky` with a z-index, so it is a stacking
+      // context and the popover inside it cannot rise above the bar's own layer,
+      // however high the popover's own z-index is. Anything painted later at a
+      // higher layer -- the dismiss scrim, the app bar -- then sits on top of an
+      // open menu, and every menu item stops responding to the pointer while
+      // still looking, and reading, exactly as before.
+      await gotoVisualRoute(page, route);
+      const trigger = page.locator(".suite-product-bar .suite-menu-anchor > button").filter({ visible: true }).first();
+      await trigger.click();
+      const popover = page.locator(popoverSelector);
+      await expect(popover).toBeVisible();
+      await settleVisualPage(page);
+      const targets = await menuItemHitTargets(popover);
+      expect(targets.length, "the open menu has no items to click").toBeGreaterThan(0);
+      expect(
+        targets.filter((target) => target !== "itself"),
+        "a pointer must reach every item of an open menu",
+      ).toEqual([]);
+    });
+  }
+
+  test("/search/ can change app at every viewport", async ({ page }) => {
+    // The shell folds its OWN app switcher away below 760px because the drawer
+    // lists the same apps underneath it. A page that supplies a switcher owns
+    // the catalog, so it gets the drawer's single-app branch instead -- folding
+    // its switcher away too would leave the one page that switches apps in
+    // place with no way to switch at all. That is a control, not a pixel, and
+    // no screenshot of a bar can see it missing.
+    await gotoVisualRoute(page, "/search/");
+    const switcher = page.locator(".suite-product-bar .suite-app-switcher");
+    await expect(switcher).toBeVisible();
+    await switcher.click();
+    const popover = page.locator(".suite-product-bar .floating-menu");
     await expect(popover).toBeVisible();
-    await settleVisualPage(page);
-    const targets = await menuItemHitTargets(popover);
-    expect(targets.length, "the open menu has no items to click").toBeGreaterThan(0);
     expect(
-      targets.filter((target) => target !== "itself"),
-      "a pointer must reach every item of an open menu",
-    ).toEqual([]);
+      await popover.getByRole("menuitem").count(),
+      "the app switcher offers nothing to switch to",
+    ).toBeGreaterThan(1);
   });
 });
 

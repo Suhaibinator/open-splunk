@@ -25,6 +25,7 @@ const runnerPath = path.join(workspace, "scripts", "test-frontend.mjs");
 const visualConfigPath = path.join(workspace, "playwright.visual.config.ts");
 const serversPath = path.join(workspace, "integration", "visual", "visual-servers.ts");
 const baselineRoot = path.join(workspace, "integration", "visual", "__screenshots__");
+const baselineProjectsPath = path.join(workspace, "scripts", "visual-baseline-projects.json");
 
 /** Paths `scripts/test-frontend.mjs` names, in the two shapes it uses. */
 function registeredTestPaths(runner) {
@@ -73,7 +74,7 @@ test("the runner list names no test file that has been deleted", async () => {
   );
 });
 
-test("every visual screenshot has a baseline in every project, and none is orphaned", async () => {
+test("every visual screenshot has a baseline in every project that records it, and none is orphaned", async () => {
   const specs = (await listRepositoryFiles(workspace)).filter((file) => file.endsWith(".visual.spec.ts"));
   assert.ok(specs.length > 0, "no *.visual.spec.ts files were found; the visual suite is not being scanned");
   const specSources = await Promise.all(specs.map((spec) => readFile(spec, "utf8")));
@@ -98,7 +99,26 @@ test("every visual screenshot has a baseline in every project, and none is orpha
     platform,
     project,
   })));
+  // A handful of captures exist at one viewport only -- the mobile drawer is
+  // the whole product navigation below 760px and simply is not rendered above
+  // it -- so "every screenshot in every project" is the rule with a recorded
+  // set of exceptions rather than the rule alone. The record is held to the
+  // same standard as the baselines: an entry naming a project that does not
+  // exist, or a screenshot no spec pins any more, fails here.
+  const scopes = JSON.parse(await readFile(baselineProjectsPath, "utf8")).projects;
+  const record = relativePosix(workspace, baselineProjectsPath);
   const problems = [];
+  for (const [name, allowed] of Object.entries(scopes)) {
+    if (!expected.has(name)) problems.push(`${record} scopes "${name}", which no spec pins`);
+    if (allowed.length === 0) problems.push(`${record} scopes "${name}" to no project at all`);
+    for (const project of allowed) {
+      if (!projects.includes(project)) {
+        problems.push(`${record} scopes "${name}" to "${project}", which is not a project`);
+      }
+    }
+  }
+  const recordsIn = (name, project) => (scopes[name] ?? projects).includes(project);
+
   for (const { files, platform, project } of listings) {
     if (files === null) {
       problems.push(`${platform}/${project}: no baselines are committed for this project`);
@@ -106,7 +126,12 @@ test("every visual screenshot has a baseline in every project, and none is orpha
     }
     const recorded = new Set(files.filter((file) => file.endsWith(".png")).map((file) => file.slice(0, -4)));
     for (const name of [...expected].toSorted()) {
-      if (!recorded.has(name)) problems.push(`${platform}/${project}/${name}.png: a spec pins it, but it is missing`);
+      if (recordsIn(name, project) && !recorded.has(name)) {
+        problems.push(`${platform}/${project}/${name}.png: a spec pins it, but it is missing`);
+      }
+      if (!recordsIn(name, project) && recorded.has(name)) {
+        problems.push(`${platform}/${project}/${name}.png: it is scoped away from this project, but a baseline is committed`);
+      }
     }
     for (const name of [...recorded].toSorted()) {
       if (!expected.has(name)) problems.push(`${platform}/${project}/${name}.png: no spec pins it any more`);

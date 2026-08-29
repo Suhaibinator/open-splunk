@@ -514,7 +514,7 @@ export function BackendLiveJobs({ apiBaseUrl }: BackendLiveJobsProps) {
                 action={filteredDescription.length > 0 ? <button type="button" onClick={() => { setFilter("all"); setAppId(""); setQuery(""); setTextFilter(""); }}>Clear filters</button> : undefined}
               />
             ) : jobs.length > 0 ? (
-              <div className="table-wrap live-jobs-table-wrap" aria-busy={refreshing}>
+              <div className="table-wrap" aria-busy={refreshing}>
                 <table className="table table--cards live-jobs-table">
                   <caption className="sr-only">Retained transient search jobs</caption>
                   <thead><tr><th scope="col">Search</th><th scope="col">Context</th><th scope="col">State</th><th scope="col">Progress</th><th scope="col">Rows / bytes</th><th scope="col">Created</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>

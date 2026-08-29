@@ -54,6 +54,20 @@ test.describe("product pages", () => {
     await expectViewportScreenshot(page, "admin-index-dialog");
   });
 
+  test("mobile navigation drawer", async ({ page, viewport }) => {
+    // Below 760px the drawer *is* the product navigation, and this phase merged
+    // the search workspace's own drawer into this one -- moving its identity
+    // block, adding a section label and a rule, and renaming two aria labels.
+    // Nothing else in the suite opens it, so every one of those changes was
+    // invisible to every gate the phase ran.
+    test.skip((viewport?.width ?? 0) > 760, "the drawer trigger only exists below the compact breakpoint");
+    await gotoVisualRoute(page, "/reports/");
+    await page.locator("button.drawer-trigger").click();
+    await expect(page.locator("dialog.drawer")).toBeVisible();
+    await settleVisualPage(page);
+    await expectViewportScreenshot(page, "product-drawer");
+  });
+
   test("activity console", async ({ page }) => {
     await gotoVisualRoute(page, "/activity/");
     await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();

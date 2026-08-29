@@ -1,7 +1,7 @@
 import type { PointerEvent, ReactNode } from "react";
 
 import { SearchJobState } from "@/gen/ts/open_splunk/search";
-import { DEMO_EVENTS, type DemoEvent, type DemoScalar } from "@/lib/demo/search-data";
+import { DEMO_EVENTS, type DemoEvent, type DemoHistoryEntry, type DemoScalar } from "@/lib/demo/search-data";
 import {
   isSplOffsetInQuotedValue,
   isSupportedSplPipelineCommand,
@@ -283,6 +283,22 @@ export function phaseLabel(phase: JobPhase): string {
     case "failed": return "Failed";
     case "canceled": return "Canceled";
     case "expired": return "Expired";
+  }
+}
+
+/**
+ * The recorded outcome of a finished search, as the one job vocabulary spells it.
+ *
+ * Search history stores its state capitalised for display; routing it through
+ * `JobPhase` keeps the job card and the running job reading their tone from the
+ * same table instead of growing a second colour map for the same four words.
+ */
+export function historyPhase(state: DemoHistoryEntry["state"]): JobPhase {
+  switch (state) {
+    case "Canceled": return "canceled";
+    case "Completed": return "completed";
+    case "Expired": return "expired";
+    case "Failed": return "failed";
   }
 }
 

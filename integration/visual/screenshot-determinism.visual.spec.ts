@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { gotoVisualRoute, settleVisualPage } from "./visual-harness";
+import { awaitSettledSearchResults, gotoVisualRoute, settleVisualPage } from "./visual-harness";
 
 /**
  * Proof that the visual baselines describe a fixed rendering.
@@ -131,9 +131,10 @@ test.describe("visual determinism", () => {
   });
 
   test("search workspace with demo results", async ({ page }) => {
-    await expectRouteIsDeterministic(page, "/search/", async (workspace) => {
-      await expect(workspace.getByTestId("event-list")).toBeVisible();
-    });
+    // Waiting for the event list alone accepts two page shapes 370 pixels
+    // apart, which the comparison below reports as the route painting two
+    // different sizes. The baselines wait for the settled state; so must this.
+    await expectRouteIsDeterministic(page, "/search/", awaitSettledSearchResults);
   });
 
   test("analytics charts", async ({ page }) => {

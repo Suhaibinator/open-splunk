@@ -12,6 +12,7 @@
     "icon-button": ".button .button--icon",
     "job-card-state": ".status .status--label with a tone modifier, through StatusLabel",
     "job-state-icon": ".status .status--icon with a tone modifier, through StatusIcon",
+    "live-jobs-table-wrap": ".table-wrap:has(> .table--cards), which drops the scroll hint for every card table",
     "mini-status": ".status .status--dot with a tone modifier, through StatusDot",
     "mode-pill": ".badge",
     "mode-pill--backend": ".badge .badge--info",

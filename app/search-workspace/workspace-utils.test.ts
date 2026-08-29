@@ -4,7 +4,7 @@ import { isValidElement, type ReactNode } from "react";
 
 import { SPL_PIPELINE_COMMANDS } from "@/lib/search/spl-syntax";
 
-import { eventFieldValueWhiteSpace, syntaxTokens } from "./workspace-utils";
+import { eventFieldValueWhiteSpace, historyPhase, stateTone, syntaxTokens } from "./workspace-utils";
 
 interface SyntaxTokenProps {
   children?: ReactNode;
@@ -426,4 +426,21 @@ test("count eval predicates highlight nested fields and operators", () => {
     ["IN", "/", ">", "=="],
   );
   assert.equal(tokens.map((token) => token.text).join(""), query);
+});
+
+test("a recorded history outcome reads its tone from the one job vocabulary", () => {
+  // The Jobs dialog paints the running job and the four cards beside it from
+  // the same table. When they were two tables, one of them was migrated to
+  // `StatusLabel` and the other kept asking for a class whose rules had been
+  // deleted -- rendering four cards with no layout and an invisible swatch,
+  // which no baseline opens and no CSS-to-markup check can see.
+  assert.equal(historyPhase("Completed"), "completed");
+  assert.equal(historyPhase("Failed"), "failed");
+  assert.equal(historyPhase("Canceled"), "canceled");
+  assert.equal(historyPhase("Expired"), "expired");
+
+  assert.equal(stateTone(historyPhase("Completed")), "success");
+  assert.equal(stateTone(historyPhase("Failed")), "error");
+  assert.equal(stateTone(historyPhase("Canceled")), "neutral");
+  assert.equal(stateTone(historyPhase("Expired")), "neutral");
 });

@@ -35,7 +35,9 @@ interface ProductShellProps {
    * Replaces the built-in app switcher, for a page that switches apps in place
    * rather than by navigating. Supplying it also means the caller owns the app
    * catalog, so the shell makes no bootstrap request of its own and the drawer
-   * offers the single app named by `appName`.
+   * offers the single app named by `appName` -- which is why a supplied
+   * switcher, unlike the built-in one, stays on the bar below 760px: the drawer
+   * has no app list to switch with in its place.
    */
   appSwitcher?: ReactNode;
   /** Replaces the built-in utilities nav, for a page with its own menus. */
@@ -196,10 +198,16 @@ export function ProductShell({
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        findRef.current?.focus();
-      }
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "k") return;
+      // A page that supplies its own `utilities` brings its own find input, so
+      // the field is resolved from the bar when the built-in slot's ref is
+      // empty. Without that, the shell would swallow the browser's own Ctrl/⌘K
+      // on exactly the pages whose input it cannot reach and focus nothing.
+      const find = findRef.current
+        ?? document.querySelector<HTMLInputElement>(".suite-product-bar .suite-find input");
+      if (find === null) return;
+      event.preventDefault();
+      find.focus();
     }
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
@@ -314,7 +322,7 @@ export function ProductShell({
           <span /><span /><span />
         </button>
         <Wordmark href={productHref("/")} />
-        {appSwitcher ?? <div className="suite-menu-anchor">
+        {appSwitcher ?? <div className="suite-menu-anchor suite-catalog-anchor">
           <button
             className="suite-app-switcher"
             type="button"

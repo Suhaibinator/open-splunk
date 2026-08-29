@@ -64,7 +64,12 @@ class, so this is the only place a deletion that outran its markup shows up.
 
 `safety-net.test.mjs` checks that the Phase 0 safety net cannot stop running
 unnoticed: every unit test file is named in this directory's hardcoded runner
-list, and every screenshot a visual spec pins has a committed baseline.
+list, and every screenshot a visual spec pins has a committed baseline under
+every viewport project that records it.
+`visual-baseline-projects.json` records the captures that exist at one viewport
+only — the mobile navigation drawer is not rendered above 760px at all — and is
+itself checked, so an entry naming a missing project or an unpinned screenshot
+fails the same test.
 
 `visual-determinism.mjs` implements `npm run test:visual:determinism`. It
 builds the exports once, serves them itself, and runs the visual suite twice
