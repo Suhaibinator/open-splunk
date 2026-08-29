@@ -215,9 +215,9 @@ lint:
 # `npm run lint:css` reports CSS-token debt as warnings only and is deliberately
 # not part of this target yet. Phase 5 of the CSS cleanup flips .stylelintrc.json
 # to errors and adds it here once the application stylesheets no longer trip it. The report
-# is 1,596 warnings: 1,566 of them are the token debt that phase exists to clear
-# (1,496 hex colors, 63 literal rgb()/font-family values, 7 off-scale media
-# features) and 30 are small correctness items. The token files themselves are
+# is 282 warnings: 251 of them are the token debt that phase exists to clear
+# (196 hex colors, 49 literal rgb()/font-family values, 6 off-scale media
+# features) and 31 are small correctness items. The token files themselves are
 # exempt from the hex and rgb() rules through an overrides entry, because the
 # primitive tier is the one place a colour literal belongs. The stylistic rules
 # from stylelint-config-standard that this repository does not follow are turned

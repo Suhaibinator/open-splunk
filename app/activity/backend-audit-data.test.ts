@@ -509,24 +509,23 @@ test("activity layouts preserve capability tabs and mobile job metadata", () => 
     path.join(process.cwd(), "app", "activity", "activity-console.tsx"),
     "utf8",
   );
-  const cardMode = readFileSync(path.join(process.cwd(), "app", "styles", "primitives", "table.css"), "utf8");
   assert.match(backendSource, /data-tab-count=\{availableViews\.length\}/u);
   for (const label of ["Search", "Status", "Owner", "Runtime", "Events", "Started", "Actions"]) {
     assert.match(demoSource, new RegExp(`data-label="${label}"`, "u"));
   }
   // The demo console used to carry a card mode of its own in
   // `activity-console.module.css`; it now opts into the one `.table--cards`
-  // implementation the backend console beside it already used. The two details
-  // this table depends on are that a labelled cell prints its column name, and
-  // that the mode still outranks a per-column desktop width -- which it does by
-  // doubling its own class and matching `:nth-child(n)`.
+  // implementation the backend console beside it already used. Opting in is a
+  // fact about this component's markup, so it is asserted here.
   assert.match(demoSource, /className="table table--cards activity-table"/u);
-  assert.match(cardMode, /\.table--cards td\[data-label\]::before,[\s\S]*?content:\s*attr\(data-label\)/u);
-  assert.match(cardMode, /\.table--cards\.table--cards td:nth-child\(n\)[^{]*\{[^}]*display:\s*flex/su);
-  // The `.live-jobs-table` desktop-cell and mobile-card contracts in
-  // app/activity/activity.css and app/styles/primitives/table.css are asserted
-  // against computed style in
-  // integration/visual/css-contracts.spec.ts.
+  // What the card mode then *does* -- print each labelled cell's column name
+  // and outrank the per-column desktop widths -- is a fact about the cascade,
+  // not about any one file, so it is asserted against computed style in
+  // integration/visual/css-contracts.spec.ts ("activity job table contracts"),
+  // beside the `.live-jobs-table` contracts. Matching the stylesheet's
+  // characters here pinned the rule to a file: Phase 4 moved it from
+  // app/globals.css to app/styles/primitives/table.css, and Phase 5 may move it
+  // again, breaking this test on a change that renders no differently.
 });
 
 test("search-attempt requests include only exact actor and owner filters", () => {

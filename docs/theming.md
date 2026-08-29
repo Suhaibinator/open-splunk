@@ -16,8 +16,8 @@ That is most of the state now.
 [`app/styles/tokens-color.css`](../app/styles/tokens-color.css) declares every
 colour role the product has, `tokens-scale.css` the non-colour scales described
 under [Scales](#scales) below, and the sweep that rewrote the call sites has
-landed: `npm run lint:css` reports 214 hex literals outside `app/styles`, down
-from 1,496, and the pre-refactor alias block is gone, so there is one name per
+landed: `npm run lint:css` reports 196 hex literals, down from 1,496, and 163 of
+those are outside `app/styles`. The pre-refactor alias block is gone, so there is one name per
 role. Recolouring the product is close to a one-file edit. What is left is not
 scattered misses but a short list of roles tier 2 does not name, which
 [Role gaps](#role-gaps) records; a literal is kept wherever the nearest token
@@ -28,7 +28,7 @@ cannot slip in beside them.
 ## Where a rule lives
 
 `app/styles/index.css` is the whole load order. `app/globals.css` used to be all
-of it — 7,267 lines, with every breakpoint override for every feature collected
+of it — 7,326 lines, with every breakpoint override for every feature collected
 into two sections at the foot of the file. Phase 4 carved it up: every rule
 moved exactly once and unchanged, each `@media` block moved into the file that
 owns its base selectors, and the five CSS modules became plain colocated
@@ -117,12 +117,37 @@ camelCase class, and `selector-pseudo-class-no-unknown` no longer exempts
 
 ### Responsive rules live beside their base rules
 
-Inside a feature stylesheet, a section's `@media` blocks sit at the end of that
-section — after the rules they override, largest breakpoint first — not in a
-"responsive" appendix at the foot of the file. A rule and the widths that change
-it are one thing to read and one thing to edit.
+**Every `@media` block lives in the file that owns its base selectors.** That is
+the rule the layer keeps, and it is the one that mattered: the monolith
+collected every breakpoint override for every feature into two document-wide
+sections, so changing how one feature folded meant editing a file 2,000 lines
+away from the rules being folded. A feature and the way it folds are now one
+file.
 
-The order within a section is load-bearing and is always the same: base rules,
+*Where inside that file* is not yet settled, and the layer ships two shapes:
+
+- **A `/* Responsive */` appendix at the file's foot**, holding every breakpoint
+  that file uses, one block per step. Fourteen sheets do this — the `table`,
+  `modal` and `layout` primitives, the four `search-workspace` sheets, and
+  `admin`, `activity`, `datasets`, `signin`, `home`,
+  `backend-resource-state` and `dashboards`.
+- **A block at the end of each section**, restating the step for every section
+  that needs it. Five sheets do this — `analytics`, `operations-dashboard`,
+  `reports`, `workspace-dialogs` and `visualization-panel`, the five that were
+  CSS modules until Phase 4 — and they pay for it in restated preludes:
+  `analytics.css` opens `(max-width: 650px)` six times and `(max-width: 480px)`
+  five times.
+
+The appendix is easier to audit (one place per file lists every width that file
+reacts to); the per-section block is easier to read while editing one component.
+**Reconciling the two is Phase 5 work**, and it is a pure reorder within each
+file — the rule-parity check in `scripts/css-split-invariants.test.mjs` verifies
+exactly that, so whichever shape wins can be applied without a screenshot
+moving. Until then, follow the shape of the file you are editing rather than
+introducing a third.
+
+The order of the steps *within* a responsive section is load-bearing wherever
+they sit, and is always the same: base rules,
 then `1240px`, `980px`, `760px`, `480px`, then `(pointer: coarse)`, then
 `(prefers-reduced-motion: reduce)`. The width queries are all `max-width`, so
 each overrides the one above it; the pointer query comes after them because a
@@ -556,8 +581,9 @@ make. These keep their literals:
   can be deleted rather than retokenised — the rest of that mobile rule, which
   repositions the panel, stays.
 
-The six CSS modules declare ten more, all between 1 and 8 and all inside
-their own component's stacking context. They stay literal for the same reason.
+The five sheets that were CSS modules until Phase 4 declare ten more, all
+between 1 and 8 and all inside their own component's stacking context. They stay
+literal for the same reason.
 
 `.fields-rail` itself is the opposite case and its mobile override must be
 kept: on the desktop it is in-flow furniture (10, `--z-sticky`), and on mobile
@@ -721,15 +747,31 @@ than before and no width is left cramped-but-unadapted; the `520px` fold is the
 one that folds inward, and it costs a definition list one column across a 40px
 band inside a dialog.
 
+Every effect in that table happens in a band no screenshot renders — the visual
+suite shoots 1440px and 760px, and the folds change 1000px, 900px, 500px and
+450px — so each row is pinned by a computed-style contract instead, under
+"folded breakpoint contracts" in `integration/visual/css-contracts.spec.ts`.
+Each mounts the named surface at a width inside the folded band and asserts the
+promised layout, plus one width outside it where the fold must have changed
+nothing. Reverting any of the five steps to its pre-fold value turns those red.
+
 `650px` is kept. It is the analytics console's mobile step, and the honest fold
 is onto `760px` — which is exactly the width the mobile baselines are recorded
 at, so the fold is a deliberate restyle with new screenshots rather than a
 rename. `analytics.css` states it six times because each section carries its own
 responsive rules, so `npm run lint:css` still reports six
 `media-feature-name-value-allowed-list` warnings; they are six occurrences of one
-off-canon step rather than six different steps. The `max-height: 650px` queries
-in `app/signin/signin.css` and `app/search-workspace/search-editor.css` are
-untouched.
+off-canon step rather than six different steps.
+
+The one `max-height: 650px` compound is untouched but is now stated **twice**:
+the monolith held a single `(max-height: 650px) and (max-width: 760px)` block
+covering the time-range popover and the sign-in card, and those belong to two
+different features, so the split gave each its own copy — `app/signin/signin.css`
+and `app/search-workspace/search-editor.css`. `media-feature-name-allowed-list`
+therefore reports 2 warnings where Phase 3 reported 1, and Phase 5 has two sites
+to budget for rather than one. The two guards can only be folded back together
+if the sign-in card and the popover can share one step, which is a design
+question rather than a rename.
 
 ## Primitives
 
@@ -1292,7 +1334,7 @@ here rather than made quietly.
 
 ## Role gaps
 
-The sweep leaves 214 hex literals, down from 1,496 before it and 261 at the end
+The sweep leaves 196 hex literals, down from 1,496 before it and 261 at the end
 of its first pass. They are not a residue to grind down one by one: they cluster
 into roles that tier 2 does not name, and the fix for each is a token, after
 which its call sites collapse together.

@@ -400,6 +400,41 @@ test.describe("activity job table contracts", () => {
     // than off a per-page wrapper class, so it reaches every card table.
     await expect(page.locator(".table-wrap")).toHaveCSS("overflow-x", "visible");
   });
+
+  // A card has no column headers above it, so the only thing naming a value is
+  // the `::before` the cell's own `data-label` fills. `app/activity`'s unit
+  // test used to assert this by matching the stylesheet's characters, which
+  // pinned the rule to whichever file held it; the promise is that the label
+  // renders, and only a browser can say whether it does.
+  test("mobile job cards print each cell's column name from its data-label", async ({ page }) => {
+    await mount(page, liveJobsMarkup, MOBILE_WIDTH);
+
+    const labels = await page.locator(".live-jobs-table tbody td").evaluateAll(
+      (cells) => cells.map((cell) => globalThis.getComputedStyle(cell, "::before").content),
+    );
+    expect(labels).toEqual([
+      '"Search"', '"Status"', '"Owner"', '"Runtime"', '"Events"', '"Started"', '"Actions"',
+    ]);
+
+    // The header row is what the label replaces, so it leaves the layout:
+    // painting both would print every column name twice. It stays in the
+    // accessibility tree rather than being display:none, which is why the
+    // contract is on the clip rather than on visibility.
+    const header = page.locator(".live-jobs-table thead");
+    await expect(header).toHaveCSS("position", "absolute");
+    await expect(header).toHaveCSS("clip-path", "inset(50%)");
+    expect(await contentWidth(page, ".live-jobs-table thead")).toBeCloseTo(1, 0);
+  });
+
+  test("desktop job cells print no label, because the header row does", async ({ page }) => {
+    await mount(page, liveJobsMarkup, DESKTOP_WIDTH);
+
+    const labels = await page.locator(".live-jobs-table tbody td").evaluateAll(
+      (cells) => cells.map((cell) => globalThis.getComputedStyle(cell, "::before").content),
+    );
+    expect(labels).toEqual(Array.from({ length: 7 }, () => "none"));
+    await expect(page.locator(".live-jobs-table thead")).toHaveCSS("position", "static");
+  });
 });
 
 // Colour-token contracts. The two-tier layer in `app/styles/tokens-color.css`
@@ -722,5 +757,146 @@ test.describe("colour token contracts", () => {
     // overrides tier 2 alone and leaves the palette underneath it untouched.
     await page.evaluate(() => document.documentElement.removeAttribute("data-theme"));
     expect(await resolveTokens(page, roles)).toEqual(light);
+  });
+});
+
+// Contracts for the five breakpoints Phase 4 folded onto the canon.
+//
+// docs/theming.md's fold table records what each fold changed, and every one of
+// those changes happens in a band no screenshot renders: the visual suite shoots
+// 1440px and 760px, and the folds live at 1000, 900, 500 and 450. So the table
+// was prose with nothing behind it. Each test below mounts the surface the table
+// names at a width inside the folded band and asserts the promised layout, plus
+// one width outside the band where the fold must have changed nothing.
+const INSIDE_1120_FOLD = 1000;
+const INSIDE_800_FOLD = 900;
+const INSIDE_520_FOLD = 500;
+const INSIDE_430_FOLD = 450;
+
+const analyticsPanelsMarkup = `
+<div class="analytics-primary-grid">
+  <section class="suite-card"><header class="analytics-panel-header"><div><h2>Search performance</h2></div></header></section>
+  <section class="suite-card"><header class="analytics-panel-header"><div><h2>Insights</h2></div></header></section>
+</div>
+<div class="analytics-secondary-grid">
+  <section class="suite-card"><header class="analytics-panel-header"><div><h2>Field profile</h2></div></header></section>
+  <section class="suite-card"><header class="analytics-panel-header"><div><h2>Slowest searches</h2></div></header></section>
+</div>`;
+
+const analyticsMetricsMarkup = `
+<section class="analytics-metric-grid">
+  <a href="#"><span>Searches run</span><strong>4,182</strong><small>up 8.4%</small><i>arrow</i></a>
+  <a href="#"><span>Success rate</span><strong>99.4%</strong><small>26 failed</small><i>arrow</i></a>
+  <a href="#"><span>Median runtime</span><strong>1.18 s</strong><small>p95 2.4 s</small><i>arrow</i></a>
+  <a href="#"><span>Events scanned</span><strong>91K</strong><small>21.8 per result</small><i>arrow</i></a>
+</section>
+<div class="analytics-field-list">
+  <div class="analytics-field-list-header"><span>Field</span><span>Coverage</span><span>Distinct</span><span>Example</span><span></span></div>
+  <ul>
+    <li>
+      <div class="analytics-field-identity"><code>host</code><span class="analytics-field-type">string</span></div>
+      <div class="analytics-coverage-cell"><span><i></i></span><strong>98%</strong></div>
+      <span class="analytics-cardinality">42</span>
+      <code class="analytics-example">web-01</code>
+      <a href="#">Analyze</a>
+    </li>
+  </ul>
+</div>`;
+
+const analyticsContextMarkup = `
+<section class="analytics-context-bar">
+  <div><span class="analytics-context-icon">i</span><div><strong>Search workload</strong><small>Filters update the summary fixtures.</small></div></div>
+  <label><span>Time range</span><select><option>Last 24 hours</option></select></label>
+  <label><span>Environment</span><select><option>All</option></select></label>
+</section>`;
+
+const operationsHeaderMarkup = `
+<header class="dashboard-title-row">
+  <div><span class="suite-eyebrow">OPERATIONS</span><h1>Service overview</h1></div>
+  <div class="operations-header-actions">
+    <label class="operations-range-picker"><span>Metrics range</span><select><option>Last 24 hours</option></select></label>
+    <span class="badge badge--outline operations-preview-badge">Preview data</span>
+    <span class="operations-update-status">Fixture timestamp: Jul 21, 4:00 PM</span>
+  </div>
+</header>
+<div class="operations-volume-chart">
+  <fieldset class="operations-volume-plot">
+    ${Array.from({ length: 24 }, () => '<button type="button" class="operations-volume-bar"><span></span></button>').join("")}
+  </fieldset>
+</div>`;
+
+const knowledgeInspectionMarkup = `
+<section class="workspace-dialog-knowledge-inspection">
+  <h3>Knowledge authority</h3>
+  <dl>
+    <dt>Snapshot digest</dt><dd><code>2f9c11ab</code></dd>
+    <dt>Catalog revision</dt><dd>18</dd>
+    <dt>Applicable field objects</dt><dd>24</dd>
+    <dt>Lookup assets</dt><dd>3</dd>
+  </dl>
+</section>`;
+
+test.describe("folded breakpoint contracts", () => {
+  test("the analytics panel rails stack from 980px, not from 1120px", async ({ page }) => {
+    // The band the fold changed: 981px-1120px used to stack the rails and now
+    // keeps both columns, which is the row docs/theming.md's fold table opens
+    // with and the reason a 1440px screenshot cannot see this fold at all.
+    await mount(page, analyticsPanelsMarkup, INSIDE_1120_FOLD);
+    expect(await gridTracks(page, ".analytics-primary-grid")).toHaveLength(2);
+    expect(await gridTracks(page, ".analytics-secondary-grid")).toHaveLength(2);
+
+    // At the canon step itself they still stack, so the fold moved the boundary
+    // rather than deleting the compact layout.
+    await mount(page, analyticsPanelsMarkup, COMPACT_WIDTH);
+    expect(await gridTracks(page, ".analytics-primary-grid")).toHaveLength(1);
+    expect(await gridTracks(page, ".analytics-secondary-grid")).toHaveLength(1);
+  });
+
+  test("the metric grid and the field list fold at 980px, not at 800px", async ({ page }) => {
+    await mount(page, analyticsMetricsMarkup, INSIDE_800_FOLD);
+    expectEqualTracks(await gridTracks(page, ".analytics-metric-grid"), 2);
+    await expect(page.locator(".analytics-field-list .analytics-example")).toHaveCSS("display", "none");
+    await expect(page.locator(".analytics-field-list-header span:nth-child(4)")).toHaveCSS("display", "none");
+
+    await mount(page, analyticsMetricsMarkup, DESKTOP_WIDTH);
+    expectEqualTracks(await gridTracks(page, ".analytics-metric-grid"), 4);
+    await expect(page.locator(".analytics-field-list .analytics-example")).not.toHaveCSS("display", "none");
+  });
+
+  test("the context bar and the metric numerals fold at 480px, not at 420px", async ({ page }) => {
+    await mount(page, `${analyticsContextMarkup}${analyticsMetricsMarkup}`, INSIDE_430_FOLD);
+    expect(await gridTracks(page, ".analytics-context-bar")).toHaveLength(1);
+    await expect(page.locator(".analytics-metric-grid strong").first()).toHaveCSS("font-size", "18px");
+
+    // Just above the canon step the two-up context bar and the full numeral
+    // survive: 421px-480px is the whole band this fold changed.
+    await mount(page, `${analyticsContextMarkup}${analyticsMetricsMarkup}`, INSIDE_520_FOLD);
+    expect(await gridTracks(page, ".analytics-context-bar")).toHaveLength(2);
+    await expect(page.locator(".analytics-metric-grid strong").first()).toHaveCSS("font-size", "21px");
+  });
+
+  test("the operations header actions and volume plot fold at 480px, not at 430px", async ({ page }) => {
+    await mount(page, operationsHeaderMarkup, INSIDE_430_FOLD);
+    expectEqualTracks(await gridTracks(page, ".operations-header-actions"), 2);
+    await expect(page.locator(".operations-volume-plot")).toHaveCSS("height", "196px");
+
+    // Between 481px and 760px the range picker still leads a `1fr auto` row and
+    // the plot keeps its full height, so the fold reaches only the narrow band.
+    await mount(page, operationsHeaderMarkup, INSIDE_520_FOLD);
+    const wide = await gridTracks(page, ".operations-header-actions");
+    expect(wide).toHaveLength(2);
+    expect(wide[0]).toBeGreaterThan(wide[1] ?? 0);
+    await expect(page.locator(".operations-volume-plot")).toHaveCSS("height", "215px");
+  });
+
+  test("the knowledge-inspection list keeps two columns down to 480px, not to 520px", async ({ page }) => {
+    // The one fold that folds inward: this list is single-column from 480px
+    // down where it used to be single-column from 520px down, so 481px-520px
+    // is the 40px band that changed and the one this asserts.
+    await mount(page, knowledgeInspectionMarkup, INSIDE_520_FOLD);
+    expect(await gridTracks(page, ".workspace-dialog-knowledge-inspection dl")).toHaveLength(2);
+
+    await mount(page, knowledgeInspectionMarkup, NARROW_WIDTH);
+    expect(await gridTracks(page, ".workspace-dialog-knowledge-inspection dl")).toHaveLength(1);
   });
 });

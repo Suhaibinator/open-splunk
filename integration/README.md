@@ -281,7 +281,8 @@ bodies, declaration order — so any tokenising or reformatting pass broke it
 without changing a rendered pixel. The spec instead loads the stylesheets into
 Chromium against fixture markup that mirrors the production DOM and reads
 resolved values through `getComputedStyle` at the 1280, 980, 760, and 480 pixel
-breakpoints.
+breakpoints — plus 1000, 900, 500 and 450, which are inside the five bands
+Phase 4's breakpoint folds changed and which no screenshot renders.
 
 "The stylesheets", plural: `visual/application-stylesheets.ts` injects each
 file `app/styles/index.css` imports, in that file's order, because `setContent`
@@ -289,7 +290,10 @@ cannot resolve an `@import` inside an injected `<style>` and would otherwise
 render every `var()` as its fallback and every rule as nothing at all. The list
 is read out of `index.css` rather than restated, and
 `scripts/token-layer.test.mjs` asserts that it still is — and that every
-stylesheet under `app/` is in it. `visual/token-layer.visual.spec.ts` covers
+stylesheet under `app/` is in it. That assertion *runs* the harness's own
+`importedStylesheets` body and compares its result with `index.css`, rather than
+re-implementing the parse: re-implementing it compared `index.css` with itself,
+and a harness injecting 25 of the 26 shipped sheets kept the whole suite green. `visual/token-layer.visual.spec.ts` covers
 the other half — it navigates to the real export rather than injecting
 anything, so a token file that never reaches `app/layout.tsx` fails there even
 while every contract here is green.

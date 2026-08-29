@@ -12,6 +12,7 @@
  * builds, and never looks outside the repository root it is handed, so the
  * invariants built on it stay deterministic and fast.
  */
+import { readFileSync } from "node:fs";
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 
@@ -388,13 +389,52 @@ export function isClassReachable(className, evidence) {
 }
 
 /**
+ * The text between a call's parentheses, given the index of the opening one.
+ *
+ * Counting delimiters rather than stopping at the first comma is what lets a
+ * path composed inside the call -- `readFileSync(path.join(root, "a.css"))` --
+ * be read as one argument list. Masking has already turned every character a
+ * path does not need into `·`, so a bracket inside a string literal cannot
+ * unbalance the count. Returns `null` for an unterminated call.
+ */
+function callArgumentList(masked, open) {
+  let depth = 0;
+  for (let index = open; index < masked.length; index += 1) {
+    const character = masked[index];
+    if (character === "(") depth += 1;
+    else if (character === ")") {
+      depth -= 1;
+      if (depth === 0) return masked.slice(open + 1, index);
+    }
+  }
+  return null;
+}
+
+/** The first argument of an argument list, ignoring commas nested in a call. */
+function firstArgument(argumentList) {
+  let depth = 0;
+  for (let index = 0; index < argumentList.length; index += 1) {
+    const character = argumentList[index];
+    if (character === "(" || character === "[" || character === "{") depth += 1;
+    else if (character === ")" || character === "]" || character === "}") depth -= 1;
+    else if (character === "," && depth === 0) return argumentList.slice(0, index);
+  }
+  return argumentList;
+}
+
+/**
  * Locates reads of stylesheet text in one source file.
  *
- * Both shapes the repository has used are covered: a path literal handed
- * straight to a read call, and a path bound to a constant a read call
- * dereferences later. Handing a path to Playwright's `addStyleTag` is not a
- * read -- the browser loads the file and the assertion is on computed style --
- * so only calls that hand back the characters count.
+ * Three shapes the repository has used are covered: a path literal handed
+ * straight to a read call, a path bound to a constant a read call dereferences
+ * later, and a path composed inside the call itself --
+ * `readFileSync(path.join(process.cwd(), "app", "styles", "x.css"), "utf8")`.
+ * That last one is why the argument is read by counting brackets instead of by
+ * stopping at the first comma: the comma-stopping form saw only `path.join(`
+ * and reported nothing, so a nested read sat inside the suite this invariant
+ * walks while the invariant stayed green. Handing a path to Playwright's
+ * `addStyleTag` is not a read -- the browser loads the file and the assertion
+ * is on computed style -- so only calls that hand back the characters count.
  */
 export function findStylesheetTextReads(source) {
   const masked = maskStringLiterals(source);
@@ -403,9 +443,11 @@ export function findStylesheetTextReads(source) {
     if (/\.css\b/u.test(match[2])) stylesheetBindings.add(match[1]);
   }
   const reads = [];
-  const readCall = /\b(readFileSync|readFile|createReadStream)\s*\(\s*([^,)]*)/gu;
+  const readCall = /\b(readFileSync|readFile|createReadStream)\s*\(/gu;
   for (const match of masked.matchAll(readCall)) {
-    const argument = match[2].trim();
+    const argumentList = callArgumentList(masked, match.index + match[0].length - 1);
+    if (argumentList === null) continue;
+    const argument = firstArgument(argumentList).trim().replaceAll(/\s+/gu, " ");
     if (/\.css\b/u.test(argument) || stylesheetBindings.has(argument)) {
       reads.push(`${match[1]}(${argument.replaceAll(MASK_OPEN, '"').replaceAll(MASK_CLOSE, '"')})`);
     }
@@ -726,24 +768,95 @@ export async function collectPrimitiveReferences(root) {
 }
 
 /**
- * The stylesheets `integration/visual/application-stylesheets.ts` injects.
+ * The stylesheets `app/styles/index.css` imports, in cascade order.
  *
- * The harness cannot inject `app/styles/index.css` itself: an `@import` cannot
- * be resolved inside an injected `<style>`. It therefore reads that file's
- * import list and injects the files one at a time, and this rebuilds the same
- * list so a test can assert the harness really derives it. A hand-written copy
- * would drift the moment the layer gained a file, and the fixtures would go on
- * rendering unresolved `var()` fallbacks with every contract green -- so an
- * empty result, meaning the harness no longer names `index.css` at all, is the
- * failure the caller is looking for.
+ * This is what the application loads: `app/layout.tsx` imports that file and
+ * nothing else. It says nothing about the fixture harness -- comparing the two
+ * is `listHarnessStylesheets`'s job -- so a caller that wants to know whether
+ * the harness agrees has to ask for both lists and compare them.
  */
 export async function listInjectedStylesheets(root) {
   const stylesRoot = path.join(root, "app", "styles");
-  const harness = await readFile(path.join(root, "integration", "visual", "application-stylesheets.ts"), "utf8");
-  if (!/index\.css/u.test(harness)) return [];
   const index = await readFile(path.join(stylesRoot, "index.css"), "utf8");
   return [...index.matchAll(/@import\s+url\("([^"]+)"\)/gu)]
     .map((match) => relativePosix(root, path.join(stylesRoot, match[1])));
+}
+
+/** Where the fixture harness lives, and the name of the function under test. */
+const HARNESS_PATH = ["integration", "visual", "application-stylesheets.ts"];
+const HARNESS_FUNCTION = "importedStylesheets";
+
+/**
+ * The statement text of one top-level `const` or `function` in a source file.
+ *
+ * Braces and parentheses are counted rather than matched by a regex so a
+ * function body that contains either still comes back whole. Throws when the
+ * declaration is missing: the caller is asserting *about* this code, and a
+ * silent `undefined` would let the assertion pass on a file that no longer
+ * contains what it claims to test.
+ */
+function declarationSource(source, keyword, name) {
+  const start = source.search(new RegExp(String.raw`^\s*(?:export\s+)?${keyword}\s+${name}\b`, "mu"));
+  if (start < 0) throw new Error(`${HARNESS_PATH.join("/")} no longer declares ${keyword} ${name}`);
+  let depth = 0;
+  for (let index = start; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === "{" || character === "(") depth += 1;
+    else if (character === "}" || character === ")") {
+      depth -= 1;
+      if (depth === 0 && character === "}") return source.slice(start, index + 1);
+    } else if (character === ";" && depth === 0) return source.slice(start, index + 1);
+  }
+  throw new Error(`${HARNESS_PATH.join("/")}: ${keyword} ${name} is unterminated`);
+}
+
+/**
+ * The stylesheets `integration/visual/application-stylesheets.ts` really injects.
+ *
+ * The harness cannot inject `app/styles/index.css` itself -- an `@import` does
+ * not resolve inside an injected `<style>` -- so it reads that file's import
+ * list and injects the files one at a time. Restating the parse here would only
+ * prove that this module can read `index.css`, which is the shape the invariant
+ * had rotted into: it compared `index.css` with `index.css` and stayed green
+ * while the harness injected a different set. So the harness's own
+ * `importedStylesheets` body is *executed* instead, with its own `stylesRoot`
+ * expression evaluated against the harness's directory, and a filter, a slice
+ * or a reordered `map` inside it changes this result.
+ *
+ * Anything that stops the body from evaluating -- a syntax the evaluator cannot
+ * run, a renamed function, a moved file -- throws. That is deliberate: a caught
+ * error returning an empty list is exactly the silent fallback this function
+ * exists to remove.
+ */
+export async function listHarnessStylesheets(root) {
+  const harnessPath = path.join(root, ...HARNESS_PATH);
+  const source = await readFile(harnessPath, "utf8");
+  const rootExpression = /const\s+stylesRoot\s*=\s*([^;]+);/u.exec(source)?.[1];
+  if (rootExpression === undefined) throw new Error(`${HARNESS_PATH.join("/")} no longer binds stylesRoot`);
+  const body = declarationSource(source, "function", HARNESS_FUNCTION)
+    .replace(/^\s*(?:export\s+)?function\s+\w+\s*\([^)]*\)\s*(?::[^{]+)?\{/u, "")
+    .replace(/\}\s*$/u, "");
+  const evaluate = new Function("readFileSync", "path", "__dirname", `
+    const stylesRoot = ${rootExpression};
+    ${body}
+  `);
+  const injected = evaluate(readFileSync, path, path.dirname(harnessPath));
+  return [...injected].map((file) => relativePosix(root, file));
+}
+
+/**
+ * How the harness turns `importedStylesheets()` into what it exports.
+ *
+ * Executing the function proves the derivation; this proves nothing was done to
+ * the result on its way out, so `importedStylesheets().slice(1)` cannot pass by
+ * satisfying the executed half.
+ */
+export async function readHarnessExportExpression(root) {
+  const source = await readFile(path.join(root, ...HARNESS_PATH), "utf8");
+  return declarationSource(source, "const", "APPLICATION_STYLESHEETS")
+    .replace(/^[^=]*=\s*/u, "")
+    .replace(/;$/u, "")
+    .trim();
 }
 
 /**

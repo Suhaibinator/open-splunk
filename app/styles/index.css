@@ -28,11 +28,20 @@
  * `globals.css`; the order was real and load-bearing, and nothing wrote it
  * down. Now it is written down.
  *
- * No file here declares a custom property: that is the token layer's job, and
- * `scripts/token-grammar.test.mjs` fails the build if one grows a rule or a
- * sheet grows a token. Each file carries its own responsive rules at its foot
- * rather than deferring them to a document-wide section, so a feature and the
- * way it folds are one edit; see docs/theming.md.
+ * The token layer owns every theme value. A sheet below it may declare a
+ * custom property only as a component-scoped knob -- a name its own container
+ * sets to size a child it deliberately does not select into, such as the
+ * `--chart-*` interface `operations-dashboard.css` hands the shared line chart
+ * -- and `scripts/token-grammar.test.mjs` fails the build if a token file
+ * grows a rule, or if a sheet grows a name that is not on that file's ledger of
+ * knobs. A colour, a space step or a radius declared out here is unreachable
+ * from a retheme, which is the whole point of the layer.
+ *
+ * Each file also carries its own responsive rules rather than deferring them to
+ * a document-wide section, so a feature and the way it folds are one edit. Two
+ * shapes are in use for where inside the file they sit -- a `Responsive`
+ * appendix at the foot, or a block per section -- and reconciling them is Phase
+ * 5 work; see docs/theming.md.
  *
  * `@import` is resolved at build time by the bundler's CSS pipeline, so this
  * indirection costs no extra request.

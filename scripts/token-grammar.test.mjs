@@ -23,6 +23,7 @@ import process from "node:process";
 import test from "node:test";
 
 import {
+  collectDeclarationBlocks,
   collectDeclarationComments,
   collectTokenBlocks,
   collectTokenComments,
@@ -550,6 +551,48 @@ test("the token layer declares tokens and nothing else", async () => {
     [],
     "A token file grew something that is not a token. Rules belong in an application stylesheet\n"
       + `or a module; keeping the layer declaration-only is what lets a theme be read at a\nglance:\n${describeList(offenders.toSorted())}`,
+  );
+});
+
+/**
+ * Every custom property a stylesheet outside the token layer is allowed to
+ * declare, as `file: --name`.
+ *
+ * A feature sheet declaring a name is not automatically a token escaping the
+ * layer: both entries below are a *component interface*, declared on the
+ * component's own container to size a child the sheet deliberately does not
+ * select into. What the layer forbids is a theme value -- a colour, a space
+ * step, a radius -- growing a second declaration site out here, where no
+ * `tokens-*.css` edit can reach it. The ledger is the difference: a knob has to
+ * be added to this list on purpose, with a reviewer reading the name.
+ */
+const COMPONENT_KNOBS = [
+  "app/dashboards/operations-dashboard.css: --chart-height",
+  "app/dashboards/operations-dashboard.css: --chart-plot-min-height",
+  "app/dashboards/operations-dashboard.css: --chart-stroke-width",
+  "app/dashboards/operations-dashboard.css: --chart-x-axis-height",
+  "app/dashboards/operations-dashboard.css: --chart-x-axis-type",
+  "app/dashboards/operations-dashboard.css: --chart-y-axis-width",
+  "app/search-workspace/search-job.css: --pulse-ring-core",
+];
+
+test("no stylesheet outside the token layer grows a token of its own", async () => {
+  const declared = new Set();
+  for (const block of await collectDeclarationBlocks(workspace, 1)) {
+    if (/^app\/styles\/tokens-[a-z]+\.css$/u.test(block.file)) continue;
+    for (const { property } of block.declarations) {
+      if (property.startsWith("--")) declared.add(`${block.file}: ${property}`);
+    }
+  }
+  assert.deepEqual(
+    [...declared].toSorted(),
+    [...COMPONENT_KNOBS].toSorted(),
+    "app/styles/index.css: \"the token layer owns every theme value; a feature sheet may declare a\n"
+      + "component-scoped knob on its own container, and those are listed in token-grammar.test.mjs.\"\n"
+      + "A name declared outside app/styles/tokens-*.css is unreachable from a retheme: the one-file\n"
+      + "edit the layer promises cannot see it. Move it into the token layer, or -- if it really is a\n"
+      + "knob one component reads from its own container -- add it to COMPONENT_KNOBS:\n"
+      + describeList([...declared].toSorted()),
   );
 });
 

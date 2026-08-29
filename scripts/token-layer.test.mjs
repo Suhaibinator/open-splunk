@@ -20,9 +20,11 @@ import {
   cssBlocks,
   cssDeclarations,
   isDarkThemeContext,
+  listHarnessStylesheets,
   listInjectedStylesheets,
   listStylesheets,
   listTokenStylesheets,
+  readHarnessExportExpression,
   relativePosix,
 } from "./css-inventory.mjs";
 
@@ -153,22 +155,77 @@ test("nothing outside the palette file reads a primitive", async () => {
 });
 
 test("the fixture harness injects exactly the stylesheets the application loads", async () => {
-  const injected = await listInjectedStylesheets(workspace);
-  const layer = (await listTokenStylesheets(workspace)).map((file) => relativePosix(workspace, file));
-  assert.ok(
-    injected.length > layer.length,
-    "integration/visual/application-stylesheets.ts no longer derives its list from\n"
-      + "app/styles/index.css. It cannot inject that file directly -- an @import does not resolve\n"
-      + "inside an injected <style> -- so it reads the import list instead. A hand-written copy\n"
-      + "leaves every fixture rendering var() fallbacks, or missing a whole primitive, with the\n"
-      + "contracts and the baselines still green.",
-  );
+  // `listHarnessStylesheets` runs the harness's own `importedStylesheets` body
+  // rather than restating its parse, so this compares two independent things.
+  // Restating it compared app/styles/index.css with itself, and a harness that
+  // injected 25 of the 26 shipped sheets kept the whole suite green.
+  const injected = await listHarnessStylesheets(workspace);
+  const shipped = await listInjectedStylesheets(workspace);
   assert.deepEqual(
-    injected.slice(0, layer.length),
-    layer,
-    "The token layer is no longer the first thing app/styles/index.css imports. Injection follows\n"
-      + "that order, and a token file that lands after the rules reading it decides the cascade by a\n"
-      + "race: the fixtures would paint fallbacks while the contracts stayed green.",
+    injected,
+    shipped,
+    "integration/visual/application-stylesheets.ts injects a different set, or a different order,\n"
+      + "than app/styles/index.css loads. It cannot inject that file directly -- an @import does not\n"
+      + "resolve inside an injected <style> -- so it reads the import list instead, and any filter,\n"
+      + "slice or reorder on the way leaves the fixtures rendering var() fallbacks, or missing a\n"
+      + `whole primitive, with the contracts and the baselines still green.\n${describeList(injected)}`,
+  );
+  const exported = await readHarnessExportExpression(workspace);
+  assert.equal(
+    exported,
+    "importedStylesheets()",
+    "APPLICATION_STYLESHEETS is no longer that function's result verbatim. Running the function\n"
+      + `proves the derivation; this proves nothing trimmed the result on its way out: ${exported}`,
+  );
+});
+
+test("app/styles/index.css imports the layer in the documented cascade order", async () => {
+  const imported = await listInjectedStylesheets(workspace);
+  const layer = (await listTokenStylesheets(workspace)).map((file) => relativePosix(workspace, file));
+  // docs/theming.md's "Where a rule lives" table, as a contract rather than as
+  // prose. `css-split-invariants.test.mjs` checks that the *bands* run in
+  // order -- tokens, base, primitives, features, interaction -- which leaves
+  // the sequence inside the primitive band free; this pins that sequence,
+  // because `layout.css` is written to lean on the five primitives above it.
+  // Every claim below is one the cascade decides and no screenshot can:
+  // a token file after a rule that reads it paints the fallback; a feature
+  // above a primitive hands `.table-wrap` the win over `.reports-table-wrap`
+  // at the same specificity; and interaction.css anywhere but last lets a
+  // feature's own min-height or font-size beat the coarse-pointer tap target
+  // and the 16px input floor, neither of which any 1440px or 760px screenshot
+  // renders.
+  const head = [
+    ...layer,
+    "app/styles/base.css",
+    "app/styles/primitives/button.css",
+    "app/styles/primitives/table.css",
+    "app/styles/primitives/form.css",
+    "app/styles/primitives/modal.css",
+    "app/styles/primitives/status.css",
+    "app/styles/primitives/layout.css",
+  ];
+  assert.deepEqual(
+    imported.slice(0, head.length),
+    head,
+    "The tokens, the base sheet and the six primitives are no longer the first imports, in that\n"
+      + "order. Tokens first because a rule that reads a name declared after it paints the fallback;\n"
+      + "primitives before every feature because `.reports-table-wrap` and `.table-wrap` are both one\n"
+      + `class and the feature is the one meant to win.\n${describeList(imported.slice(0, head.length))}`,
+  );
+  assert.equal(
+    imported.at(-1),
+    "app/styles/interaction.css",
+    "app/styles/interaction.css is no longer the last import. Its rules name selectors from every\n"
+      + "feature and have to outrank all of them: imported earlier, a feature's own min-height or\n"
+      + "font-size wins back a tap target or an input on a touch device no screenshot covers.",
+  );
+  const features = imported.slice(head.length, -1);
+  assert.deepEqual(
+    features.filter((file) => file.startsWith("app/styles/")),
+    [],
+    "A file in app/styles sits in the feature block. The shared layer is tokens, base, the\n"
+      + "primitives and the interaction floors; anything else there has no place in the order the\n"
+      + `table documents.\n${describeList(features)}`,
   );
 });
 

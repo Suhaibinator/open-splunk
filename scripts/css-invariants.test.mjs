@@ -219,6 +219,16 @@ test("findStylesheetTextReads catches direct, bound, and imported stylesheet rea
     findStylesheetTextReads('const css = readFileSync("app/styles/base.css", "utf8");'),
     ['readFileSync("app/styles/base.css")'],
   );
+  // Composed inside the call. Reading the argument up to the first comma saw
+  // only `path.join(process` and reported nothing, which is how a read of
+  // app/styles/primitives/table.css sat in app/activity/backend-audit-data.test.ts
+  // with this invariant green.
+  assert.deepEqual(
+    findStylesheetTextReads(
+      'const css = readFileSync(path.join(process.cwd(), "app", "styles", "base.css"), "utf8");',
+    ),
+    ['readFileSync(path.join(process.cwd(), "app", "styles", "base.css"))'],
+  );
   assert.deepEqual(
     findStylesheetTextReads([
       'const sheet = path.join(root, "app", "styles", "base.css");',
