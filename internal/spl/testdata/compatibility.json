@@ -4054,6 +4054,68 @@
       ]
     },
     {
+      "id": "SPL-SORT-001",
+      "summary": "Sort accepts official limits, directions, typed exact keys, quoted aliases, and terminal reversal while keeping nullish rows last.",
+      "cases": [
+        {
+          "name": "spaced and attached directions",
+          "source": "index=main | sort 0 + _time, -host, +source",
+          "expect": {
+            "parse": "accept",
+            "order": "pipeline"
+          }
+        },
+        {
+          "name": "labeled limit and typed keys",
+          "source": "index=main | sort limit=12 +num(size), -str(source), ip(client_ip), auto(product)",
+          "expect": {
+            "parse": "accept",
+            "mode": "typed"
+          }
+        },
+        {
+          "name": "quoted transformed alias",
+          "source": "index=main | stats count AS \"event count\" BY source | sort - num('event count'), + str(source)",
+          "expect": {
+            "parse": "accept",
+            "mode": "typed"
+          }
+        },
+        {
+          "name": "terminal descending aliases",
+          "source": "index=main | sort host, source DESC",
+          "expect": {
+            "parse": "accept",
+            "order": "pipeline"
+          }
+        },
+        {
+          "name": "legacy whitespace separated keys",
+          "source": "index=main | sort host source",
+          "expect": {
+            "parse": "accept",
+            "compatibility": "legacy-whitespace-fields"
+          }
+        },
+        {
+          "name": "nullish rows stay last",
+          "source": "index=main | sort 0 - optional",
+          "expect": {
+            "parse": "accept",
+            "order": "missing-last"
+          }
+        },
+        {
+          "name": "multivalue deterministic approximation",
+          "source": "index=main | eval values=split(tags, \",\") | sort auto(values)",
+          "expect": {
+            "parse": "accept",
+            "compatibility": "open-splunk-memberwise-array-order"
+          }
+        }
+      ]
+    },
+    {
       "id": "SPL-REGEX-001",
       "summary": "Regex filtering shares the bounded RE2 match profile and negative missing/null behavior.",
       "cases": [

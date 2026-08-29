@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"reflect"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -31,7 +32,7 @@ func TestCompileGradeThisEventSearchIsScopedAndParameterized(t *testing.T) {
 		`"index_time" <= parseDateTime64BestEffort(?, 3, 'UTC')`,
 		`"expires_at" > parseDateTime64BestEffort(?, 3, 'UTC')`,
 		`"visibility_seq" <= ?`,
-		`ORDER BY "__os_order_`,
+		`ORDER BY tupleElement("__os_order_`,
 		`ASC NULLS LAST`,
 		`LIMIT ?`,
 	} {
@@ -408,7 +409,9 @@ func TestCompileDedupHonorsPriorSortAndProjectionBoundaries(t *testing.T) {
 		t.Fatalf("dedup LIMIT BY missing:\n%s", sorted.SQL)
 	}
 	dedupOrder := strings.LastIndex(sorted.SQL[:limitBy], "ORDER BY ")
-	if dedupOrder < 0 || !strings.Contains(sorted.SQL[dedupOrder:limitBy], `"__os_order_2_0" ASC NULLS LAST`) {
+	if dedupOrder < 0 ||
+		!strings.Contains(sorted.SQL[dedupOrder:limitBy], `tupleElement("__os_order_2_0", 1) ASC NULLS LAST`) ||
+		!strings.Contains(sorted.SQL[dedupOrder:limitBy], `tupleElement("__os_order_2_0", 2) ASC NULLS LAST`) {
 		t.Fatalf("dedup did not reuse the prior materialized sort order:\n%s", sorted.SQL)
 	}
 
@@ -1886,7 +1889,7 @@ func TestCompileStatsSupportsDownstreamPipeline(t *testing.T) {
 		`count() AS "events"`,
 		`"__os_group_0" AS "level"`,
 		`toInt256("events") > accurateCastOrNull(?, 'Int256')`,
-		`"events" AS "__os_order_`,
+		`toString("events")`,
 		` DESC NULLS LAST`,
 		` LIMIT ?`,
 	} {
@@ -2145,7 +2148,7 @@ func TestCompilePostStatsMissingSortUsesAggregateIdentity(t *testing.T) {
 	t.Parallel()
 
 	compiled := compileSPL(t, `index=gradethis | stats count by level | sort host`)
-	if !strings.Contains(compiled.SQL, `CAST(NULL AS Nullable(String)) AS "__os_order_`) ||
+	if !strings.Contains(compiled.SQL, `isNotNull(CAST(NULL AS Nullable(String)))`) ||
 		!strings.Contains(compiled.SQL, `"__os_group_0" AS "__os_order_`) ||
 		strings.Contains(compiled.SQL, `"host" AS "__os_order_`) {
 		t.Fatalf("missing post-stats sort key was not lowered safely:\n%s", compiled.SQL)
@@ -2157,10 +2160,12 @@ func TestCompileDynamicStatsGroupRetainsNumericAwareSort(t *testing.T) {
 
 	compiled := compileSPL(t, `index=gradethis | stats count by status | sort status`)
 	for _, required := range []string{
-		`arrayMap((__os_sort_exact_text, __os_sort_lexical_text, __os_sort_exact_null)`,
+		`arrayMap((__os_sort_exact_text, __os_sort_lexical_text)`,
+		`__os_sort_ip_key`,
+		`__os_sort_leading_text`,
 		`if(length(toString("__os_group_0")) <= ` +
 			strconv.Itoa(MaximumExactNumericOrderingInputTextBytes),
-		`ifNull(__os_sort_lexical_text, CAST('' AS String))`,
+		`ifNull(toString("__os_group_0"), CAST('' AS String))`,
 		`__os_exact_order_text`,
 		`tupleElement(__os_sort_exact_key, 1) != 0`,
 	} {
@@ -3293,9 +3298,14 @@ func TestCompileStatsListUsesOneBoundedOrderedStateAndPreservesPipelineOrder(t *
 	}
 	maximum := strconv.FormatUint(MaximumStatsListValuesPerGroup, 10)
 	maximumBytes := strconv.FormatUint(MaximumStatsListBytesPerGroup, 10)
+	order := `tupleElement("__os_order_2_0", 1) ASC NULLS LAST, ` +
+		`tupleElement("__os_order_2_0", 2) ASC NULLS LAST, ` +
+		`"__os_order_2_tie_0" DESC NULLS LAST, ` +
+		`"__os_order_2_tie_1" DESC NULLS LAST, ` +
+		`"__os_order_2_tie_2" DESC NULLS LAST`
 	for _, required := range []string{
-		`row_number() OVER (PARTITION BY "service" ORDER BY "__os_order_2_0" ASC NULLS LAST, "__os_order_2_tie_0" DESC NULLS LAST, "__os_order_2_tie_1" DESC NULLS LAST, "__os_order_2_tie_2" DESC NULLS LAST) AS "__os_list_row_ordinal"`,
-		`ifNull(sum(toUInt128(length("__os_measure_strings_0"))) OVER (PARTITION BY "service" ORDER BY "__os_order_2_0" ASC NULLS LAST, "__os_order_2_tie_0" DESC NULLS LAST, "__os_order_2_tie_1" DESC NULLS LAST, "__os_order_2_tie_2" DESC NULLS LAST ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING), toUInt128(0)) AS "__os_list_prior_elements_0"`,
+		`row_number() OVER (PARTITION BY "service" ORDER BY ` + order + `) AS "__os_list_row_ordinal"`,
+		`ifNull(sum(toUInt128(length("__os_measure_strings_0"))) OVER (PARTITION BY "service" ORDER BY ` + order + ` ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING), toUInt128(0)) AS "__os_list_prior_elements_0"`,
 		`AS "__os_measure_strings_0"`,
 		`arraySlice("__os_measure_strings_0", 1, toUInt64(toUInt128(` + maximum + `) - "__os_list_prior_elements_0"))`,
 		`AS "__os_list_row_state_0"`,
@@ -3530,7 +3540,6 @@ func TestCompileStatsValuesRejectsUnpinnedScalarMultivalueConsumers(t *testing.T
 	}{
 		{name: "where", source: `index=gradethis | stats values(user) AS users | where users="alice"`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: `users="alice"`},
 		{name: "ordered search", source: `index=gradethis | stats values(user) AS users | search users>"alice"`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: `users>"alice"`},
-		{name: "sort", source: `index=gradethis | stats values(user) AS users | sort users`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: "users"},
 		{name: "dedup", source: `index=gradethis | stats values(user) AS users | dedup users`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: "users"},
 		{name: "replace", source: `index=gradethis | stats values(user) AS users | eval x=replace(users,"a","b")`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: `replace(users,"a","b")`},
 		{name: "tonumber", source: `index=gradethis | stats values(user) AS users | eval x=tonumber(users)`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: "tonumber(users)"},
@@ -5086,14 +5095,16 @@ func assertFinalOrderDirections(t *testing.T, sql string, want ...string) {
 	if limitStart := strings.Index(clause, " LIMIT "); limitStart >= 0 {
 		clause = clause[:limitStart]
 	}
-	terms := strings.Split(strings.TrimSpace(clause), ", ")
-	if len(terms) != len(want) {
+	valueTermPattern := regexp.MustCompile(
+		`tupleElement\("__os_order_[^"]+", 2\) (ASC|DESC) NULLS LAST`,
+	)
+	valueTerms := valueTermPattern.FindAllStringSubmatch(clause, -1)
+	if len(valueTerms) != len(want) {
 		t.Fatalf("final ORDER BY = %q, want %d terms with directions %v", clause, len(want), want)
 	}
 	for index, direction := range want {
-		suffix := " " + direction + " NULLS LAST"
-		if !strings.HasSuffix(terms[index], suffix) {
-			t.Fatalf("final ORDER BY term %d = %q, want direction %s; clause=%q", index, terms[index], direction, clause)
+		if valueTerms[index][1] != direction {
+			t.Fatalf("final ORDER BY term %d = %q, want direction %s; clause=%q", index, valueTerms[index][0], direction, clause)
 		}
 	}
 }

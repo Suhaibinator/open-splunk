@@ -103,6 +103,70 @@ func TestParseProjectionSortAndLimits(t *testing.T) {
 	}
 }
 
+func TestParseSortSupportsOfficialSpacedDirectionPrefixes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		source         string
+		limit          uint64
+		limitSpecified bool
+		fields         []SortField
+		rangeText      []string
+	}{
+		{
+			name:      "ascending",
+			source:    `* | sort + _time`,
+			fields:    []SortField{{Field: "_time"}},
+			rangeText: []string{"+ _time"},
+		},
+		{
+			name:      "descending",
+			source:    `* | sort - _time`,
+			fields:    []SortField{{Field: "_time", Descending: true}},
+			rangeText: []string{"- _time"},
+		},
+		{
+			name:           "explicit unlimited",
+			source:         `* | sort 0 + _time`,
+			limitSpecified: true,
+			fields:         []SortField{{Field: "_time"}},
+			rangeText:      []string{"+ _time"},
+		},
+		{
+			name:      "mixed forms and separators",
+			source:    `* | sort + host, -_time, + source`,
+			fields:    []SortField{{Field: "host"}, {Field: "_time", Descending: true}, {Field: "source"}},
+			rangeText: []string{"+ host", "-_time", "+ source"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			query, err := Parse(test.source)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			command, ok := query.Commands[0].(*SortCommand)
+			if !ok || command.Limit != test.limit || command.LimitSpecified != test.limitSpecified || len(command.Fields) != len(test.fields) {
+				t.Fatalf("sort command = %#v, want limit %d specified %v fields %#v", query.Commands[0], test.limit, test.limitSpecified, test.fields)
+			}
+			for index, want := range test.fields {
+				got := command.Fields[index]
+				if got.Field != want.Field || got.Descending != want.Descending {
+					t.Fatalf("field %d = %#v, want %#v", index, got, want)
+				}
+				if gotText := test.source[got.Range.Start.Offset:got.Range.End.Offset]; gotText != test.rangeText[index] {
+					t.Fatalf("field %d range = %q, want %q", index, gotText, test.rangeText[index])
+				}
+			}
+			if got := test.source[command.Range.Start.Offset:command.Range.End.Offset]; got != strings.TrimPrefix(test.source, "* | ") {
+				t.Fatalf("command range = %q, want %q", got, strings.TrimPrefix(test.source, "* | "))
+			}
+		})
+	}
+}
+
 func TestParseRenameExactPairs(t *testing.T) {
 	t.Parallel()
 
@@ -203,6 +267,14 @@ func TestParseSortRejectsAmbiguousOrMalformedArguments(t *testing.T) {
 		`* | sort status,,host`,
 		`* | sort status,`,
 		`* | sort 18446744073709551616 status`,
+		`* | sort +`,
+		`* | sort -`,
+		`* | sort +,status`,
+		`* | sort status, -`,
+		`* | sort + | head 1`,
+		`* | sort + -_time`,
+		`* | sort --_time`,
+		`* | sort +-status`,
 	} {
 		if _, err := Parse(source); err == nil {
 			t.Fatalf("Parse(%q) unexpectedly succeeded", source)

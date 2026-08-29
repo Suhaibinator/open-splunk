@@ -119,6 +119,7 @@ export enum AuditAction {
   AUDIT_ACTION_KNOWLEDGE_OBJECT_ENABLE = 22,
   AUDIT_ACTION_KNOWLEDGE_OBJECT_DISABLE = 23,
   AUDIT_ACTION_KNOWLEDGE_OBJECT_DELETE = 24,
+  AUDIT_ACTION_SERVER_SETTINGS_UPDATE = 25,
   UNRECOGNIZED = -1,
 }
 
@@ -199,6 +200,9 @@ export function auditActionFromJSON(object: any): AuditAction {
     case 24:
     case "AUDIT_ACTION_KNOWLEDGE_OBJECT_DELETE":
       return AuditAction.AUDIT_ACTION_KNOWLEDGE_OBJECT_DELETE;
+    case 25:
+    case "AUDIT_ACTION_SERVER_SETTINGS_UPDATE":
+      return AuditAction.AUDIT_ACTION_SERVER_SETTINGS_UPDATE;
     case -1:
     case "UNRECOGNIZED":
     default:
@@ -258,6 +262,8 @@ export function auditActionToJSON(object: AuditAction): string {
       return "AUDIT_ACTION_KNOWLEDGE_OBJECT_DISABLE";
     case AuditAction.AUDIT_ACTION_KNOWLEDGE_OBJECT_DELETE:
       return "AUDIT_ACTION_KNOWLEDGE_OBJECT_DELETE";
+    case AuditAction.AUDIT_ACTION_SERVER_SETTINGS_UPDATE:
+      return "AUDIT_ACTION_SERVER_SETTINGS_UPDATE";
     case AuditAction.UNRECOGNIZED:
     default:
       return "UNRECOGNIZED";
@@ -271,6 +277,7 @@ export enum AuditTargetKind {
   AUDIT_TARGET_KIND_APP = 3,
   AUDIT_TARGET_KIND_SAVED_SEARCH = 4,
   AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT = 5,
+  AUDIT_TARGET_KIND_SERVER_SETTINGS = 6,
   UNRECOGNIZED = -1,
 }
 
@@ -294,6 +301,9 @@ export function auditTargetKindFromJSON(object: any): AuditTargetKind {
     case 5:
     case "AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT":
       return AuditTargetKind.AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT;
+    case 6:
+    case "AUDIT_TARGET_KIND_SERVER_SETTINGS":
+      return AuditTargetKind.AUDIT_TARGET_KIND_SERVER_SETTINGS;
     case -1:
     case "UNRECOGNIZED":
     default:
@@ -315,6 +325,8 @@ export function auditTargetKindToJSON(object: AuditTargetKind): string {
       return "AUDIT_TARGET_KIND_SAVED_SEARCH";
     case AuditTargetKind.AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT:
       return "AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT";
+    case AuditTargetKind.AUDIT_TARGET_KIND_SERVER_SETTINGS:
+      return "AUDIT_TARGET_KIND_SERVER_SETTINGS";
     case AuditTargetKind.UNRECOGNIZED:
     default:
       return "UNRECOGNIZED";

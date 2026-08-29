@@ -497,6 +497,8 @@ type SortValueMode uint8
 const (
 	SortValueModeAuto SortValueMode = iota
 	SortValueModeLexical
+	SortValueModeNumeric
+	SortValueModeIP
 )
 
 // SortKey is one logical sort key.

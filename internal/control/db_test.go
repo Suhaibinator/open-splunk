@@ -13,6 +13,7 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/migrations"
 	"gorm.io/gorm"
 	_ "modernc.org/sqlite"
 )
@@ -36,8 +37,8 @@ func TestOpenConfiguresSQLiteAndAppliesMigrations(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema migrations: %v", err)
 	}
-	if migrationCount != 1 {
-		t.Fatalf("schema migration count = %d, want 1", migrationCount)
+	if migrationCount != 2 {
+		t.Fatalf("schema migration count = %d, want 2", migrationCount)
 	}
 
 	// Foreign keys are connection-local in SQLite. Force database/sql to open
@@ -85,8 +86,8 @@ func TestOpenConfiguresSQLiteAndAppliesMigrations(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema migrations after reopen: %v", err)
 	}
-	if migrationCount != 1 {
-		t.Fatalf("schema migration count after reopen = %d, want 1", migrationCount)
+	if migrationCount != 2 {
+		t.Fatalf("schema migration count after reopen = %d, want 2", migrationCount)
 	}
 }
 
@@ -480,6 +481,74 @@ func TestApplyMigrationsIsVersionedAndDetectsDrift(t *testing.T) {
 	}
 }
 
+func TestServerSettingsMigrationPreservesExistingAuditLedger(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	raw, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "upgrade.sqlite")+"?_txlock=immediate&_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	baseline, err := fs.ReadFile(migrations.SQLite(), "0001_baseline.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	versionOne := fstest.MapFS{
+		"0001_baseline.sql": &fstest.MapFile{Data: baseline},
+	}
+	if err := ApplyMigrations(ctx, raw, versionOne); err != nil {
+		t.Fatalf("apply baseline migration: %v", err)
+	}
+	if _, err := raw.ExecContext(ctx, `
+		INSERT INTO audit_tenant_state (tenant_id, next_sequence, event_count)
+		VALUES ('upgrade-tenant', 1, 0);
+		INSERT INTO audit_events (
+			tenant_id, sequence, occurred_at_unix_micro,
+			actor_kind, actor_id, actor_role,
+			action, target_kind, target_id, target_version
+		) VALUES (
+			'upgrade-tenant', 1, 1,
+			'system', 'upgrade-test', 'system',
+			'index.create', 'index', 'before-upgrade', 1
+		);`); err != nil {
+		t.Fatalf("seed pre-upgrade audit event: %v", err)
+	}
+	if err := ApplyMigrations(ctx, raw, migrations.SQLite()); err != nil {
+		t.Fatalf("apply server-settings migration: %v", err)
+	}
+	if _, err := raw.ExecContext(ctx, `
+		INSERT INTO audit_events (
+			tenant_id, sequence, occurred_at_unix_micro,
+			actor_kind, actor_id, actor_role,
+			action, target_kind, target_id, target_version
+		) VALUES (
+			'upgrade-tenant', 2, 2,
+			'system', 'upgrade-test', 'system',
+			'index.create', 'index', 'after-upgrade', 1
+		);`); err != nil {
+		t.Fatalf("append post-upgrade audit event: %v", err)
+	}
+	var eventCount, nextSequence int
+	if err := raw.QueryRowContext(ctx, `
+		SELECT event_count, next_sequence
+		FROM audit_tenant_state
+		WHERE tenant_id = 'upgrade-tenant'`).Scan(&eventCount, &nextSequence); err != nil {
+		t.Fatal(err)
+	}
+	if eventCount != 2 || nextSequence != 3 {
+		t.Fatalf("post-upgrade audit state = count %d, next %d; want 2/3", eventCount, nextSequence)
+	}
+	rows, err := raw.QueryContext(ctx, `PRAGMA foreign_key_check`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	if rows.Next() {
+		t.Fatal("server-settings migration introduced a foreign-key violation")
+	}
+}
+
 func TestApplyMigrationsRejectsLedgerlessExistingSchema(t *testing.T) {
 	t.Parallel()
 
@@ -688,8 +757,8 @@ func TestConcurrentOpenSerializesMigrationStartup(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatalf("count schema migrations: %v", err)
 	}
-	if count != 1 {
-		t.Fatalf("schema migration count = %d, want 1", count)
+	if count != 2 {
+		t.Fatalf("schema migration count = %d, want 2", count)
 	}
 }
 

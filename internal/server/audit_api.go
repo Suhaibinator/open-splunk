@@ -420,6 +420,8 @@ func auditActionFromProto(value opensplunk.AuditAction) (audit.Action, bool) {
 		return audit.ActionKnowledgeObjectDisable, true
 	case opensplunk.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_DELETE:
 		return audit.ActionKnowledgeObjectDelete, true
+	case opensplunk.AuditAction_AUDIT_ACTION_SERVER_SETTINGS_UPDATE:
+		return audit.ActionServerSettingsUpdate, true
 	default:
 		return "", false
 	}
@@ -475,6 +477,8 @@ func auditActionToProto(value audit.Action) (opensplunk.AuditAction, bool) {
 		return opensplunk.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_DISABLE, true
 	case audit.ActionKnowledgeObjectDelete:
 		return opensplunk.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_DELETE, true
+	case audit.ActionServerSettingsUpdate:
+		return opensplunk.AuditAction_AUDIT_ACTION_SERVER_SETTINGS_UPDATE, true
 	default:
 		return opensplunk.AuditAction_AUDIT_ACTION_UNSPECIFIED, false
 	}
@@ -494,6 +498,8 @@ func auditTargetKindFromProto(
 		return audit.TargetKindSavedSearch, true
 	case opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT:
 		return audit.TargetKindKnowledgeObject, true
+	case opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_SERVER_SETTINGS:
+		return audit.TargetKindServerSettings, true
 	default:
 		return "", false
 	}
@@ -513,6 +519,8 @@ func auditTargetKindToProto(
 		return opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_SAVED_SEARCH, true
 	case audit.TargetKindKnowledgeObject:
 		return opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT, true
+	case audit.TargetKindServerSettings:
+		return opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_SERVER_SETTINGS, true
 	default:
 		return opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_UNSPECIFIED, false
 	}

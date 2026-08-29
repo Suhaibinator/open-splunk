@@ -11,6 +11,7 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 )
 
@@ -103,6 +104,162 @@ func TestMVSortPrimitivesAgainstClickHouse(t *testing.T) {
 	}
 
 	testMVSortPrimitiveBoundariesAgainstClickHouse(t, queryContext, connection)
+	testSortOrderingPrimitivesAgainstClickHouse(t, queryContext, connection)
+}
+
+func testSortOrderingPrimitivesAgainstClickHouse(
+	t *testing.T,
+	queryContext context.Context,
+	connection clickhousedriver.Conn,
+) {
+	t.Helper()
+
+	t.Run("numeric mode", func(t *testing.T) {
+		assertClickHouseStringOrder(
+			t,
+			queryContext,
+			connection,
+			`['10', '2', 'bad']`,
+			numericSortOrderingKeySQL("value", "value"),
+			[]string{"2", "10", "bad"},
+		)
+	})
+	t.Run("IP mode", func(t *testing.T) {
+		assertClickHouseStringOrder(
+			t,
+			queryContext,
+			connection,
+			`['10.0.0.10', '10.0.0.2', 'bad']`,
+			ipSortOrderingKeySQL("value"),
+			[]string{"10.0.0.2", "10.0.0.10", "bad"},
+		)
+	})
+	t.Run("automatic leading number", func(t *testing.T) {
+		assertClickHouseStringOrder(
+			t,
+			queryContext,
+			connection,
+			`['10a', '2b', 'alpha']`,
+			autoSortOrderingKeySQL("value", "value"),
+			[]string{"2b", "10a", "alpha"},
+		)
+	})
+	t.Run("automatic IP", func(t *testing.T) {
+		assertClickHouseStringOrder(
+			t,
+			queryContext,
+			connection,
+			`['10.0.0.10', '10.0.0.2', 'alpha']`,
+			autoSortOrderingKeySQL("value", "value"),
+			[]string{"10.0.0.2", "10.0.0.10", "alpha"},
+		)
+	})
+	t.Run("multivalue lexicographic approximation", func(t *testing.T) {
+		member := "member"
+		key := "arrayMap(" + member + " -> " +
+			sortScalarOrderingKeySQL(member, member, plan.SortValueModeAuto) +
+			", value)"
+		rows, err := connection.Query(
+			queryContext,
+			"SELECT value FROM (SELECT arrayJoin([['2', '10'], ['10'], ['2', '2'], ['2']]) AS value) ORDER BY "+key,
+		)
+		if err != nil {
+			t.Fatalf("execute multivalue sort approximation: %v", err)
+		}
+		defer rows.Close()
+		var got [][]string
+		for rows.Next() {
+			var value []string
+			if err := rows.Scan(&value); err != nil {
+				t.Fatalf("scan multivalue sort approximation: %v", err)
+			}
+			got = append(got, value)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("iterate multivalue sort approximation: %v", err)
+		}
+		want := [][]string{{"2"}, {"2", "2"}, {"2", "10"}, {"10"}}
+		equal := len(got) == len(want)
+		if equal {
+			for index := range got {
+				equal = equal && slices.Equal(got[index], want[index])
+			}
+		}
+		if !equal {
+			t.Fatalf("multivalue sort approximation = %#v, want %#v", got, want)
+		}
+	})
+
+	for _, direction := range []struct {
+		name string
+		sql  string
+		want []string
+	}{
+		{name: "ascending", sql: "ASC", want: []string{"a", "b", "<null>"}},
+		{name: "descending", sql: "DESC", want: []string{"b", "a", "<null>"}},
+	} {
+		t.Run("null remains last "+direction.name, func(t *testing.T) {
+			query := "SELECT isNull(value), ifNull(value, '<null>') FROM (" +
+				"SELECT *, tuple(toUInt8(NOT ifNull(isNotNull(value), 0)), " +
+				"[ifNull(value, '')]) AS sort_key FROM (SELECT arrayJoin([" +
+				"CAST('b' AS Nullable(String)), CAST(NULL AS Nullable(String)), " +
+				"CAST('a' AS Nullable(String))]) AS value)) ORDER BY " +
+				"tupleElement(sort_key, 1) ASC, tupleElement(sort_key, 2) " + direction.sql
+			rows, err := connection.Query(queryContext, query)
+			if err != nil {
+				t.Fatalf("execute %s null placement: %v", direction.name, err)
+			}
+			defer rows.Close()
+			var got []string
+			for rows.Next() {
+				var null bool
+				var value string
+				if err := rows.Scan(&null, &value); err != nil {
+					t.Fatalf("scan %s null placement: %v", direction.name, err)
+				}
+				got = append(got, value)
+			}
+			if err := rows.Err(); err != nil {
+				t.Fatalf("iterate %s null placement: %v", direction.name, err)
+			}
+			if !slices.Equal(got, direction.want) {
+				t.Fatalf("%s null placement = %#v, want %#v", direction.name, got, direction.want)
+			}
+		})
+	}
+}
+
+func assertClickHouseStringOrder(
+	t *testing.T,
+	queryContext context.Context,
+	connection clickhousedriver.Conn,
+	valuesSQL string,
+	keySQL string,
+	want []string,
+) {
+	t.Helper()
+
+	query := "SELECT value FROM (SELECT arrayJoin(" + valuesSQL +
+		") AS value) ORDER BY " + keySQL
+	rows, err := connection.Query(queryContext, query)
+	if err != nil {
+		t.Fatalf("execute ordering primitive: %v\nSQL: %s", err, query)
+	}
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var value string
+		if err := rows.Scan(&value); err != nil {
+			t.Fatalf("scan ordering primitive: %v", err)
+		}
+		got = append(got, value)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate ordering primitive: %v", err)
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("ordering primitive = %#v, want %#v\nSQL: %s", got, want, query)
+	}
 }
 
 func testMVSortPrimitiveBoundariesAgainstClickHouse(

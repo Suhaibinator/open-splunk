@@ -33,14 +33,14 @@ func TestCompileStreamStatsCountUsesDeterministicPipelineOrder(t *testing.T) {
 			name:           "explicit ascending order",
 			prefix:         `index=gradethis | table event_id,sequence | sort 0 +sequence`,
 			capturePattern: `"__os_order_[0-9]+_0" AS "__os_streamstats_order_[0-9]+_0", "__os_order_[0-9]+_tie_0" AS "__os_streamstats_order_[0-9]+_1", "__os_order_[0-9]+_tie_1" AS "__os_streamstats_order_[0-9]+_2", "__os_order_[0-9]+_tie_2" AS "__os_streamstats_order_[0-9]+_3"`,
-			orderPattern:   `"__os_streamstats_order_[0-9]+_0" ASC NULLS LAST, "__os_streamstats_order_[0-9]+_1" DESC NULLS LAST, "__os_streamstats_order_[0-9]+_2" DESC NULLS LAST, "__os_streamstats_order_[0-9]+_3" DESC NULLS LAST`,
+			orderPattern:   `tupleElement\("__os_streamstats_order_[0-9]+_0", 1\) ASC NULLS LAST, tupleElement\("__os_streamstats_order_[0-9]+_0", 2\) ASC NULLS LAST, "__os_streamstats_order_[0-9]+_1" DESC NULLS LAST, "__os_streamstats_order_[0-9]+_2" DESC NULLS LAST, "__os_streamstats_order_[0-9]+_3" DESC NULLS LAST`,
 			minimumOrders:  3,
 		},
 		{
 			name:           "explicit descending order",
 			prefix:         `index=gradethis | table event_id,sequence | sort 0 -sequence`,
 			capturePattern: `"__os_order_[0-9]+_0" AS "__os_streamstats_order_[0-9]+_0", "__os_order_[0-9]+_tie_0" AS "__os_streamstats_order_[0-9]+_1", "__os_order_[0-9]+_tie_1" AS "__os_streamstats_order_[0-9]+_2", "__os_order_[0-9]+_tie_2" AS "__os_streamstats_order_[0-9]+_3"`,
-			orderPattern:   `"__os_streamstats_order_[0-9]+_0" DESC NULLS LAST, "__os_streamstats_order_[0-9]+_1" DESC NULLS LAST, "__os_streamstats_order_[0-9]+_2" DESC NULLS LAST, "__os_streamstats_order_[0-9]+_3" DESC NULLS LAST`,
+			orderPattern:   `tupleElement\("__os_streamstats_order_[0-9]+_0", 1\) ASC NULLS LAST, tupleElement\("__os_streamstats_order_[0-9]+_0", 2\) DESC NULLS LAST, "__os_streamstats_order_[0-9]+_1" DESC NULLS LAST, "__os_streamstats_order_[0-9]+_2" DESC NULLS LAST, "__os_streamstats_order_[0-9]+_3" DESC NULLS LAST`,
 			minimumOrders:  3,
 		},
 	}
@@ -283,7 +283,7 @@ func TestCompileStreamStatsCapturesOrderBeforeAliasReplacement(t *testing.T) {
 		t.Fatalf("streamstats replacement output count = %d, fields %#v", got, compiled.OutputFields)
 	}
 	capture := regexp.MustCompile(`"__os_order_[0-9]+_0" AS "__os_streamstats_order_[0-9]+_0"`)
-	windowOrder := regexp.MustCompile(`count\(\) OVER \(ORDER BY "__os_streamstats_order_[0-9]+_0" ASC NULLS LAST, `)
+	windowOrder := regexp.MustCompile(`count\(\) OVER \(ORDER BY tupleElement\("__os_streamstats_order_[0-9]+_0", 1\) ASC NULLS LAST, tupleElement\("__os_streamstats_order_[0-9]+_0", 2\) ASC NULLS LAST, `)
 	if !capture.MatchString(compiled.SQL) || !windowOrder.MatchString(compiled.SQL) {
 		t.Fatalf("streamstats did not capture the pre-replacement running order:\n%s", compiled.SQL)
 	}
@@ -343,13 +343,14 @@ func TestCompileStreamStatsPreservesSnapshottedTieBreakersForDownstreamSort(t *t
 			`"__os_sort_source_identity" AS "__os_streamstats_tie_breaker_[0-9]+_2"`,
 	)
 	downstreamProjection := regexp.MustCompile(
-		`"host" AS "__os_order_[0-9]+_0", ` +
+		` AS "__os_order_[0-9]+_0", ` +
 			`"__os_streamstats_tie_breaker_[0-9]+_0" AS "__os_order_[0-9]+_tie_0", ` +
 			`"__os_streamstats_tie_breaker_[0-9]+_1" AS "__os_order_[0-9]+_tie_1", ` +
 			`"__os_streamstats_tie_breaker_[0-9]+_2" AS "__os_order_[0-9]+_tie_2"`,
 	)
 	downstreamOrder := regexp.MustCompile(
-		`"__os_order_[0-9]+_0" ASC NULLS LAST, ` +
+		`tupleElement\("__os_order_[0-9]+_0", 1\) ASC NULLS LAST, ` +
+			`tupleElement\("__os_order_[0-9]+_0", 2\) ASC NULLS LAST, ` +
 			`"__os_order_[0-9]+_tie_0" DESC NULLS LAST, ` +
 			`"__os_order_[0-9]+_tie_1" DESC NULLS LAST, ` +
 			`"__os_order_[0-9]+_tie_2" DESC NULLS LAST`,
@@ -464,7 +465,7 @@ func TestCompileStreamStatsCountsTransformedRowsWithoutRescanningEvents(t *testi
 	for _, required := range []string{
 		`GROUP BY "service"`,
 		`count() AS "events"`,
-		`count() OVER (ORDER BY "__os_streamstats_order_`,
+		`count() OVER (ORDER BY tupleElement("__os_streamstats_order_`,
 		`AS "running"`,
 	} {
 		if !strings.Contains(compiled.SQL, required) {
@@ -631,7 +632,7 @@ func assertStreamStatsAnalysisBarrier(t *testing.T, sql string, args []any) {
 		`"__os_order_[0-9]+_0" AS "__os_streamstats_order_[0-9]+_0"`,
 	)
 	windowOrder := regexp.MustCompile(
-		`ORDER BY "__os_streamstats_order_[0-9]+_0" ASC NULLS LAST`,
+		`ORDER BY tupleElement\("__os_streamstats_order_[0-9]+_0", 1\) ASC NULLS LAST, tupleElement\("__os_streamstats_order_[0-9]+_0", 2\) ASC NULLS LAST`,
 	)
 	if !orderCapture.MatchString(sql) || !windowOrder.MatchString(sql) {
 		t.Fatalf("analysis SQL lost streamstats input order:\n%s", sql)

@@ -15,6 +15,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"github.com/Suhaibinator/open-splunk/internal/searchlimits"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
@@ -107,7 +108,18 @@ func (executor *Executor) ExecuteStatsWildcardInventory(
 	}()
 	ctx = admittedContext
 
-	settings, err := settingsForStatsWildcardInventory(executor.settings, maximumPairs)
+	base := executor.baseSettings()
+	if policy, ok := searchlimits.FromContext(ctx); ok {
+		config, configErr := ConfigFromPolicy(policy)
+		if configErr != nil {
+			return plan.StatsWildcardExpansion{}, configErr
+		}
+		base, configErr = validatedQuerySettings(config)
+		if configErr != nil {
+			return plan.StatsWildcardExpansion{}, configErr
+		}
+	}
+	settings, err := settingsForStatsWildcardInventory(base, maximumPairs)
 	if err != nil {
 		return plan.StatsWildcardExpansion{}, err
 	}

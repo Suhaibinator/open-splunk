@@ -670,11 +670,39 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 		case *spl.SortCommand:
 			keys := make([]SortKey, 0, len(command.Fields))
 			for _, field := range command.Fields {
-				ref, fieldErr := ResolveField(field.Field, field.Range)
+				fieldRange := field.FieldRange
+				if fieldRange == (spl.Range{}) {
+					fieldRange = field.Range
+				}
+				var (
+					ref      FieldRef
+					fieldErr error
+				)
+				if field.Quoted {
+					ref, fieldErr = ResolveQuotedField(field.Field, fieldRange)
+				} else {
+					ref, fieldErr = ResolveField(field.Field, fieldRange)
+				}
 				if fieldErr != nil {
 					return nil, fieldErr
 				}
-				keys = append(keys, SortKey{Field: ref, Descending: field.Descending})
+				mode := SortValueModeAuto
+				switch field.Mode {
+				case spl.SortValueModeAuto:
+				case spl.SortValueModeString:
+					mode = SortValueModeLexical
+				case spl.SortValueModeNumber:
+					mode = SortValueModeNumeric
+				case spl.SortValueModeIP:
+					mode = SortValueModeIP
+				default:
+					return nil, &Diagnostic{
+						Code:    "SPL_INVALID_QUERY",
+						Message: "sort field has an invalid value mode",
+						Range:   field.Range,
+					}
+				}
+				keys = append(keys, SortKey{Field: ref, Descending: field.Descending, Mode: mode})
 			}
 			limit := command.Limit
 			if !command.LimitSpecified {

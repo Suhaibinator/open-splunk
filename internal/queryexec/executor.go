@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unicode/utf8"
@@ -38,6 +39,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"github.com/Suhaibinator/open-splunk/internal/searchlimits"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
@@ -144,14 +146,99 @@ type Config struct {
 	ReadAdmission indexread.Admission
 }
 
+// ConfigFromPolicy derives the ClickHouse envelope from one admitted search
+// policy. Result settings retain one overflow row and a two-times byte margin
+// so the search-job sink remains the authoritative truncation boundary.
+func ConfigFromPolicy(policy searchlimits.Policy) (Config, error) {
+	if err := searchlimits.Validate(policy); err != nil {
+		return Config{}, err
+	}
+	resultRows := policy.MaxResultRows + 1
+	resultBytes := policy.MaxResultBytes * 2
+	if resultRows <= policy.MaxResultRows || resultBytes < policy.MaxResultBytes {
+		return Config{}, errors.New("derive ClickHouse query limits: result guard overflow")
+	}
+	return Config{
+		MaxExecutionTime:          policy.MaxRuntime,
+		MaxMemoryBytes:            policy.MaxMemoryBytes,
+		MaxRowsToRead:             policy.MaxRowsToRead,
+		MaxBytesToRead:            policy.MaxBytesToRead,
+		MaxResultRows:             resultRows,
+		MaxResultBytes:            resultBytes,
+		MaxRowsToGroupBy:          policy.MaxGroupedRows,
+		ExpandTimechartGroupLimit: true,
+		MaxThreads:                policy.MaxThreads,
+	}, nil
+}
+
 // Executor is a native ClickHouse implementation of searchjobs.Executor.
 type Executor struct {
 	connection                queryConnection
+	settingsMu                sync.RWMutex
 	settings                  *validatedExecutorSettings
 	expandTimechartGroupLimit bool
+	limitSource               *searchlimits.Source
 	newQueryID                func() (string, error)
 	withProgress              func(func(*clickhousedriver.Progress)) clickhousedriver.QueryOption
 	readAdmission             indexread.Admission
+}
+
+// Reconfigure atomically replaces the resource envelope used by operations
+// that start after this call. In-flight operations retain their cloned
+// ClickHouse settings.
+func (executor *Executor) Reconfigure(config Config) error {
+	if executor == nil {
+		return errors.New("reconfigure ClickHouse query executor: executor is required")
+	}
+	expand := config.MaxRowsToGroupBy == 0 || config.ExpandTimechartGroupLimit
+	settings, err := validatedQuerySettings(config)
+	if err != nil {
+		return err
+	}
+	executor.settingsMu.Lock()
+	executor.settings = settings
+	executor.expandTimechartGroupLimit = expand
+	executor.settingsMu.Unlock()
+	return nil
+}
+
+// BindLimitSource makes one atomic policy source authoritative for operations
+// started without an admission snapshot. It is configured during startup
+// before the executor is shared.
+func (executor *Executor) BindLimitSource(source *searchlimits.Source) error {
+	if executor == nil || source == nil {
+		return errors.New("bind ClickHouse search limits: source is required")
+	}
+	if _, err := ConfigFromPolicy(source.Snapshot()); err != nil {
+		return err
+	}
+	executor.settingsMu.Lock()
+	executor.limitSource = source
+	executor.settingsMu.Unlock()
+	return nil
+}
+
+func (executor *Executor) settingsSnapshot() (*validatedExecutorSettings, bool) {
+	executor.settingsMu.RLock()
+	settings, expand, source := executor.settings, executor.expandTimechartGroupLimit, executor.limitSource
+	executor.settingsMu.RUnlock()
+	if source == nil {
+		return settings, expand
+	}
+	config, err := ConfigFromPolicy(source.Snapshot())
+	if err != nil {
+		return settings, expand
+	}
+	derived, err := validatedQuerySettings(config)
+	if err != nil {
+		return settings, expand
+	}
+	return derived, true
+}
+
+func (executor *Executor) baseSettings() *validatedExecutorSettings {
+	settings, _ := executor.settingsSnapshot()
+	return settings
 }
 
 type queryConnection interface {
@@ -899,7 +986,19 @@ func (executor *Executor) settingsForContext(
 	ctx context.Context,
 	query clickhouse.CompiledQuery,
 ) (clickhousedriver.Settings, error) {
-	settings := executor.groupLimitSettingsFor(query)
+	base, expand := executor.settingsSnapshot()
+	if policy, ok := searchlimits.FromContext(ctx); ok {
+		config, err := ConfigFromPolicy(policy)
+		if err != nil {
+			return nil, fmt.Errorf("execute ClickHouse search: admitted limits are invalid: %w", err)
+		}
+		base, err = validatedQuerySettings(config)
+		if err != nil {
+			return nil, fmt.Errorf("execute ClickHouse search: admitted limits are invalid: %w", err)
+		}
+		expand = true
+	}
+	settings := groupLimitSettingsFor(base, expand, query)
 	hint, ok, err := query.StatsPartitionsMaxThreadsHintContext(ctx)
 	if err != nil {
 		return nil, err
@@ -917,16 +1016,25 @@ func (executor *Executor) settingsForContext(
 }
 
 func (executor *Executor) groupLimitSettingsFor(query clickhouse.CompiledQuery) clickhousedriver.Settings {
-	if executor.settings == nil {
+	settings, expandTimechartGroupLimit := executor.settingsSnapshot()
+	return groupLimitSettingsFor(settings, expandTimechartGroupLimit, query)
+}
+
+func groupLimitSettingsFor(
+	settings *validatedExecutorSettings,
+	expandTimechartGroupLimit bool,
+	query clickhouse.CompiledQuery,
+) clickhousedriver.Settings {
+	if settings == nil {
 		return nil
 	}
-	base := executor.settings.values
+	base := settings.values
 	percentileWide := (query.Timechart != nil &&
 		query.Timechart.Mode == clickhouse.TimechartModeRuntimeWideValue &&
 		query.Timechart.ValueKind == clickhouse.TimechartValueKindPercentile) ||
 		(query.Chart != nil &&
 			query.Chart.ValueKind == clickhouse.ChartValueKindPercentile)
-	if !executor.expandTimechartGroupLimit && !percentileWide {
+	if !expandTimechartGroupLimit && !percentileWide {
 		return base
 	}
 	// A fixed timechart groups only by bucket. Runtime-wide timecharts must first
@@ -966,16 +1074,16 @@ func (executor *Executor) groupLimitSettingsFor(query clickhouse.CompiledQuery) 
 		return base
 	}
 	if percentileWide && current > required {
-		settings := maps.Clone(base)
-		settings["max_rows_to_group_by"] = required
-		return settings
+		adjusted := maps.Clone(base)
+		adjusted["max_rows_to_group_by"] = required
+		return adjusted
 	}
-	if current >= required || !executor.expandTimechartGroupLimit {
+	if current >= required || !expandTimechartGroupLimit {
 		return base
 	}
-	settings := maps.Clone(base)
-	settings["max_rows_to_group_by"] = required
-	return settings
+	adjusted := maps.Clone(base)
+	adjusted["max_rows_to_group_by"] = required
+	return adjusted
 }
 
 // wideTimechartRow is one bucket of a split-by timechart grid: the bucket

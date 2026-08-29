@@ -12,6 +12,7 @@ import * as SavedSearchApi from "@/gen/ts/open_splunk/saved_search_api";
 import * as SearchApi from "@/gen/ts/open_splunk/search_api";
 import * as SearchAttemptAuditApi from "@/gen/ts/open_splunk/search_attempt_audit_api";
 import * as SearchInspectionApi from "@/gen/ts/open_splunk/search_inspection_api";
+import * as ServerSettingsApi from "@/gen/ts/open_splunk/server_settings_api";
 import * as SystemApi from "@/gen/ts/open_splunk/system_api";
 
 import { defineProtobufRoute, type ProtobufRoute } from "./protobuf-transport";
@@ -104,6 +105,19 @@ export const systemRoutes = {
     "/api/system/bootstrap",
     SystemApi.GetSystemBootstrapRequest,
     SystemApi.GetSystemBootstrapResponse,
+  ),
+} as const;
+
+export const serverSettingsRoutes = {
+  get: defineProtobufRoute(
+    "/api/server/settings/get",
+    ServerSettingsApi.GetServerSettingsRequest,
+    ServerSettingsApi.GetServerSettingsResponse,
+  ),
+  update: defineProtobufRoute(
+    "/api/server/settings/update",
+    ServerSettingsApi.UpdateServerSettingsRequest,
+    ServerSettingsApi.UpdateServerSettingsResponse,
   ),
 } as const;
 
@@ -551,6 +565,7 @@ export const exportRoutes = {
 
 export const openSplunkRoutes = {
   system: systemRoutes,
+  serverSettings: serverSettingsRoutes,
   apps: appRoutes,
   collectors: collectorRoutes,
   auditEvents: auditEventRoutes,

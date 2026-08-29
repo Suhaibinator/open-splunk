@@ -61,6 +61,11 @@ export enum ServerFeature {
    * Field knowledge capability 15 is also required.
    */
   SERVER_FEATURE_KNOWLEDGE_QUARANTINE = 19,
+  /**
+   * SERVER_FEATURE_SERVER_SETTINGS_ADMIN - Versioned, persistent node-wide search limits can be read and updated by
+   * an authenticated browser administrator.
+   */
+  SERVER_FEATURE_SERVER_SETTINGS_ADMIN = 20,
   UNRECOGNIZED = -1,
 }
 
@@ -126,6 +131,9 @@ export function serverFeatureFromJSON(object: any): ServerFeature {
     case 19:
     case "SERVER_FEATURE_KNOWLEDGE_QUARANTINE":
       return ServerFeature.SERVER_FEATURE_KNOWLEDGE_QUARANTINE;
+    case 20:
+    case "SERVER_FEATURE_SERVER_SETTINGS_ADMIN":
+      return ServerFeature.SERVER_FEATURE_SERVER_SETTINGS_ADMIN;
     case -1:
     case "UNRECOGNIZED":
     default:
@@ -175,6 +183,8 @@ export function serverFeatureToJSON(object: ServerFeature): string {
       return "SERVER_FEATURE_DASHBOARDS";
     case ServerFeature.SERVER_FEATURE_KNOWLEDGE_QUARANTINE:
       return "SERVER_FEATURE_KNOWLEDGE_QUARANTINE";
+    case ServerFeature.SERVER_FEATURE_SERVER_SETTINGS_ADMIN:
+      return "SERVER_FEATURE_SERVER_SETTINGS_ADMIN";
     case ServerFeature.UNRECOGNIZED:
     default:
       return "UNRECOGNIZED";

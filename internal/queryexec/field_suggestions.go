@@ -117,7 +117,7 @@ func (executor *Executor) ExecuteFieldSuggestions(
 		}
 	}()
 	ctx = admittedContext
-	settings, err := settingsForFieldSuggestions(executor.settings, query.Spec.MaximumFields)
+	settings, err := settingsForFieldSuggestions(executor.baseSettings(), query.Spec.MaximumFields)
 	if err != nil {
 		return FieldSuggestionResult{}, err
 	}

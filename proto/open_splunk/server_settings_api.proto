@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+package open_splunk;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk;opensplunk";
+
+// SearchLimits is the complete node-wide search resource policy. Updates are
+// full replacements so related limits are validated as one coherent unit.
+message SearchLimits {
+  google.protobuf.Duration maximum_runtime = 1;
+  uint64 maximum_memory_bytes = 2;
+  uint64 maximum_rows_to_read = 3;
+  uint64 maximum_bytes_to_read = 4;
+  uint64 maximum_grouped_rows = 5;
+  uint64 maximum_threads = 6;
+  uint64 maximum_result_rows = 7;
+  uint64 maximum_result_bytes = 8;
+  uint64 maximum_total_result_bytes = 9;
+  uint32 maximum_concurrent_searches = 10;
+  google.protobuf.Duration result_retention = 11;
+}
+
+message VersionedSearchLimits {
+  uint64 version = 1;
+  SearchLimits limits = 2;
+  optional google.protobuf.Timestamp updated_at = 3;
+}
+
+message GetServerSettingsRequest {}
+
+message GetServerSettingsResponse {
+  VersionedSearchLimits current = 1;
+  SearchLimits defaults = 2;
+  SearchLimits minimums = 3;
+  SearchLimits maximums = 4;
+}
+
+message UpdateServerSettingsRequest {
+  uint64 expected_version = 1;
+  SearchLimits limits = 2;
+}
+
+message UpdateServerSettingsResponse {
+  VersionedSearchLimits current = 1;
+  SearchLimits defaults = 2;
+  SearchLimits minimums = 3;
+  SearchLimits maximums = 4;
+}

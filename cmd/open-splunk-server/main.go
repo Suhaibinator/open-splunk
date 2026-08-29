@@ -38,6 +38,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/searchaudit"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"github.com/Suhaibinator/open-splunk/internal/searchlimits"
 	"github.com/Suhaibinator/open-splunk/internal/searchws"
 	"github.com/Suhaibinator/open-splunk/internal/server"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
@@ -569,13 +570,36 @@ func runWithOptions(config options) error {
 	if err != nil {
 		return fmt.Errorf("create index statistics reader: %w", err)
 	}
+	serverSettingsStore, err := control.NewServerSearchSettingsStore(
+		controlDB,
+		config.tenantID,
+		securityStores.auditEvents,
+	)
+	if err != nil {
+		return fmt.Errorf("create server settings store: %w", err)
+	}
+	initialServerSettings, err := serverSettingsStore.Get(startupContext)
+	if err != nil {
+		return fmt.Errorf("load server settings: %w", err)
+	}
+	searchLimitSource, err := searchlimits.NewSource(initialServerSettings.Limits)
+	if err != nil {
+		return fmt.Errorf("load server settings policy: %w", err)
+	}
+	queryConfig, err := queryexec.ConfigFromPolicy(initialServerSettings.Limits)
+	if err != nil {
+		return fmt.Errorf("derive server settings query policy: %w", err)
+	}
 	executor, err := newRuntimeQueryExecutor(
 		connection,
-		queryexec.Config{},
+		queryConfig,
 		indexReads.admission,
 	)
 	if err != nil {
 		return fmt.Errorf("create query executor: %w", err)
+	}
+	if err := executor.BindLimitSource(searchLimitSource); err != nil {
+		return fmt.Errorf("bind query executor search limits: %w", err)
 	}
 	compiler := internalclickhouse.Compiler{
 		Database: "open_splunk",
@@ -609,7 +633,14 @@ func runWithOptions(config options) error {
 		OnExecutionError: func(jobID string, code searchjobs.FailureCode, cause error) {
 			log.Print(formatSearchExecutionFailure(jobID, code, cause))
 		},
-		Compiler: compiler,
+		Compiler:      compiler,
+		MaxConcurrent: int(searchlimits.SupportedRange().Maximum.MaxConcurrent),
+		MaxRows:       initialServerSettings.Limits.MaxResultRows,
+		MaxBytes:      initialServerSettings.Limits.MaxResultBytes,
+		MaxTotalBytes: initialServerSettings.Limits.MaxTotalResultBytes,
+		MaxRuntime:    initialServerSettings.Limits.MaxRuntime,
+		RetentionTTL:  initialServerSettings.Limits.ResultRetention,
+		LimitSource:   searchLimitSource,
 	})
 	if err != nil {
 		return fmt.Errorf("create search job manager: %w", err)
@@ -619,6 +650,10 @@ func runWithOptions(config options) error {
 			log.Printf("close search jobs: %v", err)
 		}
 	}()
+	liveServerSettings := &runtimeServerSettings{
+		store: serverSettingsStore, source: searchLimitSource,
+		jobs: jobs, current: initialServerSettings,
+	}
 	knowledgePreview, err := knowledgepreview.NewService(knowledgepreview.Config{
 		Searches: jobs,
 		Writer:   knowledgeManagement.writer,
@@ -753,6 +788,7 @@ func runWithOptions(config options) error {
 		IndexDataDeletionWaker:     indexDataDeletion,
 		IngestionTokens:            tokenStore,
 		AuditEvents:                securityStores.auditEvents,
+		ServerSettings:             liveServerSettings,
 		SearchAttemptAuditEvents:   securityStores.searchAttemptAuditEvents,
 		CollectorAdmin:             collectorAdministration,
 		AppAdmin:                   appCatalog,

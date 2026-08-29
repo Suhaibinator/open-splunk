@@ -1741,11 +1741,12 @@ func (c Compiler) compileWithFinalizerContext(
 			)
 			state = nextState
 		case *plan.Sort:
-			materialized, sortKeys, order, compileErr := compileSort(operator.Keys, state, aliasSequence)
+			materialized, sortKeys, order, prefixArgs, compileErr := compileSort(operator.Keys, state, aliasSequence)
 			if compileErr != nil {
 				return CompiledQuery{}, compileErr
 			}
 			sortSQL := "SELECT *, " + strings.Join(materialized, ", ") + " FROM (" + relation.sql + ") AS " + alias + " ORDER BY " + order
+			args = prependArguments(prefixArgs, args)
 			if operator.Limit > 0 {
 				sortSQL += " LIMIT ?"
 				args = append(args, operator.Limit)
@@ -8551,9 +8552,11 @@ type fieldState struct {
 }
 
 type compiledSortKey struct {
-	valueSQL   string
-	descending bool
-	nullsFirst bool
+	valueSQL           string
+	descending         bool
+	nullsFirst         bool
+	separatePresence   bool
+	presenceDescending bool
 }
 
 func compileScan(
@@ -25813,17 +25816,18 @@ func compileWindow(operator *plan.Window, state compileState) (string, compileSt
 	return expression, next, nil
 }
 
-func compileSort(keys []plan.SortKey, state compileState, stage int) ([]string, []compiledSortKey, string, error) {
+func compileSort(keys []plan.SortKey, state compileState, stage int) ([]string, []compiledSortKey, string, []any, error) {
 	if len(keys) == 0 {
-		return nil, nil, "", errors.New("compile ClickHouse sort: no keys")
+		return nil, nil, "", nil, errors.New("compile ClickHouse sort: no keys")
 	}
 	materialized := make([]string, 0, len(keys)+len(state.tieBreakers))
 	compiled := make([]compiledSortKey, 0, len(keys)+len(state.tieBreakers))
+	prefixArgs := make([]any, 0)
 	explicitValues := make(map[string]struct{}, len(keys))
 	for i, key := range keys {
 		field, ok, err := resolveCompiledField(key.Field, state)
 		if err != nil {
-			return nil, nil, "", err
+			return nil, nil, "", nil, err
 		}
 		if !ok {
 			// SPL permits sorting by a field that is missing from every row. Use
@@ -25835,24 +25839,20 @@ func compileSort(keys []plan.SortKey, state compileState, stage int) ([]string, 
 				kind:      fieldKindString,
 			}
 		}
-		if isNativeMultivalueKind(field.kind) {
-			return nil, nil, "", unsupportedMultivalueUsage("sort", key.Field.Range)
-		}
 		explicitValues[field.valueSQL] = struct{}{}
 		alias := fmt.Sprintf("__os_order_%d_%d", stage, i)
-		sortValue := field.valueSQL
-		switch key.Mode {
-		case plan.SortValueModeAuto:
-			if field.kind == fieldKindDynamic || field.numericSort {
-				sortValue = dynamicSortValue(field.valueSQL, field.kind == fieldKindDynamic)
-			}
-		case plan.SortValueModeLexical:
-			sortValue = "toString(" + field.valueSQL + ")"
-		default:
-			return nil, nil, "", fmt.Errorf("compile ClickHouse sort: invalid value mode %d", key.Mode)
+		presenceSQL, presenceArgs := sortFieldPresenceSQL(field)
+		sortValue, compileErr := sortFieldValueSQL(field, key.Mode)
+		if compileErr != nil {
+			return nil, nil, "", nil, compileErr
 		}
-		materialized = append(materialized, sortValue+" AS "+quoteIdentifier(alias))
-		compiled = append(compiled, compiledSortKey{valueSQL: quoteIdentifier(alias), descending: key.Descending})
+		prefixArgs = append(prefixArgs, presenceArgs...)
+		materialized = append(materialized,
+			"tuple(toUInt8(NOT ifNull("+presenceSQL+", 0)), "+sortValue+") AS "+quoteIdentifier(alias),
+		)
+		compiled = append(compiled, compiledSortKey{
+			valueSQL: quoteIdentifier(alias), descending: key.Descending, separatePresence: true,
+		})
 	}
 	// Preserve a stable row identity without assuming the input still consists
 	// of events. Event pipelines use event_id; transforming pipelines use their
@@ -25868,58 +25868,9 @@ func compileSort(keys []plan.SortKey, state compileState, stage int) ([]string, 
 	}
 	order, err := compileMaterializedOrder(compiled, false)
 	if err != nil {
-		return nil, nil, "", err
+		return nil, nil, "", nil, err
 	}
-	return materialized, compiled, order, nil
-}
-
-func dynamicSortValue(valueSQL string, dynamicValue bool) string {
-	scalar := compiledScalar{
-		valueSQL: valueSQL,
-		kind:     fieldKindString,
-	}
-	if dynamicValue {
-		scalar = compiledScalar{
-			valueSQL:       valueSQL,
-			dynamicTypeSQL: "dynamicType(" + valueSQL + ")",
-			kind:           fieldKindDynamic,
-		}
-	}
-	numericText := exactNumericScalarTextSQL(scalar)
-	lexicalText := exactNumericScalarLexicalTextSQL(scalar)
-	// Dynamic itself is intentionally forbidden in ClickHouse ORDER BY. A
-	// fixed tuple also gives SPL-like numeric ordering for numeric values and
-	// strings. Numeric eligibility uses the bounded complete-decimal grammar,
-	// while the ordering components retain exact normalized decimal text and
-	// never collapse distinct wide integers or decimals through Float64.
-	// Nonnumeric scalars sort before missing/explicit null.
-	textVariable := "__os_sort_exact_text"
-	lexicalVariable := "__os_sort_lexical_text"
-	nullVariable := "__os_sort_exact_null"
-	keyVariable := "__os_sort_exact_key"
-	numeric := exactNumericKeyEligibleSQL(keyVariable)
-	keyValue := exactNumericKeyValueSQL(keyVariable)
-	body := "tuple(" +
-		"if(" + nullVariable + " != 0, toUInt8(2), if(" + numeric +
-		", toUInt8(0), toUInt8(1))), " +
-		"if(" + numeric + ", tupleElement(" + keyValue + ", 1), toUInt8(1)), " +
-		"if(" + numeric + ", tupleElement(" + keyValue + ", 2), toInt64(0)), " +
-		"if(" + numeric + ", tupleElement(" + keyValue + ", 3), CAST('' AS String)), " +
-		"ifNull(" + lexicalVariable + ", CAST('' AS String)))"
-	boundKey := bindSQLExpressions(
-		[]string{keyVariable},
-		[]string{exactNumericOrderingKeySQL(textVariable)},
-		body,
-	)
-	return bindSQLExpressions(
-		[]string{textVariable, lexicalVariable, nullVariable},
-		[]string{
-			numericText,
-			lexicalText,
-			"toUInt8(isNull(" + valueSQL + "))",
-		},
-		boundKey,
-	)
+	return materialized, compiled, order, prefixArgs, nil
 }
 
 func compileMaterializedOrder(keys []compiledSortKey, reverse bool) (string, error) {
@@ -25930,9 +25881,11 @@ func compileMaterializedOrder(keys []compiledSortKey, reverse bool) (string, err
 	for _, key := range keys {
 		descending := key.descending
 		nullsFirst := key.nullsFirst
+		presenceDescending := key.presenceDescending
 		if reverse {
 			descending = !descending
 			nullsFirst = !nullsFirst
+			presenceDescending = !presenceDescending
 		}
 		direction := "ASC"
 		if descending {
@@ -25941,6 +25894,17 @@ func compileMaterializedOrder(keys []compiledSortKey, reverse bool) (string, err
 		nulls := "NULLS LAST"
 		if nullsFirst {
 			nulls = "NULLS FIRST"
+		}
+		if key.separatePresence {
+			presenceDirection := "ASC"
+			if presenceDescending {
+				presenceDirection = "DESC"
+			}
+			parts = append(parts,
+				"tupleElement("+key.valueSQL+", 1) "+presenceDirection+" "+nulls,
+				"tupleElement("+key.valueSQL+", 2) "+direction+" "+nulls,
+			)
+			continue
 		}
 		parts = append(parts, key.valueSQL+" "+direction+" "+nulls)
 	}
@@ -25952,6 +25916,7 @@ func reverseCompiledSortKeys(keys []compiledSortKey) []compiledSortKey {
 	for i, key := range keys {
 		key.descending = !key.descending
 		key.nullsFirst = !key.nullsFirst
+		key.presenceDescending = !key.presenceDescending
 		result[i] = key
 	}
 	return result

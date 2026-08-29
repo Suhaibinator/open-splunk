@@ -18,6 +18,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
+	"github.com/Suhaibinator/open-splunk/internal/searchlimits"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
@@ -53,6 +54,7 @@ func (manager *Manager) prepareKnowledgeAdmission(
 	request CreateRequest,
 	visibilityCutoff uint64,
 	searchStart time.Time,
+	admittedLimits searchlimits.Policy,
 ) (preparedKnowledgeAdmission, error) {
 	return manager.prepareKnowledgeAdmissionForJob(
 		ctx,
@@ -60,6 +62,7 @@ func (manager *Manager) prepareKnowledgeAdmission(
 		"",
 		visibilityCutoff,
 		searchStart,
+		admittedLimits,
 	)
 }
 
@@ -69,6 +72,7 @@ func (manager *Manager) prepareKnowledgeAdmissionForJob(
 	searchJobID string,
 	visibilityCutoff uint64,
 	searchStart time.Time,
+	admittedLimits searchlimits.Policy,
 ) (preparedKnowledgeAdmission, error) {
 	select {
 	case manager.validationGate <- struct{}{}:
@@ -156,7 +160,8 @@ func (manager *Manager) prepareKnowledgeAdmissionForJob(
 	prelude := resolution.Prelude()
 	var wildcardExpansion plan.StatsWildcardExpansion
 	var compiled clickhouse.CompiledQuery
-	remainingRuntime := manager.maxRuntime
+	maximumRuntime := admittedLimits.MaxRuntime
+	remainingRuntime := maximumRuntime
 	if logical == nil {
 		inventoryPrefix, injectErr := plan.InjectKnowledgePrelude(prefix, prelude)
 		if injectErr != nil {
@@ -174,8 +179,11 @@ func (manager *Manager) prepareKnowledgeAdmissionForJob(
 		}
 		discoveryContext, cancelDiscovery := context.WithTimeout(
 			admissionContext,
-			manager.maxRuntime,
+			maximumRuntime,
 		)
+		if manager.limitSource != nil {
+			discoveryContext = searchlimits.WithPolicy(discoveryContext, admittedLimits)
+		}
 		var inventory clickhouse.CompiledStatsWildcardInventory
 		var inventoryRuntime time.Duration
 		wildcardExpansion, inventory, inventoryRuntime, err = manager.executeStatsWildcardInventory(
@@ -193,7 +201,7 @@ func (manager *Manager) prepareKnowledgeAdmissionForJob(
 		}
 		var remainingOK bool
 		remainingRuntime, remainingOK = remainingStatsWildcardRuntime(
-			manager.maxRuntime,
+			maximumRuntime,
 			inventoryRuntime,
 		)
 		if !remainingOK {

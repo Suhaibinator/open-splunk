@@ -264,6 +264,7 @@ func TestStatsWildcardExpansionPrivateAuthorityParticipatesInMetadataCapacity(t 
 		request,
 		0,
 		time.Date(2026, time.August, 11, 9, 0, 0, 0, time.UTC),
+		probe.currentLimits(),
 	)
 	if err != nil {
 		t.Fatalf("prepareKnowledgeAdmission(): %v", err)
@@ -280,6 +281,7 @@ func TestStatsWildcardExpansionPrivateAuthorityParticipatesInMetadataCapacity(t 
 		baselineRequest,
 		0,
 		time.Date(2026, time.August, 11, 9, 0, 0, 0, time.UTC),
+		probe.currentLimits(),
 	)
 	if err != nil {
 		t.Fatalf("prepareKnowledgeAdmission(baseline): %v", err)

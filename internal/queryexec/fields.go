@@ -115,7 +115,7 @@ func (executor *Executor) ExecuteFieldCatalog(ctx context.Context, query clickho
 	}()
 	ctx = admittedContext
 	settings, err := settingsForFieldCatalog(
-		executor.settings,
+		executor.baseSettings(),
 		query.Spec.MaximumFields,
 		knowledgeGeneratedFields,
 	)

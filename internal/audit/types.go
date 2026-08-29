@@ -21,7 +21,7 @@ const (
 	MaximumListPageSize = 200
 	// MaximumActionFilters is the complete fixed action taxonomy. One list
 	// request cannot contain more distinct action filters than this bound.
-	MaximumActionFilters = 24
+	MaximumActionFilters = 25
 
 	defaultListPageSize        = 50
 	maximumTenantIDBytes       = 255
@@ -123,6 +123,7 @@ const (
 	ActionKnowledgeObjectEnable      Action = "knowledge.object.enable"
 	ActionKnowledgeObjectDisable     Action = "knowledge.object.disable"
 	ActionKnowledgeObjectDelete      Action = "knowledge.object.delete"
+	ActionServerSettingsUpdate       Action = "server_settings.update"
 )
 
 // Valid reports whether action belongs to the immutable audit taxonomy.
@@ -151,7 +152,8 @@ func (action Action) Valid() bool {
 		ActionKnowledgeObjectScopeChange,
 		ActionKnowledgeObjectEnable,
 		ActionKnowledgeObjectDisable,
-		ActionKnowledgeObjectDelete:
+		ActionKnowledgeObjectDelete,
+		ActionServerSettingsUpdate:
 		return true
 	default:
 		return false
@@ -167,13 +169,15 @@ const (
 	TargetKindApp             TargetKind = "app"
 	TargetKindSavedSearch     TargetKind = "saved_search"
 	TargetKindKnowledgeObject TargetKind = "knowledge_object"
+	TargetKindServerSettings  TargetKind = "server_settings"
 )
 
 // Valid reports whether kind belongs to the audit target taxonomy.
 func (kind TargetKind) Valid() bool {
 	switch kind {
 	case TargetKindIngestionToken, TargetKindIndex, TargetKindApp,
-		TargetKindSavedSearch, TargetKindKnowledgeObject:
+		TargetKindSavedSearch, TargetKindKnowledgeObject,
+		TargetKindServerSettings:
 		return true
 	default:
 		return false
@@ -299,6 +303,8 @@ func validActionVersion(action Action, version uint64) bool {
 		return version >= 2
 	case ActionSavedSearchDelete:
 		return version >= 1
+	case ActionServerSettingsUpdate:
+		return version >= 1
 	case ActionIndexDeleteData:
 		return version >= 3
 	default:
@@ -337,6 +343,8 @@ func validActionTarget(action Action, targetKind TargetKind) bool {
 		ActionKnowledgeObjectDisable,
 		ActionKnowledgeObjectDelete:
 		return targetKind == TargetKindKnowledgeObject
+	case ActionServerSettingsUpdate:
+		return targetKind == TargetKindServerSettings
 	default:
 		return false
 	}

@@ -9,6 +9,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
+	"github.com/Suhaibinator/open-splunk/internal/searchlimits"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
@@ -20,14 +21,16 @@ func (manager *Manager) prepareAndCompileStatsWildcard(
 	ctx context.Context,
 	parsed *spl.Query,
 	scope plan.Scope,
+	limits searchlimits.Policy,
 ) (*plan.Query, clickhouse.CompiledQuery, plan.StatsWildcardExpansion, time.Duration, error) {
+	maxRuntime := limits.MaxRuntime
 	preparation, err := plan.PrepareStatsWildcard(parsed, scope)
 	if err != nil {
 		return nil, clickhouse.CompiledQuery{}, plan.StatsWildcardExpansion{}, 0, err
 	}
 	if full := preparation.FullPlan(); full != nil {
 		compiled, compileErr := manager.compiler.CompileContext(ctx, full)
-		return full, compiled, plan.StatsWildcardExpansion{}, manager.maxRuntime, compileErr
+		return full, compiled, plan.StatsWildcardExpansion{}, maxRuntime, compileErr
 	}
 	request := preparation.Request()
 	prefix := preparation.Prefix()
@@ -35,7 +38,10 @@ func (manager *Manager) prepareAndCompileStatsWildcard(
 		return nil, clickhouse.CompiledQuery{}, plan.StatsWildcardExpansion{}, 0,
 			errors.New("compile search query: wildcard preparation is incomplete")
 	}
-	discoveryContext, cancelDiscovery := context.WithTimeout(ctx, manager.maxRuntime)
+	discoveryContext, cancelDiscovery := context.WithTimeout(ctx, maxRuntime)
+	if manager.limitSource != nil {
+		discoveryContext = searchlimits.WithPolicy(discoveryContext, limits)
+	}
 	expansion, inventory, inventoryRuntime, err := manager.executeStatsWildcardInventory(
 		discoveryContext,
 		manager.compiler,
@@ -46,7 +52,7 @@ func (manager *Manager) prepareAndCompileStatsWildcard(
 	if err != nil {
 		return nil, clickhouse.CompiledQuery{}, plan.StatsWildcardExpansion{}, 0, err
 	}
-	remainingRuntime, ok := remainingStatsWildcardRuntime(manager.maxRuntime, inventoryRuntime)
+	remainingRuntime, ok := remainingStatsWildcardRuntime(maxRuntime, inventoryRuntime)
 	if !ok {
 		return nil, clickhouse.CompiledQuery{}, plan.StatsWildcardExpansion{}, 0,
 			context.DeadlineExceeded

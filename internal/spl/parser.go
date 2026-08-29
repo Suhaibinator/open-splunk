@@ -183,7 +183,7 @@ func (p *parser) parseCommand(stage int) (Command, error) {
 	p.advance()
 	name := strings.ToLower(nameToken.text)
 	if name != "search" && name != "where" && name != "eval" &&
-		name != "stats" && name != "eventstats" && name != "streamstats" {
+		name != "stats" && name != "eventstats" && name != "streamstats" && name != "sort" {
 		if err := p.expandLegacyScalarCompositesUntilCommandEnd(); err != nil {
 			return nil, err
 		}
@@ -4209,8 +4209,8 @@ func (p *parser) parseEvalCommand(name token) (Command, error) {
 
 func (p *parser) parseFieldsCommand(name token) (Command, error) {
 	exclude := false
-	if p.current().kind == tokenWord && p.current().text == "-" {
-		exclude = true
+	if p.current().kind == tokenWord && (p.current().text == "-" || p.current().text == "+") {
+		exclude = p.current().text == "-"
 		p.advance()
 	}
 	fields, end, err := p.parseFieldList()
@@ -4307,16 +4307,30 @@ func (p *parser) parseSortCommand(name token) (Command, error) {
 	if p.atCommandEnd() {
 		return nil, p.errorAtCurrent("SPL_EXPECTED_FIELD", "sort requires at least one field")
 	}
-	if p.current().kind == tokenWord {
-		if unsignedIntegerSyntax(p.current().text) {
-			limit, err := strconv.ParseUint(p.current().text, 10, 64)
-			if err != nil {
-				return nil, p.errorAtCurrent("SPL_NUMBER_OUT_OF_RANGE", "sort result count is outside the supported 64-bit range")
-			}
-			command.Limit = limit
-			command.LimitSpecified = true
-			p.advance()
+	if p.current().kind == tokenWord && unsignedIntegerSyntax(p.current().text) {
+		if err := p.parseSortLimit(command, p.current()); err != nil {
+			return nil, err
 		}
+		p.advance()
+	} else if p.isKeyword("LIMIT") && p.nextIs(tokenEqual) {
+		option := p.current()
+		p.advance()
+		p.advance()
+		value := p.current()
+		if value.kind != tokenWord || !unsignedIntegerSyntax(value.text) {
+			if p.atCommandEnd() {
+				value = option
+			}
+			return nil, &Diagnostic{
+				Code:    "SPL_INVALID_ARGUMENT",
+				Message: "sort limit must be a non-negative base-10 integer",
+				Range:   value.sourceRange,
+			}
+		}
+		if err := p.parseSortLimit(command, value); err != nil {
+			return nil, err
+		}
+		p.advance()
 	}
 	if p.current().kind == tokenWord && (strings.EqualFold(p.current().text, "asc") || strings.EqualFold(p.current().text, "desc")) {
 		return nil, p.errorAtCurrent("SPL_UNSUPPORTED_SORT_SYNTAX", "use a + or - prefix on each sort field")
@@ -4332,31 +4346,189 @@ func (p *parser) parseSortCommand(name token) (Command, error) {
 			lastWasComma = true
 			continue
 		}
+		if p.current().kind == tokenScalarComposite {
+			prepared, err := p.prepareScalarQuotedOperand()
+			if err != nil {
+				return nil, err
+			}
+			if !prepared {
+				return nil, p.errorAtCurrent("SPL_EXPECTED_FIELD", "expected a sort field")
+			}
+		}
 		tok := p.current()
-		if tok.kind != tokenWord {
-			return nil, p.errorAtCurrent("SPL_EXPECTED_FIELD", "expected a sort field")
-		}
-		field := tok.text
+		keyStart := tok.sourceRange.Start
 		descending := false
-		if strings.HasPrefix(field, "-") {
-			descending = true
-			field = strings.TrimPrefix(field, "-")
-		} else if after, ok := strings.CutPrefix(field, "+"); ok {
-			field = after
+		if direction, ok := sortDirectionPrefix(tok); ok {
+			descending = direction
+			prefix := tok
+			p.advance()
+			if p.atCommandEnd() || p.current().kind == tokenComma || sortTokenStartsDirection(p.current()) {
+				return nil, &Diagnostic{
+					Code:    "SPL_EXPECTED_FIELD",
+					Message: "expected a sort field after direction prefix",
+					Range:   prefix.sourceRange,
+				}
+			}
+			tok = p.current()
+		} else if tok.kind == tokenWord && len(tok.text) > 1 && (tok.text[0] == '+' || tok.text[0] == '-') {
+			descending = tok.text[0] == '-'
+			tok.text = tok.text[1:]
+			tok.sourceRange.Start = advanceSourcePosition(tok.sourceRange.Start, p.current().text[:1])
 		}
-		if field == "" {
+		if tok.text == "" || sortTokenStartsDirection(tok) {
 			return nil, p.errorAtCurrent("SPL_EXPECTED_FIELD", "expected a sort field after direction prefix")
 		}
-		command.Fields = append(command.Fields, SortField{Field: field, Descending: descending, Range: tok.sourceRange})
-		end = tok.sourceRange.End
+
+		field, keyEnd, err := p.parseSortFieldValue(tok)
+		if err != nil {
+			return nil, err
+		}
+		field.Descending = descending
+		field.Range = Range{Start: keyStart, End: keyEnd}
+		command.Fields = append(command.Fields, field)
+		end = keyEnd
 		lastWasComma = false
-		p.advance()
+
+		if !p.atCommandEnd() && p.current().kind == tokenWord &&
+			(strings.EqualFold(p.current().text, "d") || strings.EqualFold(p.current().text, "desc")) &&
+			p.index+1 < len(p.tokens) && (p.tokens[p.index+1].kind == tokenPipe || p.tokens[p.index+1].kind == tokenEOF) {
+			for index := range command.Fields {
+				command.Fields[index].Descending = !command.Fields[index].Descending
+			}
+			end = p.current().sourceRange.End
+			p.advance()
+			break
+		}
 	}
 	if len(command.Fields) == 0 || lastWasComma {
 		return nil, p.errorAtCurrent("SPL_EXPECTED_FIELD", "sort requires at least one field")
 	}
 	command.Range = Range{Start: name.sourceRange.Start, End: end}
 	return command, nil
+}
+
+func (p *parser) parseSortLimit(command *SortCommand, value token) error {
+	limit, err := strconv.ParseUint(value.text, 10, 64)
+	if err != nil {
+		return &Diagnostic{
+			Code:    "SPL_NUMBER_OUT_OF_RANGE",
+			Message: "sort result count is outside the supported 64-bit range",
+			Range:   value.sourceRange,
+		}
+	}
+	command.Limit = limit
+	command.LimitSpecified = true
+	return nil
+}
+
+// parseSortFieldValue consumes the field portion of one sort key. tok is a
+// detached copy because an attached direction such as -num(bytes) is stripped
+// without changing the lexer token or its source range.
+func (p *parser) parseSortFieldValue(tok token) (SortField, Position, error) {
+	result := SortField{Mode: SortValueModeAuto}
+	if tok.kind == tokenQuotedField {
+		if tok.scalarDiagnostic != nil {
+			return SortField{}, tok.sourceRange.End, tok.scalarDiagnostic
+		}
+		if err := validateQuotedFieldReference(tok); err != nil {
+			return SortField{}, tok.sourceRange.End, err
+		}
+		result.Field = tok.text
+		result.Quoted = true
+		result.FieldRange = tok.sourceRange
+		p.advance()
+		return result, tok.sourceRange.End, nil
+	}
+	if tok.kind != tokenWord {
+		return SortField{}, tok.sourceRange.End, p.errorAtCurrent("SPL_EXPECTED_FIELD", "expected a sort field")
+	}
+
+	mode, typed := sortValueMode(tok.text)
+	if !typed || !p.nextIs(tokenLeftParen) {
+		if p.nextIs(tokenLeftParen) {
+			return SortField{}, tok.sourceRange.End, &Diagnostic{
+				Code:        "SPL_UNSUPPORTED_SORT_SYNTAX",
+				Message:     fmt.Sprintf("sort value mode %q is not supported", tok.text),
+				Range:       tok.sourceRange,
+				Suggestions: []string{"auto(field)", "str(field)", "num(field)", "ip(field)"},
+			}
+		}
+		result.Field = tok.text
+		result.FieldRange = tok.sourceRange
+		p.advance()
+		return result, tok.sourceRange.End, nil
+	}
+
+	// p.current() still owns any attached direction spelling and is consumed
+	// here before the lexer-produced left parenthesis.
+	result.Mode = mode
+	p.advance()
+	p.advance()
+	field := p.current()
+	if field.kind == tokenScalarComposite {
+		prepared, err := p.prepareScalarQuotedOperand()
+		if err != nil {
+			return SortField{}, field.sourceRange.End, err
+		}
+		if prepared {
+			field = p.current()
+		}
+	}
+	result.Quoted = field.kind == tokenQuotedField
+	if result.Quoted {
+		if field.scalarDiagnostic != nil {
+			return SortField{}, field.sourceRange.End, field.scalarDiagnostic
+		}
+		if err := validateQuotedFieldReference(field); err != nil {
+			return SortField{}, field.sourceRange.End, err
+		}
+	}
+	if field.kind != tokenWord && !result.Quoted {
+		return SortField{}, field.sourceRange.End, p.errorAtCurrent("SPL_EXPECTED_FIELD", "sort value mode requires one field")
+	}
+	result.Field = field.text
+	result.FieldRange = field.sourceRange
+	p.advance()
+	if !p.match(tokenRightParen) {
+		return SortField{}, field.sourceRange.End, p.errorAtCurrent("SPL_EXPECTED_RIGHT_PAREN", "expected ')' after typed sort field")
+	}
+	return result, p.previous().sourceRange.End, nil
+}
+
+func sortDirectionPrefix(tok token) (descending bool, ok bool) {
+	if tok.kind != tokenWord && tok.kind != tokenPlus && tok.kind != tokenMinus {
+		return false, false
+	}
+	switch tok.text {
+	case "+":
+		return false, true
+	case "-":
+		return true, true
+	default:
+		return false, false
+	}
+}
+
+func sortTokenStartsDirection(tok token) bool {
+	if _, ok := sortDirectionPrefix(tok); ok {
+		return true
+	}
+	return tok.kind == tokenWord && len(tok.text) > 0 && (tok.text[0] == '+' || tok.text[0] == '-')
+}
+
+func sortValueMode(name string) (SortValueMode, bool) {
+	switch strings.ToLower(name) {
+	case "auto":
+		return SortValueModeAuto, true
+	case "str":
+		return SortValueModeString, true
+	case "num":
+		return SortValueModeNumber, true
+	case "ip":
+		return SortValueModeIP, true
+	default:
+		return SortValueModeAuto, false
+	}
 }
 
 func (p *parser) parseDedupCommand(name token) (Command, error) {

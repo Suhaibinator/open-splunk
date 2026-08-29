@@ -48,6 +48,9 @@ enum ServerFeature {
   // registered, recovery-keyed, and available to the browser administrator.
   // Field knowledge capability 15 is also required.
   SERVER_FEATURE_KNOWLEDGE_QUARANTINE = 19;
+  // Versioned, persistent node-wide search limits can be read and updated by
+  // an authenticated browser administrator.
+  SERVER_FEATURE_SERVER_SETTINGS_ADMIN = 20;
 }
 
 message BrowserApiLimits {

@@ -69,6 +69,13 @@ func (handler *apiHandler) getSystemBootstrap(request *http.Request, input *open
 	if selectedAppID == "" && len(apps) > 0 {
 		selectedAppID = apps[0].GetAppId()
 	}
+	defaultSearchTimeout := handler.bootstrap.DefaultSearchTimeout
+	searchResultRetention := handler.bootstrap.SearchResultRetention
+	if handler.serverSettings != nil {
+		current := handler.serverSettings.Current()
+		defaultSearchTimeout = current.Limits.MaxRuntime
+		searchResultRetention = current.Limits.ResultRetention
+	}
 	response := &opensplunk.GetSystemBootstrapResponse{
 		Build:               buildmetadata.Clone(handler.bootstrap.Build),
 		SearchWebsocketPath: handler.bootstrap.SearchWebSocketPath,
@@ -80,8 +87,8 @@ func (handler *apiHandler) getSystemBootstrap(request *http.Request, input *open
 			MaximumWebsocketFrameBytes:    handler.bootstrap.MaximumWebSocketBytes,
 			MaximumExportRows:             handler.bootstrap.MaximumExportRows,
 			MaximumExportBytes:            handler.bootstrap.MaximumExportBytes,
-			DefaultSearchTimeout:          durationpb.New(handler.bootstrap.DefaultSearchTimeout),
-			SearchResultRetention:         durationpb.New(handler.bootstrap.SearchResultRetention),
+			DefaultSearchTimeout:          durationpb.New(defaultSearchTimeout),
+			SearchResultRetention:         durationpb.New(searchResultRetention),
 			MaximumTimelineBuckets:        handler.maximumTimelineBuckets,
 			MaximumFieldSummaryValues:     handler.maximumFieldSummaryValues,
 		},

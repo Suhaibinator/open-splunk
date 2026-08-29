@@ -44,6 +44,7 @@ import { AppsAdminPanel, CollectorFleetPanel } from "./admin-resource-panels";
 import { ADMIN_SECTION_QUERY_PARAMETER, adminSectionPath, resolveAdminSection } from "./admin-navigation";
 import { KnowledgeManagerGate } from "./knowledge-manager-gate";
 import { LookupManagerGate } from "./lookup-manager-gate";
+import { SearchLimitsSettings } from "./search-limits-settings";
 import {
   TOKEN_CREATE_CLOCK_EPSILON_MS,
   TOKEN_CREATE_ZERO_CONFIRMATION_INTERVAL_MS,
@@ -1293,6 +1294,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
   const [revokeTarget, setRevokeTarget] = useState<IngestionToken | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [toast, setToast] = useState<AdminToast | null>(null);
+  const [serverSettingsDirty, setServerSettingsDirty] = useState(false);
   const tokenGuardActive = busy === "create-token"
     || issuedToken !== null
     || tokenCreateRecovery !== null
@@ -4063,6 +4065,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
   }, [bootstrap, bootstrapError, knowledgeAdvertised, lookupAdvertised, section]);
   function navigateSection(next: AdminSection) {
     if (next === section) return;
+    if (serverSettingsDirty && !window.confirm("Discard unapplied server settings?")) return;
     setSection(next);
     window.history.pushState(null, "", adminSectionPath(window.location.href, next));
   }
@@ -4265,12 +4268,15 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
           ) : null}
           {section === "server" ? (
             <BackendServerSettings
+              client={client}
               bootstrap={bootstrap}
               error={bootstrapError}
               hecState={hecState}
               hecSnapshot={hecSnapshot}
               hecError={hecError}
               onReload={load}
+              onStatus={(message, kind) => setToast({ message, kind })}
+              onDirtyChange={setServerSettingsDirty}
             />
           ) : null}
         </section>
@@ -5094,19 +5100,25 @@ function BackendTokens(props: BackendTokensProps) {
 }
 
 function BackendServerSettings({
+  client,
   bootstrap,
   error,
   hecState,
   hecSnapshot,
   hecError,
   onReload,
+  onStatus,
+  onDirtyChange,
 }: {
+  client: OpenSplunkApiClient;
   bootstrap: SystemBootstrapModel | null;
   error: string | null;
   hecState: ResourceState;
   hecSnapshot: GetHECOperationalSnapshotResponse | null;
   hecError: string | null;
   onReload: () => void;
+  onStatus: (message: string, kind: "success" | "warning") => void;
+  onDirtyChange: (dirty: boolean) => void;
 }) {
   if (bootstrap === null) {
     return (
@@ -5119,10 +5131,11 @@ function BackendServerSettings({
     );
   }
   const limits = bootstrap.limits;
+  const editable = supportsServerFeature(bootstrap, ServerFeature.SERVER_FEATURE_SERVER_SETTINGS_ADMIN);
   return (
     <div className="admin-section-stack">
-      <header className="admin-section-header"><div><h2>Server settings</h2><p>Read-only limits advertised to this browser.</p></div><span>Bootstrap values</span></header>
-      <div className="access-mode-notice" role="note"><span>i</span><div><strong>Configuration writes are unavailable</strong><p>The backend does not register a server-settings route. These values cannot be changed from this page.</p></div></div>
+      <header className="admin-section-header"><div><h2>Server settings</h2><p>{editable ? "Persistent node-wide search resource limits." : "Read-only limits advertised to this browser."}</p></div><span>{editable ? "Administrator settings" : "Bootstrap values"}</span></header>
+      {editable ? <SearchLimitsSettings client={client} onStatus={onStatus} onDirtyChange={onDirtyChange} /> : <><div className="access-mode-notice" role="note"><span>i</span><div><strong>Configuration writes are unavailable</strong><p>The backend does not advertise editable server settings. These values cannot be changed from this page.</p></div></div>
       <section className="suite-card settings-group">
         <header><h3>Search and result limits</h3><p>Authoritative limits returned by system bootstrap.</p></header>
         <dl className="backend-definition-list">
@@ -5133,7 +5146,7 @@ function BackendServerSettings({
           <div><dt>Maximum export bytes</dt><dd>{limits.maximumExportBytes > 0n ? limits.maximumExportBytes.toLocaleString() : "Not reported"}</dd></div>
           <div><dt>Maximum timeline buckets</dt><dd>{limits.maximumTimelineBuckets > 0 ? limits.maximumTimelineBuckets.toLocaleString() : "Not available"}</dd></div>
         </dl>
-      </section>
+      </section></>}
       {hecState === "unavailable" ? (
         <div className="access-mode-notice" role="note"><span>i</span><div><strong>HTTP Event Collector is disabled</strong><p>The server does not advertise HEC ingestion. HEC token creation and test commands remain unavailable until the data-plane feature is enabled.</p></div></div>
       ) : hecState === "loading" ? (

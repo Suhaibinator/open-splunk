@@ -139,6 +139,13 @@ func TestBuildAppliesSplunkDefaultSortLimitButHonorsSortZero(t *testing.T) {
 	}
 }
 
+func TestBuildDoesNotTreatSortBackslashAsAnEscapeForCanonicalTime(t *testing.T) {
+	t.Parallel()
+
+	_, err := Build(mustParse(t, `* | sort + \_time`), testScope([]string{"gradethis"}, nil))
+	assertDiagnosticCode(t, err, "SPL_INVALID_FIELD")
+}
+
 func TestBuildDedupPreservesSchemaAndExactKeys(t *testing.T) {
 	t.Parallel()
 

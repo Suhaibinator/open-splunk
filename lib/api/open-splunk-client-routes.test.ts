@@ -23,10 +23,11 @@ import {
   savedSearchRoutes,
   searchAttemptAuditRoutes,
   searchRoutes,
+  serverSettingsRoutes,
   systemRoutes,
 } from "./routes";
 
-const EXPECTED_METHOD_COUNT = 59;
+const EXPECTED_METHOD_COUNT = 61;
 
 /**
  * The binder's failure mode is a transposition — a method wired to a sibling
@@ -35,6 +36,7 @@ const EXPECTED_METHOD_COUNT = 59;
  */
 const expectedRoutes: Readonly<Record<string, Readonly<Record<string, object>>>> = {
   system: { bootstrap: systemRoutes.bootstrap },
+  serverSettings: serverSettingsRoutes,
   apps: appRoutes,
   collectors: collectorRoutes,
   auditEvents: auditEventRoutes,

@@ -159,7 +159,7 @@ func TestCompileStreamStatsCountEvalReadsIncomingSameNameBeforeReplacement(t *te
 		t.Fatalf("conditional streamstats did not read the incoming source before replacing it:\n%s", compiled.SQL)
 	}
 	orderSnapshot := regexp.MustCompile(
-		`"source" AS "(__os_order_[0-9]+_0)"`,
+		` AS "(__os_order_[0-9]+_0)"`,
 	).FindStringSubmatch(compiled.SQL)
 	if len(orderSnapshot) != 2 || !regexp.MustCompile(
 		`"`+regexp.QuoteMeta(orderSnapshot[1])+`" AS "__os_streamstats_order_[0-9]+_0"`,

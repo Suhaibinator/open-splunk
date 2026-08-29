@@ -74,7 +74,7 @@ func (executor *Executor) ExecuteTimeline(ctx context.Context, query clickhouse.
 		}
 	}()
 	ctx = admittedContext
-	settings, err := settingsForTimeline(executor.settings, query.Spec.BucketCount)
+	settings, err := settingsForTimeline(executor.baseSettings(), query.Spec.BucketCount)
 	if err != nil {
 		return nil, err
 	}

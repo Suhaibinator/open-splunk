@@ -107,9 +107,9 @@ func runDeploymentHealthcheckSubcommand(arguments []string) error {
 	flags := flag.NewFlagSet("healthcheck", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	var options deploymentHealthcheckOptions
-	flags.StringVar(&options.URL, "url", "", "strict loopback HTTPS liveness or readiness URL")
-	flags.StringVar(&options.CACertFile, "ca-cert", "", "explicit certificate-only CA bundle")
-	flags.StringVar(&options.ServerName, "server-name", "", "explicit TLS certificate name")
+	flags.StringVar(&options.URL, "url", "", "strict loopback HTTP or HTTPS liveness or readiness URL")
+	flags.StringVar(&options.CACertFile, "ca-cert", "", "explicit certificate-only CA bundle for HTTPS")
+	flags.StringVar(&options.ServerName, "server-name", "", "explicit TLS certificate name for HTTPS")
 	if err := flags.Parse(arguments); err != nil {
 		return fmt.Errorf("deployment healthcheck: parse flags: %w", err)
 	}
@@ -140,10 +140,7 @@ func runDeploymentHealthcheck(options deploymentHealthcheckOptions) error {
 	if err != nil {
 		return err
 	}
-	tlsConfig, err := loadDeploymentHealthTLSConfig(
-		options.CACertFile,
-		options.ServerName,
-	)
+	tlsConfig, err := deploymentHealthTLSConfig(endpoint, options)
 	if err != nil {
 		return err
 	}
@@ -172,7 +169,10 @@ func runDeploymentHealthcheck(options deploymentHealthcheckOptions) error {
 	request.Header.Set("Accept", "text/plain")
 	response, err := client.Do(request)
 	if err != nil {
-		return fmt.Errorf("deployment healthcheck: TLS request failed: %w", err)
+		if endpoint.Scheme == "https" {
+			return fmt.Errorf("deployment healthcheck: TLS request failed: %w", err)
+		}
+		return fmt.Errorf("deployment healthcheck: request failed: %w", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
@@ -198,20 +198,21 @@ func runDeploymentHealthcheck(options deploymentHealthcheckOptions) error {
 func validateDeploymentHealthURL(rawURL string) (*url.URL, error) {
 	if rawURL == "" || rawURL != strings.TrimSpace(rawURL) ||
 		strings.IndexByte(rawURL, 0) >= 0 {
-		return nil, errors.New("deployment healthcheck: -url must be an exact HTTPS loopback URL")
+		return nil, errors.New("deployment healthcheck: -url must be an exact HTTP or HTTPS loopback URL")
 	}
 	endpoint, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, fmt.Errorf("deployment healthcheck: parse -url: %w", err)
 	}
-	if endpoint.Scheme != "https" || endpoint.Opaque != "" ||
+	if (endpoint.Scheme != "http" && endpoint.Scheme != "https") ||
+		endpoint.Opaque != "" ||
 		endpoint.Host == "" || endpoint.User != nil ||
 		(endpoint.Path != "/healthz" && endpoint.Path != "/readyz") ||
 		endpoint.RawPath != "" ||
 		endpoint.ForceQuery || endpoint.RawQuery != "" ||
 		endpoint.Fragment != "" || endpoint.RawFragment != "" {
 		return nil, errors.New(
-			"deployment healthcheck: -url must be exactly an HTTPS loopback /healthz or /readyz endpoint without credentials, query, or fragment",
+			"deployment healthcheck: -url must be exactly an HTTP or HTTPS loopback /healthz or /readyz endpoint without credentials, query, or fragment",
 		)
 	}
 	host := net.ParseIP(endpoint.Hostname())
@@ -221,6 +222,22 @@ func validateDeploymentHealthURL(rawURL string) (*url.URL, error) {
 		)
 	}
 	return endpoint, nil
+}
+
+func deploymentHealthTLSConfig(
+	endpoint *url.URL,
+	options deploymentHealthcheckOptions,
+) (*tls.Config, error) {
+	if endpoint.Scheme == "http" {
+		if options.CACertFile != "" {
+			return nil, errors.New("deployment healthcheck: -ca-cert is only valid with HTTPS")
+		}
+		if options.ServerName != "" {
+			return nil, errors.New("deployment healthcheck: -server-name is only valid with HTTPS")
+		}
+		return nil, nil
+	}
+	return loadDeploymentHealthTLSConfig(options.CACertFile, options.ServerName)
 }
 
 func loadDeploymentHealthTLSConfig(

@@ -37,4 +37,5 @@ export * from "./open_splunk/search_attempt_audit";
 export * from "./open_splunk/search_attempt_audit_api";
 export * from "./open_splunk/search_inspection_api";
 export * from "./open_splunk/search_ws";
+export * from "./open_splunk/server_settings_api";
 export * from "./open_splunk/system_api";

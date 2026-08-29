@@ -725,10 +725,26 @@ func (*TableCommand) command()             {}
 func (*TableCommand) Name() string         { return "table" }
 func (c *TableCommand) SourceRange() Range { return c.Range }
 
-// SortField is one ordered sort key.
+// SortValueMode controls the comparison interpretation for one sort key.
+// Plain fields and auto(field) use SortValueModeAuto.
+type SortValueMode uint8
+
+const (
+	SortValueModeAuto SortValueMode = iota
+	SortValueModeString
+	SortValueModeNumber
+	SortValueModeIP
+)
+
+// SortField is one ordered sort key. FieldRange identifies only the exact
+// field reference, while Range also includes any direction prefix or typed
+// wrapper authored for the key.
 type SortField struct {
 	Field      string
+	Quoted     bool
 	Descending bool
+	Mode       SortValueMode
+	FieldRange Range
 	Range      Range
 }
 

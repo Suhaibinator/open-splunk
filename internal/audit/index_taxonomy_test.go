@@ -205,5 +205,6 @@ func allKnownAuditActions() []Action {
 		ActionKnowledgeObjectEnable,
 		ActionKnowledgeObjectDisable,
 		ActionKnowledgeObjectDelete,
+		ActionServerSettingsUpdate,
 	}
 }

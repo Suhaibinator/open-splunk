@@ -15,6 +15,7 @@ import (
 	opensplunk "github.com/Suhaibinator/open-splunk/gen/go/open_splunk"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
+	"github.com/Suhaibinator/open-splunk/internal/searchlimits"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 )
 
@@ -163,6 +164,103 @@ func TestManagerLifecycleUsesImmutableAuthorizedSnapshot(t *testing.T) {
 	}
 	if !completed.ExpiresAt.Equal(now.UTC().Add(time.Hour)) {
 		t.Fatalf("expires_at = %v, want %v", completed.ExpiresAt, now.UTC().Add(time.Hour))
+	}
+}
+
+func TestManagerLiveConcurrencyAndAdmissionPolicySnapshots(t *testing.T) {
+	t.Parallel()
+
+	initial := searchlimits.Default()
+	initial.MaxConcurrent = 1
+	source, err := searchlimits.NewSource(initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type execution struct {
+		policy searchlimits.Policy
+	}
+	started := make(chan execution, 4)
+	release := make(chan struct{}, 4)
+	executor := executorFunc(func(ctx context.Context, _ clickhouse.CompiledQuery, sink ResultSink) error {
+		policy, ok := searchlimits.FromContext(ctx)
+		if !ok {
+			return errors.New("missing admitted search policy")
+		}
+		started <- execution{policy: policy}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-release:
+		}
+		return sink.SetSchema(messageSchema())
+	})
+	manager := newTestManager(t, Config{
+		Executor: executor, MaxConcurrent: 3, MaxQueued: 4,
+		LimitSource: source, CleanupInterval: -1,
+		NewID: sequenceIDs("live-limits"),
+	})
+	jobs := make([]Job, 0, 4)
+	for range 3 {
+		job, createErr := manager.Create(context.Background(), validRequest())
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		jobs = append(jobs, job)
+	}
+	first := <-started
+	if first.policy.MaxRuntime != initial.MaxRuntime {
+		t.Fatalf("first policy = %+v", first.policy)
+	}
+	select {
+	case <-started:
+		t.Fatal("initial live concurrency limit was exceeded")
+	case <-time.After(30 * time.Millisecond):
+	}
+
+	increased := initial
+	increased.MaxConcurrent = 3
+	increased.MaxRuntime = 3 * time.Minute
+	if err := source.Store(increased); err != nil {
+		t.Fatal(err)
+	}
+	manager.LimitsChanged()
+	for range 2 {
+		if captured := <-started; captured.policy.MaxRuntime != initial.MaxRuntime {
+			t.Fatalf("queued job policy changed after admission: %+v", captured.policy)
+		}
+	}
+
+	reduced := increased
+	reduced.MaxConcurrent = 1
+	if err := source.Store(reduced); err != nil {
+		t.Fatal(err)
+	}
+	manager.LimitsChanged()
+	fourth, createErr := manager.Create(context.Background(), validRequest())
+	if createErr != nil {
+		t.Fatal(createErr)
+	}
+	jobs = append(jobs, fourth)
+	for range 2 {
+		release <- struct{}{}
+		select {
+		case <-started:
+			t.Fatal("a queued job started while active usage remained at the reduced cap")
+		case <-time.After(30 * time.Millisecond):
+		}
+	}
+	release <- struct{}{}
+	select {
+	case captured := <-started:
+		if captured.policy.MaxRuntime != increased.MaxRuntime {
+			t.Fatalf("newly admitted job did not capture updated policy: %+v", captured.policy)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("queued work did not start after usage fell below the reduced cap")
+	}
+	release <- struct{}{}
+	for _, job := range jobs {
+		waitForState(t, manager, job.ID, StateCompleted)
 	}
 }
 

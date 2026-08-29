@@ -396,9 +396,11 @@ func compileReverse(
 		name := quoteIdentifier(fmt.Sprintf("__os_reverse_order_%d_%d", stage, index))
 		materialized = append(materialized, key.valueSQL+" AS "+name)
 		durable = append(durable, compiledSortKey{
-			valueSQL:   name,
-			descending: !key.descending,
-			nullsFirst: !key.nullsFirst,
+			valueSQL:           name,
+			descending:         !key.descending,
+			nullsFirst:         !key.nullsFirst,
+			separatePresence:   key.separatePresence,
+			presenceDescending: !key.presenceDescending,
 		})
 	}
 	// Keep the identity-tie lineage distinct from the complete established
@@ -414,9 +416,11 @@ func compileReverse(
 		))
 		materialized = append(materialized, key.valueSQL+" AS "+name)
 		durableTieBreakers = append(durableTieBreakers, compiledSortKey{
-			valueSQL:   name,
-			descending: !key.descending,
-			nullsFirst: !key.nullsFirst,
+			valueSQL:           name,
+			descending:         !key.descending,
+			nullsFirst:         !key.nullsFirst,
+			separatePresence:   key.separatePresence,
+			presenceDescending: !key.presenceDescending,
 		})
 	}
 	alias := quoteIdentifier(fmt.Sprintf("_stage_%d_reverse", stage))

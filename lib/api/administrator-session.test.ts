@@ -92,6 +92,8 @@ test("administrator route allowlist excludes ordinary search and WebSocket paths
   assert.equal(isAdministratorRoutePath("/api/knowledge/lookups/replace"), true);
   assert.equal(isAdministratorRoutePath("/api/knowledge/lookups/state/set"), true);
   assert.equal(isAdministratorRoutePath("/api/search/jobs/inspect"), true);
+  assert.equal(isAdministratorRoutePath("/api/server/settings/get"), true);
+  assert.equal(isAdministratorRoutePath("/api/server/settings/update"), true);
   assert.equal(isAdministratorRoutePath("/api/search/jobs/create"), false);
   assert.equal(isAdministratorRoutePath("/api/search/suggestions"), false);
   assert.equal(isAdministratorRoutePath("/api/search/ws"), false);

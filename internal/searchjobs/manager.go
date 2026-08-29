@@ -24,6 +24,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/nilcheck"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
+	"github.com/Suhaibinator/open-splunk/internal/searchlimits"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
@@ -272,13 +273,16 @@ type Config struct {
 	MaxPageSize           int
 	MaxPageBytes          uint64
 	MaxRuntime            time.Duration
-	SnapshotTimeout       time.Duration
-	JournalTimeout        time.Duration
-	MaxSPLBytes           int
-	MaxScopeIndexes       int
-	RetentionTTL          time.Duration
-	ExpiredRetention      time.Duration
-	CleanupInterval       time.Duration
+	// LimitSource enables live, admission-snapshotted search resource policy.
+	// Nil preserves the legacy fixed Config fields used by embedders and tests.
+	LimitSource      *searchlimits.Source
+	SnapshotTimeout  time.Duration
+	JournalTimeout   time.Duration
+	MaxSPLBytes      int
+	MaxScopeIndexes  int
+	RetentionTTL     time.Duration
+	ExpiredRetention time.Duration
+	CleanupInterval  time.Duration
 	// Now and NewID may be called concurrently and must be safe for concurrent
 	// use. NewID must return a nonempty, unpadded, control-free UTF-8 identifier
 	// within MaximumJobIDBytes. Returned strings and times are detached before
@@ -321,6 +325,7 @@ type Manager struct {
 	compiler                 clickhouse.Compiler
 	knowledgeResolver        KnowledgeResolver
 	lookupResolver           LookupResolver
+	limitSource              *searchlimits.Source
 	maxRows                  uint64
 	maxBytes                 uint64
 	maxJobs                  int
@@ -371,6 +376,7 @@ type Manager struct {
 	lastJournalErr         *JournalError
 	journalErrorHookGate   chan struct{}
 	executionErrorHookGate chan struct{}
+	activeExecutions       uint32
 }
 
 type jobEntry struct {
@@ -400,6 +406,7 @@ type jobEntry struct {
 	knowledgeSnapshot        knowledgesnapshot.Snapshot
 	statsWildcardExpansion   plan.StatsWildcardExpansion
 	remainingRuntime         time.Duration
+	limits                   searchlimits.Policy
 }
 
 // New constructs and starts a search job manager.
@@ -592,6 +599,7 @@ func New(config Config) (*Manager, error) {
 		compiler:                 config.Compiler,
 		knowledgeResolver:        knowledgeResolver,
 		lookupResolver:           lookupResolver,
+		limitSource:              config.LimitSource,
 		maxRows:                  maxRows,
 		maxBytes:                 maxBytes,
 		maxJobs:                  maxJobs,
@@ -635,6 +643,44 @@ func New(config Config) (*Manager, error) {
 	return manager, nil
 }
 
+func (manager *Manager) currentLimits() searchlimits.Policy {
+	if manager.limitSource != nil {
+		return manager.limitSource.Snapshot()
+	}
+	return searchlimits.Policy{
+		MaxRuntime:          manager.maxRuntime,
+		MaxMemoryBytes:      searchlimits.Default().MaxMemoryBytes,
+		MaxRowsToRead:       searchlimits.Default().MaxRowsToRead,
+		MaxBytesToRead:      searchlimits.Default().MaxBytesToRead,
+		MaxGroupedRows:      searchlimits.Default().MaxGroupedRows,
+		MaxThreads:          searchlimits.Default().MaxThreads,
+		MaxResultRows:       manager.maxRows,
+		MaxResultBytes:      manager.maxBytes,
+		MaxTotalResultBytes: manager.maxTotalBytes,
+		MaxConcurrent:       uint32(defaultMaxConcurrent),
+		ResultRetention:     manager.retentionTTL,
+	}
+}
+
+func (sink *resultSink) effectiveLimits() searchlimits.Policy {
+	if sink.limits.MaxResultRows != 0 && sink.limits.MaxResultBytes != 0 &&
+		sink.limits.MaxTotalResultBytes != 0 {
+		return sink.limits
+	}
+	return sink.manager.currentLimits()
+}
+
+// LimitsChanged wakes workers waiting behind a reduced or newly enlarged live
+// concurrency policy.
+func (manager *Manager) LimitsChanged() {
+	if manager == nil {
+		return
+	}
+	manager.mu.Lock()
+	manager.queueCond.Broadcast()
+	manager.mu.Unlock()
+}
+
 // KnowledgeAdmissionEnabled reports whether this manager is configured to
 // seal nonempty-app searches before durable admission. Callers use it to apply
 // the corresponding live app-authorization boundary without guessing from a
@@ -675,6 +721,7 @@ func (manager *Manager) Create(ctx context.Context, request CreateRequest) (Job,
 		return Job{}, err
 	}
 	request = normalizedRequest
+	admittedLimits := manager.currentLimits()
 	if err := manager.beginOperation(); err != nil {
 		return Job{}, err
 	}
@@ -717,7 +764,7 @@ func (manager *Manager) Create(ctx context.Context, request CreateRequest) (Job,
 		}
 		now = manager.nowUTC()
 		knowledge, prepareErr := manager.prepareKnowledgeAdmission(
-			ctx, request, visibilityCutoff, now,
+			ctx, request, visibilityCutoff, now, admittedLimits,
 		)
 		if errors.Is(prepareErr, errSearchJobIDRequired) {
 			// addinfo is the sole syntax that requires an ID during compilation.
@@ -732,6 +779,7 @@ func (manager *Manager) Create(ctx context.Context, request CreateRequest) (Job,
 				id,
 				visibilityCutoff,
 				now,
+				admittedLimits,
 			)
 		}
 		if prepareErr != nil {
@@ -800,6 +848,7 @@ func (manager *Manager) Create(ctx context.Context, request CreateRequest) (Job,
 		metadataBytes:     metadataBytes,
 		ctx:               jobContext,
 		cancel:            cancel,
+		limits:            admittedLimits,
 	}
 	if prepared != nil {
 		entry.job.EffectiveIndexes = cloneStrings(prepared.effective)
@@ -1678,7 +1727,8 @@ func (manager *Manager) worker() {
 	defer manager.wg.Done()
 	for {
 		manager.mu.Lock()
-		for manager.queueCount == 0 && !manager.closed {
+		for !manager.closed && (manager.queueCount == 0 ||
+			(manager.limitSource != nil && manager.activeExecutions >= manager.limitSource.Snapshot().MaxConcurrent)) {
 			manager.queueCond.Wait()
 		}
 		if manager.closed {
@@ -1686,8 +1736,17 @@ func (manager *Manager) worker() {
 			return
 		}
 		entry := manager.dequeueLocked()
+		if manager.limitSource != nil {
+			manager.activeExecutions++
+		}
 		manager.mu.Unlock()
 		manager.runSafely(entry)
+		if manager.limitSource != nil {
+			manager.mu.Lock()
+			manager.activeExecutions--
+			manager.queueCond.Broadcast()
+			manager.mu.Unlock()
+		}
 	}
 }
 
@@ -1797,6 +1856,7 @@ func (manager *Manager) run(entry *jobEntry) {
 		entry.ctx,
 		parsed,
 		scope,
+		entry.limits,
 	)
 	if err != nil {
 		if _, ok := errors.AsType[*plan.Diagnostic](err); ok {
@@ -1830,6 +1890,9 @@ func (manager *Manager) executeCompiled(
 		return
 	}
 	executionContext, cancelExecution := context.WithTimeout(entry.ctx, runtimeBudget)
+	if manager.limitSource != nil {
+		executionContext = searchlimits.WithPolicy(executionContext, entry.limits)
+	}
 	defer cancelExecution()
 	retained, ok, cloneErr := compiled.CloneForExecutionContext(executionContext)
 	if cloneErr != nil {
@@ -1877,6 +1940,7 @@ func (manager *Manager) executeCompiled(
 		timechart:      timechart,
 		chart:          chart,
 		atomicResult:   retained.RequiresAtomicResult(),
+		limits:         entry.limits,
 	}
 	sink.ctx = executionContext
 	defer sink.close()
@@ -2049,7 +2113,7 @@ func (manager *Manager) failOrCancelWithHook(
 			incrementJobVersion(&entry.job)
 			entry.job.Failure = &failure
 			entry.job.FinishedAt = now
-			entry.job.ExpiresAt = now.Add(manager.retentionTTL)
+			entry.job.ExpiresAt = now.Add(entry.limits.ResultRetention)
 			manager.clearResultsLocked(entry)
 			entry.history = append(entry.history, StateFailed)
 			failedJobID = strings.Clone(entry.job.ID)
@@ -2102,7 +2166,7 @@ func (manager *Manager) finishCompleted(entry *jobEntry, now time.Time, resultsT
 			entry.job.State = StateCompleted
 			incrementJobVersion(&entry.job)
 			entry.job.FinishedAt = now
-			entry.job.ExpiresAt = now.Add(manager.retentionTTL)
+			entry.job.ExpiresAt = now.Add(entry.limits.ResultRetention)
 			if resultsTruncated && !entry.job.ResultsTruncated {
 				incrementResultRevision(entry)
 			}
@@ -2140,7 +2204,7 @@ func (manager *Manager) finishCanceledLocked(entry *jobEntry, now time.Time) {
 	entry.job.State = StateCanceled
 	incrementJobVersion(&entry.job)
 	entry.job.FinishedAt = now
-	entry.job.ExpiresAt = now.Add(manager.retentionTTL)
+	entry.job.ExpiresAt = now.Add(entry.limits.ResultRetention)
 	manager.clearResultsLocked(entry)
 	entry.history = append(entry.history, StateCanceled)
 }
@@ -2210,17 +2274,17 @@ func incrementResultRevision(entry *jobEntry) {
 
 // reserveRetainedLocked accounts for memory before allocating or retaining it.
 // The caller holds entry.mu; budgetMu is never acquired before an entry lock.
-func (manager *Manager) reserveRetainedLocked(entry *jobEntry, amount uint64) error {
+func (manager *Manager) reserveRetainedLocked(entry *jobEntry, amount uint64, limits searchlimits.Policy) error {
 	if amount == 0 {
 		return nil
 	}
 	nextJobBytes, err := checkedAdd(entry.retainedBytes, amount)
-	if err != nil || nextJobBytes > manager.maxBytes {
+	if err != nil || nextJobBytes > limits.MaxResultBytes {
 		return ErrByteLimit
 	}
 	manager.budgetMu.Lock()
 	nextTotalBytes, err := checkedAdd(manager.retainedBytes, amount)
-	if err != nil || nextTotalBytes > manager.maxTotalBytes {
+	if err != nil || nextTotalBytes > limits.MaxTotalResultBytes {
 		manager.budgetMu.Unlock()
 		return ErrCapacity
 	}
@@ -2383,6 +2447,7 @@ type resultSink struct {
 	receivedSchema    bool
 	firstErr          error
 	truncationErr     *retainedRowLimitError
+	limits            searchlimits.Policy
 }
 
 // retainedRowLimitError is allocated once for the first overflow row of one
@@ -2464,7 +2529,7 @@ func (sink *resultSink) SetSchema(schema Schema) error {
 	if retainedBytes > sink.manager.maxPageBytes {
 		return sink.rememberLocked(ErrByteLimit)
 	}
-	if err := sink.manager.reserveRetainedLocked(entry, retainedBytes); err != nil {
+	if err := sink.manager.reserveRetainedLocked(entry, retainedBytes, sink.effectiveLimits()); err != nil {
 		return sink.rememberLocked(err)
 	}
 	cloned := cloneSchema(schema)
@@ -2529,8 +2594,8 @@ func (sink *resultSink) planRowGrowthLocked(
 
 			newCapacity64 = safecast.MustConv[uint64](cap(rows)) * 2
 		}
-		if newCapacity64 > sink.manager.maxRows {
-			newCapacity64 = sink.manager.maxRows
+		if newCapacity64 > sink.effectiveLimits().MaxResultRows {
+			newCapacity64 = sink.effectiveLimits().MaxResultRows
 		}
 
 		newCapacity = safecast.MustConv[int](newCapacity64)
@@ -2576,7 +2641,7 @@ func (sink *resultSink) AddRow(values []Value) error {
 	// not evidence that another valid result existed and must remain a failed
 	// executor result, even though its values will not be retained.
 
-	if safecast.MustConv[uint64](len(entry.rows)) >= sink.manager.maxRows {
+	if safecast.MustConv[uint64](len(entry.rows)) >= sink.effectiveLimits().MaxResultRows {
 		limitErr := &retainedRowLimitError{}
 		sink.truncationErr = limitErr
 		return sink.rememberLocked(limitErr)
@@ -2589,7 +2654,7 @@ func (sink *resultSink) AddRow(values []Value) error {
 	if growErr != nil {
 		return sink.rememberLocked(growErr)
 	}
-	if err := sink.manager.reserveRetainedLocked(entry, retainedBytes); err != nil {
+	if err := sink.manager.reserveRetainedLocked(entry, retainedBytes, sink.effectiveLimits()); err != nil {
 		return sink.rememberLocked(err)
 	}
 	if newCapacity > cap(entry.rows) {
@@ -2620,7 +2685,7 @@ func (sink *resultSink) stageAtomicSchemaLocked(schema Schema) error {
 	if err != nil || retainedBytes > sink.manager.maxPageBytes {
 		return sink.rememberLocked(ErrByteLimit)
 	}
-	if err := sink.manager.reserveRetainedLocked(sink.entry, retainedBytes); err != nil {
+	if err := sink.manager.reserveRetainedLocked(sink.entry, retainedBytes, sink.effectiveLimits()); err != nil {
 		return sink.rememberLocked(err)
 	}
 	cloned := cloneSchema(schema)
@@ -2652,7 +2717,7 @@ func (sink *resultSink) stageAtomicRowLocked(values []Value) error {
 	if measureErr != nil {
 		return sink.rememberLocked(measureErr)
 	}
-	if uint64(len(sink.atomicRows)) >= sink.manager.maxRows {
+	if uint64(len(sink.atomicRows)) >= sink.effectiveLimits().MaxResultRows {
 		return sink.rememberLocked(ErrRowLimit)
 	}
 	nextBytes, err := checkedAdd(sink.atomicResultBytes, payloadBytes)
@@ -2665,7 +2730,7 @@ func (sink *resultSink) stageAtomicRowLocked(values []Value) error {
 	if growErr != nil {
 		return sink.rememberLocked(growErr)
 	}
-	if err := sink.manager.reserveRetainedLocked(sink.entry, retainedBytes); err != nil {
+	if err := sink.manager.reserveRetainedLocked(sink.entry, retainedBytes, sink.effectiveLimits()); err != nil {
 		return sink.rememberLocked(err)
 	}
 	if newCapacity > cap(sink.atomicRows) {

@@ -3,6 +3,24 @@
   "futureFieldNumber": 2047,
   "routes": [
     {
+      "path": "/api/server/settings/get",
+      "requestType": "GetServerSettingsRequest",
+      "responseType": "GetServerSettingsResponse",
+      "requestKnownWire": "",
+      "requestFutureWire": "+n8nZnV0dXJlOi9hcGkvc2VydmVyL3NldHRpbmdzL2dldDpyZXF1ZXN0",
+      "responseKnownWire": "CgIIAQ==",
+      "responseFutureWire": "CgIIAfp/KGZ1dHVyZTovYXBpL3NlcnZlci9zZXR0aW5ncy9nZXQ6cmVzcG9uc2U="
+    },
+    {
+      "path": "/api/server/settings/update",
+      "requestType": "UpdateServerSettingsRequest",
+      "responseType": "UpdateServerSettingsResponse",
+      "requestKnownWire": "CAE=",
+      "requestFutureWire": "CAH6fypmdXR1cmU6L2FwaS9zZXJ2ZXIvc2V0dGluZ3MvdXBkYXRlOnJlcXVlc3Q=",
+      "responseKnownWire": "CgIIAQ==",
+      "responseFutureWire": "CgIIAfp/K2Z1dHVyZTovYXBpL3NlcnZlci9zZXR0aW5ncy91cGRhdGU6cmVzcG9uc2U="
+    },
+    {
       "path": "/api/system/bootstrap",
       "requestType": "GetSystemBootstrapRequest",
       "responseType": "GetSystemBootstrapResponse",

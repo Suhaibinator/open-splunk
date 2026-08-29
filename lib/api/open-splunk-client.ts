@@ -17,6 +17,7 @@ import {
   savedSearchRoutes,
   searchAttemptAuditRoutes,
   searchRoutes,
+  serverSettingsRoutes,
   systemRoutes,
 } from "./routes";
 
@@ -24,6 +25,11 @@ import {
 export class OpenSplunkApiClient {
   public readonly system = {
     bootstrap: this.route(systemRoutes.bootstrap),
+  };
+
+  public readonly serverSettings = {
+    get: this.route(serverSettingsRoutes.get),
+    update: this.route(serverSettingsRoutes.update),
   };
 
   public readonly apps = {

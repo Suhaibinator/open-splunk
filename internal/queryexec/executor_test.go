@@ -21,6 +21,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"github.com/Suhaibinator/open-splunk/internal/searchlimits"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 )
@@ -1670,6 +1671,73 @@ func TestExecutorPublishesStatsChronologicalValuesAsCanonicalStrings(t *testing.
 	}
 	if got, ok := sink.rows[0][3].Bytes(); !ok || !slices.Equal(got, []byte{0xff, 0x00}) {
 		t.Fatalf("earliest binary raw = %x/%v, want ff00 Bytes", got, ok)
+	}
+}
+
+func TestConfigFromPolicyDerivesCheckedResultGuards(t *testing.T) {
+	t.Parallel()
+	policy := searchlimits.Default()
+	config, err := ConfigFromPolicy(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.MaxExecutionTime != policy.MaxRuntime ||
+		config.MaxResultRows != policy.MaxResultRows+1 ||
+		config.MaxResultBytes != policy.MaxResultBytes*2 ||
+		config.MaxRowsToGroupBy != policy.MaxGroupedRows ||
+		config.MaxThreads != policy.MaxThreads {
+		t.Fatalf("ConfigFromPolicy() = %+v", config)
+	}
+	invalid := policy
+	invalid.MaxResultRows = math.MaxUint64
+	if _, err := ConfigFromPolicy(invalid); err == nil {
+		t.Fatal("ConfigFromPolicy() accepted an invalid overflowing policy")
+	}
+}
+
+func TestBoundLimitSourceUpdatesNewOperationsAndPreservesAdmissionSnapshots(t *testing.T) {
+	t.Parallel()
+	initial := searchlimits.Default()
+	source, err := searchlimits.NewSource(initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := mustExecutor(t, &fakeQueryConnection{})
+	if err := executor.BindLimitSource(source); err != nil {
+		t.Fatal(err)
+	}
+	before, err := executor.settingsForContext(context.Background(), clickhouse.CompiledQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated := initial
+	updated.MaxRuntime = 7 * time.Minute
+	updated.MaxResultRows = 25_000
+	updated.MaxThreads = 9
+	if err := source.Store(updated); err != nil {
+		t.Fatal(err)
+	}
+	after, err := executor.settingsForContext(context.Background(), clickhouse.CompiledQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	captured, err := executor.settingsForContext(
+		searchlimits.WithPolicy(context.Background(), initial),
+		clickhouse.CompiledQuery{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before["max_execution_time"] != uint64(initial.MaxRuntime/time.Second) ||
+		after["max_execution_time"] != uint64(updated.MaxRuntime/time.Second) ||
+		after["max_result_rows"] != updated.MaxResultRows+1 ||
+		after["max_threads"] != updated.MaxThreads {
+		t.Fatalf("live settings before/after = %#v / %#v", before, after)
+	}
+	if captured["max_execution_time"] != uint64(initial.MaxRuntime/time.Second) ||
+		captured["max_result_rows"] != initial.MaxResultRows+1 ||
+		captured["max_threads"] != initial.MaxThreads {
+		t.Fatalf("captured settings changed after publication: %#v", captured)
 	}
 }
 

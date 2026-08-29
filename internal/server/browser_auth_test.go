@@ -50,6 +50,8 @@ var browserGateAdministratorPaths = []string{
 	"/api/apps/state/set",
 	"/api/apps/delete",
 	searchInspectionPath,
+	"/api/server/settings/get",
+	"/api/server/settings/update",
 }
 
 type recordingBrowserAuthenticator struct {
@@ -1460,6 +1462,7 @@ func newBrowserGateHandlerWithForwardedProto(
 		AppAdmin:                   &fakeAppAdministration{},
 		AppCursorKey:               appAdministrationCursorKey,
 		SearchInspections:          &fakeSearchInspections{},
+		ServerSettings:             newFakeServerSettings(),
 		SavedSearches:              &fakeSavedSearches{},
 		BrowserAuthenticator:       authenticator,
 		WebUI:                      testUI(),

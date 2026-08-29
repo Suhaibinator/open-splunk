@@ -67,6 +67,7 @@ The semantic rule inventory is:
 | `SPL-MVEXPAND-001` | controlled ordered row expansion |
 | `SPL-NOMV-001` | presentation-only flat multivalue display |
 | `SPL-FIELDS-001` | exact public command fields and private namespace |
+| `SPL-SORT-001` | bounded Splunk-compatible field ordering |
 | `SPL-MULTIVALUE-TYPE-001` | nullable native typed-list transport |
 | `SPL-ORDER-001` | durable private relation lineage |
 | `SPL-PIPELINE-LIMITS-001` | pipeline source and runtime accounting |
@@ -166,9 +167,9 @@ The cumulative command surface is:
 | `eval` | left-to-right typed scalar or multivalue assignments |
 | `rex` | first-match RE2 extraction with bounded named captures |
 | `spath` | row-preserving typed JSON scalar and wildcard-array extraction (`SPL-SPATH-MULTIVALUE-001`) |
-| `fields`, `table` | exact projection |
+| `fields`, `table` | exact projection, including explicit `fields +` inclusion |
 | `rename` | exact source/destination pairs |
-| `sort` | bounded exact keys, with `sort 0` selecting all scoped rows |
+| `sort` | bounded exact typed keys, labeled or positional limits, and terminal reversal (`SPL-SORT-001`) |
 | `dedup` | global first-N retention by exact key tuple |
 | `head`, `tail` | bounded row selection; `tail` publishes reversed selection order |
 | `stats` | bounded transforming aggregation and grouping |
@@ -199,6 +200,38 @@ Order-sensitive commands consume an established total order. Sort, projection,
 rename, aggregation, expansion, and limit operations either preserve or
 deliberately replace private lineage. Hard failures in regex, multivalue,
 lookup, arithmetic, or resource validation publish no schema or partial rows.
+
+### `fields` and `sort`
+
+`fields field...` and `fields + field...` are equivalent explicit inclusion
+forms; `fields - field...` excludes exact fields. The modifier is a standalone
+token, so an attached `+field` remains a field name rather than a modifier.
+Event-mode inclusion also retains the standard `_time` and `_raw` columns.
+
+`sort` accepts a positional unsigned count or `limit=<count>`, followed by one
+or more exact keys. A key may have an attached or whitespace-separated `+` or
+`-` direction and may be bare or wrapped as `auto(field)`, `str(field)`,
+`num(field)`, or `ip(field)`. Exact single-quoted fields are accepted, including
+transformed aliases. A terminal case-insensitive `d` or `desc` reverses every
+key direction. The default count is 10,000 and zero selects all scoped rows.
+Commas are the documented SPL separator; whitespace-separated keys remain
+accepted for compatibility with existing SPL examples and Open Splunk
+searches.
+
+Missing and explicit-null keys sort after present values in both directions,
+as specified by the [Splunk Enterprise `sort` reference](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.0/search-commands/sort).
+`str` uses byte-lexical text order, `num` uses numeric order, and `ip` compares
+valid IP addresses by address value. Invalid typed text has a deterministic
+lexical fallback. `auto` recognizes complete numbers, leading-number
+alphanumeric strings, and IP addresses, with lexical fallback for other
+values; this bounded category ordering approximates Splunk's documented
+pairwise automatic comparison.
+
+The authoritative Splunk documentation does not define how `sort` compares
+multivalue fields. Open Splunk therefore makes no parity claim for that case:
+it deterministically compares native arrays member by member using the chosen
+mode, treats a shorter equal-prefix array as smaller, and reverses that array
+order for descending keys. Missing and explicit-null fields still remain last.
 
 ### `spath` multivalue extraction
 

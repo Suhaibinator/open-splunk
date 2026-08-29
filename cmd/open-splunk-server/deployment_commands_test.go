@@ -124,9 +124,32 @@ func TestDeploymentHealthcheckAcceptsReadinessEndpoint(t *testing.T) {
 	}
 }
 
+func TestDeploymentHealthcheckAcceptsPlaintextLoopbackReadiness(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/readyz" {
+			t.Errorf("request path = %q, want /readyz", request.URL.Path)
+		}
+		response.WriteHeader(http.StatusOK)
+		_, _ = response.Write([]byte("ok\n"))
+	}))
+	t.Cleanup(server.Close)
+
+	handled, err := runDeploymentSubcommand([]string{
+		"healthcheck",
+		"-url", server.URL + "/readyz",
+	})
+	if err != nil || !handled {
+		t.Fatalf("plaintext healthcheck dispatch = (%v, %v), want (true, nil)", handled, err)
+	}
+}
+
 func TestDeploymentHealthcheckRejectsInvalidURLAndServerName(t *testing.T) {
 	t.Parallel()
 	for _, rawURL := range []string{
+		"http://127.0.0.1:8080/healthz",
+		"http://127.0.0.1:8080/readyz",
 		"https://127.0.0.1:8080/healthz",
 		"https://127.0.0.1:8080/readyz",
 	} {
@@ -136,15 +159,15 @@ func TestDeploymentHealthcheckRejectsInvalidURLAndServerName(t *testing.T) {
 	}
 
 	for name, rawURL := range map[string]string{
-		"plaintext":         "http://127.0.0.1:8080/healthz",
-		"non loopback":      "https://192.0.2.1:8080/healthz",
-		"DNS even local":    "https://localhost:8080/healthz",
-		"wrong path":        "https://127.0.0.1:8080/",
-		"encoded path":      "https://127.0.0.1:8080/%68ealthz",
-		"query":             "https://127.0.0.1:8080/healthz?ready=true",
-		"fragment":          "https://127.0.0.1:8080/healthz#ready",
-		"userinfo":          "https://user@127.0.0.1:8080/healthz",
-		"surrounding space": " https://127.0.0.1:8080/healthz ",
+		"unsupported scheme": "ftp://127.0.0.1:8080/healthz",
+		"non loopback":       "https://192.0.2.1:8080/healthz",
+		"DNS even local":     "https://localhost:8080/healthz",
+		"wrong path":         "https://127.0.0.1:8080/",
+		"encoded path":       "https://127.0.0.1:8080/%68ealthz",
+		"query":              "https://127.0.0.1:8080/healthz?ready=true",
+		"fragment":           "https://127.0.0.1:8080/healthz#ready",
+		"userinfo":           "https://user@127.0.0.1:8080/healthz",
+		"surrounding space":  " https://127.0.0.1:8080/healthz ",
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -161,6 +184,29 @@ func TestDeploymentHealthcheckRejectsInvalidURLAndServerName(t *testing.T) {
 		if err := validateDeploymentHealthServerName(serverName); err == nil {
 			t.Errorf("server name %q succeeded", serverName)
 		}
+	}
+}
+
+func TestDeploymentHealthcheckRejectsTLSOptionsForPlaintext(t *testing.T) {
+	t.Parallel()
+
+	for name, options := range map[string]deploymentHealthcheckOptions{
+		"CA certificate": {
+			URL:        "http://127.0.0.1:8080/readyz",
+			CACertFile: "/run/open-splunk/health-ca.pem",
+		},
+		"server name": {
+			URL:        "http://127.0.0.1:8080/readyz",
+			ServerName: "healthcheck.test",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			err := runDeploymentHealthcheck(options)
+			if err == nil || !strings.Contains(err.Error(), "only valid with HTTPS") {
+				t.Fatalf("plaintext TLS option error = %v", err)
+			}
+		})
 	}
 }
 

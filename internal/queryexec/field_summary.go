@@ -120,7 +120,7 @@ func (executor *Executor) ExecuteFieldSummary(
 		}
 	}()
 	ctx = admittedContext
-	settings, err := settingsForFieldSummary(executor.settings, query.Spec)
+	settings, err := settingsForFieldSummary(executor.baseSettings(), query.Spec)
 	if err != nil {
 		return FieldSummaryResult{}, err
 	}

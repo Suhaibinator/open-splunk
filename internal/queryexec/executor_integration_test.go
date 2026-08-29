@@ -282,6 +282,196 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 	})
 	gradeThisBase, gradeThisIndexTime, gradeThisTraceID := queryIntegrationInsertGradeThisEvents(t, ctx, connection)
 	chartBase, chartIndexTime := queryIntegrationInsertChartEvents(t, ctx, connection)
+	sortBase, sortIndexTime := queryIntegrationInsertSortEvents(t, ctx, connection)
+	t.Run("spaced ascending sort prefix selects oldest events", func(t *testing.T) {
+		const baseSearch = `index=main source=timechart-percentile* | sort 10 `
+		queries := []struct {
+			id     string
+			source string
+		}{
+			{id: "queryexec-sort-attached-ascending", source: baseSearch + `+_time | table event_id, _time`},
+			{id: "queryexec-sort-spaced-ascending", source: baseSearch + `+ _time | table event_id, _time`},
+		}
+		pages := make([]searchjobs.ResultPage, len(queries))
+		for index, query := range queries {
+			job, page := queryIntegrationRunSearchRange(
+				t, ctx, executor, timechartIndexTime, query.id, query.source,
+				timechartBase, timechartBase.Add(20*time.Minute),
+			)
+			if job.State != searchjobs.StateCompleted {
+				t.Fatalf("%s state = %v, failure = %#v", query.id, job.State, job.Failure)
+			}
+			if len(page.Rows) != 10 {
+				t.Fatalf("%s returned %d rows, want 10", query.id, len(page.Rows))
+			}
+			pages[index] = page
+		}
+		for index := range pages[0].Rows {
+			attachedID, attachedIDOK := pages[0].Rows[index].Values[0].String()
+			spacedID, spacedIDOK := pages[1].Rows[index].Values[0].String()
+			if !attachedIDOK || !spacedIDOK || attachedID != spacedID {
+				t.Fatalf("row %d event IDs differ: attached=%q (%v), spaced=%q (%v)", index, attachedID, attachedIDOK, spacedID, spacedIDOK)
+			}
+			attached, attachedOK := pages[0].Rows[index].Values[1].Time()
+			spaced, spacedOK := pages[1].Rows[index].Values[1].Time()
+			if !attachedOK || !spacedOK || !attached.Equal(spaced) {
+				t.Fatalf("row %d times differ: attached=%v (%v), spaced=%v (%v)", index, attached, attachedOK, spaced, spacedOK)
+			}
+			if index > 0 {
+				previous, previousOK := pages[1].Rows[index-1].Values[1].Time()
+				if !previousOK || spaced.Before(previous) {
+					t.Fatalf("spaced sort is not ascending at row %d: previous=%v, current=%v", index, previous, spaced)
+				}
+			}
+		}
+		first, firstOK := pages[1].Rows[0].Values[1].Time()
+		last, lastOK := pages[1].Rows[9].Values[1].Time()
+		if !firstOK || !lastOK || !first.Equal(timechartBase.Add(2*time.Minute-time.Nanosecond)) || !last.Equal(timechartBase.Add(11*time.Minute)) {
+			t.Fatalf("oldest range = [%v, %v], want [%v, %v]", first, last, timechartBase.Add(2*time.Minute-time.Nanosecond), timechartBase.Add(11*time.Minute))
+		}
+	})
+	t.Run("official sort compatibility surface", func(t *testing.T) {
+		run := func(t *testing.T, id, source string) searchjobs.ResultPage {
+			t.Helper()
+			job, page := queryIntegrationRunSearchRange(
+				t, ctx, executor, sortIndexTime, id, source,
+				sortBase.Add(-time.Minute), sortBase.Add(time.Hour),
+			)
+			if job.State != searchjobs.StateCompleted {
+				t.Fatalf("%s state = %v, failure = %#v", id, job.State, job.Failure)
+			}
+			return page
+		}
+		assertEventIDs := func(t *testing.T, id, source string, want ...string) searchjobs.ResultPage {
+			t.Helper()
+			page := run(t, id, source)
+			eventIDColumn := queryIntegrationColumnIndex(t, page, "event_id")
+			if len(page.Rows) != len(want) {
+				t.Fatalf("%s rows = %d, want %d: %#v", id, len(page.Rows), len(want), page.Rows)
+			}
+			for index, wantID := range want {
+				got, ok := page.Rows[index].Values[eventIDColumn].String()
+				if !ok || got != "queryexec-sort-"+wantID {
+					t.Fatalf("%s row %d event_id = %q (%v), want %q", id, index, got, ok, "queryexec-sort-"+wantID)
+				}
+			}
+			return page
+		}
+
+		t.Run("typed numeric string and IP modes", func(t *testing.T) {
+			assertEventIDs(t, "queryexec-sort-num", `index=main source="sort-number" | sort 0 + num(sort_value) | table event_id`,
+				"num-two", "num-ten", "num-hundred")
+			assertEventIDs(t, "queryexec-sort-str", `index=main source="sort-number" | sort 0 + str(sort_value) | table event_id`,
+				"num-ten", "num-hundred", "num-two")
+			assertEventIDs(t, "queryexec-sort-ip", `index=main source="sort-ip" | sort 0 ip(sort_value) | table event_id`,
+				"ip-two", "ip-ten", "ip-private")
+		})
+
+		t.Run("automatic leading-number and IP collation", func(t *testing.T) {
+			assertEventIDs(t, "queryexec-sort-auto-leading", `index=main source="sort-auto" | sort 0 auto(sort_value) | table event_id`,
+				"auto-two", "auto-ten", "auto-alpha")
+			assertEventIDs(t, "queryexec-sort-auto-ip", `index=main source="sort-ip" | sort 0 sort_value | table event_id`,
+				"ip-two", "ip-ten", "ip-private")
+		})
+
+		t.Run("terminal desc aliases reverse every key", func(t *testing.T) {
+			for _, suffix := range []string{"d", "desc"} {
+				assertEventIDs(t, "queryexec-sort-terminal-"+suffix,
+					`index=main source="sort-number" | sort 0 num(sort_value) `+suffix+` | table event_id`,
+					"num-hundred", "num-ten", "num-two")
+			}
+			page := run(t, "queryexec-sort-terminal-desc-multiple-keys",
+				`index=main source="sort-quoted" | stats count AS "event count" BY sort_value | sort 0 - num('event count'), + str(sort_value) desc`)
+			if len(page.Rows) != 3 {
+				t.Fatalf("multiple-key desc rows = %#v, want three", page.Rows)
+			}
+			wantValues := []string{"one", "two", "three"}
+			wantCounts := []uint64{1, 2, 2}
+			for index := range page.Rows {
+				value, valueOK := page.Rows[index].Values[0].String()
+				count, countOK := page.Rows[index].Values[1].Unsigned()
+				if !valueOK || value != wantValues[index] || !countOK || count != wantCounts[index] {
+					t.Fatalf("multiple-key desc row %d = %#v, want %q/%d", index, page.Rows[index], wantValues[index], wantCounts[index])
+				}
+			}
+		})
+
+		t.Run("labeled limit applies after sorting", func(t *testing.T) {
+			assertEventIDs(t, "queryexec-sort-labeled-limit",
+				`index=main source="sort-number" | sort limit=2 num(sort_value) | table event_id`,
+				"num-two", "num-ten")
+		})
+
+		t.Run("missing and explicit null remain last in both directions", func(t *testing.T) {
+			for _, test := range []struct {
+				name   string
+				source string
+				first  []string
+			}{
+				{name: "ascending", source: `index=main source="sort-null" | sort 0 + sort_value | table event_id`, first: []string{"value-a", "value-z"}},
+				{name: "descending", source: `index=main source="sort-null" | sort 0 - sort_value | table event_id`, first: []string{"value-z", "value-a"}},
+			} {
+				page := run(t, "queryexec-sort-null-"+test.name, test.source)
+				eventIDColumn := queryIntegrationColumnIndex(t, page, "event_id")
+				if len(page.Rows) != 4 {
+					t.Fatalf("%s rows = %#v, want four", test.name, page.Rows)
+				}
+				for index, want := range test.first {
+					got, ok := page.Rows[index].Values[eventIDColumn].String()
+					if !ok || got != "queryexec-sort-"+want {
+						t.Fatalf("%s row %d = %q (%v), want %q", test.name, index, got, ok, "queryexec-sort-"+want)
+					}
+				}
+				last := make(map[string]struct{}, 2)
+				for _, row := range page.Rows[2:] {
+					got, ok := row.Values[eventIDColumn].String()
+					if !ok {
+						t.Fatalf("%s null/missing suffix has non-string ID: %#v", test.name, row)
+					}
+					last[got] = struct{}{}
+				}
+				for _, want := range []string{"queryexec-sort-value-null", "queryexec-sort-value-missing"} {
+					if _, ok := last[want]; !ok {
+						t.Fatalf("%s null/missing suffix = %#v, missing %q", test.name, last, want)
+					}
+				}
+			}
+		})
+
+		t.Run("multivalue arrays use deterministic member order", func(t *testing.T) {
+			assertEventIDs(t, "queryexec-sort-multivalue-ascending",
+				`index=main source="sort-multivalue" | sort 0 auto(sort_value) | table event_id`,
+				"mv-two-z", "mv-ten", "mv-ten-a", "mv-alpha")
+			assertEventIDs(t, "queryexec-sort-multivalue-descending",
+				`index=main source="sort-multivalue" | sort 0 - auto(sort_value) | table event_id`,
+				"mv-alpha", "mv-ten-a", "mv-ten", "mv-two-z")
+		})
+
+		t.Run("quoted transformed aliases are sortable", func(t *testing.T) {
+			page := run(t, "queryexec-sort-quoted-alias",
+				`index=main source="sort-quoted" | stats count AS "event count" BY sort_value | sort 0 - num('event count'), + str(sort_value)`)
+			queryIntegrationAssertColumns(t, page, []string{"sort_value", "event count"})
+			if len(page.Rows) != 3 {
+				t.Fatalf("quoted alias rows = %#v, want three", page.Rows)
+			}
+			wantValues := []string{"three", "two", "one"}
+			wantCounts := []uint64{2, 2, 1}
+			for index := range page.Rows {
+				value, valueOK := page.Rows[index].Values[0].String()
+				count, countOK := page.Rows[index].Values[1].Unsigned()
+				if !valueOK || value != wantValues[index] || !countOK || count != wantCounts[index] {
+					t.Fatalf("quoted alias row %d = %#v, want %q/%d", index, page.Rows[index], wantValues[index], wantCounts[index])
+				}
+			}
+		})
+
+		t.Run("explicit fields inclusion composes with sort", func(t *testing.T) {
+			page := assertEventIDs(t, "queryexec-fields-explicit-inclusion",
+				`index=main source="sort-number" | fields + event_id, sort_value | sort 0 num(sort_value)`,
+				"num-two", "num-ten", "num-hundred")
+			queryIntegrationAssertColumns(t, page, []string{"event_id", "sort_value", "_time", "_raw"})
+		})
+	})
 	t.Run("chart field occurrence count", func(t *testing.T) {
 		queryIntegrationTestChartCountField(
 			t,
@@ -3308,6 +3498,87 @@ func queryIntegrationInsertTimechartEvents(t *testing.T, ctx context.Context, co
 			eventfields.CurrentFieldMetadataVersion,
 			"collector", uint8(1), "collector", "timechart-batch", uint64(index+1),
 			indexTime.Add(24*time.Hour), visibility,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := batch.Send(); err != nil {
+		t.Fatal(err)
+	}
+	return base, indexTime
+}
+
+func queryIntegrationInsertSortEvents(t *testing.T, ctx context.Context, connection clickhousedriver.Conn) (time.Time, time.Time) {
+	t.Helper()
+	query := "INSERT INTO open_splunk.events (event_id, tenant_id, index_name, event_time, index_time, " +
+		"collected_at, event_time_source, host, source, sourcetype, service, severity, level, body, raw, " +
+		"raw_encoding, trace_id, span_id, fields, field_names, field_types, field_metadata_version, " +
+		"collector_id, ingest_source_kind, ingest_source_id, batch_id, batch_sequence, " +
+		"expires_at, visibility_seq)"
+	batch, err := connection.PrepareBatch(ctx, query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Now().UTC().Add(-90 * time.Minute).Truncate(5 * time.Minute)
+	indexTime := time.Now().UTC().Truncate(time.Millisecond)
+	type fixtureEvent struct {
+		id       string
+		source   string
+		valueSet bool
+		value    any
+	}
+	multivalue := func(values ...any) clickhousedriver.Dynamic {
+		items := make([]clickhousedriver.Dynamic, len(values))
+		for index, value := range values {
+			items[index] = clickhousedriver.NewDynamic(value)
+		}
+		return clickhousedriver.NewDynamicWithType(items, "Array(Dynamic)")
+	}
+	events := []fixtureEvent{
+		{id: "num-ten", source: "sort-number", valueSet: true, value: "10"},
+		{id: "num-two", source: "sort-number", valueSet: true, value: "2"},
+		{id: "num-hundred", source: "sort-number", valueSet: true, value: "100"},
+		{id: "ip-ten", source: "sort-ip", valueSet: true, value: "10.0.0.10"},
+		{id: "ip-two", source: "sort-ip", valueSet: true, value: "10.0.0.2"},
+		{id: "ip-private", source: "sort-ip", valueSet: true, value: "192.168.1.1"},
+		{id: "auto-ten", source: "sort-auto", valueSet: true, value: "10alpha"},
+		{id: "auto-two", source: "sort-auto", valueSet: true, value: "2alpha"},
+		{id: "auto-alpha", source: "sort-auto", valueSet: true, value: "alpha"},
+		{id: "value-a", source: "sort-null", valueSet: true, value: "a"},
+		{id: "value-z", source: "sort-null", valueSet: true, value: "z"},
+		{id: "value-null", source: "sort-null", valueSet: true, value: nil},
+		{id: "value-missing", source: "sort-null"},
+		{id: "mv-two-z", source: "sort-multivalue", valueSet: true, value: multivalue("2", "z")},
+		{id: "mv-ten", source: "sort-multivalue", valueSet: true, value: multivalue("10")},
+		{id: "mv-ten-a", source: "sort-multivalue", valueSet: true, value: multivalue("10", "a")},
+		{id: "mv-alpha", source: "sort-multivalue", valueSet: true, value: multivalue("alpha")},
+		{id: "quoted-one", source: "sort-quoted", valueSet: true, value: "one"},
+		{id: "quoted-two-a", source: "sort-quoted", valueSet: true, value: "two"},
+		{id: "quoted-two-b", source: "sort-quoted", valueSet: true, value: "two"},
+		{id: "quoted-three-a", source: "sort-quoted", valueSet: true, value: "three"},
+		{id: "quoted-three-b", source: "sort-quoted", valueSet: true, value: "three"},
+	}
+	for index, event := range events {
+		message := "sort " + event.id
+		document := clickhousedriver.NewJSON()
+		var fieldNames []string
+		var fieldTypes []uint8
+		if event.valueSet {
+			value := clickhousedriver.NewDynamic(event.value)
+			if dynamic, ok := event.value.(clickhousedriver.Dynamic); ok {
+				value = dynamic
+			}
+			document.SetValueAtPath("sort_value", value)
+			fieldNames = []string{"sort_value"}
+			fieldTypes = []uint8{queryIntegrationStoredType(t, event.value)}
+		}
+		if err := batch.Append(
+			"queryexec-sort-"+event.id, "tenant", "main", base.Add(time.Duration(index)*time.Second), indexTime,
+			nil, uint8(1), "host", event.source, "test", nil, uint8(1), nil, &message, []byte(message),
+			uint8(1), nil, nil, document, fieldNames, fieldTypes,
+			eventfields.CurrentFieldMetadataVersion,
+			"collector", uint8(1), "collector", "sort-batch", uint64(index+1),
+			indexTime.Add(24*time.Hour), uint64(1),
 		); err != nil {
 			t.Fatal(err)
 		}

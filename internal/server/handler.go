@@ -32,6 +32,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
 	"github.com/Suhaibinator/open-splunk/internal/searchinspection"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"github.com/Suhaibinator/open-splunk/internal/searchlimits"
 	"github.com/Suhaibinator/open-splunk/internal/searchsuggestions"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"google.golang.org/protobuf/proto"
@@ -492,6 +493,14 @@ type BootstrapConfig struct {
 	SearchResultRetention time.Duration
 }
 
+// ServerSettings is the administrator mutation surface and live bootstrap
+// view for node-wide search limits.
+type ServerSettings interface {
+	Get(context.Context) (control.ServerSearchSettings, error)
+	Update(context.Context, uint64, searchlimits.Policy) (control.ServerSearchSettings, error)
+	Current() control.ServerSearchSettings
+}
+
 // Config composes the trusted-network browser API and embedded static UI.
 // OwnerID and TenantID are fixed process identities for the initial
 // single-user release; authentication can replace them without changing the
@@ -509,6 +518,7 @@ type Config struct {
 	HECOperations              HECOperationalSnapshotter
 	AuditEvents                AuditEvents
 	SearchAttemptAuditEvents   SearchAttemptAuditEvents
+	ServerSettings             ServerSettings
 	CollectorAdmin             CollectorAdministration
 	AppAdmin                   AppAdministration
 	AppCatalog                 AppCatalog
@@ -571,6 +581,7 @@ type apiHandler struct {
 	hecOperations              HECOperationalSnapshotter
 	auditEvents                AuditEvents
 	searchAttemptAuditEvents   SearchAttemptAuditEvents
+	serverSettings             ServerSettings
 	collectorAdmin             CollectorAdministration
 	appAdmin                   AppAdministration
 	appCatalog                 AppCatalog
@@ -700,6 +711,10 @@ func NewHandler(config Config) (*Handler, error) {
 	if isNilDependency(searchAttemptAuditEvents) {
 		searchAttemptAuditEvents = nil
 	}
+	serverSettings := config.ServerSettings
+	if isNilDependency(serverSettings) {
+		serverSettings = nil
+	}
 	collectorAdmin := config.CollectorAdmin
 	if isNilDependency(collectorAdmin) {
 		collectorAdmin = nil
@@ -795,6 +810,7 @@ func NewHandler(config Config) (*Handler, error) {
 		hecOperations != nil ||
 		auditEvents != nil ||
 		searchAttemptAuditEvents != nil ||
+		serverSettings != nil ||
 		collectorAdmin != nil ||
 		appAdmin != nil ||
 		knowledgeCatalog != nil ||
@@ -1017,6 +1033,7 @@ func NewHandler(config Config) (*Handler, error) {
 		planInspection:     inspectionService != nil,
 		auditSearch:        auditEvents != nil,
 		searchAttemptAudit: searchAttemptAuditEvents != nil,
+		serverSettings:     serverSettings != nil,
 		fieldDiscovery:     fieldService != nil,
 		previews:           searchWebSocket != nil,
 		knowledge:          completeKnowledgeFamily,
@@ -1051,6 +1068,7 @@ func NewHandler(config Config) (*Handler, error) {
 		hecOperations:              hecOperations,
 		auditEvents:                auditEvents,
 		searchAttemptAuditEvents:   searchAttemptAuditEvents,
+		serverSettings:             serverSettings,
 		collectorAdmin:             collectorAdmin,
 		appAdmin:                   appAdmin,
 		appCatalog:                 appCatalog,
@@ -1178,6 +1196,12 @@ func NewHandler(config Config) (*Handler, error) {
 	if api.searchAttemptAuditEvents != nil {
 		apiRoutes[searchAttemptAuditListPath] = http.MethodPost
 		administratorRoutes[searchAttemptAuditListPath] = struct{}{}
+	}
+	if api.serverSettings != nil {
+		for _, path := range []string{"/api/server/settings/get", "/api/server/settings/update"} {
+			apiRoutes[path] = http.MethodPost
+			administratorRoutes[path] = struct{}{}
+		}
 	}
 	if api.collectorAdmin != nil {
 		for _, path := range []string{
@@ -1405,6 +1429,7 @@ type serviceCapabilities struct {
 	lookups            bool
 	dashboards         bool
 	quarantine         bool
+	serverSettings     bool
 }
 
 func featuresForServices(features []opensplunk.ServerFeature, capabilities serviceCapabilities) []opensplunk.ServerFeature {
@@ -1431,6 +1456,7 @@ func featuresForServices(features []opensplunk.ServerFeature, capabilities servi
 		{opensplunk.ServerFeature_SERVER_FEATURE_LOOKUP_MANAGEMENT, capabilities.lookups},
 		{opensplunk.ServerFeature_SERVER_FEATURE_DASHBOARDS, capabilities.dashboards},
 		{opensplunk.ServerFeature_SERVER_FEATURE_KNOWLEDGE_QUARANTINE, capabilities.quarantine},
+		{opensplunk.ServerFeature_SERVER_FEATURE_SERVER_SETTINGS_ADMIN, capabilities.serverSettings},
 	}
 	enabled := make(map[opensplunk.ServerFeature]bool, len(managed))
 	for _, item := range managed {
@@ -1555,6 +1581,9 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 			routes,
 			handler.searchAttemptAuditRoutes(noAuth, smallRequestBytes)...,
 		)
+	}
+	if handler.serverSettings != nil {
+		routes = append(routes, handler.serverSettingsRoutes(noAuth, smallRequestBytes)...)
 	}
 	if handler.collectorAdmin != nil {
 		routes = append(

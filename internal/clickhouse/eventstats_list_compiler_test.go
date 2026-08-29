@@ -142,7 +142,8 @@ func TestCompileEventStatsListUsesOneBoundedOrderedState(t *testing.T) {
 			maximumResultValues := strconv.FormatUint(MaximumStatsListValuesPerResult, 10)
 			maximumResultBytes := strconv.FormatUint(MaximumStatsListBytesPerResult, 10)
 			order := `row_number() OVER (` + test.partition +
-				`ORDER BY "__os_order_2_0" ASC NULLS LAST, ` +
+				`ORDER BY tupleElement("__os_order_2_0", 1) ASC NULLS LAST, ` +
+				`tupleElement("__os_order_2_0", 2) ASC NULLS LAST, ` +
 				`"__os_order_2_tie_0" DESC NULLS LAST, ` +
 				`"__os_order_2_tie_1" DESC NULLS LAST, ` +
 				`"__os_order_2_tie_2" DESC NULLS LAST)`
