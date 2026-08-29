@@ -63,6 +63,72 @@ test.describe("search workspace", () => {
     await expectPageScreenshot(page, "search-events");
   });
 
+  test("event row controls and pagination", async ({ page }) => {
+    const parameters = new URLSearchParams({
+      earliest: "-24h",
+      latest: "now",
+      q: "index=gradethis",
+      run: "1",
+    });
+    await gotoVisualRoute(page, `/search/?${parameters.toString()}`);
+    await awaitSettledSearchResults(page);
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"], {
+      origin: new URL(page.url()).origin,
+    });
+
+    const rows = page.locator(".event-row");
+    const rowCount = await rows.count();
+    expect(rowCount).toBeGreaterThan(0);
+    await expect(page.getByRole("button", { name: "Copy raw event" })).toHaveCount(rowCount);
+    await page.getByRole("button", { name: "Copy raw event" }).first().click();
+    await expect(page.getByTestId("toast")).toHaveText("Raw event copied.");
+
+    const rowsMenu = page.getByRole("button", { name: /^Rows\b/u });
+    await rowsMenu.click();
+    await page.getByRole("menuitem", { name: /^Expand page\b/u }).click();
+    await expect(page.locator(".event-row.expanded")).toHaveCount(rowCount);
+
+    const rawPage = (await rows.locator(".event-raw").allTextContents())
+      .map((raw) => raw.replaceAll("\u200b", ""))
+      .join("\n");
+    await rowsMenu.click();
+    await page.getByRole("menuitem", { name: /^Copy page raw\b/u }).click();
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(rawPage);
+
+    await rowsMenu.click();
+    await page.getByRole("menuitem", { name: /^Collapse page\b/u }).click();
+    await expect(page.locator(".event-row.expanded")).toHaveCount(0);
+
+    const pageInput = page.getByRole("spinbutton", { name: "Event page number" });
+    await page.getByRole("button", { name: /^Next\b/u }).click();
+    await expect(pageInput).toHaveValue("2");
+    await expect(page.locator(".event-row.expanded")).toHaveCount(0);
+    await page.getByRole("button", { name: "First", exact: true }).click();
+    await expect(pageInput).toHaveValue("1");
+    await pageInput.fill("3");
+    await page.getByRole("button", { name: "Go", exact: true }).click();
+    await expect(pageInput).toHaveValue("3");
+    await page.getByRole("button", { name: /Prev/u }).click();
+    await expect(pageInput).toHaveValue("2");
+
+    const maximumPage = await pageInput.getAttribute("max");
+    await pageInput.fill(String(Number(maximumPage) + 1));
+    await page.getByRole("button", { name: "Go", exact: true }).click();
+    await expect(pageInput).toHaveValue("2");
+    await expect(page.getByTestId("toast")).toContainText("Choose a page from 1 to");
+
+    await page.setViewportSize({ width: 375, height: 812 });
+    await settleVisualPage(page);
+    expect(await page.locator(".event-toolbar").evaluate((toolbar) => ({
+      noHorizontalOverflow: toolbar.scrollWidth <= toolbar.clientWidth,
+      controlsInsideToolbar: [...toolbar.querySelectorAll("button, input")].every((control) => {
+        const controlBox = control.getBoundingClientRect();
+        const toolbarBox = toolbar.getBoundingClientRect();
+        return controlBox.left >= toolbarBox.left && controlBox.right <= toolbarBox.right;
+      }),
+    }))).toEqual({ noHorizontalOverflow: true, controlsInsideToolbar: true });
+  });
+
   test("timeline", async ({ page }) => {
     await openWorkspaceWithResults(page);
     await expectRegionScreenshot(page.getByTestId("timeline"), "search-timeline");

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 
 import type { SearchDataMode } from "@/lib/search/backend-data";
-import { searchLaunchHref } from "@/lib/search/launch-url";
+import { boundedIndexSearchQuery, searchLaunchHref } from "@/lib/search/launch-url";
 
 import { AppIcon } from "../_components/app-icon";
 import { StatusLabel } from "../_components/status";
@@ -86,7 +86,7 @@ function DemoDatasetsConsole() {
                 <small>{item.retention} retention · {item.status === "Paused" ? "ingestion paused" : item.name === "gradethis" ? "11 days remaining in current partition" : "healthy"}</small>
               </div>
               <footer>
-                <Link href={searchLaunchHref(`index=${item.name} | sort -_time`)} aria-label={`Search index ${item.name}`}>Search index</Link>
+                <Link href={searchLaunchHref(boundedIndexSearchQuery(item.name))} aria-label={`Search index ${item.name}`}>Search index</Link>
                 <Link href={searchLaunchHref(`index=${item.name} | stats count by sourcetype | sort -count`)} aria-label={`Explore sources in index ${item.name}`}>Explore sources</Link>
                 <Link href="/admin/?section=indexes" aria-label={`Manage index ${item.name} in Administration`}>Manage</Link>
               </footer>
@@ -99,7 +99,7 @@ function DemoDatasetsConsole() {
             <table className="table">
               <caption className="sr-only">Datasets</caption>
               <thead><tr><th scope="col">Name</th><th scope="col">Events today</th><th scope="col">Source types</th><th scope="col">Fields</th><th scope="col">Storage</th><th scope="col">Retention</th><th scope="col"><span className="sr-only">Action</span></th></tr></thead>
-              <tbody>{visible.map((item) => <tr key={item.name}><td><strong>{item.name}</strong><small className="table-secondary">{item.description}</small></td><td>{item.events}</td><td>{item.sources}</td><td>{item.fields}</td><td>{item.size}</td><td>{item.retention}</td><td><Link className="table-action" href={searchLaunchHref(`index=${item.name} | sort -_time`)} aria-label={`Search ${item.name}`}>Search <AppIcon name="chevron-right" size="xs" /></Link></td></tr>)}</tbody>
+              <tbody>{visible.map((item) => <tr key={item.name}><td><strong>{item.name}</strong><small className="table-secondary">{item.description}</small></td><td>{item.events}</td><td>{item.sources}</td><td>{item.fields}</td><td>{item.size}</td><td>{item.retention}</td><td><Link className="table-action" href={searchLaunchHref(boundedIndexSearchQuery(item.name))} aria-label={`Search ${item.name}`}>Search <AppIcon name="chevron-right" size="xs" /></Link></td></tr>)}</tbody>
             </table>
           </div>
         </section>

@@ -1,8 +1,9 @@
 import { SPL_PIPELINE_COMMANDS } from "@/lib/search/spl-syntax";
+import { boundedIndexSearchQuery } from "@/lib/search/launch-url";
 
 import type { ResultTab, TimeRange } from "./model";
 
-export const DEFAULT_QUERY = "index=gradethis\n| sort -_time";
+export const DEFAULT_QUERY = boundedIndexSearchQuery("gradethis");
 export const NUMBER_FORMAT = new Intl.NumberFormat("en-US");
 export const COMPACT_NUMBER_FORMAT = new Intl.NumberFormat("en-US", {
   notation: "compact",

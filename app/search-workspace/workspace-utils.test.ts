@@ -4,7 +4,14 @@ import { isValidElement, type ReactNode } from "react";
 
 import { SPL_PIPELINE_COMMANDS } from "@/lib/search/spl-syntax";
 
-import { eventFieldValueWhiteSpace, historyPhase, stateTone, syntaxTokens } from "./workspace-utils";
+import {
+  eventCountForQuery,
+  eventFieldValueWhiteSpace,
+  filteredDemoEvents,
+  historyPhase,
+  stateTone,
+  syntaxTokens,
+} from "./workspace-utils";
 
 interface SyntaxTokenProps {
   children?: ReactNode;
@@ -16,6 +23,14 @@ test("event field presentation preserves adapted nomv newlines", () => {
   assert.equal(eventFieldValueWhiteSpace(7), "nowrap");
   assert.equal(eventFieldValueWhiteSpace("alpha\nbeta"), "pre-wrap");
   assert.equal(eventFieldValueWhiteSpace("alpha\rbeta"), "pre-wrap");
+});
+
+test("numeric head limits clamp demo rows and result counts", () => {
+  assert.equal(eventCountForQuery("index=gradethis | head 3"), 3);
+  assert.equal(eventCountForQuery("index=gradethis | HEAD 0"), 0);
+  assert.equal(eventCountForQuery("index=gradethis | head 100 | HEAD 3"), 3);
+  assert.equal(filteredDemoEvents("index=gradethis | head 3").length, 3);
+  assert.equal(eventCountForQuery("index=gradethis | head invalid"), 12_846);
 });
 
 function classifiedTokens(query: string): Array<{ className: string; text: string }> {

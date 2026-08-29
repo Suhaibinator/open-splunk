@@ -57,6 +57,18 @@ export function hasPipelineCommand(query: string, commands: string | readonly st
   });
 }
 
+function demoHeadLimit(query: string): number | null {
+  let effectiveLimit: number | null = null;
+  for (const stage of splitSplPipeline(query).slice(1)) {
+    const match = /^\s*head\s+([0-9]+)(?:\s|$)/i.exec(stage);
+    if (match === null) continue;
+    const limit = Number(match[1]);
+    const safeLimit = Number.isSafeInteger(limit) ? limit : Number.MAX_SAFE_INTEGER;
+    effectiveLimit = effectiveLimit === null ? safeLimit : Math.min(effectiveLimit, safeLimit);
+  }
+  return effectiveLimit;
+}
+
 interface DemoFieldPredicate {
   excluded: boolean;
   field: "level" | "trace_id";
@@ -173,7 +185,7 @@ export function syntaxTokens(query: string): ReactNode[] {
   });
 }
 
-export function eventCountForQuery(query: string): number {
+function unboundedEventCountForQuery(query: string): number {
   const lowered = query.toLowerCase();
   const predicates = demoFieldPredicates(query);
   const tracePredicates = predicates.filter((predicate) => predicate.field === "trace_id");
@@ -206,6 +218,12 @@ export function eventCountForQuery(query: string): number {
   return excludedTraceIds.length > 0 ? 12_828 : 12_846;
 }
 
+export function eventCountForQuery(query: string): number {
+  const count = unboundedEventCountForQuery(query);
+  const headLimit = demoHeadLimit(query);
+  return headLimit === null ? count : Math.min(count, headLimit);
+}
+
 export function filteredDemoEvents(query: string): DemoEvent[] {
   const lowered = query.toLowerCase();
   let events = DEMO_EVENTS;
@@ -227,7 +245,8 @@ export function filteredDemoEvents(query: string): DemoEvent[] {
       events = events.filter((event) => excluded.every((predicate) => !matchesDemoValue(event.fields[field], predicate.value)));
     }
   }
-  return events;
+  const headLimit = demoHeadLimit(query);
+  return headLimit === null ? events : events.slice(0, headLimit);
 }
 
 export function resultTabForQuery(query: string): ResultTab {

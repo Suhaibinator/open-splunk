@@ -53,17 +53,9 @@ export async function settleVisualPage(page: Page): Promise<void> {
 
 /**
  * Waits for the exact result state the search workspace is photographed in.
- *
- * The event list appears before the job settles, so waiting only for it accepts
- * more than one page shape. Two of them differ by roughly 370 pixels of height:
- * above the phone breakpoint the first event is expanded over its EVENT FIELDS
- * panel, and at or below it a mount effect collapses that event along with the
- * fields rail. A run that hydrates with the phone layout in effect therefore
- * paints a much shorter desktop page -- which fails a baseline on a surface
- * nobody touched, and reads to the determinism gate as the route rendering two
- * different pages (1440x1583 against 1440x1213). Pinning the finished status
- * and the expansion the viewport implies turns that race into a wait, and into
- * an honest failure if it never resolves.
+ * The event list appears before the job settles, so the completed status and
+ * fully collapsed page together distinguish authoritative results from a live
+ * preview or stale expansion state.
  */
 export async function awaitSettledSearchResults(page: Page): Promise<void> {
   await expect(page.getByTestId("search-workspace")).toBeVisible();
@@ -73,11 +65,7 @@ export async function awaitSettledSearchResults(page: Page): Promise<void> {
   await expect(strip).toContainText("Completed");
   await expect(strip).toContainText("100%");
 
-  // The same query the workspace itself uses to decide the phone layout.
-  const phoneLayout = await page.evaluate(() => globalThis.matchMedia("(max-width: 760px)").matches);
-  const firstEvent = page.locator(".event-row").first();
-  if (phoneLayout) await expect(firstEvent).not.toHaveClass(/\bexpanded\b/u);
-  else await expect(firstEvent).toHaveClass(/\bexpanded\b/u);
+  await expect(page.locator(".event-row.expanded")).toHaveCount(0);
 
   await settleVisualPage(page);
 }

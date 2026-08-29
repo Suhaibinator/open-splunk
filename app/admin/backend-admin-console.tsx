@@ -33,7 +33,7 @@ import {
   type SystemBootstrapModel,
 } from "@/lib/api";
 import { createErrorMessage } from "@/lib/error-message";
-import { searchLaunchHref } from "@/lib/search/launch-url";
+import { boundedIndexSearchQuery, searchLaunchHref } from "@/lib/search/launch-url";
 
 import { BackendResourceState } from "../_components/backend-resource-state";
 import { StatusDot, StatusLabel, type StatusTone } from "../_components/status";
@@ -4962,7 +4962,7 @@ function BackendIndexes(props: BackendIndexesProps) {
                 return (
                   <tr key={index.indexId}>
                     <td className="table-long-value">{canSearch
-                      ? <Link className="resource-name" href={searchLaunchHref(`index=${name} | sort -_time`)} aria-label={`Search index ${name}`}>{nameContent}</Link>
+                      ? <Link className="resource-name" href={searchLaunchHref(boundedIndexSearchQuery(name))} aria-label={`Search index ${name}`}>{nameContent}</Link>
                       : <div className="resource-name" aria-label={`Index ${name} is not currently searchable`}>{nameContent}</div>}
                     </td>
                     <td><StatusLabel tone={statusTone(state)}>{state}</StatusLabel></td>

@@ -229,12 +229,79 @@ test("collector event is visible through the compiled backend UI", async ({ page
   const eventList = page.getByTestId("event-list");
   const finalRows = eventList.locator('[data-testid^="event-row-"]:not(.event-row--preview)');
   await expect(finalRows).toHaveCount(expectedRows, { timeout });
-  // Final backend results intentionally expand the first event so typed fields
-  // are immediately visible; wait for that committed state instead of toggling
-  // a row that may already be expanded.
-  await expect(finalRows.first()).toHaveClass(/\bexpanded\b/u, { timeout });
+  await expect.poll(
+    () => finalRows.evaluateAll((rows) => rows.filter((row) => row.classList.contains("expanded")).length),
+    { timeout },
+  ).toBe(0);
   await expect(eventList).toContainText(expectedText, { timeout });
   await expect(eventList.locator(".event-row--preview")).toHaveCount(0);
+
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin });
+  const rowCopyButtons = finalRows.getByRole("button", { name: "Copy raw event" });
+  await expect(rowCopyButtons).toHaveCount(expectedRows);
+  await rowCopyButtons.first().click();
+  await expect(page.getByTestId("toast")).toHaveText("Raw event copied.");
+  const firstRaw = (await finalRows.first().locator(".event-raw").textContent())?.replaceAll("\u200b", "") ?? "";
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(firstRaw);
+
+  const rowsMenuTrigger = page.getByRole("button", { name: /^Rows\b/u });
+  await rowsMenuTrigger.click();
+  await page.getByRole("menuitem", { name: /^Expand page\b/u }).click();
+  await expect.poll(
+    () => finalRows.evaluateAll((rows) => rows.filter((row) => row.classList.contains("expanded")).length),
+    { timeout },
+  ).toBe(expectedRows);
+
+  const rawPage = await finalRows.locator(".event-raw").allTextContents();
+  await rowsMenuTrigger.click();
+  await page.getByRole("menuitem", { name: /^Copy page raw\b/u }).click();
+  await expect(page.getByTestId("toast")).toHaveText(`Copied ${expectedRows} raw ${expectedRows === 1 ? "event" : "events"} from this page.`);
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+    rawPage.map((raw) => raw.replaceAll("\u200b", "")).join("\n"),
+  );
+
+  await rowsMenuTrigger.click();
+  await page.getByRole("menuitem", { name: /^Collapse page\b/u }).click();
+  await expect.poll(
+    () => finalRows.evaluateAll((rows) => rows.filter((row) => row.classList.contains("expanded")).length),
+    { timeout },
+  ).toBe(0);
+
+  const pageInput = page.getByRole("spinbutton", { name: "Event page number" });
+  await expect(pageInput).toHaveValue("1");
+  await pageInput.fill("2");
+  await page.getByRole("button", { name: "Go", exact: true }).click();
+  await expect(page.getByTestId("toast")).toHaveText("Choose a page from 1 to 1.");
+  await expect(pageInput).toHaveValue("1");
+
+  let releaseHeldResultPage: (() => void) | undefined;
+  let markHeldResultPageStarted: (() => void) | undefined;
+  const heldResultPageStarted = new Promise<void>((resolve) => {
+    markHeldResultPageStarted = resolve;
+  });
+  const heldResultPage = new Promise<void>((resolve) => {
+    releaseHeldResultPage = resolve;
+  });
+  const resultPageMatcher = (url: URL) =>
+    url.origin === origin && url.pathname === "/api/search/jobs/results";
+  const holdResultPage = async (route: Route) => {
+    markHeldResultPageStarted?.();
+    await heldResultPage;
+    await route.continue();
+  };
+  await page.route(resultPageMatcher, holdResultPage);
+  const pageSizeTrigger = page.getByRole("button", { name: /Per Page/u });
+  await pageSizeTrigger.click();
+  await page.getByRole("menuitemradio", { name: /^10 events\b/u }).click();
+  await heldResultPageStarted;
+  const eventPages = page.getByRole("navigation", { name: "Event pages" });
+  await expect(eventPages).toHaveAttribute("aria-busy", "true");
+  await expect(rowsMenuTrigger).toBeDisabled();
+  await expect(pageSizeTrigger).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Go", exact: true })).toBeDisabled();
+  releaseHeldResultPage?.();
+  await expect(eventPages).toHaveAttribute("aria-busy", "false", { timeout });
+  await page.unroute(resultPageMatcher, holdResultPage);
 
   const exportTrigger = page.getByRole("button", { name: "Export", exact: true });
   const inspectTrigger = page.getByRole("button", { name: "Inspect search job" });

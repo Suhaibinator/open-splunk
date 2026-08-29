@@ -26,7 +26,6 @@ import {
 } from "@/gen/ts/open_splunk/export";
 import type { SearchHistoryFilter } from "@/gen/ts/open_splunk/history_api";
 import {
-  DEMO_EVENTS,
   DEMO_FIELDS,
   DEMO_HISTORY,
   DEMO_PATTERNS,
@@ -109,7 +108,7 @@ import {
   type ServerSearchJobInspectionState,
 } from "@/lib/search/server-inspection";
 import { applyFieldPivot, type PivotMode } from "@/lib/search/query-pivots";
-import { splFromFindInput } from "@/lib/search/launch-url";
+import { boundedIndexSearchQuery, splFromFindInput } from "@/lib/search/launch-url";
 import {
   duplicateSavedSearchName,
   savedSearchNameWithSuffix,
@@ -155,6 +154,12 @@ import { ProductShell } from "./_components/product-shell";
 import { SearchComposer } from "./search-workspace/components/search-composer";
 import { WorkspaceDialogs } from "./search-workspace/components/workspace-dialogs";
 import { serializeRowsForClipboard } from "./search-workspace/clipboard-export";
+import {
+  collapsePageEvents,
+  expandPageEvents,
+  maximumReachableResultPage,
+  serializeRawPageForClipboard,
+} from "./search-workspace/event-page-controls";
 import {
   COMPLETIONS,
   DEFAULT_QUERY,
@@ -592,7 +597,7 @@ function defaultQueryForBootstrap(bootstrap: SystemBootstrapModel): string {
     .map((name) => searchableByName.get(name.toLowerCase()))
     .find((name): name is string => name !== undefined);
   const indexName = preferred ?? bootstrap.indexes.find((index) => index.searchable)?.name;
-  return indexName === undefined ? "" : `index=${JSON.stringify(indexName)}`;
+  return indexName === undefined ? "" : boundedIndexSearchQuery(indexName);
 }
 
 function formatResolvedBackendTimeRange(range: ResolvedTimeRange | undefined): string | null {
@@ -694,9 +699,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const [activeField, setActiveField] = useState<string | null>(null);
   const [fieldFilter, setFieldFilter] = useState("");
   const [fieldsCollapsed, setFieldsCollapsed] = useState(false);
-  const [expandedEvents, setExpandedEvents] = useState<Set<string>>(
-    new Set(backendEnabled ? [] : [DEMO_EVENTS[0].id]),
-  );
+  const [expandedEvents, setExpandedEvents] = useState<Set<string>>(new Set());
   const [completionOpen, setCompletionOpen] = useState(false);
   const [completionIndex, setCompletionIndex] = useState(0);
   const [backendCompletions, setBackendCompletions] = useState<Array<{
@@ -765,6 +768,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const [eventDisplay, setEventDisplay] = useState<EventDisplay>("List");
   const [eventPageSize, setEventPageSize] = useState(20);
   const [eventPage, setEventPage] = useState(1);
+  const [eventPageLoading, setEventPageLoading] = useState(false);
   const [eventSortDirection, setEventSortDirection] = useState<"asc" | "desc">("desc");
   const [timelineDisplay, setTimelineDisplay] = useState<TimelineDisplay>("Columns");
   const [wrapEvents, setWrapEvents] = useState(true);
@@ -1144,12 +1148,15 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     ? backendResultTotalRows ?? resultEvents.length + (backendHasNextPage ? backendResultPageSize : 0)
     : visibleEventCount;
   const currentResultPageSize = backendEnabled ? backendResultPageSize : eventPageSize;
-  const eventPageCount = Math.max(
-    1,
-    backendEnabled
-      ? eventPage + (backendHasNextPage ? 1 : 0)
-      : Math.ceil(pageableEventCount / currentResultPageSize),
-  );
+  const maximumReachableEventPage = backendEnabled
+    ? Math.max(
+      eventPage,
+      maximumReachableResultPage(backendPageTokensRef.current.keys(), currentResultPageSize),
+    )
+    : Math.max(1, Math.ceil(pageableEventCount / currentResultPageSize));
+  const eventPageStart = backendEnabled
+    ? backendStatisticsPageStart
+    : pageableEventCount === 0 ? 0 : (eventPage - 1) * currentResultPageSize + 1;
   const pagedResultEvents = useMemo(() => {
     if (resultEvents.length === 0) return [];
     if (backendEnabled) return resultEvents;
@@ -1920,6 +1927,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
 
   function resetBackendResultState() {
     resetBackendInspection();
+    setEventPageLoading(false);
     backendProgressRevisionRef.current = null;
     backendResultPagesRef.current.clear();
     backendAuthoritativeResultSchemaRef.current = null;
@@ -2449,8 +2457,12 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   }, [filteredCompletions.length]);
 
   useEffect(() => {
-    setEventPage((current) => Math.min(current, eventPageCount));
-  }, [eventPageCount]);
+    setEventPage((current) => Math.min(current, maximumReachableEventPage));
+  }, [maximumReachableEventPage]);
+
+  useEffect(() => {
+    setExpandedEvents(new Set());
+  }, [currentResultPageSize, eventPage]);
 
   useEffect(() => {
     function closeTransientUi(event: globalThis.KeyboardEvent) {
@@ -2632,7 +2644,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     } else if (!backendAuthoritativeTimelineRef.current) {
       setBackendTimeline([]);
     }
-    setExpandedEvents(new Set(adapted.events[0] ? [adapted.events[0].id] : []));
+    setExpandedEvents(new Set());
     setBackendResultKind(page.schema.resultKind);
     setBackendResultSchema(page.schema);
     if (page.totalSize !== undefined) {
@@ -4453,6 +4465,27 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     });
   }
 
+  function expandCurrentEventPage() {
+    const pageEventIds = pagedResultEvents.map((event) => event.id);
+    setExpandedEvents((current) => expandPageEvents(current, pageEventIds));
+  }
+
+  function collapseCurrentEventPage() {
+    const pageEventIds = pagedResultEvents.map((event) => event.id);
+    setExpandedEvents((current) => collapsePageEvents(current, pageEventIds));
+  }
+
+  async function copyCurrentEventPageRaw() {
+    if (pagedResultEvents.length === 0) {
+      showToast("There are no displayed raw events to copy.", "warning");
+      return;
+    }
+    await copyText(
+      serializeRawPageForClipboard(pagedResultEvents),
+      `Copied ${NUMBER_FORMAT.format(pagedResultEvents.length)} raw ${pagedResultEvents.length === 1 ? "event" : "events"} from this page.`,
+    );
+  }
+
   async function openBackendEventPage(pageNumber: number) {
     const job = backendJobRef.current;
     const bootstrap = backendBootstrapRef.current;
@@ -4468,6 +4501,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     backendPageAbortRef.current?.abort();
     const controller = new AbortController();
     backendPageAbortRef.current = controller;
+    setEventPageLoading(true);
     try {
       await fetchBackendResultPage(
         job,
@@ -4490,7 +4524,10 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         showToast(error instanceof Error ? error.message : "Unable to load that result page.", "warning");
       }
     } finally {
-      if (backendPageAbortRef.current === controller) backendPageAbortRef.current = null;
+      if (backendPageAbortRef.current === controller) {
+        backendPageAbortRef.current = null;
+        setEventPageLoading(false);
+      }
     }
   }
 
@@ -6618,13 +6655,14 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           activeField={activeField}
           backendEnabled={backendEnabled}
           backendHasNextPage={backendHasNextPage}
-          backendResultTotalExact={backendResultTotalExact}
-          backendResultTotalRows={backendResultTotalRows}
+          backendResultTotalExact={!backendEnabled || backendResultTotalExact}
+          backendResultTotalRows={backendEnabled ? backendResultTotalRows : pageableEventCount}
           defaultQuery={defaultSearchQuery}
           draggingTimeline={draggingTimeline}
           eventDisplay={eventDisplay}
           eventPage={eventPage}
-          eventPageCount={eventPageCount}
+          eventPageLoading={eventPageLoading}
+          eventPageStart={eventPageStart}
           eventPageSize={currentResultPageSize}
           eventSortDirection={eventSortDirection}
           expandedEvents={expandedEvents}
@@ -6641,6 +6679,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           maximumEventPageSize={backendEnabled && backendBootstrapRef.current !== null
             ? backendMaximumPageSize(backendBootstrapRef.current)
             : null}
+          maximumReachablePage={maximumReachableEventPage}
           pagedResultEvents={pagedResultEvents}
           previewTruncated={backendPreviewDisplay?.snapshot.truncated === true}
           resultEvents={resultEvents}
@@ -6655,6 +6694,9 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           copyText={copyText}
           endTimelineDrag={endTimelineDrag}
           moveTimelineDrag={moveTimelineDrag}
+          onCollapsePage={collapseCurrentEventPage}
+          onCopyPageRaw={() => void copyCurrentEventPageRaw()}
+          onExpandPage={expandCurrentEventPage}
           onLoadMoreFields={() => void loadMoreBackendFields()}
           setActiveField={setActiveField}
           setEventDisplay={setEventDisplay}

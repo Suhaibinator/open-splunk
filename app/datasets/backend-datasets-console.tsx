@@ -19,7 +19,7 @@ import {
   type SystemBootstrapModel,
 } from "@/lib/api";
 import { createErrorMessage } from "@/lib/error-message";
-import { searchLaunchHref } from "@/lib/search/launch-url";
+import { boundedIndexSearchQuery, searchLaunchHref } from "@/lib/search/launch-url";
 
 import { BackendResourceState } from "../_components/backend-resource-state";
 import { StatusLabel } from "../_components/status";
@@ -263,7 +263,7 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
                       )}
                     </div>
                     <footer>
-                      {index.searchable ? <Link href={searchLaunchHref(`index=${index.name} | sort -_time`)} aria-label={`Search index ${index.name}`}>Search index</Link> : <span className="dataset-action-unavailable">Search unavailable</span>}
+                      {index.searchable ? <Link href={searchLaunchHref(boundedIndexSearchQuery(index.name))} aria-label={`Search index ${index.name}`}>Search index</Link> : <span className="dataset-action-unavailable">Search unavailable</span>}
                       {index.searchable ? <Link href={searchLaunchHref(`index=${index.name} | stats count by sourcetype | sort -count`)} aria-label={`Explore source types in index ${index.name}`}>Explore source types</Link> : null}
                       <button type="button" aria-pressed={observedIndexId === index.id} aria-label={`${observedIndexId === index.id ? "Hide" : "Inspect"} profile for index ${index.name}`} onClick={() => toggleObservedIndex(index.id)}>{observedIndexId === index.id ? "Hide profile" : "Inspect profile"}</button>
                     </footer>
@@ -279,7 +279,7 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
                   <thead><tr><th scope="col">Index</th><th scope="col">State</th><th scope="col">Search access</th><th scope="col">Ingestion access</th><th scope="col">Retention</th><th scope="col">Default source type</th><th scope="col"><span className="sr-only">Action</span></th></tr></thead>
                   <tbody>{visible.map((index) => {
                     const detail = definitions.get(index.id);
-                    return <tr key={index.id}><td><strong>{index.displayName}</strong><small className="table-secondary">index={index.name}</small></td><td>{stateLabel(index)}</td><td>{accessLabel(index.searchAccess)}</td><td>{accessLabel(index.ingestionAccess)}</td><td>{detail === undefined ? "Not available" : retentionLabel(detail)}</td><td>{detail === undefined ? "Not available" : detail.definition?.defaultSourcetype || "Not set"}</td><td><div className="row-actions">{index.searchable ? <Link className="table-action" href={searchLaunchHref(`index=${index.name} | sort -_time`)} aria-label={`Search index ${index.name}`}>Search <AppIcon name="chevron-right" size="xs" /></Link> : "Unavailable"}<button className="table-action" type="button" aria-pressed={observedIndexId === index.id} aria-label={`${observedIndexId === index.id ? "Hide" : "Inspect"} profile for index ${index.name}`} onClick={() => toggleObservedIndex(index.id)}>{observedIndexId === index.id ? "Hide profile" : "Profile"}</button></div></td></tr>;
+                    return <tr key={index.id}><td><strong>{index.displayName}</strong><small className="table-secondary">index={index.name}</small></td><td>{stateLabel(index)}</td><td>{accessLabel(index.searchAccess)}</td><td>{accessLabel(index.ingestionAccess)}</td><td>{detail === undefined ? "Not available" : retentionLabel(detail)}</td><td>{detail === undefined ? "Not available" : detail.definition?.defaultSourcetype || "Not set"}</td><td><div className="row-actions">{index.searchable ? <Link className="table-action" href={searchLaunchHref(boundedIndexSearchQuery(index.name))} aria-label={`Search index ${index.name}`}>Search <AppIcon name="chevron-right" size="xs" /></Link> : "Unavailable"}<button className="table-action" type="button" aria-pressed={observedIndexId === index.id} aria-label={`${observedIndexId === index.id ? "Hide" : "Inspect"} profile for index ${index.name}`} onClick={() => toggleObservedIndex(index.id)}>{observedIndexId === index.id ? "Hide profile" : "Profile"}</button></div></td></tr>;
                   })}</tbody>
                 </table>
               </div>

@@ -1,4 +1,4 @@
-import { type Dispatch, type KeyboardEvent, type PointerEvent, type SetStateAction, useEffect, useMemo, useRef, useState } from "react";
+import { type Dispatch, type FormEvent, type KeyboardEvent, type PointerEvent, type SetStateAction, useEffect, useMemo, useRef, useState } from "react";
 
 import type { DemoEvent, DemoField, DemoScalar, TimelinePoint } from "@/lib/demo/search-data";
 import type { PivotMode } from "@/lib/search/query-pivots";
@@ -24,7 +24,8 @@ interface EventsPanelProps {
   draggingTimeline: boolean;
   eventDisplay: EventDisplay;
   eventPage: number;
-  eventPageCount: number;
+  eventPageLoading: boolean;
+  eventPageStart: number | null;
   eventPageSize: number;
   eventSortDirection: "asc" | "desc";
   expandedEvents: Set<string>;
@@ -39,6 +40,7 @@ interface EventsPanelProps {
   isPreview: boolean;
   menu: MenuName | null;
   maximumEventPageSize: number | null;
+  maximumReachablePage: number;
   pagedResultEvents: DemoEvent[];
   previewTruncated: boolean;
   resultEvents: DemoEvent[];
@@ -54,6 +56,9 @@ interface EventsPanelProps {
   endTimelineDrag: (event: PointerEvent<HTMLInputElement>) => void;
   moveTimelineDrag: (event: PointerEvent<HTMLInputElement>) => void;
   onLoadMoreFields: () => void;
+  onCollapsePage: () => void;
+  onCopyPageRaw: () => void;
+  onExpandPage: () => void;
   setActiveField: Dispatch<SetStateAction<string | null>>;
   setEventDisplay: Dispatch<SetStateAction<EventDisplay>>;
   setEventPage: Dispatch<SetStateAction<number>>;
@@ -132,7 +137,8 @@ export function EventsPanel({
   draggingTimeline,
   eventDisplay,
   eventPage,
-  eventPageCount,
+  eventPageLoading,
+  eventPageStart,
   eventPageSize,
   eventSortDirection,
   expandedEvents,
@@ -147,6 +153,7 @@ export function EventsPanel({
   isPreview,
   menu,
   maximumEventPageSize,
+  maximumReachablePage,
   pagedResultEvents,
   previewTruncated,
   resultEvents,
@@ -162,6 +169,9 @@ export function EventsPanel({
   endTimelineDrag,
   moveTimelineDrag,
   onLoadMoreFields,
+  onCollapsePage,
+  onCopyPageRaw,
+  onExpandPage,
   setActiveField,
   setEventDisplay,
   setEventPage,
@@ -186,6 +196,7 @@ export function EventsPanel({
 }: EventsPanelProps) {
   const [timelineKeyboardIndex, setTimelineKeyboardIndex] = useState(0);
   const [mobileFieldsMode, setMobileFieldsMode] = useState(false);
+  const [pageJumpDraft, setPageJumpDraft] = useState({ page: eventPage, value: String(eventPage) });
   const fieldsRailRef = useRef<HTMLElement>(null);
   const fieldsReturnFocusRef = useRef<HTMLElement | null>(null);
   const mobileFieldsButtonRef = useRef<HTMLButtonElement>(null);
@@ -202,6 +213,39 @@ export function EventsPanel({
     ...(maximumEventPageSize === null ? [] : [maximumEventPageSize]),
     eventPageSize,
   ])].filter((size) => size > 0).toSorted((left, right) => left - right);
+  const pageEventIds = pagedResultEvents.map((event) => event.id);
+  const expandedPageEventCount = pageEventIds.filter((eventId) => expandedEvents.has(eventId)).length;
+  const pageStart = pagedResultEvents.length === 0 ? 0 : eventPageStart;
+  const pageEnd = pageStart === null || pageStart === 0
+    ? null
+    : pageStart + pagedResultEvents.length - 1;
+  const pageRangeLabel = pagedResultEvents.length === 0
+    ? "Showing 0 events"
+    : pageStart === null || pageEnd === null
+      ? `${NUMBER_FORMAT.format(pagedResultEvents.length)} events on this page`
+      : `Showing ${NUMBER_FORMAT.format(pageStart)}–${NUMBER_FORMAT.format(pageEnd)}`;
+  const totalResultLabel = backendResultTotalRows === null
+    ? "total unavailable"
+    : `${backendResultTotalExact ? "" : "at least "}${NUMBER_FORMAT.format(backendResultTotalRows)} results`;
+  const pageJumpValue = pageJumpDraft.page === eventPage
+    ? pageJumpDraft.value
+    : String(eventPage);
+
+  function submitPageJump(event: FormEvent<HTMLFormElement>): void {
+    event.preventDefault();
+    const requestedPage = /^\d+$/.test(pageJumpValue) ? Number(pageJumpValue) : Number.NaN;
+    if (
+      !Number.isSafeInteger(requestedPage)
+      || requestedPage < 1
+      || requestedPage > maximumReachablePage
+    ) {
+      showToast(`Choose a page from 1 to ${NUMBER_FORMAT.format(maximumReachablePage)}.`, "warning");
+      setPageJumpDraft({ page: eventPage, value: String(eventPage) });
+      return;
+    }
+    if (requestedPage !== eventPage) setEventPage(requestedPage);
+    setPageJumpDraft({ page: requestedPage, value: String(requestedPage) });
+  }
   const ambiguousTopValueLabels = useMemo(() => {
     const identitiesByLabel = new Map<string, Set<string>>();
     for (const item of activeFieldData?.values ?? []) {
@@ -530,8 +574,18 @@ export function EventsPanel({
                   ) : null}
                 </div>
                 <button type="button" aria-pressed={wrapEvents} title={wrapEvents ? "Turn event wrapping off" : "Wrap long event text"} onClick={() => setWrapEvents((current) => !current)}><AppIcon name="wrap" size="sm" /> {wrapEvents ? "Wrap on" : "Wrap off"}</button>
+                <div className="header-menu-wrap result-menu-wrap">
+                  <button type="button" aria-haspopup="menu" aria-expanded={menu === "event-row-actions"} disabled={eventPageLoading} onClick={() => setMenu(menu === "event-row-actions" ? null : "event-row-actions")}><AppIcon name="more" size="sm" /> Rows <AppIcon name="chevron-down" size="xs" /></button>
+                  {menu === "event-row-actions" ? (
+                    <div className="floating-menu result-control-menu event-row-actions-menu" role="menu" aria-label="Event row actions">
+                      <button role="menuitem" type="button" disabled={eventPageLoading || isPreview || pageEventIds.length === 0 || expandedPageEventCount === pageEventIds.length} onClick={() => { onExpandPage(); setMenu(null); }}><AppIcon name="chevron-down" size="sm" /><span><strong>Expand page</strong><small>Show fields for every displayed event</small></span></button>
+                      <button role="menuitem" type="button" disabled={eventPageLoading || isPreview || expandedPageEventCount === 0} onClick={() => { onCollapsePage(); setMenu(null); }}><AppIcon name="chevron-right" size="sm" /><span><strong>Collapse page</strong><small>Hide fields for displayed events</small></span></button>
+                      <button role="menuitem" type="button" disabled={eventPageLoading || isPreview || pageEventIds.length === 0} onClick={() => { onCopyPageRaw(); setMenu(null); }}><AppIcon name="copy" size="sm" /><span><strong>Copy page raw</strong><small>Copy displayed raw events with newline separators</small></span></button>
+                    </div>
+                  ) : null}
+                </div>
                 {isPreview ? null : <div className="header-menu-wrap result-menu-wrap">
-                  <button type="button" aria-haspopup="menu" aria-expanded={menu === "event-page-size"} onClick={() => setMenu(menu === "event-page-size" ? null : "event-page-size")}>{eventPageSize} Per Page <AppIcon name="chevron-down" size="xs" /></button>
+                  <button type="button" aria-haspopup="menu" aria-expanded={menu === "event-page-size"} disabled={eventPageLoading} onClick={() => setMenu(menu === "event-page-size" ? null : "event-page-size")}>{eventPageSize} Per Page <AppIcon name="chevron-down" size="xs" /></button>
                   {menu === "event-page-size" ? (
                     <div className="floating-menu result-control-menu page-size-menu" role="menu" aria-label="Events per page">
                       {eventPageSizeOptions.map((size) => {
@@ -541,7 +595,7 @@ export function EventsPanel({
                             role="menuitemradio"
                             aria-checked={eventPageSize === size}
                             type="button"
-                            disabled={unavailable}
+                            disabled={eventPageLoading || unavailable}
                             title={unavailable ? `The server allows at most ${maximumEventPageSize} results per page.` : undefined}
                             key={size}
                             onClick={() => {
@@ -567,27 +621,30 @@ export function EventsPanel({
                   {NUMBER_FORMAT.format(resultEvents.length)} {resultEvents.length === 1 ? "row" : "rows"} shown
                   {previewTruncated ? <b>Preview limit reached</b> : null}
                 </span>
-              ) : <nav aria-label="Event pages">
-                <button type="button" disabled={eventPage === 1} onClick={() => setEventPage((current) => Math.max(1, current - 1))}><AppIcon name="chevron-left" size="xs" /> Prev</button>
-                {backendEnabled ? (
-                  <span aria-current="page">
-                    Page {NUMBER_FORMAT.format(eventPage)}
-                    {backendResultTotalRows === null
-                      ? ""
-                      : ` · ${backendResultTotalExact ? "" : "at least "}${NUMBER_FORMAT.format(backendResultTotalRows)} results`}
-                  </span>
-                ) : (
-                  <>
-                    {[1, 2, 3].filter((page) => page <= eventPageCount).map((page) => <button className={eventPage === page ? "active" : ""} aria-current={eventPage === page ? "page" : undefined} type="button" key={page} onClick={() => setEventPage(page)}>{page}</button>)}
-                    {eventPage > 3 && eventPage < eventPageCount ? <><span>…</span><button className="active" aria-current="page" type="button">{NUMBER_FORMAT.format(eventPage)}</button></> : null}
-                    {eventPageCount > 4 ? <span>…</span> : null}
-                    {eventPageCount > 3 ? <button className={eventPage === eventPageCount ? "active" : ""} aria-current={eventPage === eventPageCount ? "page" : undefined} type="button" onClick={() => setEventPage(eventPageCount)}>{NUMBER_FORMAT.format(eventPageCount)}</button> : null}
-                  </>
-                )}
+              ) : <nav aria-label="Event pages" aria-busy={eventPageLoading}>
+                <span className="event-page-range">{pageRangeLabel} · {totalResultLabel}</span>
+                <button type="button" disabled={eventPageLoading || eventPage === 1} onClick={() => setEventPage(1)}>First</button>
+                <button type="button" disabled={eventPageLoading || eventPage === 1} onClick={() => setEventPage((current) => Math.max(1, current - 1))}><AppIcon name="chevron-left" size="xs" /> Prev</button>
+                <form className="event-page-jump" aria-label="Jump to event page" noValidate onSubmit={submitPageJump}>
+                  <label htmlFor="event-page-number">Page</label>
+                  <input
+                    id="event-page-number"
+                    aria-label="Event page number"
+                    type="number"
+                    min={1}
+                    max={maximumReachablePage}
+                    step={1}
+                    value={pageJumpValue}
+                    disabled={eventPageLoading}
+                    onChange={(event) => setPageJumpDraft({ page: eventPage, value: event.target.value })}
+                  />
+                  <span>of {NUMBER_FORMAT.format(maximumReachablePage)}</span>
+                  <button type="submit" disabled={eventPageLoading}>Go</button>
+                </form>
                 <button
                   type="button"
-                  disabled={backendEnabled ? !backendHasNextPage : eventPage === eventPageCount}
-                  onClick={() => setEventPage((current) => backendEnabled ? current + 1 : Math.min(eventPageCount, current + 1))}
+                  disabled={eventPageLoading || (backendEnabled ? !backendHasNextPage : eventPage === maximumReachablePage)}
+                  onClick={() => setEventPage((current) => backendEnabled ? current + 1 : Math.min(maximumReachablePage, current + 1))}
                 >Next <AppIcon name="chevron-right" size="xs" /></button>
               </nav>}
             </div>
@@ -599,6 +656,7 @@ export function EventsPanel({
                 ? <span title="Server cursor order; add SPL sort for global ordering">Time · server order</span>
                 : <button type="button" aria-label={`Sort by time, ${eventSortDirection === "desc" ? "ascending" : "descending"}`} onClick={() => { setEventSortDirection((current) => current === "desc" ? "asc" : "desc"); setEventPage(1); }}>Time <span aria-hidden="true">{eventSortDirection === "desc" ? "↓" : "↑"}</span></button>}
               <span>{isPreview ? "Event · live preview" : "Event"}</span>
+              <span className="event-row-actions-heading">Actions</span>
             </div>
             <div className="event-list" data-testid="event-list">
               {pagedResultEvents.map((event) => {
@@ -637,6 +695,14 @@ export function EventsPanel({
                         </div>
                       ) : null}
                     </div>
+                    <button
+                      className="event-copy-raw"
+                      type="button"
+                      aria-label="Copy raw event"
+                      title={isPreview ? "Raw copy becomes available after authoritative results load." : "Copy raw event"}
+                      disabled={isPreview}
+                      onClick={() => void copyText(event.raw, "Raw event copied.")}
+                    ><AppIcon name="copy" size="sm" /></button>
                   </article>
                 );
               })}
