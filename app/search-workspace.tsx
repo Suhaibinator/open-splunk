@@ -149,8 +149,8 @@ import {
   utf16OffsetsForUtf8ByteOffsets,
 } from "@/lib/search/spl-editor";
 
-import { installModalSurface } from "./_components/modal-surface";
 import { AppIcon, type AppIconName } from "./_components/app-icon";
+import { ProductShell } from "./_components/product-shell";
 import { SearchComposer } from "./search-workspace/components/search-composer";
 import { WorkspaceDialogs } from "./search-workspace/components/workspace-dialogs";
 import {
@@ -655,7 +655,6 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const [absoluteEnd, setAbsoluteEnd] = useState("");
   const [modal, setModal] = useState<ModalName | null>(null);
   const [menu, setMenu] = useState<MenuName | null>(null);
-  const [mobileProductNavOpen, setMobileProductNavOpen] = useState(false);
   const [toast, setToast] = useState<ToastState | null>(null);
   const [dialogCurrentTimeMs, setDialogCurrentTimeMs] = useState(Date.now);
   const [fields, setFields] = useState<DemoField[]>(backendEnabled ? [] : DEMO_FIELDS);
@@ -906,8 +905,6 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const gutterLinesRef = useRef<HTMLDivElement>(null);
   const timePickerRef = useRef<HTMLDivElement>(null);
   const timeRangeButtonRef = useRef<HTMLButtonElement>(null);
-  const mobileProductTriggerRef = useRef<HTMLButtonElement>(null);
-  const mobileProductDrawerRef = useRef<HTMLDialogElement>(null);
   const saveAsButtonRef = useRef<HTMLButtonElement>(null);
   const saveDialogReturnFocusRef = useRef<HTMLElement | null>(null);
   const menuReturnFocusRef = useRef<HTMLElement | null>(null);
@@ -1531,18 +1528,6 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   useEffect(() => {
     if (window.matchMedia("(max-width: 760px)").matches) setFieldsCollapsed(true);
   }, []);
-
-  useEffect(() => {
-    if (!mobileProductNavOpen) return;
-    const drawer = mobileProductDrawerRef.current;
-    if (drawer === null) return;
-    return installModalSurface({
-      container: drawer,
-      excludedSiblingClassNames: ["search-mobile-backdrop"],
-      onEscape: () => setMobileProductNavOpen(false),
-      returnFocus: mobileProductTriggerRef.current,
-    });
-  }, [mobileProductNavOpen]);
 
   function showToast(message: string, tone: ToastState["tone"] = "info") {
     setToast({ message, tone });
@@ -6041,571 +6026,107 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       || (backendConnectionState === "loading" ? "Connecting…" : "Backend unavailable")
     : "Search & Reporting";
 
-  return (
-    <div className="splunk-shell" data-testid="search-workspace" id="search">
-      <a className="skip-link" href="#search-main-content">Skip to search workspace</a>
-      <header className="product-bar">
-        <div className="product-left">
-          <button ref={mobileProductTriggerRef} className="search-mobile-trigger" type="button" aria-label="Open product navigation" aria-expanded={mobileProductNavOpen} onClick={() => setMobileProductNavOpen(true)}><span /><span /><span /></button>
-          <Link className="wordmark" href={productHref("/")} aria-label="Open Splunk home"><span>open</span><b>&gt;</b><span>splunk</span></Link>
-          <div className="header-menu-wrap">
-            <button className="product-menu-button" type="button" aria-haspopup="menu" aria-expanded={menu === "app"} aria-busy={appSwitchingId !== null || (backendEnabled && backendConnectionState === "loading")} onClick={() => setMenu(menu === "app" ? null : "app")} onKeyDown={(event) => openMenuFromKeyboard(event, "app")}>
-              App: <strong>{workspaceAppName}</strong> <AppIcon name="chevron-down" size="xs" />
-            </button>
-            {menu === "app" ? (
-              <div className="floating-menu app-menu" role="menu">
-                <span className="menu-label">{backendEnabled ? "Server apps" : "Your apps"}</span>
-                {backendEnabled
-                  ? backendBootstrapModel === null
-                    ? backendConnectionState === "error"
-                      ? <button role="menuitem" type="button" onClick={() => { setMenu(null); void retryBackendConnection(); }}><span className="app-glyph"><AppIcon name="warning" size="md" /></span><span><strong>Retry backend connection</strong><small>System bootstrap is unavailable</small></span></button>
-                      : <button role="menuitem" type="button" disabled><span className="app-glyph">…</span><span><strong>Loading apps</strong><small>Reading system bootstrap</small></span></button>
-                    : backendBootstrapModel.apps.length === 0
-                      ? <button role="menuitem" type="button" disabled><span className="app-glyph">—</span><span><strong>No authorized apps</strong><small>The backend returned an empty app catalog</small></span></button>
-                      : backendBootstrapModel.apps.map((app) => {
-                      const selected = app.appId === backendBootstrapModel.selectedAppId;
-                      return (
-                        <button
-                          className={selected ? "selected" : undefined}
-                          aria-busy={appSwitchingId === app.appId}
-                          disabled={
-                            isRunning
-                            || appSwitchingId !== null
-                            || objectMutation !== null
-                            || historyClearBusy
-                            || selected
-                          }
-                          key={app.appId}
-                          role="menuitem"
-                          type="button"
-                          onClick={() => void switchBackendApp(app.appId)}
-                        >
-                          <span className="app-glyph"><AppIcon name="search" size="md" /></span>
-                          <span>
-                            <strong>{appSwitchingId === app.appId ? "Switching…" : app.displayName || app.slug || app.appId}</strong>
-                            <small>{app.defaultIndexNames.length > 0 ? `Default ${app.defaultIndexNames.join(", ")}` : "No default index"}</small>
-                          </span>
-                          {selected ? <b><AppIcon name="check" size="sm" /></b> : null}
-                        </button>
-                      );
-                    })
-                  : <>
-                      <Link role="menuitem" href="/search/" className="selected"><span className="app-glyph"><AppIcon name="search" size="md" /></span><span><strong>Search &amp; Reporting</strong><small>Search all authorized indexes</small></span><b><AppIcon name="check" size="sm" /></b></Link>
-                      <Link role="menuitem" href="/dashboards/"><span className="app-glyph">G</span><span><strong>GradeThis Operations</strong><small>Default index: gradethis</small></span></Link>
-                    </>}
-                <div className="menu-separator" />
-                <Link role="menuitem" href={productHref("/admin/")}><span className="app-glyph"><AppIcon name="plus" size="md" /></span><span><strong>Manage apps</strong></span></Link>
-              </div>
-            ) : null}
-          </div>
+  const productAppSwitcher = (
+    <div className="suite-menu-anchor">
+      <button className="suite-app-switcher" type="button" aria-haspopup="menu" aria-expanded={menu === "app"} aria-busy={appSwitchingId !== null || (backendEnabled && backendConnectionState === "loading")} onClick={() => setMenu(menu === "app" ? null : "app")} onKeyDown={(event) => openMenuFromKeyboard(event, "app")}>
+        App: <strong>{workspaceAppName}</strong> <AppIcon name="chevron-down" size="xs" />
+      </button>
+      {menu === "app" ? (
+        <div className="floating-menu app-menu" role="menu">
+          <span className="menu-label">{backendEnabled ? "Server apps" : "Your apps"}</span>
+          {backendEnabled
+            ? backendBootstrapModel === null
+              ? backendConnectionState === "error"
+                ? <button role="menuitem" type="button" onClick={() => { setMenu(null); void retryBackendConnection(); }}><span className="app-glyph"><AppIcon name="warning" size="md" /></span><span><strong>Retry backend connection</strong><small>System bootstrap is unavailable</small></span></button>
+                : <button role="menuitem" type="button" disabled><span className="app-glyph">…</span><span><strong>Loading apps</strong><small>Reading system bootstrap</small></span></button>
+              : backendBootstrapModel.apps.length === 0
+                ? <button role="menuitem" type="button" disabled><span className="app-glyph">—</span><span><strong>No authorized apps</strong><small>The backend returned an empty app catalog</small></span></button>
+                : backendBootstrapModel.apps.map((app) => {
+                const selected = app.appId === backendBootstrapModel.selectedAppId;
+                return (
+                  <button
+                    className={selected ? "selected" : undefined}
+                    aria-busy={appSwitchingId === app.appId}
+                    disabled={
+                      isRunning
+                      || appSwitchingId !== null
+                      || objectMutation !== null
+                      || historyClearBusy
+                      || selected
+                    }
+                    key={app.appId}
+                    role="menuitem"
+                    type="button"
+                    onClick={() => void switchBackendApp(app.appId)}
+                  >
+                    <span className="app-glyph"><AppIcon name="search" size="md" /></span>
+                    <span>
+                      <strong>{appSwitchingId === app.appId ? "Switching…" : app.displayName || app.slug || app.appId}</strong>
+                      <small>{app.defaultIndexNames.length > 0 ? `Default ${app.defaultIndexNames.join(", ")}` : "No default index"}</small>
+                    </span>
+                    {selected ? <b><AppIcon name="check" size="sm" /></b> : null}
+                  </button>
+                );
+              })
+            : <>
+                <Link role="menuitem" href="/search/" className="selected"><span className="app-glyph"><AppIcon name="search" size="md" /></span><span><strong>Search &amp; Reporting</strong><small>Search all authorized indexes</small></span><b><AppIcon name="check" size="sm" /></b></Link>
+                <Link role="menuitem" href="/dashboards/"><span className="app-glyph">G</span><span><strong>GradeThis Operations</strong><small>Default index: gradethis</small></span></Link>
+              </>}
+          <div className="menu-separator" />
+          <Link role="menuitem" href={productHref("/admin/")}><span className="app-glyph"><AppIcon name="plus" size="md" /></span><span><strong>Manage apps</strong></span></Link>
         </div>
-        <nav className="product-utilities" aria-label="Product utilities">
-          <Link className="health-indicator" href={productHref("/admin/")} title="Open system administration">{backendEnabled ? "Backend mode" : "Demo workspace"}</Link>
-          <button type="button" onClick={() => showToast("No new messages.")}>Messages</button>
-          <Link href={productHref("/admin/")}>Settings</Link>
-          <div className="header-menu-wrap">
-            <button type="button" aria-haspopup="menu" aria-expanded={menu === "activity"} onClick={() => setMenu(menu === "activity" ? null : "activity")} onKeyDown={(event) => openMenuFromKeyboard(event, "activity")}>Activity <span className="activity-count">1</span> <AppIcon name="chevron-down" size="xs" /></button>
-            {menu === "activity" ? (
-              <div className="floating-menu utility-menu" role="menu">
-                <span className="menu-label">Activity</span>
-                <button aria-label={`Open active search job: ${phaseLabel(phase)}`} role="menuitem" type="button" onClick={() => { setModal("jobs"); setMenu(null); }}><span className={`mini-status ${stateClass(phase)}`} /> <span><strong>{phaseLabel(phase)}</strong><small>{visibleCountPrefix}{NUMBER_FORMAT.format(visibleEventCount)} results · {elapsed}</small></span></button>
-                <Link role="menuitem" href={productHref("/activity/")}>View all activity</Link>
-              </div>
-            ) : null}
-          </div>
-          <div className="header-menu-wrap">
-            <button type="button" aria-haspopup="menu" aria-expanded={menu === "help"} onClick={() => setMenu(menu === "help" ? null : "help")} onKeyDown={(event) => openMenuFromKeyboard(event, "help")}>Help <AppIcon name="chevron-down" size="xs" /></button>
-            {menu === "help" ? (
-              <div className="floating-menu utility-menu help-menu" role="menu">
-                <span className="menu-label">Search help</span>
-                <button role="menuitem" type="button" onClick={() => showToast("SPL reference will open in a documentation pane.")}>SPL command reference</button>
-                <button role="menuitem" type="button" onClick={() => showToast("Tip: press Ctrl+Space inside the editor for completions.")}>Keyboard shortcuts</button>
-                <button role="menuitem" type="button" onClick={() => showToast(`Open Splunk ${OPEN_SPLUNK_BUILD_LABEL}`)}>About Open Splunk</button>
-              </div>
-            ) : null}
-          </div>
-          <form className="global-search" aria-label="Find events" onSubmit={handleGlobalFind}>
-            <label className="sr-only" htmlFor="search-workspace-find">Find events or enter SPL</label>
-            <input id="search-workspace-find" placeholder="Find" value={globalFind} onChange={(event) => setGlobalFind(event.target.value)} />
-            <button type="submit" aria-label="Run Find"><AppIcon name="search" size="sm" /></button>
-          </form>
-          <div className="header-menu-wrap">
-            <button className="user-button" type="button" aria-label="User menu" aria-haspopup="menu" aria-expanded={menu === "user"} onClick={() => setMenu(menu === "user" ? null : "user")} onKeyDown={(event) => openMenuFromKeyboard(event, "user")}><span>A</span> Administrator <AppIcon name="chevron-down" size="xs" /></button>
-            {menu === "user" ? (
-              <div className="floating-menu utility-menu user-menu" role="menu">
-                <div className="user-summary"><span>A</span><strong>Administrator</strong><small>admin@localhost</small></div>
-                <Link role="menuitem" href={productHref("/admin/")}>Account settings</Link>
-                <button role="menuitem" type="button" onClick={() => showToast("Open Splunk is running in trusted-network mode.")}>Session details</button>
-                <Link role="menuitem" tabIndex={0} href="/signin/" onClick={clearAdministratorBearerToken}>Sign out</Link>
-              </div>
-            ) : null}
-          </div>
-        </nav>
-      </header>
-
-      <nav className="app-bar" aria-label="Search and Reporting navigation">
-        <div className="app-tabs">
-          <Link className="active" aria-current="page" href={productHref("/search/")}>Search</Link>
-          <Link href={productHref("/analytics/")}>Analytics</Link>
-          <Link href={productHref("/datasets/")}>Datasets</Link>
-          <Link href={productHref("/reports/")}>Reports</Link>
-          <Link href={productHref("/activity/")}>Activity</Link>
-          <Link href={productHref("/dashboards/")}>Dashboards</Link>
-        </div>
-        <div className="app-identity"><span aria-hidden="true"><AppIcon name="search" size="md" /></span><strong>{workspaceAppName}</strong></div>
-      </nav>
-
-      {mobileProductNavOpen ? (
-        <>
-          <button className="search-mobile-backdrop" type="button" aria-label="Close product navigation" onClick={() => setMobileProductNavOpen(false)} />
-          <dialog ref={mobileProductDrawerRef} className="search-mobile-drawer" open aria-modal="true" aria-label="Product navigation">
-            <header><div><span>A</span><div><strong>Administrator</strong><small>admin@localhost</small></div></div><button type="button" aria-label="Close product navigation" onClick={() => setMobileProductNavOpen(false)}><AppIcon name="close" size="lg" /></button></header>
-            <span className="search-mobile-label">APPLICATION</span>
-            <Link href={productHref("/")}><i><AppIcon name="home" size="md" /></i>Home</Link><Link className="active" href={productHref("/search/")}><i><AppIcon name="search" size="md" /></i>{workspaceAppName}</Link><Link href={productHref("/analytics/")}><i><AppIcon name="analytics" size="md" /></i>Analytics</Link><Link href={productHref("/datasets/")}><i><AppIcon name="database" size="md" /></i>Datasets</Link><Link href={productHref("/reports/")}><i><AppIcon name="file" size="md" /></i>Reports</Link><Link href={productHref("/dashboards/")}><i><AppIcon name="dashboard" size="md" /></i>Dashboards</Link>
-            <span className="search-mobile-label">SYSTEM</span>
-            <Link href={productHref("/activity/")}><i><AppIcon name="activity" size="md" /></i>Activity <b className="activity-count">1</b></Link><Link href={productHref("/admin/")}><i><AppIcon name="settings" size="md" /></i>Administration</Link><Link href="/signin/" onClick={clearAdministratorBearerToken}><i><AppIcon name="logout" size="md" /></i>Sign out</Link>
-          </dialog>
-        </>
       ) : null}
+    </div>
+  );
 
+  const productUtilities = (
+    <nav className="suite-utilities" aria-label="Product utilities">
+      <Link className="health-indicator" href={productHref("/admin/")} title="Open system administration">{backendEnabled ? "Backend mode" : "Demo workspace"}</Link>
+      <button type="button" onClick={() => showToast("No new messages.")}>Messages</button>
+      <Link href={productHref("/admin/")}>Settings</Link>
+      <div className="suite-menu-anchor">
+        <button type="button" aria-haspopup="menu" aria-expanded={menu === "activity"} onClick={() => setMenu(menu === "activity" ? null : "activity")} onKeyDown={(event) => openMenuFromKeyboard(event, "activity")}>Activity <span className="activity-count">1</span> <AppIcon name="chevron-down" size="xs" /></button>
+        {menu === "activity" ? (
+          <div className="floating-menu utility-menu" role="menu">
+            <span className="menu-label">Activity</span>
+            <button aria-label={`Open active search job: ${phaseLabel(phase)}`} role="menuitem" type="button" onClick={() => { setModal("jobs"); setMenu(null); }}><span className={`mini-status ${stateClass(phase)}`} /> <span><strong>{phaseLabel(phase)}</strong><small>{visibleCountPrefix}{NUMBER_FORMAT.format(visibleEventCount)} results · {elapsed}</small></span></button>
+            <Link role="menuitem" href={productHref("/activity/")}>View all activity</Link>
+          </div>
+        ) : null}
+      </div>
+      <div className="suite-menu-anchor">
+        <button type="button" aria-haspopup="menu" aria-expanded={menu === "help"} onClick={() => setMenu(menu === "help" ? null : "help")} onKeyDown={(event) => openMenuFromKeyboard(event, "help")}>Help <AppIcon name="chevron-down" size="xs" /></button>
+        {menu === "help" ? (
+          <div className="floating-menu utility-menu help-menu" role="menu">
+            <span className="menu-label">Search help</span>
+            <button role="menuitem" type="button" onClick={() => showToast("SPL reference will open in a documentation pane.")}>SPL command reference</button>
+            <button role="menuitem" type="button" onClick={() => showToast("Tip: press Ctrl+Space inside the editor for completions.")}>Keyboard shortcuts</button>
+            <button role="menuitem" type="button" onClick={() => showToast(`Open Splunk ${OPEN_SPLUNK_BUILD_LABEL}`)}>About Open Splunk</button>
+          </div>
+        ) : null}
+      </div>
+      <form className="suite-find" aria-label="Find events" onSubmit={handleGlobalFind}>
+        <label className="sr-only" htmlFor="search-workspace-find">Find events or enter SPL</label>
+        <input id="search-workspace-find" placeholder="Find" value={globalFind} onChange={(event) => setGlobalFind(event.target.value)} />
+        <button type="submit" aria-label="Run Find"><AppIcon name="search" size="sm" /></button>
+      </form>
+      <div className="suite-menu-anchor">
+        <button className="suite-user-button" type="button" aria-label="User menu" aria-haspopup="menu" aria-expanded={menu === "user"} onClick={() => setMenu(menu === "user" ? null : "user")} onKeyDown={(event) => openMenuFromKeyboard(event, "user")}><span>A</span><b>Administrator</b><AppIcon name="chevron-down" size="xs" /></button>
+        {menu === "user" ? (
+          <div className="floating-menu utility-menu user-menu" role="menu">
+            <div className="user-summary"><span>A</span><strong>Administrator</strong><small>admin@localhost</small></div>
+            <Link role="menuitem" href={productHref("/admin/")}>Account settings</Link>
+            <button role="menuitem" type="button" onClick={() => showToast("Open Splunk is running in trusted-network mode.")}>Session details</button>
+            <Link role="menuitem" tabIndex={0} href="/signin/" onClick={clearAdministratorBearerToken}>Sign out</Link>
+          </div>
+        ) : null}
+      </div>
+    </nav>
+  );
+
+  const workspaceOverlays = (
+    <>
       {menu !== null ? <button type="button" className="menu-dismiss" aria-label="Close menu" onClick={() => setMenu(null)} /> : null}
-
-      <main className="search-page" id="search-main-content" tabIndex={-1}>
-        <header className="search-title-row">
-          <div className="search-title">
-            <h1>{activeSavedSearchId === null ? "New Search" : savedSearches.find((item) => item.id === activeSavedSearchId)?.name}</h1>
-            {savedDefinitionDirty ? (
-              <span className="unsaved-dot" title="This saved search has changes that have not been saved">Unsaved changes</span>
-            ) : dirty ? (
-              <span className="search-draft-hint" title="The editor differs from the displayed search job">
-                {submittedQuery.trim().length === 0 && activeSavedSearchId !== null
-                  ? "Run to load results"
-                  : "Run to apply draft"}
-              </span>
-            ) : null}
-            <span
-              className={`demo-badge${backendEnabled ? " backend-data-badge" : ""}`}
-              title={backendEnabled ? "Searches run against the Open Splunk backend" : "Searches use deterministic frontend fixtures"}
-            ><i /> {backendEnabled ? "Backend data" : "Demo data"}</span>
-          </div>
-          <div className="search-actions" aria-label="Search actions">
-            <button type="button" onClick={() => setModal("open")}><AppIcon name="open" size="sm" /> Open</button>
-            <button className="search-action-save" type="button" onClick={quickSave}><AppIcon name="save" size="sm" /> Save</button>
-            <div className="header-menu-wrap">
-              <button ref={saveAsButtonRef} type="button" aria-haspopup="menu" aria-expanded={menu === "save-as"} onClick={() => setMenu(menu === "save-as" ? null : "save-as")}>Save As <AppIcon name="chevron-down" size="xs" /></button>
-              {menu === "save-as" ? (
-                <div className="floating-menu action-menu" role="menu">
-                  <button role="menuitem" type="button" onClick={() => openSaveDialog(saveAsButtonRef.current, true)}><span><AppIcon name="save" size="md" /></span><span><strong>Saved search</strong><small>Preserve this SPL and time range</small></span></button>
-                  <button role="menuitem" type="button" onClick={() => showToast("Reports extend saved searches in a later phase.")}><span><AppIcon name="file" size="md" /></span><span><strong>Report</strong><small>Save table and visualization settings</small></span></button>
-                  <button role="menuitem" type="button" onClick={() => showToast("Alerts are planned after scheduled searches.")}><span><AppIcon name="alert" size="md" /></span><span><strong>Alert</strong><small>Schedule and notify</small></span></button>
-                </div>
-              ) : null}
-            </div>
-            <button type="button" onClick={() => setModal("history")}><AppIcon name="history" size="sm" /> History</button>
-            <button
-              type="button"
-              disabled={backendEnabled && !backendAuthoritativeResultsReady}
-              title={backendEnabled && !backendAuthoritativeResultsReady
-                ? "Authoritative results are required before export"
-                : undefined}
-              onClick={() => openExportDialog()}
-            ><AppIcon name="download" size="sm" /> Export</button>
-            <button className="close-search" type="button" onClick={closeSearchWorkspace}>Close</button>
-            <div className="header-menu-wrap mobile-search-actions">
-              <button type="button" aria-haspopup="menu" aria-expanded={menu === "search-actions"} onClick={() => setMenu(menu === "search-actions" ? null : "search-actions")}>More <AppIcon name="chevron-down" size="xs" /></button>
-              {menu === "search-actions" ? <div className="floating-menu mobile-search-menu" role="menu"><button role="menuitem" type="button" onClick={() => { setModal("open"); setMenu(null); }}><AppIcon name="open" size="md" /> <span>Open saved search</span></button><button role="menuitem" type="button" onClick={() => openSaveDialog(null, true)}><AppIcon name="plus" size="md" /> <span>Save as new</span></button><button role="menuitem" type="button" onClick={() => { setModal("history"); setMenu(null); }}><AppIcon name="history" size="md" /> <span>Search history</span></button><button role="menuitem" type="button" disabled={backendEnabled && !backendAuthoritativeResultsReady} title={backendEnabled && !backendAuthoritativeResultsReady ? "Authoritative results are required before export" : undefined} onClick={() => { openExportDialog(); setMenu(null); }}><AppIcon name="download" size="md" /> <span>Export results</span></button><Link role="menuitem" href={productHref("/activity/")}><AppIcon name="info" size="md" /> <span>View activity</span></Link><button role="menuitem" type="button" onClick={closeSearchWorkspace}><AppIcon name="close" size="md" /> <span>Close search</span></button></div> : null}
-            </div>
-          </div>
-        </header>
-
-        <SearchComposer
-          absoluteEnd={absoluteEnd}
-          absoluteStart={absoluteStart}
-          absoluteTimeInvalid={absoluteTimeInvalid}
-          backendTimeSyntax={backendEnabled}
-          completionIndex={completionIndex}
-          completionOpen={completionOpen}
-          diagnostic={editorDiagnostic}
-          draftTimeRange={draftTimeRange}
-          editorFocused={editorFocused}
-          editorLineCount={editorLineCount}
-          editorRef={editorRef}
-          filteredCompletions={filteredCompletions}
-          gutterLinesRef={gutterLinesRef}
-          highlightRef={highlightRef}
-          isRunning={isRunning}
-          launchPending={persistedLaunchPending}
-          modal={modal}
-          query={query}
-          relativeAmount={relativeAmount}
-          relativeUnit={relativeUnit}
-          runDisabledReason={runDisabledReason}
-          timePickerRef={timePickerRef}
-          timePickerSection={timePickerSection}
-          timeRange={timeRange}
-          timeRangeButtonRef={timeRangeButtonRef}
-          onAbsoluteRangeChange={updateAbsoluteRange}
-          onCancelSearch={cancelSearch}
-          onCloseTimePicker={closeTimePicker}
-          onCompletionIndexChange={setCompletionIndex}
-          onCompletionOpenChange={setCompletionOpen}
-          onDiagnosticFix={fixDiagnostic}
-          onDraftTimeRangeChange={setDraftTimeRange}
-          onEditorCaretChange={setEditorCaret}
-          onEditorChange={handleEditorChange}
-          onEditorFocusedChange={setEditorFocused}
-          onEditorKeyDown={handleEditorKeyDown}
-          onEditorScroll={handleEditorScroll}
-          onInsertCompletion={insertCompletion}
-          onModalChange={setModal}
-          onRelativeRangeChange={updateRelativeRange}
-          onRunSearch={() => {
-            if (backendWorkspaceTransitionBlocked()) return;
-            if (runDisabledReason !== null) {
-              showToast(runDisabledReason, "warning");
-              return;
-            }
-            if (dirty) timelineZoomParentRef.current = null;
-            runSearch();
-          }}
-          onSeedAbsoluteRange={seedAbsoluteRange}
-          onTimePickerSectionChange={setTimePickerSection}
-          onTimeRangeChange={handleManualTimeRangeChange}
-        />
-
-        <section className={`job-strip${searchIsClosed ? " is-closed" : ""}`} data-testid="job-strip" aria-label="Search job status" aria-busy={isRunning}>
-          <div className="job-primary">
-            <span className={`job-state-icon ${stateClass(phase)}`} aria-hidden="true"><AppIcon name={phase === "completed" ? "check" : phase === "failed" ? "warning" : phase === "canceled" ? "close" : phase === "expired" ? "hourglass" : "loading"} size="xs" spin={isRunning} /></span>
-            <span className="job-result-copy">
-              <output className="sr-only" aria-live="polite" aria-atomic="true">Search status: {persistedLaunchPending ? "Opening persisted search" : phaseLabel(phase)}</output>
-              <strong aria-hidden="true">{persistedLaunchPending ? "Opening persisted search" : phaseLabel(phase)}</strong>
-              <span>{visibleCountPrefix}{NUMBER_FORMAT.format(visibleEventCount)} {backendEnabled ? backendPrimaryCountLabel : "events"}</span>
-              <small data-testid="job-time-range">
-                {!backendEnabled && submittedTimeRange.label === "Last 24 hours"
-                  ? "7/20/26 3:44:00 PM to 7/21/26 3:44:00 PM"
-                  : resolvedTimeRangeLabel ?? submittedTimeRange.label}
-              </small>
-            </span>
-            {backendEnabled
-              ? <button className="sampling-button" type="button" onClick={() => setModal("settings")}>Server result policy <AppIcon name="info" size="xs" /></button>
-              : <button className="sampling-button" type="button" onClick={() => showToast("The demo result set is fixed and is not sampled.")}>No Event Sampling <AppIcon name="chevron-down" size="xs" /></button>}
-          </div>
-          <div className="job-metrics" aria-label="Job metrics">
-            <span><small>Scanned</small><strong>{scannedRowsApproximate ? "≈ " : ""}{NUMBER_FORMAT.format(scannedRows)} rows</strong></span>
-            <span><small>{backendEnabled ? "Result data" : "Data"}</small><strong>{scannedBytes}</strong></span>
-            <span><small>Elapsed</small><strong>{elapsed}</strong></span>
-            <span><small>Progress</small><strong aria-hidden="true">{progress}%</strong><progress className="sr-only" aria-label="Search progress" max={100} value={progress}>{progress}%</progress></span>
-          </div>
-          <div className="job-controls">
-            <button type="button" onClick={() => setModal("jobs")}>Job <AppIcon name="chevron-down" size="xs" /></button>
-            <button type="button" aria-label="Inspect search job" title="Inspect job" onClick={openJobInspector}><AppIcon name="info" size="md" /></button>
-            <button
-              type="button"
-              aria-label="Refresh results"
-              title={submittedQuery.trim().length === 0
-                ? "Run a search before refreshing results"
-                : backendEnabled && backendConnectionState !== "ready"
-                  ? "Restore the backend connection before refreshing results"
-                  : "Refresh results"}
-              disabled={submittedQuery.trim().length === 0 || (backendEnabled && backendConnectionState !== "ready")}
-              onClick={() => runSearch(submittedQuery, submittedTimeRange)}
-            ><AppIcon name="refresh" size="md" /></button>
-            <button
-              type="button"
-              aria-label="Share search"
-              title={submittedQuery.trim().length === 0 ? "Run a search before sharing it" : "Share search"}
-              disabled={submittedQuery.trim().length === 0}
-              onClick={() => {
-                const url = new URL(window.location.href);
-                url.searchParams.set("q", submittedQuery);
-                url.searchParams.set("earliest", submittedTimeRange.earliest);
-                url.searchParams.set("latest", submittedTimeRange.latest);
-                url.searchParams.set("label", submittedTimeRange.label);
-                if (submittedTimeRange.timezone) {
-                  url.searchParams.set("timezone", submittedTimeRange.timezone);
-                } else {
-                  url.searchParams.delete("timezone");
-                }
-                url.searchParams.set("run", "1");
-                url.hash = "search";
-                void copyText(url.toString(), "Search link copied to the clipboard.");
-              }}
-            ><AppIcon name="share" size="md" /></button>
-            <div className="header-menu-wrap search-mode-wrap">
-              {backendEnabled
-                ? <button type="button" title="Execution options are controlled by the connected server" onClick={() => setModal("settings")}><AppIcon name="mode" size="sm" /> Server Mode <AppIcon name="info" size="xs" /></button>
-                : <button type="button" aria-haspopup="menu" aria-expanded={menu === "search-mode"} onClick={() => setMenu(menu === "search-mode" ? null : "search-mode")}><AppIcon name="mode" size="sm" /> {searchMode} Mode <AppIcon name="chevron-down" size="xs" /></button>}
-              {!backendEnabled && menu === "search-mode" ? (
-                <div className="floating-menu mode-menu" role="menu">
-                  {(["Fast", "Smart", "Verbose"] as const).map((modeName) => (
-                    <button role="menuitemradio" aria-checked={searchMode === modeName} type="button" key={modeName} onClick={() => { setSearchMode(modeName); setMenu(null); }}>
-                      <span className="radio-mark">{searchMode === modeName ? "●" : "○"}</span><span><strong>{modeName}</strong><small>{modeName === "Fast" ? "Prioritize search performance" : modeName === "Smart" ? "Balance speed and field discovery" : "Discover all available fields"}</small></span>
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          </div>
-          {isRunning ? <span className="job-progress-bar" aria-hidden="true" style={{ width: `${progress}%` }} /> : null}
-        </section>
-
-        {backendRuntimeNotices.length === 0 || searchIsClosed ? null : (
-          <output className="system-notice" aria-label="Backend result notices">
-            <span className="system-notice__icon" aria-hidden="true"><AppIcon name="circle-alert" size="xs" /></span>
-            <div>
-              <strong>{backendRuntimeNotices.length === 1 ? "Backend result notice" : "Backend result notices"}</strong>
-              <small>{backendRuntimeNotices.join(" ")}</small>
-            </div>
-          </output>
-        )}
-
-        {backendEnabled ? (
-          <output className="sr-only" aria-live="polite" aria-atomic="true">
-            {backendPreviewAnnouncement}
-          </output>
-        ) : null}
-        {backendPreviewStatusPresentation === null || searchIsClosed ? null : (
-          <section
-            className={`backend-preview-status status-${backendPreviewStatus} is-${backendPreviewStatusPresentation.tone}`}
-            aria-label="Live result preview status"
-            data-status={backendPreviewStatus}
-            data-testid="backend-preview-status"
-          >
-            <span className="backend-preview-status__pulse" aria-hidden="true" />
-            <strong>{backendPreviewStatusPresentation.title}</strong>
-            <span>{backendPreviewStatusPresentation.detail}</span>
-          </section>
-        )}
-
-        {backendEnabled
-        && hasResultData
-        && backendResultKind !== ResultSetKind.RESULT_SET_KIND_EVENTS
-        && (backendHasNextPage || eventPage > 1) ? (
-          <nav className="backend-result-pager" aria-label="Server result pages">
-            <span>
-              Server page {NUMBER_FORMAT.format(eventPage)}
-              {backendResultTotalRows === null
-                ? ""
-                : ` · ${backendResultTotalExact ? "" : "at least "}${NUMBER_FORMAT.format(backendResultTotalRows)} total rows`}
-            </span>
-            <small>Column sorting applies to the loaded page. Use SPL <code>sort</code> for global ordering.</small>
-            <div>
-              <button className="button secondary compact" type="button" disabled={eventPage === 1} onClick={() => void openBackendEventPage(eventPage - 1)}><AppIcon name="chevron-left" size="xs" /> Previous</button>
-              <button className="button secondary compact" type="button" disabled={!backendHasNextPage} onClick={() => void openBackendEventPage(eventPage + 1)}>Next <AppIcon name="chevron-right" size="xs" /></button>
-            </div>
-          </nav>
-        ) : null}
-
-        <div className={`result-tabs${searchIsClosed ? " is-closed" : ""}`} role="tablist" aria-label="Search result views">
-          {([
-            ["events", "Events", backendEnabled && backendResultKind !== ResultSetKind.RESULT_SET_KIND_EVENTS ? "0" : `${visibleCountPrefix}${NUMBER_FORMAT.format(visibleEventCount)}`],
-            ["patterns", "Patterns", backendEnabled ? "0" : hasResultData ? String(patternRows.length) : "0"],
-            ["statistics", "Statistics", backendEnabled && backendResultKind === ResultSetKind.RESULT_SET_KIND_EVENTS
-              ? "0"
-              : hasResultData
-                ? `${backendDisplayingPreview
-                  ? backendPreviewDisplay?.snapshot.truncated ? "≥" : ""
-                  : backendEnabled && !backendResultTotalExact ? "≥" : ""}${NUMBER_FORMAT.format(statisticsRowCount)}`
-                : "0"],
-            ["visualization", "Visualization", ""],
-          ] as const).map(([id, label, count]) => (
-            <button
-              id={`tab-${id}`}
-              data-testid={`result-tab-${id}`}
-              role="tab"
-              aria-selected={activeTab === id}
-              aria-controls={`panel-${id}`}
-              tabIndex={activeTab === id ? 0 : -1}
-              className={activeTab === id ? "active" : ""}
-              type="button"
-              key={id}
-              disabled={!resultTabAvailable(id)}
-              title={resultTabAvailable(id) ? undefined : "This view is not available for the server result type."}
-              onClick={() => setActiveTab(id)}
-              onKeyDown={(event) => handleResultTabKeyDown(event, id)}
-            >
-              {label}{count.length === 0 ? null : <span>{count}</span>}
-            </button>
-          ))}
-        </div>
-
-        {!hasResultData ? (
-          <section
-            id={`panel-${activeTab}`}
-            role="tabpanel"
-            aria-labelledby={`tab-${activeTab}`}
-            className={`job-empty-results job-empty-results--${emptyResultPresentation.tone}`}
-            data-testid="job-empty-results"
-            data-tone={emptyResultPresentation.tone}
-            aria-busy={emptyResultPresentation.tone === "loading"}
-            aria-live="polite"
-          >
-            <span aria-hidden="true"><AppIcon name={emptyResultPresentation.icon} size="lg" spin={emptyResultPresentation.icon === "loading"} /></span>
-            <strong>{emptyResultPresentation.title}</strong>
-            <p>{emptyResultPresentation.detail}</p>
-            {backendEnabled && backendConnectionState === "error"
-              ? <button className="button secondary compact" type="button" onClick={() => void retryBackendConnection()}>Retry backend connection</button>
-              : backendHasNoSearchableIndexes
-                ? <Link className="button secondary compact" href={productHref("/admin/")}>Review index access</Link>
-                : emptyStateCanRun
-                  ? <button className="button secondary compact" type="button" onClick={() => {
-                      if (backendWorkspaceTransitionBlocked()) return;
-                      timelineZoomParentRef.current = null;
-                      clearPersistedContextForAdHocSearch();
-                      runSearch(emptyStateRunQuery);
-                    }}>{searchIsClosed ? "Run the default search" : "Run search again"}</button>
-                  : null}
-          </section>
-        ) : null}
-
-        {hasResultData && activeTab === "events" ? (
-          <EventsPanel
-            activeField={activeField}
-            backendEnabled={backendEnabled}
-            backendHasNextPage={backendHasNextPage}
-            backendResultTotalExact={backendResultTotalExact}
-            backendResultTotalRows={backendResultTotalRows}
-            defaultQuery={defaultSearchQuery}
-            draggingTimeline={draggingTimeline}
-            eventDisplay={eventDisplay}
-            eventPage={eventPage}
-            eventPageCount={eventPageCount}
-            eventPageSize={currentResultPageSize}
-            eventSortDirection={eventSortDirection}
-            expandedEvents={expandedEvents}
-            fieldFilter={fieldFilter}
-            fieldSummaryError={backendEnabled ? backendFieldSummaryError : null}
-            fieldSummaryLoading={backendEnabled && backendFieldSummaryLoading}
-            fields={fields}
-            fieldsCollapsed={fieldsCollapsed}
-            fieldsHasMore={backendEnabled && backendFieldsHasMore}
-            fieldsLoading={backendEnabled && backendFieldsLoading}
-            fieldsLoadingMore={backendEnabled && backendFieldsLoadingMore}
-            isPreview={backendDisplayingPreview}
-            menu={menu}
-            maximumEventPageSize={backendEnabled && backendBootstrapRef.current !== null
-              ? backendMaximumPageSize(backendBootstrapRef.current)
-              : null}
-            pagedResultEvents={pagedResultEvents}
-            previewTruncated={backendPreviewDisplay?.snapshot.truncated === true}
-            resultEvents={resultEvents}
-            showAllFields={showAllFields}
-            submittedQuery={submittedQuery}
-            timelineDisplay={timelineDisplay}
-            timelinePoints={timelinePoints}
-            timelineSelection={timelineSelection}
-            timelineSelectionZoomable={timelineSelectionZoomable}
-            wrapEvents={wrapEvents}
-            applyPivot={applyPivot}
-            copyText={copyText}
-            endTimelineDrag={endTimelineDrag}
-            moveTimelineDrag={moveTimelineDrag}
-            onLoadMoreFields={() => void loadMoreBackendFields()}
-            setActiveField={setActiveField}
-            setEventDisplay={setEventDisplay}
-            setEventPage={changeEventPage}
-            setEventPageSize={changeEventPageSize}
-            setEventSortDirection={setEventSortDirection}
-            setFieldFilter={setFieldFilter}
-            setFieldsCollapsed={setFieldsCollapsed}
-            setMenu={setMenu}
-            setQuery={setQuery}
-            setShowAllFields={setShowAllFields}
-            setTimelineDisplay={setTimelineDisplay}
-            setTimelineEnd={setTimelineEnd}
-            setTimelineStart={setTimelineStart}
-            setWrapEvents={setWrapEvents}
-            showToast={showToast}
-            startTimelineDrag={startTimelineDrag}
-            toggleEvent={toggleEvent}
-            toggleField={toggleField}
-            zoomTimeline={zoomTimeline}
-            zoomOutTimeline={zoomOutTimeline}
-            canZoomOut={timelineZoomParentRef.current !== null}
-          />
-        ) : null}
-
-        {hasResultData && activeTab === "patterns" ? (
-          <PatternsPanel
-            menu={menu}
-            patternRows={patternRows}
-            patternSensitivity={patternSensitivity}
-            onMenuChange={setMenu}
-            onPatternSensitivityChange={setPatternSensitivity}
-            onShowToast={showToast}
-            onTabChange={setActiveTab}
-            onViewEvents={(signature) => {
-              if (backendWorkspaceTransitionBlocked()) return;
-              timelineZoomParentRef.current = null;
-              runSearch(queryForPattern(submittedQuery, signature), submittedTimeRange);
-            }}
-          />
-        ) : null}
-
-        {hasResultData && activeTab === "statistics" ? (
-          <StatisticsPanel
-            elapsed={elapsed}
-            genericStatisticsTable={genericStatisticsTable}
-            genericStatsSort={genericStatsSort}
-            isPreview={backendDisplayingPreview}
-            isTimechartResult={isTimechartResult}
-            menu={menu}
-            pageNumber={backendEnabled ? eventPage : 1}
-            pageStart={backendStatisticsPageStart}
-            previewTruncated={backendPreviewDisplay?.snapshot.truncated === true}
-            resultIdentity={generationRef.current}
-            resultTotalExact={backendDisplayingPreview
-              ? backendPreviewDisplay?.snapshot.truncated !== true
-              : !backendEnabled || backendResultTotalExact}
-            resultTotalRows={backendDisplayingPreview
-              ? backendPreviewDisplay?.snapshot.rows.length ?? 0
-              : backendEnabled ? backendResultTotalRows : statisticsRowCount}
-            sortedGenericStatisticsRows={sortedGenericStatisticsRows}
-            sortedStatistics={sortedStatistics}
-            sortedTimechartRows={sortedTimechartRows}
-            statisticsDimension={statisticsDimension}
-            statisticsRows={statisticsRows}
-            statsDensity={statsDensity}
-            statsSort={statsSort}
-            timechartSort={timechartSort}
-            timechartValueColumns={timechartValueColumns}
-            timelinePoints={timelinePoints}
-            onApplyPivot={(field, value) => applyPivot(field, value, "include")}
-            onExport={() => openExportDialog("statistics")}
-            onGenericStatsSortChange={updateGenericStatsSort}
-            onMenuChange={setMenu}
-            onStatsDensityChange={setStatsDensity}
-            onStatsSortChange={updateStatsSort}
-            onTimechartSortChange={setTimechartSort}
-          />
-        ) : null}
-
-        {hasResultData && activeTab === "visualization" ? (
-          <VisualizationPanel
-            chartStyle={chartStyle}
-            chartTitle={chartTitle}
-            isPreview={backendDisplayingPreview}
-            isTimechartResult={isTimechartResult}
-            legendPosition={legendPosition}
-            showDataLabels={showDataLabels}
-            previewTruncated={backendPreviewDisplay?.snapshot.truncated === true}
-            statisticsDimension={statisticsDimension}
-            statisticsRows={statisticsRows}
-            timelinePoints={timelinePoints}
-            onApplyPivot={(field, value, mode) => applyPivot(field, value, mode)}
-            onChartStyleChange={setChartStyle}
-            onChartTitleChange={setChartTitle}
-            onLegendPositionChange={setLegendPosition}
-            onShowDataLabelsChange={setShowDataLabels}
-            onVisualizationEdited={() => {
-              preservedSavedVisualizationRef.current = null;
-              visualizationEditedRef.current = true;
-            }}
-            onShowToast={showToast}
-          />
-        ) : null}
-      </main>
-
       <WorkspaceDialogs
         activeSavedSearchId={activeSavedSearchId}
         activeTab={activeTab}
@@ -6761,6 +6282,459 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           <button type="button" aria-label="Dismiss notification" onClick={() => setToast(null)}><AppIcon name="close" size="md" /></button>
         </output>
       )}
-    </div>
+    </>
+  );
+
+  return (
+    <ProductShell
+      activeSection="search"
+      apiBaseUrl={apiBaseUrl}
+      appName={workspaceAppName}
+      appSwitcher={productAppSwitcher}
+      dataMode={dataMode}
+      disclosure={false}
+      mainClassName="search-page"
+      mainId="search-main-content"
+      overlays={workspaceOverlays}
+      shellClassName="splunk-shell"
+      shellId="search"
+      shellTestId="search-workspace"
+      utilities={productUtilities}
+      onSignOut={clearAdministratorBearerToken}
+    >
+      <header className="search-title-row">
+        <div className="search-title">
+          <h1>{activeSavedSearchId === null ? "New Search" : savedSearches.find((item) => item.id === activeSavedSearchId)?.name}</h1>
+          {savedDefinitionDirty ? (
+            <span className="unsaved-dot" title="This saved search has changes that have not been saved">Unsaved changes</span>
+          ) : dirty ? (
+            <span className="search-draft-hint" title="The editor differs from the displayed search job">
+              {submittedQuery.trim().length === 0 && activeSavedSearchId !== null
+                ? "Run to load results"
+                : "Run to apply draft"}
+            </span>
+          ) : null}
+          <span
+            className={`demo-badge${backendEnabled ? " backend-data-badge" : ""}`}
+            title={backendEnabled ? "Searches run against the Open Splunk backend" : "Searches use deterministic frontend fixtures"}
+          ><i /> {backendEnabled ? "Backend data" : "Demo data"}</span>
+        </div>
+        <div className="search-actions" aria-label="Search actions">
+          <button type="button" onClick={() => setModal("open")}><AppIcon name="open" size="sm" /> Open</button>
+          <button className="search-action-save" type="button" onClick={quickSave}><AppIcon name="save" size="sm" /> Save</button>
+          <div className="header-menu-wrap">
+            <button ref={saveAsButtonRef} type="button" aria-haspopup="menu" aria-expanded={menu === "save-as"} onClick={() => setMenu(menu === "save-as" ? null : "save-as")}>Save As <AppIcon name="chevron-down" size="xs" /></button>
+            {menu === "save-as" ? (
+              <div className="floating-menu action-menu" role="menu">
+                <button role="menuitem" type="button" onClick={() => openSaveDialog(saveAsButtonRef.current, true)}><span><AppIcon name="save" size="md" /></span><span><strong>Saved search</strong><small>Preserve this SPL and time range</small></span></button>
+                <button role="menuitem" type="button" onClick={() => showToast("Reports extend saved searches in a later phase.")}><span><AppIcon name="file" size="md" /></span><span><strong>Report</strong><small>Save table and visualization settings</small></span></button>
+                <button role="menuitem" type="button" onClick={() => showToast("Alerts are planned after scheduled searches.")}><span><AppIcon name="alert" size="md" /></span><span><strong>Alert</strong><small>Schedule and notify</small></span></button>
+              </div>
+            ) : null}
+          </div>
+          <button type="button" onClick={() => setModal("history")}><AppIcon name="history" size="sm" /> History</button>
+          <button
+            type="button"
+            disabled={backendEnabled && !backendAuthoritativeResultsReady}
+            title={backendEnabled && !backendAuthoritativeResultsReady
+              ? "Authoritative results are required before export"
+              : undefined}
+            onClick={() => openExportDialog()}
+          ><AppIcon name="download" size="sm" /> Export</button>
+          <button className="close-search" type="button" onClick={closeSearchWorkspace}>Close</button>
+          <div className="header-menu-wrap mobile-search-actions">
+            <button type="button" aria-haspopup="menu" aria-expanded={menu === "search-actions"} onClick={() => setMenu(menu === "search-actions" ? null : "search-actions")}>More <AppIcon name="chevron-down" size="xs" /></button>
+            {menu === "search-actions" ? <div className="floating-menu mobile-search-menu" role="menu"><button role="menuitem" type="button" onClick={() => { setModal("open"); setMenu(null); }}><AppIcon name="open" size="md" /> <span>Open saved search</span></button><button role="menuitem" type="button" onClick={() => openSaveDialog(null, true)}><AppIcon name="plus" size="md" /> <span>Save as new</span></button><button role="menuitem" type="button" onClick={() => { setModal("history"); setMenu(null); }}><AppIcon name="history" size="md" /> <span>Search history</span></button><button role="menuitem" type="button" disabled={backendEnabled && !backendAuthoritativeResultsReady} title={backendEnabled && !backendAuthoritativeResultsReady ? "Authoritative results are required before export" : undefined} onClick={() => { openExportDialog(); setMenu(null); }}><AppIcon name="download" size="md" /> <span>Export results</span></button><Link role="menuitem" href={productHref("/activity/")}><AppIcon name="info" size="md" /> <span>View activity</span></Link><button role="menuitem" type="button" onClick={closeSearchWorkspace}><AppIcon name="close" size="md" /> <span>Close search</span></button></div> : null}
+          </div>
+        </div>
+      </header>
+
+      <SearchComposer
+        absoluteEnd={absoluteEnd}
+        absoluteStart={absoluteStart}
+        absoluteTimeInvalid={absoluteTimeInvalid}
+        backendTimeSyntax={backendEnabled}
+        completionIndex={completionIndex}
+        completionOpen={completionOpen}
+        diagnostic={editorDiagnostic}
+        draftTimeRange={draftTimeRange}
+        editorFocused={editorFocused}
+        editorLineCount={editorLineCount}
+        editorRef={editorRef}
+        filteredCompletions={filteredCompletions}
+        gutterLinesRef={gutterLinesRef}
+        highlightRef={highlightRef}
+        isRunning={isRunning}
+        launchPending={persistedLaunchPending}
+        modal={modal}
+        query={query}
+        relativeAmount={relativeAmount}
+        relativeUnit={relativeUnit}
+        runDisabledReason={runDisabledReason}
+        timePickerRef={timePickerRef}
+        timePickerSection={timePickerSection}
+        timeRange={timeRange}
+        timeRangeButtonRef={timeRangeButtonRef}
+        onAbsoluteRangeChange={updateAbsoluteRange}
+        onCancelSearch={cancelSearch}
+        onCloseTimePicker={closeTimePicker}
+        onCompletionIndexChange={setCompletionIndex}
+        onCompletionOpenChange={setCompletionOpen}
+        onDiagnosticFix={fixDiagnostic}
+        onDraftTimeRangeChange={setDraftTimeRange}
+        onEditorCaretChange={setEditorCaret}
+        onEditorChange={handleEditorChange}
+        onEditorFocusedChange={setEditorFocused}
+        onEditorKeyDown={handleEditorKeyDown}
+        onEditorScroll={handleEditorScroll}
+        onInsertCompletion={insertCompletion}
+        onModalChange={setModal}
+        onRelativeRangeChange={updateRelativeRange}
+        onRunSearch={() => {
+          if (backendWorkspaceTransitionBlocked()) return;
+          if (runDisabledReason !== null) {
+            showToast(runDisabledReason, "warning");
+            return;
+          }
+          if (dirty) timelineZoomParentRef.current = null;
+          runSearch();
+        }}
+        onSeedAbsoluteRange={seedAbsoluteRange}
+        onTimePickerSectionChange={setTimePickerSection}
+        onTimeRangeChange={handleManualTimeRangeChange}
+      />
+
+      <section className={`job-strip${searchIsClosed ? " is-closed" : ""}`} data-testid="job-strip" aria-label="Search job status" aria-busy={isRunning}>
+        <div className="job-primary">
+          <span className={`job-state-icon ${stateClass(phase)}`} aria-hidden="true"><AppIcon name={phase === "completed" ? "check" : phase === "failed" ? "warning" : phase === "canceled" ? "close" : phase === "expired" ? "hourglass" : "loading"} size="xs" spin={isRunning} /></span>
+          <span className="job-result-copy">
+            <output className="sr-only" aria-live="polite" aria-atomic="true">Search status: {persistedLaunchPending ? "Opening persisted search" : phaseLabel(phase)}</output>
+            <strong aria-hidden="true">{persistedLaunchPending ? "Opening persisted search" : phaseLabel(phase)}</strong>
+            <span>{visibleCountPrefix}{NUMBER_FORMAT.format(visibleEventCount)} {backendEnabled ? backendPrimaryCountLabel : "events"}</span>
+            <small data-testid="job-time-range">
+              {!backendEnabled && submittedTimeRange.label === "Last 24 hours"
+                ? "7/20/26 3:44:00 PM to 7/21/26 3:44:00 PM"
+                : resolvedTimeRangeLabel ?? submittedTimeRange.label}
+            </small>
+          </span>
+          {backendEnabled
+            ? <button className="sampling-button" type="button" onClick={() => setModal("settings")}>Server result policy <AppIcon name="info" size="xs" /></button>
+            : <button className="sampling-button" type="button" onClick={() => showToast("The demo result set is fixed and is not sampled.")}>No Event Sampling <AppIcon name="chevron-down" size="xs" /></button>}
+        </div>
+        <div className="job-metrics" aria-label="Job metrics">
+          <span><small>Scanned</small><strong>{scannedRowsApproximate ? "≈ " : ""}{NUMBER_FORMAT.format(scannedRows)} rows</strong></span>
+          <span><small>{backendEnabled ? "Result data" : "Data"}</small><strong>{scannedBytes}</strong></span>
+          <span><small>Elapsed</small><strong>{elapsed}</strong></span>
+          <span><small>Progress</small><strong aria-hidden="true">{progress}%</strong><progress className="sr-only" aria-label="Search progress" max={100} value={progress}>{progress}%</progress></span>
+        </div>
+        <div className="job-controls">
+          <button type="button" onClick={() => setModal("jobs")}>Job <AppIcon name="chevron-down" size="xs" /></button>
+          <button type="button" aria-label="Inspect search job" title="Inspect job" onClick={openJobInspector}><AppIcon name="info" size="md" /></button>
+          <button
+            type="button"
+            aria-label="Refresh results"
+            title={submittedQuery.trim().length === 0
+              ? "Run a search before refreshing results"
+              : backendEnabled && backendConnectionState !== "ready"
+                ? "Restore the backend connection before refreshing results"
+                : "Refresh results"}
+            disabled={submittedQuery.trim().length === 0 || (backendEnabled && backendConnectionState !== "ready")}
+            onClick={() => runSearch(submittedQuery, submittedTimeRange)}
+          ><AppIcon name="refresh" size="md" /></button>
+          <button
+            type="button"
+            aria-label="Share search"
+            title={submittedQuery.trim().length === 0 ? "Run a search before sharing it" : "Share search"}
+            disabled={submittedQuery.trim().length === 0}
+            onClick={() => {
+              const url = new URL(window.location.href);
+              url.searchParams.set("q", submittedQuery);
+              url.searchParams.set("earliest", submittedTimeRange.earliest);
+              url.searchParams.set("latest", submittedTimeRange.latest);
+              url.searchParams.set("label", submittedTimeRange.label);
+              if (submittedTimeRange.timezone) {
+                url.searchParams.set("timezone", submittedTimeRange.timezone);
+              } else {
+                url.searchParams.delete("timezone");
+              }
+              url.searchParams.set("run", "1");
+              url.hash = "search";
+              void copyText(url.toString(), "Search link copied to the clipboard.");
+            }}
+          ><AppIcon name="share" size="md" /></button>
+          <div className="header-menu-wrap search-mode-wrap">
+            {backendEnabled
+              ? <button type="button" title="Execution options are controlled by the connected server" onClick={() => setModal("settings")}><AppIcon name="mode" size="sm" /> Server Mode <AppIcon name="info" size="xs" /></button>
+              : <button type="button" aria-haspopup="menu" aria-expanded={menu === "search-mode"} onClick={() => setMenu(menu === "search-mode" ? null : "search-mode")}><AppIcon name="mode" size="sm" /> {searchMode} Mode <AppIcon name="chevron-down" size="xs" /></button>}
+            {!backendEnabled && menu === "search-mode" ? (
+              <div className="floating-menu mode-menu" role="menu">
+                {(["Fast", "Smart", "Verbose"] as const).map((modeName) => (
+                  <button role="menuitemradio" aria-checked={searchMode === modeName} type="button" key={modeName} onClick={() => { setSearchMode(modeName); setMenu(null); }}>
+                    <span className="radio-mark">{searchMode === modeName ? "●" : "○"}</span><span><strong>{modeName}</strong><small>{modeName === "Fast" ? "Prioritize search performance" : modeName === "Smart" ? "Balance speed and field discovery" : "Discover all available fields"}</small></span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </div>
+        {isRunning ? <span className="job-progress-bar" aria-hidden="true" style={{ width: `${progress}%` }} /> : null}
+      </section>
+
+      {backendRuntimeNotices.length === 0 || searchIsClosed ? null : (
+        <output className="system-notice" aria-label="Backend result notices">
+          <span className="system-notice__icon" aria-hidden="true"><AppIcon name="circle-alert" size="xs" /></span>
+          <div>
+            <strong>{backendRuntimeNotices.length === 1 ? "Backend result notice" : "Backend result notices"}</strong>
+            <small>{backendRuntimeNotices.join(" ")}</small>
+          </div>
+        </output>
+      )}
+
+      {backendEnabled ? (
+        <output className="sr-only" aria-live="polite" aria-atomic="true">
+          {backendPreviewAnnouncement}
+        </output>
+      ) : null}
+      {backendPreviewStatusPresentation === null || searchIsClosed ? null : (
+        <section
+          className={`backend-preview-status status-${backendPreviewStatus} is-${backendPreviewStatusPresentation.tone}`}
+          aria-label="Live result preview status"
+          data-status={backendPreviewStatus}
+          data-testid="backend-preview-status"
+        >
+          <span className="backend-preview-status__pulse" aria-hidden="true" />
+          <strong>{backendPreviewStatusPresentation.title}</strong>
+          <span>{backendPreviewStatusPresentation.detail}</span>
+        </section>
+      )}
+
+      {backendEnabled
+      && hasResultData
+      && backendResultKind !== ResultSetKind.RESULT_SET_KIND_EVENTS
+      && (backendHasNextPage || eventPage > 1) ? (
+        <nav className="backend-result-pager" aria-label="Server result pages">
+          <span>
+            Server page {NUMBER_FORMAT.format(eventPage)}
+            {backendResultTotalRows === null
+              ? ""
+              : ` · ${backendResultTotalExact ? "" : "at least "}${NUMBER_FORMAT.format(backendResultTotalRows)} total rows`}
+          </span>
+          <small>Column sorting applies to the loaded page. Use SPL <code>sort</code> for global ordering.</small>
+          <div>
+            <button className="button secondary compact" type="button" disabled={eventPage === 1} onClick={() => void openBackendEventPage(eventPage - 1)}><AppIcon name="chevron-left" size="xs" /> Previous</button>
+            <button className="button secondary compact" type="button" disabled={!backendHasNextPage} onClick={() => void openBackendEventPage(eventPage + 1)}>Next <AppIcon name="chevron-right" size="xs" /></button>
+          </div>
+        </nav>
+      ) : null}
+
+      <div className={`result-tabs${searchIsClosed ? " is-closed" : ""}`} role="tablist" aria-label="Search result views">
+        {([
+          ["events", "Events", backendEnabled && backendResultKind !== ResultSetKind.RESULT_SET_KIND_EVENTS ? "0" : `${visibleCountPrefix}${NUMBER_FORMAT.format(visibleEventCount)}`],
+          ["patterns", "Patterns", backendEnabled ? "0" : hasResultData ? String(patternRows.length) : "0"],
+          ["statistics", "Statistics", backendEnabled && backendResultKind === ResultSetKind.RESULT_SET_KIND_EVENTS
+            ? "0"
+            : hasResultData
+              ? `${backendDisplayingPreview
+                ? backendPreviewDisplay?.snapshot.truncated ? "≥" : ""
+                : backendEnabled && !backendResultTotalExact ? "≥" : ""}${NUMBER_FORMAT.format(statisticsRowCount)}`
+              : "0"],
+          ["visualization", "Visualization", ""],
+        ] as const).map(([id, label, count]) => (
+          <button
+            id={`tab-${id}`}
+            data-testid={`result-tab-${id}`}
+            role="tab"
+            aria-selected={activeTab === id}
+            aria-controls={`panel-${id}`}
+            tabIndex={activeTab === id ? 0 : -1}
+            className={activeTab === id ? "active" : ""}
+            type="button"
+            key={id}
+            disabled={!resultTabAvailable(id)}
+            title={resultTabAvailable(id) ? undefined : "This view is not available for the server result type."}
+            onClick={() => setActiveTab(id)}
+            onKeyDown={(event) => handleResultTabKeyDown(event, id)}
+          >
+            {label}{count.length === 0 ? null : <span>{count}</span>}
+          </button>
+        ))}
+      </div>
+
+      {!hasResultData ? (
+        <section
+          id={`panel-${activeTab}`}
+          role="tabpanel"
+          aria-labelledby={`tab-${activeTab}`}
+          className={`job-empty-results job-empty-results--${emptyResultPresentation.tone}`}
+          data-testid="job-empty-results"
+          data-tone={emptyResultPresentation.tone}
+          aria-busy={emptyResultPresentation.tone === "loading"}
+          aria-live="polite"
+        >
+          <span aria-hidden="true"><AppIcon name={emptyResultPresentation.icon} size="lg" spin={emptyResultPresentation.icon === "loading"} /></span>
+          <strong>{emptyResultPresentation.title}</strong>
+          <p>{emptyResultPresentation.detail}</p>
+          {backendEnabled && backendConnectionState === "error"
+            ? <button className="button secondary compact" type="button" onClick={() => void retryBackendConnection()}>Retry backend connection</button>
+            : backendHasNoSearchableIndexes
+              ? <Link className="button secondary compact" href={productHref("/admin/")}>Review index access</Link>
+              : emptyStateCanRun
+                ? <button className="button secondary compact" type="button" onClick={() => {
+                    if (backendWorkspaceTransitionBlocked()) return;
+                    timelineZoomParentRef.current = null;
+                    clearPersistedContextForAdHocSearch();
+                    runSearch(emptyStateRunQuery);
+                  }}>{searchIsClosed ? "Run the default search" : "Run search again"}</button>
+                : null}
+        </section>
+      ) : null}
+
+      {hasResultData && activeTab === "events" ? (
+        <EventsPanel
+          activeField={activeField}
+          backendEnabled={backendEnabled}
+          backendHasNextPage={backendHasNextPage}
+          backendResultTotalExact={backendResultTotalExact}
+          backendResultTotalRows={backendResultTotalRows}
+          defaultQuery={defaultSearchQuery}
+          draggingTimeline={draggingTimeline}
+          eventDisplay={eventDisplay}
+          eventPage={eventPage}
+          eventPageCount={eventPageCount}
+          eventPageSize={currentResultPageSize}
+          eventSortDirection={eventSortDirection}
+          expandedEvents={expandedEvents}
+          fieldFilter={fieldFilter}
+          fieldSummaryError={backendEnabled ? backendFieldSummaryError : null}
+          fieldSummaryLoading={backendEnabled && backendFieldSummaryLoading}
+          fields={fields}
+          fieldsCollapsed={fieldsCollapsed}
+          fieldsHasMore={backendEnabled && backendFieldsHasMore}
+          fieldsLoading={backendEnabled && backendFieldsLoading}
+          fieldsLoadingMore={backendEnabled && backendFieldsLoadingMore}
+          isPreview={backendDisplayingPreview}
+          menu={menu}
+          maximumEventPageSize={backendEnabled && backendBootstrapRef.current !== null
+            ? backendMaximumPageSize(backendBootstrapRef.current)
+            : null}
+          pagedResultEvents={pagedResultEvents}
+          previewTruncated={backendPreviewDisplay?.snapshot.truncated === true}
+          resultEvents={resultEvents}
+          showAllFields={showAllFields}
+          submittedQuery={submittedQuery}
+          timelineDisplay={timelineDisplay}
+          timelinePoints={timelinePoints}
+          timelineSelection={timelineSelection}
+          timelineSelectionZoomable={timelineSelectionZoomable}
+          wrapEvents={wrapEvents}
+          applyPivot={applyPivot}
+          copyText={copyText}
+          endTimelineDrag={endTimelineDrag}
+          moveTimelineDrag={moveTimelineDrag}
+          onLoadMoreFields={() => void loadMoreBackendFields()}
+          setActiveField={setActiveField}
+          setEventDisplay={setEventDisplay}
+          setEventPage={changeEventPage}
+          setEventPageSize={changeEventPageSize}
+          setEventSortDirection={setEventSortDirection}
+          setFieldFilter={setFieldFilter}
+          setFieldsCollapsed={setFieldsCollapsed}
+          setMenu={setMenu}
+          setQuery={setQuery}
+          setShowAllFields={setShowAllFields}
+          setTimelineDisplay={setTimelineDisplay}
+          setTimelineEnd={setTimelineEnd}
+          setTimelineStart={setTimelineStart}
+          setWrapEvents={setWrapEvents}
+          showToast={showToast}
+          startTimelineDrag={startTimelineDrag}
+          toggleEvent={toggleEvent}
+          toggleField={toggleField}
+          zoomTimeline={zoomTimeline}
+          zoomOutTimeline={zoomOutTimeline}
+          canZoomOut={timelineZoomParentRef.current !== null}
+        />
+      ) : null}
+
+      {hasResultData && activeTab === "patterns" ? (
+        <PatternsPanel
+          menu={menu}
+          patternRows={patternRows}
+          patternSensitivity={patternSensitivity}
+          onMenuChange={setMenu}
+          onPatternSensitivityChange={setPatternSensitivity}
+          onShowToast={showToast}
+          onTabChange={setActiveTab}
+          onViewEvents={(signature) => {
+            if (backendWorkspaceTransitionBlocked()) return;
+            timelineZoomParentRef.current = null;
+            runSearch(queryForPattern(submittedQuery, signature), submittedTimeRange);
+          }}
+        />
+      ) : null}
+
+      {hasResultData && activeTab === "statistics" ? (
+        <StatisticsPanel
+          elapsed={elapsed}
+          genericStatisticsTable={genericStatisticsTable}
+          genericStatsSort={genericStatsSort}
+          isPreview={backendDisplayingPreview}
+          isTimechartResult={isTimechartResult}
+          menu={menu}
+          pageNumber={backendEnabled ? eventPage : 1}
+          pageStart={backendStatisticsPageStart}
+          previewTruncated={backendPreviewDisplay?.snapshot.truncated === true}
+          resultIdentity={generationRef.current}
+          resultTotalExact={backendDisplayingPreview
+            ? backendPreviewDisplay?.snapshot.truncated !== true
+            : !backendEnabled || backendResultTotalExact}
+          resultTotalRows={backendDisplayingPreview
+            ? backendPreviewDisplay?.snapshot.rows.length ?? 0
+            : backendEnabled ? backendResultTotalRows : statisticsRowCount}
+          sortedGenericStatisticsRows={sortedGenericStatisticsRows}
+          sortedStatistics={sortedStatistics}
+          sortedTimechartRows={sortedTimechartRows}
+          statisticsDimension={statisticsDimension}
+          statisticsRows={statisticsRows}
+          statsDensity={statsDensity}
+          statsSort={statsSort}
+          timechartSort={timechartSort}
+          timechartValueColumns={timechartValueColumns}
+          timelinePoints={timelinePoints}
+          onApplyPivot={(field, value) => applyPivot(field, value, "include")}
+          onExport={() => openExportDialog("statistics")}
+          onGenericStatsSortChange={updateGenericStatsSort}
+          onMenuChange={setMenu}
+          onStatsDensityChange={setStatsDensity}
+          onStatsSortChange={updateStatsSort}
+          onTimechartSortChange={setTimechartSort}
+        />
+      ) : null}
+
+      {hasResultData && activeTab === "visualization" ? (
+        <VisualizationPanel
+          chartStyle={chartStyle}
+          chartTitle={chartTitle}
+          isPreview={backendDisplayingPreview}
+          isTimechartResult={isTimechartResult}
+          legendPosition={legendPosition}
+          showDataLabels={showDataLabels}
+          previewTruncated={backendPreviewDisplay?.snapshot.truncated === true}
+          statisticsDimension={statisticsDimension}
+          statisticsRows={statisticsRows}
+          timelinePoints={timelinePoints}
+          onApplyPivot={(field, value, mode) => applyPivot(field, value, mode)}
+          onChartStyleChange={setChartStyle}
+          onChartTitleChange={setChartTitle}
+          onLegendPositionChange={setLegendPosition}
+          onShowDataLabelsChange={setShowDataLabels}
+          onVisualizationEdited={() => {
+            preservedSavedVisualizationRef.current = null;
+            visualizationEditedRef.current = true;
+          }}
+          onShowToast={showToast}
+        />
+      ) : null}
+    </ProductShell>
   );
 }

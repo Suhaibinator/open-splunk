@@ -543,6 +543,64 @@ One card mode is deliberately left alone: `.mobileCardTable` in
 in a 72px column rather than above it, which is a different design and not a
 drifted copy of this one.
 
+### Product chrome
+
+The search workspace hand-rolled a second product header beside `ProductShell`:
+`.product-bar` / `.app-bar` / `.product-menu-button` / `.product-utilities` /
+`.global-search` / `.user-button` / `.app-tabs` / `.app-identity`, parallel to
+`.suite-product-bar` / `.suite-app-bar` and their utilities. The two had drifted
+— 36px against 38px on the product bar, 43px against 34px on the app bar, 13px
+against 10px tab labels — so "the product header" had two answers to every
+question a theme asks.
+
+`app/search-workspace.tsx` now renders `ProductShell`, which grew optional
+slots for what a page's own header needs: `appSwitcher` (a page that switches
+apps in place rather than by navigating; supplying it also stops the shell
+making a bootstrap request of its own), `utilities`, `overlays` for modals and
+scrims that must sit outside `<main>`, `disclosure`, `mainClassName`/`mainId`,
+`onSignOut`, and the shell's own class and test hooks. The whole
+`.product-bar` family is deleted.
+
+Deliberate visual changes on `/search/`:
+
+* the product bar is 38px rather than 36px and sticks to the top of the page;
+* the app bar is 34px rather than 43px, its tab labels are `--type-xs` rather
+  than 13px, and an active tab is marked by the suite's filled ground and
+  underline rather than a 3px green bar;
+* the app identity block is 190px wide with a 22px glyph rather than 222px with
+  a 28px one;
+* below 760px the app switcher is hidden along with the app bar, as it already
+  was on every other page — the drawer names the app instead;
+* the skip link reads "Skip to main content" rather than "Skip to search
+  workspace".
+
+### Wordmark
+
+One component, `app/_components/wordmark.tsx`, and one `.wordmark` block. The
+markup was written out four times and styled by three blocks — `.wordmark`,
+`.suite-wordmark`, and `.signin-wordmark`/`.signin-mobile-brand` — which
+disagreed on both inks. The bar sizing is the base, because three of the four
+call sites sit in a bar; `.wordmark--hero` is the sign-in brand. The sign-in
+mark's ink moves from `#abb6bc`/`#78b44a` to the bar's `#aeb9bf`/`#79b84a`.
+
+### Drawer
+
+`.suite-mobile-drawer`, `.search-mobile-drawer` and the three identical
+scrims (`.suite-mobile-backdrop`, `.search-mobile-backdrop`,
+`.time-picker-mobile-backdrop`) become `.drawer` and `.drawer-backdrop`, with
+`.drawer-trigger`, `.drawer-label`, `.drawer-rule`, `.drawer-app-state` and
+`.drawer-app-retry` for its parts. The two drawers differed only in an
+inherited ink and in whether a nav icon was a `<span>` or an `<i>`; the search
+page now opens the shell's drawer, so its copy is gone rather than reconciled.
+
+### Modal
+
+`Modal` lives in `app/_components/modal.tsx` beside the `modal-surface.ts` it
+uses, instead of under `app/search-workspace/` with six importers reaching
+across from `app/admin`, `app/activity` and `app/reports`. Its CSS family is
+unchanged apart from a duplicate set of mobile `.modal-card` overrides, which
+sat at the same 760px breakpoint as the full-screen ones that shadowed them.
+
 ## Known debt in the token layer
 
 `.stylelintrc.json` carries an `overrides` entry exempting

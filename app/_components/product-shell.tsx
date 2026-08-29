@@ -21,6 +21,7 @@ import { createErrorMessage } from "@/lib/error-message";
 
 import { AppIcon } from "./app-icon";
 import { installModalSurface } from "./modal-surface";
+import { Wordmark } from "./wordmark";
 
 type ProductSection = "home" | "search" | "analytics" | "datasets" | "reports" | "dashboards" | "activity" | "admin";
 
@@ -30,6 +31,28 @@ interface ProductShellProps {
   apiBaseUrl?: string;
   children: ReactNode;
   dataMode: SearchDataMode;
+  /**
+   * Replaces the built-in app switcher, for a page that switches apps in place
+   * rather than by navigating. Supplying it also means the caller owns the app
+   * catalog, so the shell makes no bootstrap request of its own and the drawer
+   * offers the single app named by `appName`.
+   */
+  appSwitcher?: ReactNode;
+  /** Replaces the built-in utilities nav, for a page with its own menus. */
+  utilities?: ReactNode;
+  /** The demo/backend band above the page content. */
+  disclosure?: boolean;
+  /** Class and id of the `<main>` element the skip link targets. */
+  mainClassName?: string;
+  mainId?: string;
+  /** Overlays -- modals, toasts, scrims -- rendered after `</main>`. */
+  overlays?: ReactNode;
+  /** Runs before the drawer's sign-out link is followed. */
+  onSignOut?: () => void;
+  /** Extra classes and test hooks for the shell element. */
+  shellClassName?: string;
+  shellId?: string;
+  shellTestId?: string;
 }
 
 type BackendAppCatalogState = "idle" | "loading" | "available" | "error";
@@ -76,7 +99,24 @@ function appDetail(app: AppSummary, selected: boolean): string {
   return `${count.toLocaleString()} default ${count === 1 ? "index" : "indexes"}`;
 }
 
-export function ProductShell({ activeSection, apiBaseUrl = "", appName, children, dataMode }: ProductShellProps) {
+export function ProductShell({
+  activeSection,
+  apiBaseUrl = "",
+  appName,
+  appSwitcher,
+  children,
+  dataMode,
+  disclosure = true,
+  mainClassName = "",
+  mainId = "suite-main-content",
+  onSignOut,
+  overlays,
+  shellClassName = "",
+  shellId,
+  shellTestId,
+  utilities,
+}: ProductShellProps) {
+  const ownsCatalog = appSwitcher === undefined;
   const [menu, setMenu] = useState<"apps" | "help" | "user" | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [backendApps, setBackendApps] = useState<AppSummary[]>([]);
@@ -166,6 +206,7 @@ export function ProductShell({ activeSection, apiBaseUrl = "", appName, children
   }, []);
 
   useEffect(() => {
+    if (!ownsCatalog) return;
     if (dataMode !== "backend") {
       setBackendApps([]);
       setSelectedBackendAppId(null);
@@ -198,7 +239,7 @@ export function ProductShell({ activeSection, apiBaseUrl = "", appName, children
       current = false;
       controller.abort();
     };
-  }, [apiClient, backendAppCatalogGeneration, dataMode, preferredAppId]);
+  }, [apiClient, backendAppCatalogGeneration, dataMode, ownsCatalog, preferredAppId]);
 
   useEffect(() => {
     if (menu === null) return;
@@ -252,19 +293,19 @@ export function ProductShell({ activeSection, apiBaseUrl = "", appName, children
     if (drawer === null) return;
     return installModalSurface({
       container: drawer,
-      excludedSiblingClassNames: ["suite-mobile-backdrop"],
+      excludedSiblingClassNames: ["drawer-backdrop"],
       onEscape: () => setMobileOpen(false),
       returnFocus: mobileTriggerRef.current,
     });
   }, [mobileOpen]);
 
   return (
-    <div className="suite-shell">
-      <a className="skip-link" href="#suite-main-content">Skip to main content</a>
+    <div className={`suite-shell ${shellClassName}`.trim()} data-testid={shellTestId} id={shellId}>
+      <a className="skip-link" href={`#${mainId}`}>Skip to main content</a>
       <header className="suite-product-bar">
         <button
           ref={mobileTriggerRef}
-          className="suite-mobile-trigger"
+          className="drawer-trigger"
           type="button"
           aria-label="Open product navigation"
           aria-expanded={mobileOpen}
@@ -272,10 +313,8 @@ export function ProductShell({ activeSection, apiBaseUrl = "", appName, children
         >
           <span /><span /><span />
         </button>
-        <Link className="wordmark suite-wordmark" href={productHref("/")} aria-label="Open Splunk home">
-          <span>open</span><b>&gt;</b><span>splunk</span>
-        </Link>
-        <div className="suite-menu-anchor">
+        <Wordmark href={productHref("/")} />
+        {appSwitcher ?? <div className="suite-menu-anchor">
           <button
             className="suite-app-switcher"
             type="button"
@@ -321,9 +360,9 @@ export function ProductShell({ activeSection, apiBaseUrl = "", appName, children
               <Link role="menuitem" href={productHref("/admin/")}><i className="suite-app-icon suite-app-icon--muted" aria-hidden="true"><AppIcon name="settings" size="md" /></i><span><strong>Administration</strong><small>{dataMode === "backend" ? "Indexes and ingestion tokens" : "Preview system settings"}</small></span></Link>
             </div>
           ) : null}
-        </div>
+        </div>}
 
-        <nav className="suite-utilities" aria-label="Product utilities">
+        {utilities ?? <nav className="suite-utilities" aria-label="Product utilities">
           <span className="suite-context">{dataMode === "backend" ? "Backend workspace" : "Demo workspace"}</span>
           <Link href={productHref("/admin/")}>Settings</Link>
           <Link href={productHref("/activity/")}>Activity {dataMode === "demo" ? <span className="activity-count">1</span> : null}</Link>
@@ -355,7 +394,7 @@ export function ProductShell({ activeSection, apiBaseUrl = "", appName, children
               </div>
             ) : null}
           </div>
-        </nav>
+        </nav>}
       </header>
 
       <nav className="suite-app-bar" aria-label={`${appName} navigation`}>
@@ -377,17 +416,19 @@ export function ProductShell({ activeSection, apiBaseUrl = "", appName, children
       {menu !== null ? <button className="suite-dismiss" type="button" aria-label="Close menu" onClick={() => closeMenu(true)} /> : null}
 
       {mobileOpen ? (
-        <dialog ref={mobileDrawerRef} className="suite-mobile-drawer is-open" open aria-modal="true" aria-label="Mobile product navigation">
+        <dialog ref={mobileDrawerRef} className="drawer" open aria-modal="true" aria-label="Mobile product navigation">
           <header><div><span className="suite-user-avatar" aria-hidden="true">{sessionInitial}</span><span><strong>{sessionLabel}</strong><small>{sessionDetail}</small></span></div><button type="button" aria-label="Close navigation" onClick={() => setMobileOpen(false)}><AppIcon name="close" size="lg" /></button></header>
-          <span className="suite-mobile-label">APPLICATION</span>
+          <span className="drawer-label">APPLICATION</span>
           <Link className={activeSection === "home" ? "active" : undefined} aria-current={activeSection === "home" ? "page" : undefined} href={productHref("/")}><span aria-hidden="true"><AppIcon name="home" size="md" /></span>Home</Link>
-          {dataMode === "backend" ? (
+          {!ownsCatalog ? (
+            <Link className={activeSection === "search" ? "active" : undefined} aria-current={activeSection === "search" ? "page" : undefined} href={productHref("/search/")}><span aria-hidden="true"><AppIcon name="search" size="md" /></span>{appName}</Link>
+          ) : dataMode === "backend" ? (
             backendAppCatalogState === "loading" ? (
-              <output className="suite-mobile-app-state">Loading server apps…</output>
+              <output className="drawer-app-state">Loading server apps…</output>
             ) : backendAppCatalogState === "error" ? (
-              <button className="suite-mobile-app-retry" type="button" onClick={() => setBackendAppCatalogGeneration((current) => current + 1)}>Retry server apps</button>
+              <button className="drawer-app-retry" type="button" onClick={() => setBackendAppCatalogGeneration((current) => current + 1)}>Retry server apps</button>
             ) : backendApps.length === 0 ? (
-              <output className="suite-mobile-app-state">No authorized server apps</output>
+              <output className="drawer-app-state">No authorized server apps</output>
             ) : backendApps.map((app) => {
               const label = appLabel(app);
               const selected = app.appId === selectedBackendAppId;
@@ -400,23 +441,26 @@ export function ProductShell({ activeSection, apiBaseUrl = "", appName, children
           <Link className={activeSection === "datasets" ? "active" : undefined} aria-current={activeSection === "datasets" ? "page" : undefined} href={productHref("/datasets/")}><span aria-hidden="true"><AppIcon name="database" size="md" /></span>Datasets</Link>
           <Link className={activeSection === "reports" ? "active" : undefined} aria-current={activeSection === "reports" ? "page" : undefined} href={productHref("/reports/")}><span aria-hidden="true"><AppIcon name="file" size="md" /></span>Reports</Link>
           <Link className={activeSection === "dashboards" ? "active" : undefined} aria-current={activeSection === "dashboards" ? "page" : undefined} href={productHref("/dashboards/")}><span aria-hidden="true"><AppIcon name="dashboard" size="md" /></span>Dashboards</Link>
-          <span className="suite-mobile-label">SYSTEM</span>
+          <span className="drawer-label">SYSTEM</span>
           <Link className={activeSection === "activity" ? "active" : undefined} aria-current={activeSection === "activity" ? "page" : undefined} href={productHref("/activity/")}><span aria-hidden="true"><AppIcon name="activity" size="md" /></span>Activity {dataMode === "demo" ? <b className="activity-count">1</b> : null}</Link>
           <Link className={activeSection === "admin" ? "active" : undefined} aria-current={activeSection === "admin" ? "page" : undefined} href={productHref("/admin/")}><span aria-hidden="true"><AppIcon name="settings" size="md" /></span>Administration</Link>
-          <span className="suite-mobile-label">HELP DOCUMENTATION IS NOT INCLUDED IN THIS PREVIEW</span>
-          <span className="suite-mobile-rule" />
-          <Link href="/signin/"><span aria-hidden="true"><AppIcon name={localSession ? "info" : "logout"} size="md" /></span>{localSession ? "About local access" : "Sign out"}</Link>
+          <span className="drawer-label">HELP DOCUMENTATION IS NOT INCLUDED IN THIS PREVIEW</span>
+          <span className="drawer-rule" />
+          <Link href="/signin/" onClick={onSignOut}><span aria-hidden="true"><AppIcon name={localSession ? "info" : "logout"} size="md" /></span>{localSession ? "About local access" : "Sign out"}</Link>
         </dialog>
       ) : null}
-      {mobileOpen ? <button className="suite-mobile-backdrop" type="button" aria-label="Close navigation" onClick={() => setMobileOpen(false)} /> : null}
+      {mobileOpen ? <button className="drawer-backdrop" type="button" aria-label="Close navigation" onClick={() => setMobileOpen(false)} /> : null}
 
-      <main className="suite-main" id="suite-main-content" tabIndex={-1}>
-        <output className={`suite-data-disclosure suite-data-disclosure--${dataMode}`}>
-          <strong>{dataMode === "backend" ? "Backend mode" : "Demo workspace"}</strong>
-          <span>{dataMode === "backend" ? backendDisclosure : "Metrics, records, and management actions on this page are sample preview data."}</span>
-        </output>
+      <main className={`suite-main ${mainClassName}`.trim()} id={mainId} tabIndex={-1}>
+        {disclosure ? (
+          <output className={`suite-data-disclosure suite-data-disclosure--${dataMode}`}>
+            <strong>{dataMode === "backend" ? "Backend mode" : "Demo workspace"}</strong>
+            <span>{dataMode === "backend" ? backendDisclosure : "Metrics, records, and management actions on this page are sample preview data."}</span>
+          </output>
+        ) : null}
         {children}
       </main>
+      {overlays}
     </div>
   );
 }
