@@ -30,6 +30,55 @@ live collectors per process. A previously unseen identity at catalog capacity
 fails without recording token use or partial fleet state. Existing enabled
 collectors may reconnect; disabled collectors continue to fail as disabled.
 
+### Browser recovery for one-time token creation
+
+The Administration page stores a non-secret recovery guard before sending a
+token-create request. The guard contains the requested definition, baseline
+token identities, server-clock timing, and an attempt identity; it never
+contains the plaintext token. This lets the browser reconcile a timeout,
+connection loss, reload, or tab closure without silently creating a second
+live credential.
+
+An unresolved guard pauses only **Generate token**. It does not block links,
+browser navigation, authentication, or other administration work. A persistent
+banner appears in the Ingestion Tokens section with **Resolve token creation**;
+restoring a guard does not change the current section or open a dialog. Only a
+plaintext token currently visible in memory prevents navigation, because
+leaving would permanently discard that one-time secret.
+
+One tab owns recovery through an exact API-base Web Lock. That tab polls a
+complete, stable, exact-total, name-filtered token snapshot immediately and
+with 1, 2, 4, 8, then at most 10 second delays. Polling pauses while its
+document is hidden or offline and resumes immediately. Other tabs report lock
+contention directly and can use **Try again** after the owner closes. When the
+owner safely resolves and removes the exact guard, matching tabs unlock
+without a reload.
+
+For an ambiguous request with no matching token, the browser waits until the
+server-clock deadline calculated as two request timeouts plus clock
+uncertainty—about 60 seconds with the current 30-second request timeout. It
+then requires two complete zero-result snapshots at least two seconds apart
+before concluding that no token was created. A matching token cancels that
+completion; an attributable live token whose plaintext was lost must be
+revoked. This bounded policy has a small residual risk if a reverse proxy
+delivers the original create request more than 60 seconds late.
+
+An exact Open Splunk `408` response with `administrative request was canceled`
+or `429` with `ingestion token capacity is exhausted` is a definite no-create
+outcome. A proxy-generated 408/429, browser timeout, connection failure,
+malformed response, or incomplete/unstable listing remains ambiguous. If a
+check requires authentication, use the recovery dialog's sign-in route; the
+durable guard remains in place while the recovery lock is released.
+
+If the saved guard is unreadable, the owning tab records its first observation
+against the authoritative server clock and performs complete unfiltered token
+snapshots. With no trustworthy attribution data, every nonterminal token is
+treated as potentially related and must become revoked or expired. The same
+quiescence period and two zero-nonterminal snapshots are required before the
+damaged record can be removed. Never delete or edit a token recovery guard in
+browser developer tools: an unmatched removal remains fail-closed and can
+leave the browser unable to prove the create outcome safely.
+
 ## Host and source constraints
 
 A token may carry independent `allowed_host_regexes` and

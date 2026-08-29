@@ -61,6 +61,13 @@ checkpoints, and migration history are not retained here.
 - Authentication/search/export activity families and external audit archival.
 - Secret rotation and workload identity integrations beyond local bearer-token
   administration.
+- Add client-generated ingestion-token IDs as the exact create fence. The
+  browser will persist a validated UUID in its recovery guard, supply that UUID
+  on create and retry, fetch an existing ID for exact definition comparison,
+  and revoke it when its one-time plaintext was lost. This replaces fuzzy
+  metadata/timing recovery without requiring `client_request_id` to replay a
+  one-time secret response; any future idempotency contract must define that
+  outcome separately.
 
 ## Scale and availability
 

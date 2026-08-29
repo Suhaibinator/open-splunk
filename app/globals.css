@@ -5404,6 +5404,8 @@ pre {
   margin: 0;
   padding: 8px 10px;
 }
+.token-create-disabled-reason > div { display: grid; gap: 4px; }
+.token-create-disabled-reason .button { justify-self: start; margin-top: 4px; }
 
 /* Hidden, bootstrap-advertised Knowledge Manager */
 .knowledge-manager { display: grid; gap: 12px; min-width: 0; }

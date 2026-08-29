@@ -44,6 +44,19 @@ import { ADMIN_SECTION_QUERY_PARAMETER, adminSectionPath, resolveAdminSection } 
 import { KnowledgeManagerGate } from "./knowledge-manager-gate";
 import { LookupManagerGate } from "./lookup-manager-gate";
 import {
+  TOKEN_CREATE_CLOCK_EPSILON_MS,
+  TOKEN_CREATE_ZERO_CONFIRMATION_INTERVAL_MS,
+  isAuthoritativeTokenCreateRejection,
+  tokenCreateDialogRequiresExclusiveAttention,
+  tokenRecoveryEnvironmentCanPoll,
+  tokenRecoveryPollDelayMs,
+  tokenRecoveryQuiescenceDeadline,
+  tokenRecoverySnapshotDecision,
+  tokenSecretRequiresNavigationProtection,
+  type TokenRecoveryOwnership,
+  type ZeroCandidateObservation,
+} from "./token-create-recovery-policy";
+import {
   backendKnowledgeCapabilities,
   backendAdminNavigation,
   knowledgeManagerAppOptionsFromBootstrap,
@@ -153,6 +166,14 @@ interface TokenCreateRecovery {
 type TokenCreateGuardMode = "ambiguous" | "issued";
 type TokenCreateGuardStorageState = "checking" | "available" | "unavailable";
 
+interface UnreadableTokenCreateRecovery {
+  attemptId: string;
+  raw: string;
+  observedServerTimeMs: number | null;
+  candidates: IngestionToken[];
+  reconciliationError: string | null;
+}
+
 interface PersistedTokenCreateGuard {
   schemaVersion: 1;
   apiBaseUrl: string;
@@ -194,7 +215,6 @@ interface PersistedTokenCreateGuard {
 const TOKEN_HISTORY_GUARD_KEY = "__openSplunkTokenGuard";
 const TOKEN_CREATE_GUARD_STORAGE_PREFIX = "open-splunk.admin.token-create-guard";
 const TOKEN_CREATE_LOCK_PREFIX = "open-splunk.admin.token-create-lock";
-const TOKEN_CREATE_CLOCK_EPSILON_MS = 250;
 
 function normalizeApiBaseUrl(apiBaseUrl: string, pageOrigin: string): string {
   const url = new URL(apiBaseUrl.trim() || "/", pageOrigin);
@@ -869,6 +889,7 @@ function tokenIsTerminallySafe(token: IngestionToken): boolean {
 
 function isDefiniteTokenCreateFailure(error: unknown): boolean {
   if (!isHttpError(error)) return false;
+  if (isAuthoritativeTokenCreateRejection(error)) return true;
   return [
     400,
     401,
@@ -1127,7 +1148,7 @@ async function loadMorePage<T>({
 
 async function listTokensForCreateSafety(
   client: OpenSplunkApiClient,
-  tokenName: string,
+  tokenName: string | undefined,
   signal?: AbortSignal,
 ): Promise<IngestionToken[]> {
   const tokens: IngestionToken[] = [];
@@ -1135,8 +1156,8 @@ async function listTokensForCreateSafety(
   const seenCursors = new Set<string>();
   let expectedTotal: bigint | null = null;
   async function loadPage(pageToken: string | undefined): Promise<void> {
-    // This complete, name-filtered snapshot is a safety prerequisite for a
-    // non-idempotent secret-issuing request, not the Admin table loading path.
+    // This complete snapshot (name-filtered for a valid guard, unfiltered for
+    // a damaged one) is a safety prerequisite, not the Admin table load path.
     const response = await client.ingestionTokens.list({
       page: { pageSize: undefined, pageToken, includeTotalSize: true },
       stateFilters: [],
@@ -1243,18 +1264,30 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
   const [issuedToken, setIssuedToken] = useState<IngestionToken | null>(null);
   const [issuedTokenRecovery, setIssuedTokenRecovery] = useState<TokenCreateRecovery | null>(null);
   const [tokenCreateRecovery, setTokenCreateRecovery] = useState<TokenCreateRecovery | null>(null);
+  const [unreadableTokenCreateRecovery, setUnreadableTokenCreateRecovery] =
+    useState<UnreadableTokenCreateRecovery | null>(null);
   const [tokenCreateGuardStorageState, setTokenCreateGuardStorageState] =
     useState<TokenCreateGuardStorageState>("checking");
   const [tokenCreateGuardStorageError, setTokenCreateGuardStorageError] = useState<string | null>(null);
   const [tokenCreateLockAvailable, setTokenCreateLockAvailable] = useState<boolean | null>(null);
+  const [tokenRecoveryOwnership, setTokenRecoveryOwnership] =
+    useState<TokenRecoveryOwnership>("idle");
+  const [tokenRecoveryOwnershipError, setTokenRecoveryOwnershipError] = useState<string | null>(null);
+  const [tokenRecoveryChecking, setTokenRecoveryChecking] = useState(false);
+  const [tokenRecoveryLastCheckedAt, setTokenRecoveryLastCheckedAt] = useState<number | null>(null);
+  const [tokenRecoveryNextCheckAt, setTokenRecoveryNextCheckAt] = useState<number | null>(null);
+  const [tokenRecoveryEnvironmentReady, setTokenRecoveryEnvironmentReady] = useState(true);
+  const [tokenRecoveryAcquireGeneration, setTokenRecoveryAcquireGeneration] = useState(0);
   const [tokenSecretAcknowledged, setTokenSecretAcknowledged] = useState(false);
   const [revokeTarget, setRevokeTarget] = useState<IngestionToken | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [toast, setToast] = useState<AdminToast | null>(null);
-  const tokenProtectionActive = busy === "create-token"
+  const tokenGuardActive = busy === "create-token"
     || issuedToken !== null
-    || tokenCreateRecovery !== null;
-  const tokenProtectionActiveRef = useRef(tokenProtectionActive);
+    || tokenCreateRecovery !== null
+    || unreadableTokenCreateRecovery !== null;
+  const tokenNavigationProtectionActive = tokenSecretRequiresNavigationProtection(tokenSecret);
+  const tokenNavigationProtectionActiveRef = useRef(tokenNavigationProtectionActive);
   const componentMountedRef = useRef(false);
   const tokenHistoryGuardIdRef = useRef<string | null>(null);
   const tokenHistoryCleanupTimerRef = useRef<number | null>(null);
@@ -1266,6 +1299,12 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
   } | null>(null);
   const tokenGuardLockOperationAttemptRef = useRef<string | null>(null);
   const tokenRecoveryOperationGenerationRef = useRef(0);
+  const tokenRecoveryPollAttemptRef = useRef(0);
+  const tokenRecoveryFirstZeroObservationRef = useRef<ZeroCandidateObservation | null>(null);
+  const tokenCreateRecoveryRef = useRef<TokenCreateRecovery | null>(null);
+  const issuedTokenRecoveryRef = useRef<TokenCreateRecovery | null>(null);
+  const unreadableTokenCreateRecoveryRef = useRef<UnreadableTokenCreateRecovery | null>(null);
+  const tokenRecoveryCheckingRef = useRef(false);
   const tokenCreatePreparationControllerRef = useRef<AbortController | null>(null);
   const indexSeenPageTokensRef = useRef<Set<string>>(new Set());
   const tokenSeenPageTokensRef = useRef<Set<string>>(new Set());
@@ -1281,7 +1320,11 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     generation: number;
     pageToken: string;
   } | null>(null);
-  tokenProtectionActiveRef.current = tokenProtectionActive;
+  tokenNavigationProtectionActiveRef.current = tokenNavigationProtectionActive;
+  tokenCreateRecoveryRef.current = tokenCreateRecovery;
+  issuedTokenRecoveryRef.current = issuedTokenRecovery;
+  unreadableTokenCreateRecoveryRef.current = unreadableTokenCreateRecovery;
+  tokenRecoveryCheckingRef.current = tokenRecoveryChecking;
 
   const load = useCallback(() => {
     indexPageRequestGenerationRef.current += 1;
@@ -1429,6 +1472,23 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
   }, []);
 
   useEffect(() => {
+    const updateRecoveryEnvironment = () => {
+      setTokenRecoveryEnvironmentReady(
+        tokenRecoveryEnvironmentCanPoll(document.visibilityState, navigator.onLine),
+      );
+    };
+    updateRecoveryEnvironment();
+    document.addEventListener("visibilitychange", updateRecoveryEnvironment);
+    window.addEventListener("online", updateRecoveryEnvironment);
+    window.addEventListener("offline", updateRecoveryEnvironment);
+    return () => {
+      document.removeEventListener("visibilitychange", updateRecoveryEnvironment);
+      window.removeEventListener("online", updateRecoveryEnvironment);
+      window.removeEventListener("offline", updateRecoveryEnvironment);
+    };
+  }, []);
+
+  useEffect(() => {
     try {
       setNormalizedApiBaseUrl(normalizeApiBaseUrl(apiBaseUrl, window.location.origin));
       setApiBaseNormalizationError(null);
@@ -1447,23 +1507,73 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       if (event.storageArea !== window.localStorage || event.key !== key) return;
       tokenCreatePreparationControllerRef.current?.abort();
       tokenCreatePreparationControllerRef.current = null;
+      tokenRecoveryOperationGenerationRef.current += 1;
+      tokenGuardLockOperationAttemptRef.current = null;
+      releaseTokenGuardLease();
+      tokenRecoveryCheckingRef.current = false;
+      setTokenRecoveryChecking(false);
+      setTokenRecoveryNextCheckAt(null);
+      tokenRecoveryFirstZeroObservationRef.current = null;
       if (event.newValue === null) {
-        if (tokenProtectionActiveRef.current) {
-          tokenRecoveryOperationGenerationRef.current += 1;
-          tokenGuardLockOperationAttemptRef.current = null;
-          releaseTokenGuardLease();
-          setBusy(null);
-          setTokenCreateGuardStorageState("unavailable");
-          setTokenCreateGuardStorageError(
-            "The durable token safety guard was removed by another tab while this attempt was active.",
-          );
-          setToast({
-            message: "Another tab removed the active token safety guard. This tab is now read-only and must not dismiss the token dialog.",
-            kind: "warning",
-          });
-        } else {
+        const oldGuard = event.oldValue === null
+          ? null
+          : parsePersistedTokenCreateGuard(event.oldValue, canonicalApiBaseUrl);
+        const activeRecovery = tokenCreateRecoveryRef.current ?? issuedTokenRecoveryRef.current;
+        const unreadableRecovery = unreadableTokenCreateRecoveryRef.current;
+        const exactResolvedAttempt = !tokenNavigationProtectionActiveRef.current && (
+          (
+            activeRecovery !== null
+            && oldGuard?.recovery.attemptId === activeRecovery.attemptId
+          )
+          || (
+            unreadableRecovery !== null
+            && event.oldValue === unreadableRecovery.raw
+          )
+        );
+        if (exactResolvedAttempt || (
+          event.oldValue === null
+          && activeRecovery === null
+          && unreadableRecovery === null
+        )) {
           setTokenCreateGuardStorageState("available");
           setTokenCreateGuardStorageError(null);
+          setTokenRecoveryOwnership("idle");
+          setTokenRecoveryOwnershipError(null);
+          setTokenCreateRecovery(null);
+          setIssuedToken(null);
+          setIssuedTokenRecovery(null);
+          setUnreadableTokenCreateRecovery(null);
+          setTokenSecret(null);
+          setTokenSecretAcknowledged(false);
+          setModal((current) => current === "create-token" ? null : current);
+          if (exactResolvedAttempt) {
+            setToast({
+              message: "Token creation recovery finished safely in another tab.",
+              kind: "success",
+            });
+          }
+        } else {
+          if (activeRecovery === null && unreadableRecovery === null && event.oldValue !== null) {
+            if (oldGuard === null) {
+              setUnreadableTokenCreateRecovery({
+                attemptId: crypto.randomUUID(),
+                raw: event.oldValue,
+                observedServerTimeMs: null,
+                candidates: [],
+                reconciliationError: "An unreadable token safety record was removed without a matching resolved attempt.",
+              });
+            } else {
+              setTokenCreateRecovery(oldGuard.recovery);
+            }
+          }
+          setTokenRecoveryOwnership("lost");
+          setTokenRecoveryOwnershipError(
+            "The durable token safety guard was removed by another tab without a matching resolved attempt.",
+          );
+          setToast({
+            message: "Token recovery ownership changed unexpectedly. Token generation remains locked in this tab.",
+            kind: "warning",
+          });
         }
         return;
       }
@@ -1471,18 +1581,34 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
         event.newValue,
         canonicalApiBaseUrl,
       );
-      tokenRecoveryOperationGenerationRef.current += 1;
-      tokenGuardLockOperationAttemptRef.current = null;
-      releaseTokenGuardLease();
-      setBusy(null);
-      setTokenCreateGuardStorageState("unavailable");
-      setTokenCreateGuardStorageError(stored === null
-        ? "Another tab wrote an unreadable token safety record. Token generation is locked."
-        : `Another tab owns token safety attempt ${stored.recovery.attemptId}. Refresh to take over recovery after that tab finishes.`);
+      setTokenCreateGuardStorageState("available");
+      setTokenCreateGuardStorageError(null);
+      setTokenRecoveryOwnership("contended");
+      setTokenRecoveryLastCheckedAt(null);
+      setTokenRecoveryOwnershipError(stored === null
+        ? "Another tab wrote an unreadable token safety record."
+        : `Another tab owns token recovery attempt ${stored.recovery.attemptId}.`);
+      if (stored === null) {
+        setTokenCreateRecovery(null);
+        setIssuedToken(null);
+        setIssuedTokenRecovery(null);
+        setUnreadableTokenCreateRecovery({
+          attemptId: crypto.randomUUID(),
+          raw: event.newValue,
+          observedServerTimeMs: null,
+          candidates: [],
+          reconciliationError: "The saved token safety record is unreadable.",
+        });
+      } else {
+        setUnreadableTokenCreateRecovery(null);
+        setTokenCreateRecovery(stored.recovery);
+        setIssuedToken(null);
+        setIssuedTokenRecovery(null);
+      }
       setToast({
         message: stored === null
           ? "A cross-tab token safety update was unreadable. Token actions are locked."
-          : "Another tab created or took ownership of a token safety attempt. This tab is now read-only for token recovery.",
+          : "Another tab owns this token recovery attempt. This tab remains usable and token generation stays paused.",
         kind: "warning",
       });
     }
@@ -1491,7 +1617,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
   }, [normalizedApiBaseUrl]);
 
   useEffect(() => {
-    if (!tokenProtectionActive) return;
+    if (!tokenNavigationProtectionActive) return;
     if (tokenHistoryCleanupTimerRef.current !== null) {
       window.clearTimeout(tokenHistoryCleanupTimerRef.current);
       tokenHistoryCleanupTimerRef.current = null;
@@ -1511,25 +1637,25 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       event.returnValue = "";
     }
     function blockBackNavigation() {
-      if (!tokenProtectionActiveRef.current || historyHasTokenGuard(guardId)) return;
+      if (!tokenNavigationProtectionActiveRef.current || historyHasTokenGuard(guardId)) return;
       window.history.pushState(
         historyStateWithTokenGuard(guardId),
         "",
         window.location.href,
       );
       setToast({
-        message: "Finish creating, save, or revoke this one-time token before leaving Administration.",
+        message: "Save or revoke the visible one-time token before leaving Administration.",
         kind: "warning",
       });
     }
     function blockClientNavigation(event: MouseEvent) {
-      if (!tokenProtectionActiveRef.current || !(event.target instanceof Element)) return;
+      if (!tokenNavigationProtectionActiveRef.current || !(event.target instanceof Element)) return;
       const link = event.target.closest<HTMLAnchorElement>("a[href]");
       if (link === null) return;
       event.preventDefault();
       event.stopPropagation();
       setToast({
-        message: "Finish creating, save, or revoke this one-time token before following another link.",
+        message: "Save or revoke the visible one-time token before following another link.",
         kind: "warning",
       });
     }
@@ -1543,12 +1669,12 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       document.removeEventListener("click", blockClientNavigation, true);
       tokenHistoryCleanupTimerRef.current = window.setTimeout(() => {
         tokenHistoryCleanupTimerRef.current = null;
-        if (componentMountedRef.current && tokenProtectionActiveRef.current) return;
+        if (componentMountedRef.current && tokenNavigationProtectionActiveRef.current) return;
         if (historyHasTokenGuard(guardId)) window.history.back();
         if (tokenHistoryGuardIdRef.current === guardId) tokenHistoryGuardIdRef.current = null;
       }, 0);
     };
-  }, [tokenProtectionActive]);
+  }, [tokenNavigationProtectionActive]);
 
   function authoritativeServerNowMs(): number | undefined {
     if (serverClockAnchor === null) return undefined;
@@ -1617,20 +1743,34 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       hasTokenGuardLockContext(recovery.attemptId)
       && ownsTokenCreateGuard(recovery)
     ) return true;
-    setTokenCreateGuardStorageState("unavailable");
-    setTokenCreateGuardStorageError(
+    return loseTokenGuardOwnership(
+      recovery.attemptId,
       "This tab no longer owns the exact durable token safety guard.",
+      true,
     );
-    setToast({
-      message: "Token recovery ownership changed in another tab. This dialog is now read-only.",
-      kind: "warning",
-    });
+  }
+
+  function loseTokenGuardOwnership(
+    attemptId: string,
+    message: string,
+    notify = false,
+  ): false {
+    setTokenRecoveryOwnership("lost");
+    setTokenRecoveryOwnershipError(message);
+    if (notify) {
+      setToast({
+        message: "Token recovery ownership changed in another tab. This dialog is now read-only.",
+        kind: "warning",
+      });
+    }
     tokenRecoveryOperationGenerationRef.current += 1;
     tokenGuardLockOperationAttemptRef.current = null;
     tokenCreatePreparationControllerRef.current?.abort();
     tokenCreatePreparationControllerRef.current = null;
-    setBusy(null);
-    releaseTokenGuardLease(recovery.attemptId);
+    tokenRecoveryCheckingRef.current = false;
+    setTokenRecoveryChecking(false);
+    setTokenRecoveryNextCheckAt(null);
+    releaseTokenGuardLease(attemptId);
     return false;
   }
 
@@ -1651,39 +1791,59 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       allowOwnershipTakeover?: boolean;
     } = {},
   ): boolean {
-    try {
-      if (normalizedApiBaseUrl === null) {
-        throw new Error("The API base URL has not been normalized for durable token safety.");
-      }
-      if (!hasTokenGuardLockContext(recovery.attemptId)) {
-        throw new Error("This tab no longer holds the token safety Web Lock.");
-      }
-      const key = tokenCreateGuardStorageKey(normalizedApiBaseUrl);
-      const existingRaw = window.localStorage.getItem(key);
-      if (existingRaw === null && !options.allowCreate) {
-        throw new Error("The durable token safety guard disappeared before it could be updated.");
-      }
-      if (existingRaw !== null) {
-        const existing = parsePersistedTokenCreateGuard(
-          existingRaw,
-          normalizedApiBaseUrl,
-        );
-        if (
-          existing === null
-          || existing.recovery.attemptId !== recovery.attemptId
-          || (
-            existing.recovery.ownerId !== recovery.ownerId
-            && !options.allowOwnershipTakeover
-          )
-        ) {
-          throw new Error("Another tab or token attempt owns the durable safety guard.");
-        }
-      }
-      const record = serializeTokenCreateGuard(
-        normalizedApiBaseUrl,
-        recovery,
-        knownIssuedTokenId,
+    if (normalizedApiBaseUrl === null) {
+      setTokenRecoveryOwnership("failed");
+      setTokenRecoveryOwnershipError(
+        "The API base URL has not been normalized for durable token safety.",
       );
+      return false;
+    }
+    if (!hasTokenGuardLockContext(recovery.attemptId)) {
+      return loseTokenGuardOwnership(
+        recovery.attemptId,
+        "This tab no longer holds the token safety Web Lock.",
+      );
+    }
+    const key = tokenCreateGuardStorageKey(normalizedApiBaseUrl);
+    let existingRaw: string | null;
+    try {
+      existingRaw = window.localStorage.getItem(key);
+    } catch (error) {
+      setTokenCreateGuardStorageState("unavailable");
+      setTokenCreateGuardStorageError(errorMessage(error));
+      return false;
+    }
+    if (existingRaw === null && !options.allowCreate) {
+      return loseTokenGuardOwnership(
+        recovery.attemptId,
+        "The durable token safety guard disappeared before it could be updated.",
+      );
+    }
+    if (existingRaw !== null) {
+      const existing = parsePersistedTokenCreateGuard(
+        existingRaw,
+        normalizedApiBaseUrl,
+      );
+      if (
+        existing === null
+        || existing.recovery.attemptId !== recovery.attemptId
+        || (
+          existing.recovery.ownerId !== recovery.ownerId
+          && !options.allowOwnershipTakeover
+        )
+      ) {
+        return loseTokenGuardOwnership(
+          recovery.attemptId,
+          "Another tab or token attempt owns the durable safety guard.",
+        );
+      }
+    }
+    const record = serializeTokenCreateGuard(
+      normalizedApiBaseUrl,
+      recovery,
+      knownIssuedTokenId,
+    );
+    try {
       // The record is deliberately constructed field-by-field and contains no
       // plaintext credential. localStorage makes the safety guard survive tab
       // closure and broadcasts ownership changes to other same-origin tabs.
@@ -1693,6 +1853,8 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       );
       setTokenCreateGuardStorageState("available");
       setTokenCreateGuardStorageError(null);
+      setTokenRecoveryOwnership("owned");
+      setTokenRecoveryOwnershipError(null);
       return true;
     } catch (error) {
       setTokenCreateGuardStorageState("unavailable");
@@ -1705,26 +1867,46 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     expectedAttemptId: string,
     expectedOwnerId: string,
   ): boolean {
+    if (normalizedApiBaseUrl === null) {
+      setTokenRecoveryOwnership("failed");
+      setTokenRecoveryOwnershipError(
+        "The API base URL has not been normalized for durable token safety.",
+      );
+      return false;
+    }
+    if (!hasTokenGuardLockContext(expectedAttemptId)) {
+      return loseTokenGuardOwnership(
+        expectedAttemptId,
+        "This tab no longer holds the token safety Web Lock.",
+      );
+    }
+    const key = tokenCreateGuardStorageKey(normalizedApiBaseUrl);
+    let raw: string | null;
     try {
-      if (normalizedApiBaseUrl === null) {
-        throw new Error("The API base URL has not been normalized for durable token safety.");
-      }
-      if (!hasTokenGuardLockContext(expectedAttemptId)) {
-        throw new Error("This tab no longer holds the token safety Web Lock.");
-      }
-      const key = tokenCreateGuardStorageKey(normalizedApiBaseUrl);
-      const raw = window.localStorage.getItem(key);
-      if (raw === null) {
-        throw new Error("The durable token safety guard disappeared unexpectedly.");
-      }
-      const stored = parsePersistedTokenCreateGuard(raw, normalizedApiBaseUrl);
-      if (
-        stored === null
-        || stored.recovery.attemptId !== expectedAttemptId
-        || stored.recovery.ownerId !== expectedOwnerId
-      ) {
-        throw new Error("A different or unreadable token safety attempt owns the durable guard.");
-      }
+      raw = window.localStorage.getItem(key);
+    } catch (error) {
+      setTokenCreateGuardStorageState("unavailable");
+      setTokenCreateGuardStorageError(errorMessage(error));
+      return false;
+    }
+    if (raw === null) {
+      return loseTokenGuardOwnership(
+        expectedAttemptId,
+        "The durable token safety guard disappeared unexpectedly.",
+      );
+    }
+    const stored = parsePersistedTokenCreateGuard(raw, normalizedApiBaseUrl);
+    if (
+      stored === null
+      || stored.recovery.attemptId !== expectedAttemptId
+      || stored.recovery.ownerId !== expectedOwnerId
+    ) {
+      return loseTokenGuardOwnership(
+        expectedAttemptId,
+        "A different or unreadable token safety attempt owns the durable guard.",
+      );
+    }
+    try {
       window.localStorage.removeItem(key);
       tokenRecoveryOperationGenerationRef.current += 1;
       if (tokenGuardLockOperationAttemptRef.current === expectedAttemptId) {
@@ -1733,7 +1915,14 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       releaseTokenGuardLease(expectedAttemptId);
       setTokenCreateGuardStorageState("available");
       setTokenCreateGuardStorageError(null);
-      setBusy(null);
+      setTokenRecoveryOwnership("idle");
+      setTokenRecoveryOwnershipError(null);
+      tokenRecoveryCheckingRef.current = false;
+      setTokenRecoveryChecking(false);
+      setTokenRecoveryNextCheckAt(null);
+      setTokenRecoveryLastCheckedAt(Date.now());
+      tokenRecoveryPollAttemptRef.current = 0;
+      tokenRecoveryFirstZeroObservationRef.current = null;
       return true;
     } catch (error) {
       setTokenCreateGuardStorageState("unavailable");
@@ -2186,11 +2375,23 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       && tokenMatchesCreateMetadata(token, recovery.definition));
   }
 
+  function scheduleNextTokenRecoveryCheck(delayMs?: number) {
+    const delay = delayMs ?? tokenRecoveryPollDelayMs(tokenRecoveryPollAttemptRef.current);
+    tokenRecoveryPollAttemptRef.current += 1;
+    setTokenRecoveryNextCheckAt(Date.now() + delay);
+  }
+
+  function stopAutomaticTokenRecovery() {
+    setTokenRecoveryNextCheckAt(null);
+    tokenRecoveryPollAttemptRef.current = 0;
+  }
+
   function applyTokenCreateCandidates(
     recovery: TokenCreateRecovery,
     candidates: IngestionToken[],
   ) {
     if (!requireTokenGuardOwnership(recovery)) return;
+    setTokenRecoveryLastCheckedAt(Date.now());
     for (const candidate of candidates) storeTokenSnapshot(candidate);
     if (candidates.some((candidate) =>
       !tokens.some((token) => token.ingestionTokenId === candidate.ingestionTokenId))) {
@@ -2201,6 +2402,8 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       !tokenIsTerminallySafe(candidate)
       && !tokenFallsWithinCreateAttributionWindow(candidate, recovery.definition));
     if (unsafeTimingOutliers.length > 0) {
+      stopAutomaticTokenRecovery();
+      tokenRecoveryFirstZeroObservationRef.current = null;
       const outlierRecovery: TokenCreateRecovery = {
         ...recovery,
         candidates,
@@ -2212,7 +2415,6 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       setIssuedTokenRecovery(null);
       setTokenSecret(null);
       setTokenSecretAcknowledged(false);
-      setModal("create-token");
       setToast({
         message: "A matching token falls outside the expected request timing window. It remains visible and blocks automatic recovery clearing.",
         kind: "warning",
@@ -2237,6 +2439,8 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
         || recovery.confirmedRevokedTokenIds.size > 0
       )
     ) {
+      stopAutomaticTokenRecovery();
+      tokenRecoveryFirstZeroObservationRef.current = null;
       if (!clearTokenCreateGuard(recovery.attemptId, recovery.ownerId)) {
         setToast({
           message: "All identified tokens are safe, but the browser could not clear its reload guard. Token generation remains locked.",
@@ -2261,6 +2465,8 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       && unresolvedCandidates[0].state !== IngestionTokenState.INGESTION_TOKEN_STATE_UNSPECIFIED
       && unresolvedCandidates[0].state !== IngestionTokenState.UNRECOGNIZED
     ) {
+      stopAutomaticTokenRecovery();
+      tokenRecoveryFirstZeroObservationRef.current = null;
       const candidate = unresolvedCandidates[0];
       if (!persistTokenCreateGuard(nextRecovery, candidate.ingestionTokenId)) return;
       setTokenCreateRecovery(null);
@@ -2268,7 +2474,6 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       setIssuedTokenRecovery(nextRecovery);
       setTokenSecret(null);
       setTokenSecretAcknowledged(false);
-      setModal("create-token");
       setToast({
         message: tokenCanBeRevoked(candidate)
           ? `A newly created token (${candidate.tokenPrefix}) was identified, but its one-time secret was lost. Revoke it before leaving.`
@@ -2277,6 +2482,10 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       });
       return;
     }
+    if (unresolvedCandidates.length > 0) {
+      stopAutomaticTokenRecovery();
+      tokenRecoveryFirstZeroObservationRef.current = null;
+    }
     const unresolvedRecovery: TokenCreateRecovery = {
       ...nextRecovery,
       candidates: unresolvedCandidates,
@@ -2284,9 +2493,41 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     };
     if (!persistTokenCreateGuard(unresolvedRecovery, null)) return;
     setTokenCreateRecovery(unresolvedRecovery);
+    if (unresolvedCandidates.length === 0) {
+      const serverNowMs = authoritativeServerNowMs();
+      const decision = serverNowMs === undefined
+        ? { kind: "pending" as const, firstObservation: null }
+        : tokenRecoverySnapshotDecision({
+            candidateCount: unresolvedCandidates.length,
+            attemptId: recovery.attemptId,
+            serverNowMs,
+            quiescenceDeadlineMs: tokenRecoveryQuiescenceDeadline(recovery.definition),
+            previousObservation: tokenRecoveryFirstZeroObservationRef.current,
+          });
+      tokenRecoveryFirstZeroObservationRef.current = decision.firstObservation;
+      if (decision.kind === "clear") {
+        if (!clearTokenCreateGuard(recovery.attemptId, recovery.ownerId)) return;
+        setTokenCreateRecovery(null);
+        setIssuedToken(null);
+        setIssuedTokenRecovery(null);
+        setTokenSecret(null);
+        setTokenSecretAcknowledged(false);
+        setModal((current) => current === "create-token" ? null : current);
+        setToast({
+          message: `No token named “${recovery.definition.name}” was created. Token generation is available again.`,
+          kind: "success",
+        });
+        return;
+      }
+      scheduleNextTokenRecoveryCheck(
+        decision.kind === "confirm"
+          ? TOKEN_CREATE_ZERO_CONFIRMATION_INTERVAL_MS
+          : undefined,
+      );
+    }
     setToast({
       message: unresolvedCandidates.length === 0
-        ? "The create request may still have produced a token. No matching token is visible yet; do not submit another create request."
+        ? `Open Splunk is still checking whether token “${recovery.definition.name}” was created. You can keep using the rest of the app.`
         : `${unresolvedCandidates.length.toLocaleString()} new matching tokens prevent safe automatic identification. Review the possible tokens and check again; do not submit another create request.`,
       kind: "warning",
     });
@@ -2296,10 +2537,13 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     recovery: TokenCreateRecovery,
     inheritedOperationGeneration?: number,
   ) {
+    if (tokenRecoveryCheckingRef.current) return;
     if (!requireTokenGuardOwnership(recovery)) return;
     const operationGeneration = inheritedOperationGeneration
       ?? beginTokenRecoveryOperation();
-    setBusy("reconcile-token-create");
+    setTokenRecoveryNextCheckAt(null);
+    tokenRecoveryCheckingRef.current = true;
+    setTokenRecoveryChecking(true);
     try {
       const candidates = await findTokenCreateCandidates(recovery);
       if (!tokenRecoveryOperationIsCurrent(operationGeneration, recovery)) return;
@@ -2312,8 +2556,15 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       };
       if (!persistTokenCreateGuard(failedRecovery, null)) return;
       setTokenCreateRecovery(failedRecovery);
+      const serverNowMs = authoritativeServerNowMs();
+      const deadline = tokenRecoveryQuiescenceDeadline(recovery.definition);
+      if (serverNowMs !== undefined && deadline !== null && serverNowMs < deadline) {
+        scheduleNextTokenRecoveryCheck();
+      } else {
+        stopAutomaticTokenRecovery();
+      }
       setToast({
-        message: `The create outcome is still unknown and reconciliation failed: ${errorMessage(error)} Do not retry token generation.`,
+        message: `Open Splunk could not check token “${recovery.definition.name}”: ${errorMessage(error)} Token generation remains paused.`,
         kind: "warning",
       });
     } finally {
@@ -2321,8 +2572,228 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
         componentMountedRef.current
         && tokenRecoveryOperationGenerationRef.current === operationGeneration
       ) {
-        setBusy(null);
+        tokenRecoveryCheckingRef.current = false;
+        setTokenRecoveryChecking(false);
       }
+    }
+  }
+
+  function ownsUnreadableTokenCreateGuard(recovery: UnreadableTokenCreateRecovery): boolean {
+    try {
+      if (normalizedApiBaseUrl === null || !hasTokenGuardLockContext(recovery.attemptId)) {
+        return false;
+      }
+      return window.localStorage.getItem(
+        tokenCreateGuardStorageKey(normalizedApiBaseUrl),
+      ) === recovery.raw;
+    } catch {
+      return false;
+    }
+  }
+
+  function requireUnreadableTokenGuardOwnership(
+    recovery: UnreadableTokenCreateRecovery,
+  ): boolean {
+    if (normalizedApiBaseUrl === null) {
+      setTokenRecoveryOwnership("failed");
+      setTokenRecoveryOwnershipError(
+        "The API base URL has not been normalized for durable token safety.",
+      );
+      return false;
+    }
+    if (!hasTokenGuardLockContext(recovery.attemptId)) {
+      return loseTokenGuardOwnership(
+        recovery.attemptId,
+        "This tab no longer holds the token safety Web Lock.",
+      );
+    }
+    try {
+      if (window.localStorage.getItem(
+        tokenCreateGuardStorageKey(normalizedApiBaseUrl),
+      ) === recovery.raw) return true;
+    } catch (error) {
+      setTokenCreateGuardStorageState("unavailable");
+      setTokenCreateGuardStorageError(errorMessage(error));
+      tokenRecoveryCheckingRef.current = false;
+      setTokenRecoveryChecking(false);
+      stopAutomaticTokenRecovery();
+      releaseTokenGuardLease(recovery.attemptId);
+      return false;
+    }
+    return loseTokenGuardOwnership(
+      recovery.attemptId,
+      "This tab no longer owns the exact unreadable token safety record.",
+    );
+  }
+
+  function clearUnreadableTokenCreateGuard(
+    recovery: UnreadableTokenCreateRecovery,
+  ): boolean {
+    if (!requireUnreadableTokenGuardOwnership(recovery)) return false;
+    try {
+      if (normalizedApiBaseUrl === null) return false;
+      const key = tokenCreateGuardStorageKey(normalizedApiBaseUrl);
+      if (window.localStorage.getItem(key) !== recovery.raw) {
+        return loseTokenGuardOwnership(
+          recovery.attemptId,
+          "The unreadable token safety record changed before it could be cleared.",
+        );
+      }
+      window.localStorage.removeItem(key);
+      tokenRecoveryOperationGenerationRef.current += 1;
+      tokenGuardLockOperationAttemptRef.current = null;
+      releaseTokenGuardLease(recovery.attemptId);
+      setUnreadableTokenCreateRecovery(null);
+      setTokenRecoveryOwnership("idle");
+      setTokenRecoveryOwnershipError(null);
+      setTokenRecoveryChecking(false);
+      tokenRecoveryCheckingRef.current = false;
+      setTokenRecoveryLastCheckedAt(Date.now());
+      stopAutomaticTokenRecovery();
+      tokenRecoveryFirstZeroObservationRef.current = null;
+      return true;
+    } catch (error) {
+      setTokenCreateGuardStorageState("unavailable");
+      setTokenCreateGuardStorageError(errorMessage(error));
+      return false;
+    }
+  }
+
+  async function reconcileUnreadableTokenCreateRecovery(
+    recovery: UnreadableTokenCreateRecovery,
+  ) {
+    if (tokenRecoveryCheckingRef.current) return;
+    if (!requireUnreadableTokenGuardOwnership(recovery)) return;
+    const operationGeneration = beginTokenRecoveryOperation();
+    setTokenRecoveryNextCheckAt(null);
+    tokenRecoveryCheckingRef.current = true;
+    setTokenRecoveryChecking(true);
+    try {
+      const snapshot = await listTokensForCreateSafety(client, undefined);
+      if (
+        !componentMountedRef.current
+        || tokenRecoveryOperationGenerationRef.current !== operationGeneration
+        || !requireUnreadableTokenGuardOwnership(recovery)
+      ) return;
+      setTokenRecoveryLastCheckedAt(Date.now());
+      for (const token of snapshot) storeTokenSnapshot(token);
+      const candidates = snapshot.filter((token) => !tokenIsTerminallySafe(token));
+      if (candidates.length > 0) {
+        tokenRecoveryFirstZeroObservationRef.current = null;
+        stopAutomaticTokenRecovery();
+        setUnreadableTokenCreateRecovery({
+          ...recovery,
+          candidates,
+          reconciliationError: "Every nonterminal token must become revoked or expired because the damaged record contains no safe attribution data.",
+        });
+        return;
+      }
+
+      const serverNowMs = authoritativeServerNowMs();
+      const observedServerTimeMs = recovery.observedServerTimeMs ?? serverNowMs ?? null;
+      const nextRecovery = {
+        ...recovery,
+        observedServerTimeMs,
+        candidates: [],
+        reconciliationError: null,
+      };
+      setUnreadableTokenCreateRecovery(nextRecovery);
+      const deadline = observedServerTimeMs === null
+        ? null
+        : observedServerTimeMs
+          + 2 * DEFAULT_REQUEST_TIMEOUT_MS
+          + Math.max(serverClockAnchor?.uncertaintyMs ?? 0, TOKEN_CREATE_CLOCK_EPSILON_MS);
+      const decision = serverNowMs === undefined
+        ? { kind: "pending" as const, firstObservation: null }
+        : tokenRecoverySnapshotDecision({
+            candidateCount: candidates.length,
+            attemptId: recovery.attemptId,
+            serverNowMs,
+            quiescenceDeadlineMs: deadline,
+            previousObservation: tokenRecoveryFirstZeroObservationRef.current,
+          });
+      tokenRecoveryFirstZeroObservationRef.current = decision.firstObservation;
+      if (decision.kind === "clear") {
+        if (!clearUnreadableTokenCreateGuard(nextRecovery)) return;
+        setModal((current) => current === "create-token" ? null : current);
+        setToast({
+          message: "The damaged token safety record was reconciled. No nonterminal token remained, so token generation is available again.",
+          kind: "success",
+        });
+        return;
+      }
+      scheduleNextTokenRecoveryCheck(
+        decision.kind === "confirm"
+          ? TOKEN_CREATE_ZERO_CONFIRMATION_INTERVAL_MS
+          : undefined,
+      );
+    } catch (error) {
+      if (
+        !componentMountedRef.current
+        || tokenRecoveryOperationGenerationRef.current !== operationGeneration
+        || !requireUnreadableTokenGuardOwnership(recovery)
+      ) return;
+      const serverNowMs = authoritativeServerNowMs();
+      const observedServerTimeMs = recovery.observedServerTimeMs ?? serverNowMs ?? null;
+      const failedRecovery = {
+        ...recovery,
+        observedServerTimeMs,
+        reconciliationError: errorMessage(error),
+      };
+      setUnreadableTokenCreateRecovery(failedRecovery);
+      const deadline = observedServerTimeMs === null
+        ? null
+        : observedServerTimeMs
+          + 2 * DEFAULT_REQUEST_TIMEOUT_MS
+          + Math.max(serverClockAnchor?.uncertaintyMs ?? 0, TOKEN_CREATE_CLOCK_EPSILON_MS);
+      if (serverNowMs !== undefined && deadline !== null && serverNowMs < deadline) {
+        scheduleNextTokenRecoveryCheck();
+      } else {
+        stopAutomaticTokenRecovery();
+      }
+    } finally {
+      if (
+        componentMountedRef.current
+        && tokenRecoveryOperationGenerationRef.current === operationGeneration
+      ) {
+        tokenRecoveryCheckingRef.current = false;
+        setTokenRecoveryChecking(false);
+      }
+    }
+  }
+
+  async function revokeUnreadableTokenCandidate(candidate: IngestionToken) {
+    const recovery = unreadableTokenCreateRecoveryRef.current;
+    if (recovery === null || !tokenCanBeRevoked(candidate)) return;
+    if (!requireUnreadableTokenGuardOwnership(recovery)) return;
+    setBusy(`recover-damaged-token-${candidate.ingestionTokenId}`);
+    try {
+      const response = await client.ingestionTokens.revoke({
+        ingestionTokenId: candidate.ingestionTokenId,
+        expectedVersion: candidate.version,
+        reason: undefined,
+      });
+      const revoked = response.ingestionToken;
+      if (
+        revoked === undefined
+        || revoked.ingestionTokenId !== candidate.ingestionTokenId
+        || !tokenIsTerminallySafe(revoked)
+      ) {
+        throw new Error("The server did not confirm token revocation.");
+      }
+      storeTokenSnapshot(revoked);
+      await reconcileUnreadableTokenCreateRecovery({
+        ...recovery,
+        candidates: recovery.candidates.filter((token) =>
+          token.ingestionTokenId !== candidate.ingestionTokenId),
+      });
+    } catch (error) {
+      setUnreadableTokenCreateRecovery((current) => current === null ? null : {
+        ...current,
+        reconciliationError: `Candidate revocation was not confirmed: ${errorMessage(error)}`,
+      });
+    } finally {
+      setBusy(null);
     }
   }
 
@@ -2492,14 +2963,17 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
             tokenCreateGuardStorageKey(normalizedApiBaseUrl),
           );
           if (existingGuard !== null) {
-            setTokenCreateGuardStorageState("unavailable");
-            setTokenCreateGuardStorageError(
-              "A durable token safety attempt already exists. Refresh to reconcile it before creating another token.",
+            setTokenCreateGuardStorageState("available");
+            setTokenCreateGuardStorageError(null);
+            setTokenRecoveryOwnership("contended");
+            setTokenRecoveryOwnershipError(
+              "A durable token safety attempt already exists in another tab or prior session.",
             );
             setToast({
-              message: "Another tab or prior session already has an unresolved token safety attempt.",
+              message: "Another tab or prior session already has an unresolved token safety attempt. Open token recovery to take ownership safely.",
               kind: "warning",
             });
+            setTokenRecoveryAcquireGeneration((current) => current + 1);
             return;
           }
     const createOperationGeneration = beginTokenRecoveryOperation();
@@ -2510,6 +2984,9 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     let requestStartedMonotonicMs: number | null = null;
     let recovery: TokenCreateRecovery | null = null;
     let guardClearedByThisOperation = false;
+    setTokenRecoveryLastCheckedAt(null);
+    stopAutomaticTokenRecovery();
+    tokenRecoveryFirstZeroObservationRef.current = null;
     setBusy("create-token");
     try {
       const initialServerTimeMs = authoritativeServerNowMs();
@@ -2747,8 +3224,8 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
         },
       );
     } catch (error) {
-      setTokenCreateGuardStorageState("unavailable");
-      setTokenCreateGuardStorageError(`Cross-tab token lock failed: ${errorMessage(error)}`);
+      setTokenRecoveryOwnership("failed");
+      setTokenRecoveryOwnershipError(`Cross-tab token lock failed: ${errorMessage(error)}`);
       setToast({
         message: "The browser could not acquire the cross-tab token safety lock.",
         kind: "warning",
@@ -2756,6 +3233,10 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       return;
     }
     if (!crossTabLockAcquired) {
+      setTokenRecoveryOwnership("contended");
+      setTokenRecoveryOwnershipError(
+        "Another tab is currently creating or reconciling an ingestion token.",
+      );
       setToast({
         message: "Another tab is currently creating or reconciling an ingestion token. Try again after it finishes.",
         kind: "warning",
@@ -3151,55 +3632,90 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     if (raw === null) {
       setTokenCreateGuardStorageState("available");
       setTokenCreateGuardStorageError(null);
+      if (
+        tokenCreateRecoveryRef.current !== null
+        || issuedTokenRecoveryRef.current !== null
+        || unreadableTokenCreateRecoveryRef.current !== null
+      ) {
+        setTokenRecoveryOwnership("lost");
+        setTokenRecoveryOwnershipError(
+          "The durable token safety guard is missing, so this tab cannot prove that the saved recovery attempt was resolved.",
+        );
+      } else {
+        setTokenRecoveryOwnership("idle");
+        setTokenRecoveryOwnershipError(null);
+      }
       return stop;
     }
+    setTokenCreateGuardStorageState("available");
+    setTokenCreateGuardStorageError(null);
     const restored = parsePersistedTokenCreateGuard(raw, normalizedApiBaseUrl);
-    if (restored === null) {
-      setTokenCreateGuardStorageState("unavailable");
-      setTokenCreateGuardStorageError(
-        "A token safety record exists but is invalid. Token generation is locked so a possible credential is not overlooked.",
-      );
-      setToast({
-        message: "A saved token safety record could not be read. Token generation remains locked; do not clear browser storage until the possible credential is reviewed.",
-        kind: "warning",
-      });
-      return stop;
-    }
-
-    const { recovery: restoredRecovery, knownIssuedTokenId } = restored;
-    setSection("collectors");
     setTokenSecret(null);
     setTokenSecretAcknowledged(false);
     setIssuedToken(null);
     setIssuedTokenRecovery(null);
-    setTokenCreateRecovery(restoredRecovery);
-    setModal("create-token");
+    const unreadableRecovery: UnreadableTokenCreateRecovery | null = restored === null
+      ? {
+          attemptId: crypto.randomUUID(),
+          raw,
+          observedServerTimeMs: authoritativeServerNowMs() ?? null,
+          candidates: [],
+          reconciliationError: "The saved token safety record is unreadable.",
+        }
+      : null;
+    if (restored === null) {
+      setTokenCreateRecovery(null);
+      setUnreadableTokenCreateRecovery(unreadableRecovery);
+    } else {
+      setUnreadableTokenCreateRecovery(null);
+      setTokenCreateRecovery(restored.recovery);
+    }
     if (!lockAvailable) {
-      setTokenCreateGuardStorageState("unavailable");
-      setTokenCreateGuardStorageError(
+      setTokenRecoveryOwnership("failed");
+      setTokenRecoveryOwnershipError(
         "This browser does not expose the cross-tab Web Locks API required to own token recovery safely.",
       );
       return stop;
     }
 
-    setBusy("reconcile-token-create");
+    setTokenRecoveryOwnership("acquiring");
+    setTokenRecoveryOwnershipError(null);
     void lockManager.request(
       tokenCreateLockName(normalizedApiBaseUrl),
       { mode: "exclusive", ifAvailable: true, signal: controller.signal },
       async (lock) => {
         if (!current) return;
         if (lock === null) {
-          setBusy(null);
-          setTokenCreateGuardStorageState("unavailable");
-          setTokenCreateGuardStorageError(
-            "Another tab currently owns token creation recovery. Close it or refresh after it finishes.",
+          setTokenRecoveryOwnership("contended");
+          setTokenRecoveryOwnershipError(
+            "Another tab currently owns token creation recovery. Close that tab, then try again.",
           );
-          setToast({
-            message: "Another tab is already reconciling this token request. This tab is locked to read-only recovery.",
-            kind: "warning",
-          });
           return;
         }
+        if (restored === null && unreadableRecovery !== null) {
+          tokenGuardLockOperationAttemptRef.current = unreadableRecovery.attemptId;
+          setTokenRecoveryOwnership("owned");
+          setTokenRecoveryOwnershipError(null);
+          setUnreadableTokenCreateRecovery(unreadableRecovery);
+          try {
+            if (tokenRecoveryEnvironmentCanPoll(document.visibilityState, navigator.onLine)) {
+              await reconcileUnreadableTokenCreateRecovery(unreadableRecovery);
+            } else {
+              setTokenRecoveryNextCheckAt(Date.now());
+            }
+          } finally {
+            if (current && ownsUnreadableTokenCreateGuard(unreadableRecovery)) {
+              const lease = holdTokenGuardLease(unreadableRecovery.attemptId);
+              tokenGuardLockOperationAttemptRef.current = null;
+              await lease;
+            } else {
+              tokenGuardLockOperationAttemptRef.current = null;
+            }
+          }
+          return;
+        }
+        if (restored === null) return;
+        const { recovery: restoredRecovery, knownIssuedTokenId } = restored;
         const recovery: TokenCreateRecovery = {
           ...restoredRecovery,
           ownerId: currentTokenGuardOwnerId(),
@@ -3208,17 +3724,17 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
         if (!persistTokenCreateGuard(recovery, knownIssuedTokenId, {
           allowOwnershipTakeover: true,
         })) {
-          setBusy(null);
+          setTokenRecoveryOwnership("failed");
           return;
         }
         setTokenCreateRecovery(recovery);
         try {
+          if (!tokenRecoveryEnvironmentCanPoll(document.visibilityState, navigator.onLine)) {
+            setTokenRecoveryNextCheckAt(Date.now());
+            return;
+          }
           if (knownIssuedTokenId === null) {
-            const candidates = await findTokenCreateCandidates(
-              recovery,
-              controller.signal,
-            );
-            if (current) applyTokenCreateCandidates(recovery, candidates);
+            await reconcileTokenCreateRecovery(recovery);
             return;
           }
           try {
@@ -3236,9 +3752,10 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
               setTokenCreateRecovery(null);
               setIssuedToken(token);
               setIssuedTokenRecovery(recovery);
+              stopAutomaticTokenRecovery();
               setToast({
                 message: tokenCanBeRevoked(token)
-                  ? `The page reloaded after token ${token.tokenPrefix} was issued. Its one-time secret is gone; revoke it before leaving.`
+                  ? `Token ${token.tokenPrefix} was issued, but its one-time secret is gone. Revoke the unusable token when convenient; the rest of the app remains available.`
                   : `The page reloaded after token ${token.tokenPrefix} was issued. Its secret is gone, and the token is now ${tokenStateLabel(token.state).toLowerCase()}.`,
                 kind: "warning",
               });
@@ -3251,6 +3768,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
             };
             persistTokenCreateGuard(unknownRecovery, token.ingestionTokenId);
             setTokenCreateRecovery(unknownRecovery);
+            stopAutomaticTokenRecovery();
           } catch (error) {
             if (!current || controller.signal.aborted) return;
             if (!requireTokenGuardOwnership(recovery)) return;
@@ -3259,11 +3777,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
               reconciliationError: `The saved issued token could not be read directly: ${errorMessage(error)}`,
             };
             setTokenCreateRecovery(retryRecovery);
-            const candidates = await findTokenCreateCandidates(
-              retryRecovery,
-              controller.signal,
-            );
-            if (current) applyTokenCreateCandidates(retryRecovery, candidates);
+            await reconcileTokenCreateRecovery(retryRecovery);
           }
         } catch (error) {
           if (!current || controller.signal.aborted) return;
@@ -3279,7 +3793,6 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
             kind: "warning",
           });
         } finally {
-          if (current) setBusy(null);
           if (current && ownsTokenCreateGuard(recovery)) {
             const lease = holdTokenGuardLease(recovery.attemptId);
             tokenGuardLockOperationAttemptRef.current = null;
@@ -3291,17 +3804,56 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       },
     ).catch((error: unknown) => {
       if (!current || controller.signal.aborted) return;
-      setBusy(null);
-      setTokenCreateGuardStorageState("unavailable");
-      setTokenCreateGuardStorageError(`Cross-tab recovery lock failed: ${errorMessage(error)}`);
+      setTokenRecoveryOwnership("failed");
+      setTokenRecoveryOwnershipError(`Cross-tab recovery lock failed: ${errorMessage(error)}`);
     });
     return stop;
   });
 
   useEffect(
     () => reconcilePersistedTokenCreate(),
-    [client, normalizedApiBaseUrl],
+    [client, normalizedApiBaseUrl, tokenRecoveryAcquireGeneration],
   );
+
+  const runScheduledTokenRecovery = useEffectEvent(() => {
+    if (tokenRecoveryOwnership !== "owned" || tokenRecoveryCheckingRef.current) return;
+    const recovery = tokenCreateRecoveryRef.current;
+    if (recovery !== null) {
+      void reconcileTokenCreateRecovery(recovery);
+      return;
+    }
+    const unreadableRecovery = unreadableTokenCreateRecoveryRef.current;
+    if (unreadableRecovery !== null) {
+      void reconcileUnreadableTokenCreateRecovery(unreadableRecovery);
+    }
+  });
+
+  const resumeScheduledTokenRecovery = useEffectEvent(() => {
+    if (tokenRecoveryOwnership !== "owned" || tokenRecoveryNextCheckAt === null) return;
+    setTokenRecoveryNextCheckAt(Date.now());
+  });
+
+  useEffect(() => {
+    if (
+      tokenRecoveryNextCheckAt === null
+      || tokenRecoveryOwnership !== "owned"
+      || !tokenRecoveryEnvironmentReady
+    ) return;
+    const timeout = window.setTimeout(
+      () => runScheduledTokenRecovery(),
+      Math.max(0, tokenRecoveryNextCheckAt - Date.now()),
+    );
+    return () => window.clearTimeout(timeout);
+  }, [
+    tokenRecoveryEnvironmentReady,
+    tokenRecoveryNextCheckAt,
+    tokenRecoveryOwnership,
+  ]);
+
+  useEffect(() => {
+    if (!tokenRecoveryEnvironmentReady) return;
+    resumeScheduledTokenRecovery();
+  }, [tokenRecoveryEnvironmentReady]);
 
   const loadedIndexScopeOptions: TokenIndexScopeOption[] = indexes.flatMap((index) => {
     const definition = index.definition;
@@ -3384,8 +3936,16 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       ? tokenCreateGuardStorageState === "checking"
         ? "The browser reload-safety check is still running."
         : `The browser cannot persist the non-secret token safety record. Token generation is disabled.${tokenCreateGuardStorageError === null ? "" : ` ${tokenCreateGuardStorageError}`}`
-      : tokenProtectionActive
-        ? "Finish saving or revoking the current one-time token before generating another."
+      : unreadableTokenCreateRecovery !== null
+        ? `A damaged token safety record is being reconciled. Token generation remains paused, but the rest of Administration is available.${unreadableTokenCreateRecovery.reconciliationError === null ? "" : ` Latest check: ${unreadableTokenCreateRecovery.reconciliationError}`}`
+      : tokenCreateRecovery !== null
+        ? `Open Splunk is checking whether token “${tokenCreateRecovery.definition.name}” was created. Token generation remains paused, but the rest of Administration is available.${tokenCreateRecovery.reconciliationError === null ? "" : ` Latest check: ${tokenCreateRecovery.reconciliationError}`}`
+      : issuedToken !== null
+        ? tokenNavigationProtectionActive
+          ? "Save or revoke the visible one-time token before generating another."
+          : `Token ${issuedToken.tokenPrefix} was issued without a recoverable secret. Review or revoke it before generating another.`
+      : tokenGuardActive
+        ? "A token create request is currently in progress."
         : null;
   const tokenCreateScopeInvalid = tokenScopeSource === "unavailable"
     || tokenIndexes.size === 0
@@ -3432,8 +3992,20 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
   const activeIndexes = indexes.filter((index) => index.state === IndexState.INDEX_STATE_ACTIVE).length;
   const activeTokens = tokens.filter((token) => token.state === IngestionTokenState.INGESTION_TOKEN_STATE_ACTIVE).length;
   const tokenRevealOpen = issuedToken !== null;
-  const tokenRecoveryOpen = tokenCreateRecovery !== null;
+  const tokenRecoveryOpen = tokenCreateRecovery !== null || unreadableTokenCreateRecovery !== null;
   const tokenResolutionOpen = tokenRevealOpen || tokenRecoveryOpen;
+  const tokenDialogHardBlocked = tokenCreateDialogRequiresExclusiveAttention({
+    createRequestInProgress: busy === "create-token",
+    plaintextToken: tokenSecret,
+  });
+  const recoveryAuthenticationError = (
+    tokenCreateRecovery?.reconciliationError
+    ?? unreadableTokenCreateRecovery?.reconciliationError
+    ?? ""
+  );
+  const recoveryNeedsAuthentication = /auth|sign[ -]?in|administrator token/i.test(
+    recoveryAuthenticationError,
+  );
   const issuedHECCurlExample = issuedToken === null || !hecEnabled
     ? null
     : hecCurlExample(
@@ -3514,6 +4086,25 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     ?? (ingestibleTokenScopes.length === 0
       ? "No active, ingestion-enabled index is currently available for a new token."
       : null);
+  function openTokenRecoveryDialog() {
+    if (!tokenResolutionOpen) return;
+    setModal("create-token");
+  }
+  function checkOrRetryTokenRecovery() {
+    if (tokenRecoveryOwnership === "owned") {
+      const recovery = tokenCreateRecoveryRef.current;
+      if (recovery !== null) {
+        void reconcileTokenCreateRecovery(recovery);
+        return;
+      }
+      const unreadableRecovery = unreadableTokenCreateRecoveryRef.current;
+      if (unreadableRecovery !== null) {
+        void reconcileUnreadableTokenCreateRecovery(unreadableRecovery);
+      }
+      return;
+    }
+    setTokenRecoveryAcquireGeneration((current) => current + 1);
+  }
   const primaryAction = section === "indexes" && indexState === "available"
     ? <button className="suite-button suite-button--primary" type="button" onClick={openIndexDialog}>＋ Create index</button>
     : section === "collectors" && tokenState === "available"
@@ -3647,6 +4238,8 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
               onSetEnabled={(token, enabled) => void setTokenEnabled(token, enabled)}
               canCreate={ingestibleTokenScopes.length > 0 && tokenCreationBlockReason === null}
               createBlockReason={tokenCreateDisabledReason}
+              recoveryActionLabel={tokenResolutionOpen ? "Resolve token creation" : null}
+              onResolveRecovery={openTokenRecoveryDialog}
               indexState={indexState}
               indexError={indexError}
               scopeSource={tokenScopeSource}
@@ -3748,52 +4341,68 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
 
       {modal === "create-token" ? (
         <Modal
-          title={tokenRecoveryOpen
-            ? "Resolve uncertain token creation"
+          title={unreadableTokenCreateRecovery !== null
+            ? "Resolve damaged token recovery"
+            : tokenRecoveryOpen
+            ? "Resolve token creation"
             : tokenRevealOpen
               ? "Save this token now"
               : "Generate ingestion token"}
           subtitle={tokenRecoveryOpen
-            ? "Do not generate another token until this non-idempotent request is reconciled."
+            ? "New token creation is paused while Open Splunk checks; the rest of the app remains available."
             : tokenRevealOpen
               ? "The server reveals this plaintext credential only once."
               : "Scope a new credential to one or more ingestible indexes."}
-          dismissible={!tokenResolutionOpen}
+          dismissible={!tokenDialogHardBlocked}
           initialFocus={tokenRecoveryOpen
-            ? busy === null ? "#reconcile-token-create" : undefined
+            ? "#reconcile-token-create"
             : tokenRevealOpen
             ? tokenSecret === null || tokenSecret.length === 0
               ? busy === null ? "#revoke-issued-token" : undefined
               : "#copy-issued-token"
             : "#new-token-name"}
           onClose={() => {
-            if (busy !== null || tokenResolutionOpen) return;
-            setTokenSecret(null);
+            if (tokenDialogHardBlocked) return;
+            if (!tokenResolutionOpen) setTokenSecret(null);
             setModal(null);
           }}
           footer={tokenRecoveryOpen
             ? (
-              <button
-                id="reconcile-token-create"
-                className="button primary"
-                type="button"
-                disabled={busy !== null || tokenCreateGuardStorageState !== "available" || tokenCreateLockAvailable !== true}
-                onClick={() => void reconcileTokenCreateRecovery(tokenCreateRecovery)}
-              >
-                {busy === "reconcile-token-create" ? "Checking server…" : "Check for created token"}
-              </button>
+              <>
+                <button className="button secondary" type="button" onClick={() => setModal(null)}>
+                  Close
+                </button>
+                {recoveryNeedsAuthentication ? (
+                  <Link className="button secondary" href="/signin/">Sign in</Link>
+                ) : null}
+                <button
+                  id="reconcile-token-create"
+                  className="button primary"
+                  type="button"
+                  disabled={tokenRecoveryChecking || tokenRecoveryOwnership === "acquiring" || tokenCreateLockAvailable !== true}
+                  onClick={checkOrRetryTokenRecovery}
+                >
+                  {tokenRecoveryChecking
+                    ? "Checking…"
+                    : tokenRecoveryOwnership === "owned"
+                      ? "Check now"
+                      : tokenRecoveryOwnership === "acquiring"
+                        ? "Acquiring…"
+                        : "Try again"}
+                </button>
+              </>
             )
             : !tokenRevealOpen
             ? <><button className="button secondary" type="button" onClick={() => setModal(null)} disabled={busy !== null}>Cancel</button><button className="button primary" type="submit" form="create-token-form" disabled={busy !== null || tokenName.trim().length === 0 || tokenCreateScopeInvalid}>{busy === "create-token" ? "Generating…" : "Generate token"}</button></>
             : (
               <>
-                <button id="revoke-issued-token" className="button danger" type="button" disabled={busy !== null || tokenCreateGuardStorageState !== "available" || tokenCreateLockAvailable !== true || !tokenCanBeRevoked(issuedToken)} onClick={() => void revokeIssuedToken()}>
+                <button id="revoke-issued-token" className="button danger" type="button" disabled={busy !== null || tokenRecoveryOwnership !== "owned" || !tokenCanBeRevoked(issuedToken)} onClick={() => void revokeIssuedToken()}>
                   {busy === `issued-token-${issuedToken.ingestionTokenId}` ? "Revoking…" : "Revoke unused token"}
                 </button>
                 <button
                   className="button primary"
                   type="button"
-                  disabled={busy !== null || tokenCreateGuardStorageState !== "available" || tokenCreateLockAvailable !== true || (
+                  disabled={busy !== null || tokenRecoveryOwnership !== "owned" || (
                     tokenSecret !== null && tokenSecret.length > 0
                       ? !tokenSecretAcknowledged
                       : tokenCanBeRevoked(issuedToken)
@@ -3810,29 +4419,47 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
               <div className="access-mode-notice" role="alert">
                 <span>!</span>
                 <div>
-                  <strong>A token may exist without a recoverable secret</strong>
-                  <p>The create request failed ambiguously after it was sent: {tokenCreateRecovery.failureMessage}. Creating another token now could leave duplicate live credentials.</p>
+                  <strong>{unreadableTokenCreateRecovery === null
+                    ? "Open Splunk could not confirm token creation"
+                    : "The saved recovery record is damaged"}</strong>
+                  <p>{unreadableTokenCreateRecovery === null && tokenCreateRecovery !== null
+                    ? `We couldn’t confirm whether the server created token “${tokenCreateRecovery.definition.name}.” New token creation is paused while Open Splunk checks. You can keep using the rest of the app.`
+                    : "The record no longer contains enough attribution data to identify one create request. Open Splunk must conservatively review every nonterminal ingestion token. You can keep using the rest of the app."}</p>
                 </div>
               </div>
-              {tokenCreateRecovery.reconciliationError === null ? null : (
+              {tokenRecoveryOwnershipError === null ? null : (
                 <div className="access-mode-notice" role="alert">
                   <span>!</span>
-                  <div><strong>Reconciliation could not finish</strong><p>{tokenCreateRecovery.reconciliationError}</p></div>
+                  <div><strong>Recovery ownership: {tokenRecoveryOwnership}</strong><p>{tokenRecoveryOwnershipError}</p></div>
+                </div>
+              )}
+              {(tokenCreateRecovery?.reconciliationError ?? unreadableTokenCreateRecovery?.reconciliationError) === null ? null : (
+                <div className="access-mode-notice" role="alert">
+                  <span>!</span>
+                  <div><strong>Latest check could not finish</strong><p>{tokenCreateRecovery?.reconciliationError ?? unreadableTokenCreateRecovery?.reconciliationError}</p></div>
                 </div>
               )}
               <div className="token-recovery-summary">
-                <strong>{tokenCreateRecovery.candidates.length === 0
-                  ? "No unique new token is visible yet"
-                  : tokenCreateRecovery.candidates.length === 1
-                    ? "1 possible new token has an unknown state"
-                    : `${tokenCreateRecovery.candidates.length.toLocaleString()} possible new tokens`}</strong>
-                <p>{tokenCreateRecovery.candidates.length === 0
-                  ? "The original request may still be completing. Check again; token generation remains locked."
-                  : tokenCreateRecovery.candidates.length === 1
-                    ? "The matching token cannot be safely revoked until the server reports a usable state. Check again to refresh its metadata."
-                    : "The server returned more than one new token matching this request. Confirm each prefix before revoking possible credentials here, then check again after unrelated candidates are handled."}</p>
+                <strong>{tokenCreateRecovery === null
+                  ? "Damaged-record safety review"
+                  : `Checking token “${tokenCreateRecovery.definition.name}”`}</strong>
+                {tokenCreateRecovery === null ? (
+                  <p>All nonterminal tokens listed below must become revoked or expired before two complete zero-result snapshots can safely remove the damaged guard.</p>
+                ) : (
+                  <p>Request dispatched {tokenCreateRecovery.definition.dispatchedServerTimeMs === null
+                    ? "at an unknown server time"
+                    : formatDate(new Date(tokenCreateRecovery.definition.dispatchedServerTimeMs))}. Two complete zero-result snapshots after the safety window are required before Open Splunk concludes that no token was created.</p>
+                )}
+                <p>
+                  Last successful check: {tokenRecoveryLastCheckedAt === null ? "not yet" : formatDate(new Date(tokenRecoveryLastCheckedAt))}.
+                  {" "}Next automatic check: {!tokenRecoveryEnvironmentReady
+                    ? "paused while this tab is hidden or offline"
+                    : tokenRecoveryNextCheckAt === null
+                      ? "not scheduled"
+                      : formatDate(new Date(tokenRecoveryNextCheckAt))}.
+                </p>
               </div>
-              {tokenCreateRecovery.candidates.length === 0 ? null : (
+              {tokenCreateRecovery === null || tokenCreateRecovery.candidates.length === 0 ? null : (
                 <ul className="token-recovery-list" aria-label="Possible tokens created by the uncertain request">
                   {tokenCreateRecovery.candidates.map((candidate) => (
                     <li key={candidate.ingestionTokenId}>
@@ -3841,7 +4468,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
                       <button
                         className="button danger"
                         type="button"
-                        disabled={busy !== null || tokenCreateGuardStorageState !== "available" || tokenCreateLockAvailable !== true || !tokenCanBeRevoked(candidate)}
+                        disabled={busy !== null || tokenRecoveryOwnership !== "owned" || !tokenCanBeRevoked(candidate)}
                         onClick={() => void revokeTokenCreateCandidate(candidate)}
                         aria-label={`Revoke possible token ${candidate.tokenPrefix}`}
                       >
@@ -3850,6 +4477,24 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
                           : tokenCanBeRevoked(candidate)
                             ? "Revoke candidate"
                             : `Cannot revoke ${tokenStateLabel(candidate.state).toLowerCase()} state`}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {unreadableTokenCreateRecovery === null || unreadableTokenCreateRecovery.candidates.length === 0 ? null : (
+                <ul className="token-recovery-list" aria-label="Nonterminal tokens blocking damaged recovery">
+                  {unreadableTokenCreateRecovery.candidates.map((candidate) => (
+                    <li key={candidate.ingestionTokenId}>
+                      <div><strong>{candidate.name}</strong><code>{candidate.tokenPrefix}</code><small>Created {formatDate(candidate.createdAt)}</small></div>
+                      <span className={`status-label status-label--${statusClass(tokenStateLabel(candidate.state))}`}><i />{tokenStateLabel(candidate.state)}</span>
+                      <button
+                        className="button danger"
+                        type="button"
+                        disabled={busy !== null || tokenRecoveryOwnership !== "owned" || !tokenCanBeRevoked(candidate)}
+                        onClick={() => void revokeUnreadableTokenCandidate(candidate)}
+                      >
+                        {busy === `recover-damaged-token-${candidate.ingestionTokenId}` ? "Revoking…" : "Revoke token"}
                       </button>
                     </li>
                   ))}
@@ -3900,7 +4545,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
               <span className="token-warning-icon">!</span>
               {tokenSecret === null || tokenSecret.length === 0 ? (
                 <p>{tokenCanBeRevoked(issuedToken)
-                  ? "The server created this token without returning its plaintext secret. Revoke the unusable token before leaving this dialog."
+                  ? "The server created this token, but its plaintext secret is no longer available. Revoke the unusable token before generating another; you may close this dialog and keep using the app."
                   : `This token was identified without its plaintext secret and is confirmed ${tokenStateLabel(issuedToken.state).toLowerCase()}. It is no longer usable.`}</p>
               ) : (
                 <>
@@ -4345,6 +4990,8 @@ interface BackendTokensProps {
   busy: string | null;
   canCreate: boolean;
   createBlockReason: string | null;
+  recoveryActionLabel: string | null;
+  onResolveRecovery: () => void;
   onEdit: (token: IngestionToken) => void;
   onLoadMore: () => void;
   onReload: () => void;
@@ -4373,7 +5020,15 @@ function BackendTokens(props: BackendTokensProps) {
       {props.createBlockReason === null ? null : (
         <div id="ingestion-token-create-disabled-reason" className="access-mode-notice token-create-disabled-reason" role="note">
           <span>!</span>
-          <div><strong>Token generation is locked</strong><p>{props.createBlockReason}</p></div>
+          <div>
+            <strong>Token generation is locked</strong>
+            <p>{props.createBlockReason}</p>
+            {props.recoveryActionLabel === null ? null : (
+              <button className="button secondary" type="button" onClick={props.onResolveRecovery}>
+                {props.recoveryActionLabel}
+              </button>
+            )}
+          </div>
         </div>
       )}
       {props.indexState === "available" ? null : (

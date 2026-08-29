@@ -26,6 +26,7 @@ const testFiles = [
   path.join("app", "dashboards", "dashboard-panel-runner.test.ts"),
   path.join("app", "admin", "admin-resource-data.test.ts"),
   path.join("app", "admin", "backend-admin-console-hec.test.ts"),
+  path.join("app", "admin", "token-create-recovery-policy.test.ts"),
   path.join("app", "admin", "knowledge-manager-data.test.ts"),
   path.join("app", "admin", "lookup-manager-data.test.ts"),
   path.join("app", "admin", "lookup-manager-panel.test.ts"),
