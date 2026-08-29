@@ -465,3 +465,116 @@ export async function collectCustomPropertyUsage(root) {
 export async function collectGlobalStylesheetClasses(root) {
   return collectStylesheetClasses(await readFile(path.join(root, "app", "globals.css"), "utf8"));
 }
+
+/**
+ * Splits a stylesheet into blocks, each with its prelude, body, and ancestors.
+ *
+ * `cssBlockPreludes` above answers "which selectors open a block"; the token
+ * layer needs the declarations inside one, and needs to know whether the block
+ * sits inside a dark-theme at-rule. Nesting is tracked with an explicit stack
+ * for the same reason the prelude scanner uses a depth counter: declaration
+ * values contain punctuation no regular expression can tell from structure.
+ */
+export function cssBlocks(source) {
+  const css = stripCssComments(source);
+  const blocks = [];
+  const open = [];
+  let start = 0;
+  for (let index = 0; index < css.length; index += 1) {
+    const character = css[index];
+    if (character === "{") {
+      open.push({
+        ancestors: open.map((entry) => entry.prelude),
+        bodyStart: index + 1,
+        prelude: css.slice(start, index).trim(),
+      });
+      start = index + 1;
+    } else if (character === "}") {
+      const entry = open.pop();
+      if (entry !== undefined) {
+        blocks.push({
+          ancestors: entry.ancestors,
+          body: css.slice(entry.bodyStart, index),
+          prelude: entry.prelude,
+        });
+      }
+      start = index + 1;
+    } else if (character === ";") {
+      start = index + 1;
+    }
+  }
+  return blocks;
+}
+
+/**
+ * The `property: value` pairs a block body declares at its own level.
+ *
+ * Declarations that belong to a nested rule are skipped: a `:root` block has
+ * none, but the parser has to survive a stylesheet that does.
+ */
+export function cssDeclarations(body) {
+  const declarations = [];
+  let depth = 0;
+  let buffer = "";
+  function flush() {
+    const text = buffer.trim();
+    buffer = "";
+    if (depth > 0 || text.length === 0) return;
+    const separator = text.indexOf(":");
+    if (separator === -1) return;
+    declarations.push({
+      property: text.slice(0, separator).trim(),
+      value: text.slice(separator + 1).trim().replaceAll(/\s+/gu, " "),
+    });
+  }
+  for (const character of body) {
+    if (character === "{") {
+      depth += 1;
+      buffer = "";
+    } else if (character === "}") {
+      depth = Math.max(0, depth - 1);
+      buffer = "";
+    } else if (character === ";") {
+      flush();
+    } else {
+      buffer += character;
+    }
+  }
+  flush();
+  return declarations;
+}
+
+/** True when a block, or any at-rule around it, targets the dark theme. */
+export function isDarkThemeContext(block) {
+  return [block.prelude, ...block.ancestors].some((prelude) => /\bdark\b/u.test(prelude));
+}
+
+/** The token files of the two-tier layer, sorted so reports read the same way. */
+export async function listTokenStylesheets(root) {
+  const layer = /^app\/styles\/tokens-[a-z0-9-]+\.css$/u;
+  return (await listStylesheets(root)).filter((file) => layer.test(relativePosix(root, file)));
+}
+
+/**
+ * Every custom property the token layer declares, split by theme.
+ *
+ * Declarations come back as lists rather than maps so a name declared twice in
+ * one file stays visible to the caller instead of being silently overwritten.
+ */
+export async function collectTokenLayer(root) {
+  const files = await listTokenStylesheets(root);
+  return Promise.all(files.map(async (file) => {
+    const css = await readFile(file, "utf8");
+    const dark = [];
+    const light = [];
+    for (const block of cssBlocks(css)) {
+      if (block.prelude.startsWith("@")) continue;
+      const target = isDarkThemeContext(block) ? dark : light;
+      for (const { property, value } of cssDeclarations(block.body)) {
+        if (!property.startsWith("--")) continue;
+        target.push({ name: property, selector: block.prelude, value });
+      }
+    }
+    return { dark, file: relativePosix(root, file), light };
+  }));
+}

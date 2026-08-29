@@ -12,6 +12,7 @@ const scriptTests = [
   "check-docs.test.mjs",
   "compile-protos.test.mjs",
   "css-invariants.test.mjs",
+  "token-layer.test.mjs",
   "safety-net.test.mjs",
   "materialize-git-snapshot.test.mjs",
   "run-go-race-shard.test.mjs",
