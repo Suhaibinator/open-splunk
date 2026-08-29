@@ -484,8 +484,8 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
                 {savedSearches.length > 0 ? <button type="button" onClick={() => { setQuery(""); setScope("all"); }}>Clear filters</button> : <Link href="/search/">Open Search</Link>}
               </div>
             ) : (
-              <div className={styles.tableWrap}>
-                <table className={`${styles.table} ${styles.backendTable}`}>
+              <div className={`table-wrap ${styles.tableWrap}`}>
+                <table className={`table table--fixed table--cards ${styles.table} ${styles.backendTable}`}>
                   <thead><tr><th scope="col">Saved search</th><th scope="col">App</th><th scope="col">Sharing</th><th scope="col">Owner</th><th scope="col">Time range</th><th scope="col">Modified</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
                   <tbody>{visible.map((savedSearch) => {
                     const display = savedSearchForDisplay(savedSearch, formatDate);

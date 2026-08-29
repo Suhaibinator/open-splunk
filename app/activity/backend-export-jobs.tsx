@@ -301,8 +301,8 @@ export function BackendExportJobs({ apiBaseUrl, bootstrap }: BackendExportJobsPr
             {refreshing ? <BackendResourceState kind="loading" title="Updating export jobs" message="Applying exact backend filters to a fresh snapshot. Existing rows remain visible until it completes." /> : null}
             {jobs.length === 0 && !refreshing ? <BackendResourceState kind="empty" title={filtered ? "No matching export jobs" : "No retained export jobs"} message={filtered ? "No retained export jobs match these exact state and search-job filters." : "Exports created from completed searches will appear here while their records are retained."} action={filtered ? <button type="button" onClick={clearFilters}>Clear filters</button> : undefined} /> : null}
             {jobs.length > 0 ? (
-              <div className="responsive-table-wrap" aria-busy={refreshing}>
-                <table className="product-table live-jobs-table export-jobs-table">
+              <div className="table-wrap" aria-busy={refreshing}>
+                <table className="table table--cards live-jobs-table export-jobs-table">
                   <caption className="sr-only">Retained export jobs</caption>
                   <thead><tr><th scope="col">Export</th><th scope="col">Source search</th><th scope="col">State</th><th scope="col">Progress</th><th scope="col">Artifact / failure</th><th scope="col">Created</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
                   <tbody>{jobs.map((job) => {

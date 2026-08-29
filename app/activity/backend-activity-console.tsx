@@ -600,8 +600,8 @@ function BackendSearchHistory({ apiBaseUrl }: BackendActivityConsoleProps) {
                 action={hasActiveHistoryFilter ? <button type="button" onClick={() => { setFilter("all"); setQuery(""); }}>Clear filters</button> : undefined}
               />
             ) : (
-              <div className="responsive-table-wrap">
-                <table className="product-table activity-table backend-history-table">
+              <div className="table-wrap">
+                <table className="table table--cards activity-table backend-history-table">
                   <caption className="sr-only">Persisted terminal search history</caption>
                   <thead><tr><th scope="col">Search</th><th scope="col">Context</th><th scope="col">Final state</th><th scope="col">Runtime</th><th scope="col">Matched events</th><th scope="col">Rows</th><th scope="col">Finished</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
                   <tbody>{filtered.map((entry) => {

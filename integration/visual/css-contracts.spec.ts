@@ -333,8 +333,8 @@ test("the statistics sparkline paints with the palette accent", async ({ page })
 });
 
 const liveJobsMarkup = `
-<div class="responsive-table-wrap live-jobs-table-wrap">
-  <table class="product-table live-jobs-table">
+<div class="table-wrap live-jobs-table-wrap">
+  <table class="table table--cards live-jobs-table">
     <thead>
       <tr>
         <th scope="col">Search</th><th scope="col">Status</th><th scope="col">Owner</th>

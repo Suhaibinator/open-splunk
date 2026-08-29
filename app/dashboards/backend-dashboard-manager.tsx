@@ -567,7 +567,7 @@ export function BackendDashboardManager({ apiBaseUrl }: BackendDashboardManagerP
                     </div>
                     {result ? <div className={styles.panelResult}>
                       <p className={result.error ? styles.resultError : styles.resultStatus}>{result.error ?? `Search ${stateLabel(result.state)}${result.jobId ? ` · ${result.jobId}` : ""}`}</p>
-                      {result.columns && result.columns.length > 0 ? <div className="responsive-table-wrap"><table className="product-table"><thead><tr>{result.columns.map((column) => <th key={column.key} scope="col">{column.label}</th>)}</tr></thead><tbody>{result.rows?.map((row) => <tr key={row.id}>{result.columns!.map((column, columnIndex) => <td key={column.key}>{row.cells[columnIndex] ?? ""}</td>)}</tr>)}</tbody></table></div> : null}
+                      {result.columns && result.columns.length > 0 ? <div className="table-wrap"><table className="table"><thead><tr>{result.columns.map((column) => <th key={column.key} scope="col">{column.label}</th>)}</tr></thead><tbody>{result.rows?.map((row) => <tr key={row.id}>{result.columns!.map((column, columnIndex) => <td key={column.key}>{row.cells[columnIndex] ?? ""}</td>)}</tr>)}</tbody></table></div> : null}
                       {result.rows && result.rows.length === 0 ? <p className={styles.stateMessage}>The search completed with no rows.</p> : null}
                     </div> : null}
                   </section>

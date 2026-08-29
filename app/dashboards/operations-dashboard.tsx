@@ -274,8 +274,8 @@ function DemoOperationsDashboard() {
             <div><h2>Service health</h2><p>Current request volume, latency, and errors</p></div>
             <span className={styles.readOnlyBadge} title="Service configuration requires the management API.">Read only</span>
           </header>
-          <div className="responsive-table-wrap">
-            <table className="product-table service-table">
+          <div className="table-wrap">
+            <table className="table service-table">
               <thead><tr><th scope="col">Service</th><th scope="col">Status</th><th scope="col">Requests</th><th scope="col">Error rate</th><th scope="col">p95 latency</th><th scope="col">Trend</th></tr></thead>
               <tbody>{SERVICES.map(([service, status, requests, errors, serviceLatency, trend]) => (
                 <tr key={service}>

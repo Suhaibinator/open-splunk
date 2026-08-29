@@ -221,8 +221,8 @@ export function IndexObservabilityPanel({ client, index }: IndexObservabilityPan
         <BackendResourceState kind="empty" title="No fields observed" message="No field profiles matched this index, time range, and name filter." />
       ) : null}
       {fieldsState === "available" && fieldSnapshot !== null && fieldSnapshot.fields.length > 0 ? (
-        <div className="responsive-table-wrap">
-          <table className="product-table index-field-table">
+        <div className="table-wrap">
+          <table className="table index-field-table">
             <caption className="sr-only">Observed fields for index {index.name}</caption>
             <thead><tr><th scope="col">Field</th><th scope="col">Type</th><th scope="col">Events</th><th scope="col">Null</th><th scope="col">Missing</th><th scope="col">Profile</th></tr></thead>
             <tbody>{fieldSnapshot.fields.map((field) => (

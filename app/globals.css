@@ -4782,7 +4782,7 @@ pre {
   text-decoration: none;
 }
 
-.responsive-table-wrap {
+.table-wrap {
   contain: inline-size;
   max-width: 100%;
   overflow-x: auto;
@@ -4790,13 +4790,13 @@ pre {
   width: 100%;
 }
 
-.product-table {
+.table {
   border-collapse: collapse;
   font-size: var(--type-xs);
   width: 100%;
 }
 
-.product-table th {
+.table th {
   background: var(--bg-subtle);
   border-bottom: 1px solid var(--border);
   color: var(--fg-muted);
@@ -4807,7 +4807,7 @@ pre {
   white-space: nowrap;
 }
 
-.product-table td {
+.table td {
   border-bottom: 1px solid var(--border-subtle);
   color: var(--fg-secondary);
   height: 45px;
@@ -4816,10 +4816,17 @@ pre {
   white-space: nowrap;
 }
 
-.product-table tbody tr:last-child td { border-bottom: 0; }
-.product-table tbody tr:hover td { background: var(--bg-raised); }
-.product-table a { color: var(--fg-link); text-decoration: none; }
-.product-table code { color: var(--fg-muted); font-size: var(--type-xs); }
+.table tbody tr:last-child td { border-bottom: 0; }
+.table tbody tr:hover td { background: var(--bg-raised); }
+.table a { color: var(--fg-link); text-decoration: none; }
+.table code { color: var(--fg-muted); font-size: var(--type-xs); }
+
+/* Column widths declared once on the header reach the body too. */
+.table--fixed { table-layout: fixed; }
+
+/* Dialog density: a row is a line of text rather than a record. */
+.table--compact td { height: 36px; padding: 5px 10px; }
+
 .numeric-data { font-variant-numeric: tabular-nums; }
 .table-secondary { color: var(--fg-muted); display: block; font-size: var(--type-xs); margin-top: 3px; max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
 .table-action { font-weight: 600; }
@@ -6964,6 +6971,78 @@ button.knowledge-manager__row:hover { background: var(--bg-canvas); }
 }
 
 @media (max-width: 760px) {
+  /* Card mode. Below the compact breakpoint a table row becomes a card and
+     every labelled cell prints its column name above its value; the first and
+     last labelled cells span the card as its title and its action row. One
+     implementation, shared by every table that opts in with .table--cards and
+     by the knowledge-manager rows, which are a table in everything but
+     markup.
+
+     The class is doubled throughout so the mode outranks what a table declares
+     for the desktop: a module's own `.table { min-width: 970px }` and the
+     per-table `:nth-child` column widths are both one class, and a card that
+     lost to either would keep a horizontal scroll or a 30% column. */
+  .table--cards.table--cards {
+    display: block;
+    min-width: 0;
+    table-layout: auto;
+    width: 100%;
+  }
+  .table--cards.table--cards thead {
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    height: 1px;
+    overflow: hidden;
+    position: absolute;
+    white-space: nowrap;
+    width: 1px;
+  }
+  .table--cards.table--cards tbody {
+    display: grid;
+    gap: var(--space-2);
+    min-width: 0;
+    padding: var(--space-2);
+    width: 100%;
+  }
+  .table--cards.table--cards tr {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 9px;
+  }
+  .table--cards.table--cards td,
+  .table--cards.table--cards td:nth-child(n) {
+    border: 0;
+    display: flex;
+    gap: var(--space-1);
+    height: auto;
+    min-width: 0;
+    padding: 7px;
+    white-space: normal;
+    width: auto;
+  }
+
+  /* Only a labelled cell stacks: the column name sits above the value. A cell
+     with no data-label carries a single element -- a favourite toggle, an
+     action row, a colspan empty state -- and keeps the default row flow. */
+  .table--cards.table--cards td[data-label] { flex-direction: column; }
+  .table--cards.table--cards tbody tr:hover td { background: transparent; }
+  .table--cards td[data-label]::before,
+  .knowledge-manager__row > span[data-label]::before {
+    color: var(--fg-muted);
+    content: attr(data-label);
+    font-size: var(--type-xxs);
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .table--cards.table--cards td[colspan],
+  .table--cards.table--cards td[data-label]:first-child,
+  .table--cards.table--cards td[data-label]:last-child { grid-column: 1 / -1; }
+  .table--cards.table--cards td[data-label]:first-child { border-bottom: 1px solid var(--border-subtle); padding-bottom: 10px; }
+  .table--cards.table--cards td[data-label]:last-child { border-top: 1px solid var(--border-subtle); padding-top: 10px; }
+
   .product-bar {
     height: calc(36px + env(safe-area-inset-top));
     padding-top: env(safe-area-inset-top);
@@ -7071,7 +7150,7 @@ button.knowledge-manager__row:hover { background: var(--bg-canvas); }
   .app-launcher-grid { grid-template-columns: 1fr; }
   .app-launch-card { border-bottom: 1px solid var(--border-subtle); border-right: 0; min-height: 91px; }
   .recent-searches-table { min-width: 680px; }
-  .responsive-table-wrap { background: linear-gradient(to right, transparent calc(100% - 16px), rgb(39 116 155 / 9%)); }
+  .table-wrap { background: linear-gradient(to right, transparent calc(100% - 16px), rgb(39 116 155 / 9%)); }
 
   .admin-mobile-section-picker { background: var(--bg-surface); border: 1px solid var(--border); display: grid; gap: 5px; margin-bottom: 10px; padding: 10px; }
   .admin-mobile-section-picker label { color: var(--fg-muted); font-size: var(--type-xs); font-weight: 700; text-transform: uppercase; }
@@ -7097,14 +7176,6 @@ button.knowledge-manager__row:hover { background: var(--bg-canvas); }
   .knowledge-manager__row > span:first-child { grid-column: 1 / -1; }
   .knowledge-manager__row > span:nth-child(3) { justify-self: end; }
   .knowledge-manager__row > span[data-label] { display: grid; gap: 3px; min-width: 0; }
-  .knowledge-manager__row > span[data-label]::before {
-    color: var(--fg-muted);
-    content: attr(data-label);
-    font-size: var(--type-xxs);
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-  }
   .knowledge-manager__detail { padding: 13px; }
   .knowledge-manager__status { grid-template-columns: auto minmax(0, 1fr); }
   .knowledge-manager__status > button { grid-column: 1 / -1; min-height: 42px; width: 100%; }
@@ -7167,7 +7238,7 @@ button.knowledge-manager__row:hover { background: var(--bg-canvas); }
   .collector-card dl div:nth-child(2) { border-right: 0; }
   .collector-card footer { grid-template-columns: 1fr auto; }
   .collector-card footer button { grid-column: 1 / -1; min-height: 39px; }
-  .token-section .product-table { min-width: 650px; }
+  .token-section .table { min-width: 650px; }
   .user-row { grid-template-columns: auto minmax(0, 1fr) auto; }
   .user-row > b { display: none; }
   .permission-grid { grid-template-columns: 1fr; }
@@ -7212,61 +7283,8 @@ button.knowledge-manager__row:hover { background: var(--bg-canvas); }
   .live-jobs-text-filter input,
   .live-jobs-app-filter select { font-size: var(--type-xl); height: 42px; width: 100%; }
   .live-jobs-table-wrap { background: none; overflow: visible; }
-  .live-jobs-table,
-  .backend-history-table { display: block; min-width: 0; table-layout: auto; }
-  .live-jobs-table thead,
-  .backend-history-table thead {
-    clip: rect(0 0 0 0);
-    clip-path: inset(50%);
-    height: 1px;
-    overflow: hidden;
-    position: absolute;
-    white-space: nowrap;
-    width: 1px;
-  }
-  .live-jobs-table tbody,
-  .backend-history-table tbody { display: grid; gap: var(--space-2); padding: var(--space-2); }
-  .live-jobs-table tr,
-  .backend-history-table tr {
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    padding: 9px;
-  }
-  .live-jobs-table td,
-  .backend-history-table td,
-  .live-jobs-table.live-jobs-table td:nth-child(n),
-  .activity-table.backend-history-table td:nth-child(n) {
-    border: 0;
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-    height: auto;
-    min-width: 0;
-    padding: 7px;
-    white-space: normal;
-    width: auto;
-  }
-  .live-jobs-table td::before,
-  .backend-history-table td::before {
-    color: var(--fg-muted);
-    content: attr(data-label);
-    font-size: var(--type-xxs);
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-  }
-  .live-jobs-table td:first-child,
   .live-jobs-table td:nth-child(2),
-  .live-jobs-table td:last-child,
-  .backend-history-table td:first-child,
-  .backend-history-table td:nth-child(2),
-  .backend-history-table td:last-child { grid-column: 1 / -1; }
-  .live-jobs-table td:first-child,
-  .backend-history-table td:first-child { border-bottom: 1px solid var(--border-subtle); padding-bottom: 10px; }
-  .live-jobs-table td:last-child,
-  .backend-history-table td:last-child { border-top: 1px solid var(--border-subtle); padding-top: 9px; }
+  .backend-history-table td:nth-child(2) { grid-column: 1 / -1; }
   .live-job-spl { max-width: 100%; white-space: normal; }
   .live-job-progress { width: 100%; }
   .live-job-actions { justify-content: stretch; }
@@ -7509,7 +7527,7 @@ button.knowledge-manager__row:hover { background: var(--bg-canvas); }
   .search-mobile-trigger,
   .mobile-search-actions > button,
   .suite-primary-nav a,
-  .product-table .row-overflow,
+  .table .row-overflow,
   .result-tabs button,
   .chart-toggle button,
   .visualization-settings input,

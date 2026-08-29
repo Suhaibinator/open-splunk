@@ -512,8 +512,8 @@ export function WorkspaceDialogs({
           : historyDeleteState.status === "error" && historyDeleteState.error
             ? <p className={styles.actionError} role="alert">{historyDeleteState.error}</p>
             : null}
-        <div className={styles.historyTableScroll} data-testid="history-list">
-          <table className={styles.historyTable}>
+        <div className={`table-wrap ${styles.historyTableScroll}`} data-testid="history-list">
+          <table className={`table table--compact table--fixed table--cards ${styles.historyTable}`}>
             <thead>
               <tr><th scope="col">Search</th><th scope="col">Status</th><th scope="col">Results</th><th scope="col">Duration</th><th scope="col">Ran</th><th scope="col">Actions</th></tr>
             </thead>

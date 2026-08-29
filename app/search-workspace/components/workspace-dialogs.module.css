@@ -207,25 +207,12 @@
 
 .historyTableScroll {
   border: 1px solid var(--border);
-  max-width: 100%;
-  overflow-x: auto;
 }
 
+/* The table, its header, its hover and its card mode are the global .table
+   family in app/globals.css; this module carries only the column plan. */
 .historyTable {
-  border-collapse: collapse;
   min-width: 860px;
-  table-layout: fixed;
-  width: 100%;
-}
-
-.historyTable th {
-  background: var(--bg-subtle);
-  color: var(--fg-muted);
-  font-size: var(--type-xxs);
-  height: 34px;
-  padding: 0 10px;
-  text-align: left;
-  text-transform: uppercase;
 }
 
 .historyTable th:nth-child(1) { width: 34%; }
@@ -234,19 +221,6 @@
 .historyTable th:nth-child(4) { width: 9%; }
 .historyTable th:nth-child(5) { width: 12%; }
 .historyTable th:nth-child(6) { width: 26%; }
-
-.historyTable td {
-  border-top: 1px solid var(--border-subtle);
-  color: var(--fg-muted);
-  font-size: var(--type-xs);
-  height: 49px;
-  padding: 6px 10px;
-  vertical-align: middle;
-}
-
-.historyTable tbody tr:hover td {
-  background: var(--bg-raised);
-}
 
 .historyTable td code {
   display: block;
@@ -290,75 +264,10 @@
     overflow: visible;
   }
 
-  .historyTable {
-    border-collapse: separate;
-    display: block;
-    min-width: 0;
-    table-layout: auto;
-  }
-
-  .historyTable thead {
-    clip: rect(0 0 0 0);
-    clip-path: inset(50%);
-    height: 1px;
-    overflow: hidden;
-    position: absolute;
-    white-space: nowrap;
-    width: 1px;
-  }
-
-  .historyTable tbody {
-    display: grid;
-    gap: 10px;
-  }
-
-  .historyTable tr {
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    padding: 9px 10px;
-  }
-
-  .historyTable td {
-    border: 0;
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-    height: auto;
-    min-width: 0;
-    padding: 7px 5px;
+  /* Card cells read as a label above a value, so the numeric column stops
+     hugging the right edge. */
+  .numericCell {
     text-align: left;
-  }
-
-  .historyTable td::before {
-    color: var(--fg-muted);
-    content: attr(data-label);
-    font-size: var(--type-xxs);
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-  }
-
-  .historyTable td:first-child,
-  .historyTable td:last-child,
-  .historyTable td[colspan] {
-    grid-column: 1 / -1;
-  }
-
-  .historyTable td:first-child {
-    border-bottom: 1px solid var(--border-subtle);
-    padding-bottom: 10px;
-  }
-
-  .historyTable td:last-child {
-    border-top: 1px solid var(--border-subtle);
-    margin-top: 3px;
-    padding-top: 10px;
-  }
-
-  .historyTable td[colspan]::before {
-    display: none;
   }
 
   .historyTable td code,

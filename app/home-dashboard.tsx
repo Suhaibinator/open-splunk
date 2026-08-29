@@ -111,8 +111,8 @@ function BackendRecentSearches({
     content = <BackendResourceState kind="empty" title="No persisted search history" message="Completed, failed, or canceled searches for this app will appear here after the backend retains them." action={<Link href={contextualHref("/search/")}>Run a search</Link>} />;
   } else {
     content = (
-      <div className="responsive-table-wrap">
-        <table className="product-table recent-searches-table backend-home-history-table">
+      <div className="table-wrap">
+        <table className="table recent-searches-table backend-home-history-table">
           <caption className="sr-only">Recent persisted backend searches</caption>
           <thead><tr><th scope="col">Search</th><th scope="col">Results</th><th scope="col">Status</th><th scope="col">Last run</th></tr></thead>
           <tbody>{entries.map((entry) => {
@@ -237,8 +237,8 @@ export function HomeDashboard({ apiBaseUrl = "", dataMode }: HomeDashboardProps)
       {dataMode === "backend" ? <BackendRecentSearches apiBaseUrl={apiBaseUrl} preferredAppId={preferredAppId} /> : (
         <section className="suite-card recent-searches-card">
           <header className="suite-card-header"><div><h2>Preview recent searches</h2><p>Resume a deterministic sample investigation.</p></div><Link href="/activity/">View preview activity</Link></header>
-          <div className="responsive-table-wrap">
-            <table className="product-table recent-searches-table">
+          <div className="table-wrap">
+            <table className="table recent-searches-table">
               <thead><tr><th scope="col">Search</th><th scope="col">Results</th><th scope="col">Status</th><th scope="col">Last run</th></tr></thead>
               <tbody>{RECENT_SEARCHES.map((search) => (
                 <tr key={search.title}>

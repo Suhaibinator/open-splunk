@@ -305,8 +305,8 @@ function DemoReportsConsole() {
             <button type="button" onClick={resetFilters}>Clear all filters</button>
           </div>
         ) : (
-          <div className={styles.tableWrap}>
-            <table className={styles.table}>
+          <div className={`table-wrap ${styles.tableWrap}`}>
+            <table className={`table table--fixed table--cards ${styles.table}`}>
               <thead>
                 <tr>
                   <th scope="col"><span className="sr-only">Favorite</span></th>
