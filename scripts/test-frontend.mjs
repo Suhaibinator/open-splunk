@@ -12,6 +12,7 @@ const scriptTests = [
   "check-docs.test.mjs",
   "compile-protos.test.mjs",
   "css-invariants.test.mjs",
+  "css-token-sweep.test.mjs",
   "token-layer.test.mjs",
   "token-grammar.test.mjs",
   "safety-net.test.mjs",
