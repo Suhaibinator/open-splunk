@@ -146,7 +146,7 @@ func (d *Daemon) readInput(ctx context.Context, ir *inputRuntime, processed chan
 		if err != nil {
 			// A pipeline error is a configuration/logic fault, not a per-event
 			// rejection. Log and skip; do not stall the whole input.
-			d.log.Error("collector: processor pipeline failed", zap.String("input", ir.id), zap.Error(err))
+			d.log.Error("processor pipeline failed", zap.String("input", ir.id), zap.Error(err))
 			d.pipelineFailures.Add(1)
 			continue
 		}
@@ -179,13 +179,13 @@ func (d *Daemon) readInput(ctx context.Context, ir *inputRuntime, processed chan
 // errors can contain attacker-controlled JSON field names.
 func (d *Daemon) recordDecodeFailure(inputID string, src input.SourceRef, n int) {
 	d.decodeFailures.Add(1)
-	d.log.Warn("collector: skipping undecodable record",
+	d.log.Warn("skipping undecodable record",
 		zap.String("input", inputID),
 		zap.String("file_identity", src.Identity.String()),
 		zap.Uint64("start_offset", src.StartOffset),
 		zap.Uint64("end_offset", src.EndOffset),
 		zap.Uint64("line", src.LineNumber),
-		zap.Int("bytes", n),
+		zap.Int("record_bytes", n),
 		zap.String("reason", "decode_error"),
 	)
 }
@@ -265,10 +265,10 @@ func (d *Daemon) flush(ctx context.Context, b *pendingBatch) error {
 	for {
 		batch, err := d.queue.Append(b.events)
 		if err == nil {
-			d.log.Debug("collector: batch appended",
+			d.log.Debug("batch appended",
 				zap.Uint64("batch_sequence", batch.GetBatchSequence()),
 				zap.Int("events", len(b.events)),
-				zap.Int("bytes", b.bytes))
+				zap.Int("batch_bytes", b.bytes))
 			b.reset()
 			return nil
 		}
@@ -289,7 +289,7 @@ func (d *Daemon) flush(ctx context.Context, b *pendingBatch) error {
 			}
 			remaining := time.Until(graceDeadline)
 			if remaining <= 0 {
-				d.log.Warn("collector: queue full at shutdown; events left for re-read",
+				d.log.Warn("queue full at shutdown; events left for re-read",
 					zap.Int("events", len(b.events)))
 				b.reset()
 				// Cancellation is an explicit non-success result. In particular,
@@ -358,7 +358,7 @@ func (d *Daemon) flushTooLarge(ctx context.Context, b *pendingBatch) error {
 // deadLetterOversized records the single un-queueable event to the dead-letter
 // sink under BATCH_TOO_LARGE_FOR_QUEUE and counts it.
 func (d *Daemon) deadLetterOversized(b *pendingBatch) error {
-	d.log.Error("collector: event batch record exceeds max_queue_bytes; dead-lettering and dropping",
+	d.log.Error("event batch record exceeds max_queue_bytes; dead-lettering and dropping",
 		zap.Int("events", len(b.events)))
 	if d.deadLetter == nil {
 		return errors.New("collector: no dead-letter sink for event exceeding max_queue_bytes")
@@ -405,7 +405,7 @@ func (d *Daemon) advanceCheckpoints(b *pendingBatch) error {
 			// were later quarantined, restart could no longer fall back to the
 			// source. Leave the checkpoint behind; a later normally queued event
 			// will cover this drop, or it may be dead-lettered again after restart.
-			d.log.Warn("collector: deferring oversized-event checkpoint behind pending WAL",
+			d.log.Warn("deferring oversized-event checkpoint behind pending WAL",
 				zap.String("input", m.inputID),
 				zap.String("file_identity", m.identity.String()),
 				zap.Uint64("offset", m.offset))

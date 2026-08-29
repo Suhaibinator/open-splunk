@@ -219,7 +219,7 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 	// Plaintext transport sends the bearer token in cleartext; warn whenever TLS
 	// is disabled, even for loopback (config.Validate gates non-loopback use).
 	if !cfg.Server.TLS.Enabled {
-		logger.Warn("collector: TLS is disabled; the bearer token is sent to the server in cleartext",
+		logger.Warn("TLS is disabled; the bearer token is sent to the server in cleartext",
 			zap.String("address", cfg.Server.Address))
 	}
 	stateLock, err := acquireStateDirectoryLock(stateDir)
@@ -265,9 +265,9 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 	}
 	queueStats := queue.Stats()
 	if queueStats.QuarantinedSegments != 0 || queueStats.RecoveryWarning != "" {
-		logger.Warn("collector: WAL recovery retained quarantined data; operator inspection is required",
+		logger.Warn("WAL recovery retained quarantined data; operator inspection is required",
 			zap.Uint64("segments", queueStats.QuarantinedSegments),
-			zap.Uint64("bytes", queueStats.QuarantinedBytes),
+			zap.Uint64("quarantined_bytes", queueStats.QuarantinedBytes),
 			zap.String("recovery_warning", queueStats.RecoveryWarning),
 		)
 	}
@@ -293,9 +293,9 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 	if herr != nil || strings.TrimSpace(hostname) == "" ||
 		!validCollectorBoundaryText(hostname, collectorlimits.MaximumHostnameBytes, false) {
 		if herr != nil {
-			logger.Warn("collector: operating-system hostname is unavailable; using fallback")
+			logger.Warn("operating-system hostname is unavailable; using fallback")
 		} else {
-			logger.Warn("collector: operating-system hostname is invalid for the wire protocol; using fallback")
+			logger.Warn("operating-system hostname is invalid for the wire protocol; using fallback")
 		}
 		hostname = "unknown-host"
 	}
@@ -439,7 +439,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		go func(m input.Manager) {
 			defer inputWG.Done()
 			if err := m.Run(pipeCtx); err != nil {
-				d.log.Error("collector: input manager stopped", zap.Error(err))
+				d.log.Error("input manager stopped", zap.Error(err))
 			}
 		}(ir.manager)
 	}
@@ -474,13 +474,13 @@ func (d *Daemon) Run(ctx context.Context) error {
 		batcherDone = true
 		if isRealError(err) {
 			runErr = err
-			d.log.Error("collector: batcher terminated", zap.Error(err))
+			d.log.Error("batcher terminated", zap.Error(err))
 		}
 	case err := <-senderErrCh:
 		senderDone = true
 		if isRealError(err) {
 			runErr = err
-			d.log.Error("collector: sender terminated", zap.Error(err))
+			d.log.Error("sender terminated", zap.Error(err))
 		}
 	}
 

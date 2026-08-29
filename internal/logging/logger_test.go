@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"strings"
 	"syscall"
@@ -87,6 +89,32 @@ func TestNewJSONLoggerIsNamedStructuredAndFiltered(t *testing.T) {
 	}
 }
 
+// TestNewOmitsStacktraces pins the decision not to capture stacks. SRouter
+// logs every HTTP error, client 4xx included, at Error level, so enabling
+// zap.AddStacktrace(ErrorLevel) would attach a goroutine stack to every 404.
+func TestNewOmitsStacktraces(t *testing.T) {
+	t.Parallel()
+	var output bytes.Buffer
+	logger, err := New(Config{
+		Service: "open-splunk-test",
+		Level:   zapcore.InfoLevel,
+		Format:  FormatJSON,
+		Output:  zapcore.AddSync(&output),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger.Error("failed", zap.Error(errors.New("boom")))
+
+	var record map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(output.Bytes()), &record); err != nil {
+		t.Fatalf("decode JSON log %q: %v", output.String(), err)
+	}
+	if _, present := record["stacktrace"]; present {
+		t.Fatalf("error record carries a stacktrace: %#v", record)
+	}
+}
+
 func TestNewConsoleLogger(t *testing.T) {
 	t.Parallel()
 	var output bytes.Buffer
@@ -129,6 +157,16 @@ func (writer syncErrorWriter) Sync() error                     { return writer.e
 // on Linux, and /dev/null reports ENODEV on macOS; none of those mean buffered
 // output was lost, so Sync must report success. Release CI pipes stderr, so a
 // regression here fails `make release` after the work already succeeded.
+//
+// Every case here closes the *os.File it opened. A previous "descriptor closed
+// underneath the sink" case called syscall.Close on writer.Fd() and left the
+// *os.File unclosed on purpose; os.Pipe installs a runtime finalizer on that
+// file, so once it was collected the runtime closed the same fd NUMBER after
+// the kernel had already handed it to an unrelated open in another parallel
+// subtest, which then failed with "bad file descriptor". The EBADF branch of
+// isUnsyncableSink is covered deterministically by
+// TestSyncSuppressesOnlyUnsupportedTerminalErrors instead, and the "closed
+// file" case below still exercises a real descriptor.
 func TestSyncToleratesConsoleSinks(t *testing.T) {
 	t.Parallel()
 
@@ -179,26 +217,6 @@ func TestSyncToleratesConsoleSinks(t *testing.T) {
 		}
 	})
 
-	t.Run("descriptor closed underneath the sink", func(t *testing.T) {
-		t.Parallel()
-		reader, writer, err := os.Pipe()
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer reader.Close()
-		logger := newFileLogger(t, writer)
-		// Close the raw descriptor so the *os.File still looks open and the
-		// kernel answers the fsync with EBADF. The *os.File is deliberately
-		// left unclosed: the descriptor number can already have been reused by
-		// another parallel test, so closing it again would shut that sink.
-		if err := syscall.Close(int(writer.Fd())); err != nil {
-			t.Fatal(err)
-		}
-		if err := Sync(logger); err != nil {
-			t.Fatalf("Sync(closed descriptor) = %v, want nil", err)
-		}
-	})
-
 	t.Run("closed file", func(t *testing.T) {
 		t.Parallel()
 		reader, writer, err := os.Pipe()
@@ -229,6 +247,51 @@ func TestSyncPropagatesRealFlushFailures(t *testing.T) {
 		if err := Sync(logger); !errors.Is(err, expected) {
 			t.Fatalf("Sync(%v) = %v, want %v", expected, err, expected)
 		}
+	}
+}
+
+// TestSyncPropagatesFailuresFromFannedOutSinks pins the tree walk in
+// firstDurabilityFailure. zapcore.NewMultiWriteSyncer and zapcore.NewTee join
+// their per-sink errors with go.uber.org/multierr, whose aggregate implements
+// Unwrap() []error, so errors.Is on the aggregate matches when ANY constituent
+// matches. Testing the joined error directly would have reported success for a
+// console sink's EBADF while throwing away a file sink's EIO.
+func TestSyncPropagatesFailuresFromFannedOutSinks(t *testing.T) {
+	t.Parallel()
+
+	encoder := zapcore.NewJSONEncoder(zapcore.EncoderConfig{MessageKey: "msg"})
+
+	mixed := zap.New(zapcore.NewCore(
+		encoder,
+		zapcore.NewMultiWriteSyncer(
+			syncErrorWriter{err: syscall.EBADF},
+			syncErrorWriter{err: syscall.EIO},
+		),
+		zapcore.DebugLevel,
+	))
+	if err := Sync(mixed); !errors.Is(err, syscall.EIO) {
+		t.Fatalf("Sync(multi[EBADF, EIO]) = %v, want an error wrapping %v", err, syscall.EIO)
+	}
+
+	wrappedFailure := fmt.Errorf("sync audit log: %w", syscall.ENOSPC)
+	teeMixed := zap.New(zapcore.NewTee(
+		zapcore.NewCore(encoder, syncErrorWriter{err: syscall.EBADF}, zapcore.DebugLevel),
+		zapcore.NewCore(encoder, syncErrorWriter{err: wrappedFailure}, zapcore.DebugLevel),
+	))
+	if err := Sync(teeMixed); !errors.Is(err, syscall.ENOSPC) {
+		t.Fatalf("Sync(tee[EBADF, ENOSPC]) = %v, want an error wrapping %v", err, syscall.ENOSPC)
+	}
+
+	allUnsyncable := zap.New(zapcore.NewTee(
+		zapcore.NewCore(encoder, syncErrorWriter{err: syscall.EBADF}, zapcore.DebugLevel),
+		zapcore.NewCore(
+			encoder,
+			syncErrorWriter{err: &fs.PathError{Op: "sync", Path: "/dev/stderr", Err: syscall.EBADF}},
+			zapcore.DebugLevel,
+		),
+	))
+	if err := Sync(allUnsyncable); err != nil {
+		t.Fatalf("Sync(tee[EBADF, EBADF]) = %v, want nil", err)
 	}
 }
 

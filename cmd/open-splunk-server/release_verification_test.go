@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -44,6 +45,22 @@ func TestEmbeddedReleaseVerificationRejectsNilOutput(t *testing.T) {
 	}
 }
 
+func TestScrubOpenSplunkEnv(t *testing.T) {
+	t.Parallel()
+	got := scrubOpenSplunkEnv([]string{
+		"PATH=/usr/bin",
+		"OPEN_SPLUNK_SERVER_LOG_FORMAT=console",
+		"OPEN_SPLUNK_COLLECTOR_STATE_DIR=/tmp/state",
+		"OPEN_SPLUNK_TEST_VERIFY_PIPED_STDERR=1",
+		"malformed",
+		"HOME=/home/tester",
+	})
+	want := []string{"PATH=/usr/bin", "OPEN_SPLUNK_TEST_VERIFY_PIPED_STDERR=1", "HOME=/home/tester"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("scrubOpenSplunkEnv() = %q, want %q", got, want)
+	}
+}
+
 // verifyPipedStderrSubprocessEnv re-enters this test binary as the server
 // process under test.
 const verifyPipedStderrSubprocessEnv = "OPEN_SPLUNK_TEST_VERIFY_PIPED_STDERR"
@@ -70,7 +87,12 @@ func TestRunWithPipedStderrNeverFailsOnLoggerSync(t *testing.T) {
 		"-test.run=^TestRunWithPipedStderrNeverFailsOnLoggerSync$",
 		"-test.count=1",
 	)
-	command.Env = append(os.Environ(), verifyPipedStderrSubprocessEnv+"=1")
+	// runtime_options.go binds 33 OPEN_SPLUNK_SERVER_* variables (and the
+	// collector binds its own OPEN_SPLUNK_COLLECTOR_* set). Inheriting one from
+	// a developer shell or a CI job would change what the child does - a stray
+	// OPEN_SPLUNK_SERVER_LOG_FORMAT alone rewrites the stderr this test reads -
+	// so the child gets a scrubbed environment plus the sentinel.
+	command.Env = append(scrubOpenSplunkEnv(os.Environ()), verifyPipedStderrSubprocessEnv+"=1")
 
 	// StdoutPipe and StderrPipe hand the child ends of an os.Pipe, which is
 	// exactly the descriptor type that makes fsync fail.
@@ -108,14 +130,53 @@ func TestRunWithPipedStderrNeverFailsOnLoggerSync(t *testing.T) {
 	}
 
 	// Without the embedded payload the child exits 1 on the release manifest.
-	// With it, verification succeeds and the child must exit 0.
-	releaseAvailable := !strings.Contains(stderr.String(), "open embedded release")
-	if releaseAvailable && exitCode != 0 {
+	// With it, writeEmbeddedReleaseVerification prints the identity block to
+	// stdout and the child must exit 0. Keying off that block rather than off
+	// the absence of an error marker also catches the opposite failure: a
+	// zero exit with no verification output would mean the flag silently did
+	// nothing.
+	verified := strings.Contains(stdout.String(), "source_revision=") &&
+		strings.Contains(stdout.String(), "ui_sha256=")
+	if verified && exitCode != 0 {
 		t.Fatalf(
 			"verification succeeded but exit code = %d (stderr: %s)",
 			exitCode,
 			stderr.String(),
 		)
 	}
-	t.Logf("child exit=%d embedded release available=%v", exitCode, releaseAvailable)
+	if exitCode == 0 && !verified {
+		t.Fatalf(
+			"child exited 0 without printing the verification identity block (stdout: %q, stderr: %s)",
+			stdout.String(),
+			stderr.String(),
+		)
+	}
+	if !verified && !strings.Contains(stderr.String(), "open embedded release") {
+		t.Fatalf(
+			"child failed for an unexpected reason: exit=%d stdout=%q stderr=%s",
+			exitCode,
+			stdout.String(),
+			stderr.String(),
+		)
+	}
+	t.Logf("child exit=%d embedded release verified=%v", exitCode, verified)
+}
+
+// scrubOpenSplunkEnv removes every Open Splunk runtime binding from an
+// inherited environment while keeping the rest (PATH, HOME, GOCOVERDIR, the
+// Go toolchain's own variables) intact.
+func scrubOpenSplunkEnv(environment []string) []string {
+	scrubbed := make([]string, 0, len(environment))
+	for _, binding := range environment {
+		name, _, found := strings.Cut(binding, "=")
+		if !found {
+			continue
+		}
+		if strings.HasPrefix(name, "OPEN_SPLUNK_SERVER_") ||
+			strings.HasPrefix(name, "OPEN_SPLUNK_COLLECTOR_") {
+			continue
+		}
+		scrubbed = append(scrubbed, binding)
+	}
+	return scrubbed
 }

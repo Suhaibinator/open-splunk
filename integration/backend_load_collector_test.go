@@ -149,7 +149,7 @@ func assertBackendLoadPendingWAL(
 func assertBackendLoadCollectorDiagnostics(t *testing.T, logs, plaintextToken string) {
 	t.Helper()
 	for _, forbidden := range []string{
-		"collector: skipping undecodable record",
+		"skipping undecodable record",
 		"dead-lettering and dropping",
 		"dead-letter write failed",
 	} {

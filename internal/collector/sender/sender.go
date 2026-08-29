@@ -256,7 +256,7 @@ func New(opts Options, queue wal.Queue, deadLetter DeadLetterSink, reporter Stat
 	if queueStats.QuarantinedSegments > 0 {
 		logger.Error("collector WAL recovery quarantined durable segments",
 			zap.Uint64("segments", queueStats.QuarantinedSegments),
-			zap.Uint64("bytes", queueStats.QuarantinedBytes),
+			zap.Uint64("quarantined_bytes", queueStats.QuarantinedBytes),
 			zap.String("recovery_warning", queueStats.RecoveryWarning))
 	}
 
