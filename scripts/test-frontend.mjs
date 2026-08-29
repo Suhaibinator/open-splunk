@@ -14,6 +14,7 @@ const scriptTests = [
   "materialize-git-snapshot.test.mjs",
   "run-go-race-shard.test.mjs",
   "run-development.test.mjs",
+  "serve-static.test.mjs",
   "build-release.test.mjs",
   "build-oci.test.mjs",
 ];
