@@ -1,28 +1,8 @@
+/* Every colour the application uses is declared once, in the token layer. */
+@import url("./styles/tokens-color.css");
+
+/* Non-colour tokens still awaiting their own file; see docs/theming.md. */
 :root {
-  color-scheme: light;
-  --black: #161b1f;
-  --product-bar: #1e252b;
-  --app-bar: #3f464c;
-  --app-bar-hover: #4b535a;
-  --canvas: #f6f6f4;
-  --surface: #ffffff;
-  --surface-subtle: #f2f3f3;
-  --surface-raised: #fbfbfa;
-  --border: #cfd4d7;
-  --border-dark: #aeb6bb;
-  --text: #28343d;
-  --text-strong: #19252d;
-  --muted: #64717a;
-  --faint: #89949b;
-  --green: #477f2b;
-  --green-strong: #376a20;
-  --green-soft: #e8f2e1;
-  --blue: #2878a8;
-  --blue-soft: #e8f3f9;
-  --orange: #d97a23;
-  --red: #c93c37;
-  --red-soft: #fff0ee;
-  --yellow: #d2a600;
   --shadow: 0 10px 30px rgb(18 29 36 / 18%), 0 2px 7px rgb(18 29 36 / 12%);
   --font-sans: Arial, Helvetica, sans-serif;
   --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;

@@ -24,6 +24,10 @@ import { expectComponentScreenshot, settleVisualPage } from "./visual-harness";
  */
 
 const globalStylesheet = path.join(__dirname, "..", "..", "app", "globals.css");
+// `addStyleTag` injects the file's characters into a document with no base URL,
+// so the `@import` at the top of globals.css cannot resolve. The token layer is
+// therefore injected first, exactly as the cascade orders it in the browser.
+const colourTokenStylesheet = path.join(__dirname, "..", "..", "app", "styles", "tokens-color.css");
 
 /** Matches `STATS_SPARKLINE_WIDTH`/`HEIGHT` in the statistics panel. */
 const SPARKLINE_WIDTH = 128;
@@ -53,6 +57,7 @@ function sparklineMarkup(): string {
 
 test("the statistics sparkline renders its stroke, caps, and gaps", async ({ page }) => {
   await page.setContent(`<main>${sparklineMarkup()}</main>`);
+  await page.addStyleTag({ path: colourTokenStylesheet });
   await page.addStyleTag({ path: globalStylesheet });
   const sparkline = page.locator(".statistics-sparkline");
   await expect(sparkline).toBeVisible();
