@@ -12,6 +12,10 @@ import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 
 const globalStylesheet = path.join(__dirname, "..", "..", "app", "globals.css");
+// `addStyleTag` injects the file's characters into a document with no base URL,
+// so the `@import` at the top of globals.css cannot resolve. The token layer is
+// therefore injected first, exactly as the cascade orders it in the browser.
+const colourTokenStylesheet = path.join(__dirname, "..", "..", "app", "styles", "tokens-color.css");
 
 const COMPACT_WIDTH = 980;
 const MOBILE_WIDTH = 760;
@@ -21,6 +25,7 @@ const DESKTOP_WIDTH = 1280;
 async function mount(page: Page, markup: string, width: number): Promise<void> {
   await page.setViewportSize({ height: 900, width });
   await page.setContent(`<main>${markup}</main>`);
+  await page.addStyleTag({ path: colourTokenStylesheet });
   await page.addStyleTag({ path: globalStylesheet });
 }
 
@@ -399,5 +404,158 @@ test.describe("activity job table contracts", () => {
 
     // The wrapper stops scrolling horizontally once rows become cards.
     await expect(page.locator(".live-jobs-table-wrap")).toHaveCSS("overflow-x", "visible");
+  });
+});
+
+// Colour-token contracts. The two-tier layer in `app/styles/tokens-color.css`
+// is only worth having if it resolves: a semantic token pointing at a primitive
+// nothing declares yields an invalid value, and the browser falls back to
+// `unset` -- black text on a transparent ground -- rather than failing a build.
+// Each token is therefore resolved through a real element.
+
+/** Resolves `var(--name)` for each token, as the browser computes it. */
+async function resolveTokens(page: Page, names: readonly string[]): Promise<string[]> {
+  return page.evaluate((tokens) => tokens.map((token) => {
+    const probe = document.createElement("span");
+    probe.style.color = `var(${token})`;
+    document.body.append(probe);
+    const value = globalThis.getComputedStyle(probe).color;
+    probe.remove();
+    return value;
+  }), names);
+}
+
+// Every pre-refactor `:root` colour and the value it carried before the token
+// layer existed. The aliases now reach it through a semantic token and a
+// primitive, and drift anywhere along that chain moves pixels the page
+// baselines catch only where a page happens to use the token.
+const LEGACY_COLOUR_TOKENS: ReadonlyArray<readonly [string, string]> = [
+  ["--black", "rgb(22, 27, 31)"],
+  ["--product-bar", "rgb(30, 37, 43)"],
+  ["--app-bar", "rgb(63, 70, 76)"],
+  ["--app-bar-hover", "rgb(75, 83, 90)"],
+  ["--canvas", "rgb(246, 246, 244)"],
+  ["--surface", "rgb(255, 255, 255)"],
+  ["--surface-subtle", "rgb(242, 243, 243)"],
+  ["--surface-raised", "rgb(251, 251, 250)"],
+  ["--border", "rgb(207, 212, 215)"],
+  ["--border-dark", "rgb(174, 182, 187)"],
+  ["--text", "rgb(40, 52, 61)"],
+  ["--text-strong", "rgb(25, 37, 45)"],
+  ["--muted", "rgb(100, 113, 122)"],
+  ["--faint", "rgb(137, 148, 155)"],
+  ["--green", "rgb(71, 127, 43)"],
+  ["--green-strong", "rgb(55, 106, 32)"],
+  ["--green-soft", "rgb(232, 242, 225)"],
+  ["--blue", "rgb(40, 120, 168)"],
+  ["--blue-soft", "rgb(232, 243, 249)"],
+  ["--orange", "rgb(217, 122, 35)"],
+  ["--red", "rgb(201, 60, 55)"],
+  ["--red-soft", "rgb(255, 240, 238)"],
+  ["--yellow", "rgb(210, 166, 0)"],
+];
+
+const SEMANTIC_COLOUR_TOKENS: readonly string[] = [
+  "--bg-canvas",
+  "--bg-surface",
+  "--bg-subtle",
+  "--bg-raised",
+  "--bg-inverse",
+  "--fg-text",
+  "--fg-strong",
+  "--fg-muted",
+  "--fg-faint",
+  "--fg-inverse",
+  "--fg-link",
+  "--border",
+  "--border-strong",
+  "--border-focus",
+  "--accent",
+  "--accent-hover",
+  "--accent-soft",
+  "--status-success",
+  "--status-success-soft",
+  "--status-info",
+  "--status-info-soft",
+  "--status-warning",
+  "--status-warning-soft",
+  "--status-error",
+  "--status-error-soft",
+  "--status-neutral",
+  "--status-neutral-soft",
+  "--level-info",
+  "--level-warn",
+  "--level-error",
+  "--level-debug",
+  "--chart-series-1",
+  "--chart-series-2",
+  "--chart-series-3",
+  "--chart-series-4",
+  "--chart-series-5",
+  "--chart-series-6",
+  "--chart-series-7",
+  "--chart-series-8",
+  "--chart-series-9",
+  "--chart-series-10",
+  "--chart-series-11",
+  "--chart-series-12",
+  "--chrome-bar",
+  "--chrome-appbar",
+  "--chrome-hover",
+  "--highlight",
+  "--selection",
+  "--focus-ring",
+];
+
+test.describe("colour token contracts", () => {
+  test("every legacy alias resolves to the value it carried before the token layer", async ({ page }) => {
+    await mount(page, "", DESKTOP_WIDTH);
+
+    const resolved = await resolveTokens(page, LEGACY_COLOUR_TOKENS.map(([name]) => name));
+    expect(resolved).toEqual(LEGACY_COLOUR_TOKENS.map(([, value]) => value));
+  });
+
+  test("every semantic token resolves to a real colour", async ({ page }) => {
+    await mount(page, "", DESKTOP_WIDTH);
+
+    const resolved = await resolveTokens(page, SEMANTIC_COLOUR_TOKENS);
+    // `unset` on `color` inherits the document default: opaque black on a bare
+    // fixture, which is exactly what a broken var() chain produces. No semantic
+    // token is meant to be pure black, so it doubles as the sentinel.
+    const unresolved = SEMANTIC_COLOUR_TOKENS.filter((_, index) => (
+      resolved[index] === undefined
+      || resolved[index] === "rgb(0, 0, 0)"
+      || resolved[index] === "rgba(0, 0, 0, 0)"
+    ));
+    expect(unresolved).toEqual([]);
+    // Distinct roles must not have collapsed onto one primitive by accident.
+    expect(new Set(resolved).size).toBeGreaterThan(SEMANTIC_COLOUR_TOKENS.length / 2);
+  });
+
+  test("the dark theme restates the semantic tier and is inert until it is selected", async ({ page }) => {
+    await mount(page, "", DESKTOP_WIDTH);
+
+    const roles = ["--bg-canvas", "--fg-text", "--border", "--chrome-bar"];
+    const light = await resolveTokens(page, roles);
+    expect(light).toEqual([
+      "rgb(246, 246, 244)",
+      "rgb(40, 52, 61)",
+      "rgb(207, 212, 215)",
+      "rgb(30, 37, 43)",
+    ]);
+
+    // Nothing sets `data-theme` yet, so the dark block must be unreachable in
+    // the shipped render. Selecting it here proves it is wired correctly
+    // without letting it near a screenshot baseline.
+    await page.evaluate(() => document.documentElement.setAttribute("data-theme", "dark"));
+    const dark = await resolveTokens(page, roles);
+    for (const [index, role] of roles.entries()) {
+      expect(dark[index], `${role} is unchanged in the dark theme`).not.toEqual(light[index]);
+    }
+
+    // Removing the attribute restores the light values, so the theme block
+    // overrides tier 2 alone and leaves the palette underneath it untouched.
+    await page.evaluate(() => document.documentElement.removeAttribute("data-theme"));
+    expect(await resolveTokens(page, roles)).toEqual(light);
   });
 });
