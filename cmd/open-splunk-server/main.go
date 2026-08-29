@@ -145,11 +145,13 @@ func run() int {
 	if runErr != nil {
 		logger.Error("server stopped with error", zap.Error(runErr))
 	}
-	syncErr := logging.Sync(logger)
-	if syncErr != nil {
+	// Flushing the process logger is best effort. The requested work has
+	// already finished by this point, so a sink that refuses to flush is
+	// reported on stderr but must not turn a successful run into a failure.
+	if syncErr := logging.Sync(logger); syncErr != nil {
 		fmt.Fprintf(os.Stderr, "sync server logger: %v\n", syncErr)
 	}
-	if runErr != nil || syncErr != nil {
+	if runErr != nil {
 		return 1
 	}
 	return 0

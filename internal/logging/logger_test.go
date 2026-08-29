@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
+	"os"
 	"strings"
 	"syscall"
 	"testing"
@@ -122,12 +124,127 @@ type syncErrorWriter struct {
 func (writer syncErrorWriter) Write(value []byte) (int, error) { return len(value), nil }
 func (writer syncErrorWriter) Sync() error                     { return writer.err }
 
+// TestSyncToleratesConsoleSinks covers the real descriptors a process logger is
+// pointed at in production. fsync on a pipe reports EBADF on macOS and EINVAL
+// on Linux, and /dev/null reports ENODEV on macOS; none of those mean buffered
+// output was lost, so Sync must report success. Release CI pipes stderr, so a
+// regression here fails `make release` after the work already succeeded.
+func TestSyncToleratesConsoleSinks(t *testing.T) {
+	t.Parallel()
+
+	newFileLogger := func(t *testing.T, file *os.File) *zap.Logger {
+		t.Helper()
+		logger, err := New(Config{
+			Service: "open-splunk-test",
+			Level:   zapcore.InfoLevel,
+			Format:  FormatJSON,
+			Output:  zapcore.AddSync(file),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return logger
+	}
+
+	t.Run("pipe write end", func(t *testing.T) {
+		t.Parallel()
+		reader, writer, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer reader.Close()
+		defer writer.Close()
+		// Drain the pipe so a logged record cannot block on the 64 KiB buffer.
+		go func() { _, _ = io.Copy(io.Discard, reader) }()
+
+		logger := newFileLogger(t, writer)
+		logger.Info("written to a pipe")
+		if err := Sync(logger); err != nil {
+			t.Fatalf("Sync(pipe) = %v, want nil", err)
+		}
+	})
+
+	t.Run("dev null", func(t *testing.T) {
+		t.Parallel()
+		devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer devNull.Close()
+
+		logger := newFileLogger(t, devNull)
+		logger.Info("written to /dev/null")
+		if err := Sync(logger); err != nil {
+			t.Fatalf("Sync(%s) = %v, want nil", os.DevNull, err)
+		}
+	})
+
+	t.Run("descriptor closed underneath the sink", func(t *testing.T) {
+		t.Parallel()
+		reader, writer, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer reader.Close()
+		logger := newFileLogger(t, writer)
+		// Close the raw descriptor so the *os.File still looks open and the
+		// kernel answers the fsync with EBADF. The *os.File is deliberately
+		// left unclosed: the descriptor number can already have been reused by
+		// another parallel test, so closing it again would shut that sink.
+		if err := syscall.Close(int(writer.Fd())); err != nil {
+			t.Fatal(err)
+		}
+		if err := Sync(logger); err != nil {
+			t.Fatalf("Sync(closed descriptor) = %v, want nil", err)
+		}
+	})
+
+	t.Run("closed file", func(t *testing.T) {
+		t.Parallel()
+		reader, writer, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer reader.Close()
+		logger := newFileLogger(t, writer)
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := Sync(logger); err != nil {
+			t.Fatalf("Sync(closed file) = %v, want nil", err)
+		}
+	})
+}
+
+// TestSyncPropagatesRealFlushFailures keeps the suppression narrow: a sink that
+// loses output must still fail.
+func TestSyncPropagatesRealFlushFailures(t *testing.T) {
+	t.Parallel()
+	for _, expected := range []error{syscall.EIO, syscall.ENOSPC, errors.New("flush failed")} {
+		logger := zap.New(zapcore.NewCore(
+			zapcore.NewJSONEncoder(zapcore.EncoderConfig{MessageKey: "msg"}),
+			syncErrorWriter{err: expected},
+			zapcore.DebugLevel,
+		))
+		if err := Sync(logger); !errors.Is(err, expected) {
+			t.Fatalf("Sync(%v) = %v, want %v", expected, err, expected)
+		}
+	}
+}
+
 func TestSyncSuppressesOnlyUnsupportedTerminalErrors(t *testing.T) {
 	t.Parallel()
 	if err := Sync(nil); err != nil {
 		t.Fatalf("Sync(nil) = %v", err)
 	}
-	for _, expected := range []error{syscall.EINVAL, syscall.ENOTTY} {
+	for _, expected := range []error{
+		syscall.EINVAL,
+		syscall.ENOTTY,
+		syscall.EBADF,
+		syscall.ENODEV,
+		syscall.ENOTSUP,
+		os.ErrClosed,
+	} {
 		logger := zap.New(zapcore.NewCore(
 			zapcore.NewJSONEncoder(zapcore.EncoderConfig{MessageKey: "msg"}),
 			syncErrorWriter{err: expected},
