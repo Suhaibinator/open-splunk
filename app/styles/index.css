@@ -1,15 +1,33 @@
 /*
- * The token layer's single entry point.
+ * The styling layer's single entry point.
  *
- * `app/layout.tsx` imports this file and nothing else from `app/styles`, so
- * adding a token file is a one-line edit here rather than a change to a React
- * component, and the cascade order that the layer depends on -- primitives,
- * then semantics, then the application stylesheet -- is written in CSS, where
- * the cascade actually lives, instead of being implied by JavaScript import
- * order.
+ * `app/layout.tsx` imports this file and nothing else, so adding a stylesheet
+ * is a one-line edit here rather than a change to a React component, and the
+ * cascade order the layer depends on -- primitives, then semantics, then the
+ * shared application rules, then the feature stylesheets that override them --
+ * is written in CSS, where the cascade actually lives, instead of being implied
+ * by JavaScript import order or by the bundler's chunking.
  *
  * `@import` is resolved at build time by the bundler's CSS pipeline, so this
  * indirection costs no extra request.
  */
 @import url("./tokens-color.css");
 @import url("./tokens-scale.css");
+
+/* The shared layer. */
+@import url("../globals.css");
+
+/*
+ * Feature stylesheets, colocated with the feature they dress.
+ *
+ * These come last because a feature rule and a shared rule regularly have the
+ * same specificity -- `.reports-table-wrap` against `.table-wrap` -- and the
+ * feature is the one meant to win. Until this phase they were CSS modules,
+ * which the bundler happened to emit after `globals.css`; the order was real
+ * and load-bearing, and nothing wrote it down.
+ */
+@import url("../analytics/analytics.css");
+@import url("../dashboards/operations-dashboard.css");
+@import url("../reports/reports.css");
+@import url("../search-workspace/components/workspace-dialogs.css");
+@import url("../search-workspace/panels/visualization-panel.css");

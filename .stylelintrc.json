@@ -1,5 +1,5 @@
 {
-  "//": "stylelint-config-standard supplies the correctness rules (unknown properties, duplicate selectors, deprecated values). Four of its stylistic opinions are turned off below because this repository deliberately does not follow them, so `npm run lint:css` reports only debt Phase 5 intends to clear and the flip from warnings to errors needs no disable comments. declaration-block-single-line-max-declarations and rule-empty-line-before: app/globals.css writes short rules on one line and groups them without blank lines on purpose. no-descending-specificity: a cascade built on breakpoint overrides trips it by design, and reordering the file to satisfy it would move pixels for no benefit. media-feature-range-notation: it contradicts media-feature-name-allowed-list below, which permits only max-width, so satisfying either would fail the other. The breakpoint canon is the four max-width steps documented in docs/theming.md; min-width is allowed for one shape only -- the touch-tablet guard `(pointer: coarse) and (min-width: 761px)`, which max-width cannot express -- and is pinned to 761px, the exclusive complement of the 760px step, so it can never drift away from the canon it mirrors.",
+  "//": "stylelint-config-standard supplies the correctness rules (unknown properties, duplicate selectors, deprecated values). Four of its stylistic opinions are turned off below because this repository deliberately does not follow them, so `npm run lint:css` reports only debt Phase 5 intends to clear and the flip from warnings to errors needs no disable comments. declaration-block-single-line-max-declarations and rule-empty-line-before: the stylesheets write short rules on one line and group them without blank lines on purpose. selector-class-pattern and selector-pseudo-class-no-unknown carry no CSS-module escape any more: Phase 4 left one styling lane, so every class is kebab-case or BEM with a feature prefix and `:global()`/`:local()` are no longer valid anywhere -- writing one is a mistake the lint now reports rather than a scoping tool. no-descending-specificity: a cascade built on breakpoint overrides trips it by design, and reordering the file to satisfy it would move pixels for no benefit. media-feature-range-notation: it contradicts media-feature-name-allowed-list below, which permits only max-width, so satisfying either would fail the other. The breakpoint canon is the four max-width steps documented in docs/theming.md; min-width is allowed for one shape only -- the touch-tablet guard `(pointer: coarse) and (min-width: 761px)`, which max-width cannot express -- and is pinned to 761px, the exclusive complement of the 760px step, so it can never drift away from the canon it mirrors.",
   "extends": "stylelint-config-standard",
   "defaultSeverity": "warning",
   "rules": {
@@ -23,17 +23,12 @@
     "no-descending-specificity": null,
     "rule-empty-line-before": null,
     "selector-class-pattern": [
-      "^(?:[a-z][a-z0-9]*(?:(?:__|--|-)[a-z0-9]+)*|[a-z][a-zA-Z0-9]*)$",
+      "^[a-z][a-z0-9]*(?:(?:__|--|-)[a-z0-9]+)*$",
       {
-        "message": "Expected kebab-case or BEM in app/globals.css, camelCase in a CSS module"
+        "message": "Expected kebab-case or BEM with a feature prefix; the repository has one styling lane and no CSS modules"
       }
     ],
-    "selector-pseudo-class-no-unknown": [
-      true,
-      {
-        "ignorePseudoClasses": ["global", "local"]
-      }
-    ]
+    "selector-pseudo-class-no-unknown": true
   },
   "overrides": [
     {

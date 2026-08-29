@@ -4,7 +4,6 @@ import type { ReactNode } from "react";
 import { OPEN_SPLUNK_SOURCE_REVISION } from "@/lib/build-identity";
 
 import "./styles/index.css";
-import "./globals.css";
 
 export const metadata: Metadata = {
   title: {

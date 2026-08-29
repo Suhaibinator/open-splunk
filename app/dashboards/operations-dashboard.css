@@ -1,16 +1,29 @@
-.headerActions {
+/* Operations dashboards.
+ *
+ * Colocated with app/dashboards/operations-dashboard.tsx and
+ * app/dashboards/backend-dashboard-manager.tsx, and loaded through
+ * app/styles/index.css. Every class is prefixed `operations-`: the prefix is
+ * the namespace that a CSS module's generated hash used to supply, and unlike
+ * the hash it is readable in the DOM and in a Playwright selector.
+ *
+ * Each section carries its own responsive overrides at the end of the section,
+ * largest breakpoint first, so a rule and the widths that change it are read
+ * together rather than at opposite ends of the file. */
+
+/* Page header and range picker */
+.operations-header-actions {
   align-items: flex-end !important;
   display: grid !important;
   grid-template-columns: auto auto;
   justify-items: end;
 }
 
-.rangePicker {
+.operations-range-picker {
   display: grid;
   gap: 3px;
 }
 
-.rangePicker > span {
+.operations-range-picker > span {
   color: var(--fg-muted);
   font-size: var(--type-xs);
   font-weight: 700;
@@ -18,7 +31,7 @@
   text-transform: uppercase;
 }
 
-.rangePicker select {
+.operations-range-picker select {
   appearance: none;
   background: var(--bg-surface)
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath fill='%23526068' d='M0 0h8L4 5z'/%3E%3C/svg%3E")
@@ -32,40 +45,69 @@
   padding: 0 28px 0 10px;
 }
 
-.rangePicker select:focus-visible,
-.serviceLink:focus-visible,
-.notableList a:focus-visible {
+/* One focus ring for the three keyboard targets this page adds: the range
+   select here, the service link and the notable-event links further down. */
+.operations-range-picker select:focus-visible,
+.operations-service-link:focus-visible,
+.operations-notable-list a:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
-.updateStatus {
+.operations-update-status {
   color: var(--fg-muted);
   font-size: var(--type-xs);
   grid-column: 1 / -1;
   line-height: 1.3;
 }
 
-.previewBadge {
+.operations-preview-badge {
   align-self: end;
 }
 
-.lineChart {
+@media (max-width: 760px) {
+  .operations-header-actions {
+    grid-template-columns: minmax(0, 1fr) auto;
+    justify-items: stretch;
+    width: 100%;
+  }
+
+  .operations-range-picker select {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .operations-update-status {
+    justify-self: start;
+  }
+}
+
+@media (max-width: 480px) {
+  .operations-header-actions {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .operations-range-picker {
+    grid-column: 1 / -1;
+  }
+}
+
+/* Latency line chart.
+   The chart itself is the shared TimeSeriesLineChart. This panel resizes it by
+   setting the custom properties that component's rules read, so nothing here
+   selects into the chart's own markup. */
+.operations-line-chart {
+  --chart-height: 282px;
+  --chart-plot-min-height: 235px;
+  --chart-stroke-width: 2;
+  --chart-x-axis-height: 34px;
+
   min-height: 320px;
   padding: var(--space-5) var(--space-5) var(--space-2) 13px;
   position: relative;
 }
 
-.lineChart :global(.time-series-chart) {
-  grid-template-rows: minmax(235px, 1fr) 34px;
-  height: 282px;
-}
-
-.lineChart :global(.time-series-chart__line) {
-  stroke-width: 2;
-}
-
-.chartUnit {
+.operations-chart-unit {
   color: var(--fg-faint);
   font-size: var(--type-xs);
   left: 13px;
@@ -73,18 +115,36 @@
   top: 8px;
 }
 
-.chartHint {
+.operations-chart-hint {
   color: var(--fg-faint);
   font-size: var(--type-xs);
   line-height: 1.35;
   margin: 3px 0 0 48px;
 }
 
-.volumeChart {
+@media (max-width: 760px) {
+  .operations-line-chart {
+    --chart-height: 250px;
+    --chart-plot-min-height: 205px;
+    --chart-x-axis-height: 42px;
+    --chart-x-axis-type: var(--type-xs);
+    --chart-y-axis-width: 38px;
+
+    min-height: 285px;
+    padding-inline: var(--space-2) var(--space-3);
+  }
+
+  .operations-chart-hint {
+    margin-left: 38px;
+  }
+}
+
+/* Event volume chart */
+.operations-volume-chart {
   padding: 13px 15px 9px;
 }
 
-.volumePlot {
+.operations-volume-plot {
   align-items: stretch;
   border: 0;
   border-bottom: 1px solid var(--border-strong);
@@ -97,7 +157,7 @@
   padding: 37px var(--space-1) 0;
 }
 
-.volumeBar {
+.operations-volume-bar {
   align-items: flex-end;
   appearance: none;
   background: transparent;
@@ -112,12 +172,12 @@
   position: relative;
 }
 
-.volumeBar:focus-visible {
+.operations-volume-bar:focus-visible {
   box-shadow: 0 0 0 2px rgb(47 120 158 / 45%);
   z-index: 3;
 }
 
-.volumeFill {
+.operations-volume-fill {
   background: var(--accent-bright);
   height: var(--bar-height);
   min-height: 5px;
@@ -126,13 +186,13 @@
   width: 100%;
 }
 
-.volumeBar:hover .volumeFill,
-.volumeBarActive .volumeFill {
+.operations-volume-bar:hover .operations-volume-fill,
+.operations-volume-bar--active .operations-volume-fill {
   background: var(--accent);
   filter: saturate(1.1);
 }
 
-.volumeTooltip {
+.operations-volume-tooltip {
   background: var(--bg-surface);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
@@ -153,24 +213,24 @@
   z-index: 5;
 }
 
-.volumeTooltip strong {
+.operations-volume-tooltip strong {
   border-bottom: 1px solid var(--border-subtle);
   font-size: var(--type-xs);
   padding-bottom: var(--space-1);
 }
 
-.tooltipStart {
+.operations-volume-tooltip--start {
   left: -3px;
   transform: none;
 }
 
-.tooltipEnd {
+.operations-volume-tooltip--end {
   left: auto;
   right: -3px;
   transform: none;
 }
 
-.volumeAxis {
+.operations-volume-axis {
   color: var(--fg-muted);
   display: flex;
   font-size: var(--type-xs);
@@ -178,21 +238,60 @@
   padding-top: 7px;
 }
 
-.volumeChart .chartHint {
+.operations-volume-chart .operations-chart-hint {
   margin-left: 0;
 }
 
-.donutFigure {
+@media (max-width: 760px) {
+  .operations-volume-chart {
+    overflow: visible;
+    padding-inline: 10px;
+  }
+
+  .operations-volume-plot,
+  .operations-volume-axis {
+    min-width: 0;
+  }
+
+  .operations-volume-plot {
+    gap: 2px;
+    padding-inline: 1px;
+  }
+
+  .operations-volume-bar {
+    min-width: 0;
+  }
+
+  .operations-volume-chart .operations-chart-hint {
+    position: static;
+    width: auto;
+  }
+}
+
+@media (max-width: 480px) {
+  .operations-volume-plot {
+    height: 196px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .operations-volume-fill {
+    transition: none;
+  }
+}
+
+/* Service breakdown and notable events */
+.operations-donut-figure {
   margin: 0;
 }
 
-.serviceLink {
+.operations-service-link {
   color: var(--fg-link);
   font-weight: 600;
   text-decoration: none;
 }
 
-.notableList a {
+.operations-notable-list a {
   color: var(--fg-text);
   font-size: var(--type-xs);
   font-weight: 600;
@@ -202,34 +301,42 @@
   white-space: nowrap;
 }
 
-.notableList a:hover,
-.serviceLink:hover {
+.operations-notable-list a:hover,
+.operations-service-link:hover {
   color: var(--status-info-strong);
   text-decoration: underline;
 }
 
-.stateMessage {
+@media (max-width: 760px) {
+  .operations-notable-list a {
+    overflow: visible;
+    white-space: normal;
+  }
+}
+
+/* Backend dashboard manager */
+.operations-state-message {
   color: var(--fg-muted);
   margin: 0;
   padding: 22px;
 }
 
-.createForm {
+.operations-create-form {
   align-items: end;
   display: flex;
   gap: var(--space-2);
 }
 
-.createForm label,
-.settingsGrid label,
-.panelFields label {
+.operations-create-form label,
+.operations-settings-grid label,
+.operations-panel-fields label {
   display: grid;
   gap: var(--space-1);
 }
 
-.createForm label > span,
-.settingsGrid label > span,
-.panelFields label > span {
+.operations-create-form label > span,
+.operations-settings-grid label > span,
+.operations-panel-fields label > span {
   color: var(--fg-muted);
   font-size: var(--type-xs);
   font-weight: 700;
@@ -237,11 +344,11 @@
   text-transform: uppercase;
 }
 
-.createForm input,
-.createForm select,
-.settingsGrid input,
-.panelFields input,
-.panelFields textarea {
+.operations-create-form input,
+.operations-create-form select,
+.operations-settings-grid input,
+.operations-panel-fields input,
+.operations-panel-fields textarea {
   background: var(--bg-surface);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
@@ -251,15 +358,15 @@
   padding: 6px var(--space-2);
 }
 
-.panelFields textarea {
+.operations-panel-fields textarea {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   resize: vertical;
 }
 
-.createForm button,
-.editorActions button,
-.panelToolbar button,
-.errorBanner button {
+.operations-create-form button,
+.operations-editor-actions button,
+.operations-panel-toolbar button,
+.operations-error-banner button {
   background: var(--status-info);
   border: 1px solid #226687;
   border-radius: var(--radius-sm);
@@ -271,50 +378,50 @@
   padding: 5px var(--space-3);
 }
 
-.createForm button:disabled,
-.editorActions button:disabled,
-.panelToolbar button:disabled {
+.operations-create-form button:disabled,
+.operations-editor-actions button:disabled,
+.operations-panel-toolbar button:disabled {
   cursor: not-allowed;
   opacity: 0.5;
 }
 
-.managerLayout {
+.operations-manager-layout {
   align-items: start;
   display: grid;
   gap: 14px;
   grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
 }
 
-.dashboardList {
+.operations-dashboard-list {
   overflow: hidden;
   position: sticky;
   top: 12px;
 }
 
-.dashboardList h2 {
+.operations-dashboard-list h2 {
   border-bottom: 1px solid var(--border);
   font-size: 13px;
   margin: 0;
   padding: var(--space-3);
 }
 
-.dashboardList p {
+.operations-dashboard-list p {
   color: var(--fg-muted);
   font-size: var(--type-sm);
   padding: 0 var(--space-3) var(--space-3);
 }
 
-.dashboardList ul {
+.operations-dashboard-list ul {
   list-style: none;
   margin: 0;
   padding: 0;
 }
 
-.dashboardList li + li {
+.operations-dashboard-list li + li {
   border-top: 1px solid var(--border-subtle);
 }
 
-.dashboardList li button {
+.operations-dashboard-list li button {
   background: var(--bg-surface);
   border: 0;
   color: var(--fg-text);
@@ -326,86 +433,86 @@
   width: 100%;
 }
 
-.dashboardList li button:hover,
-.dashboardList .selectedDashboard {
+.operations-dashboard-list li button:hover,
+.operations-dashboard-list .operations-dashboard-selected {
   background: var(--status-info-soft);
 }
 
-.dashboardList li button span {
+.operations-dashboard-list li button span {
   color: var(--fg-muted);
   font-size: var(--type-xs);
 }
 
-.dashboardEditor {
+.operations-dashboard-editor {
   display: grid;
   gap: 14px;
   min-width: 0;
 }
 
-.definitionEditor {
+.operations-definition-editor {
   padding-bottom: var(--space-3);
 }
 
-.settingsGrid,
-.panelFields {
+.operations-settings-grid,
+.operations-panel-fields {
   display: grid;
   gap: 10px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   padding: var(--space-3);
 }
 
-.editorActions {
+.operations-editor-actions {
   display: flex;
   gap: 6px;
 }
 
-.editorActions .dangerButton {
+.operations-editor-actions .operations-danger-button {
   background: var(--bg-surface);
   border-color: #b55252;
   color: #9c3535;
 }
 
-.panelToolbar {
+.operations-panel-toolbar {
   align-items: center;
   display: flex;
   justify-content: space-between;
 }
 
-.panelToolbar h2 {
+.operations-panel-toolbar h2 {
   font-size: var(--type-lg);
   margin: 0;
 }
 
-.livePanel {
+.operations-live-panel {
   min-width: 0;
 }
 
-.splField {
+.operations-spl-field {
   grid-column: 1 / -1;
 }
 
-.panelResult {
+.operations-panel-result {
   border-top: 1px solid var(--border);
   padding: var(--space-3);
 }
 
-.resultStatus,
-.resultError {
+.operations-result-status,
+.operations-result-error {
   color: var(--fg-muted);
   font-size: var(--type-sm);
   margin: 0 0 10px;
 }
 
-.resultError,
-.errorBanner {
+.operations-result-error,
+.operations-error-banner {
   color: #8e2f2f;
 }
 
-.errorBanner,
-.noticeBanner {
+.operations-error-banner,
+.operations-notice-banner {
   align-items: center;
-  border: 1px solid #dfb8b8;
   background: var(--status-error-soft);
+  border: 1px solid #dfb8b8;
   display: flex;
   font-size: var(--type-sm);
   justify-content: space-between;
@@ -413,121 +520,33 @@
   padding: var(--space-2) 10px;
 }
 
-.noticeBanner {
+.operations-notice-banner {
   background: var(--status-success-soft);
   border-color: #b9d6b2;
   color: var(--accent-hover);
 }
 
 @media (max-width: 760px) {
-  .volumeChart {
-    overflow: visible;
-  }
-
-  .volumePlot,
-  .volumeAxis {
-    min-width: 0;
-  }
-
-  .volumeBar {
-    min-width: 0;
-  }
-
-  .volumeChart .chartHint {
-    position: static;
-    width: auto;
-  }
-}
-
-@media (max-width: 760px) {
-  .headerActions {
-    grid-template-columns: minmax(0, 1fr) auto;
-    justify-items: stretch;
-    width: 100%;
-  }
-
-  .rangePicker select {
-    min-width: 0;
-    width: 100%;
-  }
-
-  .updateStatus {
-    justify-self: start;
-  }
-
-  .lineChart {
-    min-height: 285px;
-    padding-inline: var(--space-2) var(--space-3);
-  }
-
-  .lineChart :global(.time-series-chart) {
-    grid-template-columns: 38px minmax(0, 1fr);
-    grid-template-rows: minmax(205px, 1fr) 42px;
-    height: 250px;
-  }
-
-  .lineChart :global(.time-series-chart__x-axis) {
-    font-size: var(--type-xs);
-  }
-
-  .chartHint {
-    margin-left: 38px;
-  }
-
-  .volumeChart {
-    padding-inline: 10px;
-  }
-
-  .volumePlot {
-    gap: 2px;
-    padding-inline: 1px;
-  }
-
-  .notableList a {
-    overflow: visible;
-    white-space: normal;
-  }
-
-  .managerLayout {
+  .operations-manager-layout {
     grid-template-columns: 1fr;
   }
 
-  .dashboardList {
+  .operations-dashboard-list {
     position: static;
   }
 
-  .settingsGrid,
-  .panelFields {
+  .operations-settings-grid,
+  .operations-panel-fields {
     grid-template-columns: 1fr;
   }
 
-  .splField {
+  .operations-spl-field {
     grid-column: auto;
   }
 
-  .createForm {
+  .operations-create-form {
     align-items: stretch;
     flex-direction: column;
     width: 100%;
-  }
-}
-
-@media (max-width: 430px) {
-  .headerActions {
-    grid-template-columns: 1fr 1fr;
-  }
-
-  .rangePicker {
-    grid-column: 1 / -1;
-  }
-
-  .volumePlot {
-    height: 196px;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .volumeFill {
-    transition: none;
   }
 }
