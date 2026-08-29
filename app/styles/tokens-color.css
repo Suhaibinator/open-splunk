@@ -1,0 +1,11 @@
+/*
+ * PLACEHOLDER -- integrator: replace this whole file with the tokens-color.css
+ * written by the colour slice of Phase 1. It is checked in only so that the
+ * scale slice's worktree can resolve `@import "./tokens-color.css"` from
+ * app/styles/index.css and run the visual suite; it declares nothing, so it
+ * changes no pixel and no `var()` can resolve to it by accident.
+ *
+ * The colour tier belongs here: a primitive palette, then the semantic tokens
+ * that name what each colour is for, plus the dark-theme block that redefines
+ * only the semantic names. See docs/theming.md.
+ */

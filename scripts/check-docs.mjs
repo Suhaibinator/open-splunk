@@ -17,6 +17,7 @@ const ownedMarkdownPaths = Object.freeze([
   "docs/auditing.md",
   "docs/roadmap.md",
   "docs/releasing.md",
+  "docs/theming.md",
   "deploy/README.md",
   "integration/README.md",
   "scripts/README.md",
@@ -38,6 +39,7 @@ const canonicalDocumentationNames = Object.freeze([
   "auditing.md",
   "roadmap.md",
   "releasing.md",
+  "theming.md",
 ]);
 
 async function forEachSequential(values, visit) {

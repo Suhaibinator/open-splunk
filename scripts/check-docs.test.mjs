@@ -21,6 +21,7 @@ const ownedMarkdownPaths = [
   "docs/auditing.md",
   "docs/roadmap.md",
   "docs/releasing.md",
+  "docs/theming.md",
   "deploy/README.md",
   "integration/README.md",
   "scripts/README.md",
