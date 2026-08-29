@@ -14,7 +14,6 @@ import { searchLaunchHref } from "@/lib/search/launch-url";
 import { StatusLabel } from "../_components/status";
 
 import { BackendDashboardManager } from "./backend-dashboard-manager";
-import styles from "./operations-dashboard.module.css";
 
 const LATENCY_VALUES = [
   368, 412, 386, 447, 401, 462, 508, 476, 535, 492, 518, 451,
@@ -136,17 +135,17 @@ function VolumeBarChart({ points }: VolumeBarChartProps) {
   const maximum = Math.max(...points.map((point) => point.value), 1);
 
   return (
-    <div className={styles.volumeChart}>
-      <fieldset className={styles.volumePlot}>
+    <div className="operations-volume-chart">
+      <fieldset className="operations-volume-plot">
         <legend className="sr-only">Indexed events by time bucket</legend>
         {points.map((point, index) => {
           const isActive = activeIndex === index;
-          const edgeClass = index < 2 ? styles.tooltipStart : index > points.length - 3 ? styles.tooltipEnd : "";
+          const edgeClass = index < 2 ? "operations-volume-tooltip--start" : index > points.length - 3 ? "operations-volume-tooltip--end" : "";
           return (
             <button
               aria-describedby={isActive ? `${point.id}-tooltip` : undefined}
               aria-label={`${point.label}: ${NUMBER_FORMAT.format(point.value)} indexed events`}
-              className={`${styles.volumeBar} ${isActive ? styles.volumeBarActive : ""}`}
+              className={`operations-volume-bar ${isActive ? "operations-volume-bar--active" : ""}`}
               key={point.id}
               onBlur={() => setActiveIndex(null)}
               onClick={() => setActiveIndex(index)}
@@ -161,11 +160,11 @@ function VolumeBarChart({ points }: VolumeBarChartProps) {
               type="button"
             >
               <span
-                className={styles.volumeFill}
+                className="operations-volume-fill"
                 style={{ "--bar-height": `${Math.max(5, (point.value / maximum) * 100)}%` } as CSSProperties}
               >
                 {isActive ? (
-                  <span className={`${styles.volumeTooltip} ${edgeClass}`} id={`${point.id}-tooltip`} role="tooltip">
+                  <span className={`operations-volume-tooltip ${edgeClass}`} id={`${point.id}-tooltip`} role="tooltip">
                     <strong>{point.label}</strong>
                     <span>{NUMBER_FORMAT.format(point.value)} events</span>
                   </span>
@@ -175,8 +174,8 @@ function VolumeBarChart({ points }: VolumeBarChartProps) {
           );
         })}
       </fieldset>
-      <div className={styles.volumeAxis} aria-hidden="true"><span>{points[0]?.label}</span><span>{points.at(-1)?.label}</span></div>
-      <p className={styles.chartHint}>Hover, tap, or focus a bar. Use arrow keys to inspect adjacent buckets.</p>
+      <div className="operations-volume-axis" aria-hidden="true"><span>{points[0]?.label}</span><span>{points.at(-1)?.label}</span></div>
+      <p className="operations-chart-hint">Hover, tap, or focus a bar. Use arrow keys to inspect adjacent buckets.</p>
     </div>
   );
 }
@@ -219,15 +218,15 @@ function DemoOperationsDashboard() {
           <h1>Service overview</h1>
           <p>Preview production signals across the API, workers, and real-time services.</p>
         </div>
-        <div className={styles.headerActions}>
-          <label className={styles.rangePicker}>
+        <div className="operations-header-actions">
+          <label className="operations-range-picker">
             <span>Metrics range</span>
             <select value={rangeValue} onChange={(event) => setRangeValue(event.target.value as RangeValue)}>
               {RANGE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           </label>
-          <span className={`badge badge--outline ${styles.previewBadge}`}>Preview data</span>
-          <span className={styles.updateStatus}>Fixture timestamp: Jul 21, 4:00 PM · Range scopes request and latency metrics; service health is the current fixture.</span>
+          <span className="badge badge--outline operations-preview-badge">Preview data</span>
+          <span className="operations-update-status">Fixture timestamp: Jul 21, 4:00 PM · Range scopes request and latency metrics; service health is the current fixture.</span>
         </div>
       </header>
 
@@ -244,10 +243,10 @@ function DemoOperationsDashboard() {
             <div><h2>API latency</h2><p>p95 response duration over time</p></div>
             <Link href={fixtureSearchHref("index=gradethis duration_ms=* | stats p95(duration_ms) AS p95_ms BY path | sort -p95_ms")}>Open in Search</Link>
           </header>
-          <div className={styles.lineChart}>
-            <span className={styles.chartUnit}>milliseconds</span>
+          <div className="operations-line-chart">
+            <span className="operations-chart-unit">milliseconds</span>
             <TimeSeriesLineChart points={latency} seriesLabel="p95 latency (ms)" />
-            <p className={styles.chartHint}>Hover, tap, or focus the plot. Use arrow keys to inspect adjacent buckets.</p>
+            <p className="operations-chart-hint">Hover, tap, or focus the plot. Use arrow keys to inspect adjacent buckets.</p>
           </div>
         </section>
 
@@ -265,7 +264,7 @@ function DemoOperationsDashboard() {
             <Link href={fixtureSearchHref("index=gradethis level=ERROR | stats count by service")}>View events</Link>
           </header>
           <div className="service-breakdown">
-            <figure className={`donut-chart ${styles.donutFigure}`}><figcaption className="sr-only">Errors by service: gradethis-api 48.2%, notification-worker 27.4%, realtime-hub 16.1%, other 8.3%</figcaption><span><strong>{NUMBER_FORMAT.format(errorEvents)}</strong><small>errors</small></span></figure>
+            <figure className="donut-chart operations-donut-figure"><figcaption className="sr-only">Errors by service: gradethis-api 48.2%, notification-worker 27.4%, realtime-hub 16.1%, other 8.3%</figcaption><span><strong>{NUMBER_FORMAT.format(errorEvents)}</strong><small>errors</small></span></figure>
             <ol><li><i className="donut-color-1" /><span>gradethis-api</span><strong>48.2%</strong></li><li><i className="donut-color-2" /><span>notification-worker</span><strong>27.4%</strong></li><li><i className="donut-color-3" /><span>realtime-hub</span><strong>16.1%</strong></li><li><i className="donut-color-4" /><span>other</span><strong>8.3%</strong></li></ol>
           </div>
         </section>
@@ -280,7 +279,7 @@ function DemoOperationsDashboard() {
               <thead><tr><th scope="col">Service</th><th scope="col">Status</th><th scope="col">Requests</th><th scope="col">Error rate</th><th scope="col">p95 latency</th><th scope="col">Trend</th></tr></thead>
               <tbody>{SERVICES.map(([service, status, requests, errors, serviceLatency, trend]) => (
                 <tr key={service}>
-                  <td><Link className={styles.serviceLink} href={fixtureSearchHref(`index=gradethis service="${service}" | stats count p95(duration_ms) as p95_ms`)}>{service}</Link></td>
+                  <td><Link className="operations-service-link" href={fixtureSearchHref(`index=gradethis service="${service}" | stats count p95(duration_ms) as p95_ms`)}>{service}</Link></td>
                   <td><StatusLabel tone={status === "Healthy" ? "success" : "warning"}>{status}</StatusLabel></td>
                   <td>{requests}</td><td>{errors}</td><td>{serviceLatency}</td><td><span className={status === "Healthy" ? "sparkline-good" : "sparkline-warn"}>{trend}</span></td>
                 </tr>
@@ -294,7 +293,7 @@ function DemoOperationsDashboard() {
             <div><h2>Recent notable events</h2><p>Errors and elevated warnings</p></div>
             <Link href={fixtureSearchHref("index=gradethis (level=ERROR OR level=WARN) | sort -_time")}>All events</Link>
           </header>
-          <ol className={`notable-events ${styles.notableList}`}>
+          <ol className="notable-events operations-notable-list">
             {NOTABLE_EVENTS.map((event) => (
               <li key={event.message}>
                 <span className={`badge ${event.severity === "ERROR" ? "badge--error" : "badge--warning"}`}>{event.severity}</span>

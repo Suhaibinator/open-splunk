@@ -52,7 +52,7 @@
       ],
       "sites": [
         "app/_components/backend-resource-state.css :: .index-observability-controls label > span",
-        "app/search-workspace/components/workspace-dialogs.module.css :: .exportSummary dt"
+        "app/search-workspace/components/workspace-dialogs.css :: .workspace-dialog-export-summary dt"
       ],
       "why": "Uppercase label above a control. Same unclaimed form-control family as group 8."
     },
@@ -93,7 +93,7 @@
       ],
       "sites": [
         "app/activity/activity.css :: .history-action-notice button",
-        "app/reports/reports.module.css :: .actionNotice button"
+        "app/reports/reports.css :: .reports-action-notice button"
       ],
       "why": "Bare `button` descendant rule carrying two colour literals (`#557149`, `17px`) that scripts/css-literal-debt.json still records. Consolidating it means retiring those literals first."
     },
@@ -138,7 +138,7 @@
       ],
       "sites": [
         "app/activity/activity.css :: .live-jobs-text-filter, .live-jobs-app-filter",
-        "app/reports/reports.module.css :: .searchField"
+        "app/reports/reports.css :: .reports-search-field"
       ],
       "why": "Bordered search field. Same unclaimed form-control family as group 8, at the composed-field rather than the bare-input level."
     },
@@ -300,7 +300,7 @@
         "app/admin/admin.css :: .lookup-manager__contract p",
         "app/admin/admin.css :: .token-recovery-summary p",
         "app/admin/admin.css :: .token-reveal p",
-        "app/search-workspace/components/workspace-dialogs.module.css :: .exportSummary p"
+        "app/search-workspace/components/workspace-dialogs.css :: .workspace-dialog-export-summary p"
       ],
       "why": "Muted body copy, four copies. Same unclaimed `.note` typography primitive as group 3."
     },
@@ -339,7 +339,7 @@
         "min-width: 0"
       ],
       "sites": [
-        "app/analytics/analytics.module.css :: .contextBar > div",
+        "app/analytics/analytics.css :: .analytics-context-bar > div",
         "app/search-workspace/search-editor.css :: .search-title"
       ],
       "why": "Feature layout, not a primitive: an analytics context bar and the search title happen to be the same flex row. Consolidating needs a named inline-row primitive, which no phase has defined."
@@ -352,7 +352,7 @@
         "text-decoration: none"
       ],
       "sites": [
-        "app/analytics/analytics.module.css :: .insightList footer a, .fieldList a, .slowestList a, .slowestFooter a",
+        "app/analytics/analytics.css :: .analytics-insight-list footer a, .analytics-field-list a, .analytics-slowest-list a, .analytics-slowest-footer a",
         "app/home.css :: .setup-checklist a",
         "app/home.css :: .system-notice > a"
       ],
@@ -366,7 +366,7 @@
         "margin: 0 0 9px"
       ],
       "sites": [
-        "app/analytics/analytics.module.css :: .insightList p",
+        "app/analytics/analytics.css :: .analytics-insight-list p",
         "app/home.css :: .app-launch-card p"
       ],
       "why": "Muted body copy inside a card. Candidate for a `.note` typography primitive; the trailing `margin: 0 0 9px` differs from the other muted-copy rules only by its bottom gap, so folding needs a spacing decision this phase did not make."
@@ -379,7 +379,7 @@
         "white-space: nowrap"
       ],
       "sites": [
-        "app/analytics/analytics.module.css :: .searchDetail > a",
+        "app/analytics/analytics.css :: .analytics-search-detail > a",
         "app/dashboards/dashboards.css :: .notable-events strong",
         "app/styles/primitives/modal.css :: .history-row > code"
       ],
@@ -390,15 +390,15 @@
         "fill: none",
         "stroke-linecap: round",
         "stroke-linejoin: round",
-        "stroke-width: 2.25",
+        "stroke-width: var(--chart-stroke-width, 2.25)",
         "stroke: var(--chart-series-1)",
         "vector-effect: non-scaling-stroke"
       ],
       "sites": [
-        "app/analytics/analytics.module.css :: .trendLine",
+        "app/analytics/analytics.css :: .analytics-trend-line",
         "app/search-workspace/search-results.css :: .time-series-chart__line"
       ],
-      "why": "Chart stroke geometry. Charts are their own primitive family and no phase has consolidated them; the analytics trend line and the workspace time-series line are drawn by two different components."
+      "why": "Chart stroke geometry. Charts are their own primitive family and no phase has consolidated them; the analytics trend line and the workspace time-series line are drawn by two different components. Phase 4 named the one thing a host is allowed to change -- `--chart-stroke-width` -- so both rules read it, but the six declarations are still written twice."
     },
     {
       "declarations": [
@@ -409,10 +409,10 @@
         "text-transform: uppercase"
       ],
       "sites": [
-        "app/dashboards/operations-dashboard.module.css :: .createForm label > span, .settingsGrid label > span, .panelFields label > span",
-        "app/dashboards/operations-dashboard.module.css :: .rangePicker > span"
+        "app/dashboards/operations-dashboard.css :: .operations-create-form label > span, .operations-settings-grid label > span, .operations-panel-fields label > span",
+        "app/dashboards/operations-dashboard.css :: .operations-range-picker > span"
       ],
-      "why": "Two rules inside one module, both field labels for the operations dashboard. Folding is a one-file edit the dashboard owner should make with the rest of that module."
+      "why": "Two rules inside one stylesheet, both field labels for the operations dashboard. Folding is a one-file edit the dashboard owner should make with the rest of app/dashboards/operations-dashboard.css."
     },
     {
       "declarations": [

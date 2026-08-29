@@ -95,7 +95,7 @@
         "3px solid rgb(42 120 158 / 28%)"
       ]
     },
-    "app/analytics/analytics.module.css": {
+    "app/analytics/analytics.css": {
       "background": [
         "#26333a"
       ],
@@ -124,7 +124,7 @@
         "#d68a24"
       ]
     },
-    "app/dashboards/operations-dashboard.module.css": {
+    "app/dashboards/operations-dashboard.css": {
       "border": [
         "1px solid #226687",
         "1px solid #dfb8b8"
@@ -169,7 +169,7 @@
         "#c6782b"
       ]
     },
-    "app/reports/reports.module.css": {
+    "app/reports/reports.css": {
       "border": [
         "1px solid #bdd4ae",
         "1px solid #dba39f"
@@ -184,7 +184,7 @@
         "#d28d1c"
       ]
     },
-    "app/search-workspace/components/workspace-dialogs.module.css": {
+    "app/search-workspace/components/workspace-dialogs.css": {
       "border": [
         "1px solid #b8c9ae",
         "1px solid #dba39f",
@@ -201,7 +201,7 @@
         "#9b3530 !important"
       ]
     },
-    "app/search-workspace/panels/visualization-panel.module.css": {
+    "app/search-workspace/panels/visualization-panel.css": {
       "background": [
         "#9ca9af",
         "rgb(255 255 255 / 88%)",
@@ -494,7 +494,7 @@
         "8px"
       ]
     },
-    "app/analytics/analytics.module.css": {
+    "app/analytics/analytics.css": {
       "border-radius": [
         "50%"
       ],
@@ -525,7 +525,7 @@
         "22px"
       ]
     },
-    "app/dashboards/operations-dashboard.module.css": {
+    "app/dashboards/operations-dashboard.css": {
       "box-shadow": [
         "2px"
       ],
@@ -553,7 +553,7 @@
         "24px"
       ]
     },
-    "app/reports/reports.module.css": {
+    "app/reports/reports.css": {
       "border-radius": [
         "50%",
         "9px"
@@ -566,19 +566,18 @@
         "15px",
         "17px",
         "18px",
-        "28px",
-        "8px"
+        "28px"
       ],
       "z-index": [
         "1"
       ]
     },
-    "app/search-workspace/components/workspace-dialogs.module.css": {
+    "app/search-workspace/components/workspace-dialogs.css": {
       "font-size": [
         "13px"
       ]
     },
-    "app/search-workspace/panels/visualization-panel.module.css": {
+    "app/search-workspace/panels/visualization-panel.css": {
       "border-radius": [
         "1px"
       ],

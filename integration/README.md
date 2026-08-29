@@ -288,10 +288,17 @@ file `app/styles/index.css` imports, in that file's order, because `setContent`
 cannot resolve an `@import` inside an injected `<style>` and would otherwise
 render every `var()` as its fallback and every rule as nothing at all. The list
 is read out of `index.css` rather than restated, and
-`scripts/token-layer.test.mjs` asserts that it still is -- and that every
-stylesheet under `app/` that is not a CSS module is in it. `visual/token-layer.visual.spec.ts` covers the other half — it navigates
-to the real export rather than injecting anything, so a token file that never
-reaches `app/layout.tsx` fails there even while every contract here is green.
+`scripts/token-layer.test.mjs` asserts that it still is — and that every
+stylesheet under `app/` is in it. `visual/token-layer.visual.spec.ts` covers
+the other half — it navigates to the real export rather than injecting
+anything, so a token file that never reaches `app/layout.tsx` fails there even
+while every contract here is green.
+
+The colocated feature stylesheets ride along in that list. The fixtures here
+mount the shared primitives, and every feature class carries its own prefix, so
+a feature file contributes rules no fixture markup can match; injecting them
+anyway is what keeps the list derivable from `index.css` instead of hand-picked,
+and the pages that do use them are covered by the screenshots.
 
 It needs no server, no container, no backend fixtures, and no committed
 baselines, so it is platform-independent, runs in under a second, and is the one
@@ -345,7 +352,10 @@ the properties this phase established true:
 - every `var(--x)` in every stylesheet must resolve to a custom property some
   stylesheet declares or some component sets at runtime;
 - every class an application stylesheet writes rules for must be reachable from a
-  literal `className`, an interpolation base, or a `:global()` selector.
+  literal `className` or an interpolation base;
+- the walker must reach the colocated feature stylesheets, and no `.module.css`
+  may come back: a CSS module's classes are scoped to a generated hash, so none
+  of the invariants above can see them at all.
 
 The parsing lives in `scripts/css-inventory.mjs` so the test file itself never
 opens a stylesheet. A class that genuinely only exists at runtime belongs in

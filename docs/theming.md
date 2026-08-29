@@ -3,58 +3,14 @@
 How the styling layer is put together, and where to edit it when the product
 should look different.
 
-`app/layout.tsx` loads exactly one stylesheet: `app/styles/index.css`. That
-file is nothing but an ordered `@import` list, and the order is the contract —
-tokens, base, primitives, features, interaction floors. The CSS modules the
-components import for themselves land after it.
+`app/layout.tsx` loads exactly one stylesheet — `app/styles/index.css` — and
+that file is nothing but an ordered `@import` list, so the cascade order is a
+contract written in CSS rather than one implied by JavaScript import order or
+by the bundler's chunking: tokens, base, primitives, features, interaction
+floors.
 
 Only the token files are meant to carry a literal. A retheme should be an edit
 to `app/styles/tokens-*.css`, not a search across the rules.
-
-### Where the CSS lives
-
-`app/globals.css` used to be all of it: 7,267 lines, with every breakpoint
-override for every feature collected into two sections at the foot of the file.
-Phase 4 carved it up. Every rule moved exactly once and unchanged, and the
-`@media` blocks moved into the file that owns their base selectors, so a
-feature and the way it folds are now one edit:
-
-| File | Holds |
-| --- | --- |
-| `app/styles/base.css` | the reset, the element defaults, the focus ring, the icon sizes, the shared keyframes |
-| `app/styles/primitives/button.css` | `.button` and its modifiers |
-| `app/styles/primitives/table.css` | `.table-wrap`, `.table`, the fixed/compact modifiers, the card mode |
-| `app/styles/primitives/form.css` | inputs, labels, `.form-stack`, the fieldsets, `.settings-list` |
-| `app/styles/primitives/modal.css` | the dialog shell and the surfaces that only open inside one |
-| `app/styles/primitives/status.css` | `.status` and `.badge` |
-| `app/styles/primitives/layout.css` | the product bar, the app shell, the drawer, the toasts, `.suite-page` / `.suite-card` |
-| `app/search-workspace/search-editor.css` | the search title row, the SPL editor, the time-range popover |
-| `app/search-workspace/search-job.css` | the job strip, the result tabs, the timeline |
-| `app/search-workspace/search-fields.css` | the fields rail and the event list |
-| `app/search-workspace/search-results.css` | patterns, statistics, visualization, the dense result grids |
-| `app/admin/admin.css` | the admin console, Knowledge Manager, Knowledge Preview, Lookup Manager |
-| `app/activity/activity.css` | the activity console |
-| `app/datasets/datasets.css` | the dataset cards and field catalog |
-| `app/signin/signin.css` | the sign-in page |
-| `app/home.css` | the landing page |
-| `app/_components/backend-resource-state.css` | the connected-backend empty and error surfaces |
-| `app/dashboards/dashboards.css` | the operations dashboard |
-| `app/styles/interaction.css` | the coarse-pointer tap target, the 16px input floor, the reduced-motion cut |
-
-Three of those placements are not where the file name would suggest, and each
-records a cascade dependency the monolith hid:
-
-- `.search-page` sits in `layout.css` beside `.suite-main`. The search page's
-  `<main>` carries both classes, and the shell's `min-height` wins only because
-  it is declared later; splitting the pair would hand the win to the page and
-  move the fold by seven pixels.
-- `.home-hero`, `.home-hero h1` and `.dashboard-title-row` sit in `layout.css`
-  with the `.suite-page-heading` family they override, because that family's own
-  breakpoint rules override them back.
-- `interaction.css` is imported last, after every feature. Its two rules list
-  selectors from every feature and have to outrank all of them; imported
-  earlier, a feature's own `min-height` or `font-size` would win back a tap
-  target or an input on a touch device that no desktop screenshot covers.
 
 That is most of the state now.
 [`app/styles/tokens-color.css`](../app/styles/tokens-color.css) declares every
@@ -68,6 +24,219 @@ scattered misses but a short list of roles tier 2 does not name, which
 would be the wrong role rather than merely a nearby colour, and
 `scripts/css-literal-debt.json` records every one of them so a new literal
 cannot slip in beside them.
+
+## Where a rule lives
+
+`app/styles/index.css` is the whole load order. `app/globals.css` used to be all
+of it — 7,267 lines, with every breakpoint override for every feature collected
+into two sections at the foot of the file. Phase 4 carved it up: every rule
+moved exactly once and unchanged, each `@media` block moved into the file that
+owns its base selectors, and the five CSS modules became plain colocated
+stylesheets. A feature and the way it folds are now one edit.
+
+| Order | File | What it owns |
+| --- | --- | --- |
+| 1 | `app/styles/tokens-color.css` | tier 1 primitives and tier 2 colour roles, plus the dark theme |
+| 2 | `app/styles/tokens-scale.css` | every scale that does not vary by theme: space, radius, type, stacking, elevation, motion, fonts |
+| 3 | `app/styles/base.css` | the reset, the element defaults, the focus ring, the icon sizes, the shared keyframes |
+| 4 | `app/styles/primitives/button.css` | `.button` and its modifiers |
+| 5 | `app/styles/primitives/table.css` | `.table-wrap`, `.table`, the fixed/compact modifiers, the card mode |
+| 6 | `app/styles/primitives/form.css` | inputs, labels, `.form-stack`, the fieldsets, `.settings-list` |
+| 7 | `app/styles/primitives/modal.css` | the dialog shell and the surfaces that only open inside one |
+| 8 | `app/styles/primitives/status.css` | `.status` and `.badge` |
+| 9 | `app/styles/primitives/layout.css` | the product bar, the app shell, the drawer, the toasts, `.suite-page` / `.suite-card` |
+| 10 | `app/search-workspace/search-editor.css` | the search title row, the SPL editor, the time-range popover |
+| 11 | `app/search-workspace/search-job.css` | the job strip, the result tabs, the timeline |
+| 12 | `app/search-workspace/search-fields.css` | the fields rail and the event list |
+| 13 | `app/search-workspace/search-results.css` | patterns, statistics, visualization, the dense result grids |
+| 14 | `app/admin/admin.css` | the admin console, Knowledge Manager, Knowledge Preview, Lookup Manager |
+| 15 | `app/activity/activity.css` | the activity console |
+| 16 | `app/datasets/datasets.css` | the dataset cards and field catalog |
+| 17 | `app/signin/signin.css` | the sign-in page |
+| 18 | `app/home.css` | the landing page |
+| 19 | `app/_components/backend-resource-state.css` | the connected-backend empty and error surfaces |
+| 20 | `app/dashboards/dashboards.css` | the operations dashboard's page rules |
+| 21 | `app/analytics/analytics.css` | the search-analytics console, prefix `analytics-` |
+| 22 | `app/dashboards/operations-dashboard.css` | the operations dashboard and the backend dashboard manager, prefix `operations-` |
+| 23 | `app/reports/reports.css` | the reports library and the saved-search console, prefix `reports-` |
+| 24 | `app/search-workspace/components/workspace-dialogs.css` | the workspace's dialogs, prefix `workspace-dialog-` |
+| 25 | `app/search-workspace/panels/visualization-panel.css` | the column and bar charts, prefix `visualization-` |
+| 26 | `app/styles/interaction.css` | the coarse-pointer tap target, the 16px input floor, the reduced-motion cut |
+
+The primitives come before the features on purpose. A feature rule and a
+primitive rule regularly have the same specificity — `.reports-table-wrap`
+against `.table-wrap`, both one class — and the feature is the one meant to win.
+Until Phase 4 the last five files were CSS modules, which the bundler happened
+to emit after `globals.css`: the order was real and load-bearing and nothing
+wrote it down. Adding a stylesheet is a line in `index.css`, in the position its
+rules need.
+
+Four placements are not where the file name would suggest, and each records a
+cascade dependency the monolith hid:
+
+- `.search-page` sits in `layout.css` beside `.suite-main`. The search page's
+  `<main>` carries both classes, and the shell's `min-height` wins only because
+  it is declared later; splitting the pair would hand the win to the page and
+  move the fold by seven pixels.
+- `.home-hero`, `.home-hero h1` and `.dashboard-title-row` sit in `layout.css`
+  with the `.suite-page-heading` family they override, because that family's own
+  breakpoint rules override them back.
+- the `760px` rule that sets `padding-inline` on the search title row, composer,
+  timeline, patterns, statistics and visualization panels sits in
+  `search-results.css`, the last of the four files its selectors span. Any
+  earlier and a later file's base padding wins it back.
+- `interaction.css` is imported last, after every feature. Its three rules list
+  selectors from every feature and have to outrank all of them; imported
+  earlier, a feature's own `min-height` or `font-size` would win back a tap
+  target or an input on a touch device that no desktop screenshot covers.
+
+### One styling lane
+
+**Every stylesheet in the repository is plain CSS with feature-prefixed,
+kebab-case class names.** There are no CSS modules, no `:global()`, no
+`styles.x` object, and no second way to scope a rule.
+
+A module's scoping came from a build-time hash, and the hash is precisely what
+made the rules invisible: `scripts/css-invariants.test.mjs` could not ask
+whether a module class was still reachable, `scripts/css-primitives.test.mjs`
+could not see a module's `.table` as a second implementation of the `.table`
+primitive, and `scripts/css-call-sites.test.mjs` could not tell a renamed class
+from a deleted one. The prefix does the same job in the open: `.reports-table`
+cannot collide with `.table` for the same reason `.reports_table_a7f3` could
+not, and every check that reads the styling layer can now see it.
+
+The prefix is the feature's directory name, and the classes inside a file all
+carry it. Modifiers are BEM — `.reports-table--backend`, `.analytics-severity--high`,
+`.visualization-canvas--categorical` — which is what lets a modifier sit beside
+its base in the stylesheet and in the class attribute.
+
+`.stylelintrc.json` enforces both halves: `selector-class-pattern` rejects a
+camelCase class, and `selector-pseudo-class-no-unknown` no longer exempts
+`:global`/`:local`, so writing one is a lint error rather than a scoping tool.
+`scripts/css-invariants.test.mjs` fails if a `.module.css` file comes back.
+
+### Responsive rules live beside their base rules
+
+Inside a feature stylesheet, a section's `@media` blocks sit at the end of that
+section — after the rules they override, largest breakpoint first — not in a
+"responsive" appendix at the foot of the file. A rule and the widths that change
+it are one thing to read and one thing to edit.
+
+The order within a section is load-bearing and is always the same: base rules,
+then `1240px`, `980px`, `760px`, `480px`, then `(pointer: coarse)`, then
+`(prefers-reduced-motion: reduce)`. The width queries are all `max-width`, so
+each overrides the one above it; the pointer query comes after them because a
+touch target set at `760px` must not beat the coarse-pointer minimum. Moving a
+media block earlier than a base rule that also matches the element silently
+inverts an override, which is why the sections are cut where no selector spans
+two of them.
+
+Two cross-cutting rules are deliberately not split, and say so where they sit: a
+`-webkit-tap-highlight-color` reset that names one link per panel in
+`analytics.css`, and a focus ring shared by three controls in
+`operations-dashboard.css`. Splitting either would be four copies of one
+declaration.
+
+### Reach-ins, and what replaced them
+
+A CSS module could only touch a shared class through `:global(...)`, and
+nineteen rules did. That escape hatch reads as a component reaching past its own
+markup into someone else's, and it hid the coupling from every check: the
+selector was in a file no reachability scan could interpret. All nineteen are
+gone, in three different ways, because they were three different problems.
+
+**Two were never reach-ins at all.** `workspace-dialogs.css` styles a capability
+control inside the shared `.settings-list`. With one namespace that is an
+ordinary descendant selector — `.settings-list label > .workspace-dialog-capability-control` —
+and the `:global()` was only ever the module system's tax.
+
+**Thirteen were a component positioning its own legend.** The categorical canvas
+laid out `.chart-legend`, which `visualization-panel.tsx` renders itself. Those
+rules now sit in `visualization-panel.css` as plain selectors, and the canvas
+takes a BEM modifier — `.visualization-canvas--categorical`, beside the existing
+`.visualization-canvas--line` — instead of a module class bolted onto a global
+one.
+
+**Four were a panel resizing a shared chart**, and those needed an interface
+rather than a rename. `operations-dashboard.css` was setting
+`.time-series-chart`'s grid tracks, height and stroke width from outside the
+component. `.time-series-chart` now reads six custom properties with its shipped
+values as fallbacks — `--chart-height`, `--chart-y-axis-width`,
+`--chart-plot-min-height`, `--chart-x-axis-height`, `--chart-x-axis-type` and
+`--chart-stroke-width` — and the dashboard sets them on its own container, where
+they inherit into the chart. The knobs are named and finite; a panel that needs
+a seventh has to add it to the component, which is the conversation the reach-in
+was avoiding.
+
+### Two dead things Phase 4 removed
+
+Both are invisible in every baseline, and both were only findable once the rules
+and the markup were in one namespace.
+
+* `.loadedCountLabel` in the reports console had no call site: two declarations
+  and an `8px` font size no element could ever read. Its `font-size` row leaves
+  `scripts/css-literal-debt.json` with it.
+* `visualization-panel--preview` was the opposite failure — markup asking for a
+  class no rule matched, on every live preview. The class is removed from
+  `visualization-panel.tsx`, and the new call-site invariant in
+  `scripts/css-call-sites.test.mjs` is what found it.
+
+## How to restyle X
+
+The load order above is also the search order: start at the top and stop at the
+first file that can answer.
+
+**A colour, anywhere.** `app/styles/tokens-color.css`, and nothing else. Change
+the tier-2 role (`--accent`, `--status-error`, `--fg-muted`) to move every use
+of it; change a tier-1 step to move every role built on it. See
+[The rule](#the-rule) and [Role gaps](#role-gaps) for the literals that are not
+yet reachable this way.
+
+**Buttons.** `app/styles/primitives/button.css`. `.button` is the one
+base; `.button--primary`, `--secondary`, `--ghost`, `--danger`, `--icon` and
+`--compact` are its only variants, and `buttonClassName()` in
+`app/_components/button.tsx` is the one place markup builds the string. A
+feature never restates a button's tone, height or weight — that is how three
+button vocabularies grew last time. See [`.button`](#button).
+
+**Tables.** `app/styles/primitives/table.css`.
+`.table-wrap` scrolls, `.table` paints, and `.table--fixed`, `--compact` and
+`--cards` are the three modifiers. A feature file may add a *column plan* and
+nothing else: `.reports-table` is six `th` widths and a `min-width`, and
+`.workspace-dialog-history-table` is the same shape. A height, an ink or a
+border in a feature table rule is a second table. See [Tables](#tables).
+
+**The product chrome.** `app/styles/primitives/layout.css`, the
+`/* Multi-page product shell */` banner, and `app/_components/product-shell.tsx`. Every route renders through
+`ProductShell`; a page that needs something in the bar takes a slot rather than
+drawing a bar of its own, and `chrome-invariants.visual.spec.ts` fails if two
+routes disagree about the chrome's height. See
+[Product chrome](#product-chrome).
+
+**The chart palette.** `--chart-series-1` … `--chart-series-12` in
+`tokens-color.css`, assigned in order by `TIME_SERIES_COLORS` in
+`app/search-workspace/charts/time-series-line-chart.tsx` — the one array every
+chart reads, with `CATEGORY_COLORS` a slice of it rather than a second list.
+The four log levels are `--level-debug/-info/-warn/-error` and are not part of
+the ramp: a level describes the data, a status describes the outcome of a
+search. `scripts/css-token-sweep.test.mjs` holds both claims.
+
+**A chart's size or stroke.** Not by selecting into it. `.time-series-chart`
+reads five custom properties with its shipped values as fallbacks —
+`--chart-height`, `--chart-y-axis-width`, `--chart-plot-min-height`,
+`--chart-x-axis-height`, `--chart-x-axis-type` — and `.time-series-chart__line`
+reads `--chart-stroke-width`. A host panel sets them on its own container and
+they inherit: `app/dashboards/operations-dashboard.css` shortens the latency
+chart with six declarations and no descendant selector. `.analytics-trend-line`
+honours `--chart-stroke-width` too, so the two line charts state one geometry.
+
+**One page.** Its own file, from the table above. Every page has one now; a
+surface that grows out of the file it shares takes a file and a prefix of its
+own, added to `index.css` in the feature block.
+
+**A breakpoint.** [Breakpoints](#breakpoints). Four `max-width` steps, pinned by
+lint; the canon is not a custom property because `@media` is evaluated before
+the cascade.
 
 ## The two tiers
 
@@ -134,7 +303,7 @@ themes.
 > No literal colour may appear outside `app/styles/tokens-*.css`.
 
 That means no `#rrggbb`, no `rgb()`, `rgba()`, `hsl()`, or `color()`, and no
-named CSS colour, anywhere in an application stylesheet, a `*.module.css`, an inline
+named CSS colour, anywhere in an application stylesheet, an inline
 `style` attribute, or a TypeScript constant that feeds one. `npm run lint:css`
 reports the remaining violations.
 
@@ -534,10 +703,33 @@ cannot be expressed with `max-width`; `761px` is the exclusive complement of
 `760px` and is the only `min-width` the lint allows.
 
 `.stylelintrc.json` pins `max-width` and `min-width` to those values, so an
-off-canon breakpoint is reported by `npm run lint:css`. The stylesheets still
-carry seven of them — 1120px, 800px, 650px, 520px, 430px, 420px and one
-`max-height: 650px` — and folding each onto the nearest step is part of the
-migration, not of this phase.
+off-canon breakpoint is reported by `npm run lint:css`. Six off-canon widths
+survived Phase 3 — 1120px, 800px, 650px, 520px, 430px and 420px, plus one
+`max-height: 650px`. Phase 4 folded five of them onto the canon, taking care
+that each fold left the 1440px and 760px baselines untouched:
+
+| Was | Now | Effect |
+| --- | --- | --- |
+| `1120px` (`analytics.css`) | `980px` | the analytics panel rails stop stacking between 981px and 1120px; both columns fit that range comfortably |
+| `800px` (`analytics.css`) | `980px` | the metric grid drops to two columns, and the field list drops its Example column, from 980px down instead of from 800px down |
+| `430px` (`operations-dashboard.css`) | `480px` | the header actions split two-up and the volume plot shortens from 480px down |
+| `420px` (`analytics.css`) | `480px` | the context bar goes single-column and the metric numerals shrink from 480px down |
+| `520px` (`workspace-dialogs.css`) | `480px` | the knowledge-inspection definition list stays two-column between 481px and 520px |
+
+Four of the five fold *outward*, so an adaptation happens at a wider viewport
+than before and no width is left cramped-but-unadapted; the `520px` fold is the
+one that folds inward, and it costs a definition list one column across a 40px
+band inside a dialog.
+
+`650px` is kept. It is the analytics console's mobile step, and the honest fold
+is onto `760px` — which is exactly the width the mobile baselines are recorded
+at, so the fold is a deliberate restyle with new screenshots rather than a
+rename. `analytics.css` states it six times because each section carries its own
+responsive rules, so `npm run lint:css` still reports six
+`media-feature-name-value-allowed-list` warnings; they are six occurrences of one
+off-canon step rather than six different steps. The `max-height: 650px` queries
+in `app/signin/signin.css` and `app/search-workspace/search-editor.css` are
+untouched.
 
 ## Primitives
 
@@ -627,8 +819,8 @@ only thing a caller decides (`--success`, `--info`, `--warning`, `--error`,
 its own colour already matches).
 
 **Replaces.** `.mode-pill`, `.role-pill`, `.severity-badge`, the two
-byte-identical `previewBadge` rules in `analytics.module.css` and
-`operations-dashboard.module.css`, `.readOnlyBadge`, `.liveBadge`/`.partialBadge`
+byte-identical `previewBadge` rules in `analytics.css` and
+`operations-dashboard.css`, `.readOnlyBadge`, `.liveBadge`/`.partialBadge`
 and `.availableBadge`/`.unavailableBadge` — eight, which is the number the
 Badges banner in `app/styles/primitives/status.css` states.
 
@@ -665,7 +857,7 @@ row below is a decision, not a regression, and the visual baselines under
 | `.history-clear-button` edge | `#caa6a3` | the standard control edge | the destructive intent stays in the label ink |
 | `.run-button.cancel` edge | `#983832` | `--status-error-strong`, via `.button--danger` | the run button's two states are now the primitive's two tones |
 | Snapshot-bar buttons | `.live-jobs-snapshot button`, a bare descendant rule restating the primitive | `.button.button--compact` | one implementation; the accent ink stays as a one-line feature override |
-| Reports table status ink | `reports.module.css` `.status`/`.runStatus` set no colour and inherited the cell's `--fg-secondary` | `--fg-muted`, from `.status--label` | the status vocabulary owns the label ink; the outcome is carried by the swatch, not by the text being a shade darker than its neighbours |
+| Reports table status ink | `reports.css` `.status`/`.runStatus` set no colour and inherited the cell's `--fg-secondary` | `--fg-muted`, from `.status--label` | the status vocabulary owns the label ink; the outcome is carried by the swatch, not by the text being a shade darker than its neighbours |
 
 **Residual `button` debt.** 195 rules in the application stylesheets still style a bare
 `button` as a descendant of a feature (`.search-actions > button`,
@@ -714,10 +906,12 @@ the product is built from it:
 | `.table--compact` | shorter rows for a dialog, where a row is a line of text rather than a record |
 | `.table--cards` | below 760px each row becomes a card and each labelled cell prints its column name |
 
-Three implementations went into it — `.product-table`, `.table` in
-`app/reports/reports.module.css`, and `.historyTable` in
-`app/search-workspace/components/workspace-dialogs.module.css` — and the two
-modules keep only their column plans. Deliberate visual changes:
+Three implementations went into it — `.product-table`, the reports console's own
+`.table`, and the search-history dialog's `.historyTable` — and the two feature
+stylesheets keep only their column plans, as `.reports-table` in
+`app/reports/reports.css` and `.workspace-dialog-history-table` in
+`app/search-workspace/components/workspace-dialogs.css`. Deliberate visual
+changes:
 
 * **Report rows are shorter.** The reports table declared a 67px row against
   the product's 45px. It now uses 45px; the report cell is three lines tall, so
@@ -743,7 +937,7 @@ modules keep only their column plans. Deliberate visual changes:
 
 `.table--cards` doubles its own class in every selector. The desktop column
 widths it has to beat (`.live-jobs-table td:first-child { width: 30% }`) and a
-module's own `min-width` are each one class, and a card that lost to either
+feature's own `min-width` are each one class, and a card that lost to either
 would keep a horizontal scroll bar or a 30%-wide first column.
 
 The activity console's own card mode is gone with it. `.mobileCardTable` in
@@ -874,14 +1068,25 @@ and muted body copy (four).
 
 `scripts/css-call-sites.test.mjs` walks the other direction — from every call
 site back to the styling layer, which is the direction a deletion gets wrong.
-`scripts/css-retired-classes.json` lists the sixty-six global classes this
-phase deleted and the primitive that replaced each, and nothing in the
-repository may write one into a `className`, build one from an interpolation
-base, or read one off a CSS module. The same file pins the class-coupled
-selectors in `integration/browser_vertical.spec.ts`: that spec is driven by the
-Go end-to-end harness against a compiled build, so a class it can no longer
-find surfaces as a timeout minutes into a run, far from the rename that caused
-it.
+`scripts/css-retired-classes.json` lists the sixty-six global classes Phase 3
+deleted and the primitive that replaced each, and nothing in the repository may
+write one into a `className` or build one from an interpolation base. The same
+file pins the class-coupled selectors in
+`integration/browser_vertical.spec.ts`: that spec is driven by the Go
+end-to-end harness against a compiled build, so a class it can no longer find
+surfaces as a timeout minutes into a run, far from the rename that caused it.
+
+It also asserts that every feature-prefixed class the markup writes is defined
+by some stylesheet. That check replaces the one Phase 4 made impossible: a CSS
+module resolved to a plain object, so reading a class it no longer had put the
+string `"undefined"` into the class attribute, and the invariant compared each
+`styles.x` read against its module. With plain strings that failure is gone and
+so, without a replacement, was the coverage — a missed call site in a rename now
+renders an unstyled element and raises nothing. The scan is keyed on the five
+feature prefixes (`analytics-`, `operations-`, `reports-`, `visualization-`,
+`workspace-dialog-`) and reads class attributes only, so an element id or a
+module name that shares a prefix is never mistaken for a class. It found
+`visualization-panel--preview` on the first run.
 
 `integration/visual/chrome-invariants.visual.spec.ts` covers the two things
 about the chrome that are behavioural rather than visual. Every route that
@@ -1117,7 +1322,7 @@ What is left, largest first:
 | A second neutral ink step | ~6 | `--fg-secondary` is `--gray-700`; a cluster around `--gray-650` still keeps its literals and lands on `--fg-muted` instead |
 
 Two literals cannot be reached by a token at all and need a different fix:
-`app/dashboards/operations-dashboard.module.css` carries `fill='%23526068'`
+`app/dashboards/operations-dashboard.css` carries `fill='%23526068'`
 inside a `data:` URI select arrow, where no `var()` resolves and no grep for
 `#` finds it — it wants a mask or an inline SVG; and `app/layout.tsx` keeps its
 `themeColor` literal deliberately, because the browser paints from it before

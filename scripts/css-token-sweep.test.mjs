@@ -68,7 +68,7 @@ const ALLOWED_TYPESCRIPT_COLOURS = ["app/layout.tsx: #1e252b"];
  * than a token.
  */
 const ENCODED_COLOUR_SITE =
-  "app/dashboards/operations-dashboard.module.css | .rangePicker select | background: %23526068";
+  "app/dashboards/operations-dashboard.css | .operations-range-picker select | background: %23526068";
 
 /** The four levels the log data carries, each painted from one token. */
 const SEVERITY_TOKENS = {
@@ -89,20 +89,25 @@ async function readLedger() {
 }
 
 /**
- * Every CSS module under `app/`, found by walking the tree rather than by
- * naming them.
+ * Every stylesheet under `app/` outside the token layer, found by walking the
+ * tree rather than by naming them.
  *
- * The point of the assertion below is that the sweep misses none of them, and a
- * count would answer a different question: it stays green when a module is
- * added and another deleted in the same change, and it goes red -- for no
- * reason a reader can act on -- when a module is folded into a primitive, which
- * is the direction this codebase is deliberately moving in.
+ * This used to list CSS modules, because a module was the only stylesheet a
+ * feature could own. Phase 4 replaced the modules with plain colocated files,
+ * so the question the assertion below asks is the same one -- does the sweep
+ * see every stylesheet a feature ships? -- while the shape it walks for is the
+ * shape the repository now has. A count would answer a different question: it
+ * stays green when one file is added and another deleted in the same change,
+ * and it goes red, for no reason a reader can act on, when a feature's rules
+ * are folded into a primitive, which is the direction this codebase is
+ * deliberately moving in.
  */
-async function listCssModules() {
+async function listApplicationCss() {
   const entries = await readdir(path.join(workspace, "app"), { recursive: true, withFileTypes: true });
   return entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".module.css"))
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".css"))
     .map((entry) => relativePosix(workspace, path.join(entry.parentPath, entry.name)))
+    .filter((file) => !file.startsWith("app/styles/tokens-"))
     .toSorted();
 }
 
@@ -114,12 +119,12 @@ test("the sweep reaches every stylesheet outside the token layer", async () => {
     audited.includes("app/styles/base.css") && audited.includes("app/styles/primitives/button.css"),
     "the sweep no longer reaches the base layer or the primitives, so every invariant below is vacuous",
   );
-  const modules = await listCssModules();
-  assert.ok(modules.length > 0, "no CSS module was found under app/, so the comparison below is vacuous");
+  const shipped = await listApplicationCss();
+  assert.ok(shipped.length > 1, "only one stylesheet was found under app/, so the comparison below is vacuous");
   assert.deepEqual(
-    audited.filter((file) => file.endsWith(".module.css")),
-    modules,
-    `the sweep found ${audited.length} stylesheets and must see every CSS module under app/: ${audited.join(", ")}`,
+    audited.filter((file) => file.startsWith("app/")),
+    shipped,
+    `the sweep found ${audited.length} stylesheets and must see every one under app/: ${audited.join(", ")}`,
   );
   assert.ok(
     !audited.some((file) => file.startsWith("app/styles/tokens-")),

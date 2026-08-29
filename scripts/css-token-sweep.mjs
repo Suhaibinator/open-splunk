@@ -2,8 +2,9 @@
  * Static audit of the token sweep: which literals survive, and where.
  *
  * Phase 2 replaced the colour, spacing, radius, type, stacking and elevation
- * literals in the application stylesheets, the CSS modules and the two TypeScript
- * palettes with semantic tokens. Nothing in the shipped test suite could see
+ * literals in the application stylesheets -- one monolith and six CSS modules
+ * until Phase 4 split and colocated them -- and the two TypeScript palettes
+ * with semantic tokens. Nothing in the shipped test suite could see
  * whether that job is finished: `npm run test:visual` proves no layout moved
  * and, at the harness's default per-pixel tolerance, says almost nothing about
  * colour, while `npm run lint:css` reports a warning count rather than an

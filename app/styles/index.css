@@ -4,7 +4,8 @@
  * `app/layout.tsx` imports this file and nothing else, so adding a stylesheet
  * is a one-line edit here rather than a change to a React component, and the
  * cascade order the layer depends on is written in CSS, where the cascade
- * actually lives, instead of being implied by JavaScript import order.
+ * actually lives, instead of being implied by JavaScript import order or by
+ * the bundler's chunking.
  *
  * The order below is the contract, and it reads outward from what cannot be
  * overridden to what always wins:
@@ -18,6 +19,14 @@
  *                         that renders it, free to override any primitive
  *   5. interaction     -- the coarse-pointer and reduced-motion contracts,
  *                         last because they have to outrank every feature
+ *
+ * A feature rule and a primitive rule regularly have the same specificity --
+ * `.reports-table-wrap` against `.table-wrap` -- and the feature is the one
+ * meant to win, which is why the whole feature block sits below the
+ * primitives. The five files that were CSS modules until this phase relied on
+ * the same order, by way of the bundler happening to emit them after
+ * `globals.css`; the order was real and load-bearing, and nothing wrote it
+ * down. Now it is written down.
  *
  * No file here declares a custom property: that is the token layer's job, and
  * `scripts/token-grammar.test.mjs` fails the build if one grows a rule or a
@@ -48,4 +57,9 @@
 @import url("../home.css");
 @import url("../_components/backend-resource-state.css");
 @import url("../dashboards/dashboards.css");
+@import url("../analytics/analytics.css");
+@import url("../dashboards/operations-dashboard.css");
+@import url("../reports/reports.css");
+@import url("../search-workspace/components/workspace-dialogs.css");
+@import url("../search-workspace/panels/visualization-panel.css");
 @import url("./interaction.css");

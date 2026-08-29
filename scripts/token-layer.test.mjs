@@ -176,7 +176,7 @@ test("every stylesheet the application ships is imported by app/styles/index.css
   const imported = new Set(await listInjectedStylesheets(workspace));
   const orphans = (await listStylesheets(workspace))
     .map((file) => relativePosix(workspace, file))
-    .filter((file) => file.startsWith("app/") && !file.endsWith(".module.css"))
+    .filter((file) => file.startsWith("app/"))
     .filter((file) => file !== "app/styles/index.css" && !imported.has(file))
     .toSorted();
   assert.deepEqual(

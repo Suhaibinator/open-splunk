@@ -557,13 +557,21 @@
   grid-row: 2;
 }
 
+/* The six knobs a host panel is allowed to turn: --chart-height,
+   --chart-y-axis-width, --chart-plot-min-height, --chart-x-axis-height,
+   --chart-x-axis-type here, and --chart-stroke-width on the line below.
+   Each reads a custom property with the shipped value as its fallback, so a
+   panel that needs a shorter chart or a thinner line sets the property on its
+   own container -- they inherit -- and never writes a selector into this
+   component's markup. The operations dashboard is the one caller; see
+   app/dashboards/operations-dashboard.css. */
 .time-series-chart {
   display: grid;
   grid-column: 1;
   grid-row: 1;
-  grid-template-columns: 48px minmax(0, 1fr);
-  grid-template-rows: minmax(300px, 1fr) 38px;
-  height: 100%;
+  grid-template-columns: var(--chart-y-axis-width, 48px) minmax(0, 1fr);
+  grid-template-rows: minmax(var(--chart-plot-min-height, 300px), 1fr) var(--chart-x-axis-height, 38px);
+  height: var(--chart-height, 100%);
   min-width: 0;
 }
 
@@ -622,7 +630,7 @@
   stroke: var(--chart-series-1);
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: 2.25;
+  stroke-width: var(--chart-stroke-width, 2.25);
   vector-effect: non-scaling-stroke;
 }
 
@@ -726,7 +734,7 @@
 .time-series-chart__x-axis {
   color: var(--fg-muted);
   display: flex;
-  font-size: var(--type-xxs);
+  font-size: var(--chart-x-axis-type, var(--type-xxs));
   grid-column: 2;
   grid-row: 2;
   justify-content: space-between;
@@ -1116,8 +1124,8 @@
   }
 
   .time-series-chart {
-    grid-template-columns: 40px minmax(0, 1fr);
-    grid-template-rows: minmax(250px, 1fr) 38px;
+    grid-template-columns: var(--chart-y-axis-width, 40px) minmax(0, 1fr);
+    grid-template-rows: minmax(var(--chart-plot-min-height, 250px), 1fr) var(--chart-x-axis-height, 38px);
   }
 
   .visualization-settings {

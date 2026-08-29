@@ -23,7 +23,6 @@ import {
   collectSelectorClassTokens,
   collectSourceClassEvidence,
   collectStyledClasses,
-  collectStylesheetClasses,
   listSourceFiles,
   relativePosix,
   stripCssComments,
@@ -43,8 +42,21 @@ const verticalSpecPath = path.join(workspace, "integration", "browser_vertical.s
  */
 const MODAL_MODULE = "app/_components/modal";
 
-/** The one shape a component imports a CSS module by: a default binding. */
-const MODULE_IMPORT = /import\s+(\w+)\s+from\s+"([^"]*\.module\.css)"/u;
+/**
+ * The namespaces the colocated feature stylesheets own.
+ *
+ * One prefix per file under `app/` that is not the shared layer. They are
+ * listed rather than derived because the list is the claim: a sixth feature
+ * stylesheet has to be added here for its classes to be checked at all, and
+ * that is a deliberate one-line edit rather than something a glob does quietly.
+ */
+const FEATURE_PREFIXES = [
+  "analytics-",
+  "operations-",
+  "reports-",
+  "visualization-",
+  "workspace-dialog-",
+];
 
 /** This file, which quotes retired names and fake imports as parser fixtures. */
 const SELF = "scripts/css-call-sites.test.mjs";
@@ -177,33 +189,44 @@ test("every class the Go browser harness selects on still exists", async () => {
   );
 });
 
-test("every styles.* read names a class its CSS module defines", async () => {
-  // A CSS module resolves to a plain object, so a read of a class the module no
-  // longer has yields `undefined` and the string "undefined" lands in the class
-  // attribute. Phase 3 deleted module rules -- two `.previewBadge` copies among
-  // them -- which is exactly when this goes wrong.
-  const consumers = (await callSites()).filter((entry) => MODULE_IMPORT.test(entry.source));
-  const offenders = (await Promise.all(consumers.map(async ({ directory, relative, source }) => {
-    const [, binding, specifier] = MODULE_IMPORT.exec(source);
-    const defined = collectStylesheetClasses(await readFile(path.resolve(directory, specifier), "utf8"));
-    const read = new Set();
-    for (const match of source.matchAll(new RegExp(String.raw`\b${binding}\.([A-Za-z_]\w*)`, "gu"))) {
-      read.add(match[1]);
+test("every feature class the markup writes is defined by its colocated stylesheet", async () => {
+  // The invariant this replaces read `styles.x` against the CSS module the
+  // `styles` binding came from: a module resolved to a plain object, so a read
+  // of a class the module no longer had yielded `undefined`, and the string
+  // "undefined" reached the class attribute. Phase 4 deleted the modules, and
+  // with them that failure -- and, if nothing took its place, the coverage too.
+  // A feature class is an ordinary string now, and a rename that misses one call
+  // site renders an unstyled element with no error anywhere in the toolchain.
+  //
+  // FEATURE_PREFIXES is exactly the set of namespaces the colocated stylesheets
+  // own, so the scan asks one answerable question -- is every `analytics-…`,
+  // `operations-…`, `reports-…`, `visualization-…` and `workspace-dialog-…`
+  // class the product writes actually defined? -- rather than trying to decide
+  // whether an arbitrary word in a class attribute was meant to be a class.
+  const styled = await collectStyledClasses(workspace);
+  const offenders = [];
+  for (const { relative, source } of await callSites()) {
+    // Attribute positions only, the same scan the retired-class check uses: a
+    // feature's prefix also spells element ids (`reports-rename-name-error`)
+    // and module names (`analytics-data`), and neither is a class.
+    const written = collectClassAttributeTokens(source);
+    const bases = collectSourceClassEvidence(source).interpolationPrefixes;
+    for (const name of [...written].toSorted()) {
+      if (!FEATURE_PREFIXES.some((prefix) => name.startsWith(prefix))) continue;
+      if (styled.has(name)) continue;
+      // A template literal also contributes its base -- `analytics-severity--`
+      // from `` `analytics-severity--${severity}` `` -- which is not itself a
+      // class. The completed names are checked wherever they are written out.
+      if (bases.has(name)) continue;
+      offenders.push(`${relative} renders "${name}", which no stylesheet defines`);
     }
-    for (const match of source.matchAll(new RegExp(String.raw`\b${binding}\[\s*"([^"]*)"`, "gu"))) {
-      read.add(match[1]);
-    }
-    return [...read]
-      .filter((name) => !defined.has(name))
-      .toSorted()
-      .map((name) => `${relative} reads ${binding}.${name}, which ${specifier} does not define`);
-  }))).flat();
+  }
   assert.deepEqual(
     offenders,
     [],
-    "A component reads a class name its CSS module no longer has. The read is not a type error --\n"
-      + "a module is typed as a plain record -- so the literal string \"undefined\" is what reaches the\n"
-      + `class attribute:\n${describeList(offenders)}`,
+    "Markup asks for a feature class no rule matches. Nothing in the toolchain reports an\n"
+      + "unmatched class, so the element renders with no styling at all until somebody looks at\n"
+      + `it:\n${describeList(offenders)}`,
   );
 });
 
@@ -282,20 +305,29 @@ test("collectImportSpecifiers separates the module path from the imported names"
   assert.deepEqual(
     collectImportSpecifiers([
       'import { Modal } from "../../_components/modal";',
-      'import styles from "./reports.module.css";',
+      'import Link from "next/link";',
+      // A stylesheet reaches the bundle through a side-effect import, which
+      // names no binding and so has no `from` to read a specifier out of.
+      'import "./styles/index.css";',
       'const text = \'import { Modal } from "./fake";\';',
     ].join("\n")),
-    ["../../_components/modal", "./reports.module.css"],
+    ["../../_components/modal", "next/link"],
   );
 });
 
-test("stripCssComments and collectStyledClasses agree on what a module contributes", async () => {
-  // A module's own class is scoped to a generated identifier and can never
-  // collide with a global one; only its `:global(...)` selectors name the
-  // global namespace. Getting this backwards would make every global class look
-  // defined and the retired-class invariant vacuous.
+test("stripCssComments and collectStyledClasses agree on what the layer defines", async () => {
+  // Until Phase 4 this asserted the opposite shape: a module's own class was
+  // scoped to a generated identifier, so it had to be kept *out* of the set
+  // while its `:global(...)` selectors were kept in. With one styling lane the
+  // question is simply whether the collector reaches every stylesheet, because
+  // the retired-class and harness-selector invariants above are only as wide as
+  // the set it returns.
   const styled = await collectStyledClasses(workspace);
   assert.ok(styled.has("table"), "the global .table primitive was not collected");
-  assert.ok(!styled.has("mobileCardTable"), "a module's own class leaked into the global namespace");
+  assert.ok(
+    styled.has("analytics-trend-line"),
+    "a colocated feature stylesheet was not collected, so every invariant reading this set has\n"
+      + "stopped covering the rules Phase 4 moved out of the CSS modules",
+  );
   assert.equal(stripCssComments("/* .ghost { color: red; } */ .live {}").includes("ghost"), false);
 });
