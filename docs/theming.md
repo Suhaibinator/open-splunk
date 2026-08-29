@@ -576,6 +576,138 @@ row below is a decision, not a regression, and the visual baselines under
 | `.run-button.cancel` edge | `#983832` | `--status-error-strong`, via `.button--danger` | the run button's two states are now the primitive's two tones |
 | Snapshot-bar buttons | `.live-jobs-snapshot button`, a bare descendant rule restating the primitive | `.button.button--compact` | one implementation; the accent ink stays as a one-line feature override |
 
+## Consolidated primitives — tables, chrome and overlays
+
+A token layer only makes a theme editable if each primitive has one
+implementation to point it at. Where the stylesheet carried the same widget
+two or three times, the copies have been folded into one and the consumers
+migrated. Consolidation is not free: two copies that had drifted apart cannot
+both survive, so each fold below records the appearance that was chosen and
+the one that was given up. The visual baselines under
+`integration/visual/__screenshots__/` were re-recorded for exactly these
+changes and for nothing else.
+
+### Animations
+
+| One keyframe | Replaced | Deliberate change |
+| --- | --- | --- |
+| `spin` | `app-icon-spin`, `spinner`, `backend-state-spin` | none — all three were `to { transform: rotate(360deg); }` |
+| `pulse-ring` | `pulse`, `status-pulse`, `backend-preview-pulse` | the running status dot (`.status--running`) used to hold a steady 4px glow at mid-cycle; it now emits the same expanding, fading halo as the other two. The backend-preview dot's halo grows to 4px instead of 5px and fades from 30% rather than 15% |
+
+`pulse-ring` paints an optional inner ring from `--pulse-ring-core`, which
+defaults to a fully transparent shadow. `.backend-preview-status__pulse`
+declares that property once and reads it both for its resting `box-shadow` and,
+through the keyframe, for its animated one — so the solid 1px ring that used to
+force a second copy of the keyframe is now a value rather than a rule.
+
+### Tables
+
+`app/globals.css` now carries one table family and every table in the product
+is built from it:
+
+| Class | What it is |
+| --- | --- |
+| `.table-wrap` | the horizontal scroll container (was `.responsive-table-wrap`) |
+| `.table` | the primitive: header ground, cell borders, row hover, link and code inks (was `.product-table`) |
+| `.table--fixed` | `table-layout: fixed`, for a table that declares column widths on its header |
+| `.table--compact` | shorter rows for a dialog, where a row is a line of text rather than a record |
+| `.table--cards` | below 760px each row becomes a card and each labelled cell prints its column name |
+
+Three implementations went into it — `.product-table`, `.table` in
+`app/reports/reports.module.css`, and `.historyTable` in
+`app/search-workspace/components/workspace-dialogs.module.css` — and the two
+modules keep only their column plans. Deliberate visual changes:
+
+* **Report rows are shorter.** The reports table declared a 67px row against
+  the product's 45px. It now uses 45px; the report cell is three lines tall, so
+  the rendered row settles around 55px rather than 67px.
+* **The search-history dialog uses the product header.** Its header was 34px of
+  uppercase 9px text on the same grey; it is now the product's 10px
+  sentence-case header, and its rows are `--compact` at 36px rather than 49px.
+  Its cells also move from `--fg-muted` to the product's `--fg-secondary` ink
+  and from a top border per row to the product's bottom border, which removes
+  the doubled line under the header.
+* **Card labels are one style.** Four copies of the `attr(data-label)` label
+  existed — under `.live-jobs-table`, under `.historyTable`, under the reports
+  table, and under `.knowledge-manager__row`. They disagreed on ink
+  (`--fg-faint` vs `--fg-muted`), size (10px vs 9px) and tracking (none vs
+  0.04em vs 0.06em). The survivor is `--fg-muted`, 9px, 0.06em, uppercase, so
+  the report cards' labels are smaller and tracked where they were larger and
+  plain.
+* **Only labelled cells stack.** A card cell with a `data-label` puts the label
+  above the value in a column; a cell without one — a favourite toggle, an
+  action row, a `colspan` empty state — keeps the default row flow. This is what
+  lets one card rule serve a table whose first column is a star and a table
+  whose first column is a title.
+
+`.table--cards` doubles its own class in every selector. The desktop column
+widths it has to beat (`.live-jobs-table td:first-child { width: 30% }`) and a
+module's own `min-width` are each one class, and a card that lost to either
+would keep a horizontal scroll bar or a 30%-wide first column.
+
+One card mode is deliberately left alone: `.mobileCardTable` in
+`app/activity/activity-console.module.css` lays its label out *beside* the value
+in a 72px column rather than above it, which is a different design and not a
+drifted copy of this one.
+
+### Product chrome
+
+The search workspace hand-rolled a second product header beside `ProductShell`:
+`.product-bar` / `.app-bar` / `.product-menu-button` / `.product-utilities` /
+`.global-search` / `.user-button` / `.app-tabs` / `.app-identity`, parallel to
+`.suite-product-bar` / `.suite-app-bar` and their utilities. The two had drifted
+— 36px against 38px on the product bar, 43px against 34px on the app bar, 13px
+against 10px tab labels — so "the product header" had two answers to every
+question a theme asks.
+
+`app/search-workspace.tsx` now renders `ProductShell`, which grew optional
+slots for what a page's own header needs: `appSwitcher` (a page that switches
+apps in place rather than by navigating; supplying it also stops the shell
+making a bootstrap request of its own), `utilities`, `overlays` for modals and
+scrims that must sit outside `<main>`, `disclosure`, `mainClassName`/`mainId`,
+`onSignOut`, and the shell's own class and test hooks. The whole
+`.product-bar` family is deleted.
+
+Deliberate visual changes on `/search/`:
+
+* the product bar is 38px rather than 36px and sticks to the top of the page;
+* the app bar is 34px rather than 43px, its tab labels are `--type-xs` rather
+  than 13px, and an active tab is marked by the suite's filled ground and
+  underline rather than a 3px green bar;
+* the app identity block is 190px wide with a 22px glyph rather than 222px with
+  a 28px one;
+* below 760px the app switcher is hidden along with the app bar, as it already
+  was on every other page — the drawer names the app instead;
+* the skip link reads "Skip to main content" rather than "Skip to search
+  workspace".
+
+### Wordmark
+
+One component, `app/_components/wordmark.tsx`, and one `.wordmark` block. The
+markup was written out four times and styled by three blocks — `.wordmark`,
+`.suite-wordmark`, and `.signin-wordmark`/`.signin-mobile-brand` — which
+disagreed on both inks. The bar sizing is the base, because three of the four
+call sites sit in a bar; `.wordmark--hero` is the sign-in brand. The sign-in
+mark's ink moves from `#abb6bc`/`#78b44a` to the bar's `#aeb9bf`/`#79b84a`.
+
+### Drawer
+
+`.suite-mobile-drawer`, `.search-mobile-drawer` and the three identical
+scrims (`.suite-mobile-backdrop`, `.search-mobile-backdrop`,
+`.time-picker-mobile-backdrop`) become `.drawer` and `.drawer-backdrop`, with
+`.drawer-trigger`, `.drawer-label`, `.drawer-rule`, `.drawer-app-state` and
+`.drawer-app-retry` for its parts. The two drawers differed only in an
+inherited ink and in whether a nav icon was a `<span>` or an `<i>`; the search
+page now opens the shell's drawer, so its copy is gone rather than reconciled.
+
+### Modal
+
+`Modal` lives in `app/_components/modal.tsx` beside the `modal-surface.ts` it
+uses, instead of under `app/search-workspace/` with six importers reaching
+across from `app/admin`, `app/activity` and `app/reports`. Its CSS family is
+unchanged apart from a duplicate set of mobile `.modal-card` overrides, which
+sat at the same 760px breakpoint as the full-screen ones that shadowed them.
+
 ## Known debt in the token layer
 
 `.stylelintrc.json` carries an `overrides` entry exempting

@@ -222,30 +222,10 @@
   outline: 1px solid var(--focus-ring);
 }
 
-.tableWrap {
-  max-width: 100%;
-  overflow-x: auto;
-  overscroll-behavior-inline: contain;
-}
-
+/* The table itself, its header and its card mode are the global .table family
+   in app/globals.css; this module carries only the report column plan. */
 .table {
-  border-collapse: collapse;
-  font-size: var(--type-xs);
   min-width: 970px;
-  table-layout: fixed;
-  width: 100%;
-}
-
-.table th {
-  background: var(--bg-subtle);
-  border-bottom: 1px solid var(--border);
-  color: var(--fg-muted);
-  font-size: var(--type-xs);
-  font-weight: 600;
-  height: 31px;
-  padding: 0 9px;
-  text-align: left;
-  white-space: nowrap;
 }
 
 .table th:first-child { width: 42px; }
@@ -262,22 +242,6 @@
 .backendTable th:nth-child(4) { width: 210px; }
 .backendTable th:nth-child(5) { width: 150px; }
 .backendTable th:last-child { width: 252px; }
-
-.table td {
-  border-bottom: 1px solid var(--border-subtle);
-  color: var(--fg-secondary);
-  height: 67px;
-  padding: var(--space-2) 9px;
-  vertical-align: middle;
-}
-
-.table tbody tr:last-child td {
-  border-bottom: 0;
-}
-
-.table tbody tr:hover td {
-  background: var(--bg-raised);
-}
 
 .favoriteCell {
   padding-inline: 6px !important;
@@ -601,61 +565,17 @@
   .tableWrap {
     background: var(--bg-canvas);
     overflow: visible;
-    padding: var(--space-2);
   }
 
-  .table,
-  .table tbody {
-    display: block;
-    min-width: 0;
-    width: 100%;
-  }
-
-  .table thead {
-    clip: rect(0 0 0 0);
-    clip-path: inset(50%);
-    height: 1px;
-    overflow: hidden;
-    position: absolute;
-    white-space: nowrap;
-    width: 1px;
-  }
-
-  .table thead tr {
-    border: 0;
-    display: table-row;
-    padding: 0;
+  /* Card mode comes from .table--cards in app/globals.css. The report card
+     keeps a relative origin for the favourite toggle, and restores the third
+     column the 980px rule hides. */
+  .table tr {
+    position: relative;
   }
 
   .table thead th:nth-child(3) {
     display: table-cell;
-  }
-
-  .table tbody {
-    display: grid;
-    gap: var(--space-2);
-  }
-
-  .table tr {
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    padding: 11px 10px 9px;
-    position: relative;
-  }
-
-  .table td,
-  .table td:nth-child(3) {
-    border: 0;
-    display: block;
-    height: auto;
-    min-width: 0;
-    padding: 7px 5px;
-  }
-
-  .table tbody tr:hover td {
-    background: transparent;
   }
 
   .favoriteCell {
@@ -702,16 +622,6 @@
 
   .reportCell code {
     margin-top: 6px;
-  }
-
-  .table td[data-label]::before {
-    color: var(--fg-faint);
-    content: attr(data-label);
-    display: block;
-    font-size: var(--type-xs);
-    font-weight: 700;
-    margin-bottom: 5px;
-    text-transform: uppercase;
   }
 
   .cellSecondary {

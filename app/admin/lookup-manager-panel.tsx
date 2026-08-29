@@ -27,7 +27,7 @@ import { BackendResourceState } from "../_components/backend-resource-state";
 import { StatusLabel } from "../_components/status";
 import { AppIcon } from "../_components/app-icon";
 import { formatMediumDateTime } from "../_components/date-format";
-import { Modal } from "../search-workspace/modal";
+import { Modal } from "../_components/modal";
 import { joinedPatterns, lines } from "./knowledge-lookup-text";
 import type { KnowledgeManagerAppOption } from "./knowledge-manager-feature";
 import {
@@ -742,8 +742,8 @@ export function LookupManagerTable({
 }) {
   return (
     <div className="suite-card resource-table-card lookup-manager__table-card">
-      <div className="responsive-table-wrap">
-        <table className="product-table admin-resource-table lookup-manager__table">
+      <div className="table-wrap">
+        <table className="table admin-resource-table lookup-manager__table">
           <caption className="sr-only">Lookup tables</caption>
           <thead><tr><th scope="col">Lookup</th><th scope="col">Shape</th><th scope="col">Matching</th><th scope="col">State</th><th scope="col">Updated</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
           <tbody>{lookups.map((lookup) => {
@@ -928,8 +928,8 @@ export function LookupPreviewTable({ preview }: { preview: SafeLookupPreview }) 
         </ul>
       )}
       {preview.violations.length > 0 ? null : preview.rows.length === 0 ? <p className="lookup-manager__empty-preview">The CSV contains a header and no data rows.</p> : (
-        <div className="responsive-table-wrap">
-          <table className="product-table"><caption className="sr-only">Validated lookup CSV preview</caption><thead><tr>{preview.columns.map((column) => <th key={column} scope="col">{column}</th>)}</tr></thead><tbody>{keyedRows.map(({ key, value: row }) => <tr key={key}>{row.map((value, columnIndex) => <td key={preview.columns[columnIndex]}>{value === "" ? <i aria-label="empty string">empty</i> : value}</td>)}</tr>)}</tbody></table>
+        <div className="table-wrap">
+          <table className="table"><caption className="sr-only">Validated lookup CSV preview</caption><thead><tr>{preview.columns.map((column) => <th key={column} scope="col">{column}</th>)}</tr></thead><tbody>{keyedRows.map(({ key, value: row }) => <tr key={key}>{row.map((value, columnIndex) => <td key={preview.columns[columnIndex]}>{value === "" ? <i aria-label="empty string">empty</i> : value}</td>)}</tr>)}</tbody></table>
         </div>
       )}
     </section>

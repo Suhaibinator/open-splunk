@@ -313,7 +313,7 @@ function KnowledgePreviewTable({
         {" · "}{projection.rows.length.toLocaleString()} rows
       </p>
       <section className="knowledge-preview__table-scroll" aria-label={`${label} projection table`}>
-        <table className="product-table knowledge-preview__table">
+        <table className="table knowledge-preview__table">
           <caption className="sr-only">{label} retained-search projection</caption>
           <thead>
             <tr>

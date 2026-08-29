@@ -273,8 +273,8 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
             </div>
           ) : (
             <section className="suite-card">
-              <div className="responsive-table-wrap">
-                <table className="product-table">
+              <div className="table-wrap">
+                <table className="table">
                   <caption className="sr-only">Authorized datasets</caption>
                   <thead><tr><th scope="col">Index</th><th scope="col">State</th><th scope="col">Search access</th><th scope="col">Ingestion access</th><th scope="col">Retention</th><th scope="col">Default source type</th><th scope="col"><span className="sr-only">Action</span></th></tr></thead>
                   <tbody>{visible.map((index) => {

@@ -20,7 +20,7 @@ import {
 
 /** True on the narrow project, where the workspace collapses its toolbar. */
 async function usesCompactToolbar(page: Page): Promise<boolean> {
-  return page.locator("button.search-mobile-trigger").isVisible();
+  return page.locator("button.drawer-trigger").isVisible();
 }
 
 /** Runs a workspace action that the narrow layout moves into the overflow menu. */

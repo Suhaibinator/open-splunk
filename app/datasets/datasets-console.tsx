@@ -95,8 +95,8 @@ function DemoDatasetsConsole() {
         </div>
       ) : (
         <section className="suite-card">
-          <div className="responsive-table-wrap">
-            <table className="product-table">
+          <div className="table-wrap">
+            <table className="table">
               <caption className="sr-only">Datasets</caption>
               <thead><tr><th scope="col">Name</th><th scope="col">Events today</th><th scope="col">Source types</th><th scope="col">Fields</th><th scope="col">Storage</th><th scope="col">Retention</th><th scope="col"><span className="sr-only">Action</span></th></tr></thead>
               <tbody>{visible.map((item) => <tr key={item.name}><td><strong>{item.name}</strong><small className="table-secondary">{item.description}</small></td><td>{item.events}</td><td>{item.sources}</td><td>{item.fields}</td><td>{item.size}</td><td>{item.retention}</td><td><Link className="table-action" href={searchLaunchHref(`index=${item.name} | sort -_time`)} aria-label={`Search ${item.name}`}>Search <AppIcon name="chevron-right" size="xs" /></Link></td></tr>)}</tbody>

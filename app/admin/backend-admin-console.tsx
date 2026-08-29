@@ -40,7 +40,7 @@ import { StatusDot, StatusLabel, type StatusTone } from "../_components/status";
 import { AppIcon, type AppIconName } from "../_components/app-icon";
 import { formatMediumDateTime } from "../_components/date-format";
 import { PageHeading } from "../_components/product-shell";
-import { Modal } from "../search-workspace/modal";
+import { Modal } from "../_components/modal";
 import { AppsAdminPanel, CollectorFleetPanel } from "./admin-resource-panels";
 import { ADMIN_SECTION_QUERY_PARAMETER, adminSectionPath, resolveAdminSection } from "./admin-navigation";
 import { KnowledgeManagerGate } from "./knowledge-manager-gate";
@@ -4946,8 +4946,8 @@ function BackendIndexes(props: BackendIndexesProps) {
         <BackendResourceState kind="empty" title={props.totalIndexes === 0 ? "No indexes configured" : "No matching indexes"} message={props.totalIndexes === 0 ? "Create an index to begin accepting and searching data." : "Try another index name or description."} action={props.totalIndexes > 0 && props.filter.trim().length > 0 ? <button type="button" onClick={() => props.onFilterChange("")}>Clear filter</button> : undefined} />
       ) : (
         <div className="suite-card resource-table-card">
-          <div className="responsive-table-wrap">
-            <table className="product-table admin-resource-table">
+          <div className="table-wrap">
+            <table className="table admin-resource-table">
               <caption className="sr-only">Configured indexes</caption>
               <thead><tr><th scope="col">Name</th><th scope="col">State</th><th scope="col">Ingestion</th><th scope="col">Search</th><th scope="col">Retention</th><th scope="col">Updated</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
               <tbody>{props.indexes.map((index) => {
@@ -5075,7 +5075,7 @@ function BackendTokens(props: BackendTokensProps) {
                 : "The token route is available, but generation is disabled until an authoritative index summary loads."}
           />
         ) : (
-          <div className="responsive-table-wrap"><table className="product-table"><caption className="sr-only">Issued ingestion credentials</caption><thead><tr><th scope="col">Name</th><th scope="col">Purpose</th><th scope="col">Prefix</th><th scope="col">Allowed indexes</th><th scope="col">Expires</th><th scope="col">Last used</th><th scope="col">State</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead><tbody>{props.tokens.map((token) => {
+          <div className="table-wrap"><table className="table"><caption className="sr-only">Issued ingestion credentials</caption><thead><tr><th scope="col">Name</th><th scope="col">Purpose</th><th scope="col">Prefix</th><th scope="col">Allowed indexes</th><th scope="col">Expires</th><th scope="col">Last used</th><th scope="col">State</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead><tbody>{props.tokens.map((token) => {
             const state = tokenStateLabel(token.state);
             const canRevoke = tokenCanBeRevoked(token);
             const canSetEnabled = tokenCanSetEnabled(token);

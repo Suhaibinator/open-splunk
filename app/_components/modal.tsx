@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useRef } from "react";
 
-import { installModalSurface } from "../_components/modal-surface";
-import { AppIcon } from "../_components/app-icon";
+import { installModalSurface } from "./modal-surface";
+import { AppIcon } from "./app-icon";
 
 interface ModalProps {
   title: string;

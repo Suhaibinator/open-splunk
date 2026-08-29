@@ -29,7 +29,7 @@ import { BackendResourceState } from "../_components/backend-resource-state";
 import { StatusLabel } from "../_components/status";
 import { AppIcon } from "../_components/app-icon";
 import { formatMediumDateTime } from "../_components/date-format";
-import { Modal } from "../search-workspace/modal";
+import { Modal } from "../_components/modal";
 import {
   appForm,
   blankAppForm,
@@ -302,7 +302,7 @@ export function AppsAdminPanel({ apiBaseUrl, bootstrap }: PanelProps) {
         <button type="submit">Apply</button><button type="button" onClick={load}>Refresh</button>
       </form>
       {apps.length === 0 ? <BackendResourceState kind="empty" title={appliedQuery || stateFilter !== "all" ? "No matching apps" : "No apps configured"} message={appliedQuery || stateFilter !== "all" ? "Clear the filters to show the complete app catalog." : "Create an app to define a UI and knowledge-object scope."} action={appliedQuery || stateFilter !== "all" ? <button type="button" onClick={() => { setQuery(""); setAppliedQuery(""); setStateFilter("all"); }}>Clear filters</button> : undefined} /> : (
-        <div className="suite-card resource-table-card"><div className="responsive-table-wrap"><table className="product-table admin-resource-table">
+        <div className="suite-card resource-table-card"><div className="table-wrap"><table className="table admin-resource-table">
           <caption className="sr-only">Configured apps</caption>
           <thead><tr><th scope="col">Name</th><th scope="col">Default indexes</th><th scope="col">Default time</th><th scope="col">State</th><th scope="col">Updated</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
           <tbody>{apps.map((app) => {
@@ -366,7 +366,7 @@ function formatAge(seconds: bigint | undefined, nanos: number | undefined): stri
 
 function InputRows({ inputs }: { inputs: CollectorInputHealth[] }) {
   if (inputs.length === 0) return <BackendResourceState kind="empty" title="No input telemetry" message="This collector has not reported any configured input health." />;
-  return <div className="responsive-table-wrap"><table className="product-table"><caption className="sr-only">Collector inputs</caption><thead><tr><th scope="col">Input</th><th scope="col">State</th><th scope="col">Sources</th><th scope="col">Events read</th><th scope="col">Bytes read</th><th scope="col">Last event</th></tr></thead><tbody>{inputs.map((input) => <tr key={input.inputId}><td><strong>{input.inputId}</strong>{input.statusMessage ? <small className="table-secondary">{input.statusMessage}</small> : null}</td><td>{titleCaseEnum(collectorInputStateToJSON(input.state), "COLLECTOR_INPUT_STATE_")}</td><td>{input.activeSources.toLocaleString()} active<small className="table-secondary">{input.discoveredSources.toLocaleString()} discovered</small></td><td>{input.eventsReadTotal.toLocaleString()}</td><td>{formatBytes(input.bytesReadTotal)}</td><td>{formatDate(input.lastEventAt)}</td></tr>)}</tbody></table></div>;
+  return <div className="table-wrap"><table className="table"><caption className="sr-only">Collector inputs</caption><thead><tr><th scope="col">Input</th><th scope="col">State</th><th scope="col">Sources</th><th scope="col">Events read</th><th scope="col">Bytes read</th><th scope="col">Last event</th></tr></thead><tbody>{inputs.map((input) => <tr key={input.inputId}><td><strong>{input.inputId}</strong>{input.statusMessage ? <small className="table-secondary">{input.statusMessage}</small> : null}</td><td>{titleCaseEnum(collectorInputStateToJSON(input.state), "COLLECTOR_INPUT_STATE_")}</td><td>{input.activeSources.toLocaleString()} active<small className="table-secondary">{input.discoveredSources.toLocaleString()} discovered</small></td><td>{input.eventsReadTotal.toLocaleString()}</td><td>{formatBytes(input.bytesReadTotal)}</td><td>{formatDate(input.lastEventAt)}</td></tr>)}</tbody></table></div>;
 }
 
 export function CollectorFleetPanel({ apiBaseUrl, bootstrap }: PanelProps) {
@@ -536,7 +536,7 @@ export function CollectorFleetPanel({ apiBaseUrl, bootstrap }: PanelProps) {
         <button type="submit">Apply</button>
       </form>
       {collectors.length === 0 ? <BackendResourceState kind="empty" title={appliedQuery || appliedIndexFilter || stateFilter !== "all" ? "No matching collectors" : "No collectors connected"} message={appliedQuery || appliedIndexFilter || stateFilter !== "all" ? "Clear the filters to show the complete collector fleet." : "Collectors appear after they establish an authenticated connection."} action={appliedQuery || appliedIndexFilter || stateFilter !== "all" ? <button type="button" onClick={() => { setQuery(""); setAppliedQuery(""); setIndexFilter(""); setAppliedIndexFilter(""); setStateFilter("all"); }}>Clear filters</button> : undefined} /> : (
-        <div className="suite-card resource-table-card"><div className="responsive-table-wrap"><table className="product-table admin-resource-table collector-fleet-table">
+        <div className="suite-card resource-table-card"><div className="table-wrap"><table className="table admin-resource-table collector-fleet-table">
           <caption className="sr-only">Collector fleet</caption>
           <thead><tr><th scope="col">Collector</th><th scope="col">Connection</th><th scope="col">Queue</th><th scope="col">Inputs</th><th scope="col">Authorized indexes</th><th scope="col">Last seen</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
           <tbody>{collectors.map((collector) => {

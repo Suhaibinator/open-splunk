@@ -156,7 +156,7 @@ export function SearchComposer({
     const trigger = document.querySelector<HTMLButtonElement>("[data-testid='time-range-button']");
     return installModalSurface({
       container: dialog,
-      excludedSiblingClassNames: ["time-picker-mobile-backdrop"],
+      excludedSiblingClassNames: ["drawer-backdrop"],
       onEscape: () => closeTimePickerRef.current(),
       returnFocus: trigger,
     });
@@ -253,7 +253,7 @@ export function SearchComposer({
           </button>
           {modal === "time" ? (
             <>
-            <button className="time-picker-mobile-backdrop" type="button" aria-label="Close time range" onClick={onCloseTimePicker} />
+            <button className="drawer-backdrop" type="button" aria-label="Close time range" onClick={onCloseTimePicker} />
             <dialog open className="time-popover" id="time-range-popover" data-testid="time-picker-dialog" aria-modal={mobileTimePicker} aria-labelledby="time-popover-title">
               <header className="time-popover-header">
                 <div><strong id="time-popover-title">Select time range</strong><small>{localTimeZone}</small></div>
