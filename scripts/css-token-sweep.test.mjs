@@ -111,8 +111,8 @@ test("the sweep reaches every stylesheet outside the token layer", async () => {
     .map((file) => relativePosix(workspace, file))
     .toSorted();
   assert.ok(
-    audited.includes("app/globals.css"),
-    "the sweep no longer reaches app/globals.css, so every invariant below is vacuous",
+    audited.includes("app/styles/base.css") && audited.includes("app/styles/primitives/button.css"),
+    "the sweep no longer reaches the base layer or the primitives, so every invariant below is vacuous",
   );
   const modules = await listCssModules();
   assert.ok(modules.length > 0, "no CSS module was found under app/, so the comparison below is vacuous");

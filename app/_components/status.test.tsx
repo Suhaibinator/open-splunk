@@ -21,7 +21,8 @@ test("a feature class is appended without displacing the tone", () => {
 });
 
 test("every tone reaches the stylesheet through the one modifier family", () => {
-  // `.status--*` in app/globals.css is the only place a tone is painted, so a
+  // `.status--*` in app/styles/primitives/status.css is the only place a tone is
+  // painted, so a
   // tone that stopped emitting its modifier would render a neutral swatch and
   // report the wrong outcome while looking perfectly healthy.
   for (const tone of TONES) {

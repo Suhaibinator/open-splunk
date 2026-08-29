@@ -197,7 +197,7 @@ test.describe("token layer wiring", () => {
   test("the scale tier reaches the browser through app/layout.tsx", async ({ page }) => {
     await gotoVisualRoute(page, "/");
     await expectRenderedAsLiteral(page, SCALE_SENTINELS);
-    // The outgoing `--shadow` is gone from app/globals.css, so the name has to
+    // The outgoing `--shadow` is gone from every stylesheet, so the name has to
     // resolve to nothing: a stylesheet that still declared it would keep the
     // duplicate elevation alive where nothing checks the two agree.
     const [retired] = await renderedValues(page, [["box-shadow", "var(--shadow, none)"]]);

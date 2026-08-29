@@ -311,8 +311,8 @@ test("every role that replaced a pre-refactor custom property resolves to its or
     drift,
     [],
     "The move off literals is a rename, not a recolour: the role that replaced each name\n"
-      + "app/globals.css declared before the token layer has to resolve to the byte that name\n"
-      + "resolved to at 7459a0cc. A screenshot only covers the pixels a\n"
+      + "the application stylesheet declared before the token layer has to resolve to the byte\n"
+      + "that name resolved to at 7459a0cc. A screenshot only covers the pixels a\n"
       + `spec happens to visit, so the whole table is checked here:\n${describeList(drift)}`,
   );
 });
@@ -548,8 +548,8 @@ test("the token layer declares tokens and nothing else", async () => {
   assert.deepEqual(
     offenders.toSorted(),
     [],
-    "A token file grew something that is not a token. Rules belong in app/globals.css or a module;\n"
-      + `keeping the layer declaration-only is what lets a theme be read at a glance:\n${describeList(offenders.toSorted())}`,
+    "A token file grew something that is not a token. Rules belong in an application stylesheet\n"
+      + `or a module; keeping the layer declaration-only is what lets a theme be read at a\nglance:\n${describeList(offenders.toSorted())}`,
   );
 });
 

@@ -214,7 +214,7 @@ lint:
 
 # `npm run lint:css` reports CSS-token debt as warnings only and is deliberately
 # not part of this target yet. Phase 5 of the CSS cleanup flips .stylelintrc.json
-# to errors and adds it here once app/globals.css no longer trips it. The report
+# to errors and adds it here once the application stylesheets no longer trip it. The report
 # is 1,596 warnings: 1,566 of them are the token debt that phase exists to clear
 # (1,496 hex colors, 63 literal rgb()/font-family values, 7 off-scale media
 # features) and 30 are small correctness items. The token files themselves are
@@ -223,7 +223,7 @@ lint:
 # from stylelint-config-standard that this repository does not follow are turned
 # off in .stylelintrc.json, so the flip needs no disable comments.
 
-# test:contracts reads app/globals.css back through getComputedStyle and
+# test:contracts reads the application stylesheets back through getComputedStyle and
 # test:visual renders the exported UI and compares committed baselines. Both
 # need the pinned browser, installed once with
 # `npx --no-install playwright install chromium`. test:visual rebuilds the two

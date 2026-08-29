@@ -108,7 +108,7 @@ jobs:
       - name: Test frontend and build transactions
         run: npm run test:frontend
 
-      # The computed-style contracts read app/globals.css back through a real
+      # The computed-style contracts read the application stylesheets back through a real
       # browser and need no export, no baseline, and no backend, so they are
       # platform-independent and run here. `npm run test:visual` cannot: its
       # baselines are rasterized per platform and only a darwin set is

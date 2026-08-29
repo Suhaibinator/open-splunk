@@ -6,7 +6,8 @@ import Link from "next/link";
  * It appeared four times in three shapes -- the product bar, the search bar and
  * the sign-in page's two brands -- with three CSS blocks that had drifted apart
  * on ink and tracking. The markup lives here once; `.wordmark` in
- * `app/globals.css` carries the bar sizing and `.wordmark--hero` the larger
+ * `app/styles/primitives/layout.css` carries the bar sizing and `.wordmark--hero`
+ * the larger
  * sign-in brand.
  */
 interface WordmarkProps {

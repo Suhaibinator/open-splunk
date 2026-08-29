@@ -6,7 +6,8 @@ import { addApplicationStyles } from "./application-stylesheets";
 import { expectRegionScreenshot, settleVisualPage } from "./visual-harness";
 
 /**
- * Appearance of surfaces `app/globals.css` styles that no exported page reaches.
+ * Appearance of surfaces the application stylesheets style that no exported page
+ * reaches.
  *
  * The rest of this suite photographs the shipped exports, which is the right
  * default: it pins what a reader actually sees. But a rule whose element never

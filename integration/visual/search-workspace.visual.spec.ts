@@ -11,8 +11,9 @@ import {
 } from "./visual-harness";
 
 /**
- * Appearance of the search workspace, which owns the largest share of
- * `app/globals.css`: the job strip, timeline, fields rail, result tabs, the
+ * Appearance of the search workspace, which owns the largest share of the
+ * application stylesheets -- the four `app/search-workspace/search-*.css` files:
+ * the job strip, timeline, fields rail, result tabs, the
  * statistics grid, the categorical chart, a modal surface, and the empty
  * state.
  *

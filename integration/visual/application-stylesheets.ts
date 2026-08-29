@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import path from "node:path";
 
 import { type Page } from "@playwright/test";
@@ -7,24 +8,30 @@ import { type Page } from "@playwright/test";
  *
  * Two suites mount fixture markup in a bare page instead of navigating to an
  * exported route, so nothing loads the application's CSS for them. They used
- * to inject `app/globals.css` alone, which was complete only while every
- * custom property was declared inside that file. Now that the token layer
- * declares them, injecting globals.css by itself would leave every `var()`
- * unresolved -- the fixture would silently fall back to browser defaults and
- * the assertions would pin the fallback rather than the shipped rule.
+ * to inject `app/globals.css` alone, which was complete only while that one
+ * file held every rule and every custom property. It now holds neither: the
+ * token layer declares the properties and `app/styles/index.css` imports a
+ * file per primitive and per feature, so injecting any single one of them
+ * would leave the fixture painting browser defaults and the assertions
+ * pinning the fallback rather than the shipped rule.
  *
- * `app/styles/index.css` cannot stand in for its two imports here: an
+ * `app/styles/index.css` cannot stand in for its imports here either: an
  * `@import` inside an injected `<style>` resolves against the page URL, which
- * for `page.setContent` is `about:blank`. The files are therefore listed
- * individually, and a new token file has to be added in both places.
+ * for `page.setContent` is `about:blank`. So the list is read out of that file
+ * instead of restated -- adding a stylesheet stays the one-line edit to
+ * `index.css` that the layer promises, and this list can never drift from the
+ * cascade order the browser actually gets.
  */
-const applicationRoot = path.join(__dirname, "..", "..", "app");
+const stylesRoot = path.join(__dirname, "..", "..", "app", "styles");
 
-export const APPLICATION_STYLESHEETS: readonly string[] = [
-  path.join(applicationRoot, "styles", "tokens-color.css"),
-  path.join(applicationRoot, "styles", "tokens-scale.css"),
-  path.join(applicationRoot, "globals.css"),
-];
+function importedStylesheets(): readonly string[] {
+  const index = readFileSync(path.join(stylesRoot, "index.css"), "utf8");
+  const specifiers = [...index.matchAll(/@import\s+url\("([^"]+)"\)/gu)].map((match) => match[1]);
+  if (specifiers.length === 0) throw new Error("app/styles/index.css imports nothing; the fixture suites would paint browser defaults");
+  return specifiers.map((specifier) => path.join(stylesRoot, specifier));
+}
+
+export const APPLICATION_STYLESHEETS: readonly string[] = importedStylesheets();
 
 /**
  * Injects the shipped stylesheets into a page built with `setContent`.

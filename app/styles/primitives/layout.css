@@ -1,0 +1,933 @@
+/* Layout
+   The product's chrome and page furniture: the bar and its menus, the app
+   shell and its drawer, the toast stack, and the `.suite-page` / `.suite-card`
+   frames every feature page is built out of. It is the last primitive
+   app/styles/index.css imports, so a feature sheet can override any of it,
+   and it comes after the primitives above so the chrome can lean on them. */
+
+/* Product chrome */
+.search-actions,
+.job-primary,
+.job-controls,
+.job-metrics,
+.timeline-toolbar > div,
+.event-toolbar > div,
+.event-toolbar nav,
+.row-actions,
+.event-field-actions,
+.chart-toggle {
+  align-items: center;
+  display: flex;
+}
+
+/* The product mark, everywhere. The bar sizing is the base because three of
+   the four call sites sit in a bar; --hero is the sign-in brand. */
+.wordmark {
+  align-items: baseline;
+  display: flex;
+  flex: 0 0 auto;
+  font-size: 17px;
+  font-weight: 700;
+  height: 38px;
+  letter-spacing: -0.04em;
+  padding: 9px 15px var(--space-2) 17px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.wordmark b {
+  color: #79b84a;
+  font-size: 19px;
+  line-height: 0;
+  margin: 0 1px;
+}
+
+.wordmark span:first-child {
+  color: #aeb9bf;
+  font-weight: 400;
+}
+
+.wordmark--hero {
+  font-size: 22px;
+  height: auto;
+  letter-spacing: -0.05em;
+  padding: 0;
+  width: max-content;
+}
+
+.wordmark--hero b {
+  font-size: 25px;
+  line-height: normal;
+  margin: 0 2px;
+}
+
+.suite-utilities .health-indicator {
+  color: #c7d1d6;
+}
+
+.health-indicator > span {
+  background: #74ae49;
+  border: 2px solid #38442f;
+  border-radius: 50%;
+  display: inline-block;
+  height: 9px;
+  margin-right: var(--space-1);
+  vertical-align: -1px;
+  width: 9px;
+}
+
+.activity-count {
+  align-items: center;
+  background: var(--accent);
+  border-radius: var(--radius-md);
+  color: var(--fg-inverse);
+  display: inline-flex;
+  font-size: var(--type-xxs);
+  height: 14px;
+  justify-content: center;
+  margin-left: 3px;
+  min-width: 14px;
+  padding: 0 var(--space-1);
+}
+
+.header-menu-wrap {
+  height: 100%;
+  position: relative;
+}
+
+.floating-menu {
+  animation: menu-in 100ms ease-out;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-lg);
+  color: var(--fg-text);
+  min-width: 240px;
+  padding: 6px 0;
+  position: absolute;
+  top: calc(100% + 1px);
+  z-index: var(--z-dropdown);
+}
+
+@keyframes menu-in {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.app-menu {
+  left: 0;
+  min-width: 320px;
+}
+
+.utility-menu,
+.user-menu,
+.help-menu {
+  right: 0;
+}
+
+.utility-menu {
+  min-width: 270px;
+}
+
+.menu-label {
+  color: var(--fg-muted);
+  display: block;
+  font-size: var(--type-xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 7px var(--space-3) 5px;
+  text-transform: uppercase;
+}
+
+.floating-menu button,
+.floating-menu > a {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: var(--fg-text);
+  display: flex;
+  gap: 9px;
+  min-height: 36px;
+  padding: 7px var(--space-3);
+  text-align: left;
+  text-decoration: none;
+  width: 100%;
+}
+
+.floating-menu button:hover,
+.floating-menu button:focus-visible,
+.floating-menu button.selected,
+.floating-menu > a:hover,
+.floating-menu > a:focus-visible,
+.floating-menu > a.selected {
+  background: var(--bg-subtle);
+}
+
+.floating-menu button > span:nth-child(2),
+.floating-menu > a > span:nth-child(2) {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.floating-menu button strong,
+.floating-menu > a strong {
+  font-size: var(--type-md);
+}
+
+.floating-menu button small,
+.floating-menu > a small {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  margin-top: 2px;
+}
+
+.floating-menu button b,
+.floating-menu > a b {
+  color: var(--accent);
+}
+
+.app-glyph {
+  align-items: center;
+  background: #5d9637;
+  color: var(--chrome-fg);
+  display: inline-flex;
+  flex: 0 0 auto !important;
+  font-size: 15px;
+  font-weight: 700;
+  height: 28px;
+  justify-content: center;
+  width: 28px;
+}
+
+.menu-separator {
+  border-top: 1px solid var(--border);
+  margin: 5px 0;
+}
+
+.user-summary {
+  display: grid;
+  grid-template-columns: 34px 1fr;
+  padding: var(--space-2) var(--space-3) var(--space-3);
+}
+
+.user-summary > span {
+  align-items: center;
+  background: var(--accent);
+  border-radius: 50%;
+  color: var(--chrome-fg);
+  display: inline-flex;
+  font-size: var(--type-xxs);
+  font-weight: 700;
+  grid-row: 1 / 3;
+  height: 28px;
+  justify-content: center;
+  width: 28px;
+}
+
+.user-summary strong,
+.user-summary small {
+  align-self: center;
+}
+
+.user-summary small {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+}
+
+.menu-dismiss {
+  background: transparent;
+  border: 0;
+  inset: 0;
+  position: fixed;
+  z-index: var(--z-dropdown-scrim);
+}
+
+.search-title-row:has(.floating-menu),
+.job-strip:has(.floating-menu) {
+  z-index: var(--z-dropdown);
+}
+
+/* The search page's shell frame.
+   `<main class="suite-main search-page">` carries both classes, and
+   `.suite-main` below sets the min-height that wins, purely because it is
+   declared later. The pair therefore lives together and in this order:
+   moving this rule to the search sheet would hand the win to the page and
+   shorten every search view by seven pixels. */
+
+.search-page {
+  background: var(--bg-surface);
+  min-height: calc(100vh - 79px);
+}
+
+/* Notifications */
+.toast {
+  align-items: center;
+  animation: toast-in 180ms ease-out;
+  background: #26333b;
+  border-left: 4px solid #4a8eb4;
+  bottom: 20px;
+  box-shadow: 0 8px 28px rgb(12 22 28 / 28%);
+  color: var(--fg-inverse);
+  display: flex;
+  gap: 9px;
+  min-height: 45px;
+  min-width: 330px;
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+  position: fixed;
+  right: 20px;
+  z-index: var(--z-toast);
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.toast > span {
+  align-items: center;
+  background: #4a8eb4;
+  border-radius: 50%;
+  display: inline-flex;
+  font-size: var(--type-xs);
+  height: 20px;
+  justify-content: center;
+  width: 20px;
+}
+
+.toast strong {
+  flex: 1;
+  font-size: var(--type-sm);
+}
+
+.toast button {
+  background: transparent;
+  border: 0;
+  color: var(--fg-inverse);
+  font-size: 18px;
+  height: 28px;
+  width: 28px;
+}
+
+.toast-success { border-left-color: #72a84c; }
+.toast-success > span { background: #72a84c; }
+.toast-warning { border-left-color: #d99d2a; }
+.toast-warning > span { background: var(--status-warning-bright); }
+
+/* Multi-page product shell */
+.suite-shell {
+  background: var(--bg-canvas);
+  min-height: 100vh;
+}
+
+.suite-product-bar {
+  align-items: stretch;
+  background: var(--chrome-bar);
+  color: var(--chrome-fg);
+  display: flex;
+  height: 38px;
+  position: sticky;
+  top: 0;
+  z-index: var(--z-bar);
+}
+
+/*
+ * A sticky bar with a z-index is a stacking context, so a menu inside it is
+ * trapped at the bar's layer however high the menu's own z-index climbs -- and
+ * the dismiss scrim and the app bar, both painted later at or above --z-bar,
+ * then cover every item of an open menu while it still looks clickable. Raise
+ * the bar itself for as long as it holds a menu, which is the move
+ * `.search-title-row:has(.floating-menu)` already makes one layer down.
+ * `.suite-popover` is the shell's own menu; `.floating-menu` is the one the
+ * search workspace passes into the bar's slots.
+ */
+.suite-product-bar:has(.floating-menu),
+.suite-product-bar:has(.suite-popover) {
+  z-index: var(--z-dropdown);
+}
+
+.suite-menu-anchor {
+  position: relative;
+}
+
+.suite-app-switcher,
+.suite-utilities > a,
+.suite-utilities > button,
+.suite-utilities > .suite-menu-anchor > button,
+.suite-context {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  display: flex;
+  font-size: var(--type-sm);
+  height: 38px;
+  padding: 0 11px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.suite-app-switcher {
+  border-left: 1px solid rgb(255 255 255 / 8%);
+  border-right: 1px solid rgb(255 255 255 / 8%);
+  gap: 3px;
+}
+
+.suite-app-switcher:hover,
+.suite-app-switcher[aria-expanded="true"],
+.suite-utilities > a:hover,
+.suite-utilities > button:hover,
+.suite-utilities > .suite-menu-anchor > button:hover,
+.suite-utilities > .suite-menu-anchor > button[aria-expanded="true"] {
+  background: rgb(255 255 255 / 8%);
+}
+
+.suite-utilities {
+  align-items: stretch;
+  display: flex;
+  margin-left: auto;
+  min-width: 0;
+}
+
+.suite-utilities .suite-context {
+  color: #c8d3d8;
+}
+
+.suite-find {
+  align-items: center;
+  align-self: center;
+  background: var(--bg-inverse);
+  border: 1px solid #4a555c;
+  display: flex;
+  height: 25px;
+  margin: 0 var(--space-2);
+  width: 198px;
+}
+
+.suite-find:focus-within {
+  border-color: #8fc5e0;
+  box-shadow: 0 0 0 2px rgb(47 138 193 / 35%);
+}
+
+.suite-find input {
+  background: transparent;
+  border: 0;
+  color: var(--chrome-fg);
+  font-size: var(--type-sm);
+  min-width: 0;
+  outline: 0;
+  padding: 0 6px;
+  width: 100%;
+}
+
+.suite-find kbd {
+  color: var(--fg-faint);
+  font-family: var(--font-sans);
+  font-size: var(--type-xs);
+  white-space: nowrap;
+}
+
+.suite-find button {
+  background: transparent;
+  border: 0;
+  color: #a7b2b8;
+  height: 23px;
+  padding: 0 6px;
+}
+
+.suite-user-button {
+  gap: 6px;
+}
+
+.suite-user-button > span {
+  align-items: center;
+  background: #6da442;
+  border-radius: 50%;
+  display: inline-flex;
+  font-size: var(--type-xs);
+  height: 17px;
+  justify-content: center;
+  width: 17px;
+}
+
+.suite-user-button > b {
+  font-size: var(--type-xs);
+  font-weight: 600;
+}
+
+.suite-user-button > i {
+  font-size: var(--type-xs);
+  font-style: normal;
+}
+
+.suite-popover {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-lg);
+  color: var(--fg-text);
+  padding: 6px 0;
+  position: absolute;
+  top: calc(100% + 1px);
+  z-index: var(--z-dropdown);
+}
+
+.suite-app-popover {
+  left: 0;
+  max-height: min(70dvh, 540px);
+  overflow-y: auto;
+  width: 310px;
+}
+
+.suite-utility-popover {
+  min-width: 220px;
+  right: 0;
+}
+
+.suite-popover > a,
+.suite-popover > button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: var(--fg-text);
+  display: flex;
+  font-size: var(--type-sm);
+  gap: 9px;
+  min-height: 34px;
+  padding: 7px var(--space-3);
+  text-align: left;
+  text-decoration: none;
+  width: 100%;
+}
+
+.suite-popover > a:hover,
+.suite-popover > button:hover {
+  background: var(--bg-subtle);
+}
+
+.suite-popover > a > span,
+.suite-popover > button > span,
+.suite-app-catalog-state > span {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.suite-app-popover > a.selected {
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 var(--accent);
+}
+
+.suite-app-catalog-state {
+  align-items: center;
+  color: var(--fg-text);
+  display: flex;
+  font-size: var(--type-sm);
+  gap: 9px;
+  min-height: 48px;
+  padding: 7px var(--space-3);
+}
+
+.suite-app-popover strong,
+.suite-app-popover small { overflow-wrap: anywhere; }
+
+.suite-popover small {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  font-weight: 400;
+}
+
+.suite-menu-label {
+  color: var(--fg-muted);
+  display: block;
+  font-size: var(--type-xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 5px var(--space-3) 7px;
+  text-transform: uppercase;
+}
+
+.suite-menu-rule {
+  border-top: 1px solid var(--border-subtle);
+  display: block;
+  margin: 5px 0;
+}
+
+.suite-app-icon {
+  align-items: center;
+  background: var(--accent);
+  border-radius: var(--radius-sm);
+  color: var(--fg-inverse);
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: var(--type-xl);
+  font-style: normal;
+  height: 31px;
+  justify-content: center;
+  width: 31px;
+}
+
+.suite-app-icon--grade { background: var(--status-info); }
+.suite-app-icon--muted { background: #7d8990; }
+
+.suite-user-summary {
+  align-items: center;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  gap: 9px;
+  margin: -6px 0 5px;
+  padding: var(--space-3);
+}
+
+.suite-user-summary > span {
+  align-items: center;
+  background: #679d40;
+  border-radius: 50%;
+  color: var(--fg-inverse);
+  display: inline-flex;
+  height: 32px;
+  justify-content: center;
+  width: 32px;
+}
+
+.suite-user-summary > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.suite-user-summary small { color: var(--fg-muted); font-size: var(--type-xs); }
+
+.suite-app-bar {
+  align-items: stretch;
+  background: var(--chrome-appbar);
+  color: var(--chrome-fg);
+  display: flex;
+  height: 34px;
+  justify-content: space-between;
+  position: sticky;
+  top: 38px;
+  z-index: var(--z-bar);
+}
+
+.suite-primary-nav {
+  align-items: stretch;
+  display: flex;
+}
+
+.suite-primary-nav a {
+  align-items: center;
+  border-bottom: 3px solid transparent;
+  display: flex;
+  font-size: var(--type-xs);
+  padding: 0 15px;
+  text-decoration: none;
+}
+
+.suite-primary-nav a:hover { background: var(--chrome-hover); }
+.suite-primary-nav a.active { background: #384047; border-bottom-color: #79b84a; }
+
+.suite-app-identity {
+  align-items: center;
+  border-left: 1px solid rgb(255 255 255 / 11%);
+  display: flex;
+  font-size: var(--type-xs);
+  gap: 7px;
+  min-width: 190px;
+  padding: 0 13px;
+}
+
+.suite-app-identity > span {
+  align-items: center;
+  background: var(--accent);
+  display: inline-flex;
+  font-size: 15px;
+  height: 22px;
+  justify-content: center;
+  width: 22px;
+}
+
+.suite-dismiss {
+  background: transparent;
+  border: 0;
+  inset: 38px 0 0;
+  position: fixed;
+  z-index: var(--z-dropdown-scrim);
+}
+
+.suite-main { min-height: calc(100vh - 72px); }
+
+.suite-data-disclosure {
+  align-items: center;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-muted);
+  display: flex;
+  font-size: var(--type-xs);
+  gap: 6px;
+  min-height: 28px;
+  padding: 5px var(--space-6);
+}
+
+.suite-data-disclosure strong { color: #40515a; font-size: var(--type-xs); }
+.suite-data-disclosure--demo strong { color: #86620d; }
+.suite-data-disclosure--backend strong { color: var(--accent); }
+
+/* The drawer, its scrim and its trigger exist only below the compact
+   breakpoint, where `Multi-page responsive contracts` gives them their look. */
+.drawer,
+.drawer-backdrop,
+.drawer-trigger,
+.mobile-search-actions {
+  display: none;
+}
+
+/* Shared page primitives */
+.suite-page {
+  margin: 0 auto;
+  max-width: 1480px;
+  padding: 23px var(--space-6) 44px;
+  width: 100%;
+}
+
+.suite-page-heading,
+.dashboard-title-row,
+.home-hero {
+  align-items: flex-end;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+
+.suite-page-heading h1,
+.dashboard-title-row h1,
+.home-hero h1 {
+  color: var(--fg-text);
+  font-size: 23px;
+  font-weight: 400;
+  letter-spacing: -0.02em;
+  margin: 3px 0 var(--space-1);
+}
+
+.suite-page-heading p,
+.dashboard-title-row p,
+.home-hero p {
+  color: var(--fg-muted);
+  font-size: var(--type-sm);
+  margin: 0;
+}
+
+.suite-eyebrow {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.suite-page-actions,
+.home-hero-actions,
+.dashboard-title-row > div:last-child {
+  align-items: center;
+  display: flex;
+  gap: 7px;
+}
+
+.suite-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  min-width: 0;
+}
+
+.suite-card-header {
+  align-items: center;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  justify-content: space-between;
+  min-height: 52px;
+  padding: 10px 14px;
+}
+
+.suite-card-header h2,
+.suite-card-header h3 {
+  color: var(--fg-text);
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0 0 3px;
+}
+
+.suite-card-header p {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  margin: 0;
+}
+
+.suite-card-header > a,
+.suite-card-header > button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: var(--fg-link);
+  display: inline-flex;
+  font-size: var(--type-xs);
+  font-weight: 600;
+  min-height: 30px;
+  padding: 5px 6px;
+  text-decoration: none;
+}
+
+/* Two call-site overrides of the page-heading family above, kept beside it
+   for the same reason: that family's own breakpoint rules override these
+   back, so a sheet imported later would win at the compact steps. */
+
+.home-hero { align-items: center; margin-bottom: var(--space-4); }
+.home-hero h1 { font-size: 25px; }
+
+.dashboard-title-row { align-items: center; }
+
+/* Responsive
+   The breakpoint overrides for the rules above. They live in the file that
+   owns their base selectors rather than in one document-wide section, so a
+   feature and the way it folds are one edit rather than two thousand lines
+   apart. docs/theming.md documents the step canon; each step appears once
+   here, holding what the two responsive sections used to state twice. */
+
+@media (max-width: 1240px) {
+  .suite-utilities .health-indicator {
+    display: none;
+  }
+
+  .suite-find,
+  .suite-context,
+  .suite-utilities > a:first-of-type {
+    display: none;
+  }
+}
+
+@media (max-width: 980px) {
+  .suite-utilities > a,
+  .suite-utilities > button,
+  .suite-utilities > .suite-menu-anchor:not(:last-child) { display: none; }
+  .suite-page { padding-inline: var(--space-4); }
+}
+
+@media (max-width: 760px) {
+  .toast {
+    bottom: 10px;
+    left: 10px;
+    min-width: 0;
+    right: 10px;
+  }
+
+  .suite-product-bar {
+    height: calc(45px + env(safe-area-inset-top));
+    padding-top: env(safe-area-inset-top);
+    position: sticky;
+  }
+  .suite-product-bar .wordmark { height: 45px; padding: var(--space-3) 10px 10px; }
+  .drawer-trigger {
+    align-items: center;
+    background: transparent;
+    border: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    height: 45px;
+    justify-content: center;
+    width: 44px;
+  }
+  .drawer-trigger span { background: var(--chrome-fg); display: block; height: 1px; width: 17px; }
+  /*
+   * Only the shell's OWN catalog anchor folds away here, because the drawer
+   * lists the same apps underneath it. A page that supplies its own switcher
+   * switches apps in place and gets the drawer's one-app branch instead, so
+   * hiding its anchor too would leave that page unable to change app at all
+   * below 760px -- the control the pre-shell header kept visible.
+   */
+  .suite-product-bar > .suite-catalog-anchor,
+  .suite-utilities > a,
+  .suite-utilities > button,
+  .suite-utilities > .suite-menu-anchor:not(:last-child) { display: none; }
+  .suite-product-bar > .suite-menu-anchor > .suite-app-switcher { max-width: 195px; }
+  .suite-product-bar > .suite-menu-anchor > .suite-app-switcher > strong {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .suite-utilities { margin-left: auto; }
+  .suite-user-button { height: 45px !important; padding: 0 13px !important; }
+  .suite-user-button > span { height: 24px; width: 24px; }
+  .suite-user-button > b,
+  .suite-user-button > i { display: none; }
+  .suite-app-bar { display: none; }
+  .suite-main { min-height: calc(100dvh - 45px - env(safe-area-inset-top)); }
+  .suite-data-disclosure { align-items: flex-start; flex-direction: column; gap: 1px; padding: 5px 10px; }
+  .drawer-backdrop {
+    background: rgb(14 21 25 / 48%);
+    border: 0;
+    display: block;
+    inset: 0;
+    position: fixed;
+    z-index: var(--z-drawer-scrim);
+  }
+  .drawer {
+    background: var(--bg-raised);
+    border: 0;
+    box-shadow: 8px 0 30px rgb(18 29 36 / 24%);
+    color: var(--fg-text);
+    display: flex;
+    flex-direction: column;
+    inset: 0 auto 0 0;
+    margin: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 0 0 max(12px, env(safe-area-inset-bottom));
+    position: fixed;
+    width: min(330px, calc(100vw - 42px));
+    z-index: var(--z-drawer);
+  }
+
+  .drawer > header { align-items: center; background: var(--chrome-bar); color: var(--chrome-fg); display: flex; justify-content: space-between; min-height: calc(69px + env(safe-area-inset-top)); padding: calc(10px + env(safe-area-inset-top)) 11px 10px 15px; position: sticky; top: 0; z-index: 2; }
+  .drawer > header > div { align-items: center; display: flex; gap: 9px; }
+  .drawer > header > div > span:last-child { display: flex; flex-direction: column; gap: 2px; }
+  .drawer > header small { color: #aeb9bf; font-size: var(--type-xs); }
+.suite-user-avatar { align-items: center; background: var(--accent); border-radius: 50%; display: flex; height: 34px; justify-content: center; width: 34px; }
+  .drawer > header button { background: transparent; border: 0; color: #e6ecef; font-size: 24px; height: 44px; width: 44px; }
+  .drawer-label { color: var(--fg-muted); font-size: var(--type-xs); font-weight: 700; letter-spacing: 0.1em; padding: 15px var(--space-4) 6px; }
+  .drawer > a { align-items: center; border-left: 3px solid transparent; display: flex; font-size: var(--type-sm); gap: var(--space-3); min-height: 47px; padding: 0 var(--space-4); text-decoration: none; }
+  .drawer > a:hover { background: var(--bg-subtle); }
+  .drawer > a.active { background: var(--accent-soft); border-left-color: var(--accent); font-weight: 700; }
+  .drawer > a.selected-app { background: var(--accent-soft); border-left-color: #7da768; }
+  .drawer > a > span { align-items: center; color: var(--fg-muted); display: flex; font-size: 15px; justify-content: center; width: 22px; }
+  .drawer > a > b { margin-left: auto; }
+  .drawer-app-state,
+  .drawer-app-retry { color: var(--fg-muted); display: block; font-size: var(--type-xs); margin: var(--space-1) var(--space-4) var(--space-2); padding: 10px; }
+  .drawer-app-state { background: var(--bg-subtle); }
+  .drawer-app-retry { background: var(--bg-surface); border: 1px solid var(--border-strong); text-align: left; }
+  .drawer-rule { border-top: 1px solid var(--border); margin: 9px var(--space-4); }
+
+  .suite-page { padding: 15px 10px calc(30px + env(safe-area-inset-bottom)); }
+  .suite-page-heading,
+  .dashboard-title-row,
+  .home-hero { align-items: stretch; flex-direction: column; gap: var(--space-3); }
+  .suite-page-actions,
+  .dashboard-title-row > div:last-child { flex-wrap: wrap; }
+  .suite-page-actions .button,
+  .dashboard-title-row .button { min-height: 38px; }
+  .home-hero-actions { display: grid; grid-template-columns: 1fr 1fr; }
+  .home-hero-actions .button { min-height: 40px; }
+
+  .mobile-search-actions { display: block; margin-left: auto; }
+  .mobile-search-actions > button { height: 36px; min-width: 70px; }
+  .mobile-search-menu { right: 0; width: min(270px, calc(100vw - 20px)); }
+  .mobile-search-menu > a { align-items: center; color: var(--fg-text); display: flex; gap: 9px; min-height: 42px; padding: 7px var(--space-3); text-decoration: none; }
+  .mobile-search-menu > a > span { display: inline; }
+}
+
+@media (max-width: 480px) {
+  .suite-product-bar > .suite-menu-anchor > .suite-app-switcher { max-width: calc(100vw - 142px); }
+  .suite-page-heading h1,
+  .dashboard-title-row h1,
+  .home-hero h1 { font-size: 21px; }
+}

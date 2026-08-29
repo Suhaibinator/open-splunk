@@ -1,0 +1,761 @@
+/* Search header and editor */
+
+.search-title-row {
+  align-items: center;
+  background: var(--bg-canvas);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  min-height: 56px;
+  padding: var(--space-2) 18px;
+  position: relative;
+  z-index: var(--z-sticky);
+}
+
+.search-title {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+}
+
+.search-title h1 {
+  color: var(--fg-text);
+  font-size: 21px;
+  font-weight: 400;
+  margin: 0;
+  max-width: 460px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.unsaved-dot,
+.search-draft-hint,
+.demo-badge {
+  align-items: center;
+  border-radius: 10px;
+  display: inline-flex;
+  font-size: var(--type-xs);
+  height: 21px;
+  white-space: nowrap;
+}
+
+.unsaved-dot {
+  color: var(--status-warning);
+}
+
+.unsaved-dot::before {
+  background: var(--status-warning-bright);
+  border-radius: 50%;
+  content: "";
+  height: 6px;
+  margin-right: 5px;
+  width: 6px;
+}
+
+.search-draft-hint {
+  color: var(--fg-muted);
+}
+
+.demo-badge {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  color: var(--fg-muted);
+  padding: 0 var(--space-2);
+}
+
+.demo-badge i {
+  background: var(--status-warning-bright);
+  border-radius: 50%;
+  height: 6px;
+  margin-right: 5px;
+  width: 6px;
+}
+
+.demo-badge.backend-data-badge i {
+  background: var(--accent);
+}
+
+.search-actions {
+  gap: 1px;
+}
+
+.search-actions > button,
+.search-actions > .header-menu-wrap > button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--fg-secondary);
+  display: inline-flex;
+  font-size: var(--type-sm);
+  gap: 5px;
+  height: 32px;
+  padding: 0 9px;
+}
+
+.search-actions > button:hover,
+.search-actions > .header-menu-wrap > button:hover {
+  background: var(--bg-subtle);
+}
+
+.search-actions .close-search {
+  color: var(--fg-muted);
+  margin-left: 7px;
+}
+
+.action-menu {
+  min-width: 280px;
+  right: 0;
+}
+
+.action-menu > button > span:first-child {
+  align-items: center;
+  color: var(--accent-hover);
+  display: inline-flex;
+  flex: 0 0 24px;
+  font-size: 17px;
+  justify-content: center;
+}
+
+.search-composer {
+  background: var(--bg-surface);
+  display: grid;
+  grid-template-columns: minmax(420px, 1fr) 210px 86px;
+  padding: 11px 18px var(--space-2);
+  position: relative;
+  z-index: var(--z-sticky);
+}
+
+.spl-editor {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+  height: 62px;
+  min-width: 0;
+  position: relative;
+}
+
+.spl-editor.focused {
+  border-color: var(--focus-ring);
+  box-shadow: inset 0 0 0 1px var(--focus-ring), 0 0 0 2px rgb(58 136 181 / 13%);
+  z-index: 2;
+}
+
+.spl-editor.has-error {
+  border-color: #d15b51;
+}
+
+.editor-gutter {
+  background: var(--bg-subtle);
+  border-right: 1px solid var(--border);
+  color: var(--fg-faint);
+  font-family: var(--font-mono);
+  font-size: var(--type-xs);
+  height: 60px;
+  left: 0;
+  line-height: 22px;
+  overflow: hidden;
+  padding: var(--space-2) 0;
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  width: 31px;
+  z-index: 2;
+}
+
+.editor-gutter-lines {
+  display: flex;
+  flex-direction: column;
+  will-change: transform;
+}
+
+.editor-gutter-lines span {
+  flex: 0 0 22px;
+  text-align: center;
+}
+
+.editor-highlight,
+.spl-editor textarea {
+  border: 0;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-variant-ligatures: none;
+  height: 60px;
+  inset: 0;
+  letter-spacing: -0.01em;
+  line-height: 22px;
+  margin: 0;
+  overflow: auto;
+  padding: var(--space-2) 94px var(--space-2) var(--space-8);
+  position: absolute;
+  tab-size: 2;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.editor-highlight {
+  color: var(--fg-strong);
+  pointer-events: none;
+  scrollbar-width: none;
+}
+
+.editor-highlight::-webkit-scrollbar {
+  display: none;
+}
+
+.spl-editor textarea {
+  -webkit-text-fill-color: transparent;
+  background: transparent;
+  caret-color: var(--fg-strong);
+  color: transparent;
+  outline: 0;
+  resize: none;
+  z-index: 3;
+}
+
+.spl-editor textarea::selection {
+  background: rgb(55 140 191 / 25%);
+}
+
+.spl-pipe {
+  color: #a14b96;
+  font-weight: 700;
+}
+
+.spl-command {
+  color: #734ba3;
+  font-weight: 700;
+}
+
+.spl-function {
+  color: #aa5f18;
+}
+
+.spl-field {
+  color: #146ca1;
+}
+
+.spl-string {
+  color: #2e7d45;
+}
+
+.spl-boolean {
+  color: #b04c38;
+  font-weight: 700;
+}
+
+.spl-operator {
+  color: #b04c38;
+  font-weight: 650;
+}
+
+.spl-error-token {
+  background: var(--status-error-soft);
+  color: var(--status-error);
+  text-decoration: underline wavy var(--status-error);
+}
+
+.editor-meta {
+  align-items: center;
+  bottom: 3px;
+  color: var(--fg-faint);
+  display: flex;
+  font-size: var(--type-xxs);
+  gap: 7px;
+  pointer-events: none;
+  position: absolute;
+  right: 6px;
+  z-index: 4;
+}
+
+.editor-meta span:first-child {
+  background: var(--bg-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--fg-muted);
+  font-weight: 700;
+  padding: 2px var(--space-1);
+}
+
+.completion-menu {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-lg);
+  left: 28px;
+  max-width: none;
+  min-width: 0;
+  padding: var(--space-1) 0;
+  position: absolute;
+  right: -1px;
+  top: 64px;
+  z-index: var(--z-dropdown);
+}
+
+.completion-title {
+  align-items: center;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--fg-muted);
+  display: flex;
+  font-size: var(--type-xs);
+  justify-content: space-between;
+  padding: 6px 10px;
+}
+
+.completion-title span {
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.completion-menu > button {
+  align-items: center;
+  background: var(--bg-surface);
+  border: 0;
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: 92px 1fr 18px;
+  min-height: 34px;
+  padding: 6px 10px;
+  text-align: left;
+  width: 100%;
+}
+
+.completion-menu > button:hover,
+.completion-menu > button[data-highlighted="true"] {
+  background: var(--selection);
+}
+
+.completion-menu code {
+  color: #63449a;
+  font-size: var(--type-md);
+  font-weight: 700;
+}
+
+.completion-menu > button span {
+  color: var(--fg-muted);
+  font-size: var(--type-sm);
+}
+
+.completion-menu kbd {
+  color: var(--fg-muted);
+  font-size: var(--type-md);
+}
+
+.completion-empty {
+  color: var(--fg-muted);
+  font-size: var(--type-sm);
+  margin: 0;
+  padding: var(--space-3) 10px;
+}
+
+.time-range-button {
+  align-items: center;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-left: 0;
+  display: grid;
+  gap: var(--space-2);
+  grid-template-columns: 20px 1fr 12px;
+  height: 62px;
+  padding: 0 var(--space-3);
+  text-align: left;
+}
+
+.time-picker-wrap {
+  min-width: 0;
+  position: relative;
+}
+
+.time-picker-wrap > .time-range-button {
+  width: 100%;
+}
+
+.time-range-button:hover {
+  background: var(--bg-subtle);
+}
+
+.search-composer:has(.time-popover) {
+  z-index: var(--z-dropdown);
+}
+
+.time-popover {
+  animation: menu-in 100ms ease-out;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-lg);
+  color: var(--fg-text);
+  margin: 0;
+  padding: 0;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 2px);
+  width: min(680px, calc(100vw - 28px));
+  z-index: var(--z-dropdown);
+}
+
+.time-popover-header {
+  align-items: center;
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  min-height: 48px;
+  padding: var(--space-2) 10px var(--space-2) 15px;
+  flex: 0 0 auto;
+}
+
+.time-popover-header > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.time-popover-header strong {
+  color: var(--fg-strong);
+  font-size: var(--type-lg);
+}
+
+.time-popover-header small {
+  color: var(--fg-muted);
+  font-size: var(--type-xxs);
+}
+
+.time-popover-header > button {
+  background: transparent;
+  border: 0;
+  color: var(--fg-muted);
+  font-size: var(--type-xxl);
+  height: 30px;
+  width: 30px;
+}
+
+.time-popover .time-picker-layout {
+  grid-template-columns: 154px minmax(0, 1fr);
+  margin: 0;
+  min-height: 0;
+}
+
+.time-popover .time-picker-content {
+  max-height: min(420px, calc(100vh - 245px));
+  min-height: 180px;
+  overflow: auto;
+  padding: var(--space-4) 18px;
+}
+
+.time-popover-footer {
+  align-items: center;
+  background: var(--bg-canvas);
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 7px;
+  justify-content: flex-end;
+  min-height: 48px;
+  padding: var(--space-2) var(--space-3);
+  flex: 0 0 auto;
+}
+
+.time-popover > .time-popover-preview {
+  border-left: 0;
+  border-right: 0;
+  display: grid;
+  flex: 0 0 auto;
+  margin: 0;
+  padding: var(--space-2) 15px;
+}
+
+.time-popover > .time-popover-preview span {
+  flex-direction: row;
+  justify-content: space-between;
+}
+
+.time-form-section > p {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  margin: -3px 0 var(--space-4);
+}
+
+.time-form-section > .time-validation {
+  color: var(--status-error);
+  font-weight: 700;
+  margin: var(--space-2) 0 0;
+}
+
+.relative-time-row,
+.absolute-time-row {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.relative-time-row {
+  grid-template-columns: 100px 1fr 1fr;
+}
+
+.absolute-time-row {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.relative-time-row label,
+.absolute-time-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.relative-time-row label > span,
+.absolute-time-row label > span {
+  color: #4a5962;
+  font-size: var(--type-xxs);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.relative-time-row input,
+.relative-time-row select,
+.absolute-time-row input {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  height: 34px;
+  min-width: 0;
+  padding: 0 9px;
+  width: 100%;
+}
+
+.time-range-button > span:first-child {
+  color: var(--fg-muted);
+  font-size: 19px;
+}
+
+.time-range-button > span:nth-child(2) {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.time-range-button small {
+  color: var(--fg-muted);
+  font-size: var(--type-xxs);
+  margin-bottom: 2px;
+  text-transform: uppercase;
+}
+
+.time-range-button strong {
+  font-size: var(--type-md);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The run button is a `.button` whose tone is computed -- accent while a search
+   can be started, destructive while one can be cancelled -- so the class list
+   comes from `app/_components/button.tsx`. What stays here is the layout no
+   other button has: a 62px block welded to the right edge of the SPL editor,
+   stacking a glyph over its label. */
+.run-button {
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  flex-direction: column;
+  font-size: var(--type-sm);
+  gap: 3px;
+  height: 62px;
+}
+
+.run-button > span {
+  font-size: 19px;
+  line-height: 18px;
+}
+
+.diagnostic-strip {
+  align-items: center;
+  background: var(--status-error-soft);
+  border-bottom: 1px solid #e6bbb7;
+  border-top: 1px solid #e6bbb7;
+  color: #86302c;
+  display: flex;
+  gap: 10px;
+  margin: 0 18px 7px;
+  min-height: 46px;
+  padding: 7px 10px;
+}
+
+.diagnostic-strip > span:nth-child(2) {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+}
+
+.diagnostic-strip strong {
+  font-size: var(--type-md);
+}
+
+.diagnostic-strip small {
+  color: #9c504b;
+  font-size: var(--type-xs);
+  margin-top: 2px;
+}
+
+.diagnostic-strip button {
+  background: transparent;
+  border: 0;
+  color: #8c332f;
+  font-weight: 700;
+}
+
+/* Responsive
+   The breakpoint overrides for the rules above. They live in the file that
+   owns their base selectors rather than in one document-wide section, so a
+   feature and the way it folds are one edit rather than two thousand lines
+   apart. docs/theming.md documents the step canon; each step appears once
+   here, holding what the two responsive sections used to state twice. */
+
+@media (max-width: 1240px) {
+  .search-title h1 {
+    max-width: 340px;
+  }
+
+  .search-actions > button,
+  .search-actions > .header-menu-wrap > button {
+    padding-inline: 7px;
+  }
+}
+
+@media (max-width: 980px) {
+  .search-title-row {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .search-actions {
+    overflow-x: auto;
+    width: 100%;
+  }
+
+  .search-composer {
+    grid-template-columns: minmax(330px, 1fr) 185px 76px;
+  }
+}
+
+@media (max-width: 760px) {
+  .search-title {
+    flex-wrap: wrap;
+  }
+
+  .search-actions > button,
+  .search-actions > .header-menu-wrap > button {
+    height: 36px;
+    min-width: max-content;
+    padding-inline: 10px;
+  }
+
+  .search-composer {
+    gap: 6px;
+    grid-template-columns: minmax(0, 1fr) 76px;
+  }
+
+  .spl-editor {
+    border-radius: var(--radius-sm);
+    grid-column: 1 / -1;
+    height: 76px;
+  }
+
+  .spl-editor .editor-gutter,
+  .spl-editor .editor-highlight,
+  .spl-editor textarea {
+    height: 74px;
+  }
+
+  .spl-editor .editor-highlight,
+  .spl-editor textarea {
+    font-size: var(--type-xl);
+    padding-bottom: var(--space-6);
+  }
+
+  .completion-menu {
+    left: -1px;
+    max-width: none;
+    min-width: 0;
+    right: -1px;
+    top: 130px;
+  }
+
+  .completion-menu > button {
+    gap: var(--space-2);
+    grid-template-columns: 78px minmax(0, 1fr) 16px;
+  }
+
+  .time-popover {
+    display: flex;
+    flex-direction: column;
+    max-height: max(320px, calc(100dvh - 304px));
+    right: -82px;
+    width: calc(100vw - 20px);
+  }
+
+  .time-popover .time-picker-layout {
+    flex: 1;
+    grid-template-columns: 96px minmax(0, 1fr);
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .time-popover .time-picker-content {
+    max-height: none;
+    min-height: 0;
+    overflow-y: auto;
+    padding: var(--space-3);
+  }
+
+  .relative-time-row,
+  .absolute-time-row {
+    grid-template-columns: 1fr;
+  }
+
+  .time-range-button {
+    border-left: 1px solid var(--border-strong);
+    height: 46px;
+  }
+
+  .run-button {
+    border-radius: var(--radius-sm);
+    height: 46px;
+  }
+
+  .run-button > span {
+    font-size: 15px;
+  }
+
+  .diagnostic-strip {
+    margin-inline: 10px;
+  }
+
+  /* The anchored desktop picker becomes a keyboard-safe phone sheet. */
+  .time-popover {
+    border: 0;
+    bottom: 0;
+    box-shadow: 0 -12px 36px rgb(18 29 36 / 24%);
+    left: 0;
+    max-height: 82dvh;
+    position: fixed;
+    right: 0;
+    top: auto;
+    width: 100vw;
+    z-index: var(--z-drawer);
+  }
+  .time-popover .time-picker-layout { min-height: 0; }
+  .time-popover .modal-footer,
+  .time-popover .time-picker-footer { background: var(--bg-surface); bottom: 0; padding-bottom: max(10px, env(safe-area-inset-bottom)); position: sticky; z-index: 2; }
+
+  /* Search-page action replacements. */
+  .search-actions { overflow: visible; }
+  .search-actions > button:not(.search-action-save),
+  .search-actions > .header-menu-wrap:not(.mobile-search-actions) { display: none; }
+}
+
+@media (max-width: 480px) {
+  .time-popover { max-height: 90dvh; }
+  .time-popover .time-picker-layout { grid-template-columns: 84px minmax(0, 1fr); }
+}
+
+@media (max-height: 650px) and (max-width: 760px) {
+  .time-popover { max-height: 96dvh; }
+}

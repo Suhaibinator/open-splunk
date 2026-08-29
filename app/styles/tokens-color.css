@@ -10,8 +10,9 @@
  *   actually used lands within ~24 RGB units of a step.
  *
  *   Tier 2 -- semantic tokens. Named after the *role* a colour plays, never
- *   after the colour itself. These are the only names components, globals.css,
- *   and the CSS modules may use, which is what makes a theme a one-file edit.
+ *   after the colour itself. These are the only names components, the
+ *   application stylesheets, and the CSS modules may use, which is what makes a
+ *   theme a one-file edit.
  *
  * A theme therefore restates tier 2 and leaves tier 1 alone: see the
  * `:root[data-theme="dark"]` block at the bottom, and docs/theming.md.

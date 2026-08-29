@@ -3,16 +3,58 @@
 How the styling layer is put together, and where to edit it when the product
 should look different.
 
-`app/layout.tsx` loads exactly two stylesheets, in this order:
+`app/layout.tsx` loads exactly one stylesheet: `app/styles/index.css`. That
+file is nothing but an ordered `@import` list, and the order is the contract —
+tokens, base, primitives, features, interaction floors. The CSS modules the
+components import for themselves land after it.
 
-1. `app/styles/index.css`, which `@import`s the token layer:
-   `tokens-color.css` (the colour tiers) then `tokens-scale.css` (everything
-   that does not vary by theme).
-2. `app/globals.css`, the application stylesheet, followed by the six CSS
-   modules the components import for themselves.
+Only the token files are meant to carry a literal. A retheme should be an edit
+to `app/styles/tokens-*.css`, not a search across the rules.
 
-Only the first of those is meant to carry a literal. A retheme should be an
-edit to `app/styles`, not a search across 7,600 lines of rules.
+### Where the CSS lives
+
+`app/globals.css` used to be all of it: 7,267 lines, with every breakpoint
+override for every feature collected into two sections at the foot of the file.
+Phase 4 carved it up. Every rule moved exactly once and unchanged, and the
+`@media` blocks moved into the file that owns their base selectors, so a
+feature and the way it folds are now one edit:
+
+| File | Holds |
+| --- | --- |
+| `app/styles/base.css` | the reset, the element defaults, the focus ring, the icon sizes, the shared keyframes |
+| `app/styles/primitives/button.css` | `.button` and its modifiers |
+| `app/styles/primitives/table.css` | `.table-wrap`, `.table`, the fixed/compact modifiers, the card mode |
+| `app/styles/primitives/form.css` | inputs, labels, `.form-stack`, the fieldsets, `.settings-list` |
+| `app/styles/primitives/modal.css` | the dialog shell and the surfaces that only open inside one |
+| `app/styles/primitives/status.css` | `.status` and `.badge` |
+| `app/styles/primitives/layout.css` | the product bar, the app shell, the drawer, the toasts, `.suite-page` / `.suite-card` |
+| `app/search-workspace/search-editor.css` | the search title row, the SPL editor, the time-range popover |
+| `app/search-workspace/search-job.css` | the job strip, the result tabs, the timeline |
+| `app/search-workspace/search-fields.css` | the fields rail and the event list |
+| `app/search-workspace/search-results.css` | patterns, statistics, visualization, the dense result grids |
+| `app/admin/admin.css` | the admin console, Knowledge Manager, Knowledge Preview, Lookup Manager |
+| `app/activity/activity.css` | the activity console |
+| `app/datasets/datasets.css` | the dataset cards and field catalog |
+| `app/signin/signin.css` | the sign-in page |
+| `app/home.css` | the landing page |
+| `app/_components/backend-resource-state.css` | the connected-backend empty and error surfaces |
+| `app/dashboards/dashboards.css` | the operations dashboard |
+| `app/styles/interaction.css` | the coarse-pointer tap target, the 16px input floor, the reduced-motion cut |
+
+Three of those placements are not where the file name would suggest, and each
+records a cascade dependency the monolith hid:
+
+- `.search-page` sits in `layout.css` beside `.suite-main`. The search page's
+  `<main>` carries both classes, and the shell's `min-height` wins only because
+  it is declared later; splitting the pair would hand the win to the page and
+  move the fold by seven pixels.
+- `.home-hero`, `.home-hero h1` and `.dashboard-title-row` sit in `layout.css`
+  with the `.suite-page-heading` family they override, because that family's own
+  breakpoint rules override them back.
+- `interaction.css` is imported last, after every feature. Its two rules list
+  selectors from every feature and have to outrank all of them; imported
+  earlier, a feature's own `min-height` or `font-size` would win back a tap
+  target or an input on a touch device that no desktop screenshot covers.
 
 That is most of the state now.
 [`app/styles/tokens-color.css`](../app/styles/tokens-color.css) declares every
@@ -46,7 +88,7 @@ something to point at.
 
 The steps are not invented. They were derived from the literal inventory the
 stylesheet layer started with — some 1,500 hex occurrences across
-`app/globals.css` and the CSS modules — and chosen so that every literal the
+the application stylesheets and the CSS modules — and chosen so that every literal the
 product used more than twice lands within about 24 RGB units of a step. Nine
 hue families survived that exercise: gray, slate, green, blue, amber, orange,
 red, purple, and a small set of extended categorical hues (teal, pink, indigo,
@@ -56,7 +98,7 @@ brown, olive) that only the chart ramp reaches.
 
 Names such as `--bg-surface`, `--fg-muted`, `--status-error`, `--chrome-bar`.
 Each names the **role** a colour plays, never the colour itself. These are the
-only names `app/globals.css`, the CSS modules, and component code may use.
+only names the application stylesheets, the CSS modules, and component code may use.
 
 The roles are grouped as:
 
@@ -92,7 +134,7 @@ themes.
 > No literal colour may appear outside `app/styles/tokens-*.css`.
 
 That means no `#rrggbb`, no `rgb()`, `rgba()`, `hsl()`, or `color()`, and no
-named CSS colour, anywhere in `app/globals.css`, a `*.module.css`, an inline
+named CSS colour, anywhere in an application stylesheet, a `*.module.css`, an inline
 `style` attribute, or a TypeScript constant that feeds one. `npm run lint:css`
 reports the remaining violations.
 
@@ -283,8 +325,8 @@ fluid display size, not a step on a UI ramp.
 
 ### Stacking
 
-Nine steps replace the twenty-nine distinct `z-index` values `app/globals.css`
-ships across fifty-five declarations, ordered
+Nine steps replace the twenty-nine distinct `z-index` values the application
+stylesheets ship across fifty-five declarations, ordered
 
 `base < sticky < bar < dropdown-scrim < dropdown < modal < drawer-scrim < drawer < toast`
 
@@ -500,7 +542,7 @@ migration, not of this phase.
 ## Primitives
 
 A token layer only makes a retheme a one-file edit if there is also one rule
-that reads each token. Three families in `app/globals.css` had grown a copy per
+that reads each token. Three families in the application stylesheet had grown a copy per
 feature instead, so a colour change had to be repeated by hand and the copies
 drifted apart in ways no token could reconcile. Phase 3 collapsed them.
 
@@ -511,8 +553,7 @@ feature class is the thing that produced the copies in the first place.
 
 ### `.button`
 
-One class plus BEM modifiers, in `app/globals.css` under the `/* Buttons */`
-banner. `app/_components/button.tsx` composes the same classes from props and
+One class plus BEM modifiers, in `app/styles/primitives/button.css`. `app/_components/button.tsx` composes the same classes from props and
 is worth using where the variant is *computed* — the search workspace's run
 button is accent while a search can be started and destructive while one can be
 cancelled, and it is the call site the component exists for. Where the variant
@@ -589,7 +630,7 @@ its own colour already matches).
 byte-identical `previewBadge` rules in `analytics.module.css` and
 `operations-dashboard.module.css`, `.readOnlyBadge`, `.liveBadge`/`.partialBadge`
 and `.availableBadge`/`.unavailableBadge` — eight, which is the number the
-Badges banner in `app/globals.css` states.
+Badges banner in `app/styles/primitives/status.css` states.
 
 **Not folded in: `.demo-badge`.** It is a ninth chip and it is still its own
 implementation — a 21px pill with a `10px` radius rather than `--radius-pill`,
@@ -626,7 +667,7 @@ row below is a decision, not a regression, and the visual baselines under
 | Snapshot-bar buttons | `.live-jobs-snapshot button`, a bare descendant rule restating the primitive | `.button.button--compact` | one implementation; the accent ink stays as a one-line feature override |
 | Reports table status ink | `reports.module.css` `.status`/`.runStatus` set no colour and inherited the cell's `--fg-secondary` | `--fg-muted`, from `.status--label` | the status vocabulary owns the label ink; the outcome is carried by the swatch, not by the text being a shade darker than its neighbours |
 
-**Residual `button` debt.** 195 rules in `app/globals.css` still style a bare
+**Residual `button` debt.** 195 rules in the application stylesheets still style a bare
 `button` as a descendant of a feature (`.search-actions > button`,
 `.pagination button`, and so on) rather than through `.button`. They are not
 copies of the primitive — most set only a height, a gap or an ink for a control
@@ -662,8 +703,8 @@ force a second copy of the keyframe is now a value rather than a rule.
 
 ### Tables
 
-`app/globals.css` now carries one table family and every table in the product
-is built from it:
+`app/styles/primitives/table.css` carries one table family and every table in
+the product is built from it:
 
 | Class | What it is |
 | --- | --- |
