@@ -734,3 +734,249 @@ export async function listInjectedStylesheets(root) {
   return [...list[1].matchAll(/path\.join\(([^)]*)\)/gu)]
     .map((entry) => relativePosix(root, path.join(applicationRoot, ...quoted(entry[1]))));
 }
+
+/**
+ * Consolidation inventory.
+ *
+ * Phase 3 folded parallel families -- eight status chips, eight badges, three
+ * button vocabularies, five tables, six keyframe blocks -- into one primitive
+ * each. The collectors below answer the two questions that keeps true: is each
+ * primitive still defined exactly once, and does anything still ask for a name
+ * the fold retired? Both are text questions about structure, which is why they
+ * live here rather than in a test file.
+ */
+
+/** A declaration list rendered as a stable, order-independent signature. */
+export function declarationSignature(declarations) {
+  return declarations.map(({ property, value }) => `${property}: ${value}`).toSorted();
+}
+
+/**
+ * Every rule in the styling layer that declares at least `minimum` properties.
+ *
+ * At-rule preludes (`@media`, `@keyframes`, `@property`) are dropped: only
+ * selector blocks can restate one another, and a keyframe step is a position on
+ * a timeline rather than a rule a second selector could be sharing.
+ */
+export async function collectDeclarationBlocks(root, minimum) {
+  const perFile = await Promise.all((await listStylesheets(root)).map(async (file) => {
+    const css = await readFile(file, "utf8");
+    return cssBlocks(css)
+      .filter((block) => !block.prelude.startsWith("@"))
+      .map((block) => ({
+        ancestors: block.ancestors.map((prelude) => prelude.replaceAll(/\s+/gu, " ")),
+        declarations: cssDeclarations(block.body),
+        file: relativePosix(root, file),
+        prelude: block.prelude.replaceAll(/\s+/gu, " "),
+      }))
+      .filter((block) => block.declarations.length >= minimum);
+  }));
+  return perFile.flat();
+}
+
+/** Human-readable address of a rule: file, enclosing at-rules, selector list. */
+export function describeRuleSite(block) {
+  return [block.file, ...block.ancestors, block.prelude].join(" :: ");
+}
+
+/**
+ * Rules whose selector list contains a primitive's bare class selector.
+ *
+ * "Bare" means the selector is exactly `.name` -- not `.name--modifier`, not
+ * `.name:hover`, not `.other .name`. That is the shape that *defines* a
+ * primitive, and counting it is how "one implementation of each primitive"
+ * becomes checkable: a second bare rule is a second base, wherever it lives.
+ * CSS modules contribute only through `:global(.name)`, since a module's own
+ * `.name` is scoped to a generated identifier and cannot collide.
+ */
+export async function collectBaseRuleSites(root, classNames) {
+  const wanted = new Set(classNames);
+  const perFile = await Promise.all((await listStylesheets(root)).map(async (file) => {
+    const scoped = file.endsWith(".module.css");
+    const css = await readFile(file, "utf8");
+    const found = [];
+    for (const block of cssBlocks(css)) {
+      if (block.prelude.startsWith("@")) continue;
+      for (const selector of block.prelude.split(",")) {
+        const text = selector.trim().replaceAll(/\s+/gu, " ");
+        const name = scoped
+          ? /^:global\(\s*\.([-\w]+)\s*\)$/u.exec(text)?.[1]
+          : /^\.([-\w]+)$/u.exec(text)?.[1];
+        if (name === undefined || !wanted.has(name)) continue;
+        found.push([name, {
+          ancestors: block.ancestors.map((prelude) => prelude.replaceAll(/\s+/gu, " ")),
+          file: relativePosix(root, file),
+          prelude: block.prelude.replaceAll(/\s+/gu, " "),
+        }]);
+      }
+    }
+    return found;
+  }));
+  const sites = new Map([...wanted].map((name) => [name, []]));
+  for (const [name, site] of perFile.flat()) sites.get(name).push(site);
+  return sites;
+}
+
+/** Every `@keyframes` block in the styling layer, as `{ file, name }`. */
+export async function collectKeyframeSites(root) {
+  const perFile = await Promise.all((await listStylesheets(root)).map(async (file) => {
+    const css = stripCssComments(await readFile(file, "utf8"));
+    return [...css.matchAll(/@keyframes\s+([-\w]+)/gu)]
+      .map((match) => ({ file: relativePosix(root, file), name: match[1] }));
+  }));
+  return perFile.flat();
+}
+
+/** Longhand and shorthand animation keywords a name can never be confused with. */
+const ANIMATION_KEYWORDS = new Set([
+  "alternate", "alternate-reverse", "backwards", "both", "ease", "ease-in", "ease-in-out",
+  "ease-out", "forwards", "infinite", "inherit", "initial", "linear", "none", "normal",
+  "paused", "reverse", "running", "step-end", "step-start", "unset",
+]);
+
+/**
+ * Every animation name the styling layer asks a rule to play.
+ *
+ * `animation-name` carries the name alone; the `animation` shorthand carries it
+ * among durations, easings and counts, so the reader takes the first token that
+ * is neither a keyword nor a quantity. An animation naming a keyframe set that
+ * no longer exists renders as no animation at all, in silence, which is exactly
+ * what folding six identical keyframe blocks into two risks.
+ */
+export async function collectAnimationReferences(root) {
+  const perFile = await Promise.all((await listStylesheets(root)).map(async (file) => {
+    const css = await readFile(file, "utf8");
+    const found = [];
+    for (const block of cssBlocks(css)) {
+      if (block.prelude.startsWith("@keyframes")) continue;
+      for (const { property, value } of cssDeclarations(block.body)) {
+        if (property !== "animation" && property !== "animation-name") continue;
+        const name = value.split(/[\s,]+/u).find((token) => (
+          /^[-A-Za-z_][-\w]*$/u.test(token) && !ANIMATION_KEYWORDS.has(token)
+        ));
+        if (name === undefined) continue;
+        found.push({
+          file: relativePosix(root, file),
+          name,
+          selector: block.prelude.replaceAll(/\s+/gu, " "),
+        });
+      }
+    }
+    return found;
+  }));
+  return perFile.flat();
+}
+
+/**
+ * Class names a source file writes into a `className` or `class` attribute.
+ *
+ * `scripts/css-invariants.test.mjs` asks the CSS-to-markup question: does every
+ * rule still have a caller? This is the other direction, the one a deletion
+ * gets wrong -- does every class the markup asks for still have a rule? Only
+ * attribute positions count, so a word that happens to be an API value
+ * (`variant="danger"`, a route named `cancel`) is never mistaken for a class.
+ *
+ * Both attribute spellings are read, and an expression form
+ * (`className={cond ? "a" : "b"}`) contributes every literal inside it, since
+ * any of them can reach the DOM.
+ */
+export function collectClassAttributeTokens(source) {
+  const tokens = new Set();
+  for (const match of source.matchAll(/(?:^|[^-\w.])(?:className|class)\s*=\s*/gu)) {
+    let index = match.index + match[0].length;
+    let expression = "";
+    if (source[index] === "{") {
+      let depth = 0;
+      const start = index;
+      for (; index < source.length; index += 1) {
+        if (source[index] === "{") depth += 1;
+        else if (source[index] === "}") {
+          depth -= 1;
+          if (depth === 0) break;
+        }
+      }
+      expression = source.slice(start, index + 1);
+    } else if (source[index] === '"' || source[index] === "'" || source[index] === "`") {
+      const end = source.indexOf(source[index], index + 1);
+      expression = end === -1 ? "" : source.slice(index, end + 1);
+    }
+    walkSource(expression, () => undefined, (text) => {
+      for (const token of text.split(/[^\w-]+/u)) {
+        if (token.length > 0) tokens.add(token);
+      }
+    });
+  }
+  return tokens;
+}
+
+/** Calls that hand a CSS selector to the DOM or to Playwright. */
+const SELECTOR_CALL = /\b(?:locator|querySelector|querySelectorAll|waitForSelector|closest|matches)\s*\(\s*/gu;
+
+/**
+ * Class names a source file selects on, with the lines each one sits at.
+ *
+ * A spec that drives the product through `.knowledge-manager__detail` is
+ * coupled to the stylesheet's vocabulary just as tightly as a rule is, and a
+ * rename that misses it fails as a timeout somewhere far from the cause. Only
+ * the first argument of a selector call is read, so an identifier such as
+ * `payload.value` can never be mistaken for a class.
+ */
+export function collectSelectorClassTokens(source) {
+  const found = new Map();
+  const lineStarts = [0];
+  for (let index = 0; index < source.length; index += 1) {
+    if (source[index] === "\n") lineStarts.push(index + 1);
+  }
+  function lineAt(offset) {
+    let low = 0;
+    let high = lineStarts.length - 1;
+    while (low < high) {
+      const middle = Math.ceil((low + high) / 2);
+      if (lineStarts[middle] <= offset) low = middle;
+      else high = middle - 1;
+    }
+    return low + 1;
+  }
+  for (const match of source.matchAll(SELECTOR_CALL)) {
+    const index = match.index + match[0].length;
+    const quote = source[index];
+    if (quote !== '"' && quote !== "'" && quote !== "`") continue;
+    const end = source.indexOf(quote, index + 1);
+    if (end === -1) continue;
+    const line = lineAt(index);
+    for (const name of source.slice(index + 1, end).matchAll(/\.(-?[_a-zA-Z][\w-]*)/gu)) {
+      const lines = found.get(name[1]) ?? new Set();
+      lines.add(line);
+      found.set(name[1], lines);
+    }
+  }
+  return new Map([...found].map(([name, lines]) => [name, [...lines].toSorted((left, right) => left - right)]));
+}
+
+/** Every class the styling layer can match, including a module's `:global()`. */
+export async function collectStyledClasses(root) {
+  const perFile = await Promise.all((await listStylesheets(root)).map(async (file) => {
+    const css = await readFile(file, "utf8");
+    if (!file.endsWith(".module.css")) return Array.from(collectStylesheetClasses(css));
+    const global = [];
+    for (const match of stripCssComments(css).matchAll(/:global\(([^)]*)\)/gu)) {
+      for (const selector of match[1].matchAll(/\.(-?[_a-zA-Z][\w-]*)/gu)) global.push(selector[1]);
+    }
+    return global;
+  }));
+  return new Set(perFile.flat());
+}
+
+/** Application and harness sources: everything a class name can be written in. */
+export async function listSourceFiles(root) {
+  return (await listRepositoryFiles(root)).filter((file) => SOURCE_EXTENSIONS.has(path.extname(file)));
+}
+
+/** Module specifiers a source file imports from, in source order. */
+export function collectImportSpecifiers(source) {
+  const pattern = new RegExp(
+    `\\bimport\\b[^;\\n]*?from\\s*${MASK_OPEN}([^${MASK_CLOSE}]*)${MASK_CLOSE}`,
+    "gu",
+  );
+  return [...maskStringLiterals(source).matchAll(pattern)].map((match) => match[1]);
+}
