@@ -87,6 +87,7 @@ test.describe("search workspace", () => {
     await openWorkspaceWithResults(page);
     await runWorkspaceAction(page, "Export", "Export results");
     await expect(page.getByTestId("export-dialog")).toBeVisible();
+    await settleVisualPage(page);
     await expectViewportScreenshot(page, "search-export-dialog");
   });
 

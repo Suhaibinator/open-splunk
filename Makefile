@@ -216,12 +216,14 @@ lint:
 # not part of this target yet. Phase 5 of the CSS cleanup flips .stylelintrc.json
 # to errors and adds it here once app/globals.css no longer trips it.
 
-# test:visual renders the exported UI in Chromium and compares committed
-# baselines; install the pinned browser once with
+# test:contracts reads app/globals.css back through getComputedStyle and
+# test:visual renders the exported UI and compares committed baselines. Both
+# need the pinned browser, installed once with
 # `npx --no-install playwright install chromium`.
 test: docs-check lint
 	$(GO_TEST_ENV) go test ./...
 	npm run test:frontend
+	npm run test:contracts
 	npm run test:visual
 	npm run typecheck
 

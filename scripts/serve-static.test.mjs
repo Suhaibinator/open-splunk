@@ -60,15 +60,22 @@ test("resolveRequestPath keeps every traversal inside the export root", () => {
 test("the static server mirrors the exported trailing-slash routing", async (t) => {
   const root = await exportFixture(t);
   await withServer(t, root, async (origin) => {
-    for (const [request, expected] of [
+    const routes = [
       ["/", "home"],
       ["/admin/", "admin"],
       ["/admin", "admin"],
       ["/index.html", "home"],
-    ]) {
-      const response = await fetch(`${origin}${request}`);
-      assert.equal(response.status, 200, request);
-      assert.match(await response.text(), new RegExp(`${expected}$`, "u"), request);
+    ];
+    // The routes are independent, so they are fetched together and asserted after.
+    const results = await Promise.all(
+      routes.map(async ([request, expected]) => {
+        const response = await fetch(`${origin}${request}`);
+        return { body: await response.text(), expected, request, status: response.status };
+      }),
+    );
+    for (const { body, expected, request, status } of results) {
+      assert.equal(status, 200, request);
+      assert.match(body, new RegExp(`${expected}$`, "u"), request);
     }
   });
 });
@@ -85,10 +92,16 @@ test("the static server answers an unknown route with the exported 404 page", as
 test("the static server never serves a file above the export root", async (t) => {
   const root = await exportFixture(t);
   await withServer(t, root, async (origin) => {
-    for (const request of ["/../outside.txt", "/admin/../../outside.txt", "/%2e%2e/outside.txt"]) {
-      const response = await fetch(`${origin}${request}`);
-      assert.equal(response.status, 404, request);
-      assert.doesNotMatch(await response.text(), /outside the export/u, request);
+    const traversals = ["/../outside.txt", "/admin/../../outside.txt", "/%2e%2e/outside.txt"];
+    const results = await Promise.all(
+      traversals.map(async (request) => {
+        const response = await fetch(`${origin}${request}`);
+        return { body: await response.text(), request, status: response.status };
+      }),
+    );
+    for (const { body, request, status } of results) {
+      assert.equal(status, 404, request);
+      assert.doesNotMatch(body, /outside the export/u, request);
     }
   });
 });

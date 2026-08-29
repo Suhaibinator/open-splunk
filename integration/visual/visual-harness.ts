@@ -20,10 +20,31 @@ export async function gotoVisualRoute(page: Page, route: string): Promise<void> 
   await settleVisualPage(page);
 }
 
-/** Waits for font metrics and two animation frames so layout has stopped moving. */
+/**
+ * Waits for font metrics, entrance animations, and two animation frames so
+ * layout has stopped moving.
+ *
+ * `toHaveScreenshot` fast-forwards animations at capture time, but it first
+ * compares consecutive frames to decide the page has stopped changing, and a
+ * short entrance animation can satisfy that comparison while still in flight:
+ * `.modal-card` runs `modal-in` for 140ms, so a dialog screenshot could land on
+ * the half-travelled `translateY(-8px)` frame instead of the resting one.
+ * Awaiting the finite animations pins the finished state every run.
+ */
 export async function settleVisualPage(page: Page): Promise<void> {
   await page.evaluate(async () => {
     await document.fonts.ready;
+    await Promise.all(
+      document.getAnimations().map(async (animation) => {
+        // A looping or paused animation never reaches `finished`; the capture
+        // freezes those instead, so waiting on them would hang the test.
+        const timing = animation.effect?.getComputedTiming();
+        if (animation.playState === "paused" || timing?.iterations === Number.POSITIVE_INFINITY) {
+          return;
+        }
+        await animation.finished.catch(() => undefined);
+      }),
+    );
     await new Promise((resolve) => {
       requestAnimationFrame(() => requestAnimationFrame(resolve));
     });
