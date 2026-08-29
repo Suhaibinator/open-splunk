@@ -7,15 +7,9 @@
 // Here the stylesheet is loaded into a real browser against fixture markup that
 // mirrors the production DOM, and the assertions read resolved values from
 // getComputedStyle, which is what the rules actually promise.
-import path from "node:path";
-
 import { expect, test, type Page } from "@playwright/test";
 
-const globalStylesheet = path.join(__dirname, "..", "..", "app", "globals.css");
-// `addStyleTag` injects the file's characters into a document with no base URL,
-// so the `@import` at the top of globals.css cannot resolve. The token layer is
-// therefore injected first, exactly as the cascade orders it in the browser.
-const colourTokenStylesheet = path.join(__dirname, "..", "..", "app", "styles", "tokens-color.css");
+import { addApplicationStyles } from "./application-stylesheets";
 
 const COMPACT_WIDTH = 980;
 const MOBILE_WIDTH = 760;
@@ -25,8 +19,7 @@ const DESKTOP_WIDTH = 1280;
 async function mount(page: Page, markup: string, width: number): Promise<void> {
   await page.setViewportSize({ height: 900, width });
   await page.setContent(`<main>${markup}</main>`);
-  await page.addStyleTag({ path: colourTokenStylesheet });
-  await page.addStyleTag({ path: globalStylesheet });
+  await addApplicationStyles(page);
 }
 
 async function gridTracks(page: Page, selector: string): Promise<number[]> {

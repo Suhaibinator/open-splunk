@@ -1,0 +1,77 @@
+/*
+ * Non-colour design tokens: the scales every rule is allowed to measure with.
+ *
+ * This is the tier-1 (primitive) half of the token layer that does not vary by
+ * theme. Sizes, radii, type steps, stacking order, elevation, motion and the
+ * two font stacks live here because none of them changes between light and
+ * dark; colour lives in the sibling file, tokens-color.css.
+ *
+ * Every step below was chosen from the literals `app/globals.css` and the six
+ * CSS modules actually ship today, so a later migration is a substitution, not
+ * a redesign. docs/theming.md carries the full literal-to-token mapping and
+ * names the places where a substitution will deliberately move a pixel.
+ *
+ * Nothing consumes these yet. Phase 1 only establishes the layer.
+ */
+
+:root {
+  /* Motion. --dur-fast covers 90-120ms interaction feedback (14 declarations),
+     --dur-base the 140-180ms surface transitions (3). Loader and spinner
+     cadences (0.7s-1.8s) are animation timing, not interaction feedback, and
+     stay literal. --ease is the dominant interaction easing (10 of 16). */
+  --dur-base: 180ms;
+  --dur-fast: 100ms;
+  --ease: ease-out;
+
+  /* Type stacks, moved verbatim out of the :root block in app/globals.css. */
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  --font-sans: Arial, Helvetica, sans-serif;
+
+  /* Corner radius. --radius-sm is Splunk's near-square 2px, already the most
+     common literal (24 declarations). A circle is `border-radius: 50%`, which
+     depends on the box rather than on this scale, so it stays literal. */
+  --radius-lg: 12px;
+  --radius-md: 8px;
+  --radius-pill: 999px;
+  --radius-sm: 2px;
+
+  /* Elevation. --shadow-lg is byte-identical to the outgoing --shadow, so the
+     six rules that already read a token do not move. The colours are still
+     literals: tier 2 has no shadow ink yet, and inventing one here would make
+     this file depend on a name tokens-color.css does not define. */
+  --shadow-lg: 0 10px 30px rgb(18 29 36 / 18%), 0 2px 7px rgb(18 29 36 / 12%);
+  --shadow-md: 0 3px 9px rgb(21 35 43 / 24%);
+  --shadow-sm: 0 1px 4px rgb(21 36 45 / 9%);
+
+  /* Spacing, on a 4px base. Today's padding, gap and margin literals run
+     unbroken from 1px to 94px; each rounds to its nearest step, ties down. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 40px;
+
+  /* Type scale. This product's body size is 10px, so the ramp is deliberately
+     bottom-heavy and --text-xs, not --text-md, is the default UI size. */
+  --text-lg: 14px;
+  --text-md: 12px;
+  --text-sm: 11px;
+  --text-xl: 16px;
+  --text-xs: 10px;
+  --text-xxl: 20px;
+  --text-xxs: 9px;
+
+  /* Stacking. Six layers, ordered base < sticky < dropdown < modal < drawer <
+     toast, which is the order app/globals.css ships today. The gap of 100
+     leaves room for a component's own local stacking without borrowing the
+     next layer's number. */
+  --z-base: 1;
+  --z-dropdown: 200;
+  --z-drawer: 400;
+  --z-modal: 300;
+  --z-sticky: 100;
+  --z-toast: 500;
+}

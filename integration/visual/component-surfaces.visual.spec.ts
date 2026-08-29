@@ -1,9 +1,8 @@
-import path from "node:path";
-
 import { expect, test } from "@playwright/test";
 
 import { statsSparklineSegments } from "../../app/search-workspace/statistics-sparkline";
 
+import { addApplicationStyles } from "./application-stylesheets";
 import { expectComponentScreenshot, settleVisualPage } from "./visual-harness";
 
 /**
@@ -22,12 +21,6 @@ import { expectComponentScreenshot, settleVisualPage } from "./visual-harness";
  * stylesheet and photograph the component itself. They are as deterministic as
  * a page screenshot and considerably cheaper: no navigation, no clock, no data.
  */
-
-const globalStylesheet = path.join(__dirname, "..", "..", "app", "globals.css");
-// `addStyleTag` injects the file's characters into a document with no base URL,
-// so the `@import` at the top of globals.css cannot resolve. The token layer is
-// therefore injected first, exactly as the cascade orders it in the browser.
-const colourTokenStylesheet = path.join(__dirname, "..", "..", "app", "styles", "tokens-color.css");
 
 /** Matches `STATS_SPARKLINE_WIDTH`/`HEIGHT` in the statistics panel. */
 const SPARKLINE_WIDTH = 128;
@@ -57,8 +50,7 @@ function sparklineMarkup(): string {
 
 test("the statistics sparkline renders its stroke, caps, and gaps", async ({ page }) => {
   await page.setContent(`<main>${sparklineMarkup()}</main>`);
-  await page.addStyleTag({ path: colourTokenStylesheet });
-  await page.addStyleTag({ path: globalStylesheet });
+  await addApplicationStyles(page);
   const sparkline = page.locator(".statistics-sparkline");
   await expect(sparkline).toBeVisible();
   await settleVisualPage(page);

@@ -1,11 +1,11 @@
-/* Every colour the application uses is declared once, in the token layer. */
-@import url("./styles/tokens-color.css");
+/* The token layer is loaded ahead of this file by app/styles/index.css, which
+   app/layout.tsx imports first; see docs/theming.md.
 
-/* Non-colour tokens still awaiting their own file; see docs/theming.md. */
+   --shadow is the one custom property still declared here. It is the outgoing
+   name: tokens-scale.css already carries the identical value as --shadow-lg,
+   and this declaration disappears with the last rule that reads it. */
 :root {
   --shadow: 0 10px 30px rgb(18 29 36 / 18%), 0 2px 7px rgb(18 29 36 / 12%);
-  --font-sans: Arial, Helvetica, sans-serif;
-  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
 }
 
 * {
