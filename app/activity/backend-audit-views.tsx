@@ -284,7 +284,7 @@ export function BackendMutationAudit({ apiBaseUrl, maximumPageSize }: AuditViewP
         <>
           <output className="live-jobs-snapshot"><span><i aria-hidden="true" />This journal contains successful mutations only; it does not include rejected changes, authentication, collectors, or search activity.</span></output>
           <form className="suite-card audit-filter-card" onSubmit={applyFilters}>
-            <header><div><h2>Mutation filters</h2><p>Every filter is exact and runs on the server.</p></div><div><button type="button" disabled={!dirty && filters.actions.length === 0 && filters.actorId === undefined && filters.targetKind === undefined} onClick={clearFilters}>Clear</button><button className="suite-button suite-button--primary" type="submit">{dirty ? "Apply filters" : "Refresh"}</button></div></header>
+            <header><div><h2>Mutation filters</h2><p>Every filter is exact and runs on the server.</p></div><div><button type="button" disabled={!dirty && filters.actions.length === 0 && filters.actorId === undefined && filters.targetKind === undefined} onClick={clearFilters}>Clear</button><button className="button button--primary" type="submit">{dirty ? "Apply filters" : "Refresh"}</button></div></header>
             <div className="audit-filter-grid">
               <label className="audit-action-filter"><span>Actions</span><select multiple size={5} value={draftActions.map(String)} onChange={(event) => setDraftActions([...event.currentTarget.selectedOptions].map((option) => Number(option.value) as AuditAction))}>{mutationAuditActionOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><small>Select one or more; no selection means every action.</small></label>
               <label><span>Actor ID</span><input value={draftActorId} onChange={(event) => setDraftActorId(event.target.value)} placeholder="Exact actor ID" /></label>
@@ -345,7 +345,7 @@ export function BackendSearchAttemptAudit({ apiBaseUrl, maximumPageSize }: Audit
         <>
           <output className="live-jobs-snapshot"><span><i aria-hidden="true" />This rolling journal records admitted attempts only. It deliberately contains no SPL, result content, or terminal outcome.</span></output>
           <form className="suite-card audit-filter-card" onSubmit={applyFilters}>
-            <header><div><h2>Search-attempt filters</h2><p>Actor and owner filters are exact and run on the server.</p></div><div><button type="button" disabled={!dirty && filters.actorId === undefined && filters.ownerId === undefined} onClick={clearFilters}>Clear</button><button className="suite-button suite-button--primary" type="submit">{dirty ? "Apply filters" : "Refresh"}</button></div></header>
+            <header><div><h2>Search-attempt filters</h2><p>Actor and owner filters are exact and run on the server.</p></div><div><button type="button" disabled={!dirty && filters.actorId === undefined && filters.ownerId === undefined} onClick={clearFilters}>Clear</button><button className="button button--primary" type="submit">{dirty ? "Apply filters" : "Refresh"}</button></div></header>
             <div className="audit-filter-grid audit-filter-grid--attempts">
               <label><span>Actor ID</span><input value={draftActorId} onChange={(event) => setDraftActorId(event.target.value)} placeholder="Exact actor ID" /></label>
               <label><span>Owner ID</span><input value={draftOwnerId} onChange={(event) => setDraftOwnerId(event.target.value)} placeholder="Exact owner ID" /></label>

@@ -13,6 +13,7 @@ import {
   UNSUPPORTED_SPL_PIPELINE_COMMANDS,
 } from "@/lib/search/spl-syntax";
 
+import type { StatusTone } from "../_components/status";
 import type { JobPhase, ResultTab } from "./model";
 
 function escapeRegExp(value: string): string {
@@ -285,12 +286,12 @@ export function phaseLabel(phase: JobPhase): string {
   }
 }
 
-export function stateClass(phase: JobPhase): string {
-  if (phase === "completed") return "state-success";
-  if (phase === "failed") return "state-error";
-  if (phase === "expired") return "state-muted";
-  if (phase === "canceled") return "state-muted";
-  return "state-running";
+export function stateTone(phase: JobPhase): StatusTone {
+  if (phase === "completed") return "success";
+  if (phase === "failed") return "error";
+  if (phase === "expired") return "neutral";
+  if (phase === "canceled") return "neutral";
+  return "running";
 }
 
 export function backendJobPhase(state: SearchJobState): JobPhase {

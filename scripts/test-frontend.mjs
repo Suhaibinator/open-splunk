@@ -25,6 +25,8 @@ const scriptTests = [
 ];
 const testFiles = [
   path.join("app", "_components", "app-icon.test.tsx"),
+  path.join("app", "_components", "button.test.tsx"),
+  path.join("app", "_components", "status.test.tsx"),
   path.join("app", "home-dashboard-data.test.ts"),
   path.join("app", "analytics", "analytics-data.test.ts"),
   path.join("app", "analytics", "analytics-sample-status.test.ts"),
@@ -125,7 +127,11 @@ try {
   ]);
   await run(process.execPath, [
     "--test",
-    ...testFiles.map((file) => path.join(outputDirectory, file.replace(/\.ts$/, ".js"))),
+    // `.tsx` as well as `.ts`: tsc emits both as `.js`, and a pattern anchored
+    // at `.ts$` silently handed node a path that does not exist, which it skips
+    // without a word. Every component test in the list was passing by never
+    // running.
+    ...testFiles.map((file) => path.join(outputDirectory, file.replace(/\.tsx?$/u, ".js"))),
   ], {
     ...process.env,
     NODE_PATH: path.join(workspace, "node_modules"),

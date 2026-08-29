@@ -397,9 +397,9 @@ export function StatisticsPanel({
             : `${totalDescription} · completed in ${elapsed}`}</p>
         </div>
         <div>
-          <button className="button secondary compact" type="button" disabled={isPreview} title={isPreview ? "Export becomes available after authoritative results load." : undefined} onClick={onExport}><AppIcon name="download" size="sm" /> Export</button>
+          <button className="button button--secondary button--compact" type="button" disabled={isPreview} title={isPreview ? "Export becomes available after authoritative results load." : undefined} onClick={onExport}><AppIcon name="download" size="sm" /> Export</button>
           <div className="header-menu-wrap result-menu-wrap">
-            <button className="button secondary compact" type="button" aria-haspopup="menu" aria-expanded={menu === "stats-format"} onClick={() => onMenuChange(menu === "stats-format" ? null : "stats-format")}>Format <AppIcon name="chevron-down" size="xs" /></button>
+            <button className="button button--secondary button--compact" type="button" aria-haspopup="menu" aria-expanded={menu === "stats-format"} onClick={() => onMenuChange(menu === "stats-format" ? null : "stats-format")}>Format <AppIcon name="chevron-down" size="xs" /></button>
             {menu === "stats-format" ? (
               <div className="floating-menu result-control-menu" role="menu" aria-label="Statistics table format">
                 {(["compact", "standard"] as const).map((density) => (

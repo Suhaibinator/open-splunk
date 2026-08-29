@@ -25,8 +25,9 @@ import type {
   TargetedDialogActionState,
   TimeRange,
 } from "../model";
-import { phaseLabel, stateClass } from "../workspace-utils";
+import { phaseLabel, stateTone } from "../workspace-utils";
 import { AppIcon } from "../../_components/app-icon";
+import { StatusLabel } from "../../_components/status";
 
 import { ExportArtifactStatus, ExportDownloadContent, getExportStatusTone } from "./export-presentation";
 import styles from "./workspace-dialogs.module.css";
@@ -120,7 +121,7 @@ function CapabilitySetting({
         {capability.update.status === "error" ? <small className={styles.settingError} role="alert">{capability.update.error}</small> : null}
       </span>
       <span className={styles.capabilityControl}>
-        <small className={unavailable ? styles.unavailableBadge : styles.availableBadge}>
+        <small className={`badge ${unavailable ? "badge--neutral" : "badge--success"}`}>
           {updating ? "Updating" : unavailable ? "Unavailable" : capability.configurable ? "Available" : "Read only"}
         </small>
         <input
@@ -310,7 +311,7 @@ export function WorkspaceDialogs({
           if (!saving) onModalChange(null);
         }}
         returnFocus={saveDialogReturnFocus}
-        footer={<><button className="button secondary" type="button" disabled={saving} onClick={() => onModalChange(null)}>Cancel</button><button className="button primary" type="button" aria-busy={saving} disabled={saving || saveName.trim().length === 0} onClick={onSaveSearch}>{saving ? "Saving…" : "Save"}</button></>}
+        footer={<><button className="button button--secondary" type="button" disabled={saving} onClick={() => onModalChange(null)}>Cancel</button><button className="button button--primary" type="button" aria-busy={saving} disabled={saving || saveName.trim().length === 0} onClick={onSaveSearch}>{saving ? "Saving…" : "Save"}</button></>}
       >
         <div className="form-stack" data-testid="save-search-dialog" aria-busy={saving}>
           {saveState.status === "error" ? <p className={styles.actionError} role="alert">{saveState.error}</p> : null}
@@ -352,7 +353,7 @@ export function WorkspaceDialogs({
                 <div className="saved-row-meta">
                   <span>{saved.updatedAt}</span>
                   <button
-                    className={`icon-button ${styles.savedRowIconButton}`}
+                    className={`button button--ghost button--icon ${styles.savedRowIconButton}`}
                     aria-label={duplicatingThisSearch ? `Duplicating ${saved.name}` : `Duplicate ${saved.name}`}
                     type="button"
                     disabled={savedSearchActionPending}
@@ -361,7 +362,7 @@ export function WorkspaceDialogs({
                     <AppIcon name={duplicatingThisSearch ? "loading" : "copy"} size="md" spin={duplicatingThisSearch} />
                   </button>
                   <button
-                    className={`icon-button ${styles.savedRowIconButton}`}
+                    className={`button button--ghost button--icon ${styles.savedRowIconButton}`}
                     aria-label={`Rename ${saved.name}`}
                     type="button"
                     disabled={savedSearchActionPending}
@@ -370,7 +371,7 @@ export function WorkspaceDialogs({
                     <AppIcon name="edit" size="md" />
                   </button>
                   <button
-                    className={`icon-button ${styles.savedRowIconButton}`}
+                    className={`button button--ghost button--icon ${styles.savedRowIconButton}`}
                     aria-label={deletingThisSearch ? `Deleting ${saved.name}` : `Delete ${saved.name}`}
                     type="button"
                     disabled={savedSearchActionPending}
@@ -386,7 +387,7 @@ export function WorkspaceDialogs({
           {savedSearchLibraryStatus === "available" && savedSearchHasMore ? (
             <div className={styles.loadMoreRow}>
               <button
-                className="button secondary compact"
+                className="button button--secondary button--compact"
                 type="button"
                 aria-busy={savedSearchLoadingMore}
                 disabled={savedSearchLoadingMore || savedSearchActionPending}
@@ -414,9 +415,9 @@ export function WorkspaceDialogs({
         }}
         footer={(
           <>
-            <button className="button secondary" type="button" disabled={renaming} onClick={() => onModalChange("open")}>Cancel</button>
+            <button className="button button--secondary" type="button" disabled={renaming} onClick={() => onModalChange("open")}>Cancel</button>
             <button
-              className="button primary"
+              className="button button--primary"
               type="submit"
               form="rename-saved-search-form"
               aria-busy={renaming}
@@ -482,8 +483,8 @@ export function WorkspaceDialogs({
         }}
         footer={(
           <>
-            <button className="button secondary" type="button" disabled={deleting} onClick={() => onModalChange("open")}>Keep saved search</button>
-            <button className="button danger" type="button" aria-busy={deleting} disabled={deleting} onClick={() => onDeleteSavedSearch(savedSearchDeleteTarget.id)}>
+            <button className="button button--secondary" type="button" disabled={deleting} onClick={() => onModalChange("open")}>Keep saved search</button>
+            <button className="button button--danger" type="button" aria-busy={deleting} disabled={deleting} onClick={() => onDeleteSavedSearch(savedSearchDeleteTarget.id)}>
               {deleting ? "Deleting…" : "Delete saved search"}
             </button>
           </>
@@ -506,7 +507,7 @@ export function WorkspaceDialogs({
     const deletingHistory = deletingHistoryEntryId !== null;
     return (
       <Modal title="Search history" subtitle="Recent completed, canceled, and failed searches." wide onClose={() => onModalChange(null)}>
-        <div className="library-toolbar"><label className="filter-input"><span aria-hidden="true"><AppIcon name="search" size="sm" /></span><input aria-label="Filter search history" placeholder="Filter by SPL" disabled={historyLibraryStatus !== "available"} value={historyFilter} onChange={(event) => onHistoryFilterChange(event.target.value)} /></label><button className="button secondary compact" type="button" disabled={historyLibraryStatus !== "available" || history.length === 0 || clearingHistory || deletingHistory || historyLoadingMore} onClick={() => onModalChange("clear-history")}>Clear history</button></div>
+        <div className="library-toolbar"><label className="filter-input"><span aria-hidden="true"><AppIcon name="search" size="sm" /></span><input aria-label="Filter search history" placeholder="Filter by SPL" disabled={historyLibraryStatus !== "available"} value={historyFilter} onChange={(event) => onHistoryFilterChange(event.target.value)} /></label><button className="button button--secondary button--compact" type="button" disabled={historyLibraryStatus !== "available" || history.length === 0 || clearingHistory || deletingHistory || historyLoadingMore} onClick={() => onModalChange("clear-history")}>Clear history</button></div>
         {historyClearState.status === "error" && historyClearState.error
           ? <p className={styles.actionError} role="alert">{historyClearState.error}</p>
           : historyDeleteState.status === "error" && historyDeleteState.error
@@ -560,7 +561,7 @@ export function WorkspaceDialogs({
         {historyLibraryStatus === "available" && historyHasMore ? (
           <div className={styles.loadMoreRow}>
             <button
-              className="button secondary compact"
+              className="button button--secondary button--compact"
               type="button"
               aria-busy={historyLoadingMore}
               disabled={historyLoadingMore || clearingHistory || deletingHistory}
@@ -586,8 +587,8 @@ export function WorkspaceDialogs({
         }}
         footer={(
           <>
-            <button className="button secondary" type="button" disabled={clearingHistory} onClick={() => onModalChange("history")}>Keep history</button>
-            <button className="button danger" type="button" aria-busy={clearingHistory} disabled={clearBlocked} onClick={onClearHistory}>
+            <button className="button button--secondary" type="button" disabled={clearingHistory} onClick={() => onModalChange("history")}>Keep history</button>
+            <button className="button button--danger" type="button" aria-busy={clearingHistory} disabled={clearBlocked} onClick={onClearHistory}>
               {clearingHistory ? "Clearing…" : historyLoadingMore ? "Wait for history load" : "Clear app history"}
             </button>
           </>
@@ -668,9 +669,9 @@ export function WorkspaceDialogs({
         onClose={closeExport}
         footer={exportReady
           ? <div className={styles.exportActions}>
-              <button className="button secondary" type="button" disabled={downloadPending} onClick={onResetExport}>New export</button>
+              <button className="button button--secondary" type="button" disabled={downloadPending} onClick={onResetExport}>New export</button>
               <button
-                className="button primary"
+                className="button button--primary"
                 type="button"
                 aria-label={artifact?.fileName ? `Download ${artifact.fileName}` : `Download ${exportFormatLabel}`}
                 aria-busy={downloadPending}
@@ -683,7 +684,7 @@ export function WorkspaceDialogs({
           : exportPending
             ? <div className={styles.exportActions}>
                 <button
-                  className="button secondary"
+                  className="button button--secondary"
                   type="button"
                   aria-busy={exportCancelPending}
                   disabled={exportCancelPending}
@@ -691,9 +692,9 @@ export function WorkspaceDialogs({
                 >
                   {exportCancelPending ? "Canceling…" : exportCancelState?.status === "error" ? "Retry cancellation" : "Cancel export"}
                 </button>
-                <button className="button secondary" type="button" disabled={exportCancelPending} onClick={closeExport}>Continue in background</button>
+                <button className="button button--secondary" type="button" disabled={exportCancelPending} onClick={closeExport}>Continue in background</button>
               </div>
-            : <div className={styles.exportActions}><button className="button secondary" type="button" onClick={closeExport}>Cancel</button><button className="button primary" type="button" disabled={!canCreate} onClick={onPrepareExport}>{exportFailed ? exportRetryable ? "Retry export" : "Export unavailable" : "Create export"}</button></div>}
+            : <div className={styles.exportActions}><button className="button button--secondary" type="button" onClick={closeExport}>Cancel</button><button className="button button--primary" type="button" disabled={!canCreate} onClick={onPrepareExport}>{exportFailed ? exportRetryable ? "Retry export" : "Export unavailable" : "Create export"}</button></div>}
       >
         <div className="form-stack" data-testid="export-dialog" aria-busy={exportPending || downloadPending || exportCancelPending}>
           {exportState.status === "configure" && !exportState.available ? (
@@ -779,7 +780,7 @@ export function WorkspaceDialogs({
         title="Search capabilities"
         subtitle={searchSettingsCapabilities.context}
         onClose={() => onModalChange(null)}
-        footer={<button className="button primary" type="button" onClick={() => onModalChange(null)}>Done</button>}
+        footer={<button className="button button--primary" type="button" onClick={() => onModalChange(null)}>Done</button>}
       >
         <div className="settings-list" data-testid="settings-dialog">
           <CapabilitySetting
@@ -818,7 +819,7 @@ export function WorkspaceDialogs({
       >
         <div className="jobs-list" data-testid="jobs-dialog">
           {jobCancelState.status === "error" ? <p className={styles.actionError} role="alert">{jobCancelState.error}</p> : null}
-          <article className="job-card active-job-card" aria-busy={cancelPending}><div className={`job-card-state ${stateClass(phase)}`}><span />{phaseLabel(phase)}</div><code>{submittedQuery.replaceAll("\n", " ")}</code><div className="job-card-stats"><span>{resultCountPrefix}{NUMBER_FORMAT.format(visibleEventCount)} {resultCountLabel}</span><span>{scannedBytes} {dataMetricLabel.toLowerCase()}</span><span>{elapsed}</span></div>{isRunning ? <button className="button danger compact" type="button" aria-busy={cancelPending} disabled={cancelPending} onClick={onCancelSearch}>{cancelPending ? "Canceling…" : "Cancel"}</button> : null}</article>
+          <article className="job-card active-job-card" aria-busy={cancelPending}><StatusLabel tone={stateTone(phase)}>{phaseLabel(phase)}</StatusLabel><code>{submittedQuery.replaceAll("\n", " ")}</code><div className="job-card-stats"><span>{resultCountPrefix}{NUMBER_FORMAT.format(visibleEventCount)} {resultCountLabel}</span><span>{scannedBytes} {dataMetricLabel.toLowerCase()}</span><span>{elapsed}</span></div>{isRunning ? <button className="button button--danger button--compact" type="button" aria-busy={cancelPending} disabled={cancelPending} onClick={onCancelSearch}>{cancelPending ? "Canceling…" : "Cancel"}</button> : null}</article>
           {history.slice(0, 4).map((entry) => <article className="job-card" key={entry.id}><div className={`job-card-state history-${entry.state.toLowerCase()}`}><span />{entry.state}</div><code>{entry.query}</code><div className="job-card-stats"><span>{formatHistoryResultCount(entry)} results</span><span>{entry.duration}</span><span>{entry.ranAt}</span></div></article>)}
         </div>
       </Modal>
@@ -827,9 +828,9 @@ export function WorkspaceDialogs({
 
   if (modal === "inspect") {
     return (
-      <Modal title="Search job inspector" subtitle="Dispatch and execution details for the displayed result." wide onClose={() => onModalChange(null)} footer={<button className="button primary" type="button" onClick={() => onModalChange(null)}>Done</button>}>
+      <Modal title="Search job inspector" subtitle="Dispatch and execution details for the displayed result." wide onClose={() => onModalChange(null)} footer={<button className="button button--primary" type="button" onClick={() => onModalChange(null)}>Done</button>}>
         <div className={`job-inspector ${styles.inspectionGrid}`} data-testid="job-inspector">
-          <section><span>Status</span><strong className={`inspector-state ${stateClass(phase)}`}><i />{phaseLabel(phase)}</strong></section>
+          <section><span>Status</span><StatusLabel className="inspector-state" tone={stateTone(phase)}>{phaseLabel(phase)}</StatusLabel></section>
           <section><span>Search ID</span><code>{searchId}</code></section>
           <section><span>Search mode</span><strong>{searchMode}</strong></section>
           <section><span>Time range</span><strong>{resolvedTimeRangeLabel ?? submittedTimeRange.label}</strong></section>

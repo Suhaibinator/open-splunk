@@ -458,7 +458,7 @@ export function EventsPanel({
               <section className="field-inspector" data-testid="field-inspector" aria-label={`${activeFieldData.displayName} field summary`}>
                 <header>
                   <div><span className={`field-type type-${activeFieldData.type}`}>{activeFieldData.type === "number" ? "#" : "a"}</span><strong>{activeFieldData.displayName}</strong></div>
-                  <button className="icon-button" type="button" aria-label="Close field summary" onClick={closeFieldInspector}><AppIcon name="close" size="md" /></button>
+                  <button className="button button--ghost button--icon" type="button" aria-label="Close field summary" onClick={closeFieldInspector}><AppIcon name="close" size="md" /></button>
                 </header>
                 <div className="field-summary-meta">
                   <span title={projectedCountTitle("Events", activeFieldData.eventCount, activeFieldData.eventCountExact)}>
@@ -640,7 +640,7 @@ export function EventsPanel({
                   </article>
                 );
               })}
-              {resultEvents.length === 0 ? <div className="empty-state event-empty"><strong>No events found</strong><span>Widen the time range or remove a field filter.</span><button className="button secondary compact" type="button" onClick={() => setQuery(defaultQuery)}>Reset search</button></div> : null}
+              {resultEvents.length === 0 ? <div className="empty-state event-empty"><strong>No events found</strong><span>Widen the time range or remove a field filter.</span><button className="button button--secondary button--compact" type="button" onClick={() => setQuery(defaultQuery)}>Reset search</button></div> : null}
             </div>
           </section>
         </div>

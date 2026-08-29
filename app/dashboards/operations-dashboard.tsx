@@ -11,6 +11,7 @@ import { useRovingChartFocus } from "@/app/_components/use-roving-chart-focus";
 import { TimeSeriesLineChart } from "@/app/search-workspace/charts/time-series-line-chart";
 import type { TimelinePoint } from "@/lib/demo/search-data";
 import { searchLaunchHref } from "@/lib/search/launch-url";
+import { StatusLabel } from "../_components/status";
 
 import { BackendDashboardManager } from "./backend-dashboard-manager";
 import styles from "./operations-dashboard.module.css";
@@ -225,7 +226,7 @@ function DemoOperationsDashboard() {
               {RANGE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           </label>
-          <span className={styles.previewBadge}>Preview data</span>
+          <span className={`badge badge--outline ${styles.previewBadge}`}>Preview data</span>
           <span className={styles.updateStatus}>Fixture timestamp: Jul 21, 4:00 PM · Range scopes request and latency metrics; service health is the current fixture.</span>
         </div>
       </header>
@@ -272,7 +273,7 @@ function DemoOperationsDashboard() {
         <section className="suite-card dashboard-panel dashboard-panel--wide">
           <header className="suite-card-header">
             <div><h2>Service health</h2><p>Current request volume, latency, and errors</p></div>
-            <span className={styles.readOnlyBadge} title="Service configuration requires the management API.">Read only</span>
+            <span className="badge badge--outline" title="Service configuration requires the management API.">Read only</span>
           </header>
           <div className="responsive-table-wrap">
             <table className="product-table service-table">
@@ -280,7 +281,7 @@ function DemoOperationsDashboard() {
               <tbody>{SERVICES.map(([service, status, requests, errors, serviceLatency, trend]) => (
                 <tr key={service}>
                   <td><Link className={styles.serviceLink} href={fixtureSearchHref(`index=gradethis service="${service}" | stats count p95(duration_ms) as p95_ms`)}>{service}</Link></td>
-                  <td><span className={`status-label status-label--${status === "Healthy" ? "complete" : "warning"}`}><i />{status}</span></td>
+                  <td><StatusLabel tone={status === "Healthy" ? "success" : "warning"}>{status}</StatusLabel></td>
                   <td>{requests}</td><td>{errors}</td><td>{serviceLatency}</td><td><span className={status === "Healthy" ? "sparkline-good" : "sparkline-warn"}>{trend}</span></td>
                 </tr>
               ))}</tbody>
@@ -296,7 +297,7 @@ function DemoOperationsDashboard() {
           <ol className={`notable-events ${styles.notableList}`}>
             {NOTABLE_EVENTS.map((event) => (
               <li key={event.message}>
-                <span className={`severity-badge severity-badge--${event.severity === "ERROR" ? "error" : "warn"}`}>{event.severity}</span>
+                <span className={`badge ${event.severity === "ERROR" ? "badge--error" : "badge--warning"}`}>{event.severity}</span>
                 <div><Link href={fixtureSearchHref(event.query)}>{event.message}</Link><small>{event.source}</small></div>
               </li>
             ))}

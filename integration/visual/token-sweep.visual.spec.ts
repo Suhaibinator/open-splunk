@@ -50,11 +50,20 @@ const LIGHT_GROUND_LUMINANCE = 0.6;
 /** The mirror of the above for ink: a dark letter on a dark ground. */
 const DARK_INK_LUMINANCE = 0.35;
 
-/** Status roles, and the modifier class that is supposed to paint each one. */
+/**
+ * Status roles, and the tone modifier that is supposed to paint each one.
+ *
+ * Phase 3 collapsed six parallel status families into one, so these are now
+ * `.status--*` modifiers rather than `.status-label--*`, and the vocabulary is
+ * the roles themselves: `complete` and `failed` were two spellings of
+ * `--status-success` and `--status-error`. `running` stays a name of its own
+ * because it is `info` plus a pulse, and the assertion is exactly that it still
+ * paints the informational role rather than a colour of its own.
+ */
 const STATUS_LABELS = [
-  ["complete", "--status-success"],
+  ["success", "--status-success"],
+  ["info", "--status-info"],
   ["running", "--status-info"],
-  ["failed", "--status-error"],
   ["error", "--status-error"],
   ["warning", "--status-warning"],
   ["neutral", "--status-neutral"],
@@ -106,11 +115,11 @@ async function resolveTokens(page: Page, names: readonly string[]): Promise<stri
  * document, so the rules under test are the shipped ones in the shipped
  * cascade, not an injected copy.
  *
- * `target` says which element in the fixture actually carries the paint, which
- * differs by component: a status label puts its classes on the wrapper and
- * colours the `<i>` inside it, while a severity swatch *is* the element the
- * class names. Reading the wrong one returns a transparent background, which is
- * why the caller also rejects `rgba(0, 0, 0, 0)` rather than trusting a match.
+ * `target` says which element in the fixture carries the class list, which
+ * differs by component: a status label paints the swatch nested inside the row,
+ * while a severity swatch *is* the element the class names. Mounting the list
+ * on the wrong element returns a transparent background, which is why the
+ * caller also rejects `rgba(0, 0, 0, 0)` rather than trusting a match.
  */
 async function paintOf(
   page: Page,
@@ -121,7 +130,9 @@ async function paintOf(
     const host = document.createElement("div");
     document.body.append(host);
     const painted = lists.map((classList) => {
-      host.innerHTML = `<span class="${classList}"><i></i></span>`;
+      host.innerHTML = wanted === "self"
+        ? `<span class="${classList}"></span>`
+        : `<span class="status status--label"><i class="${classList}"></i></span>`;
       const element = wanted === "self" ? host.firstElementChild : host.querySelector("i");
       if (element === null) throw new Error(`fixture for ${classList} did not mount`);
       return globalThis.getComputedStyle(element).backgroundColor;
@@ -178,13 +189,13 @@ test.describe("token sweep rendering", () => {
     await gotoVisualRoute(page, "/");
     const painted = await paintOf(
       page,
-      STATUS_LABELS.map(([modifier]) => `status-label status-label--${modifier}`),
+      STATUS_LABELS.map(([modifier]) => `status status--dot status--${modifier}`),
       "swatch",
     );
     const expected = await resolveTokens(page, STATUS_LABELS.map(([, token]) => token));
     const wrong = STATUS_LABELS
       .map(([modifier, token], index) => (
-        `.status-label--${modifier} i paints ${painted[index]}, and var(${token}) is ${expected[index]}`
+        `.status--${modifier} paints ${painted[index]}, and var(${token}) is ${expected[index]}`
       ))
       .filter((_, index) => painted[index] !== expected[index] || painted[index] === "rgba(0, 0, 0, 0)");
     expect(wrong, "status dots painted from something other than their own role token").toEqual([]);

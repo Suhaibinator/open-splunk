@@ -20,6 +20,7 @@ import {
 } from "@/lib/search/server-objects";
 
 import { BackendResourceState } from "./_components/backend-resource-state";
+import { StatusLabel, type StatusTone } from "./_components/status";
 import { AppIcon } from "./_components/app-icon";
 import { formatMediumDateTime } from "./_components/date-format";
 import { homeSearchFinishedAt, homeSearchStatus } from "./home-dashboard-data";
@@ -31,11 +32,11 @@ interface HomeDashboardProps {
 
 type RecentHistoryState = "loading" | "available" | "unavailable" | "error";
 
-const RECENT_SEARCHES = [
-  { title: "Production errors by service", query: "index=gradethis level=ERROR | stats count by service", events: "1,432", ago: "7 min ago", tone: "complete" },
-  { title: "Slowest API routes", query: "index=gradethis duration_ms=* | stats p95(duration_ms) AS p95_ms BY path | sort -p95_ms", events: "42", ago: "34 min ago", tone: "complete" },
-  { title: "Notification worker retries", query: "index=gradethis logger=notification-worker retry_count>0", events: "391", ago: "Yesterday", tone: "complete" },
-  { title: "Checkout trace investigation", query: "index=payments trace_id=\"8e1c…\"", events: "—", ago: "Yesterday", tone: "failed" },
+const RECENT_SEARCHES: { ago: string; events: string; query: string; title: string; tone: StatusTone }[] = [
+  { title: "Production errors by service", query: "index=gradethis level=ERROR | stats count by service", events: "1,432", ago: "7 min ago", tone: "success" },
+  { title: "Slowest API routes", query: "index=gradethis duration_ms=* | stats p95(duration_ms) AS p95_ms BY path | sort -p95_ms", events: "42", ago: "34 min ago", tone: "success" },
+  { title: "Notification worker retries", query: "index=gradethis logger=notification-worker retry_count>0", events: "391", ago: "Yesterday", tone: "success" },
+  { title: "Checkout trace investigation", query: "index=payments trace_id=\"8e1c…\"", events: "—", ago: "Yesterday", tone: "error" },
 ];
 
 const recentHistoryErrorMessage = createErrorMessage("The server did not return usable recent search history.");
@@ -121,7 +122,7 @@ function BackendRecentSearches({
               <tr key={entry.id}>
                 <td><Link href={contextualHref(historySearchLaunchHref(entry.id))} aria-label={`Rerun search ${entry.id}`}><strong>{entry.search.spl}</strong><code>{entry.id}</code>{entry.failureMessage === null ? null : <small className="table-error-detail">{entry.failureMessage}</small>}</Link></td>
                 <td className="numeric-data">{entry.producedRows.toLocaleString()}</td>
-                <td><span className={`status-label status-label--${status.tone}`}><i />{status.label}</span></td>
+                <td><StatusLabel tone={status.tone}>{status.label}</StatusLabel></td>
                 <td>{formatMediumDateTime(homeSearchFinishedAt(entry), "Not recorded")}</td>
               </tr>
             );
@@ -159,8 +160,8 @@ export function HomeDashboard({ apiBaseUrl = "", dataMode }: HomeDashboardProps)
             : "Explore the deterministic search, administration, and operations preview."}</p>
         </div>
         <div className="home-hero-actions">
-          <Link className="suite-button suite-button--primary" href={productHref("/search/")}>New search</Link>
-          <Link className="suite-button" href={productHref("/admin/")}>{dataMode === "backend" ? "Administration" : "Administration preview"}</Link>
+          <Link className="button button--primary" href={productHref("/search/")}>New search</Link>
+          <Link className="button" href={productHref("/admin/")}>{dataMode === "backend" ? "Administration" : "Administration preview"}</Link>
         </div>
       </header>
 
@@ -170,7 +171,7 @@ export function HomeDashboard({ apiBaseUrl = "", dataMode }: HomeDashboardProps)
           <strong>{dataMode === "backend" ? "Backend mode selected" : "Demo workspace ready"}</strong>
           <small>{dataMode === "backend" ? "Connected surfaces report their own backend availability and errors." : "Explore the interface with deterministic sample data."}</small>
         </div>
-        <span className={`mode-pill mode-pill--${dataMode}`}>{dataMode === "backend" ? "Backend mode" : "Demo data"}</span>
+        <span className={`badge ${dataMode === "backend" ? "badge--success" : "badge--warning"}`}>{dataMode === "backend" ? "Backend mode" : "Demo data"}</span>
         <Link href={productHref("/admin/")}>{dataMode === "backend" ? "Check connection" : "Open settings"} <AppIcon name="chevron-right" size="xs" /></Link>
       </section>
 
@@ -243,7 +244,7 @@ export function HomeDashboard({ apiBaseUrl = "", dataMode }: HomeDashboardProps)
               <tbody>{RECENT_SEARCHES.map((search) => (
                 <tr key={search.title}>
                   <td><Link href={fixtureSearchHref(search.query)} aria-label={`Open preview search: ${search.title}`}><strong>{search.title}</strong><code>{search.query}</code></Link></td>
-                  <td className="numeric-data">{search.events}</td><td><span className={`status-label status-label--${search.tone}`}><i />{search.tone === "complete" ? "Completed" : "Failed"}</span></td><td>{search.ago}</td>
+                  <td className="numeric-data">{search.events}</td><td><StatusLabel tone={search.tone}>{search.tone === "success" ? "Completed" : "Failed"}</StatusLabel></td><td>{search.ago}</td>
                 </tr>
               ))}</tbody>
             </table>

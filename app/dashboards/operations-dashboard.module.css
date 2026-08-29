@@ -48,15 +48,6 @@
 
 .previewBadge {
   align-self: end;
-  background: var(--bg-subtle);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  color: var(--fg-muted);
-  font-size: var(--type-xs);
-  font-weight: 700;
-  padding: 3px var(--space-2);
-  text-transform: uppercase;
-  white-space: nowrap;
 }
 
 .lineChart {
@@ -189,17 +180,6 @@
 
 .volumeChart .chartHint {
   margin-left: 0;
-}
-
-.readOnlyBadge {
-  background: var(--bg-subtle);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  color: var(--fg-muted);
-  font-size: var(--type-xs);
-  font-weight: 700;
-  padding: 3px var(--space-2);
-  text-transform: uppercase;
 }
 
 .donutFigure {

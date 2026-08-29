@@ -192,7 +192,7 @@ export function IndexObservabilityPanel({ client, index }: IndexObservabilityPan
         <label><span>Earliest</span><input value={earliest} aria-invalid={validationError !== null || undefined} aria-describedby="index-observability-range-error" onChange={(event) => { setEarliest(event.target.value); setValidationError(null); }} placeholder="-24h" /></label>
         <label><span>Latest</span><input value={latest} aria-invalid={validationError !== null || undefined} aria-describedby="index-observability-range-error" onChange={(event) => { setLatest(event.target.value); setValidationError(null); }} placeholder="now" /></label>
         <label><span>Field name contains</span><input value={nameFilter} onChange={(event) => setNameFilter(event.target.value)} placeholder="Optional, case-sensitive" /></label>
-        <button className="suite-button suite-button--primary" type="submit">Apply</button>
+        <button className="button button--primary" type="submit">Apply</button>
       </form>
       {validationError === null ? null : <div id="index-observability-range-error" className="backend-inline-error" role="alert">{validationError}</div>}
 
@@ -239,7 +239,7 @@ export function IndexObservabilityPanel({ client, index }: IndexObservabilityPan
         </div>
       ) : null}
       {fieldsError !== null && fieldsState === "available" ? <div className="backend-inline-error" role="alert">{fieldsError}</div> : null}
-      {fieldSnapshot?.nextPageToken ? <div className="index-field-footer"><button className="suite-button" type="button" disabled={loadingMore} onClick={() => void loadMore()}>{loadingMore ? "Loading…" : "Load more fields"}</button></div> : null}
+      {fieldSnapshot?.nextPageToken ? <div className="index-field-footer"><button className="button" type="button" disabled={loadingMore} onClick={() => void loadMore()}>{loadingMore ? "Loading…" : "Load more fields"}</button></div> : null}
     </section>
   );
 }

@@ -151,6 +151,7 @@ import {
 
 import { installModalSurface } from "./_components/modal-surface";
 import { AppIcon, type AppIconName } from "./_components/app-icon";
+import { StatusDot, statusClassName } from "./_components/status";
 import { SearchComposer } from "./search-workspace/components/search-composer";
 import { WorkspaceDialogs } from "./search-workspace/components/workspace-dialogs";
 import {
@@ -213,7 +214,7 @@ import {
   phaseLabel,
   queryForPattern,
   resultTabForQuery,
-  stateClass,
+  stateTone,
   timelineBoundaryLabel,
   timelineIndexFromPointer,
 } from "./search-workspace/workspace-utils";
@@ -6108,7 +6109,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
             {menu === "activity" ? (
               <div className="floating-menu utility-menu" role="menu">
                 <span className="menu-label">Activity</span>
-                <button aria-label={`Open active search job: ${phaseLabel(phase)}`} role="menuitem" type="button" onClick={() => { setModal("jobs"); setMenu(null); }}><span className={`mini-status ${stateClass(phase)}`} /> <span><strong>{phaseLabel(phase)}</strong><small>{visibleCountPrefix}{NUMBER_FORMAT.format(visibleEventCount)} results · {elapsed}</small></span></button>
+                <button aria-label={`Open active search job: ${phaseLabel(phase)}`} role="menuitem" type="button" onClick={() => { setModal("jobs"); setMenu(null); }}><StatusDot tone={stateTone(phase)} /> <span><strong>{phaseLabel(phase)}</strong><small>{visibleCountPrefix}{NUMBER_FORMAT.format(visibleEventCount)} results · {elapsed}</small></span></button>
                 <Link role="menuitem" href={productHref("/activity/")}>View all activity</Link>
               </div>
             ) : null}
@@ -6275,7 +6276,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
 
         <section className={`job-strip${searchIsClosed ? " is-closed" : ""}`} data-testid="job-strip" aria-label="Search job status" aria-busy={isRunning}>
           <div className="job-primary">
-            <span className={`job-state-icon ${stateClass(phase)}`} aria-hidden="true"><AppIcon name={phase === "completed" ? "check" : phase === "failed" ? "warning" : phase === "canceled" ? "close" : phase === "expired" ? "hourglass" : "loading"} size="xs" spin={isRunning} /></span>
+            <span className={statusClassName("icon", stateTone(phase))} aria-hidden="true"><AppIcon name={phase === "completed" ? "check" : phase === "failed" ? "warning" : phase === "canceled" ? "close" : phase === "expired" ? "hourglass" : "loading"} size="xs" spin={isRunning} /></span>
             <span className="job-result-copy">
               <output className="sr-only" aria-live="polite" aria-atomic="true">Search status: {persistedLaunchPending ? "Opening persisted search" : phaseLabel(phase)}</output>
               <strong aria-hidden="true">{persistedLaunchPending ? "Opening persisted search" : phaseLabel(phase)}</strong>
@@ -6390,8 +6391,8 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
             </span>
             <small>Column sorting applies to the loaded page. Use SPL <code>sort</code> for global ordering.</small>
             <div>
-              <button className="button secondary compact" type="button" disabled={eventPage === 1} onClick={() => void openBackendEventPage(eventPage - 1)}><AppIcon name="chevron-left" size="xs" /> Previous</button>
-              <button className="button secondary compact" type="button" disabled={!backendHasNextPage} onClick={() => void openBackendEventPage(eventPage + 1)}>Next <AppIcon name="chevron-right" size="xs" /></button>
+              <button className="button button--secondary button--compact" type="button" disabled={eventPage === 1} onClick={() => void openBackendEventPage(eventPage - 1)}><AppIcon name="chevron-left" size="xs" /> Previous</button>
+              <button className="button button--secondary button--compact" type="button" disabled={!backendHasNextPage} onClick={() => void openBackendEventPage(eventPage + 1)}>Next <AppIcon name="chevron-right" size="xs" /></button>
             </div>
           </nav>
         ) : null}
@@ -6444,11 +6445,11 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
             <strong>{emptyResultPresentation.title}</strong>
             <p>{emptyResultPresentation.detail}</p>
             {backendEnabled && backendConnectionState === "error"
-              ? <button className="button secondary compact" type="button" onClick={() => void retryBackendConnection()}>Retry backend connection</button>
+              ? <button className="button button--secondary button--compact" type="button" onClick={() => void retryBackendConnection()}>Retry backend connection</button>
               : backendHasNoSearchableIndexes
-                ? <Link className="button secondary compact" href={productHref("/admin/")}>Review index access</Link>
+                ? <Link className="button button--secondary button--compact" href={productHref("/admin/")}>Review index access</Link>
                 : emptyStateCanRun
-                  ? <button className="button secondary compact" type="button" onClick={() => {
+                  ? <button className="button button--secondary button--compact" type="button" onClick={() => {
                       if (backendWorkspaceTransitionBlocked()) return;
                       timelineZoomParentRef.current = null;
                       clearPersistedContextForAdHocSearch();

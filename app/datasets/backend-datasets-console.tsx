@@ -22,6 +22,7 @@ import { createErrorMessage } from "@/lib/error-message";
 import { searchLaunchHref } from "@/lib/search/launch-url";
 
 import { BackendResourceState } from "../_components/backend-resource-state";
+import { StatusLabel } from "../_components/status";
 import { AppIcon } from "../_components/app-icon";
 import { PageHeading } from "../_components/product-shell";
 import { IndexObservabilityPanel } from "./index-observability-panel";
@@ -198,7 +199,7 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
         eyebrow="DATA"
         title="Datasets"
         description="Browse the indexes authorized for this browser session."
-        actions={<><Link className="suite-button" href="/admin/?section=indexes">Manage indexes</Link><Link className="suite-button suite-button--primary" href="/search/">Search data</Link></>}
+        actions={<><Link className="button" href="/admin/?section=indexes">Manage indexes</Link><Link className="button button--primary" href="/search/">Search data</Link></>}
       />
 
       {loading ? (
@@ -236,7 +237,7 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
                     <header>
                       <span className={`dataset-icon dataset-icon--${position % 3 === 0 ? "green" : position % 3 === 1 ? "blue" : "orange"}`} aria-hidden="true">▦</span>
                       <div className="dataset-card__identity"><h2>{index.displayName}</h2><p><code>index={index.name}</code></p>{detail?.definition?.description ? <small>{detail.definition.description}</small> : null}</div>
-                      <span className={`status-label status-label--${state === "Active" ? "complete" : state === "Deleting" ? "running" : "neutral"}`}><i />{state}</span>
+                      <StatusLabel tone={state === "Active" ? "success" : state === "Deleting" ? "running" : "neutral"}>{state}</StatusLabel>
                     </header>
                     <dl>
                       <div><dt>Search</dt><dd>{accessLabel(index.searchAccess)}</dd></div>

@@ -16,6 +16,7 @@ import { TIME_PRESETS } from "../constants";
 import type { ModalName, TimePickerSection, TimeRange } from "../model";
 import { serverTimeRangeValidationError } from "../time-range";
 import { AppIcon, StatusIcon } from "../../_components/app-icon";
+import { Button } from "../../_components/button";
 import { syntaxTokens } from "../workspace-utils";
 
 interface CompletionItem {
@@ -320,9 +321,9 @@ export function SearchComposer({
               </div>
               <div className="range-preview time-popover-preview"><span>Earliest <code>{draftTimeRange.earliest}</code></span><span>Latest <code>{draftTimeRange.latest}</code></span></div>
               <footer className="time-popover-footer">
-                <button className="button secondary compact" type="button" onClick={onCloseTimePicker}>Cancel</button>
+                <button className="button button--secondary button--compact" type="button" onClick={onCloseTimePicker}>Cancel</button>
                 <button
-                  className="button primary compact"
+                  className="button button--primary button--compact"
                   type="button"
                   disabled={draftTimeRange.earliest.trim().length === 0 || draftTimeRange.latest.trim().length === 0 || draftTimeRangeInvalid || (timePickerSection === "range" && absoluteTimeInvalid)}
                   onClick={() => { onTimeRangeChange(draftTimeRange); onCloseTimePicker(); }}
@@ -332,10 +333,10 @@ export function SearchComposer({
             </>
           ) : null}
         </div>
-        <button
-          className={`run-button${isRunning && !launchPending ? " cancel" : ""}`}
+        <Button
+          className="run-button"
+          variant={isRunning && !launchPending ? "danger" : "primary"}
           data-testid="run-search"
-          type="button"
           aria-label={launchPending ? "Opening persisted search" : isRunning ? "Cancel search" : "Run search"}
           disabled={launchPending || (!isRunning && runDisabledReason !== null)}
           title={!isRunning && runDisabledReason !== null ? runDisabledReason : undefined}
@@ -350,7 +351,7 @@ export function SearchComposer({
         >
           <span aria-hidden="true"><AppIcon name={launchPending ? "loading" : isRunning ? "stop" : "search"} size="lg" spin={launchPending} /></span>
           <strong>{launchPending ? "Opening" : isRunning ? "Cancel" : "Search"}</strong>
-        </button>
+        </Button>
       </section>
 
       {diagnostic === null ? null : (

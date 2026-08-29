@@ -1,6 +1,7 @@
 import { SearchJobState } from "@/gen/ts/open_splunk/search";
 
 import { formatMediumDateTime } from "../_components/date-format";
+import { type StatusTone } from "../_components/status";
 
 export function formatActivityDate(value: Date | null): string {
   return formatMediumDateTime(value, "Not recorded");
@@ -36,12 +37,12 @@ export function searchJobStateLabel(state: SearchJobState): string {
   return "Unknown";
 }
 
-export function searchJobStateClass(state: SearchJobState): string {
-  if (state === SearchJobState.SEARCH_JOB_STATE_COMPLETED) return "complete";
+export function searchJobStateTone(state: SearchJobState): StatusTone {
+  if (state === SearchJobState.SEARCH_JOB_STATE_COMPLETED) return "success";
   if (
     state === SearchJobState.SEARCH_JOB_STATE_FAILED
     || state === SearchJobState.SEARCH_JOB_STATE_EXPIRED
-  ) return "failed";
+  ) return "error";
   if (state === SearchJobState.SEARCH_JOB_STATE_CANCELED) return "neutral";
   if (
     state === SearchJobState.SEARCH_JOB_STATE_QUEUED

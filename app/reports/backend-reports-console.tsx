@@ -28,6 +28,7 @@ import {
 } from "@/lib/search/server-objects";
 
 import { BackendResourceState } from "../_components/backend-resource-state";
+import { StatusLabel } from "../_components/status";
 import { AppIcon } from "../_components/app-icon";
 import { formatMediumDateTime } from "../_components/date-format";
 import { PageHeading } from "../_components/product-shell";
@@ -408,7 +409,7 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
         eyebrow="SEARCH & REPORTING"
         title="Saved searches"
         description="Open reusable search definitions persisted by the connected server."
-        actions={<><Link className="suite-button" href="/search/">Open Search</Link><button className="suite-button suite-button--primary" type="button" aria-busy={refreshPending} aria-disabled={controlsPending} onClick={() => { if (!controlsPending) reload(); }}>{refreshing ? "Refreshing…" : state === "loading" ? "Loading…" : "Refresh"}</button></>}
+        actions={<><Link className="button" href="/search/">Open Search</Link><button className="button button--primary" type="button" aria-busy={refreshPending} aria-disabled={controlsPending} onClick={() => { if (!controlsPending) reload(); }}>{refreshing ? "Refreshing…" : state === "loading" ? "Loading…" : "Refresh"}</button></>}
       />
 
       {state === "loading" ? <BackendResourceState kind="loading" title="Loading saved searches" message="Reading persisted definitions from the server…" /> : null}
@@ -500,7 +501,7 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
                         <td data-label="App">{savedSearch.search.appId === undefined
                           ? "No app"
                           : appNames[savedSearch.search.appId] ?? savedSearch.search.appId}</td>
-                        <td data-label="Sharing"><span className={styles.status}><i />{scopeLabel(savedSearch.sharingScope)}</span></td>
+                        <td data-label="Sharing"><StatusLabel tone="neutral">{scopeLabel(savedSearch.sharingScope)}</StatusLabel></td>
                         <td data-label="Owner">{savedSearch.ownerId || "Current user"}</td>
                         <td data-label="Time range"><code>{savedSearch.search.timeRange?.earliest ?? "Server default"} → {savedSearch.search.timeRange?.latest ?? "Server default"}</code></td>
                         <td data-label="Modified">{display.updatedAt}</td>
@@ -534,9 +535,9 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
           onClose={closeAction}
           footer={(
             <>
-              <button className="button secondary" type="button" disabled={actionPending !== null} onClick={closeAction}>Cancel</button>
+              <button className="button button--secondary" type="button" disabled={actionPending !== null} onClick={closeAction}>Cancel</button>
               <button
-                className="button primary"
+                className="button button--primary"
                 type="submit"
                 form="reports-rename-saved-search"
                 disabled={actionPending !== null || actionNameError !== null || actionName.trim() === modal.target.name}
@@ -563,8 +564,8 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
           onClose={closeAction}
           footer={(
             <>
-              <button className="button secondary" type="button" disabled={actionPending !== null} onClick={closeAction}>Cancel</button>
-              <button className="button primary" type="submit" form="reports-duplicate-saved-search" disabled={actionPending !== null || actionNameError !== null} aria-busy={actionPending === "duplicate"}>
+              <button className="button button--secondary" type="button" disabled={actionPending !== null} onClick={closeAction}>Cancel</button>
+              <button className="button button--primary" type="submit" form="reports-duplicate-saved-search" disabled={actionPending !== null || actionNameError !== null} aria-busy={actionPending === "duplicate"}>
                 {actionPending === "duplicate" ? "Duplicating…" : "Duplicate"}
               </button>
             </>
@@ -586,8 +587,8 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
           onClose={closeAction}
           footer={(
             <>
-              <button className="button secondary" type="button" disabled={actionPending !== null} onClick={closeAction}>Keep saved search</button>
-              <button className="button danger" type="button" disabled={actionPending !== null} aria-busy={actionPending === "delete"} onClick={() => void deleteSavedSearch()}>
+              <button className="button button--secondary" type="button" disabled={actionPending !== null} onClick={closeAction}>Keep saved search</button>
+              <button className="button button--danger" type="button" disabled={actionPending !== null} aria-busy={actionPending === "delete"} onClick={() => void deleteSavedSearch()}>
                 {actionPending === "delete" ? "Deleting…" : "Delete saved search"}
               </button>
             </>

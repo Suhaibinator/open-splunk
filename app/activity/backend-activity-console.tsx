@@ -32,6 +32,7 @@ import {
 } from "@/lib/search/server-objects";
 
 import { BackendResourceState } from "../_components/backend-resource-state";
+import { StatusDot, StatusLabel } from "../_components/status";
 import { AppIcon } from "../_components/app-icon";
 import { PageHeading } from "../_components/product-shell";
 import { Modal } from "../search-workspace/modal";
@@ -39,7 +40,7 @@ import {
   formatActivityCount,
   formatActivityDate,
   formatActivityDuration,
-  searchJobStateClass,
+  searchJobStateTone,
   searchJobStateLabel,
 } from "./backend-activity-shared";
 import { BackendLiveJobs } from "./backend-live-jobs";
@@ -549,7 +550,7 @@ function BackendSearchHistory({ apiBaseUrl }: BackendActivityConsoleProps) {
             <span><i aria-hidden="true" />This view contains persisted terminal-search metadata, not the transient job list.</span>
             <div className="history-snapshot-actions">
               <button
-                className="history-clear-button"
+                className="button button--compact history-clear-button"
                 type="button"
                 disabled={actionPending !== null || !filtersSettled || entries.length === 0 || filter === "warnings"}
                 title={filter === "warnings" ? "Warnings are not a server-side clear filter. Choose a final-state scope or All." : undefined}
@@ -557,14 +558,14 @@ function BackendSearchHistory({ apiBaseUrl }: BackendActivityConsoleProps) {
               >
                 Clear matching…
               </button>
-              <button type="button" disabled={actionPending !== null} onClick={reload}>Refresh history</button>
+              <button className="button button--compact" type="button" disabled={actionPending !== null} onClick={reload}>Refresh history</button>
             </div>
           </output>
           <section className="activity-summary" aria-label="Server-filtered search history summary">
-            <article><span className="status-dot status-dot--healthy" /><div><strong>{loadedLabel}</strong><small>{filter === "warnings" ? "Warning matches loaded" : totalSizeExact ? `${historyFilterLabel(filter)} matches` : "Matches loaded"}</small></div></article>
-            <article><span className="status-dot status-dot--healthy" /><div><strong>{completed}</strong><small>Completed loaded</small></div></article>
-            <article><span className="status-dot status-dot--warning" /><div><strong>{warnings}</strong><small>Warnings loaded</small></div></article>
-            <article><span className="status-dot status-dot--error" /><div><strong>{failed + canceled}</strong><small>Failed/canceled loaded</small></div></article>
+            <article><StatusDot tone="success" /><div><strong>{loadedLabel}</strong><small>{filter === "warnings" ? "Warning matches loaded" : totalSizeExact ? `${historyFilterLabel(filter)} matches` : "Matches loaded"}</small></div></article>
+            <article><StatusDot tone="success" /><div><strong>{completed}</strong><small>Completed loaded</small></div></article>
+            <article><StatusDot tone="warning" /><div><strong>{warnings}</strong><small>Warnings loaded</small></div></article>
+            <article><StatusDot tone="error" /><div><strong>{failed + canceled}</strong><small>Failed/canceled loaded</small></div></article>
           </section>
           {!complete ? (
             <output className="backend-list-notice backend-list-notice--action">
@@ -618,7 +619,7 @@ function BackendSearchHistory({ apiBaseUrl }: BackendActivityConsoleProps) {
                           <small>{display.sourceLabel ?? "Ad hoc"}</small>
                           <code title={display.resolvedTimeRange}>{display.timeRange}</code>
                         </td>
-                        <td data-label="Final state"><span className={`status-label status-label--${searchJobStateClass(entry.finalState)}`}><i />{label}</span></td>
+                        <td data-label="Final state"><StatusLabel tone={searchJobStateTone(entry.finalState)}>{label}</StatusLabel></td>
                         <td data-label="Runtime">{formatActivityDuration(entry.durationMs)}</td>
                         <td data-label="Matched events" className="numeric-data">{formatActivityCount(entry.matchedEvents)}</td>
                         <td data-label="Rows" className="numeric-data">{formatActivityCount(entry.producedRows)}</td>
@@ -648,8 +649,8 @@ function BackendSearchHistory({ apiBaseUrl }: BackendActivityConsoleProps) {
           onClose={closeHistoryModal}
           footer={(
             <>
-              <button className="button secondary" type="button" disabled={actionPending !== null} onClick={closeHistoryModal}>Keep entry</button>
-              <button className="button danger" type="button" disabled={actionPending !== null} aria-busy={actionPending === "delete"} onClick={() => void deleteHistoryEntry()}>
+              <button className="button button--secondary" type="button" disabled={actionPending !== null} onClick={closeHistoryModal}>Keep entry</button>
+              <button className="button button--danger" type="button" disabled={actionPending !== null} aria-busy={actionPending === "delete"} onClick={() => void deleteHistoryEntry()}>
                 {actionPending === "delete" ? "Deleting…" : "Delete entry"}
               </button>
             </>
@@ -669,8 +670,8 @@ function BackendSearchHistory({ apiBaseUrl }: BackendActivityConsoleProps) {
           onClose={closeHistoryModal}
           footer={(
             <>
-              <button className="button secondary" type="button" disabled={actionPending !== null} onClick={closeHistoryModal}>Keep history</button>
-              <button className="button danger" type="button" disabled={actionPending !== null || !filtersSettled || filter === "warnings"} aria-busy={actionPending === "clear"} onClick={() => void clearHistory()}>
+              <button className="button button--secondary" type="button" disabled={actionPending !== null} onClick={closeHistoryModal}>Keep history</button>
+              <button className="button button--danger" type="button" disabled={actionPending !== null || !filtersSettled || filter === "warnings"} aria-busy={actionPending === "clear"} onClick={() => void clearHistory()}>
                 {actionPending === "clear" ? "Clearing…" : "Clear matching history"}
               </button>
             </>

@@ -173,23 +173,7 @@
 }
 
 .capabilityControl small {
-  border-radius: 10px;
-  font-size: var(--type-xxs);
-  font-weight: 700;
-  line-height: 18px;
   margin: 0;
-  padding: 0 7px;
-  text-transform: uppercase;
-}
-
-.availableBadge {
-  background: var(--accent-soft);
-  color: var(--accent-hover);
-}
-
-.unavailableBadge {
-  background: var(--bg-subtle);
-  color: var(--fg-muted);
 }
 
 .unavailableSetting {

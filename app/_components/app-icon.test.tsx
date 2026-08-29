@@ -35,6 +35,8 @@ test("status icons expose tone styling without duplicating accessible text", () 
   for (const tone of ["success", "info", "warning", "error", "neutral"] as const) {
     const markup = renderToStaticMarkup(createElement(StatusIcon, { icon: "check", tone }));
     assert.match(markup, /aria-hidden="true"/);
-    assert.match(markup, new RegExp(`status-icon--${tone}`));
+    // The icon reads the shared `.status` family, so the assertion is that it
+    // still names one shape and one tone -- not that it kept a private class.
+    assert.match(markup, new RegExp(`class="status status--icon status--${tone}"`));
   }
 });
