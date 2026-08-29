@@ -54,14 +54,14 @@
   color: var(--fg-muted);
   font-size: var(--type-xs);
   font-weight: 700;
-  padding: 3px 8px;
+  padding: 3px var(--space-2);
   text-transform: uppercase;
   white-space: nowrap;
 }
 
 .lineChart {
   min-height: 320px;
-  padding: 20px 20px 8px 13px;
+  padding: var(--space-5) var(--space-5) var(--space-2) 13px;
   position: relative;
 }
 
@@ -103,7 +103,7 @@
   height: 215px;
   margin: 0;
   min-width: 0;
-  padding: 37px 4px 0;
+  padding: 37px var(--space-1) 0;
 }
 
 .volumeBar {
@@ -127,7 +127,7 @@
 }
 
 .volumeFill {
-  background: var(--chart-series-1);
+  background: var(--accent-bright);
   height: var(--bar-height);
   min-height: 5px;
   position: relative;
@@ -153,7 +153,7 @@
   gap: 3px;
   left: 50%;
   min-width: 124px;
-  padding: 6px 8px;
+  padding: 6px var(--space-2);
   pointer-events: none;
   position: absolute;
   text-align: left;
@@ -163,7 +163,7 @@
 }
 
 .volumeTooltip strong {
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-subtle);
   font-size: var(--type-xs);
   padding-bottom: var(--space-1);
 }
@@ -198,7 +198,7 @@
   color: var(--fg-muted);
   font-size: var(--type-xs);
   font-weight: 700;
-  padding: 3px 8px;
+  padding: 3px var(--space-2);
   text-transform: uppercase;
 }
 
@@ -224,7 +224,7 @@
 
 .notableList a:hover,
 .serviceLink:hover {
-  color: #175d81;
+  color: var(--status-info-strong);
   text-decoration: underline;
 }
 
@@ -268,7 +268,7 @@
   color: var(--fg-text);
   font: 12px/1.4 system-ui, sans-serif;
   min-height: 32px;
-  padding: 6px 8px;
+  padding: 6px var(--space-2);
 }
 
 .panelFields textarea {
@@ -288,7 +288,7 @@
   font-size: var(--type-sm);
   font-weight: 700;
   min-height: 32px;
-  padding: 5px 12px;
+  padding: 5px var(--space-3);
 }
 
 .createForm button:disabled,
@@ -331,7 +331,7 @@
 }
 
 .dashboardList li + li {
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--border-subtle);
 }
 
 .dashboardList li button {
@@ -341,7 +341,7 @@
   cursor: pointer;
   display: grid;
   gap: 3px;
-  padding: 10px 12px;
+  padding: 10px var(--space-3);
   text-align: left;
   width: 100%;
 }
@@ -430,11 +430,11 @@
   font-size: var(--type-sm);
   justify-content: space-between;
   margin: 0 0 var(--space-3);
-  padding: 8px 10px;
+  padding: var(--space-2) 10px;
 }
 
 .noticeBanner {
-  background: var(--bg-subtle);
+  background: var(--status-success-soft);
   border-color: #b9d6b2;
   color: var(--accent-hover);
 }

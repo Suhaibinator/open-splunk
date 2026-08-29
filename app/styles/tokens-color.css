@@ -16,9 +16,10 @@
  * A theme therefore restates tier 2 and leaves tier 1 alone: see the
  * `:root[data-theme="dark"]` block at the bottom, and docs/theming.md.
  *
- * The trailing block of legacy aliases keeps the pre-refactor names alive as
- * pointers at their semantic replacements, so this file changes no pixel. A
- * later phase rewrites the call sites and deletes the aliases.
+ * The pre-refactor alias block that kept names like `--surface` and `--text`
+ * alive through the migration is gone: every call site now reads a role, so the
+ * aliases had no consumers left and keeping them would have invited new ones.
+ * docs/theming.md maps each retired name onto the role that replaced it.
  */
 
 :root {
@@ -122,6 +123,7 @@
   /* Foregrounds. */
   --fg-text: var(--gray-800); /* Body text. */
   --fg-strong: var(--gray-900); /* Headings and emphasised text. */
+  --fg-secondary: var(--gray-700); /* Ink one step lighter than body text: table cells, sub-headings. */
   --fg-muted: var(--gray-600); /* Secondary text: captions, metadata, help. */
   --fg-faint: var(--gray-500); /* Tertiary text: placeholders, disabled labels. */
   --fg-inverse: var(--gray-0); /* Text on --bg-inverse. */
@@ -129,23 +131,32 @@
 
   /* Borders. */
   --border: var(--gray-300); /* Default rule between and around surfaces. */
+  --border-subtle: var(--gray-200); /* Faint divider between rows inside one surface. */
   --border-strong: var(--gray-400); /* Emphasised rule: active control edges, dividers under load. */
   --border-focus: var(--blue-450); /* Edge of a control that holds keyboard focus. */
 
   /* Accent: the product's primary action colour. */
   --accent: var(--green-700); /* Primary buttons, active tabs, progress. */
   --accent-hover: var(--green-800); /* Hovered and pressed accent. */
+  --accent-bright: var(--green-500); /* Saturated accent fill: progress bars, timeline columns. */
   --accent-soft: var(--green-100); /* Accent-tinted background wash. */
+  --accent-alt: var(--purple-600); /* Second decorative accent, carrying no status meaning. */
+  --accent-alt-soft: var(--purple-100); /* Second decorative accent, as a background wash. */
 
   /* Status: one hue per outcome, each with a background wash. */
   --status-success: var(--green-700); /* Succeeded. */
   --status-success-soft: var(--green-100); /* Succeeded, as a background wash. */
+  --status-success-strong: var(--green-800); /* Succeeded, as ink on its own wash. */
   --status-info: var(--blue-600); /* Informational. */
   --status-info-soft: var(--blue-100); /* Informational, as a background wash. */
+  --status-info-strong: var(--blue-800); /* Informational, as ink on its own wash. */
   --status-warning: var(--amber-600); /* Needs attention. */
+  --status-warning-bright: var(--amber-400); /* Needs attention, as a filled dot or glyph ground. */
   --status-warning-soft: var(--amber-50); /* Needs attention, as a background wash. */
+  --status-warning-strong: var(--amber-700); /* Needs attention, as ink on its own wash. */
   --status-error: var(--red-500); /* Failed. */
   --status-error-soft: var(--red-100); /* Failed, as a background wash. */
+  --status-error-strong: var(--red-700); /* Failed, as ink on its own wash. */
   --status-neutral: var(--gray-550); /* No outcome yet, or not applicable. */
   --status-neutral-soft: var(--gray-150); /* No outcome yet, as a background wash. */
 
@@ -168,6 +179,7 @@
   --chart-series-10: var(--teal-600); /* Series 10. */
   --chart-series-11: var(--brown-500); /* Series 11. */
   --chart-series-12: var(--olive-500); /* Series 12. */
+  --chart-neutral: var(--gray-400); /* The uncategorised remainder slice of a categorical chart. */
 
   /* Application chrome: the two persistent bars above the page. */
   --chrome-bar: var(--slate-900); /* Product bar, the topmost strip. */
@@ -179,32 +191,6 @@
   --highlight: var(--amber-200); /* Matched search term inside a result. */
   --selection: var(--blue-100); /* Selected row or range. */
   --focus-ring: var(--blue-450); /* Focus outline drawn outside a control. */
-
-  /* Legacy aliases. Pre-refactor names kept pointing at their replacements so
-   * no call site breaks mid-refactor; a later phase rewrites the call sites and
-   * deletes this block. Do not add to it. */
-  --app-bar: var(--chrome-appbar);
-  --app-bar-hover: var(--chrome-hover);
-  --black: var(--gray-950); /* Unreferenced; no semantic role to point at. */
-  --blue: var(--status-info);
-  --blue-soft: var(--status-info-soft);
-  --border-dark: var(--border-strong);
-  --canvas: var(--bg-canvas);
-  --faint: var(--fg-faint);
-  --green: var(--accent);
-  --green-soft: var(--accent-soft);
-  --green-strong: var(--accent-hover);
-  --muted: var(--fg-muted);
-  --orange: var(--orange-400); /* Unreferenced; no semantic role to point at. */
-  --product-bar: var(--chrome-bar);
-  --red: var(--status-error);
-  --red-soft: var(--status-error-soft);
-  --surface: var(--bg-surface);
-  --surface-raised: var(--bg-raised);
-  --surface-subtle: var(--bg-subtle);
-  --text: var(--fg-text);
-  --text-strong: var(--fg-strong);
-  --yellow: var(--amber-500); /* Unreferenced; no semantic role to point at. */
 }
 
 /*
@@ -237,6 +223,7 @@
   /* Foregrounds. */
   --fg-text: var(--gray-200); /* Body text. */
   --fg-strong: var(--gray-50); /* Headings and emphasised text. */
+  --fg-secondary: var(--gray-300); /* Ink one step lighter than body text. */
   --fg-muted: var(--gray-450); /* Secondary text. */
   --fg-faint: var(--gray-550); /* Tertiary text. */
   --fg-inverse: var(--gray-950); /* Text on --bg-inverse. */
@@ -244,23 +231,32 @@
 
   /* Borders. */
   --border: var(--gray-700); /* Default rule. */
+  --border-subtle: var(--gray-750); /* Faint divider inside one surface. */
   --border-strong: var(--gray-650); /* Emphasised rule. */
   --border-focus: var(--blue-200); /* Focused control edge. */
 
   /* Accent. */
   --accent: var(--green-500); /* Primary action colour. */
   --accent-hover: var(--green-400); /* Hovered and pressed accent. */
+  --accent-bright: var(--green-300); /* Saturated accent fill. */
   --accent-soft: var(--green-800); /* Accent-tinted background wash. */
+  --accent-alt: var(--purple-500); /* Second decorative accent. */
+  --accent-alt-soft: var(--purple-600); /* Second decorative accent, as a background wash. */
 
   /* Status. */
   --status-success: var(--green-500); /* Succeeded. */
   --status-success-soft: var(--green-800); /* Succeeded, as a background wash. */
+  --status-success-strong: var(--green-200); /* Succeeded, as ink on its own wash. */
   --status-info: var(--blue-400); /* Informational. */
   --status-info-soft: var(--blue-800); /* Informational, as a background wash. */
+  --status-info-strong: var(--blue-200); /* Informational, as ink on its own wash. */
   --status-warning: var(--amber-400); /* Needs attention. */
+  --status-warning-bright: var(--amber-300); /* Needs attention, as a filled dot or glyph ground. */
   --status-warning-soft: var(--amber-700); /* Needs attention, as a background wash. */
+  --status-warning-strong: var(--amber-200); /* Needs attention, as ink on its own wash. */
   --status-error: var(--red-400); /* Failed. */
   --status-error-soft: var(--red-700); /* Failed, as a background wash. */
+  --status-error-strong: var(--red-200); /* Failed, as ink on its own wash. */
   --status-neutral: var(--gray-450); /* No outcome yet. */
   --status-neutral-soft: var(--gray-700); /* No outcome yet, as a background wash. */
 
@@ -282,4 +278,7 @@
   --highlight: var(--amber-600); /* Matched search term inside a result. */
   --selection: var(--blue-800); /* Selected row or range. */
   --focus-ring: var(--blue-200); /* Focus outline. */
+
+  /* The uncategorised chart slice is a neutral, so unlike the ramp it moves. */
+  --chart-neutral: var(--gray-600); /* The uncategorised remainder slice. */
 }

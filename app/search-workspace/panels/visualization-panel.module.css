@@ -48,7 +48,7 @@
 .categoricalCanvas {
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(360px, 1fr) 40px;
-  padding: 20px 18px 5px 12px;
+  padding: var(--space-5) 18px 5px var(--space-3);
 }
 
 .categoricalCanvas :global(.chart-legend) {
@@ -123,7 +123,7 @@
 }
 
 .categoricalGrid > span {
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--border-subtle);
   left: 0;
   position: absolute;
   right: 0;
@@ -251,7 +251,7 @@
   min-width: 188px;
   overscroll-behavior: contain;
   overflow: auto;
-  padding: 8px 10px;
+  padding: var(--space-2) 10px;
   pointer-events: auto;
   position: absolute;
   right: 12px;
@@ -261,7 +261,7 @@
 
 .categoricalTooltipHeader {
   align-items: flex-start;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-subtle);
   display: flex;
   gap: var(--space-2);
   justify-content: space-between;
@@ -338,7 +338,7 @@
 }
 
 .categoricalTooltipUnavailable {
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--border-subtle);
   padding-top: 7px;
 }
 
@@ -383,7 +383,7 @@
 
 .horizontalSurface {
   min-height: 100%;
-  padding: 8px 55px 31px 0;
+  padding: var(--space-2) 55px 31px 0;
   position: relative;
 }
 
@@ -397,7 +397,7 @@
 }
 
 .horizontalGrid > span {
-  border-left: 1px solid var(--border);
+  border-left: 1px solid var(--border-subtle);
   bottom: 0;
   position: absolute;
   top: 0;
@@ -508,7 +508,7 @@
 @media (max-width: 760px) {
   .emptyState {
     min-height: 250px;
-    padding: 28px 20px;
+    padding: 28px var(--space-5);
   }
 
   .categoricalCanvas,
@@ -536,7 +536,7 @@
     grid-row: 2;
     justify-content: flex-start;
     overflow-x: auto;
-    padding: 0 4px 0 48px;
+    padding: 0 var(--space-1) 0 48px;
   }
 
   .categoricalChart {

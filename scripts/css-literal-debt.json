@@ -1,5 +1,5 @@
 {
-  "//": "Every literal the Phase 2 token sweep left behind, and nothing else.\n\nThis is a ratchet, not an exemption list. scripts/css-token-sweep.test.mjs\ncompares it against the tree with a set equality, so a literal that is not\nrecorded here fails the build and a recorded literal that has been migrated\nfails it too. Adding a row is therefore a deliberate act with a reviewer,\nwhich is the only property that makes a debt list shrink instead of drift.\n\nRows are grouped by file and property and hold the declaration value, not a\nline number: two rules that paint the same literal share one row, and\nediting anything above a rule does not churn the ledger.\n\nWhy each row is still here is answered by role, not one row at a time: the\n'Role gaps' table in docs/theming.md groups every colour below under the\ntier-2 role that would absorb it, and the 'Replaces' tables under 'Scales'\ncover the rest -- most scale rows are values whose nearest step would move a\npixel, which is a design decision rather than a substitution.\n\nA literal a token already spells exactly is a plain miss and not debt at\nall. The sweep test judges those separately and is red on them today; when\none is fixed it leaves that list and this ledger together.",
+  "//": "Every literal the Phase 2 token sweep left behind, and nothing else.\n\nThis is a ratchet, not an exemption list. scripts/css-token-sweep.test.mjs\ncompares it against the tree with a set equality, so a literal that is not\nrecorded here fails the build and a recorded literal that has been migrated\nfails it too. Adding a row is therefore a deliberate act with a reviewer,\nwhich is the only property that makes a debt list shrink instead of drift.\n\nRows are grouped by file and property and hold the declaration value, not a\nline number: two rules that paint the same literal share one row, and\nediting anything above a rule does not churn the ledger.\n\nWhy each row is still here is answered by role, not one row at a time: the\n'Role gaps' table in docs/theming.md groups every colour below under the\ntier-2 role that would absorb it, and the 'Replaces' tables under 'Scales'\ncover the rest -- most scale rows are values whose nearest step would move a\npixel, which is a design decision rather than a substitution.\n\nA literal a token already spells exactly is a plain miss and not debt at\nall. The sweep test judges those separately and that list is empty: every\nexact match has been substituted, so nothing below can be removed without\nchoosing a different colour or moving a box.",
   "colour": {
     "app/analytics/analytics.module.css": {
       "background": [
@@ -19,8 +19,6 @@
       ],
       "color": [
         "#2f718f",
-        "#46575f",
-        "#475860",
         "#765821",
         "#8b611d",
         "#9b691d",
@@ -43,15 +41,11 @@
         "0 0 0 2px rgb(47 120 158 / 45%)"
       ],
       "color": [
-        "#175d81",
         "#8e2f2f",
         "#9c3535"
       ]
     },
     "app/globals.css": {
-      "--shadow": [
-        "0 10px 30px rgb(18 29 36 / 18%), 0 2px 7px rgb(18 29 36 / 12%)"
-      ],
       "accent-color": [
         "#5c9837"
       ],
@@ -77,24 +71,14 @@
         "#72a84c",
         "#74ae49",
         "#79aa56",
-        "#79ad55",
         "#7d8990",
         "#83b84f",
         "#9bbdce",
-        "#a6b0b5",
         "#b6c0c5",
         "#bf8122",
         "#c07823",
         "#c7dfb6",
-        "#d7a728",
-        "#d99d2a",
-        "#d9e0e3",
-        "#e09d25",
-        "#e2a624",
         "#e5b553",
-        "#eee9f6",
-        "#fff3ce",
-        "conic-gradient(var(--chart-series-1) 0 48.2%, var(--chart-series-2) 48.2% 75.6%, var(--chart-series-3) 75.6% 91.7%, #a6b0b5 91.7%)",
         "linear-gradient(to right, transparent calc(100% - 16px), rgb(39 116 155 / 9%))",
         "linear-gradient(to right, transparent calc(100% - 18px), rgb(47 120 158 / 10%))",
         "linear-gradient(to top, transparent, #88bd67)",
@@ -130,7 +114,6 @@
       ],
       "border-bottom": [
         "1px solid #e6bbb7",
-        "1px solid #e8ebed",
         "1px solid #edf0f1"
       ],
       "border-bottom-color": [
@@ -181,14 +164,12 @@
       ],
       "border-right": [
         "1px solid #3d87b3",
-        "1px solid #e8ebed",
         "1px solid #edf0f1",
         "1px solid rgb(255 255 255 / 8%)",
         "1px solid rgb(255 255 255 / 9%)"
       ],
       "border-top": [
         "1px solid #e6bbb7",
-        "1px solid #e6eaec",
         "1px solid #edf0f1"
       ],
       "border-top-color": [
@@ -208,8 +189,10 @@
         "0 0 0 3px rgb(63 134 169 / 12%)",
         "0 0 0 4px rgb(46 135 183 / 0%)",
         "0 0 0 4px rgb(47 134 179 / 14%)",
+        "0 18px 55px rgb(10 20 26 / 28%)",
         "0 2px 7px rgb(20 35 44 / 16%)",
         "0 7px 18px rgb(18 29 36 / 18%)",
+        "0 8px 28px rgb(12 22 28 / 28%)",
         "8px 0 30px rgb(18 29 36 / 24%)",
         "inset 0 -1px 0 #2d3337",
         "inset 0 0 0 1px #9bc47a",
@@ -225,25 +208,18 @@
         "#1f667f",
         "#2e7d45",
         "#2f3e46",
-        "#345d71",
         "#355260",
         "#37677d",
         "#3a6f86",
-        "#3d4b54",
         "#3d4f59",
         "#3e718a",
         "#3f4f57",
         "#3f5968",
-        "#40505a",
         "#40515a",
-        "#43525a",
         "#43545d",
         "#44535c",
-        "#44545d",
         "#445760",
         "#456675",
-        "#46555e",
-        "#466239",
         "#485761",
         "#495861",
         "#4a5962",
@@ -256,13 +232,11 @@
         "#688159",
         "#6c5531",
         "#6f5a2f",
-        "#705a97",
         "#715516",
         "#715d34",
         "#734ba3",
         "#765e2d",
         "#78b44a",
-        "#795817",
         "#79b84a",
         "#84b762",
         "#86302c",
@@ -272,7 +246,6 @@
         "#8a6b2a",
         "#8c332f",
         "#8d642a",
-        "#8f2f2b",
         "#8f642c",
         "#8fbe6f",
         "#93443f",
@@ -302,9 +275,6 @@
       ]
     },
     "app/reports/reports.module.css": {
-      "background": [
-        "#f0ebf5"
-      ],
       "border": [
         "1px solid #bdd4ae",
         "1px solid #dba39f"
@@ -313,11 +283,7 @@
         "1px solid #edf0f1"
       ],
       "color": [
-        "#43525a",
-        "#466239",
         "#557149",
-        "#71538d",
-        "#8f2f2b",
         "#a4433d",
         "#b87921",
         "#d28d1c"
@@ -337,7 +303,6 @@
         "#3e4d55",
         "#5d4a1d",
         "#735100",
-        "#8f2f2b",
         "#9b3530 !important"
       ]
     },
@@ -413,11 +378,13 @@
         "-8px",
         "18px",
         "1px",
+        "28px",
         "2px",
         "30px",
         "36px",
         "3px",
         "4px",
+        "55px",
         "5px",
         "7px",
         "8px"
@@ -471,7 +438,6 @@
         "10px"
       ],
       "font-size": [
-        "10px",
         "13px"
       ]
     },

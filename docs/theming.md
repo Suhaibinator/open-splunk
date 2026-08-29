@@ -18,11 +18,14 @@ That is most of the state now.
 [`app/styles/tokens-color.css`](../app/styles/tokens-color.css) declares every
 colour role the product has, `tokens-scale.css` the non-colour scales described
 under [Scales](#scales) below, and the sweep that rewrote the call sites has
-landed: `npm run lint:css` reports 261 hex literals outside `app/styles`, down
-from 1,496. Recolouring the product is close to a one-file edit. What is left
-is not scattered misses but a short list of roles tier 2 does not name, which
-[Role gaps](#role-gaps) records; a literal was kept wherever the nearest token
-would have been the wrong role rather than merely a nearby colour.
+landed: `npm run lint:css` reports 214 hex literals outside `app/styles`, down
+from 1,496, and the pre-refactor alias block is gone, so there is one name per
+role. Recolouring the product is close to a one-file edit. What is left is not
+scattered misses but a short list of roles tier 2 does not name, which
+[Role gaps](#role-gaps) records; a literal is kept wherever the nearest token
+would be the wrong role rather than merely a nearby colour, and
+`scripts/css-literal-debt.json` records every one of them so a new literal
+cannot slip in beside them.
 
 ## The two tiers
 
@@ -109,15 +112,18 @@ Two smaller rules follow from it:
   demanded them. The step is a claim about lightness, so it is measured: a
   family whose CIE L\* stops falling as its step number rises is a ladder that
   lies about which of two colours is darker, and the grammar test rejects it.
-- Semantic tokens: `--<group>-<role>`, with the group prefix (`bg`, `fg`,
-  `status`, `level`, `chart`, `chrome`) shared by every token in it. Modifiers
-  come last: `-hover`, `-strong`, `-soft`.
+- Semantic tokens: `--<group>-<role>`, with the group prefix (`accent`, `bg`,
+  `border`, `chart`, `chrome`, `fg`, `level`, `status`) shared by every token in
+  it. Modifiers come last: `-hover`, `-bright`, `-strong`, `-soft`, `-subtle`,
+  `-alt`. `scripts/token-grammar.test.mjs` holds that list, so a new group is a
+  change to this document and to that test together.
 - No token name mentions a hue. `--status-error`, never `--status-red`.
 - One family, one kind of value. `var(--type-md)` is a length and
   `var(--fg-muted)` is a colour, and the prefix says which before the value is
   looked up. This is why the type scale is `--type-*` and not `--text-*`: the
-  legacy aliases `--text` and `--text-strong` are inks, and a family cannot
-  mean both.
+  names `--text` and `--text-strong` were inks, and a family cannot mean both.
+  Both are retired now, but the reason the scale is not called `--text-*` is
+  worth keeping.
 
 Declarations inside the token files are **not** alphabetised, and that is
 deliberate. `tokens-color.css` runs hue family by hue family and, within a
@@ -163,13 +169,48 @@ A theme restates tier 2 and leaves tier 1 alone.
    proof that the split holds and as the target for a toggle when one lands;
    until then it changes no pixel.
 
-## Legacy aliases
+## Retired aliases
 
 The pre-refactor names — `--muted`, `--surface`, `--green-strong`, and their
-peers — are still declared at the bottom of the light block, each pointing at
-its semantic replacement so no call site broke while the layer was introduced.
-They are frozen: nothing may be added to that block, and each one disappears as
-its call sites are rewritten to the semantic token.
+peers — were declared at the bottom of the light block through Phase 1, each
+pointing at its semantic replacement so no call site broke while the layer was
+introduced. Phase 2 rewrote the last call site and **deleted the block**, along
+with the `--shadow` declaration `app/globals.css` carried. There is now exactly
+one name per role.
+
+| Retired | Now read as |
+| --- | --- |
+| `--app-bar` | `--chrome-appbar` |
+| `--app-bar-hover` | `--chrome-hover` |
+| `--black` | `--bg-inverse` |
+| `--blue` | `--status-info` |
+| `--blue-soft` | `--status-info-soft` |
+| `--border-dark` | `--border-strong` |
+| `--canvas` | `--bg-canvas` |
+| `--faint` | `--fg-faint` |
+| `--green` | `--accent` |
+| `--green-soft` | `--accent-soft` |
+| `--green-strong` | `--accent-hover` |
+| `--muted` | `--fg-muted` |
+| `--orange` | *(named no role; `--orange-400` is unreferenced tier 1)* |
+| `--product-bar` | `--chrome-bar` |
+| `--red` | `--status-error` |
+| `--red-soft` | `--status-error-soft` |
+| `--shadow` | `--shadow-lg` |
+| `--surface` | `--bg-surface` |
+| `--surface-raised` | `--bg-raised` |
+| `--surface-subtle` | `--bg-subtle` |
+| `--text` | `--fg-text` |
+| `--text-strong` | `--fg-strong` |
+| `--yellow` | *(named no role; `--amber-500` is unreferenced tier 1)* |
+
+`--border` is not in the table: it survived the refactor as a tier-2 name
+rather than as an alias. The value each retired name carried is still pinned,
+channel by channel, against the role that carries it now — in
+`scripts/token-grammar.test.mjs`, `integration/visual/css-contracts.spec.ts`
+and `integration/visual/token-layer.visual.spec.ts` — so the deletion cannot
+have moved a colour without a test saying so. A separate assertion holds that
+none of the names comes back.
 
 ## Scales
 
@@ -220,11 +261,12 @@ The product's body size is 10px, so the ramp is deliberately bottom-heavy and
 twenty distinct `font-size` literals in use.
 
 The family is `--type-*` rather than the `--text-*` these steps were first
-written as, because `--text` and `--text-strong` are colours: with both
+written as, because `--text` and `--text-strong` were colours: with both
 families in the layer, `var(--text-…)` told a reader nothing about whether they
-were writing an ink or a length. The scale has no call sites yet, so renaming
-it costs nothing; the two aliases still have hundreds, so they keep their
-names until they are deleted.
+were writing an ink or a length. Both inks are retired now — see
+[Retired aliases](#retired-aliases) — but the scale keeps the `--type-*` name,
+because it has 588 call sites and the collision it was avoiding could recur the
+moment someone reached for `--text-` again.
 
 | Token | Value | Replaces | Declarations covered |
 | --- | --- | --- | --- |
@@ -346,10 +388,29 @@ different shells.
 | --- | --- | --- |
 | `--shadow-sm` | `0 1px 4px rgb(21 36 45 / 9%)` | the 1–2px ambient shadows on cards and rows |
 | `--shadow-md` | `0 3px 9px rgb(21 35 43 / 24%)` | the 3–7px lift on menus and popovers |
-| `--shadow-lg` | `0 10px 30px rgb(18 29 36 / 18%), 0 2px 7px rgb(18 29 36 / 12%)` | the outgoing `--shadow`, plus the 8–18px drops on drawers and modals |
+| `--shadow-lg` | `0 10px 30px rgb(18 29 36 / 18%), 0 2px 7px rgb(18 29 36 / 12%)` | the retired `--shadow`, and nothing else |
 
-`--shadow-lg` is byte-identical to the `--shadow` it replaces, so the six rules
-that already read a token do not move when `--shadow` is retired.
+`--shadow-lg` is byte-identical to the `--shadow` it replaced, so the seven
+rules that read the outgoing name did not move when it was retired.
+
+**A shadow token replaces a shadow only when the geometry matches exactly.** An
+elevation is an offset, a blur and an ink, and swapping one for "the nearest
+token" changes the shape of the shadow rather than its hue — which is a
+different kind of change from everything else in this phase, and the one thing
+a hue-normalisation sweep may not do. Two rules were migrated onto `--shadow-lg`
+during Phase 2 and moved back:
+
+| Rule | Literal | `--shadow-lg` would have made it |
+| --- | --- | --- |
+| `.modal-card` | `0 18px 55px rgb(10 20 26 / 28%)` | y 18px → 10px, blur 55px → 30px, alpha 28% → 18%, plus a second stop |
+| `.toast` | `0 8px 28px rgb(12 22 28 / 28%)` | y 8px → 10px, blur 28px → 30px, alpha 28% → 18%, plus a second stop |
+
+Both keep their literals and are recorded in `scripts/css-literal-debt.json`.
+They are the **`--shadow-xl` role gap**: a modal-scale drop the three-step scale
+does not carry, along with the seven other literal drops the stylesheets still
+ship (`0 7px 18px`, `8px 0 30px`, `0 -12px 36px`, `-8px 0 7px`, `0 2px 7px`).
+Naming that step is a design decision about how deep a modal sits, so it belongs
+to whoever owns the elevation scale, not to a substitution pass.
 
 ### Focus
 
@@ -423,9 +484,7 @@ The shadow tokens in `tokens-scale.css` are the same tension seen from the
 scale side: their geometry is a scale but their ink is a colour, and they will
 move onto a tier-1 colour primitive once the palette names one. Until then they
 hold the literals the stylesheets ship today, because a shadow that changes
-colour changes every elevated surface. `app/globals.css` still declares the
-outgoing `--shadow` beside them, identical in value to `--shadow-lg`, until the
-rules that read it are migrated.
+colour changes every elevated surface.
 
 Three text pairings are short of WCAG AA (4.5:1) and are inherited rather than
 introduced: `--fg-faint` on `--bg-surface` is 3.10:1 in the light theme and
@@ -435,6 +494,19 @@ token's own role comment promises, so these are not test failures; moving them
 is a palette change with call sites behind it, which belongs to a migration
 phase rather than to this one.
 
+**The sweep introduced three more and they are fixed rather than recorded.** A
+substitution that picks the nearest *fill* role for an ink lightens it, and a
+13px bold glyph on its own wash has no margin to spend: the five connected-
+backend state badges went to `--status-neutral`, `--status-warning` and
+`--status-info` and landed at 3.61:1, 3.88:1 and 4.29:1. They now read
+`--fg-secondary` and the `--status-*-strong` family, and
+`integration/visual/css-contracts.spec.ts` measures all five against their own
+computed grounds, so the next sweep cannot repeat it. The remaining ink moves of
+20 units or more all lighten onto `--fg-muted`, which is 4.93:1 on
+`--bg-surface` and 4.44:1 on `--bg-subtle`; the second of those is the
+`--fg-faint` problem one step up the ramp and is recorded here rather than
+fixed, because it is the same palette decision.
+
 The four uncollapsed focus blues are gone; only the alpha outline
 `rgb(42 120 158 / 28%)` is still a literal, and it has no primitive at all — it
 will need `color-mix()` or an alpha token. That is the shape of the remaining
@@ -442,45 +514,75 @@ colour debt generally: alpha. No tier-2 token carries any, so every
 `rgb(r g b / n%)` in the stylesheets — the two shadow stops, the mobile scrims,
 the white bar hovers, the selection wash — is still a literal.
 
-**Every legacy colour alias now has zero call sites.** All twenty-three are
-unread anywhere in `app/`, `lib/` or `integration/` outside `app/styles`
-itself, and `--shadow`'s last reader is a test that asserts it resolves
-identically to `--shadow-lg`. The block at the bottom of the light theme, and
-the `--shadow` declaration at the top of `app/globals.css`, can therefore be
-deleted outright without rewriting a single rule. Deleting them also means
-removing `LEGACY_COLOUR_TOKENS` from
-`integration/visual/css-contracts.spec.ts` and the `--shadow` row from
-`integration/visual/token-layer.visual.spec.ts` — those specs pin the aliases
-channel-by-channel, so they fail the moment the names stop resolving. That
-paired change is the next phase's first move, not a leftover from this one.
-The count is worth re-running rather than trusting:
-`grep -rn 'var(--NAME)' app lib integration | grep -v '^app/styles/'`.
+**The alias block is deleted**, along with the `--shadow` declaration in
+`app/globals.css`; see [Retired aliases](#retired-aliases) for the mapping and
+for the three test tables that were retargeted at the roles rather than dropped.
+The check is worth re-running rather than trusting:
+`grep -rnE 'var\(\s*--(surface|text|muted|canvas|shadow)\s*[,)]' app lib integration`.
 
-`npm run test:visual` is a weak check on colour and should not be read as one.
-`playwright.visual.config.ts` sets `maxDiffPixelRatio: 0.002` but no
-`threshold`, so Playwright's default per-pixel tolerance applies — generous
-enough in YIQ space that a token substitution can move a hue by tens of units
-on a channel and still pass. The suite proves that *no layout moved*, which is
-what it was built for; it does not prove that no colour moved. A colour change
-needs its own evidence, such as resolving both versions' tokens back to values
-and diffing them per declaration. Both Phase 2 slices did that separately and
-reported every substitution above a 24-unit threshold; that list, not the
-green suite, is why the deliberate changes below are known to be the only ones.
+`npm run test:visual` used to be a weak check on colour and was read as a strong
+one. `playwright.visual.config.ts` set `maxDiffPixelRatio: 0.002` but no
+`threshold`, so Playwright's default per-pixel tolerance applied — generous
+enough in YIQ space that a token substitution could move a hue by tens of units
+on a channel and still pass, which is exactly what happened: the sweep changed
+colour on 41 of the 44 baselines and the suite stayed green. The config now sets
+`threshold: 0.02`, a tenth of the default, so a hue move of that size has to be
+recorded in the baselines instead of absorbed. `npm run test:visual:determinism`
+renders the export twice and reports all 44 screenshots byte-identical, which is
+what makes a tolerance that tight safe to run.
+
+Two checks carry the colour half that a screenshot still cannot:
+`scripts/css-token-sweep.test.mjs` compares the surviving literals against
+`scripts/css-literal-debt.json` by set equality in both directions and fails on
+any literal a token already spells exactly, and
+`integration/visual/token-sweep.visual.spec.ts` walks every element of every
+exported route in the real export, stamps it, applies `data-theme="dark"` and
+fails on any ground or ink that does not move. Between them, "the sweep is
+finished" is a machine-checked claim rather than a report.
 
 
 ### Colour mappings that move a pixel
 
 The `Replaces` columns under [Scales](#scales) call out every substitution that
-will deliberately change a rendered value. The colour half needs the same list,
-because six semantic tokens are pointed at the nearest palette step rather than
-at the exact literal they will replace. Each is a decision, not an accident —
-the palette is what makes a theme possible, and a step per one-off literal
-would defeat it — but each was expected to move a baseline when Phase 2
-substituted it. In the event none did: the sweep landed all six and all 62
-visual tests passed with no baseline regenerated, because every distance below
-is smaller than the harness's per-pixel threshold. That is worth knowing before
-trusting the suite on a colour change — see the caveat under
-[Known debt](#known-debt-in-the-token-layer).
+deliberately changes a rendered value. The colour half needs the same list, and
+it is longer than the token-definition table it started as.
+
+**The measured total.** Comparing the current export against the pre-sweep
+baselines at zero tolerance, pixel by pixel: **41 of the 44 baselines changed**,
+between 1% and 98% of their pixels each, with a largest single-channel
+difference of **55** and a per-page maximum between 16 and 55. **No image
+changed size and no pixel moved by more than 55**, which is the positive result
+in the same measurement: a one-pixel text reflow against `#28343d` on white
+would show a difference of 150 or more, so "the sweep moved colour and nothing
+else" is measured rather than asserted. The regenerated baselines carry the
+change in git; the numbers come from a strict run of the same suite with
+`threshold: 0` and `maxDiffPixels: 0` against the previous images.
+
+**Where the area is.** Almost all of it is the palette rounding the product's
+near-duplicate greys onto one step, invisible per pixel and enormous per page:
+`#f5f6f5 → #f6f6f4` (distance 1) alone accounts for 7.5 million pixels, and
+`#1d252b → #1e252b` (1) for the product bar on every page. The moves worth
+knowing about, largest distance first:
+
+| Distance | Substitution | Where |
+| --- | --- | --- |
+| 55 | `#dfa024` → `--status-warning` `#a87300` | warning icons and text; the largest move in the phase, 244px |
+| 39 | `#a23e39` → `--status-error` `#c93c37` | the failed-run status dot |
+| 38 | `#d9e0e3` → `--chrome-fg` `#ffffff` | the mobile hamburger bars, three 17×1px rules |
+| 36 | `#63a33c` → `--accent` `#477f2b` | accent fills, 1,510px across nine pages |
+| 33 | `#68a63f` → `--accent` | the same family, one step lighter |
+| 29 | `#ac3d37` → `--status-error-strong` `#8f2f2b` | the error state badge, darkened deliberately (see below) |
+| 27 | `#fff3ce` → `--status-warning-soft` `#fff8e9` | the demo mode pill |
+| 25 | `#466239` → `--status-success-strong` `#376a20` | the two success action notices |
+| 23 | `#345d71` → `--fg-secondary` `#43525a` | the sign-in help notice |
+| 18 | `#79ad55` → `--accent-bright` `#69a343` | the timeline columns, 72 per search page |
+| 17 | `#4f6c7b` → `--fg-secondary` | the neutral state badge, darkened to clear AA |
+
+Distance is the largest single-channel difference. Everything above 24 is a
+place where no role-correct token was closer, so the choice was between a wrong
+role and a kept literal; each row above chose the role and is listed here for
+that reason. The token-definition mismatches that were already recorded stay
+true and are small:
 
 | Token | Resolves to | Replaces | Distance |
 | --- | --- | --- | --- |
@@ -491,14 +593,37 @@ trusting the suite on a colour change — see the caveat under
 | `--chrome-bar` | `--slate-900` `#1e252b` | `.suite-product-bar` `#1d252b` | 1 |
 | `--chrome-appbar` | `--slate-700` `#3f464c` | `.suite-app-bar` `#424a50` | 4 |
 
-Distance is the largest single-channel difference. The baselines to expect
-churn in are the search workspace's visualization chart and the product-shell
-bars on every exported page. `TIME_SERIES_COLORS` lives in
+`TIME_SERIES_COLORS` lives in
 `app/search-workspace/charts/time-series-line-chart.tsx`; series 4 and 6
-through 12 already match it exactly, as do the twenty-three legacy aliases,
-which are pinned channel-by-channel in
-`integration/visual/css-contracts.spec.ts` along with the semantic tokens that
-stand in for a literal.
+through 12 already match it exactly.
+
+**Four kinds of substitution were reverted or re-aimed** after review, because
+each picked a token of the wrong role rather than a token that was merely far
+away:
+
+- **Faint dividers.** 76 declarations whose literal sat in the `#e0e4e6`–
+  `#e7eaec` band were collapsed onto `--border` `#cfd4d7`, a 17–24 unit
+  darkening across nine pages and the largest-area visible change in the phase.
+  They now read `--border-subtle` `--gray-200` `#e6eaec`, at most 6 units from
+  the literal each replaced. The 18 declarations in the `#dce1e3`–`#dfe4e6` band
+  stay on `--border`: they are nearer `--gray-250`, and splitting the divider
+  role three ways would be a design decision rather than a substitution.
+- **Green washes.** Nine success and selected grounds (hue 93–109°, saturation
+  0.31–0.44) were mapped onto neutral `--bg-subtle`/`--bg-canvas`/`--bg-raised`,
+  which dropped the tint to saturation 0.04 and put them beyond the reach of a
+  retheme of `--accent-soft`. They now read `--accent-soft` when they mean
+  "selected" and `--status-success-soft` when they mean "succeeded".
+- **Chart-ramp fills.** Four non-chart surfaces — the coverage and duration
+  progress fills, the dashboard volume bars, and the "good" sparkline — read
+  `--chart-series-1`, so reordering the categorical ramp would have recoloured
+  them. They now read `--accent-bright`. `--chart-series-*` is for series marks
+  and legend swatches only.
+- **Two role mistakes.** `.lookup-manager__preview > header` used the background
+  wash `--status-info-soft` as a border and now uses `--border`;
+  `.token-reveal code` used `--accent-soft` as an ink on `--bg-inverse` and now
+  uses `--fg-inverse`. A white panel and its buttons
+  (`.backend-resource-state`) had gone to `--status-neutral-soft` when
+  `--bg-surface` matched them exactly, and are back on `--bg-surface`.
 
 The categorical ramp has a second, older problem it inherits from
 `TIME_SERIES_COLORS` and does not fix: its bottom end is thin. Pairwise CIE76
@@ -511,22 +636,34 @@ here rather than made quietly.
 
 ## Role gaps
 
-The sweep left 261 hex literals. They are not a residue to grind down one by
-one: they cluster into roles that tier 2 does not name, and the fix for each is
-a token, after which its call sites collapse together. Deciding these is the
-next phase's real work. The largest, by occurrences:
+The sweep leaves 214 hex literals, down from 1,496 before it and 261 at the end
+of its first pass. They are not a residue to grind down one by one: they cluster
+into roles that tier 2 does not name, and the fix for each is a token, after
+which its call sites collapse together.
+
+**Seven of the gaps this table used to record are now filled**, because the
+dark-theme audit in `integration/visual/token-sweep.visual.spec.ts` turned each
+of them from a tidiness argument into a rendered defect — a literal that does
+not move under `data-theme="dark"` is a white patch or an unreadable line, not
+an inconsistency. The new roles are `--fg-secondary` (`--gray-700`),
+`--border-subtle` (`--gray-200`), `--accent-bright` (`--green-500`),
+`--accent-alt` and `--accent-alt-soft` (the decorative violet, `--purple-600`
+and `--purple-100`), `--status-warning-bright` (`--amber-400`, the filled
+indicator dots), `--chart-neutral` (`--gray-400`, the uncategorised slice), and
+the four `--status-*-strong` inks. Each is restated in the dark block, so the
+surfaces they paint move with the theme.
+
+What is left, largest first:
 
 | Missing role | Rough count | What is there today |
 | --- | --- | --- |
-| A secondary ink between `--fg-text` and `--fg-muted` | ~26 | gray-700/750 have no tier-2 name, so the main table body text keeps `#43525a` — an exact `--gray-700` |
+| Alpha of any kind | 53 | needs `color-mix()` or an alpha token; no tier-2 token carries alpha, so every scrim, ring and translucent hover is a literal |
 | `--status-*-edge` | ~30 | the wash and the solid exist, the mid border does not; tier 1 already names `--red-300`, `--amber-300`, `--blue-300`, `--green-300` for it |
-| `--status-*-strong` | ~40 | deep ink on a pale wash; `--status-error` is 58 units away and drops the contrast |
-| `--accent-bright` | ~25 | green-500/600 brand fills and success greens; `--accent` is green-700 and 30+ away |
 | Ink and surface for dark grounds | ~14 | `--fg-faint` and `--bg-inverse` are 27+ from the bar and sign-in inks |
-| `--border-subtle` | ~6 | tier 2 starts at gray-300; tier 1 has `--gray-200` "lightest usable divider" |
+| Orange | ~8 | tier 1 has `--orange-400`/`--orange-500`; tier 2 names no role, and the two of them are unreferenced |
 | A `--syntax-*` family | 7 | the SPL inks are categorical, and the only categorical family is `--chart-series-*` |
-| Orange, purple, and a categorical neutral | ~16 | tier 1 has the hues; tier 2 names no role for them |
-| Alpha of any kind | 53 | needs `color-mix()` or an alpha token |
+| `--shadow-xl` | 9 | a modal-scale drop the three-step elevation scale does not carry; see [Elevation](#elevation) |
+| A second neutral ink step | ~6 | `--fg-secondary` is `--gray-700`; a cluster around `--gray-650` still keeps its literals and lands on `--fg-muted` instead |
 
 Two literals cannot be reached by a token at all and need a different fix:
 `app/dashboards/operations-dashboard.module.css` carries `fill='%23526068'`

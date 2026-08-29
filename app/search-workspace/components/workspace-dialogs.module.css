@@ -1,7 +1,7 @@
 .actionError {
   background: var(--status-error-soft);
   border: 1px solid #dba39f;
-  color: #8f2f2b;
+  color: var(--status-error-strong);
   font-size: var(--type-sm);
   line-height: 1.45;
   margin: 0 0 var(--space-3);
@@ -14,7 +14,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
-  padding: 11px 12px;
+  padding: 11px var(--space-3);
 }
 
 .capabilityNotice strong {
@@ -99,7 +99,7 @@
 }
 
 .exportSummaryWarning h3 { color: #735100; }
-.exportSummaryError h3 { color: #8f2f2b; }
+.exportSummaryError h3 { color: var(--status-error-strong); }
 
 .exportSummary p {
   color: var(--fg-muted);
@@ -121,7 +121,7 @@
   flex-direction: column;
   gap: var(--space-1);
   min-width: 0;
-  padding: 10px 12px;
+  padding: 10px var(--space-3);
 }
 
 .exportSummary dl > div:nth-child(3n),
@@ -202,7 +202,7 @@
 
 .settingError {
   color: #9b3530 !important;
-  font-size: 10px !important;
+  font-size: var(--type-xs) !important;
 }
 
 .historyTableScroll {
@@ -236,7 +236,7 @@
 .historyTable th:nth-child(6) { width: 26%; }
 
 .historyTable td {
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--border-subtle);
   color: var(--fg-muted);
   font-size: var(--type-xs);
   height: 49px;
@@ -347,12 +347,12 @@
   }
 
   .historyTable td:first-child {
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--border-subtle);
     padding-bottom: 10px;
   }
 
   .historyTable td:last-child {
-    border-top: 1px solid var(--border);
+    border-top: 1px solid var(--border-subtle);
     margin-top: 3px;
     padding-top: 10px;
   }
@@ -395,7 +395,7 @@
 .loadMoreRow {
   display: flex;
   justify-content: center;
-  padding: 12px 0 2px;
+  padding: var(--space-3) 0 2px;
 }
 
 .inspectorNotices {
@@ -403,7 +403,7 @@
   border: 1px solid #dfc98b;
   color: #5d4a1d;
   font-size: var(--type-xs);
-  padding: 10px 12px;
+  padding: 10px var(--space-3);
 }
 
 .inspectorNotices ul {
@@ -451,7 +451,7 @@
   background: var(--bg-canvas);
   border-bottom: 1px solid var(--border);
   grid-column: 1 / -1;
-  padding: 11px 12px;
+  padding: 11px var(--space-3);
 }
 
 .knowledgeInspection h3 {
@@ -468,7 +468,7 @@
 .knowledgeInspection dl {
   display: grid;
   font-size: var(--type-xs);
-  gap: 4px 10px;
+  gap: var(--space-1) 10px;
   grid-template-columns: max-content minmax(0, 1fr);
   margin: 0;
 }

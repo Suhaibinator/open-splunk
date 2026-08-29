@@ -13,9 +13,16 @@ import {
  *
  * The suite renders the exported demo UI from a dependency-free static server,
  * so it needs neither the Go server nor ClickHouse. It exists to pin
- * appearance while `app/globals.css` and the CSS modules are refactored: a
- * hue normalisation of a few RGB units stays inside the tolerance, while a
- * layout shift fails.
+ * appearance while `app/globals.css` and the CSS modules are refactored.
+ *
+ * It used to run on Playwright's default per-pixel `threshold` of 0.2, which is
+ * generous enough in YIQ space to call two visibly different blues equal: the
+ * Phase 2 token sweep moved colour by up to 55 units on a channel across most
+ * of every page and the suite stayed green, so "62 of 62 passed" was read as
+ * evidence about colour when it was only evidence about layout. The threshold
+ * below is tight enough that a hue move of that size fails, while
+ * `maxDiffPixelRatio` still absorbs sub-pixel antialiasing on the fraction of
+ * pixels where two machines disagree.
  */
 
 export default defineConfig({
@@ -26,6 +33,9 @@ export default defineConfig({
       // Small but nonzero: absorbs sub-pixel antialiasing, not layout movement.
       maxDiffPixelRatio: 0.002,
       scale: "css",
+      // A tenth of Playwright's default, so a token substitution that moves a
+      // hue has to be recorded in the baselines rather than absorbed here.
+      threshold: 0.02,
     },
   },
   forbidOnly: process.env.CI !== undefined,
