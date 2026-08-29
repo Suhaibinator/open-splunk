@@ -1,15 +1,51 @@
 /*
- * The token layer's single entry point.
+ * The stylesheet's single entry point.
  *
- * `app/layout.tsx` imports this file and nothing else from `app/styles`, so
- * adding a token file is a one-line edit here rather than a change to a React
- * component, and the cascade order that the layer depends on -- primitives,
- * then semantics, then the application stylesheet -- is written in CSS, where
- * the cascade actually lives, instead of being implied by JavaScript import
- * order.
+ * `app/layout.tsx` imports this file and nothing else, so adding a stylesheet
+ * is a one-line edit here rather than a change to a React component, and the
+ * cascade order the layer depends on is written in CSS, where the cascade
+ * actually lives, instead of being implied by JavaScript import order.
+ *
+ * The order below is the contract, and it reads outward from what cannot be
+ * overridden to what always wins:
+ *
+ *   1. tokens          -- names only; no rule, so nothing to override
+ *   2. base            -- the reset and the element defaults every page gets
+ *   3. primitives      -- one implementation each of button, table, form,
+ *                         modal, status and layout, in that order, so the
+ *                         chrome in `layout.css` can lean on the five above it
+ *   4. features        -- one file per surface, each colocated with the code
+ *                         that renders it, free to override any primitive
+ *   5. interaction     -- the coarse-pointer and reduced-motion contracts,
+ *                         last because they have to outrank every feature
+ *
+ * No file here declares a custom property: that is the token layer's job, and
+ * `scripts/token-grammar.test.mjs` fails the build if one grows a rule or a
+ * sheet grows a token. Each file carries its own responsive rules at its foot
+ * rather than deferring them to a document-wide section, so a feature and the
+ * way it folds are one edit; see docs/theming.md.
  *
  * `@import` is resolved at build time by the bundler's CSS pipeline, so this
  * indirection costs no extra request.
  */
 @import url("./tokens-color.css");
 @import url("./tokens-scale.css");
+@import url("./base.css");
+@import url("./primitives/button.css");
+@import url("./primitives/table.css");
+@import url("./primitives/form.css");
+@import url("./primitives/modal.css");
+@import url("./primitives/status.css");
+@import url("./primitives/layout.css");
+@import url("../search-workspace/search-editor.css");
+@import url("../search-workspace/search-job.css");
+@import url("../search-workspace/search-fields.css");
+@import url("../search-workspace/search-results.css");
+@import url("../admin/admin.css");
+@import url("../activity/activity.css");
+@import url("../datasets/datasets.css");
+@import url("../signin/signin.css");
+@import url("../home.css");
+@import url("../_components/backend-resource-state.css");
+@import url("../dashboards/dashboards.css");
+@import url("./interaction.css");

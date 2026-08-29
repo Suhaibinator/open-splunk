@@ -509,7 +509,7 @@ test("activity layouts preserve capability tabs and mobile job metadata", () => 
     path.join(process.cwd(), "app", "activity", "activity-console.tsx"),
     "utf8",
   );
-  const cardMode = readFileSync(path.join(process.cwd(), "app", "globals.css"), "utf8");
+  const cardMode = readFileSync(path.join(process.cwd(), "app", "styles", "primitives", "table.css"), "utf8");
   assert.match(backendSource, /data-tab-count=\{availableViews\.length\}/u);
   for (const label of ["Search", "Status", "Owner", "Runtime", "Events", "Started", "Actions"]) {
     assert.match(demoSource, new RegExp(`data-label="${label}"`, "u"));
@@ -524,7 +524,8 @@ test("activity layouts preserve capability tabs and mobile job metadata", () => 
   assert.match(cardMode, /\.table--cards td\[data-label\]::before,[\s\S]*?content:\s*attr\(data-label\)/u);
   assert.match(cardMode, /\.table--cards\.table--cards td:nth-child\(n\)[^{]*\{[^}]*display:\s*flex/su);
   // The `.live-jobs-table` desktop-cell and mobile-card contracts in
-  // app/globals.css are asserted against computed style in
+  // app/activity/activity.css and app/styles/primitives/table.css are asserted
+  // against computed style in
   // integration/visual/css-contracts.spec.ts.
 });
 

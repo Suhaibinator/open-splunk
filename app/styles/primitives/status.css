@@ -1,0 +1,80 @@
+/* Status
+   One family for every outcome indicator in the product. `.status` is the
+   shared inline box; a shape modifier says how big it is and whether it carries
+   a glyph; a tone modifier says which outcome it reports. Shape and tone are
+   separate so a tone is one declaration rather than one per shape, which is
+   what lets `.status--dot`, `.status--icon` and the dot inside `.status--label`
+   read the same six roles. The tone always sits on the element that paints, so
+   `.status--label` (a row of text) carries no tone of its own: its `.status
+   .status--dot` child carries it. `--running` is `--info` plus the pulse, so a
+   caller does not have to spell an in-flight state as two classes. */
+
+.status {
+  align-items: center;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.status--dot,
+.status--icon {
+  background: var(--status-neutral);
+  border-radius: 50%;
+}
+
+.status--dot {
+  height: 7px;
+  width: 7px;
+}
+
+.status--icon {
+  color: var(--fg-inverse);
+  height: 20px;
+  justify-content: center;
+  width: 20px;
+}
+
+.status--label {
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
+  font-weight: 600;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.status--success { background: var(--status-success); }
+.status--info { background: var(--status-info); }
+.status--warning { background: var(--status-warning); }
+.status--error { background: var(--status-error); }
+.status--neutral { background: var(--status-neutral); }
+.status--running { animation: pulse-ring 1.3s ease-in-out infinite; background: var(--status-info); }
+
+/* Badges
+   One non-interactive label chip, replacing the eight near-copies the product
+   grew (a mode pill, a role pill, a severity chip, two byte-identical
+   `previewBadge` module rules, a read-only pill, live/partial chips and
+   available/unavailable chips) -- the same eight docs/theming.md lists.
+   The shape is fixed -- a pill of uppercase `--type-xs` -- and only the tone
+   varies, so a chip's colour is the only decision a caller makes. `--outline`
+   is the one shape modifier, for a chip that has to read as a chip on a surface
+   its own ground already matches. */
+
+.badge {
+  background: var(--bg-subtle);
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  color: var(--fg-muted);
+  display: inline-flex;
+  font-size: var(--type-xs);
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  padding: 3px var(--space-2);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.badge--outline { border-color: var(--border); }
+.badge--success { background: var(--accent-soft); color: var(--accent-hover); }
+.badge--info { background: var(--status-info-soft); color: var(--status-info); }
+.badge--warning { background: var(--status-warning-soft); color: var(--status-warning-strong); }
+.badge--error { background: var(--status-error-soft); color: var(--status-error); }
+.badge--neutral { background: var(--bg-subtle); color: var(--fg-muted); }

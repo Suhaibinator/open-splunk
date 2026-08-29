@@ -6,8 +6,8 @@
  * two font stacks live here because none of them changes between light and
  * dark; colour lives in the sibling file, tokens-color.css.
  *
- * Every step below was chosen from the literals `app/globals.css` and the six
- * CSS modules actually ship today, so a later migration is a substitution, not
+ * Every step below was chosen from the literals the application stylesheets and
+ * the CSS modules actually ship today, so a later migration is a substitution, not
  * a redesign. docs/theming.md carries the full literal-to-token mapping and
  * names the places where a substitution will deliberately move a pixel.
  *
@@ -23,7 +23,8 @@
   --dur-fast: 100ms;
   --ease: ease-out;
 
-  /* Type stacks, moved verbatim out of the :root block in app/globals.css. */
+  /* Type stacks, moved verbatim out of the :root block the application
+     stylesheet used to carry. */
   --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
   --font-sans: Arial, Helvetica, sans-serif;
 
@@ -68,13 +69,13 @@
 
   /* Stacking. Nine layers, ordered base < sticky < bar < dropdown-scrim <
      dropdown < modal < drawer-scrim < drawer < toast, which is the order
-     app/globals.css ships today everywhere but one pair (.menu-dismiss moves
+     the application stylesheets ship today everywhere but one pair (.menu-dismiss moves
      above .suite-product-bar). Every overlay that a dismiss scrim backs gets
      the step above that scrim: sharing one step with it would leave the
      ordering to DOM order, and in four of the six pairs the scrim is the later
      sibling and would swallow its own surface. The gap of 100 leaves room for a
      component's own local stacking without borrowing the next layer's number.
-     docs/theming.md maps every declaration in app/globals.css onto a step. */
+     docs/theming.md maps every such declaration onto a step. */
   --z-bar: 200;
   --z-base: 1;
   --z-drawer: 700;

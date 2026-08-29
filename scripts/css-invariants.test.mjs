@@ -49,8 +49,8 @@ function describeList(items) {
 test("the stylesheet inventory reaches the whole styling layer", async () => {
   const stylesheets = (await listStylesheets(workspace)).map((file) => relativePosix(workspace, file));
   assert.ok(
-    stylesheets.includes("app/globals.css"),
-    "the walker no longer reaches app/globals.css, so every CSS invariant below is vacuous",
+    stylesheets.includes("app/styles/base.css") && stylesheets.includes("app/styles/primitives/button.css"),
+    "the walker no longer reaches the base layer or the primitives, so every CSS invariant below is vacuous",
   );
   assert.ok(
     stylesheets.some((file) => file.endsWith(".module.css")),
@@ -88,7 +88,7 @@ test("every var() reference resolves to a declared custom property", async () =>
   );
 });
 
-test("every class rule in the global stylesheet is reachable from the application", async () => {
+test("every class rule in the global stylesheets is reachable from the application", async () => {
   const classes = await collectGlobalStylesheetClasses(workspace);
   const evidence = await collectClassEvidence(workspace);
   const allowlist = await readDynamicClassAllowlist();
@@ -99,7 +99,7 @@ test("every class rule in the global stylesheet is reachable from the applicatio
   assert.deepEqual(
     unreachable,
     [],
-    "app/globals.css styles classes that no literal className, interpolation base, or :global()\n"
+    "A global stylesheet styles classes that no literal className, interpolation base, or :global()\n"
       + "selector can produce. Delete the rules, or -- only when a class really is built somewhere\n"
       + "this scan cannot see -- record it in scripts/css-dynamic-classes.json with a comment\n"
       + `naming the code that produces it:\n${describeList(unreachable)}`,
@@ -113,14 +113,14 @@ test("the dynamic-class allowlist carries no stale entries", async () => {
   const evidence = await collectClassEvidence(workspace);
   const stale = [];
   for (const className of [...allowlist.classes].toSorted()) {
-    if (!classes.has(className)) stale.push(`${className} is not styled by app/globals.css`);
+    if (!classes.has(className)) stale.push(`${className} is not styled by any global stylesheet`);
     else if (isClassReachable(className, evidence)) {
       stale.push(`${className} is reachable from application code and needs no allowlist entry`);
     }
   }
   for (const prefix of [...allowlist.prefixes].toSorted()) {
     if (![...classes].some((className) => className.startsWith(prefix))) {
-      stale.push(`${prefix} matches no class in app/globals.css`);
+      stale.push(`${prefix} matches no class in any global stylesheet`);
     }
   }
   assert.deepEqual(
@@ -199,29 +199,29 @@ test("maskStringLiterals leaves code callable and makes quoted source inert", ()
 
 test("findStylesheetTextReads catches direct, bound, and imported stylesheet reads", () => {
   assert.deepEqual(
-    findStylesheetTextReads('const css = readFileSync("app/globals.css", "utf8");'),
-    ['readFileSync("app/globals.css")'],
+    findStylesheetTextReads('const css = readFileSync("app/styles/base.css", "utf8");'),
+    ['readFileSync("app/styles/base.css")'],
   );
   assert.deepEqual(
     findStylesheetTextReads([
-      'const sheet = path.join(root, "app", "globals.css");',
+      'const sheet = path.join(root, "app", "styles", "base.css");',
       'const css = await readFile(sheet, "utf8");',
     ].join("\n")),
     ["readFile(sheet)"],
   );
-  assert.deepEqual(findStylesheetTextReads('import "./app/globals.css";'), ['import "./app/globals.css"']);
+  assert.deepEqual(findStylesheetTextReads('import "./app/styles/base.css";'), ['import "./app/styles/base.css"']);
 });
 
 test("findStylesheetTextReads ignores a read that only appears inside a fixture literal", () => {
   // This file's own parser tests embed stylesheet reads as data. Quoted source
   // is not a read, and treating it as one would make the invariant unfixable.
-  const source = 'const fixture = \'const css = readFileSync("app/globals.css");\';';
+  const source = 'const fixture = \'const css = readFileSync("app/styles/base.css");\';';
   assert.deepEqual(findStylesheetTextReads(source), []);
 });
 
 test("findStylesheetTextReads does not flag handing a stylesheet path to the browser", () => {
   const source = [
-    'const globalStylesheet = path.join(__dirname, "..", "..", "app", "globals.css");',
+    'const globalStylesheet = path.join(__dirname, "..", "..", "app", "styles", "base.css");',
     "await page.addStyleTag({ path: globalStylesheet });",
   ].join("\n");
   assert.deepEqual(findStylesheetTextReads(source), []);

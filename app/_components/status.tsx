@@ -9,7 +9,7 @@ import type { ReactNode } from "react";
  * module's own `statusScheduled` -- so "did it work?" was answered by a
  * different class per page and a new page picked whichever it happened to copy.
  * These six names are the whole vocabulary now, and `.status--*` in
- * `app/globals.css` is the only place they are painted.
+ * `app/styles/primitives/status.css` is the only place they are painted.
  *
  * `running` is `info` plus the pulse rather than a seventh colour: an in-flight
  * state is informational, and making callers spell it as two classes only

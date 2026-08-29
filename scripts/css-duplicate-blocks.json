@@ -3,6 +3,336 @@
   "groups": [
     {
       "declarations": [
+        "color: var(--fg-text)",
+        "font-size: var(--type-sm)",
+        "font-weight: 600",
+        "margin: 0",
+        "overflow-wrap: anywhere"
+      ],
+      "sites": [
+        "app/_components/backend-resource-state.css :: .backend-definition-list dd",
+        "app/_components/backend-resource-state.css :: .index-stats-grid dd"
+      ],
+      "why": "Definition-list value. Part of the same unclaimed metadata-list primitive as the other `dd` rules below."
+    },
+    {
+      "declarations": [
+        "color: var(--fg-muted)",
+        "font-size: var(--type-xs)",
+        "line-height: 1.5",
+        "margin: 0",
+        "overflow-wrap: anywhere"
+      ],
+      "sites": [
+        "app/_components/backend-resource-state.css :: .backend-resource-state p",
+        "app/admin/admin.css :: .knowledge-preview > p, .knowledge-preview__intro"
+      ],
+      "why": "Muted body copy with `overflow-wrap`. Same unclaimed `.note` typography primitive as group 3, with a wrapping rule rather than a bottom gap."
+    },
+    {
+      "declarations": [
+        "color: var(--fg-muted)",
+        "font-size: var(--type-xs)",
+        "line-height: 1.55",
+        "margin: 0",
+        "padding: 13px 14px"
+      ],
+      "sites": [
+        "app/_components/backend-resource-state.css :: .backend-unavailable-card > p",
+        "app/_components/backend-resource-state.css :: .index-observability-prompt > p"
+      ],
+      "why": "Padded muted prose inside an unavailable-state card. The empty/unavailable-state card is its own unclaimed primitive."
+    },
+    {
+      "declarations": [
+        "color: var(--fg-muted)",
+        "font-size: var(--type-xxs)",
+        "font-weight: 700",
+        "text-transform: uppercase"
+      ],
+      "sites": [
+        "app/_components/backend-resource-state.css :: .index-observability-controls label > span",
+        "app/search-workspace/components/workspace-dialogs.module.css :: .exportSummary dt"
+      ],
+      "why": "Uppercase label above a control. Same unclaimed form-control family as group 8."
+    },
+    {
+      "declarations": [
+        "display: grid",
+        "gap: 9px",
+        "grid-template-columns: repeat(4, minmax(0, 1fr))",
+        "margin-bottom: var(--space-3)"
+      ],
+      "sites": [
+        "app/activity/activity.css :: .activity-summary",
+        "app/dashboards/dashboards.css :: .dashboard-metrics"
+      ],
+      "why": "Four-up metric grid. Activity and the dashboards page count different things into the same grid; a `.metric-grid` primitive is unclaimed work."
+    },
+    {
+      "declarations": [
+        "color: var(--fg-muted)",
+        "display: block",
+        "font-size: var(--type-xxs)",
+        "margin-top: 3px"
+      ],
+      "sites": [
+        "app/activity/activity.css :: .export-jobs-table td small",
+        "app/activity/activity.css :: .live-jobs-table td:nth-child(3) small, .live-jobs-table td:nth-child(5) small"
+      ],
+      "why": "Secondary line under a table cell. Table *cells* were consolidated in Phase 3; per-column secondary text is still feature-owned, and `.table-secondary` already exists for the sites that opted in."
+    },
+    {
+      "declarations": [
+        "background: transparent",
+        "border: 0",
+        "color: #557149",
+        "font-size: 17px",
+        "height: 28px",
+        "width: 28px"
+      ],
+      "sites": [
+        "app/activity/activity.css :: .history-action-notice button",
+        "app/reports/reports.module.css :: .actionNotice button"
+      ],
+      "why": "Bare `button` descendant rule carrying two colour literals (`#557149`, `17px`) that scripts/css-literal-debt.json still records. Consolidating it means retiring those literals first."
+    },
+    {
+      "declarations": [
+        "color: var(--fg-text)",
+        "font-size: var(--type-xs)",
+        "margin: 0",
+        "overflow-wrap: anywhere"
+      ],
+      "sites": [
+        "app/activity/activity.css :: .history-clear-scope dd",
+        "app/admin/admin.css :: .knowledge-manager__metadata dd, .knowledge-manager__definition dd"
+      ],
+      "why": "Definition-list value, as group 9."
+    },
+    {
+      "declarations": [
+        "background: transparent",
+        "border: 0",
+        "font-size: var(--type-xs)",
+        "height: 30px",
+        "min-width: 0",
+        "outline: 0",
+        "padding: 0 var(--space-2)",
+        "width: 100%"
+      ],
+      "sites": [
+        "app/activity/activity.css :: .live-jobs-text-filter input",
+        "app/admin/admin.css :: .admin-toolbar input, .admin-toolbar select",
+        "app/admin/admin.css :: .resource-toolbar input, .activity-tabs-row input, .dataset-toolbar input"
+      ],
+      "why": "Toolbar text input. The input/select control family is the largest remaining un-consolidated primitive and is explicitly out of Phase 3's slice (buttons, status, badges, tables, chrome, overlays)."
+    },
+    {
+      "declarations": [
+        "align-items: center",
+        "background: var(--bg-surface)",
+        "border: 1px solid var(--border-strong)",
+        "display: flex",
+        "height: 32px"
+      ],
+      "sites": [
+        "app/activity/activity.css :: .live-jobs-text-filter, .live-jobs-app-filter",
+        "app/reports/reports.module.css :: .searchField"
+      ],
+      "why": "Bordered search field. Same unclaimed form-control family as group 8, at the composed-field rather than the bare-input level."
+    },
+    {
+      "declarations": [
+        "background: transparent",
+        "border: 0",
+        "color: var(--fg-link)",
+        "font-size: var(--type-xs)"
+      ],
+      "sites": [
+        "app/admin/admin.css :: .collector-card footer button",
+        "app/search-workspace/search-fields.css :: .field-inspector > footer button",
+        "app/search-workspace/search-results.css :: .pattern-table article > button"
+      ],
+      "why": "Bare `button` descendant rule -- a link-styled text button. Phase 3 consolidated `.button` call sites; the 238 remaining bare `button` descendant rules are documented in docs/theming.md as feature-owner work."
+    },
+    {
+      "declarations": [
+        "background: var(--bg-surface)",
+        "border: 1px solid var(--border-strong)",
+        "color: var(--fg-link)",
+        "font-size: var(--type-xs)",
+        "min-height: 32px",
+        "padding: 0 11px"
+      ],
+      "sites": [
+        "app/admin/admin.css :: .knowledge-manager__advanced-filter-actions button",
+        "app/admin/admin.css :: .knowledge-manager__pagination button, .knowledge-manager__stale button, .knowledge-manager__status button"
+      ],
+      "why": "Bare `button` descendant rule inside the knowledge manager, as group 13."
+    },
+    {
+      "declarations": [
+        "color: var(--fg-muted)",
+        "font-size: var(--type-xxs)",
+        "font-weight: 700",
+        "letter-spacing: 0.05em",
+        "text-transform: uppercase"
+      ],
+      "sites": [
+        "app/admin/admin.css :: .knowledge-manager__filters label > span, .knowledge-manager__advanced-filter-grid label > span",
+        "app/admin/admin.css :: .knowledge-manager__mutation-grid label > span, .knowledge-manager__delete-confirmation label > span",
+        "app/admin/admin.css :: .lookup-manager__toolbar label > span, .lookup-manager__editor label > span, .lookup-manager__upload label > span"
+      ],
+      "why": "Uppercase field label, three copies inside the knowledge and lookup managers. Same unclaimed form-control family as group 8."
+    },
+    {
+      "declarations": [
+        "background: var(--bg-surface)",
+        "border: 1px solid var(--border-strong)",
+        "font-size: var(--type-xs)",
+        "height: 34px",
+        "min-width: 0",
+        "padding: 0 9px",
+        "width: 100%"
+      ],
+      "sites": [
+        "app/admin/admin.css :: .knowledge-manager__filters select, .knowledge-manager__advanced-filter-grid input, .knowledge-manager__advanced-filter-grid select",
+        "app/admin/admin.css :: .knowledge-manager__mutation-grid input, .knowledge-manager__mutation-grid select, .knowledge-manager__delete-confirmation input",
+        "app/admin/admin.css :: .knowledge-preview input",
+        "app/admin/admin.css :: .lookup-manager__toolbar input, .lookup-manager__toolbar select, .lookup-manager__editor input:not([type=\"checkbox\"]):not([type=\"file\"]), .lookup-manager__editor select"
+      ],
+      "why": "Text input and select inside the knowledge and lookup managers -- four copies of the same control. The single largest entry in this file and the clearest candidate for the next consolidation phase."
+    },
+    {
+      "declarations": [
+        "display: grid",
+        "gap: 1px",
+        "grid-template-columns: repeat(2, minmax(0, 1fr))",
+        "margin: 0"
+      ],
+      "sites": [
+        "app/admin/admin.css :: .knowledge-manager__metadata",
+        "app/admin/admin.css :: .knowledge-manager__related-object dl"
+      ],
+      "why": "Two-column metadata grid, as group 9."
+    },
+    {
+      "declarations": [
+        "color: #43545d",
+        "font-size: var(--type-xs)",
+        "font-weight: 700",
+        "padding: 0 5px"
+      ],
+      "sites": [
+        "app/admin/admin.css :: .knowledge-manager__mutation-form legend",
+        "app/admin/admin.css :: .lookup-manager__editor legend"
+      ],
+      "why": "Fieldset legend carrying the `#43545d` literal that scripts/css-literal-debt.json still records; consolidating it means retiring that literal first."
+    },
+    {
+      "declarations": [
+        "display: grid",
+        "gap: 10px",
+        "grid-template-columns: repeat(2, minmax(0, 1fr))",
+        "min-width: 0"
+      ],
+      "sites": [
+        "app/admin/admin.css :: .knowledge-manager__mutation-grid",
+        "app/admin/admin.css :: .knowledge-preview__comparison"
+      ],
+      "why": "Two-column grid, as group 24, at a different gap owner."
+    },
+    {
+      "declarations": [
+        "color: var(--fg-text)",
+        "font-size: var(--type-xxs)",
+        "min-width: 0",
+        "overflow-wrap: anywhere"
+      ],
+      "sites": [
+        "app/admin/admin.css :: .knowledge-manager__related-identity code",
+        "app/admin/admin.css :: .knowledge-manager__relationship-list code"
+      ],
+      "why": "Inline code inside a knowledge-manager relationship row, as group 15."
+    },
+    {
+      "declarations": [
+        "align-items: center",
+        "background: var(--bg-raised)",
+        "color: var(--fg-muted)",
+        "display: flex",
+        "font-size: var(--type-xxs)",
+        "gap: var(--space-2)",
+        "justify-content: space-between",
+        "margin: 0",
+        "min-height: 34px",
+        "padding: 7px var(--space-2)"
+      ],
+      "sites": [
+        "app/admin/admin.css :: .knowledge-manager__related-status",
+        "app/admin/admin.css :: .knowledge-manager__relationship-message, .knowledge-manager__relationship-stale, .knowledge-manager__relationship-pagination"
+      ],
+      "why": "Status strip along the bottom of a knowledge-manager panel. Ten declarations, two copies: the largest single restatement left, and a strong candidate for a `.panel-status` primitive."
+    },
+    {
+      "declarations": [
+        "color: var(--fg-muted)",
+        "font-size: var(--type-xxs)",
+        "line-height: 1.45",
+        "margin: 0"
+      ],
+      "sites": [
+        "app/admin/admin.css :: .knowledge-manager__relationships > header p",
+        "app/admin/admin.css :: .lookup-manager__editor label > small, .lookup-manager__fieldset-note",
+        "app/admin/admin.css :: .lookup-manager__editor-actions p"
+      ],
+      "why": "Muted small print, as group 3."
+    },
+    {
+      "declarations": [
+        "color: var(--fg-muted)",
+        "font-size: var(--type-xs)",
+        "line-height: 1.45",
+        "margin: 0"
+      ],
+      "sites": [
+        "app/admin/admin.css :: .lookup-manager__contract p",
+        "app/admin/admin.css :: .token-recovery-summary p",
+        "app/admin/admin.css :: .token-reveal p",
+        "app/search-workspace/components/workspace-dialogs.module.css :: .exportSummary p"
+      ],
+      "why": "Muted body copy, four copies. Same unclaimed `.note` typography primitive as group 3."
+    },
+    {
+      "declarations": [
+        "background: var(--bg-surface)",
+        "border: 1px solid var(--border-strong)",
+        "font-size: var(--type-xs)",
+        "height: 32px",
+        "padding: 0 10px"
+      ],
+      "sites": [
+        "app/admin/admin.css :: .resource-toolbar > button",
+        "app/datasets/datasets.css :: .dataset-view-toggle button"
+      ],
+      "why": "Bare `button` descendant rule -- a bordered toolbar button. Same remaining debt as group 13."
+    },
+    {
+      "declarations": [
+        "color: var(--fg-muted)",
+        "font-size: var(--type-xs)",
+        "font-weight: 700",
+        "text-transform: uppercase"
+      ],
+      "sites": [
+        "app/admin/admin.css :: @media (max-width: 760px) :: .admin-mobile-section-picker label",
+        "app/styles/primitives/modal.css :: .job-inspector section > span, .inspector-query > span"
+      ],
+      "why": "Uppercase section label. Same unclaimed label vocabulary as group 19, at the section rather than the field level."
+    },
+    {
+      "declarations": [
         "align-items: center",
         "display: flex",
         "gap: 10px",
@@ -10,7 +340,7 @@
       ],
       "sites": [
         "app/analytics/analytics.module.css :: .contextBar > div",
-        "app/globals.css :: .search-title"
+        "app/search-workspace/search-editor.css :: .search-title"
       ],
       "why": "Feature layout, not a primitive: an analytics context bar and the search title happen to be the same flex row. Consolidating needs a named inline-row primitive, which no phase has defined."
     },
@@ -23,8 +353,8 @@
       ],
       "sites": [
         "app/analytics/analytics.module.css :: .insightList footer a, .fieldList a, .slowestList a, .slowestFooter a",
-        "app/globals.css :: .setup-checklist a",
-        "app/globals.css :: .system-notice > a"
+        "app/home.css :: .setup-checklist a",
+        "app/home.css :: .system-notice > a"
       ],
       "why": "Inline text link. A `.link` primitive is Phase 4 typography work; these three are feature-owned link styles that arrived at the same weight independently."
     },
@@ -37,7 +367,7 @@
       ],
       "sites": [
         "app/analytics/analytics.module.css :: .insightList p",
-        "app/globals.css :: .app-launch-card p"
+        "app/home.css :: .app-launch-card p"
       ],
       "why": "Muted body copy inside a card. Candidate for a `.note` typography primitive; the trailing `margin: 0 0 9px` differs from the other muted-copy rules only by its bottom gap, so folding needs a spacing decision this phase did not make."
     },
@@ -50,8 +380,8 @@
       ],
       "sites": [
         "app/analytics/analytics.module.css :: .searchDetail > a",
-        "app/globals.css :: .history-row > code",
-        "app/globals.css :: .notable-events strong"
+        "app/dashboards/dashboards.css :: .notable-events strong",
+        "app/styles/primitives/modal.css :: .history-row > code"
       ],
       "why": "Single-line truncation. The three sites truncate different content (a link, a query, an event title); the shared shape is the truncation idiom, which belongs in a utility class rather than in a component primitive."
     },
@@ -66,7 +396,7 @@
       ],
       "sites": [
         "app/analytics/analytics.module.css :: .trendLine",
-        "app/globals.css :: .time-series-chart__line"
+        "app/search-workspace/search-results.css :: .time-series-chart__line"
       ],
       "why": "Chart stroke geometry. Charts are their own primitive family and no phase has consolidated them; the analytics trend line and the workspace time-series line are drawn by two different components."
     },
@@ -86,76 +416,16 @@
     },
     {
       "declarations": [
-        "display: grid",
-        "gap: 9px",
-        "grid-template-columns: repeat(4, minmax(0, 1fr))",
-        "margin-bottom: var(--space-3)"
+        "font-size: var(--type-xxs)",
+        "overflow: hidden",
+        "text-overflow: ellipsis",
+        "white-space: nowrap"
       ],
       "sites": [
-        "app/globals.css :: .activity-summary",
-        "app/globals.css :: .dashboard-metrics"
+        "app/search-workspace/search-fields.css :: .event-field code",
+        "app/styles/primitives/modal.css :: .job-card code"
       ],
-      "why": "Four-up metric grid. Activity and the dashboards page count different things into the same grid; a `.metric-grid` primitive is unclaimed work."
-    },
-    {
-      "declarations": [
-        "background: transparent",
-        "border: 0",
-        "font-size: var(--type-xs)",
-        "height: 30px",
-        "min-width: 0",
-        "outline: 0",
-        "padding: 0 var(--space-2)",
-        "width: 100%"
-      ],
-      "sites": [
-        "app/globals.css :: .admin-toolbar input, .admin-toolbar select",
-        "app/globals.css :: .live-jobs-text-filter input",
-        "app/globals.css :: .resource-toolbar input, .activity-tabs-row input, .dataset-toolbar input"
-      ],
-      "why": "Toolbar text input. The input/select control family is the largest remaining un-consolidated primitive and is explicitly out of Phase 3's slice (buttons, status, badges, tables, chrome, overlays)."
-    },
-    {
-      "declarations": [
-        "color: var(--fg-text)",
-        "font-size: var(--type-sm)",
-        "font-weight: 600",
-        "margin: 0",
-        "overflow-wrap: anywhere"
-      ],
-      "sites": [
-        "app/globals.css :: .backend-definition-list dd",
-        "app/globals.css :: .index-stats-grid dd"
-      ],
-      "why": "Definition-list value. Part of the same unclaimed metadata-list primitive as the other `dd` rules below."
-    },
-    {
-      "declarations": [
-        "color: var(--fg-muted)",
-        "font-size: var(--type-xs)",
-        "line-height: 1.5",
-        "margin: 0",
-        "overflow-wrap: anywhere"
-      ],
-      "sites": [
-        "app/globals.css :: .backend-resource-state p",
-        "app/globals.css :: .knowledge-preview > p, .knowledge-preview__intro"
-      ],
-      "why": "Muted body copy with `overflow-wrap`. Same unclaimed `.note` typography primitive as group 3, with a wrapping rule rather than a bottom gap."
-    },
-    {
-      "declarations": [
-        "color: var(--fg-muted)",
-        "font-size: var(--type-xs)",
-        "line-height: 1.55",
-        "margin: 0",
-        "padding: 13px 14px"
-      ],
-      "sites": [
-        "app/globals.css :: .backend-unavailable-card > p",
-        "app/globals.css :: .index-observability-prompt > p"
-      ],
-      "why": "Padded muted prose inside an unavailable-state card. The empty/unavailable-state card is its own unclaimed primitive."
+      "why": "Inline code truncation, the same idiom as group 4 applied to `<code>`."
     },
     {
       "declarations": [
@@ -167,280 +437,10 @@
         "position: absolute"
       ],
       "sites": [
-        "app/globals.css :: .chart-grid",
-        "app/globals.css :: .timeline-grid-lines"
+        "app/search-workspace/search-job.css :: .timeline-grid-lines",
+        "app/search-workspace/search-results.css :: .chart-grid"
       ],
       "why": "Absolutely positioned grid lines behind a chart. Chart primitive family, as group 5."
-    },
-    {
-      "declarations": [
-        "background: transparent",
-        "border: 0",
-        "color: var(--fg-link)",
-        "font-size: var(--type-xs)"
-      ],
-      "sites": [
-        "app/globals.css :: .collector-card footer button",
-        "app/globals.css :: .field-inspector > footer button",
-        "app/globals.css :: .pattern-table article > button"
-      ],
-      "why": "Bare `button` descendant rule -- a link-styled text button. Phase 3 consolidated `.button` call sites; the 238 remaining bare `button` descendant rules are documented in docs/theming.md as feature-owner work."
-    },
-    {
-      "declarations": [
-        "background: var(--bg-surface)",
-        "border: 1px solid var(--border-strong)",
-        "font-size: var(--type-xs)",
-        "height: 32px",
-        "padding: 0 10px"
-      ],
-      "sites": [
-        "app/globals.css :: .dataset-view-toggle button",
-        "app/globals.css :: .resource-toolbar > button"
-      ],
-      "why": "Bare `button` descendant rule -- a bordered toolbar button. Same remaining debt as group 13."
-    },
-    {
-      "declarations": [
-        "font-size: var(--type-xxs)",
-        "overflow: hidden",
-        "text-overflow: ellipsis",
-        "white-space: nowrap"
-      ],
-      "sites": [
-        "app/globals.css :: .event-field code",
-        "app/globals.css :: .job-card code"
-      ],
-      "why": "Inline code truncation, the same idiom as group 4 applied to `<code>`."
-    },
-    {
-      "declarations": [
-        "color: var(--fg-muted)",
-        "display: block",
-        "font-size: var(--type-xxs)",
-        "margin-top: 3px"
-      ],
-      "sites": [
-        "app/globals.css :: .export-jobs-table td small",
-        "app/globals.css :: .live-jobs-table td:nth-child(3) small, .live-jobs-table td:nth-child(5) small"
-      ],
-      "why": "Secondary line under a table cell. Table *cells* were consolidated in Phase 3; per-column secondary text is still feature-owned, and `.table-secondary` already exists for the sites that opted in."
-    },
-    {
-      "declarations": [
-        "background: transparent",
-        "border: 0",
-        "color: #557149",
-        "font-size: 17px",
-        "height: 28px",
-        "width: 28px"
-      ],
-      "sites": [
-        "app/globals.css :: .history-action-notice button",
-        "app/reports/reports.module.css :: .actionNotice button"
-      ],
-      "why": "Bare `button` descendant rule carrying two colour literals (`#557149`, `17px`) that scripts/css-literal-debt.json still records. Consolidating it means retiring those literals first."
-    },
-    {
-      "declarations": [
-        "color: var(--fg-text)",
-        "font-size: var(--type-xs)",
-        "margin: 0",
-        "overflow-wrap: anywhere"
-      ],
-      "sites": [
-        "app/globals.css :: .history-clear-scope dd",
-        "app/globals.css :: .knowledge-manager__metadata dd, .knowledge-manager__definition dd"
-      ],
-      "why": "Definition-list value, as group 9."
-    },
-    {
-      "declarations": [
-        "color: var(--fg-muted)",
-        "font-size: var(--type-xxs)",
-        "font-weight: 700",
-        "text-transform: uppercase"
-      ],
-      "sites": [
-        "app/globals.css :: .index-observability-controls label > span",
-        "app/search-workspace/components/workspace-dialogs.module.css :: .exportSummary dt"
-      ],
-      "why": "Uppercase label above a control. Same unclaimed form-control family as group 8."
-    },
-    {
-      "declarations": [
-        "color: var(--fg-muted)",
-        "font-size: var(--type-xs)",
-        "font-weight: 700",
-        "text-transform: uppercase"
-      ],
-      "sites": [
-        "app/globals.css :: .job-inspector section > span, .inspector-query > span",
-        "app/globals.css :: @media (max-width: 760px) :: .admin-mobile-section-picker label"
-      ],
-      "why": "Uppercase section label. Same unclaimed label vocabulary as group 19, at the section rather than the field level."
-    },
-    {
-      "declarations": [
-        "background: var(--bg-surface)",
-        "border: 1px solid var(--border-strong)",
-        "color: var(--fg-link)",
-        "font-size: var(--type-xs)",
-        "min-height: 32px",
-        "padding: 0 11px"
-      ],
-      "sites": [
-        "app/globals.css :: .knowledge-manager__advanced-filter-actions button",
-        "app/globals.css :: .knowledge-manager__pagination button, .knowledge-manager__stale button, .knowledge-manager__status button"
-      ],
-      "why": "Bare `button` descendant rule inside the knowledge manager, as group 13."
-    },
-    {
-      "declarations": [
-        "color: var(--fg-muted)",
-        "font-size: var(--type-xxs)",
-        "font-weight: 700",
-        "letter-spacing: 0.05em",
-        "text-transform: uppercase"
-      ],
-      "sites": [
-        "app/globals.css :: .knowledge-manager__filters label > span, .knowledge-manager__advanced-filter-grid label > span",
-        "app/globals.css :: .knowledge-manager__mutation-grid label > span, .knowledge-manager__delete-confirmation label > span",
-        "app/globals.css :: .lookup-manager__toolbar label > span, .lookup-manager__editor label > span, .lookup-manager__upload label > span"
-      ],
-      "why": "Uppercase field label, three copies inside the knowledge and lookup managers. Same unclaimed form-control family as group 8."
-    },
-    {
-      "declarations": [
-        "background: var(--bg-surface)",
-        "border: 1px solid var(--border-strong)",
-        "font-size: var(--type-xs)",
-        "height: 34px",
-        "min-width: 0",
-        "padding: 0 9px",
-        "width: 100%"
-      ],
-      "sites": [
-        "app/globals.css :: .knowledge-manager__filters select, .knowledge-manager__advanced-filter-grid input, .knowledge-manager__advanced-filter-grid select",
-        "app/globals.css :: .knowledge-manager__mutation-grid input, .knowledge-manager__mutation-grid select, .knowledge-manager__delete-confirmation input",
-        "app/globals.css :: .knowledge-preview input",
-        "app/globals.css :: .lookup-manager__toolbar input, .lookup-manager__toolbar select, .lookup-manager__editor input:not([type=\"checkbox\"]):not([type=\"file\"]), .lookup-manager__editor select"
-      ],
-      "why": "Text input and select inside the knowledge and lookup managers -- four copies of the same control. The single largest entry in this file and the clearest candidate for the next consolidation phase."
-    },
-    {
-      "declarations": [
-        "display: grid",
-        "gap: 1px",
-        "grid-template-columns: repeat(2, minmax(0, 1fr))",
-        "margin: 0"
-      ],
-      "sites": [
-        "app/globals.css :: .knowledge-manager__metadata",
-        "app/globals.css :: .knowledge-manager__related-object dl"
-      ],
-      "why": "Two-column metadata grid, as group 9."
-    },
-    {
-      "declarations": [
-        "color: #43545d",
-        "font-size: var(--type-xs)",
-        "font-weight: 700",
-        "padding: 0 5px"
-      ],
-      "sites": [
-        "app/globals.css :: .knowledge-manager__mutation-form legend",
-        "app/globals.css :: .lookup-manager__editor legend"
-      ],
-      "why": "Fieldset legend carrying the `#43545d` literal that scripts/css-literal-debt.json still records; consolidating it means retiring that literal first."
-    },
-    {
-      "declarations": [
-        "display: grid",
-        "gap: 10px",
-        "grid-template-columns: repeat(2, minmax(0, 1fr))",
-        "min-width: 0"
-      ],
-      "sites": [
-        "app/globals.css :: .knowledge-manager__mutation-grid",
-        "app/globals.css :: .knowledge-preview__comparison"
-      ],
-      "why": "Two-column grid, as group 24, at a different gap owner."
-    },
-    {
-      "declarations": [
-        "color: var(--fg-text)",
-        "font-size: var(--type-xxs)",
-        "min-width: 0",
-        "overflow-wrap: anywhere"
-      ],
-      "sites": [
-        "app/globals.css :: .knowledge-manager__related-identity code",
-        "app/globals.css :: .knowledge-manager__relationship-list code"
-      ],
-      "why": "Inline code inside a knowledge-manager relationship row, as group 15."
-    },
-    {
-      "declarations": [
-        "align-items: center",
-        "background: var(--bg-raised)",
-        "color: var(--fg-muted)",
-        "display: flex",
-        "font-size: var(--type-xxs)",
-        "gap: var(--space-2)",
-        "justify-content: space-between",
-        "margin: 0",
-        "min-height: 34px",
-        "padding: 7px var(--space-2)"
-      ],
-      "sites": [
-        "app/globals.css :: .knowledge-manager__related-status",
-        "app/globals.css :: .knowledge-manager__relationship-message, .knowledge-manager__relationship-stale, .knowledge-manager__relationship-pagination"
-      ],
-      "why": "Status strip along the bottom of a knowledge-manager panel. Ten declarations, two copies: the largest single restatement left, and a strong candidate for a `.panel-status` primitive."
-    },
-    {
-      "declarations": [
-        "color: var(--fg-muted)",
-        "font-size: var(--type-xxs)",
-        "line-height: 1.45",
-        "margin: 0"
-      ],
-      "sites": [
-        "app/globals.css :: .knowledge-manager__relationships > header p",
-        "app/globals.css :: .lookup-manager__editor label > small, .lookup-manager__fieldset-note",
-        "app/globals.css :: .lookup-manager__editor-actions p"
-      ],
-      "why": "Muted small print, as group 3."
-    },
-    {
-      "declarations": [
-        "align-items: center",
-        "background: var(--bg-surface)",
-        "border: 1px solid var(--border-strong)",
-        "display: flex",
-        "height: 32px"
-      ],
-      "sites": [
-        "app/globals.css :: .live-jobs-text-filter, .live-jobs-app-filter",
-        "app/reports/reports.module.css :: .searchField"
-      ],
-      "why": "Bordered search field. Same unclaimed form-control family as group 8, at the composed-field rather than the bare-input level."
-    },
-    {
-      "declarations": [
-        "color: var(--fg-muted)",
-        "font-size: var(--type-xs)",
-        "line-height: 1.45",
-        "margin: 0"
-      ],
-      "sites": [
-        "app/globals.css :: .lookup-manager__contract p",
-        "app/globals.css :: .token-recovery-summary p",
-        "app/globals.css :: .token-reveal p",
-        "app/search-workspace/components/workspace-dialogs.module.css :: .exportSummary p"
-      ],
-      "why": "Muted body copy, four copies. Same unclaimed `.note` typography primitive as group 3."
     }
   ]
 }

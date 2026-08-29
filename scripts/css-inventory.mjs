@@ -485,9 +485,31 @@ export async function collectCustomPropertyUsage(root) {
   return { declared, references, runtimeDeclared };
 }
 
-/** Class names the global stylesheet writes rules for. */
+/**
+ * Every stylesheet whose class names are global, sorted for stable reporting.
+ *
+ * That used to be one file. It is now the set `app/styles/index.css` imports,
+ * minus the two that write no class name of their own: the token files declare
+ * only custom properties. Deriving the set from the import list rather than
+ * naming files means splitting a sheet, or adding one, cannot quietly take its
+ * rules out of the invariants built on this.
+ */
+export async function listGlobalStylesheets(root) {
+  const stylesRoot = path.join(root, "app", "styles");
+  const index = await readFile(path.join(stylesRoot, "index.css"), "utf8");
+  return [...index.matchAll(/@import\s+url\("([^"]+)"\)/gu)]
+    .map((match) => path.join(stylesRoot, match[1]))
+    .filter((file) => !/tokens-[a-z0-9-]+\.css$/u.test(file))
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+/** Class names the global stylesheets write rules for. */
 export async function collectGlobalStylesheetClasses(root) {
-  return collectStylesheetClasses(await readFile(path.join(root, "app", "globals.css"), "utf8"));
+  const files = await listGlobalStylesheets(root);
+  const perFile = await Promise.all(files.map(async (file) => collectStylesheetClasses(await readFile(file, "utf8"))));
+  const classes = new Set();
+  for (const found of perFile) for (const className of found) classes.add(className);
+  return classes;
 }
 
 /**
@@ -709,30 +731,25 @@ export async function collectPrimitiveReferences(root) {
   return perFile.flat();
 }
 
-/** The double-quoted segments of a `path.join(…)` argument list. */
-function quoted(expression) {
-  return [...expression.matchAll(/"([^"]*)"/gu)].map((match) => match[1]);
-}
-
 /**
  * The stylesheets `integration/visual/application-stylesheets.ts` injects.
  *
- * That list is written by hand because an `@import` cannot be resolved inside
- * an injected `<style>`, so it drifts the moment the token layer gains a file:
- * the fixtures would keep rendering unresolved `var()` fallbacks while every
- * contract stayed green. Reading it here lets a test compare it against the
- * layer on disk. The paths are rebuilt the way the module builds them, from
- * its own location, so a moved file is a mismatch rather than a silent pass.
+ * The harness cannot inject `app/styles/index.css` itself: an `@import` cannot
+ * be resolved inside an injected `<style>`. It therefore reads that file's
+ * import list and injects the files one at a time, and this rebuilds the same
+ * list so a test can assert the harness really derives it. A hand-written copy
+ * would drift the moment the layer gained a file, and the fixtures would go on
+ * rendering unresolved `var()` fallbacks with every contract green -- so an
+ * empty result, meaning the harness no longer names `index.css` at all, is the
+ * failure the caller is looking for.
  */
 export async function listInjectedStylesheets(root) {
-  const harness = path.join(root, "integration", "visual", "application-stylesheets.ts");
-  const source = await readFile(harness, "utf8");
-  const base = /const\s+applicationRoot\s*=\s*path\.join\(([^)]*)\)/u.exec(source);
-  const applicationRoot = path.resolve(path.dirname(harness), ...(base === null ? [] : quoted(base[1])));
-  const list = /APPLICATION_STYLESHEETS[^=]*=\s*\[(.*?)\]/su.exec(source);
-  if (list === null) return [];
-  return [...list[1].matchAll(/path\.join\(([^)]*)\)/gu)]
-    .map((entry) => relativePosix(root, path.join(applicationRoot, ...quoted(entry[1]))));
+  const stylesRoot = path.join(root, "app", "styles");
+  const harness = await readFile(path.join(root, "integration", "visual", "application-stylesheets.ts"), "utf8");
+  if (!/index\.css/u.test(harness)) return [];
+  const index = await readFile(path.join(stylesRoot, "index.css"), "utf8");
+  return [...index.matchAll(/@import\s+url\("([^"]+)"\)/gu)]
+    .map((match) => relativePosix(root, path.join(stylesRoot, match[1])));
 }
 
 /**

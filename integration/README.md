@@ -274,7 +274,7 @@ Failure artifacts (actual, expected, and diff images) are written beneath
 
 ## Global stylesheet computed-style contracts
 
-`visual/css-contracts.spec.ts` pins the behaviour of `app/globals.css` that
+`visual/css-contracts.spec.ts` pins the behaviour of the application stylesheets that
 unit tests used to pin by matching the stylesheet's raw text. Text matching
 tied the suite to formatting — newline placement, single-line media-query
 bodies, declaration order — so any tokenising or reformatting pass broke it
@@ -283,13 +283,13 @@ Chromium against fixture markup that mirrors the production DOM and reads
 resolved values through `getComputedStyle` at the 1280, 980, 760, and 480 pixel
 breakpoints.
 
-"The stylesheets", plural, since the token layer landed:
-`visual/application-stylesheets.ts` injects `app/styles/tokens-color.css` and
-`tokens-scale.css` ahead of `app/globals.css`, because `setContent` cannot
-resolve the `@import`s in `app/styles/index.css` and would otherwise render
-every `var()` as its fallback. That list is hand-maintained, so
-`scripts/token-layer.test.mjs` asserts it still matches the token files on
-disk. `visual/token-layer.visual.spec.ts` covers the other half — it navigates
+"The stylesheets", plural: `visual/application-stylesheets.ts` injects each
+file `app/styles/index.css` imports, in that file's order, because `setContent`
+cannot resolve an `@import` inside an injected `<style>` and would otherwise
+render every `var()` as its fallback and every rule as nothing at all. The list
+is read out of `index.css` rather than restated, and
+`scripts/token-layer.test.mjs` asserts that it still is -- and that every
+stylesheet under `app/` that is not a CSS module is in it. `visual/token-layer.visual.spec.ts` covers the other half — it navigates
 to the real export rather than injecting anything, so a token file that never
 reaches `app/layout.tsx` fails there even while every contract here is green.
 
@@ -344,7 +344,7 @@ the properties this phase established true:
   by screenshots and behaviour by the computed-style contracts above;
 - every `var(--x)` in every stylesheet must resolve to a custom property some
   stylesheet declares or some component sets at runtime;
-- every class `app/globals.css` writes rules for must be reachable from a
+- every class an application stylesheet writes rules for must be reachable from a
   literal `className`, an interpolation base, or a `:global()` selector.
 
 The parsing lives in `scripts/css-inventory.mjs` so the test file itself never

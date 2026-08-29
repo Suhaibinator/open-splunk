@@ -235,9 +235,9 @@ test("describeRuleSite names the file, the at-rules around a rule, and its selec
   assert.equal(
     describeRuleSite({
       ancestors: ["@media (max-width: 760px)"],
-      file: "app/globals.css",
+      file: "app/styles/primitives/table.css",
       prelude: ".table, .other",
     }),
-    "app/globals.css :: @media (max-width: 760px) :: .table, .other",
+    "app/styles/primitives/table.css :: @media (max-width: 760px) :: .table, .other",
   );
 });

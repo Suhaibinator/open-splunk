@@ -1,0 +1,83 @@
+/* Buttons
+   The single button primitive. Everything that reads as "a control you press"
+   is `.button` plus modifiers; a feature class is only kept beside it when the
+   feature owns genuinely unique *layout* (`.run-button` is a 62px two-line
+   block, `.time-range-button` is a three-column grid), never to restate a
+   colour, a height or a weight.
+
+   Sizes come off the scale rather than off a literal, so one edit in
+   `app/styles/tokens-scale.css` moves every button: the row is `--space-7`
+   tall, `--compact` is one step shorter, and the label is `--type-xs`, the
+   default UI size the token layer documents. docs/theming.md lists the pixels
+   this unification deliberately moved. */
+
+.button {
+  align-items: center;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--fg-text);
+  display: inline-flex;
+  font-size: var(--type-xs);
+  font-weight: 700;
+  gap: var(--space-1);
+  justify-content: center;
+  min-height: var(--space-7);
+  padding: 0 var(--space-3);
+  text-decoration: none;
+}
+
+.button:hover:not(:disabled, [aria-disabled="true"]) {
+  background: var(--bg-subtle);
+}
+
+.button--primary {
+  background: var(--accent);
+  border-color: var(--accent-hover);
+  color: var(--fg-inverse);
+}
+
+.button--primary:hover:not(:disabled, [aria-disabled="true"]) {
+  background: var(--accent-hover);
+}
+
+.button--secondary {
+  background: var(--bg-canvas);
+  border-color: var(--border);
+  color: var(--fg-secondary);
+}
+
+.button--danger {
+  background: var(--status-error);
+  border-color: var(--status-error-strong);
+  color: var(--fg-inverse);
+}
+
+.button--danger:hover:not(:disabled, [aria-disabled="true"]) {
+  background: var(--status-error-strong);
+}
+
+.button--ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--fg-muted);
+}
+
+.button--icon {
+  padding: 0;
+  width: var(--space-7);
+}
+
+.button--compact {
+  min-height: calc(var(--space-7) - var(--space-1));
+  padding: 0 var(--space-2);
+}
+
+.button--block {
+  width: 100%;
+}
+
+.button[aria-disabled="true"] {
+  cursor: wait;
+  opacity: 0.68;
+}

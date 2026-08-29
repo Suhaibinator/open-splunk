@@ -1,7 +1,7 @@
 import type { ComponentPropsWithoutRef, ReactNode } from "react";
 
 /**
- * The tones `.button--*` in `app/globals.css` paints.
+ * The tones `.button--*` in `app/styles/primitives/button.css` paints.
  *
  * `secondary` is the quiet filled control, `ghost` the borderless one that only
  * shows a ground on hover. There is no `link` tone: text that navigates is an

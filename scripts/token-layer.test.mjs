@@ -21,6 +21,7 @@ import {
   cssDeclarations,
   isDarkThemeContext,
   listInjectedStylesheets,
+  listStylesheets,
   listTokenStylesheets,
   relativePosix,
 } from "./css-inventory.mjs";
@@ -154,14 +155,36 @@ test("nothing outside the palette file reads a primitive", async () => {
 test("the fixture harness injects exactly the stylesheets the application loads", async () => {
   const injected = await listInjectedStylesheets(workspace);
   const layer = (await listTokenStylesheets(workspace)).map((file) => relativePosix(workspace, file));
+  assert.ok(
+    injected.length > layer.length,
+    "integration/visual/application-stylesheets.ts no longer derives its list from\n"
+      + "app/styles/index.css. It cannot inject that file directly -- an @import does not resolve\n"
+      + "inside an injected <style> -- so it reads the import list instead. A hand-written copy\n"
+      + "leaves every fixture rendering var() fallbacks, or missing a whole primitive, with the\n"
+      + "contracts and the baselines still green.",
+  );
   assert.deepEqual(
-    injected,
-    [...layer, "app/globals.css"],
-    "integration/visual/application-stylesheets.ts lists the stylesheets the fixture suites inject by\n"
-      + "path, because an @import cannot resolve inside an injected <style>. A token file missing from\n"
-      + "that list leaves every fixture rendering var() fallbacks with the contracts and the baselines\n"
-      + "still green -- the exact failure the module's own header warns about. A new token file has to\n"
-      + "be added to app/styles/index.css and to APPLICATION_STYLESHEETS, in cascade order.",
+    injected.slice(0, layer.length),
+    layer,
+    "The token layer is no longer the first thing app/styles/index.css imports. Injection follows\n"
+      + "that order, and a token file that lands after the rules reading it decides the cascade by a\n"
+      + "race: the fixtures would paint fallbacks while the contracts stayed green.",
+  );
+});
+
+test("every stylesheet the application ships is imported by app/styles/index.css", async () => {
+  const imported = new Set(await listInjectedStylesheets(workspace));
+  const orphans = (await listStylesheets(workspace))
+    .map((file) => relativePosix(workspace, file))
+    .filter((file) => file.startsWith("app/") && !file.endsWith(".module.css"))
+    .filter((file) => file !== "app/styles/index.css" && !imported.has(file))
+    .toSorted();
+  assert.deepEqual(
+    orphans,
+    [],
+    "app/layout.tsx imports app/styles/index.css and nothing else, so a stylesheet that file does\n"
+      + "not import ships to nobody: the rules are dead and the fixture harness never injects them.\n"
+      + `Add the import in cascade order, or delete the file:\n${describeList(orphans)}`,
   );
 });
 

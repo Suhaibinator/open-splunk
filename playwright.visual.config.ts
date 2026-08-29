@@ -13,7 +13,7 @@ import {
  *
  * The suite renders the exported demo UI from a dependency-free static server,
  * so it needs neither the Go server nor ClickHouse. It exists to pin
- * appearance while `app/globals.css` and the CSS modules are refactored.
+ * appearance while the application stylesheets and the CSS modules are refactored.
  *
  * It used to run on Playwright's default per-pixel `threshold` of 0.2, which is
  * generous enough in YIQ space to call two visibly different blues equal: the

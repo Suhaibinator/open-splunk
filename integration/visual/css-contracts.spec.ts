@@ -1,4 +1,4 @@
-// Computed-style contracts for app/globals.css.
+// Computed-style contracts for the application stylesheets.
 //
 // These replace unit assertions that matched the raw text of the stylesheet.
 // Text matching pinned formatting (newline placement, single-line media-query
@@ -522,7 +522,7 @@ const SEMANTIC_COLOUR_TOKENS: readonly string[] = [
 //
 // `PRE_REFACTOR_COLOUR_VALUES` above pins twenty-three pre-refactor values, which
 // left the rest of tier 2 checked only for "resolves to something". Every token
-// below stands in for a literal `app/globals.css` or a component still ships --
+// below stands in for a literal an application stylesheet or a component still ships --
 // the four severity swatches (`.legend-info` and its peers, and the same four
 // in `visualization-panel.tsx`), the categorical ramp against
 // `TIME_SERIES_COLORS`, the search-term highlight, the selection wash, the

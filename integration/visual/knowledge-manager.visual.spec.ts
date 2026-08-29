@@ -24,7 +24,7 @@ import { BACKEND_EXPORT_URL } from "./visual-servers";
 /**
  * Appearance of the bootstrap-advertised Knowledge Manager.
  *
- * That surface owns its own section of `app/globals.css` and only renders when
+ * That surface owns its own section of `app/admin/admin.css` and only renders when
  * the connected server advertises the knowledge capability, so it is
  * unreachable from the demo export. This spec renders the backend-mode export
  * instead and supplies the two protobuf responses the panel needs; every other
