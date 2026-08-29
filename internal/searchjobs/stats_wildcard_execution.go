@@ -38,7 +38,7 @@ func (manager *Manager) prepareAndCompileStatsWildcard(
 		return nil, clickhouse.CompiledQuery{}, plan.StatsWildcardExpansion{}, 0,
 			errors.New("compile search query: wildcard preparation is incomplete")
 	}
-	discoveryContext, cancelDiscovery := context.WithTimeout(ctx, maxRuntime)
+	discoveryContext := ctx
 	if manager.limitSource != nil {
 		discoveryContext = searchlimits.WithPolicy(discoveryContext, limits)
 	}
@@ -47,8 +47,8 @@ func (manager *Manager) prepareAndCompileStatsWildcard(
 		manager.compiler,
 		prefix,
 		request,
+		maxRuntime,
 	)
-	cancelDiscovery()
 	if err != nil {
 		return nil, clickhouse.CompiledQuery{}, plan.StatsWildcardExpansion{}, 0, err
 	}
@@ -82,6 +82,7 @@ func (manager *Manager) executeStatsWildcardInventory(
 	compiler clickhouse.Compiler,
 	prefix *plan.Query,
 	request plan.StatsWildcardRequest,
+	maximumRuntime time.Duration,
 ) (
 	plan.StatsWildcardExpansion,
 	clickhouse.CompiledStatsWildcardInventory,
@@ -93,6 +94,10 @@ func (manager *Manager) executeStatsWildcardInventory(
 	}
 	if err := ctx.Err(); err != nil {
 		return plan.StatsWildcardExpansion{}, clickhouse.CompiledStatsWildcardInventory{}, 0, err
+	}
+	if maximumRuntime <= 0 {
+		return plan.StatsWildcardExpansion{}, clickhouse.CompiledStatsWildcardInventory{}, 0,
+			context.DeadlineExceeded
 	}
 	capability, ok := manager.executor.(StatsWildcardInventoryExecutor)
 	if !ok || nilcheck.IsNil(capability) {
@@ -124,15 +129,25 @@ func (manager *Manager) executeStatsWildcardInventory(
 	if !ok || !equal {
 		return plan.StatsWildcardExpansion{}, clickhouse.CompiledStatsWildcardInventory{}, 0, ErrInvalidResult
 	}
+	// Compilation and seal validation are planning work, matching the ordinary
+	// query path. Arm MaxRuntime only at the storage-execution boundary so
+	// scheduler or compiler latency cannot consume an unaccounted budget.
 	inventoryStarted := time.Now()
-	expansion, err := capability.ExecuteStatsWildcardInventory(ctx, executable)
+	executionContext, cancelExecution := context.WithTimeout(ctx, maximumRuntime)
+	defer cancelExecution()
+	expansion, err := capability.ExecuteStatsWildcardInventory(executionContext, executable)
 	inventoryRuntime := time.Since(inventoryStarted)
+	executionContextErr := executionContext.Err()
+	cancelExecution()
 	equal, equalErr = executable.EqualForExecutionContext(ctx, pristine)
 	if equalErr != nil {
 		return plan.StatsWildcardExpansion{}, clickhouse.CompiledStatsWildcardInventory{}, inventoryRuntime, equalErr
 	}
 	if !equal {
 		return plan.StatsWildcardExpansion{}, clickhouse.CompiledStatsWildcardInventory{}, inventoryRuntime, ErrInvalidResult
+	}
+	if executionContextErr != nil {
+		return plan.StatsWildcardExpansion{}, clickhouse.CompiledStatsWildcardInventory{}, inventoryRuntime, executionContextErr
 	}
 	if contextErr := ctx.Err(); contextErr != nil {
 		return plan.StatsWildcardExpansion{}, clickhouse.CompiledStatsWildcardInventory{}, inventoryRuntime, contextErr

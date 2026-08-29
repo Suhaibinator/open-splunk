@@ -177,10 +177,7 @@ func (manager *Manager) prepareKnowledgeAdmissionForJob(
 		if compilerErr != nil {
 			return preparedKnowledgeAdmission{}, manager.safeKnowledgeAdmissionError(ctx, compilerErr)
 		}
-		discoveryContext, cancelDiscovery := context.WithTimeout(
-			admissionContext,
-			maximumRuntime,
-		)
+		discoveryContext := admissionContext
 		if manager.limitSource != nil {
 			discoveryContext = searchlimits.WithPolicy(discoveryContext, admittedLimits)
 		}
@@ -191,8 +188,8 @@ func (manager *Manager) prepareKnowledgeAdmissionForJob(
 			inventoryCompiler,
 			inventoryPrefix,
 			wildcardRequest,
+			maximumRuntime,
 		)
-		cancelDiscovery()
 		if err != nil {
 			if _, ok := errors.AsType[*plan.Diagnostic](err); ok {
 				return preparedKnowledgeAdmission{}, manager.safeSPLAdmissionError(ctx, err, false)
