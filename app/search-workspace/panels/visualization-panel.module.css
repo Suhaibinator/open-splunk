@@ -1,7 +1,7 @@
 .emptyState {
   align-items: center;
   align-self: stretch;
-  background: linear-gradient(180deg, #fbfcfc 0%, #f5f7f8 100%);
+  background: linear-gradient(180deg, var(--bg-raised) 0%, var(--bg-canvas) 100%);
   border: 1px dashed #bac5ca;
   display: flex;
   flex-direction: column;
@@ -16,9 +16,9 @@
 .emptyStateIcon {
   align-items: flex-end;
   display: flex;
-  gap: 4px;
+  gap: var(--space-1);
   height: 34px;
-  margin-bottom: 16px;
+  margin-bottom: var(--space-4);
 }
 
 .emptyStateIcon span {
@@ -32,14 +32,14 @@
 .emptyStateIcon span:nth-child(3) { height: 20px; }
 
 .emptyState strong {
-  color: #33444d;
-  font-size: 14px;
+  color: var(--fg-text);
+  font-size: var(--type-lg);
   margin-bottom: 7px;
 }
 
 .emptyState p {
-  color: #69777e;
-  font-size: 11px;
+  color: var(--fg-muted);
+  font-size: var(--type-sm);
   line-height: 1.5;
   margin: 0;
   max-width: 430px;
@@ -87,10 +87,10 @@
 }
 
 .categoricalYAxis {
-  color: #6f7c83;
+  color: var(--fg-muted);
   display: flex;
   flex-direction: column;
-  font-size: 9px;
+  font-size: var(--type-xxs);
   font-variant-numeric: tabular-nums;
   justify-content: space-between;
   line-height: 1;
@@ -99,14 +99,14 @@
 }
 
 .categoricalScroller {
-  border-bottom: 1px solid #9ba8ae;
-  border-left: 1px solid #9ba8ae;
+  border-bottom: 1px solid var(--border-strong);
+  border-left: 1px solid var(--border-strong);
   min-height: 0;
   min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
   overscroll-behavior-inline: contain;
-  scrollbar-color: #aeb8bd transparent;
+  scrollbar-color: var(--border-strong) transparent;
   scrollbar-width: thin;
 }
 
@@ -123,14 +123,14 @@
 }
 
 .categoricalGrid > span {
-  border-top: 1px solid #e2e7e9;
+  border-top: 1px solid var(--border);
   left: 0;
   position: absolute;
   right: 0;
 }
 
 .categoricalGrid > .zeroGridLine {
-  border-color: #9ba8ae;
+  border-color: var(--border-strong);
 }
 
 .categoricalGroups {
@@ -161,7 +161,7 @@
   position: absolute;
   right: 3px;
   top: 0;
-  transition: background-color 100ms ease-out;
+  transition: background-color var(--dur-fast) var(--ease);
 }
 
 .categoricalGroup:hover::after,
@@ -184,8 +184,8 @@
 
 .categoricalGroup > strong {
   bottom: 8px;
-  color: #53616a;
-  font-size: 10px;
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
   font-weight: 400;
   left: 5px;
   overflow: hidden;
@@ -220,13 +220,13 @@
   min-height: 1px;
   position: absolute;
   right: 8%;
-  transition: filter 90ms ease-out;
+  transition: filter 90ms var(--ease);
 }
 
 .verticalDataLabel {
   background: rgb(255 255 255 / 88%);
-  color: #3c4b54;
-  font-size: 9px;
+  color: var(--fg-text);
+  font-size: var(--type-xxs);
   font-variant-numeric: tabular-nums;
   font-weight: 650;
   left: 50%;
@@ -242,11 +242,11 @@
 }
 
 .categoricalTooltip {
-  background: #fff;
-  border: 1px solid #9da9af;
-  border-radius: 2px;
-  box-shadow: 0 3px 9px rgb(21 35 43 / 24%);
-  color: #2f3d45;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  color: var(--fg-text);
   max-height: calc(100% - 24px);
   min-width: 188px;
   overscroll-behavior: contain;
@@ -261,16 +261,16 @@
 
 .categoricalTooltipHeader {
   align-items: flex-start;
-  border-bottom: 1px solid #e1e5e7;
+  border-bottom: 1px solid var(--border);
   display: flex;
-  gap: 8px;
+  gap: var(--space-2);
   justify-content: space-between;
   margin: 0 0 7px;
   padding: 0 0 5px;
 }
 
 .categoricalTooltipHeader strong {
-  font-size: 10px;
+  font-size: var(--type-xs);
   font-weight: 600;
   max-width: 260px;
   overflow: hidden;
@@ -282,7 +282,7 @@
   align-items: center;
   background: transparent;
   border: 0;
-  color: #64737b;
+  color: var(--fg-muted);
   display: inline-flex;
   flex: 0 0 auto;
   font-size: 15px;
@@ -295,20 +295,20 @@
 
 .categoricalTooltipHeader button:hover,
 .categoricalTooltipHeader button:focus-visible {
-  background: #edf1f3;
-  color: #263b46;
+  background: var(--bg-subtle);
+  color: var(--fg-text);
 }
 
 .categoricalTooltipHeader button:focus-visible,
 .categoricalTooltipAction:focus-visible {
-  outline: 2px solid #3d7f9f;
+  outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
 
 .categoricalTooltip > span {
   align-items: center;
   display: grid;
-  font-size: 10px;
+  font-size: var(--type-xs);
   gap: 6px;
   grid-template-columns: 8px minmax(52px, 1fr) auto;
 }
@@ -323,43 +323,43 @@
 }
 
 .categoricalTooltip b {
-  color: #1f2e36;
-  font-size: 11px;
+  color: var(--fg-text);
+  font-size: var(--type-sm);
   font-variant-numeric: tabular-nums;
 }
 
 .categoricalTooltipPrecision,
 .categoricalTooltipUnavailable {
-  color: #67757d;
+  color: var(--fg-muted);
   display: block;
-  font-size: 9px;
+  font-size: var(--type-xxs);
   line-height: 1.4;
-  margin-top: 8px;
+  margin-top: var(--space-2);
 }
 
 .categoricalTooltipUnavailable {
-  border-top: 1px solid #e1e5e7;
+  border-top: 1px solid var(--border);
   padding-top: 7px;
 }
 
 .categoricalTooltipAction {
   align-items: center;
-  background: #f2f6f8;
+  background: var(--bg-canvas);
   border: 1px solid #b8c7ce;
-  color: #286f94;
+  color: var(--fg-link);
   display: flex;
-  font-size: 9px;
+  font-size: var(--type-xxs);
   font-weight: 700;
   justify-content: space-between;
-  margin-top: 8px;
+  margin-top: var(--space-2);
   min-height: 29px;
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   text-align: left;
   width: 100%;
 }
 
 .categoricalTooltipAction:hover {
-  background: #e5f0f5;
+  background: var(--status-info-soft);
   border-color: #8eabb9;
 }
 
@@ -377,7 +377,7 @@
   min-width: 0;
   overflow: auto;
   overscroll-behavior: contain;
-  scrollbar-color: #aeb8bd transparent;
+  scrollbar-color: var(--border-strong) transparent;
   scrollbar-width: thin;
 }
 
@@ -397,14 +397,14 @@
 }
 
 .horizontalGrid > span {
-  border-left: 1px solid #e2e7e9;
+  border-left: 1px solid var(--border);
   bottom: 0;
   position: absolute;
   top: 0;
 }
 
 .horizontalGrid > .zeroGridLine {
-  border-color: #9ba8ae;
+  border-color: var(--border-strong);
 }
 
 .horizontalGroups {
@@ -445,11 +445,11 @@
 
 .horizontalGroup > strong {
   align-self: center;
-  color: #53616a;
-  font-size: 10px;
+  color: var(--fg-muted);
+  font-size: var(--type-xs);
   font-weight: 400;
   overflow: hidden;
-  padding-left: 4px;
+  padding-left: var(--space-1);
   text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -475,12 +475,12 @@
   min-width: 1px;
   position: absolute;
   top: 2px;
-  transition: filter 90ms ease-out;
+  transition: filter 90ms var(--ease);
 }
 
 .horizontalDataLabel {
-  color: #3c4b54;
-  font-size: 9px;
+  color: var(--fg-text);
+  font-size: var(--type-xxs);
   font-variant-numeric: tabular-nums;
   font-weight: 650;
   line-height: 14px;
@@ -494,9 +494,9 @@
 
 .horizontalAxis {
   bottom: 3px;
-  color: #6f7c83;
+  color: var(--fg-muted);
   display: flex;
-  font-size: 9px;
+  font-size: var(--type-xxs);
   font-variant-numeric: tabular-nums;
   justify-content: space-between;
   left: 118px;
@@ -516,7 +516,7 @@
   .categoricalCanvas:global(.legend-none) {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: 300px 40px;
-    padding-left: 4px;
+    padding-left: var(--space-1);
   }
 
   .categoricalCanvas:global(.legend-right) .categoricalChart,
@@ -578,7 +578,7 @@
   }
 
   .horizontalGroup > strong {
-    font-size: 9px;
+    font-size: var(--type-xxs);
   }
 }
 
