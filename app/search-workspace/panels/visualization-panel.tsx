@@ -73,7 +73,9 @@ interface CategoricalChartProps {
   onApplyPivot: VisualizationPanelProps["onApplyPivot"];
 }
 
-const CATEGORY_COLORS = ["#5f9f3a", "#2f7fa6", "#e49a2c", "#8b67a8", "#c6534c", "#4d9a8a"] as const;
+// The first six of the categorical ramp, sliced from the one array that
+// declares it rather than retyped, so the two charts cannot drift apart.
+const CATEGORY_COLORS = TIME_SERIES_COLORS.slice(0, 6);
 const MAX_CATEGORICAL_ROWS = 12;
 const LEGACY_SERIES_KEY = "__events__";
 
@@ -84,11 +86,13 @@ function timeAxisLabels(points: TimelinePoint[]): TimelinePoint[] {
 }
 
 function categoryColor(category: string, index: number): string {
+  // The four level swatches the log data itself carries, not the outcome of a
+  // search: `--level-*`, never `--status-*`. See docs/theming.md.
   const semanticColor = {
-    info: "#5f9c3a",
-    warn: "#dda229",
-    error: "#c84f48",
-    debug: "#5290b0",
+    info: "var(--level-info)",
+    warn: "var(--level-warn)",
+    error: "var(--level-error)",
+    debug: "var(--level-debug)",
   }[category.toLowerCase()];
   return semanticColor ?? CATEGORY_COLORS[index % CATEGORY_COLORS.length];
 }

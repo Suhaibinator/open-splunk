@@ -232,8 +232,10 @@ function PerformanceTrend({ values, labels }: { values: Array<number | null>; la
         <svg aria-hidden="true" preserveAspectRatio="none" viewBox={`0 0 ${width} ${height}`}>
           <defs>
             <linearGradient id="analytics-trend-fill" x1="0" x2="0" y1="0" y2="1">
-              <stop offset="0%" stopColor="#5e963c" stopOpacity="0.24" />
-              <stop offset="100%" stopColor="#5e963c" stopOpacity="0.02" />
+              {/* `stop-color` as an attribute is not a CSS declaration, so the
+                  token has to come through `style` for `var()` to resolve. */}
+              <stop offset="0%" style={{ stopColor: "var(--chart-series-1)", stopOpacity: 0.24 }} />
+              <stop offset="100%" style={{ stopColor: "var(--chart-series-1)", stopOpacity: 0.02 }} />
             </linearGradient>
           </defs>
           {[0.25, 0.5, 0.75, 1].map((position) => (

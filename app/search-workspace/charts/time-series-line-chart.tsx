@@ -16,19 +16,27 @@ import { linearTickScale } from "./chart-scale";
 
 const VIEWBOX_WIDTH = 1000;
 const VIEWBOX_HEIGHT = 300;
+/**
+ * The categorical ramp, in assignment order.
+ *
+ * These are `var()` references rather than hex so the palette is the token
+ * layer's `--chart-series-*` and not a second copy of it: every consumer feeds
+ * them to an inline `style`, where a custom property resolves exactly as it
+ * does in a stylesheet, and nothing does colour arithmetic on a member.
+ */
 export const TIME_SERIES_COLORS = [
-  "#5f9f3a",
-  "#2f7fa6",
-  "#e49a2c",
-  "#8b67a8",
-  "#c6534c",
-  "#4d9a8a",
-  "#c76594",
-  "#6f7fb5",
-  "#a57835",
-  "#4f8f6f",
-  "#8a6d55",
-  "#708f37",
+  "var(--chart-series-1)",
+  "var(--chart-series-2)",
+  "var(--chart-series-3)",
+  "var(--chart-series-4)",
+  "var(--chart-series-5)",
+  "var(--chart-series-6)",
+  "var(--chart-series-7)",
+  "var(--chart-series-8)",
+  "var(--chart-series-9)",
+  "var(--chart-series-10)",
+  "var(--chart-series-11)",
+  "var(--chart-series-12)",
 ] as const;
 
 interface TimeSeriesLineChartProps {
