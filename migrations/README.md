@@ -1,10 +1,14 @@
 # Database schema mechanics
 
-Open Splunk is major-version-zero and supports fresh databases for one exact
-release or source revision. Until the first production deployment, SQLite and
-ClickHouse each ship one complete embedded `0001_baseline.sql` that creates the
-current schema. No cross-version or cross-revision upgrade, backfill,
-downgrade, or adoption path is currently promised.
+Open Splunk embeds an ordered migration history for each database. Every
+history starts with exactly one complete `0001_baseline.sql`; later schema
+changes are appended as contiguous, immutable versioned scripts. A fresh
+database applies the baseline and every forward migration, while a database
+whose verified ledger is an exact prefix applies only the pending suffix.
+
+Forward upgrades from a shipped migration prefix are supported. Downgrades,
+gapped or rewritten histories, unledgered schema adoption, and migration from
+an unrelated source history are not.
 
 Migration sequence numbers, ledger digests, entity/catalog revisions, and
 private row-format counters are implementation mechanics. They detect drift,
@@ -13,19 +17,24 @@ public compatibility levels.
 
 ## Ledger contract
 
-Migration files are embedded into the server. A fresh database applies its
-baseline; a retry validates the same name and SHA-256 digest and is safe.
-Missing, renamed, modified, duplicated, or unexpected rows fail as drift. The
-runners retain ordered multi-migration support for future post-deployment
-schema changes.
+Migration files are embedded into the server. Filenames carry contiguous
+four-digit versions, beginning with `0001_baseline.sql`. Before applying a
+pending script, the runner validates every existing ledger row's version,
+name, and SHA-256 digest against the corresponding embedded file. Missing,
+renamed, modified, duplicated, gapped, or unexpected rows fail as drift.
+Successful scripts are recorded once, so reopening and retrying the current
+history is safe. Tests pin every shipped migration's SHA-256 digest: an applied
+script is never edited or replaced; a schema change requires a newly appended
+migration.
 
 An unrecognized ledger or unledgered legacy schema is not silently adopted,
 rewritten, or deleted. Provision a fresh database or volume and retain old state
 separately if forensic access is required.
 
-SQLite applies each migration transactionally. ClickHouse DDL is not
-transactional, so its baseline uses retry-safe DDL and writes the ledger row
-last. GORM never runs `AutoMigrate`.
+SQLite validates and applies all pending migrations transactionally under one
+startup writer lock. ClickHouse DDL is not transactional, so each ClickHouse
+migration must use retry-safe DDL and write its ledger row last. GORM never
+runs `AutoMigrate`.
 
 ## SQLite control plane
 
@@ -92,9 +101,10 @@ Unknown state fails closed; recovery does not discard it as success.
 
 ## Verification
 
-Fast schema, final-shape, ledger, digest, drift, and retry tests run in the
-default suite. ClickHouse smoke tests reapply the baseline, verify typed
-JSON/metadata and retry deduplication, and use the repository-pinned image:
+Fast schema, final-shape, ordered-history, upgrade-preservation, ledger,
+digest, drift, and retry tests run in the default suite. ClickHouse smoke tests
+reapply the current history, verify typed JSON/metadata and retry
+deduplication, and use the repository-pinned image:
 
 ```sh
 go test ./migrations/...

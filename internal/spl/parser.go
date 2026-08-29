@@ -4339,34 +4339,6 @@ func (p *parser) parseTableFieldList() ([]string, []bool, []Range, Position, err
 	return fields, quoted, ranges, end, nil
 }
 
-func (p *parser) parseFieldList() ([]string, Position, error) {
-	fields := make([]string, 0, 8)
-	end := p.current().sourceRange.Start
-	wantField := true
-	for !p.atCommandEnd() {
-		tok := p.current()
-		if tok.kind == tokenComma {
-			if wantField {
-				return nil, end, p.errorAtCurrent("SPL_EXPECTED_FIELD", "expected a field name")
-			}
-			wantField = true
-			p.advance()
-			continue
-		}
-		if tok.kind != tokenWord {
-			return nil, end, p.errorAtCurrent("SPL_EXPECTED_FIELD", "expected a field name")
-		}
-		fields = append(fields, tok.text)
-		end = tok.sourceRange.End
-		wantField = false
-		p.advance()
-	}
-	if len(fields) == 0 || wantField {
-		return nil, end, p.errorAtCurrent("SPL_EXPECTED_FIELD", "expected at least one field name")
-	}
-	return fields, end, nil
-}
-
 func (p *parser) parseSortCommand(name token) (Command, error) {
 	command := &SortCommand{}
 	if p.atCommandEnd() {

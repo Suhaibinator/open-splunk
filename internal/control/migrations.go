@@ -235,11 +235,7 @@ func applyPendingMigration(
 	next migration,
 ) error {
 	if _, err := conn.ExecContext(ctx, string(next.contents)); err != nil {
-		return fmt.Errorf(
-			"apply SQLite migration %s (existing pre-baseline state is unsupported; provision a fresh state database): %w",
-			next.name,
-			err,
-		)
+		return fmt.Errorf("apply SQLite migration %s: %w", next.name, err)
 	}
 	if _, err := conn.ExecContext(ctx, `
 		INSERT INTO schema_migrations (version, name, checksum, applied_at_unix_micro)

@@ -161,18 +161,42 @@ func serverSearchSettingsRecordFrom(
 	if err != nil {
 		return serverSearchSettingsRecord{}, err
 	}
+	maximumBytesToRead, err := signedServerSettingsValue(limits.MaxBytesToRead)
+	if err != nil {
+		return serverSearchSettingsRecord{}, err
+	}
+	maximumGroupedRows, err := signedServerSettingsValue(limits.MaxGroupedRows)
+	if err != nil {
+		return serverSearchSettingsRecord{}, err
+	}
+	maximumThreads, err := signedServerSettingsValue(limits.MaxThreads)
+	if err != nil {
+		return serverSearchSettingsRecord{}, err
+	}
+	maximumResultRows, err := signedServerSettingsValue(limits.MaxResultRows)
+	if err != nil {
+		return serverSearchSettingsRecord{}, err
+	}
+	maximumResultBytes, err := signedServerSettingsValue(limits.MaxResultBytes)
+	if err != nil {
+		return serverSearchSettingsRecord{}, err
+	}
+	maximumTotalResultBytes, err := signedServerSettingsValue(limits.MaxTotalResultBytes)
+	if err != nil {
+		return serverSearchSettingsRecord{}, err
+	}
 	return serverSearchSettingsRecord{
 		SingletonID:                1,
 		Version:                    signedVersion,
 		MaximumRuntimeNanoseconds:  int64(limits.MaxRuntime),
 		MaximumMemoryBytes:         maximumMemoryBytes,
 		MaximumRowsToRead:          maximumRowsToRead,
-		MaximumBytesToRead:         int64(limits.MaxBytesToRead),
-		MaximumGroupedRows:         int64(limits.MaxGroupedRows),
-		MaximumThreads:             int64(limits.MaxThreads),
-		MaximumResultRows:          int64(limits.MaxResultRows),
-		MaximumResultBytes:         int64(limits.MaxResultBytes),
-		MaximumTotalResultBytes:    int64(limits.MaxTotalResultBytes),
+		MaximumBytesToRead:         maximumBytesToRead,
+		MaximumGroupedRows:         maximumGroupedRows,
+		MaximumThreads:             maximumThreads,
+		MaximumResultRows:          maximumResultRows,
+		MaximumResultBytes:         maximumResultBytes,
+		MaximumTotalResultBytes:    maximumTotalResultBytes,
 		MaximumConcurrentSearches:  int64(limits.MaxConcurrent),
 		ResultRetentionNanoseconds: int64(limits.ResultRetention),
 		UpdatedAtUnixMicro:         updatedAt.UnixMicro(),

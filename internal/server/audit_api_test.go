@@ -128,6 +128,7 @@ func TestIndexAuditProtoTaxonomyRoundTripsAndAcceptsCompleteFilterSet(t *testing
 		opensplunk.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_ENABLE,
 		opensplunk.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_DISABLE,
 		opensplunk.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_DELETE,
+		opensplunk.AuditAction_AUDIT_ACTION_SERVER_SETTINGS_UPDATE,
 	}
 	service := &fakeAuditEvents{}
 	handler := newAuditTestHandler(t, service)
@@ -142,6 +143,54 @@ func TestIndexAuditProtoTaxonomyRoundTripsAndAcceptsCompleteFilterSet(t *testing
 	if calls != 1 || len(request.ActionFilters) != audit.MaximumActionFilters ||
 		request.TargetKind == nil || *request.TargetKind != audit.TargetKindIndex {
 		t.Fatalf("complete audit filter call = %d/%+v", calls, request)
+	}
+}
+
+func TestServerSettingsAuditProtoTaxonomyRoundTrips(t *testing.T) {
+	t.Parallel()
+
+	fromAction, ok := auditActionFromProto(
+		opensplunk.AuditAction_AUDIT_ACTION_SERVER_SETTINGS_UPDATE,
+	)
+	if !ok || fromAction != audit.ActionServerSettingsUpdate {
+		t.Fatalf("auditActionFromProto(server settings update) = (%q, %t)", fromAction, ok)
+	}
+	toAction, ok := auditActionToProto(audit.ActionServerSettingsUpdate)
+	if !ok || toAction != opensplunk.AuditAction_AUDIT_ACTION_SERVER_SETTINGS_UPDATE {
+		t.Fatalf("auditActionToProto(server settings update) = (%v, %t)", toAction, ok)
+	}
+
+	fromTarget, ok := auditTargetKindFromProto(
+		opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_SERVER_SETTINGS,
+	)
+	if !ok || fromTarget != audit.TargetKindServerSettings {
+		t.Fatalf("auditTargetKindFromProto(server settings) = (%q, %t)", fromTarget, ok)
+	}
+	toTarget, ok := auditTargetKindToProto(audit.TargetKindServerSettings)
+	if !ok || toTarget != opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_SERVER_SETTINGS {
+		t.Fatalf("auditTargetKindToProto(server settings) = (%v, %t)", toTarget, ok)
+	}
+
+	message, err := auditEventToProto(audit.Event{
+		Sequence:   1,
+		TenantID:   "tenant",
+		OccurredAt: time.Date(2026, time.August, 3, 20, 21, 22, 123456000, time.UTC),
+		Actor: audit.Actor{
+			Kind: audit.ActorKindBrowser,
+			ID:   "administrator",
+			Role: audit.ActorRoleAdministrator,
+		},
+		Action:        audit.ActionServerSettingsUpdate,
+		TargetKind:    audit.TargetKindServerSettings,
+		TargetID:      "search-limits",
+		TargetVersion: 1,
+	}, "tenant")
+	if err != nil {
+		t.Fatalf("auditEventToProto(server settings update): %v", err)
+	}
+	if message.GetAction() != opensplunk.AuditAction_AUDIT_ACTION_SERVER_SETTINGS_UPDATE ||
+		message.GetTargetKind() != opensplunk.AuditTargetKind_AUDIT_TARGET_KIND_SERVER_SETTINGS {
+		t.Fatalf("server-settings audit proto = %+v", message)
 	}
 }
 

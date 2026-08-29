@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"testing/fstest"
@@ -481,6 +482,37 @@ func TestApplyMigrationsIsVersionedAndDetectsDrift(t *testing.T) {
 	}
 }
 
+func TestApplyMigrationsReportsPendingScriptAndRollsBack(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	raw, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "broken-migration.sqlite")+"?_txlock=immediate")
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	defer raw.Close()
+
+	migrationFS := fstest.MapFS{
+		"0001_baseline.sql": &fstest.MapFile{Data: []byte(`CREATE TABLE example (value TEXT NOT NULL) STRICT;`)},
+		"0002_broken.sql":   &fstest.MapFile{Data: []byte(`CREATE TABL broken (value TEXT);`)},
+	}
+	err = ApplyMigrations(ctx, raw, migrationFS)
+	if err == nil || !strings.Contains(err.Error(), "apply SQLite migration 0002_broken.sql") {
+		t.Fatalf("ApplyMigrations() error = %v, want pending migration name", err)
+	}
+
+	var schemaCount int
+	if err := raw.QueryRowContext(ctx, `
+		SELECT count(*) FROM sqlite_schema
+		WHERE name IN ('schema_migrations', 'example')
+	`).Scan(&schemaCount); err != nil {
+		t.Fatalf("inspect rolled-back schema: %v", err)
+	}
+	if schemaCount != 0 {
+		t.Fatalf("failed migration left %d schema objects, want 0", schemaCount)
+	}
+}
+
 func TestServerSettingsMigrationPreservesExistingAuditLedger(t *testing.T) {
 	t.Parallel()
 
@@ -517,6 +549,56 @@ func TestServerSettingsMigrationPreservesExistingAuditLedger(t *testing.T) {
 	if err := ApplyMigrations(ctx, raw, migrations.SQLite()); err != nil {
 		t.Fatalf("apply server-settings migration: %v", err)
 	}
+	ledgerRows, err := raw.QueryContext(ctx, `
+		SELECT version, name FROM schema_migrations ORDER BY version
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ledger []string
+	for ledgerRows.Next() {
+		var version int
+		var name string
+		if err := ledgerRows.Scan(&version, &name); err != nil {
+			t.Fatal(err)
+		}
+		if version != len(ledger)+1 {
+			t.Fatalf("post-upgrade migration version = %d at row %d", version, len(ledger)+1)
+		}
+		ledger = append(ledger, name)
+	}
+	if err := ledgerRows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := ledgerRows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	wantLedger := []string{"0001_baseline.sql", "0002_server_search_settings.sql"}
+	if strings.Join(ledger, ",") != strings.Join(wantLedger, ",") {
+		t.Fatalf("post-upgrade migration ledger = %v, want %v", ledger, wantLedger)
+	}
+	var settingsStrict, settingsWithoutRowID int
+	if err := raw.QueryRowContext(ctx, `
+		SELECT strict, wr FROM pragma_table_list
+		WHERE schema = 'main' AND name = 'server_search_settings'
+	`).Scan(&settingsStrict, &settingsWithoutRowID); err != nil {
+		t.Fatal(err)
+	}
+	if settingsStrict != 1 || settingsWithoutRowID != 1 {
+		t.Fatalf("post-upgrade server settings table = strict %d without-rowid %d", settingsStrict, settingsWithoutRowID)
+	}
+	var auditTableSQL string
+	if err := raw.QueryRowContext(ctx, `
+		SELECT sql FROM sqlite_schema
+		WHERE type = 'table' AND name = 'audit_events'
+	`).Scan(&auditTableSQL); err != nil {
+		t.Fatal(err)
+	}
+	for _, marker := range []string{"'server_settings.update'", "'server_settings'"} {
+		if !strings.Contains(auditTableSQL, marker) {
+			t.Fatalf("post-upgrade audit schema does not contain %s", marker)
+		}
+	}
 	if _, err := raw.ExecContext(ctx, `
 		INSERT INTO audit_events (
 			tenant_id, sequence, occurred_at_unix_micro,
@@ -529,7 +611,7 @@ func TestServerSettingsMigrationPreservesExistingAuditLedger(t *testing.T) {
 		);`); err != nil {
 		t.Fatalf("append post-upgrade audit event: %v", err)
 	}
-	var eventCount, nextSequence int
+	var eventCount, nextSequence, auditRows int
 	if err := raw.QueryRowContext(ctx, `
 		SELECT event_count, next_sequence
 		FROM audit_tenant_state
@@ -538,6 +620,14 @@ func TestServerSettingsMigrationPreservesExistingAuditLedger(t *testing.T) {
 	}
 	if eventCount != 2 || nextSequence != 3 {
 		t.Fatalf("post-upgrade audit state = count %d, next %d; want 2/3", eventCount, nextSequence)
+	}
+	if err := raw.QueryRowContext(ctx, `
+		SELECT count(*) FROM audit_events WHERE tenant_id = 'upgrade-tenant'
+	`).Scan(&auditRows); err != nil {
+		t.Fatal(err)
+	}
+	if auditRows != 2 {
+		t.Fatalf("post-upgrade audit rows = %d, want 2", auditRows)
 	}
 	rows, err := raw.QueryContext(ctx, `PRAGMA foreign_key_check`)
 	if err != nil {

@@ -1,12 +1,28 @@
 package migrations
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"io/fs"
-	"reflect"
+	"regexp"
+	"strconv"
 	"testing"
 )
 
-func TestFreshStateSchemasEachShipOneBaseline(t *testing.T) {
+var embeddedMigrationName = regexp.MustCompile(`^(\d{4})_[a-z0-9]+(?:_[a-z0-9]+)*\.sql$`)
+
+var embeddedMigrationSHA256 = map[string]map[string]string{
+	"SQLite": {
+		"0001_baseline.sql":               "3ceec9b0c2f2a44edccff0b3e8b5cd0622fe72c462dc8c36616d9d7683bb2b75",
+		"0002_server_search_settings.sql": "0c485f9b509705e049453a5bc8dd21f71e0543a54045cde4854d737d340a3038",
+	},
+	"ClickHouse": {
+		"0001_baseline.sql": "3f1d7104e6fbb1072c8353855d055a950b22135828ec9f23d0bd63c1fef601da",
+	},
+}
+
+func TestEmbeddedMigrationSetsAreContiguousAndHaveOneBaseline(t *testing.T) {
 	t.Parallel()
 
 	for name, migrationFS := range map[string]fs.FS{
@@ -15,6 +31,7 @@ func TestFreshStateSchemasEachShipOneBaseline(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
+			goldenSHA256 := embeddedMigrationSHA256[name]
 
 			entries, err := fs.ReadDir(migrationFS, ".")
 			if err != nil {
@@ -22,12 +39,43 @@ func TestFreshStateSchemasEachShipOneBaseline(t *testing.T) {
 			}
 			var files []string
 			for _, entry := range entries {
-				if !entry.IsDir() {
-					files = append(files, entry.Name())
+				if entry.IsDir() {
+					t.Fatalf("embedded migration directory %q is not allowed", entry.Name())
 				}
+				matches := embeddedMigrationName.FindStringSubmatch(entry.Name())
+				if matches == nil {
+					t.Fatalf("embedded migration %q has an invalid filename", entry.Name())
+				}
+				version, err := strconv.Atoi(matches[1])
+				if err != nil {
+					t.Fatalf("parse migration version in %q: %v", entry.Name(), err)
+				}
+				if want := len(files) + 1; version != want {
+					t.Fatalf("embedded migration %q has version %d, want %d", entry.Name(), version, want)
+				}
+				contents, err := fs.ReadFile(migrationFS, entry.Name())
+				if err != nil {
+					t.Fatalf("read embedded migration %q: %v", entry.Name(), err)
+				}
+				if len(bytes.TrimSpace(contents)) == 0 {
+					t.Fatalf("embedded migration %q is empty", entry.Name())
+				}
+				checksum := sha256.Sum256(contents)
+				gotSHA256 := hex.EncodeToString(checksum[:])
+				wantSHA256, pinned := goldenSHA256[entry.Name()]
+				if !pinned {
+					t.Fatalf("embedded migration %q has no deployment-compatibility checksum", entry.Name())
+				}
+				if gotSHA256 != wantSHA256 {
+					t.Fatalf("embedded migration %q SHA-256 = %s, want %s", entry.Name(), gotSHA256, wantSHA256)
+				}
+				files = append(files, entry.Name())
 			}
-			if want := []string{"0001_baseline.sql"}; !reflect.DeepEqual(files, want) {
-				t.Fatalf("embedded migrations = %v, want %v", files, want)
+			if len(files) == 0 || files[0] != "0001_baseline.sql" {
+				t.Fatalf("embedded migrations must start with exactly one 0001_baseline.sql: %v", files)
+			}
+			if len(files) != len(goldenSHA256) {
+				t.Fatalf("embedded migrations = %v, deployment checksums cover %d files", files, len(goldenSHA256))
 			}
 		})
 	}

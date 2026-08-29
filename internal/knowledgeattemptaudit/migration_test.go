@@ -8,28 +8,48 @@ import (
 	"github.com/Suhaibinator/open-splunk/migrations"
 )
 
-func TestBaselineSchemaIsExactBoundedAndRetrySafe(t *testing.T) {
+func TestCurrentSchemaIsExactBoundedAndRetrySafe(t *testing.T) {
 	t.Parallel()
 	database := openTestDatabase(t)
 	ctx := t.Context()
 
-	var ledgerRows int
-	var name string
-	if err := database.SQLDB().QueryRowContext(ctx, `
-		SELECT name FROM schema_migrations WHERE version = 1
-	`).Scan(&name); err != nil {
+	rows, err := database.SQLDB().QueryContext(ctx, `
+		SELECT version, name, length(checksum), applied_at_unix_micro
+		FROM schema_migrations
+		ORDER BY version
+	`)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := database.SQLDB().QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM schema_migrations
-	`).Scan(&ledgerRows); err != nil {
+	var ledger []string
+	for rows.Next() {
+		var version int
+		var name string
+		var checksumBytes int
+		var appliedAt int64
+		if err := rows.Scan(&version, &name, &checksumBytes, &appliedAt); err != nil {
+			t.Fatal(err)
+		}
+		ledger = append(ledger, name)
+		if version != len(ledger) {
+			t.Fatalf("migration ledger version %d is not contiguous at row %d", version, len(ledger))
+		}
+		if checksumBytes != 32 || appliedAt <= 0 {
+			t.Fatalf("migration ledger row %d has checksum bytes %d and applied time %d", version, checksumBytes, appliedAt)
+		}
+	}
+	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if name != "0001_baseline.sql" || ledgerRows != 1 {
-		t.Fatalf("migration ledger = baseline name %q rows %d", name, ledgerRows)
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	wantLedger := []string{"0001_baseline.sql", "0002_server_search_settings.sql"}
+	if strings.Join(ledger, ",") != strings.Join(wantLedger, ",") {
+		t.Fatalf("migration ledger = %v, want %v", ledger, wantLedger)
 	}
 
-	rows, err := database.SQLDB().QueryContext(ctx, `
+	rows, err = database.SQLDB().QueryContext(ctx, `
 		SELECT name FROM pragma_table_info('knowledge_attempt_audit_events') ORDER BY cid
 	`)
 	if err != nil {
@@ -67,6 +87,16 @@ func TestBaselineSchemaIsExactBoundedAndRetrySafe(t *testing.T) {
 	if strict != 1 || withoutRowID != 1 {
 		t.Fatalf("event table shape = strict %d without-rowid %d", strict, withoutRowID)
 	}
+	var settingsStrict, settingsWithoutRowID int
+	if err := database.SQLDB().QueryRowContext(ctx, `
+		SELECT strict, wr FROM pragma_table_list
+		WHERE schema = 'main' AND name = 'server_search_settings'
+	`).Scan(&settingsStrict, &settingsWithoutRowID); err != nil {
+		t.Fatal(err)
+	}
+	if settingsStrict != 1 || settingsWithoutRowID != 1 {
+		t.Fatalf("server settings table shape = strict %d without-rowid %d", settingsStrict, settingsWithoutRowID)
+	}
 
 	var tableSQL string
 	if err := database.SQLDB().QueryRowContext(ctx, `
@@ -78,6 +108,18 @@ func TestBaselineSchemaIsExactBoundedAndRetrySafe(t *testing.T) {
 	for _, action := range []string{"'get'", "'list'", "'dependencies'", "'dependents'"} {
 		if !strings.Contains(tableSQL, action) {
 			t.Errorf("event table CHECK does not contain action %s", action)
+		}
+	}
+	var auditTableSQL string
+	if err := database.SQLDB().QueryRowContext(ctx, `
+		SELECT sql FROM sqlite_schema
+		WHERE type = 'table' AND name = 'audit_events'
+	`).Scan(&auditTableSQL); err != nil {
+		t.Fatal(err)
+	}
+	for _, marker := range []string{"'server_settings.update'", "'server_settings'"} {
+		if !strings.Contains(auditTableSQL, marker) {
+			t.Errorf("current audit event table does not contain %s", marker)
 		}
 	}
 
@@ -102,12 +144,13 @@ func TestBaselineSchemaIsExactBoundedAndRetrySafe(t *testing.T) {
 	if err := control.ApplyMigrations(ctx, database.SQLDB(), migrations.SQLite()); err != nil {
 		t.Fatalf("reapply migrations: %v", err)
 	}
+	var ledgerRows int
 	if err := database.SQLDB().QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM schema_migrations
 	`).Scan(&ledgerRows); err != nil {
 		t.Fatal(err)
 	}
-	if ledgerRows != 1 {
+	if ledgerRows != len(wantLedger) {
 		t.Fatalf("migration retry changed ledger row count to %d", ledgerRows)
 	}
 }

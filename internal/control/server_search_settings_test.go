@@ -146,3 +146,28 @@ func TestServerSearchSettingsDefaultPersistenceConflictAndRollback(t *testing.T)
 		t.Fatalf("failed audit changed settings: (%+v, %v)", afterFailure, err)
 	}
 }
+
+func TestServerSearchSettingsRecordRejectsUnsignedOverflow(t *testing.T) {
+	tests := []struct {
+		name string
+		set  func(*searchlimits.Policy)
+	}{
+		{"maximum memory bytes", func(policy *searchlimits.Policy) { policy.MaxMemoryBytes = ^uint64(0) }},
+		{"maximum rows to read", func(policy *searchlimits.Policy) { policy.MaxRowsToRead = ^uint64(0) }},
+		{"maximum bytes to read", func(policy *searchlimits.Policy) { policy.MaxBytesToRead = ^uint64(0) }},
+		{"maximum grouped rows", func(policy *searchlimits.Policy) { policy.MaxGroupedRows = ^uint64(0) }},
+		{"maximum threads", func(policy *searchlimits.Policy) { policy.MaxThreads = ^uint64(0) }},
+		{"maximum result rows", func(policy *searchlimits.Policy) { policy.MaxResultRows = ^uint64(0) }},
+		{"maximum result bytes", func(policy *searchlimits.Policy) { policy.MaxResultBytes = ^uint64(0) }},
+		{"maximum total result bytes", func(policy *searchlimits.Policy) { policy.MaxTotalResultBytes = ^uint64(0) }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			limits := searchlimits.Default()
+			test.set(&limits)
+			if _, err := serverSearchSettingsRecordFrom(1, limits, time.Unix(1, 0)); !errors.Is(err, ErrInvalidArgument) {
+				t.Fatalf("serverSearchSettingsRecordFrom() error = %v, want ErrInvalidArgument", err)
+			}
+		})
+	}
+}
