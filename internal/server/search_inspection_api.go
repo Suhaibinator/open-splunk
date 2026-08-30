@@ -25,9 +25,7 @@ func (handler *apiHandler) searchInspectionRoutes(
 	smallRequestBytes int64,
 ) []protobufRouteDefinition {
 	return []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute[
-			*opensplunk.InspectSearchJobRequest,
-			*serializedSearchInspectionResponse](router.RouteConfig[
+		newForwardCompatibleProtoRoute(router.RouteConfig[
 			*opensplunk.InspectSearchJobRequest,
 			*serializedSearchInspectionResponse,
 		]{
