@@ -78,7 +78,10 @@ interface PolicyField {
   note: string;
   /** What an empty field will do, shown in the field while it is empty. */
   placeholder: string;
-  /** The noun a count is measured in, and the empty string for a quantity. */
+  /**
+   * The noun a count is measured in, or the denominator of a rate; the empty
+   * string for a plain quantity.
+   */
   unit: string;
 }
 
@@ -102,7 +105,7 @@ const RATE_FIELDS = {
     maximum: INGESTION_MAX_BYTES_PER_SECOND,
     note: "Uncompressed event bytes per second. Zero or blank is unlimited;",
     placeholder: UNLIMITED_PLACEHOLDER,
-    unit: "",
+    unit: "per second",
   },
 } as const satisfies Record<string, PolicyField>;
 
@@ -184,10 +187,13 @@ function isUnset(kind: PolicyFieldKind, value: string): boolean {
   return kind === "seconds" ? /^0(?:\.0+)?$/u.test(normalized) : normalized === "0";
 }
 
-/** The ceiling as the field's own notation states it. */
+/**
+ * The ceiling as the field's own notation states it -- spelled so that typing it
+ * back is accepted, which rules out thousands separators the parser rejects.
+ */
 function statedMaximum(field: PolicyField): string {
-  if (field.kind === "bytes") return formatByteQuantity(field.maximum);
-  return `${field.maximum.toLocaleString()} ${field.unit}`;
+  const quantity = field.kind === "bytes" ? formatByteQuantity(field.maximum) : field.maximum.toString();
+  return field.unit.length === 0 ? quantity : `${quantity} ${field.unit}`;
 }
 
 function policyFieldError(field: PolicyField, value: string): string | null {

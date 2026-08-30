@@ -160,12 +160,15 @@ export function parseSearchLimitField(key: SearchLimitKey, value: string): bigin
     : parsePositiveInteger(value);
 }
 
-/** How a range reads back to the administrator, in the field's own notation. */
+/**
+ * How a range reads back to the administrator, in the field's own notation --
+ * the same spelling `searchLimitText` uses, so a stated bound can be typed back.
+ */
 function statedRange(key: SearchLimitKey, minimum: bigint, maximum: bigint): string {
   const field = SEARCH_LIMIT_FIELDS[key];
   return field.kind === "bytes"
     ? `${formatByteQuantity(minimum)}–${formatByteQuantity(maximum)}`
-    : `${minimum.toLocaleString()}–${maximum.toLocaleString()} ${field.unit}`;
+    : `${minimum}–${maximum} ${field.unit}`;
 }
 
 /**

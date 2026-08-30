@@ -118,6 +118,14 @@ test("a range reads back in the notation the field is entered in", () => {
   assert.equal(errors.threads, "Enter 1–64 threads.");
 });
 
+test("a count range and its default share one spelling", () => {
+  const form = searchLimitsToForm(defaults);
+  assert.equal(
+    searchLimitFieldHint("rowsRead", form, defaults, minimums, maximums),
+    "1–1000000000 rows; default 250000000.",
+  );
+});
+
 test("an unparseable value is told what shape the field takes", () => {
   const form = { ...searchLimitsToForm(defaults), memory: "lots", threads: "1.5" };
   const errors = searchLimitErrors(form, minimums, maximums);

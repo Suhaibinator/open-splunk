@@ -70,11 +70,11 @@ test("every hint states its ceiling by formatting the constant the parser enforc
   );
   assert.equal(
     indexPolicyFieldHint("maxUncompressedBytesPerSecond", empty),
-    "Uncompressed event bytes per second. Zero or blank is unlimited; maximum 1 TiB.",
+    "Uncompressed event bytes per second. Zero or blank is unlimited; maximum 1 TiB per second.",
   );
   assert.equal(
     indexPolicyFieldHint("maxFieldCount", empty),
-    "Zero or blank inherits the server limit; maximum 1,024 fields.",
+    "Zero or blank inherits the server limit; maximum 1024 fields.",
   );
 });
 
@@ -91,11 +91,18 @@ test("a byte field echoes the exact count it read when the text is not already t
 
 test("a value over the ceiling is reported in the notation the field is entered in", () => {
   assert.equal(indexPolicyErrors({ ...empty, maxEventBytes: "2 MiB" }).maxEventBytes, "Enter 1 MiB or less.");
-  assert.equal(indexPolicyErrors({ ...empty, maxFieldCount: "2000" }).maxFieldCount, "Enter 1,024 fields or less.");
+  assert.equal(indexPolicyErrors({ ...empty, maxFieldCount: "2000" }).maxFieldCount, "Enter 1024 fields or less.");
   assert.equal(
     indexPolicyErrors({ ...empty, maximumFutureSkewSeconds: "301" }).maximumFutureSkewSeconds,
     "Enter 300 seconds or less.",
   );
+});
+
+test("a stated ceiling is accepted when it is typed back", () => {
+  const form = { ...empty, maxEventsPerSecond: "1000000", maxFieldCount: "1024" };
+  const errors = indexPolicyErrors(form);
+  assert.equal(errors.maxEventsPerSecond, null);
+  assert.equal(errors.maxFieldCount, null);
 });
 
 test("an unparseable value names the shape the field takes rather than throwing at submit", () => {
@@ -126,7 +133,7 @@ test("the submit-time throw carries the message the field was already showing", 
       maxEventsPerSecond: "",
       maxUncompressedBytesPerSecond: "2 TiB",
     }),
-    /Maximum ingestion rate: Enter 1 TiB or less\./u,
+    /Maximum ingestion rate: Enter 1 TiB per second or less\./u,
   );
 });
 
