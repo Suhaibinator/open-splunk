@@ -995,6 +995,11 @@
       "why": "Phase 5 gave the rule's colour literals a tier-2 role: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
     },
     {
+      "after": " || .time-popover || animation: menu-in 100ms ease-out; background: var(--bg-surface); border: 1px solid var(--border-strong); box-shadow: var(--shadow-lg); color: var(--fg-text); left: auto; margin: 0; padding: 0; position: absolute; right: 0; top: calc(100% + 2px); width: min(680px, calc(100vw - 28px)); z-index: var(--z-dropdown)",
+      "before": " || .time-popover || animation: menu-in 100ms ease-out; background: var(--bg-surface); border: 1px solid var(--border-strong); box-shadow: var(--shadow-lg); color: var(--fg-text); margin: 0; padding: 0; position: absolute; right: 0; top: calc(100% + 2px); width: min(680px, calc(100vw - 28px)); z-index: var(--z-dropdown)",
+      "why": "The native dialog user-agent rule also supplies a left inset. Resetting it to auto lets this rule's existing right inset anchor the desktop picker to its trigger and prevents the dialog from expanding the page beyond the viewport."
+    },
+    {
       "after": " || .time-range-button > span:first-child || color: var(--fg-muted); font-size: var(--type-xxl)",
       "before": " || .time-range-button > span:first-child || color: var(--fg-muted); font-size: 19px",
       "why": "Phase 5 put the rule's font-size on its documented --type-* step: `npm run lint:css` fails on a value of that kind written outside app/styles/tokens-*.css, so the rule reads the token the layer already carried."
