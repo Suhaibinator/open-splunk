@@ -203,6 +203,12 @@ export function searchLimitFieldError(
  * per-job value because the total is the field that has to move: raising a
  * per-job ceiling is the deliberate act, and the total is the one silently left
  * behind by it.
+ *
+ * It is reported only when both fields are otherwise acceptable. A per-job value
+ * that is itself out of range is already the thing to fix, and comparing against
+ * it would put an impossible instruction on a field nobody touched: 16 GiB
+ * per job against a 1 GiB ceiling would tell the total, whose own maximum is
+ * 8 GiB, to "enter at least 16 GiB".
  */
 export function searchLimitErrors(
   form: SearchLimitForm,
@@ -214,7 +220,13 @@ export function searchLimitErrors(
   ) as Record<SearchLimitKey, string | null>;
   const perJob = parseSearchLimitField("resultBytes", form.resultBytes);
   const total = parseSearchLimitField("totalResultBytes", form.totalResultBytes);
-  if (errors.totalResultBytes === null && perJob !== null && total !== null && perJob > total) {
+  if (
+    errors.resultBytes === null
+    && errors.totalResultBytes === null
+    && perJob !== null
+    && total !== null
+    && perJob > total
+  ) {
     errors.totalResultBytes = `Enter at least the per-job limit of ${formatByteQuantity(perJob)}.`;
   }
   return errors;

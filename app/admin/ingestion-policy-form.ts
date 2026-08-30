@@ -64,7 +64,7 @@ export interface TokenPolicyForm {
  * `unit` names, and `seconds` a duration with up to three decimal places --
  * which is the protobuf `Duration`'s millisecond floor, not an arbitrary cap.
  */
-type PolicyFieldKind = "bytes" | "count" | "seconds";
+export type PolicyFieldKind = "bytes" | "count" | "seconds";
 
 interface PolicyField {
   kind: PolicyFieldKind;
@@ -157,6 +157,22 @@ export type TokenPolicyFieldKey = keyof typeof TOKEN_POLICY_FIELDS;
 
 export const INDEX_POLICY_KEYS = Object.keys(INDEX_POLICY_FIELDS) as IndexPolicyFieldKey[];
 export const TOKEN_POLICY_KEYS = Object.keys(TOKEN_POLICY_FIELDS) as TokenPolicyFieldKey[];
+
+/**
+ * The on-screen keyboard a field's kind asks for.
+ *
+ * A `seconds` field takes three decimal places, and the plain numeric keypad has
+ * no decimal separator on it -- so `numeric` there makes "1.5" untypeable on a
+ * touch device while the field still accepts it. A quantity carries letters, so
+ * it needs the full keyboard. This is a property of the kind rather than a
+ * choice at the call site, because it was a call site that lost it: folding the
+ * eight hand-written policy inputs into one component collapsed the two
+ * `inputMode="decimal"` fields onto the numeric default.
+ */
+export function policyFieldInputMode(kind: PolicyFieldKind): "text" | "decimal" | "numeric" {
+  if (kind === "bytes") return "text";
+  return kind === "seconds" ? "decimal" : "numeric";
+}
 
 /** A duration with at most three decimal places: the Duration message's floor. */
 const SECONDS = /^(\d+)(?:\.(\d{1,3}))?$/u;

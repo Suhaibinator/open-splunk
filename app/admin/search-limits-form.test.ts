@@ -142,6 +142,16 @@ test("a total that is out of range keeps its own range error rather than the cro
   assert.equal(searchLimitErrors(form, minimums, maximums).totalResultBytes, "Enter 1 MiB–8 GiB.");
 });
 
+test("an out-of-range per-job value does not put an impossible demand on the total", () => {
+  // The cross-field rule compared against a per-job value that was itself over
+  // its ceiling, so 16 GiB per job told the total -- untouched, valid, and
+  // capped at 8 GiB -- to "enter at least 16 GiB", which it cannot do.
+  const form = { ...searchLimitsToForm(defaults), resultBytes: "16 GiB" };
+  const errors = searchLimitErrors(form, minimums, maximums);
+  assert.equal(errors.resultBytes, "Enter 1 MiB–1 GiB.");
+  assert.equal(errors.totalResultBytes, null);
+});
+
 test("search limit form rejects partial, fractional, zero, and uint32-overflow input", () => {
   const valid = searchLimitsToForm(defaults);
   for (const candidate of ["", "0", "1.5", " 4", "-1"]) {

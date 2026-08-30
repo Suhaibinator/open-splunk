@@ -49,12 +49,14 @@ import {
   indexPolicyFromForm,
   indexPolicyIsValid,
   normalizeTokenPatterns,
+  policyFieldInputMode,
   tokenPolicyErrors,
   tokenPolicyFieldHint,
   tokenPolicyFormFromToken,
   tokenPolicyFromForm,
   tokenPolicyIsValid,
   type IndexPolicyForm,
+  type PolicyFieldKind,
   type TokenPolicyForm,
 } from "./ingestion-policy-form";
 import { BackendResourceState } from "../_components/backend-resource-state";
@@ -4541,7 +4543,7 @@ function PolicyNumberField({
   value,
 }: {
   error: string | null;
-  field: { kind: string; label: string; placeholder: string };
+  field: { kind: PolicyFieldKind; label: string; placeholder: string };
   fieldKey: string;
   hint: string;
   idPrefix: string;
@@ -4558,7 +4560,7 @@ function PolicyNumberField({
         // A quantity carries its own unit, so it is a text field: `type="number"`
         // would refuse "512 KiB" by silently keeping the control empty, and a
         // silent rejection is what the visible validation here exists to replace.
-        inputMode={field.kind === "bytes" ? "text" : "numeric"}
+        inputMode={policyFieldInputMode(field.kind)}
         onChange={(event) => onChange(event.target.value)}
         placeholder={field.placeholder}
         spellCheck={false}

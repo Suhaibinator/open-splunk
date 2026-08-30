@@ -13,6 +13,7 @@ import {
   indexPolicyFromForm,
   indexPolicyIsValid,
   normalizeTokenPatterns,
+  policyFieldInputMode,
   tokenPatternsError,
   tokenPolicyErrors,
   tokenPolicyFormFromToken,
@@ -215,4 +216,22 @@ test("the array form rejects an empty pattern a textarea could never produce", (
   // It is reached from the persisted token-create guard, whose patterns come
   // back from storage rather than from a field.
   assert.throws(() => normalizeTokenPatterns(["ok", ""], "Allowed host"), /cannot be empty/u);
+});
+
+test("a field that accepts a decimal asks for a keyboard that has one", () => {
+  // Folding eight hand-written policy inputs into one component collapsed the
+  // two `inputMode="decimal"` fields onto the numeric default, and the plain
+  // numeric keypad has no decimal separator -- so "1.5" became untypeable on a
+  // touch device in a field that still accepts it.
+  assert.equal(policyFieldInputMode("seconds"), "decimal");
+  assert.equal(policyFieldInputMode("count"), "numeric");
+  // A quantity carries letters, so it needs the full keyboard.
+  assert.equal(policyFieldInputMode("bytes"), "text");
+  for (const key of INDEX_POLICY_KEYS) {
+    const field = INDEX_POLICY_FIELDS[key];
+    if (field.kind !== "seconds") continue;
+    assert.equal(policyFieldInputMode(field.kind), "decimal", key);
+    // The kind is only worth checking if the field really does take a fraction.
+    assert.equal(indexPolicyErrors({ ...empty, [key]: "1.5" })[key], null, key);
+  }
 });
