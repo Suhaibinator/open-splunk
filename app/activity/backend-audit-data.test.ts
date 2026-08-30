@@ -521,7 +521,7 @@ test("activity layouts preserve capability tabs and mobile job metadata", () => 
   // What the card mode then *does* -- print each labelled cell's column name
   // and outrank the per-column desktop widths -- is a fact about the cascade,
   // not about any one file, so it is asserted against computed style in
-  // integration/visual/css-contracts.spec.ts ("activity job table contracts"),
+  // integration/style-contracts/css-contracts.spec.ts ("activity job table contracts"),
   // beside the `.live-jobs-table` contracts. Matching the stylesheet's
   // characters here pinned the rule to a file: Phase 4 moved it from
   // app/globals.css to app/styles/primitives/table.css, and Phase 5 may move it

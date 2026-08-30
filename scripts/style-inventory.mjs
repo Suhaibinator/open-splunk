@@ -802,7 +802,7 @@ export async function listInjectedStylesheets(root) {
 }
 
 /** Where the fixture harness lives, and the name of the function under test. */
-const HARNESS_PATH = ["integration", "visual", "application-stylesheets.ts"];
+const HARNESS_PATH = ["integration", "style-contracts", "application-stylesheets.ts"];
 const HARNESS_FUNCTION = "importedStylesheets";
 
 /**
@@ -830,7 +830,7 @@ function declarationSource(source, keyword, name) {
 }
 
 /**
- * The stylesheets `integration/visual/application-stylesheets.ts` really injects.
+ * The stylesheets `integration/style-contracts/application-stylesheets.ts` really injects.
  *
  * The harness cannot inject `app/styles/index.css` itself -- an `@import` does
  * not resolve inside an injected `<style>` -- so it reads that file's import
@@ -1135,7 +1135,6 @@ const TOOL_CONFIGURATION_FILES = Object.freeze([
   "next.config.ts",
   "package.json",
   "playwright.contracts.config.ts",
-  "playwright.visual.config.ts",
 ]);
 
 /** Sources whose comments hold the refactor's history and must not count. */

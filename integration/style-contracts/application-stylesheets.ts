@@ -6,8 +6,8 @@ import { type Page } from "@playwright/test";
 /**
  * The shipped stylesheets, in the order `app/layout.tsx` loads them.
  *
- * Two suites mount fixture markup in a bare page instead of navigating to an
- * exported route, so nothing loads the application's CSS for them. They used
+ * The contract suite mounts fixture markup in a bare page, so nothing loads
+ * the application's CSS for it. The fixtures used
  * to inject `app/globals.css` alone, which was complete only while that one
  * file held every rule and every custom property. It now holds neither: the
  * token layer declares the properties and `app/styles/index.css` imports a

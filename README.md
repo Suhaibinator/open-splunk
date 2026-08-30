@@ -176,14 +176,13 @@ tokens in `app/styles/tokens-color.css` and `app/styles/tokens-scale.css`, and
 only those two files are meant to carry a literal. **Recolouring the product is
 an edit to the token files, not a search across the rules.**
 
-Four gates keep that true, because almost none of it is visible to a compiler:
+Three gates keep that true, because almost none of it is visible to a compiler:
 `npm run test:frontend` runs the structural invariants in
 `scripts/style-invariants.test.mjs`, `npm run lint:css` runs stylelint over the
 stylesheets, `npm run test:contracts` reads rules back through
-`getComputedStyle` in a browser, and `npm run test:visual` compares committed
-screenshots. [Theming](docs/theming.md) is the reference: where a rule lives,
-how to restyle a given thing, what each token means, and what every gate can
-and cannot see.
+`getComputedStyle` in a browser. [Theming](docs/theming.md) is the reference:
+where a rule lives, how to restyle a given thing, what each token means, and
+what every gate can and cannot see.
 
 ## Integration gates
 

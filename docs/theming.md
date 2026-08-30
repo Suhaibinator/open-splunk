@@ -27,10 +27,8 @@ six off-canon breakpoints. The colour half of `scripts/css-literal-debt.json` is
 empty as a result, and the scale half holds only the values a scale cannot
 express — a circle, a shadow's geometry, a stacking order local to one
 component. The pre-refactor alias block is gone, so there is one name per role.
-Recolouring the product is a one-file edit, and it is a checked claim rather
-than an aspiration: `integration/visual/token-sweep.visual.spec.ts` walks every
-element of every exported route, applies `data-theme="dark"`, and fails on any
-ground or ink that does not move.
+Recolouring the product is a one-file edit: the structural invariants and
+stylesheet lint reject component-level palette primitives and colour literals.
 
 ## Where a rule lives
 
@@ -241,9 +239,7 @@ border in a feature table rule is a second table. See [Tables](#tables).
 **The product chrome.** `app/styles/primitives/layout.css`, the
 `/* Multi-page product shell */` banner, and `app/_components/product-shell.tsx`. Every route renders through
 `ProductShell`; a page that needs something in the bar takes a slot rather than
-drawing a bar of its own, and `chrome-invariants.visual.spec.ts` fails if two
-routes disagree about the chrome's height. See
-[Product chrome](#product-chrome).
+drawing a bar of its own. See [Product chrome](#product-chrome).
 
 **The chart palette.** `--chart-series-1` … `--chart-series-12` in
 `tokens-color.css`, assigned in order by `TIME_SERIES_COLORS` in
@@ -491,12 +487,10 @@ one name per role.
 | `--yellow` | *(named no role; `--amber-500` is unreferenced tier 1)* |
 
 `--border` is not in the table: it survived the refactor as a tier-2 name
-rather than as an alias. The value each retired name carried is still pinned,
-channel by channel, against the role that carries it now — in
-`scripts/style-invariants.test.mjs`, `integration/visual/css-contracts.spec.ts`
-and `integration/visual/token-layer.visual.spec.ts` — so the deletion cannot
-have moved a colour without a test saying so. A separate assertion holds that
-none of the names comes back.
+rather than as an alias. The value each retired name carried is pinned against
+the role that carries it now in `scripts/style-invariants.test.mjs` and
+`integration/style-contracts/css-contracts.spec.ts`. A separate assertion
+holds that none of the names comes back.
 
 ## Scales
 
@@ -525,8 +519,9 @@ nearest step, and a tie rounds **down** so dense surfaces stay dense.
 | `--space-8` | 40px | 36px and up |
 
 This is the mapping with the widest blast radius in the whole cleanup: 10px
-alone appears 170 times and moves to 12px. Migrate it surface by surface behind
-`npm run test:visual`, never in one pass.
+alone appears 170 times and moves to 12px. Migrate it surface by surface, run
+the structural invariants and computed-style contracts, and never do it in one
+pass.
 
 ### Radius
 
@@ -585,9 +580,8 @@ analytics metric numeral was 21px falling to 18px at 480px and the page heading
 23px falling to 21px, and both ends of both rounded to `--type-xxl`, so each
 narrow-viewport rule became a restatement of the rule it was overriding. They
 now step to `--type-xl`, which keeps the fold the fold this ramp can express.
-`integration/visual/css-contracts.spec.ts` asserts the analytics one at 450px
-and at 500px; neither width is screenshotted, which is why it is a contract
-rather than a baseline.
+`integration/style-contracts/css-contracts.spec.ts` asserts the analytics one
+at 450px and at 500px.
 
 ### Stacking
 
@@ -724,9 +718,6 @@ The bar joins `--z-dropdown` only while it holds an open menu, so the ladder's
 overlapping the popover's top 34px as well. Both spellings are listed because
 the shell paints `.suite-popover` and the search workspace passes its own
 `.floating-menu` markup into the same bar slots.
-`integration/visual/chrome-invariants.visual.spec.ts` hit-tests every item of an
-open bar menu, on both spellings and at both viewports, so the next element that
-paints over a menu fails a test rather than shipping.
 
 ### Elevation
 
@@ -797,7 +788,7 @@ reads `--focus-ring` or `--border-focus`. The alpha outline
 sixteen translucent blues the product drew as rings, glows, selections and
 scroll fades. They ran from 5% to 45% and from `rgb(39 116 155)` to
 `rgb(58 136 181)`; they are three steps now — 38%, 26% and 10% — over one hue
-that a theme can move. `integration/visual/css-contracts.spec.ts` pins the
+that a theme can move. `integration/style-contracts/css-contracts.spec.ts` pins the
 outline's computed colour, which Chromium serializes as
 `color(srgb 0.184314 0.541176 0.756863 / 0.28)`.
 
@@ -842,9 +833,8 @@ cannot be expressed with `max-width`; `761px` is the exclusive complement of
 `.stylelintrc.json` pins `max-width` and `min-width` to those values, so an
 off-canon breakpoint **fails** `npm run lint:css`. Six off-canon widths survived
 Phase 3 — 1120px, 800px, 650px, 520px, 430px and 420px, plus one
-`max-height: 650px`. Phase 4 folded five of them onto the canon, taking care
-that each fold left the 1440px and 760px baselines untouched; Phase 5 folded the
-sixth, which could not leave a baseline untouched and did not try to:
+`max-height: 650px`. Phase 4 folded five of them onto the canon; Phase 5 folded
+the sixth as a deliberate restyle:
 
 | Was | Now | Effect |
 | --- | --- | --- |
@@ -859,20 +849,15 @@ than before and no width is left cramped-but-unadapted; the `520px` fold is the
 one that folds inward, and it costs a definition list one column across a 40px
 band inside a dialog.
 
-Every effect in that table happens in a band no screenshot renders — the visual
-suite shoots 1440px and 760px, and the folds change 1000px, 900px, 500px and
-450px — so each row is pinned by a computed-style contract instead, under
-"folded breakpoint contracts" in `integration/visual/css-contracts.spec.ts`.
+Each row is pinned by a computed-style contract under "folded breakpoint
+contracts" in `integration/style-contracts/css-contracts.spec.ts`.
 Each mounts the named surface at a width inside the folded band and asserts the
 promised layout, plus one width outside it where the fold must have changed
 nothing. Reverting any of the five steps to its pre-fold value turns those red.
 
 `650px` is folded onto `760px`, which finishes the canon. It was the analytics
-console's mobile step, and 760px is exactly the width the mobile baselines are
-recorded at, so the fold is a deliberate restyle with new screenshots rather
-than a rename: every analytics mobile baseline in
-`integration/visual/__screenshots__/darwin/mobile` was re-recorded for it, and
-the console adapts from 760px down where it used to adapt from 650px down.
+console's mobile step, so the fold is a deliberate restyle rather than a
+rename: the console adapts from 760px down where it used to adapt from 650px down.
 `analytics.css` stated the step six times because each section carries its own
 responsive rules, so this is six edits of one breakpoint rather than six
 different ones.
@@ -993,8 +978,7 @@ undocumented exception is how a primitive quietly acquires a tenth copy.
 ### Pixels this deliberately moved
 
 Unifying three implementations means at most one of them keeps its pixels. Each
-row below is a decision, not a regression, and the visual baselines under
-`integration/visual/__screenshots__` were re-recorded for them together.
+row below records the appearance that was deliberately chosen.
 
 | What | Was | Now | Why |
 | --- | --- | --- | --- |
@@ -1034,9 +1018,7 @@ implementation to point it at. Where the stylesheet carried the same widget
 two or three times, the copies have been folded into one and the consumers
 migrated. Consolidation is not free: two copies that had drifted apart cannot
 both survive, so each fold below records the appearance that was chosen and
-the one that was given up. The visual baselines under
-`integration/visual/__screenshots__/` were re-recorded for exactly these
-changes and for nothing else.
+the one that was given up.
 
 ### Animations
 
@@ -1107,7 +1089,7 @@ different design rather than a drifted copy", but the same page renders
 `.table--cards` in backend mode from `backend-activity-console.tsx`, so the
 argument only established that one page had two answers to the question. The
 demo console now opts into `.table--cards` like its backend twin, and the module
-file is deleted. Its mobile baseline moved: labels sit above values in a
+file is deleted. Its mobile layout changed: labels sit above values in a
 two-column card, the search cell is the card's title and the action row spans
 the foot.
 
@@ -1157,9 +1139,7 @@ Deliberate visual changes on `/search/`:
   `Single-user backend mode` in backend mode where the page's own drawer always
   read `Administrator` / `admin@localhost`; it gains the shell's help label and
   rule above sign-out, and its two aria labels are the shell's
-  ("Mobile product navigation", "Close navigation"). `search-drawer.png` and
-  `product-drawer.png` pin the two drawers, because none of this is visible from
-  a screenshot of a page with the drawer closed;
+  ("Mobile product navigation", "Close navigation");
 * the skip link reads "Skip to main content" rather than "Skip to search
   workspace";
 * Ctrl/⌘K focuses the page's own find input. The shell binds the shortcut and
@@ -1200,10 +1180,8 @@ Nothing in the toolchain reports the two failures a consolidation can have.
 CSS has no duplicate-rule error, so a second `.button` base compiles and one of
 the two silently wins on file order; and an unmatched class is not an error
 anywhere, so markup left behind by a deleted rule renders with no styling and
-raises nothing. A screenshot sees neither: a page that uses only one of two
-identical rules photographs the same either way, and an unstyled element only
-shows up if a baseline happens to cover that state. Four checks stand in for
-the errors the language does not have.
+raises nothing. Four source checks stand in for the errors the language does
+not have.
 
 `scripts/style-invariants.test.mjs` asserts that each primitive — `.button`,
 `.table`, `.table-wrap`, `.status`, `.badge`, `.wordmark`, `.drawer`,
@@ -1246,50 +1224,21 @@ feature prefixes (`analytics-`, `operations-`, `reports-`, `visualization-`,
 module name that shares a prefix is never mistaken for a class. It found
 `visualization-panel--preview` on the first run.
 
-`integration/visual/chrome-invariants.visual.spec.ts` covers the two things
-about the chrome that are behavioural rather than visual. Every route that
-renders through `ProductShell` must put its content below the same chrome — one
-shell means one height, and a route measuring differently is rendering a bar of
-its own again. And the moved `Modal` must still trap focus, still mark the bars
-behind it inert, still lock the page scroll, and still return focus to whatever
-opened it when Escape closes it; a dialog whose surface stopped being installed
-photographs exactly like one whose surface works. It also covers the two
-controls a screenshot of the bar cannot check: that a pointer reaches every item
-of an open bar menu — hit-tested rather than clicked, because a click that lands
-on a scrim closes the menu and would report a missing element instead of the
-covering one — and that `/search/` can still change app at the narrow viewport,
-where the shell folds its own switcher away. The spec takes no screenshots, so
-it adds no baselines, and it runs under both viewport projects.
-
-The drawers are the exception that needed a baseline rather than an invariant:
-`product-drawer.png` and `search-drawer.png` open the shell drawer at the narrow
-viewport, on a page that owns the app catalog and on the one that does not.
-Merging two drawers into one moved an identity block, a label and two aria
-labels, and nothing in the suite had ever opened one.
-
 ## Guardrails — what holds this in place
 
 Almost nothing on this page is visible to the toolchain by default. CSS reports
 no duplicate rule, no unmatched class, no dangling `var()` and no missing
-keyframe block; a screenshot renders one page at one width in one theme and is
-identical whether a rule won the cascade or was never needed; and a lint count
-falls when a rule is deleted exactly as it falls when a rule is migrated. Four
+keyframe block, and a lint count falls when a rule is deleted exactly as it
+falls when a rule is migrated. Three
 gates stand in for the errors the language does not have.
 
 | Gate | Command | What it can see |
 | --- | --- | --- |
 | Structural invariants | `npm run test:frontend` | everything on this page that is a property of the source: token structure, naming, literals, cascade order, one-of-each-primitive, reachability |
 | Stylesheet lint | `npm run lint:css` | the per-declaration rules stylelint can express, at **error** severity — colour, type, radius, shadow and stacking policy, the breakpoint canon, the class-name pattern, the `:global`/`:local` ban. `.stylelintrc.json` is the policy, and [What the lint enforces](#what-the-lint-enforces) says what it exempts and why |
-| Computed-style contracts | `npm run test:contracts` | what a rule resolves to in a browser, at eight widths, without a committed baseline |
-| Screenshots | `npm run test:visual` | appearance, at two viewports, at `threshold: 0.02` and a zero pixel budget, plus the dark-theme sweep that fails on any ink that does not move |
+| Computed-style contracts | `npm run test:contracts` | what a rule resolves to in a browser at eight widths |
 
-`make test` runs all four, and `npm run test:visual:determinism` renders one
-build twice and compares the bytes, which is what makes a tolerance that tight
-safe to run. CI runs the first three in its ubuntu `frontend` job and the fourth
-in a macos `visual` job of its own, because a Playwright baseline is rasterized
-per platform and the committed set is `darwin`. That job uploads
-`test-results/visual` on failure, so a red run hands the reviewer the expected
-image, the received image and the diff rather than a pixel count.
+`make test` runs all three, and CI runs them in its Ubuntu `frontend` job.
 
 ### What the lint enforces
 
@@ -1482,7 +1431,7 @@ substitution that picks the nearest *fill* role for an ink lightens it, and a
 backend state badges went to `--status-neutral`, `--status-warning` and
 `--status-info` and landed at 3.61:1, 3.88:1 and 4.29:1. They now read
 `--fg-secondary` and the `--status-*-strong` family, and
-`integration/visual/css-contracts.spec.ts` measures all five against their own
+`integration/style-contracts/css-contracts.spec.ts` measures all five against their own
 computed grounds, so the next sweep cannot repeat it. The remaining ink moves of
 20 units or more all lighten onto `--fg-muted`, which is 4.93:1 on
 `--bg-surface` and 4.44:1 on `--bg-subtle`; the second of those is the
@@ -1506,65 +1455,13 @@ for the three test tables that were retargeted at the roles rather than dropped.
 The check is worth re-running rather than trusting:
 `grep -rnE 'var\(\s*--(surface|text|muted|canvas|shadow)\s*[,)]' app lib integration`.
 
-`npm run test:visual` used to be a weak check on colour and was read as a strong
-one. `playwright.visual.config.ts` set `maxDiffPixelRatio: 0.002` but no
-`threshold`, so Playwright's default per-pixel tolerance applied — generous
-enough in YIQ space that a token substitution could move a hue by tens of units
-on a channel and still pass, which is exactly what happened: the sweep changed
-colour on 41 of the 44 baselines and the suite stayed green. The config now sets
-`threshold: 0.02`, a tenth of the default, so a hue move of that size has to be
-recorded in the baselines instead of absorbed. `npm run test:visual:determinism`
-renders the export twice and reports every screenshot byte-identical, which is
-what makes a tolerance that tight safe to run.
-
-**`maxDiffPixelRatio` is 0.** Tightening `threshold` fixed one half and left the
-other: 0.002 of a 1440x1583 page is a budget of 4,560 pixels, and Phase 3 spent
-it. Re-running the identical suite with only the pixel budget zeroed put
-seventeen baselines out of date — the reports table's whole status column
-(2,504 pixels), the home launcher's hero buttons and demo chip, the search empty
-state's compact action — all of them this phase's own deliberate restyles, on
-pages whose baselines still held one slice's pre-merge pixels. The suite was
-green, so "the baselines were updated intentionally" read as true. Nothing in
-the suite is sampled: the clock is fixed, animations are disabled, the device
-scale factor is 1, baselines are recorded per platform, and the determinism gate
-already asserts two captures of one build match exactly. A budget was therefore
-only ever a place for evidence to go missing, and no capture overrides the
-suite's terms any more: the sparkline fixture's `expectComponentScreenshot`
-loosened the budget to tighten a `threshold` the suite now sets itself, so it
-folds back into `expectRegionScreenshot`.
-
-Two checks carry the colour half that a screenshot still cannot:
-`scripts/style-invariants.test.mjs` compares the surviving literals against
-`scripts/css-literal-debt.json` by set equality in both directions and fails on
-any literal a token already spells exactly, and
-`integration/visual/token-sweep.visual.spec.ts` walks every element of every
-exported route in the real export, stamps it, applies `data-theme="dark"` and
-fails on any ground or ink that does not move. Between them, "the sweep is
-finished" is a machine-checked claim rather than a report.
-
-
 ### Colour mappings that move a pixel
 
 The `Replaces` columns under [Scales](#scales) call out every substitution that
 deliberately changes a rendered value. The colour half needs the same list, and
-it is longer than the token-definition table it started as.
-
-**The measured total.** Comparing the current export against the pre-sweep
-baselines at zero tolerance, pixel by pixel: **41 of the 44 baselines changed**,
-between 1% and 98% of their pixels each, with a largest single-channel
-difference of **55** and a per-page maximum between 16 and 55. **No image
-changed size and no pixel moved by more than 55**, which is the positive result
-in the same measurement: a one-pixel text reflow against `#28343d` on white
-would show a difference of 150 or more, so "the sweep moved colour and nothing
-else" is measured rather than asserted. The regenerated baselines carry the
-change in git; the numbers come from a strict run of the same suite with
-`threshold: 0` and `maxDiffPixels: 0` against the previous images.
-
-**Where the area is.** Almost all of it is the palette rounding the product's
-near-duplicate greys onto one step, invisible per pixel and enormous per page:
-`#f5f6f5 → #f6f6f4` (distance 1) alone accounts for 7.5 million pixels, and
-`#1d252b → #1e252b` (1) for the product bar on every page. The moves worth
-knowing about, largest distance first:
+it is longer than the token-definition table it started as. Most substitutions
+round near-duplicate greys onto one step. The moves worth knowing about,
+largest distance first:
 
 | Distance | Substitution | Where |
 | --- | --- | --- |

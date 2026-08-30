@@ -448,7 +448,7 @@ test("a recorded history outcome reads its tone from the one job vocabulary", ()
   // the same table. When they were two tables, one of them was migrated to
   // `StatusLabel` and the other kept asking for a class whose rules had been
   // deleted -- rendering four cards with no layout and an invisible swatch,
-  // which no baseline opens and no CSS-to-markup check can see.
+  // which the CSS-to-markup check cannot see.
   assert.equal(historyPhase("Completed"), "completed");
   assert.equal(historyPhase("Failed"), "failed");
   assert.equal(historyPhase("Canceled"), "canceled");

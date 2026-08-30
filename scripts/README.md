@@ -6,15 +6,6 @@ static export before compiling `open-splunk-server`.
 
 `compile-protos.sh` implements `make proto`. Invoke the Make target so the public developer workflow remains stable.
 
-`build-visual-exports.mjs` and `serve-static.mjs` support `npm run test:visual`.
-The first builds the static export in both the demo and backend data modes,
-moves each build into `.cache/visual`, and resets `out/` to the state Git
-tracks, because `out/` is the release payload `webui.go` embeds and a test
-target must not leave a manifest-less demo build in it. The second serves those
-directories over loopback with no dependencies, so the visual-regression
-baselines need neither the Go server nor ClickHouse. See
-[the integration guide](../integration/README.md#visual-regression-baselines).
-
 `check-docs.mjs` implements `make docs-check`. It validates local Markdown
 targets and heading anchors across the owned documentation set and rejects
 retired pre-release version tokens, versioned protobuf/API/HEC identifiers,
@@ -60,7 +51,7 @@ a stylesheet itself — which is one of the invariants it enforces.
 that `npm run lint` still chains `lint:css` over the whole layer, that no rule
 in `.stylelintrc.json` is set to null or downgraded by a `defaultSeverity`, that
 the two documented exemptions name exactly the files they document, and that CI
-still runs all four gates — because unwiring any of those makes the phase bar
+still runs all three gates — because unwiring any of those makes the phase bar
 false while every other test stays green. The other half covers the four
 spellings a value can take where the property that names it never appears: a
 size or a face inside the `font` shorthand, a step inside an `@container` query,
@@ -86,16 +77,6 @@ adding an unrecorded one:
   text. It is a one-phase provenance proof and should be deleted with the tests
   that read it once a later phase rewrites those rules on purpose.
 
-`safety-net.test.mjs` checks that the Phase 0 safety net cannot stop running
+`safety-net.test.mjs` checks that the frontend safety net cannot stop running
 unnoticed: every unit test file is named in this directory's hardcoded runner
-list, and every screenshot a visual spec pins has a committed baseline under
-every viewport project that records it.
-`visual-baseline-projects.json` records the captures that exist at one viewport
-only — the mobile navigation drawer is not rendered above 760px at all — and is
-itself checked, so an entry naming a missing project or an unpinned screenshot
-fails the same test.
-
-`visual-determinism.mjs` implements `npm run test:visual:determinism`. It
-builds the exports once, serves them itself, and runs the visual suite twice
-over that single build, comparing the two passes with no pixel budget. See
-[the integration guide](../integration/README.md#screenshot-determinism).
+list, and every listed test file still exists.

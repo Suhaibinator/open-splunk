@@ -59,7 +59,7 @@ test("multiline stats presentation stays inside the fixed virtual row", () => {
   })), "alpha,beta");
 
   // The `.statistics-multivalue-lines` clamp is asserted against computed style
-  // in integration/visual/css-contracts.spec.ts.
+  // in integration/style-contracts/css-contracts.spec.ts.
   const panel = readFileSync(
     path.join(process.cwd(), "app", "search-workspace", "panels", "statistics-panel.tsx"),
     "utf8",

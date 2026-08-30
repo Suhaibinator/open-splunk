@@ -4,7 +4,7 @@ import { defineConfig, devices } from "@playwright/test";
 // stylesheets inside a real browser, so they need no application server and no
 // backend fixtures.
 export default defineConfig({
-  testDir: "./integration/visual",
+  testDir: "./integration/style-contracts",
   testMatch: "css-contracts.spec.ts",
   fullyParallel: true,
   forbidOnly: process.env.CI === "true",

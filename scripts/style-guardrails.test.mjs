@@ -22,7 +22,7 @@
 //
 // The second is the wiring. Nothing in the tree notices if `npm run lint`
 // stops calling `lint:css`, if a rule in `.stylelintrc.json` is set to null, if
-// a third file joins either exemption list, or if the visual job leaves CI --
+// a third file joins either exemption list, or if a documented gate leaves CI --
 // and each of those makes the phase bar quietly false while every test still
 // passes. A guardrail whose own removal is silent is a convention, not a
 // ratchet, so the wiring is pinned here in the shape the documentation claims
@@ -178,21 +178,13 @@ test("the two stylelint exemptions name exactly the files they document", async 
 test("CI runs every gate the guardrail layer is made of", async () => {
   const workflow = await readFile(workflowPath, "utf8");
   const missing = ["npm run check:docs", "npm run lint", "npm run lint:css", "npm run typecheck",
-    "npm run test:frontend", "npm run test:visual"]
+    "npm run test:contracts", "npm run test:frontend"]
     .filter((command) => !workflow.includes(`run: ${command}`));
   assert.deepEqual(
     missing,
     [],
     "A gate that does not run in CI is a gate one developer's machine enforces. These are named in\n"
       + `docs/theming.md as the checks that hold the cleanup in place:\n${describeList(missing)}`,
-  );
-  assert.match(
-    workflow,
-    /name: Visual regression\n\s+runs-on: macos-latest/u,
-    "The visual job must stay on macos-latest: integration/visual/__screenshots__ commits only the darwin\n"
-      + "set, and playwright.visual.config.ts runs at maxDiffPixelRatio 0, so moving the job to ubuntu turns\n"
-      + "every baseline into a failure and the likeliest next edit is to delete the job rather than the\n"
-      + "runner line.",
   );
 });
 

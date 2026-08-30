@@ -16,7 +16,7 @@
         "app/search-workspace/components/workspace-dialogs.css",
         "app/search-workspace/panels/visualization-panel.css"
       ],
-      "why": "These five were `*.module.css` at Phase 3. Converting them renamed every class, so their rules are a rewrite rather than a move and there is no monolith text to compare them with. What holds them is the visual suite and `scripts/style-invariants.test.mjs`."
+      "why": "These five were `*.module.css` at Phase 3. Converting them renamed every class, so their rules are a rewrite rather than a move and there is no monolith text to compare them with. Their structure is enforced by `scripts/style-invariants.test.mjs`."
     }
   ],
   "substitutions": [
@@ -1253,7 +1253,7 @@
     {
       "after": "@media (max-width: 760px) || .suite-utilities > .suite-menu-anchor > .suite-user-button || height: 45px; padding: 0 13px",
       "before": "@media (max-width: 760px) || .suite-user-button || height: 45px !important; padding: 0 13px !important",
-      "why": "`declaration-no-important` is an error from Phase 5 on. This rule was losing to the bar's own control rule, `.suite-app-switcher, .suite-utilities > a, .suite-utilities > button, .suite-utilities > .suite-menu-anchor > button`, which is (0,2,1) and sets the 38px desktop height and 11px padding; naming the same path brings the mobile override to (0,3,1) and it wins on specificity instead. This is the one of the eleven removals that was load-bearing: taking the `!important` off without raising the selector moved seventeen mobile baselines, which is how it was found."
+      "why": "`declaration-no-important` is an error from Phase 5 on. This rule was losing to the bar's own control rule, `.suite-app-switcher, .suite-utilities > a, .suite-utilities > button, .suite-utilities > .suite-menu-anchor > button`, which is (0,2,1) and sets the 38px desktop height and 11px padding; naming the same path brings the mobile override to (0,3,1) and it wins on specificity instead. This is the one of the eleven removals that was load-bearing: taking the `!important` off without raising the selector changed the mobile layout."
     },
     {
       "after": "@media (max-width: 760px) || .table--cards.table--cards thead || clip-path: inset(50%); height: 1px; overflow: hidden; position: absolute; white-space: nowrap; width: 1px",

@@ -333,10 +333,8 @@ test("the statistics sparkline paints with the palette accent", async ({ page })
   await mount(page, '<svg class="statistics-sparkline"><polyline points="0,0" /></svg>', DESKTOP_WIDTH);
 
   // The polyline inherits --blue as currentColor, so an undefined token would
-  // silently paint the SVG black. No page in either export renders a sparkline
-  // -- it needs a server-supplied multivalue column -- so this contract and the
-  // component baseline in `component-surfaces.visual.spec.ts` are the only
-  // gates on its appearance.
+  // silently paint the SVG black. The sparkline needs a server-supplied
+  // multivalue column, so this fixture is the direct gate on its palette.
   await expect(page.locator(".statistics-sparkline")).toHaveCSS("color", "rgb(40, 120, 168)");
   const polyline = page.locator(".statistics-sparkline polyline");
   await expect(polyline).toHaveCSS("stroke", "rgb(40, 120, 168)");
@@ -470,10 +468,8 @@ async function resolveTokens(page: Page, names: readonly string[]): Promise<stri
 // Every pre-refactor `:root` colour and the value it carried before the token
 // layer existed, keyed by the role that carries it now. Phase 2 rewrote the
 // call sites and deleted the aliases, so what is pinned here is the semantic
-// name and the chain below it; drift anywhere along that chain moves pixels the
-// page baselines catch only where a page happens to use the token. `--orange`
-// and `--yellow` named no role, so the primitive each resolved to is pinned
-// directly rather than dropped.
+// name and the chain below it. `--orange` and `--yellow` named no role, so the
+// primitive each resolved to is pinned directly rather than dropped.
 const PRE_REFACTOR_COLOUR_VALUES: ReadonlyArray<readonly [string, string]> = [
   ["--bg-inverse", "rgb(22, 27, 31)"],
   ["--chrome-bar", "rgb(30, 37, 43)"],
@@ -757,8 +753,7 @@ test.describe("colour token contracts", () => {
     ]);
 
     // Nothing sets `data-theme` yet, so the dark block must be unreachable in
-    // the shipped render. Selecting it here proves it is wired correctly
-    // without letting it near a screenshot baseline.
+    // the shipped render. Selecting it here proves it is wired correctly.
     await page.evaluate(() => document.documentElement.setAttribute("data-theme", "dark"));
     const dark = await resolveTokens(page, roles);
     for (const [index, role] of roles.entries()) {
@@ -774,12 +769,10 @@ test.describe("colour token contracts", () => {
 
 // Contracts for the five breakpoints Phase 4 folded onto the canon.
 //
-// docs/theming.md's fold table records what each fold changed, and every one of
-// those changes happens in a band no screenshot renders: the visual suite shoots
-// 1440px and 760px, and the folds live at 1000, 900, 500 and 450. So the table
-// was prose with nothing behind it. Each test below mounts the surface the table
-// names at a width inside the folded band and asserts the promised layout, plus
-// one width outside the band where the fold must have changed nothing.
+// docs/theming.md's fold table records what each fold changed. Each test below
+// mounts the surface the table names at a width inside the folded band and
+// asserts the promised layout, plus one width outside the band where the fold
+// must have changed nothing.
 const INSIDE_1120_FOLD = 1000;
 const INSIDE_800_FOLD = 900;
 const INSIDE_520_FOLD = 500;
@@ -852,7 +845,7 @@ test.describe("folded breakpoint contracts", () => {
   test("the analytics panel rails stack from 980px, not from 1120px", async ({ page }) => {
     // The band the fold changed: 981px-1120px used to stack the rails and now
     // keeps both columns, which is the row docs/theming.md's fold table opens
-    // with and the reason a 1440px screenshot cannot see this fold at all.
+    // with.
     await mount(page, analyticsPanelsMarkup, INSIDE_1120_FOLD);
     expect(await gridTracks(page, ".analytics-primary-grid")).toHaveLength(2);
     expect(await gridTracks(page, ".analytics-secondary-grid")).toHaveLength(2);

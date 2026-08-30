@@ -176,7 +176,7 @@ test("the inventory reaches every stylesheet, test file and call site the suite 
   const tests = (await listTestFiles(workspace)).map((file) => relativePosix(workspace, file));
   assert.ok(tests.length > 20, `the walker found only ${tests.length} test files; it is missing the suite`);
   assert.ok(
-    tests.includes("integration/visual/css-contracts.spec.ts"),
+    tests.includes("integration/style-contracts/css-contracts.spec.ts"),
     "the walker misses Playwright specs, so a stylesheet read there would go unnoticed",
   );
 
@@ -467,11 +467,11 @@ test("the fixture harness injects exactly the stylesheets the application loads"
   assert.deepEqual(
     injected,
     shipped,
-    "integration/visual/application-stylesheets.ts injects a different set, or a different order,\n"
+    "integration/style-contracts/application-stylesheets.ts injects a different set, or a different order,\n"
       + "than app/styles/index.css loads. It cannot inject that file directly -- an @import does not\n"
       + "resolve inside an injected <style> -- so it reads the import list instead, and any filter,\n"
       + "slice or reorder on the way leaves the fixtures rendering var() fallbacks, or missing a\n"
-      + `whole primitive, with the contracts and the baselines still green.\n${describeList(injected)}`,
+      + `whole primitive while the contracts still pass.\n${describeList(injected)}`,
   );
   const exported = await readHarnessExportExpression(workspace);
   assert.equal(
@@ -1310,8 +1310,7 @@ test("no test file reads a stylesheet's characters, however the path is composed
     "A test asserts on stylesheet text. A rule moves between files routinely now, so an assertion\n"
       + "naming the file a rule lives in fails on a move that changed no pixel, and passes on a rule\n"
       + "the cascade overrides everywhere. Assert on rendered behaviour instead: computed-style\n"
-      + "contracts live in integration/visual/css-contracts.spec.ts and appearance is pinned by\n"
-      + `integration/visual/*.visual.spec.ts.\n${describeList(offenders)}`,
+      + `contracts live in integration/style-contracts/css-contracts.spec.ts.\n${describeList(offenders)}`,
   );
 });
 

@@ -8,7 +8,7 @@
    and all three have to outrank what those features declare, so this is the
    last file app/styles/index.css imports. Moving it earlier would let a
    feature's own `min-height` or `font-size` win back a tap target or an input,
-   on a device no desktop screenshot covers. */
+   on the devices these rules protect. */
 
 @media (max-width: 760px) {
   .splunk-shell input,

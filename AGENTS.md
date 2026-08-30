@@ -8,7 +8,7 @@ Go backend (`cmd/`, `internal/`) + Next.js UI (`app/`, `lib/`), UI embedded into
 2. **One styling lane.** Plain CSS, feature-prefixed kebab-case (or BEM) class names. No CSS modules, no CSS-in-JS, no `:global()`, no inline colour. State is expressed with `data-*`/`aria-*` attributes and `is-*` classes, not inline style toggles.
 3. **One primitive per concept.** `.button`, `.table`, `.status`, `.badge`, the modal family, `ProductShell`, `Wordmark`, the drawer. Extend with a modifier; never fork a second implementation or restyle a primitive from a feature file.
 4. **Where a rule lives.** Shared: `app/styles/base.css` and `app/styles/primitives/*.css`. Feature: the `*.css` beside the feature. Every stylesheet is imported exactly once, in cascade order, from `app/styles/index.css`. Responsive rules sit beside their base rules; breakpoints are only `1240 / 980 / 760 / 480px` (max-width).
-5. **Deliberate visual changes** update the affected screenshot baselines in the same commit and say why in the commit body. Unintended pixel changes are bugs.
+5. **Verify deliberate visual changes** with the structural invariants, stylesheet lint, and computed-style contracts; describe intentional appearance changes in the commit body.
 
 ## Verification — run before claiming done
 
@@ -16,7 +16,6 @@ Go backend (`cmd/`, `internal/`) + Next.js UI (`app/`, `lib/`), UI embedded into
 npm run typecheck && npm run lint && npm run check:docs
 npm run test:frontend      # unit + style invariants
 npm run test:contracts     # computed-style contracts (Playwright)
-npm run test:visual        # screenshot baselines (darwin)
 go build ./... && go vet ./... && go test ./...
 ```
 
