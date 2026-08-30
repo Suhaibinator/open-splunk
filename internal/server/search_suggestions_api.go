@@ -48,9 +48,7 @@ func (handler *apiHandler) searchSuggestionRoutes(
 	smallRequestBytes int64,
 ) []protobufRouteDefinition {
 	return []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute[
-			*opensplunk.GetSearchSuggestionsRequest,
-			*serializedSearchSuggestionsResponse](router.RouteConfig[
+		newForwardCompatibleProtoRoute(router.RouteConfig[
 			*opensplunk.GetSearchSuggestionsRequest,
 			*serializedSearchSuggestionsResponse,
 		]{

@@ -162,9 +162,7 @@ func (handler *apiHandler) appAdministrationRoutes(
 	smallRequestBytes int64,
 ) []protobufRouteDefinition {
 	return []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute[
-			*opensplunk.CreateAppRequest,
-			*serializedCreateAppResponse](router.RouteConfig[
+		newForwardCompatibleProtoRoute(router.RouteConfig[
 			*opensplunk.CreateAppRequest,
 			*serializedCreateAppResponse,
 		]{
@@ -176,9 +174,7 @@ func (handler *apiHandler) appAdministrationRoutes(
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: requestBytes},
 		}),
-		newForwardCompatibleProtoRoute[
-			*opensplunk.GetAppRequest,
-			*serializedGetAppResponse](router.RouteConfig[
+		newForwardCompatibleProtoRoute(router.RouteConfig[
 			*opensplunk.GetAppRequest,
 			*serializedGetAppResponse,
 		]{
@@ -190,9 +186,7 @@ func (handler *apiHandler) appAdministrationRoutes(
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[
-			*opensplunk.ListAppsRequest,
-			*serializedListAppsResponse](router.RouteConfig[
+		newForwardCompatibleProtoRoute(router.RouteConfig[
 			*opensplunk.ListAppsRequest,
 			*serializedListAppsResponse,
 		]{
@@ -204,9 +198,7 @@ func (handler *apiHandler) appAdministrationRoutes(
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[
-			*opensplunk.UpdateAppRequest,
-			*serializedUpdateAppResponse](router.RouteConfig[
+		newForwardCompatibleProtoRoute(router.RouteConfig[
 			*opensplunk.UpdateAppRequest,
 			*serializedUpdateAppResponse,
 		]{
@@ -218,9 +210,7 @@ func (handler *apiHandler) appAdministrationRoutes(
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: requestBytes},
 		}),
-		newForwardCompatibleProtoRoute[
-			*opensplunk.SetAppStateRequest,
-			*serializedSetAppStateResponse](router.RouteConfig[
+		newForwardCompatibleProtoRoute(router.RouteConfig[
 			*opensplunk.SetAppStateRequest,
 			*serializedSetAppStateResponse,
 		]{
@@ -232,9 +222,7 @@ func (handler *apiHandler) appAdministrationRoutes(
 			SourceType: router.Body,
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[
-			*opensplunk.DeleteAppRequest,
-			*serializedDeleteAppResponse](router.RouteConfig[
+		newForwardCompatibleProtoRoute(router.RouteConfig[
 			*opensplunk.DeleteAppRequest,
 			*serializedDeleteAppResponse,
 		]{
@@ -1649,10 +1637,7 @@ type serializedCreateAppCodec = boundedProtoCodec[
 ]
 
 func newSerializedCreateAppCodec() *serializedCreateAppCodec {
-	return newAppAdministrationCodec[
-		*opensplunk.CreateAppRequest,
-		*opensplunk.CreateAppResponse,
-	](
+	return newAppAdministrationCodec(
 		codec.NewProtoCodec[
 			*opensplunk.CreateAppRequest,
 			*opensplunk.CreateAppResponse,
@@ -1668,10 +1653,7 @@ type serializedGetAppCodec = boundedProtoCodec[
 ]
 
 func newSerializedGetAppCodec() *serializedGetAppCodec {
-	return newAppAdministrationCodec[
-		*opensplunk.GetAppRequest,
-		*opensplunk.GetAppResponse,
-	](
+	return newAppAdministrationCodec(
 		codec.NewProtoCodec[
 			*opensplunk.GetAppRequest,
 			*opensplunk.GetAppResponse,
@@ -1687,10 +1669,7 @@ type serializedListAppsCodec = boundedProtoCodec[
 ]
 
 func newSerializedListAppsCodec() *serializedListAppsCodec {
-	return newAppAdministrationCodec[
-		*opensplunk.ListAppsRequest,
-		*opensplunk.ListAppsResponse,
-	](
+	return newAppAdministrationCodec(
 		codec.NewProtoCodec[
 			*opensplunk.ListAppsRequest,
 			*opensplunk.ListAppsResponse,
@@ -1706,10 +1685,7 @@ type serializedUpdateAppCodec = boundedProtoCodec[
 ]
 
 func newSerializedUpdateAppCodec() *serializedUpdateAppCodec {
-	return newAppAdministrationCodec[
-		*opensplunk.UpdateAppRequest,
-		*opensplunk.UpdateAppResponse,
-	](
+	return newAppAdministrationCodec(
 		codec.NewProtoCodec[
 			*opensplunk.UpdateAppRequest,
 			*opensplunk.UpdateAppResponse,
@@ -1725,10 +1701,7 @@ type serializedSetAppStateCodec = boundedProtoCodec[
 ]
 
 func newSerializedSetAppStateCodec() *serializedSetAppStateCodec {
-	return newAppAdministrationCodec[
-		*opensplunk.SetAppStateRequest,
-		*opensplunk.SetAppStateResponse,
-	](
+	return newAppAdministrationCodec(
 		codec.NewProtoCodec[
 			*opensplunk.SetAppStateRequest,
 			*opensplunk.SetAppStateResponse,
@@ -1744,10 +1717,7 @@ type serializedDeleteAppCodec = boundedProtoCodec[
 ]
 
 func newSerializedDeleteAppCodec() *serializedDeleteAppCodec {
-	return newAppAdministrationCodec[
-		*opensplunk.DeleteAppRequest,
-		*opensplunk.DeleteAppResponse,
-	](
+	return newAppAdministrationCodec(
 		codec.NewProtoCodec[
 			*opensplunk.DeleteAppRequest,
 			*opensplunk.DeleteAppResponse,

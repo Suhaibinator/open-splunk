@@ -43,52 +43,52 @@ type alertRunCursor struct {
 
 func (handler *apiHandler) alertRoutes(noAuth router.AuthLevel, maximumRequestBytes, smallRequestBytes int64) []protobufRouteDefinition {
 	return []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute[*opensplunk.CreateAlertRequest, *opensplunk.CreateAlertResponse](router.RouteConfig[*opensplunk.CreateAlertRequest, *opensplunk.CreateAlertResponse]{
+		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.CreateAlertRequest, *opensplunk.CreateAlertResponse]{
 			Path: "/alerts/create", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.CreateAlertRequest, *opensplunk.CreateAlertResponse](), Handler: handler.createAlert,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunk.GetAlertRequest, *opensplunk.GetAlertResponse](router.RouteConfig[*opensplunk.GetAlertRequest, *opensplunk.GetAlertResponse]{
+		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.GetAlertRequest, *opensplunk.GetAlertResponse]{
 			Path: "/alerts/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.GetAlertRequest, *opensplunk.GetAlertResponse](), Handler: handler.getAlert,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunk.ListAlertsRequest, *opensplunk.ListAlertsResponse](router.RouteConfig[*opensplunk.ListAlertsRequest, *opensplunk.ListAlertsResponse]{
+		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.ListAlertsRequest, *opensplunk.ListAlertsResponse]{
 			Path: "/alerts/list", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.ListAlertsRequest, *opensplunk.ListAlertsResponse](), Handler: handler.listAlerts,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunk.UpdateAlertRequest, *opensplunk.UpdateAlertResponse](router.RouteConfig[*opensplunk.UpdateAlertRequest, *opensplunk.UpdateAlertResponse]{
+		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.UpdateAlertRequest, *opensplunk.UpdateAlertResponse]{
 			Path: "/alerts/update", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.UpdateAlertRequest, *opensplunk.UpdateAlertResponse](), Handler: handler.updateAlert,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunk.SetAlertEnabledRequest, *opensplunk.SetAlertEnabledResponse](router.RouteConfig[*opensplunk.SetAlertEnabledRequest, *opensplunk.SetAlertEnabledResponse]{
+		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.SetAlertEnabledRequest, *opensplunk.SetAlertEnabledResponse]{
 			Path: "/alerts/state/set", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.SetAlertEnabledRequest, *opensplunk.SetAlertEnabledResponse](), Handler: handler.setAlertEnabled,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunk.DeleteAlertRequest, *opensplunk.DeleteAlertResponse](router.RouteConfig[*opensplunk.DeleteAlertRequest, *opensplunk.DeleteAlertResponse]{
+		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.DeleteAlertRequest, *opensplunk.DeleteAlertResponse]{
 			Path: "/alerts/delete", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.DeleteAlertRequest, *opensplunk.DeleteAlertResponse](), Handler: handler.deleteAlert,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunk.RunAlertRequest, *opensplunk.RunAlertResponse](router.RouteConfig[*opensplunk.RunAlertRequest, *opensplunk.RunAlertResponse]{
+		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.RunAlertRequest, *opensplunk.RunAlertResponse]{
 			Path: "/alerts/run", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.RunAlertRequest, *opensplunk.RunAlertResponse](), Handler: handler.runAlert,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunk.TestAlertWebhookRequest, *opensplunk.TestAlertWebhookResponse](router.RouteConfig[*opensplunk.TestAlertWebhookRequest, *opensplunk.TestAlertWebhookResponse]{
+		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.TestAlertWebhookRequest, *opensplunk.TestAlertWebhookResponse]{
 			Path: "/alerts/webhook/test", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.TestAlertWebhookRequest, *opensplunk.TestAlertWebhookResponse](), Handler: handler.testAlertWebhook,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunk.RotateAlertSecretRequest, *opensplunk.RotateAlertSecretResponse](router.RouteConfig[*opensplunk.RotateAlertSecretRequest, *opensplunk.RotateAlertSecretResponse]{
+		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.RotateAlertSecretRequest, *opensplunk.RotateAlertSecretResponse]{
 			Path: "/alerts/secret/rotate", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.RotateAlertSecretRequest, *opensplunk.RotateAlertSecretResponse](), Handler: handler.rotateAlertSecret,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunk.ListAlertRunsRequest, *opensplunk.ListAlertRunsResponse](router.RouteConfig[*opensplunk.ListAlertRunsRequest, *opensplunk.ListAlertRunsResponse]{
+		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.ListAlertRunsRequest, *opensplunk.ListAlertRunsResponse]{
 			Path: "/alerts/runs/list", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.ListAlertRunsRequest, *opensplunk.ListAlertRunsResponse](), Handler: handler.listAlertRuns,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},

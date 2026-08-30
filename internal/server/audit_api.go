@@ -27,9 +27,7 @@ func (handler *apiHandler) auditEventRoutes(
 	smallRequestBytes int64,
 ) []protobufRouteDefinition {
 	return []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute[
-			*opensplunk.ListAuditEventsRequest,
-			*serializedAuditEventListResponse](router.RouteConfig[
+		newForwardCompatibleProtoRoute(router.RouteConfig[
 			*opensplunk.ListAuditEventsRequest,
 			*serializedAuditEventListResponse,
 		]{

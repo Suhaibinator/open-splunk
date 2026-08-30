@@ -103,10 +103,7 @@ func (handler *apiHandler) hecOperationalRoutes(
 	smallRequestBytes int64,
 ) []protobufRouteDefinition {
 	return []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute[
-			*opensplunk.GetHECOperationalSnapshotRequest,
-			*opensplunk.GetHECOperationalSnapshotResponse,
-		](router.RouteConfig[
+		newForwardCompatibleProtoRoute(router.RouteConfig[
 			*opensplunk.GetHECOperationalSnapshotRequest,
 			*opensplunk.GetHECOperationalSnapshotResponse,
 		]{

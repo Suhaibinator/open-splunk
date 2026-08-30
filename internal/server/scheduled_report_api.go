@@ -26,17 +26,17 @@ type searchArtifactMetadataBatchInspector interface {
 
 func (handler *apiHandler) scheduledReportRoutes(noAuth router.AuthLevel, smallRequestBytes int64) []protobufRouteDefinition {
 	return []protobufRouteDefinition{
-		newForwardCompatibleProtoRoute[*opensplunk.SetSavedSearchScheduleRequest, *opensplunk.SetSavedSearchScheduleResponse](router.RouteConfig[*opensplunk.SetSavedSearchScheduleRequest, *opensplunk.SetSavedSearchScheduleResponse]{
+		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.SetSavedSearchScheduleRequest, *opensplunk.SetSavedSearchScheduleResponse]{
 			Path: "/saved-searches/schedule/set", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.SetSavedSearchScheduleRequest, *opensplunk.SetSavedSearchScheduleResponse](), Handler: handler.setSavedSearchSchedule,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunk.RunSavedSearchRequest, *opensplunk.RunSavedSearchResponse](router.RouteConfig[*opensplunk.RunSavedSearchRequest, *opensplunk.RunSavedSearchResponse]{
+		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.RunSavedSearchRequest, *opensplunk.RunSavedSearchResponse]{
 			Path: "/saved-searches/run", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.RunSavedSearchRequest, *opensplunk.RunSavedSearchResponse](), Handler: handler.runSavedSearch,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		newForwardCompatibleProtoRoute[*opensplunk.ListScheduledSearchRunsRequest, *opensplunk.ListScheduledSearchRunsResponse](router.RouteConfig[*opensplunk.ListScheduledSearchRunsRequest, *opensplunk.ListScheduledSearchRunsResponse]{
+		newForwardCompatibleProtoRoute(router.RouteConfig[*opensplunk.ListScheduledSearchRunsRequest, *opensplunk.ListScheduledSearchRunsResponse]{
 			Path: "/saved-searches/runs/list", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunk.ListScheduledSearchRunsRequest, *opensplunk.ListScheduledSearchRunsResponse](), Handler: handler.listScheduledSearchRuns,
 			SourceType: router.Body, Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
@@ -267,8 +267,8 @@ type retainedResultProjection struct {
 }
 
 func retainedResultProjectionForArtifact(record searchartifacts.Record) retainedResultProjection {
-	result := retainedResultProjection{status: retainedResultStatusToProto(record)}
-	result.expiresAt = validRetainedResultExpiry(record.ExpiresAt)
+	result := retainedResultProjection{status: retainedResultStatusToProto(record),
+		expiresAt: validRetainedResultExpiry(record.ExpiresAt)}
 	if result.expiresAt == nil {
 		if result.status == opensplunk.RetainedResultStatus_RETAINED_RESULT_STATUS_AVAILABLE ||
 			result.status == opensplunk.RetainedResultStatus_RETAINED_RESULT_STATUS_EXPIRED {
