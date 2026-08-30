@@ -677,7 +677,7 @@ export function EventsPanel({
                       </div>
                       {expanded ? (
                         <div className="event-detail">
-                          <header><strong>Event fields</strong><span>{Object.keys(event.fields).length} fields · typed JSON</span><button type="button" onClick={() => void copyText(event.raw, "Raw event copied.")}>Copy raw</button></header>
+                          <header><strong>Event fields</strong><span>{Object.keys(event.fields).length} fields · typed JSON</span><button className="event-detail-copy-raw" type="button" onClick={() => void copyText(event.raw, "Raw event copied.")}>Copy raw</button></header>
                           <div className="event-field-grid">
                             {Object.entries(event.fields).map(([fieldName, fieldValue]) => (
                               <div className="event-field" key={fieldName}>

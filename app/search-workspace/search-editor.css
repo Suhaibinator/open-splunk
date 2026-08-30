@@ -637,6 +637,17 @@
     flex-wrap: wrap;
   }
 
+  .search-app-switcher + .app-menu {
+    left: var(--space-2);
+    max-height: calc(100dvh - var(--space-8) - var(--space-5) - env(safe-area-inset-top));
+    min-width: 0;
+    overflow-y: auto;
+    position: fixed;
+    right: var(--space-2);
+    top: calc(var(--space-8) + var(--space-3) + env(safe-area-inset-top));
+    width: auto;
+  }
+
   .search-actions > button,
   .search-actions > .header-menu-wrap > button {
     height: 36px;
@@ -746,4 +757,13 @@
 
 @media (max-height: 650px) and (max-width: 760px) {
   .time-popover { max-height: 96dvh; }
+}
+
+@media (pointer: coarse) {
+  .search-app-switcher,
+  .search-actions > button,
+  .search-actions > .header-menu-wrap > button {
+    min-height: calc(var(--space-8) + var(--space-1));
+    min-width: calc(var(--space-8) + var(--space-1));
+  }
 }

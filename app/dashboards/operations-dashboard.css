@@ -156,6 +156,7 @@ div.operations-header-actions.operations-header-actions {
 /* Event volume chart */
 .operations-volume-chart {
   padding: 13px 15px 9px;
+  position: relative;
 }
 
 .operations-volume-plot {
@@ -210,19 +211,19 @@ div.operations-header-actions.operations-header-actions {
   background: var(--bg-surface);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
-  bottom: calc(100% + 7px);
   box-shadow: var(--shadow-md);
   color: var(--fg-text);
   display: grid;
   font-size: var(--type-xs);
   gap: 3px;
-  left: 50%;
+  left: auto;
   min-width: 124px;
   padding: 6px var(--space-2);
   pointer-events: none;
   position: absolute;
+  right: var(--space-3);
   text-align: left;
-  transform: translateX(-50%);
+  top: var(--space-3);
   white-space: nowrap;
   z-index: 5;
 }
@@ -231,17 +232,6 @@ div.operations-header-actions.operations-header-actions {
   border-bottom: 1px solid var(--border-subtle);
   font-size: var(--type-xs);
   padding-bottom: var(--space-1);
-}
-
-.operations-volume-tooltip--start {
-  left: -3px;
-  transform: none;
-}
-
-.operations-volume-tooltip--end {
-  left: auto;
-  right: -3px;
-  transform: none;
 }
 
 .operations-volume-axis {
@@ -262,18 +252,21 @@ div.operations-header-actions.operations-header-actions {
     padding-inline: 10px;
   }
 
-  .operations-volume-plot,
-  .operations-volume-axis {
-    min-width: 0;
+  .operations-volume-scroll {
+    max-width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+  }
+
+  .operations-volume-scroll-content {
+    min-width: 100%;
+    width: max-content;
   }
 
   .operations-volume-plot {
     gap: 2px;
+    grid-template-columns: repeat(24, calc(var(--space-8) + var(--space-1)));
     padding-inline: 1px;
-  }
-
-  .operations-volume-bar {
-    min-width: 0;
   }
 
   .operations-volume-chart .operations-chart-hint {

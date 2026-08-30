@@ -162,6 +162,7 @@ import { AlertWizard } from "./reports/alert-wizard";
 import { defaultAlertForm } from "./reports/alerts-ui-state";
 import { scheduledReportConfigurationHref } from "./reports/reports-view-state";
 import { SearchComposer } from "./search-workspace/components/search-composer";
+import { InactiveResultTabPanels } from "./search-workspace/components/inactive-result-tab-panels";
 import { SearchSharingDialog } from "./search-workspace/components/search-sharing-dialog";
 import { WorkspaceDialogs } from "./search-workspace/components/workspace-dialogs";
 import { serializeRowsForClipboard } from "./search-workspace/clipboard-export";
@@ -6427,7 +6428,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
 
   const productAppSwitcher = (
     <div className="suite-menu-anchor">
-      <button className="suite-app-switcher" type="button" aria-haspopup="menu" aria-expanded={menu === "app"} aria-busy={appSwitchingId !== null || (backendEnabled && backendConnectionState === "loading")} onClick={() => setMenu(menu === "app" ? null : "app")} onKeyDown={(event) => openMenuFromKeyboard(event, "app")}>
+      <button className="suite-app-switcher search-app-switcher" type="button" aria-haspopup="menu" aria-expanded={menu === "app"} aria-busy={appSwitchingId !== null || (backendEnabled && backendConnectionState === "loading")} onClick={() => setMenu(menu === "app" ? null : "app")} onKeyDown={(event) => openMenuFromKeyboard(event, "app")}>
         App: <strong>{workspaceAppName}</strong> <AppIcon name="chevron-down" size="xs" />
       </button>
       {menu === "app" ? (
@@ -6998,6 +6999,8 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           </button>
         ))}
       </div>
+
+      <InactiveResultTabPanels activeTab={activeTab} />
 
       {!hasResultData ? (
         <section
